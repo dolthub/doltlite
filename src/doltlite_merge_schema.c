@@ -1174,6 +1174,35 @@ done:
 }
 
 
+static void relayoutFieldValue(
+  const u8 *pRec,
+  const DoltliteRecordInfo *pInfo,
+  int src,
+  DoltliteSerialValue *m
+){
+  int st = pInfo->aType[src];
+  const u8 *body = pRec + pInfo->aOffset[src];
+  memset(m, 0, sizeof(*m));
+  m->eType = SQLITE_NULL;
+  if( st==0 ) return;
+  if( dlSerialIsInt(st) ){
+    m->eType = SQLITE_INTEGER;
+    if( st==8 ) m->i = 0;
+    else if( st==9 ) m->i = 1;
+    else m->i = dlReadIntBytes(body, dlSerialTypeLen((u64)st));
+  }else if( st==7 ){
+    u64 bits = (u64)dlReadIntBytes(body, 8);
+    double d;
+    memcpy(&d, &bits, sizeof(d));
+    m->eType = SQLITE_FLOAT;
+    m->r = d;
+  }else if( st>=12 ){
+    m->eType = (st & 1) ? SQLITE_TEXT : SQLITE_BLOB;
+    m->p = body;
+    m->n = dlSerialTypeLen((u64)st);
+  }
+}
+
 int normalizeSideToMergedLayout(
   sqlite3 *db,
   const char *zTable,
@@ -1204,12 +1233,16 @@ int normalizeSideToMergedLayout(
   int isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
   MergeColDefaults oursDefaults;
   MergeColDefaults theirsDefaults;
+  DoltliteColInfo sideCi;
+  int sideCiInit = 0;
+  u8 *pKeyRec = 0;
   ProllyCursor oursCur;
   int oursCurInit = 0;
   int rc, res, j;
 
   memset(&oursDefaults, 0, sizeof(oursDefaults));
   memset(&theirsDefaults, 0, sizeof(theirsDefaults));
+  memset(&sideCi, 0, sizeof(sideCi));
 
   memset(pOutRoot, 0, sizeof(*pOutRoot));
   rc = parseColumns(zAncSql, &aAnc, &nAnc);
@@ -1300,6 +1333,16 @@ int normalizeSideToMergedLayout(
   rc = mergeColDefaultsLoad(zTheirsSql, zTable, &theirsDefaults);
   if( rc!=SQLITE_OK ) goto done;
 
+  if( !isIntKey ){
+    sqlite3 *tmp = 0;
+    rc = sqlite3_open(":memory:", &tmp);
+    if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, zTheirsSql, 0, 0, 0);
+    if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTable, &sideCi);
+    if( tmp ) sqlite3_close(tmp);
+    if( rc!=SQLITE_OK ) goto done;
+    sideCiInit = 1;
+  }
+
   rc = prollyMutMapInit(&mm, (u8)isIntKey);
   if( rc!=SQLITE_OK ) goto done;
   mmInit = 1;
@@ -1366,40 +1409,40 @@ int normalizeSideToMergedLayout(
     for(j=0; j<nTheirs; j++){
       int src = aTheirsRecord[j];
       int tgt;
-      int st;
-      const u8 *body;
       DoltliteSerialValue *m;
       if( src<0 || src>=info.nField || aMap[j]<0 ) continue;
       tgt = aMergedRecord[aMap[j]];
       if( tgt<0 ) continue;
-      st = info.aType[src];
-      body = pVal + info.aOffset[src];
       m = &aMem[tgt];
-      memset(m, 0, sizeof(*m));
-      m->eType = SQLITE_NULL;
-      if( st==0 ){
-        m->eType = SQLITE_NULL;
+      relayoutFieldValue(pVal, &info, src, m);
+      if( m->eType==SQLITE_NULL ){
         if( rowOnlyTheirs && tgt+1>nEmit ) nEmit = tgt+1;
-      }else if( dlSerialIsInt(st) ){
-        m->eType = SQLITE_INTEGER;
-        if( st==8 ) m->i = 0;
-        else if( st==9 ) m->i = 1;
-        else m->i = dlReadIntBytes(body, dlSerialTypeLen((u64)st));
-      }else if( st==7 ){
-        u64 bits = (u64)dlReadIntBytes(body, 8);
-        double d;
-        memcpy(&d, &bits, sizeof(d));
-        m->eType = SQLITE_FLOAT;
-        m->r = d;
-      }else if( st>=12 ){
-        m->eType = (st & 1) ? SQLITE_TEXT : SQLITE_BLOB;
-        m->p = body;
-        m->n = dlSerialTypeLen((u64)st);
+      }else if( tgt+1>nEmit ){
+        nEmit = tgt+1;
       }
-      if( m->eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
     }
     for(k=0; k<nMergedRecord; k++){
       if( aMem[k].eType!=SQLITE_NULL && k+1>nEmit ) nEmit = k+1;
+    }
+
+    /* A PK-covering row stores an empty record; once a filled default
+    ** makes the record non-empty its key columns must be spelled out too. */
+    if( nEmit>0 && nVal==0 && sideCiInit ){
+      DoltliteRecordInfo kinfo;
+      int nKeyRec = 0;
+      rc = doltliteRecordFromClusteredKeyCols(db, &sideCi, pKey, nKey,
+                                              &pKeyRec, &nKeyRec);
+      if( rc!=SQLITE_OK ) goto done;
+      doltliteParseRecord(pKeyRec, nKeyRec, &kinfo);
+      for(j=0; j<nTheirs; j++){
+        int src = aTheirsRecord[j];
+        int tgt;
+        if( src<0 || src>=kinfo.nField || aMap[j]<0 ) continue;
+        tgt = aMergedRecord[aMap[j]];
+        if( tgt<0 ) continue;
+        relayoutFieldValue(pKeyRec, &kinfo, src, &aMem[tgt]);
+        if( aMem[tgt].eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
+      }
     }
 
     if( nEmit>0 ){
@@ -1408,6 +1451,8 @@ int normalizeSideToMergedLayout(
     }
     rc = prollyMutMapInsert(&mm, pKey, nKey, intKey, pNew, nNew);
     sqlite3_free(pNew);
+    sqlite3_free(pKeyRec);
+    pKeyRec = 0;
     if( rc!=SQLITE_OK ) goto done;
 
     rc = prollyCursorNext(&cur);
@@ -1429,6 +1474,8 @@ int normalizeSideToMergedLayout(
 done:
   mergeColDefaultsFree(&oursDefaults);
   mergeColDefaultsFree(&theirsDefaults);
+  if( sideCiInit ) doltliteFreeColInfo(&sideCi);
+  sqlite3_free(pKeyRec);
   if( oursCurInit ) prollyCursorClose(&oursCur);
   if( curInit ) prollyCursorClose(&cur);
   if( mmInit ) prollyMutMapFree(&mm);

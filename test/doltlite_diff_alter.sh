@@ -123,6 +123,64 @@ run_test_match "diff_after_merge_works" \
   "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[0-9]+$" "$DB5"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5"
+DB6=/tmp/test_diff_alter6_$$.db; rm -f "$DB6"
+
+echo "CREATE TABLE t(a TEXT, b INT, PRIMARY KEY(a,b));
+INSERT INTO t VALUES('x',1),('y',2);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES('m',9);
+SELECT dolt_commit('-A','-m','main2');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN c TEXT;
+UPDATE t SET c='z' WHERE a='x';
+SELECT dolt_commit('-A','-m','feat2');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+
+run_test "pk_covering_add_col_diff_row" \
+  "SELECT dolt_checkout('feat'); SELECT from_a || '|' || from_b || '|' || coalesce(from_c,'NULL') || ' -> ' || to_a || '|' || to_b || '|' || to_c || ' ' || diff_type FROM dolt_diff_t('HEAD~1','HEAD');" \
+  "0
+x|1|NULL -> x|1|z modified" "$DB6"
+
+run_test "pk_covering_add_col_diff_stat" \
+  "SELECT dolt_checkout('feat'); SELECT rows_modified FROM dolt_diff_stat('HEAD~1','HEAD','t');" \
+  "0
+1" "$DB6"
+
+run_test "pk_covering_add_col_diff_summary" \
+  "SELECT dolt_checkout('feat'); SELECT diff_type || '|' || data_change FROM dolt_diff_summary('HEAD~1','HEAD');" \
+  "0
+modified|1" "$DB6"
+
+run_test_match "pk_covering_add_col_patch_emits_update" \
+  "SELECT dolt_checkout('feat'); SELECT statement FROM dolt_patch('HEAD~1','HEAD');" \
+  "^UPDATE \"t\" SET \"c\"='z' WHERE \"a\"='x' AND \"b\"=1;$" "$DB6"
+
+run_test "pk_covering_add_col_merge" \
+  "SELECT length(dolt_merge('feat')); SELECT a || '|' || b || '|' || coalesce(c,'NULL') FROM t ORDER BY a;" \
+  "40
+m|9|NULL
+x|1|z
+y|2|NULL" "$DB6"
+
+DB7=/tmp/test_diff_alter7_$$.db; rm -f "$DB7"
+
+echo "CREATE TABLE t(a TEXT PRIMARY KEY) WITHOUT ROWID;
+INSERT INTO t VALUES('x'),('y');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES('m');
+SELECT dolt_commit('-A','-m','main2');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+SELECT dolt_commit('-A','-m','feat2');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+run_test "pk_covering_add_col_default_cherry_pick" \
+  "SELECT length(dolt_cherry_pick('feat')); SELECT a || '|' || c FROM t ORDER BY a;" \
+  "40
+m|7
+x|7
+y|7" "$DB7"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
 
 dltest_finish

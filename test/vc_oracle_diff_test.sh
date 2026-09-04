@@ -632,6 +632,26 @@ ALTER TABLE t ADD COLUMN extra INT;
 UPDATE t SET extra = 42 WHERE id = 1;
 "
 
+oracle "diff_pk_covering_add_col_and_update_working_set" "
+CREATE TABLE pk_all(id INT, k VARCHAR(10), PRIMARY KEY(id, k));
+INSERT INTO pk_all VALUES (1, 'x'), (2, 'y');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE pk_all ADD COLUMN c VARCHAR(10);
+UPDATE pk_all SET c = 'z' WHERE id = 1;
+" "pk_all"
+
+oracle "diff_pk_covering_add_col_across_commits" "
+CREATE TABLE pk_all(id INT, k VARCHAR(10), PRIMARY KEY(id, k));
+INSERT INTO pk_all VALUES (1, 'x'), (2, 'y');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE pk_all ADD COLUMN c VARCHAR(10);
+UPDATE pk_all SET c = 'z' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "pk_all"
+
 echo ""
 echo "--- summary form: dolt_diff (no args) ---"
 
