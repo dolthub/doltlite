@@ -419,18 +419,46 @@ def assert_shadow_tables_consistent(doltlite, db_path, branch):
         )
 
 
+INDEX_NAMES = ("child_grp", "child_with_parent", "child_without_parent")
+
+
+def index_fingerprint(doltlite, db_path, branch):
+    """Hash of every index, the table that owns them, and the database."""
+    parts = ["dolt_hashof_index(%s)" % sql_quote(name) for name in INDEX_NAMES]
+    parts.append("dolt_hashof_table('child')")
+    parts.append("dolt_hashof_db()")
+    sql = "SELECT %s;" % " || '|' || ".join(parts)
+    return query_scalar(doltlite, db_path, branch, sql, "index_fingerprint")
+
+
 def assert_reindex_preserves_answers(doltlite, db_path, branch):
-    """Rebuilding every index must not change a single answer."""
+    """Rebuilding an index that is already right must change nothing.
+
+    REINDEX writes the index the engine believes the rows imply, so a hash that
+    moves means what was stored did not match the rows: an entry missing, or an
+    entry a partial predicate excludes. The answers a query returns are the
+    weaker half of this check, because a stale entry can hide behind a range
+    scan that never visits it.
+    """
     probe = (
         "SELECT coalesce(group_concat(id),'') FROM "
         "(SELECT id FROM child WHERE parent_id IS NOT NULL ORDER BY id);"
     )
-    before = query_scalar(doltlite, db_path, branch, probe, "reindex_before")
+    before_rows = query_scalar(doltlite, db_path, branch, probe, "reindex_before")
+    before_hash = index_fingerprint(doltlite, db_path, branch)
     run_sql(doltlite, db_for_branch(db_path, branch), "REINDEX;", "reindex_%s" % branch)
-    after = query_scalar(doltlite, db_path, branch, probe, "reindex_after")
-    if before != after:
+    after_rows = query_scalar(doltlite, db_path, branch, probe, "reindex_after")
+    after_hash = index_fingerprint(doltlite, db_path, branch)
+    if before_rows != after_rows:
         raise AssertionError(
-            "REINDEX changed answers on %s\nbefore=%r after=%r" % (branch, before, after)
+            "REINDEX changed answers on %s\nbefore=%r after=%r"
+            % (branch, before_rows, after_rows)
+        )
+    if before_hash != after_hash:
+        raise AssertionError(
+            "REINDEX changed an index hash on %s, so the stored index did not "
+            "match its rows\nbefore=%r\nafter=%r"
+            % (branch, before_hash, after_hash)
         )
 
 

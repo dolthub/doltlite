@@ -621,9 +621,13 @@ SELECT dolt_merge_base('abc123...', 'def456...');
 SELECT dolt_hashof('main');
 SELECT dolt_hashof('HEAD~2');
 
--- Table root (one-arg form includes uncommitted working edits)
+-- Table root and its indexes (one-arg form includes uncommitted working edits)
 SELECT dolt_hashof_table('users');
 SELECT dolt_hashof_table('users', 'main');
+
+-- One index on its own
+SELECT dolt_hashof_index('users_by_email');
+SELECT dolt_hashof_index('users_by_email', 'main');
 
 -- Whole catalog (moves when any table root or membership changes)
 SELECT dolt_hashof_db();
@@ -633,6 +637,14 @@ SELECT dolt_hashof_db('HEAD');
 Results are 40-char lowercase hex. `_table` / `_db` are history-independent:
 identical `(key, value)` sets hash the same regardless of insert order or
 branch. Property tests: `test/vc_oracle_hashof_test.sh`.
+
+An index is part of the table it indexes. `dolt_hashof_index` hashes one
+index, `dolt_hashof_table` folds in every index of that table, and a change to
+an index shows in `dolt_status` as a modification of the table it belongs to,
+never as a row of its own. `REINDEX` rewrites what the rows imply, so on a
+database whose indexes match its rows it changes no hash and leaves
+`dolt_status` clean; a hash that moves across `REINDEX` means the stored index
+did not match its rows.
 
 #### Garbage Collection
 

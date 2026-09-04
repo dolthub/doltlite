@@ -414,6 +414,65 @@ static int statusIndexNameSetsMatch(
   return nACount==nBCount;
 }
 
+/* An index root is part of its table's content, so a rebuilt or diverging
+** index reads as the parent table being modified. Index catalog entries carry
+** no name; the schema row's root page pairs a name with its entry. */
+static int statusIndexRootFor(
+  SchemaEntry *aSchema, int nSchema,
+  struct TableEntry *aEnt, int nEnt,
+  const char *zTable, const char *zIndex,
+  ProllyHash *pOut,
+  int *pFound
+){
+  int i, j;
+  *pFound = 0;
+  memset(pOut, 0, sizeof(*pOut));
+  for(i=0; i<nSchema; i++){
+    if( !aSchema[i].zType || strcmp(aSchema[i].zType, "index")!=0 ) continue;
+    if( !aSchema[i].zTblName || strcmp(aSchema[i].zTblName, zTable)!=0 ) continue;
+    if( !aSchema[i].zName || strcmp(aSchema[i].zName, zIndex)!=0 ) continue;
+    for(j=0; j<nEnt; j++){
+      if( aEnt[j].iTable==aSchema[i].iRootpage ){
+        memcpy(pOut, &aEnt[j].root, sizeof(ProllyHash));
+        *pFound = 1;
+        return 1;
+      }
+    }
+    return 1;
+  }
+  return 0;
+}
+
+static int statusIndexRootsDifferForTable(
+  SchemaEntry *aFrom, int nFrom,
+  struct TableEntry *aFromEnt, int nFromEnt,
+  const char *zTblFrom,
+  SchemaEntry *aTo, int nTo,
+  struct TableEntry *aToEnt, int nToEnt,
+  const char *zTblTo
+){
+  int i;
+  for(i=0; i<nFrom; i++){
+    ProllyHash fromRoot, toRoot;
+    int haveFrom = 0, haveTo = 0;
+    if( !aFrom[i].zType || strcmp(aFrom[i].zType, "index")!=0 ) continue;
+    if( !aFrom[i].zTblName || strcmp(aFrom[i].zTblName, zTblFrom)!=0 ) continue;
+    if( !aFrom[i].zName ) continue;
+    if( !statusIndexRootFor(aFrom, nFrom, aFromEnt, nFromEnt,
+                            zTblFrom, aFrom[i].zName, &fromRoot, &haveFrom) ){
+      continue;
+    }
+    if( !statusIndexRootFor(aTo, nTo, aToEnt, nToEnt,
+                            zTblTo, aFrom[i].zName, &toRoot, &haveTo) ){
+      /* The index itself came or went; the name-set check owns that. */
+      continue;
+    }
+    if( !haveFrom || !haveTo ) continue;
+    if( prollyHashCompare(&fromRoot, &toRoot)!=0 ) return 1;
+  }
+  return 0;
+}
+
 static int statusCompareIndexSchemaObjects(
   DoltliteStatusCursor *pCur,
   sqlite3 *db,
@@ -493,7 +552,11 @@ static int statusCompareIndexSchemaObjects(
       }
     }
     if( doltliteIndexSchemaRowsDifferForTable(aFrom, nFrom, aTo, nTo,
-                                              pRow->zTblName) ){
+                                              pRow->zTblName)
+     || statusIndexRootsDifferForTable(aFrom, nFrom, aFromEnt, nFromEnt,
+                                       pRow->zTblName,
+                                       aTo, nTo, aToEnt, nToEnt,
+                                       pRow->zTblName) ){
       rc = statusMaybeAddParentSchemaChange(pCur, pRow->zTblName,
                                             staged, zFilter);
       if( rc!=SQLITE_OK ) goto index_schema_done;
