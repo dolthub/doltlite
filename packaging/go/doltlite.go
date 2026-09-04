@@ -16,6 +16,7 @@ package doltlite
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "doltlite.h"
 
 // The engine copies bound text and blobs rather than borrowing them, which
@@ -26,6 +27,43 @@ static int dl_bind_text(sqlite3_stmt *s, int i, const char *p, int n) {
 static int dl_bind_blob(sqlite3_stmt *s, int i, const void *p, int n) {
   return sqlite3_bind_blob(s, i, p, n, SQLITE_TRANSIENT);
 }
+
+// Chunk-source bridge. dl_go_get_chunks is the exported Go trampoline; the two
+// C callbacks below both route through it (a scalar Get is a one-element batch).
+// pCtx carries a runtime/cgo.Handle to the Go ChunkSource.
+extern int dl_go_get_chunks(uintptr_t h, int n, unsigned char *hashes,
+                            unsigned char **outBytes, int *outLens);
+
+static int SQLITE_CALLBACK dl_xget(void *pCtx, const unsigned char aHash[20],
+                                   unsigned char **ppBytes, int *pnBytes) {
+  return dl_go_get_chunks((uintptr_t)pCtx, 1, (unsigned char *)aHash, ppBytes, pnBytes);
+}
+static int SQLITE_CALLBACK dl_xgetmany(void *pCtx, int nHash, const unsigned char *aHash,
+                                       unsigned char **apBytes, int *anBytes) {
+  return dl_go_get_chunks((uintptr_t)pCtx, nHash, (unsigned char *)aHash, apBytes, anBytes);
+}
+static doltlite_chunk_source *dl_new_chunk_source(uintptr_t h) {
+  doltlite_chunk_source *s = (doltlite_chunk_source *)sqlite3_malloc(sizeof(*s));
+  if (!s) return 0;
+  s->iVersion = 1;
+  s->pCtx = (void *)h;
+  s->xGet = dl_xget;
+  s->xGetMany = dl_xgetmany;
+  return s;
+}
+static int dl_set_chunk_source(sqlite3 *db, doltlite_chunk_source *s) {
+  return doltlite_set_chunk_source(db, "main", s);
+}
+static int dl_clear_chunk_source(sqlite3 *db) {
+  return doltlite_set_chunk_source(db, "main", 0);
+}
+// dl_source_bytes copies Go-provided bytes into an sqlite3_malloc buffer whose
+// ownership transfers to the engine (it frees them).
+static unsigned char *dl_source_bytes(const void *p, int n) {
+  unsigned char *out = (unsigned char *)sqlite3_malloc(n > 0 ? n : 1);
+  if (out && n > 0) memcpy(out, p, (size_t)n);
+  return out;
+}
 */
 import "C"
 
@@ -35,6 +73,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/cgo"
 	"sync"
 	"unsafe"
 )
@@ -107,6 +146,123 @@ type conn struct {
 	// while Close is tearing it down.
 	runMu   sync.Mutex
 	retired bool
+
+	// chunkSource is the registered source struct (sqlite3_malloc'd) and
+	// chunkHandle carries the Go ChunkSource across the C boundary; both are
+	// released when the source is cleared or the connection closes.
+	chunkSource *C.doltlite_chunk_source
+	chunkHandle cgo.Handle
+	hasChunkSrc bool
+}
+
+// ChunkSource supplies content-addressed chunks the engine is missing from its
+// local database — for example, to lazily hydrate a repository whose data lives
+// on a remote. It is consulted only for reads.
+type ChunkSource interface {
+	// GetChunks returns, for each requested 20-byte chunk address, the chunk's
+	// bytes, or nil for a chunk the source does not have. A non-nil error aborts
+	// the read.
+	GetChunks(hashes [][20]byte) ([][]byte, error)
+}
+
+// ChunkSourceSetter is implemented by this driver's connections. Reach it with
+// sql.Conn.Raw:
+//
+//	raw.(doltlite.ChunkSourceSetter).SetChunkSource(src)
+//
+// Registration is per connection. Pass nil to clear it.
+type ChunkSourceSetter interface {
+	SetChunkSource(ChunkSource) error
+}
+
+// SetChunkSource registers src as the source of chunks absent from this
+// connection's local database. Passing nil clears any registration.
+func (c *conn) SetChunkSource(src ChunkSource) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errConnClosed
+	}
+	if c.hasChunkSrc {
+		if err := c.run(func() { C.dl_clear_chunk_source(c.db) }); err != nil {
+			return err
+		}
+		C.sqlite3_free(unsafe.Pointer(c.chunkSource))
+		c.chunkSource = nil
+		c.chunkHandle.Delete()
+		c.hasChunkSrc = false
+	}
+	if src == nil {
+		return nil
+	}
+
+	h := cgo.NewHandle(src)
+	var cs *C.doltlite_chunk_source
+	rc := C.int(C.SQLITE_OK)
+	err := c.run(func() {
+		cs = C.dl_new_chunk_source(C.uintptr_t(h))
+		if cs == nil {
+			rc = C.SQLITE_NOMEM
+			return
+		}
+		rc = C.dl_set_chunk_source(c.db, cs)
+	})
+	if err != nil {
+		h.Delete()
+		return err
+	}
+	if rc != C.SQLITE_OK {
+		if cs != nil {
+			C.sqlite3_free(unsafe.Pointer(cs))
+		}
+		e := c.err(rc)
+		h.Delete()
+		return e
+	}
+	c.chunkSource = cs
+	c.chunkHandle = h
+	c.hasChunkSrc = true
+	return nil
+}
+
+// dl_go_get_chunks is the C-callable trampoline the engine invokes for a chunk
+// miss. It is called synchronously on the query thread; it must not re-enter
+// this connection, and the Go ChunkSource must not either.
+//
+//export dl_go_get_chunks
+func dl_go_get_chunks(h C.uintptr_t, n C.int, hashes *C.uchar, outBytes **C.uchar, outLens *C.int) C.int {
+	src, ok := cgo.Handle(h).Value().(ChunkSource)
+	if !ok {
+		return C.DOLTLITE_SOURCE_IOERR
+	}
+	count := int(n)
+	raw := C.GoBytes(unsafe.Pointer(hashes), C.int(count*20))
+	req := make([][20]byte, count)
+	for i := 0; i < count; i++ {
+		copy(req[i][:], raw[i*20:(i+1)*20])
+	}
+
+	chunks, err := src.GetChunks(req)
+	if err != nil {
+		return C.DOLTLITE_SOURCE_IOERR
+	}
+
+	outB := unsafe.Slice(outBytes, count)
+	outN := unsafe.Slice(outLens, count)
+	for i := 0; i < count; i++ {
+		if i < len(chunks) && chunks[i] != nil {
+			b := chunks[i]
+			var p unsafe.Pointer
+			if len(b) > 0 {
+				p = unsafe.Pointer(&b[0])
+			}
+			outB[i] = (*C.uchar)(C.dl_source_bytes(p, C.int(len(b))))
+			outN[i] = C.int(len(b))
+		} else {
+			outB[i] = nil
+		}
+	}
+	return C.DOLTLITE_SOURCE_OK
 }
 
 // errConnClosed is returned by run once the connection is torn down.
@@ -168,6 +324,13 @@ func (c *conn) Close() error {
 		C.sqlite3_close_v2(c.db)
 	})
 	c.stop()
+	// The registration dropped with the db; free the struct and handle.
+	if c.hasChunkSrc {
+		C.sqlite3_free(unsafe.Pointer(c.chunkSource))
+		c.chunkSource = nil
+		c.chunkHandle.Delete()
+		c.hasChunkSrc = false
+	}
 	return nil
 }
 
