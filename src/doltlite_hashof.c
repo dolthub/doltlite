@@ -46,6 +46,161 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 
+/* An index is part of the table it indexes: its root belongs in that table's
+** hash, and the index gets a hash of its own so a rebuild can be compared
+** without a constraint to walk it. Index catalog entries carry no name, so a
+** name resolves through the schema row's root page. */
+static int hashofIndexRootByName(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zIndex,
+  ProllyHash *pRoot,
+  ProllyHash *pSchemaHash,
+  char **pzTable
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *cache = doltliteGetCache(db);
+  SchemaEntry *aSchema = 0;
+  struct TableEntry *aTables = 0;
+  int nSchema = 0, nTables = 0;
+  int rc, i;
+  int found = 0;
+  Pgno iRoot = 0;
+  char *zSql = 0;
+  char *zTable = 0;
+
+  if( pzTable ) *pzTable = 0;
+  if( !cs || !cache ) return SQLITE_ERROR;
+  rc = loadSchemaFromCatalog(db, cs, cache, pCatHash, &aSchema, &nSchema);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<nSchema; i++){
+    if( !aSchema[i].zName || !aSchema[i].zType ) continue;
+    if( sqlite3_stricmp(aSchema[i].zType, "index")!=0 ) continue;
+    if( sqlite3_stricmp(aSchema[i].zName, zIndex)!=0 ) continue;
+    iRoot = aSchema[i].iRootpage;
+    zSql = aSchema[i].zSql ? sqlite3_mprintf("%s", aSchema[i].zSql) : 0;
+    zTable = aSchema[i].zTblName ? sqlite3_mprintf("%s", aSchema[i].zTblName) : 0;
+    found = 1;
+    break;
+  }
+  freeSchemaEntries(aSchema, nSchema);
+  if( !found ) return SQLITE_NOTFOUND;
+
+  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zSql);
+    sqlite3_free(zTable);
+    return rc;
+  }
+  memset(pRoot, 0, sizeof(*pRoot));
+  memset(pSchemaHash, 0, sizeof(*pSchemaHash));
+  found = 0;
+  for(i=0; i<nTables; i++){
+    if( aTables[i].iTable==iRoot ){
+      memcpy(pRoot, &aTables[i].root, sizeof(ProllyHash));
+      found = 1;
+      break;
+    }
+  }
+  doltliteFreeCatalog(aTables, nTables);
+  if( zSql ){
+    char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zIndex);
+    if( zCanon ){
+      prollyHashCompute(zCanon, (int)strlen(zCanon), pSchemaHash);
+      sqlite3_free(zCanon);
+    }
+    sqlite3_free(zSql);
+  }
+  if( !found ){
+    sqlite3_free(zTable);
+    return SQLITE_NOTFOUND;
+  }
+  if( pzTable ){
+    *pzTable = zTable;
+  }else{
+    sqlite3_free(zTable);
+  }
+  return SQLITE_OK;
+}
+
+static int hashofIndexInCatalog(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zIndex,
+  char *pHex
+){
+  ProllyHash root, schemaHash, h;
+  u8 aBuf[PROLLY_HASH_SIZE*2];
+  int rc = hashofIndexRootByName(db, pCatHash, zIndex, &root, &schemaHash, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(aBuf, root.data, PROLLY_HASH_SIZE);
+  memcpy(aBuf + PROLLY_HASH_SIZE, schemaHash.data, PROLLY_HASH_SIZE);
+  prollyHashCompute(aBuf, sizeof(aBuf), &h);
+  doltliteHashToHex(&h, pHex);
+  return SQLITE_OK;
+}
+
+/* Fold every index of one table into a running hash, ordered by index name so
+** the result does not depend on catalog order. */
+static int hashofFoldTableIndexes(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTable,
+  sqlite3_str *pStr
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *cache = doltliteGetCache(db);
+  SchemaEntry *aSchema = 0;
+  int nSchema = 0;
+  char **azIndex = 0;
+  int nIndex = 0;
+  int rc, i, j;
+
+  if( !cs || !cache ) return SQLITE_ERROR;
+  rc = loadSchemaFromCatalog(db, cs, cache, pCatHash, &aSchema, &nSchema);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<nSchema; i++){
+    if( !aSchema[i].zName || !aSchema[i].zType || !aSchema[i].zTblName ) continue;
+    if( sqlite3_stricmp(aSchema[i].zType, "index")!=0 ) continue;
+    if( sqlite3_stricmp(aSchema[i].zTblName, zTable)!=0 ) continue;
+    azIndex = sqlite3_realloc64(azIndex, (sqlite3_uint64)(nIndex+1) * sizeof(char*));
+    if( !azIndex ){
+      freeSchemaEntries(aSchema, nSchema);
+      return SQLITE_NOMEM;
+    }
+    azIndex[nIndex] = sqlite3_mprintf("%s", aSchema[i].zName);
+    if( !azIndex[nIndex] ){
+      freeSchemaEntries(aSchema, nSchema);
+      for(j=0; j<nIndex; j++) sqlite3_free(azIndex[j]);
+      sqlite3_free(azIndex);
+      return SQLITE_NOMEM;
+    }
+    nIndex++;
+  }
+  freeSchemaEntries(aSchema, nSchema);
+
+  for(i=1; i<nIndex; i++){
+    char *zTmp = azIndex[i];
+    for(j=i; j>0 && strcmp(azIndex[j-1], zTmp)>0; j--) azIndex[j] = azIndex[j-1];
+    azIndex[j] = zTmp;
+  }
+
+  for(i=0; i<nIndex && rc==SQLITE_OK; i++){
+    char zIdxHex[PROLLY_HASH_SIZE*2+1];
+    rc = hashofIndexInCatalog(db, pCatHash, azIndex[i], zIdxHex);
+    if( rc==SQLITE_NOTFOUND ){
+      /* A schema row whose entry is gone contributes nothing. */
+      rc = SQLITE_OK;
+      continue;
+    }
+    if( rc!=SQLITE_OK ) break;
+    sqlite3_str_appendf(pStr, "|%s=%s", azIndex[i], zIdxHex);
+  }
+  for(i=0; i<nIndex; i++) sqlite3_free(azIndex[i]);
+  sqlite3_free(azIndex);
+  return rc;
+}
+
 static int hashofTableInCatalog(
   sqlite3 *db,
   const ProllyHash *pCatHash,
@@ -86,10 +241,43 @@ static int hashofTableInCatalog(
     sqlite3_free(zCanon);
   }
 
-  memcpy(aBuf, tableRoot.data, PROLLY_HASH_SIZE);
-  memcpy(aBuf + PROLLY_HASH_SIZE, schemaHash.data, PROLLY_HASH_SIZE);
-  prollyHashCompute(aBuf, sizeof(aBuf), &tableHash);
   clearSchemaEntry(&schemaEntry);
+
+  /* An index is part of the table's content, so its root belongs here. A table
+  ** without indexes keeps the original root-and-schema hash, so recorded
+  ** hashes stay valid where there is nothing new to fold in. Indexes fold in
+  ** by name, as hex: a hash byte may be zero and would truncate a raw
+  ** preimage. */
+  {
+    sqlite3_str *pStr = sqlite3_str_new(0);
+    char *zFold;
+    if( !pStr ) return SQLITE_NOMEM;
+    rc = hashofFoldTableIndexes(db, pCatHash, zTable, pStr);
+    zFold = sqlite3_str_finish(pStr);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zFold);
+      return rc;
+    }
+    memcpy(aBuf, tableRoot.data, PROLLY_HASH_SIZE);
+    memcpy(aBuf + PROLLY_HASH_SIZE, schemaHash.data, PROLLY_HASH_SIZE);
+    if( !zFold || !zFold[0] ){
+      prollyHashCompute(aBuf, sizeof(aBuf), &tableHash);
+    }else{
+      char zRootHex[PROLLY_HASH_SIZE*2+1];
+      char zSchemaHex[PROLLY_HASH_SIZE*2+1];
+      char *zAll;
+      doltliteHashToHex(&tableRoot, zRootHex);
+      doltliteHashToHex(&schemaHash, zSchemaHex);
+      zAll = sqlite3_mprintf("%s|%s%s", zRootHex, zSchemaHex, zFold);
+      if( !zAll ){
+        sqlite3_free(zFold);
+        return SQLITE_NOMEM;
+      }
+      prollyHashCompute(zAll, (int)strlen(zAll), &tableHash);
+      sqlite3_free(zAll);
+    }
+    sqlite3_free(zFold);
+  }
   doltliteHashToHex(&tableHash, pHex);
   return SQLITE_OK;
 }
@@ -708,6 +896,50 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 
+static void doltliteHashofIndexFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db;
+  const char *zIndex;
+  ProllyHash catHash;
+  char hex[PROLLY_HASH_SIZE*2+1];
+  int rc;
+
+  if( argc!=1 && argc!=2 ){
+    sqlite3_result_error(ctx, "dolt_hashof_index() takes 1 or 2 arguments", -1);
+    return;
+  }
+  if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+  zIndex = (const char*)sqlite3_value_text(argv[0]);
+  if( !zIndex || !*zIndex ){
+    sqlite3_result_error(ctx, "dolt_hashof_index: index not found", -1);
+    return;
+  }
+  db = sqlite3_context_db_handle(ctx);
+
+  if( argc==1 ){
+    rc = doltliteFlushCatalogToHash(db, &catHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(ctx, "dolt_hashof_index: catalog flush failed", -1);
+      return;
+    }
+  }else{
+    if( hashofResolveRefCatalog(ctx, db, argv[1], "dolt_hashof_index", &catHash) ) return;
+  }
+
+  rc = hashofIndexInCatalog(db, &catHash, zIndex, hex);
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_result_error(ctx, "dolt_hashof_index: index not found", -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(ctx, "dolt_hashof_index: index not found in catalog", -1);
+    return;
+  }
+  sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
+}
+
 static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   ProllyHash catHash;
@@ -761,6 +993,14 @@ int doltliteHashofRegister(sqlite3 *db){
   if( rc==SQLITE_OK ){
     rc = sqlite3_create_function(db, "dolt_hashof_catalog", 1, SQLITE_UTF8, 0,
                                  doltliteHashofCatalogFunc, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_create_function(db, "dolt_hashof_index", 1, SQLITE_UTF8, 0,
+                                 doltliteHashofIndexFunc, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_create_function(db, "dolt_hashof_index", 2, SQLITE_UTF8, 0,
+                                 doltliteHashofIndexFunc, 0, 0);
   }
   return rc;
 }
