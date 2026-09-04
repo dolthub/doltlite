@@ -72,6 +72,28 @@ static int resetBranchRef(sqlite3 *db, ChunkStore *cs, const char *zName,
   return rc;
 }
 
+/* Dolt refuses to create a branch whose name differs from an existing one only
+** by case, while every lookup stays exact. An exact match is left to the
+** caller's own duplicate handling, and a rename may re-case its own name. */
+static int branchNameTakenIgnoringCase(
+  ChunkStore *cs,
+  const char *zName,
+  const char *zSelf
+){
+  const BranchRef *aBranch = 0;
+  int nBranch = 0;
+  int i;
+  refsTableGetBranches(&cs->refs, &nBranch, &aBranch);
+  for(i=0; i<nBranch; i++){
+    const char *zHave = aBranch[i].zName;
+    if( !zHave ) continue;
+    if( strcmp(zHave, zName)==0 ) continue;
+    if( zSelf && strcmp(zHave, zSelf)==0 ) continue;
+    if( sqlite3_stricmp(zHave, zName)==0 ) return 1;
+  }
+  return 0;
+}
+
 int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
 
@@ -86,6 +108,7 @@ int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( p->force && chunkStoreFindBranch(cs, p->zName, 0)==SQLITE_OK ){
     return resetBranchRef(db, cs, p->zName, &p->head);
   }
+  if( branchNameTakenIgnoringCase(cs, p->zName, 0) ) return SQLITE_ERROR;
   return chunkStoreAddBranch(cs, p->zName, &p->head);
 }
 
@@ -110,6 +133,7 @@ static int mutateBranchCopy(sqlite3 *db, ChunkStore *cs, void *pArg){
       return resetBranchRef(db, cs, p->zDest, &srcCommit);
     }
   }
+  if( branchNameTakenIgnoringCase(cs, p->zDest, 0) ) return SQLITE_ERROR;
   return chunkStoreAddBranch(cs, p->zDest, &srcCommit);
 }
 
@@ -131,6 +155,7 @@ static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( !doltliteUserRefNameIsValid(p->zDest) ) return SQLITE_CONSTRAINT;
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
+  if( branchNameTakenIgnoringCase(cs, p->zDest, p->zSrc) ) return SQLITE_ERROR;
   zDefault = chunkStoreGetDefaultBranch(cs);
   srcIsDefault = zDefault && strcmp(p->zSrc, zDefault)==0;
   rc = chunkStoreGetBranchWorkingSet(cs, p->zSrc, &srcWorkingSet);
