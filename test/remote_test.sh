@@ -834,6 +834,50 @@ else
 fi
 check "lazy clone is refs-sized before use" "1" "$lazy_refs_sized"
 
+lazy_write_uri="file:$TMPDIR/lazy_write.db?lazy_origin=1"
+"$DB" "$lazy_write_uri" \
+  "SELECT dolt_clone('--lazy','$R/lazy_origin.db');" > /dev/null
+result=$("$DB" "$lazy_write_uri" \
+  "INSERT INTO lazy_cold VALUES(102,zeroblob(4096)); SELECT count(*) || '|' || max(id) FROM lazy_cold;" 2>&1)
+check "first write to an uncached lazy table succeeds" "101|102" "$result"
+
+"$DB" "$TMPDIR/lazy_merge_origin.db" <<'ENDSQL' > /dev/null
+CREATE TABLE merge_rows(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO merge_rows VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+.quit
+ENDSQL
+lazy_merge_uri="file:$TMPDIR/lazy_merge.db?lazy_origin=1"
+"$DB" "$lazy_merge_uri" \
+  "SELECT dolt_clone('--lazy','$R/lazy_merge_origin.db');" > /dev/null
+"$DB" "$lazy_merge_uri" \
+  "SELECT count(*) FROM merge_rows; INSERT INTO merge_rows VALUES(3,'local'); SELECT dolt_commit('-am','local');" > /dev/null
+"$DB" "$TMPDIR/lazy_merge_origin.db" \
+  "INSERT INTO merge_rows VALUES(2,'origin'); SELECT dolt_commit('-am','origin');" > /dev/null
+"$DB" "$lazy_merge_uri" "SELECT dolt_fetch('origin');" > /dev/null
+result=$("$DB" "$lazy_merge_uri" \
+  "SELECT dolt_merge('origin/main');" 2>&1)
+lazy_merge_rc=$?
+check "merge faults in uncached lazy table data" "0" "$lazy_merge_rc"
+result=$("$DB" "$lazy_merge_uri" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM merge_rows ORDER BY id);" 2>&1)
+check "lazy merge keeps both branches' rows" "1,2,3" "$result"
+
+lazy_gc_uri="file:$TMPDIR/lazy_gc.db?lazy_origin=1"
+"$DB" "$lazy_gc_uri" \
+  "SELECT dolt_clone('--lazy','$R/lazy_origin.db');" > /dev/null
+result=$("$DB" "$lazy_gc_uri" "SELECT dolt_gc();" 2>&1)
+lazy_gc_rc=$?
+if [ "$lazy_gc_rc" -eq 0 ]; then
+  lazy_gc_status=0
+else
+  lazy_gc_status="$lazy_gc_rc: $result"
+fi
+check "gc faults in uncached lazy chunks" "0" "$lazy_gc_status"
+result=$("$DB" "$lazy_gc_uri" \
+  "SELECT count(*) || '|' || sum(id) FROM lazy_rows;" 2>&1)
+check "lazy data remains intact after gc" "801|321201" "$result"
+
 lazy_actual=$("$DB" "$lazy_clone_uri" "$lazy_parity_sql")
 check "lazy clone matches rows, log, branches, diff stat, historical rows, and full scan" "$lazy_expected" "$lazy_actual"
 

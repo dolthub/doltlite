@@ -521,11 +521,6 @@ int chunkStoreSourceGet(
     }
     return SQLITE_NOTFOUND;
   }
-  if( csSourceGraphLockHeld(cs, p) ){
-    csSourceSetHashError(p, SQLITE_BUSY,
-      "chunk source fetch blocked by active graph lock for", pHash);
-    return SQLITE_BUSY;
-  }
   sourceRc = pSource->xGet(pSource->pCtx, pHash->data, &pData, &nData);
   if( sourceRc==DOLTLITE_SOURCE_NOTFOUND ){
     sqlite3_free(pData);
@@ -547,7 +542,9 @@ int chunkStoreSourceGet(
   }
   apData[0] = pData;
   anData[0] = nData;
-  rc = csSourcePersistMany(cs, p, pHash, apData, anData, 1);
+  if( !csSourceGraphLockHeld(cs, p) ){
+    rc = csSourcePersistMany(cs, p, pHash, apData, anData, 1);
+  }
   if( rc==SQLITE_OK ) rc = csSourceCachePut(p, pHash, pData, nData);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pData);
@@ -593,13 +590,6 @@ int chunkStoreSourcePrefetchMany(
     if( !aPresent[i] ) aMissing[nMissing++] = aHash[i];
   }
   if( nMissing==0 ) goto prefetch_done;
-  if( csSourceGraphLockHeld(cs, p) ){
-    csSourceSetHashError(p, SQLITE_BUSY,
-      "chunk source fetch blocked by active graph lock for", &aMissing[0]);
-    rc = SQLITE_BUSY;
-    goto prefetch_done;
-  }
-
   apData = (u8**)sqlite3_malloc64(
       (sqlite3_uint64)nMissing * sizeof(u8*));
   anData = (int*)sqlite3_malloc64(
@@ -645,7 +635,9 @@ int chunkStoreSourcePrefetchMany(
     }
   }
 
-  rc = csSourcePersistMany(cs, p, aMissing, apData, anData, nMissing);
+  if( !csSourceGraphLockHeld(cs, p) ){
+    rc = csSourcePersistMany(cs, p, aMissing, apData, anData, nMissing);
+  }
   if( rc!=SQLITE_OK ) goto prefetch_done;
   for(i=0; i<nMissing; i++){
     if( !apData[i] ) continue;
@@ -672,6 +664,13 @@ void chunkStoreSourceClose(ChunkStore *cs){
   while( p->pLruTail ) csSourceCacheRemove(p, p->pLruTail);
   csSourceClearError(p);
   sqlite3_free(p);
+}
+
+void chunkStoreSourceCloseWriter(ChunkStore *cs){
+  DoltliteChunkSourceState *p = cs->pChunkSource;
+  if( !p || !p->writerOpen ) return;
+  chunkStoreClose(&p->writer);
+  p->writerOpen = 0;
 }
 
 static int csSourceCreate(
@@ -1090,6 +1089,9 @@ void chunkStoreSourceClose(ChunkStore *cs){
   cs->pChunkSource = 0;
   sqlite3_free(p->zErr);
   sqlite3_free(p);
+}
+void chunkStoreSourceCloseWriter(ChunkStore *cs){
+  UNUSED_PARAMETER(cs);
 }
 char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc){
   DoltliteChunkSourceState *p = cs->pChunkSource;
