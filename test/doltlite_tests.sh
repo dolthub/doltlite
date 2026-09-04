@@ -157,6 +157,37 @@ zero_rows|FAIL|expected_single_value expects exactly one cell. Received 0 rows
 0
 1" "$DB"
 
+CONTROL_FILE="${DB}.injected"
+rm -f "$CONTROL_FILE"
+run_test "runner_connection_control_rejected" \
+  "CREATE TABLE transaction_guard(i INT);
+   ATTACH ':memory:' AS caller_aux;
+   INSERT INTO dolt_tests VALUES
+     ('attach','connection_control','ATTACH ''$CONTROL_FILE'' AS injected','expected_rows','==','0'),
+     ('detach','connection_control','DETACH caller_aux','expected_rows','==','0'),
+     ('rollback','connection_control','ROLLBACK','expected_rows','==','0'),
+     ('savepoint','connection_control','SAVEPOINT injected_savepoint','expected_rows','==','0');
+   BEGIN;
+   INSERT INTO transaction_guard VALUES(1);
+   SELECT test_name, status, message FROM dolt_test_run('connection_control');
+   SELECT count(*) FROM pragma_database_list WHERE name='caller_aux';
+   SELECT count(*) FROM pragma_database_list WHERE name='injected';
+   SELECT count(*) FROM transaction_guard;
+   COMMIT;" \
+  "attach|FAIL|Cannot execute write queries
+detach|FAIL|Cannot execute write queries
+rollback|FAIL|Cannot execute write queries
+savepoint|FAIL|Cannot execute write queries
+1
+0
+1" "$DB"
+
+if [ -e "$CONTROL_FILE" ]; then
+  dltest_fail "runner_attach_no_file" "  created: $CONTROL_FILE"
+else
+  dltest_pass
+fi
+
 run_test "runner_query_error" \
   "INSERT INTO dolt_tests VALUES
      ('query_error','errors','SELECT * FROM absent','expected_rows','==','0');
@@ -178,7 +209,7 @@ run_test "drop_materialized_table" \
   "0
 0" "$DB"
 
-rm -f "$DB"
+rm -f "$DB" "$CONTROL_FILE"
 DB=/tmp/test_dolt_tests_zero_$$.db
 rm -f "$DB"
 

@@ -590,6 +590,12 @@ static int testAuthorizer(void *pArg, int action, const char *z1,
       p->hasCommand = 1;
     }
   }
+  if( rc==SQLITE_OK && (action==SQLITE_ATTACH
+      || action==SQLITE_DETACH
+      || action==SQLITE_TRANSACTION
+      || action==SQLITE_SAVEPOINT) ){
+    p->hasCommand = 1;
+  }
   if( rc==SQLITE_OK && action==SQLITE_PRAGMA ){
     p->hasPragma = 1;
     rc = SQLITE_DENY;
