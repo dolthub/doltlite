@@ -319,7 +319,7 @@ static void doltVerifyConstraintsFunc(
   }
 
   rc = doltliteDetectConstraintViolationsFiltered(
-      db, pDetectAnc, azScan, nScan, !bOutputOnly, &nViolations);
+      db, pDetectAnc, azScan, nScan, !bOutputOnly, &nViolations, 0);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     goto cleanup;

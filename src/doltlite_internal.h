@@ -10,7 +10,6 @@
 #include "chunk_store.h"
 #include "doltlite_catalog_types.h"
 #include <time.h>
-#include <ctype.h>
 #include <limits.h>
 
 typedef struct BtShared BtShared;
@@ -607,21 +606,6 @@ static SQLITE_INLINE int doltliteResolveBranchEffectiveCatalog(
   return SQLITE_OK;
 }
 
-/* True if the trimmed CREATE TABLE segment is a table-level constraint. */
-static SQLITE_INLINE int doltliteSegmentIsTableConstraint(const char *s, int len){
-  if( len>=11 && sqlite3_strnicmp(s, "PRIMARY KEY", 11)==0
-      && (len==11 || !isalnum((unsigned char)s[11])) ) return 1;
-  if( len>=6 && sqlite3_strnicmp(s, "UNIQUE", 6)==0
-      && (len==6 || s[6]=='(' || isspace((unsigned char)s[6])) ) return 1;
-  if( len>=5 && sqlite3_strnicmp(s, "CHECK", 5)==0
-      && (len==5 || s[5]=='(' || isspace((unsigned char)s[5])) ) return 1;
-  if( len>=11 && sqlite3_strnicmp(s, "FOREIGN KEY", 11)==0
-      && (len==11 || !isalnum((unsigned char)s[11])) ) return 1;
-  if( len>=10 && sqlite3_strnicmp(s, "CONSTRAINT", 10)==0
-      && (len==10 || isspace((unsigned char)s[10])) ) return 1;
-  return 0;
-}
-
 static SQLITE_INLINE int doltliteAppendQuotedColumnList(
   sqlite3_str *pStr,
   char *const *azName,
@@ -676,23 +660,6 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                         struct TableEntry **ppTables, int *pnTables,
                         Pgno *piNextTable);
 void doltliteFreeCatalog(struct TableEntry *a, int n);
-
-static SQLITE_INLINE int doltliteFindTableRootByName(
-  struct TableEntry *a, int n, const char *zName,
-  ProllyHash *pRoot, u8 *pFlags, ProllyHash *pSchemaHash
-){
-  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    if( pSchemaHash ) memcpy(pSchemaHash, &e->schemaHash, sizeof(ProllyHash));
-    return SQLITE_OK;
-  }
-  memset(pRoot, 0, sizeof(ProllyHash));
-  if( pFlags ) *pFlags = 0;
-  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(ProllyHash));
-  return SQLITE_NOTFOUND;
-}
 
 int doltliteLoadTableRootByName(
   sqlite3 *db,
@@ -894,7 +861,6 @@ int doltliteDeserializeConstraintViolationsForTest(
   const u8 *data, int nData
 );
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
-int doltlitePrepareCatalogForPersistence(sqlite3 *db);
 int doltliteCreateAndStoreCommit(
   sqlite3 *db,
   const ProllyHash *pParent,
@@ -970,6 +936,9 @@ int doltliteCmdParseAuthor(
   char **pzName, char **pzEmail
 );
 void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
+int doltliteCmdSourceResultError(
+  sqlite3_context *ctx, ChunkStore *cs, int *pRc
+);
 int doltliteCmdFinishWithConflicts(
   sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,
   int nConflicts, const char *zOp, int bSealOnPlain
@@ -984,25 +953,14 @@ int doltliteCmdFinishWithConflictsAndConstraintViolations(
   const char *zNestedMsg
 );
 
-int doltliteReportConflicts(
-  sqlite3 *db, sqlite3_context *ctx, int nConflicts, const char *zOp
-);
-int doltliteReportConstraintViolations(
-  sqlite3 *db, sqlite3_context *ctx, const char *zOp
-);
-int doltliteReportConflictsAndConstraintViolations(
-  sqlite3 *db, sqlite3_context *ctx, int nConflicts, const char *zOp
-);
-int doltliteDetectPostMergeConstraintViolations(
-  sqlite3 *db, const ProllyHash *pAncCatHash, int *pnViolations
-);
 int doltliteDetectConstraintViolationsFiltered(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
   const char **azTables,
   int nTables,
   int bPersist,
-  int *pnViolations
+  int *pnViolations,
+  char **pzErr
 );
 int doltliteVerifyConstraintsRegister(sqlite3 *db);
 int doltliteRefreshAndConfirmHead(
@@ -1012,10 +970,6 @@ int doltliteRestoreTxnStateOnFailure(
   sqlite3 *db, DoltliteTxnState *pSaved, int opRc
 );
 int doltlitePrimeSchemaCache(sqlite3 *db);
-void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx);
-int doltliteRollbackAutocommitConflict(
-  sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved
-);
 int doltliteSavepointIsTopLevelTxn(sqlite3 *db);
 int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db);
 
@@ -1407,12 +1361,6 @@ int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
 int doltliteSessionHasSchemaConflicts(sqlite3 *db, int *pHas);
 int doltliteForEachSchemaConflict(sqlite3 *db,
     int (*xConflict)(void*, const char*), void *pCtx);
-
-static SQLITE_INLINE int doltliteAppendQuotedIdent(sqlite3_str *pStr,
-                                                   const char *zName){
-  sqlite3_str_appendf(pStr, "\"%w\"", zName ? zName : "");
-  return sqlite3_str_errcode(pStr);
-}
 
 static SQLITE_INLINE const char *doltliteVcUnavailableMessage(sqlite3 *db){
   if( doltliteIsStockSqliteDb(db) ){

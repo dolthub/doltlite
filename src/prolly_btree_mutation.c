@@ -523,7 +523,7 @@ void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
   }
 }
 
-int ensureMutMap(BtCursor *pCur){
+static int ensureMutMap(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
   ProllyMutMap *pMap;

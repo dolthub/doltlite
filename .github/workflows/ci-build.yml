@@ -1017,3 +1017,6 @@ jobs:
 
     - name: Dead-code gate
       run: bash test/dead_code_check.sh
+
+    - name: Dead-code gate self-test
+      run: bash test/dead_code_check_selftest.sh

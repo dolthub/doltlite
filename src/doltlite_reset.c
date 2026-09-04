@@ -31,21 +31,6 @@ static int resetFindTableIndex(struct TableEntry *aTables, int nTables,
   return -1;
 }
 
-static int resetSourceResultError(
-  sqlite3_context *context,
-  ChunkStore *cs,
-  int *pRc
-){
-  int pendingRc = SQLITE_OK;
-  char *zErr = chunkStoreSourceTakeError(cs, &pendingRc);
-  if( !zErr && pendingRc==SQLITE_OK ) return 0;
-  if( zErr ) sqlite3_result_error(context, zErr, -1);
-  if( pendingRc!=SQLITE_OK ) *pRc = pendingRc;
-  sqlite3_result_error_code(context, *pRc);
-  sqlite3_free(zErr);
-  return 1;
-}
-
 /* True when zName is a table in live schema, staged, or HEAD. A table
 ** beats a same-named ref: dolt_reset('x') must not rewind HEAD. */
 static int resetNameIsTablePath(
@@ -70,7 +55,7 @@ static int resetNameIsTablePath(
   if( !prollyHashIsEmpty(&hash) ){
     rc = doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0);
     if( rc!=SQLITE_OK ){
-      if( resetSourceResultError(context, cs, &rc) ) return rc;
+      if( doltliteCmdSourceResultError(context, cs, &rc) ) return rc;
     }else{
       *pFound = resetFindTableIndex(aCat, nCat, zName)>=0;
       doltliteFreeCatalog(aCat, nCat);
@@ -81,13 +66,13 @@ static int resetNameIsTablePath(
   }
   rc = doltliteGetHeadCatalogHash(db, &hash);
   if( rc!=SQLITE_OK ){
-    if( resetSourceResultError(context, cs, &rc) ) return rc;
+    if( doltliteCmdSourceResultError(context, cs, &rc) ) return rc;
     return SQLITE_OK;
   }
   if( !prollyHashIsEmpty(&hash) ){
     rc = doltliteLoadCatalog(db, &hash, &aCat, &nCat, 0);
     if( rc!=SQLITE_OK ){
-      if( resetSourceResultError(context, cs, &rc) ) return rc;
+      if( doltliteCmdSourceResultError(context, cs, &rc) ) return rc;
     }else{
       *pFound = resetFindTableIndex(aCat, nCat, zName)>=0;
       doltliteFreeCatalog(aCat, nCat);
@@ -503,7 +488,7 @@ static void doltliteResetFunc(
   }
 
   rc = doltliteGetHeadCatalogHash(db, &preResetHeadCatHash);
-  if( rc!=SQLITE_OK && resetSourceResultError(context, cs, &rc) ){
+  if( rc!=SQLITE_OK && doltliteCmdSourceResultError(context, cs, &rc) ){
     goto reset_cleanup;
   }else if( rc==SQLITE_OK && !prollyHashIsEmpty(&preResetHeadCatHash) ){
     havePreResetHead = 1;
@@ -550,7 +535,7 @@ static void doltliteResetFunc(
           rc = doltliteResolveRef(db, arg, &probe);
           if( rc==SQLITE_OK ){
             zRef = arg;
-          }else if( resetSourceResultError(context, cs, &rc) ){
+          }else if( doltliteCmdSourceResultError(context, cs, &rc) ){
             goto reset_cleanup;
           }else{
             azPaths[nPaths++] = arg;

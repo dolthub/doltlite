@@ -1008,9 +1008,8 @@ static int rebaseApplyPlanRowCatalog(
     doltliteFreeNameList(azReindex, nReindex);
   }
   if( rc==SQLITE_OK && nConflicts==0 ){
-    rc = doltliteDetectPostMergeConstraintViolations(db,
-                                                     &parentC.catalogHash,
-                                                     &nViolations);
+    rc = doltliteDetectConstraintViolationsFiltered(
+        db, &parentC.catalogHash, 0, 0, 1, &nViolations, 0);
   }
   doltliteCommitClear(&parentC);
   doltliteCommitClear(&replayC);

@@ -756,12 +756,6 @@ static void doltliteCommitFunc(
     }
   }
 
-  rc = doltlitePrepareCatalogForPersistence(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "failed to prepare catalog", -1);
-    return;
-  }
-
   if( addAll ){
 
     rc = doltliteFlushCatalogToHash(db, &catalogHash);

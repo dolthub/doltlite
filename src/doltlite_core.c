@@ -522,11 +522,6 @@ int doltliteSerializeDb(sqlite3 *db, Btree *pBt,
   return doltliteBtreeSerialize(pBt, zBranch, pLive, ppData, pnData);
 }
 
-int doltlitePrepareCatalogForPersistence(sqlite3 *db){
-  UNUSED_PARAMETER(db);
-  return SQLITE_OK;
-}
-
 void freeSchemaMergeActions(SchemaMergeAction *a, int n){
   int i, j;
   for(i=0; i<n; i++){
@@ -859,22 +854,14 @@ int doltlitePersistOrSaveWorkingSet(sqlite3 *db){
   return doltliteSaveWorkingSet(db);
 }
 
-int doltliteDetectPostMergeConstraintViolations(
-  sqlite3 *db,
-  const ProllyHash *pAncCatHash,
-  int *pnViolations
-){
-  return doltliteDetectConstraintViolationsFiltered(
-      db, pAncCatHash, 0, 0, 1, pnViolations);
-}
-
 int doltliteDetectConstraintViolationsFiltered(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
   const char **azTables,
   int nTables,
   int bPersist,
-  int *pnViolations
+  int *pnViolations,
+  char **pzErr
 ){
   int nViolations = 0;
   int nUnique = 0;
@@ -885,6 +872,8 @@ int doltliteDetectConstraintViolationsFiltered(
   int rc;
   sqlite3_stmt *pStmt = 0;
   int needsDetection = 0;
+
+  if( pzErr ) *pzErr = 0;
 
   rc = sqlite3_prepare_v2(db,
       "SELECT 1 "
@@ -952,7 +941,11 @@ int doltliteDetectConstraintViolationsFiltered(
         db, rc==SQLITE_OK && bPersist);
     if( rc==SQLITE_OK ) rc = erc;
   }
-  sqlite3_free(zDetectErrMsg);
+  if( pzErr ){
+    *pzErr = zDetectErrMsg;
+  }else{
+    sqlite3_free(zDetectErrMsg);
+  }
   if( rc!=SQLITE_OK ) return rc;
 
   if( pnViolations ){

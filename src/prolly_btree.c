@@ -144,7 +144,7 @@ int mutMapShouldDrain(BtCursor *pCur){
       && prollyMutMapCount(pCur->pMutMap) >= PROLLY_MUTMAP_PENDING_FLUSH_LIMIT;
 }
 
-i64 prollyBtreeSyntheticPageCount(Btree *p){
+static i64 prollyBtreeSyntheticPageCount(Btree *p){
   ChunkStore *cs;
   i64 n;
   if( !p || !p->pBt ) return 0;
@@ -809,9 +809,6 @@ int sqlite3BtreeOpen(
 
   if( pBt->store.readOnly ){
     pBt->btsFlags |= BTS_READ_ONLY;
-  }
-  if( chunkStoreIsEmpty(&pBt->store) ){
-    pBt->btsFlags |= BTS_INITIALLY_EMPTY;
   }
 
   p->aMeta[BTREE_FREE_PAGE_COUNT] = 0;
@@ -1908,7 +1905,7 @@ void prollyBtCursorClearCursor(BtCursor *pCur){
   CLEAR_CACHED_PAYLOAD(pCur);
   clearMergeCursorState(pCur);
   pCur->eState = CURSOR_INVALID;
-  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_ValidOvfl|BTCF_AtLast);
+  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
   pCur->skipNext = 0;
 }
 void sqlite3BtreeClearCursor(BtCursor *pCur){

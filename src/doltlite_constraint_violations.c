@@ -356,10 +356,7 @@ static int storeUpdatedViolations(
     rc = doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
   }
   if( rc!=SQLITE_OK ) return rc;
-  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
-    return doltlitePersistWorkingSet(db);
-  }
-  return doltliteSaveWorkingSet(db);
+  return doltlitePersistOrSaveWorkingSet(db);
 }
 
 static int storeViolationBytes(
@@ -380,10 +377,7 @@ static int storeViolationBytes(
     rc = doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
   }
   if( rc!=SQLITE_OK ) return rc;
-  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
-    return doltlitePersistWorkingSet(db);
-  }
-  return doltliteSaveWorkingSet(db);
+  return doltlitePersistOrSaveWorkingSet(db);
 }
 
 static int deleteViolationRowFromCatalog(
@@ -675,10 +669,7 @@ int doltliteClearAllConstraintViolations(sqlite3 *db){
   static const ProllyHash emptyHash = {{0}};
   int rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
   if( rc!=SQLITE_OK ) return rc;
-  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
-    return doltlitePersistWorkingSet(db);
-  }
-  return doltliteSaveWorkingSet(db);
+  return doltlitePersistOrSaveWorkingSet(db);
 }
 
 typedef struct CvSumVtab CvSumVtab;
