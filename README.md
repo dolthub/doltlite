@@ -662,6 +662,10 @@ SELECT dolt_pull('origin', 'main');   -- fetch, then fast-forward or merge
 SELECT * FROM dolt_remotes;
 ```
 
+A push, including a force push, is refused if the target branch has
+uncommitted working or staged changes. Commit or reset the target database
+before retrying; a clean working set does not block a push.
+
 A lazy clone installs refs and records `origin` without copying the reachable
 chunk graph. It enables origin-backed reads on its current connection. To
 reopen the clone in another process, opt in before the B-tree opens:
@@ -916,7 +920,8 @@ For a DoltLite-format main database, the concurrency contract is:
 - **Remote ref installs are serialized.** HTTP pushes refresh the remote refs
   under the graph lock before validating and installing either conditional or
   plain ref updates. A stale push is rejected instead of replacing a peer's
-  ref update.
+  ref update. A push also refuses to replace a target branch with uncommitted
+  working or staged changes.
 - **GC cooperates with writers.** `dolt_gc` / `VACUUM` may be deferred or
   report busy while a writer holds the graph lock; after the writer finishes,
   GC completes without dropping reachable data. Multiproc GC-vs-commit and

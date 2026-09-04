@@ -516,6 +516,30 @@ static int fsSetRefsIf(
   return rc;
 }
 
+static int fsCheckRefsIf(
+  DoltliteRemote *pRemote,
+  const ProllyHash *pExpectedRefsHash,
+  const char *zBranch,
+  int bForce,
+  const u8 *pData,
+  int nData
+){
+  FsRemote *p = (FsRemote*)pRemote;
+  int rc = fsEnsureLocked(p);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashCompare(refsTableGetHash(&p->store.refs),
+                        pExpectedRefsHash)!=0 ){
+    rc = SQLITE_BUSY;
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteValidateScopedRefsUpdate(&p->store, pData, nData,
+                                          zBranch, bForce);
+  }
+  chunkStoreUnlock(&p->store);
+  p->locked = 0;
+  return rc;
+}
+
 static int fsCommit(DoltliteRemote *pRemote){
   FsRemote *p = (FsRemote*)pRemote;
   int rc = doltliteRemotePersistRefs(&p->store);
@@ -555,6 +579,7 @@ static DoltliteRemote *fsRemoteOpen(
   p->base.xGetRefs = fsGetRefs;
   p->base.xSetRefs = fsSetRefs;
   p->base.xSetRefsIf = fsSetRefsIf;
+  p->base.xCheckRefsIf = fsCheckRefsIf;
   p->base.xCommit = fsCommit;
   p->base.xClose = fsClose;
   p->pStore = &p->store;
@@ -653,6 +678,30 @@ static int localSetRefsIf(
   return localSetRefs(pRemote, zBranch, bForce, pData, nData);
 }
 
+static int localCheckRefsIf(
+  DoltliteRemote *pRemote,
+  const ProllyHash *pExpectedRefsHash,
+  const char *zBranch,
+  int bForce,
+  const u8 *pData,
+  int nData
+){
+  LocalAsRemote *p = (LocalAsRemote*)pRemote;
+  int rc = localEnsureLocked(p);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashCompare(refsTableGetHash(&p->pStore->refs),
+                        pExpectedRefsHash)!=0 ){
+    rc = SQLITE_BUSY;
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteValidateScopedRefsUpdate(p->pStore, pData, nData,
+                                          zBranch, bForce);
+  }
+  chunkStoreUnlock(p->pStore);
+  p->locked = 0;
+  return rc;
+}
+
 static int localCommit(DoltliteRemote *pRemote){
   LocalAsRemote *p = (LocalAsRemote*)pRemote;
   int rc;
@@ -684,6 +733,7 @@ DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal){
   p->base.xGetRefs = remoteGetRefs;
   p->base.xSetRefs = localSetRefs;
   p->base.xSetRefsIf = localSetRefsIf;
+  p->base.xCheckRefsIf = localCheckRefsIf;
   p->base.xCommit = localCommit;
   p->base.xClose = localClose;
   p->pStore = pLocal;
@@ -907,6 +957,168 @@ static int scopedSequencesMatch(const SequenceRef *aCur, int nCur,
   return 1;
 }
 
+static int scopedCatalogIsEmpty(
+  ChunkStore *pStore,
+  const ProllyHash *pHash,
+  int *pEmpty
+){
+  u8 *pData = 0;
+  const u8 *pEntries = 0;
+  int nData = 0;
+  int version = 0;
+  int nTables = 0;
+  const u8 *pEnd;
+  int rc;
+  int i;
+
+  *pEmpty = 1;
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  rc = chunkStoreGet(pStore, pHash, &pData, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !catalogParseHeaderEx(pData, nData, &version, &nTables, &pEntries) ){
+    sqlite3_free(pData);
+    return SQLITE_CORRUPT;
+  }
+  pEnd = pData + nData;
+  if( nTables==0 ){
+    if( pEntries!=pEnd ){
+      sqlite3_free(pData);
+      return SQLITE_CORRUPT;
+    }
+    *pEmpty = 1;
+  }else if( nTables==1 ){
+    const u8 *q = pEntries;
+    ProllyHash root;
+    int nSkip;
+    u32 iTable;
+    int nFixed = version==CATALOG_FORMAT_V3 ?
+                 CAT_ENTRY_FIXED_SIZE_V3 : CAT_ENTRY_FIXED_SIZE_V4;
+    if( pEnd-q<nFixed ){
+      sqlite3_free(pData);
+      return SQLITE_CORRUPT;
+    }
+    iTable = (u32)q[0] | ((u32)q[1]<<8) | ((u32)q[2]<<16)
+           | ((u32)q[3]<<24);
+    memcpy(root.data, q + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE,
+           PROLLY_HASH_SIZE);
+    if( version==CATALOG_FORMAT_V3 ){
+      q += CAT_ENTRY_FIXED_SIZE_V3 - 2;
+      nSkip = q[0] | (q[1]<<8);
+      q += 2;
+    }else{
+      q += CAT_ENTRY_FIXED_SIZE_V4 - 6;
+      nSkip = (q[0] | (q[1]<<8))
+            + (q[2] | (q[3]<<8))
+            + (q[4] | (q[5]<<8));
+      q += 6;
+    }
+    if( nSkip>pEnd-q ){
+      sqlite3_free(pData);
+      return SQLITE_CORRUPT;
+    }
+    q += nSkip;
+    *pEmpty = iTable==1 && prollyHashIsEmpty(&root) && q==pEnd;
+  }else{
+    *pEmpty = 0;
+  }
+  if( *pEmpty && version==CATALOG_FORMAT_V5 ){
+    for(i=CAT_HEADER_SIZE_V3; i<CAT_HEADER_SIZE_V5; i++){
+      if( pData[i]!=0 ){
+        *pEmpty = 0;
+        break;
+      }
+    }
+  }
+  sqlite3_free(pData);
+  return SQLITE_OK;
+}
+
+static int scopedWorkingSetIsDirty(
+  ChunkStore *pStore,
+  const BranchRef *pBranch,
+  int *pDirty
+){
+  ProllyHash workingCat, stagedCat, conflicts, violations;
+  DoltliteCommit commit;
+  u8 *pWs = 0;
+  u8 *pCommit = 0;
+  int nWs = 0;
+  int nCommit = 0;
+  int version;
+  int rc;
+
+  *pDirty = 0;
+  if( prollyHashIsEmpty(&pBranch->workingSetHash) ) return SQLITE_OK;
+  rc = chunkStoreGet(pStore, &pBranch->workingSetHash, &pWs, &nWs);
+  if( rc==SQLITE_OK ) rc = chunkStoreValidateWorkingSetBlob(pWs, nWs);
+  if( rc!=SQLITE_OK ) goto done;
+
+  version = pWs[0];
+  memcpy(workingCat.data, pWs + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
+  memcpy(stagedCat.data, pWs + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+  memcpy(conflicts.data, pWs + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
+  memset(&violations, 0, sizeof(violations));
+  if( version==WS_FORMAT_VERSION_V4 ){
+    memcpy(violations.data, pWs + WS_CONSTRAINT_VIOLATIONS_OFF_V4,
+           PROLLY_HASH_SIZE);
+  }else if( version==WS_FORMAT_VERSION_V5 ){
+    memcpy(violations.data, pWs + WS_CONSTRAINT_VIOLATIONS_OFF,
+           PROLLY_HASH_SIZE);
+  }
+
+  if( pWs[WS_MERGING_OFF]!=0
+   || !prollyHashIsEmpty(&conflicts)
+   || (version>=WS_FORMAT_VERSION_V3 && pWs[WS_REBASING_OFF]!=0)
+   || !prollyHashIsEmpty(&violations) ){
+    *pDirty = 1;
+    goto done;
+  }
+  if( prollyHashIsEmpty(&pBranch->commitHash) ){
+    int workingEmpty = 0;
+    int stagedEmpty = 0;
+    rc = scopedCatalogIsEmpty(pStore, &workingCat, &workingEmpty);
+    if( rc==SQLITE_OK ){
+      rc = scopedCatalogIsEmpty(pStore, &stagedCat, &stagedEmpty);
+    }
+    if( rc==SQLITE_OK ) *pDirty = !workingEmpty || !stagedEmpty;
+    goto done;
+  }
+
+  rc = chunkStoreGet(pStore, &pBranch->commitHash, &pCommit, &nCommit);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = doltliteCommitDeserialize(pCommit, nCommit, &commit);
+  if( rc==SQLITE_OK ){
+    *pDirty = (!prollyHashIsEmpty(&workingCat)
+            && prollyHashCompare(&workingCat, &commit.catalogHash)!=0)
+           || (!prollyHashIsEmpty(&stagedCat)
+            && prollyHashCompare(&stagedCat, &commit.catalogHash)!=0);
+    if( *pDirty && prollyHashIsEmpty(&commit.catalogHash) ){
+      int workingEmpty = 0;
+      int stagedEmpty = 0;
+      if( !prollyHashIsEmpty(&workingCat) ){
+        rc = scopedCatalogIsEmpty(pStore, &workingCat, &workingEmpty);
+      }
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(&stagedCat) ){
+        rc = scopedCatalogIsEmpty(pStore, &stagedCat, &stagedEmpty);
+      }
+      if( rc==SQLITE_OK ){
+        *pDirty = (!prollyHashIsEmpty(&workingCat)
+                && prollyHashCompare(&workingCat, &commit.catalogHash)!=0
+                && !workingEmpty)
+               || (!prollyHashIsEmpty(&stagedCat)
+                && prollyHashCompare(&stagedCat, &commit.catalogHash)!=0
+                && !stagedEmpty);
+      }
+    }
+    doltliteCommitClear(&commit);
+  }
+
+done:
+  sqlite3_free(pWs);
+  sqlite3_free(pCommit);
+  return rc;
+}
+
 int doltliteValidateScopedRefsUpdate(
   ChunkStore *pStore,
   const u8 *pBlob,
@@ -1050,6 +1262,15 @@ int doltliteValidateScopedRefsUpdate(
     rc = SQLITE_CONSTRAINT;
     goto done;
   }
+  if( curB ){
+    int dirty = 0;
+    rc = scopedWorkingSetIsDirty(pStore, curB, &dirty);
+    if( rc!=SQLITE_OK ) goto done;
+    if( dirty ){
+      rc = SQLITE_LOCKED;
+      goto done;
+    }
+  }
   if( !bForce && curB && incB
    && prollyHashCompare(&curB->commitHash, &incB->commitHash)!=0 ){
     int anc = 0;
@@ -1182,8 +1403,11 @@ int doltlitePush(
     if( rc==SQLITE_OK && !prollyHashIsEmpty(&remoteCommit) ){
       int cmp = prollyHashCompare(&remoteCommit, &localCommit);
       if( cmp==0 ){
+        rc = pRemote->xCheckRefsIf(
+            pRemote, &expectedRefsHash, zBranch, bForce,
+            refsData, nRefsData);
         sqlite3_free(refsData);
-        return SQLITE_OK;
+        return rc;
       }else if( !bForce ){
         int isAnc = 0;
         rc = syncIsAncestor(pLocal, &remoteCommit, &localCommit, &isAnc);
