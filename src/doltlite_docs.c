@@ -66,6 +66,8 @@ static const char *zDocsAgentDefault =
   "```sql\n"
   "SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.db');\n"
   "SELECT dolt_push('origin', 'main');\n"
+  "SELECT dolt_push('origin', 'v1');\n"
+  "SELECT dolt_push('origin', '--tags');\n"
   "SELECT dolt_pull('origin', 'main');\n"
   "SELECT dolt_clone('file:///path/to/source.db');\n"
   "```\n"

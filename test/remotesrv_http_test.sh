@@ -363,6 +363,14 @@ check "clone content and history match source" "$src_state" "$cln_state"
 result=$("$DB" "$B" "SELECT count(*) FROM users WHERE age>26;")
 check "clone index query works" "2" "$result"
 
+echo "--- 2b. tag push and fetch over http ---"
+result=$("$DB" "$A" \
+  "SELECT dolt_tag('http-v1','-m','http release'); SELECT dolt_push('origin','http-v1');" 2>&1 | tail -1)
+check "tag push over http returns 0" "0" "$result"
+result=$("$DB" "$B" \
+  "SELECT dolt_fetch('origin','main'); SELECT tag_name || '|' || message FROM dolt_tags WHERE tag_name='http-v1';" 2>&1)
+check "fetch over http installs the remote tag" $'0\nhttp-v1|http release' "$result"
+
 echo "--- 3. malformed has-chunks responses stop push before refs update ---"
 "$DB" "$A" "INSERT INTO users VALUES(99,'protocol',99); SELECT dolt_commit('-am','protocol response');" >/dev/null
 for mode in short long invalid; do

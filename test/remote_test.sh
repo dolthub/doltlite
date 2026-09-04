@@ -412,6 +412,61 @@ check "clone into seeded dirty db keeps local rows" "1" "$result"
 result=$("$DB" "$TMPDIR/seeded_dirty.db" "SELECT count(*) FROM dolt_remotes;")
 check "clone into seeded dirty db keeps remotes empty" "0" "$result"
 
+echo "=== 15b. Tag push and fetch ==="
+"$DB" "$TMPDIR/tag_src.db" <<ENDSQL
+CREATE TABLE tag_rows(id INTEGER PRIMARY KEY);
+INSERT INTO tag_rows VALUES(1);
+SELECT dolt_commit('-Am','tag c1');
+SELECT dolt_tag('v1','-m','first release');
+SELECT dolt_remote('add','origin','$R/tag_remote.db');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/tag_remote.db" "SELECT count(*) FROM dolt_tags;")
+check "branch push does not implicitly push tags" "0" "$result"
+
+result=$("$DB" "$TMPDIR/tag_src.db" "SELECT dolt_push('origin','v1');")
+check "named tag push returns 0" "0" "$result"
+result=$("$DB" "$TMPDIR/tag_remote.db" \
+  "SELECT tag_name || '|' || message FROM dolt_tags;")
+check "named tag push preserves metadata" "v1|first release" "$result"
+
+"$DB" "$TMPDIR/tag_clone.db" "SELECT dolt_clone('$R/tag_remote.db');" >/dev/null
+"$DB" "$TMPDIR/tag_src.db" <<'ENDSQL' >/dev/null
+INSERT INTO tag_rows VALUES(2);
+SELECT dolt_commit('-Am','tag c2');
+SELECT dolt_tag('v2','-m','second release');
+SELECT dolt_push('origin','main');
+SELECT dolt_push('origin','--tags');
+ENDSQL
+result=$("$DB" "$TMPDIR/tag_remote.db" \
+  "SELECT group_concat(tag_name, ',') FROM (SELECT tag_name FROM dolt_tags ORDER BY tag_name);")
+check "--tags pushes every local tag" "v1,v2" "$result"
+
+result=$("$DB" "$TMPDIR/tag_clone.db" \
+  "SELECT dolt_fetch('origin','main'); SELECT group_concat(tag_name, ',') FROM (SELECT tag_name FROM dolt_tags ORDER BY tag_name);")
+check "fetch follows tags on fetched commits" $'0\nv1,v2' "$result"
+
+"$DB" "$TMPDIR/tag_remote.db" \
+  "SELECT dolt_tag('remote-only','-m','made remotely'); SELECT dolt_tag('collision','-m','remote value');" >/dev/null
+"$DB" "$TMPDIR/tag_clone.db" \
+  "SELECT dolt_tag('collision','-m','local value');" >/dev/null
+result=$("$DB" "$TMPDIR/tag_clone.db" \
+  "SELECT dolt_fetch('origin','main'); SELECT group_concat(tag_name, ',') FROM (SELECT tag_name FROM dolt_tags ORDER BY tag_name); SELECT message FROM dolt_tags WHERE tag_name='collision';")
+check "fetch adds remote tags and preserves local collisions" \
+  $'0\ncollision,remote-only,v1,v2\nlocal value' "$result"
+
+"$DB" "$TMPDIR/tag_src.db" \
+  "SELECT dolt_tag('replace-me','HEAD~1','-m','local replacement');" >/dev/null
+"$DB" "$TMPDIR/tag_remote.db" \
+  "SELECT dolt_tag('replace-me','-m','remote original');" >/dev/null
+result=$("$DB" "$TMPDIR/tag_src.db" "SELECT dolt_push('origin','replace-me');")
+check "named tag push replaces the same remote tag" "0" "$result"
+result=$("$DB" "$TMPDIR/tag_remote.db" \
+  "SELECT message FROM dolt_tags WHERE tag_name='replace-me';")
+check "remote tag replacement preserves local metadata" "local replacement" "$result"
+
 echo "=== 16. Error cases ==="
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('nonexistent','main');" 2>&1)
 check "push to unknown remote errors" "1" "$(echo "$result" | grep -c 'remote not found')"

@@ -282,6 +282,33 @@ int main(void){
 
     rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "foo", 0);
     check("reject rewriting a tag message", rc==SQLITE_CONSTRAINT);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 0);
+    check("allow rewriting only the declared tag", rc==SQLITE_OK);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v2", 1);
+    check("reject rewriting an undeclared tag", rc==SQLITE_CONSTRAINT);
+
+    memset(&tmp, 0, sizeof(tmp));
+    chunkStoreLoadRefsFromBlob(&tmp, blob, n);
+    sqlite3_free(blob);
+    blob = 0;
+    chunkStoreAddTagFull(&tmp, "v2", &Hb, "t", "t@e", 2, "other");
+    chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
+    chunkStoreClose(&tmp);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 1);
+    check("reject adding a second tag in the same update",
+          rc==SQLITE_CONSTRAINT);
+
+    memset(&tmp, 0, sizeof(tmp));
+    chunkStoreLoadRefsFromBlob(&tmp, tagBlob, nTag);
+    chunkStoreDeleteTag(&tmp, "v1");
+    chunkStoreAddTagFull(&tmp, "v1", &Ha, "t", "t@e", 1, "rewritten");
+    chunkStoreUpdateBranch(&tmp, "foo", &Hc);
+    sqlite3_free(blob);
+    blob = 0;
+    chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
+    chunkStoreClose(&tmp);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 1);
+    check("tag update cannot rewrite a branch", rc==SQLITE_CONSTRAINT);
 
     /* And the same tag, untouched, stays in scope. */
     rc = doltliteValidateScopedRefsUpdate(&tagged, tagBlob, nTag, "foo", 0);

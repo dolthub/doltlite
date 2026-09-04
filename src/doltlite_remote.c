@@ -77,6 +77,14 @@ static int remoteFindBranchFromRefsBlob(
   return rc;
 }
 
+#define REMOTE_TAG_SCOPE_PREFIX "tag:"
+
+static const char *remoteScopedTagName(const char *zRef){
+  int nPrefix = (int)sizeof(REMOTE_TAG_SCOPE_PREFIX) - 1;
+  if( !zRef || strncmp(zRef, REMOTE_TAG_SCOPE_PREFIX, nPrefix)!=0 ) return 0;
+  return zRef[nPrefix] ? zRef + nPrefix : 0;
+}
+
 static int remoteCollectRootsFromRefsBlob(
   const u8 *pData, int nData, ProllyHash **paRoots, int *pnRoots
 ){
@@ -202,21 +210,36 @@ int doltliteValidateRefsTargetGraph(
   ChunkStore *pStore,
   const u8 *pBlob,
   int nBlob,
-  const char *zBranch
+  const char *zRef
 ){
   ChunkStore refsView;
   ProllyHash aRoots[2];
   const BranchRef *aBranch;
+  const TagRef *aTag;
+  const char *zTag = remoteScopedTagName(zRef);
   int nBranch;
+  int nTag;
   int rc;
   int i;
 
   rc = remoteLoadRefsView(pBlob, nBlob, &refsView);
   if( rc!=SQLITE_OK ) return rc;
+  if( zTag ){
+    refsTableGetTags(&refsView.refs, &nTag, &aTag);
+    rc = SQLITE_NOTFOUND;
+    for(i=0; i<nTag; i++){
+      if( strcmp(aTag[i].zName, zTag)==0 ){
+        rc = remoteValidateGraph(pStore, &aTag[i].commitHash, 1);
+        break;
+      }
+    }
+    chunkStoreClose(&refsView);
+    return rc;
+  }
   refsTableGetBranches(&refsView.refs, &nBranch, &aBranch);
   rc = SQLITE_NOTFOUND;
   for(i=0; i<nBranch; i++){
-    if( strcmp(aBranch[i].zName, zBranch)==0 ){
+    if( strcmp(aBranch[i].zName, zRef)==0 ){
       aRoots[0] = aBranch[i].commitHash;
       aRoots[1] = aBranch[i].workingSetHash;
       rc = remoteValidateGraph(pStore, aRoots, 2);
@@ -807,6 +830,24 @@ static int scopedTagsMatch(const TagRef *aCur, int nCur,
   return 1;
 }
 
+static int scopedBranchesMatch(const BranchRef *aCur, int nCur,
+                               const BranchRef *aInc, int nInc){
+  int i, j;
+  if( nCur!=nInc ) return 0;
+  for(i=0; i<nCur; i++){
+    for(j=0; j<nInc; j++){
+      if( scopedSameText(aInc[j].zName, aCur[i].zName) ) break;
+    }
+    if( j>=nInc
+     || prollyHashCompare(&aInc[j].commitHash, &aCur[i].commitHash)!=0
+     || prollyHashCompare(&aInc[j].workingSetHash,
+                          &aCur[i].workingSetHash)!=0 ){
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static int scopedRemotesMatch(const RemoteRef *aCur, int nCur,
                               const RemoteRef *aInc, int nInc){
   int i, j;
@@ -853,11 +894,24 @@ static int scopedSequencesOnlyAdvance(const SequenceRef *aCur, int nCur,
   return 1;
 }
 
+static int scopedSequencesMatch(const SequenceRef *aCur, int nCur,
+                                const SequenceRef *aInc, int nInc){
+  int i, j;
+  if( nCur!=nInc ) return 0;
+  for(i=0; i<nCur; i++){
+    for(j=0; j<nInc; j++){
+      if( scopedSameText(aInc[j].zTableName, aCur[i].zTableName) ) break;
+    }
+    if( j>=nInc || aInc[j].iSeq!=aCur[i].iSeq ) return 0;
+  }
+  return 1;
+}
+
 int doltliteValidateScopedRefsUpdate(
   ChunkStore *pStore,
   const u8 *pBlob,
   int nBlob,
-  const char *zBranch,
+  const char *zRef,
   int bForce
 ){
   ChunkStore inc;
@@ -866,6 +920,7 @@ int doltliteValidateScopedRefsUpdate(
   const RemoteRef *aCurRem = 0, *aIncRem = 0;
   const TrackingBranch *aCurTrk = 0, *aIncTrk = 0;
   const SequenceRef *aCurSeq = 0, *aIncSeq = 0;
+  const char *zTag = remoteScopedTagName(zRef);
   int nCur = 0, nInc = 0, nCurTag = 0, nIncTag = 0;
   int nCurRem = 0, nIncRem = 0, nCurTrk = 0, nIncTrk = 0;
   int nCurSeq = 0, nIncSeq = 0;
@@ -873,7 +928,7 @@ int doltliteValidateScopedRefsUpdate(
   int rc;
   int i, j;
 
-  if( !zBranch || !zBranch[0] ) return SQLITE_MISUSE;
+  if( !zRef || !zRef[0] ) return SQLITE_MISUSE;
   memset(&inc, 0, sizeof(inc));
   rc = csDeserializeRefsIntoTemp(&inc, pBlob, nBlob);
   if( rc!=SQLITE_OK ){
@@ -901,9 +956,48 @@ int doltliteValidateScopedRefsUpdate(
     goto done;
   }
 
+  if( zTag ){
+    const TagRef *incTag = 0;
+    if( !scopedBranchesMatch(aCur, nCur, aInc, nInc)
+     || !scopedRemotesMatch(aCurRem, nCurRem, aIncRem, nIncRem)
+     || !scopedTrackingMatch(aCurTrk, nCurTrk, aIncTrk, nIncTrk)
+     || !scopedSequencesMatch(aCurSeq, nCurSeq, aIncSeq, nIncSeq)
+     || !scopedSameText(scopedDefaultBranch(&pStore->refs),
+                        scopedDefaultBranch(&inc.refs)) ){
+      rc = SQLITE_CONSTRAINT;
+      goto done;
+    }
+    for(i=0; i<nCurTag; i++){
+      if( strcmp(aCurTag[i].zName, zTag)==0 ) continue;
+      for(j=0; j<nIncTag; j++){
+        if( strcmp(aIncTag[j].zName, aCurTag[i].zName)==0 ) break;
+      }
+      if( j>=nIncTag
+       || !scopedTagsMatch(&aCurTag[i], 1, &aIncTag[j], 1) ){
+        rc = SQLITE_CONSTRAINT;
+        goto done;
+      }
+    }
+    for(j=0; j<nIncTag; j++){
+      if( strcmp(aIncTag[j].zName, zTag)==0 ){
+        incTag = &aIncTag[j];
+        continue;
+      }
+      for(i=0; i<nCurTag; i++){
+        if( strcmp(aCurTag[i].zName, aIncTag[j].zName)==0 ) break;
+      }
+      if( i>=nCurTag ){
+        rc = SQLITE_CONSTRAINT;
+        goto done;
+      }
+    }
+    rc = incTag ? SQLITE_OK : SQLITE_CONSTRAINT;
+    goto done;
+  }
+
   /* Every other current branch must survive unchanged (name, commit, working set). */
   for(i=0; i<nCur; i++){
-    if( strcmp(aCur[i].zName, zBranch)==0 ) continue;
+    if( strcmp(aCur[i].zName, zRef)==0 ) continue;
     for(j=0; j<nInc; j++){
       if( strcmp(aInc[j].zName, aCur[i].zName)==0 ) break;
     }
@@ -917,7 +1011,7 @@ int doltliteValidateScopedRefsUpdate(
 
   /* Push may not introduce any branch other than the declared one. */
   for(j=0; j<nInc; j++){
-    if( strcmp(aInc[j].zName, zBranch)==0 ) continue;
+    if( strcmp(aInc[j].zName, zRef)==0 ) continue;
     for(i=0; i<nCur; i++){
       if( strcmp(aCur[i].zName, aInc[j].zName)==0 ) break;
     }
@@ -939,17 +1033,17 @@ int doltliteValidateScopedRefsUpdate(
   /* Push may not repoint the default branch (clone checkout / GET /root).
   ** An empty target may adopt the pushed branch. */
   if( !scopedSameText(scopedDefaultBranch(&inc.refs),
-                      nCur==0 ? zBranch : scopedDefaultBranch(&pStore->refs)) ){
+                      nCur==0 ? zRef : scopedDefaultBranch(&pStore->refs)) ){
     rc = SQLITE_CONSTRAINT;
     goto done;
   }
 
   /* Declared branch may be created; an existing one must fast-forward unless forced. */
   for(i=0; i<nCur; i++){
-    if( strcmp(aCur[i].zName, zBranch)==0 ){ curB = &aCur[i]; break; }
+    if( strcmp(aCur[i].zName, zRef)==0 ){ curB = &aCur[i]; break; }
   }
   for(j=0; j<nInc; j++){
-    if( strcmp(aInc[j].zName, zBranch)==0 ){ incB = &aInc[j]; break; }
+    if( strcmp(aInc[j].zName, zRef)==0 ){ incB = &aInc[j]; break; }
   }
   /* Push creates or advances the declared branch, never deletes it. */
   if( !incB ){
@@ -988,6 +1082,57 @@ static int remoteSequencesWouldAdvance(
      && aRemSeq[iSeq].iSeq >
         chunkStoreGetSequenceValue(pLocal, aRemSeq[iSeq].zTableName) ){
       *pWouldAdvance = 1;
+      break;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int remoteTagTargetAvailable(
+  ChunkStore *pLocal,
+  const ProllyHash *pCommit,
+  int *pAvailable
+){
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+
+  *pAvailable = 0;
+  rc = chunkStoreGet(pLocal, pCommit, &pData, &nData);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc==SQLITE_OK ){
+    if( doltliteClassifyChunk(pData, nData)!=CHUNK_COMMIT ){
+      rc = SQLITE_CORRUPT;
+    }else{
+      *pAvailable = 1;
+    }
+  }
+  sqlite3_free(pData);
+  return rc;
+}
+
+static int remoteTagsWouldInstall(
+  ChunkStore *pLocal,
+  ChunkStore *pRemoteRefs,
+  int *pWouldInstall
+){
+  const TagRef *aRemoteTag = 0;
+  int nRemoteTag = 0;
+  int i;
+  int rc;
+
+  *pWouldInstall = 0;
+  refsTableGetTags(&pRemoteRefs->refs, &nRemoteTag, &aRemoteTag);
+  for(i=0; i<nRemoteTag; i++){
+    int available = 0;
+    if( chunkStoreFindTag(pLocal, aRemoteTag[i].zName, 0)==SQLITE_OK ){
+      continue;
+    }
+    rc = remoteTagTargetAvailable(
+        pLocal, &aRemoteTag[i].commitHash, &available);
+    if( rc!=SQLITE_OK ) return rc;
+    if( available ){
+      *pWouldInstall = 1;
       break;
     }
   }
@@ -1138,6 +1283,118 @@ int doltlitePush(
   return rc;
 }
 
+int doltlitePushTag(
+  ChunkStore *pLocal,
+  DoltliteRemote *pRemote,
+  const char *zTag
+){
+  const TagRef *aLocalTag = 0;
+  const TagRef *pLocalTag = 0;
+  ProllyHash expectedRefsHash;
+  u8 *refsData = 0;
+  int nRefsData = 0;
+  int nLocalTag = 0;
+  int rc;
+  int i;
+
+  refsTableGetTags(&pLocal->refs, &nLocalTag, &aLocalTag);
+  for(i=0; i<nLocalTag; i++){
+    if( strcmp(aLocalTag[i].zName, zTag)==0 ){
+      pLocalTag = &aLocalTag[i];
+      break;
+    }
+  }
+  if( !pLocalTag ) return SQLITE_NOTFOUND;
+
+  memset(&expectedRefsHash, 0, sizeof(expectedRefsHash));
+  rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
+  if( rc==SQLITE_OK && refsData ){
+    ChunkStore refsView;
+    const TagRef *aRemoteTag = 0;
+    int nRemoteTag = 0;
+    prollyHashCompute(refsData, nRefsData, &expectedRefsHash);
+    memset(&refsView, 0, sizeof(refsView));
+    rc = chunkStoreLoadRefsFromBlob(&refsView, refsData, nRefsData);
+    if( rc==SQLITE_OK ){
+      refsTableGetTags(&refsView.refs, &nRemoteTag, &aRemoteTag);
+      for(i=0; i<nRemoteTag; i++){
+        if( strcmp(aRemoteTag[i].zName, zTag)==0
+         && scopedTagsMatch(pLocalTag, 1, &aRemoteTag[i], 1) ){
+          chunkStoreClose(&refsView);
+          sqlite3_free(refsData);
+          return SQLITE_OK;
+        }
+      }
+    }
+    chunkStoreClose(&refsView);
+  }else if( rc==SQLITE_NOTFOUND ){
+    rc = SQLITE_OK;
+  }
+  sqlite3_free(refsData);
+  refsData = 0;
+  if( rc!=SQLITE_OK ) return rc;
+
+  {
+    DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal);
+    if( !pLocalSrc ) return SQLITE_NOMEM;
+    rc = doltliteSyncChunks(
+        pLocalSrc, pRemote, &pLocalTag->commitHash, 1);
+    pLocalSrc->xClose(pLocalSrc);
+  }
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
+  if( rc==SQLITE_NOTFOUND ){
+    refsData = 0;
+    nRefsData = 0;
+    rc = SQLITE_OK;
+  }
+  if( rc==SQLITE_OK ){
+    ChunkStore nextRefs;
+    u8 *newRefs = 0;
+    char *zScope = 0;
+    int nNewRefs = 0;
+
+    memset(&nextRefs, 0, sizeof(nextRefs));
+    if( refsData && nRefsData>0 ){
+      rc = chunkStoreLoadRefsFromBlob(&nextRefs, refsData, nRefsData);
+    }
+    if( rc==SQLITE_OK
+     && chunkStoreFindTag(&nextRefs, zTag, 0)==SQLITE_OK ){
+      rc = chunkStoreDeleteTag(&nextRefs, zTag);
+    }
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreAddTagFull(
+          &nextRefs, zTag, &pLocalTag->commitHash,
+          pLocalTag->zTagger, pLocalTag->zEmail,
+          pLocalTag->timestamp, pLocalTag->zMessage);
+    }
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreSerializeRefsToBlob(&nextRefs, &newRefs, &nNewRefs);
+    }
+    if( rc==SQLITE_OK ){
+      zScope = sqlite3_mprintf("%s%s", REMOTE_TAG_SCOPE_PREFIX, zTag);
+      if( !zScope ) rc = SQLITE_NOMEM;
+    }
+    if( rc==SQLITE_OK ){
+      if( pRemote->xSetRefsIf ){
+        rc = pRemote->xSetRefsIf(
+            pRemote, &expectedRefsHash, zScope, 1, newRefs, nNewRefs);
+      }else{
+        rc = pRemote->xSetRefs(pRemote, zScope, 1, newRefs, nNewRefs);
+      }
+    }
+    sqlite3_free(zScope);
+    sqlite3_free(newRefs);
+    chunkStoreClose(&nextRefs);
+  }
+  sqlite3_free(refsData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteTestCrashFinalize("push");
+  return pRemote->xCommit(pRemote);
+}
+
 static int installFetchedRefs(
   ChunkStore *pLocal,
   ChunkStore *pRemoteRefs,
@@ -1155,7 +1412,9 @@ static int installFetchedRefs(
   int nCurrentData = 0;
   int nNextData = 0;
   const SequenceRef *aRemSeq = 0;
+  const TagRef *aRemTag = 0;
   int nRemSeq = 0;
+  int nRemTag = 0;
   int refsDetached = 0;
   int locked = 0;
   int i;
@@ -1195,6 +1454,23 @@ static int installFetchedRefs(
       if( aRemSeq[i].zTableName ){
         rc = chunkStoreBumpSequence(
             &nextRefs, aRemSeq[i].zTableName, aRemSeq[i].iSeq);
+      }
+    }
+  }
+  if( rc==SQLITE_OK ){
+    refsTableGetTags(&pRemoteRefs->refs, &nRemTag, &aRemTag);
+    for(i=0; i<nRemTag && rc==SQLITE_OK; i++){
+      int available = 0;
+      if( chunkStoreFindTag(&nextRefs, aRemTag[i].zName, 0)==SQLITE_OK ){
+        continue;
+      }
+      rc = remoteTagTargetAvailable(
+          pLocal, &aRemTag[i].commitHash, &available);
+      if( rc==SQLITE_OK && available ){
+        rc = chunkStoreAddTagFull(
+            &nextRefs, aRemTag[i].zName, &aRemTag[i].commitHash,
+            aRemTag[i].zTagger, aRemTag[i].zEmail,
+            aRemTag[i].timestamp, aRemTag[i].zMessage);
       }
     }
   }
@@ -1277,12 +1553,18 @@ int doltliteFetch(
   if( rc==SQLITE_OK ){
     if( prollyHashCompare(&trackingCommit, &remoteCommit)==0 ){
       int seqWouldAdvance = 0;
+      int tagWouldInstall = 0;
       rc = remoteSequencesWouldAdvance(pLocal, &remoteRefs, &seqWouldAdvance);
       if( rc!=SQLITE_OK ){
         chunkStoreClose(&remoteRefs);
         return rc;
       }
-      if( !seqWouldAdvance ){
+      rc = remoteTagsWouldInstall(pLocal, &remoteRefs, &tagWouldInstall);
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(&remoteRefs);
+        return rc;
+      }
+      if( !seqWouldAdvance && !tagWouldInstall ){
         chunkStoreClose(&remoteRefs);
         return SQLITE_OK;
       }
