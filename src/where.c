@@ -3232,6 +3232,9 @@ static int whereLoopAddBtreeIndex(
   WhereLoop *pNew;                /* Template WhereLoop under construction */
   WhereTerm *pTerm;               /* A WhereTerm under consideration */
   int opMask;                     /* Valid operators for constraints */
+#ifdef DOLTLITE_PROLLY
+  int doltliteNocaseScan = 0;
+#endif
   WhereScan scan;                 /* Iterator for WHERE terms */
   Bitmask saved_prereq;           /* Original value of pNew->prereq */
   u16 saved_nLTerm;               /* Original value of pNew->nLTerm */
@@ -3266,6 +3269,13 @@ static int whereLoopAddBtreeIndex(
   if( pProbe->bUnordered ){
     opMask &= ~(WO_GT|WO_GE|WO_LT|WO_LE);
   }
+#ifdef DOLTLITE_PROLLY
+  if( pProbe->bNocaseNul
+   && sqlite3StrICmp(pProbe->azColl[pNew->u.btree.nEq], "NOCASE")==0 ){
+    doltliteNocaseScan = 1;
+    opMask = WO_GT|WO_GE|WO_LT|WO_LE;
+  }
+#endif
 
   assert( pNew->u.btree.nEq<pProbe->nColumn );
   assert( pNew->u.btree.nEq<pProbe->nKeyCol
@@ -3291,6 +3301,9 @@ static int whereLoopAddBtreeIndex(
     int nIn = 0;
 #ifdef SQLITE_ENABLE_STAT4
     int nRecValid = pBuilder->nRecValid;
+#endif
+#ifdef DOLTLITE_PROLLY
+    if( doltliteNocaseScan && (pTerm->wtFlags & TERM_LIKEOPT)==0 ) continue;
 #endif
     if( (eOp==WO_ISNULL || (pTerm->wtFlags&TERM_VNULL)!=0)
      && indexColumnNotNull(pProbe, saved_nEq)
@@ -4022,9 +4035,15 @@ static int whereLoopAddBtree(
   LogEst rSize;               /* number of rows in the table */
   WhereClause *pWC;           /* The parsed WHERE clause */
   Table *pTab;                /* Table being queried */
+#ifdef DOLTLITE_PROLLY
+  sqlite3 *db;
+#endif
  
   pNew = pBuilder->pNew;
   pWInfo = pBuilder->pWInfo;
+#ifdef DOLTLITE_PROLLY
+  db = pWInfo->pParse->db;
+#endif
   pTabList = pWInfo->pTabList;
   pSrc = pTabList->a + pNew->iTab;
   pTab = pSrc->pSTab;
@@ -4124,6 +4143,25 @@ static int whereLoopAddBtree(
   for(; rc==SQLITE_OK && pProbe;
       pProbe=(pSrc->fg.isIndexedBy ? 0 : pProbe->pNext), iSortIdx++
   ){
+#ifdef DOLTLITE_PROLLY
+    if( pProbe->idxType!=SQLITE_IDXTYPE_IPK
+     && (HasRowid(pProbe->pTable) || !IsPrimaryKeyIndex(pProbe)) ){
+      int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
+      int hasNocaseNul = 0;
+      if( !pProbe->bNocaseNul
+       && iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
+       && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+        rc = sqlite3BtreeProllyIndexHasNocaseNul(
+            db->aDb[iDb].pBt, pProbe->tnum, pProbe->nKeyCol,
+            pProbe->azColl, &hasNocaseNul);
+        if( rc!=SQLITE_OK ) break;
+        if( hasNocaseNul ){
+          pProbe->bNocaseNul = 1;
+        }
+      }
+      if( pProbe->bNocaseNul ) pProbe->bUnordered = 1;
+    }
+#endif
     if( pProbe->pPartIdxWhere!=0
      && !whereUsablePartialIndex(pSrc->iCursor, pSrc->fg.jointype, pWC,
                                  pProbe->pPartIdxWhere)

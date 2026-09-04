@@ -19,6 +19,8 @@ struct TableEntry {
   ProllyHash appendSeekRoot;
   u8 tableRootKnown;
   u8 isTableRoot;
+  u8 nocaseNulState;
+  ProllyHash nocaseNulRoot;
   char *zName;
   struct ProllyMutMap *pPending;
 };

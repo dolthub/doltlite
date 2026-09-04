@@ -2872,6 +2872,9 @@ struct Index {
   unsigned bHasVCol:1;     /* Index references one or more VIRTUAL columns */
   unsigned bHasExpr:1;     /* Index contains an expression, either a literal
                            ** expression, or a reference to a VIRTUAL column */
+#ifdef DOLTLITE_PROLLY
+  unsigned bNocaseNul:1;
+#endif
 #ifdef SQLITE_ENABLE_STAT4
   int nSample;             /* Number of elements in aSample[] */
   int mxSample;            /* Number of slots allocated to aSample[] */

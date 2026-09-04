@@ -1150,6 +1150,7 @@ int sqlite3DoltliteIsBuiltinCollation(const CollSeq *p){
   if( sqlite3StrICmp(p->zName, "RTRIM")==0 ) return p->xCmp==rtrimCollFunc;
   return 0;
 }
+
 #endif
 
 /*

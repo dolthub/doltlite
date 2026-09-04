@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_btree_int.h"
+#include "prolly_record.h"
 
 static void btreeClearCatalogCache(Btree *p){
   sqlite3_free(p->pCatalogCache);
@@ -10,6 +11,112 @@ static void btreeClearCatalogCache(Btree *p){
 }
 
 static int registerDoltiteFunctions(sqlite3 *db);
+
+static int recordHasNocaseNul(
+  const u8 *pRec,
+  int nRec,
+  int nKeyCol,
+  const char *const *azColl,
+  int *pHas
+){
+  u64 nHdr;
+  u64 iData;
+  int iHdr;
+  int iField = 0;
+
+  *pHas = 0;
+  if( !pRec || nRec<=0 ) return SQLITE_CORRUPT;
+  iHdr = dlReadVarint(pRec, pRec+nRec, &nHdr);
+  if( iHdr<=0 || nHdr>(u64)nRec || nHdr<(u64)iHdr ) return SQLITE_CORRUPT;
+  iData = nHdr;
+  while( (u64)iHdr<nHdr ){
+    u64 serialType;
+    int nField;
+    int nVarint = dlReadVarint(pRec+iHdr, pRec+(int)nHdr, &serialType);
+    if( nVarint<=0 || (u64)(iHdr+nVarint)>nHdr ) return SQLITE_CORRUPT;
+    nField = dlSerialTypeLen(serialType);
+    if( nField<0 || (u64)nField>(u64)nRec-iData ) return SQLITE_CORRUPT;
+    if( iField<nKeyCol
+     && serialType>=13 && (serialType&1)!=0
+     && sqlite3StrICmp(azColl[iField], "NOCASE")==0
+     && nField>0 && memchr(pRec+(int)iData, 0, (size_t)nField)!=0 ){
+      *pHas = 1;
+      return SQLITE_OK;
+    }
+    iHdr += nVarint;
+    iData += nField;
+    iField++;
+  }
+  return iData==(u64)nRec ? SQLITE_OK : SQLITE_CORRUPT;
+}
+
+int sqlite3BtreeProllyIndexHasNocaseNul(
+  Btree *pBtree,
+  Pgno iTable,
+  int nKeyCol,
+  const char *const *azColl,
+  int *pHas
+){
+  struct TableEntry *pTE;
+  ProllyMutMap *pMap;
+  ProllyCursor cur;
+  int i;
+  int rc;
+  int res = 0;
+  int cacheable;
+  int hasNocase = 0;
+
+  *pHas = 0;
+  if( !pBtree || !azColl || !pBtree->pBt ) return SQLITE_MISUSE;
+  for(i=0; i<nKeyCol; i++){
+    if( sqlite3StrICmp(azColl[i], "NOCASE")==0 ){
+      hasNocase = 1;
+      break;
+    }
+  }
+  if( !hasNocase ) return SQLITE_OK;
+  pTE = findTable(pBtree, iTable);
+  if( !pTE ) return SQLITE_CORRUPT;
+  pMap = (ProllyMutMap*)pTE->pPending;
+  cacheable = !pMap || prollyMutMapIsEmpty(pMap);
+  if( cacheable && pTE->nocaseNulState
+   && prollyHashCompare(&pTE->nocaseNulRoot, &pTE->root)==0 ){
+    *pHas = pTE->nocaseNulState==2;
+    return SQLITE_OK;
+  }
+
+  if( pMap ){
+    for(i=0; i<pMap->nEntries; i++){
+      ProllyMutMapEntry *pEntry = &pMap->aEntries[i];
+      if( pEntry->op!=PROLLY_EDIT_INSERT || pEntry->nVal<=0 ) continue;
+      rc = recordHasNocaseNul(
+          pEntry->pVal, pEntry->nVal, nKeyCol, azColl, pHas);
+      if( rc!=SQLITE_OK || *pHas ) return rc;
+    }
+  }
+
+  prollyCursorInit(
+      &cur, &pBtree->pBt->store, &pBtree->pBt->cache, &pTE->root, pTE->flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur) ){
+    const u8 *pVal;
+    int nVal;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( nVal<=0 ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+    rc = recordHasNocaseNul(pVal, nVal, nKeyCol, azColl, pHas);
+    if( rc!=SQLITE_OK || *pHas ) break;
+    rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  if( rc==SQLITE_OK && cacheable ){
+    pTE->nocaseNulRoot = pTE->root;
+    pTE->nocaseNulState = *pHas ? 2 : 1;
+  }
+  return rc;
+}
 
 static int btreeApplyChunkSourceError(
   sqlite3 *db,
