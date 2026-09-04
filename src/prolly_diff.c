@@ -142,14 +142,28 @@ static int diffRecordsEqualFieldwise(
 ){
   DoltliteRecordInfo aInfo;
   DoltliteRecordInfo bInfo;
+  int nField;
   int i;
   int rc;
 
   *pEqual = 0;
-  /* PK-covering rows store an empty record until ADD COLUMN rewrites them,
-  ** so empty and non-empty shapes coexist in one table and simply differ. */
   if( nA < 1 || nB < 1 ){
-    *pEqual = (nA < 1 && nB < 1);
+    DoltliteRecordInfo *pInfo;
+    const u8 *pRec;
+    int nRec;
+    if( nA < 1 && nB < 1 ){
+      *pEqual = 1;
+      return SQLITE_OK;
+    }
+    pRec = nA < 1 ? pB : pA;
+    nRec = nA < 1 ? nB : nA;
+    pInfo = nA < 1 ? &bInfo : &aInfo;
+    rc = doltliteParseRecordStrict(pRec, nRec, pInfo);
+    if( rc!=SQLITE_OK ) return rc;
+    for(i=0; i<pInfo->nField; i++){
+      if( pInfo->aType[i]!=0 ) return SQLITE_OK;
+    }
+    *pEqual = 1;
     return SQLITE_OK;
   }
 
@@ -158,20 +172,19 @@ static int diffRecordsEqualFieldwise(
   rc = doltliteParseRecordStrict(pB, nB, &bInfo);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( aInfo.nField != bInfo.nField ) return SQLITE_OK;
-
-  for(i=0; i<aInfo.nField; i++){
-    int stA = aInfo.aType[i];
-    int stB = bInfo.aType[i];
+  nField = aInfo.nField > bInfo.nField ? aInfo.nField : bInfo.nField;
+  for(i=0; i<nField; i++){
+    int stA = i<aInfo.nField ? aInfo.aType[i] : 0;
+    int stB = i<bInfo.nField ? bInfo.aType[i] : 0;
     int szA;
     int szB;
 
     if( stA != stB ){
       if( dlSerialIsInt(stA) && dlSerialIsInt(stB) ){
         i64 vA = dlDecodeSerialInt(stA, pA + aInfo.aOffset[i],
-                                nA - aInfo.aOffset[i]);
+                                   nA - aInfo.aOffset[i]);
         i64 vB = dlDecodeSerialInt(stB, pB + bInfo.aOffset[i],
-                                nB - bInfo.aOffset[i]);
+                                   nB - bInfo.aOffset[i]);
         if( vA != vB ) return SQLITE_OK;
         continue;
       }

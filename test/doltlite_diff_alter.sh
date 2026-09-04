@@ -181,6 +181,67 @@ m|7
 x|7
 y|7" "$DB7"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
+DB8=/tmp/test_diff_alter8_$$.db; rm -f "$DB8"
+
+echo "CREATE TABLE rowid_t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE text_pk_t(id TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE clustered_t(a TEXT, b INT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO rowid_t VALUES(1,'a'),(2,'b');
+INSERT INTO text_pk_t VALUES('a','a'),('b','b');
+INSERT INTO clustered_t VALUES('a',1,'a'),('b',2,'b');
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE rowid_t ADD COLUMN added INT;
+ALTER TABLE text_pk_t ADD COLUMN added INT;
+ALTER TABLE clustered_t ADD COLUMN added INT;
+SELECT dolt_commit('-A','-m','add columns');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+
+run_test "added_null_rowid_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('rowid_t') AS v;
+   UPDATE rowid_t SET added=NULL WHERE id=2;
+   SELECT v=dolt_hashof_table('rowid_t') FROM h;" \
+  "1" "$DB8"
+
+run_test "added_null_text_pk_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('text_pk_t') AS v;
+   UPDATE text_pk_t SET added=NULL WHERE id='b';
+   SELECT v=dolt_hashof_table('text_pk_t') FROM h;" \
+  "1" "$DB8"
+
+run_test "added_null_clustered_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('clustered_t') AS v;
+   UPDATE clustered_t SET added=NULL WHERE a='b' AND b=2;
+   SELECT v=dolt_hashof_table('clustered_t') FROM h;" \
+  "1" "$DB8"
+
+run_test "added_null_status_clean" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB8"
+
+run_test "added_null_diff_empty" \
+  "SELECT (SELECT count(*) FROM dolt_diff_rowid_t('HEAD','WORKING'))
+        + (SELECT count(*) FROM dolt_diff_text_pk_t('HEAD','WORKING'))
+        + (SELECT count(*) FROM dolt_diff_clustered_t('HEAD','WORKING'));" \
+  "0" "$DB8"
+
+run_test "added_null_diff_stat_empty" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0)
+     FROM dolt_diff_stat('HEAD','WORKING');" \
+  "0" "$DB8"
+
+run_test "added_null_patch_empty" \
+  "SELECT count(*) FROM dolt_patch('HEAD','WORKING');" \
+  "0" "$DB8"
+
+run_test "added_null_blame_unchanged" \
+  "SELECT group_concat(message, ',') FROM (
+     SELECT message FROM dolt_blame_rowid_t ORDER BY id
+   );" \
+  "base,base" "$DB8"
+
+run_test_match "added_null_cannot_commit" \
+  "SELECT dolt_commit('-A','-m','content-free');" \
+  "nothing to commit" "$DB8"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 
 dltest_finish

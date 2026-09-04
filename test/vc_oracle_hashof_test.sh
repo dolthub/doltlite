@@ -244,7 +244,29 @@ same "net_vs_delete_reinsert" "$H_NET" "$H_DR"
 
 echo ""
 
-echo "--- 3b. Oversized singleton leaf vs one-shot insert ---"
+echo "--- 3b. Setting an added column to its implicit NULL is a no-op ---"
+
+ADDED_NULL="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a'), (2, 'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+ALTER TABLE t ADD COLUMN added INTEGER;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add column');
+"
+
+DB="added_null"
+setup_pair "$DB" "$ADDED_NULL"
+H_ADDED_NULL_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
+exec_pair "$DB" "UPDATE t SET added=NULL WHERE id=2;"
+H_ADDED_NULL_AFTER=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
+same "added_implicit_null_update_keeps_table_hash" \
+  "$H_ADDED_NULL_BEFORE" "$H_ADDED_NULL_AFTER"
+
+echo ""
+
+echo "--- 3c. Oversized singleton leaf vs one-shot insert ---"
 
 SMALL_TWO="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
