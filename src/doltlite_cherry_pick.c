@@ -99,9 +99,33 @@ static int cherryPickRestoreAndPersist(
   int opRc
 ){
   ProllyHash restoredCat = pSaved->sessionCatalogHash;
-  int restoreRc = doltliteRestoreTxnStateOnFailure(db, pSaved, opRc);
+  ProllyHash savedHead = pSaved->sessionHead;
+  ProllyHash diskHead;
+  ProllyHash sessionHead;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int found = 0;
+  int restoreRc;
+  int persistRc;
+
+  /* CompareAndAdvanceBranch can return an error after the new tip is already
+  ** on disk with a matching working set. Restoring the pre-op working set
+  ** then binds working-commit to the old tip; reopen discards that blob
+  ** (working-commit != HEAD) and leaves staged empty. */
+  memset(&diskHead, 0, sizeof(diskHead));
+  doltliteGetSessionHead(db, &sessionHead);
+  if( cs
+   && chunkStoreReadDiskBranchTip(
+        cs, doltliteGetSessionBranch(db), &diskHead, &found)==SQLITE_OK
+   && found
+   && prollyHashCompare(&diskHead, &savedHead)!=0
+   && prollyHashCompare(&diskHead, &sessionHead)==0 ){
+    doltliteTxnStateClear(pSaved);
+    return opRc;
+  }
+
+  restoreRc = doltliteRestoreTxnStateOnFailure(db, pSaved, opRc);
   if( restoreRc==opRc && !prollyHashIsEmpty(&restoredCat) ){
-    int persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
+    persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
     if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) restoreRc = persistRc;
   }
   return restoreRc;
