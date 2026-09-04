@@ -227,6 +227,13 @@ INSERT INTO dolt_tests VALUES
  ('write','validation','CREATE TABLE nope(x INT)','expected_rows','==','1');
 " "'validation'"
 
+oracle_query results "attach_rejected" "
+INSERT INTO dolt_tests VALUES
+ ('attach',NULL,'ATTACH '':memory:'' AS aux','expected_rows','==','0');
+" \
+  "SELECT 'R|' || test_name || '|' || status FROM dolt_test_run('attach');" \
+  "SELECT concat('R|', test_name, '|', status) FROM dolt_test_run('attach');"
+
 oracle_results "non_integer_counts" "
 INSERT INTO dolt_tests VALUES
  ('bad_cols','bad_int','SELECT 1','expected_columns','==','0.5'),
