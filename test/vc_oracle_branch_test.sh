@@ -517,6 +517,54 @@ oracle_error "no_args" "
 SELECT dolt_branch();
 "
 
+SEED_CASE="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'c1');
+SELECT dolt_branch('feat');
+"
+
+oracle_error "create_case_variant_of_existing_branch" "
+$SEED_CASE
+SELECT dolt_branch('Feat');
+"
+
+oracle_error "create_case_variant_of_default_branch" "
+$SEED_CASE
+SELECT dolt_branch('MAIN');
+"
+
+oracle_error "copy_to_case_variant" "
+$SEED_CASE
+SELECT dolt_branch('-c', 'main', 'MAIN');
+"
+
+oracle_error "force_create_case_variant" "
+$SEED_CASE
+SELECT dolt_branch('-f', 'Main', 'main');
+"
+
+oracle_error "checkout_b_case_variant" "
+$SEED_CASE
+SELECT dolt_checkout('-b', 'MAIN');
+"
+
+oracle_error "move_onto_case_variant_of_other_branch" "
+$SEED_CASE
+SELECT dolt_branch('-m', 'feat', 'MAIN');
+"
+
+oracle "move_recases_own_name" "
+$SEED_CASE
+SELECT dolt_branch('-m', 'feat', 'FEAT');
+"
+
+oracle "case_distinct_names_still_create" "
+$SEED_CASE
+SELECT dolt_branch('feature2');
+SELECT dolt_branch('-c', 'main', 'mainline');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

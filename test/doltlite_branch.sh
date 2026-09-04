@@ -190,5 +190,29 @@ echo "SELECT dolt_checkout('one'); INSERT INTO t VALUES(2); SELECT dolt_commit('
 run_test "force_delete_multiple_branches" "SELECT dolt_branch('-D','one','two');" "0" "$DB15"
 run_test "force_delete_multiple_branches_removed" "SELECT count(*) FROM dolt_branches WHERE name IN ('one','two');" "0" "$DB15"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
+DB16=/tmp/test_branch16_$$.db; rm -f "$DB16"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB16" > /dev/null 2>&1
+run_test_match "create_case_variant_refused" "SELECT dolt_branch('Feat');" "already exists" "$DB16"
+run_test_match "copy_to_case_variant_refused" "SELECT dolt_branch('-c','main','MAIN');" "already exists" "$DB16"
+run_test_match "force_create_case_variant_refused" "SELECT dolt_branch('-f','Main','main');" "already exists" "$DB16"
+run_test_match "checkout_b_case_variant_refused" "SELECT dolt_checkout('-b','MAIN');" "already exists" "$DB16"
+run_test_match "move_onto_case_variant_refused" "SELECT dolt_branch('-m','feat','MAIN');" "already exists" "$DB16"
+run_test_match "force_move_onto_case_variant_refused" "SELECT dolt_branch('-m','-f','feat','MAIN');" "already exists" "$DB16"
+run_test "case_variant_attempts_created_nothing" \
+  "SELECT group_concat(name,'|') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
+  "feat|main" "$DB16"
+run_test "distinct_name_still_creates" "SELECT dolt_branch('feature2');" "0" "$DB16"
+
+DB17=/tmp/test_branch17_$$.db; rm -f "$DB17"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+run_test "move_recases_own_name" "SELECT dolt_branch('-m','feat','FEAT');" "0" "$DB17"
+run_test "move_recased_branch_listed_once" \
+  "SELECT group_concat(name,'|') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
+  "FEAT|main" "$DB17"
+run_test "move_recases_default_branch" "SELECT dolt_branch('-m','main','MAIN');" "0" "$DB17"
+run_test "recased_default_branch_listed_once" \
+  "SELECT group_concat(name,'|') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
+  "FEAT|MAIN" "$DB17"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
 dltest_finish
