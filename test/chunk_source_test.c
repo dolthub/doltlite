@@ -1138,7 +1138,7 @@ other_ws_done:
   pCtx->mode = SOURCE_NORMAL;
 }
 
-static void testGraphLockMiss(
+static void testGraphLockFetch(
   const char *zPath,
   const char *zAuxPath,
   SourceCtx *pCtx,
@@ -1182,18 +1182,18 @@ static void testGraphLockMiss(
   inTxn = 1;
   sourceResetCounters(pCtx);
   rc = getDbChunk(db, &missing, &pData, &nData);
-  check("graph-lock miss returns busy", (rc & 0xff)==SQLITE_BUSY);
-  check("graph-lock miss does not invoke callback",
-        pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+  check("graph-lock miss fetches into memory", rc==SQLITE_OK);
+  check("graph-lock miss invokes callback", pCtx->nRequest>0);
   sqlite3_free(pData);
   pData = 0;
   rc = execSql(db, "ROLLBACK");
   check("rollback graph-lock transaction", rc==SQLITE_OK);
   if( rc==SQLITE_OK ) inTxn = 0;
   if( rc!=SQLITE_OK ) goto graph_lock_done;
+  sourceResetCounters(pCtx);
   rc = getDbChunk(db, &missing, &pData, &nData);
-  check("source miss succeeds after graph-lock rollback", rc==SQLITE_OK);
-  check("post-rollback miss invokes source", pCtx->nRequest>0);
+  check("graph-lock fetch remains cached after rollback", rc==SQLITE_OK);
+  check("post-rollback cache hit skips callback", pCtx->nRequest==0);
   sqlite3_free(pData);
   pData = 0;
   zAttach = sqlite3_mprintf("ATTACH %Q AS aux", zAuxPath);
@@ -1217,10 +1217,8 @@ static void testGraphLockMiss(
   if( rc!=SQLITE_OK ) goto graph_lock_done;
   sourceResetCounters(pCtx);
   rc = getDbChunk(db, &missing, &pData, &nData);
-  check("cross-database graph-lock miss returns busy",
-        (rc & 0xff)==SQLITE_BUSY);
-  check("cross-database graph lock suppresses callback",
-        pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+  check("cross-database graph-lock miss fetches into memory", rc==SQLITE_OK);
+  check("cross-database graph-lock miss invokes callback", pCtx->nRequest>0);
 
 graph_lock_done:
   sqlite3_free(pData);
@@ -2497,7 +2495,7 @@ int main(void){
       zWorkingSetMiss, &source, &api, pNewRefs, nNewRefs);
   testOtherBranchWorkingSetNotFound(
       zOtherWorkingSetMiss, &source, &api, pNewRefs, nNewRefs);
-  testGraphLockMiss(
+  testGraphLockFetch(
       zGraphLock, zGraphAux, &source, &api, pNewRefs, nNewRefs);
   testSourcePersistenceBusyRetry(
       zBusyRetry, sourceDb, &source, &api, pNewRefs, nNewRefs);
