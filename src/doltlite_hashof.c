@@ -991,16 +991,16 @@ int doltliteHashofRegister(sqlite3 *db){
                                  doltliteHashofCatalogFunc, 0, 0);
   }
   if( rc==SQLITE_OK ){
-    if( rc==SQLITE_OK ){
+    rc = sqlite3_create_function(db, "dolt_hashof_catalog", 1, SQLITE_UTF8, 0,
+                                 doltliteHashofCatalogFunc, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
     rc = sqlite3_create_function(db, "dolt_hashof_index", 1, SQLITE_UTF8, 0,
                                  doltliteHashofIndexFunc, 0, 0);
   }
   if( rc==SQLITE_OK ){
     rc = sqlite3_create_function(db, "dolt_hashof_index", 2, SQLITE_UTF8, 0,
                                  doltliteHashofIndexFunc, 0, 0);
-  }
-  rc = sqlite3_create_function(db, "dolt_hashof_catalog", 1, SQLITE_UTF8, 0,
-                                 doltliteHashofCatalogFunc, 0, 0);
   }
   return rc;
 }
