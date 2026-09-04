@@ -354,6 +354,53 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'post_merge');
 "
 
+oracle "merge_order_branch_commit_is_newer" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'c1', '--date', '2020-01-01T00:00:00');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-Am', 'feat1', '--date', '2020-01-02T00:00:00');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_commit('-Am', 'main1', '--date', '2020-01-03T00:00:00');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_commit('-Am', 'feat2', '--date', '2020-01-04T00:00:00');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+oracle "merge_order_height_outranks_date" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'c1', '--date', '2020-01-01T00:00:00');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-Am', 'main1', '--date', '2020-01-02T00:00:00');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_commit('-Am', 'main2', '--date', '2020-01-03T00:00:00');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (9, 90);
+SELECT dolt_commit('-Am', 'feat_dated_2030', '--date', '2030-06-01T00:00:00');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+oracle "merge_order_equal_height_breaks_on_date" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'c1', '--date', '2020-01-01T00:00:00');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-Am', 'main_dated_2025', '--date', '2025-01-02T00:00:00');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (9, 90);
+SELECT dolt_commit('-Am', 'feat_dated_2021', '--date', '2021-01-01T00:00:00');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
 echo "--- tags and branches ---"
 
 oracle "tag_does_not_add_commit" "

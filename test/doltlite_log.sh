@@ -27,5 +27,45 @@ run_test "hash_filter_matches_unpushed_predicate" "SELECT count(*) FROM dolt_log
 run_test "hash_filter_includes_reachable_commit" "SELECT count(*) FROM dolt_log WHERE commit_hash=dolt_hashof('main');" "1" "$DB4"
 run_test "hash_filter_honors_explicit_revision" "SELECT count(*) FROM dolt_log('feat') WHERE commit_hash=dolt_hashof('feat');" "1" "$DB4"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4"
+DB5=/tmp/test_log5_$$.db; rm -f "$DB5"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1','--date','2020-01-01T00:00:00');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-Am','feat1','--date','2020-01-02T00:00:00');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3);
+SELECT dolt_commit('-Am','main1','--date','2020-01-03T00:00:00');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(4);
+SELECT dolt_commit('-Am','feat2','--date','2020-01-04T00:00:00');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+run_test "log_merge_orders_by_height_then_date" \
+  "SELECT group_concat(message,'|') FROM (SELECT message FROM dolt_log);" \
+  "Merge branch 'feat' into main|feat2|main1|feat1|c1|Initialize data repository" "$DB5"
+run_test "log_merge_order_limit_takes_newest" \
+  "SELECT group_concat(message,'|') FROM (SELECT message FROM dolt_log LIMIT 3);" \
+  "Merge branch 'feat' into main|feat2|main1" "$DB5"
+
+DB6=/tmp/test_log6_$$.db; rm -f "$DB6"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1','--date','2020-01-01T00:00:00');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-Am','main1','--date','2020-01-02T00:00:00');
+INSERT INTO t VALUES(3);
+SELECT dolt_commit('-Am','main2','--date','2020-01-03T00:00:00');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(9);
+SELECT dolt_commit('-Am','feat_dated_2030','--date','2030-06-01T00:00:00');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+run_test "log_height_outranks_a_later_date" \
+  "SELECT group_concat(message,'|') FROM (SELECT message FROM dolt_log);" \
+  "Merge branch 'feat' into main|main2|feat_dated_2030|main1|c1|Initialize data repository" "$DB6"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6"
 dltest_finish
