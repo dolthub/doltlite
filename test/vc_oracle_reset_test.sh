@@ -881,6 +881,16 @@ oracle_same_session "reset_hard_preserves_untracked_contents" "$UNTRACKED_SEED" 
 SELECT concat('Q|s|', id, '|', v) FROM s;
 SELECT concat('Q|u|', x, '|', w) FROM u;"
 
+oracle "reset_hard_drops_staged_new_table" "
+$SEED
+CREATE TABLE s(id INTEGER PRIMARY KEY);
+INSERT INTO s VALUES (2);
+SELECT dolt_add('s');
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+INSERT INTO u VALUES (3);
+SELECT dolt_reset('--hard');
+"
+
 echo "--- table takes precedence over a same-named ref ---"
 
 oracle "reset_path_prefers_table_over_same_named_branch" "

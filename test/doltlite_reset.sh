@@ -293,6 +293,27 @@ run_test "hard_reset_drops_tracked_rename" \
 run_test "hard_reset_tracked_rename_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB12"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12"
+DB13=/tmp/test_reset13_$$.db; rm -f "$DB13"
+$DOLTLITE "$DB13" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-A','-m','base');
+CREATE TABLE s(id INTEGER PRIMARY KEY);
+INSERT INTO s VALUES(2);
+SELECT dolt_add('s');
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+INSERT INTO u VALUES(3);
+SELECT dolt_reset('--hard');
+SQL
+run_test "hard_reset_drops_staged_new_table" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='s';" \
+  "0" "$DB13"
+run_test "hard_reset_preserves_only_untracked_new_table" \
+  "SELECT table_name || ':' || staged || ':' || status FROM dolt_status;" \
+  "u:0:new table" "$DB13"
+run_test "hard_reset_mixed_new_tables_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB13"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
 
 dltest_finish
