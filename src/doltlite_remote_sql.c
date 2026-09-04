@@ -814,7 +814,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
   rc = bLazy ? doltliteCloneLazy(cs, pRemote, zUrl)
-             : doltliteClone(cs, pRemote);
+             : doltliteClone(cs, pRemote, zUrl);
   if( rc!=SQLITE_OK ){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
     char *zOwned;
@@ -854,29 +854,6 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     remoteSqlExpireCurrentStatement(db);
     remoteSqlClearAndSucceed(ctx, &savedState);
     return;
-  }
-
-  rc = chunkStoreAddRemote(cs, "origin", zUrl);
-  if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                              "failed to add origin remote");
-    return;
-  }
-
-  {
-    int i;
-    int nBr;
-    const BranchRef *aBr;
-    refsTableGetBranches(&cs->refs, &nBr, &aBr);
-    for(i=0; i<nBr; i++){
-      rc = chunkStoreUpdateTracking(
-          cs, "origin", aBr[i].zName, &aBr[i].commitHash);
-      if( rc!=SQLITE_OK ){
-        remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
-                                  "failed to add origin tracking refs");
-        return;
-      }
-    }
   }
 
   {

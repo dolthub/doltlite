@@ -57,7 +57,8 @@ int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
 int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zRemoteName, const char *zBranch);
 
-int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote);
+int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote,
+                  const char *zUrl);
 
 int doltliteCloneLazy(ChunkStore *pLocal, DoltliteRemote *pRemote,
                       const char *zUrl);

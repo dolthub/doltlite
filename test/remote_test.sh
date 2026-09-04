@@ -125,6 +125,34 @@ check "clone has origin" "origin" "$result"
 result=$("$DB" "$TMPDIR/clone.db" "SELECT message FROM dolt_log LIMIT 1;")
 check "clone has commit history" "initial: two tables with data" "$result"
 
+"$DB" "$TMPDIR/clone_chain_source.db" \
+  "SELECT dolt_clone('$R/remote.db'); SELECT dolt_remote('add','other','$R/remote.db'); SELECT dolt_fetch('other','main');" > /dev/null
+
+result=$("$DB" "$TMPDIR/clone_chain.db" \
+  "SELECT dolt_clone('$R/clone_chain_source.db');" 2>&1)
+check "clone of clone succeeds" "0" "$result"
+result=$("$DB" "$TMPDIR/clone_chain.db" \
+  "SELECT name, url FROM dolt_remotes ORDER BY name;")
+check "clone of clone keeps only its immediate origin" \
+  "origin|$R/clone_chain_source.db" "$result"
+result=$("$DB" "$TMPDIR/clone_chain.db" \
+  "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "clone of clone rebuilds only origin tracking refs" \
+  "remotes/origin/main" "$result"
+
+lazy_chain_uri="file:$TMPDIR/lazy_clone_chain.db?lazy_origin=1"
+result=$("$DB" "$lazy_chain_uri" \
+  "SELECT dolt_clone('--lazy','$R/clone_chain_source.db');" 2>&1)
+check "lazy clone of clone succeeds" "0" "$result"
+result=$("$DB" "$lazy_chain_uri" \
+  "SELECT name, url FROM dolt_remotes ORDER BY name;")
+check "lazy clone of clone keeps only its immediate origin" \
+  "origin|$R/clone_chain_source.db" "$result"
+result=$("$DB" "$lazy_chain_uri" \
+  "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "lazy clone of clone rebuilds only origin tracking refs" \
+  "remotes/origin/main" "$result"
+
 "$DB" "$TMPDIR/noop_clone.db" "SELECT dolt_clone('$R/remote.db'); SELECT dolt_fetch('origin','main');" > /dev/null
 clone_size_before=$(file_size "$TMPDIR/noop_clone.db")
 result=$("$DB" "$TMPDIR/noop_clone.db" "SELECT dolt_fetch('origin','main');")
