@@ -3965,8 +3965,7 @@ static void run_pull_persist_failure(void){
   removeDbFiles(remoteClientPath);
 }
 
-/* Pull of a missing local branch must create it via the atomic ref-mutation helper. */
-static void run_pull_new_branch_persists(void){
+static void run_pull_remote_branch_updates_current(void){
   sqlite3 *localDb = 0;
   sqlite3 *remoteDb = 0;
   sqlite3 *remoteClientDb = 0;
@@ -3976,11 +3975,11 @@ static void run_pull_new_branch_persists(void){
   char sql[1024];
   const char *res;
 
-  printf("=== Pull New Branch Persists Test ===\n\n");
-  make_dbpath(localPath, sizeof(localPath), "test_pull_new_branch_local");
-  make_dbpath(remotePath, sizeof(remotePath), "test_pull_new_branch_remote");
+  printf("=== Pull Remote Branch Updates Current Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_pull_remote_branch_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_pull_remote_branch_remote");
   make_dbpath(remoteClientPath, sizeof(remoteClientPath),
-              "test_pull_new_branch_client");
+              "test_pull_remote_branch_client");
   removeDbFiles(localPath);
   removeDbFiles(remotePath);
   removeDbFiles(remoteClientPath);
@@ -4010,21 +4009,23 @@ static void run_pull_new_branch_persists(void){
     "SELECT dolt_push('origin','feature');")==SQLITE_OK);
 
   res = queryScalarText(localDb, "SELECT dolt_pull('origin','feature')");
-  check("pull_new_branch_succeeds", strstr(res, "ERROR:")==0);
-  check("pulled_branch_visible_in_session",
+  check("pull_remote_branch_succeeds", strstr(res, "ERROR:")==0);
+  check("pull_remote_branch_keeps_main_active",
+    strcmp(queryScalarText(localDb, "SELECT active_branch()"), "main")==0);
+  check("pull_remote_branch_updates_current_rows",
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM t"), "2")==0);
+  check("pull_remote_branch_does_not_create_local_namesake",
     strcmp(queryScalarText(localDb,
-      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "0")==0);
 
   sqlite3_close(localDb);
   localDb = 0;
   check("reopen_local_after_pull", open_db(localPath, &localDb)==SQLITE_OK);
-  check("pulled_branch_persisted_across_reopen",
-    strcmp(queryScalarText(localDb,
-      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
-  check("pulled_branch_checkout_works", execSql(localDb,
-    "SELECT dolt_checkout('feature')")==SQLITE_OK);
-  check("pulled_branch_rows_present",
+  check("pulled_current_branch_persisted_across_reopen",
     strcmp(queryScalarText(localDb, "SELECT count(*) FROM t"), "2")==0);
+  check("pulled_remote_branch_still_not_local_after_reopen",
+    strcmp(queryScalarText(localDb,
+      "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "0")==0);
 
   sqlite3_close(remoteClientDb);
   sqlite3_close(remoteDb);
@@ -14155,7 +14156,9 @@ static const RegressionCase aCases[] = {
   { "ancestor_criss_cross_single_walk", "Ancestor Criss-Cross Single Walk Test", run_ancestor_criss_cross_single_walk },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
-  { "pull_new_branch_persists", "Pull New Branch Persists Test", run_pull_new_branch_persists },
+  { "pull_remote_branch_updates_current",
+    "Pull Remote Branch Updates Current Test",
+    run_pull_remote_branch_updates_current },
   { "pull_dirty_working_set_fails", "Pull Dirty Working Set Fails Test", run_pull_dirty_working_set_fails },
   { "pull_staged_changes_fails", "Pull Staged Changes Fails Test", run_pull_staged_changes_fails },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },

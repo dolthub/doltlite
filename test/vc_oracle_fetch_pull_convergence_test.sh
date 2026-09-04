@@ -122,6 +122,68 @@ remote_flow "nonmain_fetch_track_contents" "$NONMAIN_SEED" "$NONMAIN_ADVANCE" \
   "SELECT 'R|'||active_branch()||'|'||id||'|'||v FROM t;" \
   "SELECT CONCAT('R|',active_branch(),'|',id,'|',v) FROM t;"
 
+echo "--- pull remote branch into current branch ---"
+REMOTE_REF_SEED="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'base');
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_remote('add','origin','@REMOTE@');
+SELECT dolt_push('origin','main');
+"
+REMOTE_REF_ADVANCE="
+SELECT dolt_checkout('-b','other');
+INSERT INTO t VALUES (2,'remote-other');
+SELECT dolt_commit('-A','-m','remote other');
+SELECT dolt_push('origin','other');
+"
+remote_flow "pull_remote_ref_without_local_branch" \
+  "$REMOTE_REF_SEED" "$REMOTE_REF_ADVANCE" \
+  "SELECT dolt_pull('origin','other');" \
+  "SELECT 'R|active|'||active_branch();
+   SELECT 'R|rows|'||group_concat(id||':'||v, ',') FROM (SELECT id,v FROM t ORDER BY id);
+   SELECT 'R|local-other|'||count(*) FROM dolt_branches WHERE name='other';" \
+  "SELECT CONCAT('R|active|',active_branch());
+   SELECT CONCAT('R|rows|',group_concat(CONCAT(id,':',v) ORDER BY id SEPARATOR ',')) FROM t;
+   SELECT CONCAT('R|local-other|',count(*)) FROM dolt_branches WHERE name='other';"
+
+remote_flow "pull_remote_ref_leaves_divergent_local_namesake" \
+  "$REMOTE_REF_SEED" "$REMOTE_REF_ADVANCE" \
+  "SELECT dolt_branch('other');
+   SELECT dolt_checkout('other');
+   INSERT INTO t VALUES (3,'local-other');
+   SELECT dolt_commit('-A','-m','local other');
+   SELECT dolt_checkout('main');
+   SELECT dolt_pull('origin','other');" \
+  "SELECT 'R|active|'||active_branch();
+   SELECT 'R|main|'||group_concat(id||':'||v, ',') FROM (SELECT id,v FROM t ORDER BY id);
+   SELECT 'R|other|'||group_concat(id||':'||v, ',') FROM (SELECT id,v FROM dolt_at_t WHERE commit_ref='other' ORDER BY id);" \
+  "SELECT CONCAT('R|active|',active_branch());
+   SELECT CONCAT('R|main|',group_concat(CONCAT(id,':',v) ORDER BY id SEPARATOR ',')) FROM t;
+   SELECT CONCAT('R|other|',group_concat(CONCAT(id,':',v) ORDER BY id SEPARATOR ',')) FROM t AS OF 'other';"
+
+remote_flow "pull_remote_ref_merges_into_divergent_current" \
+  "$REMOTE_REF_SEED" "$REMOTE_REF_ADVANCE" \
+  "INSERT INTO t VALUES (3,'local-main');
+   SELECT dolt_commit('-A','-m','local main');
+   SELECT dolt_pull('origin','other');" \
+  "SELECT 'R|active|'||active_branch();
+   SELECT 'R|rows|'||group_concat(id||':'||v, ',') FROM (SELECT id,v FROM t ORDER BY id);
+   SELECT 'R|local-other|'||count(*) FROM dolt_branches WHERE name='other';" \
+  "SELECT CONCAT('R|active|',active_branch());
+   SELECT CONCAT('R|rows|',group_concat(CONCAT(id,':',v) ORDER BY id SEPARATOR ',')) FROM t;
+   SELECT CONCAT('R|local-other|',count(*)) FROM dolt_branches WHERE name='other';"
+
+remote_flow "pull_remote_ref_dirty_current_fails_without_local_branch" \
+  "$REMOTE_REF_SEED" "$REMOTE_REF_ADVANCE" \
+  "INSERT INTO t VALUES (3,'dirty-main');
+   SELECT dolt_pull('origin','other');" \
+  "SELECT 'R|active|'||active_branch();
+   SELECT 'R|rows|'||group_concat(id||':'||v, ',') FROM (SELECT id,v FROM t ORDER BY id);
+   SELECT 'R|local-other|'||count(*) FROM dolt_branches WHERE name='other';" \
+  "SELECT CONCAT('R|active|',active_branch());
+   SELECT CONCAT('R|rows|',group_concat(CONCAT(id,':',v) ORDER BY id SEPARATOR ',')) FROM t;
+   SELECT CONCAT('R|local-other|',count(*)) FROM dolt_branches WHERE name='other';"
+
 echo "--- divergent pull from refreshed remote tracking branch ---"
 TOPIC_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

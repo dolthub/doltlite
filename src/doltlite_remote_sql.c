@@ -533,16 +533,14 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
 typedef struct PullAdvanceCtx PullAdvanceCtx;
 struct PullAdvanceCtx {
-  const char *zBranch;
+  const char *zLocalBranch;
   ProllyHash newTip;
-  int isCreate;
 };
 
 static int mutatePullAdvance(sqlite3 *db, ChunkStore *cs, void *pArg){
   PullAdvanceCtx *p = (PullAdvanceCtx*)pArg;
   (void)db;
-  if( p->isCreate ) return chunkStoreAddBranch(cs, p->zBranch, &p->newTip);
-  return chunkStoreUpdateBranch(cs, p->zBranch, &p->newTip);
+  return chunkStoreUpdateBranch(cs, p->zLocalBranch, &p->newTip);
 }
 
 static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -551,12 +549,14 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   DoltliteRemote *pRemote = 0;
   const char *zUrl = 0;
   const char *zRemoteName;
-  const char *zBranch;
+  const char *zRemoteBranch;
+  const char *zLocalBranch;
   ProllyHash trackingCommit, localCommit;
   DoltliteTxnState savedState;
   int dirty = 0;
   int rc;
 
+  if( doltliteCmdRejectDetached(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<2 ){
     doltliteVcResultError(ctx, db, "usage: dolt_pull(remote, branch)");
@@ -564,8 +564,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   zRemoteName = (const char*)sqlite3_value_text(argv[0]);
-  zBranch = (const char*)sqlite3_value_text(argv[1]);
-  if( !zRemoteName || !zBranch ){
+  zRemoteBranch = (const char*)sqlite3_value_text(argv[1]);
+  if( !zRemoteName || !zRemoteBranch ){
     doltliteVcResultError(ctx, db, "remote and branch required");
     return;
   }
@@ -585,7 +585,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, &savedState) ) return;
 
-  rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
+  rc = doltliteFetch(cs, pRemote, zRemoteName, zRemoteBranch);
   pRemote->xClose(pRemote);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
@@ -593,36 +593,24 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  rc = chunkStoreFindTracking(cs, zRemoteName, zBranch, &trackingCommit);
+  rc = chunkStoreFindTracking(
+      cs, zRemoteName, zRemoteBranch, &trackingCommit);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&trackingCommit) ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
                               "tracking branch not found after fetch");
     return;
   }
 
-  rc = chunkStoreFindBranch(cs, zBranch, &localCommit);
+  zLocalBranch = doltliteGetSessionBranch(db);
+  if( !zLocalBranch ){
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                              "cannot pull in detached head");
+    return;
+  }
+  rc = chunkStoreFindBranch(cs, zLocalBranch, &localCommit);
   if( rc!=SQLITE_OK ){
-    /* Persist the new local branch under the lock; an unlocked in-memory
-    ** mutation would be clobbered or left unpersisted. */
-    DoltliteBranchExpectation exp;
-    PullAdvanceCtx adv;
-    exp.zBranch = zBranch;
-    exp.pTip = 0;
-    adv.zBranch = zBranch;
-    adv.newTip = trackingCommit;
-    adv.isCreate = 1;
-    rc = doltliteMutateRefsExpected(db, &exp, 1, mutatePullAdvance, &adv);
-    if( rc==SQLITE_BUSY ){
-      doltliteCmdResultPeerBranchBusy(ctx, "pull");
-      (void)doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
-      return;
-    }
-    if( rc!=SQLITE_OK ){
-      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                "failed to create local branch");
-      return;
-    }
-    remoteSqlClearAndSucceed(ctx, &savedState);
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+                              "current branch not found after fetch");
     return;
   }
 
@@ -640,12 +628,6 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
     if( prollyHashCompare(&ancestor, &localCommit)!=0 ){
       char *zTrackingRef;
-      if( strcmp(zBranch, doltliteGetSessionBranch(db))!=0 ){
-        remoteSqlRestoreAndReport(
-          ctx, db, cs, &savedState, SQLITE_ERROR,
-          "cannot pull non-current branch without fast-forward");
-        return;
-      }
       if( strcmp(zRemoteName, "origin")==0
        && chunkStoreOriginSourceEnabled(cs) ){
         remoteSqlRestoreAndReport(
@@ -656,7 +638,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       }
       /* Merge owns txn save/restore; drop pull's snapshot first. */
       doltliteTxnStateClear(&savedState);
-      zTrackingRef = sqlite3_mprintf("%s/%s", zRemoteName, zBranch);
+      zTrackingRef = sqlite3_mprintf(
+          "%s/%s", zRemoteName, zRemoteBranch);
       if( !zTrackingRef ){
         sqlite3_result_error_nomem(ctx);
         return;
@@ -672,17 +655,15 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
-    rc = doltliteHasUncommittedChanges(db, &dirty);
-    if( rc!=SQLITE_OK ){
-      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
-      return;
-    }
-    if( dirty ){
-      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                "cannot pull with uncommitted changes");
-      return;
-    }
+  rc = doltliteHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ){
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
+    return;
+  }
+  if( dirty ){
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                              "cannot pull with uncommitted changes");
+    return;
   }
 
   /* CAS-advance the branch: force-refresh under the graph lock, compare the
@@ -691,11 +672,10 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   {
     DoltliteBranchExpectation exp;
     PullAdvanceCtx adv;
-    exp.zBranch = zBranch;
+    exp.zBranch = zLocalBranch;
     exp.pTip = &localCommit;
-    adv.zBranch = zBranch;
+    adv.zLocalBranch = zLocalBranch;
     adv.newTip = trackingCommit;
-    adv.isCreate = 0;
     rc = doltliteMutateRefsExpected(db, &exp, 1, mutatePullAdvance, &adv);
   }
   if( rc!=SQLITE_OK ){
@@ -709,13 +689,11 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
-    rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
-    if( rc!=SQLITE_OK ){
-      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                "failed to update working tree from branch");
-      return;
-    }
+  rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
+  if( rc!=SQLITE_OK ){
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                              "failed to update working tree from branch");
+    return;
   }
   doltliteTxnStateClear(&savedState);
   rc = doltliteVcSealBranchStyleTxn(db);

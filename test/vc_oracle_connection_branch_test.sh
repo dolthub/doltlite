@@ -255,6 +255,58 @@ oracle_detached_command_success() {
   fi
 }
 
+oracle_detached_pull_error() {
+  local name="$1"
+  local dir="$TMPROOT/$name"
+  local parent repo_name dl_rc dt_rc dl_out dt_out
+
+  setup_pair "$dir"
+  run_dl "$dir/dl/remote.sqlite" \
+    "SELECT dolt_clone('file://$dir/dl/db.sqlite');" >/dev/null
+  run_dl "$dir/dl/db.sqlite" \
+    "SELECT dolt_remote('add','origin','file://$dir/dl/remote.sqlite');" \
+    >/dev/null
+  (
+    cd "$dir" || exit 1
+    "$DOLT" clone "file://$dir/dt" dt_remote >/dev/null 2>&1
+    cd "$dir/dt" || exit 1
+    printf "%s\n" \
+      "CALL dolt_remote('add','origin','file://$dir/dt_remote');" \
+      | "$DOLT" sql -c >/dev/null
+  )
+
+  run_dl "$dir/dl/db.sqlite/v1" "SELECT dolt_pull('origin','main');" \
+    >"$dir/dl.out" 2>"$dir/dl.err"
+  dl_rc=$?
+  parent=$(dirname "$dir/dt")
+  repo_name=$(basename "$dir/dt")
+  (
+    cd "$parent" || exit 1
+    printf "%s\n" "CALL dolt_pull('origin','main');" \
+      | "$DOLT" --use-db "$repo_name/v1" sql \
+          >"$dir/dt.out" 2>"$dir/dt.err"
+  )
+  dt_rc=$?
+
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to error)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+  fi
+
+  dl_out=$(run_dl "$dir/dl/db.sqlite/v1" \
+    "SELECT IFNULL(active_branch(),'NULL') || ':' || COUNT(*) FROM t;" \
+    2>>"$dir/dl.err" | tr -d '\r')
+  dt_out=$(run_dt "$dir/dt" "v1" \
+    "SELECT CONCAT(IFNULL(active_branch(),'NULL'),':',COUNT(*)) FROM t;" \
+    2>>"$dir/dt.err")
+  vc_oracle_assert_match "${name}_preserves_snapshot" "$dl_out" "$dt_out"
+}
+
 echo "=== Oracle Tests: Connection Branch Selection ==="
 echo ""
 
@@ -342,6 +394,7 @@ oracle_detached_command_error "detached_reset_is_rejected" \
   "SELECT dolt_reset('--hard');" "CALL dolt_reset('--hard');"
 oracle_detached_command_error "detached_merge_is_rejected" \
   "SELECT dolt_merge('main');" "CALL dolt_merge('main');"
+oracle_detached_pull_error "detached_pull_is_rejected"
 oracle_detached_command_error "checkout_tag_does_not_detach" \
   "SELECT dolt_checkout('v1');" "CALL dolt_checkout('v1');"
 oracle_error "attached_checkout_tag_does_not_detach" "" \
