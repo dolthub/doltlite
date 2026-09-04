@@ -2872,6 +2872,9 @@ struct Index {
   unsigned bHasVCol:1;     /* Index references one or more VIRTUAL columns */
   unsigned bHasExpr:1;     /* Index contains an expression, either a literal
                            ** expression, or a reference to a VIRTUAL column */
+#ifdef DOLTLITE_PROLLY
+  unsigned bNocaseNul:1;
+#endif
 #ifdef SQLITE_ENABLE_STAT4
   int nSample;             /* Number of elements in aSample[] */
   int mxSample;            /* Number of slots allocated to aSample[] */
@@ -5540,7 +5543,6 @@ CollSeq *sqlite3FindCollSeq(sqlite3*,u8 enc, const char*,int);
 int sqlite3IsBinary(const CollSeq*);
 #ifdef DOLTLITE_PROLLY
 int sqlite3DoltliteIsBuiltinCollation(const CollSeq*);
-int sqlite3DoltliteNocaseIndexNeedsScan(sqlite3*, const Index*);
 #endif
 CollSeq *sqlite3LocateCollSeq(Parse *pParse, const char*zName);
 void sqlite3SetTextEncoding(sqlite3 *db, u8);

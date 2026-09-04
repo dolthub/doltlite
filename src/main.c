@@ -1151,19 +1151,6 @@ int sqlite3DoltliteIsBuiltinCollation(const CollSeq *p){
   return 0;
 }
 
-int sqlite3DoltliteNocaseIndexNeedsScan(sqlite3 *db, const Index *pIdx){
-  int i;
-  int iDb;
-  if( !pIdx || !pIdx->pTable || !pIdx->pSchema ) return 0;
-  if( !HasRowid(pIdx->pTable) && IsPrimaryKeyIndex(pIdx) ) return 0;
-  iDb = sqlite3SchemaToIndex(db, pIdx->pSchema);
-  if( iDb<0 || iDb>=db->nDb || !db->aDb[iDb].pBt
-   || sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ) return 0;
-  for(i=0; i<pIdx->nKeyCol; i++){
-    if( sqlite3StrICmp(pIdx->azColl[i], "NOCASE")==0 ) return 1;
-  }
-  return 0;
-}
 #endif
 
 /*

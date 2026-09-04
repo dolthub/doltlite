@@ -1634,11 +1634,6 @@ static int analysisLoader(void *pData, int argc, char **argv, char **NotUsed){
 #endif
     pIndex->bUnordered = 0;
     decodeIntArray((char*)z, nCol, aiRowEst, pIndex->aiRowLogEst, pIndex);
-#ifdef DOLTLITE_PROLLY
-    if( sqlite3DoltliteNocaseIndexNeedsScan(pInfo->db, pIndex) ){
-      pIndex->bUnordered = 1;
-    }
-#endif
     pIndex->hasStat1 = 1;
     if( pIndex->pPartIdxWhere==0 ){
       pTable->nRowLogEst = pIndex->aiRowLogEst[0];

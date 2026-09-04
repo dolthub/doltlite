@@ -2058,14 +2058,6 @@ void sqlite3AddCollateType(Parse *pParse, Token *pToken){
         }
 #endif
         pIdx->azColl[0] = sqlite3ColumnColl(&p->aCol[i]);
-#ifdef DOLTLITE_PROLLY
-        if( sqlite3StrICmp(pIdx->azColl[0], "NOCASE")==0 ){
-          Btree *pColBt = db->aDb[sqlite3SchemaToIndex(db, p->pSchema)].pBt;
-          if( pColBt && !sqlite3BtreeUsesOrig(pColBt) ){
-            pIdx->bUnordered = 1;
-          }
-        }
-#endif
       }
     }
   }
@@ -2556,9 +2548,6 @@ static void convertToWithoutRowidTable(Parse *pParse, Table *pTab){
     pPk->nKeyCol = j;
   }
   assert( pPk!=0 );
-#ifdef DOLTLITE_PROLLY
-  pPk->bUnordered = 0;
-#endif
   pPk->isCovering = 1;
   if( !db->init.imposterTable ) pPk->uniqNotNull = 1;
   nPk = pPk->nColumn = pPk->nKeyCol;
@@ -4655,10 +4644,6 @@ void sqlite3CreateIndex(
       sqlite3ErrorMsg(pParse,
         "doltlite does not support indexes with custom collation '%s'", zColl);
       goto exit_create_index;
-    }
-    if( !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
-     && sqlite3StrICmp(zColl, "NOCASE")==0 ){
-      pIndex->bUnordered = 1;
     }
 #endif
     requestedSortOrder = pListItem->fg.sortFlags & sortOrderMask;
