@@ -586,6 +586,52 @@ static int doltliteBuildIndexEntry(
 
 /* Apply old/new row values to one index mutmap. Shared so NOCASE/
 ** RTRIM/DESC match VDBE. */
+/* A partial index holds only the rows its WHERE clause admits. The VDBE
+** applies that test for ordinary DML; index maintenance that builds entries
+** directly has to apply it too, or a merge files rows the index excludes and
+** constraint checks read violations that do not exist. */
+int doltlitePartialIndexLoad(
+  sqlite3 *db,
+  Index *pIdx,
+  DoltlitePartialIndex *pOut
+){
+  int rc;
+  memset(pOut, 0, sizeof(*pOut));
+  if( !pIdx || !pIdx->pPartIdxWhere || !pIdx->pTable || !pIdx->pTable->zName ){
+    return SQLITE_OK;
+  }
+  rc = doltlitePartialIndexWhereSql(db, pIdx, &pOut->zWhere);
+  if( rc==SQLITE_OK ){
+    rc = doltliteGetColumnNames(db, pIdx->pTable->zName, &pOut->cols);
+    if( rc==SQLITE_OK ) pOut->colsInit = 1;
+  }
+  if( rc!=SQLITE_OK ) doltlitePartialIndexClear(pOut);
+  return rc;
+}
+
+void doltlitePartialIndexClear(DoltlitePartialIndex *p){
+  if( !p ) return;
+  sqlite3_free(p->zWhere);
+  if( p->colsInit ) doltliteFreeColInfo(&p->cols);
+  if( p->pStmt ) sqlite3_finalize(p->pStmt);
+  memset(p, 0, sizeof(*p));
+}
+
+static int indexRowInPartialIndex(
+  sqlite3 *db,
+  Index *pIdx,
+  DoltlitePartialIndex *pPart,
+  const u8 *pRec, int nRec,
+  int *pIn
+){
+  *pIn = 1;
+  if( !pPart->zWhere ) return SQLITE_OK;
+  if( !pRec || nRec<=0 ) return SQLITE_OK;
+  return doltlitePartialIndexMatchesRecord(
+      db, pIdx, pPart->zWhere, pRec, nRec,
+      pPart->colsInit ? &pPart->cols : 0, &pPart->pStmt, pIn);
+}
+
 int doltliteIndexMutMapRowDelta(
   sqlite3 *db,
   Index *pIdx,
@@ -595,11 +641,36 @@ int doltliteIndexMutMapRowDelta(
   int iPKey, i64 intKey,
   const u8 *pTreeKey, int nTreeKey,
   const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal
+  const u8 *pNewVal, int nNewVal,
+  DoltlitePartialIndex *pPart
 ){
+  DoltlitePartialIndex partLocal;
+  int partLocalInit = 0;
+  int oldIn = 1, newIn = 1;
   int rc = SQLITE_OK;
 
   if( !pMap ) return SQLITE_MISUSE;
+
+  if( pIdx && pIdx->pPartIdxWhere ){
+    if( !pPart ){
+      rc = doltlitePartialIndexLoad(db, pIdx, &partLocal);
+      if( rc!=SQLITE_OK ) return rc;
+      partLocalInit = 1;
+      pPart = &partLocal;
+    }
+    if( rc==SQLITE_OK ){
+      rc = indexRowInPartialIndex(db, pIdx, pPart, pOldVal, nOldVal, &oldIn);
+    }
+    if( rc==SQLITE_OK ){
+      rc = indexRowInPartialIndex(db, pIdx, pPart, pNewVal, nNewVal, &newIn);
+    }
+    if( rc!=SQLITE_OK ){
+      if( partLocalInit ) doltlitePartialIndexClear(&partLocal);
+      return rc;
+    }
+    if( !oldIn ){ pOldVal = 0; nOldVal = 0; }
+    if( !newIn ){ pNewVal = 0; nNewVal = 0; }
+  }
 
   if( pOldVal && nOldVal>0 ){
     u8 *pSK = 0;
@@ -611,7 +682,10 @@ int doltliteIndexMutMapRowDelta(
       rc = prollyMutMapDelete(pMap, pSK, nSK, 0);
     }
     sqlite3_free(pSK);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      if( partLocalInit ) doltlitePartialIndexClear(&partLocal);
+      return rc;
+    }
   }
 
   if( pNewVal && nNewVal>0 ){
@@ -631,6 +705,7 @@ int doltliteIndexMutMapRowDelta(
     sqlite3_free(pSK);
     sqlite3_free(pRec);
   }
+  if( partLocalInit ) doltlitePartialIndexClear(&partLocal);
   return rc;
 }
 
@@ -666,7 +741,7 @@ int doltliteIndexApplyRowDelta(
   rc = doltliteIndexMutMapRowDelta(
       db, pIdx, &mm, pIdx->aiColumn, pIdx->nKeyCol, pKeyInfo,
       iPKey, intKey, pTreeKey, nTreeKey,
-      pOldVal, nOldVal, pNewVal, nNewVal);
+      pOldVal, nOldVal, pNewVal, nNewVal, 0);
   if( rc==SQLITE_OK && !prollyMutMapIsEmpty(&mm) ){
     memset(&mut, 0, sizeof(mut));
     mut.pStore = cs;
@@ -1011,7 +1086,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
               mi->pKeyInfo, mi->iPKey, pChange->intKey,
               pChange->pKey, pChange->nKey,
-              0, 0, pChange->pTheirVal, pChange->nTheirVal);
+              0, 0, pChange->pTheirVal, pChange->nTheirVal, &mi->part);
         }
       }
       break;
@@ -1030,7 +1105,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               mi->pKeyInfo, mi->iPKey, pChange->intKey,
               pChange->pKey, pChange->nKey,
               pChange->pBaseVal, pChange->nBaseVal,
-              pChange->pTheirVal, pChange->nTheirVal);
+              pChange->pTheirVal, pChange->nTheirVal, &mi->part);
         }
       }
       break;
@@ -1048,7 +1123,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
               mi->pKeyInfo, mi->iPKey, pChange->intKey,
               pChange->pKey, pChange->nKey,
-              pChange->pBaseVal, pChange->nBaseVal, 0, 0);
+              pChange->pBaseVal, pChange->nBaseVal, 0, 0, &mi->part);
         }
       }
       break;
@@ -1084,7 +1159,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
                 ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
                 mi->pKeyInfo, mi->iPKey, pChange->intKey,
                 pChange->pKey, pChange->nKey,
-                pChange->pOurVal, pChange->nOurVal, pMerged, nMerged);
+                pChange->pOurVal, pChange->nOurVal, pMerged, nMerged, &mi->part);
           }
         }
         sqlite3_free(pMerged);
@@ -1123,7 +1198,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
                     ctx->db, mi->pIdx, mi->pEdits,
                     mi->aiColumn, mi->nColumn, mi->pKeyInfo, mi->iPKey,
                     pChange->intKey, pChange->pKey, pChange->nKey,
-                    pChange->pOurVal, pChange->nOurVal, 0, 0);
+                    pChange->pOurVal, pChange->nOurVal, 0, 0, &mi->part);
               }
             }
           }

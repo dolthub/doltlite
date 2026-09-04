@@ -19,6 +19,16 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Everything about a partial index that does not change per row. Callers that
+** walk many rows build one and hand it to the index delta. */
+typedef struct DoltlitePartialIndex DoltlitePartialIndex;
+struct DoltlitePartialIndex {
+  char *zWhere;
+  DoltliteColInfo cols;
+  sqlite3_stmt *pStmt;
+  int colsInit;
+};
+
 typedef struct MergeIndexInfo MergeIndexInfo;
 struct MergeIndexInfo {
   Pgno iTable;
@@ -30,6 +40,7 @@ struct MergeIndexInfo {
   KeyInfo *pKeyInfo;
   int iPKey;          /* IPK column, -1 if none */
   Index *pIdx;
+  DoltlitePartialIndex part;
 };
 
 typedef struct ParsedColumn ParsedColumn;
@@ -316,6 +327,21 @@ struct MergeColDefaults {
   u8 **apOwned;
   int nCol;
 };
+/* Partial-index predicate, shared with index maintenance: the WHERE text is
+** recovered from the stored CREATE INDEX statement, then evaluated against a
+** row record. */
+int doltlitePartialIndexWhereSql(sqlite3 *db, Index *pIdx, char **pzWhere);
+int doltlitePartialIndexMatchesRecord(sqlite3 *db, Index *pIdx,
+                                      const char *zWhere,
+                                      const u8 *pRec, int nRec,
+                                      const DoltliteColInfo *pCols,
+                                      sqlite3_stmt **ppCached,
+                                      int *pMatch);
+
+int doltlitePartialIndexLoad(sqlite3 *db, Index *pIdx,
+                             DoltlitePartialIndex *pOut);
+void doltlitePartialIndexClear(DoltlitePartialIndex *p);
+
 void mergeColDefaultsFree(MergeColDefaults *p);
 int mergeColDefaultsLoad(const char *zSql, const char *zTable,
                          MergeColDefaults *pOut);
