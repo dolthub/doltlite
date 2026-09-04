@@ -676,11 +676,12 @@ divergent lazy pull is refused until the store is fully materialized.
 Opening without `lazy_origin=1` leaves cached chunks available, but an
 uncached miss fails with a hash-named error instead of contacting `origin`.
 
-`dolt_pull` fetches, then fast-forwards if the local branch is an ancestor
-of the remote tip. If the current branch has diverged, it three-way merges
-like `dolt_merge`. A non-current branch that is not a fast-forward is
-refused. Fetch and pull also install remote tags whose commits have been
-fetched, replacing same-named local tags when the remote value differs.
+`dolt_pull` fetches the named remote branch, then integrates it into the
+current local branch. It fast-forwards when the current tip is an ancestor of
+the remote tip and otherwise three-way merges like `dolt_merge`. The branch
+name selects the remote ref; a same-named non-current local branch is neither
+created nor moved. Fetch and pull also install remote tags whose commits have
+been fetched, replacing same-named local tags when the remote value differs.
 
 ##### HTTP Remotes
 

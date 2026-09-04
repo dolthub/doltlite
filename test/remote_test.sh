@@ -221,6 +221,19 @@ clone_head=$("$DB" "$TMPDIR/clone.db" "SELECT commit_hash FROM dolt_log LIMIT 1;
 result=$("$DB" "$TMPDIR/remote.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
 check "remote head matches clone push" "$clone_head" "$result"
 
+"$DB" "$TMPDIR/src.db" "SELECT dolt_fetch('origin','main');" >/dev/null
+detached_head=$("$DB" "$TMPDIR/src.db" "SELECT dolt_hashof('HEAD');")
+result=$("$DB" "$TMPDIR/src.db@$detached_head" \
+  "SELECT dolt_pull('origin','main');" 2>&1)
+check_match "pull from detached head reports detached session" \
+  "detached head" "$result"
+result=$("$DB" "$TMPDIR/src.db@$detached_head" \
+  "SELECT IFNULL(active_branch(),'NULL'); SELECT count(*) FROM users;")
+check "failed detached pull preserves snapshot" "NULL
+3" "$result"
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_hashof('HEAD');")
+check "failed detached pull preserves main ref" "$detached_head" "$result"
+
 echo "=== 5. Fetch ==="
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_fetch('origin','main');")
 check "fetch returns 0" "0" "$result"
