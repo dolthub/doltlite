@@ -208,6 +208,52 @@ static void dsCountChangedCells(
   *pnModified = nModified;
 }
 
+/* A row whose primary key covers every column stores an empty record, so its
+** values must come back from the key before the sides can be compared. */
+static int dsCountModifiedRow(
+  sqlite3 *db,
+  const ProllyDiffChange *pChange,
+  const DoltliteColInfo *pFromCi,
+  const DoltliteColInfo *pToCi,
+  const DsColMap *pColMap,
+  int *pnDiffer,
+  int *pnModified
+){
+  const u8 *pOld = pChange->pOldVal;
+  const u8 *pNew = pChange->pNewVal;
+  int nOld = pChange->nOldVal;
+  int nNew = pChange->nNewVal;
+  u8 *pOldOwned = 0;
+  u8 *pNewOwned = 0;
+  int nOwned = 0;
+  int rc = SQLITE_OK;
+
+  *pnDiffer = 0;
+  *pnModified = 0;
+  if( nOld==0 ){
+    rc = doltliteRecordFromClusteredKeyCols(db, pFromCi, pChange->pKey,
+                                            pChange->nKey, &pOldOwned, &nOwned);
+    if( rc==SQLITE_OK && pOldOwned ){
+      pOld = pOldOwned;
+      nOld = nOwned;
+    }
+  }
+  if( rc==SQLITE_OK && nNew==0 ){
+    rc = doltliteRecordFromClusteredKeyCols(db, pToCi, pChange->pKey,
+                                            pChange->nKey, &pNewOwned, &nOwned);
+    if( rc==SQLITE_OK && pNewOwned ){
+      pNew = pNewOwned;
+      nNew = nOwned;
+    }
+  }
+  if( rc==SQLITE_OK ){
+    dsCountChangedCells(pOld, nOld, pNew, nNew, pColMap, pnDiffer, pnModified);
+  }
+  sqlite3_free(pOldOwned);
+  sqlite3_free(pNewOwned);
+  return rc;
+}
+
 typedef struct DsStatRow DsStatRow;
 struct DsStatRow {
   char *zTableName;
@@ -398,6 +444,7 @@ static int dsComputeTableStats(
     ProllyDiffChange *pChange = 0;
     u8 ff = fromFlags ? fromFlags : toFlags;
     u8 tf = toFlags ? toFlags : fromFlags;
+    int rcRow = SQLITE_OK;
     if( !cs || !pCache ){
       rc = SQLITE_ERROR;
       goto done;
@@ -416,19 +463,22 @@ static int dsComputeTableStats(
           break;
         case PROLLY_DIFF_MODIFY: {
           int nDiffer = 0, nModified = 0;
-          dsCountChangedCells(
-              pChange->pOldVal, pChange->nOldVal,
-              pChange->pNewVal, pChange->nNewVal,
-              &colMap, &nDiffer, &nModified);
-          if( nDiffer>0 ){
+          rcRow = dsCountModifiedRow(db, pChange, &fromCi, &toCi,
+                                     &colMap, &nDiffer, &nModified);
+          if( rcRow==SQLITE_OK && nDiffer>0 ){
             rowsMod++;
             cellsMod += nModified;
           }
           break;
         }
       }
+      if( rcRow!=SQLITE_OK ) break;
     }
     prollyDiffIterClose(&iter);
+    if( rcRow!=SQLITE_OK ){
+      rc = rcRow;
+      goto done;
+    }
     if( rc!=SQLITE_DONE && rc!=SQLITE_ROW ) goto done;
     rc = SQLITE_OK;
   }
@@ -1074,9 +1124,9 @@ static int dssDataActuallyChanged(
       changed = 1;
       break;
     }
-    dsCountChangedCells(pChange->pOldVal, pChange->nOldVal,
-                        pChange->pNewVal, pChange->nNewVal,
-                        &colMap, &nDiffer, &nModified);
+    rc = dsCountModifiedRow(db, pChange, &fromCi, &toCi,
+                            &colMap, &nDiffer, &nModified);
+    if( rc!=SQLITE_OK ) goto done;
     if( nDiffer>0 ){
       changed = 1;
       break;

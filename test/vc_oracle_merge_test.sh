@@ -1039,6 +1039,37 @@ SELECT 'Q' || char(9) ||
   "SET @@foreign_key_checks = 1;
 SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM gp), '|', (SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c))"
 
+oracle_reopen_state "pk_covering_add_col_merge_applies" "
+CREATE TABLE pk_all(id INT, k VARCHAR(10), PRIMARY KEY(id, k));
+INSERT INTO pk_all VALUES (1, 'x'), (2, 'y');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+INSERT INTO pk_all VALUES (9, 'm');
+SELECT dolt_commit('-Am', 'main2');
+SELECT dolt_checkout('feature');
+ALTER TABLE pk_all ADD COLUMN c VARCHAR(10);
+UPDATE pk_all SET c = 'z' WHERE id = 1;
+SELECT dolt_commit('-Am', 'feat2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+" "SELECT 'Q' || char(9) || id || char(9) || k || char(9) || coalesce(c,'NULL') FROM pk_all ORDER BY id;" \
+"SELECT concat('Q', char(9), id, char(9), k, char(9), coalesce(c,'NULL')) FROM pk_all ORDER BY id;"
+
+oracle_reopen_state "pk_covering_add_col_default_merge_applies" "
+CREATE TABLE pk_all(id INT, k VARCHAR(10), PRIMARY KEY(id, k));
+INSERT INTO pk_all VALUES (1, 'x'), (2, 'y');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feature');
+INSERT INTO pk_all VALUES (9, 'm');
+SELECT dolt_commit('-Am', 'main2');
+SELECT dolt_checkout('feature');
+ALTER TABLE pk_all ADD COLUMN c INT DEFAULT 7;
+SELECT dolt_commit('-Am', 'feat2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+" "SELECT 'Q' || char(9) || id || char(9) || k || char(9) || coalesce(c,'NULL') FROM pk_all ORDER BY id;" \
+"SELECT concat('Q', char(9), id, char(9), k, char(9), coalesce(c,'NULL')) FROM pk_all ORDER BY id;"
+
 echo "--- non-branch merge sources ---"
 
 oracle "merge_from_tag" "

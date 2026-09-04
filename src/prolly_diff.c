@@ -146,7 +146,12 @@ static int diffRecordsEqualFieldwise(
   int rc;
 
   *pEqual = 0;
-  if( nA < 1 || nB < 1 ) return SQLITE_CORRUPT;
+  /* PK-covering rows store an empty record until ADD COLUMN rewrites them,
+  ** so empty and non-empty shapes coexist in one table and simply differ. */
+  if( nA < 1 || nB < 1 ){
+    *pEqual = (nA < 1 && nB < 1);
+    return SQLITE_OK;
+  }
 
   rc = doltliteParseRecordStrict(pA, nA, &aInfo);
   if( rc!=SQLITE_OK ) return rc;
