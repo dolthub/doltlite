@@ -567,6 +567,155 @@ check "duplicate_named_add_reopen" "t
 1
 ok" "$result"
 
+scenario "mixed foreign keys, indexes, and shadow tables preserve staging boundary"
+newdb
+mixed_setup="PRAGMA foreign_keys=ON;
+CREATE TABLE parents(id TEXT PRIMARY KEY, code TEXT UNIQUE, label TEXT);
+CREATE INDEX parent_label_nocase ON parents(label COLLATE NOCASE);
+CREATE TABLE children(id TEXT PRIMARY KEY, parent_id TEXT NOT NULL,
+  slug TEXT UNIQUE, score INTEGER CHECK(score>=0),
+  FOREIGN KEY(parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE CASCADE);
+CREATE INDEX child_parent_score ON children(parent_id,score DESC) WHERE score>=0;
+CREATE VIRTUAL TABLE notes USING fts5(body);
+CREATE VIRTUAL TABLE boxes USING rtree(id,x1,x2,y1,y2);
+INSERT INTO parents VALUES('p1','c1','Alpha'),('p2','c2','Beta');
+INSERT INTO children VALUES('k1','p1','s1',10),('k2','p2','s2',20);
+INSERT INTO notes VALUES('base document');
+INSERT INTO boxes VALUES(1,0,1,0,1);"
+mixed_stage="SELECT dolt_add('notes');
+SELECT dolt_add('children');
+SELECT dolt_add('boxes');
+SELECT dolt_add('parents');"
+for ((i=0; i<8; i++)); do
+  mixed_setup="$mixed_setup
+CREATE TABLE mix_$i(id TEXT PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO mix_$i VALUES('m$i','ml$i');"
+  mixed_stage="$mixed_stage SELECT dolt_add('mix_$((7-i))');"
+done
+result=$(run_sql ".bail on
+$mixed_setup
+$mixed_stage
+SELECT dolt_hashof_db('STAGED');" "$DB")
+check "mixed_stage_exit" "0" "$?"
+mixed_staged_hash=$(echo "$result" | tail -n 1)
+result=$(run_sql ".bail on
+PRAGMA foreign_keys=ON;
+UPDATE parents SET label='Working Alpha' WHERE id='p1';
+UPDATE children SET slug='working-s1' WHERE id='k1';
+INSERT INTO notes VALUES('working document');
+INSERT INTO boxes VALUES(2,2,3,2,3);
+UPDATE mix_3 SET label='working-ml3';
+CREATE TABLE extra(id TEXT PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO extra VALUES('e','extra');
+SELECT dolt_hashof_db('STAGED');" "$DB")
+check "mixed_working_mutation_exit" "0" "$?"
+check "mixed_staged_snapshot_stable" "$mixed_staged_hash" "$(echo "$result" | tail -n 1)"
+result=$(run_sql ".bail on
+SELECT dolt_commit('-m','staged snapshot');
+SELECT dolt_hashof_db('HEAD');
+SELECT dolt_checkout('-b','snapshot');
+PRAGMA foreign_keys=ON;
+SELECT label FROM parents INDEXED BY parent_label_nocase
+ WHERE label='alpha' COLLATE NOCASE;
+SELECT slug FROM children INDEXED BY sqlite_autoindex_children_2 WHERE slug='s1';
+SELECT score FROM children INDEXED BY child_parent_score
+ WHERE parent_id='p2' AND score>=0;
+SELECT count(*) FROM notes WHERE notes MATCH 'document';
+SELECT rtreecheck('main','boxes');
+SELECT count(*) FROM boxes WHERE x1>=0;
+SELECT label FROM mix_3 INDEXED BY sqlite_autoindex_mix_3_2 WHERE label='ml3';
+SELECT count(*) FROM sqlite_master WHERE type='table' AND name='extra';
+SELECT count(*) FROM pragma_foreign_key_check;
+PRAGMA integrity_check;" "$DB")
+check "mixed_commit_checkout_exit" "0" "$?"
+check "mixed_commit_matches_staged" "$mixed_staged_hash" \
+  "$(echo "$result" | grep -E '^[0-9a-f]{40}$' | tail -n 1)"
+check "mixed_commit_snapshot" "Alpha
+s1
+20
+1
+ok
+1
+ml3
+0
+0
+ok" "$(echo "$result" | tail -n 10)"
+mixed_snapshot_hash=$(run_sql "SELECT dolt_hashof_db('WORKING');" "$DB@snapshot")
+result=$(run_sql "PRAGMA foreign_keys=ON;
+INSERT INTO children VALUES('bad','missing','bad',1);" "$DB@snapshot")
+check "mixed_fk_failure_exit" "1" "$?"
+case "$result" in
+  *"FOREIGN KEY constraint failed"*) PASS=$((PASS+1));;
+  *) note_fail "mixed_fk_failure_error" "$result";;
+esac
+result=$(run_sql "INSERT INTO parents VALUES('p3','c1','Duplicate');" "$DB@snapshot")
+check "mixed_unique_failure_exit" "1" "$?"
+case "$result" in
+  *"UNIQUE constraint failed"*) PASS=$((PASS+1));;
+  *) note_fail "mixed_unique_failure_error" "$result";;
+esac
+result=$(run_sql "INSERT INTO boxes VALUES(9,5,4,0,1);" "$DB@snapshot")
+check "mixed_rtree_failure_exit" "1" "$?"
+case "$result" in
+  *"rtree constraint failed"*) PASS=$((PASS+1));;
+  *) note_fail "mixed_rtree_failure_error" "$result";;
+esac
+check "mixed_failures_leave_snapshot_unchanged" "$mixed_snapshot_hash" \
+  "$(run_sql "SELECT dolt_hashof_db('WORKING');" "$DB@snapshot")"
+result=$(run_sql ".bail on
+PRAGMA foreign_keys=ON;
+SELECT label FROM parents WHERE id='p1';
+SELECT slug FROM children WHERE id='k1';
+SELECT count(*) FROM notes;
+SELECT count(*) FROM boxes;
+SELECT label FROM mix_3 WHERE id='m3';
+SELECT count(*) FROM extra;" "$DB@main")
+check "mixed_working_after_staged_commit" "Working Alpha
+working-s1
+2
+2
+working-ml3
+1" "$result"
+result=$(run_sql ".bail on
+SELECT dolt_commit('-am','tracked working edits');
+SELECT dolt_checkout('-b','updated');
+PRAGMA foreign_keys=ON;
+SELECT label FROM parents WHERE id='p1';
+SELECT slug FROM children WHERE id='k1';
+SELECT count(*) FROM notes;
+SELECT rtreecheck('main','boxes');
+SELECT count(*) FROM boxes;
+SELECT label FROM mix_3 WHERE id='m3';
+SELECT count(*) FROM sqlite_master WHERE type='table' AND name='extra';
+SELECT count(*) FROM pragma_foreign_key_check;
+PRAGMA integrity_check;" "$DB@main")
+check "mixed_am_exit" "0" "$?"
+check "mixed_am_commit" "Working Alpha
+working-s1
+2
+ok
+2
+working-ml3
+0
+0
+ok" "$(echo "$result" | tail -n 9)"
+result=$(run_sql ".bail on
+PRAGMA foreign_keys=ON;
+SELECT label FROM parents INDEXED BY parent_label_nocase
+ WHERE label='working alpha' COLLATE NOCASE;
+SELECT slug FROM children INDEXED BY sqlite_autoindex_children_2
+ WHERE slug='working-s1';
+SELECT count(*) FROM notes WHERE notes MATCH 'working';
+SELECT rtreecheck('main','boxes');
+SELECT count(*) FROM pragma_foreign_key_check;
+PRAGMA integrity_check;" "$DB@updated")
+check "mixed_am_reopen" "Working Alpha
+working-s1
+1
+ok
+0
+ok" "$result"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
