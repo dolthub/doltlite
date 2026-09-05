@@ -724,6 +724,95 @@ INSERT INTO a VALUES (9, 9);
 SELECT dolt_commit('-am', 'drop only');
 "
 
+echo "--- incremental staging of new indexed tables ---"
+for count in 12 24; do
+  for mode in all individual reverse; do
+    setup=""
+    stage=""
+    dl_query=""
+    dt_query=""
+    for ((i=0; i<count; i++)); do
+      setup="$setup
+CREATE TABLE items_$i(id VARCHAR(40) PRIMARY KEY, label VARCHAR(40) UNIQUE);
+INSERT INTO items_$i VALUES('base_$i','label_$i');"
+      if [ "$mode" = reverse ]; then
+        stage="SELECT dolt_add('items_$i'); $stage"
+      else
+        stage="$stage SELECT dolt_add('items_$i');"
+      fi
+      dl_query="$dl_query SELECT 'R|' || id FROM items_$i WHERE label='label_$i';"
+      dt_query="$dt_query SELECT concat('R|', id) FROM items_$i WHERE label='label_$i';"
+    done
+    if [ "$mode" = all ]; then stage="SELECT dolt_add('-A');"; fi
+    setup="$setup
+$stage
+SELECT dolt_commit('-m','initial');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');"
+    oracle_query "indexed_${mode}_${count}" "$setup" "$dl_query" "$dt_query"
+    oracle_error "indexed_${mode}_${count}_duplicate" "$setup
+INSERT INTO items_0 VALUES('duplicate','label_0');"
+    oracle_error "indexed_${mode}_${count}_missing_add" "$setup
+SELECT dolt_add('items_0','missing_table');"
+  done
+done
+
+oracle_query "duplicate_named_add_arguments" "
+CREATE TABLE t(id VARCHAR(40) PRIMARY KEY, label VARCHAR(40) UNIQUE);
+INSERT INTO t VALUES('t','label');
+SELECT dolt_add('t','T','t');
+SELECT dolt_commit('-m','duplicates');
+SELECT dolt_checkout('-b','snapshot');
+" "SELECT 'R|' || id || '|' || label FROM t;" \
+  "SELECT concat('R|', id, '|', label) FROM t;"
+
+MIXED_SCHEMA_SEED="
+CREATE TABLE parents(id VARCHAR(40) PRIMARY KEY, code VARCHAR(40) UNIQUE, label VARCHAR(40));
+CREATE INDEX parent_label_idx ON parents(label);
+CREATE TABLE children(id VARCHAR(40) PRIMARY KEY, parent_id VARCHAR(40) NOT NULL,
+  slug VARCHAR(40) UNIQUE, score INTEGER CHECK(score>=0),
+  FOREIGN KEY(parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE CASCADE);
+CREATE INDEX child_parent_score ON children(parent_id,score);
+INSERT INTO parents VALUES('p1','c1','Alpha'),('p2','c2','Beta');
+INSERT INTO children VALUES('k1','p1','s1',10),('k2','p2','s2',20);
+SELECT dolt_add('children');
+SELECT dolt_add('parents');
+UPDATE parents SET label='Working Alpha' WHERE id='p1';
+UPDATE children SET slug='working-s1' WHERE id='k1';
+SELECT dolt_commit('-m','staged snapshot');
+SELECT dolt_reset('--hard');"
+
+oracle_query "mixed_fk_indexes_staged_snapshot" "$MIXED_SCHEMA_SEED" \
+  "SELECT 'R|p|' || id || '|' || label FROM parents WHERE label='Alpha';
+SELECT 'R|c|' || id || '|' || slug || '|' || score FROM children
+ WHERE parent_id='p2' AND score=20;" \
+  "SELECT concat('R|p|', id, '|', label) FROM parents WHERE label='Alpha';
+SELECT concat('R|c|', id, '|', slug, '|', score) FROM children
+ WHERE parent_id='p2' AND score=20;"
+
+oracle_query "mixed_fk_indexes_commit_am" "
+CREATE TABLE parents(id VARCHAR(40) PRIMARY KEY, code VARCHAR(40) UNIQUE, label VARCHAR(40));
+CREATE INDEX parent_label_idx ON parents(label);
+CREATE TABLE children(id VARCHAR(40) PRIMARY KEY, parent_id VARCHAR(40) NOT NULL,
+  slug VARCHAR(40) UNIQUE, score INTEGER CHECK(score>=0),
+  FOREIGN KEY(parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE CASCADE);
+CREATE INDEX child_parent_score ON children(parent_id,score);
+INSERT INTO parents VALUES('p1','c1','Alpha'),('p2','c2','Beta');
+INSERT INTO children VALUES('k1','p1','s1',10),('k2','p2','s2',20);
+SELECT dolt_add('children');
+SELECT dolt_add('parents');
+UPDATE parents SET label='Working Alpha' WHERE id='p1';
+UPDATE children SET slug='working-s1' WHERE id='k1';
+SELECT dolt_commit('-m','staged snapshot');
+CREATE TABLE extra(id INTEGER PRIMARY KEY, label VARCHAR(40));
+INSERT INTO extra VALUES('e','extra');
+SELECT dolt_commit('-am','working edits');
+SELECT dolt_reset('--hard');
+" "SELECT 'R|p|' || id || '|' || label FROM parents WHERE id='p1';
+SELECT 'R|c|' || id || '|' || slug FROM children WHERE id='k1';" \
+  "SELECT concat('R|p|', id, '|', label) FROM parents WHERE id='p1';
+SELECT concat('R|c|', id, '|', slug) FROM children WHERE id='k1';"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

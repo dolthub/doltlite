@@ -1345,6 +1345,9 @@ int doltliteMergeCatalogs(sqlite3 *db,
 void doltliteFreeNameList(char **az, int n);
 int doltliteIndexSchemaRowsDifferForTable(SchemaEntry *aA, int nA,
     SchemaEntry *aB, int nB, const char *zTable);
+int doltliteDisjoinCatalogEntries(sqlite3 *db,
+  struct TableEntry *aWorking, int nWorking,
+  struct TableEntry *aStaged, int nStaged, Pgno *pOffset);
 int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
     const ProllyHash *pWorkingMaster, u8 workingFlags,
     const ProllyHash *pOldMaster, u8 oldFlags,

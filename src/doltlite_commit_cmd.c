@@ -189,6 +189,7 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
   u8 *aRemoveStaged = 0;
   const char **azTouched = 0;
   int nTouched = 0;
+  Pgno stagedOffset = 0;
 
   memset(&workingIdx, 0, sizeof(workingIdx));
   memset(&headIdx, 0, sizeof(headIdx));
@@ -239,6 +240,14 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     return rc;
   }
 
+  rc = doltliteDisjoinCatalogEntries(db, aWorking, nWorking,
+                                     aStaged, nStaged, &stagedOffset);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    FREE_ADD_MODIFIED_CATALOGS();
+    return rc;
+  }
+
   nStagedAlloc = nStaged + nWorking + 1;
   if( nStagedAlloc>0 ){
     struct TableEntry *aNewStaged = sqlite3_realloc(
@@ -281,6 +290,7 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     int updated = 0;
     char *zDup;
     struct TableEntry *pStaged;
+    if( aWorking[j].iTable==1 ) continue;
     if( !addNameIndexFind(&headIdx, zName) ) continue;
 
     azTouched[nTouched++] = zName;
@@ -372,6 +382,12 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
       sqlite3_result_error(context, "failed to load schema for staging", -1);
       FREE_ADD_MODIFIED_CATALOGS();
       return rc;
+    }
+
+    for(i2=0; i2<nOldSchema; i2++){
+      if( aOldSchema[i2].iRootpage>1 ){
+        aOldSchema[i2].iRootpage += stagedOffset;
+      }
     }
 
     for(k2=0; k2<nStaged; ){

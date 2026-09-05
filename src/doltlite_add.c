@@ -694,6 +694,18 @@ int doltliteStageNamedTables(
       rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedSrc,
                                  &aStagedSchema, &nStagedSchema);
     }
+    if( rc==SQLITE_OK ){
+      Pgno offset;
+      rc = doltliteDisjoinCatalogEntries(db, aWorking, nWorking,
+                                         aStaged, nStaged, &offset);
+      if( rc==SQLITE_OK ){
+        for(i=0; i<nStagedSchema; i++){
+          if( aStagedSchema[i].iRootpage>1 ){
+            aStagedSchema[i].iRootpage += offset;
+          }
+        }
+      }
+    }
     if( rc!=SQLITE_OK ){
       ADDNAMED_FREE_ALL();
       sqlite3_result_error(context, "failed to load schema for staging", -1);
@@ -706,6 +718,11 @@ int doltliteStageNamedTables(
     Pgno iTable = 0;
     int j;
     if( !zTable || strcmp(zTable, ".")==0 ) continue;
+    for(j=0; j<i; j++){
+      const char *zPrior = (const char*)sqlite3_value_text(argv[j]);
+      if( zPrior && sqlite3_stricmp(zPrior, zTable)==0 ) break;
+    }
+    if( j<i ) continue;
 
     if( !bForce ){
       int ignored = 0;
