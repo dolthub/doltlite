@@ -445,6 +445,103 @@ ok
 ftok
 ok" "$result"
 
+scenario "new indexed tables staged individually"
+for count in 4 12 24; do
+  canonical_hash=""
+  for mode in all individual reverse; do
+    newdb
+    setup=""
+    stage=""
+    probes=""
+    expected=""
+    for ((i=0; i<count; i++)); do
+      setup="$setup CREATE TABLE items_$i(id TEXT PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO items_$i VALUES('base_$i','label_$i');"
+      if [ "$mode" = reverse ]; then
+        stage="SELECT dolt_add('items_$i'); $stage"
+      else
+        stage="$stage SELECT dolt_add('items_$i');"
+      fi
+      probes="$probes SELECT id FROM items_$i INDEXED BY sqlite_autoindex_items_${i}_2 WHERE label='label_$i';"
+      expected="${expected}base_$i
+"
+    done
+    if [ "$mode" = all ]; then stage="SELECT dolt_add('-A');"; fi
+    result=$(run_sql ".bail on
+$setup
+$stage
+SELECT dolt_commit('-m','initial');
+$probes
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+$probes
+PRAGMA integrity_check;" "$DB")
+    check "${mode}_${count}_exit" "0" "$?"
+    check "${mode}_${count}_checkout" "${expected}ok" "$(echo "$result" | tail -n $((count+1)))"
+    result=$(run_sql ".bail on
+$probes
+PRAGMA integrity_check;" "$DB@feature")
+    check "${mode}_${count}_reopen" "${expected}ok" "$result"
+    hash=$(run_sql "SELECT dolt_hashof_db('HEAD');" "$DB@feature")
+    if [ "$mode" = all ]; then canonical_hash="$hash"; fi
+    check "${mode}_${count}_canonical" "$canonical_hash" "$hash"
+    result=$(run_sql "INSERT INTO items_0 VALUES('duplicate','label_0');" "$DB@feature")
+    check "${mode}_${count}_unique_exit" "1" "$?"
+    case "$result" in
+      *"UNIQUE constraint failed"*) PASS=$((PASS+1));;
+      *) note_fail "${mode}_${count}_unique_error" "$result";;
+    esac
+    staged_hash=$(run_sql "SELECT dolt_hashof_db('STAGED');" "$DB@feature")
+    result=$(run_sql "SELECT dolt_add('items_0','missing_table');" "$DB@feature")
+    check "${mode}_${count}_missing_add_exit" "1" "$?"
+    check "${mode}_${count}_missing_add_atomic" "$staged_hash" \
+      "$(run_sql "SELECT dolt_hashof_db('STAGED');" "$DB@feature")"
+    REMOTE="file://$TDIR/incremental$N.db"
+    result=$(run_sql ".bail on
+SELECT dolt_remote('add','origin','$REMOTE');
+SELECT dolt_push('origin','feature');" "$DB@feature")
+    check "${mode}_${count}_push_exit" "0" "$?"
+    CLONE="$TDIR/incremental_clone$N.db"
+    result=$(run_sql ".bail on
+SELECT dolt_clone('$REMOTE');
+$probes
+PRAGMA integrity_check;" "$CLONE")
+    check "${mode}_${count}_clone_exit" "0" "$?"
+    check "${mode}_${count}_clone_indexes" "${expected}ok" \
+      "$(echo "$result" | tail -n $((count+1)))"
+  done
+done
+
+scenario "commit -am preserves staged-only indexes across numbering changes"
+setup=""
+for ((i=0; i<12; i++)); do
+  setup="$setup CREATE TABLE items_$i(id TEXT PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO items_$i VALUES('base_$i','label_$i');"
+done
+for staged in 0 10; do
+  newdb
+  result=$(run_sql ".bail on
+CREATE TABLE z(id TEXT PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO z VALUES('z','z');
+SELECT dolt_commit('-Am','base');
+$setup
+SELECT dolt_add('items_$staged');
+UPDATE items_$staged SET label='unstaged';
+UPDATE z SET label='zz';
+SELECT dolt_commit('-am','mixed');
+SELECT dolt_checkout('-b','snapshot');
+SELECT dolt_reset('--hard');
+SELECT id FROM items_$staged INDEXED BY sqlite_autoindex_items_${staged}_2 WHERE label='label_$staged';
+SELECT id FROM z INDEXED BY sqlite_autoindex_z_2 WHERE label='zz';
+SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'items_%';
+PRAGMA integrity_check;" "$DB")
+  check "am_staged_${staged}_exit" "0" "$?"
+  check "am_staged_${staged}_indexes" "base_$staged
+z
+1
+ok" "$(echo "$result" | tail -n 4)"
+done
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

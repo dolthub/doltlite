@@ -724,6 +724,39 @@ INSERT INTO a VALUES (9, 9);
 SELECT dolt_commit('-am', 'drop only');
 "
 
+echo "--- incremental staging of new indexed tables ---"
+for count in 12 24; do
+  for mode in all individual reverse; do
+    setup=""
+    stage=""
+    dl_query=""
+    dt_query=""
+    for ((i=0; i<count; i++)); do
+      setup="$setup
+CREATE TABLE items_$i(id VARCHAR(40) PRIMARY KEY, label VARCHAR(40) UNIQUE);
+INSERT INTO items_$i VALUES('base_$i','label_$i');"
+      if [ "$mode" = reverse ]; then
+        stage="SELECT dolt_add('items_$i'); $stage"
+      else
+        stage="$stage SELECT dolt_add('items_$i');"
+      fi
+      dl_query="$dl_query SELECT 'R|' || id FROM items_$i WHERE label='label_$i';"
+      dt_query="$dt_query SELECT concat('R|', id) FROM items_$i WHERE label='label_$i';"
+    done
+    if [ "$mode" = all ]; then stage="SELECT dolt_add('-A');"; fi
+    setup="$setup
+$stage
+SELECT dolt_commit('-m','initial');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');"
+    oracle_query "indexed_${mode}_${count}" "$setup" "$dl_query" "$dt_query"
+    oracle_error "indexed_${mode}_${count}_duplicate" "$setup
+INSERT INTO items_0 VALUES('duplicate','label_0');"
+    oracle_error "indexed_${mode}_${count}_missing_add" "$setup
+SELECT dolt_add('items_0','missing_table');"
+  done
+done
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

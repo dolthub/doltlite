@@ -1139,6 +1139,75 @@ int doltliteSerializeCatalogEntries(
       db, aTables, nTables, 0, 0, ppOut, pnOut);
 }
 
+int doltliteDisjoinCatalogEntries(
+  sqlite3 *db,
+  struct TableEntry *aWorking, int nWorking,
+  struct TableEntry *aStaged, int nStaged,
+  Pgno *pOffset
+){
+  Btree *pBtree = db->aDb[0].pBt;
+  SchemaCatalogRow *aRows = 0;
+  struct TableEntry master;
+  struct TableEntry *pMaster = 0;
+  ProllyMutMap mm;
+  Pgno offset = 0;
+  int nRows = 0;
+  int i, rc;
+
+  *pOffset = 0;
+  for(i=0; i<nStaged; i++){
+    if( aStaged[i].iTable==1 ) pMaster = &aStaged[i];
+  }
+  if( !pMaster ) return SQLITE_OK;
+  for(i=0; i<nWorking; i++){
+    if( aWorking[i].iTable>offset ) offset = aWorking[i].iTable;
+  }
+  for(i=0; i<nStaged; i++){
+    if( aStaged[i].iTable>0xffffffff-offset ) return SQLITE_FULL;
+  }
+  master = *pMaster;
+  rc = loadSchemaCatalogRows(pBtree, aStaged, nStaged, &aRows, &nRows,
+                             &master.root, &master.flags);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyMutMapInit(&mm, 1);
+  if( rc!=SQLITE_OK ){
+    freeSchemaCatalogRows(aRows, nRows);
+    return rc;
+  }
+  for(i=0; i<nRows && rc==SQLITE_OK; i++){
+    Pgno pg = aRows[i].oldPg;
+    u8 *pRec;
+    int nRec;
+    if( pg>1 ){
+      if( pg>0xffffffff-offset ){
+        rc = SQLITE_FULL;
+        break;
+      }
+      pg += offset;
+    }
+    pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
+                                    aRows[i].zTblName, pg, aRows[i].zSql,
+                                    &nRec);
+    if( !pRec ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    rc = prollyMutMapInsert(&mm, 0, 0, aRows[i].iRowid, pRec, nRec);
+    sqlite3_free(pRec);
+  }
+  if( rc==SQLITE_OK ) rc = applyMutMapToTableRoot(pBtree->pBt, &master, &mm);
+  prollyMutMapFree(&mm);
+  freeSchemaCatalogRows(aRows, nRows);
+  if( rc==SQLITE_OK ){
+    pMaster->root = master.root;
+    for(i=0; i<nStaged; i++){
+      if( aStaged[i].iTable>1 ) aStaged[i].iTable += offset;
+    }
+    *pOffset = offset;
+  }
+  return rc;
+}
+
 /* Named staging master: touched objects from working, the rest from staged. */
 int doltliteBuildNamedStageMasterRoot(
   sqlite3 *db,
