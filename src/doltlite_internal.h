@@ -209,6 +209,12 @@ static SQLITE_INLINE u64 doltliteFnv1aSep(u64 h){
   return h * DOLTLITE_FNV1A_PRIME;
 }
 
+/* Vtab rowids must name the same row in every scan: RIGHT JOIN records
+** matches by rowid on a constrained pass and replays them on a full one. */
+static SQLITE_INLINE i64 doltliteFnv1aRowid(u64 h){
+  return (i64)(h >> 1);
+}
+
 struct DoltliteTxnState {
   ProllyHash refsHash;
   ProllyHash committedRefsHash;
@@ -562,6 +568,7 @@ static SQLITE_INLINE int doltliteVtabConnectSimple(
   sqlite3_vtab *pVtab;
   int rc = sqlite3_declare_vtab(db, zSchema);
   if( rc!=SQLITE_OK ) return rc;
+  sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   pVtab = sqlite3_malloc(nByte);
   if( !pVtab ) return SQLITE_NOMEM;
   memset(pVtab, 0, nByte);

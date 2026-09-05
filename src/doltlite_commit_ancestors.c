@@ -30,7 +30,6 @@ struct CommitAncestorsCursor {
   int curParents;
   int curParentIdx;
   int hasRow;
-  i64 iRowid;
   int singleCommit;
 };
 
@@ -93,7 +92,6 @@ static void caCursorReset(CommitAncestorsCursor *pCur){
   pCur->hasRow = 0;
   pCur->curParents = 0;
   pCur->curParentIdx = 0;
-  pCur->iRowid = 0;
   pCur->singleCommit = 0;
 }
 
@@ -157,7 +155,6 @@ static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
 static int caNext(sqlite3_vtab_cursor *pCursor){
   CommitAncestorsCursor *pCur = (CommitAncestorsCursor*)pCursor;
   CommitAncestorsVtab *pVtab = (CommitAncestorsVtab*)pCursor->pVtab;
-  pCur->iRowid++;
   pCur->curParentIdx++;
   if( pCur->curParentIdx >= pCur->curParents ){
     return caLoadNextCommit(pCur, pVtab->db);
@@ -282,7 +279,11 @@ static int caColumn(
 }
 
 static int caRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((CommitAncestorsCursor*)pCursor)->iRowid;
+  CommitAncestorsCursor *pCur = (CommitAncestorsCursor*)pCursor;
+  u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, pCur->zCurHex);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aI64(h, pCur->curParentIdx);
+  *pRowid = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }
 

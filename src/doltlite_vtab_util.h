@@ -7,6 +7,7 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 
 int sqlite3DoltliteVtabConstraintIsCorrelated(sqlite3_index_info *pIdxInfo,
                                               int iConstraint);
@@ -32,6 +33,7 @@ struct DoltliteVtabCursorCommon {
   int nVal;
   int hasRow;
   i64 iRowid;
+  u64 keyHash;
 };
 
 static SQLITE_INLINE void doltliteVtabCommonReset(
@@ -54,8 +56,11 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
   const DoltliteSideCols *pSide
 ){
   const u8 *pVal; int nVal;
+  const u8 *pRowKey; int nRowKey;
   sqlite3_free(c->pVal);
   c->pVal = 0; c->nVal = 0;
+  prollyCursorKey(&c->tblCur, &pRowKey, &nRowKey);
+  c->keyHash = doltliteFnv1aBytes(DOLTLITE_FNV1A_OFFSET, pRowKey, nRowKey);
   /* Blob-key nodes have no integer key; follow the node, not the table, when
   ** history spans a key-shape change. */
   c->intKey = c->rootIntKey ? prollyCursorIntKey(&c->tblCur) : 0;
@@ -159,6 +164,7 @@ static SQLITE_INLINE int doltliteVtabConnectTable(
     doltliteVtabCommonDisconnect(&v->base);
     return rc;
   }
+  sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   *ppVtab = &v->base;
   return SQLITE_OK;
 }

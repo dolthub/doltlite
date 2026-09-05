@@ -777,6 +777,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
     sqlite3_free(v);
     return rc;
   }
+  sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
 
   *ppVtab = &v->base;
   return SQLITE_OK;

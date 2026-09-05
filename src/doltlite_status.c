@@ -1375,7 +1375,12 @@ static int statusColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int 
   return SQLITE_OK;
 }
 static int statusRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((DoltliteStatusCursor*)pCursor)->iRow;
+  DoltliteStatusCursor *pCur = (DoltliteStatusCursor*)pCursor;
+  StatusRow *r = &pCur->aRows[pCur->iRow];
+  u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, r->zName);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aI64(h, r->staged);
+  *pRowid = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }
 static int statusBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){

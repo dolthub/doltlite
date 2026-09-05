@@ -13,4 +13,5 @@ vc_oracle_pk_only_tables_test.sh
 vc_oracle_pk_shapes_scale_test.sh
 vc_oracle_pk_shapes_table_ops_test.sh
 vc_oracle_pk_shapes_vc_ops_test.sh
+vc_oracle_read_table_joins_test.sh
 vc_oracle_schema_diff_test.sh

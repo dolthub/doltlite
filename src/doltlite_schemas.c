@@ -229,7 +229,12 @@ static int schemasColumn(sqlite3_vtab_cursor *pCursor,
 }
 
 static int schemasRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((SchemasCursor*)pCursor)->iRow;
+  SchemasCursor *pCur = (SchemasCursor*)pCursor;
+  SchemasRow *r = &pCur->aRows[pCur->iRow];
+  u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, r->zType);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aStr(h, r->zName);
+  *pRowid = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }
 
