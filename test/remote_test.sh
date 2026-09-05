@@ -904,7 +904,7 @@ dirty-uncommitted
 
 "$DB" "$TMPDIR/preopened_remote.db" "SELECT 1;" >/dev/null
 result=$("$DB" "$TMPDIR/preopened_src.db" \
-  "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','initial'); SELECT dolt_remote('add','origin','$R/preopened_remote.db'); SELECT dolt_push('origin','main');" 2>&1 | tail -1)
+  "SELECT dolt_clone('$R/preopened_remote.db'); CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','initial'); SELECT dolt_push('origin','main');" 2>&1 | tail -1)
 check "clean pre-opened remote accepts initial push" "0" "$result"
 result=$("$DB" "$TMPDIR/preopened_remote.db" "SELECT id FROM t;")
 check "initial push lands in clean pre-opened remote" "1" "$result"
