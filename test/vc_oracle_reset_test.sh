@@ -1044,6 +1044,34 @@ INSERT INTO untracked VALUES (2, 'label');
 SELECT dolt_reset('--hard');
 " "SELECT concat('Q|', id) FROM untracked WHERE label='label';
 SELECT concat('Q|', id) FROM t;"
+SEED_IDX="
+CREATE TABLE child(id INTEGER PRIMARY KEY, grp INTEGER NOT NULL, body VARCHAR(40));
+CREATE INDEX cg ON child(grp);
+INSERT INTO child VALUES (1, 1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+"
+
+oracle "reset_table_unstages_add_column" "
+$SEED_IDX
+ALTER TABLE child ADD COLUMN x INT;
+SELECT dolt_add('child');
+SELECT dolt_reset('child');
+"
+
+oracle "reset_table_unstages_rename_column" "
+$SEED_IDX
+ALTER TABLE child RENAME COLUMN body TO body2;
+SELECT dolt_add('child');
+SELECT dolt_reset('child');
+"
+
+oracle "reset_table_unstages_second_index" "
+$SEED_IDX
+CREATE INDEX cb ON child(body);
+SELECT dolt_add('child');
+SELECT dolt_reset('child');
+"
 
 oracle "reset_end_options_dash_table" "
 CREATE TABLE \`--hard\`(id INTEGER PRIMARY KEY, v INT);
