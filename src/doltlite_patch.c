@@ -1358,6 +1358,7 @@ static int patchConnect(sqlite3 *db, void *pAux, int argc,
   (void)pAux; (void)argc; (void)argv;
   rc = sqlite3_declare_vtab(db,patchSchemaSql);
   if( rc!=SQLITE_OK ){ *pzErr=sqlite3_mprintf("%s",sqlite3_errmsg(db)); return rc; }
+  sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   p = sqlite3_malloc(sizeof(*p));
   if( !p ) return SQLITE_NOMEM;
   memset(p,0,sizeof(*p));
@@ -1547,7 +1548,20 @@ static int patchColumn(sqlite3_vtab_cursor *p, sqlite3_context *ctx, int iCol){
   return SQLITE_OK;
 }
 static int patchRowid(sqlite3_vtab_cursor *p, sqlite3_int64 *pRowid){
-  *pRowid=((PatchCursor*)p)->iRow+1; return SQLITE_OK;
+  PatchCursor *c=(PatchCursor*)p;
+  PatchRow *r=&c->aRow[c->iRow];
+  u64 h=DOLTLITE_FNV1A_OFFSET;
+  h=doltliteFnv1aStr(h, c->zFrom);
+  h=doltliteFnv1aSep(h);
+  h=doltliteFnv1aStr(h, c->zTo);
+  h=doltliteFnv1aSep(h);
+  h=doltliteFnv1aStr(h, r->zTable);
+  h=doltliteFnv1aSep(h);
+  h=doltliteFnv1aStr(h, r->zType);
+  h=doltliteFnv1aSep(h);
+  h=doltliteFnv1aStr(h, r->zSql);
+  *pRowid=doltliteFnv1aRowid(h);
+  return SQLITE_OK;
 }
 
 static sqlite3_module patchModule = {

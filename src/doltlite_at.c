@@ -370,6 +370,7 @@ static int atConnect(sqlite3 *db, void *pAux, int argc,
     doltliteVtabCommonDisconnect(&v->base);
     return rc;
   }
+  sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   *ppVtab = &v->base;
   return SQLITE_OK;
 }

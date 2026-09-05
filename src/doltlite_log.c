@@ -326,7 +326,6 @@ struct DoltliteLogCursor {
   char zHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
   int hasRow;
-  i64 iRowid;
   int singleCommit;
 };
 
@@ -388,7 +387,6 @@ static void logCursorReset(DoltliteLogCursor *pCur){
     pCur->excludedInit = 0;
   }
   pCur->hasRow = 0;
-  pCur->iRowid = 0;
   pCur->singleCommit = 0;
 }
 
@@ -504,7 +502,6 @@ static int logIsReachable(
 static int doltliteLogNext(sqlite3_vtab_cursor *pCursor){
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
   DoltliteLogVtab *pVtab = (DoltliteLogVtab*)pCursor->pVtab;
-  pCur->iRowid++;
   return logAdvance(pCur, pVtab->db);
 }
 
@@ -650,7 +647,9 @@ static int doltliteLogColumn(
 }
 
 static int doltliteLogRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((DoltliteLogCursor*)pCursor)->iRowid;
+  DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
+  *pRowid = doltliteFnv1aRowid(
+      doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, pCur->zHex));
   return SQLITE_OK;
 }
 

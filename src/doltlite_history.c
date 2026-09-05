@@ -399,8 +399,16 @@ static int htFilter(sqlite3_vtab_cursor *cur,
 static int htNext(sqlite3_vtab_cursor *cur){
   HistCursor *c=(HistCursor*)cur;
   DoltliteVtabCommon *v=(DoltliteVtabCommon*)cur->pVtab;
-  c->common.iRowid++;
   return htAdvance(c, v->db, v->zTableName);
+}
+
+static int htRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *pRowid){
+  HistCursor *c=(HistCursor*)cur;
+  u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, c->zCommitHex);
+  h = doltliteFnv1aSep(h);
+  h ^= c->common.keyHash;
+  *pRowid = doltliteFnv1aRowid(h);
+  return SQLITE_OK;
 }
 
 static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
@@ -435,7 +443,7 @@ static sqlite3_module historyModule = {
   0, htConnect, htConnect, htBestIndex,
   doltliteVtabCommonDisconnect, doltliteVtabCommonDisconnect,
   htOpen, htClose, htFilter, htNext,
-  doltliteVtabCommonEof, htColumn, doltliteVtabCommonRowid,
+  doltliteVtabCommonEof, htColumn, htRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 

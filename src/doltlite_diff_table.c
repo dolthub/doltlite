@@ -44,6 +44,7 @@ struct AuditRow {
   u8 diffType;
   i64 intKey;
   u8 keyIsIntKey;
+  const u8 *pKey; int nKey;
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
   /* Owned records rebuilt from a clustered key, one per side's PK definition. */
@@ -101,7 +102,6 @@ struct DiffTblCursor {
 
   AuditRow row;
   int hasRow;
-  i64 iRowid;
   int sourceError;
 };
 
@@ -1005,6 +1005,8 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
         pCur->row.diffType = pChange->type;
         pCur->row.intKey = pChange->intKey;
         pCur->row.keyIsIntKey = pChange->keyIsIntKey;
+        pCur->row.pKey = pChange->pKey;
+        pCur->row.nKey = pChange->nKey;
 
         pCur->row.pOldVal = pChange->pOldVal;
         pCur->row.nOldVal = pChange->pOldVal ? pChange->nOldVal : 0;
@@ -1052,7 +1054,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
         }
 
         pCur->hasRow = 1;
-        pCur->iRowid++;
         return SQLITE_OK;
       }
       if( rc!=SQLITE_DONE && rc!=SQLITE_ROW ){
@@ -1179,7 +1180,6 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   c->iPair = 0;
   c->pairsDone = 0;
   c->hasRow = 0;
-  c->iRowid = 0;
   c->sourceError = 0;
 
   {
@@ -1332,7 +1332,13 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 }
 
 static int dtRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
-  *r = ((DiffTblCursor*)cur)->iRowid;
+  AuditRow *row = &((DiffTblCursor*)cur)->row;
+  u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, row->zFromCommit);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aStr(h, row->zToCommit);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aBytes(h, row->pKey, row->nKey);
+  *r = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }
 

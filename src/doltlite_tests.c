@@ -890,7 +890,12 @@ static int testRunColumn(sqlite3_vtab_cursor *pCursor,
 
 static int testRunRowid(sqlite3_vtab_cursor *pCursor,
     sqlite3_int64 *pRowid){
-  *pRowid = ((TestRunCursor*)pCursor)->iRow;
+  TestRunCursor *p = (TestRunCursor*)pCursor;
+  TestResult *r = &p->aResult[p->iRow];
+  u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, r->zGroup);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aStr(h, r->zName);
+  *pRowid = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }
 

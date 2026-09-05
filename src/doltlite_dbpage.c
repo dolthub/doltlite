@@ -135,6 +135,7 @@ static int dlDbpageConnect(sqlite3 *db, void *pAux, int argc,
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
   rc = doltliteVtabConnectSimple(db, zDbpageSchema, sizeof(*pVtab), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
+  sqlite3_vtab_config(db, SQLITE_VTAB_DIRECTONLY);
   pVtab = (DbpageVtab*)*ppVtab;
   pVtab->db = db;
   return SQLITE_OK;

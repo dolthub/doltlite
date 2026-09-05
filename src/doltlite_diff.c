@@ -224,7 +224,6 @@ struct DoltliteDiffCursor {
   char *zFilterTable;
   int phase;
   int hasRow;
-  i64 iRowid;
   int singleCommit;
   int pseudoFilter;   /* 0=STAGED+WORKING, 1=WORKING, 2=STAGED */
 };
@@ -806,7 +805,6 @@ static void diffCursorReset(DoltliteDiffCursor *pCur){
   pCur->zFilterTable = 0;
   pCur->phase = 0;
   pCur->hasRow = 0;
-  pCur->iRowid = 0;
   pCur->pseudoFilter = 0;
 }
 
@@ -970,7 +968,6 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 static int diffNext(sqlite3_vtab_cursor *pCursor){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
   DoltliteDiffVtab *pVtab = (DoltliteDiffVtab*)pCursor->pVtab;
-  pCur->iRowid++;
   pCur->iBatch++;
   return diffAdvance(pCur, pVtab->db);
 }
@@ -1035,7 +1032,12 @@ static int diffColumn(sqlite3_vtab_cursor *pCursor,
 }
 
 static int diffRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((DoltliteDiffCursor*)pCursor)->iRowid;
+  DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
+  DiffSummaryRow *r = &pCur->aBatch[pCur->iBatch];
+  u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, r->zCommitHex);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aStr(h, r->zTableName);
+  *pRowid = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }
 
