@@ -397,6 +397,63 @@ run_test "hard_reset_multiple_untracked_indexed_status" \
 run_test "hard_reset_multiple_untracked_indexed_tracked_intact" \
   "SELECT * FROM tracked;" "1" "$DB17"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
+DB18=/tmp/test_reset18_$$.db; rm -f "$DB18"
+reset18_seed() {
+  rm -f "$DB18"
+  $DOLTLITE "$DB18" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE child(id INTEGER PRIMARY KEY, grp INTEGER NOT NULL, body TEXT);
+CREATE INDEX cg ON child(grp);
+CREATE TABLE other(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO child VALUES(1,1,'a');
+INSERT INTO other VALUES(1,'o');
+SELECT dolt_commit('-Am','base');
+SQL
+}
+reset18_status() { echo "SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM (SELECT * FROM dolt_status ORDER BY table_name, staged);"; }
+
+reset18_seed
+echo "ALTER TABLE child ADD COLUMN x INT; SELECT dolt_add('child'); SELECT dolt_reset('child');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_unstages_add_column" "$(reset18_status)" "child|0|modified" "$DB18"
+run_test "table_reset_add_column_stays_in_working" \
+  "SELECT count(*) FROM pragma_table_info('child') WHERE name='x';" "1" "$DB18"
+
+reset18_seed
+echo "ALTER TABLE child RENAME COLUMN body TO body2; SELECT dolt_add('child'); SELECT dolt_reset('child');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_unstages_rename_column" "$(reset18_status)" "child|0|modified" "$DB18"
+
+reset18_seed
+echo "CREATE INDEX cb ON child(body); SELECT dolt_add('child'); SELECT dolt_reset('child');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_unstages_second_index" "$(reset18_status)" "child|0|modified" "$DB18"
+run_test "table_reset_second_index_absent_from_staged" \
+  "SELECT count(*) FROM dolt_diff_child('HEAD','STAGED');" "0" "$DB18"
+
+reset18_seed
+echo "CREATE INDEX cb ON child(body) WHERE body IS NOT NULL; SELECT dolt_add('child'); SELECT dolt_reset('child');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_unstages_partial_index" "$(reset18_status)" "child|0|modified" "$DB18"
+
+reset18_seed
+echo "DROP INDEX cg; SELECT dolt_add('child'); SELECT dolt_reset('child');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_unstages_drop_index" "$(reset18_status)" "child|0|modified" "$DB18"
+
+reset18_seed
+echo "CREATE INDEX cb ON child(body); INSERT INTO other VALUES(2,'p'); SELECT dolt_add('child','other'); SELECT dolt_reset('child','other');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_two_tables_one_call" "$(reset18_status)" "child|0|modified other|0|modified" "$DB18"
+
+reset18_seed
+echo "CREATE INDEX cb ON child(body); INSERT INTO child VALUES(2,2,'b'); SELECT dolt_add('child'); SELECT dolt_reset('child'); SELECT dolt_commit('-am','all');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_then_commit_am_takes_working_schema" \
+  "SELECT (SELECT count(*) FROM sqlite_master WHERE name='cb') || (SELECT count(*) FROM child) || length(dolt_hashof_index('cb','HEAD'));" \
+  "1240" "$DB18"
+
+reset18_seed
+echo "CREATE TABLE fresh(id TEXT PRIMARY KEY, label TEXT UNIQUE); INSERT INTO fresh VALUES('a','l'); CREATE INDEX cb ON child(body); SELECT dolt_add('-A'); SELECT dolt_reset('child'); SELECT dolt_commit('-m','fresh only'); SELECT dolt_branch('probe18');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test "table_reset_beside_staged_new_indexed_table_commit" \
+  "SELECT id FROM fresh WHERE label='l'; SELECT count(*) FROM sqlite_master WHERE name='cb'; PRAGMA integrity_check;" \
+  "a
+0
+ok" "$DB18/probe18"
+run_test "table_reset_beside_staged_new_indexed_table_status" "$(reset18_status)" "child|0|modified" "$DB18"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 
 dltest_finish

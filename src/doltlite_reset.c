@@ -93,6 +93,8 @@ static int resetStageNamedPaths(
   int nHead = 0, nStaged = 0, nHeadSchema = 0, nStagedSchema = 0;
   ProllyHash headCatHash, stagedHash;
   Pgno iNextFree = 2;
+  const char **azReset = 0;
+  int nReset = 0;
   int p, k;
   int rc;
 
@@ -133,6 +135,13 @@ static int resetStageNamedPaths(
     if( iH<0 && iS<0 ){
       rc = SQLITE_NOTFOUND;
       goto done;
+    }
+    if( iH>=0 ){
+      const char **azNew = sqlite3_realloc(azReset,
+          (nReset+1)*(int)sizeof(const char*));
+      if( !azNew ){ rc = SQLITE_NOMEM; goto done; }
+      azReset = azNew;
+      azReset[nReset++] = zHeadTable;
     }
     if( iH<0 ){
       /* Staged-only: new table, or new name of a staged rename. Dolt keeps
@@ -231,6 +240,26 @@ static int resetStageNamedPaths(
     }
   }
 
+  /* The entries above now carry HEAD content, but the staged master still
+  ** spells the staged definition of each reset table: its CREATE TABLE text
+  ** and its index rows. Fallback rows only fill gaps, so compose the master
+  ** the way a named add does, with the reset tables' rows from HEAD and every
+  ** other row, views and triggers included, left as staged. */
+  if( rc==SQLITE_OK && nReset>0 ){
+    struct TableEntry *pHeadMaster = doltliteFindTableByNumber(aHead, nHead, 1);
+    struct TableEntry *pStagedMaster =
+        doltliteFindTableByNumber(aStaged, nStaged, 1);
+    if( pHeadMaster && pStagedMaster ){
+      ProllyHash composedRoot;
+      rc = doltliteBuildNamedStageMasterRoot(db,
+              &pHeadMaster->root, pHeadMaster->flags,
+              &pStagedMaster->root, pStagedMaster->flags,
+              azReset, nReset, aStaged, nStaged, 0, &composedRoot);
+      if( rc!=SQLITE_OK ) goto done;
+      pStagedMaster->root = composedRoot;
+    }
+  }
+
   {
     u8 *buf = 0;
     int nBuf = 0;
@@ -247,6 +276,7 @@ static int resetStageNamedPaths(
   }
 
 done:
+  sqlite3_free((void*)azReset);
   doltliteFreeCatalog(aHead, nHead);
   doltliteFreeCatalog(aStaged, nStaged);
   if( aHeadSchema ){
