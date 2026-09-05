@@ -137,7 +137,7 @@ int doltliteMasterViewTriggerRowsDiffer(
   if( rc==SQLITE_OK ){
     if( nOld!=nNew ){
       *pDiffer = 1;
-    }else{
+    }else if( nOld>0 ){
       qsort(azOld, nOld, sizeof(char*), masterRowStrCmp);
       qsort(azNew, nNew, sizeof(char*), masterRowStrCmp);
       for(i=0; i<nOld; i++){
