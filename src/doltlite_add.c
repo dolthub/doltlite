@@ -718,6 +718,11 @@ int doltliteStageNamedTables(
     Pgno iTable = 0;
     int j;
     if( !zTable || strcmp(zTable, ".")==0 ) continue;
+    for(j=0; j<i; j++){
+      const char *zPrior = (const char*)sqlite3_value_text(argv[j]);
+      if( zPrior && sqlite3_stricmp(zPrior, zTable)==0 ) break;
+    }
+    if( j<i ) continue;
 
     if( !bForce ){
       int ignored = 0;

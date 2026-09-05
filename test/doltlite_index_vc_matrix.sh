@@ -542,6 +542,31 @@ z
 ok" "$(echo "$result" | tail -n 4)"
 done
 
+scenario "duplicate named add arguments"
+newdb
+result=$(run_sql ".bail on
+CREATE TABLE t(id TEXT PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO t VALUES('t','label');
+CREATE VIRTUAL TABLE ft USING fts5(body);
+INSERT INTO ft VALUES('one doc');
+SELECT dolt_add('t','T','t');
+SELECT dolt_add('ft','FT','ft');
+SELECT dolt_commit('-m','duplicates');
+SELECT dolt_checkout('-b','snapshot');
+SELECT id FROM t INDEXED BY sqlite_autoindex_t_2 WHERE label='label';
+SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+PRAGMA integrity_check;" "$DB")
+check "duplicate_named_add_exit" "0" "$?"
+check "duplicate_named_add_commit" "t
+1
+ok" "$(echo "$result" | tail -n 3)"
+result=$(run_sql "SELECT id FROM t INDEXED BY sqlite_autoindex_t_2 WHERE label='label';
+SELECT count(*) FROM ft WHERE ft MATCH 'doc';
+PRAGMA integrity_check;" "$DB@snapshot")
+check "duplicate_named_add_reopen" "t
+1
+ok" "$result"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

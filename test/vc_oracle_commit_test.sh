@@ -757,6 +757,15 @@ SELECT dolt_add('items_0','missing_table');"
   done
 done
 
+oracle_query "duplicate_named_add_arguments" "
+CREATE TABLE t(id VARCHAR(40) PRIMARY KEY, label VARCHAR(40) UNIQUE);
+INSERT INTO t VALUES('t','label');
+SELECT dolt_add('t','T','t');
+SELECT dolt_commit('-m','duplicates');
+SELECT dolt_checkout('-b','snapshot');
+" "SELECT 'R|' || id || '|' || label FROM t;" \
+  "SELECT concat('R|', id, '|', label) FROM t;"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
