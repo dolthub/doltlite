@@ -407,47 +407,6 @@ jobs:
         cc /tmp/doltlite-installed-probe.c -ldoltlite -lz -lpthread -lm -o /tmp/doltlite-installed-probe
         test "$(/tmp/doltlite-installed-probe)" = "prolly"
 
-  # ── Run benchmarks ────────────────────────────────────────
-  benchmark:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev python3
-
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build doltlite and stock SQLite
-      run: |
-        cd build
-        make doltlite
-        make doltlite-lib
-        cc -O2 -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm
-        bash ../test/build_stock_reference.sh ../build-stockref ./doltlite
-        cc -O2 -I../build-stockref -I../src -o bench_timer_sqlite ../test/sysbench_timer.c ../build-stockref/sqlite3.o -lpthread -lz -lm
-
-    - name: Run benchmarks
-      run: |
-        cd build
-        BENCH_ROWS=100000 BENCH_RUNS=5 BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_classic.md
-        sed -n '/### File-Backed/,/^_/p' /tmp/bench_classic.md > /tmp/bench_results.md
-
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v4
-      with:
-        name: benchmark
-        path: /tmp/bench_results.md
-
   # ── Cross-version compatibility gate ──────────────────────
   # Databases created by prior releases must open and pass feature smoke
   # tests when the on-disk format signature is unchanged, and must be
@@ -494,7 +453,7 @@ jobs:
   # ── Create GitHub release ─────────────────────────────────
   release:
     if: github.event_name != 'workflow_dispatch'
-    needs: [source, build, package-smoke-deb, benchmark, compat]
+    needs: [source, build, package-smoke-deb, compat]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -526,17 +485,21 @@ jobs:
         echo "Uploading: ${ASSETS}"
         gh release upload "${GITHUB_REF_NAME}" ${ASSETS} --clobber
 
-    - name: Append benchmark to release notes
+    - name: Append nightly performance summary to release notes
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        BENCH="artifacts/benchmark/bench_results.md"
-        if [ -f "$BENCH" ]; then
-          EXISTING=$(gh release view "${GITHUB_REF_NAME}" --json body --jq .body)
-          APPEND=$(printf '\n## Benchmark / int-keys (100K rows, Linux x64)\n\n'; cat "$BENCH")
-          printf '%s\n%s' "$EXISTING" "$APPEND" > /tmp/release_body.md
-          gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release_body.md
-        fi
+        SUMMARY="$RUNNER_TEMP/release-performance-summary.md"
+        NOTES="$RUNNER_TEMP/release-notes.md"
+        REPORT_URL="https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/performance-report.md#sql-workload-summary"
+        python3 tool/release-performance-summary.py performance-report.md > "$SUMMARY"
+        EXISTING=$(gh release view "${GITHUB_REF_NAME}" --json body --jq .body)
+        {
+          printf '%s\n\n## Benchmark / SQL workload summary\n\n' "$EXISTING"
+          cat "$SUMMARY"
+          printf '\n_Full nightly results: [performance-report.md](%s)._\n' "$REPORT_URL"
+        } > "$NOTES"
+        gh release edit "${GITHUB_REF_NAME}" --notes-file "$NOTES"
 
   # ── Trigger binding releases ─────────────────────────────
   # The node and python bindings publish from tag pushes in their own

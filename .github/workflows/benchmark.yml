@@ -150,6 +150,7 @@ jobs:
       run: |
         python3 test/benchmark_compare_test.py
         python3 test/benchmark_retry_test.py
+        python3 test/release_performance_summary_test.py
 
     - name: Generate relative performance report
       id: report
