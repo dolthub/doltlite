@@ -651,6 +651,128 @@ static int doltliteCommitCreateObject(
   return SQLITE_OK;
 }
 
+static int doltliteCommitNextForeignKeyParent(
+  const char **pzSql,
+  char **pzParent
+){
+  const char *z = *pzSql;
+  int type;
+  int n;
+
+  *pzParent = 0;
+  while( *z ){
+    n = sqlite3GetToken((const u8*)z, &type);
+    if( n<=0 || type==TK_ILLEGAL ) return SQLITE_CORRUPT;
+    if( type!=TK_STRING && type!=TK_BLOB && type!=TK_COMMENT
+     && type!=TK_SPACE && n==10 && sqlite3_strnicmp(z, "REFERENCES", 10)==0 ){
+      z += n;
+      do{
+        if( !*z ) return SQLITE_CORRUPT;
+        n = sqlite3GetToken((const u8*)z, &type);
+        if( n<=0 || type==TK_ILLEGAL ) return SQLITE_CORRUPT;
+        if( type!=TK_SPACE && type!=TK_COMMENT ) break;
+        z += n;
+      }while( 1 );
+      *pzParent = sqlite3_mprintf("%.*s", n, z);
+      if( !*pzParent ) return SQLITE_NOMEM;
+      sqlite3Dequote(*pzParent);
+      *pzSql = z + n;
+      return SQLITE_ROW;
+    }
+    z += n;
+  }
+  *pzSql = z;
+  return SQLITE_DONE;
+}
+
+static int doltliteCommitFindMissingForeignKeyParent(
+  SchemaEntry *aSchema,
+  int nSchema,
+  char **pzChild,
+  char **pzParent
+){
+  int i;
+  *pzChild = 0;
+  *pzParent = 0;
+  for(i=0; i<nSchema; i++){
+    const char *z;
+    char *zParent = 0;
+    int rc;
+    if( !aSchema[i].zType || sqlite3_stricmp(aSchema[i].zType, "table")!=0
+     || !aSchema[i].zSql || !aSchema[i].zName ){
+      continue;
+    }
+    z = aSchema[i].zSql;
+    while( (rc = doltliteCommitNextForeignKeyParent(&z, &zParent))==SQLITE_ROW ){
+      int j;
+      int found = 0;
+      for(j=0; j<nSchema; j++){
+        if( aSchema[j].zType
+         && sqlite3_stricmp(aSchema[j].zType, "table")==0
+         && aSchema[j].zName
+         && sqlite3_stricmp(aSchema[j].zName, zParent)==0 ){
+          found = 1;
+          break;
+        }
+      }
+      if( !found ){
+        *pzChild = sqlite3_mprintf("%s", aSchema[i].zName);
+        if( !*pzChild ){
+          sqlite3_free(zParent);
+          return SQLITE_NOMEM;
+        }
+        *pzParent = zParent;
+        return SQLITE_OK;
+      }
+      sqlite3_free(zParent);
+      zParent = 0;
+    }
+    if( rc!=SQLITE_DONE ) return rc;
+  }
+  return SQLITE_OK;
+}
+
+static int doltliteCommitValidateForeignKeyParents(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const ProllyHash *pCatalogHash
+){
+  SchemaEntry *aSchema = 0;
+  int nSchema = 0;
+  char *zChild = 0;
+  char *zParent = 0;
+  char *zErr;
+  int rc;
+
+  rc = loadSchemaFromCatalog(db, doltliteGetChunkStore(db),
+      doltliteGetCache(db), pCatalogHash, &aSchema, &nSchema);
+  if( rc==SQLITE_OK ){
+    rc = doltliteCommitFindMissingForeignKeyParent(
+        aSchema, nSchema, &zChild, &zParent);
+  }
+  freeSchemaEntries(aSchema, nSchema);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zChild);
+    sqlite3_free(zParent);
+    sqlite3_result_error_code(context, rc);
+    return rc;
+  }
+  if( !zParent ) return SQLITE_OK;
+
+  zErr = sqlite3_mprintf(
+      "foreign key on table `%q` requires the referenced table `%q`",
+      zChild, zParent);
+  sqlite3_free(zChild);
+  sqlite3_free(zParent);
+  if( !zErr ){
+    sqlite3_result_error_code(context, SQLITE_NOMEM);
+    return SQLITE_NOMEM;
+  }
+  sqlite3_result_error(context, zErr, -1);
+  sqlite3_free(zErr);
+  return SQLITE_ERROR;
+}
+
 static void doltliteCommitFunc(
   sqlite3_context *context,
   int argc,
@@ -856,6 +978,11 @@ static void doltliteCommitFunc(
         }
       }
     }
+  }
+
+  if( !force ){
+    rc = doltliteCommitValidateForeignKeyParents(db, context, &catalogHash);
+    if( rc!=SQLITE_OK ) return;
   }
 
   rc = doltliteCommitCreateObject(db, context, &opts, &catalogHash, &commitHash);

@@ -508,7 +508,159 @@ SELECT staged FROM dolt_status WHERE table_name='t';" \
   "0
 0" "$DB16"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16"
+DB17=/tmp/test_dolt_commit_missing_fk_$$.db; rm -f "$DB17"
+
+run_test "missing_fk_empty_setup" \
+  "CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+SELECT dolt_add('children');" \
+  "0" "$DB17"
+
+HEAD17=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB17")
+STAGED17=$(run_sql "SELECT dolt_hashof('STAGED');" "$DB17")
+
+run_test_match "missing_fk_empty_rejected" \
+  "SELECT dolt_commit('-m','child only');" \
+  "foreign key.*children.*parents" "$DB17"
+
+run_test "missing_fk_failure_keeps_head" \
+  "SELECT dolt_hashof('HEAD');" "$HEAD17" "$DB17"
+
+run_test "missing_fk_failure_keeps_staged" \
+  "SELECT dolt_hashof('STAGED');" "$STAGED17" "$DB17"
+
+run_test "missing_fk_failure_survives_reopen" \
+  "SELECT table_name || '|' || staged || '|' || status
+   FROM dolt_status ORDER BY table_name, staged;" \
+  "children|1|new table
+parents|0|new table" "$DB17"
+
+run_test_match "missing_fk_child_then_parent_commits" \
+  "SELECT dolt_add('parents');
+SELECT dolt_commit('-m','both');" \
+  "[0-9a-f]{40}$" "$DB17"
+
+DB18=/tmp/test_dolt_commit_missing_fk_force_$$.db; rm -f "$DB18"
+
+run_test "missing_fk_populated_setup" \
+  "CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+INSERT INTO parents VALUES(1);
+INSERT INTO children VALUES(1,1);
+SELECT dolt_add('children');" \
+  "0" "$DB18"
+
+run_test_match "missing_fk_populated_rejected" \
+  "SELECT dolt_commit('-m','child only');" \
+  "foreign key.*children.*parents" "$DB18"
+
+run_test_match "missing_fk_force_commits" \
+  "SELECT dolt_commit('--force','-m','child only');" \
+  "^[0-9a-f]{40}$" "$DB18"
+
+run_test "missing_fk_force_advances_head" \
+  "SELECT count(*) FROM dolt_log WHERE message='child only';" \
+  "1" "$DB18"
+
+DB19=/tmp/test_dolt_commit_fk_parent_first_$$.db; rm -f "$DB19"
+
+run_test_match "missing_fk_parent_then_child_commits" \
+  "CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES PaReNtS(id));
+SELECT dolt_add('parents');
+SELECT dolt_add('children');
+SELECT dolt_commit('-m','both');" \
+  "[0-9a-f]{40}$" "$DB19"
+
+DB20=/tmp/test_dolt_commit_fk_self_$$.db; rm -f "$DB20"
+
+run_test_match "missing_fk_quoted_self_reference_commits" \
+  "CREATE TABLE \"Node Table\"(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES \"Node Table\"(id));
+SELECT dolt_add('Node Table');
+SELECT dolt_commit('-m','self');" \
+  "[0-9a-f]{40}$" "$DB20"
+
+DB21=/tmp/test_dolt_commit_fk_drop_$$.db; rm -f "$DB21"
+
+run_test_match "missing_fk_drop_setup" \
+  "CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+SELECT dolt_commit('-Am','base');" \
+  "^[0-9a-f]{40}$" "$DB21"
+
+run_test_match "missing_fk_dropped_parent_rejected" \
+  "PRAGMA foreign_keys=OFF;
+DROP TABLE parents;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','drop parent');" \
+  "foreign key.*children.*parents" "$DB21"
+
+run_test "missing_fk_dropped_parent_does_not_commit" \
+  "SELECT count(*) FROM dolt_log WHERE message='drop parent';" \
+  "0" "$DB21"
+
+DB22=/tmp/test_dolt_commit_fk_rename_$$.db; rm -f "$DB22"
+
+run_test_match "missing_fk_rename_setup" \
+  "CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+SELECT dolt_commit('-Am','base');" \
+  "^[0-9a-f]{40}$" "$DB22"
+
+run_test "missing_fk_rename_stage" \
+  "ALTER TABLE parents RENAME TO parents_new;
+SELECT dolt_add('parents_new');" \
+  "0" "$DB22"
+
+HEAD22=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB22")
+STATUS22=$(run_sql "SELECT table_name || '|' || staged || '|' || status
+  FROM dolt_status ORDER BY table_name, staged;" "$DB22")
+
+run_test_match "missing_fk_renamed_parent_rejected" \
+  "SELECT dolt_commit('-m','rename parent only');" \
+  "foreign key.*children.*parents" "$DB22"
+
+run_test "missing_fk_rename_failure_keeps_state" \
+  "SELECT dolt_hashof('HEAD');
+SELECT table_name || '|' || staged || '|' || status
+  FROM dolt_status ORDER BY table_name, staged;" \
+  "$HEAD22
+$STATUS22" "$DB22"
+
+DB23=/tmp/test_dolt_commit_fk_multiple_$$.db; rm -f "$DB23"
+
+run_test "missing_fk_multiple_setup" \
+  "CREATE TABLE present(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY,
+  first_parent INTEGER REFERENCES present(id),
+  second_parent INTEGER,
+  CONSTRAINT second_fk FOREIGN KEY(second_parent) REFERENCES absent(id));
+SELECT dolt_add('present');
+SELECT dolt_add('children');" \
+  "0
+0" "$DB23"
+
+run_test_match "missing_fk_multiple_checks_every_reference" \
+  "SELECT dolt_commit('-m','two parents');" \
+  "foreign key.*children.*absent" "$DB23"
+
+DB24=/tmp/test_dolt_commit_fk_token_context_$$.db; rm -f "$DB24"
+
+run_test_match "missing_fk_ignores_comments_and_literals" \
+  "CREATE TABLE tokens(id INTEGER PRIMARY KEY,
+  note TEXT DEFAULT 'REFERENCES absent',
+  value INTEGER /* REFERENCES absent */);
+SELECT dolt_add('tokens');
+SELECT dolt_commit('-m','tokens');" \
+  "[0-9a-f]{40}$" "$DB24"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
