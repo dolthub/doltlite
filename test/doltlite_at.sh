@@ -372,4 +372,81 @@ run_test "at_namemap_old_commit" \
 
 rm -f "$DBA"
 
+DBWS=/tmp/test_at_working_staged_$$.db; rm -f "$DBWS"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'h1'),(2,'h2'),(3,'h3');
+SELECT dolt_commit('-Am','base');
+UPDATE t SET v='s' || id;
+SELECT dolt_add('t');
+UPDATE t SET v='w' || id;" | $DOLTLITE "$DBWS" > /dev/null 2>&1
+
+run_test "at_working_staged_head_rows" \
+  "SELECT group_concat(id || ':' || v, ',') FROM (
+    SELECT id, v FROM dolt_at_t('HEAD') ORDER BY id);" \
+  "1:h1,2:h2,3:h3" "$DBWS"
+
+run_test "at_working_staged_staged_rows" \
+  "SELECT group_concat(id || ':' || v, ',') FROM (
+    SELECT id, v FROM dolt_at_t('STAGED') ORDER BY id);" \
+  "1:s1,2:s2,3:s3" "$DBWS"
+
+run_test "at_working_staged_working_rows" \
+  "SELECT group_concat(id || ':' || v, ',') FROM (
+    SELECT id, v FROM dolt_at_t('WORKING') ORDER BY id);" \
+  "1:w1,2:w2,3:w3" "$DBWS"
+
+run_test "at_working_staged_case_insensitive" \
+  "SELECT v FROM dolt_at_t('staged') WHERE id=1;
+SELECT v FROM dolt_at_t('working') WHERE id=1;" \
+  "s1
+w1" "$DBWS"
+
+run_test "at_working_staged_pk_pushdown" \
+  "SELECT group_concat(id || ':' || v, ',') FROM (
+    SELECT id, v FROM dolt_at_t('STAGED') WHERE id>=2 ORDER BY id);
+SELECT group_concat(id || ':' || v, ',') FROM (
+    SELECT id, v FROM dolt_at_t('WORKING') WHERE id<3 ORDER BY id);" \
+  "2:s2,3:s3
+1:w1,2:w2" "$DBWS"
+
+run_test "at_working_staged_ref_labels" \
+  "SELECT DISTINCT commit_ref FROM dolt_at_t('STAGED');
+SELECT DISTINCT commit_ref FROM dolt_at_t('WORKING');" \
+  "STAGED
+WORKING" "$DBWS"
+
+run_test "at_working_sees_transaction_and_preserves_rollback" \
+  "BEGIN;
+UPDATE t SET v='txn' WHERE id=1;
+SELECT v FROM dolt_at_t('WORKING') WHERE id=1;
+ROLLBACK;
+SELECT v FROM t WHERE id=1;" \
+  "txn
+w1" "$DBWS"
+
+rm -f "$DBWS"
+
+DBWSS=/tmp/test_at_working_staged_schema_$$.db; rm -f "$DBWSS"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, keep TEXT, dropped TEXT);
+INSERT INTO t VALUES(1,'base','old');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t ADD COLUMN staged_col TEXT;
+UPDATE t SET staged_col='staged';
+SELECT dolt_add('t');
+ALTER TABLE t DROP COLUMN dropped;
+ALTER TABLE t ADD COLUMN working_col TEXT;
+UPDATE t SET working_col='working';" | $DOLTLITE "$DBWSS" > /dev/null 2>&1
+
+run_test "at_staged_with_working_schema_change" \
+  "SELECT id || '|' || keep || '|' || coalesce(staged_col,'NULL') || '|' ||
+          coalesce(working_col,'NULL') FROM dolt_at_t('STAGED');" \
+  "1|base|staged|NULL" "$DBWSS"
+
+run_test "at_working_with_working_schema_change" \
+  "SELECT id || '|' || keep || '|' || coalesce(staged_col,'NULL') || '|' ||
+          coalesce(working_col,'NULL') FROM dolt_at_t('WORKING');" \
+  "1|base|staged|working" "$DBWSS"
+
+rm -f "$DBWSS"
+
 dltest_finish

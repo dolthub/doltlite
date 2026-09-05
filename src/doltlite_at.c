@@ -495,7 +495,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   c->zCommitRef = sqlite3_mprintf("%s", zRef);
   if( !c->zCommitRef ) return SQLITE_NOMEM;
 
-  rc=doltliteRefToCatalogHash(db,zRef,&catHash);
+  rc=doltliteResolveCatalogHashForRef(db,zRef,&catHash);
   if(rc==SQLITE_NOTFOUND){
     sqlite3_free(cur->pVtab->zErrMsg);
     cur->pVtab->zErrMsg = 0;
