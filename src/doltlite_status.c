@@ -237,26 +237,8 @@ static int statusSchemaHasViewOrTriggerDiff(sqlite3 *db,
                                             const ProllyHash *pNewRoot,
                                             u8 flags,
                                             int *pFound){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  ProllyDiffIter iter;
-  ProllyDiffChange *pChange = 0;
-  int rc;
-  *pFound = 0;
-  if( !cs || !pCache ) return SQLITE_ERROR;
-  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return SQLITE_OK;
-  rc = prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags,
-                          flags);
-  if( rc!=SQLITE_OK ) return rc;
-  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
-    if( statusSchemaRecordIsViewOrTrigger(pChange->pNewVal, pChange->nNewVal)
-     || statusSchemaRecordIsViewOrTrigger(pChange->pOldVal, pChange->nOldVal) ){
-      *pFound = 1;
-      break;
-    }
-  }
-  prollyDiffIterClose(&iter);
-  return rc==SQLITE_ROW || rc==SQLITE_DONE ? SQLITE_OK : rc;
+  return doltliteMasterViewTriggerRowsDiffer(db, pOldRoot, pNewRoot, flags,
+                                             pFound);
 }
 
 static int statusCompareDoltSchemas(
