@@ -325,7 +325,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop dropped table');
 " "dropped_only" "HEAD~1"
 
-echo "--- working set is NOT visible at any ref ---"
+echo "--- HEAD, STAGED, and WORKING isolation ---"
 
 oracle "at_head_excludes_working_modifications" "
 $SEED
@@ -337,6 +337,20 @@ $SEED
 UPDATE t SET v = 999 WHERE id = 1;
 SELECT dolt_add('-A');
 " "HEAD"
+
+WORKING_STAGED_SEED="
+CREATE TABLE t(id INT PRIMARY KEY, v VARCHAR(20));
+INSERT INTO t VALUES (1, 'h1'), (2, 'h2'), (3, 'h3');
+SELECT dolt_commit('-Am', 'base');
+UPDATE t SET v = concat('s', id);
+SELECT dolt_add('t');
+UPDATE t SET v = concat('w', id);
+"
+
+oracle "at_staged_rows" "$WORKING_STAGED_SEED" "STAGED"
+oracle "at_working_rows" "$WORKING_STAGED_SEED" "WORKING"
+oracle "at_staged_clean_falls_back_to_head" "$SEED" "STAGED"
+oracle "at_working_clean_matches_head" "$SEED" "WORKING"
 
 echo "--- post-merge ---"
 
