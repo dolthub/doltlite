@@ -6,8 +6,8 @@
 class Doltlite < Formula
   desc "SQLite fork with Git-style version control via prolly trees"
   homepage "https://github.com/dolthub/doltlite"
-  url "https://github.com/dolthub/doltlite/releases/download/v0.50.5/doltlite-autoconf-0.50.5.tar.gz"
-  sha256 "3cd477ea96d69f6e22dec669480cca6f221f564017c725661dd2356390db4c67"
+  url "https://github.com/dolthub/doltlite/releases/download/v0.50.6/doltlite-autoconf-0.50.6.tar.gz"
+  sha256 "78e212ad1759ef56a200868a9bd2196a3f32063d3cc5bd75cd5a73bbcc7dd168"
   # Composite, and both halves are real: the DoltLite extensions are
   # Apache-2.0, the SQLite code they are built on is public domain. Stating
   # only the first would misdescribe the tarball this formula builds.
