@@ -5,7 +5,11 @@
 int mergeAppendReindexName(char ***paz, int *pn, const char *zName){
   char **azNew;
   char *zDup;
+  int i;
   if( !paz ) return SQLITE_OK;
+  for(i=0; i<*pn; i++){
+    if( strcmp((*paz)[i], zName)==0 ) return SQLITE_OK;
+  }
   azNew = sqlite3_realloc(*paz, (*pn+1)*(int)sizeof(char*));
   if( !azNew ) return SQLITE_NOMEM;
   *paz = azNew;

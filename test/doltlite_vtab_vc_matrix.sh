@@ -268,6 +268,26 @@ result=$(run_sql "INSERT INTO f5(f5) VALUES('integrity-check'); SELECT 'ok'; PRA
 check "merge_conflict_rebuilt_index_valid" "ok
 ok" "$result"
 
+scenario "clean fts5 shadow merge rebuilds from content"
+newdb
+run_sql "CREATE VIRTUAL TABLE docs USING fts5(body);
+INSERT INTO docs(rowid,body) VALUES(270203,'row b27 00868 doc');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+INSERT INTO docs(rowid,body) VALUES(610229,'row b61 01070 doc');
+INSERT INTO docs(docs) VALUES('rebuild');
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('main');
+INSERT INTO docs(rowid,body) VALUES(900212,'row b90 01626 doc');
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('side');" "$DB" > /dev/null
+check "merge_clean_shadow_content" "3" \
+  "$(run_sql "SELECT count(*) FROM docs_content;" "$DB")"
+check "merge_clean_shadow_search" "610229,900212" \
+  "$(run_sql "SELECT group_concat(rowid) FROM (SELECT rowid FROM docs WHERE docs MATCH 'b61 OR b90' ORDER BY rowid);" "$DB")"
+check "merge_clean_shadow_integrity" "" \
+  "$(run_sql "INSERT INTO docs(docs) VALUES('integrity-check');" "$DB")"
+
 scenario "merge adopts a branch-added vtab of every flavor"
 newdb
 run_sql "CREATE TABLE plain(k INTEGER PRIMARY KEY, v TEXT); INSERT INTO plain VALUES(1,'p');

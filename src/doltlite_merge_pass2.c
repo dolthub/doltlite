@@ -647,6 +647,50 @@ static char *mergeDerivedShadowOwner(
   return 0;
 }
 
+int mergeScheduleChangedDerivedShadows(
+  sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aOurs, int nOurs,
+  struct TableEntry *aTheirs, int nTheirs,
+  char ***pazRebuild,
+  int *pnRebuild,
+  char **pzRefuse
+){
+  int i;
+  for(i=0; i<nAnc; i++){
+    struct TableEntry *pOurs;
+    struct TableEntry *pTheirs;
+    char *zOwner;
+    int bRebuildable;
+    int rc;
+    if( !aAnc[i].zName ) continue;
+    pOurs = doltliteFindTableByName(aOurs, nOurs, aAnc[i].zName);
+    pTheirs = doltliteFindTableByName(aTheirs, nTheirs, aAnc[i].zName);
+    if( !pOurs || !pTheirs
+     || prollyHashCompare(&aAnc[i].root, &pOurs->root)==0
+     || prollyHashCompare(&aAnc[i].root, &pTheirs->root)==0 ){
+      continue;
+    }
+    zOwner = mergeDerivedShadowOwner(db, aAnc[i].zName, &bRebuildable);
+    if( !zOwner ) continue;
+    if( !bRebuildable ){
+      if( pzRefuse && *pzRefuse==0 ){
+        *pzRefuse = sqlite3_mprintf(
+            "cannot merge: '%s' indexes data that cannot be rebuilt from the "
+            "merged rows, and both sides changed it. Merge on one branch, or "
+            "drop and recreate '%s' after merging",
+            zOwner, zOwner);
+      }
+      sqlite3_free(zOwner);
+      return SQLITE_OK;
+    }
+    rc = mergeAppendReindexName(pazRebuild, pnRebuild, zOwner);
+    sqlite3_free(zOwner);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
 /* If every conflict is a rebuildable derived shadow, drop them and
 ** return owners to rebuild. Any non-derived conflict keeps all loud. */
 int mergeFilterDerivedShadowConflicts(
