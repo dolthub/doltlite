@@ -1024,6 +1024,27 @@ INSERT INTO dolt_ignore VALUES ('extra_%', 0);
 SELECT dolt_reset('--hard');
 "
 
+oracle "reset_hard_keeps_untracked_unique_indexed_table" "
+$SEED
+CREATE TABLE untracked(id INTEGER PRIMARY KEY, label VARCHAR(40) UNIQUE);
+INSERT INTO untracked VALUES (2, 'label');
+SELECT dolt_reset('--hard');
+"
+
+oracle_same_session "reset_hard_untracked_unique_indexed_reads" "
+$SEED
+CREATE TABLE untracked(id INTEGER PRIMARY KEY, label VARCHAR(40) UNIQUE);
+INSERT INTO untracked VALUES (2, 'label');
+SELECT dolt_reset('--hard');
+" "SELECT 'Q|' || id FROM untracked WHERE label='label';
+SELECT 'Q|' || id FROM t;" \
+"$SEED
+CREATE TABLE untracked(id INTEGER PRIMARY KEY, label VARCHAR(40) UNIQUE);
+INSERT INTO untracked VALUES (2, 'label');
+SELECT dolt_reset('--hard');
+" "SELECT concat('Q|', id) FROM untracked WHERE label='label';
+SELECT concat('Q|', id) FROM t;"
+
 oracle "reset_end_options_dash_table" "
 CREATE TABLE \`--hard\`(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO \`--hard\` VALUES (1, 10);

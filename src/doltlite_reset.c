@@ -369,6 +369,7 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
     SchemaEntry *aWorkSchema = 0;
     int nWorking = 0, nTarget = 0, nWorkSchema = 0;
     Pgno iNextFree = 2;
+    Pgno iNextFreeBase = 2;
 
     rc = doltliteFlushCatalogToHash(db, &workingHash);
     if( rc==SQLITE_OK ){
@@ -388,23 +389,42 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
       for(k=0; k<nTarget; k++){
         if( aTarget[k].iTable >= iNextFree ) iNextFree = aTarget[k].iTable + 1;
       }
+      for(k=0; k<nWorking; k++){
+        if( aWorking[k].iTable >= iNextFree ) iNextFree = aWorking[k].iTable + 1;
+      }
+      iNextFreeBase = iNextFree;
+      /* Every appended entry takes a fresh number, so the schema rows that
+      ** carried its working number must follow it: the serializer pairs an
+      ** index row to its entry by number alone, and only a table row can fall
+      ** back to its name. A clustered primary key's autoindex row shares its
+      ** table's number and needs no entry of its own. */
       for(j=0; j<nUntracked && rc==SQLITE_OK; j++){
         SchemaEntry *pSe = findSchemaEntry(aWorkSchema, nWorkSchema,
                                            azUntracked[j]);
         struct TableEntry *pWork = 0;
         struct TableEntry *aNew;
-        char *zDup;
+        char *zDup = 0;
+        Pgno iOldPg;
+        Pgno iNewPg;
+        int isIndex;
+        int m;
         if( !pSe || pSe->iRootpage<=1 ) continue;
+        iOldPg = pSe->iRootpage;
+        if( iOldPg >= iNextFreeBase ) continue;
         for(k=0; k<nWorking; k++){
-          if( aWorking[k].iTable==pSe->iRootpage ){
+          if( aWorking[k].iTable==iOldPg ){
             pWork = &aWorking[k];
             break;
           }
         }
         if( !pWork ) continue;
-        zDup = sqlite3_mprintf("%s", azUntracked[j]);
-        aNew = zDup ? sqlite3_realloc(aTarget,
-                        (nTarget+1)*(int)sizeof(struct TableEntry)) : 0;
+        isIndex = pSe->zType && strcmp(pSe->zType, "index")==0;
+        if( !isIndex ){
+          zDup = sqlite3_mprintf("%s", azUntracked[j]);
+          if( !zDup ){ rc = SQLITE_NOMEM; break; }
+        }
+        aNew = sqlite3_realloc(aTarget,
+                               (nTarget+1)*(int)sizeof(struct TableEntry));
         if( !aNew ){
           sqlite3_free(zDup);
           rc = SQLITE_NOMEM;
@@ -413,8 +433,12 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
         aTarget = aNew;
         aTarget[nTarget] = *pWork;
         aTarget[nTarget].zName = zDup;
-        aTarget[nTarget].iTable = iNextFree++;
+        iNewPg = iNextFree++;
+        aTarget[nTarget].iTable = iNewPg;
         nTarget++;
+        for(m=0; m<nWorkSchema; m++){
+          if( aWorkSchema[m].iRootpage==iOldPg ) aWorkSchema[m].iRootpage = iNewPg;
+        }
       }
     }
     if( rc==SQLITE_OK ){

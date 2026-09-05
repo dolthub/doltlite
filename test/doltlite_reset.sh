@@ -347,6 +347,56 @@ run_test "hard_reset_reverts_tracked_lazy_system_tables" \
   "SELECT (SELECT count(*) FROM dolt_ignore) || '|' || (SELECT doc_text FROM dolt_docs WHERE doc_name='README.md') || '|' || (SELECT count(*) FROM dolt_status);" \
   "1|committed|0" "$DB15"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
+DB16=/tmp/test_reset16_$$.db; rm -f "$DB16"
+$DOLTLITE "$DB16" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE tracked(id INTEGER PRIMARY KEY);
+INSERT INTO tracked VALUES(1);
+SELECT dolt_commit('-Am','base');
+CREATE TABLE untracked(id INTEGER PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO untracked VALUES(2,'label');
+SELECT dolt_reset('--hard');
+SQL
+run_test "hard_reset_untracked_unique_autoindex_tracked_intact" \
+  "SELECT * FROM tracked;" "1" "$DB16"
+run_test "hard_reset_untracked_unique_autoindex_indexed_read" \
+  "SELECT id FROM untracked WHERE label='label';" "2" "$DB16"
+run_test "hard_reset_untracked_unique_autoindex_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB16"
+run_test "hard_reset_untracked_unique_autoindex_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "untracked|0|new table" "$DB16"
+run_test_match "hard_reset_untracked_unique_still_enforced" \
+  "INSERT INTO untracked VALUES(3,'label');" "UNIQUE constraint failed" "$DB16"
+
+DB17=/tmp/test_reset17_$$.db; rm -f "$DB17"
+$DOLTLITE "$DB17" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE tracked(id INTEGER PRIMARY KEY);
+INSERT INTO tracked VALUES(1);
+SELECT dolt_commit('-Am','base');
+CREATE TABLE u(k TEXT PRIMARY KEY, label TEXT UNIQUE);
+INSERT INTO u VALUES('a','x');
+CREATE TABLE w(k TEXT PRIMARY KEY, n INTEGER);
+CREATE INDEX w_n ON w(n);
+INSERT INTO w VALUES('b',7);
+CREATE TABLE p(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER);
+CREATE UNIQUE INDEX p_ab ON p(a,b) WHERE b IS NOT NULL;
+INSERT INTO p VALUES(2,1,1),(3,1,NULL);
+SELECT dolt_reset('--hard');
+SQL
+run_test "hard_reset_untracked_text_pk_secondary_unique_read" \
+  "SELECT k FROM u WHERE label='x';" "a" "$DB17"
+run_test "hard_reset_untracked_explicit_index_read" \
+  "SELECT k FROM w WHERE n=7;" "b" "$DB17"
+run_test "hard_reset_untracked_partial_index_read" \
+  "SELECT count(*) FROM p WHERE a=1 AND b IS NOT NULL;" "1" "$DB17"
+run_test "hard_reset_multiple_untracked_indexed_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB17"
+run_test "hard_reset_multiple_untracked_indexed_status" \
+  "SELECT group_concat(table_name || '|' || staged || '|' || status, ' ') FROM (SELECT * FROM dolt_status ORDER BY table_name);" \
+  "p|0|new table u|0|new table w|0|new table" "$DB17"
+run_test "hard_reset_multiple_untracked_indexed_tracked_intact" \
+  "SELECT * FROM tracked;" "1" "$DB17"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
 
 dltest_finish
