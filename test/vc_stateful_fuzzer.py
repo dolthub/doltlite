@@ -246,6 +246,9 @@ def check_invariants(doltlite, db_path, branches, tags, model, rng):
     if rng.randrange(4) == 0:
         assert_refs(doltlite, db_path, branches, tags)
     assert_related_consistent(doltlite, db_path, branch)
+    assert_views_query(doltlite, db_path, branch)
+    if rng.randrange(6) == 0:
+        assert_triggers_fire(doltlite, db_path, branch)
     if rng.randrange(4) == 0:
         assert_shadow_tables_consistent(doltlite, db_path, branch)
     if rng.randrange(8) == 0:
@@ -459,6 +462,159 @@ def assert_reindex_preserves_answers(doltlite, db_path, branch):
             "REINDEX changed an index hash on %s, so the stored index did not "
             "match its rows\nbefore=%r\nafter=%r"
             % (branch, before_hash, after_hash)
+        )
+
+
+def schema_objects(doltlite, db_path, branch):
+    """Sorted (type, name) pairs of the views and triggers in the working schema."""
+    rows = query_list(
+        doltlite,
+        db_path,
+        branch,
+        ".mode list\n.separator |\nSELECT type || '|' || name FROM sqlite_schema "
+        "WHERE type IN ('view','trigger') ORDER BY type, name;\n",
+        "schema_objects",
+    )
+    return sorted(tuple(r.split("|", 1)) for r in rows)
+
+
+def mutate_schema_objects(doltlite, db_path, branch, rng, step):
+    """Create, replace or drop a view or trigger on one branch."""
+    objects = schema_objects(doltlite, db_path, branch)
+    prefix = "_%s_" % branch
+    views = [n for t, n in objects if t == "view" and prefix in n]
+    triggers = [n for t, n in objects if t == "trigger" and prefix in n]
+    actions = ["create_view", "create_trigger"]
+    if views:
+        actions.extend(("drop_view", "replace_view"))
+    if triggers:
+        actions.extend(("drop_trigger", "replace_trigger"))
+    action = rng.choice(actions)
+    vname = "v%s%d" % (prefix, step)
+    tname = "tr%s%d" % (prefix, step)
+    selects = (
+        "SELECT id, v FROM kv WHERE id > %d" % rng.randrange(1000),
+        "SELECT id FROM child WHERE parent_id IS NULL",
+        "SELECT c.id, p.id AS pid FROM child c JOIN parent p ON p.id = c.parent_id",
+        "SELECT count(*) AS n FROM kv",
+    )
+    events = ("AFTER INSERT ON child", "AFTER UPDATE ON child",
+              "AFTER DELETE ON child", "AFTER INSERT ON parent")
+
+    if action == "create_view":
+        sql = "CREATE VIEW %s AS %s;" % (vname, rng.choice(selects))
+        expect = ("view", vname, True)
+    elif action == "replace_view":
+        vname = rng.choice(views)
+        sql = "DROP VIEW %s; CREATE VIEW %s AS %s;" % (vname, vname, rng.choice(selects))
+        expect = ("view", vname, True)
+    elif action == "drop_view":
+        vname = rng.choice(views)
+        sql = "DROP VIEW %s;" % vname
+        expect = ("view", vname, False)
+    elif action == "create_trigger":
+        event = rng.choice(events)
+        ref = "old" if "DELETE" in event else "new"
+        sql = (
+            "CREATE TRIGGER %s %s BEGIN INSERT INTO audit(id, note) "
+            "SELECT %s.id, %s WHERE NOT EXISTS (SELECT 1 FROM audit WHERE id = %s.id); END;"
+            % (tname, event, ref, sql_quote(tname), ref)
+        )
+        expect = ("trigger", tname, True)
+    elif action == "replace_trigger":
+        tname = rng.choice(triggers)
+        event = rng.choice(events)
+        ref = "old" if "DELETE" in event else "new"
+        sql = (
+            "DROP TRIGGER %s; CREATE TRIGGER %s %s BEGIN INSERT INTO audit(id, note) "
+            "SELECT %s.id, %s WHERE NOT EXISTS (SELECT 1 FROM audit WHERE id = %s.id); END;"
+            % (tname, tname, event, ref, sql_quote(tname + "b"), ref)
+        )
+        expect = ("trigger", tname, True)
+    else:
+        tname = rng.choice(triggers)
+        sql = "DROP TRIGGER %s;" % tname
+        expect = ("trigger", tname, False)
+
+    run_sql(doltlite, db_for_branch(db_path, branch), sql, "schema_object_%s_%s" % (action, branch))
+    after = schema_objects(doltlite, db_path, branch)
+    present = (expect[0], expect[1]) in after
+    if present != expect[2]:
+        raise AssertionError(
+            "%s on %s did not take: %s %s present=%s\nschema=%r"
+            % (action, branch, expect[0], expect[1], present, after)
+        )
+    if after == objects and action.startswith("create"):
+        raise AssertionError("%s on %s left the schema unchanged" % (action, branch))
+    if action.startswith("create"):
+        rows = query_list(
+            doltlite,
+            db_path,
+            branch,
+            "SELECT table_name || '|' || staged FROM dolt_status WHERE table_name='dolt_schemas';",
+            "schema_object_status",
+        )
+        if not rows:
+            raise AssertionError(
+                "%s on %s left dolt_status without a dolt_schemas row" % (action, branch)
+            )
+
+
+def assert_views_query(doltlite, db_path, branch):
+    """Every view must still answer: its tables and columns are never dropped."""
+    for kind, name in schema_objects(doltlite, db_path, branch):
+        if kind != "view":
+            continue
+        query_scalar(
+            doltlite,
+            db_path,
+            branch,
+            "SELECT count(*) FROM %s;" % name,
+            "view_query_%s" % name,
+        )
+
+
+def assert_triggers_fire(doltlite, db_path, branch):
+    """A probe insert into child must reach audit exactly when an AFTER INSERT
+    trigger on child is defined, and the probe is removed afterwards."""
+    base = branch_base(branch)
+    probe = base + 9500
+    triggers = query_list(
+        doltlite,
+        db_path,
+        branch,
+        ".mode list\n.separator |\nSELECT name FROM sqlite_schema WHERE type='trigger' "
+        "AND tbl_name='child' AND sql LIKE '%AFTER INSERT%';\n",
+        "insert_triggers",
+    )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        "DELETE FROM audit WHERE id=%d; DELETE FROM child WHERE id=%d;" % (probe, probe),
+        "probe_clear_%s" % branch,
+    )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        "INSERT INTO child(id, parent_id, grp, name, body) VALUES(%d, NULL, %d, 'probe', 'probe doc');"
+        % (probe, base + 9),
+        "probe_insert_%s" % branch,
+    )
+    fired = query_scalar(
+        doltlite, db_path, branch,
+        "SELECT count(*) FROM audit WHERE id=%d;" % probe, "probe_audit",
+    )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        "DELETE FROM child WHERE id=%d; DELETE FROM audit WHERE id=%d;" % (probe, probe),
+        "probe_cleanup_%s" % branch,
+    )
+    expected = "1" if triggers else "0"
+    if fired != expected:
+        raise AssertionError(
+            "trigger probe on %s: audit rows=%s with insert triggers=%r"
+            % (branch, fired, triggers)
         )
 
 
@@ -762,7 +918,15 @@ def merge_branch(doltlite, db_path, branches, model, rng):
     source = rng.choice(source_choices)
     commit_branch(doltlite, db_path, target, model, 0)
     commit_branch(doltlite, db_path, source, model, 0)
-    run_sql(
+    ours = set(schema_objects(doltlite, db_path, target))
+    theirs = set(schema_objects(doltlite, db_path, source))
+    base_hash = query_scalar(
+        doltlite, db_path, target,
+        "SELECT coalesce(dolt_merge_base(%s, %s), '');" % (sql_quote(target), sql_quote(source)),
+        "merge_base",
+    )
+    base = set(schema_objects(doltlite, db_path, base_hash)) if base_hash else None
+    out = run_sql(
         doltlite,
         db_for_branch(db_path, target),
         "SELECT dolt_merge(%s);" % sql_quote(source),
@@ -771,6 +935,20 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         allowed_errors=MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, target, model)
+    if out is not None and base is not None:
+        # Three-way rules on entryless objects. Names are branch-scoped, so no
+        # two sides ever define one name differently: an object on both sides
+        # survives, one added on a single side survives, and one that a single
+        # side deleted since the base is the only thing that may go.
+        after = set(schema_objects(doltlite, db_path, target))
+        must_keep = (ours & theirs) | ((ours ^ theirs) - base)
+        missing = must_keep - after
+        resurrected = (base - ours - theirs) & after
+        if missing or resurrected:
+            raise AssertionError(
+                "merge %s into %s: dropped=%r resurrected=%r"
+                % (source, target, sorted(missing), sorted(resurrected))
+            )
 
 
 def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
@@ -1014,7 +1192,25 @@ RELATED_SCHEMA = (
     "CREATE UNIQUE INDEX child_without_parent ON child(grp, name)\n"
     "  WHERE parent_id IS NULL;\n"
     "CREATE VIRTUAL TABLE docs USING fts5(body);\n"
+    "CREATE TABLE audit(id INTEGER PRIMARY KEY, note TEXT NOT NULL);\n"
+    "CREATE VIEW v_seed AS SELECT id, v FROM kv;\n"
+    "CREATE TRIGGER tr_seed AFTER INSERT ON child BEGIN\n"
+    "  INSERT INTO audit(id, note) SELECT new.id, 'seed'\n"
+    "  WHERE NOT EXISTS (SELECT 1 FROM audit WHERE id = new.id);\n"
+    "END;\n"
 )
+
+# Views and triggers are entryless catalog rows: they have no prolly tree of
+# their own and travel through commits, merges and resets as sqlite_master text.
+# Names are branch-scoped so two branches never define the same name, and every
+# definition reads only kv.id, kv.v, child.id and parent.id, columns no
+# operation ever drops or renames; a view that cannot be queried is therefore a
+# bug, not a stale definition. Triggers write to audit keyed by the branch-scoped
+# child id, so their side effects merge without collision and a probe insert can
+# check that the triggers present in the schema actually fire. Their bodies
+# insert only when the row is absent rather than OR REPLACE: an upsert that
+# fires a trigger overrides the trigger's own conflict clause (stock SQLite does
+# the same), so OR REPLACE inside a trigger can still raise UNIQUE.
 
 
 def setup_repo(doltlite, db_path, remote_path):
@@ -1044,6 +1240,7 @@ def setup_repo(doltlite, db_path, remote_path):
 OPERATIONS = (
     ["mutate"] * 4
     + ["mutate_related"] * 3
+    + ["schema_objects"] * 2
     + ["ddl"] * 3
     + [
         "add",
@@ -1118,6 +1315,8 @@ def main():
                 mutate_branch(doltlite, db_path, branch, model, rng, step)
             elif op == "mutate_related":
                 mutate_related(doltlite, db_path, branch, rng, step)
+            elif op == "schema_objects":
+                mutate_schema_objects(doltlite, db_path, branch, rng, step)
             elif op == "reindex":
                 assert_reindex_preserves_answers(doltlite, db_path, branch)
             elif op == "ddl":
