@@ -377,6 +377,11 @@ int mergeFilterDerivedShadowConflicts(sqlite3 *db,
     MergeConflictTable *aConflictTables, int *pnConflictTables,
     int *pTotalConflicts, char ***pazRebuild, int *pnRebuild,
     char **pzRefuse);
+int mergeScheduleChangedDerivedShadows(sqlite3 *db,
+    struct TableEntry *aAnc, int nAnc,
+    struct TableEntry *aOurs, int nOurs,
+    struct TableEntry *aTheirs, int nTheirs,
+    char ***pazRebuild, int *pnRebuild, char **pzRefuse);
 
 int mergeCatalogPass1(
   sqlite3 *db,

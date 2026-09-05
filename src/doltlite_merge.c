@@ -1073,6 +1073,23 @@ int doltliteMergeCatalogs(
   }
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
+  if( totalConflicts==0 && pazRebuildVtabs ){
+    char *zRefuse = 0;
+    rc = mergeScheduleChangedDerivedShadows(db,
+        aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
+        pazRebuildVtabs, pnRebuildVtabs, &zRefuse);
+    if( rc==SQLITE_OK && zRefuse ){
+      if( pzErrMsg ){
+        sqlite3_free(*pzErrMsg);
+        *pzErrMsg = zRefuse;
+      }else{
+        sqlite3_free(zRefuse);
+      }
+      rc = SQLITE_ERROR;
+    }
+  }
+  if( rc!=SQLITE_OK ) goto merge_cleanup;
+
   /* Their schema would reinstall objects we deleted; drop those their
   ** side left alone. Tables/indexes are already excluded. A deletion
   ** racing their change keeps today's behaviour. */
