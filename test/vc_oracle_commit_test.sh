@@ -666,6 +666,62 @@ SELECT dolt_merge('feature');
 SELECT dolt_commit('-m', 'force-commit-with-conflict');
 "
 
+oracle_error "commit_missing_fk_parent_empty" "
+CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+SELECT dolt_add('children');
+SELECT dolt_commit('-m', 'child only');
+"
+
+oracle_error "commit_missing_fk_parent_populated" "
+CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+INSERT INTO parents VALUES(1);
+INSERT INTO children VALUES(1,1);
+SELECT dolt_add('children');
+SELECT dolt_commit('-m', 'child only');
+"
+
+oracle "commit_fk_child_then_parent" "
+CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+SELECT dolt_add('children');
+SELECT dolt_add('parents');
+SELECT dolt_commit('-m', 'both');
+"
+
+oracle "commit_fk_parent_then_child" "
+CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+SELECT dolt_add('parents');
+SELECT dolt_add('children');
+SELECT dolt_commit('-m', 'both');
+"
+
+oracle "commit_missing_fk_parent_force" "
+CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+INSERT INTO parents VALUES(1);
+INSERT INTO children VALUES(1,1);
+SELECT dolt_add('children');
+SELECT dolt_commit('--force', '-m', 'child only');
+"
+
+oracle_error "commit_missing_fk_renamed_parent" "
+CREATE TABLE parents(id INTEGER PRIMARY KEY);
+CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
+  FOREIGN KEY(parent_id) REFERENCES parents(id));
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE parents RENAME TO parents_new;
+SELECT dolt_add('parents_new');
+SELECT dolt_commit('-m', 'rename parent only');
+"
+
 echo "--- commit -a leaves a working-tree rename in the working tree ---"
 
 COMMIT_A_RENAME_SEED="
