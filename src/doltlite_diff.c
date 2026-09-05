@@ -11,6 +11,7 @@
 
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "prolly_record.h"
 #include "doltlite_name_index.h"
 #include <stddef.h>
 #include <string.h>
@@ -34,41 +35,130 @@ static int schemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
   return 0;
 }
 
+/* View and trigger rows are compared by content. The master keys its rows by
+** rowid, and a rowid is a position in the canonical row order, so adding or
+** dropping a table or index moves every view and trigger behind it; a rowid
+** diff would report them changed when nothing about them changed. */
+static int masterRowCanonical(const u8 *pRec, int nRec, char **pzOut){
+  DoltliteRecordInfo ri;
+  char *zType = 0, *zName = 0, *zTbl = 0, *zSql = 0;
+  int rc;
+  *pzOut = 0;
+  if( !pRec || nRec<=0 ) return SQLITE_OK;
+  doltliteParseRecord(pRec, nRec, &ri);
+  if( ri.nField<5 ) return SQLITE_OK;
+  rc = dlRecordTextField(pRec, nRec, &ri, 0, &zType);
+  if( rc==SQLITE_OK ) rc = dlRecordTextField(pRec, nRec, &ri, 1, &zName);
+  if( rc==SQLITE_OK ) rc = dlRecordTextField(pRec, nRec, &ri, 2, &zTbl);
+  if( rc==SQLITE_OK ) rc = dlRecordTextField(pRec, nRec, &ri, 4, &zSql);
+  if( rc==SQLITE_OK && zType
+   && (strcmp(zType, "view")==0 || strcmp(zType, "trigger")==0) ){
+    *pzOut = sqlite3_mprintf("%s\x01%s\x01%s\x01%s", zType,
+                             zName ? zName : "", zTbl ? zTbl : "",
+                             zSql ? zSql : "");
+    if( !*pzOut ) rc = SQLITE_NOMEM;
+  }
+  sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTbl); sqlite3_free(zSql);
+  return rc;
+}
+
+static int masterCollectViewTriggerRows(
+  sqlite3 *db,
+  const ProllyHash *pRoot,
+  u8 flags,
+  char ***pazRows,
+  int *pnRows
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyCursor cur;
+  char **az = 0;
+  int n = 0, nAlloc = 0;
+  int rc, res;
+  *pazRows = 0;
+  *pnRows = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
+  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal; int nVal; char *z = 0;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    rc = masterRowCanonical(pVal, nVal, &z);
+    if( rc!=SQLITE_OK ) break;
+    if( z ){
+      if( n>=nAlloc ){
+        int nNew = nAlloc ? nAlloc*2 : 8;
+        char **aNew = sqlite3_realloc(az, nNew*(int)sizeof(char*));
+        if( !aNew ){ sqlite3_free(z); rc = SQLITE_NOMEM; break; }
+        az = aNew; nAlloc = nNew;
+      }
+      az[n++] = z;
+    }
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) break;
+  }
+  prollyCursorClose(&cur);
+  if( rc!=SQLITE_OK ){
+    int i;
+    for(i=0; i<n; i++) sqlite3_free(az[i]);
+    sqlite3_free(az);
+    return rc;
+  }
+  *pazRows = az;
+  *pnRows = n;
+  return SQLITE_OK;
+}
+
+static int masterRowStrCmp(const void *a, const void *b){
+  return strcmp(*(char*const*)a, *(char*const*)b);
+}
+
+int doltliteMasterViewTriggerRowsDiffer(
+  sqlite3 *db,
+  const ProllyHash *pOldRoot,
+  const ProllyHash *pNewRoot,
+  u8 flags,
+  int *pDiffer
+){
+  char **azOld = 0, **azNew = 0;
+  int nOld = 0, nNew = 0, i, rc;
+  *pDiffer = 0;
+  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return SQLITE_OK;
+  rc = sqlite3FaultSim(957) ? SQLITE_IOERR
+     : masterCollectViewTriggerRows(db, pOldRoot, flags, &azOld, &nOld);
+  if( rc==SQLITE_OK ){
+    rc = masterCollectViewTriggerRows(db, pNewRoot, flags, &azNew, &nNew);
+  }
+  if( rc==SQLITE_OK ){
+    if( nOld!=nNew ){
+      *pDiffer = 1;
+    }else if( nOld>0 ){
+      qsort(azOld, nOld, sizeof(char*), masterRowStrCmp);
+      qsort(azNew, nNew, sizeof(char*), masterRowStrCmp);
+      for(i=0; i<nOld; i++){
+        if( strcmp(azOld[i], azNew[i])!=0 ){ *pDiffer = 1; break; }
+      }
+    }
+  }
+  for(i=0; i<nOld; i++) sqlite3_free(azOld[i]);
+  for(i=0; i<nNew; i++) sqlite3_free(azNew[i]);
+  sqlite3_free(azOld);
+  sqlite3_free(azNew);
+  return rc;
+}
+
 static int schemaHasViewOrTriggerDiff(sqlite3 *db,
                                       const ProllyHash *pOldRoot,
                                       const ProllyHash *pNewRoot,
                                       u8 flags,
                                       int *pFound){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  ProllyDiffIter iter;
-  ProllyDiffChange *pChange = 0;
-  int rc;
-  *pFound = 0;
-  if( !cs || !pCache ) return SQLITE_ERROR;
-  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return SQLITE_OK;
-  memset(&iter, 0, sizeof(iter));
-  rc = sqlite3FaultSim(957) ? SQLITE_IOERR :
-       prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags,
-                          flags);
-  if( rc!=SQLITE_OK ){
-    prollyDiffIterClose(&iter);
-    return rc;
-  }
-  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW ){
-    if( !pChange ){
-      rc = SQLITE_CORRUPT;
-      break;
-    }
-    if( schemaRecordIsViewOrTrigger(pChange->pNewVal, pChange->nNewVal)
-     || schemaRecordIsViewOrTrigger(pChange->pOldVal, pChange->nOldVal) ){
-      *pFound = 1;
-      rc = SQLITE_OK;
-      break;
-    }
-  }
-  prollyDiffIterClose(&iter);
-  return rc==SQLITE_DONE ? SQLITE_OK : rc;
+  return doltliteMasterViewTriggerRowsDiffer(db, pOldRoot, pNewRoot, flags,
+                                             pFound);
 }
 
 static int schemaHasAnyViewOrTrigger(sqlite3 *db,

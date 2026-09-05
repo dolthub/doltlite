@@ -265,6 +265,39 @@ run_test "diff_empty_table_working" \
   "SELECT data_change || '|' || schema_change FROM dolt_diff WHERE commit_hash='WORKING' AND table_name='empty_working';" \
   "0|1" "$DB18"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
+DB19=/tmp/test_diff19_$$.db; rm -f "$DB19"
+$DOLTLITE "$DB19" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);
+INSERT INTO t VALUES(1,1);
+CREATE VIEW v1 AS SELECT id FROM t;
+SELECT dolt_commit('-Am','c1');
+CREATE TABLE newt(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','c2 table only');
+CREATE INDEX tx ON t(x);
+SELECT dolt_commit('-Am','c3 index only');
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;
+SELECT dolt_commit('-Am','c4 trigger');
+DROP VIEW v1;
+CREATE VIEW v1 AS SELECT id, x FROM t;
+SELECT dolt_commit('-Am','c5 view changed');
+SQL
+run_test "diff_table_added_does_not_list_untouched_view" \
+  "SELECT group_concat(DISTINCT table_name) FROM dolt_diff WHERE commit_hash=dolt_hashof('HEAD~3');" \
+  "newt" "$DB19"
+run_test "diff_index_added_does_not_list_untouched_view" \
+  "SELECT group_concat(DISTINCT table_name) FROM dolt_diff WHERE commit_hash=dolt_hashof('HEAD~2');" \
+  "t" "$DB19"
+run_test "diff_trigger_added_lists_dolt_schemas" \
+  "SELECT group_concat(DISTINCT table_name) FROM dolt_diff WHERE commit_hash=dolt_hashof('HEAD~1');" \
+  "dolt_schemas" "$DB19"
+run_test "diff_view_changed_lists_dolt_schemas" \
+  "SELECT group_concat(DISTINCT table_name) FROM dolt_diff WHERE commit_hash=dolt_hashof('HEAD');" \
+  "dolt_schemas" "$DB19"
+echo "CREATE TABLE later(id INTEGER PRIMARY KEY);" | $DOLTLITE "$DB19" > /dev/null 2>&1
+run_test "status_table_added_does_not_list_untouched_view" \
+  "SELECT group_concat(table_name||'|'||staged||'|'||status) FROM dolt_status;" \
+  "later|0|new table" "$DB19"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19"
 
 dltest_finish

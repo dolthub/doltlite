@@ -127,6 +127,50 @@ echo ""
 
 echo "--- indexes ---"
 
+oracle_status "view_committed_then_table_added_unstaged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE VIEW v1 AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'base');
+CREATE TABLE newt(id INTEGER PRIMARY KEY);
+"
+
+oracle_status "view_committed_then_table_added_staged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE VIEW v1 AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'base');
+CREATE TABLE newt(id INTEGER PRIMARY KEY);
+SELECT dolt_add('newt');
+"
+
+oracle_status "view_committed_then_index_added_unstaged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE VIEW v1 AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'base');
+CREATE INDEX idx_t_v ON t(v);
+"
+
+oracle_status "view_staged_then_table_added_unstaged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+CREATE VIEW v1 AS SELECT id FROM t;
+SELECT dolt_add('-A');
+CREATE TABLE newt(id INTEGER PRIMARY KEY);
+"
+
+oracle_status "view_changed_beside_table_added" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE VIEW v1 AS SELECT id FROM t;
+SELECT dolt_commit('-Am', 'base');
+CREATE TABLE newt(id INTEGER PRIMARY KEY);
+DROP VIEW v1;
+CREATE VIEW v1 AS SELECT id, v FROM t;
+"
+
 oracle_status "create_index_unstaged" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
