@@ -138,4 +138,59 @@ run_test_match "text_pk_insert_rowid_rejected_after_reopen" "
 INSERT INTO t(rowid, k, v) VALUES(99, 'b', 2);
 " "has no column named rowid" "$DB"
 
+rm -f "$DB" "$DB2"
+dltest_run_sql "
+CREATE TABLE text_pk(k TEXT PRIMARY KEY, v INT);
+INSERT INTO text_pk VALUES('a', 1), ('b', 2);
+CREATE TABLE int_pk(k INT PRIMARY KEY, v INT);
+INSERT INTO int_pk VALUES(5, 3);
+CREATE TABLE composite_pk(a TEXT, b TEXT, v INT, PRIMARY KEY(a, b));
+INSERT INTO composite_pk VALUES('x', 'y', 4);
+CREATE TABLE desc_pk(k INTEGER PRIMARY KEY DESC, v INT);
+INSERT INTO desc_pk VALUES(6, 5);
+CREATE TABLE keyless(v INT);
+INSERT INTO keyless(rowid, v) VALUES(20, 6);
+CREATE TABLE unique_only(k TEXT UNIQUE, v INT);
+INSERT INTO unique_only(rowid, k, v) VALUES(30, 'u', 7);
+" "$DB" >/dev/null
+dump=$("$DOLTLITE" "$DB" ".dump --preserve-rowids")
+bad_dump=0
+for table_name in text_pk int_pk composite_pk desc_pk; do
+  if grep -q "INSERT INTO $table_name(rowid," <<<"$dump"; then
+    bad_dump=1
+  fi
+done
+for table_name in keyless unique_only; do
+  if ! grep -q "INSERT INTO $table_name(rowid," <<<"$dump"; then
+    bad_dump=1
+  fi
+done
+if [ "$bad_dump" -eq 0 ]; then
+  dltest_pass
+else
+  dltest_fail "dump_preserve_rowids_shape" "  got:\n$dump"
+fi
+
+restore_output=$(printf '%s\n' "$dump" | "$DOLTLITE" -bail "$DB2" 2>&1)
+restore_rc=$?
+if [ "$restore_rc" -ne 0 ]; then
+  dltest_fail "dump_preserve_rowids_restore" "  got:\n$restore_output"
+else
+  run_test "dump_preserve_rowids_restore" "
+SELECT group_concat(k || ':' || v, ',') FROM text_pk;
+SELECT k, v FROM int_pk;
+SELECT a, b, v FROM composite_pk;
+SELECT k, v FROM desc_pk;
+SELECT rowid, v FROM keyless;
+SELECT rowid, k, v FROM unique_only;
+PRAGMA integrity_check;
+" "a:1,b:2
+5|3
+x|y|4
+6|5
+20|6
+30|u|7
+ok" "$DB2"
+fi
+
 dltest_finish
