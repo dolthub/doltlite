@@ -65,6 +65,7 @@ doltlite_savepoint.sh
 doltlite_rollback_durability.sh
 doltlite_delete_or.sh
 doltlite_autoinc_schema.sh
+doltlite_autoinc_sequence_reset.sh
 doltlite_rowid_identity.sh
 doltlite_pk_clustered_notnull.sh
 doltlite_pk_clustered_rowid_readonly.sh

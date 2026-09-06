@@ -590,6 +590,23 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
 void sqlite3AutoincrementEnd(Parse *pParse){
   if( pParse->usesAinc ) autoIncrementEnd(pParse);
 }
+
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+/* Schema index when pTab is a prolly-backed sqlite_sequence whose rows a
+** top-level statement is writing directly, else -1. */
+int sqlite3DoltliteSeqTableDb(Parse *pParse, Table *pTab){
+  sqlite3 *db = pParse->db;
+  int iDb;
+  if( pParse->nested || pTab!=pTab->pSchema->pSeqTab || pTab->nCol!=2 ){
+    return -1;
+  }
+  iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+  if( iDb==1 || !db->aDb[iDb].pBt || sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+    return -1;
+  }
+  return iDb;
+}
+#endif
 #else
 /*
 ** If SQLITE_OMIT_AUTOINCREMENT is defined, then the three routines
@@ -2903,6 +2920,15 @@ void sqlite3CompleteInsertion(
     sqlite3VdbeAppendP4(v, pTab, P4_TABLE);
   }
   sqlite3VdbeChangeP5(v, pik_flags);
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+  {
+    int iSeqDb = sqlite3DoltliteSeqTableDb(pParse, pTab);
+    if( iSeqDb>=0 ){
+      sqlite3VdbeAddOp3(v, OP_DoltliteSeqSet, regNewData+2, regNewData+1,
+                        iSeqDb);
+    }
+  }
+#endif
 }
 
 /*

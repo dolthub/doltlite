@@ -484,6 +484,9 @@ void sqlite3DeleteFrom(
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
    && db->xPreUpdateCallback==0
 #endif
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+   && sqlite3DoltliteSeqTableDb(pParse, pTab)<0
+#endif
   ){
     assert( !isView );
     sqlite3TableLock(pParse, iDb, pTab->tnum, 1, pTab->zName);
@@ -887,6 +890,17 @@ void sqlite3GenerateRowDelete(
   if( !IsView(pTab) ){
     u8 p5 = 0;
     sqlite3GenerateRowIndexDelete(pParse, pTab, iDataCur, iIdxCur,0,iIdxNoSeek);
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+    {
+      int iSeqDb = sqlite3DoltliteSeqTableDb(pParse, pTab);
+      if( iSeqDb>=0 ){
+        int regSeqName = sqlite3GetTempReg(pParse);
+        sqlite3ExprCodeGetColumnOfTable(v, pTab, iDataCur, 0, regSeqName);
+        sqlite3VdbeAddOp3(v, OP_DoltliteSeqDrop, regSeqName, 0, iSeqDb);
+        sqlite3ReleaseTempReg(pParse, regSeqName);
+      }
+    }
+#endif
     sqlite3VdbeAddOp2(v, OP_Delete, iDataCur, (count?OPFLAG_NCHANGE:0));
     if( pParse->nested==0 || 0==sqlite3_stricmp(pTab->zName, "sqlite_stat1") ){
       sqlite3VdbeAppendP4(v, (char*)pTab, P4_TABLE);
