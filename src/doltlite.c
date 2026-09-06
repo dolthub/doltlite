@@ -3,30 +3,6 @@
 #include "sqliteInt.h"
 #include "doltlite_internal.h"
 
-extern int doltliteLogRegister(sqlite3 *db);
-extern int doltliteCommitAncestorsRegister(sqlite3 *db);
-extern int doltliteStatusRegister(sqlite3 *db);
-extern int doltliteMergeStatusRegister(sqlite3 *db);
-extern int doltliteDiffRegister(sqlite3 *db);
-extern int doltliteSchemasRegister(sqlite3 *db);
-extern int doltliteDiffStatRegister(sqlite3 *db);
-extern int doltliteBranchRegister(sqlite3 *db);
-extern int doltliteConflictsRegister(sqlite3 *db);
-extern int doltliteTagRegister(sqlite3 *db);
-extern int doltliteGcRegister(sqlite3 *db);
-extern int doltliteRegisterWorkspaceTables(sqlite3 *db);
-extern int doltliteAncestorRegister(sqlite3 *db);
-extern int doltliteRegisterBlameTables(sqlite3 *db);
-extern int doltliteSchemaDiffRegister(sqlite3 *db);
-extern int doltlitePatchRegister(sqlite3 *db);
-extern int doltliteRemoteSqlRegister(sqlite3 *db);
-extern int doltliteHashofRegister(sqlite3 *db);
-extern int doltliteConstraintViolationsRegister(sqlite3 *db);
-extern int doltliteVerifyConstraintsRegister(sqlite3 *db);
-extern int doltliteDocsRegister(sqlite3 *db);
-extern int doltliteTestsRegister(sqlite3 *db);
-extern int doltliteIgnoreRegister(sqlite3 *db);
-
 int doltliteRegister(sqlite3 *db){
   int rc;
   if( (rc = doltliteCommitCmdRegister(db))!=SQLITE_OK ) return rc;

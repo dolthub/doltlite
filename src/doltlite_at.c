@@ -319,56 +319,13 @@ static void atCursorReset(AtCursor *c){
   c->zCommitRef = 0;
 }
 
-static int atRowMatchesUpper(AtCursor *c){
-  if( !c->pkRange.hasPkHi ) return 1;
-  return doltlitePkRangeMatchesUpper(
-      &c->pkRange, prollyCursorIntKey(&c->common.tblCur));
-}
-
 static int atConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  DoltliteVtabCommon *v;
-  const char *zMod = argv[0];
-  size_t nPrefix = strlen("dolt_at_");
-  char *zSchema;
-  int rc;
   (void)pAux;
-
-  v = sqlite3_malloc(sizeof(AtVtab));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(AtVtab));
-  v->db = db;
-
-  if( zMod && strncmp(zMod, "dolt_at_", nPrefix)==0 ){
-    v->zTableName = sqlite3_mprintf("%s", zMod + nPrefix);
-  }else if( argc > 3 ){
-    v->zTableName = sqlite3_mprintf("%s", argv[3]);
-  }else{
-    v->zTableName = sqlite3_mprintf("");
-  }
-  if( !v->zTableName ){
-    doltliteVtabCommonDisconnect(&v->base);
-    return SQLITE_NOMEM;
-  }
-
-  rc = doltliteLoadHistoricalTableColumns(db, v->zTableName,
-                                           &v->cols, pzErr);
-  if( rc==SQLITE_OK ){
-    zSchema = atBuildSchema(&v->cols);
-    if( !zSchema ){
-      rc = SQLITE_NOMEM;
-    }else{
-      rc = sqlite3_declare_vtab(db, zSchema);
-      sqlite3_free(zSchema);
-    }
-  }
-  if( rc!=SQLITE_OK ){
-    doltliteVtabCommonDisconnect(&v->base);
-    return rc;
-  }
-  sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
-  *ppVtab = &v->base;
-  return SQLITE_OK;
+  return doltliteVtabConnectHistoricalTable(db, argc, argv,
+                                            "dolt_at_",
+                                            sizeof(AtVtab), atBuildSchema,
+                                            ppVtab, pzErr);
 }
 
 static int atOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
@@ -569,7 +526,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
         return rc;
       }
     }
-    if( !prollyCursorIsValid(&c->common.tblCur) || !atRowMatchesUpper(c) ){
+    if( !prollyCursorIsValid(&c->common.tblCur) || !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
       prollyCursorClose(&c->common.tblCur);
       return SQLITE_OK;
     }
@@ -587,7 +544,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
-  if( seekable && c->pkRange.hasPkHi && !atRowMatchesUpper(c) ){
+  if( seekable && c->pkRange.hasPkHi && !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
@@ -627,7 +584,7 @@ static int atNext(sqlite3_vtab_cursor *cur){
     return SQLITE_OK;
   }
   if( (c->idxNum & AT_IDX_PK_ANY) && c->common.rootIntKey
-   && !atRowMatchesUpper(c) ){
+   && !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
     c->common.hasRow = 0;

@@ -633,6 +633,29 @@ int doltliteCmdSourceResultError(
   return 1;
 }
 
+void doltliteCmdSourceResultErrorOrCode(
+  sqlite3_context *ctx,
+  ChunkStore *cs,
+  int rc
+){
+  if( !doltliteCmdSourceResultError(ctx, cs, &rc) ){
+    sqlite3_result_error_code(ctx, rc);
+  }
+}
+
+void doltliteCmdReportInvalidCommitHash(
+  sqlite3_context *ctx,
+  ChunkStore *cs,
+  int rc
+){
+  if( doltliteCmdSourceResultError(ctx, cs, &rc) ) return;
+  if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR ){
+    sqlite3_result_error(ctx, "invalid commit hash", -1);
+  }else{
+    sqlite3_result_error_code(ctx, rc);
+  }
+}
+
 int doltliteVtabMapChunkSourceError(
   sqlite3_vtab *pVtab,
   sqlite3 *db,
@@ -683,9 +706,7 @@ int doltliteCmdReportLoadParentedCommitError(
   doltliteCommitClear(pTarget);
   doltliteCommitClear(pParent);
   doltliteCommitClear(pOurs);
-  if( !doltliteCmdSourceResultError(ctx, cs, &rc) ){
-    sqlite3_result_error_code(ctx, rc);
-  }
+  doltliteCmdSourceResultErrorOrCode(ctx, cs, rc);
   return 1;
 }
 

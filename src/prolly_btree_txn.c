@@ -15,9 +15,7 @@ static void btreeTakeCatalogCache(Btree *p, u8 **ppData, int nData,
   }
 }
 
-static int findSavepointTableIndexInArray(
-  SavepointTableEntry*, int, Pgno
-);
+static int findITableIndex(const void *a, int n, int stride, Pgno iTable);
 
 void freeSavepointTables(struct SavepointTableState *pState){
   sqlite3_free(pState->zRebaseOrigBranch);
@@ -314,8 +312,8 @@ static int inheritPendingSnapshots(
   for(i=0; i<pChild->nPendingSnapshot; i++){
     SavepointPendingSnapshot *pSnap = &pChild->aPendingSnapshot[i];
     if( !pSnap->pPending ) continue;
-    if( findSavepointTableIndexInArray(pParent->aTables, pParent->nTables,
-                                       pSnap->iTable) < 0 ){
+    if( findITableIndex(pParent->aTables, pParent->nTables,
+                        (int)sizeof(pParent->aTables[0]), pSnap->iTable) < 0 ){
       prollyMutMapFree(pSnap->pPending);
       sqlite3_free(pSnap->pPending);
       pSnap->pPending = 0;
@@ -395,7 +393,8 @@ int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
       int rc = ensureSavepointTablesCaptured(pBtree, pState);
       if( rc!=SQLITE_OK ) return rc;
     }
-    j = findSavepointTableIndexInArray(pState->aTables, pState->nTables, iTable);
+    j = findITableIndex(pState->aTables, pState->nTables,
+                        (int)sizeof(pState->aTables[0]), iTable);
     if( j < 0 ) continue;
     if( findPendingSnapshotIndex(pState, iTable) >= 0 ) return SQLITE_OK;
     {
@@ -416,38 +415,19 @@ int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
   return SQLITE_OK;
 }
 
-static int findTableIndexInArray(
-  struct TableEntry *aTables,
-  int nTables,
+static int findITableIndex(
+  const void *a,
+  int n,
+  int stride,
   Pgno iTable
 ){
+  const unsigned char *p = (const unsigned char*)a;
   int lo = 0;
-  int hi = nTables;
+  int hi = n;
+  if( !a || n<=0 || stride<=0 ) return -1;
   while( lo < hi ){
     int mid = lo + ((hi - lo) / 2);
-    Pgno midTable = aTables[mid].iTable;
-    if( midTable==iTable ){
-      return mid;
-    }
-    if( midTable < iTable ){
-      lo = mid + 1;
-    }else{
-      hi = mid;
-    }
-  }
-  return -1;
-}
-
-static int findSavepointTableIndexInArray(
-  SavepointTableEntry *aTables,
-  int nTables,
-  Pgno iTable
-){
-  int lo = 0;
-  int hi = nTables;
-  while( lo < hi ){
-    int mid = lo + ((hi - lo) / 2);
-    Pgno midTable = aTables[mid].iTable;
+    Pgno midTable = *(const Pgno*)(p + (size_t)mid * (size_t)stride);
     if( midTable==iTable ){
       return mid;
     }
@@ -489,8 +469,9 @@ static int restoreTablesFromSavepoint(
     if( !pMap ){
       continue;
     }
-    iSaved = findSavepointTableIndexInArray(
-        pState->aTables, pState->nTables, aCurrent[k].iTable);
+    iSaved = findITableIndex(
+        pState->aTables, pState->nTables,
+        (int)sizeof(pState->aTables[0]), aCurrent[k].iTable);
     if( iSaved>=0 ){
       pState->aTables[iSaved].pPending = pMap;
     }else{
@@ -568,8 +549,9 @@ static int restoreTablesFromSavepoint(
 
   if( pState->nTables>0 ){
     for(k=0; k<pState->nTables; k++){
-      int idx = findTableIndexInArray(
-          pBtree->cat.a, pBtree->cat.n, pState->aTables[k].iTable);
+      int idx = findITableIndex(
+          pBtree->cat.a, pBtree->cat.n,
+          (int)sizeof(pBtree->cat.a[0]), pState->aTables[k].iTable);
       if( idx < 0 ){
         return SQLITE_CORRUPT;
       }

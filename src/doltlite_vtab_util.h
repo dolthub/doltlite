@@ -86,6 +86,13 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
   return SQLITE_OK;
 }
 
+static SQLITE_INLINE int doltlitePkRangeMatchesCursorUpper(
+  const DoltlitePkRange *pRange,
+  ProllyCursor *pCur
+){
+  return doltlitePkRangeMatchesUpper(pRange, prollyCursorIntKey(pCur));
+}
+
 static SQLITE_INLINE int doltliteVtabCommonDisconnect(
   sqlite3_vtab *pVtab
 ){

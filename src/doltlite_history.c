@@ -64,12 +64,6 @@ static void htCursorReset(HistCursor *c){
   doltliteCommitQueueClear(&c->queue);
 }
 
-static int htRowMatchesUpper(HistCursor *c){
-  if( !c->pkRange.hasPkHi ) return 1;
-  return doltlitePkRangeMatchesUpper(
-      &c->pkRange, prollyCursorIntKey(&c->common.tblCur));
-}
-
 static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     const char *zTableName, const ProllyHash *pCommitHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -155,7 +149,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
         return rc;
       }
     }
-    if( !prollyCursorIsValid(&c->common.tblCur) || !htRowMatchesUpper(c) ){
+    if( !prollyCursorIsValid(&c->common.tblCur) || !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
       prollyCursorClose(&c->common.tblCur);
       return SQLITE_OK;
     }
@@ -172,7 +166,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
-  if( seekable && c->pkRange.hasPkHi && !htRowMatchesUpper(c) ){
+  if( seekable && c->pkRange.hasPkHi && !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
@@ -196,7 +190,7 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
         return rc;
       }
       if( prollyCursorIsValid(&c->common.tblCur)
-       && (!c->common.rootIntKey || htRowMatchesUpper(c)) ){
+       && (!c->common.rootIntKey || doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur)) ){
         return doltliteVtabCommonCaptureRowSide(&c->common, db, zTableName,
                                                 &c->side);
       }

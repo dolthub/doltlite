@@ -322,7 +322,4 @@ int origCursorCursorIsValidNNVt(BtCursor *pCur){
   return origBtreeCursorIsValidNN(pCur->pOrigCursor);
 }
 
-extern int doltliteRegister(sqlite3 *db);
-
-
 #endif /* DOLTLITE_PROLLY */

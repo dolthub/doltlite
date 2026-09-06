@@ -28,14 +28,6 @@ static int skGetVarint32(const u8 *p, u32 *pVal){
   }
 }
 
-static u32 serialTypeLen(u32 serialType){
-  static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
-  if( serialType <= 6 ) return aLen[serialType];
-  if( serialType == 7 ) return 8;
-  if( serialType >= 12 ) return (serialType - 12) / 2;
-  return 0;
-}
-
 static u8 serialTypeTag(u32 serialType){
   if( serialType == 0 ) return SORTKEY_NULL;
   if( serialType <= 6 || serialType == 8 || serialType == 9 ){
@@ -307,7 +299,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
     if( nMaxFields > 0 && nField >= nMaxFields ) break;
 
     hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
-    fieldLen = serialTypeLen(serialType);
+    fieldLen = (u32)dlSerialTypeLen(serialType);
 
     if( fieldLen > (u32)nRec - dataOff ) return -1;
     pField = pRec + dataOff;
@@ -377,7 +369,7 @@ static int sortKeyFromSingleBinaryFieldFast(
   hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
   if( nKeyField<=0 && hdrOff<hdrSize ) return SQLITE_NOTFOUND;
 
-  fieldLen = serialTypeLen(serialType);
+  fieldLen = (u32)dlSerialTypeLen(serialType);
   dataOff = hdrSize;
   if( fieldLen > (u32)nRec - dataOff ) return SQLITE_CORRUPT;
 

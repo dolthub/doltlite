@@ -469,7 +469,6 @@ int mutMapShouldDrain(BtCursor *pCur);
 int prollyBtreeCheckMaxPageCount(Btree *p);
 int cacheCursorPayloadZeroTail(BtCursor *pCur, const u8 *pData,
                                int nData, i64 nZeroTail);
-u32 prollySerialTypeLen(u32 serialType);
 int currentMutMapEntry(BtCursor *pCur, ProllyMutMapEntry **ppEntry);
 void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx);
 const char *findTableNumberName(sqlite3 *db, Pgno iTable);

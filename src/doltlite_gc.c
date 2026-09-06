@@ -15,7 +15,7 @@
 #include <unistd.h>
 #endif
 
-extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
+#include "chunk_store_int.h"
 #include "doltlite_internal.h"
 
 typedef struct GcQueue GcQueue;

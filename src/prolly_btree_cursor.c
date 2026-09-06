@@ -953,7 +953,7 @@ int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
   if( unlikely(typeRowid<1 || typeRowid>9 || typeRowid==7) ){
     goto prolly_idx_rowid_corruption;
   }
-  lenRowid = prollySerialTypeLen(typeRowid);
+  lenRowid = (u32)dlSerialTypeLen(typeRowid);
   testcase( (u32)nRec==szHdr+lenRowid );
   if( unlikely((u32)nRec<szHdr+lenRowid) ){
     goto prolly_idx_rowid_corruption;

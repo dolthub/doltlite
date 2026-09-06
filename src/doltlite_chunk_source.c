@@ -12,6 +12,12 @@
 #include "doltlite_remote.h"
 #endif
 
+static int csHasOrigin(ChunkStore *cs){
+  const char *zUrl = 0;
+  return chunkStoreFindRemote(cs, "origin", &zUrl)==SQLITE_OK
+      && zUrl && zUrl[0];
+}
+
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
 
 #define CS_SOURCE_CACHE_BUCKETS 256
@@ -48,16 +54,10 @@ struct DoltliteChunkSourceState {
   char *zErr;
 };
 
-static int csSourceHasOrigin(ChunkStore *cs){
-  const char *zUrl = 0;
-  return chunkStoreFindRemote(cs, "origin", &zUrl)==SQLITE_OK
-      && zUrl && zUrl[0];
-}
-
 static doltlite_chunk_source *csSourceActive(DoltliteChunkSourceState *p){
   if( p->pHostSource ) return p->pHostSource;
   if( p->originEnabled
-   && csSourceHasOrigin((ChunkStore*)p->originSource.pCtx) ){
+   && csHasOrigin((ChunkStore*)p->originSource.pCtx) ){
     return &p->originSource;
   }
   return 0;
@@ -495,7 +495,7 @@ int chunkStoreSourceGet(
   int sourceRc;
   int rc;
   if( !p ){
-    if( csSourceHasOrigin(cs) ) return csSourceSetModeError(cs, pHash);
+    if( csHasOrigin(cs) ) return csSourceSetModeError(cs, pHash);
     return SQLITE_NOTFOUND;
   }
   csSourceClearError(p);
@@ -516,7 +516,7 @@ int chunkStoreSourceGet(
   }
   pSource = csSourceActive(p);
   if( !pSource ){
-    if( csSourceHasOrigin(cs) && !p->originEnabled ){
+    if( csHasOrigin(cs) && !p->originEnabled ){
       return csSourceSetModeError(cs, pHash);
     }
     return SQLITE_NOTFOUND;
@@ -759,7 +759,7 @@ int doltliteOriginSourceEnable(
 
 int chunkStoreOriginSourceEnabled(ChunkStore *cs){
   DoltliteChunkSourceState *p = cs->pChunkSource;
-  return p && p->originEnabled && csSourceHasOrigin(cs);
+  return p && p->originEnabled && csHasOrigin(cs);
 }
 
 static void csSourceDropHost(ChunkStore *cs){
@@ -980,12 +980,6 @@ static int csDisabledEnsureState(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-static int csDisabledHasOrigin(ChunkStore *cs){
-  const char *zUrl = 0;
-  return chunkStoreFindRemote(cs, "origin", &zUrl)==SQLITE_OK
-      && zUrl && zUrl[0];
-}
-
 static int csDisabledSetHashError(
   ChunkStore *cs,
   const ProllyHash *pHash,
@@ -1024,7 +1018,7 @@ int chunkStoreSourceGet(ChunkStore *cs, const ProllyHash *pHash,
                         u8 **ppData, int *pnData){
   *ppData = 0;
   *pnData = 0;
-  if( !csDisabledHasOrigin(cs) ) return SQLITE_NOTFOUND;
+  if( !csHasOrigin(cs) ) return SQLITE_NOTFOUND;
   if( chunkStoreOriginSourceEnabled(cs) ){
     return csDisabledSetHashError(
         cs, pHash, "DoltLite chunk source support is disabled for",
@@ -1080,7 +1074,7 @@ int doltliteOriginSourceEnable(ChunkStore *cs, sqlite3 *db, int *pChanged){
 
 int chunkStoreOriginSourceEnabled(ChunkStore *cs){
   DoltliteChunkSourceState *p = cs->pChunkSource;
-  return p && p->originEnabled && csDisabledHasOrigin(cs);
+  return p && p->originEnabled && csHasOrigin(cs);
 }
 
 void chunkStoreSourceClose(ChunkStore *cs){

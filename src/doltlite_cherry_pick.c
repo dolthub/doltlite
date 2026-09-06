@@ -396,9 +396,7 @@ static void doltliteCherryPickFunc(
     rc = mergeAbortInPlace(db);
     doltliteCmdArgsClear(&args);
     if( rc!=SQLITE_OK ){
-      if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-        sqlite3_result_error_code(context, rc);
-      }
+      doltliteCmdSourceResultErrorOrCode(context, cs, rc);
       return;
     }
     sqlite3_result_int(context, 0);
@@ -421,9 +419,7 @@ static void doltliteCherryPickFunc(
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      sqlite3_result_error_code(context, rc);
-    }
+    doltliteCmdSourceResultErrorOrCode(context, cs, rc);
     return;
   }
   if( dirty ){
@@ -434,13 +430,7 @@ static void doltliteCherryPickFunc(
 
   rc = doltliteResolveRef(db,zRef, &pickHash);
   if( rc!=SQLITE_OK ){
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR ){
-        sqlite3_result_error(context, "invalid commit hash", -1);
-      }else{
-        sqlite3_result_error_code(context, rc);
-      }
-    }
+    doltliteCmdReportInvalidCommitHash(context, cs, rc);
     return;
   }
   rc = doltliteLoadHeadAndParentedCommit(

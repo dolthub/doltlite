@@ -179,13 +179,7 @@ static void doltliteRevertFunc(
 
   rc = doltliteResolveRef(db,zRef, &revertHash);
   if( rc!=SQLITE_OK ){
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR ){
-        sqlite3_result_error(context, "invalid commit hash", -1);
-      }else{
-        sqlite3_result_error_code(context, rc);
-      }
-    }
+    doltliteCmdReportInvalidCommitHash(context, cs, rc);
     return;
   }
   rc = doltliteLoadHeadAndParentedCommit(
