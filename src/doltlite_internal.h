@@ -1093,6 +1093,7 @@ int mergeAbortInPlace(sqlite3 *db);
 int mergeFastForward(
   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
   const ProllyHash *pOurHead, const ProllyHash *pTheirHead,
+  const ProllyHash *pIgnored,
   int squash
 );
 int doltliteMergeRef(

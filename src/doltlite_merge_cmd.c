@@ -18,13 +18,224 @@
 #include <ctype.h>
 #include <time.h>
 
+static int mergeStoreCatalog(
+  sqlite3 *db,
+  struct TableEntry *aCatalog,
+  int nCatalog,
+  SchemaEntry *aSchema,
+  int nSchema,
+  ProllyHash *pHash
+){
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = doltliteSerializeCatalogEntriesForeignDomain(
+      db, aCatalog, nCatalog, aSchema, nSchema, &pData, &nData);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(doltliteGetChunkStore(db), pData, nData, pHash);
+  }
+  sqlite3_free(pData);
+  return rc;
+}
+
+static int mergeSplitWorkingCatalog(
+  sqlite3 *db,
+  const ProllyHash *pBase,
+  int bIgnoreListed,
+  ProllyHash *pTracked,
+  ProllyHash *pIgnored,
+  char **pzErr
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  struct TableEntry *aBase = 0, *aWorking = 0;
+  struct TableEntry *aTracked = 0, *aIgnored = 0;
+  SchemaEntry *aSchema = 0;
+  ProllyHash workingHash;
+  int nBase = 0, nWorking = 0, nSchema = 0;
+  int nTracked = 0, nIgnored = 0;
+  int i, j;
+  int rc;
+
+  memset(pIgnored, 0, sizeof(*pIgnored));
+  rc = doltliteFlushCatalogToHash(db, &workingHash);
+  if( rc!=SQLITE_OK ) return rc;
+  *pTracked = workingHash;
+  rc = doltliteLoadCatalog(db, pBase, &aBase, &nBase, 0);
+  if( rc==SQLITE_OK ){
+    rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+  }
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
+                               &aSchema, &nSchema);
+  }
+  if( rc!=SQLITE_OK ) goto split_done;
+  if( nWorking==0 ) goto split_done;
+  aTracked = sqlite3_malloc64((sqlite3_uint64)nWorking * sizeof(*aTracked));
+  aIgnored = sqlite3_malloc64((sqlite3_uint64)nWorking * sizeof(*aIgnored));
+  if( !aTracked || !aIgnored ){
+    rc = SQLITE_NOMEM;
+    goto split_done;
+  }
+  for(i=0; i<nWorking; i++){
+    const char *zOwner = aWorking[i].zName;
+    int ignored = 0;
+    if( aWorking[i].iTable==1 ){
+      aTracked[nTracked++] = aWorking[i];
+      aIgnored[nIgnored++] = aWorking[i];
+      continue;
+    }
+    if( !zOwner ){
+      for(j=0; j<nSchema; j++){
+        if( aSchema[j].iRootpage==aWorking[i].iTable
+         && aSchema[j].zType && strcmp(aSchema[j].zType, "index")==0 ){
+          zOwner = aSchema[j].zTblName;
+          break;
+        }
+      }
+    }
+    if( zOwner ){
+      int listed = doltliteFindTableByName(aBase, nBase, zOwner)!=0;
+      if( bIgnoreListed ){
+        ignored = listed;
+      }else if( !listed ){
+        rc = doltliteCheckIgnore(db, zOwner, &ignored, pzErr);
+        if( rc!=SQLITE_OK ) goto split_done;
+      }
+    }
+    if( ignored ) aIgnored[nIgnored++] = aWorking[i];
+    else aTracked[nTracked++] = aWorking[i];
+  }
+  if( nIgnored>1 ){
+    rc = mergeStoreCatalog(db, aTracked, nTracked, 0, 0, pTracked);
+    if( rc==SQLITE_OK ){
+      rc = mergeStoreCatalog(db, aIgnored, nIgnored, 0, 0, pIgnored);
+    }
+  }
+
+split_done:
+  sqlite3_free(aTracked);
+  sqlite3_free(aIgnored);
+  doltliteFreeCatalog(aBase, nBase);
+  doltliteFreeCatalog(aWorking, nWorking);
+  freeSchemaEntries(aSchema, nSchema);
+  return rc;
+}
+
+static int mergeWorkingCatalog(
+  sqlite3 *db,
+  const ProllyHash *pIgnored,
+  const ProllyHash *pTarget,
+  ProllyHash *pWorking,
+  char **pzErr
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  struct TableEntry *aIgnored = 0, *aTarget = 0;
+  SchemaEntry *aSchema = 0, *aTargetSchema = 0;
+  int nIgnored = 0, nTarget = 0, nSchema = 0, nTargetSchema = 0;
+  int i, j, nKeep = 0;
+  Pgno iNext = 2;
+  int rc;
+
+  *pWorking = *pTarget;
+  if( prollyHashIsEmpty(pIgnored) ) return SQLITE_OK;
+  rc = doltliteLoadCatalog(db, pIgnored, &aIgnored, &nIgnored, 0);
+  if( rc==SQLITE_OK ){
+    rc = doltliteLoadCatalog(db, pTarget, &aTarget, &nTarget, 0);
+  }
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pIgnored,
+                               &aSchema, &nSchema);
+  }
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pTarget,
+                               &aTargetSchema, &nTargetSchema);
+  }
+  if( rc!=SQLITE_OK ) goto working_done;
+  for(i=0; i<nSchema; i++){
+    if( aSchema[i].iRootpage<=1 || !aSchema[i].zType
+     || (strcmp(aSchema[i].zType, "table")!=0
+      && strcmp(aSchema[i].zType, "index")!=0) ){
+      clearSchemaEntry(&aSchema[i]);
+      continue;
+    }
+    for(j=0; j<nTargetSchema; j++){
+      if( aSchema[i].zName && aTargetSchema[j].zName
+       && sqlite3_stricmp(aSchema[i].zName, aTargetSchema[j].zName)==0 ){
+        *pzErr = sqlite3_mprintf("merge would overwrite ignored object: %s",
+                                 aSchema[i].zName);
+        rc = *pzErr ? SQLITE_ERROR : SQLITE_NOMEM;
+        goto working_done;
+      }
+    }
+    if( i!=nKeep ){
+      aSchema[nKeep] = aSchema[i];
+      memset(&aSchema[i], 0, sizeof(aSchema[i]));
+    }
+    nKeep++;
+  }
+  nSchema = nKeep;
+  for(i=0; i<nTarget; i++){
+    if( aTarget[i].iTable>=iNext ) iNext = aTarget[i].iTable+1;
+  }
+  for(i=0; i<nIgnored; i++){
+    if( aIgnored[i].iTable>=iNext ) iNext = aIgnored[i].iTable+1;
+  }
+  for(i=0; i<nIgnored; i++){
+    struct TableEntry *aNew;
+    Pgno iOld;
+    char *zName;
+    if( aIgnored[i].iTable<=1 ) continue;
+    zName = aIgnored[i].zName ? sqlite3_mprintf("%s", aIgnored[i].zName) : 0;
+    if( aIgnored[i].zName && !zName ){
+      rc = SQLITE_NOMEM;
+      goto working_done;
+    }
+    aNew = sqlite3_realloc64(aTarget,
+        ((sqlite3_uint64)nTarget+1) * sizeof(*aTarget));
+    if( !aNew ){
+      sqlite3_free(zName);
+      rc = SQLITE_NOMEM;
+      goto working_done;
+    }
+    aTarget = aNew;
+    aTarget[nTarget] = aIgnored[i];
+    aTarget[nTarget].zName = zName;
+    aTarget[nTarget++].iTable = iNext;
+    iOld = aIgnored[i].iTable;
+    /* Table and clustered primary-key rows share a number. */
+    for(j=0; j<nSchema; j++){
+      if( aSchema[j].iRootpage==iOld ) aSchema[j].iRootpage = iNext;
+    }
+    iNext++;
+  }
+  rc = mergeStoreCatalog(db, aTarget, nTarget, aSchema, nSchema, pWorking);
+
+working_done:
+  doltliteFreeCatalog(aIgnored, nIgnored);
+  doltliteFreeCatalog(aTarget, nTarget);
+  freeSchemaEntries(aSchema, nSchema);
+  freeSchemaEntries(aTargetSchema, nTargetSchema);
+  return rc;
+}
+
 int mergeAbortInPlace(sqlite3 *db){
-  ProllyHash headCatHash;
+  ProllyHash headCatHash, stagedHash, trackedHash, ignoredHash, workingHash;
+  DoltliteTxnState saved;
+  char *zErr = 0;
   int rc = doltliteGetHeadCatalogHash(db, &headCatHash);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteHardReset(db, &headCatHash);
+  rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteSetSessionStaged(db, &headCatHash);
+  doltliteGetSessionStaged(db, &stagedHash);
+  if( prollyHashIsEmpty(&stagedHash) ) stagedHash = headCatHash;
+  rc = mergeSplitWorkingCatalog(db, &stagedHash, 0, &trackedHash,
+                                 &ignoredHash, &zErr);
+  if( rc==SQLITE_OK ) rc = doltliteHardReset(db, &headCatHash);
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(&ignoredHash) ){
+    rc = mergeWorkingCatalog(db, &ignoredHash, &headCatHash,
+                              &workingHash, &zErr);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingHash);
+  }
+  if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &headCatHash);
   if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
   if( rc==SQLITE_OK ) rc = doltliteSetSessionPendingReplayCommit(db, 0);
   if( rc==SQLITE_OK ){
@@ -34,8 +245,11 @@ int mergeAbortInPlace(sqlite3 *db){
     }
   }
   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  return doltliteVcSealActiveSavepoints(db);
+  if( rc==SQLITE_OK ) rc = doltliteVcSealActiveSavepoints(db);
+  sqlite3_free(zErr);
+  if( rc!=SQLITE_OK ) return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
+  doltliteTxnStateClear(&saved);
+  return SQLITE_OK;
 }
 
 int mergeFastForward(
@@ -44,10 +258,13 @@ int mergeFastForward(
   ChunkStore *cs,
   const ProllyHash *pOurHead,
   const ProllyHash *pTheirHead,
+  const ProllyHash *pIgnored,
   int squash
 ){
   DoltliteCommit theirCommit;
   DoltliteTxnState savedState;
+  ProllyHash workingCatHash;
+  char *zErr = 0;
   int rc;
   char hx[PROLLY_HASH_SIZE*2+1];
 
@@ -66,7 +283,13 @@ int mergeFastForward(
     sqlite3_result_error_code(context, rc);
     return rc;
   }
+  workingCatHash = theirCommit.catalogHash;
   rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(pIgnored) ){
+    rc = mergeWorkingCatalog(db, pIgnored, &theirCommit.catalogHash,
+                              &workingCatHash, &zErr);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
+  }
   if( squash ){
     if( rc==SQLITE_OK ){
       rc = doltliteSetSessionStaged(db, &theirCommit.catalogHash);
@@ -76,18 +299,18 @@ int mergeFastForward(
     }
     if( rc==SQLITE_OK ){
       int persistRc = doltlitePersistWorkingSetWithHash(
-          db, &theirCommit.catalogHash);
+          db, &workingCatHash);
       chunkStoreUnlock(cs);
       rc = persistRc;
     }
   }else{
     if( rc==SQLITE_OK ){
       rc = doltliteUpdateBranchWorkingState(db, doltliteGetSessionBranch(db),
-                                            &theirCommit.catalogHash, NULL);
+                                            &workingCatHash, NULL);
     }
     if( rc==SQLITE_OK ){
       rc = doltliteCompareAndAdvanceBranch(
-          db, pOurHead, pTheirHead, &theirCommit.catalogHash, 0);
+          db, pOurHead, pTheirHead, &theirCommit.catalogHash, &workingCatHash);
     }
   }
   if( rc!=SQLITE_OK ){
@@ -95,6 +318,8 @@ int mergeFastForward(
     if( rc==SQLITE_BUSY ) doltliteCmdResultPeerBranchBusy(context, "merge");
     sqlite3_result_error_code(context,
         doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+    if( zErr ) sqlite3_result_error(context, zErr, -1);
+    sqlite3_free(zErr);
     return rc;
   }
   rc = doltliteVcSealEnclosingTxn(db);
@@ -232,6 +457,8 @@ static int mergeRefInstallMergedCatalog(
   const ProllyHash *pAncCat,
   const ProllyHash *pTheirCat,
   ProllyHash *pMergedCat,
+  const ProllyHash *pIgnored,
+  ProllyHash *pWorkingCat,
   int nMergeConflicts,
   SchemaMergeAction **paSchemaActions,
   int *pnSchemaActions,
@@ -263,7 +490,7 @@ static int mergeRefInstallMergedCatalog(
   if( *pnSchemaActions > 0 && nMergeConflicts==0 ){
     rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
                                          *paSchemaActions, *pnSchemaActions,
-                                         pMergedCat);
+                                         pWorkingCat);
   }
   freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
   *paSchemaActions = 0;
@@ -319,13 +546,23 @@ static int mergeRefInstallMergedCatalog(
     }
   }
 
-  rc = doltliteFlushCatalogToHash(db, pMergedCat);
-  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pMergedCat);
+  rc = doltliteFlushCatalogToHash(db, pWorkingCat);
+  if( rc==SQLITE_OK ){
+    *pMergedCat = *pWorkingCat;
+    if( !prollyHashIsEmpty(pIgnored) ){
+      ProllyHash ignoredHash;
+      char *zErr = 0;
+      rc = mergeSplitWorkingCatalog(db, pIgnored, 1, pMergedCat,
+                                     &ignoredHash, &zErr);
+      sqlite3_free(zErr);
+    }
+  }
+  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pWorkingCat);
   if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
   if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, pMergedCat);
   if( rc==SQLITE_OK ){
     rc = doltliteUpdateBranchWorkingState(db,
-        doltliteGetSessionBranch(db), pMergedCat, NULL);
+        doltliteGetSessionBranch(db), pWorkingCat, NULL);
   }
   return rc;
 }
@@ -365,6 +602,7 @@ static int mergeRefCreateMergeCommit(
   const ProllyHash *pOurHead,
   const ProllyHash *pTheirHead,
   const ProllyHash *pMergedCat,
+  const ProllyHash *pWorkingCat,
   const char *zBranch,
   const char *zMessage,
   int nExtraParents
@@ -400,7 +638,7 @@ static int mergeRefCreateMergeCommit(
 
   doltliteTestCrashFinalize("merge");
   rc = doltliteCompareAndAdvanceBranch(
-      db, pOurHead, &commitHash, pMergedCat, 0);
+      db, pOurHead, &commitHash, pMergedCat, pWorkingCat);
   if( rc==SQLITE_BUSY ){
     doltliteCmdResultPeerBranchBusy(context, "merge");
     doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
@@ -428,7 +666,7 @@ static int mergeRefLeaveUncommitted(
   DoltliteTxnState *pSaved,
   const ProllyHash *pOurHead,
   const ProllyHash *pTheirHead,
-  const ProllyHash *pMergedCat,
+  const ProllyHash *pWorkingCat,
   const char *zBranch,
   int bSetMergeState
 ){
@@ -460,7 +698,7 @@ static int mergeRefLeaveUncommitted(
         doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
     return SQLITE_ERROR;
   }
-  rc = doltlitePersistWorkingSetWithHash(db, pMergedCat);
+  rc = doltlitePersistWorkingSetWithHash(db, pWorkingCat);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context,
@@ -512,6 +750,7 @@ int doltliteMergeRef(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash ourHead, theirHead, ancestorHash;
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
+  ProllyHash ignoredCatHash, workingCatHash;
   DoltliteTxnState savedState;
   int nMergeConflicts = 0;
   DoltliteCommit ourCommit, theirCommit;
@@ -535,6 +774,7 @@ int doltliteMergeRef(
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&savedState, 0, sizeof(savedState));
   memset(&mergedCatHash, 0, sizeof(mergedCatHash));
+  memset(&ignoredCatHash, 0, sizeof(ignoredCatHash));
 
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
@@ -572,6 +812,24 @@ int doltliteMergeRef(
     return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
   }
   if( dirty ){
+    ProllyHash headCatHash, stagedHash, trackedHash;
+    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+    doltliteGetSessionStaged(db, &stagedHash);
+    if( rc==SQLITE_OK && (prollyHashIsEmpty(&stagedHash)
+     || prollyHashCompare(&stagedHash, &headCatHash)==0) ){
+      rc = mergeSplitWorkingCatalog(db, &headCatHash, 0, &trackedHash,
+                                     &ignoredCatHash, &zOwnedErr);
+      if( rc==SQLITE_OK ){
+        dirty = prollyHashCompare(&trackedHash, &headCatHash)!=0;
+      }
+    }
+    if( rc!=SQLITE_OK ){
+      rc = mergeRefAbortAfterWriteTxn(db, context, zOwnedErr, rc);
+      sqlite3_free(zOwnedErr);
+      return rc;
+    }
+  }
+  if( dirty ){
     return mergeRefAbortAfterWriteTxn(db, context,
       "uncommitted changes \xe2\x80\x94 commit or reset before merging", rc);
   }
@@ -588,7 +846,8 @@ int doltliteMergeRef(
   }
 
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
-    return mergeFastForward(db, context, cs, &ourHead, &theirHead, squash);
+    return mergeFastForward(db, context, cs, &ourHead, &theirHead,
+                             &ignoredCatHash, squash);
   }
 
   rc = mergeRefLoadCatalogs(db, &ourHead, &theirHead, &ancestorHash,
@@ -636,13 +895,20 @@ int doltliteMergeRef(
   rc = doltliteSwitchCatalog(db, &mergedCatHash);
   doltliteCommitClear(&ourCommit);
   doltliteCommitClear(&theirCommit);
+  workingCatHash = mergedCatHash;
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(&ignoredCatHash) ){
+    rc = mergeWorkingCatalog(db, &ignoredCatHash, &mergedCatHash,
+                              &workingCatHash, &zOwnedErr);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
+  }
   if( rc!=SQLITE_OK ){
     bRestoreOnFail = 1;
     goto merge_fail;
   }
 
   rc = mergeRefInstallMergedCatalog(db, &ancCatHash, &theirCatHash,
-                                    &mergedCatHash, nMergeConflicts,
+                                    &mergedCatHash, &ignoredCatHash,
+                                    &workingCatHash, nMergeConflicts,
                                     &aSchemaActions, &nSchemaActions,
                                     &azReindex, &nReindex,
                                     &azRebuildVtabs, &nRebuildVtabs);
@@ -701,11 +967,12 @@ int doltliteMergeRef(
 
   if( noCommit ){
     return mergeRefLeaveUncommitted(
-        db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
+        db, context, &savedState, &ourHead, &theirHead, &workingCatHash,
         zBranch, !squash);
   }
   return mergeRefCreateMergeCommit(
       db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
+      &workingCatHash,
       zBranch, zMessage, squash ? 0 : 1);
 
 merge_fail:
