@@ -157,8 +157,7 @@ i64 chunkStoreGetSequenceValue(ChunkStore *cs, const char *zTableName){
 
 int chunkStoreBumpSequence(ChunkStore *cs, const char *zTableName,
                            i64 newSeq){
-  int i, n;
-  char *zCopy;
+  int i;
   if( !cs || !zTableName ) return SQLITE_MISUSE;
   i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
                      (int)sizeof(SequenceRef), zTableName);
@@ -168,12 +167,25 @@ int chunkStoreBumpSequence(ChunkStore *cs, const char *zTableName,
     }
     return SQLITE_OK;
   }
+  return chunkStoreSetSequence(cs, zTableName, newSeq);
+}
+
+int chunkStoreSetSequence(ChunkStore *cs, const char *zTableName, i64 seq){
+  int i, n;
+  char *zCopy;
+  if( !cs || !zTableName ) return SQLITE_MISUSE;
+  i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
+                     (int)sizeof(SequenceRef), zTableName);
+  if( i>=0 ){
+    cs->refs.aSequences[i].iSeq = seq;
+    return SQLITE_OK;
+  }
   n = cs->refs.nSequences;
   if( csRefArrayGrow((void**)&cs->refs.aSequences, n, (int)sizeof(SequenceRef)) ) return SQLITE_NOMEM;
   zCopy = sqlite3_mprintf("%s", zTableName);
   if( !zCopy ) return SQLITE_NOMEM;
   cs->refs.aSequences[n].zTableName = zCopy;
-  cs->refs.aSequences[n].iSeq = newSeq;
+  cs->refs.aSequences[n].iSeq = seq;
   cs->refs.nSequences++;
   return SQLITE_OK;
 }

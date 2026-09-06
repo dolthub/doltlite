@@ -5543,6 +5543,9 @@ CollSeq *sqlite3FindCollSeq(sqlite3*,u8 enc, const char*,int);
 int sqlite3IsBinary(const CollSeq*);
 #ifdef DOLTLITE_PROLLY
 int sqlite3DoltliteIsBuiltinCollation(const CollSeq*);
+#ifndef SQLITE_TEST
+int sqlite3DoltliteSeqTableDb(Parse*, Table*);
+#endif
 #endif
 CollSeq *sqlite3LocateCollSeq(Parse *pParse, const char*zName);
 void sqlite3SetTextEncoding(sqlite3 *db, u8);

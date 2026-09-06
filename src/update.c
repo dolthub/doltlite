@@ -1088,6 +1088,17 @@ void sqlite3Update(
     ** is the column index supplied by the user.
     */
     assert( regNew==regNewRowid+1 );
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+    {
+      int iSeqDb = sqlite3DoltliteSeqTableDb(pParse, pTab);
+      if( iSeqDb>=0 ){
+        int regSeqName = sqlite3GetTempReg(pParse);
+        sqlite3ExprCodeGetColumnOfTable(v, pTab, iDataCur, 0, regSeqName);
+        sqlite3VdbeAddOp3(v, OP_DoltliteSeqDrop, regSeqName, 0, iSeqDb);
+        sqlite3ReleaseTempReg(pParse, regSeqName);
+      }
+    }
+#endif
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
     sqlite3VdbeAddOp3(v, OP_Delete, iDataCur,
         OPFLAG_ISUPDATE | ((hasFK>1 || chngKey) ? 0 : OPFLAG_ISNOOP),

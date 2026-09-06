@@ -4117,6 +4117,36 @@ case OP_DoltliteSeqBump: {
   break;
 }
 
+/* Opcode: DoltliteSeqSet P1 P2 P3 * *
+** Synopsis: chunkStoreSetSequence(r[P2], r[P1])
+**
+** Doltlite-only. Set the shared AUTOINCREMENT counter for the table name
+** in register P2 on schema P3 to exactly r[P1], or drop it when r[P1] is
+** not an integer. Emitted when a statement writes a sqlite_sequence row
+** directly, so lowering or deleting seq resets the counter as in SQLite
+** instead of being outvoted by the shared value.
+*/
+case OP_DoltliteSeqSet: {
+  Mem *pCtr;
+  Mem *pName;
+  ChunkStore *pCs;
+  const char *zName;
+  pCtr  = &aMem[pOp->p1];
+  pName = &aMem[pOp->p2];
+  if( (pName->flags & MEM_Str)==0 ) break;
+  pCs = vdbeDoltliteSeqStore(db, pOp->p3);
+  if( !pCs ) break;
+  zName = (const char*)pName->z;
+  if( !zName ) break;
+  if( (pCtr->flags & MEM_Int)==0 ){
+    chunkStoreDropSequence(pCs, zName);
+  }else{
+    rc = chunkStoreSetSequence(pCs, zName, pCtr->u.i);
+    if( rc ) goto abort_due_to_error;
+  }
+  break;
+}
+
 /* Opcode: DoltliteSeqDrop P1 * P3 * *
 ** Synopsis: chunkStoreDropSequence(r[P1])
 **

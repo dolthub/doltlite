@@ -836,6 +836,12 @@ For a DoltLite-format main database, the compatibility contract is:
   from HEAD.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
+- `AUTOINCREMENT` counters are shared by every branch of a database, so ids
+  allocated on one branch are never reused on another. `sqlite_sequence`
+  still works as the reset surface: `UPDATE sqlite_sequence SET seq=N`,
+  `DELETE FROM sqlite_sequence`, and inserting a seed row set or drop the
+  shared counter for that table, after which the next id is
+  `max(seq, max(rowid))+1` exactly as in SQLite.
 - `PRAGMA query_only` covers version control: while it is set, `dolt_add`,
   `dolt_commit`, `dolt_merge`, `dolt_tag`, `dolt_branch`, `dolt_gc`, and every
   other function that would change the file fail with `attempt to write a

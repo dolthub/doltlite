@@ -145,6 +145,8 @@ i64 chunkStoreGetSequenceValue(struct ChunkStore *cs, const char *zTableName);
 /* max(existing, newSeq); creates the row if absent. Caller holds the lock. */
 int chunkStoreBumpSequence(struct ChunkStore *cs, const char *zTableName,
                            i64 newSeq);
+int chunkStoreSetSequence(struct ChunkStore *cs, const char *zTableName,
+                          i64 seq);
 void chunkStoreDropSequence(struct ChunkStore *cs, const char *zTableName);
 int chunkStoreRenameSequence(struct ChunkStore *cs, const char *zOld,
                              const char *zNew);
