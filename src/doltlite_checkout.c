@@ -1433,6 +1433,7 @@ static int checkoutStartPointBeforeDashB(
 }
 
 void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
   DoltliteCmdArgs args;
   int createBranch = 0;
   int startFirst = 0;
@@ -1441,6 +1442,11 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   };
   int rc;
 
+  if( db->nVdbeWrite>0 ){
+    doltliteVcResultError(ctx, db,
+        "cannot checkout while a write statement is active");
+    return;
+  }
   if( argc==0 ){
     doltCheckoutParsedFunc(ctx, argc, argv, createBranch, startFirst);
     return;

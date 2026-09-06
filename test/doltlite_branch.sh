@@ -214,5 +214,28 @@ run_test "recased_default_branch_listed_once" \
   "SELECT group_concat(name,'|') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
   "FEAT|MAIN" "$DB17"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
+DB18=/tmp/test_branch18_$$.db; rm -f "$DB18"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX t_v ON t(v); CREATE TABLE dst(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'v'),(2,'v'),(3,'v'),(4,'v'),(5,'v'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test_match "checkout_during_update_errors" \
+  "UPDATE t SET v='upd' || CASE WHEN id=3 THEN dolt_checkout('feat') ELSE '' END;" \
+  "cannot checkout while a write statement is active" "$DB18"
+run_test "checkout_during_update_keeps_branch" "SELECT active_branch();" "main" "$DB18"
+run_test "checkout_during_update_rolls_back_main" \
+  "SELECT count(*) FROM t WHERE v!='v';" "0" "$DB18"
+run_test "checkout_during_update_leaves_target_unchanged" \
+  "SELECT count(*) FROM t WHERE v!='v';" "0" "$DB18/feat"
+run_test_match "checkout_during_insert_errors" \
+  "INSERT INTO dst SELECT id, CASE WHEN id=3 THEN dolt_checkout('feat') ELSE v END FROM t;" \
+  "cannot checkout while a write statement is active" "$DB18"
+run_test "checkout_during_insert_rolls_back_main" "SELECT count(*) FROM dst;" "0" "$DB18"
+run_test "checkout_during_insert_leaves_target_unchanged" \
+  "SELECT count(*) FROM dst;" "0" "$DB18/feat"
+run_test_match "checkout_during_delete_errors" \
+  "DELETE FROM t WHERE id!=3 OR dolt_checkout('feat')=0;" \
+  "cannot checkout while a write statement is active" "$DB18"
+run_test "checkout_during_delete_rolls_back_main" "SELECT count(*) FROM t;" "5" "$DB18"
+run_test "checkout_during_delete_leaves_target_unchanged" \
+  "SELECT count(*) FROM t;" "5" "$DB18/feat"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 dltest_finish
