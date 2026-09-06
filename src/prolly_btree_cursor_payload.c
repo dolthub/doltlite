@@ -2,7 +2,7 @@
 
 #include "prolly_btree_int.h"
 
-i64 doltliteSyntheticRowidFromSortKey(const u8*, int, const KeyInfo*);
+int doltliteSyntheticRowidFromSortKey(const u8*, int, const KeyInfo*, i64*);
 static SQLITE_NOINLINE i64 prollyBtCursorSyntheticRowid(BtCursor *pCur);
 
 void prollyBtreeCursorCurrentTreeValueSpan(
@@ -141,7 +141,16 @@ static SQLITE_NOINLINE i64 prollyBtCursorSyntheticRowid(BtCursor *pCur){
   }else{
     return 0;
   }
-  return doltliteSyntheticRowidFromSortKey(pKey, nKey, pCur->pKeyInfo);
+  {
+    i64 v = 0;
+    int rc = doltliteSyntheticRowidFromSortKey(pKey, nKey, pCur->pKeyInfo, &v);
+    if( rc!=SQLITE_OK ){
+      pCur->eState = CURSOR_FAULT;
+      pCur->skipNext = rc;
+      return 0;
+    }
+    return v;
+  }
 }
 
 static int cursorPayloadFault(

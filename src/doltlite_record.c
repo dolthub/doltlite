@@ -41,39 +41,54 @@ static int doltliteRecordFirstInt(const u8 *pRec, int nRec, i64 *pOut){
   return 0;
 }
 
-i64 doltliteSyntheticRowidFromRecord(const u8 *pRec, int nRec,
-    const KeyInfo *pKeyInfo){
+/* A key the sort-key codec cannot express still gets a stable rowid from the
+** raw bytes; an allocation failure must surface instead of changing the hash. */
+int doltliteSyntheticRowidFromRecord(const u8 *pRec, int nRec,
+    const KeyInfo *pKeyInfo, i64 *pRowid){
   i64 v = 0;
   u8 *pSk = 0;
   int nAlloc = 0, nSk = 0;
+  int rc = SQLITE_NOTFOUND;
   int nKeyField = pKeyInfo ? pKeyInfo->nKeyField : 0;
 
-  if( nKeyField==1 && doltliteRecordFirstInt(pRec, nRec, &v) ) return v;
-  if( pKeyInfo && sortKeyFromRecordPrefixCollBuffer(
-        pRec, nRec, nKeyField, pKeyInfo, &pSk, &nAlloc, &nSk)==SQLITE_OK ){
-    v = doltliteRowidHash(pSk, nSk);
-    sqlite3_free(pSk);
-    return v;
+  if( nKeyField==1 && doltliteRecordFirstInt(pRec, nRec, &v) ){
+    *pRowid = v;
+    return SQLITE_OK;
+  }
+  if( pKeyInfo ){
+    rc = sortKeyFromRecordPrefixCollBuffer(
+        pRec, nRec, nKeyField, pKeyInfo, &pSk, &nAlloc, &nSk);
+  }
+  if( rc==SQLITE_OK ){
+    *pRowid = doltliteRowidHash(pSk, nSk);
+  }else if( rc!=SQLITE_NOMEM ){
+    *pRowid = doltliteRowidHash(pRec, nRec);
+    rc = SQLITE_OK;
   }
   sqlite3_free(pSk);
-  return doltliteRowidHash(pRec, nRec);
+  return rc;
 }
 
-i64 doltliteSyntheticRowidFromSortKey(const u8 *pSortKey, int nSortKey,
-    const KeyInfo *pKeyInfo){
+int doltliteSyntheticRowidFromSortKey(const u8 *pSortKey, int nSortKey,
+    const KeyInfo *pKeyInfo, i64 *pRowid){
   u8 *pRec = 0;
   int nAlloc = 0, nRec = 0;
   i64 v;
+  int rc = SQLITE_NOTFOUND;
   int nKeyField = pKeyInfo ? pKeyInfo->nKeyField : 0;
 
-  if( pKeyInfo && recordFromSortKeyBufferColl(
-        pSortKey, nSortKey, pKeyInfo, &pRec, &nAlloc, &nRec)==SQLITE_OK
-   && nKeyField==1 && doltliteRecordFirstInt(pRec, nRec, &v) ){
-    sqlite3_free(pRec);
-    return v;
+  if( pKeyInfo ){
+    rc = recordFromSortKeyBufferColl(
+        pSortKey, nSortKey, pKeyInfo, &pRec, &nAlloc, &nRec);
+  }
+  if( rc==SQLITE_OK && nKeyField==1 && doltliteRecordFirstInt(pRec, nRec, &v) ){
+    *pRowid = v;
+  }else if( rc!=SQLITE_NOMEM ){
+    *pRowid = doltliteRowidHash(pSortKey, nSortKey);
+    rc = SQLITE_OK;
   }
   sqlite3_free(pRec);
-  return doltliteRowidHash(pSortKey, nSortKey);
+  return rc;
 }
 
 static u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen){
