@@ -1277,6 +1277,8 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     chunkStoreUnlock(destCs);
     destLocked = 0;
     chunkStoreClose(destCs);
+    tmpStore.xWriteGate = destCs->xWriteGate;
+    tmpStore.pWriteGateArg = destCs->pWriteGateArg;
     *destCs = tmpStore;
     memset(&tmpStore, 0, sizeof(tmpStore));
     tmpStoreOpen = 0;

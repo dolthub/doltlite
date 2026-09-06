@@ -752,6 +752,10 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
     rc = doltliteHardReset(db, &targetCatHash);
+    if( rc==SQLITE_READONLY ){
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "hard reset failed", -1);
       goto reset_cleanup;

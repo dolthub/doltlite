@@ -716,7 +716,8 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   if( wrFlag ){
     int bStoreChanged = 0;
     int nSavepointStart = p->nSavepoint;
-    if( p->isDetached || (pBt->btsFlags & BTS_READ_ONLY) ){
+    if( p->isDetached || (pBt->btsFlags & BTS_READ_ONLY)
+     || (p->db && (p->db->flags & SQLITE_QueryOnly)!=0) ){
       return SQLITE_READONLY;
     }
 

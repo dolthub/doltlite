@@ -545,6 +545,11 @@ commit_done:
   return rc;
 }
 
+int chunkStoreWriteRefused(ChunkStore *cs){
+  return cs->readOnly || cs->movedReadOnly
+      || (cs->xWriteGate && cs->xWriteGate(cs->pWriteGateArg));
+}
+
 int chunkStoreCommit(ChunkStore *cs){
   int rc;
   int acquiredLock = 0;
@@ -555,7 +560,7 @@ int chunkStoreCommit(ChunkStore *cs){
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( cs->notADatabase ) return SQLITE_NOTADB;
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
-  if( cs->readOnly || cs->movedReadOnly ) return SQLITE_READONLY;
+  if( chunkStoreWriteRefused(cs) ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
   if( !cs->isBuffer && cs->lockDepth<=0 && cs->file.zFilename ){
     ProllyHash baseRefsHash;
