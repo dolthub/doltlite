@@ -187,25 +187,6 @@ int sortKeyFromUnpackedForCount(
   return rc;
 }
 
-/* Exclusive bound after prefix pKey. Drop trailing 0xff or the bound is too high. */
-static int blobPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
-  int i;
-  u8 *pOut;
-  for(i=nKey-1; i>=0 && pKey[i]==0xff; i--){}
-  if( i<0 ){
-    *ppOut = 0;
-    *pnOut = 0;
-    return SQLITE_OK;
-  }
-  pOut = sqlite3_malloc(i+1);
-  if( !pOut ) return SQLITE_NOMEM;
-  memcpy(pOut, pKey, i+1);
-  pOut[i]++;
-  *ppOut = pOut;
-  *pnOut = i+1;
-  return SQLITE_OK;
-}
-
 /* Exclusive end after a complete first field. Exact 9-byte numerics prefix
 ** an 18-byte neighbor; a raw successor would count that neighbor in. */
 static int blobFieldSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
@@ -218,7 +199,7 @@ static int blobFieldSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
     *pnOut = 10;
     return SQLITE_OK;
   }
-  return blobPrefixSuccessor(pKey, nKey, ppOut, pnOut);
+  return sortKeyPrefixSuccessor(pKey, nKey, ppOut, pnOut);
 }
 
 static int countBlobKeysBefore(

@@ -123,6 +123,7 @@ doltlite_branch_edge.sh
 doltlite_diff_alter.sh
 doltlite_gc_scale.sh
 doltlite_index_prefix.sh
+doltlite_index_reverse_prefix_seek.sh
 doltlite_txn_seek_visibility.sh
 doltlite_txn_seek_prefix_contract.sh
 doltlite_count_numeric_range.sh
