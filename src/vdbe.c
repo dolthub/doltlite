@@ -23,7 +23,7 @@
 
 #ifdef DOLTLITE_PROLLY
 const void *sqlite3BtreePayloadFetchWithSize(BtCursor*, u32*, u32*);
-i64 doltliteSyntheticRowidFromRecord(const u8*, int, const KeyInfo*);
+int doltliteSyntheticRowidFromRecord(const u8*, int, const KeyInfo*, i64*);
 #endif
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 #include "chunk_store.h"
@@ -6749,8 +6749,9 @@ case OP_Rowid: {                 /* out2, ncycle */
       pOut->flags = MEM_Null;
       break;
     }
-    v = doltliteSyntheticRowidFromRecord(
-        (const u8*)pRec->z, pRec->n, pC->pKeyInfo);
+    rc = doltliteSyntheticRowidFromRecord(
+        (const u8*)pRec->z, pRec->n, pC->pKeyInfo, &v);
+    if( rc ) goto abort_due_to_error;
     pOut->u.i = v;
     break;
   }
@@ -7214,8 +7215,9 @@ case OP_IdxInsert: {        /* in2 */
     i64 iRowid = 0;
     int bRowid = 0;
     if( (pOp->p5 & OPFLAG_LASTROWID)!=0 ){
-      iRowid = doltliteSyntheticRowidFromRecord(
-          (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo);
+      rc = doltliteSyntheticRowidFromRecord(
+          (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo, &iRowid);
+      if( rc ) goto abort_due_to_error;
       db->lastRowid = iRowid;
       bRowid = 1;
     }
@@ -7224,8 +7226,9 @@ case OP_IdxInsert: {        /* in2 */
       Table *pTab = pOp->p4.pTab;
       if( pTab && pTab->aCol && VisibleRowid(pTab) && pC->iDb>=0 ){
         if( !bRowid ){
-          iRowid = doltliteSyntheticRowidFromRecord(
-              (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo);
+          rc = doltliteSyntheticRowidFromRecord(
+              (const u8*)pIn2->z, pIn2->n, pC->pKeyInfo, &iRowid);
+          if( rc ) goto abort_due_to_error;
         }
         db->xUpdateCallback(db->pUpdateArg,
             (pOp->p5 & OPFLAG_ISUPDATE) ? SQLITE_UPDATE : SQLITE_INSERT,

@@ -5720,20 +5720,12 @@ fkey_malloc fkey_malloc-7.transient.198 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.199 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.477 @no-coverage class=intentional
 fkey_malloc fkey_malloc-7.transient.478 @no-coverage class=intentional
-fkey_malloc fkey_malloc-1.transient.148 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.35 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.152 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.155 @coverage class=intentional
-fkey_malloc fkey_malloc-6.transient.156 @coverage class=intentional
 vtab_err vtab_err-1.3.3 class=intentional
 vtab_err vtab_err-2.transient.685 @no-coverage class=intentional
 vtab_err vtab_err-2.transient.708 @no-coverage class=intentional
 vtab_err vtab_err-2.persistent.708 @no-coverage class=intentional
 vtab_err vtab_err-3-oom-transient.424 @no-coverage class=intentional
-vtab_err vtab_err-2.transient.681 @coverage class=intentional
 vtab_err vtab_err-2.transient.742 @coverage class=intentional
-vtab_err vtab_err-2.transient.775 @coverage class=intentional
-vtab_err vtab_err-2.transient.777 @coverage class=intentional
 vtab_err vtab_err-2.transient.816 @coverage class=intentional
 vtab_err vtab_err-2.transient.818 @coverage class=intentional
 vtab_err vtab_err-2.transient.819 @coverage class=intentional
@@ -5742,15 +5734,6 @@ vtab_err vtab_err-2.persistent.819 @coverage class=intentional
 # extra sqlite_schema INSERT for clustered PK autoindexes shifts this OOM
 # injection: count(*) from sqlite_master is no longer 4 at fail-point 90.
 doltlite_fts3_oom doltlite_fts3_oom-2.2.1 class=intentional
-fts3cov fts3cov-10.transient.46 class=intentional
-fts3cov fts3cov-10.transient.287 @no-coverage class=intentional
-fts3cov fts3cov-10.persistent.287 @no-coverage class=intentional
-fts3cov fts3cov-10.transient.292 @coverage class=intentional
-fts3cov fts3cov-10.persistent.292 @coverage class=intentional
-fts3cov fts3cov-8.transient.573 @no-coverage class=intentional issue=2492  # OOM fault-point shift: latent fts3 segdir-write swallow
-fts3cov fts3cov-8.transient.722 @no-coverage class=intentional issue=2492  # OOM fault-point shift (fts3 segdir write)
-fts3cov fts3cov-8.transient.576 @coverage class=intentional issue=2492  # OOM fault-point shift: latent fts3 segdir-write swallow
-fts3cov fts3cov-8.transient.725 @coverage class=intentional issue=2492  # OOM fault-point shift (fts3 segdir write)
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1 class=intentional issue=2493  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
