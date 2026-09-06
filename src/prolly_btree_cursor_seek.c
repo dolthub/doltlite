@@ -854,6 +854,151 @@ static int indexMovetoExactTreeHit(
   return SQLITE_OK;
 }
 
+/* Smallest visible entry at or above the raw key, merged across the tree
+** and the pending map; CURSOR_INVALID when there is none. */
+static int seekMergedLowerBound(BtCursor *pCur, const u8 *pKey, int nKey){
+  int rc;
+  int res = 0;
+
+  clearMergeCursorState(pCur);
+  CLEAR_CACHED_PAYLOAD(pCur);
+  rc = prollyCursorSeekBlob(&pCur->pCur, pKey, nKey, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( res<0 && prollyCursorIsValid(&pCur->pCur) ){
+    rc = prollyCursorNext(&pCur->pCur);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    int idx = 0, found = 0;
+    rc = prollyMutMapResolveSortedPos(pCur->pMutMap, pKey, nKey, 0,
+                                      &idx, &found);
+    if( rc!=SQLITE_OK ) return rc;
+    pCur->mmActive = 1;
+    pCur->mmIdx = idx;
+    rc = mergeScan(pCur, 1, &res);
+    if( rc!=SQLITE_OK ) return rc;
+    pCur->eState = res==0 ? CURSOR_VALID : CURSOR_INVALID;
+    /* A backward step from a pending landing re-seeks the tree below it. */
+    pCur->mergeStepDir = 1;
+  }else{
+    pCur->eState = prollyCursorIsValid(&pCur->pCur)
+                 ? CURSOR_VALID : CURSOR_INVALID;
+  }
+  return SQLITE_OK;
+}
+
+static int currentMergedKey(BtCursor *pCur, const u8 **ppKey, int *pnKey){
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = 0;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !e ) return SQLITE_NOTFOUND;
+    *ppKey = e->pKey;
+    *pnKey = e->nKey;
+    return SQLITE_OK;
+  }
+  if( !prollyCursorIsValid(&pCur->pCur) ) return SQLITE_NOTFOUND;
+  prollyCursorKey(&pCur->pCur, ppKey, pnKey);
+  return SQLITE_OK;
+}
+
+/* Last visible entry below the raw bound (NULL bound = above everything).
+** pEmpty: no entries at all. pNoneBelow: every entry is at or above the
+** bound; the cursor is left on the first one. */
+static int positionBeforeBound(
+  BtCursor *pCur,
+  const u8 *pBound,
+  int nBound,
+  int *pEmpty,
+  int *pNoneBelow
+){
+  int rc;
+  int res = 0;
+
+  *pEmpty = 0;
+  *pNoneBelow = 0;
+  if( pBound ){
+    rc = seekMergedLowerBound(pCur, pBound, nBound);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCur->eState==CURSOR_VALID ){
+      rc = prollyBtCursorPrevious(pCur, 0);
+      if( rc==SQLITE_OK ) return SQLITE_OK;
+      if( rc!=SQLITE_DONE ) return rc;
+      *pNoneBelow = 1;
+      rc = prollyBtCursorFirst(pCur, &res);
+      if( rc==SQLITE_OK && res!=0 ) *pEmpty = 1;
+      return rc;
+    }
+  }
+  rc = prollyBtCursorLast(pCur, &res);
+  if( rc==SQLITE_OK && res!=0 ) *pEmpty = 1;
+  return rc;
+}
+
+/* SeekLE/SeekGT prefix seek: land on the last entry whose leading fields
+** equal the seek key, so the caller never walks the matching run. Stock
+** reaches that spot because default_rc<0 makes matches compare below the
+** key inside the b-tree search; here the same position is the predecessor
+** of the prefix's successor. An exact numeric prefix is also a byte prefix
+** of the 18-byte inexact neighbours that sort right after its matches, so
+** when the landing is one of those the bound moves to prefix+0x80, which
+** every neighbour starts with and no field start does. */
+static int indexMovetoPrefixLast(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  const u8 *pSortKey,
+  int nSortKey,
+  int nSeekKeyField,
+  int *pRes
+){
+  u8 *pBound = 0;
+  int nBound = 0;
+  int rc;
+  int pass;
+
+  pIdxKey->eqSeen = 0;
+  *pRes = -1;
+  rc = sortKeyPrefixSuccessor(pSortKey, nSortKey, &pBound, &nBound);
+  if( rc!=SQLITE_OK ) return rc;
+  for(pass=0; pass<2; pass++){
+    const u8 *pKey = 0;
+    int nKey = 0;
+    int empty = 0, noneBelow = 0;
+
+    rc = positionBeforeBound(pCur, pBound, nBound, &empty, &noneBelow);
+    sqlite3_free(pBound);
+    pBound = 0;
+    if( rc!=SQLITE_OK ) return rc;
+    if( empty ){
+      pCur->eState = CURSOR_INVALID;
+      break;
+    }
+    if( noneBelow ){
+      *pRes = 1;
+      break;
+    }
+    rc = currentMergedKey(pCur, &pKey, &nKey);
+    if( rc!=SQLITE_OK ) return rc;
+    if( nKey<nSortKey || memcmp(pKey, pSortKey, nSortKey)!=0 ) break;
+    if( nKey==nSortKey || sortKeyByteStartsField(pKey[nSortKey]) ){
+      pIdxKey->eqSeen = 1;
+      break;
+    }
+    if( pass==1 ) break;
+    pBound = sqlite3_malloc(nSortKey+1);
+    if( !pBound ) return SQLITE_NOMEM;
+    memcpy(pBound, pSortKey, nSortKey);
+    pBound[nSortKey] = 0x80;
+    nBound = nSortKey+1;
+  }
+  /* First/Last/Previous cleared the cached seek key the following
+  ** OP_IdxGT/IdxLT compares against; the buffer itself is untouched. */
+  pCur->nSeekSortKey = nSortKey;
+  pCur->nSeekKeyField = nSeekKeyField;
+  return SQLITE_OK;
+}
+
 int prollyBtCursorIndexMoveto(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -892,6 +1037,11 @@ int prollyBtCursorIndexMoveto(
     rc = indexMovetoCustomCollation(
         pCur, pIdxKey, nSeekKeyField, exactMutMapKey, pRes, &done);
     if( rc!=SQLITE_OK || done ) return rc;
+
+    if( nSeekKeyField>0 && pIdxKey->default_rc<0 ){
+      return indexMovetoPrefixLast(
+          pCur, pIdxKey, pSortKey, nSortKey, nSeekKeyField, pRes);
+    }
 
     rc = indexMovetoExactMutMap(
         pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey, pRes, &done);
