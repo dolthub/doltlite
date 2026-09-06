@@ -860,7 +860,8 @@ For a DoltLite-format main database, the compatibility contract is:
   explicit `WITHOUT ROWID` — there is no stored `rowid` column. TEMP tables
   are not clustered, so those writes still work. An `INTEGER PRIMARY KEY`
   remains a writable rowid alias. Explicit `WITHOUT ROWID` tables have no
-  `rowid` at all, matching SQLite.
+  `rowid` at all, matching SQLite. `.dump --preserve-rowids` omits the
+  read-only alias from clustered-primary-key inserts so its output restores.
 - Those clustered primary keys are `NOT NULL`, matching SQLite
   `WITHOUT ROWID` tables. `PRAGMA table_info` reports `notnull=1` on the PK
   columns, and inserting NULL fails with `NOT NULL constraint failed`. SQLite

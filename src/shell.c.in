@@ -4048,13 +4048,13 @@ static char **tableColumnList(ShellState *p, const char *zTab){
   ** rowids on tables where the rowid is inaccessible because there are other
   ** columns in the table named "rowid", "_rowid_", and "oid".
   */
+#ifdef DOLTLITE_PROLLY
+  if( preserveRowid && nPK ){
+#else
   if( preserveRowid && isIPK ){
-    /* If a single PRIMARY KEY column with type INTEGER was seen, then it
-    ** might be an alias for the ROWID.  But it might also be a WITHOUT ROWID
-    ** table or a INTEGER PRIMARY KEY DESC column, neither of which are
-    ** ROWID aliases.  To distinguish these cases, check to see if
-    ** there is a "pk" entry in "PRAGMA index_list".  There will be
-    ** no "pk" index if the PRIMARY KEY really is an alias for the ROWID.
+#endif
+    /* A "pk" entry in "PRAGMA index_list" distinguishes a PRIMARY KEY
+    ** backed by an index from an INTEGER PRIMARY KEY alias for the ROWID.
     */
     zSql = sqlite3_mprintf("SELECT 1 FROM pragma_index_list(%Q)"
                            " WHERE origin='pk'", zTab);
@@ -4067,7 +4067,12 @@ static char **tableColumnList(ShellState *p, const char *zTab){
     }
     rc = sqlite3_step(pStmt);
     sqlite3_finalize(pStmt);
+#ifdef DOLTLITE_PROLLY
+    /* Index-backed primary keys have a read-only compatibility rowid. */
+    preserveRowid = rc!=SQLITE_ROW && !isIPK;
+#else
     preserveRowid = rc==SQLITE_ROW;
+#endif
   }
   if( preserveRowid ){
     /* Only preserve the rowid if we can find a name to use for the
