@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include "doltlite_ignore.h"
 #include "doltlite_record.h"
+#include "prolly_record.h"
 #include "prolly_cursor.h"
 
 #define STATUS_IDX_STAGED_EQ 0x01
@@ -39,6 +40,148 @@ struct StatusCatalogIndex {
   StatusNumberSlot *aNumberSlot;
   int nSlot;
 };
+
+static int statusCheckIgnoreObject(
+  sqlite3 *db,
+  const char *zName,
+  int *pIgnored,
+  char **pzErr
+){
+  const char *zTail;
+  char *zOwner = 0;
+  int rc;
+  if( !zName ){
+    *pIgnored = 0;
+    return SQLITE_OK;
+  }
+  zTail = strrchr(zName, '_');
+  if( zTail && sqlite3ShadowTableName(db, zName) ){
+    zOwner = sqlite3_mprintf("%.*s", (int)(zTail-zName), zName);
+    if( !zOwner ) return SQLITE_NOMEM;
+  }
+  rc = doltliteCheckIgnore(db, zOwner ? zOwner : zName, pIgnored, pzErr);
+  sqlite3_free(zOwner);
+  return rc;
+}
+
+static int statusSequenceRowIgnored(
+  sqlite3 *db,
+  struct TableEntry *aBase,
+  int nBase,
+  const char *zOwner,
+  int *pIgnored,
+  char **pzErr
+){
+  *pIgnored = 0;
+  if( !zOwner || doltliteFindTableByName(aBase, nBase, zOwner) ){
+    return SQLITE_OK;
+  }
+  return doltliteCheckIgnore(db, zOwner, pIgnored, pzErr);
+}
+
+static int statusSequenceContains(
+  sqlite3 *db,
+  const struct TableEntry *pEntry,
+  const char *zOwner,
+  const u8 *pRecord,
+  int nRecord,
+  int *pFound
+){
+  ProllyCursor cur;
+  int res = 0;
+  int rc;
+  *pFound = 0;
+  if( !pEntry || prollyHashIsEmpty(&pEntry->root) ) return SQLITE_OK;
+  prollyCursorInit(&cur, doltliteGetChunkStore(db), doltliteGetCache(db),
+                   &pEntry->root, pEntry->flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && !res && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    DoltliteRecordInfo info;
+    char *zName = 0;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    rc = doltliteParseRecordStrict(pVal, nVal, &info);
+    if( rc==SQLITE_OK && info.nField<1 ) rc = SQLITE_CORRUPT;
+    if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &info, 0, &zName);
+    if( rc==SQLITE_OK && zName && strcmp(zName, zOwner)==0 ){
+      *pFound = nVal==nRecord
+             && (nVal==0 || memcmp(pVal, pRecord, nVal)==0);
+      sqlite3_free(zName);
+      break;
+    }
+    sqlite3_free(zName);
+    if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+static int statusSequenceTrackedEqualOneWay(
+  sqlite3 *db,
+  const struct TableEntry *pFrom,
+  const struct TableEntry *pTo,
+  struct TableEntry *aBase,
+  int nBase,
+  int *pEqual,
+  char **pzErr
+){
+  ProllyCursor cur;
+  int res = 0;
+  int rc;
+  if( !pFrom || prollyHashIsEmpty(&pFrom->root) ) return SQLITE_OK;
+  prollyCursorInit(&cur, doltliteGetChunkStore(db), doltliteGetCache(db),
+                   &pFrom->root, pFrom->flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && !res && *pEqual && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    DoltliteRecordInfo info;
+    char *zOwner = 0;
+    int ignored = 0;
+    int found = 0;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    rc = doltliteParseRecordStrict(pVal, nVal, &info);
+    if( rc==SQLITE_OK && info.nField<1 ) rc = SQLITE_CORRUPT;
+    if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &info, 0, &zOwner);
+    if( rc==SQLITE_OK ){
+      rc = statusSequenceRowIgnored(db, aBase, nBase, zOwner,
+                                    &ignored, pzErr);
+    }
+    if( rc==SQLITE_OK && !ignored ){
+      if( !zOwner ){
+        *pEqual = 0;
+      }else{
+        rc = statusSequenceContains(db, pTo, zOwner, pVal, nVal, &found);
+        if( rc==SQLITE_OK && !found ) *pEqual = 0;
+      }
+    }
+    sqlite3_free(zOwner);
+    if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+static int statusSequenceTrackedEqual(
+  sqlite3 *db,
+  const struct TableEntry *pFrom,
+  const struct TableEntry *pTo,
+  struct TableEntry *aBase,
+  int nBase,
+  int *pEqual,
+  char **pzErr
+){
+  int rc;
+  *pEqual = 1;
+  rc = statusSequenceTrackedEqualOneWay(db, pFrom, pTo, aBase, nBase,
+                                        pEqual, pzErr);
+  if( rc==SQLITE_OK && *pEqual ){
+    rc = statusSequenceTrackedEqualOneWay(db, pTo, pFrom, aBase, nBase,
+                                          pEqual, pzErr);
+  }
+  return rc;
+}
 
 typedef struct DoltliteStatusVtab DoltliteStatusVtab;
 struct DoltliteStatusVtab { sqlite3_vtab base; sqlite3 *db; };
@@ -513,7 +656,8 @@ static int statusCompareIndexSchemaObjects(
     if( !staged && !pFromEnt && pToEnt ){
       int ignored = 0;
       char *zIgnErr = 0;
-      rc = doltliteCheckIgnore(db, pRow->zTblName, &ignored, &zIgnErr);
+      rc = statusCheckIgnoreObject(db, pRow->zTblName,
+                                   &ignored, &zIgnErr);
       if( rc==SQLITE_CONSTRAINT ){
         sqlite3_free(pCur->base.pVtab->zErrMsg);
         pCur->base.pVtab->zErrMsg = zIgnErr;
@@ -905,11 +1049,33 @@ static int compareCatalogs(
     rc = statusTableName(db, &aTo[i], &zName);
     if( rc==SQLITE_NOTFOUND ) continue;
     if( rc!=SQLITE_OK ) goto compare_done;
+    if( !staged && strcmp(zName, "sqlite_sequence")==0 ){
+      int equal = 0;
+      char *zIgnErr = 0;
+      rc = statusSequenceTrackedEqual(db, pFrom, &aTo[i],
+                                      aFrom, nFrom, &equal, &zIgnErr);
+      if( rc==SQLITE_CONSTRAINT ){
+        sqlite3_free(pCur->base.pVtab->zErrMsg);
+        pCur->base.pVtab->zErrMsg = zIgnErr;
+        sqlite3_free(zName);
+        rc = SQLITE_ERROR;
+        goto compare_done;
+      }
+      sqlite3_free(zIgnErr);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zName);
+        goto compare_done;
+      }
+      if( equal ){
+        sqlite3_free(zName);
+        continue;
+      }
+    }
     if(!pFrom){
       if( staged==0 ){
         int ignored = 0;
         char *zIgnErr = 0;
-        int irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
+        int irc = statusCheckIgnoreObject(db, zName, &ignored, &zIgnErr);
         if( irc==SQLITE_CONSTRAINT ){
           if( pCur->base.pVtab->zErrMsg ){
             sqlite3_free(pCur->base.pVtab->zErrMsg);

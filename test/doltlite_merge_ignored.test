@@ -228,6 +228,188 @@ do_test incoming-metadata {
   execsql {PRAGMA user_version; SELECT kind FROM runtime_jobs WHERE id=1;}
 } {17 keep}
 
+ifcapable fts5 {
+  do_test virtual-shadow.1 {
+    reset_db
+    execsql {
+      CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT);
+      INSERT INTO items VALUES(1,'base'),(2,'base');
+      INSERT INTO dolt_ignore VALUES('runtime_search',1);
+      SELECT dolt_add('items','dolt_ignore');
+      SELECT dolt_commit('-m','base');
+      SELECT dolt_branch('feature');
+      CREATE VIRTUAL TABLE runtime_search USING fts5(body);
+      INSERT INTO runtime_search VALUES('keep token');
+      SELECT dolt_checkout('feature');
+      UPDATE items SET label='feature' WHERE id=1;
+      SELECT dolt_add('items');
+      SELECT dolt_commit('-m','feature');
+      SELECT dolt_checkout('main');
+      UPDATE items SET label='main' WHERE id=2;
+      SELECT dolt_add('items');
+      SELECT dolt_commit('-m','main');
+    }
+    db one {SELECT count(*) FROM dolt_status}
+  } {0}
+  do_test virtual-shadow.2 {
+    execsql {SELECT dolt_merge('feature')}
+    db close
+    sqlite3 db test.db
+    execsql {
+      SELECT rowid,body FROM runtime_search;
+      SELECT count(*) FROM runtime_search WHERE runtime_search MATCH 'token';
+      SELECT count(*) FROM sqlite_master WHERE name LIKE 'runtime_search%';
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    }
+  } {1 {keep token} 1 6 0 ok}
+  do_test virtual-shadow.3 {
+    execsql {SELECT dolt_checkout('-b','committed','HEAD')}
+    set result [execsql {
+      SELECT count(*) FROM sqlite_master WHERE name LIKE 'runtime_search%';
+    }]
+    execsql {SELECT dolt_checkout('main')}
+    lappend result [db one {
+      SELECT count(*) FROM runtime_search WHERE runtime_search MATCH 'token'
+    }]
+    set result
+  } {0 1}
+  do_test virtual-shadow.4 {
+    reset_db
+    execsql {
+      CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT);
+      INSERT INTO items VALUES(1,'base');
+      INSERT INTO dolt_ignore VALUES('runtime_search',1);
+      SELECT dolt_add('items','dolt_ignore');
+      SELECT dolt_commit('-m','base');
+      SELECT dolt_branch('feature');
+      CREATE VIRTUAL TABLE runtime_search USING fts5(body);
+      INSERT INTO runtime_search VALUES('local token');
+      SELECT dolt_checkout('feature');
+      CREATE VIRTUAL TABLE runtime_search USING fts5(body);
+      INSERT INTO runtime_search VALUES('incoming token');
+      SELECT dolt_commit('-A','-m','feature');
+      SELECT dolt_checkout('main');
+    }
+    set head [db one {SELECT dolt_hashof('HEAD')}]
+    set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
+    db close
+    sqlite3 db test.db
+    list $failed [string match {*overwrite ignored object*} $message] \
+        [expr {$head eq [db one {SELECT dolt_hashof('HEAD')}]}] \
+        [db one {SELECT body FROM runtime_search}] \
+        [db one {SELECT count(*) FROM dolt_status}]
+  } {1 1 1 {local token} 0}
+}
+
+do_test autoincrement-only.1 {
+  reset_db
+  execsql {
+    CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT);
+    INSERT INTO items VALUES(1,'base'),(2,'base');
+    INSERT INTO dolt_ignore VALUES('runtime_jobs',1);
+    SELECT dolt_add('items','dolt_ignore');
+    SELECT dolt_commit('-m','base');
+    SELECT dolt_branch('feature');
+    CREATE TABLE runtime_jobs(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT
+    );
+    INSERT INTO runtime_jobs(label) VALUES('keep');
+    SELECT dolt_checkout('feature');
+    UPDATE items SET label='feature' WHERE id=1;
+    SELECT dolt_add('items');
+    SELECT dolt_commit('-m','feature');
+    SELECT dolt_checkout('main');
+    UPDATE items SET label='main' WHERE id=2;
+    SELECT dolt_add('items');
+    SELECT dolt_commit('-m','main');
+  }
+  db one {SELECT count(*) FROM dolt_status}
+} {0}
+do_test autoincrement-only.2 {
+  execsql {SELECT dolt_merge('feature')}
+  db close
+  sqlite3 db test.db
+  execsql {
+    INSERT INTO runtime_jobs(label) VALUES('next');
+    SELECT group_concat(id || ':' || label, ',') FROM runtime_jobs ORDER BY id;
+    SELECT name,seq FROM sqlite_sequence;
+    SELECT count(*) FROM dolt_status;
+    PRAGMA integrity_check;
+  }
+} {1:keep,2:next runtime_jobs 2 0 ok}
+do_test autoincrement-only.3 {
+  execsql {SELECT dolt_checkout('-b','committed','HEAD')}
+  set result [execsql {
+    SELECT count(*) FROM sqlite_master
+      WHERE name IN ('runtime_jobs','sqlite_sequence');
+  }]
+  execsql {SELECT dolt_checkout('main')}
+  lappend result [db one {SELECT max(id) FROM runtime_jobs}]
+  set result
+} {0 2}
+
+do_test autoincrement-shared.1 {
+  reset_db
+  execsql {
+    CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT);
+    INSERT INTO items VALUES(1,'base'),(2,'base');
+    CREATE TABLE tracked_ids(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT
+    );
+    INSERT INTO tracked_ids(id,label) VALUES(10,'tracked');
+    INSERT INTO dolt_ignore VALUES('runtime_jobs',1);
+    SELECT dolt_commit('-A','-m','base');
+    SELECT dolt_branch('feature');
+    CREATE TABLE runtime_jobs(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT
+    );
+    INSERT INTO runtime_jobs(label) VALUES('keep');
+    SELECT dolt_checkout('feature');
+    UPDATE items SET label='feature' WHERE id=1;
+    SELECT dolt_add('items');
+    SELECT dolt_commit('-m','feature');
+    SELECT dolt_checkout('main');
+    UPDATE items SET label='main' WHERE id=2;
+    SELECT dolt_add('items');
+    SELECT dolt_commit('-m','main');
+  }
+  db one {SELECT count(*) FROM dolt_status}
+} {0}
+do_test autoincrement-shared.2 {
+  execsql {SELECT dolt_merge('feature')}
+  db close
+  sqlite3 db test.db
+  execsql {
+    SELECT name,seq FROM sqlite_sequence ORDER BY name;
+    SELECT id,label FROM runtime_jobs;
+    SELECT id,label FROM tracked_ids;
+    SELECT count(*) FROM dolt_status;
+    PRAGMA integrity_check;
+  }
+} {runtime_jobs 1 tracked_ids 10 1 keep 10 tracked 0 ok}
+do_test autoincrement-shared.3 {
+  execsql {BEGIN; UPDATE sqlite_sequence SET seq=99 WHERE name='tracked_ids'}
+  set result [execsql {
+    SELECT table_name,status FROM dolt_status
+      WHERE table_name='sqlite_sequence';
+  }]
+  execsql {ROLLBACK}
+  set result
+} {sqlite_sequence modified}
+do_test autoincrement-shared.4 {
+  execsql {SELECT dolt_checkout('-b','committed','HEAD')}
+  set result [execsql {
+    SELECT name,seq FROM sqlite_sequence ORDER BY name;
+    SELECT count(*) FROM sqlite_master WHERE name='runtime_jobs';
+  }]
+  execsql {SELECT dolt_checkout('main')}
+  lappend result [db one {
+    SELECT seq FROM sqlite_sequence WHERE name='runtime_jobs'
+  }]
+  set result
+} {tracked_ids 10 0 1}
+
 source $testdir/malloc_common.tcl
 foreach diverged {0 1} {
   ignored_merge_setup 1 $diverged

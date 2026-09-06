@@ -1406,6 +1406,10 @@ int doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                           const ProllyHash *pCatHash,
                           SchemaEntry **ppEntries, int *pnEntries);
+int loadSchemaFromCatalogUnfiltered(sqlite3 *db, ChunkStore *cs,
+                                    ProllyCache *pCache,
+                                    const ProllyHash *pCatHash,
+                                    SchemaEntry **ppEntries, int *pnEntries);
 int loadSchemaEntryFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                                const ProllyHash *pCatHash, const char *zName,
                                SchemaEntry *pEntry, int *pFound);

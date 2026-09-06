@@ -107,12 +107,13 @@ static int appendSchemaDiffRow(
   return SQLITE_OK;
 }
 
-int loadSchemaFromCatalog(
+static int loadSchemaFromCatalogMode(
   sqlite3 *db,
   ChunkStore *cs,
   ProllyCache *pCache,
   const ProllyHash *pCatHash,
-  SchemaEntry **ppEntries, int *pnEntries
+  SchemaEntry **ppEntries, int *pnEntries,
+  int includeClustered
 ){
   struct TableEntry *aTables = 0;
   int nTables = 0;
@@ -240,7 +241,7 @@ load_schema_done:
     *pnEntries = 0;
     return rc;
   }
-  {
+  if( !includeClustered ){
     int iOut = 0;
     for(i=0; i<nEntries; i++){
       int j, clustered = 0;
@@ -273,6 +274,28 @@ load_schema_done:
   *ppEntries = aEntries;
   *pnEntries = nEntries;
   return rc;
+}
+
+int loadSchemaFromCatalog(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pCatHash,
+  SchemaEntry **ppEntries, int *pnEntries
+){
+  return loadSchemaFromCatalogMode(db, cs, pCache, pCatHash,
+                                   ppEntries, pnEntries, 0);
+}
+
+int loadSchemaFromCatalogUnfiltered(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pCatHash,
+  SchemaEntry **ppEntries, int *pnEntries
+){
+  return loadSchemaFromCatalogMode(db, cs, pCache, pCatHash,
+                                   ppEntries, pnEntries, 1);
 }
 
 int loadSchemaEntryFromCatalog(
