@@ -2,13 +2,13 @@
 
 > Nightly result: **PASS**
 >
-> Generated: 2026-09-05 11:09 UTC
+> Generated: 2026-09-06 11:07 UTC
 >
-> Commit: [`2bbf2dc953b59922fbd69e1c8d98457cb4a114a4`](https://github.com/dolthub/doltlite/commit/2bbf2dc953b59922fbd69e1c8d98457cb4a114a4)
+> Commit: [`37a390eb7b021962d9d287a465a2da3c9f59c3cf`](https://github.com/dolthub/doltlite/commit/37a390eb7b021962d9d287a465a2da3c9f59c3cf)
 >
 > Runner: ubuntu24 20260831.293.1
 >
-> [GitHub Actions run](https://github.com/dolthub/doltlite/actions/runs/33958249554)
+> [GitHub Actions run](https://github.com/dolthub/doltlite/actions/runs/34024916235)
 
 This report compares optimized DoltLite against stock SQLite on the same GitHub-hosted runner. Baseline and candidate execution order alternates on each repetition. Reported timings are medians. Paired-ratio noise is the median absolute deviation of the paired DoltLite/SQLite ratios, expressed as a percentage.
 
@@ -20,16 +20,16 @@ The primary view aggregates all key shapes and compares DoltLite with SQLite by 
 
 | Operation | SQLite median total | DoltLite median total | Ratio | Paired-ratio noise | Result |
 |---|---:|---:|---:|---:|---|
-| Reads | 10.36s | 11.62s | 1.1× | 1.4% | **PASS** |
-| Writes | 2.22s | 3.72s | 1.7× | 1.2% | **PASS** |
+| Reads | 10.21s | 10.73s | 1.1× | 1.4% | **PASS** |
+| Writes | 2.13s | 3.46s | 1.6× | 1.5% | **PASS** |
 
 ### File-backed
 
 | Operation | SQLite median total | DoltLite median total | Ratio | Paired-ratio noise | Result |
 |---|---:|---:|---:|---:|---|
-| Reads | 11.25s | 11.86s | 1.1× | 1.5% | **PASS** |
-| Writes | 3.08s | 4.06s | 1.3× | 1.8% | **PASS** |
-| Autocommit writes | 810.96ms | 2.93s | 3.6× | 6.3% | **PASS** |
+| Reads | 11.33s | 11.06s | 1.0× | 1.4% | **PASS** |
+| Writes | 3.44s | 4.09s | 1.2× | 2.2% | **PASS** |
+| Autocommit writes | 813.02ms | 2.76s | 3.4× | 5.8% | **PASS** |
 
 The absolute ceiling is 2.3× per ordinary workload and 1.9× for a section average. Durable autocommit writes use 6.0× and 5.0× ceilings respectively.
 
@@ -40,105 +40,105 @@ The integer, text, blob, and composite primary-key runs verify that performance 
 
 | Storage | Operation | Key shape | Workloads | Samples/workload | SQLite median total | DoltLite median total | Ratio | Paired-ratio noise | Result |
 |---|---|---|---:|---:|---:|---:|---:|---:|---|
-| In-memory | Reads | int | 15 | 55 | 2.44s | 2.67s | 1.1× | 1.3% | **PASS** |
-| In-memory | Reads | textpk | 15 | 55 | 2.82s | 3.01s | 1.1× | 1.6% | **PASS** |
-| In-memory | Reads | blobpk | 15 | 55 | 2.54s | 2.93s | 1.2× | 1.9% | **PASS** |
-| In-memory | Reads | compositepk | 15 | 55 | 2.56s | 3.01s | 1.2× | 1.3% | **PASS** |
-| In-memory | Writes | int | 8 | 55 | 433.34ms | 705.98ms | 1.6× | 1.2% | **PASS** |
-| In-memory | Writes | textpk | 8 | 55 | 605.48ms | 1.04s | 1.7× | 1.6% | **PASS** |
-| In-memory | Writes | blobpk | 8 | 55 | 594.75ms | 1.01s | 1.7× | 1.3% | **PASS** |
-| In-memory | Writes | compositepk | 8 | 55 | 585.60ms | 971.34ms | 1.7× | 1.1% | **PASS** |
-| File-backed | Reads | int | 15 | 55 | 2.65s | 2.72s | 1.0× | 1.3% | **PASS** |
-| File-backed | Reads | textpk | 15 | 55 | 2.97s | 3.04s | 1.0× | 1.5% | **PASS** |
-| File-backed | Reads | blobpk | 15 | 55 | 2.83s | 3.01s | 1.1× | 1.7% | **PASS** |
-| File-backed | Reads | compositepk | 15 | 55 | 2.79s | 3.07s | 1.1× | 1.6% | **PASS** |
-| File-backed | Writes | int | 8 | 55 | 576.30ms | 767.65ms | 1.3× | 1.5% | **PASS** |
-| File-backed | Writes | textpk | 8 | 55 | 928.64ms | 1.13s | 1.2× | 2.7% | **PASS** |
-| File-backed | Writes | blobpk | 8 | 55 | 824.46ms | 1.12s | 1.4× | 1.9% | **PASS** |
-| File-backed | Writes | compositepk | 8 | 55 | 748.88ms | 1.05s | 1.4× | 1.7% | **PASS** |
-| File-backed | Autocommit reads | int | 15 | 55 | 2.50s | 2.73s | 1.1× | 1.0% | **PASS** |
-| File-backed | Autocommit reads | textpk | 15 | 55 | 2.77s | 3.04s | 1.1× | 1.5% | **PASS** |
-| File-backed | Autocommit reads | blobpk | 15 | 55 | 2.73s | 3.03s | 1.1× | 1.5% | **PASS** |
-| File-backed | Autocommit reads | compositepk | 15 | 55 | 2.64s | 3.07s | 1.2× | 1.2% | **PASS** |
-| File-backed | Autocommit writes | int | 8 | 55 | 179.69ms | 670.84ms | 3.7× | 5.9% | **PASS** |
-| File-backed | Autocommit writes | textpk | 8 | 55 | 220.71ms | 773.89ms | 3.5× | 7.1% | **PASS** |
-| File-backed | Autocommit writes | blobpk | 8 | 55 | 213.32ms | 753.34ms | 3.5× | 6.0% | **PASS** |
-| File-backed | Autocommit writes | compositepk | 8 | 55 | 197.24ms | 732.24ms | 3.7× | 6.5% | **PASS** |
+| In-memory | Reads | int | 15 | 55 | 2.52s | 2.69s | 1.1× | 1.6% | **PASS** |
+| In-memory | Reads | textpk | 15 | 55 | 2.83s | 2.89s | 1.0× | 1.5% | **PASS** |
+| In-memory | Reads | blobpk | 15 | 55 | 2.70s | 2.86s | 1.1× | 2.0% | **PASS** |
+| In-memory | Reads | compositepk | 15 | 55 | 2.17s | 2.29s | 1.1× | 0.9% | **PASS** |
+| In-memory | Writes | int | 8 | 55 | 452.83ms | 727.21ms | 1.6× | 1.8% | **PASS** |
+| In-memory | Writes | textpk | 8 | 55 | 604.91ms | 1.00s | 1.7× | 1.5% | **PASS** |
+| In-memory | Writes | blobpk | 8 | 55 | 606.06ms | 1.02s | 1.7× | 1.6% | **PASS** |
+| In-memory | Writes | compositepk | 8 | 55 | 466.05ms | 702.28ms | 1.5× | 0.9% | **PASS** |
+| File-backed | Reads | int | 15 | 55 | 2.76s | 2.76s | 1.0× | 1.8% | **PASS** |
+| File-backed | Reads | textpk | 15 | 55 | 3.21s | 3.03s | 0.9× | 1.3% | **PASS** |
+| File-backed | Reads | blobpk | 15 | 55 | 2.99s | 2.94s | 1.0× | 1.7% | **PASS** |
+| File-backed | Reads | compositepk | 15 | 55 | 2.36s | 2.34s | 1.0× | 0.9% | **PASS** |
+| File-backed | Writes | int | 8 | 55 | 599.38ms | 788.43ms | 1.3× | 1.8% | **PASS** |
+| File-backed | Writes | textpk | 8 | 55 | 930.98ms | 1.10s | 1.2× | 5.2% | **PASS** |
+| File-backed | Writes | blobpk | 8 | 55 | 862.10ms | 1.12s | 1.3× | 2.1% | **PASS** |
+| File-backed | Writes | compositepk | 8 | 55 | 1.05s | 1.09s | 1.0× | 4.5% | **PASS** |
+| File-backed | Autocommit reads | int | 15 | 55 | 2.61s | 2.76s | 1.1× | 1.9% | **PASS** |
+| File-backed | Autocommit reads | textpk | 15 | 55 | 2.96s | 3.00s | 1.0× | 1.6% | **PASS** |
+| File-backed | Autocommit reads | blobpk | 15 | 55 | 2.84s | 2.94s | 1.0× | 1.8% | **PASS** |
+| File-backed | Autocommit reads | compositepk | 15 | 55 | 2.39s | 2.39s | 1.0× | 1.0% | **PASS** |
+| File-backed | Autocommit writes | int | 8 | 55 | 184.36ms | 684.98ms | 3.7× | 3.5% | **PASS** |
+| File-backed | Autocommit writes | textpk | 8 | 55 | 154.55ms | 575.67ms | 3.7× | 5.1% | **PASS** |
+| File-backed | Autocommit writes | blobpk | 8 | 55 | 223.33ms | 786.33ms | 3.5× | 7.2% | **PASS** |
+| File-backed | Autocommit writes | compositepk | 8 | 55 | 250.78ms | 712.34ms | 2.8× | 9.4% | **PASS** |
 
 <details>
 <summary>int workload details</summary>
 
 | Section | Workload | SQLite median | DoltLite median | Ratio | Paired-ratio noise | Result |
 |---|---|---:|---:|---:|---:|---|
-| mem_reads | `oltp_point_select` | 23.70ms | 29.98ms | 1.3× | 1.9% | PASS |
-| mem_reads | `oltp_range_select` | 10.06ms | 12.09ms | 1.2× | 2.1% | PASS |
-| mem_reads | `oltp_sum_range` | 9.40ms | 11.15ms | 1.2× | 1.3% | PASS |
-| mem_reads | `oltp_order_range` | 2.57ms | 2.81ms | 1.1× | 1.2% | PASS |
-| mem_reads | `oltp_distinct_range` | 3.66ms | 4.05ms | 1.1× | 0.8% | PASS |
-| mem_reads | `oltp_index_scan` | 3.80ms | 5.13ms | 1.4× | 1.7% | PASS |
-| mem_reads | `select_random_points` | 9.79ms | 10.86ms | 1.1× | 2.5% | PASS |
-| mem_reads | `select_random_ranges` | 2.88ms | 3.94ms | 1.4× | 1.6% | PASS |
-| mem_reads | `covering_index_scan` | 4.13ms | 4.17ms | 1.0× | 1.1% | PASS |
-| mem_reads | `groupby_scan` | 30.76ms | 33.04ms | 1.1× | 0.7% | PASS |
-| mem_reads | `index_join` | 5.74ms | 7.81ms | 1.4× | 1.4% | PASS |
-| mem_reads | `index_join_scan` | 3.19ms | 4.28ms | 1.3× | 2.0% | PASS |
-| mem_reads | `types_table_scan` | 1.05s | 1.16s | 1.1× | 0.5% | PASS |
-| mem_reads | `table_scan` | 1.17s | 1.26s | 1.1× | 0.4% | PASS |
-| mem_reads | `oltp_read_only` | 102.57ms | 120.12ms | 1.2× | 1.1% | PASS |
-| mem_writes | `oltp_bulk_insert` | 179.41ms | 254.34ms | 1.4× | 1.2% | PASS |
-| mem_writes | `oltp_insert` | 15.15ms | 27.34ms | 1.8× | 1.2% | PASS |
-| mem_writes | `oltp_update_index` | 49.03ms | 94.70ms | 1.9× | 1.4% | PASS |
-| mem_writes | `oltp_update_non_index` | 33.75ms | 59.57ms | 1.8× | 1.9% | PASS |
-| mem_writes | `oltp_delete_insert` | 44.28ms | 72.31ms | 1.6× | 1.2% | PASS |
-| mem_writes | `oltp_write_only` | 21.57ms | 46.51ms | 2.2× | 1.1% | PASS |
-| mem_writes | `types_delete_insert` | 24.03ms | 36.71ms | 1.5× | 1.4% | PASS |
-| mem_writes | `oltp_read_write` | 66.12ms | 114.50ms | 1.7× | 1.2% | PASS |
-| file_reads | `oltp_point_select` | 92.03ms | 48.40ms | 0.5× | 1.3% | PASS |
-| file_reads | `oltp_range_select` | 16.93ms | 13.94ms | 0.8× | 1.9% | PASS |
-| file_reads | `oltp_sum_range` | 16.46ms | 13.11ms | 0.8× | 1.6% | PASS |
-| file_reads | `oltp_order_range` | 3.34ms | 3.08ms | 0.9× | 1.4% | PASS |
-| file_reads | `oltp_distinct_range` | 4.45ms | 4.31ms | 1.0× | 1.4% | PASS |
-| file_reads | `oltp_index_scan` | 10.88ms | 7.37ms | 0.7× | 1.4% | PASS |
-| file_reads | `select_random_points` | 17.09ms | 12.99ms | 0.8× | 2.5% | PASS |
-| file_reads | `select_random_ranges` | 9.78ms | 5.85ms | 0.6× | 1.0% | PASS |
-| file_reads | `covering_index_scan` | 11.12ms | 6.37ms | 0.6× | 1.2% | PASS |
-| file_reads | `groupby_scan` | 31.73ms | 33.40ms | 1.1× | 0.7% | PASS |
-| file_reads | `index_join` | 9.66ms | 9.44ms | 1.0× | 1.2% | PASS |
-| file_reads | `index_join_scan` | 4.10ms | 4.69ms | 1.1× | 2.4% | PASS |
-| file_reads | `types_table_scan` | 1.05s | 1.16s | 1.1× | 0.4% | PASS |
-| file_reads | `table_scan` | 1.17s | 1.26s | 1.1× | 0.5% | PASS |
-| file_reads | `oltp_read_only` | 204.54ms | 148.26ms | 0.7× | 0.9% | PASS |
-| file_writes | `oltp_bulk_insert` | 191.87ms | 262.71ms | 1.4× | 0.8% | PASS |
-| file_writes | `oltp_insert` | 21.38ms | 31.18ms | 1.5× | 1.7% | PASS |
-| file_writes | `oltp_update_index` | 73.78ms | 105.02ms | 1.4× | 1.7% | PASS |
-| file_writes | `oltp_update_non_index` | 55.85ms | 69.72ms | 1.2× | 1.7% | PASS |
-| file_writes | `oltp_delete_insert` | 65.27ms | 81.15ms | 1.2× | 1.2% | PASS |
-| file_writes | `oltp_write_only` | 42.25ms | 53.54ms | 1.3× | 1.4% | PASS |
-| file_writes | `types_delete_insert` | 37.90ms | 42.45ms | 1.1× | 1.5% | PASS |
-| file_writes | `oltp_read_write` | 87.99ms | 121.87ms | 1.4× | 1.4% | PASS |
-| ac_reads | `oltp_point_select` | 45.75ms | 48.30ms | 1.1× | 1.0% | PASS |
-| ac_reads | `oltp_range_select` | 12.48ms | 13.98ms | 1.1× | 1.3% | PASS |
-| ac_reads | `oltp_sum_range` | 11.86ms | 13.11ms | 1.1× | 1.0% | PASS |
-| ac_reads | `oltp_order_range` | 2.90ms | 3.09ms | 1.1× | 1.4% | PASS |
-| ac_reads | `oltp_distinct_range` | 3.98ms | 4.29ms | 1.1× | 0.8% | PASS |
-| ac_reads | `oltp_index_scan` | 6.36ms | 7.37ms | 1.2× | 1.5% | PASS |
-| ac_reads | `select_random_points` | 12.33ms | 13.00ms | 1.1× | 2.2% | PASS |
-| ac_reads | `select_random_ranges` | 5.28ms | 5.88ms | 1.1× | 0.9% | PASS |
-| ac_reads | `covering_index_scan` | 6.63ms | 6.36ms | 1.0× | 1.5% | PASS |
-| ac_reads | `groupby_scan` | 31.21ms | 33.36ms | 1.1× | 0.8% | PASS |
-| ac_reads | `index_join` | 7.20ms | 9.39ms | 1.3× | 1.4% | PASS |
-| ac_reads | `index_join_scan` | 3.55ms | 4.71ms | 1.3× | 1.7% | PASS |
-| ac_reads | `types_table_scan` | 1.05s | 1.16s | 1.1× | 0.4% | PASS |
-| ac_reads | `table_scan` | 1.17s | 1.26s | 1.1× | 0.5% | PASS |
-| ac_reads | `oltp_read_only` | 137.02ms | 148.00ms | 1.1× | 1.0% | PASS |
-| ac_writes | `oltp_bulk_insert_ac` | 19.87ms | 69.83ms | 3.5× | 5.8% | PASS |
-| ac_writes | `oltp_insert_ac` | 22.51ms | 83.20ms | 3.7× | 6.4% | PASS |
-| ac_writes | `oltp_update_index_ac` | 24.32ms | 94.88ms | 3.9× | 3.6% | PASS |
-| ac_writes | `oltp_update_non_index_ac` | 20.60ms | 77.72ms | 3.8× | 4.9% | PASS |
-| ac_writes | `oltp_delete_insert_ac` | 23.11ms | 87.70ms | 3.8× | 7.2% | PASS |
-| ac_writes | `oltp_write_only_ac` | 22.60ms | 86.59ms | 3.8× | 4.5% | PASS |
-| ac_writes | `types_delete_insert_ac` | 19.85ms | 78.39ms | 3.9× | 6.7% | PASS |
-| ac_writes | `oltp_read_write_ac` | 26.83ms | 92.52ms | 3.4× | 6.0% | PASS |
+| mem_reads | `oltp_point_select` | 24.33ms | 30.69ms | 1.3× | 1.6% | PASS |
+| mem_reads | `oltp_range_select` | 10.47ms | 12.42ms | 1.2× | 1.0% | PASS |
+| mem_reads | `oltp_sum_range` | 9.66ms | 11.42ms | 1.2× | 1.9% | PASS |
+| mem_reads | `oltp_order_range` | 2.62ms | 2.86ms | 1.1× | 1.0% | PASS |
+| mem_reads | `oltp_distinct_range` | 3.76ms | 4.11ms | 1.1× | 1.1% | PASS |
+| mem_reads | `oltp_index_scan` | 3.91ms | 5.31ms | 1.4× | 2.8% | PASS |
+| mem_reads | `select_random_points` | 10.01ms | 11.26ms | 1.1× | 3.0% | PASS |
+| mem_reads | `select_random_ranges` | 3.00ms | 4.12ms | 1.4× | 2.7% | PASS |
+| mem_reads | `covering_index_scan` | 4.17ms | 4.23ms | 1.0× | 1.2% | PASS |
+| mem_reads | `groupby_scan` | 31.08ms | 32.94ms | 1.1× | 0.7% | PASS |
+| mem_reads | `index_join` | 5.83ms | 8.19ms | 1.4× | 1.7% | PASS |
+| mem_reads | `index_join_scan` | 3.26ms | 4.65ms | 1.4× | 3.0% | PASS |
+| mem_reads | `types_table_scan` | 1.06s | 1.14s | 1.1× | 0.6% | PASS |
+| mem_reads | `table_scan` | 1.24s | 1.29s | 1.0× | 1.6% | PASS |
+| mem_reads | `oltp_read_only` | 108.77ms | 123.28ms | 1.1× | 1.2% | PASS |
+| mem_writes | `oltp_bulk_insert` | 186.11ms | 258.93ms | 1.4× | 1.2% | PASS |
+| mem_writes | `oltp_insert` | 15.47ms | 27.91ms | 1.8× | 0.9% | PASS |
+| mem_writes | `oltp_update_index` | 51.21ms | 99.29ms | 1.9× | 1.9% | PASS |
+| mem_writes | `oltp_update_non_index` | 36.32ms | 61.92ms | 1.7× | 2.9% | PASS |
+| mem_writes | `oltp_delete_insert` | 46.56ms | 75.60ms | 1.6× | 2.0% | PASS |
+| mem_writes | `oltp_write_only` | 22.93ms | 48.53ms | 2.1× | 2.5% | PASS |
+| mem_writes | `types_delete_insert` | 25.13ms | 38.02ms | 1.5× | 1.8% | PASS |
+| mem_writes | `oltp_read_write` | 69.09ms | 117.01ms | 1.7× | 1.5% | PASS |
+| file_reads | `oltp_point_select` | 94.43ms | 49.78ms | 0.5× | 0.9% | PASS |
+| file_reads | `oltp_range_select` | 18.13ms | 14.41ms | 0.8× | 3.0% | PASS |
+| file_reads | `oltp_sum_range` | 17.25ms | 13.66ms | 0.8× | 2.6% | PASS |
+| file_reads | `oltp_order_range` | 3.55ms | 3.31ms | 0.9× | 3.7% | PASS |
+| file_reads | `oltp_distinct_range` | 4.70ms | 4.53ms | 1.0× | 2.3% | PASS |
+| file_reads | `oltp_index_scan` | 11.10ms | 7.78ms | 0.7× | 2.2% | PASS |
+| file_reads | `select_random_points` | 17.40ms | 13.62ms | 0.8× | 4.5% | PASS |
+| file_reads | `select_random_ranges` | 10.01ms | 6.10ms | 0.6× | 1.8% | PASS |
+| file_reads | `covering_index_scan` | 11.36ms | 6.64ms | 0.6× | 1.8% | PASS |
+| file_reads | `groupby_scan` | 32.22ms | 33.66ms | 1.0× | 0.9% | PASS |
+| file_reads | `index_join` | 9.81ms | 10.19ms | 1.0× | 1.7% | PASS |
+| file_reads | `index_join_scan` | 4.17ms | 4.95ms | 1.2× | 3.0% | PASS |
+| file_reads | `types_table_scan` | 1.05s | 1.14s | 1.1× | 0.6% | PASS |
+| file_reads | `table_scan` | 1.27s | 1.30s | 1.0× | 1.2% | PASS |
+| file_reads | `oltp_read_only` | 209.44ms | 150.22ms | 0.7× | 1.1% | PASS |
+| file_writes | `oltp_bulk_insert` | 198.57ms | 267.78ms | 1.3× | 1.3% | PASS |
+| file_writes | `oltp_insert` | 21.93ms | 31.80ms | 1.5× | 1.5% | PASS |
+| file_writes | `oltp_update_index` | 77.27ms | 110.10ms | 1.4× | 2.1% | PASS |
+| file_writes | `oltp_update_non_index` | 58.29ms | 72.15ms | 1.2× | 2.0% | PASS |
+| file_writes | `oltp_delete_insert` | 68.10ms | 83.83ms | 1.2× | 1.7% | PASS |
+| file_writes | `oltp_write_only` | 43.33ms | 55.35ms | 1.3× | 1.6% | PASS |
+| file_writes | `types_delete_insert` | 39.17ms | 43.43ms | 1.1× | 1.8% | PASS |
+| file_writes | `oltp_read_write` | 92.74ms | 123.99ms | 1.3× | 1.8% | PASS |
+| ac_reads | `oltp_point_select` | 46.92ms | 49.42ms | 1.1× | 1.2% | PASS |
+| ac_reads | `oltp_range_select` | 13.29ms | 14.28ms | 1.1× | 2.0% | PASS |
+| ac_reads | `oltp_sum_range` | 12.27ms | 13.58ms | 1.1× | 2.3% | PASS |
+| ac_reads | `oltp_order_range` | 3.10ms | 3.34ms | 1.1× | 3.4% | PASS |
+| ac_reads | `oltp_distinct_range` | 4.18ms | 4.52ms | 1.1× | 2.4% | PASS |
+| ac_reads | `oltp_index_scan` | 6.56ms | 7.66ms | 1.2× | 2.6% | PASS |
+| ac_reads | `select_random_points` | 12.80ms | 13.48ms | 1.1× | 2.2% | PASS |
+| ac_reads | `select_random_ranges` | 5.47ms | 6.08ms | 1.1× | 1.8% | PASS |
+| ac_reads | `covering_index_scan` | 6.97ms | 6.65ms | 1.0× | 1.8% | PASS |
+| ac_reads | `groupby_scan` | 31.70ms | 33.75ms | 1.1× | 0.8% | PASS |
+| ac_reads | `index_join` | 7.46ms | 10.02ms | 1.3× | 1.9% | PASS |
+| ac_reads | `index_join_scan` | 3.75ms | 4.98ms | 1.3× | 3.3% | PASS |
+| ac_reads | `types_table_scan` | 1.05s | 1.14s | 1.1× | 0.7% | PASS |
+| ac_reads | `table_scan` | 1.26s | 1.29s | 1.0× | 1.4% | PASS |
+| ac_reads | `oltp_read_only` | 144.08ms | 152.47ms | 1.1× | 0.8% | PASS |
+| ac_writes | `oltp_bulk_insert_ac` | 20.55ms | 71.54ms | 3.5× | 2.7% | PASS |
+| ac_writes | `oltp_insert_ac` | 22.95ms | 85.29ms | 3.7× | 2.3% | PASS |
+| ac_writes | `oltp_update_index_ac` | 25.00ms | 97.10ms | 3.9× | 3.4% | PASS |
+| ac_writes | `oltp_update_non_index_ac` | 21.46ms | 80.05ms | 3.7× | 5.8% | PASS |
+| ac_writes | `oltp_delete_insert_ac` | 22.89ms | 90.07ms | 3.9× | 3.7% | PASS |
+| ac_writes | `oltp_write_only_ac` | 23.12ms | 87.23ms | 3.8× | 4.3% | PASS |
+| ac_writes | `types_delete_insert_ac` | 20.60ms | 80.37ms | 3.9× | 4.6% | PASS |
+| ac_writes | `oltp_read_write_ac` | 27.79ms | 93.34ms | 3.4× | 3.2% | PASS |
 
 </details>
 
@@ -147,75 +147,75 @@ The integer, text, blob, and composite primary-key runs verify that performance 
 
 | Section | Workload | SQLite median | DoltLite median | Ratio | Paired-ratio noise | Result |
 |---|---|---:|---:|---:|---:|---|
-| mem_reads | `oltp_point_select` | 35.99ms | 38.96ms | 1.1× | 1.6% | PASS |
-| mem_reads | `oltp_range_select` | 16.58ms | 14.06ms | 0.8× | 1.9% | PASS |
-| mem_reads | `oltp_sum_range` | 15.32ms | 14.06ms | 0.9× | 1.6% | PASS |
-| mem_reads | `oltp_order_range` | 3.30ms | 3.18ms | 1.0× | 1.7% | PASS |
-| mem_reads | `oltp_distinct_range` | 4.43ms | 4.42ms | 1.0× | 0.9% | PASS |
-| mem_reads | `oltp_index_scan` | 3.98ms | 6.22ms | 1.6× | 1.6% | PASS |
-| mem_reads | `select_random_points` | 21.77ms | 21.28ms | 1.0× | 1.6% | PASS |
-| mem_reads | `select_random_ranges` | 3.63ms | 5.36ms | 1.5× | 1.1% | PASS |
-| mem_reads | `covering_index_scan` | 4.21ms | 4.71ms | 1.1× | 1.8% | PASS |
-| mem_reads | `groupby_scan` | 35.74ms | 35.07ms | 1.0× | 1.0% | PASS |
-| mem_reads | `index_join` | 10.54ms | 9.64ms | 0.9× | 2.6% | PASS |
-| mem_reads | `index_join_scan` | 3.72ms | 5.28ms | 1.4× | 2.4% | PASS |
-| mem_reads | `types_table_scan` | 1.13s | 1.29s | 1.1× | 2.7% | PASS |
-| mem_reads | `table_scan` | 1.39s | 1.41s | 1.0× | 2.0% | PASS |
-| mem_reads | `oltp_read_only` | 142.73ms | 141.75ms | 1.0× | 1.4% | PASS |
-| mem_writes | `oltp_bulk_insert` | 246.33ms | 384.09ms | 1.6× | 0.9% | PASS |
-| mem_writes | `oltp_insert` | 18.33ms | 39.69ms | 2.2× | 0.9% | PASS |
-| mem_writes | `oltp_update_index` | 66.20ms | 146.59ms | 2.2× | 1.4% | PASS |
-| mem_writes | `oltp_update_non_index` | 49.39ms | 88.11ms | 1.8× | 1.7% | PASS |
-| mem_writes | `oltp_delete_insert` | 54.82ms | 108.10ms | 2.0× | 1.1% | PASS |
-| mem_writes | `oltp_write_only` | 28.79ms | 64.40ms | 2.2× | 1.8% | PASS |
-| mem_writes | `types_delete_insert` | 39.44ms | 55.26ms | 1.4× | 1.9% | PASS |
-| mem_writes | `oltp_read_write` | 102.18ms | 153.07ms | 1.5× | 2.6% | PASS |
-| file_reads | `oltp_point_select` | 106.81ms | 57.58ms | 0.5× | 1.7% | PASS |
-| file_reads | `oltp_range_select` | 24.17ms | 16.02ms | 0.7× | 1.5% | PASS |
-| file_reads | `oltp_sum_range` | 23.19ms | 16.29ms | 0.7× | 1.9% | PASS |
-| file_reads | `oltp_order_range` | 4.17ms | 3.46ms | 0.8× | 1.8% | PASS |
-| file_reads | `oltp_distinct_range` | 5.34ms | 4.72ms | 0.9× | 1.2% | PASS |
-| file_reads | `oltp_index_scan` | 11.33ms | 8.43ms | 0.7× | 1.5% | PASS |
-| file_reads | `select_random_points` | 31.17ms | 24.53ms | 0.8× | 2.6% | PASS |
-| file_reads | `select_random_ranges` | 10.77ms | 7.35ms | 0.7× | 1.1% | PASS |
-| file_reads | `covering_index_scan` | 11.58ms | 6.87ms | 0.6× | 1.4% | PASS |
-| file_reads | `groupby_scan` | 36.82ms | 35.51ms | 1.0× | 0.8% | PASS |
-| file_reads | `index_join` | 14.79ms | 11.02ms | 0.7× | 2.4% | PASS |
-| file_reads | `index_join_scan` | 4.76ms | 5.68ms | 1.2× | 1.9% | PASS |
-| file_reads | `types_table_scan` | 1.09s | 1.27s | 1.2× | 0.8% | PASS |
-| file_reads | `table_scan` | 1.35s | 1.40s | 1.0× | 2.0% | PASS |
-| file_reads | `oltp_read_only` | 252.03ms | 171.55ms | 0.7× | 1.3% | PASS |
-| file_writes | `oltp_bulk_insert` | 271.30ms | 397.56ms | 1.5× | 1.4% | PASS |
-| file_writes | `oltp_insert` | 25.77ms | 46.49ms | 1.8× | 1.8% | PASS |
-| file_writes | `oltp_update_index` | 132.85ms | 163.21ms | 1.2× | 6.1% | PASS |
-| file_writes | `oltp_update_non_index` | 100.09ms | 101.63ms | 1.0× | 8.9% | PASS |
-| file_writes | `oltp_delete_insert` | 95.88ms | 121.19ms | 1.3× | 2.0% | PASS |
-| file_writes | `oltp_write_only` | 87.52ms | 74.36ms | 0.8× | 11.4% | PASS |
-| file_writes | `types_delete_insert` | 72.58ms | 63.80ms | 0.9× | 2.3% | PASS |
-| file_writes | `oltp_read_write` | 142.64ms | 161.37ms | 1.1× | 3.2% | PASS |
-| ac_reads | `oltp_point_select` | 59.47ms | 57.34ms | 1.0× | 1.0% | PASS |
-| ac_reads | `oltp_range_select` | 19.48ms | 16.05ms | 0.8× | 2.4% | PASS |
-| ac_reads | `oltp_sum_range` | 18.51ms | 16.23ms | 0.9× | 1.5% | PASS |
-| ac_reads | `oltp_order_range` | 3.78ms | 3.50ms | 0.9× | 1.5% | PASS |
-| ac_reads | `oltp_distinct_range` | 4.88ms | 4.76ms | 1.0× | 1.3% | PASS |
-| ac_reads | `oltp_index_scan` | 6.67ms | 8.46ms | 1.3× | 1.3% | PASS |
-| ac_reads | `select_random_points` | 25.64ms | 24.27ms | 0.9× | 2.9% | PASS |
-| ac_reads | `select_random_ranges` | 6.15ms | 7.33ms | 1.2× | 1.4% | PASS |
-| ac_reads | `covering_index_scan` | 6.92ms | 6.87ms | 1.0× | 1.4% | PASS |
-| ac_reads | `groupby_scan` | 35.87ms | 35.44ms | 1.0× | 0.8% | PASS |
-| ac_reads | `index_join` | 12.53ms | 11.03ms | 0.9× | 2.9% | PASS |
-| ac_reads | `index_join_scan` | 4.24ms | 5.64ms | 1.3× | 2.4% | PASS |
-| ac_reads | `types_table_scan` | 1.10s | 1.28s | 1.2× | 1.6% | PASS |
-| ac_reads | `table_scan` | 1.28s | 1.40s | 1.1× | 3.3% | PASS |
-| ac_reads | `oltp_read_only` | 177.71ms | 169.92ms | 1.0× | 1.0% | PASS |
-| ac_writes | `oltp_bulk_insert_ac` | 24.85ms | 77.25ms | 3.1× | 6.2% | PASS |
-| ac_writes | `oltp_insert_ac` | 29.13ms | 95.79ms | 3.3× | 8.9% | PASS |
-| ac_writes | `oltp_update_index_ac` | 29.29ms | 111.54ms | 3.8× | 8.9% | PASS |
-| ac_writes | `oltp_update_non_index_ac` | 23.74ms | 89.06ms | 3.8× | 4.6% | PASS |
-| ac_writes | `oltp_delete_insert_ac` | 27.59ms | 99.83ms | 3.6× | 7.0% | PASS |
-| ac_writes | `oltp_write_only_ac` | 27.32ms | 103.07ms | 3.8× | 7.6% | PASS |
-| ac_writes | `types_delete_insert_ac` | 24.62ms | 90.08ms | 3.7× | 7.2% | PASS |
-| ac_writes | `oltp_read_write_ac` | 34.17ms | 107.26ms | 3.1× | 5.7% | PASS |
+| mem_reads | `oltp_point_select` | 40.78ms | 37.74ms | 0.9× | 2.9% | PASS |
+| mem_reads | `oltp_range_select` | 17.93ms | 13.81ms | 0.8× | 2.0% | PASS |
+| mem_reads | `oltp_sum_range` | 16.37ms | 13.59ms | 0.8× | 1.6% | PASS |
+| mem_reads | `oltp_order_range` | 3.60ms | 3.26ms | 0.9× | 0.9% | PASS |
+| mem_reads | `oltp_distinct_range` | 4.68ms | 4.39ms | 0.9× | 0.7% | PASS |
+| mem_reads | `oltp_index_scan` | 4.19ms | 6.24ms | 1.5× | 1.6% | PASS |
+| mem_reads | `select_random_points` | 22.73ms | 20.79ms | 0.9× | 3.2% | PASS |
+| mem_reads | `select_random_ranges` | 3.63ms | 5.35ms | 1.5× | 0.9% | PASS |
+| mem_reads | `covering_index_scan` | 4.28ms | 4.52ms | 1.1× | 2.0% | PASS |
+| mem_reads | `groupby_scan` | 37.75ms | 36.16ms | 1.0× | 0.8% | PASS |
+| mem_reads | `index_join` | 10.73ms | 8.76ms | 0.8× | 1.5% | PASS |
+| mem_reads | `index_join_scan` | 3.97ms | 5.70ms | 1.4× | 2.2% | PASS |
+| mem_reads | `types_table_scan` | 1.17s | 1.23s | 1.1× | 0.5% | PASS |
+| mem_reads | `table_scan` | 1.34s | 1.37s | 1.0× | 1.1% | PASS |
+| mem_reads | `oltp_read_only` | 147.38ms | 134.50ms | 0.9× | 1.4% | PASS |
+| mem_writes | `oltp_bulk_insert` | 245.89ms | 359.64ms | 1.5× | 0.8% | PASS |
+| mem_writes | `oltp_insert` | 18.50ms | 39.15ms | 2.1× | 1.0% | PASS |
+| mem_writes | `oltp_update_index` | 65.95ms | 145.27ms | 2.2× | 1.2% | PASS |
+| mem_writes | `oltp_update_non_index` | 49.84ms | 86.73ms | 1.7× | 1.6% | PASS |
+| mem_writes | `oltp_delete_insert` | 55.44ms | 108.20ms | 2.0× | 1.5% | PASS |
+| mem_writes | `oltp_write_only` | 30.14ms | 66.81ms | 2.2× | 1.9% | PASS |
+| mem_writes | `types_delete_insert` | 40.28ms | 54.47ms | 1.4× | 1.9% | PASS |
+| mem_writes | `oltp_read_write` | 98.87ms | 144.49ms | 1.5× | 2.3% | PASS |
+| file_reads | `oltp_point_select` | 122.06ms | 57.35ms | 0.5× | 1.2% | PASS |
+| file_reads | `oltp_range_select` | 27.59ms | 16.29ms | 0.6× | 1.4% | PASS |
+| file_reads | `oltp_sum_range` | 26.14ms | 16.20ms | 0.6× | 0.8% | PASS |
+| file_reads | `oltp_order_range` | 4.58ms | 3.53ms | 0.8× | 1.0% | PASS |
+| file_reads | `oltp_distinct_range` | 5.59ms | 4.70ms | 0.8× | 1.0% | PASS |
+| file_reads | `oltp_index_scan` | 12.73ms | 8.39ms | 0.7× | 1.5% | PASS |
+| file_reads | `select_random_points` | 31.82ms | 23.08ms | 0.7× | 0.9% | PASS |
+| file_reads | `select_random_ranges` | 12.17ms | 7.63ms | 0.6× | 1.4% | PASS |
+| file_reads | `covering_index_scan` | 13.20ms | 7.10ms | 0.5× | 1.2% | PASS |
+| file_reads | `groupby_scan` | 39.72ms | 37.23ms | 0.9× | 1.3% | PASS |
+| file_reads | `index_join` | 16.33ms | 11.05ms | 0.7× | 2.0% | PASS |
+| file_reads | `index_join_scan` | 5.00ms | 6.24ms | 1.2× | 2.1% | PASS |
+| file_reads | `types_table_scan` | 1.22s | 1.26s | 1.0× | 1.5% | PASS |
+| file_reads | `table_scan` | 1.40s | 1.39s | 1.0× | 2.6% | PASS |
+| file_reads | `oltp_read_only` | 274.98ms | 167.72ms | 0.6× | 1.1% | PASS |
+| file_writes | `oltp_bulk_insert` | 270.00ms | 371.31ms | 1.4× | 1.2% | PASS |
+| file_writes | `oltp_insert` | 25.78ms | 46.27ms | 1.8× | 2.0% | PASS |
+| file_writes | `oltp_update_index` | 128.43ms | 163.55ms | 1.3× | 8.1% | PASS |
+| file_writes | `oltp_update_non_index` | 97.09ms | 101.25ms | 1.0× | 9.8% | PASS |
+| file_writes | `oltp_delete_insert` | 95.15ms | 122.49ms | 1.3× | 1.0% | PASS |
+| file_writes | `oltp_write_only` | 84.85ms | 75.59ms | 0.9× | 15.1% | PASS |
+| file_writes | `types_delete_insert` | 71.89ms | 62.45ms | 0.9× | 2.2% | PASS |
+| file_writes | `oltp_read_write` | 157.79ms | 158.68ms | 1.0× | 9.4% | PASS |
+| ac_reads | `oltp_point_select` | 68.44ms | 58.96ms | 0.9× | 1.7% | PASS |
+| ac_reads | `oltp_range_select` | 22.03ms | 16.32ms | 0.7× | 2.0% | PASS |
+| ac_reads | `oltp_sum_range` | 19.38ms | 15.96ms | 0.8× | 2.3% | PASS |
+| ac_reads | `oltp_order_range` | 4.04ms | 3.52ms | 0.9× | 1.1% | PASS |
+| ac_reads | `oltp_distinct_range` | 5.03ms | 4.68ms | 0.9× | 1.0% | PASS |
+| ac_reads | `oltp_index_scan` | 7.12ms | 8.34ms | 1.2× | 1.6% | PASS |
+| ac_reads | `select_random_points` | 26.82ms | 23.32ms | 0.9× | 1.7% | PASS |
+| ac_reads | `select_random_ranges` | 6.65ms | 7.64ms | 1.1× | 1.3% | PASS |
+| ac_reads | `covering_index_scan` | 7.47ms | 7.11ms | 1.0× | 1.2% | PASS |
+| ac_reads | `groupby_scan` | 38.62ms | 36.77ms | 1.0× | 0.8% | PASS |
+| ac_reads | `index_join` | 13.36ms | 11.04ms | 0.8× | 2.2% | PASS |
+| ac_reads | `index_join_scan` | 4.45ms | 6.07ms | 1.4× | 1.1% | PASS |
+| ac_reads | `types_table_scan` | 1.18s | 1.24s | 1.1× | 0.9% | PASS |
+| ac_reads | `table_scan` | 1.37s | 1.39s | 1.0× | 3.0% | PASS |
+| ac_reads | `oltp_read_only` | 189.89ms | 165.86ms | 0.9× | 1.9% | PASS |
+| ac_writes | `oltp_bulk_insert_ac` | 16.80ms | 56.89ms | 3.4× | 4.3% | PASS |
+| ac_writes | `oltp_insert_ac` | 19.39ms | 69.46ms | 3.6× | 5.0% | PASS |
+| ac_writes | `oltp_update_index_ac` | 19.68ms | 82.70ms | 4.2× | 5.2% | PASS |
+| ac_writes | `oltp_update_non_index_ac` | 16.26ms | 65.88ms | 4.1× | 5.5% | PASS |
+| ac_writes | `oltp_delete_insert_ac` | 19.12ms | 75.16ms | 3.9× | 3.3% | PASS |
+| ac_writes | `oltp_write_only_ac` | 18.97ms | 75.06ms | 4.0× | 5.4% | PASS |
+| ac_writes | `types_delete_insert_ac` | 17.60ms | 67.91ms | 3.9× | 6.1% | PASS |
+| ac_writes | `oltp_read_write_ac` | 26.72ms | 82.61ms | 3.1× | 5.0% | PASS |
 
 </details>
 
@@ -224,75 +224,75 @@ The integer, text, blob, and composite primary-key runs verify that performance 
 
 | Section | Workload | SQLite median | DoltLite median | Ratio | Paired-ratio noise | Result |
 |---|---|---:|---:|---:|---:|---|
-| mem_reads | `oltp_point_select` | 35.90ms | 38.22ms | 1.1× | 1.9% | PASS |
-| mem_reads | `oltp_range_select` | 16.49ms | 13.83ms | 0.8× | 2.4% | PASS |
-| mem_reads | `oltp_sum_range` | 15.38ms | 13.90ms | 0.9× | 2.7% | PASS |
-| mem_reads | `oltp_order_range` | 3.27ms | 3.16ms | 1.0× | 1.3% | PASS |
-| mem_reads | `oltp_distinct_range` | 4.43ms | 4.40ms | 1.0× | 0.9% | PASS |
-| mem_reads | `oltp_index_scan` | 4.00ms | 6.20ms | 1.6× | 1.4% | PASS |
-| mem_reads | `select_random_points` | 22.12ms | 20.90ms | 0.9× | 3.4% | PASS |
-| mem_reads | `select_random_ranges` | 3.52ms | 5.32ms | 1.5× | 1.9% | PASS |
-| mem_reads | `covering_index_scan` | 4.20ms | 4.81ms | 1.1× | 2.4% | PASS |
-| mem_reads | `groupby_scan` | 35.34ms | 34.88ms | 1.0× | 0.8% | PASS |
-| mem_reads | `index_join` | 10.61ms | 9.54ms | 0.9× | 2.2% | PASS |
-| mem_reads | `index_join_scan` | 3.75ms | 5.26ms | 1.4× | 2.9% | PASS |
-| mem_reads | `types_table_scan` | 1.06s | 1.26s | 1.2× | 0.6% | PASS |
-| mem_reads | `table_scan` | 1.19s | 1.37s | 1.2× | 0.4% | PASS |
-| mem_reads | `oltp_read_only` | 137.42ms | 138.31ms | 1.0× | 0.9% | PASS |
-| mem_writes | `oltp_bulk_insert` | 247.63ms | 376.21ms | 1.5× | 1.0% | PASS |
-| mem_writes | `oltp_insert` | 18.77ms | 38.97ms | 2.1× | 0.8% | PASS |
-| mem_writes | `oltp_update_index` | 64.83ms | 140.98ms | 2.2× | 2.1% | PASS |
-| mem_writes | `oltp_update_non_index` | 47.84ms | 84.37ms | 1.8× | 1.4% | PASS |
-| mem_writes | `oltp_delete_insert` | 53.46ms | 103.88ms | 1.9× | 1.4% | PASS |
-| mem_writes | `oltp_write_only` | 28.39ms | 63.12ms | 2.2× | 1.2% | PASS |
-| mem_writes | `types_delete_insert` | 38.09ms | 52.90ms | 1.4× | 2.1% | PASS |
-| mem_writes | `oltp_read_write` | 95.72ms | 146.95ms | 1.5× | 1.3% | PASS |
-| file_reads | `oltp_point_select` | 105.17ms | 57.60ms | 0.5× | 1.3% | PASS |
-| file_reads | `oltp_range_select` | 23.44ms | 16.02ms | 0.7× | 2.1% | PASS |
-| file_reads | `oltp_sum_range` | 23.11ms | 16.18ms | 0.7× | 2.0% | PASS |
-| file_reads | `oltp_order_range` | 4.34ms | 3.55ms | 0.8× | 1.9% | PASS |
-| file_reads | `oltp_distinct_range` | 5.51ms | 4.83ms | 0.9× | 1.6% | PASS |
-| file_reads | `oltp_index_scan` | 11.25ms | 8.44ms | 0.8× | 1.0% | PASS |
-| file_reads | `select_random_points` | 30.28ms | 23.94ms | 0.8× | 3.4% | PASS |
-| file_reads | `select_random_ranges` | 10.51ms | 7.34ms | 0.7× | 1.0% | PASS |
-| file_reads | `covering_index_scan` | 11.36ms | 6.87ms | 0.6× | 1.7% | PASS |
-| file_reads | `groupby_scan` | 36.28ms | 35.31ms | 1.0× | 0.9% | PASS |
-| file_reads | `index_join` | 14.25ms | 10.99ms | 0.8× | 2.5% | PASS |
-| file_reads | `index_join_scan` | 4.62ms | 5.58ms | 1.2× | 2.0% | PASS |
-| file_reads | `types_table_scan` | 1.06s | 1.25s | 1.2× | 0.5% | PASS |
-| file_reads | `table_scan` | 1.24s | 1.39s | 1.1× | 1.8% | PASS |
-| file_reads | `oltp_read_only` | 259.34ms | 173.06ms | 0.7× | 1.4% | PASS |
-| file_writes | `oltp_bulk_insert` | 269.56ms | 392.08ms | 1.5× | 1.1% | PASS |
-| file_writes | `oltp_insert` | 26.70ms | 47.09ms | 1.8× | 1.9% | PASS |
-| file_writes | `oltp_update_index` | 102.90ms | 164.06ms | 1.6× | 2.3% | PASS |
-| file_writes | `oltp_update_non_index` | 86.14ms | 101.61ms | 1.2× | 5.5% | PASS |
-| file_writes | `oltp_delete_insert` | 90.63ms | 120.38ms | 1.3× | 1.9% | PASS |
-| file_writes | `oltp_write_only` | 57.89ms | 73.00ms | 1.3× | 2.5% | PASS |
-| file_writes | `types_delete_insert` | 63.90ms | 62.43ms | 1.0× | 1.8% | PASS |
-| file_writes | `oltp_read_write` | 126.74ms | 157.65ms | 1.2× | 1.2% | PASS |
-| ac_reads | `oltp_point_select` | 58.54ms | 57.61ms | 1.0× | 1.3% | PASS |
-| ac_reads | `oltp_range_select` | 18.73ms | 16.04ms | 0.9× | 1.6% | PASS |
-| ac_reads | `oltp_sum_range` | 17.72ms | 16.18ms | 0.9× | 1.5% | PASS |
-| ac_reads | `oltp_order_range` | 3.84ms | 3.50ms | 0.9× | 1.9% | PASS |
-| ac_reads | `oltp_distinct_range` | 5.03ms | 4.76ms | 0.9× | 1.7% | PASS |
-| ac_reads | `oltp_index_scan` | 6.78ms | 8.58ms | 1.3× | 2.8% | PASS |
-| ac_reads | `select_random_points` | 27.31ms | 24.78ms | 0.9× | 2.6% | PASS |
-| ac_reads | `select_random_ranges` | 6.06ms | 7.34ms | 1.2× | 1.1% | PASS |
-| ac_reads | `covering_index_scan` | 6.93ms | 6.88ms | 1.0× | 1.5% | PASS |
-| ac_reads | `groupby_scan` | 36.02ms | 35.43ms | 1.0× | 0.8% | PASS |
-| ac_reads | `index_join` | 12.01ms | 11.06ms | 0.9× | 3.0% | PASS |
-| ac_reads | `index_join_scan` | 4.26ms | 5.63ms | 1.3× | 1.8% | PASS |
-| ac_reads | `types_table_scan` | 1.07s | 1.26s | 1.2× | 1.3% | PASS |
-| ac_reads | `table_scan` | 1.26s | 1.40s | 1.1× | 1.3% | PASS |
-| ac_reads | `oltp_read_only` | 184.33ms | 171.71ms | 0.9× | 1.2% | PASS |
-| ac_writes | `oltp_bulk_insert_ac` | 22.98ms | 76.81ms | 3.3× | 5.0% | PASS |
-| ac_writes | `oltp_insert_ac` | 25.43ms | 93.70ms | 3.7× | 5.9% | PASS |
-| ac_writes | `oltp_update_index_ac` | 28.63ms | 104.89ms | 3.7× | 5.6% | PASS |
-| ac_writes | `oltp_update_non_index_ac` | 23.63ms | 87.23ms | 3.7× | 6.1% | PASS |
-| ac_writes | `oltp_delete_insert_ac` | 27.31ms | 97.30ms | 3.6× | 5.5% | PASS |
-| ac_writes | `oltp_write_only_ac` | 26.75ms | 96.26ms | 3.6× | 7.4% | PASS |
-| ac_writes | `types_delete_insert_ac` | 24.93ms | 91.66ms | 3.7× | 7.3% | PASS |
-| ac_writes | `oltp_read_write_ac` | 33.66ms | 105.49ms | 3.1× | 6.7% | PASS |
+| mem_reads | `oltp_point_select` | 35.71ms | 39.00ms | 1.1× | 2.0% | PASS |
+| mem_reads | `oltp_range_select` | 16.86ms | 14.13ms | 0.8× | 2.9% | PASS |
+| mem_reads | `oltp_sum_range` | 15.39ms | 13.84ms | 0.9× | 1.4% | PASS |
+| mem_reads | `oltp_order_range` | 3.32ms | 3.22ms | 1.0× | 1.4% | PASS |
+| mem_reads | `oltp_distinct_range` | 4.41ms | 4.45ms | 1.0× | 0.9% | PASS |
+| mem_reads | `oltp_index_scan` | 4.06ms | 6.49ms | 1.6× | 2.3% | PASS |
+| mem_reads | `select_random_points` | 21.97ms | 21.63ms | 1.0× | 3.1% | PASS |
+| mem_reads | `select_random_ranges` | 3.55ms | 5.44ms | 1.5× | 1.6% | PASS |
+| mem_reads | `covering_index_scan` | 4.18ms | 4.93ms | 1.2× | 1.4% | PASS |
+| mem_reads | `groupby_scan` | 35.40ms | 34.94ms | 1.0× | 0.8% | PASS |
+| mem_reads | `index_join` | 10.56ms | 9.96ms | 0.9× | 2.9% | PASS |
+| mem_reads | `index_join_scan` | 3.76ms | 5.62ms | 1.5× | 2.6% | PASS |
+| mem_reads | `types_table_scan` | 1.14s | 1.22s | 1.1× | 2.0% | PASS |
+| mem_reads | `table_scan` | 1.26s | 1.33s | 1.1× | 1.3% | PASS |
+| mem_reads | `oltp_read_only` | 145.17ms | 142.11ms | 1.0× | 2.0% | PASS |
+| mem_writes | `oltp_bulk_insert` | 247.28ms | 374.63ms | 1.5× | 1.3% | PASS |
+| mem_writes | `oltp_insert` | 18.84ms | 39.31ms | 2.1× | 1.0% | PASS |
+| mem_writes | `oltp_update_index` | 66.16ms | 145.39ms | 2.2× | 1.5% | PASS |
+| mem_writes | `oltp_update_non_index` | 48.97ms | 86.85ms | 1.8× | 1.6% | PASS |
+| mem_writes | `oltp_delete_insert` | 54.74ms | 107.37ms | 2.0× | 2.0% | PASS |
+| mem_writes | `oltp_write_only` | 28.78ms | 63.86ms | 2.2× | 2.2% | PASS |
+| mem_writes | `types_delete_insert` | 38.38ms | 54.71ms | 1.4× | 1.6% | PASS |
+| mem_writes | `oltp_read_write` | 102.92ms | 152.47ms | 1.5× | 1.9% | PASS |
+| file_reads | `oltp_point_select` | 107.56ms | 59.11ms | 0.5× | 1.4% | PASS |
+| file_reads | `oltp_range_select` | 24.34ms | 16.41ms | 0.7× | 1.8% | PASS |
+| file_reads | `oltp_sum_range` | 23.45ms | 16.29ms | 0.7× | 1.8% | PASS |
+| file_reads | `oltp_order_range` | 4.30ms | 3.52ms | 0.8× | 1.7% | PASS |
+| file_reads | `oltp_distinct_range` | 5.62ms | 4.95ms | 0.9× | 1.7% | PASS |
+| file_reads | `oltp_index_scan` | 11.32ms | 8.65ms | 0.8× | 1.7% | PASS |
+| file_reads | `select_random_points` | 31.64ms | 24.96ms | 0.8× | 2.7% | PASS |
+| file_reads | `select_random_ranges` | 10.57ms | 7.46ms | 0.7× | 1.2% | PASS |
+| file_reads | `covering_index_scan` | 11.73ms | 7.03ms | 0.6× | 1.2% | PASS |
+| file_reads | `groupby_scan` | 36.58ms | 35.25ms | 1.0× | 0.8% | PASS |
+| file_reads | `index_join` | 15.03ms | 11.43ms | 0.8× | 2.4% | PASS |
+| file_reads | `index_join_scan` | 4.82ms | 5.97ms | 1.2× | 3.6% | PASS |
+| file_reads | `types_table_scan` | 1.14s | 1.22s | 1.1× | 2.0% | PASS |
+| file_reads | `table_scan` | 1.30s | 1.34s | 1.0× | 1.3% | PASS |
+| file_reads | `oltp_read_only` | 254.10ms | 173.94ms | 0.7× | 1.6% | PASS |
+| file_writes | `oltp_bulk_insert` | 269.29ms | 386.48ms | 1.4× | 0.9% | PASS |
+| file_writes | `oltp_insert` | 28.60ms | 46.58ms | 1.6× | 2.3% | PASS |
+| file_writes | `oltp_update_index` | 105.13ms | 161.01ms | 1.5× | 1.7% | PASS |
+| file_writes | `oltp_update_non_index` | 90.45ms | 100.53ms | 1.1× | 5.9% | PASS |
+| file_writes | `oltp_delete_insert` | 93.83ms | 120.84ms | 1.3× | 2.1% | PASS |
+| file_writes | `oltp_write_only` | 66.51ms | 74.40ms | 1.1× | 2.3% | PASS |
+| file_writes | `types_delete_insert` | 66.60ms | 63.33ms | 1.0× | 1.6% | PASS |
+| file_writes | `oltp_read_write` | 141.68ms | 163.51ms | 1.2× | 2.1% | PASS |
+| ac_reads | `oltp_point_select` | 60.37ms | 59.54ms | 1.0× | 1.8% | PASS |
+| ac_reads | `oltp_range_select` | 19.45ms | 16.24ms | 0.8× | 2.2% | PASS |
+| ac_reads | `oltp_sum_range` | 19.00ms | 16.51ms | 0.9× | 2.5% | PASS |
+| ac_reads | `oltp_order_range` | 3.87ms | 3.55ms | 0.9× | 1.4% | PASS |
+| ac_reads | `oltp_distinct_range` | 5.36ms | 5.06ms | 0.9× | 2.1% | PASS |
+| ac_reads | `oltp_index_scan` | 6.80ms | 8.67ms | 1.3× | 1.3% | PASS |
+| ac_reads | `select_random_points` | 25.72ms | 25.00ms | 1.0× | 2.7% | PASS |
+| ac_reads | `select_random_ranges` | 6.03ms | 7.46ms | 1.2× | 1.3% | PASS |
+| ac_reads | `covering_index_scan` | 7.11ms | 7.00ms | 1.0× | 2.2% | PASS |
+| ac_reads | `groupby_scan` | 36.25ms | 35.59ms | 1.0× | 0.8% | PASS |
+| ac_reads | `index_join` | 12.66ms | 11.53ms | 0.9× | 2.5% | PASS |
+| ac_reads | `index_join_scan` | 4.29ms | 5.89ms | 1.4× | 1.7% | PASS |
+| ac_reads | `types_table_scan` | 1.15s | 1.22s | 1.1× | 2.4% | PASS |
+| ac_reads | `table_scan` | 1.30s | 1.34s | 1.0× | 1.4% | PASS |
+| ac_reads | `oltp_read_only` | 184.16ms | 173.75ms | 0.9× | 1.3% | PASS |
+| ac_writes | `oltp_bulk_insert_ac` | 25.01ms | 82.48ms | 3.3× | 6.0% | PASS |
+| ac_writes | `oltp_insert_ac` | 26.97ms | 96.52ms | 3.6× | 4.7% | PASS |
+| ac_writes | `oltp_update_index_ac` | 29.34ms | 109.73ms | 3.7× | 9.5% | PASS |
+| ac_writes | `oltp_update_non_index_ac` | 24.49ms | 90.95ms | 3.7× | 9.4% | PASS |
+| ac_writes | `oltp_delete_insert_ac` | 28.91ms | 106.18ms | 3.7× | 7.3% | PASS |
+| ac_writes | `oltp_write_only_ac` | 28.46ms | 97.65ms | 3.4× | 7.0% | PASS |
+| ac_writes | `types_delete_insert_ac` | 25.07ms | 93.19ms | 3.7× | 8.7% | PASS |
+| ac_writes | `oltp_read_write_ac` | 35.07ms | 109.63ms | 3.1× | 7.0% | PASS |
 
 </details>
 
@@ -301,75 +301,75 @@ The integer, text, blob, and composite primary-key runs verify that performance 
 
 | Section | Workload | SQLite median | DoltLite median | Ratio | Paired-ratio noise | Result |
 |---|---|---:|---:|---:|---:|---|
-| mem_reads | `oltp_point_select` | 32.95ms | 41.41ms | 1.3× | 1.6% | PASS |
-| mem_reads | `oltp_range_select` | 19.03ms | 21.11ms | 1.1× | 1.3% | PASS |
-| mem_reads | `oltp_sum_range` | 17.59ms | 20.63ms | 1.2× | 1.5% | PASS |
-| mem_reads | `oltp_order_range` | 3.52ms | 3.88ms | 1.1× | 1.1% | PASS |
-| mem_reads | `oltp_distinct_range` | 4.74ms | 5.20ms | 1.1× | 1.0% | PASS |
-| mem_reads | `oltp_index_scan` | 4.48ms | 5.98ms | 1.3× | 1.4% | PASS |
-| mem_reads | `select_random_points` | 27.35ms | 32.08ms | 1.2× | 1.4% | PASS |
-| mem_reads | `select_random_ranges` | 7.62ms | 8.91ms | 1.2× | 1.2% | PASS |
-| mem_reads | `covering_index_scan` | 4.17ms | 4.25ms | 1.0× | 1.3% | PASS |
-| mem_reads | `groupby_scan` | 36.99ms | 40.40ms | 1.1× | 0.6% | PASS |
-| mem_reads | `index_join` | 7.93ms | 10.27ms | 1.3× | 1.3% | PASS |
-| mem_reads | `index_join_scan` | 3.85ms | 5.35ms | 1.4× | 1.6% | PASS |
-| mem_reads | `types_table_scan` | 1.05s | 1.27s | 1.2× | 0.4% | PASS |
-| mem_reads | `table_scan` | 1.19s | 1.37s | 1.2× | 0.5% | PASS |
-| mem_reads | `oltp_read_only` | 147.74ms | 173.42ms | 1.2× | 1.1% | PASS |
-| mem_writes | `oltp_bulk_insert` | 246.51ms | 357.00ms | 1.4× | 1.1% | PASS |
-| mem_writes | `oltp_insert` | 18.86ms | 35.35ms | 1.9× | 0.9% | PASS |
-| mem_writes | `oltp_update_index` | 64.53ms | 126.26ms | 2.0× | 1.4% | PASS |
-| mem_writes | `oltp_update_non_index` | 49.72ms | 83.85ms | 1.7× | 1.1% | PASS |
-| mem_writes | `oltp_delete_insert` | 48.84ms | 95.89ms | 2.0× | 1.1% | PASS |
-| mem_writes | `oltp_write_only` | 26.22ms | 57.92ms | 2.2× | 1.3% | PASS |
-| mem_writes | `types_delete_insert` | 32.30ms | 53.39ms | 1.7× | 1.5% | PASS |
-| mem_writes | `oltp_read_write` | 98.61ms | 161.69ms | 1.6× | 1.1% | PASS |
-| file_reads | `oltp_point_select` | 102.37ms | 59.74ms | 0.6× | 0.9% | PASS |
-| file_reads | `oltp_range_select` | 26.31ms | 23.20ms | 0.9× | 2.2% | PASS |
-| file_reads | `oltp_sum_range` | 24.83ms | 22.70ms | 0.9× | 1.6% | PASS |
-| file_reads | `oltp_order_range` | 4.25ms | 4.19ms | 1.0× | 1.7% | PASS |
-| file_reads | `oltp_distinct_range` | 5.58ms | 5.47ms | 1.0× | 1.3% | PASS |
-| file_reads | `oltp_index_scan` | 11.50ms | 8.12ms | 0.7× | 1.6% | PASS |
-| file_reads | `select_random_points` | 36.19ms | 35.18ms | 1.0× | 1.7% | PASS |
-| file_reads | `select_random_ranges` | 14.89ms | 10.99ms | 0.7× | 1.7% | PASS |
-| file_reads | `covering_index_scan` | 11.15ms | 6.41ms | 0.6× | 1.8% | PASS |
-| file_reads | `groupby_scan` | 37.95ms | 40.62ms | 1.1× | 1.0% | PASS |
-| file_reads | `index_join` | 11.92ms | 11.94ms | 1.0× | 1.6% | PASS |
-| file_reads | `index_join_scan` | 4.95ms | 5.82ms | 1.2× | 2.5% | PASS |
-| file_reads | `types_table_scan` | 1.05s | 1.27s | 1.2× | 0.7% | PASS |
-| file_reads | `table_scan` | 1.20s | 1.37s | 1.1× | 0.6% | PASS |
-| file_reads | `oltp_read_only` | 251.68ms | 201.87ms | 0.8× | 1.1% | PASS |
-| file_writes | `oltp_bulk_insert` | 260.89ms | 366.26ms | 1.4× | 1.4% | PASS |
-| file_writes | `oltp_insert` | 25.78ms | 40.98ms | 1.6× | 2.2% | PASS |
-| file_writes | `oltp_update_index` | 92.81ms | 138.42ms | 1.5× | 1.3% | PASS |
-| file_writes | `oltp_update_non_index` | 74.47ms | 96.97ms | 1.3× | 1.6% | PASS |
-| file_writes | `oltp_delete_insert` | 73.52ms | 106.80ms | 1.5× | 1.8% | PASS |
-| file_writes | `oltp_write_only` | 48.77ms | 68.17ms | 1.4× | 2.0% | PASS |
-| file_writes | `types_delete_insert` | 48.28ms | 59.03ms | 1.2× | 2.1% | PASS |
-| file_writes | `oltp_read_write` | 124.38ms | 172.12ms | 1.4× | 1.2% | PASS |
-| ac_reads | `oltp_point_select` | 56.04ms | 60.03ms | 1.1× | 0.9% | PASS |
-| ac_reads | `oltp_range_select` | 21.81ms | 23.16ms | 1.1× | 1.6% | PASS |
-| ac_reads | `oltp_sum_range` | 20.06ms | 22.77ms | 1.1× | 1.2% | PASS |
-| ac_reads | `oltp_order_range` | 3.88ms | 4.15ms | 1.1× | 1.4% | PASS |
-| ac_reads | `oltp_distinct_range` | 5.06ms | 5.46ms | 1.1× | 1.2% | PASS |
-| ac_reads | `oltp_index_scan` | 6.94ms | 8.14ms | 1.2× | 2.0% | PASS |
-| ac_reads | `select_random_points` | 30.63ms | 35.22ms | 1.1× | 1.1% | PASS |
-| ac_reads | `select_random_ranges` | 10.17ms | 11.00ms | 1.1× | 1.1% | PASS |
-| ac_reads | `covering_index_scan` | 6.65ms | 6.40ms | 1.0× | 2.1% | PASS |
-| ac_reads | `groupby_scan` | 37.24ms | 40.64ms | 1.1× | 0.7% | PASS |
-| ac_reads | `index_join` | 9.38ms | 11.95ms | 1.3× | 1.4% | PASS |
-| ac_reads | `index_join_scan` | 4.31ms | 5.78ms | 1.3× | 1.8% | PASS |
-| ac_reads | `types_table_scan` | 1.05s | 1.26s | 1.2× | 0.7% | PASS |
-| ac_reads | `table_scan` | 1.20s | 1.37s | 1.1× | 0.4% | PASS |
-| ac_reads | `oltp_read_only` | 183.20ms | 201.91ms | 1.1× | 0.8% | PASS |
-| ac_writes | `oltp_bulk_insert_ac` | 21.37ms | 74.39ms | 3.5× | 6.8% | PASS |
-| ac_writes | `oltp_insert_ac` | 24.93ms | 90.48ms | 3.6× | 6.4% | PASS |
-| ac_writes | `oltp_update_index_ac` | 25.92ms | 101.61ms | 3.9× | 5.7% | PASS |
-| ac_writes | `oltp_update_non_index_ac` | 22.89ms | 88.72ms | 3.9× | 6.9% | PASS |
-| ac_writes | `oltp_delete_insert_ac` | 23.69ms | 95.44ms | 4.0× | 5.4% | PASS |
-| ac_writes | `oltp_write_only_ac` | 24.98ms | 93.13ms | 3.7× | 6.6% | PASS |
-| ac_writes | `types_delete_insert_ac` | 21.93ms | 85.62ms | 3.9× | 7.0% | PASS |
-| ac_writes | `oltp_read_write_ac` | 31.54ms | 102.85ms | 3.3× | 5.4% | PASS |
+| mem_reads | `oltp_point_select` | 25.99ms | 29.36ms | 1.1× | 1.0% | PASS |
+| mem_reads | `oltp_range_select` | 15.73ms | 16.22ms | 1.0× | 1.5% | PASS |
+| mem_reads | `oltp_sum_range` | 14.20ms | 15.30ms | 1.1× | 0.9% | PASS |
+| mem_reads | `oltp_order_range` | 2.96ms | 3.08ms | 1.0× | 0.9% | PASS |
+| mem_reads | `oltp_distinct_range` | 3.84ms | 4.03ms | 1.1× | 1.2% | PASS |
+| mem_reads | `oltp_index_scan` | 3.59ms | 4.41ms | 1.2× | 1.1% | PASS |
+| mem_reads | `select_random_points` | 21.10ms | 24.06ms | 1.1× | 0.8% | PASS |
+| mem_reads | `select_random_ranges` | 5.87ms | 6.42ms | 1.1× | 1.0% | PASS |
+| mem_reads | `covering_index_scan` | 3.32ms | 3.21ms | 1.0× | 0.8% | PASS |
+| mem_reads | `groupby_scan` | 30.61ms | 31.62ms | 1.0× | 0.7% | PASS |
+| mem_reads | `index_join` | 6.18ms | 7.73ms | 1.2× | 0.7% | PASS |
+| mem_reads | `index_join_scan` | 3.21ms | 4.44ms | 1.4× | 0.8% | PASS |
+| mem_reads | `types_table_scan` | 882.87ms | 954.47ms | 1.1× | 0.4% | PASS |
+| mem_reads | `table_scan` | 1.03s | 1.05s | 1.0× | 0.6% | PASS |
+| mem_reads | `oltp_read_only` | 118.49ms | 129.81ms | 1.1× | 1.1% | PASS |
+| mem_writes | `oltp_bulk_insert` | 194.90ms | 256.67ms | 1.3× | 0.8% | PASS |
+| mem_writes | `oltp_insert` | 15.17ms | 25.90ms | 1.7× | 0.8% | PASS |
+| mem_writes | `oltp_update_index` | 52.73ms | 93.52ms | 1.8× | 0.9% | PASS |
+| mem_writes | `oltp_update_non_index` | 41.21ms | 60.21ms | 1.5× | 1.3% | PASS |
+| mem_writes | `oltp_delete_insert` | 39.02ms | 70.22ms | 1.8× | 1.0% | PASS |
+| mem_writes | `oltp_write_only` | 21.40ms | 42.50ms | 2.0× | 1.0% | PASS |
+| mem_writes | `types_delete_insert` | 25.28ms | 37.27ms | 1.5× | 0.9% | PASS |
+| mem_writes | `oltp_read_write` | 76.34ms | 115.98ms | 1.5× | 0.6% | PASS |
+| file_reads | `oltp_point_select` | 91.22ms | 46.23ms | 0.5× | 0.6% | PASS |
+| file_reads | `oltp_range_select` | 22.74ms | 18.21ms | 0.8× | 1.4% | PASS |
+| file_reads | `oltp_sum_range` | 21.16ms | 17.20ms | 0.8× | 1.1% | PASS |
+| file_reads | `oltp_order_range` | 3.67ms | 3.36ms | 0.9× | 1.6% | PASS |
+| file_reads | `oltp_distinct_range` | 4.53ms | 4.30ms | 0.9× | 1.4% | PASS |
+| file_reads | `oltp_index_scan` | 10.41ms | 6.65ms | 0.6× | 1.4% | PASS |
+| file_reads | `select_random_points` | 28.28ms | 26.21ms | 0.9× | 1.2% | PASS |
+| file_reads | `select_random_ranges` | 12.59ms | 8.38ms | 0.7× | 0.9% | PASS |
+| file_reads | `covering_index_scan` | 10.15ms | 5.44ms | 0.5× | 0.9% | PASS |
+| file_reads | `groupby_scan` | 31.27ms | 32.01ms | 1.0× | 0.6% | PASS |
+| file_reads | `index_join` | 9.89ms | 9.55ms | 1.0× | 1.1% | PASS |
+| file_reads | `index_join_scan` | 3.96ms | 4.84ms | 1.2× | 0.6% | PASS |
+| file_reads | `types_table_scan` | 881.15ms | 952.59ms | 1.1× | 0.4% | PASS |
+| file_reads | `table_scan` | 1.02s | 1.05s | 1.0× | 0.4% | PASS |
+| file_reads | `oltp_read_only` | 212.56ms | 154.46ms | 0.7× | 0.6% | PASS |
+| file_writes | `oltp_bulk_insert` | 254.37ms | 315.27ms | 1.2× | 12.1% | PASS |
+| file_writes | `oltp_insert` | 32.25ms | 45.00ms | 1.4× | 6.0% | PASS |
+| file_writes | `oltp_update_index` | 160.16ms | 157.59ms | 1.0× | 2.4% | PASS |
+| file_writes | `oltp_update_non_index` | 136.70ms | 113.52ms | 0.8× | 3.9% | PASS |
+| file_writes | `oltp_delete_insert` | 133.03ms | 127.95ms | 1.0× | 4.5% | PASS |
+| file_writes | `oltp_write_only` | 94.89ms | 89.08ms | 0.9× | 4.5% | PASS |
+| file_writes | `types_delete_insert` | 86.12ms | 69.81ms | 0.8× | 6.0% | PASS |
+| file_writes | `oltp_read_write` | 154.96ms | 167.29ms | 1.1× | 2.7% | PASS |
+| ac_reads | `oltp_point_select` | 47.65ms | 46.50ms | 1.0× | 1.1% | PASS |
+| ac_reads | `oltp_range_select` | 18.54ms | 18.18ms | 1.0× | 1.5% | PASS |
+| ac_reads | `oltp_sum_range` | 16.87ms | 17.21ms | 1.0× | 0.7% | PASS |
+| ac_reads | `oltp_order_range` | 3.34ms | 3.36ms | 1.0× | 0.7% | PASS |
+| ac_reads | `oltp_distinct_range` | 4.19ms | 4.30ms | 1.0× | 0.8% | PASS |
+| ac_reads | `oltp_index_scan` | 6.27ms | 6.71ms | 1.1× | 0.7% | PASS |
+| ac_reads | `select_random_points` | 24.82ms | 26.71ms | 1.1× | 1.7% | PASS |
+| ac_reads | `select_random_ranges` | 8.50ms | 8.41ms | 1.0× | 1.0% | PASS |
+| ac_reads | `covering_index_scan` | 5.98ms | 5.48ms | 0.9× | 0.8% | PASS |
+| ac_reads | `groupby_scan` | 31.04ms | 32.07ms | 1.0× | 0.7% | PASS |
+| ac_reads | `index_join` | 7.84ms | 9.62ms | 1.2× | 1.1% | PASS |
+| ac_reads | `index_join_scan` | 3.64ms | 4.84ms | 1.3× | 1.4% | PASS |
+| ac_reads | `types_table_scan` | 909.34ms | 966.45ms | 1.1× | 1.4% | PASS |
+| ac_reads | `table_scan` | 1.16s | 1.09s | 0.9× | 4.6% | PASS |
+| ac_reads | `oltp_read_only` | 149.96ms | 154.63ms | 1.0× | 0.9% | PASS |
+| ac_writes | `oltp_bulk_insert_ac` | 28.69ms | 73.78ms | 2.6× | 8.2% | PASS |
+| ac_writes | `oltp_insert_ac` | 30.98ms | 97.10ms | 3.1× | 52.3% | PASS |
+| ac_writes | `oltp_update_index_ac` | 32.90ms | 102.70ms | 3.1× | 20.5% | PASS |
+| ac_writes | `oltp_update_non_index_ac` | 28.77ms | 80.38ms | 2.8× | 6.0% | PASS |
+| ac_writes | `oltp_delete_insert_ac` | 30.51ms | 85.06ms | 2.8× | 5.8% | PASS |
+| ac_writes | `oltp_write_only_ac` | 32.36ms | 92.32ms | 2.9× | 9.6% | PASS |
+| ac_writes | `types_delete_insert_ac` | 28.84ms | 79.38ms | 2.8× | 9.1% | PASS |
+| ac_writes | `oltp_read_write_ac` | 37.74ms | 101.61ms | 2.7× | 13.3% | PASS |
 
 </details>
 
@@ -377,23 +377,23 @@ The integer, text, blob, and composite primary-key runs verify that performance 
 
 ## Version-control latency
 
-Wall time: 1m 56s. Samples per benchmark: 101.
+Wall time: 1m 59s. Samples per benchmark: 101.
 
 | Benchmark | Median | Ceiling | Ceiling used | MAD | Result |
 |---|---:|---:|---:|---:|---|
-| `status_clean_many_tables` | 67.99ms | 130.00ms | 52.3% | 0.4% | PASS |
-| `status_dirty_many_tables` | 70.55ms | 130.00ms | 54.3% | 0.4% | PASS |
-| `diff_regular_working_one_table` | 62.77ms | 120.00ms | 52.3% | 0.6% | PASS |
-| `diff_regular_working_many_tables` | 74.18ms | 140.00ms | 53.0% | 0.3% | PASS |
-| `diff_stat_working_many_tables` | 74.19ms | 140.00ms | 53.0% | 0.4% | PASS |
-| `diff_schema_working_many_tables` | 74.62ms | 140.00ms | 53.3% | 0.4% | PASS |
-| `branch_list_many_branches` | 21.48ms | 35.00ms | 61.4% | 1.3% | PASS |
-| `branch_create_delete` | 32.69ms | 40.00ms | 81.7% | 1.5% | PASS |
-| `checkout_branch_clean` | 99.92ms | 150.00ms | 66.6% | 0.5% | PASS |
-| `merge_data_no_conflicts` | 38.61ms | 50.00ms | 77.2% | 0.8% | PASS |
-| `merge_schema_no_conflicts` | 22.62ms | 35.00ms | 64.6% | 1.5% | PASS |
-| `merge_data_conflicts` | 29.55ms | 180.00ms | 16.4% | 0.9% | PASS |
-| `merge_data_conflicts_with_resolve` | 29.66ms | 180.00ms | 16.5% | 1.2% | PASS |
+| `status_clean_many_tables` | 81.85ms | 130.00ms | 63.0% | 0.4% | PASS |
+| `status_dirty_many_tables` | 85.03ms | 130.00ms | 65.4% | 0.3% | PASS |
+| `diff_regular_working_one_table` | 77.20ms | 120.00ms | 64.3% | 0.5% | PASS |
+| `diff_regular_working_many_tables` | 90.58ms | 140.00ms | 64.7% | 0.5% | PASS |
+| `diff_stat_working_many_tables` | 90.41ms | 140.00ms | 64.6% | 0.3% | PASS |
+| `diff_schema_working_many_tables` | 91.50ms | 140.00ms | 65.4% | 0.4% | PASS |
+| `branch_list_many_branches` | 22.27ms | 35.00ms | 63.6% | 1.1% | PASS |
+| `branch_create_delete` | 25.06ms | 40.00ms | 62.6% | 1.1% | PASS |
+| `checkout_branch_clean` | 55.25ms | 150.00ms | 36.8% | 0.6% | PASS |
+| `merge_data_no_conflicts` | 28.12ms | 50.00ms | 56.2% | 1.1% | PASS |
+| `merge_schema_no_conflicts` | 21.06ms | 35.00ms | 60.2% | 1.1% | PASS |
+| `merge_data_conflicts` | 31.72ms | 180.00ms | 17.6% | 0.8% | PASS |
+| `merge_data_conflicts_with_resolve` | 31.69ms | 180.00ms | 17.6% | 0.9% | PASS |
 
 Version-control ceiling result: **PASS**.
 
