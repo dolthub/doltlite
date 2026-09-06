@@ -55,8 +55,10 @@ void walStateSetOffset(WalState *w, i64 iOffset);
 void walStateSetDataSize(WalState *w, i64 nData);
 
 struct ChunkStore;
-int csReplayWal(struct ChunkStore *cs);
 int csReplayWalSkipping(struct ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd);
+static inline int csReplayWal(struct ChunkStore *cs){
+  return csReplayWalSkipping(cs, 0, 0);
+}
 int csReplayWalTail(struct ChunkStore *cs, i64 iStart);
 int csTryLoadWalCheckpoint(struct ChunkStore *cs, int *pLoaded,
                            i64 *pSkipStart, i64 *pSkipEnd);

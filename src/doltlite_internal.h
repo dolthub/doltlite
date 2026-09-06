@@ -734,6 +734,16 @@ static SQLITE_INLINE int dlReadU32Blob(DlByteReader *r, u8 **pp, int *pn){
   r->p += n;
   return SQLITE_OK;
 }
+static SQLITE_INLINE int dlSkipU32Blob(DlByteReader *r){
+  int n = dlReadU32(r);
+  if( r->err ) return SQLITE_CORRUPT;
+  if( n<0 || (size_t)n > (size_t)(r->end - r->p) ){
+    r->err = 1;
+    return SQLITE_CORRUPT;
+  }
+  r->p += n;
+  return SQLITE_OK;
+}
 static SQLITE_INLINE int dlReadU16Name(DlByteReader *r, char **pz){
   int n = dlReadU16(r);
   *pz = 0;
@@ -960,6 +970,17 @@ int doltliteCmdSourceResultError(
 );
 int doltliteVtabMapChunkSourceError(
   sqlite3_vtab *pVtab, sqlite3 *db, int sourceRc, int mappedRc
+);
+int doltliteCmdReportLoadParentedCommitError(
+  sqlite3_context *ctx, ChunkStore *cs, int rc,
+  DoltliteCommit *pTarget, DoltliteCommit *pParent, DoltliteCommit *pOurs,
+  const char *zInitialMsg
+);
+void doltliteCmdFinishApplyMerged(
+  sqlite3_context *ctx, ChunkStore *cs, int rc, int nConflicts,
+  char *zApplyErr, const char *zOp, const char *zRef,
+  const char *zDoneMsg, const char *zFailFmt, const char *zFailFallback,
+  const char *hexBuf
 );
 
 static SQLITE_INLINE int doltliteVtabSetErrmsgFromDb(

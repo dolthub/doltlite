@@ -13,6 +13,7 @@
 #include "doltlite_name_index.h"
 #include <stddef.h>
 #include "doltlite_ignore.h"
+#include "doltlite_constraint_violations.h"
 
 #include <string.h>
 #include <ctype.h>
@@ -1009,7 +1010,6 @@ static void doltliteCommitFunc(
   }
 
   {
-    extern int doltliteClearAllConstraintViolations(sqlite3*);
     if( doltliteSessionHasConstraintViolations(db) ){
       doltliteClearAllConstraintViolations(db);
     }

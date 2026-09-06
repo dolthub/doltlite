@@ -133,28 +133,19 @@ static int readViolationRow(DlByteReader *rd, ConstraintViolationRow *r){
   return dlReadU32Str(rd, &r->zInfo);
 }
 
-static int skipViolationBlob(DlByteReader *rd){
-  int n = dlReadU32(rd);
-  if( rd->err ) return SQLITE_CORRUPT;
-  if( n<0 || (size_t)n > (size_t)(rd->end - rd->p) ){
-    rd->err = 1;
-    return SQLITE_CORRUPT;
-  }
-  rd->p += n;
-  return SQLITE_OK;
-}
+
 
 static int skipViolationRow(DlByteReader *rd){
   int rc;
   (void)dlReadU8(rd);
   if( rd->err ) return SQLITE_CORRUPT;
-  rc = skipViolationBlob(rd);
+  rc = dlSkipU32Blob(rd);
   if( rc!=SQLITE_OK ) return rc;
   (void)dlReadI64(rd);
   if( rd->err ) return SQLITE_CORRUPT;
-  rc = skipViolationBlob(rd);
+  rc = dlSkipU32Blob(rd);
   if( rc!=SQLITE_OK ) return rc;
-  return skipViolationBlob(rd);
+  return dlSkipU32Blob(rd);
 }
 
 static int deserializeAllViolations(

@@ -201,10 +201,6 @@ fail_net:
   return NULL;
 }
 
-DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls) {
-  return doltliteConnOpenTimeout(host, port, useTls, 0);
-}
-
 int doltliteConnWriteAll(DoltliteConn *c, const void *buf, int nbuf) {
   const unsigned char *p = (const unsigned char *)buf;
   int off = 0;

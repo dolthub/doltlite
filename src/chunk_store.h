@@ -265,10 +265,12 @@ int chunkStoreSerializeRefs(ChunkStore *cs);
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash);
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash);
 
-int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
 int chunkStoreAddTagFull(ChunkStore *cs, const char *zName, const ProllyHash *pCommit,
                          const char *zTagger, const char *zEmail,
                          i64 timestamp, const char *zMessage);
+static inline int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
+  return chunkStoreAddTagFull(cs, zName, pCommit, 0, 0, 0, 0);
+}
 int chunkStoreDeleteTag(ChunkStore *cs, const char *zName);
 int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 

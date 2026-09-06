@@ -1024,10 +1024,6 @@ replay_error:
   return rc;
 }
 
-int csReplayWal(ChunkStore *cs){
-  return csReplayWalSkipping(cs, 0, 0);
-}
-
 /* Ingest records appended after iStart into the live store. The caller
 ** proved the prefix below iStart is the content it already holds. */
 int csReplayWalTail(ChunkStore *cs, i64 iStart){

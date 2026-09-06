@@ -32,14 +32,16 @@ static inline int sortKeyByteStartsField(u8 b){
   return 0;
 }
 
-int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut);
-
-int sortKeyFromRecordPrefix(const u8 *pRec, int nRec, int nKeyField,
-                            u8 **ppOut, int *pnOut);
-
 int sortKeyFromRecordPrefixColl(const u8 *pRec, int nRec, int nKeyField,
                                  const KeyInfo *pKeyInfo,
                                  u8 **ppOut, int *pnOut);
+static inline int sortKeyFromRecordPrefix(const u8 *pRec, int nRec, int nKeyField,
+                            u8 **ppOut, int *pnOut){
+  return sortKeyFromRecordPrefixColl(pRec, nRec, nKeyField, NULL, ppOut, pnOut);
+}
+static inline int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut){
+  return sortKeyFromRecordPrefix(pRec, nRec, 0, ppOut, pnOut);
+}
 int sortKeyFromRecordPrefixCollBuffer(const u8 *pRec, int nRec, int nKeyField,
                                  const KeyInfo *pKeyInfo,
                                  u8 **ppBuf, int *pnAlloc, int *pnOut);
@@ -72,11 +74,15 @@ static inline void sortKeyWriteExactInt64(i64 v, u8 *pOut){
   }
 }
 
-int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut);
 int recordFromSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 );
+static inline int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
+  int nAlloc = 0;
+  *ppOut = 0;
+  return recordFromSortKeyBuffer(pSortKey, nSortKey, ppOut, &nAlloc, pnOut);
+}
 int recordFromSortKeyBufferColl(
   const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
   u8 **ppBuf, int *pnAlloc, int *pnOut

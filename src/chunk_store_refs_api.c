@@ -189,10 +189,6 @@ int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
   return SQLITE_OK;
 }
 
-int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
-  return chunkStoreAddTagFull(cs, zName, pCommit, 0, 0, 0, 0);
-}
-
 int chunkStoreAddTagFull(
   ChunkStore *cs,
   const char *zName,
