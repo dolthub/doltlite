@@ -7,7 +7,7 @@
 #include "prolly_node.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
-#include "doltlite_chunk_walk.h"
+#include "prolly_chunk_walk.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -1115,7 +1115,7 @@ static void doltliteGcFunc(
 
 /* Compaction targets one store. Mark from cs's own refs and session hashes
 ** sharing cs, so an ATTACH is marked from its own state. */
-int doltliteGcCompactStoreWithPhase(
+static int doltliteGcCompactStoreWithPhase(
   sqlite3 *db,
   ChunkStore *cs,
   const char **pzPhase

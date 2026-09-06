@@ -7,6 +7,11 @@
 
 #include <string.h>
 
+static void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
+static void doltliteCmdResultMissingOptionValue(
+  sqlite3_context *ctx, const char *zOptName
+);
+
 static DoltliteCmdOption *cmdFindLongOption(
   DoltliteCmdOption *aOption,
   int nOption,
@@ -211,7 +216,7 @@ int doltliteCmdRejectDetached(sqlite3_context *ctx){
   return 1;
 }
 
-void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt){
+static void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt){
   char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
   if( zErr ){
     sqlite3_result_error(ctx, zErr, -1);
@@ -221,7 +226,7 @@ void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt){
   }
 }
 
-void doltliteCmdResultMissingOptionValue(
+static void doltliteCmdResultMissingOptionValue(
   sqlite3_context *ctx,
   const char *zOptName
 ){

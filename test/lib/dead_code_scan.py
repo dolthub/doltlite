@@ -4,8 +4,10 @@
 B: extern function defined in owned .c, never referenced from another .c and
    never called in its defining file (header declaration does not count).
 C: static inline in a header whose identifier never appears elsewhere.
-D: non-static function with no identifier occurrence outside its .c
-   (should be static so Part A can see it).
+D: non-static function with no other .c mention. A header prototype
+   does not count as a caller (should be static so Part A can see it).
+   Btree vtable methods (prollyBtree* / origBtree*) stay non-static:
+   other TUs call them through the ops table, not by name.
 E: non-static prototype in an owned header that never appears in any .c.
 F: #define in an owned header whose identifier never appears elsewhere
    (include guards skipped).
@@ -63,6 +65,13 @@ ALLOW_EXTERN = {
     "doltliteServeAsync",
     "doltliteServerStop",
 }
+VTBL_PREFIXES = (
+    "prollyBtree",
+    "prollyBtCursor",
+    "origBtree",
+    "origCursor",
+)
+SEAM_HDRS = frozenset({"prolly_btree_int.h", "doltlite_internal.h"})
 ONE_CALL = re.compile(
     r"^return\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(.*\)\s*;$"
 )
@@ -253,17 +262,71 @@ def scan_test_only_wrappers(
     return dead
 
 
+def is_vtbl_method(name: str) -> bool:
+    return name.startswith(VTBL_PREFIXES)
+
+
+def header_uses_beyond_proto(hpath: str, name: str, texts: dict[str, str]) -> bool:
+    raw = texts.get(hpath)
+    if raw is None:
+        return False
+    proto = re.compile(
+        r"^(?!\s)(?:SQLITE_PRIVATE\s+|SQLITE_API\s+|SQLITE_EXTERN\s+)?"
+        r".+?\b" + re.escape(name) + r"\s*\([^;]*\)\s*;",
+        re.M,
+    )
+    leftover = proto.sub("", strip_comments(raw))
+    return name in IDENT.findall(leftover)
+
+
 def scan_should_be_static(src_files: list[str], corpus: list[str], texts: dict[str, str],
                           idents: dict[str, set[str]]) -> list[str]:
     dead: list[str] = []
     for path in src_files:
         for name, line, is_static, stripped, match in iter_defs(path, texts):
-            if is_static:
+            if is_static or name in ALLOW_EXTERN or is_vtbl_method(name):
                 continue
-            others = [q for q in corpus if q != path and name in idents.get(q, ())]
-            if others:
+            others_c = [
+                q for q in corpus
+                if q.endswith(".c") and q != path and name in idents.get(q, ())
+            ]
+            if others_c:
+                continue
+            hdrs = [
+                q for q in corpus
+                if q.endswith(".h") and name in idents.get(q, ())
+            ]
+            if any(header_uses_beyond_proto(h, name, texts) for h in hdrs):
                 continue
             dead.append(f"  should be static: {name} ({path}:{line})")
+    return dead
+
+
+def scan_duplicate_prototypes(
+    owned_hdrs: list[str], texts: dict[str, str]
+) -> list[str]:
+    byname: dict[str, list[str]] = defaultdict(list)
+    for path in owned_hdrs:
+        raw = texts.get(path)
+        if raw is None:
+            continue
+        for match in PROTO.finditer(strip_comments(raw)):
+            name = match.group(1)
+            if name in SKIP_DEF or name in ALLOW_EXTERN:
+                continue
+            if name.startswith("sqlite3") or name.startswith("orig_sqlite3"):
+                continue
+            byname[name].append(path)
+    dead: list[str] = []
+    for name, paths in sorted(byname.items()):
+        uniq = sorted(set(paths))
+        if len(uniq) < 2:
+            continue
+        bases = {os.path.basename(p) for p in uniq}
+        if bases == SEAM_HDRS:
+            continue
+        shown = ", ".join(uniq)
+        dead.append(f"  duplicate header prototype: {name} ({shown})")
     return dead
 
 
@@ -501,6 +564,7 @@ def main() -> int:
     dead += scan_inlines(hdrs, corpus, texts, idents, counts)
     dead += scan_should_be_static(src_files, corpus, texts, idents)
     dead += scan_unused_prototypes(owned_hdrs, corpus, texts, idents)
+    dead += scan_duplicate_prototypes(owned_hdrs, texts)
     dead += scan_unused_macros(owned_hdrs, corpus, texts, idents, counts)
     dead += scan_clones(src_files, texts)
     dead += scan_test_only_wrappers(src_files, corpus, root, texts, idents)

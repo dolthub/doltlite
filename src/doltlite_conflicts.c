@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_vtab_util.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 #include <string.h>
 

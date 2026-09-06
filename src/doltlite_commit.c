@@ -156,7 +156,7 @@ int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
   return SQLITE_OK;
 }
 
-int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
+static int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
                              ProllyHash *pCatHash){
   ProllyHash commitHash;
   int rc = doltliteResolveRef(db, zRef, &commitHash);

@@ -9,7 +9,6 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
-#include "doltlite_name_index.h"
 #include <stddef.h>
 #include <string.h>
 

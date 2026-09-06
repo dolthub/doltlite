@@ -1059,7 +1059,7 @@ int doltliteTableSchemaConflictDetail(
 /* Evaluate declared defaults once. A pre-ADD-COLUMN row omits the
 ** new field; reads materialize the default. Rewriting into a wider
 ** record covers that slot, so leaving NULL would replace the default. */
-void mergeColDefaultsFree(MergeColDefaults *p){
+static void mergeColDefaultsFree(MergeColDefaults *p){
   int i;
   if( p->apOwned ){
     for(i=0; i<p->nCol; i++) sqlite3_free(p->apOwned[i]);
@@ -1069,7 +1069,7 @@ void mergeColDefaultsFree(MergeColDefaults *p){
   memset(p, 0, sizeof(*p));
 }
 
-int mergeColDefaultsLoad(
+static int mergeColDefaultsLoad(
   const char *zSql,
   const char *zTable,
   MergeColDefaults *pOut

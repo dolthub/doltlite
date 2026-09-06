@@ -116,6 +116,41 @@ static int dead_code_gate_same_file_caller(int x){
 EOF
 expect_scan_hit "should_be_static_is_rejected" "should be static: dead_code_gate_should_be_static"
 
+# Part D: header prototype is not a caller.
+cat > "$WORK/src/doltlite_fixture.h" <<'EOF'
+#ifndef DOLTLITE_FIXTURE_H
+#define DOLTLITE_FIXTURE_H
+int dead_code_gate_header_only_proto(int x);
+#endif
+EOF
+cat > "$WORK/src/doltlite.c" <<'EOF'
+#include "doltlite_fixture.h"
+int dead_code_gate_header_only_proto(int x){
+  return x;
+}
+static int dead_code_gate_header_only_caller(int x){
+  return dead_code_gate_header_only_proto(x);
+}
+EOF
+expect_scan_hit "header_proto_is_not_a_caller" "should be static: dead_code_gate_header_only_proto"
+
+# Part E: same prototype in two owned headers.
+cat > "$WORK/src/doltlite_fixture.h" <<'EOF'
+#ifndef DOLTLITE_FIXTURE_H
+#define DOLTLITE_FIXTURE_H
+int dead_code_gate_dup_proto(void);
+#endif
+EOF
+cat > "$WORK/src/doltlite_other.h" <<'EOF'
+#ifndef DOLTLITE_OTHER_H
+#define DOLTLITE_OTHER_H
+int dead_code_gate_dup_proto(void);
+#endif
+EOF
+: > "$WORK/src/doltlite.c"
+expect_scan_hit "duplicate_header_prototype_is_rejected" "duplicate header prototype: dead_code_gate_dup_proto"
+rm -f "$WORK/src/doltlite_other.h" "$WORK/src/doltlite_fixture.h"
+
 # Part A: unused static in a real translation unit (compiler-driven).
 cp "$ROOT/src/doltlite_add.c" "$WORK/src/doltlite_add.c"
 printf '\nstatic int dead_code_gate_unused_static(void){ return 0; }\n' \

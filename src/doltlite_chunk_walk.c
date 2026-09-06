@@ -7,7 +7,7 @@
 #include "chunk_store.h"
 #include "chunk_refs.h"
 #include "doltlite_commit.h"
-#include "doltlite_chunk_walk.h"
+#include "prolly_chunk_walk.h"
 
 #include <string.h>
 

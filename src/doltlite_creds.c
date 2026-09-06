@@ -67,7 +67,7 @@ void doltliteSha512_224(const unsigned char *in, size_t inlen,
 
 static const char B32_ALPHABET[] = "0123456789abcdefghijklmnopqrstuv";
 
-char *doltliteBase32Encode(const unsigned char *in, size_t inlen) {
+static char *doltliteBase32Encode(const unsigned char *in, size_t inlen) {
   size_t outlen = (inlen * 8 + 4) / 5;
   char *out = (char *)sqlite3_malloc(outlen + 1);
   size_t oi = 0;

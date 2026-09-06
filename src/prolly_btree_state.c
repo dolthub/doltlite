@@ -108,7 +108,7 @@ int btreeLoadWorkingSetBlob(
   return SQLITE_OK;
 }
 
-int btreeLoadBranchHeadCatalog(
+static int btreeLoadBranchHeadCatalog(
   ChunkStore *cs,
   const char *zBranch,
   ProllyHash *pCatHash,
@@ -311,7 +311,7 @@ int btreeStoreWorkingSetBlob(
   return rc;
 }
 
-int btreePutRebaseMetadataOnBranch(
+static int btreePutRebaseMetadataOnBranch(
   ChunkStore *cs,
   const char *zBranch,
   u8 rebaseFlags,
@@ -350,7 +350,7 @@ int btreePutRebaseMetadataOnBranch(
                                   &cvs);
 }
 
-int btreeClearRebaseMetadataOnBranch(ChunkStore *cs, const char *zBranch){
+static int btreeClearRebaseMetadataOnBranch(ChunkStore *cs, const char *zBranch){
   ProllyHash cat, commit, staged, mergeC, conflicts, cvs;
   char *zIgnoreOrig = 0;
   char *zIgnoreReturn = 0;
@@ -1182,7 +1182,7 @@ int doltliteSeedSessionHashes(
   return rc;
 }
 
-int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash){
+static int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
   u8 *catData = 0;

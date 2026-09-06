@@ -10,7 +10,7 @@
 #include "doltlite_internal.h"
 #include "prolly_hashset.h"
 #include "prolly_node.h"
-#include "doltlite_chunk_walk.h"
+#include "prolly_chunk_walk.h"
 #include <string.h>
 #ifndef _WIN32
 #include <errno.h>
@@ -722,7 +722,7 @@ static void localClose(DoltliteRemote *pRemote){
   sqlite3_free(p);
 }
 
-DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal){
+static DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal){
   LocalAsRemote *p = sqlite3_malloc(sizeof(LocalAsRemote));
   if( !p ) return 0;
   memset(p, 0, sizeof(LocalAsRemote));

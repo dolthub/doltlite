@@ -399,7 +399,7 @@ int advanceTreeCursor(BtCursor *pCur, int dir){
   }
 }
 
-int flushMutMap(BtCursor *pCur){
+static int flushMutMap(BtCursor *pCur){
   struct TableEntry *pTE;
   ProllyMutMap *pFlushMap;
   int captured;

@@ -11,7 +11,6 @@
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
 #include <stdio.h>
-#include "doltlite_name_index.h"
 #include <stddef.h>
 #include "doltlite_ignore.h"
 

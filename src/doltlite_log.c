@@ -6,6 +6,7 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 
+#include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 #include <string.h>
 #include <time.h>

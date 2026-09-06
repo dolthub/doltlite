@@ -19,14 +19,10 @@ typedef sqlite3_file *CsFileLock;
 #define CS_PENDING_DRAIN_LIMIT (64*1024*1024)
 
 
-int csFileLockHeld(sqlite3_file *pFile);
 int csFileLock(sqlite3_vfs *pVfs, const char *path,
                sqlite3_file **ppFile, char **pzName);
 int csFileLockPromote(sqlite3_file *pFile);
 void csFileUnlock(sqlite3_file *pFile, char **pzName);
-int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
-                 sqlite3_file **ppFile, char **pzName);
-int csReloadFromDisk(ChunkStore *cs);
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
 int csRestoreOrMergeLocalRefs(ChunkStore *cs, SavedRefsState *pSaved,
                               const ProllyHash *pSavedRefsHash,

@@ -453,7 +453,6 @@ static inline void btreeFreeCatalogTables(Btree *p){
 
 void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 void invalidateSchema(Btree *pBtree);
-int flushMutMap(BtCursor *pCur);
 void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap);
 int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
@@ -477,7 +476,6 @@ void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur);
 void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur);
 int copyZeroTailPayload(ProllyMutMapEntry *e, u32 offset, u32 amt, void *pBuf);
 void btreeMarkWorkingStateChanged(Btree *p, int bLocal);
-int restoreFromCommitted(Btree *p);
 int rollbackNeedsSchemaReset(Btree *pBtree);
 int btreeFillWorkingSetBlob(
   u8 *buf,
@@ -685,7 +683,6 @@ extern const struct BtreeOps origBtreeVtOps;
 extern const struct BtCursorOps prollyCursorOps;
 extern const struct BtCursorOps origCursorVtOps;
 
-int btreeLoadBranchHeadCatalog(ChunkStore*, const char*, ProllyHash*, ProllyHash*);
 typedef struct BtreeBranchState BtreeBranchState;
 struct BtreeBranchState {
   ProllyHash catalog;
@@ -711,10 +708,6 @@ int btreeStoreWorkingSetBlob(ChunkStore*, const char*, const ProllyHash*,
                              const ProllyHash*, const ProllyHash*, u8,
                              const ProllyHash*, const ProllyHash*, const char*,
                              const char*, const ProllyHash*);
-int btreePutRebaseMetadataOnBranch(ChunkStore*, const char*, u8,
-                                   const ProllyHash*, const ProllyHash*,
-                                   const char*, const char*);
-int btreeClearRebaseMetadataOnBranch(ChunkStore*, const char*);
 int btreeReadWorkingCatalog(ChunkStore*, const char*, ProllyHash*, ProllyHash*);
 int btreeWriteWorkingState(ChunkStore*, const char*, const ProllyHash*,
                            const ProllyHash*);
@@ -724,7 +717,6 @@ int btreeRefreshSharedWorkingState(Btree*);
 int btreeReloadBranchWorkingStateInto(Btree*, int, ProllyHash*);
 int doltliteBtreeHydrateDeferred(Btree*);
 int doltliteOriginSourceEnable(ChunkStore*, sqlite3*, int*);
-int chunkStoreOriginSourceEnabled(ChunkStore*);
 int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 void btreeStoreCommittedFromCurrent(Btree*, const ProllyHash*);
@@ -733,7 +725,6 @@ int ensureStatementSavepointsCaptured(Btree*);
 int pushSavepoint(Btree*, int);
 void freeSavepointTables(struct SavepointTableState*);
 int snapshotPendingForFlush(Btree*, Pgno, ProllyMutMap**, ProllyMutMap**, int*);
-void btreeDiscardAllSavepoints(Btree*);
 int serializeCatalog(Btree*, u8**, int*);
 int doltliteFlushAndSerializeBtreeCatalog(Btree*, u8**, int*);
 int serializeCatalogForCommit(Btree*, u8**, int*);

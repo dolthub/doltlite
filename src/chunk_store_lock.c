@@ -8,7 +8,9 @@
 #include <stdlib.h>
 #include <limits.h>
 
-int csFileLockHeld(sqlite3_file *pFile){
+static int csReloadFromDisk(ChunkStore *cs);
+
+static int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;
 }
 
@@ -136,7 +138,7 @@ void csFileUnlock(sqlite3_file *pFile, char **pzName){
   }
 }
 
-int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
+static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
                         sqlite3_file **ppFile, char **pzName){
   return csFileLock(pVfs, path, ppFile, pzName);
 }
@@ -643,7 +645,7 @@ int chunkStoreForceRefresh(ChunkStore *cs){
   return rc;
 }
 
-int csReloadFromDisk(ChunkStore *cs){
+static int csReloadFromDisk(ChunkStore *cs){
   ChunkStore tmp;
   ChunkStoreReloadState saved;
   char *zOldFilename;
