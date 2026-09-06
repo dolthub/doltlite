@@ -240,16 +240,10 @@ static int docsSeedAgent(DocsVtab *p){
 }
 
 static int docsMaterialize(DocsVtab *p){
-  int rc;
-  char *zErr = 0;
-  if( sqlite3FindTable(p->db, "dolt_docs", "main") ) return SQLITE_OK;
-  rc = sqlite3_exec(p->db, zDocsCreate, 0, 0, &zErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(p->base.zErrMsg);
-    p->base.zErrMsg = sqlite3_mprintf("%s", zErr ? zErr : sqlite3_errstr(rc));
-    sqlite3_free(zErr);
-    return rc;
-  }
+  int existed = sqlite3FindTable(p->db, "dolt_docs", "main")!=0;
+  int rc = doltliteLazyCreateTable(&p->base, p->db, "dolt_docs", zDocsCreate);
+  if( rc!=SQLITE_OK ) return rc;
+  if( existed ) return SQLITE_OK;
   return docsSeedAgent(p);
 }
 
@@ -258,65 +252,30 @@ static int docsBegin(sqlite3_vtab *pBase){
 }
 
 static const char *docsInsertSql(sqlite3 *db){
-  switch( sqlite3_vtab_on_conflict(db) ){
-    case SQLITE_REPLACE:
-      return "INSERT OR REPLACE INTO main.dolt_docs(doc_name, doc_text) "
-             "VALUES(?1, ?2)";
-    case SQLITE_IGNORE:
-      return "INSERT OR IGNORE INTO main.dolt_docs(doc_name, doc_text) "
-             "VALUES(?1, ?2)";
-    case SQLITE_FAIL:
-      return "INSERT OR FAIL INTO main.dolt_docs(doc_name, doc_text) "
-             "VALUES(?1, ?2)";
-    case SQLITE_ROLLBACK:
-      return "INSERT OR ROLLBACK INTO main.dolt_docs(doc_name, doc_text) "
-             "VALUES(?1, ?2)";
-    default:
-      return "INSERT INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)";
-  }
+  return doltliteVtabOnConflictOr(db,
+      "INSERT OR REPLACE INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)",
+      "INSERT OR IGNORE INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)",
+      "INSERT OR FAIL INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)",
+      "INSERT OR ROLLBACK INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)",
+      "INSERT INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)");
 }
 
 static const char *docsUpdateSql(sqlite3 *db){
-  switch( sqlite3_vtab_on_conflict(db) ){
-    case SQLITE_REPLACE:
-      return "UPDATE OR REPLACE main.dolt_docs SET doc_name=?1, doc_text=?2 "
-             "WHERE doc_name=?3";
-    case SQLITE_IGNORE:
-      return "UPDATE OR IGNORE main.dolt_docs SET doc_name=?1, doc_text=?2 "
-             "WHERE doc_name=?3";
-    case SQLITE_FAIL:
-      return "UPDATE OR FAIL main.dolt_docs SET doc_name=?1, doc_text=?2 "
-             "WHERE doc_name=?3";
-    case SQLITE_ROLLBACK:
-      return "UPDATE OR ROLLBACK main.dolt_docs SET doc_name=?1, doc_text=?2 "
-             "WHERE doc_name=?3";
-    default:
-      return "UPDATE main.dolt_docs SET doc_name=?1, doc_text=?2 "
-             "WHERE doc_name=?3";
-  }
+  return doltliteVtabOnConflictOr(db,
+      "UPDATE OR REPLACE main.dolt_docs SET doc_name=?1, doc_text=?2 WHERE doc_name=?3",
+      "UPDATE OR IGNORE main.dolt_docs SET doc_name=?1, doc_text=?2 WHERE doc_name=?3",
+      "UPDATE OR FAIL main.dolt_docs SET doc_name=?1, doc_text=?2 WHERE doc_name=?3",
+      "UPDATE OR ROLLBACK main.dolt_docs SET doc_name=?1, doc_text=?2 WHERE doc_name=?3",
+      "UPDATE main.dolt_docs SET doc_name=?1, doc_text=?2 WHERE doc_name=?3");
 }
 
 static int docsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
                       sqlite3_int64 *pRowid){
   DocsVtab *p = (DocsVtab*)pBase;
-  int rc;
-
-  rc = docsMaterialize(p);
-  if( rc!=SQLITE_OK ) return rc;
-
-  if( argc==1 ){
-    return doltliteVtabExecBound(&p->base, p->db,
-        "DELETE FROM main.dolt_docs WHERE doc_name=?1", argv[0], 0, 0);
-  }
-  if( sqlite3_value_type(argv[0])!=SQLITE_NULL ){
-    return doltliteVtabExecBound(&p->base, p->db,
-        docsUpdateSql(p->db), argv[2], argv[3], argv[0]);
-  }
-
-  rc = doltliteVtabExecBound(&p->base, p->db, docsInsertSql(p->db), argv[2], argv[3], 0);
-  if( rc!=SQLITE_OK ) return rc;
-  if( pRowid ) *pRowid = sqlite3_last_insert_rowid(p->db);
-  return SQLITE_OK;
+  return doltliteLazyTwoColUpdate(pBase, p->db, argc, argv, pRowid,
+      (int(*)(void*))docsMaterialize, p,
+      "DELETE FROM main.dolt_docs WHERE doc_name=?1",
+      docsUpdateSql(p->db), docsInsertSql(p->db));
 }
 
 static sqlite3_module doltliteDocsModule = {

@@ -11,6 +11,7 @@
 #include "doltlite_catalog_types.h"
 #include <time.h>
 #include <limits.h>
+#include <string.h>
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
@@ -857,6 +858,119 @@ static SQLITE_INLINE int dlReadFramedHeader(DlByteReader *r, u8 m0, u8 m1,
   return SQLITE_OK;
 }
 
+typedef int (*DlRowIO)(DlByteReader *r, void *pRow);
+
+static SQLITE_INLINE int dlReadNamedRowTable(
+  DlByteReader *r,
+  char **pzName,
+  int *pnRows,
+  void **ppRows,
+  size_t szRow,
+  int bAllocEmpty,
+  DlRowIO xRead
+){
+  int nr, j, rc;
+  void *aRows = 0;
+
+  *pzName = 0;
+  *pnRows = 0;
+  *ppRows = 0;
+  rc = dlReadU16Name(r, pzName);
+  if( rc!=SQLITE_OK ) return rc;
+  nr = dlReadU32(r);
+  if( r->err || nr<0 ){
+    sqlite3_free(*pzName);
+    *pzName = 0;
+    return SQLITE_CORRUPT;
+  }
+  if( (sqlite3_uint64)nr > (sqlite3_uint64)(r->end - r->p) ){
+    sqlite3_free(*pzName);
+    *pzName = 0;
+    return SQLITE_CORRUPT;
+  }
+  if( nr>0 || bAllocEmpty ){
+    aRows = sqlite3_malloc64(nr ? (sqlite3_uint64)nr * szRow : 1);
+    if( !aRows ){
+      sqlite3_free(*pzName);
+      *pzName = 0;
+      return SQLITE_NOMEM;
+    }
+    memset(aRows, 0, nr ? (sqlite3_uint64)nr * szRow : 1);
+  }
+  for(j=0; j<nr; j++){
+    rc = xRead(r, (char*)aRows + (size_t)j * szRow);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(aRows);
+      sqlite3_free(*pzName);
+      *pzName = 0;
+      return rc;
+    }
+  }
+  *pnRows = nr;
+  *ppRows = aRows;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int dlMatchOrSkipNamedTable(
+  DlByteReader *r,
+  const char *zWant,
+  int *pFound,
+  char **pzName,
+  int *pnRows,
+  void **ppRows,
+  size_t szRow,
+  int bAllocEmpty,
+  DlRowIO xRead,
+  DlRowIO xSkip
+){
+  char *zName = 0;
+  int nr, j, rc;
+  int isMatch;
+
+  rc = dlReadU16Name(r, &zName);
+  if( rc!=SQLITE_OK ) return rc;
+  nr = dlReadU32(r);
+  if( r->err || nr<0 ){
+    sqlite3_free(zName);
+    return SQLITE_CORRUPT;
+  }
+  if( (sqlite3_uint64)nr > (sqlite3_uint64)(r->end - r->p) ){
+    sqlite3_free(zName);
+    return SQLITE_CORRUPT;
+  }
+  isMatch = (*pFound==0 && zName && strcmp(zName, zWant)==0);
+  if( isMatch ){
+    void *aRows = 0;
+    if( nr>0 || bAllocEmpty ){
+      aRows = sqlite3_malloc64(nr ? (sqlite3_uint64)nr * szRow : 1);
+      if( !aRows ){
+        sqlite3_free(zName);
+        return SQLITE_NOMEM;
+      }
+      memset(aRows, 0, nr ? (sqlite3_uint64)nr * szRow : 1);
+    }
+    for(j=0; j<nr; j++){
+      rc = xRead(r, (char*)aRows + (size_t)j * szRow);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aRows);
+        sqlite3_free(zName);
+        return rc;
+      }
+    }
+    *pzName = zName;
+    *pnRows = nr;
+    *ppRows = aRows;
+    *pFound = 1;
+    return SQLITE_OK;
+  }
+  sqlite3_free(zName);
+  for(j=0; j<nr; j++){
+    rc = xSkip(r, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 ChunkStore *doltliteBtreeChunkStore(Btree *p);
 int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs);
@@ -1010,6 +1124,67 @@ static SQLITE_INLINE int doltliteVtabExecBound(
   sqlite3_step(pStmt);
   rc = sqlite3_finalize(pStmt);
   if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(pVtab, db, rc);
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE const char *doltliteVtabOnConflictOr(
+  sqlite3 *db,
+  const char *zReplace,
+  const char *zIgnore,
+  const char *zFail,
+  const char *zRollback,
+  const char *zDefault
+){
+  switch( sqlite3_vtab_on_conflict(db) ){
+    case SQLITE_REPLACE: return zReplace;
+    case SQLITE_IGNORE: return zIgnore;
+    case SQLITE_FAIL: return zFail;
+    case SQLITE_ROLLBACK: return zRollback;
+    default: return zDefault;
+  }
+}
+
+static SQLITE_INLINE int doltliteLazyCreateTable(
+  sqlite3_vtab *pBase,
+  sqlite3 *db,
+  const char *zName,
+  const char *zCreate
+){
+  char *zErr = 0;
+  int rc;
+  if( sqlite3FindTable(db, zName, "main") ) return SQLITE_OK;
+  rc = sqlite3_exec(db, zCreate, 0, 0, &zErr);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBase->zErrMsg);
+    pBase->zErrMsg = sqlite3_mprintf("%s", zErr ? zErr : sqlite3_errstr(rc));
+    sqlite3_free(zErr);
+  }
+  return rc;
+}
+
+static SQLITE_INLINE int doltliteLazyTwoColUpdate(
+  sqlite3_vtab *pBase,
+  sqlite3 *db,
+  int argc,
+  sqlite3_value **argv,
+  sqlite3_int64 *pRowid,
+  int (*xMaterialize)(void*),
+  void *pMat,
+  const char *zDeleteSql,
+  const char *zUpdateSql,
+  const char *zInsertSql
+){
+  int rc = xMaterialize(pMat);
+  if( rc!=SQLITE_OK ) return rc;
+  if( argc==1 ){
+    return doltliteVtabExecBound(pBase, db, zDeleteSql, argv[0], 0, 0);
+  }
+  if( sqlite3_value_type(argv[0])!=SQLITE_NULL ){
+    return doltliteVtabExecBound(pBase, db, zUpdateSql, argv[2], argv[3], argv[0]);
+  }
+  rc = doltliteVtabExecBound(pBase, db, zInsertSql, argv[2], argv[3], 0);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pRowid ) *pRowid = sqlite3_last_insert_rowid(db);
   return SQLITE_OK;
 }
 

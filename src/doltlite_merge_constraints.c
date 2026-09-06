@@ -572,5 +572,138 @@ int fetchRowByPkFromTable(
                             ppKey, pnKey, ppVal, pnVal);
 }
 
+int scanMergeColumnFlagViolations(
+  sqlite3 *db,
+  const char *zTable,
+  struct TableEntry *aAnc, int nAnc,
+  char **azCols, char **azExtra, int nCols,
+  u8 cvType,
+  int *pnFound
+){
+  int hasRowid;
+  int nKeyCol;
+  MergePkInfo pkInfo;
+  sqlite3_str *pStr;
+  char *zQuery = 0;
+  sqlite3_stmt *pQ = 0;
+  int i;
+  int rc;
+  int queryStepRc;
+
+  memset(&pkInfo, 0, sizeof(pkInfo));
+  rc = tableHasRowid(db, zTable, &hasRowid);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !hasRowid ){
+    rc = loadMergePkInfo(db, zTable, &pkInfo);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  nKeyCol = hasRowid ? 1 : pkInfo.nPk;
+
+  pStr = sqlite3_str_new(db);
+  sqlite3_str_appendf(pStr, "SELECT %s",
+                      hasRowid ? "rowid" : pkInfo.zPkCols);
+  for(i=0; i<nCols; i++){
+    if( azExtra ){
+      sqlite3_str_appendf(pStr, ", typeof(\"%w\") NOT IN ('null','%s')",
+                          azCols[i], azExtra[i]);
+    }else{
+      sqlite3_str_appendf(pStr, ", typeof(\"%w\")='null'", azCols[i]);
+    }
+  }
+  sqlite3_str_appendf(pStr, " FROM main.\"%w\" NOT INDEXED WHERE 0", zTable);
+  for(i=0; i<nCols; i++){
+    if( azExtra ){
+      sqlite3_str_appendf(pStr, " OR typeof(\"%w\") NOT IN ('null','%s')",
+                          azCols[i], azExtra[i]);
+    }else{
+      sqlite3_str_appendf(pStr, " OR typeof(\"%w\")='null'", azCols[i]);
+    }
+  }
+  zQuery = sqlite3_str_finish(pStr);
+  if( !zQuery ){
+    freeMergePkInfo(&pkInfo);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
+  sqlite3_free(zQuery);
+  if( rc!=SQLITE_OK ){
+    freeMergePkInfo(&pkInfo);
+    return rc;
+  }
+
+  while( (queryStepRc = sqlite3_step(pQ))==SQLITE_ROW ){
+    u8 *pKey = 0; int nKey = 0;
+    u8 *pVal = 0; int nVal = 0;
+    i64 intKey = 0;
+    sqlite3_str *pInfo;
+    char *zInfo;
+    int nNamed = 0;
+    int appendRc;
+
+    if( hasRowid ){
+      intKey = sqlite3_column_int64(pQ, 0);
+      rc = fetchOrphanRow(db, zTable, intKey, &pKey, &nKey, &pVal, &nVal);
+    }else{
+      u8 *pPkRec = 0; int nPkRec = 0;
+      pPkRec = buildRecordFromStmtCols(pQ, 0, pkInfo.nPk, &nPkRec);
+      if( !pPkRec ){ rc = SQLITE_NOMEM; break; }
+      rc = fetchRowByPkFromTable(db, zTable, pPkRec, nPkRec, pkInfo.nPk,
+                                 &pKey, &nKey, &pVal, &nVal);
+      sqlite3_free(pPkRec);
+    }
+    if( rc==SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pKey);
+      sqlite3_free(pVal);
+      break;
+    }
+
+    if( aAnc ){
+      u8 *pAncVal = 0; int nAncVal = 0;
+      int ancRc = hasRowid
+          ? fetchAncestorRowByName(db, aAnc, nAnc, zTable,
+                                   intKey, &pAncVal, &nAncVal)
+          : fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
+                                  pKey, nKey, &pAncVal, &nAncVal);
+      int preExisting = (ancRc==SQLITE_OK)
+          && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+      sqlite3_free(pAncVal);
+      if( preExisting ){
+        sqlite3_free(pKey);
+        sqlite3_free(pVal);
+        continue;
+      }
+    }
+
+    pInfo = sqlite3_str_new(db);
+    sqlite3_str_appendall(pInfo, "{\"Columns\": [");
+    for(i=0; i<nCols; i++){
+      if( sqlite3_column_int(pQ, nKeyCol + i) ){
+        sqlite3_str_appendf(pInfo, "%s\"%w\"", nNamed ? ", " : "", azCols[i]);
+        nNamed++;
+      }
+    }
+    sqlite3_str_appendall(pInfo, "]}");
+    zInfo = sqlite3_str_finish(pInfo);
+    if( !zInfo ){
+      sqlite3_free(pKey);
+      sqlite3_free(pVal);
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    appendRc = doltliteAppendConstraintViolation(
+        db, zTable, cvType, intKey, pKey, nKey, pVal, nVal, zInfo);
+    sqlite3_free(zInfo);
+    sqlite3_free(pKey);
+    sqlite3_free(pVal);
+    if( appendRc!=SQLITE_OK ){ rc = appendRc; break; }
+    if( pnFound ) (*pnFound)++;
+  }
+  if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
+  rc = finishConstraintStmt(pQ, rc);
+  freeMergePkInfo(&pkInfo);
+  return rc;
+}
+
 
 #endif
