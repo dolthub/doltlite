@@ -37,7 +37,6 @@ int fetchRowByBlobKey(
   ChunkStore *cs, ProllyCache *pCache, const ProllyHash *pRoot, u8 flags,
   const u8 *pKey, int nKey, u8 **ppKey, int *pnKey, u8 **ppVal, int *pnVal
 );
-int tableEntryDiffers(const struct TableEntry *a, const struct TableEntry *b);
 int catalogTableChanged(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aCur, int nCur,

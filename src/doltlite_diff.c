@@ -17,23 +17,7 @@
 #include <string.h>
 #include <time.h>
 
-static int schemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
-  DoltliteRecordInfo ri;
-  int st, off, len;
-  const u8 *pBody;
-  if( !pRec || nRec<=0 ) return 0;
-  doltliteParseRecord(pRec, nRec, &ri);
-  if( ri.nField < 1 ) return 0;
-  st = ri.aType[0];
-  off = ri.aOffset[0];
-  if( st < 13 || (st & 1)==0 ) return 0;
-  len = (st - 13) / 2;
-  if( off < 0 || off + len > nRec ) return 0;
-  pBody = pRec + off;
-  if( len==4 && memcmp(pBody, "view", 4)==0 ) return 1;
-  if( len==7 && memcmp(pBody, "trigger", 7)==0 ) return 1;
-  return 0;
-}
+
 
 /* View and trigger rows are compared by content. The master keys its rows by
 ** rowid, and a rowid is a position in the canonical row order, so adding or
@@ -152,15 +136,6 @@ int doltliteMasterViewTriggerRowsDiffer(
   return rc;
 }
 
-static int schemaHasViewOrTriggerDiff(sqlite3 *db,
-                                      const ProllyHash *pOldRoot,
-                                      const ProllyHash *pNewRoot,
-                                      u8 flags,
-                                      int *pFound){
-  return doltliteMasterViewTriggerRowsDiffer(db, pOldRoot, pNewRoot, flags,
-                                             pFound);
-}
-
 static int schemaHasAnyViewOrTrigger(sqlite3 *db,
                                      const ProllyHash *pRoot,
                                      u8 flags,
@@ -181,7 +156,7 @@ static int schemaHasAnyViewOrTrigger(sqlite3 *db,
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal; int nVal;
     prollyCursorValue(&cur, &pVal, &nVal);
-    if( schemaRecordIsViewOrTrigger(pVal, nVal) ){
+    if( doltliteSchemaRecordIsViewOrTrigger(pVal, nVal) ){
       *pFound = 1;
       break;
     }
@@ -228,22 +203,7 @@ struct DoltliteDiffCursor {
   int pseudoFilter;   /* 0=STAGED+WORKING, 1=WORKING, 2=STAGED */
 };
 
-static int diffMapChunkSourceError(
-  DoltliteDiffCursor *pCur,
-  sqlite3 *db,
-  int sourceRc,
-  int mappedRc
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int pendingRc = SQLITE_OK;
-  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
-  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
-  if( zErr ){
-    sqlite3_free(pCur->base.pVtab->zErrMsg);
-    pCur->base.pVtab->zErrMsg = zErr;
-  }
-  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
-}
+
 
 static const char *diffSchema =
   "CREATE TABLE x("
@@ -282,13 +242,7 @@ static void diffNameIndexFree(DiffNameIndex *pIdx){
   doltliteNameIndexFree(pIdx);
 }
 
-static struct TableEntry *diffNameIndexFind(
-  const DiffNameIndex *pIdx,
-  const char *zName
-){
-  int r = doltliteNameIndexFind(pIdx, zName);
-  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
-}
+
 
 static void freeBatch(DoltliteDiffCursor *pCur){
   int i;
@@ -390,7 +344,7 @@ static int diffFilteredTableRoots(
   rc = doltliteLoadTableRootByName(db, pChildCat, pCur->zFilterTable,
                                    &childRoot, 0, &childSchema);
   if( rc==SQLITE_NOTFOUND ){
-    rc = diffMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+    rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
     if( rc!=SQLITE_OK ) return rc;
     childFound = 0;
   }else{
@@ -405,7 +359,7 @@ static int diffFilteredTableRoots(
   rc = doltliteLoadTableRootByName(db, pParentCat, pCur->zFilterTable,
                                    &parentRoot, 0, &parentSchema);
   if( rc==SQLITE_NOTFOUND ){
-    rc = diffMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+    rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
     if( rc!=SQLITE_OK ) return rc;
     parentFound = 0;
   }else{
@@ -481,7 +435,7 @@ static int diffCatalogPairOne(
     if( !pNewMaster ) return SQLITE_OK;
 
     pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
-    rc = schemaHasViewOrTriggerDiff(db, pOldRoot, &pNewMaster->root,
+    rc = doltliteMasterViewTriggerRowsDiffer(db, pOldRoot, &pNewMaster->root,
                                     pNewMaster->flags, &hasDiff);
     if( rc!=SQLITE_OK ) return rc;
     if( hasDiff ){
@@ -550,7 +504,7 @@ static int diffCatalogPair(
       memset(&emptyRoot, 0, sizeof(emptyRoot));
       pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
       pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
-      rc = schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags,
+      rc = doltliteMasterViewTriggerRowsDiffer(db, pOldRoot, &e->root, e->flags,
                                       &hasDiff);
       if( rc!=SQLITE_OK ) goto diff_done;
       if( hasDiff ){
@@ -562,7 +516,7 @@ static int diffCatalogPair(
       }
       continue;
     }
-    p = diffNameIndexFind(&parentIdx, e->zName);
+    p = addNameIndexFind(&parentIdx, e->zName);
     if( !p ){
       rc = diffRootHasRows(db, &e->root, &dataChange);
       if( rc!=SQLITE_OK ) goto diff_done;
@@ -584,7 +538,7 @@ static int diffCatalogPair(
     struct TableEntry *p = &aParent[i];
     u8 dataChange;
     if( !p->zName ) continue;
-    if( diffNameIndexFind(&childIdx, p->zName) ) continue;
+    if( addNameIndexFind(&childIdx, p->zName) ) continue;
     rc = diffRootHasRows(db, &p->root, &dataChange);
     if( rc!=SQLITE_OK ) goto diff_done;
     rc = batchAppend(pCur, zHex, p->zName, pCommit, dataChange, 1);

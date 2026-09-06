@@ -320,11 +320,7 @@ static const char *zIgnoreCreate =
   "CREATE TABLE main.dolt_ignore("
   "pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern))";
 
-static int ignoreSetErr(IgnoreVtab *p, int rc){
-  sqlite3_free(p->base.zErrMsg);
-  p->base.zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(p->db));
-  return rc;
-}
+
 
 static int ignoreConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
@@ -397,21 +393,7 @@ static int ignoreBegin(sqlite3_vtab *pBase){
   return ignoreMaterialize((IgnoreVtab*)pBase);
 }
 
-static int ignoreExecBound(IgnoreVtab *p, const char *zSql,
-                           sqlite3_value *pArg1, sqlite3_value *pArg2,
-                           sqlite3_value *pArg3){
-  sqlite3_stmt *pStmt = 0;
-  int rc = sqlite3_prepare_v3(p->db, zSql, -1,
-                              SQLITE_PREPARE_NO_VTAB, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return ignoreSetErr(p, rc);
-  if( pArg1 ) sqlite3_bind_value(pStmt, 1, pArg1);
-  if( pArg2 ) sqlite3_bind_value(pStmt, 2, pArg2);
-  if( pArg3 ) sqlite3_bind_value(pStmt, 3, pArg3);
-  sqlite3_step(pStmt);
-  rc = sqlite3_finalize(pStmt);
-  if( rc!=SQLITE_OK ) return ignoreSetErr(p, rc);
-  return SQLITE_OK;
-}
+
 
 static const char *ignoreInsertSql(sqlite3 *db){
   switch( sqlite3_vtab_on_conflict(db) ){
@@ -461,15 +443,15 @@ static int ignoreUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   if( rc!=SQLITE_OK ) return rc;
 
   if( argc==1 ){
-    return ignoreExecBound(p,
+    return doltliteVtabExecBound(&p->base, p->db,
         "DELETE FROM main.dolt_ignore WHERE pattern=?1", argv[0], 0, 0);
   }
   if( sqlite3_value_type(argv[0])!=SQLITE_NULL ){
-    return ignoreExecBound(p,
+    return doltliteVtabExecBound(&p->base, p->db,
         ignoreUpdateSql(p->db), argv[2], argv[3], argv[0]);
   }
 
-  rc = ignoreExecBound(p, ignoreInsertSql(p->db), argv[2], argv[3], 0);
+  rc = doltliteVtabExecBound(&p->base, p->db, ignoreInsertSql(p->db), argv[2], argv[3], 0);
   if( rc!=SQLITE_OK ) return rc;
   if( pRowid ) *pRowid = sqlite3_last_insert_rowid(p->db);
   return SQLITE_OK;

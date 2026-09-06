@@ -144,11 +144,7 @@ static int docsOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
   return doltliteVtabOpenCursor(ppCursor, sizeof(DocsCursor));
 }
 
-static int docsSetErrMsg(DocsVtab *p, int rc){
-  sqlite3_free(p->base.zErrMsg);
-  p->base.zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(p->db));
-  return rc;
-}
+
 
 static int docsAdvance(DocsCursor *c){
   DocsVtab *p = (DocsVtab*)c->base.pVtab;
@@ -161,7 +157,7 @@ static int docsAdvance(DocsCursor *c){
   if( rc==SQLITE_ROW ) return SQLITE_OK;
   rc = sqlite3_finalize(c->pStmt);
   c->pStmt = 0;
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(&p->base, p->db, rc);
   c->eof = 1;
   return SQLITE_OK;
 }
@@ -183,7 +179,7 @@ static int docsFilter(sqlite3_vtab_cursor *pCursor,
   rc = sqlite3_prepare_v3(p->db,
       "SELECT doc_name, doc_text FROM main.dolt_docs", -1,
       SQLITE_PREPARE_NO_VTAB, &c->pStmt, 0);
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(&p->base, p->db, rc);
   return docsAdvance(c);
 }
 
@@ -227,33 +223,19 @@ static int docsClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-static int docsExecBound(DocsVtab *p, const char *zSql,
-                         sqlite3_value *pArg1, sqlite3_value *pArg2,
-                         sqlite3_value *pArg3){
-  sqlite3_stmt *pStmt = 0;
-  int rc = sqlite3_prepare_v3(p->db, zSql, -1,
-                              SQLITE_PREPARE_NO_VTAB, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
-  if( pArg1 ) sqlite3_bind_value(pStmt, 1, pArg1);
-  if( pArg2 ) sqlite3_bind_value(pStmt, 2, pArg2);
-  if( pArg3 ) sqlite3_bind_value(pStmt, 3, pArg3);
-  sqlite3_step(pStmt);
-  rc = sqlite3_finalize(pStmt);
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
-  return SQLITE_OK;
-}
+
 
 static int docsSeedAgent(DocsVtab *p){
   sqlite3_stmt *pStmt = 0;
   int rc = sqlite3_prepare_v3(p->db,
       "INSERT INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)", -1,
       SQLITE_PREPARE_NO_VTAB, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(&p->base, p->db, rc);
   sqlite3_bind_text(pStmt, 1, zDocsAgentName, -1, SQLITE_STATIC);
   sqlite3_bind_text(pStmt, 2, zDocsAgentDefault, -1, SQLITE_STATIC);
   sqlite3_step(pStmt);
   rc = sqlite3_finalize(pStmt);
-  if( rc!=SQLITE_OK ) return docsSetErrMsg(p, rc);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(&p->base, p->db, rc);
   return SQLITE_OK;
 }
 
@@ -323,15 +305,15 @@ static int docsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   if( rc!=SQLITE_OK ) return rc;
 
   if( argc==1 ){
-    return docsExecBound(p,
+    return doltliteVtabExecBound(&p->base, p->db,
         "DELETE FROM main.dolt_docs WHERE doc_name=?1", argv[0], 0, 0);
   }
   if( sqlite3_value_type(argv[0])!=SQLITE_NULL ){
-    return docsExecBound(p,
+    return doltliteVtabExecBound(&p->base, p->db,
         docsUpdateSql(p->db), argv[2], argv[3], argv[0]);
   }
 
-  rc = docsExecBound(p, docsInsertSql(p->db), argv[2], argv[3], 0);
+  rc = doltliteVtabExecBound(&p->base, p->db, docsInsertSql(p->db), argv[2], argv[3], 0);
   if( rc!=SQLITE_OK ) return rc;
   if( pRowid ) *pRowid = sqlite3_last_insert_rowid(p->db);
   return SQLITE_OK;

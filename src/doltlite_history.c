@@ -54,22 +54,7 @@ struct HistCursor {
   int singleCommit;
 };
 
-static int htMapChunkSourceError(
-  HistCursor *c,
-  sqlite3 *db,
-  int sourceRc,
-  int mappedRc
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int pendingRc = SQLITE_OK;
-  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
-  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
-  if( zErr ){
-    sqlite3_free(c->common.base.pVtab->zErrMsg);
-    c->common.base.pVtab->zErrMsg = zErr;
-  }
-  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
-}
+
 
 static void htCursorReset(HistCursor *c){
   doltliteVtabCommonReset(&c->common);
@@ -80,13 +65,9 @@ static void htCursorReset(HistCursor *c){
 }
 
 static int htRowMatchesUpper(HistCursor *c){
-  i64 k;
   if( !c->pkRange.hasPkHi ) return 1;
-  k = prollyCursorIntKey(&c->common.tblCur);
-  if( c->pkRange.pkHiStrict ){
-    return k < c->pkRange.pkHi;
-  }
-  return k <= c->pkRange.pkHi;
+  return doltlitePkRangeMatchesUpper(
+      &c->pkRange, prollyCursorIntKey(&c->common.tblCur));
 }
 
 static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
@@ -131,7 +112,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   }
   doltliteCommitClear(&commit);
   if( rc==SQLITE_NOTFOUND ){
-    rc = htMapChunkSourceError(c, db, rc, SQLITE_OK);
+    rc = doltliteVtabMapChunkSourceError(c->common.base.pVtab, db, rc, SQLITE_OK);
   }
   if( rc!=SQLITE_OK ) return rc;
 

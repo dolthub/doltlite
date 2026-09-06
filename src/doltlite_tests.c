@@ -44,11 +44,7 @@ static const char *zTestsCreate =
   "CONSTRAINT assertion_comparator_check CHECK(assertion_comparator IN "
     "('==','!=','<','>','<=','>=')))";
 
-static int testsSetErr(TestsVtab *p, int rc){
-  sqlite3_free(p->base.zErrMsg);
-  p->base.zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(p->db));
-  return rc;
-}
+
 
 static int testsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
@@ -143,11 +139,11 @@ static int testsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
       break;
   }
   rc = sqlite3_prepare_v2(p->db, zSql, -1, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return testsSetErr(p, rc);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(&p->base, p->db, rc);
   for(i=0; i<6; i++) sqlite3_bind_value(pStmt, i+1, argv[i+2]);
   sqlite3_step(pStmt);
   rc = sqlite3_finalize(pStmt);
-  if( rc!=SQLITE_OK ) return testsSetErr(p, rc);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(&p->base, p->db, rc);
   if( pRowid ) *pRowid = sqlite3_last_insert_rowid(p->db);
   return SQLITE_OK;
 }

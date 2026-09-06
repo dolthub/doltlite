@@ -161,19 +161,7 @@ int hasAnySchemaConflict(
   return 0;
 }
 
-static int mergeSchemaEntriesSame(
-  const SchemaEntry *pA,
-  const SchemaEntry *pB
-){
-  if( !pA && !pB ) return 1;
-  if( !pA || !pB ) return 0;
-  if( sqlite3_stricmp(pA->zType ? pA->zType : "",
-                      pB->zType ? pB->zType : "")!=0 ) return 0;
-  if( sqlite3_stricmp(pA->zTblName ? pA->zTblName : "",
-                      pB->zTblName ? pB->zTblName : "")!=0 ) return 0;
-  if( (pA->zSql==0)!=(pB->zSql==0) ) return 0;
-  return !pA->zSql || strcmp(pA->zSql, pB->zSql)==0;
-}
+
 
 static int mergeIndexColListSame(const char *zA, const char *zB){
   if( !zA || !zB ) return zA==zB;
@@ -290,8 +278,8 @@ static int preDetectIndexSchemaConflicts(
       pAnc = findSchemaEntry(aAnc, nAnc, a[i].zName);
       pOurs = findSchemaEntry(aOurs, nOurs, a[i].zName);
       pTheirs = findSchemaEntry(aTheirs, nTheirs, a[i].zName);
-      oursChanged = !mergeSchemaEntriesSame(pAnc, pOurs);
-      theirsChanged = !mergeSchemaEntriesSame(pAnc, pTheirs);
+      oursChanged = !doltliteSchemaEntriesSame(pAnc, pOurs);
+      theirsChanged = !doltliteSchemaEntriesSame(pAnc, pTheirs);
       if( mergeIndexFollowsDualRename(
             aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
             pAnc, pOurs, pTheirs) ){
@@ -347,7 +335,7 @@ static int preDetectIndexSchemaConflicts(
         continue;
       }
       if( !oursChanged || !theirsChanged
-       || mergeSchemaEntriesSame(pOurs, pTheirs) ){
+       || doltliteSchemaEntriesSame(pOurs, pTheirs) ){
         continue;
       }
       /* Dolt keeps the modified index when the other branch drops it. */

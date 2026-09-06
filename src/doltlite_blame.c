@@ -57,22 +57,7 @@ struct BlameCursor {
   int iRow;
 };
 
-static int blameMapChunkSourceError(
-  BlameCursor *pCur,
-  sqlite3 *db,
-  int sourceRc,
-  int mappedRc
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int pendingRc = SQLITE_OK;
-  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
-  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
-  if( zErr ){
-    sqlite3_free(pCur->base.pVtab->zErrMsg);
-    pCur->base.pVtab->zErrMsg = zErr;
-  }
-  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
-}
+
 
 static int blameIntPkEnabled(const BlameVtab *v){
   if( v->nPkCols != 1 ) return 0;
@@ -462,7 +447,7 @@ static int blameCompareAgainstRef(
                                      &refRoot, &refFlags, 0);
     if( rc==SQLITE_OK ) haveRef = 1;
     else if( rc==SQLITE_NOTFOUND ){
-      rc = blameMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+      rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
       if( rc!=SQLITE_OK ) return rc;
     }else{
       return rc;
@@ -583,7 +568,7 @@ static int blameFindAllParentMergeBase(
     memset(&nextBase, 0, sizeof(nextBase));
     rc = doltliteFindAncestor(db, &base, pParent, &nextBase);
     if( rc==SQLITE_NOTFOUND ){
-      rc = blameMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+      rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
       if( rc!=SQLITE_OK ) return rc;
       memset(&base, 0, sizeof(base));
       break;
@@ -625,7 +610,7 @@ static int blameWalk(
                                      &curTableRoot, &curFlags, 0);
     if( rc==SQLITE_OK ) haveCurTable = 1;
     else if( rc==SQLITE_NOTFOUND ){
-      rc = blameMapChunkSourceError(pCur, db, rc, SQLITE_OK);
+      rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
       if( rc!=SQLITE_OK ){
         doltliteCommitClear(&commit);
         return rc;
@@ -854,7 +839,7 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   rc = doltliteLoadTableRootByName(db, &headCatHash, v->zTableName,
                                    &tableRoot, &tableFlags, 0);
   if( rc==SQLITE_NOTFOUND ){
-    rc = blameMapChunkSourceError(c, db, rc, SQLITE_OK);
+    rc = doltliteVtabMapChunkSourceError(c->base.pVtab, db, rc, SQLITE_OK);
   }
   if( rc!=SQLITE_OK ) return rc;
 

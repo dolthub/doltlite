@@ -2,22 +2,7 @@
 
 #include "doltlite_merge_int.h"
 
-/* Serial type + body length for an i64, matching SQLite records. */
-void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen){
-  if( v==0 ){ *pType = 8; *pLen = 0; return; }
-  if( v==1 ){ *pType = 9; *pLen = 0; return; }
-  if( v>=-128 && v<=127 ){ *pType = 1; *pLen = 1; return; }
-  if( v>=-32768 && v<=32767 ){ *pType = 2; *pLen = 2; return; }
-  if( v>=-8388608 && v<=8388607 ){ *pType = 3; *pLen = 3; return; }
-  if( v>=-2147483648LL && v<=2147483647LL ){ *pType = 4; *pLen = 4; return; }
-  if( v>=-140737488355328LL && v<=140737488355327LL ){ *pType = 5; *pLen = 6; return; }
-  *pType = 6; *pLen = 8;
-}
 
-void doltliteIpkWriteBE(u8 *p, i64 v, int n){
-  int i;
-  for(i=n-1; i>=0; i--){ p[i] = (u8)(v & 0xff); v >>= 8; }
-}
 
 /* KeyInfo without Parse. Matches sqlite3KeyInfoOfIndex so VC paths
 ** encode the same sort keys as VDBE. */
@@ -466,7 +451,7 @@ static int doltliteBuildIndexEntry(
     int st = info.aType[iPKey];
     if( st==0 || st==8 || st==9 ){
       useIpk = 1;
-      doltliteIpkSerialType(intKey, &ipkType, &ipkLen);
+      dlIpkSerialType(intKey, &ipkType, &ipkLen);
     }
   }
 
@@ -536,7 +521,7 @@ static int doltliteBuildIndexEntry(
         st = (int)ipkType;
         flen = (int)ipkLen;
         if( flen>0 ){
-          doltliteIpkWriteBE(p, intKey, flen);
+          dlIpkWriteBE(p, intKey, flen);
           p += flen;
         }
         continue;

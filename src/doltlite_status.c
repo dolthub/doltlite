@@ -182,23 +182,7 @@ static int addRow(DoltliteStatusCursor *pCur, const char *zName,
   return SQLITE_OK;
 }
 
-static int statusSchemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
-  DoltliteRecordInfo ri;
-  int st, off, len;
-  const u8 *pBody;
-  if( !pRec || nRec<=0 ) return 0;
-  doltliteParseRecord(pRec, nRec, &ri);
-  if( ri.nField < 1 ) return 0;
-  st = ri.aType[0];
-  off = ri.aOffset[0];
-  if( st < 13 || (st & 1)==0 ) return 0;
-  len = (st - 13) / 2;
-  if( off < 0 || off + len > nRec ) return 0;
-  pBody = pRec + off;
-  if( len==4 && memcmp(pBody, "view", 4)==0 ) return 1;
-  if( len==7 && memcmp(pBody, "trigger", 7)==0 ) return 1;
-  return 0;
-}
+
 
 static int statusSchemaHasViewOrTrigger(sqlite3 *db,
                                         const ProllyHash *pRoot,
@@ -221,7 +205,7 @@ static int statusSchemaHasViewOrTrigger(sqlite3 *db,
     const u8 *pVal;
     int nVal;
     prollyCursorValue(&cur, &pVal, &nVal);
-    if( statusSchemaRecordIsViewOrTrigger(pVal, nVal) ){
+    if( doltliteSchemaRecordIsViewOrTrigger(pVal, nVal) ){
       *pFound = 1;
       break;
     }
@@ -232,14 +216,7 @@ static int statusSchemaHasViewOrTrigger(sqlite3 *db,
   return rc;
 }
 
-static int statusSchemaHasViewOrTriggerDiff(sqlite3 *db,
-                                            const ProllyHash *pOldRoot,
-                                            const ProllyHash *pNewRoot,
-                                            u8 flags,
-                                            int *pFound){
-  return doltliteMasterViewTriggerRowsDiffer(db, pOldRoot, pNewRoot, flags,
-                                             pFound);
-}
+
 
 static int statusCompareDoltSchemas(
   DoltliteStatusCursor *pCur,
@@ -273,7 +250,7 @@ static int statusCompareDoltSchemas(
   pNewRoot = pNewMaster ? &pNewMaster->root : &emptyRoot;
   flags = pNewMaster ? pNewMaster->flags : pOldMaster->flags;
 
-  rc = statusSchemaHasViewOrTriggerDiff(
+  rc = doltliteMasterViewTriggerRowsDiffer(
       db, pOldRoot, pNewRoot, flags, &changed);
   if( rc!=SQLITE_OK || !changed ) return rc;
 
