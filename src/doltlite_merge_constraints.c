@@ -2,7 +2,7 @@
 
 #include "doltlite_merge_constraints_int.h"
 
-int copyCursorRow(
+static int copyCursorRow(
   ProllyCursor *pCur,
   u8 **ppKey, int *pnKey,
   u8 **ppVal, int *pnVal
@@ -34,7 +34,7 @@ int copyCursorRow(
   return SQLITE_OK;
 }
 
-int fetchRowByRowid(
+static int fetchRowByRowid(
   ChunkStore *cs,
   ProllyCache *pCache,
   const ProllyHash *pRoot,
@@ -66,7 +66,7 @@ int fetchRowByRowid(
   return rc;
 }
 
-int fetchRowByBlobKey(
+static int fetchRowByBlobKey(
   ChunkStore *cs,
   ProllyCache *pCache,
   const ProllyHash *pRoot,
@@ -304,7 +304,7 @@ u8 *buildRecordFromStmtCols(
   return pOut;
 }
 
-int recordPrefixEquals(
+static int recordPrefixEquals(
   const u8 *pLeft, int nLeft,
   const u8 *pRight, int nRight,
   int nField
@@ -331,7 +331,7 @@ int recordPrefixEquals(
 
 /* PK-equals-all-columns rows store an empty value; match the sort-key
 ** record instead or callers skip the check as "no such row". */
-int fetchRowByPkRecord(
+static int fetchRowByPkRecord(
   ChunkStore *cs,
   ProllyCache *pCache,
   const ProllyHash *pRoot,

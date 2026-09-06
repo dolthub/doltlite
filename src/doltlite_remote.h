@@ -72,8 +72,6 @@ DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath);
 DoltliteRemote *doltliteRemoteOpenReadOnly(sqlite3_vfs *pVfs,
                                            const char *zUrl);
 
-DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal);
-
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl);
 
 int doltliteHttpParseResponseForTest(const u8 *pRaw, int nRaw, int nHash);

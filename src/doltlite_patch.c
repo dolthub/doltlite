@@ -2,6 +2,7 @@
 
 #include "sqliteInt.h"
 #include "doltlite_vtab_util.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 #include "record_codec.h"
 #include "prolly_cursor.h"

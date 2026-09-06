@@ -5,6 +5,7 @@
 #include "prolly_hashset.h"
 #include "prolly_diff.h"
 #include "doltlite_commit.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 
 #include <assert.h>

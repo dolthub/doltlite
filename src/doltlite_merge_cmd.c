@@ -13,7 +13,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
-#include "doltlite_name_index.h"
+#include "doltlite_ancestor.h"
 #include "record_codec.h"
 #include <stddef.h>
 #include "doltlite_ignore.h"
@@ -649,7 +649,7 @@ int mergeAbortInPlace(sqlite3 *db){
   return SQLITE_OK;
 }
 
-int mergeFastForward(
+static int mergeFastForward(
   sqlite3 *db,
   sqlite3_context *context,
   ChunkStore *cs,

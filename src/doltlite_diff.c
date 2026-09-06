@@ -12,7 +12,6 @@
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
 #include "prolly_record.h"
-#include "doltlite_name_index.h"
 #include <stddef.h>
 #include <string.h>
 #include <time.h>

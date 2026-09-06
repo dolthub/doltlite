@@ -103,9 +103,6 @@ struct DoltliteSerialValue {
   int n;
 };
 
-u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen);
-void doltliteSerialPut(u8 *pOut, const DoltliteSerialValue *pVal, u32 serialType);
-
 /* Assemble an SQLite-format record (header varints + body) from nField
 ** serial values. Returns a sqlite3_malloc'd buffer of *pnOut bytes, or 0
 ** on OOM or nField<=0. */

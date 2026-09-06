@@ -76,7 +76,7 @@ i64 doltliteSyntheticRowidFromSortKey(const u8 *pSortKey, int nSortKey,
   return doltliteRowidHash(pSortKey, nSortKey);
 }
 
-u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen){
+static u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen){
   if( pVal->eType == SQLITE_NULL ){ *pLen = 0; return 0; }
   if( pVal->eType == SQLITE_INTEGER ){
     i64 v = pVal->i;
@@ -102,7 +102,7 @@ u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen){
   return 0;
 }
 
-void doltliteSerialPut(u8 *pOut, const DoltliteSerialValue *pVal, u32 serialType){
+static void doltliteSerialPut(u8 *pOut, const DoltliteSerialValue *pVal, u32 serialType){
   i64 v;
   int nByte, i;
   if( serialType==0 || serialType==8 || serialType==9 ) return;

@@ -12,9 +12,11 @@
 #   Part C: static inline helpers in headers that never appear outside their
 #           definition (the compiler will not warn; each TU that includes the
 #           header just omits the unused inline).
-#   Part D: non-static functions with no identifier occurrence outside the
-#           defining file. Those should be static so Part A can see them.
-#   Part E: non-static prototypes in owned headers that never appear in any .c.
+#   Part D: non-static functions with no other .c mention. A header prototype
+#           is not a caller. Btree vtable methods stay non-static.
+#   Part E: non-static prototypes in owned headers that never appear in any .c,
+#           or the same prototype in two owned headers (btree-int vs internal
+#           seam copies excepted).
 #   Part F: #define names in owned headers that never appear elsewhere
 #           (include guards skipped).
 #   Part G: identical function bodies copied across owned .c files, or two
@@ -82,7 +84,7 @@ else
   done
 fi
 
-echo "== Part B-I: unused externs / inlines / should-be-static / prototypes / macros / clones / test-only wrappers / redundant local externs =="
+echo "== Part B-I: unused externs / inlines / should-be-static / prototypes / macros / clones / test-only wrappers / redundant local externs / duplicate prototypes =="
 if ! python3 "$SCRIPT_DIR/lib/dead_code_scan.py" --root "$ROOT" --src-root "$SRC_ROOT"
 then
   fail=1

@@ -617,7 +617,7 @@ static int indexRowInPartialIndex(
       pPart->colsInit ? &pPart->cols : 0, &pPart->pStmt, pIn);
 }
 
-int doltliteIndexMutMapRowDelta(
+static int doltliteIndexMutMapRowDelta(
   sqlite3 *db,
   Index *pIdx,
   ProllyMutMap *pMap,

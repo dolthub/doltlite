@@ -2,6 +2,8 @@
 
 #include "sqliteInt.h"
 #include "doltlite_internal.h"
+#include "doltlite_constraint_violations.h"
+#include "doltlite_ignore.h"
 
 int doltliteRegister(sqlite3 *db){
   int rc;

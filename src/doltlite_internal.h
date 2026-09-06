@@ -19,8 +19,6 @@ typedef struct DoltliteTxnState DoltliteTxnState;
 typedef struct DoltlitePkRange DoltlitePkRange;
 typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 
-int chunkStoreOriginSourceEnabled(ChunkStore*);
-
 #define DOLTLITE_RANGE_NONE      0
 #define DOLTLITE_RANGE_TWO_DOT   2
 #define DOLTLITE_RANGE_THREE_DOT 3
@@ -861,7 +859,6 @@ static SQLITE_INLINE int dlReadFramedHeader(DlByteReader *r, u8 m0, u8 m1,
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 ChunkStore *doltliteBtreeChunkStore(Btree *p);
-int doltliteGcCompactStoreWithPhase(sqlite3 *db, ChunkStore *cs, const char **pzPhase);
 int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs);
 int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase);
 int doltliteGcVacuumInto(sqlite3 *db, int iDb, const char *zOut,
@@ -956,10 +953,7 @@ int doltliteCmdParseArgs(
 );
 void doltliteCmdArgsClear(DoltliteCmdArgs *pArgs);
 int doltliteCmdRejectDetached(sqlite3_context *ctx);
-void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
-void doltliteCmdResultMissingOptionValue(
-  sqlite3_context *ctx, const char *zOptName
-);
+
 int doltliteCmdParseAuthor(
   sqlite3_context *ctx, const char *zAuthor,
   char **pzName, char **pzEmail
@@ -1117,12 +1111,6 @@ int doltliteCatalogRenameMate(
 );
 
 int mergeAbortInPlace(sqlite3 *db);
-int mergeFastForward(
-  sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
-  const ProllyHash *pOurHead, const ProllyHash *pTheirHead,
-  const ProllyHash *pIgnored,
-  int squash
-);
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1158,10 +1146,8 @@ int doltliteSchemaDiffRegister(sqlite3 *db);
 int doltlitePatchRegister(sqlite3 *db);
 int doltliteRemoteSqlRegister(sqlite3 *db);
 int doltliteHashofRegister(sqlite3 *db);
-int doltliteConstraintViolationsRegister(sqlite3 *db);
 int doltliteDocsRegister(sqlite3 *db);
 int doltliteTestsRegister(sqlite3 *db);
-int doltliteIgnoreRegister(sqlite3 *db);
 int doltliteMaybeSeedRepo(sqlite3 *db);
 int doltliteSeedStoreIfNeeded(sqlite3*, ChunkStore*, const char*,
                               ProllyHash*, int*);
@@ -1195,9 +1181,6 @@ int doltliteDetectMergeStrictViolations(sqlite3 *db, const ProllyHash *pAncCatHa
                                        char **pzErrMsg, int *pnFound,
                                        const char **azTables, int nTables);
 
-int doltliteConstraintViolationBatchBegin(sqlite3 *db);
-int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);
-
 int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
                                  ProllyHash *pSchemaHash);
@@ -1208,9 +1191,6 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p);
 
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit);
 int doltliteUserRefNameIsValid(const char *zName);
-int doltliteFindAncestor(sqlite3 *db, const ProllyHash *pCommit1,
-                         const ProllyHash *pCommit2,
-                         ProllyHash *pAncestor);
 
 typedef struct DoltliteCommit DoltliteCommit;
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
@@ -1245,8 +1225,6 @@ int applyMergedCatalogAndCommit(
 
 int doltliteCommitCatalogHash(sqlite3 *db, const ProllyHash *pCommit,
                               ProllyHash *pCatHash);
-int doltliteRefToCatalogHash(sqlite3 *db, const char *zRef,
-                             ProllyHash *pCatHash);
 
 int doltliteRefIsWorking(const char *zRef);
 int doltliteRefIsStaged(const char *zRef);
@@ -1294,19 +1272,6 @@ KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
 int doltliteMasterViewTriggerRowsDiffer(sqlite3 *db, const ProllyHash *pOldRoot,
                                         const ProllyHash *pNewRoot, u8 flags,
                                         int *pDiffer);
-struct DoltlitePartialIndex;
-int doltliteIndexMutMapRowDelta(
-  sqlite3 *db,
-  Index *pIdx,
-  ProllyMutMap *pMap,
-  const i16 *aiColumn, int nIdxCol,
-  KeyInfo *pKeyInfo,
-  int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal,
-  struct DoltlitePartialIndex *pPart
-);
 int doltliteIndexApplyRowDelta(
   sqlite3 *db,
   ChunkStore *cs,
@@ -1382,7 +1347,6 @@ int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
                                  ProllyHash *pRoot, u8 *pFlags);
 int doltliteSaveWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSet(sqlite3 *db);
-int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 void doltliteAdoptRollbackBaseline(sqlite3 *db, const ProllyHash *pCatalogHash);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);

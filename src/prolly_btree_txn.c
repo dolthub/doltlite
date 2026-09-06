@@ -16,6 +16,8 @@ static void btreeTakeCatalogCache(Btree *p, u8 **ppData, int nData,
 }
 
 static int findITableIndex(const void *a, int n, int stride, Pgno iTable);
+static int restoreFromCommitted(Btree *p);
+static void btreeDiscardAllSavepoints(Btree *p);
 
 void freeSavepointTables(struct SavepointTableState *pState){
   sqlite3_free(pState->zRebaseOrigBranch);
@@ -1118,7 +1120,7 @@ int sqlite3BtreeCommit(Btree *p){
   return p->pOps->xCommit(p);
 }
 
-int restoreFromCommitted(Btree *p){
+static int restoreFromCommitted(Btree *p){
   assert( p!=0 && p->pBt!=0 );
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
     if( p->bCatalogDropped ){
@@ -1472,7 +1474,7 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
   return chunkStoreCommit(&pBt->store);
 }
 
-void btreeDiscardAllSavepoints(Btree *p){
+static void btreeDiscardAllSavepoints(Btree *p){
   int j;
   for(j=0; j<p->nSavepoint; j++){
     freeSavepointTables(&p->aSavepointTables[j]);

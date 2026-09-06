@@ -24,8 +24,6 @@ typedef struct DoltliteCreds DoltliteCreds;
 void doltliteSha512_224(const unsigned char *in, size_t inlen,
                         unsigned char out[DOLTLITE_KID_RAW_LEN]);
 
-char *doltliteBase32Encode(const unsigned char *in, size_t inlen);
-
 char *doltliteBase64UrlEncode(const unsigned char *in, size_t inlen);
 int doltliteBase64UrlDecode(const char *in, unsigned char **out, size_t *outlen);
 

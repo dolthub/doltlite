@@ -255,8 +255,6 @@ int hasAnySchemaConflict(
   int nConflictTables
 );
 
-int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB);
-
 int mergePreDetectDualIndexOverlap(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
@@ -341,10 +339,6 @@ int doltlitePartialIndexMatchesRecord(sqlite3 *db, Index *pIdx,
 int doltlitePartialIndexLoad(sqlite3 *db, Index *pIdx,
                              DoltlitePartialIndex *pOut);
 void doltlitePartialIndexClear(DoltlitePartialIndex *p);
-
-void mergeColDefaultsFree(MergeColDefaults *p);
-int mergeColDefaultsLoad(const char *zSql, const char *zTable,
-                         MergeColDefaults *pOut);
 
 int normalizeSideToMergedLayout(
   sqlite3 *db,

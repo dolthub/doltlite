@@ -257,7 +257,7 @@ if {$doltlite} {
     prolly_diff.h prolly_encoding.h prolly_hash.h prolly_hashset.h prolly_mutate.h
     prolly_mutmap.h prolly_node.h prolly_record.h prolly_three_way_diff.h
     prolly_three_way_merge.h prolly_xxhash.h prolly_btree_int.h
-    doltlite_ancestor.h doltlite_catalog_types.h doltlite_chunk_walk.h doltlite_commit.h
+    doltlite_ancestor.h doltlite_catalog_types.h doltlite_commit.h
     doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
     doltlite_branch_int.h doltlite_merge_int.h doltlite_merge_constraints_int.h
     doltlite_name_index.h doltlite_parse.h

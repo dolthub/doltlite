@@ -195,7 +195,7 @@ static void mergeIndexNameListFree(MergeIndexNameList *p){
   sqlite3_free(p->az);
 }
 
-int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB){
+static int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB){
   MergeIndexNameList a;
   MergeIndexNameList b;
   int i, j, bOverlap = 0;
