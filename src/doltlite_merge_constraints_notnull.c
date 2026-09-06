@@ -6,12 +6,6 @@
 ** Use typeof(c)='null': IS NULL is strength-reduced away on NOT NULL
 ** columns, so the obvious query never sees these rows. */
 
-static void freeNames(char **az, int n){
-  int i;
-  for(i=0; i<n; i++) sqlite3_free(az[i]);
-  sqlite3_free(az);
-}
-
 static int loadNotNullColumns(
   sqlite3 *db,
   const char *zTable,
@@ -52,7 +46,7 @@ static int loadNotNullColumns(
   if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
   rc = finishConstraintStmt(pQ, rc);
   if( rc!=SQLITE_OK ){
-    freeNames(az, n);
+    doltliteFreeNameList(az, n);
     return rc;
   }
   *pazCols = az;
@@ -128,14 +122,14 @@ int doltliteDetectMergeNotNullViolations(
     memset(&pkInfo, 0, sizeof(pkInfo));
     rc = tableHasRowid(db, zTable, &hasRowid);
     if( rc!=SQLITE_OK ){
-      freeNames(azCols, nCols);
+      doltliteFreeNameList(azCols, nCols);
       sqlite3_free(zTable);
       break;
     }
     if( !hasRowid ){
       rc = loadMergePkInfo(db, zTable, &pkInfo);
       if( rc!=SQLITE_OK ){
-        freeNames(azCols, nCols);
+        doltliteFreeNameList(azCols, nCols);
         sqlite3_free(zTable);
         break;
       }
@@ -155,7 +149,7 @@ int doltliteDetectMergeNotNullViolations(
     }
     zQuery = sqlite3_str_finish(pStr);
     if( !zQuery ){
-      freeNames(azCols, nCols);
+      doltliteFreeNameList(azCols, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
       rc = SQLITE_NOMEM;
@@ -164,7 +158,7 @@ int doltliteDetectMergeNotNullViolations(
     rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
     sqlite3_free(zQuery);
     if( rc!=SQLITE_OK ){
-      freeNames(azCols, nCols);
+      doltliteFreeNameList(azCols, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
       break;
@@ -242,7 +236,7 @@ int doltliteDetectMergeNotNullViolations(
     }
     if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
     rc = finishConstraintStmt(pQ, rc);
-    freeNames(azCols, nCols);
+    doltliteFreeNameList(azCols, nCols);
     freeMergePkInfo(&pkInfo);
     sqlite3_free(zTable);
     if( rc!=SQLITE_OK ) break;

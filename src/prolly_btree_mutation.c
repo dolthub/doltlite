@@ -210,14 +210,6 @@ static int prollyGetVarint32(const u8 *p, u32 *pVal){
   }
 }
 
-u32 prollySerialTypeLen(u32 serialType){
-  static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
-  if( serialType <= 6 ) return aLen[serialType];
-  if( serialType == 7 ) return 8;
-  if( serialType >= 12 ) return (serialType - 12) / 2;
-  return 0;
-}
-
 static int sortKeyFromIntRecordLocal(
   BtCursor *pCur,
   const u8 *pRec,
@@ -255,7 +247,7 @@ static int sortKeyFromIntRecordLocal(
       return SQLITE_NOTFOUND;
     }
     hdrOff += prollyGetVarint32(pRec + hdrOff, &serialType);
-    fieldLen = prollySerialTypeLen(serialType);
+    fieldLen = (u32)dlSerialTypeLen(serialType);
     if( fieldLen > (u32)nRec - dataOff ) return SQLITE_CORRUPT;
     if( serialType==8 ){
       v = 0;

@@ -968,6 +968,12 @@ void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
 int doltliteCmdSourceResultError(
   sqlite3_context *ctx, ChunkStore *cs, int *pRc
 );
+void doltliteCmdSourceResultErrorOrCode(
+  sqlite3_context *ctx, ChunkStore *cs, int rc
+);
+void doltliteCmdReportInvalidCommitHash(
+  sqlite3_context *ctx, ChunkStore *cs, int rc
+);
 int doltliteVtabMapChunkSourceError(
   sqlite3_vtab *pVtab, sqlite3 *db, int sourceRc, int mappedRc
 );
@@ -1136,6 +1142,26 @@ int doltliteCherryPickRegister(sqlite3 *db);
 int doltliteRevertRegister(sqlite3 *db);
 int doltliteRebaseRegister(sqlite3 *db);
 int doltliteConfigRegister(sqlite3 *db);
+int doltliteLogRegister(sqlite3 *db);
+int doltliteCommitAncestorsRegister(sqlite3 *db);
+int doltliteStatusRegister(sqlite3 *db);
+int doltliteMergeStatusRegister(sqlite3 *db);
+int doltliteDiffRegister(sqlite3 *db);
+int doltliteSchemasRegister(sqlite3 *db);
+int doltliteDiffStatRegister(sqlite3 *db);
+int doltliteBranchRegister(sqlite3 *db);
+int doltliteConflictsRegister(sqlite3 *db);
+int doltliteTagRegister(sqlite3 *db);
+int doltliteGcRegister(sqlite3 *db);
+int doltliteAncestorRegister(sqlite3 *db);
+int doltliteSchemaDiffRegister(sqlite3 *db);
+int doltlitePatchRegister(sqlite3 *db);
+int doltliteRemoteSqlRegister(sqlite3 *db);
+int doltliteHashofRegister(sqlite3 *db);
+int doltliteConstraintViolationsRegister(sqlite3 *db);
+int doltliteDocsRegister(sqlite3 *db);
+int doltliteTestsRegister(sqlite3 *db);
+int doltliteIgnoreRegister(sqlite3 *db);
 int doltliteMaybeSeedRepo(sqlite3 *db);
 int doltliteSeedStoreIfNeeded(sqlite3*, ChunkStore*, const char*,
                               ProllyHash*, int*);

@@ -5,12 +5,6 @@
 /* Merge can pair a STRICT schema with a forbidden stored type. NULL
 ** is the NOT NULL detector's; ANY admits everything. */
 
-static void strictFreeNames(char **az, int n){
-  int i;
-  for(i=0; i<n; i++) sqlite3_free(az[i]);
-  sqlite3_free(az);
-}
-
 /* STRICT storage class, or 0 for ANY. */
 static const char *strictAllowedTypeof(const char *zDecl){
   if( sqlite3_stricmp(zDecl, "INT")==0
@@ -103,8 +97,8 @@ static int loadStrictColumns(
   if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
   rc = finishConstraintStmt(pQ, rc);
   if( rc!=SQLITE_OK ){
-    strictFreeNames(azCols, n);
-    strictFreeNames(azAllowed, n);
+    doltliteFreeNameList(azCols, n);
+    doltliteFreeNameList(azAllowed, n);
     return rc;
   }
   *pazCols = azCols;
@@ -192,16 +186,16 @@ int doltliteDetectMergeStrictViolations(
     memset(&pkInfo, 0, sizeof(pkInfo));
     rc = tableHasRowid(db, zTable, &hasRowid);
     if( rc!=SQLITE_OK ){
-      strictFreeNames(azCols, nCols);
-      strictFreeNames(azAllowed, nCols);
+      doltliteFreeNameList(azCols, nCols);
+      doltliteFreeNameList(azAllowed, nCols);
       sqlite3_free(zTable);
       break;
     }
     if( !hasRowid ){
       rc = loadMergePkInfo(db, zTable, &pkInfo);
       if( rc!=SQLITE_OK ){
-        strictFreeNames(azCols, nCols);
-        strictFreeNames(azAllowed, nCols);
+        doltliteFreeNameList(azCols, nCols);
+        doltliteFreeNameList(azAllowed, nCols);
         sqlite3_free(zTable);
         break;
       }
@@ -223,8 +217,8 @@ int doltliteDetectMergeStrictViolations(
     }
     zQuery = sqlite3_str_finish(pStr);
     if( !zQuery ){
-      strictFreeNames(azCols, nCols);
-      strictFreeNames(azAllowed, nCols);
+      doltliteFreeNameList(azCols, nCols);
+      doltliteFreeNameList(azAllowed, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
       rc = SQLITE_NOMEM;
@@ -233,8 +227,8 @@ int doltliteDetectMergeStrictViolations(
     rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
     sqlite3_free(zQuery);
     if( rc!=SQLITE_OK ){
-      strictFreeNames(azCols, nCols);
-      strictFreeNames(azAllowed, nCols);
+      doltliteFreeNameList(azCols, nCols);
+      doltliteFreeNameList(azAllowed, nCols);
       freeMergePkInfo(&pkInfo);
       sqlite3_free(zTable);
       break;
@@ -313,8 +307,8 @@ int doltliteDetectMergeStrictViolations(
 
     if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
     rc = finishConstraintStmt(pQ, rc);
-    strictFreeNames(azCols, nCols);
-    strictFreeNames(azAllowed, nCols);
+    doltliteFreeNameList(azCols, nCols);
+    doltliteFreeNameList(azAllowed, nCols);
     freeMergePkInfo(&pkInfo);
     sqlite3_free(zTable);
     if( rc!=SQLITE_OK ) break;

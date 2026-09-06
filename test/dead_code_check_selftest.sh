@@ -142,6 +142,55 @@ else
   ok
 fi
 
+# Part G (same file): identical bodies under two names.
+cat > "$WORK/src/doltlite_samefile.c" <<'EOF'
+static int dead_code_gate_samefile_left(int a, int b, int c){
+  int t;
+  if( a<0 ) a = -a;
+  if( b<0 ) b = -b;
+  if( c<0 ) c = -c;
+  t = a*b + b*c + c*a + a + b + c + 42;
+  if( t<0 ) t = -t;
+  t = t + a*a + b*b + c*c;
+  t = t + (a+1)*(b+1)*(c+1);
+  t = t + (a-1)*(b-1)*(c-1);
+  return t;
+}
+static int dead_code_gate_samefile_right(int a, int b, int c){
+  int t;
+  if( a<0 ) a = -a;
+  if( b<0 ) b = -b;
+  if( c<0 ) c = -c;
+  t = a*b + b*c + c*a + a + b + c + 42;
+  if( t<0 ) t = -t;
+  t = t + a*a + b*b + c*c;
+  t = t + (a+1)*(b+1)*(c+1);
+  t = t + (a-1)*(b-1)*(c-1);
+  return t;
+}
+EOF
+rm -f "$WORK/src/doltlite_clone_a.c" "$WORK/src/doltlite_clone_b.c" "$WORK/src/doltlite.c"
+expect_scan_hit "samefile_duplicate_body_is_rejected" "duplicate function body: dead_code_gate_samefile_left"
+
+# Part I: local extern of a prototype already in an included header.
+cat > "$WORK/src/doltlite_fixture.h" <<'EOF'
+#ifndef DOLTLITE_FIXTURE_H
+#define DOLTLITE_FIXTURE_H
+int dead_code_gate_already_proto(void);
+#endif
+EOF
+cat > "$WORK/src/doltlite.c" <<'EOF'
+#include "doltlite_fixture.h"
+extern int dead_code_gate_already_proto(void);
+int dead_code_gate_already_proto(void){ return 1; }
+EOF
+cat > "$WORK/src/doltlite_other.c" <<'EOF'
+int dead_code_gate_already_proto(void);
+int dead_code_gate_other_use(void){ return dead_code_gate_already_proto(); }
+EOF
+rm -f "$WORK/src/doltlite_samefile.c"
+expect_scan_hit "redundant_local_extern_is_rejected" "redundant local extern: dead_code_gate_already_proto"
+
 # Part H: one-call wrapper only mentioned from test/.
 cat > "$WORK/src/doltlite.c" <<'EOF'
 int dead_code_gate_inner(int x){ return x+1; }

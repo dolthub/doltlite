@@ -113,12 +113,6 @@ static int collectChangedTables(
   return SQLITE_OK;
 }
 
-static void freeStringList(char **az, int n){
-  int i;
-  for(i=0; i<n; i++) sqlite3_free(az[i]);
-  sqlite3_free(az);
-}
-
 static int hasRecordedViolations(
   sqlite3 *db,
   const char **azTables,
@@ -276,7 +270,7 @@ static void doltVerifyConstraintsFunc(
           int nNew = nInterAlloc ? nInterAlloc*2 : 4;
           char **azNew = sqlite3_realloc(azInter, nNew * (int)sizeof(char*));
           if( !azNew ){
-            freeStringList(azInter, nInter);
+            doltliteFreeNameList(azInter, nInter);
             sqlite3_result_error_nomem(context);
             goto cleanup;
           }
@@ -285,13 +279,13 @@ static void doltVerifyConstraintsFunc(
         }
         azInter[nInter] = sqlite3_mprintf("%s", azArgTables[i]);
         if( !azInter[nInter] ){
-          freeStringList(azInter, nInter);
+          doltliteFreeNameList(azInter, nInter);
           sqlite3_result_error_nomem(context);
           goto cleanup;
         }
         nInter++;
       }
-      freeStringList(azChanged, nChanged);
+      doltliteFreeNameList(azChanged, nChanged);
       azChanged = azInter;
       nChanged = nInter;
     }
@@ -349,7 +343,7 @@ detection_done:
   sqlite3_result_int(context, nViolations>0 ? 1 : 0);
 
 cleanup:
-  freeStringList(azChanged, nChanged);
+  doltliteFreeNameList(azChanged, nChanged);
   sqlite3_free((void*)azArgTables);
   doltliteCmdArgsClear(&args);
 }

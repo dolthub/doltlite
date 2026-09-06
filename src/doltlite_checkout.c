@@ -188,8 +188,6 @@ static int checkoutLoadAndApply(
 
 static int refreshBranchScopedTables(sqlite3 *db){
   int rc;
-  extern int doltliteRegisterWorkspaceTables(sqlite3 *db);
-  extern int doltliteRegisterBlameTables(sqlite3 *db);
 
   rc = doltliteRegisterHistoricalTables(db);
   if( rc!=SQLITE_OK ) return rc;

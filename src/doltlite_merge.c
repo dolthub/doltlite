@@ -8,10 +8,8 @@
 
 static int serializeMergedCatalog(
   sqlite3 *db,
-  const ProllyHash *oursCatHash,
   struct TableEntry *aMerged,
   int nMerged,
-  Pgno iNextTable,
   SchemaEntry *aFallbackSchema,
   int nFallbackSchema,
   ProllyHash *pOutHash
@@ -20,9 +18,6 @@ static int serializeMergedCatalog(
   u8 *buf = 0;
   int nBuf = 0;
   int rc;
-
-  (void)oursCatHash;
-  (void)iNextTable;
 
   rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
       db, aMerged, nMerged, aFallbackSchema, nFallbackSchema, &buf, &nBuf);
@@ -1113,7 +1108,7 @@ int doltliteMergeCatalogs(
       }
       aFallback = aKept;
     }
-    rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
+    rc = serializeMergedCatalog(db, aMerged, nMerged,
                                 aFallback, nFallback, pMergedHash);
     sqlite3_free(aKept);
   }

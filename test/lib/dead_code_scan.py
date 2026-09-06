@@ -9,12 +9,14 @@ D: non-static function with no identifier occurrence outside its .c
 E: non-static prototype in an owned header that never appears in any .c.
 F: #define in an owned header whose identifier never appears elsewhere
    (include guards skipped).
-G: two owned .c files contain functions with identical normalized bodies
-   (whitespace collapsed, length >= MIN_CLONE_BODY).
+G: two owned .c functions have identical normalized bodies (whitespace
+   collapsed, length >= MIN_CLONE_BODY), across files or same-file aliases.
 H: non-static .c function whose body is a single return otherFn(...) and
    whose only extra-file .c mentions are under test/. doltliteTest* and
    *ForTest names are the C-test surface (tests link production libdoltlite)
    and are skipped.
+I: file-local extern of an owned function whose prototype already appears
+   in a header this .c includes.
 """
 from __future__ import annotations
 
@@ -64,6 +66,11 @@ ALLOW_EXTERN = {
 ONE_CALL = re.compile(
     r"^return\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(.*\)\s*;$"
 )
+INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.M)
+LOCAL_EXTERN = re.compile(
+    r"^\s*extern\s+.+?\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*;",
+    re.M | re.S,
+)
 SRC_GLOBS = (
     "doltlite.c",
     "doltlite_*.c",
@@ -81,7 +88,7 @@ OWNED_HDR_GLOBS = (
     "sortkey.h",
     "record_codec.h",
 )
-MIN_CLONE_BODY = 200
+MIN_CLONE_BODY = 100
 
 
 def expand(root: str, patterns: list[str]) -> list[str]:
@@ -393,18 +400,79 @@ def scan_clones(src_files: list[str], texts: dict[str, str]) -> list[str]:
             byhash[digest].append((path, line, name))
     dead: list[str] = []
     for items in sorted(byhash.values(), key=lambda xs: (xs[0][0], xs[0][1])):
+        if len(items) < 2:
+            continue
         files = {p for p, _, _ in items}
-        if len(files) < 2:
+        names = {n for _, _, n in items}
+        if len(files) < 2 and len(names) < 2:
             continue
         first = items[0]
         for other in items[1:]:
-            if other[0] == first[0]:
+            if other[0] == first[0] and other[2] == first[2]:
                 continue
             dead.append(
                 "  duplicate function body: "
                 f"{first[2]} ({first[0]}:{first[1]}) identical to "
                 f"{other[2]} ({other[0]}:{other[1]})"
             )
+    return dead
+
+
+def resolve_include(inc: str, from_path: str, src_root: str) -> str | None:
+    cands = [
+        os.path.normpath(os.path.join(os.path.dirname(from_path), inc)),
+        os.path.normpath(os.path.join(src_root, inc)),
+        os.path.normpath(os.path.join(src_root, os.path.basename(inc))),
+    ]
+    for cand in cands:
+        if os.path.isfile(cand):
+            return os.path.abspath(cand)
+    return None
+
+
+def header_has_proto(hpath: str, name: str, texts: dict[str, str]) -> bool:
+    raw = texts.get(hpath)
+    if raw is None:
+        try:
+            raw = open(hpath, errors="replace").read()
+        except OSError:
+            return False
+    proto = re.compile(
+        r"^(?!\s)(?:SQLITE_PRIVATE\s+|SQLITE_API\s+|SQLITE_EXTERN\s+)?"
+        r".+?\b" + re.escape(name) + r"\s*\([^;]*\)\s*;",
+        re.M,
+    )
+    return bool(proto.search(strip_comments(raw)))
+
+
+def scan_redundant_externs(
+    src_files: list[str],
+    src_root: str,
+    texts: dict[str, str],
+) -> list[str]:
+    dead: list[str] = []
+    for path in src_files:
+        raw = texts.get(path)
+        if raw is None:
+            continue
+        stripped = strip_comments(raw)
+        headers = []
+        for match in INCLUDE.finditer(stripped):
+            hpath = resolve_include(match.group(1), path, src_root)
+            if hpath:
+                headers.append(hpath)
+        if not headers:
+            continue
+        for match in LOCAL_EXTERN.finditer(stripped):
+            name = match.group(1)
+            if name in SKIP_DEF or name in ALLOW_EXTERN:
+                continue
+            if name.startswith("sqlite3") or name.startswith("orig_sqlite3"):
+                continue
+            if not any(header_has_proto(h, name, texts) for h in headers):
+                continue
+            lineno = stripped[: match.start()].count("\n") + 1
+            dead.append(f"  redundant local extern: {name} ({path}:{lineno})")
     return dead
 
 
@@ -436,6 +504,7 @@ def main() -> int:
     dead += scan_unused_macros(owned_hdrs, corpus, texts, idents, counts)
     dead += scan_clones(src_files, texts)
     dead += scan_test_only_wrappers(src_files, corpus, root, texts, idents)
+    dead += scan_redundant_externs(src_files, src_root, texts)
     for line in dead:
         print(line)
     return 1 if dead else 0
