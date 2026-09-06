@@ -1,0 +1,49 @@
+# A clustered-PK table has no stored rowid: the SQL rowid is derived from the
+# primary key's sort key. Deriving it allocates, and when that allocation
+# failed the helper fell back to hashing the raw record instead of failing,
+# so the statement succeeded with a rowid that does not match the row.
+#
+# Each fault iteration below must either fail cleanly or return exactly the
+# consistent answer; a mismatched rowid counts as a failure.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_synthetic_rowid_oom
+
+do_execsql_test 1.0 {
+  CREATE TABLE k(a TEXT PRIMARY KEY, b TEXT);
+  INSERT INTO k VALUES('ten', 'x');
+  INSERT INTO k VALUES('twenty', 'y');
+  CREATE TABLE log(r INTEGER);
+  CREATE TRIGGER tk AFTER INSERT ON k BEGIN INSERT INTO log VALUES(NEW.rowid); END;
+}
+faultsim_save_and_close
+
+# last_insert_rowid() and NEW.rowid come from the inserted record.
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {
+    INSERT INTO k VALUES('thirty', 'z');
+    SELECT last_insert_rowid() = (SELECT rowid FROM k WHERE a='thirty'),
+           (SELECT r FROM log) = (SELECT rowid FROM k WHERE a='thirty');
+  }
+} -test {
+  faultsim_test_result {0 {1 1}} {1 {out of memory}}
+  faultsim_integrity_check
+}
+
+# The rowid read back through the cursor comes from the stored sort key.
+do_faultsim_test 1.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {
+    SELECT count(*) FROM k WHERE rowid = (SELECT rowid FROM k x WHERE x.a = k.a);
+  }
+} -test {
+  faultsim_test_result {0 2} {1 {out of memory}}
+}
+
+finish_test
