@@ -192,33 +192,9 @@ static void doltliteRevertFunc(
     db, &revertHash,
     &ourHead, &revertCommit, &parentCommit, &ourCommit
   );
-  if( rc==SQLITE_NOTFOUND ){
-    doltliteCommitClear(&revertCommit);
-    doltliteCommitClear(&parentCommit);
-    doltliteCommitClear(&ourCommit);
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      sqlite3_result_error(context, "commit not found", -1);
-    }
-    return;
-  }
-  if( rc==SQLITE_EMPTY ){
-    doltliteCommitClear(&revertCommit);
-    sqlite3_result_error(context, "cannot revert the initial commit", -1);
-    return;
-  }
-  if( rc==SQLITE_DONE ){
-    doltliteCommitClear(&revertCommit);
-    doltliteCommitClear(&parentCommit);
-    sqlite3_result_error(context, "no commits on current branch", -1);
-    return;
-  }
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&revertCommit);
-    doltliteCommitClear(&parentCommit);
-    doltliteCommitClear(&ourCommit);
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      sqlite3_result_error_code(context, rc);
-    }
+  if( doltliteCmdReportLoadParentedCommitError(
+        context, cs, rc, &revertCommit, &parentCommit, &ourCommit,
+        "cannot revert the initial commit") ){
     return;
   }
 
@@ -260,38 +236,10 @@ static void doltliteRevertFunc(
   doltliteCommitClear(&parentCommit);
   doltliteCommitClear(&ourCommit);
 
-  if( rc==SQLITE_BUSY ){
-    sqlite3_free(zApplyErr);
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      doltliteCmdResultPeerBranchBusy(context, "revert");
-    }
-    return;
-  }
-  if( rc==SQLITE_DONE ){
-    sqlite3_free(zApplyErr);
-    sqlite3_result_error(context, "nothing to commit", -1);
-    return;
-  }
-  if( rc!=SQLITE_OK ){
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      if( zApplyErr ){
-        sqlite3_result_error(context, zApplyErr, -1);
-      }else{
-        char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
-        sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
-        sqlite3_free(zMsg);
-      }
-    }
-    sqlite3_free(zApplyErr);
-    return;
-  }
-  sqlite3_free(zApplyErr);
-
-  /* Finish helpers already set the context error; do not overwrite. */
-  if( nConflicts > 0 ) return;
-  if( hexBuf[0] ){
-    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
-  }
+  doltliteCmdFinishApplyMerged(
+      context, cs, rc, nConflicts, zApplyErr, "revert", zRef,
+      "nothing to commit",
+      "revert of \"%s\" failed", "revert failed", hexBuf);
   return;
 
 revert_error:

@@ -477,6 +477,16 @@ static int cmdRollbackAutocommitConstraintViolations(
   return SQLITE_OK;
 }
 
+static int cmdNestedRestoreOrError(
+  sqlite3 *db,
+  sqlite3_context *ctx,
+  DoltliteTxnState *pSaved
+){
+  int rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
+  if( rc!=SQLITE_OK ) sqlite3_result_error_code(ctx, rc);
+  return rc;
+}
+
 int doltliteCmdFinishWithConflicts(
   sqlite3 *db,
   sqlite3_context *ctx,
@@ -495,11 +505,8 @@ int doltliteCmdFinishWithConflicts(
     return cmdFinishPlainAfterReport(db, ctx, pSaved,
         cmdReportConflicts(db, ctx, nConflicts, zOp), bSealOnPlain);
   case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-    rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return rc;
-    }
+    rc = cmdNestedRestoreOrError(db, ctx, pSaved);
+    if( rc!=SQLITE_OK ) return rc;
     {
       char msg[256];
       sqlite3_snprintf(sizeof(msg), msg,
@@ -528,11 +535,8 @@ int doltliteCmdFinishWithConstraintViolations(
     return cmdFinishPlainAfterReport(db, ctx, pSaved,
         cmdReportConstraintViolations(db, ctx, zOp), bSealOnPlain);
   case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-    rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return rc;
-    }
+    rc = cmdNestedRestoreOrError(db, ctx, pSaved);
+    if( rc!=SQLITE_OK ) return rc;
     if( zNestedMsg ){
       sqlite3_result_error(ctx, zNestedMsg, -1);
     }else{
@@ -595,11 +599,8 @@ int doltliteCmdFinishWithConflictsAndConstraintViolations(
             db, ctx, nConflicts, zOp),
         bSealOnPlain);
   case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-    rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return rc;
-    }
+    rc = cmdNestedRestoreOrError(db, ctx, pSaved);
+    if( rc!=SQLITE_OK ) return rc;
     if( zNestedMsg ){
       sqlite3_result_error(ctx, zNestedMsg, -1);
     }else{
@@ -647,6 +648,90 @@ int doltliteVtabMapChunkSourceError(
     pVtab->zErrMsg = zErr;
   }
   return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+}
+
+int doltliteCmdReportLoadParentedCommitError(
+  sqlite3_context *ctx,
+  ChunkStore *cs,
+  int rc,
+  DoltliteCommit *pTarget,
+  DoltliteCommit *pParent,
+  DoltliteCommit *pOurs,
+  const char *zInitialMsg
+){
+  if( rc==SQLITE_OK ) return 0;
+  if( rc==SQLITE_NOTFOUND ){
+    doltliteCommitClear(pTarget);
+    doltliteCommitClear(pParent);
+    doltliteCommitClear(pOurs);
+    if( !doltliteCmdSourceResultError(ctx, cs, &rc) ){
+      sqlite3_result_error(ctx, "commit not found", -1);
+    }
+    return 1;
+  }
+  if( rc==SQLITE_EMPTY ){
+    doltliteCommitClear(pTarget);
+    sqlite3_result_error(ctx, zInitialMsg, -1);
+    return 1;
+  }
+  if( rc==SQLITE_DONE ){
+    doltliteCommitClear(pTarget);
+    doltliteCommitClear(pParent);
+    sqlite3_result_error(ctx, "no commits on current branch", -1);
+    return 1;
+  }
+  doltliteCommitClear(pTarget);
+  doltliteCommitClear(pParent);
+  doltliteCommitClear(pOurs);
+  if( !doltliteCmdSourceResultError(ctx, cs, &rc) ){
+    sqlite3_result_error_code(ctx, rc);
+  }
+  return 1;
+}
+
+void doltliteCmdFinishApplyMerged(
+  sqlite3_context *ctx,
+  ChunkStore *cs,
+  int rc,
+  int nConflicts,
+  char *zApplyErr,
+  const char *zOp,
+  const char *zRef,
+  const char *zDoneMsg,
+  const char *zFailFmt,
+  const char *zFailFallback,
+  const char *hexBuf
+){
+  if( rc==SQLITE_BUSY ){
+    sqlite3_free(zApplyErr);
+    if( !doltliteCmdSourceResultError(ctx, cs, &rc) ){
+      doltliteCmdResultPeerBranchBusy(ctx, zOp);
+    }
+    return;
+  }
+  if( rc==SQLITE_DONE ){
+    sqlite3_free(zApplyErr);
+    sqlite3_result_error(ctx, zDoneMsg, -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    if( !doltliteCmdSourceResultError(ctx, cs, &rc) ){
+      if( zApplyErr ){
+        sqlite3_result_error(ctx, zApplyErr, -1);
+      }else{
+        char *zMsg = sqlite3_mprintf(zFailFmt, zRef);
+        sqlite3_result_error(ctx, zMsg ? zMsg : zFailFallback, -1);
+        sqlite3_free(zMsg);
+      }
+    }
+    sqlite3_free(zApplyErr);
+    return;
+  }
+  sqlite3_free(zApplyErr);
+  if( nConflicts > 0 ) return;
+  if( hexBuf && hexBuf[0] ){
+    sqlite3_result_text(ctx, hexBuf, -1, SQLITE_TRANSIENT);
+  }
 }
 
 #endif

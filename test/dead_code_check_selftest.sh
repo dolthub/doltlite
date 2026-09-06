@@ -142,6 +142,18 @@ else
   ok
 fi
 
+# Part H: one-call wrapper only mentioned from test/.
+cat > "$WORK/src/doltlite.c" <<'EOF'
+int dead_code_gate_inner(int x){ return x+1; }
+int dead_code_gate_test_wrapper(int x){
+  return dead_code_gate_inner(x);
+}
+EOF
+mkdir -p "$WORK/test"
+printf 'int dead_code_gate_test_wrapper(int x);\nvoid use(void){ (void)dead_code_gate_test_wrapper(0); }\n' \
+  > "$WORK/test/caller.c"
+expect_scan_hit "test_only_wrapper_is_rejected" "test-only wrapper: dead_code_gate_test_wrapper"
+
 # Part B: unused extern (definition, no caller) on a one-file src tree.
 mkdir -p "$WORK/tiny/src"
 printf 'int dead_code_gate_unused_extern(void){ return 0; }\n' \

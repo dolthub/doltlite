@@ -447,33 +447,9 @@ static void doltliteCherryPickFunc(
     db, &pickHash,
     &ourHead, &pickCommit, &parentCommit, &ourCommit
   );
-  if( rc==SQLITE_NOTFOUND ){
-    doltliteCommitClear(&pickCommit);
-    doltliteCommitClear(&parentCommit);
-    doltliteCommitClear(&ourCommit);
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      sqlite3_result_error(context, "commit not found", -1);
-    }
-    return;
-  }
-  if( rc==SQLITE_EMPTY ){
-    doltliteCommitClear(&pickCommit);
-    sqlite3_result_error(context, "cannot cherry-pick the initial commit", -1);
-    return;
-  }
-  if( rc==SQLITE_DONE ){
-    doltliteCommitClear(&pickCommit);
-    doltliteCommitClear(&parentCommit);
-    sqlite3_result_error(context, "no commits on current branch", -1);
-    return;
-  }
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&pickCommit);
-    doltliteCommitClear(&parentCommit);
-    doltliteCommitClear(&ourCommit);
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      sqlite3_result_error_code(context, rc);
-    }
+  if( doltliteCmdReportLoadParentedCommitError(
+        context, cs, rc, &pickCommit, &parentCommit, &ourCommit,
+        "cannot cherry-pick the initial commit") ){
     return;
   }
   if( doltliteCommitParentCount(&pickCommit)>1 ){
@@ -503,38 +479,10 @@ static void doltliteCherryPickFunc(
   doltliteCommitClear(&parentCommit);
   doltliteCommitClear(&ourCommit);
 
-  if( rc==SQLITE_BUSY ){
-    sqlite3_free(zApplyErr);
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      doltliteCmdResultPeerBranchBusy(context, "cherry-pick");
-    }
-    return;
-  }
-  if( rc==SQLITE_DONE ){
-    sqlite3_free(zApplyErr);
-    sqlite3_result_error(context, "no changes were made, nothing to commit", -1);
-    return;
-  }
-  if( rc!=SQLITE_OK ){
-    if( !doltliteCmdSourceResultError(context, cs, &rc) ){
-      if( zApplyErr ){
-        sqlite3_result_error(context, zApplyErr, -1);
-      }else{
-        char *zMsg = sqlite3_mprintf("cherry-pick of %s failed", zRef);
-        sqlite3_result_error(context, zMsg ? zMsg : "cherry-pick failed", -1);
-        sqlite3_free(zMsg);
-      }
-    }
-    sqlite3_free(zApplyErr);
-    return;
-  }
-  sqlite3_free(zApplyErr);
-
-  /* Finish helpers already set the context error; do not overwrite. */
-  if( nConflicts > 0 ) return;
-  if( hexBuf[0] ){
-    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
-  }
+  doltliteCmdFinishApplyMerged(
+      context, cs, rc, nConflicts, zApplyErr, "cherry-pick", zRef,
+      "no changes were made, nothing to commit",
+      "cherry-pick of %s failed", "cherry-pick failed", hexBuf);
 }
 
 

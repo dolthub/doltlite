@@ -18,6 +18,10 @@
 #   Part F: #define names in owned headers that never appear elsewhere
 #           (include guards skipped).
 #   Part G: identical function bodies copied across owned .c files.
+#   Part H: non-static one-call wrappers whose only extra-file .c mentions are
+#           under test/ (production-dead). doltliteTest* / *ForTest are the
+#           C-test surface and are skipped: those tests link production
+#           libdoltlite, so SQLITE_TEST cannot hide them.
 #
 # Needs the generated headers, so run it after a configure+build (the build
 # dir defaults to ./build, override with DOLTLITE_BUILD_DIR). Point
@@ -75,7 +79,7 @@ else
   done
 fi
 
-echo "== Part B-G: unused externs / inlines / should-be-static / prototypes / macros / clones =="
+echo "== Part B-H: unused externs / inlines / should-be-static / prototypes / macros / clones / test-only wrappers =="
 if ! python3 "$SCRIPT_DIR/lib/dead_code_scan.py" --root "$ROOT" --src-root "$SRC_ROOT"
 then
   fail=1

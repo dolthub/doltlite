@@ -9,13 +9,15 @@ extern "C" {
 
 typedef struct DoltliteConn DoltliteConn;
 
-DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls);
 DoltliteConn *doltliteConnOpenTimeout(
   const char *host,
   int port,
   int useTls,
   int timeoutMs
 );
+static inline DoltliteConn *doltliteConnOpen(const char *host, int port, int useTls){
+  return doltliteConnOpenTimeout(host, port, useTls, 0);
+}
 
 #ifndef DOLTLITE_AUTH_CLIENT_ONLY
 typedef struct DoltliteTlsServer DoltliteTlsServer;

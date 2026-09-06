@@ -354,16 +354,6 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
   return pOut ? outPos : (int)outSize;
 }
 
-int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut){
-  return sortKeyFromRecordPrefix(pRec, nRec, 0, ppOut, pnOut);
-}
-
-int sortKeyFromRecordPrefix(
-  const u8 *pRec, int nRec, int nKeyField, u8 **ppOut, int *pnOut
-){
-  return sortKeyFromRecordPrefixColl(pRec, nRec, nKeyField, NULL, ppOut, pnOut);
-}
-
 static int sortKeyFromSingleBinaryFieldFast(
   const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
   u8 **ppBuf, int *pnAlloc, int *pnOut
@@ -1367,12 +1357,6 @@ int recordFromSortKeyBufferColl(
   rc = recordFromSortKeyBuffer(pNorm, nSortKey, ppBuf, pnAlloc, pnOut);
   if( nNormAlloc ) sqlite3_free(pNorm);
   return rc;
-}
-
-int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
-  int nAlloc = 0;
-  *ppOut = 0;
-  return recordFromSortKeyBuffer(pSortKey, nSortKey, ppOut, &nAlloc, pnOut);
 }
 
 #endif

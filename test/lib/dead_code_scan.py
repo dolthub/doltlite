@@ -11,6 +11,10 @@ F: #define in an owned header whose identifier never appears elsewhere
    (include guards skipped).
 G: two owned .c files contain functions with identical normalized bodies
    (whitespace collapsed, length >= MIN_CLONE_BODY).
+H: non-static .c function whose body is a single return otherFn(...) and
+   whose only extra-file .c mentions are under test/. doltliteTest* and
+   *ForTest names are the C-test surface (tests link production libdoltlite)
+   and are skipped.
 """
 from __future__ import annotations
 
@@ -57,6 +61,9 @@ ALLOW_EXTERN = {
     "doltliteServeAsync",
     "doltliteServerStop",
 }
+ONE_CALL = re.compile(
+    r"^return\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(.*\)\s*;$"
+)
 SRC_GLOBS = (
     "doltlite.c",
     "doltlite_*.c",
@@ -151,6 +158,92 @@ def iter_defs(path: str, texts: dict[str, str]):
             continue
         lineno = stripped[: match.start()].count("\n") + 1
         yield name, lineno, is_static_def(line), stripped, match
+
+
+def is_test_api_name(name: str) -> bool:
+    return name.startswith("doltliteTest") or name.endswith("ForTest")
+
+
+def is_test_path(path: str, root: str) -> bool:
+    rel = os.path.relpath(path, root)
+    return rel.startswith("test" + os.sep) or rel.startswith("test/")
+
+
+def extract_body(stripped: str, match: re.Match[str]) -> str | None:
+    rest = stripped[match.end():]
+    depth = 1
+    i = 0
+    while i < len(rest) and depth:
+        ch = rest[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        elif ch in ";{":
+            break
+        i += 1
+    if i >= len(rest) or rest[i] != ")":
+        return None
+    j = rest.find("{", i)
+    if j < 0 or ";" in rest[i:j]:
+        return None
+    body_start = match.end() + j + 1
+    depth = 1
+    k = body_start
+    while k < len(stripped) and depth:
+        if stripped[k] == "{":
+            depth += 1
+        elif stripped[k] == "}":
+            depth -= 1
+        k += 1
+    return stripped[body_start:k - 1]
+
+
+def scan_test_only_wrappers(
+    src_files: list[str],
+    corpus: list[str],
+    root: str,
+    texts: dict[str, str],
+    idents: dict[str, set[str]],
+) -> list[str]:
+    dead: list[str] = []
+    for path in src_files:
+        raw = texts.get(path)
+        if raw is None:
+            continue
+        stripped = strip_comments(raw)
+        for match in DEF.finditer(stripped):
+            name = match.group(1)
+            if name in SKIP_DEF or is_test_api_name(name):
+                continue
+            if name.startswith("sqlite3") or name.startswith("orig_sqlite3"):
+                continue
+            line = match.group(0)
+            if line.lstrip().startswith("static") or not looks_like_def(line, name):
+                continue
+            body = extract_body(stripped, match)
+            if body is None:
+                continue
+            norm = re.sub(r"\s+", " ", body).strip()
+            hit = ONE_CALL.match(norm)
+            if not hit or hit.group(1) == name:
+                continue
+            extra_c = [
+                q for q in corpus
+                if q.endswith(".c") and q != path and name in idents.get(q, ())
+            ]
+            prod = [q for q in extra_c if not is_test_path(q, root)]
+            if prod:
+                continue
+            if Counter(IDENT.findall(stripped))[name] > 1:
+                continue
+            lineno = stripped[: match.start()].count("\n") + 1
+            dead.append(
+                f"  test-only wrapper: {name} ({path}:{lineno}) -> {hit.group(1)}"
+            )
+    return dead
 
 
 def scan_should_be_static(src_files: list[str], corpus: list[str], texts: dict[str, str],
@@ -342,6 +435,7 @@ def main() -> int:
     dead += scan_unused_prototypes(owned_hdrs, corpus, texts, idents)
     dead += scan_unused_macros(owned_hdrs, corpus, texts, idents, counts)
     dead += scan_clones(src_files, texts)
+    dead += scan_test_only_wrappers(src_files, corpus, root, texts, idents)
     for line in dead:
         print(line)
     return 1 if dead else 0

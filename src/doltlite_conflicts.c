@@ -115,28 +115,19 @@ static int readConflictRow(DlByteReader *r, DoltliteConflictRow *cr){
   return dlReadU32Blob(r, &cr->pTheirVal, &cr->nTheirVal);
 }
 
-static int skipConflictBlob(DlByteReader *r){
-  int n = dlReadU32(r);
-  if( r->err ) return SQLITE_CORRUPT;
-  if( n<0 || (size_t)n > (size_t)(r->end - r->p) ){
-    r->err = 1;
-    return SQLITE_CORRUPT;
-  }
-  r->p += n;
-  return SQLITE_OK;
-}
+
 
 static int skipConflictRow(DlByteReader *r){
   int rc;
-  rc = skipConflictBlob(r);
+  rc = dlSkipU32Blob(r);
   if( rc!=SQLITE_OK ) return rc;
   (void)dlReadI64(r);
   if( r->err ) return SQLITE_CORRUPT;
-  rc = skipConflictBlob(r);
+  rc = dlSkipU32Blob(r);
   if( rc!=SQLITE_OK ) return rc;
-  rc = skipConflictBlob(r);
+  rc = dlSkipU32Blob(r);
   if( rc!=SQLITE_OK ) return rc;
-  return skipConflictBlob(r);
+  return dlSkipU32Blob(r);
 }
 
 static int deserializeAllConflicts(
