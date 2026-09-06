@@ -209,7 +209,13 @@ int loadSchemaFromCatalog(
           rc = appendSchemaEntry(&aEntries, &nEntries, &nAlloc,
                                  zName, zTblName, zSql, zType,
                                  (Pgno)iRootpage);
-          if( rc!=SQLITE_OK ) goto load_schema_done;
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(zType);
+            sqlite3_free(zName);
+            sqlite3_free(zTblName);
+            sqlite3_free(zSql);
+            goto load_schema_done;
+          }
           zName = 0;
           zTblName = 0;
           zSql = 0;

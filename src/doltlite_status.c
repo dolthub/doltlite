@@ -533,6 +533,20 @@ static int statusCompareIndexSchemaObjects(
         continue;
       }
     }
+    if( !staged && !pFromEnt && pToEnt ){
+      int ignored = 0;
+      char *zIgnErr = 0;
+      rc = doltliteCheckIgnore(db, pRow->zTblName, &ignored, &zIgnErr);
+      if( rc==SQLITE_CONSTRAINT ){
+        sqlite3_free(pCur->base.pVtab->zErrMsg);
+        pCur->base.pVtab->zErrMsg = zIgnErr;
+        rc = SQLITE_ERROR;
+        goto index_schema_done;
+      }
+      sqlite3_free(zIgnErr);
+      if( rc!=SQLITE_OK ) goto index_schema_done;
+      if( ignored ) continue;
+    }
     if( doltliteIndexSchemaRowsDifferForTable(aFrom, nFrom, aTo, nTo,
                                               pRow->zTblName)
      || statusIndexRootsDifferForTable(aFrom, nFrom, aFromEnt, nFromEnt,

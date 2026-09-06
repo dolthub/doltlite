@@ -34,6 +34,7 @@ doltlite_page_size_default
 doltlite_savepoint_release
 doltlite_default_materialization
 doltlite_merge_constraint_prune
+doltlite_merge_ignored
 doltlite_recover_changes
 doltlite_gc_stop_world
 doltlite_reload_uncommitted_recent

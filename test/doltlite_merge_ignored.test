@@ -1,0 +1,260 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_merge_ignored
+
+proc ignored_merge_setup {indexed diverged} {
+  reset_db
+  execsql {
+    CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT);
+    INSERT INTO items VALUES(1,'base'),(2,'base');
+    INSERT INTO dolt_ignore VALUES('runtime_%',1);
+    SELECT dolt_add('items','dolt_ignore');
+    SELECT dolt_commit('-m','base');
+    CREATE TABLE runtime_jobs(id INTEGER PRIMARY KEY, kind VARCHAR(64));
+    INSERT INTO runtime_jobs VALUES(1,'keep');
+  }
+  if {$indexed} {
+    execsql { CREATE INDEX runtime_jobs_kind ON runtime_jobs(kind) }
+  }
+  execsql {
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+    UPDATE items SET label='feature' WHERE id=1;
+    CREATE INDEX item_label ON items(label);
+    SELECT dolt_add('items');
+    SELECT dolt_commit('-m','feature');
+    SELECT dolt_checkout('main');
+  }
+  if {$diverged} {
+    execsql {
+      UPDATE items SET label='main' WHERE id=2;
+      SELECT dolt_add('items');
+      SELECT dolt_commit('-m','main');
+    }
+  }
+  execsql { SELECT dolt_reset('--hard') }
+}
+
+foreach indexed {0 1} {
+  foreach {mode diverged flags noCommit} {
+    ff        0 {}                         0
+    noff      0 {'--no-ff',}               0
+    threeway  1 {}                         0
+    squashff  0 {'--squash',}              1
+    squash    1 {'--squash',}              0
+    nocommit  1 {'--no-commit',}           1
+  } {
+    do_test $indexed.$mode.1 {
+      ignored_merge_setup $indexed $diverged
+      execsql { SELECT count(*) FROM dolt_status }
+    } {0}
+    do_test $indexed.$mode.2 {
+      execsql "SELECT dolt_merge(${flags}'feature')"
+      execsql {
+        SELECT kind FROM runtime_jobs WHERE id=1;
+        SELECT label FROM items WHERE id=1;
+        SELECT count(*) FROM dolt_status WHERE table_name LIKE 'runtime_%';
+      }
+    } {keep feature 0}
+    do_test $indexed.$mode.3 {
+      if {$noCommit} {
+        execsql { SELECT dolt_commit('-m','finish merge') }
+      }
+      db close
+      sqlite3 db test.db
+      set result [execsql {
+        SELECT kind FROM runtime_jobs WHERE id=1;
+        SELECT label FROM items WHERE id=1;
+        SELECT count(*) FROM dolt_status;
+        PRAGMA integrity_check;
+      }]
+      if {$indexed} {
+        lappend result [db one {
+          SELECT id FROM runtime_jobs INDEXED BY runtime_jobs_kind WHERE kind='keep'
+        }]
+      } else {
+        lappend result 1
+      }
+      set result
+    } {keep feature 0 ok 1}
+    do_test $indexed.$mode.4 {
+      execsql { SELECT dolt_checkout('-b','committed','HEAD') }
+      set result [execsql {
+        SELECT count(*) FROM sqlite_master WHERE name LIKE 'runtime_%';
+        SELECT label FROM items WHERE id=1;
+      }]
+      execsql { SELECT dolt_checkout('main') }
+      lappend result [db one { SELECT kind FROM runtime_jobs WHERE id=1 }]
+      set result
+    } {0 feature keep}
+  }
+}
+
+foreach {name change} {
+  tracked {UPDATE items SET label='dirty' WHERE id=2;}
+  index {CREATE INDEX local_index ON items(id,label);}
+  untracked {CREATE TABLE local_table(id INTEGER PRIMARY KEY);}
+  staged {SELECT dolt_add('-f','runtime_jobs');}
+  metadata {PRAGMA user_version=17;}
+} {
+  do_test dirty.$name {
+    ignored_merge_setup 1 0
+    execsql $change
+    set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
+    list $failed [string match {*uncommitted changes*} $message] \
+        [db one {SELECT kind FROM runtime_jobs WHERE id=1}] \
+        [db one {SELECT label FROM items WHERE id=1}]
+  } {1 1 keep base}
+}
+
+do_test tracked-ignore {
+  reset_db
+  execsql {
+    CREATE TABLE runtime_tracked(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO runtime_tracked VALUES(1,'base');
+    INSERT INTO dolt_ignore VALUES('runtime_%',1);
+    SELECT dolt_add('-f','runtime_tracked','dolt_ignore');
+    SELECT dolt_commit('-m','base');
+    SELECT dolt_checkout('-b','feature');
+    INSERT INTO runtime_tracked VALUES(2,'feature');
+    SELECT dolt_add('-f','runtime_tracked');
+    SELECT dolt_commit('-m','feature');
+    SELECT dolt_checkout('main');
+    UPDATE runtime_tracked SET v='dirty' WHERE id=1;
+  }
+  set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
+  list $failed [string match {*uncommitted changes*} $message] \
+      [db one {SELECT v FROM runtime_tracked WHERE id=1}]
+} {1 1 dirty}
+
+foreach {name change} {
+  table {
+    CREATE TABLE runtime_jobs(id INTEGER PRIMARY KEY, kind VARCHAR(64));
+    INSERT INTO runtime_jobs VALUES(2,'incoming');
+    SELECT dolt_add('-f','runtime_jobs');
+  }
+  index {
+    CREATE INDEX runtime_jobs_kind ON items(id);
+    SELECT dolt_add('items');
+  }
+} {
+  do_test collision.$name {
+    ignored_merge_setup 1 0
+    execsql {SELECT dolt_checkout('feature')}
+    execsql $change
+    execsql {
+      SELECT dolt_commit('-m','collision');
+      SELECT dolt_checkout('main');
+    }
+    set head [db one {SELECT dolt_hashof('HEAD')}]
+    set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
+    db close
+    sqlite3 db test.db
+    list $failed [string match {*overwrite ignored object*} $message] \
+        [expr {$head eq [db one {SELECT dolt_hashof('HEAD')}]}] \
+        [db one {SELECT kind FROM runtime_jobs INDEXED BY runtime_jobs_kind WHERE id=1}] \
+        [db one {SELECT label FROM items WHERE id=1}]
+  } {1 1 1 keep base}
+}
+
+do_test conflict-autocommit {
+  ignored_merge_setup 1 0
+  execsql {
+    UPDATE items SET label='ours' WHERE id=1;
+    SELECT dolt_add('items');
+    SELECT dolt_commit('-m','conflict');
+  }
+  set head [db one {SELECT dolt_hashof('HEAD')}]
+  set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
+  db close
+  sqlite3 db test.db
+  list $failed [string match {*conflicts detected*} $message] \
+      [expr {$head eq [db one {SELECT dolt_hashof('HEAD')}]}] \
+      [db one {SELECT kind FROM runtime_jobs WHERE id=1}] \
+      [db one {SELECT label FROM items WHERE id=1}] \
+      [db one {SELECT count(*) FROM dolt_merge_status WHERE is_merging=1}]
+} {1 1 1 keep ours 0}
+
+do_test conflict-abort {
+  execsql {BEGIN}
+  catch {execsql {SELECT dolt_merge('feature')}}
+  execsql {
+    UPDATE runtime_jobs SET kind='updated' WHERE id=1;
+    SELECT dolt_merge('--abort');
+    COMMIT;
+  }
+  db close
+  sqlite3 db test.db
+  execsql {
+    SELECT kind FROM runtime_jobs WHERE id=1;
+    SELECT label FROM items WHERE id=1;
+    SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;
+    PRAGMA integrity_check;
+  }
+} {updated ours 0 ok}
+
+do_test composite-primary-key {
+  ignored_merge_setup 1 1
+  execsql {
+    CREATE TABLE runtime_pairs(
+      a TEXT, b TEXT, kind TEXT UNIQUE, payload BLOB, PRIMARY KEY(a,b)
+    );
+    CREATE INDEX runtime_pairs_payload ON runtime_pairs(payload) WHERE kind='keep';
+    INSERT INTO runtime_pairs VALUES('a','b','keep',x'010203'),('c','d','other',x'00');
+    SELECT dolt_merge('feature');
+  }
+  db close
+  sqlite3 db test.db
+  execsql {
+    SELECT a,b,hex(payload) FROM runtime_pairs INDEXED BY runtime_pairs_payload
+      WHERE kind='keep' AND payload=x'010203';
+    SELECT count(*) FROM dolt_status;
+    PRAGMA integrity_check;
+  }
+} {a b 010203 0 ok}
+
+do_test incoming-metadata {
+  ignored_merge_setup 1 0
+  execsql {
+    SELECT dolt_checkout('feature');
+    PRAGMA user_version=17;
+    SELECT dolt_commit('-A','-m','metadata');
+    SELECT dolt_checkout('main');
+    SELECT dolt_merge('feature');
+  }
+  db close
+  sqlite3 db test.db
+  execsql {PRAGMA user_version; SELECT kind FROM runtime_jobs WHERE id=1;}
+} {17 keep}
+
+source $testdir/malloc_common.tcl
+foreach diverged {0 1} {
+  ignored_merge_setup 1 $diverged
+  faultsim_save_and_close
+  do_faultsim_test oom.$diverged -faults oom-transient -prep {
+    faultsim_restore_and_reopen
+  } -body {
+    db eval {SELECT dolt_merge('feature') IS NOT NULL}
+  } -test {
+    faultsim_test_result {0 1} {1 {disk I/O error}} \
+        {1 {merge source not found}} {1 {no common ancestor found}} \
+        {1 {failed to load commit}} {1 {failed to load our commit}} \
+        {1 {failed to load their commit}} {1 {failed to load ancestor}} \
+        {1 {merge failed}} {1 {failed to create merge commit}}
+    catchsql ROLLBACK
+    db close
+    sqlite3 db test.db
+    if {[db eval {SELECT kind FROM runtime_jobs WHERE id=1}] ne "keep"} {
+      error "ignored rows lost during merge"
+    }
+    if {[db eval {
+      SELECT id FROM runtime_jobs INDEXED BY runtime_jobs_kind WHERE kind='keep'
+    }] ne "1"} {
+      error "ignored index lost during merge"
+    }
+    faultsim_integrity_check
+  }
+}
+
+finish_test
