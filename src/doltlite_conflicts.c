@@ -140,6 +140,10 @@ static int skipConflictRowIO(DlByteReader *r, void *pRow){
   return skipConflictRow(r);
 }
 
+static void freeConflictRowIO(void *pRow){
+  freeConflictRow((DoltliteConflictRow*)pRow);
+}
+
 static int deserializeAllConflicts(
   const u8 *data,
   int nData,
@@ -168,7 +172,7 @@ static int deserializeAllConflicts(
     void *aRows = 0;
     rc = dlReadNamedRowTable(&r, &aTables[i].zName, &aTables[i].nConflicts,
                              &aRows, sizeof(DoltliteConflictRow), 0,
-                             readConflictRowIO);
+                             readConflictRowIO, freeConflictRowIO);
     if( rc!=SQLITE_OK ) goto conflicts_cleanup;
     aTables[i].aRows = (DoltliteConflictRow*)aRows;
   }
@@ -291,7 +295,8 @@ static int loadConflictTable(
     rc = dlMatchOrSkipNamedTable(&r, zTableName, pFound,
                                  &pTable->zName, &pTable->nConflicts, &aRows,
                                  sizeof(DoltliteConflictRow), 0,
-                                 readConflictRowIO, skipConflictRowIO);
+                                 readConflictRowIO, skipConflictRowIO,
+                                 freeConflictRowIO);
     if( rc!=SQLITE_OK ) goto conflict_table_cleanup;
     if( aRows ) pTable->aRows = (DoltliteConflictRow*)aRows;
   }

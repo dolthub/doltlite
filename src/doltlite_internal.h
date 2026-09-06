@@ -859,6 +859,22 @@ static SQLITE_INLINE int dlReadFramedHeader(DlByteReader *r, u8 m0, u8 m1,
 }
 
 typedef int (*DlRowIO)(DlByteReader *r, void *pRow);
+typedef void (*DlRowFree)(void *pRow);
+
+static SQLITE_INLINE void dlFreeRowArray(
+  void *aRows,
+  int nRows,
+  size_t szRow,
+  DlRowFree xFree
+){
+  int k;
+  if( aRows && xFree ){
+    for(k=0; k<nRows; k++){
+      xFree((char*)aRows + (size_t)k * szRow);
+    }
+  }
+  sqlite3_free(aRows);
+}
 
 static SQLITE_INLINE int dlReadNamedRowTable(
   DlByteReader *r,
@@ -867,7 +883,8 @@ static SQLITE_INLINE int dlReadNamedRowTable(
   void **ppRows,
   size_t szRow,
   int bAllocEmpty,
-  DlRowIO xRead
+  DlRowIO xRead,
+  DlRowFree xFree
 ){
   int nr, j, rc;
   void *aRows = 0;
@@ -900,7 +917,7 @@ static SQLITE_INLINE int dlReadNamedRowTable(
   for(j=0; j<nr; j++){
     rc = xRead(r, (char*)aRows + (size_t)j * szRow);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(aRows);
+      dlFreeRowArray(aRows, j+1, szRow, xFree);
       sqlite3_free(*pzName);
       *pzName = 0;
       return rc;
@@ -921,7 +938,8 @@ static SQLITE_INLINE int dlMatchOrSkipNamedTable(
   size_t szRow,
   int bAllocEmpty,
   DlRowIO xRead,
-  DlRowIO xSkip
+  DlRowIO xSkip,
+  DlRowFree xFree
 ){
   char *zName = 0;
   int nr, j, rc;
@@ -952,7 +970,7 @@ static SQLITE_INLINE int dlMatchOrSkipNamedTable(
     for(j=0; j<nr; j++){
       rc = xRead(r, (char*)aRows + (size_t)j * szRow);
       if( rc!=SQLITE_OK ){
-        sqlite3_free(aRows);
+        dlFreeRowArray(aRows, j+1, szRow, xFree);
         sqlite3_free(zName);
         return rc;
       }

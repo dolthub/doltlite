@@ -157,6 +157,10 @@ static int skipViolationRowIO(DlByteReader *r, void *pRow){
   return skipViolationRow(r);
 }
 
+static void freeViolationRowIO(void *pRow){
+  freeViolationRow((ConstraintViolationRow*)pRow);
+}
+
 static int deserializeAllViolations(
   const u8 *data,
   int nData,
@@ -185,7 +189,7 @@ static int deserializeAllViolations(
     void *aRows = 0;
     rc = dlReadNamedRowTable(&rd, &aTables[i].zName, &aTables[i].nRows,
                              &aRows, sizeof(ConstraintViolationRow), 1,
-                             readViolationRowIO);
+                             readViolationRowIO, freeViolationRowIO);
     if( rc!=SQLITE_OK ) goto fail;
     aTables[i].aRows = (ConstraintViolationRow*)aRows;
   }
@@ -267,7 +271,8 @@ static int loadViolationTable(
     rc = dlMatchOrSkipNamedTable(&rd, zTableName, pFound,
                                  &pTable->zName, &pTable->nRows, &aRows,
                                  sizeof(ConstraintViolationRow), 1,
-                                 readViolationRowIO, skipViolationRowIO);
+                                 readViolationRowIO, skipViolationRowIO,
+                                 freeViolationRowIO);
     if( rc!=SQLITE_OK ) goto fail;
     if( aRows ) pTable->aRows = (ConstraintViolationRow*)aRows;
   }
