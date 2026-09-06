@@ -346,6 +346,24 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
   return pOut ? outPos : (int)outSize;
 }
 
+int sortKeyPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
+  int i;
+  u8 *pOut;
+  for(i=nKey-1; i>=0 && pKey[i]==0xff; i--){}
+  if( i<0 ){
+    *ppOut = 0;
+    *pnOut = 0;
+    return SQLITE_OK;
+  }
+  pOut = sqlite3_malloc(i+1);
+  if( !pOut ) return SQLITE_NOMEM;
+  memcpy(pOut, pKey, i+1);
+  pOut[i]++;
+  *ppOut = pOut;
+  *pnOut = i+1;
+  return SQLITE_OK;
+}
+
 static int sortKeyFromSingleBinaryFieldFast(
   const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
   u8 **ppBuf, int *pnAlloc, int *pnOut

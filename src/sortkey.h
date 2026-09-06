@@ -32,6 +32,9 @@ static inline int sortKeyByteStartsField(u8 b){
   return 0;
 }
 
+/* Smallest key above every key that starts with pKey; NULL when none exists. */
+int sortKeyPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut);
+
 int sortKeyFromRecordPrefixColl(const u8 *pRec, int nRec, int nKeyField,
                                  const KeyInfo *pKeyInfo,
                                  u8 **ppOut, int *pnOut);

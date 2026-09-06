@@ -755,6 +755,7 @@ int materializeDeferredMergedSeekBackward(BtCursor *pCur);
 int tableEntryIsTableRoot(Btree*, struct TableEntry*, int*);
 void clearMergeCursorState(BtCursor*);
 int mergeLast(BtCursor *pCur, int *pRes);
+int mergeScan(BtCursor *pCur, int dir, int *pRes);
 static SQLITE_INLINE int prollyCursorCheckInterrupt(BtCursor *pCur){
   sqlite3 *db = pCur && pCur->pBtree ? pCur->pBtree->db : 0;
   if( db && AtomicLoad(&db->u1.isInterrupted) ){
