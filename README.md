@@ -836,6 +836,11 @@ For a DoltLite-format main database, the compatibility contract is:
   from HEAD.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
+- `PRAGMA query_only` covers version control: while it is set, `dolt_add`,
+  `dolt_commit`, `dolt_merge`, `dolt_tag`, `dolt_branch`, `dolt_gc`, and every
+  other function that would change the file fail with `attempt to write a
+  readonly database`, the same as DML. The `immutable=1` URI parameter opens
+  the database read-only, as it does in SQLite.
 - Application-defined collations registered with `sqlite3_create_collation*`
   are supported for expressions and unindexed columns. Persisted index keys,
   `UNIQUE` constraints, and non-integer primary keys using them are rejected

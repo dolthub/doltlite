@@ -1230,7 +1230,9 @@ static void doltCheckoutParsedFunc(
     branchCreate.zName = zBranch;
     rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
     if( rc!=SQLITE_OK ){
-      doltliteVcResultError(ctx, db, "branch already exists");
+      (void)doltliteVcSealSavepointError(db);
+      doltliteRefResultError(ctx, rc, "start point not found",
+                             "branch already exists");
       return;
     }
     isCreateAndSwitch = 1;

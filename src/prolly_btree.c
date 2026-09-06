@@ -662,6 +662,13 @@ static int doltliteFileHasContent(
   return SQLITE_OK;
 }
 
+/* Version-control writes never pass OP_Transaction, so the connection's
+** query_only flag has to be re-checked where the store persists. */
+static int prollyBtreeQueryOnlyWriteGate(void *pArg){
+  Btree *p = (Btree*)pArg;
+  return p->db!=0 && (p->db->flags & SQLITE_QueryOnly)!=0;
+}
+
 int sqlite3BtreeOpen(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -697,6 +704,9 @@ int sqlite3BtreeOpen(
   if( !useOrig && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
     const char *zEngine = sqlite3_uri_parameter(zFilename, "doltlite_engine");
     useOriginSource = sqlite3_uri_boolean(zFilename, "lazy_origin", 0);
+    if( sqlite3_uri_boolean(zFilename, "immutable", 0) ){
+      vfsFlags |= SQLITE_OPEN_READONLY;
+    }
     if( zEngine && sqlite3StrICmp(zEngine, "sqlite")==0 ){
       int hasContent = 1;
       rc = doltliteFileHasContent(pVfs, zFilename, &hasContent);
@@ -807,6 +817,8 @@ int sqlite3BtreeOpen(
   pagerShimSetStore(pBt->pPagerShim, &pBt->store);
 
   pBt->db = db;
+  pBt->store.xWriteGate = prollyBtreeQueryOnlyWriteGate;
+  pBt->store.pWriteGateArg = p;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
   pBt->iWorkingStateVersion = 1;
   pBt->nRef = 1;

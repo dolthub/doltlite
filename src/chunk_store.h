@@ -192,6 +192,11 @@ struct ChunkStore {
   ** on the open handle. Re-evaluated on refresh. */
   u8 movedReadOnly;
 
+  /* Owner-supplied veto consulted before any durable write; the connection
+  ** uses it for state the store cannot see, such as PRAGMA query_only. */
+  int (*xWriteGate)(void*);
+  void *pWriteGateArg;
+
   /* One-shot: adopt the path on next refresh. Only the installer may set
   ** this (backup dest is replaced on purpose). */
   u8 adoptReplacement;
@@ -321,6 +326,7 @@ int chunkStorePutSparse(ChunkStore *cs, const u8 *pPrefix, int nPrefix,
                         i64 nZeroTail, ProllyHash *pHash);
 
 int chunkStoreCommit(ChunkStore *cs);
+int chunkStoreWriteRefused(ChunkStore *cs);
 
 int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest);
 int chunkStoreCopyIntoEmptyNoCommit(ChunkStore *pSrc, ChunkStore *pDest);

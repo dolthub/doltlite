@@ -1017,11 +1017,11 @@ static int gcRun(
   /* Sweep republishes by renaming over this path. A non-writable connection,
   ** or one whose file was replaced underneath it, must not. Checked after
   ** refresh, which detects the replacement. */
-  if( cs->readOnly || cs->movedReadOnly ){
+  if( chunkStoreWriteRefused(cs) ){
     chunkStoreUnlock(cs);
-    *pzPhase = cs->readOnly
-             ? "attempt to write a readonly database"
-             : "cannot rewrite a database file that was replaced";
+    *pzPhase = cs->movedReadOnly
+             ? "cannot rewrite a database file that was replaced"
+             : "attempt to write a readonly database";
     return SQLITE_READONLY;
   }
   if( bForceRefresh ){
