@@ -5451,20 +5451,11 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
     }
 
 #ifdef DOLTLITE_PROLLY
-    /* Fix for prolly btree prefix-match positioning (issues #179, #180).
-    **
-    ** sqlite3BtreeIndexMoveto() may return res<0 with eqSeen when doing a
-    ** prefix match (search key has fewer fields than the index).  In standard
-    ** SQLite's b-tree, the binary search naturally lands PAST the matching
-    ** range (res>0), so SeekLE calls BtreePrevious to reach the last match.
-    ** In the prolly btree, IndexMoveto lands at the FIRST prefix match
-    ** (res<0), causing SeekLE to stay there — returning the MIN instead of
-    ** MAX for reverse-ordered queries.
-    **
-    ** Fix: when we get res<0 + eqSeen for a SeekLE or SeekGT, advance the
-    ** cursor forward through all prefix-matching entries, then position at
-    ** the first entry PAST the range (res>0).  The existing SeekLE logic
-    ** will then call BtreePrevious to land on the last match. */
+    /* A prefix seek with default_rc<0 must land on the LAST match, since
+    ** SeekLE stays put and SeekGT steps once. The prolly seek does that in
+    ** O(log n) for encodable keys; the unsupported-collation scan path can
+    ** still land on the first match, so finish the walk here. For an
+    ** already-correct landing this costs one step out and one back. */
     if( res<0 && r.eqSeen && (oc==OP_SeekLE || oc==OP_SeekGT) ){
       while(1){
         int nx = sqlite3BtreeNext(pC->uc.pCursor, 0);

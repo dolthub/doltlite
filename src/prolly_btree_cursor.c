@@ -144,7 +144,7 @@ static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
   }
 }
 
-static int mergeScan(BtCursor *pCur, int dir, int *pRes){
+int mergeScan(BtCursor *pCur, int dir, int *pRes){
   assert( pCur!=0 );
   assert( pCur->pMutMap!=0 );
   assert( dir==1 || dir==-1 );
