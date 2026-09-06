@@ -1,19 +1,23 @@
 #!/bin/bash
 #
 # Dead-code gate for the doltlite-specific sources. Fails CI if a function is
-# defined but never used:
+# defined but never used, or if the same function body is copied across files:
 #
 #   Part A: unused static functions and unused locals, detected exactly by the
 #           compiler (-Werror=unused-function / -unused-variable).
-#   Part B: extern functions with no caller anywhere in the tree. This is a
-#           heuristic (an occurrence count of <=2 means a definition plus at
-#           most one declaration, i.e. no call site); intentional exports that
-#           legitimately have no in-tree caller are listed in ALLOW below.
+#   Part B: extern functions with no caller in any other .c and no use in the
+#           defining file (a header declaration does not count as a caller).
+#           Intentional embeddable-API exports live in ALLOW_EXTERN in
+#           test/lib/dead_code_scan.py.
 #   Part C: static inline helpers in headers that never appear outside their
 #           definition (the compiler will not warn; each TU that includes the
 #           header just omits the unused inline).
 #   Part D: non-static functions with no identifier occurrence outside the
 #           defining file. Those should be static so Part A can see them.
+#   Part E: non-static prototypes in owned headers that never appear in any .c.
+#   Part F: #define names in owned headers that never appear elsewhere
+#           (include guards skipped).
+#   Part G: identical function bodies copied across owned .c files.
 #
 # Needs the generated headers, so run it after a configure+build (the build
 # dir defaults to ./build, override with DOLTLITE_BUILD_DIR). Point
@@ -48,15 +52,9 @@ CFLAGS=(
   -Iext/misc -Iext/blake3 -Iext/ed25519 -Iext/mbedtls/include
 )
 
-# Intentional exports that have no in-tree caller (documented/embeddable API,
-# or build-glue entry points reached from outside this tree).
-ALLOW="doltliteServe doltliteServeAsync doltliteServerStop"
-
 fail=0
 ERR=$(mktemp)
-FNS=$(mktemp)
-DEAD=$(mktemp)
-trap 'rm -f "$ERR" "$FNS" "$DEAD"' EXIT
+trap 'rm -f "$ERR"' EXIT
 
 echo "== Part A: unused static functions / locals =="
 if [ "${DEAD_CODE_SKIP_PART_A:-}" = 1 ]; then
@@ -77,24 +75,7 @@ else
   done
 fi
 
-echo "== Part B: extern functions with no caller =="
-for f in "${SRCS[@]}"; do
-  [ -f "$f" ] || continue
-  grep -nE '^[a-zA-Z_][a-zA-Z0-9_ ]*[ \*]([a-z][a-zA-Z0-9_]+)\(' "$f" \
-    | grep -vE '^[0-9]+:(static|typedef|return|else|case|do|while|for|if|switch)\b' \
-    | sed -nE 's/^[0-9]+:[a-zA-Z_][a-zA-Z0-9_ ]*[ \*]([a-z][a-zA-Z0-9_]+)\(.*/\1/p'
-done | sort -u > "$FNS"
-: > "$DEAD"
-while read -r fn; do
-  [ -z "$fn" ] && continue
-  case " $ALLOW " in *" $fn "*) continue;; esac
-  cnt=$(grep -rhoE "\b$fn\b" "$SRC_ROOT"/*.c "$SRC_ROOT"/*.h \
-          ext/*/*.c ext/*/*.h test/*.c 2>/dev/null | wc -l | tr -d ' ')
-  [ "$cnt" -le 2 ] && echo "  dead (no caller): $fn" >> "$DEAD"
-done < "$FNS"
-if [ -s "$DEAD" ]; then cat "$DEAD"; fail=1; fi
-
-echo "== Part C/D: unused header inlines / should-be-static =="
+echo "== Part B-G: unused externs / inlines / should-be-static / prototypes / macros / clones =="
 if ! python3 "$SCRIPT_DIR/lib/dead_code_scan.py" --root "$ROOT" --src-root "$SRC_ROOT"
 then
   fail=1

@@ -309,13 +309,7 @@ static int dsNameIndexInit(
                                (int)offsetof(struct TableEntry, zName));
 }
 
-static struct TableEntry *dsNameIndexFind(
-  const DsNameIndex *pIdx,
-  const char *zName
-){
-  int r = doltliteNameIndexFind(pIdx, zName);
-  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
-}
+
 
 static struct TableEntry *dsFindTableByNameNoCase(
   struct TableEntry *aCat,
@@ -641,7 +635,7 @@ static int dsAppendTableNames(
   for(i=0; i<nCat; i++){
     const char *zName = aCat[i].zName;
     if( !zName || aCat[i].iTable==1 ) continue;
-    if( pSkip && dsNameIndexFind(pSkip, zName) ) continue;
+    if( pSkip && addNameIndexFind(pSkip, zName) ) continue;
     if( *pn>=*pAlloc ){
       int newAlloc = *pAlloc ? *pAlloc*2 : 8;
       char **aNew = sqlite3_realloc(*paz, newAlloc*(int)sizeof(char*));
@@ -792,7 +786,7 @@ static struct TableEntry *dsRenamePartner(
   if( !pRef ) return 0;
   p = doltliteFindTableByNumber(aOther, nOther, pRef->iTable);
   if( !p || !p->zName ) return 0;
-  if( dsNameIndexFind(pRefSideIdx, p->zName) ) return 0;
+  if( addNameIndexFind(pRefSideIdx, p->zName) ) return 0;
   return p;
 }
 
@@ -818,8 +812,8 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
       if( pFromEntry ) zFromName = pFromEntry->zName;
       if( pToEntry ) zToName = pToEntry->zName;
     }else{
-      pFromEntry = dsNameIndexFind(&c->fromIdx, zName);
-      pToEntry = dsNameIndexFind(&c->toIdx, zName);
+      pFromEntry = addNameIndexFind(&c->fromIdx, zName);
+      pToEntry = addNameIndexFind(&c->toIdx, zName);
       if( pFromEntry && !pToEntry ){
         struct TableEntry *pRen =
             dsRenamePartner(c->aToCat, c->nToCat, pFromEntry, &c->fromIdx);
@@ -1206,8 +1200,8 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
       pFromEntry = dsFindTableByNameNoCase(c->aFromCat, c->nFromCat, zName);
       pToEntry = dsFindTableByNameNoCase(c->aToCat, c->nToCat, zName);
     }else{
-      pFromEntry = dsNameIndexFind(&c->fromIdx, zName);
-      pToEntry = dsNameIndexFind(&c->toIdx, zName);
+      pFromEntry = addNameIndexFind(&c->fromIdx, zName);
+      pToEntry = addNameIndexFind(&c->toIdx, zName);
       if( pFromEntry && !pToEntry ){
         struct TableEntry *pRen =
             dsRenamePartner(c->aToCat, c->nToCat, pFromEntry, &c->fromIdx);

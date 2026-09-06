@@ -44,14 +44,66 @@ $out"
 }
 
 # Part C: unused static inline in a header.
-cat > "$WORK/src/fixture.h" <<'EOF'
-#ifndef FIXTURE_H
-#define FIXTURE_H
+cat > "$WORK/src/doltlite_fixture.h" <<'EOF'
+#ifndef DOLTLITE_FIXTURE_H
+#define DOLTLITE_FIXTURE_H
 static SQLITE_INLINE int dead_code_gate_unused_inline(int x){ return x; }
 #endif
 EOF
 : > "$WORK/src/doltlite.c"
 expect_scan_hit "header_inline_is_rejected" "dead header inline: dead_code_gate_unused_inline"
+
+# Part E: unused header prototype.
+cat > "$WORK/src/doltlite_fixture.h" <<'EOF'
+#ifndef DOLTLITE_FIXTURE_H
+#define DOLTLITE_FIXTURE_H
+int dead_code_gate_unused_proto(void);
+#endif
+EOF
+: > "$WORK/src/doltlite.c"
+expect_scan_hit "header_prototype_is_rejected" "dead header prototype: dead_code_gate_unused_proto"
+
+# Part F: unused header macro.
+cat > "$WORK/src/doltlite_fixture.h" <<'EOF'
+#ifndef DOLTLITE_FIXTURE_H
+#define DOLTLITE_FIXTURE_H
+#define DEAD_CODE_GATE_UNUSED_MACRO 1
+#endif
+EOF
+: > "$WORK/src/doltlite.c"
+expect_scan_hit "header_macro_is_rejected" "dead header macro: DEAD_CODE_GATE_UNUSED_MACRO"
+
+# Part G: identical function bodies in two owned .c files.
+cat > "$WORK/src/doltlite_clone_a.c" <<'EOF'
+static int dead_code_gate_clone_left(int a, int b, int c){
+  int t;
+  if( a<0 ) a = -a;
+  if( b<0 ) b = -b;
+  if( c<0 ) c = -c;
+  t = a*b + b*c + c*a + a + b + c + 42;
+  if( t<0 ) t = -t;
+  t = t + a*a + b*b + c*c;
+  t = t + (a+1)*(b+1)*(c+1);
+  t = t + (a-1)*(b-1)*(c-1);
+  return t;
+}
+EOF
+cat > "$WORK/src/doltlite_clone_b.c" <<'EOF'
+static int dead_code_gate_clone_right(int a, int b, int c){
+  int t;
+  if( a<0 ) a = -a;
+  if( b<0 ) b = -b;
+  if( c<0 ) c = -c;
+  t = a*b + b*c + c*a + a + b + c + 42;
+  if( t<0 ) t = -t;
+  t = t + a*a + b*b + c*c;
+  t = t + (a+1)*(b+1)*(c+1);
+  t = t + (a-1)*(b-1)*(c-1);
+  return t;
+}
+EOF
+rm -f "$WORK/src/doltlite_fixture.h"
+expect_scan_hit "duplicate_body_is_rejected" "duplicate function body: dead_code_gate_clone_left"
 
 # Part D: non-static helper only referenced in its defining file.
 cat > "$WORK/src/doltlite.c" <<'EOF'
@@ -62,7 +114,6 @@ static int dead_code_gate_same_file_caller(int x){
   return dead_code_gate_should_be_static(x);
 }
 EOF
-: > "$WORK/src/fixture.h"
 expect_scan_hit "should_be_static_is_rejected" "should be static: dead_code_gate_should_be_static"
 
 # Part A: unused static in a real translation unit (compiler-driven).

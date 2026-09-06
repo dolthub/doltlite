@@ -77,6 +77,15 @@ struct DoltlitePkRange {
   int isEmpty;            /* NULL bound: scan matches nothing. */
 };
 
+static SQLITE_INLINE int doltlitePkRangeMatchesUpper(
+  const DoltlitePkRange *pRange,
+  i64 k
+){
+  if( !pRange->hasPkHi ) return 1;
+  if( pRange->pkHiStrict ) return k < pRange->pkHi;
+  return k <= pRange->pkHi;
+}
+
 struct DoltliteCommitQueue {
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
@@ -949,6 +958,64 @@ void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
 int doltliteCmdSourceResultError(
   sqlite3_context *ctx, ChunkStore *cs, int *pRc
 );
+int doltliteVtabMapChunkSourceError(
+  sqlite3_vtab *pVtab, sqlite3 *db, int sourceRc, int mappedRc
+);
+
+static SQLITE_INLINE int doltliteVtabSetErrmsgFromDb(
+  sqlite3_vtab *pVtab,
+  sqlite3 *db,
+  int rc
+){
+  sqlite3_free(pVtab->zErrMsg);
+  pVtab->zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(db));
+  return rc;
+}
+
+static SQLITE_INLINE int doltliteVtabExecBound(
+  sqlite3_vtab *pVtab,
+  sqlite3 *db,
+  const char *zSql,
+  sqlite3_value *pArg1,
+  sqlite3_value *pArg2,
+  sqlite3_value *pArg3
+){
+  sqlite3_stmt *pStmt = 0;
+  int rc = sqlite3_prepare_v3(db, zSql, -1, SQLITE_PREPARE_NO_VTAB, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(pVtab, db, rc);
+  if( pArg1 ) sqlite3_bind_value(pStmt, 1, pArg1);
+  if( pArg2 ) sqlite3_bind_value(pStmt, 2, pArg2);
+  if( pArg3 ) sqlite3_bind_value(pStmt, 3, pArg3);
+  sqlite3_step(pStmt);
+  rc = sqlite3_finalize(pStmt);
+  if( rc!=SQLITE_OK ) return doltliteVtabSetErrmsgFromDb(pVtab, db, rc);
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteTableEntryDiffers(
+  const struct TableEntry *a,
+  const struct TableEntry *b
+){
+  if( !a && !b ) return 0;
+  if( !a || !b ) return 1;
+  if( prollyHashCompare(&a->root, &b->root)!=0 ) return 1;
+  if( prollyHashCompare(&a->schemaHash, &b->schemaHash)!=0 ) return 1;
+  return 0;
+}
+
+static SQLITE_INLINE int doltliteSchemaEntriesSame(
+  const SchemaEntry *pA,
+  const SchemaEntry *pB
+){
+  if( !pA && !pB ) return 1;
+  if( !pA || !pB ) return 0;
+  if( sqlite3_stricmp(pA->zType ? pA->zType : "",
+                      pB->zType ? pB->zType : "")!=0 ) return 0;
+  if( sqlite3_stricmp(pA->zTblName ? pA->zTblName : "",
+                      pB->zTblName ? pB->zTblName : "")!=0 ) return 0;
+  if( (pA->zSql==0)!=(pB->zSql==0) ) return 0;
+  return !pA->zSql || strcmp(pA->zSql, pB->zSql)==0;
+}
 int doltliteCmdFinishWithConflicts(
   sqlite3 *db, sqlite3_context *ctx, DoltliteTxnState *pSaved,
   int nConflicts, const char *zOp, int bSealOnPlain
@@ -988,9 +1055,12 @@ int addNameIndexInit(
   AddNameIndex *pIdx, struct TableEntry *aEntry, int nEntry
 );
 void addNameIndexFree(AddNameIndex *pIdx);
-struct TableEntry *addNameIndexFind(
-  const AddNameIndex *pIdx, const char *zName
-);
+static SQLITE_INLINE struct TableEntry *addNameIndexFind(
+  const DoltliteNameIndex *pIdx, const char *zName
+){
+  int r = doltliteNameIndexFind(pIdx, zName);
+  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*(size_t)pIdx->stride);
+}
 int amTableStagedByName(
   struct TableEntry *aStaged, int nStaged, const char *zTbl
 );
@@ -1172,8 +1242,6 @@ int doltliteSerializeConflicts(ChunkStore *cs,
                                int nTables, ProllyHash *pHash);
 
 /* Index keys must match VDBE (NOCASE/RTRIM/DESC). */
-void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen);
-void doltliteIpkWriteBE(u8 *p, i64 v, int n);
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
 int doltliteMasterViewTriggerRowsDiffer(sqlite3 *db, const ProllyHash *pOldRoot,
                                         const ProllyHash *pNewRoot, u8 flags,

@@ -3,6 +3,7 @@
 
 #include "sortkey.h"
 #include "vdbeInt.h"
+#include "prolly_record.h"
 #include <limits.h>
 #include <string.h>
 
@@ -49,9 +50,6 @@ static u8 serialTypeTag(u32 serialType){
 #define SORTKEY_COLL_BINARY 0
 #define SORTKEY_COLL_NOCASE 1
 #define SORTKEY_COLL_RTRIM  2
-
-static void intSerialType(i64 v, u32 *pType, u32 *pLen);
-static void writeIntBE(u8 *p, i64 v, int nByte);
 
 static int collFromKeyInfo(const KeyInfo *pKeyInfo, int iCol){
   const CollSeq *pColl;
@@ -473,11 +471,11 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
   }
   if( flags & MEM_IntReal ){
     /* Integer-valued REAL encodes as a true REAL of that value. */
-    intSerialType(pMem->u.i, pSerialType, pLen);
+    dlIpkSerialType(pMem->u.i, pSerialType, pLen);
     return SQLITE_OK;
   }
   if( flags & MEM_Int ){
-    intSerialType(pMem->u.i, pSerialType, pLen);
+    dlIpkSerialType(pMem->u.i, pSerialType, pLen);
     return SQLITE_OK;
   }
   if( flags & MEM_Real ){
@@ -529,7 +527,7 @@ static int sortKeyEncodeMemArray(
     pField = (const u8*)pMem->z;
 
     if( serialType <= 6 || serialType==8 || serialType==9 ){
-      writeIntBE(aNum, pMem->u.i, (int)fieldLen);
+      dlIpkWriteBE(aNum, pMem->u.i, (int)fieldLen);
       pField = aNum;
     }else if( serialType==7 ){
       u64 v;
@@ -728,30 +726,13 @@ int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut){
     return SQLITE_OK;
   }
 
-  intSerialType(v, &serialType, &nData);
-  writeIntBE(aData, v, (int)nData);
+  dlIpkSerialType(v, &serialType, &nData);
+  dlIpkWriteBE(aData, v, (int)nData);
   *pnOut = encodeNumeric(pOut, serialType, aData, nData, 0);
   return SQLITE_OK;
 }
 
-static void intSerialType(i64 v, u32 *pType, u32 *pLen){
-  if( v==0 ){ *pType = 8; *pLen = 0; return; }
-  if( v==1 ){ *pType = 9; *pLen = 0; return; }
-  if( v>=-128 && v<=127 ){ *pType = 1; *pLen = 1; return; }
-  if( v>=-32768 && v<=32767 ){ *pType = 2; *pLen = 2; return; }
-  if( v>=-8388608 && v<=8388607 ){ *pType = 3; *pLen = 3; return; }
-  if( v>=-2147483648LL && v<=2147483647LL ){ *pType = 4; *pLen = 4; return; }
-  if( v>=-140737488355328LL && v<=140737488355327LL ){ *pType = 5; *pLen = 6; return; }
-  *pType = 6; *pLen = 8;
-}
 
-static void writeIntBE(u8 *p, i64 v, int nByte){
-  int j;
-  for(j = nByte - 1; j >= 0; j--){
-    p[j] = (u8)(v & 0xFF);
-    v >>= 8;
-  }
-}
 
 static SQLITE_INLINE void decodeNumericSortKeyToRecord(
   const u8 *pIn,
@@ -771,8 +752,8 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
           | ((u64)pIn[13] << 24) | ((u64)pIn[14] << 16)
           | ((u64)pIn[15] << 8)  | (u64)pIn[16];
     i64 iv = (i64)(u ^ ((u64)1 << 63));
-    intSerialType(iv, pType, pLen);
-    writeIntBE(pOut, iv, (int)*pLen);
+    dlIpkSerialType(iv, pType, pLen);
+    dlIpkWriteBE(pOut, iv, (int)*pLen);
     return;
   }
 
@@ -792,8 +773,8 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
   {
     i64 iv = (i64)d;
     if( d >= -9223372036854775808.0 && d < 9223372036854775808.0 && (double)iv == d ){
-      intSerialType(iv, pType, pLen);
-      writeIntBE(pOut, iv, (int)*pLen);
+      dlIpkSerialType(iv, pType, pLen);
+      dlIpkWriteBE(pOut, iv, (int)*pLen);
     }else{
       *pType = 7;
       *pLen = 8;

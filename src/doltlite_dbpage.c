@@ -36,21 +36,7 @@ static void put4byteBE(unsigned char *p, unsigned int v){
   p[3] = (unsigned char)(v & 0xff);
 }
 
-static int dbpageMapChunkSourceError(
-  DbpageVtab *pVtab,
-  int sourceRc,
-  int mappedRc
-){
-  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
-  int pendingRc = SQLITE_OK;
-  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
-  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
-  if( zErr ){
-    sqlite3_free(pVtab->base.zErrMsg);
-    pVtab->base.zErrMsg = zErr;
-  }
-  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
-}
+
 
 static int synthesizeHeader(DbpageVtab *pVtab, unsigned char *aPage){
   sqlite3 *db = pVtab->db;
@@ -88,14 +74,14 @@ static int synthesizeHeader(DbpageVtab *pVtab, unsigned char *aPage){
 
   rc = doltliteGetHeadCatalogHash(db, &catHash);
   if( rc!=SQLITE_OK ){
-    return dbpageMapChunkSourceError(pVtab, rc, SQLITE_OK);
+    return doltliteVtabMapChunkSourceError(&pVtab->base, pVtab->db, rc, SQLITE_OK);
   }
   if( !prollyHashIsEmpty(&catHash) ){
     int userTables = 0;
     rc = doltliteLoadCatalog(db, &catHash, &aTables, &nTables, &iNextTable);
     if( rc!=SQLITE_OK ){
       doltliteFreeCatalog(aTables, nTables);
-      return dbpageMapChunkSourceError(pVtab, rc, SQLITE_OK);
+      return doltliteVtabMapChunkSourceError(&pVtab->base, pVtab->db, rc, SQLITE_OK);
     }
     for(i=0; i<nTables; i++){
 

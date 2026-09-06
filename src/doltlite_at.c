@@ -320,13 +320,9 @@ static void atCursorReset(AtCursor *c){
 }
 
 static int atRowMatchesUpper(AtCursor *c){
-  i64 k;
   if( !c->pkRange.hasPkHi ) return 1;
-  k = prollyCursorIntKey(&c->common.tblCur);
-  if( c->pkRange.pkHiStrict ){
-    return k < c->pkRange.pkHi;
-  }
-  return k <= c->pkRange.pkHi;
+  return doltlitePkRangeMatchesUpper(
+      &c->pkRange, prollyCursorIntKey(&c->common.tblCur));
 }
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,

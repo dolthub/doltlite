@@ -64,22 +64,7 @@ struct WorkspaceCursor {
   WorkspaceRows *pRows;
 };
 
-static int wsMapChunkSourceError(
-  WorkspaceCursor *pCur,
-  WorkspaceVtab *pVtab,
-  int sourceRc,
-  int mappedRc
-){
-  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
-  int pendingRc = SQLITE_OK;
-  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
-  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
-  if( zErr ){
-    sqlite3_free(pCur->base.pVtab->zErrMsg);
-    pCur->base.pVtab->zErrMsg = zErr;
-  }
-  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
-}
+
 
 static int wsLoadTableRootOrEmpty(
   WorkspaceCursor *pCur,
@@ -93,7 +78,7 @@ static int wsLoadTableRootOrEmpty(
       pVtab->db, pCatHash, pVtab->zTableName,
       pRoot, pFlags, pSchemaHash);
   if( rc==SQLITE_NOTFOUND ){
-    rc = wsMapChunkSourceError(pCur, pVtab, rc, SQLITE_OK);
+    rc = doltliteVtabMapChunkSourceError(&pVtab->base, pVtab->db, rc, SQLITE_OK);
   }
   return rc;
 }

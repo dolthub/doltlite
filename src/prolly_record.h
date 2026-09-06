@@ -40,6 +40,22 @@ static inline int dlSerialTypeLen(u64 st){
   return 0;
 }
 
+static inline void dlIpkSerialType(i64 v, u32 *pType, u32 *pLen){
+  if( v==0 ){ *pType = 8; *pLen = 0; return; }
+  if( v==1 ){ *pType = 9; *pLen = 0; return; }
+  if( v>=-128 && v<=127 ){ *pType = 1; *pLen = 1; return; }
+  if( v>=-32768 && v<=32767 ){ *pType = 2; *pLen = 2; return; }
+  if( v>=-8388608 && v<=8388607 ){ *pType = 3; *pLen = 3; return; }
+  if( v>=-2147483648LL && v<=2147483647LL ){ *pType = 4; *pLen = 4; return; }
+  if( v>=-140737488355328LL && v<=140737488355327LL ){ *pType = 5; *pLen = 6; return; }
+  *pType = 6; *pLen = 8;
+}
+
+static inline void dlIpkWriteBE(u8 *p, i64 v, int n){
+  int i;
+  for(i=n-1; i>=0; i--){ p[i] = (u8)(v & 0xff); v >>= 8; }
+}
+
 static inline int dlSerialIsInt(int st){
   return st>=1 && st<=9 && st!=7;
 }
@@ -75,6 +91,24 @@ int doltliteParseRecordStrict(const u8 *pData, int nData,
                               DoltliteRecordInfo *pInfo);
 
 void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo);
+
+static inline int doltliteSchemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
+  DoltliteRecordInfo ri;
+  int st, off, len;
+  const u8 *pBody;
+  if( !pRec || nRec<=0 ) return 0;
+  doltliteParseRecord(pRec, nRec, &ri);
+  if( ri.nField < 1 ) return 0;
+  st = ri.aType[0];
+  off = ri.aOffset[0];
+  if( st < 13 || (st & 1)==0 ) return 0;
+  len = (st - 13) / 2;
+  if( off < 0 || off + len > nRec ) return 0;
+  pBody = pRec + off;
+  if( len==4 && memcmp(pBody, "view", 4)==0 ) return 1;
+  if( len==7 && memcmp(pBody, "trigger", 7)==0 ) return 1;
+  return 0;
+}
 
 static inline int dlRecordTextField(
   const u8 *pVal,

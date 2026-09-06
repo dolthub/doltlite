@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""Parts C/D of test/dead_code_check.sh.
+"""Dead/duplicate-code scan for DoltLite-owned sources.
 
+B: extern function defined in owned .c, never referenced from another .c and
+   never called in its defining file (header declaration does not count).
 C: static inline in a header whose identifier never appears elsewhere.
-D: non-static function defined in DoltLite-owned .c with no identifier
-   occurrence outside that file (should be static, or it is dead).
+D: non-static function with no identifier occurrence outside its .c
+   (should be static so Part A can see it).
+E: non-static prototype in an owned header that never appears in any .c.
+F: #define in an owned header whose identifier never appears elsewhere
+   (include guards skipped).
+G: two owned .c files contain functions with identical normalized bodies
+   (whitespace collapsed, length >= MIN_CLONE_BODY).
 """
 from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import os
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 INLINE = re.compile(
@@ -20,11 +28,18 @@ INLINE = re.compile(
     re.S,
 )
 DEF = re.compile(
-    r"^(?!\s)(?!static\b)(?!typedef\b)(?!#)"
-    r"(?:SQLITE_PRIVATE\s+|SQLITE_API\s+)?"
+    r"^(?!\s)(?!typedef\b)(?!#)"
+    r"(?:static\s+)?(?:SQLITE_PRIVATE\s+|SQLITE_API\s+)?"
     r".+?\b([A-Za-z_][A-Za-z0-9_]*)\s*\(",
     re.M,
 )
+PROTO = re.compile(
+    r"^(?!\s)(?!static\b)(?!typedef\b)(?!#)"
+    r"(?:SQLITE_PRIVATE\s+|SQLITE_API\s+|SQLITE_EXTERN\s+)?"
+    r".+?\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*;",
+    re.M,
+)
+MACRO = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
 SKIP_DEF = {
     "if",
     "for",
@@ -37,6 +52,11 @@ SKIP_DEF = {
     "do",
     "main",
 }
+ALLOW_EXTERN = {
+    "doltliteServe",
+    "doltliteServeAsync",
+    "doltliteServerStop",
+}
 SRC_GLOBS = (
     "doltlite.c",
     "doltlite_*.c",
@@ -46,6 +66,15 @@ SRC_GLOBS = (
     "pager_shim.c",
     "sortkey.c",
 )
+OWNED_HDR_GLOBS = (
+    "doltlite*.h",
+    "chunk_*.h",
+    "prolly_*.h",
+    "pager_shim.h",
+    "sortkey.h",
+    "record_codec.h",
+)
+MIN_CLONE_BODY = 200
 
 
 def expand(root: str, patterns: list[str]) -> list[str]:
@@ -76,6 +105,19 @@ def load_tokens(paths: list[str]) -> tuple[dict[str, str], dict[str, set[str]], 
     return texts, idents, counts
 
 
+def looks_like_def(line: str, name: str) -> bool:
+    before = line[: line.find(name)]
+    if not (re.search(r"[A-Za-z_][A-Za-z0-9_]*\s+\**$", before) or "*" in before):
+        return False
+    if ";" in line and "{" not in line:
+        return False
+    return True
+
+
+def is_static_def(line: str) -> bool:
+    return bool(re.match(r"^(?:SQLITE_PRIVATE\s+|SQLITE_API\s+)?static\b", line))
+
+
 def scan_inlines(hdrs: list[str], corpus: list[str], texts: dict[str, str],
                  idents: dict[str, set[str]], counts: dict[str, Counter]) -> list[str]:
     dead: list[str] = []
@@ -93,37 +135,183 @@ def scan_inlines(hdrs: list[str], corpus: list[str], texts: dict[str, str],
     return dead
 
 
-def looks_like_def(line: str, name: str) -> bool:
-    before = line[: line.find(name)]
-    if not (re.search(r"[A-Za-z_][A-Za-z0-9_]*\s+\**$", before) or "*" in before):
-        return False
-    # Declarations end with ';' and have no body. One-line definitions have '{'.
-    if ";" in line and "{" not in line:
-        return False
-    return True
+def iter_defs(path: str, texts: dict[str, str]):
+    raw = texts.get(path)
+    if raw is None:
+        return
+    stripped = strip_comments(raw)
+    for match in DEF.finditer(stripped):
+        name = match.group(1)
+        if name in SKIP_DEF:
+            continue
+        if name.startswith("sqlite3") or name.startswith("orig_sqlite3"):
+            continue
+        line = match.group(0)
+        if not looks_like_def(line, name):
+            continue
+        lineno = stripped[: match.start()].count("\n") + 1
+        yield name, lineno, is_static_def(line), stripped, match
 
 
 def scan_should_be_static(src_files: list[str], corpus: list[str], texts: dict[str, str],
                           idents: dict[str, set[str]]) -> list[str]:
     dead: list[str] = []
     for path in src_files:
-        raw = texts.get(path)
-        if raw is None:
-            continue
-        stripped = strip_comments(raw)
-        for match in DEF.finditer(stripped):
-            name = match.group(1)
-            if name in SKIP_DEF:
-                continue
-            if name.startswith("sqlite3") or name.startswith("orig_sqlite3"):
-                continue
-            if not looks_like_def(match.group(0), name):
+        for name, line, is_static, stripped, match in iter_defs(path, texts):
+            if is_static:
                 continue
             others = [q for q in corpus if q != path and name in idents.get(q, ())]
             if others:
                 continue
-            line = stripped[: match.start()].count("\n") + 1
             dead.append(f"  should be static: {name} ({path}:{line})")
+    return dead
+
+
+def scan_unused_externs(src_files: list[str], corpus: list[str], texts: dict[str, str],
+                        idents: dict[str, set[str]], counts: dict[str, Counter]) -> list[str]:
+    """Definition in one .c, no other .c mentions it, defining file count==1."""
+    dead: list[str] = []
+    seen: set[str] = set()
+    for path in src_files:
+        for name, line, is_static, stripped, match in iter_defs(path, texts):
+            if is_static or name in ALLOW_EXTERN or name in seen:
+                continue
+            c_files = [q for q in corpus if q.endswith(".c") and name in idents.get(q, ())]
+            if len(c_files) != 1 or c_files[0] != path:
+                continue
+            if counts.get(path, Counter())[name] > 1:
+                continue
+            hdrs_with = [q for q in corpus if q.endswith(".h") and name in idents.get(q, ())]
+            proto = re.compile(
+                r"^(?!\s)(?:SQLITE_PRIVATE\s+|SQLITE_API\s+|SQLITE_EXTERN\s+)?"
+                r".+?\b" + re.escape(name) + r"\s*\([^;]*\)\s*;",
+                re.M,
+            )
+            used_from_header = False
+            for h in hdrs_with:
+                leftover = proto.sub("", strip_comments(texts[h]))
+                if name in IDENT.findall(leftover):
+                    used_from_header = True
+                    break
+            if used_from_header:
+                continue
+            seen.add(name)
+            dead.append(f"  dead (no caller): {name} ({path}:{line})")
+    return dead
+
+
+def scan_unused_prototypes(hdrs: list[str], corpus: list[str], texts: dict[str, str],
+                           idents: dict[str, set[str]]) -> list[str]:
+    dead: list[str] = []
+    seen: set[str] = set()
+    for path in hdrs:
+        raw = texts.get(path)
+        if raw is None:
+            continue
+        for match in PROTO.finditer(strip_comments(raw)):
+            name = match.group(1)
+            if name in SKIP_DEF or name in ALLOW_EXTERN:
+                continue
+            if name.startswith("sqlite3") or name.startswith("orig_sqlite3"):
+                continue
+            if name in seen:
+                continue
+            c_files = [q for q in corpus if q.endswith(".c") and name in idents.get(q, ())]
+            if c_files:
+                continue
+            seen.add(name)
+            dead.append(f"  dead header prototype: {name} ({path})")
+    return dead
+
+
+def scan_unused_macros(hdrs: list[str], corpus: list[str], texts: dict[str, str],
+                       idents: dict[str, set[str]], counts: dict[str, Counter]) -> list[str]:
+    dead: list[str] = []
+    for path in hdrs:
+        raw = texts.get(path)
+        if raw is None:
+            continue
+        stripped = strip_comments(raw)
+        for match in MACRO.finditer(stripped):
+            name = match.group(1)
+            if name.endswith("_H") or name.endswith("_H_"):
+                continue
+            others = [q for q in corpus if q != path and name in idents.get(q, ())]
+            if others:
+                continue
+            if counts.get(path, Counter())[name] <= 1:
+                dead.append(f"  dead header macro: {name} ({path})")
+    return dead
+
+
+def extract_func_bodies(path: str, texts: dict[str, str]):
+    raw = texts.get(path)
+    if raw is None:
+        return
+    stripped = strip_comments(raw)
+    for match in DEF.finditer(stripped):
+        name = match.group(1)
+        if name in SKIP_DEF:
+            continue
+        line = match.group(0)
+        if not looks_like_def(line, name):
+            continue
+        rest = stripped[match.end():]
+        depth = 1
+        i = 0
+        while i < len(rest) and depth:
+            ch = rest[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif ch in ";{":
+                break
+            i += 1
+        if i >= len(rest) or rest[i] != ")":
+            continue
+        j = rest.find("{", i)
+        if j < 0 or ";" in rest[i:j]:
+            continue
+        body_start = match.end() + j + 1
+        depth = 1
+        k = body_start
+        while k < len(stripped) and depth:
+            if stripped[k] == "{":
+                depth += 1
+            elif stripped[k] == "}":
+                depth -= 1
+            k += 1
+        body = stripped[body_start:k - 1]
+        norm = re.sub(r"\s+", " ", body).strip()
+        if len(norm) < MIN_CLONE_BODY:
+            continue
+        lineno = stripped[: match.start()].count("\n") + 1
+        digest = hashlib.sha1(norm.encode()).hexdigest()
+        yield name, lineno, digest
+
+
+def scan_clones(src_files: list[str], texts: dict[str, str]) -> list[str]:
+    byhash: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
+    for path in src_files:
+        for name, line, digest in extract_func_bodies(path, texts):
+            byhash[digest].append((path, line, name))
+    dead: list[str] = []
+    for items in sorted(byhash.values(), key=lambda xs: (xs[0][0], xs[0][1])):
+        files = {p for p, _, _ in items}
+        if len(files) < 2:
+            continue
+        first = items[0]
+        for other in items[1:]:
+            if other[0] == first[0]:
+                continue
+            dead.append(
+                "  duplicate function body: "
+                f"{first[2]} ({first[0]}:{first[1]}) identical to "
+                f"{other[2]} ({other[0]}:{other[1]})"
+            )
     return dead
 
 
@@ -137,9 +325,7 @@ def main() -> int:
 
     src_files = expand(src_root, list(SRC_GLOBS))
     hdrs = expand(src_root, ["*.h"])
-    # Owned files are scanned for definitions; the whole src tree is searched
-    # for uses (sqliteInt.h / main.c / vdbe.c hold Register and btree entry
-    # points).
+    owned_hdrs = expand(src_root, list(OWNED_HDR_GLOBS))
     corpus = expand(src_root, ["*.c", "*.h"]) + expand(root, [
         "test/*.c",
         "test/c/*.c",
@@ -149,8 +335,13 @@ def main() -> int:
     corpus = sorted(set(corpus))
     texts, idents, counts = load_tokens(corpus)
 
-    dead = scan_inlines(hdrs, corpus, texts, idents, counts)
+    dead: list[str] = []
+    dead += scan_unused_externs(src_files, corpus, texts, idents, counts)
+    dead += scan_inlines(hdrs, corpus, texts, idents, counts)
     dead += scan_should_be_static(src_files, corpus, texts, idents)
+    dead += scan_unused_prototypes(owned_hdrs, corpus, texts, idents)
+    dead += scan_unused_macros(owned_hdrs, corpus, texts, idents, counts)
+    dead += scan_clones(src_files, texts)
     for line in dead:
         print(line)
     return 1 if dead else 0

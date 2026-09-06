@@ -119,13 +119,7 @@ void addNameIndexFree(AddNameIndex *pIdx){
   doltliteNameIndexFree(pIdx);
 }
 
-struct TableEntry *addNameIndexFind(
-  const AddNameIndex *pIdx,
-  const char *zName
-){
-  int r = doltliteNameIndexFind(pIdx, zName);
-  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
-}
+
 
 void doltliteAlignStagedEntriesToWorking(
   struct TableEntry *aWorking,

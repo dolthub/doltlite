@@ -426,13 +426,7 @@ static int sdTableIndexInit(
                                (int)offsetof(struct TableEntry, zName));
 }
 
-static struct TableEntry *sdTableIndexFind(
-  const SdTableIndex *pIdx,
-  const char *zName
-){
-  int r = doltliteNameIndexFind(pIdx, zName);
-  return r<0 ? 0 : (struct TableEntry*)(pIdx->aBase + (size_t)r*pIdx->stride);
-}
+
 
 static int computeSchemaDiff(
   SdCursor *pCur,
@@ -483,7 +477,7 @@ static int computeSchemaDiff(
     fromEntry = sdSchemaIndexFind(&fromSchemaIdx, aTo[i].zName);
     if( fromEntry ) continue;
 
-    toTE = sdTableIndexFind(&toTableIdx, aTo[i].zName);
+    toTE = addNameIndexFind(&toTableIdx, aTo[i].zName);
     if( !toTE || toTE->iTable==0 ) continue;
 
     for(j=0; j<nFromTables; j++){
@@ -493,7 +487,7 @@ static int computeSchemaDiff(
       if( !aFromTables[j].zName ) continue;
       if( prollyHashCompare(&aFromTables[j].root, &toTE->root)!=0 ) break;
 
-      if( sdTableIndexFind(&toTableIdx, aFromTables[j].zName) ) break;
+      if( addNameIndexFind(&toTableIdx, aFromTables[j].zName) ) break;
 
       dropped = sdSchemaIndexFind(&fromSchemaIdx, aFromTables[j].zName);
       if( !dropped ) break;

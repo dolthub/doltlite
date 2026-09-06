@@ -18,15 +18,7 @@
 #include <ctype.h>
 #include <time.h>
 
-static int doltliteTableEntryDiffers(
-  const struct TableEntry *a, const struct TableEntry *b
-){
-  if( !a && !b ) return 0;
-  if( !a || !b ) return 1;
-  if( prollyHashCompare(&a->root, &b->root)!=0 ) return 1;
-  if( prollyHashCompare(&a->schemaHash, &b->schemaHash)!=0 ) return 1;
-  return 0;
-}
+
 
 static int revertTouchesTable(
   struct TableEntry *aCommit, int nCommit,

@@ -111,16 +111,10 @@ static int dtMapChunkSourceError(
   int sourceRc,
   int mappedRc
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int pendingRc = SQLITE_OK;
-  char *zErr = cs ? chunkStoreSourceTakeError(cs, &pendingRc) : 0;
-  if( !zErr && pendingRc==SQLITE_OK ) return mappedRc;
-  pCur->sourceError = 1;
-  if( zErr ){
-    sqlite3_free(pCur->base.pVtab->zErrMsg);
-    pCur->base.pVtab->zErrMsg = zErr;
-  }
-  return pendingRc!=SQLITE_OK ? pendingRc : sourceRc;
+  int rc = doltliteVtabMapChunkSourceError(
+      pCur->base.pVtab, db, sourceRc, mappedRc);
+  if( rc!=mappedRc ) pCur->sourceError = 1;
+  return rc;
 }
 
 static int dtLoadTableRootOrEmpty(

@@ -782,16 +782,7 @@ static void schemaConflictsFreeRows(SchemaConflictsCur *pCur){
   pCur->iRow = 0;
 }
 
-static int schemaEntrySame(const SchemaEntry *pA, const SchemaEntry *pB){
-  if( !pA && !pB ) return 1;
-  if( !pA || !pB ) return 0;
-  if( sqlite3_stricmp(pA->zType ? pA->zType : "",
-                      pB->zType ? pB->zType : "")!=0 ) return 0;
-  if( sqlite3_stricmp(pA->zTblName ? pA->zTblName : "",
-                      pB->zTblName ? pB->zTblName : "")!=0 ) return 0;
-  if( (pA->zSql==0)!=(pB->zSql==0) ) return 0;
-  return !pA->zSql || strcmp(pA->zSql, pB->zSql)==0;
-}
+
 
 static SchemaEntry *schemaTableEntry(
   SchemaEntry *aSchema,
@@ -865,9 +856,9 @@ static char *schemaConflictIndexDescription(
       pBase = findSchemaEntry(aBase, nBase, a[i].zName);
       pOurs = findSchemaEntry(aOurs, nOurs, a[i].zName);
       pTheirs = findSchemaEntry(aTheirs, nTheirs, a[i].zName);
-      oursChanged = !schemaEntrySame(pBase, pOurs);
-      theirsChanged = !schemaEntrySame(pBase, pTheirs);
-      if( !oursChanged || !theirsChanged || schemaEntrySame(pOurs, pTheirs) ){
+      oursChanged = !doltliteSchemaEntriesSame(pBase, pOurs);
+      theirsChanged = !doltliteSchemaEntriesSame(pBase, pTheirs);
+      if( !oursChanged || !theirsChanged || doltliteSchemaEntriesSame(pOurs, pTheirs) ){
         continue;
       }
       if( !pBase ){
