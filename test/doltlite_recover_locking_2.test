@@ -322,8 +322,14 @@ do_test doltlite_recover_locking_2-8.16 {
 } {0 0}
 
 do_test doltlite_recover_locking_2-9.0 {
-  list [catch {sqlite3 dbmem file:/x.db?vfs=memdb -uri 1} msg] $msg
-} {1 {unable to open database file}}
+  set r [list [catch {sqlite3 dbmem file:/x.db?vfs=memdb -uri 1} msg] $msg]
+  dbmem eval { CREATE TABLE mm(a); INSERT INTO mm VALUES(42) }
+  sqlite3 dbmem2 file:/x.db?vfs=memdb -uri 1
+  lappend r [dbmem2 eval { SELECT a FROM mm }]
+  dbmem2 close
+  dbmem close
+  set r
+} {0 {} 42}
 
 do_test doltlite_recover_locking_2-9.1 {
   execsql {CREATE TABLE m(x, y); INSERT INTO m VALUES(1, 2);}

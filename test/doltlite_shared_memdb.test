@@ -1,0 +1,90 @@
+# Named in-memory databases are shared between connections the way stock
+# shares them: mode=memory (or :memory:) under shared cache, and the memdb
+# VFS with a leading slash. Unnamed and slash-less forms stay private.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_shared_memdb
+
+db close
+sqlite3 db  "file:dlshm1?mode=memory&cache=shared" -uri 1
+sqlite3 db2 "file:dlshm1?mode=memory&cache=shared" -uri 1
+
+do_execsql_test 1.1 {
+  CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1,'a');
+} {}
+do_test 1.2 {
+  db2 eval { SELECT id, v FROM t }
+} {1 a}
+do_test 1.3 {
+  db eval { SELECT length(dolt_commit('-Am','init')) }
+} {40}
+do_test 1.4 {
+  db2 eval { SELECT count(*) FROM dolt_log }
+} {2}
+do_test 1.5 {
+  db2 eval { INSERT INTO t VALUES(2,'b'); SELECT dolt_branch('f') }
+  db eval { SELECT id FROM t ORDER BY id; SELECT group_concat(name) FROM dolt_branches }
+} {1 2 main,f}
+do_test 1.6 {
+  db eval { BEGIN; INSERT INTO t VALUES(3,'c') }
+  set r [catchsql { INSERT INTO t VALUES(4,'d') } db2]
+  db eval { COMMIT }
+  list $r [db2 eval { SELECT count(*) FROM t }]
+} {{1 {database is locked}} 3}
+do_test 1.7 {
+  db close
+  db2 eval { SELECT count(*) FROM t; SELECT count(*) FROM dolt_log }
+} {3 2}
+do_test 1.8 {
+  sqlite3 db "file:dlshm1?mode=memory&cache=shared" -uri 1
+  db eval { SELECT count(*) FROM t }
+} {3}
+db close
+db2 close
+
+do_test 2.1 {
+  sqlite3 db  "file:/dlshm2?vfs=memdb" -uri 1
+  sqlite3 db2 "file:/dlshm2?vfs=memdb" -uri 1
+  db eval { CREATE TABLE u(a INT PRIMARY KEY); INSERT INTO u VALUES(7) }
+  db2 eval { SELECT a FROM u }
+} {7}
+db close
+db2 close
+
+do_test 3.1 {
+  sqlite3 db  "file:dlshm3?vfs=memdb" -uri 1
+  sqlite3 db2 "file:dlshm3?vfs=memdb" -uri 1
+  db eval { CREATE TABLE p(a INT PRIMARY KEY) }
+  catchsql { SELECT count(*) FROM p } db2
+} {1 {no such table: p}}
+db close
+db2 close
+
+do_test 3.2 {
+  sqlite3 db  "file:dlshm4?mode=memory" -uri 1
+  sqlite3 db2 "file:dlshm4?mode=memory" -uri 1
+  db eval { CREATE TABLE p(a INT PRIMARY KEY) }
+  catchsql { SELECT count(*) FROM p } db2
+} {1 {no such table: p}}
+db close
+db2 close
+
+do_test 4.1 {
+  sqlite3 db  "file::memory:?cache=shared" -uri 1
+  sqlite3 db2 "file::memory:?cache=shared" -uri 1
+  db eval { CREATE TABLE q(a INT PRIMARY KEY); INSERT INTO q VALUES(9) }
+  db2 eval { SELECT a FROM q }
+} {9}
+db close
+db2 close
+
+do_test 5.1 {
+  sqlite3 db "file:dlshm5?mode=memory&cache=shared" -uri 1
+  db eval { CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','x') }
+  db eval { SELECT dolt_gc() }
+} {{0 chunks removed, 0 chunks kept (in-memory)}}
+db close
+
+finish_test

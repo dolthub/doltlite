@@ -449,12 +449,10 @@ shared shared-1-16.1 class=unsupported issue=1837
 shared shared-1-16.2 class=unsupported issue=1837
 shared shared-1-16.4 class=unsupported issue=1837
 shared shared-1-16.5 class=unsupported issue=1837
-shared shared-1-16.8.1 class=unsupported issue=1837
 shared shared-2-16.1 class=unsupported issue=1837
 shared shared-2-16.2 class=unsupported issue=1837
 shared shared-2-16.4 class=unsupported issue=1837
 shared shared-2-16.5 class=unsupported issue=1837
-shared shared-2-16.8.1 class=unsupported issue=1837
 shared shared-2.1.0 class=unsupported issue=1837  # auto_vacuum rejected on doltlite-format databases
 
 # ── shared2 ──
@@ -5738,7 +5736,6 @@ doltlite_fts3_oom doltlite_fts3_oom-2.2.1 class=intentional
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1 class=intentional issue=2493  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
 pager2 pager2-2.2 class=intentional  # file size = chunk payload (13088), not a page-count multiple
-pager2 pager2-3.1 class=intentional  # shared-cache in-memory db (file:...?mode=memory&cache=shared): cross-connection table visibility differs
 
 # ── pragma3 ── (was crash-listed on the journal_mode rejection; now completes)
 # data_version is not bumped by another connection's write (MVCC/chunk-store

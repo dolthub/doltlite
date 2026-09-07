@@ -848,6 +848,12 @@ For a DoltLite-format main database, the compatibility contract is:
   `DELETE FROM sqlite_sequence`, and inserting a seed row set or drop the
   shared counter for that table, after which the next id is
   `max(seq, max(rowid))+1` exactly as in SQLite.
+- Named in-memory databases are shared between connections the way SQLite
+  shares them: `file:name?mode=memory&cache=shared`, `file::memory:?cache=shared`,
+  and `file:/name?vfs=memdb` open one store per name inside the process, with
+  writers serialized like a file. `:memory:`, `mode=memory` without shared
+  cache, and slash-less `vfs=memdb` names stay private to their connection.
+  `dolt_gc` and `VACUUM INTO` treat a shared in-memory database as in-memory.
 - `PRAGMA query_only` covers version control: while it is set, `dolt_add`,
   `dolt_commit`, `dolt_merge`, `dolt_tag`, `dolt_branch`, `dolt_gc`, and every
   other function that would change the file fail with `attempt to write a

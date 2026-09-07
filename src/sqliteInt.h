@@ -5525,6 +5525,8 @@ int sqlite3MemdbPrivateVfsData(
   sqlite3_vfs*, unsigned char**, sqlite3_int64*, int
 );
 int sqlite3IsDoltliteMemdb(const sqlite3_vfs*);
+sqlite3_vfs *sqlite3DoltliteSharedMemVfs(void);
+int sqlite3IsDoltliteSharedMemVfs(const sqlite3_vfs*);
 int doltliteBtreeSerialize(Btree*, const char*, const void*,
                            unsigned char**, sqlite3_int64*);
 int doltliteSerializeDb(sqlite3*, Btree*, unsigned char**, sqlite3_int64*);
@@ -5536,6 +5538,8 @@ int doltliteBtreeDeserialize(
 # define sqlite3IsMemdb(X) 0
 # ifdef DOLTLITE_PROLLY
 #  define sqlite3IsDoltliteMemdb(X) 0
+#  define sqlite3IsDoltliteSharedMemVfs(X) 0
+#  define sqlite3DoltliteSharedMemVfs() ((sqlite3_vfs*)0)
 #  define sqlite3MemdbDestroyPrivateVfs(X) ((void)0)
 # endif
 #endif

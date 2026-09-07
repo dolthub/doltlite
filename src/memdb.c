@@ -528,6 +528,13 @@ static int memdbFileControl(sqlite3_file *pFile, int op, void *pArg){
     *(char**)pArg = sqlite3_mprintf("memdb(%p,%lld)", p->aData, p->sz);
     rc = SQLITE_OK;
   }
+#ifdef DOLTLITE_PROLLY
+  /* The chunk store's peer-change detection asks; a memory file never moves. */
+  if( op==SQLITE_FCNTL_HAS_MOVED ){
+    *(int*)pArg = 0;
+    rc = SQLITE_OK;
+  }
+#endif
   if( op==SQLITE_FCNTL_SIZE_LIMIT ){
     sqlite3_int64 iLimit = *(sqlite3_int64*)pArg;
     if( iLimit<p->sz ){
@@ -1025,6 +1032,82 @@ int sqlite3IsMemdb(const sqlite3_vfs *pVfs){
 }
 
 #ifdef DOLTLITE_PROLLY
+/* The chunk store treats a shared in-memory database as an ordinary file:
+** every connection opens the same named MemStore, coordinates through
+** memdbLock on the lock sidecar, and sees peers' commits by re-reading the
+** tail. That needs xAccess to report existence and xDelete to exist, which
+** the stock memdb VFS lacks. */
+static sqlite3_vfs doltlite_shmem_vfs;
+
+static MemStore *doltliteShmemFind(const char *zName){
+  int i;
+  for(i=0; i<memdb_g.nMemStore; i++){
+    if( strcmp(memdb_g.apMemStore[i]->zFName, zName)==0 ){
+      return memdb_g.apMemStore[i];
+    }
+  }
+  return 0;
+}
+
+static int doltliteShmemAccess(
+  sqlite3_vfs *pVfs,
+  const char *zName,
+  int flags,
+  int *pResOut
+){
+  int n = sqlite3Strlen30(zName);
+#ifndef SQLITE_MUTEX_OMIT
+  sqlite3_mutex *pVfsMutex = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_VFS1);
+#endif
+  UNUSED_PARAMETER(pVfs);
+  UNUSED_PARAMETER(flags);
+  if( n==0 || zName[n-1]=='/' || strcmp(zName, ".")==0 ){
+    *pResOut = 1;  /* every directory exists and is writable */
+    return SQLITE_OK;
+  }
+  sqlite3_mutex_enter(pVfsMutex);
+  {
+    MemStore *p = doltliteShmemFind(zName);
+    *pResOut = 0;
+    if( p ){
+      memdbEnter(p);
+      *pResOut = p->sz>0;
+      memdbLeave(p);
+    }
+  }
+  sqlite3_mutex_leave(pVfsMutex);
+  return SQLITE_OK;
+}
+
+static int doltliteShmemDelete(sqlite3_vfs *pVfs, const char *zName, int dirSync){
+#ifndef SQLITE_MUTEX_OMIT
+  sqlite3_mutex *pVfsMutex = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_VFS1);
+#endif
+  UNUSED_PARAMETER(pVfs);
+  UNUSED_PARAMETER(dirSync);
+  sqlite3_mutex_enter(pVfsMutex);
+  {
+    MemStore *p = doltliteShmemFind(zName);
+    if( p ){
+      memdbEnter(p);
+      p->sz = 0;
+      memdbLeave(p);
+    }
+  }
+  sqlite3_mutex_leave(pVfsMutex);
+  return SQLITE_OK;
+}
+
+sqlite3_vfs *sqlite3DoltliteSharedMemVfs(void){
+  return &doltlite_shmem_vfs;
+}
+
+int sqlite3IsDoltliteSharedMemVfs(const sqlite3_vfs *pVfs){
+  return pVfs==&doltlite_shmem_vfs;
+}
+#endif
+
+#ifdef DOLTLITE_PROLLY
 sqlite3_vfs *sqlite3MemdbCreatePrivateVfs(
   unsigned char *pData,
   sqlite3_int64 szDb,
@@ -1114,6 +1197,12 @@ int sqlite3MemdbInit(void){
   ** is no way to reach it under most builds. */
   if( sz<sizeof(MemFile) ) sz = sizeof(MemFile); /*NO_TEST*/
   memdb_vfs.szOsFile = sz;
+#ifdef DOLTLITE_PROLLY
+  doltlite_shmem_vfs = memdb_vfs;
+  doltlite_shmem_vfs.zName = "doltlite-shmem";
+  doltlite_shmem_vfs.xDelete = doltliteShmemDelete;
+  doltlite_shmem_vfs.xAccess = doltliteShmemAccess;
+#endif
   return sqlite3_vfs_register(&memdb_vfs, 0);
 }
 #endif /* SQLITE_OMIT_DESERIALIZE */

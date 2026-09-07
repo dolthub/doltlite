@@ -54,6 +54,7 @@ doltlite_persistence.sh
 doltlite_attach_write_matrix.sh
 doltlite_branding.sh
 doltlite_memory_db.sh
+doltlite_shared_memdb.sh
 doltlite_gc.sh
 doltlite_gc_commit_classify.sh
 doltlite_gc_session_state.sh
