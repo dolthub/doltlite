@@ -3834,6 +3834,9 @@ struct AutoincInfo {
   Table *pTab;          /* Table this info block refers to */
   int iDb;              /* Index in sqlite3.aDb[] of database holding pTab */
   int regCtr;           /* Memory register holding the rowid counter */
+#ifdef DOLTLITE_PROLLY
+  u8 bSeqOnly;          /* Branch-shared counter only; no sqlite_sequence row */
+#endif
 };
 
 /*
