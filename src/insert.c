@@ -406,15 +406,39 @@ void sqlite3ComputeGeneratedColumns(
 ** The 2nd register is the one that is returned.  That is all the
 ** insert routine needs to know about.
 */
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+/* Implicit rowids on a prolly-backed rowid table come from the counter
+** shared by every branch of the file, so two branches never allocate the
+** same id. Only AUTOINCREMENT tables also record it in sqlite_sequence. */
+static int rowidTableUsesSharedSeq(Parse *pParse, int iDb, Table *pTab){
+  sqlite3 *db = pParse->db;
+  return HasRowid(pTab)
+      && !IsVirtual(pTab)
+      && !IsView(pTab)
+      && iDb!=1
+      && db->aDb[iDb].pBt
+      && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+      && sqlite3StrNICmp(pTab->zName, "sqlite_", 7)!=0
+      && (db->mDbFlags & DBFLAG_Vacuum)==0;
+}
+#endif
+
 static int autoIncBegin(
   Parse *pParse,      /* Parsing context */
   int iDb,            /* Index of the database holding pTab */
   Table *pTab         /* The table we are writing to */
 ){
   int memId = 0;      /* Register holding maximum rowid */
+  int bSeqOnly = 0;
   assert( pParse->db->aDb[iDb].pSchema!=0 );
-  if( (pTab->tabFlags & TF_Autoincrement)!=0
-   && (pParse->db->mDbFlags & DBFLAG_Vacuum)==0
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+  if( (pTab->tabFlags & TF_Autoincrement)==0 ){
+    bSeqOnly = rowidTableUsesSharedSeq(pParse, iDb, pTab);
+  }
+#endif
+  if( bSeqOnly
+   || ((pTab->tabFlags & TF_Autoincrement)!=0
+       && (pParse->db->mDbFlags & DBFLAG_Vacuum)==0)
   ){
     Parse *pToplevel = sqlite3ParseToplevel(pParse);
     AutoincInfo *pInfo;
@@ -423,10 +447,11 @@ static int autoIncBegin(
     /* Verify that the sqlite_sequence table exists and is an ordinary
     ** rowid table with exactly two columns.
     ** Ticket d8dc2b3a58cd5dc2918a1d4acb 2018-05-23 */
-    if( pSeqTab==0
-     || !HasRowid(pSeqTab)
-     || NEVER(IsVirtual(pSeqTab))
-     || pSeqTab->nCol!=2
+    if( !bSeqOnly
+     && (pSeqTab==0
+         || !HasRowid(pSeqTab)
+         || NEVER(IsVirtual(pSeqTab))
+         || pSeqTab->nCol!=2)
     ){
       pParse->nErr++;
       pParse->rc = SQLITE_CORRUPT_SEQUENCE;
@@ -448,6 +473,9 @@ static int autoIncBegin(
       pToplevel->usesAinc = 1;
       pInfo->pTab = pTab;
       pInfo->iDb = iDb;
+#ifdef DOLTLITE_PROLLY
+      pInfo->bSeqOnly = (u8)bSeqOnly;
+#endif
       pToplevel->nMem++;                  /* Register to hold name of table */
       pInfo->regCtr = ++pToplevel->nMem;  /* Max rowid register */
       pToplevel->nMem +=2;       /* Rowid in sqlite_sequence + orig max val */
@@ -495,6 +523,14 @@ void sqlite3AutoincrementBegin(Parse *pParse){
     pDb = &db->aDb[p->iDb];
     memId = p->regCtr;
     assert( sqlite3SchemaMutexHeld(db, 0, pDb->pSchema) );
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+    if( p->bSeqOnly ){
+      sqlite3VdbeLoadString(v, memId-1, p->pTab->zName);
+      sqlite3VdbeAddOp2(v, OP_Integer, 0, memId);
+      sqlite3VdbeAddOp3(v, OP_DoltliteSeqMax, memId, memId-1, p->iDb);
+      continue;
+    }
+#endif
     sqlite3OpenTable(pParse, 0, p->iDb, pDb->pSchema->pSeqTab, OP_OpenRead);
     sqlite3VdbeLoadString(v, memId-1, p->pTab->zName);
     aOp = sqlite3VdbeAddOpList(v, ArraySize(autoInc), autoInc, iLn);
@@ -565,6 +601,12 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
     int iRec;
     int memId = p->regCtr;
 
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+    if( p->bSeqOnly ){
+      sqlite3VdbeAddOp3(v, OP_DoltliteSeqBump, memId, memId-1, p->iDb);
+      continue;
+    }
+#endif
     iRec = sqlite3GetTempReg(pParse);
     assert( sqlite3SchemaMutexHeld(db, 0, pDb->pSchema) );
     sqlite3VdbeAddOp3(v, OP_Le, memId+2, sqlite3VdbeCurrentAddr(v)+7, memId);

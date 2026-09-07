@@ -836,9 +836,15 @@ For a DoltLite-format main database, the compatibility contract is:
   from HEAD.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
-- `AUTOINCREMENT` counters are shared by every branch of a database, so ids
-  allocated on one branch are never reused on another. `sqlite_sequence`
-  still works as the reset surface: `UPDATE sqlite_sequence SET seq=N`,
+- Implicit rowids are allocated from a counter shared by every branch of a
+  database, so an `INSERT` that omits the `INTEGER PRIMARY KEY` (or the
+  rowid of a table without a primary key) never gets an id another branch
+  already used, and such inserts merge cleanly. This gives every rowid table
+  `AUTOINCREMENT` allocation: after the largest row is deleted the next id
+  continues rather than being reused. `DROP TABLE` resets the counter and
+  `ALTER TABLE ... RENAME` carries it. Only tables declared `AUTOINCREMENT`
+  also record the counter in `sqlite_sequence`, which remains the reset
+  surface for them: `UPDATE sqlite_sequence SET seq=N`,
   `DELETE FROM sqlite_sequence`, and inserting a seed row set or drop the
   shared counter for that table, after which the next id is
   `max(seq, max(rowid))+1` exactly as in SQLite.

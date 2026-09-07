@@ -247,16 +247,17 @@ void sqlite3AlterRenameTable(
     sqlite3NestedParse(pParse,
         "UPDATE \"%w\".sqlite_sequence set name = %Q WHERE name = %Q",
         zDb, zName, pTab->zName);
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
-    if( iDb!=1 && db->aDb[iDb].pBt && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
-      int regOld = ++pParse->nMem;
-      int regNew = ++pParse->nMem;
-      sqlite3VdbeLoadString(v, regOld, pTab->zName);
-      sqlite3VdbeLoadString(v, regNew, zName);
-      sqlite3VdbeAddOp3(v, OP_DoltliteSeqRename, regOld, regNew, iDb);
-    }
-#endif
   }
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+  if( HasRowid(pTab) && !IsVirtual(pTab)
+   && iDb!=1 && db->aDb[iDb].pBt && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+    int regOld = ++pParse->nMem;
+    int regNew = ++pParse->nMem;
+    sqlite3VdbeLoadString(v, regOld, pTab->zName);
+    sqlite3VdbeLoadString(v, regNew, zName);
+    sqlite3VdbeAddOp3(v, OP_DoltliteSeqRename, regOld, regNew, iDb);
+  }
+#endif
 #endif
 
   /* If the table being renamed is not itself part of the temp database,
