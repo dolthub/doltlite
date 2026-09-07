@@ -2332,7 +2332,8 @@ int doltliteLoadTableRootByName(
       q += nName+nTbl;
       if( !found
        && nType==5 && memcmp(pType, "table", 5)==0
-       && nName==nWant && memcmp(pName, zTableName, nName)==0 ){
+       && nName==nWant
+       && sqlite3_strnicmp((const char*)pName, zTableName, nName)==0 ){
         found = 1;
         memcpy(&foundRoot, &root, sizeof(foundRoot));
         memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
@@ -2353,7 +2354,8 @@ int doltliteLoadTableRootByName(
       }
       pName = q;
       q += nLen;
-      if( !found && nLen==nWant && memcmp(pName, zTableName, nLen)==0 ){
+      if( !found && nLen==nWant
+       && sqlite3_strnicmp((const char*)pName, zTableName, nLen)==0 ){
         found = 1;
         memcpy(&foundRoot, &root, sizeof(foundRoot));
         memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
@@ -2546,7 +2548,7 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
   if( pBtree && pBtree->cat.a ){
     for(i=0; i<pBtree->cat.n; i++){
       if( pBtree->cat.a[i].zName
-       && strcmp(pBtree->cat.a[i].zName, zTable)==0 ){
+       && sqlite3_stricmp(pBtree->cat.a[i].zName, zTable)==0 ){
         *piTable = pBtree->cat.a[i].iTable;
         return SQLITE_OK;
       }
@@ -2556,7 +2558,7 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
   if( !pSchema ) return SQLITE_ERROR;
   for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
     Table *pTab = (Table*)sqliteHashData(k);
-    if( pTab && strcmp(pTab->zName, zTable)==0 ){
+    if( pTab && sqlite3_stricmp(pTab->zName, zTable)==0 ){
       *piTable = pTab->tnum;
       return SQLITE_OK;
     }

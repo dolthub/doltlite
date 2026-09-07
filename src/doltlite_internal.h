@@ -1005,7 +1005,7 @@ static SQLITE_INLINE int dlMatchOrSkipNamedTable(
     sqlite3_free(zName);
     return SQLITE_CORRUPT;
   }
-  isMatch = (*pFound==0 && zName && strcmp(zName, zWant)==0);
+  isMatch = (*pFound==0 && zName && sqlite3_stricmp(zName, zWant)==0);
   if( isMatch ){
     void *aRows = 0;
     if( nr>0 || bAllocEmpty ){
