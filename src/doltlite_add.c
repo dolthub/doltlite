@@ -92,7 +92,7 @@ static struct TableEntry *addFindEntryByName(
   int i;
   if( !zName ) return 0;
   for(i=0; i<nEntries; i++){
-    if( aEntries[i].zName && strcmp(aEntries[i].zName, zName)==0 ){
+    if( aEntries[i].zName && sqlite3_stricmp(aEntries[i].zName, zName)==0 ){
       return &aEntries[i];
     }
   }
@@ -292,14 +292,14 @@ int doltliteIndexSchemaRowsDifferForTable(
   for(i=0; i<nA; i++){
     int found = 0;
     if( !aA[i].zType || strcmp(aA[i].zType, "index")!=0
-     || !aA[i].zTblName || strcmp(aA[i].zTblName, zTable)!=0 ){
+     || !aA[i].zTblName || sqlite3_stricmp(aA[i].zTblName, zTable)!=0 ){
       continue;
     }
     for(j=0; j<nB; j++){
       if( aB[j].zType && strcmp(aB[j].zType, "index")==0
-       && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0
+       && aB[j].zTblName && sqlite3_stricmp(aB[j].zTblName, zTable)==0
        && aB[j].zName && aA[i].zName
-       && strcmp(aB[j].zName, aA[i].zName)==0
+       && sqlite3_stricmp(aB[j].zName, aA[i].zName)==0
        && ((aB[j].zSql==0)==(aA[i].zSql==0))
        && (aB[j].zSql==0 || strcmp(aB[j].zSql, aA[i].zSql)==0) ){
         found = 1;
@@ -311,7 +311,7 @@ int doltliteIndexSchemaRowsDifferForTable(
   }
   for(j=0; j<nB; j++){
     if( aB[j].zType && strcmp(aB[j].zType, "index")==0
-     && aB[j].zTblName && strcmp(aB[j].zTblName, zTable)==0 ){
+     && aB[j].zTblName && sqlite3_stricmp(aB[j].zTblName, zTable)==0 ){
       nBForTable++;
     }
   }
@@ -325,7 +325,7 @@ int amTableStagedByName(struct TableEntry *aStaged, int nStaged,
   int i;
   if( !zTbl ) return 0;
   for(i=0; i<nStaged; i++){
-    if( aStaged[i].zName && strcmp(aStaged[i].zName, zTbl)==0 ) return 1;
+    if( aStaged[i].zName && sqlite3_stricmp(aStaged[i].zName, zTbl)==0 ) return 1;
   }
   return 0;
 }
@@ -470,7 +470,7 @@ void addRemoveIndexEntriesOfTable(
         break;
       }
     }
-    if( !zParent || strcmp(zParent, zTable)!=0 ){ j++; continue; }
+    if( !zParent || sqlite3_stricmp(zParent, zTable)!=0 ){ j++; continue; }
     sqlite3_free(aStaged[j].zName);
     if( j+1<*pnStaged ){
       memmove(&aStaged[j], &aStaged[j+1],
@@ -497,7 +497,7 @@ int addAppendIndexEntriesOfTable(
      || strcmp(aWorkSchema[i].zType, "index")!=0
      || aWorkSchema[i].iRootpage<=1
      || !aWorkSchema[i].zTblName
-     || strcmp(aWorkSchema[i].zTblName, zTable)!=0 ){
+     || sqlite3_stricmp(aWorkSchema[i].zTblName, zTable)!=0 ){
       continue;
     }
     for(j=0; j<nWorking; j++){
@@ -538,7 +538,7 @@ static int addStageShadowTablesOf(
     if( !aWorkSchema[i].zType
      || strcmp(aWorkSchema[i].zType, "table")!=0
      || !aWorkSchema[i].zName
-     || strcmp(aWorkSchema[i].zName, zTable)==0
+     || sqlite3_stricmp(aWorkSchema[i].zName, zTable)==0
      || !sqlite3IsShadowTableOf(db, pTab, aWorkSchema[i].zName) ){
       continue;
     }
@@ -546,7 +546,7 @@ static int addStageShadowTablesOf(
     if( !pWork ) continue;
     for(k=0; k<*pnStaged; k++){
       if( (*paStaged)[k].zName
-       && strcmp((*paStaged)[k].zName, pWork->zName)==0 ){
+       && sqlite3_stricmp((*paStaged)[k].zName, pWork->zName)==0 ){
         char *zDup = sqlite3_mprintf("%s", pWork->zName);
         if( !zDup ) return SQLITE_NOMEM;
         sqlite3_free((*paStaged)[k].zName);
@@ -604,7 +604,7 @@ static void addRemoveShadowEntriesOfDroppedVtab(
     }
     for(k=0; k<*pnStaged; ){
       if( aStaged[k].zName
-       && strcmp(aStaged[k].zName, aStagedSchema[i].zName)==0 ){
+       && sqlite3_stricmp(aStaged[k].zName, aStagedSchema[i].zName)==0 ){
         sqlite3_free(aStaged[k].zName);
         if( k+1<*pnStaged ){
           memmove(&aStaged[k], &aStaged[k+1],
@@ -708,6 +708,7 @@ int doltliteStageNamedTables(
 
   for(i=0; i<argc; i++){
     const char *zTable = (const char*)sqlite3_value_text(argv[i]);
+    Table *pLive;
     Pgno iTable = 0;
     int j;
     if( !zTable || strcmp(zTable, ".")==0 ) continue;
@@ -716,6 +717,9 @@ int doltliteStageNamedTables(
       if( zPrior && sqlite3_stricmp(zPrior, zTable)==0 ) break;
     }
     if( j<i ) continue;
+
+    pLive = sqlite3FindTable(db, zTable, "main");
+    if( pLive ) zTable = pLive->zName;
 
     if( !bForce ){
       int ignored = 0;
@@ -730,7 +734,6 @@ int doltliteStageNamedTables(
     /* Vtabs have no catalog entry; commit content is the shadow tables. Stage
     ** those and adopt the working master so the vtab schema row travels too. */
     {
-      Table *pLive = sqlite3FindTable(db, zTable, "main");
       if( pLive && IsVirtual(pLive) ){
         int w;
         rc = addStageShadowTablesOf(db, context, &aStaged, &nStaged,
@@ -746,7 +749,7 @@ int doltliteStageNamedTables(
           if( aWorkSchema[w].zType
            && strcmp(aWorkSchema[w].zType, "table")==0
            && aWorkSchema[w].zName
-           && strcmp(aWorkSchema[w].zName, zTable)!=0
+           && sqlite3_stricmp(aWorkSchema[w].zName, zTable)!=0
            && sqlite3IsShadowTableOf(db, pLive, aWorkSchema[w].zName) ){
             ADDNAMED_TOUCH(aWorkSchema[w].zName);
           }
@@ -761,7 +764,7 @@ int doltliteStageNamedTables(
       int found = 0;
       Pgno iDroppedTable = 0;
       for(j=0; j<nStaged; j++){
-        if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
+        if( aStaged[j].zName && sqlite3_stricmp(aStaged[j].zName, zTable)==0 ){
           iDroppedTable = aStaged[j].iTable;
           found = 1;
           break;
@@ -776,7 +779,7 @@ int doltliteStageNamedTables(
           int removeEntry = 0;
           if( iDroppedTable!=0 && aStaged[j].iTable==iDroppedTable ){
             removeEntry = 1;
-          }else if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
+          }else if( aStaged[j].zName && sqlite3_stricmp(aStaged[j].zName, zTable)==0 ){
             removeEntry = 1;
           }
           if( removeEntry ){

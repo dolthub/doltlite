@@ -67,6 +67,7 @@ static int hashofIndexRootByName(
   int found = 0;
   Pgno iRoot = 0;
   char *zSql = 0;
+  char *zCanonicalIndex = 0;
   char *zTable = 0;
 
   if( pzTable ) *pzTable = 0;
@@ -79,7 +80,14 @@ static int hashofIndexRootByName(
     if( sqlite3_stricmp(aSchema[i].zName, zIndex)!=0 ) continue;
     iRoot = aSchema[i].iRootpage;
     zSql = aSchema[i].zSql ? sqlite3_mprintf("%s", aSchema[i].zSql) : 0;
+    zCanonicalIndex = sqlite3_mprintf("%s", aSchema[i].zName);
     zTable = aSchema[i].zTblName ? sqlite3_mprintf("%s", aSchema[i].zTblName) : 0;
+    if( !zCanonicalIndex ){
+      sqlite3_free(zSql);
+      sqlite3_free(zTable);
+      freeSchemaEntries(aSchema, nSchema);
+      return SQLITE_NOMEM;
+    }
     found = 1;
     break;
   }
@@ -89,6 +97,7 @@ static int hashofIndexRootByName(
   rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zSql);
+    sqlite3_free(zCanonicalIndex);
     sqlite3_free(zTable);
     return rc;
   }
@@ -104,13 +113,14 @@ static int hashofIndexRootByName(
   }
   doltliteFreeCatalog(aTables, nTables);
   if( zSql ){
-    char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zIndex);
+    char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zCanonicalIndex);
     if( zCanon ){
       prollyHashCompute(zCanon, (int)strlen(zCanon), pSchemaHash);
       sqlite3_free(zCanon);
     }
     sqlite3_free(zSql);
   }
+  sqlite3_free(zCanonicalIndex);
   if( !found ){
     sqlite3_free(zTable);
     return SQLITE_NOTFOUND;

@@ -424,7 +424,8 @@ static int deleteConflictRowFromCatalog(
       goto delete_conflict_done;
     }
 
-    isMatch = (!deleted && zName && strcmp(zName, zTableName)==0);
+    isMatch = (!deleted && zName
+               && sqlite3_stricmp(zName, zTableName)==0);
     if( isMatch ){
       u8 *pCountOut = 0;
       int nKeep = 0;
@@ -559,7 +560,8 @@ static int removeConflictTableFromCatalog(
       goto remove_conflict_done;
     }
 
-    isMatch = (*pFound==0 && zName && strcmp(zName, zTableName)==0);
+    isMatch = (*pFound==0 && zName
+               && sqlite3_stricmp(zName, zTableName)==0);
     for(j=0; j<nc; j++){
       rc = skipConflictRow(&r);
       if( rc!=SQLITE_OK ){
@@ -1281,7 +1283,8 @@ static int conflictsResolveTableExists(sqlite3 *db, const char *zTable, int *pEx
 
   *pExists = 0;
   rc = sqlite3_prepare_v2(db,
-      "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?1",
+      "SELECT 1 FROM main.sqlite_master "
+      "WHERE type='table' AND name=?1 COLLATE NOCASE",
       -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3_bind_text(pStmt, 1, zTable, -1, SQLITE_TRANSIENT);

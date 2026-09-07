@@ -1,0 +1,94 @@
+# 2026-09-07
+#
+# The author disclaims copyright to this source code.  In place of
+# a legal notice, here is a blessing:
+#
+#    May you do good and not evil.
+#    May you find forgiveness for yourself and forgive others.
+#    May you share freely, never taking more than you give.
+#
+#***********************************************************************
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test doltlite_identifier_case-1.1 {
+  CREATE TABLE Mixed(id INT PRIMARY KEY, v TEXT);
+  INSERT INTO Mixed VALUES(1, 'base');
+  SELECT dolt_add('mixed');
+  SELECT length(dolt_commit('-m', 'base'));
+  UPDATE Mixed SET v='working';
+  SELECT length(dolt_hashof_table('MIXED'));
+  SELECT dolt_hashof_table('MIXED')=dolt_hashof_table('Mixed');
+  SELECT dolt_checkout('mIxEd');
+  SELECT v FROM Mixed;
+  UPDATE Mixed SET v='reset';
+  SELECT dolt_reset('MIXED');
+  CREATE TABLE UntrackedMixed(id INT PRIMARY KEY);
+  SELECT dolt_clean('untrackedmixed');
+  CREATE TABLE UntrackedMixed(id INT PRIMARY KEY);
+  SELECT dolt_verify_constraints('MIXED');
+} {0 40 40 1 0 base 0 0 0}
+
+reset_db
+
+do_execsql_test doltlite_identifier_case-2.1 {
+  CREATE TABLE Mixed(id INT PRIMARY KEY, v INT);
+  CREATE INDEX Mixed_v ON Mixed(v);
+  INSERT INTO Mixed VALUES(1, 10);
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('feature');
+  SELECT dolt_checkout('feature');
+  UPDATE Mixed SET v=20;
+  SELECT length(dolt_commit('-Am', 'feature'));
+  SELECT dolt_checkout('main');
+  UPDATE Mixed SET v=30;
+  SELECT dolt_checkout('feature', 'mIxEd');
+  SELECT v FROM Mixed;
+  SELECT length(dolt_hashof_table('MIXED', 'feature'));
+  SELECT dolt_hashof_table('MIXED', 'feature')=
+         dolt_hashof_table('Mixed', 'feature');
+  SELECT dolt_hashof_index('mIxEd_v')=dolt_hashof_index('Mixed_v');
+} {40 0 0 40 0 0 20 40 1 1}
+
+reset_db
+
+do_execsql_test doltlite_identifier_case-3.1 {
+  CREATE TABLE DropMixed(id INT PRIMARY KEY);
+  SELECT length(dolt_commit('-Am', 'base'));
+  DROP TABLE DropMixed;
+  SELECT dolt_add('dropmixed');
+  SELECT status, staged FROM dolt_status
+   WHERE lower(table_name)='dropmixed';
+} {40 0 deleted 1}
+
+reset_db
+
+do_execsql_test doltlite_identifier_case-4.1 {
+  CREATE TABLE Mixed(id INT PRIMARY KEY, v INT);
+  INSERT INTO Mixed VALUES(1, 10);
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('feature');
+  SELECT dolt_checkout('feature');
+  UPDATE Mixed SET v=20;
+  SELECT length(dolt_commit('-Am', 'feature'));
+  SELECT dolt_checkout('main');
+  UPDATE Mixed SET v=30;
+  SELECT length(dolt_commit('-Am', 'main'));
+} {40 0 0 40 0 40}
+
+do_test doltlite_identifier_case-4.2 {
+  lindex [catchsql {
+    BEGIN;
+    SELECT dolt_merge('feature');
+  }] 0
+} {1}
+
+do_execsql_test doltlite_identifier_case-4.3 {
+  SELECT count(*) FROM dolt_conflicts_Mixed;
+  SELECT dolt_conflicts_resolve('--theirs', 'mIxEd');
+  SELECT v FROM Mixed;
+  ROLLBACK;
+} {1 0 20}
+
+finish_test

@@ -351,7 +351,7 @@ int loadSchemaEntryFromCatalog(
 
       rc = dlRecordTextField(pVal, nVal, &ri, 1, &zEntryName);
       if( rc!=SQLITE_OK ) goto load_schema_entry_done;
-      if( zEntryName && strcmp(zEntryName, zName)==0 ){
+      if( zEntryName && sqlite3_stricmp(zEntryName, zName)==0 ){
         rc = dlRecordTextField(pVal, nVal, &ri, 0, &zType);
         if( rc==SQLITE_OK ){
           rc = dlRecordTextField(pVal, nVal, &ri, 2, &zTblName);
@@ -410,7 +410,7 @@ void freeSchemaEntries(SchemaEntry *a, int n){
 SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
   int i;
   for(i=0; i<n; i++){
-    if( a[i].zName && strcmp(a[i].zName, zName)==0 ) return &a[i];
+    if( a[i].zName && sqlite3_stricmp(a[i].zName, zName)==0 ) return &a[i];
   }
   return 0;
 }

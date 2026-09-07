@@ -1728,7 +1728,7 @@ int doltliteApplyRawRowMutation(
     pTE = 0;
     for(i=0; i<pBtree->cat.n; i++){
       if( pBtree->cat.a[i].zName
-       && strcmp(pBtree->cat.a[i].zName, zTable)==0 ){
+       && sqlite3_stricmp(pBtree->cat.a[i].zName, zTable)==0 ){
         pTE = &pBtree->cat.a[i];
         break;
       }

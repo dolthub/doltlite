@@ -71,7 +71,7 @@ static int checkoutLoadLiveTableSql(
   *pzSql = 0;
   zQry = sqlite3_mprintf(
       "SELECT sql FROM main.sqlite_master "
-      "WHERE type='table' AND name='%q'",
+      "WHERE type='table' AND name='%q' COLLATE NOCASE",
       zName);
   if( !zQry ) return SQLITE_NOMEM;
   rc = sqlite3_prepare_v2(db, zQry, -1, &pStmt, 0);
@@ -141,7 +141,8 @@ static int checkoutLoadSourceTableSql(
         prollyCursorClose(&cur);
         return rc;
       }
-      if( strcmp(zType, "table")==0 && strcmp(zEntryName, zName)==0 ){
+      if( strcmp(zType, "table")==0
+       && sqlite3_stricmp(zEntryName, zName)==0 ){
         *pFound = 1;
         rc = checkoutSchemaTextField(pVal, nVal, &ri, 4, pzSql);
         sqlite3_free(zType);
@@ -578,7 +579,7 @@ static int checkoutReconcileTableIndexes(
 
   rc = sqlite3_prepare_v2(db,
       "SELECT name, sql FROM sqlite_master"
-      " WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL",
+      " WHERE type='index' AND tbl_name=?1 COLLATE NOCASE AND sql IS NOT NULL",
       -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_bind_text(pStmt, 1, zTable, -1, SQLITE_STATIC);
@@ -589,8 +590,10 @@ static int checkoutReconcileTableIndexes(
     if( !zName ) continue;
     for(j=0; j<nSourceSchema; j++){
       if( aSourceSchema[j].zType && strcmp(aSourceSchema[j].zType, "index")==0
-       && aSourceSchema[j].zTblName && strcmp(aSourceSchema[j].zTblName, zTable)==0
-       && aSourceSchema[j].zName && strcmp(aSourceSchema[j].zName, zName)==0
+       && aSourceSchema[j].zTblName
+       && sqlite3_stricmp(aSourceSchema[j].zTblName, zTable)==0
+       && aSourceSchema[j].zName
+       && sqlite3_stricmp(aSourceSchema[j].zName, zName)==0
        && aSourceSchema[j].zSql ){
         char *zLiveCanon = doltliteCanonicalizeSchemaSql(zSql ? zSql : "", zName);
         char *zSrcCanon = doltliteCanonicalizeSchemaSql(aSourceSchema[j].zSql, zName);
@@ -631,7 +634,8 @@ static int checkoutReconcileTableIndexes(
     int exists;
     sqlite3_stmt *pChk = 0;
     if( !aSourceSchema[j].zType || strcmp(aSourceSchema[j].zType, "index")!=0 ) continue;
-    if( !aSourceSchema[j].zTblName || strcmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
+    if( !aSourceSchema[j].zTblName
+     || sqlite3_stricmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
     if( !aSourceSchema[j].zName || !aSourceSchema[j].zSql ) continue;
     rc = sqlite3_prepare_v2(db,
         "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
@@ -670,7 +674,7 @@ static int checkoutReconcileVtabShadowIndexes(
     char *zDup;
     if( !aSourceSchema[i].zName || !aSourceSchema[i].zType
      || strcmp(aSourceSchema[i].zType, "table")!=0
-     || strcmp(aSourceSchema[i].zName, zVtab)==0
+     || sqlite3_stricmp(aSourceSchema[i].zName, zVtab)==0
      || !sqlite3IsShadowTableOf(db, pTab, aSourceSchema[i].zName) ){
       continue;
     }
@@ -704,7 +708,8 @@ static void checkoutAdoptSourceIndexRoots(
   for(j=0; j<nSourceSchema; j++){
     struct TableEntry *pSrcEntry, *pWorkEntry;
     if( !aSourceSchema[j].zType || strcmp(aSourceSchema[j].zType, "index")!=0 ) continue;
-    if( !aSourceSchema[j].zTblName || strcmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
+    if( !aSourceSchema[j].zTblName
+     || sqlite3_stricmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
     if( !aSourceSchema[j].zName ) continue;
     pSrcEntry = doltliteFindTableByNumber(aSource, nSource,
                                           aSourceSchema[j].iRootpage);
@@ -712,7 +717,7 @@ static void checkoutAdoptSourceIndexRoots(
     for(k=0; k<nWorkSchema; k++){
       if( aWorkSchema[k].zType && strcmp(aWorkSchema[k].zType, "index")==0
        && aWorkSchema[k].zName
-       && strcmp(aWorkSchema[k].zName, aSourceSchema[j].zName)==0 ){
+       && sqlite3_stricmp(aWorkSchema[k].zName, aSourceSchema[j].zName)==0 ){
         break;
       }
     }
@@ -793,7 +798,7 @@ static int checkoutAdoptVtabShadows(
       int srcIdx = -1, workIdx = -1;
       if( !zName || !aList[pass][i].zType
        || strcmp(aList[pass][i].zType, "table")!=0
-       || strcmp(zName, zVtab)==0
+       || sqlite3_stricmp(zName, zVtab)==0
        || !sqlite3IsShadowTableOf(db, pTab, zName) ){
         continue;
       }
@@ -801,12 +806,13 @@ static int checkoutAdoptVtabShadows(
         continue;  /* already handled from the source list */
       }
       for(j=0; j<nSource; j++){
-        if( aSource[j].zName && strcmp(aSource[j].zName, zName)==0 ){
+        if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
           srcIdx = j; break;
         }
       }
       for(j=0; j<*pnWorking; j++){
-        if( (*paWorking)[j].zName && strcmp((*paWorking)[j].zName, zName)==0 ){
+        if( (*paWorking)[j].zName
+         && sqlite3_stricmp((*paWorking)[j].zName, zName)==0 ){
           workIdx = j; break;
         }
       }
@@ -886,7 +892,7 @@ static int doltliteCheckoutTables(
       int srcIdx = -1;
       if( !zName ) continue;
       for(j=0; j<nSource; j++){
-        if( aSource[j].zName && strcmp(aSource[j].zName, zName)==0 ){
+        if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
           srcIdx = j;
           break;
         }
@@ -1010,12 +1016,12 @@ static int doltliteCheckoutTables(
     if( !zName ) continue;
 
     for(j=0; j<nSource; j++){
-      if( aSource[j].zName && strcmp(aSource[j].zName, zName)==0 ){
+      if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
         srcIdx = j; break;
       }
     }
     for(j=0; j<nWorking; j++){
-      if( aWorking[j].zName && strcmp(aWorking[j].zName, zName)==0 ){
+      if( aWorking[j].zName && sqlite3_stricmp(aWorking[j].zName, zName)==0 ){
         workIdx = j; break;
       }
     }
@@ -1048,7 +1054,8 @@ static int doltliteCheckoutTables(
       nWorking--;
     }else{
       rc = checkoutInstallSourceEntry(&aWorking, &nWorking,
-                                      &aSource[srcIdx], zName, workIdx);
+                                      &aSource[srcIdx],
+                                      aSource[srcIdx].zName, workIdx);
       if( rc!=SQLITE_OK ){
         freeSchemaEntries(aSourceSchema, nSourceSchema);
         checkoutSchemaInfoClear(aSchema, nNames);
