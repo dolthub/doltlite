@@ -335,44 +335,9 @@ static int ignoreConnect(sqlite3 *db, void *pAux, int argc,
   return SQLITE_OK;
 }
 
-static int ignoreBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  (void)pVtab;
-  pInfo->estimatedCost = 10.0;
-  pInfo->estimatedRows = 0;
-  return SQLITE_OK;
-}
-
 static int ignoreOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
   (void)pVtab;
   return doltliteVtabOpenCursor(ppCursor, sizeof(IgnoreCursor));
-}
-
-static int ignoreFilter(sqlite3_vtab_cursor *pCursor,
-    int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
-  (void)pCursor; (void)idxNum; (void)idxStr; (void)argc; (void)argv;
-  return SQLITE_OK;
-}
-
-static int ignoreNext(sqlite3_vtab_cursor *pCursor){
-  (void)pCursor;
-  return SQLITE_OK;
-}
-
-static int ignoreEof(sqlite3_vtab_cursor *pCursor){
-  (void)pCursor;
-  return 1;
-}
-
-static int ignoreColumn(sqlite3_vtab_cursor *pCursor,
-    sqlite3_context *ctx, int iCol){
-  (void)pCursor; (void)ctx; (void)iCol;
-  return SQLITE_OK;
-}
-
-static int ignoreRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  (void)pCursor;
-  *pRowid = 0;
-  return SQLITE_OK;
 }
 
 static int ignoreMaterialize(IgnoreVtab *p){
@@ -413,9 +378,9 @@ static int ignoreUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
 }
 
 static sqlite3_module doltliteIgnoreModule = {
-  0, 0, ignoreConnect, ignoreBestIndex, doltliteVtabDisconnect, 0,
-  ignoreOpen, doltliteVtabClose, ignoreFilter, ignoreNext, ignoreEof,
-  ignoreColumn, ignoreRowid,
+  0, 0, ignoreConnect, doltliteVtabBestIndexEmpty, doltliteVtabDisconnect, 0,
+  ignoreOpen, doltliteVtabClose, doltliteVtabEmptyFilter, doltliteVtabEmptyNext,
+  doltliteVtabEofAlways, doltliteVtabEmptyColumn, doltliteVtabZeroRowid,
   ignoreUpdate, ignoreBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 

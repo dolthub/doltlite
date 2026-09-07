@@ -555,6 +555,55 @@ static SQLITE_INLINE int doltliteVtabClose(sqlite3_vtab_cursor *pCur){
   return SQLITE_OK;
 }
 
+static SQLITE_INLINE int doltliteVtabBestIndexEmpty(
+  sqlite3_vtab *pVtab,
+  sqlite3_index_info *pInfo
+){
+  (void)pVtab;
+  pInfo->estimatedCost = 10.0;
+  pInfo->estimatedRows = 0;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabEmptyFilter(
+  sqlite3_vtab_cursor *pCursor,
+  int idxNum,
+  const char *idxStr,
+  int argc,
+  sqlite3_value **argv
+){
+  (void)pCursor; (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabEmptyNext(sqlite3_vtab_cursor *pCursor){
+  (void)pCursor;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabEofAlways(sqlite3_vtab_cursor *pCursor){
+  (void)pCursor;
+  return 1;
+}
+
+static SQLITE_INLINE int doltliteVtabEmptyColumn(
+  sqlite3_vtab_cursor *pCursor,
+  sqlite3_context *ctx,
+  int iCol
+){
+  (void)pCursor; (void)ctx; (void)iCol;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabZeroRowid(
+  sqlite3_vtab_cursor *pCursor,
+  sqlite3_int64 *pRowid
+){
+  (void)pCursor;
+  *pRowid = 0;
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE int doltliteVtabOpenCursor(
   sqlite3_vtab_cursor **ppCursor,
   int nByte

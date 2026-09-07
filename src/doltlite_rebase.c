@@ -1334,18 +1334,6 @@ static int rebaseDropPlan(sqlite3 *db){
       sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
 }
 
-static int rebaseClaimActiveEndRetry(
-  sqlite3 *db,
-  const char *zWorkingBranch
-){
-  int rc;
-  db->busyHandler.nBusy = 0;
-  do {
-    rc = rebaseClaimActiveEnd(db, zWorkingBranch);
-  }while( rebaseRetryableRc(rc) && rebaseEndBusyRetry(db) );
-  return rc;
-}
-
 static int rebaseRetryBranchOp(
   sqlite3 *db,
   int (*xOp)(sqlite3*, const char*),
@@ -1407,7 +1395,7 @@ static int rebaseDiscardWorkingBranch(
 ){
   int rc;
 
-  rc = rebaseClaimActiveEndRetry(db, zWorkingBranch);
+  rc = rebaseRetryBranchOp(db, rebaseClaimActiveEnd, zWorkingBranch);
   if( rc!=SQLITE_OK && rc!=SQLITE_DONE ) return rc;
   rc = rebaseRetryDbOp(db, rebaseDropPlan);
   if( rc!=SQLITE_OK ) return rc;
@@ -1717,7 +1705,7 @@ static void doltliteRebaseInteractiveAbort(
   }
 
   /* Names before claim clears session rebase state. */
-  rc = rebaseClaimActiveEndRetry(db, zWorking);
+  rc = rebaseRetryBranchOp(db, rebaseClaimActiveEnd, zWorking);
   if( rc==SQLITE_DONE ){
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
@@ -1870,7 +1858,7 @@ static void doltliteRebaseInteractiveContinue(
 
   /* Claim before replay so a concurrent --abort loses with "no rebase
   ** in progress" rather than both failing mid-recovery. */
-  rc = rebaseClaimActiveEndRetry(db, zWorking);
+  rc = rebaseRetryBranchOp(db, rebaseClaimActiveEnd, zWorking);
   if( rc==SQLITE_DONE ){
     sqlite3_result_error(context, "no rebase in progress", -1);
     goto abort_err_silent;

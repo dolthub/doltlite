@@ -59,44 +59,9 @@ static int testsConnect(sqlite3 *db, void *pAux, int argc,
   return SQLITE_OK;
 }
 
-static int testsBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  (void)pVtab;
-  pInfo->estimatedCost = 10.0;
-  pInfo->estimatedRows = 0;
-  return SQLITE_OK;
-}
-
 static int testsOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
   (void)pVtab;
   return doltliteVtabOpenCursor(ppCursor, sizeof(TestsCursor));
-}
-
-static int testsFilter(sqlite3_vtab_cursor *pCursor,
-    int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
-  (void)pCursor; (void)idxNum; (void)idxStr; (void)argc; (void)argv;
-  return SQLITE_OK;
-}
-
-static int testsNext(sqlite3_vtab_cursor *pCursor){
-  (void)pCursor;
-  return SQLITE_OK;
-}
-
-static int testsEof(sqlite3_vtab_cursor *pCursor){
-  (void)pCursor;
-  return 1;
-}
-
-static int testsColumn(sqlite3_vtab_cursor *pCursor,
-    sqlite3_context *ctx, int iCol){
-  (void)pCursor; (void)ctx; (void)iCol;
-  return SQLITE_OK;
-}
-
-static int testsRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  (void)pCursor;
-  *pRowid = 0;
-  return SQLITE_OK;
 }
 
 static int testsMaterialize(TestsVtab *p){
@@ -139,9 +104,9 @@ static int testsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
 }
 
 static sqlite3_module doltliteTestsModule = {
-  0, 0, testsConnect, testsBestIndex, doltliteVtabDisconnect, 0,
-  testsOpen, doltliteVtabClose, testsFilter, testsNext, testsEof,
-  testsColumn, testsRowid,
+  0, 0, testsConnect, doltliteVtabBestIndexEmpty, doltliteVtabDisconnect, 0,
+  testsOpen, doltliteVtabClose, doltliteVtabEmptyFilter, doltliteVtabEmptyNext,
+  doltliteVtabEofAlways, doltliteVtabEmptyColumn, doltliteVtabZeroRowid,
   testsUpdate, testsBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
