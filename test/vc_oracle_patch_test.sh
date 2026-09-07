@@ -200,6 +200,18 @@ oracle_shape schema_filter_count "$basic_setup" "'HEAD~1','HEAD'" "count(*)" \
 oracle_shape unknown_filter_empty "$basic_setup" "'HEAD~1','HEAD'" "count(*)" \
   "diff_type='unknown'"
 
+native_rename_setup="
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'one'),(2,'two');
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t RENAME TO u;
+SELECT dolt_commit('-A','-m','target');
+"
+oracle_shape table_rename_single_schema_statement "$native_rename_setup" \
+  "'HEAD~1','HEAD'" "count(*)" "diff_type='schema'"
+oracle_shape table_rename_has_no_data_statements "$native_rename_setup" \
+  "'HEAD~1','HEAD'" "count(*)" "diff_type='data'"
+
 oracle_data multi_table_order "
 CREATE TABLE z(pk INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE a(pk INTEGER PRIMARY KEY, v TEXT);
@@ -433,7 +445,7 @@ else
 fi
 vc_oracle_assert_match apply_literal_round_trip "$actual_fingerprint" "$target_fingerprint"
 
-# Table rename as an executable rebuild, including quoted ids and the index.
+# Table rename as executable ALTER, including quoted ids and the index.
 rename_dir="$TMPROOT/apply_rename"
 mkdir -p "$rename_dir"
 rename_db="$rename_dir/db"
@@ -450,6 +462,9 @@ target_fingerprint=$("$DOLTLITE" "$rename_db" \
   "SELECT group_concat(\"pk col\"||':'||\"value\",',') FROM (SELECT * FROM \"new table\" ORDER BY \"pk col\");" \
   "SELECT group_concat(type||':'||name,',') FROM (SELECT type,name FROM sqlite_master WHERE tbl_name='new table' ORDER BY type,name);")
 "$DOLTLITE" "$rename_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$rename_dir/patch.sql"
+actual_rename=$(grep '^ALTER TABLE ' "$rename_dir/patch.sql" || true)
+vc_oracle_assert_match native_table_rename_sql "$actual_rename" \
+  'ALTER TABLE "odd table" RENAME TO "new table";'
 "$DOLTLITE" "$rename_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
 if "$DOLTLITE" "$rename_db" <"$rename_dir/patch.sql" 2>"$rename_dir/apply.err"; then
   actual_fingerprint=$("$DOLTLITE" "$rename_db" \

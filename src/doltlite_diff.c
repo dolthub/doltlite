@@ -241,6 +241,36 @@ static void diffNameIndexFree(DiffNameIndex *pIdx){
   doltliteNameIndexFree(pIdx);
 }
 
+static struct TableEntry *diffFindTableByNameNoCase(
+  struct TableEntry *aCat,
+  int nCat,
+  const char *zName
+){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<nCat; i++){
+    if( aCat[i].zName && sqlite3_stricmp(aCat[i].zName,zName)==0 ){
+      return &aCat[i];
+    }
+  }
+  return 0;
+}
+
+static struct TableEntry *diffRenamePartner(
+  struct TableEntry *aOther,
+  int nOther,
+  const struct TableEntry *pRef,
+  struct TableEntry *aRef,
+  int nRef
+){
+  struct TableEntry *p;
+  if( !pRef ) return 0;
+  p = doltliteFindTableByNumber(aOther, nOther, pRef->iTable);
+  if( !p || !p->zName ) return 0;
+  if( diffFindTableByNameNoCase(aRef,nRef,p->zName) ) return 0;
+  return p;
+}
+
 
 
 static void freeBatch(DoltliteDiffCursor *pCur){
@@ -373,7 +403,37 @@ static int diffFilteredTableRoots(
   if( !childFound && !parentFound ) return SQLITE_OK;
 
   if( !childFound || !parentFound ){
+    struct TableEntry *aChild = 0, *aParent = 0;
+    struct TableEntry *e, *p, *pRen;
+    int nChild = 0, nParent = 0;
     u8 dataChange;
+
+    rc = doltliteLoadCatalog(db, pChildCat, &aChild, &nChild, 0);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteLoadCatalog(db, pParentCat, &aParent, &nParent, 0);
+    if( rc!=SQLITE_OK ){
+      doltliteFreeCatalog(aChild, nChild);
+      return rc;
+    }
+    e = diffFindTableByNameNoCase(aChild,nChild,pCur->zFilterTable);
+    p = diffFindTableByNameNoCase(aParent,nParent,pCur->zFilterTable);
+    if( e && !p ){
+      pRen = diffRenamePartner(aParent,nParent,e,aChild,nChild);
+      if( pRen ){
+        dataChange = prollyHashCompare(&e->root,&pRen->root)!=0;
+        rc = batchAppend(pCur,zHex,e->zName,pCommit,dataChange,1);
+        doltliteFreeCatalog(aChild, nChild);
+        doltliteFreeCatalog(aParent, nParent);
+        return rc;
+      }
+    }else if( p && !e
+           && diffRenamePartner(aChild,nChild,p,aParent,nParent) ){
+      doltliteFreeCatalog(aChild, nChild);
+      doltliteFreeCatalog(aParent, nParent);
+      return SQLITE_OK;
+    }
+    doltliteFreeCatalog(aChild, nChild);
+    doltliteFreeCatalog(aParent, nParent);
     rc = diffRootHasRows(db, childFound ? &childRoot : &parentRoot,
                          &dataChange);
     if( rc!=SQLITE_OK ) return rc;
@@ -517,9 +577,15 @@ static int diffCatalogPair(
     }
     p = addNameIndexFind(&parentIdx, e->zName);
     if( !p ){
-      rc = diffRootHasRows(db, &e->root, &dataChange);
-      if( rc!=SQLITE_OK ) goto diff_done;
-      schemaChange = 1;
+      p = diffRenamePartner(aParent,nParent,e,aChild,nChild);
+      if( p ){
+        dataChange = prollyHashCompare(&e->root,&p->root)!=0;
+        schemaChange = 1;
+      }else{
+        rc = diffRootHasRows(db, &e->root, &dataChange);
+        if( rc!=SQLITE_OK ) goto diff_done;
+        schemaChange = 1;
+      }
     }else{
       dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
       schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
@@ -538,6 +604,7 @@ static int diffCatalogPair(
     u8 dataChange;
     if( !p->zName ) continue;
     if( addNameIndexFind(&childIdx, p->zName) ) continue;
+    if( diffRenamePartner(aChild,nChild,p,aParent,nParent) ) continue;
     rc = diffRootHasRows(db, &p->root, &dataChange);
     if( rc!=SQLITE_OK ) goto diff_done;
     rc = batchAppend(pCur, zHex, p->zName, pCommit, dataChange, 1);
