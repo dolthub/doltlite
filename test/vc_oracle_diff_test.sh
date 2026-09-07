@@ -212,6 +212,38 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'modify_u_only');
 " "t,u"
 
+rename_summary_setup="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10), (2, 20);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE t RENAME TO u;
+SELECT dolt_commit('-Am', 'rename');
+"
+oracle_summary "summary_table_rename" "$rename_summary_setup"
+oracle_summary_filter_name "summary_table_rename_new_name" \
+  "$rename_summary_setup" "u"
+oracle_summary_filter_name "summary_table_rename_old_name" \
+  "$rename_summary_setup" "t"
+
+oracle_summary "summary_table_rename_with_data" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10), (2, 20);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE t RENAME TO u;
+UPDATE u SET v=99 WHERE id=1;
+SELECT dolt_commit('-Am', 'rename and edit');
+"
+
+oracle_summary "summary_table_rename_and_reuse_old_name" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+ALTER TABLE t RENAME TO u;
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-Am', 'rename and recreate');
+"
+
 echo "--- per-table: row-level diff ---"
 
 oracle "table_diff_modify_row" "

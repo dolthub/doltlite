@@ -849,8 +849,11 @@ static int patchNativeAlter(
   int isCandidate = 0;
   int rc = SQLITE_OK;
   *pzAlter = 0;
-  if( strcmp(pTable->zFromName,pTable->zToName)!=0 ) return SQLITE_OK;
-  if( pFrom->col.nCol==pTo->col.nCol ){
+  if( strcmp(pTable->zFromName,pTable->zToName)!=0 ){
+    isCandidate = 1;
+    zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" RENAME TO \"%w\"",
+                             pTable->zFromName,pTable->zToName);
+  }else if( pFrom->col.nCol==pTo->col.nCol ){
     for(i=0; i<pFrom->col.nCol; i++){
       if( strcmp(pFrom->col.azName[i],pTo->col.azName[i])!=0 ){
         nDiff++;
