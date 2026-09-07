@@ -148,13 +148,26 @@ static int skipViolationRow(DlByteReader *rd){
   return dlSkipU32Blob(rd);
 }
 
+static int readViolationRowIO(DlByteReader *r, void *pRow){
+  return readViolationRow(r, (ConstraintViolationRow*)pRow);
+}
+
+static int skipViolationRowIO(DlByteReader *r, void *pRow){
+  (void)pRow;
+  return skipViolationRow(r);
+}
+
+static void freeViolationRowIO(void *pRow){
+  freeViolationRow((ConstraintViolationRow*)pRow);
+}
+
 static int deserializeAllViolations(
   const u8 *data,
   int nData,
   ConstraintViolationTable **ppTables, int *pnTables
 ){
   DlByteReader rd;
-  int nTables, i, j, rc;
+  int nTables, i, rc;
   ConstraintViolationTable *aTables;
 
   *ppTables = 0;
@@ -173,25 +186,12 @@ static int deserializeAllViolations(
   memset(aTables, 0, nTables ? nTables * (int)sizeof(*aTables) : 1);
 
   for(i=0; i<nTables; i++){
-    int nr;
-    rc = dlReadU16Name(&rd, &aTables[i].zName);
+    void *aRows = 0;
+    rc = dlReadNamedRowTable(&rd, &aTables[i].zName, &aTables[i].nRows,
+                             &aRows, sizeof(ConstraintViolationRow), 1,
+                             readViolationRowIO, freeViolationRowIO);
     if( rc!=SQLITE_OK ) goto fail;
-    nr = dlReadU32(&rd);
-    if( rd.err || nr<0 ){ rc = SQLITE_CORRUPT; goto fail; }
-    /* nr cannot exceed remaining bytes (1 byte/row min). malloc64 avoids 32-bit overflow. */
-    if( (sqlite3_uint64)nr > (sqlite3_uint64)(rd.end - rd.p) ){
-      rc = SQLITE_CORRUPT; goto fail;
-    }
-    aTables[i].nRows = nr;
-    aTables[i].aRows = sqlite3_malloc64(nr ? (sqlite3_uint64)nr * sizeof(ConstraintViolationRow) : 1);
-    if( !aTables[i].aRows ){ rc = SQLITE_NOMEM; goto fail; }
-    memset(aTables[i].aRows, 0, nr ? (sqlite3_uint64)nr * sizeof(ConstraintViolationRow) : 1);
-
-    for(j=0; j<nr; j++){
-      ConstraintViolationRow *r = &aTables[i].aRows[j];
-      rc = readViolationRow(&rd, r);
-      if( rc!=SQLITE_OK ) goto fail;
-    }
+    aTables[i].aRows = (ConstraintViolationRow*)aRows;
   }
 
   if( rd.err || rd.p != rd.end ){ rc = SQLITE_CORRUPT; goto fail; }
@@ -247,7 +247,7 @@ static int loadViolationTable(
   ProllyHash hash;
   u8 *data = 0; int nData = 0;
   DlByteReader rd;
-  int nTables, i, j, rc;
+  int nTables, i, rc;
 
   memset(pTable, 0, sizeof(*pTable));
   *pFound = 0;
@@ -267,42 +267,14 @@ static int loadViolationTable(
   }
 
   for(i=0; i<nTables; i++){
-    char *zName = 0;
-    int nr;
-    int isMatch;
-
-    rc = dlReadU16Name(&rd, &zName);
+    void *aRows = 0;
+    rc = dlMatchOrSkipNamedTable(&rd, zTableName, pFound,
+                                 &pTable->zName, &pTable->nRows, &aRows,
+                                 sizeof(ConstraintViolationRow), 1,
+                                 readViolationRowIO, skipViolationRowIO,
+                                 freeViolationRowIO);
     if( rc!=SQLITE_OK ) goto fail;
-    nr = dlReadU32(&rd);
-    if( rd.err || nr<0 ){
-      sqlite3_free(zName);
-      rc = SQLITE_CORRUPT; goto fail;
-    }
-    if( (sqlite3_uint64)nr > (sqlite3_uint64)(rd.end - rd.p) ){
-      sqlite3_free(zName);
-      rc = SQLITE_CORRUPT; goto fail;
-    }
-
-    isMatch = (*pFound==0 && zName && strcmp(zName, zTableName)==0);
-    if( isMatch ){
-      pTable->zName = zName;
-      zName = 0;
-      pTable->nRows = nr;
-      pTable->aRows = sqlite3_malloc64(nr ? (sqlite3_uint64)nr * sizeof(ConstraintViolationRow) : 1);
-      if( !pTable->aRows ){ rc = SQLITE_NOMEM; goto fail; }
-      memset(pTable->aRows, 0, nr ? (sqlite3_uint64)nr * sizeof(ConstraintViolationRow) : 1);
-      for(j=0; j<nr; j++){
-        rc = readViolationRow(&rd, &pTable->aRows[j]);
-        if( rc!=SQLITE_OK ) goto fail;
-      }
-      *pFound = 1;
-    }else{
-      sqlite3_free(zName);
-      for(j=0; j<nr; j++){
-        rc = skipViolationRow(&rd);
-        if( rc!=SQLITE_OK ) goto fail;
-      }
-    }
+    if( aRows ) pTable->aRows = (ConstraintViolationRow*)aRows;
   }
 
   if( rd.err || rd.p != rd.end ){ rc = SQLITE_CORRUPT; goto fail; }

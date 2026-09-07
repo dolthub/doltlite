@@ -100,17 +100,7 @@ static int testsRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
 }
 
 static int testsMaterialize(TestsVtab *p){
-  char *zErr = 0;
-  int rc;
-  if( sqlite3FindTable(p->db, "dolt_tests", "main") ) return SQLITE_OK;
-  rc = sqlite3_exec(p->db, zTestsCreate, 0, 0, &zErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(p->base.zErrMsg);
-    p->base.zErrMsg = sqlite3_mprintf("%s",
-        zErr ? zErr : sqlite3_errstr(rc));
-    sqlite3_free(zErr);
-  }
-  return rc;
+  return doltliteLazyCreateTable(&p->base, p->db, "dolt_tests", zTestsCreate);
 }
 
 static int testsBegin(sqlite3_vtab *pBase){

@@ -822,24 +822,38 @@ static int hashofResolveRefCatalog(
   return 0;
 }
 
-static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+typedef int (*HashofInCatalogFn)(
+  sqlite3 *db, const ProllyHash *pCatHash, const char *zName, char *pHex
+);
+
+static void hashofNamedObjectFunc(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv,
+  const char *zFn,
+  const char *zKind,
+  HashofInCatalogFn xLookup
+){
   sqlite3 *db;
-  const char *zTable;
+  const char *zName;
   ProllyHash catHash;
   char hex[PROLLY_HASH_SIZE*2+1];
+  char zErr[80];
   int rc;
 
   if( argc!=1 && argc!=2 ){
-    sqlite3_result_error(ctx, "dolt_hashof_table() takes 1 or 2 arguments", -1);
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s() takes 1 or 2 arguments", zFn);
+    sqlite3_result_error(ctx, zErr, -1);
     return;
   }
   if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
     sqlite3_result_null(ctx);
     return;
   }
-  zTable = (const char*)sqlite3_value_text(argv[0]);
-  if( !zTable || !*zTable ){
-    sqlite3_result_error(ctx, "dolt_hashof_table: table not found", -1);
+  zName = (const char*)sqlite3_value_text(argv[0]);
+  if( !zName || !*zName ){
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s: %s not found", zFn, zKind);
+    sqlite3_result_error(ctx, zErr, -1);
     return;
   }
   db = sqlite3_context_db_handle(ctx);
@@ -847,23 +861,31 @@ static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_valu
   if( argc==1 ){
     rc = doltliteFlushCatalogToHash(db, &catHash);
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_table: catalog flush failed", -1);
+      sqlite3_snprintf(sizeof(zErr), zErr, "%s: catalog flush failed", zFn);
+      sqlite3_result_error(ctx, zErr, -1);
       return;
     }
   }else{
-    if( hashofResolveRefCatalog(ctx, db, argv[1], "dolt_hashof_table", &catHash) ) return;
+    if( hashofResolveRefCatalog(ctx, db, argv[1], zFn, &catHash) ) return;
   }
 
-  rc = hashofTableInCatalog(db, &catHash, zTable, hex);
+  rc = xLookup(db, &catHash, zName, hex);
   if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_error(ctx, "dolt_hashof_table: table not found", -1);
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s: %s not found", zFn, zKind);
+    sqlite3_result_error(ctx, zErr, -1);
     return;
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(ctx, "dolt_hashof_table: table not found in catalog", -1);
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s: %s not found in catalog", zFn, zKind);
+    sqlite3_result_error(ctx, zErr, -1);
     return;
   }
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
+}
+
+static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  hashofNamedObjectFunc(ctx, argc, argv, "dolt_hashof_table", "table",
+                        hashofTableInCatalog);
 }
 
 static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -897,47 +919,8 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
 }
 
 static void doltliteHashofIndexFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
-  sqlite3 *db;
-  const char *zIndex;
-  ProllyHash catHash;
-  char hex[PROLLY_HASH_SIZE*2+1];
-  int rc;
-
-  if( argc!=1 && argc!=2 ){
-    sqlite3_result_error(ctx, "dolt_hashof_index() takes 1 or 2 arguments", -1);
-    return;
-  }
-  if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
-    sqlite3_result_null(ctx);
-    return;
-  }
-  zIndex = (const char*)sqlite3_value_text(argv[0]);
-  if( !zIndex || !*zIndex ){
-    sqlite3_result_error(ctx, "dolt_hashof_index: index not found", -1);
-    return;
-  }
-  db = sqlite3_context_db_handle(ctx);
-
-  if( argc==1 ){
-    rc = doltliteFlushCatalogToHash(db, &catHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_index: catalog flush failed", -1);
-      return;
-    }
-  }else{
-    if( hashofResolveRefCatalog(ctx, db, argv[1], "dolt_hashof_index", &catHash) ) return;
-  }
-
-  rc = hashofIndexInCatalog(db, &catHash, zIndex, hex);
-  if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_error(ctx, "dolt_hashof_index: index not found", -1);
-    return;
-  }
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(ctx, "dolt_hashof_index: index not found in catalog", -1);
-    return;
-  }
-  sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
+  hashofNamedObjectFunc(ctx, argc, argv, "dolt_hashof_index", "index",
+                        hashofIndexInCatalog);
 }
 
 static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){

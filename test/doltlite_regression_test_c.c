@@ -2697,6 +2697,92 @@ static void run_conflicts_blob_corruption(void){
   removeDbFiles(dbpath);
 }
 
+static int build_named_conflict_blob(u8 *buf, int nBuf){
+  static const u8 payload[] = "conflict-blob-payload";
+  DlByteWriter w;
+  int i;
+
+  dlWriterInit(&w, buf, nBuf);
+  dlWriteFramedHeader(&w, 'D', 'L', 'C', 1, 1);
+  dlWriteU16Name(&w, "t", 1);
+  dlWriteU32(&w, 2);
+  for(i=0; i<2; i++){
+    dlWriteU32Blob(&w, payload, (int)sizeof(payload));
+    dlWriteI64(&w, i+1);
+    dlWriteU32Blob(&w, payload, (int)sizeof(payload));
+    dlWriteU32Blob(&w, payload, (int)sizeof(payload));
+    dlWriteU32Blob(&w, payload, (int)sizeof(payload));
+  }
+  if( w.err ) return -1;
+  return (int)(w.p - buf);
+}
+
+static int build_named_violation_blob(u8 *buf, int nBuf){
+  static const u8 payload[] = "violation-blob-payload";
+  DlByteWriter w;
+  int i;
+
+  dlWriterInit(&w, buf, nBuf);
+  dlWriteFramedHeader(&w, 'D', 'C', 'V', 1, 1);
+  dlWriteU16Name(&w, "t", 1);
+  dlWriteU32(&w, 2);
+  for(i=0; i<2; i++){
+    dlWriteU8(&w, 2);
+    dlWriteU32Blob(&w, payload, (int)sizeof(payload));
+    dlWriteI64(&w, i+1);
+    dlWriteU32Blob(&w, payload, (int)sizeof(payload));
+    dlWriteU32Blob(&w, payload, (int)sizeof(payload));
+  }
+  if( w.err ) return -1;
+  return (int)(w.p - buf);
+}
+
+static void check_truncated_deserialize_does_not_leak(
+  const char *zKind,
+  int (*xDeserialize)(const u8*, int),
+  const u8 *blob,
+  int nFull
+){
+  sqlite3_int64 beforeBytes;
+  char zName[96];
+  int n, rc, nBad = 0;
+
+  sqlite3_snprintf(sizeof(zName), zName, "%s_full_blob_ok", zKind);
+  check(zName, nFull>0 && xDeserialize(blob, nFull)==SQLITE_OK);
+
+  (void)xDeserialize((const u8*)"", 0);
+  beforeBytes = sqlite3_memory_used();
+  for(n=0; n<nFull; n++){
+    rc = xDeserialize(blob, n);
+    if( rc!=SQLITE_CORRUPT ){
+      fprintf(stderr, "FAIL: %s prefix %d rc=%d\n", zKind, n, rc);
+      nBad++;
+    }
+  }
+  sqlite3_snprintf(sizeof(zName), zName, "%s_truncated_prefixes_corrupt", zKind);
+  check(zName, nBad==0);
+  sqlite3_snprintf(sizeof(zName), zName, "%s_truncated_prefixes_do_not_leak", zKind);
+  check(zName, sqlite3_memory_used()==beforeBytes);
+}
+
+static void run_conflicts_cv_truncated_deserialize_leak(void){
+  u8 conflictBlob[512];
+  u8 violationBlob[512];
+  int nConflict;
+  int nViolation;
+
+  printf("=== Conflicts/CV Truncated Deserialize Leak Test ===\n\n");
+  nConflict = build_named_conflict_blob(conflictBlob, (int)sizeof(conflictBlob));
+  nViolation = build_named_violation_blob(violationBlob, (int)sizeof(violationBlob));
+  check("conflict_blob_built", nConflict>0);
+  check("violation_blob_built", nViolation>0);
+  check_truncated_deserialize_does_not_leak(
+    "conflicts", doltliteDeserializeConflictsForTest, conflictBlob, nConflict);
+  check_truncated_deserialize_does_not_leak(
+    "constraint_violations", doltliteDeserializeConstraintViolationsForTest,
+    violationBlob, nViolation);
+}
+
 static void run_status_error_propagation(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -14167,6 +14253,7 @@ static const RegressionCase aCases[] = {
   { "refs_blob_corruption", "Refs Blob Corruption Test", run_refs_blob_corruption },
   { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation },
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },
+  { "conflicts_cv_truncated_deserialize_leak", "Conflicts/CV Truncated Deserialize Leak Test", run_conflicts_cv_truncated_deserialize_leak },
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
   { "status_many_table_renames", "Status Many Table Renames Test", run_status_many_table_renames },
   { "refs_commit_merges_concurrent_peer_refs", "Refs Commit Merges Concurrent Peer Refs Test", run_refs_commit_merges_concurrent_peer_refs },

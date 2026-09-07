@@ -60,5 +60,11 @@ int fetchRowByPkFromTable(
   const u8 *pPkRec, int nPkRec, int nPkField,
   u8 **ppKey, int *pnKey, u8 **ppVal, int *pnVal
 );
+int scanMergeColumnFlagViolations(
+  sqlite3 *db, const char *zTable,
+  struct TableEntry *aAnc, int nAnc,
+  char **azCols, char **azExtra, int nCols,
+  u8 cvType, int *pnFound
+);
 
 #endif /* DOLTLITE_MERGE_CONSTRAINTS_INT_H */
