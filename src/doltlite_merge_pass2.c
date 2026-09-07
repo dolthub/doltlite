@@ -266,32 +266,8 @@ int mergeIndexColumnGoneFrom(
   const char *zSideTableSql,
   char **pzColumn
 ){
-  MergeIndexColCtx ctx;
-  int rc;
-
-  if( pzColumn ) *pzColumn = 0;
-  if( !zIndexSql || !zAncTableSql || !zSideTableSql ) return 0;
-
-  memset(&ctx, 0, sizeof(ctx));
-  if( parseColumns(zAncTableSql, &ctx.aAnc, &ctx.nAnc)!=SQLITE_OK ) return 0;
-  if( parseColumns(zSideTableSql, &ctx.aSide, &ctx.nSide)!=SQLITE_OK ){
-    freeColumns(ctx.aAnc, ctx.nAnc);
-    return 0;
-  }
-
-  rc = mergeIndexEachColumn(zIndexSql, mergeIndexColSurvives, &ctx);
-  freeColumns(ctx.aAnc, ctx.nAnc);
-  freeColumns(ctx.aSide, ctx.nSide);
-  if( rc!=SQLITE_OK || !ctx.zMissing ){
-    sqlite3_free(ctx.zMissing);
-    return 0;
-  }
-  if( pzColumn ){
-    *pzColumn = ctx.zMissing;
-  }else{
-    sqlite3_free(ctx.zMissing);
-  }
-  return 1;
+  return mergeIndexColumnScan(zIndexSql, zAncTableSql, zSideTableSql,
+                              mergeIndexColSurvives, pzColumn);
 }
 
 

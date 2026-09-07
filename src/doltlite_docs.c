@@ -210,12 +210,6 @@ static int docsColumn(sqlite3_vtab_cursor *pCursor,
   return SQLITE_OK;
 }
 
-static int docsRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  (void)pCursor;
-  *pRowid = 0;
-  return SQLITE_OK;
-}
-
 static int docsClose(sqlite3_vtab_cursor *pCursor){
   DocsCursor *c = (DocsCursor*)pCursor;
   sqlite3_finalize(c->pStmt);
@@ -281,7 +275,7 @@ static int docsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
 static sqlite3_module doltliteDocsModule = {
   0, 0, docsConnect, docsBestIndex, doltliteVtabDisconnect, 0,
   docsOpen, docsClose, docsFilter, docsNext, docsEof,
-  docsColumn, docsRowid,
+  docsColumn, doltliteVtabZeroRowid,
   docsUpdate, docsBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
