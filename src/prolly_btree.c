@@ -714,7 +714,40 @@ int sqlite3BtreeOpen(
       if( !hasContent ) useOrig = 1;
     }
   }
-  if( !useOrig ){
+  /* Stock shares an in-memory database between connections that name it:
+  ** mode=memory (or :memory:) under shared cache, or the memdb VFS with a
+  ** leading slash. Route those onto the shared-memory VFS as an ordinary
+  ** named file so every connection reads and writes the same store. */
+  if( !useOrig && sqlite3IsMemdb(pVfs) && zFilename[0]!='/' ){
+    /* A slash-less memdb name is private in stock too; keep it in the
+    ** connection's own memory store. */
+    pVfs = sqlite3_vfs_find(0);
+    zOpenFilename = ":memory:";
+    vfsFlags |= SQLITE_OPEN_MEMORY;
+  }else if( !useOrig
+   && (sqlite3IsMemdb(pVfs)
+       || (((vfsFlags & SQLITE_OPEN_SHAREDCACHE)!=0
+            || ((vfsFlags & SQLITE_OPEN_PRIVATECACHE)==0
+                && sqlite3GlobalConfig.sharedCacheEnabled))
+           && ((vfsFlags & SQLITE_OPEN_MEMORY)!=0
+               || strcmp(zFilename, ":memory:")==0))) ){
+    int n = sqlite3Strlen30(zFilename);
+    int bSlash = zFilename[0]=='/';
+    char *z = sqlite3_malloc(n + 3);
+    if( !z ) return SQLITE_NOMEM;
+    z[0] = '/';
+    memcpy(z + (bSlash ? 0 : 1), zFilename, n);
+    z[n + (bSlash ? 0 : 1)] = 0;
+    z[n + (bSlash ? 0 : 1) + 1] = 0;
+    zStoreFilename = z;
+    zOpenFilename = z;
+    pVfs = sqlite3DoltliteSharedMemVfs();
+    /* mode=memory replaces the access mode; the store still needs to create. */
+    vfsFlags &= ~SQLITE_OPEN_MEMORY;
+    if( (vfsFlags & SQLITE_OPEN_READONLY)==0 ){
+      vfsFlags |= SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+    }
+  }else if( !useOrig ){
     rc = doltliteResolveOpenBranchPath(pVfs, zFilename, &zStoreFilename,
                                        &zBranchFromPath);
     if( rc!=SQLITE_OK ) return rc;

@@ -364,6 +364,7 @@ int chunkStoreOpen(
   }
   cs->file.pVfs = pVfs;
   cs->isBuffer = sqlite3IsDoltliteMemdb(pVfs);
+  cs->isSharedMemory = sqlite3IsDoltliteSharedMemVfs(pVfs);
   CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   cs->pGraphLockName = 0;
   cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
@@ -619,8 +620,8 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   char *lockName = 0;
   int lockHeld;
 
-  if( cs->isMemory || cs->isBuffer || cs->readOnly || cs->movedReadOnly
-   || cs->corruptMidStream ){
+  if( cs->isMemory || cs->isBuffer || cs->isSharedMemory || cs->readOnly
+   || cs->movedReadOnly || cs->corruptMidStream ){
     return;
   }
   if( !cs->file.pFile || !cs->file.zFilename ){

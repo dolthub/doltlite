@@ -202,6 +202,7 @@ struct ChunkStore {
   u8 adoptReplacement;
   u8 isMemory;
   u8 isBuffer;
+  u8 isSharedMemory;      /* named memory file shared between connections */
   u8 fullFsync;           /* PRAGMA fullfsync -> SQLITE_SYNC_FULL */
   u8 noSync;              /* PRAGMA synchronous=OFF: skip syncs */
   u8 snapshotPinned;

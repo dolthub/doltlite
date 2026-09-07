@@ -1091,7 +1091,8 @@ static void doltliteGcFunc(
     return;
   }
 
-  if( !chunkFileGetFilename(&cs->file) || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
+  if( !chunkFileGetFilename(&cs->file) || cs->isSharedMemory
+   || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     sqlite3_result_text(context, "0 chunks removed, 0 chunks kept (in-memory)", -1, SQLITE_TRANSIENT);
     return;
   }
@@ -1165,7 +1166,7 @@ int doltliteGcVacuumInto(
   *pzPhase = 0;
   if( !db || iDb<0 || iDb>=db->nDb ) return SQLITE_ERROR;
   cs = doltliteBtreeChunkStore(db->aDb[iDb].pBt);
-  if( !cs || !chunkFileGetFilename(&cs->file)
+  if( !cs || !chunkFileGetFilename(&cs->file) || cs->isSharedMemory
    || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     *pzPhase = "cannot VACUUM an in-memory database INTO a file";
     return SQLITE_ERROR;
