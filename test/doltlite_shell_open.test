@@ -1,0 +1,83 @@
+# The doltlite CLI's open paths: -deserialize / .open --deserialize load the
+# image (the parsed filename used to be freed before the deserialize block
+# read it, so both silently produced an empty database), .open --zip reads
+# the archive through the same pointer, the substitute in-memory database
+# still appears when a path cannot be opened, and db@branch selects the
+# branch. Needs the CLI next to the testfixture; tester.tcl skips otherwise.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_shell_open
+set CLI [test_find_cli]
+db close
+
+forcedelete stock.db dolt.db br.db
+sqlite3 dbs file:stock.db?doltlite_engine=sqlite -uri 1
+dbs eval {
+  CREATE TABLE t(a INTEGER, b INTEGER, c, PRIMARY KEY(a,b));
+  INSERT INTO t VALUES(1,10,'x'),(2,20,'y');
+}
+dbs close
+sqlite3 dbd dolt.db
+dbd eval { CREATE TABLE q(k INT PRIMARY KEY, v); INSERT INTO q VALUES(7,'seven') }
+dbd close
+
+# 1: -deserialize on the command line, stock and doltlite images
+do_test 1.1 {
+  catchcmd "-deserialize stock.db" {SELECT count(*) FROM sqlite_master; SELECT a, b, c FROM t ORDER BY a;}
+} {0 {2
+1|10|x
+2|20|y}}
+do_test 1.2 {
+  catchcmd "-deserialize dolt.db" {SELECT v FROM q;}
+} {0 seven}
+do_test 1.3 {
+  catchcmd "-deserialize stock.db" {INSERT INTO t VALUES(3,30,'z'); SELECT count(*) FROM t; PRAGMA integrity_check;}
+} {0 {3
+ok}}
+
+# 2: .open --deserialize inside a session, and a second .open replaces it
+do_test 2.1 {
+  catchcmd ":memory:" {.open --deserialize stock.db
+SELECT c FROM t WHERE a=2 AND b=20;
+.open --deserialize dolt.db
+SELECT v FROM q;}
+} {0 {y
+seven}}
+do_test 2.2 {
+  catchcmd ":memory:" {.open --deserialize does-not-exist.db
+SELECT count(*) FROM sqlite_master;}
+} {0 0}
+
+# 3: .open --zip
+do_test 3.1 {
+  forcedelete z.zip hello.txt
+  set fd [open hello.txt w]; puts $fd hello; close $fd
+  catchcmd ":memory:" {CREATE VIRTUAL TABLE zz USING zipfile('z.zip');
+INSERT INTO zz(name, data) VALUES('hello.txt', 'hello');
+.open --zip z.zip
+SELECT name, data FROM zip;}
+} {0 hello.txt|hello}
+
+# 4: an unopenable path falls back to a substitute in-memory database
+do_test 4.1 {
+  set res [catchcmd ":memory:" {.open /nonexistent-dir/x.db
+SELECT 1+1;}]
+  list [regexp {substitute in-memory database} $res] [regexp {(^|\n)2(\n|$)} [lindex $res 1]]
+} {1 1}
+
+# 5: db@branch opens the branch and a missing branch is an error
+do_test 5.1 {
+  catchcmd "br.db" {CREATE TABLE b(x);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT length(dolt_commit('-Am','x')) > 0;}
+  catchcmd "br.db@feat" {SELECT active_branch();}
+} {0 feat}
+do_test 5.2 {
+  set res [catchcmd "br.db@nope" {SELECT 1;}]
+  list [lindex $res 0] [regexp {branch or revision "nope" not found} $res]
+} {1 1}
+
+sqlite3 db test.db
+finish_test

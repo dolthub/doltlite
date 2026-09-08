@@ -895,6 +895,13 @@ For a DoltLite-format main database, the compatibility contract is:
   follows the catalog, not insertion order. `CHECK` constraint error messages
   follow that canonical form. Query results and constraint enforcement are
   unchanged.
+- The `doltlite` CLI is the SQLite shell with a few deliberate differences:
+  `.schema` and `.dump` list objects in catalog order and print the
+  canonical `CREATE` text, the prompt is `doltlite> `, and `-version` prints
+  the DoltLite version. Everything else, including `-deserialize`,
+  `.open --deserialize|--zip|--hexdb`, `db@branch` open syntax and the
+  substitute in-memory database on an unopenable path, follows the upstream
+  shell; the upstream `shell*.test` files run against the CLI in CI.
 - `sqlite3_backup_step()` copies a file-backed DoltLite database, including an
   attached database, as one operation; its page-count argument is not
   incremental. File-backed and in-memory DoltLite databases can be copied in

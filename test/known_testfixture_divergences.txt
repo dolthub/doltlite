@@ -5663,3 +5663,35 @@ filefmt filefmt-1.8 class=intentional  # SQLite page-header/format bytes; CTLD c
 filefmt filefmt-2.1.2 class=intentional  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
 filefmt filefmt-2.1.6 class=intentional  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
 filefmt filefmt-2.2.2 class=intentional  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
+
+# shell bucket — upstream shell*.test driven through the doltlite CLI (the
+# regression jobs alias sqlite3 -> doltlite for this bucket only).
+# .import ignores the display mode's separators (issue 2711, to match
+# sqlite3): the -list / .mode ascii import cases split on ',' instead of the
+# mode separator, and the mode's non-ASCII separator is never seen.
+shell2 shell2-1.4.9 class=engine-gap issue=2706  # .clone errors on sqlite_sequence; clone content is right
+shell2 shell2-1.4.11 class=engine-gap issue=2711  # .import ignores the display mode's 0xFF separator
+shell5 shell5-1.4.4 class=engine-gap issue=2711  # .import comma split; '|' rows read as one column
+shell5 shell5-1.4.5 class=engine-gap issue=2711  # .import comma split
+shell5 shell5-1.4.6 class=engine-gap issue=2711  # .import comma split
+shell5 shell5-1.4.8.1 class=engine-gap issue=2711  # .import comma split
+shell5 shell5-1.4.8.2 class=engine-gap issue=2711  # cascade of 1.4.8.1
+shell5 shell5-1.4.9.1 class=engine-gap issue=2711  # .import comma split
+shell5 shell5-1.4.9.2 class=engine-gap issue=2711  # cascade of 1.4.9.1
+shell5 shell5-1.4.10.1 class=engine-gap issue=2711  # .import comma split
+shell5 shell5-1.4.10.2 class=engine-gap issue=2711  # cascade of 1.4.10.1
+shell5 shell5-1.4.11 class=engine-gap issue=2711  # .import comma split (BOM case)
+shell5 shell5-1.4.12 class=engine-gap issue=2711  # .import comma split (BOM + quoted field)
+shell5 shell5-1.5.1 class=engine-gap issue=2711  # .import comma split (long field)
+shell5 shell5-3.1 class=engine-gap issue=2711  # .mode ascii import still splits on ','
+shell5 shell5-3.2 class=engine-gap issue=2711  # cascade of 3.1
+shell5 shell5-7.1 class=engine-gap issue=2711  # .import comma split into a table with a computed column
+# The CLI leaves DEFENSIVE off (issue 2712, to match sqlite3); stock rejects
+# the sqlite_master write in the dump.
+shell9 shell9-1.2.2 class=engine-gap issue=2712  # .read of a dump that writes sqlite_master succeeds
+# sqlite_master is a catalog projection: .schema/.dump list objects in
+# catalog (name) order and print canonical CREATE text; the prompt is
+# "doltlite> " (SQLITE_PS1 override).
+shellB shellB-dotcmd01.sql class=intentional  # .schema lists sqlite_stat1 before t1 (catalog order)
+shellB shellB-import01.sql class=intentional  # canonical CREATE text for the .import-created table
+shellB shellB-shell-prompt.sql class=intentional  # doltlite prompt template
