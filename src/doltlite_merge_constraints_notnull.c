@@ -54,6 +54,28 @@ static int loadNotNullColumns(
   return SQLITE_OK;
 }
 
+static int notNullWalkTable(
+  sqlite3 *db,
+  const char *zTable,
+  const char *zSql,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  void *pCtx
+){
+  char **azCols = 0;
+  int nCols = 0;
+  int rc;
+  (void)zSql; (void)aCur; (void)nCur;
+  rc = loadNotNullColumns(db, zTable, &azCols, &nCols);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nCols==0 ) return SQLITE_OK;
+  rc = scanMergeColumnFlagViolations(
+      db, zTable, aAnc, nAnc, azCols, 0, nCols,
+      DOLTLITE_CV_NOT_NULL, (int*)pCtx);
+  doltliteFreeNameList(azCols, nCols);
+  return rc;
+}
+
 int doltliteDetectMergeNotNullViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -62,70 +84,9 @@ int doltliteDetectMergeNotNullViolations(
   const char **azTables,
   int nTables
 ){
-  sqlite3_stmt *pTbls = 0;
-  struct TableEntry *aAnc = 0;
-  int nAnc = 0;
-  struct TableEntry *aCur = 0;
-  int nCur = 0;
-  int rc;
-  int stepRc;
-
   if( pnFound ) *pnFound = 0;
-
-  rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
-                                      &aCur, &nCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = sqlite3_prepare_v2(db,
-      "SELECT name FROM main.sqlite_master WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
-      -1, &pTbls, 0);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeCatalog(aAnc, nAnc);
-    doltliteFreeCatalog(aCur, nCur);
-    return rc;
-  }
-
-  while( (stepRc = sqlite3_step(pTbls))==SQLITE_ROW ){
-    const char *zTableRaw = (const char*)sqlite3_column_text(pTbls, 0);
-    char *zTable;
-    char **azCols = 0;
-    int nCols = 0;
-
-    if( !zTableRaw ) continue;
-    zTable = sqlite3_mprintf("%s", zTableRaw);
-    if( !zTable ){ rc = SQLITE_NOMEM; break; }
-    if( !cvTableAllowed(zTable, azTables, nTables)
-     || !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable) ){
-      sqlite3_free(zTable);
-      continue;
-    }
-
-    rc = loadNotNullColumns(db, zTable, &azCols, &nCols);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zTable);
-      break;
-    }
-    if( nCols==0 ){
-      sqlite3_free(zTable);
-      continue;
-    }
-
-    rc = scanMergeColumnFlagViolations(
-        db, zTable, aAnc, nAnc, azCols, 0, nCols,
-        DOLTLITE_CV_NOT_NULL, pnFound);
-    doltliteFreeNameList(azCols, nCols);
-    sqlite3_free(zTable);
-    if( rc!=SQLITE_OK ) break;
-  }
-  if( rc==SQLITE_OK && stepRc!=SQLITE_DONE && stepRc!=SQLITE_ROW ){
-    rc = stepRc;
-  }
-  rc = finishConstraintStmt(pTbls, rc);
-  doltliteFreeCatalog(aAnc, nAnc);
-  doltliteFreeCatalog(aCur, nCur);
-  setConstraintError(db, pzErrMsg, rc);
-  return rc;
+  return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
+                             1, 0, notNullWalkTable, pnFound);
 }
 
 #endif

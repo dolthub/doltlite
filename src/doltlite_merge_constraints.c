@@ -111,7 +111,7 @@ int catalogTableChanged(
 }
 
 
-int cvTableAllowed(
+static int cvTableAllowed(
   const char *zTable,
   const char **azTables,
   int nTables
@@ -125,7 +125,7 @@ int cvTableAllowed(
   return 0;
 }
 
-int loadAncestorAndCurrentCatalogs(
+static int loadAncestorAndCurrentCatalogs(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
   struct TableEntry **paAnc, int *pnAnc,
@@ -157,6 +157,82 @@ int loadAncestorAndCurrentCatalogs(
     *paAnc = 0;
     *pnAnc = 0;
   }
+  return rc;
+}
+
+int walkMergeUserTables(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  char **pzErrMsg,
+  const char **azTables,
+  int nTables,
+  int skipUnchanged,
+  int wantSql,
+  MergeUserTableWalk xWalk,
+  void *pCtx
+){
+  sqlite3_stmt *pTbls = 0;
+  struct TableEntry *aAnc = 0;
+  int nAnc = 0;
+  struct TableEntry *aCur = 0;
+  int nCur = 0;
+  int rc;
+  int stepRc;
+
+  rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
+                                      &aCur, &nCur);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3_prepare_v2(db,
+      wantSql
+        ? "SELECT name, sql FROM main.sqlite_master WHERE type='table' "
+          "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'"
+        : "SELECT name FROM main.sqlite_master WHERE type='table' "
+          "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+      -1, &pTbls, 0);
+  if( rc!=SQLITE_OK ){
+    doltliteFreeCatalog(aAnc, nAnc);
+    doltliteFreeCatalog(aCur, nCur);
+    return rc;
+  }
+
+  while( (stepRc = sqlite3_step(pTbls))==SQLITE_ROW ){
+    const char *zTableRaw = (const char*)sqlite3_column_text(pTbls, 0);
+    const char *zSqlRaw = wantSql ? (const char*)sqlite3_column_text(pTbls, 1) : 0;
+    char *zTable;
+    char *zSql = 0;
+
+    if( !zTableRaw ) continue;
+    if( wantSql && !zSqlRaw ) continue;
+    zTable = sqlite3_mprintf("%s", zTableRaw);
+    if( !zTable ){ rc = SQLITE_NOMEM; break; }
+    if( wantSql ){
+      zSql = sqlite3_mprintf("%s", zSqlRaw);
+      if( !zSql ){
+        sqlite3_free(zTable);
+        rc = SQLITE_NOMEM;
+        break;
+      }
+    }
+    if( !cvTableAllowed(zTable, azTables, nTables)
+     || (skipUnchanged
+         && !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable)) ){
+      sqlite3_free(zTable);
+      sqlite3_free(zSql);
+      continue;
+    }
+    rc = xWalk(db, zTable, zSql, aAnc, nAnc, aCur, nCur, pCtx);
+    sqlite3_free(zTable);
+    sqlite3_free(zSql);
+    if( rc!=SQLITE_OK ) break;
+  }
+  if( rc==SQLITE_OK && stepRc!=SQLITE_DONE && stepRc!=SQLITE_ROW ){
+    rc = stepRc;
+  }
+  rc = finishConstraintStmt(pTbls, rc);
+  doltliteFreeCatalog(aAnc, nAnc);
+  doltliteFreeCatalog(aCur, nCur);
+  setConstraintError(db, pzErrMsg, rc);
   return rc;
 }
 

@@ -29,11 +29,24 @@ int catalogTableChanged(
   struct TableEntry *aCur, int nCur,
   const char *zTable
 );
-int cvTableAllowed(const char *zTable, const char **azTables, int nTables);
-int loadAncestorAndCurrentCatalogs(
-  sqlite3 *db, const ProllyHash *pAncCatHash,
-  struct TableEntry **paAnc, int *pnAnc,
-  struct TableEntry **paCur, int *pnCur
+typedef int (*MergeUserTableWalk)(
+  sqlite3 *db,
+  const char *zTable,
+  const char *zSql,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  void *pCtx
+);
+int walkMergeUserTables(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  char **pzErrMsg,
+  const char **azTables,
+  int nTables,
+  int skipUnchanged,
+  int wantSql,
+  MergeUserTableWalk xWalk,
+  void *pCtx
 );
 u8 *buildRecordFromStmtCols(
   sqlite3_stmt *pStmt, int iStart, int nField, int *pnOut
