@@ -261,6 +261,27 @@ static void test_reader_after_peer_restore(void){
         execSql(reader, "CREATE TABLE must_not_land(x);")==SQLITE_READONLY);
 
   sqlite3_close(reader);
+  reader = 0;
+  remove(path);
+  check("mp_restore_reuse_open",
+        sqlite3_open(foreignPath, &foreign)==SQLITE_OK);
+  check("mp_restore_reuse_seed",
+        execSql(foreign,
+          "CREATE TABLE fresh_path(x);"
+          "SELECT dolt_commit('-A','-m','fresh path');")==SQLITE_OK);
+  sqlite3_close(foreign);
+  foreign = 0;
+  check("mp_restore_reuse_install", rename(foreignPath, path)==0);
+  check("mp_restore_reuse_reader_open",
+        sqlite3_open(path, &reader)==SQLITE_OK);
+  check("mp_restore_reuse_reader_read",
+        execSql(reader, "SELECT * FROM fresh_path;")==SQLITE_OK);
+  check("mp_restore_reuse_current_rename", rename(path, foreignPath)==0);
+  check("mp_restore_reuse_old_rename", rename(saved, path)==0);
+  check("mp_restore_stale_proof_rejected",
+        execSql(reader, "CREATE TABLE must_not_return(x);")==SQLITE_READONLY);
+
+  sqlite3_close(reader);
   remove(path);
   remove(source);
   remove(saved);

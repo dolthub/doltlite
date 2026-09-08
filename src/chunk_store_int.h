@@ -38,6 +38,6 @@ int csManifestHashStateOffsetless(const u8 *aBuf);
 int csValidateWalRootManifest(const ChunkStore *cs, const u8 *aBuf,
                               i64 iRootOffset);
 int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut);
-void chunkStoreRefreshReplacementProof(ChunkStore *cs);
+int chunkStoreRefreshReplacementProof(ChunkStore *cs);
 
 #endif /* CHUNK_STORE_INT_H */

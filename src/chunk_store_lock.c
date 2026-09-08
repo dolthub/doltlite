@@ -138,79 +138,70 @@ void csFileUnlock(sqlite3_file *pFile, char **pzName){
   }
 }
 
-#define CS_REPLACEMENT_PROOF_MAGIC 0x52504c44
-#define CS_REPLACEMENT_PROOF_SIZE (4 + PROLLY_HASH_SIZE)
+#define CS_REPLACEMENT_PROOF_MAGIC 0x32504c44
+#define CS_REPLACEMENT_PROOF_SIZE (4 + 2*PROLLY_HASH_SIZE)
 
 /* Backup changes database identity. Its current refs hash in the graph-lock
-** sidecar lets stale peers follow that sanctioned replacement; later commits
+** sidecar lets stale peers follow that sanctioned replacement; later GC runs
 ** advance the proof so an unrelated file at the path remains untrusted. */
 static int csReadReplacementProof(
   ChunkStore *cs,
-  ProllyHash *pProof,
+  ProllyHash *pFrom,
+  ProllyHash *pTo,
   int *pValid
 ){
   u8 aBuf[CS_REPLACEMENT_PROOF_SIZE];
   int rc;
 
   *pValid = 0;
-  memset(pProof, 0, sizeof(*pProof));
+  memset(pFrom, 0, sizeof(*pFrom));
+  memset(pTo, 0, sizeof(*pTo));
   if( !CS_GRAPH_LOCK(cs) ) return SQLITE_OK;
   rc = sqlite3OsRead(CS_GRAPH_LOCK(cs), aBuf, sizeof(aBuf), 0);
   if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
   if( CS_READ_U32(aBuf)==CS_REPLACEMENT_PROOF_MAGIC ){
-    memcpy(pProof->data, aBuf+4, PROLLY_HASH_SIZE);
-    *pValid = !prollyHashIsEmpty(pProof);
+    memcpy(pFrom->data, aBuf+4, PROLLY_HASH_SIZE);
+    memcpy(pTo->data, aBuf+4+PROLLY_HASH_SIZE, PROLLY_HASH_SIZE);
+    *pValid = !prollyHashIsEmpty(pFrom) && !prollyHashIsEmpty(pTo);
   }
   return SQLITE_OK;
 }
 
 static int csWriteReplacementProof(
   ChunkStore *cs,
-  const ProllyHash *pProof
+  const ProllyHash *pFrom,
+  const ProllyHash *pTo
 ){
   u8 aBuf[CS_REPLACEMENT_PROOF_SIZE];
-  int rc;
 
-  if( prollyHashIsEmpty(pProof) ) return SQLITE_OK;
+  if( prollyHashIsEmpty(pFrom) || prollyHashIsEmpty(pTo) ) return SQLITE_OK;
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
   CS_WRITE_U32(aBuf, CS_REPLACEMENT_PROOF_MAGIC);
-  memcpy(aBuf+4, pProof->data, PROLLY_HASH_SIZE);
-  rc = sqlite3OsWrite(CS_GRAPH_LOCK(cs), aBuf, sizeof(aBuf), 0);
-  if( rc==SQLITE_OK ) cs->replacementProofActive = 1;
-  return rc;
+  memcpy(aBuf+4, pFrom->data, PROLLY_HASH_SIZE);
+  memcpy(aBuf+4+PROLLY_HASH_SIZE, pTo->data, PROLLY_HASH_SIZE);
+  return sqlite3OsWrite(CS_GRAPH_LOCK(cs), aBuf, sizeof(aBuf), 0);
 }
 
-static void chunkStoreLoadReplacementProofState(ChunkStore *cs){
-  ProllyHash proof;
+int chunkStoreRefreshReplacementProof(ChunkStore *cs){
+  ProllyHash from;
+  ProllyHash to;
+  int has = 0;
   int valid = 0;
-  if( csReadReplacementProof(cs, &proof, &valid)==SQLITE_OK && valid ){
-    cs->replacementProofActive = 1;
-  }
+  int rc = csReadReplacementProof(cs, &from, &to, &valid);
+  if( rc!=SQLITE_OK || !valid ) return rc;
+  rc = chunkStoreHas(cs, &to, &has);
+  if( rc!=SQLITE_OK || !has ) return rc;
+  return csWriteReplacementProof(cs, &from, &cs->refs.refsHash);
 }
 
-void chunkStoreRefreshReplacementProof(ChunkStore *cs){
-  int rc;
-  if( !cs->replacementProofActive ) return;
-  rc = csWriteReplacementProof(cs, &cs->refs.refsHash);
-  if( rc!=SQLITE_OK ){
-    sqlite3_log(SQLITE_NOTICE,
-                "doltlite: unable to refresh replacement proof: %d", rc);
-  }
-}
-
-int chunkStorePublishPathReplacementProof(ChunkStore *cs){
-  ChunkStore candidate;
-  ProllyHash proof;
-  int rc;
-
+int chunkStorePublishPathReplacementProof(
+  ChunkStore *cs,
+  const ProllyHash *pFrom,
+  const ProllyHash *pTo
+){
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
-  rc = chunkStoreOpen(&candidate, cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
-  if( rc!=SQLITE_OK ) return rc;
-  proof = candidate.refs.refsHash;
-  chunkStoreClose(&candidate);
-  return csWriteReplacementProof(cs, &proof);
+  return csWriteReplacementProof(cs, pFrom, pTo);
 }
 
 static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
@@ -234,7 +225,6 @@ static int csLockForReplacementProof(ChunkStore *cs, int *pAcquired){
   if( rc==SQLITE_OK ){
     cs->lockDepth = 1;
     *pAcquired = 1;
-    chunkStoreLoadReplacementProofState(cs);
   }
   if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
   return rc;
@@ -439,7 +429,6 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     return rc;
   }
   cs->lockDepth = 1;
-  chunkStoreLoadReplacementProofState(cs);
   rc = csNoteMovedUnderLock(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
@@ -492,7 +481,8 @@ static int csStoreHasAnyBranchTip(ChunkStore *pCand, const RefsTable *rt,
 ** we remember. No proof: upstream read-only. */
 static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   ChunkStore cand;
-  ProllyHash proof;
+  ProllyHash from;
+  ProllyHash to;
   int acquired = 0;
   int valid = 0;
   int rc;
@@ -513,10 +503,10 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   if( rc==SQLITE_OK ){
     rc = csStoreHasAnyBranchTip(&cand, &cs->refs, pIsOurs);
     if( rc==SQLITE_OK && !*pIsOurs ){
-      rc = csReadReplacementProof(cs, &proof, &valid);
-      if( rc==SQLITE_OK && valid ){
-        rc = chunkStoreHas(&cand, &proof, pIsOurs);
-        if( rc==SQLITE_OK ) cs->replacementProofActive = 1;
+      rc = csReadReplacementProof(cs, &from, &to, &valid);
+      if( rc==SQLITE_OK && valid
+       && prollyHashCompare(&cs->refs.committedRefsHash, &from)==0 ){
+        rc = chunkStoreHas(&cand, &to, pIsOurs);
       }
     }
     chunkStoreClose(&cand);

@@ -200,7 +200,6 @@ struct ChunkStore {
   /* One-shot: adopt the path on next refresh. Only the installer may set
   ** this (backup dest is replaced on purpose). */
   u8 adoptReplacement;
-  u8 replacementProofActive; /* Lock sidecar carries sanctioned refs. */
   u8 isMemory;
   u8 isBuffer;
   u8 isSharedMemory;      /* named memory file shared between connections */
@@ -247,7 +246,11 @@ void chunkStoreUnlock(ChunkStore *cs);
        || ((cs)->pGraphLockFile!=0 && (cs)->lockDepth>0) ); \
 }while(0)
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
-int chunkStorePublishPathReplacementProof(ChunkStore *cs);
+int chunkStorePublishPathReplacementProof(
+  ChunkStore *cs,
+  const ProllyHash *pFrom,
+  const ProllyHash *pTo
+);
 
 int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                        ProllyHash *pCatHash,

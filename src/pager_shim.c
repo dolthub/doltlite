@@ -1368,10 +1368,8 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     if( rc==SQLITE_OK ){
       doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
       zPreparedBranch = 0;
-      if( chunkStorePublishPathReplacementProof(destCs)!=SQLITE_OK ){
-        sqlite3_log(SQLITE_NOTICE,
-                    "doltlite: unable to publish replacement proof");
-      }
+      (void)chunkStorePublishPathReplacementProof(
+          destCs, &destCs->refs.committedRefsHash, &srcCs->refs.refsHash);
     }
 #if SQLITE_OS_WIN
     {

@@ -527,7 +527,6 @@ static int csCommitToFile(ChunkStore *cs){
         checkpointRc);
     }
   }
-  chunkStoreRefreshReplacementProof(cs);
   csFileUnlock(lockFd, &lockName);
   return SQLITE_OK;
 
