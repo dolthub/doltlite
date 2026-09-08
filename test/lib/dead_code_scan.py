@@ -9,8 +9,8 @@ D: non-static function with no other .c mention. A header prototype
    Btree vtable methods (prollyBtree* / origBtree*) stay non-static:
    other TUs call them through the ops table, not by name.
 E: non-static prototype in an owned header that never appears in any .c.
-F: #define in an owned header whose identifier never appears elsewhere
-   (include guards skipped).
+F: #define in an owned header or owned .c whose identifier never appears
+   elsewhere (include guards skipped).
 G: two owned .c functions have identical normalized bodies (whitespace
    collapsed, length >= MIN_CLONE_BODY), across files or same-file aliases.
 H: non-static .c function whose body is a single return otherFn(...) and
@@ -88,6 +88,7 @@ SRC_GLOBS = (
     "remotesrv_main.c",
     "pager_shim.c",
     "sortkey.c",
+    "btree_orig_api.c",
 )
 OWNED_HDR_GLOBS = (
     "doltlite*.h",
@@ -96,6 +97,8 @@ OWNED_HDR_GLOBS = (
     "pager_shim.h",
     "sortkey.h",
     "record_codec.h",
+    "btree_orig_api.h",
+    "btree_orig_prefix.h",
 )
 MIN_CLONE_BODY = 100
 
@@ -387,14 +390,15 @@ def scan_unused_prototypes(hdrs: list[str], corpus: list[str], texts: dict[str, 
     return dead
 
 
-def scan_unused_macros(hdrs: list[str], corpus: list[str], texts: dict[str, str],
+def scan_unused_macros(paths: list[str], corpus: list[str], texts: dict[str, str],
                        idents: dict[str, set[str]], counts: dict[str, Counter]) -> list[str]:
     dead: list[str] = []
-    for path in hdrs:
+    for path in paths:
         raw = texts.get(path)
         if raw is None:
             continue
         stripped = strip_comments(raw)
+        kind = "header" if path.endswith(".h") else "source"
         for match in MACRO.finditer(stripped):
             name = match.group(1)
             if name.endswith("_H") or name.endswith("_H_"):
@@ -403,7 +407,7 @@ def scan_unused_macros(hdrs: list[str], corpus: list[str], texts: dict[str, str]
             if others:
                 continue
             if counts.get(path, Counter())[name] <= 1:
-                dead.append(f"  dead header macro: {name} ({path})")
+                dead.append(f"  dead {kind} macro: {name} ({path})")
     return dead
 
 
@@ -565,7 +569,7 @@ def main() -> int:
     dead += scan_should_be_static(src_files, corpus, texts, idents)
     dead += scan_unused_prototypes(owned_hdrs, corpus, texts, idents)
     dead += scan_duplicate_prototypes(owned_hdrs, texts)
-    dead += scan_unused_macros(owned_hdrs, corpus, texts, idents, counts)
+    dead += scan_unused_macros(owned_hdrs + src_files, corpus, texts, idents, counts)
     dead += scan_clones(src_files, texts)
     dead += scan_test_only_wrappers(src_files, corpus, root, texts, idents)
     dead += scan_redundant_externs(src_files, src_root, texts)

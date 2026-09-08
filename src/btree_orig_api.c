@@ -182,11 +182,6 @@ int origBtreeCountIndexRange(
 ){
   return orig_sqlite3BtreeCountIndexRange(db, C(pCur), pLower, pUpper, pn);
 }
-int origBtreeClosesWithCursor(void *p, void *pCur){
-
-  (void)p; (void)pCur;
-  return 1;
-}
 void origBtreeTripAllCursors(void *p, int e, int w){
   orig_sqlite3BtreeTripAllCursors(B(p), e, w);
 }
@@ -198,20 +193,6 @@ int origBtreeCursorIsValidNN(void *pCur){
 int origBtreeTransferRow(void *pDest, void *pSrc, i64 iKey){
   return orig_sqlite3BtreeTransferRow(C(pDest), C(pSrc), iKey);
 }
-void origBtreeEnterAll(sqlite3 *db){
-#ifndef SQLITE_OMIT_SHARED_CACHE
-  orig_sqlite3BtreeEnterAll(db);
-#else
-  (void)db;
-#endif
-}
-void origBtreeLeaveAll(sqlite3 *db){
-#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
-  orig_sqlite3BtreeLeaveAll(db);
-#else
-  (void)db;
-#endif
-}
 int origBtreeIsEmpty(void *pCur, int *pRes){
   return orig_sqlite3BtreeIsEmpty(C(pCur), pRes);
 }
@@ -221,11 +202,6 @@ int origBtreeClearTableOfCursor(void *pCur){
 int origBtreeMaxRecordSize(void *pCur){
   return orig_sqlite3BtreeMaxRecordSize(C(pCur));
 }
-void origBtreeCursorHint(void *pCur, unsigned int mask, ...){
-
-  (void)pCur; (void)mask;
-}
-
 int origBtreeCursorSize(void){ return orig_sqlite3BtreeCursorSize(); }
 void origBtreeEnter(void *p){
 #ifndef SQLITE_OMIT_SHARED_CACHE

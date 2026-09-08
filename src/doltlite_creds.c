@@ -1065,10 +1065,6 @@ int doltliteCredsValidateAuthDir(const char *dir) {
   return rc;
 }
 
-#define JWT_ISSUER_EXPECTED   "dolt-client.dolthub.com"
-#define JWT_SUBJECT_PREFIX_V  "doltClientCredentials/"
-#define JWT_TOKEN_VERSION_V   "2023.01"
-
 int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudience,
                               const char *authKeysDir, long now, char **kidOut) {
   const char *jwt;
@@ -1106,7 +1102,7 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
   ver = jsonFindString(hdr, "dolt_token_version");
   kid = jsonFindString(hdr, "kid");
   if (!alg || strcmp(alg, "EdDSA") != 0) goto done;
-  if (!ver || strcmp(ver, JWT_TOKEN_VERSION_V) != 0) goto done;
+  if (!ver || strcmp(ver, JWT_TOKEN_VERSION) != 0) goto done;
   if (!kid) goto done;
 
   if (doltliteCredsLoadPubKey(authKeysDir, kid, pub) != 0) goto done;
@@ -1122,11 +1118,11 @@ int doltliteCredsVerifyBearer(const char *authValue, const char *expectedAudienc
 
   iss = jsonFindString(claims, "iss");
   sub = jsonFindString(claims, "sub");
-  if (!iss || strcmp(iss, JWT_ISSUER_EXPECTED) != 0) goto done;
+  if (!iss || strcmp(iss, JWT_ISSUER) != 0) goto done;
 
-  expectSub = (char *)sqlite3_malloc(strlen(JWT_SUBJECT_PREFIX_V) + strlen(kid) + 1);
+  expectSub = (char *)sqlite3_malloc(strlen(JWT_SUBJECT_PREFIX) + strlen(kid) + 1);
   if (!expectSub) goto done;
-  strcpy(expectSub, JWT_SUBJECT_PREFIX_V);
+  strcpy(expectSub, JWT_SUBJECT_PREFIX);
   strcat(expectSub, kid);
   if (!sub || strcmp(sub, expectSub) != 0) goto done;
 

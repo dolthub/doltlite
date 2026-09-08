@@ -24,7 +24,6 @@
 #define sqlite3BtreeCount orig_sqlite3BtreeCount
 #define sqlite3BtreeCountIndexRange orig_sqlite3BtreeCountIndexRange
 #define sqlite3BtreeCountRange orig_sqlite3BtreeCountRange
-#define sqlite3BtreeCreateIndex orig_sqlite3BtreeCreateIndex
 #define sqlite3BtreeCreateTable orig_sqlite3BtreeCreateTable
 #define sqlite3BtreeCursor orig_sqlite3BtreeCursor
 #define sqlite3BtreeCursorHasHint orig_sqlite3BtreeCursorHasHint
@@ -55,7 +54,6 @@
 #define sqlite3BtreeGetMeta orig_sqlite3BtreeGetMeta
 #define sqlite3BtreeGetPageSize orig_sqlite3BtreeGetPageSize
 #define sqlite3BtreeGetRequestedReserve orig_sqlite3BtreeGetRequestedReserve
-#define sqlite3BtreeGetReserve orig_sqlite3BtreeGetReserve
 #define sqlite3BtreeGetReserveNoMutex orig_sqlite3BtreeGetReserveNoMutex
 #define sqlite3BtreeHoldsAllMutexes orig_sqlite3BtreeHoldsAllMutexes
 #define sqlite3BtreeHoldsMutex orig_sqlite3BtreeHoldsMutex
@@ -86,7 +84,6 @@
 #define sqlite3BtreePayloadChecked orig_sqlite3BtreePayloadChecked
 #define sqlite3BtreePayloadFetch orig_sqlite3BtreePayloadFetch
 #define sqlite3BtreePayloadSize orig_sqlite3BtreePayloadSize
-#define sqlite3BtreePrev orig_sqlite3BtreePrev
 #define sqlite3BtreePrevious orig_sqlite3BtreePrevious
 #define sqlite3BtreePutData orig_sqlite3BtreePutData
 #define sqlite3BtreeRollback orig_sqlite3BtreeRollback
@@ -141,7 +138,6 @@
 #define sqlite3PagerJrnlFile orig_sqlite3PagerJrnlFile
 #define sqlite3PagerLockingMode orig_sqlite3PagerLockingMode
 #define sqlite3PagerLookup orig_sqlite3PagerLookup
-#define sqlite3PagerMalloc orig_sqlite3PagerMalloc
 #define sqlite3PagerMaxPageCount orig_sqlite3PagerMaxPageCount
 #define sqlite3PagerMemUsed orig_sqlite3PagerMemUsed
 #define sqlite3PagerMovepage orig_sqlite3PagerMovepage
@@ -159,7 +155,6 @@
 #define sqlite3PagerRekey orig_sqlite3PagerRekey
 #define sqlite3PagerRollback orig_sqlite3PagerRollback
 #define sqlite3PagerSavepoint orig_sqlite3PagerSavepoint
-#define sqlite3PagerSetBusyhandler orig_sqlite3PagerSetBusyhandler
 #define sqlite3PagerSetBusyHandler orig_sqlite3PagerSetBusyHandler
 #define sqlite3PagerSetCachesize orig_sqlite3PagerSetCachesize
 #define sqlite3PagerSetFlags orig_sqlite3PagerSetFlags
@@ -201,7 +196,6 @@
 #define sqlite3WalCallback orig_sqlite3WalCallback
 #define sqlite3WalCheckpoint orig_sqlite3WalCheckpoint
 #define sqlite3WalClose orig_sqlite3WalClose
-#define sqlite3WalCloseSnapshot orig_sqlite3WalCloseSnapshot
 #ifdef SQLITE_ENABLE_SETLK_TIMEOUT
 #define sqlite3WalDb orig_sqlite3WalDb
 #endif
@@ -216,7 +210,6 @@
 #define sqlite3WalHeapMemory orig_sqlite3WalHeapMemory
 #define sqlite3WalLimit orig_sqlite3WalLimit
 #define sqlite3WalOpen orig_sqlite3WalOpen
-#define sqlite3WalOpenSnapshot orig_sqlite3WalOpenSnapshot
 #define sqlite3WalReadFrame orig_sqlite3WalReadFrame
 #define sqlite3WalSavepoint orig_sqlite3WalSavepoint
 #define sqlite3WalSavepointUndo orig_sqlite3WalSavepointUndo
@@ -254,14 +247,5 @@
 #endif
 #define sqlite3HeaderSizeBtree orig_sqlite3HeaderSizeBtree
 #define sqlite3SectorSize orig_sqlite3SectorSize
-
-#define sqlite3BtreeEnter orig_sqlite3BtreeEnter
-#define sqlite3BtreeEnterAll orig_sqlite3BtreeEnterAll
-#define sqlite3BtreeEnterCursor orig_sqlite3BtreeEnterCursor
-#define sqlite3BtreeHoldsAllMutexes orig_sqlite3BtreeHoldsAllMutexes
-#define sqlite3BtreeHoldsMutex orig_sqlite3BtreeHoldsMutex
-#define sqlite3BtreeLeave orig_sqlite3BtreeLeave
-#define sqlite3BtreeLeaveAll orig_sqlite3BtreeLeaveAll
-#define sqlite3BtreeLeaveCursor orig_sqlite3BtreeLeaveCursor
 
 #endif
