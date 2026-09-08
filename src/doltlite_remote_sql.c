@@ -186,6 +186,59 @@ static int remoteSqlResetSessionToCommit(
   return rc;
 }
 
+static int remoteSqlSelectLazyRevision(
+  sqlite3 *db,
+  Btree *pBtree,
+  ChunkStore *cs,
+  const char *zRevision
+){
+  ProllyHash commitHash;
+  ProllyHash catalogHash;
+  u8 isBranch = 0;
+  int rc;
+
+  memset(&commitHash, 0, sizeof(commitHash));
+  memset(&catalogHash, 0, sizeof(catalogHash));
+  rc = doltliteResolveOpenRevision(
+      cs, zRevision, &commitHash, &catalogHash, &isBranch);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( isBranch ){
+    const char *zBranch = zRevision;
+    if( strcmp(zRevision, "HEAD")==0 || strcmp(zRevision, "head")==0 ){
+      zBranch = chunkStoreGetDefaultBranch(cs);
+      if( !zBranch ) return SQLITE_NOTFOUND;
+    }
+    rc = doltliteSetSessionBranch(db, zBranch);
+    if( rc!=SQLITE_OK ) return rc;
+    pBtree->headCommit = commitHash;
+    pBtree->isDetached = 0;
+    pBtree->bDeferredOpen = 1;
+    return SQLITE_OK;
+  }
+
+  rc = doltliteSwitchCatalog(db, &catalogHash);
+  if( rc!=SQLITE_OK ) return rc;
+  pBtree->headCommit = commitHash;
+  memset(&pBtree->vc, 0, sizeof(pBtree->vc));
+  pBtree->vc.stagedCatalog = catalogHash;
+  pBtree->isRebasing = 0;
+  memset(&pBtree->preRebaseWorkingCat, 0,
+         sizeof(pBtree->preRebaseWorkingCat));
+  memset(&pBtree->rebaseOntoCommit, 0,
+         sizeof(pBtree->rebaseOntoCommit));
+  sqlite3_free(pBtree->zRebaseOrigBranch);
+  pBtree->zRebaseOrigBranch = 0;
+  sqlite3_free(pBtree->zRebaseReturnBranch);
+  pBtree->zRebaseReturnBranch = 0;
+  pBtree->isDetached = 1;
+  pBtree->bDeferredOpen = 0;
+  pBtree->bCatalogDropped = 0;
+  btreeStoreCommittedFromCurrent(pBtree, &catalogHash);
+  btreeMarkWorkingStateChanged(pBtree, 0);
+  return SQLITE_OK;
+}
+
 static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -713,9 +766,11 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   DoltliteRemote *pRemote = 0;
   DoltliteCmdArgs args;
   DoltliteCmdOption aOption[] = {
-    { "lazy", 0, DOLTLITE_CMD_OPTION_FLAG, 0, 0 }
+    { "lazy", 0, DOLTLITE_CMD_OPTION_FLAG, 0, 0 },
+    { "revision", 0, DOLTLITE_CMD_OPTION_VALUE, 0, 0 }
   };
   const char *zUrl;
+  const char *zRevision = 0;
   DoltliteTxnState savedState;
   int bLazy = 0;
   int dirty = 0;
@@ -723,11 +778,13 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<1 ){
-    doltliteVcResultError(ctx, db, "usage: dolt_clone(['--lazy'], url)");
+    doltliteVcResultError(ctx, db,
+      "usage: dolt_clone(['--lazy'] ['--revision' rev], url)");
     return;
   }
 
   aOption[0].pSeen = &bLazy;
+  aOption[1].pzValue = &zRevision;
   rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ){
@@ -742,6 +799,11 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( args.nPositional>1 ){
     doltliteCmdArgsClear(&args);
     doltliteVcResultError(ctx, db, "too many arguments");
+    return;
+  }
+  if( zRevision && !bLazy ){
+    doltliteCmdArgsClear(&args);
+    doltliteVcResultError(ctx, db, "--revision requires --lazy");
     return;
   }
   zUrl = args.azPositional[0];
@@ -843,8 +905,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
     pBtree->bDeferredOpen = 1;
-    rc = doltliteBtreePrepareBackupBranch(
-        pBtree, cs, &zPreparedBranch, 0);
+    if( zRevision ){
+      rc = remoteSqlSelectLazyRevision(db, pBtree, cs, zRevision);
+    }else{
+      rc = doltliteBtreePrepareBackupBranch(
+          pBtree, cs, &zPreparedBranch, 0);
+    }
     if( rc==SQLITE_OK && zPreparedBranch ){
       doltliteBtreeInstallBackupBranch(pBtree, zPreparedBranch);
       zPreparedBranch = 0;
