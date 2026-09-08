@@ -1101,6 +1101,65 @@ static SQLITE_INLINE int dlMatchOrSkipNamedTable(
   return SQLITE_OK;
 }
 
+typedef struct DlFramedCodec DlFramedCodec;
+struct DlFramedCodec {
+  u8 m0, m1, m2, ver;
+  size_t szRow;
+  int bAllocEmpty;
+  int bNameNocase;
+  int iPutFaultSim;
+  DlRowIO xRead;
+  DlRowIO xSkip;
+  DlRowFree xFree;
+  int (*xMeasureRow)(const void *pRow, sqlite3_int64 *pSz);
+  void (*xWriteRow)(DlByteWriter *w, const void *pRow);
+  i64 (*xRowid)(const void *pRow);
+};
+
+#define DL_FRAMED_TABLE(type, nameF, nRowsF, aRowsF) \
+  sizeof(type), offsetof(type, nameF), offsetof(type, nRowsF), offsetof(type, aRowsF)
+
+int dlFramedSerialize(
+  ChunkStore *cs,
+  ProllyHash *pHash,
+  const DlFramedCodec *pCodec,
+  int nTables,
+  size_t szTable,
+  size_t offName,
+  size_t offNRows,
+  size_t offARows,
+  const void *aTables
+);
+int dlFramedDeserialize(
+  const u8 *data, int nData,
+  const DlFramedCodec *pCodec,
+  size_t szTable,
+  size_t offName,
+  size_t offNRows,
+  size_t offARows,
+  void **ppTables, int *pnTables,
+  void (*xFreeTables)(void *aTables, int nTables)
+);
+int dlFramedLoadNamed(
+  const u8 *data, int nData,
+  const DlFramedCodec *pCodec,
+  const char *zTableName,
+  char **pzName, int *pnRows, void **ppRows, int *pFound
+);
+int dlFramedDeleteRow(
+  const u8 *data, int nData,
+  const DlFramedCodec *pCodec,
+  const char *zTableName,
+  i64 deleteRowid,
+  u8 **ppOut, int *pnOut, int *pnOutTables, int *pDeleted
+);
+int dlFramedDropTable(
+  const u8 *data, int nData,
+  const DlFramedCodec *pCodec,
+  const char *zTableName,
+  u8 **ppOut, int *pnOut, int *pnOutTables, int *pFound
+);
+
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 ChunkStore *doltliteBtreeChunkStore(Btree *p);
 int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs);

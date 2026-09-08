@@ -1550,6 +1550,9 @@ doltlite_ancestor.o:	$(TOP)/src/doltlite_ancestor.c $(DEPS_OBJ_COMMON)
 doltlite_conflicts.o:	$(TOP)/src/doltlite_conflicts.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_conflicts.c
 
+doltlite_framed.o:	$(TOP)/src/doltlite_framed.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_framed.c
+
 doltlite_gc.o:	$(TOP)/src/doltlite_gc.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_gc.c
 
