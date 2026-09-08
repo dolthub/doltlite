@@ -476,6 +476,9 @@ Open a branch at connect time via the database path (CLI, C API, or bindings):
 ./doltlite my.db/feature
 ```
 
+The file is the longest existing database-file prefix, so branch names may
+contain `/` (for example, `my.db/feature/parser`).
+
 ```c
 sqlite3_open("my.db@feature", &db);
 ```

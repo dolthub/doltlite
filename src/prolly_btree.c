@@ -556,8 +556,8 @@ static int doltliteResolveOpenBranchPath(
   char **pzStoreFilename,
   const char **pzBranch
 ){
-  const char *z;
-  const char *zSep = 0;
+  const char *zSep;
+  const char *zEnd;
   int parentExists = 0;
   int rc;
   char *zParent;
@@ -571,51 +571,52 @@ static int doltliteResolveOpenBranchPath(
     return SQLITE_OK;
   }
 
-  for(z=zFilename; *z; z++){
-    if( *z=='/' || *z=='\\' || *z=='@' ) zSep = z;
+  zEnd = zFilename + strlen(zFilename);
+  for(zSep=zEnd; zSep>zFilename; ){
+    zSep--;
+    if( *zSep!='/' && *zSep!='\\' && *zSep!='@' ) continue;
+    if( zSep==zFilename || zSep[1]=='\0' ) continue;
+    nParent = (int)(zSep - zFilename);
+    zParent = sqlite3_mprintf("%.*s", nParent, zFilename);
+    if( !zParent ) return SQLITE_NOMEM;
+    if( !doltliteLooksLikeDbPath(zParent) ){
+      sqlite3_free(zParent);
+      continue;
+    }
+    parentExists = 0;
+    rc = doltliteFileExists(pVfs, zParent, &parentExists);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zParent);
+      return rc;
+    }
+    if( !parentExists ){
+      sqlite3_free(zParent);
+      continue;
+    }
+    parentIsFile = 0;
+    rc = doltliteReadableFile(pVfs, zParent, &parentIsFile);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zParent);
+      return rc;
+    }
+    if( !parentIsFile ){
+      sqlite3_free(zParent);
+      continue;
+    }
+    parentIsSqlite = 0;
+    rc = origBtreeIsSqliteFile(pVfs, zParent, &parentIsSqlite);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zParent);
+      return rc;
+    }
+    if( parentIsSqlite ){
+      sqlite3_free(zParent);
+      return SQLITE_OK;
+    }
+    *pzStoreFilename = zParent;
+    *pzBranch = zSep + 1;
+    break;
   }
-  if( !zSep || zSep==zFilename || zSep[1]=='\0' ) return SQLITE_OK;
-
-  nParent = (int)(zSep - zFilename);
-  zParent = sqlite3_mprintf("%.*s", nParent, zFilename);
-  if( !zParent ) return SQLITE_NOMEM;
-  if( !doltliteLooksLikeDbPath(zParent) ){
-    sqlite3_free(zParent);
-    return SQLITE_OK;
-  }
-
-  rc = doltliteFileExists(pVfs, zParent, &parentExists);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zParent);
-    return rc;
-  }
-  if( !parentExists ){
-    sqlite3_free(zParent);
-    return SQLITE_OK;
-  }
-
-  rc = doltliteReadableFile(pVfs, zParent, &parentIsFile);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zParent);
-    return rc;
-  }
-  if( !parentIsFile ){
-    sqlite3_free(zParent);
-    return SQLITE_OK;
-  }
-
-  rc = origBtreeIsSqliteFile(pVfs, zParent, &parentIsSqlite);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zParent);
-    return rc;
-  }
-  if( parentIsSqlite ){
-    sqlite3_free(zParent);
-    return SQLITE_OK;
-  }
-
-  *pzStoreFilename = zParent;
-  *pzBranch = zSep + 1;
   return SQLITE_OK;
 }
 
@@ -900,11 +901,17 @@ int sqlite3BtreeOpen(
     if( zBranchFromPath && rc!=SQLITE_OK ){
       int openRc;
       rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
-      openRc = rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM
-             || rc==SQLITE_IOERR_CHUNK_SOURCE ? rc : SQLITE_ERROR;
-      if( openRc==SQLITE_ERROR ){
-        sqlite3ErrorWithMsg(db, SQLITE_ERROR,
-                            "unable to select branch \"%s\"", zDef);
+      if( rc==SQLITE_NOTFOUND ){
+        openRc = SQLITE_CANTOPEN;
+        sqlite3ErrorWithMsg(db, openRc,
+                            "branch or revision \"%s\" not found", zDef);
+      }else{
+        openRc = rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM
+               || rc==SQLITE_IOERR_CHUNK_SOURCE ? rc : SQLITE_ERROR;
+        if( openRc==SQLITE_ERROR ){
+          sqlite3ErrorWithMsg(db, openRc,
+                              "unable to select branch \"%s\"", zDef);
+        }
       }
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);

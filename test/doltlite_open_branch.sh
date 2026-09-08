@@ -53,6 +53,12 @@ SELECT dolt_checkout('main');
 INSERT INTO t VALUES(2,'main2');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main2');
+SELECT dolt_branch('feature/x');
+SELECT dolt_checkout('feature/x');
+UPDATE t SET v='slash' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','slash');
+SELECT dolt_checkout('main');
 SQL
 
 res=$("$DOLTLITE" "$DB" "SELECT active_branch(); SELECT v FROM t WHERE id=1;" | normalize_output)
@@ -64,11 +70,26 @@ check_eq "at_selects_side" $'side\nside' "$res"
 res=$("$DOLTLITE" "$DB/side" "SELECT active_branch(); SELECT v FROM t WHERE id=1;" | normalize_output)
 check_eq "slash_selects_side" $'side\nside' "$res"
 
+res=$("$DOLTLITE" "$DB/feature/x" "SELECT active_branch(); SELECT v FROM t WHERE id=1;" | normalize_output)
+check_eq "slash_selects_nested_branch" $'feature/x\nslash' "$res"
+
+res=$("$DOLTLITE" "$DB@feature/x" "SELECT active_branch(); SELECT v FROM t WHERE id=1;" | normalize_output)
+check_eq "at_selects_nested_branch" $'feature/x\nslash' "$res"
+
 res=$("$DOLTLITE" "$DB" "SELECT active_branch(); SELECT v FROM t WHERE id=1;" | normalize_output)
 check_eq "branch_open_does_not_change_default" $'main\nmain' "$res"
 
 res=$("$DOLTLITE" "$DB@missing" "SELECT active_branch();" 2>&1 | normalize_output || true)
-check_match "missing_branch_errors" "unable to open database|unable to select branch|branch.*not found|SQLITE_NOTFOUND" "$res"
+check_match "missing_branch_errors" 'branch or revision "missing" not found' "$res"
+
+res=$("$DOLTLITE" "$DB/missing/name" "SELECT active_branch();" 2>&1 | normalize_output || true)
+check_match "missing_nested_branch_errors" 'branch or revision "missing/name" not found' "$res"
+
+res=$("$DOLTLITE" "$DB/main/" "SELECT active_branch();" 2>&1 | normalize_output || true)
+check_match "trailing_slash_branch_errors" 'branch or revision "main/" not found' "$res"
+
+res=$("$DOLTLITE" "$DB//main" "SELECT active_branch();" 2>&1 | normalize_output || true)
+check_match "leading_slash_branch_errors" 'branch or revision "/main" not found' "$res"
 
 cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null 2>&1
 SELECT dolt_branch('-m','side','renamed');
@@ -90,7 +111,7 @@ SELECT dolt_branch('-D','copy');
 SQL
 
 res=$("$DOLTLITE" "$DB@copy" "SELECT active_branch();" 2>&1 | normalize_output || true)
-check_match "deleted_branch_open_errors" "unable to open database|unable to select branch|branch.*not found|SQLITE_NOTFOUND" "$res"
+check_match "deleted_branch_open_errors" 'branch or revision "copy" not found' "$res"
 
 res=$("$DOLTLITE" "$DB/v1" "SELECT IFNULL(active_branch(),'NULL'); SELECT group_concat(id || ':' || v, ',') FROM t;" | normalize_output)
 check_eq "tag_open_is_detached" $'NULL\n1:main' "$res"
