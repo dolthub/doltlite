@@ -80,14 +80,14 @@ int origBtreeConnectionCount(void *p){
 #endif
 }
 void origBtreeEnterCursor(void *pCur){
-#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
+#if !defined(SQLITE_OMIT_SHARED_CACHE) && !defined(SQLITE_OMIT_INCRBLOB)
   orig_sqlite3BtreeEnterCursor(C(pCur));
 #else
   (void)pCur;
 #endif
 }
 void origBtreeLeaveCursor(void *pCur){
-#if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
+#if !defined(SQLITE_OMIT_SHARED_CACHE) && !defined(SQLITE_OMIT_INCRBLOB) && SQLITE_THREADSAFE
   orig_sqlite3BtreeLeaveCursor(C(pCur));
 #else
   (void)pCur;
@@ -150,10 +150,10 @@ const void *origBtreePayloadFetch(void *pCur, u32 *pAmt){
 }
 i64 origBtreeIntegerKey(void *pCur){ return orig_sqlite3BtreeIntegerKey(C(pCur)); }
 i64 origBtreeOffset(void *pCur){ return orig_sqlite3BtreeOffset(C(pCur)); }
+#ifndef SQLITE_OMIT_INCRBLOB
 u32 origBtreePayloadChecked(void *pCur, u32 off, u32 amt, void *pBuf){
   return orig_sqlite3BtreePayloadChecked(C(pCur), off, amt, pBuf);
 }
-#ifndef SQLITE_OMIT_INCRBLOB
 int origBtreePutData(void *pCur, u32 off, u32 amt, void *pBuf){
   return orig_sqlite3BtreePutData(C(pCur), off, amt, pBuf);
 }

@@ -82,6 +82,54 @@ if "origBtreeOffset" not in api_c or "orig_sqlite3BtreeOffset" not in api_c:
 if "origBtreeCountRange" not in api_c or "orig_sqlite3BtreeCountRange" not in api_c:
     fails.append("origBtreeCountRange must forward orig_sqlite3BtreeCountRange")
 
+# Stock btree compiles these only without SQLITE_OMIT_INCRBLOB. Calling them
+# from the adapter without that guard leaves unresolved orig_sqlite3* symbols.
+INCRBLOB_SYMS = (
+    "orig_sqlite3BtreeEnterCursor",
+    "orig_sqlite3BtreeLeaveCursor",
+    "orig_sqlite3BtreePayloadChecked",
+    "orig_sqlite3BtreePutData",
+    "orig_sqlite3BtreeIncrblobCursor",
+)
+IF_LINE = re.compile(r"^\s*#\s*(if|ifdef|ifndef|else|elif|endif)\b(.*)$")
+stack = []
+for lineno, raw in enumerate(api_c.splitlines(), 1):
+    directive = IF_LINE.match(raw)
+    if directive:
+        kind = directive.group(1)
+        rest = directive.group(2).strip()
+        if kind in ("if", "ifdef", "ifndef"):
+            stack.append((kind, rest, False))
+        elif kind == "elif":
+            if stack:
+                stack[-1] = ("if", rest, False)
+        elif kind == "else":
+            if stack:
+                kind0, rest0, _ = stack[-1]
+                stack[-1] = (kind0, rest0, True)
+        elif kind == "endif" and stack:
+            stack.pop()
+        continue
+    for sym in INCRBLOB_SYMS:
+        if sym not in raw:
+            continue
+        guarded = False
+        for kind, rest, inverted in stack:
+            mentions = "SQLITE_OMIT_INCRBLOB" in rest
+            if not mentions:
+                continue
+            if inverted:
+                continue
+            if kind == "ifndef" and rest == "SQLITE_OMIT_INCRBLOB":
+                guarded = True
+            elif kind in ("if", "elif") and "!defined(SQLITE_OMIT_INCRBLOB)" in rest.replace(" ", ""):
+                guarded = True
+        if not guarded:
+            fails.append(
+                "%s:%d calls %s without SQLITE_OMIT_INCRBLOB"
+                % ("btree_orig_api.c", lineno, sym)
+            )
+
 if fails:
     print("lint_orig_btree_adapter: %d violation(s)" % len(fails), file=sys.stderr)
     for f in fails:
