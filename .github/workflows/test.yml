@@ -325,6 +325,7 @@ jobs:
           - fts4-core
           - fts4-merge
           - ported
+          - shell
           - slow-plain
     steps:
     - uses: actions/checkout@v4
@@ -367,9 +368,12 @@ jobs:
     # so the jobs parallelize and a red bucket names the broken area. The
     # "ported" bucket holds doltlite-native rewrites of gated divergences
     # (#1313): zero-divergence files asserting the intent the upstream
-    # entries lost. Every file belongs to:
-    # core-sql, ddl-schema, storage, fault-fuzz, fts3, fts4-core,
-    # fts4-merge. A file must appear in exactly one bucket; the guard below
+    # entries lost. The "shell" bucket runs the upstream shell*.test files
+    # and doltlite's own CLI tests against the doltlite CLI (aliased below);
+    # shell1 stays in core-sql until issue 2709's stale read is fixed.
+    # Every file belongs to: core-sql, ddl-schema, storage, fault-fuzz,
+    # fts3, fts4-core, fts4-merge, ported, shell, slow-plain. A file must
+    # appear in exactly one bucket; the guard below
     # enforces it. Nondeterministic-class files (thread*, walcrash*,
     # writecrash, wal*fault) stay excluded, same rationale as the crash.test
     # exclusion. fts3.test is also excluded: it is the permutations
@@ -388,6 +392,13 @@ jobs:
         bash test/check_testfixture_exception_inventory_test.sh
         bash test/run_testfixture_test.sh
         bash test/check_testfixture_inventory_issues_alive_test.sh
+
+    # The shell bucket drives the doltlite CLI through tester.tcl's catchcmd,
+    # which looks for a `sqlite3` next to the testfixture. No other bucket
+    # gets the alias, so their shell*.test files keep skipping as before.
+    - name: Alias the doltlite CLI for the shell bucket
+      if: matrix.bucket == 'shell'
+      run: ln -sf doltlite "$FIXTURE_DIR/sqlite3"
 
     - name: SQLite regression tests - ${{ matrix.bucket }}
       run: |
