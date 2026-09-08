@@ -135,14 +135,48 @@ INSERT INTO t VALUES(1),(2);
 UPDATE sqlite_sequence SET seq=100 WHERE name='t';
 .clone $ROOT/clone.db
 .open $ROOT/clone.db
-SELECT max(seq) FROM sqlite_sequence;
+SELECT name, seq FROM sqlite_sequence ORDER BY name;
+SELECT count(*) FROM sqlite_sequence;
 INSERT INTO t DEFAULT VALUES;
 SELECT max(id) FROM t;
-SELECT max(seq) FROM sqlite_sequence;
+SELECT name, seq FROM sqlite_sequence ORDER BY name;
+SELECT count(*) FROM sqlite_sequence;
 " "t... done
 done
-100
+t|100
+1
 101
-101" ":memory:"
+t|101
+1" ":memory:"
+
+run_test "seq_clone_two_autoinc_tables_one_row_each" "
+.mode batch
+CREATE TABLE a(id INTEGER PRIMARY KEY AUTOINCREMENT);
+CREATE TABLE b(id INTEGER PRIMARY KEY AUTOINCREMENT);
+INSERT INTO a DEFAULT VALUES;
+INSERT INTO b DEFAULT VALUES;
+UPDATE sqlite_sequence SET seq=40 WHERE name='a';
+UPDATE sqlite_sequence SET seq=80 WHERE name='b';
+.clone $ROOT/clone2.db
+.open $ROOT/clone2.db
+SELECT name, seq FROM sqlite_sequence ORDER BY name;
+SELECT count(*) FROM sqlite_sequence;
+INSERT INTO a DEFAULT VALUES;
+INSERT INTO b DEFAULT VALUES;
+SELECT max(id) FROM a;
+SELECT max(id) FROM b;
+SELECT name, seq FROM sqlite_sequence ORDER BY name;
+SELECT count(*) FROM sqlite_sequence;
+" "a... done
+b... done
+done
+a|40
+b|80
+2
+41
+81
+a|41
+b|81
+2" ":memory:"
 
 dltest_finish
