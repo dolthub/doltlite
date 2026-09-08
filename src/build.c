@@ -1334,13 +1334,14 @@ void sqlite3StartTable(
   if( !IN_SPECIAL_PARSE && SQLITE_OK!=sqlite3ReadSchema(pParse) ){
     goto begin_table_error;
   }
-#ifdef DOLTLITE_PROLLY
-  if( sqlite3CheckObjectName(pParse, zName,
-        isView?"view":(isVirtual?"virtual":"table"), zName) ){
+  if( sqlite3CheckObjectName(pParse, zName, isView?"view":"table", zName) ){
     goto begin_table_error;
   }
-#else
-  if( sqlite3CheckObjectName(pParse, zName, isView?"view":"table", zName) ){
+#ifdef DOLTLITE_PROLLY
+  if( isVirtual && pParse->nested==0 && !db->init.busy
+   && sqlite3StrNICmp(zName, "dolt_", 5)==0 ){
+    sqlite3ErrorMsg(pParse,
+        "table names beginning with dolt_ are reserved for internal use");
     goto begin_table_error;
   }
 #endif

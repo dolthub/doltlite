@@ -132,4 +132,17 @@ run_test_match "add_column_dolt_rebase_refused" \
   "table dolt_rebase may not be altered" "$DB"
 
 rm -f "$DB"
+DB=/tmp/test_reserved_fts_$$.db
+rm -f "$DB"
+
+run_test "fts5_virtual_table_still_works" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY);
+   SELECT dolt_commit('-Am','init') IS NOT NULL;
+   CREATE VIRTUAL TABLE ft USING fts5(a);
+   INSERT INTO ft VALUES('hello');
+   SELECT * FROM ft;" \
+  "1
+hello" "$DB"
+
+rm -f "$DB"
 dltest_finish
