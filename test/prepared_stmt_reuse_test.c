@@ -502,6 +502,158 @@ static void test_v1_stmt_survives_data_rollback(void){
   unlink("test_v1_rollback.db");
 }
 
+static void test_open_cursor_add(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *pTable = 0;
+  sqlite3_stmt *pIndex = 0;
+  int rc;
+
+  unlink("test_open_cursor_add.db");
+  rc = sqlite3_open("test_open_cursor_add.db", &db);
+  check("open_cursor_add: open", rc==SQLITE_OK);
+  execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "CREATE INDEX tv ON t(v);"
+    "INSERT INTO t VALUES(1,'v1'),(2,'v2'),(3,'v3'),(4,'v4');"
+    "SELECT dolt_commit('-Am','base');"
+    "UPDATE t SET v='z4' WHERE id=4;");
+
+  rc = sqlite3_prepare_v2(db, "SELECT id FROM t ORDER BY id", -1,
+                          &pTable, 0);
+  check("open_cursor_add: prepare table", rc==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db,
+    "SELECT id FROM t INDEXED BY tv ORDER BY v", -1, &pIndex, 0);
+  check("open_cursor_add: prepare index", rc==SQLITE_OK);
+
+  check("open_cursor_add: table first", sqlite3_step(pTable)==SQLITE_ROW);
+  check_int("open_cursor_add: table row 1", sqlite3_column_int(pTable, 0), 1);
+  check("open_cursor_add: index first", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_int("open_cursor_add: index row 1", sqlite3_column_int(pIndex, 0), 1);
+
+  rc = execSql(db, "SELECT dolt_add('-A')");
+  check("open_cursor_add: add", rc==SQLITE_OK);
+  check("open_cursor_add: table continues", sqlite3_step(pTable)==SQLITE_ROW);
+  check_int("open_cursor_add: table row 2", sqlite3_column_int(pTable, 0), 2);
+  check("open_cursor_add: index continues", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_int("open_cursor_add: index row 2", sqlite3_column_int(pIndex, 0), 2);
+  check("open_cursor_add: table third", sqlite3_step(pTable)==SQLITE_ROW);
+  check_int("open_cursor_add: table row 3", sqlite3_column_int(pTable, 0), 3);
+  check("open_cursor_add: index third", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_int("open_cursor_add: index row 3", sqlite3_column_int(pIndex, 0), 3);
+  check("open_cursor_add: table fourth", sqlite3_step(pTable)==SQLITE_ROW);
+  check_int("open_cursor_add: table row 4", sqlite3_column_int(pTable, 0), 4);
+  check("open_cursor_add: index fourth", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_int("open_cursor_add: index row 4", sqlite3_column_int(pIndex, 0), 4);
+  check("open_cursor_add: table done", sqlite3_step(pTable)==SQLITE_DONE);
+  check("open_cursor_add: index done", sqlite3_step(pIndex)==SQLITE_DONE);
+
+  sqlite3_finalize(pTable);
+  sqlite3_finalize(pIndex);
+  sqlite3_close(db);
+  unlink("test_open_cursor_add.db");
+}
+
+static void test_open_cursor_commit(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *pTable = 0;
+  sqlite3_stmt *pIndex = 0;
+  int rc;
+
+  unlink("test_open_cursor_commit.db");
+  rc = sqlite3_open("test_open_cursor_commit.db", &db);
+  check("open_cursor_commit: open", rc==SQLITE_OK);
+  execSql(db,
+    "CREATE TABLE t(a TEXT, b INT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;"
+    "CREATE INDEX tv ON t(v);"
+    "INSERT INTO t VALUES('a',1,'v1'),('b',2,'v2'),"
+                         "('c',3,'v3'),('d',4,'v4');"
+    "SELECT dolt_commit('-Am','base');"
+    "UPDATE t SET v='z4' WHERE a='d' AND b=4;");
+
+  rc = sqlite3_prepare_v2(db, "SELECT a FROM t ORDER BY a,b", -1,
+                          &pTable, 0);
+  check("open_cursor_commit: prepare table", rc==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db,
+    "SELECT a FROM t INDEXED BY tv ORDER BY v", -1, &pIndex, 0);
+  check("open_cursor_commit: prepare index", rc==SQLITE_OK);
+
+  check("open_cursor_commit: table first", sqlite3_step(pTable)==SQLITE_ROW);
+  check_str("open_cursor_commit: table row a",
+            (const char*)sqlite3_column_text(pTable, 0), "a");
+  check("open_cursor_commit: index first", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_str("open_cursor_commit: index row a",
+            (const char*)sqlite3_column_text(pIndex, 0), "a");
+
+  rc = execSql(db, "SELECT dolt_commit('-am','open cursors')");
+  check("open_cursor_commit: commit", rc==SQLITE_OK);
+  check("open_cursor_commit: table continues", sqlite3_step(pTable)==SQLITE_ROW);
+  check_str("open_cursor_commit: table row b",
+            (const char*)sqlite3_column_text(pTable, 0), "b");
+  check("open_cursor_commit: index continues", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_str("open_cursor_commit: index row b",
+            (const char*)sqlite3_column_text(pIndex, 0), "b");
+  check("open_cursor_commit: table third", sqlite3_step(pTable)==SQLITE_ROW);
+  check_str("open_cursor_commit: table row c",
+            (const char*)sqlite3_column_text(pTable, 0), "c");
+  check("open_cursor_commit: index third", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_str("open_cursor_commit: index row c",
+            (const char*)sqlite3_column_text(pIndex, 0), "c");
+  check("open_cursor_commit: table fourth", sqlite3_step(pTable)==SQLITE_ROW);
+  check_str("open_cursor_commit: table row d",
+            (const char*)sqlite3_column_text(pTable, 0), "d");
+  check("open_cursor_commit: index fourth", sqlite3_step(pIndex)==SQLITE_ROW);
+  check_str("open_cursor_commit: index row d",
+            (const char*)sqlite3_column_text(pIndex, 0), "d");
+  check("open_cursor_commit: table done", sqlite3_step(pTable)==SQLITE_DONE);
+  check("open_cursor_commit: index done", sqlite3_step(pIndex)==SQLITE_DONE);
+
+  sqlite3_finalize(pTable);
+  sqlite3_finalize(pIndex);
+  sqlite3_close(db);
+  unlink("test_open_cursor_commit.db");
+}
+
+static void test_content_change_aborts_open_cursor(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *pScan = 0;
+  int rc;
+
+  unlink("test_content_change_cursor.db");
+  rc = sqlite3_open("test_content_change_cursor.db", &db);
+  check("content_change_cursor: open", rc==SQLITE_OK);
+  execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'v1'),(2,'v2'),(3,'v3');"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_checkout('-b','side');"
+    "UPDATE t SET v='side' WHERE id=3;"
+    "SELECT dolt_commit('-Am','side');"
+    "SELECT dolt_checkout('main');");
+
+  rc = sqlite3_prepare_v2(db, "SELECT id,v FROM t ORDER BY id", -1,
+                          &pScan, 0);
+  check("content_change_cursor: prepare checkout", rc==SQLITE_OK);
+  check("content_change_cursor: checkout first", sqlite3_step(pScan)==SQLITE_ROW);
+  rc = execSql(db, "SELECT dolt_checkout('side')");
+  check("content_change_cursor: checkout", rc==SQLITE_OK);
+  check("content_change_cursor: checkout aborts", sqlite3_step(pScan)==SQLITE_ABORT);
+  sqlite3_finalize(pScan);
+  pScan = 0;
+
+  execSql(db, "UPDATE t SET v='dirty' WHERE id=3");
+  rc = sqlite3_prepare_v2(db, "SELECT id,v FROM t ORDER BY id", -1,
+                          &pScan, 0);
+  check("content_change_cursor: prepare reset", rc==SQLITE_OK);
+  check("content_change_cursor: reset first", sqlite3_step(pScan)==SQLITE_ROW);
+  rc = execSql(db, "SELECT dolt_reset('--hard')");
+  check("content_change_cursor: reset", rc==SQLITE_OK);
+  check("content_change_cursor: reset aborts", sqlite3_step(pScan)==SQLITE_ABORT);
+
+  sqlite3_finalize(pScan);
+  sqlite3_close(db);
+  unlink("test_content_change_cursor.db");
+}
+
 
 int main(int argc, char **argv){
   (void)argc; (void)argv;
@@ -534,6 +686,15 @@ int main(int argc, char **argv){
 
   printf("--- v1 statement survives data rollback ---\n");
   test_v1_stmt_survives_data_rollback();
+
+  printf("--- open cursors survive dolt_add ---\n");
+  test_open_cursor_add();
+
+  printf("--- open cursors survive dolt_commit ---\n");
+  test_open_cursor_commit();
+
+  printf("--- content changes abort open cursors ---\n");
+  test_content_change_aborts_open_cursor();
 
   printf("\n=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail > 0 ? 1 : 0;

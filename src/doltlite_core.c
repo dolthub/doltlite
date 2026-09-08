@@ -790,12 +790,13 @@ int doltliteAdvanceBranch(
       db, pNewHead, pCatalogHash, pWorkingCatHash, &saved, 1);
 }
 
-int doltliteCompareAndAdvanceBranch(
+static int doltliteCompareAndAdvanceBranchImpl(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash,
-  const ProllyHash *pWorkingCatHash
+  const ProllyHash *pWorkingCatHash,
+  int bSwitchCatalog
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteTxnState saved;
@@ -833,7 +834,7 @@ int doltliteCompareAndAdvanceBranch(
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
   chunkStoreUnlock(cs);
 
-  if( rc==SQLITE_OK ){
+  if( rc==SQLITE_OK && bSwitchCatalog ){
     /* Adopt the catalog after the durable tip is on disk. Failure leaves HEAD
     ** advanced with a recoverable working-set mismatch on reopen. */
     if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
@@ -845,6 +846,28 @@ int doltliteCompareAndAdvanceBranch(
     }
   }
   return rc;
+}
+
+int doltliteCompareAndAdvanceBranch(
+  sqlite3 *db,
+  const ProllyHash *pExpectedHead,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+){
+  return doltliteCompareAndAdvanceBranchImpl(
+      db, pExpectedHead, pNewHead, pCatalogHash, pWorkingCatHash, 1);
+}
+
+int doltliteCompareAndAdvanceBranchCurrentCatalog(
+  sqlite3 *db,
+  const ProllyHash *pExpectedHead,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+){
+  return doltliteCompareAndAdvanceBranchImpl(
+      db, pExpectedHead, pNewHead, pCatalogHash, pWorkingCatHash, 0);
 }
 
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db){

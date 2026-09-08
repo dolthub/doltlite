@@ -883,7 +883,6 @@ static void doltliteCommitFunc(
 
   if( !sealTopLevel
    && (!db->autoCommit
-       || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
        || db->pSavepoint) ){
     /* Plain BEGIN and nested SAVEPOINT stay rollbackable until validation. */
     rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
@@ -1018,7 +1017,7 @@ static void doltliteCommitFunc(
     ProllyHash workingCatHash;
     rc = doltliteFlushCatalogToHash(db, &workingCatHash);
     if( rc==SQLITE_OK ){
-      rc = doltliteCompareAndAdvanceBranch(
+      rc = doltliteCompareAndAdvanceBranchCurrentCatalog(
           db, &sessionHeadBeforeLock, &commitHash, &catalogHash,
           &workingCatHash);
     }
