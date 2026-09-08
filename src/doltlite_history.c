@@ -8,12 +8,16 @@
 #include <time.h>
 
 static char *htBuildSchema(const DoltliteColInfo *ci){
+  static const char *const azReserved[] = {
+    "commit_hash", "committer", "commit_date", "start_ref"
+  };
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  if( doltliteAppendIntegerPkColumnList(pStr, ci->azName, ci->nCol,
-                                        ci->iPkCol)!=SQLITE_OK ){
+  if( doltliteAppendDisambiguatedColumnList(
+          pStr,ci->azName,ci->nCol,"",", ",azReserved,
+          ArraySize(azReserved),ci->iPkCol)!=SQLITE_OK ){
     sqlite3_str_reset(pStr);
     return 0;
   }

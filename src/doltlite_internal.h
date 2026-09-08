@@ -702,6 +702,69 @@ static SQLITE_INLINE int doltliteAppendIntegerPkColumnList(
   return sqlite3_str_errcode(pStr);
 }
 
+static SQLITE_INLINE int doltliteVtabColumnNameUsed(
+  char *const *azName,
+  int nName,
+  int iName,
+  const char *zPrefix,
+  const char *const *azReserved,
+  int nReserved,
+  const char *zCandidate
+){
+  int i;
+  int nPrefix = (int)strlen(zPrefix);
+  if( (int)strlen(zCandidate)>=nPrefix
+   && sqlite3_strnicmp(zCandidate,zPrefix,nPrefix)==0 ){
+    for(i=0; i<nName; i++){
+      if( i!=iName
+       && sqlite3_stricmp(zCandidate+nPrefix,azName[i])==0 ){
+        return 1;
+      }
+    }
+  }
+  for(i=0; i<nReserved; i++){
+    if( sqlite3_stricmp(zCandidate,azReserved[i])==0 ) return 1;
+  }
+  return 0;
+}
+
+static SQLITE_INLINE int doltliteAppendDisambiguatedColumnList(
+  sqlite3_str *pStr,
+  char *const *azName,
+  int nName,
+  const char *zPrefix,
+  const char *zSep,
+  const char *const *azReserved,
+  int nReserved,
+  int iIntegerPk
+){
+  int i;
+  if( !zPrefix ) zPrefix = "";
+  if( !zSep ) zSep = ", ";
+  for(i=0; i<nName; i++){
+    char *zBase = sqlite3_mprintf("%s%s",zPrefix,azName[i]);
+    char *zColumn = zBase;
+    int iSuffix = 1;
+    if( !zBase ) return SQLITE_NOMEM;
+    while( doltliteVtabColumnNameUsed(azName,nName,i,zPrefix,
+                                      azReserved,nReserved,zColumn) ){
+      if( zColumn!=zBase ) sqlite3_free(zColumn);
+      zColumn = sqlite3_mprintf("%s_%d",zBase,iSuffix++);
+      if( !zColumn ){
+        sqlite3_free(zBase);
+        return SQLITE_NOMEM;
+      }
+    }
+    if( i>0 ) sqlite3_str_appendall(pStr,zSep);
+    sqlite3_str_appendf(pStr,"\"%w\"%s",zColumn,
+                        i==iIntegerPk ? " INTEGER" : "");
+    if( zColumn!=zBase ) sqlite3_free(zColumn);
+    sqlite3_free(zBase);
+    if( sqlite3_str_errcode(pStr)!=SQLITE_OK ) return sqlite3_str_errcode(pStr);
+  }
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE void doltliteFreeStringArray(char **az, int n){
   int i;
   if( !az ) return;

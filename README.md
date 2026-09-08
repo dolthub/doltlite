@@ -367,6 +367,12 @@ SELECT d.*
   JOIN dolt_log('v1.0..HEAD') AS l ON l.commit_hash = d.to_commit;
 ```
 
+SQLite requires virtual-table column names to be unique. If a generated user
+column in `dolt_diff_<table>`, `dolt_history_<table>`, or
+`dolt_conflicts_<table>` collides case-insensitively with a metadata column,
+the metadata keeps its Dolt name and the user column receives the first
+available numeric suffix (`_1`, `_2`, …).
+
 #### Log and History
 
 ```sql
