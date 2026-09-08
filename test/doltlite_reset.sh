@@ -322,15 +322,15 @@ INSERT INTO dolt_ignore VALUES('scratch_%',1);
 INSERT INTO dolt_docs VALUES('README.md','hello');
 INSERT INTO dolt_tests VALUES('t1','g','SELECT 1','expected_single_value','==','1');
 CREATE TABLE newt(id INTEGER PRIMARY KEY);
-CREATE TABLE dolt_custom(a INTEGER PRIMARY KEY);
-INSERT INTO dolt_custom VALUES(7);
+CREATE TABLE custom(a INTEGER PRIMARY KEY);
+INSERT INTO custom VALUES(7);
 SELECT dolt_reset('--hard');
 SQL
 run_test "hard_reset_keeps_untracked_lazy_system_tables" \
   "SELECT group_concat(table_name,'|') FROM (SELECT table_name FROM dolt_status ORDER BY table_name);" \
-  "dolt_custom|dolt_docs|dolt_ignore|dolt_tests|newt" "$DB14"
+  "custom|dolt_docs|dolt_ignore|dolt_tests|newt" "$DB14"
 run_test "hard_reset_keeps_untracked_lazy_system_table_rows" \
-  "SELECT (SELECT count(*) FROM dolt_ignore) || '|' || (SELECT count(*) FROM dolt_docs WHERE doc_name='README.md') || '|' || (SELECT count(*) FROM dolt_tests) || '|' || (SELECT count(*) FROM dolt_custom);" \
+  "SELECT (SELECT count(*) FROM dolt_ignore) || '|' || (SELECT count(*) FROM dolt_docs WHERE doc_name='README.md') || '|' || (SELECT count(*) FROM dolt_tests) || '|' || (SELECT count(*) FROM custom);" \
   "1|1|1|1" "$DB14"
 
 DB15=/tmp/test_reset15_$$.db; rm -f "$DB15"

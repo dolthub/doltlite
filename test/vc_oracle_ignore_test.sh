@@ -49,7 +49,7 @@ doltlite_schema_reject() {
   local dir="$TMPROOT/${name}_rej"
   mkdir -p "$dir/dl"
   echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
-  if grep -qi 'dolt_ignore' "$dir/out" \
+  if grep -qiE 'dolt_ignore|reserved for internal use' "$dir/out" \
      && grep -qiE 'error|fail' "$dir/out"; then
     pass=$((pass+1))
   else
@@ -425,22 +425,6 @@ doltlite_runtime_expect() {
   fi
 }
 
-doltlite_runtime_reject() {
-  local name="$1" sql="$2"
-  local dir="$TMPROOT/${name}_rtrej"
-  mkdir -p "$dir/dl"
-  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
-  if grep -qi 'unexpected schema' "$dir/out" \
-     && grep -qiE 'error|fail' "$dir/out"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected doltlite runtime reject)"
-    echo "    output:"; sed 's/^/      /' "$dir/out"
-  fi
-}
-
 doltlite_runtime_expect "temp_shadow_ignored_main_wins" "
 INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
 CREATE TEMP TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
@@ -448,10 +432,8 @@ INSERT INTO temp.dolt_ignore VALUES ('tmp_*', 0);
 CREATE TABLE tmp_shadowed(x INT PRIMARY KEY);
 " ""
 
-doltlite_runtime_reject "runtime_wrong_shape_view" "
+doltlite_schema_reject "create_view_dolt_ignore_reserved" "
 CREATE VIEW dolt_ignore AS SELECT 'tmp_*' AS pattern;
-CREATE TABLE tmp_bad(x INT PRIMARY KEY);
-SELECT * FROM dolt_status;
 "
 
 echo "--- cross-branch + merge + reset ---"
