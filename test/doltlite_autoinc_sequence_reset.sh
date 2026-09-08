@@ -128,4 +128,21 @@ INSERT INTO tt(v) VALUES(3);
 SELECT id FROM tt;
 " "1" "$DB"
 
+run_test "seq_clone_copies_without_error" "
+.mode batch
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT);
+INSERT INTO t VALUES(1),(2);
+UPDATE sqlite_sequence SET seq=100 WHERE name='t';
+.clone $ROOT/clone.db
+.open $ROOT/clone.db
+SELECT max(seq) FROM sqlite_sequence;
+INSERT INTO t DEFAULT VALUES;
+SELECT max(id) FROM t;
+SELECT max(seq) FROM sqlite_sequence;
+" "t... done
+done
+100
+101
+101" ":memory:"
+
 dltest_finish

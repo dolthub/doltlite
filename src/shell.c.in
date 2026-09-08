@@ -6149,8 +6149,15 @@ static void tryToCloneSchema(
   const unsigned char *zSql;
   char *zErrMsg = 0;
 
+#ifdef DOLTLITE_PROLLY
+  zQuery = sqlite3_mprintf("SELECT name, sql FROM sqlite_schema"
+                           " WHERE %s"
+                           " ORDER BY name='sqlite_sequence', rowid ASC",
+                           zWhere);
+#else
   zQuery = sqlite3_mprintf("SELECT name, sql FROM sqlite_schema"
                            " WHERE %s ORDER BY rowid ASC", zWhere);
+#endif
   shell_check_oom(zQuery);
   rc = sqlite3_prepare_v2(p->db, zQuery, -1, &pQuery, 0);
   if( rc ){
