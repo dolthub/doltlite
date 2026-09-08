@@ -2845,9 +2845,7 @@ void sqlite3EndTable(
   bUserWithoutRowid = (tabOpts & TF_WithoutRowid)!=0;
   if( !bUserWithoutRowid
    && iDb!=1
-#ifndef SQLITE_TEST
    && db->aDb[iDb].pBt && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
-#endif
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
    && IsOrdinaryTable(p)
    && sqlite3StrNICmp(p->zName, "sqlite_", 7)!=0

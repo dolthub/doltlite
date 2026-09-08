@@ -9,7 +9,11 @@ set testprefix doltlite_deserialize_stock_image
 db close
 forcedelete stockimg.db stockmain.db
 sqlite3 dbs file:stockimg.db?doltlite_engine=sqlite -uri 1
-dbs eval { CREATE TABLE t(a INT); INSERT INTO t VALUES(1),(2),(3) }
+dbs eval {
+  CREATE TABLE t(a INT); INSERT INTO t VALUES(1),(2),(3);
+  CREATE TABLE pk(k1 INT, k2 INT, v, PRIMARY KEY(k1,k2));
+  INSERT INTO pk VALUES(1,10,'a'),(2,20,'b');
+}
 set img [dbs serialize]
 dbs close
 
@@ -28,6 +32,17 @@ do_test 1.3 {
 do_test 1.4 {
   string range [db serialize] 0 14
 } {SQLite format 3}
+# A composite PRIMARY KEY stays in stock rowid form: rows come from the table
+# b-tree, not from the autoindex.
+do_test 1.5 {
+  db eval { SELECT rowid, k1, k2, v FROM pk ORDER BY rowid }
+} {1 1 10 a 2 2 20 b}
+do_test 1.6 {
+  db eval { SELECT v FROM pk WHERE k1=2 AND k2=20 }
+} {b}
+do_test 1.7 {
+  db eval { INSERT INTO pk VALUES(3,30,'c'); SELECT count(*) FROM pk; PRAGMA integrity_check }
+} {3 ok}
 db close
 
 # 2: into a connection whose main is a stock file
