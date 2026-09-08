@@ -360,6 +360,7 @@ struct ConstraintViolationBatch {
   ConstraintViolationTable *aTables;
   int nTables;
   int nAppended;   /* 0 when nothing was added, matching the non-batch path */
+  int nDropped;    /* tables removed by BatchDropTables; also a write */
 };
 
 int doltliteConstraintViolationBatchBegin(sqlite3 *db){
@@ -382,7 +383,7 @@ int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit){
   int rc = SQLITE_OK;
   if( !pBatch ) return SQLITE_OK;
   doltliteSetCvBatch(db, 0);
-  if( commit && pBatch->nAppended>0 ){
+  if( commit && (pBatch->nAppended>0 || pBatch->nDropped>0) ){
     ChunkStore *cs = doltliteGetChunkStore(db);
     rc = cs ? storeUpdatedViolations(db, cs, pBatch->aTables, pBatch->nTables)
             : SQLITE_ERROR;
@@ -390,6 +391,45 @@ int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit){
   freeViolationTables(pBatch->aTables, pBatch->nTables);
   sqlite3_free(pBatch);
   return rc;
+}
+
+int doltliteConstraintViolationBatchActive(sqlite3 *db){
+  return doltliteGetCvBatch(db)!=0;
+}
+
+/* Drop tables from the open batch's copy of the catalog; nNames==0 drops
+** every table. Nothing reaches the store until BatchEnd commits, so a
+** detector error between the drop and the end leaves the recorded
+** findings exactly as they were, and no other session ever sees the
+** cleared state without the new findings beside it. */
+int doltliteConstraintViolationBatchDropTables(
+  sqlite3 *db,
+  const char *const *azTables,
+  int nNames
+){
+  ConstraintViolationBatch *pBatch = (ConstraintViolationBatch*)doltliteGetCvBatch(db);
+  int nKept = 0;
+  int i, j;
+  if( !pBatch ) return SQLITE_MISUSE;
+  for(i=0; i<pBatch->nTables; i++){
+    int drop = nNames==0;
+    for(j=0; !drop && j<nNames; j++){
+      if( pBatch->aTables[i].zName && azTables[j]
+       && sqlite3_stricmp(pBatch->aTables[i].zName, azTables[j])==0 ){
+        drop = 1;
+      }
+    }
+    if( drop ){
+      freeViolationTable(&pBatch->aTables[i]);
+      memset(&pBatch->aTables[i], 0, sizeof(pBatch->aTables[i]));
+      pBatch->nDropped++;
+    }else{
+      if( nKept!=i ) pBatch->aTables[nKept] = pBatch->aTables[i];
+      nKept++;
+    }
+  }
+  pBatch->nTables = nKept;
+  return SQLITE_OK;
 }
 
 int doltliteAppendConstraintViolation(
@@ -425,47 +465,6 @@ int doltliteAppendConstraintViolation(
     rc = storeUpdatedViolations(db, cs, aTables, nTables);
   }
   freeViolationTables(aTables, nTables);
-  return rc;
-}
-
-/* Drop recorded violations only for named tables. Wholesale clear would
-** let a scoped re-check hide other tables from the commit gate. */
-int doltliteClearConstraintViolationsForTables(
-  sqlite3 *db,
-  const char *const *azTables,
-  int nNames
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ConstraintViolationTable *aTables = 0;
-  int nTables = 0;
-  int nKept = 0;
-  int i, j;
-  int rc;
-
-  if( !cs || nNames<=0 ) return SQLITE_OK;
-  rc = loadAllViolations(db, cs, &aTables, &nTables);
-  if( rc!=SQLITE_OK ) return rc;
-
-  for(i=0; i<nTables; i++){
-    int drop = 0;
-    for(j=0; j<nNames; j++){
-      if( aTables[i].zName && azTables[j]
-       && sqlite3_stricmp(aTables[i].zName, azTables[j])==0 ){
-        drop = 1;
-        break;
-      }
-    }
-    if( drop ){
-      /* Free contents only; the array is one block released at the end. */
-      freeViolationTable(&aTables[i]);
-      memset(&aTables[i], 0, sizeof(aTables[i]));
-    }else{
-      if( nKept!=i ) aTables[nKept] = aTables[i];
-      nKept++;
-    }
-  }
-  rc = storeUpdatedViolations(db, cs, aTables, nKept);
-  freeViolationTables(aTables, nKept);
   return rc;
 }
 

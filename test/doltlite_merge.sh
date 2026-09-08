@@ -1097,5 +1097,32 @@ run_test "cherry_pick_partial_index_null_rows" \
 run_test "cherry_pick_partial_index_verify_constraints" \
   "SELECT dolt_verify_constraints();" "0" "$DB63"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64"
+# A verify that errors partway must leave earlier findings in place: the
+# clear used to persist before the detectors ran and nothing put it back.
+DB66=/tmp/test_merge66_$$.db; rm -f "$DB66"
+$DOLTLITE "$DB66" > /dev/null 2>&1 <<'SQL'
+PRAGMA foreign_keys=OFF;
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT REFERENCES parent(id));
+INSERT INTO child VALUES(1, 99);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT CHECK(json_extract(v,'$.ok')));
+INSERT INTO t VALUES(1,'{"ok":1}');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_verify_constraints('--all');
+PRAGMA ignore_check_constraints=ON;
+INSERT INTO t VALUES(2,'not-json');
+PRAGMA ignore_check_constraints=OFF;
+SQL
+run_test "verify_recorded_orphan_before_failed_check" \
+  "SELECT count(*) FROM dolt_constraint_violations_child;" "1" "$DB66"
+run_test_match "verify_failed_check_keeps_recorded_orphan" \
+  "SELECT dolt_verify_constraints('--all');
+   SELECT count(*) FROM dolt_constraint_violations_child;" "^1\$" "$DB66"
+run_test_match "verify_failed_default_scope_keeps_recorded_orphan" \
+  "SELECT dolt_verify_constraints();
+   SELECT count(*) FROM dolt_constraint_violations_child;" "^1\$" "$DB66"
+run_test "verify_recorded_orphan_survives_failed_checks" \
+  "SELECT count(*) FROM dolt_constraint_violations_child;" "1" "$DB66"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66"
 dltest_finish

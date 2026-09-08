@@ -895,6 +895,7 @@ int doltliteDetectConstraintViolationsFiltered(
   int rc;
   sqlite3_stmt *pStmt = 0;
   int needsDetection = 0;
+  int bOwnBatch = 1;
 
   if( pzErr ) *pzErr = 0;
 
@@ -933,7 +934,11 @@ int doltliteDetectConstraintViolationsFiltered(
     return SQLITE_OK;
   }
 
-  rc = doltliteConstraintViolationBatchBegin(db);
+  /* A caller that already opened a batch (dolt_verify_constraints, which
+  ** drops the tables it re-scans into it first) commits or discards it
+  ** itself, so the clear and the new findings land in one write. */
+  bOwnBatch = !doltliteConstraintViolationBatchActive(db);
+  rc = bOwnBatch ? doltliteConstraintViolationBatchBegin(db) : SQLITE_OK;
   if( rc==SQLITE_OK ){
     rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
                                          &zDetectErrMsg, &nViolations,
@@ -959,7 +964,7 @@ int doltliteDetectConstraintViolationsFiltered(
                                             &zDetectErrMsg, &nStrict,
                                             azTables, nTables);
   }
-  {
+  if( bOwnBatch ){
     int erc = doltliteConstraintViolationBatchEnd(
         db, rc==SQLITE_OK && bPersist);
     if( rc==SQLITE_OK ) rc = erc;
