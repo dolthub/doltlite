@@ -5666,7 +5666,6 @@ filefmt filefmt-2.2.2 class=intentional  # SQLite page-header/format bytes; CTLD
 
 # shell bucket — upstream shell*.test driven through the doltlite CLI (the
 # regression jobs alias sqlite3 -> doltlite for this bucket only).
-shell2 shell2-1.4.9 class=engine-gap issue=2706  # .clone errors on sqlite_sequence; clone content is right
 # The CLI leaves DEFENSIVE off (issue 2712, to match sqlite3); stock rejects
 # the sqlite_master write in the dump.
 shell9 shell9-1.2.2 class=engine-gap issue=2712  # .read of a dump that writes sqlite_master succeeds
