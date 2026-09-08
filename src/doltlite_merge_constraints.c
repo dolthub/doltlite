@@ -34,12 +34,14 @@ static int copyCursorRow(
   return SQLITE_OK;
 }
 
-static int fetchRowByRowid(
+static int fetchRowAtCursor(
   ChunkStore *cs,
   ProllyCache *pCache,
   const ProllyHash *pRoot,
   u8 flags,
-  i64 targetRowid,
+  int bIntKey,
+  i64 iKey,
+  const u8 *pBlob, int nBlob,
   u8 **ppKey, int *pnKey,
   u8 **ppVal, int *pnVal
 ){
@@ -52,46 +54,12 @@ static int fetchRowByRowid(
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_NOTFOUND;
 
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorSeekInt(&cur, targetRowid, &res);
-  if( rc!=SQLITE_OK ){
+  rc = bIntKey
+      ? prollyCursorSeekInt(&cur, iKey, &res)
+      : prollyCursorSeekBlob(&cur, pBlob, nBlob, &res);
+  if( rc!=SQLITE_OK || res!=0 ){
     prollyCursorClose(&cur);
-    return rc;
-  }
-  if( res!=0 ){
-    prollyCursorClose(&cur);
-    return SQLITE_NOTFOUND;
-  }
-  rc = copyCursorRow(&cur, ppKey, pnKey, ppVal, pnVal);
-  prollyCursorClose(&cur);
-  return rc;
-}
-
-static int fetchRowByBlobKey(
-  ChunkStore *cs,
-  ProllyCache *pCache,
-  const ProllyHash *pRoot,
-  u8 flags,
-  const u8 *pKey, int nKey,
-  u8 **ppKey, int *pnKey,
-  u8 **ppVal, int *pnVal
-){
-  ProllyCursor cur;
-  int res, rc;
-
-  *ppKey = 0; *pnKey = 0;
-  *ppVal = 0; *pnVal = 0;
-
-  if( prollyHashIsEmpty(pRoot) ) return SQLITE_NOTFOUND;
-
-  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorSeekBlob(&cur, pKey, nKey, &res);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&cur);
-    return rc;
-  }
-  if( res!=0 ){
-    prollyCursorClose(&cur);
-    return SQLITE_NOTFOUND;
+    return rc!=SQLITE_OK ? rc : SQLITE_NOTFOUND;
   }
   rc = copyCursorRow(&cur, ppKey, pnKey, ppVal, pnVal);
   prollyCursorClose(&cur);
@@ -485,11 +453,13 @@ static int fetchRowByPkRecord(
   return SQLITE_NOTFOUND;
 }
 
-int fetchAncestorRowByName(
+static int fetchAncestorRow(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
   const char *zTable,
+  int bIntKey,
   i64 rowid,
+  const u8 *pKey, int nKey,
   u8 **ppAncVal, int *pnAncVal
 ){
   ChunkStore *cs;
@@ -509,11 +479,24 @@ int fetchAncestorRowByName(
 
   pTE = doltliteFindTableByName(aAnc, nAnc, zTable);
   if( !pTE ) return SQLITE_NOTFOUND;
+  if( !bIntKey && (pTE->flags & PROLLY_NODE_INTKEY) ) return SQLITE_NOTFOUND;
 
-  rc = fetchRowByRowid(cs, pCache, &pTE->root, pTE->flags, rowid,
-                       &pAncKey, &nAncKey, ppAncVal, pnAncVal);
+  rc = fetchRowAtCursor(cs, pCache, &pTE->root, pTE->flags,
+                        bIntKey, rowid, pKey, nKey,
+                        &pAncKey, &nAncKey, ppAncVal, pnAncVal);
   sqlite3_free(pAncKey);
   return rc;
+}
+
+int fetchAncestorRowByName(
+  sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
+  const char *zTable,
+  i64 rowid,
+  u8 **ppAncVal, int *pnAncVal
+){
+  return fetchAncestorRow(db, aAnc, nAnc, zTable, 1, rowid, 0, 0,
+                          ppAncVal, pnAncVal);
 }
 
 int fetchAncestorRowByKey(
@@ -523,30 +506,8 @@ int fetchAncestorRowByKey(
   const u8 *pKey, int nKey,
   u8 **ppAncVal, int *pnAncVal
 ){
-  ChunkStore *cs;
-  ProllyCache *pCache;
-  struct TableEntry *pTE;
-  u8 *pAncKey = 0;
-  int nAncKey = 0;
-  int rc;
-
-  *ppAncVal = 0;
-  *pnAncVal = 0;
-
-  if( !aAnc || nAnc==0 ) return SQLITE_NOTFOUND;
-
-  cs = doltliteGetChunkStore(db);
-  pCache = doltliteGetCache(db);
-  if( !cs || !pCache ) return SQLITE_ERROR;
-
-  pTE = doltliteFindTableByName(aAnc, nAnc, zTable);
-  if( !pTE ) return SQLITE_NOTFOUND;
-  if( pTE->flags & PROLLY_NODE_INTKEY ) return SQLITE_NOTFOUND;
-
-  rc = fetchRowByBlobKey(cs, pCache, &pTE->root, pTE->flags, pKey, nKey,
-                         &pAncKey, &nAncKey, ppAncVal, pnAncVal);
-  sqlite3_free(pAncKey);
-  return rc;
+  return fetchAncestorRow(db, aAnc, nAnc, zTable, 0, 0, pKey, nKey,
+                          ppAncVal, pnAncVal);
 }
 
 int isRowPreExisting(
@@ -610,8 +571,8 @@ int fetchOrphanRow(
   rc = doltliteGetSessionTableRoot(db, iTable, &root, &flags);
   if( rc != SQLITE_OK ) return rc;
 
-  return fetchRowByRowid(cs, pCache, &root, flags, rowid,
-                         ppKey, pnKey, ppVal, pnVal);
+  return fetchRowAtCursor(cs, pCache, &root, flags, 1, rowid, 0, 0,
+                          ppKey, pnKey, ppVal, pnVal);
 }
 
 int fetchRowByPkFromTable(
