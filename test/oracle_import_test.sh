@@ -20,7 +20,7 @@ oracle_import() {
   printf '%s' "$csv" > "$dir/data.csv"
 
   local dl_out
-  dl_out=$(printf '.import %s t\n.headers off\n.mode csv\nSELECT * FROM t;\n' "$dir/data.csv" \
+  dl_out=$(printf '.mode csv\n.import %s t\n.headers off\nSELECT * FROM t;\n' "$dir/data.csv" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize)
 
@@ -53,7 +53,7 @@ assert_dl_columns() {
   printf '%s' "$csv" > "$dir/data.csv"
 
   local actual
-  actual=$(printf '.import %s t\nSELECT count(*) FROM pragma_table_info(%s);\n' \
+  actual=$(printf '.mode csv\n.import %s t\nSELECT count(*) FROM pragma_table_info(%s);\n' \
                   "$dir/data.csv" "'t'" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r')
