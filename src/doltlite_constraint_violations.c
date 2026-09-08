@@ -8,7 +8,6 @@
 #include <string.h>
 
 static void freeViolationTable(ConstraintViolationTable *pTable);
-static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r);
 
 static void freeViolationRow(ConstraintViolationRow *r){
   if( !r ) return;
@@ -16,6 +15,21 @@ static void freeViolationRow(ConstraintViolationRow *r){
   sqlite3_free(r->pVal);
   sqlite3_free(r->zInfo);
   memset(r, 0, sizeof(*r));
+}
+
+static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r){
+  u64 h = DOLTLITE_FNV1A_OFFSET;
+  h = doltliteFnv1aBytes(h, r->pKey, r->nKey);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aI64(h, r->intKey);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aBytes(h, r->pVal, r->nVal);
+  h = doltliteFnv1aSep(h);
+  h ^= (u64)r->violationType;
+  h *= DOLTLITE_FNV1A_PRIME;
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aStr(h, r->zInfo);
+  return (sqlite3_int64)(h & 0x7fffffffffffffffULL);
 }
 
 static void freeViolationTables(ConstraintViolationTable *a, int n){
@@ -56,70 +70,32 @@ static ConstraintViolationTable *findOrCreateViolationTable(
 #define DCV_MAGIC2 'V'
 #define DCV_VERSION 1
 
-static int serializeViolations(
-  ChunkStore *cs,
-  ConstraintViolationTable *aTables, int nTables,
-  ProllyHash *pHash
-){
-  sqlite3_int64 sz = 4 + 2;
-  int i, j, rc;
-  u8 *buf;
-  DlByteWriter w;
-
-  if( nTables<0 || nTables>0xffff ) return SQLITE_TOOBIG;
-  if( nTables>0 && !aTables ) return SQLITE_CORRUPT;
-  for(i=0; i<nTables; i++){
-    size_t nName = aTables[i].zName ? strlen(aTables[i].zName) : 0;
-    int nl;
-    if( nName>0xffff || aTables[i].nRows<0 ) return SQLITE_TOOBIG;
-    if( aTables[i].nRows>0 && !aTables[i].aRows ) return SQLITE_CORRUPT;
-    nl = (int)nName;
-    rc = dlAddSize(&sz, 2 + nl + 4);
-    if( rc!=SQLITE_OK ) return rc;
-    for(j=0; j<aTables[i].nRows; j++){
-      ConstraintViolationRow *r = &aTables[i].aRows[j];
-      size_t nInfo = r->zInfo ? strlen(r->zInfo) : 0;
-      if( r->nKey<0 || r->nVal<0 ) return SQLITE_CORRUPT;
-      if( (r->nKey>0 && !r->pKey) || (r->nVal>0 && !r->pVal) ){
-        return SQLITE_CORRUPT;
-      }
-      if( nInfo>INT_MAX ) return SQLITE_TOOBIG;
-      rc = dlAddSize(&sz, 21);
-      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, r->nKey);
-      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, r->nVal);
-      if( rc==SQLITE_OK ) rc = dlAddSize(&sz, (sqlite3_int64)nInfo);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
-
-  buf = sqlite3_malloc64((sqlite3_uint64)sz);
-  if( !buf ) return SQLITE_NOMEM;
-  dlWriterInit(&w, buf, (int)sz);
-
-  dlWriteFramedHeader(&w, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION, nTables);
-
-  for(i=0; i<nTables; i++){
-    int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
-    dlWriteU16Name(&w, aTables[i].zName, nl);
-    dlWriteU32(&w, aTables[i].nRows);
-    for(j=0; j<aTables[i].nRows; j++){
-      ConstraintViolationRow *r = &aTables[i].aRows[j];
-      int ni = r->zInfo ? (int)strlen(r->zInfo) : 0;
-      dlWriteU8(&w, (u8)r->violationType);
-      dlWriteU32Blob(&w, r->pKey, r->nKey);
-      dlWriteI64(&w, r->intKey);
-      dlWriteU32Blob(&w, r->pVal, r->nVal);
-      dlWriteU32Blob(&w, (const u8*)r->zInfo, ni);
-    }
-  }
-
-  if( w.err || w.p!=w.end ){
-    sqlite3_free(buf);
-    return SQLITE_CORRUPT;
-  }
-  rc = chunkStorePut(cs, buf, (int)sz, pHash);
-  sqlite3_free(buf);
+static int measureViolationRow(const void *pRow, sqlite3_int64 *pSz){
+  const ConstraintViolationRow *r = (const ConstraintViolationRow*)pRow;
+  size_t nInfo = r->zInfo ? strlen(r->zInfo) : 0;
+  int rc;
+  if( r->nKey<0 || r->nVal<0 ) return SQLITE_CORRUPT;
+  if( (r->nKey>0 && !r->pKey) || (r->nVal>0 && !r->pVal) ) return SQLITE_CORRUPT;
+  if( nInfo>INT_MAX ) return SQLITE_TOOBIG;
+  rc = dlAddSize(pSz, 21);
+  if( rc==SQLITE_OK ) rc = dlAddSize(pSz, r->nKey);
+  if( rc==SQLITE_OK ) rc = dlAddSize(pSz, r->nVal);
+  if( rc==SQLITE_OK ) rc = dlAddSize(pSz, (sqlite3_int64)nInfo);
   return rc;
+}
+
+static void writeViolationRow(DlByteWriter *w, const void *pRow){
+  const ConstraintViolationRow *r = (const ConstraintViolationRow*)pRow;
+  int ni = r->zInfo ? (int)strlen(r->zInfo) : 0;
+  dlWriteU8(w, (u8)r->violationType);
+  dlWriteU32Blob(w, r->pKey, r->nKey);
+  dlWriteI64(w, r->intKey);
+  dlWriteU32Blob(w, r->pVal, r->nVal);
+  dlWriteU32Blob(w, (const u8*)r->zInfo, ni);
+}
+
+static i64 violationRowidIO(const void *pRow){
+  return cvrViolationRowid((const ConstraintViolationRow*)pRow);
 }
 
 static int readViolationRow(DlByteReader *rd, ConstraintViolationRow *r){
@@ -161,48 +137,39 @@ static void freeViolationRowIO(void *pRow){
   freeViolationRow((ConstraintViolationRow*)pRow);
 }
 
+static void freeViolationTablesVoid(void *aTables, int nTables){
+  freeViolationTables((ConstraintViolationTable*)aTables, nTables);
+}
+
+static const DlFramedCodec *violationCodec(void){
+  static const DlFramedCodec codec = {
+    DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
+    sizeof(ConstraintViolationRow),
+    1, 0, 0,
+    readViolationRowIO, skipViolationRowIO, freeViolationRowIO,
+    measureViolationRow, writeViolationRow, violationRowidIO
+  };
+  return &codec;
+}
+
+static int serializeViolations(
+  ChunkStore *cs,
+  ConstraintViolationTable *aTables, int nTables,
+  ProllyHash *pHash
+){
+  return dlFramedSerialize(cs, pHash, violationCodec(), nTables,
+      DL_FRAMED_TABLE(ConstraintViolationTable, zName, nRows, aRows),
+      aTables);
+}
+
 static int deserializeAllViolations(
   const u8 *data,
   int nData,
   ConstraintViolationTable **ppTables, int *pnTables
 ){
-  DlByteReader rd;
-  int nTables, i, rc;
-  ConstraintViolationTable *aTables;
-
-  *ppTables = 0;
-  *pnTables = 0;
-
-  if( !data || nData<(4+2) ) return SQLITE_CORRUPT;
-
-  dlReaderInit(&rd, data, nData);
-  if( dlReadFramedHeader(&rd, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
-                         &nTables)!=SQLITE_OK ){
-    return SQLITE_CORRUPT;
-  }
-
-  aTables = sqlite3_malloc(nTables ? nTables * (int)sizeof(*aTables) : 1);
-  if( !aTables ) return SQLITE_NOMEM;
-  memset(aTables, 0, nTables ? nTables * (int)sizeof(*aTables) : 1);
-
-  for(i=0; i<nTables; i++){
-    void *aRows = 0;
-    rc = dlReadNamedRowTable(&rd, &aTables[i].zName, &aTables[i].nRows,
-                             &aRows, sizeof(ConstraintViolationRow), 1,
-                             readViolationRowIO, freeViolationRowIO);
-    if( rc!=SQLITE_OK ) goto fail;
-    aTables[i].aRows = (ConstraintViolationRow*)aRows;
-  }
-
-  if( rd.err || rd.p != rd.end ){ rc = SQLITE_CORRUPT; goto fail; }
-
-  *ppTables = aTables;
-  *pnTables = nTables;
-  return SQLITE_OK;
-
-fail:
-  freeViolationTables(aTables, nTables);
-  return rc;
+  return dlFramedDeserialize(data, nData, violationCodec(),
+      DL_FRAMED_TABLE(ConstraintViolationTable, zName, nRows, aRows),
+      (void**)ppTables, pnTables, freeViolationTablesVoid);
 }
 
 int doltliteDeserializeConstraintViolationsForTest(const u8 *data, int nData){
@@ -246,8 +213,8 @@ static int loadViolationTable(
 ){
   ProllyHash hash;
   u8 *data = 0; int nData = 0;
-  DlByteReader rd;
-  int nTables, i, rc;
+  void *aRows = 0;
+  int rc;
 
   memset(pTable, 0, sizeof(*pTable));
   *pFound = 0;
@@ -257,35 +224,15 @@ static int loadViolationTable(
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
-
-  dlReaderInit(&rd, data, nData);
-  if( dlReadFramedHeader(&rd, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
-                         &nTables)!=SQLITE_OK ){
-    sqlite3_free(data);
-    return SQLITE_CORRUPT;
-  }
-
-  for(i=0; i<nTables; i++){
-    void *aRows = 0;
-    rc = dlMatchOrSkipNamedTable(&rd, zTableName, pFound,
-                                 &pTable->zName, &pTable->nRows, &aRows,
-                                 sizeof(ConstraintViolationRow), 1,
-                                 readViolationRowIO, skipViolationRowIO,
-                                 freeViolationRowIO);
-    if( rc!=SQLITE_OK ) goto fail;
-    if( aRows ) pTable->aRows = (ConstraintViolationRow*)aRows;
-  }
-
-  if( rd.err || rd.p != rd.end ){ rc = SQLITE_CORRUPT; goto fail; }
-
+  rc = dlFramedLoadNamed(data, nData, violationCodec(), zTableName,
+                         &pTable->zName, &pTable->nRows, &aRows, pFound);
   sqlite3_free(data);
+  pTable->aRows = (ConstraintViolationRow*)aRows;
+  if( rc!=SQLITE_OK ){
+    freeViolationTable(pTable);
+    return rc;
+  }
   return SQLITE_OK;
-
-fail:
-  freeViolationTable(pTable);
-  sqlite3_free(data);
-  return rc;
 }
 
 static void freeViolationTable(ConstraintViolationTable *pTable){
@@ -352,128 +299,22 @@ static int deleteViolationRowFromCatalog(
   ProllyHash hash;
   u8 *data = 0;
   u8 *out = 0;
-  int nData = 0;
-  DlByteReader rd;
-  DlByteWriter w;
-  int nTables, nOutTables = 0;
-  int i, j, rc = SQLITE_OK;
+  int nData = 0, nOut = 0, nOutTables = 0;
   int deleted = 0;
+  int rc;
 
   doltliteGetSessionConstraintViolationsCatalog(db, &hash);
   if( prollyHashIsEmpty(&hash) ) return SQLITE_OK;
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
-
-  out = sqlite3_malloc(nData);
-  if( !out ){ sqlite3_free(data); return SQLITE_NOMEM; }
-
-  dlReaderInit(&rd, data, nData);
-  if( dlReadFramedHeader(&rd, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
-                         &nTables)!=SQLITE_OK ){
-    rc = SQLITE_CORRUPT;
-    goto delete_violation_done;
-  }
-
-  dlWriterInit(&w, out, nData);
-  dlWriteFramedHeader(&w, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION, 0);
-
-  for(i=0; i<nTables; i++){
-    const u8 *pTableStart = rd.p;
-    u8 *pOutTableStart = w.p;
-    char *zName = 0;
-    int nr;
-    int isMatch;
-
-    rc = dlReadU16Name(&rd, &zName);
-    if( rc!=SQLITE_OK ) goto delete_violation_done;
-    nr = dlReadU32(&rd);
-    if( rd.err || nr<0 ){
-      sqlite3_free(zName);
-      rc = SQLITE_CORRUPT;
-      goto delete_violation_done;
-    }
-    if( (sqlite3_uint64)nr > (sqlite3_uint64)(rd.end - rd.p) ){
-      sqlite3_free(zName);
-      rc = SQLITE_CORRUPT;
-      goto delete_violation_done;
-    }
-
-    isMatch = (!deleted && zName && strcmp(zName, zTableName)==0);
-    if( isMatch ){
-      u8 *pCountOut = 0;
-      int nKeep = 0;
-      int nl = (int)strlen(zName);
-
-      dlWriteU16Name(&w, zName, nl);
-      pCountOut = w.p;
-      dlWriteU32(&w, 0);
-      for(j=0; j<nr; j++){
-        ConstraintViolationRow vr;
-        memset(&vr, 0, sizeof(vr));
-        rc = readViolationRow(&rd, &vr);
-        if( rc!=SQLITE_OK ){
-          freeViolationRow(&vr);
-          sqlite3_free(zName);
-          goto delete_violation_done;
-        }
-        if( !deleted && cvrViolationRowid(&vr) == deleteRowid ){
-          deleted = 1;
-        }else{
-          int ni = vr.zInfo ? (int)strlen(vr.zInfo) : 0;
-          dlWriteU8(&w, (u8)vr.violationType);
-          dlWriteU32Blob(&w, vr.pKey, vr.nKey);
-          dlWriteI64(&w, vr.intKey);
-          dlWriteU32Blob(&w, vr.pVal, vr.nVal);
-          dlWriteU32Blob(&w, (const u8*)vr.zInfo, ni);
-          nKeep++;
-        }
-        freeViolationRow(&vr);
-      }
-      if( nKeep==0 ){
-        w.p = pOutTableStart;
-      }else{
-        DlByteWriter cw;
-        dlWriterInit(&cw, pCountOut, 4);
-        dlWriteU32(&cw, nKeep);
-        assert( !cw.err );
-        nOutTables++;
-      }
-    }else{
-      for(j=0; j<nr; j++){
-        rc = skipViolationRow(&rd);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(zName);
-          goto delete_violation_done;
-        }
-      }
-      assert( !isMatch );
-      {
-        int nCopy = (int)(rd.p - pTableStart);
-        dlWriteBytes(&w, pTableStart, nCopy);
-        nOutTables++;
-      }
-    }
-    sqlite3_free(zName);
-  }
-
-  if( rd.err || rd.p != rd.end || w.err ){
-    rc = SQLITE_CORRUPT;
-    goto delete_violation_done;
-  }
-  if( deleted ){
-    DlByteWriter hw;
-    dlWriterInit(&hw, out, 6);
-    dlWriteFramedHeader(&hw, DCV_MAGIC0, DCV_MAGIC1, DCV_MAGIC2, DCV_VERSION,
-                        nOutTables);
-    assert( !hw.err );
-    rc = storeViolationBytes(db, cs, out, (int)(w.p - out), nOutTables);
-  }
-
-delete_violation_done:
-  sqlite3_free(out);
+  rc = dlFramedDeleteRow(data, nData, violationCodec(), zTableName, deleteRowid,
+                         &out, &nOut, &nOutTables, &deleted);
   sqlite3_free(data);
+  if( rc==SQLITE_OK && deleted ){
+    rc = storeViolationBytes(db, cs, out, nOut, nOutTables);
+  }
+  sqlite3_free(out);
   return rc;
 }
 
@@ -856,21 +697,6 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     sqlite3_result_null(ctx);
   }
   return SQLITE_OK;
-}
-
-static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r){
-  u64 h = DOLTLITE_FNV1A_OFFSET;
-  h = doltliteFnv1aBytes(h, r->pKey, r->nKey);
-  h = doltliteFnv1aSep(h);
-  h = doltliteFnv1aI64(h, r->intKey);
-  h = doltliteFnv1aSep(h);
-  h = doltliteFnv1aBytes(h, r->pVal, r->nVal);
-  h = doltliteFnv1aSep(h);
-  h ^= (u64)r->violationType;
-  h *= DOLTLITE_FNV1A_PRIME;
-  h = doltliteFnv1aSep(h);
-  h = doltliteFnv1aStr(h, r->zInfo);
-  return (sqlite3_int64)(h & 0x7fffffffffffffffULL);
 }
 
 static int cvrRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
