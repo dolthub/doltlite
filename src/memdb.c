@@ -932,7 +932,8 @@ static int doltliteImageIsSqliteHeader(const unsigned char *p, sqlite3_int64 n){
   if( ((pageSize-1)&pageSize)!=0 || pageSize>65536 || pageSize<512 ){
     return 0;
   }
-  if( p[18]>2 || p[19]>2 || p[18]==0 || p[19]==0 ) return 0;
+  /* A write version above 2 only makes the pager read-only. */
+  if( p[19]>2 ) return 0;
   return p[21]==64 && p[22]==32 && p[23]==32;
 }
 #endif
