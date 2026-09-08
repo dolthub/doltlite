@@ -1370,8 +1370,10 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     if( rc==SQLITE_OK ){
       doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
       zPreparedBranch = 0;
+      sqlite3BeginBenignMalloc();
       (void)chunkStorePublishPathReplacementProof(
           destCs, &destCs->refs.committedRefsHash, &replacementProofTip);
+      sqlite3EndBenignMalloc();
     }
 #if SQLITE_OS_WIN
     {
