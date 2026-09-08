@@ -555,78 +555,15 @@ void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo){
   (void)doltliteParseRecordStrict(pData, nData, pInfo);
 }
 
-typedef struct DoltliteDecodedField DoltliteDecodedField;
-struct DoltliteDecodedField {
-  int eType;
-  i64 i;
-  double r;
-  const u8 *p;
-  int n;
-};
-
-static void doltliteDecodeField(
-  const u8 *pData, int nData,
-  int st, int off,
-  DoltliteDecodedField *pOut
-){
-  memset(pOut, 0, sizeof(*pOut));
-  pOut->eType = SQLITE_NULL;
-
-  if( st==0 ) return;
-  if( st==8 ){
-    pOut->eType = SQLITE_INTEGER;
-    pOut->i = 0;
-    return;
-  }
-  if( st==9 ){
-    pOut->eType = SQLITE_INTEGER;
-    pOut->i = 1;
-    return;
-  }
-  if( st>=1 && st<=6 ){
-    int nB = dlSerialTypeLen((u64)st);
-    if( off>=0 && off<=nData-nB ){
-      pOut->eType = SQLITE_INTEGER;
-      pOut->i = dlReadIntBytes(pData + off, nB);
-    }
-    return;
-  }
-  if( st==7 ){
-    if( off>=0 && off<=nData-8 ){
-      const u8 *q = pData + off;
-      u64 bits = 0;
-      int i;
-      for(i=0; i<8; i++) bits = (bits<<8) | q[i];
-      pOut->eType = SQLITE_FLOAT;
-      memcpy(&pOut->r, &bits, 8);
-    }
-    return;
-  }
-  if( st>=13 && (st&1)==1 ){
-    int len = (st-13)/2;
-    if( off>=0 && off<=nData-len ){
-      pOut->eType = SQLITE_TEXT;
-      pOut->p = pData + off;
-      pOut->n = len;
-    }
-    return;
-  }
-  if( st>=12 && (st&1)==0 ){
-    int len = (st-12)/2;
-    if( off>=0 && off<=nData-len ){
-      pOut->eType = SQLITE_BLOB;
-      pOut->p = pData + off;
-      pOut->n = len;
-    }
-  }
-}
-
 void doltliteResultField(
   sqlite3_context *ctx, const u8 *pData, int nData,
   int st, int off
 ){
-  DoltliteDecodedField f;
-  doltliteDecodeField(pData, nData, st, off, &f);
+  DoltliteSerialValue f;
+  if( doltliteSerialValueFromPayload(pData, nData, st, off, &f)!=SQLITE_OK ){
+    sqlite3_result_null(ctx);
+    return;
+  }
   switch( f.eType ){
     case SQLITE_INTEGER:
       sqlite3_result_int64(ctx, f.i);

@@ -62,44 +62,6 @@ static int indexColumnIsExpr(const i16 *aiColumn, int nIdxCol){
   return 0;
 }
 
-static int serialValueFromRecordField(
-  const u8 *pRec, int nRec,
-  const DoltliteRecordInfo *pInfo,
-  int iField,
-  DoltliteSerialValue *pValue
-){
-  int st, off, n;
-  memset(pValue, 0, sizeof(*pValue));
-  if( iField<0 || iField>=pInfo->nField ) return SQLITE_CORRUPT;
-  st = pInfo->aType[iField];
-  off = pInfo->aOffset[iField];
-  n = dlSerialTypeLen((u64)st);
-  if( n<0 || off<0 || off>nRec-n ) return SQLITE_CORRUPT;
-  if( st==0 ){
-    pValue->eType = SQLITE_NULL;
-  }else if( st==8 || st==9 || (st>=1 && st<=6) ){
-    pValue->eType = SQLITE_INTEGER;
-    pValue->i = st==8 ? 0 : st==9 ? 1 : dlReadIntBytes(pRec + off, n);
-  }else if( st==7 ){
-    u64 bits = 0;
-    int i;
-    pValue->eType = SQLITE_FLOAT;
-    for(i=0; i<8; i++) bits = (bits<<8) | pRec[off+i];
-    memcpy(&pValue->r, &bits, 8);
-  }else if( st>=13 && (st&1)==1 ){
-    pValue->eType = SQLITE_TEXT;
-    pValue->p = pRec + off;
-    pValue->n = n;
-  }else if( st>=12 && (st&1)==0 ){
-    pValue->eType = SQLITE_BLOB;
-    pValue->p = pRec + off;
-    pValue->n = n;
-  }else{
-    return SQLITE_CORRUPT;
-  }
-  return SQLITE_OK;
-}
-
 static int bindIndexExprRow(
   sqlite3_stmt *pStmt,
   Table *pTab,
@@ -114,7 +76,7 @@ static int bindIndexExprRow(
       rc = sqlite3_bind_int64(pStmt, i+1, intKey);
     }else if( i<info.nField ){
       DoltliteSerialValue v;
-      rc = serialValueFromRecordField(pRec, nRec, &info, i, &v);
+      rc = doltliteSerialValueFromField(pRec, nRec, &info, i, &v);
       if( rc!=SQLITE_OK ) return rc;
       if( v.eType==SQLITE_NULL ){
         rc = sqlite3_bind_null(pStmt, i+1);
@@ -346,7 +308,7 @@ static int doltliteBuildIndexEntryWithExpr(
         aMem[nOut].eType = SQLITE_INTEGER;
         aMem[nOut].i = intKey;
       }else{
-        rc = serialValueFromRecordField(pRec, nRec, &info, col, &aMem[nOut]);
+        rc = doltliteSerialValueFromField(pRec, nRec, &info, col, &aMem[nOut]);
         if( rc!=SQLITE_OK ) goto expr_fail;
       }
       nOut++;

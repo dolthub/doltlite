@@ -103,6 +103,50 @@ struct DoltliteSerialValue {
   int n;
 };
 
+static inline int doltliteSerialValueFromPayload(
+  const u8 *pRec, int nRec, int st, int off, DoltliteSerialValue *pValue
+){
+  int n;
+  memset(pValue, 0, sizeof(*pValue));
+  n = dlSerialTypeLen((u64)st);
+  if( n<0 || off<0 || off>nRec-n ) return SQLITE_CORRUPT;
+  if( st==0 ){
+    pValue->eType = SQLITE_NULL;
+  }else if( st==8 || st==9 || (st>=1 && st<=6) ){
+    pValue->eType = SQLITE_INTEGER;
+    pValue->i = st==8 ? 0 : st==9 ? 1 : dlReadIntBytes(pRec + off, n);
+  }else if( st==7 ){
+    u64 bits = 0;
+    int i;
+    pValue->eType = SQLITE_FLOAT;
+    for(i=0; i<8; i++) bits = (bits<<8) | pRec[off+i];
+    memcpy(&pValue->r, &bits, 8);
+  }else if( st>=13 && (st&1)==1 ){
+    pValue->eType = SQLITE_TEXT;
+    pValue->p = pRec + off;
+    pValue->n = n;
+  }else if( st>=12 && (st&1)==0 ){
+    pValue->eType = SQLITE_BLOB;
+    pValue->p = pRec + off;
+    pValue->n = n;
+  }else{
+    return SQLITE_CORRUPT;
+  }
+  return SQLITE_OK;
+}
+
+static inline int doltliteSerialValueFromField(
+  const u8 *pRec, int nRec,
+  const DoltliteRecordInfo *pInfo,
+  int iField,
+  DoltliteSerialValue *pValue
+){
+  memset(pValue, 0, sizeof(*pValue));
+  if( iField<0 || iField>=pInfo->nField ) return SQLITE_CORRUPT;
+  return doltliteSerialValueFromPayload(
+      pRec, nRec, pInfo->aType[iField], pInfo->aOffset[iField], pValue);
+}
+
 /* Assemble an SQLite-format record (header varints + body) from nField
 ** serial values. Returns a sqlite3_malloc'd buffer of *pnOut bytes, or 0
 ** on OOM or nField<=0. */

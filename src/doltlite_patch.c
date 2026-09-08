@@ -939,7 +939,8 @@ static void patchGetValue(
   PatchValue *pOut
 ){
   DoltliteRecordInfo ri;
-  int iField, st, off, n;
+  DoltliteSerialValue v;
+  int iField;
   memset(pOut, 0, sizeof(*pOut));
   pOut->eType = SQLITE_NULL;
   if( iCol==pSchema->col.iPkCol && iCol>=0 ){
@@ -950,37 +951,12 @@ static void patchGetValue(
   if( !pRec || nRec<=0 ) return;
   doltliteParseRecord(pRec, nRec, &ri);
   iField = pSchema->col.aColToRec ? pSchema->col.aColToRec[iCol] : iCol;
-  if( iField<0 || iField>=ri.nField ) return;
-  st = ri.aType[iField];
-  off = ri.aOffset[iField];
-  if( st==0 ) return;
-  if( st==8 || st==9 ){
-    pOut->eType = SQLITE_INTEGER; pOut->i = st==9; return;
-  }
-  if( st>=1 && st<=6 ){
-    n = dlSerialTypeLen((u64)st);
-    if( off>=0 && off<=nRec-n ){
-      pOut->eType = SQLITE_INTEGER;
-      pOut->i = dlReadIntBytes(pRec+off, n);
-    }
-    return;
-  }
-  if( st==7 && off>=0 && off<=nRec-8 ){
-    u64 bits = 0;
-    int i;
-    for(i=0; i<8; i++) bits = (bits<<8) | pRec[off+i];
-    pOut->eType = SQLITE_FLOAT;
-    memcpy(&pOut->r, &bits, 8);
-    return;
-  }
-  if( st>=12 ){
-    n = dlSerialTypeLen((u64)st);
-    if( off>=0 && off<=nRec-n ){
-      pOut->eType = (st&1) ? SQLITE_TEXT : SQLITE_BLOB;
-      pOut->p = pRec+off;
-      pOut->n = n;
-    }
-  }
+  if( doltliteSerialValueFromField(pRec, nRec, &ri, iField, &v)!=SQLITE_OK ) return;
+  pOut->eType = v.eType;
+  pOut->i = v.i;
+  pOut->r = v.r;
+  pOut->p = (const u8*)v.p;
+  pOut->n = v.n;
 }
 
 static void patchAppendHex(sqlite3_str *pStr, const u8 *p, int n){
