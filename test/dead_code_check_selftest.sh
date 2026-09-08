@@ -73,6 +73,15 @@ EOF
 : > "$WORK/src/doltlite.c"
 expect_scan_hit "header_macro_is_rejected" "dead header macro: DEAD_CODE_GATE_UNUSED_MACRO"
 
+# Part F: unused #define in an owned .c file.
+rm -f "$WORK/src/doltlite_fixture.h"
+cat > "$WORK/src/doltlite.c" <<'EOF'
+#define DEAD_CODE_GATE_UNUSED_SRC_MACRO 1
+static int dead_code_gate_alive(void){ return 0; }
+static int dead_code_gate_caller(void){ return dead_code_gate_alive(); }
+EOF
+expect_scan_hit "source_macro_is_rejected" "dead source macro: DEAD_CODE_GATE_UNUSED_SRC_MACRO"
+
 # Part G: identical function bodies in two owned .c files.
 cat > "$WORK/src/doltlite_clone_a.c" <<'EOF'
 static int dead_code_gate_clone_left(int a, int b, int c){

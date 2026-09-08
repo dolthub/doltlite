@@ -9,8 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PROLLY_EST_ENTRIES_PER_LEAF 50
-
 static int parentChildSubtreeCount(
   ChunkStore *pStore,
   ProllyCache *pCache,

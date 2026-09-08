@@ -17,8 +17,8 @@
 #   Part E: non-static prototypes in owned headers that never appear in any .c,
 #           or the same prototype in two owned headers (btree-int vs internal
 #           seam copies excepted).
-#   Part F: #define names in owned headers that never appear elsewhere
-#           (include guards skipped).
+#   Part F: #define names in owned headers and owned .c files that never
+#           appear elsewhere (include guards skipped).
 #   Part G: identical function bodies copied across owned .c files, or two
 #           differently named functions in the same file.
 #   Part H: non-static one-call wrappers whose only extra-file .c mentions are
@@ -49,6 +49,7 @@ SRCS=(
   "$SRC_ROOT"/remotesrv_main.c
   "$SRC_ROOT"/pager_shim.c
   "$SRC_ROOT"/sortkey.c
+  "$SRC_ROOT"/btree_orig_api.c
 )
 
 CFLAGS=(
@@ -84,7 +85,7 @@ else
   done
 fi
 
-echo "== Part B-I: unused externs / inlines / should-be-static / prototypes / macros / clones / test-only wrappers / redundant local externs / duplicate prototypes =="
+echo "== Part B-I: unused externs / inlines / should-be-static / prototypes / macros / clones / test-only wrappers / redundant local externs / duplicate prototypes / source macros =="
 if ! python3 "$SCRIPT_DIR/lib/dead_code_scan.py" --root "$ROOT" --src-root "$SRC_ROOT"
 then
   fail=1

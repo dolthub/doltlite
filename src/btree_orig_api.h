@@ -79,18 +79,14 @@ int origBtreeCountRange(sqlite3 *db, void *pCur, i64 iLower, i64 iUpper,
                         i64 *pnEntry);
 int origBtreeCountIndexRange(sqlite3 *db, void *pCur, UnpackedRecord *pLower,
                              UnpackedRecord *pUpper, i64 *pnEntry);
-int origBtreeClosesWithCursor(void *p, void *pCur);
 void origBtreeTripAllCursors(void *p, int errCode, int writeOnly);
 void origBtreeCursorPin(void *pCur);
 void origBtreeCursorUnpin(void *pCur);
 int origBtreeCursorIsValidNN(void *pCur);
 int origBtreeTransferRow(void *pDest, void *pSrc, i64 iKey);
-void origBtreeEnterAll(sqlite3 *db);
-void origBtreeLeaveAll(sqlite3 *db);
 int origBtreeIsEmpty(void *pCur, int *pRes);
 int origBtreeClearTableOfCursor(void *pCur);
 int origBtreeMaxRecordSize(void *pCur);
-void origBtreeCursorHint(void *pCur, unsigned int mask, ...);
 
 int origBtreeCursorSize(void);
 int origBtreeCursorIsLastOnSingle(void *pCur);
