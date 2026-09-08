@@ -6043,6 +6043,14 @@ static void tryToCloneData(
   int cnt = 0;
   const int spinRate = 10000;
 
+#ifdef DOLTLITE_PROLLY
+  /* AUTOINCREMENT clones already inserted sqlite_sequence rows. Replace them
+  ** with the source counters instead of appending duplicates. */
+  if( sqlite3_stricmp(zTable, "sqlite_sequence")==0 ){
+    sqlite3_exec(newDb, "DELETE FROM sqlite_sequence", 0, 0, 0);
+  }
+#endif
+
   zQuery = sqlite3_mprintf("SELECT * FROM \"%w\"", zTable);
   shell_check_oom(zQuery);
   rc = sqlite3_prepare_v2(p->db, zQuery, -1, &pQuery, 0);
@@ -6150,8 +6158,15 @@ static void tryToCloneSchema(
   const unsigned char *zSql;
   char *zErrMsg = 0;
 
+#ifdef DOLTLITE_PROLLY
+  zQuery = sqlite3_mprintf("SELECT name, sql FROM sqlite_schema"
+                           " WHERE %s"
+                           " ORDER BY name='sqlite_sequence', rowid ASC",
+                           zWhere);
+#else
   zQuery = sqlite3_mprintf("SELECT name, sql FROM sqlite_schema"
                            " WHERE %s ORDER BY rowid ASC", zWhere);
+#endif
   shell_check_oom(zQuery);
   rc = sqlite3_prepare_v2(p->db, zQuery, -1, &pQuery, 0);
   if( rc ){
