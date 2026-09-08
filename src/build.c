@@ -1094,7 +1094,8 @@ int sqlite3WritableSchema(sqlite3 *db){
 ** unqualified name for a new schema object (table, index, view or
 ** trigger). All names are legal except those that begin with the string
 ** "sqlite_" (in upper, lower or mixed case). This portion of the namespace
-** is reserved for internal use.
+** is reserved for internal use. DoltLite also reserves "dolt_" except
+** CREATE TABLE of dolt_ignore, dolt_docs, dolt_tests, and dolt_rebase.
 **
 ** When parsing the sqlite_schema table, this routine also checks to
 ** make sure the "type", "name", and "tbl_name" columns are consistent
@@ -1130,6 +1131,20 @@ int sqlite3CheckObjectName(
                       zName);
       return SQLITE_ERROR;
     }
+#ifdef DOLTLITE_PROLLY
+    if( pParse->nested==0 && sqlite3StrNICmp(zName, "dolt_", 5)==0 ){
+      int bUserTable = sqlite3StrICmp(zType, "table")==0
+        && (sqlite3StrICmp(zName, "dolt_ignore")==0
+         || sqlite3StrICmp(zName, "dolt_docs")==0
+         || sqlite3StrICmp(zName, "dolt_tests")==0
+         || sqlite3StrICmp(zName, "dolt_rebase")==0);
+      if( !bUserTable ){
+        sqlite3ErrorMsg(pParse,
+            "table names beginning with dolt_ are reserved for internal use");
+        return SQLITE_ERROR;
+      }
+    }
+#endif
 
   }
   return SQLITE_OK;
@@ -1319,9 +1334,16 @@ void sqlite3StartTable(
   if( !IN_SPECIAL_PARSE && SQLITE_OK!=sqlite3ReadSchema(pParse) ){
     goto begin_table_error;
   }
+#ifdef DOLTLITE_PROLLY
+  if( sqlite3CheckObjectName(pParse, zName,
+        isView?"view":(isVirtual?"virtual":"table"), zName) ){
+    goto begin_table_error;
+  }
+#else
   if( sqlite3CheckObjectName(pParse, zName, isView?"view":"table", zName) ){
     goto begin_table_error;
   }
+#endif
   if( db->init.iDb==1 ) isTemp = 1;
 #ifndef SQLITE_OMIT_AUTHORIZATION
   assert( isTemp==0 || isTemp==1 );
