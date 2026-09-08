@@ -188,6 +188,85 @@ static void test_reader_during_write(void){
   remove(path);
 }
 
+static void test_reader_after_peer_restore(void){
+  const char *path = "/tmp/test_mp_restore_refresh.db";
+  const char *source = "/tmp/test_mp_restore_source.db";
+  const char *saved = "/tmp/test_mp_restore_refresh_saved.db";
+  const char *foreignPath = "/tmp/test_mp_restore_foreign.db";
+  sqlite3 *reader = 0;
+  sqlite3 *foreign = 0;
+  pid_t pid;
+  int status;
+
+  printf("--- Test 3: Reader refreshes after peer restore ---\n");
+  remove(path);
+  remove(source);
+  remove(saved);
+  remove(foreignPath);
+  check("mp_restore_reader_open", sqlite3_open(path, &reader)==SQLITE_OK);
+  check("mp_restore_reader_seed",
+        execSql(reader,
+          "CREATE TABLE old_table(x);"
+          "SELECT dolt_commit('-A','-m','old state');")==SQLITE_OK);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *src = 0;
+    sqlite3 *dest = 0;
+    sqlite3_backup *backup = 0;
+    int rc = sqlite3_open(source, &src);
+    if( rc==SQLITE_OK ) rc = sqlite3_open(path, &dest);
+    if( rc==SQLITE_OK ){
+      backup = sqlite3_backup_init(dest, "main", src, "main");
+      if( backup==0 ) rc = sqlite3_errcode(dest);
+    }
+    if( rc==SQLITE_OK ) rc = sqlite3_backup_step(backup, -1);
+    if( backup ){
+      int finishRc = sqlite3_backup_finish(backup);
+      if( rc==SQLITE_DONE ) rc = finishRc;
+    }
+    if( rc==SQLITE_OK ){
+      rc = execSql(dest,
+        "CREATE TABLE t1(x);"
+        "CREATE VIEW v2 AS SELECT x+1 AS y FROM t1;"
+        "CREATE VIEW v1 AS SELECT y+1 FROM v2;");
+    }
+    if( src ) sqlite3_close(src);
+    if( dest ) sqlite3_close(dest);
+    _exit(rc==SQLITE_OK ? 0 : 1);
+  }
+
+  check("mp_restore_fork", pid>0);
+  waitpid(pid, &status, 0);
+  check("mp_restore_writer_ok",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+  check("mp_restore_reader_sees_peer_schema",
+        execSql(reader, "DROP VIEW v1; DROP VIEW v2; DROP TABLE t1;")
+          ==SQLITE_OK);
+  check("mp_restore_reader_commit",
+        execSql(reader, "SELECT dolt_commit('-A','-m','after restore');")
+          ==SQLITE_OK);
+
+  check("mp_restore_foreign_open",
+        sqlite3_open(foreignPath, &foreign)==SQLITE_OK);
+  check("mp_restore_foreign_seed",
+        execSql(foreign,
+          "CREATE TABLE stranger(x);"
+          "SELECT dolt_commit('-A','-m','stranger');")==SQLITE_OK);
+  sqlite3_close(foreign);
+  foreign = 0;
+  check("mp_restore_current_rename", rename(path, saved)==0);
+  check("mp_restore_foreign_rename", rename(foreignPath, path)==0);
+  check("mp_restore_foreign_still_rejected",
+        execSql(reader, "CREATE TABLE must_not_land(x);")==SQLITE_READONLY);
+
+  sqlite3_close(reader);
+  remove(path);
+  remove(source);
+  remove(saved);
+  remove(foreignPath);
+}
+
 static void test_reader_close_during_write_upgrade(void){
   const char *path = "/tmp/test_mp_reader_close_upgrade.db";
   int start[2];
@@ -776,6 +855,7 @@ int main(){
 
   test_two_writers();
   test_reader_during_write();
+  test_reader_after_peer_restore();
   test_reader_close_during_write_upgrade();
   test_add_during_transaction();
   test_sequential_processes();
