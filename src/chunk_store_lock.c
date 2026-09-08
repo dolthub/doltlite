@@ -181,7 +181,7 @@ static int csWriteReplacementProof(
   return rc;
 }
 
-void chunkStoreLoadReplacementProofState(ChunkStore *cs){
+static void chunkStoreLoadReplacementProofState(ChunkStore *cs){
   ProllyHash proof;
   int valid = 0;
   if( csReadReplacementProof(cs, &proof, &valid)==SQLITE_OK && valid ){
