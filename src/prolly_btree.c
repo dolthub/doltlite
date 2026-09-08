@@ -696,7 +696,10 @@ int sqlite3BtreeOpen(
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
    /* VACUUM copies pages; the target must match the legacy source engine. */
-   || (db && (db->mDbFlags & DBFLAG_VacuumOrig)!=0);
+   || (db && (db->mDbFlags & DBFLAG_VacuumOrig)!=0)
+   /* sqlite3_deserialize reopening a stock image over memdb: the pager gets
+   ** the bytes after this open, and its "x" name is not a ParseUri name. */
+   || (db && db->init.reopenMemdb);
   /* doltlite_engine=sqlite selects stock for a new empty file (backup /
   ** VACUUM INTO). Ignored once the file has content. sqlite3_uri_parameter
   ** only works on ParseUri names (MAIN_DB / ATTACH); a plain C string is

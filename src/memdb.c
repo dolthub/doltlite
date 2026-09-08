@@ -921,6 +921,22 @@ unsigned char *sqlite3_serialize(
 
 /* Convert zSchema to a MemDB and initialize its content.
 */
+#ifdef DOLTLITE_PROLLY
+/* Stock's page-1 header with the fields the pager itself validates. */
+static int doltliteImageIsSqliteHeader(const unsigned char *p, sqlite3_int64 n){
+  int pageSize;
+  if( n<100 || p==0 ) return 0;
+  if( memcmp(p, "SQLite format 3", 16)!=0 ) return 0;
+  pageSize = (p[16]<<8) | p[17];
+  if( pageSize==1 ) pageSize = 65536;
+  if( ((pageSize-1)&pageSize)!=0 || pageSize>65536 || pageSize<512 ){
+    return 0;
+  }
+  if( p[18]>2 || p[19]>2 || p[18]==0 || p[19]==0 ) return 0;
+  return p[21]==64 && p[22]==32 && p[23]==32;
+}
+#endif
+
 int sqlite3_deserialize(
   sqlite3 *db,            /* The database connection */
   const char *zSchema,    /* Which DB to reopen with the deserialization */
@@ -952,8 +968,13 @@ int sqlite3_deserialize(
     goto end_deserialize;
   }
 #ifdef DOLTLITE_PROLLY
+  /* The image decides the engine: a well-formed stock page image goes
+  ** through the stock reopen below even when the schema currently holds a
+  ** prolly tree. Anything else stays on the DoltLite path, which rejects
+  ** garbage up front; a stock-engine schema takes only stock images. */
   if( iDb>=0 && db->aDb[iDb].pBt
-   && sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt) ){
+   && sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt)
+   && !doltliteImageIsSqliteHeader(pData, szDb) ){
     Btree *pNewBt = 0;
     Schema *pNewSchema;
     if( szDb<0 || szBuf<szDb || (szDb>0 && pData==0) ){
@@ -980,6 +1001,10 @@ int sqlite3_deserialize(
     db->aDb[iDb].pSchema = pNewSchema;
     db->mDbFlags &= ~DBFLAG_SchemaKnownOk;
     rc = SQLITE_OK;
+    goto end_deserialize;
+  }
+  if( szDb>0 && !doltliteImageIsSqliteHeader(pData, szDb) ){
+    rc = SQLITE_NOTADB;
     goto end_deserialize;
   }
 #endif

@@ -1,0 +1,58 @@
+# sqlite3_deserialize() of a stock SQLite page image reopens the schema on the
+# original B-tree engine, whatever engine the schema held before. The image
+# decides; the connection's current format does not.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_deserialize_stock_image
+
+db close
+forcedelete stockimg.db stockmain.db
+sqlite3 dbs file:stockimg.db?doltlite_engine=sqlite -uri 1
+dbs eval { CREATE TABLE t(a INT); INSERT INTO t VALUES(1),(2),(3) }
+set img [dbs serialize]
+dbs close
+
+# 1: into a DoltLite-format :memory: main
+sqlite3 db :memory:
+do_test 1.1 {
+  db eval { CREATE TABLE d(x INT PRIMARY KEY); SELECT count(*) FROM dolt_log }
+} {1}
+do_test 1.2 {
+  db deserialize $img
+  db eval { SELECT count(*), sum(a) FROM t }
+} {3 6}
+do_test 1.3 {
+  db eval { INSERT INTO t VALUES(4); SELECT sum(a) FROM t }
+} {10}
+do_test 1.4 {
+  string range [db serialize] 0 14
+} {SQLite format 3}
+db close
+
+# 2: into a connection whose main is a stock file
+sqlite3 dbm file:stockmain.db?doltlite_engine=sqlite -uri 1
+dbm eval { CREATE TABLE z(q) }
+do_test 2.1 {
+  dbm eval { SELECT name FROM sqlite_master }
+} {z}
+do_test 2.2 {
+  dbm deserialize $img
+  dbm eval { SELECT count(*), sum(a) FROM t }
+} {3 6}
+dbm close
+
+# 3: a DoltLite image still takes the DoltLite path
+sqlite3 dbd :memory:
+dbd eval { CREATE TABLE k(id INT PRIMARY KEY, v); INSERT INTO k VALUES(1,'a'); SELECT dolt_commit('-Am','init') }
+set dimg [dbd serialize]
+dbd close
+sqlite3 dbd :memory:
+do_test 3.1 {
+  dbd deserialize $dimg
+  dbd eval { SELECT v FROM k; SELECT count(*) FROM dolt_log }
+} {a 2}
+dbd close
+
+sqlite3 db test.db
+finish_test

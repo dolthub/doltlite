@@ -19,6 +19,7 @@ doltlite_recover_rawformat_1
 doltlite_recover_rawformat_2
 doltlite_recover_rawformat_3
 doltlite_recover_rejections
+doltlite_deserialize_stock_image
 doltlite_recover_rtree
 doltlite_recover_savepointfault
 doltlite_recover_shared_ioerr
