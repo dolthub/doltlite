@@ -967,7 +967,8 @@ static int rebaseApplyPlanRowCatalog(
   sqlite3 *db,
   const RebasePlanRow *pRow,
   const ProllyHash *pCurCat,
-  ProllyHash *pMergedCat
+  ProllyHash *pMergedCat,
+  char **pzErr
 ){
   DoltliteCommit parentC, replayC;
   int nConflicts = 0;
@@ -1008,7 +1009,7 @@ static int rebaseApplyPlanRowCatalog(
   }
   if( rc==SQLITE_OK && nConflicts==0 ){
     rc = doltliteDetectConstraintViolationsFiltered(
-        db, &parentC.catalogHash, 0, 0, 1, &nViolations, 0);
+        db, &parentC.catalogHash, 0, 0, 1, &nViolations, pzErr);
   }
   doltliteCommitClear(&parentC);
   doltliteCommitClear(&replayC);
@@ -1061,7 +1062,8 @@ static int rebaseReplayPlanGroup(
   int iStart,
   ProllyHash *pCurCat,
   ProllyHash *pCurHead,
-  int *piNext
+  int *piNext,
+  char **pzErr
 ){
   char *combinedMsg = 0;
   ProllyHash startCat;
@@ -1069,7 +1071,8 @@ static int rebaseReplayPlanGroup(
   int j;
 
   startCat = *pCurCat;
-  rc = rebaseApplyPlanRowCatalog(db, &aPlan[iStart], pCurCat, pCurCat);
+  rc = rebaseApplyPlanRowCatalog(
+      db, &aPlan[iStart], pCurCat, pCurCat, pzErr);
   if( rc!=SQLITE_OK ) return rc;
 
   combinedMsg = sqlite3_mprintf("%s",
@@ -1086,7 +1089,7 @@ static int rebaseReplayPlanGroup(
       continue;
     }
 
-    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat);
+    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat, pzErr);
     if( rc!=SQLITE_OK ){
       sqlite3_free(combinedMsg);
       return rc;
@@ -1786,6 +1789,7 @@ static void doltliteRebaseInteractiveContinue(
   ProllyHash preRebaseCat;
   RebaseFinalizeRefsCtx refsCtx;
   char *zPlanErr = 0;
+  char *zReplayErr = 0;
 
   memset(&curCat, 0, sizeof(curCat));
   memset(&curHead, 0, sizeof(curHead));
@@ -1894,7 +1898,8 @@ static void doltliteRebaseInteractiveContinue(
     while( i < nPlan && strcmp(aPlan[i].zAction, "drop")==0 ) i++;
     if( i >= nPlan ) break;
 
-    rc = rebaseReplayPlanGroup(db, aPlan, nPlan, i, &curCat, &curHead, &j);
+    rc = rebaseReplayPlanGroup(
+        db, aPlan, nPlan, i, &curCat, &curHead, &j, &zReplayErr);
     if( rc==SQLITE_CONSTRAINT ) goto abort_err_conflict;
     if( rc==SQLITE_BUSY ) goto abort_err_cas;
     if( rc!=SQLITE_OK ) goto abort_err;
@@ -1951,6 +1956,7 @@ static void doltliteRebaseInteractiveContinue(
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rebaseFreePlan(aPlan, nPlan);
+  sqlite3_free(zReplayErr);
   {
     char *zMsg = sqlite3_mprintf(
       "Successfully rebased and updated refs/heads/%s", zOrigBranch);
@@ -1964,6 +1970,7 @@ static void doltliteRebaseInteractiveContinue(
 
 abort_err_conflict:
   rebaseFreePlan(aPlan, nPlan);
+  sqlite3_free(zReplayErr);
   recoveryRc = rebaseAbortConflictedContinue(
       db, zOrigBranch, zReturnBranch, zWorking);
   if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
@@ -1985,6 +1992,7 @@ abort_err_cas:
       db, aPlan, nPlan, &preRebaseCat, &expectedOrigHead,
       zOrigBranch, zReturnBranch);
   rebaseFreePlan(aPlan, nPlan);
+  sqlite3_free(zReplayErr);
   if( recoveryRc!=SQLITE_OK ){
     sqlite3_free(zOrigBranch);
     sqlite3_free(zReturnBranch);
@@ -2017,6 +2025,7 @@ abort_err:
     sqlite3_free(zOrigBranch);
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
+    sqlite3_free(zReplayErr);
     if( (stateRc==SQLITE_OK && !rebaseActive) || rc==SQLITE_NOTFOUND ){
       sqlite3_result_error(context, "no rebase in progress", -1);
     }else{
@@ -2036,7 +2045,18 @@ abort_err:
   sqlite3_free(zReturnBranch);
   sqlite3_free(zWorking);
   if( recoveryRc!=SQLITE_OK ){
+    sqlite3_free(zReplayErr);
     rebaseResultRecoveryFailure(context, recoveryRc);
+  }else if( zReplayErr ){
+    char *zMsg = sqlite3_mprintf(
+      "rebase failed — %s — branch restored to pre-rebase state", zReplayErr);
+    sqlite3_free(zReplayErr);
+    if( zMsg ){
+      sqlite3_result_error(context, zMsg, -1);
+      sqlite3_free(zMsg);
+    }else{
+      sqlite3_result_error_nomem(context);
+    }
   }else{
     sqlite3_result_error(context,
       "rebase failed — branch restored to pre-rebase state", -1);
@@ -2045,6 +2065,7 @@ abort_err:
 
 abort_err_silent:
   rebaseFreePlan(aPlan, nPlan);
+  sqlite3_free(zReplayErr);
   sqlite3_free(zOrigBranch);
   sqlite3_free(zReturnBranch);
   sqlite3_free(zWorking);

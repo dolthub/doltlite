@@ -807,7 +807,28 @@ Successfully rebased and updated refs/heads/feat
 main_add_2,base" \
   "$DBE3"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DBE" "$DBE2" "$DBE3"
+DB10=/tmp/test_rebase_detector_error_$$.db; rm -f "$DB10"
+cat <<'SQL' | "$DOLTLITE" "$DB10" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT CHECK(json_extract(v,'$.ok')));
+INSERT INTO t VALUES(0,'{"ok":1}');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feat');
+PRAGMA ignore_check_constraints=ON;
+INSERT INTO t VALUES(1,'not-json');
+PRAGMA ignore_check_constraints=OFF;
+SELECT dolt_commit('-am','bad row');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'{"ok":2}');
+SELECT dolt_commit('-am','main moves');
+SELECT dolt_checkout('feat');
+SQL
+run_test_match "interactive_rebase_reports_detector_error" \
+  "SELECT dolt_rebase('-i','main');
+   SELECT dolt_rebase('--continue');" \
+  "rebase failed — malformed JSON — branch restored to pre-rebase state" \
+  "$DB10/feat"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DBE" "$DBE2" "$DBE3"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
