@@ -1168,6 +1168,13 @@ int doltliteCompareAndAdvanceBranch(
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash
 );
+int doltliteCompareAndAdvanceBranchCurrentCatalog(
+  sqlite3 *db,
+  const ProllyHash *pExpectedHead,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
+);
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
 #define DOLTLITE_CMD_OPTION_FLAG 0
 #define DOLTLITE_CMD_OPTION_VALUE 1
