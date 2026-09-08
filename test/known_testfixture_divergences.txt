@@ -1089,8 +1089,6 @@ misc1 misc1-14.2b class=intentional  # no rollback-journal file: doltlite has no
 # gencol1 — gencol1-15.10/15.20 use `db deserialize [decode_hexdb ...]` to load a
 # raw SQLite page image. DoltLite deserialize accepts native DoltLite images,
 # not stock SQLite page images. Generated-column behavior itself is correct.
-gencol1 gencol1-15.10 class=intentional  # stock SQLite serialization is not a DoltLite image
-gencol1 gencol1-15.20 class=intentional  # stock SQLite serialization is not a DoltLite image
 gencol1 gencol1-21.1 class=intentional  # canonicalized text shortens the raw type span below sqlite3AddColumn's 16-char GENERATED-trim threshold; declared type string differs, affinity unchanged
 
 # enc2 — UTF-16 encoding tests (#1164). DoltLite is locked to UTF-8: it ignores
@@ -1437,7 +1435,6 @@ autoindex3 autoindex3-310 class=intentional  # EQP plan shape
 index5 index5-1.3 class=intentional  # file-format page count / index page layout
 
 # pragma6-1.0 deserializes a stock SQLite page image, not a DoltLite image.
-pragma6 pragma6-1.0 class=intentional  # stock SQLite serialization is not a DoltLite image
 
 # windowC-2.0/2.1 — PRAGMA encoding=UTF16le/be ignored, locked to UTF-8
 # (#1164); randstr text read back as UTF-8 bytes.
