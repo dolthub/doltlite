@@ -1,0 +1,11 @@
+shell2
+shell3
+shell4
+shell5
+shell6
+shell7
+shell8
+shell9
+shellA
+shellB
+doltlite_shell_open

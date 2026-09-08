@@ -5345,9 +5345,9 @@ static void open_db(ShellState *p, int openFlags){
       cli_printf(stderr,"Error: unable to open database \"%s\": %s\n",
             zRequestedFilename ? zRequestedFilename : zDbFilename,
             sqlite3_errmsg(p->db));
-      sqlite3_free(zParsedFilename);
-      sqlite3_free(zParsedBranch);
       if( (openFlags & OPEN_DB_KEEPALIVE)==0 ){
+        sqlite3_free(zParsedFilename);
+        sqlite3_free(zParsedBranch);
         cli_exit(1);
       }
       sqlite3_close(p->db);
@@ -5367,15 +5367,13 @@ static void open_db(ShellState *p, int openFlags){
     if( rc!=SQLITE_OK ){
       cli_printf(stderr, "Error: unable to select branch \"%s\": %s\n",
                  zParsedBranch ? zParsedBranch : "main", sqlite3_errstr(rc));
-      sqlite3_free(zParsedFilename);
-      sqlite3_free(zParsedBranch);
       if( (openFlags & OPEN_DB_KEEPALIVE)==0 ){
+        sqlite3_free(zParsedFilename);
+        sqlite3_free(zParsedBranch);
         cli_exit(1);
       }
     }
 #endif /* DOLTLITE_PROLLY */
-    sqlite3_free(zParsedFilename);
-    sqlite3_free(zParsedBranch);
     globalDb = p->db;
     sqlite3_db_config(p->db, SQLITE_DBCONFIG_STMT_SCANSTATUS, (int)0, (int*)0);
 
@@ -5513,6 +5511,9 @@ static void open_db(ShellState *p, int openFlags){
       }
     }
 #endif
+    /* zDbFilename may point into zParsedFilename until here. */
+    sqlite3_free(zParsedFilename);
+    sqlite3_free(zParsedBranch);
     free(zToFree);
   }
   if( p->db!=0 ){
