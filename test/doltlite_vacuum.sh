@@ -200,6 +200,7 @@ echo "--- VACUUM replays catalog SQL like stock ---"
 DB=/tmp/test_vac_writable_schema_$$.db; db_rm "$DB"
 OUT=$(echo "CREATE TABLE t7(x);
 INSERT INTO t7 VALUES(1);
+.dbconfig defensive off
 PRAGMA writable_schema=ON;
 UPDATE sqlite_master SET sql='CREATE TABLE [M%s%s%s%s%s%s%s%s%s%s%s%s%s' WHERE name='t7';
 VACUUM;" | $DOLTLITE "$DB" 2>&1)

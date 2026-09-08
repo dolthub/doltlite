@@ -218,6 +218,7 @@ INSERT INTO t(cmd, arg) VALUES ('rebuild', (SELECT v FROM m));
 SELECT dolt_commit('-Am','built');
 SELECT dolt_checkout('-b','left');
 INSERT INTO t(rowid, vector) VALUES (7001, x'0000803f0000803f0000803f0000803f0000803f0000803f0000803f0000803f');
+.dbconfig defensive off
 DELETE FROM t_model WHERE id=1;
 SELECT dolt_commit('-am','left, model removed');
 SELECT dolt_checkout('main'); SELECT dolt_checkout('-b','right');
