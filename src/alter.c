@@ -36,6 +36,12 @@ static int isAlterableTable(Parse *pParse, Table *pTab){
         && sqlite3ReadOnlyShadowTables(pParse->db)
    )
 #endif
+#ifdef DOLTLITE_PROLLY
+   || sqlite3StrICmp(pTab->zName, "dolt_ignore")==0
+   || sqlite3StrICmp(pTab->zName, "dolt_docs")==0
+   || sqlite3StrICmp(pTab->zName, "dolt_tests")==0
+   || sqlite3StrICmp(pTab->zName, "dolt_rebase")==0
+#endif
   ){
     sqlite3ErrorMsg(pParse, "table %s may not be altered", pTab->zName);
     return 1;
@@ -170,6 +176,13 @@ void sqlite3AlterRenameTable(
   if( SQLITE_OK!=sqlite3CheckObjectName(pParse,zName,"table",zName) ){
     goto exit_rename_table;
   }
+#ifdef DOLTLITE_PROLLY
+  if( sqlite3StrNICmp(zName, "dolt_", 5)==0 ){
+    sqlite3ErrorMsg(pParse,
+        "table names beginning with dolt_ are reserved for internal use");
+    goto exit_rename_table;
+  }
+#endif
 
 #ifndef SQLITE_OMIT_VIEW
   if( IsView(pTab) ){
