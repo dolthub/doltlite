@@ -138,9 +138,83 @@ void csFileUnlock(sqlite3_file *pFile, char **pzName){
   }
 }
 
+#define CS_REPLACEMENT_PROOF_MAGIC 0x32504c44
+#define CS_REPLACEMENT_PROOF_SIZE (4 + 2*PROLLY_HASH_SIZE)
+
+/* Backup changes database identity. The displaced refs and an installed
+** commit in the graph-lock sidecar let stale peers follow that replacement. */
+static int csReadReplacementProof(
+  ChunkStore *cs,
+  ProllyHash *pFrom,
+  ProllyHash *pTo,
+  int *pValid
+){
+  u8 aBuf[CS_REPLACEMENT_PROOF_SIZE];
+  int rc;
+
+  *pValid = 0;
+  memset(pFrom, 0, sizeof(*pFrom));
+  memset(pTo, 0, sizeof(*pTo));
+  if( !CS_GRAPH_LOCK(cs) ) return SQLITE_OK;
+  rc = sqlite3OsRead(CS_GRAPH_LOCK(cs), aBuf, sizeof(aBuf), 0);
+  if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  if( CS_READ_U32(aBuf)==CS_REPLACEMENT_PROOF_MAGIC ){
+    memcpy(pFrom->data, aBuf+4, PROLLY_HASH_SIZE);
+    memcpy(pTo->data, aBuf+4+PROLLY_HASH_SIZE, PROLLY_HASH_SIZE);
+    *pValid = !prollyHashIsEmpty(pFrom) && !prollyHashIsEmpty(pTo);
+  }
+  return SQLITE_OK;
+}
+
+static int csWriteReplacementProof(
+  ChunkStore *cs,
+  const ProllyHash *pFrom,
+  const ProllyHash *pTo
+){
+  u8 aBuf[CS_REPLACEMENT_PROOF_SIZE];
+
+  if( prollyHashIsEmpty(pFrom) || prollyHashIsEmpty(pTo) ) return SQLITE_OK;
+  PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
+  CS_WRITE_U32(aBuf, CS_REPLACEMENT_PROOF_MAGIC);
+  memcpy(aBuf+4, pFrom->data, PROLLY_HASH_SIZE);
+  memcpy(aBuf+4+PROLLY_HASH_SIZE, pTo->data, PROLLY_HASH_SIZE);
+  return sqlite3OsWrite(CS_GRAPH_LOCK(cs), aBuf, sizeof(aBuf), 0);
+}
+
+int chunkStorePublishPathReplacementProof(
+  ChunkStore *cs,
+  const ProllyHash *pFrom,
+  const ProllyHash *pTo
+){
+  PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
+  return csWriteReplacementProof(cs, pFrom, pTo);
+}
+
 static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
                         sqlite3_file **ppFile, char **pzName){
   return csFileLock(pVfs, path, ppFile, pzName);
+}
+
+static int csLockForReplacementProof(ChunkStore *cs, int *pAcquired){
+  int rc;
+  *pAcquired = 0;
+  if( cs->lockDepth>0 ) return SQLITE_OK;
+  if( cs->pLockMutex && sqlite3_mutex_try(cs->pLockMutex)!=SQLITE_OK ){
+    return SQLITE_BUSY;
+  }
+  if( csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+    rc = csFileRelock(CS_GRAPH_LOCK(cs));
+  }else{
+    rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename,
+                      &CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
+  }
+  if( rc==SQLITE_OK ){
+    cs->lockDepth = 1;
+    *pAcquired = 1;
+  }
+  if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
+  return rc;
 }
 
 
@@ -389,11 +463,15 @@ static int csStoreHasAnyBranchTip(ChunkStore *pCand, const RefsTable *rt,
 }
 
 /* Proof the path still holds our DB: candidate contains one of our branch
-** tips (GC keeps those reachable). Empty files are never moved. Working-set
-** roots are not proof — a peer WS advance lets GC sweep the one we remember.
-** No proof: upstream read-only. */
+** tips or the sanctioned replacement proof. Empty files are never moved.
+** Working-set roots are not proof — a peer WS advance lets GC sweep the one
+** we remember. No proof: upstream read-only. */
 static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   ChunkStore cand;
+  ProllyHash from;
+  ProllyHash to;
+  int acquired = 0;
+  int valid = 0;
   int rc;
 
   *pIsOurs = 0;
@@ -404,12 +482,23 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
     return SQLITE_OK;
   }
 
-  rc = chunkStoreOpen(&cand, cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
+  rc = csLockForReplacementProof(cs, &acquired);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreOpen(&cand, cs->file.pVfs, cs->file.zFilename,
+                        SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
+  }
   if( rc==SQLITE_OK ){
     rc = csStoreHasAnyBranchTip(&cand, &cs->refs, pIsOurs);
+    if( rc==SQLITE_OK && !*pIsOurs ){
+      rc = csReadReplacementProof(cs, &from, &to, &valid);
+      if( rc==SQLITE_OK && valid
+       && prollyHashCompare(&cs->refs.committedRefsHash, &from)==0 ){
+        rc = chunkStoreHas(&cand, &to, pIsOurs);
+      }
+    }
     chunkStoreClose(&cand);
   }
+  if( acquired ) chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     /* Only OOM is inconclusive; other read failures are a failed proof. */
     *pIsOurs = 0;

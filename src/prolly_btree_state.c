@@ -583,7 +583,7 @@ int doltliteBtreeHydrateDeferred(Btree *p){
   cs = &p->pBt->store;
   rc = chunkStoreEnsureRefsFresh(cs);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteBtreePrepareBackupBranch(p, cs, &zPrepared);
+  rc = doltliteBtreePrepareBackupBranch(p, cs, &zPrepared, 0);
   if( rc!=SQLITE_OK ) return rc;
   if( zPrepared ){
     zOldBranch = p->zBranch;
@@ -702,21 +702,23 @@ const char *doltliteGetSessionBranch(sqlite3 *db){
 int doltliteBtreePrepareBackupBranch(
   Btree *p,
   ChunkStore *cs,
-  char **pzPrepared
+  char **pzPrepared,
+  ProllyHash *pTip
 ){
   const char *zDef;
   int rc;
   if( !pzPrepared ) return SQLITE_MISUSE;
   *pzPrepared = 0;
   if( !p || !p->pBt || !cs || p->isDetached ) return SQLITE_OK;
-  rc = chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0);
+  rc = chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", pTip);
   if( rc==SQLITE_OK ) return SQLITE_OK;
   if( rc!=SQLITE_NOTFOUND ) return rc;
   zDef = chunkStoreGetDefaultBranch(cs);
   if( !zDef ) zDef = "main";
   if( sqlite3FaultSim(962) ) return SQLITE_NOMEM;
   *pzPrepared = sqlite3_mprintf("%s", zDef);
-  return *pzPrepared ? SQLITE_OK : SQLITE_NOMEM;
+  if( !*pzPrepared ) return SQLITE_NOMEM;
+  return pTip ? chunkStoreFindBranch(cs, zDef, pTip) : SQLITE_OK;
 }
 
 void doltliteBtreeInstallBackupBranch(Btree *p, char *zPrepared){

@@ -961,8 +961,10 @@ For a DoltLite-format main database, the concurrency contract is:
   transaction does not publish its rows or staged state, and rolling the
   transaction back restores its prior staging state. A peer that only opens,
   reads, and closes the database does not prevent a live read transaction from
-  upgrading to a writer. An open iterator completes safely while another
-  process runs GC. Readers do not create SQLite `-wal`/`-shm` sidecars.
+  upgrading to a writer. An idle connection follows a peer's completed
+  `.restore` or backup replacement, while an unrelated file moved over the path
+  remains read-only. An open iterator completes safely while another process
+  runs GC. Readers do not create SQLite `-wal`/`-shm` sidecars.
 - **Multi-process commits are CAS-safe.** A process that races `dolt_commit`
   against a peer either wins a clean tip advance or loses with a busy /
   conflict outcome. The loser's stale tip must not clobber the winner's

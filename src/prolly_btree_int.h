@@ -761,7 +761,7 @@ ChunkStore *doltliteBtreeChunkStore(Btree*);
 void doltliteBtreeBackupStart(Btree*);
 void doltliteBtreeBackupFinish(Btree*);
 void doltliteInvalidateBtreeWorkingState(Btree*);
-int doltliteBtreePrepareBackupBranch(Btree*, ChunkStore*, char**);
+int doltliteBtreePrepareBackupBranch(Btree*, ChunkStore*, char**, ProllyHash*);
 void doltliteBtreeInstallBackupBranch(Btree*, char*);
 BtShared *doltliteGetBtShared(sqlite3*);
 ProllyCache *doltliteGetCache(sqlite3*);

@@ -246,6 +246,11 @@ void chunkStoreUnlock(ChunkStore *cs);
        || ((cs)->pGraphLockFile!=0 && (cs)->lockDepth>0) ); \
 }while(0)
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
+int chunkStorePublishPathReplacementProof(
+  ChunkStore *cs,
+  const ProllyHash *pFrom,
+  const ProllyHash *pTo
+);
 
 int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                        ProllyHash *pCatHash,
