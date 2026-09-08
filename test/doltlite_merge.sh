@@ -1124,5 +1124,19 @@ run_test_match "verify_failed_default_scope_keeps_recorded_orphan" \
 run_test "verify_recorded_orphan_survives_failed_checks" \
   "SELECT count(*) FROM dolt_constraint_violations_child;" "1" "$DB66"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66"
+# A row that makes CHECK evaluation itself fail: the detector's message
+# must reach the caller, not a bare error code.
+DB64=/tmp/test_merge64_$$.db; rm -f "$DB64"
+$DOLTLITE "$DB64" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT CHECK(json_extract(v,'$.ok')));
+PRAGMA ignore_check_constraints=ON;
+INSERT INTO t VALUES(1,'not-json');
+PRAGMA ignore_check_constraints=OFF;
+SQL
+run_test_match "verify_constraints_all_reports_detector_error" \
+  "SELECT dolt_verify_constraints('--all');" "malformed JSON" "$DB64"
+run_test_match "verify_constraints_default_reports_detector_error" \
+  "SELECT dolt_verify_constraints();" "malformed JSON" "$DB64"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB64"
 dltest_finish
