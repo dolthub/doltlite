@@ -104,6 +104,14 @@ SELECT dolt_merge('feat', '-m', 'merge_feat');
 SELECT dolt_tag('v2');
 "
 
+CORRELATED_LOG="
+$BRANCHY
+CREATE TABLE requested(id INT PRIMARY KEY, label TEXT, commit_hash TEXT NOT NULL);
+INSERT INTO requested
+  SELECT CASE name WHEN 'feat' THEN 1 ELSE 2 END, name, hash
+  FROM dolt_branches WHERE name IN ('feat', 'side');
+"
+
 echo "--- dolt_log x dolt_commit_ancestors ---"
 
 oracle "log_parent_messages_linear" "$LINEAR" \
@@ -151,6 +159,81 @@ oracle "log_ancestors_cte_tip_parents" "$BRANCHY" \
  FROM tip
  JOIN dolt_commit_ancestors a ON a.commit_hash = tip.hash
  JOIN dolt_log p ON p.commit_hash = a.parent_hash;"
+
+echo "--- correlated dolt_log revisions ---"
+
+run_pair "log_correlated_revision_three_way_join" "$CORRELATED_LOG" \
+"SELECT CONCAT('R|', r.label, '|', count(*))
+ FROM requested r
+ JOIN dolt_commit_ancestors a
+   ON a.commit_hash COLLATE BINARY = r.commit_hash COLLATE BINARY
+  AND a.parent_index = 0
+ JOIN dolt_log(a.commit_hash) c
+   ON c.commit_hash COLLATE BINARY = r.commit_hash COLLATE BINARY
+ GROUP BY r.label;" \
+"SELECT CONCAT('R|', r.label, '|', count(*))
+ FROM requested r
+ JOIN dolt_commit_ancestors a
+   ON a.commit_hash = r.commit_hash AND a.parent_index = 0
+ JOIN dolt_log c ON c.commit_hash = r.commit_hash
+ GROUP BY r.label;"
+
+run_pair "log_correlated_revision_from_branch" "$BRANCHY" \
+"SELECT CONCAT('R|', b.name, '|', c.message)
+ FROM dolt_branches b
+ JOIN dolt_log(b.hash) c ON c.commit_hash = b.hash
+ WHERE b.name IN ('feat', 'side');" \
+"SELECT CONCAT('R|', b.name, '|', c.message)
+ FROM dolt_branches b
+ JOIN dolt_log c ON c.commit_hash = b.hash
+ WHERE b.name IN ('feat', 'side');"
+
+run_pair "log_correlated_parent_revision" "$CORRELATED_LOG" \
+"SELECT CONCAT('R|', r.label, '|', p.message)
+ FROM requested r
+ JOIN dolt_commit_ancestors a
+   ON a.commit_hash = r.commit_hash AND a.parent_index = 0
+ JOIN dolt_log(a.parent_hash) p ON p.commit_hash = a.parent_hash;" \
+"SELECT CONCAT('R|', r.label, '|', p.message)
+ FROM requested r
+ JOIN dolt_commit_ancestors a
+   ON a.commit_hash = r.commit_hash AND a.parent_index = 0
+ JOIN dolt_log p ON p.commit_hash = a.parent_hash;"
+
+run_pair "log_correlated_revision_through_cte" "$CORRELATED_LOG" \
+"WITH parents AS (
+   SELECT r.label, a.parent_hash
+   FROM requested r
+   JOIN dolt_commit_ancestors a
+     ON a.commit_hash = r.commit_hash AND a.parent_index = 0)
+ SELECT CONCAT('R|', parents.label, '|', p.message)
+ FROM parents
+ JOIN dolt_log(parents.parent_hash) p
+   ON p.commit_hash = parents.parent_hash;" \
+"WITH parents AS (
+   SELECT r.label, a.parent_hash
+   FROM requested r
+   JOIN dolt_commit_ancestors a
+     ON a.commit_hash = r.commit_hash AND a.parent_index = 0)
+ SELECT CONCAT('R|', parents.label, '|', p.message)
+ FROM parents
+ JOIN dolt_log p ON p.commit_hash = parents.parent_hash;"
+
+run_pair "log_correlated_revision_cross_join_control" "$CORRELATED_LOG" \
+"SELECT CONCAT('R|', r.label, '|', c.message)
+ FROM requested r
+ CROSS JOIN dolt_commit_ancestors a
+ CROSS JOIN dolt_log(a.commit_hash) c
+ WHERE a.commit_hash = r.commit_hash
+   AND a.parent_index = 0
+   AND c.commit_hash = r.commit_hash;" \
+"SELECT CONCAT('R|', r.label, '|', c.message)
+ FROM requested r
+ CROSS JOIN dolt_commit_ancestors a
+ CROSS JOIN dolt_log c
+ WHERE a.commit_hash = r.commit_hash
+   AND a.parent_index = 0
+   AND c.commit_hash = r.commit_hash;"
 
 echo "--- dolt_log x dolt_diff ---"
 

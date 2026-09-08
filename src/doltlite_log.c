@@ -646,6 +646,10 @@ static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 
   for(i=0; i<pInfo->nConstraint; i++){
     const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( pC->iColumn == 5 && pC->op == SQLITE_INDEX_CONSTRAINT_EQ
+     && !pC->usable ){
+      return SQLITE_CONSTRAINT;
+    }
     if( !pC->usable ) continue;
     if( pC->op != SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     if( pC->iColumn == 0 && iHashEq < 0
