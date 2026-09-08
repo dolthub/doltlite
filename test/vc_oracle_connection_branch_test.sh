@@ -314,6 +314,18 @@ oracle "default_open_uses_main" "$TMPROOT/default_open_uses_main/dl/db.sqlite" "
 oracle "at_branch_selects_branch" "$TMPROOT/at_branch_selects_branch/dl/db.sqlite@side" "side"
 oracle "slash_branch_selects_branch" "$TMPROOT/slash_branch_selects_branch/dl/db.sqlite/side" "side"
 
+oracle_with_mutation "nested_slash_branch_selects_branch" \
+  "SELECT dolt_branch('feature/x');" \
+  "$TMPROOT/nested_slash_branch_selects_branch/dl/db.sqlite/feature/x" \
+  "feature/x" \
+  "SELECT active_branch() AS value UNION ALL SELECT v FROM t WHERE id=1;"
+
+oracle_with_mutation "at_nested_slash_branch_selects_branch" \
+  "SELECT dolt_branch('feature/x');" \
+  "$TMPROOT/at_nested_slash_branch_selects_branch/dl/db.sqlite@feature/x" \
+  "feature/x" \
+  "SELECT active_branch() AS value UNION ALL SELECT v FROM t WHERE id=1;"
+
 oracle_with_mutation "renamed_branch_open_selects_branch" \
   "SELECT dolt_branch('-m','side','renamed');" \
   "$TMPROOT/renamed_branch_open_selects_branch/dl/db.sqlite@renamed" \

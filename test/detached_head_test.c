@@ -99,6 +99,8 @@ int main(void){
                                       sizeof(zHash))==SQLITE_OK && strlen(zHash)==40);
   check("insert second row", execSql(db, "INSERT INTO t VALUES(2)")==SQLITE_OK);
   check("commit second row", execSql(db, "SELECT dolt_commit('-A','-m','c2')")==SQLITE_OK);
+  check("create slash branch",
+        execSql(db, "SELECT dolt_branch('feature/x')")==SQLITE_OK);
   check("attached checkout tag rejected",
         sqlite3_exec(db, "SELECT dolt_checkout('v1')", 0, 0, 0)!=SQLITE_OK);
   check("rejected checkout stays attached",
@@ -106,6 +108,38 @@ int main(void){
         && strcmp(zOpen, "main")==0 && sqlite3_db_readonly(db, "main")==0);
   snprintf(zOpen, sizeof(zOpen), "SELECT dolt_checkout('%s')", zHash);
   check("attached checkout hash rejected", sqlite3_exec(db, zOpen, 0, 0, 0)!=SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  snprintf(zOpen, sizeof(zOpen), "%s/feature/x", zPath);
+  rc = sqlite3_open(zOpen, &db);
+  check("open slash branch name", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("slash branch active",
+          scalarText(db, "SELECT active_branch()", zOpen, sizeof(zOpen))==SQLITE_OK
+          && strcmp(zOpen, "feature/x")==0);
+  }
+  sqlite3_close(db);
+  db = 0;
+
+  snprintf(zOpen, sizeof(zOpen), "%s@feature/x", zPath);
+  rc = sqlite3_open(zOpen, &db);
+  check("open at slash branch name", rc==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  snprintf(zOpen, sizeof(zOpen), "%s/missing/name", zPath);
+  rc = sqlite3_open(zOpen, &db);
+  check("missing slash branch is cantopen", (rc & 0xff)==SQLITE_CANTOPEN);
+  check("missing slash branch names ref",
+        strstr(sqlite3_errmsg(db), "missing/name")!=0);
+  sqlite3_close(db);
+  db = 0;
+
+  snprintf(zOpen, sizeof(zOpen), "%s/missing", zPath);
+  rc = sqlite3_open(zOpen, &db);
+  check("missing branch is cantopen", (rc & 0xff)==SQLITE_CANTOPEN);
+  check("missing branch names ref", strstr(sqlite3_errmsg(db), "missing")!=0);
   sqlite3_close(db);
   db = 0;
 
