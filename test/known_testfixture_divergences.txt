@@ -1761,56 +1761,15 @@ corruptK corruptK-3.3 class=intentional  # stock freelist via sqlite_dbpage; pag
 # 16.1: rootpage swap in SQL is honored as catalog text; integrity flags it
 # at a different layer than stock page checks — not "wire detection earlier."
 # 17.2: truncate to 2048 bytes → disk I/O vs stock malformed (format class).
-corruptL corruptL-1.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-1.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-1.2 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-1.3 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-1.4 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-2.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-2.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-2.2 class=intentional  # stock index-page corruption; no page index layout (architectural)
 corruptL corruptL-3.1 class=intentional issue=1852  # writable_schema index-SQL poke tolerated; store stays consistent (verified intentional)
-corruptL corruptL-4.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-4.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-5.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-5.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-5.2 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-5.3 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-6.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-6.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-7.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-7.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-8.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-8.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-9.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-9.3 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-10.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-10.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
 corruptL corruptL-11.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
 corruptL corruptL-11.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-12.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-12.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-13.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-13.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-14.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-14.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-14.2 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-15.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-15.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-15.2 class=intentional  # stock index-page corruption; no page index layout (architectural)
 corruptL corruptL-16.1 class=intentional  # SQL rootpage swap: integrity flags at chunk/catalog layer, not stock page check (architectural)
 corruptL corruptL-17.2 class=intentional  # truncate to 2048 → disk I/O vs stock malformed (format class, not message parity)
-corruptL corruptL-18.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-18.1 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-19.0 class=intentional  # stock index-page corruption; no page index layout (architectural)
-corruptL corruptL-19.2 class=intentional  # stock index-page corruption; no page index layout (architectural)
 corruptL corruptL-19.4 class=intentional issue=1852  # writable_schema index rewrite tolerated; store stays self-consistent (verified intentional)
 # corruptN deserializes raw stock SQLite page images and then corrupts pages.
 # DoltLite deserialize accepts native DoltLite images, so these stock
 # page-corruption paths and messages do not apply.
-corruptN corruptN-1.0 class=intentional  # stock SQLite serialization is not a DoltLite image
-corruptN corruptN-1.1 class=intentional  # stock SQLite serialization is not a DoltLite image
-corruptN corruptN-2.0 class=intentional  # stock SQLite serialization is not a DoltLite image
 corruptN corruptN-6.1 class=intentional  # stock SQLite serialization is not a DoltLite image
 corruptN corruptN-6.3 class=intentional  # stock SQLite serialization is not a DoltLite image
 corruptN corruptN-7.1 class=intentional  # stock SQLite serialization is not a DoltLite image
@@ -2849,10 +2808,6 @@ e_walckpt e_walckpt-6.4 class=unsupported issue=1836
 # raw stock-SQLite corrupt page images injected via `db deserialize`; doltlite's
 # chunk format cannot host raw page images, so setup fails and the ALTERs see
 # "no such table" instead of "database disk image is malformed"
-altercorrupt altercorrupt-1.0 class=intentional
-altercorrupt altercorrupt-1.1 class=intentional
-altercorrupt altercorrupt-2.0 class=intentional
-altercorrupt altercorrupt-2.1 class=intentional
 
 # DEFENSIVE shadow-name reservation at CREATE is a warm-schema-cache check
 # (sqlite3FindTable without forced load); doltlite invalidates the schema
@@ -2981,13 +2936,6 @@ colmeta colmeta-5.2 class=intentional
 # fails to load: 100/200/310 error in the do_test body, and 101a/110/320/330
 # are cascades that then see an empty db instead of the corrupt content
 # ("ok" / "no such table" instead of "database disk image is malformed").
-dbfuzz001 dbfuzz001-100 class=intentional
-dbfuzz001 dbfuzz001-101a class=intentional
-dbfuzz001 dbfuzz001-110 class=intentional
-dbfuzz001 dbfuzz001-200 class=intentional
-dbfuzz001 dbfuzz001-310 class=intentional
-dbfuzz001 dbfuzz001-320 class=intentional
-dbfuzz001 dbfuzz001-330 class=intentional
 # PRAGMA journal_mode = memory/PERSIST is rejected ("journal_mode is not
 # configurable on doltlite-format databases") — intentional rejection class.
 dbfuzz001 dbfuzz001-420 class=intentional
