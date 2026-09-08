@@ -296,17 +296,19 @@ static void doltVerifyConstraintsFunc(
     nScan = nChanged;
   }
 
-  /* Clear findings only for tables about to be re-checked. Default verify
-  ** scans tables that differ from HEAD; wholesale clear would drop others the
-  ** commit gate still reads. Empty scan set is --all with no names. */
+  /* Drop only the tables about to be re-checked (default verify scans those
+  ** that differ from HEAD; an empty scan set is --all with no names) and
+  ** re-detect inside one batch, so the store is written once, on success.
+  ** A detector error discards the batch and the recorded findings stay as
+  ** they were; other sessions never see the cleared set alone. */
   if( !bOutputOnly ){
-    if( nScan>0 ){
-      rc = doltliteClearConstraintViolationsForTables(
+    rc = doltliteConstraintViolationBatchBegin(db);
+    if( rc==SQLITE_OK ){
+      rc = doltliteConstraintViolationBatchDropTables(
           db, (const char *const *)azScan, nScan);
-    }else{
-      rc = doltliteClearAllConstraintViolations(db);
     }
     if( rc!=SQLITE_OK ){
+      doltliteConstraintViolationBatchEnd(db, 0);
       sqlite3_result_error_code(context, rc);
       goto cleanup;
     }
@@ -314,6 +316,10 @@ static void doltVerifyConstraintsFunc(
 
   rc = doltliteDetectConstraintViolationsFiltered(
       db, pDetectAnc, azScan, nScan, !bOutputOnly, &nViolations, 0);
+  if( !bOutputOnly ){
+    int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
+    if( rc==SQLITE_OK ) rc = erc;
+  }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     goto cleanup;

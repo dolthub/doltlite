@@ -26,9 +26,6 @@ struct ConstraintViolationTable {
   ConstraintViolationRow *aRows;
 };
 
-int doltliteClearConstraintViolationsForTables(
-  sqlite3 *db, const char *const *azTables, int nNames
-);
 
 int doltliteAppendConstraintViolation(
   sqlite3 *db,
@@ -45,6 +42,12 @@ int doltliteClearAllConstraintViolations(sqlite3 *db);
 /* Begin loads; appends accumulate; End persists if commit!=0. Not nestable. */
 int doltliteConstraintViolationBatchBegin(sqlite3 *db);
 int doltliteConstraintViolationBatchEnd(sqlite3 *db, int commit);
+int doltliteConstraintViolationBatchActive(sqlite3 *db);
+int doltliteConstraintViolationBatchDropTables(
+  sqlite3 *db,
+  const char *const *azTables,
+  int nNames
+);
 
 int doltliteConstraintViolationsRegister(sqlite3 *db);
 
