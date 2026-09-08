@@ -886,7 +886,7 @@ void doltliteBtreeBackupStart(Btree *p);
 void doltliteBtreeBackupFinish(Btree *p);
 void doltliteInvalidateBtreeWorkingState(Btree *p);
 int doltliteBtreePrepareBackupBranch(Btree *p, ChunkStore *cs,
-                                     char **pzPrepared);
+                                     char **pzPrepared, ProllyHash *pTip);
 void doltliteBtreeInstallBackupBranch(Btree *p, char *zPrepared);
 
 static int doltliteBackupSameFile(
@@ -1124,6 +1124,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   sqlite3_file *pTmp = 0;
   char *zTmpFile = 0;
   char *zPreparedBranch = 0;
+  ProllyHash replacementProofTip;
   int retainTmp = 0;
   i64 fileSize = 0;
   int rc;
@@ -1136,6 +1137,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   (void)nPage;
 
   memset(&tmpStore, 0, sizeof(tmpStore));
+  memset(&replacementProofTip, 0, sizeof(replacementProofTip));
 
   if( p && p->pOrig ) return orig_sqlite3_backup_step(p->pOrig, nPage);
   if( !p ) return SQLITE_DONE;
@@ -1262,7 +1264,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   }
 
   rc = doltliteBtreePrepareBackupBranch(
-      pDestBt, srcCs, &zPreparedBranch);
+      pDestBt, srcCs, &zPreparedBranch, &replacementProofTip);
   if( rc!=SQLITE_OK ) goto backup_step_done;
 
   if( destCs->isMemory ){
@@ -1369,7 +1371,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
       doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
       zPreparedBranch = 0;
       (void)chunkStorePublishPathReplacementProof(
-          destCs, &destCs->refs.committedRefsHash, &srcCs->refs.refsHash);
+          destCs, &destCs->refs.committedRefsHash, &replacementProofTip);
     }
 #if SQLITE_OS_WIN
     {

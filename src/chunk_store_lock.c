@@ -141,9 +141,8 @@ void csFileUnlock(sqlite3_file *pFile, char **pzName){
 #define CS_REPLACEMENT_PROOF_MAGIC 0x32504c44
 #define CS_REPLACEMENT_PROOF_SIZE (4 + 2*PROLLY_HASH_SIZE)
 
-/* Backup changes database identity. Its current refs hash in the graph-lock
-** sidecar lets stale peers follow that sanctioned replacement; later GC runs
-** advance the proof so an unrelated file at the path remains untrusted. */
+/* Backup changes database identity. The displaced refs and an installed
+** commit in the graph-lock sidecar let stale peers follow that replacement. */
 static int csReadReplacementProof(
   ChunkStore *cs,
   ProllyHash *pFrom,
@@ -181,18 +180,6 @@ static int csWriteReplacementProof(
   memcpy(aBuf+4, pFrom->data, PROLLY_HASH_SIZE);
   memcpy(aBuf+4+PROLLY_HASH_SIZE, pTo->data, PROLLY_HASH_SIZE);
   return sqlite3OsWrite(CS_GRAPH_LOCK(cs), aBuf, sizeof(aBuf), 0);
-}
-
-int chunkStoreRefreshReplacementProof(ChunkStore *cs){
-  ProllyHash from;
-  ProllyHash to;
-  int has = 0;
-  int valid = 0;
-  int rc = csReadReplacementProof(cs, &from, &to, &valid);
-  if( rc!=SQLITE_OK || !valid ) return rc;
-  rc = chunkStoreHas(cs, &to, &has);
-  if( rc!=SQLITE_OK || !has ) return rc;
-  return csWriteReplacementProof(cs, &from, &cs->refs.refsHash);
 }
 
 int chunkStorePublishPathReplacementProof(

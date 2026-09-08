@@ -1033,13 +1033,6 @@ static int gcRun(
     }
   }
 
-  rc = chunkStoreRefreshReplacementProof(cs);
-  if( rc!=SQLITE_OK ){
-    chunkStoreUnlock(cs);
-    *pzPhase = "failed to refresh replacement proof for gc";
-    return rc;
-  }
-
   rc = csMaterializeIndex(cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);

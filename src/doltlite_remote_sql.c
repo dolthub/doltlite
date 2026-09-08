@@ -844,7 +844,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
     pBtree->bDeferredOpen = 1;
     rc = doltliteBtreePrepareBackupBranch(
-        pBtree, cs, &zPreparedBranch);
+        pBtree, cs, &zPreparedBranch, 0);
     if( rc==SQLITE_OK && zPreparedBranch ){
       doltliteBtreeInstallBackupBranch(pBtree, zPreparedBranch);
       zPreparedBranch = 0;

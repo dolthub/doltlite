@@ -194,6 +194,8 @@ static void test_reader_after_peer_restore(void){
   const char *saved = "/tmp/test_mp_restore_refresh_saved.db";
   const char *foreignPath = "/tmp/test_mp_restore_foreign.db";
   sqlite3 *reader = 0;
+  sqlite3 *idle = 0;
+  sqlite3 *gc = 0;
   sqlite3 *foreign = 0;
   pid_t pid;
   int status;
@@ -208,6 +210,9 @@ static void test_reader_after_peer_restore(void){
         execSql(reader,
           "CREATE TABLE old_table(x);"
           "SELECT dolt_commit('-A','-m','old state');")==SQLITE_OK);
+  check("mp_restore_idle_open", sqlite3_open(path, &idle)==SQLITE_OK);
+  check("mp_restore_idle_seed",
+        execSql(idle, "SELECT * FROM old_table;")==SQLITE_OK);
 
   pid = fork();
   if( pid==0 ){
@@ -246,6 +251,14 @@ static void test_reader_after_peer_restore(void){
   check("mp_restore_reader_commit",
         execSql(reader, "SELECT dolt_commit('-A','-m','after restore');")
           ==SQLITE_OK);
+  check("mp_restore_gc_open", sqlite3_open(path, &gc)==SQLITE_OK);
+  check("mp_restore_gc", execSql(gc, "SELECT dolt_gc();")==SQLITE_OK);
+  sqlite3_close(gc);
+  gc = 0;
+  check("mp_restore_idle_after_gc",
+        execSql(idle, "CREATE TABLE after_gc(x);")==SQLITE_OK);
+  sqlite3_close(idle);
+  idle = 0;
 
   check("mp_restore_foreign_open",
         sqlite3_open(foreignPath, &foreign)==SQLITE_OK);
@@ -261,6 +274,8 @@ static void test_reader_after_peer_restore(void){
         execSql(reader, "CREATE TABLE must_not_land(x);")==SQLITE_READONLY);
 
   sqlite3_close(reader);
+  sqlite3_close(idle);
+  sqlite3_close(gc);
   reader = 0;
   remove(path);
   check("mp_restore_reuse_open",

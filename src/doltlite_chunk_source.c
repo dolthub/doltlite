@@ -937,7 +937,7 @@ SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
     if( locked ) chunkStoreUnlock(cs);
     if( rc==SQLITE_OK ){
       rc = doltliteBtreePrepareBackupBranch(
-          pBtree, cs, &zPreparedBranch);
+          pBtree, cs, &zPreparedBranch, 0);
     }
     if( rc==SQLITE_OK && zPreparedBranch ){
       doltliteBtreeInstallBackupBranch(pBtree, zPreparedBranch);
