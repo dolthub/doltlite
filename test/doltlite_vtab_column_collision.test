@@ -1,0 +1,103 @@
+# 2026-09-08
+#
+# The author disclaims copyright to this source code.  In place of
+# a legal notice, here is a blessing:
+#
+#    May you do good and not evil.
+#    May you find forgiveness for yourself and forgive others.
+#    May you share freely, never taking more than you give.
+#
+#***********************************************************************
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test doltlite_vtab_column_collision-1.1 {
+  CREATE TABLE d(
+    id INT PRIMARY KEY,
+    "commit" TEXT,
+    commit_1 TEXT,
+    commit_date TEXT,
+    commit_date_1 TEXT,
+    ref TEXT,
+    ref_1 TEXT
+  );
+  INSERT INTO d VALUES(1, 'c', 'c1', 'd', 'd1', 'r', 'r1');
+  SELECT length(dolt_commit('-Am', 'base'));
+  UPDATE d SET "commit"='working';
+  SELECT group_concat(name, '|') FROM (
+    SELECT name FROM pragma_table_xinfo('dolt_diff_d') ORDER BY cid
+  );
+} {40 {to_id|to_commit_2|to_commit_1|to_commit_date_2|to_commit_date_1|to_ref_2|to_ref_1|to_commit|to_commit_date|from_id|from_commit_2|from_commit_1|from_commit_date_2|from_commit_date_1|from_ref_2|from_ref_1|from_commit|from_commit_date|diff_type|from_ref|to_ref}}
+
+do_execsql_test doltlite_vtab_column_collision-1.2 {
+  SELECT to_commit_2, to_commit_1, to_commit_date_2, to_commit_date_1,
+         to_ref_2, to_ref_1, to_commit, diff_type
+    FROM dolt_diff_d
+   WHERE to_commit='WORKING';
+} {working c1 d d1 r r1 WORKING modified}
+
+reset_db
+
+do_execsql_test doltlite_vtab_column_collision-2.1 {
+  CREATE TABLE h(
+    id INT PRIMARY KEY,
+    commit_hash TEXT,
+    commit_hash_1 TEXT,
+    "Committer" TEXT,
+    "Committer_1" TEXT,
+    commit_date TEXT,
+    commit_date_1 TEXT,
+    start_ref TEXT,
+    start_ref_1 TEXT
+  );
+  INSERT INTO h VALUES(1, 'h', 'h1', 'm', 'm1', 'd', 'd1', 's', 's1');
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT group_concat(name, '|') FROM (
+    SELECT name FROM pragma_table_xinfo('dolt_history_h') ORDER BY cid
+  );
+} {40 {id|commit_hash_2|commit_hash_1|Committer_2|Committer_1|commit_date_2|commit_date_1|start_ref_2|start_ref_1|commit_hash|committer|commit_date|start_ref}}
+
+do_execsql_test doltlite_vtab_column_collision-2.2 {
+  SELECT commit_hash_2, commit_hash_1, committer_2, committer_1,
+         commit_date_2, commit_date_1, start_ref_2, start_ref_1,
+         length(commit_hash)
+    FROM dolt_history_h
+   WHERE commit_hash=(SELECT commit_hash FROM dolt_log WHERE message='base');
+} {h h1 m m1 d d1 s s1 40}
+
+reset_db
+
+do_execsql_test doltlite_vtab_column_collision-3.1 {
+  CREATE TABLE c(id INT PRIMARY KEY, diff_type TEXT, diff_type_1 TEXT);
+  INSERT INTO c VALUES(1, 'base', 'keep');
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_checkout('-b', 'feature');
+  UPDATE c SET diff_type='theirs';
+  SELECT length(dolt_commit('-Am', 'theirs'));
+  SELECT dolt_checkout('main');
+  UPDATE c SET diff_type='ours';
+  SELECT length(dolt_commit('-Am', 'ours'));
+} {40 0 40 0 40}
+
+do_test doltlite_vtab_column_collision-3.2 {
+  lindex [catchsql {
+    BEGIN;
+    SELECT dolt_merge('feature');
+  }] 0
+} {1}
+
+do_execsql_test doltlite_vtab_column_collision-3.3 {
+  SELECT group_concat(name, '|') FROM (
+    SELECT name FROM pragma_table_xinfo('dolt_conflicts_c') ORDER BY cid
+  );
+} {{from_root_ish|base_id|base_diff_type|base_diff_type_1|our_id|our_diff_type_2|our_diff_type_1|our_diff_type|their_id|their_diff_type_2|their_diff_type_1|their_diff_type|dolt_conflict_id}}
+
+do_execsql_test doltlite_vtab_column_collision-3.4 {
+  SELECT base_diff_type, our_diff_type_2, our_diff_type,
+         their_diff_type_2, their_diff_type
+    FROM dolt_conflicts_c;
+  ROLLBACK;
+} {base ours modified theirs modified}
+
+finish_test
