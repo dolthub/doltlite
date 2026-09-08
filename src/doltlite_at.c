@@ -50,13 +50,6 @@ struct AtCursor {
   DoltlitePkRange pkRange;
 };
 
-typedef struct AtSeenTable AtSeenTable;
-struct AtSeenTable {
-  char **azName;
-  int nName;
-  int nAlloc;
-};
-
 static int atTakeChunkSourceError(
   ChunkStore *cs,
   char **pzErr,
@@ -69,39 +62,6 @@ static int atTakeChunkSourceError(
   else sqlite3_free(zErr);
   if( pRc && sourceRc!=SQLITE_OK ) *pRc = sourceRc;
   return 1;
-}
-
-static void atSeenTableClear(AtSeenTable *pSeen){
-  int i;
-  for(i=0; i<pSeen->nName; i++) sqlite3_free(pSeen->azName[i]);
-  sqlite3_free(pSeen->azName);
-  memset(pSeen, 0, sizeof(*pSeen));
-}
-
-static int atSeenTableHas(AtSeenTable *pSeen, const char *zName){
-  int i;
-  for(i=0; i<pSeen->nName; i++){
-    if( strcmp(pSeen->azName[i], zName)==0 ) return 1;
-  }
-  return 0;
-}
-
-static int atSeenTableAdd(AtSeenTable *pSeen, const char *zName){
-  char *zCopy;
-  if( atSeenTableHas(pSeen, zName) ) return SQLITE_OK;
-  if( pSeen->nName>=pSeen->nAlloc ){
-    int nNew = pSeen->nAlloc ? pSeen->nAlloc*2 : 16;
-    char **azNew;
-    if( nNew > 0x7fffffff/(int)sizeof(char*) ) return SQLITE_NOMEM;
-    azNew = sqlite3_realloc(pSeen->azName, nNew*(int)sizeof(char*));
-    if( !azNew ) return SQLITE_NOMEM;
-    pSeen->azName = azNew;
-    pSeen->nAlloc = nNew;
-  }
-  zCopy = sqlite3_mprintf("%s", zName);
-  if( !zCopy ) return SQLITE_NOMEM;
-  pSeen->azName[pSeen->nName++] = zCopy;
-  return SQLITE_OK;
 }
 
 static int atEnqueueReachableRoots(
@@ -302,12 +262,7 @@ int doltliteLoadHistoricalTableColumns(
   doltliteCommitQueueClear(&q);
 
   if( rc==SQLITE_OK && pCols->nCol<=0 ){
-    if( pzErr ){
-      *pzErr = sqlite3_mprintf("table not found in reachable refs: %s",
-                               zTableName);
-      if( !*pzErr ) return SQLITE_NOMEM;
-    }
-    return SQLITE_ERROR;
+    return SQLITE_NOTFOUND;
   }
   return rc;
 }
@@ -637,87 +592,48 @@ static int atRegisterModule(
   return rc;
 }
 
-static int atRegisterOne(sqlite3 *db, AtSeenTable *pSeen, const char *zName){
+Module *doltliteHistoricalModuleRegister(sqlite3 *db, const char *zName){
+  const sqlite3_module *pModule;
+  const char *zPrefix;
+  int nPrefix;
   int rc;
-  if( !zName || atSeenTableHas(pSeen, zName) ) return SQLITE_OK;
-  rc = atRegisterModule(db, "dolt_at_", zName, &atModule);
-  if( rc==SQLITE_OK ){
-    rc = atRegisterModule(db, "dolt_diff_", zName,
-                          doltliteDiffTableModule());
+
+  if( db->nDb<=0 || !sqlite3BtreeIsDoltliteFormat(db->aDb[0].pBt) ){
+    return 0;
   }
-  if( rc==SQLITE_OK ){
-    rc = atRegisterModule(db, "dolt_history_", zName,
-                          doltliteHistoryTableModule());
+  if( sqlite3_strnicmp(zName, "dolt_at_", 8)==0 && zName[8] ){
+    zPrefix = "dolt_at_";
+    nPrefix = 8;
+    pModule = &atModule;
+  }else if( sqlite3_strnicmp(zName, "dolt_diff_", 10)==0 && zName[10] ){
+    zPrefix = "dolt_diff_";
+    nPrefix = 10;
+    pModule = doltliteDiffTableModule();
+  }else if( sqlite3_strnicmp(zName, "dolt_history_", 13)==0 && zName[13] ){
+    zPrefix = "dolt_history_";
+    nPrefix = 13;
+    pModule = doltliteHistoryTableModule();
+  }else{
+    return 0;
   }
-  if( rc!=SQLITE_OK ) return rc;
-  return atSeenTableAdd(pSeen, zName);
+
+  rc = atRegisterModule(db, zPrefix, zName+nPrefix, pModule);
+  if( rc!=SQLITE_OK ) return 0;
+  return (Module*)sqlite3HashFind(&db->aModule, zName);
 }
 
-static int atRegisterCatalogTables(
-  sqlite3 *db,
-  const ProllyHash *pCatHash,
-  AtSeenTable *pSeen
-){
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
-  int i, rc;
-  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
-  rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  for(i=0; i<nTables && rc==SQLITE_OK; i++){
-    if( aTables[i].zName && aTables[i].iTable > 1 ){
-      rc = atRegisterOne(db, pSeen, aTables[i].zName);
+void doltliteHistoricalModulesReset(sqlite3 *db){
+  HashElem *pElem;
+  for(pElem=sqliteHashFirst(&db->aModule); pElem;
+      pElem=sqliteHashNext(pElem)){
+    Module *pModule = (Module*)sqliteHashData(pElem);
+    const char *zName = pModule->zName;
+    if( sqlite3_strnicmp(zName, "dolt_at_", 8)==0
+     || sqlite3_strnicmp(zName, "dolt_diff_", 10)==0
+     || sqlite3_strnicmp(zName, "dolt_history_", 13)==0 ){
+      sqlite3VtabEponymousTableClear(db, pModule);
     }
   }
-  doltliteFreeCatalog(aTables, nTables);
-  return rc;
-}
-
-int doltliteRegisterHistoricalTablesForCatalog(
-  sqlite3 *db,
-  const ProllyHash *pCatHash
-){
-  AtSeenTable seen;
-  int rc;
-  memset(&seen, 0, sizeof(seen));
-  rc = atRegisterCatalogTables(db, pCatHash, &seen);
-  atSeenTableClear(&seen);
-  return rc;
-}
-
-int doltliteRegisterHistoricalTables(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int has, rc;
-  DoltliteCommitQueue q;
-  ProllyHash cur;
-  AtSeenTable seen;
-
-  memset(&q, 0, sizeof(q));
-  memset(&cur, 0, sizeof(cur));
-  memset(&seen, 0, sizeof(seen));
-
-  if( !cs ) return SQLITE_OK;
-
-  rc = doltliteCommitQueueInit(&q, &cur);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = atEnqueueReachableRoots(db, &q);
-
-  while( rc==SQLITE_OK ){
-    DoltliteCommit commit;
-    rc = doltliteCommitQueueNext(&q, &cur, &has);
-    if( rc!=SQLITE_OK || !has ) break;
-    rc = doltliteLoadCommit(db, &cur, &commit);
-    if( rc!=SQLITE_OK ) break;
-    rc = atRegisterCatalogTables(db, &commit.catalogHash, &seen);
-    if( rc==SQLITE_OK ){
-      rc = doltliteCommitQueueEnqueueParents(&q, &commit);
-    }
-    doltliteCommitClear(&commit);
-  }
-
-  doltliteCommitQueueClear(&q);
-  atSeenTableClear(&seen);
-  return rc;
 }
 
 #endif

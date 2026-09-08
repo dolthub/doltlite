@@ -444,6 +444,11 @@ Table *sqlite3LocateTable(
     ** can be an eponymous virtual table. */
     if( (pParse->prepFlags & SQLITE_PREPARE_NO_VTAB)==0 && db->init.busy==0 ){
       Module *pMod = (Module*)sqlite3HashFind(&db->aModule, zName);
+#ifdef DOLTLITE_PROLLY
+      if( pMod==0 ){
+        pMod = doltliteHistoricalModuleRegister(db, zName);
+      }
+#endif
       if( pMod==0 && sqlite3_strnicmp(zName, "pragma_", 7)==0 ){
         pMod = sqlite3PragmaVtabRegister(db, zName);
       }

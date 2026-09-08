@@ -155,6 +155,10 @@ static SQLITE_INLINE int doltliteVtabConnectTable(
   if( historical ){
     rc = doltliteLoadHistoricalTableColumns(db, v->zTableName,
                                              &v->cols, pzErr);
+    if( rc==SQLITE_NOTFOUND && (!pzErr || !*pzErr) ){
+      if( pzErr ) *pzErr = sqlite3_mprintf("no such table: %s", zMod);
+      rc = pzErr && !*pzErr ? SQLITE_NOMEM : SQLITE_ERROR;
+    }
   }else{
     rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
   }

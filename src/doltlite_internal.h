@@ -1528,9 +1528,6 @@ int doltliteRegisterWorkspaceTables(sqlite3 *db);
 int doltliteRegisterBlameTables(sqlite3 *db);
 const sqlite3_module *doltliteDiffTableModule(void);
 const sqlite3_module *doltliteHistoryTableModule(void);
-int doltliteRegisterHistoricalTables(sqlite3 *db);
-int doltliteRegisterHistoricalTablesForCatalog(sqlite3 *db,
-                                                const ProllyHash *pCatHash);
 int doltliteRefreshConstraintViolationTables(sqlite3 *db);
 int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 int doltliteUpdateSchemaHashes(sqlite3 *db);

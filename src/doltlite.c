@@ -25,7 +25,6 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltliteTagRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteConflictsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteGcRegister(db))!=SQLITE_OK ) return rc;
-  if( (rc = doltliteRegisterHistoricalTables(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteRegisterWorkspaceTables(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteAncestorRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteRegisterBlameTables(db))!=SQLITE_OK ) return rc;
