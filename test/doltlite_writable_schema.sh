@@ -4,22 +4,29 @@
 echo "=== Doltlite writable_schema catalog poke tests ==="
 echo ""
 
-# CLI honors writable_schema without `.dbconfig defensive off`.
+# The CLI starts in DEFENSIVE mode like sqlite3: PRAGMA writable_schema=ON
+# stays off until `.dbconfig defensive off` (or -unsafe-testing).
 DB=/tmp/test_dl_writable_schema_pragma_$$.db; rm -f "$DB"
 run_test "writable_schema_default_off" \
   "PRAGMA writable_schema;" \
   "0" "$DB"
-run_test "writable_schema_on_roundtrip" \
+run_test "writable_schema_on_blocked_by_defensive" \
   "PRAGMA writable_schema=ON; PRAGMA writable_schema;" \
-  "1" "$DB"
-run_test "writable_schema_off_roundtrip" \
-  "PRAGMA writable_schema=ON; PRAGMA writable_schema=OFF; PRAGMA writable_schema;" \
   "0" "$DB"
+run_test_match "writable_schema_on_roundtrip" \
+  ".dbconfig defensive off
+PRAGMA writable_schema=ON; PRAGMA writable_schema;" \
+  "^1\$" "$DB"
+run_test_match "writable_schema_off_roundtrip" \
+  ".dbconfig defensive off
+PRAGMA writable_schema=ON; PRAGMA writable_schema=OFF; PRAGMA writable_schema;" \
+  "^0\$" "$DB"
 rm -f "$DB"
 
 DB=/tmp/test_dl_writable_schema_null_row_$$.db; rm -f "$DB"
 cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null
 CREATE TABLE t(a);
+.dbconfig defensive off
 PRAGMA writable_schema=ON;
 INSERT INTO sqlite_master VALUES(NULL, NULL, NULL, NULL, NULL);
 SQL
