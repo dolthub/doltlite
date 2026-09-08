@@ -735,6 +735,108 @@ without_rowid_done:
   return rc;
 }
 
+static int uniqueWalkTable(
+  sqlite3 *db,
+  const char *zTable,
+  const char *zSql,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  void *pCtx
+){
+  sqlite3_stmt *pIdxList = 0;
+  char *zIdxQ;
+  int hasRowid = 1;
+  MergePkInfo pkInfo;
+  int indexStepRc;
+  int rc;
+  int *pnFound = (int*)pCtx;
+  (void)zSql; (void)aAnc; (void)nAnc;
+
+  memset(&pkInfo, 0, sizeof(pkInfo));
+  rc = tableHasRowid(db, zTable, &hasRowid);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !hasRowid ){
+    rc = loadMergePkInfo(db, zTable, &pkInfo);
+    if( rc != SQLITE_OK ) return rc;
+  }
+
+  zIdxQ = sqlite3_mprintf("PRAGMA main.index_list(%Q)", zTable);
+  if( !zIdxQ ){
+    freeMergePkInfo(&pkInfo);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3_prepare_v2(db, zIdxQ, -1, &pIdxList, 0);
+  sqlite3_free(zIdxQ);
+  if( rc != SQLITE_OK ){
+    freeMergePkInfo(&pkInfo);
+    return rc;
+  }
+
+  while( (indexStepRc = sqlite3_step(pIdxList)) == SQLITE_ROW ){
+    int unique = sqlite3_column_int(pIdxList, 2);
+    const char *zIdxRaw;
+    const char *zOrigin;
+    char *zIdx;
+    Index *pIdx;
+    sqlite3_str *pColList;
+    char *zColList;
+    int i;
+    int supported = 1;
+
+    if( !unique ) continue;
+    zIdxRaw = (const char*)sqlite3_column_text(pIdxList, 1);
+    if( !zIdxRaw ) continue;
+
+    zOrigin = (const char*)sqlite3_column_text(pIdxList, 3);
+    if( zOrigin && strcmp(zOrigin, "pk")==0 ) continue;
+
+    zIdx = sqlite3_mprintf("%s", zIdxRaw);
+    if( !zIdx ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    pIdx = sqlite3FindIndex(db, zIdx, "main");
+    if( !pIdx ){
+      sqlite3_free(zIdx);
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+
+    pColList = sqlite3_str_new(0);
+    for(i=0; i<pIdx->nKeyCol; i++){
+      int cno = pIdx->aiColumn[i];
+      if( i>0 ) sqlite3_str_appendall(pColList, ", ");
+      if( cno>=0 && cno<pIdx->pTable->nCol ){
+        sqlite3_str_appendf(
+            pColList, "\"%w\"", pIdx->pTable->aCol[cno].zCnName);
+      }else{
+        supported = 0;
+        sqlite3_str_appendall(pColList, "null");
+      }
+    }
+    zColList = sqlite3_str_finish(pColList);
+    if( !zColList ) rc = SQLITE_NOMEM;
+    if( supported && zColList && *zColList ){
+      if( hasRowid ){
+        rc = detectUniqueViolationsForIndex(
+            db, zTable, pIdx, zColList, pnFound);
+      }else{
+        rc = detectUniqueViolationsForIndexWithoutRowid(
+            db, doltliteFindTableByName(aCur, nCur, zTable),
+            zTable, pIdx, zColList, &pkInfo, pnFound);
+      }
+    }
+    sqlite3_free(zColList);
+    sqlite3_free(zIdx);
+    if( rc != SQLITE_OK ) break;
+  }
+
+  if( rc==SQLITE_OK && indexStepRc!=SQLITE_DONE ) rc = indexStepRc;
+  rc = finishConstraintStmt(pIdxList, rc);
+  freeMergePkInfo(&pkInfo);
+  return rc;
+}
+
 int doltliteDetectMergeUniqueViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -743,149 +845,9 @@ int doltliteDetectMergeUniqueViolations(
   const char **azTables,
   int nTables
 ){
-  sqlite3_stmt *pTbls = 0;
-  struct TableEntry *aAnc = 0;
-  int nAnc = 0;
-  struct TableEntry *aCur = 0;
-  int nCur = 0;
-  int rc;
-
   if( pnFound ) *pnFound = 0;
-
-  rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
-                                      &aCur, &nCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = sqlite3_prepare_v2(db,
-      "SELECT name FROM main.sqlite_master WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
-      -1, &pTbls, 0);
-  if( rc != SQLITE_OK ){
-    doltliteFreeCatalog(aAnc, nAnc);
-    doltliteFreeCatalog(aCur, nCur);
-    return rc;
-  }
-
-  while( (rc = sqlite3_step(pTbls)) == SQLITE_ROW ){
-    const char *zTableRaw = (const char*)sqlite3_column_text(pTbls, 0);
-    char *zTable;
-    sqlite3_stmt *pIdxList = 0;
-    char *zIdxQ;
-    int hasRowid = 1;
-    MergePkInfo pkInfo;
-    int indexStepRc;
-
-    if( !zTableRaw ) continue;
-    zTable = sqlite3_mprintf("%s", zTableRaw);
-    if( !zTable ){ rc = SQLITE_NOMEM; break; }
-    if( !cvTableAllowed(zTable, azTables, nTables) ){
-      sqlite3_free(zTable);
-      continue;
-    }
-    if( !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable) ){
-      sqlite3_free(zTable);
-      continue;
-    }
-    memset(&pkInfo, 0, sizeof(pkInfo));
-    rc = tableHasRowid(db, zTable, &hasRowid);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zTable);
-      break;
-    }
-    if( !hasRowid ){
-      rc = loadMergePkInfo(db, zTable, &pkInfo);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(zTable);
-        break;
-      }
-    }
-
-    zIdxQ = sqlite3_mprintf("PRAGMA main.index_list(%Q)", zTable);
-    if( !zIdxQ ){
-      freeMergePkInfo(&pkInfo);
-      sqlite3_free(zTable);
-      rc = SQLITE_NOMEM;
-      break;
-    }
-    rc = sqlite3_prepare_v2(db, zIdxQ, -1, &pIdxList, 0);
-    sqlite3_free(zIdxQ);
-    if( rc != SQLITE_OK ){
-      freeMergePkInfo(&pkInfo);
-      sqlite3_free(zTable);
-      break;
-    }
-
-    while( (indexStepRc = sqlite3_step(pIdxList)) == SQLITE_ROW ){
-      int unique = sqlite3_column_int(pIdxList, 2);
-      const char *zIdxRaw;
-      const char *zOrigin;
-      char *zIdx;
-      Index *pIdx;
-      sqlite3_str *pColList;
-      char *zColList;
-      int i;
-      int supported = 1;
-
-      if( !unique ) continue;
-      zIdxRaw = (const char*)sqlite3_column_text(pIdxList, 1);
-      if( !zIdxRaw ) continue;
-
-      zOrigin = (const char*)sqlite3_column_text(pIdxList, 3);
-      if( zOrigin && strcmp(zOrigin, "pk")==0 ) continue;
-
-      zIdx = sqlite3_mprintf("%s", zIdxRaw);
-      if( !zIdx ){
-        rc = SQLITE_NOMEM;
-        break;
-      }
-      pIdx = sqlite3FindIndex(db, zIdx, "main");
-      if( !pIdx ){
-        sqlite3_free(zIdx);
-        rc = SQLITE_CORRUPT;
-        break;
-      }
-
-      pColList = sqlite3_str_new(0);
-      for(i=0; i<pIdx->nKeyCol; i++){
-        int cno = pIdx->aiColumn[i];
-        if( i>0 ) sqlite3_str_appendall(pColList, ", ");
-        if( cno>=0 && cno<pIdx->pTable->nCol ){
-          sqlite3_str_appendf(
-              pColList, "\"%w\"", pIdx->pTable->aCol[cno].zCnName);
-        }else{
-          supported = 0;
-          sqlite3_str_appendall(pColList, "null");
-        }
-      }
-      zColList = sqlite3_str_finish(pColList);
-      if( !zColList ) rc = SQLITE_NOMEM;
-      if( supported && zColList && *zColList ){
-        if( hasRowid ){
-          rc = detectUniqueViolationsForIndex(
-              db, zTable, pIdx, zColList, pnFound);
-        }else{
-          rc = detectUniqueViolationsForIndexWithoutRowid(
-              db, doltliteFindTableByName(aCur, nCur, zTable),
-              zTable, pIdx, zColList, &pkInfo, pnFound);
-        }
-      }
-      sqlite3_free(zColList);
-      sqlite3_free(zIdx);
-      if( rc != SQLITE_OK ) break;
-    }
-
-    if( rc==SQLITE_OK && indexStepRc!=SQLITE_DONE ) rc = indexStepRc;
-    rc = finishConstraintStmt(pIdxList, rc);
-    freeMergePkInfo(&pkInfo);
-    sqlite3_free(zTable);
-    if( rc != SQLITE_OK ) break;
-  }
-  if( rc == SQLITE_DONE ) rc = SQLITE_OK;
-  rc = finishConstraintStmt(pTbls, rc);
-  doltliteFreeCatalog(aAnc, nAnc);
-  doltliteFreeCatalog(aCur, nCur);
-  setConstraintError(db, pzErrMsg, rc);
-  return rc;
+  return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
+                             1, 0, uniqueWalkTable, pnFound);
 }
 
 

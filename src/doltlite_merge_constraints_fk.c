@@ -400,6 +400,131 @@ static int detectFkViolationsForSpec(
   return rc;
 }
 
+static int fkWalkTable(
+  sqlite3 *db,
+  const char *zTable,
+  const char *zSql,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  void *pCtx
+){
+  char *zFkQ = 0;
+  sqlite3_stmt *pFk = 0;
+  int hasRowid = 1;
+  MergePkInfo childPk;
+  int curId = -1;
+  char *zParent = 0;
+  char **azFrom = 0;
+  char **azTo = 0;
+  int nCol = 0;
+  int nAlloc = 0;
+  int childChanged;
+  int fkStepRc;
+  int rc;
+  int *pnFound = (int*)pCtx;
+  (void)zSql;
+
+  childChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable);
+  memset(&childPk, 0, sizeof(childPk));
+  rc = tableHasRowid(db, zTable, &hasRowid);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !hasRowid ){
+    rc = loadMergePkInfo(db, zTable, &childPk);
+    if( rc != SQLITE_OK ) return rc;
+  }
+
+  zFkQ = sqlite3_mprintf("PRAGMA main.foreign_key_list(%Q)", zTable);
+  if( !zFkQ ){
+    freeMergePkInfo(&childPk);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3_prepare_v2(db, zFkQ, -1, &pFk, 0);
+  sqlite3_free(zFkQ);
+  if( rc != SQLITE_OK ){
+    freeMergePkInfo(&childPk);
+    return rc;
+  }
+
+  while( (fkStepRc = sqlite3_step(pFk)) == SQLITE_ROW ){
+    int id = sqlite3_column_int(pFk, 0);
+    const char *zParentRaw = (const char*)sqlite3_column_text(pFk, 2);
+    const char *zFromRaw = (const char*)sqlite3_column_text(pFk, 3);
+    const char *zToRaw = (const char*)sqlite3_column_text(pFk, 4);
+
+    if( curId>=0 && id!=curId ){
+      int parentChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zParent);
+      if( childChanged || parentChanged ){
+        struct TableEntry *aCheckAnc = parentChanged ? 0 : aAnc;
+        int nCheckAnc = parentChanged ? 0 : nAnc;
+        rc = backfillParentPk(db, zParent, azTo, nCol);
+        if( rc != SQLITE_OK ) break;
+        rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
+            zTable, hasRowid, &childPk, zParent, curId,
+            azFrom, azTo, nCol, pnFound);
+      }
+      doltliteFreeStringArray(azFrom, nCol);
+      doltliteFreeStringArray(azTo, nCol);
+      azFrom = 0; azTo = 0; nCol = 0; nAlloc = 0;
+      sqlite3_free(zParent); zParent = 0;
+      if( rc != SQLITE_OK ) break;
+    }
+
+    if( curId != id ){
+      curId = id;
+      zParent = sqlite3_mprintf("%s", zParentRaw ? zParentRaw : "");
+      if( !zParent ){ rc = SQLITE_NOMEM; break; }
+    }
+
+    if( nCol >= nAlloc ){
+      int nNew = nAlloc ? nAlloc*2 : 4;
+      char **azFromNew;
+      char **azToNew;
+      azFromNew = sqlite3_realloc64(azFrom, (sqlite3_int64)nNew * sizeof(char*));
+      if( !azFromNew ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      azFrom = azFromNew;
+      azToNew = sqlite3_realloc64(azTo, (sqlite3_int64)nNew * sizeof(char*));
+      if( !azToNew ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      azTo = azToNew;
+      nAlloc = nNew;
+    }
+    azFrom[nCol] = sqlite3_mprintf("%s", zFromRaw ? zFromRaw : "");
+    azTo[nCol] = zToRaw ? sqlite3_mprintf("%s", zToRaw) : 0;
+    if( !azFrom[nCol] || (zToRaw && !azTo[nCol]) ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    nCol++;
+  }
+
+  if( rc==SQLITE_OK && fkStepRc!=SQLITE_DONE ) rc = fkStepRc;
+  if( rc==SQLITE_OK && curId>=0 ){
+    int parentChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zParent);
+    if( childChanged || parentChanged ){
+      struct TableEntry *aCheckAnc = parentChanged ? 0 : aAnc;
+      int nCheckAnc = parentChanged ? 0 : nAnc;
+      rc = backfillParentPk(db, zParent, azTo, nCol);
+      if( rc==SQLITE_OK ){
+        rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
+            zTable, hasRowid, &childPk, zParent, curId,
+            azFrom, azTo, nCol, pnFound);
+      }
+    }
+  }
+
+  doltliteFreeStringArray(azFrom, nCol);
+  doltliteFreeStringArray(azTo, nCol);
+  sqlite3_free(zParent);
+  rc = finishConstraintStmt(pFk, rc);
+  freeMergePkInfo(&childPk);
+  return rc;
+}
+
 int doltliteDetectMergeFkViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -408,174 +533,9 @@ int doltliteDetectMergeFkViolations(
   const char **azTables,
   int nTables
 ){
-  sqlite3_stmt *pTbls = 0;
-  struct TableEntry *aAnc = 0;
-  int nAnc = 0;
-  struct TableEntry *aCur = 0;
-  int nCur = 0;
-  int rc;
-  int nFound = 0;
-  int stepRc;
-
   if( pnFound ) *pnFound = 0;
-
-  rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
-                                      &aCur, &nCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = sqlite3_prepare_v2(db,
-      "SELECT name FROM main.sqlite_master WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
-      -1, &pTbls, 0);
-  if( rc != SQLITE_OK ){
-    doltliteFreeCatalog(aAnc, nAnc);
-    doltliteFreeCatalog(aCur, nCur);
-    return rc;
-  }
-
-  while( (stepRc = sqlite3_step(pTbls)) == SQLITE_ROW ){
-    const char *zTableRaw = (const char*)sqlite3_column_text(pTbls, 0);
-    char *zTable = 0;
-    char *zFkQ = 0;
-    sqlite3_stmt *pFk = 0;
-    int hasRowid = 1;
-    MergePkInfo childPk;
-    int curId = -1;
-    char *zParent = 0;
-    char **azFrom = 0;
-    char **azTo = 0;
-    int nCol = 0;
-    int nAlloc = 0;
-    int childChanged;
-    int fkStepRc;
-
-    if( !zTableRaw ) continue;
-    zTable = sqlite3_mprintf("%s", zTableRaw);
-    if( !zTable ){ rc = SQLITE_NOMEM; break; }
-    if( !cvTableAllowed(zTable, azTables, nTables) ){
-      sqlite3_free(zTable);
-      continue;
-    }
-    childChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable);
-    memset(&childPk, 0, sizeof(childPk));
-    rc = tableHasRowid(db, zTable, &hasRowid);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zTable);
-      break;
-    }
-    if( !hasRowid ){
-      rc = loadMergePkInfo(db, zTable, &childPk);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(zTable);
-        break;
-      }
-    }
-
-    zFkQ = sqlite3_mprintf("PRAGMA main.foreign_key_list(%Q)", zTable);
-    if( !zFkQ ){
-      freeMergePkInfo(&childPk);
-      sqlite3_free(zTable);
-      rc = SQLITE_NOMEM;
-      break;
-    }
-    rc = sqlite3_prepare_v2(db, zFkQ, -1, &pFk, 0);
-    sqlite3_free(zFkQ);
-    if( rc != SQLITE_OK ){
-      freeMergePkInfo(&childPk);
-      sqlite3_free(zTable);
-      break;
-    }
-
-    while( (fkStepRc = sqlite3_step(pFk)) == SQLITE_ROW ){
-      int id = sqlite3_column_int(pFk, 0);
-      const char *zParentRaw = (const char*)sqlite3_column_text(pFk, 2);
-      const char *zFromRaw = (const char*)sqlite3_column_text(pFk, 3);
-      const char *zToRaw = (const char*)sqlite3_column_text(pFk, 4);
-
-      if( curId>=0 && id!=curId ){
-        int parentChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zParent);
-        if( childChanged || parentChanged ){
-          struct TableEntry *aCheckAnc = parentChanged ? 0 : aAnc;
-          int nCheckAnc = parentChanged ? 0 : nAnc;
-          rc = backfillParentPk(db, zParent, azTo, nCol);
-          if( rc != SQLITE_OK ) break;
-          rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
-              zTable, hasRowid, &childPk, zParent, curId,
-              azFrom, azTo, nCol, &nFound);
-        }
-        doltliteFreeStringArray(azFrom, nCol);
-        doltliteFreeStringArray(azTo, nCol);
-        azFrom = 0; azTo = 0; nCol = 0; nAlloc = 0;
-        sqlite3_free(zParent); zParent = 0;
-        if( rc != SQLITE_OK ) break;
-      }
-
-      if( curId != id ){
-        curId = id;
-        zParent = sqlite3_mprintf("%s", zParentRaw ? zParentRaw : "");
-        if( !zParent ){ rc = SQLITE_NOMEM; break; }
-      }
-
-      if( nCol >= nAlloc ){
-        int nNew = nAlloc ? nAlloc*2 : 4;
-        char **azFromNew;
-        char **azToNew;
-        azFromNew = sqlite3_realloc64(azFrom, (sqlite3_int64)nNew * sizeof(char*));
-        if( !azFromNew ){
-          rc = SQLITE_NOMEM;
-          break;
-        }
-        azFrom = azFromNew;
-        azToNew = sqlite3_realloc64(azTo, (sqlite3_int64)nNew * sizeof(char*));
-        if( !azToNew ){
-          rc = SQLITE_NOMEM;
-          break;
-        }
-        azTo = azToNew;
-        nAlloc = nNew;
-      }
-      azFrom[nCol] = sqlite3_mprintf("%s", zFromRaw ? zFromRaw : "");
-      azTo[nCol] = zToRaw ? sqlite3_mprintf("%s", zToRaw) : 0;
-      if( !azFrom[nCol] || (zToRaw && !azTo[nCol]) ){
-        rc = SQLITE_NOMEM;
-        break;
-      }
-      nCol++;
-    }
-
-    if( rc==SQLITE_OK && fkStepRc!=SQLITE_DONE ) rc = fkStepRc;
-    if( rc==SQLITE_OK && curId>=0 ){
-      int parentChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zParent);
-      if( childChanged || parentChanged ){
-        struct TableEntry *aCheckAnc = parentChanged ? 0 : aAnc;
-        int nCheckAnc = parentChanged ? 0 : nAnc;
-        rc = backfillParentPk(db, zParent, azTo, nCol);
-        if( rc==SQLITE_OK ){
-          rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
-              zTable, hasRowid, &childPk, zParent, curId,
-              azFrom, azTo, nCol, &nFound);
-        }
-      }
-    }
-
-    doltliteFreeStringArray(azFrom, nCol);
-    doltliteFreeStringArray(azTo, nCol);
-    sqlite3_free(zParent);
-    rc = finishConstraintStmt(pFk, rc);
-    freeMergePkInfo(&childPk);
-    sqlite3_free(zTable);
-    if( rc != SQLITE_OK ) break;
-  }
-
-  if( rc == SQLITE_OK && stepRc != SQLITE_DONE && stepRc != SQLITE_ROW ){
-    rc = stepRc;
-  }
-  rc = finishConstraintStmt(pTbls, rc);
-  doltliteFreeCatalog(aAnc, nAnc);
-  doltliteFreeCatalog(aCur, nCur);
-  if( pnFound ) *pnFound = nFound;
-  setConstraintError(db, pzErrMsg, rc);
-  return rc;
+  return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
+                             0, 0, fkWalkTable, pnFound);
 }
 
 

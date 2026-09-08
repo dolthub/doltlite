@@ -103,6 +103,147 @@ static int nextCheckClause(
   return 0;
 }
 
+typedef struct CheckWalk CheckWalk;
+struct CheckWalk {
+  char **pzErrMsg;
+  int *pnFound;
+};
+
+static int checkWalkTable(
+  sqlite3 *db,
+  const char *zTable,
+  const char *zSql,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  void *pCtx
+){
+  CheckWalk *pWalk = (CheckWalk*)pCtx;
+  int offset = 0;
+  int hasRowid = 1;
+  MergePkInfo pkInfo;
+  int rc;
+  (void)aCur; (void)nCur;
+
+  memset(&pkInfo, 0, sizeof(pkInfo));
+  rc = tableHasRowid(db, zTable, &hasRowid);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !hasRowid ){
+    rc = loadMergePkInfo(db, zTable, &pkInfo);
+    if( rc != SQLITE_OK ) return rc;
+  }
+
+  for(;;){
+    char *zExpr = 0;
+    char *zCkName = 0;
+    int clauseRc = nextCheckClause(zSql, &offset, &zExpr, &zCkName);
+    char *zQuery;
+    sqlite3_stmt *pQ = 0;
+    int queryStepRc;
+
+    if( clauseRc <= 0 ){
+      sqlite3_free(zExpr);
+      sqlite3_free(zCkName);
+      if( clauseRc<0 ) rc = -clauseRc;
+      break;
+    }
+
+    if( hasRowid ){
+      zQuery = sqlite3_mprintf(
+          "SELECT rowid FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
+          zTable, zExpr);
+    }else{
+      zQuery = sqlite3_mprintf(
+          "SELECT %s FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
+          pkInfo.zPkCols, zTable, zExpr);
+    }
+    if( !zQuery ){
+      sqlite3_free(zExpr);
+      sqlite3_free(zCkName);
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
+    sqlite3_free(zQuery);
+    if( rc != SQLITE_OK ){
+      setConstraintError(db, pWalk->pzErrMsg, rc);
+      sqlite3_free(zExpr);
+      sqlite3_free(zCkName);
+      break;
+    }
+
+    while( (queryStepRc = sqlite3_step(pQ)) == SQLITE_ROW ){
+      u8 *pKey = 0; int nKey = 0;
+      u8 *pVal = 0; int nVal = 0;
+      char *zInfo;
+      int appendRc;
+      i64 intKey = 0;
+
+      if( hasRowid ){
+        intKey = sqlite3_column_int64(pQ, 0);
+        rc = fetchOrphanRow(db, zTable, intKey, &pKey, &nKey, &pVal, &nVal);
+      }else{
+        u8 *pPkRec = 0; int nPkRec = 0;
+        pPkRec = buildRecordFromStmtCols(pQ, 0, pkInfo.nPk, &nPkRec);
+        if( !pPkRec ){ rc = SQLITE_NOMEM; break; }
+        rc = fetchRowByPkFromTable(db, zTable, pPkRec, nPkRec, pkInfo.nPk,
+                                   &pKey, &nKey, &pVal, &nVal);
+        sqlite3_free(pPkRec);
+      }
+      if( rc == SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
+      if( rc != SQLITE_OK ){
+        sqlite3_free(pKey);
+        sqlite3_free(pVal);
+        break;
+      }
+
+      if( aAnc ){
+        u8 *pAncVal = 0; int nAncVal = 0;
+        int ancRc = hasRowid
+            ? fetchAncestorRowByName(db, aAnc, nAnc, zTable,
+                                     intKey, &pAncVal, &nAncVal)
+            : fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
+                                    pKey, nKey, &pAncVal, &nAncVal);
+        int preExisting = (ancRc==SQLITE_OK)
+            && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+        sqlite3_free(pAncVal);
+        if( preExisting ){
+          sqlite3_free(pKey);
+          sqlite3_free(pVal);
+          continue;
+        }
+      }
+
+      zInfo = sqlite3_mprintf(
+          "{\"Name\": \"%w\", \"Expression\": \"%w\"}",
+          zCkName ? zCkName : "", zExpr);
+      if( !zInfo ){
+        sqlite3_free(pKey);
+        sqlite3_free(pVal);
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      appendRc = doltliteAppendConstraintViolation(
+          db, zTable, DOLTLITE_CV_CHECK_CONSTRAINT,
+          intKey, pKey, nKey, pVal, nVal, zInfo);
+      sqlite3_free(zInfo);
+      sqlite3_free(pKey);
+      sqlite3_free(pVal);
+      if( appendRc != SQLITE_OK ){ rc = appendRc; break; }
+      if( pWalk->pnFound ) (*pWalk->pnFound)++;
+    }
+    if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
+    setConstraintError(db, pWalk->pzErrMsg, rc);
+    rc = finishConstraintStmt(pQ, rc);
+    setConstraintError(db, pWalk->pzErrMsg, rc);
+    sqlite3_free(zExpr);
+    sqlite3_free(zCkName);
+    if( rc != SQLITE_OK ) break;
+  }
+
+  freeMergePkInfo(&pkInfo);
+  return rc;
+}
+
 int doltliteDetectMergeCheckViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -111,195 +252,12 @@ int doltliteDetectMergeCheckViolations(
   const char **azTables,
   int nTables
 ){
-  sqlite3_stmt *pTbls = 0;
-  struct TableEntry *aAnc = 0;
-  int nAnc = 0;
-  struct TableEntry *aCur = 0;
-  int nCur = 0;
-  int rc;
-  int stepRc;
-
+  CheckWalk walk;
   if( pnFound ) *pnFound = 0;
-
-  rc = loadAncestorAndCurrentCatalogs(db, pAncCatHash, &aAnc, &nAnc,
-                                      &aCur, &nCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = sqlite3_prepare_v2(db,
-      "SELECT name, sql FROM main.sqlite_master WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
-      -1, &pTbls, 0);
-  if( rc != SQLITE_OK ){
-    doltliteFreeCatalog(aAnc, nAnc);
-    doltliteFreeCatalog(aCur, nCur);
-    return rc;
-  }
-
-  while( (stepRc = sqlite3_step(pTbls)) == SQLITE_ROW ){
-    const char *zTableRaw = (const char*)sqlite3_column_text(pTbls, 0);
-    const char *zSqlRaw   = (const char*)sqlite3_column_text(pTbls, 1);
-    char *zTable;
-    char *zSql;
-    int offset = 0;
-    int hasRowid = 1;
-    MergePkInfo pkInfo;
-
-    if( !zTableRaw || !zSqlRaw ) continue;
-    zTable = sqlite3_mprintf("%s", zTableRaw);
-    zSql   = sqlite3_mprintf("%s", zSqlRaw);
-    if( !zTable || !zSql ){
-      sqlite3_free(zTable);
-      sqlite3_free(zSql);
-      rc = SQLITE_NOMEM;
-      break;
-    }
-    if( !cvTableAllowed(zTable, azTables, nTables) ){
-      sqlite3_free(zTable);
-      sqlite3_free(zSql);
-      continue;
-    }
-    if( !catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable) ){
-      sqlite3_free(zTable);
-      sqlite3_free(zSql);
-      continue;
-    }
-    memset(&pkInfo, 0, sizeof(pkInfo));
-    rc = tableHasRowid(db, zTable, &hasRowid);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zTable);
-      sqlite3_free(zSql);
-      break;
-    }
-    if( !hasRowid ){
-      rc = loadMergePkInfo(db, zTable, &pkInfo);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(zTable);
-        sqlite3_free(zSql);
-        break;
-      }
-    }
-
-    for(;;){
-      char *zExpr = 0;
-      char *zCkName = 0;
-      int clauseRc = nextCheckClause(zSql, &offset, &zExpr, &zCkName);
-      char *zQuery;
-      sqlite3_stmt *pQ = 0;
-      int queryStepRc;
-
-      if( clauseRc <= 0 ){
-        sqlite3_free(zExpr);
-        sqlite3_free(zCkName);
-        if( clauseRc<0 ) rc = -clauseRc;
-        break;
-      }
-
-      if( hasRowid ){
-        zQuery = sqlite3_mprintf(
-            "SELECT rowid FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
-            zTable, zExpr);
-      }else{
-        zQuery = sqlite3_mprintf(
-            "SELECT %s FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
-            pkInfo.zPkCols, zTable, zExpr);
-      }
-      if( !zQuery ){
-        sqlite3_free(zExpr);
-        sqlite3_free(zCkName);
-        rc = SQLITE_NOMEM;
-        break;
-      }
-      rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
-      sqlite3_free(zQuery);
-      if( rc != SQLITE_OK ){
-        setConstraintError(db, pzErrMsg, rc);
-        sqlite3_free(zExpr);
-        sqlite3_free(zCkName);
-        break;
-      }
-
-      while( (queryStepRc = sqlite3_step(pQ)) == SQLITE_ROW ){
-        u8 *pKey = 0; int nKey = 0;
-        u8 *pVal = 0; int nVal = 0;
-        char *zInfo;
-        int appendRc;
-        i64 intKey = 0;
-
-        if( hasRowid ){
-          intKey = sqlite3_column_int64(pQ, 0);
-          rc = fetchOrphanRow(db, zTable, intKey, &pKey, &nKey, &pVal, &nVal);
-        }else{
-          u8 *pPkRec = 0; int nPkRec = 0;
-          pPkRec = buildRecordFromStmtCols(pQ, 0, pkInfo.nPk, &nPkRec);
-          if( !pPkRec ){ rc = SQLITE_NOMEM; break; }
-          rc = fetchRowByPkFromTable(db, zTable, pPkRec, nPkRec, pkInfo.nPk,
-                                     &pKey, &nKey, &pVal, &nVal);
-          sqlite3_free(pPkRec);
-        }
-        if( rc == SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
-        if( rc != SQLITE_OK ){
-          sqlite3_free(pKey);
-          sqlite3_free(pVal);
-          break;
-        }
-
-        if( aAnc ){
-          u8 *pAncVal = 0; int nAncVal = 0;
-          int ancRc = hasRowid
-              ? fetchAncestorRowByName(db, aAnc, nAnc, zTable,
-                                       intKey, &pAncVal, &nAncVal)
-              : fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
-                                      pKey, nKey, &pAncVal, &nAncVal);
-          int preExisting = (ancRc==SQLITE_OK)
-              && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
-          sqlite3_free(pAncVal);
-          if( preExisting ){
-            sqlite3_free(pKey);
-            sqlite3_free(pVal);
-            continue;
-          }
-        }
-
-        zInfo = sqlite3_mprintf(
-            "{\"Name\": \"%w\", \"Expression\": \"%w\"}",
-            zCkName ? zCkName : "", zExpr);
-        if( !zInfo ){
-          sqlite3_free(pKey);
-          sqlite3_free(pVal);
-          rc = SQLITE_NOMEM;
-          break;
-        }
-        appendRc = doltliteAppendConstraintViolation(
-            db, zTable, DOLTLITE_CV_CHECK_CONSTRAINT,
-            intKey, pKey, nKey, pVal, nVal, zInfo);
-        sqlite3_free(zInfo);
-        sqlite3_free(pKey);
-        sqlite3_free(pVal);
-        if( appendRc != SQLITE_OK ){ rc = appendRc; break; }
-        if( pnFound ) (*pnFound)++;
-      }
-      if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
-      setConstraintError(db, pzErrMsg, rc);
-      rc = finishConstraintStmt(pQ, rc);
-      setConstraintError(db, pzErrMsg, rc);
-      sqlite3_free(zExpr);
-      sqlite3_free(zCkName);
-      if( rc != SQLITE_OK ) break;
-    }
-
-    sqlite3_free(zTable);
-    sqlite3_free(zSql);
-    freeMergePkInfo(&pkInfo);
-    if( rc != SQLITE_OK ) break;
-  }
-  if( rc == SQLITE_OK && stepRc != SQLITE_DONE && stepRc != SQLITE_ROW ){
-    rc = stepRc;
-  }
-  rc = finishConstraintStmt(pTbls, rc);
-  doltliteFreeCatalog(aAnc, nAnc);
-  doltliteFreeCatalog(aCur, nCur);
-  setConstraintError(db, pzErrMsg, rc);
-  return rc;
+  walk.pzErrMsg = pzErrMsg;
+  walk.pnFound = pnFound;
+  return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
+                             1, 1, checkWalkTable, &walk);
 }
 
 
