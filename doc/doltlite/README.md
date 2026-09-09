@@ -14,6 +14,7 @@ of the version-control features; these pages hold the detail.
 - [building.md](building.md) — macOS, Linux, Windows, WebAssembly builds and flags
 - [cli.md](cli.md) — the `doltlite` shell: what differs from `sqlite3`, URI parameters, environment variables
 - [embedding.md](embedding.md) — C API surface, exported symbols, C / Python / Go quickstarts
+- [bindings.md](bindings.md) — every language package: what it bundles, platforms, and gotchas
 - [using-existing-sqlite-bindings.md](using-existing-sqlite-bindings.md) — pointing rusqlite, go-sqlite3, Dart, .NET and FFI bindings at libdoltlite
 
 ## Behaviour contracts

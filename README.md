@@ -64,22 +64,22 @@ Download `doltlite-tools-win-x64-<ver>.zip` from
 
 ## Bindings
 
-Language-specific wrappers around `libdoltlite`. Each one exposes the bundled
-SQLite version's public `sqlite3_*` API surface plus the Dolt version-control
-functions, subject to the [storage-engine exceptions](#sqlite-compatibility).
+Language-specific wrappers around `libdoltlite`, each exposing the bundled
+SQLite API plus the Dolt version-control functions. Platforms, gotchas, and
+per-language notes: [bindings.md](doc/doltlite/bindings.md).
 
-| Language | Distribution | Source |
-|---|---|---|
-| Python | `pip install doltlite` | [dolthub/doltlite-python](https://github.com/dolthub/doltlite-python) |
-| Ruby | `gem install doltlite` | [dolthub/doltlite-ruby](https://github.com/dolthub/doltlite-ruby) |
-| Node.js / Bun | `npm install @dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
-| PHP | `composer require dolthub/doltlite-php` | this repo ([`packaging/composer`](packaging/composer)), distributed via [dolthub/doltlite-php](https://github.com/dolthub/doltlite-php) |
-| .NET | `dotnet add package DoltHub.Doltlite` | this repo ([`packaging/nuget`](packaging/nuget)); works under Microsoft.Data.Sqlite.Core, EF Core, Dapper |
-| Rust | `cargo add doltlite` | this repo ([`packaging/rust`](packaging/rust)); engine vendored, or run the full default build and point `rusqlite` at it with `SQLITE3_LIB_DIR` |
-| Go | `go get github.com/dolthub/doltlite-driver` | this repo ([`packaging/go`](packaging/go)), distributed via [dolthub/doltlite-driver](https://github.com/dolthub/doltlite-driver); `database/sql` driver, engine vendored |
-| Browser / WASM | `npm install @dolthub/doltlite-wasm` | this repo ([`packaging/npm`](packaging/npm), built from [`ext/wasm`](ext/wasm)) |
-| Swift (iOS / macOS) | SwiftPM: `https://github.com/dolthub/doltlite-swift` | [dolthub/doltlite-swift](https://github.com/dolthub/doltlite-swift) (XCFramework built by [`packaging/swift`](packaging/swift)) |
-| Android | Gradle: `com.dolthub:doltlite-android` | [dolthub/doltlite-android](https://github.com/dolthub/doltlite-android) (AAR + JNA) |
+| Language | Distribution |
+|---|---|
+| Python | `pip install doltlite` |
+| Ruby | `gem install doltlite` |
+| Node.js / Bun | `npm install @dolthub/doltlite` |
+| Browser / WASM | `npm install @dolthub/doltlite-wasm` |
+| PHP | `composer require dolthub/doltlite-php` |
+| .NET | `dotnet add package DoltHub.Doltlite` |
+| Rust | `cargo add doltlite` |
+| Go | `go get github.com/dolthub/doltlite-driver` |
+| Swift (iOS / macOS) | SwiftPM: `https://github.com/dolthub/doltlite-swift` |
+| Android | Gradle: `com.dolthub:doltlite-android` |
 
 ## Building
 

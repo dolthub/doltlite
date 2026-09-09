@@ -20,6 +20,11 @@ classes so existing code ports by search-and-replace.
 - Linux (x86_64/arm64) or macOS (arm64). The package bundles a
   prebuilt `libdoltlite` per platform; `DOLTLITE_PHP_LIB=/path/to/lib`
   overrides resolution for anything else.
+- Windows is not supported. Composer will install the package there, but
+  releases do not reliably include `libdoltlite.dll` and nothing is tested on
+  Windows, so the first `new Doltlite3(...)` fails inside `FFI::cdef()` with a
+  loader error. `DOLTLITE_PHP_LIB` pointing at a DLL you built yourself is an
+  untested escape hatch, not support.
 
 ## Install
 
