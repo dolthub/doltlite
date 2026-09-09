@@ -5,7 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 for path in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
   [ -e "$path" ] || continue
-  if grep -qiE 'packages[.]microsoft[.]com|azure-cli' "$path"; then
+  if grep -qiE 'packages[.]microsoft[.]com|azure-cli|dl[.]google[.]com' "$path"; then
     sudo mv "$path" "$path.disabled"
   fi
 done
