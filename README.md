@@ -20,6 +20,7 @@ the proud product of
 [agentic engineering](https://www.dolthub.com/blog/2026-08-17-top-5-agent-engineered-open-source-projects/).
 
 [DoltLite is Beta](https://www.dolthub.com/blog/2026-08-31-doltlite-beta/).
+Documentation beyond this README lives in [doc/doltlite](doc/doltlite/README.md).
 
 ## Install
 
@@ -80,8 +81,6 @@ functions, subject to the [storage-engine exceptions](#sqlite-compatibility).
 
 ## Building
 
-### macOS / Linux
-
 ```
 cd build
 ../configure
@@ -89,136 +88,15 @@ make
 ./doltlite :memory:
 ```
 
-### Windows (MSYS2 / MINGW64)
-
-```
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make tcl
-mkdir -p build && cd build
-../configure
-make doltlite.exe
-./doltlite.exe :memory:
-```
-
-To verify the engine:
-
-```sql
-SELECT doltlite_engine();
--- prolly
-```
-
-To build stock SQLite instead (for comparison):
-
-```
-make DOLTLITE_PROLLY=0 sqlite3
-```
-
-Vec1 is built into native DoltLite by default. Use `make DOLTLITE_VEC1=0` to
-omit it. Compile the DoltLite amalgamation with `-DDOLTLITE_VEC1=1` to include
-vec1; otherwise it can be built and loaded as an extension.
-
-### WebAssembly (`ext/wasm`)
-
-Vendored SQLite `ext/wasm`, defaulting to the DoltLite engine. Build generated
-SQLite sources first, then wasm:
-
-```bash
-./configure
-make sqlite3.c sqlite3.h sqlite3ext.h
-make -C ext/wasm
-# → ext/wasm/jswasm/{sqlite3.js,sqlite3.mjs,sqlite3.wasm}
-make -C ext/wasm DOLTLITE_WASM=0   # upstream SQLite wasm instead
-make -C ext/wasm DOLTLITE_ENABLE_REMOTES=0 # DoltLite without remote clients
-make -C ext/wasm dist             # zip package
-```
-
-`DOLTLITE_ENABLE_REMOTES=0` omits clone, fetch, pull, push, HTTP, TLS, and
-credential code. Calls to the remote SQL functions then return `DoltLite
-remotes are disabled in this build`. Browser builds with remotes enabled need
-an Emscripten-compatible socket transport or proxy; see
-[`examples/wa-sqlite-clone.mjs`](examples/wa-sqlite-clone.mjs) for a public
-clone request that exercises the client.
-
-`DOLTLITE_ENABLE_CHUNK_SOURCE=0` omits host-provided and origin-backed lazy
-chunk fetching. The feature is enabled by default.
+Windows, WebAssembly, stock-SQLite comparison builds, and build flags:
+[building.md](doc/doltlite/building.md).
 
 ## Using as a C Library
 
-Public C API is the bundled SQLite declarations under `sqlite3_*` names plus
-the DoltLite-specific declarations in `doltlite.h`. Port supported programs by
-switching the include/link to `libdoltlite`; APIs tied to SQLite's pager, page
-format, or journaling differ (see [SQLite Compatibility](#sqlite-compatibility)).
-Dolt features are SQL functions (`dolt_commit`, `dolt_branch`, …) and virtual
-tables (`dolt_log`, `dolt_diff_<table>`, …).
-
-`doltlite_set_chunk_source()` registers synchronous `xGet` and `xGetMany`
-callbacks for one attached database. `doltlite_init_lazy()` installs a refs
-blob into a fresh or existing main database, allowing missing graph chunks to
-be fetched and cached on demand. Source objects remain owned by the host and
-must outlive their registrations.
-
-Loadable extensions use `doltliteext.h` (rebranded `sqlite3ext.h`, shipped in
-the amalgamation zip). The shared library exports only `sqlite3_*`,
-`doltliteServe*` (`doltlite_remotesrv.h`), `doltlite_set_chunk_source`, and
-`doltlite_init_lazy`; prolly/chunk-store internals, other `doltlite*` symbols,
-and vendored crypto are hidden. The static archive is unfiltered for tests and
-tooling.
-
-```bash
-cd build
-../configure
-make doltlite-lib   # libdoltlite.a and libdoltlite.dylib/.so
-
-# Static (recommended) or dynamic
-gcc -o myapp myapp.c -I/path/to/build libdoltlite.a -lpthread -lz
-gcc -o myapp myapp.c -I/path/to/build -L/path/to/build -ldoltlite -lpthread -lz
-
-sudo make install   # honours --prefix / DESTDIR; then:
-gcc -o myapp myapp.c -ldoltlite -lpthread -lz
-```
-
-`make install` also installs SQLite-named artifacts (`sqlite3.h`,
-`libsqlite3.*`, …) from this tree — release packages omit those so they do not
-collide with system SQLite. Use a private `--prefix` if that matters.
-
-### Quickstart Examples
-
-Same flow (commits, branches, merges, diffs, tags) in each language.
-
-**C** ([`examples/quickstart.c`](examples/quickstart.c)) — based on the
-[SQLite quickstart](https://sqlite.org/quickstart.html):
-
-```bash
-cd build
-gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz
-./quickstart
-```
-
-**Python** ([`examples/quickstart.py`](examples/quickstart.py)) — stdlib
-`sqlite3` with the [`doltlite`](https://github.com/dolthub/doltlite-python)
-package (bundles libdoltlite):
-
-```bash
-pip install doltlite
-python3 examples/quickstart.py
-```
-
-Needs a Python whose `_sqlite3` links a shared `libsqlite3` (distro,
-Homebrew, pyenv, or conda). Avoid python-build-standalone (`uv python install`
-defaults), the python.org macOS installer, and Apple system Python — they
-static-link SQLite and cannot preload libdoltlite. Local-build preload
-recipes (including macOS) are in the
-[doltlite-python](https://github.com/dolthub/doltlite-python) README.
-
-**Go** ([`examples/go/main.go`](examples/go/main.go)) — uses
-[mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) with the `libsqlite3`
-build tag:
-
-```bash
-cd examples/go
-CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread" \
-    go build -tags libsqlite3 -o quickstart .
-./quickstart
-```
+`#include <doltlite.h>` and link `libdoltlite.a -lpthread -lz`. The public API
+is SQLite's `sqlite3_*` declarations plus the DoltLite additions in
+`doltlite.h`. Details, exported symbols, and C / Python / Go quickstarts:
+[embedding.md](doc/doltlite/embedding.md).
 
 ## Dolt Features
 
@@ -667,101 +545,19 @@ SELECT dolt_gc();
 
 #### Remotes
 
-Git-like push / fetch / pull / clone between databases.
-
-##### Filesystem Remotes
+Git-like push / fetch / pull / clone between databases, over the filesystem
+or HTTP.
 
 ```sql
 SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
 SELECT dolt_push('origin', 'main');
-SELECT dolt_push('origin', 'v1.0');       -- push one tag
-SELECT dolt_push('origin', '--tags');     -- push all tags
-SELECT dolt_clone('file:///path/to/source.doltlite');
-SELECT dolt_clone('--lazy', 'file:///path/to/source.doltlite');
-SELECT dolt_clone('--lazy', '--revision', 'release~1',
-                  'file:///path/to/source.doltlite');
-SELECT dolt_fetch('origin', 'main');
-SELECT dolt_pull('origin', 'main');   -- fetch, then fast-forward or merge
-SELECT * FROM dolt_remotes;
-```
-
-A push, including a force push, is refused if the target branch has
-uncommitted working or staged changes. Commit or reset the target database
-before retrying; a clean working set does not block a push.
-
-A lazy clone installs refs and records `origin` without copying the reachable
-chunk graph. It enables origin-backed reads on its current connection. To
-reopen the clone in another process, opt in before the B-tree opens:
-
-```sh
-doltlite 'file:/path/to/lazy.db?lazy_origin=1'
-```
-
-Missing chunks are fetched and cached as queries need them. Fetch and
-fast-forward pull remain refs-only while the connection is origin-enabled. A
-divergent lazy pull is refused until the store is fully materialized.
-Opening without `lazy_origin=1` leaves cached chunks available, but an
-uncached miss fails with a hash-named error instead of contacting `origin`.
-The optional `--revision` value resolves a branch, tag, commit hash, or
-ancestor expression once during the lazy clone. A branch selects its working
-set; every other revision opens a read-only detached snapshot at that commit.
-
-`dolt_pull` fetches the named remote branch, then integrates it into the
-current local branch. It fast-forwards when the current tip is an ancestor of
-the remote tip and otherwise three-way merges like `dolt_merge`. The branch
-name selects the remote ref; a same-named non-current local branch is neither
-created nor moved. Fetch and pull also install remote tags whose commits have
-been fetched, replacing same-named local tags when the remote value differs.
-
-##### HTTP Remotes
-
-Same ops as filesystem remotes; the URL includes the database name:
-
-```sql
-SELECT dolt_remote('add', 'origin', 'http://myserver:8080/mydb.db');
-SELECT dolt_push('origin', 'main');
+SELECT dolt_pull('origin', 'main');
 SELECT dolt_clone('http://myserver:8080/mydb.db');
-SELECT dolt_clone('--lazy', 'http://myserver:8080/mydb.db');
 ```
 
-##### Remote Server (`doltlite-remotesrv`)
-
-> [!WARNING]
-> The server binds to `127.0.0.1` by default. Bound anywhere else, it warns at
-> startup about each protection left unconfigured: `--cert`/`--key` for TLS, and
-> `--auth-keys` plus `--audience` for authentication. These are independent — TLS encrypts but does
-> not authenticate, and without `--auth-keys` every client that can reach the port
-> may read the served databases *and push to them*. Configure both, or place the
-> server behind a reverse proxy that provides equivalent TLS and authentication.
-
-Standalone HTTP server for a directory of databases (`make doltlite-remotesrv`
-in `build/`):
-
-```
-./doltlite-remotesrv -p 8080 /path/to/databases/
-./doltlite-remotesrv -p 8080 --bind 0.0.0.0 /path/to/databases/   # all interfaces
-./doltlite-remotesrv -p 8443 --bind 0.0.0.0 \
-  --cert server.crt --key server.key \
-  --auth-keys /path/to/authorized-keys --audience db.example.com \
-  /path/to/databases/
-```
-
-Each `.db` is at `http://host:8080/filename.db` (or the HTTPS URL). Clients use
-the system trust store (`DOLTLITE_CA_FILE` for a private CA); credentials live
-in `~/.doltlite/creds` (`SELECT dolt_creds_new();`). Authorize one without
-copying its private seed by exporting its public JWK directly into the server's
-key directory:
-
-```sql
-SELECT dolt_creds('export', '<credential-id>', '/path/to/authorized-keys');
-```
-
-With no directory argument, `dolt_creds('export', '<credential-id>')` returns
-the public JWK. The server rejects private credential files in `--auth-keys`.
-Default HTTP timeout is 30s (`DOLTLITE_HTTP_TIMEOUT_MS`). Embeddable as
-`doltliteServeAsync` in `doltlite_remotesrv.h`. Transfers are content-addressed.
-JWT, TLS, and credential-store details:
-[doc/doltlite/auth.md](doc/doltlite/auth.md).
+Remote semantics and lazy clones: [remotes.md](doc/doltlite/remotes.md).
+Serving databases with `doltlite-remotesrv`, which binds to localhost until
+TLS and authentication are configured: [remotesrv.md](doc/doltlite/remotesrv.md).
 
 #### Version String
 
@@ -772,277 +568,48 @@ SELECT dolt_version();
 
 ## Using Existing SQLite Databases
 
-Header-based auto-detect: stock SQLite files use the original B-tree engine;
-everything else is prolly. Typical hybrid: versioned tables on the DoltLite
-main DB, high-write operational tables on an attached stock SQLite file. Version
-control applies only to the DoltLite-format main database.
-
-```sql
-ATTACH DATABASE '/path/to/events.sqlite' AS ops;
-SELECT * FROM ops.events WHERE type='click';
-SELECT * FROM threads;   -- main DB, no prefix
-SELECT t.title, e.type
-  FROM threads t
-  JOIN ops.events e ON t.id = e.thread_id;
-
--- Migrate either direction
-INSERT INTO threads SELECT * FROM ops.threads;
-INSERT INTO ops.archive SELECT * FROM threads WHERE archived=1;
-CREATE TABLE local_events AS SELECT * FROM ops.events;
-
-DETACH DATABASE ops;
-```
-
-Auto-detect reads an existing file's header, so it cannot classify a file that
-does not exist yet: a database created by DoltLite is DoltLite-format. To create
-a stock SQLite file instead, open it with `doltlite_engine=sqlite`:
-
-```
-doltlite 'file:/path/to/new.sqlite?doltlite_engine=sqlite'
-```
-
-The parameter selects the engine for a database being created and is ignored
-once the file has content, so it can never reinterpret an existing database.
-`.backup` and `VACUUM INTO` apply it for you when the source is a stock file, so
-their output is a stock file too.
-
-`VACUUM` on a stock database rewrites pages as SQLite does; on a DoltLite
-database it garbage-collects unreachable chunks. `.backup`/`.restore` and
-`sqlite3_backup_*` work within either format, but not between them — there is no
-defined conversion, so a mixed pair is refused rather than half-copied.
-
-## Per-Session Branching Architecture
-
-Each connection selects a branch independently and recovers that branch's
-working set when it checks it out. There is no `dolt_stash`: checkout does not
-shelve uncommitted work between branches. Writer serialization, snapshot pins,
-and multiproc rules are spelled out under [Concurrency](#concurrency).
+Stock SQLite files are detected by their header and opened on SQLite's
+original B-tree engine, directly or via `ATTACH`. Version control applies only
+to DoltLite-format databases. Engine selection, `ATTACH` hybrids, and backup
+rules: [sqlite-files.md](doc/doltlite/sqlite-files.md).
 
 ## SQLite Compatibility
 
-DoltLite targets SQLite SQL semantics and uses the bundled SQLite version's
-public C declarations and `sqlite3_*` symbol names. That is API-surface
-compatibility, not a claim that storage-coupled APIs keep SQLite pager or file
-format semantics.
+DoltLite keeps SQLite's SQL semantics and `sqlite3_*` API. Storage-coupled
+behaviour differs:
 
-For a DoltLite-format main database, the compatibility contract is:
+- Own on-disk format; no rollback journal, WAL, or shared-memory sidecars.
+  `PRAGMA journal_mode` reports `wal` and ignores changes.
+- `VACUUM` and `PRAGMA wal_checkpoint` run DoltLite garbage collection.
+- A write transaction may touch only one file-backed database.
+- Non-integer primary keys are clustered and `NOT NULL`; `rowid` is a
+  read-only alias for them.
+- Rowids come from a counter shared by every branch, so implicit-rowid
+  inserts merge cleanly.
+- `sqlite_schema` is a projection of the catalog with canonical `CREATE` text.
 
-- DoltLite uses its own on-disk format. Standard SQLite files are detected and
-  routed to SQLite's original B-tree engine, but Dolt version-control features
-  are available only on DoltLite-format databases.
-- No SQLite rollback-journal, WAL, or shared-memory sidecar is created.
-  `PRAGMA journal_mode` reports `wal` as a compatibility value and ignores
-  requests to change it. All `PRAGMA wal_checkpoint` modes bridge to DoltLite
-  garbage collection and report zero WAL frames.
-- A transaction that writes more than one file-backed database is rejected
-  with `atomic commit across multiple file-backed databases is not supported`
-  and rolled back in full. This includes TEMP triggers that write `main` while
-  changing an attached file. Single-file writes and transactions involving a
-  `:memory:` attachment are supported.
-- `PRAGMA auto_vacuum` reports `0`; attempts to enable it and
-  `PRAGMA incremental_vacuum` are no-ops. `VACUUM` runs DoltLite garbage
-  collection instead of rebuilding SQLite pages. File-backed `VACUUM INTO`
-  writes a compacted DoltLite-format copy; `:memory:` as the destination is
-  refused. `SQLITE_DBCONFIG_RESET_DATABASE` plus `VACUUM` empties the
-  current branch working catalog (`sqlite_master` has no user objects)
-  and zeros `user_version` and `application_id`; other branches and
-  commit history remain, so `dolt_reset('--hard')` restores this branch
-  from HEAD.
-- Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
-  `PRAGMA encoding` at `UTF-8`.
-- Implicit rowids are allocated from a counter shared by every branch of a
-  database, so an `INSERT` that omits the `INTEGER PRIMARY KEY` (or the
-  rowid of a table without a primary key) never gets an id another branch
-  already used, and such inserts merge cleanly. This gives every rowid table
-  `AUTOINCREMENT` allocation: after the largest row is deleted the next id
-  continues rather than being reused. `DROP TABLE` resets the counter and
-  `ALTER TABLE ... RENAME` carries it. Only tables declared `AUTOINCREMENT`
-  also record the counter in `sqlite_sequence`, which remains the reset
-  surface for them: `UPDATE sqlite_sequence SET seq=N`,
-  `DELETE FROM sqlite_sequence`, and inserting a seed row set or drop the
-  shared counter for that table, after which the next id is
-  `max(seq, max(rowid))+1` exactly as in SQLite.
-- Named in-memory databases are shared between connections the way SQLite
-  shares them: `file:name?mode=memory&cache=shared`, `file::memory:?cache=shared`,
-  and `file:/name?vfs=memdb` open one store per name inside the process, with
-  writers serialized like a file. `:memory:`, `mode=memory` without shared
-  cache, and slash-less `vfs=memdb` names stay private to their connection.
-  `dolt_gc` and `VACUUM INTO` treat a shared in-memory database as in-memory.
-- `PRAGMA query_only` covers version control: while it is set, `dolt_add`,
-  `dolt_commit`, `dolt_merge`, `dolt_tag`, `dolt_branch`, `dolt_gc`, and every
-  other function that would change the file fail with `attempt to write a
-  readonly database`, the same as DML. The `immutable=1` URI parameter opens
-  the database read-only, as it does in SQLite.
-- Application-defined collations registered with `sqlite3_create_collation*`
-  are supported for expressions and unindexed columns. Persisted index keys,
-  `UNIQUE` constraints, and non-integer primary keys using them are rejected
-  because prolly sort keys cannot depend on application callbacks. An index
-  may override such a column with `BINARY`, `NOCASE`, or `RTRIM`. Replacing one
-  of those built-ins is rejected while a persisted index uses its name.
-- A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key.
-  `rowid` and `last_insert_rowid()` still work as a read-only SQL alias:
-  a single integer PK is that value, otherwise a stable hash of the PK.
-  `INSERT` and `UPDATE` of `rowid` fail with `no such column`, matching
-  explicit `WITHOUT ROWID` — there is no stored `rowid` column. TEMP tables
-  are not clustered, so those writes still work. An `INTEGER PRIMARY KEY`
-  remains a writable rowid alias. Explicit `WITHOUT ROWID` tables have no
-  `rowid` at all, matching SQLite. `.dump --preserve-rowids` omits the
-  read-only alias from clustered-primary-key inserts so its output restores.
-- Those clustered primary keys are `NOT NULL`, matching SQLite
-  `WITHOUT ROWID` tables. `PRAGMA table_info` reports `notnull=1` on the PK
-  columns, and inserting NULL fails with `NOT NULL constraint failed`. SQLite
-  rowid tables still allow NULL in a TEXT, `INT`, `INTEGER PRIMARY KEY DESC`,
-  or composite PK. TEMP tables are not clustered and keep SQLite's nullable
-  PK. An `INTEGER PRIMARY KEY` remains a rowid alias.
-- `sqlite_master` / `sqlite_schema` is a projection of the prolly catalog,
-  not a stored table of verbatim DDL. After a schema commit, `sql` is the
-  canonical `CREATE` text (whitespace and quoting normalized) and row order
-  follows the catalog, not insertion order. `CHECK` constraint error messages
-  follow that canonical form. Query results and constraint enforcement are
-  unchanged.
-- The `doltlite` CLI is the SQLite shell with a few deliberate differences:
-  `.schema` and `.dump` list objects in catalog order and print the
-  canonical `CREATE` text, the prompt is `doltlite> `, and `-version` prints
-  the DoltLite version. Everything else, including `-deserialize`,
-  `.open --deserialize|--zip|--hexdb`, `db@branch` open syntax and the
-  substitute in-memory database on an unopenable path, follows the upstream
-  shell; the upstream `shell*.test` files run against the CLI in CI.
-- `sqlite3_backup_step()` copies a file-backed DoltLite database, including an
-  attached database, as one operation; its page-count argument is not
-  incremental. File-backed and in-memory DoltLite databases can be copied in
-  either direction.
-- `sqlite3_serialize()` and `sqlite3_deserialize()` use a contiguous native
-  DoltLite database image, including the commit graph, refs, and working sets.
-  The image is an existing DoltLite storage-format file represented as bytes,
-  not a SQLite page image or a SQL dump, and is not readable by stock SQLite.
-  `sqlite3_deserialize()` of a stock SQLite page image reopens that schema on
-  SQLite's original B-tree engine, as stock does, without version control.
-- `dbstat` is not supported on a DoltLite-format database: the chunk store has
-  no SQLite page layout. A scan fails with an error rather than reporting an
-  empty database. `dbstat` on an attached stock SQLite file still walks pages.
-
-The machine-readable contract and its test mapping live in
-[`test/sqlite_compatibility_contract.tsv`](test/sqlite_compatibility_contract.tsv).
-The inherited-suite backlog lives with the assertions it gates, in
-[`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt):
-each line names one assertion and carries its disposition as
-`class=intentional|unsupported|harness|engine-gap`, plus `issue=<number>` where
-one is required. Gates classified as `engine-gap` are bugs to fix, not
-compatibility promises.
+The full contract and its test mapping: [sqlite-compatibility.md](doc/doltlite/sqlite-compatibility.md).
 
 ## Concurrency
 
-DoltLite supports multiple connections and processes on one database file, but
-it is not a free-for-all multi-writer server. Coordination is explicit: a
-**graph lock** sidecar serializes durable writers, write transactions pin a
-chunk-store snapshot, and multi-step version-control ops re-check HEAD under
-the lock before advancing a branch tip.
+Multiple connections and processes may share one file. Coordination is explicit:
 
-For a DoltLite-format main database, the concurrency contract is:
+- Each connection selects its own branch; the uncommitted working set belongs
+  to the branch, so another connection on that branch sees it.
+- One durable writer at a time. A concurrent writer gets `SQLITE_BUSY`.
+- Readers stay live while a peer writes or runs GC.
+- Commits, merges, and pushes re-confirm HEAD under the lock, so a stale tip
+  never clobbers a peer.
+- Conflicts are never durable; they live only in the transaction that made them.
 
-- **Per-connection branch selection.** Each connection holds its own active
-  branch and session view of HEAD and staging (see
-  [Per-Session Branching](#per-session-branching-architecture)). The
-  uncommitted working set belongs to the branch, so another connection that
-  selects that branch recovers it. Two connections may sit on different
-  branches of the same file at once.
-- **Peer-deleted branches.** A connection parked on a branch that a peer
-  deletes may keep reading its snapshot, but writes fail and name the missing
-  branch. Checking out an existing branch recovers the connection without
-  recreating the deleted branch.
-- **One durable writer at a time.** A connection that holds an explicit write
-  transaction owns the graph lock. A peer that tries to begin a concurrent
-  write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
-  commits or rolls back. After the lock is free, the peer can retry
-  successfully. In serialized threading mode, sequential calls from different
-  threads may continue and finish the same transaction.
-- **Snapshot-safe write upgrades.** A transaction that has established a read
-  snapshot cannot upgrade to a writer after a peer advances the store; the
-  upgrade returns `SQLITE_BUSY_SNAPSHOT` instead of mixing catalogs. Once a
-  write transaction begins, it holds the graph lock and pins its snapshot
-  until commit or rollback.
-- **Readers stay live.** A reader can see already-committed data while another
-  process holds an uncommitted write. Running `dolt_add` inside that write
-  transaction does not publish its rows or staged state, and rolling the
-  transaction back restores its prior staging state. A peer that only opens,
-  reads, and closes the database does not prevent a live read transaction from
-  upgrading to a writer. An idle connection follows a peer's completed
-  `.restore` or backup replacement, while an unrelated file moved over the path
-  remains read-only. An open iterator completes safely while another process
-  runs GC. Readers do not create SQLite `-wal`/`-shm` sidecars.
-- **Multi-process commits are CAS-safe.** A process that races `dolt_commit`
-  against a peer either wins a clean tip advance or loses with a busy /
-  conflict outcome. The loser's stale tip must not clobber the winner's
-  commit. Sequential multiproc commits both land; forked SQL transaction
-  writers leave consistent table and index state.
-- **VC ops re-confirm HEAD under the lock.** Merge, cherry-pick, and revert use
-  locked compare-and-advance; pull and rebase use operation-specific locked
-  branch expectations. A peer commit between planning and ref update yields
-  `SQLITE_BUSY` instead of a lost update.
-- **Remote ref installs are serialized.** HTTP pushes refresh the remote refs
-  under the graph lock before validating and installing either conditional or
-  plain ref updates. A stale push is rejected instead of replacing a peer's
-  ref update. A push also refuses to replace a target branch with uncommitted
-  working or staged changes.
-- **GC cooperates with writers.** `dolt_gc` / `VACUUM` may be deferred or
-  report busy while a writer holds the graph lock; after the writer finishes,
-  GC completes without dropping reachable data. Multiproc GC-vs-commit and
-  GC-vs-GC races leave committed rows intact.
-- **Conflicts are never durable.** A conflicted merge exists only inside the
-  transaction that produced it. Commit is refused while conflicts remain;
-  nothing conflicted is left on disk for a later connection to inherit.
-  Constraint violations still persist (see Constraint Violations on Merge).
-
-The machine-readable contract and its test mapping live in
-[`test/concurrency_contract.tsv`](test/concurrency_contract.tsv). Multiproc and
-multi-connection C harnesses (`multi_process_*`, `concurrent_*`) are the
-behavioral oracles; the contract test asserts that every claim still points at
-a real check or source needle. Nightly stress soaks those harnesses for hours;
-PR CI runs them at shorter budgets via `test/run_c_tests.sh` and
-`build-test`.
+The full contract and its test mapping: [concurrency.md](doc/doltlite/concurrency.md).
 
 ## Storage Format
 
-DoltLite does **not** use the SQLite page format. Primary databases are a
-single content-addressed chunk-store file (magic `DLTC` / `0x444C5443`) with
-prolly-tree chunks, a WAL of chunk/root records, and refs for branches and
-tags. Stock SQLite files are still detected and opened for ordinary SQL (see
-[Using Existing SQLite Databases](#using-existing-sqlite-databases)); version
-control requires a DoltLite-format file.
-
-### Frozen format version 12 (beta)
-
-Chunk-store version **12** is the on-disk format frozen for the DoltLite beta.
-Version 12 includes every nested format written into the store, including:
-
-| Layer | Constant | Value |
-|---|---|---|
-| Chunk-store header | `CHUNK_STORE_VERSION` | **12** |
-| Working-set blob | `WS_FORMAT_VERSION` | **v5** |
-| Catalog entries | `CATALOG_FORMAT_V5` | **0x46** |
-| Refs blob | refs serializer | **v7** |
-| Commit blob | `DOLTLITE_COMMIT_V2` | **v2** |
-
-- **Writers** stamp version 12 and emit the nested formats above.
-- **Readers** require an exact `CHUNK_STORE_VERSION` match. A different version
-  returns `SQLITE_NOTADB`; there is no silent reinterpretation or automatic
-  rewrite on open.
-- Every file produced by a beta or later version-12 release remains readable
-  and writable by later version-12 builds. An incompatible change to any nested
-  format requires a `CHUNK_STORE_VERSION` bump even when that format has its own
-  marker.
-- Bumping `CHUNK_STORE_VERSION` requires updating this section, adding a corpus
-  entry under [`test/format-corpus/`](test/format-corpus/), updating
-  [`test/storage_format_contract.tsv`](test/storage_format_contract.tsv), and
-  documenting whether version 12 is open-only, migrated, or refused.
-
-The frozen version-12 file and its generation recipe live in
-[`test/format-corpus/v12/`](test/format-corpus/v12/). The machine-readable
-contract is
-[`test/storage_format_contract.tsv`](test/storage_format_contract.tsv); CI runs
-[`test/storage_format_contract_test.sh`](test/storage_format_contract_test.sh)
-to verify the fixture, read and extend it, run GC, reject other header versions,
-and keep evidence needles live.
+A DoltLite database is one content-addressed chunk-store file, not SQLite
+pages. Format version 12 is frozen for the beta: every version-12 file stays
+readable and writable by later version-12 builds. Layers, constants, and the
+bump procedure: [storage-format.md](doc/doltlite/storage-format.md).
 
 ## Vector Search
 
@@ -1074,59 +641,20 @@ instead of losing data. Merge and storage semantics:
 
 ## Performance
 
-Nightly DoltLite-versus-SQLite numbers:
-[performance-report.md](performance-report.md). Per-release comparisons ship on
-[GitHub releases](https://github.com/dolthub/doltlite/releases).
-
-PR CI runs paired sysbench-style workloads (int / text / blob / composite PK)
-and a short version-control latency suite against the PR base, with automatic
-remeasurement on borderline regressions. Details live in
-[`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml).
-
-Complexity properties asserted in CI (`test/doltlite_perf.sh`,
-`test/doltlite_structural.sh`):
-
-- **O(log n)** point SELECT / UPDATE / DELETE by primary key
-- **O(n log n)** bulk INSERT inside an explicit transaction
-- **O(changes)** `dolt_diff` between commits (not proportional to table size)
-- **Structural sharing** between versions (small edits add little file growth)
-- **GC** reclaims unreachable chunks without dropping reachable data
+Nightly DoltLite-versus-SQLite numbers: [performance-report.md](performance-report.md).
+Benchmark CI and the complexity properties asserted in tests:
+[performance.md](doc/doltlite/performance.md).
 
 ## Running Tests
 
 ```bash
 cd build
 ../configure && make
-
-# DoltLite shell suites (branch / commit / merge / remotes / …)
 bash ../test/run_doltlite_tests.sh
-
-# C unit / multiproc / stress harnesses
 bash ../test/run_c_tests.sh
-
-# Upstream SQLite TCL suite (prolly engine) — one CI bucket
-bash ../test/run_testfixture.sh "SQLite regression core-sql" 300 \
-  $(tr '\n' ' ' < ../test/regression-buckets/core-sql.txt)
-
-# Differential oracles (need stock sqlite3 and/or dolt on PATH)
-bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3
-bash ../test/vc_oracle_workspace_test.sh ./doltlite dolt
-
-# sqllogictest corpus (needs Fossil + corpus checkout)
-bash ../test/run_sqllogictest.sh ./doltlite ./sqlite3 /path/to/sqllogictest
 ```
 
-CI wiring, coverage floors, and full bucket lists are in
-[`.github/workflows/test.yml`](.github/workflows/test.yml) and
-[AGENTS.md](AGENTS.md). Contract suites
-(`sqlite_compatibility_contract_test.sh`, `concurrency_contract_test.sh`,
-`storage_format_contract_test.sh`) gate the README contracts above.
-
-Inherited TCL allowlists:
-[`test/known_testfixture_divergences.txt`](test/known_testfixture_divergences.txt),
-[`test/known_testfixture_crashes.txt`](test/known_testfixture_crashes.txt).
-Both carry a `class=` disposition per gate; the totals are pinned by
-[`test/known_testfixture_exception_ratchet.txt`](test/known_testfixture_exception_ratchet.txt).
+Every test layer, oracle, and allowlist: [testing.md](doc/doltlite/testing.md).
 
 ## Architecture
 

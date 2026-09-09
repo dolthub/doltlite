@@ -269,7 +269,7 @@ Subtle rules that are easy to break silently — hold them when touching VC code
 ## Concurrency contract
 
 User-facing concurrency guarantees and the multiproc/multi-connection oracles
-that pin them live in the README **Concurrency** section and
+that pin them live in `doc/doltlite/concurrency.md` and
 `test/concurrency_contract.tsv`. `test/concurrency_contract_test.sh` fails if a
 claim loses its evidence needle. When changing graph lock, snapshot pin or
 write upgrade, locked ref expectation/CAS paths, multiproc harnesses, or
@@ -281,9 +281,9 @@ implementors even when a claim is also listed in the contract.
 
 ## SQLite compatibility contract
 
-The user-facing SQLite compatibility contract lives in the README **SQLite
-Compatibility** section; claims and evidence live in
-`test/sqlite_compatibility_contract.tsv`. Update the README, contract row, and
+The user-facing SQLite compatibility contract lives in
+`doc/doltlite/sqlite-compatibility.md`; claims and evidence live in
+`test/sqlite_compatibility_contract.tsv`. Update the doc, contract row, and
 its evidence together when observable compatibility behavior changes.
 
 Do not infer poor SQLite compatibility from an intentional storage-engine
@@ -297,13 +297,13 @@ known boundaries. SQLLogicTest remains a zero-divergence correctness gate.
 ## Storage format version
 
 Chunk-store version **12** is the beta format freeze. User-facing rules live in
-the README **Storage Format** section; claims and evidence live in
+`doc/doltlite/storage-format.md`; claims and evidence live in
 `test/storage_format_contract.tsv`, and the golden file lives under
 `test/format-corpus/v12/`.
 
 Bumping `CHUNK_STORE_VERSION` requires:
 
-1. README Storage Format update
+1. `doc/doltlite/storage-format.md` update
 2. A new `test/format-corpus/` entry and MANIFEST
 3. `storage_format_contract.tsv` evidence update
 4. Explicit open/upgrade policy for version 12 (open-only, migrate, or refuse)
