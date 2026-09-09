@@ -345,16 +345,16 @@ run_test_match "gc_mark_failure_names_missing_chunk" \
 
 db_rm "$DB"
 
-# VACUUM INTO after gc in one session: the output filename must outlive the
-# handle it was opened with (a use-after-free under ASAN otherwise).
+# VACUUM INTO renames the copy over its output path, so closing the handle
+# logs through the output filename; that name must outlive the handle
+# (a use-after-free under ASAN otherwise).
 DB=/tmp/test_gc_vacuum_into_$$.db; db_rm "$DB"; COPY=/tmp/test_gc_vacuum_into_copy_$$.db; db_rm "$COPY"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a'),(2,'b');
 SELECT dolt_commit('-A','-m','seed');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "gc_then_vacuum_into_same_session" \
-  "SELECT dolt_gc() IS NOT NULL; VACUUM; VACUUM INTO '$COPY'; SELECT count(*) FROM t;" \
-  "1
-2" "$DB"
+run_test "vacuum_into_name_outlives_handle" \
+  "VACUUM INTO '$COPY'; SELECT count(*) FROM t;" \
+  "2" "$DB"
 run_test "gc_vacuum_into_copy_readable" "SELECT count(*) FROM t;" "2" "$COPY"
 db_rm "$DB"; db_rm "$COPY"
 
