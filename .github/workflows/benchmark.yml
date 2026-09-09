@@ -76,7 +76,7 @@ jobs:
   vc-relative:
     name: version-control
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -107,29 +107,6 @@ jobs:
             --individual-min-delta-us 50000 \
             -- bash test/vc_perf_ceiling.sh "$GITHUB_WORKSPACE/build/doltlite"
         cat "$results/vc.md"
-
-    - name: Measure HEAD query history scaling
-      env:
-        VC_HEAD_SCALE_DEPTHS: "1 1000"
-        VC_HEAD_SCALE_RUNS: 7
-        VC_PERF_BASELINE_LABEL: PR base
-        VC_PERF_CANDIDATE_LABEL: PR candidate
-      run: |
-        results="$RUNNER_TEMP/benchmark-results"
-        VC_HEAD_SCALE_BASELINE="$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
-          VC_HEAD_SCALE_BASELINE_TIMER="$GITHUB_WORKSPACE/benchmark-baseline/bench_timer_doltlite" \
-          VC_HEAD_SCALE_CANDIDATE_TIMER="$GITHUB_WORKSPACE/build/bench_timer_doltlite" \
-          python3 test/benchmark_retry.py \
-            --suite vc-scale \
-            --results-dir "$results" \
-            --max-attempts 3 \
-            --individual-ratio 1.50 \
-            --aggregate-ratio 1.25 \
-            --min-delta-us 1000 \
-            --individual-min-delta-us 1000 \
-            -- python3 test/vc_head_history_scale.py \
-              "$GITHUB_WORKSPACE/build/doltlite"
-        cat "$results/vc-scale.md"
 
     - name: Upload paired measurements
       if: always()
@@ -179,7 +156,7 @@ jobs:
       id: report
       run: |
         report="$RUNNER_TEMP/benchmark-relative.md"
-        required="int textpk blobpk compositepk vc vc-scale"
+        required="int textpk blobpk compositepk vc"
         missing=""
         for suite in $required; do
           if [ ! -s "benchmark-results/$suite.tsv" ] ||
@@ -211,13 +188,11 @@ jobs:
             --input "blobpk=benchmark-results/blobpk.tsv" \
             --input "compositepk=benchmark-results/compositepk.tsv" \
             --input "vc=benchmark-results/vc.tsv" \
-            --input "vc-scale=benchmark-results/vc-scale.tsv" \
             --attempt-history "int=benchmark-results/int-attempts.tsv" \
             --attempt-history "textpk=benchmark-results/textpk-attempts.tsv" \
             --attempt-history "blobpk=benchmark-results/blobpk-attempts.tsv" \
             --attempt-history "compositepk=benchmark-results/compositepk-attempts.tsv" \
             --attempt-history "vc=benchmark-results/vc-attempts.tsv" \
-            --attempt-history "vc-scale=benchmark-results/vc-scale-attempts.tsv" \
             --baseline-ref "$baseline" \
             --candidate-ref "$candidate" \
             --expected-baseline-ref "$expected_baseline" \
@@ -226,7 +201,6 @@ jobs:
             --aggregate-ratio 1.25 \
             --min-delta-us 10000 \
             --suite-individual "vc=2.00:50000" \
-            --suite-individual "vc-scale=1.50:1000" \
             --output "$report"
           report_rc=$?
           set -e

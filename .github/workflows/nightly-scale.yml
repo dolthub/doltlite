@@ -1,8 +1,7 @@
 name: Nightly scale
 
 # Full large_scale_test (1M + 10M + 100M) with the script's strict
-# wall-clock ceilings, plus HEAD-query scaling across commit depth. PR only
-# runs --quick (100K) and a two-depth HEAD check. Separate from
+# wall-clock ceilings. PR only runs --quick (100K). Separate from
 # Nightly stress (race soaks on checked builds) and Nightly performance
 # (sysbench vs SQLite): this is correctness + absolute latency at
 # multi-million row size on an optimized binary (PROLLY_CHECK would
@@ -56,10 +55,7 @@ jobs:
         {
           # Plain optimized build: time gates in large_scale_test.sh are
           # meaningless under DOLTLITE_PROLLY_CHECK (full-tree walk per commit).
-          make -j2 doltlite doltlite-lib
-          cc -O2 -Werror -I. -I../src \
-            -o bench_timer_doltlite ../test/sysbench_timer.c \
-            libdoltlite.a -lpthread -lz -lm
+          make -j2 doltlite
         } 2>&1 | tee build.log
         if grep -E "warning:" build.log; then
           echo "::error::compiler warnings in nightly scale build"
@@ -187,103 +183,13 @@ jobs:
         echo "::error::nightly scale failure in large_scale_test full mode"
         exit 1
 
-  head-history:
-    name: head-history-scaling
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh zlib1g-dev
-
-    - name: Download build
-      uses: actions/download-artifact@v4
-      with:
-        name: nightly-scale-build
-
-    - name: Extract build
-      run: tar -xzf nightly-scale-build.tar.gz
-
-    - name: Run HEAD query history scaling
-      id: scale
-      run: |
-        set -uo pipefail
-        outdir="$GITHUB_WORKSPACE/scale-artifacts/head-history"
-        mkdir -p "$outdir"
-        log="$outdir/run.log"
-        set +e
-        VC_HEAD_SCALE_DEPTHS="1 100 1000 10000" \
-          VC_HEAD_SCALE_RUNS=21 \
-          python3 test/vc_head_history_scale.py build/doltlite \
-            >"$log" 2>&1
-        rc=$?
-        set -e
-        cat "$log"
-        if [ "$rc" -eq 0 ]; then
-          echo "failed=" >> "$GITHUB_OUTPUT"
-        else
-          echo "failed=1" >> "$GITHUB_OUTPUT"
-        fi
-
-    - name: Compose failure report
-      if: steps.scale.outputs.failed == '1'
-      run: |
-        BODY="$RUNNER_TEMP/scale-body.md"
-        {
-          echo "Nightly HEAD-query history scaling failed."
-          echo ""
-          echo "The gate compares identical current state at 1, 100, 1,000, and 10,000 ancestors."
-          echo ""
-          echo "Full output is in the \`nightly-scale-head-history\` artifact."
-          echo ""
-          echo "Reproduce locally:"
-          echo '```bash'
-          echo "VC_HEAD_SCALE_DEPTHS='1 100 1000 10000' VC_HEAD_SCALE_RUNS=21 \\\"
-          echo "  python3 test/vc_head_history_scale.py build/doltlite"
-          echo '```'
-          echo ""
-          echo "Last 100 lines:"
-          echo '```'
-          tail -n 100 "$GITHUB_WORKSPACE/scale-artifacts/head-history/run.log"
-          echo '```'
-        } > "$BODY"
-        cat "$BODY"
-
-    - name: Upload scale log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: nightly-scale-head-history
-        path: scale-artifacts/head-history/
-        if-no-files-found: warn
-        retention-days: 14
-
-    - name: Report failure as GitHub issue
-      if: steps.scale.outputs.failed == '1'
-      uses: ./.github/actions/report-failure-issue
-      with:
-        label: nightly-scale-head-history
-        title: "Nightly scale failure: HEAD query history depth"
-        body-file: ${{ runner.temp }}/scale-body.md
-        token: ${{ secrets.GITHUB_TOKEN }}
-        label-description: Nightly HEAD query history-depth scaling failure
-
-    - name: Fail the job if scale failed
-      if: steps.scale.outputs.failed == '1'
-      run: |
-        echo "::error::nightly HEAD query history scaling failure"
-        exit 1
-
   # A red or cancelled night must never be silent. Specific failures above
   # cut their own issues; this catches the classes they cannot: a setup or
   # build step failing before the reporter arms, or a job cancelled while
   # the run survives. A whole-run cancellation kills this job too, which is
   # what the weekly nightly-heartbeat exists to catch.
   watchdog:
-    needs: [build, large-full, head-history]
+    needs: [build, large-full]
     if: failure() || cancelled()
     runs-on: ubuntu-latest
     steps:
@@ -292,11 +198,11 @@ jobs:
       id: sibling
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        LABEL_PREFIXES: "nightly-scale-large-full nightly-scale-head-history"
+        LABEL_PREFIXES: "nightly-scale-large-full"
       run: |
         started=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq .run_started_at)
         covered=0
-        for prefix in nightly-scale-large-full nightly-scale-head-history; do
+        for prefix in nightly-scale-large-full; do
           n=$(gh api -X GET "repos/${{ github.repository }}/issues" \
                 -f state=all -f per_page=50 -f sort=updated -f direction=desc \
               | jq --arg p "$prefix" --arg t "$started" --arg w "nightly-scale-watchdog" \

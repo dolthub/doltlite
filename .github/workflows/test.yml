@@ -25,6 +25,14 @@ jobs:
         bash test/doltlite_scaling.sh --self-test
         bash test/doltlite_scaling.sh build-plain/doltlite
 
+    - name: Version history scaling
+      env:
+        VC_HEAD_SCALE_DEPTHS: "1 1000"
+        VC_HEAD_SCALE_RUNS: 7
+      run: |
+        bash test/doltlite_open_perf.sh build-plain/doltlite
+        python3 test/vc_head_history_scale.py build-plain/doltlite
+
   concurrency-stress:
     runs-on: ubuntu-latest
     timeout-minutes: 20

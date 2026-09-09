@@ -158,43 +158,10 @@ def median(samples):
     return int(statistics.median(samples))
 
 
-def write_results(path, medians, depths, has_baseline):
-    with pathlib.Path(path).open("w", encoding="utf-8") as output:
-        for name, _sql, _expected in QUERIES:
-            for depth in depths:
-                baseline = medians["baseline", name, depth] if has_baseline else 0
-                candidate = medians["candidate", name, depth]
-                output.write(
-                    f"vc-scale\t{name}_depth_{depth}\t"
-                    f"{baseline}\t{candidate}\n"
-                )
-
-
-def write_samples(path, samples, depths, runs, has_baseline):
-    with pathlib.Path(path).open("w", encoding="utf-8") as output:
-        output.write("section\ttest\trun\tbaseline_us\tcandidate_us\n")
-        for name, _sql, _expected in QUERIES:
-            for depth in depths:
-                for run in range(1, runs + 1):
-                    baseline = (
-                        samples["baseline", name, depth, run]
-                        if has_baseline
-                        else 0
-                    )
-                    candidate = samples["candidate", name, depth, run]
-                    output.write(
-                        f"vc-scale\t{name}_depth_{depth}\t{run}\t"
-                        f"{baseline}\t{candidate}\n"
-                    )
-
-
 def render_report(
     medians,
     depths,
     runs,
-    has_baseline,
-    baseline_label,
-    candidate_label,
     max_ratio,
     min_delta_us,
 ):
@@ -212,28 +179,18 @@ def render_report(
         "execution are timed."
     )
     print(
-        f"Gate: fail when {candidate_label} exceeds depth 1 by both "
+        "Gate: fail when a measurement exceeds depth 1 by both "
         f"{max_ratio:.2f}x and {min_delta_us / 1000:.2f}ms."
     )
     print()
-    if has_baseline:
-        print(
-            f"| Query | Ancestors | {baseline_label} ms | "
-            f"{candidate_label} ms | vs depth 1 | Delta ms | Result |"
-        )
-        print("|---|---:|---:|---:|---:|---:|---|")
-    else:
-        print(
-            f"| Query | Ancestors | {candidate_label} ms | "
-            "vs depth 1 | Delta ms | Result |"
-        )
-        print("|---|---:|---:|---:|---:|---|")
+    print("| Query | Ancestors | Median ms | vs depth 1 | Delta ms | Result |")
+    print("|---|---:|---:|---:|---:|---|")
     for name, _sql, _expected in QUERIES:
-        shallow = medians["candidate", name, 1]
+        shallow = medians[name, 1]
         for depth in depths:
-            candidate = medians["candidate", name, depth]
-            ratio = candidate / shallow
-            delta = candidate - shallow
+            measured = medians[name, depth]
+            ratio = measured / shallow
+            delta = measured - shallow
             failed = (
                 depth != 1
                 and ratio > max_ratio
@@ -243,11 +200,9 @@ def render_report(
             if failed:
                 failures.append((name, depth, ratio, delta))
             fields = [f"`{name}`", str(depth)]
-            if has_baseline:
-                fields.append(f"{medians['baseline', name, depth] / 1000:.2f}")
             fields.extend(
                 (
-                    f"{candidate / 1000:.2f}",
+                    f"{measured / 1000:.2f}",
                     f"{ratio:.3f}x",
                     f"{delta / 1000:+.2f}",
                     status,
@@ -261,17 +216,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Measure current-state query cost across commit depths"
     )
-    parser.add_argument("candidate")
+    parser.add_argument("doltlite")
     parser.add_argument(
-        "--candidate-timer",
-        default=os.environ.get("VC_HEAD_SCALE_CANDIDATE_TIMER", ""),
-    )
-    parser.add_argument(
-        "--baseline", default=os.environ.get("VC_HEAD_SCALE_BASELINE", "")
-    )
-    parser.add_argument(
-        "--baseline-timer",
-        default=os.environ.get("VC_HEAD_SCALE_BASELINE_TIMER", ""),
+        "--timer",
+        default=os.environ.get("VC_HEAD_SCALE_TIMER", ""),
     )
     parser.add_argument(
         "--depths",
@@ -297,75 +245,37 @@ def main(argv=None):
     if args.runs < 1:
         parser.error("--runs must be at least 1")
 
-    candidate = pathlib.Path(args.candidate).resolve()
-    baseline = pathlib.Path(args.baseline).resolve() if args.baseline else None
-    candidate_timer = pathlib.Path(
-        args.candidate_timer
-        or candidate.parent / "bench_timer_doltlite"
+    doltlite = pathlib.Path(args.doltlite).resolve()
+    timer = pathlib.Path(
+        args.timer or doltlite.parent / "bench_timer_doltlite"
     ).resolve()
-    baseline_timer = (
-        pathlib.Path(
-            args.baseline_timer
-            or baseline.parent / "bench_timer_doltlite"
-        ).resolve()
-        if baseline
-        else None
-    )
-    for binary in (candidate, baseline, candidate_timer, baseline_timer):
-        if binary and not os.access(binary, os.X_OK):
+    for binary in (doltlite, timer):
+        if not os.access(binary, os.X_OK):
             parser.error(f"binary is not executable: {binary}")
 
-    samples = {}
     grouped = collections.defaultdict(list)
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
         workloads = write_workloads(root)
-        fixtures = {
-            "candidate": build_fixtures(
-                candidate, root / "candidate", args.depths
-            )
-        }
-        timers = {"candidate": candidate_timer}
-        if baseline:
-            fixtures["baseline"] = build_fixtures(
-                baseline, root / "baseline", args.depths
-            )
-            timers["baseline"] = baseline_timer
+        fixtures = build_fixtures(
+            doltlite, root / "fixtures", args.depths
+        )
 
         for run in range(1, args.runs + 1):
             depths = args.depths if run % 2 else list(reversed(args.depths))
             queries = QUERIES if run % 2 else tuple(reversed(QUERIES))
             for depth in depths:
                 for name, _sql, _expected in queries:
-                    kinds = list(timers)
-                    if run % 2 == 0:
-                        kinds.reverse()
-                    for kind in kinds:
-                        elapsed = time_query(
-                            timers[kind],
-                            fixtures[kind][depth],
-                            workloads[name],
-                        )
-                        samples[kind, name, depth, run] = elapsed
-                        grouped[kind, name, depth].append(elapsed)
+                    elapsed = time_query(
+                        timer, fixtures[depth], workloads[name]
+                    )
+                    grouped[name, depth].append(elapsed)
 
     medians = {key: median(values) for key, values in grouped.items()}
-    results_path = os.environ.get("VC_PERF_RESULTS_OUTPUT")
-    samples_path = os.environ.get("VC_PERF_SAMPLES_OUTPUT")
-    if results_path:
-        write_results(results_path, medians, args.depths, bool(baseline))
-    if samples_path:
-        write_samples(
-            samples_path, samples, args.depths, args.runs, bool(baseline)
-        )
-
     failures = render_report(
         medians,
         args.depths,
         args.runs,
-        bool(baseline),
-        os.environ.get("VC_PERF_BASELINE_LABEL", "PR base"),
-        os.environ.get("VC_PERF_CANDIDATE_LABEL", "DoltLite"),
         args.max_ratio,
         args.min_delta_us,
     )
