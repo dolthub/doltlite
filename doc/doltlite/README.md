@@ -20,6 +20,30 @@ of the version-control features; these pages hold the detail.
 
 ## Version control
 
+Every `dolt_*` function and table, one page per feature. Revision syntax and
+the forms each surface accepts are in [refs.md](refs.md).
+
+- [dolt_commit.md](dolt_commit.md) — `dolt_add`, `dolt_commit`, `dolt_status`, `dolt_config`
+- [dolt_reset.md](dolt_reset.md) — `dolt_reset`, `dolt_clean`
+- [dolt_branch.md](dolt_branch.md) — `dolt_branch`, `dolt_checkout`, `active_branch`, `dolt_branches`, `dolt_remote_branches`, `dolt_default_branch`, `dolt_connect_branch`
+- [dolt_merge.md](dolt_merge.md) — `dolt_merge`, `dolt_merge_status`, `dolt_merge_base`, `dolt_conflicts`, `dolt_conflicts_<table>`, `dolt_schema_conflicts`, `dolt_conflicts_resolve`
+- [dolt_diff.md](dolt_diff.md) — `dolt_diff`, `dolt_diff_<table>`, `dolt_diff_stat`, `dolt_diff_summary`, `dolt_schema_diff`, `dolt_patch`
+- [dolt_log.md](dolt_log.md) — `dolt_log`, `dolt_history_<table>`, `dolt_at_<table>`, `dolt_blame_<table>`, `dolt_commit_ancestors`
+- [dolt_remote.md](dolt_remote.md) — `dolt_remote`, `dolt_push`, `dolt_fetch`, `dolt_pull`, `dolt_clone`, `dolt_remotes`
+- [dolt_rebase.md](dolt_rebase.md) — `dolt_rebase` and the plan table
+- [dolt_cherry_pick.md](dolt_cherry_pick.md) — `dolt_cherry_pick`, `dolt_revert`
+- [dolt_tag.md](dolt_tag.md) — `dolt_tag`, `dolt_tags`
+- [dolt_hashof.md](dolt_hashof.md) — `dolt_hashof`, `dolt_hashof_table`, `dolt_hashof_index`, `dolt_hashof_db`, `dolt_hashof_catalog`
+- [dolt_gc.md](dolt_gc.md) — `dolt_gc`, `VACUUM`
+- [dolt_constraint_violations.md](dolt_constraint_violations.md) — `dolt_constraint_violations`, `dolt_constraint_violations_<table>`, `dolt_verify_constraints`
+- [dolt_workspace.md](dolt_workspace.md) — `dolt_workspace_<table>`
+- [dolt_ignore.md](dolt_ignore.md) — `dolt_ignore`, `dolt_docs`, `dolt_tests`, `dolt_test_run`
+- [dolt_schemas.md](dolt_schemas.md) — `dolt_schemas` and the versioned catalog
+- [dolt_creds.md](dolt_creds.md) — `dolt_creds_new`, `dolt_creds`
+- [dolt_version.md](dolt_version.md) — `dolt_version`, `doltlite_engine`
+
+## Cross-cutting
+
 - [transactions.md](transactions.md) — what `ROLLBACK` undoes, conflicts inside vs outside `BEGIN`, busy outcomes, refusals
 - [refs.md](refs.md) — revision syntax: branches, tags, hashes, `HEAD~N`, `WORKING`, `STAGED`, ranges, `db@branch` opens, name rules
 - [dolt-differences.md](dolt-differences.md) — what is deliberately different from Dolt, and what is missing on purpose

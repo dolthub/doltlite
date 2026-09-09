@@ -42,7 +42,7 @@ Both sides are required and a range may hold one operator, so `..main` and
 | `dolt_schema_diff`, `dolt_patch` | `(from, to)` or `(range)` |
 | `dolt_diff_stat`, `dolt_diff_summary` | `(from, to)` only |
 | `dolt_history_<table>(rev)`, `dolt_at_<table>(rev)` | one revision |
-| `dolt_branch(name, rev)`, `dolt_checkout('-b', name, rev)`, `dolt_tag(name, rev)`, `dolt_reset('--hard', rev)` | one revision as start point |
+| `dolt_branch(name, rev)`, `dolt_checkout('-b', name, rev)`, `dolt_tag(name, rev)`, `dolt_reset('--hard' \| '--soft', rev)` | one commit revision as start point |
 
 `dolt_checkout(tag)` and `dolt_checkout(hash)` are refused, as in Dolt: the
 error suggests `dolt_checkout(rev, '-b', name)`. To read a commit without a
