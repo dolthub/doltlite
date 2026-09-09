@@ -147,7 +147,11 @@ def parse_depths(value):
         depths = [int(part) for part in value.replace(",", " ").split()]
     except ValueError as exc:
         raise argparse.ArgumentTypeError("depths must be integers") from exc
-    if not depths or depths[0] != 1:
+    if len(depths) < 2:
+        raise argparse.ArgumentTypeError(
+            "depths must include 1 and at least one deeper depth"
+        )
+    if depths[0] != 1:
         raise argparse.ArgumentTypeError("depths must begin with 1")
     if depths != sorted(set(depths)):
         raise argparse.ArgumentTypeError("depths must be unique and increasing")
