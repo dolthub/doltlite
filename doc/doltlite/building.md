@@ -29,7 +29,9 @@ SELECT doltlite_engine();
 To build stock SQLite instead (for comparison):
 
 ```
-make DOLTLITE_PROLLY=0 sqlite3
+cd ..
+bash test/build_stock_reference.sh build-stock build/doltlite
+./build-stock/sqlite3
 ```
 
 Vec1 is built into native DoltLite by default. Use `make DOLTLITE_VEC1=0` to
@@ -53,10 +55,8 @@ make -C ext/wasm dist             # zip package
 
 `DOLTLITE_ENABLE_REMOTES=0` omits clone, fetch, pull, push, HTTP, TLS, and
 credential code. Calls to the remote SQL functions then return `DoltLite
-remotes are disabled in this build`. Browser builds with remotes enabled need
-an Emscripten-compatible socket transport or proxy; see
-[`examples/wa-sqlite-clone.mjs`](../../examples/wa-sqlite-clone.mjs) for a public
-clone request that exercises the client.
+remotes are disabled in this build`. Remotes use browser XHR/CORS or Node
+worker/fetch. See [wasm.md](wasm.md).
 
 `DOLTLITE_ENABLE_CHUNK_SOURCE=0` omits host-provided and origin-backed lazy
 chunk fetching. The feature is enabled by default.

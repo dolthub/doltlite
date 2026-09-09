@@ -3,10 +3,8 @@
 > [!WARNING]
 > The server binds to `127.0.0.1` by default. Bound anywhere else, it warns at
 > startup about each protection left unconfigured: `--cert`/`--key` for TLS, and
-> `--auth-keys` plus `--audience` for authentication. These are independent — TLS encrypts but does
-> not authenticate, and without `--auth-keys` every client that can reach the port
-> may read the served databases *and push to them*. Configure both, or place the
-> server behind a reverse proxy that provides equivalent TLS and authentication.
+> `--auth-keys` plus `--audience` for clients. TLS authenticates only the server;
+> without client auth, anyone may read *and push*. Configure both or use a proxy.
 
 Standalone HTTP server for a directory of databases (`make doltlite-remotesrv`
 in `build/`):

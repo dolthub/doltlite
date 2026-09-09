@@ -51,10 +51,13 @@ Cross-Origin-Embedder-Policy: require-corp
 import { sqlite3InitModule } from '@dolthub/doltlite-wasm';
 
 const sqlite3 = await sqlite3InitModule();
-const db = new sqlite3.oo1.DB('/tmp/app.db');
+const db = new sqlite3.oo1.DB(':memory:');
 db.exec(`CREATE TABLE t(x)`);
 db.exec(`SELECT dolt_commit('-A', '-m', 'init')`);
 ```
+
+Paths are process-local. For persistence, serialize or use native
+`@dolthub/doltlite`.
 
 ## Entry points
 

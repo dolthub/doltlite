@@ -17,8 +17,7 @@ bug; please file it.
 | One database per server, many databases | One file per database. There is no `dolt_undrop`, `dolt_purge_dropped_databases`, or `dolt_backup`; the file is the backup. |
 | Column names on `dolt_log`, `dolt_diff`, and other system tables | May differ. Compare rows, not headers. |
 
-Every `dolt_*` function is direct-only: it cannot be used in a view,
-trigger, or generated column.
+Only command functions are direct-only; `dolt_hashof` and `dolt_version` are not.
 
 ## Not implemented, on purpose
 
