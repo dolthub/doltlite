@@ -31,7 +31,7 @@ versioned table like any other.
 
 | Pragma | Behaviour |
 |---|---|
-| `cache_size` | Sizes the chunk cache. Negative values are a KiB budget as in SQLite. Never shrinks below the engine default. |
+| `cache_size` | Sizes the chunk cache. Negative values are a KiB budget as in SQLite. The floor is the engine default of 16384 chunks; smaller requests are raised to it. Reads back `-2000` (SQLite's default) until set, which understates the real capacity. |
 | `synchronous` | `OFF` skips fsync on commit; every other level syncs. |
 | `fullfsync` | Honoured on macOS. |
 | `integrity_check`, `quick_check` | Run SQLite's row and index checks, then walk the chunk graph of the named tables and of every branch, tag, and working set. Missing or corrupt chunks count as errors. |
