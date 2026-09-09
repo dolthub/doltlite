@@ -54,9 +54,6 @@ trigger, or generated column.
   `dolt_diff_<table>`, `dolt_history_<table>`, or `dolt_conflicts_<table>`
   collides case-insensitively with a metadata column, the user column gets
   `_1`, `_2`, ... because SQLite requires unique column names.
-- **Working sets never travel.** Remotes carry commits and refs only.
-  Cloned branches start clean, and a push is refused while the target branch
-  has uncommitted changes.
 - **Merges that cannot be represented are refused, not approximated.** A
   merge involving a primary-key change, or a derived index the engine cannot
   rebuild correctly, fails rather than producing a table with the wrong shape.
