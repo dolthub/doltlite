@@ -17,7 +17,9 @@ A Dolt commit is durable when it returns, so a successful `dolt_commit`
 inside `BEGIN` also commits the SQL transaction. A following `ROLLBACK`
 fails with `cannot rollback - no transaction is active`, and a `SAVEPOINT`
 opened before it is gone. The same holds for an operation that creates a
-commit or fast-forwards a branch. Put `dolt_commit` last.
+commit or fast-forwards a branch. A `dolt_commit` that finds nothing to
+commit has also already ended the transaction, as in Dolt; only option and
+author errors are raised before that point. Put `dolt_commit` last.
 
 Rows written before a `dolt_checkout` in the same transaction stay with the
 branch they were written on.
