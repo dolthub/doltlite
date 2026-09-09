@@ -20,8 +20,8 @@ of the version-control features; these pages hold the detail.
 
 ## Version control
 
-Every `dolt_*` function and table, one page per feature. Revision spellings
-shared by all of them are in [refs.md](refs.md).
+Every `dolt_*` function and table, one page per feature. Revision syntax and
+the forms each surface accepts are in [refs.md](refs.md).
 
 - [dolt_commit.md](dolt_commit.md) — `dolt_add`, `dolt_commit`, `dolt_status`, `dolt_config`
 - [dolt_reset.md](dolt_reset.md) — `dolt_reset`, `dolt_clean`

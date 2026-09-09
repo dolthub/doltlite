@@ -41,7 +41,7 @@ SELECT * FROM dolt_commit_ancestors WHERE commit_hash = dolt_hashof('HEAD');
   that last set each live row's values. Schema-only changes do not move blame.
   The table needs a primary key: `dolt_blame_<t>: table has no primary key`.
 - `dolt_commit_ancestors` has one row per parent; a merge commit has
-  `parent_index` 0 and 1.
+  `parent_index` 0 and 1, and a root has one row with a NULL parent.
 
 | Error | Cause |
 |---|---|
@@ -51,8 +51,9 @@ SELECT * FROM dolt_commit_ancestors WHERE commit_hash = dolt_hashof('HEAD');
 
 ## Differences from Dolt
 
-`dolt_log` doubles as Dolt's `dolt_commits`; there is no separate flat
-table. Column names are the DoltLite set above.
+`dolt_log` walks selected ancestry; `dolt_commit_ancestors` exposes the graph
+across refs. There is no separate flat `dolt_commits` table. Column names are
+the DoltLite set above.
 
 ## See also
 

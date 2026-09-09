@@ -9,7 +9,8 @@ Undo staging or working changes on the current branch. Dolt:
 ```sql
 SELECT dolt_reset();                    -- unstage everything
 SELECT dolt_reset('users');             -- unstage one table
-SELECT dolt_reset('--soft');            -- same as no arguments
+SELECT dolt_reset('--soft');            -- no-op; keep staged changes
+SELECT dolt_reset('--soft', 'HEAD~1');  -- move HEAD, keep staged and working
 SELECT dolt_reset('--hard');            -- discard staged and working changes
 SELECT dolt_reset('--hard', 'HEAD~1');  -- also move the branch to a commit
 SELECT dolt_clean('--dry-run');
@@ -21,10 +22,12 @@ SELECT dolt_clean();
 
 | Form | Effect |
 |---|---|
-| no arguments, `--soft` | Unstage all tables; working changes stay |
+| no arguments | Unstage all tables; working changes stay |
 | `table`, ... | Unstage those tables |
+| `--soft` | Make no changes |
+| `--soft`, `rev` | Move the branch to a commit; staged and working changes stay |
 | `--hard` | Working set and staging back to `HEAD` |
-| `--hard`, `rev` | Move the branch to `rev` (any [revision](refs.md)), then reset hard |
+| `--hard`, `rev` | Move the branch to one commit [revision](refs.md), then reset hard |
 
 Returns `0`. `--hard` is not undone by `ROLLBACK`; see
 [transactions.md](transactions.md).

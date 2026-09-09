@@ -1,7 +1,7 @@
 # dolt_version and doltlite_engine
 
 ```sql
-SELECT dolt_version();      -- v0.50.7
+SELECT dolt_version();      -- build version from git describe
 SELECT doltlite_engine();   -- prolly
 SELECT sqlite_version();    -- 3.54.0
 ```
@@ -12,10 +12,10 @@ SELECT sqlite_version();    -- 3.54.0
 | `doltlite_engine()` | `prolly` on a DoltLite-format main database, `orig` when the main database is a stock SQLite file |
 | `sqlite_version()` | The bundled SQLite version, unchanged |
 
-`doltlite_engine()` is the test to run before calling any `dolt_*` function:
-on a stock file they fail with `dolt version-control features are not
-available on stock SQLite databases`. The shell's `-version` prints all of
-this on one line.
+Use `doltlite_engine()` before storage-backed `dolt_*` operations. On a stock
+file they fail with `dolt version-control features are not available on stock
+SQLite databases`; `dolt_version()` remains available. Shell `-version` prints
+the DoltLite version, SQLite version, and process bitness, but not the engine.
 
 ## See also
 

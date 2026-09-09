@@ -1,8 +1,9 @@
 # Versioned system tables: dolt_ignore, dolt_docs, dolt_tests
 
-Three tables that live in the repository and version with it. Each is served
-empty before it exists; the first write creates the real table, which then
-commits, diffs, branches, and merges like any other. Dolt:
+Three tables that live in the repository and version with it. `dolt_ignore`
+and `dolt_tests` start empty; `dolt_docs` starts with `AGENT.md`. The first
+write creates the real table, which then commits, diffs, branches, and merges
+like any other. Dolt:
 [dolt_ignore](https://docs.dolthub.com/sql-reference/version-control/dolt-system-tables#dolt_ignore),
 [dolt_docs](https://docs.dolthub.com/sql-reference/version-control/dolt-system-tables#dolt_docs),
 [dolt_tests](https://docs.dolthub.com/sql-reference/version-control/dolt-system-tables#dolt_tests).

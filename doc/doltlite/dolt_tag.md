@@ -8,7 +8,7 @@ Named, immutable pointers to commits. Dolt:
 
 ```sql
 SELECT dolt_tag('v1.0');                                   -- HEAD
-SELECT dolt_tag('v1.0', 'HEAD~2');                          -- any revision
+SELECT dolt_tag('v1.0', 'HEAD~2');                          -- commit revision
 SELECT dolt_tag('v1.0', 'main', '-m', 'release', '--author', 'Ann <ann@example.com>');
 SELECT dolt_tag('-d', 'v1.0');
 SELECT * FROM dolt_tags;
@@ -18,7 +18,7 @@ SELECT * FROM dolt_tags;
 
 | Option | Meaning |
 |---|---|
-| `name [, rev]` | Create `name` at `rev` (default `HEAD`) |
+| `name [, rev]` | Create `name` at a commit revision (default `HEAD`) |
 | `-m`, `--message` | Tag message |
 | `--author 'Name <email>'` | Tagger; default is the connection's `dolt_config` identity |
 | `-d`, `--delete name` | Delete |

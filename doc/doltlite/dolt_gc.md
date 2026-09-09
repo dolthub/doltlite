@@ -18,9 +18,9 @@ Stop-the-world mark and sweep over every ref, commit, catalog, working set,
 and prolly node, then a rewrite of the file holding only live chunks. Safe to
 run at any time and idempotent. Deleted history becomes unreachable when its
 last ref goes (`dolt_branch('-D')`, `dolt_tag('-d')`, `dolt_reset('--hard')`),
-so space returns on the next `dolt_gc`. Nothing runs automatically: commit
-cost grows with the WAL since the last collection, and collecting is the
-user's call.
+so space returns on the next `dolt_gc`. Collection is manual: unreachable
+chunks occupy space until then. Automatic chunk-WAL checkpoints are separate
+from GC.
 
 `VACUUM` on a DoltLite database runs the same collection; `PRAGMA
 wal_checkpoint` does too. `VACUUM INTO` writes a compacted DoltLite-format

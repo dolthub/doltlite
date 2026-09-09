@@ -9,7 +9,7 @@ Branches and the connection's position on them. Dolt:
 
 ```sql
 SELECT dolt_branch('feature');                 -- from HEAD
-SELECT dolt_branch('feature', 'v1.0');         -- from any revision
+SELECT dolt_branch('feature', 'v1.0');         -- from a commit revision
 SELECT dolt_branch('-m', 'old', 'new');        -- rename
 SELECT dolt_branch('-c', 'src', 'copy');       -- copy
 SELECT dolt_branch('-d', 'feature');           -- delete if merged
@@ -25,11 +25,11 @@ SELECT * FROM dolt_branches;
 
 | Option | Meaning |
 |---|---|
-| `name [, rev]` | Create `name` at `rev` (default `HEAD`) |
+| `name [, rev]` | Create `name` at a commit revision (default `HEAD`) |
 | `-m`, `--move old new` | Rename |
 | `-c`, `--copy old new` | Copy |
 | `-d`, `--delete name` | Delete. Refused for the current branch, the default branch, or an unmerged branch. |
-| `-D name` | Delete even if unmerged |
+| `-D name` | Delete even if unmerged; the current and default branches remain protected |
 | `-f`, `--force` | With `name rev`: move an existing branch to `rev` |
 
 Returns `0`. Branch and tag changes are durable immediately, even inside

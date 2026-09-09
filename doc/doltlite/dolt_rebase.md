@@ -37,9 +37,9 @@ connection sits on a working branch named `dolt_rebase_<branch>`.
 
 ## Behaviour
 
-The rebase is atomic: a conflict or error restores the original branch and
-reports `conflict rebasing "<message>"; rebase aborted, branch restored to
-pre-rebase state`. The working set must be clean to start.
+Replay failures restore the original branch and report that the rebase was
+aborted. Plan-validation errors leave an interactive rebase open so the plan
+can be fixed and `--continue` retried. The working set must be clean to start.
 
 | Error | Cause |
 |---|---|
@@ -48,7 +48,7 @@ pre-rebase state`. The working set must be clean to start.
 | `rebase already in progress; use --continue or --abort` | second `-i` |
 | `no rebase in progress` | `--continue`/`--abort` with no plan |
 | `first non-drop action must be pick or reword` | invalid plan |
-| `rebase aborted due to changes in the source branch` | upstream moved during the rebase |
+| `rebase aborted due to changes in branch <name>` | the original/current branch moved during the rebase |
 
 ## Differences from Dolt
 

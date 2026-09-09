@@ -15,8 +15,8 @@ SELECT dolt_creds('rm', '<credential-id>');
 
 ## Behaviour
 
-`dolt_creds_new()` creates a credential in the store, returns its id, and
-prints the DoltHub URL for registering the public key. `dolt_creds()` with no
+`dolt_creds_new()` creates a credential and returns one multiline message with
+its id, public key, and DoltHub registration URL. `dolt_creds()` with no
 arguments reports the state: `no credentials; run SELECT dolt_creds_new()`
 until one exists.
 

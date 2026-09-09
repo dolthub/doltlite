@@ -24,14 +24,15 @@ SELECT dolt_merge_base('main', 'feature');
 
 | Option | Meaning |
 |---|---|
-| `branch` | Any [revision](refs.md) to merge in |
+| `branch` | One commit [revision](refs.md) to merge in |
 | `--no-ff` | Always create a merge commit, even when fast-forward is possible |
-| `--squash` | Apply and stage the changes without committing; `dolt_commit` then makes a one-parent commit |
-| `--no-commit` | Merge and stage, leave `is_merging = 1`; `dolt_commit` then makes the two-parent commit |
+| `--squash` | Fast-forward: stage without moving `HEAD`. Three-way: make a one-parent commit; add `--no-commit` to only stage. |
+| `--no-commit` | Three-way: stage and leave `is_merging = 1`, or `0` with `--squash`. A possible fast-forward still advances `HEAD`. |
 | `-m`, `--message` | Message for the merge commit (default `Merge branch 'x' into y`) |
 | `--abort` | Drop an in-progress merge and restore the pre-merge working set |
 
-Returns the new tip hash. A fast-forward returns the merged branch's tip.
+Committed merges return the new tip hash. A fast-forward returns the merged
+branch's tip; an uncommitted three-way merge returns `0`.
 `--squash` and `--no-ff` together: `flags '--squash' and '--no-ff' cannot
 be used together`. Other errors: `usage: dolt_merge('branch')`,
 `merge source not found`, `no merge in progress`.
@@ -66,7 +67,8 @@ auto-resolved: abort, align the schemas on one side, merge again.
 A merge that cannot produce a correct result fails instead of guessing: a
 table whose primary key changed on either side, or a derived index (a
 virtual-table shadow) the engine cannot rebuild from merged content.
-Constraint violations do not block the merge; see
+Inside a plain `BEGIN`, constraint violations are recorded and preserved for
+inspection; autocommit rolls the merge back. See
 [dolt_constraint_violations.md](dolt_constraint_violations.md).
 
 ## dolt_merge_base
