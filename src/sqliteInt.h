@@ -1814,6 +1814,9 @@ struct sqlite3 {
   VtabCtx *pVtabCtx;            /* Context for active vtab connect/create */
   VTable **aVTrans;             /* Virtual tables with open transactions */
   VTable *pDisconnect;          /* Disconnect these in next sqlite3_prepare() */
+#ifdef DOLTLITE_PROLLY
+  ExprList *pDoltliteHistoricalArgs;
+#endif
 #endif
   Hash aFunc;                   /* Hash table of connection functions */
   Hash aCollSeq;                /* All collating sequences */

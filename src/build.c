@@ -503,6 +503,10 @@ Table *sqlite3LocateTableItem(
   SrcItem *p
 ){
   const char *zDb;
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_OMIT_VIRTUALTABLE)
+  ExprList *pSavedHistoricalArgs;
+  Table *pTab;
+#endif
   if( p->fg.fixedSchema ){
     int iDb = sqlite3SchemaToIndex(pParse->db, p->u4.pSchema);
     assert( iDb>=0 && iDb<pParse->db->nDb );
@@ -511,7 +515,16 @@ Table *sqlite3LocateTableItem(
     assert( !p->fg.isSubquery );
     zDb = p->u4.zDatabase;
   }
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_OMIT_VIRTUALTABLE)
+  pSavedHistoricalArgs = pParse->db->pDoltliteHistoricalArgs;
+  pParse->db->pDoltliteHistoricalArgs =
+      p->fg.isTabFunc ? p->u1.pFuncArg : 0;
+  pTab = sqlite3LocateTable(pParse, flags, p->zName, zDb);
+  pParse->db->pDoltliteHistoricalArgs = pSavedHistoricalArgs;
+  return pTab;
+#else
   return sqlite3LocateTable(pParse, flags, p->zName, zDb);
+#endif
 }
 
 /*

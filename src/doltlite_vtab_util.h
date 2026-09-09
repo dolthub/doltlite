@@ -119,7 +119,7 @@ static SQLITE_INLINE int doltliteVtabCommonRowid(
 }
 
 /* Allocates nByte (>= sizeof(DoltliteVtabCommon)); caller fills trailing fields. */
-int doltliteLoadHistoricalTableColumns(sqlite3*, const char*,
+int doltliteLoadHistoricalTableColumns(sqlite3*, const char*, const char*,
                                        DoltliteColInfo*, char**);
 
 static SQLITE_INLINE int doltliteVtabConnectTable(
@@ -153,7 +153,7 @@ static SQLITE_INLINE int doltliteVtabConnectTable(
   }
 
   if( historical ){
-    rc = doltliteLoadHistoricalTableColumns(db, v->zTableName,
+    rc = doltliteLoadHistoricalTableColumns(db, zMod, v->zTableName,
                                              &v->cols, pzErr);
     if( rc==SQLITE_NOTFOUND && (!pzErr || !*pzErr) ){
       if( pzErr ) *pzErr = sqlite3_mprintf("no such table: %s", zMod);

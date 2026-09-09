@@ -2404,9 +2404,11 @@ static void testDeferredRegistrationScope(const char *zPrefix){
   sqlite3 *lazyDb = 0;
   SourceCtx source;
   doltlite_chunk_source api;
+  ProllyHash noiseHash;
   unsigned char *pRefs = 0;
   int nRefs = 0;
   sqlite3_int64 nRow = 0;
+  char *zNoiseHash = 0;
   char zSource[192];
   char zLazy[192];
   char zSql[192];
@@ -2415,6 +2417,7 @@ static void testDeferredRegistrationScope(const char *zPrefix){
   int i;
 
   memset(&source, 0, sizeof(source));
+  memset(&noiseHash, 0, sizeof(noiseHash));
   snprintf(zSource, sizeof(zSource), "%s_registration_source.db", zPrefix);
   snprintf(zLazy, sizeof(zLazy), "%s_registration_lazy.db", zPrefix);
   removeStore(zSource);
@@ -2424,6 +2427,11 @@ static void testDeferredRegistrationScope(const char *zPrefix){
       "CREATE TABLE main_only(id INTEGER PRIMARY KEY, v INTEGER);"
       "INSERT INTO main_only VALUES(1,1);"
       "SELECT dolt_commit('-A','-m','main');"
+      "SELECT dolt_checkout('-b','noise');"
+      "CREATE TABLE noise_only(id INTEGER PRIMARY KEY, v INTEGER);"
+      "INSERT INTO noise_only VALUES(1,1);"
+      "SELECT dolt_commit('-A','-m','noise');"
+      "SELECT dolt_checkout('main');"
       "SELECT dolt_checkout('-b','deep');"
       "CREATE TABLE history_only(id INTEGER PRIMARY KEY, v INTEGER);"
       "INSERT INTO history_only VALUES(1,0);"
@@ -2435,6 +2443,10 @@ static void testDeferredRegistrationScope(const char *zPrefix){
       "SELECT dolt_commit('-am','deep %d')", i, i);
     rc = execSql(sourceDb, zSql);
   }
+  if( rc==SQLITE_OK ){
+    rc = queryText(sourceDb, "SELECT dolt_hashof('noise')", &zNoiseHash);
+  }
+  if( rc==SQLITE_OK ) rc = doltliteHexToHash(zNoiseHash, &noiseHash);
   if( rc==SQLITE_OK ) rc = execSql(sourceDb, "SELECT dolt_checkout('main')");
   check("build deep non-current registration history", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) goto registration_done;
@@ -2458,15 +2470,57 @@ static void testDeferredRegistrationScope(const char *zPrefix){
   rc = queryInt64(lazyDb, "SELECT 1", &nRow);
   check("trivial query does not fault non-current history",
         rc==SQLITE_OK && nRow==1 && source.nRequest<=nStartupRequest+1);
+
+  sourceResetCounters(&source);
+  source.mode = SOURCE_ONE_NOTFOUND;
+  memcpy(source.faultHash, noiseHash.data, PROLLY_HASH_SIZE);
+  rc = queryInt64(lazyDb,
+      "SELECT count(*) FROM dolt_at_history_only('deep')", &nRow);
+  check("literal dolt_at schema lookup stays on its ref",
+        rc==SQLITE_OK && nRow==1 && !source.faultIssued);
+
+  sourceResetCounters(&source);
+  memcpy(source.faultHash, noiseHash.data, PROLLY_HASH_SIZE);
+  rc = queryInt64(lazyDb,
+      "SELECT count(*) FROM dolt_diff_history_only('main','deep')", &nRow);
+  check("literal dolt_diff schema lookup stays on its refs",
+        rc==SQLITE_OK && nRow==1 && !source.faultIssued);
+
+  doltliteHistoricalModulesReset(lazyDb);
+  sourceResetCounters(&source);
+  memcpy(source.faultHash, noiseHash.data, PROLLY_HASH_SIZE);
+  rc = queryInt64(lazyDb,
+      "SELECT count(*) FROM dolt_diff_history_only('main..deep')", &nRow);
+  check("literal dolt_diff range schema lookup stays on its refs",
+        rc==SQLITE_OK && nRow==1 && !source.faultIssued);
+
+  doltliteHistoricalModulesReset(lazyDb);
+  sourceResetCounters(&source);
+  memcpy(source.faultHash, noiseHash.data, PROLLY_HASH_SIZE);
+  rc = queryInt64(lazyDb,
+      "SELECT count(*) FROM dolt_diff_history_only('main...deep')", &nRow);
+  check("literal dolt_diff merge-base schema lookup stays on its refs",
+        rc==SQLITE_OK && nRow==1 && !source.faultIssued);
+
+  sourceResetCounters(&source);
+  memcpy(source.faultHash, noiseHash.data, PROLLY_HASH_SIZE);
   rc = queryInt64(lazyDb,
       "SELECT count(*) FROM dolt_history_history_only('deep')", &nRow);
-  check("historical-only module registers on demand",
-        rc==SQLITE_OK && nRow==13 && source.nRequest>nStartupRequest);
+  check("literal dolt_history schema lookup stays on its ref",
+        rc==SQLITE_OK && nRow==13 && !source.faultIssued);
+
+  source.mode = SOURCE_NORMAL;
+  rc = queryInt64(lazyDb,
+      "WITH ref(v) AS (VALUES('noise')) "
+      "SELECT count(*) FROM ref, dolt_at_noise_only(ref.v)", &nRow);
+  check("expression historical lookup keeps reachable-ref fallback",
+        rc==SQLITE_OK && nRow==1);
 
 registration_done:
   if( lazyDb ) sqlite3_close(lazyDb);
   sourceClose(&source);
   if( sourceDb ) sqlite3_close(sourceDb);
+  sqlite3_free(zNoiseHash);
   sqlite3_free(pRefs);
   removeStore(zSource);
   removeStore(zLazy);
