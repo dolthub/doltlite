@@ -22,7 +22,7 @@ of the version-control features; these pages hold the detail.
 
 - [transactions.md](transactions.md) — what `ROLLBACK` undoes, conflicts inside vs outside `BEGIN`, busy outcomes, refusals
 - [refs.md](refs.md) — revision syntax: branches, tags, hashes, `HEAD~N`, `WORKING`, `STAGED`, ranges, `db@branch` opens, name rules
-
+- [dolt-differences.md](dolt-differences.md) — what is deliberately different from Dolt, and what is missing on purpose
 - [agents.md](agents.md) — the in-database `AGENT.md` guide and the rules an AI agent should know
 
 ## Remotes
