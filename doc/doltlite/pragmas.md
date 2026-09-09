@@ -7,6 +7,8 @@ run on SQLite's own engine and behave exactly as stock.
 
 Verified by running each pragma against `build/doltlite` and a stock
 `sqlite3` of the same version on the same schema and diffing the output.
+`test/oracle_pragma_matrix_test.sh` repeats that in CI and fails when a pragma
+is missing from this page or a classification stops being true.
 
 ## Same as SQLite
 
@@ -14,7 +16,7 @@ Behaviour and output match stock:
 
 `analysis_limit`, `application_id`, `automatic_index`, `busy_timeout`,
 `case_sensitive_like`, `collation_list`, `compile_options`, `count_changes`,
-`data_version`, `database_list`, `defer_foreign_keys`,
+`data_version`, `database_list`, `default_cache_size`, `defer_foreign_keys`,
 `empty_result_callbacks`, `foreign_key_check`, `foreign_key_list`,
 `foreign_keys`, `full_column_names`, `fullfsync`, `function_list`, `hard_heap_limit`,
 `ignore_check_constraints`, `index_info`, `index_list`, `legacy_alter_table`,
@@ -51,7 +53,8 @@ journal, WAL, or freelist for them to act on.
 | `journal_mode` | `wal`, whatever you set |
 | `wal_checkpoint` | `0\|0\|0`. Every mode runs DoltLite garbage collection instead. |
 | `wal_autocheckpoint` | the value you set; nothing to checkpoint |
-| `auto_vacuum` | `0`. `incremental_vacuum` does nothing. `VACUUM` runs garbage collection. |
+| `auto_vacuum` | `0`. `VACUUM` runs garbage collection. |
+| `incremental_vacuum` | nothing; there is no freelist to trim |
 | `encoding` | `UTF-8`, including on an empty database |
 | `page_size` | **the value you set**, even though no pages exist. Do not read it as confirmation. |
 | `page_count`, `max_page_count` | chunk counts, not pages |
