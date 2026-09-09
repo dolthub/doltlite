@@ -7,8 +7,10 @@ statement, with two rules that are easy to miss.
 
 | Inside `BEGIN` | On `ROLLBACK` |
 |---|---|
-| Row writes, `dolt_add`, `dolt_reset`, `dolt_checkout` | Undone, staging included |
+| Row writes, `dolt_add`, `dolt_reset('--soft')` | Undone, staging included |
 | `dolt_branch`, `dolt_tag`, `dolt_branch('-d')` | Kept. Refs are durable the moment the call returns. |
+| `dolt_reset('--hard')` | Kept. The working set is already back at `HEAD`. |
+| `dolt_checkout` | Kept. The connection stays on the new branch. |
 | `dolt_commit`, and any merge, cherry-pick, revert, or pull that completes | Kept, and the SQL transaction is already over |
 
 A Dolt commit is durable when it returns, so a successful `dolt_commit`
@@ -17,8 +19,8 @@ fails with `cannot rollback - no transaction is active`, and a `SAVEPOINT`
 opened before it is gone. The same holds for an operation that creates a
 commit or fast-forwards a branch. Put `dolt_commit` last.
 
-`dolt_checkout` inside a transaction moves the connection. Rows written
-before the checkout stay with the branch they were written on.
+Rows written before a `dolt_checkout` in the same transaction stay with the
+branch they were written on.
 
 ## Conflicts live only inside a transaction
 
