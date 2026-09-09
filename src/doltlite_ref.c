@@ -33,10 +33,15 @@ static int doltliteOpenRevisionBase(
   u8 *pIsBranch
 ){
   DoltliteCommit commit;
+  const char *zBranch = zRef;
   int rc;
 
   *pIsBranch = 0;
-  rc = chunkStoreFindBranch(cs, zRef, pCommit);
+  if( strcmp(zRef, "HEAD")==0 || strcmp(zRef, "head")==0 ){
+    zBranch = chunkStoreGetDefaultBranch(cs);
+    if( !zBranch ) return SQLITE_NOTFOUND;
+  }
+  rc = chunkStoreFindBranch(cs, zBranch, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
     *pIsBranch = 1;
   }else{
@@ -132,7 +137,7 @@ int doltliteResolveOpenRevision(
     }else{
       rc = doltliteOpenRevisionParent(cs, pCommit, n-1);
     }
-    if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   memset(&commit, 0, sizeof(commit));

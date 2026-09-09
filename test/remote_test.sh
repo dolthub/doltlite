@@ -984,6 +984,65 @@ SELECT dolt_branch('feature');
 .quit
 ENDSQL
 
+"$DB" "$TMPDIR/lazy_revision_origin.db" <<'ENDSQL' > /dev/null
+CREATE TABLE base_t(id INTEGER PRIMARY KEY);
+INSERT INTO base_t VALUES(1),(2);
+SELECT dolt_commit('-Am','revision base');
+CREATE TABLE main_t(id INTEGER PRIMARY KEY);
+INSERT INTO main_t VALUES(1),(2),(3);
+SELECT dolt_commit('-Am','revision main');
+SELECT dolt_tag('base-tag','HEAD~1');
+SELECT dolt_checkout('-b','feature');
+CREATE TABLE feature_t(id INTEGER PRIMARY KEY);
+INSERT INTO feature_t VALUES(1),(2),(3),(4);
+SELECT dolt_commit('-Am','revision feature');
+SELECT dolt_checkout('main');
+.quit
+ENDSQL
+
+lazy_revision_base=$("$DB" "$TMPDIR/lazy_revision_origin.db" \
+  "SELECT dolt_hashof('HEAD~1');")
+lazy_revision_tables="SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' ORDER BY name);"
+
+result=$("$DB" "file:lazy_revision_branch?mode=memory&lazy_origin=1" \
+  "SELECT dolt_clone('--lazy','--revision','feature','$R/lazy_revision_origin.db'); SELECT active_branch(); $lazy_revision_tables SELECT count(*) FROM feature_t;")
+check "lazy clone opens a non-default branch working set" "0
+feature
+base_t,feature_t,main_t
+4" "$result"
+
+result=$("$DB" "file:lazy_revision_commit?mode=memory&lazy_origin=1" \
+  "SELECT dolt_clone('--lazy','--revision','$lazy_revision_base','$R/lazy_revision_origin.db'); SELECT IFNULL(active_branch(),'NULL'); SELECT dolt_hashof('HEAD'); $lazy_revision_tables SELECT count(*) FROM base_t;")
+check "lazy clone opens a detached commit" "0
+NULL
+$lazy_revision_base
+base_t
+2" "$result"
+
+result=$("$DB" "file:lazy_revision_tag?mode=memory&lazy_origin=1" \
+  "SELECT dolt_clone('--lazy','--revision','base-tag','$R/lazy_revision_origin.db'); SELECT IFNULL(active_branch(),'NULL'); SELECT dolt_hashof('HEAD'); $lazy_revision_tables SELECT count(*) FROM base_t;")
+check "lazy clone opens a detached tag" "0
+NULL
+$lazy_revision_base
+base_t
+2" "$result"
+
+result=$("$DB" "file:lazy_revision_ancestor?mode=memory&lazy_origin=1" \
+  "SELECT dolt_clone('--lazy','--revision','HEAD~1','$R/lazy_revision_origin.db'); SELECT IFNULL(active_branch(),'NULL'); SELECT dolt_hashof('HEAD'); $lazy_revision_tables SELECT count(*) FROM base_t;")
+check "lazy clone opens a detached ancestor" "0
+NULL
+$lazy_revision_base
+base_t
+2" "$result"
+
+result=$("$DB" "file:lazy_revision_write?mode=memory&lazy_origin=1" \
+  "SELECT dolt_clone('--lazy','--revision','base-tag','$R/lazy_revision_origin.db'); INSERT INTO base_t VALUES(3);" 2>&1)
+check_match "lazy detached revision rejects writes" "readonly|read-only" "$result"
+
+result=$("$DB" "file:lazy_revision_requires_lazy?mode=memory&lazy_origin=1" \
+  "SELECT dolt_clone('--revision','main','$R/lazy_revision_origin.db');" 2>&1)
+check_match "clone revision requires lazy mode" "revision requires --lazy" "$result"
+
 lazy_parity_sql="
 SELECT count(*) || '|' || sum(id) || '|' || sum(length(payload)) FROM lazy_rows;
 SELECT count(*) || '|' || max(message='lazy update') FROM dolt_log;
