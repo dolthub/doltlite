@@ -1869,7 +1869,6 @@ ioerr3 ioerr3-2.3.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.4.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.5.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.6.3 class=intentional  # IO-fault point shift
-ioerr3 ioerr3-2.7.3 class=intentional  # IO-fault point shift
 journal2 journal2-1.1 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.2 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.5 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
@@ -3752,13 +3751,14 @@ sysfault sysfault-2.2-vfsfault-transient.50 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.51 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.52 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.53 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.54 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.55 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.56 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.57 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.58 class=intentional
-sysfault sysfault-2.2-vfsfault-transient.60 class=intentional
+sysfault sysfault-2.2-vfsfault-transient.59 class=intentional
+sysfault sysfault-2.2-vfsfault-persistent.107 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.110 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.111 @coverage class=intentional
+sysfault sysfault-2.2-vfsfault-transient.107 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-transient.110 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-transient.111 @coverage class=intentional
 # section 3: fstat/fallocate EIO injection — stock expects every fault
@@ -5110,7 +5110,6 @@ ioerr ioerr-7.54.1 class=intentional  # hot-journal prep copies absent -journal 
 ioerr ioerr-7.55.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.56.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.57.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.58.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1 class=intentional  # master-journal prep copies absent -journal sidecar
 # ioerr-2 VACUUM gc-rewrite window: the injected error lands in a best-effort
 # finalization write gc deliberately consumes, so the statement succeeds after
@@ -5611,7 +5610,6 @@ sysfault sysfault-2.1-vfsfault-transient.109 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.110 @coverage class=intentional
 sysfault sysfault-2.1-vfsfault-transient.111 @coverage class=intentional
 sysfault sysfault-2.1-vfsfault-transient.112 @coverage class=intentional
-sysfault sysfault-2.1-vfsfault-transient.113 @coverage class=intentional
 sysfault sysfault-2.1-vfsfault-transient.88 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.89 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.90 class=intentional
@@ -5627,11 +5625,9 @@ sysfault sysfault-2.1-vfsfault-transient.99 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.108 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.109 class=intentional
 sysfault sysfault-2.2-vfsfault-persistent.112 @coverage class=intentional
-sysfault sysfault-2.2-vfsfault-persistent.113 @coverage class=intentional
 sysfault sysfault-2.2-vfsfault-transient.108 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.109 class=intentional
 sysfault sysfault-2.2-vfsfault-transient.112 @coverage class=intentional
-sysfault sysfault-2.2-vfsfault-transient.113 @coverage class=intentional
 
 stmt stmt-1.2 class=intentional  # retained graph-lock handle raises the instrumented open-file count
 stmt stmt-1.5 class=intentional  # retained graph-lock handle raises the instrumented open-file count

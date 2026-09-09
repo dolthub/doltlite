@@ -2399,6 +2399,79 @@ deferred_done:
   removeStore(zGuard);
 }
 
+static void testDeferredRegistrationScope(const char *zPrefix){
+  sqlite3 *sourceDb = 0;
+  sqlite3 *lazyDb = 0;
+  SourceCtx source;
+  doltlite_chunk_source api;
+  unsigned char *pRefs = 0;
+  int nRefs = 0;
+  sqlite3_int64 nRow = 0;
+  char zSource[192];
+  char zLazy[192];
+  char zSql[192];
+  int nStartupRequest = 0;
+  int rc;
+  int i;
+
+  memset(&source, 0, sizeof(source));
+  snprintf(zSource, sizeof(zSource), "%s_registration_source.db", zPrefix);
+  snprintf(zLazy, sizeof(zLazy), "%s_registration_lazy.db", zPrefix);
+  removeStore(zSource);
+  rc = openDb(zSource, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, &sourceDb);
+  if( rc==SQLITE_OK ){
+    rc = execSql(sourceDb,
+      "CREATE TABLE main_only(id INTEGER PRIMARY KEY, v INTEGER);"
+      "INSERT INTO main_only VALUES(1,1);"
+      "SELECT dolt_commit('-A','-m','main');"
+      "SELECT dolt_checkout('-b','deep');"
+      "CREATE TABLE history_only(id INTEGER PRIMARY KEY, v INTEGER);"
+      "INSERT INTO history_only VALUES(1,0);"
+      "SELECT dolt_commit('-A','-m','deep 0')");
+  }
+  for(i=1; i<=12 && rc==SQLITE_OK; i++){
+    snprintf(zSql, sizeof(zSql),
+      "UPDATE history_only SET v=%d;"
+      "SELECT dolt_commit('-am','deep %d')", i, i);
+    rc = execSql(sourceDb, zSql);
+  }
+  if( rc==SQLITE_OK ) rc = execSql(sourceDb, "SELECT dolt_checkout('main')");
+  check("build deep non-current registration history", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto registration_done;
+
+  rc = sourceOpen(&source, zSource);
+  if( rc==SQLITE_OK ) rc = serializeRefs(&source, &pRefs, &nRefs);
+  check("serialize deep registration refs", rc==SQLITE_OK && pRefs && nRefs>0);
+  if( rc!=SQLITE_OK ) goto registration_done;
+  initSourceApi(&source, &api);
+  rc = createLazyFile(zLazy, pRefs, nRefs);
+  if( rc==SQLITE_OK ) rc = openDb(zLazy, SQLITE_OPEN_READWRITE, &lazyDb);
+  check("open deep refs-only registration store", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto registration_done;
+
+  sourceResetCounters(&source);
+  rc = doltlite_set_chunk_source(lazyDb, "main", &api);
+  nStartupRequest = source.nRequest;
+  check("deferred registration loads only current branch state",
+        rc==SQLITE_OK && nStartupRequest>0 && nStartupRequest<8);
+  if( rc!=SQLITE_OK ) goto registration_done;
+  rc = queryInt64(lazyDb, "SELECT 1", &nRow);
+  check("trivial query does not fault non-current history",
+        rc==SQLITE_OK && nRow==1 && source.nRequest<=nStartupRequest+1);
+  rc = queryInt64(lazyDb,
+      "SELECT count(*) FROM dolt_history_history_only('deep')", &nRow);
+  check("historical-only module registers on demand",
+        rc==SQLITE_OK && nRow==13 && source.nRequest>nStartupRequest);
+
+registration_done:
+  if( lazyDb ) sqlite3_close(lazyDb);
+  sourceClose(&source);
+  if( sourceDb ) sqlite3_close(sourceDb);
+  sqlite3_free(pRefs);
+  removeStore(zSource);
+  removeStore(zLazy);
+}
+
 int main(void){
   sqlite3 *sourceDb = 0;
   SourceCtx source;
@@ -2516,6 +2589,7 @@ int main(void){
   testIntegrityErrorConsumed(
       zIntegrity, &source, &api, pNewRefs, nNewRefs);
   testDeferredHydrationInfrastructure(zPrefix);
+  testDeferredRegistrationScope(zPrefix);
   testDetachedInitLazyRejected(zSource, sourceDb, pNewRefs, nNewRefs);
   testRegistrationRefreshesPeerAdvance(zSource, sourceDb, &source, &api);
   testCatalogMissSurfaces(zPrefix, zSource, sourceDb, &source, &api);

@@ -1042,11 +1042,7 @@ static void doltliteCommitFunc(
     sqlite3_result_error_code(context, rc);
     return;
   }
-  rc = doltliteRegisterHistoricalTablesForCatalog(db, &catalogHash);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
+  doltliteHistoricalModulesReset(db);
   rc = doltliteRegisterBlameTables(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
