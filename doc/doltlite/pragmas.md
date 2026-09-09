@@ -16,7 +16,7 @@ Behaviour and output match stock:
 `case_sensitive_like`, `collation_list`, `compile_options`, `count_changes`,
 `data_version`, `database_list`, `defer_foreign_keys`,
 `empty_result_callbacks`, `foreign_key_check`, `foreign_key_list`,
-`foreign_keys`, `full_column_names`, `function_list`, `hard_heap_limit`,
+`foreign_keys`, `full_column_names`, `fullfsync`, `function_list`, `hard_heap_limit`,
 `ignore_check_constraints`, `index_info`, `index_list`, `legacy_alter_table`,
 `module_list`, `optimize`, `pragma_list`, `query_only`, `read_uncommitted`,
 `recursive_triggers`, `reverse_unordered_selects`, `short_column_names`,
@@ -33,7 +33,6 @@ versioned table like any other.
 |---|---|
 | `cache_size` | Sizes the chunk cache. Negative values are a KiB budget as in SQLite. The floor is the engine default of 16384 chunks; smaller requests are raised to it. Reads back `-2000` (SQLite's default) until set, which understates the real capacity. |
 | `synchronous` | `OFF` skips fsync on commit; every other level syncs. |
-| `fullfsync` | Honoured on macOS. |
 | `integrity_check`, `quick_check` | Run SQLite's row and index checks, then walk the chunk graph of the named tables and of every branch, tag, and working set. Missing or corrupt chunks count as errors. |
 | `table_info`, `table_xinfo` | Non-integer primary key columns report `notnull=1`, because clustered keys are `NOT NULL`. |
 | `table_list` | A table with a non-integer primary key reports `wr=1`; it is stored like a `WITHOUT ROWID` table. |
