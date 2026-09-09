@@ -16,6 +16,10 @@ of the version-control features; these pages hold the detail.
 - [storage-format.md](storage-format.md) — the chunk-store file and frozen format version 12
 - [sqlite-files.md](sqlite-files.md) — opening and attaching stock SQLite databases
 
+## Version control
+
+- [refs.md](refs.md) — revision syntax: branches, tags, hashes, `HEAD~N`, `WORKING`, `STAGED`, ranges, `db@branch` opens, name rules
+
 ## Remotes
 
 - [remotes.md](remotes.md) — push, fetch, pull, clone, lazy clones, filesystem and HTTP URLs
