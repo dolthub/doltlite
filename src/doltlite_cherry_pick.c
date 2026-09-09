@@ -183,11 +183,14 @@ int applyMergedCatalogAndCommit(
 
   {
     char **azReindex = 0;
+    char **azRebuild = 0;
     int nReindex = 0;
+    int nRebuild = 0;
     rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
                                 &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
                                 bPreferOurMaster, 0,
-                                &azReindex, &nReindex, 0, 0);
+                                &azReindex, &nReindex,
+                                &azRebuild, &nRebuild);
     if( rc!=SQLITE_OK ){
       if( pzApplyErr && zMergeErr ){
         *pzApplyErr = zMergeErr;
@@ -196,6 +199,7 @@ int applyMergedCatalogAndCommit(
       sqlite3_free(zMergeErr);
       doltliteTxnStateClear(&savedState);
       doltliteFreeNameList(azReindex, nReindex);
+      doltliteFreeNameList(azRebuild, nRebuild);
       return rc;
     }
     sqlite3_free(zMergeErr);
@@ -203,6 +207,7 @@ int applyMergedCatalogAndCommit(
     rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
     if( rc!=SQLITE_OK ){
       doltliteFreeNameList(azReindex, nReindex);
+      doltliteFreeNameList(azRebuild, nRebuild);
       return doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
     }
     graphLocked = 1;
@@ -214,7 +219,11 @@ int applyMergedCatalogAndCommit(
     if( rc==SQLITE_OK && nReindex>0 ){
       rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
     }
+    if( rc==SQLITE_OK && nRebuild>0 ){
+      rc = doltliteRebuildVirtualTables(db, azRebuild, nRebuild);
+    }
     doltliteFreeNameList(azReindex, nReindex);
+    doltliteFreeNameList(azRebuild, nRebuild);
     if( rc!=SQLITE_OK ) goto apply_rollback;
   }
 

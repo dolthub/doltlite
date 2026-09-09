@@ -849,6 +849,34 @@ static int mergeRefLoadCatalogs(
   return SQLITE_OK;
 }
 
+int doltliteRebuildVirtualTables(
+  sqlite3 *db,
+  char **azRebuild,
+  int nRebuild
+){
+  int i;
+  int rc = SQLITE_OK;
+  (void)sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1", 0, 0, 0);
+  for(i=0; i<nRebuild && rc==SQLITE_OK; i++){
+    const char *zOwner = azRebuild[i];
+    Table *pTab = sqlite3FindTable(db, zOwner, "main");
+    char *zSql;
+    if( pTab && IsVirtual(pTab) && pTab->u.vtab.nArg>0
+     && sqlite3_stricmp(pTab->u.vtab.azArg[0], "vec1")!=0 ){
+      zSql = sqlite3_mprintf(
+          "INSERT INTO \"%w\"(\"%w\") VALUES('rebuild')", zOwner, zOwner);
+    }else{
+      zSql = sqlite3_mprintf(
+          "INSERT INTO \"%w\"(cmd, arg) VALUES('rebuild',"
+          " (SELECT val FROM \"%w_model\" WHERE id=1))", zOwner, zOwner);
+    }
+    if( !zSql ) return SQLITE_NOMEM;
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+  }
+  return rc;
+}
+
 static int mergeRefInstallMergedCatalog(
   sqlite3 *db,
   const ProllyHash *pAncCat,
@@ -898,30 +926,8 @@ static int mergeRefInstallMergedCatalog(
   /* Rebuild derived vtab shadows from merged %_base while the catalog
   ** is live. Populated only on otherwise conflict-free merges. */
   if( *pnRebuildVtabs>0 && nMergeConflicts==0 ){
-    int ri;
-    /* Reload schema so FindTable sees the just-switched catalog. */
-    (void)sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1", 0, 0, 0);
-    for(ri=0; ri<*pnRebuildVtabs && rc==SQLITE_OK; ri++){
-      const char *zOwner = (*pazRebuildVtabs)[ri];
-      Table *pTab = sqlite3FindTable(db, zOwner, "main");
-      char *zSql;
-      /* vec1 takes the stored model; fts names itself in a hidden column. */
-      if( pTab && IsVirtual(pTab) && pTab->u.vtab.nArg>0
-       && sqlite3_stricmp(pTab->u.vtab.azArg[0], "vec1")!=0 ){
-        zSql = sqlite3_mprintf(
-            "INSERT INTO \"%w\"(\"%w\") VALUES('rebuild')", zOwner, zOwner);
-      }else{
-        zSql = sqlite3_mprintf(
-            "INSERT INTO \"%w\"(cmd, arg) VALUES('rebuild',"
-            " (SELECT val FROM \"%w_model\" WHERE id=1))", zOwner, zOwner);
-      }
-      if( !zSql ){
-        rc = SQLITE_NOMEM;
-        break;
-      }
-      rc = sqlite3_exec(db, zSql, 0, 0, 0);
-      sqlite3_free(zSql);
-    }
+    rc = doltliteRebuildVirtualTables(
+        db, *pazRebuildVtabs, *pnRebuildVtabs);
   }
   doltliteFreeNameList(*pazRebuildVtabs, *pnRebuildVtabs);
   *pazRebuildVtabs = 0;
