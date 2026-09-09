@@ -20,7 +20,7 @@ Behaviour and output match stock:
 `ignore_check_constraints`, `index_info`, `index_list`, `legacy_alter_table`,
 `module_list`, `optimize`, `pragma_list`, `query_only`, `read_uncommitted`,
 `recursive_triggers`, `reverse_unordered_selects`, `short_column_names`,
-`shrink_memory`, `soft_heap_limit`, `table_xinfo`, `temp_store`,
+`shrink_memory`, `soft_heap_limit`, `temp_store`,
 `temp_store_directory`, `threads`, `trusted_schema`, `user_version`.
 
 Two of these deserve a note. `query_only` also blocks every `dolt_*` function
