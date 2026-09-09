@@ -33,6 +33,7 @@ of the version-control features; these pages hold the detail.
 
 ## Extensions
 
+- [wasm.md](wasm.md) — the WebAssembly build: persistence, remotes over XHR / worker threads, build flags
 - [vec1.md](vec1.md) — versioned vector search
 
 ## Project
