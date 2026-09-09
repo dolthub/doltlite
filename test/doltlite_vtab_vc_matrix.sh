@@ -288,6 +288,30 @@ check "merge_clean_shadow_search" "610229,900212" \
 check "merge_clean_shadow_integrity" "" \
   "$(run_sql "INSERT INTO docs(docs) VALUES('integrity-check');" "$DB")"
 
+scenario "cherry-pick rebuilds converged fts5 metadata"
+newdb
+run_sql "CREATE VIRTUAL TABLE docs USING fts5(body);
+INSERT INTO docs(rowid,body) VALUES(1,'base doc');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','source');
+INSERT INTO docs(rowid,body) VALUES(10,'source one doc');
+INSERT INTO docs(rowid,body) VALUES(11,'source two doc');
+SELECT dolt_commit('-Am','source');
+SELECT dolt_checkout('main');
+DELETE FROM docs WHERE rowid=1;
+INSERT INTO docs(rowid,body) VALUES(20,'target one doc');
+INSERT INTO docs(rowid,body) VALUES(21,'target two doc');
+INSERT INTO docs(rowid,body) VALUES(22,'target three doc');
+INSERT INTO docs(docs) VALUES('rebuild');
+SELECT dolt_commit('-Am','target');
+SELECT dolt_cherry_pick('source');" "$DB" > /dev/null
+check "cherry_pick_fts5_content" "5" \
+  "$(run_sql "SELECT count(*) FROM docs;" "$DB")"
+check "cherry_pick_fts5_search" "5" \
+  "$(run_sql "SELECT count(*) FROM docs WHERE docs MATCH 'doc';" "$DB")"
+check "cherry_pick_fts5_integrity" "" \
+  "$(run_sql "INSERT INTO docs(docs) VALUES('integrity-check');" "$DB")"
+
 scenario "merge adopts a branch-added vtab of every flavor"
 newdb
 run_sql "CREATE TABLE plain(k INTEGER PRIMARY KEY, v TEXT); INSERT INTO plain VALUES(1,'p');
