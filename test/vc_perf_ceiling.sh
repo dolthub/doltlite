@@ -21,6 +21,8 @@ RUNS=${VC_PERF_RUNS:-3}
 TABLES=${VC_PERF_TABLES:-800}
 ROWS_PER_TABLE=${VC_PERF_ROWS_PER_TABLE:-125}
 BRANCHES=${VC_PERF_BRANCHES:-300}
+HISTORY_BRANCHES=${VC_PERF_HISTORY_BRANCHES:-200}
+HISTORY_DEPTH=${VC_PERF_HISTORY_DEPTH:-200}
 CHECKOUT_TABLES=${VC_PERF_CHECKOUT_TABLES:-400}
 CHECKOUT_ROWS_PER_TABLE=${VC_PERF_CHECKOUT_ROWS_PER_TABLE:-250}
 MERGE_ROWS=${VC_PERF_MERGE_ROWS:-100000}
@@ -126,6 +128,34 @@ make_branch_db() {
   run_sql_file "$db" "$TMPDIR/branches.sql" "$bin"
 }
 
+make_history_db() {
+  local db="$1"
+  local bin="$2"
+  local sql="$TMPDIR/history.sql"
+  {
+    echo "CREATE TABLE anchor(id INTEGER PRIMARY KEY, v INTEGER);"
+    echo "INSERT INTO anchor VALUES(1,0);"
+    echo "SELECT dolt_commit('-A','-m','base');"
+    for ((i=1; i<=HISTORY_BRANCHES; i++)); do
+      printf -v branch "noise_%04d" "$i"
+      echo "SELECT dolt_checkout('-b','$branch');"
+      echo "UPDATE anchor SET v=$i;"
+      echo "SELECT dolt_commit('-am','noise $i');"
+      echo "SELECT dolt_checkout('main');"
+    done
+    echo "SELECT dolt_checkout('-b','zz_history');"
+    echo "CREATE TABLE history_only(id INTEGER PRIMARY KEY, v INTEGER);"
+    echo "INSERT INTO history_only VALUES(1,0);"
+    echo "SELECT dolt_commit('-A','-m','history 0');"
+    for ((i=1; i<=HISTORY_DEPTH; i++)); do
+      echo "UPDATE history_only SET v=$i;"
+      echo "SELECT dolt_commit('-am','history $i');"
+    done
+    echo "SELECT dolt_checkout('main');"
+  } > "$sql"
+  run_sql_file "$db" "$sql" "$bin"
+}
+
 make_merge_data_db() {
   local db="$1"
   local bin="$2"
@@ -195,6 +225,7 @@ prepare_fixtures() {
   run_sql_file "$dest/many_schema.db" "$TMPDIR/dirty_schema.sql" "$bin"
 
   make_branch_db "$dest/branches.db" "$bin"
+  make_history_db "$dest/history.db" "$bin"
 
   make_many_tables_db "$dest/checkout.db" "$CHECKOUT_TABLES" "$CHECKOUT_ROWS_PER_TABLE" "$bin"
   run_sql "$dest/checkout.db" "SELECT dolt_branch('feat');" "$bin"
@@ -390,6 +421,12 @@ bench_sql "branch_list_many_branches" "branches.db" \
   "SELECT count(*) FROM dolt_branches;" 35
 bench_sql "branch_create_delete" "branches.db" \
   "SELECT dolt_branch('tmp_perf'); SELECT dolt_branch('-D','tmp_perf');" 40
+bench_sql "at_literal_deep_history" "history.db" \
+  "SELECT count(*) FROM dolt_at_history_only('zz_history');" 100
+bench_sql "diff_literal_deep_history" "history.db" \
+  "SELECT count(*) FROM dolt_diff_history_only('main','zz_history');" 120
+bench_sql "history_literal_deep_history" "history.db" \
+  "SELECT count(*) FROM dolt_history_history_only('zz_history');" 150
 bench_sql "checkout_branch_clean" "checkout.db" \
   "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');" 150
 bench_sql "merge_data_no_conflicts" "merge_data.db" \
@@ -436,7 +473,8 @@ tables, and schema-dirty cases update 1 row plus add a column in 20 tables.
 Branch tests use $BRANCHES branches, checkout uses a clean $CHECKOUT_TABLES-table
 branch switch over $((CHECKOUT_TABLES * CHECKOUT_ROWS_PER_TABLE)) rows, and merge
 tests use $MERGE_ROWS-row tables with $MERGE_CHANGE_ROWS changed or conflicting
-rows per side.
+rows per side. Historical queries use $HISTORY_BRANCHES unrelated branches and
+a $HISTORY_DEPTH-commit target history.
 
 IO probe: ${IO_PROBE_NOTE} (reference ${VC_PERF_IO_REF_US}us);
 ceilings scaled by ${IO_SCALE}x.

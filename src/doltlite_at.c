@@ -3,6 +3,7 @@
 
 #include "doltlite_vtab_util.h"
 #include "doltlite_commit.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 
 #include <string.h>
@@ -201,17 +202,197 @@ int doltliteSideColsLoad(
   return SQLITE_OK;
 }
 
+static const char *atHistoricalLiteralArg(sqlite3 *db, int iArg){
+  ExprList *pArgs = db->pDoltliteHistoricalArgs;
+  Expr *pExpr;
+  if( !pArgs || iArg<0 || iArg>=pArgs->nExpr ) return 0;
+  pExpr = pArgs->a[iArg].pExpr;
+  return pExpr && pExpr->op==TK_STRING ? pExpr->u.zToken : 0;
+}
+
+static int atResolveSchemaRef(
+  sqlite3 *db,
+  const char *zRef,
+  int branchEffective,
+  int allowWorkspace,
+  ProllyHash *pCommit,
+  ProllyHash *pCatalog
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteCommit commit;
+  int rc;
+
+  memset(&commit, 0, sizeof(commit));
+  memset(pCommit, 0, sizeof(*pCommit));
+  memset(pCatalog, 0, sizeof(*pCatalog));
+  if( allowWorkspace
+   && (doltliteRefIsWorking(zRef) || doltliteRefIsStaged(zRef)) ){
+    rc = doltliteResolveCatalogHashForRef(db, zRef, pCatalog);
+    if( rc==SQLITE_OK ) doltliteGetSessionHead(db, pCommit);
+    return rc;
+  }
+
+  rc = doltliteResolveRef(db, zRef, pCommit);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pCommit, &commit);
+  if( rc==SQLITE_OK ) *pCatalog = commit.catalogHash;
+  doltliteCommitClear(&commit);
+  if( rc==SQLITE_OK && branchEffective && cs ){
+    ProllyHash branchCommit;
+    if( chunkStoreFindBranch(cs, zRef, &branchCommit)==SQLITE_OK
+     && !prollyHashIsEmpty(&branchCommit) ){
+      ProllyHash effective;
+      rc = doltliteResolveBranchEffectiveCatalog(
+          cs, zRef, &branchCommit, pCatalog, &effective);
+      if( rc==SQLITE_OK ) *pCatalog = effective;
+    }
+  }
+  return rc;
+}
+
+static int atResolveLiteralScope(
+  sqlite3 *db,
+  const char *zModule,
+  ProllyHash *aCommit,
+  ProllyHash *aCatalog,
+  int *pnRef,
+  int *pScoped,
+  char **pzErr
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ExprList *pArgs = db->pDoltliteHistoricalArgs;
+  const char *azRef[2] = {0, 0};
+  char *zLeft = 0;
+  char *zRight = 0;
+  int branchEffective = 0;
+  int allowWorkspace = 0;
+  int nRef = 0;
+  int rangeType = DOLTLITE_RANGE_NONE;
+  int primary;
+  int i;
+  int rc = SQLITE_OK;
+
+  *pnRef = 0;
+  *pScoped = 0;
+  if( !pArgs || !zModule ) return SQLITE_OK;
+  if( sqlite3_strnicmp(zModule, "dolt_at_", 8)==0 ){
+    if( pArgs->nExpr!=1 ) return SQLITE_OK;
+    azRef[0] = atHistoricalLiteralArg(db, 0);
+    branchEffective = 1;
+    allowWorkspace = 1;
+    nRef = azRef[0] ? 1 : 0;
+  }else if( sqlite3_strnicmp(zModule, "dolt_history_", 13)==0 ){
+    if( pArgs->nExpr!=1 ) return SQLITE_OK;
+    azRef[0] = atHistoricalLiteralArg(db, 0);
+    nRef = azRef[0] ? 1 : 0;
+  }else if( sqlite3_strnicmp(zModule, "dolt_diff_", 10)==0 ){
+    allowWorkspace = 1;
+    if( pArgs->nExpr==2 ){
+      azRef[0] = atHistoricalLiteralArg(db, 1);
+      azRef[1] = atHistoricalLiteralArg(db, 0);
+      nRef = azRef[0] && azRef[1] ? 2 : 0;
+    }else if( pArgs->nExpr==1 ){
+      const char *zSpec = atHistoricalLiteralArg(db, 0);
+      if( zSpec ){
+        rc = doltliteSplitRevisionRange(
+            zSpec, &zLeft, &zRight, &rangeType);
+        if( rc==SQLITE_OK ){
+          azRef[0] = zRight;
+          azRef[1] = zLeft;
+          nRef = 2;
+        }else if( rc==SQLITE_NOMEM ){
+          goto done;
+        }else{
+          rc = SQLITE_OK;
+        }
+      }
+    }
+  }
+  if( nRef==0 ) goto done;
+
+  for(i=0; i<nRef; i++){
+    rc = atResolveSchemaRef(db, azRef[i], branchEffective, allowWorkspace,
+                            &aCommit[i], &aCatalog[i]);
+    if( rc!=SQLITE_OK ) goto resolve_failed;
+  }
+  if( rangeType==DOLTLITE_RANGE_THREE_DOT ){
+    DoltliteCommit ancestorCommit;
+    ProllyHash ancestor;
+    memset(&ancestorCommit, 0, sizeof(ancestorCommit));
+    rc = doltliteFindAncestor(db, &aCommit[1], &aCommit[0], &ancestor);
+    if( rc==SQLITE_OK ){
+      rc = doltliteLoadCommit(db, &ancestor, &ancestorCommit);
+    }
+    if( rc==SQLITE_OK ){
+      aCommit[1] = ancestor;
+      aCatalog[1] = ancestorCommit.catalogHash;
+    }
+    doltliteCommitClear(&ancestorCommit);
+    if( rc!=SQLITE_OK ) goto resolve_failed;
+  }
+  *pnRef = nRef;
+  *pScoped = 1;
+  goto done;
+
+resolve_failed:
+  primary = rc & 0xff;
+  if( atTakeChunkSourceError(cs, pzErr, &rc) ) goto done;
+  if( primary==SQLITE_ERROR || primary==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+
+done:
+  sqlite3_free(zLeft);
+  sqlite3_free(zRight);
+  return rc;
+}
+
+static int atLoadSchemaColumns(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pCatalog,
+  const char *zTableName,
+  DoltliteColInfo *pCols
+){
+  SchemaEntry entry;
+  int found = 0;
+  sqlite3 *tmp = 0;
+  int rc;
+
+  memset(&entry, 0, sizeof(entry));
+  if( prollyHashIsEmpty(pCatalog) ) return SQLITE_OK;
+  rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatalog,
+                                  zTableName, &entry, &found);
+  if( rc==SQLITE_OK && found && entry.zSql ){
+    rc = sqlite3_open(":memory:", &tmp);
+    if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+    if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTableName, pCols);
+    if( rc==SQLITE_OK && pCols->nCol<=0 ){
+      doltliteFreeColInfo(pCols);
+      rc = SQLITE_NOTFOUND;
+    }
+  }
+  if( tmp ) sqlite3_close(tmp);
+  clearSchemaEntry(&entry);
+  return rc;
+}
+
 int doltliteLoadHistoricalTableColumns(
   sqlite3 *db,
+  const char *zModule,
   const char *zTableName,
   DoltliteColInfo *pCols,
   char **pzErr
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
-  int has, rc;
+  ProllyHash aCommit[2];
+  ProllyHash aCatalog[2];
   DoltliteCommitQueue q;
   ProllyHash cur;
+  int nRef = 0;
+  int scoped = 0;
+  int has;
+  int i;
+  int rc;
 
   memset(pCols, 0, sizeof(*pCols));
   pCols->iPkCol = -1;
@@ -222,36 +403,42 @@ int doltliteLoadHistoricalTableColumns(
     doltliteFreeColInfo(pCols);
   }
 
+  memset(aCommit, 0, sizeof(aCommit));
+  memset(aCatalog, 0, sizeof(aCatalog));
+  rc = atResolveLiteralScope(db, zModule, aCommit, aCatalog,
+                             &nRef, &scoped, pzErr);
+  for(i=0; rc==SQLITE_OK && i<nRef && pCols->nCol<=0; i++){
+    rc = atLoadSchemaColumns(
+        db, cs, pCache, &aCatalog[i], zTableName, pCols);
+    if( rc==SQLITE_NOTFOUND ){
+      if( !atTakeChunkSourceError(cs, pzErr, &rc) ) rc = SQLITE_OK;
+    }else if( rc!=SQLITE_OK ){
+      atTakeChunkSourceError(cs, pzErr, &rc);
+    }
+  }
+  if( rc!=SQLITE_OK || pCols->nCol>0 ) return rc;
+
   memset(&q, 0, sizeof(q));
   memset(&cur, 0, sizeof(cur));
   rc = doltliteCommitQueueInit(&q, &cur);
-  if( rc==SQLITE_OK ) rc = atEnqueueReachableRoots(db, &q);
+  if( scoped ){
+    for(i=0; i<nRef && rc==SQLITE_OK; i++){
+      rc = doltliteCommitQueueEnqueue(&q, &aCommit[i]);
+    }
+  }else if( rc==SQLITE_OK ){
+    rc = atEnqueueReachableRoots(db, &q);
+  }
   while( rc==SQLITE_OK && pCols->nCol<=0 ){
     DoltliteCommit commit;
-    SchemaEntry entry;
-    int found = 0;
-    sqlite3 *tmp = 0;
     memset(&commit, 0, sizeof(commit));
-    memset(&entry, 0, sizeof(entry));
     rc = doltliteCommitQueueNext(&q, &cur, &has);
     if( rc!=SQLITE_OK || !has ) break;
     rc = doltliteLoadCommit(db, &cur, &commit);
     if( rc==SQLITE_OK ) rc = doltliteCommitQueueEnqueueParents(&q, &commit);
     if( rc==SQLITE_OK ){
-      rc = loadSchemaEntryFromCatalog(db, cs, pCache, &commit.catalogHash,
-                                      zTableName, &entry, &found);
+      rc = atLoadSchemaColumns(
+          db, cs, pCache, &commit.catalogHash, zTableName, pCols);
     }
-    if( rc==SQLITE_OK && found && entry.zSql ){
-      rc = sqlite3_open(":memory:", &tmp);
-      if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
-      if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTableName, pCols);
-      if( rc==SQLITE_OK && pCols->nCol<=0 ){
-        doltliteFreeColInfo(pCols);
-        rc = SQLITE_NOTFOUND;
-      }
-    }
-    if( tmp ) sqlite3_close(tmp);
-    clearSchemaEntry(&entry);
     doltliteCommitClear(&commit);
     if( rc==SQLITE_NOTFOUND ){
       if( !atTakeChunkSourceError(cs, pzErr, &rc) ) rc = SQLITE_OK;
@@ -261,9 +448,7 @@ int doltliteLoadHistoricalTableColumns(
   }
   doltliteCommitQueueClear(&q);
 
-  if( rc==SQLITE_OK && pCols->nCol<=0 ){
-    return SQLITE_NOTFOUND;
-  }
+  if( rc==SQLITE_OK && pCols->nCol<=0 ) return SQLITE_NOTFOUND;
   return rc;
 }
 
