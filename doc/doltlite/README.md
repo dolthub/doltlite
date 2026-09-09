@@ -6,6 +6,7 @@ of the version-control features; these pages hold the detail.
 ## Build and embed
 
 - [building.md](building.md) — macOS, Linux, Windows, WebAssembly builds and flags
+- [cli.md](cli.md) — the `doltlite` shell: what differs from `sqlite3`, URI parameters, environment variables
 - [embedding.md](embedding.md) — C API surface, exported symbols, C / Python / Go quickstarts
 - [using-existing-sqlite-bindings.md](using-existing-sqlite-bindings.md) — pointing rusqlite, go-sqlite3, Dart, .NET and FFI bindings at libdoltlite
 
@@ -14,13 +15,15 @@ of the version-control features; these pages hold the detail.
 - [sqlite-compatibility.md](sqlite-compatibility.md) — where a DoltLite-format database differs from SQLite
 - [concurrency.md](concurrency.md) — connections, processes, locks, and per-session branches
 - [storage-format.md](storage-format.md) — the chunk-store file and frozen format version 12
+- [pragmas.md](pragmas.md) — every PRAGMA: same as SQLite, adapted, or accepted and inert
 - [sqlite-files.md](sqlite-files.md) — opening and attaching stock SQLite databases
 
 ## Version control
 
+- [transactions.md](transactions.md) — what `ROLLBACK` undoes, conflicts inside vs outside `BEGIN`, busy outcomes, refusals
 - [refs.md](refs.md) — revision syntax: branches, tags, hashes, `HEAD~N`, `WORKING`, `STAGED`, ranges, `db@branch` opens, name rules
-
 - [dolt-differences.md](dolt-differences.md) — what is deliberately different from Dolt, and what is missing on purpose
+- [agents.md](agents.md) — the in-database `AGENT.md` guide and the rules an AI agent should know
 
 ## Remotes
 
@@ -30,6 +33,7 @@ of the version-control features; these pages hold the detail.
 
 ## Extensions
 
+- [wasm.md](wasm.md) — the WebAssembly build: persistence, remotes over XHR / worker threads, build flags
 - [vec1.md](vec1.md) — versioned vector search
 
 ## Project
