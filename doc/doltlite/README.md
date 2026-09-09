@@ -18,6 +18,7 @@ of the version-control features; these pages hold the detail.
 
 ## Version control
 
+- [transactions.md](transactions.md) — what `ROLLBACK` undoes, conflicts inside vs outside `BEGIN`, busy outcomes, refusals
 - [refs.md](refs.md) — revision syntax: branches, tags, hashes, `HEAD~N`, `WORKING`, `STAGED`, ranges, `db@branch` opens, name rules
 
 ## Remotes
