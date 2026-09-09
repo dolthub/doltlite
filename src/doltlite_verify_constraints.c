@@ -174,6 +174,7 @@ static void doltVerifyConstraintsFunc(
   int i;
   int rc;
   int nViolations = 0;
+  char *zDetectErr = 0;
   ProllyHash headCat;
   ProllyHash emptyCat;
   DoltliteCommit headCommit;
@@ -315,13 +316,17 @@ static void doltVerifyConstraintsFunc(
   }
 
   rc = doltliteDetectConstraintViolationsFiltered(
-      db, pDetectAnc, azScan, nScan, !bOutputOnly, &nViolations, 0);
+      db, pDetectAnc, azScan, nScan, !bOutputOnly, &nViolations, &zDetectErr);
   if( !bOutputOnly ){
     int erc = doltliteConstraintViolationBatchEnd(db, rc==SQLITE_OK);
     if( rc==SQLITE_OK ) rc = erc;
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
+    if( zDetectErr ){
+      sqlite3_result_error(context, zDetectErr, -1);
+    }else{
+      sqlite3_result_error_code(context, rc);
+    }
     goto cleanup;
   }
 
@@ -349,6 +354,7 @@ detection_done:
   sqlite3_result_int(context, nViolations>0 ? 1 : 0);
 
 cleanup:
+  sqlite3_free(zDetectErr);
   doltliteFreeNameList(azChanged, nChanged);
   sqlite3_free((void*)azArgTables);
   doltliteCmdArgsClear(&args);
