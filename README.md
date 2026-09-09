@@ -21,6 +21,8 @@ the proud product of
 
 [DoltLite is Beta](https://www.dolthub.com/blog/2026-08-31-doltlite-beta/).
 Documentation beyond this README lives in [doc/doltlite](doc/doltlite/README.md).
+New here? Start with [the detective demo](doc/doltlite/demo.md): a whodunit
+that is secretly the tutorial, every SQL block runnable as written.
 
 ## Install
 
