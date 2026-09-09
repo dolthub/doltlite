@@ -8,9 +8,9 @@ Sync commits and refs between databases over the filesystem or HTTP. Dolt:
 ## Synopsis
 
 ```sql
-SELECT dolt_remote('add', 'origin', 'file:///data/remote.db');
-SELECT dolt_remote('add', 'origin', 'http://host:8080/mydb.db');
-SELECT dolt_remote('remove', 'origin');
+SELECT dolt_clone('http://host:8080/mydb.db');   -- into an empty database; records origin
+SELECT dolt_remote('add', 'backup', 'file:///data/remote.db');
+SELECT dolt_remote('remove', 'backup');
 SELECT dolt_push('origin', 'main');
 SELECT dolt_push('origin', 'main', '--force');
 SELECT dolt_push('origin', 'v1.0');              -- one tag
@@ -18,10 +18,12 @@ SELECT dolt_push('origin', '--tags');
 SELECT dolt_fetch('origin');                     -- all branches
 SELECT dolt_fetch('origin', 'main');
 SELECT dolt_pull('origin', 'main');
-SELECT dolt_clone('http://host:8080/mydb.db');   -- into an empty database
-SELECT dolt_clone('--lazy', '--revision', 'v1.0', 'file:///data/src.db');
 SELECT * FROM dolt_remotes;
 SELECT * FROM dolt_remote_branches;
+```
+
+```sql
+SELECT dolt_clone('--lazy', '--revision', 'v1.0', 'file:///data/src.db');
 ```
 
 ## Functions

@@ -9,13 +9,20 @@ SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
 SELECT dolt_push('origin', 'main');
 SELECT dolt_push('origin', 'v1.0');       -- push one tag
 SELECT dolt_push('origin', '--tags');     -- push all tags
-SELECT dolt_clone('file:///path/to/source.doltlite');
-SELECT dolt_clone('--lazy', 'file:///path/to/source.doltlite');
-SELECT dolt_clone('--lazy', '--revision', 'release~1',
-                  'file:///path/to/source.doltlite');
 SELECT dolt_fetch('origin', 'main');
 SELECT dolt_pull('origin', 'main');   -- fetch, then fast-forward or merge
 SELECT * FROM dolt_remotes;
+```
+
+Clone into an empty database:
+
+```sql
+SELECT dolt_clone('file:///path/to/source.doltlite');
+```
+
+```sql
+SELECT dolt_clone('--lazy', '--revision', 'main~1',
+                  'file:///path/to/source.doltlite');
 ```
 
 A push, including a force push, is refused if the target branch has
@@ -51,8 +58,10 @@ been fetched, replacing same-named local tags when the remote value differs.
 Same ops as filesystem remotes; the URL includes the database name:
 
 ```sql
-SELECT dolt_remote('add', 'origin', 'http://myserver:8080/mydb.db');
-SELECT dolt_push('origin', 'main');
-SELECT dolt_clone('http://myserver:8080/mydb.db');
+SELECT dolt_remote('add', 'backup', 'http://myserver:8080/mydb.db');
+SELECT dolt_push('backup', 'main');
+```
+
+```sql
 SELECT dolt_clone('--lazy', 'http://myserver:8080/mydb.db');
 ```

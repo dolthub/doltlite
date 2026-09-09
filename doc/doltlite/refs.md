@@ -53,6 +53,7 @@ branch, open it by path.
 The database path may carry a revision after `@` or `/`. The file is the
 longest existing prefix, so branch names may contain `/`.
 
+<!-- contract: conn.detached_snapshot -->
 ```
 doltlite my.db@feature       # branch: read-write, working set of that branch
 doltlite my.db/feature/x     # same, slash form

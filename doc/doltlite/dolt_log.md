@@ -47,7 +47,7 @@ SELECT * FROM dolt_commit_ancestors WHERE commit_hash = dolt_hashof('HEAD');
 |---|---|
 | `invalid dolt_log revision: <x>` | unknown revision, `WORKING`, or a malformed range |
 | `ref not found: <x>` | `dolt_history_<t>` / `dolt_at_<t>` given an unknown revision |
-| `no such table: dolt_at_<x>` | no such user table |
+| `no such table: <name>` | `dolt_at_<x>` where `x` is not a user table |
 
 ## Differences from Dolt
 

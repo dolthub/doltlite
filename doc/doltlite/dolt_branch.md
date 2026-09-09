@@ -8,12 +8,12 @@ Branches and the connection's position on them. Dolt:
 ## Synopsis
 
 ```sql
-SELECT dolt_branch('feature');                 -- from HEAD
-SELECT dolt_branch('feature', 'v1.0');         -- from a commit revision
+SELECT dolt_branch('topic2');                  -- from HEAD
+SELECT dolt_branch('topic3', 'v1.0');          -- from a commit revision
 SELECT dolt_branch('-m', 'old', 'new');        -- rename
 SELECT dolt_branch('-c', 'src', 'copy');       -- copy
-SELECT dolt_branch('-d', 'feature');           -- delete if merged
-SELECT dolt_branch('-D', 'feature');           -- delete regardless
+SELECT dolt_branch('-d', 'topic2');            -- delete if merged
+SELECT dolt_branch('-D', 'topic3');            -- delete regardless
 SELECT dolt_checkout('feature');
 SELECT dolt_checkout('-b', 'feature2', 'main');
 SELECT dolt_checkout('users');                 -- restore one table from HEAD

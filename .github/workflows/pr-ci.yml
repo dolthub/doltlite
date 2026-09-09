@@ -46,14 +46,24 @@ jobs:
             );
 
   doc_links:
-    name: Doc links
+    name: Docs validation
     needs: classify
     if: needs.classify.outputs.docs_changed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: bash test/doc_links_test.sh
+      - run: bash test/doc_error_strings_test.sh
+      - name: Build doltlite
+        run: |
+          bash .github/scripts/install-apt-deps.sh build-essential tcl-dev zlib1g-dev
+          mkdir -p build && cd build
+          TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+          ../configure ${TCL_CONFIG:+--with-tcl=$(dirname "$TCL_CONFIG")} >/dev/null
+          make -j"$(nproc)" doltlite
+      - run: bash test/oracle_doc_examples_test.sh build/doltlite
+      - run: bash test/oracle_doc_agent_guide_test.sh build/doltlite
 
   build:
     name: Build all binaries
