@@ -507,6 +507,8 @@ jobs:
   # release assets are uploaded, bump each binding package to the same
   # version, push that commit to its main branch, then push the matching
   # release tag. The tag push starts each binding repo's publish workflow.
+  # This job then waits for npm and PyPI; a failed publish fails the
+  # release workflow.
   release-bindings:
     if: github.event_name != 'workflow_dispatch'
     needs: release
@@ -671,6 +673,51 @@ jobs:
         done
 
         echo "doltlite-node workflow succeeded, but npm does not report ${version}"
+        exit 1
+
+    - name: Wait for doltlite-python PyPI publication
+      timeout-minutes: 45
+      run: |
+        set -euo pipefail
+        version="${VERSION#v}"
+        run_id=""
+
+        for attempt in $(seq 1 30); do
+          run_id=$(gh run list \
+            --repo dolthub/doltlite-python \
+            --workflow wheels.yml \
+            --event push \
+            --branch "${VERSION}" \
+            --limit 10 \
+            --json databaseId,headBranch \
+            --jq "map(select(.headBranch == \"${VERSION}\"))[0].databaseId // empty")
+          [ -n "$run_id" ] && break
+          echo "Waiting for doltlite-python ${VERSION} wheels workflow to start..."
+          sleep 10
+        done
+
+        if [ -z "$run_id" ]; then
+          echo "No doltlite-python wheels workflow found for ${VERSION}"
+          exit 1
+        fi
+
+        echo "Watching doltlite-python wheels run ${run_id}"
+        gh run watch "$run_id" \
+          --repo dolthub/doltlite-python \
+          --exit-status \
+          --interval 15
+
+        for attempt in $(seq 1 20); do
+          if curl -fsS -o /dev/null --max-time 15 \
+              "https://pypi.org/pypi/doltlite/${version}/json"; then
+            echo "doltlite ${version} is available from PyPI"
+            exit 0
+          fi
+          echo "Waiting for PyPI propagation of ${version}..."
+          sleep 10
+        done
+
+        echo "doltlite-python workflow succeeded, but PyPI does not report ${version}"
         exit 1
 
   # ── Publish WASM package to npm ──────────────────────────
