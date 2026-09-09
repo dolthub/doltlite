@@ -122,7 +122,7 @@ SELECT * FROM dolt_status;
 UPDATE dolt_workspace_ratings SET staged = 1 WHERE to_confidence > from_confidence;
 ```
 
-**Ignore, docs, tests** — [dolt_ignore.md](doc/doltlite/dolt_ignore.md)
+**Ignore, docs, tests** — [dolt_ignore.md](doc/doltlite/dolt_ignore.md), [dolt_docs.md](doc/doltlite/dolt_docs.md), [dolt_tests.md](doc/doltlite/dolt_tests.md)
 
 ```sql
 INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
