@@ -27,7 +27,8 @@ bash ../test/run_sqllogictest.sh \
 
 CI wiring, coverage floors, and full bucket lists are in
 [`.github/workflows/test.yml`](../../.github/workflows/test.yml) and
-[AGENTS.md](../../AGENTS.md). Contract suites
+[AGENTS.md](../../AGENTS.md). `test/doc_links_test.sh` checks relative links and anchors in tracked
+Markdown; PR CI runs it whenever a `.md` file changes. Contract suites
 (`sqlite_compatibility_contract_test.sh`, `concurrency_contract_test.sh`,
 `storage_format_contract_test.sh`) gate [SQLite compatibility](sqlite-compatibility.md),
 [concurrency](concurrency.md), and [storage format](storage-format.md).
