@@ -158,6 +158,19 @@ doltlite_coverage_suites() {
   done < <(doltlite_all_suites)
 }
 
+# Everything the coverage set runs except suites that need artifacts the
+# sanitizer build tarball does not carry (build guard, stock parity) or that
+# the sanitizer job runs on its own (the C regression corpus).
+doltlite_sanitizer_suites() {
+  local excluded
+  excluded="$(printf '%s\n' build_artifacts_guard_test.sh doltlite_parity.sh doltlite_regression_test_c.sh)"
+  while IFS= read -r suite; do
+    if ! grep -Fqx "$suite" <<<"$excluded"; then
+      echo "$suite"
+    fi
+  done < <(doltlite_coverage_suites)
+}
+
 doltlite_windows_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh

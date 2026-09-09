@@ -13,16 +13,17 @@ jobs:
       matrix:
         include:
           - suite: oracles
-          - suite: oracles-refs-workspace
-            bucket: refs-workspace
-          - suite: oracles-diff-history-data
-            bucket: diff-history-data
-          - suite: oracles-remotes-recovery
-            bucket: remotes-recovery
+          # The three small Dolt-oracle buckets share one runner; the merge
+          # bucket alone is as long as the three together.
+          - suite: oracles-vc
+            bucket: refs-workspace diff-history-data remotes-recovery
           - suite: oracles-merge
             bucket: merge-replay-schema
-          - suite: native
-          - suite: c-regression
+          # The DoltLite shell suites (sanitizer manifest set) split in two.
+          - suite: native-1
+            shard: 1/2
+          - suite: native-2
+            shard: 2/2
 
     steps:
     - uses: actions/checkout@v4
@@ -78,53 +79,34 @@ jobs:
       if: matrix.bucket
       run: |
         cd build
-        while IFS= read -r oracle; do
-          [ -z "$oracle" ] && continue
-          echo "--- $oracle ---"
-          bash "../test/$oracle" ./doltlite dolt || exit 1
-        done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
+        for bucket in ${{ matrix.bucket }}; do
+          while IFS= read -r oracle; do
+            [ -z "$oracle" ] && continue
+            echo "--- $oracle ---"
+            bash "../test/$oracle" ./doltlite dolt || exit 1
+          done < "../test/oracle-buckets/$bucket.txt"
+        done
       timeout-minutes: 25
 
     - name: Correctness regression tests
-      if: matrix.suite == 'native'
+      if: matrix.suite == 'native-1'
       run: cd build && bash ../test/correctness_test.sh ./doltlite
 
-    # Version-control virtual tables decode stored values and rebuild rows
-    # through the prolly record codec — exactly where signed-int / value
-    # decode UB lives (the left-shift-of-negative this PR fixes surfaced
-    # here). The oracle suites above are stock-SQL semantics and the C
-    # corpus is C-API level; neither exercises these SQL vtab read paths.
-    - name: VC virtual-table read suites
-      if: matrix.suite == 'native'
+    # Every DoltLite shell suite the coverage job runs, under ASan/UBSan,
+    # minus the ones that need artifacts this tarball lacks. The set is the
+    # manifest's sanitizer set, sharded across the two native jobs so neither
+    # exceeds the budget; a new suite is covered here by default.
+    - name: DoltLite shell suites (ASan/UBSan)
+      if: matrix.shard
       run: |
-        cd build
-        for s in doltlite_at doltlite_history doltlite_diff doltlite_diff_table \
-                 doltlite_diff_table_range \
-                 doltlite_schema_diff doltlite_workspace doltlite_conflicts \
-                 doltlite_conflict_rows doltlite_comparison doltlite_merge; do
-          echo "=== $s ==="
-          bash ../test/$s.sh ./doltlite || exit 1
-        done
-
-    # Ref-mutation, GC, and remote clone/pull paths deserialize the refs blob
-    # and rewrite refs/chunks — memory-management code (the refs int-overflow
-    # and the cursor-pin / merge-cleanup fixes lived here) that the oracle and
-    # read-vtab suites above never exercise under ASan. Kept to fast,
-    # self-contained suites (no server, no external Dolt) to stay in budget.
-    - name: VC ref-mutation + remote suites
-      if: matrix.suite == 'native'
-      run: |
-        cd build
-        for s in doltlite_branch doltlite_default_branch doltlite_tag \
-                 doltlite_gc doltlite_vacuum remote_test; do
-          echo "=== $s ==="
-          bash ../test/$s.sh ./doltlite || exit 1
-        done
+        DOLTLITE_BUILD_DIR="$PWD/build" DOLTLITE_SUITE_SET=sanitizer \
+          DOLTLITE_SUITE_SHARD=${{ matrix.shard }} bash test/run_doltlite_tests.sh
+      timeout-minutes: 20
 
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
     - name: C regression corpus (ASan/UBSan)
-      if: matrix.suite == 'c-regression'
+      if: matrix.suite == 'native-2'
       run: cd build && ./doltlite_regression_test_c all
 
   # Same ASan/UBSan coverage as the Linux job above, but on macOS/arm64 to

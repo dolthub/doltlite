@@ -25,12 +25,29 @@ case "${DOLTLITE_SUITE_SET:-all}" in
   all) suite_manifest=doltlite_all_suites ;;
   coverage) suite_manifest=doltlite_coverage_suites ;;
   timing) suite_manifest=doltlite_timing_suites ;;
+  sanitizer) suite_manifest=doltlite_sanitizer_suites ;;
   *)
     echo "ERROR: unknown DOLTLITE_SUITE_SET: $DOLTLITE_SUITE_SET"
     exit 1
     ;;
 esac
 while IFS= read -r line; do TESTS+=("$line"); done < <("$suite_manifest")
+
+# DOLTLITE_SUITE_SHARD=k/n keeps every n-th suite starting at k (1-based), so
+# a slow build can split one set across parallel jobs without a second list.
+if [ -n "${DOLTLITE_SUITE_SHARD:-}" ]; then
+  shard_k="${DOLTLITE_SUITE_SHARD%/*}"; shard_n="${DOLTLITE_SUITE_SHARD#*/}"
+  if ! [ "$shard_k" -ge 1 ] 2>/dev/null || ! [ "$shard_k" -le "$shard_n" ] 2>/dev/null; then
+    echo "ERROR: DOLTLITE_SUITE_SHARD must be k/n with 1 <= k <= n: $DOLTLITE_SUITE_SHARD"
+    exit 1
+  fi
+  SHARDED=()
+  for i in "${!TESTS[@]}"; do
+    if [ $(( i % shard_n )) -eq $(( shard_k - 1 )) ]; then SHARDED+=("${TESTS[$i]}"); fi
+  done
+  TESTS=("${SHARDED[@]}")
+  echo "Shard $DOLTLITE_SUITE_SHARD: ${#TESTS[@]} suites"
+fi
 
 total_pass=0
 total_fail=0
