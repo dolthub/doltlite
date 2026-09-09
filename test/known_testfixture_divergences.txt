@@ -1869,7 +1869,6 @@ ioerr3 ioerr3-2.3.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.4.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.5.3 class=intentional  # IO-fault point shift
 ioerr3 ioerr3-2.6.3 class=intentional  # IO-fault point shift
-ioerr3 ioerr3-2.7.3 class=intentional  # IO-fault point shift
 journal2 journal2-1.1 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.2 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
 journal2 journal2-1.5 class=unsupported issue=1836  # hot-journal crash simulation needs -journal sidecar; copied state differs
@@ -5111,7 +5110,6 @@ ioerr ioerr-7.54.1 class=intentional  # hot-journal prep copies absent -journal 
 ioerr ioerr-7.55.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.56.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.57.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.58.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1 class=intentional  # master-journal prep copies absent -journal sidecar
 # ioerr-2 VACUUM gc-rewrite window: the injected error lands in a best-effort
 # finalization write gc deliberately consumes, so the statement succeeds after
