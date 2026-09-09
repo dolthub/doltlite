@@ -107,8 +107,10 @@ substitute() {  # substitute <db>: rewrite doc placeholders into fixture values
 }
 
 mkdir -p "$TMPDIR/authorized-keys"
-"$DOLTLITE" "file:$TMPDIR/events.sqlite?doltlite_engine=sqlite" \
-  "CREATE TABLE events(id INTEGER PRIMARY KEY, thread_id INT, type TEXT); CREATE TABLE threads(id INTEGER PRIMARY KEY, title TEXT, archived INT); CREATE TABLE archive(id INTEGER PRIMARY KEY, title TEXT, archived INT); INSERT INTO events VALUES(1,1,'click');" >/dev/null 2>&1
+if ! "$DOLTLITE" "file:$TMPDIR/events.sqlite?doltlite_engine=sqlite" \
+  "CREATE TABLE events(id INTEGER PRIMARY KEY, thread_id INT, type TEXT); CREATE TABLE threads(id INTEGER PRIMARY KEY, title TEXT, archived INT); CREATE TABLE archive(id INTEGER PRIMARY KEY, title TEXT, archived INT); INSERT INTO events VALUES(1,1,'click');" >"$TMPDIR/events.out" 2>&1; then
+  echo "FAIL: could not create the stock SQLite fixture: $(head -c 300 "$TMPDIR/events.out")"; echo "Results: 0 passed, 1 failed"; exit 1
+fi
 
 for page in "$DOCS"/*.md; do
   name=$(basename "$page")
@@ -145,6 +147,8 @@ for page in "$DOCS"/*.md; do
   if [ -z "$bad_lines" ]; then pass=$((pass+1)); echo "PASS: $name"
   else fail=$((fail+1)); echo "FAIL: $name$bad_lines"; fi
 done
+
+if [ "$pass" -eq 0 ]; then fail=$((fail+1)); echo "FAIL: no documentation page was run"; fi
 
 echo ""
 echo "================================"
