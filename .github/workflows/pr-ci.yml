@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.files.outputs.docs_only }}
+      docs_changed: ${{ steps.files.outputs.docs_changed }}
     steps:
       - id: files
         uses: actions/github-script@v7
@@ -23,6 +24,7 @@ jobs:
             const pull = context.payload.pull_request;
             if (!pull) {
               core.setOutput('docs_only', 'false');
+              core.setOutput('docs_changed', 'true');
               return;
             }
             const files = await github.paginate(
@@ -38,6 +40,20 @@ jobs:
               'docs_only',
               String(files.length > 0 && files.every(file => file.filename.endsWith('.md')))
             );
+            core.setOutput(
+              'docs_changed',
+              String(files.some(file => file.filename.endsWith('.md')))
+            );
+
+  doc_links:
+    name: Doc links
+    needs: classify
+    if: needs.classify.outputs.docs_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash test/doc_links_test.sh
 
   build:
     name: Build all binaries
@@ -77,13 +93,14 @@ jobs:
 
   gate:
     name: CI Gate
-    needs: [classify, build, build_test, test_suite, sanitizers, smoke, benchmark]
+    needs: [classify, doc_links, build, build_test, test_suite, sanitizers, smoke, benchmark]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - env:
           DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CLASSIFY: ${{ needs.classify.result }}
+          DOC_LINKS: ${{ needs.doc_links.result }}
           BUILD: ${{ needs.build.result }}
           BUILD_TEST: ${{ needs.build_test.result }}
           TEST_SUITE: ${{ needs.test_suite.result }}
@@ -92,6 +109,7 @@ jobs:
           BENCHMARK: ${{ needs.benchmark.result }}
         run: |
           test "$CLASSIFY" = success
+          case "$DOC_LINKS" in success|skipped) ;; *) exit 1 ;; esac
           if [ "$DOCS_ONLY" = true ]; then
             exit 0
           fi
