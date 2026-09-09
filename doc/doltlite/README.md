@@ -14,6 +14,7 @@ of the version-control features; these pages hold the detail.
 - [sqlite-compatibility.md](sqlite-compatibility.md) — where a DoltLite-format database differs from SQLite
 - [concurrency.md](concurrency.md) — connections, processes, locks, and per-session branches
 - [storage-format.md](storage-format.md) — the chunk-store file and frozen format version 12
+- [pragmas.md](pragmas.md) — every PRAGMA: same as SQLite, adapted, or accepted and inert
 - [sqlite-files.md](sqlite-files.md) — opening and attaching stock SQLite databases
 
 ## Version control
