@@ -129,36 +129,63 @@ stmts_for() {
   esac
 }
 
-run_on() {  # run_on <binary> <dbfile> <sql>
+run_on() {  # run_on <binary> <dbfile> <sql> <outfile>; returns the engine status
+  local st
   rm -f "$2"
-  "$1" "$2" "$SCHEMA" >/dev/null 2>&1
-  "$1" "$2" "$3" 2>&1 | sed -E 's/^(Parse|Runtime) error[^:]*: /ERROR: /; s/^Error[^:]*: /ERROR: /'
+  if ! "$1" "$2" "$SCHEMA" >"$4" 2>&1; then
+    echo "SETUP FAILED: $(tr '\n' ' ' <"$4")" >"$4"
+    return 99
+  fi
+  "$1" "$2" "$3" >"$4.raw" 2>&1
+  st=$?
+  sed -E 's/^(Parse|Runtime) error[^:]*: /ERROR: /; s/^Error[^:]*: /ERROR: /' "$4.raw" >"$4"
+  return $st
 }
 
+# Same-as-SQLite: identical normalized output and identical exit status. A
+# probe may error on purpose (a violated constraint) as long as both do.
 for prag in $same_list; do
   sql=$(stmts_for "$prag") || { bad "same_$prag" "no probe statements for $prag; add a case to stmts_for"; continue; }
-  dl=$(run_on "$DOLTLITE" "$TMPDIR/dl.db" "$sql")
-  sq=$(run_on "$SQLITE3" "$TMPDIR/sq.db" "$sql")
-  if [ "$dl" = "$sq" ]; then ok "same_$prag"
-  else bad "same_$prag" "doltlite: $(echo "$dl" | tr '\n' '|')  stock: $(echo "$sq" | tr '\n' '|')"; fi
+  run_on "$DOLTLITE" "$TMPDIR/dl.db" "$sql" "$TMPDIR/dl.out"; st_dl=$?
+  run_on "$SQLITE3" "$TMPDIR/sq.db" "$sql" "$TMPDIR/sq.out"; st_sq=$?
+  dl=$(tr '\n' '|' <"$TMPDIR/dl.out"); sq=$(tr '\n' '|' <"$TMPDIR/sq.out")
+  if [ "$st_dl" = 99 ] || [ "$st_sq" = 99 ]; then bad "same_$prag" "doltlite: $dl  stock: $sq"
+  elif [ "$dl" = "$sq" ] && [ "$st_dl" = "$st_sq" ]; then ok "same_$prag"
+  else bad "same_$prag" "doltlite(rc=$st_dl): $dl  stock(rc=$st_sq): $sq"; fi
 done
 
+# Accepted and inert: DoltLite reads back the documented value and exits 0.
+asserted=""
 expect_dl() {  # expect_dl <name> <sql> <expected-output-joined-by-|>
-  local got
-  got=$(run_on "$DOLTLITE" "$TMPDIR/dl.db" "$2" | tr '\n' '|')
-  if [ "$got" = "$3" ]; then ok "inert_$1"; else bad "inert_$1" "got $got expected $3"; fi
+  local got st
+  asserted="$asserted $1"
+  run_on "$DOLTLITE" "$TMPDIR/dl.db" "$2" "$TMPDIR/dl.out"; st=$?
+  got=$(tr '\n' '|' <"$TMPDIR/dl.out")
+  if [ "$st" = 0 ] && [ "$got" = "$3" ]; then ok "inert_$1"
+  else bad "inert_$1" "got $got (rc=$st) expected $3 (rc=0)"; fi
 }
 expect_dl journal_mode   "PRAGMA journal_mode=DELETE; PRAGMA journal_mode=MEMORY; PRAGMA journal_mode;" "wal|wal|wal|"
 expect_dl wal_checkpoint "PRAGMA wal_checkpoint; PRAGMA wal_checkpoint(TRUNCATE);" "0|0|0|0|0|0|"
-expect_dl auto_vacuum    "PRAGMA auto_vacuum=FULL; PRAGMA auto_vacuum; PRAGMA incremental_vacuum;" "0|"
+expect_dl wal_autocheckpoint "PRAGMA wal_autocheckpoint; PRAGMA wal_autocheckpoint=100; PRAGMA wal_autocheckpoint;" "1000|100|100|"
+expect_dl auto_vacuum    "PRAGMA auto_vacuum=FULL; PRAGMA auto_vacuum;" "0|"
+expect_dl incremental_vacuum "PRAGMA incremental_vacuum; PRAGMA incremental_vacuum(1); SELECT 'done';" "done|"
 expect_dl encoding       "PRAGMA encoding='UTF-16le'; PRAGMA encoding;" "UTF-8|"
 expect_dl page_size      "PRAGMA page_size=8192; PRAGMA page_size;" "8192|"
+expect_dl page_count     "SELECT typeof(page_count), page_count>0 FROM pragma_page_count;" "integer|1|"
+expect_dl max_page_count "PRAGMA max_page_count=1000; SELECT typeof(max_page_count), max_page_count >= (SELECT page_count FROM pragma_page_count) FROM pragma_max_page_count;" "1000|integer|1|"
 expect_dl freelist_count "PRAGMA freelist_count;" "0|"
 expect_dl cache_spill    "PRAGMA cache_spill=0; PRAGMA cache_spill;" "0|"
 expect_dl mmap_size      "PRAGMA mmap_size=1000000; PRAGMA mmap_size;" "0|0|"
 expect_dl journal_size_limit "PRAGMA journal_size_limit=1000; PRAGMA journal_size_limit;" "-1|-1|"
 expect_dl secure_delete  "PRAGMA secure_delete=1; PRAGMA secure_delete;" "0|0|"
+expect_dl locking_mode   "PRAGMA locking_mode; PRAGMA locking_mode=EXCLUSIVE; PRAGMA locking_mode;" "normal|exclusive|exclusive|"
+expect_dl cell_size_check "PRAGMA cell_size_check; PRAGMA cell_size_check=1; PRAGMA cell_size_check;" "0|1|"
+expect_dl checkpoint_fullfsync "PRAGMA checkpoint_fullfsync; PRAGMA checkpoint_fullfsync=1; PRAGMA checkpoint_fullfsync;" "0|1|"
 expect_dl schema_version "PRAGMA schema_version=500; SELECT CASE WHEN (SELECT 1 FROM pragma_schema_version WHERE schema_version=500) IS NULL THEN 'ignored' END;" "ignored|"
+
+unasserted=$(comm -23 <(echo "$inert_list") <(echo "$asserted" | tr ' ' '\n' | sort -u))
+if [ -z "$unasserted" ]; then ok "every inert pragma in pragmas.md has an assertion"
+else bad "inert pragmas documented without an assertion" "$(echo "$unasserted" | tr '\n' ' ')"; fi
 
 echo ""
 echo "================================"
