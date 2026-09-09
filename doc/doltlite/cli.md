@@ -33,7 +33,7 @@ returns `prolly` or `orig`.
 | Surface | DoltLite |
 |---|---|
 | Prompt | `doltlite> ` |
-| `-version` | `DoltLite v0.50.7 (SQLite 3.54.0, 64-bit)` |
+| `-version` | DoltLite/SQLite versions and architecture |
 | `.schema`, `.dump` | Objects in catalog order (sorted by name), with the canonical `CREATE` text rather than the text you typed |
 | `.dump --preserve-rowids` | Omits the read-only rowid alias on tables with a non-integer primary key, so the output restores |
 | `.backup`, `.restore` | Work within one format. A DoltLite source writes a DoltLite copy, a stock source a stock copy. Mixing them is refused: `cannot backup between a legacy SQLite database and a doltlite database`. |

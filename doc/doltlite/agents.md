@@ -42,8 +42,8 @@ SELECT name FROM pragma_module_list  WHERE name LIKE 'dolt_%' ORDER BY 1;
 SELECT dolt_version(), doltlite_engine();
 ```
 
-`doltlite_engine()` returns `prolly` on a DoltLite database and `orig` on a
-stock SQLite file, where the `dolt_*` surface is absent.
+`doltlite_engine()` returns `prolly` for DoltLite and `orig` for stock. `dolt_*`
+calls stay listed but fail.
 
 The repository's own guidance for agents working on the DoltLite source is
 [AGENTS.md](../../AGENTS.md) at the repo root; this page is about databases.

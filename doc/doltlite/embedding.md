@@ -26,11 +26,11 @@ cd build
 make doltlite-lib   # libdoltlite.a and libdoltlite.dylib/.so
 
 # Static (recommended) or dynamic
-gcc -o myapp myapp.c -I/path/to/build libdoltlite.a -lpthread -lz
-gcc -o myapp myapp.c -I/path/to/build -L/path/to/build -ldoltlite -lpthread -lz
+gcc -o myapp myapp.c -I/path/to/build libdoltlite.a -lpthread -lz -lm
+gcc -o myapp myapp.c -I/path/to/build -L/path/to/build -ldoltlite -lpthread -lz -lm
 
 sudo make install   # honours --prefix / DESTDIR; then:
-gcc -o myapp myapp.c -ldoltlite -lpthread -lz
+gcc -o myapp myapp.c -ldoltlite -lpthread -lz -lm
 ```
 
 `make install` also installs SQLite-named artifacts (`sqlite3.h`,
@@ -46,7 +46,7 @@ Same flow (commits, branches, merges, diffs, tags) in each language.
 
 ```bash
 cd build
-gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz
+gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
 ./quickstart
 ```
 
@@ -72,7 +72,7 @@ build tag:
 
 ```bash
 cd examples/go
-CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread" \
+CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread -lm" \
     go build -tags libsqlite3 -o quickstart .
 ./quickstart
 ```

@@ -13,11 +13,10 @@ use `@dolthub/doltlite` instead.
 |---|---|
 | Browser, cross-origin isolated | OPFS via `sqlite3.oo1.OpfsDb`. Needs `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. |
 | Browser, not isolated | In-memory only |
-| Node / Bun | Ordinary files through the wasm filesystem |
+| Node / Bun | Virtual; no host persistence |
 
-A database is one file in either case, in the same format native DoltLite
-reads and writes. `sqlite3_serialize()` / `deserialize()` move a whole
-database, history included, in and out as bytes.
+OPFS/serialized bytes use the native format and include history. Persist bytes
+yourself or use native `@dolthub/doltlite`.
 
 ## Remotes
 

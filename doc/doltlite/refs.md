@@ -1,7 +1,6 @@
 # Revision syntax
 
-Every version-control function and table that takes a revision accepts the
-same spellings. Resolution is case-sensitive.
+Commit refs are case-sensitive. Snapshot refs/ranges vary below.
 
 | Spelling | Meaning |
 |---|---|
