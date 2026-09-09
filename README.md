@@ -100,453 +100,115 @@ is SQLite's `sqlite3_*` declarations plus the DoltLite additions in
 
 ## Dolt Features
 
-Version control operations are exposed as SQL functions and virtual tables.
+Version control is SQL functions and virtual tables. One example each; every
+option, column, and error is on the linked page, and revision spellings
+(`HEAD~1`, `WORKING`, `main..feature`, ...) are in
+[refs.md](doc/doltlite/refs.md).
 
-### The basic commit loop
-
-#### Configuration
-
-Per-connection, not persisted. Used by `dolt_commit`, `dolt_merge`,
-`dolt_cherry_pick`, and `dolt_revert`. `dolt_commit --author` overrides once.
+**Commit loop** — [dolt_commit.md](doc/doltlite/dolt_commit.md)
 
 ```sql
-SELECT dolt_config('user.name', 'Tim Sehn');
-SELECT dolt_config('user.email', 'tim@dolthub.com');
-SELECT dolt_config('user.name');
--- Tim Sehn
-```
-
-#### Staging and Committing
-
-```sql
-SELECT dolt_add('users');
+SELECT dolt_config('user.name', 'Ann');
 SELECT dolt_add('-A');
-SELECT dolt_commit('-m', 'Add users table');
-SELECT dolt_commit('-A', '-m', 'Initial commit');
-SELECT dolt_commit('-am', 'Initial commit');   -- like git commit -am
-SELECT dolt_commit('-m', 'Fix data', '--author', 'Alice <alice@example.com>');
-```
-
-#### Status
-
-```sql
+SELECT dolt_commit('-m', 'Add users');           -- or dolt_commit('-Am', 'msg')
 SELECT * FROM dolt_status;
--- table_name | staged | status
--- users      | 1      | modified
--- orders     | 0      | new table
 ```
 
-#### Workspace Tables
-
-Row-level working/staged edits; set `staged` to stage/unstage. `DELETE`
-discards unstaged rows (staged rows must be unstaged first).
+**Row-level staging** — [dolt_workspace.md](doc/doltlite/dolt_workspace.md)
 
 ```sql
-SELECT id, staged, diff_type, to_id, to_rating, to_confidence,
-       from_rating, from_confidence
-  FROM dolt_workspace_ratings;
-
-UPDATE dolt_workspace_ratings
-   SET staged = TRUE
- WHERE to_confidence > from_confidence;
-
-SELECT dolt_commit('-m', 'accept higher-confidence edits');
+UPDATE dolt_workspace_ratings SET staged = 1 WHERE to_confidence > from_confidence;
 ```
 
-#### Ignoring Tables (`dolt_ignore`)
-
-Patterns skipped by `dolt_add` and hidden from `dolt_status` (tables stay in
-the working set). `SELECT` works before any pattern exists; the first write
-creates the backing table, which then commits, diffs, branches and merges
-like any other table. Patterns use `*`/`%` = any and `?` = one char.
-Most-specific match wins; equal-specificity conflicts error.
+**Ignore, docs, tests** — [dolt_ignore.md](doc/doltlite/dolt_ignore.md)
 
 ```sql
-SELECT * FROM dolt_ignore;                       -- empty on a fresh repo
 INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
-INSERT INTO dolt_ignore VALUES ('tmp_keep', 0);  -- un-ignore
-```
-
-#### Repository Docs (`dolt_docs`)
-
-Versioned documents keyed by name (`README.md`, `LICENSE.md`, or any name),
-as in Dolt. `SELECT` works before any doc exists; the first write statement
-creates the backing table, which then commits, diffs, branches and merges
-like any other table. A fresh repo serves a default `AGENT.md` (a usage
-guide for AI agents); overwrite or delete it like any other doc.
-
-```sql
-SELECT * FROM dolt_docs;                       -- default AGENT.md on a fresh repo
 INSERT INTO dolt_docs VALUES ('README.md', '# my project');
-REPLACE INTO dolt_docs VALUES ('README.md', '# updated');
-SELECT dolt_commit('-A', '-m', 'update readme');
-```
-
-#### Repository Tests (`dolt_tests`)
-
-Versioned SQL tests live in `dolt_tests`. The first write creates the backing
-table; test definitions then commit, diff, branch and merge like ordinary
-data. Each read-only query can assert its row count, column count, or single
-result value with `==`, `!=`, `<`, `>`, `<=`, or `>=`. Run every test with no
-argument or `'*'`, or select tests by test name or group.
-
-```sql
-INSERT INTO dolt_tests VALUES (
-  'user count', 'users', 'SELECT * FROM users', 'expected_rows', '==', '10'
-);
+INSERT INTO dolt_tests VALUES ('count', 'users', 'SELECT * FROM users', 'expected_rows', '==', '10');
 SELECT * FROM dolt_test_run();
-SELECT * FROM dolt_test_run('users');
 ```
 
-### Inspecting what's there
-
-#### Diff
+**Diff** — [dolt_diff.md](doc/doltlite/dolt_diff.md)
 
 ```sql
--- Tables changed across commit history
-SELECT * FROM dolt_diff WHERE table_name = 'users';
-
--- Row/cell counts between refs
-SELECT * FROM dolt_diff_stat('v1.0', 'HEAD');
-SELECT * FROM dolt_diff_stat('v1.0', 'HEAD', 'users');
-
--- Per-table added / dropped / renamed / modified
-SELECT * FROM dolt_diff_summary('v1.0', 'HEAD');
-
--- Schema-level (tables, views, indexes)
-SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
-
--- Ordered, executable SQLite statements (schema rebuilds when ALTER cannot express)
-SELECT * FROM dolt_patch('v1.0', 'v2.0');
-SELECT * FROM dolt_patch('v1.0', 'v2.0', 'users');
-SELECT * FROM dolt_patch('v1.0..v2.0');
-SELECT * FROM dolt_patch('main...feature', 'users');
-SELECT statement FROM dolt_patch('HEAD', 'WORKING')
- WHERE diff_type = 'data'
- ORDER BY statement_order;
-
--- Per-table row history (to_/from_ columns + commit metadata + diff_type).
--- One vtable per user table. to_commit = 'WORKING' is staged + working.
-SELECT * FROM dolt_diff_users;
-SELECT * FROM dolt_diff_users WHERE to_id = 42;
+SELECT * FROM dolt_diff_users('v1.0', 'HEAD');
 SELECT * FROM dolt_diff_users WHERE to_commit = 'WORKING';
-
--- TVF form: snapshots at two refs (table name is in the module, like Dolt).
--- Two dots = endpoints; three dots = merge base to right endpoint.
-SELECT * FROM dolt_diff_users('HEAD~1', 'HEAD');
-SELECT * FROM dolt_diff_users('v1.0', 'WORKING');
-SELECT * FROM dolt_diff_users('main..feature');
-SELECT * FROM dolt_diff_users('main...feature');
--- The table may exist only at one endpoint.
-SELECT * FROM dolt_diff_feature_only('main', 'feature');
-
-SELECT d.*
-  FROM dolt_diff_users AS d
-  JOIN dolt_log('v1.0..HEAD') AS l ON l.commit_hash = d.to_commit;
+SELECT * FROM dolt_diff_stat('v1.0', 'HEAD');
+SELECT statement FROM dolt_patch('v1.0', 'HEAD') ORDER BY statement_order;
 ```
 
-SQLite requires virtual-table column names to be unique. If a generated user
-column in `dolt_diff_<table>`, `dolt_history_<table>`, or
-`dolt_conflicts_<table>` collides case-insensitively with a metadata column,
-the metadata keeps its Dolt name and the user column receives the first
-available numeric suffix (`_1`, `_2`, …).
-
-#### Log and History
+**Log, history, blame** — [dolt_log.md](doc/doltlite/dolt_log.md)
 
 ```sql
--- Commit history
-SELECT * FROM dolt_log;
-SELECT * FROM dolt_log('feature');
 SELECT * FROM dolt_log('main..feature');
--- commit_hash | committer | email | date | message
-```
-
-Two per-table virtual tables for time travel:
-
-```sql
--- Every version of every row in the current HEAD ancestry
 SELECT * FROM dolt_history_users WHERE id = 42;
-
--- Start from another branch, tag, or commit
-SELECT * FROM dolt_history_users('feature') WHERE id = 42;
-
--- Select one exact committed snapshot
-SELECT * FROM dolt_history_users
- WHERE commit_hash = dolt_hashof('feature');
-
--- The table as it existed at a specific commit / branch / tag
-SELECT * FROM dolt_at_users('abc123...');
-SELECT * FROM dolt_at_users('feature');
 SELECT * FROM dolt_at_users('v1.0');
-```
-
-#### Blame (`dolt_blame_<table>`)
-
-Most recent commit that set each live row's current value:
-
-```sql
 SELECT * FROM dolt_blame_users;
--- id | commit | commit_date | committer | email | message
 ```
 
-First-parent walk from HEAD: blame updates when a row differs from the
-first parent (or from the merge base at merges). Schema-only changes
-(`ALTER TABLE ADD COLUMN`) do not update blame.
-
-#### Schema History (`dolt_schemas`)
-
-Views and triggers from the branch-scoped `sqlite_schema` (not ordinary
-tables/indexes). Switches with `dolt_checkout`:
+**Schema objects** — [dolt_schemas.md](doc/doltlite/dolt_schemas.md)
 
 ```sql
-CREATE VIEW active_users AS SELECT * FROM users WHERE active = 1;
-CREATE TRIGGER audit_users AFTER UPDATE ON users
-  BEGIN INSERT INTO audit VALUES(new.id, 'updated'); END;
-SELECT dolt_commit('-Am', 'Add view and trigger');
-
-SELECT * FROM dolt_schemas;
--- type    | name         | fragment                                  | extra | sql_mode
--- view    | active_users | CREATE VIEW active_users AS SELECT ...    |       |
--- trigger | audit_users  | CREATE TRIGGER audit_users AFTER UPDATE...|       |
+SELECT type, name, fragment FROM dolt_schemas;     -- views and triggers
 ```
 
-Use `sqlite_schema` or `dolt_schema_diff` for the full schema surface.
-
-### Undoing on one branch
-
-#### Reset
+**Undo** — [dolt_reset.md](doc/doltlite/dolt_reset.md), [dolt_cherry_pick.md](doc/doltlite/dolt_cherry_pick.md)
 
 ```sql
-SELECT dolt_reset('--soft');   -- unstage all, keep working changes
-SELECT dolt_reset('--hard');   -- discard all uncommitted changes
+SELECT dolt_reset('--hard');
+SELECT dolt_revert('HEAD');
+SELECT dolt_cherry_pick('0123abcd...');
 ```
 
-#### Revert
-
-New commit that applies the inverse of a target commit onto HEAD
-(message `Revert '<original message>'`). Cannot revert the initial commit.
-
-```sql
-SELECT dolt_revert('abc123...');
--- Returns new commit hash, or "Revert completed with N conflict(s)"
-```
-
-### Parallel development
-
-#### Branching (Per-Session)
-
-Each connection tracks its own active branch (and session view of HEAD /
-staging). Uncommitted work belongs to the **branch**, not the connection —
-see [Concurrency](#concurrency).
+**Branches** — [dolt_branch.md](doc/doltlite/dolt_branch.md)
 
 ```sql
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('feature');
 SELECT active_branch();
-SELECT * FROM dolt_branches;
-SELECT dolt_branch('-d', 'feature');
 ```
 
-Open a branch at connect time via the database path (CLI, C API, or bindings):
+Each connection has its own branch; uncommitted work belongs to the branch.
+Open one at connect time with `my.db@feature`, or a read-only snapshot with
+`my.db/v1.0`.
 
-```bash
-./doltlite my.db@feature
-./doltlite my.db/feature
-```
-
-The file is the longest existing database-file prefix, so branch names may
-contain `/` (for example, `my.db/feature/parser`).
-
-```c
-sqlite3_open("my.db@feature", &db);
-```
-
-##### Detached revisions
-
-A tag, commit hash, or ancestor spec in the same qualified database path opens
-an immutable historical snapshot:
-
-```bash
-./doltlite my.db/v1
-./doltlite my.db/0123456789abcdef0123456789abcdef01234567
-./doltlite 'my.db/main~1'
-```
-
-Detached state belongs only to that connection. `active_branch()` returns
-`NULL`, `HEAD` names the selected commit, and the database is read-only. A peer
-may advance branches or delete the selected tag without changing the open
-snapshot. `dolt_checkout()` does not enter detached state; checking out an
-existing branch from a detached connection reattaches that session and makes it
-writable again. Closing and reopening the unqualified database uses its default
-branch normally.
-
-#### Tags
+**Tags** — [dolt_tag.md](doc/doltlite/dolt_tag.md)
 
 ```sql
-SELECT dolt_tag('v1.0');                  -- tag HEAD
-SELECT dolt_tag('v1.0', 'abc123...');     -- tag a commit
-SELECT dolt_tag('-d', 'v1.0');
-SELECT * FROM dolt_tags;
+SELECT dolt_tag('v1.0');
 ```
 
-#### Merge
-
-Three-way, **row-level** merge into the current branch. Non-conflicting row
-edits auto-merge; same-row edits become conflicts (see below).
+**Merge and conflicts** — [dolt_merge.md](doc/doltlite/dolt_merge.md)
 
 ```sql
-SELECT dolt_merge('feature');
--- Returns commit hash (clean merge), or "Merge completed with N conflict(s)"
-```
-
-#### Merge Status
-
-Always one row (`is_merging = 0` and other columns NULL when idle):
-
-```sql
-SELECT * FROM dolt_merge_status;
--- is_merging | source  | source_commit | target          | unmerged_tables
--- 1          | feature | 0f470f8440... | refs/heads/main | orders, users
-```
-
-`unmerged_tables` is the name-ordered union of tables with data conflicts,
-constraint violations, or schema conflicts. Merge state is in the working set,
-so other connections see it too; `source` is recovered from the branch at the
-merge commit when possible, otherwise the commit hash.
-
-#### Conflicts
-
-```sql
-SELECT * FROM dolt_conflicts;
--- table | num_conflicts
--- users | 2
-
--- Per-table rows: base_/our_/their_ columns, diff_types, dolt_conflict_id
+BEGIN;
+SELECT dolt_merge('feature');                 -- error names the conflicts, if any
 SELECT * FROM dolt_conflicts_users;
-
-DELETE FROM dolt_conflicts_users WHERE dolt_conflict_id = 5;  -- keep working value
-SELECT dolt_conflicts_resolve('--ours', 'users');
 SELECT dolt_conflicts_resolve('--theirs', 'users');
-
-SELECT dolt_commit('-A', '-m', 'msg');
--- Error: "cannot commit: unresolved merge conflicts"
+SELECT dolt_commit('-m', 'Merge feature');
 ```
 
-Conflicts are never durable: they exist only in the transaction that produced
-them. Resolve there; `COMMIT` is refused while any remain, and an autocommit
-merge that conflicts is rolled back whole. Nothing conflicted is left on disk
-for a later connection. Dolt can commit a conflicted working set — this is a
-deliberate divergence.
+Conflicts live only inside the transaction; nothing conflicted reaches disk.
+Constraint violations from a merge land in
+`dolt_constraint_violations_<table>`
+([dolt_constraint_violations.md](doc/doltlite/dolt_constraint_violations.md)).
 
-#### Constraint Violations on Merge
-
-Merges apply cell-by-cell and do not run referential actions inline.
-Post-merge, violating rows land in `dolt_constraint_violations_<table>`
-(summary: `dolt_constraint_violations`).
-
-```sql
-SELECT * FROM dolt_constraint_violations;
--- table | num_violations
--- child | 1
-
-SELECT violation_type, pk, violation_info
-  FROM dolt_constraint_violations_child;
--- foreign key | 2 | {"Columns":["v1"],"ReferencedTable":"parent",...}
-
-DELETE FROM dolt_constraint_violations_child WHERE pk = 2;
-```
-
-Types match Dolt: `foreign key`, `unique index`, `check constraint`. FK/CHECK
-violators stay in the base table; unique-index losers (highest rowid) are
-evicted into the violations vtable. `dolt_commit` refuses while any remain
-(`--force` bypasses). Re-scan:
-`SELECT dolt_verify_constraints([--all] [--output-only] [table...]);`.
-
-#### Cherry-Pick
-
-Apply one commit's changes onto the current branch (parent→commit diff as a
-three-way merge; conflicts like `dolt_merge`). Ranges / multi-commit are not
-supported.
-
-```sql
-SELECT dolt_cherry_pick('abc123...');
--- Returns new commit hash, or "Cherry-pick completed with N conflict(s)"
-```
-
-#### Rebase
-
-Replay this branch onto an upstream. Atomic: conflict/error restores the
-pre-rebase branch. Interactive (`-i`) edits a plan table before apply:
+**Rebase** — [dolt_rebase.md](doc/doltlite/dolt_rebase.md)
 
 ```sql
 SELECT dolt_rebase('main');
--- "Successfully rebased and updated refs/heads/feat"
-
-SELECT dolt_rebase('-i', 'main');
--- Working branch dolt_rebase_<orig> + dolt_rebase plan rows (default pick).
--- action: pick | drop | reword | squash | fixup; edit commit_message /
--- rebase_order with normal SQL.
-
-UPDATE dolt_rebase SET action='drop'   WHERE commit_message='debug';
-UPDATE dolt_rebase SET action='squash' WHERE commit_message='fixup';
-SELECT dolt_rebase('--continue');
-SELECT dolt_rebase('--abort');
+SELECT dolt_rebase('-i', 'main');             -- then edit the dolt_rebase plan table
 ```
 
-#### Merge Base
+**Hashes and GC** — [dolt_hashof.md](doc/doltlite/dolt_hashof.md), [dolt_gc.md](doc/doltlite/dolt_gc.md)
 
 ```sql
-SELECT dolt_merge_base('abc123...', 'def456...');
-```
-
-### Introspection and ops
-
-#### Content-Addressed Hashes
-
-```sql
--- Commit hash (branch, tag, raw hash, HEAD, HEAD~N / HEAD^N)
-SELECT dolt_hashof('main');
-SELECT dolt_hashof('HEAD~2');
-
--- Table root and its indexes (one-arg form includes uncommitted working edits)
-SELECT dolt_hashof_table('users');
-SELECT dolt_hashof_table('users', 'main');
-
--- One index on its own
-SELECT dolt_hashof_index('users_by_email');
-SELECT dolt_hashof_index('users_by_email', 'main');
-
--- Whole catalog (moves when any table root or membership changes)
-SELECT dolt_hashof_db();
-SELECT dolt_hashof_db('HEAD');
-```
-
-Results are 40-char lowercase hex. `_table` / `_db` are history-independent:
-identical `(key, value)` sets hash the same regardless of insert order or
-branch. Property tests: `test/vc_oracle_hashof_test.sh`.
-
-An index is part of the table it indexes. `dolt_hashof_index` hashes one
-index, `dolt_hashof_table` folds in every index of that table, and a change to
-an index shows in `dolt_status` as a modification of the table it belongs to,
-never as a row of its own. `REINDEX` rewrites what the rows imply, so on a
-database whose indexes match its rows it changes no hash and leaves
-`dolt_status` clean; a hash that moves across `REINDEX` means the stored index
-did not match its rows.
-
-#### Garbage Collection
-
-Stop-the-world mark-and-sweep over branches, tags, history, catalogs, and
-prolly nodes; rewrites the file with only live chunks. Safe and idempotent.
-
-```sql
+SELECT dolt_hashof('HEAD'), dolt_hashof_table('users'), dolt_hashof_db();
 SELECT dolt_gc();
--- "12 chunks removed, 45 chunks kept"
 ```
 
-#### Remotes
-
-Git-like push / fetch / pull / clone between databases, over the filesystem
-or HTTP.
+**Remotes** — [dolt_remote.md](doc/doltlite/dolt_remote.md)
 
 ```sql
 SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
@@ -555,16 +217,11 @@ SELECT dolt_pull('origin', 'main');
 SELECT dolt_clone('http://myserver:8080/mydb.db');
 ```
 
-Remote semantics and lazy clones: [remotes.md](doc/doltlite/remotes.md).
-Serving databases with `doltlite-remotesrv`, which binds to localhost until
-TLS and authentication are configured: [remotesrv.md](doc/doltlite/remotesrv.md).
+Remote semantics: [remotes.md](doc/doltlite/remotes.md). Serving over HTTP
+with `doltlite-remotesrv`, which binds to localhost until TLS and
+authentication are configured: [remotesrv.md](doc/doltlite/remotesrv.md).
 
-#### Version String
-
-```sql
-SELECT dolt_version();
--- e.g. "v0.11.38" (from git describe at compile time)
-```
+**Version** — `SELECT dolt_version();` ([dolt_version.md](doc/doltlite/dolt_version.md))
 
 ## Using Existing SQLite Databases
 
