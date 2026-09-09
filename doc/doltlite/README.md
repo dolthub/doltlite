@@ -3,6 +3,12 @@
 Flat list. The [README](../../README.md) covers install, bindings, and a tour
 of the version-control features; these pages hold the detail.
 
+## Start here
+
+- [demo.md](demo.md) — **The DoltHub Break Room Incident**: a whodunit that is
+  secretly the tutorial. Every SQL block runs as written against
+  `./doltlite case.db`, and a test keeps the story honest.
+
 ## Build and embed
 
 - [building.md](building.md) — macOS, Linux, Windows, WebAssembly builds and flags
@@ -64,4 +70,3 @@ the forms each surface accepts are in [refs.md](refs.md).
 
 - [performance.md](performance.md) — benchmarks and asserted complexity properties
 - [testing.md](testing.md) — test layers, oracles, and allowlists
-- [demo.md](demo.md) — a narrative walkthrough of the version-control features
