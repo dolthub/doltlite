@@ -48,7 +48,8 @@ can be fixed and `--continue` retried. The working set must be clean to start.
 | `rebase already in progress; use --continue or --abort` | second `-i` |
 | `no rebase in progress` | `--continue`/`--abort` with no plan |
 | `first non-drop action must be pick or reword` | invalid plan |
-| `rebase aborted due to changes in branch <name>` | the original/current branch moved during the rebase |
+| `rebase aborted due to changes in branch <name>` | the current branch moved during the rebase |
+| `rebase aborted due to changes in the source branch` | the upstream moved during the rebase |
 
 ## Differences from Dolt
 

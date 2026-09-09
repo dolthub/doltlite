@@ -34,9 +34,10 @@ back.` Inside `BEGIN` they persist and block `dolt_commit` until resolved.
 
 The per-table vtable exists only while that table has recorded violations.
 `violation_type` is `foreign key`, `unique index`, `check constraint`, `not
-null`, or `strict type`. Violating rows stay in the base table; every member of
-a unique-index collision is recorded. Resolve by fixing the data and
-`DELETE`-ing the violation row.
+null`, or `strict type`. Foreign-key, check, not-null, and strict-type
+violators stay in the base table. A unique-index collision records every
+member, and the higher-rowid row is moved out of the table into the violations
+vtable. Resolve by fixing the data and `DELETE`-ing the violation row.
 
 ## dolt_verify_constraints
 
