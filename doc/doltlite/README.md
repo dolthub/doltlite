@@ -20,6 +20,8 @@ of the version-control features; these pages hold the detail.
 
 - [refs.md](refs.md) — revision syntax: branches, tags, hashes, `HEAD~N`, `WORKING`, `STAGED`, ranges, `db@branch` opens, name rules
 
+- [dolt-differences.md](dolt-differences.md) — what is deliberately different from Dolt, and what is missing on purpose
+
 ## Remotes
 
 - [remotes.md](remotes.md) — push, fetch, pull, clone, lazy clones, filesystem and HTTP URLs
