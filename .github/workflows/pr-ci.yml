@@ -14,7 +14,6 @@ jobs:
     name: Classify changes
     runs-on: ubuntu-latest
     outputs:
-      docs_only: ${{ steps.files.outputs.docs_only }}
       docs_changed: ${{ steps.files.outputs.docs_changed }}
     steps:
       - id: files
@@ -23,7 +22,6 @@ jobs:
           script: |
             const pull = context.payload.pull_request;
             if (!pull) {
-              core.setOutput('docs_only', 'false');
               core.setOutput('docs_changed', 'true');
               return;
             }
@@ -35,10 +33,6 @@ jobs:
                 pull_number: pull.number,
                 per_page: 100,
               }
-            );
-            core.setOutput(
-              'docs_only',
-              String(files.length > 0 && files.every(file => file.filename.endsWith('.md')))
             );
             core.setOutput(
               'docs_changed',
@@ -68,37 +62,31 @@ jobs:
   build:
     name: Build all binaries
     needs: classify
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/ci-build.yml
 
   build_test:
     name: Build-Test
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/build-test.yml
 
   test_suite:
     name: Test Suite
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/test.yml
 
   sanitizers:
     name: Sanitizers
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/sanitizers.yml
 
   smoke:
     name: Smoke
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/smoke.yml
 
   benchmark:
     name: Benchmark
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/benchmark.yml
 
   gate:
@@ -108,7 +96,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - env:
-          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CLASSIFY: ${{ needs.classify.result }}
           DOC_LINKS: ${{ needs.doc_links.result }}
           BUILD: ${{ needs.build.result }}
@@ -120,9 +107,6 @@ jobs:
         run: |
           test "$CLASSIFY" = success
           case "$DOC_LINKS" in success|skipped) ;; *) exit 1 ;; esac
-          if [ "$DOCS_ONLY" = true ]; then
-            exit 0
-          fi
           for result in "$BUILD" "$BUILD_TEST" "$TEST_SUITE" "$SANITIZERS" "$SMOKE" "$BENCHMARK"; do
             test "$result" = success
           done
