@@ -17,6 +17,13 @@ export DOLTLITE_CREDS_DIR="$TMPDIR/creds"
 pass=0; fail=0
 
 case "$DOLTLITE" in /*) ;; *) DOLTLITE="$PWD/$DOLTLITE" ;; esac
+if [ ! -x "$DOLTLITE" ] || ! "$DOLTLITE" :memory: "SELECT doltlite_engine();" >/dev/null 2>&1; then
+  echo "FAIL: $DOLTLITE is not a runnable doltlite"; echo "Results: 0 passed, 1 failed"; exit 1
+fi
+
+# The shell exits 1 when any statement errored under .bail off; anything
+# higher (a sanitizer abort, a signal) is an engine failure, never a pass.
+engine_ok() { [ "$1" -le 1 ]; }
 
 # Pages whose blocks need inputs a fixture cannot supply.
 SKIP="demo.md vec1.md building.md using-existing-sqlite-bindings.md"
@@ -24,7 +31,7 @@ SKIP="demo.md vec1.md building.md using-existing-sqlite-bindings.md"
 fixture() {  # fixture <db>: schema, three commits on main, a conflicting feature branch, tags, a remote
   local db="$1" remote="$TMPDIR/remote.db"
   rm -f "$db" "$remote"
-  "$DOLTLITE" "$db" <<SQL >/dev/null 2>&1
+  "$DOLTLITE" "$db" <<SQL >"$TMPDIR/fixture.out" 2>&1
 SELECT dolt_config('user.name', 'Fixture'); SELECT dolt_config('user.email', 'fixture@example.com');
 CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, email TEXT, active INT, confidence REAL);
 CREATE INDEX users_by_email ON users(email);
@@ -65,6 +72,11 @@ SELECT dolt_push('origin', '--tags');
 SELECT dolt_remote('remove', 'origin');
 SELECT dolt_creds_new();
 SQL
+  local rc=$?
+  if [ "$rc" -ne 0 ] || grep -q 'Error' "$TMPDIR/fixture.out"; then
+    echo "  fixture failed (rc=$rc): $(grep -m3 -iE 'error|Sanitizer|runtime error' "$TMPDIR/fixture.out" | tr '\n' ' ' | cut -c1-300)"
+    return 1
+  fi
 }
 
 prelude() {  # prelude <page>: extra statements before the page's blocks
@@ -107,10 +119,15 @@ for page in "$DOCS"/*.md; do
   db="$TMPDIR/$name.db"
   awk -v tmp="$TMPDIR" -v db="$db" -v name="$name" '/^````/{q=!q; next} q{next} /^```sql$/{f=1; n++; buf=""; next} /^```$/{if(f){ c=(buf ~ /dolt_clone\(/); if(c) printf ".open %s/%s.clone_%d.db\n", tmp, name, n; printf "%s", buf; if(c) printf ".open %s\n", db; print "-- @@BLOCK@@"} f=0; next} f{buf=buf $0 "\n"}' "$page" > "$TMPDIR/blocks.sql"
   [ -s "$TMPDIR/blocks.sql" ] || continue
-  fixture "$db"
+  if ! fixture "$db"; then fail=$((fail+1)); echo "FAIL: $name (fixture)"; continue; fi
   { echo ".bail off"; prelude "$name"; substitute "$db" < "$TMPDIR/blocks.sql"; } > "$TMPDIR/run.sql"
   "$DOLTLITE" "$db" < "$TMPDIR/run.sql" > "$TMPDIR/out.txt" 2>&1
+  rc=$?
   bad_lines=""
+  if ! engine_ok "$rc"; then
+    bad_lines="
+    engine exited $rc: $(grep -m2 -iE 'Sanitizer|runtime error|Abort|Segmentation' "$TMPDIR/out.txt" | tr '\n' ' ' | cut -c1-300)"
+  fi
   while IFS= read -r line; do
     case "$line" in
       *"error near line "*|*"Error near line "*|*"error in "*) ;;
