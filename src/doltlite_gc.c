@@ -1214,8 +1214,8 @@ int doltliteGcVacuumInto(
     rc = gcWriteCompactedTo(cs, &marked, zPath, 0, &bTargetNonEmpty,
                             &pOutFile, &finalSize,
                             &aNewIndex, &nNewIndex, &nNewData);
-    sqlite3_free(zPath);
     if( bTargetNonEmpty ){
+      sqlite3_free(zPath);
       prollyHashSetFree(&marked);
       chunkStoreUnlock(cs);
       *pzPhase = "output file already exists";
@@ -1225,10 +1225,13 @@ int doltliteGcVacuumInto(
   prollyHashSetFree(&marked);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zPath);
     *pzPhase = "vacuum into write failed";
     return rc;
   }
+  /* The VFS keeps the open name until xClose; free it after. */
   sqlite3OsCloseFree(pOutFile);
+  sqlite3_free(zPath);
   sqlite3_free(aNewIndex);
   return SQLITE_OK;
 }

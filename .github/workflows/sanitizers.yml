@@ -116,7 +116,7 @@ jobs:
       run: |
         cd build
         for s in doltlite_branch doltlite_default_branch doltlite_tag \
-                 doltlite_gc remote_test; do
+                 doltlite_gc doltlite_vacuum remote_test; do
           echo "=== $s ==="
           bash ../test/$s.sh ./doltlite || exit 1
         done
@@ -182,7 +182,7 @@ jobs:
       run: |
         cd build
         for s in doltlite_branch doltlite_default_branch doltlite_tag \
-                 doltlite_gc remote_test; do
+                 doltlite_gc doltlite_vacuum remote_test; do
           echo "=== $s ==="
           bash ../test/$s.sh ./doltlite || exit 1
         done
