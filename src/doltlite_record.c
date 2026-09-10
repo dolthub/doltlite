@@ -320,11 +320,18 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
 
 void doltliteFreeColInfo(DoltliteColInfo *ci){
   int i;
-  for(i=0; i<ci->nCol; i++) sqlite3_free(ci->azName[i]);
+  for(i=0; i<ci->nCol; i++){
+    sqlite3_free(ci->azName[i]);
+    if( ci->azDecl ) sqlite3_free(ci->azDecl[i]);
+  }
   sqlite3_free(ci->azName);
+  sqlite3_free(ci->azDecl);
+  sqlite3_free(ci->aAffinity);
   sqlite3_free(ci->aColToRec);
   sqlite3_free(ci->aPkSortFlags);
   ci->azName = 0;
+  ci->azDecl = 0;
+  ci->aAffinity = 0;
   ci->aColToRec = 0;
   ci->aPkSortFlags = 0;
   ci->nCol = 0;
@@ -581,13 +588,14 @@ void doltliteResultField(
   sqlite3_result_null(ctx);
 }
 
-void doltliteResultUserCol(
+static void resultUserCol(
   sqlite3_context *ctx,
   const DoltliteColInfo *ci,
   const u8 *pRec, int nRec,
   i64 intKey,
   int bRootIntKey,
-  int iDeclaredCol
+  int iDeclaredCol,
+  u8 affinity
 ){
   int iRecField;
   DoltliteRecordInfo ri;
@@ -600,7 +608,8 @@ void doltliteResultUserCol(
   /* intKey is the row key only on an intkey tree. A historical root with
   ** a different key shape stores the whole row in the record. */
   if( iDeclaredCol==ci->iPkCol && ci->iPkCol>=0 && bRootIntKey ){
-    sqlite3_result_int64(ctx, intKey);
+    if( affinity==SQLITE_AFF_REAL ) sqlite3_result_double(ctx, (double)intKey);
+    else sqlite3_result_int64(ctx, intKey);
     return;
   }
 
@@ -615,8 +624,24 @@ void doltliteResultUserCol(
     sqlite3_result_null(ctx);
     return;
   }
+  if( affinity==SQLITE_AFF_REAL ){
+    DoltliteSerialValue f;
+    if( doltliteSerialValueFromPayload(pRec,nRec,
+            ri.aType[iRecField],ri.aOffset[iRecField],&f)==SQLITE_OK
+     && f.eType==SQLITE_INTEGER ){
+      sqlite3_result_double(ctx, (double)f.i);
+      return;
+    }
+  }
   doltliteResultField(ctx, pRec, nRec,
                       ri.aType[iRecField], ri.aOffset[iRecField]);
+}
+
+void doltliteResultUserCol(
+  sqlite3_context *ctx, const DoltliteColInfo *ci,
+  const u8 *pRec, int nRec, i64 intKey, int bRootIntKey, int iDeclaredCol
+){
+  resultUserCol(ctx,ci,pRec,nRec,intKey,bRootIntKey,iDeclaredCol,SQLITE_AFF_BLOB);
 }
 
 /* Reconstruct a clustered row whose stored value is empty (PK covers every
@@ -702,7 +727,7 @@ void doltliteResultSideCol(
   const DoltliteSideCols *pSide,
   const DoltliteColInfo *pDeclared,
   const u8 *pRec, int nRec,
-  i64 intKey, int bRootIntKey, int iDeclaredCol
+  i64 intKey, int bRootIntKey, int iDeclaredCol, u8 affinity
 ){
   if( pSide && pSide->valid ){
     int iSide = -1;
@@ -713,12 +738,12 @@ void doltliteResultSideCol(
       sqlite3_result_null(ctx);
       return;
     }
-    doltliteResultUserCol(ctx, &pSide->ci, pRec, nRec,
-                          intKey, bRootIntKey, iSide);
+    resultUserCol(ctx, &pSide->ci, pRec, nRec,
+                  intKey, bRootIntKey, iSide, affinity);
     return;
   }
-  doltliteResultUserCol(ctx, pDeclared, pRec, nRec,
-                        intKey, bRootIntKey, iDeclaredCol);
+  resultUserCol(ctx, pDeclared, pRec, nRec,
+                intKey, bRootIntKey, iDeclaredCol, affinity);
 }
 
 u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut){

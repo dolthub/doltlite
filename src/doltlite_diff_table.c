@@ -24,7 +24,7 @@ static char *buildDiffSchema(const DoltliteColInfo *ci){
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
   if( doltliteAppendDisambiguatedColumnList(
           pStr,ci->azName,ci->nCol,"to_",", ",
-          azReserved,ArraySize(azReserved),-1)!=SQLITE_OK ){
+          azReserved,ArraySize(azReserved),-1,0)!=SQLITE_OK ){
     sqlite3_str_reset(pStr);
     return 0;
   }
@@ -33,7 +33,7 @@ static char *buildDiffSchema(const DoltliteColInfo *ci){
     sqlite3_str_appendall(pStr, ", ");
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"from_",", ",
-            azReserved,ArraySize(azReserved),-1)!=SQLITE_OK ){
+            azReserved,ArraySize(azReserved),-1,0)!=SQLITE_OK ){
       sqlite3_str_reset(pStr);
       return 0;
     }
@@ -1305,7 +1305,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   if( nCols > 0 && col < nCols ){
     doltliteResultSideCol(ctx, &c->toSide, &pVtab->cols,
                           r->pNewVal, r->nNewVal,
-                          r->intKey, r->keyIsIntKey, col);
+                          r->intKey, r->keyIsIntKey, col, SQLITE_AFF_BLOB);
   }else if( nCols > 0 && col == nCols ){
 
     sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
@@ -1315,7 +1315,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     int colIdx = col - nCols - 2;
     doltliteResultSideCol(ctx, &c->fromSide, &pVtab->cols,
                           r->pOldVal, r->nOldVal,
-                          r->intKey, r->keyIsIntKey, colIdx);
+                          r->intKey, r->keyIsIntKey, colIdx, SQLITE_AFF_BLOB);
   }else if( nCols > 0 && col == 2*nCols+2 ){
 
     sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);

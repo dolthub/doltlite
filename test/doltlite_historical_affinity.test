@@ -1,0 +1,140 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test doltlite_historical_affinity-setup {
+  CREATE TABLE t(
+    id INTEGER PRIMARY KEY, n INT, r REAL, q DECIMAL(10,2), s TEXT,
+    g INT AS (n+1) STORED, v TEXT COLLATE NOCASE,
+    padded TEXT COLLATE RTRIM, raw BLOB, untyped
+  );
+  INSERT INTO t(id,n,r,q,s,v,padded,raw,untyped) VALUES
+    (1,42,1.5,7.25,42,'abc','tail  ',42,42),
+    (2,7,2,5,7,'B','tail','42','42'),
+    (3,42,3,7.25,42,'ABC','other',x'3432',x'3432'),
+    (4,99,4,8,99,'Z','other ',NULL,NULL);
+  SELECT length(dolt_commit('-Am','base'));
+  SELECT dolt_tag('base');
+  SELECT count(*) FROM t WHERE n='42';
+  SELECT count(*) FROM t WHERE v='ABC';
+} {40 0 2 2}
+
+set queries {
+  integer {SELECT id FROM @ WHERE n='42' ORDER BY id}
+  real {SELECT id FROM @ WHERE r='2.0' ORDER BY id}
+  numeric {SELECT id FROM @ WHERE q='7.25' ORDER BY id}
+  text {SELECT id FROM @ WHERE s=42 ORDER BY id}
+  nocase {SELECT id FROM @ WHERE v='ABC' ORDER BY id}
+  rtrim {SELECT id FROM @ WHERE padded='tail' ORDER BY id}
+  blob {SELECT id FROM @ WHERE raw='42' ORDER BY id}
+  untyped {SELECT id FROM @ WHERE untyped=42 ORDER BY id}
+  null {SELECT id FROM @ WHERE raw IS NULL ORDER BY id}
+  types {SELECT typeof(n),typeof(r),typeof(q),typeof(s),typeof(raw)
+           FROM @ ORDER BY id}
+  range {SELECT id FROM @ WHERE n BETWEEN '40' AND '50' ORDER BY id}
+  in {SELECT id FROM @ WHERE n IN ('42','7') ORDER BY id}
+  join {WITH rhs(a,b) AS (VALUES('42','ABC'))
+        SELECT h.id FROM @ h JOIN rhs ON h.n=rhs.a AND h.v=rhs.b
+         ORDER BY h.id}
+  sort {SELECT id FROM @ ORDER BY v,id}
+  group {SELECT min(id),count(*) FROM @ GROUP BY v ORDER BY min(id)}
+  distinct {SELECT count(DISTINCT v),count(DISTINCT padded) FROM @}
+  explicit_collation {SELECT id FROM @ WHERE v COLLATE BINARY='ABC'}
+}
+foreach {name sql} $queries {
+  set expected($name) [db eval [string map [list @ t] $sql]]
+}
+foreach phase {live reopen dropped} {
+  if {$phase ne "live"} {
+    if {$phase eq "dropped"} {
+      db eval {DROP TABLE t; SELECT dolt_commit('-Am','drop')}
+    }
+    db close
+    sqlite3 db test.db
+  }
+  foreach {surface source} {
+    snapshot dolt_at_t('base')
+    history dolt_history_t('base')
+  } {
+    foreach {name sql} $queries {
+      do_execsql_test doltlite_historical_affinity-$phase-$surface-$name \
+          [string map [list @ $source] $sql] $expected($name)
+    }
+  }
+}
+
+reset_db
+do_execsql_test doltlite_historical_affinity-strict-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a ANY) STRICT;
+  INSERT INTO t VALUES(1,'42'),(2,42);
+  SELECT length(dolt_commit('-Am','strict'));
+} {40}
+foreach source {t dolt_at_t('HEAD') dolt_history_t} {
+  do_execsql_test doltlite_historical_affinity-strict-$source "
+    SELECT id,typeof(a) FROM $source WHERE a='42' ORDER BY id;
+    SELECT id,typeof(a) FROM $source WHERE a=42 ORDER BY id;
+  " {1 text 2 integer}
+}
+
+reset_db
+do_execsql_test doltlite_historical_affinity-collision-setup {
+  CREATE TABLE t(id INT PRIMARY KEY, commit_hash TEXT COLLATE NOCASE);
+  INSERT INTO t VALUES(1,'abc');
+  SELECT length(dolt_commit('-Am','collision'));
+} {40}
+do_execsql_test doltlite_historical_affinity-collision {
+  SELECT id FROM dolt_history_t WHERE commit_hash_1='ABC';
+} {1}
+
+reset_db
+proc historical_nocase {a b} { string compare -nocase $a $b }
+db collate {fold"case} historical_nocase
+do_execsql_test doltlite_historical_affinity-custom-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT COLLATE "fold""case");
+  INSERT INTO t VALUES(1,'abc');
+  SELECT length(dolt_commit('-Am','custom collation'));
+} {40}
+foreach source {t dolt_at_t('HEAD') dolt_history_t} {
+  do_execsql_test doltlite_historical_affinity-custom-$source \
+      "SELECT id FROM $source WHERE v='ABC'" {1}
+}
+
+do_execsql_test doltlite_historical_affinity-custom-drop {
+  SELECT dolt_tag('custom');
+  DROP TABLE t;
+  SELECT length(dolt_commit('-Am','drop custom collation table'));
+} {0 40}
+db close
+sqlite3 db test.db
+foreach source {dolt_at_t('custom') dolt_history_t('custom')} {
+  do_test doltlite_historical_affinity-custom-missing-$source {
+    lindex [catchsql "SELECT id FROM $source WHERE v='ABC'"] 0
+  } {1}
+}
+db collate {fold"case} historical_nocase
+foreach source {dolt_at_t('custom') dolt_history_t('custom')} {
+  do_execsql_test doltlite_historical_affinity-custom-dropped-$source \
+      "SELECT id FROM $source WHERE v='ABC'" {1}
+}
+
+reset_db
+set historical_collation_deletes 0
+sqlite3_create_collation_v2 db owned historical_nocase \
+    {incr ::historical_collation_deletes}
+do_execsql_test doltlite_historical_affinity-owned-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT COLLATE owned);
+  INSERT INTO t VALUES(1,'abc');
+  SELECT length(dolt_commit('-Am','owned collation'));
+  SELECT dolt_tag('owned');
+  ALTER TABLE t ADD COLUMN n INT;
+  SELECT id FROM dolt_at_t('owned') WHERE v='ABC';
+} {40 0 1}
+do_test doltlite_historical_affinity-owned-borrowed {
+  set historical_collation_deletes
+} {0}
+db close
+do_test doltlite_historical_affinity-owned-close {
+  set historical_collation_deletes
+} {1}
+sqlite3 db test.db
+
+finish_test

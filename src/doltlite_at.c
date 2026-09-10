@@ -23,8 +23,9 @@ static char *atBuildSchema(const DoltliteColInfo *ci){
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  if( doltliteAppendIntegerPkColumnList(pStr, ci->azName, ci->nCol,
-                                        ci->iPkCol)!=SQLITE_OK ){
+  if( doltliteAppendDisambiguatedColumnList(
+          pStr,ci->azName,ci->nCol,"",", ",0,0,
+          ci->iPkCol,ci->azDecl)!=SQLITE_OK ){
     sqlite3_str_reset(pStr);
     return 0;
   }
@@ -131,6 +132,35 @@ static int sideColsDeclaredSchemaMatches(
   return SQLITE_OK;
 }
 
+static int atOpenSchemaDb(sqlite3 *db, sqlite3 **ppTmp){
+  sqlite3 *tmp = 0;
+  HashElem *pElem;
+  int i, rc;
+  *ppTmp = 0;
+  rc = sqlite3_open(":memory:", &tmp);
+  sqlite3_mutex_enter(db->mutex);
+  for(pElem=sqliteHashFirst(&db->aCollSeq); rc==SQLITE_OK && pElem;
+      pElem=sqliteHashNext(pElem)){
+    CollSeq *aColl = sqliteHashData(pElem);
+    for(i=0; i<3 && rc==SQLITE_OK; i++){
+      CollSeq *pColl = &aColl[i];
+      int enc = pColl->enc & SQLITE_UTF16_ALIGNED
+          ? SQLITE_UTF16_ALIGNED : pColl->enc;
+      if( !pColl->xCmp ) continue;
+      /* The caller owns collation contexts; this connection only borrows them. */
+      rc = sqlite3_create_collation(tmp, pColl->zName, enc,
+                                    pColl->pUser, pColl->xCmp);
+    }
+  }
+  sqlite3_mutex_leave(db->mutex);
+  if( rc!=SQLITE_OK ){
+    sqlite3_close(tmp);
+    return rc;
+  }
+  *ppTmp = tmp;
+  return SQLITE_OK;
+}
+
 /* Load columns as pCatHash declares them. Invalid-side fallback to declared
 ** layout is allowed only when the table is absent or the live schema is
 ** identical; otherwise fail rather than decode with the wrong layout. */
@@ -166,7 +196,7 @@ int doltliteSideColsLoad(
     return bSideHasData ? SQLITE_CORRUPT : SQLITE_OK;
   }
 
-  rc = sqlite3_open(":memory:", &tmp);
+  rc = atOpenSchemaDb(db, &tmp);
   if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
   if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTable, &pSide->ci);
   if( tmp ) sqlite3_close(tmp);
@@ -344,6 +374,44 @@ done:
   return rc;
 }
 
+static int atLoadColumnDeclarations(
+  sqlite3 *db, const char *zTable, DoltliteColInfo *ci
+){
+  Table *pTab;
+  int i, rc = SQLITE_OK;
+  if( ci->nCol==0 ) return SQLITE_OK;
+  ci->azDecl = sqlite3_malloc64(ci->nCol*sizeof(char*));
+  if( !ci->azDecl ) return SQLITE_NOMEM;
+  memset(ci->azDecl, 0, ci->nCol*sizeof(char*));
+  ci->aAffinity = sqlite3_malloc(ci->nCol);
+  if( !ci->aAffinity ) return SQLITE_NOMEM;
+  sqlite3_mutex_enter(db->mutex);
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( !pTab ) rc = SQLITE_NOTFOUND;
+  for(i=0; rc==SQLITE_OK && i<ci->nCol; i++){
+    int iCol = sqlite3ColumnIndex(pTab, ci->azName[i]);
+    const char *zType = "BLOB";
+    const char *zColl;
+    if( iCol<0 ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+    ci->aAffinity[i] = pTab->aCol[iCol].affinity;
+    switch( ci->aAffinity[i] ){
+      case SQLITE_AFF_TEXT: zType = "TEXT"; break;
+      case SQLITE_AFF_NUMERIC: zType = "NUMERIC"; break;
+      case SQLITE_AFF_INTEGER: zType = "INTEGER"; break;
+      case SQLITE_AFF_REAL: zType = "REAL"; break;
+    }
+    zColl = sqlite3ColumnColl(&pTab->aCol[iCol]);
+    ci->azDecl[i] = sqlite3_mprintf(" %s COLLATE \"%w\"",
+                                     zType,zColl ? zColl : "BINARY");
+    if( !ci->azDecl[i] ) rc = SQLITE_NOMEM;
+  }
+  sqlite3_mutex_leave(db->mutex);
+  return rc;
+}
+
 static int atLoadSchemaColumns(
   sqlite3 *db,
   ChunkStore *cs,
@@ -362,9 +430,10 @@ static int atLoadSchemaColumns(
   rc = loadSchemaEntryFromCatalog(db, cs, pCache, pCatalog,
                                   zTableName, &entry, &found);
   if( rc==SQLITE_OK && found && entry.zSql ){
-    rc = sqlite3_open(":memory:", &tmp);
+    rc = atOpenSchemaDb(db, &tmp);
     if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
     if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(tmp, zTableName, pCols);
     if( rc==SQLITE_OK && pCols->nCol<=0 ){
       doltliteFreeColInfo(pCols);
       rc = SQLITE_NOTFOUND;
@@ -398,6 +467,7 @@ int doltliteLoadHistoricalTableColumns(
   pCols->iPkCol = -1;
   if( sqlite3FindTable(db, zTableName, "main") ){
     rc = doltliteGetColumnNames(db, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
     if( rc!=SQLITE_OK ) return rc;
     if( pCols->nCol>0 ) return SQLITE_OK;
     doltliteFreeColInfo(pCols);
@@ -747,7 +817,8 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else if(nCols>0 && col<nCols){
     doltliteResultSideCol(ctx, &c->side, &v->cols,
                           c->common.pVal, c->common.nVal,
-                          c->common.intKey, c->common.rootIntKey, col);
+                          c->common.intKey, c->common.rootIntKey, col,
+                          v->cols.aAffinity[col]);
   }
 
   return SQLITE_OK;

@@ -32,6 +32,12 @@ For a DoltLite-format main database, the compatibility contract is:
   `PRAGMA encoding` at `UTF-8`.
 - Stored generated columns are recomputed from merged base-column values.
   Dependent generated columns and secondary indexes use the recomputed values.
+- Snapshot (`dolt_at_<table>`) and history (`dolt_history_<table>`) columns
+  retain the affinity and collation of the schema used to declare the virtual
+  table. Predicates, joins, ordering, and grouping use SQLite's comparison
+  rules, including when that schema is recovered for a dropped table.
+  Custom collations must be registered on the querying connection; historical
+  schema recovery borrows those registrations without taking ownership.
 - Implicit rowids are allocated from a counter shared by every branch of a
   database, so an `INSERT` that omits the `INTEGER PRIMARY KEY` (or the
   rowid of a table without a primary key) never gets an id another branch

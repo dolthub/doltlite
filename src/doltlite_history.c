@@ -17,7 +17,7 @@ static char *htBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
   if( doltliteAppendDisambiguatedColumnList(
           pStr,ci->azName,ci->nCol,"",", ",azReserved,
-          ArraySize(azReserved),ci->iPkCol)!=SQLITE_OK ){
+          ArraySize(azReserved),ci->iPkCol,ci->azDecl)!=SQLITE_OK ){
     sqlite3_str_reset(pStr);
     return 0;
   }
@@ -400,7 +400,8 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   if(nCols>0 && col<nCols){
     doltliteResultSideCol(ctx, &c->side, &v->cols,
                           c->common.pVal, c->common.nVal,
-                          c->common.intKey, c->common.rootIntKey, col);
+                          c->common.intKey, c->common.rootIntKey, col,
+                          v->cols.aAffinity[col]);
   }else{
     int fixedCol=col-nCols;
     switch(fixedCol){
