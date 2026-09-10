@@ -57,6 +57,7 @@ jobs:
           ../configure ${TCL_CONFIG:+--with-tcl=$(dirname "$TCL_CONFIG")} >/dev/null
           make -j"$(nproc)" doltlite
       - run: bash test/oracle_doc_examples_test.sh build/doltlite
+      - run: bash test/doc_examples_selftest.sh build/doltlite
       - run: bash test/oracle_doc_agent_guide_test.sh build/doltlite
 
   build:
