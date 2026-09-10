@@ -170,6 +170,56 @@ foreach indexed {0 1} {
   } {1 1 1 2 2 2 5 7 3 7 8 15}
 }
 
+foreach {shape key vals1 vals2} {
+  clustered {id INT PRIMARY KEY} {1,1,2} {2,1,2}
+  textpk {id TEXT PRIMARY KEY} {'a',1,2} {'b',1,2}
+} {
+  reset_db
+  execsql "CREATE TABLE t($key, x INT, y INT)"
+  execsql "INSERT INTO t(id,x,y) VALUES($vals1)"
+  execsql {
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+  }
+  execsql "CREATE TABLE t2($key, x INT, y INT, z INT AS(x+y) STORED UNIQUE)"
+  execsql {
+    INSERT INTO t2(id,x,y) SELECT id,x,y FROM t;
+    DROP TABLE t;
+    ALTER TABLE t2 RENAME TO t;
+    SELECT dolt_commit('-Am','left adds unique stored column');
+    SELECT dolt_checkout('feature');
+  }
+  execsql "INSERT INTO t(id,x,y) VALUES($vals2)"
+  execsql {
+    SELECT dolt_commit('-Am','right inserts colliding row');
+    SELECT dolt_checkout('main');
+  }
+  set name "doltlite_merge_generated-cvunique-$shape"
+  set before [execsql {SELECT dolt_hashof_table('t')}]
+
+  # The recomputed value collides on a clustered key, where the unique
+  # detector cannot read the merged column list back over the connection.
+  # It must report a constraint violation, not an internal result code.
+  do_test $name.1 {
+    set res [catchsql {SELECT dolt_merge('feature')}]
+    list [lindex $res 0] \
+         [string match {*constraint violation*} [lindex $res 1]]
+  } {1 1}
+  do_test $name.2 {
+    expr {$before eq [execsql {SELECT dolt_hashof_table('t')}]}
+  } {1}
+
+  # The refusal has to be durable: reopening must not surface the row the
+  # merge rejected, and the unique index must still hold.
+  db close
+  sqlite3 db test.db
+  do_test $name.3 {
+    list [execsql {SELECT count(*) FROM t}] \
+         [expr {$before eq [execsql {SELECT dolt_hashof_table('t')}]}] \
+         [execsql {PRAGMA integrity_check}]
+  } {1 1 ok}
+}
+
 foreach kind {unique evaluation} {
   reset_db
   if {$kind eq "unique"} {
