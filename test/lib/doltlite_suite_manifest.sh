@@ -12,6 +12,7 @@ doltlite_parity.sh
 doltlite_commit.sh
 doltlite_commit_date.sh
 doltlite_hashof_refs.sh
+doltlite_creds.sh
 doltlite_staging.sh
 doltlite_clean.sh
 doltlite_workspace.sh
