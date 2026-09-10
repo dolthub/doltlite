@@ -3,17 +3,12 @@ name: Cancel conflicted PR CI
 on:
   push:
     branches: [master]
-  pull_request:
-    paths:
-      - .github/workflows/cancel-conflicted-ci.yml
-      - .github/scripts/cancel-conflicted-pr-runs.js
-      - .github/scripts/cancel-conflicted-pr-runs.test.js
 
 permissions:
   contents: read
 
 concurrency:
-  group: cancel-conflicted-ci-${{ github.event_name == 'push' && 'master' || github.event.pull_request.number }}
+  group: cancel-conflicted-ci-master
   cancel-in-progress: true
 
 jobs:
@@ -25,7 +20,6 @@ jobs:
       - run: node --test .github/scripts/cancel-conflicted-pr-runs.test.js
 
   cancel:
-    if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
