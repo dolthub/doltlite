@@ -45,10 +45,14 @@ func main() {
 	defer cleanup()
 
 	check("engine version reports", doltlite.Version() != "", true)
+	check("build version reports", doltlite.BuildVersion != "", true)
 
 	db, err := sql.Open("doltlite", dbPath)
 	must(err)
 	defer db.Close()
+	var buildVersion string
+	must(db.QueryRow(`SELECT dolt_version()`).Scan(&buildVersion))
+	check("engine version is stamped", buildVersion, doltlite.BuildVersion)
 
 	_, err = db.Exec(`CREATE TABLE t(pk INTEGER PRIMARY KEY, s TEXT, f REAL, b BLOB)`)
 	must(err)

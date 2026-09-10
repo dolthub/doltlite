@@ -17,6 +17,13 @@ VERSION="${1:?usage: assemble.sh <version> <out_dir> <build_dir>}"
 OUT_DIR="${2:?usage: assemble.sh <version> <out_dir> <build_dir>}"
 BUILD_DIR="${3:?usage: assemble.sh <version> <out_dir> <build_dir>}"
 
+case "$VERSION" in
+  *[!A-Za-z0-9._+-]*)
+    echo "ERROR: version contains unsupported characters: $VERSION" >&2
+    exit 1
+    ;;
+esac
+
 PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$PKG_DIR/../.." && pwd)"
 
@@ -31,14 +38,19 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 cp "$PKG_DIR/doltlite.go" "$OUT_DIR/doltlite.go"
+sed "s/@DOLTLITE_VERSION@/$VERSION/g" \
+  "$PKG_DIR/doltlite_build.go.in" > "$OUT_DIR/doltlite_build.go"
 cp "$PKG_DIR/go.mod"      "$OUT_DIR/go.mod"
 cp "$PKG_DIR/README.md"   "$OUT_DIR/README.md"
 cp "$ROOT/LICENSE.md"     "$OUT_DIR/LICENSE.md"
-cp "$BUILD_DIR/sqlite3.c" "$OUT_DIR/doltlite.c"
+sed "s/# define DOLTLITE_VERSION \"doltlite-amalgamation\"/# define DOLTLITE_VERSION \"$VERSION\"/" \
+  "$BUILD_DIR/sqlite3.c" > "$OUT_DIR/doltlite.c"
 cp "$BUILD_DIR/sqlite3.h" "$OUT_DIR/doltlite.h"
 
-# Go modules take their version from the repository tag, not from go.mod, so
-# there is nothing to stamp -- record it for the pushing side instead.
+grep -Fq "# define DOLTLITE_VERSION \"$VERSION\"" "$OUT_DIR/doltlite.c"
+
+# Go modules take their version from the repository tag, not from go.mod.
+# Record it for the pushing side as well as in the compiled build metadata.
 echo "$VERSION" > "$OUT_DIR/.version"
 
 echo "Staged doltlite-driver $VERSION in $OUT_DIR:"

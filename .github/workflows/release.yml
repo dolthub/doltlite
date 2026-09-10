@@ -821,6 +821,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch'
     needs: release
     runs-on: ubuntu-latest
+    concurrency:
+      group: doltlite-driver-publish
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
       VERSION: ${{ github.ref_name }}
@@ -877,6 +880,16 @@ jobs:
         fi
         git tag "${VERSION}"
         git push origin "${VERSION}"
+
+        if git ls-remote --exit-code --heads origin dev >/dev/null 2>&1; then
+          git fetch origin dev
+          git switch --create dev --track origin/dev
+          if ! git merge-base --is-ancestor main HEAD; then
+            git merge --strategy=ours main \
+              -m "Merge doltlite-driver ${VERSION} into dev"
+            git push origin dev
+          fi
+        fi
 
   # ── Publish the .NET NuGet package ───────────────────────
   # nuget.org takes uploaded artifacts, so there is no split repo: assemble
