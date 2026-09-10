@@ -123,6 +123,53 @@ do_test doltlite_merge_generated-affinity.3 {
   expr {$before eq [execsql {SELECT dolt_hashof_table('t')}]}
 } {1}
 
+foreach indexed {0 1} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,x INT,y INT);
+    INSERT INTO t VALUES(1,1,1),(2,2,NULL);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    CREATE TABLE t2(id INTEGER PRIMARY KEY,x INT,y INT,z INT AS(x+y) STORED);
+    INSERT INTO t2(id,x,y) SELECT id,x,y FROM t;
+    DROP TABLE t;
+    ALTER TABLE t2 RENAME TO t;
+  }
+  if {$indexed} { execsql {CREATE INDEX iz ON t(z)} }
+  execsql {
+    SELECT dolt_commit('-Am','left adds stored column');
+    SELECT dolt_checkout('feature');
+    INSERT INTO t(id,x,y) VALUES(3,7,8);
+    UPDATE t SET y=5 WHERE id=2;
+    SELECT dolt_commit('-Am','right inserts and updates');
+    SELECT dolt_checkout('main');
+  }
+  set name "doltlite_merge_generated-onesided-$indexed"
+  do_test $name.1 {
+    execsql {SELECT length(dolt_merge('feature'))>0}
+  } {1}
+
+  # Row 3 is a their-side insert and row 2 a their-side modify whose base and
+  # ours both hold NULL, so neither row reaches the cell-merge path.
+  do_execsql_test $name.2 {
+    SELECT id,x,y,z FROM t ORDER BY id;
+  } {1 1 1 2 2 2 5 7 3 7 8 15}
+  do_execsql_test $name.3 {
+    SELECT count(*) FROM t WHERE z IS NOT (x+y);
+  } {0}
+  if {$indexed} {
+    do_execsql_test $name.4 {
+      SELECT id FROM t INDEXED BY iz WHERE z=15;
+      SELECT count(*) FROM t INDEXED BY iz WHERE z<>x+y;
+    } {3 0}
+  }
+  db close
+  sqlite3 db test.db
+  do_execsql_test $name.5 {
+    SELECT id,x,y,z FROM t ORDER BY id;
+  } {1 1 1 2 2 2 5 7 3 7 8 15}
+}
+
 foreach kind {unique evaluation} {
   reset_db
   if {$kind eq "unique"} {
