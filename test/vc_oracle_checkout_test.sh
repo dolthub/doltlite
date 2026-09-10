@@ -712,7 +712,7 @@ SAVEPOINT sp1;
 UPDATE t SET v='dirty' WHERE id=1;
 SELECT dolt_checkout('-b', 'side');
 ROLLBACK TO sp1;
-" "SELECT concat(active_branch(), char(9), (SELECT v FROM t WHERE id=1), char(9), (SELECT group_concat(name, ',') FROM dolt_branches));"
+" "SELECT concat(active_branch(), char(9), (SELECT v FROM t WHERE id=1), char(9), (SELECT group_concat(name) FROM dolt_branches));"
 
 oracle_savepoint_poststate "savepoint_checkout_missing_invalidates" "
 $SEED
