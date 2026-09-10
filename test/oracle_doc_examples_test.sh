@@ -17,8 +17,8 @@ export DOLTLITE_CREDS_DIR="$TMPDIR/creds"
 pass=0; fail=0
 
 case "$DOLTLITE" in /*) ;; *) DOLTLITE="$PWD/$DOLTLITE" ;; esac
-if [ ! -x "$DOLTLITE" ] || ! "$DOLTLITE" :memory: "SELECT doltlite_engine();" >/dev/null 2>&1; then
-  echo "FAIL: $DOLTLITE is not a runnable doltlite"; echo "Results: 0 passed, 1 failed"; exit 1
+if [ ! -x "$DOLTLITE" ] || [ "$("$DOLTLITE" :memory: "SELECT doltlite_engine();" 2>/dev/null)" != prolly ]; then
+  echo "FAIL: $DOLTLITE is not a runnable doltlite (doltlite_engine() must return prolly)"; echo "Results: 0 passed, 1 failed"; exit 1
 fi
 
 # The shell exits 1 when any statement errored under .bail off; anything
@@ -128,8 +128,13 @@ for page in "$DOCS"/*.md; do
   if dots=$(grep -nE '^[[:space:]]*\.[A-Za-z]' "$TMPDIR/blocks.sql" | grep -vE '^[0-9]+:\.open '); then
     fail=$((fail+1)); echo "FAIL: $name (shell dot-command in a sql block)"; echo "$dots" | sed 's/^/    /'; continue
   fi
-  if fns=$(grep -niE '\b(writefile|readfile|edit|fsdir|zipfile|load_extension)[[:space:]]*\(' "$TMPDIR/blocks.sql"); then
-    fail=$((fail+1)); echo "FAIL: $name (shell file function in a sql block)"; echo "$fns" | sed 's/^/    /'; continue
+  # Scan a normalized copy: comments removed, whitespace removed, lowercased,
+  # so a call split across lines, wrapped in comments, or written as a quoted
+  # identifier is still seen.
+  norm=$(sed -E 's#--.*$##' "$TMPDIR/blocks.sql" | tr -d '\n\r\t ' | sed -E 's#/\*[^*]*\*+([^/*][^*]*\*+)*/##g' | tr '[:upper:]' '[:lower:]')
+  if echo "$norm" | grep -qE '(["`]|\[)?(writefile|readfile|edit|fsdir|zipfile|load_extension)(["`]|\])?\('; then
+    fail=$((fail+1)); echo "FAIL: $name (shell file function in a sql block)"
+    grep -niE 'writefile|readfile|edit|fsdir|zipfile|load_extension' "$TMPDIR/blocks.sql" | sed 's/^/    /'; continue
   fi
   if ! fixture "$db"; then fail=$((fail+1)); echo "FAIL: $name (fixture)"; continue; fi
   { echo ".bail off"; prelude "$name"; substitute "$db" < "$TMPDIR/blocks.sql"; } > "$TMPDIR/run.sql"
