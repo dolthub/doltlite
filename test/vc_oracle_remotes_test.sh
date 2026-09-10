@@ -87,7 +87,7 @@ oracle_savepoint_remote_poststate() {
   dl_rc=$?
   dl_v=$(printf ".headers off\n.mode list\nSELECT v FROM t WHERE id=1;\n" \
          | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
-  dl_remotes=$(printf ".headers off\n.mode list\nSELECT coalesce(group_concat(name, ','), '') FROM dolt_remotes;\n" \
+  dl_remotes=$(printf ".headers off\n.mode list\nSELECT coalesce(group_concat(name), '') FROM dolt_remotes;\n" \
                | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
 
   local dolt_setup
@@ -95,7 +95,7 @@ oracle_savepoint_remote_poststate() {
   vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
   dt_rc=$?
   dt_v=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT v FROM t WHERE id=1;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
-  dt_remotes=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT coalesce(group_concat(name, ','), '') FROM dolt_remotes;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
+  dt_remotes=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT coalesce(group_concat(name), '') FROM dolt_remotes;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
 
   if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" && [ "$dl_v" = "$dt_v" ] && [ "$dl_remotes" = "$dt_remotes" ]; then
     pass=$((pass+1))
