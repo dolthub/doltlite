@@ -32,7 +32,19 @@ def pull_request(**overrides):
 
 class PublishPerformanceReportTest(unittest.TestCase):
     @mock.patch.object(publisher, "command")
-    def test_uses_actions_bot_identity_in_github_actions(self, command):
+    def test_uses_token_login_in_github_actions(self, command):
+        command.return_value.returncode = 0
+        command.return_value.stdout = "release-bot\n"
+        with mock.patch.dict(
+            publisher.os.environ,
+            {"GITHUB_ACTIONS": "true"},
+        ):
+            self.assertEqual(publisher.report_login(), "release-bot")
+
+    @mock.patch.object(publisher, "command")
+    def test_falls_back_to_app_identity_when_token_is_the_app(self, command):
+        command.return_value.returncode = 1
+        command.return_value.stdout = ""
         with mock.patch.dict(
             publisher.os.environ,
             {"GITHUB_ACTIONS": "true"},
@@ -41,10 +53,26 @@ class PublishPerformanceReportTest(unittest.TestCase):
                 publisher.report_login(),
                 "app/github-actions",
             )
-        command.assert_not_called()
+
+    @mock.patch.object(publisher, "command")
+    def test_rejects_unknown_login_outside_github_actions(self, command):
+        command.return_value.returncode = 1
+        command.return_value.stdout = ""
+        with mock.patch.dict(
+            publisher.os.environ,
+            {"GITHUB_ACTIONS": ""},
+        ):
+            with self.assertRaisesRegex(publisher.PublishError, "login"):
+                publisher.report_login()
+
+    def test_accepts_legacy_app_author_after_token_switch(self):
+        publisher.validate_previous_pr(
+            pull_request(author={"login": "app/github-actions"}), "release-bot"
+        )
 
     @mock.patch.object(publisher, "command")
     def test_discovers_login_outside_github_actions(self, command):
+        command.return_value.returncode = 0
         command.return_value.stdout = "report-bot\n"
         with mock.patch.dict(
             publisher.os.environ,

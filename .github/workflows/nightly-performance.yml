@@ -399,6 +399,9 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         label-description: Nightly absolute performance ceiling failure
 
+    # The release bot token opens the PR as a repository member, so its CI
+    # runs without a manual approval; the workflow token would author it as
+    # the GitHub Actions app, which the repository holds for approval.
     - name: Publish rolling performance report PR
       if: >-
         ${{ always() &&
@@ -406,7 +409,7 @@ jobs:
              inputs.source_run_id != '') &&
             steps.report.outputs.valid == '1' }}
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
       run: |
         python3 tool/publish-performance-report.py \
           --report "${{ steps.report.outputs.report }}" \
