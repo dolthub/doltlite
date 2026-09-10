@@ -1648,6 +1648,9 @@ doltlite_merge_rebuild.o:	$(TOP)/src/doltlite_merge_rebuild.c $(TOP)/src/doltlit
 doltlite_merge_rows.o:	$(TOP)/src/doltlite_merge_rows.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_rows.c
 
+doltlite_merge_generated.o:	$(TOP)/src/doltlite_merge_generated.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_generated.c
+
 doltlite_merge_schema.o:	$(TOP)/src/doltlite_merge_schema.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_schema.c
 

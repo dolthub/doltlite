@@ -251,11 +251,20 @@ static int mergePass1MergeTableData(
   }
 
   if( !handled ){
-    rc = mergeTableRows(c->db, &pAnc->root, &pOurs->root,
+    sqlite3 *pSchemaDb = 0;
+    Table *pTab = 0;
+    rc = mergeRowTable(c, zName,
+        ourSchemaChanged || theirSchemaChanged,
+        schemaChoice==SCHEMA_MERGE_THEIRS
+          || (theirSchemaChanged && !ourSchemaChanged),
+        &pSchemaDb, &pTab);
+    if( rc==SQLITE_OK ) rc = mergeTableRows(c->db, pTab,
+                        &pAnc->root, &pOurs->root,
                         pTheirsRoot, pOurs->flags,
                         pAnc->flags, pTheirsEntry->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
                         aIdxInfo, nIdxInfo, pRowPolicy);
+    sqlite3_close(pSchemaDb);
     if( rc!=SQLITE_OK ){
       mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
       return rc;
@@ -1297,7 +1306,7 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
         mergePass1FreeRowPolicy(&policy);
         return rc;
       }
-      rc = mergeTableRows(c->db, &ancEntry->root, &c->aOurs[iTable1Idx].root,
+      rc = mergeTableRows(c->db, 0, &ancEntry->root, &c->aOurs[iTable1Idx].root,
                           &theirsEntry->root, c->aOurs[iTable1Idx].flags,
                           ancEntry->flags, theirsEntry->flags,
                           &mergedTableRoot, &nConflicts, &aConflictRows,

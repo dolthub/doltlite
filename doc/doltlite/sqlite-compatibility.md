@@ -30,6 +30,8 @@ For a DoltLite-format main database, the compatibility contract is:
   from HEAD.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
+- Stored generated columns are recomputed from merged base-column values.
+  Dependent generated columns and secondary indexes use the recomputed values.
 - Implicit rowids are allocated from a counter shared by every branch of a
   database, so an `INSERT` that omits the `INTEGER PRIMARY KEY` (or the
   rowid of a table without a primary key) never gets an id another branch
