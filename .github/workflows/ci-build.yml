@@ -108,8 +108,8 @@ jobs:
     - name: Build Linux-only test binaries
       if: matrix.platform == 'ubuntu'
       run: |
+        set -eo pipefail
         cd build
-        set -o pipefail
         {
           make DOLTLITE_PROLLY_CHECK=1 doltlite-c-tests-build
           cc $CFLAGS -Wno-comment -I. -I../src \
@@ -200,8 +200,8 @@ jobs:
     - name: Build standalone Unix test probes
       if: matrix.platform != 'windows'
       run: |
+        set -eo pipefail
         cd build
-        set -o pipefail
         {
           cc $CFLAGS -Wall \
             -I../src -I../ext/ed25519 \
@@ -638,8 +638,8 @@ jobs:
 
     - name: Build
       run: |
+        set -eo pipefail
         cd build
-        set -o pipefail
         {
           make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
             sqlite3.c sqlite3.h
