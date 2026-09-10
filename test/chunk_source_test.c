@@ -36,6 +36,7 @@ struct SourceCtx {
   int nGet;
   int nGetMany;
   int nManyHash;
+  int nMaxManyHash;
   int nRequest;
   int nReturned;
   int faultIssued;
@@ -276,6 +277,15 @@ static int buildSource(const char *zPath, sqlite3 **ppDb){
   if( rc==SQLITE_OK ){
     rc = execSql(db, "SELECT dolt_commit('-A','-m','base fixture')");
   }
+  if( rc==SQLITE_OK ) rc = execSql(db, "SELECT dolt_branch('sparse')");
+  if( rc==SQLITE_OK ) rc = execSql(db, "SELECT dolt_checkout('sparse')");
+  if( rc==SQLITE_OK ){
+    rc = execSql(db,
+      "UPDATE items SET payload=substr('sparse-'||payload,1,700) "
+      "WHERE id%97=0;"
+      "SELECT dolt_commit('-am','sparse changes')");
+  }
+  if( rc==SQLITE_OK ) rc = execSql(db, "SELECT dolt_checkout('main')");
   if( rc==SQLITE_OK ) rc = execSql(db, "SELECT dolt_branch('feature')");
   if( rc==SQLITE_OK ) rc = execSql(db, "SELECT dolt_checkout('feature')");
   if( rc==SQLITE_OK ){
@@ -337,6 +347,7 @@ static void sourceResetCounters(SourceCtx *p){
   p->nGet = 0;
   p->nGetMany = 0;
   p->nManyHash = 0;
+  p->nMaxManyHash = 0;
   p->nRequest = 0;
   p->nReturned = 0;
   p->faultIssued = 0;
@@ -428,6 +439,7 @@ static int sourceGetMany(
   int rc = DOLTLITE_SOURCE_OK;
   p->nGetMany++;
   p->nManyHash += nHash;
+  if( nHash>p->nMaxManyHash ) p->nMaxManyHash = nHash;
   for(i=0; i<nHash; i++){
     apBytes[i] = 0;
     anBytes[i] = 0;
@@ -977,6 +989,44 @@ static void testReadOnlyCacheAndBatching(
 
 readonly_done:
   if( b ) sqlite3_close(b);
+}
+
+static void testDiffFrontierBatching(
+  const char *zPath,
+  SourceCtx *pCtx,
+  doltlite_chunk_source *pApi,
+  const unsigned char *pRefs,
+  int nRefs
+){
+  sqlite3 *db = 0;
+  sqlite3_int64 nModified = 0;
+  int rc;
+
+  check("create diff-frontier refs-only store",
+        createLazyFile(zPath, pRefs, nRefs)==SQLITE_OK);
+  rc = openDb(zPath, SQLITE_OPEN_READONLY, &db);
+  check("open diff-frontier refs-only store", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto diff_batch_done;
+  pCtx->mode = SOURCE_NORMAL;
+  rc = doltlite_set_chunk_source(db, "main", pApi);
+  check("register diff-frontier source", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto diff_batch_done;
+
+  sourceResetCounters(pCtx);
+  rc = queryInt64(db,
+      "SELECT rows_modified FROM "
+      "dolt_diff_stat('sparse~1','sparse','items')", &nModified);
+  check("lazy sparse diff succeeds", rc==SQLITE_OK && nModified==24);
+  check("sparse diff uses batch source reads", pCtx->nGetMany>0);
+  check("sparse diff batches a frontier",
+        pCtx->nMaxManyHash>2 && pCtx->nManyHash>pCtx->nGetMany);
+  check("sparse diff bounds frontier round trips", pCtx->nGetMany<=2);
+
+diff_batch_done:
+  if( db ){
+    (void)doltlite_set_chunk_source(db, "main", 0);
+    sqlite3_close(db);
+  }
 }
 
 static void testFailedRegistrationDetaches(
@@ -2539,6 +2589,7 @@ int main(void){
   char zSource[192];
   char zWrite[192];
   char zReadOnly[192];
+  char zDiffBatch[192];
   char zDetach[192];
   char zWorkingSetMiss[192];
   char zOtherWorkingSetMiss[192];
@@ -2565,6 +2616,7 @@ int main(void){
   snprintf(zSource, sizeof(zSource), "%s_source.db", zPrefix);
   snprintf(zWrite, sizeof(zWrite), "%s_write.db", zPrefix);
   snprintf(zReadOnly, sizeof(zReadOnly), "%s_readonly.db", zPrefix);
+  snprintf(zDiffBatch, sizeof(zDiffBatch), "%s_diff_batch.db", zPrefix);
   snprintf(zDetach, sizeof(zDetach), "%s_detach.db", zPrefix);
   snprintf(zWorkingSetMiss, sizeof(zWorkingSetMiss),
            "%s_working_set_miss.db", zPrefix);
@@ -2616,6 +2668,8 @@ int main(void){
   source.mode = SOURCE_NORMAL;
   testReadOnlyCacheAndBatching(
       zReadOnly, sourceDb, &source, &api, pNewRefs, nNewRefs);
+  testDiffFrontierBatching(
+      zDiffBatch, &source, &api, pNewRefs, nNewRefs);
   testFailedRegistrationDetaches(
       zDetach, &source, &api, pNewRefs, nNewRefs);
   testWorkingSetNotFound(
@@ -2656,6 +2710,7 @@ test_done:
   removeStore(zSource);
   removeStore(zWrite);
   removeStore(zReadOnly);
+  removeStore(zDiffBatch);
   removeStore(zDetach);
   removeStore(zWorkingSetMiss);
   removeStore(zOtherWorkingSetMiss);
