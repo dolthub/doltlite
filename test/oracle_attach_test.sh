@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -22,21 +24,14 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
+  local dl_rc=0 sq_rc=0
   local dl_out
-  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize)
+  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize) || dl_rc=$?
 
   local sq_out
-  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize)
+  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "${3-}" "${4:-0}"
 }
 
 echo "=== Oracle Tests: ATTACH + cross-engine ==="
@@ -66,7 +61,7 @@ CREATE TABLE aux.v(id INT PRIMARY KEY);
 SELECT name FROM aux.sqlite_master WHERE type='table' ORDER BY name;
 "
 
-oracle "detach_nonexistent_fails" "
+oracle_error "detach_nonexistent_fails" "no such database: nosuch" "
 DETACH DATABASE nosuch;
 "
 
@@ -215,7 +210,7 @@ SELECT count(*) FROM aux.u;
 
 echo "--- cross-engine triggers ---"
 
-oracle "trigger_references_aux_rejected" "
+oracle_error "trigger_references_aux_rejected" "qualified table names are not allowed" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 ATTACH DATABASE ':memory:' AS aux;
 CREATE TABLE aux.log(id INT PRIMARY KEY, v INT);
@@ -276,10 +271,4 @@ SELECT t.v, u.v FROM t JOIN aux.u u USING (id) WHERE t.id = 25;
 "
 
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
-exit 0
+stock_oracle_finish

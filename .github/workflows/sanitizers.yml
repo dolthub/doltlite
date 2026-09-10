@@ -57,6 +57,7 @@ jobs:
       if: matrix.suite == 'oracles'
       run: |
         cd build
+        bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite || exit 1
         bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
         bash ../test/oracle_import_test.sh ./doltlite dolt || exit 1
         for f in ../test/oracle_*_test.sh; do
@@ -136,6 +137,7 @@ jobs:
     - name: SQL oracle tests (vs stock SQLite)
       run: |
         cd build
+        bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite || exit 1
         bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename "$f")" = "oracle_import_test.sh" ] && continue

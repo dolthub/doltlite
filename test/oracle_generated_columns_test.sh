@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -22,21 +24,14 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
+  local dl_rc=0 sq_rc=0
   local dl_out
-  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize)
+  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize) || dl_rc=$?
 
   local sq_out
-  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize)
+  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "${3-}" "${4:-0}"
 }
 
 echo "=== Oracle Tests: generated columns ==="
@@ -179,7 +174,7 @@ SELECT id, a, b, prod FROM t;
 
 echo "--- illegal specification ---"
 
-oracle "insert_into_generated_fails" "
+oracle_error "insert_into_generated_fails" "cannot INSERT into generated column" "
 CREATE TABLE t(
   id INT PRIMARY KEY,
   a INT,
@@ -191,7 +186,7 @@ SELECT id, a, b FROM t;
 
 echo "--- constraints ---"
 
-oracle "check_on_generated_violates" "
+oracle_error "check_on_generated_violates" "CHECK constraint failed: doubled < 100" "
 CREATE TABLE t(
   id INT PRIMARY KEY,
   a INT,
@@ -212,7 +207,7 @@ INSERT INTO t(id, a) VALUES(1, 10), (2, 20), (3, 49);
 SELECT id, doubled FROM t ORDER BY id;
 "
 
-oracle "unique_on_stored_generated" "
+oracle_error "unique_on_stored_generated" "UNIQUE constraint failed: t.lower_name" "
 CREATE TABLE t(
   id INT PRIMARY KEY,
   name TEXT,
@@ -223,7 +218,7 @@ INSERT INTO t(id, name) VALUES(2, 'alice');
 SELECT id, name, lower_name FROM t ORDER BY id;
 "
 
-oracle "unique_index_on_virtual_generated" "
+oracle_error "unique_index_on_virtual_generated" "UNIQUE constraint failed: t.lower_name" "
 CREATE TABLE t(
   id INT PRIMARY KEY,
   name TEXT,
@@ -296,7 +291,7 @@ SELECT id, doubled, plus_one FROM t;
 
 echo "--- ALTER TABLE ADD ---"
 
-oracle "alter_add_stored_rejected" "
+oracle_error "alter_add_stored_rejected" "cannot add a STORED column" "
 CREATE TABLE t(id INT PRIMARY KEY, a INT);
 INSERT INTO t(id, a) VALUES(1, 5);
 ALTER TABLE t ADD COLUMN doubled INT GENERATED ALWAYS AS (a * 2) STORED;
@@ -473,7 +468,7 @@ SELECT id, a, sq FROM t ORDER BY id;
 
 echo "--- illegal self-reference ---"
 
-oracle "self_reference_rejected" "
+oracle_error "self_reference_rejected" "generated column loop" "
 CREATE TABLE t(
   id INT PRIMARY KEY,
   a INT GENERATED ALWAYS AS (a + 1) STORED
@@ -492,10 +487,4 @@ SELECT id, a, doubled FROM t;
 "
 
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
-exit 0
+stock_oracle_finish

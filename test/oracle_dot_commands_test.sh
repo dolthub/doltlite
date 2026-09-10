@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -23,26 +25,18 @@ oracle() {
   mkdir -p "$dir"
 
   mkdir -p "$dir/dl" "$dir/sq"
+  local dl_rc=0 sq_rc=0
   local dl_out
   dl_out=$(printf '%s\n%s\n' "$setup" "$cmd" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
-           | normalize)
+           | normalize) || dl_rc=$?
 
   local sq_out
   sq_out=$(printf '%s\n%s\n' "$setup" "$cmd" \
            | "$SQLITE3" "$dir/sq/db" 2>"$dir/sq.err" \
-           | normalize)
+           | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    cmd: $cmd"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "" "${4:-0}"
 }
 
 # sqlite_master order differs (canonical vs creation); compare sorted.
@@ -50,23 +44,15 @@ oracle_sorted() {
   local name="$1" setup="$2" cmd="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
+  local dl_rc=0 sq_rc=0
   local dl_out sq_out
   dl_out=$(printf '%s\n%s\n' "$setup" "$cmd" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
-           | normalize | sort)
+           | normalize | sort) || dl_rc=$?
   sq_out=$(printf '%s\n%s\n' "$setup" "$cmd" \
            | "$SQLITE3" "$dir/sq/db" 2>"$dir/sq.err" \
-           | normalize | sort)
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    cmd: $cmd"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+           | normalize | sort) || sq_rc=$?
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "" "${4:-0}"
 }
 
 oracle_dbinfo() {
@@ -78,28 +64,23 @@ oracle_dbinfo() {
   # a non-INTEGER PRIMARY KEY; .indexes still lists the in-memory PK.
   local filter='grep -Ev "^(file change counter|database page count|schema cookie|autovacuum top root|data version|number of indexes:)"'
 
+  local dl_rc=0 sq_rc=0
   local dl_out
   dl_out=$(printf '%s\n.dbinfo\n' "$setup" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | eval "$filter" \
-           | normalize)
+           | normalize) || dl_rc=$?
 
   local sq_out
   sq_out=$(printf '%s\n.dbinfo\n' "$setup" \
            | "$SQLITE3" "$dir/sq/db" 2>"$dir/sq.err" \
            | eval "$filter" \
-           | normalize)
+           | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "" "${4:-0}"
 }
+
+oracle_empty() { oracle "$@" 1; }
 
 SEED_EMPTY=""
 
@@ -158,8 +139,8 @@ INSERT INTO t VALUES(1,NULL,NULL);
 INSERT INTO t VALUES(2,'with ''apostrophe''',NULL);
 INSERT INTO t VALUES(3,'ok',x'deadbeef');"
 
-SEED_QUOTED_NAME='CREATE TABLE "my-table"(id INT, "col name" TEXT);
-INSERT INTO "my-table" VALUES(1,''hi'');'
+SEED_QUOTED_NAME="CREATE TABLE \"my-table\"(id INT, \"col name\" TEXT);
+INSERT INTO \"my-table\" VALUES(1,'hi');"
 
 SEED_MIXED_CASE="CREATE TABLE Users(id INT);
 CREATE TABLE USERS_LOG(id INT);
@@ -170,23 +151,23 @@ echo ""
 
 echo "--- .tables ---"
 
-oracle "tables_empty" "$SEED_EMPTY" ".tables"
+oracle_empty "tables_empty" "$SEED_EMPTY" ".tables"
 oracle "tables_one"   "$SEED_ONE_TABLE" ".tables"
 oracle "tables_many"  "$SEED_MANY_TABLES" ".tables"
 oracle "tables_pattern_prefix" "$SEED_MANY_TABLES" ".tables user%"
 oracle "tables_pattern_suffix" "$SEED_MANY_TABLES" ".tables %s"
 oracle "tables_pattern_contains" "$SEED_MANY_TABLES" ".tables %post%"
-oracle "tables_pattern_nomatch"  "$SEED_MANY_TABLES" ".tables nomatch%"
+oracle_empty "tables_pattern_nomatch"  "$SEED_MANY_TABLES" ".tables nomatch%"
 oracle "tables_with_view"        "$SEED_WITH_VIEW" ".tables"
 
 echo "--- .schema ---"
 
-oracle "schema_empty"           "$SEED_EMPTY" ".schema"
+oracle_empty "schema_empty"           "$SEED_EMPTY" ".schema"
 oracle "schema_one_table"       "$SEED_ONE_TABLE" ".schema"
 oracle_sorted "schema_many_tables"     "$SEED_MANY_TABLES" ".schema"
 oracle "schema_single_table"    "$SEED_MANY_TABLES" ".schema users"
 oracle_sorted "schema_pattern"         "$SEED_MANY_TABLES" ".schema us%"
-oracle "schema_nomatch"         "$SEED_MANY_TABLES" ".schema nomatch"
+oracle_empty "schema_nomatch"         "$SEED_MANY_TABLES" ".schema nomatch"
 oracle_sorted "schema_with_index"      "$SEED_WITH_INDEX" ".schema"
 oracle "schema_with_view"       "$SEED_WITH_VIEW" ".schema"
 oracle "schema_view_only"       "$SEED_WITH_VIEW" ".schema high"
@@ -195,11 +176,11 @@ oracle "schema_indent_flag"     "$SEED_ONE_TABLE" ".schema --indent"
 
 echo "--- .indexes ---"
 
-oracle "indexes_empty"            "$SEED_EMPTY" ".indexes"
-oracle "indexes_none"             "$SEED_ONE_TABLE" ".indexes"
+oracle_empty "indexes_empty"            "$SEED_EMPTY" ".indexes"
+oracle_empty "indexes_none"             "$SEED_ONE_TABLE" ".indexes"
 oracle "indexes_with_index"       "$SEED_WITH_INDEX" ".indexes"
 oracle "indexes_specific_table"   "$SEED_WITH_INDEX" ".indexes t"
-oracle "indexes_nomatch_table"    "$SEED_WITH_INDEX" ".indexes nomatch"
+oracle_empty "indexes_nomatch_table"    "$SEED_WITH_INDEX" ".indexes nomatch"
 
 echo "--- .databases ---"
 
@@ -256,9 +237,4 @@ oracle "dump_quoted_name"      "$SEED_QUOTED_NAME" ".dump"
 oracle_sorted "tables_mixed_case"     "$SEED_MIXED_CASE" ".tables"
 oracle_sorted "schema_mixed_case"     "$SEED_MIXED_CASE" ".schema"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+stock_oracle_finish

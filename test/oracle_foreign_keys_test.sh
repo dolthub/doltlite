@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -22,21 +24,14 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
+  local dl_rc=0 sq_rc=0
   local dl_out
-  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize)
+  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize) || dl_rc=$?
 
   local sq_out
-  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize)
+  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "${3-}" "${4:-0}"
 }
 
 echo "=== Oracle Tests: foreign keys (single branch) ==="
@@ -53,7 +48,7 @@ INSERT INTO child VALUES(10, 1);
 SELECT c.id, c.pid, p.name FROM child c JOIN parent p ON c.pid = p.id;
 "
 
-oracle "insert_child_no_parent" "
+oracle_error "insert_child_no_parent" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY, name TEXT);
 CREATE TABLE child(id INT PRIMARY KEY, pid INT REFERENCES parent(id));
@@ -72,7 +67,7 @@ INSERT INTO child VALUES(11, 1);
 SELECT id, pid FROM child ORDER BY id;
 "
 
-oracle "update_child_to_invalid_parent" "
+oracle_error "update_child_to_invalid_parent" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(id INT PRIMARY KEY, pid INT REFERENCES parent(id));
@@ -82,7 +77,7 @@ UPDATE child SET pid = 99 WHERE id = 10;
 SELECT id, pid FROM child;
 "
 
-oracle "delete_parent_with_child_rejected" "
+oracle_error "delete_parent_with_child_rejected" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(id INT PRIMARY KEY, pid INT REFERENCES parent(id));
@@ -93,7 +88,7 @@ SELECT id FROM parent;
 SELECT id, pid FROM child;
 "
 
-oracle "delete_parent_restrict" "
+oracle_error "delete_parent_restrict" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(id INT PRIMARY KEY,
@@ -186,7 +181,7 @@ SELECT id FROM parent ORDER BY id;
 SELECT id, pid FROM child ORDER BY id;
 "
 
-oracle "delete_set_default_violates" "
+oracle_error "delete_set_default_violates" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(
@@ -256,7 +251,7 @@ INSERT INTO tree VALUES(4, 2);
 SELECT id, parent_id FROM tree ORDER BY id;
 "
 
-oracle "self_ref_insert_before_parent_fails" "
+oracle_error "self_ref_insert_before_parent_fails" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE tree(
   id INT PRIMARY KEY,
@@ -266,7 +261,7 @@ INSERT INTO tree VALUES(2, 1);
 SELECT count(*) FROM tree;
 "
 
-oracle "self_ref_cascade_delete" "
+oracle_empty "self_ref_cascade_delete" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE tree(
   id INT PRIMARY KEY,
@@ -298,7 +293,7 @@ INSERT INTO c VALUES(11, 'eu', 2);
 SELECT id, region, code FROM c ORDER BY id;
 "
 
-oracle "composite_fk_insert_missing_half_fails" "
+oracle_error "composite_fk_insert_missing_half_fails" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE p(
   region TEXT,
@@ -352,7 +347,7 @@ COMMIT;
 SELECT id, pid FROM child;
 "
 
-oracle "deferred_fk_unresolved_commit_fails" "
+oracle_error "deferred_fk_unresolved_commit_fails" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(
@@ -367,10 +362,10 @@ SELECT id, pid FROM child;
 
 oracle "defer_fks_pragma_ok_when_resolved" "
 PRAGMA foreign_keys = ON;
-PRAGMA defer_foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(id INT PRIMARY KEY, pid INT REFERENCES parent(id));
 BEGIN;
+PRAGMA defer_foreign_keys = ON;
 INSERT INTO child VALUES(10, 1);
 INSERT INTO parent VALUES(1);
 COMMIT;
@@ -379,7 +374,7 @@ SELECT id, pid FROM child;
 
 echo "--- transaction interactions ---"
 
-oracle "immediate_violation_aborts_statement" "
+oracle_error "immediate_violation_aborts_statement" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(id INT PRIMARY KEY, pid INT REFERENCES parent(id));
@@ -407,7 +402,7 @@ SELECT id, pid FROM child ORDER BY id;
 
 echo "--- NO ACTION vs RESTRICT ---"
 
-oracle "no_action_deferred_to_end_of_statement" "
+oracle_error "no_action_deferred_to_end_of_statement" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(
@@ -422,7 +417,7 @@ SELECT id FROM parent ORDER BY id;
 SELECT id, pid FROM child ORDER BY id;
 "
 
-oracle "restrict_rejects_midstatement_violation" "
+oracle_error "restrict_rejects_midstatement_violation" "FOREIGN KEY constraint failed" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(
@@ -555,7 +550,7 @@ SELECT count(*) FROM child;
 SELECT id, msg FROM log ORDER BY id;
 "
 
-oracle "trigger_abort_prevents_cascade" "
+oracle_error "trigger_abort_prevents_cascade" "no" "
 PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INT PRIMARY KEY);
 CREATE TABLE child(id INT PRIMARY KEY,
@@ -672,10 +667,4 @@ SELECT count(*) FROM child;
 "
 
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
-exit 0
+stock_oracle_finish

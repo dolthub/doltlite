@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -22,21 +24,14 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
+  local dl_rc=0 sq_rc=0
   local dl_out
-  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize)
+  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize) || dl_rc=$?
 
   local sq_out
-  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize)
+  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "${3-}" "${4:-0}"
 }
 
 echo "=== Oracle Tests: WITHOUT ROWID ==="
@@ -70,13 +65,13 @@ SELECT id, v FROM t;
 
 echo "--- rowid column absence ---"
 
-oracle "select_rowid_rejected" "
+oracle_error "select_rowid_rejected" "no such column: rowid" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 10);
 SELECT rowid FROM t;
 "
 
-oracle "select_oid_rejected" "
+oracle_error "select_oid_rejected" "no such column: oid" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 10);
 SELECT oid FROM t;
@@ -90,26 +85,26 @@ SELECT * FROM t ORDER BY id;
 
 echo "--- integer PK semantics ---"
 
-oracle "int_pk_without_rowid_no_autoalloc" "
+oracle_error "int_pk_without_rowid_no_autoalloc" "NOT NULL constraint failed: t.id" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t(v) VALUES('a');
 SELECT id, v FROM t;
 "
 
-oracle "autoincrement_rejected" "
+oracle_error "autoincrement_rejected" "AUTOINCREMENT not allowed on WITHOUT ROWID tables" "
 CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT) WITHOUT ROWID;
 SELECT 1;
 "
 
 echo "--- PK implies NOT NULL ---"
 
-oracle "text_pk_null_rejected" "
+oracle_error "text_pk_null_rejected" "NOT NULL constraint failed: t.k" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(NULL, 1);
 SELECT count(*) FROM t;
 "
 
-oracle "composite_pk_null_half_rejected" "
+oracle_error "composite_pk_null_half_rejected" "NOT NULL constraint failed: t.b" "
 CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
 INSERT INTO t VALUES(1, NULL, 10);
 SELECT count(*) FROM t;
@@ -137,7 +132,7 @@ INSERT INTO t VALUES(1,1,11),(1,2,12),(2,1,21),(2,2,22),(3,1,31);
 SELECT a, b, v FROM t WHERE a = 2 ORDER BY b;
 "
 
-oracle "composite_pk_dup_rejected" "
+oracle_error "composite_pk_dup_rejected" "UNIQUE constraint failed: t.a, t.b" "
 CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a, b)) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 1, 'a');
 INSERT INTO t VALUES(1, 1, 'b');
@@ -146,14 +141,14 @@ SELECT a, b, v FROM t;
 
 echo "--- PK collation ---"
 
-oracle "text_pk_nocase" "
+oracle_error "text_pk_nocase" "UNIQUE constraint failed: t.k" "
 CREATE TABLE t(k TEXT PRIMARY KEY COLLATE NOCASE, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES('Alice', 1);
 INSERT INTO t VALUES('alice', 2);
 SELECT k, v FROM t ORDER BY k;
 "
 
-oracle "text_pk_rtrim" "
+oracle_error "text_pk_rtrim" "UNIQUE constraint failed: t.k" "
 CREATE TABLE t(k TEXT PRIMARY KEY COLLATE RTRIM, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES('abc', 1);
 INSERT INTO t VALUES('abc ', 2);
@@ -176,7 +171,7 @@ UPDATE t SET a = 10 WHERE a = 1 AND b = 1;
 SELECT a, b, v FROM t ORDER BY a, b;
 "
 
-oracle "update_pk_to_existing_collides" "
+oracle_error "update_pk_to_existing_collides" "UNIQUE constraint failed: t.k" "
 CREATE TABLE t(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES(1, 'a'),(2, 'b');
 UPDATE t SET k = 2 WHERE k = 1;
@@ -223,7 +218,7 @@ INSERT INTO t VALUES(1, 'a', 10),(2, 'b', 20),(3, 'a', 30);
 SELECT k, v FROM t WHERE tag = 'a' ORDER BY k;
 "
 
-oracle "unique_secondary_index_on_without_rowid" "
+oracle_error "unique_secondary_index_on_without_rowid" "UNIQUE constraint failed: t.u" "
 CREATE TABLE t(k INT PRIMARY KEY, u INT, v INT) WITHOUT ROWID;
 CREATE UNIQUE INDEX idx_u ON t(u);
 INSERT INTO t VALUES(1, 100, 'a');
@@ -388,10 +383,4 @@ SELECT count(*) FROM t WHERE a = 1;
 "
 
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
-exit 0
+stock_oracle_finish

@@ -93,12 +93,17 @@ exit 0
 EOF
 cat > "$SQL_ORACLE_TMP/pretends" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' 'sql-oracle-ready|42'
+if [ "${2-}" = 'SELECT doltlite_engine();' ]; then
+  echo prolly
+else
+  echo 'sql-oracle-ready|42'
+fi
 EOF
 chmod +x "$SQL_ORACLE_TMP/fails" "$SQL_ORACLE_TMP/empty" "$SQL_ORACLE_TMP/pretends"
 expect_startup_failure silent_failure "$SQL_ORACLE_TMP/fails" "$SQL_ORACLE_TMP/fails"
 expect_startup_failure empty_success "$SQL_ORACLE_TMP/empty" "$SQL_ORACLE_TMP/empty"
 expect_startup_failure missing_executable "$SQL_ORACLE_TMP/missing" "$SQL_ORACLE_TMP/missing"
-expect_startup_failure no_stock_database "$SQL_ORACLE_TMP/pretends" "$SQL_ORACLE_TMP/pretends"
+cp "$SQL_ORACLE_TMP/pretends" "$SQL_ORACLE_TMP/pretend_reference"
+expect_startup_failure no_stock_database "$SQL_ORACLE_TMP/pretends" "$SQL_ORACLE_TMP/pretend_reference"
 
 echo "SQL oracle harness: 20 checks passed"
