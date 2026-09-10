@@ -513,19 +513,23 @@ class Gen:
         return "\n".join(self.out)
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.stderr.write("usage: %s SEED [--include-<group>]... [--all]\n"
-                         "groups: %s\n" % (sys.argv[0], " ".join(GROUPS)))
-        return 2
-    seed = int(sys.argv[1])
-    flags = sys.argv[2:]
+def parse_groups(flags):
     if "--all" in flags:
         groups = list(GROUPS)
     else:
         groups = [g for g in GROUPS if ("--include-%s" % g) in flags]
     unknown = [f for f in flags
                if f != "--all" and f[len("--include-"):] not in GROUPS]
+    return groups, unknown
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.stderr.write("usage: %s SEED [--include-<group>]... [--all]\n"
+                         "groups: %s\n" % (sys.argv[0], " ".join(GROUPS)))
+        return 2
+    seed = int(sys.argv[1])
+    groups, unknown = parse_groups(sys.argv[2:])
     if unknown:
         sys.stderr.write("unknown flag(s): %s\n" % " ".join(unknown))
         return 2

@@ -285,7 +285,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh zlib1g-dev
+      run: bash .github/scripts/install-apt-deps.sh zlib1g-dev llvm
 
     - name: Download instrumented build
       uses: actions/download-artifact@v4
@@ -296,7 +296,10 @@ jobs:
       run: |
         tar -xzf coverage-build.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
-        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
+        # %p dumps one file per process. %8m flock-merges on every exit; this
+        # job starts ~5000 instrumented processes and that merge was the
+        # 15-minute timeout tail. A later step folds the raw dumps to one file.
+        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%p.profraw" >> "$GITHUB_ENV"
 
     - name: Randomized SQL differential sweep (vs stock SQLite)
       run: |
@@ -305,6 +308,21 @@ jobs:
           ./doltlite ./sqlite3-stock \
           ${{ matrix.first }} ${{ matrix.last }}
       timeout-minutes: 15
+
+    - name: Merge per-process coverage profiles
+      if: always()
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/coverage-profiles"
+        list=$(mktemp)
+        find "$dir" -type f -name '*.profraw' | LC_ALL=C sort > "$list"
+        if [ ! -s "$list" ]; then
+          echo "no profraw files to merge"
+          exit 0
+        fi
+        echo "merging $(wc -l < "$list") profraw files"
+        llvm-profdata merge -sparse -f "$list" -o "$dir/sql-differential.profdata"
+        xargs rm -f < "$list"
 
     - name: Upload SQL differential coverage profiles
       if: always()
