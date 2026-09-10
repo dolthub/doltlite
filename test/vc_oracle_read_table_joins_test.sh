@@ -644,6 +644,31 @@ oracle_as_of "as_of_three_way_compare" "$BRANCHY" \
  LEFT JOIN t AS OF 'feat' AS f ON f.id = base.id
  JOIN t AS cur ON cur.id = base.id;"
 
+for column in commit_ref CoMmIt_ReF; do
+  oracle_as_of "as_of_commit_ref_collision_$column" "
+CREATE TABLE t(id INT PRIMARY KEY, $column TEXT, commit_ref_1 TEXT);
+INSERT INTO t VALUES(1, 'payload', 'keep');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_tag('base');
+UPDATE t SET $column='updated';
+SELECT dolt_commit('-Am', 'updated');
+" \
+"SELECT CONCAT('R|', id, '|', commit_ref_2, '|', commit_ref_1)
+ FROM dolt_at_t('base') WHERE commit_ref_2='payload';" \
+"SELECT CONCAT('R|', id, '|', $column, '|', commit_ref_1)
+ FROM t AS OF 'base' WHERE $column='payload';"
+done
+
+oracle_as_of "as_of_commit_ref_integer_pk" "
+CREATE TABLE t(commit_ref INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'one'), (2, 'two'), (3, 'three');
+SELECT dolt_commit('-Am', 'base');
+" \
+"SELECT CONCAT('R|', commit_ref_1, '|', v)
+ FROM dolt_at_t('HEAD') WHERE commit_ref_1>=2 AND commit_ref_1<3;" \
+"SELECT CONCAT('R|', commit_ref, '|', v)
+ FROM t AS OF 'HEAD' WHERE commit_ref>=2 AND commit_ref<3;"
+
 echo ""
 AFFINITY="
 CREATE TABLE t(id INT PRIMARY KEY, n INT);

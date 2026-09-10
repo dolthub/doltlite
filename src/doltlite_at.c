@@ -19,13 +19,14 @@
   (AT_IDX_PK_EQ|AT_IDX_PK_GE|AT_IDX_PK_LE|AT_IDX_PK_GT|AT_IDX_PK_LT)
 
 static char *atBuildSchema(const DoltliteColInfo *ci){
+  static const char *const azReserved[] = {"commit_ref"};
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
   if( doltliteAppendDisambiguatedColumnList(
-          pStr,ci->azName,ci->nCol,"",", ",0,0,
-          ci->iPkCol,ci->azDecl)!=SQLITE_OK ){
+          pStr,ci->azName,ci->nCol,"",", ",azReserved,
+          ArraySize(azReserved),ci->iPkCol,ci->azDecl)!=SQLITE_OK ){
     sqlite3_str_reset(pStr);
     return 0;
   }
