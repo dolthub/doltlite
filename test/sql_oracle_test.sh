@@ -1,49 +1,15 @@
 #!/bin/bash
 
+set -uo pipefail
+
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
-TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/sql_oracle_common.sh"
+if ! sql_oracle_check_binaries "$SCRIPT_DIR"; then exit 1; fi
+SQL_ORACLE_TMP=$(mktemp -d) || exit 1
+trap 'rm -rf "$SQL_ORACLE_TMP"' EXIT
 pass=0; fail=0
-
-normalize_oracle_output() {
-  LC_ALL=C sed -E \
-    -e 's/^Error near line [0-9]+: /ERROR: /' \
-    -e 's/^Runtime error near line [0-9]+: /ERROR: /' \
-    -e 's/ \([0-9]+\)$//'
-}
-
-oracle() {
-  local name="$1" sql="$2"
-  oracle_with_flags "$name" "$sql" ""
-}
-
-oracle_with_flags() {
-  local name="$1" sql="$2" flags="$3"
-  local dl="$TMPDIR/dl_${name}.db" sq="$TMPDIR/sq_${name}.db"
-  local out_dl out_sq norm_dl norm_sq rc_dl rc_sq
-  rm -f "$dl" "$sq"
-  out_dl=$(echo "$sql" | "$DOLTLITE" $flags "$dl" 2>&1)
-  rc_dl=$?
-  out_sq=$(echo "$sql" | "$SQLITE3" $flags "$sq" 2>&1)
-  rc_sq=$?
-  norm_dl=$(printf '%s\n' "$out_dl" | normalize_oracle_output)
-  norm_sq=$(printf '%s\n' "$out_sq" | normalize_oracle_output)
-  if [ "$rc_dl" -eq "$rc_sq" ] && [ "$norm_dl" = "$norm_sq" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    echo "  FAIL: $name"
-    echo "    doltlite rc: $rc_dl"
-    echo "    doltlite: $(echo "$out_dl" | head -3)"
-    echo "    sqlite3 rc:  $rc_sq"
-    echo "    sqlite3:  $(echo "$out_sq" | head -3)"
-  fi
-}
-
-oracle_unsafe() {
-  oracle_with_flags "$1" "$2" "--unsafe-testing"
-}
 
 echo "=== Index Oracle Tests ==="
 echo ""
@@ -3556,12 +3522,12 @@ SELECT first || ' ' || last as full_name FROM t WHERE last = 'Doe' ORDER BY firs
 echo ""
 echo "--- Category 56: Subquery patterns ---"
 
-oracle "cat56_all_any" "
+oracle_error "cat56_all_any" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 CREATE INDEX idx ON t(val);
 INSERT INTO t VALUES(1,10),(2,20),(3,30),(4,40),(5,50);
 SELECT id FROM t WHERE val > ALL(SELECT val FROM t WHERE id <= 2) ORDER BY id;
-"
+" 'near "ALL": syntax error'
 
 oracle "cat56_subquery_having" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, grp TEXT, val INT);
@@ -4818,13 +4784,13 @@ SELECT sum(val) FROM t;
 SELECT min(val), max(val) FROM t;
 "
 
-oracle "cat88_insert_abort" "
+oracle_error "cat88_insert_abort" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT UNIQUE);
 INSERT INTO t VALUES(1, 10),(2, 20);
 INSERT OR ABORT INTO t VALUES(3, 10);
 SELECT * FROM t ORDER BY id;
 SELECT count(*) FROM t;
-"
+" 'UNIQUE constraint failed: t.val'
 
 oracle "cat88_insert_sorted_explicit_rowid" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
@@ -5074,11 +5040,11 @@ GROUP BY category HAVING total / cnt > 100 ORDER BY category;
 echo ""
 echo "--- Category 95: Complex INSERT patterns ---"
 
-oracle "cat95_insert_returning_agg" "
+oracle_error "cat95_insert_returning_agg" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 CREATE INDEX idx ON t(val);
 INSERT INTO t VALUES(1,10),(2,20),(3,30) RETURNING sum(val) OVER () as total;
-"
+" 'misuse of window function sum()'
 
 oracle "cat95_insert_from_cte" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT, rank_val INT);
@@ -5963,16 +5929,16 @@ SELECT count(b.k), count(*) FROM a LEFT JOIN b USING(k);
 echo ""
 echo "--- Category 121: Defensively-walled internal paths ---"
 
-oracle "cat121_drop_sqlite_master_rejected" "
+oracle_error "cat121_drop_sqlite_master_rejected" "
 CREATE TABLE t(x INT);
 DROP TABLE sqlite_master;
-"
+" 'table sqlite_master may not be dropped'
 
-oracle "cat121_drop_sqlite_master_writable_schema_rejected" "
+oracle_error "cat121_drop_sqlite_master_writable_schema_rejected" "
 PRAGMA writable_schema = 1;
 CREATE TABLE t(x INT);
 DROP TABLE sqlite_master;
-"
+" 'table sqlite_master may not be dropped'
 
 oracle_unsafe "cat121_writable_schema_delete_master" "
 CREATE TABLE keep(x INT);
