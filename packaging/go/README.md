@@ -14,6 +14,17 @@ go get github.com/dolthub/doltlite-driver
 Requires cgo (`CGO_ENABLED=1`, the default when a C compiler is present) and
 zlib. The first build compiles the engine and is then cached.
 
+Development snapshots built from DoltLite's `master` branch are available on
+the driver's `dev` branch:
+
+```sh
+go get github.com/dolthub/doltlite-driver@dev
+```
+
+Go records an immutable pseudo-version in `go.mod`. Run the command again to
+advance to a newer snapshot, and commit the resulting `go.mod` and `go.sum`
+changes before deploying.
+
 ## Use
 
 ```go

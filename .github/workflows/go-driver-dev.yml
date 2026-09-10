@@ -1,0 +1,103 @@
+name: Publish Go Driver Dev
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'dolthub/doltlite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: doltlite-driver-publish
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+    steps:
+    - name: Check release bot token
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "RELEASE_BOT_TOKEN is required to push dev builds to doltlite-driver"
+          exit 1
+        fi
+        gh auth status
+        gh auth setup-git
+
+    - uses: actions/checkout@v4
+      with:
+        ref: master
+        fetch-depth: 0
+
+    - name: Resolve source revision
+      run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+    - name: Install dependencies
+      run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev tcl
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: false
+
+    - name: Configure git identity
+      run: |
+        git config --global user.name "DoltHub Release Bot"
+        git config --global user.email "releases@dolthub.com"
+
+    - name: Build and test the driver
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j2 sqlite3.c sqlite3.h
+        cd ..
+        bash packaging/go/test-package.sh build
+
+    - name: Publish the dev snapshot
+      run: |
+        set -euo pipefail
+        stage="$(mktemp -d)"
+        trap 'rm -rf "$stage"' EXIT
+
+        bash packaging/go/assemble.sh "dev-${SOURCE_SHA}" "$stage/pkg" build
+        rm -f "$stage/pkg/.version"
+        printf '%s\n' "$SOURCE_SHA" > "$stage/pkg/DOLTLITE_SOURCE_REVISION"
+
+        gh repo clone dolthub/doltlite-driver "$stage/doltlite-driver"
+        cd "$stage/doltlite-driver"
+        if git ls-remote --exit-code --heads origin dev >/dev/null 2>&1; then
+          git fetch origin dev
+          git switch --create dev --track origin/dev
+        else
+          git switch --create dev origin/main
+        fi
+
+        git fetch origin main
+        if ! git merge-base --is-ancestor origin/main HEAD; then
+          git merge --strategy=ours origin/main \
+            -m "Merge doltlite-driver releases into dev"
+        fi
+
+        find . -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
+        cp -R "$stage/pkg/." .
+        git add -A
+        if ! git diff --cached --quiet; then
+          git commit -m "doltlite dev ${SOURCE_SHA}"
+        fi
+        git push origin dev
+
+        driver_sha="$(git rev-parse HEAD)"
+        cd "$stage"
+        driver_version="$(GOPROXY=direct go list -m -f '{{.Version}}' \
+          "github.com/dolthub/doltlite-driver@${driver_sha}")"
+        {
+          echo "### DoltLite Go driver dev snapshot"
+          echo
+          echo "- DoltLite source: \`${SOURCE_SHA}\`"
+          echo "- Driver commit: \`${driver_sha}\`"
+          echo "- Go version: \`${driver_version}\`"
+          echo
+          echo "\`go get github.com/dolthub/doltlite-driver@dev\`"
+        } >> "$GITHUB_STEP_SUMMARY"
