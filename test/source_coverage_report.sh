@@ -56,9 +56,10 @@ find "$REPO_ROOT/src" -maxdepth 1 -type f \
      -o -name 'btree_orig_api.c' \) \
   | LC_ALL=C sort > "$SOURCE_LIST"
 
-find "$PROFILE_DIR" -type f -name '*.profraw' | LC_ALL=C sort > "$PROFILE_LIST"
+find "$PROFILE_DIR" -type f \( -name '*.profraw' -o -name '*.profdata' \) \
+  | LC_ALL=C sort > "$PROFILE_LIST"
 if [ ! -s "$PROFILE_LIST" ]; then
-  echo "ERROR: no LLVM raw profiles found under $PROFILE_DIR"
+  echo "ERROR: no LLVM profraw/profdata files found under $PROFILE_DIR"
   exit 1
 fi
 

@@ -29,6 +29,7 @@ LAST="${4:-${DOLTLITE_DIFF_LAST_SEED:-200}}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GEN="$SCRIPT_DIR/sql_differential_fuzzer.py"
+SWEEP="$SCRIPT_DIR/sql_differential_sweep.py"
 
 for bin in "$DOLTLITE" "$SQLITE3"; do
   if [ ! -x "$bin" ]; then
@@ -36,8 +37,8 @@ for bin in "$DOLTLITE" "$SQLITE3"; do
     exit 1
   fi
 done
-if [ ! -f "$GEN" ]; then
-  echo "ERROR: missing generator: $GEN"
+if [ ! -f "$GEN" ] || [ ! -f "$SWEEP" ]; then
+  echo "ERROR: missing generator or sweep runner"
   exit 1
 fi
 
@@ -71,76 +72,11 @@ else
   done
 fi
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-
 echo "=== SQL differential sweep: seeds $FIRST..$LAST ==="
 echo "    doltlite: $DOLTLITE"
 echo "    stock:    $SQLITE3"
 [ -n "$GENFLAGS" ] && echo "    groups:  $GENFLAGS"
 echo ""
 
-pass=0
-fail=0
-errored=0
-failed_seeds=""
-
-# -f %.0f, not a bare seq: BSD seq renders a seed this size as 4.82399e+09 and
-# the generator cannot parse that. The nightly draws seeds up to 9e9, so a
-# window it picks would fail on every seed on a Mac and pass on the runner.
-for seed in $(seq -f %.0f "$FIRST" "$LAST"); do
-  sql="$WORK/case.sql"
-  if ! python3 "$GEN" "$seed" $GENFLAGS > "$sql" 2>"$WORK/gen.err"; then
-    echo "  ERROR: generator failed for seed $seed"
-    cat "$WORK/gen.err"
-    fail=$((fail + 1))
-    continue
-  fi
-
-  rm -f "$WORK/dl.db" "$WORK/dl.db-lock" "$WORK/dl.db-wal" "$WORK/sq.db"
-  out_dl=$("$DOLTLITE" "$WORK/dl.db" < "$sql" 2>&1)
-  rc_dl=$?
-  out_sq=$("$SQLITE3" "$WORK/sq.db" < "$sql" 2>&1)
-  rc_sq=$?
-
-  if [ "$rc_dl" -eq "$rc_sq" ] && [ "$out_dl" = "$out_sq" ]; then
-    pass=$((pass + 1))
-    # Some workloads conflict on purpose: INSERT OR ROLLBACK, or a CHECK
-    # violation from the constraints group. Both engines rejecting a statement
-    # and agreeing on how is the comparison working, not the script breaking,
-    # so count those rather than leave a nonzero exit looking accidental.
-    case "$out_dl" in
-      *Error*|*error*) errored=$((errored + 1)) ;;
-    esac
-    continue
-  fi
-
-  fail=$((fail + 1))
-  failed_seeds="$failed_seeds $seed"
-  # Every failing seed keeps its script, so a long sweep does not end up with
-  # more failures than reproducers. Only the first few print a diff, because
-  # that is about keeping the log readable.
-  if [ -n "${DOLTLITE_DIFF_SAVE_DIR:-}" ]; then
-    cp "$sql" "$DOLTLITE_DIFF_SAVE_DIR/seed_$seed.sql" 2>/dev/null || true
-  fi
-  if [ "$fail" -le 5 ]; then
-    echo "  FAIL: seed $seed (doltlite rc=$rc_dl, stock rc=$rc_sq)"
-    diff <(printf '%s\n' "$out_dl") <(printf '%s\n' "$out_sq") \
-      | head -20 | sed 's/^/    /'
-  elif [ "$fail" -eq 6 ]; then
-    echo "  ... further diffs omitted; every failing seed is listed below and"
-    echo "      its script saved to the artifact directory"
-  fi
-done
-
-echo ""
-echo "Results: $pass passed, $fail failed out of $((pass + fail)) seeds"
-if [ "$errored" -gt 0 ]; then
-  echo "          ($errored of the passing seeds had a statement both engines"
-  echo "           rejected, and they agreed on the rejection)"
-fi
-if [ "$fail" -gt 0 ]; then
-  echo "Failing seeds:$failed_seeds"
-  echo "Reproduce with: python3 test/sql_differential_fuzzer.py <seed>$GENFLAGS"
-  exit 1
-fi
+python3 "$SCRIPT_DIR/sql_differential_sweep_test.py" -q || exit 1
+python3 -u "$SWEEP" "$DOLTLITE" "$SQLITE3" "$FIRST" "$LAST" $GENFLAGS
