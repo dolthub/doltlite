@@ -1032,13 +1032,22 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
 
       break;
 
-    case THREE_WAY_RIGHT_ADD:
+    case THREE_WAY_RIGHT_ADD: {
 
+      const u8 *pTheirs;
+      int nTheirs;
+      u8 *pOwned;
+
+      pTheirs = pChange->pTheirVal;
+      nTheirs = pChange->nTheirVal;
+      rc = mergeGeneratedTheirRow(ctx->db, ctx->pGeneratedTable,
+          &ctx->pGeneratedStmt, pChange->intKey, &pTheirs, &nTheirs, &pOwned);
+      if( rc!=SQLITE_OK ) return rc;
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
-          pChange->pTheirVal, pChange->nTheirVal);
+          pTheirs, nTheirs);
       if( rc==SQLITE_OK && ctx->nIndexes>0
-       && pChange->pTheirVal && pChange->nTheirVal>0 ){
+       && pTheirs && nTheirs>0 ){
         int ix;
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
@@ -1046,16 +1055,27 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
               mi->pKeyInfo, mi->iPKey, pChange->intKey,
               pChange->pKey, pChange->nKey,
-              0, 0, pChange->pTheirVal, pChange->nTheirVal, &mi->part);
+              0, 0, pTheirs, nTheirs, &mi->part);
         }
       }
+      sqlite3_free(pOwned);
       break;
+    }
 
-    case THREE_WAY_RIGHT_MODIFY:
+    case THREE_WAY_RIGHT_MODIFY: {
 
+      const u8 *pTheirs;
+      int nTheirs;
+      u8 *pOwned;
+
+      pTheirs = pChange->pTheirVal;
+      nTheirs = pChange->nTheirVal;
+      rc = mergeGeneratedTheirRow(ctx->db, ctx->pGeneratedTable,
+          &ctx->pGeneratedStmt, pChange->intKey, &pTheirs, &nTheirs, &pOwned);
+      if( rc!=SQLITE_OK ) return rc;
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
-          pChange->pTheirVal, pChange->nTheirVal);
+          pTheirs, nTheirs);
       if( rc==SQLITE_OK && ctx->nIndexes>0 ){
         int ix;
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
@@ -1065,10 +1085,12 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               mi->pKeyInfo, mi->iPKey, pChange->intKey,
               pChange->pKey, pChange->nKey,
               pChange->pBaseVal, pChange->nBaseVal,
-              pChange->pTheirVal, pChange->nTheirVal, &mi->part);
+              pTheirs, nTheirs, &mi->part);
         }
       }
+      sqlite3_free(pOwned);
       break;
+    }
 
     case THREE_WAY_RIGHT_DELETE:
 

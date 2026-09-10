@@ -126,6 +126,30 @@ static int mergeGeneratedPrepare(
 #endif
 }
 
+/* A record taken wholesale from their side was written against their schema.
+** Relayout into the merged layout leaves a generated column the merged schema
+** adds holding its filled default rather than its expression value, so the
+** stored value is recomputed before it reaches rows or indexes. Returns their
+** record untouched, and *ppOwned zeroed, when the table stores none. */
+int mergeGeneratedTheirRow(
+  sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
+  const u8 **ppVal, int *pnVal, u8 **ppOwned
+){
+  int rc;
+  *ppOwned = 0;
+  if( !pTab || !*ppVal || *pnVal<=0 ) return SQLITE_OK;
+  rc = doltliteDupBytes(*ppVal, *pnVal, ppOwned);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = mergeGeneratedRecord(db, pTab, ppStmt, intKey, ppOwned, pnVal);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(*ppOwned);
+    *ppOwned = 0;
+    return rc;
+  }
+  *ppVal = *ppOwned;
+  return SQLITE_OK;
+}
+
 int mergeGeneratedRecord(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   u8 **ppRecord, int *pnRecord

@@ -30,8 +30,10 @@ For a DoltLite-format main database, the compatibility contract is:
   from HEAD.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
-- Stored generated columns are recomputed from merged base-column values.
-  Dependent generated columns and secondary indexes use the recomputed values.
+- Stored generated columns are recomputed from merged base-column values. This
+  covers a row only one branch changed and a row one branch inserted while the
+  other added the generated column. Dependent generated columns and secondary
+  indexes use the recomputed values.
 - Snapshot (`dolt_at_<table>`) and history (`dolt_history_<table>`) columns
   retain the affinity and collation of the schema used to declare the virtual
   table. Predicates, joins, ordering, and grouping use SQLite's comparison
