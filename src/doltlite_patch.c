@@ -444,9 +444,12 @@ static int patchColumnIndex(const PatchSchema *p, const char *zName){
 
 static const char *patchRowidName(const PatchSchema *p){
   static const char *const azRowid[] = {"rowid", "_rowid_", "oid"};
-  int i;
+  int i, j;
   for(i=0; i<ArraySize(azRowid); i++){
-    if( patchColumnIndex(p,azRowid[i])<0 ) return azRowid[i];
+    for(j=0; j<p->col.nCol; j++){
+      if( sqlite3_stricmp(p->col.azName[j],azRowid[i])==0 ) break;
+    }
+    if( j==p->col.nCol ) return azRowid[i];
   }
   return 0;
 }

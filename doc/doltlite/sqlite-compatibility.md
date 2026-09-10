@@ -44,6 +44,10 @@ For a DoltLite-format main database, the compatibility contract is:
   `DELETE FROM sqlite_sequence`, and inserting a seed row set or drop the
   shared counter for that table, after which the next id is
   `max(seq, max(rowid))+1` exactly as in SQLite.
+- For tables without a primary key, `dolt_patch` selects a rowid alias using
+  SQLite's case-insensitive identifier rules. Declared columns shadow `rowid`,
+  `_rowid_`, and `oid` regardless of case; patch generation fails if all three
+  aliases are shadowed.
 - Named in-memory databases are shared between connections the way SQLite
   shares them: `file:name?mode=memory&cache=shared`, `file::memory:?cache=shared`,
   and `file:/name?vfs=memdb` open one store per name inside the process, with
