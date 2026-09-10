@@ -55,7 +55,7 @@ class FakeRunner:
 
 
 class BenchmarkRetryTest(unittest.TestCase):
-    def run_retry(self, directory, outcomes):
+    def run_retry(self, directory, outcomes, fail_confirmed=False):
         runner = FakeRunner(outcomes)
         rc = benchmark_retry.run_with_retries(
             "int",
@@ -68,6 +68,7 @@ class BenchmarkRetryTest(unittest.TestCase):
             5000,
             runner,
             PRODUCER_ID,
+            fail_confirmed,
         )
         return rc, runner
 
@@ -135,6 +136,16 @@ class BenchmarkRetryTest(unittest.TestCase):
             f"# producer_id\t{PRODUCER_ID}\n"
             "reads\tpoint\t100000\t150000\n",
         )
+
+    def test_confirmed_failure_can_fail_caller(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rc, runner = self.run_retry(
+                directory,
+                [(100_000, 130_000)] * 3,
+                fail_confirmed=True,
+            )
+        self.assertEqual(rc, 1)
+        self.assertEqual(runner.calls, 3)
 
     def test_rotating_individual_failures_stop_without_confirmation(self):
         steady = ("reads", "steady", 1_000_000, 1_000_000)

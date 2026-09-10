@@ -16,6 +16,11 @@ if [ -n "$VC_PERF_BASELINE" ] && [ ! -x "$VC_PERF_BASELINE" ]; then
 fi
 VC_PERF_BASELINE_LABEL="${VC_PERF_BASELINE_LABEL:-PR base}"
 VC_PERF_CANDIDATE_LABEL="${VC_PERF_CANDIDATE_LABEL:-PR candidate}"
+VC_PERF_GATE_MODE="${VC_PERF_GATE_MODE:-enforce}"
+case "$VC_PERF_GATE_MODE" in
+  enforce|none) ;;
+  *) echo "unknown VC_PERF_GATE_MODE: $VC_PERF_GATE_MODE" >&2; exit 2 ;;
+esac
 
 RUNS=${VC_PERF_RUNS:-3}
 TABLES=${VC_PERF_TABLES:-800}
@@ -485,7 +490,8 @@ $(printf "%b" "$rows")
 EOF
 fi
 
-if [ -z "$VC_PERF_BASELINE" ] && [ "$failures" -ne 0 ]; then
+if [ -z "$VC_PERF_BASELINE" ] && [ "$VC_PERF_GATE_MODE" = "enforce" ] \
+    && [ "$failures" -ne 0 ]; then
   echo "$failures version-control benchmark(s) exceeded their ceiling." >&2
   exit 1
 fi
