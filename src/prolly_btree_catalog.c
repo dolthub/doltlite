@@ -1367,8 +1367,21 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     return rc;
   }
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
-  /* Constructed arrays: drop index rows whose parent table is gone. */
-  if( aTables!=pBtree->cat.a ){
+  if( !bForeignDomain ){
+    rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
+                                        &aRows, &nRows, aMeta, nMeta,
+                                        aTables, nTables);
+  }
+  if( rc==SQLITE_OK ){
+    rc = appendFallbackSchemaCatalogRows(&aRows, &nRows, aTables, nTables,
+                                         aFallbackSchema, nFallbackSchema);
+  }
+  if( rc!=SQLITE_OK ){
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return rc;
+  }
+  /* Drop index rows whose parent table is gone. */
+  {
     int nOut = 0;
     for(i=0; i<nRows; i++){
       int keep = 1;
@@ -1379,12 +1392,6 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
           if( aRows[j].zType && strcmp(aRows[j].zType, "table")==0
            && aRows[j].zName
            && strcmp(aRows[j].zName, aRows[i].zTblName)==0 ){
-            keep = 1;
-          }
-        }
-        for(j=0; j<nTables && !keep; j++){
-          if( aTables[j].zName
-           && strcmp(aTables[j].zName, aRows[i].zTblName)==0 ){
             keep = 1;
           }
         }
@@ -1404,20 +1411,6 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       }
     }
     nRows = nOut;
-  }
-  /* Live numbers belong to this connection; skip on a foreign-domain catalog. */
-  if( !bForeignDomain ){
-    rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
-                                        &aRows, &nRows, aMeta, nMeta,
-                                        aTables, nTables);
-  }
-  if( rc==SQLITE_OK ){
-    rc = appendFallbackSchemaCatalogRows(&aRows, &nRows, aTables, nTables,
-                                         aFallbackSchema, nFallbackSchema);
-  }
-  if( rc!=SQLITE_OK ){
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
   }
   if( nRows>0 ){
     ProllyMutMap mm;
