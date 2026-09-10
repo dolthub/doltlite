@@ -121,10 +121,15 @@ for page in "$DOCS"/*.md; do
   db="$TMPDIR/$name.db"
   awk -v tmp="$TMPDIR" -v db="$db" -v name="$name" '/^````/{q=!q; next} q{next} /^```sql$/{f=1; n++; buf=""; next} /^```$/{if(f){ c=(buf ~ /dolt_clone\(/); if(c) printf ".open %s/%s.clone_%d.db\n", tmp, name, n; printf "%s", buf; if(c) printf ".open %s\n", db; print "-- @@BLOCK@@"} f=0; next} f{buf=buf $0 "\n"}' "$page" > "$TMPDIR/blocks.sql"
   [ -s "$TMPDIR/blocks.sql" ] || continue
-  # The blocks are SQL. A shell dot-command in a page (.shell, .system,
-  # .open, ...) would run with the CI runner's privileges; refuse the page.
+  # The blocks are SQL for the engine. The shell's own escape hatches, dot
+  # commands (.shell, .system, .open, ...) and its file functions, would run
+  # with the CI runner's privileges; refuse the page. (-safe would block them
+  # too, but it also blocks ATTACH and VACUUM INTO, which pages document.)
   if dots=$(grep -nE '^[[:space:]]*\.[A-Za-z]' "$TMPDIR/blocks.sql" | grep -vE '^[0-9]+:\.open '); then
     fail=$((fail+1)); echo "FAIL: $name (shell dot-command in a sql block)"; echo "$dots" | sed 's/^/    /'; continue
+  fi
+  if fns=$(grep -niE '\b(writefile|readfile|edit|fsdir|zipfile|load_extension)[[:space:]]*\(' "$TMPDIR/blocks.sql"); then
+    fail=$((fail+1)); echo "FAIL: $name (shell file function in a sql block)"; echo "$fns" | sed 's/^/    /'; continue
   fi
   if ! fixture "$db"; then fail=$((fail+1)); echo "FAIL: $name (fixture)"; continue; fi
   { echo ".bail off"; prelude "$name"; substitute "$db" < "$TMPDIR/blocks.sql"; } > "$TMPDIR/run.sql"
