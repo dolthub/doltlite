@@ -1,8 +1,9 @@
 #!/bin/bash
-DOLTLITE="${1:-./doltlite}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/doltlite_test_common.sh"
+DOLTLITE="${1:-$DOLTLITE}"
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
-PASS=0; FAIL=0; ERRORS=""
 
 file_size() {
   case "$(uname -s)" in
@@ -16,20 +17,26 @@ stable_rollback() {
   local name="$1" setup="$2" txn="$3"
   local db="$TMP/${name}.db"
   rm -f "$db"
-  if [ -n "$setup" ]; then
-    printf '%s\n' "$setup" | "$DOLTLITE" "$db" >/dev/null 2>&1
+  if ! dltest_require "${name}_setup" "$db" "$setup"; then
+    return
   fi
+  if [ ! -f "$db" ]; then
+    dltest_fail "$name" "  expected a database file after setup"
+    return
+  fi
+  run_test "${name}_log" "SELECT count(*) FROM dolt_log;" "2" "$db"
   local size_before sha_before size_after sha_after
   size_before=$(file_size "$db")
   sha_before=$(file_sha "$db")
-  printf '%s\n' "$txn" | "$DOLTLITE" "$db" >/dev/null 2>&1
+  if ! dltest_require "${name}_txn" "$db" "$txn"; then
+    return
+  fi
   size_after=$(file_size "$db")
   sha_after=$(file_sha "$db")
   if [ "$size_before" = "$size_after" ] && [ "$sha_before" = "$sha_after" ]; then
-    PASS=$((PASS+1))
+    dltest_pass
   else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  expected: file unchanged (size=$size_before sha=${sha_before:0:8})\n  got:      size=$size_after sha=${sha_after:0:8} (delta=$((size_after-size_before)))"
+    dltest_fail "$name" "  expected: file unchanged (size=$size_before sha=${sha_before:0:8})\n  got:      size=$size_after sha=${sha_after:0:8} (delta=$((size_after-size_before)))"
   fi
 }
 
@@ -83,6 +90,4 @@ stable_rollback "many_inserts_rollback" \
 stable_rollback "rollback_after_select_only_inside_txn" \
   "$SEED_T" "BEGIN; SELECT count(*) FROM t; ROLLBACK;"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
+dltest_finish
