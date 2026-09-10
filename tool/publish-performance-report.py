@@ -41,19 +41,26 @@ def gh_json(arguments):
         raise PublishError(f"invalid gh JSON for: {' '.join(arguments)}") from exc
 
 
+# gh renders GitHub App authors with an "app/" prefix. Reports opened with the
+# workflow's own token carry this author; PRs opened with a user token carry
+# that user's login, and their CI runs without a manual approval.
+LEGACY_APP_LOGIN = "app/github-actions"
+
+
 def report_login():
+    result = command(["gh", "api", "user", "--jq", ".login"], check=False)
+    login = result.stdout.strip() if result.returncode == 0 else ""
+    if login:
+        return login
     if os.environ.get("GITHUB_ACTIONS") == "true":
-        # gh renders GitHub App authors with an "app/" prefix.
-        return "app/github-actions"
-    login = command(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
-    if not login:
-        raise PublishError("unable to determine report bot login")
-    return login
+        # An installation token cannot call /user; the author is the app.
+        return LEGACY_APP_LOGIN
+    raise PublishError("unable to determine report bot login")
 
 
 def validate_previous_pr(pr, current_login):
     author = (pr.get("author") or {}).get("login")
-    if author != current_login:
+    if author not in (current_login, LEGACY_APP_LOGIN):
         raise PublishError(
             f"refusing to merge PR #{pr.get('number')}: "
             f"author is {author!r}, expected {current_login!r}"
