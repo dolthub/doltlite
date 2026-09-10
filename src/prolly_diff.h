@@ -60,6 +60,8 @@ struct DiffIterFrame {
   u8 *pNewData;
   int i;
   int j;
+  int iPrefetched;
+  int jPrefetched;
 };
 
 typedef struct ProllyDiffIter ProllyDiffIter;

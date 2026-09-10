@@ -6,6 +6,15 @@
 
 #include <string.h>
 
+#define DIFF_PREFETCH_MAX_PAIRS 256
+#define DIFF_PREFETCH_BATCH_HASHES 256
+
+typedef struct DiffPrefetchPair DiffPrefetchPair;
+struct DiffPrefetchPair {
+  ProllyHash oldHash;
+  ProllyHash newHash;
+};
+
 int prollyFetchNode(ChunkStore *pStore, const ProllyHash *pHash,
                     ProllyNode *pNode, u8 **ppData){
   u8 *pData = 0;
@@ -707,6 +716,126 @@ static void diffIterPopFrame(ProllyDiffIter *pIter){
   memset(pF, 0, sizeof(*pF));
 }
 
+static int diffIterPrefetchPairs(
+  ProllyDiffIter *pIter,
+  const DiffPrefetchPair *aInitial,
+  int nInitial
+){
+  DiffPrefetchPair aPair[DIFF_PREFETCH_MAX_PAIRS];
+  ProllyHash aHash[DIFF_PREFETCH_BATCH_HASHES];
+  int iLevel = 0;
+  int nPair = nInitial;
+  int rc = SQLITE_OK;
+
+  if( !pIter->pStore->pChunkSource || nInitial==0 ) return SQLITE_OK;
+  memcpy(aPair, aInitial, (size_t)nInitial * sizeof(DiffPrefetchPair));
+
+  while( iLevel<nPair ){
+    int iLevelEnd = nPair;
+    int iBatch = iLevel;
+    int k;
+
+    while( iBatch<iLevelEnd ){
+      int nBatchPair = iLevelEnd - iBatch;
+      int nHash;
+      if( nBatchPair>DIFF_PREFETCH_BATCH_HASHES/2 ){
+        nBatchPair = DIFF_PREFETCH_BATCH_HASHES/2;
+      }
+      for(k=0; k<nBatchPair; k++){
+        aHash[k*2] = aPair[iBatch+k].oldHash;
+        aHash[k*2+1] = aPair[iBatch+k].newHash;
+      }
+      nHash = nBatchPair * 2;
+      rc = chunkStoreSourcePrefetchMany(pIter->pStore, aHash, nHash);
+      if( rc!=SQLITE_OK ) return rc;
+      iBatch += nBatchPair;
+    }
+
+    if( pIter->shapeMismatch ) break;
+    for(k=iLevel; k<iLevelEnd && nPair<DIFF_PREFETCH_MAX_PAIRS; k++){
+      ProllyNode oldNode, newNode;
+      u8 *pOldData = 0;
+      u8 *pNewData = 0;
+      int i = 0;
+      int j = 0;
+
+      rc = prollyFetchNode(pIter->pStore, &aPair[k].oldHash,
+                           &oldNode, &pOldData);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = prollyFetchNode(pIter->pStore, &aPair[k].newHash,
+                           &newNode, &pNewData);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(pOldData);
+        return rc;
+      }
+      if( oldNode.level>0 && newNode.level>0
+       && oldNode.level==newNode.level ){
+        while( i<(int)oldNode.nItems
+            && j<(int)newNode.nItems
+            && nPair<DIFF_PREFETCH_MAX_PAIRS ){
+          DiffPrefetchPair *pPair = &aPair[nPair];
+          prollyNodeChildHash(&oldNode, i, &pPair->oldHash);
+          prollyNodeChildHash(&newNode, j, &pPair->newHash);
+          if( prollyHashCompare(&pPair->oldHash, &pPair->newHash)==0 ){
+            i++;
+            j++;
+            continue;
+          }
+          if( diffNodeKeyCmp(&oldNode, i, &newNode, j,
+                             pIter->flags)!=0 ){
+            break;
+          }
+          nPair++;
+          i++;
+          j++;
+        }
+      }
+      sqlite3_free(pOldData);
+      sqlite3_free(pNewData);
+    }
+    iLevel = iLevelEnd;
+  }
+
+  return SQLITE_OK;
+}
+
+static int diffIterPrefetchFrame(
+  ProllyDiffIter *pIter,
+  DiffIterFrame *pF
+){
+  DiffPrefetchPair aPair[DIFF_PREFETCH_MAX_PAIRS];
+  int i = pF->i;
+  int j = pF->j;
+  int nPair = 0;
+
+  if( !pIter->pStore->pChunkSource ) return SQLITE_OK;
+  if( i<pF->iPrefetched && j<pF->jPrefetched ) return SQLITE_OK;
+
+  while( i<(int)pF->oldNode.nItems
+      && j<(int)pF->newNode.nItems
+      && nPair<DIFF_PREFETCH_MAX_PAIRS ){
+    DiffPrefetchPair *pPair = &aPair[nPair];
+    prollyNodeChildHash(&pF->oldNode, i, &pPair->oldHash);
+    prollyNodeChildHash(&pF->newNode, j, &pPair->newHash);
+    if( prollyHashCompare(&pPair->oldHash, &pPair->newHash)==0 ){
+      i++;
+      j++;
+      continue;
+    }
+    if( diffNodeKeyCmp(&pF->oldNode, i, &pF->newNode, j,
+                       pIter->flags)!=0 ){
+      break;
+    }
+    nPair++;
+    i++;
+    j++;
+  }
+
+  pF->iPrefetched = i;
+  pF->jPrefetched = j;
+  return diffIterPrefetchPairs(pIter, aPair, nPair);
+}
+
 /* Expand one differing subtree pair: identical hashes vanish, same-level
 ** internal pairs suspend as a frame, everything else (leaves, mixed
 ** levels, one empty side) becomes a cursor range. */
@@ -787,6 +916,8 @@ static int diffIterAdvanceFrame(ProllyDiffIter *pIter){
     cmp = diffNodeKeyCmp(&pF->oldNode, pF->i, &pF->newNode, pF->j,
                          pIter->flags);
     if( cmp==0 ){
+      rc = diffIterPrefetchFrame(pIter, pF);
+      if( rc!=SQLITE_OK ) return rc;
       pF->i++;
       pF->j++;
       return diffIterDescendPair(pIter, &oldChild, &newChild);
@@ -847,6 +978,25 @@ int prollyDiffIterOpen(
   pIter->newFlags = newFlags;
   pIter->shapeMismatch =
       ((oldFlags ^ newFlags) & PROLLY_NODE_INTKEY)!=0;
+
+  if( pStore->pChunkSource
+   && prollyHashCompare(pOldRoot, pNewRoot)!=0 ){
+    if( !prollyHashIsEmpty(pOldRoot) && !prollyHashIsEmpty(pNewRoot) ){
+      DiffPrefetchPair rootPair;
+      rootPair.oldHash = *pOldRoot;
+      rootPair.newHash = *pNewRoot;
+      rc = diffIterPrefetchPairs(pIter, &rootPair, 1);
+    }else{
+      ProllyHash rootHash = prollyHashIsEmpty(pOldRoot)
+                          ? *pNewRoot : *pOldRoot;
+      rc = chunkStoreSourcePrefetchMany(pStore, &rootHash, 1);
+    }
+    if( rc!=SQLITE_OK ){
+      pIter->eof = 1;
+      pIter->rc = rc;
+      return rc;
+    }
+  }
 
   if( pIter->shapeMismatch ){
     rc = diffIterActivateRange(pIter, pOldRoot, pNewRoot, 0, 0);
