@@ -1,0 +1,15 @@
+name: macOS Build
+
+on:
+  workflow_call:
+
+jobs:
+  checked:
+    uses: ./.github/workflows/checked-build.yml
+    with:
+      platform: macos
+
+  asan-ubsan:
+    uses: ./.github/workflows/asan-build.yml
+    with:
+      platform: macos

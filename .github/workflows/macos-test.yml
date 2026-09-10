@@ -1,0 +1,68 @@
+name: macOS Tests
+
+on:
+  workflow_call:
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/platform-test.yml
+    with:
+      platform: macos
+
+  asan-ubsan-macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      ASAN_CFLAGS: -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1
+      UBSAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download ASan/UBSan build
+      uses: actions/download-artifact@v4
+      with:
+        name: asan-ubsan-macos
+
+    - name: Extract ASan/UBSan build
+      run: tar -xzf asan-ubsan-macos.tar.gz
+
+    - name: SQL oracle tests (vs stock SQLite)
+      run: |
+        cd build
+        bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite || exit 1
+        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
+        for f in ../test/oracle_*_test.sh; do
+          [ "$(basename "$f")" = "oracle_import_test.sh" ] && continue
+          echo "--- $(basename "$f") ---"
+          bash "$f" ./doltlite ./sqlite3 || exit 1
+        done
+      timeout-minutes: 20
+
+    - name: Correctness regression tests
+      run: cd build && bash ../test/correctness_test.sh ./doltlite
+
+    - name: VC virtual-table read suites
+      run: |
+        cd build
+        for s in doltlite_at doltlite_history doltlite_diff doltlite_diff_table \
+                 doltlite_diff_table_range \
+                 doltlite_schema_diff doltlite_workspace doltlite_conflicts \
+                 doltlite_conflict_rows doltlite_comparison doltlite_merge; do
+          echo "=== $s ==="
+          bash ../test/$s.sh ./doltlite || exit 1
+        done
+
+    - name: VC ref-mutation + remote suites
+      run: |
+        cd build
+        for s in doltlite_branch doltlite_default_branch doltlite_tag \
+                 doltlite_gc doltlite_vacuum remote_test; do
+          echo "=== $s ==="
+          bash ../test/$s.sh ./doltlite || exit 1
+        done
+
+    - name: C regression corpus (ASan/UBSan)
+      run: cd build && ./doltlite_regression_test_c all

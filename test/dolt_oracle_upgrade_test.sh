@@ -121,7 +121,7 @@ PATH="$tmp/bin:$PATH" REPO_ROOT="$tmp/work" \
   bash "$script"
 assert_lacks 'gh pr create'
 
-for workflow in build-test.yml sanitizers.yml test.yml; do
+for workflow in platform-test.yml sanitizers.yml test.yml; do
   grep -Fq 'bash .github/scripts/install-dolt-oracle.sh' \
     "$root/.github/workflows/$workflow"
 done

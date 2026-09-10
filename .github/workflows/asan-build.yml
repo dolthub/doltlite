@@ -1,0 +1,82 @@
+name: ASan/UBSan Build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Platform to build or test
+        type: string
+        required: true
+
+jobs:
+  asan-ubsan-build:
+    name: asan-ubsan-${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: ${{ inputs.platform }}
+            runs-on: ${{ format('{0}-latest', inputs.platform) }}
+            warning-flags: ${{ inputs.platform == 'macos' && '-Wno-deprecated-declarations' || '' }}
+    env:
+      ASAN_CFLAGS: -O1 -g -Werror ${{ matrix.warning-flags }} -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+      ASAN_LDFLAGS: -fsanitize=address,undefined
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Linux dependencies
+      if: matrix.platform == 'ubuntu'
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+
+    - name: Install macOS dependencies
+      if: matrix.platform == 'macos'
+      run: brew install tcl-tk
+
+    - name: Configure
+      run: |
+        mkdir -p build
+        cd build
+        if [ "${{ matrix.platform }}" = "macos" ]; then
+          export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+          ../configure
+        else
+          TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+          if [ -n "$TCL_CONFIG" ]; then
+            ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+          else
+            ../configure
+          fi
+        fi
+
+    - name: Build
+      run: |
+        cd build
+        set -o pipefail
+        {
+          make CFLAGS="$ASAN_CFLAGS" LDFLAGS="$ASAN_LDFLAGS" \
+            doltlite libdoltlite.a
+          make DOLTLITE_PROLLY=0 sqlite3
+          cc $ASAN_CFLAGS -I. -I../src \
+            -o doltlite_regression_test_c \
+            ../test/doltlite_regression_test_c.c \
+            libdoltlite.a $ASAN_LDFLAGS -lz -lpthread -lm
+        } 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in sanitizer build"
+          exit 1
+        fi
+
+    - name: Package
+      run: tar -czf asan-ubsan-${{ matrix.platform }}.tar.gz build
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: asan-ubsan-${{ matrix.platform }}
+        path: asan-ubsan-${{ matrix.platform }}.tar.gz
+        retention-days: 1
