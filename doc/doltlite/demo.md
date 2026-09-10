@@ -7,7 +7,7 @@
 
 This is a doltlite tutorial disguised as a whodunit. Every SQL block is
 runnable — copy-paste into `./doltlite case.db` and the story unfolds
-for real. The companion test script `test/doltlite_detective_demo_test.sh`
+for real. The companion test script `test/doltlite_demo.sh`
 runs the same SQL with assertions, so the demo never drifts from what
 the engine actually does.
 

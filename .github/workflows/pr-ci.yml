@@ -14,7 +14,6 @@ jobs:
     name: Classify changes
     runs-on: ubuntu-latest
     outputs:
-      docs_only: ${{ steps.files.outputs.docs_only }}
       docs_changed: ${{ steps.files.outputs.docs_changed }}
     steps:
       - id: files
@@ -23,7 +22,6 @@ jobs:
           script: |
             const pull = context.payload.pull_request;
             if (!pull) {
-              core.setOutput('docs_only', 'false');
               core.setOutput('docs_changed', 'true');
               return;
             }
@@ -37,58 +35,58 @@ jobs:
               }
             );
             core.setOutput(
-              'docs_only',
-              String(files.length > 0 && files.every(file => file.filename.endsWith('.md')))
-            );
-            core.setOutput(
               'docs_changed',
               String(files.some(file => file.filename.endsWith('.md')))
             );
 
   doc_links:
-    name: Doc links
+    name: Docs validation
     needs: classify
     if: needs.classify.outputs.docs_changed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: bash test/doc_links_test.sh
+      - run: bash test/doc_error_strings_test.sh
+      - name: Build doltlite
+        run: |
+          bash .github/scripts/install-apt-deps.sh build-essential tcl-dev zlib1g-dev
+          mkdir -p build && cd build
+          TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+          ../configure ${TCL_CONFIG:+--with-tcl=$(dirname "$TCL_CONFIG")} >/dev/null
+          make -j"$(nproc)" doltlite
+      - run: bash test/oracle_doc_examples_test.sh build/doltlite
+      - run: bash test/oracle_doc_agent_guide_test.sh build/doltlite
 
   build:
     name: Build all binaries
     needs: classify
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/ci-build.yml
 
   build_test:
     name: Build-Test
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/build-test.yml
 
   test_suite:
     name: Test Suite
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/test.yml
 
   sanitizers:
     name: Sanitizers
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/sanitizers.yml
 
   smoke:
     name: Smoke
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/smoke.yml
 
   benchmark:
     name: Benchmark
     needs: [classify, build]
-    if: needs.classify.outputs.docs_only != 'true'
     uses: ./.github/workflows/benchmark.yml
 
   gate:
@@ -98,7 +96,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - env:
-          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CLASSIFY: ${{ needs.classify.result }}
           DOC_LINKS: ${{ needs.doc_links.result }}
           BUILD: ${{ needs.build.result }}
@@ -110,9 +107,6 @@ jobs:
         run: |
           test "$CLASSIFY" = success
           case "$DOC_LINKS" in success|skipped) ;; *) exit 1 ;; esac
-          if [ "$DOCS_ONLY" = true ]; then
-            exit 0
-          fi
           for result in "$BUILD" "$BUILD_TEST" "$TEST_SUITE" "$SANITIZERS" "$SMOKE" "$BENCHMARK"; do
             test "$result" = success
           done

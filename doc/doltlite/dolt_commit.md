@@ -8,13 +8,14 @@ equivalents: [dolt_add](https://docs.dolthub.com/sql-reference/version-control/d
 ## Synopsis
 
 ```sql
+SELECT dolt_config('user.name', 'Ann');
 SELECT dolt_add('users', 'orders');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'message');
+UPDATE users SET active = 0 WHERE id = 2;
 SELECT dolt_commit('-am', 'message');           -- -a and -m combine
-SELECT dolt_commit('-A', '-m', 'message', '--author', 'Ann <ann@example.com>');
+SELECT dolt_commit('--allow-empty', '-m', 'message', '--author', 'Ann <ann@example.com>');
 SELECT * FROM dolt_status;
-SELECT dolt_config('user.name', 'Ann');
 ```
 
 ## dolt_add
@@ -52,7 +53,7 @@ the SQL transaction; see [transactions.md](transactions.md).
 | `cannot commit: unresolved merge conflicts. Use dolt_conflicts_resolve() first.` | see [dolt_merge.md](dolt_merge.md) |
 | `cannot commit: unresolved entries in dolt_constraint_violations ...` | see [dolt_constraint_violations.md](dolt_constraint_violations.md) |
 | `cannot --amend: HEAD has no parent (initial commit)` | amend on the first commit |
-| `unknown option \`--x\``, `no value for option \`message'` | option parsing |
+| `unknown option`, `no value for option` | option parsing; the message names the option |
 
 ## dolt_status
 

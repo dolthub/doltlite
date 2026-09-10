@@ -69,5 +69,5 @@ Readers never block on writers and never see uncommitted rows or staging.
 |---|---|
 | Writing two file-backed databases in one transaction | `atomic commit across multiple file-backed databases is not supported`; the transaction is rolled back |
 | Any `dolt_*` write under `PRAGMA query_only=1` or `immutable=1` | `attempt to write a readonly database` |
-| A `dolt_*` command inside a view, trigger, generated column, or index | `unsafe use of dolt_commit()` at parse time; they are direct-only |
+| A `dolt_*` command inside a view, trigger, generated column, or index | `unsafe use of <function>()` at parse time; command functions are direct-only |
 | `VACUUM` inside a transaction | `cannot VACUUM from within a transaction`, as in SQLite |

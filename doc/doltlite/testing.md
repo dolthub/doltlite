@@ -27,8 +27,7 @@ bash ../test/run_sqllogictest.sh \
 
 CI wiring, coverage floors, and full bucket lists are in
 [`.github/workflows/test.yml`](../../.github/workflows/test.yml) and
-[AGENTS.md](../../AGENTS.md). `test/doc_links_test.sh` checks relative links and anchors in tracked
-Markdown; PR CI runs it whenever a `.md` file changes. Contract suites
+[AGENTS.md](../../AGENTS.md). Docs validation runs in PR CI whenever a `.md` file changes: `test/doc_links_test.sh` (relative links and anchors), `test/doc_error_strings_test.sh` (every quoted error message exists in the source), `test/oracle_doc_examples_test.sh` (every ```sql block in `doc/doltlite` runs against `build/doltlite`), `test/oracle_doc_agent_guide_test.sh` (the `AGENT.md` row matches `agents.md`), and `test/oracle_pragma_matrix_test.sh` on code PRs. Contract suites
 (`sqlite_compatibility_contract_test.sh`, `concurrency_contract_test.sh`,
 `storage_format_contract_test.sh`) gate [SQLite compatibility](sqlite-compatibility.md),
 [concurrency](concurrency.md), and [storage format](storage-format.md).

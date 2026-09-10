@@ -8,16 +8,19 @@ the lock before advancing a branch tip.
 
 For a DoltLite-format main database, the concurrency contract is:
 
+<!-- contract: conn.per_session_branch -->
 - **Per-connection branch selection.** Each connection holds its own active
   branch and session view of HEAD and staging (see
   per-session branching below). The
   uncommitted working set belongs to the branch, so another connection that
   selects that branch recovers it. Two connections may sit on different
   branches of the same file at once.
+<!-- contract: conn.peer_deleted_branch -->
 - **Peer-deleted branches.** A connection parked on a branch that a peer
   deletes may keep reading its snapshot, but writes fail and name the missing
   branch. Checking out an existing branch recovers the connection without
   recreating the deleted branch.
+<!-- contract: writer.cross_thread_transaction -->
 - **One durable writer at a time.** A connection that holds an explicit write
   transaction owns the graph lock. A peer that tries to begin a concurrent
   write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
@@ -29,6 +32,9 @@ For a DoltLite-format main database, the concurrency contract is:
   upgrade returns `SQLITE_BUSY_SNAPSHOT` instead of mixing catalogs. Once a
   write transaction begins, it holds the graph lock and pins its snapshot
   until commit or rollback.
+<!-- contract: txn.add_isolation -->
+<!-- contract: txn.reader_close_upgrade -->
+<!-- contract: reader.follows_restore -->
 - **Readers stay live.** A reader can see already-committed data while another
   process holds an uncommitted write. Running `dolt_add` inside that write
   transaction does not publish its rows or staged state, and rolling the

@@ -7,10 +7,10 @@ Named, immutable pointers to commits. Dolt:
 ## Synopsis
 
 ```sql
-SELECT dolt_tag('v1.0');                                   -- HEAD
-SELECT dolt_tag('v1.0', 'HEAD~2');                          -- commit revision
-SELECT dolt_tag('v1.0', 'main', '-m', 'release', '--author', 'Ann <ann@example.com>');
-SELECT dolt_tag('-d', 'v1.0');
+SELECT dolt_tag('v2.1');                                   -- HEAD
+SELECT dolt_tag('v2.2', 'HEAD~2');                          -- commit revision
+SELECT dolt_tag('v3.0', 'main', '-m', 'release', '--author', 'Ann <ann@example.com>');
+SELECT dolt_tag('-d', 'v2.1');
 SELECT * FROM dolt_tags;
 ```
 

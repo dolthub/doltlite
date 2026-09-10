@@ -8,15 +8,19 @@ Three-way, row-level merge into the current branch. Dolt:
 ## Synopsis
 
 ```sql
-SELECT dolt_merge('feature');
-SELECT dolt_merge('--no-ff', '-m', 'Merge feature', 'feature');
-SELECT dolt_merge('--squash', 'feature');
-SELECT dolt_merge('--no-commit', 'feature');
-SELECT dolt_merge('--abort');
+SELECT dolt_merge('topic');                       -- fast-forward when possible
+SELECT dolt_merge('--no-ff', '-m', 'Merge topic', 'topic');
+SELECT dolt_merge('--squash', 'topic');
+SELECT dolt_merge('--no-commit', 'topic');
+BEGIN;
+SELECT dolt_merge('feature');                     -- error: conflicts on users
 SELECT * FROM dolt_merge_status;
 SELECT * FROM dolt_conflicts;
 SELECT * FROM dolt_conflicts_users;
+SELECT dolt_merge('--abort');
+SELECT dolt_merge('feature');                     -- error: same conflicts again
 SELECT dolt_conflicts_resolve('--theirs', 'users');
+SELECT dolt_commit('-m', 'Merge feature');
 SELECT dolt_merge_base('main', 'feature');
 ```
 

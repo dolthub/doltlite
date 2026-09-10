@@ -9,10 +9,11 @@ branch. Dolt:
 
 ```sql
 SELECT dolt_cherry_pick('0123abcd...');
-SELECT dolt_cherry_pick(dolt_hashof('feature'));
-SELECT dolt_cherry_pick('--abort');
 SELECT dolt_revert('HEAD');
-SELECT dolt_revert('0123abcd...');
+BEGIN;
+SELECT dolt_cherry_pick(dolt_hashof('feature'));   -- error: conflicts, inspect dolt_conflicts
+SELECT dolt_cherry_pick('--abort');
+ROLLBACK;
 ```
 
 ## dolt_cherry_pick

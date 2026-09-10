@@ -6,11 +6,12 @@ Replay the current branch's commits onto another branch. Dolt:
 ## Synopsis
 
 ```sql
-SELECT dolt_rebase('main');
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--abort');                    -- give up an interactive plan
 SELECT dolt_rebase('-i', 'main');
 UPDATE dolt_rebase SET action = 'squash' WHERE commit_message = 'fixup';
 SELECT dolt_rebase('--continue');
-SELECT dolt_rebase('--abort');
+SELECT dolt_rebase('main');                       -- non-interactive
 ```
 
 ## Options

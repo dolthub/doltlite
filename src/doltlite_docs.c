@@ -118,7 +118,13 @@ static const char *zDocsAgentDefault =
   "- ATTACH works, but one transaction may write only one file-backed database.\n"
   "- Most SQLite SQL features remain available, including triggers, views,\n"
   "  FTS5, and R-Tree. For storage-coupled API and PRAGMA differences, see\n"
-  "  https://github.com/dolthub/doltlite#sqlite-compatibility.\n";
+  "  https://github.com/dolthub/doltlite/blob/master/doc/doltlite/sqlite-compatibility.md\n"
+  "  and pragmas.md alongside it.\n"
+  "- Full reference, one page per feature:\n"
+  "  https://github.com/dolthub/doltlite/tree/master/doc/doltlite\n"
+  "  Start with refs.md (revision syntax), transactions.md (what ROLLBACK\n"
+  "  undoes; dolt_commit ends the SQL transaction), and dolt-differences.md\n"
+  "  if you already know Dolt.\n";
 
 static int docsConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
