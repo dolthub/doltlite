@@ -242,17 +242,21 @@ struct UniqueIndexEntry {
   UnpackedRecord *pUnpacked;
 };
 
+/* Record slots come from the index's own table, never from column info read
+** back over the connection: mid-merge that read still returns the pre-merge
+** catalog, so a column the merged schema adds looks absent and an index over
+** it cannot be mapped. */
 static int uniqueRecordFromTableRow(
   const u8 *pRecord,
   int nRecord,
   const DoltliteRecordInfo *pInfo,
-  const DoltliteColInfo *pCols,
   Index *pIdx,
   int nField,
   u8 **ppOut,
   int *pnOut,
   int *pHasNull
 ){
+  Table *pTab = pIdx->pTable;
   DoltliteSerialValue *aValue;
   int i;
   int rc = SQLITE_OK;
@@ -267,11 +271,13 @@ static int uniqueRecordFromTableRow(
   for(i=0; i<nField; i++){
     int iColumn = pIdx->aiColumn[i];
     int iRecord;
-    if( iColumn<0 || iColumn>=pCols->nCol ){
-      rc = SQLITE_NOTFOUND;
+    if( iColumn<0 || iColumn>=pTab->nCol ){
+      rc = SQLITE_CORRUPT;
       break;
     }
-    iRecord = pCols->aColToRec[iColumn];
+    iRecord = HasRowid(pTab)
+        ? sqlite3TableColumnToStorage(pTab, iColumn)
+        : sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iColumn);
     rc = doltliteSerialValueFromField(
         pRecord, nRecord, pInfo, iRecord, &aValue[i]);
     if( rc!=SQLITE_OK ) break;
@@ -595,12 +601,12 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     }
     if( rc==SQLITE_OK ){
       rc = uniqueRecordFromTableRow(
-          pRecord, nRecord, &info, &cols, pIdx, pIdx->nKeyCol,
+          pRecord, nRecord, &info, pIdx, pIdx->nKeyCol,
           &entry.pKey, &entry.nKey, &hasNull);
     }
     if( rc==SQLITE_OK && !hasNull ){
       rc = uniqueRecordFromTableRow(
-          pRecord, nRecord, &info, &cols, pPkIdx, pPkIdx->nKeyCol,
+          pRecord, nRecord, &info, pPkIdx, pPkIdx->nKeyCol,
           &entry.pPk, &entry.nPk, 0);
     }
     sqlite3_free(pOwnedRecord);
