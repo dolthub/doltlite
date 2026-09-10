@@ -73,6 +73,9 @@ if [ "$#" -eq 2 ]; then
   case "$2" in
     "SELECT 'sql-oracle-ready',6*7;") echo 'sql-oracle-ready|42'; exit 0 ;;
     'SELECT sqlite_version();') echo '3.54.0'; exit 0 ;;
+    'SELECT doltlite_engine();')
+      printf '%s\n' "${oracle_test_engine:-prolly}"
+      exit "${oracle_test_engine_rc:-0}" ;;
     'CREATE TABLE x(y); INSERT INTO x VALUES(1);')
       printf 'SQLite format 3\000' > "$1"; exit 0 ;;
   esac
@@ -82,6 +85,35 @@ printf '%s' "$oracle_test_output"
 exit "$oracle_test_rc"
 ENGINE
 chmod +x "$WORK/engine"
+cp "$WORK/engine" "$WORK/candidate"
+cp "$WORK/engine" "$WORK/reference"
+ln -s "$WORK/candidate" "$WORK/symlink"
+ln "$WORK/candidate" "$WORK/hardlink"
+
+check_binaries() {
+  local name="$1" DOLTLITE="$2" SQLITE3="$3" expected="${4-}" rc=0
+  sql_oracle_check_binaries "$SCRIPT_DIR" > "$WORK/binaries.log" 2>&1 || rc=$?
+  if { [ -z "$expected" ] && [ "$rc" -ne 0 ]; } \
+     || { [ -n "$expected" ] && { [ "$rc" -eq 0 ] \
+         || ! grep -Fq "$expected" "$WORK/binaries.log"; }; }; then
+    cat "$WORK/binaries.log"
+    echo "FAIL: $name (rc=$rc)"
+    exit 1
+  fi
+  checks=$((checks+1))
+}
+check_binaries distinct_engines "$WORK/candidate" "$WORK/reference"
+check_binaries same_file "$WORK/candidate" "$WORK/candidate" 'same executable'
+check_binaries relative_alias "$WORK/candidate" "$WORK/./candidate" 'same executable'
+check_binaries symlink_alias "$WORK/candidate" "$WORK/symlink" 'same executable'
+check_binaries hardlink_alias "$WORK/candidate" "$WORK/hardlink" 'same executable'
+export oracle_test_engine=sqlite
+check_binaries copied_stock "$WORK/candidate" "$WORK/reference" 'not a DoltLite'
+export oracle_test_engine='no such function: doltlite_engine' oracle_test_engine_rc=1
+check_binaries missing_engine_function "$WORK/candidate" "$WORK/reference" 'not a DoltLite'
+export oracle_test_engine=prolly
+check_binaries failed_engine_probe "$WORK/candidate" "$WORK/reference" 'not a DoltLite'
+unset oracle_test_engine oracle_test_engine_rc
 for suite in upsert dot_commands fts5; do
   for scenario in empty failure crash; do
     export oracle_test_output='' oracle_test_rc=0
@@ -90,7 +122,7 @@ for suite in upsert dot_commands fts5; do
     elif [ "$scenario" = crash ]; then
       export oracle_test_output='unexpected engine error' oracle_test_rc=134
     fi
-    if bash "$SUITE_DIR/oracle_${suite}_test.sh" "$WORK/engine" "$WORK/engine" \
+    if bash "$SUITE_DIR/oracle_${suite}_test.sh" "$WORK/candidate" "$WORK/reference" \
         > "$WORK/runtime.log" 2>&1; then
       echo "FAIL: $suite accepted runtime $scenario"
       tail -5 "$WORK/runtime.log"

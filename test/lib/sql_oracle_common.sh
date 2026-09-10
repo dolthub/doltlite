@@ -19,6 +19,15 @@ sql_oracle_check_binaries() {
       return 1
     fi
   done
+  if [ "$DOLTLITE" -ef "$SQLITE3" ]; then
+    echo "ERROR: candidate and reference are the same executable" >&2
+    return 1
+  fi
+  if ! output=$("$DOLTLITE" :memory: "SELECT doltlite_engine();" 2>&1) \
+     || [ "$output" != "prolly" ]; then
+    echo "ERROR: $DOLTLITE is not a DoltLite prolly engine: $output" >&2
+    return 1
+  fi
   bash "$script_dir/assert_stock_reference.sh" "$SQLITE3" "$DOLTLITE"
 }
 
