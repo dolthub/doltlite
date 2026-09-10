@@ -1,0 +1,159 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {shape key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  without_rowid {id INTEGER PRIMARY KEY} {WITHOUT ROWID}
+  composite {id INT, k TEXT, PRIMARY KEY(k,id)} {}
+} {
+  foreach indexed {0 1} {
+    foreach right {2 3} {
+      reset_db
+      if {$shape eq "composite"} {
+        set ddl {id INT, k TEXT, x INT, z INT AS(x+y) STORED,
+                 y INT, w INT AS(z*2) STORED, v INT AS(w+1) VIRTUAL,
+                 PRIMARY KEY(k,id)}
+        set cols {id,k,x,y}
+        set vals {1,'key',1,1}
+      } else {
+        set ddl "$key, x INT, z INT AS(x+y) STORED,
+                 y INT, w INT AS(z*2) STORED, v INT AS(w+1) VIRTUAL"
+        set cols {id,x,y}
+        set vals {1,1,1}
+      }
+      execsql "CREATE TABLE t($ddl) $suffix"
+      if {$indexed} { execsql {CREATE INDEX iz ON t(z)} }
+      execsql "INSERT INTO t($cols) VALUES($vals)"
+      execsql {
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('feature');
+        UPDATE t SET x=2;
+        SELECT dolt_commit('-Am','left');
+        SELECT dolt_checkout('feature');
+      }
+      execsql "UPDATE t SET y=$right"
+      execsql {
+        SELECT dolt_commit('-Am','right');
+        SELECT dolt_checkout('main');
+      }
+      set name "doltlite_merge_generated-$shape-$indexed-$right"
+      do_test $name.1 {
+        execsql {SELECT length(dolt_merge('feature'))>0}
+      } {1}
+      set sum [expr {2+$right}]
+      do_execsql_test $name.2 {
+        SELECT x,y,z,w,v FROM t;
+      } [list 2 $right $sum [expr {$sum*2}] [expr {$sum*2+1}]]
+      if {$indexed} {
+        do_execsql_test $name.3 "
+          SELECT id FROM t INDEXED BY iz WHERE z=$sum;
+          SELECT count(*) FROM t INDEXED BY iz WHERE z<>x+y;
+        " {1 0}
+      }
+      db close
+      sqlite3 db test.db
+      do_execsql_test $name.4 {
+        SELECT x,y,z,w,v FROM t;
+      } [list 2 $right $sum [expr {$sum*2}] [expr {$sum*2+1}]]
+    }
+  }
+}
+
+foreach side {left right both} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,x INT,z INT AS(x+y) STORED,y INT);
+    INSERT INTO t(id,x,y) VALUES(1,1,1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    UPDATE t SET x=2;
+  }
+  if {$side ne "right"} { execsql {ALTER TABLE t ADD COLUMN a INT DEFAULT 8} }
+  execsql {
+    SELECT dolt_commit('-Am','left');
+    SELECT dolt_checkout('feature');
+    UPDATE t SET y=3;
+  }
+  if {$side ne "left"} { execsql {ALTER TABLE t ADD COLUMN b INT DEFAULT 9} }
+  execsql {
+    SELECT dolt_commit('-Am','right');
+    SELECT dolt_checkout('main');
+  }
+  do_test doltlite_merge_generated-add-$side.1 {
+    execsql {SELECT length(dolt_merge('feature'))>0}
+  } {1}
+  do_execsql_test doltlite_merge_generated-add-$side.2 {
+    SELECT x,y,z FROM t;
+  } {2 3 5}
+  if {$side ne "right"} {
+    do_execsql_test doltlite_merge_generated-add-$side.3 {SELECT a FROM t} {8}
+  }
+  if {$side ne "left"} {
+    do_execsql_test doltlite_merge_generated-add-$side.4 {SELECT b FROM t} {9}
+  }
+}
+
+reset_db
+proc merge_generated_sum {x y} { expr {$x+$y} }
+db function merge_generated_sum -deterministic -argcount 2 merge_generated_sum
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,x REAL,y REAL,
+    s REAL AS(merge_generated_sum(x,y)) STORED,
+    txt TEXT AS(s) STORED, label TEXT AS(id||':'||txt) STORED);
+  INSERT INTO t(id,x,y) VALUES(1,1,1),(2,2,2);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('feature');
+  UPDATE t SET x=x+1;
+  SELECT dolt_commit('-Am','left');
+  SELECT dolt_checkout('feature');
+  UPDATE t SET y=y+1;
+  SELECT dolt_commit('-Am','right');
+  SELECT dolt_checkout('main');
+}
+do_test doltlite_merge_generated-affinity.1 {
+  execsql {SELECT length(dolt_merge('feature'))>0}
+} {1}
+do_execsql_test doltlite_merge_generated-affinity.2 {
+  SELECT id,s,typeof(s),txt,typeof(txt),label FROM t ORDER BY id;
+} {1 4.0 real 4.0 text 1:4.0 2 6.0 real 6.0 text 2:6.0}
+do_test doltlite_merge_generated-affinity.3 {
+  set before [execsql {SELECT dolt_hashof_table('t')}]
+  execsql {UPDATE t SET x=x}
+  expr {$before eq [execsql {SELECT dolt_hashof_table('t')}]}
+} {1}
+
+foreach kind {unique evaluation} {
+  reset_db
+  if {$kind eq "unique"} {
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,x INT,y INT,
+                     z INT AS(x+y) STORED UNIQUE);
+      INSERT INTO t(id,x,y) VALUES(2,2,2);
+    }
+  } else {
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,x INT,y INT,
+        z TEXT AS(json(CASE WHEN x+y>3 THEN 'invalid' ELSE '[]' END)) STORED);
+    }
+  }
+  execsql {
+    INSERT INTO t(id,x,y) VALUES(1,1,1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    UPDATE t SET x=2 WHERE id=1;
+    SELECT dolt_commit('-Am','left');
+    SELECT dolt_checkout('feature');
+    UPDATE t SET y=2 WHERE id=1;
+    SELECT dolt_commit('-Am','right');
+    SELECT dolt_checkout('main');
+  }
+  do_test doltlite_merge_generated-error-$kind.1 {
+    set before [execsql {SELECT dolt_hashof_table('t')}]
+    set result [catchsql {SELECT dolt_merge('feature')}]
+    list [lindex $result 0] \
+        [expr {$before eq [execsql {SELECT dolt_hashof_table('t')}]}]
+  } {1 1}
+}
+
+finish_test

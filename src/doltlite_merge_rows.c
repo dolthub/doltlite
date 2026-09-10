@@ -708,6 +708,8 @@ int doltliteIndexApplyRowDelta(
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
   sqlite3 *db;
+  Table *pGeneratedTable;
+  sqlite3_stmt *pGeneratedStmt;
   ProllyMutMap *pEdits;
   const MergeRowPolicy *pPolicy;
   u8 isIntKey;
@@ -718,6 +720,16 @@ struct RowMergeCtx {
   DoltliteConflictRow *aConflicts;
   int nConflictsAlloc;
 };
+
+static int mergeGeneratedField(Table *pTab, int iField){
+  int iCol;
+  if( !pTab || iField>=pTab->nNVCol ) return 0;
+  iCol = HasRowid(pTab)
+      ? sqlite3StorageColumnToTable(pTab, iField)
+      : sqlite3PrimaryKeyIndex(pTab)->aiColumn[iField];
+  return (pTab->aCol[iCol].colFlags & COLFLAG_STORED)!=0;
+}
+
 
 typedef struct RecField RecField;
 struct RecField { u64 st; int off; int len; };
@@ -940,6 +952,7 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
 }
 
 static u8 *tryCellMerge(
+  Table *pGeneratedTable,
   const u8 *pBase, int nBase,
   const u8 *pOurs, int nOurs,
   const u8 *pTheirs, int nTheirs,
@@ -975,7 +988,7 @@ static u8 *tryCellMerge(
       int oursChanged   = fieldEquals(pBase, fB, pOurs, fO)!=0;
       int theirsChanged = fieldEquals(pBase, fB, pTheirs, fT)!=0;
 
-      if(!theirsChanged){
+      if( mergeGeneratedField(pGeneratedTable, i) || !theirsChanged ){
 
         winners[i].pRec = pOurs; winners[i].pField = fO;
       }else if(!oursChanged){
@@ -1088,6 +1101,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
        && pChange->pOurVal && pChange->nOurVal>0
        && pChange->pTheirVal && pChange->nTheirVal>0 ){
         pMerged = tryCellMerge(
+            ctx->pGeneratedTable,
             pChange->pBaseVal, pChange->nBaseVal,
             pChange->pOurVal, pChange->nOurVal,
             pChange->pTheirVal, pChange->nTheirVal,
@@ -1095,6 +1109,12 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       }
 
       if( pMerged ){
+        rc = mergeGeneratedRecord(ctx->db, ctx->pGeneratedTable,
+             &ctx->pGeneratedStmt, pChange->intKey, &pMerged, &nMerged);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(pMerged);
+          return rc;
+        }
         rc = prollyMutMapInsert(ctx->pEdits,
             pChange->pKey, pChange->nKey, pChange->intKey,
             pMerged, nMerged);
@@ -1289,6 +1309,7 @@ int canFastMerge(
 
   pTab = sqlite3FindTable(db, zName, 0);
   if( !pTab ) return 0;
+  if( pTab->tabFlags & TF_HasStored ) return 0;
 
   if( pTab->pIndex ) return 0;
   if( pTab->pCheck && pTab->pCheck->nExpr>0 ) return 0;
@@ -1311,6 +1332,7 @@ int canFastMerge(
 
 static void freeRowMergeCtx(RowMergeCtx *ctx){
   int i;
+  sqlite3_finalize(ctx->pGeneratedStmt);
   for(i=0; i<ctx->nConflicts; i++){
     doltliteConflictRowFree(&ctx->aConflicts[i]);
   }
@@ -1323,6 +1345,7 @@ static void freeRowMergeCtx(RowMergeCtx *ctx){
 
 int mergeTableRows(
   sqlite3 *db,
+  Table *pTab,
   const ProllyHash *pAncRoot,
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
@@ -1354,6 +1377,9 @@ int mergeTableRows(
 
   memset(&ctx, 0, sizeof(ctx));
   ctx.db = db;
+  if( pTab && (pTab->tabFlags & TF_HasStored)!=0 ){
+    ctx.pGeneratedTable = pTab;
+  }
   ctx.isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
   ctx.pPolicy = pPolicy;
   ctx.aIndexes = aIndexes;

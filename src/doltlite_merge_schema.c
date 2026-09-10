@@ -1082,6 +1082,7 @@ static int mergeColDefaultsLoad(
 
   memset(pOut, 0, sizeof(*pOut));
   rc = sqlite3_open(":memory:", &tmp);
+  if( tmp ) sqlite3_mutex_enter(tmp->mutex);
   if( rc!=SQLITE_OK ) goto done;
   rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) goto done;
@@ -1168,7 +1169,10 @@ static int mergeColDefaultsLoad(
 done:
   if( pStmt ) sqlite3_finalize(pStmt);
   sqlite3_free(zQuery);
-  if( tmp ) sqlite3_close(tmp);
+  if( tmp ){
+    sqlite3_mutex_leave(tmp->mutex);
+    sqlite3_close(tmp);
+  }
   if( rc!=SQLITE_OK ) mergeColDefaultsFree(pOut);
   return rc;
 }

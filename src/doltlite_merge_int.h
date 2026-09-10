@@ -136,6 +136,15 @@ int canFastMerge(
   int schemaUnchangedBothSides
 );
 
+int mergeRowTable(
+  MergePass1Ctx *c, const char *zName, int schemaChanged, int useTheirs,
+  sqlite3 **ppSchemaDb, Table **ppTab
+);
+int mergeGeneratedRecord(
+  sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
+  u8 **ppRecord, int *pnRecord
+);
+
 /* azRenameOverDrop: ancestor names one side renamed and the other
 ** dropped. Resolve to the survivor, matching Dolt.
 ** azDualRename: both sides renamed differently. Not a user conflict;
@@ -151,6 +160,7 @@ struct MergeRowPolicy {
 
 int mergeTableRows(
   sqlite3 *db,
+  Table *pTab,
   const ProllyHash *pAncRoot,
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
