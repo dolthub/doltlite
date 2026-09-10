@@ -207,7 +207,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
+        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev llvm
 
     - name: Download instrumented build
       uses: actions/download-artifact@v4
@@ -218,7 +218,7 @@ jobs:
       run: |
         tar -xzf coverage-build.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
-        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
+        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%p.profraw" >> "$GITHUB_ENV"
 
     - name: Install Dolt
       run: bash .github/scripts/install-dolt-oracle.sh
@@ -258,6 +258,10 @@ jobs:
           bash "$f" ./doltlite ./sqlite3-stock || exit 1
         done
       timeout-minutes: 10
+
+    - name: Merge per-process coverage profiles
+      if: always()
+      run: bash .github/scripts/merge-coverage-profiles.sh "$RUNNER_TEMP/coverage-profiles"
 
     - name: Upload oracle coverage profiles
       if: always()
@@ -311,18 +315,7 @@ jobs:
 
     - name: Merge per-process coverage profiles
       if: always()
-      run: |
-        set -euo pipefail
-        dir="$RUNNER_TEMP/coverage-profiles"
-        list=$(mktemp)
-        find "$dir" -type f -name '*.profraw' | LC_ALL=C sort > "$list"
-        if [ ! -s "$list" ]; then
-          echo "no profraw files to merge"
-          exit 0
-        fi
-        echo "merging $(wc -l < "$list") profraw files"
-        llvm-profdata merge -sparse -f "$list" -o "$dir/sql-differential.profdata"
-        xargs rm -f < "$list"
+      run: bash .github/scripts/merge-coverage-profiles.sh "$RUNNER_TEMP/coverage-profiles" sql-differential
 
     - name: Upload SQL differential coverage profiles
       if: always()
@@ -462,7 +455,7 @@ jobs:
     - name: Install dependencies
       run: |
         bash .github/scripts/install-apt-deps.sh \
-          build-essential clang zlib1g-dev
+          build-essential clang zlib1g-dev llvm
 
     - name: Download instrumented build
       uses: actions/download-artifact@v4
@@ -473,7 +466,11 @@ jobs:
       run: |
         tar -xzf coverage-build.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
-        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
+        profile_pattern=%8m.profraw
+        if [ "${{ matrix.suite }}" = "shell" ]; then
+          profile_pattern=%p.profraw
+        fi
+        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/$profile_pattern" >> "$GITHUB_ENV"
 
     - name: Deterministic shell tests
       if: matrix.suite == 'shell'
@@ -495,6 +492,10 @@ jobs:
     - name: Deterministic C tests
       if: matrix.suite == 'c'
       run: bash test/run_c_tests.sh build-coverage coverage
+
+    - name: Merge per-process coverage profiles
+      if: always() && matrix.suite == 'shell'
+      run: bash .github/scripts/merge-coverage-profiles.sh "$RUNNER_TEMP/coverage-profiles"
 
     - name: Upload native coverage profiles
       if: always()

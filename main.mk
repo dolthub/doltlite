@@ -315,6 +315,7 @@ lint:
 	@bash $(TOP)/test/dolt_oracle_upgrade_test.sh
 	@bash $(TOP)/test/sql_oracle_harness_test.sh
 	@bash $(TOP)/test/stock_oracle_harness_test.sh
+	@bash $(TOP)/.github/scripts/ci-optimization-test.sh
 
 ########################################################################
 ########################################################################
