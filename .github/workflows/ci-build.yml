@@ -86,13 +86,14 @@ jobs:
           -lpthread -lm -lz -lodbc
 
     - name: Package
-      run: tar -czf sqllogictest-build.tar.gz build/sqllogictest
+      run: bash .github/scripts/package-ci-build.sh sqllogictest-build.tar.gz build/sqllogictest
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: sqllogictest-build
         path: sqllogictest-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   coverage-build:
@@ -131,7 +132,6 @@ jobs:
           make -j2 DOLTLITE_PROLLY_CHECK=1 \
             doltlite doltlite-remotesrv doltlite-lib testfixture \
             doltlite-c-tests-build doltlite-regression-test-c-build
-          make DOLTLITE_PROLLY=0 sqlite3
           blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
           for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
             [ ! -f "$object" ] || blake_objects+=("$object")
@@ -148,7 +148,7 @@ jobs:
         find . -type f -name '*.profraw' -delete
 
     - name: Build the stock reference
-      run: bash test/build_stock_reference.sh build-stockref build-coverage/doltlite
+      run: bash test/build_stock_reference.sh --shell-only build-stockref build-coverage/doltlite
 
     - name: Package
       run: |
@@ -169,13 +169,14 @@ jobs:
         bash test/assert_stock_reference.sh \
           coverage-artifact/build-coverage/sqlite3-stock \
           coverage-artifact/build-coverage/doltlite
-        tar -C coverage-artifact -czf coverage-build.tar.gz build-coverage
+        bash .github/scripts/package-ci-build.sh coverage-build.tar.gz -C coverage-artifact build-coverage
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: coverage-build
         path: coverage-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   benchmark-build:
@@ -239,7 +240,7 @@ jobs:
         mv benchmark-base/build benchmark-baseline
         git rev-parse HEAD > benchmark-candidate-sha
         git -C benchmark-base rev-parse HEAD > benchmark-baseline-sha
-        tar -czf benchmark-build.tar.gz \
+        bash .github/scripts/package-ci-build.sh benchmark-build.tar.gz \
           build benchmark-baseline \
           benchmark-candidate-sha benchmark-baseline-sha
 
@@ -248,6 +249,7 @@ jobs:
       with:
         name: benchmark-build
         path: benchmark-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   asan-ubsan-build:
@@ -295,17 +297,20 @@ jobs:
 
     - name: Build
       run: |
+        set -eo pipefail
         cd build
-        set -o pipefail
         {
           make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
             sqlite3.c sqlite3.h
+          clang $TSAN_CFLAGS -I. -I../src \
+            -c sqlite3.c -o ci-amalgamation.o
           clang $TSAN_CFLAGS -DDOLTLITE_PROLLY=1 -I. -I../src \
-            -o threadtest4 ../test/threadtest4.c sqlite3.c \
+            -o threadtest4 ../test/threadtest4.c ci-amalgamation.o \
             $TSAN_LDFLAGS -ldl -lpthread -lm -lz
           clang $TSAN_CFLAGS -I. -I../src \
-            -o threadtest5 ../test/threadtest5.c sqlite3.c \
+            -o threadtest5 ../test/threadtest5.c ci-amalgamation.o \
             $TSAN_LDFLAGS -ldl -lpthread -lm -lz
+          rm -f ci-amalgamation.o
           make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
             doltlite doltlite-remotesrv vc_concurrency_test \
             vc_ref_mutation_stress_test
@@ -316,13 +321,14 @@ jobs:
         fi
 
     - name: Package
-      run: tar -czf tsan-build.tar.gz build
+      run: bash .github/scripts/package-ci-build.sh tsan-build.tar.gz build
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: tsan-build
         path: tsan-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   crash-build:
@@ -365,13 +371,14 @@ jobs:
         fi
 
     - name: Package
-      run: tar -czf crash-build.tar.gz build-crash
+      run: bash .github/scripts/package-ci-build.sh crash-build.tar.gz build-crash
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: crash-build
         path: crash-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   fuzz-build:
@@ -424,13 +431,14 @@ jobs:
         fi
 
     - name: Package
-      run: tar -czf fuzz-build.tar.gz build-fuzz
+      run: bash .github/scripts/package-ci-build.sh fuzz-build.tar.gz build-fuzz
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: fuzz-build
         path: fuzz-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   wasm-build:
@@ -509,7 +517,7 @@ jobs:
 
     - name: Package
       run: |
-        tar -czf ci-wasm-build.tar.gz \
+        bash .github/scripts/package-ci-build.sh ci-wasm-build.tar.gz \
           build/doltlite \
           build/doltlite-remotesrv \
           ext/wasm/jswasm \
@@ -520,6 +528,7 @@ jobs:
       with:
         name: ci-wasm-build
         path: ci-wasm-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   compat-build:
@@ -551,13 +560,14 @@ jobs:
           bash test/doltlite_compat_test.sh --build-only
 
     - name: Package
-      run: tar -czf compat-build.tar.gz .compat-cache
+      run: bash .github/scripts/package-ci-build.sh compat-build.tar.gz .compat-cache
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: compat-build
         path: compat-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   development-builds:
@@ -644,7 +654,7 @@ jobs:
           build-assert/doltlite_regression_test_c \
           > build-assert/development-build.sha256
         echo "$GITHUB_SHA" > build-assert/development-build.commit
-        tar -czf development-build.tar.gz \
+        bash .github/scripts/package-ci-build.sh development-build.tar.gz \
           build-assert/catalog_serialize_determinism_test \
           build-assert/doltlite_regression_test_c \
           build-assert/development-build.sha256 \
@@ -655,6 +665,7 @@ jobs:
       with:
         name: development-build
         path: development-build.tar.gz
+        compression-level: 0
         retention-days: 1
 
   no-dead-code:

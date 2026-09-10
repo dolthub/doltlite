@@ -10,15 +10,17 @@ runs:
   - name: Build Linux-only test binaries
     if: inputs.platform == 'ubuntu'
     run: |
+      set -eo pipefail
       cd build
-      set -o pipefail
       {
         make DOLTLITE_PROLLY_CHECK=1 doltlite-c-tests-build
+        cc $CFLAGS -Wno-comment -I. -I../src \
+          -c sqlite3.c -o ci-amalgamation.o
         cc $CFLAGS -Wno-comment -DDOLTLITE_PROLLY=1 -I. -I../src \
-          -o threadtest4 ../test/threadtest4.c sqlite3.c \
+          -o threadtest4 ../test/threadtest4.c ci-amalgamation.o \
           -ldl -lpthread -lm -lz
         cc $CFLAGS -Wno-comment -I. -I../src \
-          -o threadtest5 ../test/threadtest5.c sqlite3.c \
+          -o threadtest5 ../test/threadtest5.c ci-amalgamation.o \
           -ldl -lpthread -lm -lz
         gcc $CFLAGS -o quickstart \
           ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
@@ -99,8 +101,8 @@ runs:
   - name: Build standalone Unix test probes
     if: inputs.platform != 'windows'
     run: |
+      set -eo pipefail
       cd build
-      set -o pipefail
       {
         cc $CFLAGS -Wall \
           -I../src -I../ext/ed25519 \
@@ -134,12 +136,15 @@ runs:
           -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
           -lm -o blake3_kat
         probe_libs=(-lz -lpthread -lm)
+        probe_amalgamation=sqlite3.c
         if [ "${{ inputs.platform }}" = "ubuntu" ]; then
           probe_libs+=(-ldl)
+          probe_amalgamation=ci-amalgamation.o
         fi
         cc $CFLAGS -Wno-comment -I. \
-          ../test/amalgamation_http_probe.c sqlite3.c \
+          ../test/amalgamation_http_probe.c "$probe_amalgamation" \
           "${probe_libs[@]}" -o amalgamation_http_probe
+        rm -f ci-amalgamation.o
       } 2>&1 | tee -a build.log
       if grep -E "warning:" build.log; then
         echo "::error::compiler warnings in standalone probes"
@@ -195,15 +200,16 @@ runs:
       fi
   - name: Package checked build
     if: inputs.platform != 'windows'
-    run: tar -czf checked-build-${{ inputs.platform }}.tar.gz build
+    run: bash .github/scripts/package-ci-build.sh checked-build-${{ inputs.platform }}.tar.gz build
     shell: bash -e {0}
   - name: Package checked Windows build
     if: inputs.platform == 'windows'
     shell: msys2 {0}
-    run: tar -czf checked-build-windows.tar.gz build
+    run: bash .github/scripts/package-ci-build.sh checked-build-windows.tar.gz build
   - name: Upload checked build
     uses: actions/upload-artifact@v4
     with:
       name: checked-build-${{ inputs.platform }}
       path: checked-build-${{ inputs.platform }}.tar.gz
+      compression-level: 0
       retention-days: 1

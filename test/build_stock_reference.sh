@@ -12,20 +12,27 @@
 # storage, which made every comparison against it pass by construction.
 #
 # A directory that has never built doltlite cannot get this wrong, so that is
-# where the reference is built. It costs one amalgamation and one compile.
+# where the reference is built.
 #
 # Note this is only for the reference. A build directory's own `sqlite3` is
 # expected to be doltlite-flavoured -- the inherited shell tests run it -- so
 # this never touches one.
 #
-# Usage: build_stock_reference.sh <build-dir> [engine-binary]
+# Usage: build_stock_reference.sh [--shell-only] <build-dir> [engine-binary]
 #
 # Leaves <build-dir>/sqlite3 and <build-dir>/sqlite3.o, the latter for callers
 # that link a benchmark harness against stock instead of driving the shell.
+# --shell-only omits sqlite3.o.
 
 set -euo pipefail
 
-DIR="${1:?Usage: build_stock_reference.sh <build-dir> [engine-binary]}"
+TARGETS=(sqlite3 sqlite3.o)
+if [ "${1-}" = "--shell-only" ]; then
+  TARGETS=(sqlite3)
+  shift
+fi
+
+DIR="${1:?Usage: build_stock_reference.sh [--shell-only] <build-dir> [engine-binary]}"
 ENGINE="${2-}"
 
 # Resolved before the cd below, or a relative path stops meaning what it did.
@@ -53,7 +60,7 @@ cd "$DIR"
   exit 1
 }
 
-make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o >build.log 2>&1 || {
+make DOLTLITE_PROLLY=0 "${TARGETS[@]}" >build.log 2>&1 || {
   echo "ERROR: building the stock reference failed in $DIR"
   tail -30 build.log
   exit 1
