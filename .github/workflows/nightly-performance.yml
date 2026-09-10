@@ -185,15 +185,23 @@ jobs:
         set +e
         (
           cd build-nightly
-          VC_PERF_RESULTS_OUTPUT="$results/vc.tsv" \
-            VC_PERF_SAMPLES_OUTPUT="$results/vc-samples.tsv" \
-            bash ../test/vc_perf_ceiling.sh ./doltlite
-        ) > "$results/vc.md" 2> "$results/vc.stderr"
+          VC_PERF_GATE_MODE=none python3 ../test/benchmark_retry.py \
+            --suite vc \
+            --results-dir "$results" \
+            --max-attempts 3 \
+            --individual-ratio 1.0 \
+            --aggregate-ratio 1000 \
+            --min-delta-us 0 \
+            --individual-min-delta-us 0 \
+            --fail-confirmed \
+            -- bash ../test/vc_perf_ceiling.sh ./doltlite
+        ) > "$results/vc.retry.log" 2> "$results/vc.stderr"
         bench_rc=$?
         set -e
         finished_at=$(date +%s)
         echo "$bench_rc" > "$results/vc.status"
         echo "$((finished_at - started_at))" > "$results/vc.duration"
+        cat "$results/vc.retry.log"
         cat "$results/vc.md"
         cat "$results/vc.stderr" >&2
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"

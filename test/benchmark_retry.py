@@ -120,6 +120,7 @@ def run_with_retries(
     individual_min_delta_us,
     command_runner=subprocess.run,
     producer_id=None,
+    fail_confirmed=False,
 ):
     results_dir = pathlib.Path(results_dir)
     attempts_dir = results_dir / "attempts"
@@ -296,8 +297,7 @@ def run_with_retries(
             )
             continue
 
-        # A valid measurement is always published. The aggregate report job
-        # enforces the gate after this third consecutive regression.
+        # A valid measurement is always published before enforcement.
         try:
             promote_attempt(
                 attempt_dir,
@@ -320,16 +320,14 @@ def run_with_retries(
             ),
             flush=True,
         )
-        return 0
+        return 1 if fail_confirmed else 0
 
     raise AssertionError("retry loop did not return")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description=(
-            "Retry a paired benchmark only when its performance gate fails"
-        )
+        description="Retry a benchmark only when its performance gate fails"
     )
     parser.add_argument("--suite", required=True)
     parser.add_argument("--results-dir", required=True)
@@ -338,6 +336,7 @@ def main(argv=None):
     parser.add_argument("--aggregate-ratio", type=float, default=1.15)
     parser.add_argument("--min-delta-us", type=int, default=5000)
     parser.add_argument("--individual-min-delta-us", type=int, default=5000)
+    parser.add_argument("--fail-confirmed", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
 
@@ -358,6 +357,7 @@ def main(argv=None):
         args.aggregate_ratio,
         args.min_delta_us,
         args.individual_min_delta_us,
+        fail_confirmed=args.fail_confirmed,
     )
 
 
