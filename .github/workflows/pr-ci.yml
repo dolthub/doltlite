@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_changed: ${{ steps.files.outputs.docs_changed }}
+      light: ${{ steps.files.outputs.light }}
     steps:
       - id: files
         uses: actions/github-script@v7
@@ -23,6 +24,7 @@ jobs:
             const pull = context.payload.pull_request;
             if (!pull) {
               core.setOutput('docs_changed', 'true');
+              core.setOutput('light', 'false');
               return;
             }
             const files = await github.paginate(
@@ -38,6 +40,13 @@ jobs:
               'docs_changed',
               String(files.some(file => file.filename.endsWith('.md')))
             );
+            // The repo README and the rolling performance report are not
+            // engine or doc-reference surfaces: they only need the link check.
+            const light = new Set(['README.md', 'performance-report.md']);
+            core.setOutput(
+              'light',
+              String(files.length > 0 && files.every(file => light.has(file.filename)))
+            );
 
   doc_links:
     name: Docs validation
@@ -50,44 +59,54 @@ jobs:
       - run: bash test/doc_links_test.sh
       - run: bash test/doc_error_strings_test.sh
       - name: Build doltlite
+        if: needs.classify.outputs.light != 'true'
         run: |
           bash .github/scripts/install-apt-deps.sh build-essential tcl-dev zlib1g-dev
           mkdir -p build && cd build
           TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
           ../configure ${TCL_CONFIG:+--with-tcl=$(dirname "$TCL_CONFIG")} >/dev/null
           make -j"$(nproc)" doltlite
-      - run: bash test/oracle_doc_examples_test.sh build/doltlite
-      - run: bash test/doc_examples_selftest.sh build/doltlite
-      - run: bash test/oracle_doc_agent_guide_test.sh build/doltlite
+      - if: needs.classify.outputs.light != 'true'
+        run: bash test/oracle_doc_examples_test.sh build/doltlite
+      - if: needs.classify.outputs.light != 'true'
+        run: bash test/doc_examples_selftest.sh build/doltlite
+      - if: needs.classify.outputs.light != 'true'
+        run: bash test/oracle_doc_agent_guide_test.sh build/doltlite
 
   build:
     name: Build all binaries
     needs: classify
+    if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/ci-build.yml
 
   build_test:
     name: Build-Test
     needs: [classify, build]
+    if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/build-test.yml
 
   test_suite:
     name: Test Suite
     needs: [classify, build]
+    if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/test.yml
 
   sanitizers:
     name: Sanitizers
     needs: [classify, build]
+    if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/sanitizers.yml
 
   smoke:
     name: Smoke
     needs: [classify, build]
+    if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/smoke.yml
 
   benchmark:
     name: Benchmark
     needs: [classify, build]
+    if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/benchmark.yml
 
   gate:
@@ -98,6 +117,7 @@ jobs:
     steps:
       - env:
           CLASSIFY: ${{ needs.classify.result }}
+          LIGHT: ${{ needs.classify.outputs.light }}
           DOC_LINKS: ${{ needs.doc_links.result }}
           BUILD: ${{ needs.build.result }}
           BUILD_TEST: ${{ needs.build_test.result }}
@@ -108,6 +128,9 @@ jobs:
         run: |
           test "$CLASSIFY" = success
           case "$DOC_LINKS" in success|skipped) ;; *) exit 1 ;; esac
+          if [ "$LIGHT" = true ]; then
+            exit 0
+          fi
           for result in "$BUILD" "$BUILD_TEST" "$TEST_SUITE" "$SANITIZERS" "$SMOKE" "$BENCHMARK"; do
             test "$result" = success
           done
