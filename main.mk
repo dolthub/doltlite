@@ -959,6 +959,7 @@ HDR = \
 # Prolly tree engine headers
 HDR += \
    $(TOP)/src/doltlite_catalog_types.h \
+   $(TOP)/src/record_codec.h \
    $(TOP)/src/prolly_hash.h \
    $(TOP)/src/prolly_xxhash.h \
    $(TOP)/src/prolly_node.h \

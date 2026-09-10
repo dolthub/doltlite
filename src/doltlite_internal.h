@@ -736,7 +736,8 @@ static SQLITE_INLINE int doltliteAppendDisambiguatedColumnList(
   const char *zSep,
   const char *const *azReserved,
   int nReserved,
-  int iIntegerPk
+  int iIntegerPk,
+  char *const *azDecl
 ){
   int i;
   if( !zPrefix ) zPrefix = "";
@@ -757,7 +758,8 @@ static SQLITE_INLINE int doltliteAppendDisambiguatedColumnList(
     }
     if( i>0 ) sqlite3_str_appendall(pStr,zSep);
     sqlite3_str_appendf(pStr,"\"%w\"%s",zColumn,
-                        i==iIntegerPk ? " INTEGER" : "");
+                        azDecl ? azDecl[i]
+                          : i==iIntegerPk ? " INTEGER" : "");
     if( zColumn!=zBase ) sqlite3_free(zColumn);
     sqlite3_free(zBase);
     if( sqlite3_str_errcode(pStr)!=SQLITE_OK ) return sqlite3_str_errcode(pStr);

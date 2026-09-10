@@ -9,6 +9,8 @@ char *doltliteDecodeRecord(const u8 *pData, int nData);
 typedef struct DoltliteColInfo DoltliteColInfo;
 struct DoltliteColInfo {
   char **azName;
+  char **azDecl;
+  u8 *aAffinity;
   int nCol;
   int iPkCol;
   /* aColToRec[i] is the record field index for the i-th declared
@@ -80,7 +82,7 @@ void doltliteResultSideCol(sqlite3_context *ctx,
     const DoltliteSideCols *pSide,
     const DoltliteColInfo *pDeclared,
     const u8 *pRec, int nRec,
-    i64 intKey, int bRootIntKey, int iDeclaredCol);
+    i64 intKey, int bRootIntKey, int iDeclaredCol, u8 affinity);
 void doltliteResultUserCol(sqlite3_context *ctx,
                            const DoltliteColInfo *ci,
                            const u8 *pRec, int nRec,

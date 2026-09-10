@@ -645,6 +645,25 @@ oracle_as_of "as_of_three_way_compare" "$BRANCHY" \
  JOIN t AS cur ON cur.id = base.id;"
 
 echo ""
+AFFINITY="
+CREATE TABLE t(id INT PRIMARY KEY, n INT);
+INSERT INTO t VALUES(1,42),(2,7);
+SELECT dolt_commit('-Am','base');
+"
+oracle "history_numeric_affinity" "$AFFINITY" \
+"SELECT CONCAT('R|',count(*)) FROM dolt_history_t WHERE n='42';"
+oracle "history_numeric_affinity_join" "$AFFINITY" \
+"SELECT CONCAT('R|',count(*)) FROM dolt_history_t h
+ JOIN (SELECT '42' AS n) q ON h.n=q.n;"
+oracle_as_of "as_of_numeric_affinity" "$AFFINITY" \
+"SELECT CONCAT('R|',count(*)) FROM dolt_at_t('HEAD') WHERE n='42';" \
+"SELECT CONCAT('R|',count(*)) FROM t AS OF 'HEAD' WHERE n='42';"
+oracle_as_of "as_of_numeric_affinity_join" "$AFFINITY" \
+"SELECT CONCAT('R|',count(*)) FROM dolt_at_t('HEAD') h
+ JOIN (SELECT '42' AS n) q ON h.n=q.n;" \
+"SELECT CONCAT('R|',count(*)) FROM t AS OF 'HEAD' h
+ JOIN (SELECT '42' AS n) q ON h.n=q.n;"
+
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"

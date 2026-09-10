@@ -532,11 +532,11 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else if( col>=3 && col<3+nCols ){
     doltliteResultSideCol(ctx, r->staged ? &c->stagedSide : &c->workingSide,
                           &p->cols, r->pNewVal, r->nNewVal,
-                          r->intKey, r->keyIsIntKey, col-3);
+                          r->intKey, r->keyIsIntKey, col-3, SQLITE_AFF_BLOB);
   }else if( col>=3+nCols && col<3+2*nCols ){
     doltliteResultSideCol(ctx, r->staged ? &c->headSide : &c->stagedSide,
                           &p->cols, r->pOldVal, r->nOldVal,
-                          r->intKey, r->keyIsIntKey, col-3-nCols);
+                          r->intKey, r->keyIsIntKey, col-3-nCols, SQLITE_AFF_BLOB);
   }else{
     sqlite3_result_null(ctx);
   }
