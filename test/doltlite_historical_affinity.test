@@ -98,4 +98,43 @@ foreach source {t dolt_at_t('HEAD') dolt_history_t} {
       "SELECT id FROM $source WHERE v='ABC'" {1}
 }
 
+do_execsql_test doltlite_historical_affinity-custom-drop {
+  SELECT dolt_tag('custom');
+  DROP TABLE t;
+  SELECT length(dolt_commit('-Am','drop custom collation table'));
+} {0 40}
+db close
+sqlite3 db test.db
+foreach source {dolt_at_t('custom') dolt_history_t('custom')} {
+  do_test doltlite_historical_affinity-custom-missing-$source {
+    lindex [catchsql "SELECT id FROM $source WHERE v='ABC'"] 0
+  } {1}
+}
+db collate {fold"case} historical_nocase
+foreach source {dolt_at_t('custom') dolt_history_t('custom')} {
+  do_execsql_test doltlite_historical_affinity-custom-dropped-$source \
+      "SELECT id FROM $source WHERE v='ABC'" {1}
+}
+
+reset_db
+set historical_collation_deletes 0
+sqlite3_create_collation_v2 db owned historical_nocase \
+    {incr ::historical_collation_deletes}
+do_execsql_test doltlite_historical_affinity-owned-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT COLLATE owned);
+  INSERT INTO t VALUES(1,'abc');
+  SELECT length(dolt_commit('-Am','owned collation'));
+  SELECT dolt_tag('owned');
+  ALTER TABLE t ADD COLUMN n INT;
+  SELECT id FROM dolt_at_t('owned') WHERE v='ABC';
+} {40 0 1}
+do_test doltlite_historical_affinity-owned-borrowed {
+  set historical_collation_deletes
+} {0}
+db close
+do_test doltlite_historical_affinity-owned-close {
+  set historical_collation_deletes
+} {1}
+sqlite3 db test.db
+
 finish_test
