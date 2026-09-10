@@ -54,6 +54,10 @@ For a DoltLite-format main database, the compatibility contract is:
   SQLite's case-insensitive identifier rules. Declared columns shadow `rowid`,
   `_rowid_`, and `oid` regardless of case; patch generation fails if all three
   aliases are shadowed.
+- Snapshot tables reserve the hidden `commit_ref` argument case-insensitively.
+  A user column with that name remains readable under the first unused suffix
+  (`commit_ref_1`, `commit_ref_2`, ...), preserving its original spelling.
+  Existing suffixed columns keep their names.
 - Named in-memory databases are shared between connections the way SQLite
   shares them: `file:name?mode=memory&cache=shared`, `file::memory:?cache=shared`,
   and `file:/name?vfs=memdb` open one store per name inside the process, with

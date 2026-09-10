@@ -100,4 +100,65 @@ do_execsql_test doltlite_vtab_column_collision-3.4 {
   ROLLBACK;
 } {base ours modified theirs modified}
 
+foreach {name column extra alias values names} {
+  lower commit_ref {} commit_ref_1 {} {id|commit_ref_1|commit_ref}
+  mixed CoMmIt_ReF {} CoMmIt_ReF_1 {} {id|CoMmIt_ReF_1|commit_ref}
+  suffix commit_ref {, COMMIT_REF_1 TEXT, commit_ref_2 TEXT}
+    commit_ref_3 {, 'one', 'two'}
+    {id|commit_ref_3|COMMIT_REF_1|commit_ref_2|commit_ref}
+} {
+  reset_db
+  do_execsql_test doltlite_vtab_column_collision-at-$name-setup "
+    CREATE TABLE t(id INTEGER PRIMARY KEY, $column TEXT $extra);
+    INSERT INTO t VALUES(1, 'payload' $values);
+    SELECT length(dolt_commit('-Am', 'base'));
+    SELECT dolt_tag('base');
+    UPDATE t SET $column='new';
+    SELECT length(dolt_commit('-Am', 'updated'));
+  " {40 0 40}
+  foreach phase {live reopen dropped} {
+    if {$phase ne "live"} {
+      if {$phase eq "dropped"} {
+        db eval {DROP TABLE t; SELECT dolt_commit('-Am', 'drop')}
+      }
+      db close
+      sqlite3 db test.db
+    }
+    do_execsql_test doltlite_vtab_column_collision-at-$name-$phase-schema {
+      SELECT group_concat(name, '|') FROM (
+        SELECT name FROM pragma_table_xinfo('dolt_at_t') ORDER BY cid
+      );
+      SELECT name, hidden FROM pragma_table_xinfo('dolt_at_t') WHERE hidden;
+    } [list $names commit_ref 1]
+    do_execsql_test doltlite_vtab_column_collision-at-$name-$phase-tvf "
+      SELECT * FROM dolt_at_t('base');
+    " [concat {1 payload} [expr {$name eq "suffix" ? {one two} : {}}]]
+    do_execsql_test doltlite_vtab_column_collision-at-$name-$phase-ref "
+      SELECT id, $alias, commit_ref FROM dolt_at_t WHERE commit_ref='base';
+    " {1 payload base}
+    do_execsql_test doltlite_vtab_column_collision-at-$name-$phase-filter "
+      SELECT id FROM dolt_at_t('base') WHERE $alias='payload';
+      SELECT id FROM dolt_at_t('base') WHERE $alias='new';
+    " {1}
+  }
+}
+
+reset_db
+do_execsql_test doltlite_vtab_column_collision-at-pk-setup {
+  CREATE TABLE t(commit_ref INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'one'), (2, 'two'), (3, 'three');
+  SELECT length(dolt_commit('-Am', 'base'));
+} {40}
+do_execsql_test doltlite_vtab_column_collision-at-pk-schema {
+  SELECT name, type, hidden FROM pragma_table_xinfo('dolt_at_t')
+   WHERE name IN ('commit_ref_1', 'commit_ref') ORDER BY cid;
+} {commit_ref_1 INTEGER 0 commit_ref TEXT 1}
+do_execsql_test doltlite_vtab_column_collision-at-pk-equality {
+  SELECT commit_ref_1, v FROM dolt_at_t('HEAD') WHERE commit_ref_1='2';
+} {2 two}
+do_execsql_test doltlite_vtab_column_collision-at-pk-range {
+  SELECT commit_ref_1, v FROM dolt_at_t('HEAD')
+   WHERE commit_ref_1>=2 AND commit_ref_1<3;
+} {2 two}
+
 finish_test
