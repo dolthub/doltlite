@@ -5547,6 +5547,7 @@ static Table *isSimpleCount(Select *p, AggInfo *pAggInfo){
   return pTab;
 }
 
+#ifdef DOLTLITE_PROLLY
 static int exprIsRowidOfTable(Expr *pExpr, Table *pTab){
   while( pExpr && (pExpr->op==TK_UPLUS || pExpr->op==TK_COLLATE) ){
     pExpr = pExpr->pLeft;
@@ -5771,7 +5772,7 @@ static Index *isSimpleIndexRangeCount(
   *ppTab = pTab;
   return pIdx;
 }
-
+#endif
 /*
 ** If the source-list item passed as an argument was augmented with an
 ** INDEXED BY clause, then try to locate the specified index. If there
@@ -7128,7 +7129,6 @@ static int aggregateArgCanBeNull(const Expr *pExpr){
   return sqlite3ExprCanBeNull(pExpr);
 }
 #endif
-
 /*
 ** Generate code that will update the accumulator memory cells for an
 ** aggregate based on the current cursor position.
@@ -9129,6 +9129,7 @@ int sqlite3Select(
     else {
       /* Aggregate functions without GROUP BY. tag-select-0820 */
       Table *pTab;
+#ifdef DOLTLITE_PROLLY
       Expr *pRangeLow = 0;
       Expr *pRangeHigh = 0;
       Index *pRangeIdx = 0;
@@ -9192,7 +9193,9 @@ int sqlite3Select(
               pTab->zName
           );
         }
-      }else if( (pTab = isSimpleCount(p, pAggInfo))!=0 ){
+      }else
+#endif
+      if( (pTab = isSimpleCount(p, pAggInfo))!=0 ){
         /* tag-select-0821
         **
         ** If isSimpleCount() returns a pointer to a Table structure, then

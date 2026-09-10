@@ -1112,8 +1112,7 @@ int sqlite3WritableSchema(sqlite3 *db){
 ** unqualified name for a new schema object (table, index, view or
 ** trigger). All names are legal except those that begin with the string
 ** "sqlite_" (in upper, lower or mixed case). This portion of the namespace
-** is reserved for internal use. DoltLite also reserves "dolt_" except
-** CREATE TABLE of dolt_ignore, dolt_docs, dolt_tests, and dolt_rebase.
+** is reserved for internal use.
 **
 ** When parsing the sqlite_schema table, this routine also checks to
 ** make sure the "type", "name", and "tbl_name" columns are consistent
@@ -1347,11 +1346,13 @@ void sqlite3StartTable(
   }
   pParse->sNameToken = *pName;
   if( zName==0 ) return;
+#ifdef DOLTLITE_PROLLY
   /* The reserved shadow-name check resolves the owning virtual table
   ** through the schema, so the schema must be loaded before it runs. */
   if( !IN_SPECIAL_PARSE && SQLITE_OK!=sqlite3ReadSchema(pParse) ){
     goto begin_table_error;
   }
+#endif
   if( sqlite3CheckObjectName(pParse, zName, isView?"view":"table", zName) ){
     goto begin_table_error;
   }
@@ -2874,10 +2875,27 @@ void sqlite3EndTable(
   assert( (p->tabFlags & TF_HasPrimaryKey)!=0
        || (p->iPKey<0 && sqlite3PrimaryKeyIndex(p)==0) );
 
+#ifndef DOLTLITE_PROLLY
+  /* Special processing for WITHOUT ROWID Tables */
+  if( tabOpts & TF_WithoutRowid ){
+    if( (p->tabFlags & TF_Autoincrement) ){
+      sqlite3ErrorMsg(pParse,
+          "AUTOINCREMENT not allowed on WITHOUT ROWID tables");
+      return;
+    }
+    if( (p->tabFlags & TF_HasPrimaryKey)==0 ){
+      sqlite3ErrorMsg(pParse, "PRIMARY KEY missing on table %s", p->zName);
+      return;
+    }
+    p->tabFlags |= TF_WithoutRowid | TF_NoVisibleRowid;
+    convertToWithoutRowidTable(pParse, p);
+  }
+  iDb = sqlite3SchemaToIndex(db, p->pSchema);
+  assert( iDb>=0 && iDb<=db->nDb );
+#else
   iDb = sqlite3SchemaToIndex(db, p->pSchema);
   assert( iDb>=0 && iDb<=db->nDb );
 
-#ifdef DOLTLITE_PROLLY
   /* Cluster non-INTEGER PRIMARY KEY tables as WITHOUT ROWID so the
   ** storage key is the user PK (merge identity). convertToWithoutRowidTable
   ** runs later, after the dolt_* schema guards, so PK-implied NOT NULL
@@ -2903,15 +2921,10 @@ void sqlite3EndTable(
   }
 #endif
 
-  /* Doltlite: dolt_ignore is a user-created system table whose
-  ** schema is load-bearing — dolt_add / dolt_status run
-  ** `SELECT pattern, ignored FROM dolt_ignore` and would silently
-  ** ignore all patterns if the columns don't match. Enforce the
-  ** exact shape at CREATE TIME so the failure mode is a clear parse
-  ** error instead of silent mis-configuration. Skipped during
-  ** schema replay (db->init.busy): a previously-validated on-disk
-  ** schema is assumed correct. */
 #ifdef DOLTLITE_PROLLY
+  /* dolt_ignore is a user-created system table whose schema is
+  ** load-bearing. Enforce the exact shape at CREATE TIME. Skipped
+  ** during schema replay (db->init.busy). */
   if( !db->init.busy
    && !db->init.imposterTable
    && iDb!=1
@@ -3077,7 +3090,6 @@ void sqlite3EndTable(
     }
   }
 #endif
-
 #ifdef DOLTLITE_PROLLY
   if( tabOpts & TF_WithoutRowid ){
     if( (p->tabFlags & TF_Autoincrement) ){
@@ -3093,23 +3105,7 @@ void sqlite3EndTable(
     if( bUserWithoutRowid ) p->tabFlags |= TF_NoVisibleRowid;
     convertToWithoutRowidTable(pParse, p);
   }
-#else
-  /* Special processing for WITHOUT ROWID Tables */
-  if( tabOpts & TF_WithoutRowid ){
-    if( (p->tabFlags & TF_Autoincrement) ){
-      sqlite3ErrorMsg(pParse,
-          "AUTOINCREMENT not allowed on WITHOUT ROWID tables");
-      return;
-    }
-    if( (p->tabFlags & TF_HasPrimaryKey)==0 ){
-      sqlite3ErrorMsg(pParse, "PRIMARY KEY missing on table %s", p->zName);
-      return;
-    }
-    p->tabFlags |= TF_WithoutRowid | TF_NoVisibleRowid;
-    convertToWithoutRowidTable(pParse, p);
-  }
 #endif
-
 #ifndef SQLITE_OMIT_CHECK
   /* Resolve names in all CHECK constraint expressions.
   */
@@ -4810,11 +4806,13 @@ void sqlite3CreateIndex(
       assert( sqlite3SchemaMutexHeld(db, 0, pIndex->pSchema) );
       if( pTblName!=0 ){
         pIndex->tnum = db->init.newTnum;
-        if( sqlite3IndexHasDuplicateRootPage(pIndex)
 #ifdef DOLTLITE_PROLLY
+        if( sqlite3IndexHasDuplicateRootPage(pIndex)
          || (HasRowid(pIndex->pTable) && pIndex->tnum==pIndex->pTable->tnum)
-#endif
         ){
+#else
+        if( sqlite3IndexHasDuplicateRootPage(pIndex) ){
+#endif
           sqlite3ErrorMsg(pParse, "invalid rootpage");
           pParse->rc = SQLITE_CORRUPT_BKPT;
           goto exit_create_index;

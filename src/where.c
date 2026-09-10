@@ -4684,7 +4684,6 @@ int sqlite3DoltliteVtabConstraintIsCorrelated(
   return pTerm->prereqRight!=0;
 }
 #endif
-
 /*
 ** Return true if ORDER BY clause may be handled as DISTINCT.
 */
@@ -7943,13 +7942,16 @@ void sqlite3WhereEnd(WhereInfo *pWInfo){
           }
         }else if( pOp->opcode==OP_Rowid ){
 #ifdef DOLTLITE_PROLLY
-          if( HasRowid(pTab) || IsPrimaryKeyIndex(pIdx) )
-#endif
-          {
+          if( HasRowid(pTab) || IsPrimaryKeyIndex(pIdx) ){
             pOp->p1 = pLevel->iIdxCur;
             pOp->opcode = OP_IdxRowid;
             OpcodeRewriteTrace(db, k, pOp);
           }
+#else
+          pOp->p1 = pLevel->iIdxCur;
+          pOp->opcode = OP_IdxRowid;
+          OpcodeRewriteTrace(db, k, pOp);
+#endif
         }else if( pOp->opcode==OP_IfNullRow ){
           pOp->p1 = pLevel->iIdxCur;
           OpcodeRewriteTrace(db, k, pOp);

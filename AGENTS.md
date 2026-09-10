@@ -69,7 +69,10 @@ make DOLTLITE_PROLLY=0 sqlite3   # stock SQLite, for oracle/perf comparison
   change or you validate a stale engine. A repo-root `./doltlite` or `./sqlite3`
   built over the prolly `.o` files is DoltLite-in-disguise; to get *real* stock
   SQLite for comparison, build with `DOLTLITE_PROLLY=0` in a clean directory.
-- `make lint` runs the layering and raw-file-I/O guards over `src/`.
+- `make lint` runs the layering and raw-file-I/O guards over `src/`, and
+  checks that SQLite-core files above `btree.h` still match
+  `.sqlite-upstream-base` after `#ifdef DOLTLITE_PROLLY` branches are
+  stripped.
 
 ## Source layout
 

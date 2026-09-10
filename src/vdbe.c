@@ -111,18 +111,22 @@ static void updateMaxBlobsize(Mem *p){
 ** This macro evaluates to true if either the update hook or the preupdate
 ** hook are enabled for database connect DB.
 */
+#ifdef DOLTLITE_PROLLY
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
 # define HAS_UPDATE_HOOK_CB(DB) ((DB)->xPreUpdateCallback||(DB)->xUpdateCallback)
 #else
 # define HAS_UPDATE_HOOK_CB(DB) ((DB)->xUpdateCallback)
 #endif
-#ifdef DOLTLITE_PROLLY
   /* Internal DML must not fire hooks. Do not clear xPreUpdateCallback:
   ** the session module stores its object list in pPreUpdateArg. */
 # define HAS_UPDATE_HOOK(DB) \
     (HAS_UPDATE_HOOK_CB(DB) && ((DB)->mDbFlags & DBFLAG_InternalDml)==0)
 #else
-# define HAS_UPDATE_HOOK(DB) HAS_UPDATE_HOOK_CB(DB)
+#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
+# define HAS_UPDATE_HOOK(DB) ((DB)->xPreUpdateCallback||(DB)->xUpdateCallback)
+#else
+# define HAS_UPDATE_HOOK(DB) ((DB)->xUpdateCallback)
+#endif
 #endif
 
 /*
@@ -1696,6 +1700,7 @@ case OP_Move: {
     assert( pIn1<=&aMem[(p->nMem+1 - p->nCursor)] );
     assert( memIsValid(pIn1) );
     memAboutToChange(p, pOut);
+#ifdef DOLTLITE_PROLLY
     if( (pIn1->flags & MEM_Ephem)!=0
      && (pIn1->flags & (MEM_Str|MEM_Blob))!=0
      && (pIn1->flags & MEM_Zero)==0
@@ -1721,6 +1726,9 @@ case OP_Move: {
       sqlite3VdbeMemMove(pOut, pIn1);
       Deephemeralize(pOut);
     }
+#else
+    sqlite3VdbeMemMove(pOut, pIn1);
+#endif
 #ifdef SQLITE_DEBUG
     pIn1->pScopyFrom = 0;
     { int i;
@@ -1731,6 +1739,9 @@ case OP_Move: {
         }
       }
     }
+#endif
+#ifndef DOLTLITE_PROLLY
+    Deephemeralize(pOut);
 #endif
     REGISTER_TRACE(p2++, pOut);
     pIn1++;
@@ -3153,10 +3164,12 @@ op_column_restart:
       pC->payloadSize = sqlite3BtreePayloadSize(pCrsr);
       pC->aRow = sqlite3BtreePayloadFetch(pCrsr, &pC->szRow);
 #endif
+#ifdef DOLTLITE_PROLLY
       if( pC->aRow==0 ){
         if( db->mallocFailed ) goto no_mem;
         goto op_column_corrupt;
       }
+#endif
       assert( pC->szRow<=pC->payloadSize );
 #ifndef DOLTLITE_PROLLY
       assert( pC->szRow<=65536 );  /* Maximum page size is 64KiB */
@@ -4017,6 +4030,7 @@ case OP_Count: {         /* out2 */
   goto check_for_interrupt;
 }
 
+#ifdef DOLTLITE_PROLLY
 /* Opcode: CountRange P1 P2 P3 * *
 ** Synopsis: r[P2]=count_range(r[P3]..r[P3+1])
 **
@@ -4061,7 +4075,7 @@ case OP_CountRange: {    /* out2 */
   goto check_for_interrupt;
 }
 
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#if !defined(SQLITE_TEST)
 /* Opcode: DoltliteSeqMax P1 P2 P3 * *
 ** Synopsis: r[P1]=max(r[P1], chunkStoreGetSequenceValue(r[P2]))
 **
@@ -4268,7 +4282,7 @@ case OP_CountIndexRange: {    /* out2 */
   pOut->u.i = nEntry;
   goto check_for_interrupt;
 }
-
+#endif
 /* Opcode: Savepoint P1 * * P4 *
 **
 ** Open, release or rollback the savepoint named by parameter P4, depending
@@ -4602,11 +4616,11 @@ case OP_Transaction: {
 
     if( p->usesStmtJournal
      && pOp->p2
-     && (db->autoCommit==0 || db->nVdbeRead>1
-#if defined(DOLTLITE_PROLLY)
-         || p->hasVUpdate
+#ifdef DOLTLITE_PROLLY
+     && (db->autoCommit==0 || db->nVdbeRead>1 || p->hasVUpdate)
+#else
+     && (db->autoCommit==0 || db->nVdbeRead>1)
 #endif
-        )
     ){
       assert( sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE );
       if( p->iStatement==0 ){
@@ -4614,11 +4628,16 @@ case OP_Transaction: {
         db->nStatement++;
         p->iStatement = db->nSavepoint + db->nStatement;
       }
+#ifdef DOLTLITE_PROLLY
       if( db->nVtabSavepoint==0 ){
         rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
       }else{
         rc = SQLITE_OK;
       }
+#else
+
+      rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
+#endif
       if( rc==SQLITE_OK ){
         rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
       }
@@ -4973,6 +4992,7 @@ case OP_OpenDup: {           /* ncycle */
   pOrig->noReuse = 1;
   rc = sqlite3BtreeCursor(pCx->ub.pBtx, pCx->pgnoRoot, BTREE_WRCSR,
                           pCx->pKeyInfo, pCx->uc.pCursor);
+#ifdef DOLTLITE_PROLLY
   /* Stock SQLite asserts this open cannot fail: a second cursor on an
   ** already-open btree needs no allocation. doltlite's cursor open DOES
   ** allocate (catalog entry + prolly cursor state), so under OOM it can
@@ -4980,6 +5000,12 @@ case OP_OpenDup: {           /* ncycle */
   ** cursor (left zeroed by sqlite3BtreeCursorZero), which a later
   ** OP_NewRowid/OP_Last would dereference via the prolly cursor ops. */
   if( rc ) goto abort_due_to_error;
+#else
+  /* The sqlite3BtreeCursor() routine can only fail for the first cursor
+  ** opened for a database.  Since there is already an open cursor when this
+  ** opcode is run, the sqlite3BtreeCursor() cannot fail */
+  assert( rc==SQLITE_OK );
+#endif
   break;
 }
 
@@ -5330,7 +5356,9 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
 
   pC->deferredMoveto = 0;
   pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
   pC->idxRowidCacheValid = 0;
+#endif
   if( pC->isTable ){
     u16 flags3, newType;
     /* The OPFLAG_SEEKEQ/BTREE_SEEK_EQ flag is only set on index cursors */
@@ -5449,7 +5477,6 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
       assert( res!=0 );
       goto seek_not_found;
     }
-
 #ifdef DOLTLITE_PROLLY
     /* A prefix seek with default_rc<0 must land on the LAST match, since
     ** SeekLE stays put and SeekGT steps once. The prolly seek does that in
@@ -5717,7 +5744,9 @@ case OP_SeekScan: {          /* ncycle */
     }
     nStep--;
     pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
     pC->idxRowidCacheValid = 0;
+#endif
     rc = sqlite3BtreeNext(pC->uc.pCursor, 0);
     if( rc ){
       if( rc==SQLITE_DONE ){
@@ -5952,7 +5981,9 @@ case OP_Found: {        /* jump, in3, ncycle */
   pC->nullRow = 1-alreadyExists;
   pC->deferredMoveto = 0;
   pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
   pC->idxRowidCacheValid = 0;
+#endif
   if( pOp->opcode==OP_Found ){
     VdbeBranchTaken(alreadyExists!=0,2);
     if( alreadyExists ) goto jump_to_p2;
@@ -6545,13 +6576,11 @@ case OP_Delete: {
   /* Invoke the update-hook if required. */
   if( opflags & OPFLAG_NCHANGE ){
     p->nChange++;
-    if( db->xUpdateCallback && ALWAYS(pTab!=0)
 #ifdef DOLTLITE_PROLLY
-     && VisibleRowid(pTab)
+    if( db->xUpdateCallback && ALWAYS(pTab!=0) && VisibleRowid(pTab) ){
 #else
-     && HasRowid(pTab)
+    if( db->xUpdateCallback && ALWAYS(pTab!=0) && HasRowid(pTab) ){
 #endif
-    ){
 #ifdef DOLTLITE_PROLLY
       db->xUpdateCallback(db->pUpdateArg, SQLITE_DELETE, zDb, pTab->zName,
           HasRowid(pTab) ? pC->movetoTarget : iHookRowid);
@@ -6705,7 +6734,7 @@ case OP_RowData: {
   break;
 }
 
-/* Opcode: Rowid P1 P2 P3 * *
+/* Opcode: Rowid P1 P2 * * *
 ** Synopsis: r[P2]=PX rowid of P1
 **
 ** Store in register P2 an integer which is the key of the table entry that
@@ -6714,11 +6743,6 @@ case OP_RowData: {
 ** P1 can be either an ordinary table or a virtual table.  There used to
 ** be a separate OP_VRowid opcode for use with virtual tables, but this
 ** one opcode now works for both table types.
-**
-** If P3 is non-zero, P1 is used only for KeyInfo and r[P2] is the SQL
-** rowid of the index record in r[P3]. Clustered PRIMARY KEY RETURNING
-** and NEW.rowid use that form because the PK cursor is still a null row
-** after OP_IdxInsert.
 */
 case OP_Rowid: {                 /* out2, ncycle */
   VdbeCursor *pC;
@@ -6808,7 +6832,9 @@ case OP_NullRow: {
   }
   pC->nullRow = 1;
   pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
   pC->idxRowidCacheValid = 0;
+#endif
   if( pC->eCurType==CURTYPE_BTREE ){
     assert( pC->uc.pCursor!=0 );
     sqlite3BtreeClearCursor(pC->uc.pCursor);
@@ -6868,7 +6894,9 @@ case OP_Last: {              /* jump0, ncycle */
   pC->nullRow = (u8)res;
   pC->deferredMoveto = 0;
   pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
   pC->idxRowidCacheValid = 0;
+#endif
   if( rc ) goto abort_due_to_error;
   if( pOp->p2>0 ){
     VdbeBranchTaken(res!=0,2);
@@ -6986,7 +7014,9 @@ case OP_Rewind: {        /* jump0, ncycle */
     rc = sqlite3BtreeFirst(pCrsr, &res);
     pC->deferredMoveto = 0;
     pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
     pC->idxRowidCacheValid = 0;
+#endif
   }
   if( rc ) goto abort_due_to_error;
   pC->nullRow = (u8)res;
@@ -7117,7 +7147,9 @@ case OP_Next:          /* jump, ncycle */
 
 next_tail:
   pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
   pC->idxRowidCacheValid = 0;
+#endif
   VdbeBranchTaken(rc==SQLITE_OK,2);
   if( rc==SQLITE_OK ){
     pC->nullRow = 0;
@@ -7188,12 +7220,14 @@ case OP_IdxInsert: {        /* in2 */
       x.aMem = 0;
       x.nMem = 0;
     }
-  }else
-#endif
-  {
+  }else{
     x.aMem = aMem + pOp->p3;
     x.nMem = (u16)pOp->p4.i;
   }
+#else
+  x.aMem = aMem + pOp->p3;
+  x.nMem = (u16)pOp->p4.i;
+#endif
   rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
        (pOp->p5 & (OPFLAG_APPEND|OPFLAG_SAVEPOSITION|OPFLAG_PREFORMAT)),
       ((pOp->p5 & OPFLAG_USESEEKRESULT) ? pC->seekResult : 0)
@@ -7304,7 +7338,9 @@ case OP_IdxDelete: {
         goto abort_due_to_error;
       }
       pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
       pC->idxRowidCacheValid = 0;
+#endif
       pC->seekResult = 0;
       break;
     }
@@ -7320,7 +7356,9 @@ case OP_IdxDelete: {
   if( rc ) goto abort_due_to_error;
   assert( pC->deferredMoveto==0 );
   pC->cacheStatus = CACHE_STALE;
+#ifdef DOLTLITE_PROLLY
   pC->idxRowidCacheValid = 0;
+#endif
   pC->seekResult = 0;
   break;
 }
@@ -7379,23 +7417,26 @@ case OP_IdxRowid: {           /* out2, ncycle */
 
   if( !pC->nullRow ){
     rowid = 0;  /* Not needed.  Only used to silence a warning. */
+#ifdef DOLTLITE_PROLLY
     if( pC->idxRowidCacheValid ){
       rowid = pC->idxRowidCache;
     }else{
-#if defined(DOLTLITE_PROLLY)
       rc = sqlite3BtreeProllyIndexRowid(pC->uc.pCursor, &rowid);
       if( rc==SQLITE_NOTFOUND ){
         rc = sqlite3VdbeIdxRowid(db, pC->uc.pCursor, &rowid);
       }
-#else
-      rc = sqlite3VdbeIdxRowid(db, pC->uc.pCursor, &rowid);
-#endif
       if( rc!=SQLITE_OK ){
         goto abort_due_to_error;
       }
       pC->idxRowidCache = rowid;
       pC->idxRowidCacheValid = 1;
     }
+#else
+    rc = sqlite3VdbeIdxRowid(db, pC->uc.pCursor, &rowid);
+    if( rc!=SQLITE_OK ){
+      goto abort_due_to_error;
+    }
+#endif
     if( pOp->opcode==OP_DeferredSeek ){
       assert( pOp->p3>=0 && pOp->p3<p->nCursor );
       pTabCur = p->apCsr[pOp->p3];
@@ -8773,7 +8814,6 @@ case OP_JournalMode: {    /* out2 */
   if( eNew==PAGER_JOURNALMODE_QUERY ) eNew = eOld;
   assert( sqlite3BtreeHoldsMutex(pBt) );
   if( !sqlite3PagerOkToChangeJournalMode(pPager) ) eNew = eOld;
-
 #ifdef DOLTLITE_PROLLY
   if( eNew!=eOld && sqlite3BtreeIsDoltliteFormat(pBt) ){
     /* doltlite keeps data in a content-addressed chunk store with no
@@ -9056,10 +9096,10 @@ case OP_VCreate: {
       assert( resetSchemaOnFault==0 || resetSchemaOnFault==pOp->p1+1 );
       resetSchemaOnFault = pOp->p1+1;
     }
-#endif
     if( rc && db->mallocFailed ){
       rc = SQLITE_NOMEM_BKPT;
     }
+#endif
 #if defined(DOLTLITE_PROLLY) && defined(SQLITE_TEST)
     /* The generic constructor message only replaces the tokenizer error
     ** when allocating that error failed; the OOM harness expects NOMEM. */

@@ -53,7 +53,7 @@ int SQLITE_EXTRA_AUTOEXT(sqlite3*);
 #if defined(DOLTLITE_PROLLY) && defined(SQLITE_ENABLE_DBPAGE_VTAB)
 int doltliteDbpageRegister(sqlite3*);
 #endif
-#if DOLTLITE_VEC1
+#if defined(DOLTLITE_PROLLY) && DOLTLITE_VEC1
 int sqlite3Vec1Init(sqlite3*);
 #endif
 /*
@@ -92,8 +92,7 @@ static int (*const sqlite3BuiltinExtensions[])(sqlite3*) = {
 #ifdef SQLITE_ENABLE_BYTECODE_VTAB
   sqlite3VdbeBytecodeVtabInit,
 #endif
-#if DOLTLITE_VEC1
-  /* doltlite ships the vec1 vector-search extension built in. */
+#if defined(DOLTLITE_PROLLY) && DOLTLITE_VEC1
   sqlite3Vec1Init,
 #endif
 #ifdef SQLITE_EXTRA_AUTOEXT
@@ -1139,7 +1138,6 @@ static int nocaseCollatingFunc(
   }
   return r;
 }
-
 #ifdef DOLTLITE_PROLLY
 int sqlite3DoltliteIsBuiltinCollation(const CollSeq *p){
   if( !p || !p->zName ) return 0;
@@ -2942,7 +2940,6 @@ static int createCollation(
   int enc2;
  
   assert( sqlite3_mutex_held(db->mutex) );
-
 #ifdef DOLTLITE_PROLLY
   if( sqlite3StrICmp(zName, "BINARY")==0
    || sqlite3StrICmp(zName, "NOCASE")==0

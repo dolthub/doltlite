@@ -108,8 +108,10 @@ struct VdbeCursor {
   /* seekResult does not distinguish between "no seeks have ever occurred
   ** on this cursor" and "the most recent seek was an exact match".
   ** For CURTYPE_PSEUDO, seekResult is the register holding the record */
+#ifdef DOLTLITE_PROLLY
   u8 idxRowidCacheValid;  /* True if idxRowidCache is valid */
   i64 idxRowidCache;      /* Rowid decoded from the current index entry */
+#endif
 
   /* When a new VdbeCursor is allocated, only the fields above are zeroed.
   ** The fields that follow are uninitialized, and must be individually

@@ -511,7 +511,6 @@ void sqlite3AlterFinishAddColumn(Parse *pParse, Token *pColDef){
         zTab, zDb
       );
     }
-
 #ifdef DOLTLITE_PROLLY
     if( pDflt && (pCol->colFlags & COLFLAG_GENERATED)==0 ){
       FuncDef *pFunc = sqlite3FindFunction(
