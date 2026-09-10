@@ -570,6 +570,21 @@ SELECT group_concat(_rowid_||':'||rowid||':'||v,',') FROM (SELECT _rowid_,* FROM
 SELECT sql FROM sqlite_master WHERE name='t';
 "
 
+apply_bidirectional keyless_mixed_rowid_alias_shadow "
+CREATE TABLE t(RowID TEXT,v INTEGER);
+INSERT INTO t(RowID,v) VALUES('declared-a',1),('declared-b',2);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+UPDATE t SET v=11 WHERE _rowid_=1;
+DELETE FROM t WHERE _rowid_=2;
+INSERT INTO t(RowID,v) VALUES('declared-c',3);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(_rowid_||':'||rowid||':'||v,',') FROM (SELECT _rowid_,* FROM t ORDER BY _rowid_);
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
 apply_bidirectional blob_composite_primary_key "
 CREATE TABLE t(k BLOB,s TEXT,v BLOB,n REAL,PRIMARY KEY(k,s)) WITHOUT ROWID;
 INSERT INTO t VALUES(x'00ff','a',x'01',1.25),(x'10','b',x'02',-4.5);

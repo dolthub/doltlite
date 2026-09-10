@@ -1,0 +1,63 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name col1 col2 alias} {
+  unshadowed a b rowid
+  lowercase rowid b _rowid_
+  mixed RowID b _rowid_
+  uppercase ROWID b _rowid_
+  two_aliases RowID _RoWiD_ oid
+  last_aliases _RoWiD_ OiD rowid
+  outer_aliases RowID OiD _rowid_
+} {
+  reset_db
+  db eval "
+    CREATE TABLE t($col1 TEXT,$col2 TEXT,v INT);
+    INSERT INTO t($alias,$col1,$col2,v)
+      VALUES(10,'a','x',1),(20,'b','y',2),(30,'keep','z',3);
+    SELECT dolt_commit('-Am','base');
+    UPDATE t SET v=11 WHERE $alias=10;
+    DELETE FROM t WHERE $alias=20;
+    INSERT INTO t($alias,$col1,$col2,v) VALUES(40,'new','n',4);
+  "
+  set query "SELECT $alias,* FROM t ORDER BY $alias"
+  set target {10 a x 11 30 keep z 3 40 new n 4}
+  set base {10 a x 1 20 b y 2 30 keep z 3}
+  set forward [db eval {
+    SELECT statement FROM dolt_patch('HEAD','WORKING')
+     ORDER BY statement_order
+  }]
+  set reverse [db eval {
+    SELECT statement FROM dolt_patch('WORKING','HEAD')
+     ORDER BY statement_order
+  }]
+  db eval {SELECT dolt_reset('--hard')}
+
+  foreach direction {forward reverse} expected [list $target $base] {
+    do_test doltlite_patch_rowid_alias-$name-$direction {
+      foreach statement [set $direction] { db eval $statement }
+      db close
+      sqlite3 db test.db
+      db eval $query
+    } $expected
+  }
+}
+
+foreach {operation sql} {
+  insert {INSERT INTO t VALUES('b','y','n',2)}
+  update {UPDATE t SET v=2}
+  delete {DELETE FROM t}
+} {
+  reset_db
+  db eval {
+    CREATE TABLE t(RowID TEXT,_RoWiD_ TEXT,OiD TEXT,v INT);
+    INSERT INTO t VALUES('a','x','m',1);
+    SELECT dolt_commit('-Am','base');
+  }
+  db eval $sql
+  do_catchsql_test doltlite_patch_rowid_alias-all-shadowed-$operation {
+    SELECT statement FROM dolt_patch('HEAD','WORKING');
+  } {1 {dolt_patch: table 't' shadows every rowid alias}}
+}
+
+finish_test

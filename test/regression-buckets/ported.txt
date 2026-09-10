@@ -36,6 +36,7 @@ doltlite_page_size_default
 doltlite_savepoint_release
 doltlite_default_materialization
 doltlite_identifier_case
+doltlite_patch_rowid_alias
 doltlite_vtab_column_collision
 doltlite_merge_constraint_prune
 doltlite_merge_ignored
