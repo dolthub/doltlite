@@ -1,0 +1,83 @@
+name: checked-build
+description: Build CI artifacts with the existing platform configuration.
+inputs:
+  platform:
+    description: Target runner platform
+    required: true
+runs:
+  using: composite
+  steps:
+  - name: Test bounded apt retries
+    if: inputs.platform == 'ubuntu'
+    run: bash .github/scripts/retry-apt-get-test.sh
+    shell: bash -e {0}
+  - name: Install Linux build dependencies
+    if: inputs.platform == 'ubuntu'
+    run: |
+      bash .github/scripts/install-apt-deps.sh \
+        build-essential ripgrep tcl-dev zlib1g-dev
+    shell: bash -e {0}
+  - name: Install Windows build dependencies
+    if: inputs.platform == 'windows'
+    uses: msys2/setup-msys2@v2
+    with:
+      msystem: MINGW64
+      install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl
+        tcl openssl
+  - name: Install macOS build dependencies
+    if: inputs.platform == 'macos'
+    run: brew install ripgrep tcl-tk
+    shell: bash -e {0}
+  - name: Install Go toolchain
+    if: inputs.platform == 'ubuntu'
+    uses: actions/setup-go@v5
+    with:
+      go-version: '1.23'
+      cache: false
+  - name: Configure Unix build
+    if: inputs.platform != 'windows'
+    run: |
+      mkdir -p build
+      cd build
+      if [ "${{ inputs.platform }}" = "macos" ]; then
+        export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+        ../configure
+      else
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+      fi
+    shell: bash -e {0}
+  - name: Configure Windows build
+    if: inputs.platform == 'windows'
+    shell: msys2 {0}
+    run: |
+      mkdir -p build
+      cd build
+      ../configure
+  - name: Build checked Unix binaries
+    if: inputs.platform != 'windows'
+    run: |
+      cd build
+      set -o pipefail
+      {
+        make -j2 DOLTLITE_PROLLY_CHECK=1 \
+          doltlite doltlite-remotesrv doltlite-lib
+        make DOLTLITE_PROLLY=0 sqlite3
+        make libsqlite3.a USE_AMALGAMATION=0
+        rm -f sqlite3.c .target_source
+        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 \
+          sqlite3.c sqlite3.h
+      } 2>&1 | tee build.log
+      DOLTLITE_CHECK_AMALGAMATION=0 \
+        bash ../test/assert_doltlite_artifacts.sh .
+      bash ../test/amalgamation_vec1_option_test.sh .
+      if grep -E "warning:" build.log; then
+        echo "::error::compiler warnings in checked build"
+        exit 1
+      fi
+      make lint
+    shell: bash -e {0}

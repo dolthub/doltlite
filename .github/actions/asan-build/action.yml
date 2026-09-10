@@ -1,0 +1,62 @@
+name: asan-build
+description: Build CI artifacts with the existing platform configuration.
+inputs:
+  platform:
+    description: Target runner platform
+    required: true
+runs:
+  using: composite
+  steps:
+  - name: Install Linux dependencies
+    if: inputs.platform == 'ubuntu'
+    run: |
+      bash .github/scripts/install-apt-deps.sh \
+        build-essential tcl-dev zlib1g-dev
+    shell: bash -e {0}
+  - name: Install macOS dependencies
+    if: inputs.platform == 'macos'
+    run: brew install tcl-tk
+    shell: bash -e {0}
+  - name: Configure
+    run: |
+      mkdir -p build
+      cd build
+      if [ "${{ inputs.platform }}" = "macos" ]; then
+        export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+        ../configure
+      else
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+      fi
+    shell: bash -e {0}
+  - name: Build
+    run: |
+      cd build
+      set -o pipefail
+      {
+        make CFLAGS="$ASAN_CFLAGS" LDFLAGS="$ASAN_LDFLAGS" \
+          doltlite libdoltlite.a
+        make DOLTLITE_PROLLY=0 sqlite3
+        cc $ASAN_CFLAGS -I. -I../src \
+          -o doltlite_regression_test_c \
+          ../test/doltlite_regression_test_c.c \
+          libdoltlite.a $ASAN_LDFLAGS -lz -lpthread -lm
+      } 2>&1 | tee build.log
+      if grep -E "warning:" build.log; then
+        echo "::error::compiler warnings in sanitizer build"
+        exit 1
+      fi
+    shell: bash -e {0}
+  - name: Package
+    run: tar -czf asan-ubsan-${{ inputs.platform }}.tar.gz build
+    shell: bash -e {0}
+  - name: Upload
+    uses: actions/upload-artifact@v4
+    with:
+      name: asan-ubsan-${{ inputs.platform }}
+      path: asan-ubsan-${{ inputs.platform }}.tar.gz
+      retention-days: 1

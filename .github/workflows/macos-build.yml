@@ -5,11 +5,47 @@ on:
 
 jobs:
   checked:
-    uses: ./.github/workflows/checked-build.yml
-    with:
-      platform: macos
+    name: checked-${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    env:
+      CFLAGS: -O2 -g -Werror
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+        - platform: macos
+          runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/checked-build
+      with:
+        platform: ${{ matrix.platform }}
+    - name: Install layout
+      if: matrix.platform != 'windows'
+      run: bash test/install_layout_test.sh build
+      timeout-minutes: 10
+    - uses: ./.github/actions/checked-probes
+      with:
+        platform: ${{ matrix.platform }}
 
-  asan-ubsan:
-    uses: ./.github/workflows/asan-build.yml
-    with:
-      platform: macos
+  asan-ubsan-build:
+    name: asan-ubsan-${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+        - platform: macos
+          runs-on: macos-latest
+          warning-flags: -Wno-deprecated-declarations
+    env:
+      ASAN_CFLAGS: -O1 -g -Werror ${{ matrix.warning-flags }} -fsanitize=address,undefined -fno-omit-frame-pointer
+        -fno-sanitize-recover=all
+      ASAN_LDFLAGS: -fsanitize=address,undefined
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/asan-build
+      with:
+        platform: ${{ matrix.platform }}

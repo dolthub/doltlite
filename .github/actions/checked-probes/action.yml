@@ -1,0 +1,209 @@
+name: checked-probes
+description: Build CI artifacts with the existing platform configuration.
+inputs:
+  platform:
+    description: Target runner platform
+    required: true
+runs:
+  using: composite
+  steps:
+  - name: Build Linux-only test binaries
+    if: inputs.platform == 'ubuntu'
+    run: |
+      cd build
+      set -o pipefail
+      {
+        make DOLTLITE_PROLLY_CHECK=1 doltlite-c-tests-build
+        cc $CFLAGS -Wno-comment -DDOLTLITE_PROLLY=1 -I. -I../src \
+          -o threadtest4 ../test/threadtest4.c sqlite3.c \
+          -ldl -lpthread -lm -lz
+        cc $CFLAGS -Wno-comment -I. -I../src \
+          -o threadtest5 ../test/threadtest5.c sqlite3.c \
+          -ldl -lpthread -lm -lz
+        gcc $CFLAGS -o quickstart \
+          ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
+        cc $CFLAGS -O0 -I. -I../src \
+          -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
+          -o concurrent_branch_test ../test/concurrent_branch_test.c \
+          libsqlite3.a -lz -lpthread -lm
+        gcc $CFLAGS -O0 -I. \
+          -o concurrent_write_test ../test/concurrent_write_test.c \
+          libdoltlite.a -lz -lpthread -lm
+        cc $CFLAGS -I. -I../src \
+          -o crash_recovery_test ../test/crash_recovery_test.c \
+          libdoltlite.a -lz -lpthread -lm
+        (
+          cd ../examples/go
+          CGO_CFLAGS="-I../../build" \
+            CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread -lm" \
+            go build -tags libsqlite3 -o ../../build/go_quickstart .
+        )
+      } 2>&1 | tee -a build.log
+      if grep -E "warning:" build.log; then
+        echo "::error::compiler warnings in checked build"
+        exit 1
+      fi
+    shell: bash -e {0}
+  - name: Build macOS-only test binaries
+    if: inputs.platform == 'macos'
+    run: |
+      cd build
+      set -o pipefail
+      {
+        gcc $CFLAGS -o quickstart \
+          ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
+        cc $CFLAGS -O0 -I. -I../src \
+          -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
+          -o concurrent_branch_test ../test/concurrent_branch_test.c \
+          libsqlite3.a -lz -lpthread -lm
+        gcc $CFLAGS -O0 -I. \
+          -o concurrent_write_test ../test/concurrent_write_test.c \
+          libdoltlite.a -lz -lpthread -lm
+        gcc $CFLAGS -O0 -I. \
+          -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
+          libdoltlite.a -lz -lpthread -lm
+      } 2>&1 | tee -a build.log
+      if grep -E "warning:" build.log; then
+        echo "::error::compiler warnings in checked build"
+        exit 1
+      fi
+    shell: bash -e {0}
+  - name: Build Windows binaries
+    if: inputs.platform == 'windows'
+    shell: msys2 {0}
+    run: |
+      cd build
+      set -o pipefail
+      {
+        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
+          doltlite.exe doltlite-remotesrv.exe doltlite-lib
+        rm -f doltlite.exe
+        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
+          'T.link=$(T.cc.sqlite) -static' doltlite.exe
+        if objdump -p doltlite.exe | grep -Eq 'DLL Name: (libwinpthread-1\.dll|zlib1\.dll)'; then
+          exit 1
+        fi
+        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
+        cc $CFLAGS -I. -I../src \
+          -o doltlite_regression_test_c \
+          ../test/doltlite_regression_test_c.c libdoltlite.a \
+          -lz -lpthread -lm -lws2_32 -lbcrypt -lcrypt32
+      } 2>&1 | tee build.log
+      DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 \
+        bash ../test/assert_doltlite_artifacts.sh .
+      cp -f "$(command -v sqlite3)" sqlite3
+      if grep -E "warning:" build.log; then
+        echo "::error::compiler warnings in checked build"
+        exit 1
+      fi
+  - name: Build standalone Unix test probes
+    if: inputs.platform != 'windows'
+    run: |
+      cd build
+      set -o pipefail
+      {
+        cc $CFLAGS -Wall \
+          -I../src -I../ext/ed25519 \
+          ../test/doltlite_creds_kat.c ../test/sqlite3_alloc_stub.c \
+          ../src/doltlite_creds.c \
+          ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+          ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+          ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+          ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+          -o creds_kat
+        cc $CFLAGS -Wall \
+          -I../src -I../ext/ed25519 \
+          ../test/creds_verify_kat.c ../test/sqlite3_alloc_stub.c \
+          ../src/doltlite_creds.c \
+          ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+          ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+          ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+          ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+          -o creds_verify_kat
+        cc $CFLAGS -I../src -I../ext/mbedtls/include \
+          ../test/doltlite_tls_test_main.c ../test/sqlite3_alloc_stub.c \
+          ../src/doltlite_tls.c \
+          ../ext/mbedtls/library/*.c \
+          -o tls_test
+        blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
+        for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
+          [ ! -f "$object" ] || blake_objects+=("$object")
+        done
+        cc $CFLAGS ../test/blake3_kat.c \
+          prolly_hash.o "${blake_objects[@]}" \
+          -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
+          -lm -o blake3_kat
+        probe_libs=(-lz -lpthread -lm)
+        if [ "${{ inputs.platform }}" = "ubuntu" ]; then
+          probe_libs+=(-ldl)
+        fi
+        cc $CFLAGS -Wno-comment -I. \
+          ../test/amalgamation_http_probe.c sqlite3.c \
+          "${probe_libs[@]}" -o amalgamation_http_probe
+      } 2>&1 | tee -a build.log
+      if grep -E "warning:" build.log; then
+        echo "::error::compiler warnings in standalone probes"
+        exit 1
+      fi
+    shell: bash -e {0}
+  - name: Build standalone Windows test probes
+    if: inputs.platform == 'windows'
+    shell: msys2 {0}
+    run: |
+      cd build
+      set -o pipefail
+      {
+        cc $CFLAGS -Wall \
+          -I../src -I../ext/ed25519 \
+          ../test/doltlite_creds_kat.c ../test/sqlite3_alloc_stub.c \
+          ../src/doltlite_creds.c \
+          ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+          ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+          ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+          ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+          -lws2_32 -lbcrypt -lcrypt32 -o creds_kat.exe
+        cc $CFLAGS -Wall \
+          -I../src -I../ext/ed25519 \
+          ../test/creds_verify_kat.c ../test/sqlite3_alloc_stub.c \
+          ../src/doltlite_creds.c \
+          ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
+          ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
+          ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
+          ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
+          -lws2_32 -lbcrypt -lcrypt32 -o creds_verify_kat.exe
+        cc $CFLAGS -I../src -I../ext/mbedtls/include \
+          ../test/doltlite_tls_test_main.c ../test/sqlite3_alloc_stub.c \
+          ../src/doltlite_tls.c \
+          ../ext/mbedtls/library/*.c \
+          -lws2_32 -lbcrypt -lcrypt32 -o tls_test.exe
+        blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
+        for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
+          [ ! -f "$object" ] || blake_objects+=("$object")
+        done
+        cc $CFLAGS ../test/blake3_kat.c \
+          prolly_hash.o "${blake_objects[@]}" \
+          -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
+          -lm -o blake3_kat.exe
+        cc $CFLAGS -Wno-comment -I. \
+          ../test/amalgamation_http_probe.c sqlite3.c \
+          -lz -lpthread -lm -lws2_32 -lbcrypt -lcrypt32 \
+          -o amalgamation_http_probe.exe
+      } 2>&1 | tee -a build.log
+      if grep -E "warning:" build.log; then
+        echo "::error::compiler warnings in standalone probes"
+        exit 1
+      fi
+  - name: Package checked build
+    if: inputs.platform != 'windows'
+    run: tar -czf checked-build-${{ inputs.platform }}.tar.gz build
+    shell: bash -e {0}
+  - name: Package checked Windows build
+    if: inputs.platform == 'windows'
+    shell: msys2 {0}
+    run: tar -czf checked-build-windows.tar.gz build
+  - name: Upload checked build
+    uses: actions/upload-artifact@v4
+    with:
+      name: checked-build-${{ inputs.platform }}
+      path: checked-build-${{ inputs.platform }}.tar.gz
+      retention-days: 1
