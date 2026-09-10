@@ -18,6 +18,28 @@ dltest_run_sql() {
   fi
 }
 
+# -bail so a missing dolt_* function is a non-zero status, not a continued script.
+dltest_engine() {
+  local db="$1"
+  local sql="$2"
+  printf '%s\n' "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+    "$DOLTLITE" -bail "$db" 2>&1
+}
+
+dltest_require() {
+  local name="$1"
+  local db="$2"
+  local sql="$3"
+  local out rc
+  out=$(dltest_engine "$db" "$sql")
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    dltest_fail "$name" "  engine rc=$rc\n  $out"
+    return 1
+  fi
+  return 0
+}
+
 dltest_pass() {
   PASS=$((PASS+1))
 }
