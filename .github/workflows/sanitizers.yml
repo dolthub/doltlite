@@ -12,18 +12,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Buckets are grouped so no job runs much past six minutes.
           - suite: oracles
-          # The three small Dolt-oracle buckets share one runner; the merge
-          # bucket alone is as long as the three together.
+            bucket: remotes-recovery
           - suite: oracles-vc
-            bucket: refs-workspace diff-history-data remotes-recovery
+            bucket: refs-workspace diff-history-data
           - suite: oracles-merge
             bucket: merge-replay-schema
-          # The DoltLite shell suites (sanitizer manifest set) split in two.
-          - suite: native-1
-            shard: 1/2
-          - suite: native-2
-            shard: 2/2
+          # Every DoltLite shell suite (sanitizer manifest set) plus the
+          # correctness tests and the C corpus.
+          - suite: native
 
     steps:
     - uses: actions/checkout@v4
@@ -89,24 +87,24 @@ jobs:
       timeout-minutes: 25
 
     - name: Correctness regression tests
-      if: matrix.suite == 'native-1'
+      if: matrix.suite == 'native'
       run: cd build && bash ../test/correctness_test.sh ./doltlite
 
     # Every DoltLite shell suite the coverage job runs, under ASan/UBSan,
     # minus the ones that need artifacts this tarball lacks. The set is the
-    # manifest's sanitizer set, sharded across the two native jobs so neither
-    # exceeds the budget; a new suite is covered here by default.
+    # manifest's sanitizer set, so a new suite is covered here by default.
+    # If it outgrows the budget, split with DOLTLITE_SUITE_SHARD=k/n.
     - name: DoltLite shell suites (ASan/UBSan)
-      if: matrix.shard
+      if: matrix.suite == 'native'
       run: |
         DOLTLITE_BUILD_DIR="$PWD/build" DOLTLITE_SUITE_SET=sanitizer \
-          DOLTLITE_SUITE_SHARD=${{ matrix.shard }} bash test/run_doltlite_tests.sh
+          bash test/run_doltlite_tests.sh
       timeout-minutes: 20
 
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
     - name: C regression corpus (ASan/UBSan)
-      if: matrix.suite == 'native-2'
+      if: matrix.suite == 'native'
       run: cd build && ./doltlite_regression_test_c all
 
   # Same ASan/UBSan coverage as the Linux job above, but on macOS/arm64 to
