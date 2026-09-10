@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -22,21 +24,14 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
+  local dl_rc=0 sq_rc=0
   local dl_out
-  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize)
+  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize) || dl_rc=$?
 
   local sq_out
-  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize)
+  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "${3-}" "${4:-0}"
 }
 
 echo "=== Oracle Tests: CREATE TEMP TABLE / TRIGGER ==="
@@ -211,7 +206,7 @@ INSERT INTO t VALUES(1, 'a'),(2, 'b'),(3, 'a'),(4, 'c');
 SELECT id FROM t WHERE tag = 'a' ORDER BY id;
 "
 
-oracle "temp_table_unique_index_rejects_dup" "
+oracle_error "temp_table_unique_index_rejects_dup" "UNIQUE constraint failed: t.u" "
 CREATE TEMP TABLE t(id INT PRIMARY KEY, u INT);
 CREATE UNIQUE INDEX idx_u ON t(u);
 INSERT INTO t VALUES(1, 100);
@@ -221,14 +216,14 @@ SELECT id, u FROM t ORDER BY id;
 
 echo "--- TEMP constraints ---"
 
-oracle "temp_check_constraint" "
+oracle_error "temp_check_constraint" "CHECK constraint failed: v > 0" "
 CREATE TEMP TABLE t(id INT PRIMARY KEY, v INT CHECK (v > 0));
 INSERT INTO t VALUES(1, 10);
 INSERT INTO t VALUES(2, -1);
 SELECT id, v FROM t ORDER BY id;
 "
 
-oracle "temp_not_null_constraint" "
+oracle_error "temp_not_null_constraint" "NOT NULL constraint failed: t.v" "
 CREATE TEMP TABLE t(id INT PRIMARY KEY, v TEXT NOT NULL);
 INSERT INTO t VALUES(1, NULL);
 SELECT count(*) FROM t;
@@ -261,10 +256,4 @@ SELECT v FROM t WHERE id = 25;
 "
 
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
-exit 0
+stock_oracle_finish

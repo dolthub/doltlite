@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -19,21 +21,14 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
+  local dl_rc=0 sq_rc=0
   local dl_out
-  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize)
+  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize) || dl_rc=$?
 
   local sq_out
-  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize)
+  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "${3-}" "${4:-0}"
 }
 
 echo "=== Oracle Tests: SQL triggers ==="
@@ -166,7 +161,7 @@ SELECT n FROM counter;
 
 echo "--- RAISE actions ---"
 
-oracle "raise_abort_reverts_statement" "
+oracle_error "raise_abort_reverts_statement" "negative not allowed" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);
 CREATE TRIGGER guard BEFORE INSERT ON t WHEN new.v < 0 BEGIN
@@ -189,7 +184,7 @@ INSERT INTO t VALUES(3, 30);
 SELECT id, v FROM t ORDER BY id;
 "
 
-oracle "raise_fail_on_second_row" "
+oracle_error "raise_fail_on_second_row" "no neg" "
 CREATE TABLE src(id INT, v INT);
 INSERT INTO src VALUES(1,10),(2,-1),(3,30);
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -200,7 +195,7 @@ INSERT OR FAIL INTO t SELECT id, v FROM src ORDER BY id;
 SELECT id, v FROM t ORDER BY id;
 "
 
-oracle "raise_rollback_reverts_transaction" "
+oracle_error "raise_rollback_reverts_transaction" "negatives forbidden" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 CREATE TRIGGER no_neg BEFORE INSERT ON t WHEN new.v < 0 BEGIN
   SELECT RAISE(ROLLBACK, 'negatives forbidden');
@@ -378,9 +373,4 @@ SELECT remaining FROM log ORDER BY remaining;
 SELECT id FROM t ORDER BY id;
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+stock_oracle_finish

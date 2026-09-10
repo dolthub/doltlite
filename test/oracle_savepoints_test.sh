@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -u
+set -uo pipefail
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-./sqlite3}"
@@ -8,6 +8,8 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/stock_oracle_common.sh"
+stock_oracle_init || exit 1
 
 normalize() {
   tr -d '\r' \
@@ -22,21 +24,14 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/sq"
 
+  local dl_rc=0 sq_rc=0
   local dl_out
-  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize)
+  dl_out=$(printf '%s\n' "$sql" | "$DOLTLITE" "$dir/dl/db" 2>&1 | normalize) || dl_rc=$?
 
   local sq_out
-  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize)
+  sq_out=$(printf '%s\n' "$sql" | "$SQLITE3" "$dir/sq/db" 2>&1 | normalize) || sq_rc=$?
 
-  if [ "$dl_out" = "$sq_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
-  fi
+  stock_oracle_assert "$name" "$dl_out" "$sq_out" "$dl_rc" "$sq_rc" "${3-}" "${4:-0}"
 }
 
 echo "=== Oracle Tests: savepoints + rollbacks ==="
@@ -189,7 +184,7 @@ RELEASE SAVEPOINT s1;
 SELECT id, v FROM t ORDER BY id;
 "
 
-oracle "nested_rollback_outer_discards_inner" "
+oracle_empty "nested_rollback_outer_discards_inner" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 SAVEPOINT s1;
 INSERT INTO t VALUES(1, 10);
@@ -508,7 +503,7 @@ SELECT 't', id, v FROM t ORDER BY id;
 SELECT 'log', id, v FROM log ORDER BY id;
 "
 
-oracle "trigger_raise_rollback_through_savepoint" "
+oracle_error "trigger_raise_rollback_through_savepoint" "no neg" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 CREATE TRIGGER no_neg BEFORE INSERT ON t WHEN new.v < 0 BEGIN
   SELECT RAISE(ROLLBACK, 'no neg');
@@ -608,9 +603,4 @@ ROLLBACK;
 SELECT id, v FROM t ORDER BY id;
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+stock_oracle_finish
