@@ -422,24 +422,31 @@ static int rowidTableUsesSharedSeq(Parse *pParse, int iDb, Table *pTab){
       && (db->mDbFlags & DBFLAG_Vacuum)==0;
 }
 #endif
-
 static int autoIncBegin(
   Parse *pParse,      /* Parsing context */
   int iDb,            /* Index of the database holding pTab */
   Table *pTab         /* The table we are writing to */
 ){
   int memId = 0;      /* Register holding maximum rowid */
+#ifdef DOLTLITE_PROLLY
   int bSeqOnly = 0;
+#endif
   assert( pParse->db->aDb[iDb].pSchema!=0 );
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
   if( (pTab->tabFlags & TF_Autoincrement)==0 ){
     bSeqOnly = rowidTableUsesSharedSeq(pParse, iDb, pTab);
   }
 #endif
+#ifdef DOLTLITE_PROLLY
   if( bSeqOnly
    || ((pTab->tabFlags & TF_Autoincrement)!=0
        && (pParse->db->mDbFlags & DBFLAG_Vacuum)==0)
   ){
+#else
+  if( (pTab->tabFlags & TF_Autoincrement)!=0
+   && (pParse->db->mDbFlags & DBFLAG_Vacuum)==0
+  ){
+#endif
     Parse *pToplevel = sqlite3ParseToplevel(pParse);
     AutoincInfo *pInfo;
     Table *pSeqTab = pParse->db->aDb[iDb].pSchema->pSeqTab;
@@ -447,12 +454,20 @@ static int autoIncBegin(
     /* Verify that the sqlite_sequence table exists and is an ordinary
     ** rowid table with exactly two columns.
     ** Ticket d8dc2b3a58cd5dc2918a1d4acb 2018-05-23 */
+#ifdef DOLTLITE_PROLLY
     if( !bSeqOnly
      && (pSeqTab==0
          || !HasRowid(pSeqTab)
          || NEVER(IsVirtual(pSeqTab))
          || pSeqTab->nCol!=2)
     ){
+#else
+    if( pSeqTab==0
+     || !HasRowid(pSeqTab)
+     || NEVER(IsVirtual(pSeqTab))
+     || pSeqTab->nCol!=2
+    ){
+#endif
       pParse->nErr++;
       pParse->rc = SQLITE_CORRUPT_SEQUENCE;
       return 0;
@@ -632,7 +647,6 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
 void sqlite3AutoincrementEnd(Parse *pParse){
   if( pParse->usesAinc ) autoIncrementEnd(pParse);
 }
-
 #if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 /* Schema index when pTab is a prolly-backed sqlite_sequence whose rows a
 ** top-level statement is writing directly, else -1. */

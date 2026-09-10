@@ -277,7 +277,6 @@ Expr *sqlite3LimitWhere(
 }
 #endif /* defined(SQLITE_ENABLE_UPDATE_DELETE_LIMIT) */
        /*      && !defined(SQLITE_OMIT_SUBQUERY) */
-
 #ifdef DOLTLITE_PROLLY
 static int doltliteExprContainsOr(const Expr *pExpr){
   if( pExpr==0 ) return 0;
@@ -552,18 +551,14 @@ void sqlite3DeleteFrom(
       sqlite3VdbeAddOp1(v, OP_FinishSeek, iTabCur);
     }
  
-    /* Keep track of the number of rows to be deleted.
-    **
-    ** For the one-pass paths the row is deleted inline here in the WHERE loop,
-    ** so count it here. For the two-pass path (ONEPASS_OFF) the WHERE loop only
-    ** collects keys: under DoltLite's OR handling the same row is visited once
-    ** per OR term (bComplex is forced for any OR WHERE — see
-    ** doltliteExprContainsOr above — so the inline ONEPASS_MULTI delete that
-    ** stock SQLite uses, which removes a row before the next term re-finds it,
-    ** is unavailable). Counting here would count duplicates; the actual delete
-    ** loop iterates the de-duplicated keys (OP_RowSetRead / the ephemeral
-    ** index), so for ONEPASS_OFF we count there instead. */
+    /* Keep track of the number of rows to be deleted */
+#ifdef DOLTLITE_PROLLY
+    /* ONEPASS_OFF collects keys only. DoltLite forces bComplex for OR WHERE,
+    ** so the same row can be visited once per term; count in the de-dup loop. */
     if( memCnt && eOnePass!=ONEPASS_OFF ){
+#else
+    if( memCnt ){
+#endif
       sqlite3VdbeAddOp2(v, OP_AddImm, memCnt, 1);
     }
  
@@ -654,15 +649,13 @@ void sqlite3DeleteFrom(
       addrLoop = sqlite3VdbeAddOp3(v, OP_RowSetRead, iRowSet, 0, iKey);
       VdbeCoverage(v);
       assert( nKey==1 );
-    }
-
-    /* Count the row here for the two-pass path: this loop iterates the
-    ** de-duplicated keys collected above, so each row is counted exactly once
-    ** (the WHERE-loop count was suppressed for ONEPASS_OFF). */
+    } 
+ 
+#ifdef DOLTLITE_PROLLY
     if( memCnt && eOnePass==ONEPASS_OFF ){
       sqlite3VdbeAddOp2(v, OP_AddImm, memCnt, 1);
     }
-
+#endif
     /* Delete the row */
 #ifndef SQLITE_OMIT_VIRTUALTABLE
     if( IsVirtual(pTab) ){
