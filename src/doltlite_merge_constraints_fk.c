@@ -400,6 +400,12 @@ static int detectFkViolationsForSpec(
   return rc;
 }
 
+typedef struct FkWalk FkWalk;
+struct FkWalk {
+  int *pnFound;
+  char **pzErrMsg;
+};
+
 static int fkWalkTable(
   sqlite3 *db,
   const char *zTable,
@@ -421,7 +427,7 @@ static int fkWalkTable(
   int childChanged;
   int fkStepRc;
   int rc;
-  int *pnFound = (int*)pCtx;
+  FkWalk *pWalk = (FkWalk*)pCtx;
   (void)zSql;
 
   childChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable);
@@ -460,7 +466,7 @@ static int fkWalkTable(
         if( rc != SQLITE_OK ) break;
         rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
             zTable, hasRowid, &childPk, zParent, curId,
-            azFrom, azTo, nCol, pnFound);
+            azFrom, azTo, nCol, pWalk->pnFound);
       }
       doltliteFreeStringArray(azFrom, nCol);
       doltliteFreeStringArray(azTo, nCol);
@@ -512,7 +518,7 @@ static int fkWalkTable(
       if( rc==SQLITE_OK ){
         rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
             zTable, hasRowid, &childPk, zParent, curId,
-            azFrom, azTo, nCol, pnFound);
+            azFrom, azTo, nCol, pWalk->pnFound);
       }
     }
   }
@@ -520,6 +526,7 @@ static int fkWalkTable(
   doltliteFreeStringArray(azFrom, nCol);
   doltliteFreeStringArray(azTo, nCol);
   sqlite3_free(zParent);
+  setConstraintError(db, pWalk->pzErrMsg, rc);
   rc = finishConstraintStmt(pFk, rc);
   freeMergePkInfo(&childPk);
   return rc;
@@ -533,9 +540,12 @@ int doltliteDetectMergeFkViolations(
   const char **azTables,
   int nTables
 ){
+  FkWalk walk;
+  walk.pnFound = pnFound;
+  walk.pzErrMsg = pzErrMsg;
   if( pnFound ) *pnFound = 0;
   return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
-                             0, 0, fkWalkTable, pnFound);
+                             0, 0, fkWalkTable, &walk);
 }
 
 

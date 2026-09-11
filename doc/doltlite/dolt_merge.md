@@ -70,6 +70,12 @@ auto-resolved: abort, align the schemas on one side, merge again.
 
 ## Refusals
 
+<!-- contract: merge.validation_error_restores -->
+If applying a merged schema change fails, the refusal includes SQLite's
+underlying error. If a foreign-key check cannot run, for example because a
+referenced table was dropped, the refusal names the missing table and restores
+the pre-merge working set, including when the database is reopened.
+
 A merge that cannot produce a correct result fails instead of guessing: a
 table whose primary key changed on either side, or a derived index (a
 virtual-table shadow) the engine cannot rebuild from merged content.

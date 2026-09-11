@@ -12,6 +12,7 @@ int mergeRowTable(
 ){
   SchemaEntry *pSchema;
   sqlite3 *tmp = 0;
+  char *zErr = 0;
   int i, j, rc;
 
   *ppSchemaDb = 0;
@@ -22,7 +23,7 @@ int mergeRowTable(
       : findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
   if( !pSchema || !pSchema->zSql ) return SQLITE_CORRUPT;
   rc = sqlite3_open(":memory:", &tmp);
-  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, pSchema->zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, pSchema->zSql, 0, 0, &zErr);
   for(i=0; rc==SQLITE_OK && c->pnSchemaActions && i<*c->pnSchemaActions; i++){
     SchemaMergeAction *pAction = &(*c->ppSchemaActions)[i];
     if( sqlite3_stricmp(pAction->zTableName, zName)!=0 ) continue;
@@ -30,7 +31,7 @@ int mergeRowTable(
     for(j=0; j<pAction->nAddColumns && rc==SQLITE_OK; j++){
       char *zSql = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %s",
                                     zName, pAction->azAddColumns[j]);
-      rc = zSql ? sqlite3_exec(tmp, zSql, 0, 0, 0) : SQLITE_NOMEM;
+      rc = zSql ? sqlite3_exec(tmp, zSql, 0, 0, &zErr) : SQLITE_NOMEM;
       sqlite3_free(zSql);
     }
   }
@@ -46,6 +47,12 @@ int mergeRowTable(
     sqlite3_mutex_leave(tmp->mutex);
   }
   if( rc!=SQLITE_OK ){
+    if( zErr && c->pzErrMsg ){
+      *c->pzErrMsg = sqlite3_mprintf(
+          "cannot merge: schema change could not be applied: %s", zErr);
+      if( !*c->pzErrMsg ) rc = SQLITE_NOMEM;
+    }
+    sqlite3_free(zErr);
     sqlite3_close(tmp);
     return rc;
   }

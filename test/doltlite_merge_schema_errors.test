@@ -1,0 +1,90 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc merge_schema_snapshot {} {
+  set state [execsql {
+    SELECT dolt_hashof('HEAD');
+    SELECT sql FROM sqlite_master ORDER BY name;
+  }]
+  foreach table [execsql {
+    SELECT name FROM sqlite_master WHERE type='table' ORDER BY name
+  }] {
+    lappend state [execsql "SELECT dolt_hashof_table('$table')"]
+  }
+  return $state
+}
+
+foreach kind {generated foreign-key} {
+  foreach direction {forward reverse} {
+    foreach txn {autocommit explicit} {
+      reset_db
+      execsql {
+        CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b INT);
+        INSERT INTO t VALUES(1,'x',10),(2,'y',20);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('side');
+      }
+      if {$kind eq "generated"} {
+        execsql {ALTER TABLE t DROP COLUMN b}
+      } else {
+        execsql {DROP TABLE t}
+      }
+      execsql {
+        SELECT dolt_commit('-Am','drop');
+        SELECT dolt_checkout('side');
+      }
+      if {$kind eq "generated"} {
+        execsql {ALTER TABLE t ADD COLUMN d INT AS (b*2) VIRTUAL}
+        set pattern {*cannot merge: schema change could not be applied:*no such column*b*}
+      } else {
+        execsql {
+          CREATE TABLE child(id INTEGER PRIMARY KEY, parent INT REFERENCES t(id));
+          INSERT INTO child VALUES(1,1);
+        }
+        set pattern {*no such table: main.t*}
+      }
+      execsql {SELECT dolt_commit('-Am','dependency')}
+      if {$direction eq "forward"} {
+        execsql {SELECT dolt_checkout('main')}
+        set target side
+      } else {
+        set target main
+      }
+      set before [merge_schema_snapshot]
+      if {$txn eq "explicit"} {execsql {BEGIN; SAVEPOINT before_merge}}
+      set name merge-schema-errors-$kind-$direction-$txn
+      do_test $name-message {
+        set result [catchsql "SELECT dolt_merge('$target')"]
+        if {![string match $pattern [lindex $result 1]]} {
+          set result
+        } else {
+          list [lindex $result 0] detail
+        }
+      } {1 detail}
+      do_test $name-restored {
+        list [expr {$before eq [merge_schema_snapshot]}] [execsql {
+          SELECT is_merging FROM dolt_merge_status;
+          SELECT count(*) FROM dolt_conflicts;
+        }]
+      } {1 {0 0}}
+      do_test $name-retry {
+        catchsql "SELECT dolt_merge('$target')"
+      } $result
+      if {$txn eq "explicit"} {
+        do_execsql_test $name-rollback {ROLLBACK TO before_merge; COMMIT} {}
+      }
+      db close
+      if {$direction eq "reverse"} {
+        sqlite3 db test.db/side
+      } else {
+        sqlite3 db test.db
+      }
+      do_test $name-reopen {
+        list [expr {$before eq [merge_schema_snapshot]}] \
+             [execsql {PRAGMA integrity_check}]
+      } {1 ok}
+    }
+  }
+}
+
+finish_test
