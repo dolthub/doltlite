@@ -100,7 +100,12 @@ check("DOLTLITE_SPLIT_TEST_COMPILE: '1'" in action and 'CC: ccache cc' in action
 check('check-compiler-cache.sh' in action, 'cache health check missing')
 check('actions/cache/save@v4' in action and 'actions/cache/restore@v4' in action,
       'compiler cache must be restored and saved explicitly')
+check("default: 'false'" in action and "if: inputs.seed != 'true' ||" in action,
+      'PR builds must still compile on a cache hit')
+check("steps.cache.outputs.cache-matched-key == ''" in action,
+      'seeding must not rebuild an already populated compiler cache')
 seed = (repo / '.github/workflows/seed-ci-caches.yml').read_text()
+check("seed: 'true'" in seed, 'seeding must opt into skipping populated caches')
 check('needs: [benchmark, compatibility, sqllogictest, development-debug,' in seed,
       'cache seeding failure is not watched')
 
