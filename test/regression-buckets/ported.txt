@@ -42,6 +42,7 @@ doltlite_vtab_column_collision
 doltlite_merge_constraint_prune
 doltlite_merge_generated
 doltlite_merge_ignored
+doltlite_rebase_plan_hash
 doltlite_recover_changes
 doltlite_gc_stop_world
 doltlite_reload_uncommitted_recent

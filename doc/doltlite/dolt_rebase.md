@@ -49,6 +49,7 @@ can be fixed and `--continue` retried. The working set must be clean to start.
 | `rebase already in progress; use --continue or --abort` | second `-i` |
 | `no rebase in progress` | `--continue`/`--abort` with no plan |
 | `first non-drop action must be pick or reword` | invalid plan |
+| `invalid commit hash: <hash>` | a plan hash does not resolve to a commit; repair the plan and retry |
 | `rebase aborted due to changes in branch <name>` | the current branch moved during the rebase |
 | `rebase aborted due to changes in the source branch` | the upstream moved during the rebase |
 
