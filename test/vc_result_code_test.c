@@ -165,6 +165,76 @@ static void test_no_internal_code_escapes(const char *zPath){
   remove(zPath);
 }
 
+typedef struct CommitBusyCtx CommitBusyCtx;
+struct CommitBusyCtx {
+  sqlite3 *peer;
+  int calls;
+  int releaseRc;
+};
+
+static int releaseCommitPeer(void *arg, int attempt){
+  CommitBusyCtx *p = (CommitBusyCtx*)arg;
+  (void)attempt;
+  p->calls++;
+  p->releaseRc = exec(p->peer, "ROLLBACK");
+  return p->releaseRc==SQLITE_OK;
+}
+
+static int rowCount(sqlite3 *db){
+  sqlite3_stmt *stmt = 0;
+  int n = -1;
+  if( sqlite3_prepare_v2(db, "SELECT count(*) FROM t", -1, &stmt, 0)
+      ==SQLITE_OK && sqlite3_step(stmt)==SQLITE_ROW ){
+    n = sqlite3_column_int(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return n;
+}
+
+static void test_commit_busy(const char *zPath){
+  sqlite3 *db = 0;
+  sqlite3 *peer = 0;
+  char *zErr = 0;
+  CommitBusyCtx ctx;
+  int rc;
+  remove(zPath);
+  checkRc("commit_busy: open", sqlite3_open(zPath, &db), SQLITE_OK);
+  checkRc("commit_busy: seed", exec(db, seedSql), SQLITE_OK);
+  checkRc("commit_busy: prior insert",
+          exec(db, "INSERT INTO t VALUES(2,'prior')"), SQLITE_OK);
+  checkRc("commit_busy: open peer", sqlite3_open(zPath, &peer), SQLITE_OK);
+  checkRc("commit_busy: peer lock",
+          exec(peer, "BEGIN IMMEDIATE; INSERT INTO t VALUES(50,'peer')"),
+          SQLITE_OK);
+  rc = sqlite3_exec(db, "SELECT dolt_commit('-Am','blocked')", 0, 0, &zErr);
+  checkRc("commit_busy: retryable code", rc, SQLITE_BUSY);
+  check("commit_busy: honest message", zErr && strstr(zErr,"busy")
+        && !strstr(zErr,"another connection committed"));
+  sqlite3_free(zErr);
+  check("commit_busy: prior row survives", rowCount(db)==2);
+  checkRc("commit_busy: refused insert",
+          exec(db, "INSERT INTO t VALUES(3,'retry')"), SQLITE_BUSY);
+  check("commit_busy: refused insert absent", rowCount(db)==2);
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.peer = peer;
+  sqlite3_busy_handler(db, releaseCommitPeer, &ctx);
+  rc = exec(db, "SELECT dolt_commit('-Am','retry')");
+  checkRc("commit_busy: handler permits retry", rc, SQLITE_OK);
+  check("commit_busy: handler called", ctx.calls>0);
+  checkRc("commit_busy: peer released", ctx.releaseRc, SQLITE_OK);
+  sqlite3_busy_handler(db, 0, 0);
+  if( !sqlite3_get_autocommit(peer) ) exec(peer, "ROLLBACK");
+  sqlite3_close(peer);
+  checkRc("commit_busy: following insert and commit",
+          exec(db, "INSERT INTO t VALUES(3,'retry');"
+                   "SELECT dolt_commit('-Am','after')"), SQLITE_OK);
+  sqlite3_close(db);
+  checkRc("commit_busy: reopen", sqlite3_open(zPath, &db), SQLITE_OK);
+  check("commit_busy: reopened rows", rowCount(db)==3);
+  sqlite3_close(db);
+  remove(zPath);
+}
+
 int main(void){
   char zPath[256];
   char zBase[256];
@@ -178,6 +248,7 @@ int main(void){
   test_readonly_code(zPath);
   test_busy_code(zBase, zWork);
   test_no_internal_code_escapes(zPath);
+  test_commit_busy(zPath);
 
   printf("vc_result_code_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

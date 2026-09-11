@@ -128,7 +128,11 @@ UPDATE t SET v=3 WHERE id=1;
 ANALYZE;
 SELECT dolt_commit('-A','-m','main');
 EOF
-err=$("$DOLTLITE" "$DB" "BEGIN; SELECT dolt_merge('feat'); SELECT \"table\" FROM dolt_conflicts; ROLLBACK;" 2>&1)
+err=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+BEGIN; SELECT dolt_merge('feat');
+SELECT "table" FROM dolt_conflicts; ROLLBACK;
+SQL
+)
 check_match "real_table_conflict_still_surfaces" "^t$" "$err"
 
 DB="$TMPROOT/freshboth.db"

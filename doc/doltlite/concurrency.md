@@ -26,13 +26,16 @@ For a DoltLite-format main database, the concurrency contract is:
   polling status from a second process cannot make a writer's `INSERT` or
   `dolt_commit` fail. Such a connection still sees a peer's uncommitted and
   committed work.
+<!-- contract: writer.commit_busy_retry -->
 <!-- contract: writer.cross_thread_transaction -->
 - **One durable writer at a time.** A connection that holds an explicit write
   transaction owns the graph lock. A peer that tries to begin a concurrent
   write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
   commits or rolls back. Version-control commands report that same code, so a
   retry policy keyed on `SQLITE_BUSY` covers `dolt_branch` and `dolt_tag` as
-  well as an ordinary `INSERT`. After the lock is free, the peer can retry
+  well as an ordinary `INSERT`. `dolt_commit` honors the busy handler while
+  waiting for the graph lock; a refused commit preserves earlier successful
+  autocommit writes in the working set. After the lock is free, the peer can retry
   successfully. In serialized threading mode, sequential calls from different
   threads may continue and finish the same transaction.
 - **Snapshot-safe write upgrades.** A transaction that has established a read
@@ -43,8 +46,11 @@ For a DoltLite-format main database, the concurrency contract is:
 <!-- contract: txn.add_isolation -->
 <!-- contract: txn.reader_close_upgrade -->
 <!-- contract: reader.follows_restore -->
+<!-- contract: reader.status_snapshot -->
 - **Readers stay live.** A reader can see already-committed data while another
-  process holds an uncommitted write. Running `dolt_add` inside that write
+  process holds an uncommitted write. A `dolt_status` query uses its active
+  reader snapshot without acquiring the graph writer lock, including on a
+  read-only connection. Running `dolt_add` inside that write
   transaction does not publish its rows or staged state, and rolling the
   transaction back restores its prior staging state. A peer that only opens,
   reads, and closes the database does not prevent a live read transaction from
