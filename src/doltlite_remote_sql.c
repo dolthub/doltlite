@@ -68,6 +68,9 @@ static void remoteSqlResultError(
   int rc,
   const char *zMsg
 ){
+  /* NOTFOUND is how this file reports a missing remote or branch to itself.
+  ** It is not a result code, and callers test for SQLITE_ERROR. */
+  if( rc==SQLITE_NOTFOUND ) rc = SQLITE_ERROR;
   if( zMsg ){
     sqlite3_result_error(ctx, zMsg, -1);
     sqlite3_result_error_code(ctx, rc);

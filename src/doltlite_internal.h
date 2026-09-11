@@ -562,7 +562,11 @@ static SQLITE_INLINE void doltliteRefResultError(
   }else if( rc==SQLITE_ERROR && zExists ){
     sqlite3_result_error(ctx, zExists, -1);
   }else{
+    /* Order matters: result_error_code only supplies text when the result is
+    ** still NULL, so it keeps the message and corrects the code a caller
+    ** tests with sqlite3_errcode(). */
     sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
+    sqlite3_result_error_code(ctx, rc);
   }
 }
 

@@ -24,7 +24,9 @@ For a DoltLite-format main database, the concurrency contract is:
 - **One durable writer at a time.** A connection that holds an explicit write
   transaction owns the graph lock. A peer that tries to begin a concurrent
   write gets `SQLITE_BUSY` (or a retryable busy class) until the owner
-  commits or rolls back. After the lock is free, the peer can retry
+  commits or rolls back. Version-control commands report that same code, so a
+  retry policy keyed on `SQLITE_BUSY` covers `dolt_branch` and `dolt_tag` as
+  well as an ordinary `INSERT`. After the lock is free, the peer can retry
   successfully. In serialized threading mode, sequential calls from different
   threads may continue and finish the same transaction.
 - **Snapshot-safe write upgrades.** A transaction that has established a read

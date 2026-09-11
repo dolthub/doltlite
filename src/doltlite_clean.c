@@ -260,7 +260,11 @@ static void doltliteCleanFunc(
   goto clean_done;
 
 clean_error:
-  sqlite3_result_error(context, sqlite3_errmsg(db), -1);
+  /* A sub-call that fails without touching the connection leaves errmsg
+  ** reading "not an error". */
+  sqlite3_result_error(context,
+      sqlite3_errcode(db)==SQLITE_OK ? sqlite3_errstr(rc) : sqlite3_errmsg(db),
+      -1);
   sqlite3_result_error_code(context, rc);
 clean_done:
   cleanNamesClear(&untracked);

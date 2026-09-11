@@ -26,6 +26,7 @@ COVERAGE_TESTS=(
   three_way_merge_fast_test
   clone_error_code_test
   authorizer_internal_sql_test
+  vc_result_code_test
   prolly_hashset_test
   prolly_chunker_boundary_test
   scoped_refs_push_test
