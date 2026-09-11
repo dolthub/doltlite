@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fail if a suite is neither run nor listed.
-# "Run": basename in .github/workflows/*.yml, CI globs (oracle_*_test.sh,
+# "Run": basename in CI workflows/actions, CI globs (oracle_*_test.sh,
 # vc_oracle_*_test.sh), a regression bucket (*.test),
 # test/lib/doltlite_suite_manifest.sh, test/run_c_tests.sh, or main.mk.
 # Else listed in test/ci_suite_allowlist.txt or test/ci_suite_quarantine.txt
@@ -13,6 +13,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
+ci_sources=(.github/workflows/ .github/actions/)
 
 # Not suites: runners, lib, perf, this guard.
 is_excluded() {
@@ -41,7 +42,7 @@ in_bucket() {  # in_bucket <basename-without-.test>
 referenced() {
   local base="$1"
   grep -rIlF "$base" \
-      .github/workflows/ \
+      "${ci_sources[@]}" \
       test/lib/doltlite_suite_manifest.sh test/run_c_tests.sh main.mk \
       2>/dev/null | grep -q .
 }
@@ -50,7 +51,7 @@ referenced() {
 matches_ci_glob() {
   case "$1" in
     oracle_*_test.sh|vc_oracle_*_test.sh)
-      grep -rqE "oracle_\*_test\.sh|vc_oracle_\*_test\.sh" .github/workflows/ ;;
+      grep -rqE "oracle_\*_test\.sh|vc_oracle_\*_test\.sh" "${ci_sources[@]}" ;;
     *) return 1 ;;
   esac
 }
@@ -88,7 +89,7 @@ done
 # main.mk only builds the binary; run_c_tests.sh / a workflow / the manifest must run it.
 c_test_gated() {  # c_test_gated <name-without-.c>
   grep -rIlF "$1" \
-      test/run_c_tests.sh .github/workflows/ \
+      test/run_c_tests.sh "${ci_sources[@]}" \
       test/lib/doltlite_suite_manifest.sh \
       2>/dev/null | grep -q .
 }
@@ -111,7 +112,7 @@ group_orphans=()
 if [ -f test/sql_differential_fuzzer.py ]; then
   # Ignore echo/printf reproduce hints; they run nothing.
   selections() {
-    grep -rhE "DOLTLITE_DIFF_GROUPS=" .github/workflows/ 2>/dev/null \
+    grep -rhE "DOLTLITE_DIFF_GROUPS=" "${ci_sources[@]}" 2>/dev/null \
       | grep -vE "^[[:space:]]*(#|echo|printf)"
   }
   if selections | grep -qE "DOLTLITE_DIFF_GROUPS=[\"']?all\b"; then

@@ -1,0 +1,35 @@
+name: Checked Build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Platform to build or test
+        type: string
+        required: true
+
+jobs:
+  checked:
+    name: checked-${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    env:
+      CFLAGS: -O2 -g -Werror
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+        - platform: ${{ inputs.platform }}
+          runs-on: ${{ format('{0}-latest', inputs.platform) }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/checked-build
+      with:
+        platform: ${{ matrix.platform }}
+    - name: Install layout
+      if: matrix.platform != 'windows'
+      run: bash test/install_layout_test.sh build
+      timeout-minutes: 10
+    - uses: ./.github/actions/checked-probes
+      with:
+        platform: ${{ matrix.platform }}

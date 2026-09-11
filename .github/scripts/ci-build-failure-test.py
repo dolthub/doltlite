@@ -3,14 +3,15 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import textwrap
 
 
-workflow = (Path(__file__).resolve().parents[1] / "workflows/ci-build.yml").read_text()
+github_dir = Path(__file__).resolve().parents[1]
 cases = (
-    ("checked", "Build Linux-only test binaries", "ubuntu"),
-    ("checked", "Build standalone Unix test probes", "ubuntu"),
-    ("checked", "Build standalone Unix test probes", "macos"),
-    ("tsan-build", "Build", "ubuntu"),
+    ("actions/checked-probes/action.yml", None, "Build Linux-only test binaries", "ubuntu"),
+    ("actions/checked-probes/action.yml", None, "Build standalone Unix test probes", "ubuntu"),
+    ("actions/checked-probes/action.yml", None, "Build standalone Unix test probes", "macos"),
+    ("workflows/ci-build.yml", "tsan-build", "Build", "ubuntu"),
 )
 stub = """#!/usr/bin/env bash
 set -eu
@@ -54,18 +55,22 @@ def run(script, fail_at, warning, errexit):
 
 
 checks = 0
-for job, step, platform in cases:
-    job_match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  \S|\Z)",
-                          workflow, re.M | re.S)
-    assert job_match, job
+for source, job, step, platform in cases:
+    content = (github_dir / source).read_text()
+    if job is not None:
+        job_match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  \S|\Z)",
+                              content, re.M | re.S)
+        assert job_match, job
+        content = job_match[1]
+    indent = "    " if job is not None else "  "
     step_match = re.search(
-        rf"^    - name: {re.escape(step)}\n.*?^      run: \|\n((?:        [^\n]*\n|\n)+)",
-        job_match[1], re.M | re.S,
+        rf"^{indent}- name: {re.escape(step)}\n.*?^{indent}  run: \|\n"
+        rf"((?:{indent}    [^\n]*\n|\n)+)", content, re.M | re.S,
     )
-    assert step_match, (job, step)
-    script = "".join(line[8:] if line.startswith("        ") else line
-                     for line in step_match[1].splitlines(keepends=True))
+    assert step_match, (source, job, step)
+    script = textwrap.dedent(step_match[1])
     script = script.replace("${{ matrix.platform }}", platform)
+    script = script.replace("${{ inputs.platform }}", platform)
     for errexit in (False, True):
         result, commands, log, packaged = run(script, 0, 0, errexit)
         assert result.returncode == 0 and packaged, (step, result.stderr)

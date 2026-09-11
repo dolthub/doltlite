@@ -1,0 +1,463 @@
+name: Platform Tests
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Platform to build or test
+        type: string
+        required: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
+    # Several steps here budget 20 minutes, which a 20-minute job cap made
+    # unreachable: the job died first with "The operation was canceled" rather
+    # than the step failing on its own budget and naming itself. Observed runs
+    # are 3-5m on macos, 6-7m on windows and 6-15m on ubuntu, so 30 keeps a
+    # real ceiling while letting a stuck step report which one it was.
+    timeout-minutes: 30
+    env:
+      CFLAGS: -O2 -g -Werror
+      DOLTLITE_AMALG_HTTP_PROBE: ${{ github.workspace }}/build/amalgamation_http_probe${{ matrix.exe }}
+      DOLTLITE_BLAKE3_KAT_BIN: ${{ github.workspace }}/build/blake3_kat${{ matrix.exe }}
+      DOLTLITE_CREDS_KAT_BIN: ${{ github.workspace }}/build/creds_kat${{ matrix.exe }}
+      DOLTLITE_CREDS_VERIFY_BIN: ${{ github.workspace }}/build/creds_verify_kat${{ matrix.exe }}
+      DOLTLITE_TLS_TEST_BIN: ${{ github.workspace }}/build/tls_test${{ matrix.exe }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ${{ inputs.platform }}
+            runs-on: ${{ format('{0}-latest', inputs.platform) }}
+            exe: ${{ inputs.platform == 'windows' && '.exe' || '' }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      if: matrix.platform == 'ubuntu'
+      run: |
+        bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev ripgrep
+
+    - name: Install Windows dependencies
+      if: matrix.platform == 'windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl openssl
+
+    - name: Install dependencies (macOS)
+      if: matrix.platform == 'macos'
+      run: brew install ripgrep
+
+    - name: Install Dolt
+      if: matrix.platform == 'ubuntu'
+      run: bash .github/scripts/install-dolt-oracle.sh
+
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-${{ matrix.platform }}
+
+    - name: Extract checked build
+      if: matrix.platform != 'windows'
+      run: tar -xzf checked-build-${{ matrix.platform }}.tar.gz
+
+    - name: Extract checked Windows build
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: tar -xzf checked-build-windows.tar.gz
+
+    - name: Basic smoke tests
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        rm -f /tmp/build_test_smoke_basic.db /tmp/build_test_smoke_basic.db-wal /tmp/build_test_smoke_basic.db-lock
+        test "$(./doltlite :memory: "SELECT 1;")" = "1"
+        ./doltlite /tmp/build_test_smoke_basic.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT count(*) FROM t;"
+        test "$(./doltlite /tmp/build_test_smoke_basic.db "SELECT v FROM t WHERE id=1;")" = "a"
+        ./doltlite /tmp/build_test_smoke_basic.db "SELECT dolt_commit('-A','-m','c1');"
+        test "$(./doltlite /tmp/build_test_smoke_basic.db "SELECT count(*) FROM dolt_log;")" = "2"
+      timeout-minutes: 2
+
+    - name: Basic smoke tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        rm -f /tmp/build_test_smoke_basic.db /tmp/build_test_smoke_basic.db-wal /tmp/build_test_smoke_basic.db-lock
+        test "$(./doltlite.exe :memory: "SELECT 1;")" = "1"
+        ./doltlite.exe /tmp/build_test_smoke_basic.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT count(*) FROM t;"
+        test "$(./doltlite.exe /tmp/build_test_smoke_basic.db "SELECT v FROM t WHERE id=1;")" = "a"
+        ./doltlite.exe /tmp/build_test_smoke_basic.db "SELECT dolt_commit('-A','-m','c1');"
+        test "$(./doltlite.exe /tmp/build_test_smoke_basic.db "SELECT count(*) FROM dolt_log;")" = "2"
+      timeout-minutes: 2
+
+    - name: Windows path smoke tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: cd build && bash ../test/windows_path_smoke.sh ./doltlite.exe
+      timeout-minutes: 2
+
+    - name: Set up PHP
+      if: matrix.platform != 'windows'
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: ffi
+        tools: composer
+
+    - name: Smoke test the dolthub/doltlite-php Composer package
+      if: matrix.platform != 'windows'
+      run: |
+        chmod +x packaging/composer/assemble.sh packaging/composer/test-package.sh
+        bash packaging/composer/test-package.sh build
+      timeout-minutes: 5
+
+    - name: Set up Go
+      if: matrix.platform != 'windows'
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: false
+
+    - name: Smoke test the doltlite-driver module
+      if: matrix.platform != 'windows'
+      shell: bash
+      run: |
+        chmod +x packaging/go/assemble.sh packaging/go/test-package.sh
+        bash packaging/go/test-package.sh build
+      timeout-minutes: 20
+
+    - name: Smoke test the doltlite Rust crate
+      if: matrix.platform != 'windows'
+      shell: bash
+      run: |
+        chmod +x packaging/rust/assemble.sh packaging/rust/test-package.sh
+        bash packaging/rust/test-package.sh build
+      timeout-minutes: 25
+
+    # The step above runs on whatever stable the runner ships, which cannot
+    # tell us whether the crate still builds on the version it advertises.
+    # Read the MSRV out of the manifest so this leg cannot drift away from
+    # what the crate promises, and let the consumer resolve dependencies
+    # from scratch, so a dependency raising its own MSRV fails here rather
+    # than after publication.
+    - name: Smoke test the doltlite Rust crate on its declared MSRV
+      if: matrix.platform == 'ubuntu'
+      shell: bash
+      run: |
+        msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' packaging/rust/Cargo.toml)
+        if [ -z "$msrv" ]; then
+          echo "::error::packaging/rust/Cargo.toml declares no rust-version"
+          exit 1
+        fi
+        rustup toolchain install "$msrv" --profile minimal --no-self-update
+        export RUSTUP_TOOLCHAIN="$msrv"
+        echo "declared MSRV $msrv -> $(rustc --version)"
+        chmod +x packaging/rust/assemble.sh packaging/rust/test-package.sh
+        bash packaging/rust/test-package.sh build
+      timeout-minutes: 25
+
+    - name: Smoke test the DoltHub.Doltlite NuGet package
+      shell: bash
+      run: |
+        chmod +x packaging/nuget/assemble.sh packaging/nuget/test-package.sh
+        bash packaging/nuget/test-package.sh build
+      timeout-minutes: 10
+
+    - name: GC smoke tests
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        rm -f /tmp/build_test_smoke_gc.db /tmp/build_test_smoke_gc.db-wal /tmp/build_test_smoke_gc.db-lock
+        ./doltlite /tmp/build_test_smoke_gc.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_gc(); SELECT count(*) FROM t;"
+        bash ../test/doltlite_gc.sh
+        bash ../test/doltlite_gc_session_state.sh
+        bash ../test/doltlite_pragma_page_count.sh
+      timeout-minutes: 5
+
+    - name: GC smoke tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        rm -f /tmp/build_test_smoke_gc.db /tmp/build_test_smoke_gc.db-wal /tmp/build_test_smoke_gc.db-lock
+        ./doltlite.exe /tmp/build_test_smoke_gc.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_gc(); SELECT count(*) FROM t;"
+        bash ../test/doltlite_gc.sh
+        bash ../test/doltlite_gc_session_state.sh
+        bash ../test/doltlite_pragma_page_count.sh
+      timeout-minutes: 5
+
+    # -- Doltlite feature tests ------------------------------
+
+    - name: Doltlite feature tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/run_doltlite_tests.sh
+      timeout-minutes: 20
+
+    - name: Doltlite timing and scale tests
+      if: matrix.platform == 'ubuntu'
+      run: cd build && DOLTLITE_SUITE_SET=timing bash ../test/run_doltlite_tests.sh
+      timeout-minutes: 20
+
+    - name: Correctness regression tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/correctness_test.sh ./doltlite
+      timeout-minutes: 10
+
+    - name: Index operation tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/index_test.sh ./doltlite
+      timeout-minutes: 5
+
+    # All oracle tests (vc + sql) run in the parallel oracle-tests job
+
+    - name: Large-scale test (10K rows)
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
+      timeout-minutes: 5
+
+    - name: Growth-axis scaling gates
+      if: matrix.platform != 'windows'
+      # Ratio gates: per-operation cost vs history size. Ratios, not
+      # absolute times, so runner load moves both sides of each gate.
+      # Links the driver against the libdoltlite.a already in the
+      # checked-build artifact — no make here, which could rebuild
+      # artifact objects against fresh checkout mtimes.
+      run: bash test/growth_axis_test.sh build --quick
+      timeout-minutes: 10
+
+    - name: Chunk size distribution
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/chunk_distribution_test.sh ./doltlite
+      timeout-minutes: 5
+
+    - name: Chunker boundary golden
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/chunker_boundary_golden.sh ./doltlite
+      timeout-minutes: 5
+
+    - name: Multi-table test
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/multi_table_test.sh ./doltlite --quick
+      timeout-minutes: 5
+
+    - name: Diff tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/diff_test.sh ./doltlite
+      timeout-minutes: 10
+
+    - name: Config tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/config_test.sh ./doltlite
+      timeout-minutes: 2
+
+    - name: BLAKE3 known-answer test
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
+      timeout-minutes: 2
+
+    - name: Credential known-answer test
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/creds_kat_test.sh
+      timeout-minutes: 2
+
+    - name: TLS client test
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/tls_test.sh
+      timeout-minutes: 2
+
+    - name: Windows Doltlite feature tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        export DLTEST_STRIP_CR=1
+        rm -rf /d/tmp
+        powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
+        cat > ./doltlite-no-msys-conv <<'SH'
+        #!/usr/bin/env bash
+        export MSYS2_ARG_CONV_EXCL='*'
+        exec ./doltlite "$@"
+        SH
+        chmod +x ./doltlite-no-msys-conv
+        export DOLTLITE=./doltlite-no-msys-conv
+        export DOLTLITE_SYSTEM="$(cygpath -w "$PWD/doltlite.exe")"
+        export DOLTLITE_SYSTEM_NULL=NUL
+        source ../test/lib/doltlite_suite_manifest.sh
+        while IFS= read -r test; do
+          test="../test/$test"
+          echo "━━━ ${test} ━━━"
+          bash "$test" "$DOLTLITE"
+        done < <(doltlite_windows_suites)
+      timeout-minutes: 20
+
+    - name: Windows correctness regression tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/correctness_test.sh ./doltlite
+        bash ../test/index_test.sh ./doltlite
+      timeout-minutes: 15
+
+    - name: Windows scale and feature tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/large_scale_test.sh ./doltlite --quick
+        bash ../test/chunk_distribution_test.sh ./doltlite
+        bash ../test/chunker_boundary_golden.sh ./doltlite
+        bash ../test/multi_table_test.sh ./doltlite --quick
+        bash ../test/diff_test.sh ./doltlite
+        bash ../test/config_test.sh ./doltlite
+        bash ../test/blake3_kat_test.sh ./doltlite
+      timeout-minutes: 20
+
+    - name: Windows credential + TLS + remote tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/creds_kat_test.sh
+        bash ../test/creds_path_test.sh "$DOLTLITE"
+        bash ../test/tls_test.sh
+        bash ../test/creds_verify_test.sh
+        bash ../test/remote_test.sh ./doltlite
+        bash ../test/remote_https_auth_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+      timeout-minutes: 15
+
+    - name: Windows HTTP remotesrv tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/http_remote_content_length_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_bind_warning_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_concurrency_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_stall_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_http_force_push_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/amalgamation_windows_source_test.sh ./sqlite3.c
+        bash ../test/amalgamation_http_remote_test.sh .
+        bash ../test/amalgamation_https_remote_test.sh .
+        bash ../test/amalgamation_generation_atomic_test.sh .
+      timeout-minutes: 20
+
+    - name: Remote integration tests
+      if: matrix.platform != 'windows'
+      run: cd build && bash ../test/remote_test.sh ./doltlite
+      timeout-minutes: 5
+
+    - name: Credential verify known-answer test
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        bash ../test/creds_verify_test.sh
+        bash ../test/creds_path_test.sh ./doltlite
+      timeout-minutes: 5
+
+    - name: Remote HTTPS + credential auth tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: HTTP remote Content-Length test
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: HTTP remote lifecycle test (strict proxy)
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: Remotesrv bind warning tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_bind_warning_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: HTTP remote concurrency tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: HTTP remote stalled client tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_stall_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: HTTP remote partial failure tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: HTTP remote force push tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: Amalgamation excludes remote implementation
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        bash ../test/amalgamation_http_remote_test.sh .
+        bash ../test/amalgamation_https_remote_test.sh .
+        bash ../test/amalgamation_generation_atomic_test.sh .
+      timeout-minutes: 5
+
+    # -- C/Python/Go integration tests -----------------------
+
+    - name: C integration tests
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        ./quickstart
+        ./concurrent_branch_test
+
+    - name: Concurrent write test
+      if: matrix.platform != 'windows'
+      run: |
+        cd build
+        ./concurrent_write_test
+
+    - name: Native crash recovery test
+      if: matrix.platform == 'ubuntu'
+      run: |
+        cd build
+        ./crash_recovery_test
+      timeout-minutes: 10
+
+    - name: Prepared statement reuse test
+      if: matrix.platform == 'macos'
+      run: |
+        cd build
+        ./prepared_stmt_reuse_test
+
+    - name: Windows native C regression tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      env:
+        DOLTLITE_REGRESSION_PREBUILT: 1
+      run: cd build && bash ../test/run_doltlite_regression_case.sh all_except=backup_safety
+      timeout-minutes: 15
+
+    - name: Warning-free specialized C tests
+      if: matrix.platform == 'ubuntu'
+      run: |
+        cd build
+        bash ../test/run_c_tests.sh . specialized
+      timeout-minutes: 15
+
+    - name: Python integration test
+      if: matrix.platform == 'ubuntu'
+      run: cd build && LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
+
+    - name: Go integration test
+      if: matrix.platform == 'ubuntu'
+      run: build/go_quickstart

@@ -73,45 +73,49 @@ jobs:
       - if: needs.classify.outputs.light != 'true'
         run: bash test/oracle_doc_agent_guide_test.sh build/doltlite
 
-  build:
-    name: Build all binaries
+  build_ubuntu:
+    name: build-ubuntu
     needs: classify
     if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/ci-build.yml
 
-  build_test:
-    name: Build-Test
-    needs: [classify, build]
+  test_ubuntu:
+    name: test-ubuntu
+    needs: [classify, build_ubuntu]
     if: needs.classify.outputs.light != 'true'
-    uses: ./.github/workflows/build-test.yml
+    uses: ./.github/workflows/ubuntu-test.yml
 
-  test_suite:
-    name: Test Suite
-    needs: [classify, build]
+  build_macos:
+    name: build-macos
+    needs: classify
     if: needs.classify.outputs.light != 'true'
-    uses: ./.github/workflows/test.yml
+    uses: ./.github/workflows/macos-build.yml
 
-  sanitizers:
-    name: Sanitizers
-    needs: [classify, build]
+  test_macos:
+    name: test-macos
+    needs: [classify, build_macos]
     if: needs.classify.outputs.light != 'true'
-    uses: ./.github/workflows/sanitizers.yml
+    uses: ./.github/workflows/macos-test.yml
 
-  smoke:
-    name: Smoke
-    needs: [classify, build]
+  build_windows:
+    name: build-windows
+    needs: classify
     if: needs.classify.outputs.light != 'true'
-    uses: ./.github/workflows/smoke.yml
+    uses: ./.github/workflows/checked-build.yml
+    with:
+      platform: windows
 
-  benchmark:
-    name: Benchmark
-    needs: [classify, build]
+  test_windows:
+    name: test-windows
+    needs: [classify, build_windows]
     if: needs.classify.outputs.light != 'true'
-    uses: ./.github/workflows/benchmark.yml
+    uses: ./.github/workflows/platform-test.yml
+    with:
+      platform: windows
 
   gate:
     name: CI Gate
-    needs: [classify, doc_links, build, build_test, test_suite, sanitizers, smoke, benchmark]
+    needs: [classify, doc_links, build_ubuntu, test_ubuntu, build_macos, test_macos, build_windows, test_windows]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -119,18 +123,18 @@ jobs:
           CLASSIFY: ${{ needs.classify.result }}
           LIGHT: ${{ needs.classify.outputs.light }}
           DOC_LINKS: ${{ needs.doc_links.result }}
-          BUILD: ${{ needs.build.result }}
-          BUILD_TEST: ${{ needs.build_test.result }}
-          TEST_SUITE: ${{ needs.test_suite.result }}
-          SANITIZERS: ${{ needs.sanitizers.result }}
-          SMOKE: ${{ needs.smoke.result }}
-          BENCHMARK: ${{ needs.benchmark.result }}
+          BUILD_UBUNTU: ${{ needs.build_ubuntu.result }}
+          TEST_UBUNTU: ${{ needs.test_ubuntu.result }}
+          BUILD_MACOS: ${{ needs.build_macos.result }}
+          TEST_MACOS: ${{ needs.test_macos.result }}
+          BUILD_WINDOWS: ${{ needs.build_windows.result }}
+          TEST_WINDOWS: ${{ needs.test_windows.result }}
         run: |
           test "$CLASSIFY" = success
           case "$DOC_LINKS" in success|skipped) ;; *) exit 1 ;; esac
           if [ "$LIGHT" = true ]; then
             exit 0
           fi
-          for result in "$BUILD" "$BUILD_TEST" "$TEST_SUITE" "$SANITIZERS" "$SMOKE" "$BENCHMARK"; do
+          for result in "$BUILD_UBUNTU" "$TEST_UBUNTU" "$BUILD_MACOS" "$TEST_MACOS" "$BUILD_WINDOWS" "$TEST_WINDOWS"; do
             test "$result" = success
           done

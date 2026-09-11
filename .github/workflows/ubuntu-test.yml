@@ -1,0 +1,20 @@
+name: Ubuntu Tests
+
+on:
+  workflow_call:
+
+jobs:
+  build-test:
+    uses: ./.github/workflows/build-test.yml
+
+  test-suite:
+    uses: ./.github/workflows/test.yml
+
+  sanitizers:
+    uses: ./.github/workflows/sanitizers.yml
+
+  smoke:
+    uses: ./.github/workflows/smoke.yml
+
+  benchmark:
+    uses: ./.github/workflows/benchmark.yml
