@@ -17,6 +17,8 @@ runs:
     id: identity
     shell: bash
     run: |
+      cc --version
+      lscpu | grep -E '^(CPU\(s\)|Model name|Thread\(s\) per core|Core\(s\) per socket):'
       key=$({
         sha256sum "$(readlink -f /usr/bin/cc)"
         cc --version
@@ -79,3 +81,13 @@ runs:
     with:
       path: ${{ runner.temp }}/development-debug-ccache
       key: ${{ steps.identity.outputs.key }}-${{ github.sha }}
+
+  - name: Upload build timings and commands
+    if: always() && steps.build.outcome != 'skipped'
+    uses: actions/upload-artifact@v4
+    with:
+      name: development-debug-logs
+      path: |
+        build/testrunner.db
+        build/testrunner.log
+      retention-days: 1
