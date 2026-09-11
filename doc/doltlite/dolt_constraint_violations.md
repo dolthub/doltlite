@@ -25,6 +25,10 @@ violations in autocommit mode is rolled back: `Committing this transaction
 resulted in a working set with constraint violations, transaction rolled
 back.` Inside `BEGIN` they persist and block `dolt_commit` until resolved.
 
+`NOT NULL` checks include stored and virtual generated columns. The checks
+use their computed values: valid non-NULL results still merge, and nullable
+generated columns may produce NULL.
+
 ## Tables
 
 | Table | Columns |

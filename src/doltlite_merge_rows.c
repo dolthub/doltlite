@@ -1027,20 +1027,44 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
 
   switch( pChange->type ){
     case THREE_WAY_LEFT_ADD:
-    case THREE_WAY_LEFT_MODIFY:
-    case THREE_WAY_LEFT_DELETE:
+    case THREE_WAY_LEFT_MODIFY: {
+      const u8 *pOurs = pChange->pOurVal;
+      int nOurs = pChange->nOurVal;
+      u8 *pOwned;
+      int ix;
 
+      if( !ctx->pGeneratedTable ) break;
+      rc = mergeGeneratedSideRow(ctx->db, ctx->pGeneratedTable,
+          &ctx->pGeneratedStmt, pChange->intKey, &pOurs, &nOurs, &pOwned);
+      if( rc!=SQLITE_OK ) return rc;
+      if( nOurs!=pChange->nOurVal
+       || memcmp(pOurs, pChange->pOurVal, nOurs)!=0 ){
+        rc = prollyMutMapInsert(ctx->pEdits,
+            pChange->pKey, pChange->nKey, pChange->intKey, pOurs, nOurs);
+        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
+          MergeIndexInfo *mi = &ctx->aIndexes[ix];
+          rc = doltliteIndexMutMapRowDelta(
+              ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
+              mi->pKeyInfo, mi->iPKey, pChange->intKey,
+              pChange->pKey, pChange->nKey,
+              pChange->pOurVal, pChange->nOurVal, pOurs, nOurs, &mi->part);
+        }
+      }
+      sqlite3_free(pOwned);
+      break;
+    }
+
+    case THREE_WAY_LEFT_DELETE:
       break;
 
     case THREE_WAY_RIGHT_ADD: {
-
       const u8 *pTheirs;
       int nTheirs;
       u8 *pOwned;
 
       pTheirs = pChange->pTheirVal;
       nTheirs = pChange->nTheirVal;
-      rc = mergeGeneratedTheirRow(ctx->db, ctx->pGeneratedTable,
+      rc = mergeGeneratedSideRow(ctx->db, ctx->pGeneratedTable,
           &ctx->pGeneratedStmt, pChange->intKey, &pTheirs, &nTheirs, &pOwned);
       if( rc!=SQLITE_OK ) return rc;
       rc = prollyMutMapInsert(ctx->pEdits,
@@ -1063,14 +1087,13 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     }
 
     case THREE_WAY_RIGHT_MODIFY: {
-
       const u8 *pTheirs;
       int nTheirs;
       u8 *pOwned;
 
       pTheirs = pChange->pTheirVal;
       nTheirs = pChange->nTheirVal;
-      rc = mergeGeneratedTheirRow(ctx->db, ctx->pGeneratedTable,
+      rc = mergeGeneratedSideRow(ctx->db, ctx->pGeneratedTable,
           &ctx->pGeneratedStmt, pChange->intKey, &pTheirs, &nTheirs, &pOwned);
       if( rc!=SQLITE_OK ) return rc;
       rc = prollyMutMapInsert(ctx->pEdits,
@@ -1093,7 +1116,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     }
 
     case THREE_WAY_RIGHT_DELETE:
-
       rc = prollyMutMapDelete(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey);
       if( rc==SQLITE_OK && ctx->nIndexes>0
@@ -1111,7 +1133,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       break;
 
     case THREE_WAY_CONVERGENT:
-
       break;
 
     case THREE_WAY_CONFLICT_MM: {
