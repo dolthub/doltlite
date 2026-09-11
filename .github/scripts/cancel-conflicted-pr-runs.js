@@ -3,6 +3,14 @@ module.exports = async function cancelConflictedPrRuns({
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
 }) {
   const repo = context.repo;
+  async function currentMaster() {
+    const {data} = await github.rest.git.getRef({...repo, ref: 'heads/master'});
+    if (data.object.sha === context.sha) return true;
+    core.info(`Master advanced beyond ${context.sha}; leaving CI to the newer push workflow`);
+    return false;
+  }
+
+  if (!await currentMaster()) return 0;
   const runsByPull = new Map();
   for (const status of ['queued', 'in_progress', 'pending', 'waiting', 'requested']) {
     const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
@@ -29,7 +37,7 @@ module.exports = async function cancelConflictedPrRuns({
 
   function current(pull) {
     return pull && pull.state === 'open' && !pull.merged &&
-      pull.base.ref === 'master' && pull.base.sha === context.sha;
+      pull.base.ref === 'master';
   }
 
   let pending = [...runsByPull.keys()];
@@ -50,6 +58,7 @@ module.exports = async function cancelConflictedPrRuns({
         const confirmed = await getPull(number);
         if (!current(confirmed) || confirmed.head.sha !== pull.head.sha ||
             confirmed.mergeable !== false) break;
+        if (!await currentMaster()) return cancelled;
         try {
           await github.rest.actions.cancelWorkflowRun({...repo, run_id: run.id});
           cancelledRuns.add(run.id);

@@ -16,9 +16,17 @@ const run = (overrides = {}) => ({
 });
 const apiError = status => Object.assign(new Error(`HTTP ${status}`), {status});
 
-function fixture({runs = [run()], pulls = [pull()], cancelError} = {}) {
+function fixture({runs = [run()], pulls = [pull()], masterTips = ['master-tip'], cancelError} = {}) {
   const listed = [], fetched = [], cancelled = [], sleeps = [], logs = [];
+  const refs = [];
   const github = {rest: {
+    git: {async getRef(args) {
+      assert.deepEqual(args, {...repo, ref: 'heads/master'});
+      const value = masterTips[Math.min(refs.length, masterTips.length - 1)];
+      refs.push(args.ref);
+      if (value instanceof Error) throw value;
+      return {data: {object: {sha: value}}};
+    }},
     actions: {
       listWorkflowRuns() {},
       async cancelWorkflowRun(args) {
@@ -84,7 +92,6 @@ const changes = {
   'closed PR': {state: 'closed'},
   'merged PR': {merged: true},
   'different base branch': {base: {ref: 'release', sha: 'master-tip'}},
-  'new master tip': {base: {ref: 'master', sha: 'new-master-tip'}},
 };
 for (const [name, change] of Object.entries(changes)) {
   test(`leaves ${name} alone`, async () => {
@@ -166,4 +173,42 @@ test('surfaces cancellation API errors', async () => {
 test('surfaces pull request API errors', async () => {
   const error = apiError(500);
   await assert.rejects(fixture({pulls: [error]}).execute(), error);
+});
+
+test('cancels a conflicted PR whose base SHA still names an older master commit', async () => {
+  const f = fixture({pulls: [pull({base: {ref: 'master', sha: 'old-master-tip'}})]});
+  assert.equal(await f.execute(), 1);
+  assert.deepEqual(f.cancelled, [100]);
+});
+
+test('allows stale PR base metadata on the confirmation read', async () => {
+  const f = fixture({pulls: [pull(), pull({base: {ref: 'master', sha: 'old-master-tip'}})]});
+  assert.equal(await f.execute(), 1);
+  assert.deepEqual(f.cancelled, [100]);
+});
+
+test('leaves new master tip alone', async () => {
+  const f = fixture({masterTips: ['new-master-tip']});
+  assert.equal(await f.execute(), 0);
+  assert.deepEqual(f.cancelled, []);
+  assert.deepEqual(f.listed, []);
+});
+
+test('rechecks new master tip immediately before cancellation', async () => {
+  const f = fixture({masterTips: ['master-tip', 'new-master-tip']});
+  assert.equal(await f.execute(), 0);
+  assert.deepEqual(f.fetched, [42, 42]);
+  assert.deepEqual(f.cancelled, []);
+});
+
+test('stops when master advances between cancellations', async () => {
+  const f = fixture({runs: [run(), run({id: 101})],
+    masterTips: ['master-tip', 'master-tip', 'new-master-tip']});
+  assert.equal(await f.execute(), 1);
+  assert.deepEqual(f.cancelled, [100]);
+});
+
+test('surfaces master ref API errors', async () => {
+  const error = apiError(500);
+  await assert.rejects(fixture({masterTips: [error]}).execute(), error);
 });
