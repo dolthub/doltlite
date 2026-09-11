@@ -121,6 +121,12 @@ def checked_build():
         root = Path(tmp)
         for directory in ('bin', 'build', 'test'):
             (root / directory).mkdir()
+        (root / '.github/scripts').mkdir(parents=True)
+        shutil.copy(scripts / 'use-macos-compiler-cache.sh', root / '.github/scripts')
+        (root / 'ccache/libexec').mkdir(parents=True)
+        for name in ('cc', 'c++'):
+            write_executable(root / 'ccache/libexec' / name, '#!/bin/bash\nexit 0\n')
+        write_executable(root / 'bin/brew', f'#!/bin/bash\necho "{root}/ccache"\n')
         write_executable(root / 'bin/sysctl', '#!/bin/sh\necho 6\n')
         write_executable(root / 'bin/make', r'''#!/bin/bash
 set -eu
@@ -205,7 +211,8 @@ def cache_producers():
     for text in (producer, platform):
         assert 'uses: ./.github/actions/macos-package-cache' in text
         assert 'bash .github/scripts/macos-package-tests.sh build' in text
-        assert 'export PATH="$(brew --prefix ccache)/libexec:$PATH"' in text
+        assert 'source .github/scripts/use-macos-compiler-cache.sh' in text
+        assert 'bash ../.github/scripts/check-compiler-cache.sh' in text
     action = (github / 'actions/macos-package-cache/action.yml').read_text()
     assert 'echo "CCACHE_DIR=$RUNNER_TEMP/doltlite-ccache"' in action
     assert '${{ runner.temp }}/doltlite-ccache' in action

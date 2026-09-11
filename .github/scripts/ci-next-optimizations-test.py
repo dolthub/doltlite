@@ -29,6 +29,8 @@ def lint_workers():
         (root / '.github/scripts').mkdir(parents=True)
         shutil.copy(repo / 'test/run_lint_selftests.sh', root / 'test')
         shutil.copy(scripts / 'parallel-compile.sh', root / '.github/scripts')
+        (root / '.github/scripts/ci-selftests.sh').write_text(
+            'ci_selftests() { ci_compile bash \"$root/.github/scripts/ci-optimization-test.sh\"; }\n')
         recipe = run(['make', '-f', 'main.mk', '-n', 'lint', f'TOP={repo}'], cwd=repo)
         assert recipe.returncode == 0, recipe
         commands = [shlex.split(line.replace(str(repo), str(root)))

@@ -29,6 +29,7 @@ runs:
       mkdir -p build
       cd build
       if [ "${{ inputs.platform }}" = "macos" ]; then
+        source ../.github/scripts/use-macos-compiler-cache.sh
         export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
         ../configure
       else
@@ -46,6 +47,7 @@ runs:
       cd build
       make_jobs=(-j2)
       if [ "${{ inputs.platform }}" = "macos" ]; then
+        source ../.github/scripts/use-macos-compiler-cache.sh
         make_jobs=(-j"$(sysctl -n hw.logicalcpu)")
       fi
       {
@@ -62,6 +64,13 @@ runs:
         exit 1
       fi
     shell: bash -e {0}
+  - name: Verify compiler cache
+    if: inputs.platform == 'macos'
+    shell: bash
+    run: bash .github/scripts/check-compiler-cache.sh
+  - name: Save compiler cache
+    if: inputs.platform == 'macos'
+    uses: ./.github/actions/save-macos-build-cache
   - name: Package
     run: |
       bash .github/scripts/package-ci-build.sh asan-ubsan-${{ inputs.platform }}.tar.gz \
