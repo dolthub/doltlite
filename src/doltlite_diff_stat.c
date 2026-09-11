@@ -14,6 +14,20 @@
 #include <stddef.h>
 #include <string.h>
 
+#define DS_RESERVED_ALIAS "doltlite_stat_colinfo"
+
+/* Outside schema parsing SQLite refuses CREATE TABLE for an sqlite_ name, so
+** a stored definition for one (sqlite_stat1, after ANALYZE) is replayed under
+** a placeholder to read its columns. */
+static char *dsAliasReservedCreate(const char *zSql, const char *zTable){
+  const char *pName = zSql ? strstr(zSql, zTable) : 0;
+  int nPrefix;
+  if( !pName ) return 0;
+  nPrefix = (int)(pName - zSql);
+  return sqlite3_mprintf("%.*s%s%s", nPrefix, zSql, DS_RESERVED_ALIAS,
+                         pName + strlen(zTable));
+}
+
 static int dsLoadColInfo(sqlite3 *db,
                          const ProllyHash *pCatHash,
                          const char *zTableName,
@@ -22,6 +36,8 @@ static int dsLoadColInfo(sqlite3 *db,
   ProllyCache *pCache = doltliteGetCache(db);
   SchemaEntry entry;
   int found = 0;
+  int reserved;
+  char *zAliased = 0;
   sqlite3 *tmp = 0;
   int rc;
 
@@ -36,10 +52,26 @@ static int dsLoadColInfo(sqlite3 *db,
     return SQLITE_OK;
   }
 
+  reserved = sqlite3_strnicmp(zTableName, "sqlite_", 7)==0;
+  if( reserved ){
+    int missing = strstr(entry.zSql, zTableName)==0;
+    zAliased = missing ? 0 : dsAliasReservedCreate(entry.zSql, zTableName);
+    if( !zAliased ){
+      clearSchemaEntry(&entry);
+      return missing ? SQLITE_CORRUPT : SQLITE_NOMEM;
+    }
+  }
+
   rc = sqlite3_open(":memory:", &tmp);
-  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
-  if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTableName, pOut);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_exec(tmp, zAliased ? zAliased : entry.zSql, 0, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteGetColumnNames(tmp, reserved ? DS_RESERVED_ALIAS : zTableName,
+                                pOut);
+  }
   if( tmp ) sqlite3_close(tmp);
+  sqlite3_free(zAliased);
   clearSchemaEntry(&entry);
   if( rc!=SQLITE_OK ) doltliteFreeColInfo(pOut);
   return rc;
