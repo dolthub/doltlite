@@ -144,7 +144,7 @@ int mergeGeneratedRecord(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   u8 **ppRecord, int *pnRecord
 );
-int mergeGeneratedTheirRow(
+int mergeGeneratedSideRow(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   const u8 **ppVal, int *pnVal, u8 **ppOwned
 );

@@ -1,0 +1,120 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc generated_notnull_setup {key storage operation outcome direction} {
+  reset_db
+  set constraint [expr {$outcome eq "nullable" ? "" : "NOT NULL"}]
+  set generated "z INT AS(nullif(x+y,100)) $storage $constraint"
+  set schema "id $key PRIMARY KEY, x INT, y INT"
+  if {$operation eq "cell"} {append schema ", $generated"}
+  execsql "CREATE TABLE t($schema)"
+  execsql {
+    INSERT INTO t(id,x,y) VALUES(1,1,2);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+  }
+  if {$operation eq "cell"} {
+    execsql {UPDATE t SET x=50}
+  } else {
+    execsql "CREATE TABLE t2($schema, $generated)"
+    execsql {
+      INSERT INTO t2(id,x,y) SELECT id,x,y FROM t;
+      DROP TABLE t;
+      ALTER TABLE t2 RENAME TO t;
+    }
+  }
+  execsql {
+    CREATE INDEX iz ON t(z);
+    SELECT dolt_commit('-Am','main');
+    SELECT dolt_checkout('feature');
+  }
+  set y [expr {$outcome eq "valid" ? 5 : 50}]
+  if {$operation eq "insert"} {
+    execsql "INSERT INTO t(id,x,y) VALUES(2,50,$y)"
+  } elseif {$operation eq "update"} {
+    execsql "UPDATE t SET x=50,y=$y"
+  } else {
+    execsql "UPDATE t SET y=$y"
+  }
+  execsql {SELECT dolt_commit('-Am','feature')}
+  if {$direction eq "forward"} {
+    execsql {SELECT dolt_checkout('main')}
+    return feature
+  }
+  return main
+}
+
+foreach key {INTEGER INT} {
+  foreach storage {STORED VIRTUAL} {
+    foreach operation {insert update cell} {
+      foreach direction {forward reverse} {
+        set prefix generated-notnull-$key-$storage-$operation-$direction
+        foreach txn {autocommit explicit} {
+          set target [generated_notnull_setup $key $storage $operation invalid $direction]
+          set before [execsql {SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')}]
+          if {$txn eq "explicit"} {execsql {BEGIN}}
+          set name $prefix-$txn
+          do_test $name-merge {
+            set result [catchsql "SELECT dolt_merge('$target')"]
+            list [lindex $result 0] [string match {*constraint violations*} [lindex $result 1]]
+          } {1 1}
+          if {$txn eq "explicit"} {
+            set id [expr {$operation eq "insert" ? 2 : 1}]
+            do_execsql_test $name-violation {
+              SELECT violation_type,id,json_extract(violation_info,'$.Columns[0]')
+                FROM dolt_constraint_violations_t;
+              SELECT count(*) FROM t WHERE typeof(z)='null';
+            } [list {not null} $id z 1]
+            do_test $name-commit-blocked {
+              set result [catchsql {SELECT dolt_commit('-Am','invalid')}]
+              list [lindex $result 0] [string match {*dolt_constraint_violations*} [lindex $result 1]]
+            } {1 1}
+            do_execsql_test $name-verify {
+              DELETE FROM dolt_constraint_violations_t;
+              SELECT dolt_verify_constraints('--all');
+              SELECT count(*) FROM dolt_constraint_violations_t;
+            } {1 1}
+            do_execsql_test $name-repair {
+              UPDATE t SET x=40 WHERE typeof(z)='null';
+              SELECT dolt_verify_constraints('--all');
+              SELECT count(*) FROM dolt_constraint_violations;
+              PRAGMA integrity_check;
+            } {0 0 ok}
+            do_test $name-commit {
+              execsql {SELECT length(dolt_commit('-Am','resolved'))}
+            } {40}
+          } else {
+            do_test $name-restored {
+              list [expr {$before eq [execsql {
+                SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+              }]}] [execsql {SELECT count(*) FROM dolt_constraint_violations; PRAGMA integrity_check}]
+            } {1 {0 ok}}
+            db close
+            sqlite3 db [expr {$direction eq "forward" ? "test.db" : "test.db/feature"}]
+            do_test $name-reopen {
+              list [expr {$before eq [execsql {
+                SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+              }]}] [execsql {PRAGMA integrity_check}]
+            } {1 ok}
+          }
+        }
+        foreach outcome {valid nullable} {
+          set target [generated_notnull_setup $key $storage $operation $outcome $direction]
+          set name $prefix-$outcome
+          do_test $name-merge {
+            execsql "SELECT length(dolt_merge('$target'))"
+          } {40}
+          do_execsql_test $name-clean {
+            SELECT count(*) FROM dolt_constraint_violations;
+            SELECT quote(z) FROM t ORDER BY id DESC LIMIT 1;
+            SELECT quote(z) FROM t INDEXED BY iz ORDER BY id DESC LIMIT 1;
+            PRAGMA integrity_check;
+          } [list 0 [expr {$outcome eq "valid" ? 55 : "NULL"}] \
+                    [expr {$outcome eq "valid" ? 55 : "NULL"}] ok]
+        }
+      }
+    }
+  }
+}
+
+finish_test

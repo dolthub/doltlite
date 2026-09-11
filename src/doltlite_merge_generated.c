@@ -133,12 +133,9 @@ static int mergeGeneratedPrepare(
 #endif
 }
 
-/* A record taken wholesale from their side was written against their schema.
-** Relayout into the merged layout leaves a generated column the merged schema
-** adds holding its filled default rather than its expression value, so the
-** stored value is recomputed before it reaches rows or indexes. Returns their
-** record untouched, and *ppOwned zeroed, when the table stores none. */
-int mergeGeneratedTheirRow(
+/* Relayout can fill a newly added generated column with its default instead
+** of its expression value. Recompute before updating rows or indexes. */
+int mergeGeneratedSideRow(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   const u8 **ppVal, int *pnVal, u8 **ppOwned
 ){
