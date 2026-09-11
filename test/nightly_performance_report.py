@@ -82,6 +82,20 @@ def read_results(path):
     except OSError as exc:
         raise ValueError(f"unable to read results: {path}") from exc
     for line_number, line in enumerate(rows, 1):
+        if line.startswith("# "):
+            if results:
+                raise ValueError(
+                    f"{path}:{line_number}: metadata follows results"
+                )
+            columns = line[2:].split("\t", 1)
+            if len(columns) != 2 or columns[0] not in (
+                "suite",
+                "producer_id",
+            ):
+                raise ValueError(
+                    f"{path}:{line_number}: invalid result metadata"
+                )
+            continue
         columns = line.split("\t")
         if len(columns) != 4:
             raise ValueError(
