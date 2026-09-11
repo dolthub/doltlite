@@ -270,6 +270,36 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "workload mismatch"):
                 nightly_report.load_suite(directory, "int")
 
+    def test_reads_retry_promoted_vc_results(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_suite(directory, "vc")
+            path = directory / "vc.tsv"
+            path.write_text(
+                "# suite\tvc\n"
+                "# producer_id\tabc123\n"
+                + path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            suite = nightly_report.load_suite(directory, "vc")
+        self.assertEqual(len(suite.results), 1)
+        self.assertEqual(suite.results[0].test, "status_clean")
+        self.assertEqual(suite.results[0].baseline_us, 200000)
+        self.assertEqual(suite.results[0].candidate_us, 100000)
+
+    def test_rejects_metadata_after_vc_results(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_suite(directory, "vc")
+            path = directory / "vc.tsv"
+            path.write_text(
+                path.read_text(encoding="utf-8")
+                + "# producer_id\tabc123\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "metadata follows results"):
+                nightly_report.load_suite(directory, "vc")
+
     def test_rejects_noncontiguous_sample_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
