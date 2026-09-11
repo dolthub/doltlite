@@ -51,9 +51,12 @@ else bad "pragmas.md names unknown pragmas" "$(echo "$extra" | tr '\n' ' ')"; fi
 SCHEMA="CREATE TABLE p(id INTEGER PRIMARY KEY, name TEXT NOT NULL, n INT CHECK(n>0));
 CREATE TABLE c(id INTEGER PRIMARY KEY AUTOINCREMENT, pid INT REFERENCES p(id), v TEXT);
 CREATE INDEX c_pid ON c(pid);
+CREATE TABLE npk(a INT, b TEXT, c REAL, PRIMARY KEY(a,b));
+CREATE INDEX npk_c ON npk(c);
 CREATE VIEW v AS SELECT * FROM p;
 INSERT INTO p VALUES(1,'a',1),(2,'b',2);
-INSERT INTO c(pid,v) VALUES(1,'x'),(2,'y');"
+INSERT INTO c(pid,v) VALUES(1,'x'),(2,'y');
+INSERT INTO npk VALUES(1,'a',1.5),(2,'b',2.5);"
 
 # Read, write, read again. Pragmas with no write form just read.
 stmts_for() {
@@ -118,10 +121,10 @@ stmts_for() {
     synchronous)        echo "PRAGMA synchronous; PRAGMA synchronous=OFF; PRAGMA synchronous;" ;;
     integrity_check)    echo "PRAGMA integrity_check; PRAGMA integrity_check(p);" ;;
     quick_check)        echo "PRAGMA quick_check;" ;;
-    table_info)         echo "PRAGMA table_info(p); PRAGMA table_info(c);" ;;
-    table_xinfo)        echo "PRAGMA table_xinfo(p);" ;;
-    table_list)         echo "SELECT schema, name, type, ncol, wr, strict FROM pragma_table_list WHERE name IN ('p','c') ORDER BY name;" ;;
-    index_xinfo)        echo "PRAGMA index_xinfo(c_pid);" ;;
+    table_info)         echo "PRAGMA table_info(p); PRAGMA table_info(c); PRAGMA table_info(npk);" ;;
+    table_xinfo)        echo "PRAGMA table_xinfo(p); PRAGMA table_xinfo(npk);" ;;
+    table_list)         echo "SELECT schema, name, type, ncol, wr, strict FROM pragma_table_list WHERE name IN ('p','c','npk') ORDER BY name;" ;;
+    index_xinfo)        echo "PRAGMA index_xinfo(c_pid); PRAGMA index_xinfo(sqlite_autoindex_npk_1); PRAGMA index_xinfo(npk_c);" ;;
     writable_schema)    echo "PRAGMA writable_schema; PRAGMA writable_schema=1; PRAGMA writable_schema;" ;;
     schema_version)     echo "PRAGMA schema_version=500; PRAGMA schema_version;" ;;
     data_store_directory|lock_proxy_file) echo "SELECT 'platform';" ;;
@@ -152,6 +155,35 @@ for prag in $same_list; do
   if [ "$st_dl" = 99 ] || [ "$st_sq" = 99 ]; then bad "same_$prag" "doltlite: $dl  stock: $sq"
   elif [ "$dl" = "$sq" ] && [ "$st_dl" = "$st_sq" ]; then ok "same_$prag"
   else bad "same_$prag" "doltlite(rc=$st_dl): $dl  stock(rc=$st_sq): $sq"; fi
+done
+
+# Same intent, DoltLite mechanics: clustered non-integer PK rows in pragmas.md.
+adapted_asserted=""
+expect_adapted() {  # expect_adapted <name> <sql> <expected-output-joined-by-|>
+  local got st
+  adapted_asserted="$adapted_asserted $1"
+  run_on "$DOLTLITE" "$TMPDIR/dl.db" "$2" "$TMPDIR/dl.out"; st=$?
+  got=$(tr '\n' '|' <"$TMPDIR/dl.out")
+  if [ "$st" = 0 ] && [ "$got" = "$3" ]; then ok "adapted_$1"
+  else bad "adapted_$1" "got $got (rc=$st) expected $3 (rc=0)"; fi
+}
+expect_adapted table_info \
+  "PRAGMA table_info(npk);" \
+  "0|a|INT|1||1|1|b|TEXT|1||2|2|c|REAL|0||0|"
+expect_adapted table_xinfo \
+  "PRAGMA table_xinfo(npk);" \
+  "0|a|INT|1||1|0|1|b|TEXT|1||2|0|2|c|REAL|0||0|0|"
+expect_adapted table_list \
+  "SELECT wr FROM pragma_table_list WHERE name='npk';" \
+  "1|"
+expect_adapted index_xinfo \
+  "PRAGMA index_xinfo(sqlite_autoindex_npk_1); PRAGMA index_xinfo(npk_c);" \
+  "0|0|a|0|BINARY|1|1|1|b|0|BINARY|1|2|2|c|0|BINARY|0|0|2|c|0|BINARY|1|1|0|a|0|BINARY|0|2|1|b|0|BINARY|0|"
+for need in table_info table_xinfo table_list index_xinfo; do
+  case " $adapted_asserted " in
+    *" $need "*) ;;
+    *) bad "adapted_$need" "clustered-PK row in pragmas.md has no assertion" ;;
+  esac
 done
 
 # Accepted and inert: DoltLite reads back the documented value and exits 0.

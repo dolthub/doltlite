@@ -38,7 +38,7 @@ versioned table like any other.
 | `integrity_check`, `quick_check` | Run SQLite's row and index checks, then walk the chunk graph of the named tables and of every branch, tag, and working set. Missing or corrupt chunks count as errors. |
 | `table_info`, `table_xinfo` | Non-integer primary key columns report `notnull=1`, because clustered keys are `NOT NULL`. |
 | `table_list` | A table with a non-integer primary key reports `wr=1`; it is stored like a `WITHOUT ROWID` table. |
-| `index_xinfo` | The automatic index of a non-integer primary key returns no rows: the key is the table, not a separate index. |
+| `index_xinfo` | The automatic index of a non-integer primary key lists every table column. Secondary indexes trail the PK columns as non-key entries instead of `rowid`. |
 | `writable_schema` | Accepted, but `sqlite_master` still refuses writes. The catalog is a projection, not a table. |
 | `schema_version` | Increments on every schema change. Assigning a value is ignored. |
 | `data_version` | Changes when another connection commits, as in SQLite. |
