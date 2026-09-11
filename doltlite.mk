@@ -163,3 +163,17 @@ ifeq ($(DOLTLITE_PROLLY),1)
     -DSQLITE_ENABLE_STMTVTAB \
     -DSQLITE_ENABLE_UNKNOWN_SQL_FUNCTION
 endif
+
+# VEC1=1 compiles sqlite3Vec1Init into main.o; VEC1=0 drops vec1.o from the
+# link. Without a flags stamp make reuses main.o and the link fails. Remove
+# the objects when flags change: macOS /usr/bin/make is GNU 3.81 and only
+# compares timestamps to one second.
+DOLTLITE_FEATURE_STAMP = .doltlite-feature-flags
+DOLTLITE_FEATURE_STAMP_TEXT = PROLLY=$(DOLTLITE_PROLLY) VEC1=$(DOLTLITE_VEC1) REMOTES=$(DOLTLITE_ENABLE_REMOTES) CHUNK_SOURCE=$(DOLTLITE_ENABLE_CHUNK_SOURCE) PROLLY_CHECK=$(DOLTLITE_PROLLY_CHECK)
+_doltlite_feature_stamp_n := $(shell printf '%s\n' "$(DOLTLITE_FEATURE_STAMP_TEXT)" > $(DOLTLITE_FEATURE_STAMP).tmp && if cmp -s $(DOLTLITE_FEATURE_STAMP).tmp $(DOLTLITE_FEATURE_STAMP) 2>/dev/null; then rm -f $(DOLTLITE_FEATURE_STAMP).tmp; else mv $(DOLTLITE_FEATURE_STAMP).tmp $(DOLTLITE_FEATURE_STAMP) && rm -f main.o sqlite3.o; fi)
+main.o sqlite3.o: $(DOLTLITE_FEATURE_STAMP)
+
+clean-doltlite-feature-stamp:
+	rm -f $(DOLTLITE_FEATURE_STAMP) $(DOLTLITE_FEATURE_STAMP).tmp
+tidy: clean-doltlite-feature-stamp
+clean: clean-doltlite-feature-stamp

@@ -11,6 +11,8 @@ build-*/
 *.dSYM/
 
 # Amalgamation / lemon / build scratch
+.doltlite-feature-flags
+.doltlite-feature-flags.tmp
 tsrc/
 /Makefile
 /sqlite3.c
