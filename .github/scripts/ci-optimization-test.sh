@@ -6,6 +6,10 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 python3 "$script_dir/ci-build-failure-test.py"
 python3 "$script_dir/parallel-compile-test.py"
 python3 "$script_dir/macos-build-jobs-test.py"
+python3 "$script_dir/benchmark-build-test.py"
+python3 "$script_dir/benchmark-cache-key-test.py"
+python3 "$script_dir/../../test/sqllogictest_gate_test.py"
+python3 "$script_dir/../../test/sysbench_harness_test.py"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/payload/nested" "$work/profiles with spaces" "$work/bin"
