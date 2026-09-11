@@ -22,6 +22,13 @@ so space returns on the next `dolt_gc`. Collection is manual: unreachable
 chunks occupy space until then. Automatic chunk-WAL checkpoints are separate
 from GC.
 
+Traversal queues each reachable chunk once and reuses consumed queue slots.
+Its queue buffers stay below 64 MiB; larger frontiers spill to a temporary
+file and continue within the same operation. This bounds traversal buffering,
+not total GC memory: the visited hashes and chunk indexes still scale with
+the number of chunks. The original database remains authoritative until the
+complete compacted replacement is ready.
+
 `VACUUM` on a DoltLite database runs the same collection; `PRAGMA
 wal_checkpoint` does too. `VACUUM INTO` writes a compacted DoltLite-format
 copy; `:memory:` as the destination is refused. On an in-memory database the
