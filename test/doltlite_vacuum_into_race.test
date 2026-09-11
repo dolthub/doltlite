@@ -1,0 +1,125 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# VACUUM INTO checked the destination for emptiness and then streamed output
+# through the same handle. A peer could commit a whole database at that path
+# in between, and the output overwrote it while VACUUM INTO reported success.
+# The destination is now reserved for the duration, so one side is refused
+# and neither loses committed data.
+
+proc vacuum_race_setup {} {
+  forcedelete vir_source.db vir_target.db
+  forcedelete .vir_source.db-lock .vir_target.db-lock
+  sqlite3 src vir_source.db
+  src eval {
+    CREATE TABLE source_rows(id INT PRIMARY KEY);
+    INSERT INTO source_rows VALUES(1);
+    SELECT dolt_commit('-Am','source');
+  }
+  src close
+}
+
+# The peer runs on its own connection from inside the first write to the
+# destination, which is the exact window the old code left open.
+proc vacuum_race_peer {method path id offset amount} {
+  if {!$::vir_fired && [file tail $path] eq "vir_target.db" && $offset==0} {
+    set ::vir_fired 1
+    set ::vir_peer_rc [catch {
+      sqlite3 peer vir_target.db
+      peer eval {
+        CREATE TABLE peer_rows(id INT PRIMARY KEY, value TEXT);
+        INSERT INTO peer_rows VALUES(42,'preserve me');
+        SELECT dolt_commit('-Am','peer');
+      }
+    } ::vir_peer_msg]
+    catch {peer close}
+  }
+  return SQLITE_OK
+}
+
+vacuum_race_setup
+set ::vir_fired 0
+set ::vir_peer_rc 0
+set ::vir_peer_msg ""
+
+testvfs racevfs
+racevfs filter {xWrite}
+racevfs script vacuum_race_peer
+sqlite3 db vir_source.db -vfs racevfs
+set ::vir_vac_rc [catch {db eval {VACUUM INTO 'vir_target.db'}} ::vir_vac_msg]
+db close
+racevfs delete
+
+do_test doltlite_vacuum_into_race-1.0 {
+  set ::vir_fired
+} {1}
+
+# Exactly one side may win. The peer is refused while the destination is
+# reserved; if it ever did commit, its rows must still be there.
+do_test doltlite_vacuum_into_race-1.1 {
+  expr {$::vir_vac_rc==0 || $::vir_peer_rc==0}
+} {1}
+
+sqlite3 chk vir_target.db
+# Whichever side won, the destination holds that side's committed data whole.
+do_test doltlite_vacuum_into_race-1.2 {
+  if {$::vir_peer_rc==0} {
+    # The peer committed: its row must have survived the vacuum output.
+    list peer [chk eval {SELECT value FROM peer_rows WHERE id=42}]
+  } else {
+    # The peer was refused: the vacuum must have succeeded and landed.
+    list vacuum $::vir_vac_rc [chk eval {SELECT count(*) FROM source_rows}]
+  }
+} [expr {$::vir_peer_rc==0 ? {peer {preserve me}} : {vacuum 0 1}}]
+
+do_test doltlite_vacuum_into_race-1.3 {
+  chk eval {PRAGMA integrity_check}
+} {ok}
+chk close
+
+# The source is never touched by any of this.
+sqlite3 s2 vir_source.db
+do_test doltlite_vacuum_into_race-1.4 {
+  s2 eval {SELECT count(*) FROM source_rows}
+} {1}
+s2 close
+
+# Controls: an uncontended empty destination still works, and a destination
+# that already holds a database is still refused with its bytes intact.
+forcedelete vir_plain.db .vir_plain.db-lock
+sqlite3 db vir_source.db
+do_test doltlite_vacuum_into_race-2.0 {
+  db eval {VACUUM INTO 'vir_plain.db'}
+  set {} {}
+} {}
+db close
+sqlite3 p1 vir_plain.db
+do_test doltlite_vacuum_into_race-2.1 {
+  p1 eval {SELECT count(*) FROM source_rows}
+} {1}
+p1 close
+
+forcedelete vir_busy.db .vir_busy.db-lock
+sqlite3 ex vir_busy.db
+ex eval {
+  CREATE TABLE keep(a INT);
+  INSERT INTO keep VALUES(7);
+  SELECT dolt_commit('-Am','keep');
+}
+ex close
+sqlite3 db vir_source.db
+do_test doltlite_vacuum_into_race-2.2 {
+  list [catch {db eval {VACUUM INTO 'vir_busy.db'}} msg] $msg
+} {1 {output file already exists}}
+db close
+sqlite3 ex2 vir_busy.db
+do_test doltlite_vacuum_into_race-2.3 {
+  ex2 eval {SELECT a FROM keep}
+} {7}
+ex2 close
+
+forcedelete vir_source.db vir_target.db vir_plain.db vir_busy.db
+forcedelete .vir_source.db-lock .vir_target.db-lock
+forcedelete .vir_plain.db-lock .vir_busy.db-lock
+
+finish_test

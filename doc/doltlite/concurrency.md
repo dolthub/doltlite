@@ -26,6 +26,15 @@ For a DoltLite-format main database, the concurrency contract is:
   polling status from a second process cannot make a writer's `INSERT` or
   `dolt_commit` fail. Such a connection still sees a peer's uncommitted and
   committed work.
+<!-- contract: writer.vacuum_into_destination -->
+- **`VACUUM INTO` reserves its destination.** The destination is held for the
+  whole operation, so a peer cannot commit a database at that path between the
+  emptiness check and the output. One side is refused: `VACUUM INTO` reports
+  `output file is in use by another connection` if the destination is already
+  held, and a peer that arrives while it runs is refused instead. Neither side
+  reports success while overwriting the other's committed data. An
+  already-populated destination is still refused with `output file already
+  exists`.
 <!-- contract: writer.commit_busy_retry -->
 <!-- contract: writer.cross_thread_transaction -->
 - **One durable writer at a time.** A connection that holds an explicit write

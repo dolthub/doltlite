@@ -52,3 +52,4 @@ doltlite_readonly_status
 doltlite_reload_uncommitted_recent
 doltlite_recover_cacheflush_oom
 doltlite_rebase_messages
+doltlite_vacuum_into_race
