@@ -370,8 +370,8 @@ static int diffFilteredTableRoots(
   if( !pCur->zFilterTable ) return SQLITE_OK;
   if( strcmp(pCur->zFilterTable, "dolt_schemas")==0 ) return SQLITE_NOTFOUND;
 
-  rc = doltliteLoadTableRootByName(db, pChildCat, pCur->zFilterTable,
-                                   &childRoot, 0, &childSchema);
+  rc = doltliteLoadTableRootByNameExact(db, pChildCat, pCur->zFilterTable,
+                                       &childRoot, 0, &childSchema);
   if( rc==SQLITE_NOTFOUND ){
     rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
     if( rc!=SQLITE_OK ) return rc;
@@ -385,8 +385,8 @@ static int diffFilteredTableRoots(
     memset(&childSchema, 0, sizeof(childSchema));
   }
 
-  rc = doltliteLoadTableRootByName(db, pParentCat, pCur->zFilterTable,
-                                   &parentRoot, 0, &parentSchema);
+  rc = doltliteLoadTableRootByNameExact(db, pParentCat, pCur->zFilterTable,
+                                       &parentRoot, 0, &parentSchema);
   if( rc==SQLITE_NOTFOUND ){
     rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
     if( rc!=SQLITE_OK ) return rc;
@@ -415,8 +415,8 @@ static int diffFilteredTableRoots(
       doltliteFreeCatalog(aChild, nChild);
       return rc;
     }
-    e = diffFindTableByNameNoCase(aChild,nChild,pCur->zFilterTable);
-    p = diffFindTableByNameNoCase(aParent,nParent,pCur->zFilterTable);
+    e = doltliteFindTableByName(aChild,nChild,pCur->zFilterTable);
+    p = doltliteFindTableByName(aParent,nParent,pCur->zFilterTable);
     if( e && !p ){
       pRen = diffRenamePartner(aParent,nParent,e,aChild,nChild);
       if( pRen ){

@@ -2246,10 +2246,11 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   return SQLITE_OK;
 }
 
-int doltliteLoadTableRootByName(
+static int catalogLoadTableRootByName(
   sqlite3 *db,
   const ProllyHash *pCatHash,
   const char *zTableName,
+  int bExact,
   ProllyHash *pRoot,
   u8 *pFlags,
   ProllyHash *pSchemaHash
@@ -2326,7 +2327,8 @@ int doltliteLoadTableRootByName(
       if( !found
        && nType==5 && memcmp(pType, "table", 5)==0
        && nName==nWant
-       && sqlite3_strnicmp((const char*)pName, zTableName, nName)==0 ){
+       && (bExact ? memcmp(pName, zTableName, (size_t)nName)==0
+                  : sqlite3_strnicmp((const char*)pName, zTableName, nName)==0) ){
         found = 1;
         memcpy(&foundRoot, &root, sizeof(foundRoot));
         memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
@@ -2348,7 +2350,8 @@ int doltliteLoadTableRootByName(
       pName = q;
       q += nLen;
       if( !found && nLen==nWant
-       && sqlite3_strnicmp((const char*)pName, zTableName, nLen)==0 ){
+       && (bExact ? memcmp(pName, zTableName, (size_t)nLen)==0
+                  : sqlite3_strnicmp((const char*)pName, zTableName, nLen)==0) ){
         found = 1;
         memcpy(&foundRoot, &root, sizeof(foundRoot));
         memcpy(&foundSchemaHash, &schemaHash, sizeof(foundSchemaHash));
@@ -2367,6 +2370,33 @@ int doltliteLoadTableRootByName(
   if( pFlags ) *pFlags = foundFlags;
   if( pSchemaHash ) memcpy(pSchemaHash, &foundSchemaHash, sizeof(*pSchemaHash));
   return SQLITE_OK;
+}
+
+/* Table-name arguments resolve case-insensitively, matching Dolt. */
+int doltliteLoadTableRootByName(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  return catalogLoadTableRootByName(db, pCatHash, zTableName, 0,
+                                    pRoot, pFlags, pSchemaHash);
+}
+
+/* For a filter on a table_name column, where the comparison the caller wrote
+** is an ordinary BINARY one and a case variant must not match. */
+int doltliteLoadTableRootByNameExact(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+){
+  return catalogLoadTableRootByName(db, pCatHash, zTableName, 1,
+                                    pRoot, pFlags, pSchemaHash);
 }
 
 int doltliteLoadTableRootById(

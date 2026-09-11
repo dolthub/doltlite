@@ -298,6 +298,41 @@ run_test "status_table_added_does_not_list_untouched_view" \
   "SELECT group_concat(table_name||'|'||staged||'|'||status) FROM dolt_status;" \
   "later|0|new table" "$DB19"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19"
+# table_name is an ordinary TEXT column, so a filter on it compares like any
+# other BINARY comparison and a case variant must not match. Table-name
+# *arguments* stay case-insensitive, matching Dolt, but report the catalog's
+# spelling rather than echoing what the caller typed.
+DB20=/tmp/test_diff_case_$$.db; rm -f "$DB20"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','init');
+INSERT INTO t VALUES(2,'b');" | $DOLTLITE "$DB20" > /dev/null 2>&1
+
+run_test "diff_filter_exact_case_matches" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name='t';" \
+  "2" "$DB20"
+run_test "diff_filter_wrong_case_matches_nothing" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name='T';" \
+  "0" "$DB20"
+run_test "diff_filter_in_list_does_not_double" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name IN ('T','t');" \
+  "2" "$DB20"
+run_test "diff_filter_never_invents_a_table" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name NOT IN (SELECT name FROM sqlite_master WHERE type='table');" \
+  "0" "$DB20"
+# Dolt is inconsistent across these three and DoltLite matches it surface by
+# surface: dolt_diff_stat echoes the caller's spelling, while dolt_patch and
+# dolt_diff_summary report the catalog's. Verified against Dolt 2.3.3.
+run_test "diff_stat_arg_case_insensitive_echoes_caller" \
+  "SELECT table_name FROM dolt_diff_stat('HEAD','WORKING','T');" \
+  "T" "$DB20"
+run_test "diff_summary_arg_is_canonical" \
+  "SELECT to_table_name FROM dolt_diff_summary('HEAD','WORKING','T');" \
+  "t" "$DB20"
+run_test "patch_arg_is_canonical" \
+  "SELECT DISTINCT table_name FROM dolt_patch('HEAD','WORKING','T');" \
+  "t" "$DB20"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 
 dltest_finish

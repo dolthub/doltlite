@@ -835,6 +835,15 @@ int doltliteLoadTableRootByName(
   ProllyHash *pSchemaHash
 );
 
+int doltliteLoadTableRootByNameExact(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  ProllyHash *pRoot,
+  u8 *pFlags,
+  ProllyHash *pSchemaHash
+);
+
 int doltliteLoadTableRootById(
   sqlite3 *db,
   const ProllyHash *pCatHash,
