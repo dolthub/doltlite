@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import shutil
 import tempfile
 import textwrap
 
@@ -12,6 +13,8 @@ cases = (
     ("actions/checked-probes/action.yml", None, "Build standalone Unix test probes", "ubuntu"),
     ("actions/checked-probes/action.yml", None, "Build standalone Unix test probes", "macos"),
     ("workflows/ci-build.yml", "tsan-build", "Build", "ubuntu"),
+    ("actions/asan-build/action.yml", None, "Build", "ubuntu"),
+    ("actions/asan-build/action.yml", None, "Build", "macos"),
 )
 stub = """#!/usr/bin/env bash
 set -eu
@@ -34,6 +37,10 @@ def run(script, fail_at, warning, errexit):
         (root / "build").mkdir()
         (root / "examples/go").mkdir(parents=True)
         (root / "bin").mkdir()
+        (root / ".github/scripts").mkdir(parents=True)
+        shutil.copy(github_dir / "scripts/parallel-compile.sh", root / ".github/scripts")
+        (root / "bin/sysctl").write_text("#!/bin/sh\necho 1\n")
+        (root / "bin/sysctl").chmod(0o755)
         for command in ("make", "cc", "gcc", "clang", "go"):
             path = root / "bin" / command
             path.write_text(stub)
@@ -44,7 +51,9 @@ def run(script, fail_at, warning, errexit):
                    COMMAND_LOG=str(root / "commands"), FAIL_AT=str(fail_at),
                    EMIT_WARNING=str(warning), PACKAGE_MARKER=str(root / "package"),
                    CFLAGS="-O2", TSAN_CFLAGS="-O1 -fsanitize=thread",
-                   TSAN_LDFLAGS="-fsanitize=thread")
+                   TSAN_LDFLAGS="-fsanitize=thread",
+                   ASAN_CFLAGS="-O1 -fsanitize=address,undefined",
+                   ASAN_LDFLAGS="-fsanitize=address,undefined")
         result = subprocess.run(
             ["bash", *(["-e"] if errexit else []), str(path)],
             cwd=root, env=env, capture_output=True, text=True, timeout=30,

@@ -123,11 +123,42 @@ jobs:
         go-version: '1.23'
         cache: false
 
+    - name: Set up macOS package caches
+      if: matrix.platform == 'macos'
+      id: package-cache
+      run: |
+        brew install ccache
+        cache_key=$(bash .github/scripts/macos-package-cache-key.sh)
+        echo "key=$cache_key" >> "$GITHUB_OUTPUT"
+        echo "go-build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+        echo "go-mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore macOS package caches
+      if: matrix.platform == 'macos'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.package-cache.outputs.go-build }}
+          ${{ steps.package-cache.outputs.go-mod }}
+          ~/.cargo/registry
+          ~/.cargo/git
+          ${{ runner.temp }}/doltlite-package-target
+          ${{ runner.temp }}/doltlite-ccache
+        key: macos-packages-v1-${{ runner.arch }}-${{ steps.package-cache.outputs.key }}-${{ hashFiles('packaging/go/**', 'packaging/rust/**', 'build/sqlite3.c', 'build/sqlite3.h') }}
+        restore-keys: |
+          macos-packages-v1-${{ runner.arch }}-${{ steps.package-cache.outputs.key }}-
+
     - name: Smoke test the doltlite-driver module
       if: matrix.platform != 'windows'
       shell: bash
       run: |
         chmod +x packaging/go/assemble.sh packaging/go/test-package.sh
+        if [ "${{ matrix.platform }}" = "macos" ]; then
+          export DOLTLITE_PACKAGE_WORK_ROOT="$RUNNER_TEMP/doltlite-packages"
+          export CCACHE_DIR="$RUNNER_TEMP/doltlite-ccache"
+          export CCACHE_MAXSIZE=128M CCACHE_COMPILERCHECK=content
+          export CC="ccache ${CC:-$(go env CC)}"
+        fi
         bash packaging/go/test-package.sh build
       timeout-minutes: 20
 
@@ -136,7 +167,17 @@ jobs:
       shell: bash
       run: |
         chmod +x packaging/rust/assemble.sh packaging/rust/test-package.sh
+        if [ "${{ matrix.platform }}" = "macos" ]; then
+          export DOLTLITE_PACKAGE_WORK_ROOT="$RUNNER_TEMP/doltlite-packages"
+          export CCACHE_DIR="$RUNNER_TEMP/doltlite-ccache"
+          export CCACHE_MAXSIZE=128M CCACHE_COMPILERCHECK=content
+          export CC="ccache ${CC:-cc}"
+          export DOLTLITE_PACKAGE_TARGET_DIR="$RUNNER_TEMP/doltlite-package-target"
+        fi
         bash packaging/rust/test-package.sh build
+        if [ "${{ matrix.platform }}" = "macos" ]; then
+          bash packaging/rust/test-cache.sh
+        fi
       timeout-minutes: 25
 
     # The step above runs on whatever stable the runner ships, which cannot
@@ -195,7 +236,9 @@ jobs:
 
     - name: Doltlite feature tests
       if: matrix.platform == 'macos'
-      run: cd build && bash ../test/run_doltlite_tests.sh
+      run: |
+        cd build
+        DOLTLITE_REGRESSION_JOBS=$(sysctl -n hw.logicalcpu) bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
 
     - name: Doltlite timing and scale tests

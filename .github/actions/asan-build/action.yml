@@ -35,10 +35,14 @@ runs:
     shell: bash -e {0}
   - name: Build
     run: |
+      set -eo pipefail
       cd build
-      set -o pipefail
+      make_jobs=()
+      if [ "${{ inputs.platform }}" = "macos" ]; then
+        make_jobs=(-j"$(sysctl -n hw.logicalcpu)")
+      fi
       {
-        make CFLAGS="$ASAN_CFLAGS" LDFLAGS="$ASAN_LDFLAGS" \
+        make "${make_jobs[@]}" CFLAGS="$ASAN_CFLAGS" LDFLAGS="$ASAN_LDFLAGS" \
           doltlite libdoltlite.a
         make DOLTLITE_PROLLY=0 sqlite3
         cc $ASAN_CFLAGS -I. -I../src \

@@ -18,7 +18,12 @@ esac
 
 if [ "${DOLTLITE_REGRESSION_PREBUILT:-0}" != "1" ]; then
   source "$script_dir/lib/build_artifacts.sh"
-  make -C "$build_dir" libdoltlite.a
+  make_args=(-C "$build_dir" libdoltlite.a)
+  if [ -n "${DOLTLITE_REGRESSION_JOBS:-}" ]; then
+    [[ "$DOLTLITE_REGRESSION_JOBS" =~ ^[1-9][0-9]*$ ]] || exit 1
+    make_args=(-j"$DOLTLITE_REGRESSION_JOBS" "${make_args[@]}")
+  fi
+  make "${make_args[@]}"
   dl_check_archive_flags "$build_dir/libdoltlite.a" "${CFLAGS:-"-g"}"
   "${CC:-cc}" ${CFLAGS:-"-g"} -I"$build_dir" -I"$repo_root/src" \
     -o "$build_dir/doltlite_regression_test_c" \

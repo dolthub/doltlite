@@ -15,8 +15,15 @@ BUILD_DIR="$(cd "${1:-$ROOT/build}" && pwd)"
 
 command -v go >/dev/null || { echo "ERROR: go is required" >&2; exit 1; }
 
-STAGE="$(mktemp -d)"
-CONSUMER="$(mktemp -d)"
+if [ -n "${DOLTLITE_PACKAGE_WORK_ROOT:-}" ]; then
+  mkdir -p "$DOLTLITE_PACKAGE_WORK_ROOT/go"
+  STAGE="$DOLTLITE_PACKAGE_WORK_ROOT/go/stage"
+  CONSUMER="$DOLTLITE_PACKAGE_WORK_ROOT/go/consumer"
+  mkdir "$STAGE" "$CONSUMER"
+else
+  STAGE="$(mktemp -d)"
+  CONSUMER="$(mktemp -d)"
+fi
 trap 'chmod -R u+w "$STAGE" "$CONSUMER" 2>/dev/null; rm -rf "$STAGE" "$CONSUMER"' EXIT
 
 bash "$PKG_DIR/assemble.sh" "0.0.0" "$STAGE/pkg" "$BUILD_DIR"
