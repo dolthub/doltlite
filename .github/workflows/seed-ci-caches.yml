@@ -102,6 +102,21 @@ jobs:
           build-essential fossil unixodbc-dev
     - uses: ./.github/actions/sqllogictest-cache
 
+  development-debug:
+    if: >-
+      github.event_name != 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: seed-development-debug-cache
+      cancel-in-progress: false
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+    - uses: ./.github/actions/development-debug-build
+
   macos-packages:
     if: >-
       github.event_name != 'push' &&
@@ -202,7 +217,7 @@ jobs:
   # A whole-run cancellation kills this job too, which is what the weekly
   # nightly-heartbeat audit catches from outside.
   watchdog:
-    needs: [benchmark, compatibility, sqllogictest, macos-packages, macos-builds]
+    needs: [benchmark, compatibility, sqllogictest, development-debug, macos-packages, macos-builds]
     if: failure() || cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -226,6 +241,7 @@ jobs:
           echo "| benchmark base build | ${{ needs.benchmark.result }} |"
           echo "| compatibility references | ${{ needs.compatibility.result }} |"
           echo "| SQLLogicTest reference | ${{ needs.sqllogictest.result }} |"
+          echo "| All-Debug compiler cache | ${{ needs.development-debug.result }} |"
           echo "| macOS package caches | ${{ needs.macos-packages.result }} |"
           echo "| macOS compiler caches | ${{ needs.macos-builds.result }} |"
           echo ""
