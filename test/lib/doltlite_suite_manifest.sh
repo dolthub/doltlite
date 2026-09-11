@@ -62,6 +62,7 @@ doltlite_shared_memdb.sh
 doltlite_gc.sh
 doltlite_gc_commit_classify.sh
 doltlite_gc_session_state.sh
+doltlite_gc_history.sh
 doltlite_vacuum.sh
 doltlite_structural.sh
 chunk_physical_dups_test.sh
@@ -209,6 +210,7 @@ doltlite_reset.sh
 doltlite_working_set.sh
 doltlite_gc.sh
 doltlite_gc_session_state.sh
+doltlite_gc_history.sh
 doltlite_gc_scale.sh
 doltlite_vacuum.sh
 doltlite_memory_db.sh

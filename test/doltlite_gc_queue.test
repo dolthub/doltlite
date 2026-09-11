@@ -1,0 +1,205 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite-gc-queue
+set saved_limit [expr {[info exists env(DOLTLITE_GC_QUEUE_LIMIT)] ? $env(DOLTLITE_GC_QUEUE_LIMIT) : ""}]
+set had_limit [info exists env(DOLTLITE_GC_QUEUE_LIMIT)]
+unset -nocomplain env(DOLTLITE_GC_QUEUE_LIMIT)
+
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER NOT NULL);
+  WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000)
+  INSERT INTO t SELECT x, 0 FROM c;
+  SELECT dolt_commit('-Am', 'seed');
+  SELECT dolt_tag('seed');
+  SELECT dolt_branch('old');
+}
+for {set i 0} {$i<40} {incr i} {
+  db eval {
+    UPDATE t SET v=v+1 WHERE id%100=0;
+    SELECT dolt_commit('-Am', 'change');
+  }
+}
+set original_log [db eval {SELECT commit_hash FROM dolt_log ORDER BY commit_hash}]
+set original_head [db one {SELECT dolt_hashof('HEAD')}]
+db close
+file copy -force test.db gc-queue-base.db
+
+proc gc_queue_vfs {method filename args} {
+  if {$filename ne ""} {return SQLITE_OK}
+  incr ::events($method)
+  if {$method eq $::fail_method && $::events($method)==$::fail_at} {
+    if {$::fail_code eq "interrupt"} {
+      db interrupt
+    } elseif {$::fail_code eq "SQLITE_FULL"} {
+      gcqueue full 1 1
+    } elseif {$::fail_code eq "SQLITE_CANTOPEN"} {
+      gcqueue cantopenerr 1 1
+    } else {
+      return $::fail_code
+    }
+  }
+  return SQLITE_OK
+}
+proc gc_queue_open {} {
+  catch {db close}
+  forcedelete test.db
+  file copy -force gc-queue-base.db test.db
+  sqlite3 db test.db -vfs gcqueue
+  array set ::events {xOpen 0 xRead 0 xWrite 0 xClose 0}
+  set ::fail_method ""
+  set ::fail_at 0
+  set ::fail_code SQLITE_OK
+}
+proc gc_queue_state {} {
+  list [db eval {SELECT count(*),sum(v) FROM t}] \
+       [expr {[db eval {SELECT commit_hash FROM dolt_log ORDER BY commit_hash}] eq $::original_log}] \
+       [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $::original_head}] \
+       [db eval {PRAGMA integrity_check}]
+}
+proc gc_queue_bytes {} {
+  set fd [open test.db rb]
+  set bytes [read $fd]
+  close $fd
+  return $bytes
+}
+
+testvfs gcqueue
+gcqueue filter {xOpen xRead xWrite xClose}
+gcqueue script gc_queue_vfs
+
+foreach limit {1 8 256 1024 1048576} {
+  set env(DOLTLITE_GC_QUEUE_LIMIT) $limit
+  foreach {name sql} {
+    vacuum {VACUUM}
+    gc {SELECT dolt_gc()}
+    checkpoint {PRAGMA wal_checkpoint}
+    into {VACUUM INTO 'gc-queue-copy.db'}
+  } {
+    gc_queue_open
+    forcedelete gc-queue-copy.db
+    set before [gc_queue_bytes]
+    do_test $limit.$name.run {
+      db eval $sql
+      gc_queue_state
+    } {{10000 4000} 1 1 ok}
+    do_test $limit.$name.spill {
+      if {$limit<=8} {
+        list [expr {$events(xOpen)==1}] [expr {$events(xWrite)>2}] \
+             [expr {$events(xRead)>2}] [expr {$events(xClose)==1}]
+      } elseif {$limit==1048576} {
+        list [expr {$events(xOpen)==0}] 1 1 [expr {$events(xClose)==0}]
+      } else {
+        list 1 1 1 [expr {$events(xOpen)==$events(xClose)}]
+      }
+    } {1 1 1 1}
+    if {$name eq "into"} {
+      do_test $limit.$name.source {
+        expr {[gc_queue_bytes] eq $before}
+      } 1
+      db close
+      sqlite3 db gc-queue-copy.db
+    } else {
+      db close
+      sqlite3 db test.db
+    }
+    do_test $limit.$name.reopen {gc_queue_state} {{10000 4000} 1 1 ok}
+    do_test $limit.$name.history {
+      db eval {SELECT dolt_checkout('old')}
+      set old [db eval {SELECT count(*),sum(v) FROM t}]
+      db eval {SELECT dolt_checkout('seed', '-b', 'from_tag')}
+      list $old [db eval {SELECT count(*),sum(v) FROM t}]
+    } {{10000 0} {10000 0}}
+    db close
+  }
+}
+
+set env(DOLTLITE_GC_QUEUE_LIMIT) 8
+foreach {method at code expected} {
+  xOpen 1 SQLITE_CANTOPEN SQLITE_CANTOPEN
+  xWrite 1 SQLITE_FULL SQLITE_FULL
+  xWrite 3 SQLITE_IOERR SQLITE_IOERR
+  xRead 1 SQLITE_IOERR SQLITE_IOERR
+  xRead 3 SQLITE_IOERR SQLITE_IOERR
+  xRead 2 interrupt SQLITE_INTERRUPT
+} {
+  foreach {name sql} {vacuum VACUUM gc {SELECT dolt_gc()} into {VACUUM INTO 'gc-queue-copy.db'}} {
+    gc_queue_open
+    forcedelete gc-queue-copy.db
+    set before [gc_queue_bytes]
+    set fail_method $method
+    set fail_at $at
+    set fail_code $code
+    do_test fail.$method.$at.$name.error {
+      set caught [catch {db eval $sql}]
+      list $caught [sqlite3_errcode db] [expr {$events($method)>=$at}]
+    } [list 1 $expected 1]
+    set fail_method ""
+    gcqueue full
+    gcqueue cantopenerr
+    do_test fail.$method.$at.$name.intact {
+      list [expr {[gc_queue_bytes] eq $before}] [gc_queue_state] \
+        [expr {$method eq "xOpen" || $events(xClose)==1}] \
+        [expr {![file exists gc-queue-copy.db]}]
+    } {1 {{10000 4000} 1 1 ok} 1 1}
+    do_test fail.$method.$at.$name.retry {
+      db eval $sql
+      gc_queue_state
+    } {{10000 4000} 1 1 ok}
+  }
+}
+
+gc_queue_open
+do_test session.staged {
+  db eval {
+    INSERT INTO t VALUES(10001, 7);
+    SELECT dolt_add('-A');
+    UPDATE t SET v=9 WHERE id=10001;
+  }
+  set status [db eval {SELECT * FROM dolt_status}]
+  db eval {SELECT dolt_gc()}
+  list [expr {[db eval {SELECT * FROM dolt_status}] eq $status}] \
+       [db one {SELECT v FROM t WHERE id=10001}]
+} {1 9}
+do_test session.commit {
+  db eval {SELECT dolt_commit('-m', 'staged'); SELECT dolt_reset('--hard')}
+  db eval {SELECT v FROM t WHERE id=10001}
+} {7}
+
+db close
+gcqueue delete
+forcedelete test.db
+sqlite3 db test.db
+set env(DOLTLITE_GC_QUEUE_LIMIT) 1
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'seed');
+  SELECT dolt_commit('-Am', 'seed');
+  UPDATE t SET v='tip';
+  SELECT dolt_commit('-Am', 'tip');
+}
+set oom_log [db eval {SELECT commit_hash FROM dolt_log ORDER BY commit_hash}]
+source $testdir/malloc_common.tcl
+faultsim_save_and_close
+do_faultsim_test oom -faults oom-* -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {VACUUM}
+} -test {
+  faultsim_test_result {0 {}} {1 {out of memory}}
+  db close
+  sqlite3 db test.db
+  if {[db eval {SELECT * FROM t}] ne {1 tip}} {error "changed rows"}
+  if {[db eval {SELECT commit_hash FROM dolt_log ORDER BY commit_hash}] ne $::oom_log} {
+    error "changed history"
+  }
+  faultsim_integrity_check
+}
+db close
+forcedelete gc-queue-base.db gc-queue-copy.db
+if {$had_limit} {
+  set env(DOLTLITE_GC_QUEUE_LIMIT) $saved_limit
+} else {
+  unset env(DOLTLITE_GC_QUEUE_LIMIT)
+}
+finish_test
