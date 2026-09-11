@@ -983,6 +983,29 @@ SELECT CONCAT('LOG|P|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_fea
 SELECT CONCAT('LOG|T|', count(*)) FROM t;
 "
 
+for action in pick reword squash fixup drop; do
+  oracle_error_reopen "interactive_invalid_${action}_hash_repair" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action='$action',
+  commit_hash=SUBSTR('0000000000000000000000000000000000000000',
+                     1, LENGTH(dolt_hashof('HEAD')))
+  WHERE rebase_order=2;
+SELECT dolt_rebase('--continue');
+" "
+SELECT dolt_checkout('dolt_rebase_feat');
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|P|', count(*)) FROM dolt_rebase;
+SELECT CONCAT('LOG|BEFORE|', id) FROM t ORDER BY id;
+UPDATE dolt_rebase SET commit_hash=(
+  SELECT commit_hash FROM dolt_log('feat') WHERE message='f2'
+) WHERE rebase_order=2;
+SELECT dolt_rebase('--continue');
+SELECT CONCAT('LOG|M|', REPLACE(message, CHAR(10), ' | ')) FROM dolt_log;
+SELECT CONCAT('LOG|AFTER|', id) FROM t ORDER BY id;
+"
+done
+
 echo "--- rebase dissolves merge commits in range ---"
 
 MERGE_DISSOLVE_SETUP="

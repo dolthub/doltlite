@@ -1878,6 +1878,30 @@ static void doltliteRebaseInteractiveContinue(
     goto abort_err_silent;
   }
 
+  for(i=0; i<nPlan; i++){
+    DoltliteCommit commit;
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &aPlan[i].commitHash, &commit);
+    doltliteCommitClear(&commit);
+    if( rc!=SQLITE_OK ){
+      if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
+        char zHex[PROLLY_HASH_SIZE*2+1];
+        char *zMsg;
+        doltliteHashToHex(&aPlan[i].commitHash, zHex);
+        zMsg = sqlite3_mprintf("invalid commit hash: %s", zHex);
+        if( zMsg ){
+          sqlite3_result_error(context, zMsg, -1);
+          sqlite3_free(zMsg);
+        }else{
+          sqlite3_result_error_nomem(context);
+        }
+      }else{
+        sqlite3_result_error_code(context, rc);
+      }
+      goto abort_err_silent;
+    }
+  }
+
   /* Claim before replay so a concurrent --abort loses with "no rebase
   ** in progress" rather than both failing mid-recovery. */
   rc = rebaseRetryBranchOp(db, rebaseClaimActiveEnd, zWorking);

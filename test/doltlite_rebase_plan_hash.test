@@ -1,0 +1,88 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc rebase_hash_setup {} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(0);
+    SELECT dolt_commit('-Am', 'init');
+    SELECT dolt_checkout('-b', 'feat');
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-am', 'f1');
+    INSERT INTO t VALUES(2);
+    SELECT dolt_commit('-am', 'f2');
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(10);
+    SELECT dolt_commit('-am', 'main');
+    SELECT dolt_checkout('feat');
+    SELECT dolt_rebase('-i', 'main');
+  }
+}
+
+foreach badhash {
+  0000000000000000000000000000000000000000
+  ffffffffffffffffffffffffffffffffffffffff
+  catalog
+} {
+  foreach {action messages rows} {
+    pick {f2 f1 main init} {0 1 2 10}
+    reword {f2 f1 main init} {0 1 2 10}
+    squash {{f1
+
+f2} main init} {0 1 2 10}
+    fixup {f1 main init} {0 1 2 10}
+    drop {f1 main init} {0 1 10}
+  } {
+    rebase_hash_setup
+    set invalid $badhash
+    if {$badhash eq "catalog"} {
+      set invalid [db one {SELECT dolt_hashof_catalog('main')}]
+    }
+    set feature [db one {SELECT dolt_hashof('feat')}]
+    set working [db one {SELECT dolt_hashof('HEAD')}]
+    set valid [db one {SELECT commit_hash FROM dolt_rebase WHERE rebase_order=2}]
+    db eval {
+      UPDATE dolt_rebase SET action=$action, commit_hash=$invalid
+        WHERE rebase_order=2;
+    }
+    set name rebase-plan-hash-$action-[string index $badhash 0]
+    do_catchsql_test $name-error {
+      SELECT dolt_rebase('--continue');
+    } [list 1 "invalid commit hash: $invalid"]
+    do_test $name-intact {
+      list [db one {SELECT active_branch()}] \
+           [db one {SELECT count(*) FROM dolt_rebase}] \
+           [expr {$feature eq [db one {SELECT dolt_hashof('feat')}]}] \
+           [expr {$working eq [db one {SELECT dolt_hashof('HEAD')}]}] \
+           [execsql {SELECT id FROM t ORDER BY id}]
+    } {dolt_rebase_feat 2 1 1 {0 10}}
+    do_test $name-repair {
+      db eval {UPDATE dolt_rebase SET commit_hash=$valid WHERE rebase_order=2}
+      execsql {SELECT dolt_rebase('--continue')}
+      execsql {SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%'}
+    } $messages
+    do_execsql_test $name-rows {
+      SELECT id FROM t ORDER BY id;
+    } $rows
+  }
+}
+
+rebase_hash_setup
+set feature [db one {SELECT dolt_hashof('feat')}]
+execsql {
+  UPDATE dolt_rebase SET commit_hash='0000000000000000000000000000000000000000'
+    WHERE rebase_order=2;
+}
+do_catchsql_test rebase-plan-hash-abort-error {
+  SELECT dolt_rebase('--continue');
+} {1 {invalid commit hash: 0000000000000000000000000000000000000000}}
+do_test rebase-plan-hash-abort {
+  execsql {SELECT dolt_rebase('--abort')}
+  list [db one {SELECT active_branch()}] \
+       [expr {$feature eq [db one {SELECT dolt_hashof('HEAD')}]}] \
+       [db one {SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'}] \
+       [execsql {SELECT id FROM t ORDER BY id}]
+} {feat 1 0 {0 1 2}}
+
+finish_test
