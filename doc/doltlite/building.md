@@ -35,8 +35,10 @@ bash test/build_stock_reference.sh build-stock build/doltlite
 ```
 
 Vec1 is built into native DoltLite by default. Use `make DOLTLITE_VEC1=0` to
-omit it. Compile the DoltLite amalgamation with `-DDOLTLITE_VEC1=1` to include
-vec1; otherwise it can be built and loaded as an extension.
+omit it. Changing `DOLTLITE_VEC1`, `DOLTLITE_ENABLE_REMOTES`, or
+`DOLTLITE_ENABLE_CHUNK_SOURCE` rebuilds `main.o`; a clean is not required.
+Compile the DoltLite amalgamation with `-DDOLTLITE_VEC1=1` to include vec1;
+otherwise it can be built and loaded as an extension.
 
 ## WebAssembly (`ext/wasm`)
 
