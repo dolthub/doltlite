@@ -47,7 +47,7 @@ the SQL transaction; see [transactions.md](transactions.md).
 
 | Error | Cause |
 |---|---|
-| `dolt_commit requires a message: SELECT dolt_commit('-m', 'msg')` | no `-m`, or empty message |
+| `dolt_commit requires a message: SELECT dolt_commit('-m', 'msg')` | no `-m` unless `--amend`, or empty message |
 | `nothing to commit, working tree clean (use dolt_add to stage changes)` | nothing staged and no `-a`/`-A` |
 | `Author not formatted correctly. Use 'Name <author@example.com>' format` | bad `--author` |
 | `cannot commit: unresolved merge conflicts. Use dolt_conflicts_resolve() first.` | see [dolt_merge.md](dolt_merge.md) |
