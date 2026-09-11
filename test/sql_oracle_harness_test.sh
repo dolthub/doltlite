@@ -24,8 +24,11 @@ EOF
 cp "$DOLTLITE" "$SQLITE3"
 chmod +x "$DOLTLITE" "$SQLITE3"
 
+checks=0
+
 check_case() {
   local name="$1" want_fail="$2" kind="$3" error="${4-}"
+  checks=$((checks+1))
   local pass=0 fail=0
   if [ "$kind" = error ]; then
     oracle_error "$name" "SELECT 42;" "$error" > "$SQL_ORACLE_TMP/case.log"
@@ -74,8 +77,27 @@ export candidate_rc=0 reference_rc=0 candidate_output=42 reference_output=42 exp
 check_case unsafe_flag_preserved 0 unsafe
 unset expect_unsafe
 
+sed() {
+  printf 'normalized\n' >> "$SQL_ORACLE_TMP/normalizations"
+  command sed "$@"
+}
+export candidate_output=$'first\nsecond (19)\n\n' reference_output=$'first\nsecond (19)\n'
+check_case identical_multiline_output 0 success
+[ ! -e "$SQL_ORACLE_TMP/normalizations" ]
+export candidate_output=$'first (19)\nsecond' reference_output=$'first\nsecond'
+check_case normalized_success 0 success
+[ "$(wc -l < "$SQL_ORACLE_TMP/normalizations")" -eq 2 ]
+export reference_output=$'first\nthird'
+check_case different_multiline_output 1 success
+export candidate_rc=1 reference_rc=1
+export candidate_output='Error near line 2: shared error (19)'
+export reference_output="$candidate_output"
+check_case identical_errors_still_normalized 0 error 'ERROR: shared error'
+unset -f sed
+
 expect_startup_failure() {
   local name="$1" candidate="$2" reference="$3"
+  checks=$((checks+1))
   if bash "$ORACLE" "$candidate" "$reference" > "$SQL_ORACLE_TMP/startup.log" 2>&1; then
     echo "FAIL: oracle accepted $name"
     tail -5 "$SQL_ORACLE_TMP/startup.log"
@@ -106,4 +128,4 @@ expect_startup_failure missing_executable "$SQL_ORACLE_TMP/missing" "$SQL_ORACLE
 cp "$SQL_ORACLE_TMP/pretends" "$SQL_ORACLE_TMP/pretend_reference"
 expect_startup_failure no_stock_database "$SQL_ORACLE_TMP/pretends" "$SQL_ORACLE_TMP/pretend_reference"
 
-echo "SQL oracle harness: 20 checks passed"
+echo "SQL oracle harness: $checks checks passed"

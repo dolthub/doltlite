@@ -104,7 +104,13 @@ runs:
       set -eo pipefail
       cd build
       {
-        cc $CFLAGS -Wall \
+        ci_compile() { "$@"; }
+        ci_compile_wait() { :; }
+        if [ "${{ inputs.platform }}" = "macos" ]; then
+          source ../.github/scripts/parallel-compile.sh
+          ci_compile_init "$(sysctl -n hw.logicalcpu)"
+        fi
+        ci_compile cc $CFLAGS -Wall \
           -I../src -I../ext/ed25519 \
           ../test/doltlite_creds_kat.c ../test/sqlite3_alloc_stub.c \
           ../src/doltlite_creds.c \
@@ -113,7 +119,7 @@ runs:
           ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
           ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
           -o creds_kat
-        cc $CFLAGS -Wall \
+        ci_compile cc $CFLAGS -Wall \
           -I../src -I../ext/ed25519 \
           ../test/creds_verify_kat.c ../test/sqlite3_alloc_stub.c \
           ../src/doltlite_creds.c \
@@ -122,7 +128,7 @@ runs:
           ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
           ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
           -o creds_verify_kat
-        cc $CFLAGS -I../src -I../ext/mbedtls/include \
+        ci_compile cc $CFLAGS -I../src -I../ext/mbedtls/include \
           ../test/doltlite_tls_test_main.c ../test/sqlite3_alloc_stub.c \
           ../src/doltlite_tls.c \
           ../ext/mbedtls/library/*.c \
@@ -131,7 +137,7 @@ runs:
         for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
           [ ! -f "$object" ] || blake_objects+=("$object")
         done
-        cc $CFLAGS ../test/blake3_kat.c \
+        ci_compile cc $CFLAGS ../test/blake3_kat.c \
           prolly_hash.o "${blake_objects[@]}" \
           -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
           -lm -o blake3_kat
@@ -141,9 +147,10 @@ runs:
           probe_libs+=(-ldl)
           probe_amalgamation=ci-amalgamation.o
         fi
-        cc $CFLAGS -Wno-comment -I. \
+        ci_compile cc $CFLAGS -Wno-comment -I. \
           ../test/amalgamation_http_probe.c "$probe_amalgamation" \
           "${probe_libs[@]}" -o amalgamation_http_probe
+        ci_compile_wait
         rm -f ci-amalgamation.o
       } 2>&1 | tee -a build.log
       if grep -E "warning:" build.log; then

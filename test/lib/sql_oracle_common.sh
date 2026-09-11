@@ -54,6 +54,11 @@ oracle_with_flags() {
   rm -f "$dl" "$sq"
   out_dl=$(printf '%s\n' "$sql" | "$DOLTLITE" ${flag:+"$flag"} "$dl" 2>&1) || rc_dl=$?
   out_sq=$(printf '%s\n' "$sql" | "$SQLITE3" ${flag:+"$flag"} "$sq" 2>&1) || rc_sq=$?
+  if [ "$expected_rc" -eq 0 ] && [ "$rc_dl" -eq 0 ] && [ "$rc_sq" -eq 0 ] \
+     && [ "$out_dl" = "$out_sq" ]; then
+    pass=$((pass+1))
+    return
+  fi
   norm_dl=$(printf '%s\n' "$out_dl" | normalize_oracle_output)
   norm_sq=$(printf '%s\n' "$out_sq" | normalize_oracle_output)
   if [ "$rc_dl" -eq "$expected_rc" ] && [ "$rc_sq" -eq "$expected_rc" ] \

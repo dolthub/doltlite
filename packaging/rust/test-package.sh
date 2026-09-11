@@ -16,8 +16,15 @@ BUILD_DIR="$(cd "${1:-$ROOT/build}" && pwd)"
 
 command -v cargo >/dev/null || { echo "ERROR: cargo is required" >&2; exit 1; }
 
-STAGE="$(mktemp -d)"
-CONSUMER="$(mktemp -d)"
+if [ -n "${DOLTLITE_PACKAGE_WORK_ROOT:-}" ]; then
+  mkdir -p "$DOLTLITE_PACKAGE_WORK_ROOT/rust"
+  STAGE="$DOLTLITE_PACKAGE_WORK_ROOT/rust/stage"
+  CONSUMER="$DOLTLITE_PACKAGE_WORK_ROOT/rust/consumer"
+  mkdir "$STAGE" "$CONSUMER"
+else
+  STAGE="$(mktemp -d)"
+  CONSUMER="$(mktemp -d)"
+fi
 trap 'rm -rf "$STAGE" "$CONSUMER"' EXIT
 
 bash "$PKG_DIR/assemble.sh" "0.0.0" "$STAGE/pkg" "$BUILD_DIR"
@@ -42,4 +49,8 @@ sed -i.bak "s|^doltlite = .*|doltlite = { path = \"$EXTRACTED\" }|" \
   "$CONSUMER/Cargo.toml"
 rm -f "$CONSUMER/Cargo.toml.bak"
 cd "$CONSUMER"
+if [ -n "${DOLTLITE_PACKAGE_TARGET_DIR:-}" ]; then
+  bash "$PKG_DIR/refresh-package.sh" "$EXTRACTED"
+  export CARGO_TARGET_DIR="$DOLTLITE_PACKAGE_TARGET_DIR"
+fi
 DOLTLITE_EXPECT_VERSION="v0.0.0" cargo run --release --quiet
