@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -28,6 +29,13 @@ def lint_workers():
         (root / '.github/scripts').mkdir(parents=True)
         shutil.copy(repo / 'test/run_lint_selftests.sh', root / 'test')
         shutil.copy(scripts / 'parallel-compile.sh', root / '.github/scripts')
+        recipe = run(['make', '-f', 'main.mk', '-n', 'lint', f'TOP={repo}'], cwd=repo)
+        assert recipe.returncode == 0, recipe
+        commands = [shlex.split(line.replace(str(repo), str(root)))
+                    for line in recipe.stdout.replace('\\\n', ' ').splitlines()
+                    if '/test/run_lint_selftests.sh' in line]
+        assert len(commands) == 1, recipe
+        command = commands[0]
         worker = root / 'worker.py'
         worker.write_text('''import os, sys, time
 from pathlib import Path
@@ -52,7 +60,7 @@ sys.exit(42 if os.environ['FAIL'] == n else 0)
             if events.exists():
                 shutil.rmtree(events)
             events.mkdir()
-            result = run(['bash', str(root / 'test/run_lint_selftests.sh')],
+            result = run(command,
                          env=dict(os.environ, DOLTLITE_LINT_JOBS=jobs, JOBS=jobs, FAIL=fail,
                                   EVENTS=str(events)))
             assert result.returncode == (42 if fail != '0' else 0), result
@@ -60,10 +68,12 @@ sys.exit(42 if os.environ['FAIL'] == n else 0)
             assert sorted(result.stdout.splitlines()) == ['worker 1', 'worker 2', 'worker 3']
             checks += 1
         for jobs in ('0', '-1', 'two'):
-            result = run(['bash', str(root / 'test/run_lint_selftests.sh')],
+            result = run(command,
                          env=dict(os.environ, DOLTLITE_LINT_JOBS=jobs))
             assert result.returncode != 0
             checks += 1
+        assert run(['bash', str(root / 'test/run_lint_selftests.sh')]).returncode != 0
+        checks += 1
 
 
 def macos_keys():

@@ -3,9 +3,12 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 source "$root/.github/scripts/parallel-compile.sh"
+if [ "$#" -eq 0 ]; then
+  echo 'Usage: run_lint_selftests.sh suite ...' >&2
+  exit 1
+fi
 ci_compile_init "${DOLTLITE_LINT_JOBS:-1}"
-for script in test/lint_layers_selftest.sh test/stock_oracle_harness_test.sh \
-              .github/scripts/ci-optimization-test.sh; do
+for script in "$@"; do
   ci_compile bash "$root/$script"
 done
 ci_compile_wait
