@@ -137,7 +137,8 @@ run_dual_command_outcome() {
 }
 
 query_doltlite_scalar() {
-  "$DOLTLITE" "$1" "$2" 2>"$TMPROOT/$3.dl.query.err" | tr -d '\r"'
+  printf '%s\n' "$2" | "$DOLTLITE" "$1" \
+    2>"$TMPROOT/$3.dl.query.err" | tr -d '\r"'
 }
 
 query_dolt_scalar() {
@@ -225,7 +226,8 @@ expect_merge_conflict "schema_conflict_existing_column_autocommit" "$DB"
 expect_dual_value "schema_conflicts_existing_autocommit_rollback" "$DB" "0|0|0" \
   "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
   "SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts), '|', (SELECT count(*) FROM dolt_conflicts), '|', (SELECT count(*) FROM dolt_status WHERE status='schema conflict'));"
-printf '%s\n' "BEGIN; SELECT dolt_merge('feat'); COMMIT;" \
+printf '%s\n' "BEGIN; SELECT dolt_merge('feat');
+COMMIT;" \
   | "$DOLTLITE" "$DB" >"$TMPROOT/schema_conflicts_persist.dl.out" \
       2>"$TMPROOT/schema_conflicts_persist.dl.err" || true
 DT_T2=$(dt_repo_for_db "$DB")
@@ -234,13 +236,16 @@ DT_T2=$(dt_repo_for_db "$DB")
   | "$DOLT" sql -c) >"$TMPROOT/schema_conflicts_persist.dt.out" \
       2>"$TMPROOT/schema_conflicts_persist.dt.err" || true
 expect_dual_value "schema_conflicts_transaction_state" "$DB" "1|1|0|1" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT coalesce(sum(num_conflicts),-1) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
+  "BEGIN; SELECT dolt_merge('feat');
+SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT coalesce(sum(num_conflicts),-1) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
   "SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts), '|', (SELECT count(*) FROM dolt_conflicts), '|', (SELECT coalesce(sum(num_conflicts),-1) FROM dolt_conflicts), '|', (SELECT count(*) FROM dolt_status WHERE status='schema conflict'));"
 expect_dual_value "schema_conflicts_schema_rows" "$DB" "t|1|1|1" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT table_name || '|' || (base_schema LIKE '%CREATE TABLE%') || '|' || (our_schema LIKE '%extra%') || '|' || (their_schema LIKE '%extra%') FROM dolt_schema_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feat');
+SELECT table_name || '|' || (base_schema LIKE '%CREATE TABLE%') || '|' || (our_schema LIKE '%extra%') || '|' || (their_schema LIKE '%extra%') FROM dolt_schema_conflicts;" \
   "SELECT CONCAT(table_name, '|', base_schema LIKE '%CREATE TABLE%', '|', our_schema LIKE '%extra%', '|', their_schema LIKE '%extra%') FROM dolt_schema_conflicts;"
 run_dual_command_outcome "schema_conflicts_resolve_refused" "$DB" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_conflicts_resolve('--ours','t');" \
+  "BEGIN; SELECT dolt_merge('feat');
+SELECT dolt_conflicts_resolve('--ours','t');" \
   "CALL dolt_conflicts_resolve('--ours','t');" error
 # Abort is compared by effect, not output: the creating txn already carries the conflict error.
 DT_AB=$(dt_repo_for_db "$DB")
