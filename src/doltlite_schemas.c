@@ -249,4 +249,52 @@ int doltliteSchemasRegister(sqlite3 *db){
   return sqlite3_create_module(db, "dolt_schemas", &doltliteSchemasModule, 0);
 }
 
+int doltliteRevertViewsAndTriggers(
+  sqlite3 *db,
+  SchemaEntry *aSourceSchema,
+  int nSourceSchema
+){
+  sqlite3_stmt *pStmt = 0;
+  char **azDrop = 0;
+  int nDrop = 0;
+  int i, rc;
+
+  /* Collect first: dropping while the statement walks the schema would
+  ** invalidate it. */
+  rc = sqlite3_prepare_v2(db,
+      "SELECT type, name FROM main.sqlite_master"
+      " WHERE type IN ('view','trigger')", -1, &pStmt, 0);
+  while( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *zType = (const char*)sqlite3_column_text(pStmt, 0);
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
+    char **azNew;
+    if( !zType || !zName ) continue;
+    azNew = sqlite3_realloc(azDrop, (nDrop+1)*(int)sizeof(char*));
+    if( !azNew ){ rc = SQLITE_NOMEM; break; }
+    azDrop = azNew;
+    azDrop[nDrop] = sqlite3_mprintf("DROP %s \"%w\"",
+        strcmp(zType, "view")==0 ? "VIEW" : "TRIGGER", zName);
+    if( !azDrop[nDrop] ){ rc = SQLITE_NOMEM; break; }
+    nDrop++;
+  }
+  if( pStmt ){
+    int rc2 = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  for(i=0; rc==SQLITE_OK && i<nDrop; i++){
+    rc = sqlite3_exec(db, azDrop[i], 0, 0, 0);
+  }
+  for(i=0; i<nDrop; i++) sqlite3_free(azDrop[i]);
+  sqlite3_free(azDrop);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(i=0; rc==SQLITE_OK && i<nSourceSchema; i++){
+    const char *zType = aSourceSchema[i].zType;
+    if( !zType || !aSourceSchema[i].zSql ) continue;
+    if( strcmp(zType, "view")!=0 && strcmp(zType, "trigger")!=0 ) continue;
+    rc = sqlite3_exec(db, aSourceSchema[i].zSql, 0, 0, 0);
+  }
+  return rc;
+}
+
 #endif

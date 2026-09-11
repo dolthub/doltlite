@@ -1686,6 +1686,8 @@ int doltliteSerializeConflicts(ChunkStore *cs,
 
 /* Index keys must match VDBE (NOCASE/RTRIM/DESC). */
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
+int doltliteRevertViewsAndTriggers(sqlite3 *db, struct SchemaEntry *aSourceSchema,
+                                   int nSourceSchema);
 int doltliteMasterViewTriggerRowsDiffer(sqlite3 *db, const ProllyHash *pOldRoot,
                                         const ProllyHash *pNewRoot, u8 flags,
                                         int *pDiffer);

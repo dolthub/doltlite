@@ -633,6 +633,9 @@ int doltliteStageNamedTables(
   int nStaged = 0;
   int i;
   int updateMaster = 0;
+  /* Views and triggers are master rows with no catalog entry, which
+  ** dolt_status reports under one name. Naming it stages that whole set. */
+  int stageSchemas = 0;
   int rc;
 
   SchemaEntry *aWorkSchema = 0;
@@ -717,6 +720,13 @@ int doltliteStageNamedTables(
       if( zPrior && sqlite3_stricmp(zPrior, zTable)==0 ) break;
     }
     if( j<i ) continue;
+
+    if( sqlite3_stricmp(zTable, "dolt_schemas")==0
+     && !sqlite3FindTable(db, zTable, "main") ){
+      stageSchemas = 1;
+      updateMaster = 1;
+      continue;
+    }
 
     pLive = sqlite3FindTable(db, zTable, "main");
     if( pLive ) zTable = pLive->zName;
@@ -933,7 +943,7 @@ int doltliteStageNamedTables(
               pStagedMaster ? &pStagedMaster->root : 0,
               pStagedMaster ? pStagedMaster->flags : 0,
               (const char**)azTouched, nTouched,
-              aStaged, nStaged, 0,
+              aStaged, nStaged, stageSchemas,
               &composedRoot);
       if( rc!=SQLITE_OK ){
         ADDNAMED_FREE_ALL();

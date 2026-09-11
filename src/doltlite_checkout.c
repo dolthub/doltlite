@@ -17,9 +17,20 @@ struct CheckoutSchemaInfo {
   int hasCurrent;
   int hasSource;
   int rebuilt;
+  int isSchemas;
   char *zCurrentSql;
   char *zSourceSql;
 };
+
+#define CHECKOUT_SCHEMAS_NAME "dolt_schemas"
+
+/* Views and triggers have no catalog entry of their own; they are rows in the
+** master tree that dolt_status reports under one name. Checking that name out
+** replaces the live set with the source's. */
+static int checkoutIsSchemasName(const char *zName){
+  return zName && sqlite3_stricmp(zName, CHECKOUT_SCHEMAS_NAME)==0;
+}
+
 
 static void checkoutSchemaInfoClear(CheckoutSchemaInfo *aInfo, int nInfo){
   int i;
@@ -890,6 +901,7 @@ static int doltliteCheckoutTables(
       const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
       int srcIdx = -1;
       if( !zName ) continue;
+      if( checkoutIsSchemasName(zName) ) continue;
       for(j=0; j<nSource; j++){
         if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
           srcIdx = j;
@@ -929,6 +941,10 @@ static int doltliteCheckoutTables(
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     if( !zName ) continue;
+    if( checkoutIsSchemasName(zName) ){
+      aSchema[i].isSchemas = 1;
+      continue;
+    }
     rc = checkoutLoadLiveTableSql(db, zName,
                                   &aSchema[i].hasCurrent,
                                   &aSchema[i].zCurrentSql);
@@ -957,6 +973,11 @@ static int doltliteCheckoutTables(
     int bSchemaChanged;
     char *zDrop;
     if( !zName ) continue;
+    if( aSchema[i].isSchemas ){
+      rc = doltliteRevertViewsAndTriggers(db, aSourceSchema, nSourceSchema);
+      if( rc!=SQLITE_OK ) break;
+      continue;
+    }
     bSchemaChanged =
       (aSchema[i].hasCurrent != aSchema[i].hasSource)
       || (aSchema[i].hasCurrent && aSchema[i].hasSource
@@ -1013,6 +1034,7 @@ static int doltliteCheckoutTables(
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int srcIdx = -1, workIdx = -1;
     if( !zName ) continue;
+    if( aSchema[i].isSchemas ) continue;
 
     for(j=0; j<nSource; j++){
       if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
