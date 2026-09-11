@@ -1071,103 +1071,93 @@ static int conflictsResolveSealSuccessfulTopSavepoint(sqlite3 *db){
   return SQLITE_OK;
 }
 
-static void conflictsResolveFinishNoConflictTable(
-  sqlite3_context *ctx,
-  sqlite3 *db,
-  const char *zTable
-){
-  int tableExists = 0;
-  int rc;
-
-  rc = conflictsResolveTableExists(db, zTable, &tableExists);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(ctx, rc);
-    return;
-  }
-  if( tableExists ){
-    rc = conflictsResolveSealSuccessfulTopSavepoint(db);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-    sqlite3_result_int(ctx, 0);
-    return;
-  }
-  sqlite3_result_error(ctx, "table not found", -1);
-}
-
 static void conflictsResolveParsedFunc(
   sqlite3_context *ctx,
   int useOurs,
-  const char *zTable
+  int nTables,
+  const char **azTables
 ){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   ConflictTableInfo table;
   int found = 0;
-  int j, rc;
+  int needsSeal = 0;
+  int i, j, rc;
 
   if(!cs){ sqlite3_result_error(ctx,"no database",-1); return; }
 
-  rc = loadConflictTable(db, cs, zTable, &table, &found);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(ctx, rc);
-    return;
-  }
-  if( found && table.nConflicts==0 ){
-    freeConflictTable(&table);
-    sqlite3_result_error(ctx,
-      "Unable to automatically resolve schema conflicts since data changes "
-      "may not have been fully merged yet. Abort this merge, align the "
-      "schemas on one side, then rerun the merge.", -1);
-    return;
-  }
-  freeConflictTable(&table);
-  found = 0;
-
-  if( useOurs ){
-    rc = removeConflictTableFromCatalog(db, cs, zTable, &found);
+  for(i=0; i<nTables; i++){
+    int tableExists = 0;
+    rc = loadConflictTable(db, cs, azTables[i], &table, &found);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
       return;
     }
-    if( found ){
-      sqlite3_result_int(ctx, 0);
-    }else{
-      conflictsResolveFinishNoConflictTable(ctx, db, zTable);
-    }
-
-  }else{
-    rc = loadConflictTable(db, cs, zTable, &table, &found);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-
-    if( found ){
-      for(j=0; j<table.nConflicts; j++){
-        DoltliteConflictRow *cr = &table.aRows[j];
-        rc = doltliteApplyRawRowMutation(db, zTable,
-                                         cr->pKey, cr->nKey, cr->intKey,
-                                         cr->pTheirVal, cr->nTheirVal);
-        if( rc!=SQLITE_OK ){
-          freeConflictTable(&table);
-          sqlite3_result_error(ctx, "failed to apply theirs value", -1);
-          return;
-        }
-      }
+    if( found && table.nConflicts==0 ){
       freeConflictTable(&table);
-      rc = removeConflictTableFromCatalog(db, cs, zTable, &found);
+      sqlite3_result_error(ctx,
+        "Unable to automatically resolve schema conflicts since data changes "
+        "may not have been fully merged yet. Abort this merge, align the "
+        "schemas on one side, then rerun the merge.", -1);
+      return;
+    }
+    freeConflictTable(&table);
+    rc = conflictsResolveTableExists(db, azTables[i], &tableExists);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    if( !tableExists ){
+      sqlite3_result_error(ctx, "table not found", -1);
+      return;
+    }
+  }
+
+  for(i=0; i<nTables; i++){
+    if( useOurs ){
+      rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(ctx, rc);
         return;
       }
-      sqlite3_result_int(ctx, 0);
     }else{
-      conflictsResolveFinishNoConflictTable(ctx, db, zTable);
+      rc = loadConflictTable(db, cs, azTables[i], &table, &found);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
+      if( found ){
+        for(j=0; j<table.nConflicts; j++){
+          DoltliteConflictRow *cr = &table.aRows[j];
+          rc = doltliteApplyRawRowMutation(db, azTables[i],
+                                           cr->pKey, cr->nKey, cr->intKey,
+                                           cr->pTheirVal, cr->nTheirVal);
+          if( rc!=SQLITE_OK ){
+            freeConflictTable(&table);
+            sqlite3_result_error(ctx, "failed to apply theirs value", -1);
+            return;
+          }
+        }
+        freeConflictTable(&table);
+        rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(ctx, rc);
+          return;
+        }
+      }else{
+        freeConflictTable(&table);
+      }
     }
-
+    if( !found ) needsSeal = 1;
   }
+  if( needsSeal ){
+    rc = conflictsResolveSealSuccessfulTopSavepoint(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+  }
+  sqlite3_result_int(ctx, 0);
 }
 
 static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -1183,13 +1173,13 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) return;
-  if( useOurs + useTheirs!=1 || args.nPositional!=1 ){
+  if( useOurs + useTheirs!=1 || args.nPositional<1 ){
     doltliteCmdArgsClear(&args);
     sqlite3_result_error(ctx,
-      "usage: dolt_conflicts_resolve('--ours'|'--theirs','table')", -1);
+      "usage: dolt_conflicts_resolve('--ours'|'--theirs','table',...)", -1);
     return;
   }
-  conflictsResolveParsedFunc(ctx, useOurs, args.azPositional[0]);
+  conflictsResolveParsedFunc(ctx, useOurs, args.nPositional, args.azPositional);
   doltliteCmdArgsClear(&args);
 }
 

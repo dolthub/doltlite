@@ -60,7 +60,9 @@ commit with dolt_commit.` and the transaction stays open with:
 
 Resolve with `dolt_conflicts_resolve('--ours' | '--theirs', table, ...)`, or
 `DELETE FROM dolt_conflicts_<table> WHERE dolt_conflict_id = ...` to keep the
-working value (only `DELETE` is supported on conflict tables). Then
+working value (only `DELETE` is supported on conflict tables). One call can
+resolve several named tables; a missing table name rejects the call before
+any table is resolved. Existing tables without conflicts are ignored. Then
 `dolt_commit` records the merge commit. `COMMIT` with conflicts left fails
 with `constraint failed`; `dolt_commit` with `cannot commit: unresolved merge
 conflicts. Use dolt_conflicts_resolve() first.` Schema conflicts cannot be
