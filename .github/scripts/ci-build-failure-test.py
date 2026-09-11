@@ -13,6 +13,8 @@ cases = (
     ("actions/checked-probes/action.yml", None, "Build standalone Unix test probes", "ubuntu"),
     ("actions/checked-probes/action.yml", None, "Build standalone Unix test probes", "macos"),
     ("workflows/ci-build.yml", "tsan-build", "Build", "ubuntu"),
+    ("workflows/ci-build.yml", "crash-build", "Build", "ubuntu"),
+    ("workflows/ci-build.yml", "fuzz-build", "Build", "ubuntu"),
     ("actions/asan-build/action.yml", None, "Build", "ubuntu"),
     ("actions/asan-build/action.yml", None, "Build", "macos"),
 )
@@ -34,11 +36,15 @@ done
 def run(script, fail_at, warning, errexit):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / "build").mkdir()
+        for directory in ("build", "build-crash", "build-fuzz"):
+            (root / directory).mkdir()
         (root / "examples/go").mkdir(parents=True)
         (root / "bin").mkdir()
         (root / ".github/scripts").mkdir(parents=True)
         shutil.copy(github_dir / "scripts/parallel-compile.sh", root / ".github/scripts")
+        (root / "tclConfig.sh").write_text('TCL_INCLUDE_SPEC="-I/fake/tcl"\n')
+        (root / "bin/find").write_text(f'#!/bin/sh\necho "{root}/tclConfig.sh"\n')
+        (root / "bin/find").chmod(0o755)
         (root / "bin/sysctl").write_text("#!/bin/sh\necho 1\n")
         (root / "bin/sysctl").chmod(0o755)
         for command in ("make", "cc", "gcc", "clang", "go"):
@@ -53,13 +59,15 @@ def run(script, fail_at, warning, errexit):
                    CFLAGS="-O2", TSAN_CFLAGS="-O1 -fsanitize=thread",
                    TSAN_LDFLAGS="-fsanitize=thread",
                    ASAN_CFLAGS="-O1 -fsanitize=address,undefined",
-                   ASAN_LDFLAGS="-fsanitize=address,undefined")
+                   ASAN_LDFLAGS="-fsanitize=address,undefined",
+                   FUZZ_CFLAGS="-O1 -fsanitize=fuzzer-no-link,address",
+                   FUZZ_LDFLAGS="-fsanitize=fuzzer-no-link,address")
         result = subprocess.run(
             ["bash", *(["-e"] if errexit else []), str(path)],
             cwd=root, env=env, capture_output=True, text=True, timeout=30,
         )
         commands = (root / "commands").read_text().splitlines()
-        log = (root / "build/build.log").read_text()
+        log = next(root.glob("build*/build.log")).read_text()
         return result, commands, log, (root / "package").exists()
 
 

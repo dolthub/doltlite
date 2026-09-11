@@ -1,0 +1,24 @@
+name: Compatibility reference cache
+description: Build or restore toolchain-validated release binaries.
+runs:
+  using: composite
+  steps:
+  - name: Identify compatibility cache
+    id: identity
+    shell: bash
+    run: |
+      key=$(bash .github/scripts/compatibility-cache-key.sh)
+      echo "key=$key" >> "$GITHUB_OUTPUT"
+  - name: Restore compatibility binaries
+    uses: actions/cache@v4
+    with:
+      path: .compat-cache
+      key: compat-bins-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.key }}
+  - name: Build compatibility references
+    shell: bash
+    run: |
+      DOLTLITE_COMPAT_JOBS=4 bash test/doltlite_compat_test.sh --build-only
+      for tag in $(cat .compat-cache/TAGS); do
+        test -s ".compat-cache/$tag/build.log"
+        test "$(".compat-cache/$tag/doltlite" :memory: 'SELECT 1;')" = 1
+      done

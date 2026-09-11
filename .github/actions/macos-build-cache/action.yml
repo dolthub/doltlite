@@ -1,0 +1,44 @@
+name: macOS build cache
+description: Cache compiler outputs for one build configuration.
+inputs:
+  configuration:
+    required: true
+    description: Build configuration
+  cflags:
+    required: true
+    description: Compiler flags
+  ldflags:
+    default: ''
+    description: Linker flags
+outputs:
+  cache-hit:
+    description: Whether this revision was already cached
+    value: ${{ steps.cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+  - name: Identify compiler cache
+    id: identity
+    shell: bash
+    env:
+      CACHE_BUILD_CONFIGURATION: ${{ inputs.configuration }}
+      CACHE_BUILD_CFLAGS: ${{ inputs.cflags }}
+      CACHE_BUILD_LDFLAGS: ${{ inputs.ldflags }}
+    run: |
+      brew install ccache
+      key=$(bash .github/scripts/macos-build-cache-key.sh)
+      echo "key=$key" >> "$GITHUB_OUTPUT"
+      echo "$(brew --prefix ccache)/libexec" >> "$GITHUB_PATH"
+      {
+        echo "CCACHE_DIR=$RUNNER_TEMP/doltlite-${{ inputs.configuration }}-ccache"
+        echo "CCACHE_MAXSIZE=256M"
+        echo "CCACHE_COMPILERCHECK=content"
+      } >> "$GITHUB_ENV"
+  - name: Restore compiler cache
+    id: cache
+    uses: actions/cache@v4
+    with:
+      path: ${{ runner.temp }}/doltlite-${{ inputs.configuration }}-ccache
+      key: macos-build-v1-${{ runner.arch }}-${{ steps.identity.outputs.key }}-${{ github.sha }}
+      restore-keys: |
+        macos-build-v1-${{ runner.arch }}-${{ steps.identity.outputs.key }}-

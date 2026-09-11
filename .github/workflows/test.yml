@@ -212,11 +212,11 @@ jobs:
     - name: Download instrumented build
       uses: actions/download-artifact@v4
       with:
-        name: coverage-build
+        name: coverage-cli
 
     - name: Extract instrumented build
       run: |
-        tar -xzf coverage-build.tar.gz
+        tar -xzf coverage-cli.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%p.profraw" >> "$GITHUB_ENV"
 
@@ -294,11 +294,11 @@ jobs:
     - name: Download instrumented build
       uses: actions/download-artifact@v4
       with:
-        name: coverage-build
+        name: coverage-cli
 
     - name: Extract instrumented build
       run: |
-        tar -xzf coverage-build.tar.gz
+        tar -xzf coverage-cli.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
         # %p dumps one file per process. %8m flock-merges on every exit; this
         # job starts ~5000 instrumented processes and that merge was the
@@ -357,12 +357,12 @@ jobs:
       if: matrix.bucket != 'slow-plain'
       uses: actions/download-artifact@v4
       with:
-        name: coverage-build
+        name: coverage-fixture
 
     - name: Extract instrumented build
       if: matrix.bucket != 'slow-plain'
       run: |
-        tar -xzf coverage-build.tar.gz
+        tar -xzf coverage-fixture.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
         echo "FIXTURE_DIR=build-coverage" >> "$GITHUB_ENV"
@@ -521,11 +521,11 @@ jobs:
     - name: Download instrumented build
       uses: actions/download-artifact@v4
       with:
-        name: coverage-build
+        name: coverage-cli
 
     - name: Extract instrumented build
       run: |
-        tar -xzf coverage-build.tar.gz
+        tar -xzf coverage-cli.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
 
