@@ -41,7 +41,13 @@ def run(script, fail_at, warning, errexit):
         (root / "examples/go").mkdir(parents=True)
         (root / "bin").mkdir()
         (root / ".github/scripts").mkdir(parents=True)
-        shutil.copy(github_dir / "scripts/parallel-compile.sh", root / ".github/scripts")
+        for name in ('parallel-compile.sh', 'build-standalone-probes.sh', 'use-macos-compiler-cache.sh'):
+            shutil.copy(github_dir / 'scripts' / name, root / '.github/scripts')
+        (root / 'ccache/libexec').mkdir(parents=True)
+        for name in ('cc', 'c++'):
+            (root / 'ccache/libexec' / name).symlink_to(root / 'bin/cc')
+        (root / 'bin/brew').write_text(f'#!/bin/bash\necho "{root}/ccache"\n')
+        (root / 'bin/brew').chmod(0o755)
         (root / "tclConfig.sh").write_text('TCL_INCLUDE_SPEC="-I/fake/tcl"\n')
         (root / "bin/find").write_text(f'#!/bin/sh\necho "{root}/tclConfig.sh"\n')
         (root / "bin/find").chmod(0o755)
@@ -54,7 +60,7 @@ def run(script, fail_at, warning, errexit):
         path = root / "step.sh"
         path.write_text(script + '\nprintf packaged > "$PACKAGE_MARKER"\n')
         env = dict(os.environ, PATH=f"{root / 'bin'}:{os.environ['PATH']}",
-                   COMMAND_LOG=str(root / "commands"), FAIL_AT=str(fail_at),
+                   DOLTLITE_PROBE_JOBS="1", COMMAND_LOG=str(root / "commands"), FAIL_AT=str(fail_at),
                    EMIT_WARNING=str(warning), PACKAGE_MARKER=str(root / "package"),
                    CFLAGS="-O2", TSAN_CFLAGS="-O1 -fsanitize=thread",
                    TSAN_LDFLAGS="-fsanitize=thread",

@@ -60,6 +60,9 @@ jobs:
           exit 1
         fi
     - uses: ./.github/actions/compatibility-cache
+    - name: Install SQLLogicTest dependencies
+      run: bash .github/scripts/install-apt-deps.sh fossil unixodbc-dev
+    - uses: ./.github/actions/sqllogictest-cache
 
   macos:
     if: >-
@@ -96,10 +99,12 @@ jobs:
     - name: Warm native compiler cache
       if: steps.package-cache.outputs.cache-hit != 'true'
       run: |
-        export PATH="$(brew --prefix ccache)/libexec:$PATH"
+        source .github/scripts/use-macos-compiler-cache.sh
+        ccache --zero-stats
         cd build
         ../configure
         make -j"$(sysctl -n hw.logicalcpu)" libdoltlite.a
+        bash ../.github/scripts/check-compiler-cache.sh
 
     - uses: ./.github/actions/macos-build-cache
       id: checked-cache
@@ -113,8 +118,10 @@ jobs:
         mkdir build
         cd build
         export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+        source ../.github/scripts/use-macos-compiler-cache.sh
         ../configure
         make -j"$(sysctl -n hw.logicalcpu)" DOLTLITE_PROLLY_CHECK=1 libdoltlite.a
+        bash ../.github/scripts/check-compiler-cache.sh
     - uses: ./.github/actions/macos-build-cache
       id: asan-cache
       with:
@@ -128,7 +135,9 @@ jobs:
         mkdir build
         cd build
         export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+        source ../.github/scripts/use-macos-compiler-cache.sh
         ../configure
         make -j"$(sysctl -n hw.logicalcpu)" \
           CFLAGS="-O1 -g -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
           LDFLAGS="-fsanitize=address,undefined" libdoltlite.a
+        bash ../.github/scripts/check-compiler-cache.sh

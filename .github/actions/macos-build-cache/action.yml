@@ -28,7 +28,6 @@ runs:
       brew install ccache
       key=$(bash .github/scripts/macos-build-cache-key.sh)
       echo "key=$key" >> "$GITHUB_OUTPUT"
-      echo "$(brew --prefix ccache)/libexec" >> "$GITHUB_PATH"
       {
         echo "CCACHE_DIR=$RUNNER_TEMP/doltlite-${{ inputs.configuration }}-ccache"
         echo "CCACHE_MAXSIZE=256M"
@@ -42,3 +41,6 @@ runs:
       key: macos-build-v1-${{ runner.arch }}-${{ steps.identity.outputs.key }}-${{ github.sha }}
       restore-keys: |
         macos-build-v1-${{ runner.arch }}-${{ steps.identity.outputs.key }}-
+  - name: Reset compiler statistics
+    shell: bash
+    run: ccache --zero-stats

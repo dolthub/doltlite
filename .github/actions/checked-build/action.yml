@@ -47,6 +47,7 @@ runs:
       mkdir -p build
       cd build
       if [ "${{ inputs.platform }}" = "macos" ]; then
+        source ../.github/scripts/use-macos-compiler-cache.sh
         export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
         ../configure
       else
@@ -72,6 +73,7 @@ runs:
       set -o pipefail
       make_jobs=2
       if [ "${{ inputs.platform }}" = "macos" ]; then
+        source ../.github/scripts/use-macos-compiler-cache.sh
         make_jobs=$(sysctl -n hw.logicalcpu)
       fi
       {
@@ -92,3 +94,7 @@ runs:
       fi
       DOLTLITE_LINT_JOBS="$make_jobs" make lint
     shell: bash -e {0}
+  - name: Verify compiler cache
+    if: inputs.platform == 'macos'
+    shell: bash
+    run: bash .github/scripts/check-compiler-cache.sh

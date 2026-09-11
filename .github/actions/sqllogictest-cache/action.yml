@@ -1,0 +1,24 @@
+name: SQLLogicTest reference cache
+description: Reuse the pinned SQLLogicTest sources and stock runner.
+runs:
+  using: composite
+  steps:
+  - name: Identify reference
+    id: identity
+    shell: bash
+    run: |
+      key=$(bash .github/scripts/sqllogictest-cache-key.sh)
+      echo "key=$key" >> "$GITHUB_OUTPUT"
+  - name: Restore reference
+    id: cache
+    uses: actions/cache@v4
+    with:
+      path: .sqllogictest-cache
+      key: sqllogictest-reference-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.key }}
+  - name: Build reference
+    if: steps.cache.outputs.cache-hit != 'true'
+    shell: bash
+    run: bash .github/scripts/sqllogictest-reference.sh build .sqllogictest-cache
+  - name: Validate reference
+    shell: bash
+    run: bash .github/scripts/sqllogictest-reference.sh validate .sqllogictest-cache

@@ -205,9 +205,11 @@ jobs:
     - name: Doltlite feature tests
       if: matrix.platform == 'macos'
       run: |
-        export PATH="$(brew --prefix ccache)/libexec:$PATH"
+        source .github/scripts/use-macos-compiler-cache.sh
+        ccache --zero-stats
         cd build
         DOLTLITE_REGRESSION_JOBS=$(sysctl -n hw.logicalcpu) bash ../test/run_doltlite_tests.sh
+        bash ../.github/scripts/check-compiler-cache.sh
       timeout-minutes: 20
 
     - name: Doltlite timing and scale tests

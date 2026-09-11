@@ -104,54 +104,10 @@ runs:
       set -eo pipefail
       cd build
       {
-        ci_compile() { "$@"; }
-        ci_compile_wait() { :; }
         if [ "${{ inputs.platform }}" = "macos" ]; then
-          source ../.github/scripts/parallel-compile.sh
-          ci_compile_init "$(sysctl -n hw.logicalcpu)"
+          source ../.github/scripts/use-macos-compiler-cache.sh
         fi
-        ci_compile cc $CFLAGS -Wall \
-          -I../src -I../ext/ed25519 \
-          ../test/doltlite_creds_kat.c ../test/sqlite3_alloc_stub.c \
-          ../src/doltlite_creds.c \
-          ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
-          ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
-          ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
-          ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
-          -o creds_kat
-        ci_compile cc $CFLAGS -Wall \
-          -I../src -I../ext/ed25519 \
-          ../test/creds_verify_kat.c ../test/sqlite3_alloc_stub.c \
-          ../src/doltlite_creds.c \
-          ../ext/ed25519/fe.c ../ext/ed25519/ge.c \
-          ../ext/ed25519/sc.c ../ext/ed25519/sha512.c \
-          ../ext/ed25519/keypair.c ../ext/ed25519/sign.c \
-          ../ext/ed25519/verify.c ../ext/ed25519/add_scalar.c \
-          -o creds_verify_kat
-        ci_compile cc $CFLAGS -I../src -I../ext/mbedtls/include \
-          ../test/doltlite_tls_test_main.c ../test/sqlite3_alloc_stub.c \
-          ../src/doltlite_tls.c \
-          ../ext/mbedtls/library/*.c \
-          -o tls_test
-        blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
-        for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
-          [ ! -f "$object" ] || blake_objects+=("$object")
-        done
-        ci_compile cc $CFLAGS ../test/blake3_kat.c \
-          prolly_hash.o "${blake_objects[@]}" \
-          -I../src -I../ext/blake3 -DDOLTLITE_PROLLY=1 \
-          -lm -o blake3_kat
-        probe_libs=(-lz -lpthread -lm)
-        probe_amalgamation=sqlite3.c
-        if [ "${{ inputs.platform }}" = "ubuntu" ]; then
-          probe_libs+=(-ldl)
-          probe_amalgamation=ci-amalgamation.o
-        fi
-        ci_compile cc $CFLAGS -Wno-comment -I. \
-          ../test/amalgamation_http_probe.c "$probe_amalgamation" \
-          "${probe_libs[@]}" -o amalgamation_http_probe
-        ci_compile_wait
-        rm -f ci-amalgamation.o
+        bash ../.github/scripts/build-standalone-probes.sh "${{ inputs.platform }}"
       } 2>&1 | tee -a build.log
       if grep -E "warning:" build.log; then
         echo "::error::compiler warnings in standalone probes"
@@ -218,5 +174,19 @@ runs:
     with:
       name: checked-build-${{ inputs.platform }}
       path: checked-build-${{ inputs.platform }}.tar.gz
+      compression-level: 0
+      retention-days: 1
+  - name: Package generated headers
+    if: inputs.platform == 'ubuntu'
+    shell: bash
+    run: |
+      bash .github/scripts/package-ci-build.sh checked-headers.tar.gz \
+        build/sqlite3.h build/sqlite_cfg.h build/parse.h build/opcodes.h
+  - name: Upload generated headers
+    if: inputs.platform == 'ubuntu'
+    uses: actions/upload-artifact@v4
+    with:
+      name: checked-headers
+      path: checked-headers.tar.gz
       compression-level: 0
       retention-days: 1
