@@ -1,3 +1,10 @@
+# Warms the caches PR CI restores, so a cold cache costs a scheduled run
+# rather than every pull request. Each cache is warmed by its own job: the
+# work is independent, and one slow cache must not eat the budget of the
+# others. A job is given at least the time CI already budgets for the same
+# work, because a seed job only does that work when the cache is cold --- a
+# budget that fits a warm run passes every time and times out on exactly the
+# runs that matter.
 name: Seed CI caches
 
 on:
@@ -14,7 +21,7 @@ jobs:
   benchmark:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     concurrency:
       group: seed-benchmark-cache
       cancel-in-progress: false
@@ -59,22 +66,51 @@ jobs:
           echo "::error::compiler warnings in optimized base build"
           exit 1
         fi
+
+  compatibility:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: seed-compatibility-cache
+      cancel-in-progress: false
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        fetch-depth: 0
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
     - uses: ./.github/actions/compatibility-cache
+
+  sqllogictest:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: seed-sqllogictest-cache
+      cancel-in-progress: false
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
     - name: Install SQLLogicTest dependencies
-      run: bash .github/scripts/install-apt-deps.sh fossil unixodbc-dev
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential fossil unixodbc-dev
     - uses: ./.github/actions/sqllogictest-cache
 
-  macos:
+  macos-packages:
     if: >-
       github.event_name != 'push' &&
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     concurrency:
-      group: seed-macos-cache
+      group: seed-macos-package-cache
       cancel-in-progress: false
-    env:
-      CFLAGS: -O2 -g -Werror
     steps:
     - uses: actions/checkout@v4
       with:
@@ -106,6 +142,23 @@ jobs:
         make -j"$(sysctl -n hw.logicalcpu)" libdoltlite.a
         bash ../.github/scripts/check-compiler-cache.sh
 
+  macos-builds:
+    if: >-
+      github.event_name != 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: macos-latest
+    timeout-minutes: 50
+    concurrency:
+      group: seed-macos-build-cache
+      cancel-in-progress: false
+    env:
+      CFLAGS: -O2 -g -Werror
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+    - name: Install build dependencies
+      run: brew install tcl-tk
     - uses: ./.github/actions/macos-build-cache
       id: checked-cache
       with:
@@ -143,3 +196,45 @@ jobs:
           LDFLAGS="-fsanitize=address,undefined" libdoltlite.a
         bash ../.github/scripts/check-compiler-cache.sh
     - uses: ./.github/actions/save-macos-build-cache
+
+  # Seeding is invisible when it breaks: the caches simply stay cold and PR CI
+  # gets slower. Nothing downstream turns red, so the run has to report itself.
+  # A whole-run cancellation kills this job too, which is what the weekly
+  # nightly-heartbeat audit catches from outside.
+  watchdog:
+    needs: [benchmark, compatibility, sqllogictest, macos-packages, macos-builds]
+    if: failure() || cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Describe the incident
+      run: |
+        {
+          echo "A scheduled CI cache seeding run did not finish."
+          echo ""
+          echo "Every cache below is restored by PR CI and rebuilt from scratch"
+          echo "when it is missing. A seed run that fails or times out leaves the"
+          echo "cold cache in place, and the only symptom is that pull requests"
+          echo "get slower, which nothing else reports."
+          echo ""
+          echo "| Cache | Result |"
+          echo "| --- | --- |"
+          echo "| benchmark base build | ${{ needs.benchmark.result }} |"
+          echo "| compatibility references | ${{ needs.compatibility.result }} |"
+          echo "| SQLLogicTest reference | ${{ needs.sqllogictest.result }} |"
+          echo "| macOS package caches | ${{ needs.macos-packages.result }} |"
+          echo "| macOS compiler caches | ${{ needs.macos-builds.result }} |"
+          echo ""
+          echo "A job that timed out is budgeted for less than the work it warms;"
+          echo "compare it against the CI job that builds the same thing."
+        } > "$RUNNER_TEMP/seed-watchdog-body.md"
+    - uses: ./.github/actions/report-failure-issue
+      with:
+        label: seed-ci-caches
+        title: "CI cache seeding did not finish"
+        body-file: ${{ runner.temp }}/seed-watchdog-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}

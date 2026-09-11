@@ -1,12 +1,16 @@
-# The nightlies are silent when green and cut issues when they fail — but a
-# run that is cancelled whole, or never scheduled at all, produces nothing.
-# GitHub cancels every job in a cancelled run, per-run watchdogs included, so
-# absence cannot be detected from inside the run. This weekly job looks at
-# the record from outside: each of the last seven nights must show a
+# The scheduled workflows are silent when green and cut issues when they fail
+# — but a run that is cancelled whole, or never scheduled at all, produces
+# nothing. GitHub cancels every job in a cancelled run, per-run watchdogs
+# included, so absence cannot be detected from inside the run. This weekly job
+# looks at the record from outside: each of the last seven days must show a
 # scheduled run that reached a conclusion (success, or failure — failures
-# report themselves) for every nightly workflow, and each workflow must
+# report themselves) for every audited workflow, and each workflow must
 # still be active (a repo without pushes for 60 days gets its schedules
 # disabled by GitHub). Silent when the record is complete.
+#
+# Cache seeding is audited alongside the nightlies: it reports its own
+# failures, but a seed run that never happens leaves the caches cold and
+# nothing else notices.
 name: Nightly Heartbeat
 
 on:
@@ -34,7 +38,7 @@ jobs:
         BODY="$RUNNER_TEMP/heartbeat-body.md"
         : > "$BODY"
         SINCE=$(date -u -d '8 days ago' +%Y-%m-%d)
-        for wf in nightly-fuzz nightly-stress nightly-scale nightly-performance; do
+        for wf in nightly-fuzz nightly-stress nightly-scale nightly-performance seed-ci-caches; do
           state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}.yml" --jq .state)
           if [ "$state" != "active" ]; then
             echo "- \`$wf\` is **$state** — its schedule is not running at all." >> "$BODY"
@@ -54,8 +58,8 @@ jobs:
         done
         if [ -s "$BODY" ]; then
           {
-            echo "The nightly record for the last seven nights has holes. A missing or"
-            echo "cancelled night reports nothing on its own — that is why this check exists."
+            echo "The scheduled-run record for the last seven days has holes. A missing"
+            echo "or cancelled run reports nothing on its own — that is why this check exists."
             echo ""
             cat "$BODY"
           } > "$RUNNER_TEMP/heartbeat-issue.md"
@@ -63,7 +67,7 @@ jobs:
           echo "HEARTBEAT_GAPS=1" >> "$GITHUB_ENV"
           cat "$RUNNER_TEMP/heartbeat-issue.md"
         else
-          echo "All four nightlies ran to a conclusion every night. Silent."
+          echo "Every audited workflow ran to a conclusion every day. Silent."
         fi
 
     - name: Report the gaps
