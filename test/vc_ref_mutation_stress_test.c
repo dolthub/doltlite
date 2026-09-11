@@ -175,6 +175,11 @@ static int queryTextWithRetry(sqlite3 *db, const char *sql, char *out, int nOut)
     }
     sqlite3_finalize(stmt);
     if( rc==SQLITE_DONE ) return SQLITE_OK;
+    if( msgContains(sqlite3_errmsg(db),
+                    "conflict: another connection committed") ){
+      snprintf(out, nOut, "%s", sqlite3_errmsg(db));
+      return rc;
+    }
     if( !isRetryableRc(rc) && !isRetryableMsg(sqlite3_errmsg(db)) ){
       snprintf(out, nOut, "%s", sqlite3_errmsg(db));
       return rc;
@@ -638,6 +643,46 @@ static void runAtomicMutationTests(void){
   cleanupDb(path);
 }
 
+static void runPeerCommitRetryTest(void){
+  const char *path = "/tmp/test_vc_ref_retry.db";
+  sqlite3 *db = 0;
+  char out[256];
+  int count = 0;
+  int rc;
+
+  startPhase();
+  cleanupDb(path);
+  rc = sqlite3_open(path, &db);
+  check("peer_retry_open", rc==SQLITE_OK);
+  rc = execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+    "INSERT INTO t VALUES(1);"
+    "SELECT dolt_commit('-Am','seed');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "INSERT INTO t VALUES(2);"
+    "SELECT dolt_commit('-Am','feature');"
+    "SELECT dolt_checkout('main');");
+  check("peer_retry_setup", rc==SQLITE_OK);
+
+  doltliteTestFailNextHeadConfirm();
+  rc = queryTextWithRetry(db, "SELECT dolt_merge('feature')", out, sizeof(out));
+  check("peer_retry_returns_to_outer_operation", rc==SQLITE_BUSY);
+  check("peer_retry_preserves_error", msgContains(out,
+        "conflict: another connection committed"));
+  rc = queryIntWithRetry(db, "SELECT count(*) FROM t", &count);
+  check("peer_retry_does_not_merge_before_restart", rc==SQLITE_OK && count==1);
+
+  rc = reopenDb(path, &db);
+  check("peer_retry_reopen", rc==SQLITE_OK);
+  rc = queryTextWithRetry(db, "SELECT dolt_merge('feature')", out, sizeof(out));
+  check("peer_retry_merge_after_restart", rc==SQLITE_OK && strlen(out)==40);
+  rc = queryIntWithRetry(db, "SELECT count(*) FROM t", &count);
+  check("peer_retry_keeps_both_rows", rc==SQLITE_OK && count==2);
+  sqlite3_close(db);
+  cleanupDb(path);
+}
+
 int main(void){
   const char *path = "/tmp/test_vc_ref_mutation_stress.db";
   pid_t pids[N_WORKERS];
@@ -666,6 +711,7 @@ int main(void){
   cleanupDb(path);
   runDefaultRenameStress();
   runAtomicMutationTests();
+  runPeerCommitRetryTest();
 
   printf("\nResults: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass+nFail);

@@ -23,8 +23,8 @@ typedef struct GcQueueItem GcQueueItem;
 struct GcQueueItem {
   ProllyHash hash;
   ProllyHash parent;
-  const char *zSource;
-  const char *zParentType;
+  int eSource;
+  int eParentType;
   int iParentLevel;
   int nParentItems;
   int iChild;
@@ -34,6 +34,14 @@ struct GcQueue {
   int nItems;
   int nAlloc;
   int iHead;
+  int nLimit;
+  sqlite3_vfs *pVfs;
+  ProllyHashSet *marked;
+  sqlite3_file *pFile;
+  GcQueueItem *aWrite;
+  int nWrite;
+  i64 iRead;
+  i64 iWrite;
 };
 
 typedef struct GcChildCtx GcChildCtx;
@@ -41,8 +49,8 @@ struct GcChildCtx {
   GcQueue *q;
   ChunkStore *cs;
   ProllyHash parent;
-  const char *zSource;
-  const char *zParentType;
+  int eSource;
+  int eParentType;
   int iParentLevel;
   int nParentItems;
   int iNextChild;
@@ -54,8 +62,8 @@ struct GcMarkTrace {
   int rc;
   ProllyHash missing;
   ProllyHash parent;
-  const char *zSource;
-  const char *zParentType;
+  int eSource;
+  int eParentType;
   int iParentLevel;
   int nParentItems;
   int iChild;
@@ -75,75 +83,172 @@ static const char *gcChunkTypeName(DoltliteChunkType type){
   }
 }
 
-static int gcQueueInit(GcQueue *q){
-  q->nAlloc = 256;
-  q->aItems = sqlite3_malloc(q->nAlloc * (int)sizeof(GcQueueItem));
-  if( !q->aItems ) return SQLITE_NOMEM;
-  q->nItems = 0;
-  q->iHead = 0;
-  return SQLITE_OK;
+enum {
+  GC_REFS, GC_BRANCH_COMMIT, GC_BRANCH_WORKING, GC_TAG, GC_TRACKING,
+  GC_PENDING, GC_SESSION, GC_CHILD
+};
+
+static const char *gcSourceName(int eSource){
+  static const char *azSource[] = {
+    "refs-table", "branch-commit", "branch-working-set", "tag-commit",
+    "tracking-commit", "pending", "session", "child"
+  };
+  return azSource[eSource];
+}
+
+#define GC_QUEUE_BUFFER 256
+#define GC_QUEUE_BYTES (64*1024*1024)
+
+static int gcQueueInit(
+  GcQueue *q, sqlite3_vfs *pVfs, ProllyHashSet *marked
+){
+  memset(q, 0, sizeof(*q));
+  q->pVfs = pVfs;
+  q->marked = marked;
+  q->nLimit = GC_QUEUE_BYTES / sizeof(GcQueueItem) - 2*GC_QUEUE_BUFFER;
+#ifdef SQLITE_TEST
+  {
+    const char *zLimit = getenv("DOLTLITE_GC_QUEUE_LIMIT");
+    int nLimit;
+    if( zLimit && sqlite3GetInt32(zLimit, &nLimit)
+     && nLimit>0 && nLimit<q->nLimit ) q->nLimit = nLimit;
+  }
+#endif
+  q->nAlloc = MIN(GC_QUEUE_BUFFER, q->nLimit);
+  q->aItems = sqlite3_malloc(q->nAlloc * sizeof(GcQueueItem));
+  return q->aItems ? SQLITE_OK : SQLITE_NOMEM;
 }
 
 static void gcQueueFree(GcQueue *q){
+  if( q->pFile ) sqlite3OsCloseFree(q->pFile);
+  sqlite3_free(q->aWrite);
   sqlite3_free(q->aItems);
   memset(q, 0, sizeof(*q));
+}
+
+static int gcQueueWrite(GcQueue *q, const GcQueueItem *a, int n){
+  while( n>0 ){
+    int nWrite = MIN(n, GC_QUEUE_BUFFER);
+    int nByte = nWrite * (int)sizeof(GcQueueItem);
+    int rc;
+    if( q->iWrite>LARGEST_INT64-nByte ) return SQLITE_FULL;
+    rc = sqlite3OsWrite(q->pFile, a, nByte, q->iWrite);
+    if( rc!=SQLITE_OK ) return rc;
+    q->iWrite += nByte;
+    a += nWrite;
+    n -= nWrite;
+  }
+  return SQLITE_OK;
+}
+
+static int gcQueueFlush(GcQueue *q){
+  int rc = SQLITE_OK;
+  if( q->nWrite ){
+    rc = gcQueueWrite(q, q->aWrite, q->nWrite);
+    if( rc==SQLITE_OK ) q->nWrite = 0;
+  }
+  return rc;
+}
+
+static int gcQueueSpill(GcQueue *q){
+  int nFirst = MIN(q->nItems, q->nAlloc-q->iHead);
+  int rc = sqlite3OsOpenMalloc(q->pVfs, 0, &q->pFile,
+      SQLITE_OPEN_TEMP_JOURNAL | SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+    | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_DELETEONCLOSE, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = gcQueueWrite(q, &q->aItems[q->iHead], nFirst);
+  if( rc==SQLITE_OK && nFirst<q->nItems ){
+    rc = gcQueueWrite(q, q->aItems, q->nItems-nFirst);
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_free(q->aItems);
+  q->aItems = sqlite3_malloc(GC_QUEUE_BUFFER * sizeof(GcQueueItem));
+  q->aWrite = sqlite3_malloc(GC_QUEUE_BUFFER * sizeof(GcQueueItem));
+  if( !q->aItems || !q->aWrite ) return SQLITE_NOMEM;
+  q->nAlloc = GC_QUEUE_BUFFER;
+  q->nItems = q->iHead = 0;
+  return SQLITE_OK;
 }
 
 static int gcQueuePush(
   GcQueue *q,
   const ProllyHash *h,
   const ProllyHash *pParent,
-  const char *zSource,
-  const char *zParentType,
+  int eSource,
+  int eParentType,
   int iParentLevel,
   int nParentItems,
   int iChild
 ){
-  assert( q!=0 && h!=0 );
+  GcQueueItem item;
+  int rc;
   assert( q->nItems>=0 && q->nItems<=q->nAlloc );
-  assert( q->iHead>=0 && q->iHead<=q->nItems );
-  if( prollyHashIsEmpty(h) ) return SQLITE_OK;
-  if( q->nItems >= q->nAlloc ){
-    i64 nNew = q->nAlloc ? (i64)q->nAlloc * 2 : (i64)256;
-    GcQueueItem *aNew;
-    if( nNew > (i64)0x7fffffff/(i64)sizeof(GcQueueItem) ) return SQLITE_NOMEM;
-    aNew = (GcQueueItem*)sqlite3_realloc(
-      q->aItems, (int)(nNew * (i64)sizeof(GcQueueItem))
-    );
-    if( !aNew ) return SQLITE_NOMEM;
-    q->aItems = aNew;
-    q->nAlloc = (int)nNew;
+  assert( q->iHead>=0 && q->iHead<q->nAlloc );
+  if( prollyHashIsEmpty(h) || prollyHashSetContains(q->marked, h) ){
+    return SQLITE_OK;
   }
-  memcpy(&q->aItems[q->nItems].hash, h, sizeof(ProllyHash));
-  if( pParent ){
-    memcpy(&q->aItems[q->nItems].parent, pParent, sizeof(ProllyHash));
-  }else{
-    memset(&q->aItems[q->nItems].parent, 0, sizeof(ProllyHash));
+  /* Marking is complete only when every scheduled chunk has been walked. */
+  rc = prollyHashSetAdd(q->marked, h);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !q->pFile && q->nItems==q->nAlloc ){
+    int nNew = q->nAlloc * 2;
+    /* A moving realloc can hold both rings until the copy completes. */
+    if( nNew>q->nLimit-q->nAlloc ){
+      rc = gcQueueSpill(q);
+      if( rc!=SQLITE_OK ) return rc;
+    }else{
+      GcQueueItem *aNew = sqlite3_realloc(q->aItems,
+                                         nNew * sizeof(GcQueueItem));
+      if( !aNew ) return SQLITE_NOMEM;
+      q->aItems = aNew;
+      memcpy(&q->aItems[q->nAlloc], q->aItems,
+             q->iHead * sizeof(GcQueueItem));
+      q->nAlloc = nNew;
+    }
   }
-  q->aItems[q->nItems].zSource = zSource;
-  q->aItems[q->nItems].zParentType = zParentType;
-  q->aItems[q->nItems].iParentLevel = iParentLevel;
-  q->aItems[q->nItems].nParentItems = nParentItems;
-  q->aItems[q->nItems].iChild = iChild;
+  memset(&item, 0, sizeof(item));
+  item.hash = *h;
+  if( pParent ) item.parent = *pParent;
+  item.eSource = eSource;
+  item.eParentType = eParentType;
+  item.iParentLevel = iParentLevel;
+  item.nParentItems = nParentItems;
+  item.iChild = iChild;
+  if( q->pFile ){
+    q->aWrite[q->nWrite++] = item;
+    return q->nWrite==GC_QUEUE_BUFFER ? gcQueueFlush(q) : SQLITE_OK;
+  }
+  q->aItems[(q->iHead+q->nItems)%q->nAlloc] = item;
   q->nItems++;
   return SQLITE_OK;
 }
 
 static int gcQueuePop(GcQueue *q, GcQueueItem *pItem){
-  assert( q!=0 && pItem!=0 );
-  assert( q->iHead>=0 && q->iHead<=q->nItems );
-  assert( q->nItems<=q->nAlloc );
-  if( q->iHead >= q->nItems ) return 0;
+  if( q->nItems==0 && q->pFile ){
+    int nByte;
+    int rc = gcQueueFlush(q);
+    if( rc!=SQLITE_OK ) return rc;
+    nByte = (int)MIN(q->iWrite-q->iRead,
+                    GC_QUEUE_BUFFER * (i64)sizeof(GcQueueItem));
+    if( nByte==0 ) return SQLITE_DONE;
+    rc = sqlite3OsRead(q->pFile, q->aItems, nByte, q->iRead);
+    if( rc!=SQLITE_OK ) return rc;
+    q->iRead += nByte;
+    q->iHead = 0;
+    q->nItems = nByte / sizeof(GcQueueItem);
+  }
+  if( q->nItems==0 ) return SQLITE_DONE;
   *pItem = q->aItems[q->iHead];
-  q->iHead++;
-  return 1;
+  q->iHead = (q->iHead+1)%q->nAlloc;
+  q->nItems--;
+  return SQLITE_OK;
 }
 
 static int gcChildCb(void *ctx, const ProllyHash *pHash){
   GcChildCtx *p = (GcChildCtx*)ctx;
   int iChild = p->iNextChild++;
-  return gcQueuePush(p->q, pHash, &p->parent, p->zSource,
-                     p->zParentType, p->iParentLevel, p->nParentItems,
+  return gcQueuePush(p->q, pHash, &p->parent, p->eSource,
+                     p->eParentType, p->iParentLevel, p->nParentItems,
                      iChild);
 }
 
@@ -212,21 +317,21 @@ static int gcMarkReachable(
   int rc, i;
 
   memset(pTrace, 0, sizeof(*pTrace));
-  rc = gcQueueInit(&queue);
+  rc = gcQueueInit(&queue, chunkFileGetVfs(&cs->file), marked);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = gcQueuePush(&queue, refsTableGetHash(&cs->refs), 0, "refs-table",
+  rc = gcQueuePush(&queue, refsTableGetHash(&cs->refs), 0, GC_REFS,
                    0, -1, -1, -1);
 
   {
     int nBr; const BranchRef *aBr;
     refsTableGetBranches(&cs->refs, &nBr, &aBr);
     for(i=0; rc==SQLITE_OK && i<nBr; i++){
-      rc = gcQueuePush(&queue, &aBr[i].commitHash, 0, "branch-commit",
+      rc = gcQueuePush(&queue, &aBr[i].commitHash, 0, GC_BRANCH_COMMIT,
                        0, -1, -1, -1);
       if( rc==SQLITE_OK ){
         rc = gcQueuePush(&queue, &aBr[i].workingSetHash, 0,
-                         "branch-working-set", 0, -1, -1, -1);
+                         GC_BRANCH_WORKING, 0, -1, -1, -1);
       }
     }
   }
@@ -235,7 +340,7 @@ static int gcMarkReachable(
     int nTg; const TagRef *aTg;
     refsTableGetTags(&cs->refs, &nTg, &aTg);
     for(i=0; rc==SQLITE_OK && i<nTg; i++){
-      rc = gcQueuePush(&queue, &aTg[i].commitHash, 0, "tag-commit",
+      rc = gcQueuePush(&queue, &aTg[i].commitHash, 0, GC_TAG,
                        0, -1, -1, -1);
     }
   }
@@ -244,7 +349,7 @@ static int gcMarkReachable(
     int nTk; const TrackingBranch *aTk;
     refsTableGetTracking(&cs->refs, &nTk, &aTk);
     for(i=0; rc==SQLITE_OK && i<nTk; i++){
-      rc = gcQueuePush(&queue, &aTk[i].commitHash, 0, "tracking-commit",
+      rc = gcQueuePush(&queue, &aTk[i].commitHash, 0, GC_TRACKING,
                        0, -1, -1, -1);
     }
   }
@@ -253,7 +358,7 @@ static int gcMarkReachable(
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; rc==SQLITE_OK && i<nPend; i++){
-      rc = gcQueuePush(&queue, &aPend[i].hash, 0, "pending",
+      rc = gcQueuePush(&queue, &aPend[i].hash, 0, GC_PENDING,
                        0, -1, -1, -1);
     }
   }
@@ -262,7 +367,7 @@ static int gcMarkReachable(
     memset(&seedCtx, 0, sizeof(seedCtx));
     seedCtx.q = &queue;
     seedCtx.cs = cs;
-    seedCtx.zSource = "session";
+    seedCtx.eSource = GC_SESSION;
     rc = doltliteSeedSessionHashes(db, cs, gcSessionChildCb, &seedCtx);
   }
 
@@ -271,16 +376,15 @@ static int gcMarkReachable(
     return rc;
   }
 
-  while( gcQueuePop(&queue, &current) ){
+  while( (rc = gcQueuePop(&queue, &current))==SQLITE_OK ){
     u8 *data = 0;
     int nData = 0;
     GcChildCtx childCtx;
 
-    if( prollyHashIsEmpty(&current.hash) ) continue;
-    if( prollyHashSetContains(marked, &current.hash) ) continue;
-
-    rc = prollyHashSetAdd(marked, &current.hash);
-    if( rc!=SQLITE_OK ) break;
+    if( sqlite3_is_interrupted(db) ){
+      rc = SQLITE_INTERRUPT;
+      break;
+    }
 
     rc = chunkStoreGet(cs, &current.hash, &data, &nData);
     if( rc!=SQLITE_OK ){
@@ -289,8 +393,8 @@ static int gcMarkReachable(
         pTrace->rc = rc;
         memcpy(&pTrace->missing, &current.hash, sizeof(ProllyHash));
         memcpy(&pTrace->parent, &current.parent, sizeof(ProllyHash));
-        pTrace->zSource = current.zSource;
-        pTrace->zParentType = current.zParentType;
+        pTrace->eSource = current.eSource;
+        pTrace->eParentType = current.eParentType;
         pTrace->iParentLevel = current.iParentLevel;
         pTrace->nParentItems = current.nParentItems;
         pTrace->iChild = current.iChild;
@@ -301,12 +405,12 @@ static int gcMarkReachable(
     childCtx.q = &queue;
     childCtx.cs = cs;
     childCtx.parent = current.hash;
-    childCtx.zSource = "child";
-    childCtx.zParentType = gcChunkTypeName(doltliteClassifyChunk(data, nData));
+    childCtx.eSource = GC_CHILD;
+    childCtx.eParentType = doltliteClassifyChunk(data, nData);
     childCtx.iParentLevel = -1;
     childCtx.nParentItems = -1;
     childCtx.iNextChild = 0;
-    if( strcmp(childCtx.zParentType, "prolly-node")==0 ){
+    if( childCtx.eParentType==CHUNK_PROLLY_NODE ){
       ProllyNode node;
       if( prollyNodeParse(&node, data, nData)==SQLITE_OK ){
         childCtx.iParentLevel = node.level;
@@ -320,7 +424,7 @@ static int gcMarkReachable(
   }
 
   gcQueueFree(&queue);
-  return rc;
+  return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 static void gcFormatMarkFailure(
@@ -337,22 +441,22 @@ static void gcFormatMarkFailure(
   if( prollyHashIsEmpty(&pTrace->parent) ){
     sqlite3_snprintf(nBuf, zBuf,
       "gc mark phase failed: missing chunk %s source=%s rc=%d",
-      zMissing, pTrace->zSource ? pTrace->zSource : "unknown", pTrace->rc);
+      zMissing, gcSourceName(pTrace->eSource), pTrace->rc);
   }else{
     doltliteHashToHex(&pTrace->parent, zParent);
-    if( pTrace->zParentType && strcmp(pTrace->zParentType, "prolly-node")==0 ){
+    if( pTrace->eParentType==CHUNK_PROLLY_NODE ){
       sqlite3_snprintf(nBuf, zBuf,
         "gc mark phase failed: missing chunk %s parent=%s source=%s "
         "parent_type=%s parent_level=%d parent_items=%d child_index=%d rc=%d",
-        zMissing, zParent, pTrace->zSource ? pTrace->zSource : "unknown",
-        pTrace->zParentType, pTrace->iParentLevel, pTrace->nParentItems,
+        zMissing, zParent, gcSourceName(pTrace->eSource),
+        gcChunkTypeName(pTrace->eParentType), pTrace->iParentLevel, pTrace->nParentItems,
         pTrace->iChild, pTrace->rc);
     }else{
       sqlite3_snprintf(nBuf, zBuf,
         "gc mark phase failed: missing chunk %s parent=%s source=%s "
         "parent_type=%s child_index=%d rc=%d",
-        zMissing, zParent, pTrace->zSource ? pTrace->zSource : "unknown",
-        pTrace->zParentType ? pTrace->zParentType : "unknown",
+        zMissing, zParent, gcSourceName(pTrace->eSource),
+        gcChunkTypeName(pTrace->eParentType),
         pTrace->iChild, pTrace->rc);
     }
   }

@@ -26,7 +26,9 @@ For a DoltLite-format main database, the compatibility contract is:
   `:memory:` attachment are supported.
 - `PRAGMA auto_vacuum` reports `0`; attempts to enable it and
   `PRAGMA incremental_vacuum` are no-ops. `VACUUM` runs DoltLite garbage
-  collection instead of rebuilding SQLite pages. File-backed `VACUUM INTO`
+  collection instead of rebuilding SQLite pages. Collection reuses traversal
+  memory across shared history and spills large queues to temporary disk storage.
+  File-backed `VACUUM INTO`
   writes a compacted DoltLite-format copy; `:memory:` as the destination is
   refused. `SQLITE_DBCONFIG_RESET_DATABASE` plus `VACUUM` empties the
   current branch working catalog (`sqlite_master` has no user objects)
