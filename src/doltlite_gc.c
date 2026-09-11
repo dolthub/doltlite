@@ -1264,6 +1264,8 @@ int doltliteGcVacuumInto(
   i64 nNewData = 0;
   i64 finalSize = 0;
   sqlite3_file *pOutFile = 0;
+  sqlite3_file *pDestLock = 0;
+  char *zDestLockName = 0;
   char *zPath = 0;
   int rc;
 
@@ -1286,14 +1288,26 @@ int doltliteGcVacuumInto(
     return SQLITE_ERROR;
   }
 
+  /* Reserve the destination before anything is examined or written there.
+  ** The source graph lock says nothing about another process committing a
+  ** database at this path, and the emptiness check below would otherwise be
+  ** a guess that a peer can invalidate before the first byte goes out. */
+  rc = csFileLock(chunkFileGetVfs(&cs->file), zOut, &pDestLock, &zDestLockName);
+  if( rc!=SQLITE_OK ){
+    *pzPhase = "output file is in use by another connection";
+    return rc==SQLITE_BUSY ? SQLITE_BUSY : rc;
+  }
+
   rc = gcLockAndRefresh(db, cs, 1);
   if( rc!=SQLITE_OK ){
+    csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "failed to acquire lock for vacuum into";
     return rc;
   }
   rc = csMaterializeIndex(cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
+    csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "vacuum into index load failed";
     return rc;
   }
@@ -1301,6 +1315,7 @@ int doltliteGcVacuumInto(
       chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
+    csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "vacuum into mark phase failed";
     return rc;
   }
@@ -1308,6 +1323,7 @@ int doltliteGcVacuumInto(
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&marked);
     chunkStoreUnlock(cs);
+    csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "vacuum into mark phase failed";
     return rc;
   }
@@ -1322,6 +1338,7 @@ int doltliteGcVacuumInto(
       sqlite3_free(zPath);
       prollyHashSetFree(&marked);
       chunkStoreUnlock(cs);
+      csFileUnlock(pDestLock, &zDestLockName);
       *pzPhase = "output file already exists";
       return SQLITE_ERROR;
     }
@@ -1330,11 +1347,14 @@ int doltliteGcVacuumInto(
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zPath);
+    csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "vacuum into write failed";
     return rc;
   }
-  /* The VFS keeps the open name until xClose; free it after. */
+  /* The VFS keeps the open name until xClose; free it after. Hold the
+  ** destination reservation until the output is closed. */
   sqlite3OsCloseFree(pOutFile);
+  csFileUnlock(pDestLock, &zDestLockName);
   sqlite3_free(zPath);
   sqlite3_free(aNewIndex);
   return SQLITE_OK;

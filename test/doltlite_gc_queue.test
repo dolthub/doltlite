@@ -30,7 +30,7 @@ proc gc_queue_vfs {method filename args} {
   incr ::events($method)
   if {$method eq "xWrite"} {
     set n [lindex $args 2]
-    set ::max_temp_write [expr {max($::max_temp_write,$n)}]
+    if {$n>$::max_temp_write} {set ::max_temp_write $n}
     incr ::temp_written $n
   }
   if {$method eq $::fail_method && $::events($method)==$::fail_at} {

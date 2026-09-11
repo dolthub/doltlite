@@ -1,0 +1,39 @@
+name: macOS package cache
+description: Share toolchain-validated package and native compiler caches.
+outputs:
+  cache-hit:
+    description: Whether the complete source key was restored
+    value: ${{ steps.cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+  - name: Identify cache
+    id: identity
+    shell: bash
+    run: |
+      brew install ccache
+      cache_key=$(bash .github/scripts/macos-package-cache-key.sh)
+      echo "key=$cache_key" >> "$GITHUB_OUTPUT"
+      echo "go-build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      echo "go-mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      {
+        echo "CCACHE_DIR=$RUNNER_TEMP/doltlite-ccache"
+        echo "CCACHE_MAXSIZE=128M"
+        echo "CCACHE_COMPILERCHECK=content"
+        echo "DOLTLITE_PACKAGE_WORK_ROOT=$RUNNER_TEMP/doltlite-packages"
+        echo "DOLTLITE_PACKAGE_TARGET_DIR=$RUNNER_TEMP/doltlite-package-target"
+      } >> "$GITHUB_ENV"
+  - name: Restore cache
+    id: cache
+    uses: actions/cache@v4
+    with:
+      path: |
+        ${{ steps.identity.outputs.go-build }}
+        ${{ steps.identity.outputs.go-mod }}
+        ~/.cargo/registry
+        ~/.cargo/git
+        ${{ runner.temp }}/doltlite-package-target
+        ${{ runner.temp }}/doltlite-ccache
+      key: macos-packages-v2-${{ runner.arch }}-${{ steps.identity.outputs.key }}-${{ hashFiles('packaging/go/**', 'packaging/rust/**', 'src/**', 'ext/**', 'auto.def', 'autosetup/**', 'main.mk', 'Makefile.in', 'doltlite.mk', '.github/scripts/macos-*', 'build/sqlite3.c', 'build/sqlite3.h') }}
+      restore-keys: |
+        macos-packages-v2-${{ runner.arch }}-${{ steps.identity.outputs.key }}-

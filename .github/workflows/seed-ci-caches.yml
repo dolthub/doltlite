@@ -1,0 +1,100 @@
+name: Seed CI caches
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: seed-benchmark-cache
+      cancel-in-progress: false
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        path: benchmark-base
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev zlib1g-dev
+    - name: Identify base build cache
+      id: base-key
+      run: |
+        key=$(bash .github/scripts/benchmark-cache-key.sh benchmark-base)
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+    - name: Restore base build
+      id: base-cache
+      uses: actions/cache@v4
+      with:
+        path: benchmark-baseline
+        key: benchmark-base-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.base-key.outputs.key }}
+    - name: Build base
+      if: steps.base-cache.outputs.cache-hit != 'true'
+      run: |
+        rm -rf benchmark-baseline
+        bash .github/scripts/build-optimized-benchmark.sh benchmark-base
+        mkdir benchmark-baseline
+        cp benchmark-base/build/doltlite benchmark-base/build/bench_timer_doltlite \
+          benchmark-base/build/build.log benchmark-baseline/
+    - name: Validate base build
+      run: |
+        test -x benchmark-baseline/doltlite
+        test -x benchmark-baseline/bench_timer_doltlite
+        test -s benchmark-baseline/build.log
+        if grep -E "warning:" benchmark-baseline/build.log; then
+          echo "::error::compiler warnings in optimized base build"
+          exit 1
+        fi
+
+  macos:
+    if: >-
+      github.event_name != 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    concurrency:
+      group: seed-macos-cache
+      cancel-in-progress: false
+    env:
+      CFLAGS: -O2 -g -Werror
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: false
+    - name: Generate package inputs
+      run: |
+        brew install tcl-tk
+        export PATH="$(brew --prefix tcl-tk)/bin:$PATH"
+        mkdir -p build
+        cd build
+        ../configure
+        make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
+    - uses: ./.github/actions/macos-package-cache
+      id: package-cache
+    - name: Warm package caches
+      if: steps.package-cache.outputs.cache-hit != 'true'
+      run: bash .github/scripts/macos-package-tests.sh build
+    - name: Warm native compiler cache
+      if: steps.package-cache.outputs.cache-hit != 'true'
+      run: |
+        export PATH="$(brew --prefix ccache)/libexec:$PATH"
+        cd build
+        ../configure
+        make -j"$(sysctl -n hw.logicalcpu)" libdoltlite.a

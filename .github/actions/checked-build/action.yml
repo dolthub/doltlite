@@ -63,8 +63,12 @@ runs:
     run: |
       cd build
       set -o pipefail
+      make_jobs=2
+      if [ "${{ inputs.platform }}" = "macos" ]; then
+        make_jobs=$(sysctl -n hw.logicalcpu)
+      fi
       {
-        make -j2 DOLTLITE_PROLLY_CHECK=1 \
+        make -j"$make_jobs" DOLTLITE_PROLLY_CHECK=1 \
           doltlite doltlite-remotesrv doltlite-lib
         make DOLTLITE_PROLLY=0 sqlite3
         make libsqlite3.a USE_AMALGAMATION=0

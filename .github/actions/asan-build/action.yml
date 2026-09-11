@@ -56,7 +56,10 @@ runs:
       fi
     shell: bash -e {0}
   - name: Package
-    run: bash .github/scripts/package-ci-build.sh asan-ubsan-${{ inputs.platform }}.tar.gz build
+    run: |
+      bash .github/scripts/package-ci-build.sh asan-ubsan-${{ inputs.platform }}.tar.gz \
+        build/doltlite build/sqlite3 build/doltlite_regression_test_c \
+        build/libdoltlite.a build/sqlite3.h build/build.log
     shell: bash -e {0}
   - name: Upload
     uses: actions/upload-artifact@v4
