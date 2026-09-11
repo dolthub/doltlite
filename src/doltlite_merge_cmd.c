@@ -757,10 +757,12 @@ static int doltliteApplyMergeSchemaActions(
   const ProllyHash *pTheirCatHash,
   SchemaMergeAction *aSchemaActions,
   int nSchemaActions,
-  ProllyHash *pMergedCatHash
+  ProllyHash *pMergedCatHash,
+  char **pzErr
 ){
   int rc = SQLITE_OK;
   int si;
+  char *zErr = 0;
 
   /* Table renames first: SQLite's rewriter carries every dependent along,
   ** so column actions and reindexes see the final table names. */
@@ -773,7 +775,7 @@ static int doltliteApplyMergeSchemaActions(
                                     aSchemaActions[si].zTableName, zNew) : 0;
     sqlite3_free(zNew);
     if( !zAlter ) return SQLITE_NOMEM;
-    rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+    rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
     sqlite3_free(zAlter);
   }
 
@@ -784,7 +786,7 @@ static int doltliteApplyMergeSchemaActions(
                                       aSchemaActions[si].zTableName,
                                       aSchemaActions[si].azAddColumns[sj]);
       if( !zAlter ) return SQLITE_NOMEM;
-      rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+      rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
       sqlite3_free(zAlter);
       if( rc!=SQLITE_OK ) break;
     }
@@ -798,7 +800,7 @@ static int doltliteApplyMergeSchemaActions(
           aSchemaActions[si].azRenameColumns[sj], zNew) : 0;
       sqlite3_free(zNew);
       if( !zAlter ) return SQLITE_NOMEM;
-      rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+      rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
       sqlite3_free(zAlter);
     }
     for(sj=0; rc==SQLITE_OK && sj<aSchemaActions[si].nDropColumns; sj++){
@@ -806,13 +808,19 @@ static int doltliteApplyMergeSchemaActions(
                                       aSchemaActions[si].zTableName,
                                       aSchemaActions[si].azDropColumns[sj]);
       if( !zAlter ) return SQLITE_NOMEM;
-      rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+      rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
       sqlite3_free(zAlter);
     }
   }
 
   if( rc==SQLITE_OK ){
     rc = doltliteFlushCatalogToHash(db, pMergedCatHash);
+  }
+  if( zErr ){
+    *pzErr = sqlite3_mprintf(
+        "cannot merge: schema change could not be applied: %s", zErr);
+    sqlite3_free(zErr);
+    if( !*pzErr ) rc = SQLITE_NOMEM;
   }
   return rc;
 }
@@ -890,7 +898,8 @@ static int mergeRefInstallMergedCatalog(
   char ***pazReindex,
   int *pnReindex,
   char ***pazRebuildVtabs,
-  int *pnRebuildVtabs
+  int *pnRebuildVtabs,
+  char **pzErr
 ){
   ProllyHash trackedBaseHash = *pMergedCat;
   int rc;
@@ -916,7 +925,7 @@ static int mergeRefInstallMergedCatalog(
   if( *pnSchemaActions > 0 && nMergeConflicts==0 ){
     rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
                                          *paSchemaActions, *pnSchemaActions,
-                                         pWorkingCat);
+                                         pWorkingCat, pzErr);
   }
   freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
   *paSchemaActions = 0;
@@ -1165,6 +1174,7 @@ int doltliteMergeRef(
   int bHaveSaved = 0;
   int bPeerBusy = 0;
   int bRestoreOnFail = 0;
+  int bPersistRestore = 0;
   const char *zFail = 0;
   char *zOwnedErr = 0;
   SchemaMergeAction *aSchemaActions = 0;
@@ -1317,7 +1327,7 @@ int doltliteMergeRef(
                                     &workingCatHash, nMergeConflicts,
                                     &aSchemaActions, &nSchemaActions,
                                     &azReindex, &nReindex,
-                                    &azRebuildVtabs, &nRebuildVtabs);
+                                    &azRebuildVtabs, &nRebuildVtabs, &zOwnedErr);
   if( rc!=SQLITE_OK ){
     bRestoreOnFail = 1;
     goto merge_fail;
@@ -1332,6 +1342,7 @@ int doltliteMergeRef(
       db, &ancCatHash, &nViolations, &zOwnedErr);
   if( rc!=SQLITE_OK ){
     bRestoreOnFail = 1;
+    bPersistRestore = db->autoCommit;
     goto merge_fail;
   }
   if( nViolations > 0 ){
@@ -1393,7 +1404,19 @@ merge_fail:
   doltliteCommitClear(&theirCommit);
   if( bHaveSaved ){
     if( bRestoreOnFail ){
-      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+      int restoreRc = doltliteRestoreTxnState(db, &savedState);
+      if( restoreRc==SQLITE_OK && bPersistRestore ){
+        restoreRc = doltliteRefreshAndConfirmHead(
+            db, cs, &savedState.sessionHead);
+        if( restoreRc==SQLITE_BUSY ) bPeerBusy = 1;
+        if( restoreRc==SQLITE_OK ){
+          restoreRc = doltlitePersistWorkingSetWithHash(
+              db, &savedState.sessionCatalogHash);
+          chunkStoreUnlock(cs);
+        }
+      }
+      doltliteTxnStateClear(&savedState);
+      if( restoreRc!=SQLITE_OK ) rc = restoreRc;
     }else{
       doltliteTxnStateClear(&savedState);
     }

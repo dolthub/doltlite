@@ -41,6 +41,7 @@ doltlite_historical_affinity
 doltlite_vtab_column_collision
 doltlite_merge_constraint_prune
 doltlite_merge_generated
+doltlite_merge_schema_errors
 doltlite_merge_ignored
 doltlite_rebase_plan_hash
 doltlite_recover_changes
