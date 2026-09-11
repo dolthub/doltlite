@@ -22,14 +22,9 @@ struct CheckoutSchemaInfo {
   char *zSourceSql;
 };
 
+/* Views and triggers are master rows with no catalog entry of their own,
+** which dolt_status reports under this one name. */
 #define CHECKOUT_SCHEMAS_NAME "dolt_schemas"
-
-/* Views and triggers have no catalog entry of their own; they are rows in the
-** master tree that dolt_status reports under one name. Checking that name out
-** replaces the live set with the source's. */
-static int checkoutIsSchemasName(const char *zName){
-  return zName && sqlite3_stricmp(zName, CHECKOUT_SCHEMAS_NAME)==0;
-}
 
 
 static void checkoutSchemaInfoClear(CheckoutSchemaInfo *aInfo, int nInfo){
@@ -68,38 +63,6 @@ static int checkoutSchemaTextField(
   return SQLITE_OK;
 }
 
-static int checkoutLoadLiveTableSql(
-  sqlite3 *db,
-  const char *zName,
-  int *pFound,
-  char **pzSql
-){
-  sqlite3_stmt *pStmt = 0;
-  char *zQry;
-  int rc;
-
-  *pFound = 0;
-  *pzSql = 0;
-  zQry = sqlite3_mprintf(
-      "SELECT sql FROM main.sqlite_master "
-      "WHERE type='table' AND name='%q' COLLATE NOCASE",
-      zName);
-  if( !zQry ) return SQLITE_NOMEM;
-  rc = sqlite3_prepare_v2(db, zQry, -1, &pStmt, 0);
-  sqlite3_free(zQry);
-  if( rc!=SQLITE_OK ) return rc;
-  if( sqlite3_step(pStmt)==SQLITE_ROW ){
-    const char *zSql = (const char*)sqlite3_column_text(pStmt, 0);
-    *pFound = 1;
-    *pzSql = sqlite3_mprintf("%s", zSql ? zSql : "");
-    if( !*pzSql ){
-      sqlite3_finalize(pStmt);
-      return SQLITE_NOMEM;
-    }
-  }
-  sqlite3_finalize(pStmt);
-  return SQLITE_OK;
-}
 
 static int checkoutLoadSourceTableSql(
   sqlite3 *db,
@@ -856,7 +819,8 @@ static int doltliteCheckoutTables(
   const char *zSourceRef,
   sqlite3_value **argv,
   int iFirstName,
-  int nNames
+  int nNames,
+  const char **pzMissing
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash workingHash, headCatHash, stagedHash;
@@ -901,7 +865,7 @@ static int doltliteCheckoutTables(
       const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
       int srcIdx = -1;
       if( !zName ) continue;
-      if( checkoutIsSchemasName(zName) ) continue;
+      if( sqlite3_stricmp(zName, CHECKOUT_SCHEMAS_NAME)==0 ) continue;
       for(j=0; j<nSource; j++){
         if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
           srcIdx = j;
@@ -924,6 +888,7 @@ static int doltliteCheckoutTables(
           return rc;
         }
         if( !hasVtab ){
+          if( pzMissing ) *pzMissing = zName;
           doltliteFreeCatalog(aSource, nSource);
           return SQLITE_NOTFOUND;
         }
@@ -941,17 +906,23 @@ static int doltliteCheckoutTables(
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     if( !zName ) continue;
-    if( checkoutIsSchemasName(zName) ){
+    if( sqlite3_stricmp(zName, CHECKOUT_SCHEMAS_NAME)==0 ){
       aSchema[i].isSchemas = 1;
       continue;
     }
-    rc = checkoutLoadLiveTableSql(db, zName,
+    rc = doltliteLoadLiveTableSql(db, zName,
                                   &aSchema[i].hasCurrent,
                                   &aSchema[i].zCurrentSql);
     if( rc==SQLITE_OK ){
       rc = checkoutLoadSourceTableSql(db, aSource, nSource, zName,
                                       &aSchema[i].hasSource,
                                       &aSchema[i].zSourceSql);
+    }
+    /* Reject an unknown name before the schema pass starts dropping and
+    ** recreating the objects of the names ahead of it. */
+    if( rc==SQLITE_OK && !aSchema[i].hasCurrent && !aSchema[i].hasSource ){
+      if( pzMissing ) *pzMissing = zName;
+      rc = SQLITE_NOTFOUND;
     }
     if( rc!=SQLITE_OK ){
       checkoutSchemaInfoClear(aSchema, nNames);
@@ -1059,6 +1030,7 @@ static int doltliteCheckoutTables(
            && sqlite3_strnicmp(aSchema[i].zCurrentSql, "CREATE VIRTUAL", 14)==0) ){
         continue;
       }
+      if( pzMissing ) *pzMissing = zName;
       freeSchemaEntries(aSourceSchema, nSourceSchema);
       checkoutSchemaInfoClear(aSchema, nNames);
       doltliteFreeCatalog(aWorking, nWorking);
@@ -1166,6 +1138,7 @@ static void doltCheckoutParsedFunc(
   CheckoutMutationCtx m;
   BranchMutationCtx branchCreate;
   const char *zBranch;
+  const char *zMissing = 0;
   char *zCurrentBranch = 0;
   int isCreateAndSwitch = 0;
   int hadExplicitTxn = !db->autoCommit;
@@ -1288,12 +1261,14 @@ static void doltCheckoutParsedFunc(
     ProllyHash sourceRef;
     rc = doltliteResolveRef(db, zBranch, &sourceRef);
     if( rc==SQLITE_OK ){
-      rc = doltliteCheckoutTables(db, ctx, zBranch, argv, 1, argc-1);
+      rc = doltliteCheckoutTables(db, ctx, zBranch, argv, 1, argc-1,
+                                  &zMissing);
     }else{
-      rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc);
+      rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing);
     }
     if( rc==SQLITE_NOTFOUND ){
-      char *zErr = sqlite3_mprintf("no such branch or table: %s", zBranch);
+      char *zErr = sqlite3_mprintf("no such branch or table: %s",
+                                   zMissing ? zMissing : zBranch);
       doltliteVcResultError(ctx, db, zErr ? zErr : "no such branch or table");
       sqlite3_free(zErr);
       return;
@@ -1384,10 +1359,10 @@ static void doltCheckoutParsedFunc(
       return;
     }
 
-    rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc);
+    rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing);
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf(
-          "no such branch or table: %s", zBranch);
+          "no such branch or table: %s", zMissing ? zMissing : zBranch);
       doltliteVcResultError(ctx, db, zErr ? zErr : "no such branch or table");
       sqlite3_free(zErr);
       return;

@@ -88,4 +88,34 @@ run_test "dolt_schemas_name_is_reserved_for_tables" \
   "Parse error near line 1: table names beginning with dolt_ are reserved for internal use" "$DB4"
 rm -f "$DB4"
 
+# A checkout that fails must leave the live schema exactly as it was: the
+# schema pass rewrites objects name by name, so an unknown name has to be
+# rejected before any of it runs.
+DB5=/tmp/test_schemas_atomic_$$.db
+seed "$DB5" "CREATE VIEW v2 AS SELECT 2;"
+run_test "failed_checkout_names_the_missing_one" \
+  "SELECT dolt_checkout('dolt_schemas','nosuchtable');" \
+  "Error near line 1: no such branch or table: nosuchtable" "$DB5"
+run_test "failed_checkout_keeps_working_schema" \
+  "SELECT group_concat(type||':'||name ORDER BY type||':'||name) FROM sqlite_master WHERE type IN ('view','trigger');" \
+  "trigger:tr,view:v,view:v2" "$DB5"
+run_test "failed_checkout_keeps_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "1" "$DB5"
+rm -f "$DB5"
+
+# Same guarantee for an ordinary table, whose schema pass drops and recreates
+# it the same way.
+DB6=/tmp/test_schemas_atomic_table_$$.db
+rm -f "$DB6"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t ADD COLUMN b INT;" | $DOLTLITE "$DB6" > /dev/null 2>&1
+run_test "failed_table_checkout_keeps_added_column" \
+  "SELECT dolt_checkout('t','nosuchtable');
+   SELECT group_concat(name) FROM pragma_table_info('t');" \
+  "Error near line 1: no such branch or table: nosuchtable
+id,a,b" "$DB6"
+rm -f "$DB6"
+
 dltest_finish

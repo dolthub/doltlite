@@ -297,4 +297,37 @@ int doltliteRevertViewsAndTriggers(
   return rc;
 }
 
+int doltliteLoadLiveTableSql(
+  sqlite3 *db,
+  const char *zName,
+  int *pFound,
+  char **pzSql
+){
+  sqlite3_stmt *pStmt = 0;
+  char *zQry;
+  int rc;
+
+  *pFound = 0;
+  *pzSql = 0;
+  zQry = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master "
+      "WHERE type='table' AND name='%q' COLLATE NOCASE",
+      zName);
+  if( !zQry ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zQry, -1, &pStmt, 0);
+  sqlite3_free(zQry);
+  if( rc!=SQLITE_OK ) return rc;
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *zSql = (const char*)sqlite3_column_text(pStmt, 0);
+    *pFound = 1;
+    *pzSql = sqlite3_mprintf("%s", zSql ? zSql : "");
+    if( !*pzSql ){
+      sqlite3_finalize(pStmt);
+      return SQLITE_NOMEM;
+    }
+  }
+  sqlite3_finalize(pStmt);
+  return SQLITE_OK;
+}
+
 #endif
