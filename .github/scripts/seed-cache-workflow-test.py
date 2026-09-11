@@ -76,7 +76,7 @@ def seed_budgets():
 REPORTS_DIRECTLY = {'sqlite-upstream-drift.yml'}
 # Ratchet: scheduled workflows that still report nothing when they fail. Empty
 # this set, never add to it.
-KNOWN_SILENT = {'dolt-oracle-upgrade.yml'}
+KNOWN_SILENT = set()
 
 
 def scheduled_workflows_report():
@@ -99,17 +99,28 @@ def scheduled_workflows_report():
     assert scheduled >= 6, f'expected the scheduled workflows, found {scheduled}'
 
 
-# A watchdog only fires while the run survives; a whole-run cancellation kills
-# it too. The weekly heartbeat is the outside observer, so it has to know about
-# every scheduled workflow that is otherwise silent.
-def heartbeat_covers_seeding():
+# A watchdog only fires while its own run survives; a whole-run cancellation
+# kills it along with everything else. So a watchdog is only half the story:
+# the weekly heartbeat has to audit that workflow from outside as well.
+def heartbeat_covers_every_watchdog():
     global checks
     text = (workflows / 'nightly-heartbeat.yml').read_text()
-    audited = re.search(r'^        for wf in ([^;]+); do', text, re.M)
-    assert audited, 'nightly-heartbeat no longer lists the workflows it audits'
-    assert 'seed-ci-caches' in audited[1].split(), \
-        'nightly-heartbeat does not audit seed-ci-caches, so a cancelled seed run is silent'
-    checks += 1
+    listed = re.search(r'^        for wf in ([^;]+); do', text, re.M)
+    assert listed, 'nightly-heartbeat no longer lists the workflows it audits'
+    audited = set(listed[1].split())
+    covered = 0
+    for path in sorted(workflows.glob('*.yml')):
+        body = path.read_text()
+        if not re.search(r'^  schedule:[ \t]*$', body, re.M):
+            continue
+        if not re.search(r'^  watchdog:[ \t]*$', body, re.M):
+            continue
+        assert path.stem in audited, (
+            f'{path.name} has a watchdog but nightly-heartbeat does not audit it; '
+            f'a whole-run cancellation would kill the watchdog and report nothing')
+        covered += 1
+        checks += 1
+    assert covered >= 5, f'expected the watchdog workflows, found {covered}'
 
 
 def watchdog_arms_on_every_bad_end():
@@ -133,6 +144,6 @@ def watchdog_arms_on_every_bad_end():
 
 seed_budgets()
 scheduled_workflows_report()
-heartbeat_covers_seeding()
+heartbeat_covers_every_watchdog()
 watchdog_arms_on_every_bad_end()
 print(f'Seed cache budgets and scheduled-workflow reporting: {checks} checks passed')

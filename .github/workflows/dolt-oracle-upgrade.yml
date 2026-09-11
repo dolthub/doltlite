@@ -37,3 +37,40 @@ jobs:
 
     - name: Reconcile Dolt oracle upgrades
       run: bash .github/scripts/upgrade-dolt-oracle.sh
+
+  # A successful run's product is a pull request, so a failed run leaves
+  # nothing behind and an absent PR is indistinguishable from "Dolt had no new
+  # release today". The pin then stops tracking Dolt with nothing saying so.
+  # A whole-run cancellation kills this job too, which is what the weekly
+  # nightly-heartbeat audit catches from outside.
+  watchdog:
+    needs: upgrade
+    if: failure() || cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Describe the incident
+      run: |
+        {
+          echo "The scheduled Dolt oracle upgrade run did not finish."
+          echo ""
+          echo "This job reconciles \`.dolt-oracle-version\` against the latest"
+          echo "Dolt release and opens the upgrade pull request. When it fails"
+          echo "there is no pull request whose absence anyone would notice, so"
+          echo "the oracle silently stops tracking Dolt."
+          echo ""
+          echo "Currently pinned: \`$(tr -d '[:space:]' < .dolt-oracle-version)\`"
+          echo ""
+          echo "The upgrade script is \`set -euo pipefail\` throughout, so the"
+          echo "step log names the failing command."
+        } > "$RUNNER_TEMP/dolt-oracle-watchdog-body.md"
+    - uses: ./.github/actions/report-failure-issue
+      with:
+        label: dolt-oracle-upgrade
+        title: "Dolt oracle upgrade did not finish"
+        body-file: ${{ runner.temp }}/dolt-oracle-watchdog-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
