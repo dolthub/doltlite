@@ -19,12 +19,7 @@ BENCH_SAMPLES_FILE="$TMPDIR/bench_samples.tsv"
 printf 'section\ttest\trun\tbaseline_us\tcandidate_us\n' \
   > "$BENCH_SAMPLES_FILE"
 
-fmt_us() {
-  python3 - "$1" <<'PYEOF'
-import sys
-print(f"{int(sys.argv[1]):,}")
-PYEOF
-}
+BENCH_REPORT_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sysbench_report.py"
 
 run_bench() {
   local id="$1"
@@ -93,17 +88,6 @@ bench_runs_summary() {
   fi
 }
 
-median_us() {
-  python3 - "$@" <<'PYEOF'
-import sys
-vals = sorted(int(v) for v in sys.argv[1:] if int(v) >= 0)
-if not vals:
-    print(-1)
-else:
-    print(vals[len(vals)//2])
-PYEOF
-}
-
 run_bench_pair_stable() {
   local section="$1"
   local test_name="$2"
@@ -111,8 +95,6 @@ run_bench_pair_stable() {
   local baseline_db="$4"
   local candidate_db="$5"
   local runs i baseline_sample candidate_sample
-  local baseline_samples=()
-  local candidate_samples=()
   runs=$(bench_runs_for_test "$test_name")
 
   for ((i=1; i<=runs; i++)); do
@@ -131,16 +113,12 @@ run_bench_pair_stable() {
         baseline "$BENCH_BASELINE_KIND" "$BENCH_BASELINE_BINARY" \
         "$BENCH_BASELINE_TIMER" "$sql_file" "$baseline_db")
     fi
-    baseline_samples+=("$baseline_sample")
-    candidate_samples+=("$candidate_sample")
     printf '%s\t%s\t%d\t%s\t%s\n' \
       "$section" "$test_name" "$i" "$baseline_sample" "$candidate_sample" \
       >> "$BENCH_SAMPLES_FILE"
+    printf '%s\t%s\t%d\t%s\t%s\n' \
+      "$section" "$test_name" "$i" "$baseline_sample" "$candidate_sample"
   done
-
-  printf '%s\t%s\n' \
-    "$(median_us "${baseline_samples[@]}")" \
-    "$(median_us "${candidate_samples[@]}")"
 }
 
 run_section() {
@@ -148,43 +126,21 @@ run_section() {
   local tests="$2"
   local baseline_db="$3"
   local candidate_db="$4"
-  local ratio_sum=0
-  local ratio_count=0
-  local avg_ratio="--"
-  local t pair baseline candidate baseline_display candidate_display ratio
+  local t pair
+  local BENCH_SECTION_SAMPLES_FILE="$TMPDIR/bench_section_samples.tsv"
+  : > "$BENCH_SECTION_SAMPLES_FILE"
 
   echo "| Test | $BENCH_BASELINE_LABEL (us) | $BENCH_CANDIDATE_LABEL (us) | Multiplier |"
   echo "|------|------------:|--------------:|-----------:|"
   for t in $tests; do
     pair=$(run_bench_pair_stable \
       "$section" "$t" "$TMPDIR/$t.sql" "$baseline_db" "$candidate_db")
-    IFS=$'\t' read -r baseline candidate <<< "$pair"
-    baseline_display="$baseline"
-    candidate_display="$candidate"
-    if [ "$baseline" -eq -1 ] 2>/dev/null; then baseline_display="crash"; fi
-    if [ "$candidate" -eq -1 ] 2>/dev/null; then candidate_display="crash"; fi
-    if [ "$baseline" -ge 0 ] 2>/dev/null; then
-      baseline_display=$(fmt_us "$baseline")
+    if [ -n "$pair" ]; then
+      printf '%s\n' "$pair" >> "$BENCH_SECTION_SAMPLES_FILE"
     fi
-    if [ "$candidate" -ge 0 ] 2>/dev/null; then
-      candidate_display=$(fmt_us "$candidate")
-    fi
-    if [ "$baseline" -gt 0 ] 2>/dev/null \
-        && [ "$candidate" -ge 0 ] 2>/dev/null; then
-      ratio=$(python3 -c "print(f'{$candidate/$baseline:.2f}')")
-      ratio_sum=$(python3 -c "print($ratio_sum + ($candidate/$baseline))")
-      ratio_count=$((ratio_count + 1))
-    else
-      ratio="--"
-    fi
-    printf '%s\t%s\t%s\t%s\n' \
-      "$section" "$t" "$baseline" "$candidate" >> "$BENCH_RESULTS_FILE"
-    echo "| $t | $baseline_display | $candidate_display | ${ratio} |"
   done
-  if [ "$ratio_count" -gt 0 ]; then
-    avg_ratio=$(python3 -c "print(f'{($ratio_sum/$ratio_count):.2f}')")
-  fi
-  echo "| Average |  |  | ${avg_ratio} |"
+  python3 "$BENCH_REPORT_SCRIPT" section \
+    "$BENCH_SECTION_SAMPLES_FILE" "$section" "$tests" "$BENCH_RESULTS_FILE"
 }
 
 benchmark_autocommit_note() {
@@ -203,64 +159,11 @@ benchmark_gate_note() {
 }
 
 check_ceiling() {
-  local section="$1"
-  local tests="$2"
-  local max="$3"
-  local failed=0
-  local t line baseline candidate over ratio
-  for t in $tests; do
-    line=$(awk -F '\t' -v section="$section" -v test="$t" \
-      '$1==section && $2==test {print $3 "\t" $4; exit}' \
-      "$BENCH_RESULTS_FILE")
-    baseline="${line%%$'\t'*}"
-    candidate="${line#*$'\t'}"
-    if ! [ "$baseline" -gt 0 ] 2>/dev/null \
-        || ! [ "$candidate" -ge 0 ] 2>/dev/null; then
-      echo "FAIL: $section/$t did not produce valid timings" >&2
-      failed=1
-      continue
-    fi
-    over=$(python3 -c "r=$candidate/$baseline; print(1 if r>$max else 0)")
-    if [ "$over" = "1" ]; then
-      ratio=$(python3 -c "print(f'{$candidate/$baseline:.2f}')")
-      echo "FAIL: $section/$t = ${ratio}x (ceiling: ${max}x)" >&2
-      failed=1
-    fi
-  done
-  return "$failed"
+  python3 "$BENCH_REPORT_SCRIPT" ceiling "$BENCH_RESULTS_FILE" "$1" "$2" "$3"
 }
 
 check_average_ceiling() {
-  local section="$1"
-  local tests="$2"
-  local max="$3"
-  local ratio
-  ratio=$(python3 - "$BENCH_RESULTS_FILE" "$section" "$tests" <<'PYEOF'
-import sys
-path, section, tests = sys.argv[1], sys.argv[2], sys.argv[3].split()
-wanted = set(tests)
-ratios = []
-with open(path) as f:
-    for line in f:
-        cols = line.rstrip("\n").split("\t")
-        if len(cols) < 4 or cols[0] != section or cols[1] not in wanted:
-            continue
-        baseline, candidate = int(cols[2]), int(cols[3])
-        if baseline > 0 and candidate >= 0:
-            ratios.append(candidate / baseline)
-if len(ratios) == len(wanted):
-    print(f"{sum(ratios) / len(ratios):.2f}")
-PYEOF
-)
-  if [ -z "$ratio" ]; then
-    echo "FAIL: $section average is missing valid timings" >&2
-    return 1
-  fi
-  if python3 -c "r=$ratio; raise SystemExit(0 if r>$max else 1)"; then
-    echo "FAIL: $section average = ${ratio}x (ceiling: ${max}x)" >&2
-    return 1
-  fi
-  return 0
+  python3 "$BENCH_REPORT_SCRIPT" average "$BENCH_RESULTS_FILE" "$1" "$2" "$3"
 }
 
 benchmark_copy_results() {

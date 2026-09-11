@@ -141,10 +141,7 @@ jobs:
     - name: Download paired build metadata
       uses: actions/download-artifact@v4
       with:
-        name: benchmark-build
-
-    - name: Extract paired build metadata
-      run: tar -xzf benchmark-build.tar.gz
+        name: benchmark-build-metadata
 
     - name: Test relative comparison policy
       run: |
