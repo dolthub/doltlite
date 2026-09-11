@@ -38,7 +38,7 @@ jobs:
         BODY="$RUNNER_TEMP/heartbeat-body.md"
         : > "$BODY"
         SINCE=$(date -u -d '8 days ago' +%Y-%m-%d)
-        for wf in nightly-fuzz nightly-stress nightly-scale nightly-performance seed-ci-caches; do
+        for wf in nightly-fuzz nightly-stress nightly-scale nightly-performance seed-ci-caches dolt-oracle-upgrade; do
           state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}.yml" --jq .state)
           if [ "$state" != "active" ]; then
             echo "- \`$wf\` is **$state** — its schedule is not running at all." >> "$BODY"
