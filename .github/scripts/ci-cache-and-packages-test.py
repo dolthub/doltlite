@@ -203,10 +203,19 @@ def cache_producers():
     for text in (producer, consumer):
         assert 'path: benchmark-baseline\n' in text
         assert 'key: benchmark-base-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.base-key.outputs.key }}\n' in text
-    assert 'restore-keys:' not in producer.split('  macos:')[0]
-    assert producer.count("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)") == 2
-    assert "github.event_name != 'push'" in producer.split('  macos:')[1]
-    assert producer.count('cancel-in-progress: false') == 2
+    # An exact key only: a base build from another revision must never stand in.
+    assert 'restore-keys:' not in producer
+    # Every job that warms a cache is pinned to the default branch and queues
+    # rather than cancels, whatever the caches are split across.
+    parts = re.split(r'^  ([A-Za-z0-9_-]+):[ \t]*$', producer.split('\njobs:\n')[1], flags=re.M)
+    seeding = {name: body for name, body in zip(parts[1::2], parts[2::2])
+               if name != 'watchdog'}
+    assert len(seeding) >= 4, sorted(seeding)
+    for name, body in seeding.items():
+        assert "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)" in body, name
+        assert 'cancel-in-progress: false' in body, name
+        if name.startswith('macos'):
+            assert "github.event_name != 'push'" in body, name
     platform = (github / 'workflows/platform-test.yml').read_text()
     for text in (producer, platform):
         assert 'uses: ./.github/actions/macos-package-cache' in text
@@ -218,7 +227,7 @@ def cache_producers():
     assert '${{ runner.temp }}/doltlite-ccache' in action
     assert "'src/**'" in action and "'build/sqlite3.c'" in action
     assert 'CCACHE_COMPILERCHECK=content' in action
-    return 10
+    return 9 + len(seeding)
 
 
 if __name__ == '__main__':

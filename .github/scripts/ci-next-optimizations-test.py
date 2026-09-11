@@ -250,12 +250,19 @@ def wiring():
     seed = (repo / '.github/workflows/seed-ci-caches.yml').read_text()
     assert 'uses: ./.github/actions/compatibility-cache' in seed
     assert 'uses: ./.github/actions/compatibility-cache' in (repo / '.github/workflows/ci-build.yml').read_text()
-    mac = seed.split('  macos:\n')[1]
-    assert "github.event_name != 'push'" in mac
+    # The macOS caches may be split across jobs; what matters is that every
+    # macOS seed job skips pushes and that the pair warms both configurations.
+    parts = re.split(r'^  ([A-Za-z0-9_-]+):[ \t]*$', seed.split('\njobs:\n')[1], flags=re.M)
+    macs = {name: body for name, body in zip(parts[1::2], parts[2::2])
+            if 'runs-on: macos-latest' in body}
+    assert macs, 'no macOS seed job'
+    for name, body in macs.items():
+        assert "github.event_name != 'push'" in body, name
+    mac = ''.join(macs.values())
     assert mac.count('uses: ./.github/actions/macos-build-cache') == 2
     for name in ('checked-build', 'asan-build'):
         assert 'uses: ./.github/actions/macos-build-cache' in (repo / f'.github/actions/{name}/action.yml').read_text()
-    assert seed.count('runs-on: macos-latest') == 1
+    assert seed.count('runs-on: macos-latest') == len(macs)
     mac_build = (repo / '.github/workflows/macos-build.yml').read_text()
     warning = re.search(r'warning-flags: (.*)', mac_build)[1]
     flags = re.search(r'ASAN_CFLAGS: (.*)\n        (.*)', mac_build)
