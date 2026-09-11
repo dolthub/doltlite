@@ -30,6 +30,11 @@ For a DoltLite-format main database, the compatibility contract is:
   from HEAD.
 - Text is stored as UTF-8. Requests for a UTF-16 database encoding leave
   `PRAGMA encoding` at `UTF-8`.
+- An authorizer registered with `sqlite3_set_authorizer` sees a `dolt_*` call as
+  `SQLITE_FUNCTION` and may refuse it, but it does not see the statements that
+  command issues internally, nor the placeholder schema a lazy system table
+  declares to connect. Reads of real tables, `sqlite_master` included, stay
+  authorized, so denying those can still fail a version control read.
 - Stored generated columns are recomputed from merged base-column values. This
   covers a row only one branch changed and a row one branch inserted while the
   other added the generated column. Dependent generated columns and secondary

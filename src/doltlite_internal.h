@@ -27,6 +27,27 @@ typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 /* Commands must not run from persistent schema objects. */
 #define DOLTLITE_COMMAND_FUNC_FLAGS (SQLITE_UTF8 | SQLITE_DIRECTONLY)
 
+/* The authorizer judges the user's statement, not the statements a version
+** control surface issues to implement it. Stock ALTER and VACUUM likewise
+** rewrite sqlite_master without authorizing the rows they touch, so a
+** sandboxing authorizer must not see, or be able to refuse, our internals.
+** Calling the dolt_* function itself is still authorized as SQLITE_FUNCTION. */
+typedef struct DoltliteAuthShield DoltliteAuthShield;
+struct DoltliteAuthShield {
+  sqlite3 *db;
+#ifndef SQLITE_OMIT_AUTHORIZATION
+  sqlite3_xauth xAuth;
+#endif
+};
+void doltliteAuthShieldEnter(sqlite3 *db, DoltliteAuthShield *p);
+void doltliteAuthShieldLeave(DoltliteAuthShield *p);
+int doltliteCreateCommandFunc(
+  sqlite3 *db,
+  const char *zName,
+  int nArg,
+  void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
+);
+
 static SQLITE_INLINE int doltliteSplitRevisionRange(
   const char *zSpec,
   char **pzLeft,
@@ -616,6 +637,17 @@ static SQLITE_INLINE int doltliteVtabOpenCursor(
   return SQLITE_OK;
 }
 
+/* The placeholder table in a declared schema does not exist, so authorizing
+** reads of it only gives a sandbox a way to fail the constructor. */
+static SQLITE_INLINE int doltliteDeclareVtab(sqlite3 *db, const char *zSchema){
+  DoltliteAuthShield shield;
+  int rc;
+  doltliteAuthShieldEnter(db, &shield);
+  rc = sqlite3_declare_vtab(db, zSchema);
+  doltliteAuthShieldLeave(&shield);
+  return rc;
+}
+
 static SQLITE_INLINE int doltliteVtabConnectSimple(
   sqlite3 *db,
   const char *zSchema,
@@ -623,7 +655,7 @@ static SQLITE_INLINE int doltliteVtabConnectSimple(
   sqlite3_vtab **ppVtab
 ){
   sqlite3_vtab *pVtab;
-  int rc = sqlite3_declare_vtab(db, zSchema);
+  int rc = doltliteDeclareVtab(db, zSchema);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   pVtab = sqlite3_malloc(nByte);

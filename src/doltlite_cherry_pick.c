@@ -485,9 +485,8 @@ static void doltliteCherryPickFunc(
 
 
 int doltliteCherryPickRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_cherry_pick", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltliteCherryPickFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_cherry_pick", -1,
+                                 doltliteCherryPickFunc);
 }
 
 #endif

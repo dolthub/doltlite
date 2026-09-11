@@ -754,7 +754,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
     sqlite3_free(v);
     return SQLITE_NOMEM;
   }
-  rc = sqlite3_declare_vtab(db, zSchema);
+  rc = doltliteDeclareVtab(db, zSchema);
   sqlite3_free(zSchema);
   if( rc!=SQLITE_OK ){
     blameFreePkColumns(v->azPkNames, v->aPkColIdx, v->nPkCols);

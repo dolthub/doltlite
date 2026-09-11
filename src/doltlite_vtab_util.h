@@ -167,7 +167,7 @@ static SQLITE_INLINE int doltliteVtabConnectTable(
     if( !zSchema ){
       rc = SQLITE_NOMEM;
     }else{
-      rc = sqlite3_declare_vtab(db, zSchema);
+      rc = doltliteDeclareVtab(db, zSchema);
       sqlite3_free(zSchema);
     }
   }

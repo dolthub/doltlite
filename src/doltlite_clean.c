@@ -270,9 +270,8 @@ clean_done:
 }
 
 int doltliteCleanRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_clean", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltliteCleanFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_clean", -1,
+                                 doltliteCleanFunc);
 }
 
 #endif

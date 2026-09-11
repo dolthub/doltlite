@@ -2171,9 +2171,8 @@ rebase_cleanup:
 
 
 int doltliteRebaseRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_rebase", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltliteRebaseFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_rebase", -1,
+                                 doltliteRebaseFunc);
 }
 
 #endif
