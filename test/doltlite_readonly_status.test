@@ -1,0 +1,76 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-readonly-status
+# The CLI uses the default lock-byte range, unlike tester.tcl.
+set saved_pending_byte $sqlite_pending_byte
+sqlite3_test_control_pending_byte 0x40000000
+
+set CLI [test_binary_name doltlite]
+if {![file executable $CLI]} {error "DoltLite CLI missing: $CLI"}
+
+db eval {
+  CREATE TABLE t(id TEXT PRIMARY KEY, body TEXT);
+  INSERT INTO t VALUES('seed','x');
+  SELECT dolt_commit('-Am','seed');
+  INSERT INTO t VALUES('prior','x');
+}
+db close
+
+testvfs statusvfs
+statusvfs filter {xLock}
+proc status_lock {method path level} {
+  if {[string match *-lock $path] && $level==2} {incr ::graph_locks}
+  return SQLITE_OK
+}
+statusvfs script status_lock
+foreach readonly {0 1} {
+  sqlite3 db test.db -vfs statusvfs -readonly $readonly
+  foreach query {{SELECT count(*) FROM dolt_status} {SELECT * FROM dolt_status}} {
+    set graph_locks 0
+    do_test $testprefix-snapshot.$readonly.$query {
+      db eval $query
+      list $graph_locks [db eval {SELECT count(*) FROM t}]
+    } {0 2}
+  }
+  db close
+}
+statusvfs delete
+sqlite3 db test.db
+db eval {BEGIN IMMEDIATE; UPDATE t SET body='held' WHERE id='seed'}
+foreach mode {list box column markdown table html json} {
+  foreach stats {off on} {
+    foreach bail {0 1} {
+      do_test $testprefix-shell.$mode.$stats.$bail {
+        set sql ".mode $mode\n.stats $stats\n.bail $bail\n"
+        append sql "INSERT INTO t VALUES('refused','x'); SELECT 'UNEXPECTED_CONTINUATION'; SELECT dolt_commit('-Am','refused');\n"
+        append sql "SELECT 'NEXT_INPUT_LINE';\n"
+        set rc [catch {exec $CLI test.db << $sql 2>@1} out]
+        list $rc [string match {*database is locked*} $out] \
+             [string match {*UNEXPECTED_CONTINUATION*} $out] \
+             [string match {*commit conflict*} $out] \
+             [string match {*NEXT_INPUT_LINE*} $out]
+      } [list 1 1 0 0 [expr {!$bail}]]
+    }
+  }
+}
+do_test $testprefix-shell.commandline {
+  set rc [catch {exec $CLI test.db \
+    "INSERT INTO t VALUES('refused','x'); SELECT 'UNEXPECTED_CONTINUATION';" 2>@1} out]
+  list $rc [string match {*database is locked*} $out] \
+       [string match {*UNEXPECTED_CONTINUATION*} $out]
+} {1 1 0}
+db eval {ROLLBACK}
+do_execsql_test preserved {
+  SELECT id FROM t ORDER BY id;
+} {prior seed}
+do_test $testprefix-retry {
+  exec $CLI -bail test.db \
+    "INSERT INTO t VALUES('retried','x'); SELECT dolt_commit('-Am','retry');" 2>@1
+  db eval {SELECT id FROM t ORDER BY id}
+} {prior retried seed}
+db close
+sqlite3 db test.db
+do_execsql_test reopened {SELECT id FROM t ORDER BY id} {prior retried seed}
+db close
+sqlite3_test_control_pending_byte $saved_pending_byte
+finish_test

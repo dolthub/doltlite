@@ -1067,8 +1067,9 @@ int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
     return SQLITE_ERROR;
   }
   p = db->aDb[0].pBt;
-  if( !db->autoCommit || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
-   || db->pSavepoint ){
+  /* Nested SQL can end the B-tree read while an outer reader is still active. */
+  if( db->nVdbeRead>0 || !db->autoCommit
+   || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE || db->pSavepoint ){
     /* Cherry-pick/revert record conflicts without isMerging. */
     memcpy(pHash, &p->vc.conflictsCatalogHash, sizeof(*pHash));
     return SQLITE_OK;

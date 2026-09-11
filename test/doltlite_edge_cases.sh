@@ -400,21 +400,26 @@ SELECT dolt_commit('-A','-m','main: v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "multi_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
 run_test_match "multi_conflict_count" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT 'MC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT 'MC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^MC\\|2$" "$DB"
 
 run_test_match "multi_conflict_blocked" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT dolt_commit('-A','-m','fail');" \
   "cannot commit: unresolved merge conflicts|Use dolt_conflicts_resolve" "$DB"
 
 run_test_match "multi_conflict_users_ours" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'U|' || name FROM users WHERE id=1; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'U|' || name FROM users WHERE id=1; ROLLBACK;" \
   "^U\\|alice_v2$" "$DB"
 run_test_match "multi_conflict_resolved" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'R|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'R|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^R\\|0$" "$DB"
 run_test_match "multi_conflict_orders_ours" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'O|' || item FROM orders WHERE id=1; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'O|' || item FROM orders WHERE id=1; ROLLBACK;" \
   "^O\\|hat_v2$" "$DB"
 
 rm -f "$DB"
@@ -436,20 +441,25 @@ SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "ours_conflict_merge" "SELECT dolt_merge('hf');" "conflict" "$DB"
 run_test_match "ours_conflict_exists" \
-  "BEGIN; SELECT dolt_merge('hf'); SELECT 'OC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hf');
+SELECT 'OC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^OC\\|1$" "$DB"
 
 run_test_match "ours_conflicts_cleared" \
-  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OCC|' || count(*) FROM dolt_conflicts;" \
+  "SELECT dolt_merge('hf');
+SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OCC|' || count(*) FROM dolt_conflicts;" \
   "^OCC\\|0$" "$DB"
 run_test_match "ours_value_kept" \
-  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OV|' || v FROM t WHERE id=1;" \
+  "SELECT dolt_merge('hf');
+SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OV|' || v FROM t WHERE id=1;" \
   "^OV\\|main_val$" "$DB"
 run_test_match "ours_other_row_ok" \
-  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OR|' || v FROM t WHERE id=2;" \
+  "SELECT dolt_merge('hf');
+SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OR|' || v FROM t WHERE id=2;" \
   "^OR\\|keep$" "$DB"
 run_test_match "ours_branch_ok" \
-  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OB|' || active_branch();" \
+  "SELECT dolt_merge('hf');
+SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OB|' || active_branch();" \
   "^OB\\|main$" "$DB"
 
 rm -f "$DB"

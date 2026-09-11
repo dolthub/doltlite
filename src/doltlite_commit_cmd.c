@@ -1043,7 +1043,12 @@ static void doltliteCommitFunc(
   }
   if( rc==SQLITE_BUSY ){
     rc = doltliteRestoreTxnStateOnFailure(db, &mutationState, rc);
-    doltliteCmdResultPeerBranchBusy(context, "commit");
+    if( rc==SQLITE_BUSY ){
+      sqlite3_result_error(context,
+          "cannot commit: database is busy or branch HEAD changed. "
+          "Please retry your transaction.", -1);
+    }
+    sqlite3_result_error_code(context, rc);
     return;
   }
   if( rc!=SQLITE_OK ){

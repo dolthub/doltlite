@@ -7,6 +7,11 @@ format semantics.
 
 For a DoltLite-format main database, the compatibility contract is:
 
+- A CLI statement failure reports the original error and stops the remaining
+  statements in that SQL input batch. With `.bail on`, it also stops reading
+  subsequent input. Failed statements are not silently skipped before a
+  later `dolt_commit`.
+
 - DoltLite uses its own on-disk format. Standard SQLite files are detected and
   routed to SQLite's original B-tree engine, but Dolt version-control features
   are available only on DoltLite-format databases.

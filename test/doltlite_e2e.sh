@@ -72,18 +72,22 @@ SELECT dolt_commit('-A','-m','Main: update Alice name');" | $DOLTLITE "$DB" > /d
 run_test_match "e2e_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
 
 run_test_match "e2e_has_conflicts" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT 'EC|' || num_conflicts FROM dolt_conflicts WHERE \"table\"='users'; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT 'EC|' || num_conflicts FROM dolt_conflicts WHERE \"table\"='users'; ROLLBACK;" \
   "^EC\\|1$" "$DB"
 
 run_test_match "e2e_commit_blocked" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT dolt_commit('-A','-m','fail');" \
   "cannot commit: unresolved merge conflicts|Use dolt_conflicts_resolve" "$DB"
 
 run_test_match "e2e_conflicts_cleared" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'ER|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'ER|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^ER\\|0$" "$DB"
 run_test_match "e2e_ours_kept" \
-  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'EU|' || name FROM users WHERE id=1; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('hotfix');
+SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'EU|' || name FROM users WHERE id=1; ROLLBACK;" \
   "^EU\\|alice_updated$" "$DB"
 
 echo "INSERT INTO users VALUES(99,'Temp','temp@test.com');" | $DOLTLITE "$DB" > /dev/null 2>&1

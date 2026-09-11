@@ -41,6 +41,10 @@ dl_query() {
   "$DOLTLITE" "$db" "$@" 2>/dev/null
 }
 
+dl_script() {
+  printf '%s\n' "$2" | "$DOLTLITE" "$1" 2>/dev/null
+}
+
 dolt_query() {
   local dir="$1"; shift
   cd "$dir" && "$DOLT" sql -c -q "$@" -r csv 2>/dev/null | tail -1
@@ -504,7 +508,7 @@ echo "--- BEGIN + BEGIN + COMMIT + dolt_commit ---"
 
 DB="$TMPROOT/m.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;
 INSERT INTO t VALUES(1,'in-outer');
@@ -537,7 +541,7 @@ echo "--- BEGIN + BEGIN + dolt_commit + COMMIT ---"
 
 DB="$TMPROOT/n.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;
 INSERT INTO t VALUES(1,'in-outer');
@@ -570,7 +574,7 @@ echo "--- BEGIN IMMEDIATE + BEGIN + COMMIT + dolt_commit ---"
 
 DB="$TMPROOT/o.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN IMMEDIATE;
 INSERT INTO t VALUES(1,'in-immediate');
@@ -603,7 +607,7 @@ echo "--- BEGIN IMMEDIATE + BEGIN + dolt_commit + COMMIT ---"
 
 DB="$TMPROOT/p.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN IMMEDIATE;
 INSERT INTO t VALUES(1,'in-immediate');
