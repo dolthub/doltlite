@@ -523,7 +523,8 @@ run_test "schema_conflicts_not_persisted" \
   "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts);" \
   "0|0" "$DB"
 run_test_match "schema_conflicts_abort" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_merge('--abort');" "^[0-9]+$" "$DB"
+  "BEGIN; SELECT dolt_merge('feat');
+SELECT dolt_merge('--abort');" "^[0-9]+$" "$DB"
 run_test "schema_conflicts_abort_clears" \
   "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
   "0|0|0" "$DB"

@@ -316,7 +316,7 @@ scenario "merge adopts a branch-added vtab of every flavor"
 newdb
 run_sql "CREATE TABLE plain(k INTEGER PRIMARY KEY, v TEXT); INSERT INTO plain VALUES(1,'p');
 SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
-run_sql "SELECT dolt_checkout('-b','side'); $FIXTURE SELECT dolt_commit('-Am','side adds vtabs');
+run_sql "SELECT dolt_checkout('-b','side'); ${FIXTURE%%CREATE TABLE plain*} SELECT dolt_commit('-Am','side adds vtabs');
 SELECT dolt_checkout('main'); INSERT INTO plain VALUES(2,'m'); SELECT dolt_commit('-am','main');
 SELECT dolt_merge('side');" "$DB" > /dev/null 2>&1
 verify "merge_adopt_all_flavors" "$DB" "$BASE_STATE"

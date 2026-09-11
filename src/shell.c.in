@@ -3918,19 +3918,31 @@ static int shell_exec(
       bind_prepared_stmt(pArg, pStmt);
       if( isExplain && pArg->mode.autoExplain ){
         spec.eStyle = isExplain==1 ? QRF_STYLE_Explain : QRF_STYLE_Eqp;
+#ifdef DOLTLITE_PROLLY
+        rc = sqlite3_format_query_result(pStmt, &spec, pzErrMsg);
+#else
         sqlite3_format_query_result(pStmt, &spec, pzErrMsg);
+#endif
       }else if( pArg->mode.eMode==MODE_Www ){
         cli_printf(pArg->out,
               "</PRE>\n"
               "<TABLE border='1' cellspacing='0' cellpadding='2'>\n");
         spec.eStyle = QRF_STYLE_Html;
+#ifdef DOLTLITE_PROLLY
+        rc = sqlite3_format_query_result(pStmt, &spec, pzErrMsg);
+#else
         sqlite3_format_query_result(pStmt, &spec, pzErrMsg);
+#endif
         cli_printf(pArg->out,
               "</TABLE>\n"
               "<PRE>");
       }else{
         spec.eStyle = eStyle;
+#ifdef DOLTLITE_PROLLY
+        rc = sqlite3_format_query_result(pStmt, &spec, pzErrMsg);
+#else
         sqlite3_format_query_result(pStmt, &spec, pzErrMsg);
+#endif
       }
 
       /* print usage stats if stats on */
@@ -3939,7 +3951,11 @@ static int shell_exec(
       }
 
       /* print loop-counters if required */
-      if( pArg && pArg->mode.scanstatsOn ){
+      if( pArg && pArg->mode.scanstatsOn
+#ifdef DOLTLITE_PROLLY
+       && rc==SQLITE_OK
+#endif
+      ){
         char *zErr = 0;
         switch( pArg->mode.scanstatsOn ){
           case 1:   spec.eStyle = QRF_STYLE_Stats;     break;
@@ -3958,11 +3974,19 @@ static int shell_exec(
       ** copy of the error message. Otherwise, set zSql to point to the
       ** next statement to execute. */
       rc2 = sqlite3_finalize(pStmt);
+#ifdef DOLTLITE_PROLLY
+      if( rc==SQLITE_OK ) rc = rc2;
+#else
       if( rc!=SQLITE_NOMEM ) rc = rc2;
+#endif
       if( rc==SQLITE_OK ){
         zSql = zLeftover;
         while( IsSpace(zSql[0]) ) zSql++;
-      }else if( pzErrMsg ){
+      }else if( pzErrMsg
+#ifdef DOLTLITE_PROLLY
+             && *pzErrMsg==0
+#endif
+      ){
         *pzErrMsg = save_err_msg(db, "stepping", rc, 0);
       }
 

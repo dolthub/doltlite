@@ -21,11 +21,13 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "checkout_blocked_conflict" \
-  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_checkout('feature'); ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('feature');
+SELECT dolt_checkout('feature'); ROLLBACK;" \
   "unresolved merge conflicts" "$DB"
 
 run_test_match "checkout_create_blocked_conflict" \
-  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_checkout('-b','blocked_branch_tx'); ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('feature');
+SELECT dolt_checkout('-b','blocked_branch_tx'); ROLLBACK;" \
   "unresolved merge conflicts" "$DB"
 
 TX_OUT=$({

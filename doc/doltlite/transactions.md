@@ -58,7 +58,7 @@ One durable writer at a time per database file. What a second connection sees:
 |---|---|
 | A peer holds an open write transaction | `database is locked` (`SQLITE_BUSY`). `busy_timeout` applies. |
 | A read transaction tries to write after a peer committed | `database is locked` (`SQLITE_BUSY_SNAPSHOT`). The read snapshot is stale; roll back and retry. |
-| `dolt_commit` while a peer advanced the branch first | `commit conflict: another connection committed to this branch. Please retry your transaction.` |
+| `dolt_commit` while the graph lock is busy or a peer advanced the branch first | `cannot commit: database is busy or branch HEAD changed. Please retry your transaction.` |
 | Merge, cherry-pick, revert, pull racing a peer commit | `SQLITE_BUSY`; nothing is lost, retry the operation |
 
 Readers never block on writers and never see uncommitted rows or staging.

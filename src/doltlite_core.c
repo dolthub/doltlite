@@ -164,7 +164,9 @@ int doltliteRefreshAndConfirmHead(
     return SQLITE_BUSY;
   }
 
-  rc = chunkStoreLockAndRefresh(cs);
+  do {
+    rc = chunkStoreLockAndRefresh(cs);
+  }while( rc==SQLITE_BUSY && sqlite3InvokeBusyHandler(&db->busyHandler) );
   if( rc!=SQLITE_OK ) return rc;
 
   /* Refresh in-memory state. No-op under a reentrant lock, so not a CAS basis. */

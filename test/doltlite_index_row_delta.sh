@@ -204,7 +204,8 @@ SELECT dolt_checkout('main');
 INSERT INTO t VALUES(2, 9);
 SELECT dolt_commit('-Am','main');
 EOF
-out=$(echo "BEGIN; SELECT dolt_merge('feat'); SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations; ROLLBACK;" | $DOLTLITE "$DB" 2>/dev/null | tail -1)
+out=$(echo "BEGIN; SELECT dolt_merge('feat');
+SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations; ROLLBACK;" | $DOLTLITE "$DB" 2>/dev/null | tail -1)
 if [ "$out" = "2" ]; then
   PASS=$((PASS+1))
 else
