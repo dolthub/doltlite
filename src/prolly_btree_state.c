@@ -1074,9 +1074,11 @@ int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
     return SQLITE_OK;
   }
   if( db->autoCommit && sqlite3_txn_state(db, "main")==SQLITE_TXN_NONE ){
-    /* Idle: refresh so the in-memory read sees the durable working set. */
+    /* Idle: refresh so the in-memory read sees the durable working set.
+    ** The graph lock is exclusive, so a read-only connection taking it here
+    ** would stall writers to do a read it never needs to serialize. */
     pStore = &p->pBt->store;
-    if( chunkStoreLockAndRefresh(pStore)==SQLITE_OK ){
+    if( !pStore->readOnly && chunkStoreLockAndRefresh(pStore)==SQLITE_OK ){
       (void)chunkStoreForceRefresh(pStore);
       chunkStoreUnlock(pStore);
     }
