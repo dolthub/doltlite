@@ -493,7 +493,7 @@ static int doltliteRebaseLinearReplay(
         &replayCommit.catalogHash,
         &curHead, 0,
         replayCommit.zMessage ? replayCommit.zMessage : "",
-        0, 1, &nConflicts, &nViolations, &zApplyErr, hexBuf);
+        0, 0, 0, 1, &nConflicts, &nViolations, &zApplyErr, hexBuf);
 
     doltliteCommitClear(&replayCommit);
     doltliteCommitClear(&parentCommit);

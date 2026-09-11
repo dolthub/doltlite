@@ -1621,6 +1621,8 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *ourHead,
   const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
   int bPreferOurMaster,
   int bRejectUnchanged,
   int *pnConflicts,

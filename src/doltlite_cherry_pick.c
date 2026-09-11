@@ -139,6 +139,8 @@ int applyMergedCatalogAndCommit(
   const ProllyHash *ourHead,
   const ProllyHash *pCommitOurCatHash,
   const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
   int bPreferOurMaster,
   int bRejectUnchanged,
   int *pnConflicts,
@@ -326,7 +328,7 @@ int applyMergedCatalogAndCommit(
   }
 
   rc = doltliteCreateAndStoreCommit(db, ourHead, &commitCatHash,
-      zMessage, NULL, NULL, NULL, 0, &commitHash);
+      zMessage, zAuthorName, zAuthorEmail, NULL, 0, &commitHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteCompareAndAdvanceBranch(
@@ -469,7 +471,7 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 1, &nConflicts, 0,
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, 0, 1, &nConflicts, 0,
         &zApplyErr, hexBuf);
   }
 

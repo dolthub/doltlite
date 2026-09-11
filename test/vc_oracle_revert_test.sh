@@ -178,6 +178,24 @@ SELECT CONCAT('L|', message) FROM dolt_log
   WHERE message IN ('schema', 'add row') OR message LIKE 'Revert%';
 "
 
+oracle_state "revert_author_override" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES(2, 'b');
+SELECT dolt_commit('-am', 'c2');
+SELECT dolt_revert('HEAD', '--author', 'Ann <ann@x.com>');
+" "
+SELECT 'L|' || committer || '|' || coalesce(email, '') || '|' || message
+  FROM dolt_log LIMIT 1;
+SELECT 'C|' || count(*) FROM t;
+" "
+SELECT CONCAT('L|', committer, '|', coalesce(email, ''), '|', message)
+  FROM dolt_log LIMIT 1;
+SELECT CONCAT('C|', count(*)) FROM t;
+"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

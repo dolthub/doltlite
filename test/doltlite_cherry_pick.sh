@@ -312,6 +312,46 @@ run_test_match "rv_err_badhash" "SELECT dolt_revert('bad');" "invalid" "$DB"
 run_test_match "rv_err_initial" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
   "initial commit" "$DB"
+run_test_match "rv_author_bad" \
+  "SELECT dolt_revert('HEAD','--author','not-an-author');" \
+  "Author not formatted correctly" "$DB"
+run_test_match "rv_author_empty_email" \
+  "SELECT dolt_revert('HEAD','--author','Ann <>');" \
+  "empty author email" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rv_author_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-am','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "rv_author_hash" \
+  "SELECT dolt_revert('HEAD','--author','Ann <ann@x.com>');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_author_committer" "SELECT committer FROM dolt_log LIMIT 1;" "Ann" "$DB"
+run_test "rv_author_email" "SELECT email FROM dolt_log LIMIT 1;" "ann@x.com" "$DB"
+run_test "rv_author_message" "SELECT message FROM dolt_log LIMIT 1;" "Revert \"c2\"" "$DB"
+run_test "rv_author_count" "SELECT count(*) FROM t;" "1" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rv_author_first_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-am','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "rv_author_first_hash" \
+  "SELECT dolt_revert('--author','Ann <ann@x.com>','HEAD');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_author_first_committer" "SELECT committer FROM dolt_log LIMIT 1;" "Ann" "$DB"
+run_test "rv_author_first_count" "SELECT count(*) FROM t;" "1" "$DB"
 
 rm -f "$DB"
 

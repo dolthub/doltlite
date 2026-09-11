@@ -135,6 +135,12 @@ static void doltliteRevertFunc(
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
   const char *zRef;
+  const char *zAuthor = 0;
+  char *zParsedName = 0, *zParsedEmail = 0;
+  DoltliteCmdArgs args;
+  DoltliteCmdOption aOption[] = {
+    { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &zAuthor }
+  };
   ProllyHash revertHash, ourHead;
   ProllyHash liveOurCatalog;
   DoltliteCommit revertCommit, parentCommit, ourCommit;
@@ -154,30 +160,42 @@ static void doltliteRevertFunc(
     sqlite3_result_int(context, 0);
     return;
   }
-  if( argc>1 ){
-    char *zErr = sqlite3_mprintf("branch not found: %s",
-        (const char*)sqlite3_value_text(argv[1]));
-    if( zErr ){
-      sqlite3_result_error(context, zErr, -1);
-      sqlite3_free(zErr);
-    }else{
-      sqlite3_result_error_nomem(context);
-    }
-    return;
-  }
 
-  if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
-    sqlite3_result_error(context, "invalid commit hash", -1);
+  rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
+                            0, &args);
+  if( rc!=SQLITE_OK ) return;
+  if( args.nPositional!=1 ){
+    int nPos = args.nPositional;
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context,
+      nPos>1
+        ? "reverting multiple commits is not supported yet."
+        : "nothing specified to revert",
+      -1);
     return;
   }
-  zRef = (const char*)sqlite3_value_text(argv[0]);
-  if( !zRef ){
-    sqlite3_result_error_nomem(context);
-    return;
+  zRef = args.azPositional[0];
+  if( zAuthor ){
+    rc = doltliteCmdParseAuthor(context, zAuthor, &zParsedName, &zParsedEmail);
+    if( rc!=SQLITE_OK ){
+      doltliteCmdArgsClear(&args);
+      return;
+    }
+    if( !zParsedEmail || zParsedEmail[0]==0 ){
+      sqlite3_free(zParsedName);
+      sqlite3_free(zParsedEmail);
+      doltliteCmdArgsClear(&args);
+      sqlite3_result_error(context,
+        "Aborting commit due to empty author email. Is your config set?", -1);
+      return;
+    }
   }
+  doltliteCmdArgsClear(&args);
 
   rc = doltliteResolveRef(db,zRef, &revertHash);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zParsedName);
+    sqlite3_free(zParsedEmail);
     doltliteCmdReportInvalidCommitHash(context, cs, rc);
     return;
   }
@@ -188,6 +206,8 @@ static void doltliteRevertFunc(
   if( doltliteCmdReportLoadParentedCommitError(
         context, cs, rc, &revertCommit, &parentCommit, &ourCommit,
         "cannot revert the initial commit") ){
+    sqlite3_free(zParsedName);
+    sqlite3_free(zParsedEmail);
     return;
   }
 
@@ -201,6 +221,8 @@ static void doltliteRevertFunc(
       doltliteCommitClear(&revertCommit);
       doltliteCommitClear(&parentCommit);
       doltliteCommitClear(&ourCommit);
+      sqlite3_free(zParsedName);
+      sqlite3_free(zParsedEmail);
       sqlite3_result_error(context,
         "Your local changes would be overwritten by revert.\n"
         "hint: Please commit your changes before you revert.", -1);
@@ -221,13 +243,16 @@ static void doltliteRevertFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &revertCommit.catalogHash, &liveOurCatalog,
-        &parentCommit.catalogHash, &ourHead, pCommitOurs, msg, 1, 1,
+        &parentCommit.catalogHash, &ourHead, pCommitOurs, msg,
+        zParsedName, zParsedEmail, 1, 1,
         &nConflicts, 0, &zApplyErr, hexBuf);
   }
 
   doltliteCommitClear(&revertCommit);
   doltliteCommitClear(&parentCommit);
   doltliteCommitClear(&ourCommit);
+  sqlite3_free(zParsedName);
+  sqlite3_free(zParsedEmail);
 
   doltliteCmdFinishApplyMerged(
       context, cs, rc, nConflicts, zApplyErr, "revert", zRef,
@@ -239,6 +264,8 @@ revert_error:
   doltliteCommitClear(&revertCommit);
   doltliteCommitClear(&parentCommit);
   doltliteCommitClear(&ourCommit);
+  sqlite3_free(zParsedName);
+  sqlite3_free(zParsedEmail);
   if( !doltliteCmdSourceResultError(context, cs, &rc) ){
     char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
     sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
