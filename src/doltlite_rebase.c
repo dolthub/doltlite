@@ -709,7 +709,7 @@ static int doltliteValidateRebasePlanTable(sqlite3 *db, char **pzErr){
       "rebase_order REAL PRIMARY KEY, "
       "action TEXT, "
       "commit_hash TEXT, "
-      "commit_message TEXT)");
+      "commit_message TEXT NOT NULL)");
   }
   return SQLITE_CONSTRAINT;
 }
@@ -748,6 +748,10 @@ static int rebaseReadPlan(sqlite3 *db, RebasePlanRow **paPlan, int *pnPlan){
     RebasePlanRow *r;
     const char *zHex;
 
+    if( sqlite3_column_type(pStmt, 3)==SQLITE_NULL ){
+      rc = SQLITE_CONSTRAINT_NOTNULL;
+      goto fail;
+    }
     if( nPlan >= nAlloc ){
       int nNew = nAlloc ? nAlloc*2 : 16;
       RebasePlanRow *tmp = sqlite3_realloc(aPlan, nNew*(int)sizeof(RebasePlanRow));
@@ -857,7 +861,7 @@ static int rebaseWritePlanRows(
     "  rebase_order REAL PRIMARY KEY,"
     "  action TEXT,"
     "  commit_hash TEXT,"
-    "  commit_message TEXT"
+    "  commit_message TEXT NOT NULL"
     ")", 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -931,7 +935,7 @@ static int rebaseCreateAndPopulatePlanTable(
     "  rebase_order REAL PRIMARY KEY,"
     "  action TEXT,"
     "  commit_hash TEXT,"
-    "  commit_message TEXT"
+    "  commit_message TEXT NOT NULL"
     ")", 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -968,6 +972,7 @@ static int rebaseApplyPlanRowCatalog(
   const RebasePlanRow *pRow,
   const ProllyHash *pCurCat,
   ProllyHash *pMergedCat,
+  char **pzMessage,
   char **pzErr
 ){
   DoltliteCommit parentC, replayC;
@@ -975,6 +980,7 @@ static int rebaseApplyPlanRowCatalog(
   int nViolations = 0;
   int rc;
 
+  *pzMessage = 0;
   memset(&parentC, 0, sizeof(parentC));
   memset(&replayC, 0, sizeof(replayC));
 
@@ -1011,11 +1017,20 @@ static int rebaseApplyPlanRowCatalog(
     rc = doltliteDetectConstraintViolationsFiltered(
         db, &parentC.catalogHash, 0, 0, 1, &nViolations, pzErr);
   }
+  if( rc==SQLITE_OK && (nConflicts>0 || nViolations>0) ){
+    rc = SQLITE_CONSTRAINT;
+  }
+  if( rc==SQLITE_OK ){
+    const char *zMessage = replayC.zMessage;
+    if( strcmp(pRow->zAction, "reword")==0 && pRow->zCommitMessage[0] ){
+      zMessage = pRow->zCommitMessage;
+    }
+    *pzMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
+    if( !*pzMessage ) rc = SQLITE_NOMEM;
+  }
   doltliteCommitClear(&parentC);
   doltliteCommitClear(&replayC);
-  if( rc!=SQLITE_OK ) return rc;
-  if( nConflicts>0 || nViolations>0 ) return SQLITE_CONSTRAINT;
-  return SQLITE_OK;
+  return rc;
 }
 
 static void (*rebaseBeforeAdvanceHook)(void) = 0;
@@ -1072,36 +1087,34 @@ static int rebaseReplayPlanGroup(
 
   startCat = *pCurCat;
   rc = rebaseApplyPlanRowCatalog(
-      db, &aPlan[iStart], pCurCat, pCurCat, pzErr);
+      db, &aPlan[iStart], pCurCat, pCurCat, &combinedMsg, pzErr);
   if( rc!=SQLITE_OK ) return rc;
-
-  combinedMsg = sqlite3_mprintf("%s",
-      aPlan[iStart].zCommitMessage ? aPlan[iStart].zCommitMessage : "");
-  if( !combinedMsg ) return SQLITE_NOMEM;
 
   j = iStart + 1;
   while( j < nPlan
       && (strcmp(aPlan[j].zAction, "squash")==0
        || strcmp(aPlan[j].zAction, "fixup")==0
        || strcmp(aPlan[j].zAction, "drop")==0) ){
+    char *zMessage = 0;
     if( strcmp(aPlan[j].zAction, "drop")==0 ){
       j++;
       continue;
     }
 
-    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat, pzErr);
+    rc = rebaseApplyPlanRowCatalog(
+        db, &aPlan[j], pCurCat, pCurCat, &zMessage, pzErr);
     if( rc!=SQLITE_OK ){
       sqlite3_free(combinedMsg);
       return rc;
     }
 
     if( strcmp(aPlan[j].zAction, "squash")==0 ){
-      char *zNew = sqlite3_mprintf("%s\n\n%s", combinedMsg,
-                                   aPlan[j].zCommitMessage ? aPlan[j].zCommitMessage : "");
+      char *zNew = sqlite3_mprintf("%s\n\n%s", combinedMsg, zMessage);
       sqlite3_free(combinedMsg);
       combinedMsg = zNew;
-      if( !combinedMsg ) return SQLITE_NOMEM;
     }
+    sqlite3_free(zMessage);
+    if( !combinedMsg ) return SQLITE_NOMEM;
     j++;
   }
 
@@ -1826,6 +1839,11 @@ static void doltliteRebaseInteractiveContinue(
   }
 
   rc = rebaseReadPlan(db, &aPlan, &nPlan);
+  if( rc==SQLITE_CONSTRAINT_NOTNULL ){
+    sqlite3_result_error(context,
+      "dolt_rebase.commit_message must not be NULL", -1);
+    goto abort_err_silent;
+  }
   if( rc!=SQLITE_OK ) goto abort_err;
 
   /* Unknown plan verbs (typos in dolt_rebase.action) are not silent picks.

@@ -1,0 +1,112 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc rebase_message_setup {} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(0);
+    SELECT dolt_commit('-Am', 'init');
+    SELECT dolt_checkout('-b', 'feat');
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-am', 'f1');
+    INSERT INTO t VALUES(2);
+    SELECT dolt_commit('-am', 'f2');
+    INSERT INTO t VALUES(3);
+    SELECT dolt_commit('-am', 'f3');
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(10);
+    SELECT dolt_commit('-am', 'main');
+    SELECT dolt_checkout('feat');
+    SELECT dolt_rebase('-i', 'main');
+  }
+}
+
+foreach {name plan expected} {
+  pick {
+    UPDATE dolt_rebase SET commit_message = 'ignored';
+  } {f3 f2 f1 main init}
+  squash {
+    UPDATE dolt_rebase SET commit_message = 'ignored';
+    UPDATE dolt_rebase SET action = 'squash' WHERE rebase_order = 2;
+  } {f3 {f1
+
+f2} main init}
+  reword_squash_fixup {
+    UPDATE dolt_rebase SET commit_message = 'ignored';
+    UPDATE dolt_rebase SET action = 'reword', commit_message = 'rewritten'
+      WHERE rebase_order = 1;
+    UPDATE dolt_rebase SET action = 'squash' WHERE rebase_order = 2;
+    UPDATE dolt_rebase SET action = 'fixup' WHERE rebase_order = 3;
+  } {{rewritten
+
+f2} main init}
+  empty {
+    UPDATE dolt_rebase SET commit_message = '';
+    UPDATE dolt_rebase SET action = 'reword' WHERE rebase_order = 1;
+  } {f3 f2 f1 main init}
+} {
+  rebase_message_setup
+  do_test rebase-messages-$name {
+    execsql $plan
+    execsql {SELECT dolt_rebase('--continue')}
+    execsql {SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%'}
+  } $expected
+  do_execsql_test rebase-messages-$name-rows {
+    SELECT id FROM t ORDER BY id;
+  } {0 1 2 3 10}
+}
+
+rebase_message_setup
+do_test rebase-messages-hash {
+  set first [db one {SELECT commit_hash FROM dolt_rebase WHERE rebase_order=1}]
+  set third [db one {SELECT commit_hash FROM dolt_rebase WHERE rebase_order=3}]
+  db eval {UPDATE dolt_rebase SET commit_hash=$third WHERE rebase_order=1}
+  db eval {UPDATE dolt_rebase SET commit_hash=$first WHERE rebase_order=3}
+  execsql {SELECT dolt_rebase('--continue')}
+  execsql {SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%'}
+} {f1 f2 f3 main init}
+
+rebase_message_setup
+do_catchsql_test rebase-messages-null-update {
+  UPDATE dolt_rebase SET commit_message = CASE rebase_order
+    WHEN 2 THEN NULL ELSE 'changed' END;
+} {1 {NOT NULL constraint failed: dolt_rebase.commit_message}}
+do_execsql_test rebase-messages-null-update-atomic {
+  SELECT commit_message FROM dolt_rebase ORDER BY rebase_order;
+} {f1 f2 f3}
+do_catchsql_test rebase-messages-null-insert {
+  INSERT INTO dolt_rebase SELECT 4, 'pick', commit_hash, NULL
+    FROM dolt_rebase WHERE rebase_order=1;
+} {1 {NOT NULL constraint failed: dolt_rebase.commit_message}}
+do_test rebase-messages-null-continue {
+  execsql {SELECT dolt_rebase('--continue')}
+  execsql {SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%'}
+} {f3 f2 f1 main init}
+
+rebase_message_setup
+execsql {
+  CREATE TEMP TABLE saved_plan AS SELECT * FROM dolt_rebase;
+  DROP TABLE dolt_rebase;
+  CREATE TABLE dolt_rebase(rebase_order REAL PRIMARY KEY,
+    action TEXT, commit_hash TEXT, commit_message TEXT);
+  INSERT INTO dolt_rebase SELECT * FROM saved_plan;
+  DROP TABLE saved_plan;
+  UPDATE dolt_rebase SET commit_message=NULL WHERE rebase_order=2;
+}
+do_catchsql_test rebase-messages-legacy-null {
+  SELECT dolt_rebase('--continue');
+} {1 {dolt_rebase.commit_message must not be NULL}}
+do_execsql_test rebase-messages-legacy-plan-retained {
+  SELECT count(*) FROM dolt_rebase;
+  SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';
+} {3 1}
+do_test rebase-messages-legacy-repair {
+  execsql {
+    UPDATE dolt_rebase SET commit_message='ignored' WHERE rebase_order=2;
+    SELECT dolt_rebase('--continue');
+  }
+  execsql {SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%'}
+} {f3 f2 f1 main init}
+
+finish_test
