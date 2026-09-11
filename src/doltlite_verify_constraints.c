@@ -361,9 +361,8 @@ cleanup:
 }
 
 int doltliteVerifyConstraintsRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_verify_constraints", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltVerifyConstraintsFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_verify_constraints", -1,
+                                 doltVerifyConstraintsFunc);
 }
 
 #endif

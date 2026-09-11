@@ -248,9 +248,8 @@ revert_error:
 
 
 int doltliteRevertRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_revert", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltliteRevertFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_revert", -1,
+                                 doltliteRevertFunc);
 }
 
 #endif

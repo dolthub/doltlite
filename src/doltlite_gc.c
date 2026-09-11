@@ -1243,9 +1243,8 @@ int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase){
 }
 
 int doltliteGcRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_gc", 0,
-                                  DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                  doltliteGcFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_gc", 0,
+                                 doltliteGcFunc);
 }
 
 #endif

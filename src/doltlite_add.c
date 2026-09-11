@@ -1090,9 +1090,8 @@ add_cleanup:
 
 
 int doltliteAddRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_add", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltliteAddFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_add", -1,
+                                 doltliteAddFunc);
 }
 
 #endif

@@ -482,16 +482,13 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
 
 int doltliteBranchRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_function(db, "dolt_branch", -1,
-                               DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                               doltBranchFunc, 0, 0);
-  if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_checkout", -1,
-                                                  DOLTLITE_COMMAND_FUNC_FLAGS,
-                                                  0, doltCheckoutFunc, 0, 0);
+  rc = doltliteCreateCommandFunc(db, "dolt_branch", -1,
+                                 doltBranchFunc);
+  if(rc==SQLITE_OK) rc = doltliteCreateCommandFunc(db, "dolt_checkout", -1,
+                                 doltCheckoutFunc);
   if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "active_branch", 0, SQLITE_UTF8, 0, activeBranchFunc, 0, 0);
-  if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_connect_branch", 1,
-                                                  DOLTLITE_COMMAND_FUNC_FLAGS,
-                                                  0, doltConnectBranchFunc, 0, 0);
+  if(rc==SQLITE_OK) rc = doltliteCreateCommandFunc(db, "dolt_connect_branch", 1,
+                                 doltConnectBranchFunc);
   if(rc==SQLITE_OK) rc = sqlite3_create_module(db, "dolt_branches", &doltliteBranchesModule, 0);
   if(rc==SQLITE_OK) rc = sqlite3_create_module(db, "dolt_remote_branches", &doltliteRemoteBranchesModule, 0);
   return rc;

@@ -1059,9 +1059,8 @@ static void doltliteCommitFunc(
 
 
 int doltliteCommitCmdRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_commit", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltliteCommitFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_commit", -1,
+                                 doltliteCommitFunc);
 }
 
 #endif

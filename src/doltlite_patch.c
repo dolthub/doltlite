@@ -1339,7 +1339,7 @@ static int patchConnect(sqlite3 *db, void *pAux, int argc,
   PatchVtab *p;
   int rc;
   (void)pAux; (void)argc; (void)argv;
-  rc = sqlite3_declare_vtab(db,patchSchemaSql);
+  rc = doltliteDeclareVtab(db,patchSchemaSql);
   if( rc!=SQLITE_OK ){ *pzErr=sqlite3_mprintf("%s",sqlite3_errmsg(db)); return rc; }
   sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   p = sqlite3_malloc(sizeof(*p));

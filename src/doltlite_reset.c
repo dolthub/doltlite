@@ -807,9 +807,8 @@ reset_cleanup:
 
 
 int doltliteResetRegister(sqlite3 *db){
-  return sqlite3_create_function(db, "dolt_reset", -1,
-                                 DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                 doltliteResetFunc, 0, 0);
+  return doltliteCreateCommandFunc(db, "dolt_reset", -1,
+                                 doltliteResetFunc);
 }
 
 #endif

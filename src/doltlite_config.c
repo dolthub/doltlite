@@ -170,17 +170,11 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     int bWasSet = (db->mDbFlags & DBFLAG_InternalDml)!=0;
     i64 nChange = db->nChange;
     i64 nTotalChange = db->nTotalChange;
-#ifndef SQLITE_OMIT_AUTHORIZATION
-    sqlite3_xauth xAuth = db->xAuth;
-#endif
+    DoltliteAuthShield shield;
     db->mDbFlags |= DBFLAG_InternalDml;
-#ifndef SQLITE_OMIT_AUTHORIZATION
-    db->xAuth = 0;
-#endif
+    doltliteAuthShieldEnter(db, &shield);
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
-#ifndef SQLITE_OMIT_AUTHORIZATION
-    db->xAuth = xAuth;
-#endif
+    doltliteAuthShieldLeave(&shield);
     /* Clear this bit only: restoring the word would undo flags set by prepare. */
     if( !bWasSet ) db->mDbFlags &= ~DBFLAG_InternalDml;
     db->nChange = nChange;
@@ -240,15 +234,13 @@ int doltliteMaybeSeedRepo(sqlite3 *db){
 
 int doltliteConfigRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_function(db, "dolt_config", -1,
-                               DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                               doltliteConfigFunc, 0, 0);
+  rc = doltliteCreateCommandFunc(db, "dolt_config", -1,
+                                 doltliteConfigFunc);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_version", 0,
                                                    SQLITE_UTF8, 0,
                                                    doltliteVersionFunc, 0, 0);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_default_branch", -1,
-                                                   DOLTLITE_COMMAND_FUNC_FLAGS, 0,
-                                                   doltliteDefaultBranchFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_default_branch", -1,
+                                 doltliteDefaultBranchFunc);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db,
       "doltlite_internal_materialize_default_column",
       3, DOLTLITE_COMMAND_FUNC_FLAGS, 0,

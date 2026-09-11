@@ -7,6 +7,42 @@
 
 #include <string.h>
 
+void doltliteAuthShieldEnter(sqlite3 *db, DoltliteAuthShield *p){
+  p->db = db;
+#ifndef SQLITE_OMIT_AUTHORIZATION
+  p->xAuth = db->xAuth;
+  db->xAuth = 0;
+#endif
+}
+
+void doltliteAuthShieldLeave(DoltliteAuthShield *p){
+#ifndef SQLITE_OMIT_AUTHORIZATION
+  p->db->xAuth = p->xAuth;
+#endif
+}
+
+static void doltliteCommandFuncShield(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv
+){
+  void (*xFunc)(sqlite3_context*,int,sqlite3_value**) = sqlite3_user_data(ctx);
+  DoltliteAuthShield shield;
+  doltliteAuthShieldEnter(sqlite3_context_db_handle(ctx), &shield);
+  xFunc(ctx, argc, argv);
+  doltliteAuthShieldLeave(&shield);
+}
+
+int doltliteCreateCommandFunc(
+  sqlite3 *db,
+  const char *zName,
+  int nArg,
+  void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
+){
+  return sqlite3_create_function(db, zName, nArg, DOLTLITE_COMMAND_FUNC_FLAGS,
+                                 (void*)xFunc, doltliteCommandFuncShield, 0, 0);
+}
+
 static void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);
 static void doltliteCmdResultMissingOptionValue(
   sqlite3_context *ctx, const char *zOptName
