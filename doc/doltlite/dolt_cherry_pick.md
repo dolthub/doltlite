@@ -10,6 +10,7 @@ branch. Dolt:
 ```sql
 SELECT dolt_cherry_pick('0123abcd...');
 SELECT dolt_revert('HEAD');
+SELECT dolt_revert('HEAD', '--author', 'Ann <ann@example.com>');
 BEGIN;
 SELECT dolt_cherry_pick(dolt_hashof('feature'));   -- error: conflicts, inspect dolt_conflicts
 SELECT dolt_cherry_pick('--abort');
@@ -42,10 +43,16 @@ inside `BEGIN`. A completed cherry-pick ends the enclosing SQL transaction.
 message `Revert "<original message>"` and returns the new hash. One commit at
 a time; the initial commit cannot be reverted. Conflicts behave like a merge.
 
+| Argument | Meaning |
+|---|---|
+| `commit` | One commit [revision](refs.md) to invert onto `HEAD` |
+| `--author 'Name <email>'` | Override the committer for the revert commit |
+
 | Error | Cause |
 |---|---|
 | `Your local changes would be overwritten by revert.` (with a hint to commit first) | dirty working set |
 | `invalid commit hash` | does not resolve |
+| `Author not formatted correctly. Use 'Name <author@example.com>' format` | bad `--author` |
 
 ## Differences from Dolt
 
