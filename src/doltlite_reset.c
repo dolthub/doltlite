@@ -95,6 +95,9 @@ static int resetStageNamedPaths(
   Pgno iNextFree = 2;
   const char **azReset = 0;
   int nReset = 0;
+  /* Views and triggers are master rows with no catalog entry; naming the one
+  ** name dolt_status reports them under unstages that whole set. */
+  int resetSchemas = 0;
   int p, k;
   int rc;
 
@@ -127,11 +130,17 @@ static int resetStageNamedPaths(
 
   for(p=0; p<nPaths; p++){
     const char *zPath = azPaths[p];
-    int iH = resetFindTableIndex(aHead, nHead, zPath);
-    int iS = resetFindTableIndex(aStaged, nStaged, zPath);
+    int bSchemas = sqlite3_stricmp(zPath, "dolt_schemas")==0
+                && !sqlite3FindTable(db, zPath, "main");
+    int iH = bSchemas ? -1 : resetFindTableIndex(aHead, nHead, zPath);
+    int iS = bSchemas ? -1 : resetFindTableIndex(aStaged, nStaged, zPath);
     const char *zHeadTable = iH>=0 ? aHead[iH].zName : 0;
     const char *zStagedTable = iS>=0 ? aStaged[iS].zName : 0;
     char *zDup;
+    if( bSchemas ){
+      resetSchemas = 1;
+      continue;
+    }
     if( iH<0 && iS<0 ){
       rc = SQLITE_NOTFOUND;
       goto done;
@@ -245,7 +254,7 @@ static int resetStageNamedPaths(
   ** and its index rows. Fallback rows only fill gaps, so compose the master
   ** the way a named add does, with the reset tables' rows from HEAD and every
   ** other row, views and triggers included, left as staged. */
-  if( rc==SQLITE_OK && nReset>0 ){
+  if( rc==SQLITE_OK && (nReset>0 || resetSchemas) ){
     struct TableEntry *pHeadMaster = doltliteFindTableByNumber(aHead, nHead, 1);
     struct TableEntry *pStagedMaster =
         doltliteFindTableByNumber(aStaged, nStaged, 1);
@@ -254,7 +263,7 @@ static int resetStageNamedPaths(
       rc = doltliteBuildNamedStageMasterRoot(db,
               &pHeadMaster->root, pHeadMaster->flags,
               &pStagedMaster->root, pStagedMaster->flags,
-              azReset, nReset, aStaged, nStaged, 0, &composedRoot);
+              azReset, nReset, aStaged, nStaged, resetSchemas, &composedRoot);
       if( rc!=SQLITE_OK ) goto done;
       pStagedMaster->root = composedRoot;
     }
