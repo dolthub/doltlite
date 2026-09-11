@@ -31,6 +31,7 @@ case "$mode" in
     )
     printf '%s\n' "$revision" > "$cache/revision"
     (cd "$cache" && find tree -type f -exec shasum -a 256 {} + > MANIFEST)
+    exit 0
     ;;
   validate) ;;
   *) exit 1 ;;

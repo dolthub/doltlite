@@ -96,7 +96,16 @@ for event in ['start', 'end']:
         f.seek(0)
         json.dump(data, f)
         f.truncate()
-    if event == 'start': time.sleep(0.08)
+    if event == 'start':
+        deadline = time.monotonic() + 10
+        while True:
+            with state.open() as f:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                ready = len(json.load(f)['start']) >= int(os.environ['WORKERS'])
+            if ready: break
+            assert time.monotonic() < deadline, 'workers did not overlap'
+            time.sleep(0.01)
+        time.sleep(0.03)
 print(name)
 sys.exit(42 if os.environ.get('FAIL') == name else 0)
 ''')
@@ -113,7 +122,7 @@ sys.exit(42 if os.environ.get('FAIL') == name else 0)
             command = ['bash', str(scripts / 'ci-optimization-test.sh')] if standalone else [
                 'bash', str(root / 'test/run_lint_selftests.sh'), *extras]
             result = run(command, cwd=root, env=dict(os.environ, STATE=str(state), FAIL=fail,
-                                                    DOLTLITE_LINT_JOBS=str(jobs)))
+                                                    DOLTLITE_LINT_JOBS=str(jobs), WORKERS=str(jobs)))
             data = json.loads(state.read_text())
             assert result.returncode == (42 if fail else 0), result
             assert data['active'] == 0 and sorted(data['start']) == sorted(data['end']), data
