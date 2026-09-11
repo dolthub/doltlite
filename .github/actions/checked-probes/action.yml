@@ -190,3 +190,6 @@ runs:
       path: checked-headers.tar.gz
       compression-level: 0
       retention-days: 1
+  - name: Save compiler cache
+    if: inputs.platform == 'macos'
+    uses: ./.github/actions/save-macos-build-cache

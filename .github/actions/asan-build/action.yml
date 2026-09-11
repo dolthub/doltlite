@@ -68,6 +68,9 @@ runs:
     if: inputs.platform == 'macos'
     shell: bash
     run: bash .github/scripts/check-compiler-cache.sh
+  - name: Save compiler cache
+    if: inputs.platform == 'macos'
+    uses: ./.github/actions/save-macos-build-cache
   - name: Package
     run: |
       bash .github/scripts/package-ci-build.sh asan-ubsan-${{ inputs.platform }}.tar.gz \

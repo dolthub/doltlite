@@ -32,15 +32,18 @@ runs:
         echo "CCACHE_DIR=$RUNNER_TEMP/doltlite-${{ inputs.configuration }}-ccache"
         echo "CCACHE_MAXSIZE=256M"
         echo "CCACHE_COMPILERCHECK=content"
+        echo "DOLTLITE_COMPILER_CACHE_KEY=macos-build-v1-${{ runner.arch }}-$key-${{ github.sha }}"
       } >> "$GITHUB_ENV"
   - name: Restore compiler cache
     id: cache
-    uses: actions/cache@v4
+    uses: actions/cache/restore@v4
     with:
-      path: ${{ runner.temp }}/doltlite-${{ inputs.configuration }}-ccache
-      key: macos-build-v1-${{ runner.arch }}-${{ steps.identity.outputs.key }}-${{ github.sha }}
+      path: ${{ env.CCACHE_DIR }}
+      key: ${{ env.DOLTLITE_COMPILER_CACHE_KEY }}
       restore-keys: |
         macos-build-v1-${{ runner.arch }}-${{ steps.identity.outputs.key }}-
   - name: Reset compiler statistics
     shell: bash
-    run: ccache --zero-stats
+    run: |
+      ccache --zero-stats
+      echo "DOLTLITE_COMPILER_CACHE_HIT=${{ steps.cache.outputs.cache-hit }}" >> "$GITHUB_ENV"

@@ -1,0 +1,11 @@
+name: Save macOS compiler cache
+description: Save the active compiler cache before leaving its build context.
+runs:
+  using: composite
+  steps:
+  - name: Save compiler cache
+    if: env.DOLTLITE_COMPILER_CACHE_HIT != 'true'
+    uses: actions/cache/save@v4
+    with:
+      path: ${{ env.CCACHE_DIR }}
+      key: ${{ env.DOLTLITE_COMPILER_CACHE_KEY }}

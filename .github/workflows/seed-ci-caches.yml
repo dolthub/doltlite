@@ -122,6 +122,7 @@ jobs:
         ../configure
         make -j"$(sysctl -n hw.logicalcpu)" DOLTLITE_PROLLY_CHECK=1 libdoltlite.a
         bash ../.github/scripts/check-compiler-cache.sh
+    - uses: ./.github/actions/save-macos-build-cache
     - uses: ./.github/actions/macos-build-cache
       id: asan-cache
       with:
@@ -141,3 +142,4 @@ jobs:
           CFLAGS="-O1 -g -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
           LDFLAGS="-fsanitize=address,undefined" libdoltlite.a
         bash ../.github/scripts/check-compiler-cache.sh
+    - uses: ./.github/actions/save-macos-build-cache

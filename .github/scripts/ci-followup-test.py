@@ -67,6 +67,46 @@ fi
             checks += 1
 
 
+def cache_lifecycle():
+    global checks
+    action = repo / '.github/actions/macos-build-cache/action.yml'
+    restore = action.read_text()
+    save = (repo / '.github/actions/save-macos-build-cache/action.yml').read_text()
+    assert 'uses: actions/cache/restore@v4' in restore
+    assert 'uses: actions/cache/save@v4' in save
+    assert 'path: ${{ env.CCACHE_DIR }}' in restore and 'path: ${{ env.CCACHE_DIR }}' in save
+    assert 'key: ${{ env.DOLTLITE_COMPILER_CACHE_KEY }}' in restore and 'key: ${{ env.DOLTLITE_COMPILER_CACHE_KEY }}' in save
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        executable(root / 'bin/brew', '#!/bin/bash\nexit 0\n')
+        executable(root / 'bin/ccache', '#!/bin/bash\nexit 0\n')
+        executable(root / '.github/scripts/macos-build-cache-key.sh', '#!/bin/bash\necho "$CACHE_BUILD_CONFIGURATION-key"\n')
+        env = dict(os.environ, PATH=f'{root}/bin:{os.environ["PATH"]}', RUNNER_TEMP=str(root),
+                   GITHUB_ENV=str(root / 'env'), GITHUB_OUTPUT=str(root / 'outputs'))
+        saved = []
+        for configuration in ('checked', 'asan'):
+            command = step(action, 'Identify compiler cache')
+            for name, value in [('inputs.configuration', configuration), ('runner.arch', 'ARM64'), ('github.sha', 'revision')]:
+                command = command.replace('${{ ' + name + ' }}', value)
+            result = run(['bash', '-e', '-c', command], cwd=root,
+                         env=dict(env, CACHE_BUILD_CONFIGURATION=configuration))
+            assert result.returncode == 0, result
+            env.update(line.split('=', 1) for line in (root / 'env').read_text().splitlines())
+            assert env['CCACHE_DIR'] == str(root / f'doltlite-{configuration}-ccache')
+            assert env['DOLTLITE_COMPILER_CACHE_KEY'] == f'macos-build-v1-ARM64-{configuration}-key-revision'
+            Path(env['CCACHE_DIR']).mkdir()
+            (Path(env['CCACHE_DIR']) / 'compiler-output').write_text(configuration)
+            saved.append((env['DOLTLITE_COMPILER_CACHE_KEY'], env['CCACHE_DIR']))
+            checks += 1
+        assert saved[0][0] != saved[1][0] and saved[0][1] != saved[1][1]
+    probes = (repo / '.github/actions/checked-probes/action.yml').read_text()
+    assert probes.index('build-standalone-probes.sh') < probes.index('uses: ./.github/actions/save-macos-build-cache')
+    seed = (repo / '.github/workflows/seed-ci-caches.yml').read_text()
+    assert seed.count('uses: ./.github/actions/save-macos-build-cache') == 2
+    assert seed.index('uses: ./.github/actions/save-macos-build-cache') < seed.index('id: asan-cache')
+    checks += 1
+
+
 def workers():
     global checks
     with tempfile.TemporaryDirectory() as tmp:
@@ -254,6 +294,7 @@ printf '%s errors out of 4 tests in smoke.test - 0 skipped.\\n' "${ERRORS:-0}" >
 
 
 compiler_cache()
+cache_lifecycle()
 workers()
 header_archive()
 reference_cache()
