@@ -20,6 +20,12 @@ For a DoltLite-format main database, the concurrency contract is:
   deletes may keep reading its snapshot, but writes fail and name the missing
   branch. Checking out an existing branch recovers the connection without
   recreating the deleted branch.
+<!-- contract: reader.readonly_never_blocks_writer -->
+- **A read-only connection never blocks a writer.** Reads, `dolt_status`
+  included, take no exclusive lock on a connection opened read-only, so
+  polling status from a second process cannot make a writer's `INSERT` or
+  `dolt_commit` fail. Such a connection still sees a peer's uncommitted and
+  committed work.
 <!-- contract: writer.cross_thread_transaction -->
 - **One durable writer at a time.** A connection that holds an explicit write
   transaction owns the graph lock. A peer that tries to begin a concurrent

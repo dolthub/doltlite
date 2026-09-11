@@ -2757,6 +2757,7 @@ DOLTLITE_C_TESTS = \
 	remotesrv_init_failure_test$(T.exe) \
 	commit_deserialize_test$(T.exe) \
 	serialize_pending_test$(T.exe) \
+	readonly_reader_writer_test$(T.exe) \
 	authorizer_internal_sql_test$(T.exe) \
 	vc_result_code_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe)
@@ -2775,6 +2776,10 @@ authorizer_internal_sql_test$(T.exe): $(TOP)/test/authorizer_internal_sql_test.c
 
 vc_result_code_test$(T.exe): $(TOP)/test/vc_result_code_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/vc_result_code_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+readonly_reader_writer_test$(T.exe): $(TOP)/test/readonly_reader_writer_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/readonly_reader_writer_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 clone_error_code_test$(T.exe): $(TOP)/test/clone_error_code_test.c libdoltlite$(T.lib)
