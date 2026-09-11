@@ -1,0 +1,103 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc conflicts_multi_setup {} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE u(id TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE w(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE clean(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1,'base');
+    INSERT INTO u VALUES('key','base');
+    INSERT INTO w VALUES(1,'base');
+    INSERT INTO clean VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','side');
+    UPDATE t SET v='side';
+    UPDATE u SET v='side';
+    UPDATE w SET v='side';
+    SELECT dolt_commit('-am','side');
+    SELECT dolt_checkout('main');
+    UPDATE t SET v='main';
+    UPDATE u SET v='main';
+    UPDATE w SET v='main';
+    SELECT dolt_commit('-am','main');
+    BEGIN;
+  }
+  set result [catchsql {SELECT dolt_merge('side')}]
+  if {[lindex $result 0] != 1 || [db one {SELECT count(*) FROM dolt_conflicts}] != 3} {
+    error "expected three merge conflicts: $result"
+  }
+}
+
+foreach {mode value} {ours main theirs side} {
+  set i 0
+  foreach tables { {'t','u'} {'u','t'} {'t','t','u'} {'clean','t','u'} {'t','u','clean'} } {
+    incr i
+    conflicts_multi_setup
+    execsql {SAVEPOINT before_resolve}
+    do_test conflicts-multi-$mode-$i-resolve {
+      execsql "SELECT dolt_conflicts_resolve('--$mode',$tables)"
+    } {0}
+    do_execsql_test conflicts-multi-$mode-$i-selected {
+      SELECT v FROM t;
+      SELECT v FROM u;
+      SELECT v FROM w;
+      SELECT "table" FROM dolt_conflicts;
+    } [list $value $value main w]
+    do_execsql_test conflicts-multi-$mode-$i-rollback {
+      ROLLBACK TO before_resolve;
+      SELECT v FROM t;
+      SELECT v FROM u;
+      SELECT v FROM w;
+      SELECT count(*) FROM dolt_conflicts;
+    } {main main main 3}
+    do_test conflicts-multi-$mode-$i-commit {
+      execsql "SELECT dolt_conflicts_resolve('--$mode',$tables,'w')"
+      execsql {SELECT dolt_commit('-Am','resolved')}
+      execsql {SELECT count(*) FROM dolt_conflicts; SELECT v FROM t; SELECT v FROM u; SELECT v FROM w}
+    } [list 0 $value $value $value]
+  }
+  set i 0
+  foreach tables { {'missing','t','u'} {'t','missing','u'} {'t','u','missing'} } {
+    incr i
+    conflicts_multi_setup
+    do_test conflicts-multi-$mode-missing-$i-error {
+      catchsql "SELECT dolt_conflicts_resolve('--$mode',$tables)"
+    } {1 {table not found}}
+    do_execsql_test conflicts-multi-$mode-missing-$i-intact {
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT v FROM t;
+      SELECT v FROM u;
+      SELECT v FROM w;
+    } {3 main main main}
+    do_test conflicts-multi-$mode-missing-$i-repair {
+      execsql "SELECT dolt_conflicts_resolve('--$mode','t','u','w')"
+      execsql {SELECT count(*) FROM dolt_conflicts; SELECT v FROM t; SELECT v FROM u; SELECT v FROM w}
+    } [list 0 $value $value $value]
+  }
+}
+
+reset_db
+execsql {CREATE TABLE t(id INTEGER PRIMARY KEY); CREATE TABLE u(id INTEGER PRIMARY KEY)}
+do_execsql_test conflicts-multi-clean-savepoint {
+  SAVEPOINT s;
+  SELECT dolt_conflicts_resolve('--ours','t','u');
+} {0}
+do_catchsql_test conflicts-multi-clean-savepoint-sealed {
+  ROLLBACK TO s;
+} {1 {no such savepoint: s}}
+
+do_execsql_test conflicts-multi-clean-invalid-savepoint {
+  SAVEPOINT s;
+} {}
+do_catchsql_test conflicts-multi-clean-invalid {
+  SELECT dolt_conflicts_resolve('--ours','t','missing');
+} {1 {table not found}}
+do_execsql_test conflicts-multi-clean-invalid-rollback {
+  ROLLBACK TO s;
+  RELEASE s;
+} {}
+
+finish_test

@@ -36,7 +36,7 @@ differently in the two modes:
 
 While conflicts remain, `dolt_commit` fails with `cannot commit: unresolved
 merge conflicts` and `COMMIT` fails with `constraint failed`. Resolve with
-`dolt_conflicts_resolve('--ours' | '--theirs', table)` or by editing
+`dolt_conflicts_resolve('--ours' | '--theirs', table, ...)` or by editing
 `dolt_conflicts_<table>`, then `dolt_commit` records the merge commit.
 Nothing conflicted is ever written to disk, so no other connection can see
 or inherit a half-finished merge. Dolt can commit a conflicted working set;

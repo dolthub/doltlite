@@ -139,6 +139,56 @@ SELECT dolt_merge('feature');
 SELECT CONCAT('R|t|', id, '|', v) FROM t ORDER BY id;
 SELECT CONCAT('R|u_conflicts|', num_conflicts) FROM dolt_conflicts WHERE \`table\`='u';"
 
+MULTI_CONFLICT_SETUP="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+CREATE TABLE u(id INT PRIMARY KEY, v INT);
+CREATE TABLE clean(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1, 10);
+INSERT INTO u VALUES(1, 100);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feature');
+UPDATE t SET v=20;
+UPDATE u SET v=200;
+SELECT dolt_commit('-am', 'feature');
+SELECT dolt_checkout('main');
+UPDATE t SET v=30;
+UPDATE u SET v=300;
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_merge('feature');
+"
+
+for mode in ours theirs; do
+  i=0
+  for tables in "'t','u'" "'u','t'" "'t','t','u'" "'clean','t','u'" "'t','u','clean'"; do
+    i=$((i+1))
+    oracle "resolve_${mode}_multiple_$i" "$MULTI_CONFLICT_SETUP" "
+SELECT dolt_conflicts_resolve('--$mode', $tables);
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('R|t|', v) FROM t;
+SELECT CONCAT('R|u|', v) FROM u;
+"
+  done
+  i=0
+  for tables in "'missing','t','u'" "'t','missing','u'" "'t','u','missing'"; do
+    i=$((i+1))
+    oracle "resolve_${mode}_missing_multiple_$i" "$MULTI_CONFLICT_SETUP" "
+SELECT dolt_conflicts_resolve('--$mode', $tables);
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('R|t|', v) FROM t;
+SELECT CONCAT('R|u|', v) FROM u;
+"
+  done
+  oracle "resolve_${mode}_multiple_savepoint" "$MULTI_CONFLICT_SETUP" "
+SAVEPOINT both_tables;
+SELECT dolt_conflicts_resolve('--$mode', 't', 'u');
+SELECT CONCAT('R|resolved|', count(*)) FROM dolt_conflicts;
+ROLLBACK TO both_tables;
+SELECT CONCAT('R|restored|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('R|t|', v) FROM t;
+SELECT CONCAT('R|u|', v) FROM u;
+"
+done
+
 echo "--- resolve then commit ---"
 
 oracle "resolve_and_commit" \
@@ -177,7 +227,7 @@ oracle_error "resolve_missing_table" \
 SELECT dolt_conflicts_resolve('--ours', 'nope');
 "
 
-oracle_error "resolve_extra_positional_arg" \
+oracle_error "resolve_missing_second_table" \
   "$CONFLICT_SETUP
 SELECT dolt_conflicts_resolve('--ours', 't', 'extra');
 "
