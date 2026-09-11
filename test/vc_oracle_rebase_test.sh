@@ -690,6 +690,32 @@ UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f3';
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', message) FROM dolt_log;"
 
+for action in pick reword squash fixup; do
+  oracle "interactive_${action}_edited_plan_message" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET commit_message = 'ignored';
+UPDATE dolt_rebase SET action = '$action', commit_message = 'edited'
+  WHERE rebase_order = 2;
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', REPLACE(message, CHAR(10), ' | ')) FROM dolt_log;"
+done
+
+oracle "interactive_empty_reword_message" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action = 'reword', commit_message = ''
+  WHERE rebase_order = 1;
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', message) FROM dolt_log;"
+
+oracle_error_reopen "interactive_null_message_update" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET commit_message = NULL WHERE rebase_order = 1;
+" "SELECT dolt_checkout('dolt_rebase_feat');
+SELECT CONCAT('LOG|', commit_message) FROM dolt_rebase ORDER BY rebase_order;"
+
 LONG_INTERACTIVE_SETUP="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);

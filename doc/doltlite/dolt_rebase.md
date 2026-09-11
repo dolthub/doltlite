@@ -30,9 +30,12 @@ transaction like `dolt_commit`.
 ## The plan table
 
 `dolt_rebase(rebase_order REAL PRIMARY KEY, action TEXT, commit_hash TEXT,
-commit_message TEXT)` exists only during an interactive rebase. Edit it with
-ordinary SQL: `action` is `pick`, `drop`, `reword`, `squash`, or `fixup`;
-change `commit_message` to reword, `rebase_order` to reorder. The first
+commit_message TEXT NOT NULL)` exists only during an interactive rebase.
+Edit it with ordinary SQL: `action` is `pick`, `drop`, `reword`, `squash`, or `fixup`;
+set `action` to `reword` and change `commit_message` to edit a message,
+or change `rebase_order` to reorder. `pick` and `squash` use the original
+commit messages; `fixup` keeps the preceding message. An empty reword
+message also keeps the original message. NULL messages are rejected. The first
 non-drop action must be `pick` or `reword`. While the plan is open the
 connection sits on a working branch named `dolt_rebase_<branch>`.
 
