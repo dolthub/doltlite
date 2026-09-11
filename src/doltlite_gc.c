@@ -127,12 +127,18 @@ static void gcQueueFree(GcQueue *q){
 }
 
 static int gcQueueWrite(GcQueue *q, const GcQueueItem *a, int n){
-  int nByte = n * (int)sizeof(GcQueueItem);
-  int rc;
-  if( q->iWrite>LARGEST_INT64-nByte ) return SQLITE_FULL;
-  rc = sqlite3OsWrite(q->pFile, a, nByte, q->iWrite);
-  if( rc==SQLITE_OK ) q->iWrite += nByte;
-  return rc;
+  while( n>0 ){
+    int nWrite = MIN(n, GC_QUEUE_BUFFER);
+    int nByte = nWrite * (int)sizeof(GcQueueItem);
+    int rc;
+    if( q->iWrite>LARGEST_INT64-nByte ) return SQLITE_FULL;
+    rc = sqlite3OsWrite(q->pFile, a, nByte, q->iWrite);
+    if( rc!=SQLITE_OK ) return rc;
+    q->iWrite += nByte;
+    a += nWrite;
+    n -= nWrite;
+  }
+  return SQLITE_OK;
 }
 
 static int gcQueueFlush(GcQueue *q){

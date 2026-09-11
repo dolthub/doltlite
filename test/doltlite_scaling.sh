@@ -1,12 +1,35 @@
 #!/bin/bash
 # Ratio gates (not wall-clock). Meaningless on DOLTLITE_PROLLY_CHECK (full-tree walk per commit).
-set -uo pipefail
+set -euo pipefail
 
 median_n() {
   printf '%s\n' "$@" | sort -n | awk -v n="$#" 'NR==int((n+1)/2){print; exit}'
 }
 
 SAMPLES=7
+
+ms_now() {
+  python3 -c 'import time; print(int(time.time()*1000))'
+}
+
+run_ms() {
+  local db="$1"; shift
+  local t0 t1
+  t0=$(ms_now)
+  "$DOLTLITE" "$db" "$@" > /dev/null || return $?
+  t1=$(ms_now)
+  echo $(( t1 - t0 ))
+}
+
+# Odd SAMPLES: median drops (SAMPLES-1)/2 outliers each side.
+run_ms_median() {
+  local samples=() t i
+  for (( i=0; i<SAMPLES; i++ )); do
+    t=$(run_ms "$@") || return $?
+    samples+=("$t")
+  done
+  median_n "${samples[@]}"
+}
 
 if [ "${1:-}" = "--self-test" ]; then
   failures=0
@@ -23,6 +46,20 @@ if [ "${1:-}" = "--self-test" ]; then
       failures=$((failures+1))
     fi
   done
+  scaling_failure() { echo "injected database failure" >&2; return 17; }
+  DOLTLITE=scaling_failure
+  for timer in run_ms run_ms_median; do
+    if actual=$("$timer" :memory: "SELECT 1;" 2>&1); then
+      rc=0
+    else
+      rc=$?
+    fi
+    if [ "$rc" -ne 17 ] || [ "$actual" != "injected database failure" ]; then
+      echo "FAIL: $timer concealed a database error ($rc: $actual)"
+      failures=$((failures+1))
+    fi
+  done
+  python3 "$(dirname "$0")/doltlite_scaling_test.py" "$0" || failures=$((failures+1))
   if [ "$failures" -eq 0 ]; then
     echo "PASS: scaling sample policy"
   fi
@@ -76,32 +113,9 @@ check_eq() {
   fi
 }
 
-ms_now() {
-  python3 -c 'import time; print(int(time.time()*1000))'
-}
-
-run_ms() {
-  local db="$1"; shift
-  local t0 t1
-  t0=$(ms_now)
-  "$DOLTLITE" "$db" "$@" > /dev/null 2>&1
-  t1=$(ms_now)
-  echo $(( t1 - t0 ))
-}
-
-# Odd SAMPLES: median drops (SAMPLES-1)/2 outliers each side.
-run_ms_median() {
-  local samples=() t i
-  for (( i=0; i<SAMPLES; i++ )); do
-    t=$(run_ms "$@")
-    samples+=("$t")
-  done
-  median_n "${samples[@]}"
-}
-
 query() {
   local db="$1"; shift
-  "$DOLTLITE" "$db" "$@" 2>/dev/null
+  "$DOLTLITE" "$db" "$@"
 }
 
 commit_block() {
@@ -124,7 +138,7 @@ seed_rows() {
       printf 'WITH RECURSIVE c(x) AS (VALUES(%d) UNION ALL SELECT x+1 FROM c WHERE x<%d) INSERT INTO t SELECT %s FROM c;\n' "$i" "$end" "$cols"
       i=$(( end + 1 ))
     done
-  } | "$DOLTLITE" "$db" > /dev/null 2>&1
+  } | "$DOLTLITE" "$db" > /dev/null
 }
 
 # Depth-independent after head re-confirm; CI spikes to ~16x, gate matches O(n) scan/gc headroom.
@@ -135,9 +149,9 @@ echo "════════════════════════�
 echo "  Segment A: cost vs history depth"
 echo "══════════════════════════════════════"
 DBA="$TMPDIR/depth"
-"$DOLTLITE" "$DBA" "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER); CREATE TABLE s(id INTEGER PRIMARY KEY, v INTEGER); INSERT INTO s VALUES(1,0),(2,0),(3,0),(4,0),(5,0),(6,0);" > /dev/null 2>&1
+"$DOLTLITE" "$DBA" "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER); CREATE TABLE s(id INTEGER PRIMARY KEY, v INTEGER); INSERT INTO s VALUES(1,0),(2,0),(3,0),(4,0),(5,0),(6,0);" > /dev/null
 seed_rows "$DBA" 10000 "x, 0"
-"$DOLTLITE" "$DBA" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed'); SELECT dolt_branch('anchor');" > /dev/null 2>&1
+"$DOLTLITE" "$DBA" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed'); SELECT dolt_branch('anchor');" > /dev/null
 
 # Disjoint side branches; three per depth (merge once, jitter).
 sides_sql=""
@@ -146,7 +160,7 @@ for side in side1a side1b side1c side2a side2b side2c; do
   row=$((row + 1))
   sides_sql="$sides_sql SELECT dolt_branch('$side'); SELECT dolt_checkout('$side'); UPDATE s SET v=1 WHERE id=$row; SELECT dolt_commit('-am','$side'); SELECT dolt_checkout('main');"
 done
-"$DOLTLITE" "$DBA" "$sides_sql" > /dev/null 2>&1
+"$DOLTLITE" "$DBA" "$sides_sql" > /dev/null
 
 median3() {
   printf '%s\n%s\n%s\n' "$1" "$2" "$3" | sort -n | awk 'NR==2{print; exit}'
@@ -155,21 +169,22 @@ median3() {
 depth_ops() {
   local prefix="$1"
   local lg co m1 m2 m3 mg
-  lg=$(run_ms_median "$DBA" "SELECT count(*) FROM dolt_log;")
+  lg=$(run_ms_median "$DBA" "SELECT count(*) FROM dolt_log;") || return $?
   # Both checkouts in one session: a leftover branch made later samples a no-op.
   co=$(run_ms_median "$DBA" \
-       "SELECT dolt_checkout('anchor'); SELECT dolt_checkout('main');")
+       "SELECT dolt_checkout('anchor'); SELECT dolt_checkout('main');") || return $?
   # One branch per sample: merging twice is a no-op.
-  m1=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}a');")
-  m2=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}b');")
-  m3=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}c');")
+  m1=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}a');") || return $?
+  m2=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}b');") || return $?
+  m3=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}c');") || return $?
   mg=$(median3 "$m1" "$m2" "$m3")
   echo "$lg $co $mg"
 }
 
 BLOCK=200
 block1=$(commit_block "$DBA" 0 "$BLOCK")
-read -r log1 co1 mg1 <<< "$(depth_ops side1)"
+depth_result=$(depth_ops side1)
+read -r log1 co1 mg1 <<< "$depth_result"
 echo "  depth 200:   ${block1}ms/block ($((block1 / BLOCK))ms/commit) log=${log1}ms checkout=${co1}ms merge=${mg1}ms"
 for b in 1 2 3 4; do
   commit_block "$DBA" $(( b * BLOCK )) "$BLOCK" > /dev/null
@@ -177,10 +192,12 @@ done
 deep_samples=()
 deep_start=$(( 5 * BLOCK ))
 for (( i=0; i<SAMPLES; i++ )); do
-  deep_samples+=("$(commit_block "$DBA" $(( deep_start + i * BLOCK )) "$BLOCK")")
+  sample=$(commit_block "$DBA" $(( deep_start + i * BLOCK )) "$BLOCK")
+  deep_samples+=("$sample")
 done
 deep=$(median_n "${deep_samples[@]}")
-read -r log_deep co_deep mg_deep <<< "$(depth_ops side2)"
+depth_result=$(depth_ops side2)
+read -r log_deep co_deep mg_deep <<< "$depth_result"
 echo "  depth ~$(( deep_start + SAMPLES * BLOCK )): ${deep}ms/block ($((deep / BLOCK))ms/commit) log=${log_deep}ms checkout=${co_deep}ms merge=${mg_deep}ms [samples $(IFS=,; echo "${deep_samples[*]}")ms; median ${deep}ms]"
 
 check_ratio "per-commit growth, deep vs 200" "$deep" "$block1" "$COMMIT_GROWTH_GATE"
@@ -194,7 +211,8 @@ echo "  dolt_gc: ${gc_ms}ms"
 postgc_samples=()
 postgc_start=$(( deep_start + SAMPLES * BLOCK ))
 for (( i=0; i<SAMPLES; i++ )); do
-  postgc_samples+=("$(commit_block "$DBA" $(( postgc_start + i * 50 )) 50)")
+  sample=$(commit_block "$DBA" $(( postgc_start + i * 50 )) 50)
+  postgc_samples+=("$sample")
 done
 postgc=$(median_n "${postgc_samples[@]}")
 postgc_scaled=$(( postgc * BLOCK / 50 ))
@@ -212,9 +230,9 @@ declare -a T_OPEN T_LOOKUP T_COMMIT T_SCAN T_GC T_DIFF
 for idx in 0 1 2 3; do
   n=${SIZES[$idx]}
   db="$TMPDIR/size$n"
-  "$DOLTLITE" "$db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null 2>&1
+  "$DOLTLITE" "$db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null
   seed_rows "$db" "$n" "x, 'row_'||x, x%1000, printf('%032d', x)"
-  "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
+  "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null
   T_GC[$idx]=$(run_ms "$db" "SELECT dolt_gc();")
 
   T_OPEN[$idx]=$(run_ms_median "$db" "SELECT 1;")
@@ -244,7 +262,7 @@ for idx in 0 1 2 3; do
   T_DIFF[$idx]=$(( $(ms_now) - t0 ))
   check_eq "history diff of newest commit at N=$n" "500" "$diff_out"
 
-  "$DOLTLITE" "$db" "SELECT dolt_checkout('-b','wipe'); DELETE FROM t WHERE id<=1000; SELECT dolt_commit('-am','wipe'); SELECT dolt_checkout('main');" > /dev/null 2>&1
+  "$DOLTLITE" "$db" "SELECT dolt_checkout('-b','wipe'); DELETE FROM t WHERE id<=1000; SELECT dolt_commit('-am','wipe'); SELECT dolt_checkout('main');" > /dev/null
   wipe_seen=$(query "$db" "SELECT dolt_checkout('wipe'); SELECT count(*) FROM t WHERE id<=1000;" | tail -1)
   main_seen=$(query "$db" "SELECT dolt_checkout('main'); SELECT count(*) FROM t WHERE id<=1000;" | tail -1)
   check_eq "branch isolation at N=$n" "0|1000" "$wipe_seen|$main_seen"
@@ -273,7 +291,7 @@ echo "════════════════════════�
 echo "  Segment C: cost vs blob size"
 echo "══════════════════════════════════════"
 DBC="$TMPDIR/blob"
-"$DOLTLITE" "$DBC" "CREATE TABLE b(id INTEGER PRIMARY KEY, data BLOB); SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null 2>&1
+"$DOLTLITE" "$DBC" "CREATE TABLE b(id INTEGER PRIMARY KEY, data BLOB); SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null
 b_small=$(run_ms "$DBC" "INSERT INTO b VALUES(1, randomblob(1048576)); SELECT dolt_commit('-am','small');")
 b_big=$(run_ms "$DBC" "INSERT INTO b VALUES(2, randomblob(16777216)); SELECT dolt_commit('-am','big');")
 r_small=$(run_ms_median "$DBC" "SELECT length(data) FROM b WHERE id=1;")
