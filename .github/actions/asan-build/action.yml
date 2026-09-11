@@ -17,6 +17,13 @@ runs:
     if: inputs.platform == 'macos'
     run: brew install tcl-tk
     shell: bash -e {0}
+  - name: Cache macOS compiler outputs
+    if: inputs.platform == 'macos'
+    uses: ./.github/actions/macos-build-cache
+    with:
+      configuration: asan
+      cflags: ${{ env.ASAN_CFLAGS }}
+      ldflags: ${{ env.ASAN_LDFLAGS }}
   - name: Configure
     run: |
       mkdir -p build
@@ -37,7 +44,7 @@ runs:
     run: |
       set -eo pipefail
       cd build
-      make_jobs=()
+      make_jobs=(-j2)
       if [ "${{ inputs.platform }}" = "macos" ]; then
         make_jobs=(-j"$(sysctl -n hw.logicalcpu)")
       fi

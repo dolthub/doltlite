@@ -1,10 +1,10 @@
 #!/bin/bash
 
 MODE=test
-if [ "${1:-}" = "--build-only" ]; then
-  MODE=build-only
-  shift
-fi
+case "${1:-}" in
+  --build-only) MODE=build-only; shift ;;
+  --list-tags) MODE=list-tags; shift ;;
+esac
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -214,6 +214,10 @@ TAGS="${DOLTLITE_COMPAT_TAGS:-$(compute_default_tags "$cur_series")}"
 if [ -z "${TAGS// }" ]; then
   echo "ERROR: no historical tags to test against"
   exit 1
+fi
+if [ "$MODE" = "list-tags" ]; then
+  printf '%s\n' $TAGS
+  exit 0
 fi
 echo "current: $cur_desc (series $cur_series, chunk store v$cur_csv)"
 echo "tags: $TAGS"

@@ -169,13 +169,29 @@ jobs:
         bash test/assert_stock_reference.sh \
           coverage-artifact/build-coverage/sqlite3-stock \
           coverage-artifact/build-coverage/doltlite
-        bash .github/scripts/package-ci-build.sh coverage-build.tar.gz -C coverage-artifact build-coverage
+        bash .github/scripts/package-coverage-build.sh coverage-artifact
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: coverage-build
         path: coverage-build.tar.gz
+        compression-level: 0
+        retention-days: 1
+
+    - name: Upload oracle runtime
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-cli
+        path: coverage-cli.tar.gz
+        compression-level: 0
+        retention-days: 1
+
+    - name: Upload regression runtime
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-fixture
+        path: coverage-fixture.tar.gz
         compression-level: 0
         retention-days: 1
 
@@ -319,7 +335,7 @@ jobs:
             -o threadtest5 ../test/threadtest5.c ci-amalgamation.o \
             $TSAN_LDFLAGS -ldl -lpthread -lm -lz
           rm -f ci-amalgamation.o
-          make CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
+          make -j2 CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
             doltlite doltlite-remotesrv vc_concurrency_test \
             vc_ref_mutation_stress_test
         } 2>&1 | tee build.log
@@ -368,8 +384,8 @@ jobs:
         cd build-crash
         TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
         . "$TCL_CONFIG"
-        set -o pipefail
-        make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
+        set -eo pipefail
+        make -j2 OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
           OPTS="$TCL_INCLUDE_SPEC" \
           libdoltlite.a doltlite-crashtest crash_recovery_test_sqlite_test \
           2>&1 | tee build.log
@@ -419,9 +435,9 @@ jobs:
     - name: Build
       run: |
         cd build-fuzz
-        set -o pipefail
+        set -eo pipefail
         {
-          make CC=clang CFLAGS="$FUZZ_CFLAGS" LDFLAGS="$FUZZ_LDFLAGS" \
+          make -j2 CC=clang CFLAGS="$FUZZ_CFLAGS" LDFLAGS="$FUZZ_LDFLAGS" \
             libdoltlite.a
           for target in fuzz_replaywal fuzz_prolly_node fuzz_deserialize_refs fuzz_read_index fuzz_deserialize_catalog fuzz_wire_response fuzz_commit fuzz_working_set fuzz_conflicts fuzz_constraint_violations; do
             clang -O1 -g -Werror \
@@ -554,18 +570,7 @@ jobs:
         bash .github/scripts/install-apt-deps.sh \
           build-essential tcl-dev zlib1g-dev
 
-    - name: Cache old-version binaries
-      uses: actions/cache@v4
-      with:
-        path: .compat-cache
-        key: compat-bins-${{ runner.os }}-${{ github.base_ref || github.ref_name }}
-        restore-keys: |
-          compat-bins-${{ runner.os }}-
-
-    - name: Build compatibility references
-      run: |
-        DOLTLITE_COMPAT_JOBS=4 \
-          bash test/doltlite_compat_test.sh --build-only
+    - uses: ./.github/actions/compatibility-cache
 
     - name: Package
       run: bash .github/scripts/package-ci-build.sh compat-build.tar.gz .compat-cache
