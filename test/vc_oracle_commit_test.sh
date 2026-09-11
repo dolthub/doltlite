@@ -312,6 +312,36 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('--amend', '-m', 'amended with row 2');
 "
 
+oracle "commit_amend_keeps_head_message" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (2, 'b');
+SELECT dolt_add('t');
+SELECT dolt_commit('--amend');
+"
+
+oracle "commit_amend_author_without_message" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (2, 'b');
+SELECT dolt_add('t');
+SELECT dolt_commit('--amend', '--author', 'Pat <pat@example.com>');
+"
+
+oracle "commit_amend_date_without_message" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (2, 'b');
+SELECT dolt_add('t');
+SELECT dolt_commit('--amend', '--date', '2020-06-15T12:00:00Z');
+"
+
 # Amending a merge must keep every parent; dropping them makes a later merge of the same branch replay.
 oracle "commit_amend_merge_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

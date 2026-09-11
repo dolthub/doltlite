@@ -660,7 +660,66 @@ SELECT dolt_add('tokens');
 SELECT dolt_commit('-m','tokens');" \
   "[0-9a-f]{40}$" "$DB24"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24"
+DB25=/tmp/test_dolt_commit_amend_nomsg_$$.db; rm -f "$DB25"
+
+run_test_match "amend_setup" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');" \
+  "^[0-9a-f]{40}$" "$DB25"
+
+run_test_match "amend_without_message" \
+  "INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('t');
+SELECT dolt_commit('--amend');" \
+  "^[0-9a-f]{40}$" "$DB25"
+
+run_test "amend_without_message_keeps_head" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "c1" "$DB25"
+
+run_test "amend_without_message_has_row" \
+  "SELECT count(*) FROM dolt_at_t('HEAD');" \
+  "2" "$DB25"
+
+run_test "amend_without_message_log_count" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB25"
+
+run_test_match "amend_author_without_message" \
+  "INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('t');
+SELECT dolt_commit('--amend', '--author', 'Pat <pat@example.com>');" \
+  "^[0-9a-f]{40}$" "$DB25"
+
+run_test "amend_author_without_message_keeps_head" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "c1" "$DB25"
+
+run_test "amend_author_without_message_sets_author" \
+  "SELECT committer FROM dolt_log LIMIT 1;" \
+  "Pat" "$DB25"
+
+run_test "amend_author_without_message_sets_email" \
+  "SELECT email FROM dolt_log LIMIT 1;" \
+  "pat@example.com" "$DB25"
+
+run_test_match "amend_date_without_message" \
+  "INSERT INTO t VALUES(4,'d');
+SELECT dolt_add('t');
+SELECT dolt_commit('--amend', '--date', '2020-06-15T12:00:00Z');" \
+  "^[0-9a-f]{40}$" "$DB25"
+
+run_test "amend_date_without_message_keeps_head" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "c1" "$DB25"
+
+run_test "amend_date_without_message_sets_date" \
+  "SELECT substr(date,1,10) FROM dolt_log LIMIT 1;" \
+  "2020-06-15" "$DB25"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

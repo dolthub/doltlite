@@ -539,6 +539,7 @@ static int doltliteCommitCreateObject(
   ProllyHash aExtraParents[DOLTLITE_MAX_PARENTS];
   int nExtraParents = 0;
   char *zParsedName = 0, *zParsedEmail = 0;
+  char *zAmendMessage = 0;
   const char *zMessage;
   const char *zAuthor;
   int rc;
@@ -595,8 +596,14 @@ static int doltliteCommitCreateObject(
       }
     }
     if( !zMessage || !*zMessage ){
-      zMessage = sqlite3_mprintf("%s",
+      zAmendMessage = sqlite3_mprintf("%s",
           headCommit.zMessage ? headCommit.zMessage : "");
+      if( !zAmendMessage ){
+        doltliteCommitClear(&headCommit);
+        sqlite3_result_error_code(context, SQLITE_NOMEM);
+        return SQLITE_NOMEM;
+      }
+      zMessage = zAmendMessage;
     }
     doltliteCommitClear(&headCommit);
   }
@@ -624,13 +631,24 @@ static int doltliteCommitCreateObject(
   if( zAuthor ){
     rc = doltliteCmdParseAuthor(context, zAuthor,
                                 &zParsedName, &zParsedEmail);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zAmendMessage);
+      return rc;
+    }
   }
 
   {
     const char *p = zMessage;
+    if( !p ){
+      sqlite3_free(zAmendMessage);
+      sqlite3_free(zParsedName);
+      sqlite3_free(zParsedEmail);
+      sqlite3_result_error_code(context, SQLITE_NOMEM);
+      return SQLITE_NOMEM;
+    }
     while( *p==' ' || *p=='\t' || *p=='\n' || *p=='\r' ) p++;
     if( *p==0 ){
+      sqlite3_free(zAmendMessage);
       sqlite3_free(zParsedName);
       sqlite3_free(zParsedEmail);
       sqlite3_result_error(context,
@@ -642,6 +660,7 @@ static int doltliteCommitCreateObject(
   rc = doltliteCreateAndStoreCommitWithTime(db, &parentHash, pCatalogHash,
       zMessage, zParsedName, zParsedEmail, aExtraParents, nExtraParents,
       opts->zDate!=0, opts->explicitTimestamp, pCommitHashOut);
+  sqlite3_free(zAmendMessage);
   sqlite3_free(zParsedName);
   sqlite3_free(zParsedEmail);
   if( rc!=SQLITE_OK ){
@@ -846,7 +865,7 @@ static void doltliteCommitFunc(
     }
   }
 
-  if( !zMessage || zMessage[0]==0 ){
+  if( (!zMessage || zMessage[0]==0) && !amend ){
     sqlite3_result_error(context,
       "dolt_commit requires a message: SELECT dolt_commit('-m', 'msg')", -1);
     return;
