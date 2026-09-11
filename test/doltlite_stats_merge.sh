@@ -561,6 +561,43 @@ EOF
 out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_conflicts;")
 check "noop_reanalyze_no_conflicts" "0" "$out"
 
+# sqlite_stat1 is an ordinary versioned table here, so every read surface has
+# to handle it. Replaying its stored CREATE to learn its columns is refused
+# outside schema parsing, because the name is reserved.
+DB="$TMPROOT/statdiff.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX iv ON t(v);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','base');
+INSERT INTO t VALUES(2,2);
+ANALYZE;
+SELECT dolt_commit('-Am','analyze');
+EOF
+
+out=$("$DOLTLITE" -list "$DB" \
+  "SELECT group_concat(table_name) FROM (SELECT table_name FROM dolt_diff_stat('HEAD~1','HEAD') ORDER BY table_name);" 2>&1)
+check "diff_stat_range_includes_stat1" "sqlite_stat1,t" "$out"
+
+out=$("$DOLTLITE" -list "$DB" \
+  "SELECT table_name||'|'||rows_added FROM dolt_diff_stat('HEAD~1','HEAD','sqlite_stat1');" 2>&1)
+check "diff_stat_filter_on_stat1" "sqlite_stat1|1" "$out"
+
+# diff_stat and diff_summary must agree on which tables changed.
+out=$("$DOLTLITE" -list "$DB" \
+  "SELECT group_concat(n) FROM (SELECT to_table_name AS n FROM dolt_diff_summary('HEAD~1','HEAD') ORDER BY to_table_name);" 2>&1)
+check "diff_summary_agrees_with_stat" "sqlite_stat1,t" "$out"
+
+# Dropping it leaves a range whose stored definition is the only source for
+# the column list, so the live schema cannot stand in.
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+DROP TABLE sqlite_stat1;
+SELECT dolt_commit('-Am','dropped');
+EOF
+out=$("$DOLTLITE" -list "$DB" \
+  "SELECT table_name||'|'||rows_deleted FROM dolt_diff_stat('HEAD~1','HEAD');" 2>&1)
+check "diff_stat_over_dropped_stat1" "sqlite_stat1|1" "$out"
+
 echo
 echo "doltlite_stats_merge: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
