@@ -11,14 +11,23 @@ DLTEST_MATCH_FLAGS="${DLTEST_MATCH_FLAGS:-}"
 dltest_run_sql() {
   local sql="$1"
   local db="$2"
-  local extra=()
-  [ "${3:-}" = "bail" ] && extra=(-bail)
-  if [ "$DLTEST_STRIP_CR" = "1" ]; then
-    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-      "$DOLTLITE" "${extra[@]}" "$db" 2>&1 | tr -d '\r'
+  # macOS /bin/bash 3.2 + set -u treats empty "${arr[@]}" as unbound.
+  if [ "${3:-}" = "bail" ]; then
+    if [ "$DLTEST_STRIP_CR" = "1" ]; then
+      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+        "$DOLTLITE" -bail "$db" 2>&1 | tr -d '\r'
+    else
+      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+        "$DOLTLITE" -bail "$db" 2>&1
+    fi
   else
-    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-      "$DOLTLITE" "${extra[@]}" "$db" 2>&1
+    if [ "$DLTEST_STRIP_CR" = "1" ]; then
+      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+        "$DOLTLITE" "$db" 2>&1 | tr -d '\r'
+    else
+      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+        "$DOLTLITE" "$db" 2>&1
+    fi
   fi
 }
 

@@ -36,6 +36,18 @@ if DOLTLITE="$STOCK" bash -c '. "'"$SCRIPT_DIR"'/lib/doltlite_test_common.sh"' \
 fi
 echo "PASS: common.sh rejects stock sqlite3"
 
+if [ -x "$ENG" ]; then
+  if ! DOLTLITE="$ENG" bash -c 'set -u
+    . "'"$SCRIPT_DIR"'/lib/doltlite_test_common.sh"
+    run_test_match "nounset_no_bail" "SELECT 1;" "." ":memory:"
+    [ "$FAIL" -eq 0 ]
+  '; then
+    echo "FAIL: common.sh run_test_match broke under set -u"
+    exit 1
+  fi
+  echo "PASS: common.sh run_test_match under set -u"
+fi
+
 if bash "$SCRIPT_DIR/sql_differential_test.sh" "$STOCK" "$STOCK" 1 1 \
      >/tmp/floor-diff.out 2>&1; then
   echo "FAIL: sql-differential stock vs stock passed"
