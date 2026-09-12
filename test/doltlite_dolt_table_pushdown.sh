@@ -152,9 +152,9 @@ SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test "nonint_history_total" \
   "SELECT count(*) FROM dolt_history_k;" "4" "$DB2"
 
-run_test_match "nonint_history_no_index_pushdown" \
+run_test_match "nonint_history_eq_uses_index" \
   "EXPLAIN QUERY PLAN SELECT * FROM dolt_history_k WHERE name='alice';" \
-  "VIRTUAL TABLE INDEX 0" "$DB2"
+  "VIRTUAL TABLE INDEX [1-9]" "$DB2"
 
 run_test "nonint_history_filter_correct" \
   "SELECT count(*) FROM dolt_history_k WHERE name='alice';" "2" "$DB2"

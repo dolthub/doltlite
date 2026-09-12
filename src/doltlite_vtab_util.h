@@ -103,6 +103,68 @@ static SQLITE_INLINE int doltlitePkRangeMatchesCursorUpper(
   return doltlitePkRangeMatchesUpper(pRange, prollyCursorIntKey(pCur));
 }
 
+/* Equality on every clustered PK column, in key order. INTEGER PRIMARY KEY
+** uses doltliteBestIndexIntPkRange instead (iPkCol>=0). */
+static SQLITE_INLINE int doltliteBestIndexClusteredPkEq(
+  sqlite3_index_info *pInfo,
+  const DoltliteColInfo *ci,
+  int idxEq,
+  int *pnArg
+){
+  int *aDecl = 0;
+  int *aEq = 0;
+  int i, j, nArg;
+
+  if( !pInfo || !ci || !pnArg ) return SQLITE_OK;
+  if( ci->bHasRowid || ci->nPk<=0 || !ci->aColToRec ) return SQLITE_OK;
+
+  aDecl = sqlite3_malloc64((sqlite3_int64)ci->nPk * sizeof(int));
+  aEq = sqlite3_malloc64((sqlite3_int64)ci->nPk * sizeof(int));
+  if( !aDecl || !aEq ){
+    sqlite3_free(aDecl);
+    sqlite3_free(aEq);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; i<ci->nPk; i++){
+    aDecl[i] = -1;
+    aEq[i] = -1;
+  }
+  for(i=0; i<ci->nCol; i++){
+    int slot = ci->aColToRec[i];
+    if( slot>=0 && slot<ci->nPk ) aDecl[slot] = i;
+  }
+  for(i=0; i<ci->nPk; i++){
+    if( aDecl[i]<0 ) goto clustered_done;
+  }
+  for(i=0; i<ci->nPk; i++){
+    for(j=0; j<pInfo->nConstraint; j++){
+      const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[j];
+      if( !pC->usable ) continue;
+      if( pC->iColumn!=aDecl[i] ) continue;
+      if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+        aEq[i] = j;
+        break;
+      }
+    }
+    if( aEq[i]<0 ) goto clustered_done;
+  }
+  nArg = *pnArg;
+  if( nArg<1 ) nArg = 1;
+  for(i=0; i<ci->nPk; i++){
+    pInfo->aConstraintUsage[aEq[i]].argvIndex = nArg++;
+    pInfo->aConstraintUsage[aEq[i]].omit = 0;
+  }
+  *pnArg = nArg;
+  pInfo->idxNum |= idxEq;
+  pInfo->estimatedCost = 10.0;
+  pInfo->estimatedRows = 1;
+
+clustered_done:
+  sqlite3_free(aDecl);
+  sqlite3_free(aEq);
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE int doltliteVtabCommonDisconnect(
   sqlite3_vtab *pVtab
 ){

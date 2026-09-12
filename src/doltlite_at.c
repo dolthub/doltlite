@@ -52,6 +52,8 @@ struct AtCursor {
   int idxNum;
   int pkSeekable;
   DoltlitePkRange pkRange;
+  u8 *pPkBlob;
+  int nPkBlob;
 };
 
 static int atTakeChunkSourceError(
@@ -529,6 +531,9 @@ static void atCursorReset(AtCursor *c){
   doltliteVtabCommonReset(&c->common);
   sqlite3_free(c->zCommitRef);
   c->zCommitRef = 0;
+  sqlite3_free(c->pPkBlob);
+  c->pPkBlob = 0;
+  c->nPkBlob = 0;
 }
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,
@@ -582,7 +587,14 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iRef].omit=1;
     idxNum |= AT_IDX_REF;
     /* Historical roots may differ in key shape: never omit PK constraints. */
-    if( iEq>=0 ){
+    if( iPkCol<0 ){
+      pInfo->idxNum = idxNum;
+      if( doltliteBestIndexClusteredPkEq(pInfo, &v->cols, AT_IDX_PK_EQ,
+                                         &argvIdx)!=SQLITE_OK ){
+        return SQLITE_NOMEM;
+      }
+      idxNum = pInfo->idxNum;
+    }else if( iEq>=0 ){
       pInfo->aConstraintUsage[iEq].argvIndex=argvIdx++;
       idxNum |= AT_IDX_PK_EQ;
     }else{
@@ -639,11 +651,23 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   atCursorReset(c);
   c->idxNum = idxNum;
   if(!cs||(idxNum & AT_IDX_REF)==0||argc<1) return SQLITE_OK;
-  doltlitePkRangeFromArgs(idxNum,
-      AT_IDX_PK_EQ, AT_IDX_PK_GE, AT_IDX_PK_LE,
-      AT_IDX_PK_GT, AT_IDX_PK_LT,
-      argc-1, argv+1, &c->pkRange);
-  if( c->pkRange.isEmpty ) return SQLITE_OK;
+  if( (idxNum & AT_IDX_PK_EQ) && v->cols.iPkCol<0 && v->cols.nPk>0 ){
+    int iPk;
+    if( argc<1+v->cols.nPk ) return SQLITE_OK;
+    for(iPk=0; iPk<v->cols.nPk; iPk++){
+      if( sqlite3_value_type(argv[1+iPk])==SQLITE_NULL ) return SQLITE_OK;
+    }
+    rc = doltliteSortKeyFromPkValues(v->db, v->zTableName,
+                                     v->cols.nPk, argv+1,
+                                     &c->pPkBlob, &c->nPkBlob);
+    if( rc!=SQLITE_OK ) return rc;
+  }else{
+    doltlitePkRangeFromArgs(idxNum,
+        AT_IDX_PK_EQ, AT_IDX_PK_GE, AT_IDX_PK_LE,
+        AT_IDX_PK_GT, AT_IDX_PK_LT,
+        argc-1, argv+1, &c->pkRange);
+    if( c->pkRange.isEmpty ) return SQLITE_OK;
+  }
 
   pBt=doltliteGetBtShared(db);
   if(!pBt) return SQLITE_OK;
@@ -703,6 +727,22 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 
   prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
   c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
+
+  if( !c->common.rootIntKey && c->pPkBlob
+   && (idxNum & AT_IDX_PK_EQ) ){
+    rc = prollyCursorSeekBlob(&c->common.tblCur, c->pPkBlob, c->nPkBlob, &res);
+    if( rc!=SQLITE_OK ){
+      prollyCursorClose(&c->common.tblCur);
+      return rc;
+    }
+    if( res!=0 || !prollyCursorIsValid(&c->common.tblCur) ){
+      prollyCursorClose(&c->common.tblCur);
+      return SQLITE_OK;
+    }
+    c->common.tblCurOpen = 1;
+    return doltliteVtabCommonCaptureRowSide(&c->common, v->db, v->zTableName,
+                                            &c->side);
+  }
 
   c->pkSeekable = c->common.rootIntKey
               && (idxNum & AT_IDX_PK_ANY) != 0
@@ -774,8 +814,8 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  if( (c->idxNum & AT_IDX_PK_EQ) && c->pkRange.hasPkLo
-   && c->pkSeekable ){
+  if( (c->idxNum & AT_IDX_PK_EQ)
+   && ((c->pkSeekable && c->pkRange.hasPkLo) || c->pPkBlob) ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
     c->common.hasRow = 0;
