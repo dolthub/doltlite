@@ -269,6 +269,19 @@ Subtle rules that are easy to break silently — hold them when touching VC code
 - **Ref resolution** for commit / branch / `HEAD` / `WORKING` / `STAGED` goes
   through `doltliteResolveCatalogHashForRef` — reuse it, don't re-derive.
 
+## Documentation
+
+Update user-facing documentation only when the user explicitly requests
+documentation work. A bug fix, feature, refactor, or observable behavior change
+does not by itself authorize documentation edits. Explain the change in the PR
+and add regression coverage; do not turn each fix into another paragraph in a
+guide or a new published contract claim.
+
+Keep existing contract evidence accurate when tests or implementation change.
+This does not require expanding documentation or adding contract rows for every
+regression test. When documentation work is requested, keep the affected docs,
+contract claims, and evidence consistent.
+
 ## Concurrency contract
 
 User-facing concurrency guarantees and the multiproc/multi-connection oracles
@@ -286,8 +299,9 @@ implementors even when a claim is also listed in the contract.
 
 The user-facing SQLite compatibility contract lives in
 `doc/doltlite/sqlite-compatibility.md`; claims and evidence live in
-`test/sqlite_compatibility_contract.tsv`. Update the doc, contract row, and
-its evidence together when observable compatibility behavior changes.
+`test/sqlite_compatibility_contract.tsv`. Maintain existing contract evidence
+when affected by a change; follow the documentation policy above for doc edits
+and new published claims.
 
 Do not infer poor SQLite compatibility from an intentional storage-engine
 adaptation. DoltLite uses chunks rather than pages, has no SQLite WAL or
@@ -306,10 +320,11 @@ Chunk-store version **12** is the beta format freeze. User-facing rules live in
 
 Bumping `CHUNK_STORE_VERSION` requires:
 
-1. `doc/doltlite/storage-format.md` update
-2. A new `test/format-corpus/` entry and MANIFEST
-3. `storage_format_contract.tsv` evidence update
-4. Explicit open/upgrade policy for version 12 (open-only, migrate, or refuse)
+1. A new `test/format-corpus/` entry and MANIFEST
+2. `storage_format_contract.tsv` evidence update
+3. Explicit open/upgrade policy for version 12 (open-only, migrate, or refuse),
+   described in the PR; update `doc/doltlite/storage-format.md` when documentation
+   work is explicitly requested
 
 Any incompatible change to a nested write format, including working sets,
 catalogs, refs, commits, prolly nodes, or key encoding, must bump
