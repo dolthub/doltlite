@@ -432,6 +432,9 @@ static int flushMutMap(BtCursor *pCur){
     pCur->flushSeekEdits = 0;
   }else{
     prollyMutMapClear((ProllyMutMap*)pTE->pPending);
+    /* Clearing in place leaves every cursor's mmIdx past nEntries. */
+    refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                               (ProllyMutMap*)pTE->pPending);
   }
 
   return SQLITE_OK;
@@ -471,6 +474,7 @@ int flushPendingForTable(
   if( pTE->pPending==pMap ){
     if( clearInPlace ){
       prollyMutMapClear(pMap);
+      refreshCursorMutMapAliases(pBtree, pBt, pTE->iTable, pMap);
     }else{
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
