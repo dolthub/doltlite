@@ -118,6 +118,15 @@ SQL
 
 DB3=/tmp/test_rebase_dirty_$$.db
 seed_dirty_main "$DB3"
+run_test_match "amend_during_rebase_refused" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i','main');
+   SELECT dolt_commit('--amend','-m','oops');
+   SELECT dolt_rebase('--abort');" \
+  "you are in the middle of a rebase -- cannot amend" \
+  "$DB3"
+
+seed_dirty_main "$DB3"
 run_test "interactive_rebase_keeps_other_branch_uncommitted_work" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');

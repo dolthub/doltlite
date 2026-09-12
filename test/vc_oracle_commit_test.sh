@@ -343,6 +343,24 @@ SELECT dolt_commit('--amend', '--date', '2020-06-15T12:00:00Z');
 "
 
 # Amending a merge must keep every parent; dropping them makes a later merge of the same branch replay.
+oracle_error "commit_amend_during_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_branch('side');
+INSERT INTO t VALUES(2,'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(3,'side');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','side');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--no-commit','--no-ff','side');
+SELECT dolt_commit('--amend','-m','oops');
+"
+
 oracle "commit_amend_merge_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

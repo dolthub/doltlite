@@ -719,7 +719,42 @@ run_test "amend_date_without_message_sets_date" \
   "SELECT substr(date,1,10) FROM dolt_log LIMIT 1;" \
   "2020-06-15" "$DB25"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25"
+rm -f "$DB25"
+
+DB26=/tmp/test_dolt_commit_amend_merge_$$.db; rm -f "$DB26"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('side');
+INSERT INTO t VALUES(2,'main');
+SELECT dolt_commit('-am','main');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(3,'side');
+SELECT dolt_commit('-am','side');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--no-commit','--no-ff','side');" | $DOLTLITE "$DB26" > /dev/null 2>&1
+
+run_test_match "amend_during_merge_refused" \
+  "SELECT dolt_commit('--amend','-m','oops');" \
+  "you are in the middle of a merge -- cannot amend" "$DB26"
+
+run_test "amend_during_merge_keeps_tip" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "main" "$DB26"
+
+run_test "amend_during_merge_still_merging" \
+  "SELECT is_merging FROM dolt_merge_status;" \
+  "1" "$DB26"
+
+run_test_match "amend_during_merge_then_finish" \
+  "SELECT dolt_commit('-m','merged');" \
+  "^[0-9a-f]{40}$" "$DB26"
+
+run_test "amend_during_merge_then_finish_msg" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "merged" "$DB26"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

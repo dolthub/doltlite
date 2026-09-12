@@ -53,6 +53,9 @@ the SQL transaction; see [transactions.md](transactions.md).
 | `cannot commit: unresolved merge conflicts. Use dolt_conflicts_resolve() first.` | see [dolt_merge.md](dolt_merge.md) |
 | `cannot commit: unresolved entries in dolt_constraint_violations ...` | see [dolt_constraint_violations.md](dolt_constraint_violations.md) |
 | `cannot --amend: HEAD has no parent (initial commit)` | amend on the first commit |
+| `you are in the middle of a merge -- cannot amend` | `--amend` while a merge is in progress |
+| `you are in the middle of a cherry-pick -- cannot amend` | `--amend` while a cherry-pick or revert is in progress |
+| `you are in the middle of a rebase -- cannot amend` | `--amend` while a rebase is in progress |
 | `unknown option`, `no value for option` | option parsing; the message names the option |
 
 ## dolt_status

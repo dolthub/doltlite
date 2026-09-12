@@ -845,6 +845,28 @@ static void doltliteCommitFunc(
   skipEmpty = opts.skipEmpty;
   force = opts.force;
 
+  if( amend ){
+    u8 isMerging = 0;
+    u8 isRebasing = 0;
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( isMerging ){
+      sqlite3_result_error(context,
+        "you are in the middle of a merge -- cannot amend", -1);
+      return;
+    }
+    doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+    if( isRebasing ){
+      sqlite3_result_error(context,
+        "you are in the middle of a rebase -- cannot amend", -1);
+      return;
+    }
+    if( doltliteSessionHasPendingReplayCommit(db) ){
+      sqlite3_result_error(context,
+        "you are in the middle of a cherry-pick -- cannot amend", -1);
+      return;
+    }
+  }
+
   if( !force && doltliteSessionHasConstraintViolations(db) ){
     sqlite3_result_error(context,
       "cannot commit: unresolved entries in dolt_constraint_violations. "
