@@ -34,6 +34,7 @@ def jobs(name):
 # Work a seed job warms -> the CI job that already budgets for it. A seed job
 # that warms several caches serially needs the sum, counted per occurrence.
 REFERENCE = {
+    'uses: ./.github/actions/development-debug-build': ('ci-build.yml', 'development-builds'),
     'uses: ./.github/actions/compatibility-cache': ('ci-build.yml', 'compat-build'),
     'uses: ./.github/actions/sqllogictest-cache': ('ci-build.yml', 'sqllogictest-build'),
     'build-optimized-benchmark.sh': ('ci-build.yml', 'benchmark-build'),

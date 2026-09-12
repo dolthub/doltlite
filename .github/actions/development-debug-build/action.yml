@@ -1,0 +1,93 @@
+name: Development All-Debug build
+description: Build every All-Debug target with cached compiler objects.
+inputs:
+  seed:
+    description: Only populate a missing compiler cache.
+    default: 'false'
+runs:
+  using: composite
+  steps:
+  - name: Install dependencies
+    shell: bash
+    run: |
+      bash .github/scripts/install-apt-deps.sh \
+        build-essential tcl-dev libsqlite3-tcl zlib1g-dev ccache
+
+  - name: Identify compiler cache
+    id: identity
+    shell: bash
+    run: |
+      cc --version
+      lscpu | grep -E '^(CPU\(s\)|Model name|Thread\(s\) per core|Core\(s\) per socket):'
+      key=$({
+        sha256sum "$(readlink -f /usr/bin/cc)"
+        cc --version
+        ccache --version
+        dpkg-query -W -f='${Package} ${Version}\n' \
+          libc6-dev linux-libc-dev tcl-dev libsqlite3-tcl zlib1g-dev
+        printf '%s\n' "${ImageOS:-}" "${ImageVersion:-}"
+      } | sha256sum | cut -d ' ' -f 1)
+      echo "key=development-debug-v1-${{ runner.arch }}-$key" >> "$GITHUB_OUTPUT"
+
+  - name: Verify build scheduling
+    shell: bash
+    run: python3 .github/scripts/development-debug-test.py --scheduler --compiler
+
+  - name: Restore compiler cache
+    id: cache
+    uses: actions/cache/restore@v4
+    with:
+      path: ${{ runner.temp }}/development-debug-ccache
+      key: ${{ steps.identity.outputs.key }}-${{ github.sha }}
+      restore-keys: |
+        ${{ steps.identity.outputs.key }}-
+
+  - name: Compile development configurations
+    id: build
+    if: inputs.seed != 'true' || steps.cache.outputs.cache-matched-key == ''
+    shell: bash
+    env:
+      CCACHE_DIR: ${{ runner.temp }}/development-debug-ccache
+      CCACHE_MAXSIZE: 512M
+      CCACHE_COMPILERCHECK: content
+      DOLTLITE_SPLIT_TEST_COMPILE: '1'
+      CC: ccache cc
+      CFLAGS: -O2 -g -Werror
+    run: |
+      ccache --zero-stats
+      mkdir -p build
+      cd build
+      TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+      if [ -n "$TCL_CONFIG" ]; then
+        ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+      else
+        ../configure
+      fi
+      tclsh ../test/testrunner.tcl --buildonly --jobs 4 --config All-Debug mdevtest
+      bash ../.github/scripts/check-compiler-cache.sh
+
+  - name: Report development build timings
+    if: always()
+    shell: bash
+    run: |
+      if [ -f build/testrunner.db ]; then
+        python3 .github/scripts/development-build-timings.py build/testrunner.db \
+          | tee -a "$GITHUB_STEP_SUMMARY"
+      fi
+
+  - name: Save compiler cache
+    if: steps.build.outcome == 'success' && steps.cache.outputs.cache-hit != 'true'
+    uses: actions/cache/save@v4
+    with:
+      path: ${{ runner.temp }}/development-debug-ccache
+      key: ${{ steps.identity.outputs.key }}-${{ github.sha }}
+
+  - name: Upload build timings and commands
+    if: always() && steps.build.outcome != 'skipped'
+    uses: actions/upload-artifact@v4
+    with:
+      name: development-debug-logs
+      path: |
+        build/testrunner.db
+        build/testrunner.log
+      retention-days: 1

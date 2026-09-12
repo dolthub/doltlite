@@ -1173,7 +1173,14 @@ proc r_get_next_job {iJob} {
       }
     }
 
-    if {($iJob%2)} {
+    if {$TRG(buildonly)} {
+      append orderby {ORDER BY
+        CASE
+          WHEN displayname GLOB '* (fuzzcheck-*san)' THEN 0
+          WHEN displayname GLOB '* (testfixture)' THEN 1
+          ELSE 2
+        END, jobid}
+    } elseif {($iJob%2)} {
       append orderby "ORDER BY priority ASC"
     } else {
       append orderby "ORDER BY priority DESC"

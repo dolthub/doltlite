@@ -585,12 +585,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - uses: ./.github/actions/development-debug-build
+      if: matrix.configuration == 'All-Debug'
+
     - name: Install dependencies
+      if: matrix.configuration != 'All-Debug'
       run: |
         bash .github/scripts/install-apt-deps.sh \
           build-essential tcl-dev libsqlite3-tcl zlib1g-dev
 
     - name: Configure
+      if: matrix.configuration != 'All-Debug'
       run: |
         mkdir -p build
         cd build
@@ -602,6 +607,7 @@ jobs:
         fi
 
     - name: Compile development configurations
+      if: matrix.configuration != 'All-Debug'
       run: |
         cd build
         tclsh ../test/testrunner.tcl \

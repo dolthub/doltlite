@@ -2290,11 +2290,17 @@ TESTFIXTURE_SRC1 = sqlite3.c
 TESTFIXTURE_SRC = $(TESTSRC) tclsqlite-ex.c
 TESTFIXTURE_SRC += $(TESTFIXTURE_SRC$(USE_AMALGAMATION))
 
-testfixture$(T.exe):	$(T.tcl.env.sh) has_tclsh85 $(TESTFIXTURE_SRC)
-	$(T.link.tcl) -DSQLITE_NO_SYNC=1 $(TESTFIXTURE_FLAGS) \
-		-o $@ $(TESTFIXTURE_SRC) \
-		$$TCL_LIB_SPEC $$TCL_INCLUDE_SPEC $$TCL_LIBS \
-		$(LDFLAGS.libsqlite3)
+T.testlink = $(T.link) $(1) -o $@ $(2) $(3)
+ifeq ($(DOLTLITE_SPLIT_TEST_COMPILE),1)
+  TEST_COMPILE_DEP = $(TOP)/tool/compile-test.py
+  T.testlink = python3 $(TOP)/tool/compile-test.py --cc $(T.link) \
+    --cflags $(1) --sources $(2) --ldflags $(3) --output $@
+endif
+
+testfixture$(T.exe):	$(T.tcl.env.sh) has_tclsh85 $(TESTFIXTURE_SRC) $(TEST_COMPILE_DEP)
+	$(T.tcl.env.source); \
+		$(call T.testlink,-DSQLITE_NO_SYNC=1 $(TESTFIXTURE_FLAGS) $$TCL_INCLUDE_SPEC,\
+		$(TESTFIXTURE_SRC),$$TCL_LIB_SPEC $$TCL_LIBS $(LDFLAGS.libsqlite3))
 
 coretestprogs:	testfixture$(B.exe) sqlite3$(B.exe)
 
@@ -2654,12 +2660,10 @@ sqlite3-shell-static.flags.0 =
 # runtime performance hit, which is fine for use in the shell but is
 # not appropriate for the canonical library build.
 #
-sqlite3$(T.exe):	shell.c sqlite3.c
-	$(T.link) -o $@ \
-		shell.c sqlite3.c \
-		$(sqlite3-shell-static.flags.$(STATIC_CLI_SHELL)) \
-		$(CFLAGS.readline) $(SHELL_OPT) $(CFLAGS.icu) \
-		$(LDFLAGS.libsqlite3) $(LDFLAGS.readline)
+sqlite3$(T.exe):	shell.c sqlite3.c $(TEST_COMPILE_DEP)
+	$(call T.testlink,$(sqlite3-shell-static.flags.$(STATIC_CLI_SHELL)) \
+		$(CFLAGS.readline) $(SHELL_OPT) $(CFLAGS.icu),shell.c sqlite3.c,\
+		$(LDFLAGS.libsqlite3) $(LDFLAGS.readline))
 #
 # Build sqlite3$(T.exe) by default except in wasi-sdk builds.  Yes, the
 # semantics of 0 and 1 are confusingly swapped here.
@@ -3125,23 +3129,23 @@ fuzzershell$(T.exe):	$(TOP)/tool/fuzzershell.c sqlite3.c sqlite3.h
 fuzzy: fuzzershell$(T.exe)
 xbin: fuzzershell$(T.exe)
 
-fuzzcheck$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP)
-	$(T.link) -o $@ $(FUZZCHECK_OPT) $(FUZZCHECK_SRC) $(LDFLAGS.libsqlite3)
+fuzzcheck$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP) $(TEST_COMPILE_DEP)
+	$(call T.testlink,$(FUZZCHECK_OPT),$(FUZZCHECK_SRC),$(LDFLAGS.libsqlite3))
 fuzzy: fuzzcheck$(T.exe)
 xbin: fuzzcheck$(T.exe)
 
 # -fsanitize=... flags for fuzzcheck-asan.
 CFLAGS.fuzzcheck-asan.fsanitize ?= -fsanitize=address
 
-fuzzcheck-asan$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP)
-	$(T.link) -o $@ $(CFLAGS.fuzzcheck-asan.fsanitize) $(FUZZCHECK_OPT) $(FUZZCHECK_SRC) \
-		$(LDFLAGS.libsqlite3)
+fuzzcheck-asan$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP) $(TEST_COMPILE_DEP)
+	$(call T.testlink,$(CFLAGS.fuzzcheck-asan.fsanitize) $(FUZZCHECK_OPT),\
+		$(FUZZCHECK_SRC),$(LDFLAGS.libsqlite3))
 fuzzy: fuzzcheck-asan$(T.exe)
 xbin: fuzzcheck-asan$(T.exe)
 
-fuzzcheck-ubsan$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP)
-	$(T.link) -o $@ -fsanitize=undefined $(FUZZCHECK_OPT) $(FUZZCHECK_SRC) \
-		$(LDFLAGS.libsqlite3)
+fuzzcheck-ubsan$(T.exe):	$(FUZZCHECK_SRC) $(FUZZCHECK_DEP) $(TEST_COMPILE_DEP)
+	$(call T.testlink,-fsanitize=undefined $(FUZZCHECK_OPT),\
+		$(FUZZCHECK_SRC),$(LDFLAGS.libsqlite3))
 fuzzy: fuzzcheck-ubsan$(T.exe)
 xbin: fuzzcheck-ubsan$(T.exe)
 
@@ -3151,8 +3155,8 @@ ossshell$(T.exe):	$(TOP)/test/ossfuzz.c $(TOP)/test/ossshell.c sqlite3.c sqlite3
 fuzzy: ossshell$(T.exe)
 xbin: ossshell$(T.exe)
 
-sessionfuzz$(T.exe):	$(TOP)/test/sessionfuzz.c sqlite3.c sqlite3.h
-	$(T.link) -o $@ $(TOP)/test/sessionfuzz.c $(LDFLAGS.libsqlite3)
+sessionfuzz$(T.exe):	$(TOP)/test/sessionfuzz.c sqlite3.c sqlite3.h $(TEST_COMPILE_DEP)
+	$(call T.testlink,,$(TOP)/test/sessionfuzz.c,$(LDFLAGS.libsqlite3))
 fuzzy: sessionfuzz$(T.exe)
 
 dbfuzz$(T.exe):	$(TOP)/test/dbfuzz.c sqlite3.c sqlite3.h
@@ -3348,6 +3352,7 @@ tidy:
 	rm -f *.o *.obj *.c *.da *.bb *.bbg gmon.* *.rws sqlite3$(T.exe) doltlite$(T.exe)
 	rm -f fts5.h keywordhash.h opcodes.h sqlite3.h sqlite3ext.h sqlite3session.h
 	rm -rf .libs .deps tsrc .target_source
+	rm -rf .test-objects
 	rm -f lemon$(B.exe) sqlite*.tar.gz
 	rm -f mkkeywordhash$(B.exe) mksourceid$(B.exe)
 	rm -f parse.* fts5parse.*
