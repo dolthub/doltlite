@@ -1,0 +1,77 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout schema rows} {
+  changed {oldkey INTEGER PRIMARY KEY, id INT}
+    {(-100,42),(1,99),(2,42),(100,7)}
+  changed_reordered {id INT, oldkey INTEGER PRIMARY KEY}
+    {(-100,42),(1,99),(2,42),(100,7)}
+  same_reordered {id INTEGER PRIMARY KEY, oldkey INT}
+    {(-100,42),(1,99),(100,7)}
+  clustered {oldkey INT, id INT, PRIMARY KEY(oldkey,id)}
+    {(-100,42),(1,99),(2,42),(100,7)}
+  keyless {oldkey INT, id INT}
+    {(-100,42),(1,99),(2,42),(100,7)}
+} {
+  reset_db
+  execsql "CREATE TABLE t($schema);
+           INSERT INTO t(oldkey,id) VALUES $rows;"
+  execsql {
+    SELECT dolt_commit('-Am','old');
+    SELECT dolt_tag('old');
+    DROP TABLE t;
+    CREATE TABLE t(oldkey INT, id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(10,42),(11,99),(12,7);
+    SELECT dolt_commit('-Am','new');
+  }
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {
+      db close
+      sqlite3 db test.db
+    }
+    foreach {surface source} {
+      snapshot_old {dolt_at_t('old')}
+      snapshot_current {dolt_at_t('HEAD')}
+      history {dolt_history_t}
+      history_old {dolt_history_t('old')}
+      history_commit {dolt_history_t WHERE commit_hash=dolt_hashof('old')}
+    } {
+      set base "SELECT oldkey,id FROM $source"
+      foreach {predicate where} {
+        eq {id=42}
+        eq_first {id=7}
+        ge {id>=42}
+        gt {id>7}
+        le {id<=42}
+        lt {id<99}
+        bounded {id>7 AND id<=42}
+        in {id IN (7,42)}
+      } {
+        set expected [execsql "SELECT oldkey,id FROM ($base LIMIT -1)
+                               WHERE $where ORDER BY oldkey,id"]
+        set joiner WHERE
+        if {$surface eq "history_commit"} {set joiner AND}
+        do_execsql_test historical-pk-$layout-$phase-$surface-$predicate \
+            "$base $joiner $where ORDER BY oldkey,id" $expected
+      }
+    }
+  }
+}
+
+reset_db
+do_execsql_test historical-pk-missing-setup {
+  CREATE TABLE t(oldkey INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1),(2);
+  SELECT length(dolt_commit('-Am','old'));
+  DROP TABLE t;
+  CREATE TABLE t(oldkey INT, id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1,42);
+  SELECT length(dolt_commit('-Am','new'));
+} {40 40}
+do_execsql_test historical-pk-missing {
+  SELECT oldkey,id FROM dolt_at_t('HEAD~1') WHERE id IS NULL ORDER BY oldkey;
+  SELECT count(*) FROM dolt_at_t('HEAD~1') WHERE id=42;
+  SELECT oldkey,id FROM dolt_history_t WHERE id=42;
+} {1 {} 2 {} 0 1 42}
+
+finish_test

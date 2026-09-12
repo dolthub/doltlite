@@ -50,6 +50,7 @@ struct AtCursor {
   DoltliteSideCols side;
   char *zCommitRef;
   int idxNum;
+  int pkSeekable;
   DoltlitePkRange pkRange;
 };
 
@@ -631,7 +632,6 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   ProllyHash tableRoot; u8 flags=0;
   ProllyHash schemaHash;
   int rc, res;
-  int seekable;
   (void)idxStr;
 
   memset(&schemaHash, 0, sizeof(schemaHash));
@@ -704,10 +704,11 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
   c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
 
-  seekable = c->common.rootIntKey
-          && (idxNum & AT_IDX_PK_ANY) != 0;
+  c->pkSeekable = c->common.rootIntKey
+              && (idxNum & AT_IDX_PK_ANY) != 0
+              && doltliteSideColsMatchIntPk(&c->side, &v->cols);
 
-  if( seekable && (idxNum & AT_IDX_PK_EQ) && c->pkRange.hasPkLo ){
+  if( c->pkSeekable && (idxNum & AT_IDX_PK_EQ) && c->pkRange.hasPkLo ){
     rc = prollyCursorSeekInt(&c->common.tblCur, c->pkRange.pkLo, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
@@ -722,7 +723,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
                                             &c->side);
   }
 
-  if( seekable && c->pkRange.hasPkLo ){
+  if( c->pkSeekable && c->pkRange.hasPkLo ){
     i64 startKey = c->pkRange.pkLo;
     if( c->pkRange.pkLoStrict ) startKey++;
     rc = prollyCursorSeekInt(&c->common.tblCur, startKey, &res);
@@ -755,7 +756,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
-  if( seekable && c->pkRange.hasPkHi && !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
+  if( c->pkSeekable && c->pkRange.hasPkHi && !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
     prollyCursorClose(&c->common.tblCur);
     return SQLITE_OK;
   }
@@ -773,9 +774,8 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  /* EQ probe only positions intkey roots; mismatched shapes must keep stepping. */
   if( (c->idxNum & AT_IDX_PK_EQ) && c->pkRange.hasPkLo
-   && c->common.rootIntKey ){
+   && c->pkSeekable ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
     c->common.hasRow = 0;
@@ -794,7 +794,7 @@ static int atNext(sqlite3_vtab_cursor *cur){
     c->common.hasRow = 0;
     return SQLITE_OK;
   }
-  if( (c->idxNum & AT_IDX_PK_ANY) && c->common.rootIntKey
+  if( c->pkSeekable
    && !doltlitePkRangeMatchesCursorUpper(&c->pkRange, &c->common.tblCur) ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
