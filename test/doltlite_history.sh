@@ -384,4 +384,29 @@ run_test "hist_namemap_old_commit" \
 
 rm -f "$DBH"
 
+DB=/tmp/test_hist_pk_mapping_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(oldkey INTEGER PRIMARY KEY, id INT);
+INSERT INTO t VALUES(-100,42),(1,99),(2,42),(100,7);
+SELECT dolt_commit('-Am','old');
+DROP TABLE t;
+CREATE TABLE t(oldkey INT, id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(10,42),(11,99),(12,7);
+SELECT dolt_commit('-Am','new');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "snapshot_changed_pk_eq" \
+  "SELECT oldkey,id FROM dolt_at_t('HEAD~1') WHERE id=42 ORDER BY oldkey;" \
+  "-100|42
+2|42" "$DB"
+run_test "snapshot_changed_pk_range" \
+  "SELECT oldkey,id FROM dolt_at_t('HEAD~1') WHERE id<=42 ORDER BY oldkey;" \
+  "-100|42
+2|42
+100|7" "$DB"
+run_test "history_changed_pk_eq" \
+  "SELECT count(*) FROM dolt_history_t WHERE id=42;" "3" "$DB"
+run_test "history_changed_pk_range" \
+  "SELECT count(*) FROM dolt_history_t WHERE id>7 AND id<=42;" "3" "$DB"
+
+rm -f "$DB"
+
 dltest_finish

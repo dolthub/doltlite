@@ -86,6 +86,16 @@ static SQLITE_INLINE int doltliteVtabCommonCaptureRowSide(
   return SQLITE_OK;
 }
 
+static SQLITE_INLINE int doltliteSideColsMatchIntPk(
+  const DoltliteSideCols *pSide,
+  const DoltliteColInfo *pDeclared
+){
+  int iPk = pDeclared->iPkCol;
+  return iPk>=0 && (!pSide->valid
+      || (pSide->ci.iPkCol>=0
+          && pSide->aDeclToSide[iPk]==pSide->ci.iPkCol));
+}
+
 static SQLITE_INLINE int doltlitePkRangeMatchesCursorUpper(
   const DoltlitePkRange *pRange,
   ProllyCursor *pCur
