@@ -23,7 +23,7 @@ static int loadNotNullColumns(
   *pazCols = 0;
   *pnCols = 0;
   zSql = sqlite3_mprintf(
-      "SELECT name FROM pragma_table_xinfo(%Q) "
+      "SELECT name FROM pragma_table_xinfo(%Q, 'main') "
       "WHERE \"notnull\"=1 AND hidden!=1", zTable);
   if( !zSql ) return SQLITE_NOMEM;
   rc = sqlite3_prepare_v2(db, zSql, -1, &pQ, 0);
