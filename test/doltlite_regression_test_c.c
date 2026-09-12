@@ -13790,6 +13790,56 @@ static void run_count_flush_keeps_scan(void){
   removeDbFiles(dbpath);
 }
 
+/* A pending map that drains mid-build must not leave cursors pointing past
+** nEntries; PROLLY_MUTMAP_PENDING_FLUSH_LIMIT is 65536, so the index build
+** has to cross it. */
+static void run_index_build_flush_resets_cursor(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  char dbpath[256];
+  char seen[128];
+  int rc;
+
+  printf("=== Index Build Flush Resets Cursor Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_index_build_flush_resets_cursor");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_index_build_flush", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_rows_for_index_build_flush", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);"
+    "WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<70000)"
+    "  INSERT INTO t(a,b) SELECT 1, x FROM s;")==SQLITE_OK);
+  check("index_build_crosses_flush_limit", execSql(db,
+    "CREATE INDEX iab ON t(a,b);")==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db,
+    "SELECT (SELECT max(b) FROM t INDEXED BY iab WHERE a=1)"
+    "    || '|' || (SELECT max(b) FROM t NOT INDEXED WHERE a=1)"
+    "    || '|' || (SELECT count(*) FROM t INDEXED BY iab WHERE a=1);",
+    -1, &stmt, 0);
+  check("prepare_index_build_flush_probe", rc==SQLITE_OK);
+  if( stmt ){
+    rc = collect_stepped_text(stmt, seen, (int)sizeof(seen));
+    check("index_build_flush_probe_done", rc==SQLITE_DONE);
+    check("index_build_flush_index_matches_scan",
+          strcmp(seen, "70000|70000|70000")==0);
+  }
+  sqlite3_finalize(stmt);
+  stmt = 0;
+
+  rc = sqlite3_prepare_v2(db, "PRAGMA integrity_check;", -1, &stmt, 0);
+  check("prepare_index_build_flush_integrity", rc==SQLITE_OK);
+  if( stmt ){
+    rc = collect_stepped_text(stmt, seen, (int)sizeof(seen));
+    check("index_build_flush_integrity_done", rc==SQLITE_DONE);
+    check("index_build_flush_integrity_ok", strcmp(seen, "ok")==0);
+  }
+  sqlite3_finalize(stmt);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_negzero_sortkey_eq(void){
   static const u8 posZero[] = {
     0x02, 0x07,
@@ -14432,6 +14482,7 @@ static const RegressionCase aCases[] = {
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
+  { "index_build_flush_resets_cursor", "Index Build Flush Resets Cursor Test", run_index_build_flush_resets_cursor },
   { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq },
   { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch },
   { "clustered_pk_update_hook", "Clustered PK Update Hook Test", run_clustered_pk_update_hook },
