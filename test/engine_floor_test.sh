@@ -28,6 +28,22 @@ if [ -x "$ENG" ]; then
     exit 1
   fi
   echo "PASS: common.sh run_test_match under set -u"
+
+  fake="$(mktemp "${TMPDIR:-/tmp}/dltest-fake.XXXXXX")"
+  printf '%s\n' '#!/bin/sh' 'echo 1' 'exit 7' >"$fake"
+  chmod +x "$fake"
+  if DLTEST_SKIP_ENGINE_FLOOR=1 DOLTLITE="$fake" bash -c '
+    . "'"$SCRIPT_DIR"'/lib/doltlite_test_common.sh"
+    run_test "nonzero_exit" "SELECT 1;" "1" ":memory:"
+    [ "$FAIL" -gt 0 ]
+  '; then
+    echo "PASS: run_test rejects matching output with rc!=0"
+  else
+    echo "FAIL: run_test passed when the engine exited 7"
+    rm -f "$fake"
+    exit 1
+  fi
+  rm -f "$fake"
 else
   echo "SKIP: no DoltLite engine at $ENG"
 fi

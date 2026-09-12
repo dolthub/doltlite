@@ -64,22 +64,32 @@ dltest_fail() {
   ERRORS="$ERRORS\nFAIL: $name\n$msg"
 }
 
+dltest_expected_error() {
+  case "$1" in
+    Error*|*"Error near"*|*"Parse error"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 run_test() {
   local name="$1"
   local sql="$2"
   local expected="$3"
   local db="$4"
   local result rc bail=""
-  case "$expected" in
-    Error*|*"Error near"*) ;;
-    *) bail=bail ;;
-  esac
+  if ! dltest_expected_error "$expected"; then
+    bail=bail
+  fi
   result=$(dltest_run_sql "$sql" "$db" $bail)
   rc=$?
-  if [ "$result" = "$expected" ]; then
+  if [ -n "$bail" ]; then
+    if [ "$result" = "$expected" ] && [ "$rc" -eq 0 ]; then
+      dltest_pass
+    else
+      dltest_fail "$name" "  engine rc=$rc\n  expected: $expected\n  got:      $result"
+    fi
+  elif [ "$result" = "$expected" ]; then
     dltest_pass
-  elif [ -n "$bail" ] && [ "$rc" -ne 0 ]; then
-    dltest_fail "$name" "  engine rc=$rc\n  expected: $expected\n  got:      $result"
   else
     dltest_fail "$name" "  expected: $expected\n  got:      $result"
   fi
