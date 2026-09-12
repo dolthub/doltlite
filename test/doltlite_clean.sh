@@ -86,5 +86,25 @@ run_test "clean_named_overrides_ignore" "SELECT dolt_clean('ig_named');" "0" "$D
 run_test "clean_named_drops_ignored_target" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ig_named';" "0" "$DB8"
 run_test "clean_named_keeps_other_untracked" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='other';" "1" "$DB8"
 
+for mode in named all; do
+  DB9=/tmp/test_clean_temp_shadow_${mode}_$$.db; rm -f "$DB9"
+  args=""
+  if [ "$mode" = named ]; then args="'T'"; fi
+  run_test "clean_temp_shadow_$mode" \
+    "CREATE TABLE main.t(id INTEGER PRIMARY KEY);
+     INSERT INTO main.t VALUES(1);
+     CREATE TEMP TABLE t(id INTEGER PRIMARY KEY);
+     INSERT INTO temp.t VALUES(99);
+     SELECT dolt_clean($args);
+     SELECT count(*) FROM main.sqlite_master WHERE name='t';
+     SELECT id FROM temp.t;" \
+    "0
+0
+99" "$DB9"
+  run_test "clean_temp_shadow_${mode}_reopen" \
+    "SELECT count(*) FROM main.sqlite_master WHERE name='t';" "0" "$DB9"
+  rm -f "$DB9"
+done
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 dltest_finish
