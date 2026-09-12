@@ -517,4 +517,33 @@ run_test "mixheight_originals_untouched" \
 
 rm -f "$DBMIX"
 
+DBLAZY=/tmp/test_dt_lazy_$$.db; rm -f "$DBLAZY"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'c0');
+SELECT dolt_commit('-Am','c0');" | $DOLTLITE "$DBLAZY" > /dev/null 2>&1
+i=1
+while [ "$i" -le 20 ]; do
+  echo "INSERT INTO t VALUES($i,'c$i'); SELECT dolt_commit('-Am','c$i');" \
+    | $DOLTLITE "$DBLAZY" > /dev/null 2>&1
+  i=$((i+1))
+done
+
+run_test "lazy_full_count" \
+  "SELECT count(*) FROM dolt_diff_t;" \
+  "21" "$DBLAZY"
+run_test "lazy_limit_one_count" \
+  "SELECT count(*) FROM (SELECT * FROM dolt_diff_t LIMIT 1);" \
+  "1" "$DBLAZY"
+run_test "lazy_from_commit_c0" \
+  "SELECT count(*) FROM dolt_diff_t
+     WHERE from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c0');" \
+  "1" "$DBLAZY"
+run_test "lazy_from_commit_limit" \
+  "SELECT count(*) FROM dolt_diff_t
+     WHERE from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c0')
+     LIMIT 1;" \
+  "1" "$DBLAZY"
+
+rm -f "$DBLAZY"
+
 dltest_finish

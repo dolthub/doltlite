@@ -89,6 +89,26 @@ struct DiffPair {
   i64        toDate;
 };
 
+typedef struct CmTblInfo CmTblInfo;
+typedef struct CmTblMap CmTblMap;
+struct CmTblInfo {
+  ProllyHash key;
+  ProllyHash tblRoot;
+  ProllyHash catHash;
+  ProllyHash schemaHash;
+  u8         flags;
+  i64        date;
+  char       zHexName[PROLLY_HASH_SIZE*2+1];
+};
+
+struct CmTblMap {
+  CmTblInfo *aEntry;
+  int nEntry;
+  int nAlloc;
+  int *aSlot;
+  int nSlot;
+};
+
 typedef struct DiffTblCursor DiffTblCursor;
 struct DiffTblCursor {
   sqlite3_vtab_cursor base;
@@ -98,6 +118,17 @@ struct DiffTblCursor {
   int nPairsAlloc;
   int iPair;
   int pairsDone;
+
+  int walkActive;
+  CmTblMap walkMap;
+  ProllyHash *aWalkStack;
+  int nWalkStack;
+  int nWalkStackAlloc;
+  ProllyHashSet walkSeen;
+  int walkSeenInit;
+  ProllyHash walkCurr;
+  int walkCurrInited;
+  char zFromFilter[PROLLY_HASH_SIZE*2+1];
 
   ProllyDiffIter diffIter;
   int diffIterOpen;
@@ -184,26 +215,6 @@ static void closeDiffIter(DiffTblCursor *pCur){
     pCur->diffIterOpen = 0;
   }
 }
-
-typedef struct CmTblInfo CmTblInfo;
-typedef struct CmTblMap CmTblMap;
-struct CmTblInfo {
-  ProllyHash key;
-  ProllyHash tblRoot;
-  ProllyHash catHash;
-  ProllyHash schemaHash;
-  u8         flags;
-  i64        date;
-  char       zHexName[PROLLY_HASH_SIZE*2+1];
-};
-
-struct CmTblMap {
-  CmTblInfo *aEntry;
-  int nEntry;
-  int nAlloc;
-  int *aSlot;
-  int nSlot;
-};
 
 static u32 cmHashSlot(const ProllyHash *pKey, int nSlot){
   u32 h;
@@ -456,49 +467,79 @@ static int registerCommitParents(
   return SQLITE_OK;
 }
 
-static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
-                          const char *zTableName){
+static void clearHistoryWalk(DiffTblCursor *pCur){
+  cmMapFree(&pCur->walkMap);
+  sqlite3_free(pCur->aWalkStack);
+  pCur->aWalkStack = 0;
+  pCur->nWalkStack = 0;
+  pCur->nWalkStackAlloc = 0;
+  if( pCur->walkSeenInit ){
+    prollyHashSetFree(&pCur->walkSeen);
+    pCur->walkSeenInit = 0;
+  }
+  pCur->walkActive = 0;
+  pCur->walkCurrInited = 0;
+  pCur->zFromFilter[0] = 0;
+}
+
+static int startHistoryWalk(DiffTblCursor *pCur, sqlite3 *db,
+                            const char *zTableName){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;
-  CmTblMap map;
-  ProllyHash *aStack = 0;
-  int nStack = 0, nStackAlloc = 0;
-  ProllyHashSet seen;
-  int seenInit = 0;
-  int currInited = 0;
-  ProllyHash curr;
+  char zKeepFilter[PROLLY_HASH_SIZE*2+1];
   int rc = SQLITE_OK;
 
+  memcpy(zKeepFilter, pCur->zFromFilter, sizeof(zKeepFilter));
+  clearHistoryWalk(pCur);
+  memcpy(pCur->zFromFilter, zKeepFilter, sizeof(pCur->zFromFilter));
   if( !cs ) return SQLITE_OK;
-  memset(&map, 0, sizeof(map));
 
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
-  rc = seedWorkingChildInfo(pCur, db, &headHash, zTableName, &map);
-  if( rc!=SQLITE_OK ) goto walk_done;
+  rc = seedWorkingChildInfo(pCur, db, &headHash, zTableName, &pCur->walkMap);
+  if( rc!=SQLITE_OK ){
+    clearHistoryWalk(pCur);
+    return rc;
+  }
 
-  rc = prollyHashSetInit(&seen, 64);
-  if( rc!=SQLITE_OK ) goto walk_done;
-  seenInit = 1;
+  rc = prollyHashSetInit(&pCur->walkSeen, 64);
+  if( rc!=SQLITE_OK ){
+    clearHistoryWalk(pCur);
+    return rc;
+  }
+  pCur->walkSeenInit = 1;
 
-  rc = stackPushUnique(&seen, &aStack, &nStack, &nStackAlloc, &headHash);
-  if( rc!=SQLITE_OK ) goto walk_done;
-  curr = headHash;
-  currInited = 1;
-  nStack--;
+  rc = stackPushUnique(&pCur->walkSeen, &pCur->aWalkStack,
+                       &pCur->nWalkStack, &pCur->nWalkStackAlloc, &headHash);
+  if( rc!=SQLITE_OK ){
+    clearHistoryWalk(pCur);
+    return rc;
+  }
+  pCur->walkCurr = headHash;
+  pCur->walkCurrInited = 1;
+  pCur->nWalkStack--;
+  pCur->walkActive = 1;
+  return SQLITE_OK;
+}
 
-  while( currInited ){
+static int walkNextDiffPair(DiffTblCursor *pCur, sqlite3 *db,
+                            const char *zTableName){
+  int rc = SQLITE_OK;
+
+  while( pCur->walkCurrInited ){
     DoltliteCommit commit;
     ProllyHash curTblRoot;
     ProllyHash curSchemaHash;
     u8 curFlags = 0;
     char curHex[PROLLY_HASH_SIZE*2+1];
+    int nBefore = pCur->nPairs;
+    int filterHit = 0;
 
     memset(&commit, 0, sizeof(commit));
     memset(&curTblRoot, 0, sizeof(curTblRoot));
     memset(&curSchemaHash, 0, sizeof(curSchemaHash));
 
-    rc = doltliteLoadCommit(db, &curr, &commit);
+    rc = doltliteLoadCommit(db, &pCur->walkCurr, &commit);
     if( rc!=SQLITE_OK ) break;
 
     rc = dtLoadTableRootOrEmpty(pCur, db, &commit.catalogHash,
@@ -509,29 +550,33 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
       break;
     }
 
-    doltliteHashToHex(&curr, curHex);
-    rc = appendCurrentDiffPair(pCur, &curr, &commit, &curTblRoot,
-                               &curSchemaHash, curFlags, &map);
-    if( rc==SQLITE_OK ){
-      rc = registerCommitParents(&map, &seen, &aStack, &nStack, &nStackAlloc,
+    doltliteHashToHex(&pCur->walkCurr, curHex);
+    filterHit = pCur->zFromFilter[0]
+             && sqlite3_stricmp(curHex, pCur->zFromFilter)==0;
+    if( !pCur->zFromFilter[0] || filterHit ){
+      rc = appendCurrentDiffPair(pCur, &pCur->walkCurr, &commit, &curTblRoot,
+                                 &curSchemaHash, curFlags, &pCur->walkMap);
+    }
+    if( rc==SQLITE_OK && !filterHit ){
+      rc = registerCommitParents(&pCur->walkMap, &pCur->walkSeen,
+                                 &pCur->aWalkStack, &pCur->nWalkStack,
+                                 &pCur->nWalkStackAlloc,
                                  &commit, &curTblRoot,
                                  &curSchemaHash, curFlags, curHex);
     }
     doltliteCommitClear(&commit);
     if( rc!=SQLITE_OK ) break;
 
-    if( nStack==0 ){
-      currInited = 0;
+    if( pCur->nWalkStack==0 || filterHit ){
+      pCur->walkCurrInited = 0;
     }else{
-      curr = aStack[nStack-1];
-      nStack--;
+      pCur->walkCurr = pCur->aWalkStack[pCur->nWalkStack-1];
+      pCur->nWalkStack--;
     }
+    if( pCur->nPairs > nBefore ) return SQLITE_OK;
   }
 
-walk_done:
-  cmMapFree(&map);
-  sqlite3_free(aStack);
-  if( seenInit ) prollyHashSetFree(&seen);
+  pCur->walkCurrInited = 0;
   return rc;
 }
 
@@ -940,8 +985,14 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   if( !cs ) return SQLITE_OK;
 
   if( pCur->iPair >= pCur->nPairs ){
-    pCur->pairsDone = 1;
-    return SQLITE_OK;
+    if( pCur->walkActive && pCur->walkCurrInited ){
+      rc = walkNextDiffPair(pCur, db, pVtab->zTableName);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    if( pCur->iPair >= pCur->nPairs ){
+      pCur->pairsDone = 1;
+      return SQLITE_OK;
+    }
   }
 
   {
@@ -1158,6 +1209,7 @@ static int dtClose(sqlite3_vtab_cursor *cur){
   closeDiffIter(c);
   clearAuditRow(&c->row);
   freePairCols(c);
+  clearHistoryWalk(c);
   sqlite3_free(c->aPairs);
   sqlite3_free(c);
   return SQLITE_OK;
@@ -1174,6 +1226,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   closeDiffIter(c);
   clearAuditRow(&c->row);
   freePairCols(c);
+  clearHistoryWalk(c);
   sqlite3_free(c->aPairs);
   c->aPairs = 0;
   c->nPairs = 0;
@@ -1260,24 +1313,14 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
       }
     }
     if( zLabel[0] ){
-      rc = buildDiffPairs(c, db, pVtab->zTableName);
-      if( rc==SQLITE_OK ){
-        int iKeep = 0;
-        int iScan;
-        for(iScan=0; iScan<c->nPairs; iScan++){
-          if( sqlite3_stricmp(c->aPairs[iScan].zFromCommit, zLabel)==0 ){
-            c->aPairs[iKeep++] = c->aPairs[iScan];
-          }
-        }
-        c->nPairs = iKeep;
-      }
+      sqlite3_snprintf(sizeof(c->zFromFilter), c->zFromFilter, "%s", zLabel);
+      rc = startHistoryWalk(c, db, pVtab->zTableName);
     }
   }else{
-
-    rc = buildDiffPairs(c, db, pVtab->zTableName);
+    rc = startHistoryWalk(c, db, pVtab->zTableName);
   }
   if( rc!=SQLITE_OK ) return rc;
-  if( c->nPairs==0 ){
+  if( c->nPairs==0 && !c->walkActive ){
     c->pairsDone = 1;
     return SQLITE_OK;
   }
