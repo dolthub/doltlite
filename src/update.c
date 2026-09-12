@@ -1088,7 +1088,7 @@ void sqlite3Update(
     ** is the column index supplied by the user.
     */
     assert( regNew==regNewRowid+1 );
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
     {
       int iSeqDb = sqlite3DoltliteSeqTableDb(pParse, pTab);
       if( iSeqDb>=0 ){

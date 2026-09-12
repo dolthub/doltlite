@@ -3808,7 +3808,7 @@ void sqlite3CodeDropTable(Parse *pParse, Table *pTab, int iDb, int isView){
       pDb->zDbSName, pTab->zName
     );
   }
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
   if( HasRowid(pTab) && !IsVirtual(pTab)
    && iDb!=1 && pDb->pBt && !sqlite3BtreeUsesOrig(pDb->pBt) ){
     Vdbe *vSeq = sqlite3GetVdbe(pParse);

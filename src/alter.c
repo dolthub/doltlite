@@ -261,7 +261,7 @@ void sqlite3AlterRenameTable(
         "UPDATE \"%w\".sqlite_sequence set name = %Q WHERE name = %Q",
         zDb, zName, pTab->zName);
   }
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
   if( HasRowid(pTab) && !IsVirtual(pTab)
    && iDb!=1 && db->aDb[iDb].pBt && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
     int regOld = ++pParse->nMem;
