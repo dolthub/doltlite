@@ -19,6 +19,9 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
+# Shared sequence metadata adds a file-size divergence before the old cutoff.
+incr ::cmdlinearg(maxerror)
+
 # If this build of the library does not support auto-vacuum, omit this
 # whole file.
 ifcapable {!autovacuum || !pragma} {

@@ -1,0 +1,114 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {kind schema} {
+  ipk {id INTEGER PRIMARY KEY, v TEXT}
+  autoinc {id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT}
+  keyless {v TEXT}
+} {
+  reset_db
+  execsql "CREATE TABLE t($schema)"
+  execsql {
+    INSERT INTO t(v) VALUES('base');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('other');
+    INSERT INTO t(v) VALUES('main');
+    SELECT dolt_checkout('other');
+  }
+  do_execsql_test shared-rowid-$kind-branch {
+    INSERT INTO t(v) VALUES('other');
+    SELECT rowid,v FROM t ORDER BY rowid;
+  } {1 base 3 other}
+  do_execsql_test shared-rowid-$kind-delete {
+    DELETE FROM t WHERE rowid=3;
+    INSERT INTO t(v) VALUES('next');
+    SELECT rowid FROM t WHERE v='next';
+  } {4}
+  do_execsql_test shared-rowid-$kind-rollback {
+    BEGIN;
+    INSERT INTO t(v) VALUES('rollback');
+    SELECT last_insert_rowid();
+    ROLLBACK;
+    INSERT INTO t(v) VALUES('kept');
+    SELECT last_insert_rowid();
+  } {5 5}
+  do_execsql_test shared-rowid-$kind-savepoint {
+    SAVEPOINT s;
+    INSERT INTO t(v) VALUES('rollback');
+    SELECT last_insert_rowid();
+    ROLLBACK TO s;
+    RELEASE s;
+    INSERT INTO t(v) VALUES('kept');
+    SELECT last_insert_rowid();
+  } {6 7}
+  do_execsql_test shared-rowid-$kind-rename {
+    DELETE FROM t;
+    ALTER TABLE t RENAME TO renamed;
+    INSERT INTO renamed(v) VALUES('renamed');
+    SELECT rowid FROM renamed;
+  } {8}
+  db close
+  sqlite3 db test.db
+  execsql {SELECT dolt_checkout('other')}
+  do_execsql_test shared-rowid-$kind-reopen {
+    INSERT INTO renamed(v) VALUES('reopened');
+    SELECT last_insert_rowid();
+  } {9}
+  execsql {DROP TABLE renamed}
+  execsql "CREATE TABLE renamed($schema)"
+  do_execsql_test shared-rowid-$kind-drop {
+    INSERT INTO renamed(v) VALUES('new');
+    SELECT rowid FROM renamed;
+  } {1}
+}
+
+reset_db
+do_execsql_test shared-rowid-sequence-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+  INSERT INTO t(v) VALUES('base');
+  SELECT length(dolt_commit('-Am','base'));
+  SELECT dolt_branch('other');
+  INSERT INTO t VALUES(50,'main');
+  SELECT dolt_checkout('other');
+  INSERT INTO t(v) VALUES('other');
+  SELECT last_insert_rowid();
+} {40 0 0 51}
+do_execsql_test shared-rowid-sequence-update {
+  DELETE FROM t;
+  UPDATE sqlite_sequence SET seq=10 WHERE name='t';
+  INSERT INTO t(v) VALUES('reset');
+  SELECT id FROM t;
+} {11}
+do_execsql_test shared-rowid-sequence-delete {
+  DELETE FROM t;
+  DELETE FROM sqlite_sequence WHERE name='t';
+  INSERT INTO t(v) VALUES('reset');
+  SELECT id FROM t;
+} {1}
+do_execsql_test shared-rowid-sequence-insert {
+  DELETE FROM t;
+  DELETE FROM sqlite_sequence;
+  INSERT INTO sqlite_sequence VALUES('t',20);
+  INSERT INTO t(v) VALUES('reset');
+  SELECT id FROM t;
+} {21}
+do_execsql_test shared-rowid-sequence-rollback {
+  BEGIN;
+  DELETE FROM t;
+  UPDATE sqlite_sequence SET seq=0 WHERE name='t';
+  ROLLBACK;
+  INSERT INTO t(v) VALUES('kept');
+  SELECT last_insert_rowid();
+} {22}
+do_execsql_test shared-rowid-schema-isolation {
+  CREATE TEMP TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  ATTACH ':memory:' AS aux;
+  CREATE TABLE aux.t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO temp.t(v) VALUES('temp');
+  INSERT INTO aux.t(v) VALUES('aux');
+  SELECT id FROM temp.t;
+  SELECT id FROM aux.t;
+  SELECT max(id) FROM main.t;
+} {1 1 22}
+
+finish_test

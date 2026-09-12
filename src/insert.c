@@ -406,7 +406,7 @@ void sqlite3ComputeGeneratedColumns(
 ** The 2nd register is the one that is returned.  That is all the
 ** insert routine needs to know about.
 */
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
 /* Implicit rowids on a prolly-backed rowid table come from the counter
 ** shared by every branch of the file, so two branches never allocate the
 ** same id. Only AUTOINCREMENT tables also record it in sqlite_sequence. */
@@ -432,7 +432,7 @@ static int autoIncBegin(
   int bSeqOnly = 0;
 #endif
   assert( pParse->db->aDb[iDb].pSchema!=0 );
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
   if( (pTab->tabFlags & TF_Autoincrement)==0 ){
     bSeqOnly = rowidTableUsesSharedSeq(pParse, iDb, pTab);
   }
@@ -538,7 +538,7 @@ void sqlite3AutoincrementBegin(Parse *pParse){
     pDb = &db->aDb[p->iDb];
     memId = p->regCtr;
     assert( sqlite3SchemaMutexHeld(db, 0, pDb->pSchema) );
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
     if( p->bSeqOnly ){
       sqlite3VdbeLoadString(v, memId-1, p->pTab->zName);
       sqlite3VdbeAddOp2(v, OP_Integer, 0, memId);
@@ -562,7 +562,7 @@ void sqlite3AutoincrementBegin(Parse *pParse){
     aOp[7].p2 = memId+2;
     aOp[7].p1 = memId;
     aOp[10].p2 = memId;
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
     /* Shared counter is per chunk-store (P3=iDb). TEMP and orig-format
     ** schemas keep sqlite_sequence only — a name-only key would leak
     ** allocations across schemas. */
@@ -616,7 +616,7 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
     int iRec;
     int memId = p->regCtr;
 
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
     if( p->bSeqOnly ){
       sqlite3VdbeAddOp3(v, OP_DoltliteSeqBump, memId, memId-1, p->iDb);
       continue;
@@ -636,7 +636,7 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
     aOp[3].p2 = iRec;
     aOp[3].p3 = memId+1;
     aOp[3].p5 = OPFLAG_APPEND;
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
     if( p->iDb!=1 && pDb->pBt && !sqlite3BtreeUsesOrig(pDb->pBt) ){
       sqlite3VdbeAddOp3(v, OP_DoltliteSeqBump, memId, memId-1, p->iDb);
     }
@@ -647,7 +647,7 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
 void sqlite3AutoincrementEnd(Parse *pParse){
   if( pParse->usesAinc ) autoIncrementEnd(pParse);
 }
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
 /* Schema index when pTab is a prolly-backed sqlite_sequence whose rows a
 ** top-level statement is writing directly, else -1. */
 int sqlite3DoltliteSeqTableDb(Parse *pParse, Table *pTab){
@@ -2976,7 +2976,7 @@ void sqlite3CompleteInsertion(
     sqlite3VdbeAppendP4(v, pTab, P4_TABLE);
   }
   sqlite3VdbeChangeP5(v, pik_flags);
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
   {
     int iSeqDb = sqlite3DoltliteSeqTableDb(pParse, pTab);
     if( iSeqDb>=0 ){
