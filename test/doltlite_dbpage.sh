@@ -1,7 +1,10 @@
 #!/bin/bash
 
-DOLTLITE="${1:-./doltlite}"
+DOLTLITE="${1:-${DOLTLITE:-./doltlite}}"
 PASS=0; FAIL=0; ERRORS=""
+if ! bash "$(dirname "$0")/lib/assert_doltlite_engine.sh" "$DOLTLITE"; then
+  exit 1
+fi
 
 run_test() {
   local n="$1" s="$2" e="$3" d="$4"

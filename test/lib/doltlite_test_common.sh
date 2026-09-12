@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DOLTLITE="${DOLTLITE:-./doltlite}"
+DOLTLITE="${1:-${DOLTLITE:-./doltlite}}"
 PASS="${PASS:-0}"
 FAIL="${FAIL:-0}"
 ERRORS="${ERRORS:-}"
@@ -11,10 +11,14 @@ DLTEST_MATCH_FLAGS="${DLTEST_MATCH_FLAGS:-}"
 dltest_run_sql() {
   local sql="$1"
   local db="$2"
+  local extra=()
+  [ "${3:-}" = "bail" ] && extra=(-bail)
   if [ "$DLTEST_STRIP_CR" = "1" ]; then
-    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" "$DOLTLITE" "$db" 2>&1 | tr -d '\r'
+    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+      "$DOLTLITE" "${extra[@]}" "$db" 2>&1 | tr -d '\r'
   else
-    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" "$DOLTLITE" "$db" 2>&1
+    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+      "$DOLTLITE" "${extra[@]}" "$db" 2>&1
   fi
 }
 
@@ -56,8 +60,17 @@ run_test() {
   local sql="$2"
   local expected="$3"
   local db="$4"
-  local result
-  result=$(dltest_run_sql "$sql" "$db")
+  local result rc bail=""
+  case "$expected" in
+    Error*|*"Error near"*) ;;
+    *) bail=bail ;;
+  esac
+  result=$(dltest_run_sql "$sql" "$db" $bail)
+  rc=$?
+  if [ -n "$bail" ] && [ "$rc" -ne 0 ]; then
+    dltest_fail "$name" "  engine rc=$rc\n  expected: $expected\n  got:      $result"
+    return
+  fi
   if [ "$result" = "$expected" ]; then
     dltest_pass
   else
@@ -101,3 +114,11 @@ dltest_finish() {
     exit 1
   fi
 }
+
+if [ "${DLTEST_SKIP_ENGINE_FLOOR:-0}" != "1" ]; then
+  _dltest_floor="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/assert_doltlite_engine.sh"
+  if ! bash "$_dltest_floor" "$DOLTLITE"; then
+    exit 1
+  fi
+  unset _dltest_floor
+fi

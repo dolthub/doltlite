@@ -3,6 +3,7 @@
 doltlite_all_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
+engine_floor_test.sh
 feature_flags_stamp_test.sh
 install_sh_layout_test.sh
 homebrew_formula_test.sh

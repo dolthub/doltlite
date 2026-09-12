@@ -1,6 +1,7 @@
 #!/bin/bash
 # The in-repo Homebrew formula must not pin a pre-freeze tarball, and
 # bump-formula.sh must rewrite url/sha256 the way the release job does.
+DLTEST_SKIP_ENGINE_FLOOR=1
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
