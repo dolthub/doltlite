@@ -25,7 +25,7 @@
 const void *sqlite3BtreePayloadFetchWithSize(BtCursor*, u32*, u32*);
 int doltliteSyntheticRowidFromRecord(const u8*, int, const KeyInfo*, i64*);
 #endif
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
 #include "chunk_store.h"
 ChunkStore *doltliteBtreeChunkStore(Btree*);
 static ChunkStore *vdbeDoltliteSeqStore(sqlite3 *db, int iDb){
@@ -4075,7 +4075,6 @@ case OP_CountRange: {    /* out2 */
   goto check_for_interrupt;
 }
 
-#if !defined(SQLITE_TEST)
 /* Opcode: DoltliteSeqMax P1 P2 P3 * *
 ** Synopsis: r[P1]=max(r[P1], chunkStoreGetSequenceValue(r[P2]))
 **
@@ -4127,7 +4126,8 @@ case OP_DoltliteSeqBump: {
   if( !pCs ) break;
   zName = (const char*)pName->z;
   if( !zName ) break;
-  chunkStoreBumpSequence(pCs, zName, pCtr->u.i);
+  rc = chunkStoreBumpSequence(pCs, zName, pCtr->u.i);
+  if( rc ) goto abort_due_to_error;
   break;
 }
 
@@ -4198,10 +4198,10 @@ case OP_DoltliteSeqRename: {
   pCs = vdbeDoltliteSeqStore(db, pOp->p3);
   if( !pCs ) break;
   if( !pOld->z || !pNew->z ) break;
-  chunkStoreRenameSequence(pCs, (const char*)pOld->z, (const char*)pNew->z);
+  rc = chunkStoreRenameSequence(pCs, (const char*)pOld->z, (const char*)pNew->z);
+  if( rc ) goto abort_due_to_error;
   break;
 }
-#endif
 
 /* Opcode: CountIndexRange P1 P2 P3 P4 *
 ** Synopsis: r[P2]=count_index_range(r[P3]..r[P3+P4])

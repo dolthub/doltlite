@@ -31,6 +31,7 @@ incrblobfault
 incrvacuum_ioerr
 indexfault
 insertfault
+doltlite_shared_rowid_fault
 instrfault
 ioerr
 ioerr3

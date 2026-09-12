@@ -12,6 +12,7 @@ doltlite_recover_jrnlwal_4
 doltlite_recover_locking_1
 doltlite_recover_locking_2
 doltlite_shared_memdb
+doltlite_shared_rowid
 doltlite_recover_misc7
 doltlite_recover_ordering
 doltlite_recover_pragma_output

@@ -103,7 +103,7 @@ foreach code [list {
       } elseif {$now < $x} {
         for {set k $now} {$k < $x} {incr k} {
           execsql "SAVEPOINT sp_$k"
-          execsql { INSERT INTO t1(j) VALUES(randomblob(1500)) }
+          execsql "INSERT INTO t1(i,j) VALUES([expr {$k+1}],randomblob(1500))"
         }
       }
       do_execsql_test pager2.1.$otn.$tn { 

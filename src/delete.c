@@ -483,7 +483,7 @@ void sqlite3DeleteFrom(
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
    && db->xPreUpdateCallback==0
 #endif
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
    && sqlite3DoltliteSeqTableDb(pParse, pTab)<0
 #endif
   ){
@@ -883,7 +883,7 @@ void sqlite3GenerateRowDelete(
   if( !IsView(pTab) ){
     u8 p5 = 0;
     sqlite3GenerateRowIndexDelete(pParse, pTab, iDataCur, iIdxCur,0,iIdxNoSeek);
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef DOLTLITE_PROLLY
     {
       int iSeqDb = sqlite3DoltliteSeqTableDb(pParse, pTab);
       if( iSeqDb>=0 ){
