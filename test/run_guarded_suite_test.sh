@@ -50,7 +50,23 @@ echo "starting"
 exit 0
 SH
 
+cat > "$tmp/ends_on_skip.sh" <<'SH'
+set -u
+echo "SKIP: no libdoltlite.a in build"
+exit 0
+SH
+
+# An intermediate skip is not completion: the suite still died afterwards.
+cat > "$tmp/skips_then_dies.sh" <<'SH'
+set -u
+echo "SKIP: one case is unavailable here"
+echo "carrying on"
+exit 0
+SH
+
 expect_rc "completed_pass_stays_zero" 0 "$tmp/complete_pass.sh"
+expect_rc "ending_on_skip_is_a_pass" 0 "$tmp/ends_on_skip.sh"
+expect_rc "intermediate_skip_does_not_count" 1 "$tmp/skips_then_dies.sh"
 expect_rc "completed_failure_stays_nonzero" 1 "$tmp/complete_fail.sh"
 expect_rc "death_before_tally_is_a_failure" 1 "$tmp/dies_midway.sh"
 expect_rc "silent_exit_is_a_failure" 1 "$tmp/silent_exit.sh"
