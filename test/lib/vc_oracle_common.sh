@@ -84,3 +84,43 @@ vc_oracle_assert_match_allow_empty() {
   echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
   return 1
 }
+
+# A suite whose assertions are all "this must error" passes against an engine
+# that errors at everything. Prove both sides can run a known-good script
+# before believing any of their failures.
+vc_oracle_require_working_engines() {
+  local dir="$1"
+  local probe_sql dl_rc dt_rc dt_sql ok=1
+  probe_sql="CREATE TABLE oracle_probe(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO oracle_probe VALUES(1,'probe');
+SELECT dolt_commit('-A','-m','probe');
+SELECT count(*) FROM oracle_probe;"
+
+  mkdir -p "$dir/dl" "$dir/dt"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" \
+    "$probe_sql"
+  dl_rc=$?
+  if [ "$dl_rc" -ne 0 ] || ! grep -qx '1' "$dir/dl.out"; then
+    echo "  FAIL: engine_probe (doltlite cannot run a known-good script; rc=$dl_rc)"
+    sed 's/^/      /' "$dir/dl.err" 2>/dev/null | head -5
+    ok=0
+  fi
+
+  dt_sql=$(vc_oracle_translate_for_dolt "$probe_sql")
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
+    "$dt_sql"
+  dt_rc=$?
+  if [ "$dt_rc" -ne 0 ]; then
+    echo "  FAIL: engine_probe (dolt cannot run a known-good script; rc=$dt_rc)"
+    sed 's/^/      /' "$dir/dt.err" 2>/dev/null | head -5
+    ok=0
+  fi
+
+  if [ "$ok" -eq 1 ]; then
+    pass=$((pass+1))
+    return 0
+  fi
+  fail=$((fail+1))
+  FAILED_NAMES="$FAILED_NAMES engine_probe"
+  return 1
+}

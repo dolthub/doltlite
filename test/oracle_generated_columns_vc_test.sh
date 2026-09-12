@@ -141,7 +141,12 @@ SELECT dolt_merge('feat');
 SELECT y FROM t WHERE id=1;
 ROLLBACK;")
 [ "$CONFLICTS" = "1" ] && pass_name "e_conflict_detected" || fail_name "e_conflict_detected; got $CONFLICTS"
-[ "$YVAL" = "$((XVAL*2))" ] && pass_name "e_generated_consistent" || fail_name "e_generated_consistent; x=$XVAL y=$YVAL"
+# Engine output is untrusted: arithmetic on a non-number aborts the suite.
+if [ -n "$XVAL" ] && [ -z "${XVAL//[0-9-]/}" ] && [ "$YVAL" = "$((XVAL*2))" ]; then
+  pass_name "e_generated_consistent"
+else
+  fail_name "e_generated_consistent; x=$XVAL y=$YVAL"
+fi
 
 echo ""
 echo "--- F: Cherry-pick with generated column ---"

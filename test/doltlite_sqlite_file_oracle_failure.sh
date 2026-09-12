@@ -49,3 +49,4 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "PASS: failed overflow copies stop before post-copy assertions"
+echo "Results: 1 passed, 0 failed"
