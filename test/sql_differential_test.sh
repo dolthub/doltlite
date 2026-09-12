@@ -50,6 +50,15 @@ fi
 if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3" "$DOLTLITE"; then
   exit 1
 fi
+if ! bash "$SCRIPT_DIR/lib/assert_doltlite_engine.sh" "$DOLTLITE"; then
+  exit 1
+fi
+if python3 -c 'import os,sys; sys.exit(0 if os.path.samefile(sys.argv[1], sys.argv[2]) else 1)' \
+     "$DOLTLITE" "$SQLITE3" 2>/dev/null; then
+  echo "ERROR: candidate and reference are the same file: $DOLTLITE"
+  echo "       sql-differential would compare stock sqlite3 with itself and pass."
+  exit 1
+fi
 
 # Not named GROUPS: bash keeps that as the caller's group-id array and silently
 # ignores assignments to it.
