@@ -67,7 +67,13 @@ EOF
 cc -O2 -I"$BUILD" -I"$DOLTLITE_SRC/src" -o "$TMP/nofollow" "$TMP/nofollow.c" \
   "$BUILD/libdoltlite.a" -lpthread -lz -lm || {
   echo "SKIP: could not link nofollow probe"
+  echo "Results: 0 passed, 0 failed"
   exit 0
 }
 
-DL_TMP="$TMP" "$TMP/nofollow"
+if DL_TMP="$TMP" "$TMP/nofollow"; then
+  echo "Results: 1 passed, 0 failed"
+else
+  echo "Results: 0 passed, 1 failed"
+  exit 1
+fi

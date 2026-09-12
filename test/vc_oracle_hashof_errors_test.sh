@@ -56,6 +56,7 @@ oracle_both_error() {
 }
 
 echo "=== Version Control Oracle Tests: dolt_hashof* error parity ==="
+vc_oracle_require_working_engines "$TMPROOT/engine_probe"
 echo ""
 
 echo "--- invalid refs and tables must error (not silently NULL) ---"

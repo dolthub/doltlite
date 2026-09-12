@@ -54,6 +54,7 @@ SELECT dolt_add('t');
 "
 
 echo "=== Version Control Oracle Tests: NULL arguments ==="
+vc_oracle_require_working_engines "$TMPROOT/engine_probe"
 
 oracle_error "at_null_ref" "$BASE" \
   "SELECT count(*) FROM dolt_at_t(NULL);" \

@@ -58,7 +58,7 @@ cd "$BUILD_DIR"
 for t in "${TESTS[@]}"; do
   echo ""
   echo "━━━ $t ━━━"
-  if bash "$SCRIPT_DIR/$t"; then
+  if bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t"; then
     total_pass=$((total_pass + 1))
   else
     total_fail=$((total_fail + 1))
