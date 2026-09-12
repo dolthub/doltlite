@@ -1686,6 +1686,8 @@ int doltliteSerializeConflicts(ChunkStore *cs,
 
 /* Index keys must match VDBE (NOCASE/RTRIM/DESC). */
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
+int doltliteSortKeyFromPkValues(sqlite3 *db, const char *zTable,
+    int nVal, sqlite3_value **apVal, u8 **ppKey, int *pnKey);
 int doltliteLoadLiveTableSql(sqlite3 *db, const char *zName,
                              int *pFound, char **pzSql);
 int doltliteRevertViewsAndTriggers(sqlite3 *db, struct SchemaEntry *aSourceSchema,
