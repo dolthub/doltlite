@@ -738,6 +738,12 @@ run_test "cp_conflict_not_a_merge" \
 Error near line 5: unresolved conflicts — resolve them or roll back first
 Error near line 6: no merge in progress" \
   "$DB"
+run_test_match "cp_amend_during_conflict_refused" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT dolt_commit('--amend','-m','oops');
+   ROLLBACK;" \
+  "you are in the middle of a cherry-pick -- cannot amend" "$DB"
 rm -f "$DB"
 
 DB=/tmp/test_cp_abort_$$.db; rm -f "$DB"
