@@ -27,7 +27,8 @@ Behaviour and output match stock:
 
 Two of these deserve a note. `query_only` also blocks every `dolt_*` function
 that would write. `optimize` may run `ANALYZE`, and `sqlite_stat1` is a
-versioned table like any other.
+versioned table like any other. On a clustered primary key, `foreign_key_check`
+reports the same synthetic rowid as `SELECT rowid`.
 
 ## Same intent, DoltLite mechanics
 

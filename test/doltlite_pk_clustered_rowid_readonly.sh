@@ -171,6 +171,47 @@ else
   dltest_fail "dump_preserve_rowids_shape" "  got:\n$dump"
 fi
 
+rm -f "$DB"
+run_test "text_pk_fk_check_rowid_matches_select" "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE p(id TEXT PRIMARY KEY);
+CREATE TABLE c(id TEXT PRIMARY KEY, pid TEXT REFERENCES p(id));
+INSERT INTO c VALUES('c1','missing');
+SELECT (SELECT rowid FROM pragma_foreign_key_check) IS NOT NULL;
+SELECT (SELECT rowid FROM pragma_foreign_key_check) = (SELECT rowid FROM c);
+" "1
+1" "$DB"
+
+rm -f "$DB"
+run_test "text_pk_fk_check_rowid_deletes" "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE p(id TEXT PRIMARY KEY);
+CREATE TABLE c(id TEXT PRIMARY KEY, pid TEXT REFERENCES p(id));
+INSERT INTO c VALUES('c1','missing');
+DELETE FROM c WHERE rowid = (SELECT rowid FROM pragma_foreign_key_check);
+SELECT count(*) FROM c;
+SELECT count(*) FROM pragma_foreign_key_check;
+" "0
+0" "$DB"
+
+rm -f "$DB"
+run_test "without_rowid_fk_check_rowid_null" "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE p(id TEXT PRIMARY KEY);
+CREATE TABLE c(id TEXT PRIMARY KEY, pid TEXT REFERENCES p(id)) WITHOUT ROWID;
+INSERT INTO c VALUES('c1','missing');
+SELECT rowid FROM pragma_foreign_key_check;
+" "" "$DB"
+
+rm -f "$DB"
+run_test "integer_pk_fk_check_rowid" "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pid INT REFERENCES p(id));
+INSERT INTO c VALUES(10, 99);
+SELECT rowid FROM pragma_foreign_key_check;
+" "10" "$DB"
+
 restore_output=$(printf '%s\n' "$dump" | "$DOLTLITE" -bail "$DB2" 2>&1)
 restore_rc=$?
 if [ "$restore_rc" -ne 0 ]; then
