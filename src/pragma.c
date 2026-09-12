@@ -1645,7 +1645,11 @@ void sqlite3Pragma(
         }
 
         /* Generate code to report an FK violation to the caller. */
+#ifdef DOLTLITE_PROLLY
+        if( VisibleRowid(pTab) ){
+#else
         if( HasRowid(pTab) ){
+#endif
           sqlite3VdbeAddOp2(v, OP_Rowid, 0, regResult+1);
         }else{
           sqlite3VdbeAddOp2(v, OP_Null, 0, regResult+1);

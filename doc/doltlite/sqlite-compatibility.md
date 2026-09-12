@@ -92,6 +92,8 @@ For a DoltLite-format main database, the compatibility contract is:
 - A table with a non-`INTEGER PRIMARY KEY` is keyed by that primary key.
   `rowid` and `last_insert_rowid()` still work as a read-only SQL alias:
   a single integer PK is that value, otherwise a stable hash of the PK.
+  `PRAGMA foreign_key_check` reports that same alias; explicit `WITHOUT ROWID`
+  tables still report NULL, matching SQLite.
   `INSERT` and `UPDATE` of `rowid` fail with `no such column`, matching
   explicit `WITHOUT ROWID` — there is no stored `rowid` column. TEMP tables
   are not clustered, so those writes still work. An `INTEGER PRIMARY KEY`
