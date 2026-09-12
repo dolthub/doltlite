@@ -1,0 +1,52 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach kind {table virtual} {
+  if {$kind eq "virtual"} {
+    ifcapable !fts5 {continue}
+  }
+  foreach mode {named all} {
+    reset_db
+    execsql {
+      CREATE TABLE keep(id INTEGER PRIMARY KEY,v TEXT);
+      INSERT INTO keep VALUES(1,'tracked');
+      SELECT dolt_commit('-Am','base');
+    }
+    if {$kind eq "table"} {
+      execsql {CREATE TABLE "clean""target"(id INTEGER PRIMARY KEY,v TEXT)}
+    } else {
+      execsql {CREATE VIRTUAL TABLE "clean""target" USING fts5(v)}
+    }
+    execsql {
+      INSERT INTO main."clean""target"(v) VALUES('untracked');
+      CREATE TEMP TABLE "clean""target"(id INTEGER PRIMARY KEY,v TEXT);
+      INSERT INTO temp."clean""target" VALUES(99,'temporary');
+    }
+    set name clean-temp-shadow-$kind-$mode
+    do_execsql_test $name-dry-run {
+      SELECT dolt_clean('--dry-run');
+      SELECT v FROM main."clean""target";
+      SELECT id,v FROM temp."clean""target";
+    } {0 untracked 99 temporary}
+    set args {}
+    if {$mode eq "named"} {set args {'CLEAN"TARGET'}}
+    do_execsql_test $name-clean "SELECT dolt_clean($args)" {0}
+    do_execsql_test $name-main-removed {
+      SELECT count(*) FROM main.sqlite_master WHERE name GLOB 'clean"target*';
+      SELECT v FROM main.keep;
+    } {0 tracked}
+    do_execsql_test $name-temp-preserved {
+      SELECT id,v FROM temp."clean""target";
+    } {99 temporary}
+    db close
+    sqlite3 db test.db
+    do_execsql_test $name-reopen {
+      SELECT count(*) FROM main.sqlite_master WHERE name GLOB 'clean"target*';
+      SELECT v FROM main.keep;
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    } {0 tracked 0 ok}
+  }
+}
+
+finish_test

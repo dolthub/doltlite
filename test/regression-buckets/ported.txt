@@ -41,6 +41,7 @@ doltlite_historical_affinity
 doltlite_vtab_column_collision
 doltlite_merge_constraint_prune
 doltlite_constraint_temp_shadow
+doltlite_clean_temp_shadow
 doltlite_merge_generated
 doltlite_merge_generated_notnull
 doltlite_merge_schema_errors

@@ -140,7 +140,7 @@ static int cleanDropTables(sqlite3 *db, const CleanNames *pNames){
     rc = sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_FKEY, 0, &ignored);
   }
   for(i=pNames->n-1; rc==SQLITE_OK && i>=0; i--){
-    char *zSql = sqlite3_mprintf("DROP TABLE \"%w\"", pNames->az[i]);
+    char *zSql = sqlite3_mprintf("DROP TABLE main.\"%w\"", pNames->az[i]);
     if( !zSql ){
       rc = SQLITE_NOMEM;
       break;
