@@ -42,6 +42,7 @@ struct BlameVtab {
   sqlite3 *db;
   char *zTableName;
   char **azPkNames;
+  char **azPkColl;
   int   *aPkColIdx;
   int    nPkCols;
   int    intPkCid;
@@ -69,6 +70,7 @@ typedef struct BlamePkTmp BlamePkTmp;
 struct BlamePkTmp {
   int cid;
   char *zName;
+  char *zColl;
   int pkPos;
   int isIntegerType;
 };
@@ -94,6 +96,7 @@ static int blameLoadPkColumns(
   sqlite3 *db,
   const char *zTable,
   char ***pazNames,
+  char ***pazColl,
   int **paColIdx,
   int *pnCols,
   int *pIntPkCid
@@ -103,6 +106,7 @@ static int blameLoadPkColumns(
   int rc;
   int n = 0;
   char **azNames = 0;
+  char **azColl = 0;
   int *aCid = 0;
   int intPkCid = -1;
   BlamePkTmp *aTmp = 0;
@@ -113,6 +117,7 @@ static int blameLoadPkColumns(
   int i, j;
 
   *pazNames = 0;
+  *pazColl = 0;
   *paColIdx = 0;
   *pnCols = 0;
   *pIntPkCid = -1;
@@ -136,10 +141,21 @@ static int blameLoadPkColumns(
     }
     aTmp[nTmp].cid = cid;
     aTmp[nTmp].zName = sqlite3_mprintf("%s", zName ? zName : "");
+    aTmp[nTmp].zColl = 0;
     aTmp[nTmp].pkPos = pkPos;
     aTmp[nTmp].isIntegerType =
         zType && sqlite3_stricmp(zType, "INTEGER")==0;
     if( !aTmp[nTmp].zName ){ rc = SQLITE_NOMEM; break; }
+    {
+      const char *zColl = 0;
+      if( sqlite3_table_column_metadata(db, "main", zTable,
+            aTmp[nTmp].zName, 0, &zColl, 0, 0, 0)==SQLITE_OK
+       && zColl && zColl[0]
+       && sqlite3_stricmp(zColl, "BINARY")!=0 ){
+        aTmp[nTmp].zColl = sqlite3_mprintf("%s", zColl);
+        if( !aTmp[nTmp].zColl ){ rc = SQLITE_NOMEM; break; }
+      }
+    }
     nTmp++;
   }
   if( rc==SQLITE_DONE ) rc = SQLITE_OK;
@@ -151,7 +167,10 @@ static int blameLoadPkColumns(
     rc = SQLITE_TOOBIG;
   }
   if( rc!=SQLITE_OK ){
-    for(i=0; i<nTmp; i++) sqlite3_free(aTmp[i].zName);
+    for(i=0; i<nTmp; i++){
+      sqlite3_free(aTmp[i].zName);
+      sqlite3_free(aTmp[i].zColl);
+    }
     sqlite3_free(aTmp);
     return rc;
   }
@@ -168,17 +187,23 @@ static int blameLoadPkColumns(
 
   if( nTmp > 0 ){
     azNames = sqlite3_malloc(nTmp * (int)sizeof(char*));
+    azColl = sqlite3_malloc(nTmp * (int)sizeof(char*));
     aCid = sqlite3_malloc(nTmp * (int)sizeof(int));
-    if( !azNames || !aCid ){
+    if( !azNames || !azColl || !aCid ){
       sqlite3_free(azNames);
+      sqlite3_free(azColl);
       sqlite3_free(aCid);
-      for(i=0; i<nTmp; i++) sqlite3_free(aTmp[i].zName);
+      for(i=0; i<nTmp; i++){
+        sqlite3_free(aTmp[i].zName);
+        sqlite3_free(aTmp[i].zColl);
+      }
       sqlite3_free(aTmp);
       return SQLITE_NOMEM;
     }
   }
   for(i=0; i<nTmp; i++){
     azNames[i] = aTmp[i].zName;
+    azColl[i] = aTmp[i].zColl;
     aCid[i] = aTmp[i].cid;
     n++;
   }
@@ -191,14 +216,21 @@ static int blameLoadPkColumns(
   sqlite3_free(aTmp);
 
   *pazNames = azNames;
+  *pazColl = azColl;
   *paColIdx = aCid;
   *pnCols = n;
   *pIntPkCid = intPkCid;
   return SQLITE_OK;
 }
 
-static void blameFreePkColumns(char **azNames, int *aColIdx, int nCols){
+static void blameFreePkColumns(
+  char **azNames,
+  char **azColl,
+  int *aColIdx,
+  int nCols
+){
   doltliteFreeStringArray(azNames, nCols);
+  doltliteFreeStringArray(azColl, nCols);
   sqlite3_free(aColIdx);
 }
 
@@ -212,8 +244,15 @@ static char *blameBuildSchema(BlameVtab *v){
     if( v->aPkColIdx[i]==v->intPkCid ) iIntPk = i;
   }
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  if( doltliteAppendIntegerPkColumnList(pStr, v->azPkNames, v->nPkCols,
-                                        iIntPk)!=SQLITE_OK ){
+  for(i=0; i<v->nPkCols; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
+    sqlite3_str_appendf(pStr, "\"%w\"%s", v->azPkNames[i],
+                        i==iIntPk ? " INTEGER" : "");
+    if( v->azPkColl && v->azPkColl[i] ){
+      sqlite3_str_appendf(pStr, " COLLATE \"%w\"", v->azPkColl[i]);
+    }
+  }
+  if( sqlite3_str_errcode(pStr) ){
     sqlite3_str_reset(pStr);
     return 0;
   }
@@ -734,7 +773,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
   if( !v->zTableName ){ sqlite3_free(v); return SQLITE_NOMEM; }
 
   rc = blameLoadPkColumns(db, v->zTableName,
-                          &v->azPkNames, &v->aPkColIdx, &v->nPkCols,
+                          &v->azPkNames, &v->azPkColl, &v->aPkColIdx, &v->nPkCols,
                           &v->intPkCid);
   if( rc!=SQLITE_OK ){
     if( pzErr ){
@@ -763,7 +802,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
 
   zSchema = blameBuildSchema(v);
   if( !zSchema ){
-    blameFreePkColumns(v->azPkNames, v->aPkColIdx, v->nPkCols);
+    blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
     return SQLITE_NOMEM;
@@ -771,7 +810,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
   rc = doltliteDeclareVtab(db, zSchema);
   sqlite3_free(zSchema);
   if( rc!=SQLITE_OK ){
-    blameFreePkColumns(v->azPkNames, v->aPkColIdx, v->nPkCols);
+    blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
     return rc;
@@ -784,7 +823,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
 
 static int bmDisconnect(sqlite3_vtab *pVtab){
   BlameVtab *v = (BlameVtab*)pVtab;
-  blameFreePkColumns(v->azPkNames, v->aPkColIdx, v->nPkCols);
+  blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
   sqlite3_free(v->zTableName);
   sqlite3_free(v);
   return SQLITE_OK;

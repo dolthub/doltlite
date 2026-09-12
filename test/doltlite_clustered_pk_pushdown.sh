@@ -58,4 +58,25 @@ run_test "blame_composite_pk_eq_count" \
   "1" "$DB"
 
 rm -f "$DB"
+echo "CREATE TABLE nc(k TEXT PRIMARY KEY COLLATE NOCASE, v TEXT);
+INSERT INTO nc VALUES('Alpha','1');
+SELECT dolt_commit('-Am','c1');
+CREATE TABLE rt(k TEXT PRIMARY KEY COLLATE RTRIM, v TEXT);
+INSERT INTO rt VALUES('beta   ','1');
+SELECT dolt_commit('-Am','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "blame_nocase_eq" \
+  "SELECT k FROM dolt_blame_nc WHERE k='ALPHA';" \
+  "Alpha" "$DB"
+run_test "blame_rtrim_eq" \
+  "SELECT k FROM dolt_blame_rt WHERE k='beta';" \
+  "beta   " "$DB"
+run_test "history_nocase_eq" \
+  "SELECT count(*) FROM dolt_history_nc WHERE k='ALPHA';" \
+  "2" "$DB"
+run_test "at_rtrim_eq" \
+  "SELECT count(*) FROM dolt_at_rt('HEAD') WHERE k='beta';" \
+  "1" "$DB"
+
+rm -f "$DB"
 dltest_finish
