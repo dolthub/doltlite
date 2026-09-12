@@ -15,6 +15,11 @@ do_faultsim_test shared-rowid-insert-oom -faults oom-transient -prep {
   db eval {INSERT INTO t VALUES(50,'main')}
 } -test {
   faultsim_test_result {0 {}}
+  set expectedRows [expr {$testrc==0 ? 1 : 0}]
+  set actualRows [db one {SELECT count(*) FROM t}]
+  if {$actualRows != $expectedRows} {
+    error "expected $expectedRows rows after INSERT, got $actualRows"
+  }
   set expected [expr {$testrc==0 ? 51 : 1}]
   db eval {SELECT dolt_checkout('other'); INSERT INTO t(v) VALUES('other')}
   set actual [db one {SELECT id FROM t}]
