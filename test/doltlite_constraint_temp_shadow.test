@@ -1,0 +1,120 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc constraint_temp_shadow_setup {key kind} {
+  reset_db
+  execsql "CREATE TABLE t(id $key PRIMARY KEY,b INT)"
+  execsql {
+    INSERT INTO t VALUES(1,7);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+  }
+  set value [expr {$kind eq "notnull" ? "NULL" : "'bad'"}]
+  execsql "INSERT INTO t VALUES(2,$value)"
+  execsql {
+    SELECT dolt_commit('-Am','feature');
+    SELECT dolt_checkout('main');
+  }
+  set constraint [expr {$kind eq "notnull" ? "NOT NULL" : ""}]
+  set strict [expr {$kind eq "strict" ? "STRICT" : ""}]
+  execsql "CREATE TABLE t2(id $key PRIMARY KEY,b INT $constraint) $strict"
+  execsql {
+    INSERT INTO t2 SELECT * FROM t;
+    DROP TABLE t;
+    ALTER TABLE t2 RENAME TO t;
+    SELECT dolt_commit('-Am','main');
+    CREATE TEMP TABLE t(id INTEGER PRIMARY KEY,b ANY);
+    INSERT INTO temp.t VALUES(99,'temporary');
+  }
+}
+
+foreach key {INTEGER INT} {
+  foreach kind {notnull strict} {
+    foreach txn {autocommit explicit} {
+      constraint_temp_shadow_setup $key $kind
+      set name constraint-temp-shadow-$key-$kind-$txn
+      set head [execsql {SELECT dolt_hashof('HEAD')}]
+      if {$txn eq "explicit"} {execsql {BEGIN}}
+      do_test $name-merge {
+        set result [catchsql {SELECT dolt_merge('feature')}]
+        list [lindex $result 0] \
+            [string match {*constraint violations*} [lindex $result 1]]
+      } {1 1}
+      do_execsql_test $name-temp-preserved {
+        SELECT id,b FROM temp.t;
+      } {99 temporary}
+      if {$txn eq "explicit"} {
+        set violation [expr {$kind eq "notnull" ? "not null" : "strict type"}]
+        do_execsql_test $name-recorded {
+          SELECT violation_type,id FROM dolt_constraint_violations_t;
+        } [list $violation 2]
+        foreach scope {all named} {
+          set args [expr {$scope eq "all" ? "'--all'" : "'--all','t'"}]
+          do_test $name-verify-$scope {
+            execsql {DELETE FROM dolt_constraint_violations_t}
+            execsql "SELECT dolt_verify_constraints($args);
+                     SELECT violation_type,id FROM dolt_constraint_violations_t;"
+          } [list 1 $violation 2]
+        }
+        do_execsql_test $name-repair {
+          UPDATE main.t SET b=8 WHERE id=2;
+          SELECT dolt_verify_constraints('--all');
+          SELECT count(*) FROM dolt_constraint_violations;
+          SELECT id,b FROM temp.t;
+        } {0 0 99 temporary}
+        do_test $name-rollback {catchsql {ROLLBACK}} {0 {}}
+      }
+      do_test $name-restored {
+        list [expr {$head eq [execsql {SELECT dolt_hashof('HEAD')}]}] \
+            [execsql {
+              SELECT id,b FROM main.t;
+              SELECT count(*) FROM dolt_constraint_violations;
+              PRAGMA main.integrity_check;
+            }]
+      } {1 {1 7 0 ok}}
+      db close
+      sqlite3 db test.db
+      do_test $name-reopen {
+        list [expr {$head eq [execsql {SELECT dolt_hashof('HEAD')}]}] \
+            [execsql {
+              SELECT id,b FROM main.t;
+              SELECT dolt_verify_constraints('--all');
+              PRAGMA main.integrity_check;
+            }]
+      } {1 {1 7 0 ok}}
+    }
+  }
+}
+
+foreach kind {notnull strict} {
+  reset_db
+  set strict [expr {$kind eq "strict" ? "STRICT" : ""}]
+  execsql "CREATE TABLE t(id INTEGER PRIMARY KEY,b ANY) $strict"
+  execsql {
+    INSERT INTO t VALUES(1,7);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+  }
+  set value [expr {$kind eq "notnull" ? "NULL" : "'valid'"}]
+  execsql "INSERT INTO t VALUES(2,$value)"
+  execsql {
+    SELECT dolt_commit('-Am','feature');
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(3,8);
+    SELECT dolt_commit('-Am','main');
+    CREATE TEMP TABLE t(id INTEGER PRIMARY KEY,b INT NOT NULL);
+    INSERT INTO temp.t VALUES(99,9);
+  }
+  do_execsql_test constraint-temp-shadow-$kind-valid {
+    SELECT length(dolt_merge('feature'));
+    SELECT dolt_verify_constraints('--all');
+    SELECT count(*) FROM dolt_constraint_violations;
+    SELECT count(*) FROM main.t;
+    SELECT id,b FROM temp.t;
+    PRAGMA main.integrity_check;
+  } {40 0 0 3 99 9 ok}
+}
+
+finish_test

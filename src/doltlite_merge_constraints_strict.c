@@ -61,7 +61,7 @@ static int loadStrictColumns(
   *pazAllowed = 0;
   *pnCols = 0;
   zSql = sqlite3_mprintf(
-      "SELECT name, type FROM pragma_table_info(%Q)", zTable);
+      "SELECT name, type FROM pragma_table_info(%Q, 'main')", zTable);
   if( !zSql ) return SQLITE_NOMEM;
   rc = sqlite3_prepare_v2(db, zSql, -1, &pQ, 0);
   sqlite3_free(zSql);

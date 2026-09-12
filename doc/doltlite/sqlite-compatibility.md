@@ -46,6 +46,9 @@ For a DoltLite-format main database, the compatibility contract is:
   covers a row only one branch changed and a row one branch inserted while the
   other added the generated column. Dependent generated columns and secondary
   indexes use the recomputed values.
+- Merge validation and `dolt_verify_constraints` read `NOT NULL` and `STRICT`
+  constraints from the main table's schema even when a TEMP table has the same
+  name. TEMP columns cannot suppress or introduce violations in the main table.
 - Snapshot (`dolt_at_<table>`) and history (`dolt_history_<table>`) columns
   retain the affinity and collation of the schema used to declare the virtual
   table. Predicates, joins, ordering, and grouping use SQLite's comparison
