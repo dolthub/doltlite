@@ -29,6 +29,10 @@ back.` Inside `BEGIN` they persist and block `dolt_commit` until resolved.
 use their computed values: valid non-NULL results still merge, and nullable
 generated columns may produce NULL.
 
+Merge validation and `dolt_verify_constraints` read `NOT NULL` and `STRICT`
+constraints from the main table's schema even when a TEMP table has the same
+name. TEMP columns cannot suppress or introduce violations in the main table.
+
 ## Tables
 
 | Table | Columns |
