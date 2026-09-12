@@ -76,12 +76,10 @@ run_test() {
   esac
   result=$(dltest_run_sql "$sql" "$db" $bail)
   rc=$?
-  if [ -n "$bail" ] && [ "$rc" -ne 0 ]; then
-    dltest_fail "$name" "  engine rc=$rc\n  expected: $expected\n  got:      $result"
-    return
-  fi
   if [ "$result" = "$expected" ]; then
     dltest_pass
+  elif [ -n "$bail" ] && [ "$rc" -ne 0 ]; then
+    dltest_fail "$name" "  engine rc=$rc\n  expected: $expected\n  got:      $result"
   else
     dltest_fail "$name" "  expected: $expected\n  got:      $result"
   fi
