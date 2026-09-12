@@ -55,13 +55,14 @@ expect_rc "completed_failure_stays_nonzero" 1 "$tmp/complete_fail.sh"
 expect_rc "death_before_tally_is_a_failure" 1 "$tmp/dies_midway.sh"
 expect_rc "silent_exit_is_a_failure" 1 "$tmp/silent_exit.sh"
 
-# Without the guard the dying suite reports success; that is the bug.
-bash "$tmp/dies_midway.sh" >/dev/null 2>&1
-if [ $? -eq 0 ]; then
-  pass=$((pass+1))
-else
+# A suite that dies never reaches its tally, so its recorded failures and every
+# test after the abort are lost. bash 3.2 (macOS) also leaves the status at 0,
+# where bash 4.4+ exits non-zero; the missing tally is what holds on both.
+if bash "$tmp/dies_midway.sh" 2>/dev/null | grep -qE '[0-9]+ passed, [0-9]+ failed'; then
   fail=$((fail+1))
-  echo "  FAIL: unguarded_death_still_exits_zero (fixture no longer reproduces the bug)"
+  echo "  FAIL: unguarded_death_prints_no_tally (fixture no longer reproduces the bug)"
+else
+  pass=$((pass+1))
 fi
 
 echo ""
