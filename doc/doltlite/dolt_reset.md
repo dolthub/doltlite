@@ -44,9 +44,6 @@ Returns `0`. `--hard` is not undone by `ROLLBACK`; see
 Drops untracked tables: those with status `new table` that have never been
 committed.
 
-Cleanup targets the main database. A TEMP table with the same name is preserved,
-including its rows.
-
 | Argument | Meaning |
 |---|---|
 | none | Drop every untracked table |
