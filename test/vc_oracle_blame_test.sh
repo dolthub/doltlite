@@ -401,6 +401,28 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "SELECT CONCAT('BL|', a, '|', b, '|', message) FROM dolt_blame_u ORDER BY a, b;"
 
+oracle "filtered_parent_gaps" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (10, 10), (30, 30);
+SELECT dolt_commit('-Am', 'BASE');
+INSERT INTO t VALUES (0, 0), (20, 20), (40, 40);
+UPDATE t SET v=300 WHERE id=30;
+SELECT dolt_commit('-Am', 'CHANGE');
+" "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t WHERE id>=20
+UNION ALL SELECT CONCAT('BL|low|', id, '|', message) FROM dolt_blame_t WHERE id=0
+UNION ALL SELECT CONCAT('BL|old|', id, '|', message) FROM dolt_blame_t WHERE id=10;"
+
+oracle "filtered_composite_parent_gaps" "
+CREATE TABLE t(a VARCHAR(10), b INT, PRIMARY KEY(a,b));
+INSERT INTO t VALUES ('a',10), ('a',30);
+SELECT dolt_commit('-Am', 'BASE');
+INSERT INTO t VALUES ('a',0), ('a',20), ('a',40);
+SELECT dolt_commit('-Am', 'INSERT');
+" "SELECT CONCAT('BL|', a, '|', b, '|', message) FROM dolt_blame_t WHERE a='a' AND b=20
+UNION ALL SELECT CONCAT('BL|', a, '|', b, '|', message) FROM dolt_blame_t WHERE a='a' AND b=0
+UNION ALL SELECT CONCAT('BL|', a, '|', b, '|', message) FROM dolt_blame_t WHERE a='a' AND b=40
+UNION ALL SELECT CONCAT('BL|', a, '|', b, '|', message) FROM dolt_blame_t WHERE a='a' AND b=10;"
+
 echo "--- empty table returns no rows ---"
 
 oracle "empty_table" "
