@@ -826,11 +826,4 @@ expect_line "deferred_fk_repair_reopen_child" "child|1" "$DL_U_REOPEN"
 expect_line "deferred_fk_repair_reopen_head" "head|1" "$DL_U_REOPEN"
 expect_line "deferred_fk_repair_reopen_valid" "fk|0" "$DL_U_REOPEN"
 
-echo ""
-echo "======================================="
-echo "Results: $pass passed, $fail failed"
-echo "======================================="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

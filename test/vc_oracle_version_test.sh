@@ -8,6 +8,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 dl_scalar() {
   local name="$1" sql="$2"
@@ -166,11 +167,4 @@ else
   echo "  FAIL: dolt_rejects_one_arg"
 fi
 
-echo ""
-echo "======================================="
-echo "Results: $pass passed, $fail failed"
-echo "======================================="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -129,9 +129,4 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'wider');
     "SELECT CONCAT('R|', diff_type, '|', count(*)) FROM dolt_diff_t('HEAD~1','HEAD') GROUP BY diff_type;"
 done
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

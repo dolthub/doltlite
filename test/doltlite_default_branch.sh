@@ -111,3 +111,4 @@ if [ "$fail" -gt 0 ]; then
   echo "FAILED:$FAILED_NAMES"
   exit 1
 fi
+echo "__SUITE_COMPLETE__"

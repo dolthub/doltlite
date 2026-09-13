@@ -1614,11 +1614,4 @@ expect_dual_value "both_add_same_column_and_disjoint_drop_row" "$DB" \
   "SELECT id || ':' || payload || ':' || c1899 || ':' || COALESCE(c1699, 'NULL') FROM t;" \
   "SELECT CONCAT(id, ':', payload, ':', c1899, ':', COALESCE(c1699, 'NULL')) FROM t;"
 
-echo ""
-echo "======================================="
-echo "Results: $pass passed, $fail failed"
-echo "======================================="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

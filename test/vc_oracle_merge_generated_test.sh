@@ -113,5 +113,4 @@ R|3|7|8|15"
   vc_oracle_assert_match "${name}_expected" "$dl_out" "$expected" || true
 done
 
-echo "Results: $pass passed, $fail failed"
-[ "$fail" -eq 0 ]
+vc_oracle_finish

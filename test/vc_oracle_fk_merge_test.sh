@@ -599,11 +599,4 @@ SELECT (SELECT count(*) FROM dolt_conflicts) || '|' ||
           FROM (SELECT id,u,v FROM t ORDER BY id));
 ROLLBACK;" \
   "0|1|1:9:main1,2:9:feat2"
-echo ""
-echo "======================================="
-echo "Results: $pass passed, $fail failed"
-echo "======================================="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

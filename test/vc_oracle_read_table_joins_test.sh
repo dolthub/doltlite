@@ -689,8 +689,4 @@ oracle_as_of "as_of_numeric_affinity_join" "$AFFINITY" \
 "SELECT CONCAT('R|',count(*)) FROM t AS OF 'HEAD' h
  JOIN (SELECT '42' AS n) q ON h.n=q.n;"
 
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -185,3 +185,4 @@ if [ $FAIL -gt 0 ]; then
   exit 1
 fi
 echo "All tests passed!"
+echo "__SUITE_COMPLETE__"

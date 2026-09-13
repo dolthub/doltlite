@@ -134,3 +134,4 @@ if [ "$fail" -gt 0 ]; then
   python3 "$SCANNER" "$DBFILE"
   exit 1
 fi
+echo "__SUITE_COMPLETE__"

@@ -138,7 +138,9 @@ check "zeroblob_16384_two_commit_vs_one" "$z16_one" "$z16_two"
 echo
 if [ "$fail" -eq 0 ]; then
   echo "Results: $pass passed, 0 failed"
+  echo "__SUITE_COMPLETE__"
   exit 0
 fi
 echo "Results: $pass passed, $fail failed"
 exit 1
+echo "__SUITE_COMPLETE__"

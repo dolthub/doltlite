@@ -1095,9 +1095,4 @@ SELECT CONCAT('LOG|child|', id, '=', pid) FROM child ORDER BY id;
 SELECT CONCAT('LOG|parent|', id) FROM parent ORDER BY id;
 SELECT CONCAT('LOG|msg=', message) FROM dolt_log;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

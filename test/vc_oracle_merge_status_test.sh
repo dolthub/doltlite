@@ -209,9 +209,4 @@ UPDATE t SET v = 'ours' WHERE id = 2;
 SELECT dolt_commit('-Am', 'ours');" "feature" \
 "DELETE FROM dolt_conflicts_t WHERE our_id = 1;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

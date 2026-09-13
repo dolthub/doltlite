@@ -110,4 +110,5 @@ echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
-[ "$fail" -eq 0 ] && exit 0 || exit 1
+echo "__SUITE_COMPLETE__"
+[ "$fail" -eq 0 ]

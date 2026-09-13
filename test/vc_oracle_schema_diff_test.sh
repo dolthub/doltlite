@@ -931,9 +931,4 @@ SELECT dolt_add('-A');
 CREATE TABLE w2(id INTEGER PRIMARY KEY);
 " "STAGED" "WORKING"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -354,9 +354,4 @@ $LINEAR
 SELECT dolt_merge_base('main', 'main', 'main');
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

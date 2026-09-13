@@ -51,6 +51,7 @@ fi
 if [ ! -x "$STOCK" ]; then
   echo "SKIP: no stock sqlite3 for rejection tests"
   echo "engine floor: PASS"
+  echo "__SUITE_COMPLETE__"
   exit 0
 fi
 
@@ -83,3 +84,4 @@ fi
 echo "PASS: sql-differential stock vs stock rejected"
 
 echo "engine floor: PASS"
+echo "__SUITE_COMPLETE__"

@@ -547,9 +547,4 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_swap_nulls');
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

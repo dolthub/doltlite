@@ -505,9 +505,4 @@ INSERT INTO t VALUES(2,'z',30);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','post_merge');
 " "SELECT CONCAT('R|',a,'|',b) FROM log ORDER BY a,b;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failures:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

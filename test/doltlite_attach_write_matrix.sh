@@ -261,3 +261,4 @@ if [ $FAIL -gt 0 ]; then
   echo -e "$ERRORS" | head -80
   exit 1
 fi
+echo "__SUITE_COMPLETE__"

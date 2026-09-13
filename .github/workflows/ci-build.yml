@@ -687,6 +687,9 @@ jobs:
     - name: Orphaned-suite guard self-test
       run: bash test/lint_orphaned_suites_test.sh
 
+    - name: Suite completion guard self-test
+      run: bash test/run_guarded_suite_test.sh
+
     - name: Install dependencies
       run: |
         bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev

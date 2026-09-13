@@ -438,9 +438,4 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "SELECT CONCAT('R|', h.a, '|', h.b, '|', h.v, '|', IFNULL(l.message,'')) FROM dolt_history_u h LEFT JOIN dolt_log l ON l.commit_hash = h.commit_hash ORDER BY h.a, h.b, IFNULL(l.message,'');"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -69,8 +69,4 @@ for indexed in 0 1; do
      SELECT dolt_merge('--abort');"
 done
 
-echo "Results: $pass passed, $fail failed"
-if [ "$fail" -ne 0 ]; then
-  echo "Failures:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -70,4 +70,10 @@ cc -O2 -I"$BUILD" -I"$DOLTLITE_SRC/src" -o "$TMP/nofollow" "$TMP/nofollow.c" \
   exit 0
 }
 
-DL_TMP="$TMP" "$TMP/nofollow"
+if DL_TMP="$TMP" "$TMP/nofollow"; then
+  echo "__SUITE_COMPLETE__"
+else
+  echo "FAIL: nofollow probe"
+  echo "__SUITE_COMPLETE__"
+  exit 1
+fi

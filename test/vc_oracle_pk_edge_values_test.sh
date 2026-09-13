@@ -144,9 +144,4 @@ oracle "double_membership" "$DBL_SETUP" \
 oracle "double_diff_count" "$DBL_SETUP" \
   "SELECT CONCAT('R|', diff_type, '|', count(*)) FROM dolt_diff_t('HEAD~1','HEAD') GROUP BY diff_type;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

@@ -196,11 +196,4 @@ SELECT CONCAT('L|', committer, '|', coalesce(email, ''), '|', message)
 SELECT CONCAT('C|', count(*)) FROM t;
 "
 
-echo ""
-echo "======================================="
-echo "Results: $pass passed, $fail failed"
-echo "======================================="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

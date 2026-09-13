@@ -310,9 +310,4 @@ SELECT dolt_commit('-m', 'add_u');
 SELECT dolt_reset('--hard', 'HEAD~1');
 " "t"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

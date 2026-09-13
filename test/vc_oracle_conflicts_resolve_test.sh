@@ -641,9 +641,4 @@ SELECT dolt_merge('feature');
   "SELECT dolt_conflicts_resolve('--theirs', 't');
 SELECT CONCAT('R|', id, '|', IFNULL(v,'NULL'), '|', IFNULL(note,'NULL')) FROM t ORDER BY id;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

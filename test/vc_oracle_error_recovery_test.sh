@@ -3965,9 +3965,4 @@ INSERT INTO t(id,val) VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, val FROM t ORDER BY id;"
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failures:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

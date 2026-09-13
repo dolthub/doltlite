@@ -245,3 +245,4 @@ rm -f "$DB_1K" "$DB_100K" "$DB_1M"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
+echo "__SUITE_COMPLETE__"

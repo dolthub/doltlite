@@ -128,9 +128,4 @@ DELETE FROM link WHERE p = 1 AND c = 2;
 oracle "d_workspace" "$SETUP_WS" \
   "SELECT CONCAT('R|', IFNULL(to_p,''), '|', IFNULL(to_c,''), '|', IFNULL(from_p,''), '|', IFNULL(from_c,''), '|', diff_type) FROM dolt_workspace_link;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

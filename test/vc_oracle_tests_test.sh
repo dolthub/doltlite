@@ -304,9 +304,4 @@ oracle_error "no_tests_wildcard" "" \
   "SELECT * FROM dolt_test_run();" \
   "SELECT * FROM dolt_test_run();"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

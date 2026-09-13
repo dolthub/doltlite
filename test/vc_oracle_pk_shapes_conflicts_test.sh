@@ -298,9 +298,4 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m','UPD');
    FROM dolt_history_t h LEFT JOIN dolt_log l ON l.commit_hash=h.commit_hash
    ORDER BY h.pk, l.message;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failures:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -223,5 +223,5 @@ echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"
-[ "$fail" -gt 0 ] && exit 1
-exit 0
+echo "__SUITE_COMPLETE__"
+[ "$fail" -eq 0 ]

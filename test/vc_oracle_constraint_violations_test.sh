@@ -295,11 +295,4 @@ SELECT CONCAT('R|AGG|', 't|', num_violations) FROM dolt_constraint_violations;" 
 "R|AGG|t|1
 R|ST|2|hello|text|cols=[v]"
 
-echo ""
-echo "======================================="
-echo "Results: $pass passed, $fail failed"
-echo "======================================="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

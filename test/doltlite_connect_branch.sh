@@ -118,3 +118,4 @@ if [ $FAIL -gt 0 ]; then
   printf "%b\n" "$ERRORS"
   exit 1
 fi
+echo "__SUITE_COMPLETE__"

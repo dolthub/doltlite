@@ -200,9 +200,4 @@ SELECT dolt_reset('--hard','HEAD~1');
 INSERT INTO t(v) VALUES('new');" \
 "SELECT id, v FROM t ORDER BY id"
 
-echo
-echo "vc_oracle_autoinc: $pass passed, $fail failed"
-if [ "$fail" -gt 0 ]; then
-  echo "FAILED:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

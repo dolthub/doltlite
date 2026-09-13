@@ -78,3 +78,4 @@ if [ "$qrc" -ne 0 ]; then
 fi
 
 echo "feature flags stamp: PASS"
+echo "__SUITE_COMPLETE__"

@@ -193,10 +193,5 @@ CALL dolt_commit('-Am','src_feat_side');
 
 pull_dual_flow "pull_conflict_and_cv"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish
 exit 0

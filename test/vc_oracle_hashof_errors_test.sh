@@ -56,6 +56,7 @@ oracle_both_error() {
 }
 
 echo "=== Version Control Oracle Tests: dolt_hashof* error parity ==="
+vc_oracle_require_working_engines "$TMPROOT/engine_probe"
 echo ""
 
 echo "--- invalid refs and tables must error (not silently NULL) ---"
@@ -65,9 +66,4 @@ oracle_both_error "hashof_empty_string"     "SELECT dolt_hashof('');"
 oracle_both_error "hashof_table_missing"    "SELECT dolt_hashof_table('not_a_real_table');"
 oracle_both_error "hashof_table_empty"      "SELECT dolt_hashof_table('');"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

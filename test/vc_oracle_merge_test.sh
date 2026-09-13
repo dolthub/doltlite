@@ -2079,9 +2079,4 @@ SELECT dolt_merge('feat');
           (SELECT COUNT(*) FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='parent' AND INDEX_NAME='parent_payload'), '|',
           (SELECT COUNT(*) FROM parent WHERE payload='one'));"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

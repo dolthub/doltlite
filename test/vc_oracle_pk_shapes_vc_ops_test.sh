@@ -165,9 +165,4 @@ $ROW4
 " "SELECT CONCAT('R|', table_name, '|', staged, '|', status) FROM dolt_status;"
 done
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

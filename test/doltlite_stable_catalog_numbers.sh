@@ -167,3 +167,4 @@ if [ -n "$FAILED_NAMES" ]; then
   echo "Failed:$FAILED_NAMES"
 fi
 [ "$fail" -eq 0 ]
+echo "__SUITE_COMPLETE__"

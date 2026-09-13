@@ -233,7 +233,7 @@ jobs:
         while IFS= read -r oracle; do
           [ -z "$oracle" ] && continue
           echo "--- $oracle ---"
-          bash "../test/$oracle" ./doltlite dolt || exit 1
+          bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || exit 1
         done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
       timeout-minutes: 18
 
@@ -255,7 +255,7 @@ jobs:
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename $f)" = "oracle_import_test.sh" ] && continue
           echo "--- $(basename $f) ---"
-          bash "$f" ./doltlite ./sqlite3-stock || exit 1
+          bash ../test/run_guarded_suite.sh "$f" ./doltlite ./sqlite3-stock || exit 1
         done
       timeout-minutes: 10
 

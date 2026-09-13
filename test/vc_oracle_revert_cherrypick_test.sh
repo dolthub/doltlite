@@ -1208,9 +1208,4 @@ INSERT INTO t VALUES (5);
 " "SELECT 'Q|' || count(*) || '|' || coalesce((SELECT id FROM audit), '~') FROM audit" \
 "SELECT concat('Q|', count(*), '|', coalesce((SELECT id FROM audit), '~')) FROM audit"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

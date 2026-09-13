@@ -54,6 +54,7 @@ SELECT dolt_add('t');
 "
 
 echo "=== Version Control Oracle Tests: NULL arguments ==="
+vc_oracle_require_working_engines "$TMPROOT/engine_probe"
 
 oracle_error "at_null_ref" "$BASE" \
   "SELECT count(*) FROM dolt_at_t(NULL);" \
@@ -107,9 +108,4 @@ oracle_error "cherry_pick_drops_null_arg" "$BASE" \
   "SELECT dolt_cherry_pick(NULL,dolt_hashof('feature'));" \
   "CALL dolt_cherry_pick(NULL,dolt_hashof('feature'));"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -ne 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -260,9 +260,4 @@ compare "two_branch_delete_first_branch" "$MUT_DELETE_FIRST" \
   "SELECT 'R|deleted|' || count(*) FROM dolt_branches WHERE name='topic_foo';" \
   "SELECT CONCAT('R|deleted|', count(*)) FROM dolt_branches WHERE name='topic_foo';"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish
