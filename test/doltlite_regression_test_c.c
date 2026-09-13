@@ -13840,6 +13840,50 @@ static void run_index_build_flush_resets_cursor(void){
   removeDbFiles(dbpath);
 }
 
+/* Internal SQL run from a vtab's xFilter halts while the outer statement is
+** still reading, and its commit used to end the connection's transaction. */
+static void run_nested_stmt_keeps_read_txn(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  char dbpath[256];
+  char seen[128];
+  int rc;
+
+  printf("=== Nested Statement Keeps Read Txn Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_nested_stmt_keeps_read_txn");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_nested_read_txn", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_nested_read_txn", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("commit_nested_read_txn", execSql(db,
+    "SELECT dolt_commit('-Am','init');")==SQLITE_OK);
+  check("dirty_nested_read_txn", execSql(db,
+    "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+
+  /* NOT IN defers the sqlite_master scan until after the vtab has filtered,
+  ** so the catalog cursor opens once the nested commit has already run. */
+  rc = sqlite3_prepare_v2(db,
+    "SELECT (SELECT count(*) FROM dolt_diff"
+    "          WHERE table_name NOT IN (SELECT name FROM sqlite_master))"
+    "    || '|' || (SELECT count(*) FROM dolt_diff"
+    "          WHERE table_name IN (SELECT name FROM sqlite_master))"
+    "    || '|' || (SELECT count(*) FROM dolt_status"
+    "          WHERE table_name NOT IN (SELECT name FROM sqlite_master));",
+    -1, &stmt, 0);
+  check("prepare_nested_read_txn", rc==SQLITE_OK);
+  if( stmt ){
+    rc = collect_stepped_text(stmt, seen, (int)sizeof(seen));
+    check("nested_read_txn_done", rc==SQLITE_DONE);
+    check("nested_read_txn_values", strcmp(seen, "0|2|0")==0);
+  }
+  sqlite3_finalize(stmt);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_negzero_sortkey_eq(void){
   static const u8 posZero[] = {
     0x02, 0x07,
@@ -14483,6 +14527,7 @@ static const RegressionCase aCases[] = {
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
   { "index_build_flush_resets_cursor", "Index Build Flush Resets Cursor Test", run_index_build_flush_resets_cursor },
+  { "nested_stmt_keeps_read_txn", "Nested Statement Keeps Read Txn Test", run_nested_stmt_keeps_read_txn },
   { "negzero_sortkey_eq", "Negzero Sortkey Eq Test", run_negzero_sortkey_eq },
   { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch },
   { "clustered_pk_update_hook", "Clustered PK Update Hook Test", run_clustered_pk_update_hook },
