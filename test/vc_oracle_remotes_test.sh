@@ -913,9 +913,4 @@ CALL dolt_branch('topic', 'origin/branchA');
 CALL dolt_checkout('topic');" \
   "SELECT concat(active_branch(), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

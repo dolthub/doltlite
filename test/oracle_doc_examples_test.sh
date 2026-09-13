@@ -18,7 +18,7 @@ pass=0; fail=0
 
 case "$DOLTLITE" in /*) ;; *) DOLTLITE="$PWD/$DOLTLITE" ;; esac
 if [ ! -x "$DOLTLITE" ] || [ "$("$DOLTLITE" :memory: "SELECT doltlite_engine();" 2>/dev/null)" != prolly ]; then
-  echo "FAIL: $DOLTLITE is not a runnable doltlite (doltlite_engine() must return prolly)"; echo "Results: 0 passed, 1 failed"; exit 1
+  echo "FAIL: $DOLTLITE is not a runnable doltlite (doltlite_engine() must return prolly)"; echo "Results: 0 passed, 1 failed"; echo "__SUITE_COMPLETE__"; exit 1
 fi
 
 # The shell exits 1 when any statement errored under .bail off; anything
@@ -109,7 +109,7 @@ substitute() {  # substitute <db>: rewrite doc placeholders into fixture values
 mkdir -p "$TMPDIR/authorized-keys"
 if ! "$DOLTLITE" "file:$TMPDIR/events.sqlite?doltlite_engine=sqlite" \
   "CREATE TABLE events(id INTEGER PRIMARY KEY, thread_id INT, type TEXT); CREATE TABLE threads(id INTEGER PRIMARY KEY, title TEXT, archived INT); CREATE TABLE archive(id INTEGER PRIMARY KEY, title TEXT, archived INT); INSERT INTO events VALUES(1,1,'click');" >"$TMPDIR/events.out" 2>&1; then
-  echo "FAIL: could not create the stock SQLite fixture: $(head -c 300 "$TMPDIR/events.out")"; echo "Results: 0 passed, 1 failed"; exit 1
+  echo "FAIL: could not create the stock SQLite fixture: $(head -c 300 "$TMPDIR/events.out")"; echo "Results: 0 passed, 1 failed"; echo "__SUITE_COMPLETE__"; exit 1
 fi
 
 for page in "$DOCS"/*.md; do
@@ -169,5 +169,5 @@ echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"
-[ "$fail" -gt 0 ] && exit 1
-exit 0
+echo "__SUITE_COMPLETE__"
+[ "$fail" -eq 0 ]

@@ -440,7 +440,4 @@ if [ "$gaps" -ne 0 ]; then
   echo "gaps (we merge where Dolt refuses -- fix by refusing):$GAP_NAMES"
 fi
 echo "======================================="
-if [ "$fail" -ne 0 ]; then
-  echo "failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

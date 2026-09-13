@@ -619,11 +619,4 @@ shape "hashof_table_shape" "$H_T"
 shape "hashof_db_shape"    "$H_D"
 shape "hashof_ref_shape"   "$H_R"
 
-echo ""
-echo "======================================="
-echo "Results: $pass passed, $fail failed"
-echo "======================================="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -315,9 +315,4 @@ SELECT dolt_merge('feat');" \
 "DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1;" \
 "SELECT CONCAT('R|', base_a, '|', base_b, '|', base_v, '|', our_a, '|', our_b, '|', our_v, '|', our_diff_type, '|', their_a, '|', their_b, '|', their_v, '|', their_diff_type) FROM dolt_conflicts_t ORDER BY base_a, base_b;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

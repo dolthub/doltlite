@@ -129,9 +129,4 @@ remote_flow "tracking_name_resolves" "$SEED" "$ADVANCE" "$FETCH" \
   "SELECT 'R|'||count(*) FROM dolt_at_t('remotes/origin/feature');" \
   "SELECT CONCAT('R|',count(*)) FROM t AS OF 'remotes/origin/feature';"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

@@ -100,3 +100,4 @@ if [ $FAIL -gt 0 ]; then
   exit 1
 fi
 echo "RESULTS: $PASS passed, $FAIL failed"
+echo "__SUITE_COMPLETE__"

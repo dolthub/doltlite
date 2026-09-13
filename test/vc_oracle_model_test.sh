@@ -212,9 +212,4 @@ for seed in 7 11 19 23 31; do
   run_model_case "$seed"
 done
 
-echo ""
-echo "Results: $pass passed, $fail failed"
-if [ "$fail" -ne 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

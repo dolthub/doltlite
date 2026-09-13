@@ -196,9 +196,4 @@ paired_branch_query "branches" "side_connection_recovers_its_working_set" "side"
 echo ""
 # Conflict handoff is not compared: Dolt can persist conflicts; DoltLite cannot.
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

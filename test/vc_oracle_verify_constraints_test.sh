@@ -326,10 +326,4 @@ UPDATE \`--all\` SET v = 20 WHERE pk = 1;
 "'--', '--all'" \
 "$FOLLOW_AGG_COUNT" 0
 
-echo ""
-echo "Results: $pass passed, $fail failed"
-if [ "$fail" -ne 0 ]; then
-  echo "FAILED:$FAILED_NAMES"
-  exit 1
-fi
-exit 0
+vc_oracle_finish

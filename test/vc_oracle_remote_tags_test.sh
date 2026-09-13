@@ -347,9 +347,4 @@ SELECT dolt_push('origin','v1');
   "SELECT CONCAT('R|',count(*),'|',max(message)) FROM dolt_tags;
    SELECT CONCAT('R|rows|',count(*)) FROM t;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

@@ -128,6 +128,7 @@ echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
+echo "__SUITE_COMPLETE__"
 if [ $fail -gt 0 ]; then
   echo "Failed:$FAILED_NAMES"
   exit 1

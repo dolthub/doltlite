@@ -8,6 +8,13 @@ DLTEST_TIMEOUT="${DLTEST_TIMEOUT:-10}"
 DLTEST_STRIP_CR="${DLTEST_STRIP_CR:-0}"
 DLTEST_MATCH_FLAGS="${DLTEST_MATCH_FLAGS:-}"
 
+# A suite that stops early still prints whatever tallies it reached, so the
+# wrapper cannot tell a finished run from a truncated one. This line is the
+# proof, and only the real end of a suite emits it.
+dltest_mark_complete() {
+  echo "__SUITE_COMPLETE__"
+}
+
 dltest_run_sql() {
   local sql="$1"
   local db="$2"
@@ -128,8 +135,10 @@ dltest_finish() {
   echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
   if [ "$FAIL" -gt 0 ]; then
     echo -e "$ERRORS"
+    dltest_mark_complete
     exit 1
   fi
+  dltest_mark_complete
 }
 
 if [ "${DLTEST_SKIP_ENGINE_FLOOR:-0}" != "1" ]; then

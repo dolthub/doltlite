@@ -231,9 +231,4 @@ SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

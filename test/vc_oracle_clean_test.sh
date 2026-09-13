@@ -161,9 +161,4 @@ CREATE TABLE u(id INTEGER PRIMARY KEY);
 SELECT dolt_clean(NULL);
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -338,9 +338,4 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('side');
 " "SELECT CONCAT('R|', IFNULL(to_k,''), '|', IFNULL(from_v,''), '|', IFNULL(to_v,''), '|', diff_type, '|', IFNULL(log_from.message, from_commit)) FROM dolt_diff_t dt LEFT JOIN dolt_log log_from ON log_from.commit_hash = dt.from_commit WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

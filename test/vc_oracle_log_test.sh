@@ -497,9 +497,4 @@ SELECT dolt_branch('from_p2', 'HEAD^2');
 SELECT dolt_checkout('from_p2');
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

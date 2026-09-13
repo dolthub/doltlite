@@ -118,9 +118,4 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main2');
     "SELECT CONCAT('R|', count(*)) FROM dolt_history_t;"
 done
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

@@ -917,9 +917,4 @@ SELECT 'R|c|' || id || '|' || slug FROM children WHERE id='k1';" \
   "SELECT concat('R|p|', id, '|', label) FROM parents WHERE id='p1';
 SELECT concat('R|c|', id, '|', slug) FROM children WHERE id='k1';"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -339,9 +339,4 @@ CREATE INDEX idx_b_v ON b(v);
 SELECT dolt_add('a');
 " "staged=1 AND table_name='a'" "3"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

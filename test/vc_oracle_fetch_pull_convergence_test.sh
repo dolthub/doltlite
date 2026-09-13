@@ -588,9 +588,4 @@ SELECT dolt_pull('origin','main');
   "SELECT 'R|'||(SELECT count(*) FROM sqlite_master WHERE type='view')||'|'||(SELECT count(*) FROM dolt_log);" \
   "SELECT CONCAT('R|', (SELECT count(*) FROM dolt_schemas WHERE type='view'), '|', (SELECT count(*) FROM dolt_log));"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ -n "$FAILED_NAMES" ]; then
-  echo "Failed:$FAILED_NAMES"
-fi
-[ "$fail" -eq 0 ]
+vc_oracle_finish

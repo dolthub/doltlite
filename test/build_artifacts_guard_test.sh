@@ -173,3 +173,4 @@ if [ "$FAIL" -gt 0 ]; then
   echo -e "$ERRORS"
   exit 1
 fi
+echo "__SUITE_COMPLETE__"

@@ -281,9 +281,4 @@ assert_deterministic_lca "criss_cross_rev_dl_determinism" "$CRISS_CROSS_REV"
 assert_dolt_in_set       "criss_cross_fwd_dt_in_set"     "$CRISS_CROSS_FWD"
 assert_dolt_in_set       "criss_cross_rev_dt_in_set"     "$CRISS_CROSS_REV"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

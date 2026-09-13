@@ -847,9 +847,4 @@ SELECT group_concat(name,',') FROM pragma_table_info('we (them)');
 SELECT replace(sql,' ','') FROM sqlite_master WHERE name='we (them)';
 "
 
-echo ""
-echo "=== dolt_patch oracle results: $pass passed, $fail failed ==="
-if [ "$fail" -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

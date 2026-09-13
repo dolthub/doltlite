@@ -16,16 +16,22 @@ trap 'rm -f "$OUT"' EXIT
 bash "$SUITE" "$@" 2>&1 | tee "$OUT"
 rc=${PIPESTATUS[0]}
 
-# Completion is a result tally, or a suite that ended on a skip. An
-# intermediate skip does not count: the skip has to be the last thing said.
-last_line=$(grep -v '^[[:space:]]*$' "$OUT" | tail -1)
-if ! grep -qE '[0-9]+ passed, [0-9]+ failed' "$OUT" \
-   && ! printf '%s' "$last_line" | grep -qE '^[[:space:]]*SKIP[: ]'; then
-  echo ""
-  echo "GUARD FAIL: $(basename "$SUITE") exited without reporting a result tally (rc=$rc)."
-  echo "  A suite that stops early reports no failures; that is not a pass."
-  echo "  End with a \"Results: N passed, M failed\" line, or a SKIP: line if it did not run."
-  if [ "$rc" -eq 0 ]; then rc=1; fi
+# A suite that stops early still prints whatever tallies it reached, so the
+# tally cannot prove the run finished. Only the real end emits the sentinel.
+# A suite that never ran says so with a trailing SKIP instead.
+# Only a suite claiming success has to prove it got there; a non-zero status
+# already fails the run.
+if [ "$rc" -eq 0 ]; then
+  last_line=$(grep -v '^[[:space:]]*$' "$OUT" | tail -1)
+  if ! grep -qx '__SUITE_COMPLETE__' "$OUT" \
+     && ! printf '%s' "$last_line" | grep -qE '^[[:space:]]*SKIP[: ]'; then
+    echo ""
+    echo "GUARD FAIL: $(basename "$SUITE") exited 0 without reporting completion."
+    echo "  A suite that stops early reports no failures; that is not a pass."
+    echo "  End through dltest_finish / vc_oracle_finish / stock_oracle_finish,"
+    echo "  or print __SUITE_COMPLETE__ as the last thing the suite does."
+    rc=1
+  fi
 fi
 
 exit "$rc"

@@ -173,9 +173,4 @@ SELECT dolt_cherry_pick('feature');
 SELECT dolt_cherry_pick('--abort');
 "
 
-echo ""
-echo "Results: $pass passed, $fail failed out of $((pass+fail)) tests"
-if [ "$fail" -ne 0 ]; then
-  echo "FAILED:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

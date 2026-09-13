@@ -124,3 +124,16 @@ SELECT count(*) FROM oracle_probe;"
   FAILED_NAMES="$FAILED_NAMES engine_probe"
   return 1
 }
+
+# The tally alone cannot prove a suite finished, since a run that stops early
+# still prints whatever it reached. Only the real end emits the sentinel.
+vc_oracle_finish() {
+  echo ""
+  echo "=== Results: $pass passed, $fail failed ==="
+  if [ "$fail" -gt 0 ]; then
+    echo "Failed:$FAILED_NAMES"
+    echo "__SUITE_COMPLETE__"
+    exit 1
+  fi
+  echo "__SUITE_COMPLETE__"
+}

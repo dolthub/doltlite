@@ -1239,9 +1239,4 @@ SELECT dolt_checkout('HEAD', '--', '-b');
 UPDATE t SET v = (SELECT v FROM \`-b\` WHERE id = 1) WHERE id = 1;
 "
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failed:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish

@@ -391,9 +391,4 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','more inserts');
 " "SELECT id FROM log ORDER BY id;"
 
-echo ""
-echo "=== Results: $pass passed, $fail failed ==="
-if [ $fail -gt 0 ]; then
-  echo "Failures:$FAILED_NAMES"
-  exit 1
-fi
+vc_oracle_finish
