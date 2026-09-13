@@ -1062,7 +1062,10 @@ int prollyBtCursorIndexMoveto(
       if( ((pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap))
          || (pPending && pPending!=pCur->pMutMap
              && !prollyMutMapIsEmpty(pPending)))
-       && !(treeFound && treeCmp==0) ){
+       && !(treeFound && treeCmp==0)
+       && !(exactMutMapKey
+            || (pCur->pKeyInfo
+                && pIdxKey->nField>=pCur->pKeyInfo->nAllField)) ){
       int savedEqSeen = pIdxKey->eqSeen;
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
                                    pCur->pKeyInfo,
