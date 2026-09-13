@@ -97,6 +97,73 @@ oracle_summary() {
   fi
 }
 
+oracle_stat_args() {
+  local name="$1" setup="$2" args="$3" allow_empty="${4:-}"
+  local dir="$TMPROOT/${name}_stat"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local q="SELECT 'S' || char(9) || table_name || char(9) || rows_added || char(9) || rows_deleted || char(9) || rows_modified || char(9) || old_row_count || char(9) || new_row_count FROM dolt_diff_stat($args) ORDER BY table_name"
+  local q_dolt="SELECT concat('S', char(9), table_name, char(9), rows_added, char(9), rows_deleted, char(9), rows_modified, char(9), old_row_count, char(9), new_row_count) FROM dolt_diff_stat($args) ORDER BY table_name"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' | awk -F'\t' 'NF >= 6 && $1 == "S" { print }' | sort)
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      printf '%s\n' "$dolt_setup"
+      printf '%s;\n' "$q_dolt"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' \
+      | tr -d '\r' | awk -F'\t' 'NF >= 6 && $1 == "S" { print }' | sort
+  )
+
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "${name}_stat" "$dl_out" "$dt_out"
+  else
+    vc_oracle_assert_match "${name}_stat" "$dl_out" "$dt_out"
+  fi
+}
+
+oracle_summary_args() {
+  local name="$1" setup="$2" args="$3" allow_empty="${4:-}"
+  local dir="$TMPROOT/${name}_summary"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local q="SELECT 'M' || char(9) || from_table_name || char(9) || to_table_name || char(9) || diff_type || char(9) || data_change || char(9) || schema_change FROM dolt_diff_summary($args) ORDER BY from_table_name, to_table_name"
+  local q_dolt="SELECT concat('M', char(9), from_table_name, char(9), to_table_name, char(9), diff_type, char(9), data_change, char(9), schema_change) FROM dolt_diff_summary($args) ORDER BY from_table_name, to_table_name"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | normalize_summary)
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      printf '%s\n' "$dolt_setup"
+      printf '%s;\n' "$q_dolt"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
+  )
+
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "${name}_summary" "$dl_out" "$dt_out"
+  else
+    vc_oracle_assert_match "${name}_summary" "$dl_out" "$dt_out"
+  fi
+}
+
 oracle_both() {
   oracle_stat    "$@"
   oracle_summary "$@"
@@ -812,5 +879,32 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
 UPDATE t SET c=NULL;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','clear_c');
 " "HEAD~1" "HEAD"
+
+echo "--- dotted revision ranges ---"
+
+DIVERGE="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+ALTER TABLE t ADD COLUMN x INT;
+INSERT INTO t VALUES(2, 'b', 1), (3, 'c', 1), (4, 'd', 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5, 'e');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+"
+
+oracle_stat_args "range_two_dot" "$DIVERGE" "'main..f'"
+oracle_stat_args "range_three_dot" "$DIVERGE" "'main...f'"
+oracle_stat_args "range_two_dot_table" "$DIVERGE" "'main..f','t'"
+oracle_summary_args "range_two_dot" "$DIVERGE" "'main..f'"
+oracle_summary_args "range_three_dot" "$DIVERGE" "'main...f'"
+oracle_summary_args "range_two_arg" "$DIVERGE" "'main','f'"
+oracle_summary_args "range_three_dot_table" "$DIVERGE" "'main...f','t'"
 
 vc_oracle_finish

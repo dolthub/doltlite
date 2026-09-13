@@ -15,8 +15,11 @@ SELECT * FROM dolt_diff_users WHERE to_commit = 'WORKING';  -- uncommitted
 SELECT * FROM dolt_diff_users('v1.0', 'HEAD');              -- between two revisions
 SELECT * FROM dolt_diff_users('main...feature');
 SELECT * FROM dolt_diff_stat('v1.0', 'HEAD');
+SELECT * FROM dolt_diff_stat('HEAD~1...HEAD');
 SELECT * FROM dolt_diff_summary('v1.0', 'HEAD', 'users');
+SELECT * FROM dolt_diff_summary('HEAD~1..HEAD');
 SELECT * FROM dolt_schema_diff('v1.0..HEAD');
+SELECT * FROM dolt_schema_diff('HEAD~1...HEAD');
 SELECT statement FROM dolt_patch('HEAD', 'WORKING') ORDER BY statement_order;
 ```
 
@@ -28,8 +31,8 @@ Revision spellings and which surfaces take ranges: [refs.md](refs.md).
 |---|---|---|
 | `dolt_diff` | none | `commit_hash`, `committer`, `email`, `date`, `message`, `data_change`, `schema_change`, `table_name` |
 | `dolt_diff_<table>` | none; or `(from, to)`; or `(range)` | `to_<col>...`, `to_commit`, `to_commit_date`, `from_<col>...`, `from_commit`, `from_commit_date`, `diff_type` |
-| `dolt_diff_stat` | `(from, to [, table])` | `table_name`, `rows_unmodified`, `rows_added`, `rows_deleted`, `rows_modified`, `cells_added`, `cells_deleted`, `cells_modified`, `old_row_count`, `new_row_count`, `old_cell_count`, `new_cell_count` |
-| `dolt_diff_summary` | `(from, to [, table])` | `from_table_name`, `to_table_name`, `diff_type`, `data_change`, `schema_change` |
+| `dolt_diff_stat` | `(from, to [, table])` or `(range [, table])` | `table_name`, `rows_unmodified`, `rows_added`, `rows_deleted`, `rows_modified`, `cells_added`, `cells_deleted`, `cells_modified`, `old_row_count`, `new_row_count`, `old_cell_count`, `new_cell_count` |
+| `dolt_diff_summary` | `(from, to [, table])` or `(range [, table])` | `from_table_name`, `to_table_name`, `diff_type`, `data_change`, `schema_change` |
 | `dolt_schema_diff` | `(from, to [, table])` or `(range [, table])` | `from_table_name`, `to_table_name`, `from_create_statement`, `to_create_statement` |
 | `dolt_patch` | `(from, to [, table])` or `(range [, table])` | `statement_order`, `from_commit_hash`, `to_commit_hash`, `table_name`, `diff_type`, `statement` |
 
@@ -44,7 +47,8 @@ Revision spellings and which surfaces take ranges: [refs.md](refs.md).
 - The two-argument form is a snapshot comparison and works even if the table
   exists at only one endpoint. A single revision is an error:
   `dolt_diff_<table> requires a '..' or '...' revision range`.
-- `dolt_diff_stat` and `dolt_diff_summary` take no range form:
+- `dolt_diff_stat` and `dolt_diff_summary` accept `(from, to)` or a single
+  `..` / `...` range. A lone revision is still
   `dolt_diff_stat requires from_ref and to_ref`.
 - `dolt_patch` emits ordered, executable SQLite: `schema` statements first,
   then `data`. When `ALTER TABLE` cannot express a change it emits a rebuild.

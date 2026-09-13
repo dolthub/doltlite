@@ -130,6 +130,50 @@ SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "range_count" "SELECT count(*) FROM dolt_schema_diff('HEAD~1..HEAD');" "1" "$DB"
 run_test "range_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD~1..HEAD');" "u" "$DB"
+run_test "range_three_dot_linear" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD~1...HEAD');" "1" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_sd_dot_range_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+ALTER TABLE t ADD COLUMN x INT;
+INSERT INTO t VALUES(2,'b',1),(3,'c',1),(4,'d',1);
+SELECT dolt_commit('-am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5,'e');
+SELECT dolt_commit('-am','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "summary_two_arg" \
+  "SELECT count(*) FROM dolt_diff_summary('main','f');" "1" "$DB"
+run_test "summary_two_dot" \
+  "SELECT count(*) FROM dolt_diff_summary('main..f');" "1" "$DB"
+run_test "summary_three_dot" \
+  "SELECT count(*) FROM dolt_diff_summary('main...f');" "1" "$DB"
+run_test "stat_two_dot" \
+  "SELECT count(*) FROM dolt_diff_stat('main..f');" "1" "$DB"
+run_test "stat_three_dot" \
+  "SELECT count(*) FROM dolt_diff_stat('main...f');" "1" "$DB"
+run_test "schema_two_dot_diverge" \
+  "SELECT count(*) FROM dolt_schema_diff('main..f');" "1" "$DB"
+run_test "schema_three_dot_diverge" \
+  "SELECT count(*) FROM dolt_schema_diff('main...f');" "1" "$DB"
+run_test "summary_two_dot_matches_two_arg" \
+  "SELECT (SELECT count(*) FROM dolt_diff_summary('main','f')) =
+          (SELECT count(*) FROM dolt_diff_summary('main..f'));" "1" "$DB"
+run_test "stat_three_dot_skips_other_side" \
+  "SELECT (SELECT rows_deleted FROM dolt_diff_stat('main..f')) >
+          (SELECT rows_deleted FROM dolt_diff_stat('main...f'));" "1" "$DB"
+run_test "stat_range_table" \
+  "SELECT table_name FROM dolt_diff_stat('main..f','t');" "t" "$DB"
+run_test "summary_range_table" \
+  "SELECT to_table_name FROM dolt_diff_summary('main...f','t');" "t" "$DB"
+run_test "schema_range_table" \
+  "SELECT to_table_name FROM dolt_schema_diff('main...f','t');" "t" "$DB"
 
 rm -f "$DB"
 

@@ -39,8 +39,7 @@ Both sides are required and a range may hold one operator, so `..main` and
 |---|---|
 | `dolt_log(rev)`, `dolt_log(range)` | one argument; no two-argument form |
 | `dolt_diff_<table>(from, to)`, `dolt_diff_<table>(range)` | one revision alone is an error |
-| `dolt_schema_diff`, `dolt_patch` | `(from, to)` or `(range)` |
-| `dolt_diff_stat`, `dolt_diff_summary` | `(from, to)` only |
+| `dolt_schema_diff`, `dolt_patch`, `dolt_diff_stat`, `dolt_diff_summary` | `(from, to)` or `(range)` |
 | `dolt_history_<table>(rev)`, `dolt_at_<table>(rev)` | one revision |
 | `dolt_branch(name, rev)`, `dolt_checkout('-b', name, rev)`, `dolt_tag(name, rev)`, `dolt_reset('--hard' \| '--soft', rev)` | one commit revision as start point |
 
