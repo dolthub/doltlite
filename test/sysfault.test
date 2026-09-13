@@ -61,9 +61,11 @@ proc vfsfault_install {} { test_syscall install {open getcwd} }
 do_faultsim_test 1 -faults vfsfault-* -prep {
   faultsim_restore
 } -body $open_and_write_body -test {
+  set ioerr {}
+  ifcapable doltlite {set ioerr {{1 {disk I/O error}}}}
   faultsim_test_result {0 {wal 1 2 3 4}}       \
     {1 {unable to open database file}}         \
-    {1 {attempt to write a readonly database}}
+    {1 {attempt to write a readonly database}} {*}$ioerr
 }
 
 #-------------------------------------------------------------------------
