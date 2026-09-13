@@ -1,0 +1,34 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_probe_fullpath
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+}
+db close
+
+testvfs probe
+probe filter xFullPathname
+probe script probe_fullpath
+proc probe_fullpath {method filename args} {
+  incr ::probe_calls
+  if {$::probe_calls==1} {return SQLITE_IOERR}
+  return SQLITE_OK
+}
+
+foreach {tn filename} [list 1 test.db 2 [file normalize test.db]] {
+  do_test 1.$tn {
+    set ::probe_calls 0
+    set rc [catch {sqlite3 db $filename -vfs probe} msg]
+    catch {db close}
+    list $rc $msg $::probe_calls
+  } {1 {disk I/O error} 1}
+}
+
+probe delete
+sqlite3 db test.db
+do_execsql_test 2.0 {SELECT * FROM t} {1}
+
+finish_test

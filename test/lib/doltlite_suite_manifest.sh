@@ -109,6 +109,7 @@ doltlite_open_nofollow.sh
 doltlite_readonly_directory.sh
 doltlite_readonly_file_replacement.sh
 doltlite_open_missing_path.sh
+doltlite_relative_reopen.sh
 doltlite_comparison.sh
 doltlite_pragma_auto_vacuum.sh
 doltlite_pragma_encoding.sh
@@ -228,6 +229,7 @@ doltlite_open_sqlite_file.sh
 doltlite_sqlite_file_oracle.sh
 doltlite_sqlite_file_oracle_failure.sh
 doltlite_open_missing_path.sh
+doltlite_relative_reopen.sh
 doltlite_comparison.sh
 doltlite_merge_ignore_corners.sh
 doltlite_pragma_auto_vacuum.sh

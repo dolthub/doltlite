@@ -74,6 +74,7 @@ sortfault
 statfault
 swarmvtabfault
 sysfault
+doltlite_probe_fullpath
 tempfault
 unionallfault
 unionvtabfault

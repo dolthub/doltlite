@@ -3648,8 +3648,6 @@ subjournal subjournal-2.1 class=intentional
 # performs different syscalls at each fault index, so some fault points
 # surface "disk I/O error" / "attempt to write a readonly database" where
 # the test only allows its own short error list; later indexes recover.
-sysfault sysfault-1-vfsfault-transient.5 class=intentional
-sysfault sysfault-1-vfsfault-transient.6 class=intentional
 sysfault sysfault-1.2.1-vfsfault-transient.8 class=intentional
 sysfault sysfault-1.2.2-vfsfault-transient.8 class=intentional
 # sections 2.1/2.2: the body runs PRAGMA journal_mode=truncate, which

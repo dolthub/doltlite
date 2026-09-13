@@ -226,7 +226,9 @@ int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
   int exists = 0;
   int outFlags = 0;
   int rc;
+  int nFull;
   char *zProbe = 0;
+  char *zFull = 0;
   u8 buf[16];
 
   *pIsSqliteFile = 0;
@@ -243,8 +245,19 @@ int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
   if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
   if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
 
+  nFull = pVfs->mxPathname + 1;
+  zFull = sqlite3_malloc(nFull);
+  if( !zFull ) return SQLITE_NOMEM;
+  rc = sqlite3OsFullPathname(pVfs, zFilename, nFull, zFull);
+  if( rc==SQLITE_OK_SYMLINK ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zFull);
+    return rc;
+  }
+
   /* SQLITE_OPEN_MAIN_DB uses VFS double-nul; callers hand us plain strings. */
-  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zProbe);
+  rc = chunkStoreDupFilenameDoubleNul(zFull, &zProbe);
+  sqlite3_free(zFull);
   if( rc!=SQLITE_OK ) return rc;
 
   /* zProbe must outlive close: unixClose logs pFile->zPath. */
