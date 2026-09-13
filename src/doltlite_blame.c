@@ -518,11 +518,19 @@ static int blameCompareAgainstRef(
       && ((refFlags & PROLLY_NODE_INTKEY)==(curFlags & PROLLY_NODE_INTKEY));
   if( canScanRef ){
     int res = 0;
+    BlameRow *r;
+    for(i=0; i<pCur->nRows && pCur->aRows[i].blamed; i++){}
+    if( i==pCur->nRows ) return SQLITE_OK;
+    r = &pCur->aRows[i];
     prollyCursorInit(&refCur, cs, pCache, &refRoot, refFlags);
     refCurOpen = 1;
-    rc = prollyCursorFirst(&refCur, &res);
+    if( refFlags & PROLLY_NODE_INTKEY ){
+      rc = prollyCursorSeekInt(&refCur, r->intKey, &res);
+    }else{
+      rc = prollyCursorSeekBlob(&refCur, r->pKey, r->nKey, &res);
+    }
     if( rc!=SQLITE_OK ) goto blame_compare_done;
-    refCurValid = (res==0);
+    refCurValid = prollyCursorIsValid(&refCur);
   }
 
   for(i=0; i<pCur->nRows; i++){

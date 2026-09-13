@@ -1,0 +1,49 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+testvfs blame_reads
+blame_reads filter xRead
+blame_reads script blame_read
+proc blame_read {method filename args} {
+  incr ::blame_reads
+  return SQLITE_OK
+}
+
+foreach {kind columns key sizes} {
+  int {id INTEGER PRIMARY KEY} x {1000 10000 100000}
+  text {id TEXT PRIMARY KEY} {printf('%09d',x)} {10000}
+  blob {id BLOB PRIMARY KEY} {CAST(printf('%09d',x) AS BLOB)} {10000}
+} {
+  foreach n $sizes {
+    reset_db
+    set testprefix doltlite_blame_seek
+    execsql "
+      CREATE TABLE t($columns, v TEXT);
+      WITH RECURSIVE c(x) AS (
+        VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$n
+      ) INSERT INTO t SELECT $key, printf('%080d',x) FROM c;
+      SELECT dolt_commit('-Am','base');
+      UPDATE t SET v='changed' WHERE id=(SELECT max(id) FROM t);
+      SELECT dolt_commit('-am','update');
+    "
+    foreach {offset message} {0 update 1 base} {
+      set wanted [string map [list x [expr {$n-$offset}]] $key]
+      db close
+      set ::blame_reads 0
+      sqlite3 db test.db -vfs blame_reads
+      do_test $kind.$n.$offset {
+        set ::blame_reads 0
+        set result [db eval "SELECT message FROM dolt_blame_t WHERE id=$wanted"]
+        if {$::blame_reads>128} {
+          error "point blame made $::blame_reads file reads"
+        }
+        set result
+      } $message
+    }
+  }
+}
+
+db close
+blame_reads delete
+sqlite3 db test.db
+finish_test
