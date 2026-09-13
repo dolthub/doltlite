@@ -1632,6 +1632,15 @@ int prollyBtreeCursor(
   BtShared *pBt = p->pBt;
   struct TableEntry *pTE;
 
+  /* Inner SQL inside dolt_* and vtab methods halts in autocommit and commits
+  ** the connection, tearing down the read transaction of the statement that
+  ** invoked it. Multi-step VC commands depend on that teardown to refresh
+  ** between steps, so re-open a read transaction for the cursors the outer
+  ** statement has yet to open rather than reading with none. */
+  if( p->inTrans<TRANS_READ ){
+    int rcTrans = sqlite3BtreeBeginTrans(p, 0, 0);
+    if( rcTrans!=SQLITE_OK ) return rcTrans;
+  }
   assert( p->inTrans>=TRANS_READ );
 
   pCur->pgnoRoot = iTable;
