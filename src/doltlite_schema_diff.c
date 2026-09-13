@@ -9,6 +9,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_ancestor.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -862,7 +863,8 @@ static int sdParseArgs(
   sqlite3_value **argv,
   const char **pzFromRef,
   const char **pzToRef,
-  const char **pzTableFilter
+  const char **pzTableFilter,
+  int *pRangeAlloc
 ){
   int argIdx = 0;
   const char *zFromRef = 0;
@@ -870,6 +872,7 @@ static int sdParseArgs(
   const char *zTableFilter = 0;
   sqlite3_value *pArg;
 
+  *pRangeAlloc = 0;
   if( (idxNum & 1) && argIdx<argc ){
     pArg = argv[argIdx++];
     if( sqlite3_value_type(pArg)==SQLITE_NULL ) goto null_arg;
@@ -889,7 +892,7 @@ static int sdParseArgs(
     if( !zTableFilter ) return SQLITE_NOMEM;
   }
 
-  if( zFromRef && !zToRef ){
+  if( zFromRef ){
     char *zRangeFrom = 0;
     char *zRangeTo = 0;
     int rangeType = DOLTLITE_RANGE_NONE;
@@ -897,8 +900,21 @@ static int sdParseArgs(
 
     rc = doltliteSplitRevisionRange(zFromRef, &zRangeFrom, &zRangeTo,
                                     &rangeType);
-    if( rc==SQLITE_OK && rangeType==DOLTLITE_RANGE_TWO_DOT ){
+    if( rc==SQLITE_OK && (rangeType==DOLTLITE_RANGE_TWO_DOT
+                       || rangeType==DOLTLITE_RANGE_THREE_DOT) ){
       ProllyHash probe;
+
+      if( zTableFilter ){
+        sqlite3_free(zRangeFrom);
+        sqlite3_free(zRangeTo);
+        sqlite3_free(pVtab->zErrMsg);
+        pVtab->zErrMsg = sqlite3_mprintf(
+          "Invalid argument to dolt_schema_diff: %s",
+          zFromRef
+        );
+        return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+      }
+      if( zToRef ) zTableFilter = zToRef;
 
       rc = doltliteResolveCatalogHashForRef(db, zRangeFrom, &probe);
       if( rc==SQLITE_OK ){
@@ -913,24 +929,49 @@ static int sdParseArgs(
         pVtab->zErrMsg = sqlite3_mprintf(
           "dolt_schema_diff: from_ref '%s' could not be resolved", zRangeFrom);
       }
+      if( rc==SQLITE_OK && rangeType==DOLTLITE_RANGE_THREE_DOT ){
+        ProllyHash leftHash, rightHash, ancestor;
+        char zAncestor[PROLLY_HASH_SIZE*2+1];
+        rc = doltliteResolveRef(db, zRangeFrom, &leftHash);
+        if( rc==SQLITE_OK ) rc = doltliteResolveRef(db, zRangeTo, &rightHash);
+        if( rc==SQLITE_OK ){
+          if( prollyHashIsEmpty(&leftHash) || prollyHashIsEmpty(&rightHash) ){
+            sqlite3_free(pVtab->zErrMsg);
+            pVtab->zErrMsg = sqlite3_mprintf(
+              "dolt_schema_diff: three-dot range requires commit refs");
+            rc = SQLITE_ERROR;
+          }else{
+            rc = doltliteFindAncestor(db, &leftHash, &rightHash, &ancestor);
+          }
+        }
+        if( rc==SQLITE_OK ){
+          doltliteHashToHex(&ancestor, zAncestor);
+          sqlite3_free(zRangeFrom);
+          zRangeFrom = sqlite3_mprintf("%s", zAncestor);
+          if( !zRangeFrom ) rc = SQLITE_NOMEM;
+        }
+      }
       if( rc!=SQLITE_OK ){
         sqlite3_free(zRangeFrom);
         sqlite3_free(zRangeTo);
-        return SQLITE_ERROR;
+        return rc==SQLITE_NOMEM ? rc : SQLITE_ERROR;
       }
 
       zFromRef = zRangeFrom;
       zToRef = zRangeTo;
+      *pRangeAlloc = 1;
     }else{
       sqlite3_free(zRangeFrom);
       sqlite3_free(zRangeTo);
       if( rc==SQLITE_NOMEM ) return rc;
-      sqlite3_free(pVtab->zErrMsg);
-      pVtab->zErrMsg = sqlite3_mprintf(
-        "Invalid argument to dolt_schema_diff: %s",
-        zFromRef
-      );
-      return SQLITE_ERROR;
+      if( rc!=SQLITE_NOTFOUND || !zToRef ){
+        sqlite3_free(pVtab->zErrMsg);
+        pVtab->zErrMsg = sqlite3_mprintf(
+          "Invalid argument to dolt_schema_diff: %s",
+          zFromRef
+        );
+        return SQLITE_ERROR;
+      }
     }
   }
 
@@ -973,9 +1014,8 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   pCache = doltliteGetCache(db);
 
   rc = sdParseArgs(db, &v->base, idxNum, argc, argv,
-                   &zFromRef, &zToRef, &zTableFilter);
+                   &zFromRef, &zToRef, &zTableFilter, &freeRangeRefs);
   if( rc!=SQLITE_OK ) return rc;
-  freeRangeRefs = (zFromRef && zToRef && !(idxNum & 2));
 
   rc = sdResolveRefs(db, &v->base, zFromRef, zToRef, &fromCatHash, &toCatHash);
   if( rc!=SQLITE_OK ) goto sd_filter_done;

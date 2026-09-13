@@ -185,6 +185,44 @@ SELECT dolt_commit('-m', 'drop_t');
        CASE WHEN to_create_statement   IS NULL OR to_create_statement=''   THEN 'N' ELSE 'Y' END
      ) FROM dolt_schema_diff('HEAD~1..HEAD');"
 
+oracle_query "three_dot_range_syntax" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+ALTER TABLE t ADD COLUMN x INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5, 'e');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+" "SELECT CONCAT('ROW|', from_table_name, '|', to_table_name, '|',
+       CASE WHEN from_create_statement IS NULL OR from_create_statement='' THEN 'N' ELSE 'Y' END, '|',
+       CASE WHEN to_create_statement   IS NULL OR to_create_statement=''   THEN 'N' ELSE 'Y' END
+     ) FROM dolt_schema_diff('main...f');"
+
+oracle_query "three_dot_range_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+ALTER TABLE t ADD COLUMN x INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5, 'e');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+" "SELECT CONCAT('ROW|', from_table_name, '|', to_table_name, '|',
+       CASE WHEN from_create_statement IS NULL OR from_create_statement='' THEN 'N' ELSE 'Y' END, '|',
+       CASE WHEN to_create_statement   IS NULL OR to_create_statement=''   THEN 'N' ELSE 'Y' END
+     ) FROM dolt_schema_diff('main...f', 't');"
+
 oracle "drop_filter_by_table_name" "
 $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);

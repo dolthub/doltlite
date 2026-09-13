@@ -11,6 +11,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_ancestor.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -315,6 +316,8 @@ typedef struct DsFilterCtx DsFilterCtx;
 struct DsFilterCtx {
   const char *zFromRef;
   const char *zToRef;
+  char *zRangeFrom;
+  char *zRangeTo;
   const char *zTblFilter;
   ProllyHash fromCat;
   ProllyHash toCat;
@@ -323,6 +326,12 @@ struct DsFilterCtx {
 };
 
 static void dsFilterCtxClear(DsFilterCtx *pCtx);
+static int dsRefError(
+  sqlite3_vtab *pVtab,
+  const char *zName,
+  const char *zRef,
+  int rc
+);
 
 typedef DoltliteNameIndex DsNameIndex;
 
@@ -358,11 +367,103 @@ static struct TableEntry *dsFindTableByNameNoCase(
 }
 
 static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
-  if( (idxNum & 3)!=3 ){
+  if( (idxNum & 1)!=0 ) return SQLITE_OK;
+  sqlite3_free(pVtab->zErrMsg);
+  pVtab->zErrMsg = sqlite3_mprintf("%s requires from_ref and to_ref", zName);
+  return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+}
+
+static int dsThreeDotFrom(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  const char *zName,
+  const char *zLeft,
+  const char *zRight,
+  char **pzFromHex
+){
+  ProllyHash leftHash, rightHash, ancestor;
+  char zHex[PROLLY_HASH_SIZE*2+1];
+  int rc;
+
+  *pzFromHex = 0;
+  rc = doltliteResolveRef(db, zLeft, &leftHash);
+  if( rc!=SQLITE_OK ) return dsRefError(pVtab, zName, zLeft, rc);
+  rc = doltliteResolveRef(db, zRight, &rightHash);
+  if( rc!=SQLITE_OK ) return dsRefError(pVtab, zName, zRight, rc);
+  if( prollyHashIsEmpty(&leftHash) || prollyHashIsEmpty(&rightHash) ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(
+        "%s: three-dot range requires commit refs", zName);
+    return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  rc = doltliteFindAncestor(db, &leftHash, &rightHash, &ancestor);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteHashToHex(&ancestor, zHex);
+  *pzFromHex = sqlite3_mprintf("%s", zHex);
+  return *pzFromHex ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+static int dsApplyRangeSpec(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  const char *zName,
+  DsFilterCtx *pCtx
+){
+  char *zLeft = 0, *zRight = 0;
+  int rangeType = DOLTLITE_RANGE_NONE;
+  int rc;
+
+  rc = doltliteSplitRevisionRange(pCtx->zFromRef, &zLeft, &zRight, &rangeType);
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_free(zLeft);
+    sqlite3_free(zRight);
+    if( pCtx->zToRef ) return SQLITE_OK;
     sqlite3_free(pVtab->zErrMsg);
     pVtab->zErrMsg = sqlite3_mprintf("%s requires from_ref and to_ref", zName);
-    return SQLITE_ERROR;
+    return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
   }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zLeft);
+    sqlite3_free(zRight);
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf("%s: invalid range: %s",
+                                     zName, pCtx->zFromRef);
+    return rc==SQLITE_NOMEM ? rc
+         : (pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM);
+  }
+  if( pCtx->zTblFilter ){
+    sqlite3_free(zLeft);
+    sqlite3_free(zRight);
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf("%s: invalid arguments near '%s'",
+                                     zName, pCtx->zFromRef);
+    return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  if( pCtx->zToRef ) pCtx->zTblFilter = pCtx->zToRef;
+  if( rangeType==DOLTLITE_RANGE_THREE_DOT ){
+    char *zFromHex = 0;
+    rc = dsThreeDotFrom(db, pVtab, zName, zLeft, zRight, &zFromHex);
+    sqlite3_free(zLeft);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zRight);
+      sqlite3_free(zFromHex);
+      return rc;
+    }
+    pCtx->zRangeFrom = zFromHex;
+    pCtx->zRangeTo = zRight;
+  }else if( rangeType==DOLTLITE_RANGE_TWO_DOT ){
+    pCtx->zRangeFrom = zLeft;
+    pCtx->zRangeTo = zRight;
+  }else{
+    sqlite3_free(zLeft);
+    sqlite3_free(zRight);
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf("%s: invalid range: %s",
+                                     zName, pCtx->zFromRef);
+    return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  pCtx->zFromRef = pCtx->zRangeFrom;
+  pCtx->zToRef = pCtx->zRangeTo;
   return SQLITE_OK;
 }
 
@@ -731,6 +832,8 @@ fail:
 }
 
 static void dsFilterCtxClear(DsFilterCtx *pCtx){
+  sqlite3_free(pCtx->zRangeFrom);
+  sqlite3_free(pCtx->zRangeTo);
   doltliteFreeStringArray(pCtx->azNames, pCtx->nNames);
   memset(pCtx, 0, sizeof(*pCtx));
 }
@@ -778,6 +881,9 @@ static int dsFilterInit(
     rc = dsArgText(pVtab, argv[argIdx++], zName, &pCtx->zTblFilter);
     if( rc!=SQLITE_OK ) return rc;
   }
+
+  rc = dsApplyRangeSpec(db, pVtab, zName, pCtx);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteResolveCatalogHashForRef(db, pCtx->zFromRef, &pCtx->fromCat);
   if( rc!=SQLITE_OK ) return dsRefError(
@@ -919,7 +1025,10 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
 
   rc = dsFilterInit(db, &v->base, idxNum, argc, argv, "dolt_diff_stat",
                     &c->fctx);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    dstCursorReset(c);
+    return rc;
+  }
   rc = doltliteLoadCatalog(db, &c->fctx.fromCat, &c->aFromCat, &c->nFromCat, 0);
   if( rc!=SQLITE_OK ) goto done;
   rc = doltliteLoadCatalog(db, &c->fctx.toCat, &c->aToCat, &c->nToCat, 0);
@@ -1274,7 +1383,10 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
 
   rc = dsFilterInit(db, &v->base, idxNum, argc, argv,
                     "dolt_diff_summary", &c->fctx);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    dssCursorReset(c);
+    return rc;
+  }
   rc = doltliteLoadCatalog(db, &c->fctx.fromCat, &c->aFromCat, &c->nFromCat, 0);
   if( rc!=SQLITE_OK ) goto done;
   rc = doltliteLoadCatalog(db, &c->fctx.toCat, &c->aToCat, &c->nToCat, 0);
