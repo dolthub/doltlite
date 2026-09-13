@@ -8,6 +8,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 dl_scalar() {
   local name="$1" sql="$2"

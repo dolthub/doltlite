@@ -11,6 +11,7 @@ DOLT="${2:-dolt}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; gaps=0; corrupt=0; differs=0; skipped=0; FAILED_NAMES=""; GAP_NAMES=""; CORRUPT_NAMES=""; DIFFER_NAMES=""; SKIP_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 # Refuse while Dolt merges. A pair that starts merging fails here.
 # Triggers follow their table through renames and drops by decree, a
