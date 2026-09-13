@@ -2,7 +2,9 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
+#include "vdbeInt.h"
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 #include "sortkey.h"
 #include "prolly_xxhash.h"
 #include <string.h>
@@ -796,6 +798,55 @@ u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut)
   sqlite3_free(aType);
   sqlite3_free(aLen);
   return pOut;
+}
+
+int doltliteSortKeyFromPkValues(
+  sqlite3 *db,
+  const char *zTable,
+  int nVal,
+  sqlite3_value **apVal,
+  u8 **ppKey,
+  int *pnKey
+){
+  Table *pTab;
+  Index *pPk;
+  KeyInfo *pKI = 0;
+  Mem *aMem = 0;
+  int i;
+  int rc = SQLITE_OK;
+  int nAlloc = 0;
+
+  *ppKey = 0;
+  *pnKey = 0;
+  if( !db || !zTable || nVal<=0 || !apVal ) return SQLITE_OK;
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( !pTab ) return SQLITE_OK;
+  pPk = sqlite3PrimaryKeyIndex(pTab);
+  if( !pPk || pPk->nKeyCol!=nVal ) return SQLITE_OK;
+  pKI = doltliteKeyInfoOfIndex(db, pPk);
+  if( !pKI ) return SQLITE_NOMEM;
+  aMem = sqlite3MallocZero((sqlite3_uint64)nVal * sizeof(Mem));
+  if( !aMem ){
+    sqlite3KeyInfoUnref(pKI);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; i<nVal; i++){
+    aMem[i].db = db;
+    rc = sqlite3VdbeMemCopy(&aMem[i], (const Mem*)apVal[i]);
+    if( rc!=SQLITE_OK ) goto sortkey_done;
+  }
+  rc = sortKeyFromMemPrefixCollBuffer(aMem, nVal, nVal, pKI,
+                                      ppKey, &nAlloc, pnKey);
+sortkey_done:
+  for(i=0; i<nVal; i++) sqlite3VdbeMemRelease(&aMem[i]);
+  sqlite3_free(aMem);
+  sqlite3KeyInfoUnref(pKI);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(*ppKey);
+    *ppKey = 0;
+    *pnKey = 0;
+  }
+  return rc;
 }
 
 #endif

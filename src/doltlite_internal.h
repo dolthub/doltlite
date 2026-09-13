@@ -723,21 +723,6 @@ static SQLITE_INLINE int doltliteAppendQuotedColumnList(
   return sqlite3_str_errcode(pStr);
 }
 
-static SQLITE_INLINE int doltliteAppendIntegerPkColumnList(
-  sqlite3_str *pStr,
-  char *const *azName,
-  int nName,
-  int iIntegerPk
-){
-  int i;
-  for(i=0; i<nName; i++){
-    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
-    sqlite3_str_appendf(pStr, "\"%w\"%s", azName[i],
-                        i==iIntegerPk ? " INTEGER" : "");
-  }
-  return sqlite3_str_errcode(pStr);
-}
-
 static SQLITE_INLINE int doltliteVtabColumnNameUsed(
   char *const *azName,
   int nName,
@@ -1686,6 +1671,8 @@ int doltliteSerializeConflicts(ChunkStore *cs,
 
 /* Index keys must match VDBE (NOCASE/RTRIM/DESC). */
 KeyInfo *doltliteKeyInfoOfIndex(sqlite3 *db, Index *pIdx);
+int doltliteSortKeyFromPkValues(sqlite3 *db, const char *zTable,
+    int nVal, sqlite3_value **apVal, u8 **ppKey, int *pnKey);
 int doltliteLoadLiveTableSql(sqlite3 *db, const char *zName,
                              int *pFound, char **pzSql);
 int doltliteRevertViewsAndTriggers(sqlite3 *db, struct SchemaEntry *aSourceSchema,

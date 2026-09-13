@@ -42,6 +42,7 @@ struct BlameVtab {
   sqlite3 *db;
   char *zTableName;
   char **azPkNames;
+  char **azPkColl;
   int   *aPkColIdx;
   int    nPkCols;
   int    intPkCid;
@@ -69,6 +70,7 @@ typedef struct BlamePkTmp BlamePkTmp;
 struct BlamePkTmp {
   int cid;
   char *zName;
+  char *zColl;
   int pkPos;
   int isIntegerType;
 };
@@ -94,6 +96,7 @@ static int blameLoadPkColumns(
   sqlite3 *db,
   const char *zTable,
   char ***pazNames,
+  char ***pazColl,
   int **paColIdx,
   int *pnCols,
   int *pIntPkCid
@@ -103,6 +106,7 @@ static int blameLoadPkColumns(
   int rc;
   int n = 0;
   char **azNames = 0;
+  char **azColl = 0;
   int *aCid = 0;
   int intPkCid = -1;
   BlamePkTmp *aTmp = 0;
@@ -113,6 +117,7 @@ static int blameLoadPkColumns(
   int i, j;
 
   *pazNames = 0;
+  *pazColl = 0;
   *paColIdx = 0;
   *pnCols = 0;
   *pIntPkCid = -1;
@@ -136,10 +141,21 @@ static int blameLoadPkColumns(
     }
     aTmp[nTmp].cid = cid;
     aTmp[nTmp].zName = sqlite3_mprintf("%s", zName ? zName : "");
+    aTmp[nTmp].zColl = 0;
     aTmp[nTmp].pkPos = pkPos;
     aTmp[nTmp].isIntegerType =
         zType && sqlite3_stricmp(zType, "INTEGER")==0;
     if( !aTmp[nTmp].zName ){ rc = SQLITE_NOMEM; break; }
+    {
+      const char *zColl = 0;
+      if( sqlite3_table_column_metadata(db, "main", zTable,
+            aTmp[nTmp].zName, 0, &zColl, 0, 0, 0)==SQLITE_OK
+       && zColl && zColl[0]
+       && sqlite3_stricmp(zColl, "BINARY")!=0 ){
+        aTmp[nTmp].zColl = sqlite3_mprintf("%s", zColl);
+        if( !aTmp[nTmp].zColl ){ rc = SQLITE_NOMEM; break; }
+      }
+    }
     nTmp++;
   }
   if( rc==SQLITE_DONE ) rc = SQLITE_OK;
@@ -151,7 +167,10 @@ static int blameLoadPkColumns(
     rc = SQLITE_TOOBIG;
   }
   if( rc!=SQLITE_OK ){
-    for(i=0; i<nTmp; i++) sqlite3_free(aTmp[i].zName);
+    for(i=0; i<nTmp; i++){
+      sqlite3_free(aTmp[i].zName);
+      sqlite3_free(aTmp[i].zColl);
+    }
     sqlite3_free(aTmp);
     return rc;
   }
@@ -168,17 +187,23 @@ static int blameLoadPkColumns(
 
   if( nTmp > 0 ){
     azNames = sqlite3_malloc(nTmp * (int)sizeof(char*));
+    azColl = sqlite3_malloc(nTmp * (int)sizeof(char*));
     aCid = sqlite3_malloc(nTmp * (int)sizeof(int));
-    if( !azNames || !aCid ){
+    if( !azNames || !azColl || !aCid ){
       sqlite3_free(azNames);
+      sqlite3_free(azColl);
       sqlite3_free(aCid);
-      for(i=0; i<nTmp; i++) sqlite3_free(aTmp[i].zName);
+      for(i=0; i<nTmp; i++){
+        sqlite3_free(aTmp[i].zName);
+        sqlite3_free(aTmp[i].zColl);
+      }
       sqlite3_free(aTmp);
       return SQLITE_NOMEM;
     }
   }
   for(i=0; i<nTmp; i++){
     azNames[i] = aTmp[i].zName;
+    azColl[i] = aTmp[i].zColl;
     aCid[i] = aTmp[i].cid;
     n++;
   }
@@ -191,14 +216,21 @@ static int blameLoadPkColumns(
   sqlite3_free(aTmp);
 
   *pazNames = azNames;
+  *pazColl = azColl;
   *paColIdx = aCid;
   *pnCols = n;
   *pIntPkCid = intPkCid;
   return SQLITE_OK;
 }
 
-static void blameFreePkColumns(char **azNames, int *aColIdx, int nCols){
+static void blameFreePkColumns(
+  char **azNames,
+  char **azColl,
+  int *aColIdx,
+  int nCols
+){
   doltliteFreeStringArray(azNames, nCols);
+  doltliteFreeStringArray(azColl, nCols);
   sqlite3_free(aColIdx);
 }
 
@@ -212,8 +244,15 @@ static char *blameBuildSchema(BlameVtab *v){
     if( v->aPkColIdx[i]==v->intPkCid ) iIntPk = i;
   }
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  if( doltliteAppendIntegerPkColumnList(pStr, v->azPkNames, v->nPkCols,
-                                        iIntPk)!=SQLITE_OK ){
+  for(i=0; i<v->nPkCols; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
+    sqlite3_str_appendf(pStr, "\"%w\"%s", v->azPkNames[i],
+                        i==iIntPk ? " INTEGER" : "");
+    if( v->azPkColl && v->azPkColl[i] ){
+      sqlite3_str_appendf(pStr, " COLLATE \"%w\"", v->azPkColl[i]);
+    }
+  }
+  if( sqlite3_str_errcode(pStr) ){
     sqlite3_str_reset(pStr);
     return 0;
   }
@@ -250,17 +289,28 @@ static int blameCollectLiveRows(
   u8 flags,
   int idxNum,
   i64 pkLo, int hasPkLo, int pkLoStrict,
-  i64 pkHi, int hasPkHi, int pkHiStrict
+  i64 pkHi, int hasPkHi, int pkHiStrict,
+  const u8 *pPkBlob, int nPkBlob
 ){
   ProllyCursor cur;
   int res, rc;
   int pushIntKey = (flags & PROLLY_NODE_INTKEY) != 0
                   && (idxNum & BLAME_IDX_PK_ANY) != 0;
+  int pushBlob = (flags & PROLLY_NODE_INTKEY)==0
+                  && (idxNum & BLAME_IDX_PK_EQ)!=0
+                  && pPkBlob && nPkBlob>0;
 
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
 
-  if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) && hasPkLo ){
+  if( pushBlob ){
+    rc = prollyCursorSeekBlob(&cur, pPkBlob, nPkBlob, &res);
+    if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
+    if( res!=0 || !prollyCursorIsValid(&cur) ){
+      prollyCursorClose(&cur);
+      return SQLITE_OK;
+    }
+  }else if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) && hasPkLo ){
     rc = prollyCursorSeekInt(&cur, pkLo, &res);
     if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
     if( res!=0 || !prollyCursorIsValid(&cur) ){
@@ -286,7 +336,9 @@ static int blameCollectLiveRows(
     int nKey = 0, nVal = 0;
     BlameRow *r;
 
-    if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) && hasPkLo ){
+    if( pushBlob ){
+      /* Equality probe: one row. */
+    }else if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) && hasPkLo ){
       i64 k = prollyCursorIntKey(&cur);
       if( k != pkLo ) break;
     }else if( pushIntKey && hasPkHi ){
@@ -328,6 +380,7 @@ static int blameCollectLiveRows(
     }
 
     pCur->nRows++;
+    if( pushBlob ) break;
     rc = prollyCursorNext(&cur);
     if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
   }
@@ -720,7 +773,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
   if( !v->zTableName ){ sqlite3_free(v); return SQLITE_NOMEM; }
 
   rc = blameLoadPkColumns(db, v->zTableName,
-                          &v->azPkNames, &v->aPkColIdx, &v->nPkCols,
+                          &v->azPkNames, &v->azPkColl, &v->aPkColIdx, &v->nPkCols,
                           &v->intPkCid);
   if( rc!=SQLITE_OK ){
     if( pzErr ){
@@ -749,7 +802,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
 
   zSchema = blameBuildSchema(v);
   if( !zSchema ){
-    blameFreePkColumns(v->azPkNames, v->aPkColIdx, v->nPkCols);
+    blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
     return SQLITE_NOMEM;
@@ -757,7 +810,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
   rc = doltliteDeclareVtab(db, zSchema);
   sqlite3_free(zSchema);
   if( rc!=SQLITE_OK ){
-    blameFreePkColumns(v->azPkNames, v->aPkColIdx, v->nPkCols);
+    blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
     return rc;
@@ -770,7 +823,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
 
 static int bmDisconnect(sqlite3_vtab *pVtab){
   BlameVtab *v = (BlameVtab*)pVtab;
-  blameFreePkColumns(v->azPkNames, v->aPkColIdx, v->nPkCols);
+  blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
   sqlite3_free(v->zTableName);
   sqlite3_free(v);
   return SQLITE_OK;
@@ -778,18 +831,38 @@ static int bmDisconnect(sqlite3_vtab *pVtab){
 
 static int bmBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   BlameVtab *v = (BlameVtab*)pVtab;
+  int i, j, nArg = 0;
 
-  if( !blameIntPkEnabled(v) ){
-    pInfo->estimatedCost = 100000.0;
-    pInfo->estimatedRows = 1000;
-    pInfo->idxNum = 0;
-    return SQLITE_OK;
+  if( blameIntPkEnabled(v) ){
+    return doltliteBestIndexIntPkRange(pInfo, 0,
+        BLAME_IDX_PK_EQ, BLAME_IDX_PK_GE, BLAME_IDX_PK_LE,
+        BLAME_IDX_PK_GT, BLAME_IDX_PK_LT,
+        100000.0, 1000, 100.0, 1, 1000.0, 100);
   }
 
-  return doltliteBestIndexIntPkRange(pInfo, 0,
-      BLAME_IDX_PK_EQ, BLAME_IDX_PK_GE, BLAME_IDX_PK_LE,
-      BLAME_IDX_PK_GT, BLAME_IDX_PK_LT,
-      100000.0, 1000, 100.0, 1, 1000.0, 100);
+  pInfo->estimatedCost = 100000.0;
+  pInfo->estimatedRows = 1000;
+  pInfo->idxNum = 0;
+  if( v->nPkCols<=0 ) return SQLITE_OK;
+  for(i=0; i<v->nPkCols; i++){
+    int iEq = -1;
+    for(j=0; j<pInfo->nConstraint; j++){
+      const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[j];
+      if( !pC->usable ) continue;
+      if( pC->iColumn!=i ) continue;
+      if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+        iEq = j;
+        break;
+      }
+    }
+    if( iEq<0 ) return SQLITE_OK;
+    pInfo->aConstraintUsage[iEq].argvIndex = ++nArg;
+    pInfo->aConstraintUsage[iEq].omit = 0;
+  }
+  pInfo->idxNum = BLAME_IDX_PK_EQ;
+  pInfo->estimatedCost = 10.0;
+  pInfo->estimatedRows = 1;
+  return SQLITE_OK;
 }
 
 static int bmOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
@@ -821,35 +894,65 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
 
   blameFreeRows(c);
   c->iRow = 0;
+  memset(&pkRange, 0, sizeof(pkRange));
 
-  doltlitePkRangeFromArgs(idxNum,
-      BLAME_IDX_PK_EQ, BLAME_IDX_PK_GE, BLAME_IDX_PK_LE,
-      BLAME_IDX_PK_GT, BLAME_IDX_PK_LT,
-      argc, argv, &pkRange);
-  if( pkRange.isEmpty ) return SQLITE_OK;
+  {
+    u8 *pPkBlob = 0;
+    int nPkBlob = 0;
+    if( (idxNum & BLAME_IDX_PK_EQ) && !blameIntPkEnabled(v) && v->nPkCols>0 ){
+      int iPk;
+      if( argc<v->nPkCols ) return SQLITE_OK;
+      for(iPk=0; iPk<v->nPkCols; iPk++){
+        if( sqlite3_value_type(argv[iPk])==SQLITE_NULL ) return SQLITE_OK;
+      }
+      rc = doltliteSortKeyFromPkValues(v->db, v->zTableName,
+                                       v->nPkCols, argv, &pPkBlob, &nPkBlob);
+      if( rc!=SQLITE_OK ) return rc;
+    }else{
+      doltlitePkRangeFromArgs(idxNum,
+          BLAME_IDX_PK_EQ, BLAME_IDX_PK_GE, BLAME_IDX_PK_LE,
+          BLAME_IDX_PK_GT, BLAME_IDX_PK_LT,
+          argc, argv, &pkRange);
+      if( pkRange.isEmpty ) return SQLITE_OK;
+    }
 
-  if( !cs || !pCache ) return SQLITE_OK;
+    if( !cs || !pCache ){
+      sqlite3_free(pPkBlob);
+      return SQLITE_OK;
+    }
 
-  doltliteGetSessionHead(db, &headHash);
-  if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
+    doltliteGetSessionHead(db, &headHash);
+    if( prollyHashIsEmpty(&headHash) ){
+      sqlite3_free(pPkBlob);
+      return SQLITE_OK;
+    }
 
-  rc = doltliteCommitCatalogHash(db, &headHash, &headCatHash);
-  if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteCommitCatalogHash(db, &headHash, &headCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pPkBlob);
+      return rc;
+    }
 
-  rc = doltliteLoadTableRootByName(db, &headCatHash, v->zTableName,
-                                   &tableRoot, &tableFlags, 0);
-  if( rc==SQLITE_NOTFOUND ){
-    rc = doltliteVtabMapChunkSourceError(c->base.pVtab, db, rc, SQLITE_OK);
+    rc = doltliteLoadTableRootByName(db, &headCatHash, v->zTableName,
+                                     &tableRoot, &tableFlags, 0);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = doltliteVtabMapChunkSourceError(c->base.pVtab, db, rc, SQLITE_OK);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pPkBlob);
+      return rc;
+    }
+
+    rc = blameCollectLiveRows(c, cs, pCache, &tableRoot, tableFlags,
+                              idxNum,
+                              pkRange.pkLo, pkRange.hasPkLo,
+                              pkRange.pkLoStrict,
+                              pkRange.pkHi, pkRange.hasPkHi,
+                              pkRange.pkHiStrict,
+                              pPkBlob, nPkBlob);
+    sqlite3_free(pPkBlob);
+    if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
   }
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = blameCollectLiveRows(c, cs, pCache, &tableRoot, tableFlags,
-                            idxNum,
-                            pkRange.pkLo, pkRange.hasPkLo,
-                            pkRange.pkLoStrict,
-                            pkRange.pkHi, pkRange.hasPkHi,
-                            pkRange.pkHiStrict);
-  if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
   c->nUnresolved = c->nRows;
 
   rc = blameWalk(c, db, v->zTableName);
