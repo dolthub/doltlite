@@ -55,6 +55,7 @@ struct HistCursor {
   i64 commitDate;
   int idxNum;
   int pkSeekable;
+  int pkBlobSeekable;
   DoltlitePkRange pkRange;
   u8 *pPkBlob;
   int nPkBlob;
@@ -71,6 +72,7 @@ static void htCursorReset(HistCursor *c){
   sqlite3_free(c->pPkBlob);
   c->pPkBlob = 0;
   c->nPkBlob = 0;
+  c->pkBlobSeekable = 0;
   doltliteCommitQueueClear(&c->queue);
 }
 
@@ -127,7 +129,8 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
 
   if( !c->common.rootIntKey && c->pPkBlob
-   && (c->idxNum & HIST_IDX_PK_EQ) ){
+   && (c->idxNum & HIST_IDX_PK_EQ)
+   && doltliteSideColsMatchClusteredPk(&c->side, &v->cols) ){
     rc = prollyCursorSeekBlob(&c->common.tblCur, c->pPkBlob, c->nPkBlob, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
@@ -138,6 +141,7 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
       return SQLITE_OK;
     }
     c->common.tblCurOpen = 1;
+    c->pkBlobSeekable = 1;
     return SQLITE_OK;
   }
 
@@ -204,7 +208,7 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
 
   if( c->common.tblCurOpen ){
     if( (c->idxNum & HIST_IDX_PK_EQ)
-     && ((c->pkSeekable && c->pkRange.hasPkLo) || c->pPkBlob) ){
+     && ((c->pkSeekable && c->pkRange.hasPkLo) || c->pkBlobSeekable) ){
       prollyCursorClose(&c->common.tblCur);
       c->common.tblCurOpen = 0;
     }else{

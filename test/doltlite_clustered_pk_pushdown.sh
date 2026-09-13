@@ -79,4 +79,24 @@ run_test "at_rtrim_eq" \
   "1" "$DB"
 
 rm -f "$DB"
+echo "CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES('alice','1');
+SELECT dolt_commit('-Am','old');
+SELECT dolt_tag('old');
+DROP TABLE t;
+CREATE TABLE t(k TEXT, v TEXT, PRIMARY KEY(k,v));
+INSERT INTO t VALUES('bob','2');
+SELECT dolt_commit('-Am','new');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "at_old_unfiltered_after_pk_change" \
+  "SELECT k||'|'||v FROM dolt_at_t('old');" \
+  "alice|1" "$DB"
+run_test "at_old_filtered_after_pk_change" \
+  "SELECT k||'|'||v FROM dolt_at_t('old') WHERE k='alice' AND v='1';" \
+  "alice|1" "$DB"
+run_test "history_filtered_after_pk_change" \
+  "SELECT count(*) FROM dolt_history_t WHERE k='alice' AND v='1';" \
+  "1" "$DB"
+
+rm -f "$DB"
 dltest_finish

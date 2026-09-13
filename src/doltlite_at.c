@@ -51,6 +51,7 @@ struct AtCursor {
   char *zCommitRef;
   int idxNum;
   int pkSeekable;
+  int pkBlobSeekable;
   DoltlitePkRange pkRange;
   u8 *pPkBlob;
   int nPkBlob;
@@ -534,6 +535,7 @@ static void atCursorReset(AtCursor *c){
   sqlite3_free(c->pPkBlob);
   c->pPkBlob = 0;
   c->nPkBlob = 0;
+  c->pkBlobSeekable = 0;
 }
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,
@@ -729,7 +731,8 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
 
   if( !c->common.rootIntKey && c->pPkBlob
-   && (idxNum & AT_IDX_PK_EQ) ){
+   && (idxNum & AT_IDX_PK_EQ)
+   && doltliteSideColsMatchClusteredPk(&c->side, &v->cols) ){
     rc = prollyCursorSeekBlob(&c->common.tblCur, c->pPkBlob, c->nPkBlob, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
@@ -740,6 +743,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
       return SQLITE_OK;
     }
     c->common.tblCurOpen = 1;
+    c->pkBlobSeekable = 1;
     return doltliteVtabCommonCaptureRowSide(&c->common, v->db, v->zTableName,
                                             &c->side);
   }
@@ -815,7 +819,7 @@ static int atNext(sqlite3_vtab_cursor *cur){
     return SQLITE_OK;
   }
   if( (c->idxNum & AT_IDX_PK_EQ)
-   && ((c->pkSeekable && c->pkRange.hasPkLo) || c->pPkBlob) ){
+   && ((c->pkSeekable && c->pkRange.hasPkLo) || c->pkBlobSeekable) ){
     prollyCursorClose(&c->common.tblCur);
     c->common.tblCurOpen = 0;
     c->common.hasRow = 0;

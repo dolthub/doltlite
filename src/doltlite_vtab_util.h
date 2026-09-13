@@ -96,6 +96,39 @@ static SQLITE_INLINE int doltliteSideColsMatchIntPk(
           && pSide->aDeclToSide[iPk]==pSide->ci.iPkCol));
 }
 
+static SQLITE_INLINE int doltlitePkSlotToDeclCol(
+  const DoltliteColInfo *ci,
+  int slot
+){
+  int i;
+  if( !ci->aColToRec ) return -1;
+  for(i=0; i<ci->nCol; i++){
+    if( ci->aColToRec[i]==slot ) return i;
+  }
+  return -1;
+}
+
+/* 1 if a clustered sort-key seek using the live PK is valid on this side. */
+static SQLITE_INLINE int doltliteSideColsMatchClusteredPk(
+  const DoltliteSideCols *pSide,
+  const DoltliteColInfo *pDeclared
+){
+  int i;
+  if( pDeclared->bHasRowid || pDeclared->nPk<=0 ) return 0;
+  if( !pSide || !pSide->valid ) return 1;
+  if( pSide->ci.bHasRowid || pSide->ci.nPk!=pDeclared->nPk ) return 0;
+  if( !pDeclared->azName || !pSide->ci.azName ) return 0;
+  for(i=0; i<pDeclared->nPk; i++){
+    int iDecl = doltlitePkSlotToDeclCol(pDeclared, i);
+    int iSide = doltlitePkSlotToDeclCol(&pSide->ci, i);
+    if( iDecl<0 || iSide<0 ) return 0;
+    if( sqlite3_stricmp(pDeclared->azName[iDecl], pSide->ci.azName[iSide])!=0 ){
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static SQLITE_INLINE int doltlitePkRangeMatchesCursorUpper(
   const DoltlitePkRange *pRange,
   ProllyCursor *pCur
