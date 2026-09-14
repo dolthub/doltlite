@@ -75,6 +75,7 @@ static int fkParentExistsInCatalog(
   DoltliteColInfo parentCols;
   DoltliteRecordInfo childInfo;
   int *aiParentCol = 0;
+  u8 *pParentRec = 0;
   ProllyCursor cur;
   int res = 0;
   int rc;
@@ -123,7 +124,18 @@ static int fkParentExistsInCatalog(
     DoltliteRecordInfo parentInfo;
     int match = 1;
 
+    sqlite3_free(pParentRec);
+    pParentRec = 0;
     prollyCursorValue(&cur, &pParentVal, &nParentVal);
+    if( nParentVal==0 && (pParent->flags & PROLLY_NODE_INTKEY)==0 ){
+      const u8 *pParentKey;
+      int nParentKey;
+      prollyCursorKey(&cur, &pParentKey, &nParentKey);
+      rc = doltliteRecordFromClusteredKeyCols(db, &parentCols,
+          pParentKey, nParentKey, &pParentRec, &nParentVal);
+      if( rc!=SQLITE_OK ) break;
+      pParentVal = pParentRec;
+    }
     rc = doltliteParseRecordStrict(pParentVal, nParentVal, &parentInfo);
     if( rc!=SQLITE_OK ) break;
 
@@ -155,6 +167,7 @@ static int fkParentExistsInCatalog(
     rc = prollyCursorNext(&cur);
   }
   prollyCursorClose(&cur);
+  sqlite3_free(pParentRec);
   sqlite3_free(aiParentCol);
   doltliteFreeColInfo(&parentCols);
   return rc==SQLITE_DONE ? SQLITE_OK : rc;
@@ -296,7 +309,8 @@ static int detectFkViolationsForSpec(
       zParentTable);
   for(int i=0; i<nCol; i++){
     if( i>0 ) sqlite3_str_appendall(pSql, " AND ");
-    sqlite3_str_appendf(pSql, "p.\"%w\" = c.\"%w\"", azTo[i], azFrom[i]);
+    /* Only the parent key contributes comparison affinity. */
+    sqlite3_str_appendf(pSql, "p.\"%w\" = +c.\"%w\"", azTo[i], azFrom[i]);
   }
   sqlite3_str_appendall(pSql, ")");
   zQuery = sqlite3_str_finish(pSql);

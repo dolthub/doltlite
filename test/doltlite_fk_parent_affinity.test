@@ -1,0 +1,131 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach storage {primary secondary} {
+  foreach {name parent child parentValue childValue violations} {
+    text_integer TEXT INTEGER '01' 1 1
+    text_real TEXT REAL '1' 1.0 1
+    blob_integer BLOB INTEGER '1' 1 1
+    blob_text BLOB TEXT 1 '1' 1
+    text_integer_match TEXT INTEGER '1' 1 0
+    numeric_text NUMERIC TEXT 1 '01' 0
+    integer_text INTEGER TEXT 1 '01' 0
+    real_text REAL TEXT 1.5 '1.5' 0
+    nocase {TEXT COLLATE NOCASE} {TEXT COLLATE BINARY} 'a' 'A' 0
+    rtrim {TEXT COLLATE RTRIM} {TEXT COLLATE NOCASE} {'a '} 'a' 0
+    binary {TEXT COLLATE BINARY} {TEXT COLLATE NOCASE} 'a' 'A' 1
+    blob_real BLOB REAL 1 1.0 0
+    text_blob TEXT BLOB '1' X'31' 1
+  } {
+    reset_db
+    if {$storage eq "primary"} {
+      execsql "CREATE TABLE p(k $parent PRIMARY KEY)"
+    } else {
+      execsql "CREATE TABLE p(id INTEGER PRIMARY KEY,k $parent UNIQUE)"
+    }
+    execsql "CREATE TABLE c(id INTEGER PRIMARY KEY,k $child REFERENCES p(k))"
+    execsql "
+      INSERT INTO p(k) VALUES($parentValue);
+      PRAGMA foreign_keys=OFF;
+      INSERT INTO c VALUES(1,$childValue);
+      PRAGMA foreign_keys=ON;
+    "
+    set prefix doltlite-fk-affinity-$storage-$name
+    do_execsql_test $prefix-verify {
+      SELECT count(*) FROM pragma_foreign_key_check('c');
+      SELECT dolt_verify_constraints('--all');
+      SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations;
+    } [list $violations $violations $violations]
+    db close
+    sqlite3 db test.db
+    do_execsql_test $prefix-reopen {
+      SELECT count(*) FROM pragma_foreign_key_check('c');
+      SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations;
+    } [list $violations $violations]
+    do_execsql_test $prefix-repair {
+      UPDATE c SET k=NULL;
+      SELECT dolt_verify_constraints('--all');
+      SELECT count(*) FROM dolt_constraint_violations;
+      PRAGMA foreign_key_check;
+    } {0 0}
+  }
+}
+
+foreach refs {{(a,b)} {}} {
+  foreach {parentValue violations} {'01' 1 '1' 0} {
+    reset_db
+    execsql {
+      CREATE TABLE p(a TEXT COLLATE NOCASE,b TEXT,PRIMARY KEY(a,b));
+    }
+    execsql "
+      CREATE TABLE c(id INTEGER PRIMARY KEY,a TEXT COLLATE BINARY,b INTEGER,
+                     FOREIGN KEY(a,b) REFERENCES p$refs);
+      INSERT INTO p VALUES('A',$parentValue);
+      PRAGMA foreign_keys=OFF;
+      INSERT INTO c VALUES(1,'a',1);
+      PRAGMA foreign_keys=ON;
+    "
+    do_execsql_test doltlite-fk-affinity-composite-$refs-$violations {
+      SELECT count(*) FROM pragma_foreign_key_check('c');
+      SELECT dolt_verify_constraints('--all');
+      SELECT coalesce(sum(num_violations),0) FROM dolt_constraint_violations;
+    } [list $violations $violations $violations]
+  }
+}
+
+foreach operation {merge cherry_pick} {
+  foreach txn {autocommit explicit} {
+    reset_db
+    execsql {
+      PRAGMA foreign_keys=ON;
+      CREATE TABLE p(k TEXT PRIMARY KEY);
+      CREATE TABLE c(id INTEGER PRIMARY KEY,k INTEGER REFERENCES p(k));
+      INSERT INTO p VALUES('1');
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_checkout('-b','side');
+      INSERT INTO c VALUES(1,1);
+      SELECT dolt_commit('-Am','child');
+      SELECT dolt_checkout('main');
+      UPDATE p SET k='01';
+      SELECT dolt_commit('-Am','parent');
+    }
+    set head [execsql {SELECT dolt_hashof('HEAD')}]
+    set prefix doltlite-fk-affinity-$operation-$txn
+    if {$txn eq "explicit"} {execsql {BEGIN}}
+    do_test $prefix-reject {
+      set result [catchsql "SELECT dolt_${operation}('side')"]
+      list [lindex $result 0] \
+          [string match {*constraint violations*} [lindex $result 1]]
+    } {1 1}
+    if {$txn eq "explicit"} {
+      do_execsql_test $prefix-recorded {
+        SELECT violation_type,id FROM dolt_constraint_violations_c;
+        SELECT count(*) FROM pragma_foreign_key_check('c');
+        SELECT dolt_verify_constraints('--all');
+      } {{foreign key} 1 1 1}
+      do_test $prefix-rollback {catchsql {ROLLBACK}} {0 {}}
+    }
+    do_test $prefix-restored {
+      list [expr {$head eq [execsql {SELECT dolt_hashof('HEAD')}]}] \
+          [execsql {
+            SELECT k FROM p;
+            SELECT count(*) FROM c;
+            SELECT count(*) FROM dolt_constraint_violations;
+            PRAGMA foreign_key_check;
+          }]
+    } {1 {01 0 0}}
+    db close
+    sqlite3 db test.db
+    do_test $prefix-reopen {
+      list [expr {$head eq [execsql {SELECT dolt_hashof('HEAD')}]}] \
+          [execsql {
+            SELECT k FROM p;
+            SELECT count(*) FROM c;
+            SELECT dolt_verify_constraints('--all');
+            PRAGMA foreign_key_check;
+          }]
+    } {1 {01 0 0}}
+  }
+}
+
+finish_test
