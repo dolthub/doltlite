@@ -58,8 +58,8 @@ jobs:
       run: |
         cd build
         bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite || exit 1
-        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
-        bash ../test/oracle_import_test.sh ./doltlite dolt || exit 1
+        bash ../test/run_guarded_suite.sh ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
+        bash ../test/run_guarded_suite.sh ../test/oracle_import_test.sh ./doltlite dolt || exit 1
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename "$f")" = "oracle_import_test.sh" ] && continue
           echo "--- $(basename "$f") ---"
@@ -82,7 +82,7 @@ jobs:
           while IFS= read -r oracle; do
             [ -z "$oracle" ] && continue
             echo "--- $oracle ---"
-            bash "../test/$oracle" ./doltlite dolt || exit 1
+            bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || exit 1
           done < "../test/oracle-buckets/$bucket.txt"
         done
       timeout-minutes: 25

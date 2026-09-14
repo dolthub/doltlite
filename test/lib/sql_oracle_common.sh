@@ -79,3 +79,15 @@ oracle_with_flags() {
 oracle_unsafe() {
   oracle_with_flags "$1" "$2" "--unsafe-testing"
 }
+
+sql_oracle_finish() {
+  echo ""
+  echo "================================"
+  echo "Results: $pass passed, $fail failed"
+  echo "================================"
+  if [ "$fail" -gt 0 ]; then
+    echo "__SUITE_COMPLETE__"
+    return 1
+  fi
+  echo "__SUITE_COMPLETE__"
+}

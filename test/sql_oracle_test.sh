@@ -6073,11 +6073,4 @@ SELECT count(*) FROM t WHERE x BETWEEN -4 AND -2;
 SELECT group_concat(x) FROM (SELECT x FROM t ORDER BY x);
 "
 
-echo ""
-echo "================================"
-echo "Results: $pass passed, $fail failed"
-echo "================================"
-if [ "$fail" -gt 0 ]; then
-  exit 1
-fi
-exit 0
+sql_oracle_finish
