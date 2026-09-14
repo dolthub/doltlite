@@ -1629,6 +1629,57 @@ static void test_sealed_wal_root_manifest_validation(void){
   removeDb(dbpath);
 }
 
+/* A crash mid-root-write can leave a full-size WAL root whose prefix is
+** tag+magic+version and the rest zeros (SIZE_HINT / sector prealloc).
+** Replay must not treat that all-zero self-hash as a commit. */
+static void test_unsealed_wal_root_keeps_prior_commit(void){
+  const char *dbpath = "/tmp/test_corr_unsealed_wal_root.db";
+  unsigned char torn[1 + CHUNK_MANIFEST_SIZE];
+  unsigned char lastRec[1 + CHUNK_MANIFEST_SIZE];
+  off_t sz;
+  off_t nextOff;
+  sqlite3 *db = 0;
+  const char *res;
+
+  printf("--- Test 31: Unsealed WAL root does not clobber prior commit ---\n");
+
+  check("create_good_31", create_good_db(dbpath)==0);
+  check("rows_before_31", strcmp(rowCountOf(dbpath), "5")==0);
+
+  sz = file_size(dbpath);
+  check("last_root_readable_31",
+        sz>=(off_t)sizeof(lastRec)
+        && read_bytes(dbpath, sz-(off_t)sizeof(lastRec), lastRec,
+                      sizeof(lastRec))==0
+        && lastRec[0]==CS_WAL_TAG_ROOT);
+  nextOff = (off_t)CS_READ_I64(lastRec + 1 + CS_MANIFEST_NEXT_OFF_OFF);
+  check("next_off_at_or_past_eof_31", nextOff>=sz);
+
+  memset(torn, 0, sizeof(torn));
+  torn[0] = CS_WAL_TAG_ROOT;
+  CS_WRITE_U32(torn + 1 + CS_MANIFEST_MAGIC_OFF, CHUNK_STORE_MAGIC);
+  CS_WRITE_U32(torn + 1 + CS_MANIFEST_VERSION_OFF, CHUNK_STORE_VERSION);
+  check("append_unsealed_root_31",
+        corrupt_bytes(dbpath, nextOff, torn, sizeof(torn))==0);
+
+  check("rows_after_unsealed_root_31", strcmp(rowCountOf(dbpath), "5")==0);
+
+  check("open_after_unsealed_root_31", sqlite3_open(dbpath, &db)==SQLITE_OK);
+  if( db ){
+    res = queryScalarText(db, "PRAGMA integrity_check");
+    check("integrity_after_unsealed_root_31", strcmp(res, "ok")==0);
+    check("insert_after_unsealed_root_31",
+          execSql(db, "INSERT INTO t1 VALUES(6, 'zeta')")==SQLITE_OK);
+    res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'after torn root')");
+    check("commit_after_unsealed_root_31", strncmp(res, "ERROR", 5)!=0);
+    res = queryScalarText(db, "SELECT count(*) FROM t1");
+    check("rows_after_recommit_31", strcmp(res, "6")==0);
+    sqlite3_close(db);
+  }
+
+  removeDb(dbpath);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -1663,6 +1714,7 @@ int main(void){
   test_unsealed_header_bounds_checks_wal_offset();
   test_index_end_overflow_bounds_wal_offset();
   test_sealed_wal_root_manifest_validation();
+  test_unsealed_wal_root_keeps_prior_commit();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);

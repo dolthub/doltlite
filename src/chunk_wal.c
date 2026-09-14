@@ -863,8 +863,9 @@ static int csReplayWalFrom(
        && csManifestHashStateOffsetless(m)==CS_MANIFEST_HASH_OK ){
         hashState = CS_MANIFEST_HASH_OK;
       }
+      /* LEGACY (all-zero self-hash) is a torn prefix, not a commit. */
       if( CS_READ_U32(m) != CHUNK_STORE_MAGIC
-       || hashState == CS_MANIFEST_HASH_BAD ){
+       || hashState != CS_MANIFEST_HASH_OK ){
         sqlite3_log(SQLITE_NOTICE,
           "doltlite: damaged WAL root manifest at offset %lld; "
           "stopping replay at last commit boundary",
@@ -876,8 +877,7 @@ static int csReplayWalFrom(
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
       }
-      if( hashState==CS_MANIFEST_HASH_OK
-       && csValidateWalRootManifest(
+      if( csValidateWalRootManifest(
             cs, m, cs->wal.iWalOffset+recPos)!=SQLITE_OK ){
         sqlite3_log(SQLITE_CORRUPT,
           "doltlite: invalid sealed WAL root manifest at offset %lld",
@@ -891,7 +891,7 @@ static int csReplayWalFrom(
       memcpy(cs->refs.refsHash.data, m + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
       pos = recPos + 1 + CHUNK_MANIFEST_SIZE;
-      if( hashState == CS_MANIFEST_HASH_OK ){
+      {
         i64 recAbs = cs->wal.iWalOffset + recPos;
         i64 durableTo = CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF);
         i64 batchStart = CS_READ_I64(m + CS_MANIFEST_BATCH_START_OFF);
@@ -903,8 +903,6 @@ static int csReplayWalFrom(
         if( iSkipStart==0 ){
           (void)csReadCheckpointStamp(m, recAbs, &cs->wal);
         }
-      }else{
-        cs->wal.cleanCloseMarker = 0;
       }
       lastBoundary = pos;
       nRootedPending = cs->staging.nPending;

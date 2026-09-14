@@ -68,7 +68,9 @@
 **     is a fresh sector, so it can sit past DURABLE_TO (unwritten gap).
 **   NEXT_OFF: sector-aligned start of the next batch; replay skips the gap.
 **   SELF_HASH: hash of the manifest with this field zeroed plus the root's
-**     file offset. Nonzero-and-wrong is damage, not a commit point. */
+**     file offset. A WAL root with a missing or wrong hash is a torn tail,
+**     not a commit. An all-zero hash on the offset-0 header is a pre-seal
+**     file and still opens. */
 #define CS_MANIFEST_DURABLE_TO_OFF   44
 #define CS_MANIFEST_NEXT_OFF_OFF     52
 #define CS_MANIFEST_BATCH_START_OFF  60
