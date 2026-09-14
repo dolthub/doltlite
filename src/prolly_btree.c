@@ -2134,6 +2134,7 @@ int sqlite3BtreeIntegrityCheck(
   int i;
   int nErr = 0;
   int rc;
+  int bCount = 1;
 
   if( !p ){
     if( pnErr ) *pnErr = 0;
@@ -2146,14 +2147,25 @@ int sqlite3BtreeIntegrityCheck(
                                    nRoot, mxErr, pnErr, pzOut);
   }
 
-  (void)aCnt;
-
   if( !p->pBt ){
     if( pnErr ) *pnErr = 0;
     if( pzOut ) *pzOut = 0;
     return SQLITE_OK;
   }
   pBt = p->pBt;
+
+  /* pragma.c only compares these tallies against each other, so they mean
+  ** something only when every tree is counted from the same committed state;
+  ** one unflushed edit would make every other tree look wrong. */
+  for(i=0; aCnt && i<nRoot; i++){
+    struct TableEntry *pTE = findTable(p, aRoot[i]);
+    ProllyMutMap *pMap = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+    if( pMap && !prollyMutMapIsEmpty(pMap) ){
+      bCount = 0;
+      break;
+    }
+  }
+
   memset(&ctx, 0, sizeof(ctx));
   ctx.pBt = pBt;
   ctx.mxErr = mxErr;
@@ -2171,7 +2183,7 @@ int sqlite3BtreeIntegrityCheck(
       /* A tree too damaged to count is reported by the graph walk below, so
       ** a failed count leaves the tally at zero rather than aborting. */
       i64 nRow = 0;
-      (void)countTreeEntries(p, aRoot[i], &nRow);
+      if( bCount ) (void)countTreeEntries(p, aRoot[i], &nRow);
       sqlite3VdbeMemSetInt64(&aCnt[i], nRow);
     }
     if( nErr>=mxErr ) continue;
