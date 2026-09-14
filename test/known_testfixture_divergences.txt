@@ -215,6 +215,9 @@ collate4 collate4-1.2.11 class=intentional
 collate4 collate4-1.2.12 class=intentional
 collate4 collate4-1.2.13 class=intentional
 
+# ── expridx1 ──
+expridx1 expridx1-2.4 class=engine-gap issue=2922  # imposter rewrites t1c entries, then DELETE of those rows cannot find the moved keys and leaves 18 orphans; t1=500 vs t1c=518
+
 # ── fkey1 ──
 fkey1 fkey1-4.2 class=intentional  # table_info notnull=1 on the TEXT PK column (PK-clustered; matches stock WITHOUT ROWID), not FK-related
 
