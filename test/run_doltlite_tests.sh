@@ -14,7 +14,9 @@ if [ ! -d "$BUILD_DIR" ]; then
   exit 1
 fi
 
-if [ ! -x "$BUILD_DIR/doltlite" ]; then
+if [ -z "${DOLTLITE:-}" ] \
+   && [ ! -x "$BUILD_DIR/doltlite" ] \
+   && [ ! -x "$BUILD_DIR/doltlite.exe" ]; then
   echo "ERROR: $BUILD_DIR/doltlite not found or not executable"
   echo "Run make in the build directory first."
   exit 1
@@ -26,6 +28,7 @@ case "${DOLTLITE_SUITE_SET:-all}" in
   coverage) suite_manifest=doltlite_coverage_suites ;;
   timing) suite_manifest=doltlite_timing_suites ;;
   sanitizer) suite_manifest=doltlite_sanitizer_suites ;;
+  windows) suite_manifest=doltlite_windows_suites ;;
   *)
     echo "ERROR: unknown DOLTLITE_SUITE_SET: $DOLTLITE_SUITE_SET"
     exit 1
@@ -58,7 +61,12 @@ cd "$BUILD_DIR"
 for t in "${TESTS[@]}"; do
   echo ""
   echo "━━━ $t ━━━"
-  if bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t"; then
+  if [ -n "${DOLTLITE:-}" ]; then
+    guarded=(bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t" "$DOLTLITE")
+  else
+    guarded=(bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t")
+  fi
+  if "${guarded[@]}"; then
     total_pass=$((total_pass + 1))
   else
     total_fail=$((total_fail + 1))

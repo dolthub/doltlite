@@ -250,8 +250,8 @@ jobs:
       if: matrix.bucket == 'sql'
       run: |
         cd build-coverage
-        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3-stock || exit 1
-        bash ../test/oracle_import_test.sh ./doltlite dolt || exit 1
+        bash ../test/run_guarded_suite.sh ../test/sql_oracle_test.sh ./doltlite ./sqlite3-stock || exit 1
+        bash ../test/run_guarded_suite.sh ../test/oracle_import_test.sh ./doltlite dolt || exit 1
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename $f)" = "oracle_import_test.sh" ] && continue
           echo "--- $(basename $f) ---"

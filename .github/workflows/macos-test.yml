@@ -33,7 +33,7 @@ jobs:
       run: |
         cd build
         bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite || exit 1
-        bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
+        bash ../test/run_guarded_suite.sh ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename "$f")" = "oracle_import_test.sh" ] && continue
           echo "--- $(basename "$f") ---"
@@ -52,7 +52,7 @@ jobs:
                  doltlite_schema_diff doltlite_workspace doltlite_conflicts \
                  doltlite_conflict_rows doltlite_comparison doltlite_merge; do
           echo "=== $s ==="
-          bash ../test/$s.sh ./doltlite || exit 1
+          bash ../test/run_guarded_suite.sh ../test/$s.sh ./doltlite || exit 1
         done
 
     - name: VC ref-mutation + remote suites
@@ -61,7 +61,7 @@ jobs:
         for s in doltlite_branch doltlite_default_branch doltlite_tag \
                  doltlite_gc doltlite_vacuum remote_test; do
           echo "=== $s ==="
-          bash ../test/$s.sh ./doltlite || exit 1
+          bash ../test/run_guarded_suite.sh ../test/$s.sh ./doltlite || exit 1
         done
 
     - name: C regression corpus (ASan/UBSan)

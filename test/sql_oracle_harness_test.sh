@@ -128,4 +128,31 @@ expect_startup_failure missing_executable "$SQL_ORACLE_TMP/missing" "$SQL_ORACLE
 cp "$SQL_ORACLE_TMP/pretends" "$SQL_ORACLE_TMP/pretend_reference"
 expect_startup_failure no_stock_database "$SQL_ORACLE_TMP/pretends" "$SQL_ORACLE_TMP/pretend_reference"
 
+grep -qx 'sql_oracle_finish' "$ORACLE" || {
+  echo "FAIL: $ORACLE must end through sql_oracle_finish"
+  exit 1
+}
+checks=$((checks+1))
+
+pass=1 fail=0
+finish_out=$(sql_oracle_finish)
+printf '%s\n' "$finish_out" | grep -qx '__SUITE_COMPLETE__' || {
+  echo "FAIL: sql_oracle_finish success path omitted __SUITE_COMPLETE__"
+  exit 1
+}
+checks=$((checks+1))
+
+pass=0 fail=1
+finish_rc=0
+finish_out=$(sql_oracle_finish) || finish_rc=$?
+[ "$finish_rc" -eq 1 ] || {
+  echo "FAIL: sql_oracle_finish fail path rc=$finish_rc"
+  exit 1
+}
+printf '%s\n' "$finish_out" | grep -qx '__SUITE_COMPLETE__' || {
+  echo "FAIL: sql_oracle_finish fail path omitted __SUITE_COMPLETE__"
+  exit 1
+}
+checks=$((checks+1))
+
 echo "SQL oracle harness: $checks checks passed"
