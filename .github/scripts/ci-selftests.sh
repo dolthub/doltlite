@@ -9,6 +9,7 @@ ci_selftests() {
   ci_compile python3 "$script_dir/ci-followup-test.py"
   ci_compile python3 "$script_dir/development-debug-test.py"
   ci_compile python3 "$script_dir/seed-cache-workflow-test.py"
+  ci_compile python3 "$script_dir/nightly-heartbeat-test.py"
   ci_compile python3 "$script_dir/benchmark-build-test.py"
   ci_compile python3 "$script_dir/benchmark-cache-key-test.py"
   ci_compile python3 "$script_dir/../../test/sqllogictest_gate_test.py"

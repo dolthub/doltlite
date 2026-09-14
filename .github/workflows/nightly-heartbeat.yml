@@ -39,15 +39,19 @@ jobs:
         : > "$BODY"
         SINCE=$(date -u -d '8 days ago' +%Y-%m-%d)
         for wf in nightly-fuzz nightly-stress nightly-scale nightly-performance seed-ci-caches dolt-oracle-upgrade; do
-          state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}.yml" --jq .state)
+          workflow=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}.yml")
+          state=$(printf '%s' "$workflow" | jq -er .state)
           if [ "$state" != "active" ]; then
             echo "- \`$wf\` is **$state** — its schedule is not running at all." >> "$BODY"
             continue
           fi
+          created_at=$(printf '%s' "$workflow" | jq -er .created_at)
+          created_day=$(date -u -d "$created_at" +%Y-%m-%d)
           runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}.yml/runs?event=schedule&created=>=${SINCE}&per_page=50" \
                  --jq '[.workflow_runs[] | {day: (.run_started_at[0:10]), conclusion}]')
           for i in 1 2 3 4 5 6 7; do
             day=$(date -u -d "-$i days" +%Y-%m-%d)
+            [[ "$day" > "$created_day" ]] || continue
             day_concls=$(printf '%s' "$runs" | jq -r --arg d "$day" '[.[] | select(.day==$d) | .conclusion // "in_progress"] | join(",")')
             if [ -z "$day_concls" ]; then
               echo "- \`$wf\` has **no scheduled run** on $day." >> "$BODY"
