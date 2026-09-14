@@ -24,9 +24,22 @@ ifcapable !crashtest {
 
 proc read_state {sql} {
   sqlite3 rdb test.db
-  set r [list [rdb eval $sql] [rdb eval {PRAGMA integrity_check}]]
+  set rows [rdb eval $sql]
+  set integ [rdb eval {PRAGMA integrity_check}]
+  set conflicts -1
+  set headlen 0
+  catch {set conflicts [rdb eval {SELECT count(*) FROM dolt_conflicts}]}
+  catch {set headlen [rdb eval {SELECT length(dolt_hashof('HEAD'))}]}
   rdb close
-  return $r
+  list $rows $integ $conflicts $headlen
+}
+
+proc recover_state_ok {post pre committed} {
+  expr {[lindex $post 1] eq "ok"
+     && [lindex $post 2] == 0
+     && [lindex $post 3] == 40
+     && ([lindex $post 0] eq [lindex $pre 0]
+      || [lindex $post 0] eq [lindex $committed 0])}
 }
 
 # Run one crash iteration from the current test.db state: learn the committed
@@ -49,10 +62,7 @@ proc crash_iteration {iDelay sigsql extraargs body} {
   set crashed [lindex $ret 0]
   set post [read_state $sigsql]
 
-  set okint [expr {[lindex $post 1] eq "ok"}]
-  set known [expr {[lindex $post 0] eq [lindex $pre 0]
-                || [lindex $post 0] eq [lindex $committed 0]}]
-  if {$okint && $known} {
+  if {[recover_state_ok $post $pre $committed]} {
     set verdict ok
   } else {
     set verdict [list post $post pre $pre committed $committed probe $probe]
@@ -158,9 +168,7 @@ for {set iDelay 1} {$iDelay<=3} {incr iDelay} {
     set pre [read_state $::sigsql_cur]
     crashsql -delay $iDelay -file test.db-journal $::body_cur
     set post [read_state $::sigsql_cur]
-    expr {[lindex $post 1] eq "ok"
-       && ([lindex $post 0] eq [lindex $pre 0]
-        || [lindex $post 0] eq [lindex $committed 0])}
+    recover_state_ok $post $pre $committed
   } {1}
 }
 
@@ -215,9 +223,7 @@ for {set i 1} {$i<=6} {incr i} {
       set pre [read_state $::sigsql_cur]
       eval crashsql -delay 1 $::extraargs_cur -file test.db-journal [list $::body_cur]
       set post [read_state $::sigsql_cur]
-      expr {[lindex $post 1] eq "ok"
-         && ([lindex $post 0] eq [lindex $pre 0]
-          || [lindex $post 0] eq [lindex $committed 0])}
+      recover_state_ok $post $pre $committed
     } {1}
   }
 }

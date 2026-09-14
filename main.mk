@@ -2764,7 +2764,9 @@ DOLTLITE_C_TESTS = \
 	authorizer_internal_sql_test$(T.exe) \
 	vc_result_code_test$(T.exe) \
 	integrity_check_counts_test$(T.exe) \
-	oom_dolt_fault_test$(T.exe)
+	oom_dolt_fault_test$(T.exe) \
+	crash_recovery_test$(T.exe) \
+	concurrent_branch_test$(T.exe)
 
 serialize_pending_test$(T.exe): $(TOP)/test/serialize_pending_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/serialize_pending_test.c \
@@ -2937,6 +2939,14 @@ chunk_source_test$(T.exe): $(TOP)/test/chunk_source_test.c libdoltlite$(T.lib)
 # rather than killing the whole run.
 oom_dolt_fault_test$(T.exe): $(TOP)/test/oom_dolt_fault_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/oom_dolt_fault_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+crash_recovery_test$(T.exe): $(TOP)/test/crash_recovery_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/crash_recovery_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+concurrent_branch_test$(T.exe): $(TOP)/test/concurrent_branch_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/concurrent_branch_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 doltlite-c-tests-build: $(DOLTLITE_C_TESTS)

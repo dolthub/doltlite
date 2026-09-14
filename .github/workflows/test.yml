@@ -437,7 +437,7 @@ jobs:
   coverage-native:
     name: coverage-native-${{ matrix.suite }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CC: clang
       CFLAGS: -O1 -g -fprofile-instr-generate -fcoverage-mapping
@@ -491,7 +491,9 @@ jobs:
 
     - name: Deterministic C tests
       if: matrix.suite == 'c'
-      run: bash test/run_c_tests.sh build-coverage coverage
+      run: |
+        bash test/run_c_tests.sh build-coverage coverage
+        ./build-coverage/oom_dolt_fault_test
 
     - name: Merge per-process coverage profiles
       if: always() && matrix.suite == 'shell'

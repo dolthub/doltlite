@@ -45,6 +45,7 @@ COVERAGE_TESTS=(
   commit_deserialize_test
   serialize_pending_test
   chunk_store_put_bounds_test
+  crash_recovery_test
 )
 
 SPECIALIZED_TESTS=(
@@ -59,6 +60,7 @@ SPECIALIZED_TESTS=(
   multi_process_merge_rebase_test
   oom_dolt_fault_test
   chunk_store_fork_lock_test
+  concurrent_branch_test
 )
 
 case "$SUITE_SET" in

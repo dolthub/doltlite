@@ -133,6 +133,28 @@ static int verify_consistency(const char *dbpath, const char *label){
     if( nLog<0 ) ok = 0;
   }
 
+  {
+    const char *integ = queryScalarText(db, "PRAGMA integrity_check");
+    snprintf(desc, sizeof(desc), "%s: integrity_check is ok", label);
+    check(desc, integ && strcmp(integ, "ok")==0);
+    if( !integ || strcmp(integ, "ok")!=0 ) ok = 0;
+  }
+
+  {
+    int nConflicts = queryScalarInt(db, "SELECT count(*) FROM dolt_conflicts", -1);
+    snprintf(desc, sizeof(desc), "%s: no persisted conflicts", label);
+    check(desc, nConflicts==0);
+    if( nConflicts!=0 ) ok = 0;
+  }
+
+  {
+    const char *zHead = queryScalarText(db, "SELECT dolt_hashof('HEAD')");
+    int nHead = zHead ? (int)strlen(zHead) : 0;
+    snprintf(desc, sizeof(desc), "%s: HEAD hash resolves", label);
+    check(desc, nHead==40);
+    if( nHead!=40 ) ok = 0;
+  }
+
   sqlite3_close(db);
   return ok;
 }

@@ -102,6 +102,14 @@ jobs:
           bash test/run_doltlite_tests.sh
       timeout-minutes: 20
 
+    - name: Gated C tests (ASan/UBSan)
+      if: matrix.suite == 'native'
+      run: |
+        cd build
+        bash ../test/run_c_tests.sh . coverage
+        ./oom_dolt_fault_test
+      timeout-minutes: 15
+
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
     - name: C regression corpus (ASan/UBSan)
