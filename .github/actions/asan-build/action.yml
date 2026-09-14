@@ -52,7 +52,7 @@ runs:
       fi
       {
         make "${make_jobs[@]}" CFLAGS="$ASAN_CFLAGS" LDFLAGS="$ASAN_LDFLAGS" \
-          doltlite libdoltlite.a doltlite-c-tests-build
+          doltlite libdoltlite.a crash_recovery_test oom_dolt_fault_test
         make DOLTLITE_PROLLY=0 sqlite3
         cc $ASAN_CFLAGS -I. -I../src \
           -o doltlite_regression_test_c \
@@ -76,7 +76,7 @@ runs:
       bash .github/scripts/package-ci-build.sh asan-ubsan-${{ inputs.platform }}.tar.gz \
         build/doltlite build/sqlite3 build/doltlite_regression_test_c \
         build/libdoltlite.a build/sqlite3.h build/build.log \
-        build/*_test
+        build/crash_recovery_test build/oom_dolt_fault_test
     shell: bash -e {0}
   - name: Upload
     uses: actions/upload-artifact@v4

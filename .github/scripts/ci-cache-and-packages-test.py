@@ -80,7 +80,8 @@ def artifact():
     action = (github / 'actions/asan-build/action.yml').read_text()
     command = step(action, 'Package', '  ').replace('${{ inputs.platform }}', 'macos')
     expected = {'build/doltlite', 'build/sqlite3', 'build/doltlite_regression_test_c',
-                'build/libdoltlite.a', 'build/sqlite3.h', 'build/build.log'}
+                'build/libdoltlite.a', 'build/sqlite3.h', 'build/build.log',
+                'build/crash_recovery_test', 'build/oom_dolt_fault_test'}
     checks = 0
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

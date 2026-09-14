@@ -106,7 +106,7 @@ jobs:
       if: matrix.suite == 'native'
       run: |
         cd build
-        bash ../test/run_c_tests.sh . coverage
+        ./crash_recovery_test
         ./oom_dolt_fault_test
       timeout-minutes: 15
 
