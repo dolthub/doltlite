@@ -695,8 +695,9 @@ static int mergeFastForward(
       rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
     }
     if( rc==SQLITE_OK ){
-      int persistRc = doltlitePersistWorkingSetWithHash(
-          db, &workingCatHash);
+      int persistRc = db->autoCommit
+          ? doltlitePersistWorkingSetWithHash(db, &workingCatHash)
+          : doltliteSaveWorkingSet(db);
       chunkStoreUnlock(cs);
       rc = persistRc;
     }
@@ -719,7 +720,7 @@ static int mergeFastForward(
     sqlite3_free(zErr);
     return rc;
   }
-  rc = doltliteVcSealEnclosingTxn(db);
+  if( !squash || db->autoCommit ) rc = doltliteVcSealEnclosingTxn(db);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&theirCommit);
     sqlite3_result_error_code(context, rc);
@@ -1112,14 +1113,15 @@ static int mergeRefLeaveUncommitted(
         doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
     return SQLITE_ERROR;
   }
-  rc = doltlitePersistWorkingSetWithHash(db, pWorkingCat);
+  rc = db->autoCommit ? doltlitePersistWorkingSetWithHash(db, pWorkingCat)
+                      : doltliteSaveWorkingSet(db);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context,
         doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
     return SQLITE_ERROR;
   }
-  rc = doltliteVcSealEnclosingTxn(db);
+  if( db->autoCommit ) rc = doltliteVcSealEnclosingTxn(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return SQLITE_ERROR;

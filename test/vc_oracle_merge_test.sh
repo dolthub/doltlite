@@ -440,6 +440,46 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('--squash', '--no-ff', 'feature');
 "
 
+echo "--- explicit transaction completion ---"
+
+for mode in ff ff_no_commit no_ff no_ff_no_commit ff_squash \
+            three_way three_way_no_commit three_way_squash \
+            three_way_squash_no_commit; do
+  flags=""
+  case "$mode" in
+    ff_no_commit|three_way_no_commit) flags="'--no-commit'," ;;
+    no_ff) flags="'--no-ff'," ;;
+    no_ff_no_commit) flags="'--no-ff','--no-commit'," ;;
+    ff_squash|three_way_squash) flags="'--squash'," ;;
+    three_way_squash_no_commit) flags="'--squash','--no-commit'," ;;
+  esac
+  diverge=""
+  case "$mode" in
+    three_way*) diverge="INSERT INTO t VALUES (10, 100);
+SELECT dolt_commit('-Am', 'main2');" ;;
+  esac
+  for finish in ROLLBACK COMMIT; do
+    oracle_reopen_state "txn_${mode}_${finish}" "
+$SEED
+$diverge
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-Am', 'feat1');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge(${flags}'-m', 'merged', 'feature');
+$finish;
+" "SELECT concat('Q', char(9), count(*)) FROM t;
+SELECT concat('Q', char(9), message) FROM dolt_log LIMIT 1;
+SELECT concat('Q', char(9), count(*)) FROM dolt_status;
+SELECT concat('Q', char(9), is_merging) FROM dolt_merge_status;" \
+"SELECT concat('Q', char(9), count(*)) FROM t;
+SELECT concat('Q', char(9), message) FROM dolt_log ORDER BY commit_order DESC LIMIT 1;
+SELECT concat('Q', char(9), count(*)) FROM dolt_status;
+SELECT concat('Q', char(9), is_merging) FROM dolt_merge_status;"
+  done
+done
+
 echo "--- custom message ---"
 
 oracle "merge_with_custom_message" "
