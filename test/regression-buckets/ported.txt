@@ -43,6 +43,7 @@ doltlite_historical_pk_mapping
 doltlite_vtab_column_collision
 doltlite_merge_constraint_prune
 doltlite_fk_parent_affinity
+doltlite_check_tokenization
 doltlite_constraint_temp_shadow
 doltlite_clean_temp_shadow
 doltlite_merge_generated

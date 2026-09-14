@@ -1,0 +1,192 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach key {INTEGER INT} {
+  foreach {name definition} {
+    backtick {`CHECK(0)` INT}
+    bracket {[CHECK(0)] INT}
+    doublequote {"CHECK(0)" INT}
+    singlequote {'CHECK(0)' INT}
+    escaped_backtick {`a``CHECK(0)` INT}
+    escaped_doublequote {"a""CHECK(0)" INT}
+    block_comment {v INT /* CHECK(0) */}
+    line_comment {v INT -- CHECK(0)
+    }
+    default_string {v TEXT DEFAULT 'CHECK(0)'}
+  } {
+    reset_db
+    execsql "CREATE TABLE t(id $key PRIMARY KEY, $definition)"
+    execsql {INSERT INTO t VALUES(1,1)}
+    do_execsql_test check-token-$key-$name-verify {
+      SELECT dolt_verify_constraints('--all');
+      SELECT count(*) FROM dolt_constraint_violations;
+      PRAGMA integrity_check;
+    } {0 0 ok}
+    reset_db
+    execsql "CREATE TABLE t(id $key PRIMARY KEY, $definition)"
+    execsql {
+      INSERT INTO t VALUES(1,1);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('side');
+      SELECT dolt_checkout('side');
+      INSERT INTO t VALUES(2,2);
+      SELECT dolt_commit('-Am','side');
+      SELECT dolt_checkout('main');
+      INSERT INTO t VALUES(3,3);
+      SELECT dolt_commit('-Am','main');
+    }
+    do_execsql_test check-token-$key-$name-merge {
+      SELECT length(dolt_merge('side'));
+      SELECT count(*) FROM t;
+      SELECT count(*) FROM dolt_constraint_violations;
+    } {40 3 0}
+    db close
+    sqlite3 db test.db
+    do_execsql_test check-token-$key-$name-reopen {
+      SELECT dolt_verify_constraints('--all');
+      SELECT count(*) FROM t;
+      PRAGMA integrity_check;
+    } {0 3 ok}
+  }
+
+  foreach {name column expression trivia} {
+    backtick {`a)b`} {`a)b`>0} {}
+    bracket {[a)b]} {[a)b]>0} {}
+    doublequote {"a)b"} {"a)b">0} {}
+    escaped_backtick {`a``)b`} {`a``)b`>0} {}
+    escaped_doublequote {"a"")b"} {"a"")b">0} {}
+    nested {v} {((v+1)>1)} {}
+    string {v} {v>0 AND ')''CHECK(0)'!=''} {}
+    block_comment {v} {v /* ) CHECK(0) */ >0} {/* ( CHECK(0) */}
+    line_comment {v} {v -- ) CHECK(0)
+      >0} {-- ( CHECK(0)
+    }
+    carriage_return {v} {v>0} {\r}
+    formfeed {v} {v>0} {\f}
+  } {
+    reset_db
+    set trivia [subst -nocommands -novariables $trivia]
+    execsql [format {CREATE TABLE t(id %s PRIMARY KEY, %s INT,
+        CONSTRAINT [positive value] CHECK%s(%s))} $key $column $trivia $expression]
+    execsql {
+      INSERT INTO t VALUES(1,1),(2,NULL);
+      SELECT dolt_commit('-Am','base');
+    }
+    do_execsql_test check-token-$key-$name-valid {
+      SELECT dolt_verify_constraints('--all');
+      SELECT count(*) FROM dolt_constraint_violations;
+      PRAGMA integrity_check;
+    } {0 0 ok}
+    execsql {
+      PRAGMA ignore_check_constraints=ON;
+      INSERT INTO t VALUES(3,-1);
+      PRAGMA ignore_check_constraints=OFF;
+    }
+    set expectedExpression $expression
+    if {$name in {block_comment line_comment}} {set expectedExpression {v >0}}
+    do_execsql_test check-token-$key-$name-invalid {
+      SELECT dolt_verify_constraints('--all');
+      SELECT violation_type,id,json_extract(violation_info,'$.Name'),
+             json_extract(violation_info,'$.Expression')
+        FROM dolt_constraint_violations_t;
+    } [list 1 {check constraint} 3 {positive value} $expectedExpression]
+    db close
+    sqlite3 db test.db
+    do_execsql_test check-token-$key-$name-persisted {
+      SELECT violation_type,id FROM dolt_constraint_violations_t;
+    } {{check constraint} 3}
+    do_execsql_test check-token-$key-$name-repaired {
+      DELETE FROM t WHERE id=3;
+      SELECT dolt_verify_constraints('--all');
+      SELECT count(*) FROM dolt_constraint_violations;
+      PRAGMA integrity_check;
+    } {0 0 ok}
+  }
+}
+
+foreach {name column} {
+  backtick {`a)b`}
+  bracket {[a)b]}
+  doublequote {"a)b"}
+} {
+  reset_db
+  execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, $column INT)"
+  execsql {
+    INSERT INTO t VALUES(1,1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+    SELECT dolt_checkout('side');
+    INSERT INTO t VALUES(2,-1);
+    SELECT dolt_commit('-Am','side');
+    SELECT dolt_checkout('main');
+  }
+  execsql "CREATE TABLE t2(id INTEGER PRIMARY KEY, $column INT CHECK($column>0))"
+  execsql {
+    INSERT INTO t2 SELECT * FROM t;
+    DROP TABLE t;
+    ALTER TABLE t2 RENAME TO t;
+    SELECT dolt_commit('-Am','check');
+    BEGIN;
+  }
+  do_test check-token-$name-merge-invalid {
+    set result [catchsql {SELECT dolt_merge('side')}]
+    list [lindex $result 0] \
+        [string match {*constraint violations*} [lindex $result 1]]
+  } {1 1}
+  do_execsql_test check-token-$name-merge-recorded {
+    SELECT violation_type,id FROM dolt_constraint_violations_t;
+  } {{check constraint} 2}
+  do_execsql_test check-token-$name-merge-repaired {
+    DELETE FROM t WHERE id=2;
+    SELECT dolt_verify_constraints('--all');
+    SELECT count(*) FROM dolt_constraint_violations;
+    ROLLBACK;
+    SELECT count(*) FROM t;
+    PRAGMA integrity_check;
+  } {0 0 1 ok}
+}
+
+foreach {name quoted} [list \
+    simple positive \
+    backtick {`CHECK(0)`} \
+    bracket {[positive value]} \
+    doublequote {"positive""value"} \
+    singlequote {'positive''value'} \
+    backslash {`positive\value`} \
+    long [string repeat positive 30]] {
+  reset_db
+  execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CONSTRAINT $quoted CHECK(v>0))"
+  execsql {
+    SELECT dolt_commit('-Am','base');
+    PRAGMA ignore_check_constraints=ON;
+    INSERT INTO t VALUES(1,-1);
+    PRAGMA ignore_check_constraints=OFF;
+  }
+  set expected $quoted
+  if {$name ne "simple" && $name ne "long"} {
+    set expected [string range $quoted 1 end-1]
+    set expected [string map [list {""} {"} {''} {'}] $expected]
+  }
+  do_execsql_test check-token-name-$name {
+    SELECT dolt_verify_constraints('--all');
+    SELECT json_extract(violation_info,'$.Name') FROM dolt_constraint_violations_t;
+  } [list 1 $expected]
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,
+    v INT CONSTRAINT unrelated NOT NULL CHECK(v>0),
+    w INT CONSTRAINT named CHECK(w<10) CHECK(w>0));
+  SELECT dolt_commit('-Am','base');
+  PRAGMA ignore_check_constraints=ON;
+  INSERT INTO t VALUES(1,-1,1),(2,1,11),(3,1,-1);
+  PRAGMA ignore_check_constraints=OFF;
+}
+do_execsql_test check-token-names {
+  SELECT dolt_verify_constraints('--all');
+  SELECT id,json_extract(violation_info,'$.Name')
+    FROM dolt_constraint_violations_t ORDER BY id;
+} {1 1 {} 2 named 3 {}}
+
+finish_test

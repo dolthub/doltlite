@@ -505,4 +505,36 @@ INSERT INTO t VALUES(2,'z',30);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','post_merge');
 " "SELECT CONCAT('R|',a,'|',b) FROM log ORDER BY a,b;"
 
+oracle "quoted_check_identifiers" "$(cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, `CHECK(0)` INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,3);
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feat');
+SELECT dolt_verify_constraints('--all');
+SQL
+)" "SELECT CONCAT('R|rows=', COUNT(*)) FROM t;
+SELECT CONCAT('R|violations=', COUNT(*)) FROM dolt_constraint_violations;"
+
+oracle "quoted_check_expression" "$(cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, `a)b` INT CHECK(`a)b`>0));
+INSERT INTO t VALUES(1,1),(2,NULL);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,2);
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(4,3);
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feat');
+SELECT dolt_verify_constraints('--all');
+SQL
+)" "SELECT CONCAT('R|rows=', COUNT(*)) FROM t;
+SELECT CONCAT('R|violations=', COUNT(*)) FROM dolt_constraint_violations;"
+
 vc_oracle_finish
