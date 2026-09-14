@@ -2168,7 +2168,11 @@ int sqlite3BtreeIntegrityCheck(
   for(i=0; i<nRoot; i++){
 
     if( aCnt ){
-      sqlite3VdbeMemSetInt64(&aCnt[i], 0);
+      /* A tree too damaged to count is reported by the graph walk below, so
+      ** a failed count leaves the tally at zero rather than aborting. */
+      i64 nRow = 0;
+      (void)countTreeEntries(p, aRoot[i], &nRow);
+      sqlite3VdbeMemSetInt64(&aCnt[i], nRow);
     }
     if( nErr>=mxErr ) continue;
     {
