@@ -1,0 +1,95 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc merge_txn_setup {diverged} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','feature');
+    SELECT dolt_checkout('main');
+  }
+  if {$diverged} {
+    execsql {INSERT INTO t VALUES(2); SELECT dolt_commit('-Am','main')}
+  }
+}
+
+proc merge_txn_state {connection} {
+  $connection eval {
+    SELECT count(*) FROM t;
+    SELECT dolt_hashof('HEAD');
+    SELECT count(*) FROM dolt_status;
+    SELECT is_merging FROM dolt_merge_status;
+  }
+}
+
+foreach {name diverged flags} {
+  ff 0 {}
+  ff-no-commit 0 {'--no-commit',}
+  no-ff 0 {'--no-ff',}
+  three-way 1 {}
+} {
+  merge_txn_setup $diverged
+  do_test merge-txn-$name-commits {
+    execsql "BEGIN; SELECT dolt_merge(${flags}'feature')"
+    list [sqlite3_get_autocommit db] [catch {execsql ROLLBACK}] \
+         [execsql {SELECT count(*) FROM t}]
+  } [list 1 1 [expr {$diverged+1}]]
+}
+
+foreach {name diverged flags merging} {
+  no-ff-no-commit 0 {'--no-ff','--no-commit',} 1
+  ff-squash 0 {'--squash',} 0
+  three-way-no-commit 1 {'--no-commit',} 1
+  three-way-squash-no-commit 1 {'--squash','--no-commit',} 0
+} {
+  foreach boundary {begin nested savepoint} {
+    foreach finish {rollback commit close} {
+      merge_txn_setup $diverged
+      set before [merge_txn_state db]
+      set namebase merge-txn-$name-$boundary-$finish
+      if {$boundary ne "savepoint"} {execsql BEGIN}
+      if {$boundary ne "begin"} {execsql {SAVEPOINT before_merge}}
+      do_test $namebase-open {
+        execsql "SELECT dolt_merge(${flags}'feature')"
+        list [sqlite3_get_autocommit db] [execsql {SELECT count(*) FROM t}] \
+             [execsql {SELECT is_merging FROM dolt_merge_status}]
+      } [list 0 [expr {$diverged+1}] $merging]
+      do_test $namebase-private {
+        sqlite3 peer test.db
+        set state [merge_txn_state peer]
+        peer close
+        set state
+      } $before
+      if {$finish eq "rollback"} {
+        if {$boundary ne "begin"} {
+          do_test $namebase-rollback-to {
+            execsql {ROLLBACK TO before_merge}
+            merge_txn_state db
+          } $before
+        }
+        do_test $namebase-rollback {execsql ROLLBACK} {}
+      } elseif {$finish eq "commit"} {
+        do_test $namebase-commit {execsql COMMIT} {}
+      }
+      db close
+      sqlite3 db test.db
+      if {$finish eq "commit"} {
+        do_test $namebase-reopen {
+          merge_txn_state db
+        } [list [expr {$diverged+1}] [lindex $before 1] 1 $merging]
+        do_test $namebase-finish {
+          execsql {SELECT dolt_commit('-m','finish')}
+          execsql {SELECT count(*) FROM dolt_status; SELECT is_merging FROM dolt_merge_status}
+        } {0 0}
+      } else {
+        do_test $namebase-reopen {merge_txn_state db} $before
+      }
+    }
+  }
+}
+
+finish_test
