@@ -1355,7 +1355,7 @@ static void doltCheckoutParsedFunc(
       goto checkout_done;
     }
     if( rc!=SQLITE_NOTFOUND ){
-      doltliteVcResultError(ctx, db, "checkout failed");
+      doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
       return;
     }
 
@@ -1400,7 +1400,7 @@ checkout_done:
     return;
   }
   if( rc!=SQLITE_OK ){
-    doltliteVcResultError(ctx, db, "checkout failed");
+    doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
     return;
   }
   if( hadExplicitTxn ){

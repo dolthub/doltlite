@@ -270,6 +270,9 @@ revert_error:
     char *zMsg = sqlite3_mprintf("revert of \"%s\" failed", zRef);
     sqlite3_result_error(context, zMsg ? zMsg : "revert failed", -1);
     sqlite3_free(zMsg);
+    if( rc!=SQLITE_ERROR && rc!=SQLITE_NOTFOUND ){
+      sqlite3_result_error_code(context, rc);
+    }
   }
 }
 

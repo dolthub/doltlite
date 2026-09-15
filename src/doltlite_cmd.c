@@ -785,6 +785,11 @@ void doltliteCmdFinishApplyMerged(
         sqlite3_result_error(ctx, zMsg ? zMsg : zFailFallback, -1);
         sqlite3_free(zMsg);
       }
+      /* Setting the code after the message keeps the message, so a caller can
+      ** tell a read-only database or a busy peer from a failed apply. */
+      if( rc!=SQLITE_ERROR && rc!=SQLITE_NOTFOUND ){
+        sqlite3_result_error_code(ctx, rc);
+      }
     }
     sqlite3_free(zApplyErr);
     return;

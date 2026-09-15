@@ -1090,6 +1090,18 @@ void doltliteVcResultError(sqlite3_context *ctx, sqlite3 *db, const char *zMsg){
   sqlite3_result_error(ctx, zMsg, -1);
 }
 
+/* For sites relaying a result code rather than reporting a usage error.
+** The code goes on after the message so the message survives; NOTFOUND is an
+** internal sentinel and SQLITE_ERROR is what a bare message already gives. */
+void doltliteVcResultErrorCode(
+  sqlite3_context *ctx, sqlite3 *db, const char *zMsg, int rc
+){
+  doltliteVcResultError(ctx, db, zMsg);
+  if( rc!=SQLITE_OK && rc!=SQLITE_ERROR && rc!=SQLITE_NOTFOUND ){
+    sqlite3_result_error_code(ctx, rc);
+  }
+}
+
 int doltliteVcSealBranchStyleTxn(sqlite3 *db){
   int rc;
   if( db->autoCommit ) return SQLITE_OK;
