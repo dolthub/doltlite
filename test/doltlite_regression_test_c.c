@@ -5631,6 +5631,12 @@ static void run_record_decode_corruption(void){
   };
   static const u8 validBlob[] = { 0x02, 0x0e, 0x2a };
   static const u8 validText[] = { 0x02, 0x0f, 0x78 };
+  /* Header of two text fields, the second declaring six payload bytes when
+  ** only two follow: the parse fails after the first field is accepted. */
+  static const u8 truncatedSecondField[] = { 0x03, 0x0d, 0x19, 0x61, 0x62 };
+  /* Two one-byte text fields with a stray third payload byte, so the parse
+  ** fails only at the final payload-endpoint check. */
+  static const u8 trailingPayloadByte[] = { 0x03, 0x0f, 0x0f, 0x78, 0x79, 0x7a };
   DoltliteRecordInfo info;
   char *z;
   int rc;
@@ -5690,6 +5696,27 @@ static void run_record_decode_corruption(void){
         doltliteParseRecordStrict(validText,
           (int)sizeof(validText), &info)==SQLITE_OK
         && info.nField==1 && info.aType[0]==15 && info.aOffset[0]==2);
+
+  memset(&info, 0xff, sizeof(info));
+  rc = doltliteParseRecordStrict(truncatedSecondField,
+                                 (int)sizeof(truncatedSecondField), &info);
+  check("truncated_field_leaves_no_fields",
+        rc==SQLITE_CORRUPT && info.nField==0);
+  memset(&info, 0xff, sizeof(info));
+  doltliteParseRecord(truncatedSecondField,
+                      (int)sizeof(truncatedSecondField), &info);
+  check("truncated_field_hides_the_prefix_from_the_wrapper", info.nField==0);
+
+  memset(&info, 0xff, sizeof(info));
+  rc = doltliteParseRecordStrict(trailingPayloadByte,
+                                 (int)sizeof(trailingPayloadByte), &info);
+  check("trailing_payload_byte_leaves_no_fields",
+        rc==SQLITE_CORRUPT && info.nField==0);
+  memset(&info, 0xff, sizeof(info));
+  doltliteParseRecord(trailingPayloadByte,
+                      (int)sizeof(trailingPayloadByte), &info);
+  check("trailing_payload_byte_hides_the_prefix_from_the_wrapper",
+        info.nField==0);
 }
 
 static void run_sortkey_two_numeric_roundtrip(void){

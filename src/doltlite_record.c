@@ -525,6 +525,7 @@ int doltliteParseRecordStrict(
   u64 hdrSize;
   int hdrBytes, off;
   const u8 *pHdrEnd;
+  int nField = 0;
 
   memset(pInfo, 0, sizeof(*pInfo));
   if( !pData || nData < 1 ) return SQLITE_CORRUPT;
@@ -541,11 +542,9 @@ int doltliteParseRecordStrict(
   while( p < pHdrEnd ){
     u64 st;
     int stBytes = dlReadVarint(p, pHdrEnd, &st);
-    int nField;
     int nSerial;
     if( stBytes<=0 ) return SQLITE_CORRUPT;
     if( st==10 || st==11 || st>(u64)INT_MAX ) return SQLITE_CORRUPT;
-    nField = pInfo->nField;
     if( nField >= DOLTLITE_MAX_RECORD_FIELDS ) return SQLITE_CORRUPT;
     p += stBytes;
     nSerial = dlSerialTypeLen(st);
@@ -553,10 +552,14 @@ int doltliteParseRecordStrict(
     pInfo->aType[nField] = (int)st;
     pInfo->aOffset[nField] = off;
     off += nSerial;
-    pInfo->nField = nField + 1;
+    nField++;
   }
   if( p != pHdrEnd ) return SQLITE_CORRUPT;
   if( off != nData ) return SQLITE_CORRUPT;
+  /* Publishing the count only once the whole record validates is what lets the
+  ** non-strict wrapper drop the return code: every caller bounds itself by
+  ** nField, so a header that fails partway through shows no fields at all. */
+  pInfo->nField = nField;
   return SQLITE_OK;
 }
 
