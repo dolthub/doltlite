@@ -155,7 +155,7 @@ static int fkParentLookupInit(
     u8 *pDecoded = 0;
     u8 *pRecord = 0;
     int nRecord = 0;
-    DoltliteRecordInfo info;
+    DoltliteRecordInfo info = {0};
     BtreePayload payload;
     prollyCursorValue(&p->cur, &pVal, &nVal);
     if( nVal==0 && (p->pParent->flags & PROLLY_NODE_INTKEY)==0 ){
@@ -190,6 +190,7 @@ static int fkParentLookupInit(
     }
     sqlite3_free(pRecord);
     sqlite3_free(pDecoded);
+    doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&p->cur);
   }
   sqlite3_free(aValue);

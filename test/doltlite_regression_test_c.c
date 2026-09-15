@@ -5557,7 +5557,7 @@ static void run_record_header_varint_boundary(void){
   for(k=0; k<(int)(sizeof(aField)/sizeof(aField[0])); k++){
     int nField = aField[k];
     DoltliteSerialValue *aMem;
-    DoltliteRecordInfo info;
+    DoltliteRecordInfo info = {0};
     u8 *pRec;
     int nRec = 0;
     int i;
@@ -5589,6 +5589,7 @@ static void run_record_header_varint_boundary(void){
     sqlite3_snprintf((int)sizeof(zName), zName,
                      "record_header_varint_boundary_%d_fields", nField);
     check(zName, ok);
+    doltliteRecordInfoClear(&info);
     sqlite3_free(pRec);
     sqlite3_free(aMem);
   }
@@ -5637,7 +5638,7 @@ static void run_record_decode_corruption(void){
   /* Two one-byte text fields with a stray third payload byte, so the parse
   ** fails only at the final payload-endpoint check. */
   static const u8 trailingPayloadByte[] = { 0x03, 0x0f, 0x0f, 0x78, 0x79, 0x7a };
-  DoltliteRecordInfo info;
+  DoltliteRecordInfo info = {0};
   char *z;
   int rc;
 

@@ -97,7 +97,7 @@ static int statusSequenceContains(
   while( rc==SQLITE_OK && !res && prollyCursorIsValid(&cur) ){
     const u8 *pVal = 0;
     int nVal = 0;
-    DoltliteRecordInfo info;
+    DoltliteRecordInfo info = {0};
     char *zName = 0;
     prollyCursorValue(&cur, &pVal, &nVal);
     rc = doltliteParseRecordStrict(pVal, nVal, &info);
@@ -107,9 +107,11 @@ static int statusSequenceContains(
       *pFound = nVal==nRecord
              && (nVal==0 || memcmp(pVal, pRecord, nVal)==0);
       sqlite3_free(zName);
+      doltliteRecordInfoClear(&info);
       break;
     }
     sqlite3_free(zName);
+    doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
   }
   prollyCursorClose(&cur);
@@ -135,7 +137,7 @@ static int statusSequenceTrackedEqualOneWay(
   while( rc==SQLITE_OK && !res && *pEqual && prollyCursorIsValid(&cur) ){
     const u8 *pVal = 0;
     int nVal = 0;
-    DoltliteRecordInfo info;
+    DoltliteRecordInfo info = {0};
     char *zOwner = 0;
     int ignored = 0;
     int found = 0;
@@ -156,6 +158,7 @@ static int statusSequenceTrackedEqualOneWay(
       }
     }
     sqlite3_free(zOwner);
+    doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
   }
   prollyCursorClose(&cur);

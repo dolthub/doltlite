@@ -195,7 +195,7 @@ static void dsCountChangedCells(
   int *pnDiffer,
   int *pnModified
 ){
-  DoltliteRecordInfo fromRi, toRi;
+  DoltliteRecordInfo fromRi = {0}, toRi = {0};
   int i;
   int nDiffer = 0;
   int nModified = 0;
@@ -238,6 +238,8 @@ static void dsCountChangedCells(
 
   *pnDiffer = nDiffer;
   *pnModified = nModified;
+  doltliteRecordInfoClear(&fromRi);
+  doltliteRecordInfoClear(&toRi);
 }
 
 /* A row whose primary key covers every column stores an empty record, so its

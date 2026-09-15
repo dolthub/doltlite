@@ -400,6 +400,8 @@ T.compile = $(T.cc) $(T.compile.gcov)
 #
 T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
     -Wdeclaration-after-statement
+# Library objects only. Test binaries (T.link) can have large frames.
+T.cc.sqlite.frame = -Wframe-larger-than=16384
 
 #
 # $(T.cc.sqlite) is $(T.cc) plus any flags which are desired for the
@@ -407,7 +409,7 @@ T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
 # will normally get initially populated with flags by the
 # configure-generated makefile.
 #
-T.cc.sqlite ?= $(T.compile) $(T.cc.sqlite.extras)
+T.cc.sqlite ?= $(T.compile) $(T.cc.sqlite.extras) $(T.cc.sqlite.frame)
 
 #
 # $(CFLAGS.intree_includes) = -I... flags relevant specifically to
@@ -432,7 +434,8 @@ T.cc.extension = $(T.compile) -I. -I$(TOP)/src $(T.cc.sqlite.extras) -DSQLITE_CO
 # $(T.link.gcov) = optional config-specific flags for $(T.link),
 # intended for use with gcov-related flags.
 #
-T.link = $(T.cc.sqlite) $(T.link.gcov)
+T.link = $(T.compile) $(T.cc.sqlite.extras) $(CFLAGS.intree_includes) \
+    $(T.link.gcov)
 #
 # $(T.link.shared) = $(T.link) invocation specifically for shared libraries
 #
@@ -1313,12 +1316,14 @@ ed25519_%.o:	$(TOP)/ext/ed25519/%.c
 	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/ed25519 -c $< -o $@
 
 mbedtls_%.o:	$(TOP)/ext/mbedtls/library/%.c
-	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/mbedtls/include -c $< -o $@
+	$(T.compile) -Wno-declaration-after-statement -Wno-frame-larger-than \
+		-I$(TOP)/ext/mbedtls/include -c $< -o $@
 
 # Vendored BLAKE3 sources use C99 mid-block declarations that the
 # rest of doltlite's tree bans via -Wdeclaration-after-statement.
 # Disable that warning for the blake3/ ext sources only.
-BLAKE3_CFLAGS = -Wno-declaration-after-statement -I$(TOP)/ext/blake3
+BLAKE3_CFLAGS = -Wno-declaration-after-statement -Wno-frame-larger-than \
+		-I$(TOP)/ext/blake3
 
 blake3.o:	$(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3.h \
 		$(TOP)/ext/blake3/blake3_impl.h
@@ -2768,6 +2773,7 @@ DOLTLITE_C_TESTS = \
 	count_range_override_test$(T.exe) \
 	vc_cas_swallow_test$(T.exe) \
 	remote_push_lock_busy_test$(T.exe) \
+	record_info_stack_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe) \
 	crash_recovery_test$(T.exe) \
 	concurrent_branch_test$(T.exe)
@@ -2802,6 +2808,10 @@ vc_cas_swallow_test$(T.exe): $(TOP)/test/vc_cas_swallow_test.c libdoltlite$(T.li
 
 remote_push_lock_busy_test$(T.exe): $(TOP)/test/remote_push_lock_busy_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/remote_push_lock_busy_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+record_info_stack_test$(T.exe): $(TOP)/test/record_info_stack_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/record_info_stack_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 readonly_reader_writer_test$(T.exe): $(TOP)/test/readonly_reader_writer_test.c libdoltlite$(T.lib)

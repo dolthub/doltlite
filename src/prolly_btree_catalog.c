@@ -763,7 +763,7 @@ static int loadSchemaCatalogRows(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal;
     int nVal;
-    DoltliteRecordInfo ri;
+    DoltliteRecordInfo ri = {0};
     prollyCursorValue(&cur, &pVal, &nVal);
     if( pVal && nVal>0 ){
       char *zType = 0, *zName = 0, *zTblName = 0, *zSql = 0;
@@ -781,6 +781,7 @@ static int loadSchemaCatalogRows(
       if( rc!=SQLITE_OK ){
         sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); break;
       }
+      doltliteRecordInfoClear(&ri);
       if( nRows>=nAlloc ){
         i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
         SchemaCatalogRow *aNew;

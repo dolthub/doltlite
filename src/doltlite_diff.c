@@ -23,7 +23,7 @@
 ** dropping a table or index moves every view and trigger behind it; a rowid
 ** diff would report them changed when nothing about them changed. */
 static int masterRowCanonical(const u8 *pRec, int nRec, char **pzOut){
-  DoltliteRecordInfo ri;
+  DoltliteRecordInfo ri = {0};
   char *zType = 0, *zName = 0, *zTbl = 0, *zSql = 0;
   int rc;
   *pzOut = 0;
@@ -42,6 +42,7 @@ static int masterRowCanonical(const u8 *pRec, int nRec, char **pzOut){
     if( !*pzOut ) rc = SQLITE_NOMEM;
   }
   sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTbl); sqlite3_free(zSql);
+  doltliteRecordInfoClear(&ri);
   return rc;
 }
 

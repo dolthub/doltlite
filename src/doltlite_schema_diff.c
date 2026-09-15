@@ -170,7 +170,7 @@ static int loadSchemaFromCatalogMode(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal;
     int nVal;
-    DoltliteRecordInfo ri;
+    DoltliteRecordInfo ri = {0};
 
     prollyCursorValue(&cur, &pVal, &nVal);
 
@@ -227,6 +227,7 @@ static int loadSchemaFromCatalogMode(
         sqlite3_free(zTblName);
         sqlite3_free(zSql);
       }
+      doltliteRecordInfoClear(&ri);
     }
 
     rc = prollyCursorNext(&cur);
@@ -337,7 +338,7 @@ int loadSchemaEntryFromCatalog(
 
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal; int nVal;
-    DoltliteRecordInfo ri;
+    DoltliteRecordInfo ri = {0};
 
     prollyCursorValue(&cur, &pVal, &nVal);
     if( pVal && nVal > 0 ){
@@ -377,6 +378,7 @@ int loadSchemaEntryFromCatalog(
         break;
       }
       sqlite3_free(zEntryName);
+      doltliteRecordInfoClear(&ri);
     }
 
     rc = prollyCursorNext(&cur);

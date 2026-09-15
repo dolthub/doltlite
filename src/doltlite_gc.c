@@ -562,11 +562,12 @@ static void gcCrashResetForRun(void){
 /* Buffered forward-only writer for the gc tmp file; streams so RAM stays
 ** bounded. */
 typedef struct GcFileWriter GcFileWriter;
+#define GC_WRITER_BUF 65536
 struct GcFileWriter {
   sqlite3_file *pFile;
   i64 iOff;
   int nBuf;
-  u8 aBuf[65536];
+  u8 *aBuf;
 };
 
 static int gcWriterFlush(GcFileWriter *pW){
@@ -582,13 +583,13 @@ static int gcWriterFlush(GcFileWriter *pW){
 
 static int gcWriterAppend(GcFileWriter *pW, const u8 *p, int n){
   while( n>0 ){
-    int space = (int)sizeof(pW->aBuf) - pW->nBuf;
+    int space = GC_WRITER_BUF - pW->nBuf;
     int nCopy = n<space ? n : space;
     memcpy(pW->aBuf + pW->nBuf, p, nCopy);
     pW->nBuf += nCopy;
     p += nCopy;
     n -= nCopy;
-    if( pW->nBuf==(int)sizeof(pW->aBuf) ){
+    if( pW->nBuf==GC_WRITER_BUF ){
       int rc = gcWriterFlush(pW);
       if( rc!=SQLITE_OK ) return rc;
     }
@@ -875,6 +876,12 @@ static int gcWriteCompactedTo(
     w.pFile = pTmpFile;
     w.iOff = 0;
     w.nBuf = 0;
+    w.aBuf = sqlite3_malloc(GC_WRITER_BUF);
+    if( !w.aBuf ){
+      sqlite3OsCloseFree(pTmpFile);
+      sqlite3_free(aNewIndex);
+      return SQLITE_NOMEM;
+    }
 
     rc = gcWriterAppend(&w, manifest, CHUNK_MANIFEST_SIZE);
 
@@ -937,6 +944,7 @@ static int gcWriteCompactedTo(
       rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
     }
     if( rc!=SQLITE_OK ){
+      sqlite3_free(w.aBuf);
       sqlite3OsCloseFree(pTmpFile);
       sqlite3BeginBenignMalloc();
       sqlite3OsDelete(chunkFileGetVfs(&cs->file), zPath, 0);
@@ -944,6 +952,7 @@ static int gcWriteCompactedTo(
       sqlite3_free(aNewIndex);
       return rc;
     }
+    sqlite3_free(w.aBuf);
     *ppFileOut = pTmpFile;
   }
   *pFinalSize = finalSize;

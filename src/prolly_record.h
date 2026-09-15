@@ -3,6 +3,7 @@
 #define SQLITE_PROLLY_RECORD_H
 
 #include <limits.h>
+#include <string.h>
 #include "sqliteInt.h"
 
 /* Read a varint from p (bounded by pEnd). Returns bytes consumed, or 0 if
@@ -79,13 +80,48 @@ static inline i64 dlDecodeSerialInt(int st, const u8 *p, int n){
 }
 
 #define DOLTLITE_MAX_RECORD_FIELDS SQLITE_MAX_COLUMN
+#define DOLTLITE_RECORD_INLINE_FIELDS 32
 
 typedef struct DoltliteRecordInfo DoltliteRecordInfo;
 struct DoltliteRecordInfo {
   int nField;
-  int aType[DOLTLITE_MAX_RECORD_FIELDS];
-  int aOffset[DOLTLITE_MAX_RECORD_FIELDS];
+  int nAlloc;
+  int *aType;
+  int *aOffset;
+  int aTypeSpace[DOLTLITE_RECORD_INLINE_FIELDS];
+  int aOffsetSpace[DOLTLITE_RECORD_INLINE_FIELDS];
 };
+
+static inline void doltliteRecordInfoInit(DoltliteRecordInfo *p){
+  p->nField = 0;
+  p->nAlloc = DOLTLITE_RECORD_INLINE_FIELDS;
+  p->aType = p->aTypeSpace;
+  p->aOffset = p->aOffsetSpace;
+}
+
+static inline void doltliteRecordInfoClear(DoltliteRecordInfo *p){
+  if( p->aType && p->aType!=p->aTypeSpace ) sqlite3_free(p->aType);
+  doltliteRecordInfoInit(p);
+}
+
+static inline int doltliteRecordInfoGrow(DoltliteRecordInfo *p, int nNeed){
+  int *aMem;
+  int nAlloc;
+  if( nNeed<=p->nAlloc ) return SQLITE_OK;
+  nAlloc = p->nAlloc * 2;
+  if( nAlloc<nNeed ) nAlloc = nNeed;
+  if( nAlloc>DOLTLITE_MAX_RECORD_FIELDS ) nAlloc = DOLTLITE_MAX_RECORD_FIELDS;
+  if( nNeed>nAlloc ) return SQLITE_NOMEM;
+  aMem = sqlite3_malloc64((sqlite3_uint64)nAlloc * sizeof(int) * 2);
+  if( !aMem ) return SQLITE_NOMEM;
+  memcpy(aMem, p->aType, (size_t)(nNeed-1) * sizeof(int));
+  memcpy(aMem + nAlloc, p->aOffset, (size_t)(nNeed-1) * sizeof(int));
+  if( p->aType!=p->aTypeSpace ) sqlite3_free(p->aType);
+  p->aType = aMem;
+  p->aOffset = aMem + nAlloc;
+  p->nAlloc = nAlloc;
+  return SQLITE_OK;
+}
 
 int doltliteParseRecordStrict(const u8 *pData, int nData,
                               DoltliteRecordInfo *pInfo);
@@ -93,21 +129,32 @@ int doltliteParseRecordStrict(const u8 *pData, int nData,
 void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo);
 
 static inline int doltliteSchemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
-  DoltliteRecordInfo ri;
-  int st, off, len;
+  DoltliteRecordInfo ri = {0};
+  int st, off, len, match = 0;
   const u8 *pBody;
   if( !pRec || nRec<=0 ) return 0;
+  doltliteRecordInfoInit(&ri);
   doltliteParseRecord(pRec, nRec, &ri);
-  if( ri.nField < 1 ) return 0;
+  if( ri.nField < 1 ){
+    doltliteRecordInfoClear(&ri);
+    return 0;
+  }
   st = ri.aType[0];
   off = ri.aOffset[0];
-  if( st < 13 || (st & 1)==0 ) return 0;
+  if( st < 13 || (st & 1)==0 ){
+    doltliteRecordInfoClear(&ri);
+    return 0;
+  }
   len = (st - 13) / 2;
-  if( off < 0 || off + len > nRec ) return 0;
+  if( off < 0 || off + len > nRec ){
+    doltliteRecordInfoClear(&ri);
+    return 0;
+  }
   pBody = pRec + off;
-  if( len==4 && memcmp(pBody, "view", 4)==0 ) return 1;
-  if( len==7 && memcmp(pBody, "trigger", 7)==0 ) return 1;
-  return 0;
+  if( len==4 && memcmp(pBody, "view", 4)==0 ) match = 1;
+  else if( len==7 && memcmp(pBody, "trigger", 7)==0 ) match = 1;
+  doltliteRecordInfoClear(&ri);
+  return match;
 }
 
 static inline int dlRecordTextField(

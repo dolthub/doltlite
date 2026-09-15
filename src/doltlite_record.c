@@ -527,10 +527,16 @@ int doltliteParseRecordStrict(
   const u8 *pHdrEnd;
   int nField = 0;
 
-  /* Only nField needs clearing: every reader bounds itself by it, and the
-  ** non-strict wrapper discards the return code, so a failed parse has to
-  ** leave a zero field count behind. Clearing the arrays as well is 16KB. */
-  pInfo->nField = 0;
+  /* Reclaim a previous Grow() heap if the layout matches ours. Poisoned
+  ** (0xff) structs have nAlloc out of range and are left alone. */
+  if( pInfo->aType
+   && pInfo->aType!=pInfo->aTypeSpace
+   && pInfo->nAlloc>DOLTLITE_RECORD_INLINE_FIELDS
+   && pInfo->nAlloc<=DOLTLITE_MAX_RECORD_FIELDS
+   && pInfo->aOffset==pInfo->aType + pInfo->nAlloc ){
+    sqlite3_free(pInfo->aType);
+  }
+  doltliteRecordInfoInit(pInfo);
   if( !pData || nData < 1 ) return SQLITE_CORRUPT;
   p = pData;
   pEnd = pData + nData;
@@ -546,24 +552,31 @@ int doltliteParseRecordStrict(
     u64 st;
     int stBytes = dlReadVarint(p, pHdrEnd, &st);
     int nSerial;
-    if( stBytes<=0 ) return SQLITE_CORRUPT;
-    if( st==10 || st==11 || st>(u64)INT_MAX ) return SQLITE_CORRUPT;
-    if( nField >= DOLTLITE_MAX_RECORD_FIELDS ) return SQLITE_CORRUPT;
+    if( stBytes<=0 ) goto parse_corrupt;
+    if( st==10 || st==11 || st>(u64)INT_MAX ) goto parse_corrupt;
+    if( nField >= DOLTLITE_MAX_RECORD_FIELDS ) goto parse_corrupt;
+    if( doltliteRecordInfoGrow(pInfo, nField+1)!=SQLITE_OK ){
+      doltliteRecordInfoClear(pInfo);
+      return SQLITE_NOMEM;
+    }
     p += stBytes;
     nSerial = dlSerialTypeLen(st);
-    if( nSerial<0 || nSerial>nData-off ) return SQLITE_CORRUPT;
+    if( nSerial<0 || nSerial>nData-off ) goto parse_corrupt;
     pInfo->aType[nField] = (int)st;
     pInfo->aOffset[nField] = off;
     off += nSerial;
     nField++;
   }
-  if( p != pHdrEnd ) return SQLITE_CORRUPT;
-  if( off != nData ) return SQLITE_CORRUPT;
+  if( p != pHdrEnd ) goto parse_corrupt;
+  if( off != nData ) goto parse_corrupt;
   /* Publishing the count only once the whole record validates is what lets the
   ** non-strict wrapper drop the return code: every caller bounds itself by
   ** nField, so a header that fails partway through shows no fields at all. */
   pInfo->nField = nField;
   return SQLITE_OK;
+parse_corrupt:
+  doltliteRecordInfoClear(pInfo);
+  return SQLITE_CORRUPT;
 }
 
 void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo){
@@ -606,7 +619,7 @@ static void resultUserCol(
   u8 affinity
 ){
   int iRecField;
-  DoltliteRecordInfo ri;
+  DoltliteRecordInfo ri = {0};
 
   if( !pRec || nRec<=0 || !ci || iDeclaredCol<0 || iDeclaredCol>=ci->nCol ){
     sqlite3_result_null(ctx);
@@ -629,6 +642,7 @@ static void resultUserCol(
 
   doltliteParseRecord(pRec, nRec, &ri);
   if( iRecField>=ri.nField ){
+    doltliteRecordInfoClear(&ri);
     sqlite3_result_null(ctx);
     return;
   }
@@ -637,12 +651,14 @@ static void resultUserCol(
     if( doltliteSerialValueFromPayload(pRec,nRec,
             ri.aType[iRecField],ri.aOffset[iRecField],&f)==SQLITE_OK
      && f.eType==SQLITE_INTEGER ){
+      doltliteRecordInfoClear(&ri);
       sqlite3_result_double(ctx, (double)f.i);
       return;
     }
   }
   doltliteResultField(ctx, pRec, nRec,
                       ri.aType[iRecField], ri.aOffset[iRecField]);
+  doltliteRecordInfoClear(&ri);
 }
 
 void doltliteResultUserCol(

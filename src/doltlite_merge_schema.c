@@ -1242,6 +1242,7 @@ int normalizeSideToMergedLayout(
   u8 *pKeyRec = 0;
   ProllyCursor oursCur;
   int oursCurInit = 0;
+  DoltliteSerialValue *aMem = 0;
   int rc, res, j;
 
   memset(&oursDefaults, 0, sizeof(oursDefaults));
@@ -1255,9 +1256,7 @@ int normalizeSideToMergedLayout(
   if( rc!=SQLITE_OK ){ freeColumns(aAnc, nAnc); return rc; }
   rc = parseColumns(zTheirsSql, &aTheirs, &nTheirs);
   if( rc!=SQLITE_OK ){
-    freeColumns(aAnc, nAnc);
-    freeColumns(aOurs, nOurs);
-    return rc;
+    freeColumns(aAnc, nAnc); freeColumns(aOurs, nOurs); return rc;
   }
 
   nMerged = nOurs;
@@ -1356,6 +1355,11 @@ int normalizeSideToMergedLayout(
     oursCurInit = 1;
   }
 
+  if( nMergedRecord>0
+   && !(aMem = sqlite3_malloc64((sqlite3_uint64)nMergedRecord * sizeof(*aMem))) ){
+    rc = SQLITE_NOMEM; goto done;
+  }
+
   prollyCursorInit(&cur, cs, cache, pTheirsRoot, flags);
   curInit = 1;
   rc = prollyCursorFirst(&cur, &res);
@@ -1364,8 +1368,7 @@ int normalizeSideToMergedLayout(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal = 0; int nVal = 0;
     const u8 *pKey = 0; int nKey = 0; i64 intKey = 0;
-    DoltliteRecordInfo info;
-    DoltliteSerialValue aMem[DOLTLITE_MAX_RECORD_FIELDS];
+    DoltliteRecordInfo info = {0};
     int nEmit = 0, k;
     int rowOnlyTheirs;
     u8 *pNew = 0; int nNew = 0;
@@ -1432,7 +1435,7 @@ int normalizeSideToMergedLayout(
     /* A PK-covering row stores an empty record; once a filled default
     ** makes the record non-empty its key columns must be spelled out too. */
     if( nEmit>0 && nVal==0 && sideCiInit ){
-      DoltliteRecordInfo kinfo;
+      DoltliteRecordInfo kinfo = {0};
       int nKeyRec = 0;
       rc = doltliteRecordFromClusteredKeyCols(db, &sideCi, pKey, nKey,
                                               &pKeyRec, &nKeyRec);
@@ -1447,6 +1450,7 @@ int normalizeSideToMergedLayout(
         relayoutFieldValue(pKeyRec, &kinfo, src, &aMem[tgt]);
         if( aMem[tgt].eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
       }
+      doltliteRecordInfoClear(&kinfo);
     }
 
     if( nEmit>0 ){
@@ -1457,6 +1461,7 @@ int normalizeSideToMergedLayout(
     sqlite3_free(pNew);
     sqlite3_free(pKeyRec);
     pKeyRec = 0;
+    doltliteRecordInfoClear(&info);
     if( rc!=SQLITE_OK ) goto done;
 
     rc = prollyCursorNext(&cur);
@@ -1476,10 +1481,10 @@ int normalizeSideToMergedLayout(
   }
 
 done:
+  sqlite3_free(aMem); sqlite3_free(pKeyRec);
   mergeColDefaultsFree(&oursDefaults);
   mergeColDefaultsFree(&theirsDefaults);
   if( sideCiInit ) doltliteFreeColInfo(&sideCi);
-  sqlite3_free(pKeyRec);
   if( oursCurInit ) prollyCursorClose(&oursCur);
   if( curInit ) prollyCursorClose(&cur);
   if( mmInit ) prollyMutMapFree(&mm);

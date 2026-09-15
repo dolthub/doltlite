@@ -5,6 +5,7 @@ doltlite_all_suites() {
 build_artifacts_guard_test.sh
 engine_floor_test.sh
 windows_suite_coverage_test.sh
+frame_size_guard_test.sh
 doltlite_clustered_pk_pushdown.sh
 feature_flags_stamp_test.sh
 install_sh_layout_test.sh
@@ -186,6 +187,7 @@ doltlite_windows_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
 windows_suite_coverage_test.sh
+frame_size_guard_test.sh
 sqlite_compatibility_contract_test.sh
 concurrency_contract_test.sh
 storage_format_contract_test.sh

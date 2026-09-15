@@ -151,12 +151,14 @@ static int diffRecordsEqualFieldwise(
   int *pnFieldA,
   int *pnFieldB
 ){
-  DoltliteRecordInfo aInfo;
-  DoltliteRecordInfo bInfo;
+  DoltliteRecordInfo aInfo = {0};
+  DoltliteRecordInfo bInfo = {0};
   int nField;
   int i;
   int rc;
 
+  doltliteRecordInfoInit(&aInfo);
+  doltliteRecordInfoInit(&bInfo);
   *pEqual = 0;
   if( pnFieldA ) *pnFieldA = 0;
   if( pnFieldB ) *pnFieldB = 0;
@@ -179,16 +181,19 @@ static int diffRecordsEqualFieldwise(
       *pnFieldA = pInfo->nField;
     }
     for(i=0; i<pInfo->nField; i++){
-      if( pInfo->aType[i]!=0 ) return SQLITE_OK;
+      if( pInfo->aType[i]!=0 ) goto diff_eq_done;
     }
     *pEqual = 1;
-    return SQLITE_OK;
+    goto diff_eq_done;
   }
 
   rc = doltliteParseRecordStrict(pA, nA, &aInfo);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteParseRecordStrict(pB, nB, &bInfo);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    doltliteRecordInfoClear(&aInfo);
+    return rc;
+  }
   if( pnFieldA ) *pnFieldA = aInfo.nField;
   if( pnFieldB ) *pnFieldB = bInfo.nField;
 
@@ -205,19 +210,22 @@ static int diffRecordsEqualFieldwise(
                                    nA - aInfo.aOffset[i]);
         i64 vB = dlDecodeSerialInt(stB, pB + bInfo.aOffset[i],
                                    nB - bInfo.aOffset[i]);
-        if( vA != vB ) return SQLITE_OK;
+        if( vA != vB ) goto diff_eq_done;
         continue;
       }
-      return SQLITE_OK;
+      goto diff_eq_done;
     }
     szA = dlSerialTypeLen((u64)stA);
     szB = dlSerialTypeLen((u64)stB);
-    if( szA != szB ) return SQLITE_OK;
+    if( szA != szB ) goto diff_eq_done;
     if( szA>0 && memcmp(pA + aInfo.aOffset[i], pB + bInfo.aOffset[i], szA)!=0 ){
-      return SQLITE_OK;
+      goto diff_eq_done;
     }
   }
   *pEqual = 1;
+diff_eq_done:
+  doltliteRecordInfoClear(&aInfo);
+  doltliteRecordInfoClear(&bInfo);
   return SQLITE_OK;
 }
 
@@ -750,18 +758,33 @@ static void diffIterPopFrame(ProllyDiffIter *pIter){
   memset(pF, 0, sizeof(*pF));
 }
 
+static int diffIterEnsurePrefetchBuf(ProllyDiffIter *pIter){
+  if( pIter->pPrefetchPairs ) return SQLITE_OK;
+  pIter->pPrefetchPairs = sqlite3_malloc64(
+      (sqlite3_uint64)DIFF_PREFETCH_MAX_PAIRS * sizeof(DiffPrefetchPair)
+    + (sqlite3_uint64)DIFF_PREFETCH_BATCH_HASHES * sizeof(ProllyHash));
+  if( !pIter->pPrefetchPairs ) return SQLITE_NOMEM;
+  pIter->pPrefetchHashes = (DiffPrefetchPair*)pIter->pPrefetchPairs
+                         + DIFF_PREFETCH_MAX_PAIRS;
+  return SQLITE_OK;
+}
+
 static int diffIterPrefetchPairs(
   ProllyDiffIter *pIter,
   const DiffPrefetchPair *aInitial,
   int nInitial
 ){
-  DiffPrefetchPair aPair[DIFF_PREFETCH_MAX_PAIRS];
-  ProllyHash aHash[DIFF_PREFETCH_BATCH_HASHES];
+  DiffPrefetchPair *aPair;
+  ProllyHash *aHash;
   int iLevel = 0;
   int nPair = nInitial;
   int rc = SQLITE_OK;
 
   if( !pIter->pStore->pChunkSource || nInitial==0 ) return SQLITE_OK;
+  rc = diffIterEnsurePrefetchBuf(pIter);
+  if( rc!=SQLITE_OK ) return rc;
+  aPair = (DiffPrefetchPair*)pIter->pPrefetchPairs;
+  aHash = (ProllyHash*)pIter->pPrefetchHashes;
   memcpy(aPair, aInitial, (size_t)nInitial * sizeof(DiffPrefetchPair));
 
   while( iLevel<nPair ){
@@ -837,13 +860,17 @@ static int diffIterPrefetchFrame(
   ProllyDiffIter *pIter,
   DiffIterFrame *pF
 ){
-  DiffPrefetchPair aPair[DIFF_PREFETCH_MAX_PAIRS];
+  DiffPrefetchPair *aPair;
   int i = pF->i;
   int j = pF->j;
   int nPair = 0;
+  int rc;
 
   if( !pIter->pStore->pChunkSource ) return SQLITE_OK;
   if( i<pF->iPrefetched && j<pF->jPrefetched ) return SQLITE_OK;
+  rc = diffIterEnsurePrefetchBuf(pIter);
+  if( rc!=SQLITE_OK ) return rc;
+  aPair = (DiffPrefetchPair*)pIter->pPrefetchPairs;
 
   while( i<(int)pF->oldNode.nItems
       && j<(int)pF->newNode.nItems
@@ -1186,6 +1213,9 @@ void prollyDiffIterClose(ProllyDiffIter *pIter){
   sqlite3_free(pIter->aFrames);
   pIter->aFrames = 0;
   pIter->nFramesAlloc = 0;
+  sqlite3_free(pIter->pPrefetchPairs);
+  pIter->pPrefetchPairs = 0;
+  pIter->pPrefetchHashes = 0;
   diffIterFreeCopies(pIter);
   pIter->eof = 1;
 }

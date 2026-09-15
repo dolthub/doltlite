@@ -252,6 +252,16 @@ int doltliteValidateRefsTargetGraph(
 
 #define SYNC_BATCH_SIZE 256
 
+typedef struct SyncBatchBuf SyncBatchBuf;
+struct SyncBatchBuf {
+  ProllyHash aBatch[SYNC_BATCH_SIZE];
+  ProllyHash aFetch[SYNC_BATCH_SIZE];
+  u8 aPresent[SYNC_BATCH_SIZE];
+  u8 aPut[SYNC_BATCH_SIZE];
+  u8 *apData[SYNC_BATCH_SIZE];
+  int anData[SYNC_BATCH_SIZE];
+};
+
 /* Fetched chunk must hash to the requested address, else wrong bytes are
 ** stored under their own hash and still walked by syncEnqueueChildren. */
 static int syncVerifyFetchedChunk(
@@ -274,18 +284,24 @@ int doltliteSyncChunks(
 ){
   SyncQueue queue;
   ProllyHashSet seen;
-  ProllyHash aBatch[SYNC_BATCH_SIZE];
-  u8 aPresent[SYNC_BATCH_SIZE];
+  SyncBatchBuf *pB;
   int bFirstBatch = 1;
   int bResumeScan = 0;
   int rc, i;
 
+  pB = sqlite3_malloc64(sizeof(*pB));
+  if( !pB ) return SQLITE_NOMEM;
+
   rc = syncQueueInit(&queue);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pB);
+    return rc;
+  }
 
   rc = prollyHashSetInit(&seen, 256);
   if( rc!=SQLITE_OK ){
     syncQueueFree(&queue);
+    sqlite3_free(pB);
     return rc;
   }
 
@@ -299,17 +315,18 @@ int doltliteSyncChunks(
   while( rc==SQLITE_OK && syncQueuePending(&queue) > 0 ){
     int nBatch = 0;
 
-    while( nBatch < SYNC_BATCH_SIZE && syncQueuePop(&queue, &aBatch[nBatch]) ){
+    while( nBatch < SYNC_BATCH_SIZE
+        && syncQueuePop(&queue, &pB->aBatch[nBatch]) ){
       nBatch++;
     }
     if( nBatch == 0 ) break;
 
-    rc = pDst->xHasChunks(pDst, aBatch, nBatch, aPresent);
+    rc = pDst->xHasChunks(pDst, pB->aBatch, nBatch, pB->aPresent);
     if( rc!=SQLITE_OK ) break;
     if( bFirstBatch && pDst->bResumePartialPuts ){
       bResumeScan = 1;
       for(i=0; i<nBatch; i++){
-        if( !aPresent[i] ){
+        if( !pB->aPresent[i] ){
           bResumeScan = 0;
           break;
         }
@@ -320,50 +337,47 @@ int doltliteSyncChunks(
     /* A resumed partial put may have persisted a parent before missing
     ** descendants; scan below present roots. */
     {
-      ProllyHash aFetch[SYNC_BATCH_SIZE];
-      u8 aPut[SYNC_BATCH_SIZE];
       int nFetch = 0;
 
       for(i=0; i<nBatch; i++){
-        if( !aPresent[i] || bResumeScan ){
-          aFetch[nFetch] = aBatch[i];
-          aPut[nFetch] = !aPresent[i];
+        if( !pB->aPresent[i] || bResumeScan ){
+          pB->aFetch[nFetch] = pB->aBatch[i];
+          pB->aPut[nFetch] = !pB->aPresent[i];
           nFetch++;
         }
       }
       if( nFetch==0 ) continue;
 
       if( pSrc->xGetChunks ){
-        u8 *apData[SYNC_BATCH_SIZE];
-        int anData[SYNC_BATCH_SIZE];
-
-        memset(apData, 0, sizeof(apData[0]) * nFetch);
-        rc = pSrc->xGetChunks(pSrc, aFetch, nFetch, apData, anData);
+        memset(pB->apData, 0, sizeof(pB->apData[0]) * nFetch);
+        rc = pSrc->xGetChunks(pSrc, pB->aFetch, nFetch, pB->apData, pB->anData);
         for(i=0; i<nFetch && rc==SQLITE_OK; i++){
-          if( !apData[i] ){ rc = SQLITE_NOTFOUND; break; }
-          rc = syncVerifyFetchedChunk(&aFetch[i], apData[i], anData[i]);
+          if( !pB->apData[i] ){ rc = SQLITE_NOTFOUND; break; }
+          rc = syncVerifyFetchedChunk(&pB->aFetch[i], pB->apData[i], pB->anData[i]);
           if( rc!=SQLITE_OK ) break;
-          if( aPut[i] ){
-            rc = pDst->xPutChunk(pDst, &aFetch[i], apData[i], anData[i]);
+          if( pB->aPut[i] ){
+            rc = pDst->xPutChunk(pDst, &pB->aFetch[i],
+                                 pB->apData[i], pB->anData[i]);
           }
           if( rc==SQLITE_OK ){
-            rc = syncEnqueueChildren(apData[i], anData[i], &queue, &seen);
+            rc = syncEnqueueChildren(pB->apData[i], pB->anData[i],
+                                     &queue, &seen);
           }
         }
-        for(i=0; i<nFetch; i++) sqlite3_free(apData[i]);
+        for(i=0; i<nFetch; i++) sqlite3_free(pB->apData[i]);
       }else{
         for(i=0; i<nFetch && rc==SQLITE_OK; i++){
           u8 *data = 0;
           int nData = 0;
-          rc = pSrc->xGetChunk(pSrc, &aFetch[i], &data, &nData);
+          rc = pSrc->xGetChunk(pSrc, &pB->aFetch[i], &data, &nData);
           if( rc!=SQLITE_OK ) break;
-          rc = syncVerifyFetchedChunk(&aFetch[i], data, nData);
+          rc = syncVerifyFetchedChunk(&pB->aFetch[i], data, nData);
           if( rc!=SQLITE_OK ){
             sqlite3_free(data);
             break;
           }
-          if( aPut[i] ){
-            rc = pDst->xPutChunk(pDst, &aFetch[i], data, nData);
+          if( pB->aPut[i] ){
+            rc = pDst->xPutChunk(pDst, &pB->aFetch[i], data, nData);
           }
           if( rc==SQLITE_OK ){
             rc = syncEnqueueChildren(data, nData, &queue, &seen);
@@ -376,6 +390,7 @@ int doltliteSyncChunks(
 
   prollyHashSetFree(&seen);
   syncQueueFree(&queue);
+  sqlite3_free(pB);
   return rc;
 }
 

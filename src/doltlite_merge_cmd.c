@@ -226,7 +226,7 @@ static int mergeSplitSequenceRoot(
     const u8 *pVal = 0;
     int nVal = 0;
     i64 intKey = prollyCursorIntKey(&cur);
-    DoltliteRecordInfo info;
+    DoltliteRecordInfo info = {0};
     char *zOwner = 0;
     int isIgnored = 0;
     ProllyMutMap *pMap;
@@ -247,6 +247,7 @@ static int mergeSplitSequenceRoot(
       rc = prollyCursorNext(&cur);
     }
     sqlite3_free(zOwner);
+    doltliteRecordInfoClear(&info);
   }
   prollyCursorClose(&cur);
   if( rc==SQLITE_OK ){

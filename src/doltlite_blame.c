@@ -994,7 +994,7 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
     if( cid == v->intPkCid ){
       sqlite3_result_int64(ctx, r->intKey);
     }else if( r->pCurVal && r->nCurVal>0 ){
-      DoltliteRecordInfo ri;
+      DoltliteRecordInfo ri = {0};
       doltliteParseRecord(r->pCurVal, r->nCurVal, &ri);
       if( iCol < ri.nField ){
         doltliteResultField(ctx, r->pCurVal, r->nCurVal,
@@ -1002,6 +1002,7 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
       }else{
         sqlite3_result_null(ctx);
       }
+      doltliteRecordInfoClear(&ri);
     }else{
       sqlite3_result_null(ctx);
     }
