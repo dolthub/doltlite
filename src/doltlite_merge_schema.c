@@ -1256,9 +1256,7 @@ int normalizeSideToMergedLayout(
   if( rc!=SQLITE_OK ){ freeColumns(aAnc, nAnc); return rc; }
   rc = parseColumns(zTheirsSql, &aTheirs, &nTheirs);
   if( rc!=SQLITE_OK ){
-    freeColumns(aAnc, nAnc);
-    freeColumns(aOurs, nOurs);
-    return rc;
+    freeColumns(aAnc, nAnc); freeColumns(aOurs, nOurs); return rc;
   }
 
   nMerged = nOurs;
@@ -1357,10 +1355,9 @@ int normalizeSideToMergedLayout(
     oursCurInit = 1;
   }
 
-  if( nMergedRecord>0 ){
-    aMem = sqlite3_malloc64(
-        (sqlite3_uint64)nMergedRecord * sizeof(DoltliteSerialValue));
-    if( !aMem ){ rc = SQLITE_NOMEM; goto done; }
+  if( nMergedRecord>0
+   && !(aMem = sqlite3_malloc64((sqlite3_uint64)nMergedRecord * sizeof(*aMem))) ){
+    rc = SQLITE_NOMEM; goto done;
   }
 
   prollyCursorInit(&cur, cs, cache, pTheirsRoot, flags);
@@ -1484,11 +1481,10 @@ int normalizeSideToMergedLayout(
   }
 
 done:
-  sqlite3_free(aMem);
+  sqlite3_free(aMem); sqlite3_free(pKeyRec);
   mergeColDefaultsFree(&oursDefaults);
   mergeColDefaultsFree(&theirsDefaults);
   if( sideCiInit ) doltliteFreeColInfo(&sideCi);
-  sqlite3_free(pKeyRec);
   if( oursCurInit ) prollyCursorClose(&oursCur);
   if( curInit ) prollyCursorClose(&cur);
   if( mmInit ) prollyMutMapFree(&mm);
