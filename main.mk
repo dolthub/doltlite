@@ -399,8 +399,9 @@ T.compile = $(T.cc) $(T.compile.gcov)
 # can include the generated sqlite_cfg.h.
 #
 T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
-    -Wdeclaration-after-statement \
-    -Wframe-larger-than=16384
+    -Wdeclaration-after-statement
+# Library objects only. Test binaries (T.link) can have large frames.
+T.cc.sqlite.frame = -Wframe-larger-than=16384
 
 #
 # $(T.cc.sqlite) is $(T.cc) plus any flags which are desired for the
@@ -408,7 +409,7 @@ T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
 # will normally get initially populated with flags by the
 # configure-generated makefile.
 #
-T.cc.sqlite ?= $(T.compile) $(T.cc.sqlite.extras)
+T.cc.sqlite ?= $(T.compile) $(T.cc.sqlite.extras) $(T.cc.sqlite.frame)
 
 #
 # $(CFLAGS.intree_includes) = -I... flags relevant specifically to
@@ -433,7 +434,8 @@ T.cc.extension = $(T.compile) -I. -I$(TOP)/src $(T.cc.sqlite.extras) -DSQLITE_CO
 # $(T.link.gcov) = optional config-specific flags for $(T.link),
 # intended for use with gcov-related flags.
 #
-T.link = $(T.cc.sqlite) $(T.link.gcov)
+T.link = $(T.compile) $(T.cc.sqlite.extras) $(CFLAGS.intree_includes) \
+    $(T.link.gcov)
 #
 # $(T.link.shared) = $(T.link) invocation specifically for shared libraries
 #
