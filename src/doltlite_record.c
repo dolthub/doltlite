@@ -527,10 +527,8 @@ int doltliteParseRecordStrict(
   const u8 *pHdrEnd;
   int nField = 0;
 
-  if( pInfo->aType && pInfo->aType!=pInfo->aTypeSpace ){
-    sqlite3_free(pInfo->aType);
-    pInfo->aType = 0;
-  }
+  /* Treat pInfo as uninitialized. Callers that re-parse the same struct
+  ** must Clear first or they leak a previous heap spill. */
   doltliteRecordInfoInit(pInfo);
   if( !pData || nData < 1 ) return SQLITE_CORRUPT;
   p = pData;
