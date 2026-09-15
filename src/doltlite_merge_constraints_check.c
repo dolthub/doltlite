@@ -2,105 +2,88 @@
 
 #include "doltlite_merge_constraints_int.h"
 
-static int checkIsIdent(char c){
-  return sqlite3Isalnum(c) || c=='_';
+static int nextCheckToken(const char **pzSql, int *pType){
+  int n;
+  do{
+    if( !**pzSql ) return 0;
+    n = sqlite3GetToken((const u8*)*pzSql, pType);
+    if( n<=0 || *pType==TK_ILLEGAL ) return -SQLITE_CORRUPT;
+    if( *pType!=TK_SPACE && *pType!=TK_COMMENT ) return n;
+    *pzSql += n;
+  }while( 1 );
 }
 
 static int nextCheckClause(
   const char *zSql, int *pOffset, char **pzExpr, char **pzName
 ){
   const char *p = zSql + *pOffset;
-  const char *pEnd;
-  char lastConstraintName[128] = {0};
-  int depth;
-  const char *pExprStart;
+  const char *zName = 0;
+  int nName = 0;
+  int type, n;
 
   *pzExpr = 0;
   *pzName = 0;
 
-  while( *p ){
-    if( (p==zSql || !checkIsIdent(p[-1]))
-     && (p[0]=='C' || p[0]=='c')
-     && sqlite3_strnicmp(p, "CONSTRAINT", 10)==0
-     && (p[10]==' ' || p[10]=='\t' || p[10]=='\n') ){
-      int i = 0;
-      p += 10;
-      while( *p==' ' || *p=='\t' || *p=='\n' ) p++;
-      while( *p && *p!=' ' && *p!='\t' && *p!='\n' && *p!='(' && i<127 ){
-        lastConstraintName[i++] = *p++;
-      }
-      lastConstraintName[i] = 0;
+  while( (n = nextCheckToken(&p, &type))>0 ){
+    p += n;
+    if( type==TK_CONSTRAINT ){
+      n = nextCheckToken(&p, &type);
+      if( n<=0 ) return n<0 ? n : -SQLITE_CORRUPT;
+      zName = p;
+      nName = n;
+      p += n;
       continue;
     }
-    if( (p==zSql || !checkIsIdent(p[-1]))
-     && (p[0]=='C' || p[0]=='c')
-     && sqlite3_strnicmp(p, "CHECK", 5)==0
-     && (p[5]==' ' || p[5]=='\t' || p[5]=='(' || p[5]=='\n') ){
-      p += 5;
-      while( *p==' ' || *p=='\t' || *p=='\n' ) p++;
-      if( *p!='(' ){ p++; lastConstraintName[0] = 0; continue; }
-      p++;
+    if( type==TK_CHECK ){
+      const char *pExprStart;
+      const char *pEnd;
+      int depth = 1;
+      n = nextCheckToken(&p, &type);
+      if( n<=0 || type!=TK_LP ) return -SQLITE_CORRUPT;
+      p += n;
       pExprStart = p;
-      depth = 1;
-      while( *p && depth>0 ){
-        char c = *p;
-        if( c=='\'' ){
-          p++;
-          while( *p && !(*p=='\'' && p[1]!='\'') ){
-            if( *p=='\'' && p[1]=='\'' ) p++;
-            p++;
-          }
-          if( *p=='\'' ) p++;
-          continue;
-        }
-        if( c=='"' ){
-          p++;
-          while( *p && *p!='"' ) p++;
-          if( *p=='"' ) p++;
-          continue;
-        }
-        if( c=='(' ) depth++;
-        else if( c==')' ) depth--;
-        if( depth>0 ) p++;
+      while( depth>0 ){
+        n = nextCheckToken(&p, &type);
+        if( n<=0 ) return n<0 ? n : -SQLITE_CORRUPT;
+        if( type==TK_LP ) depth++;
+        if( type==TK_RP ) depth--;
+        pEnd = p;
+        p += n;
       }
-      if( depth!=0 ) return -SQLITE_CORRUPT;
-      pEnd = p;
-      p++;
-      *pzExpr = sqlite3_malloc((int)(pEnd - pExprStart) + 1);
+      *pzExpr = sqlite3_mprintf("%.*s", (int)(pEnd-pExprStart), pExprStart);
       if( !*pzExpr ) return -SQLITE_NOMEM;
-      memcpy(*pzExpr, pExprStart, (size_t)(pEnd - pExprStart));
-      (*pzExpr)[pEnd - pExprStart] = 0;
-      if( lastConstraintName[0] ){
-        *pzName = sqlite3_mprintf("%s", lastConstraintName);
+      if( zName ){
+        *pzName = sqlite3_mprintf("%.*s", nName, zName);
         if( !*pzName ){
           sqlite3_free(*pzExpr);
           *pzExpr = 0;
           return -SQLITE_NOMEM;
         }
+        sqlite3Dequote(*pzName);
       }
       *pOffset = (int)(p - zSql);
       return 1;
     }
-    if( *p=='\'' ){
-      p++;
-      while( *p && !(*p=='\'' && p[1]!='\'') ){
-        if( *p=='\'' && p[1]=='\'' ) p++;
-        p++;
-      }
-      if( *p=='\'' ) p++;
-      continue;
-    }
-    if( *p=='"' ){
-      p++;
-      while( *p && *p!='"' ) p++;
-      if( *p=='"' ) p++;
-      continue;
-    }
-    if( *p==',' ) lastConstraintName[0] = 0;
-    p++;
+    zName = 0;
   }
   *pOffset = (int)(p - zSql);
-  return 0;
+  return n;
+}
+
+static void appendCheckJsonString(sqlite3_str *pJson, const char *z){
+  sqlite3_str_appendchar(pJson, 1, '"');
+  for(; *z; z++){
+    unsigned char c = (unsigned char)*z;
+    if( c=='"' || c=='\\' ){
+      sqlite3_str_appendchar(pJson, 1, '\\');
+      sqlite3_str_appendchar(pJson, 1, c);
+    }else if( c<0x20 ){
+      sqlite3_str_appendf(pJson, "\\u%04x", c);
+    }else{
+      sqlite3_str_appendchar(pJson, 1, c);
+    }
+  }
+  sqlite3_str_appendchar(pJson, 1, '"');
 }
 
 typedef struct CheckWalk CheckWalk;
@@ -175,6 +158,7 @@ static int checkWalkTable(
       u8 *pKey = 0; int nKey = 0;
       u8 *pVal = 0; int nVal = 0;
       char *zInfo;
+      sqlite3_str *pJson;
       int appendRc;
       i64 intKey = 0;
 
@@ -213,9 +197,13 @@ static int checkWalkTable(
         }
       }
 
-      zInfo = sqlite3_mprintf(
-          "{\"Name\": \"%w\", \"Expression\": \"%w\"}",
-          zCkName ? zCkName : "", zExpr);
+      pJson = sqlite3_str_new(db);
+      sqlite3_str_appendall(pJson, "{\"Name\": ");
+      appendCheckJsonString(pJson, zCkName ? zCkName : "");
+      sqlite3_str_appendall(pJson, ", \"Expression\": ");
+      appendCheckJsonString(pJson, zExpr);
+      sqlite3_str_appendchar(pJson, 1, '}');
+      zInfo = sqlite3_str_finish(pJson);
       if( !zInfo ){
         sqlite3_free(pKey);
         sqlite3_free(pVal);
