@@ -2002,46 +2002,66 @@ typedef struct IntegrityCheckCtx IntegrityCheckCtx;
 struct IntegrityCheckCtx {
   BtShared *pBt;
   ProllyHashSet seen;
+  ProllyHash *aPending;
+  int nPending;
+  int nAlloc;
   int mxErr;
   int *pnErr;
 };
 
-static int integrityCheckChunkGraph(IntegrityCheckCtx *pCtx, const ProllyHash *pHash);
-
 static int integrityCheckChildCb(void *pArg, const ProllyHash *pHash){
-  return integrityCheckChunkGraph((IntegrityCheckCtx*)pArg, pHash);
+  IntegrityCheckCtx *pCtx = (IntegrityCheckCtx*)pArg;
+  int rc;
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  if( pCtx->mxErr>0 && *pCtx->pnErr>=pCtx->mxErr ) return SQLITE_OK;
+  if( prollyHashSetContains(&pCtx->seen, pHash) ) return SQLITE_OK;
+  if( pCtx->nPending==pCtx->nAlloc ){
+    int nNew;
+    ProllyHash *aNew;
+    if( pCtx->nAlloc>INT_MAX/(2*(int)sizeof(ProllyHash)) ){
+      return SQLITE_NOMEM;
+    }
+    nNew = pCtx->nAlloc ? pCtx->nAlloc*2 : 64;
+    aNew = sqlite3_realloc64(pCtx->aPending,
+                            (sqlite3_uint64)nNew*sizeof(ProllyHash));
+    if( !aNew ) return SQLITE_NOMEM;
+    pCtx->aPending = aNew;
+    pCtx->nAlloc = nNew;
+  }
+  rc = prollyHashSetAdd(&pCtx->seen, pHash);
+  if( rc==SQLITE_OK ) pCtx->aPending[pCtx->nPending++] = *pHash;
+  return rc;
 }
 
 static int integrityCheckChunkGraph(
   IntegrityCheckCtx *pCtx,
   const ProllyHash *pHash
 ){
-  u8 *pData = 0;
-  int nData = 0;
   int rc;
-
-  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
-  if( pCtx->mxErr>0 && *pCtx->pnErr>=pCtx->mxErr ) return SQLITE_OK;
-  if( prollyHashSetContains(&pCtx->seen, pHash) ) return SQLITE_OK;
-
-  rc = prollyHashSetAdd(&pCtx->seen, pHash);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = chunkStoreGet(&pCtx->pBt->store, pHash, &pData, &nData);
-  if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
-    char *zSourceErr = chunkStoreSourceTakeError(&pCtx->pBt->store, 0);
-    sqlite3_free(zSourceErr);
-    (*pCtx->pnErr)++;
-    return SQLITE_OK;
+  assert( pCtx->nPending==0 );
+  rc = integrityCheckChildCb(pCtx, pHash);
+  while( rc==SQLITE_OK && pCtx->nPending>0 ){
+    ProllyHash hash = pCtx->aPending[--pCtx->nPending];
+    u8 *pData = 0;
+    int nData = 0;
+    if( pCtx->mxErr>0 && *pCtx->pnErr>=pCtx->mxErr ) break;
+    rc = chunkStoreGet(&pCtx->pBt->store, &hash, &pData, &nData);
+    if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
+      char *zSourceErr = chunkStoreSourceTakeError(&pCtx->pBt->store, 0);
+      sqlite3_free(zSourceErr);
+      (*pCtx->pnErr)++;
+      rc = SQLITE_OK;
+      continue;
+    }
+    if( rc!=SQLITE_OK ) break;
+    rc = doltliteEnumerateChunkChildren(pData, nData, integrityCheckChildCb, pCtx);
+    sqlite3_free(pData);
+    if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
+      (*pCtx->pnErr)++;
+      rc = SQLITE_OK;
+    }
   }
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteEnumerateChunkChildren(pData, nData, integrityCheckChildCb, pCtx);
-  sqlite3_free(pData);
-  if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
-    (*pCtx->pnErr)++;
-    return SQLITE_OK;
-  }
+  pCtx->nPending = 0;
   return rc;
 }
 
@@ -2100,6 +2120,7 @@ int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
     rc = integrityCheckChunkGraph(&ctx, &p->vc.conflictsCatalogHash);
   }
 
+  sqlite3_free(ctx.aPending);
   prollyHashSetFree(&ctx.seen);
   if( pnErr ) *pnErr = nErr;
   return rc;
@@ -2202,6 +2223,7 @@ int sqlite3BtreeIntegrityCheck(
   nErr += i;
 
 integrity_done:
+  sqlite3_free(ctx.aPending);
   prollyHashSetFree(&ctx.seen);
   if( rc!=SQLITE_OK ){
     /* OP_IntegrityCk always reads *pnErr and frees *pzOut; count this fail. */
