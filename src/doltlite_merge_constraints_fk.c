@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_merge_constraints_int.h"
+#include "vdbeInt.h"
 
 /* Unnamed azTo slots are the parent PK by position. */
 static int backfillParentPk(sqlite3 *db, const char *zParent,
@@ -41,136 +42,191 @@ static int tableColumnIndex(const DoltliteColInfo *pCols, const char *zName){
   return -1;
 }
 
-static int recordFieldEqualsInt64(
-  const u8 *pRec,
-  int nRec,
-  int serialType,
-  int off,
-  i64 v
+typedef struct FkParentLookup FkParentLookup;
+struct FkParentLookup {
+  int ready;
+  int isIntPk;
+  int cursorOpen;
+  int nCol;
+  struct TableEntry *pParent;
+  Table *pTab;
+  DoltliteColInfo cols;
+  int *aiCol;
+  ProllyCursor cur;
+  Btree *pIndex;
+  BtCursor *pIndexCur;
+  KeyInfo *pKeyInfo;
+  UnpackedRecord *pProbe;
+};
+
+static void fkParentLookupClear(sqlite3 *db, FkParentLookup *p){
+  if( p->cursorOpen ){
+    sqlite3BtreeCloseCursor(p->pIndexCur);
+  }else if( p->pIndex ){
+    sqlite3BtreeClose(p->pIndex);
+  }
+  sqlite3_free(p->pIndexCur);
+  if( p->pProbe ){
+    for(int i=0; i<p->nCol; i++){
+      sqlite3VdbeMemRelease(&p->pProbe->aMem[i]);
+    }
+    sqlite3DbFree(db, p->pProbe);
+  }
+  sqlite3KeyInfoUnref(p->pKeyInfo);
+  if( p->ready && p->pParent ) prollyCursorClose(&p->cur);
+  sqlite3_free(p->aiCol);
+  doltliteFreeColInfo(&p->cols);
+}
+
+static int fkParentLookupInit(
+  sqlite3 *db,
+  struct TableEntry *aCur, int nCur,
+  const char *zParentTable,
+  char **azTo, int nCol,
+  FkParentLookup *p
 ){
-  i64 got;
-  int nByte;
-  if( serialType==8 ) return v==0;
-  if( serialType==9 ) return v==1;
-  if( serialType<1 || serialType>6 ) return 0;
-  nByte = dlSerialTypeLen((u64)serialType);
-  if( off<0 || off+nByte>nRec ) return 0;
-  got = dlReadIntBytes(pRec + off, nByte);
-  return got==v;
+  Table *pTab;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  DoltliteSerialValue *aValue = 0;
+  Pgno root;
+  int rc, res = 0;
+
+  p->pParent = doltliteFindTableByName(aCur, nCur, zParentTable);
+  if( !p->pParent || prollyHashIsEmpty(&p->pParent->root) ){
+    p->pParent = 0;
+    p->ready = 1;
+    return SQLITE_OK;
+  }
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  prollyCursorInit(&p->cur, cs, pCache, &p->pParent->root, p->pParent->flags);
+  p->ready = 1;
+  p->nCol = nCol;
+  rc = doltliteGetColumnNames(db, zParentTable, &p->cols);
+  if( rc!=SQLITE_OK ) return rc;
+  pTab = sqlite3FindTable(db, zParentTable, "main");
+  if( !pTab ) return SQLITE_ERROR;
+  p->pTab = pTab;
+  p->aiCol = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(int));
+  p->pKeyInfo = sqlite3KeyInfoAlloc(db, nCol, 0);
+  if( !p->aiCol || !p->pKeyInfo ) return SQLITE_NOMEM;
+  for(int i=0; i<nCol; i++){
+    int col = tableColumnIndex(&p->cols, azTo[i]);
+    const char *zColl;
+    if( col<0 || col>=pTab->nCol ) return SQLITE_ERROR;
+    p->aiCol[i] = col;
+    zColl = sqlite3ColumnColl(&pTab->aCol[col]);
+    p->pKeyInfo->aColl[i] = sqlite3FindCollSeq(db, ENC(db),
+                                            zColl ? zColl : "BINARY", 0);
+    if( !p->pKeyInfo->aColl[i] || !p->pKeyInfo->aColl[i]->xCmp ){
+      return SQLITE_ERROR;
+    }
+  }
+  p->pProbe = sqlite3VdbeAllocUnpackedRecord(p->pKeyInfo);
+  if( !p->pProbe ) return SQLITE_NOMEM;
+  p->pProbe->nField = nCol;
+  p->pProbe->default_rc = 0;
+  for(int i=0; i<nCol; i++){
+    sqlite3VdbeMemInit(&p->pProbe->aMem[i], db, MEM_Null);
+  }
+  p->isIntPk = nCol==1 && (p->pParent->flags & PROLLY_NODE_INTKEY)
+      && p->cols.iPkCol==p->aiCol[0];
+  if( p->isIntPk ) return SQLITE_OK;
+
+  /* Rebuilt secondary indexes need not yet reflect the merged table root. */
+  rc = sqlite3BtreeOpen(db->pVfs, 0, db, &p->pIndex,
+      BTREE_OMIT_JOURNAL | BTREE_SINGLE,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE
+      | SQLITE_OPEN_DELETEONCLOSE | SQLITE_OPEN_TRANSIENT_DB);
+  if( rc==SQLITE_OK ) rc = sqlite3BtreeBeginTrans(p->pIndex, 1, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3BtreeCreateTable(p->pIndex, &root, BTREE_BLOBKEY);
+  if( rc!=SQLITE_OK ) return rc;
+  p->pIndexCur = sqlite3MallocZero(sqlite3BtreeCursorSize());
+  if( !p->pIndexCur ) return SQLITE_NOMEM;
+  rc = sqlite3BtreeCursor(p->pIndex, root, BTREE_WRCSR, p->pKeyInfo, p->pIndexCur);
+  if( rc!=SQLITE_OK ) return rc;
+  p->cursorOpen = 1;
+  aValue = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(*aValue));
+  if( !aValue ) return SQLITE_NOMEM;
+  rc = prollyCursorFirst(&p->cur, &res);
+  while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&p->cur) ){
+    const u8 *pVal;
+    int nVal;
+    u8 *pDecoded = 0;
+    u8 *pRecord = 0;
+    int nRecord = 0;
+    DoltliteRecordInfo info;
+    BtreePayload payload;
+    prollyCursorValue(&p->cur, &pVal, &nVal);
+    if( nVal==0 && (p->pParent->flags & PROLLY_NODE_INTKEY)==0 ){
+      const u8 *pKey;
+      int nKey;
+      prollyCursorKey(&p->cur, &pKey, &nKey);
+      rc = doltliteRecordFromClusteredKeyCols(db, &p->cols,
+          pKey, nKey, &pDecoded, &nVal);
+      pVal = pDecoded;
+    }
+    if( rc==SQLITE_OK ) rc = doltliteParseRecordStrict(pVal, nVal, &info);
+    memset(aValue, 0, (size_t)nCol * sizeof(*aValue));
+    for(int i=0; i<nCol && rc==SQLITE_OK; i++){
+      int col = p->aiCol[i];
+      if( (p->pParent->flags & PROLLY_NODE_INTKEY) && col==p->cols.iPkCol ){
+        aValue[i].eType = SQLITE_INTEGER;
+        aValue[i].i = prollyCursorIntKey(&p->cur);
+      }else{
+        rc = doltliteSerialValueFromField(pVal, nVal, &info,
+                                          p->cols.aColToRec[col], &aValue[i]);
+      }
+    }
+    if( rc==SQLITE_OK ){
+      pRecord = doltliteBuildRecord(aValue, nCol, &nRecord);
+      if( !pRecord ) rc = SQLITE_NOMEM;
+    }
+    if( rc==SQLITE_OK ){
+      memset(&payload, 0, sizeof(payload));
+      payload.pKey = pRecord;
+      payload.nKey = nRecord;
+      rc = sqlite3BtreeInsert(p->pIndexCur, &payload, 0, 0);
+    }
+    sqlite3_free(pRecord);
+    sqlite3_free(pDecoded);
+    if( rc==SQLITE_OK ) rc = prollyCursorNext(&p->cur);
+  }
+  sqlite3_free(aValue);
+  prollyCursorClose(&p->cur);
+  return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 static int fkParentExistsInCatalog(
   sqlite3 *db,
-  struct TableEntry *aCur, int nCur,
-  const char *zParentTable,
-  char **azTo,
-  int nCol,
-  const u8 *pChildFkRec,
-  int nChildFkRec,
+  FkParentLookup *p,
+  sqlite3_stmt *pStmt,
+  int iFirst,
   int *pExists
 ){
-  ChunkStore *cs;
-  ProllyCache *pCache;
-  struct TableEntry *pParent;
-  DoltliteColInfo parentCols;
-  DoltliteRecordInfo childInfo;
-  int *aiParentCol = 0;
-  u8 *pParentRec = 0;
-  ProllyCursor cur;
+  int rc = SQLITE_OK;
   int res = 0;
-  int rc;
-  int i;
-
   *pExists = 0;
-  if( !aCur || nCur==0 ) return SQLITE_OK;
-  pParent = doltliteFindTableByName(aCur, nCur, zParentTable);
-  if( !pParent || prollyHashIsEmpty(&pParent->root) ) return SQLITE_OK;
-
-  rc = doltliteParseRecordStrict(pChildFkRec, nChildFkRec, &childInfo);
-  if( rc!=SQLITE_OK ) return rc;
-  if( childInfo.nField<nCol ) return SQLITE_CORRUPT;
-
-  memset(&parentCols, 0, sizeof(parentCols));
-  rc = doltliteGetColumnNames(db, zParentTable, &parentCols);
-  if( rc!=SQLITE_OK ) return rc;
-
-  aiParentCol = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(int));
-  if( !aiParentCol ){
-    doltliteFreeColInfo(&parentCols);
-    return SQLITE_NOMEM;
+  if( !p->pParent ) return SQLITE_OK;
+  for(int i=0; i<p->nCol; i++){
+    Mem *pValue = &p->pProbe->aMem[i];
+    rc = sqlite3VdbeMemCopy(pValue, (Mem*)sqlite3_column_value(pStmt, iFirst+i));
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3ValueApplyAffinity(pValue, p->pTab->aCol[p->aiCol[i]].affinity, ENC(db));
+    if( db->mallocFailed ) return SQLITE_NOMEM;
   }
-  for(i=0; i<nCol; i++){
-    aiParentCol[i] = tableColumnIndex(&parentCols, azTo[i]);
-    if( aiParentCol[i]<0 ){
-      sqlite3_free(aiParentCol);
-      doltliteFreeColInfo(&parentCols);
-      return SQLITE_ERROR;
-    }
+  if( p->isIntPk ){
+    Mem *pValue = &p->pProbe->aMem[0];
+    if( (pValue->flags & MEM_Int)==0 ) return SQLITE_OK;
+    rc = prollyCursorSeekInt(&p->cur, pValue->u.i, &res);
+    *pExists = rc==SQLITE_OK && res==0 && prollyCursorIsValid(&p->cur);
+  }else{
+    p->pProbe->errCode = 0;
+    rc = sqlite3BtreeIndexMoveto(p->pIndexCur, p->pProbe, &res);
+    if( rc==SQLITE_OK && p->pProbe->errCode ) rc = p->pProbe->errCode;
+    *pExists = rc==SQLITE_OK && res==0;
   }
-
-  cs = doltliteGetChunkStore(db);
-  pCache = doltliteGetCache(db);
-  if( !cs || !pCache ){
-    sqlite3_free(aiParentCol);
-    doltliteFreeColInfo(&parentCols);
-    return SQLITE_ERROR;
-  }
-
-  prollyCursorInit(&cur, cs, pCache, &pParent->root, pParent->flags);
-  rc = prollyCursorFirst(&cur, &res);
-  while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur) ){
-    const u8 *pParentVal = 0;
-    int nParentVal = 0;
-    DoltliteRecordInfo parentInfo;
-    int match = 1;
-
-    sqlite3_free(pParentRec);
-    pParentRec = 0;
-    prollyCursorValue(&cur, &pParentVal, &nParentVal);
-    if( nParentVal==0 && (pParent->flags & PROLLY_NODE_INTKEY)==0 ){
-      const u8 *pParentKey;
-      int nParentKey;
-      prollyCursorKey(&cur, &pParentKey, &nParentKey);
-      rc = doltliteRecordFromClusteredKeyCols(db, &parentCols,
-          pParentKey, nParentKey, &pParentRec, &nParentVal);
-      if( rc!=SQLITE_OK ) break;
-      pParentVal = pParentRec;
-    }
-    rc = doltliteParseRecordStrict(pParentVal, nParentVal, &parentInfo);
-    if( rc!=SQLITE_OK ) break;
-
-    for(i=0; i<nCol && match; i++){
-      int iParent = aiParentCol[i];
-      int iParentRec = parentCols.aColToRec[iParent];
-      if( (pParent->flags & PROLLY_NODE_INTKEY)
-       && parentCols.iPkCol==iParent ){
-        match = recordFieldEqualsInt64(
-            pChildFkRec, nChildFkRec,
-            childInfo.aType[i], childInfo.aOffset[i],
-            prollyCursorIntKey(&cur));
-      }else{
-        if( iParentRec<0 || iParentRec>=parentInfo.nField ){
-          match = 0;
-        }else{
-          match = doltliteFieldValuesEqual(
-              childInfo.aType[i], pChildFkRec, nChildFkRec,
-              childInfo.aOffset[i],
-              parentInfo.aType[iParentRec], pParentVal, nParentVal,
-              parentInfo.aOffset[iParentRec]);
-        }
-      }
-    }
-    if( match ){
-      *pExists = 1;
-      break;
-    }
-    rc = prollyCursorNext(&cur);
-  }
-  prollyCursorClose(&cur);
-  sqlite3_free(pParentRec);
-  sqlite3_free(aiParentCol);
-  doltliteFreeColInfo(&parentCols);
-  return rc==SQLITE_DONE ? SQLITE_OK : rc;
+  return rc;
 }
 
 static char *buildFkViolationInfo(
@@ -292,6 +348,8 @@ static int detectFkViolationsForSpec(
   char *zQuery = 0;
   sqlite3_stmt *pStmt = 0;
   int nKeyCol;
+  FkParentLookup parent = {0};
+  char *zInfo = 0;
   int rc;
   int stepRc;
 
@@ -324,9 +382,7 @@ static int detectFkViolationsForSpec(
   while( (stepRc = sqlite3_step(pStmt))==SQLITE_ROW ){
     u8 *pKey = 0; int nKey = 0;
     u8 *pVal = 0; int nVal = 0;
-    u8 *pChildFkRec = 0; int nChildFkRec = 0;
     i64 intKey = 0;
-    char *zInfo;
     int appendRc;
 
     if( hasRowid ){
@@ -347,28 +403,18 @@ static int detectFkViolationsForSpec(
       break;
     }
 
-    pChildFkRec = buildRecordFromStmtCols(pStmt, nKeyCol, nCol, &nChildFkRec);
-    if( !pChildFkRec ){
-      sqlite3_free(pKey);
-      sqlite3_free(pVal);
-      rc = SQLITE_NOMEM;
-      break;
-    }
     {
       int parentExists = 0;
-      rc = fkParentExistsInCatalog(db, aCur, nCur, zParentTable,
-                                   azTo, nCol, pChildFkRec, nChildFkRec,
-                                   &parentExists);
-      sqlite3_free(pChildFkRec);
-      pChildFkRec = 0;
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(pKey);
-        sqlite3_free(pVal);
-        break;
+      if( !parent.ready ){
+        rc = fkParentLookupInit(db, aCur, nCur, zParentTable, azTo, nCol, &parent);
       }
-      if( parentExists ){
+      if( rc==SQLITE_OK ){
+        rc = fkParentExistsInCatalog(db, &parent, pStmt, nKeyCol, &parentExists);
+      }
+      if( rc!=SQLITE_OK || parentExists ){
         sqlite3_free(pKey);
         sqlite3_free(pVal);
+        if( rc!=SQLITE_OK ) break;
         continue;
       }
     }
@@ -390,7 +436,7 @@ static int detectFkViolationsForSpec(
       }
     }
 
-    zInfo = buildFkViolationInfo(db, zChildTable, fkid, &rc);
+    if( !zInfo ) zInfo = buildFkViolationInfo(db, zChildTable, fkid, &rc);
     if( rc!=SQLITE_OK ){
       sqlite3_free(pKey);
       sqlite3_free(pVal);
@@ -399,7 +445,6 @@ static int detectFkViolationsForSpec(
     appendRc = doltliteAppendConstraintViolation(
         db, zChildTable, DOLTLITE_CV_FOREIGN_KEY,
         intKey, pKey, nKey, pVal, nVal, zInfo);
-    sqlite3_free(zInfo);
     sqlite3_free(pKey);
     sqlite3_free(pVal);
     if( appendRc != SQLITE_OK ){
@@ -410,6 +455,8 @@ static int detectFkViolationsForSpec(
   }
 
   if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
+  fkParentLookupClear(db, &parent);
+  sqlite3_free(zInfo);
   rc = finishConstraintStmt(pStmt, rc);
   return rc;
 }
