@@ -15,6 +15,25 @@ def sql_quote(s):
     return "'" + s.replace("'", "''") + "'"
 
 
+def resolve_engine(path):
+    """Windows CI wraps the engine in a bash script Python cannot CreateProcess.
+
+    platform-test.yml sets DOLTLITE to doltlite-no-msys-conv and the PE path in
+    DOLTLITE_SYSTEM. Prefer that, then a sibling doltlite.exe, then `path`.
+    """
+    system = os.environ.get("DOLTLITE_SYSTEM")
+    if system:
+        return system
+    if not path:
+        return path
+    if path.lower().endswith(".exe"):
+        return path
+    sibling = os.path.join(os.path.dirname(os.path.abspath(path)) or ".", "doltlite.exe")
+    if os.path.isfile(sibling):
+        return sibling
+    return path
+
+
 def db_for_branch(db_path, branch):
     return db_path if branch == "main" else db_path + "/" + branch
 
@@ -230,9 +249,30 @@ def assert_refs(doltlite, db_path, branches, tags):
         )
 
 
+def assert_generated_indexes(doltlite, db_path, branch):
+    """VIRTUAL/STORED generated indexes must contain every table row."""
+    for table, index in (("t_gen", "t_gen_g"), ("t_int", "t_int_g")):
+        via_scan = query_scalar(
+            doltlite, db_path, branch,
+            "SELECT count(*) FROM %s NOT INDEXED;" % table,
+            "gen_scan_%s" % table,
+        )
+        via_idx = query_scalar(
+            doltlite, db_path, branch,
+            "SELECT count(*) FROM %s INDEXED BY %s;" % (table, index),
+            "gen_idx_%s" % table,
+        )
+        if via_scan != via_idx:
+            raise AssertionError(
+                "generated index %s on %s disagrees with the table: "
+                "index=%s scan=%s" % (index, branch, via_idx, via_scan)
+            )
+
+
 def check_invariants(doltlite, db_path, branches, tags, model, rng):
     for branch in branches:
         assert_rows(doltlite, db_path, branch, model)
+        assert_generated_indexes(doltlite, db_path, branch)
     branch = rng.choice(branches)
     assert_hash_shape(doltlite, db_path, branch)
     assert_clean_commit_stable(doltlite, db_path, branch)
@@ -424,16 +464,59 @@ def assert_shadow_tables_consistent(doltlite, db_path, branch):
         )
 
 
-INDEX_NAMES = ("child_grp", "child_with_parent", "child_without_parent")
+def secondary_index_hashes(doltlite, db_path, branch):
+    """Hash of every CREATE INDEX / UNIQUE INDEX, labeled by name.
+
+    Clustered PK tables (TEXT / composite / WITHOUT ROWID) are the table
+    itself. ADD COLUMN without a default leaves omitted-NULL encoding in those
+    trees; REINDEX rewrites the NULLs and dolt_hashof_table / dolt_hashof_db
+    move even though SELECT * does not. Secondary indexes have no such
+    rewrite, so a hash that moves is a stale entry.
+    """
+    sql = (
+        ".mode list\n"
+        ".separator |\n"
+        "SELECT name, dolt_hashof_index(name) FROM sqlite_schema\n"
+        " WHERE type='index' AND sql IS NOT NULL ORDER BY name;\n"
+    )
+    out = run_sql(
+        doltlite, db_for_branch(db_path, branch), sql, "secondary_index_hashes"
+    )
+    hashes = {}
+    for line in (out or "").splitlines():
+        parts = line.split("|", 1)
+        if len(parts) != 2:
+            continue
+        hashes[parts[0]] = parts[1]
+    return hashes
 
 
-def index_fingerprint(doltlite, db_path, branch):
-    """Hash of every index, the table that owns them, and the database."""
-    parts = ["dolt_hashof_index(%s)" % sql_quote(name) for name in INDEX_NAMES]
-    parts.append("dolt_hashof_table('child')")
-    parts.append("dolt_hashof_db()")
-    sql = "SELECT %s;" % " || '|' || ".join(parts)
-    return query_scalar(doltlite, db_path, branch, sql, "index_fingerprint")
+def logical_table_dumps(doltlite, db_path, branch):
+    """SELECT * of every fuzzed table, so a clustered PK rewrite cannot hide."""
+    dumps = {}
+    for table in ("kv", "child") + SHAPE_TABLES:
+        sql = (
+            ".headers off\n"
+            ".mode list\n"
+            ".separator |\n"
+            "SELECT * FROM %s ORDER BY 1, 2, 3;\n" % table
+        )
+        dumps[table] = run_sql(
+            doltlite, db_for_branch(db_path, branch), sql, "dump_%s" % table
+        ) or ""
+    return dumps
+
+
+def format_hash_diff(before, after):
+    keys = sorted(set(before) | set(after))
+    lines = []
+    for key in keys:
+        b = before.get(key)
+        a = after.get(key)
+        if b == a:
+            continue
+        lines.append("%s before=%s after=%s" % (key, b, a))
+    return "\n".join(lines) if lines else "(no labeled object changed)"
 
 
 def assert_reindex_preserves_answers(doltlite, db_path, branch):
@@ -450,10 +533,12 @@ def assert_reindex_preserves_answers(doltlite, db_path, branch):
         "(SELECT id FROM child WHERE parent_id IS NOT NULL ORDER BY id);"
     )
     before_rows = query_scalar(doltlite, db_path, branch, probe, "reindex_before")
-    before_hash = index_fingerprint(doltlite, db_path, branch)
+    before_hash = secondary_index_hashes(doltlite, db_path, branch)
+    before_dump = logical_table_dumps(doltlite, db_path, branch)
     run_sql(doltlite, db_for_branch(db_path, branch), "REINDEX;", "reindex_%s" % branch)
     after_rows = query_scalar(doltlite, db_path, branch, probe, "reindex_after")
-    after_hash = index_fingerprint(doltlite, db_path, branch)
+    after_hash = secondary_index_hashes(doltlite, db_path, branch)
+    after_dump = logical_table_dumps(doltlite, db_path, branch)
     if before_rows != after_rows:
         raise AssertionError(
             "REINDEX changed answers on %s\nbefore=%r after=%r"
@@ -462,8 +547,13 @@ def assert_reindex_preserves_answers(doltlite, db_path, branch):
     if before_hash != after_hash:
         raise AssertionError(
             "REINDEX changed an index hash on %s, so the stored index did not "
-            "match its rows\nbefore=%r\nafter=%r"
-            % (branch, before_hash, after_hash)
+            "match its rows\n%s"
+            % (branch, format_hash_diff(before_hash, after_hash))
+        )
+    if before_dump != after_dump:
+        raise AssertionError(
+            "REINDEX changed table rows on %s\n%s"
+            % (branch, format_hash_diff(before_dump, after_dump))
         )
 
 
@@ -1542,7 +1632,7 @@ def setup_check(doltlite, db_path):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = [a for a in sys.argv[1:] if a.startswith("--")]
-    doltlite = args[0] if args else "./doltlite"
+    doltlite = resolve_engine(args[0] if args else "./doltlite")
     setup_db = args[1] if len(args) > 1 else None
     if "--setup-check" in flags:
         tmp = None
@@ -1556,6 +1646,7 @@ def main():
             if tmp and os.environ.get("DOLTLITE_VC_STATEFUL_KEEP_DB") != "1":
                 shutil.rmtree(tmp, ignore_errors=True)
     seconds = int(os.environ.get("DOLTLITE_VC_STATEFUL_SECONDS", "600"))
+    max_steps = int(os.environ.get("DOLTLITE_VC_STATEFUL_STEPS", "0"))
     seed = int(os.environ.get("DOLTLITE_VC_STATEFUL_SEED", str(int(time.time()))))
     rng = random.Random(seed)
     tmp = tempfile.mkdtemp(prefix="doltlite-stateful-")
@@ -1574,12 +1665,15 @@ def main():
     current_op = "setup"
 
     print(
-        "stateful vc fuzzer: seed=%d seconds=%d db=%s" % (seed, seconds, db_path),
+        "stateful vc fuzzer: seed=%d seconds=%d steps=%s db=%s"
+        % (seed, seconds, max_steps or "unlimited", db_path),
         flush=True,
     )
     try:
         setup_repo(doltlite, db_path, remote_path)
         while time.time() < deadline:
+            if max_steps and step >= max_steps:
+                break
             step += 1
             if not operation_cycle:
                 operation_cycle = list(OPERATIONS)

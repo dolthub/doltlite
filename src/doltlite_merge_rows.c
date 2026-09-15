@@ -62,6 +62,16 @@ static int indexColumnIsExpr(const i16 *aiColumn, int nIdxCol){
   return 0;
 }
 
+static int indexNeedsExprBuild(Index *pIdx, const i16 *aiColumn, int nIdxCol){
+  Table *pTab = pIdx ? pIdx->pTable : 0;
+  if( indexColumnIsExpr(aiColumn, nIdxCol) ) return 1;
+  /* VIRTUAL columns are not record fields, so table column numbers after
+  ** them are not record field numbers. Evaluate those keys through the
+  ** expression path, which maps storage columns and computes VIRTUAL. */
+  if( pTab && (pTab->tabFlags & TF_HasVirtual) ) return 1;
+  return 0;
+}
+
 static int bindIndexExprRow(
   sqlite3_stmt *pStmt,
   Table *pTab,
@@ -72,11 +82,24 @@ static int bindIndexExprRow(
   int i, rc = SQLITE_OK;
   doltliteParseRecord(pRec, nRec, &info);
   for(i=0; i<pTab->nCol && rc==SQLITE_OK; i++){
+    int iField = i;
     if( i==iPKey ){
       rc = sqlite3_bind_int64(pStmt, i+1, intKey);
-    }else if( i<info.nField ){
+      continue;
+    }
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+    /* Table column numbers are not record field numbers: INTEGER PRIMARY
+    ** KEY is the btree key, and VIRTUAL generated columns are not stored.
+    ** sqlite3TableColumnToStorage skips VIRTUAL; IPK is still field 0 NULL. */
+    if( pTab->aCol[i].colFlags & COLFLAG_VIRTUAL ){
+      rc = sqlite3_bind_null(pStmt, i+1);
+      continue;
+    }
+    iField = sqlite3TableColumnToStorage(pTab, i);
+#endif
+    if( iField>=0 && iField<info.nField ){
       DoltliteSerialValue v;
-      rc = doltliteSerialValueFromField(pRec, nRec, &info, i, &v);
+      rc = doltliteSerialValueFromField(pRec, nRec, &info, iField, &v);
       if( rc==SQLITE_OK && v.eType==SQLITE_NULL ){
         rc = sqlite3_bind_null(pStmt, i+1);
       }else if( rc==SQLITE_OK && v.eType==SQLITE_INTEGER ){
@@ -167,39 +190,31 @@ static int indexExprToSql(sqlite3_str *p, const Expr *pExpr, Table *pTab){
   }
 }
 
-static int evalIndexExprColumn(
-  sqlite3 *db,
-  Index *pIdx,
+static int evalExprOnRecord(
+  Table *pTab,
+  const Expr *pExpr,
+  const char *zSpan,
   const u8 *pRec, int nRec,
   int iPKey, i64 intKey,
-  int iIdxCol,
   DoltliteSerialValue *pOut,
   u8 **ppKeep
 ){
-  Table *pTab;
   sqlite3 *pEval = 0;
   sqlite3_str *pSql;
   char *zSql;
   sqlite3_stmt *pStmt = 0;
   sqlite3_value *pVal;
-  const char *zSpan;
   int i, n, rc;
   int eType;
 
   *ppKeep = 0;
   memset(pOut, 0, sizeof(*pOut));
-  (void)db;
-  if( !pIdx || !pIdx->pTable || !pIdx->aColExpr
-   || iIdxCol<0 || iIdxCol>=pIdx->aColExpr->nExpr ){
-    return SQLITE_ERROR;
-  }
-  pTab = pIdx->pTable;
-  zSpan = pIdx->aColExpr->a[iIdxCol].zEName;
+  if( !pTab || (!pExpr && (!zSpan || !zSpan[0])) ) return SQLITE_ERROR;
   pSql = sqlite3_str_new(0);
   sqlite3_str_appendall(pSql, "SELECT (");
   if( zSpan && zSpan[0] ){
     sqlite3_str_appendall(pSql, zSpan);
-  }else if( indexExprToSql(pSql, pIdx->aColExpr->a[iIdxCol].pExpr, pTab) ){
+  }else if( indexExprToSql(pSql, pExpr, pTab) ){
     sqlite3_free(sqlite3_str_finish(pSql));
     return SQLITE_ERROR;
   }
@@ -253,6 +268,44 @@ static int evalIndexExprColumn(
   return SQLITE_OK;
 }
 
+static int evalIndexExprColumn(
+  sqlite3 *db,
+  Index *pIdx,
+  const u8 *pRec, int nRec,
+  int iPKey, i64 intKey,
+  int iIdxCol,
+  DoltliteSerialValue *pOut,
+  u8 **ppKeep
+){
+  const char *zSpan;
+  (void)db;
+  if( !pIdx || !pIdx->pTable || !pIdx->aColExpr
+   || iIdxCol<0 || iIdxCol>=pIdx->aColExpr->nExpr ){
+    return SQLITE_ERROR;
+  }
+  zSpan = pIdx->aColExpr->a[iIdxCol].zEName;
+  return evalExprOnRecord(pIdx->pTable, pIdx->aColExpr->a[iIdxCol].pExpr, zSpan,
+                          pRec, nRec, iPKey, intKey, pOut, ppKeep);
+}
+
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+static int evalGeneratedColumn(
+  Table *pTab,
+  const u8 *pRec, int nRec,
+  int iPKey, i64 intKey,
+  int iCol,
+  DoltliteSerialValue *pOut,
+  u8 **ppKeep
+){
+  Expr *pExpr;
+  if( !pTab || iCol<0 || iCol>=pTab->nCol ) return SQLITE_ERROR;
+  pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[iCol]);
+  if( !pExpr ) return SQLITE_ERROR;
+  return evalExprOnRecord(pTab, pExpr, 0, pRec, nRec, iPKey, intKey,
+                          pOut, ppKeep);
+}
+#endif
+
 static int doltliteBuildIndexEntryWithExpr(
   sqlite3 *db,
   Index *pIdx,
@@ -292,6 +345,7 @@ static int doltliteBuildIndexEntryWithExpr(
 
   for(i=0; i<nIdxCol; i++){
     int col = aiColumn[i];
+    Table *pTab = pIdx ? pIdx->pTable : 0;
     if( col==XN_EXPR ){
       rc = evalIndexExprColumn(db, pIdx, pRec, nRec, iPKey, intKey,
                                i, &aMem[nOut], &apKeep[nOut]);
@@ -301,14 +355,29 @@ static int doltliteBuildIndexEntryWithExpr(
       aMem[nOut].eType = SQLITE_INTEGER;
       aMem[nOut].i = intKey;
       nOut++;
-    }else if( col>=0 && col<info.nField ){
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+    }else if( pTab && col>=0 && col<pTab->nCol
+           && (pTab->aCol[col].colFlags & COLFLAG_VIRTUAL) ){
+      rc = evalGeneratedColumn(pTab, pRec, nRec, iPKey, intKey, col,
+                               &aMem[nOut], &apKeep[nOut]);
+      if( rc!=SQLITE_OK ) goto expr_fail;
+      nOut++;
+#endif
+    }else if( pTab && col>=0 && col<pTab->nCol ){
+      int iStore = sqlite3TableColumnToStorage(pTab, col);
       if( iPKey>=0 && col==iPKey ){
         aMem[nOut].eType = SQLITE_INTEGER;
         aMem[nOut].i = intKey;
-      }else{
-        rc = doltliteSerialValueFromField(pRec, nRec, &info, col, &aMem[nOut]);
+      }else if( iStore>=0 && iStore<info.nField ){
+        rc = doltliteSerialValueFromField(pRec, nRec, &info, iStore, &aMem[nOut]);
         if( rc!=SQLITE_OK ) goto expr_fail;
+      }else{
+        aMem[nOut].eType = SQLITE_NULL;
       }
+      nOut++;
+    }else if( col>=0 && col<info.nField ){
+      rc = doltliteSerialValueFromField(pRec, nRec, &info, col, &aMem[nOut]);
+      if( rc!=SQLITE_OK ) goto expr_fail;
       nOut++;
     }
   }
@@ -399,7 +468,7 @@ static int doltliteBuildIndexEntry(
   if( pnIdxRec ) *pnIdxRec = 0;
   if( pStorePayload ) *pStorePayload = 0;
 
-  if( indexColumnIsExpr(aiColumn, nIdxCol)
+  if( indexNeedsExprBuild(pIdx, aiColumn, nIdxCol)
    || (iPKey<0 && pIdx && pIdx->pTable && HasRowid(pIdx->pTable)) ){
     return doltliteBuildIndexEntryWithExpr(
         db, pIdx, pRec, nRec, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
@@ -431,6 +500,14 @@ static int doltliteBuildIndexEntry(
       int out = 0;
       for(i=0; i<nIdxCol; i++){
         int col = aiColumn[i];
+        if( col<0 ) continue;
+        if( pIdx && pIdx->pTable && col<pIdx->pTable->nCol ){
+          if( col==pIdx->pTable->iPKey ) continue;
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+          if( pIdx->pTable->aCol[col].colFlags & COLFLAG_VIRTUAL ) continue;
+          col = sqlite3TableColumnToStorage(pIdx->pTable, col);
+#endif
+        }
         if( col>=0 && col<info.nField ){
           aFieldOrder[out++] = col;
         }

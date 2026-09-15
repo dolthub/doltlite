@@ -35,6 +35,7 @@ doltlite_tag.sh
 doltlite_merge.sh
 doltlite_merge_status.sh
 doltlite_merge_index_conflict.sh
+doltlite_merge_virtual_gen_index.sh
 doltlite_merge_nocase_reindex.sh
 doltlite_failed_merge_working_set.sh
 doltlite_index_row_delta.sh
@@ -209,6 +210,7 @@ doltlite_open_branch.sh
 doltlite_tag.sh
 doltlite_merge.sh
 doltlite_merge_status.sh
+doltlite_merge_virtual_gen_index.sh
 doltlite_conflicts.sh
 doltlite_diff_table.sh
 doltlite_diff_table_range.sh
