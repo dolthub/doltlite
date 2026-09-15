@@ -1,0 +1,86 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name parent child parentValues childValues reference} {
+  integer {k INTEGER PRIMARY KEY} {k TEXT} {x} {printf('%d.0',x)} {(k)}
+  text {k TEXT COLLATE NOCASE PRIMARY KEY} {k TEXT} {'parent'||x} {'PARENT'||x} {(k)}
+  real {k REAL PRIMARY KEY} {k TEXT} {x} {printf('%d.0',x)} {(k)}
+  unique {p INTEGER PRIMARY KEY,k TEXT COLLATE NOCASE UNIQUE} {k TEXT}
+         {x,'parent'||x} {'PARENT'||x} {(k)}
+  composite {a TEXT COLLATE RTRIM,b INT,PRIMARY KEY(b DESC,a)} {k TEXT,b INT}
+            {'parent ',x} {'parent',x} {(a,b)}
+} {
+  reset_db
+  set fk [expr {$name eq "composite" ? "k,b" : "k"}]
+  execsql "CREATE TABLE p($parent)"
+  execsql "CREATE TABLE c(id INTEGER PRIMARY KEY,$child,
+                         FOREIGN KEY($fk) REFERENCES p$reference)"
+  execsql "WITH RECURSIVE s(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM s WHERE x<200)
+           INSERT INTO p SELECT $parentValues FROM s"
+  execsql {SELECT dolt_commit('-Am','base'); PRAGMA foreign_keys=OFF;}
+  execsql "WITH RECURSIVE s(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM s WHERE x<400)
+           INSERT INTO c SELECT x,$childValues FROM s"
+  execsql {PRAGMA foreign_keys=ON}
+  do_execsql_test fk-lookup-$name-output-only {
+    SELECT count(*) FROM pragma_foreign_key_check('c');
+    SELECT dolt_verify_constraints('--all','--output-only');
+    SELECT count(*) FROM dolt_constraint_violations;
+  } {200 1 0}
+  do_execsql_test fk-lookup-$name-recorded {
+    SELECT dolt_verify_constraints('--all');
+    SELECT count(*),min(id),max(id) FROM dolt_constraint_violations_c;
+  } {1 200 201 400}
+  db close
+  sqlite3 db test.db
+  do_execsql_test fk-lookup-$name-reopen {
+    SELECT count(*),min(id),max(id) FROM dolt_constraint_violations_c;
+  } {200 201 400}
+  do_execsql_test fk-lookup-$name-repair {
+    DELETE FROM c WHERE id>200;
+    SELECT dolt_verify_constraints('--all');
+    SELECT count(*) FROM dolt_constraint_violations;
+    PRAGMA foreign_key_check;
+  } {0 0}
+}
+
+foreach key {INTEGER INT} {
+  reset_db
+  execsql "CREATE TABLE p(id $key PRIMARY KEY,k TEXT COLLATE NOCASE UNIQUE)"
+  execsql {CREATE TABLE c(id INTEGER PRIMARY KEY,k TEXT REFERENCES p(k))}
+  execsql {
+    INSERT INTO p VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','side');
+    INSERT INTO p VALUES(2,'side');
+    INSERT INTO c VALUES(2,'SIDE');
+    SELECT dolt_commit('-Am','side');
+    SELECT dolt_checkout('main');
+    INSERT INTO p VALUES(3,'main');
+    INSERT INTO c VALUES(3,'MAIN');
+    SELECT dolt_commit('-Am','main');
+  }
+  do_execsql_test fk-lookup-$key-merge-parents {
+    SELECT length(dolt_merge('side'));
+    SELECT dolt_verify_constraints('--all');
+    SELECT count(*) FROM dolt_constraint_violations;
+    SELECT count(*) FROM c;
+  } {40 0 0 2}
+}
+
+reset_db
+execsql {
+  CREATE TABLE p(k TEXT COLLATE NOCASE UNIQUE);
+  CREATE TABLE c(id INTEGER PRIMARY KEY,k TEXT REFERENCES p(k));
+  INSERT INTO p VALUES('A'||char(0)||'x'),('B');
+  SELECT dolt_commit('-Am','base');
+  PRAGMA foreign_keys=OFF;
+  INSERT INTO c VALUES(1,'a'||char(0)||'y'),(2,'b'),(3,'a'||char(0)||'long'),(4,NULL);
+  PRAGMA foreign_keys=ON;
+}
+do_execsql_test fk-lookup-nocase-nul {
+  SELECT count(*) FROM pragma_foreign_key_check('c');
+  SELECT dolt_verify_constraints('--all');
+  SELECT id FROM dolt_constraint_violations_c;
+} {1 1 3}
+
+finish_test
