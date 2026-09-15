@@ -3,9 +3,18 @@
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
+run_sql() {
+  local out rc
+  out=$(echo "$1" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$2" 2>&1)
+  rc=$?
+  printf '%s' "$out" | tr -d '\r'
+  return $rc
+}
+
 run_test() {
   local name="$1" sql="$2" expected="$3" db="$4"
-  local result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
+  local result
+  result=$(run_sql "$sql" "$db")
   local exit_code=$?
   if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
     result="CRASH (exit $exit_code)"
@@ -20,7 +29,8 @@ run_test() {
 
 run_test_match() {
   local name="$1" sql="$2" pattern="$3" db="$4"
-  local result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
+  local result
+  result=$(run_sql "$sql" "$db")
   local exit_code=$?
   if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
     result="CRASH (exit $exit_code)"

@@ -10,7 +10,7 @@ run_db_match() {
   local db="/tmp/${n}_$$.db"
   rm -f "$db"
   local r
-  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>&1)
+  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>&1 | tr -d '\r')
   rm -f "$db"
   if echo "$r" | grep -qE "$p"; then
     PASS=$((PASS+1))
@@ -25,7 +25,7 @@ run_db_eq() {
   local db="/tmp/${n}_$$.db"
   rm -f "$db"
   local r
-  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>&1 | tail -n 1)
+  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>&1 | tr -d '\r' | tail -n 1)
   rm -f "$db"
   if [ "$r" = "$e" ]; then
     PASS=$((PASS+1))
