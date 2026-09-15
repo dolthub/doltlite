@@ -314,6 +314,8 @@ static int gcMarkReachable(
   GcQueue queue;
   GcQueueItem current;
   GcChildCtx seedCtx;
+  int localOnly = chunkStoreSourceEnabled(cs);
+  int partial = 0;
   int rc, i;
 
   memset(pTrace, 0, sizeof(*pTrace));
@@ -386,6 +388,15 @@ static int gcMarkReachable(
       break;
     }
 
+    if( localOnly ){
+      int has = 0;
+      rc = chunkStoreHas(cs, &current.hash, &has);
+      if( rc!=SQLITE_OK ) break;
+      if( !has ){
+        partial = 1;
+        continue;
+      }
+    }
     rc = chunkStoreGet(cs, &current.hash, &data, &nData);
     if( rc!=SQLITE_OK ){
       if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
@@ -423,6 +434,22 @@ static int gcMarkReachable(
     if( rc!=SQLITE_OK ) break;
   }
 
+  if( rc==SQLITE_DONE && partial ){
+    const ChunkIndexEntry *aEntries[3];
+    int nEntries[3];
+    int j;
+    /* Missing parents can hide cached descendants. Without the complete
+    ** graph, unmarked local chunks are not provably unreachable. */
+    chunkIndexGetEntries(&cs->index, &nEntries[0], &aEntries[0]);
+    chunkStagingGetRecent(&cs->staging, &nEntries[1], &aEntries[1]);
+    chunkStagingGetPending(&cs->staging, &nEntries[2], &aEntries[2]);
+    rc = SQLITE_OK;
+    for(i=0; rc==SQLITE_OK && i<3; i++){
+      for(j=0; rc==SQLITE_OK && j<nEntries[i]; j++){
+        rc = prollyHashSetAdd(marked, &aEntries[i][j].hash);
+      }
+    }
+  }
   gcQueueFree(&queue);
   return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }

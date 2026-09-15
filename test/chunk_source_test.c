@@ -627,6 +627,122 @@ static int getDbChunk(
   return rc;
 }
 
+static void testLocalGc(
+  const char *zPrefix,
+  sqlite3 *sourceDb,
+  SourceCtx *pCtx,
+  doltlite_chunk_source *pApi,
+  const unsigned char *pRefs,
+  int nRefs
+){
+  sqlite3 *db = 0;
+  ProllyHash catalog, cachedRoot, missingTip;
+  unsigned char *pData = 0;
+  char *zSql = 0;
+  char zPath[192], zCopy[192];
+  sqlite3_int64 value = 0;
+  int nData = 0;
+  int mode, rc, has;
+
+  snprintf(zPath, sizeof(zPath), "%s_gc.db", zPrefix);
+  snprintf(zCopy, sizeof(zCopy), "%s_gc_copy.db", zPrefix);
+  removeStore(zCopy);
+  pCtx->mode = SOURCE_NORMAL;
+  sqlite3_mutex_enter(sourceDb->mutex);
+  sqlite3BtreeEnter(sourceDb->aDb[0].pBt);
+  rc = doltliteResolveCatalogHashForRef(sourceDb, "feature", &catalog);
+  if( rc==SQLITE_OK ){
+    rc = doltliteLoadTableRootByName(sourceDb, &catalog, "items",
+                                    &cachedRoot, 0, 0);
+  }
+  sqlite3BtreeLeave(sourceDb->aDb[0].pBt);
+  sqlite3_mutex_leave(sourceDb->mutex);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreFindBranch(&pCtx->store, "feature", &missingTip);
+  }
+  check("find remote graph for local GC", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto local_gc_done;
+  rc = createLazyFile(zPath, pRefs, nRefs);
+  if( rc==SQLITE_OK ) rc = openDb(zPath, SQLITE_OPEN_READWRITE, &db);
+  if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", pApi);
+  check("open partial store for local GC", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto local_gc_done;
+  rc = queryInt64(db, "SELECT id FROM items WHERE id=1", &value);
+  check("materialize one row before local GC", rc==SQLITE_OK && value==1);
+  rc = execSql(db,
+      "CREATE TABLE local_work(id INTEGER PRIMARY KEY);"
+      "INSERT INTO local_work VALUES(42);"
+      "SELECT dolt_commit('-Am','local work');"
+      "INSERT INTO local_work VALUES(43);");
+  check("create committed and working local data before GC", rc==SQLITE_OK);
+  rc = getDbChunk(db, &cachedRoot, &pData, &nData);
+  check("cache a chunk below a missing branch tip", rc==SQLITE_OK && nData>0);
+  sqlite3_free(pData);
+  pData = 0;
+
+  for(mode=0; mode<3; mode++){
+    pCtx->mode = mode==0 ? SOURCE_NORMAL
+                        : mode==1 ? SOURCE_IOERR : SOURCE_NOTFOUND;
+    pCtx->failAfter = 0;
+    sourceResetCounters(pCtx);
+    has = 1;
+    rc = chunkStoreHas(doltliteGetChunkStore(db), &missingTip, &has);
+    check("GC fixture still has an uncached branch tip", rc==SQLITE_OK && !has);
+    rc = execSql(db, "SELECT dolt_gc(); SELECT dolt_gc();");
+    check("repeated GC succeeds on partial store", rc==SQLITE_OK);
+    check("GC never requests source chunks",
+          pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+    sourceResetCounters(pCtx);
+    rc = queryInt64(db, "PRAGMA wal_checkpoint", &value);
+    check("partial checkpoint completes without busy", rc==SQLITE_OK && value==0);
+    check("checkpoint never requests source chunks",
+          pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+    sqlite3_close(db);
+    db = 0;
+    sourceResetCounters(pCtx);
+    rc = openDb(zPath, SQLITE_OPEN_READWRITE, &db);
+    if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", pApi);
+    check("reopen partial store after compaction", rc==SQLITE_OK);
+    if( rc!=SQLITE_OK ) goto local_gc_done;
+    rc = queryInt64(db, "SELECT id FROM items WHERE id=1", &value);
+    check("cached row survives compaction and reopen", rc==SQLITE_OK && value==1);
+    rc = queryInt64(db, "SELECT sum(id) FROM local_work", &value);
+    check("committed and working local rows survive GC", rc==SQLITE_OK && value==85);
+    rc = getDbChunk(db, &cachedRoot, &pData, &nData);
+    check("cached descendant survives missing parent and reopen",
+          rc==SQLITE_OK && nData>0);
+    sqlite3_free(pData);
+    pData = 0;
+    check("reopen and cached reads need no source callbacks",
+          pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+  }
+
+  sourceResetCounters(pCtx);
+  zSql = sqlite3_mprintf("VACUUM INTO %Q", zCopy);
+  rc = zSql ? execSql(db, zSql) : SQLITE_NOMEM;
+  check("VACUUM INTO copies partial store offline", rc==SQLITE_OK);
+  check("VACUUM INTO never requests source chunks",
+        pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+  if( rc!=SQLITE_OK ) goto local_gc_done;
+  sqlite3_close(db);
+  db = 0;
+  rc = openDb(zCopy, SQLITE_OPEN_READWRITE, &db);
+  if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", pApi);
+  if( rc==SQLITE_OK ) rc = getDbChunk(db, &cachedRoot, &pData, &nData);
+  check("compacted copy keeps cached descendant offline", rc==SQLITE_OK && nData>0);
+  check("reading compacted copy needs no source callbacks",
+        pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+
+local_gc_done:
+  sqlite3_free(zSql);
+  sqlite3_free(pData);
+  if( db ) sqlite3_close(db);
+  pCtx->mode = SOURCE_NORMAL;
+  sourceResetCounters(pCtx);
+  removeStore(zPath);
+  removeStore(zCopy);
+}
+
 static int resetTreeCache(sqlite3 *db){
   Btree *pBtree = db->aDb[0].pBt;
   int rc;
@@ -640,6 +756,57 @@ static int resetTreeCache(sqlite3 *db){
   sqlite3BtreeLeave(pBtree);
   sqlite3_mutex_leave(db->mutex);
   return rc;
+}
+
+static void testCompleteGcWithSource(
+  const char *zPrefix,
+  SourceCtx *pCtx,
+  doltlite_chunk_source *pApi
+){
+  sqlite3 *db = 0;
+  ProllyHash discarded;
+  char zPath[192];
+  char *zHash = 0;
+  int rc, has = 0;
+
+  snprintf(zPath, sizeof(zPath), "%s_complete_gc.db", zPrefix);
+  removeStore(zPath);
+  rc = openDb(zPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, &db);
+  if( rc==SQLITE_OK ){
+    rc = execSql(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+        "SELECT dolt_commit('-Am','base');"
+        "SELECT dolt_checkout('-b','garbage');"
+        "INSERT INTO t VALUES(1);"
+        "SELECT dolt_commit('-Am','discard');");
+  }
+  if( rc==SQLITE_OK ) rc = queryText(db, "SELECT dolt_hashof('HEAD')", &zHash);
+  if( rc==SQLITE_OK ) rc = doltliteHexToHash(zHash, &discarded);
+  if( rc==SQLITE_OK ){
+    rc = execSql(db,
+        "SELECT dolt_checkout('main'); SELECT dolt_branch('-D','garbage');");
+  }
+  if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", pApi);
+  check("create complete local graph with source installed", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto complete_gc_done;
+  rc = chunkStoreHas(doltliteGetChunkStore(db), &discarded, &has);
+  check("discarded branch tip exists before GC", rc==SQLITE_OK && has);
+  pCtx->mode = SOURCE_IOERR;
+  pCtx->failAfter = 0;
+  sourceResetCounters(pCtx);
+  rc = execSql(db, "SELECT dolt_gc()");
+  check("complete graph GC succeeds with offline source", rc==SQLITE_OK);
+  rc = chunkStoreHas(doltliteGetChunkStore(db), &discarded, &has);
+  check("complete graph GC still collects unreachable chunks", rc==SQLITE_OK && !has);
+  check("complete graph GC needs no source requests",
+        pCtx->nGet==0 && pCtx->nGetMany==0 && pCtx->nRequest==0);
+
+complete_gc_done:
+  sqlite3_free(zHash);
+  if( db ) sqlite3_close(db);
+  pCtx->mode = SOURCE_NORMAL;
+  sourceResetCounters(pCtx);
+  removeStore(zPath);
 }
 
 static int runToError(sqlite3 *db, const char *zSql, char **pzErr){
@@ -709,6 +876,9 @@ static void testOriginPrecedenceAndReuse(
   zUri = 0;
   check("reopen lazy clone with origin chunk source URI", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) goto origin_done;
+  rc = queryInt64(db, "SELECT id FROM items WHERE id=1", &value);
+  check("warm origin-backed row before offline compaction", rc==SQLITE_OK && value==1);
+  if( rc!=SQLITE_OK ) goto origin_done;
 
   sourceResetCounters(pCtx);
   pCtx->mode = SOURCE_NORMAL;
@@ -765,6 +935,14 @@ static void testOriginPrecedenceAndReuse(
         && zErr && strstr(zErr, zHash)!=0);
   sqlite3_free(zErr);
   zErr = 0;
+
+  rc = execSql(db, "SELECT dolt_gc(); SELECT dolt_gc();");
+  check("origin-backed GC succeeds while origin is offline", rc==SQLITE_OK);
+  rc = queryInt64(db, "PRAGMA wal_checkpoint", &value);
+  check("origin-backed checkpoint succeeds offline", rc==SQLITE_OK && value==0);
+  rc = queryInt64(db, "SELECT id FROM items WHERE id=1", &value);
+  check("origin-backed cached row survives offline compaction",
+        rc==SQLITE_OK && value==1);
 
   rc = rename(zSourceAway, zSource);
   check("restore built-in origin after IOERR", rc==0);
@@ -2653,6 +2831,9 @@ int main(void){
   rc = serializeRefs(&source, &pRefs, &nRefs);
   check("serialize initial refs", rc==SQLITE_OK && pRefs && nRefs>0);
   if( rc!=SQLITE_OK ) goto test_done;
+
+  testLocalGc(zPrefix, sourceDb, &source, &api, pRefs, nRefs);
+  testCompleteGcWithSource(zPrefix, &source, &api);
 
   testOracleWriteThroughAndRefresh(
       zSource, zWrite, sourceDb, &source, &api, pRefs, nRefs,
