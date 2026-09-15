@@ -1453,7 +1453,7 @@ RELATED_SCHEMA = (
 # the same), so OR REPLACE inside a trigger can still raise UNIQUE.
 
 
-def setup_repo(doltlite, db_path, remote_path):
+def setup_repo(doltlite, db_path, remote_path=None):
     run_sql(
         doltlite,
         db_path,
@@ -1468,6 +1468,8 @@ def setup_repo(doltlite, db_path, remote_path):
         ),
         "setup",
     )
+    if not remote_path:
+        return
     shutil.copyfile(db_path, remote_path)
     remote_url = "file://" + remote_path
     run_sql(
@@ -1520,7 +1522,7 @@ OPERATIONS = (
 
 
 def setup_check(doltlite, db_path):
-    setup_repo(doltlite, db_path, db_path + ".remote")
+    setup_repo(doltlite, db_path)
     names = query_list(
         doltlite,
         db_path,

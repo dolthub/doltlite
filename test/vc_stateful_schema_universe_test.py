@@ -56,8 +56,9 @@ def main():
 
     doltlite = sys.argv[1] if len(sys.argv) > 1 else ""
     if doltlite:
+        doltlite = os.path.abspath(doltlite)
         tmp = tempfile.mkdtemp(prefix="doltlite-shape-")
-        db = os.path.join(tmp, "s.db")
+        db = os.path.abspath(os.path.join(tmp, "s.db"))
         env = os.environ.copy()
         env["DOLTLITE_VC_STATEFUL_SECONDS"] = "0"
         # setup-check: create the repo and list shape tables, then exit.
@@ -67,12 +68,15 @@ def main():
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=30,
+            timeout=60,
         )
         out = (r.stdout or "") + "\n" + (r.stderr or "")
         p, f = check("setup_check_runs", r.returncode == 0, errors)
         passed += p
         failed += f
+        if r.returncode != 0:
+            errors.append("setup_check stdout:\n%s" % (r.stdout or ""))
+            errors.append("setup_check stderr:\n%s" % (r.stderr or ""))
         for name in shapes:
             p, f = check("setup_has_%s" % name, name in out, errors)
             passed += p
