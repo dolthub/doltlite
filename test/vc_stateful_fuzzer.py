@@ -1258,7 +1258,7 @@ def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
             "already exists",
             "cherry-pick of",
             "cherry-picking a merge commit",
-        ),
+        ) + MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, target, model)
 
@@ -1300,7 +1300,11 @@ def rebase_branch(doltlite, db_path, branches, model, rng, step):
         "SELECT dolt_rebase(%s);" % sql_quote(upstream),
         "rebase_%s_onto_%s" % (branch, upstream),
         timeout=30,
-        allowed_errors=("conflict", "rebase aborted", "didn't identify any commits"),
+        allowed_errors=(
+            "conflict",
+            "rebase aborted",
+            "didn't identify any commits",
+        ) + MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, branch, model)
 
