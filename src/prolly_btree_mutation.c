@@ -826,7 +826,7 @@ int prollyBtCursorInsert(
       if( sameKey ){
         rc = getCursorPayload(pCur, &pOld, &nOld);
         if( rc!=SQLITE_OK ) return rc;
-        rc = prollyValuesEqual(pOld, nOld, pData, nData, &equal);
+        rc = prollyValuesInterchangeable(pOld, nOld, pData, nData, &equal);
         if( rc!=SQLITE_OK ) return rc;
         if( equal ){
           pData = pOld;
@@ -943,7 +943,7 @@ int prollyBtCursorInsert(
         int equal;
         rc = getCursorPayload(pCur, &pOld, &nOld);
         if( rc==SQLITE_OK ){
-          rc = prollyValuesEqual(
+          rc = prollyValuesInterchangeable(
               pOld, nOld, pStoredPayload, nStoredPayload, &equal);
         }
         if( rc==SQLITE_OK && equal ){

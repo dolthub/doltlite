@@ -242,6 +242,53 @@ run_test_match "added_null_cannot_commit" \
   "SELECT dolt_commit('-A','-m','content-free');" \
   "nothing to commit" "$DB8"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+DB9=/tmp/test_diff_alter9_$$.db; rm -f "$DB9"
+
+# DROP COLUMN shortens the stored record. Keeping the longer legacy bytes for a
+# "semantically unchanged" row leaves the dropped value in storage, and the next
+# ADD COLUMN reads it back in place of the new column's default.
+echo "CREATE TABLE t(k TEXT PRIMARY KEY, a INT, x TEXT);
+INSERT INTO t(k,a) VALUES('n1',1),('n2',2);
+UPDATE t SET x='v' WHERE k='n2';
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t DROP COLUMN x;
+ALTER TABLE t ADD COLUMN y INT DEFAULT 7;" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+run_test "dropcol_then_addcol_default_applies" \
+  "SELECT group_concat(k || '=' || coalesce(y,'NULL'), ' ') FROM t;" \
+  "n1=7 n2=7" "$DB9"
+
+echo "SELECT dolt_commit('-A','-m','drop then add');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+run_test "dropcol_then_addcol_default_survives_commit" \
+  "SELECT group_concat(k || '=' || coalesce(y,'NULL'), ' ') FROM t;" \
+  "n1=7 n2=7" "$DB9"
+
+DB10=/tmp/test_diff_alter10_$$.db; rm -f "$DB10"
+
+echo "CREATE TABLE t(k TEXT PRIMARY KEY, a INT, x TEXT);
+INSERT INTO t(k,a) VALUES('n1',1);
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t DROP COLUMN x;" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+echo "ALTER TABLE t ADD COLUMN y INT NOT NULL DEFAULT 0;" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+run_test "dropcol_then_addcol_not_null_default_accepted" \
+  "SELECT y FROM t;" \
+  "0" "$DB10"
+
+DB11=/tmp/test_diff_alter11_$$.db; rm -f "$DB11"
+
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, x TEXT);
+INSERT INTO t(id,a) VALUES(1,1);
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t DROP COLUMN x;
+ALTER TABLE t ADD COLUMN y TEXT DEFAULT 'dflt';" | $DOLTLITE "$DB11" > /dev/null 2>&1
+
+run_test "dropcol_then_addcol_default_rowid_table" \
+  "SELECT quote(y) FROM t;" \
+  "'dflt'" "$DB11"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 
 dltest_finish

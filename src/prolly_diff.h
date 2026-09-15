@@ -42,6 +42,8 @@ int prollyDiff(ChunkStore *pStore, ProllyCache *pCache,
                const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
                u8 flags, ProllyDiffCallback xCallback, void *pCtx);
 
+int prollyValuesInterchangeable(const u8*, int, const u8*, int, int*);
+
 int prollyValuesEqual(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
