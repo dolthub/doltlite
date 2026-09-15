@@ -7,8 +7,15 @@ import sys
 import tempfile
 import time
 
-# Autocommit merge refusals roll back whole; dolt_pull's merge half is the same. Prefix matches those errors.
-MERGE_ROLLED_BACK = ("cannot merge:",)
+# Autocommit merge refusals roll back whole; dolt_pull's merge half is the same.
+# UNIQUE/CHECK/FK on the extra shape tables also land here: autocommit merge
+# with conflicts or constraint violations is not a fuzzer failure.
+MERGE_ROLLED_BACK = (
+    "cannot merge:",
+    "conflict",
+    "constraint violation",
+    "transaction rolled back",
+)
 
 
 def sql_quote(s):
