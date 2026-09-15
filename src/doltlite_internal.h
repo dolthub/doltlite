@@ -1794,6 +1794,12 @@ void doltliteTestFailNextVcSeal(void);
 void doltliteTestSetBeforeRefInstallHook(void (*xHook)(void*), void *pArg);
 void doltliteTestRunBeforeRefInstallHook(void);
 void doltliteTestFailNextHeadConfirm(void);
+void doltliteTestFailNextRestore(void);
+void doltliteTestFailNextCreateCommit(void);
+void doltliteTestFailPersistAtCall(int n);
+void doltliteTestClearFaults(void);
+void doltliteTestFailNextGetBranchWorkingSet(void);
+void doltliteTestSetMergeInstallHook(void (*xHook)(void*), void *pArg);
 void doltliteTestSetRebaseBeforeAdvanceHook(void (*xHook)(void));
 
 const char *doltliteGetAuthorName(sqlite3 *db);

@@ -2766,6 +2766,7 @@ DOLTLITE_C_TESTS = \
 	vc_result_code_test$(T.exe) \
 	integrity_check_counts_test$(T.exe) \
 	count_range_override_test$(T.exe) \
+	vc_cas_swallow_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe) \
 	crash_recovery_test$(T.exe) \
 	concurrent_branch_test$(T.exe)
@@ -2792,6 +2793,10 @@ integrity_check_counts_test$(T.exe): $(TOP)/test/integrity_check_counts_test.c l
 
 count_range_override_test$(T.exe): $(TOP)/test/count_range_override_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/count_range_override_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+vc_cas_swallow_test$(T.exe): $(TOP)/test/vc_cas_swallow_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/vc_cas_swallow_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 readonly_reader_writer_test$(T.exe): $(TOP)/test/readonly_reader_writer_test.c libdoltlite$(T.lib)

@@ -30,6 +30,7 @@ COVERAGE_TESTS=(
   vc_result_code_test
   integrity_check_counts_test
   count_range_override_test
+  vc_cas_swallow_test
   prolly_hashset_test
   prolly_chunker_boundary_test
   scoped_refs_push_test
