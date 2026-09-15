@@ -72,7 +72,6 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
   int i;
   int rc;
   int res = 0;
-  int cacheable;
   int hasNocase = 0;
 
   *pHas = 0;
@@ -87,13 +86,6 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
   pTE = findTable(pBtree, iTable);
   if( !pTE ) return SQLITE_CORRUPT;
   pMap = (ProllyMutMap*)pTE->pPending;
-  cacheable = !pMap || prollyMutMapIsEmpty(pMap);
-  if( cacheable && pTE->nocaseNulState
-   && prollyHashCompare(&pTE->nocaseNulRoot, &pTE->root)==0 ){
-    *pHas = pTE->nocaseNulState==2;
-    return SQLITE_OK;
-  }
-
   if( pMap ){
     for(i=0; i<pMap->nEntries; i++){
       ProllyMutMapEntry *pEntry = &pMap->aEntries[i];
@@ -102,6 +94,16 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
           pEntry->pVal, pEntry->nVal, nKeyCol, azColl, pHas);
       if( rc!=SQLITE_OK || *pHas ) return rc;
     }
+  }
+
+  /* The memo answers for the committed tree alone, which pending edits do not
+  ** move, so it stays good while they are outstanding; the planner asks once
+  ** per prepared statement and a transaction that writes then reads would
+  ** otherwise rescan the whole index every time. */
+  if( pTE->nocaseNulState
+   && prollyHashCompare(&pTE->nocaseNulRoot, &pTE->root)==0 ){
+    *pHas = pTE->nocaseNulState==2;
+    return SQLITE_OK;
   }
 
   prollyCursorInit(
@@ -120,7 +122,7 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
     rc = prollyCursorNext(&cur);
   }
   prollyCursorClose(&cur);
-  if( rc==SQLITE_OK && cacheable ){
+  if( rc==SQLITE_OK ){
     pTE->nocaseNulRoot = pTE->root;
     pTE->nocaseNulState = *pHas ? 2 : 1;
   }
