@@ -512,6 +512,85 @@ int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
+/* Index added over a column the other branch does not have, while both
+** branches also changed the table (typically two independent ADD COLUMNs).
+** Dual-add rewrites the CREATE TABLE, but the adopted index is still in
+** sqlite_master against the pre-rewrite SQL, and sqlite3Init reports
+** SQLITE_CORRUPT. Refuse until catalog install applies table ALTER first. */
+int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c){
+  int side, i, j, k;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *aNew = side ? c->aTheirsSchema : c->aOursSchema;
+    int nNew = side ? c->nTheirsSchema : c->nOursSchema;
+    SchemaEntry *aOther = side ? c->aOursSchema : c->aTheirsSchema;
+    int nOther = side ? c->nOursSchema : c->nTheirsSchema;
+
+    for(i=0; i<nNew; i++){
+      SchemaEntry *pAncTbl, *pOtherTbl, *pThisTbl;
+      ParsedColumn *aThis = 0, *aOtherCols = 0, *aAncCols = 0;
+      int nThis = 0, nOtherCols = 0, nAncCols = 0;
+      int thisChanged, otherChanged;
+      if( !aNew[i].zType || strcmp(aNew[i].zType, "index")!=0 ) continue;
+      if( !aNew[i].zName || !aNew[i].zSql || !aNew[i].zTblName ) continue;
+      if( findSchemaEntry(c->aAncSchema, c->nAncSchema, aNew[i].zName) ){
+        continue;
+      }
+      pAncTbl = findSchemaEntry(c->aAncSchema, c->nAncSchema, aNew[i].zTblName);
+      pOtherTbl = findSchemaEntry(aOther, nOther, aNew[i].zTblName);
+      pThisTbl = findSchemaEntry(aNew, nNew, aNew[i].zTblName);
+      if( !pAncTbl || !pOtherTbl || !pThisTbl
+       || !pAncTbl->zSql || !pOtherTbl->zSql || !pThisTbl->zSql ){
+        continue;
+      }
+      thisChanged = strcmp(pThisTbl->zSql, pAncTbl->zSql)!=0;
+      otherChanged = strcmp(pOtherTbl->zSql, pAncTbl->zSql)!=0;
+      if( !thisChanged || !otherChanged ) continue;
+      if( parseColumns(pThisTbl->zSql, &aThis, &nThis)!=SQLITE_OK ) continue;
+      if( parseColumns(pOtherTbl->zSql, &aOtherCols, &nOtherCols)!=SQLITE_OK ){
+        freeColumns(aThis, nThis);
+        continue;
+      }
+      if( parseColumns(pAncTbl->zSql, &aAncCols, &nAncCols)!=SQLITE_OK ){
+        freeColumns(aThis, nThis);
+        freeColumns(aOtherCols, nOtherCols);
+        continue;
+      }
+      for(j=0; j<nThis; j++){
+        const char *zCol = aThis[j].zName;
+        int inAnc = 0, inOther = 0;
+        if( !zCol ) continue;
+        for(k=0; k<nAncCols; k++){
+          if( aAncCols[k].zName
+           && sqlite3_stricmp(aAncCols[k].zName, zCol)==0 ) inAnc = 1;
+        }
+        for(k=0; k<nOtherCols; k++){
+          if( aOtherCols[k].zName
+           && sqlite3_stricmp(aOtherCols[k].zName, zCol)==0 ) inOther = 1;
+        }
+        if( inAnc || inOther ) continue;
+        if( !mergeSqlNamesColumn(aNew[i].zSql, aNew[i].zType, zCol) ) continue;
+        if( c->pzErrMsg ){
+          sqlite3_free(*c->pzErrMsg);
+          *c->pzErrMsg = sqlite3_mprintf(
+              "cannot merge: index '%s' covers column '%s' of table '%s', "
+              "which only one branch added while the other also changed "
+              "the table; drop or recreate the index, then merge",
+              aNew[i].zName, zCol, aNew[i].zTblName);
+        }
+        freeColumns(aThis, nThis);
+        freeColumns(aOtherCols, nOtherCols);
+        freeColumns(aAncCols, nAncCols);
+        return SQLITE_ERROR;
+      }
+      freeColumns(aThis, nThis);
+      freeColumns(aOtherCols, nOtherCols);
+      freeColumns(aAncCols, nAncCols);
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* ================= dependents follow their table =================
 **
 ** A table's dependents (indexes, triggers, views) are adopted per name,

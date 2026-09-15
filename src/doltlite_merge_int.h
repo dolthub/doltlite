@@ -96,6 +96,7 @@ struct MergePass1Ctx {
 };
 
 int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c);
+int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c);
 int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c);
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c);
 int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c);
