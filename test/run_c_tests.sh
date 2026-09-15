@@ -29,6 +29,7 @@ COVERAGE_TESTS=(
   authorizer_internal_sql_test
   vc_result_code_test
   integrity_check_counts_test
+  count_range_override_test
   prolly_hashset_test
   prolly_chunker_boundary_test
   scoped_refs_push_test
