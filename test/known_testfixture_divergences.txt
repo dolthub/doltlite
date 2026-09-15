@@ -1432,7 +1432,6 @@ skipscan1 skipscan1-3.2 class=intentional  # cascade of 3.1 (rows missing from f
 # autoindex3 / autoindex5 — EXPLAIN QUERY PLAN shape for automatic-index
 # choices; results equivalent.
 autoindex3 autoindex3-310 class=intentional  # EQP plan shape
-index5 index5-1.3 class=intentional  # file-format page count / index page layout
 
 # pragma6-1.0 deserializes a stock SQLite page image, not a DoltLite image.
 
