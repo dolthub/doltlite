@@ -626,6 +626,9 @@ static SQLITE_INLINE int prollyBtCursorStepPrologue(
   int rc;
   *pImmediate = 1;
   CLEAR_CACHED_PAYLOAD(pCur);
+  /* The seek key describes where the last seek landed, and a delete may remove
+  ** it in place of the entry under the cursor; stepping makes it a stale key. */
+  CLEAR_CACHED_SEEK_KEY(pCur);
 
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
