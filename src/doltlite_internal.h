@@ -1834,6 +1834,10 @@ struct SchemaMergeAction {
 };
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);
+int doltliteApplyMergeSchemaActions(sqlite3 *db,
+    const ProllyHash *pAncCatHash, const ProllyHash *pTheirCatHash,
+    SchemaMergeAction *aSchemaActions, int nSchemaActions,
+    ProllyHash *pMergedCatHash, char **pzErr);
 
 int doltliteMergeCatalogs(sqlite3 *db,
     const ProllyHash *ancestor, const ProllyHash *ours,

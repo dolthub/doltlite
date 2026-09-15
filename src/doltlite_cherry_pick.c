@@ -186,10 +186,13 @@ int applyMergedCatalogAndCommit(
   {
     char **azReindex = 0;
     char **azRebuild = 0;
+    SchemaMergeAction *aSchemaActions = 0;
     int nReindex = 0;
     int nRebuild = 0;
+    int nSchemaActions = 0;
     rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
-                                &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
+                                &mergedCatHash, pnConflicts, &zMergeErr,
+                                &aSchemaActions, &nSchemaActions,
                                 bPreferOurMaster, 0,
                                 &azReindex, &nReindex,
                                 &azRebuild, &nRebuild);
@@ -202,6 +205,7 @@ int applyMergedCatalogAndCommit(
       doltliteTxnStateClear(&savedState);
       doltliteFreeNameList(azReindex, nReindex);
       doltliteFreeNameList(azRebuild, nRebuild);
+      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       return rc;
     }
     sqlite3_free(zMergeErr);
@@ -210,6 +214,7 @@ int applyMergedCatalogAndCommit(
     if( rc!=SQLITE_OK ){
       doltliteFreeNameList(azReindex, nReindex);
       doltliteFreeNameList(azRebuild, nRebuild);
+      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       return doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
     }
     graphLocked = 1;
@@ -221,11 +226,27 @@ int applyMergedCatalogAndCommit(
     if( rc==SQLITE_OK && nReindex>0 ){
       rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
     }
+    /* Column adds, drops and renames the three-way produced are applied here
+    ** for the same reason the branch merge applies them: the rows were relaid
+    ** out for the merged schema, and without these the live catalog never
+    ** adopts it and the leftover divergence surfaces as a schema conflict. */
+    if( rc==SQLITE_OK && nSchemaActions>0 && *pnConflicts==0 ){
+      char *zActionErr = 0;
+      rc = doltliteApplyMergeSchemaActions(db, ancCatHash, theirCatHash,
+                                           aSchemaActions, nSchemaActions,
+                                           &mergedCatHash, &zActionErr);
+      if( rc!=SQLITE_OK && zActionErr && pzApplyErr && *pzApplyErr==0 ){
+        *pzApplyErr = zActionErr;
+        zActionErr = 0;
+      }
+      sqlite3_free(zActionErr);
+    }
     if( rc==SQLITE_OK && nRebuild>0 ){
       rc = doltliteRebuildVirtualTables(db, azRebuild, nRebuild);
     }
     doltliteFreeNameList(azReindex, nReindex);
     doltliteFreeNameList(azRebuild, nRebuild);
+    freeSchemaMergeActions(aSchemaActions, nSchemaActions);
     if( rc!=SQLITE_OK ) goto apply_rollback;
   }
 

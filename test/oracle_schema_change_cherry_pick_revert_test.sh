@@ -105,6 +105,71 @@ R=$(dl "$DB" "SELECT count(*) FROM t;" 2>&1)
 [ -n "$R" ] && pass_name "12_no_crash" || fail_name "12_no_crash"
 
 echo ""
+echo ""
+echo "--- 13: Cherry-pick and rebase with a schema change on BOTH sides ---"
+# The replayed rows are relaid out for the merged schema, so the column actions
+# the three-way produced have to reach the live catalog. Without them the
+# leftover divergence surfaces as a schema conflict that has no rows to resolve.
+for src in ADDCOL DROPCOL RENCOL; do
+  case "$src" in
+    ADDCOL) src_sql="ALTER TABLE t ADD COLUMN c INT DEFAULT 5;" ;;
+    DROPCOL) src_sql="ALTER TABLE t DROP COLUMN b;" ;;
+    RENCOL) src_sql="ALTER TABLE t RENAME COLUMN b TO bb;" ;;
+  esac
+  for tgt in ADDCOL DROPCOL RENCOL; do
+    case "$tgt" in
+      ADDCOL) tgt_sql="ALTER TABLE t ADD COLUMN d INT DEFAULT 1;" ;;
+      DROPCOL) tgt_sql="ALTER TABLE t DROP COLUMN e;" ;;
+      RENCOL) tgt_sql="ALTER TABLE t RENAME COLUMN e TO ee;" ;;
+    esac
+
+    DB="$TMPROOT/13_cp_${src}_${tgt}.db"
+    dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, e INT);
+      INSERT INTO t VALUES(1,1,1,1),(2,2,2,2);
+      SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+      SELECT dolt_checkout('feat'); $src_sql SELECT dolt_commit('-Am','fc');
+      SELECT dolt_checkout('main'); $tgt_sql SELECT dolt_commit('-Am','mc');" >/dev/null
+    # A rolled-back cherry-pick also leaves 0 conflicts and 2 rows, so assert
+    # the commit it returns rather than the state it failed to change.
+    cp_out=$(dl "$DB" "SELECT dolt_cherry_pick(dolt_hashof('feat'));")
+    case "$cp_out" in
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+        [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "2" ] \
+          && pass_name "13_cherry_pick_${src}_over_${tgt}" \
+          || fail_name "13_cherry_pick_${src}_over_${tgt}" ;;
+      *) fail_name "13_cherry_pick_${src}_over_${tgt}" ;;
+    esac
+
+    DB="$TMPROOT/13_rb_${src}_${tgt}.db"
+    dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, e INT);
+      INSERT INTO t VALUES(1,1,1,1),(2,2,2,2);
+      SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+      SELECT dolt_checkout('feat'); $src_sql SELECT dolt_commit('-Am','fc');
+      SELECT dolt_checkout('main'); $tgt_sql SELECT dolt_commit('-Am','mc');" >/dev/null
+    case "$(dl "$DB/feat" "SELECT dolt_rebase('main');")" in
+      *Successfully*) pass_name "13_rebase_${src}_over_${tgt}" ;;
+      *) fail_name "13_rebase_${src}_over_${tgt}" ;;
+    esac
+  done
+done
+
+echo ""
+echo "--- 14: Cherry-picked column keeps its values over a target ADD COLUMN ---"
+DB="$TMPROOT/14.db"
+dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  INSERT INTO t VALUES(1,1),(2,2);
+  SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+  SELECT dolt_checkout('feat');
+  ALTER TABLE t ADD COLUMN c INT DEFAULT 5; UPDATE t SET c=42 WHERE id=1;
+  SELECT dolt_commit('-Am','fc');
+  SELECT dolt_checkout('main');
+  ALTER TABLE t ADD COLUMN d INT DEFAULT 1; SELECT dolt_commit('-Am','mc');
+  SELECT dolt_cherry_pick(dolt_hashof('feat'));" >/dev/null
+[ "$(dl "$DB" "SELECT group_concat(name) FROM pragma_table_info('t');")" = "id,a,d,c" ] \
+  && pass_name "14_merged_column_order" || fail_name "14_merged_column_order"
+[ "$(dl "$DB" "SELECT group_concat(id||','||a||','||d||','||c,' ') FROM t;")" = "1,1,1,42 2,2,1,5" ] \
+  && pass_name "14_merged_values" || fail_name "14_merged_values"
+
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="

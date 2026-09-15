@@ -752,7 +752,7 @@ static char *mergeQuotedIfNeeded(const char *zName){
                 : sqlite3_mprintf("\"%w\"", zName);
 }
 
-static int doltliteApplyMergeSchemaActions(
+int doltliteApplyMergeSchemaActions(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
   const ProllyHash *pTheirCatHash,
