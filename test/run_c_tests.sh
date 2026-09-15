@@ -28,6 +28,7 @@ COVERAGE_TESTS=(
   readonly_reader_writer_test
   authorizer_internal_sql_test
   vc_result_code_test
+  integrity_check_counts_test
   prolly_hashset_test
   prolly_chunker_boundary_test
   scoped_refs_push_test

@@ -215,6 +215,9 @@ collate4 collate4-1.2.11 class=intentional
 collate4 collate4-1.2.12 class=intentional
 collate4 collate4-1.2.13 class=intentional
 
+# ── expridx1 ──
+expridx1 expridx1-2.4 class=engine-gap issue=2922  # imposter rewrites t1c entries, then DELETE of those rows cannot find the moved keys and leaves 18 orphans; t1=500 vs t1c=518
+
 # ── fkey1 ──
 fkey1 fkey1-4.2 class=intentional  # table_info notnull=1 on the TEXT PK column (PK-clustered; matches stock WITHOUT ROWID), not FK-related
 
@@ -3079,7 +3082,6 @@ e_blobopen e_blobopen-4.8.2.4.4 class=intentional
 # ("row 3/4 missing from index i1/i2") without stock's two "wrong # of
 # entries in index" summary lines (reproduced standalone; REINDEX then
 # repairs and 1.4 passes). Diagnostic-detail wording divergence.
-e_reindex e_reindex-1.3 class=intentional
 # Section 2 builds its dataset with CREATE INDEX ... COLLATE collA/collB
 # where collA/collB are tcl-registered collations. doltlite explicitly
 # rejects indexes with custom collations ("doltlite does not support
