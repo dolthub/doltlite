@@ -526,7 +526,10 @@ int doltliteParseRecordStrict(
   int hdrBytes, off;
   const u8 *pHdrEnd;
 
-  memset(pInfo, 0, sizeof(*pInfo));
+  /* Only nField needs clearing: every reader bounds itself by it, and the
+  ** non-strict wrapper discards the return code, so a failed parse has to
+  ** leave a zero field count behind. Clearing the arrays as well is 16KB. */
+  pInfo->nField = 0;
   if( !pData || nData < 1 ) return SQLITE_CORRUPT;
   p = pData;
   pEnd = pData + nData;
