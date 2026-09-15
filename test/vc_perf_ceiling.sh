@@ -34,6 +34,10 @@ CHECKOUT_TABLES=${VC_PERF_CHECKOUT_TABLES:-400}
 CHECKOUT_ROWS_PER_TABLE=${VC_PERF_CHECKOUT_ROWS_PER_TABLE:-250}
 MERGE_ROWS=${VC_PERF_MERGE_ROWS:-100000}
 MERGE_CHANGE_ROWS=${VC_PERF_MERGE_CHANGE_ROWS:-2000}
+# The secondary-index merge fixture is separate and much larger: the index
+# term only separates from the rest of the merge once there are enough
+# changed rows for it to dominate.
+MERGE_INDEX_ROWS=${VC_PERF_MERGE_INDEX_ROWS:-300000}
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 RESULTS_FILE="$TMPDIR/vc_results.tsv"
@@ -180,6 +184,28 @@ UPDATE t SET v='main_' || id
 SELECT dolt_commit('-A','-m','main');" "$bin"
 }
 
+# Every row changes, and the index key is uncorrelated with the primary key,
+# so index edits arrive in an order unrelated to index-key order. That is the
+# ordinary shape for a secondary index and the one merge_data.db cannot reach:
+# it has no index and changes 2% of rows in contiguous primary-key ranges.
+make_merge_index_db() {
+  local db="$1"
+  local bin="$2"
+  run_sql "$db" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);
+INSERT INTO t(id,v,k) $(cte 1 "$MERGE_INDEX_ROWS")
+  SELECT i, 'base_' || i, (i*2654435761) % 1000000007 FROM c;
+CREATE INDEX ik ON t(k);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET v='feat_' || id, k=(k*7) % 1000000007 WHERE id % 2 = 0;
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main_' || id, k=(k*11) % 1000000007 WHERE id % 2 = 1;
+SELECT dolt_commit('-A','-m','main');" "$bin"
+}
+
 make_merge_schema_db() {
   local db="$1"
   local bin="$2"
@@ -238,6 +264,7 @@ prepare_fixtures() {
   run_sql "$dest/checkout.db" "SELECT dolt_branch('feat');" "$bin"
 
   make_merge_data_db "$dest/merge_data.db" "$bin"
+  make_merge_index_db "$dest/merge_index.db" "$bin"
   make_merge_schema_db "$dest/merge_schema.db" "$bin"
   make_merge_conflict_db "$dest/merge_conflict.db" "$bin"
 }
@@ -417,6 +444,8 @@ bench_sql "checkout_branch_clean" "checkout.db" \
   "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');" 150
 bench_sql "merge_data_no_conflicts" "merge_data.db" \
   "SELECT dolt_merge('feat');" 50
+bench_sql "merge_data_secondary_index" "merge_index.db" \
+  "SELECT dolt_merge('feat');" 2500
 bench_sql "merge_schema_no_conflicts" "merge_schema.db" \
   "SELECT dolt_merge('feat');" 35
 bench_sql "merge_data_conflicts" "merge_conflict.db" \

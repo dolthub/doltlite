@@ -1435,7 +1435,8 @@ int mergeTableRows(
   for(i=0; i<nIndexes; i++){
     aIndexes[i].pEdits = sqlite3_malloc(sizeof(ProllyMutMap));
     if( !aIndexes[i].pEdits ){ rc = SQLITE_NOMEM; goto merge_err; }
-    rc = prollyMutMapInit(aIndexes[i].pEdits, 0);
+    /* Index edits arrive unordered in index-key space; sort once at flush. */
+    rc = prollyMutMapInitMode(aIndexes[i].pEdits, 0, 0);
     if( rc!=SQLITE_OK ) goto merge_err;
   }
 
