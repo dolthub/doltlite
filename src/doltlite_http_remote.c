@@ -50,6 +50,14 @@ struct HttpRemote {
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
 #define HTTP_UPLOAD_BATCH_MAX ((i64)32 * 1024 * 1024)
 #define HTTP_TIMEOUT_MS 30000
+#define HTTP_BUSY_RETRY_MAX 20
+#define HTTP_BUSY_RETRY_MS 50
+
+static int httpBusyRetry(int nBusy){
+  if( nBusy>=HTTP_BUSY_RETRY_MAX ) return 0;
+  sqlite3_sleep(HTTP_BUSY_RETRY_MS);
+  return 1;
+}
 
 static void httpClearLastError(HttpRemote *p){
   sqlite3_free(p->zLastError);
@@ -174,10 +182,17 @@ static int httpMapError(
       httpSetLastError(p,
         "remote branch has uncommitted changes and cannot be overwritten by push");
     }
-  }else if( status==409
-   || (zCode && strcmp(zCode, "refs_changed")==0)
-   || (hasSqlite && sqliteRc==SQLITE_BUSY) ){
+  }else if( (zCode && strcmp(zCode, "busy")==0)
+         || (hasSqlite && sqliteRc==SQLITE_BUSY
+             && !(zCode && strcmp(zCode, "refs_changed")==0)) ){
     rc = SQLITE_BUSY;
+    if( !p->zLastError ){
+      httpSetLastError(p, "database is locked by another connection");
+    }
+  }else if( (zCode && strcmp(zCode, "refs_changed")==0)
+         || (hasSqlite && sqliteRc==SQLITE_BUSY_SNAPSHOT)
+         || status==409 ){
+    rc = SQLITE_BUSY_SNAPSHOT;
     if( !p->zLastError ){
       httpSetLastError(p, "remote refs changed; pull and retry");
     }
@@ -800,12 +815,21 @@ static int httpFlushUploadBatch(HttpRemote *p){
   if( p->nUploadBuf==0 ) return SQLITE_OK;
   zPath = buildPath(p, "/chunks");
   if( !zPath ) return SQLITE_NOMEM;
-  rc = httpRequest(p, "POST", zPath, p->pUploadBuf, p->nUploadBuf,
-                   &status, &pResp, &nResp);
-  sqlite3_free(zPath);
-  if( rc==SQLITE_OK && status!=200 && status!=204 ){
-    rc = httpMapError(p, status, pResp, nResp);
+  {
+    int nBusy = 0;
+    do {
+      sqlite3_free(pResp);
+      pResp = 0;
+      nResp = 0;
+      status = 0;
+      rc = httpRequest(p, "POST", zPath, p->pUploadBuf, p->nUploadBuf,
+                       &status, &pResp, &nResp);
+      if( rc==SQLITE_OK && status!=200 && status!=204 ){
+        rc = httpMapError(p, status, pResp, nResp);
+      }
+    }while( rc==SQLITE_BUSY && httpBusyRetry(nBusy++) );
   }
+  sqlite3_free(zPath);
   sqlite3_free(pResp);
   if( rc==SQLITE_OK ) p->nUploadBuf = 0;
   return rc;
@@ -1144,12 +1168,21 @@ static int httpSendPendingRefs(HttpRemote *p){
     off += PROLLY_HASH_SIZE;
   }
   memcpy(pReq+off, p->pPendingRefs, p->nPendingRefs);
-  rc = httpRequest(p, "PUT", zPath, pReq, nReq, &status, &pResp, &nResp);
+  {
+    int nBusy = 0;
+    do {
+      sqlite3_free(pResp);
+      pResp = 0;
+      nResp = 0;
+      status = 0;
+      rc = httpRequest(p, "PUT", zPath, pReq, nReq, &status, &pResp, &nResp);
+      if( rc==SQLITE_OK && status!=200 && status!=204 ){
+        rc = httpMapError(p, status, pResp, nResp);
+      }
+    }while( rc==SQLITE_BUSY && httpBusyRetry(nBusy++) );
+  }
   sqlite3_free(pReq);
   sqlite3_free(zPath);
-  if( rc==SQLITE_OK && status!=200 && status!=204 ){
-    rc = httpMapError(p, status, pResp, nResp);
-  }
   sqlite3_free(pResp);
   return rc;
 }

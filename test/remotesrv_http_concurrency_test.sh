@@ -162,7 +162,7 @@ fi
 
 check "exactly one same-branch push wins" "1" "$same_success"
 check_match "losing same-branch push reports conflict/non-fast-forward" \
-  "remote refs changed|not a fast-forward|push failed|ERROR|Error" \
+  "remote refs changed|not a fast-forward|push failed|locked|ERROR|Error" \
   "$(printf '%s\n%s\n' "$same_a" "$same_b" | grep -vx '0' || true)"
 check "remote main remains readable after contention" "2" "$same_rows"
 check_match "remote has base plus one contender row" "^(1,10|1,20)$" "$winner_rows"

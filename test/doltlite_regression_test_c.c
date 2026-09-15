@@ -11901,7 +11901,8 @@ static void run_file_remote_stale_size_heuristic_keeps_peer_branch(void){
   pStoreB->snapshotPinned = 1;
 
   rc = pB->xSetRefsIf(pB, &expected, "branch_b", 0, pRefsB, nRefsB);
-  check("file_remote_second_install_rejected", rc==SQLITE_CONSTRAINT || rc==SQLITE_BUSY);
+  check("file_remote_second_install_rejected",
+        rc==SQLITE_CONSTRAINT || rc==SQLITE_BUSY || rc==SQLITE_BUSY_SNAPSHOT);
   if( rc==SQLITE_OK ){
     (void)pB->xCommit(pB);
   }

@@ -431,8 +431,18 @@ static int remoteGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
   return chunkStoreGet(pStore, refsTableGetHash(&pStore->refs), ppData, pnData);
 }
 
+static int fsBusyRetry(int nBusy){
+  if( nBusy>=20 ) return 0;
+  sqlite3_sleep(50);
+  return 1;
+}
+
 static int fsLockAndForceRefresh(ChunkStore *cs){
-  int rc = chunkStoreLockAndRefresh(cs);
+  int nBusy = 0;
+  int rc;
+  do {
+    rc = chunkStoreLockAndRefresh(cs);
+  }while( rc==SQLITE_BUSY && fsBusyRetry(nBusy++) );
   if( rc==SQLITE_OK ){
     rc = chunkStoreForceRefresh(cs);
     if( rc==SQLITE_CANTOPEN || rc==SQLITE_NOTADB ) rc = SQLITE_OK;
@@ -505,7 +515,7 @@ static int fsSetRefsIf(
     chunkStoreRollback(&p->store);
     chunkStoreUnlock(&p->store);
     p->locked = 0;
-    return SQLITE_BUSY;
+    return SQLITE_BUSY_SNAPSHOT;
   }
   rc = fsSetRefs(pRemote, zBranch, bForce, pData, nData);
   if( rc!=SQLITE_OK ){
@@ -529,7 +539,7 @@ static int fsCheckRefsIf(
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashCompare(refsTableGetHash(&p->store.refs),
                         pExpectedRefsHash)!=0 ){
-    rc = SQLITE_BUSY;
+    rc = SQLITE_BUSY_SNAPSHOT;
   }
   if( rc==SQLITE_OK ){
     rc = doltliteValidateScopedRefsUpdate(&p->store, pData, nData,
@@ -625,9 +635,12 @@ struct LocalAsRemote {
 };
 
 static int localEnsureLocked(LocalAsRemote *p){
+  int nBusy = 0;
   int rc;
   if( p->locked ) return SQLITE_OK;
-  rc = chunkStoreLockAndRefresh(p->pStore);
+  do {
+    rc = chunkStoreLockAndRefresh(p->pStore);
+  }while( rc==SQLITE_BUSY && fsBusyRetry(nBusy++) );
   if( rc==SQLITE_OK ) rc = chunkStoreForceRefresh(p->pStore);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(p->pStore);
@@ -673,7 +686,7 @@ static int localSetRefsIf(
     memset(&expected, 0, sizeof(expected));
   }
   if( prollyHashCompare(refsTableGetHash(&p->pStore->refs), &expected)!=0 ){
-    return SQLITE_BUSY;
+    return SQLITE_BUSY_SNAPSHOT;
   }
   return localSetRefs(pRemote, zBranch, bForce, pData, nData);
 }
@@ -691,7 +704,7 @@ static int localCheckRefsIf(
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashCompare(refsTableGetHash(&p->pStore->refs),
                         pExpectedRefsHash)!=0 ){
-    rc = SQLITE_BUSY;
+    rc = SQLITE_BUSY_SNAPSHOT;
   }
   if( rc==SQLITE_OK ){
     rc = doltliteValidateScopedRefsUpdate(p->pStore, pData, nData,
