@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+source "$(dirname "$0")/lib/vc_perf_benchmark.sh"
+
 DOLTLITE="${1:-${DOLTLITE:-./doltlite}}"
 if [ ! -x "$DOLTLITE" ] && [ -x ./sqlite3 ]; then
   DOLTLITE=./sqlite3
@@ -243,33 +245,12 @@ prepare_fixtures() {
 failures=0
 rows=""
 
-time_sql() {
-  local binary="$1"
-  local db="$2"
-  local sql="$3"
-  local out="$4"
-  local err="$5"
-  local allow_error="$6"
-  local start end rc
-  start=$(us_now)
-  set +e
-  printf '%s\n' "$sql" | "$binary" "$db" >"$out" 2>"$err"
-  rc=$?
-  set -e
-  end=$(us_now)
-  if [ "$rc" -ne 0 ] && [ "$allow_error" != "1" ]; then
-    cat "$err" >&2
-    return "$rc"
-  fi
-  echo $((end-start))
-}
-
 bench_sql() {
   local name="$1"
   local seed_name="$2"
   local sql="$3"
   local ceiling="$4"
-  local allow_error="${5:-0}"
+  local expectation="${5:-0}"
   local candidate_vals=()
   local baseline_vals=()
   local candidate_db baseline_db candidate_us baseline_us out err
@@ -288,24 +269,24 @@ bench_sql() {
       if [ $((r % 2)) -eq 1 ]; then
         if ! baseline_us=$(time_sql "$VC_PERF_BASELINE" "$baseline_db" \
             "$sql" "$TMPDIR/${name}_baseline_${r}.out" \
-            "$TMPDIR/${name}_baseline_${r}.err" "$allow_error"); then
+            "$TMPDIR/${name}_baseline_${r}.err" "$expectation"); then
           echo "Baseline benchmark $name failed on run $r" >&2
           return 1
         fi
         if ! candidate_us=$(time_sql "$DOLTLITE" "$candidate_db" \
-            "$sql" "$out" "$err" "$allow_error"); then
+            "$sql" "$out" "$err" "$expectation"); then
           echo "Candidate benchmark $name failed on run $r" >&2
           return 1
         fi
       else
         if ! candidate_us=$(time_sql "$DOLTLITE" "$candidate_db" \
-            "$sql" "$out" "$err" "$allow_error"); then
+            "$sql" "$out" "$err" "$expectation"); then
           echo "Candidate benchmark $name failed on run $r" >&2
           return 1
         fi
         if ! baseline_us=$(time_sql "$VC_PERF_BASELINE" "$baseline_db" \
             "$sql" "$TMPDIR/${name}_baseline_${r}.out" \
-            "$TMPDIR/${name}_baseline_${r}.err" "$allow_error"); then
+            "$TMPDIR/${name}_baseline_${r}.err" "$expectation"); then
           echo "Baseline benchmark $name failed on run $r" >&2
           return 1
         fi
@@ -315,7 +296,7 @@ bench_sql() {
         "$name" "$r" "$baseline_us" "$candidate_us" >> "$SAMPLES_FILE"
     else
       if ! candidate_us=$(time_sql "$DOLTLITE" "$candidate_db" \
-          "$sql" "$out" "$err" "$allow_error"); then
+          "$sql" "$out" "$err" "$expectation"); then
         echo "Benchmark $name failed on run $r" >&2
         return 1
       fi
@@ -439,9 +420,9 @@ bench_sql "merge_data_no_conflicts" "merge_data.db" \
 bench_sql "merge_schema_no_conflicts" "merge_schema.db" \
   "SELECT dolt_merge('feat');" 35
 bench_sql "merge_data_conflicts" "merge_conflict.db" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT count(*) FROM dolt_conflicts_t; ROLLBACK;" 180 1
+  "$(vc_perf_conflict_sql conflicts)" 180 conflicts
 bench_sql "merge_data_conflicts_with_resolve" "merge_conflict.db" \
-  "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT count(*) FROM dolt_conflicts; ROLLBACK;" 180 1
+  "$(vc_perf_conflict_sql resolved)" 180 resolved
 
 if [ -n "${VC_PERF_RESULTS_OUTPUT:-}" ]; then
   mkdir -p "$(dirname "$VC_PERF_RESULTS_OUTPUT")"
