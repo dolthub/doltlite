@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The CLI and libdoltlite are not SQLITE_TEST builds. Production must ignore
-# DOLTLITE_WAL_CHECKPOINT_THRESHOLD; testfixture still honors it.
+# Bounding open time is a deployment decision, so the CLI and libdoltlite
+# honor DOLTLITE_WAL_CHECKPOINT_THRESHOLD and DOLTLITE_WAL_CHECKPOINT_CHUNKS
+# rather than reserving them for SQLITE_TEST builds.
 
 set -uo pipefail
 
@@ -33,30 +34,52 @@ print(struct.unpack_from("<I", rec, 1 + 8)[0])
 ' "$1"
 }
 
-echo "=== WAL checkpoint threshold env is test-only ==="
+# CS_WAL_CHECKPOINT_MAGIC_V2.
+CHECKPOINT_V2=844122947
+
+seed_db() {
+  local db="$1"
+  dltest_require "cli_commit" "$db" \
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);
+     INSERT INTO t VALUES(1, randomblob(8192));
+     SELECT dolt_commit('-A','-m','env-threshold');"
+}
+
+check_magic() {
+  local name="$1" db="$2" want="$3" magic crc
+  magic=$(checkpoint_magic "$db")
+  crc=$?
+  if [ "$crc" -ne 0 ]; then
+    dltest_fail "$name" "  could not read checkpoint stamp (rc=$crc)"
+  elif [ "$magic" = "$want" ]; then
+    dltest_pass
+  else
+    dltest_fail "$name" "  expected checkpoint magic $want, got $magic"
+  fi
+}
+
+echo "=== WAL checkpoint limits are settable in production builds ==="
 
 export DOLTLITE_WAL_CHECKPOINT_THRESHOLD=1
-if ! dltest_require "cli_commit" "$DB" \
-  "CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);
-   INSERT INTO t VALUES(1, randomblob(8192));
-   SELECT dolt_commit('-A','-m','env-threshold');"; then
-  dltest_finish
-fi
+if ! seed_db "$DB"; then dltest_finish; fi
 if [ ! -f "$DB" ]; then
   dltest_fail "cli_commit" "  expected a database file after commit"
   dltest_finish
 fi
 run_test "cli_commit_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
-magic=$(checkpoint_magic "$DB")
-crc=$?
-if [ "$crc" -ne 0 ]; then
-  dltest_fail "cli_ignores_checkpoint_threshold_env" \
-    "  could not read checkpoint stamp (rc=$crc)"
-elif [ "$magic" = "0" ]; then
-  dltest_pass
-else
-  dltest_fail "cli_ignores_checkpoint_threshold_env" \
-    "  expected checkpoint magic 0 (64MiB default), got $magic"
-fi
+check_magic "cli_honors_checkpoint_threshold_env" "$DB" "$CHECKPOINT_V2"
+unset DOLTLITE_WAL_CHECKPOINT_THRESHOLD
+
+CHUNK_DB="$TMP/chunks.db"
+export DOLTLITE_WAL_CHECKPOINT_CHUNKS=1
+if ! seed_db "$CHUNK_DB"; then dltest_finish; fi
+check_magic "cli_honors_checkpoint_chunks_env" "$CHUNK_DB" "$CHECKPOINT_V2"
+unset DOLTLITE_WAL_CHECKPOINT_CHUNKS
+
+# A single small commit is far below both defaults, so nothing checkpoints
+# when the environment says nothing.
+UNSET_DB="$TMP/unset.db"
+if ! seed_db "$UNSET_DB"; then dltest_finish; fi
+check_magic "cli_defaults_do_not_checkpoint_one_commit" "$UNSET_DB" "0"
 
 dltest_finish

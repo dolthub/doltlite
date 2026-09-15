@@ -130,25 +130,39 @@ void csStampWalCheckpoint(const ChunkStore *cs, u8 *aManifest){
   }
 }
 
-static i64 csWalCheckpointThreshold(void){
-  i64 n = 64*1024*1024;
-#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
-  const char *z = getenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD");
+static i64 csWalEnvLimit(const char *zName, i64 nDefault){
+  const char *z = getenv(zName);
   if( z && z[0] ){
     i64 v = (i64)strtoll(z, 0, 10);
-    if( v>0 ) n = v;
+    if( v>0 ) return v;
   }
-#endif
-  return n;
+  return nDefault;
+}
+
+static i64 csWalCheckpointThreshold(void){
+  return csWalEnvLimit("DOLTLITE_WAL_CHECKPOINT_THRESHOLD",
+                       CS_WAL_CHECKPOINT_BYTES);
+}
+
+static i64 csWalCheckpointChunkLimit(void){
+  return csWalEnvLimit("DOLTLITE_WAL_CHECKPOINT_CHUNKS",
+                       CS_WAL_CHECKPOINT_CHUNKS);
 }
 
 int csWalCheckpointDue(const ChunkStore *cs){
   i64 iBase = cs->wal.iCheckpointReplay>0
             ? cs->wal.iCheckpointReplay : cs->wal.iWalOffset;
+  i64 nSince;
   /* Ref-less raw stores still verify every WAL chunk. */
-  return !prollyHashIsEmpty(&cs->refs.refsHash)
-      && iBase>0 && cs->file.iFileSize>=iBase
-      && cs->file.iFileSize-iBase>=csWalCheckpointThreshold();
+  if( prollyHashIsEmpty(&cs->refs.refsHash) ) return 0;
+  if( iBase<=0 || cs->file.iFileSize<iBase ) return 0;
+  if( cs->file.iFileSize-iBase>=csWalCheckpointThreshold() ) return 1;
+  /* Open replays every record written since the checkpoint, so bounding the
+  ** byte span alone bounds nothing a stream of small commits cares about:
+  ** thousands of them cost thousands of reads while the bytes stay tiny. */
+  nSince = (i64)chunkIndexCount(&cs->index) + cs->staging.nRecent
+         - cs->wal.nCheckpointEntries;
+  return nSince>=csWalCheckpointChunkLimit();
 }
 
 static void csSerializeCheckpointEntry(u8 *aBuf, const ChunkIndexEntry *pEntry){

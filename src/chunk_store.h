@@ -94,6 +94,16 @@
 #define CS_WAL_CHUNK_LEN_OFF   (1 + PROLLY_HASH_SIZE)
 #define CS_WAL_CHUNK_HDR_SIZE  (1 + PROLLY_HASH_SIZE + 4)
 
+/* When a checkpoint becomes due, whichever limit is reached first. Both are
+** overridable at runtime: DOLTLITE_WAL_CHECKPOINT_THRESHOLD in bytes and
+** DOLTLITE_WAL_CHECKPOINT_CHUNKS in records. */
+#ifndef CS_WAL_CHECKPOINT_BYTES
+# define CS_WAL_CHECKPOINT_BYTES  (8*1024*1024)
+#endif
+#ifndef CS_WAL_CHECKPOINT_CHUNKS
+# define CS_WAL_CHECKPOINT_CHUNKS 2048
+#endif
+
 /* Scan/replay read window. Heap-allocated by its users: a buffer this size
 ** exceeds the whole stack in small-stack builds (wasm defaults to 64K). */
 #define CS_SCAN_WINDOW 65536

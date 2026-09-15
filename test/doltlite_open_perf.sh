@@ -3,9 +3,13 @@
 set -euo pipefail
 
 DOLTLITE="${1:-./doltlite}"
-COMMITS_PER_STAGE="${DOLTLITE_OPEN_PERF_COMMITS:-64}"
+COMMITS_PER_STAGE="${DOLTLITE_OPEN_PERF_COMMITS:-1000}"
 STAGES="${DOLTLITE_OPEN_PERF_STAGES:-3}"
 OPENS_PER_SAMPLE="${DOLTLITE_OPEN_PERF_OPENS:-40}"
+# Small enough that the byte-span checkpoint never fires on its own: a large
+# payload puts every stage past a checkpoint and measures the steady state
+# rather than the growth this test exists to catch.
+PAYLOAD_BYTES="${DOLTLITE_OPEN_PERF_PAYLOAD:-512}"
 SAMPLES="${DOLTLITE_OPEN_PERF_SAMPLES:-3}"
 MAX_GROWTH_MS="${DOLTLITE_OPEN_PERF_MAX_GROWTH_MS:-750}"
 TMP="$(mktemp -d)"
@@ -29,7 +33,7 @@ append_commits() {
   {
     echo "CREATE TABLE IF NOT EXISTS updates(id INTEGER PRIMARY KEY, payload BLOB NOT NULL);"
     for ((i=first; i<=last; i++)); do
-      echo "INSERT INTO updates(payload) VALUES(zeroblob(2097152));"
+      echo "INSERT INTO updates(payload) VALUES(zeroblob($PAYLOAD_BYTES));"
       echo "SELECT dolt_commit('-A','-m','open perf $i');"
     done
   } | "$DOLTLITE" "$DB" >/dev/null

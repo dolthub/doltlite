@@ -49,6 +49,8 @@ Views and triggers over `dolt_*` virtual tables work with the shell's default
 |---|---|
 | `DOLTLITE_CA_FILE` | HTTPS remotes: a private CA bundle |
 | `DOLTLITE_HTTP_TIMEOUT_MS` | HTTP remote requests (default 30000) |
+| `DOLTLITE_WAL_CHECKPOINT_THRESHOLD` | Bytes of WAL since the last checkpoint before the next one (default 8388608) |
+| `DOLTLITE_WAL_CHECKPOINT_CHUNKS` | Chunks since the last checkpoint before the next one (default 2048) |
 | `DOLTLITE_CREDS_DIR` | Credential store location (default `~/.doltlite/creds`) |
 | `DOLTLITE_CREDS_KID` | Which stored credential to present |
 | `SQLITE_HISTORY`, `NO_COLOR`, `VISUAL` | Upstream shell behaviour, unchanged |
