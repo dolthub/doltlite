@@ -195,7 +195,7 @@ static void dsCountChangedCells(
   int *pnDiffer,
   int *pnModified
 ){
-  DoltliteRecordInfo fromRi, toRi;
+  DoltliteRecordInfo fromRi = {0}, toRi = {0};
   int i;
   int nDiffer = 0;
   int nModified = 0;

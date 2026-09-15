@@ -100,7 +100,7 @@ static int checkoutLoadSourceTableSql(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal = 0;
     int nVal = 0;
-    DoltliteRecordInfo ri;
+    DoltliteRecordInfo ri = {0};
     char *zType = 0;
     char *zEntryName = 0;
 

@@ -150,7 +150,7 @@ int doltlitePartialIndexMatchesRecord(
 ){
   Table *pTab;
   sqlite3_stmt *pStmt = 0;
-  DoltliteRecordInfo info;
+  DoltliteRecordInfo info = {0};
   int i, rc;
 
   *pMatch = 0;
@@ -572,7 +572,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     int nKey = 0;
     int nValue = 0;
     int nRecord;
-    DoltliteRecordInfo info;
+    DoltliteRecordInfo info = {0};
     UniqueIndexEntry entry;
     int hasNull = 0;
     int partialMatch = 1;

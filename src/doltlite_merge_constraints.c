@@ -353,7 +353,7 @@ static int recordPrefixEquals(
   const u8 *pRight, int nRight,
   int nField
 ){
-  DoltliteRecordInfo a, b;
+  DoltliteRecordInfo a = {0}, b = {0};
   int i;
 
   if( nField<=0 ) return 1;

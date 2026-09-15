@@ -170,7 +170,7 @@ static int loadSchemaFromCatalogMode(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal;
     int nVal;
-    DoltliteRecordInfo ri;
+    DoltliteRecordInfo ri = {0};
 
     prollyCursorValue(&cur, &pVal, &nVal);
 
@@ -337,7 +337,7 @@ int loadSchemaEntryFromCatalog(
 
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal; int nVal;
-    DoltliteRecordInfo ri;
+    DoltliteRecordInfo ri = {0};
 
     prollyCursorValue(&cur, &pVal, &nVal);
     if( pVal && nVal > 0 ){

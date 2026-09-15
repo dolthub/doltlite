@@ -897,11 +897,13 @@ emcc.jsflags += -sINITIAL_MEMORY=$(emcc.INITIAL_MEMORY.$(emcc.INITIAL_MEMORY))
 #
 
 emcc.jsflags += $(emcc.environment)
+emcc.jsflags += -sSTACK_SIZE=512KB
 # ^^^ ACHTUNG: emsdk 3.1.27 reduced the default stack size from 5MB to
 # a mere 64KB, which leads to silent memory corruption via the kvvfs
 # VFS, which requires twice that for its xRead() and xWrite() methods.
 # 2023-03: those methods have since been adapted to use a malloc()'d
-# buffer.
+# buffer. An explicit STACK_SIZE keeps schema-merge / GC off the
+# default 64KB.
 
 #
 # $(sqlite3.js.init-func) is the name Emscripten assigns our exported

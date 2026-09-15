@@ -763,7 +763,7 @@ static int loadSchemaCatalogRows(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal;
     int nVal;
-    DoltliteRecordInfo ri;
+    DoltliteRecordInfo ri = {0};
     prollyCursorValue(&cur, &pVal, &nVal);
     if( pVal && nVal>0 ){
       char *zType = 0, *zName = 0, *zTblName = 0, *zSql = 0;

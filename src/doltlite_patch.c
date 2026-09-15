@@ -941,7 +941,7 @@ static void patchGetValue(
   int iCol,
   PatchValue *pOut
 ){
-  DoltliteRecordInfo ri;
+  DoltliteRecordInfo ri = {0};
   DoltliteSerialValue v;
   int iField;
   memset(pOut, 0, sizeof(*pOut));

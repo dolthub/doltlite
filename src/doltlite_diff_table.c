@@ -925,7 +925,7 @@ static int changeIsSchemaOnly(
   const DoltliteColInfo *pFromCi,
   const DoltliteColInfo *pToCi
 ){
-  DoltliteRecordInfo fromRi, toRi;
+  DoltliteRecordInfo fromRi = {0}, toRi = {0};
   int i;
 
   if( !pFromRec || nFromRec<=0 || !pToRec || nToRec<=0 ) return 0;

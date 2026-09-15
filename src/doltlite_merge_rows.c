@@ -68,7 +68,7 @@ static int bindIndexExprRow(
   const u8 *pRec, int nRec,
   int iPKey, i64 intKey
 ){
-  DoltliteRecordInfo info;
+  DoltliteRecordInfo info = {0};
   int i, rc;
   doltliteParseRecord(pRec, nRec, &info);
   for(i=0; i<pTab->nCol; i++){
@@ -266,7 +266,7 @@ static int doltliteBuildIndexEntryWithExpr(
   u8 **ppIdxRec, int *pnIdxRec,
   int *pStorePayload
 ){
-  DoltliteRecordInfo info;
+  DoltliteRecordInfo info = {0};
   DoltliteSerialValue *aMem = 0;
   u8 **apKeep = 0;
   u8 *pIdxRec = 0;
@@ -383,7 +383,7 @@ static int doltliteBuildIndexEntry(
   u8 **ppIdxRec, int *pnIdxRec,
   int *pStorePayload
 ){
-  DoltliteRecordInfo info;
+  DoltliteRecordInfo info = {0};
   u8 *pIdxRec = 0;
   int nIdxRec = 0;
   u32 ipkType = 0;

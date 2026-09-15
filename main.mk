@@ -399,7 +399,9 @@ T.compile = $(T.cc) $(T.compile.gcov)
 # can include the generated sqlite_cfg.h.
 #
 T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
-    -Wdeclaration-after-statement
+    -Wdeclaration-after-statement \
+    -Wframe-larger-than=16384 \
+    -Werror=frame-larger-than
 
 #
 # $(T.cc.sqlite) is $(T.cc) plus any flags which are desired for the
@@ -2768,6 +2770,7 @@ DOLTLITE_C_TESTS = \
 	count_range_override_test$(T.exe) \
 	vc_cas_swallow_test$(T.exe) \
 	remote_push_lock_busy_test$(T.exe) \
+	record_info_stack_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe) \
 	crash_recovery_test$(T.exe) \
 	concurrent_branch_test$(T.exe)
@@ -2802,6 +2805,10 @@ vc_cas_swallow_test$(T.exe): $(TOP)/test/vc_cas_swallow_test.c libdoltlite$(T.li
 
 remote_push_lock_busy_test$(T.exe): $(TOP)/test/remote_push_lock_busy_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/remote_push_lock_busy_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+record_info_stack_test$(T.exe): $(TOP)/test/record_info_stack_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/record_info_stack_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 readonly_reader_writer_test$(T.exe): $(TOP)/test/readonly_reader_writer_test.c libdoltlite$(T.lib)

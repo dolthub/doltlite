@@ -97,6 +97,10 @@ struct ProllyDiffIter {
   int nOldValCopy;
   u8 *pNewValCopy;
   int nNewValCopy;
+
+  /* Heap prefetch workspace. Local diffs skip this entirely. */
+  void *pPrefetchPairs;
+  void *pPrefetchHashes;
 };
 
 int prollyDiffIterOpen(ProllyDiffIter *pIter, ChunkStore *pStore,
