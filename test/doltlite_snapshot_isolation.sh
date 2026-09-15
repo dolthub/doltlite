@@ -3,8 +3,11 @@
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
+strip_cr() { tr -d '\r'; }
+
 run_test() {
   local n="$1" got="$2" want="$3"
+  got=$(printf '%s' "$got" | strip_cr)
   if [ "$got" = "$want" ]; then
     PASS=$((PASS+1))
   else
@@ -36,12 +39,12 @@ sleep 0.3
 echo "UPDATE t SET v=99 WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 wait $PID
 
-first=$(grep '^first:' "$OUTFILE" | head -1)
-second=$(grep '^second:' "$OUTFILE" | head -1)
+first=$(grep '^first:' "$OUTFILE" | head -1 | tr -d '\r')
+second=$(grep '^second:' "$OUTFILE" | head -1 | tr -d '\r')
 
 run_test "begin_repeatable_first_select" "$first" "first:10"
 run_test "begin_repeatable_second_select" "$second" "second:10"
-post=$($DOLTLITE "$DB" "SELECT 'post:'||v FROM t WHERE id=1;" 2>/dev/null)
+post=$($DOLTLITE "$DB" "SELECT 'post:'||v FROM t WHERE id=1;" 2>/dev/null | tr -d '\r')
 run_test "begin_repeatable_post_visible" "$post" "post:99"
 rm -f "$OUTFILE"
 db_rm "$DB"
@@ -62,8 +65,8 @@ sleep 0.3
 echo "UPDATE t SET v=42 WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 wait $PID
 
-first=$(grep '^first:' "$OUTFILE" | head -1)
-second=$(grep '^second:' "$OUTFILE" | head -1)
+first=$(grep '^first:' "$OUTFILE" | head -1 | tr -d '\r')
+second=$(grep '^second:' "$OUTFILE" | head -1 | tr -d '\r')
 run_test "autocommit_first_select" "$first" "first:10"
 run_test "autocommit_second_sees_update" "$second" "second:42"
 rm -f "$OUTFILE"
@@ -77,7 +80,7 @@ INSERT INTO t VALUES(1,10),(2,20),(3,30);" \
 out=$($DOLTLITE "$DB" "SELECT
   (SELECT v FROM t WHERE id=1) || ':' ||
   (SELECT v FROM t WHERE id=2) || ':' ||
-  (SELECT sum(v) FROM t);" 2>&1)
+  (SELECT sum(v) FROM t);" 2>&1 | tr -d '\r')
 run_test "compound_query_consistent" "$out" "10:20:60"
 db_rm "$DB"
 
@@ -90,7 +93,7 @@ SELECT v FROM t WHERE id=1;
 UPDATE t SET v=99 WHERE id=1;
 SELECT v FROM t WHERE id=1;
 ROLLBACK;
-SELECT v FROM t WHERE id=1;" | $DOLTLITE "$DB" 2>&1 | tr '\n' '|')
+SELECT v FROM t WHERE id=1;" | $DOLTLITE "$DB" 2>&1 | tr -d '\r' | tr '\n' '|')
 run_test "rollback_to_pre_update" "$out" "10|99|10|"
 db_rm "$DB"
 

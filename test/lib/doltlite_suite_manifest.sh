@@ -4,6 +4,7 @@ doltlite_all_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
 engine_floor_test.sh
+windows_suite_coverage_test.sh
 doltlite_clustered_pk_pushdown.sh
 feature_flags_stamp_test.sh
 install_sh_layout_test.sh
@@ -178,9 +179,13 @@ doltlite_sanitizer_suites() {
   done < <(doltlite_coverage_suites)
 }
 
+# Portable native suites. Unix-only stays off this list: nofollow (symlink
+# semantics) and fork-based C tests. /tmp paths work on Windows CI via the
+# D:\tmp junction in platform-test.yml.
 doltlite_windows_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
+windows_suite_coverage_test.sh
 sqlite_compatibility_contract_test.sh
 concurrency_contract_test.sh
 storage_format_contract_test.sh
@@ -208,9 +213,14 @@ doltlite_schemas_scoped_ops.sh
 doltlite_schema_merge.sh
 doltlite_cherry_pick.sh
 doltlite_revert_dirty.sh
+doltlite_rebase.sh
+doltlite_rebase_schema.sh
 doltlite_conflict_rows.sh
 doltlite_reset.sh
 doltlite_working_set.sh
+doltlite_history.sh
+doltlite_at.sh
+doltlite_clustered_pk_pushdown.sh
 doltlite_gc.sh
 doltlite_gc_session_state.sh
 doltlite_gc_history.sh
@@ -221,8 +231,11 @@ doltlite_dbpage.sh
 doltlite_dbstat.sh
 doltlite_record_format.sh
 doltlite_rollback_durability.sh
+doltlite_savepoint.sh
 doltlite_unique_index_delete.sh
 doltlite_storage_locking.sh
+doltlite_snapshot_isolation.sh
+doltlite_txn_seek_visibility.sh
 chunk_physical_dups_test.sh
 chunker_boundary_golden.sh
 doltlite_open_sqlite_file.sh
@@ -242,5 +255,6 @@ doltlite_pragma_wal_checkpoint.sh
 doltlite_row_count_estimate.sh
 doltlite_schema_cookie.sh
 doltlite_unknown_sql_function.sh
+doltlite_regression_test_c.sh
 EOF
 }

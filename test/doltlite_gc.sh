@@ -345,6 +345,64 @@ run_test_match "gc_mark_failure_names_missing_chunk" \
 
 db_rm "$DB"
 
+# A second connection stays on the file while GC replaces it. POSIX can
+# unlink an open inode; Windows cannot reliably replace a file another
+# handle still holds. Either way the committed rows stay readable, and
+# after the peer closes, GC can replace.
+DB=/tmp/test_gc_rename_open_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','c2');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_branch('-d','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+READER_OUT=/tmp/test_gc_rename_open_reader_$$.out
+GC_OUT=/tmp/test_gc_rename_open_gc_$$.out
+(
+  echo "BEGIN;"
+  echo "SELECT count(*) FROM t;"
+  sleep 2
+  echo "SELECT count(*) FROM t;"
+  echo "COMMIT;"
+) | $DOLTLITE "$DB" > "$READER_OUT" 2>&1 &
+READER_PID=$!
+sleep 0.3
+echo "SELECT dolt_gc(); SELECT count(*) FROM t; PRAGMA integrity_check;" \
+  | $DOLTLITE "$DB" > "$GC_OUT" 2>&1
+wait "$READER_PID"
+
+gc_replaced=0
+grep -qE 'chunks (removed|kept)|0 chunks removed' "$GC_OUT" && gc_replaced=1
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if [ "$gc_replaced" = 1 ] || grep -q 'gc sweep phase failed' "$GC_OUT"; then
+      PASS=$((PASS+1))
+    else
+      FAIL=$((FAIL+1))
+      ERRORS="$ERRORS\nFAIL: gc_rename_over_open_gc\n  got: $(tr '\n' '|' < "$GC_OUT")"
+    fi
+    ;;
+  *)
+    if [ "$gc_replaced" = 1 ]; then
+      PASS=$((PASS+1))
+    else
+      FAIL=$((FAIL+1))
+      ERRORS="$ERRORS\nFAIL: gc_rename_over_open_gc\n  got: $(tr '\n' '|' < "$GC_OUT")"
+    fi
+    ;;
+esac
+run_test "gc_rename_over_open_rows" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "gc_rename_over_open_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+run_test_match "gc_rename_over_open_retry" "SELECT dolt_gc();" "chunks" "$DB"
+rm -f "$READER_OUT" "$GC_OUT"
+db_rm "$DB"
+
 # VACUUM INTO renames the copy over its output path, so closing the handle
 # logs through the output filename; that name must outlive the handle
 # (a use-after-free under ASAN otherwise).

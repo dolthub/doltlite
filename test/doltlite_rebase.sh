@@ -2,10 +2,14 @@
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
+run_sql() {
+  echo "$1" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$2" 2>&1 | tr -d '\r'
+}
+
 run_test() {
   local n="$1" s="$2" e="$3" d="$4"
   local r
-  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$d" 2>&1)
+  r=$(run_sql "$s" "$d")
   if [ "$r" = "$e" ]; then
     PASS=$((PASS+1))
   else
@@ -17,7 +21,7 @@ run_test() {
 run_test_match() {
   local n="$1" s="$2" p="$3" d="$4"
   local r
-  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$d" 2>&1)
+  r=$(run_sql "$s" "$d")
   if echo "$r" | grep -qE "$p"; then
     PASS=$((PASS+1))
   else

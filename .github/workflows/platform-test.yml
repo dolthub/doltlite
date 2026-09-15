@@ -15,9 +15,10 @@ jobs:
     # Several steps here budget 20 minutes, which a 20-minute job cap made
     # unreachable: the job died first with "The operation was canceled" rather
     # than the step failing on its own budget and naming itself. Observed runs
-    # are 3-5m on macos, 6-7m on windows and 6-15m on ubuntu, so 30 keeps a
+    # are 3-5m on macos, 6-15m on ubuntu. Windows now runs rebase, history,
+    # and the C regression corpus inside the native suite, so 45 keeps a
     # real ceiling while letting a stuck step report which one it was.
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CFLAGS: -O2 -g -Werror
       DOLTLITE_AMALG_HTTP_PROBE: ${{ github.workspace }}/build/amalgamation_http_probe${{ matrix.exe }}
@@ -310,9 +311,10 @@ jobs:
         export DOLTLITE=./doltlite-no-msys-conv
         export DOLTLITE_SYSTEM="$(cygpath -w "$PWD/doltlite.exe")"
         export DOLTLITE_SYSTEM_NULL=NUL
+        export DOLTLITE_REGRESSION_PREBUILT=1
         DOLTLITE_BUILD_DIR="$PWD" DOLTLITE_SUITE_SET=windows \
           bash ../test/run_doltlite_tests.sh
-      timeout-minutes: 20
+      timeout-minutes: 35
 
     - name: Windows correctness regression tests
       if: matrix.platform == 'windows'
@@ -457,14 +459,6 @@ jobs:
       run: |
         cd build
         ./prepared_stmt_reuse_test
-
-    - name: Windows native C regression tests
-      if: matrix.platform == 'windows'
-      shell: msys2 {0}
-      env:
-        DOLTLITE_REGRESSION_PREBUILT: 1
-      run: cd build && bash ../test/run_doltlite_regression_case.sh all_except=backup_safety
-      timeout-minutes: 15
 
     - name: Warning-free specialized C tests
       if: matrix.platform == 'ubuntu'

@@ -547,4 +547,28 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_swap_nulls');
 "
 
+echo "--- PK shape ---"
+
+oracle "text_pk_history" "
+CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES ('a', 10);
+INSERT INTO t VALUES ('b', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v = 11 WHERE id = 'a';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+"
+
+oracle "composite_pk_history" "
+CREATE TABLE t(id INT, v INT, PRIMARY KEY(id, v));
+INSERT INTO t VALUES (1, 10);
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (1, 11);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+"
+
 vc_oracle_finish
