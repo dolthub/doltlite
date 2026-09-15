@@ -354,6 +354,19 @@ int doltlitePartialIndexLoad(sqlite3 *db, Index *pIdx,
                              DoltlitePartialIndex *pOut);
 void doltlitePartialIndexClear(DoltlitePartialIndex *p);
 
+int doltliteIndexMutMapRowDelta(
+  sqlite3 *db,
+  Index *pIdx,
+  ProllyMutMap *pMap,
+  const i16 *aiColumn, int nIdxCol,
+  KeyInfo *pKeyInfo,
+  int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal,
+  DoltlitePartialIndex *pPart
+);
+
 int normalizeSideToMergedLayout(
   sqlite3 *db,
   const char *zTable,

@@ -99,6 +99,7 @@ for f in \
   "$SRCDIR"/doltlite_merge_predetect.c \
   "$SRCDIR"/doltlite_merge_rebuild.c \
   "$SRCDIR"/doltlite_merge_rows.c \
+  "$SRCDIR"/doltlite_merge_index_key.c \
   "$SRCDIR"/doltlite_merge_generated.c \
   "$SRCDIR"/doltlite_merge_schema.c
 do
