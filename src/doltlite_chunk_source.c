@@ -762,6 +762,10 @@ int chunkStoreOriginSourceEnabled(ChunkStore *cs){
   return p && p->originEnabled && csHasOrigin(cs);
 }
 
+int chunkStoreSourceEnabled(ChunkStore *cs){
+  return cs->pChunkSource && csSourceActive(cs->pChunkSource)!=0;
+}
+
 static void csSourceDropHost(ChunkStore *cs){
   DoltliteChunkSourceState *p = cs->pChunkSource;
   if( !p ) return;
@@ -1075,6 +1079,10 @@ int doltliteOriginSourceEnable(ChunkStore *cs, sqlite3 *db, int *pChanged){
 int chunkStoreOriginSourceEnabled(ChunkStore *cs){
   DoltliteChunkSourceState *p = cs->pChunkSource;
   return p && p->originEnabled && csHasOrigin(cs);
+}
+
+int chunkStoreSourceEnabled(ChunkStore *cs){
+  return chunkStoreOriginSourceEnabled(cs);
 }
 
 void chunkStoreSourceClose(ChunkStore *cs){
