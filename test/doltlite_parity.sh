@@ -17,7 +17,10 @@ fi
 if ! bash "$SCRIPT_DIR/lib/assert_doltlite_engine.sh" "$DOLTLITE"; then
   exit 1
 fi
-if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3" "$DOLTLITE"; then
+# Header-only: Windows CI's ./sqlite3 is MSYS 3.53 vs doltlite 3.54.
+# Version match would reject a valid stock reference; self-comparison is
+# still caught by the SQLite-format header check and samefile.
+if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3"; then
   exit 1
 fi
 if python3 -c 'import os,sys; sys.exit(0 if os.path.samefile(sys.argv[1], sys.argv[2]) else 1)' \
