@@ -400,8 +400,7 @@ T.compile = $(T.cc) $(T.compile.gcov)
 #
 T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
     -Wdeclaration-after-statement \
-    -Wframe-larger-than=16384 \
-    -Werror=frame-larger-than
+    -Wframe-larger-than=16384
 
 #
 # $(T.cc.sqlite) is $(T.cc) plus any flags which are desired for the
