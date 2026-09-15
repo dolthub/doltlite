@@ -467,6 +467,10 @@ int csMaterializeIndex(ChunkStore *cs){
     sqlite3_free(aLazy);
     return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
   }
+  if( cs->index.nIndex==0 ){
+    chunkIndexReplaceEntries(&cs->index, aLazy, lazy.nEntries);
+    return SQLITE_OK;
+  }
   nTotal = lazy.nEntries+cs->index.nIndex;
   aMerged = sqlite3_malloc64((sqlite3_uint64)nTotal*sizeof(ChunkIndexEntry));
   if( !aMerged ){
@@ -512,7 +516,6 @@ int csReadIndex(ChunkStore *cs){
   int rc;
   i64 nEntries64;
   int nEntries;
-  u8 *aBuf;
   int i;
   i64 fileSize = 0;
 
@@ -564,46 +567,28 @@ int csReadIndex(ChunkStore *cs){
   cs->index.aIndexMmapBase = 0;
   cs->index.aIndexMmapSize = 0;
 
-  aBuf = (u8 *)sqlite3_malloc64(cs->index.nIndexSize);
-  if( aBuf == 0 ){
-    sqlite3_free(cs->index.aIndex);
-    cs->index.aIndex = 0;
-    cs->index.nIndex = 0;
-    return SQLITE_NOMEM;
+  assert( sizeof(ChunkIndexEntry)>=CHUNK_INDEX_ENTRY_SIZE );
+  rc = csReadSliced(cs, cs->index.aIndex, cs->index.nIndexSize,
+                   cs->index.iIndexOffset);
+  /* Decode backwards so padding cannot overwrite unread entries. */
+  for(i=nEntries-1; rc==SQLITE_OK && i>=0; i--){
+    ChunkIndexEntry e;
+    rc = csDeserializeIndexEntry(
+        (u8*)cs->index.aIndex+(i64)i*CHUNK_INDEX_ENTRY_SIZE, &e);
+    if( rc==SQLITE_OK ) cs->index.aIndex[i] = e;
   }
 
-  rc = csReadSliced(cs, aBuf, (i64)cs->index.nIndexSize, cs->index.iIndexOffset);
-  if( rc != SQLITE_OK ){
-    sqlite3_free(aBuf);
-    sqlite3_free(cs->index.aIndex);
-    cs->index.aIndex = 0;
-    cs->index.nIndex = 0;
-    return rc;
+  if( rc==SQLITE_OK ){
+    rc = csValidateIndexEntries(cs->index.aIndex, nEntries,
+                               cs->index.iIndexOffset);
   }
-
-  for( i = 0; i < nEntries; i++ ){
-    rc = csDeserializeIndexEntry(aBuf + i * CHUNK_INDEX_ENTRY_SIZE,
-                                 &cs->index.aIndex[i]);
-    if( rc != SQLITE_OK ){
-      sqlite3_free(aBuf);
-      sqlite3_free(cs->index.aIndex);
-      cs->index.aIndex = 0;
-      cs->index.nIndex = 0;
-      return rc;
-    }
-  }
-
-  rc = csValidateIndexEntries(cs->index.aIndex, nEntries,
-                              cs->index.iIndexOffset);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(aBuf);
     sqlite3_free(cs->index.aIndex);
     cs->index.aIndex = 0;
     cs->index.nIndex = 0;
     return rc;
   }
 
-  sqlite3_free(aBuf);
   return SQLITE_OK;
 }
 
