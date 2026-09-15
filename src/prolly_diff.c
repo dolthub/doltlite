@@ -147,7 +147,9 @@ static int diffEmitModify(
 static int diffRecordsEqualFieldwise(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
-  int *pEqual
+  int *pEqual,
+  int *pnFieldA,
+  int *pnFieldB
 ){
   DoltliteRecordInfo aInfo;
   DoltliteRecordInfo bInfo;
@@ -156,6 +158,8 @@ static int diffRecordsEqualFieldwise(
   int rc;
 
   *pEqual = 0;
+  if( pnFieldA ) *pnFieldA = 0;
+  if( pnFieldB ) *pnFieldB = 0;
   if( nA < 1 || nB < 1 ){
     DoltliteRecordInfo *pInfo;
     const u8 *pRec;
@@ -169,6 +173,11 @@ static int diffRecordsEqualFieldwise(
     pInfo = nA < 1 ? &bInfo : &aInfo;
     rc = doltliteParseRecordStrict(pRec, nRec, pInfo);
     if( rc!=SQLITE_OK ) return rc;
+    if( nA < 1 ){
+      if( pnFieldB ) *pnFieldB = pInfo->nField;
+    }else if( pnFieldA ){
+      *pnFieldA = pInfo->nField;
+    }
     for(i=0; i<pInfo->nField; i++){
       if( pInfo->aType[i]!=0 ) return SQLITE_OK;
     }
@@ -180,6 +189,8 @@ static int diffRecordsEqualFieldwise(
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteParseRecordStrict(pB, nB, &bInfo);
   if( rc!=SQLITE_OK ) return rc;
+  if( pnFieldA ) *pnFieldA = aInfo.nField;
+  if( pnFieldB ) *pnFieldB = bInfo.nField;
 
   nField = aInfo.nField > bInfo.nField ? aInfo.nField : bInfo.nField;
   for(i=0; i<nField; i++){
@@ -210,6 +221,29 @@ static int diffRecordsEqualFieldwise(
   return SQLITE_OK;
 }
 
+/* True when the stored record may stand in for the new one, so an update that
+** changes nothing can keep the old bytes and leave the table hash alone.
+** Semantic equality is not enough: a record that drops trailing fields compares
+** equal to the longer one it replaces, and keeping those bytes would leave the
+** dropped column in storage for the next ADD COLUMN to read back. */
+int prollyValuesInterchangeable(
+  const u8 *pOld, int nOld,
+  const u8 *pNew, int nNew,
+  int *pOk
+){
+  int equal = 0;
+  int nFieldOld = 0;
+  int nFieldNew = 0;
+  int rc;
+
+  *pOk = 0;
+  rc = diffRecordsEqualFieldwise(pOld, nOld, pNew, nNew, &equal,
+                                 &nFieldOld, &nFieldNew);
+  if( rc!=SQLITE_OK ) return rc;
+  *pOk = equal && nFieldOld<=nFieldNew;
+  return SQLITE_OK;
+}
+
 int prollyValuesEqual(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
@@ -222,13 +256,13 @@ int prollyValuesEqual(
       return SQLITE_OK;
     }
     if( memcmp(pA, pB, nA)==0 ){
-      rc = diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
+      rc = diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual, 0, 0);
       if( rc!=SQLITE_OK ) return rc;
       if( *pEqual ) return SQLITE_OK;
       return SQLITE_CORRUPT;
     }
   }
-  return diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
+  return diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual, 0, 0);
 }
 
 static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew,
