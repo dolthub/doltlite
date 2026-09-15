@@ -242,6 +242,55 @@ rm -f "$DB_DIFF"
 
 rm -f "$DB_1K" "$DB_100K" "$DB_1M"
 
+# A NOCASE index has to be checked for keys holding a NUL byte before the
+# planner can trust its order. The answer is a property of the committed tree,
+# so pending edits must not force it to be recomputed per prepared statement.
+echo ""
+echo "NOCASE index planning with edits pending..."
+DB_NC="/tmp/dl_perf_nocase_$$.db"
+NC_SQL="/tmp/dl_perf_nocase_$$.sql"
+rm -f "$DB_NC"
+python3 -c "
+q = chr(39)
+print('CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);')
+print('BEGIN;')
+for i in range(1, 200001):
+    print(f'INSERT INTO t VALUES({i},{q}key_{i}{q});')
+print('COMMIT;')
+print('CREATE INDEX i_s ON t(s);')
+" | $DOLTLITE "$DB_NC" > /dev/null 2>&1
+
+nocase_plan_ms() {
+  python3 -c "
+q = chr(39)
+print('BEGIN;')
+print(f'UPDATE t SET s={q}changed{q} WHERE id=1;')
+for i in range(1, $1 + 1):
+    print(f'SELECT count(*) FROM t WHERE s={q}key_{i}{q};')
+print('COMMIT;')
+" > "$NC_SQL"
+  time_ms "$DOLTLITE '$DB_NC' < '$NC_SQL'"
+}
+
+T_NC_50=$(nocase_plan_ms 50)
+T_NC_800=$(nocase_plan_ms 800)
+echo "  50 statements: ${T_NC_50}ms"
+echo "  800 statements: ${T_NC_800}ms"
+NC_ROWS=$($DOLTLITE "$DB_NC" "SELECT count(*) FROM t WHERE s='changed';" 2>&1)
+echo "  (correctness: $NC_ROWS changed row; expected 1)"
+if [ "$NC_ROWS" != "1" ]; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: nocase_plan_correctness\n  expected 1 changed row, got $NC_ROWS"
+  echo "  FAIL: nocase_plan_correctness — expected 1, got $NC_ROWS"
+else
+  PASS=$((PASS+1))
+  echo "  PASS: nocase_plan_correctness"
+fi
+
+assert_ratio "nocase_plan_50_to_800_statements" "$T_NC_50" "$T_NC_800" 3
+
+rm -f "$DB_NC" "$NC_SQL"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

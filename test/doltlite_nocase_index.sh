@@ -56,4 +56,51 @@ run_test_lastline "nocase_z_boundary_integrity_check" "
 PRAGMA integrity_check;
 " "ok" "$DB"
 
+# A NOCASE key holding a NUL byte sorts differently from the index order the
+# planner would otherwise trust, so the index stops being usable for ORDER BY.
+# The plan is the visible form of that answer; it has to stay right whether the
+# NUL is committed or still pending.
+NULDB=/tmp/test_doltlite_nocase_nul_$$.db
+rm -f "$NULDB"
+trap 'rm -f "$DB" "$NULDB"' EXIT
+
+run_test "nocase_nul_absent_keeps_index_order" "
+CREATE TABLE n(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+INSERT INTO n VALUES(1,'aa'),(2,'bb'),(3,'cc');
+CREATE INDEX i_n ON n(s);
+EXPLAIN QUERY PLAN SELECT s FROM n ORDER BY s;
+" "QUERY PLAN
+\`--SCAN n USING COVERING INDEX i_n" "$NULDB"
+
+run_test "nocase_nul_pending_edit_without_nul_keeps_index_order" "
+BEGIN;
+UPDATE n SET s='zz' WHERE id=2;
+EXPLAIN QUERY PLAN SELECT s FROM n ORDER BY s;
+EXPLAIN QUERY PLAN SELECT s FROM n ORDER BY s;
+COMMIT;
+" "QUERY PLAN
+\`--SCAN n USING COVERING INDEX i_n
+QUERY PLAN
+\`--SCAN n USING COVERING INDEX i_n" "$NULDB"
+
+run_test "nocase_nul_pending_edit_with_nul_drops_index_order" "
+BEGIN;
+UPDATE n SET s='b'||char(0)||'b' WHERE id=3;
+EXPLAIN QUERY PLAN SELECT s FROM n ORDER BY s;
+ROLLBACK;
+" "QUERY PLAN
+|--SCAN n
+\`--USE TEMP B-TREE FOR ORDER BY" "$NULDB"
+
+run_test "nocase_nul_committed_drops_index_order" "
+INSERT INTO n VALUES(4,'d'||char(0)||'d');
+EXPLAIN QUERY PLAN SELECT s FROM n ORDER BY s;
+" "QUERY PLAN
+|--SCAN n
+\`--USE TEMP B-TREE FOR ORDER BY" "$NULDB"
+
+run_test_lastline "nocase_nul_integrity_check" "
+PRAGMA integrity_check;
+" "ok" "$NULDB"
+
 dltest_finish
