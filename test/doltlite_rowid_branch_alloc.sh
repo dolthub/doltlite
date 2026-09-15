@@ -128,6 +128,23 @@ SELECT id FROM tt ORDER BY id;
 " "1
 2" "$DB"
 
+CEIL="$ROOT/ceiling.db"
+
+run_test "ipk_ceiling_is_full_not_random" "
+CREATE TABLE c(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO c VALUES(9223372036854775807,'max');
+INSERT INTO c(v) VALUES('next');
+SELECT count(*) FROM c;
+" "Error near line 4: database or disk is full
+1" "$CEIL"
+
+run_test "ipk_ceiling_stays_full_after_delete" "
+DELETE FROM c WHERE id = 9223372036854775807;
+INSERT INTO c(v) VALUES('after');
+SELECT count(*) FROM c;
+" "Error near line 3: database or disk is full
+0" "$CEIL"
+
 run_test "autoincrement_table_unchanged" "
 CREATE TABLE ai(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
 INSERT INTO ai(v) VALUES(1),(2);
