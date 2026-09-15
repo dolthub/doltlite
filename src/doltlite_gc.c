@@ -338,11 +338,19 @@ static int gcVerifySessionHashCb(void *ctx, const ProllyHash *pHash){
 
 static void gcVerifySessionResolvable(sqlite3 *db, ChunkStore *cs){
   GcVerifyCtx v;
+#ifdef SQLITE_TEST
+  extern int sqlite3_io_error_benign;
+  int savedIoBenign = sqlite3_io_error_benign;
+  sqlite3_io_error_benign = 1;
+#endif
   v.cs = cs; v.rc = SQLITE_OK;
-  /* Diagnostic-only; allocation failures are inconclusive (gcVerifyHashCb). */
+  /* Diagnostic-only; allocation and I/O failures are inconclusive. */
   sqlite3BeginBenignMalloc();
   (void)doltliteSeedSessionHashes(db, cs, gcVerifySessionHashCb, &v);
   sqlite3EndBenignMalloc();
+#ifdef SQLITE_TEST
+  sqlite3_io_error_benign = savedIoBenign;
+#endif
 }
 #endif
 
