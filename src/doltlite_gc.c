@@ -3,7 +3,6 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
-#include "prolly_hashset.h"
 #include "prolly_node.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
@@ -17,6 +16,15 @@
 
 #include "chunk_store_int.h"
 #include "doltlite_internal.h"
+
+typedef struct GcMarks GcMarks;
+struct GcMarks {
+  ChunkStore *cs;
+  Bitvec *aBits[3];
+  int nEntries[3];
+  int keepAll;
+};
+enum { GC_INDEX, GC_RECENT, GC_STAGING };
 
 typedef struct GcQueue GcQueue;
 typedef struct GcQueueItem GcQueueItem;
@@ -36,7 +44,7 @@ struct GcQueue {
   int iHead;
   int nLimit;
   sqlite3_vfs *pVfs;
-  ProllyHashSet *marked;
+  GcMarks *marked;
   sqlite3_file *pFile;
   GcQueueItem *aWrite;
   int nWrite;
@@ -96,11 +104,65 @@ static const char *gcSourceName(int eSource){
   return azSource[eSource];
 }
 
+static void gcMarksFree(GcMarks *p){
+  int i;
+  for(i=0; i<3; i++) sqlite3BitvecDestroy(p->aBits[i]);
+  memset(p, 0, sizeof(*p));
+}
+
+static int gcMarksInit(GcMarks *p, ChunkStore *cs){
+  int i;
+  memset(p, 0, sizeof(*p));
+  p->cs = cs;
+  p->nEntries[GC_INDEX] = cs->index.nIndex;
+  p->nEntries[GC_RECENT] = cs->staging.nRecent;
+  p->nEntries[GC_STAGING] = cs->staging.nPending;
+  for(i=0; i<3; i++){
+    if( p->nEntries[i]==0 ) continue;
+    p->aBits[i] = sqlite3BitvecCreate((u32)p->nEntries[i]);
+    if( !p->aBits[i] ){
+      gcMarksFree(p);
+      return SQLITE_NOMEM;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int gcMarksTest(GcMarks *p, int eIndex, int i){
+  assert( i>=0 && i<p->nEntries[eIndex] );
+  return p->keepAll || sqlite3BitvecTest(p->aBits[eIndex], (u32)i+1);
+}
+
+static int gcMarksAdd(GcMarks *p, const ProllyHash *h, int *pSeen){
+  ChunkStore *cs = p->cs;
+  int aPos[3];
+  int i, rc;
+  assert( cs->lockDepth>0 );
+  assert( p->nEntries[GC_INDEX]==cs->index.nIndex );
+  assert( p->nEntries[GC_RECENT]==cs->staging.nRecent );
+  assert( p->nEntries[GC_STAGING]==cs->staging.nPending );
+  *pSeen = 0;
+  aPos[GC_INDEX] = csSearchIndex(cs->index.aIndex, cs->index.nIndex, h);
+  rc = csSearchRecent(cs, h, &aPos[GC_RECENT]);
+  if( rc==SQLITE_OK ) rc = csSearchPending(cs, h, &aPos[GC_STAGING]);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<3; i++){
+    if( aPos[i]<0 ) continue;
+    if( gcMarksTest(p, i, aPos[i]) ){
+      *pSeen = 1;
+    }else{
+      rc = sqlite3BitvecSet(p->aBits[i], (u32)aPos[i]+1);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
 #define GC_QUEUE_BUFFER 256
 #define GC_QUEUE_BYTES (64*1024*1024)
 
 static int gcQueueInit(
-  GcQueue *q, sqlite3_vfs *pVfs, ProllyHashSet *marked
+  GcQueue *q, sqlite3_vfs *pVfs, GcMarks *marked
 ){
   memset(q, 0, sizeof(*q));
   q->pVfs = pVfs;
@@ -181,15 +243,13 @@ static int gcQueuePush(
   int iChild
 ){
   GcQueueItem item;
-  int rc;
+  int rc, seen;
   assert( q->nItems>=0 && q->nItems<=q->nAlloc );
   assert( q->iHead>=0 && q->iHead<q->nAlloc );
-  if( prollyHashIsEmpty(h) || prollyHashSetContains(q->marked, h) ){
-    return SQLITE_OK;
-  }
+  if( prollyHashIsEmpty(h) ) return SQLITE_OK;
   /* Marking is complete only when every scheduled chunk has been walked. */
-  rc = prollyHashSetAdd(q->marked, h);
-  if( rc!=SQLITE_OK ) return rc;
+  rc = gcMarksAdd(q->marked, h, &seen);
+  if( rc!=SQLITE_OK || seen ) return rc;
   if( !q->pFile && q->nItems==q->nAlloc ){
     int nNew = q->nAlloc * 2;
     /* A moving realloc can hold both rings until the copy completes. */
@@ -308,7 +368,7 @@ static void gcVerifySessionResolvable(sqlite3 *db, ChunkStore *cs){
 static int gcMarkReachable(
   sqlite3 *db,
   ChunkStore *cs,
-  ProllyHashSet *marked,
+  GcMarks *marked,
   GcMarkTrace *pTrace
 ){
   GcQueue queue;
@@ -435,20 +495,9 @@ static int gcMarkReachable(
   }
 
   if( rc==SQLITE_DONE && partial ){
-    const ChunkIndexEntry *aEntries[3];
-    int nEntries[3];
-    int j;
     /* Missing parents can hide cached descendants. Without the complete
     ** graph, unmarked local chunks are not provably unreachable. */
-    chunkIndexGetEntries(&cs->index, &nEntries[0], &aEntries[0]);
-    chunkStagingGetRecent(&cs->staging, &nEntries[1], &aEntries[1]);
-    chunkStagingGetPending(&cs->staging, &nEntries[2], &aEntries[2]);
-    rc = SQLITE_OK;
-    for(i=0; rc==SQLITE_OK && i<3; i++){
-      for(j=0; rc==SQLITE_OK && j<nEntries[i]; j++){
-        rc = prollyHashSetAdd(marked, &aEntries[i][j].hash);
-      }
-    }
+    marked->keepAll = 1;
   }
   gcQueueFree(&queue);
   return rc==SQLITE_DONE ? SQLITE_OK : rc;
@@ -550,7 +599,7 @@ static int gcWriterAppend(GcFileWriter *pW, const u8 *p, int n){
 static int gcStreamMarkedChunk(
   ChunkStore *cs,
   const ProllyHash *pHash,
-  ProllyHashSet *marked,
+  int isMarked,
   GcFileWriter *pW,
   i64 *piPos,
   ChunkIndexEntry *aNewIndex,
@@ -560,7 +609,7 @@ static int gcStreamMarkedChunk(
   int nChunkData = 0;
   int rc;
 
-  if( !prollyHashSetContains(marked, pHash) ) return SQLITE_OK;
+  if( !isMarked ) return SQLITE_OK;
 
   rc = chunkStoreGet(cs, pHash, &chunkData, &nChunkData);
   if( rc!=SQLITE_OK ) return rc;
@@ -590,7 +639,7 @@ static int gcStreamMarkedChunk(
 ** fetch-and-discard still hash-validates every kept chunk. */
 static int gcBuildCompactedIndex(
   ChunkStore *cs,
-  ProllyHashSet *marked,
+  GcMarks *marked,
   GcFileWriter *pW,
   i64 *pnNewData,
   ChunkIndexEntry **ppNewIndex,
@@ -607,21 +656,21 @@ static int gcBuildCompactedIndex(
     int nIdx; const ChunkIndexEntry *aIdx;
     chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
     for(i=0; i<nIdx; i++){
-      if( prollyHashSetContains(marked, &aIdx[i].hash) ) kept++;
+      if( gcMarksTest(marked, GC_INDEX, i) ) kept++;
     }
   }
   {
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; i<nPend; i++){
-      if( prollyHashSetContains(marked, &aPend[i].hash) ) kept++;
+      if( gcMarksTest(marked, GC_STAGING, i) ) kept++;
     }
   }
   {
     int nRec; const ChunkIndexEntry *aRec;
     chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
     for(i=0; i<nRec; i++){
-      if( prollyHashSetContains(marked, &aRec[i].hash) ) kept++;
+      if( gcMarksTest(marked, GC_RECENT, i) ) kept++;
     }
   }
 
@@ -638,7 +687,8 @@ static int gcBuildCompactedIndex(
     int nIdx; const ChunkIndexEntry *aIdx;
     chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
     for(i=0; i<nIdx && rc==SQLITE_OK; i++){
-      rc = gcStreamMarkedChunk(cs, &aIdx[i].hash, marked, pW, &iPos,
+      rc = gcStreamMarkedChunk(cs, &aIdx[i].hash,
+                               gcMarksTest(marked, GC_INDEX, i), pW, &iPos,
                                aNewIndex, &nNewIndex);
     }
   }
@@ -646,7 +696,8 @@ static int gcBuildCompactedIndex(
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; i<nPend && rc==SQLITE_OK; i++){
-      rc = gcStreamMarkedChunk(cs, &aPend[i].hash, marked, pW, &iPos,
+      rc = gcStreamMarkedChunk(cs, &aPend[i].hash,
+                               gcMarksTest(marked, GC_STAGING, i), pW, &iPos,
                                aNewIndex, &nNewIndex);
     }
   }
@@ -654,7 +705,8 @@ static int gcBuildCompactedIndex(
     int nRec; const ChunkIndexEntry *aRec;
     chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
     for(i=0; i<nRec && rc==SQLITE_OK; i++){
-      rc = gcStreamMarkedChunk(cs, &aRec[i].hash, marked, pW, &iPos,
+      rc = gcStreamMarkedChunk(cs, &aRec[i].hash,
+                               gcMarksTest(marked, GC_RECENT, i), pW, &iPos,
                                aNewIndex, &nNewIndex);
     }
   }
@@ -703,7 +755,7 @@ static int gcReopenChunkFile(ChunkStore *cs, sqlite3_file **ppFile){
 ** the source store is not touched. */
 static int gcWriteCompactedTo(
   ChunkStore *cs,
-  ProllyHashSet *marked,
+  GcMarks *marked,
   const char *zPath,
   int bDeleteExisting,
   int *pbTargetNonEmpty,
@@ -739,7 +791,7 @@ static int gcWriteCompactedTo(
     int nIdx; const ChunkIndexEntry *aIdx;
     chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
     for(i=0; i<nIdx; i++){
-      if( prollyHashSetContains(marked, &aIdx[i].hash) ){
+      if( gcMarksTest(marked, GC_INDEX, i) ){
         kept++;
         nDataBytes += 4 + (i64)aIdx[i].size;
       }
@@ -749,7 +801,7 @@ static int gcWriteCompactedTo(
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; i<nPend; i++){
-      if( prollyHashSetContains(marked, &aPend[i].hash) ){
+      if( gcMarksTest(marked, GC_STAGING, i) ){
         kept++;
         nDataBytes += 4 + (i64)aPend[i].size;
       }
@@ -759,7 +811,7 @@ static int gcWriteCompactedTo(
     int nRec; const ChunkIndexEntry *aRec;
     chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
     for(i=0; i<nRec; i++){
-      if( prollyHashSetContains(marked, &aRec[i].hash) ){
+      if( gcMarksTest(marked, GC_RECENT, i) ){
         kept++;
         nDataBytes += 4 + (i64)aRec[i].size;
       }
@@ -830,7 +882,8 @@ static int gcWriteCompactedTo(
       int nIdx; const ChunkIndexEntry *aIdx;
       chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
       for(i=0; i<nIdx && rc==SQLITE_OK; i++){
-        rc = gcStreamMarkedChunk(cs, &aIdx[i].hash, marked, &w, &iPos,
+        rc = gcStreamMarkedChunk(cs, &aIdx[i].hash,
+                                 gcMarksTest(marked, GC_INDEX, i), &w, &iPos,
                                  aNewIndex, &nNewIndex);
       }
     }
@@ -838,7 +891,8 @@ static int gcWriteCompactedTo(
       int nPend; const ChunkIndexEntry *aPend;
       chunkStagingGetPending(&cs->staging, &nPend, &aPend);
       for(i=0; i<nPend && rc==SQLITE_OK; i++){
-        rc = gcStreamMarkedChunk(cs, &aPend[i].hash, marked, &w, &iPos,
+        rc = gcStreamMarkedChunk(cs, &aPend[i].hash,
+                                 gcMarksTest(marked, GC_STAGING, i), &w, &iPos,
                                  aNewIndex, &nNewIndex);
       }
     }
@@ -846,7 +900,8 @@ static int gcWriteCompactedTo(
       int nRec; const ChunkIndexEntry *aRec;
       chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
       for(i=0; i<nRec && rc==SQLITE_OK; i++){
-        rc = gcStreamMarkedChunk(cs, &aRec[i].hash, marked, &w, &iPos,
+        rc = gcStreamMarkedChunk(cs, &aRec[i].hash,
+                                 gcMarksTest(marked, GC_RECENT, i), &w, &iPos,
                                  aNewIndex, &nNewIndex);
       }
     }
@@ -900,7 +955,7 @@ static int gcWriteCompactedTo(
 
 static int gcRewriteFile(
   ChunkStore *cs,
-  ProllyHashSet *marked,
+  GcMarks *marked,
   ChunkIndexEntry **ppNewIndex,
   int *pnNewIndex,
   i64 *pnNewData,
@@ -1015,7 +1070,7 @@ static int gcRewriteFile(
 
 static int gcSweep(
   ChunkStore *cs,
-  ProllyHashSet *marked,
+  GcMarks *marked,
   int *pKept,
   int *pRemoved
 ){
@@ -1030,7 +1085,7 @@ static int gcSweep(
     int nIdx; const ChunkIndexEntry *aIdx;
     chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
     for(i=0; i<nIdx; i++){
-      if( prollyHashSetContains(marked, &aIdx[i].hash) ){
+      if( gcMarksTest(marked, GC_INDEX, i) ){
         kept++;
       }else{
         removed++;
@@ -1041,7 +1096,7 @@ static int gcSweep(
     int nPend; const ChunkIndexEntry *aPend;
     chunkStagingGetPending(&cs->staging, &nPend, &aPend);
     for(i=0; i<nPend; i++){
-      if( prollyHashSetContains(marked, &aPend[i].hash) ){
+      if( gcMarksTest(marked, GC_STAGING, i) ){
         kept++;
       }
     }
@@ -1050,7 +1105,7 @@ static int gcSweep(
     int nRec; const ChunkIndexEntry *aRec;
     chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
     for(i=0; i<nRec; i++){
-      if( prollyHashSetContains(marked, &aRec[i].hash) ){
+      if( gcMarksTest(marked, GC_RECENT, i) ){
         kept++;
       }
     }
@@ -1127,7 +1182,7 @@ static int gcRun(
   int bForceRefresh,
   int bBusyRetry
 ){
-  ProllyHashSet marked;
+  GcMarks marked;
   GcMarkTrace markTrace;
   int rc;
 
@@ -1171,7 +1226,7 @@ static int gcRun(
     return rc;
   }
 
-  rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
+  rc = gcMarksInit(&marked, cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     *pzPhase = "gc mark phase failed";
@@ -1180,7 +1235,7 @@ static int gcRun(
 
   rc = gcMarkReachable(db, cs, &marked, &markTrace);
   if( rc!=SQLITE_OK ){
-    prollyHashSetFree(&marked);
+    gcMarksFree(&marked);
     chunkStoreUnlock(cs);
     if( markTrace.hasMissing && zPhaseBuf && nPhaseBuf>0 ){
       gcFormatMarkFailure(zPhaseBuf, nPhaseBuf, &markTrace);
@@ -1192,7 +1247,7 @@ static int gcRun(
   }
 
   rc = gcSweep(cs, &marked, pnKept, pnRemoved);
-  prollyHashSetFree(&marked);
+  gcMarksFree(&marked);
 #ifdef DOLTLITE_PROLLY_CHECK
   if( rc==SQLITE_OK ) gcVerifySessionResolvable(db, cs);
 #endif
@@ -1284,7 +1339,7 @@ int doltliteGcVacuumInto(
   const char **pzPhase
 ){
   ChunkStore *cs;
-  ProllyHashSet marked;
+  GcMarks marked;
   GcMarkTrace markTrace;
   ChunkIndexEntry *aNewIndex = 0;
   int nNewIndex = 0;
@@ -1338,8 +1393,7 @@ int doltliteGcVacuumInto(
     *pzPhase = "vacuum into index load failed";
     return rc;
   }
-  rc = prollyHashSetInit(&marked,
-      chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
+  rc = gcMarksInit(&marked, cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     csFileUnlock(pDestLock, &zDestLockName);
@@ -1348,7 +1402,7 @@ int doltliteGcVacuumInto(
   }
   rc = gcMarkReachable(db, cs, &marked, &markTrace);
   if( rc!=SQLITE_OK ){
-    prollyHashSetFree(&marked);
+    gcMarksFree(&marked);
     chunkStoreUnlock(cs);
     csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "vacuum into mark phase failed";
@@ -1363,14 +1417,14 @@ int doltliteGcVacuumInto(
                             &aNewIndex, &nNewIndex, &nNewData);
     if( bTargetNonEmpty ){
       sqlite3_free(zPath);
-      prollyHashSetFree(&marked);
+      gcMarksFree(&marked);
       chunkStoreUnlock(cs);
       csFileUnlock(pDestLock, &zDestLockName);
       *pzPhase = "output file already exists";
       return SQLITE_ERROR;
     }
   }
-  prollyHashSetFree(&marked);
+  gcMarksFree(&marked);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zPath);
