@@ -503,14 +503,6 @@ static int doltliteBuildIndexEntry(
       int out = 0;
       for(i=0; i<nIdxCol; i++){
         int col = aiColumn[i];
-        if( col<0 ) continue;
-        if( pIdx && pIdx->pTable && col<pIdx->pTable->nCol ){
-          if( col==pIdx->pTable->iPKey ) continue;
-#ifndef SQLITE_OMIT_GENERATED_COLUMNS
-          if( pIdx->pTable->aCol[col].colFlags & COLFLAG_VIRTUAL ) continue;
-          col = sqlite3TableColumnToStorage(pIdx->pTable, col);
-#endif
-        }
         if( col>=0 && col<info.nField ){
           aFieldOrder[out++] = col;
         }
