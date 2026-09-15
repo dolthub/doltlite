@@ -110,6 +110,12 @@ def artifact():
             assert result.returncode != 0, name
             path.write_bytes(saved)
             checks += 1
+        extra = 'build/crash_recovery_test'
+        write_executable(root / extra, '#!/bin/sh\nprintf "extra\\n"\n')
+        subprocess.run(['bash', '-e', '-c', command], cwd=root, check=True)
+        with tarfile.open(root / 'asan-ubsan-macos.tar.gz') as archive:
+            assert set(archive.getnames()) == expected | {extra}
+        checks += 1
     return checks
 
 

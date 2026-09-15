@@ -78,15 +78,11 @@ static void disableOom(void){
 static int isAcceptableErr(int rc){
   if( rc==SQLITE_OK ) return 1;
   if( rc==SQLITE_NOMEM ) return 1;
-  if( rc==SQLITE_ERROR ) return 1;
-  if( rc==SQLITE_BUSY ) return 1;
-  if( rc==SQLITE_FULL ) return 1;
-  if( rc==SQLITE_CONSTRAINT ) return 1;
-  if( rc==SQLITE_MISUSE ) return 1;
   if( rc==SQLITE_IOERR_NOMEM ) return 1;
-  if( rc==SQLITE_INTERRUPT ) return 1;
-  if( rc==SQLITE_ABORT ) return 1;
-  if( (rc&0xFF)==SQLITE_IOERR ) return 1;
+  if( rc==SQLITE_FULL ) return 1;
+  if( rc==SQLITE_BUSY ) return 1;
+  if( rc==SQLITE_CONSTRAINT ) return 1;
+  if( rc==SQLITE_ERROR ) return 1;
   return 0;
 }
 

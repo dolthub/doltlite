@@ -24,15 +24,8 @@ runs:
           -ldl -lpthread -lm -lz
         gcc $CFLAGS -o quickstart \
           ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
-        cc $CFLAGS -O0 -I. -I../src \
-          -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
-          -o concurrent_branch_test ../test/concurrent_branch_test.c \
-          libsqlite3.a -lz -lpthread -lm
         gcc $CFLAGS -O0 -I. \
           -o concurrent_write_test ../test/concurrent_write_test.c \
-          libdoltlite.a -lz -lpthread -lm
-        cc $CFLAGS -I. -I../src \
-          -o crash_recovery_test ../test/crash_recovery_test.c \
           libdoltlite.a -lz -lpthread -lm
         (
           cd ../examples/go
