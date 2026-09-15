@@ -144,7 +144,7 @@ static int openTestStore(ChunkStore *cs, ProllyCache *cache, const char *path){
   rc = chunkStoreOpen(cs, sqlite3_vfs_find(0), chunks, SQLITE_OPEN_CREATE);
   if( rc!=SQLITE_OK ) return rc;
 
-  prollyCacheInit(cache, 64);
+  prollyCacheInit(cache, 64*4096);
   return SQLITE_OK;
 }
 

@@ -33,6 +33,7 @@ COVERAGE_TESTS=(
   vc_cas_swallow_test
   remote_push_lock_busy_test
   record_info_stack_test
+  prolly_cache_budget_test
   prolly_hashset_test
   prolly_chunker_boundary_test
   scoped_refs_push_test

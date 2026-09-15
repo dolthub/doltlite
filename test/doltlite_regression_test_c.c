@@ -11307,7 +11307,7 @@ static void run_prolly_mutate_preserves_order_across_skipped_subtrees(void){
 
   check("open_memory_store_for_prolly_mutate_skip",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_prolly_mutate_skip", prollyCacheInit(&cache, 64)==SQLITE_OK);
+  check("init_cache_for_prolly_mutate_skip", prollyCacheInit(&cache, 64*4096)==SQLITE_OK);
   check("init_chunker_for_prolly_mutate_skip",
         prollyChunkerInit(&chunker, &cs, PROLLY_NODE_BLOBKEY)==SQLITE_OK);
 
@@ -11390,7 +11390,7 @@ static void run_prolly_mutate_appends_blob_key_to_right_edge(void){
   check("open_memory_store_for_prolly_blob_append",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
   check("init_cache_for_prolly_blob_append",
-        prollyCacheInit(&cache, 64)==SQLITE_OK);
+        prollyCacheInit(&cache, 64*4096)==SQLITE_OK);
   check("init_chunker_for_prolly_blob_append",
         prollyChunkerInit(&chunker, &cs, PROLLY_NODE_BLOBKEY)==SQLITE_OK);
 
@@ -11458,7 +11458,7 @@ static void run_prolly_mutate_batches_existing_int_replacements(void){
   check("open_memory_store_for_prolly_batch_replace",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
   check("init_cache_for_prolly_batch_replace",
-        prollyCacheInit(&cache, 64)==SQLITE_OK);
+        prollyCacheInit(&cache, 64*4096)==SQLITE_OK);
   check("init_chunker_for_prolly_batch_replace",
         prollyChunkerInit(&chunker, &cs, PROLLY_NODE_INTKEY)==SQLITE_OK);
 
@@ -12039,7 +12039,7 @@ static void run_prolly_blob_cursor_seek_across_internal_boundary(void){
 
   check("open_memory_store_for_blob_cursor",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_blob_cursor", prollyCacheInit(&cache, 8)==SQLITE_OK);
+  check("init_cache_for_blob_cursor", prollyCacheInit(&cache, 8*4096)==SQLITE_OK);
 
   prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
   check("build_left_leaf_a",
@@ -12115,7 +12115,7 @@ static void run_prolly_int_cursor_seek_across_internal_boundary(void){
 
   check("open_memory_store_for_int_cursor",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_int_cursor", prollyCacheInit(&cache, 8)==SQLITE_OK);
+  check("init_cache_for_int_cursor", prollyCacheInit(&cache, 8*4096)==SQLITE_OK);
 
   prollyNodeBuilderInit(&b, 0, PROLLY_NODE_INTKEY);
   check("build_left_leaf_10", addIntKeyItem(&b, 10, v1, sizeof(v1))==SQLITE_OK);
@@ -12177,7 +12177,7 @@ static void run_prolly_int_cursor_seek_past_max(void){
 
   check("open_memory_store_for_int_cursor_past_max",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_int_cursor_past_max", prollyCacheInit(&cache, 8)==SQLITE_OK);
+  check("init_cache_for_int_cursor_past_max", prollyCacheInit(&cache, 8*4096)==SQLITE_OK);
 
   prollyNodeBuilderInit(&b, 0, PROLLY_NODE_INTKEY);
   check("build_past_max_left_leaf_10", addIntKeyItem(&b, 10, v1, sizeof(v1))==SQLITE_OK);
@@ -12247,7 +12247,7 @@ static void run_prolly_blob_cursor_seek_past_max(void){
 
   check("open_memory_store_for_blob_cursor_past_max",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_blob_cursor_past_max", prollyCacheInit(&cache, 8)==SQLITE_OK);
+  check("init_cache_for_blob_cursor_past_max", prollyCacheInit(&cache, 8*4096)==SQLITE_OK);
 
   prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
   check("build_left_leaf_a_past_max",
@@ -12314,7 +12314,7 @@ static void run_prolly_cursor_empty_leaf_root(void){
 
   check("open_memory_store_for_empty_leaf_root",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_empty_leaf_root", prollyCacheInit(&cache, 4)==SQLITE_OK);
+  check("init_cache_for_empty_leaf_root", prollyCacheInit(&cache, 4*4096)==SQLITE_OK);
   check("store_empty_leaf_root",
         chunkStorePut(&cs, emptyLeafRoot, (int)sizeof(emptyLeafRoot), &rootHash)==SQLITE_OK);
 
@@ -12373,7 +12373,7 @@ static void run_prolly_cursor_empty_leaf_under_internal(void){
 
   check("empty_leaf_internal_open_store",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("empty_leaf_internal_init_cache", prollyCacheInit(&cache, 8)==SQLITE_OK);
+  check("empty_leaf_internal_init_cache", prollyCacheInit(&cache, 8*4096)==SQLITE_OK);
   check("empty_leaf_internal_put_full",
         chunkStorePut(&cs, fullLeaf, (int)sizeof(fullLeaf), &leafFull)==SQLITE_OK);
   check("empty_leaf_internal_put_empty",
@@ -12506,7 +12506,7 @@ static void run_prolly_cursor_surfaces_corrupt_node(void){
 
   check("open_memory_store_for_corrupt_cursor",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_corrupt_cursor", prollyCacheInit(&cache, 4)==SQLITE_OK);
+  check("init_cache_for_corrupt_cursor", prollyCacheInit(&cache, 4*4096)==SQLITE_OK);
   check("store_bad_root_node",
         chunkStorePut(&cs, badNode, (int)sizeof(badNode), &rootHash)==SQLITE_OK);
 
@@ -12540,7 +12540,7 @@ static void run_prolly_diff_iter_copies_blob_keys(void){
 
   check("open_memory_store_for_diff_iter_key_copy",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_diff_iter_key_copy", prollyCacheInit(&cache, 8)==SQLITE_OK);
+  check("init_cache_for_diff_iter_key_copy", prollyCacheInit(&cache, 8*4096)==SQLITE_OK);
 
   prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
   check("build_old_left_leaf_for_diff_iter_key_copy",
@@ -12639,7 +12639,7 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
   memset(&ctx, 0, sizeof(ctx));
   check("open_memory_store_for_diff_leaf_corruption",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
-  check("init_cache_for_diff_leaf_corruption", prollyCacheInit(&cache, 4)==SQLITE_OK);
+  check("init_cache_for_diff_leaf_corruption", prollyCacheInit(&cache, 4*4096)==SQLITE_OK);
 
   prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
   check("build_old_leaf_bad_record",

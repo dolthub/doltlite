@@ -23,7 +23,8 @@ struct ProllyCacheEntry {
 };
 
 struct ProllyCache {
-  int nCapacity;
+  i64 nMaxByte;
+  i64 nByte;
   int nUsed;
   int nBucket;
   ProllyCacheEntry **aBucket;
@@ -31,7 +32,9 @@ struct ProllyCache {
   ProllyCacheEntry lruTail;
 };
 
-int prollyCacheInit(ProllyCache *cache, int nCapacity);
+int prollyCacheInit(ProllyCache *cache, i64 nMaxByte);
+
+void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte);
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash);
 
