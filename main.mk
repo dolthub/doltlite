@@ -1314,12 +1314,14 @@ ed25519_%.o:	$(TOP)/ext/ed25519/%.c
 	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/ed25519 -c $< -o $@
 
 mbedtls_%.o:	$(TOP)/ext/mbedtls/library/%.c
-	$(T.compile) -Wno-declaration-after-statement -I$(TOP)/ext/mbedtls/include -c $< -o $@
+	$(T.compile) -Wno-declaration-after-statement -Wno-frame-larger-than \
+		-I$(TOP)/ext/mbedtls/include -c $< -o $@
 
 # Vendored BLAKE3 sources use C99 mid-block declarations that the
 # rest of doltlite's tree bans via -Wdeclaration-after-statement.
 # Disable that warning for the blake3/ ext sources only.
-BLAKE3_CFLAGS = -Wno-declaration-after-statement -I$(TOP)/ext/blake3
+BLAKE3_CFLAGS = -Wno-declaration-after-statement -Wno-frame-larger-than \
+		-I$(TOP)/ext/blake3
 
 blake3.o:	$(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3.h \
 		$(TOP)/ext/blake3/blake3_impl.h
