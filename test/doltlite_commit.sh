@@ -351,20 +351,33 @@ CREATE TRIGGER trg AFTER INSERT ON t BEGIN SELECT 1; END;
 SELECT dolt_add('t');
 SELECT dolt_commit('-m','only t');"   "^[0-9a-f]{40}$" "$DB11"
 
-run_test "view_stays_out_of_named_commit"   "SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');
+run_test "view_stays_out_of_named_commit"   "SELECT dolt_checkout('-b','named_head');
+SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');
+SELECT count(*) FROM pragma_table_info('t');
+SELECT dolt_checkout('main');
+SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');"   "0
+0
+2
+0
+2" "$DB11"
+
+run_test "untracked_views_survive_hard_reset"   "SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');
 SELECT dolt_reset('--hard');
 SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');
 SELECT count(*) FROM pragma_table_info('t');"   "2
 0
-0
+2
 2" "$DB11"
 
 run_test_match "view_rides_with_am"   "CREATE VIEW v2 AS SELECT a FROM t; INSERT INTO t(a) VALUES(1);
 SELECT dolt_commit('-am','am');"   "^[0-9a-f]{40}$" "$DB11"
 
-run_test "view_in_am_commit"   "SELECT dolt_reset('--hard');
-SELECT name FROM sqlite_master WHERE type='view';"   "0
-v2" "$DB11"
+run_test "view_in_am_commit"   "SELECT dolt_checkout('-b','am_head');
+SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;
+SELECT count(*) FROM sqlite_master WHERE type='trigger';"   "0
+v2
+vv
+1" "$DB11"
 
 # Named add must not adopt other tables' unstaged schema; staged index roots must survive.
 DB12=/tmp/test_dolt_namedscope_$$.db; rm -f "$DB12"

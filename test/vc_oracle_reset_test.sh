@@ -619,6 +619,71 @@ SELECT concat('Q|parent|', count(*)) FROM p;"
 
 echo "--- hard reset preserves untracked schema objects ---"
 
+for kind in view trigger; do
+  for stage in unstaged staged tracked target; do
+    for unrelated in 0 1; do
+      schema_seed="CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1,1);"
+      if [ "$stage" = tracked ] || [ "$stage" = target ]; then
+        schema_seed="$schema_seed
+CREATE VIEW old_v AS SELECT a FROM t;"
+      fi
+      schema_seed="$schema_seed
+SELECT dolt_commit('-Am','base');"
+      if [ "$stage" = target ]; then
+        schema_seed="$schema_seed
+DROP VIEW old_v;
+SELECT dolt_commit('-Am','drop');"
+      fi
+      if [ "$kind" = view ]; then
+        dl_schema="CREATE VIEW vv AS SELECT a FROM t;"
+        dt_schema="$dl_schema"
+      else
+        dl_schema="CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO audit VALUES(NEW.id); END;"
+        dt_schema="CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES(NEW.id);"
+      fi
+      schema_tail=""
+      if [ "$stage" = staged ]; then
+        schema_tail="SELECT dolt_add('dolt_schemas');"
+      elif [ "$stage" = tracked ]; then
+        schema_tail="DROP VIEW old_v;"
+      fi
+      if [ "$unrelated" = 1 ]; then
+        schema_tail="$schema_tail
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
+INSERT INTO u VALUES(1,'untracked');"
+      fi
+      schema_tail="$schema_tail
+SELECT concat('Q|before|',count(*)) FROM dolt_schemas WHERE name IN ('vv','tr');
+UPDATE t SET a=99;"
+      if [ "$stage" = target ]; then
+        schema_tail="$schema_tail
+SELECT dolt_reset('--hard','HEAD~1');"
+      else
+        schema_tail="$schema_tail
+SELECT dolt_reset('--hard');"
+      fi
+      schema_query="SELECT concat('Q|new|',count(*)) FROM dolt_schemas WHERE name IN ('vv','tr');
+SELECT concat('Q|old|',count(*)) FROM dolt_schemas WHERE name='old_v';
+SELECT concat('Q|row|',a) FROM t;
+SELECT concat('Q|staged|',count(*)) FROM dolt_status WHERE staged=1;
+SELECT concat('Q|schema-status|',count(*)) FROM dolt_status WHERE table_name='dolt_schemas';"
+      if [ "$unrelated" = 1 ]; then
+        schema_query="$schema_query
+SELECT concat('Q|untracked|',id) FROM u WHERE v='untracked';"
+      fi
+      oracle_same_session "reset_hard_${kind}_${stage}_unrelated_${unrelated}" \
+        "$schema_seed
+$dl_schema
+$schema_tail" "$schema_query" \
+        "$schema_seed
+$dt_schema
+$schema_tail" "$schema_query"
+    done
+  done
+done
+
 oracle_same_session "reset_hard_preserves_untracked_index_view_trigger" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');

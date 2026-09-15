@@ -299,17 +299,21 @@ done:
   return rc;
 }
 
-static int doltlitePreserveUntrackedTablesOnHardReset(
+static int doltlitePreserveUntrackedOnHardReset(
   sqlite3 *db,
   ChunkStore *cs,
   const ProllyHash *pPreResetStagedCatHash,
   ProllyHash *pTargetCatHash
 ){
   struct TableEntry *aStaged = 0;
+  SchemaEntry *aStagedSchema = 0;
   SchemaEntry *aTargetSchema = 0;
   int nStaged = 0;
+  int nStagedSchema = 0;
   int nTargetSchema = 0;
   int nUntracked = 0;
+  int stagedSchemas = 0;
+  int preserveSchemas = 0;
   char **azUntracked = 0;
   sqlite3_stmt *pStmt = 0;
   int j, k;
@@ -318,19 +322,37 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   rc = doltliteLoadCatalog(
       db, pPreResetStagedCatHash, &aStaged, &nStaged, 0);
   if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db),
+        pPreResetStagedCatHash, &aStagedSchema, &nStagedSchema);
+  }
+  for(k=0; k<nStagedSchema; k++){
+    const char *zType = aStagedSchema[k].zType;
+    if( zType && (strcmp(zType, "view")==0 || strcmp(zType, "trigger")==0) ){
+      stagedSchemas = 1;
+      break;
+    }
+  }
+  if( rc==SQLITE_OK ){
     rc = sqlite3_prepare_v2(db,
-        "SELECT m.name FROM sqlite_master AS m WHERE m.type='table' "
+        "SELECT m.name, m.type FROM sqlite_master AS m "
+        "WHERE m.type IN ('table','view','trigger') "
         "AND m.name NOT LIKE 'sqlite_%' "
-        "AND NOT EXISTS (SELECT 1 FROM dolt_status AS s "
+        "AND (m.type!='table' OR NOT EXISTS (SELECT 1 FROM dolt_status AS s "
         "WHERE s.status='renamed' AND "
-        "substr(s.table_name, -(length(m.name)+4))=' -> ' || m.name)",
+        "substr(s.table_name, -(length(m.name)+4))=' -> ' || m.name))",
         -1, &pStmt, 0);
   }
   if( rc==SQLITE_OK ){
-    while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
       const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+      const char *zType = (const char*)sqlite3_column_text(pStmt, 1);
       int inStaged = 0;
       if( !zName ) continue;
+      if( zType && strcmp(zType, "table")!=0 ){
+        /* Views and triggers are tracked together as dolt_schemas. */
+        if( !stagedSchemas ) preserveSchemas = 1;
+        continue;
+      }
       for(k=0; k<nStaged; k++){
         if( aStaged[k].zName && strcmp(aStaged[k].zName, zName)==0 ){
           inStaged = 1;
@@ -343,15 +365,23 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
         if( !aNew ){ rc = SQLITE_NOMEM; break; }
         azUntracked = aNew;
         azUntracked[nUntracked++] = sqlite3_mprintf("%s", zName);
+        if( !azUntracked[nUntracked-1] ){ rc = SQLITE_NOMEM; break; }
       }
     }
+    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
     sqlite3_finalize(pStmt);
     pStmt = 0;
   }
 
-  if( rc==SQLITE_OK && nUntracked>0 ){
+  if( rc==SQLITE_OK && (nUntracked>0 || preserveSchemas) ){
     rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pTargetCatHash,
                                &aTargetSchema, &nTargetSchema);
+  }
+  for(k=0; k<nTargetSchema && preserveSchemas; k++){
+    const char *zType = aTargetSchema[k].zType;
+    if( zType && (strcmp(zType, "view")==0 || strcmp(zType, "trigger")==0) ){
+      preserveSchemas = 0;
+    }
   }
   if( rc==SQLITE_OK && nUntracked>0 ){
     int nKeep = 0;
@@ -402,7 +432,7 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
     pStmt = 0;
   }
 
-  if( rc==SQLITE_OK && nUntracked>0 ){
+  if( rc==SQLITE_OK && (nUntracked>0 || preserveSchemas) ){
     ProllyHash workingHash;
     struct TableEntry *aWorking = 0, *aTarget = 0;
     SchemaEntry *aWorkSchema = 0;
@@ -420,6 +450,12 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
     if( rc==SQLITE_OK ){
       rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
                                  &aWorkSchema, &nWorkSchema);
+    }
+    for(k=0; k<nWorkSchema && !preserveSchemas; k++){
+      const char *zType = aWorkSchema[k].zType;
+      if( zType && (strcmp(zType, "view")==0 || strcmp(zType, "trigger")==0) ){
+        clearSchemaEntry(&aWorkSchema[k]);
+      }
     }
     /* Build FROM the target so dropped tracked tables are restored, then
     ** append untracked entries past the target range (working numbers can
@@ -506,6 +542,7 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
   for(j=0; j<nUntracked; j++) sqlite3_free(azUntracked[j]);
   sqlite3_free(azUntracked);
   doltliteFreeCatalog(aStaged, nStaged);
+  freeSchemaEntries(aStagedSchema, nStagedSchema);
   freeSchemaEntries(aTargetSchema, nTargetSchema);
   return rc;
 }
@@ -746,7 +783,7 @@ static void doltliteResetFunc(
     }
 
     if( havePreResetHead ){
-      rc = doltlitePreserveUntrackedTablesOnHardReset(
+      rc = doltlitePreserveUntrackedOnHardReset(
         db, cs, &preResetStagedCatHash, &targetCatHash
       );
       if( rc!=SQLITE_OK ){
