@@ -57,7 +57,11 @@ For a DoltLite-format main database, the compatibility contract is:
   rowid of a table without a primary key) never gets an id another branch
   already used, and such inserts merge cleanly. This gives every rowid table
   `AUTOINCREMENT` allocation: after the largest row is deleted the next id
-  continues rather than being reused. `DROP TABLE` resets the counter and
+  continues rather than being reused, and once the counter reaches
+  9223372036854775807 an implicit insert fails with `SQLITE_FULL` instead of
+  falling back to SQLite's random-rowid search — SQLite behaves this way for
+  `AUTOINCREMENT` tables, DoltLite does so for every rowid table.
+  `DROP TABLE` resets the counter and
   `ALTER TABLE ... RENAME` carries it. Only tables declared `AUTOINCREMENT`
   also record the counter in `sqlite_sequence`, which remains the reset
   surface for them: `UPDATE sqlite_sequence SET seq=N`,
