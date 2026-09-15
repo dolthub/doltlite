@@ -781,6 +781,7 @@ static int loadSchemaCatalogRows(
       if( rc!=SQLITE_OK ){
         sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); break;
       }
+      doltliteRecordInfoClear(&ri);
       if( nRows>=nAlloc ){
         i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
         SchemaCatalogRow *aNew;

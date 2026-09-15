@@ -227,6 +227,7 @@ static int loadSchemaFromCatalogMode(
         sqlite3_free(zTblName);
         sqlite3_free(zSql);
       }
+      doltliteRecordInfoClear(&ri);
     }
 
     rc = prollyCursorNext(&cur);
@@ -377,6 +378,7 @@ int loadSchemaEntryFromCatalog(
         break;
       }
       sqlite3_free(zEntryName);
+      doltliteRecordInfoClear(&ri);
     }
 
     rc = prollyCursorNext(&cur);

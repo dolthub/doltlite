@@ -527,8 +527,15 @@ int doltliteParseRecordStrict(
   const u8 *pHdrEnd;
   int nField = 0;
 
-  /* Treat pInfo as uninitialized. Callers that re-parse the same struct
-  ** must Clear first or they leak a previous heap spill. */
+  /* Reclaim a previous Grow() heap if the layout matches ours. Poisoned
+  ** (0xff) structs have nAlloc out of range and are left alone. */
+  if( pInfo->aType
+   && pInfo->aType!=pInfo->aTypeSpace
+   && pInfo->nAlloc>DOLTLITE_RECORD_INLINE_FIELDS
+   && pInfo->nAlloc<=DOLTLITE_MAX_RECORD_FIELDS
+   && pInfo->aOffset==pInfo->aType + pInfo->nAlloc ){
+    sqlite3_free(pInfo->aType);
+  }
   doltliteRecordInfoInit(pInfo);
   if( !pData || nData < 1 ) return SQLITE_CORRUPT;
   p = pData;

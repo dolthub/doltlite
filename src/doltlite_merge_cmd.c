@@ -247,6 +247,7 @@ static int mergeSplitSequenceRoot(
       rc = prollyCursorNext(&cur);
     }
     sqlite3_free(zOwner);
+    doltliteRecordInfoClear(&info);
   }
   prollyCursorClose(&cur);
   if( rc==SQLITE_OK ){

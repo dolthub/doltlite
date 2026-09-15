@@ -1002,6 +1002,7 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
       }else{
         sqlite3_result_null(ctx);
       }
+      doltliteRecordInfoClear(&ri);
     }else{
       sqlite3_result_null(ctx);
     }

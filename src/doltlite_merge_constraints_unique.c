@@ -176,10 +176,16 @@ int doltlitePartialIndexMatchesRecord(
     }
     sqlite3_str_appendf(pSql, ") WHERE (%s)", zWhere);
     zSql = sqlite3_str_finish(pSql);
-    if( !zSql ) return SQLITE_NOMEM;
+    if( !zSql ){
+      doltliteRecordInfoClear(&info);
+      return SQLITE_NOMEM;
+    }
     rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
     sqlite3_free(zSql);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      doltliteRecordInfoClear(&info);
+      return rc;
+    }
     if( ppCached ) *ppCached = pStmt;
   }
   for(i=0; i<pTab->nCol && rc==SQLITE_OK; i++){
@@ -215,8 +221,10 @@ int doltlitePartialIndexMatchesRecord(
   if( ppCached ){
     /* The caller owns the statement; leave it prepared for the next row. */
     sqlite3_reset(pStmt);
+    doltliteRecordInfoClear(&info);
     return rc;
   }
+  doltliteRecordInfoClear(&info);
   return finishConstraintStmt(pStmt, rc);
 }
 
@@ -596,6 +604,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     }
     if( rc==SQLITE_OK && !partialMatch ){
       sqlite3_free(pOwnedRecord);
+      doltliteRecordInfoClear(&info);
       rc = prollyCursorNext(&cursor);
       continue;
     }
@@ -626,6 +635,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     }else{
       uniqueEntryClear(db, &entry);
     }
+    doltliteRecordInfoClear(&info);
     rc = prollyCursorNext(&cursor);
   }
   if( rc==SQLITE_DONE ) rc = SQLITE_OK;

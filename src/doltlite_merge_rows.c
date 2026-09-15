@@ -77,7 +77,10 @@ static int bindIndexExprRow(
     }else if( i<info.nField ){
       DoltliteSerialValue v;
       rc = doltliteSerialValueFromField(pRec, nRec, &info, i, &v);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ){
+        doltliteRecordInfoClear(&info);
+        return rc;
+      }
       if( v.eType==SQLITE_NULL ){
         rc = sqlite3_bind_null(pStmt, i+1);
       }else if( v.eType==SQLITE_INTEGER ){
@@ -92,8 +95,12 @@ static int bindIndexExprRow(
     }else{
       rc = sqlite3_bind_null(pStmt, i+1);
     }
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      doltliteRecordInfoClear(&info);
+      return rc;
+    }
   }
+  doltliteRecordInfoClear(&info);
   return SQLITE_OK;
 }
 
@@ -278,7 +285,10 @@ static int doltliteBuildIndexEntryWithExpr(
   int i, rc;
 
   doltliteParseRecord(pRec, nRec, &info);
-  if( info.nField==0 ) return SQLITE_CORRUPT;
+  if( info.nField==0 ){
+    doltliteRecordInfoClear(&info);
+    return SQLITE_CORRUPT;
+  }
   hasRowid = pIdx && pIdx->pTable && HasRowid(pIdx->pTable);
 
   nAlloc = nIdxCol + 1;
@@ -287,6 +297,7 @@ static int doltliteBuildIndexEntryWithExpr(
   if( !aMem || !apKeep ){
     sqlite3_free(aMem);
     sqlite3_free(apKeep);
+    doltliteRecordInfoClear(&info);
     return SQLITE_NOMEM;
   }
   memset(aMem, 0, nAlloc * (int)sizeof(DoltliteSerialValue));
@@ -350,6 +361,7 @@ static int doltliteBuildIndexEntryWithExpr(
   }
   if( rc!=SQLITE_OK ){
     sqlite3_free(pIdxRec);
+    doltliteRecordInfoClear(&info);
     return rc;
   }
   if( pStorePayload ) *pStorePayload = storePayload;
@@ -359,6 +371,7 @@ static int doltliteBuildIndexEntryWithExpr(
   }else{
     sqlite3_free(pIdxRec);
   }
+  doltliteRecordInfoClear(&info);
   return SQLITE_OK;
 
 expr_fail:
@@ -368,6 +381,7 @@ expr_fail:
   sqlite3_free(apKeep);
   sqlite3_free(aMem);
   sqlite3_free(pIdxRec);
+  doltliteRecordInfoClear(&info);
   return rc;
 }
 
@@ -425,6 +439,7 @@ static int doltliteBuildIndexEntry(
     int nOutField;
     int *aFieldOrder = sqlite3_malloc((nIdxCol + 1) * sizeof(int));
     if( !aFieldOrder ){
+      doltliteRecordInfoClear(&info);
       return SQLITE_NOMEM;
     }
 

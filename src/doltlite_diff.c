@@ -42,6 +42,7 @@ static int masterRowCanonical(const u8 *pRec, int nRec, char **pzOut){
     if( !*pzOut ) rc = SQLITE_NOMEM;
   }
   sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTbl); sqlite3_free(zSql);
+  doltliteRecordInfoClear(&ri);
   return rc;
 }
 

@@ -358,18 +358,28 @@ static int recordPrefixEquals(
 
   if( nField<=0 ) return 1;
   if( doltliteParseRecordStrict(pLeft, nLeft, &a)!=SQLITE_OK ) return 0;
-  if( doltliteParseRecordStrict(pRight, nRight, &b)!=SQLITE_OK ) return 0;
-  if( a.nField < nField || b.nField < nField ) return 0;
+  if( doltliteParseRecordStrict(pRight, nRight, &b)!=SQLITE_OK ){
+    doltliteRecordInfoClear(&a);
+    return 0;
+  }
+  if( a.nField < nField || b.nField < nField ){
+    doltliteRecordInfoClear(&a);
+    doltliteRecordInfoClear(&b);
+    return 0;
+  }
 
   for(i=0; i<nField; i++){
     int nA = dlSerialTypeLen((u64)a.aType[i]);
     int nB = dlSerialTypeLen((u64)b.aType[i]);
-    if( a.aType[i]!=b.aType[i] ) return 0;
-    if( nA!=nB ) return 0;
-    if( nA>0 && memcmp(pLeft + a.aOffset[i], pRight + b.aOffset[i], (size_t)nA)!=0 ){
+    if( a.aType[i]!=b.aType[i] || nA!=nB
+     || (nA>0 && memcmp(pLeft + a.aOffset[i], pRight + b.aOffset[i], (size_t)nA)!=0) ){
+      doltliteRecordInfoClear(&a);
+      doltliteRecordInfoClear(&b);
       return 0;
     }
   }
+  doltliteRecordInfoClear(&a);
+  doltliteRecordInfoClear(&b);
   return 1;
 }
 

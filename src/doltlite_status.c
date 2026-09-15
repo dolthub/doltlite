@@ -107,9 +107,11 @@ static int statusSequenceContains(
       *pFound = nVal==nRecord
              && (nVal==0 || memcmp(pVal, pRecord, nVal)==0);
       sqlite3_free(zName);
+      doltliteRecordInfoClear(&info);
       break;
     }
     sqlite3_free(zName);
+    doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
   }
   prollyCursorClose(&cur);
@@ -156,6 +158,7 @@ static int statusSequenceTrackedEqualOneWay(
       }
     }
     sqlite3_free(zOwner);
+    doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
   }
   prollyCursorClose(&cur);

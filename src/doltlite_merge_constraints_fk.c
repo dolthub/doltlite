@@ -190,6 +190,7 @@ static int fkParentLookupInit(
     }
     sqlite3_free(pRecord);
     sqlite3_free(pDecoded);
+    doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&p->cur);
   }
   sqlite3_free(aValue);

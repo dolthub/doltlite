@@ -112,6 +112,7 @@ static int checkoutLoadSourceTableSql(
       if( rc!=SQLITE_OK ){
         sqlite3_free(zType);
         sqlite3_free(zEntryName);
+        doltliteRecordInfoClear(&ri);
         prollyCursorClose(&cur);
         return rc;
       }
@@ -121,12 +122,14 @@ static int checkoutLoadSourceTableSql(
         rc = checkoutSchemaTextField(pVal, nVal, &ri, 4, pzSql);
         sqlite3_free(zType);
         sqlite3_free(zEntryName);
+        doltliteRecordInfoClear(&ri);
         prollyCursorClose(&cur);
         return rc;
       }
     }
     sqlite3_free(zType);
     sqlite3_free(zEntryName);
+    doltliteRecordInfoClear(&ri);
     rc = prollyCursorNext(&cur);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&cur);

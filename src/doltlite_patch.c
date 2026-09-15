@@ -954,12 +954,16 @@ static void patchGetValue(
   if( !pRec || nRec<=0 ) return;
   doltliteParseRecord(pRec, nRec, &ri);
   iField = pSchema->col.aColToRec ? pSchema->col.aColToRec[iCol] : iCol;
-  if( doltliteSerialValueFromField(pRec, nRec, &ri, iField, &v)!=SQLITE_OK ) return;
+  if( doltliteSerialValueFromField(pRec, nRec, &ri, iField, &v)!=SQLITE_OK ){
+    doltliteRecordInfoClear(&ri);
+    return;
+  }
   pOut->eType = v.eType;
   pOut->i = v.i;
   pOut->r = v.r;
   pOut->p = (const u8*)v.p;
   pOut->n = v.n;
+  doltliteRecordInfoClear(&ri);
 }
 
 static void patchAppendHex(sqlite3_str *pStr, const u8 *p, int n){

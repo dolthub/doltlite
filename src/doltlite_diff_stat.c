@@ -238,6 +238,8 @@ static void dsCountChangedCells(
 
   *pnDiffer = nDiffer;
   *pnModified = nModified;
+  doltliteRecordInfoClear(&fromRi);
+  doltliteRecordInfoClear(&toRi);
 }
 
 /* A row whose primary key covers every column stores an empty record, so its
