@@ -52,6 +52,14 @@ static void test_readonly_code(const char *zPath){
   checkRc("ro: dolt_tag", exec(db, "SELECT dolt_tag('t1')"), SQLITE_READONLY);
   checkRc("ro: dolt_checkout -b",
           exec(db, "SELECT dolt_checkout('-b','b2')"), SQLITE_READONLY);
+  /* These three relay the code through the shared apply-merged finish and
+  ** the checkout error path, which used to report only a message. */
+  checkRc("ro: dolt_checkout",
+          exec(db, "SELECT dolt_checkout('feature')"), SQLITE_READONLY);
+  checkRc("ro: dolt_revert",
+          exec(db, "SELECT dolt_revert('HEAD')"), SQLITE_READONLY);
+  checkRc("ro: dolt_cherry_pick",
+          exec(db, "SELECT dolt_cherry_pick('HEAD')"), SQLITE_READONLY);
   sqlite3_close(db);
 
   check("ro: reopen readonly",
@@ -63,6 +71,12 @@ static void test_readonly_code(const char *zPath){
           exec(db, "SELECT dolt_branch('b1')"), SQLITE_READONLY);
   checkRc("ro_open: dolt_tag",
           exec(db, "SELECT dolt_tag('t1')"), SQLITE_READONLY);
+  checkRc("ro_open: dolt_checkout",
+          exec(db, "SELECT dolt_checkout('feature')"), SQLITE_READONLY);
+  checkRc("ro_open: dolt_revert",
+          exec(db, "SELECT dolt_revert('HEAD')"), SQLITE_READONLY);
+  checkRc("ro_open: dolt_cherry_pick",
+          exec(db, "SELECT dolt_cherry_pick('HEAD')"), SQLITE_READONLY);
   sqlite3_close(db);
   remove(zPath);
 }
