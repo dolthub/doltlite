@@ -315,6 +315,7 @@ lint:
 	@bash $(TOP)/test/check_testfixture_exception_inventory_test.sh
 	@bash $(TOP)/test/dolt_oracle_upgrade_test.sh
 	@bash $(TOP)/test/sql_oracle_harness_test.sh
+	@bash $(TOP)/test/vc_oracle_harness_selftest.sh
 	@bash $(TOP)/test/run_lint_selftests.sh test/lint_layers_selftest.sh \
 	  test/stock_oracle_harness_test.sh
 

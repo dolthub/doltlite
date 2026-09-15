@@ -11,40 +11,15 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
+DOLTLITE=$(vc_oracle_resolve_binary "$DOLTLITE") || exit 1
+DOLT=$(vc_oracle_resolve_binary "$DOLT") || exit 1
+
 normalize() {
   tr -d '\r'
 }
 
 oracle() {
-  local name="$1" setup="$2" allow_empty="${3:-}"
-  local dir="$TMPROOT/$name"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
-           | grep -v '^[0-9]*$' \
-           | grep -v '^[0-9a-f]\{40\}$' \
-           | normalize)
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-
-  (
-    cd "$dir/dt" || exit 1
-    vc_oracle_init_repo
-    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
-    "$DOLT" sql -r csv -q "SELECT concat(table_name, char(9), staged, char(9), status) FROM dolt_status ORDER BY table_name, staged, status;" 2>>"$dir/dt.err"
-  ) > "$dir/dt.raw"
-
-  local dt_out
-  dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" | normalize)
-
-  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
-    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
-  else
-    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
-  fi
+  oracle_dual "$1" "$2" "$2" "${3:-}"
 }
 
 oracle_dual() {
@@ -52,24 +27,28 @@ oracle_dual() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$dl_setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
-           | grep -v '^[0-9]*$' \
-           | grep -v '^[0-9a-f]\{40\}$' \
-           | normalize)
+  local dl_out dl_rc dt_out dt_rc dolt_setup
+  printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$dl_setup" \
+    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.raw" 2>"$dir/dl.err"
+  dl_rc=$?
 
-  local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
+  vc_oracle_run_dolt_setup_query "$dir/dt" "$dir/dt.raw" "$dir/dt.err" \
+    "$dolt_setup" \
+    "SELECT concat(table_name, char(9), staged, char(9), status) FROM dolt_status ORDER BY table_name, staged, status;"
+  dt_rc=$?
 
-  (
-    cd "$dir/dt" || exit 1
-    vc_oracle_init_repo
-    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
-    "$DOLT" sql -r csv -q "SELECT concat(table_name, char(9), staged, char(9), status) FROM dolt_status ORDER BY table_name, staged, status;" 2>>"$dir/dt.err"
-  ) > "$dir/dt.raw"
+  if [ "$dl_rc" -ne 0 ] || [ "$dt_rc" -ne 0 ]; then
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (execution failed: doltlite rc=$dl_rc, dolt rc=$dt_rc)"
+    echo "    doltlite stderr:"; sed 's/^/      /' "$dir/dl.err"
+    echo "    dolt stderr:"; sed 's/^/      /' "$dir/dt.err"
+    return 1
+  fi
 
-  local dt_out
+  dl_out=$(grep -v '^[0-9]*$' "$dir/dl.raw" \
+    | grep -v '^[0-9a-f]\{40\}$' | normalize)
   dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" | normalize)
 
   if [ "$allow_empty" = "EXPECT_EMPTY" ]; then

@@ -10,7 +10,30 @@ vc_oracle_translate_for_dolt() {
 }
 
 vc_oracle_init_repo() {
-  "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+  "$DOLT" init --name oracle --email oracle@test >/dev/null 2>"${1:-/dev/null}"
+}
+
+vc_oracle_resolve_binary() {
+  local bin="$1" resolved
+  if ! resolved=$(command -v "$bin") || [ ! -x "$resolved" ]; then
+    echo "ERROR: not executable: $bin" >&2
+    return 1
+  fi
+  case "$resolved" in
+    /*) printf '%s\n' "$resolved" ;;
+    *) printf '%s/%s\n' "$PWD" "$resolved" ;;
+  esac
+}
+
+vc_oracle_run_dolt_setup_query() {
+  local repo="$1" out="$2" err="$3" setup="$4" query="$5"
+  : > "$out"
+  (
+    cd "$repo" 2>"$err" || exit 1
+    vc_oracle_init_repo "$err" || exit $?
+    printf '%s\n' "$setup" | "$DOLT" sql >/dev/null 2>>"$err" || exit $?
+    "$DOLT" sql -r csv -q "$query" >"$out" 2>>"$err"
+  )
 }
 
 vc_oracle_run_doltlite_script() {
