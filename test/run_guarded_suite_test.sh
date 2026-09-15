@@ -36,6 +36,15 @@ echo "__SUITE_COMPLETE__"
 exit 1
 SH
 
+# Catalog-numbers shape: sentinel then the fail test as the last command.
+cat > "$tmp/complete_then_status.sh" <<'SH'
+set -u
+fail=1
+echo "Results: 13 passed, 1 failed"
+echo "__SUITE_COMPLETE__"
+[ "$fail" -eq 0 ]
+SH
+
 # A tally is not proof of completion: suites print sub-tallies as they go, so a
 # run that stops after one looks finished unless completion is stated outright.
 cat > "$tmp/early_tally_then_dies.sh" <<'SH'
@@ -90,6 +99,7 @@ expect_rc "completed_pass_stays_zero" 0 "$tmp/complete_pass.sh"
 expect_rc "ending_on_skip_is_a_pass" 0 "$tmp/ends_on_skip.sh"
 expect_rc "intermediate_skip_does_not_count" 1 "$tmp/skips_then_dies.sh"
 expect_rc "completed_failure_stays_nonzero" 1 "$tmp/complete_fail.sh"
+expect_rc "sentinel_then_fail_status_is_nonzero" 1 "$tmp/complete_then_status.sh"
 expect_rc "death_before_tally_is_a_failure" 1 "$tmp/dies_midway.sh"
 expect_rc "silent_exit_is_a_failure" 1 "$tmp/silent_exit.sh"
 expect_rc "early_tally_does_not_prove_completion" 1 "$tmp/early_tally_then_dies.sh"

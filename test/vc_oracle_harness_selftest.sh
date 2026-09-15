@@ -106,4 +106,51 @@ fi
 check grep -q 'FAIL: empty_fresh_db (execution failed: doltlite rc=26, dolt rc=0)' "$VC_HARNESS_DIR/suite.log"
 check grep -q 'candidate failure detail' "$VC_HARNESS_DIR/suite.log"
 
+# Pass floor and separator-empty comparisons.
+pass=0; fail=0; nonempty=0; compared=0; FAILED_NAMES=""
+if vc_oracle_finish > "$VC_HARNESS_DIR/floor.log" 2>&1; then
+  echo 'FAIL: empty suite accepted by vc_oracle_finish' >&2
+  exit 1
+fi
+check grep -q 'suite needs passing' "$VC_HARNESS_DIR/floor.log"
+
+pass=0; fail=0; nonempty=0; compared=0; FAILED_NAMES=""
+vc_oracle_assert_match 'pipe_empty' '|' '|' > "$VC_HARNESS_DIR/pipe.log" || true
+check test "$fail" = 1
+check test "$pass" = 0
+check grep -q 'both sides empty' "$VC_HARNESS_DIR/pipe.log"
+
+pass=0; fail=0; nonempty=0; compared=0; FAILED_NAMES=""
+vc_oracle_assert_match 'real_row' '1' '1' > "$VC_HARNESS_DIR/row.log"
+check test "$pass" = 1
+check test "$nonempty" = 1
+if ! vc_oracle_finish > "$VC_HARNESS_DIR/okfloor.log" 2>&1; then
+  echo 'FAIL: nonempty suite rejected by vc_oracle_finish' >&2
+  exit 1
+fi
+
+# Sabotaged engines must not report success. /usr/bin/false used to make
+# vc_oracle_clean_test.sh print 11 passed / 0 failed.
+if bash "$SCRIPT_DIR/vc_oracle_clean_test.sh" /usr/bin/false /usr/bin/false \
+    > "$VC_HARNESS_DIR/clean_false.log" 2>&1; then
+  echo 'FAIL: clean oracle accepted /usr/bin/false' >&2
+  tail -10 "$VC_HARNESS_DIR/clean_false.log" >&2
+  exit 1
+fi
+check grep -q 'FAIL:' "$VC_HARNESS_DIR/clean_false.log"
+
+# Representative sweep: the full matrix is too large for lint. The floor
+# plus these suites cover empty/separator matches and startup probes.
+for base in vc_oracle_clean_test.sh vc_oracle_status_test.sh \
+            vc_oracle_commit_test.sh vc_oracle_branch_test.sh \
+            vc_oracle_add_test.sh vc_oracle_docs_test.sh; do
+  if bash "$SCRIPT_DIR/$base" /usr/bin/false /usr/bin/false \
+      > "$VC_HARNESS_DIR/sabotage.log" 2>&1; then
+    echo "FAIL: $base accepted /usr/bin/false" >&2
+    tail -8 "$VC_HARNESS_DIR/sabotage.log" >&2
+    exit 1
+  fi
+  checks=$((checks+1))
+done
+
 printf 'VC oracle harness: %s checks passed\n' "$checks"

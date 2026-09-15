@@ -74,9 +74,21 @@ vc_oracle_tail_csv_body() {
   tail -n +2 "$1" | tr -d '"'
 }
 
+# True when a compared value has no content besides separators/whitespace.
+# Joining two empty fields with "|" must not count as a match.
+vc_oracle_output_is_blank() {
+  local s="$1"
+  s="${s//|/}"
+  s="${s//$'\t'/}"
+  s="${s// /}"
+  s="${s//$'\n'/}"
+  [ -z "$s" ]
+}
+
 vc_oracle_assert_match() {
   local name="$1" dl_out="$2" dt_out="$3"
-  if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
+  compared=$((${compared:-0}+1))
+  if vc_oracle_output_is_blank "$dl_out" && vc_oracle_output_is_blank "$dt_out"; then
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"
     echo "  FAIL: $name (both sides empty — schema/function/vtable likely broke)"
@@ -84,6 +96,7 @@ vc_oracle_assert_match() {
   fi
   if [ "$dl_out" = "$dt_out" ]; then
     pass=$((pass+1))
+    nonempty=$((${nonempty:-0}+1))
     return 0
   fi
   fail=$((fail+1))
@@ -150,13 +163,26 @@ SELECT count(*) FROM oracle_probe;"
 
 # The tally alone cannot prove a suite finished, since a run that stops early
 # still prints whatever it reached. Only the real end emits the sentinel.
+# A suite that compared nothing, or only separator-empty strings, is not a pass.
 vc_oracle_finish() {
+  nonempty=${nonempty:-0}
+  compared=${compared:-0}
+  if [ "$pass" -eq 0 ]; then
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES suite_floor"
+    echo "  FAIL: suite needs passing comparisons"
+  elif [ "$compared" -gt 0 ] && [ "$nonempty" -eq 0 ]; then
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES suite_floor"
+    echo "  FAIL: suite needs passing comparisons and non-empty compared output"
+  fi
   echo ""
   echo "=== Results: $pass passed, $fail failed ==="
   if [ "$fail" -gt 0 ]; then
     echo "Failed:$FAILED_NAMES"
     echo "__SUITE_COMPLETE__"
-    exit 1
+    return 1
   fi
   echo "__SUITE_COMPLETE__"
+  return 0
 }

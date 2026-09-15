@@ -21,7 +21,13 @@ if [ ! -x "$SQLITE3" ]; then
   echo "======================================="
   echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
   echo "======================================="
+  echo "__SUITE_COMPLETE__"
   exit 0
+fi
+# shellcheck source=lib/require_stock_sqlite3.sh
+source "$(dirname "$0")/lib/require_stock_sqlite3.sh"
+if ! require_stock_sqlite3 "$SQLITE3"; then
+  exit 1
 fi
 
 SQLDB1=/tmp/test_attach1_$$.db
