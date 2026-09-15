@@ -55,6 +55,18 @@ void chunkIndexSetMetadata(ChunkIndex *idx, int nChunks, i64 iOffset, i64 nSize)
 void chunkIndexReplaceEntries(ChunkIndex *idx, ChunkIndexEntry *aNew, int nNew);
 
 struct ChunkStore;
+typedef struct ChunkIndexSpool ChunkIndexSpool;
+typedef int (*CsIndexVisitor)(void*, const ChunkIndexEntry*);
+int csVisitIndex(struct ChunkStore*, CsIndexVisitor, void*);
+int csIndexSpoolInit(sqlite3_vfs*, ChunkIndexSpool**);
+void csIndexSpoolFree(ChunkIndexSpool*);
+int csIndexSpoolAdd(void*, const ChunkIndexEntry*);
+int csIndexSpoolFinish(ChunkIndexSpool*);
+int csIndexSpoolCount(const ChunkIndexSpool*);
+int csIndexSpoolGet(ChunkIndexSpool*, int, ChunkIndexEntry*);
+int csIndexSpoolFind(ChunkIndexSpool*, const ProllyHash*, int*);
+int csIndexSnapshot(struct ChunkStore*, int, ChunkIndexSpool**);
+void csIndexInstallFlat(ChunkIndex*);
 int csReadIndex(struct ChunkStore *cs);
 int csIndexLookup(struct ChunkStore *cs, const ProllyHash *pHash,
                   ChunkIndexEntry *pEntry, int *pFound);

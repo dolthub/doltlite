@@ -27,6 +27,12 @@ file copy -force test.db gc-queue-base.db
 
 proc gc_queue_vfs {method filename args} {
   if {$filename ne ""} {return SQLITE_OK}
+  if {$method eq "xOpen"} {
+    set kind [expr {[dict get [lindex $args 0] flags]&1024 ? "index" : "queue"}]
+    if {$kind ne $::temp_target} {return other-temp}
+  } elseif {[lindex $args 0] eq "other-temp"} {
+    return SQLITE_OK
+  }
   incr ::events($method)
   if {$method eq "xWrite"} {
     set n [lindex $args 2]
@@ -52,6 +58,7 @@ proc gc_queue_open {} {
   file copy -force gc-queue-base.db test.db
   sqlite3 db test.db -vfs gcqueue
   array set ::events {xOpen 0 xRead 0 xWrite 0 xClose 0}
+  set ::temp_target queue
   set ::max_temp_write 0
   set ::temp_written 0
   set ::fail_method ""
@@ -150,6 +157,39 @@ foreach {method at code expected} {
         [expr {![file exists gc-queue-copy.db]}]
     } {1 {{10000 4000} 1 1 ok} 1 1}
     do_test fail.$method.$at.$name.retry {
+      db eval $sql
+      gc_queue_state
+    } {{10000 4000} 1 1 ok}
+  }
+}
+
+foreach {method at code expected} {
+  xOpen 1 SQLITE_CANTOPEN SQLITE_CANTOPEN
+  xWrite 1 SQLITE_FULL SQLITE_FULL
+  xWrite 2 SQLITE_IOERR SQLITE_IOERR
+  xRead 1 SQLITE_IOERR SQLITE_IOERR
+  xRead 3 SQLITE_IOERR SQLITE_IOERR
+} {
+  foreach {name sql} {vacuum VACUUM gc {SELECT dolt_gc()} into {VACUUM INTO 'gc-queue-copy.db'}} {
+    gc_queue_open
+    set temp_target index
+    forcedelete gc-queue-copy.db
+    set before [gc_queue_bytes]
+    set fail_method $method
+    set fail_at $at
+    set fail_code $code
+    do_test index.fail.$method.$at.$name.error {
+      list [catch {db eval $sql}] [sqlite3_errcode db] [expr {$events($method)>=$at}]
+    } [list 1 $expected 1]
+    set fail_method ""
+    gcqueue full
+    gcqueue cantopenerr
+    do_test index.fail.$method.$at.$name.intact {
+      list [expr {[gc_queue_bytes] eq $before}] [gc_queue_state] \
+           [expr {$events(xClose)==$events(xOpen)-($method eq "xOpen")}] \
+           [file exists gc-queue-copy.db]
+    } {1 {{10000 4000} 1 1 ok} 1 0}
+    do_test index.fail.$method.$at.$name.retry {
       db eval $sql
       gc_queue_state
     } {{10000 4000} 1 1 ok}
@@ -302,7 +342,10 @@ puts $fd {
   set env(DOLTLITE_GC_QUEUE_LIMIT) 8192
   set calls 0
   proc crash_spill {method filename args} {
-    if {$filename eq "" && $method eq $::method} {
+    if {$filename eq "" && $method eq "xOpen"} {
+      if {[dict get [lindex $args 0] flags]&1024} {return index-spool}
+    }
+    if {$filename eq "" && [lindex $args 0] ne "index-spool" && $method eq $::method} {
       incr ::calls
       if {$::calls==$::at} {
         puts "reached spill crash point"
@@ -313,7 +356,7 @@ puts $fd {
     return SQLITE_OK
   }
   testvfs crashqueue
-  crashqueue filter {xRead xWrite}
+  crashqueue filter {xOpen xRead xWrite}
   crashqueue script crash_spill
   sqlite3 db test.db -vfs crashqueue
   db eval $sql

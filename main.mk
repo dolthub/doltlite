@@ -703,6 +703,7 @@ SRC += \
   $(TOP)/src/prolly_node.h \
   $(TOP)/src/prolly_cache.c \
   $(TOP)/src/prolly_cache.h \
+  $(TOP)/src/chunk_index_spool.c \
   $(TOP)/src/chunk_store.c \
   $(TOP)/src/chunk_store.h \
   $(TOP)/src/chunk_store_int.h \
@@ -1396,6 +1397,9 @@ chunk_wal.o:	$(TOP)/src/chunk_wal.c $(DEPS_OBJ_COMMON)
 
 chunk_refs.o:	$(TOP)/src/chunk_refs.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_refs.c
+
+chunk_index_spool.o:	$(TOP)/src/chunk_index_spool.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/chunk_index_spool.c
 
 chunk_index.o:	$(TOP)/src/chunk_index.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_index.c
