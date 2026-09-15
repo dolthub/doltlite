@@ -5672,11 +5672,7 @@ static Table *isSimpleRowidRangeCount(
   assert( pExpr!=0 );
   if( pExpr->op!=TK_AGG_FUNCTION ) return 0;
   if( pExpr->pAggInfo!=pAggInfo ) return 0;
-  if( (pAggInfo->aFunc[0].pFunc->funcFlags&SQLITE_FUNC_COUNT)==0
-   && sqlite3_stricmp(pExpr->u.zToken,"count")!=0
-  ){
-    return 0;
-  }
+  if( (pAggInfo->aFunc[0].pFunc->funcFlags&SQLITE_FUNC_COUNT)==0 ) return 0;
   assert( pAggInfo->aFunc[0].pFExpr==pExpr );
   if( ExprHasProperty(pExpr, EP_Distinct|EP_WinFunc) ) return 0;
   pArgs = ExprUseXList(pExpr) ? pExpr->x.pList : 0;
@@ -5752,11 +5748,7 @@ static Index *isSimpleIndexRangeCount(
   assert( pExpr!=0 );
   if( pExpr->op!=TK_AGG_FUNCTION ) return 0;
   if( pExpr->pAggInfo!=pAggInfo ) return 0;
-  if( (pAggInfo->aFunc[0].pFunc->funcFlags&SQLITE_FUNC_COUNT)==0
-   && sqlite3_stricmp(pExpr->u.zToken,"count")!=0
-  ){
-    return 0;
-  }
+  if( (pAggInfo->aFunc[0].pFunc->funcFlags&SQLITE_FUNC_COUNT)==0 ) return 0;
   assert( pAggInfo->aFunc[0].pFExpr==pExpr );
   if( ExprHasProperty(pExpr, EP_Distinct|EP_WinFunc) ) return 0;
   pArgs = ExprUseXList(pExpr) ? pExpr->x.pList : 0;
