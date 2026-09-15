@@ -165,8 +165,19 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
   return SQLITE_OK;
 }
 
+static int failNextGetBranchWorkingSet = 0;
+
+void doltliteTestFailNextGetBranchWorkingSet(void){
+  failNextGetBranchWorkingSet = 1;
+}
+
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash){
-  int i = findBranchIdx(cs, zBranch);
+  int i;
+  if( failNextGetBranchWorkingSet ){
+    failNextGetBranchWorkingSet = 0;
+    return SQLITE_IOERR;
+  }
+  i = findBranchIdx(cs, zBranch);
   if( i<0 ){
     memset(pHash, 0, sizeof(ProllyHash));
     return SQLITE_NOTFOUND;

@@ -159,7 +159,11 @@ static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   zDefault = chunkStoreGetDefaultBranch(cs);
   srcIsDefault = zDefault && strcmp(p->zSrc, zDefault)==0;
   rc = chunkStoreGetBranchWorkingSet(cs, p->zSrc, &srcWorkingSet);
-  if( rc!=SQLITE_OK ) memset(&srcWorkingSet, 0, sizeof(srcWorkingSet));
+  if( rc==SQLITE_NOTFOUND ){
+    memset(&srcWorkingSet, 0, sizeof(srcWorkingSet));
+  }else if( rc!=SQLITE_OK ){
+    return rc;
+  }
   rc = chunkStoreFindBranch(cs, p->zDest, 0);
   if( rc==SQLITE_OK ){
     if( !p->force ) return SQLITE_ERROR;

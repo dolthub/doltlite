@@ -1050,7 +1050,12 @@ static void doltliteCommitFunc(
 
   {
     if( doltliteSessionHasConstraintViolations(db) ){
-      doltliteClearAllConstraintViolations(db);
+      rc = doltliteClearAllConstraintViolations(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context,
+            doltliteRestoreTxnStateOnFailure(db, &mutationState, rc));
+        return;
+      }
     }
   }
 

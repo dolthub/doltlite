@@ -23,6 +23,14 @@
 #include <ctype.h>
 #include <time.h>
 
+static void (*xTestMergeInstall)(void*) = 0;
+static void *pTestMergeInstallArg = 0;
+
+void doltliteTestSetMergeInstallHook(void (*xHook)(void*), void *pArg){
+  xTestMergeInstall = xHook;
+  pTestMergeInstallArg = pArg;
+}
+
 static int mergeStoreCatalog(
   sqlite3 *db,
   struct TableEntry *aCatalog,
@@ -905,6 +913,10 @@ static int mergeRefInstallMergedCatalog(
   ProllyHash trackedBaseHash = *pMergedCat;
   int rc;
 
+  if( xTestMergeInstall ){
+    xTestMergeInstall(pTestMergeInstallArg);
+  }
+
   /* Adopted indexes cover only their branch's rows; rebuild over merged
   ** tables before the flush. Skip when the merge already conflicted:
   ** those names may belong to an excluded dual-rename parent. */
@@ -1026,6 +1038,7 @@ static int mergeRefCreateMergeCommit(
   char hexBuf[PROLLY_HASH_SIZE*2+1];
   char msg[256];
   int rc;
+  int restoreRc;
 
   rc = doltliteSetSessionStaged(db, pMergedCat);
   if( rc!=SQLITE_OK ){
@@ -1045,9 +1058,14 @@ static int mergeRefCreateMergeCommit(
       &commitHash);
   if( rc!=SQLITE_OK ){
     /* Catalog is already live; leaving it lets dolt_commit drop theirHead
-    ** from ancestry. Restore first. */
-    (void)doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
-    sqlite3_result_error(context, "failed to create merge commit", -1);
+    ** from ancestry. Restore first, and surface a restore failure. */
+    restoreRc = doltliteRestoreTxnState(db, pSaved);
+    doltliteTxnStateClear(pSaved);
+    if( restoreRc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, restoreRc);
+    }else{
+      sqlite3_result_error(context, "failed to create merge commit", -1);
+    }
     return SQLITE_ERROR;
   }
 
@@ -1055,8 +1073,12 @@ static int mergeRefCreateMergeCommit(
   rc = doltliteCompareAndAdvanceBranch(
       db, pOurHead, &commitHash, pMergedCat, pWorkingCat);
   if( rc==SQLITE_BUSY ){
-    doltliteCmdResultPeerBranchBusy(context, "merge");
-    doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+    restoreRc = doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+    if( restoreRc!=rc ){
+      sqlite3_result_error_code(context, restoreRc);
+    }else{
+      doltliteCmdResultPeerBranchBusy(context, "merge");
+    }
     return SQLITE_ERROR;
   }
   if( rc!=SQLITE_OK ){
@@ -1170,7 +1192,7 @@ int doltliteMergeRef(
   DoltliteTxnState savedState;
   int nMergeConflicts = 0;
   DoltliteCommit ourCommit, theirCommit;
-  int graphLocked = 0;
+
   int dirty = 0;
   int rc;
   int bHaveSaved = 0;
@@ -1308,7 +1330,7 @@ int doltliteMergeRef(
     goto merge_fail;
   }
   if( rc!=SQLITE_OK ) goto merge_fail;
-  graphLocked = 1;
+  chunkStoreUnlock(cs);
 
   rc = doltliteSwitchCatalog(db, &mergedCatHash);
   doltliteCommitClear(&ourCommit);
@@ -1333,11 +1355,6 @@ int doltliteMergeRef(
   if( rc!=SQLITE_OK ){
     bRestoreOnFail = 1;
     goto merge_fail;
-  }
-
-  if( graphLocked ){
-    chunkStoreUnlock(cs);
-    graphLocked = 0;
   }
 
   rc = mergeRefDetectConstraintViolations(
@@ -1395,10 +1412,6 @@ int doltliteMergeRef(
       zBranch, zMessage, squash ? 0 : 1);
 
 merge_fail:
-  if( graphLocked ){
-    chunkStoreUnlock(cs);
-    graphLocked = 0;
-  }
   freeSchemaMergeActions(aSchemaActions, nSchemaActions);
   doltliteFreeNameList(azReindex, nReindex);
   doltliteFreeNameList(azRebuildVtabs, nRebuildVtabs);

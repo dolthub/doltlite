@@ -31,6 +31,10 @@ void doltliteTestCrashFinalize(const char *zOperation){
 
 static int failNextVcSeal = 0;
 static int failNextHeadConfirm = 0;
+static int failNextRestore = 0;
+static int failNextCreateCommit = 0;
+static int failPersistAtCall = 0;
+static int nPersistCalls = 0;
 
 void doltliteTestFailNextVcSeal(void){
   failNextVcSeal = 1;
@@ -38,6 +42,28 @@ void doltliteTestFailNextVcSeal(void){
 
 void doltliteTestFailNextHeadConfirm(void){
   failNextHeadConfirm = 1;
+}
+
+void doltliteTestFailNextRestore(void){
+  failNextRestore = 1;
+}
+
+void doltliteTestFailNextCreateCommit(void){
+  failNextCreateCommit = 1;
+}
+
+void doltliteTestFailPersistAtCall(int n){
+  failPersistAtCall = n;
+  nPersistCalls = 0;
+}
+
+void doltliteTestClearFaults(void){
+  failNextVcSeal = 0;
+  failNextHeadConfirm = 0;
+  failNextRestore = 0;
+  failNextCreateCommit = 0;
+  failPersistAtCall = 0;
+  nPersistCalls = 0;
 }
 
 static void (*xTestBeforeRefInstall)(void*) = 0;
@@ -102,6 +128,10 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   int rc;
   assert( db!=0 && p!=0 );
   assert( p->zSessionBranch!=0 );
+  if( failNextRestore ){
+    failNextRestore = 0;
+    return SQLITE_IOERR;
+  }
   cs = doltliteGetChunkStore(db);
 
   if( !cs ) return SQLITE_ERROR;
@@ -597,6 +627,10 @@ static int doltliteCreateAndStoreCommitOnStore(
   assert( db!=0 && cs!=0 && pParent!=0 && pCatalog!=0 && pCommitHash!=0 );
   assert( nExtraParents>=0 );
   assert( nExtraParents==0 || aExtraParents!=0 );
+  if( failNextCreateCommit ){
+    failNextCreateCommit = 0;
+    return SQLITE_IOERR;
+  }
 
   memset(&c, 0, sizeof(c));
   memcpy(&c.parentHash, pParent, sizeof(ProllyHash));
@@ -873,6 +907,11 @@ int doltliteCompareAndAdvanceBranchCurrentCatalog(
 }
 
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db){
+  nPersistCalls++;
+  if( failPersistAtCall>0 && nPersistCalls==failPersistAtCall ){
+    failPersistAtCall = 0;
+    return SQLITE_IOERR;
+  }
   if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     return doltlitePersistWorkingSet(db);
   }
