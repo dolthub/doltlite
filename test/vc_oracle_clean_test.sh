@@ -52,7 +52,8 @@ oracle() {
   ) >"$dir/dt.rows.out"
   dt_rows=$(tail -n +2 "$dir/dt.rows.out" | tr -d '\r"')
 
-  vc_oracle_assert_match "$name" "$dl_status|$dl_rows" "$dt_status|$dt_rows"
+  vc_oracle_assert_match "${name}_status" "$dl_status" "$dt_status"
+  vc_oracle_assert_match "${name}_rows" "$dl_rows" "$dt_rows"
 }
 
 oracle_error() {

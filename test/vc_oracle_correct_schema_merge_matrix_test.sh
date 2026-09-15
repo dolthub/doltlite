@@ -441,4 +441,9 @@ if [ "$gaps" -ne 0 ]; then
   echo "gaps (we merge where Dolt refuses -- fix by refusing):$GAP_NAMES"
 fi
 echo "======================================="
+if [ "$skipped" -gt "${VC_SCHEMA_MERGE_SKIP_CEILING:-200}" ]; then
+  fail=$((fail+1))
+  FAILED_NAMES="$FAILED_NAMES skip_ceiling"
+  echo "  FAIL: skipped=$skipped exceeds ceiling ${VC_SCHEMA_MERGE_SKIP_CEILING:-200}"
+fi
 vc_oracle_finish

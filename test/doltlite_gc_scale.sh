@@ -97,6 +97,11 @@ run_test "gc_multi_integrity" \
 
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
 if [ -x "$SQLITE3" ]; then
+  # shellcheck source=lib/require_stock_sqlite3.sh
+  source "$(dirname "$0")/lib/require_stock_sqlite3.sh"
+  if ! require_stock_sqlite3 "$SQLITE3"; then
+    exit 1
+  fi
   DB5=/tmp/test_gc5_$$.db; rm -f "$DB5"
   SQLDB=/tmp/test_gc5_att_$$.db; rm -f "$SQLDB"
   $SQLITE3 "$SQLDB" "CREATE TABLE ext(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO ext VALUES(1,'hello');"

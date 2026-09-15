@@ -2,6 +2,13 @@
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${2:-$(command -v sqlite3 2>/dev/null)}"
+# shellcheck source=lib/require_stock_sqlite3.sh
+source "$(dirname "$0")/lib/require_stock_sqlite3.sh"
+if [ -n "$SQLITE3" ] && [ -x "$SQLITE3" ]; then
+  if ! require_stock_sqlite3 "$SQLITE3"; then
+    exit 1
+  fi
+fi
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
 PASS=0; FAIL=0; SKIP=0

@@ -44,7 +44,13 @@ if [ ! -x "$SQLITE3" ]; then
   echo "SKIP: stock sqlite3 binary not found at $SQLITE3"
   echo ""
   echo "Results: 0 passed, 0 failed, 1 skipped"
+  echo "__SUITE_COMPLETE__"
   exit 0
+fi
+# shellcheck source=lib/require_stock_sqlite3.sh
+source "$(dirname "$0")/lib/require_stock_sqlite3.sh"
+if ! require_stock_sqlite3 "$SQLITE3"; then
+  exit 1
 fi
 
 echo ""

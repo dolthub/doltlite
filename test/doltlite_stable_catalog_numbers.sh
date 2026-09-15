@@ -166,5 +166,5 @@ echo "Results: $pass passed, $fail failed out of $((pass+fail)) tests"
 if [ -n "$FAILED_NAMES" ]; then
   echo "Failed:$FAILED_NAMES"
 fi
-[ "$fail" -eq 0 ]
 echo "__SUITE_COMPLETE__"
+[ "$fail" -eq 0 ]

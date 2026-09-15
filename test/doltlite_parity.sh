@@ -1,6 +1,7 @@
 #!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOLTLITE="${1:-./doltlite}"
-SQLITE3=./sqlite3
+SQLITE3="${2:-./sqlite3}"
 PASS=0; FAIL=0; ERRORS=""
 
 if [ ! -x "$DOLTLITE" ]; then
@@ -10,6 +11,22 @@ fi
 
 if [ ! -x "$SQLITE3" ]; then
   echo "ERROR: $SQLITE3 not found or not executable"
+  exit 1
+fi
+
+if ! bash "$SCRIPT_DIR/lib/assert_doltlite_engine.sh" "$DOLTLITE"; then
+  exit 1
+fi
+# Header-only: Windows CI's ./sqlite3 is MSYS 3.53 vs doltlite 3.54.
+# Version match would reject a valid stock reference; self-comparison is
+# still caught by the SQLite-format header check and samefile.
+if ! bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3"; then
+  exit 1
+fi
+if python3 -c 'import os,sys; sys.exit(0 if os.path.samefile(sys.argv[1], sys.argv[2]) else 1)' \
+     "$DOLTLITE" "$SQLITE3" 2>/dev/null; then
+  echo "ERROR: candidate and reference are the same file: $DOLTLITE"
+  echo "       parity would compare the engine with itself and pass."
   exit 1
 fi
 
