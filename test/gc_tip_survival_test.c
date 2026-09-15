@@ -239,6 +239,108 @@ static void test_branch_tips_across_gc(void){
   removeDbFiles(path);
 }
 
+static int seedAllocationFixture(const char *path, ProllyHash *pDead){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  int i, wrote = 0;
+  int rc;
+
+  removeDbFiles(path);
+  rc = sqlite3_open(path, &db);
+  if( rc==SQLITE_OK ){
+    rc = execSql(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+        "INSERT INTO t VALUES(1,'kept');"
+        "SELECT dolt_commit('-Am','kept');");
+  }
+  sqlite3_close(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreLockAndRefresh(&cs);
+  for(i=0; rc==SQLITE_OK && i<40000; i++){
+    u8 data[4];
+    data[0] = (u8)i;
+    data[1] = (u8)(i>>8);
+    data[2] = (u8)(i>>16);
+    data[3] = (u8)(i>>24);
+    rc = chunkStorePut(&cs, data, sizeof(data), pDead);
+  }
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(&cs);
+  if( rc==SQLITE_OK ) rc = csWriteWalCheckpoint(&cs, 1, &wrote);
+  if( rc==SQLITE_OK && !wrote ) rc = SQLITE_ERROR;
+  chunkStoreUnlock(&cs);
+  chunkStoreClose(&cs);
+  return rc;
+}
+
+static void test_gc_allocation_budget(void){
+  const char *path = "test_gc_allocation.db";
+  const char *copy = "test_gc_allocation_copy.db";
+  const char *aSql[] = {
+    "VACUUM", "SELECT dolt_gc()", "VACUUM INTO 'test_gc_allocation_copy.db'"
+  };
+  ProllyHash dead;
+  ChunkStore cs;
+  sqlite3 *db = 0;
+  sqlite3_int64 oldLimit;
+  int rc, i, has;
+
+  rc = seedAllocationFixture(path, &dead);
+  check("allocation_seed_lazy_index", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto allocation_done;
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+                      SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
+  check("allocation_open_lazy_index", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto allocation_done;
+  check("allocation_index_has_no_overlay",
+        cs.index.lazy.active && cs.index.lazy.nEntries>40000 && cs.index.nIndex==0);
+  oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+2*1024*1024);
+  rc = csMaterializeIndex(&cs);
+  sqlite3_hard_heap_limit64(oldLimit);
+  check("allocation_materialize_with_2mib_headroom", rc==SQLITE_OK);
+  rc = chunkStoreHas(&cs, &dead, &has);
+  check("allocation_materialize_keeps_index_entries", rc==SQLITE_OK && has);
+  chunkStoreClose(&cs);
+
+  for(i=0; i<3; i++){
+    const char *resultPath = i==2 ? copy : path;
+    removeDbFiles(copy);
+    rc = seedAllocationFixture(path, &dead);
+    check("allocation_gc_seed", rc==SQLITE_OK);
+    if( rc!=SQLITE_OK ) goto allocation_done;
+    rc = sqlite3_open(path, &db);
+    check("allocation_gc_open", rc==SQLITE_OK);
+    if( rc!=SQLITE_OK ) goto allocation_done;
+    oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+2*1024*1024);
+    rc = execSql(db, aSql[i]);
+    sqlite3_hard_heap_limit64(oldLimit);
+    if( rc!=SQLITE_OK ) fprintf(stderr, "%s: %s\n", aSql[i], sqlite3_errmsg(db));
+    check("allocation_gc_with_2mib_headroom", rc==SQLITE_OK);
+    sqlite3_close(db);
+    db = 0;
+    if( rc!=SQLITE_OK ) continue;
+    rc = storeHasChunk(resultPath, &dead, &has);
+    check("allocation_gc_collects_unreachable", rc==SQLITE_OK && !has);
+    rc = sqlite3_open(resultPath, &db);
+    check("allocation_gc_reopen", rc==SQLITE_OK);
+    check("allocation_gc_preserves_rows",
+          strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "kept")==0);
+    check("allocation_gc_preserves_history",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+    check("allocation_gc_integrity",
+          strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+    sqlite3_close(db);
+    db = 0;
+  }
+
+allocation_done:
+  if( db ) sqlite3_close(db);
+  removeDbFiles(path);
+  removeDbFiles(copy);
+}
+
 int main(void){
   printf("=== GC Tip Survival Contract Tests ===\n\n");
 
@@ -246,6 +348,7 @@ int main(void){
   test_stale_tip_survives_peer_advance_and_gc();
   test_tip_survives_vacuum();
   test_branch_tips_across_gc();
+  test_gc_allocation_budget();
 
   printf("\ngc_tip_survival_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

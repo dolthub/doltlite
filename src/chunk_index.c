@@ -467,6 +467,10 @@ int csMaterializeIndex(ChunkStore *cs){
     sqlite3_free(aLazy);
     return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
   }
+  if( cs->index.nIndex==0 ){
+    chunkIndexReplaceEntries(&cs->index, aLazy, lazy.nEntries);
+    return SQLITE_OK;
+  }
   nTotal = lazy.nEntries+cs->index.nIndex;
   aMerged = sqlite3_malloc64((sqlite3_uint64)nTotal*sizeof(ChunkIndexEntry));
   if( !aMerged ){

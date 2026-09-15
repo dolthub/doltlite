@@ -98,6 +98,7 @@ static const char *gcSourceName(int eSource){
 
 #define GC_QUEUE_BUFFER 256
 #define GC_QUEUE_BYTES (64*1024*1024)
+#define GC_MARK_INITIAL_CAPACITY 4096
 
 static int gcQueueInit(
   GcQueue *q, sqlite3_vfs *pVfs, ProllyHashSet *marked
@@ -1171,7 +1172,8 @@ static int gcRun(
     return rc;
   }
 
-  rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
+  rc = prollyHashSetInit(&marked,
+      MIN(chunkIndexCount(&cs->index), GC_MARK_INITIAL_CAPACITY));
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     *pzPhase = "gc mark phase failed";
@@ -1339,7 +1341,7 @@ int doltliteGcVacuumInto(
     return rc;
   }
   rc = prollyHashSetInit(&marked,
-      chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
+      MIN(chunkIndexCount(&cs->index), GC_MARK_INITIAL_CAPACITY));
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     csFileUnlock(pDestLock, &zDestLockName);
