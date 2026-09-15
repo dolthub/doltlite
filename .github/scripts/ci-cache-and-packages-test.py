@@ -80,8 +80,7 @@ def artifact():
     action = (github / 'actions/asan-build/action.yml').read_text()
     command = step(action, 'Package', '  ').replace('${{ inputs.platform }}', 'macos')
     expected = {'build/doltlite', 'build/sqlite3', 'build/doltlite_regression_test_c',
-                'build/libdoltlite.a', 'build/sqlite3.h', 'build/build.log',
-                'build/crash_recovery_test', 'build/oom_dolt_fault_test'}
+                'build/libdoltlite.a', 'build/sqlite3.h', 'build/build.log'}
     checks = 0
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -111,6 +110,12 @@ def artifact():
             assert result.returncode != 0, name
             path.write_bytes(saved)
             checks += 1
+        extra = 'build/crash_recovery_test'
+        write_executable(root / extra, '#!/bin/sh\nprintf "extra\\n"\n')
+        subprocess.run(['bash', '-e', '-c', command], cwd=root, check=True)
+        with tarfile.open(root / 'asan-ubsan-macos.tar.gz') as archive:
+            assert set(archive.getnames()) == expected | {extra}
+        checks += 1
     return checks
 
 
