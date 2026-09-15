@@ -752,7 +752,7 @@ static int resetTreeCache(sqlite3 *db){
   sqlite3_mutex_enter(db->mutex);
   sqlite3BtreeEnter(pBtree);
   prollyCacheFree(&pBtree->pBt->cache);
-  rc = prollyCacheInit(&pBtree->pBt->cache, PROLLY_DEFAULT_CACHE_SIZE);
+  rc = prollyCacheInit(&pBtree->pBt->cache, PROLLY_DEFAULT_CACHE_BYTES);
   sqlite3BtreeLeave(pBtree);
   sqlite3_mutex_leave(db->mutex);
   return rc;

@@ -833,7 +833,7 @@ int sqlite3BtreeOpen(
   poisonAfterOpen = pBt->store.corruptMidStream;
   pBt->store.corruptMidStream = 0;
 
-  rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_SIZE);
+  rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_BYTES);
   if( rc!=SQLITE_OK ){
     chunkStoreClose(&pBt->store);
     sqlite3_free(zStoreFilename);
@@ -857,6 +857,7 @@ int sqlite3BtreeOpen(
   pBt->store.xWriteGate = prollyBtreeQueryOnlyWriteGate;
   pBt->store.pWriteGateArg = p;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
+  pBt->cacheSize = SQLITE_DEFAULT_CACHE_SIZE;
   pBt->iWorkingStateVersion = 1;
   pBt->nRef = 1;
   p->inTransaction = TRANS_NONE;
@@ -1168,20 +1169,19 @@ int sqlite3BtreeNewDb(Btree *p){
 }
 
 int prollyBtreeSetCacheSize(Btree *p, int mxPage){
-  i64 nEntry;
+  i64 nByte;
   if( !p || !p->pBt ) return SQLITE_OK;
   if( mxPage>0 ){
-    nEntry = mxPage;
-  }else{
-    /* Negative cache_size is a KiB budget, mapped like the stock pager. */
     u32 pgsz = p->pBt->pageSize>0 ? p->pBt->pageSize : PROLLY_DEFAULT_PAGE_SIZE;
-    nEntry = (-(i64)mxPage * 1024) / pgsz;
+    nByte = (i64)mxPage * pgsz;
+  }else{
+    nByte = -(i64)mxPage * 1024;
   }
-  /* Never shrink below the engine baseline (stock default is -2000). */
-  if( nEntry < PROLLY_DEFAULT_CACHE_SIZE ) nEntry = PROLLY_DEFAULT_CACHE_SIZE;
-  p->pBt->cache.nCapacity = (int)nEntry;
+  p->pBt->cacheSize = mxPage;
+  prollyCacheSetBudget(&p->pBt->cache, nByte);
   return SQLITE_OK;
 }
+
 int sqlite3BtreeSetCacheSize(Btree *p, int mxPage){
   if( !p ) return SQLITE_OK;
   return p->pOps->xSetCacheSize(p, mxPage);
@@ -1223,6 +1223,9 @@ int prollyBtreeSetPageSize(Btree *p, int nPagesize, int nReserve, int eFix){
   /* Stock range: power of two in [512,65536]. Layout-inert either way. */
   if( nPagesize>=512 && nPagesize<=65536 && ((nPagesize-1)&nPagesize)==0 ){
     p->pBt->pageSize = (u32)nPagesize;
+    if( p->pBt->cacheSize>0 ){
+      prollyBtreeSetCacheSize(p, p->pBt->cacheSize);
+    }
   }
   return SQLITE_OK;
 }

@@ -98,16 +98,13 @@ static ProllyCacheEntry *cacheEntryNewOwned(
   return pEntry;
 }
 
-int prollyCacheInit(ProllyCache *cache, int nCapacity){
+int prollyCacheInit(ProllyCache *cache, i64 nMaxByte){
   int nBucket = 16;
-  i64 nBucketMin = (i64)nCapacity * 2;
 
   memset(cache, 0, sizeof(*cache));
-  if( nBucketMin>0x40000000 ) return SQLITE_NOMEM;
-  cache->nCapacity = nCapacity;
+  cache->nMaxByte = MAX(nMaxByte, 4096);
   cache->nUsed = 0;
 
-  while( nBucket<nBucketMin ) nBucket *= 2;
   cache->nBucket = nBucket;
 
   cache->aBucket = (ProllyCacheEntry **)sqlite3_malloc(
@@ -117,6 +114,7 @@ int prollyCacheInit(ProllyCache *cache, int nCapacity){
     return SQLITE_NOMEM;
   }
   memset(cache->aBucket, 0, sizeof(ProllyCacheEntry *) * nBucket);
+  cache->nByte = sqlite3_msize(cache->aBucket);
 
   cache->lruHead.pLruNext = &cache->lruTail;
   cache->lruHead.pLruPrev = 0;
@@ -159,6 +157,7 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     if( pEntry->nRef==0 ){
       lruRemove(pEntry);
       hashRemove(cache, pEntry);
+      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
       sqlite3_free(pEntry->pData);
       memset(pEntry, 0, sizeof(*pEntry));
       cache->nUsed--;
@@ -167,6 +166,57 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     pEntry = pEntry->pLruPrev;
   }
   return 0;
+}
+
+static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
+  ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
+  while( cache->nByte>nMaxByte && pEntry!=&cache->lruHead ){
+    ProllyCacheEntry *pPrev = pEntry->pLruPrev;
+    if( pEntry->nRef==0 ){
+      lruRemove(pEntry);
+      hashRemove(cache, pEntry);
+      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+      cache->nUsed--;
+      cacheEntryFree(pEntry);
+    }
+    pEntry = pPrev;
+  }
+}
+
+static void cacheRehash(ProllyCache *cache, int nBucket){
+  ProllyCacheEntry **aBucket;
+  ProllyCacheEntry *pEntry;
+  sqlite3BeginBenignMalloc();
+  aBucket = sqlite3_malloc64((u64)nBucket * sizeof(*aBucket));
+  sqlite3EndBenignMalloc();
+  if( aBucket==0 ) return;
+  memset(aBucket, 0, (size_t)nBucket * sizeof(*aBucket));
+  cache->nByte += (i64)sqlite3_msize(aBucket)
+               - (i64)sqlite3_msize(cache->aBucket);
+  sqlite3_free(cache->aBucket);
+  cache->aBucket = aBucket;
+  cache->nBucket = nBucket;
+  for(pEntry=cache->lruHead.pLruNext; pEntry!=&cache->lruTail;
+      pEntry=pEntry->pLruNext){
+    int iBucket = cacheHashBucket(cache, &pEntry->hash);
+    pEntry->pHashNext = cache->aBucket[iBucket];
+    cache->aBucket[iBucket] = pEntry;
+  }
+}
+
+void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte){
+  int nBucket = cache->nBucket;
+  cache->nMaxByte = MAX(nMaxByte, 4096);
+  while( nBucket>16
+      && (i64)nBucket*sizeof(*cache->aBucket)>cache->nMaxByte/16 ){
+    nBucket /= 2;
+  }
+  if( nBucket!=cache->nBucket ){
+    cacheTrim(cache, cache->nMaxByte + sqlite3_msize(cache->aBucket)
+                    - (i64)nBucket*sizeof(*cache->aBucket));
+    cacheRehash(cache, nBucket);
+  }
+  cacheTrim(cache, cache->nMaxByte);
 }
 
 ProllyCacheEntry *prollyCachePutOwned(
@@ -189,7 +239,8 @@ ProllyCacheEntry *prollyCachePutOwned(
   }
 
   pEntry = 0;
-  if( cache->nUsed>=cache->nCapacity ){
+  if( cache->nByte + nData + PROLLY_NODE_BUFFER_SLOP
+      + sizeof(ProllyCacheEntry)>cache->nMaxByte ){
     pEntry = cacheEvictOne(cache);
   }
 
@@ -230,6 +281,10 @@ ProllyCacheEntry *prollyCachePutOwned(
     return 0;
   }
 
+  if( cache->nUsed/2>=cache->nBucket && cache->nBucket<0x40000000
+      && (i64)cache->nBucket*2*sizeof(*cache->aBucket)<=cache->nMaxByte/16 ){
+    cacheRehash(cache, cache->nBucket*2);
+  }
   iBucket = cacheHashBucket(cache, hash);
   pEntry->pHashNext = cache->aBucket[iBucket];
   cache->aBucket[iBucket] = pEntry;
@@ -237,6 +292,8 @@ ProllyCacheEntry *prollyCachePutOwned(
   lruInsertHead(cache, pEntry);
 
   cache->nUsed++;
+  cache->nByte += sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+  cacheTrim(cache, cache->nMaxByte);
   return pEntry;
 }
 
@@ -251,11 +308,12 @@ ProllyCacheEntry *prollyCachePutTransientOwned(
 }
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry){
-  (void)cache;
   assert( entry->nRef>0 );
   entry->nRef--;
   if( entry->nRef==0 && entry->bTransient ){
     cacheEntryFree(entry);
+  }else if( entry->nRef==0 && cache->nByte>cache->nMaxByte ){
+    cacheTrim(cache, cache->nMaxByte);
   }
 }
 

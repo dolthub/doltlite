@@ -26,7 +26,7 @@ static int openStore(ChunkStore *cs, ProllyCache *cache, const char *path){
   memset(cs, 0, sizeof(*cs));
   rc = chunkStoreOpen(cs, sqlite3_vfs_find(0), path, SQLITE_OPEN_CREATE);
   if( rc!=SQLITE_OK ) return rc;
-  prollyCacheInit(cache, 64);
+  prollyCacheInit(cache, 64*4096);
   return SQLITE_OK;
 }
 
