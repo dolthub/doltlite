@@ -1,0 +1,94 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach kind {view trigger} {
+  foreach stage {unstaged staged tracked target} {
+    foreach unrelated {0 1} {
+      foreach txn {autocommit explicit} {
+        reset_db
+        execsql {
+          CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+          CREATE TABLE audit(id INTEGER PRIMARY KEY);
+          INSERT INTO t VALUES(1,1);
+        }
+        if {$stage in {tracked target}} {
+          execsql {CREATE VIEW old_v AS SELECT a FROM t}
+        }
+        execsql {SELECT dolt_commit('-Am','base')}
+        if {$stage eq "target"} {
+          execsql {
+            DROP VIEW old_v;
+            SELECT dolt_commit('-Am','drop');
+          }
+        }
+        if {$kind eq "view"} {
+          execsql {CREATE VIEW vv AS SELECT a FROM t}
+        } else {
+          execsql {
+            CREATE TRIGGER tr AFTER INSERT ON t BEGIN
+              INSERT INTO audit VALUES(NEW.id);
+            END;
+          }
+        }
+        if {$stage eq "staged"} {
+          execsql {SELECT dolt_add('dolt_schemas')}
+        }
+        if {$stage eq "tracked"} {
+          execsql {DROP VIEW old_v}
+        }
+        if {$unrelated} {
+          execsql {
+            CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
+            INSERT INTO u VALUES(1,'untracked');
+          }
+        }
+        execsql {UPDATE t SET a=99}
+        if {$txn eq "explicit"} {execsql {BEGIN}}
+        set prefix reset-schema-$kind-$stage-$unrelated-$txn
+        set keep [expr {$stage eq "unstaged"}]
+        set tracked [expr {$stage in {tracked target}}]
+        if {$stage eq "target"} {
+          do_execsql_test $prefix-reset {
+            SELECT dolt_reset('--hard','HEAD~1');
+          } {0}
+        } else {
+          do_execsql_test $prefix-reset {SELECT dolt_reset('--hard')} {0}
+        }
+        set query {
+          SELECT count(*) FROM sqlite_master WHERE name IN ('vv','tr');
+          SELECT count(*) FROM sqlite_master WHERE name='old_v';
+          SELECT a FROM t;
+          SELECT count(*) FROM dolt_status WHERE staged=1;
+          SELECT count(*) FROM dolt_status WHERE table_name='dolt_schemas';
+          SELECT count(*) FROM sqlite_master WHERE name='u';
+          PRAGMA integrity_check;
+        }
+        set expected [list $keep $tracked 1 0 $keep $unrelated ok]
+        do_execsql_test $prefix-live $query $expected
+        if {$txn eq "explicit"} {execsql {COMMIT}}
+        db close
+        sqlite3 db test.db
+        do_execsql_test $prefix-reopen $query $expected
+        if {$unrelated} {
+          do_execsql_test $prefix-untracked-index {
+            SELECT id FROM u WHERE v='untracked';
+          } {1}
+        }
+        if {$keep && $kind eq "view"} {
+          do_execsql_test $prefix-view {SELECT a FROM vv} {1}
+        }
+        if {$keep && $kind eq "trigger"} {
+          do_execsql_test $prefix-trigger {
+            INSERT INTO t VALUES(2,2);
+            SELECT id FROM audit;
+          } {2}
+        }
+        if {$tracked} {
+          do_execsql_test $prefix-restored-view {SELECT a FROM old_v} {1}
+        }
+      }
+    }
+  }
+}
+
+finish_test
