@@ -787,7 +787,7 @@ static int gcWriteCompactedTo(
     w.pFile = pTmpFile;
     w.iOff = 0;
     w.nBuf = 0;
-    w.aBuf = sqlite3_malloc(GC_WRITER_BUF);
+    w.aBuf = sqlite3_malloc(2*GC_WRITER_BUF);
     if( !w.aBuf ){
       sqlite3OsCloseFree(pTmpFile);
       sqlite3_free(aNewIndex);
@@ -799,6 +799,7 @@ static int gcWriteCompactedTo(
     indexWriter.pFile = pTmpFile;
     indexWriter.iOff = CHUNK_MANIFEST_SIZE+nDataBytes;
     indexWriter.nBuf = 0;
+    indexWriter.aBuf = w.aBuf+GC_WRITER_BUF;
     for(i=0; rc==SQLITE_OK && i<marked->nEntries; i++){
       ChunkIndexEntry e;
       u8 *data = 0;
