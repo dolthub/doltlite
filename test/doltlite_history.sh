@@ -384,28 +384,85 @@ run_test "hist_namemap_old_commit" \
 
 rm -f "$DBH"
 
-DB=/tmp/test_hist_pk_mapping_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(oldkey INTEGER PRIMARY KEY, id INT);
-INSERT INTO t VALUES(-100,42),(1,99),(2,42),(100,7);
+# Filter results must match a forced scan (LIMIT -1) so a seek skip on a
+# historical key layout cannot silently change rows.
+pk_map_check() {
+  local name="$1" from_sql="$2" joiner="$3" pred="$4"
+  local scan filt
+  scan=$(printf '%s\n' \
+    "SELECT oldkey,id FROM (SELECT oldkey,id FROM $from_sql LIMIT -1) WHERE $pred ORDER BY oldkey,id;" \
+    | $DOLTLITE "$DB" 2>/dev/null | tr -d '\r')
+  filt=$(printf '%s\n' \
+    "SELECT oldkey,id FROM $from_sql $joiner $pred ORDER BY oldkey,id;" \
+    | $DOLTLITE "$DB" 2>/dev/null | tr -d '\r')
+  if [ "$scan" = "$filt" ]; then
+    dltest_pass
+  else
+    dltest_fail "$name" "  scan: $scan\n  filt: $filt"
+  fi
+}
+
+while IFS='|' read -r layout schema rows; do
+  [ -z "$layout" ] && continue
+  DB=/tmp/test_hist_pk_mapping_${layout}_$$.db; rm -f "$DB"
+  echo "CREATE TABLE t($schema);
+INSERT INTO t(oldkey,id) VALUES $rows;
 SELECT dolt_commit('-Am','old');
+SELECT dolt_tag('old');
 DROP TABLE t;
 CREATE TABLE t(oldkey INT, id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(10,42),(11,99),(12,7);
 SELECT dolt_commit('-Am','new');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "snapshot_changed_pk_eq" \
-  "SELECT oldkey,id FROM dolt_at_t('HEAD~1') WHERE id=42 ORDER BY oldkey;" \
-  "-100|42
-2|42" "$DB"
-run_test "snapshot_changed_pk_range" \
-  "SELECT oldkey,id FROM dolt_at_t('HEAD~1') WHERE id<=42 ORDER BY oldkey;" \
-  "-100|42
-2|42
-100|7" "$DB"
-run_test "history_changed_pk_eq" \
-  "SELECT count(*) FROM dolt_history_t WHERE id=42;" "3" "$DB"
-run_test "history_changed_pk_range" \
-  "SELECT count(*) FROM dolt_history_t WHERE id>7 AND id<=42;" "3" "$DB"
+  for surface_spec in \
+    "snapshot_old|dolt_at_t('old')|WHERE" \
+    "snapshot_current|dolt_at_t('HEAD')|WHERE" \
+    "history|dolt_history_t|WHERE" \
+    "history_old|dolt_history_t('old')|WHERE" \
+    "history_commit|dolt_history_t WHERE commit_hash=dolt_hashof('old')|AND"
+  do
+    IFS='|' read -r surface from_sql joiner <<<"$surface_spec"
+    for pred_spec in \
+      "eq|id=42" \
+      "eq_first|id=7" \
+      "ge|id>=42" \
+      "gt|id>7" \
+      "le|id<=42" \
+      "lt|id<99" \
+      "bounded|id>7 AND id<=42" \
+      "in|id IN (7,42)"
+    do
+      IFS='|' read -r predname pred <<<"$pred_spec"
+      pk_map_check "pkmap_${layout}_${surface}_${predname}" \
+        "$from_sql" "$joiner" "$pred"
+    done
+  done
+  rm -f "$DB"
+done <<'LAYOUTS'
+changed|oldkey INTEGER PRIMARY KEY, id INT|(-100,42),(1,99),(2,42),(100,7)
+changed_reordered|id INT, oldkey INTEGER PRIMARY KEY|(-100,42),(1,99),(2,42),(100,7)
+same_reordered|id INTEGER PRIMARY KEY, oldkey INT|(-100,42),(1,99),(100,7)
+clustered|oldkey INT, id INT, PRIMARY KEY(oldkey,id)|(-100,42),(1,99),(2,42),(100,7)
+keyless|oldkey INT, id INT|(-100,42),(1,99),(2,42),(100,7)
+LAYOUTS
+
+DB=/tmp/test_hist_pk_missing_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(oldkey INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1),(2);
+SELECT dolt_commit('-Am','old');
+DROP TABLE t;
+CREATE TABLE t(oldkey INT, id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1,42);
+SELECT dolt_commit('-Am','new');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "pkmap_missing_at_null_id" \
+  "SELECT oldkey,id FROM dolt_at_t('HEAD~1') WHERE id IS NULL ORDER BY oldkey;" \
+  "1|
+2|" "$DB"
+run_test "pkmap_missing_at_eq" \
+  "SELECT count(*) FROM dolt_at_t('HEAD~1') WHERE id=42;" "0" "$DB"
+run_test "pkmap_missing_history_eq" \
+  "SELECT oldkey,id FROM dolt_history_t WHERE id=42;" "1|42" "$DB"
 
 rm -f "$DB"
 
