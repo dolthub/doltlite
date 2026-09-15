@@ -85,7 +85,8 @@ static const char *remoteSqlRemoteMsg(DoltliteRemote *pRemote, int rc){
     z = pRemote->xErrMsg(pRemote);
     if( z && z[0] ) return z;
   }
-  if( rc==SQLITE_BUSY ) return "push failed (remote refs changed)";
+  if( rc==SQLITE_BUSY ) return "database is locked by another connection";
+  if( rc==SQLITE_BUSY_SNAPSHOT ) return "push failed (remote refs changed)";
   if( rc==SQLITE_LOCKED ){
     return "remote branch has uncommitted changes and cannot be overwritten by push";
   }

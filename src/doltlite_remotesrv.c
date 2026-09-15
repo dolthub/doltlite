@@ -160,6 +160,10 @@ static void sendSqliteError(DoltliteConn *fd, int rc){
                           "overwritten by push");
       return;
     case SQLITE_BUSY:
+      sendStructuredError(fd, 503, "Service Unavailable", "busy", rc,
+                          "database is locked by another connection");
+      return;
+    case SQLITE_BUSY_SNAPSHOT:
       sendStructuredError(fd, 409, "Conflict", "refs_changed", rc,
                           "remote refs changed; pull and retry");
       return;
@@ -216,8 +220,18 @@ static void sendUnauthorized(DoltliteConn *fd){
                       "unauthorized");
 }
 
+static int remoteSrvBusyRetry(int nBusy){
+  if( nBusy>=20 ) return 0;
+  sqlite3_sleep(50);
+  return 1;
+}
+
 static int remoteSrvCommitPending(ChunkStore *pStore){
-  int rc = chunkStoreCommit(pStore);
+  int nBusy = 0;
+  int rc;
+  do {
+    rc = chunkStoreCommit(pStore);
+  }while( rc==SQLITE_BUSY && remoteSrvBusyRetry(nBusy++) );
   if( rc!=SQLITE_OK ){
     chunkStoreRollback(pStore);
   }
@@ -771,7 +785,11 @@ static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
 }
 
 static int remoteSrvLockAndForceRefresh(ChunkStore *pStore){
-  int rc = chunkStoreLockAndRefresh(pStore);
+  int nBusy = 0;
+  int rc;
+  do {
+    rc = chunkStoreLockAndRefresh(pStore);
+  }while( rc==SQLITE_BUSY && remoteSrvBusyRetry(nBusy++) );
   if( rc==SQLITE_OK ){
     rc = chunkStoreForceRefresh(pStore);
     if( rc==SQLITE_CANTOPEN || rc==SQLITE_NOTADB ) rc = SQLITE_OK;
@@ -805,7 +823,7 @@ static int remoteSrvApplyRefsIf(
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashCompare(refsTableGetHash(&pStore->refs), pExpectedRefsHash)!=0 ){
     chunkStoreUnlock(pStore);
-    return SQLITE_BUSY;
+    return SQLITE_BUSY_SNAPSHOT;
   }
   rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody);
   chunkStoreUnlock(pStore);
