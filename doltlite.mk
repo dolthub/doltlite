@@ -53,7 +53,7 @@ endif
 
 PROLLY_OBJS = \
               prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
-              chunk_store.o chunk_store_lock.o chunk_store_refs_api.o chunk_store_commit.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
+              chunk_store.o chunk_store_lock.o chunk_store_refs_api.o chunk_store_commit.o chunk_wal.o chunk_refs.o chunk_index.o chunk_index_spool.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o \
               prolly_btree.o prolly_btree_catalog.o prolly_btree_cursor.o prolly_btree_cursor_seek.o prolly_btree_cursor_payload.o prolly_btree_cursor_count.o prolly_btree_mutation.o \
               prolly_btree_orig.o prolly_btree_state.o prolly_btree_txn.o pager_shim.o sortkey.o \

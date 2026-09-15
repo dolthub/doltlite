@@ -636,6 +636,12 @@ static int tvfsOpen(
   if( p->pScript && p->mask&TESTVFS_OPEN_MASK ){
     Tcl_Obj *pArg = Tcl_NewObj();
     Tcl_IncrRefCount(pArg);
+#ifdef DOLTLITE_PROLLY
+    if( !zName || zName[0]==0 ){
+      Tcl_ListObjAppendElement(0, pArg, Tcl_NewStringObj("flags", -1));
+      Tcl_ListObjAppendElement(0, pArg, Tcl_NewIntObj(flags));
+    }
+#endif
     if( flags&SQLITE_OPEN_MAIN_DB ){
       const char *z = &zName[strlen(zName)+1];
       while( *z ){

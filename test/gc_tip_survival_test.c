@@ -393,11 +393,11 @@ static void test_gc_live_allocation_budget(void){
     rc = sqlite3_open(path, &db);
     check("live_allocation_open", rc==SQLITE_OK);
     if( rc!=SQLITE_OK ) break;
-    oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+8*1024*1024);
+    oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+5*1024*1024);
     rc = execSql(db, aSql[i]);
     sqlite3_hard_heap_limit64(oldLimit);
     if( rc!=SQLITE_OK ) fprintf(stderr, "%s: %s\n", aSql[i], sqlite3_errmsg(db));
-    check("live_allocation_gc_with_8mib_headroom", rc==SQLITE_OK);
+    check("live_allocation_gc_with_5mib_headroom", rc==SQLITE_OK);
     if( rc!=SQLITE_OK ){
       check("live_allocation_failed_gc_preserves_history",
             strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "40002")==0);
@@ -426,15 +426,143 @@ static void test_gc_live_allocation_budget(void){
     if( rc!=SQLITE_OK ) break;
     chunkIndexReplaceEntries(&cs.index, 0, 0);
     oldLimit = sqlite3_hard_heap_limit64(
-        sqlite3_memory_used()+cs.index.nIndexSize+256*1024);
+        sqlite3_memory_used()+256*1024);
     rc = csReadIndex(&cs);
     sqlite3_hard_heap_limit64(oldLimit);
     check("live_allocation_read_index_without_full_copy", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreHas(&cs, &dead, &has);
+      check("live_allocation_lazy_lookup", rc==SQLITE_OK && !has);
+    }
     chunkStoreClose(&cs);
+    rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), resultPath,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+    check("live_allocation_checkpoint_open", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      int wrote = 0;
+      rc = chunkStoreLockAndRefresh(&cs);
+      if( rc==SQLITE_OK ){
+        oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+1024*1024);
+        rc = csWriteWalCheckpoint(&cs, 1, &wrote);
+        sqlite3_hard_heap_limit64(oldLimit);
+      }
+      check("live_allocation_checkpoint_with_1mib_headroom", rc==SQLITE_OK && wrote);
+      chunkStoreUnlock(&cs);
+      chunkStoreClose(&cs);
+    }
+    rc = sqlite3_open(resultPath, &db);
+    check("live_allocation_checkpoint_reopen", rc==SQLITE_OK);
+    check("live_allocation_checkpoint_history",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "40002")==0);
+    check("live_allocation_write_after_checkpoint",
+          execSql(db, "INSERT INTO t VALUES(2,'after'); SELECT dolt_commit('-Am','after');")==SQLITE_OK);
+    sqlite3_close(db);
+    db = 0;
   }
   if( db ) sqlite3_close(db);
   removeDbFiles(path);
   removeDbFiles(copy);
+}
+
+static void indexTestHash(ProllyHash *h, int i){
+  memset(h, 0, sizeof(*h));
+  h->data[0] = (u8)(i>>24);
+  h->data[1] = (u8)(i>>16);
+  h->data[2] = (u8)(i>>8);
+  h->data[3] = (u8)i;
+}
+
+static void test_index_spool(void){
+  ChunkIndexSpool *p = 0;
+  ChunkIndexEntry e;
+  sqlite3_int64 oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+512*1024);
+  int i, rc = csIndexSpoolInit(sqlite3_vfs_find(0), &p);
+  for(i=0; rc==SQLITE_OK && i<80000; i++){
+    int key = (int)(((sqlite3_int64)i*7919)%40000);
+    indexTestHash(&e.hash, key);
+    e.offset = key+CHUNK_MANIFEST_SIZE;
+    e.size = key;
+    rc = csIndexSpoolAdd(p, &e);
+  }
+  if( rc==SQLITE_OK ) rc = csIndexSpoolFinish(p);
+  check("spool_sort_and_deduplicate_with_512kib", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("spool_unique_count", csIndexSpoolCount(p)==40000);
+    for(i=0; rc==SQLITE_OK && i<40000; i++){
+      ProllyHash h;
+      indexTestHash(&h, i);
+      rc = csIndexSpoolGet(p, i, &e);
+      if( rc==SQLITE_OK && (memcmp(&e.hash, &h, sizeof(h))
+       || e.size!=i || e.offset!=i+CHUNK_MANIFEST_SIZE) ) rc = SQLITE_ERROR;
+    }
+    check("spool_sorted_entries", rc==SQLITE_OK);
+    for(i=39999; rc==SQLITE_OK && i>=0; i-=97){
+      ProllyHash h;
+      int found;
+      indexTestHash(&h, i);
+      rc = csIndexSpoolFind(p, &h, &found);
+      if( rc==SQLITE_OK && found!=i ) rc = SQLITE_ERROR;
+    }
+    check("spool_random_lookup", rc==SQLITE_OK);
+  }
+  csIndexSpoolFree(p);
+  sqlite3_hard_heap_limit64(oldLimit);
+}
+
+#define LARGE_INDEX_COUNT (67108864+129)
+#define LARGE_INDEX_OFFSET (CHUNK_MANIFEST_SIZE+5)
+static int largeIndexRead(sqlite3_file *f, void *buf, int n, sqlite3_int64 off){
+  u8 *a = buf;
+  int i;
+  (void)f;
+  if( off<LARGE_INDEX_OFFSET || (off-LARGE_INDEX_OFFSET)%32 || n%32 ){
+    return SQLITE_IOERR;
+  }
+  for(i=0; i<n; i+=32){
+    ProllyHash h;
+    int key = (int)((off-LARGE_INDEX_OFFSET+i)/32);
+    indexTestHash(&h, key);
+    memcpy(a+i, h.data, PROLLY_HASH_SIZE);
+    CS_WRITE_I64(a+i+20, CHUNK_MANIFEST_SIZE);
+    CS_WRITE_U32(a+i+28, 1);
+  }
+  return SQLITE_OK;
+}
+static int largeIndexSize(sqlite3_file *f, sqlite3_int64 *size){
+  (void)f;
+  *size = LARGE_INDEX_OFFSET+(sqlite3_int64)LARGE_INDEX_COUNT*32;
+  return SQLITE_OK;
+}
+static void test_index_over_2gib(void){
+  sqlite3_io_methods methods;
+  sqlite3_file file;
+  ChunkStore cs;
+  ChunkIndexEntry e;
+  ProllyHash h;
+  sqlite3_int64 oldLimit;
+  int found = 0, rc;
+  memset(&methods, 0, sizeof(methods));
+  methods.iVersion = 1;
+  methods.xRead = largeIndexRead;
+  methods.xFileSize = largeIndexSize;
+  file.pMethods = &methods;
+  memset(&cs, 0, sizeof(cs));
+  cs.file.pFile = &file;
+  chunkIndexSetMetadata(&cs.index, LARGE_INDEX_COUNT, LARGE_INDEX_OFFSET,
+                       (sqlite3_int64)LARGE_INDEX_COUNT*32);
+  oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+256*1024);
+  rc = csReadIndex(&cs);
+  check("flat_index_over_2gib_with_256kib", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    indexTestHash(&h, LARGE_INDEX_COUNT-1);
+    rc = csIndexLookup(&cs, &h, &e, &found);
+    check("flat_index_lookup_beyond_2gib", rc==SQLITE_OK && found && e.size==1);
+    indexTestHash(&h, LARGE_INDEX_COUNT);
+    rc = csIndexLookup(&cs, &h, &e, &found);
+    check("flat_index_absent_beyond_2gib", rc==SQLITE_OK && !found);
+  }
+  chunkIndexReplaceEntries(&cs.index, 0, 0);
+  sqlite3_hard_heap_limit64(oldLimit);
 }
 
 int main(void){
@@ -446,6 +574,8 @@ int main(void){
   test_branch_tips_across_gc();
   test_gc_allocation_budget();
   test_gc_live_allocation_budget();
+  test_index_spool();
+  test_index_over_2gib();
 
   printf("\ngc_tip_survival_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

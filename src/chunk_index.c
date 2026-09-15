@@ -121,6 +121,74 @@ static int csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
   return SQLITE_OK;
 }
 
+static int csVisitFlat(ChunkStore *cs, CsIndexVisitor xVisit, void *pCtx){
+  u8 a[4096];
+  ProllyHash previous;
+  int i = 0;
+  int nEntries = (int)(cs->index.nIndexSize/CHUNK_INDEX_ENTRY_SIZE);
+  while( i<nEntries ){
+    int j;
+    int n = MIN(nEntries-i, (int)sizeof(a)/CHUNK_INDEX_ENTRY_SIZE);
+    int rc = csReadSliced(cs, a, n*CHUNK_INDEX_ENTRY_SIZE,
+                         cs->index.iIndexOffset+(i64)i*CHUNK_INDEX_ENTRY_SIZE);
+    if( rc!=SQLITE_OK ) return rc;
+    for(j=0; j<n; j++, i++){
+      ChunkIndexEntry e;
+      rc = csDeserializeIndexEntry(a+j*CHUNK_INDEX_ENTRY_SIZE, &e);
+      if( rc!=SQLITE_OK || e.offset<CHUNK_MANIFEST_SIZE
+       || e.offset>cs->index.iIndexOffset-4
+       || (i64)e.size>cs->index.iIndexOffset-e.offset-4
+       || (i>0 && prollyHashCompare(&previous, &e.hash)>=0) ){
+        return SQLITE_CORRUPT;
+      }
+      previous = e.hash;
+      if( xVisit ){
+        rc = xVisit(pCtx, &e);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int csFlatLookup(
+  ChunkStore *cs, const ProllyHash *h, ChunkIndexEntry *e, int *pFound
+){
+  u8 a[4096];
+  int lo = 0, hi = cs->index.lazy.nEntries-1;
+  while( lo<=hi ){
+    int first = ((lo+(hi-lo)/2)/128)*128;
+    int n = MIN(128, cs->index.lazy.nEntries-first);
+    int l = 0, r = n-1;
+    int rc = csReadSliced(cs, a, n*CHUNK_INDEX_ENTRY_SIZE,
+                         cs->index.lazy.iRootOffset+(i64)first*CHUNK_INDEX_ENTRY_SIZE);
+    if( rc!=SQLITE_OK ) return rc;
+    while( l<=r ){
+      int mid = l+(r-l)/2;
+      int cmp = memcmp(a+mid*CHUNK_INDEX_ENTRY_SIZE, h->data, PROLLY_HASH_SIZE);
+      if( cmp==0 ){
+        rc = csDeserializeIndexEntry(a+mid*CHUNK_INDEX_ENTRY_SIZE, e);
+        if( rc==SQLITE_OK ) *pFound = 1;
+        return rc;
+      }
+      if( cmp<0 ) l = mid+1;
+      else r = mid-1;
+    }
+    if( l==0 ) hi = first-1;
+    else if( l==n ) lo = first+n;
+    else break;
+  }
+  return SQLITE_OK;
+}
+
+void csIndexInstallFlat(ChunkIndex *p){
+  chunkIndexReplaceEntries(p, 0, 0);
+  p->lazy.active = p->nIndexSize>0 ? 2 : 0;
+  p->lazy.iRootOffset = p->iIndexOffset;
+  p->lazy.iDataEnd = p->iIndexOffset;
+  p->lazy.nEntries = (int)(p->nIndexSize/CHUNK_INDEX_ENTRY_SIZE);
+}
+
 static int csReadLazyPage(
   ChunkStore *cs,
   i64 iOffset,
@@ -232,6 +300,7 @@ int csIndexLookup(
     return SQLITE_OK;
   }
   if( !pLazy->active ) return SQLITE_OK;
+  if( pLazy->active==2 ) return csFlatLookup(cs, pHash, pEntry, pFound);
   iOffset = pLazy->iRootOffset;
   nBody = pLazy->nRootSize;
   pageHash = pLazy->rootHash;
@@ -371,7 +440,10 @@ static int csCollectLazyPage(
   ChunkIndexEntry *aOut,
   int nOut,
   int *pPos,
-  int depth
+  int depth,
+  ProllyHash *pLast,
+  CsIndexVisitor xVisit,
+  void *pCtx
 ){
   u8 *aBody = 0;
   u32 magic;
@@ -403,11 +475,17 @@ static int csCollectLazyPage(
        || (i64)e.size>cs->index.lazy.iDataEnd-e.offset-4
        || *pPos>=nOut
        || (*pPos>0
-           && prollyHashCompare(&aOut[*pPos-1].hash, &e.hash)>=0) ){
+           && prollyHashCompare(pLast, &e.hash)>=0) ){
         rc = SQLITE_CORRUPT;
         goto collect_done;
       }
-      aOut[(*pPos)++] = e;
+      *pLast = e.hash;
+      if( aOut ) aOut[*pPos] = e;
+      (*pPos)++;
+      if( xVisit ){
+        rc = xVisit(pCtx, &e);
+        if( rc!=SQLITE_OK ) goto collect_done;
+      }
     }
   }else{
     ProllyHash previousMax;
@@ -430,7 +508,8 @@ static int csCollectLazyPage(
       }
       previousMax = childMax;
       rc = csCollectLazyPage(cs, childOffset, childSize, &childHash,
-                             iOffset, &childMax, aOut, nOut, pPos, depth+1);
+                             iOffset, &childMax, aOut, nOut, pPos, depth+1,
+                             pLast, xVisit, pCtx);
       if( rc!=SQLITE_OK ) goto collect_done;
     }
   }
@@ -438,6 +517,36 @@ static int csCollectLazyPage(
 collect_done:
   sqlite3_free(aBody);
   return rc;
+}
+
+int csVisitIndex(ChunkStore *cs, CsIndexVisitor xVisit, void *pCtx){
+  ChunkIndexLazy *p = &cs->index.lazy;
+  int i, n = 0;
+  int rc = SQLITE_OK;
+  ProllyHash last;
+  if( p->active==2 ){
+    rc = csVisitFlat(cs, xVisit, pCtx);
+  }else if( p->active ){
+    rc = csCollectLazyPage(cs, p->iRootOffset, p->nRootSize, &p->rootHash,
+                           p->iRootOffset+CS_WAL_CHUNK_HDR_SIZE+p->nRootSize,
+                           0, 0, p->nEntries, &n, 0, &last, xVisit, pCtx);
+    if( rc==SQLITE_OK && n!=p->nEntries ) rc = SQLITE_CORRUPT;
+  }
+  for(i=0; rc==SQLITE_OK && i<cs->index.nIndex; i++){
+    rc = xVisit(pCtx, &cs->index.aIndex[i]);
+  }
+  return rc;
+}
+
+typedef struct CsIndexCollect CsIndexCollect;
+struct CsIndexCollect {
+  ChunkIndexEntry *a;
+  int n;
+};
+static int csIndexCollect(void *pCtx, const ChunkIndexEntry *e){
+  CsIndexCollect *p = pCtx;
+  p->a[p->n++] = *e;
+  return SQLITE_OK;
 }
 
 int csMaterializeIndex(ChunkStore *cs){
@@ -459,10 +568,19 @@ int csMaterializeIndex(ChunkStore *cs){
   aLazy = sqlite3_malloc64(
       (sqlite3_uint64)lazy.nEntries*sizeof(ChunkIndexEntry));
   if( !aLazy ) return SQLITE_NOMEM;
-  rc = csCollectLazyPage(cs, lazy.iRootOffset, lazy.nRootSize,
-                         &lazy.rootHash,
-                         lazy.iRootOffset+CS_WAL_CHUNK_HDR_SIZE+lazy.nRootSize,
-                         0, aLazy, lazy.nEntries, &i, 0);
+  if( lazy.active==2 ){
+    CsIndexCollect collect;
+    collect.a = aLazy;
+    collect.n = 0;
+    rc = csVisitFlat(cs, csIndexCollect, &collect);
+    i = collect.n;
+  }else{
+    ProllyHash last;
+    rc = csCollectLazyPage(cs, lazy.iRootOffset, lazy.nRootSize,
+                           &lazy.rootHash,
+                           lazy.iRootOffset+CS_WAL_CHUNK_HDR_SIZE+lazy.nRootSize,
+                           0, aLazy, lazy.nEntries, &i, 0, &last, 0, 0);
+  }
   if( rc!=SQLITE_OK || i!=lazy.nEntries ){
     sqlite3_free(aLazy);
     return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
@@ -535,13 +653,7 @@ int csReadIndex(ChunkStore *cs){
   if( nEntries64 > INT_MAX ){
     return SQLITE_TOOBIG;
   }
-  if( cs->index.nIndexSize > INT_MAX ){
-    return SQLITE_TOOBIG;
-  }
   nEntries = (int)nEntries64;
-  if( nEntries > INT_MAX/(int)sizeof(ChunkIndexEntry) ){
-    return SQLITE_TOOBIG;
-  }
   /* nChunks includes WAL; index compacted. */
   if( nEntries > cs->index.nChunks ){
     return SQLITE_CORRUPT;
@@ -557,6 +669,12 @@ int csReadIndex(ChunkStore *cs){
    && (cs->index.iIndexOffset > fileSize
        || cs->index.nIndexSize > fileSize - cs->index.iIndexOffset) ){
     return SQLITE_CORRUPT;
+  }
+
+  if( nEntries>8192 ){
+    rc = csVisitFlat(cs, 0, 0);
+    if( rc==SQLITE_OK ) csIndexInstallFlat(&cs->index);
+    return rc;
   }
 
   cs->index.aIndex = (ChunkIndexEntry *)sqlite3_malloc(

@@ -5107,15 +5107,6 @@ ioerr ioerr-7.55.1 class=intentional  # hot-journal prep copies absent -journal 
 ioerr ioerr-7.56.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-7.57.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1 class=intentional  # master-journal prep copies absent -journal sidecar
-# ioerr-2 VACUUM gc-rewrite window: the injected error lands in a best-effort
-# finalization write gc deliberately consumes, so the statement succeeds after
-# the error was hit. Ordinals are ubuntu-runner IDs and track the streamed
-# writer's coalesced write count; macOS no longer trips the window at all.
-ioerr ioerr-2.30.3 @linux @coverage class=intentional
-ioerr ioerr-2.31.3 @linux @coverage class=intentional
-ioerr ioerr-2.32.3 @linux @coverage class=intentional
-ioerr ioerr-2.33.3 @linux @coverage class=intentional
-
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
 # format (read-back 0, not 2), and the chunk store has no page freelist,
 # so freelist_count stays 0 after the mass DELETE instead of 64.
@@ -5483,14 +5474,7 @@ vacuum2 vacuum2-6.0 class=intentional  # PRIMARY KEY with custom collation rejec
 # chunk-store GC, never a page-size rebuild, and [file size] is chunk payload, so every file-size
 # expectation differs. On the :memory: db (5.2) PRAGMA page_size reads
 # back the requested value where stock retains the original (a memdb
-# can't be rebuilt). The do_ioerr_test .31-.33 step-3 failures are injected errors that
-# land on gc-finalization IO ops the GC deliberately treats as
-# best-effort (gcRewriteFile's stale-tmp delete is explicitly
-# "must not fail the GC"; post-replace cleanup likewise): the error is
-# consumed but the statement succeeds, failing the harness's hit/fail
-# parity check. The follow-up cksum/integrity steps (.4/.6) pass, so no
-# data is lost; verified by direct probe (errors at earlier indexes
-# surface properly as "gc sweep phase failed").
+# can't be rebuilt).
 vacuum3 vacuum3-1.3 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-1.4.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-1.5.2 class=intentional  # file size = chunk payload
@@ -5508,30 +5492,6 @@ vacuum3 vacuum3-2.8.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-2.9.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-2.10.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-5.2 class=intentional issue=2493  # memdb page_size read-back after VACUUM (no rebuild)
-# VACUUM gc-rewrite ioerr window: the injected error lands in a best-effort
-# finalization write that gc deliberately consumes, so the statement succeeds
-# after the error was hit; checksum subtests pass, data intact. Ordinals are
-# ubuntu-runner IDs and track the streamed writer's coalesced write count.
-# The window widens by one whenever the session root set does: the post-sweep
-# resolvability check re-reads every seeded hash, so each added root is one
-# more fault point inside it. .32 arrived with the session head commit.
-vacuum3 vacuum3-ioerr-1.30.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-1.31.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-1.32.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-1.33.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-2.30.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-2.31.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-2.32.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-2.33.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-3.30.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-3.31.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-3.32.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-3.33.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-4.30.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-4.31.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-4.32.3 @linux class=intentional
-vacuum3 vacuum3-ioerr-4.33.3 @linux class=intentional
-
 # fkey_malloc / vtab_err: OOM fault indices, re-derived after allocations were
 # removed from the large-blob insert and integer-index seek paths; indices
 # shift with allocation counts. Mechanism notes: the
