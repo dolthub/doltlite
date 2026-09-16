@@ -234,6 +234,7 @@ BELOW_SAMPLES=()
 CHECKPOINT_SAMPLES=()
 POST_SAMPLES=()
 SAMPLE_LINES=()
+RAW_SAMPLE_LINES=()
 BELOW_WAL_BYTES=0
 for ((trial=1; trial<=TRIALS; trial++)); do
   MEASURE_DB="$TMP/checkpoint_measure_$trial.db"
@@ -307,6 +308,7 @@ for ((trial=1; trial<=TRIALS; trial++)); do
     "  trial $trial: below=${BELOW_MS}ms checkpoint=${CHECKPOINT_MS}ms post=${POST_MS}ms"
     "    checkpoint/below=${CHECKPOINT_RATIO_DISPLAY}x post/below=${POST_RATIO_DISPLAY}x"
   )
+  RAW_SAMPLE_LINES+=("$trial"$'\t'"$BELOW_SECONDS"$'\t'"$CHECKPOINT_SECONDS"$'\t'"$POST_SECONDS")
 done
 
 MEDIAN_BELOW=$(median "${BELOW_SAMPLES[@]}")
@@ -331,5 +333,9 @@ echo "  median checkpointing append: ${MEDIAN_CHECKPOINT_MS}ms"
 echo "  median post-checkpoint append on same connection: ${MEDIAN_POST_MS}ms"
 echo "  median checkpoint/below ratio: ${MEDIAN_CHECKPOINT_RATIO}x"
 echo "  median post/below ratio: ${MEDIAN_POST_RATIO}x"
-echo "PASS: measured checkpoint and post-checkpoint append ratios; no bound is enforced yet"
+if [ -n "${DOLTLITE_CHECKPOINT_PERF_SAMPLES_OUTPUT:-}" ]; then
+  printf '%s\n' $'run\tbelow_seconds\tcheckpoint_seconds\tpost_seconds' \
+    "${RAW_SAMPLE_LINES[@]}" > "$DOLTLITE_CHECKPOINT_PERF_SAMPLES_OUTPUT"
+fi
+echo "PASS: checkpoint structure and append samples validated"
 echo "__SUITE_COMPLETE__"

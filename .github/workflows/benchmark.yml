@@ -116,6 +116,62 @@ jobs:
         path: ${{ runner.temp }}/benchmark-results
         retention-days: 14
 
+  hotspots:
+    name: performance-hotspots
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download paired optimized build
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-build
+
+    - name: Extract paired optimized build
+      run: tar -xzf benchmark-build.tar.gz
+
+    - name: Build verified stock SQLite reference
+      run: bash test/build_stock_reference.sh --shell-only build-hotspots-stock build/doltlite
+
+    - name: Test hotspot measurement harness
+      run: python3 test/performance_hotspots_test.py
+
+    - name: Measure and gate performance hotspots
+      id: hotspots
+      run: |
+        python3 test/benchmark_retry.py \
+          --suite hotspots \
+          --results-dir "$RUNNER_TEMP/hotspot-results" \
+          --max-attempts 3 \
+          --individual-ratio 1.50 \
+          --aggregate-ratio 1.25 \
+          --min-delta-us 10000 \
+          --individual-min-delta-us 10000 \
+          --fail-confirmed \
+          -- python3 test/performance_hotspots.py \
+            --baseline "$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
+            --candidate "$GITHUB_WORKSPACE/build/doltlite" \
+            --stock "$GITHUB_WORKSPACE/build-hotspots-stock/sqlite3"
+
+    - name: Publish hotspot measurements
+      if: always()
+      run: |
+        report="$RUNNER_TEMP/hotspot-results/hotspots.md"
+        echo "Performance hotspots gate: ${{ steps.hotspots.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+        if [ -f "$report" ]; then
+          cat "$report" | tee -a "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Upload hotspot measurements
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-hotspots
+        path: ${{ runner.temp }}/hotspot-results
+        retention-days: 14
+
   relative-report:
     name: relative-performance-gate
     # Still publish diagnostics when a producer fails, but do not turn a
@@ -124,6 +180,7 @@ jobs:
     needs:
       - sysbench-relative
       - vc-relative
+      - hotspots
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -210,6 +267,10 @@ jobs:
             } > "$report"
             report_rc=1
           fi
+        fi
+        if [ "${{ needs.hotspots.result }}" != success ]; then
+          printf '\n**FAILED:** performance hotspots; see the separate performance-hotspots job report.\n' >> "$report"
+          report_rc=1
         fi
         cat "$report"
         cat "$report" >> "$GITHUB_STEP_SUMMARY"
