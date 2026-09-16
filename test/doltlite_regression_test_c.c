@@ -10889,6 +10889,80 @@ static void run_mutmap_append_sorted_order(void){
   prollyMutMapFree(&mm);
 }
 
+static void run_mutmap_sorted_lookup_transition(void){
+  ProllyMutMap mm;
+  ProllyMutMapEntry *e;
+  char zKey[32];
+  int ordered, i, rc;
+  u8 val;
+
+  for(ordered=0; ordered<2; ordered++){
+    check("sorted_lookup_init", prollyMutMapInitMode(&mm, 0, 0)==SQLITE_OK);
+    for(i=0; i<100; i++){
+      sqlite3_snprintf(sizeof(zKey), zKey, "common-prefix-%04d", i*2);
+      val = (u8)i;
+      check("sorted_lookup_insert",
+            prollyMutMapInsert(&mm, (u8*)zKey, 18, 0, &val, 1)==SQLITE_OK);
+    }
+    if( ordered ){
+      check("sorted_lookup_order", prollyMutMapEnsureOrder(&mm)==SQLITE_OK);
+    }
+    for(i=-1; i<=200; i++){
+      sqlite3_snprintf(sizeof(zKey), zKey, "common-prefix-%04d", i);
+      rc = prollyMutMapFindRc(&mm, (u8*)zKey, 18, 0, &e);
+      check("sorted_lookup_find", rc==SQLITE_OK);
+      if( i>=0 && i<200 && i%2==0 ){
+        check("sorted_lookup_value", e && e->nVal==1 && e->pVal[0]==i/2);
+      }else{
+        check("sorted_lookup_absent", e==0);
+      }
+    }
+    prollyMutMapPushSavepoint(&mm, 1);
+    for(i=0; i<100; i+=33){
+      sqlite3_snprintf(sizeof(zKey), zKey, "common-prefix-%04d", i*2);
+      val = 255;
+      check("sorted_lookup_overwrite",
+            prollyMutMapInsert(&mm, (u8*)zKey, 18, 0, &val, 1)==SQLITE_OK);
+      check("sorted_lookup_overwrite_value",
+            prollyMutMapFindRc(&mm, (u8*)zKey, 18, 0, &e)==SQLITE_OK
+         && e && e->pVal[0]==255 && mm.nEntries==100);
+    }
+    check("sorted_lookup_delete",
+          prollyMutMapDelete(&mm, (const u8*)"common-prefix-0100", 18, 0)
+          ==SQLITE_OK);
+    check("sorted_lookup_deleted",
+          prollyMutMapFindRc(&mm, (const u8*)"common-prefix-0100", 18, 0, &e)
+          ==SQLITE_OK && e && e->op==PROLLY_EDIT_DELETE);
+    val = 101;
+    check("sorted_lookup_out_of_order",
+          prollyMutMapInsertAbsent(&mm, (const u8*)"common-prefix-0101", 18,
+                                  0, &val, 1)==SQLITE_OK);
+    check("sorted_lookup_hash_value",
+          prollyMutMapFindRc(&mm, (const u8*)"common-prefix-0101", 18, 0, &e)
+          ==SQLITE_OK && e && e->pVal[0]==101);
+    check("sorted_lookup_rollback",
+          prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
+    for(i=0; i<100; i++){
+      sqlite3_snprintf(sizeof(zKey), zKey, "common-prefix-%04d", i*2);
+      check("sorted_lookup_restored",
+            prollyMutMapFindRc(&mm, (u8*)zKey, 18, 0, &e)==SQLITE_OK
+         && e && e->op==PROLLY_EDIT_INSERT && e->nVal==1 && e->pVal[0]==i);
+    }
+    check("sorted_lookup_rolled_back_insert",
+          prollyMutMapFindRc(&mm, (const u8*)"common-prefix-0101", 18, 0, &e)
+          ==SQLITE_OK && e==0 && mm.nEntries==100);
+    prollyMutMapClear(&mm);
+    val = 42;
+    check("sorted_lookup_reuse",
+          prollyMutMapInsert(&mm, (const u8*)"common-prefix-0000", 18,
+                            0, &val, 1)==SQLITE_OK);
+    check("sorted_lookup_reused_value",
+          prollyMutMapFindRc(&mm, (const u8*)"common-prefix-0000", 18, 0, &e)
+          ==SQLITE_OK && e && e->pVal[0]==42 && mm.nEntries==1);
+    prollyMutMapFree(&mm);
+  }
+}
+
 typedef struct MutMapModelEntry MutMapModelEntry;
 struct MutMapModelEntry {
   i64 key;
@@ -14522,6 +14596,7 @@ static const RegressionCase aCases[] = {
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_delete_reinsert_reuses_entry", "MutMap Delete Reinsert Reuses Entry Test", run_mutmap_delete_reinsert_reuses_entry },
+  { "mutmap_sorted_lookup_transition", "MutMap Sorted Lookup Transition Test", run_mutmap_sorted_lookup_transition },
   { "mutmap_append_sorted_order", "MutMap Append Sorted Order Test", run_mutmap_append_sorted_order },
   { "mutmap_resolve_sorted_pos", "MutMap ResolveSortedPos Test", run_mutmap_resolve_sorted_pos },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
