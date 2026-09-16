@@ -8,6 +8,7 @@
 typedef struct ChunkIndexEntry ChunkIndexEntry;
 typedef struct ChunkIndex ChunkIndex;
 typedef struct ChunkIndexLazy ChunkIndexLazy;
+typedef struct ChunkIndexCache ChunkIndexCache;
 
 #if defined(__GNUC__) || defined(__clang__)
 #  define DOLTLITE_PACKED __attribute__((__packed__))
@@ -70,6 +71,7 @@ void csIndexInstallFlat(ChunkIndex*);
 int csReadIndex(struct ChunkStore *cs);
 int csIndexLookup(struct ChunkStore *cs, const ProllyHash *pHash,
                   ChunkIndexEntry *pEntry, int *pFound);
+void csIndexCacheFree(struct ChunkStore *cs);
 int csMaterializeIndex(struct ChunkStore *cs);
 int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx, const ProllyHash *pHash);
 int csIndexEntryCmp(const void *a, const void *b);

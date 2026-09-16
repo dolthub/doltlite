@@ -720,6 +720,7 @@ int chunkStoreClose(ChunkStore *cs){
     cs->pOwnedVfs = 0;
   }
   sqlite3_free(cs->file.zFilename);
+  csIndexCacheFree(cs);
   csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
   cs->index.aIndex = 0;
   cs->index.aIndexMmapBase = 0;

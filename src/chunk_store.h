@@ -195,6 +195,7 @@ struct ChunkStore {
   RefsTable refs;
   u8 bRefsStale;          /* OOM cleared refs; reload from refsHash */
   ChunkIndex index;
+  ChunkIndexCache *pIndexCache;
   WalState wal;
   ChunkStaging staging;
 

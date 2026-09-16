@@ -1012,6 +1012,7 @@ static int gcSweep(
 
   if( rc==SQLITE_OK || replaced ){
     i64 indexSize = (i64)nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
+    csIndexCacheFree(cs);
     chunkIndexSetMetadata(&cs->index, nNewIndex,
                           CHUNK_MANIFEST_SIZE + nNewData, indexSize);
     if( aNewIndex ) chunkIndexReplaceEntries(&cs->index, aNewIndex, nNewIndex);

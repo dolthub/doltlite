@@ -1330,9 +1330,17 @@ static void fill_checkpoint_value(unsigned char *a, int i){
   CS_WRITE_U32(a, (u32)i);
 }
 
+static int checkpointReadCount;
+static int (*checkpointRead)(sqlite3_file*, void*, int, sqlite3_int64);
+
+static int countCheckpointRead(sqlite3_file *p, void *a, int n, sqlite3_int64 off){
+  checkpointReadCount++;
+  return checkpointRead(p, a, n, off);
+}
+
 static void test_paged_checkpoint_large_index(void){
   const char *dbpath = "/tmp/test_corr_paged_checkpoint.db";
-  const int nChunk = 20000;
+  const int nChunk = 40000;
   const int aWant[] = { 0, 9999, 19999 };
   ProllyHash aHash[3];
   ChunkStore cs;
@@ -1370,6 +1378,13 @@ static void test_paged_checkpoint_large_index(void){
       SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
   check("paged_checkpoint_reopen", rc==SQLITE_OK);
   if( rc==SQLITE_OK ){
+    const sqlite3_io_methods *pMethods = cs.file.pFile->pMethods;
+    sqlite3_io_methods methods = *pMethods;
+    sqlite3_int64 before = sqlite3_memory_used();
+    int nReused = 0;
+    checkpointRead = pMethods->xRead;
+    methods.xRead = countCheckpointRead;
+    cs.file.pFile->pMethods = &methods;
     check("paged_checkpoint_no_eager_entries", cs.index.nIndex==0);
     check("paged_checkpoint_entry_count",
           chunkIndexCount(&cs.index)==nChunk);
@@ -1383,7 +1398,32 @@ static void test_paged_checkpoint_large_index(void){
       check(name, rc==SQLITE_OK && nData==(int)sizeof(value)
                   && memcmp(pData, value, sizeof(value))==0);
       sqlite3_free(pData);
+      {
+        ChunkIndexEntry e;
+        int found = 0;
+        checkpointReadCount = 0;
+        rc = csIndexLookup(&cs, &aHash[i], &e, &found);
+        check("paged_checkpoint_cached_result",
+              rc==SQLITE_OK && found && e.size==(int)sizeof(value));
+        if( rc==SQLITE_OK && found && checkpointReadCount==0 ) nReused++;
+      }
     }
+    check("paged_checkpoint_reuses_index_pages", nReused>=2);
+    for(i=0; i<nChunk && rc==SQLITE_OK; i++){
+      ProllyHash hash;
+      ChunkIndexEntry e;
+      int found = 0;
+      fill_checkpoint_value(value, i);
+      prollyHashCompute(value, sizeof(value), &hash);
+      rc = csIndexLookup(&cs, &hash, &e, &found);
+      if( rc==SQLITE_OK && (!found || e.size!=(int)sizeof(value)) ){
+        rc = SQLITE_ERROR;
+      }
+    }
+    check("paged_checkpoint_cache_eviction_preserves_entries", rc==SQLITE_OK);
+    check("paged_checkpoint_cache_memory_bounded",
+          sqlite3_memory_used()-before < 270*1024);
+    cs.file.pFile->pMethods = pMethods;
     chunkStoreClose(&cs);
   }
   removeDb(dbpath);
