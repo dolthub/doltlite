@@ -31,6 +31,7 @@
 #define RATIO_C_MAX 3.0   /* late commits vs early commits */
 #define COMMIT_SUBWINDOWS 5 /* median over these, not one contiguous mean */
 #define COMMIT_MIN_MS 1.0 /* below this the axis is under timer noise */
+#define OPEN_MIN_MS 1.0   /* same, for the open-latency axis */
 
 static int nPass = 0;
 static int nFail = 0;
@@ -43,6 +44,21 @@ static void gate(const char *name, double ratio, double max){
     printf("  FAIL: %s ratio %.2f > %.2f\n", name, ratio, max);
     nFail++;
   }
+}
+
+/* A ratio between two sub-millisecond timings measures the clock, not the
+** engine: a fast host opens in 0.5 ms and a 0.3 ms wobble reads as 1.6x.
+** Below the floor there is no growth to measure, and a real regression on
+** this axis leaves the floor far behind. */
+static void gateWithFloor(const char *name, double measured, double base,
+                          double max, double floorMs){
+  if( measured < floorMs ){
+    printf("  PASS: %s %.2f ms is under the %.2f ms floor; "
+           "no growth to measure\n", name, measured, floorMs);
+    nPass++;
+    return;
+  }
+  gate(name, measured/(base>floorMs ? base : floorMs), max);
 }
 
 static double now_ms(void){
@@ -278,13 +294,14 @@ int main(int argc, char **argv){
   oL = openCost3(large);
   printf("B open+first-query: %.1f ms @%d rows, %.1f ms @%d rows\n",
          oS, seed, oL, seed*5);
-  gate("open_cost_at_most_linear", oL/(oS>0.5?oS:0.5), RATIO_B_MAX);
+  gateWithFloor("open_cost_at_most_linear", oL, oS, RATIO_B_MAX, OPEN_MIN_MS);
   db = openDb(large);
   x(db, "SELECT dolt_gc()");
   sqlite3_close(db);
   oGc = openCost3(large);
   printf("B open after gc: %.1f ms (pre-gc %.1f ms)\n", oGc, oL);
-  gate("open_after_gc_not_slower", oGc/(oL>0.5?oL:0.5), RATIO_B_GC_MAX);
+  gateWithFloor("open_after_gc_not_slower", oGc, oL, RATIO_B_GC_MAX,
+                OPEN_MIN_MS);
 
   /* C: commit latency vs history depth (single connection, no gc) */
   {
