@@ -1,0 +1,144 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_recover_nested_ioerr
+
+do_execsql_test seed {
+  CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
+  CREATE TABLE t2(id INTEGER PRIMARY KEY, v INTEGER, pad TEXT);
+  WITH RECURSIVE c(i) AS (
+    VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<128
+  ) INSERT INTO t1 SELECT i, printf('%08000d',i) FROM c;
+  INSERT INTO t2 SELECT id, 0, printf('%01000d',id) FROM t1;
+  SELECT id FROM t1 WHERE id IN (1,5,10,15,20);
+} {1 5 10 15 20}
+set reader_checksum [db one {SELECT md5sum(id,v) FROM t1}]
+db close
+file copy -force test.db nested-ioerr-base.db
+
+set armed ""
+set phase ""
+set hits {}
+proc nested_ioerr_vfs {method filename args} {
+  if {[file tail $filename] eq "test.db" && $::armed eq $method} {
+    set ::armed ""
+    lappend ::hits $::phase $method
+    return SQLITE_IOERR
+  }
+  return SQLITE_OK
+}
+testvfs nestedio
+nestedio filter {xRead xWrite}
+nestedio script nested_ioerr_vfs
+
+proc nested_ioerr_state {value {recovered 0}} {
+  db eval {
+    SELECT count(*), sum(id), sum(v IS NOT ($value+$recovered*(id=1))),
+           sum(pad IS NOT printf('%01000d',id)) FROM t2;
+  }
+}
+
+set coverage [dict create update/xRead 0 update/xWrite 0 select/xRead 0]
+set scenarios 0
+foreach {name explicit method cascade outer_fault commit} {
+  autocommit-ok           0 {}     0 0 0
+  transaction-ok          1 {}     0 0 0
+  update-read             0 xRead  0 0 0
+  transaction-read        1 xRead  0 0 0
+  update-write            0 xWrite 0 0 0
+  commit-write            1 xWrite 0 0 1
+  select-read             0 {}     0 1 0
+  transaction-select-read 1 {}     0 1 0
+  read-then-select        0 xRead  1 1 0
+  write-then-select       0 xWrite 1 1 0
+} {
+  forcedelete test.db
+  file copy -force nested-ioerr-base.db test.db
+  sqlite3 db test.db -vfs nestedio
+  db eval {PRAGMA cache_size=-1; PRAGMA temp_store=memory}
+  if {$explicit} {db eval BEGIN}
+  set visited {}
+  set inner {}
+  set hits {}
+  set armed ""
+  set payload_ok 1
+  set rc [catch {
+    db eval {SELECT id,v FROM t1 WHERE id IN (1,5,10,15,20)} {
+      lappend visited $id
+      if {[llength $visited]==1} {
+        set phase update
+        set armed $method
+        set sql {UPDATE t2 SET v=v+1}
+        if {$commit} {append sql {; COMMIT}}
+        lappend inner [catchsql $sql]
+        set phase select
+        if {$outer_fault && !$cascade} {set armed xRead}
+      } elseif {$cascade && [llength $visited]==2} {
+        set phase update
+        lappend inner [catchsql {UPDATE t2 SET v=v+1}]
+        set phase select
+        set armed xRead
+      }
+      if {$v ne [format %08000d $id]} {set payload_ok 0}
+    }
+  } msg]
+  set pending $armed
+  set armed ""
+  incr scenarios
+  foreach {hit_phase hit_method} $hits {
+    dict incr coverage $hit_phase/$hit_method
+  }
+
+  set expected_hits {}
+  set expected_inner [list {0 {}}]
+  set expected_rows {1 5 10 15 20}
+  set expected_outer {0 {}}
+  if {$method ne ""} {
+    lappend expected_hits update $method
+    set expected_inner [list {1 {disk I/O error}}]
+  }
+  if {$cascade} {lappend expected_inner {0 {}}}
+  if {$outer_fault} {
+    lappend expected_hits select xRead
+    set expected_outer {1 {disk I/O error}}
+    set expected_rows [expr {$cascade ? {1 5} : {1}}]
+  }
+  set expected_auto [expr {!$explicit || $method ne "" || $outer_fault}]
+  set changed [expr {($method eq "" || $cascade)
+                     && !($explicit && $outer_fault)}]
+
+  do_test $name.faults {list $hits $pending} [list $expected_hits {}]
+  do_test $name.inner {set inner} $expected_inner
+  do_test $name.outer {list $rc $msg} $expected_outer
+  do_test $name.rows {list $visited $payload_ok} [list $expected_rows 1]
+  do_test $name.transaction {sqlite3_get_autocommit db} $expected_auto
+  do_test $name.writer {nested_ioerr_state $changed} {128 8256 0 0}
+  do_test $name.reader {db one {SELECT md5sum(id,v) FROM t1}} $reader_checksum
+
+  if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+  set durable [expr {$changed && !$explicit}]
+  do_test $name.rollback {
+    list [sqlite3_get_autocommit db] [nested_ioerr_state $durable]
+  } {1 {128 8256 0 0}}
+  do_execsql_test $name.continue {
+    BEGIN;
+    UPDATE t2 SET v=v+1 WHERE id=1;
+    COMMIT;
+    SELECT changes();
+    PRAGMA integrity_check;
+  } {1 ok}
+  do_test $name.recovered {nested_ioerr_state $durable 1} {128 8256 0 0}
+  db close
+  sqlite3 db test.db
+  do_test $name.reopen {
+    list [nested_ioerr_state $durable 1] [db one {SELECT md5sum(id,v) FROM t1}] \
+         [db one {PRAGMA integrity_check}]
+  } [list {128 8256 0 0} $reader_checksum ok]
+  db close
+}
+
+do_test fault.coverage {list $scenarios $coverage} \
+    {10 {update/xRead 3 update/xWrite 3 select/xRead 4}}
+
+nestedio delete
+sqlite3 db test.db
+finish_test

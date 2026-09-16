@@ -19,7 +19,7 @@ crash2 class=harness issue=2072  # crash2-2.* crash test.db-journal, which doltl
 crash8 class=harness  # crash-simulation timing is nondeterministic; unbucketed
 dbstatus class=intentional  # echo-vtab cleanup after schema reset
 incrblob class=intentional issue=1840  # rowid assumption on a primary-key table
-ioerr2 class=harness  # exceeds the per-file timeout; unbucketed
+ioerr2 class=harness  # ioerr2-5 assumes sequential composite-PK rowids, so its fault callback never runs; unbucketed
 malloc class=harness  # cap-truncated OOM fault sequence; unbucketed
 malloc3 class=harness  # unstable OOM fault-point set; unbucketed
 multiplex2 class=intentional  # incompatible multiplex VFS setup
