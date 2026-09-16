@@ -163,7 +163,7 @@ def measure_index_queries(binary, db, cases, cache_kib):
     return measured
 
 
-def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
+def write_results(samples, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
                      for name in runs[0]} for arm, runs in samples.items()}
@@ -179,9 +179,6 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
                 raw.write(f"queries\t{name}\t{i+1}\t"
                           f"{samples['baseline'][i][name]}\t{candidate[name]}\t{stock}\n")
     print("## Performance hotspots")
-    print(f"\n{rows:,} rows × {PAYLOAD_BYTES} payload bytes; "
-          f"{cache_kib:,} KiB cache per connection.")
-    print("Fixture bytes: " + ", ".join(f"{arm}={size:,}" for arm, size in sizes.items()))
     print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
@@ -219,8 +216,6 @@ def main(argv=None):
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
             prepare(binary, databases[arm], args.rows)
             prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
-        sizes = {arm: db.stat().st_size for arm, db in databases.items()}
-        sizes.update({f"{arm}-index": db.stat().st_size for arm, db in index_databases.items()})
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
             for arm in order:
@@ -229,7 +224,7 @@ def main(argv=None):
                 measured.update(measure_index_queries(binaries[arm], index_databases[arm],
                                                       index_cases, args.cache_kib))
                 samples[arm].append(measured)
-        write_results(samples, args.rows, args.cache_kib, sizes,
+        write_results(samples,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),
                       Path(os.environ.get("BENCH_SAMPLES_OUTPUT", "hotspots-samples.tsv")))
 
