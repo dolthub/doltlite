@@ -55,6 +55,15 @@ do_execsql_test 1.0 {
   CREATE INDEX t1b ON t1(b);
   CREATE INDEX t1c ON t1(c);
 }
+ifcapable doltlite {
+  # Compare warmed read caches without allocations retained by setup writes.
+  db close
+  sqlite3 db test.db
+  do_execsql_test 1.0.1 {
+    PRAGMA cache_size = -2000;
+    SELECT count(*) FROM t1 WHERE +a IS NOT NULL
+  } {100000}
+}
 set ans "#/[memory_used]/"
 
 do_test 1.1 { memory_used } $ans

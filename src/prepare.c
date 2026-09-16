@@ -351,10 +351,18 @@ int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
   if( pDb->pSchema->cache_size==0 ){
 #ifndef SQLITE_OMIT_DEPRECATED
     size = sqlite3AbsInt32(meta[BTREE_DEFAULT_CACHE_SIZE-1]);
+#ifdef DOLTLITE_PROLLY
+    if( size==0 ){ size = sqlite3BtreeDefaultCacheSize(pDb->pBt); }
+#else
     if( size==0 ){ size = SQLITE_DEFAULT_CACHE_SIZE; }
+#endif
     pDb->pSchema->cache_size = size;
 #else
+#ifdef DOLTLITE_PROLLY
+    pDb->pSchema->cache_size = sqlite3BtreeDefaultCacheSize(pDb->pBt);
+#else
     pDb->pSchema->cache_size = SQLITE_DEFAULT_CACHE_SIZE;
+#endif
 #endif
     sqlite3BtreeSetCacheSize(pDb->pBt, pDb->pSchema->cache_size);
   }

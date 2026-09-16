@@ -333,7 +333,7 @@ do_test doltlite_recover_jrnlwal_4-10.2 {
               [execsql {SELECT count(*) FROM t1} db2]]
   db2 close
   set r
-} {10 -2000 5}
+} {10 -65536 5}
 do_execsql_test doltlite_recover_jrnlwal_4-10.3 {
   CREATE TABLE drops(x);
   DROP TABLE drops;

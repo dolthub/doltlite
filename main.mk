@@ -2762,6 +2762,7 @@ DOLTLITE_C_TESTS = \
 	clone_error_code_test$(T.exe) \
 	three_way_diff_test$(T.exe) \
 	three_way_merge_fast_test$(T.exe) \
+	prolly_cache_budget_test$(T.exe) \
 	prolly_hashset_test$(T.exe) \
 	prolly_chunker_boundary_test$(T.exe) \
 	scoped_refs_push_test$(T.exe) \
@@ -2941,6 +2942,11 @@ three_way_merge_fast_test$(T.exe): $(TOP)/test/three_way_merge_fast_test.c $(LIB
 prolly_hashset_test$(T.exe): $(TOP)/test/prolly_hashset_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/prolly_hashset_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+prolly_cache_budget_test$(T.exe): $(TOP)/test/prolly_cache_budget_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/prolly_cache_budget_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 prolly_chunker_boundary_test$(T.exe): $(TOP)/test/prolly_chunker_boundary_test.c libdoltlite$(T.lib)

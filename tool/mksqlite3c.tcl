@@ -643,6 +643,7 @@ proc emit_doltlite_storage_block {} {
   # be re-declared with the orig_Btree type inside this block.
   set skipfns {
     sqlite3BtreeUsesOrig
+    sqlite3BtreeDefaultCacheSize
     sqlite3BtreeProllyCachedIndexKeyCompare
     sqlite3BtreeProllyIndexRowid
     sqlite3BtreeProllyIndexHasNocaseNul

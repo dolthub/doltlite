@@ -127,7 +127,9 @@ u32 prollyBtreeGetU32LE(const u8 *p);
   (pCur)->nCompareKeyField = 0; \
 }while(0)
 
-#define PROLLY_DEFAULT_CACHE_SIZE 16384
+#define PROLLY_DEFAULT_CACHE_BYTES (DOLTLITE_DEFAULT_CACHE_SIZE<0 \
+  ? -(i64)DOLTLITE_DEFAULT_CACHE_SIZE*1024 \
+  : (i64)DOLTLITE_DEFAULT_CACHE_SIZE*PROLLY_DEFAULT_PAGE_SIZE)
 
 #ifdef SQLITE_DEFAULT_PAGE_SIZE
 # define PROLLY_DEFAULT_PAGE_SIZE SQLITE_DEFAULT_PAGE_SIZE
@@ -178,6 +180,7 @@ struct BtShared {
   BtCursor *pCursor;
   u16 btsFlags;
   u32 pageSize;
+  int cacheSize;
   u32 iWorkingStateVersion;
   int nRef;
   int nIncrblobCur;

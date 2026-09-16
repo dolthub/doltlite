@@ -1,0 +1,52 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+set testprefix doltlite-cache-budget
+
+do_execsql_test default {
+  PRAGMA cache_size;
+  PRAGMA default_cache_size;
+} {-65536 -65536}
+
+do_execsql_test 1 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  WITH RECURSIVE c(i) AS (
+    VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<128
+  ) INSERT INTO t SELECT i, printf('%02000d',i) FROM c;
+  SELECT count(v), sum(length(v)), sum(id) FROM t;
+} {128 256000 8256}
+faultsim_save_and_close
+
+do_faultsim_test scan -faults oom-* -prep {
+  faultsim_restore_and_reopen
+  db eval {PRAGMA cache_size=-1024}
+} -body {
+  db eval {SELECT count(v), sum(length(v)), sum(id) FROM t}
+} -test {
+  faultsim_test_result {0 {128 256000 8256}} {1 {out of memory}}
+  if {[db eval {SELECT count(v), sum(length(v)), sum(id) FROM t}]
+      ne {128 256000 8256}} {
+    error "scan changed after allocation failure"
+  }
+}
+
+do_faultsim_test shrink -faults oom-* -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    PRAGMA cache_size=-1024;
+    SELECT count(v), sum(length(v)) FROM t;
+  }
+} -body {
+  db eval {
+    PRAGMA cache_size=0;
+    SELECT count(v), sum(length(v)), sum(id) FROM t;
+  }
+} -test {
+  faultsim_test_result {0 {128 256000 8256}} {1 {out of memory}}
+  if {[db eval {SELECT count(v), sum(length(v)), sum(id) FROM t}]
+      ne {128 256000 8256}} {
+    error "scan changed after cache shrink failure"
+  }
+}
+
+finish_test
