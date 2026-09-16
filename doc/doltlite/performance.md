@@ -228,8 +228,8 @@ than the wrapped write workloads.
 
 [performance_hotspots.py](../../test/performance_hotspots.py) supplements the
 SQL workloads with performance gaps against stock SQLite. Its PR comment has
-a **Large Table Scans** table with the five read metrics below and a **Small
-Table Updates** table with `bulk_update_text_pk`: one transaction updating a
+a **Large Table Scans** table with the five read metrics below and a **Text PK
+Bulk Updates** table with `bulk_update_text_pk`: one transaction updating a
 non-key balance column in 5,000 text-primary-keyed rows. The update fixture fits
 within its 64 MiB cache; its timing includes BEGIN, UPDATE, and COMMIT. Each
 metric compares with both the PR base and stock SQLite. The harness reports

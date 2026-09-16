@@ -250,7 +250,7 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
-    for heading, group in (("Large Table Scans", "queries"), ("Small Table Updates", "updates")):
+    for heading, group in (("Large Table Scans", "queries"), ("Text PK Bulk Updates", "updates")):
         print(f"\n### {heading}")
         if group == "updates":
             print(f"\n{UPDATE_ROWS:,} rows with text primary keys; "

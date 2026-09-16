@@ -148,7 +148,7 @@ class HotspotTests(unittest.TestCase):
                 f"{hotspots.section(name)}\t{name}\t120000\t240000\n" for name in self.names))
             self.assertIn("240.000 | 2.00× | 50.000 | 4.80×", report.getvalue())
             self.assertIn("### Large Table Scans\n", report.getvalue())
-            self.assertIn("### Small Table Updates\n", report.getvalue())
+            self.assertIn("### Text PK Bulk Updates\n", report.getvalue())
             self.assertEqual(report.getvalue().count("| Workload |"), 2)
             self.assertEqual([line.split("|")[1].strip() for line in report.getvalue().splitlines()
                               if line.startswith("| ") and not line.startswith("| Workload |")], list(self.names))
