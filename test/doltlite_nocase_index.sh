@@ -139,4 +139,39 @@ QUERY PLAN
 |--SCAN n3 USING COVERING INDEX i_n3
 \`--USE TEMP B-TREE FOR ORDER BY" "$NULDB"
 
+# The key that made the index unordered can be deleted, and the index is then
+# ordered again. Latching the first positive answer left the plan stuck.
+DELDB=/tmp/test_doltlite_nocase_del_$$.db
+rm -f "$DELDB"
+trap 'rm -f "$DB" "$NULDB" "$DELDB"' EXIT
+
+run_test "nocase_nul_delete_restores_index_order" "
+CREATE TABLE d(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+INSERT INTO d VALUES(1,'aa'),(2,'b'||char(0)||'b');
+CREATE INDEX i_d ON d(s);
+EXPLAIN QUERY PLAN SELECT s FROM d ORDER BY s;
+DELETE FROM d WHERE id=2;
+EXPLAIN QUERY PLAN SELECT s FROM d ORDER BY s;
+SELECT count(*) FROM d;
+" "QUERY PLAN
+|--SCAN d
+\`--USE TEMP B-TREE FOR ORDER BY
+QUERY PLAN
+\`--SCAN d USING COVERING INDEX i_d
+1" "$DELDB"
+
+# Re-probing must never undo the unordered verdict ANALYZE recorded.
+run_test "nocase_analyze_unordered_is_not_undone" "
+CREATE TABLE au(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+INSERT INTO au VALUES(1,'aa'),(2,'bb'),(3,'cc');
+CREATE INDEX i_au ON au(s);
+ANALYZE;
+DELETE FROM sqlite_stat1;
+INSERT INTO sqlite_stat1 VALUES('au','i_au','3 1 unordered');
+ANALYZE sqlite_master;
+EXPLAIN QUERY PLAN SELECT s FROM au ORDER BY s;
+" "QUERY PLAN
+|--SCAN au
+\`--USE TEMP B-TREE FOR ORDER BY" "$DELDB"
+
 dltest_finish
