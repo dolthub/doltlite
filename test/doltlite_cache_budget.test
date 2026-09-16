@@ -3,6 +3,11 @@ source $testdir/tester.tcl
 source $testdir/malloc_common.tcl
 set testprefix doltlite-cache-budget
 
+do_execsql_test default {
+  PRAGMA cache_size;
+  PRAGMA default_cache_size;
+} {-65536 -65536}
+
 do_execsql_test 1 {
   CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
   WITH RECURSIVE c(i) AS (

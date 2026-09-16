@@ -52,6 +52,17 @@ INSERT INTO logs VALUES(2000,'running');
 INSERT INTO logs VALUES(3000,'done');
 "
 
+run_test "attach_cache_defaults" \
+  "ATTACH DATABASE '$SQLDB1' AS ops;
+PRAGMA main.cache_size;
+PRAGMA main.default_cache_size;
+PRAGMA ops.cache_size;
+PRAGMA ops.default_cache_size;" \
+  "-65536
+-65536
+-2000
+-2000" ":memory:"
+
 run_test "attach_select_all" \
   "ATTACH DATABASE '$SQLDB1' AS ops;
 SELECT * FROM ops.events ORDER BY id;" \

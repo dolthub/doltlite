@@ -282,6 +282,7 @@ int sqlite3BtreeProllyIndexRowid(BtCursor*, i64*);
 void sqlite3BtreeProllyClearCompareKey(BtCursor*);
 int sqlite3BtreeIncrblobCursorReseek(BtCursor*);
 int sqlite3BtreeUsesOrig(Btree*);
+int sqlite3BtreeDefaultCacheSize(Btree*);
 #endif
 int sqlite3BtreeCursorHasMoved(BtCursor*);
 int sqlite3BtreeCursorRestore(BtCursor*, int*);

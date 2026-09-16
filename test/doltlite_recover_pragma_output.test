@@ -46,7 +46,7 @@ do_test doltlite_recover_pragma_output-1.6 {
     PRAGMA default_cache_size;
     PRAGMA synchronous;
   }
-} {-2000 -2000 2}
+} {-65536 -65536 2}
 do_test doltlite_recover_pragma_output-1.7 {
   execsql {
     PRAGMA default_cache_size=-500;
@@ -69,7 +69,7 @@ do_test doltlite_recover_pragma_output-1.9 {
     PRAGMA aux.cache_size;
     PRAGMA aux.default_cache_size;
   }
-} {-2000 -2000}
+} {-65536 -65536}
 execsql {DETACH aux}
 
 do_test doltlite_recover_pragma_output-2.1 {

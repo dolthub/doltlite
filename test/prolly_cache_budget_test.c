@@ -149,7 +149,8 @@ int main(void){
   check("reopen", sqlite3_open(zPath, &db)==SQLITE_OK);
   pCache = doltliteGetCache(db);
   scan(db);
-  check("default budget", cacheBytes(pCache)<=2000*1024);
+  check("default cache retains scan", cacheBytes(pCache)>8*1024*1024);
+  check("default budget", cacheBytes(pCache)<=64*1024*1024);
   execSql(db, "PRAGMA cache_size=-32768");
   scan(db);
   check("larger cache retains scan", cacheBytes(pCache)>8*1024*1024);

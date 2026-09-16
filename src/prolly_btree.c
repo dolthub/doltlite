@@ -857,7 +857,7 @@ int sqlite3BtreeOpen(
   pBt->store.xWriteGate = prollyBtreeQueryOnlyWriteGate;
   pBt->store.pWriteGateArg = p;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
-  pBt->cacheSize = SQLITE_DEFAULT_CACHE_SIZE;
+  pBt->cacheSize = DOLTLITE_DEFAULT_CACHE_SIZE;
   pBt->iWorkingStateVersion = 1;
   pBt->nRef = 1;
   p->inTransaction = TRANS_NONE;
@@ -1166,6 +1166,11 @@ int prollyBtreeNewDb(Btree *p){
 int sqlite3BtreeNewDb(Btree *p){
   if( !p ) return SQLITE_OK;
   return p->pOps->xNewDb(p);
+}
+
+int sqlite3BtreeDefaultCacheSize(Btree *p){
+  return sqlite3BtreeIsDoltliteFormat(p)
+      ? DOLTLITE_DEFAULT_CACHE_SIZE : SQLITE_DEFAULT_CACHE_SIZE;
 }
 
 int prollyBtreeSetCacheSize(Btree *p, int mxPage){

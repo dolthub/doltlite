@@ -572,7 +572,11 @@ void sqlite3Pragma(
       if( ONLY_IF_REALLOC_STRESS(aOp==0) ) break;
       aOp[0].p1 = iDb;
       aOp[1].p1 = iDb;
+#ifdef DOLTLITE_PROLLY
+      aOp[6].p1 = sqlite3BtreeDefaultCacheSize(pDb->pBt);
+#else
       aOp[6].p1 = SQLITE_DEFAULT_CACHE_SIZE;
+#endif
     }else{
       int size = sqlite3AbsInt32(sqlite3Atoi(zRight));
       sqlite3BeginWriteOperation(pParse, 0, iDb);
