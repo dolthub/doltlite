@@ -128,6 +128,80 @@ class HotspotTests(unittest.TestCase):
                     self.assertEqual((root / "output").read_text().splitlines()[-1],
                                      f"report_rc={0 if status == 'success' else 1}")
 
+    def test_hotspot_comment_summary(self):
+        workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()
+        step = workflow.split("    - name: Publish hotspot measurements\n", 1)[1]
+        script = textwrap.dedent(step.split("      run: |\n", 1)[1].split("\n    - name:", 1)[0])
+        for key, value in (("github.server_url", "https://github.com"),
+                           ("github.repository", "dolthub/doltlite"),
+                           ("github.run_id", "123")):
+            script = script.replace("${{ " + key + " }}", value)
+        for status, measured in (("success", True), ("failure", True), ("failure", False)):
+            with self.subTest(status=status, measured=measured), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                results = root / "hotspot-results"
+                if measured:
+                    results.mkdir()
+                    (results / "hotspots.md").write_text("## Performance hotspots\n\nMeasured table\n")
+                env = dict(os.environ, RUNNER_TEMP=str(root), GITHUB_STEP_SUMMARY=str(root / "summary"))
+                subprocess.run(["bash", "-e", "-o", "pipefail", "-c",
+                                script.replace("${{ steps.hotspots.outcome }}", status)],
+                               env=env, check=True, capture_output=True)
+                body = (results / "summary.md").read_text()
+                self.assertEqual(body, (root / "summary").read_text())
+                self.assertIn("<!-- benchmark:hotspots -->", body)
+                self.assertIn(f"**Gate:** {status}", body)
+                self.assertIn("https://github.com/dolthub/doltlite/actions/runs/123", body)
+                self.assertIn("Measured table" if measured else "No complete hotspot measurements", body)
+
+    def test_hotspot_comment_creates_then_updates(self):
+        workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()
+        step = workflow.split("    - name: Comment PR with performance hotspots\n", 1)[1]
+        script = textwrap.dedent(step.split("        script: |\n", 1)[1].split("\n    - name:", 1)[0])
+        harness = r"""
+const assert = require('node:assert/strict');
+const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+const publish = new AsyncFunction('github', 'context', 'require', 'process', process.argv[1]);
+let body = '<!-- benchmark:hotspots -->\nfirst results';
+let exists = true;
+const calls = [];
+const comments = [{id: 1, body: '<!-- benchmark:relative -->\nstandard results'}];
+const issues = {
+  listComments: 'list',
+  createComment: async args => { calls.push(['create', args]); comments.push({id: 2, body: args.body}); },
+  updateComment: async args => { calls.push(['update', args]); },
+};
+const github = {rest: {issues}, paginate: async (method, args) => {
+  assert.equal(method, 'list');
+  assert.equal(args.issue_number, 10);
+  return comments;
+}};
+const context = {repo: {owner: 'dolthub', repo: 'doltlite'}, issue: {number: 10}};
+const fakeRequire = name => {
+  assert.equal(name, 'fs');
+  return {existsSync: () => exists, readFileSync: () => body};
+};
+async function main() {
+  const invoke = () => publish(github, context, fakeRequire, {env: {RUNNER_TEMP: '/tmp'}});
+  await invoke();
+  body = '<!-- benchmark:hotspots -->\nupdated results';
+  await invoke();
+  assert.deepEqual(calls.map(call => call[0]), ['create', 'update']);
+  assert.equal(calls[0][1].issue_number, 10);
+  assert.equal(calls[1][1].comment_id, 2);
+  assert.equal(calls[1][1].body, body);
+  assert.equal(comments[0].body, '<!-- benchmark:relative -->\nstandard results');
+  context.issue.number = undefined;
+  await invoke();
+  context.issue.number = 10;
+  exists = false;
+  await invoke();
+  assert.equal(calls.length, 2);
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        subprocess.run(["node", "-e", harness, script], check=True, capture_output=True)
+
 
 if __name__ == "__main__":
     unittest.main()
