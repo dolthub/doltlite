@@ -134,9 +134,6 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     print(f"\n{rows:,} rows × {PAYLOAD_BYTES} payload bytes; "
           f"{cache_kib:,} KiB cache per connection.")
     print("Fixture bytes: " + ", ".join(f"{arm}={size:,}" for arm, size in sizes.items()))
-    print("\nScans start on a fresh connection, then repeat on that connection. "
-          "The fixture exceeds the node cache; the OS file cache is not flushed. "
-          "Timings exclude process startup, database open, and fixture setup.")
     print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")

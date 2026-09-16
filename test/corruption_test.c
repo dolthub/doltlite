@@ -1331,10 +1331,12 @@ static void fill_checkpoint_value(unsigned char *a, int i){
 }
 
 static int checkpointReadCount;
+static int checkpointHeaderReadCount;
 static int (*checkpointRead)(sqlite3_file*, void*, int, sqlite3_int64);
 
 static int countCheckpointRead(sqlite3_file *p, void *a, int n, sqlite3_int64 off){
   checkpointReadCount++;
+  if( n==CS_WAL_CHUNK_HDR_SIZE ) checkpointHeaderReadCount++;
   return checkpointRead(p, a, n, off);
 }
 
@@ -1382,6 +1384,7 @@ static void test_paged_checkpoint_large_index(void){
     sqlite3_io_methods methods = *pMethods;
     sqlite3_int64 before = sqlite3_memory_used();
     int nReused = 0;
+    checkpointHeaderReadCount = 0;
     checkpointRead = pMethods->xRead;
     methods.xRead = countCheckpointRead;
     cs.file.pFile->pMethods = &methods;
@@ -1409,6 +1412,7 @@ static void test_paged_checkpoint_large_index(void){
       }
     }
     check("paged_checkpoint_reuses_index_pages", nReused>=2);
+    checkpointReadCount = 0;
     for(i=0; i<nChunk && rc==SQLITE_OK; i++){
       ProllyHash hash;
       ChunkIndexEntry e;
@@ -1421,8 +1425,12 @@ static void test_paged_checkpoint_large_index(void){
       }
     }
     check("paged_checkpoint_cache_eviction_preserves_entries", rc==SQLITE_OK);
+    check("paged_checkpoint_reads_header_with_body",
+          checkpointReadCount>0 && checkpointHeaderReadCount==0);
+    check("paged_checkpoint_retains_frequent_pages",
+          checkpointReadCount<nChunk);
     check("paged_checkpoint_cache_memory_bounded",
-          sqlite3_memory_used()-before < 270*1024);
+          sqlite3_memory_used()-before < 200*1024);
     cs.file.pFile->pMethods = pMethods;
     chunkStoreClose(&cs);
   }
