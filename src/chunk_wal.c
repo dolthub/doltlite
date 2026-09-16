@@ -449,6 +449,9 @@ static void csRollbackReplayState(
 }
 
 void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
+  csIndexCacheFree(pDst);
+  pDst->pIndexCache = pSrc->pIndexCache;
+  pSrc->pIndexCache = 0;
   sqlite3_free(pDst->staging.aRecent);
   pDst->staging.aRecent = 0;
   pDst->staging.nRecent = 0;

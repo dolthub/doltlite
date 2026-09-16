@@ -11,6 +11,70 @@
 
 #define CS_INDEX_WINDOW_MIN 4096
 #define CS_INDEX_WINDOW_MARGIN_DIV 64
+#define CS_INDEX_CACHE_SLOTS 48
+#define CS_INDEX_CACHE_WAYS 4
+
+typedef struct ChunkIndexCachePage ChunkIndexCachePage;
+struct ChunkIndexCachePage {
+  ProllyHash hash;
+  i64 iOffset;
+  i64 iDataEnd;
+  int nBody;
+  u8 *aBody;
+  u64 lastUse;
+};
+
+struct ChunkIndexCache {
+  ChunkIndexCachePage aPage[CS_INDEX_CACHE_SLOTS];
+  u64 clock;
+};
+
+void csIndexCacheFree(ChunkStore *cs){
+  int i;
+  if( !cs->pIndexCache ) return;
+  for(i=0; i<CS_INDEX_CACHE_SLOTS; i++){
+    sqlite3_free(cs->pIndexCache->aPage[i].aBody);
+  }
+  sqlite3_free(cs->pIndexCache);
+  cs->pIndexCache = 0;
+}
+
+static int csIndexCacheSlot(const ProllyHash *pHash){
+  u32 h;
+  memcpy(&h, pHash->data, sizeof(h));
+  return (int)(h % (CS_INDEX_CACHE_SLOTS/CS_INDEX_CACHE_WAYS))
+         *CS_INDEX_CACHE_WAYS;
+}
+
+static void csIndexCachePut(
+  ChunkStore *cs, i64 iOffset, int nBody,
+  const ProllyHash *pHash, const u8 *aBody
+){
+  ChunkIndexCachePage *p;
+  u8 *aCopy;
+  int slot = csIndexCacheSlot(pHash);
+  int i;
+  sqlite3BeginBenignMalloc();
+  if( !cs->pIndexCache ){
+    cs->pIndexCache = sqlite3MallocZero(sizeof(*cs->pIndexCache));
+  }
+  aCopy = cs->pIndexCache ? sqlite3_malloc(nBody) : 0;
+  sqlite3EndBenignMalloc();
+  if( !aCopy ) return;
+  p = &cs->pIndexCache->aPage[slot];
+  for(i=1; i<CS_INDEX_CACHE_WAYS; i++){
+    ChunkIndexCachePage *q = &cs->pIndexCache->aPage[slot+i];
+    if( q->lastUse<p->lastUse ) p = q;
+  }
+  sqlite3_free(p->aBody);
+  p->hash = *pHash;
+  p->iOffset = iOffset;
+  p->iDataEnd = cs->index.lazy.iDataEnd;
+  p->nBody = nBody;
+  p->aBody = aCopy;
+  p->lastUse = ++cs->pIndexCache->clock;
+  memcpy(aCopy, aBody, nBody);
+}
 
 void chunkIndexGetEntries(const ChunkIndex *idx, int *pn, const ChunkIndexEntry **par){
   assert( idx!=0 && pn!=0 && par!=0 );
@@ -195,9 +259,9 @@ static int csReadLazyPage(
   int nBody,
   const ProllyHash *pHash,
   i64 iLimit,
+  u8 *aBuffer,
   u8 **ppBody
 ){
-  u8 aHeader[CS_WAL_CHUNK_HDR_SIZE];
   ProllyHash actual;
   u8 *aBody;
   int rc;
@@ -209,27 +273,44 @@ static int csReadLazyPage(
    || iOffset>iLimit-CS_WAL_CHUNK_HDR_SIZE-nBody ){
     return SQLITE_CORRUPT;
   }
-  rc = sqlite3OsRead(cs->file.pFile, aHeader, sizeof(aHeader), iOffset);
-  if( rc!=SQLITE_OK ) return rc;
-  if( aHeader[0]!=CS_WAL_TAG_CHUNK
-   || CS_READ_U32(aHeader+CS_WAL_CHUNK_LEN_OFF)!=(u32)nBody
-   || memcmp(aHeader+CS_WAL_CHUNK_HASH_OFF, pHash->data,
-             PROLLY_HASH_SIZE)!=0 ){
-    return SQLITE_CORRUPT;
+  if( aBuffer && cs->pIndexCache ){
+    int slot = csIndexCacheSlot(pHash);
+    int i;
+    for(i=0; i<CS_INDEX_CACHE_WAYS; i++){
+      ChunkIndexCachePage *p = &cs->pIndexCache->aPage[slot+i];
+      if( p->aBody && p->iOffset==iOffset && p->nBody==nBody
+       && p->iDataEnd==cs->index.lazy.iDataEnd
+       && prollyHashCompare(&p->hash, pHash)==0 ){
+        aBody = aBuffer;
+        memcpy(aBody, p->aBody, nBody);
+        p->lastUse = ++cs->pIndexCache->clock;
+        *ppBody = aBody;
+        return SQLITE_OK;
+      }
+    }
   }
-  aBody = sqlite3_malloc(nBody);
+  aBody = aBuffer ? aBuffer : sqlite3_malloc(nBody+CS_WAL_CHUNK_HDR_SIZE);
   if( !aBody ) return SQLITE_NOMEM;
-  rc = sqlite3OsRead(cs->file.pFile, aBody, nBody,
-                     iOffset+CS_WAL_CHUNK_HDR_SIZE);
+  rc = sqlite3OsRead(cs->file.pFile, aBody,
+                     nBody+CS_WAL_CHUNK_HDR_SIZE, iOffset);
+  if( rc==SQLITE_OK
+   && (aBody[0]!=CS_WAL_TAG_CHUNK
+       || CS_READ_U32(aBody+CS_WAL_CHUNK_LEN_OFF)!=(u32)nBody
+       || memcmp(aBody+CS_WAL_CHUNK_HASH_OFF, pHash->data,
+                 PROLLY_HASH_SIZE)!=0) ){
+    rc = SQLITE_CORRUPT;
+  }
   if( rc==SQLITE_OK ){
-    prollyHashCompute(aBody, nBody, &actual);
+    prollyHashCompute(aBody+CS_WAL_CHUNK_HDR_SIZE, nBody, &actual);
     if( prollyHashCompare(&actual, pHash)!=0 ) rc = SQLITE_CORRUPT;
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_free(aBody);
+    if( !aBuffer ) sqlite3_free(aBody);
     return rc;
   }
+  memmove(aBody, aBody+CS_WAL_CHUNK_HDR_SIZE, nBody);
   *ppBody = aBody;
+  if( aBuffer ) csIndexCachePut(cs, iOffset, nBody, pHash, aBody);
   return SQLITE_OK;
 }
 
@@ -282,6 +363,7 @@ int csIndexLookup(
   ChunkIndexEntry *pEntry,
   int *pFound
 ){
+  u8 aBuffer[CS_INDEX_PAGE_SIZE+CS_WAL_CHUNK_HDR_SIZE];
   ChunkIndexLazy *pLazy = &cs->index.lazy;
   ProllyHash pageHash;
   ProllyHash expectedMax;
@@ -312,7 +394,7 @@ int csIndexLookup(
     int nCell;
     int nCellSize;
     ProllyHash pageMax;
-    int rc = csReadLazyPage(cs, iOffset, nBody, &pageHash, iLimit, &aBody);
+    int rc = csReadLazyPage(cs, iOffset, nBody, &pageHash, iLimit, aBuffer, &aBody);
     if( rc!=SQLITE_OK ) return rc;
     rc = csLazyPageShape(aBody, nBody, &magic, &nCell, &nCellSize);
     if( rc==SQLITE_OK ){
@@ -323,7 +405,6 @@ int csIndexLookup(
       }
     }
     if( rc!=SQLITE_OK ){
-      sqlite3_free(aBody);
       return rc;
     }
 
@@ -342,7 +423,6 @@ int csIndexLookup(
          || e.offset>pLazy->iDataEnd-4
          || (i64)e.size>pLazy->iDataEnd-e.offset-4
          || (i>0 && prollyHashCompare(&previous, &e.hash)>=0) ){
-          sqlite3_free(aBody);
           return SQLITE_CORRUPT;
         }
         previous = e.hash;
@@ -366,12 +446,10 @@ int csIndexLookup(
                     >pLazy->iDataEnd-pEntry->offset-4) ){
             rc = SQLITE_CORRUPT;
           }
-          sqlite3_free(aBody);
           if( rc==SQLITE_OK ) *pFound = 1;
           return rc;
         }
       }
-      sqlite3_free(aBody);
       return SQLITE_OK;
     }else{
       int lo = 0;
@@ -396,7 +474,6 @@ int csIndexLookup(
          || childOffset<pLazy->iDataEnd
          || iOffset<CS_WAL_CHUNK_HDR_SIZE+(i64)childSize
          || childOffset>iOffset-CS_WAL_CHUNK_HDR_SIZE-childSize ){
-          sqlite3_free(aBody);
           return SQLITE_CORRUPT;
         }
         previous = h;
@@ -411,7 +488,6 @@ int csIndexLookup(
         else hi = mid;
       }
       if( lo==nCell ){
-        sqlite3_free(aBody);
         return SQLITE_OK;
       }
       p = aBody+CS_INDEX_PAGE_HEADER_SIZE+lo*CS_INDEX_CHILD_SIZE;
@@ -424,7 +500,6 @@ int csIndexLookup(
       p += 4;
       memcpy(pageHash.data, p, PROLLY_HASH_SIZE);
       haveExpectedMax = 1;
-      sqlite3_free(aBody);
     }
   }
   return SQLITE_CORRUPT;
@@ -454,7 +529,7 @@ static int csCollectLazyPage(
   int rc;
 
   if( depth>=32 ) return SQLITE_CORRUPT;
-  rc = csReadLazyPage(cs, iOffset, nBody, pHash, iLimit, &aBody);
+  rc = csReadLazyPage(cs, iOffset, nBody, pHash, iLimit, 0, &aBody);
   if( rc!=SQLITE_OK ) return rc;
   rc = csLazyPageShape(aBody, nBody, &magic, &nCell, &nCellSize);
   if( rc!=SQLITE_OK ) goto collect_done;
