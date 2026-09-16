@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import csv
 import math
 import os
 from pathlib import Path
@@ -97,23 +96,6 @@ def prepare(binary, db, rows):
         raise ValueError(f"fixture unexpectedly smaller than its payload: {db}")
 
 
-def measure_checkpoint(binary, output):
-    env = dict(os.environ, DOLTLITE_CHECKPOINT_PERF_TRIALS="1",
-               DOLTLITE_CHECKPOINT_PERF_THRESHOLD_BYTES="67108864",
-               DOLTLITE_CHECKPOINT_PERF_PAYLOAD_BYTES="2097152",
-               DOLTLITE_CHECKPOINT_PERF_MAX_APPENDS="128",
-               DOLTLITE_CHECKPOINT_PERF_SAMPLES_OUTPUT=str(output))
-    log = run(["bash", str(TEST_DIR / "doltlite_checkpoint_perf.sh"), str(binary)],
-              env=env)
-    output.with_suffix(".log").write_text(log)
-    with output.open() as source:
-        records = list(csv.DictReader(source, delimiter="\t"))
-    if len(records) != 1 or records[0]["run"] != "1":
-        raise ValueError(f"invalid checkpoint samples: {records}")
-    return {f"append_{name}": positive_us(records[0][f"{name}_seconds"])
-            for name in ("below", "checkpoint", "post")}
-
-
 def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -123,12 +105,11 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     with result_path.open("w") as output, sample_path.open("w") as raw:
         raw.write("section\ttest\trun\tbaseline_us\tcandidate_us\tstock_us\n")
         for name in names:
-            section = "checkpoint" if name.startswith("append_") else "queries"
-            output.write(f"{section}\t{name}\t{medians['baseline'][name]:.0f}\t"
+            output.write(f"queries\t{name}\t{medians['baseline'][name]:.0f}\t"
                          f"{medians['candidate'][name]:.0f}\n")
             for i, candidate in enumerate(samples["candidate"]):
-                stock = samples["stock"][i].get(name, "")
-                raw.write(f"{section}\t{name}\t{i+1}\t"
+                stock = samples["stock"][i][name]
+                raw.write(f"queries\t{name}\t{i+1}\t"
                           f"{samples['baseline'][i][name]}\t{candidate[name]}\t{stock}\n")
     print("## Performance hotspots")
     print(f"\n{rows:,} rows × {PAYLOAD_BYTES} payload bytes; "
@@ -137,18 +118,14 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
-    for title, append in (("Large Table Scans", False), ("Large Table Appends", True)):
-        print(f"\n### {title}")
-        print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
-        print("|---|---:|---:|---:|---:|---:|")
-        for name in names:
-            if name.startswith("append_") != append:
-                continue
-            base, candidate = medians["baseline"][name], medians["candidate"][name]
-            stock = medians["stock"].get(name)
-            stock_cells = f"{stock/1000:.3f} | {candidate/stock:.2f}×" if stock else "— | —"
-            print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
-                  f"{candidate/base:.2f}× | {stock_cells} |")
+    print("\n### Large Table Scans")
+    print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
+    print("|---|---:|---:|---:|---:|---:|")
+    for name in names:
+        base, candidate = medians["baseline"][name], medians["candidate"][name]
+        stock = medians["stock"][name]
+        print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
+              f"{candidate/base:.2f}× | {stock/1000:.3f} | {candidate/stock:.2f}× |")
 
 
 def main(argv=None):
@@ -177,8 +154,6 @@ def main(argv=None):
             for arm in order:
                 print(f"Hotspots trial {trial+1}/{args.runs}: {arm}", file=sys.stderr, flush=True)
                 measured = measure_queries(binaries[arm], databases[arm], args.rows, args.cache_kib)
-                if arm != "stock":
-                    measured.update(measure_checkpoint(binaries[arm], root / f"{arm}-{trial}.tsv"))
                 samples[arm].append(measured)
         write_results(samples, args.rows, args.cache_kib, sizes,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),

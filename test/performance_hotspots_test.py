@@ -57,53 +57,58 @@ class HotspotTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
-    def test_checkpoint_samples_are_required(self):
+    def test_main_measures_queries_for_all_arms(self):
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "samples.tsv"
-            header = "run\tbelow_seconds\tcheckpoint_seconds\tpost_seconds\n"
-            with patch.object(hotspots, "run", return_value="validated"):
-                for body in (header, header + "1\t0.01\t0\t0.01\n",
-                             header + "2\t0.01\t0.02\t0.01\n"):
-                    output.write_text(body)
-                    with self.assertRaises(ValueError):
-                        hotspots.measure_checkpoint(Path("engine"), output)
-                output.write_text(header + "1\t0.01\t0.02\t0.011\n")
-                self.assertEqual(hotspots.measure_checkpoint(Path("engine"), output),
-                                 {"append_below": 10000, "append_checkpoint": 20000,
-                                  "append_post": 11000})
+            result = Path(directory) / "results.tsv"
+            raw = Path(directory) / "samples.tsv"
+            values = {name: 100000 for name, _, _ in hotspots.workloads(262144)}
+            with patch.object(hotspots, "run", return_value="validated") as run, \
+                 patch.object(hotspots, "prepare", side_effect=lambda binary, db, rows: db.touch()), \
+                 patch.object(hotspots, "measure_queries", return_value=values) as measure, \
+                 patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                hotspots.main(["--baseline", "base", "--candidate", "candidate",
+                               "--stock", "stock", "--runs", "2"])
+            run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
+                                         str(Path("stock").resolve()), str(Path("candidate").resolve())])
+            self.assertEqual([call.args[0].name for call in measure.call_args_list],
+                             ["base", "candidate", "stock", "stock", "candidate", "base"])
+            self.assertEqual(result.read_text(), "".join(
+                f"queries\t{name}\t100000\t100000\n" for name in values))
+            self.assertEqual(len(raw.read_text().splitlines()), 7)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
             raw = Path(directory) / "samples.tsv"
             samples = {
-                "baseline": [{"scan_first": n, "append_checkpoint": n}
+                "baseline": [{"scan_first": n, "scan_repeat": n, "point_10000": n}
                              for n in (100000, 900000, 120000)],
-                "candidate": [{"scan_first": n, "append_checkpoint": n}
+                "candidate": [{"scan_first": n, "scan_repeat": n, "point_10000": n}
                               for n in (240000, 200000, 900000)],
-                "stock": [{"scan_first": n} for n in (50000, 45000, 55000)],
+                "stock": [{"scan_first": n, "scan_repeat": n, "point_10000": n}
+                          for n in (50000, 45000, 55000)],
             }
             report = io.StringIO()
             with contextlib.redirect_stdout(report):
                 hotspots.write_results(samples, 262144, 65536, {"candidate": 300000000}, result, raw)
             self.assertEqual(result.read_text(),
                              "queries\tscan_first\t120000\t240000\n"
-                             "checkpoint\tappend_checkpoint\t120000\t240000\n")
+                             "queries\tscan_repeat\t120000\t240000\n"
+                             "queries\tpoint_10000\t120000\t240000\n")
             self.assertIn("240.000 | 2.00× | 50.000 | 4.80×", report.getvalue())
-            scans, appends = report.getvalue().split("### Large Table Appends\n")
-            self.assertIn("### Large Table Scans\n", scans)
-            for table in (scans, appends):
-                self.assertIn("| Workload | PR base ms | Candidate ms |", table)
-            self.assertIn("| scan_first |", scans)
-            self.assertNotIn("| append_checkpoint |", scans)
-            self.assertIn("| append_checkpoint |", appends)
-            self.assertNotIn("| scan_first |", appends)
-            self.assertIn("checkpoint\tappend_checkpoint\t3\t120000\t900000\t\n", raw.read_text())
+            self.assertIn("### Large Table Scans\n", report.getvalue())
+            self.assertEqual(report.getvalue().count("| Workload |"), 1)
+            for name in ("scan_first", "scan_repeat", "point_10000"):
+                self.assertIn(f"| {name} |", report.getvalue())
+                self.assertIn(f"queries\t{name}\t3\t120000\t900000\t55000\n", raw.read_text())
+            self.assertNotIn("Large Table Appends", report.getvalue())
+            self.assertNotIn("—", report.getvalue())
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertTrue(analysis["individual_failures"])
             self.assertTrue(analysis["section_failures"])
-            self.assertIn(("hotspots", "checkpoint", "append_checkpoint"),
+            self.assertIn(("hotspots", "queries", "point_10000"),
                           analysis["individual_failures"])
 
     def test_hotspot_failure_reaches_existing_gate(self):

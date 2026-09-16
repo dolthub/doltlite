@@ -22,6 +22,7 @@ thresholds are defined in [benchmark.yml](../../.github/workflows/benchmark.yml)
 - [HEAD queries versus history depth](#head-queries-versus-history-depth)
 - [Foreign-key verification scaling](#foreign-key-verification-scaling)
 - [Open time](#open-time)
+- [Checkpoint write latency](#checkpoint-write-latency)
 - [Primary-key operations and diff growth](#primary-key-operations-and-diff-growth)
 - [COUNT performance](#count-performance)
 - [Structural sharing and GC space use](#structural-sharing-and-gc-space-use)
@@ -226,9 +227,11 @@ than the wrapped write workloads.
 ## Performance hotspots
 
 [performance_hotspots.py](../../test/performance_hotspots.py) supplements the
-SQL workloads with large reads and checkpoint-boundary writes. It has its own
-PR comment and gate. It reports five-trial medians in milliseconds and verifies
-query results as well as timings.
+SQL workloads with large-table reads that expose performance gaps against
+stock SQLite. Its PR comment has one **Large Table Scans** table with all three
+metrics below, each compared with both the PR base and stock SQLite. It reports
+five-trial medians in milliseconds, verifies query results, and gates regressions
+against the PR base.
 
 The three read workloads use 262,144 integer-keyed rows with 1 KiB random BLOB
 payloads: 256 MiB of payload with a 64 MiB cache per connection. They run in the
@@ -255,37 +258,6 @@ Performs 10,000 primary-key lookups spread across the table by a deterministic
 key sequence, summing the retrieved payload lengths. The lookups execute inside
 one SQL statement after the two scans. The reported time covers all 10,000
 lookups, including tree traversal and chunk lookup.
-
-### `append_below`
-
-On a separate fixture, replaces one row's payload with 2 MiB of random data
-just before the 64 MiB checkpoint threshold is crossed. This is the ordinary
-write baseline near that boundary. The time includes generating the payload,
-executing the update, and completing its autocommit transaction.
-
-### `append_checkpoint`
-
-Times the next 2 MiB replacement, which crosses the threshold and creates a
-checkpoint during the update. Comparing it with `append_below` shows whether
-checkpoint creation introduces a write-latency spike. The harness checks the
-file's checkpoint metadata to confirm that this is the checkpointing operation.
-
-### `append_post`
-
-Times the next replacement on the same connection and verifies that it reuses
-the existing checkpoint. This catches extra work that would make subsequent
-ordinary writes remain slow after checkpoint creation.
-
-The append rows use [doltlite_checkpoint_perf.sh](../../test/doltlite_checkpoint_perf.sh).
-The SQL replaces a row; the name "append" refers to appending new storage
-records. A checkpoint records the chunk index so later opens can replay from
-that point. It is separate from a version-control `dolt_commit`.
-
-Only the read rows currently report stock SQLite comparisons. The append
-harness defines its three events around DoltLite's checkpoint and runs only
-DoltLite binaries. SQLite can execute the same payload update, but its normal
-write latency is not currently collected here, and its checkpoint events would
-need their own definition. A dash in these columns means "not measured."
 
 ## Version-control latency
 
@@ -480,6 +452,45 @@ without bound.
 Lowering either limit shortens open time and grows the file between
 collections; `dolt_gc()` reclaims that space. Deployments that open a
 connection per request and commit often are the ones worth tuning.
+
+## Checkpoint write latency
+
+[doltlite_checkpoint_perf.sh](../../test/doltlite_checkpoint_perf.sh) measures
+three consecutive 2 MiB payload replacements around the 64 MiB checkpoint
+threshold. It runs in the native timing suites and reports five-trial medians
+in milliseconds, plus checkpoint/below and post/below ratios. Its assertions
+validate the checkpoint boundary, reuse of the checkpoint after creation,
+positive timings, row count, and database integrity. It does not enforce a
+latency ceiling or compare with the PR base or stock SQLite.
+
+Each trial starts from a copy of a fixture just below the checkpoint boundary.
+The three updates run on the same connection. Their timings include generating
+the random payload, executing the update, and completing its autocommit
+transaction; fixture preparation, database open, and close are excluded.
+
+### Below-threshold append
+
+Replaces the single row's payload immediately before the checkpoint threshold
+is crossed. This provides the ordinary write latency near that boundary.
+
+### Checkpointing append
+
+Times the next replacement, which crosses the threshold and creates a checkpoint
+during the update. Comparing it with the below-threshold timing exposes the cost
+of checkpoint creation. The harness checks the file's checkpoint metadata to
+confirm that this is the checkpointing operation.
+
+### Post-checkpoint append
+
+Times the next replacement and verifies that it reuses the existing checkpoint.
+Comparing it with the below-threshold timing shows whether ordinary writes remain
+slow after checkpoint creation.
+
+The SQL updates a single-row table; "append" refers to appending new storage
+records. A checkpoint records the chunk index so later opens can replay from
+that point. It is separate from a version-control `dolt_commit`. These timings
+are reported by the standalone test, outside the performance-hotspot comment
+and regression gate.
 
 ## Primary-key operations and diff growth
 
