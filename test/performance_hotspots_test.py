@@ -90,6 +90,14 @@ class HotspotTests(unittest.TestCase):
                              "queries\tscan_first\t120000\t240000\n"
                              "checkpoint\tappend_checkpoint\t120000\t240000\n")
             self.assertIn("240.000 | 2.00× | 50.000 | 4.80×", report.getvalue())
+            scans, appends = report.getvalue().split("### Large Table Appends\n")
+            self.assertIn("### Large Table Scans\n", scans)
+            for table in (scans, appends):
+                self.assertIn("| Workload | PR base ms | Candidate ms |", table)
+            self.assertIn("| scan_first |", scans)
+            self.assertNotIn("| append_checkpoint |", scans)
+            self.assertIn("| append_checkpoint |", appends)
+            self.assertNotIn("| scan_first |", appends)
             self.assertIn("checkpoint\tappend_checkpoint\t3\t120000\t900000\t\n", raw.read_text())
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)

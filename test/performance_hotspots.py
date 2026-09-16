@@ -137,14 +137,18 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
-    print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
-    print("|---|---:|---:|---:|---:|---:|")
-    for name in names:
-        base, candidate = medians["baseline"][name], medians["candidate"][name]
-        stock = medians["stock"].get(name)
-        stock_cells = f"{stock/1000:.3f} | {candidate/stock:.2f}×" if stock else "— | —"
-        print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
-              f"{candidate/base:.2f}× | {stock_cells} |")
+    for title, append in (("Large Table Scans", False), ("Large Table Appends", True)):
+        print(f"\n### {title}")
+        print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
+        print("|---|---:|---:|---:|---:|---:|")
+        for name in names:
+            if name.startswith("append_") != append:
+                continue
+            base, candidate = medians["baseline"][name], medians["candidate"][name]
+            stock = medians["stock"].get(name)
+            stock_cells = f"{stock/1000:.3f} | {candidate/stock:.2f}×" if stock else "— | —"
+            print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
+                  f"{candidate/base:.2f}× | {stock_cells} |")
 
 
 def main(argv=None):
