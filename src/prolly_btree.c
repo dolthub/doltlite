@@ -30,7 +30,7 @@ static u32 nocaseCollMask(int nKeyCol, const char *const *azColl, int *pOk){
   return mask;
 }
 
-int doltliteRecordMaskHasNocaseNul(
+static int doltliteRecordMaskHasNocaseNul(
   const u8 *pRec,
   int nRec,
   u32 nocaseMask,
