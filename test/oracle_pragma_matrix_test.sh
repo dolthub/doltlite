@@ -71,7 +71,15 @@ stmts_for() {
     count_changes)      echo "PRAGMA count_changes; PRAGMA count_changes=1; UPDATE p SET n=n WHERE id=1;" ;;
     data_version)       echo "PRAGMA data_version;" ;;
     database_list)      echo "SELECT seq, name FROM pragma_database_list;" ;;
-    default_cache_size) echo "PRAGMA default_cache_size; PRAGMA default_cache_size=1000; PRAGMA default_cache_size;" ;;
+    default_cache_size) echo "
+      SELECT (SELECT * FROM pragma_default_cache_size) =
+             (SELECT * FROM pragma_cache_size);
+      PRAGMA default_cache_size=1000;
+      PRAGMA default_cache_size;
+      PRAGMA cache_size;
+      PRAGMA default_cache_size=-500;
+      PRAGMA default_cache_size;
+      PRAGMA cache_size;" ;;
     defer_foreign_keys) echo "PRAGMA defer_foreign_keys; PRAGMA defer_foreign_keys=1; PRAGMA defer_foreign_keys;" ;;
     empty_result_callbacks) echo "PRAGMA empty_result_callbacks; PRAGMA empty_result_callbacks=1; PRAGMA empty_result_callbacks;" ;;
     foreign_key_check)  echo "PRAGMA foreign_keys=0; INSERT INTO c(pid,v) VALUES(99,'z'); PRAGMA foreign_key_check; PRAGMA foreign_key_check(c);" ;;
