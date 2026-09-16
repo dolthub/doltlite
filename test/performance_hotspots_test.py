@@ -81,7 +81,8 @@ class HotspotTests(unittest.TestCase):
                              for n in (100000, 900000, 120000)],
                 "candidate": [{"scan_first": n, "append_checkpoint": n}
                               for n in (240000, 200000, 900000)],
-                "stock": [{"scan_first": n} for n in (50000, 45000, 55000)],
+                "stock": [{"scan_first": n, "append_checkpoint": n // 2}
+                          for n in (50000, 45000, 55000)],
             }
             report = io.StringIO()
             with contextlib.redirect_stdout(report):
@@ -97,14 +98,50 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("| scan_first |", scans)
             self.assertNotIn("| append_checkpoint |", scans)
             self.assertIn("| append_checkpoint |", appends)
+            self.assertIn("240.000 | 2.00× | 25.000 | 9.60×", appends)
+            self.assertNotIn("—", appends)
             self.assertNotIn("| scan_first |", appends)
-            self.assertIn("checkpoint\tappend_checkpoint\t3\t120000\t900000\t\n", raw.read_text())
+            self.assertIn("checkpoint\tappend_checkpoint\t3\t120000\t900000\t27500\n", raw.read_text())
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertTrue(analysis["individual_failures"])
             self.assertTrue(analysis["section_failures"])
             self.assertIn(("hotspots", "checkpoint", "append_checkpoint"),
                           analysis["individual_failures"])
+
+    def test_missing_stock_samples_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            complete = dict(scan_first=10000, append_below=20000,
+                            append_checkpoint=30000, append_post=40000)
+            for stock in ([], [{"scan_first": 10000}], [complete, complete]):
+                with self.subTest(stock=stock), self.assertRaisesRegex(ValueError, "stock"):
+                    hotspots.write_results({"baseline": [complete], "candidate": [complete],
+                                            "stock": stock}, 262144, 65536, {},
+                                           root / "results.tsv", root / "samples.tsv")
+
+    def test_stock_append_measurements_and_validation(self):
+        configuration = "wal\n2\n1000\n-65536\n0\n1\n"
+        timings = "".join(f"BEGIN {name}\nRun Time: real 0.010 user 0.008 sys 0.002\n"
+                          f"1|2097152\nEND {name}\n" for name in hotspots.APPEND_NAMES)
+        verified = "1|2097152|2097152\nok\n"
+        with patch.object(hotspots, "sql", side_effect=["wal\n", configuration + timings, verified]):
+            self.assertEqual(hotspots.measure_stock_appends(Path("stock"), Path("db"), 65536),
+                             dict.fromkeys(hotspots.APPEND_NAMES, 10000))
+        for setup, output, reopen in (
+                ("delete\n", configuration + timings, verified),
+                ("wal\n", configuration.replace("\n2\n", "\n1\n") + timings, verified),
+                ("wal\n", configuration.replace("1000", "0") + timings, verified),
+                ("wal\n", configuration + timings.replace("1|2097152", "0|2097152"), verified),
+                ("wal\n", configuration + timings.replace("2097152", "1048576"), verified),
+                ("wal\n", configuration + timings.replace("0.010", "0.000"), verified),
+                ("wal\n", configuration + timings.replace("END append_post", ""), verified),
+                ("wal\n", configuration + timings, verified.replace("ok", "bad")),
+                ("wal\n", configuration + timings, verified.replace("2097152", "0"))):
+            with self.subTest(setup=setup, output=output, reopen=reopen):
+                with patch.object(hotspots, "sql", side_effect=[setup, output, reopen]):
+                    with self.assertRaises(ValueError):
+                        hotspots.measure_stock_appends(Path("stock"), Path("db"), 65536)
 
     def test_hotspot_failure_reaches_existing_gate(self):
         workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()

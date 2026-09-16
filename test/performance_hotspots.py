@@ -14,6 +14,8 @@ import tempfile
 
 TEST_DIR = Path(__file__).resolve().parent
 PAYLOAD_BYTES = 1024
+APPEND_PAYLOAD_BYTES = 2097152
+APPEND_NAMES = ("append_below", "append_checkpoint", "append_post")
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
 
 
@@ -100,7 +102,7 @@ def prepare(binary, db, rows):
 def measure_checkpoint(binary, output):
     env = dict(os.environ, DOLTLITE_CHECKPOINT_PERF_TRIALS="1",
                DOLTLITE_CHECKPOINT_PERF_THRESHOLD_BYTES="67108864",
-               DOLTLITE_CHECKPOINT_PERF_PAYLOAD_BYTES="2097152",
+               DOLTLITE_CHECKPOINT_PERF_PAYLOAD_BYTES=str(APPEND_PAYLOAD_BYTES),
                DOLTLITE_CHECKPOINT_PERF_MAX_APPENDS="128",
                DOLTLITE_CHECKPOINT_PERF_SAMPLES_OUTPUT=str(output))
     log = run(["bash", str(TEST_DIR / "doltlite_checkpoint_perf.sh"), str(binary)],
@@ -114,8 +116,46 @@ def measure_checkpoint(binary, output):
             for name in ("below", "checkpoint", "post")}
 
 
+def measure_stock_appends(binary, db, cache_kib):
+    update = f"UPDATE updates SET payload=randomblob({APPEND_PAYLOAD_BYTES}) WHERE id=1;"
+    cases = [(name, update, f"1|{APPEND_PAYLOAD_BYTES}") for name in APPEND_NAMES]
+    setup = sql(binary, db, f"""
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=FULL;
+CREATE TABLE updates(id INTEGER PRIMARY KEY, payload BLOB NOT NULL);
+INSERT INTO updates VALUES(1,randomblob({APPEND_PAYLOAD_BYTES}));
+""")
+    if setup.strip() != "wal":
+        raise ValueError(f"stock append fixture did not enable WAL: {setup}")
+    statements = [".headers off", ".mode list", ".output /dev/null",
+                  "PRAGMA synchronous=FULL;", "PRAGMA wal_autocheckpoint=1000;",
+                  "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{cache_kib};",
+                  ".output stdout",
+                  "PRAGMA journal_mode;", "PRAGMA synchronous;",
+                  "PRAGMA wal_autocheckpoint;", "PRAGMA cache_size;",
+                  "PRAGMA mmap_size;", "SELECT count(*) FROM updates;"]
+    for name, query, _expected in cases:
+        statements.extend([f".print BEGIN {name}", ".timer on", query,
+                           ".timer off", "SELECT changes(),length(payload) FROM updates WHERE id=1;",
+                           f".print END {name}"])
+    output = sql(binary, db, "\n".join(statements))
+    configuration = output.splitlines()[:6]
+    if configuration != ["wal", "2", "1000", str(-cache_kib), "0", "1"]:
+        raise ValueError(f"invalid stock append configuration: {configuration}")
+    measured = parse_session("\n".join(output.splitlines()[6:]), cases)
+    verified = sql(binary, db, "SELECT count(*),min(length(payload)),max(length(payload)) "
+                   "FROM updates; PRAGMA integrity_check;")
+    if verified.strip() != f"1|{APPEND_PAYLOAD_BYTES}|{APPEND_PAYLOAD_BYTES}\nok":
+        raise ValueError(f"invalid stock append result after reopen: {verified}")
+    return measured
+
+
 def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     names = list(samples["candidate"][0])
+    for arm in ("baseline", "candidate", "stock"):
+        if (len(samples[arm]) != len(samples["candidate"])
+                or any(set(sample) != set(names) for sample in samples[arm])):
+            raise ValueError(f"incomplete {arm} hotspot samples")
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
                      for name in runs[0]} for arm, runs in samples.items()}
     result_path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +167,7 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
             output.write(f"{section}\t{name}\t{medians['baseline'][name]:.0f}\t"
                          f"{medians['candidate'][name]:.0f}\n")
             for i, candidate in enumerate(samples["candidate"]):
-                stock = samples["stock"][i].get(name, "")
+                stock = samples["stock"][i][name]
                 raw.write(f"{section}\t{name}\t{i+1}\t"
                           f"{samples['baseline'][i][name]}\t{candidate[name]}\t{stock}\n")
     print("## Performance hotspots")
@@ -145,8 +185,8 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
             if name.startswith("append_") != append:
                 continue
             base, candidate = medians["baseline"][name], medians["candidate"][name]
-            stock = medians["stock"].get(name)
-            stock_cells = f"{stock/1000:.3f} | {candidate/stock:.2f}×" if stock else "— | —"
+            stock = medians["stock"][name]
+            stock_cells = f"{stock/1000:.3f} | {candidate/stock:.2f}×"
             print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
                   f"{candidate/base:.2f}× | {stock_cells} |")
 
@@ -177,7 +217,10 @@ def main(argv=None):
             for arm in order:
                 print(f"Hotspots trial {trial+1}/{args.runs}: {arm}", file=sys.stderr, flush=True)
                 measured = measure_queries(binaries[arm], databases[arm], args.rows, args.cache_kib)
-                if arm != "stock":
+                if arm == "stock":
+                    measured.update(measure_stock_appends(binaries[arm],
+                                    root / f"stock-appends-{trial}.db", args.cache_kib))
+                else:
                     measured.update(measure_checkpoint(binaries[arm], root / f"{arm}-{trial}.tsv"))
                 samples[arm].append(measured)
         write_results(samples, args.rows, args.cache_kib, sizes,
