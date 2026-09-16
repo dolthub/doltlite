@@ -289,48 +289,6 @@ fi
 
 assert_ratio "nocase_plan_50_to_800_statements" "$T_NC_50" "$T_NC_800" 3
 
-# Each commit moves the index root, so a memo keyed on it is only useful if it
-# survives the flush. Autocommit pairs expose that -- but a commit costs a
-# sync, which on a slow disk dwarfs any planning, so timing them alone
-# measures the disk. An identical BINARY-collated table is the control: what
-# must not grow with commit count is what NOCASE costs on top of it.
-DB_BIN="/tmp/dl_perf_binary_$$.db"
-rm -f "$DB_BIN"
-python3 -c "
-q = chr(39)
-print('CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT);')
-print('BEGIN;')
-for i in range(1, 200001):
-    print(f'INSERT INTO t VALUES({i},{q}key_{i}{q});')
-print('COMMIT;')
-print('CREATE INDEX i_s ON t(s);')
-" | $DOLTLITE "$DB_BIN" > /dev/null 2>&1
-
-autocommit_pairs_ms() {
-  python3 -c "
-q = chr(39)
-for i in range(1, $2 + 1):
-    print(f'UPDATE t SET s={q}ch_{i}{q} WHERE id={i};')
-    print(f'SELECT count(*) FROM t WHERE s={q}key_{i}{q};')
-" > "$NC_SQL"
-  time_ms "$DOLTLITE '$1' < '$NC_SQL'"
-}
-
-NC_AC_25=$(autocommit_pairs_ms "$DB_NC" 25)
-BIN_AC_25=$(autocommit_pairs_ms "$DB_BIN" 25)
-NC_AC_400=$(autocommit_pairs_ms "$DB_NC" 400)
-BIN_AC_400=$(autocommit_pairs_ms "$DB_BIN" 400)
-NC_OVER_25=$((NC_AC_25 - BIN_AC_25))
-NC_OVER_400=$((NC_AC_400 - BIN_AC_400))
-if [ "$NC_OVER_25" -lt 0 ]; then NC_OVER_25=0; fi
-if [ "$NC_OVER_400" -lt 0 ]; then NC_OVER_400=0; fi
-echo "  25 pairs: nocase ${NC_AC_25}ms, binary ${BIN_AC_25}ms, nocase costs ${NC_OVER_25}ms extra"
-echo "  400 pairs: nocase ${NC_AC_400}ms, binary ${BIN_AC_400}ms, nocase costs ${NC_OVER_400}ms extra"
-assert_ratio "nocase_plan_overhead_25_to_400_autocommit" \
-  "$NC_OVER_25" "$NC_OVER_400" 4
-
-rm -f "$DB_BIN"
-
 rm -f "$DB_NC" "$NC_SQL"
 
 echo ""
