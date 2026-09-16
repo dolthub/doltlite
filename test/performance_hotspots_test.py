@@ -138,7 +138,7 @@ class HotspotTests(unittest.TestCase):
             }
             report = io.StringIO()
             with contextlib.redirect_stdout(report):
-                hotspots.write_results(samples, 262144, 65536, {"candidate": 300000000}, result, raw)
+                hotspots.write_results(samples, result, raw)
             self.assertEqual(result.read_text(), "".join(
                 f"queries\t{name}\t120000\t240000\n" for name in self.names))
             self.assertIn("240.000 | 2.00× | 50.000 | 4.80×", report.getvalue())
