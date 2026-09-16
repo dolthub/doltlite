@@ -4148,18 +4148,27 @@ static int whereLoopAddBtree(
      && (HasRowid(pProbe->pTable) || !IsPrimaryKeyIndex(pProbe)) ){
       int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
       int hasNocaseNul = 0;
-      if( !pProbe->bNocaseNul
-       && iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
+      if( iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
        && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+        /* Ask every time rather than latch the first positive answer: the
+        ** key that made it positive can be deleted, and the index is then
+        ** ordered again. The btree memoises this, so asking is cheap. */
         rc = sqlite3BtreeProllyIndexHasNocaseNul(
             db->aDb[iDb].pBt, pProbe->tnum, pProbe->nKeyCol,
             pProbe->azColl, &hasNocaseNul);
         if( rc!=SQLITE_OK ) break;
-        if( hasNocaseNul ){
-          pProbe->bNocaseNul = 1;
-        }
+        pProbe->bNocaseNul = hasNocaseNul ? 1 : 0;
       }
-      if( pProbe->bNocaseNul ) pProbe->bUnordered = 1;
+      if( pProbe->bNocaseNul ){
+        if( !pProbe->bUnordered ){
+          pProbe->bUnordered = 1;
+          pProbe->bNocaseNulUnordered = 1;
+        }
+      }else if( pProbe->bNocaseNulUnordered ){
+        /* Only ever undo what this made unordered; ANALYZE's verdict stands. */
+        pProbe->bUnordered = 0;
+        pProbe->bNocaseNulUnordered = 0;
+      }
     }
 #endif
     if( pProbe->pPartIdxWhere!=0
