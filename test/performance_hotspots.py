@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -14,6 +15,9 @@ import tempfile
 
 TEST_DIR = Path(__file__).resolve().parent
 PAYLOAD_BYTES = 1024
+UPDATE_ROWS = 5000
+UPDATE_CACHE_KIB = 65536
+UPDATE_NAME = "bulk_update_text_pk"
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
 
 
@@ -163,6 +167,67 @@ def measure_index_queries(binary, db, cases, cache_kib):
     return measured
 
 
+def update_check():
+    return "SELECT count(*),sum(balance),sum(length(payload)) FROM accounts;\nPRAGMA integrity_check;"
+
+
+def prepare_updates(binary, db, stock=False):
+    journal = "PRAGMA journal_mode=WAL;\n" if stock else ""
+    sql(binary, db, journal + f"""CREATE TABLE accounts(
+      id TEXT PRIMARY KEY, balance INTEGER NOT NULL, payload TEXT NOT NULL);
+    BEGIN;
+    WITH RECURSIVE c(i) AS (
+      VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{UPDATE_ROWS}
+    ) INSERT INTO accounts SELECT printf('item-%08d',i),0,printf('%0064d',i) FROM c;
+    COMMIT;""")
+    expected = f"{UPDATE_ROWS}|0|{UPDATE_ROWS * 64}\nok\n"
+    if sql(binary, db, update_check()) != expected:
+        raise ValueError("invalid update fixture")
+    if db.stat().st_size >= UPDATE_CACHE_KIB * 1024 // 4:
+        raise ValueError("update fixture must fit comfortably within the cache")
+
+
+def parse_update_session(output):
+    start = "BEGIN bulk_update_text_pk\n"
+    if not output.startswith(start) or output.count("END bulk_update_text_pk\n") != 1:
+        raise ValueError(f"invalid update markers: {output}")
+    timed, result = output[len(start):].split("END bulk_update_text_pk\n")
+    timers = [TIMER.fullmatch(line) for line in timed.splitlines()]
+    expected = f"{UPDATE_ROWS}|{UPDATE_ROWS}|{UPDATE_ROWS * 64}\nok\n"
+    if len(timers) != 3 or not all(timers) or result != expected:
+        raise ValueError(f"invalid update timing or result: {output}")
+    return positive_us(sum(float(timer[1]) for timer in timers))
+
+
+def measure_updates(binary, seed, db):
+    shutil.copyfile(seed, db)
+    output = sql(binary, db, f""".headers off
+.mode list
+.output /dev/null
+PRAGMA mmap_size=0;
+PRAGMA cache_size=-{UPDATE_CACHE_KIB};
+PRAGMA synchronous=FULL;
+SELECT sum(balance)+sum(length(payload)) FROM accounts;
+.output stdout
+.print BEGIN bulk_update_text_pk
+.timer on
+BEGIN;
+UPDATE accounts SET balance=balance+1;
+COMMIT;
+.timer off
+.print END bulk_update_text_pk
+{update_check()}""")
+    elapsed = parse_update_session(output)
+    expected = f"{UPDATE_ROWS}|{UPDATE_ROWS}|{UPDATE_ROWS * 64}\nok\n"
+    if sql(binary, db, update_check()) != expected:
+        raise ValueError("update result did not survive reopen")
+    return {UPDATE_NAME: elapsed}
+
+
+def section(name):
+    return "updates" if name == UPDATE_NAME else "queries"
+
+
 def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -172,27 +237,33 @@ def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
     with result_path.open("w") as output, sample_path.open("w") as raw:
         raw.write("section\ttest\trun\tbaseline_us\tcandidate_us\tstock_us\n")
         for name in names:
-            output.write(f"queries\t{name}\t{medians['baseline'][name]:.0f}\t"
+            output.write(f"{section(name)}\t{name}\t{medians['baseline'][name]:.0f}\t"
                          f"{medians['candidate'][name]:.0f}\n")
             for i, candidate in enumerate(samples["candidate"]):
                 stock = samples["stock"][i][name]
-                raw.write(f"queries\t{name}\t{i+1}\t"
+                raw.write(f"{section(name)}\t{name}\t{i+1}\t"
                           f"{samples['baseline'][i][name]}\t{candidate[name]}\t{stock}\n")
     print("## Performance hotspots")
-    print(f"\n{rows:,} rows × {PAYLOAD_BYTES} payload bytes; "
+    print(f"\nLarge-table fixtures: {rows:,} rows × {PAYLOAD_BYTES} payload bytes; "
           f"{cache_kib:,} KiB cache per connection.")
     print("Fixture bytes: " + ", ".join(f"{arm}={size:,}" for arm, size in sizes.items()))
     print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
-    print("\n### Large Table Scans")
-    print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
-    print("|---|---:|---:|---:|---:|---:|")
-    for name in names:
-        base, candidate = medians["baseline"][name], medians["candidate"][name]
-        stock = medians["stock"][name]
-        print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
-              f"{candidate/base:.2f}× | {stock/1000:.3f} | {candidate/stock:.2f}× |")
+    for heading, group in (("Large Table Scans", "queries"), ("Small Table Updates", "updates")):
+        print(f"\n### {heading}")
+        if group == "updates":
+            print(f"\n{UPDATE_ROWS:,} rows with text primary keys; "
+                  f"{UPDATE_CACHE_KIB:,} KiB cache. One UPDATE in an explicit transaction.")
+        print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
+        print("|---|---:|---:|---:|---:|---:|")
+        for name in names:
+            if section(name) != group:
+                continue
+            base, candidate = medians["baseline"][name], medians["candidate"][name]
+            stock = medians["stock"][name]
+            print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
+                  f"{candidate/base:.2f}× | {stock/1000:.3f} | {candidate/stock:.2f}× |")
 
 
 def main(argv=None):
@@ -213,14 +284,17 @@ def main(argv=None):
         root = Path(directory)
         databases = {arm: root / f"{arm}.db" for arm in binaries}
         index_databases = {arm: root / f"{arm}-index.db" for arm in binaries}
+        update_databases = {arm: root / f"{arm}-update.db" for arm in binaries}
         fixture = root / "index-fixture.sql"
         index_cases = index_fixture(fixture, args.rows)
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
             prepare(binary, databases[arm], args.rows)
             prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
+            prepare_updates(binary, update_databases[arm], stock=arm == "stock")
         sizes = {arm: db.stat().st_size for arm, db in databases.items()}
         sizes.update({f"{arm}-index": db.stat().st_size for arm, db in index_databases.items()})
+        sizes.update({f"{arm}-update": db.stat().st_size for arm, db in update_databases.items()})
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
             for arm in order:
@@ -228,6 +302,8 @@ def main(argv=None):
                 measured = measure_queries(binaries[arm], databases[arm], args.rows, args.cache_kib)
                 measured.update(measure_index_queries(binaries[arm], index_databases[arm],
                                                       index_cases, args.cache_kib))
+                measured.update(measure_updates(binaries[arm], update_databases[arm],
+                                                root / f"{arm}-update-{trial}.db"))
                 samples[arm].append(measured)
         write_results(samples, args.rows, args.cache_kib, sizes,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),

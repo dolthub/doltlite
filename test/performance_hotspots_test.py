@@ -18,7 +18,7 @@ import performance_hotspots as hotspots
 class HotspotTests(unittest.TestCase):
     def setUp(self):
         self.names = ("scan_first", "scan_repeat", "point_10000",
-                      "index_scan_row_fetch", "index_scan")
+                      "index_scan_row_fetch", "index_scan", "bulk_update_text_pk")
         self.cases = [("scan_first", "SELECT 42;", "42"),
                       ("scan_repeat", "SELECT 42;", "42")]
         self.output = ("BEGIN scan_first\n42\n"
@@ -48,7 +48,7 @@ class HotspotTests(unittest.TestCase):
             fixture = Path(directory) / "fixture.sql"
             cases = hotspots.index_fixture(fixture, 2051)
             db.executescript(fixture.read_text().removeprefix(".bail on\n"))
-            self.assertEqual([case[0] for case in cases], list(self.names[3:]))
+            self.assertEqual([case[0] for case in cases], list(self.names[3:5]))
             for name, queries, expected in cases:
                 self.assertEqual(len(expected), 1000)
                 results = ["|".join(map(str, db.execute(query).fetchone()))
@@ -62,7 +62,7 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "fixture.sql"
             fixture.touch()
-            for name in self.names[3:]:
+            for name in self.names[3:5]:
                 with self.subTest(name=name), patch.object(hotspots, "run", return_value=""), \
                      patch.object(hotspots, "sql", side_effect=["1|1024\nok\n", "SCAN orders\n"]):
                     with self.assertRaisesRegex(ValueError, "unexpected .* plan"):
@@ -103,13 +103,15 @@ class HotspotTests(unittest.TestCase):
             result = Path(directory) / "results.tsv"
             raw = Path(directory) / "samples.tsv"
             values = {name: 100000 for name in self.names[:3]}
-            index_values = {name: 100000 for name in self.names[3:]}
+            index_values = {name: 100000 for name in self.names[3:5]}
             with patch.object(hotspots, "run", return_value="validated") as run, \
                  patch.object(hotspots, "prepare", side_effect=lambda binary, db, rows: db.touch()), \
                  patch.object(hotspots, "measure_queries", side_effect=lambda *args: dict(values)) as measure, \
                  patch.object(hotspots, "index_fixture", return_value=[]), \
                  patch.object(hotspots, "prepare_index_queries", side_effect=lambda binary, db, *args: db.touch()), \
                  patch.object(hotspots, "measure_index_queries", return_value=index_values) as index_measure, \
+                 patch.object(hotspots, "prepare_updates", side_effect=lambda binary, db, **kw: db.touch()), \
+                 patch.object(hotspots, "measure_updates", return_value={hotspots.UPDATE_NAME: 100000}) as updates, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
@@ -120,9 +122,12 @@ class HotspotTests(unittest.TestCase):
                              ["base", "candidate", "stock", "stock", "candidate", "base"])
             self.assertEqual([call.args[0].name for call in index_measure.call_args_list],
                              ["base", "candidate", "stock", "stock", "candidate", "base"])
+            self.assertEqual([call.args[0].name for call in updates.call_args_list],
+                             ["base", "candidate", "stock", "stock", "candidate", "base"])
+            self.assertEqual(len({call.args[2] for call in updates.call_args_list}), 6)
             self.assertEqual(result.read_text(), "".join(
-                f"queries\t{name}\t100000\t100000\n" for name in self.names))
-            self.assertEqual(len(raw.read_text().splitlines()), 11)
+                f"{hotspots.section(name)}\t{name}\t100000\t100000\n" for name in self.names))
+            self.assertEqual(len(raw.read_text().splitlines()), 13)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -140,15 +145,16 @@ class HotspotTests(unittest.TestCase):
             with contextlib.redirect_stdout(report):
                 hotspots.write_results(samples, 262144, 65536, {"candidate": 300000000}, result, raw)
             self.assertEqual(result.read_text(), "".join(
-                f"queries\t{name}\t120000\t240000\n" for name in self.names))
+                f"{hotspots.section(name)}\t{name}\t120000\t240000\n" for name in self.names))
             self.assertIn("240.000 | 2.00× | 50.000 | 4.80×", report.getvalue())
             self.assertIn("### Large Table Scans\n", report.getvalue())
-            self.assertEqual(report.getvalue().count("| Workload |"), 1)
+            self.assertIn("### Small Table Updates\n", report.getvalue())
+            self.assertEqual(report.getvalue().count("| Workload |"), 2)
             self.assertEqual([line.split("|")[1].strip() for line in report.getvalue().splitlines()
-                              if line.startswith("| ")][1:], list(self.names))
+                              if line.startswith("| ") and not line.startswith("| Workload |")], list(self.names))
             for name in self.names:
                 self.assertIn(f"| {name} |", report.getvalue())
-                self.assertIn(f"queries\t{name}\t3\t120000\t900000\t55000\n", raw.read_text())
+                self.assertIn(f"{hotspots.section(name)}\t{name}\t3\t120000\t900000\t55000\n", raw.read_text())
             self.assertNotIn("Large Table Appends", report.getvalue())
             self.assertNotIn("—", report.getvalue())
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
@@ -157,6 +163,65 @@ class HotspotTests(unittest.TestCase):
             self.assertTrue(analysis["section_failures"])
             self.assertIn(("hotspots", "queries", "index_scan_row_fetch"),
                           analysis["individual_failures"])
+            self.assertIn(("hotspots", "updates", "bulk_update_text_pk"),
+                          analysis["individual_failures"])
+
+    def update_output(self):
+        return ("BEGIN bulk_update_text_pk\n"
+                "Run Time: real 0.000000 user 0.000000 sys 0.000000\n"
+                "Run Time: real 0.020000 user 0.020000 sys 0.000000\n"
+                "Run Time: real 0.001000 user 0.000000 sys 0.001000\n"
+                "END bulk_update_text_pk\n5000|5000|320000\nok\n")
+
+    def test_update_timing_and_result_validation(self):
+        output = self.update_output()
+        self.assertEqual(hotspots.parse_update_session(output), 21000)
+        for bad in ("", output.replace("5000|5000", "5000|0"),
+                    output.replace("ok\n", "corrupt\n"),
+                    output.replace("0.020000", "0.000000").replace("0.001000", "0.000000"),
+                    output.replace("BEGIN bulk_update_text_pk", "START"),
+                    output.replace("END bulk_update_text_pk", "END other"),
+                    output.replace("Run Time: real 0.000000 user 0.000000 sys 0.000000\n", ""),
+                    output + "unexpected\n"):
+            with self.subTest(output=bad), self.assertRaises(ValueError):
+                hotspots.parse_update_session(bad)
+
+    def test_update_fixture_and_expected_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "seed.db"
+            def execute(_binary, dbpath, statements):
+                with sqlite3.connect(dbpath) as db:
+                    if statements == hotspots.update_check():
+                        return "".join("|".join(map(str, row)) + "\n"
+                                       for query in statements.splitlines()
+                                       for row in db.execute(query))
+                    db.executescript(statements)
+                    return ""
+            with patch.object(hotspots, "sql", side_effect=execute):
+                hotspots.prepare_updates(Path("stock"), path, stock=True)
+            with sqlite3.connect(path) as db:
+                db.execute("UPDATE accounts SET balance=balance+1")
+                self.assertEqual(db.execute("SELECT count(*),sum(balance),sum(length(payload)) "
+                                            "FROM accounts").fetchone(), (5000, 5000, 320000))
+                self.assertEqual(db.execute("SELECT count(DISTINCT id) FROM accounts").fetchone(), (5000,))
+
+    def test_updates_use_fresh_copy_and_verify_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            seed = root / "seed.db"
+            seed.write_bytes(b"fixture")
+            result = "5000|5000|320000\nok\n"
+            with patch.object(hotspots, "sql", side_effect=[self.update_output(), result]) as sql:
+                measured = hotspots.measure_updates(Path("engine"), seed, root / "trial.db")
+            self.assertEqual(measured, {"bulk_update_text_pk": 21000})
+            self.assertEqual((root / "trial.db").read_bytes(), seed.read_bytes())
+            self.assertIn("BEGIN;\nUPDATE accounts SET balance=balance+1;\nCOMMIT;",
+                          sql.call_args_list[0].args[2])
+            self.assertIn("PRAGMA synchronous=FULL;", sql.call_args_list[0].args[2])
+            self.assertEqual(sql.call_args_list[1].args[2], hotspots.update_check())
+            with patch.object(hotspots, "sql", side_effect=[self.update_output(), "5000|0|320000\nok\n"]), \
+                 self.assertRaisesRegex(ValueError, "survive reopen"):
+                hotspots.measure_updates(Path("engine"), seed, root / "bad.db")
 
     def test_hotspot_failure_reaches_existing_gate(self):
         workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()
