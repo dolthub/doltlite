@@ -1425,6 +1425,7 @@ int mergeCatalogPass1(
   c.pazReindex = pazReindex; c.pnReindex = pnReindex;
 
   rc = mergePass1CheckIndexOverRenamedColumn(&c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckIndexOverDivergentAdd(&c);
   if( rc==SQLITE_OK ) rc = mergePass1CheckTriggerOverRenamedTable(&c);
   if( rc==SQLITE_OK ) rc = mergePass1CheckRowEditOfDroppedColumn(&c);
   if( rc==SQLITE_OK ) rc = mergePass1CheckDuplicateIndexColumns(&c);

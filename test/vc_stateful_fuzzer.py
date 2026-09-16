@@ -7,12 +7,38 @@ import sys
 import tempfile
 import time
 
-# Autocommit merge refusals roll back whole; dolt_pull's merge half is the same. Prefix matches those errors.
-MERGE_ROLLED_BACK = ("cannot merge:",)
+# Autocommit merge refusals roll back whole; dolt_pull's merge half is the same.
+# UNIQUE/CHECK/FK on the extra shape tables also land here: autocommit merge
+# with conflicts or constraint violations is not a fuzzer failure.
+MERGE_ROLLED_BACK = (
+    "cannot merge:",
+    "conflict",
+    "constraint violation",
+    "transaction rolled back",
+)
 
 
 def sql_quote(s):
     return "'" + s.replace("'", "''") + "'"
+
+
+def resolve_engine(path):
+    """Windows CI wraps the engine in a bash script Python cannot CreateProcess.
+
+    platform-test.yml sets DOLTLITE to doltlite-no-msys-conv and the PE path in
+    DOLTLITE_SYSTEM. Prefer that, then a sibling doltlite.exe, then `path`.
+    """
+    system = os.environ.get("DOLTLITE_SYSTEM")
+    if system:
+        return system
+    if not path:
+        return path
+    if path.lower().endswith(".exe"):
+        return path
+    sibling = os.path.join(os.path.dirname(os.path.abspath(path)) or ".", "doltlite.exe")
+    if os.path.isfile(sibling):
+        return sibling
+    return path
 
 
 def db_for_branch(db_path, branch):
@@ -184,15 +210,16 @@ def assert_rows(doltlite, db_path, branch, model):
 
 
 def assert_hash_shape(doltlite, db_path, branch):
-    h = query_scalar(
-        doltlite,
-        db_path,
-        branch,
-        "SELECT dolt_hashof_table('kv');",
-        "hash_shape",
-    )
-    if len(h) != 40 or any(c not in "0123456789abcdef" for c in h):
-        raise AssertionError("bad table hash for %s: %r" % (branch, h))
+    for table in ("kv",) + SHAPE_TABLES:
+        h = query_scalar(
+            doltlite,
+            db_path,
+            branch,
+            "SELECT dolt_hashof_table(%s);" % sql_quote(table),
+            "hash_shape_%s" % table,
+        )
+        if len(h) != 40 or any(c not in "0123456789abcdef" for c in h):
+            raise AssertionError("bad table hash for %s %s: %r" % (branch, table, h))
 
 
 def assert_clean_commit_stable(doltlite, db_path, branch):
@@ -229,9 +256,30 @@ def assert_refs(doltlite, db_path, branches, tags):
         )
 
 
+def assert_generated_indexes(doltlite, db_path, branch):
+    """VIRTUAL/STORED generated indexes must contain every table row."""
+    for table, index in (("t_gen", "t_gen_g"), ("t_int", "t_int_g")):
+        via_scan = query_scalar(
+            doltlite, db_path, branch,
+            "SELECT count(*) FROM %s NOT INDEXED;" % table,
+            "gen_scan_%s" % table,
+        )
+        via_idx = query_scalar(
+            doltlite, db_path, branch,
+            "SELECT count(*) FROM %s INDEXED BY %s;" % (table, index),
+            "gen_idx_%s" % table,
+        )
+        if via_scan != via_idx:
+            raise AssertionError(
+                "generated index %s on %s disagrees with the table: "
+                "index=%s scan=%s" % (index, branch, via_idx, via_scan)
+            )
+
+
 def check_invariants(doltlite, db_path, branches, tags, model, rng):
     for branch in branches:
         assert_rows(doltlite, db_path, branch, model)
+        assert_generated_indexes(doltlite, db_path, branch)
     branch = rng.choice(branches)
     assert_hash_shape(doltlite, db_path, branch)
     assert_clean_commit_stable(doltlite, db_path, branch)
@@ -246,6 +294,7 @@ def check_invariants(doltlite, db_path, branches, tags, model, rng):
     if rng.randrange(4) == 0:
         assert_refs(doltlite, db_path, branches, tags)
     assert_related_consistent(doltlite, db_path, branch)
+    assert_generated_columns(doltlite, db_path, branch)
     assert_views_query(doltlite, db_path, branch)
     if rng.randrange(6) == 0:
         assert_triggers_fire(doltlite, db_path, branch)
@@ -422,16 +471,59 @@ def assert_shadow_tables_consistent(doltlite, db_path, branch):
         )
 
 
-INDEX_NAMES = ("child_grp", "child_with_parent", "child_without_parent")
+def secondary_index_hashes(doltlite, db_path, branch):
+    """Hash of every CREATE INDEX / UNIQUE INDEX, labeled by name.
+
+    Clustered PK tables (TEXT / composite / WITHOUT ROWID) are the table
+    itself. ADD COLUMN without a default leaves omitted-NULL encoding in those
+    trees; REINDEX rewrites the NULLs and dolt_hashof_table / dolt_hashof_db
+    move even though SELECT * does not. Secondary indexes have no such
+    rewrite, so a hash that moves is a stale entry.
+    """
+    sql = (
+        ".mode list\n"
+        ".separator |\n"
+        "SELECT name, dolt_hashof_index(name) FROM sqlite_schema\n"
+        " WHERE type='index' AND sql IS NOT NULL ORDER BY name;\n"
+    )
+    out = run_sql(
+        doltlite, db_for_branch(db_path, branch), sql, "secondary_index_hashes"
+    )
+    hashes = {}
+    for line in (out or "").splitlines():
+        parts = line.split("|", 1)
+        if len(parts) != 2:
+            continue
+        hashes[parts[0]] = parts[1]
+    return hashes
 
 
-def index_fingerprint(doltlite, db_path, branch):
-    """Hash of every index, the table that owns them, and the database."""
-    parts = ["dolt_hashof_index(%s)" % sql_quote(name) for name in INDEX_NAMES]
-    parts.append("dolt_hashof_table('child')")
-    parts.append("dolt_hashof_db()")
-    sql = "SELECT %s;" % " || '|' || ".join(parts)
-    return query_scalar(doltlite, db_path, branch, sql, "index_fingerprint")
+def logical_table_dumps(doltlite, db_path, branch):
+    """SELECT * of every fuzzed table, so a clustered PK rewrite cannot hide."""
+    dumps = {}
+    for table in ("kv", "child") + SHAPE_TABLES:
+        sql = (
+            ".headers off\n"
+            ".mode list\n"
+            ".separator |\n"
+            "SELECT * FROM %s ORDER BY 1, 2, 3;\n" % table
+        )
+        dumps[table] = run_sql(
+            doltlite, db_for_branch(db_path, branch), sql, "dump_%s" % table
+        ) or ""
+    return dumps
+
+
+def format_hash_diff(before, after):
+    keys = sorted(set(before) | set(after))
+    lines = []
+    for key in keys:
+        b = before.get(key)
+        a = after.get(key)
+        if b == a:
+            continue
+        lines.append("%s before=%s after=%s" % (key, b, a))
+    return "\n".join(lines) if lines else "(no labeled object changed)"
 
 
 def assert_reindex_preserves_answers(doltlite, db_path, branch):
@@ -448,10 +540,12 @@ def assert_reindex_preserves_answers(doltlite, db_path, branch):
         "(SELECT id FROM child WHERE parent_id IS NOT NULL ORDER BY id);"
     )
     before_rows = query_scalar(doltlite, db_path, branch, probe, "reindex_before")
-    before_hash = index_fingerprint(doltlite, db_path, branch)
+    before_hash = secondary_index_hashes(doltlite, db_path, branch)
+    before_dump = logical_table_dumps(doltlite, db_path, branch)
     run_sql(doltlite, db_for_branch(db_path, branch), "REINDEX;", "reindex_%s" % branch)
     after_rows = query_scalar(doltlite, db_path, branch, probe, "reindex_after")
-    after_hash = index_fingerprint(doltlite, db_path, branch)
+    after_hash = secondary_index_hashes(doltlite, db_path, branch)
+    after_dump = logical_table_dumps(doltlite, db_path, branch)
     if before_rows != after_rows:
         raise AssertionError(
             "REINDEX changed answers on %s\nbefore=%r after=%r"
@@ -460,8 +554,13 @@ def assert_reindex_preserves_answers(doltlite, db_path, branch):
     if before_hash != after_hash:
         raise AssertionError(
             "REINDEX changed an index hash on %s, so the stored index did not "
-            "match its rows\nbefore=%r\nafter=%r"
-            % (branch, before_hash, after_hash)
+            "match its rows\n%s"
+            % (branch, format_hash_diff(before_hash, after_hash))
+        )
+    if before_dump != after_dump:
+        raise AssertionError(
+            "REINDEX changed table rows on %s\n%s"
+            % (branch, format_hash_diff(before_dump, after_dump))
         )
 
 
@@ -873,41 +972,230 @@ def connect_branch(doltlite, db_path, branches, model, rng, step):
         raise AssertionError("connect did not activate %s: %r" % (target, out))
 
 
+def aux_create_sql(name, rng):
+    templates = (
+        "CREATE TABLE {n}(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER);",
+        "CREATE TABLE {n}(k TEXT PRIMARY KEY, payload TEXT, n INTEGER);",
+        "CREATE TABLE {n}(a INTEGER NOT NULL, b INTEGER NOT NULL, payload TEXT, PRIMARY KEY(a, b));",
+        "CREATE TABLE {n}(k TEXT PRIMARY KEY, payload TEXT, n INTEGER) WITHOUT ROWID;",
+        "CREATE TABLE {n}(id INTEGER NOT NULL, payload TEXT, n INTEGER, PRIMARY KEY(id DESC)) WITHOUT ROWID;",
+        "CREATE TABLE {n}(id INTEGER PRIMARY KEY, n INTEGER, g INTEGER GENERATED ALWAYS AS (n + 1) STORED);",
+        "CREATE TABLE {n}(id INTEGER PRIMARY KEY, n INTEGER CHECK (n >= 0), payload TEXT);",
+        "CREATE TABLE {n}(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id), payload TEXT);",
+    )
+    return rng.choice(templates).format(n=name)
+
+
+def extra_columns(doltlite, db_path, branch, table):
+    cols = query_list(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT name FROM pragma_table_info(%s) ORDER BY cid;" % sql_quote(table),
+        "table_info_%s" % table,
+    )
+    return [c for c in cols if c.startswith("xcol_")]
+
+
+def data_columns(doltlite, db_path, branch, table):
+    cols = query_list(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT name FROM pragma_table_info(%s) WHERE pk=0 ORDER BY cid;"
+        % sql_quote(table),
+        "data_cols_%s" % table,
+    )
+    return [c for c in cols if c not in ("g",) and not c.startswith("xcol_")]
+
+
 def mutate_schema(doltlite, db_path, branch, rng, step):
     schema = query_schema(doltlite, db_path, branch)
     tables = [line.split("|", 2)[1] for line in schema if line.startswith("table|aux_")]
     indexes = [line.split("|", 2)[1] for line in schema if line.startswith("index|aux_idx_")]
+    shape_targets = list(SHAPE_TABLES) + tables
     actions = ["create_table"]
     if tables:
         actions.extend((
-            "add_column", "rename_table", "drop_table",
-            "create_index", "create_partial_index",
+            "add_column", "add_column_default", "add_column_notnull",
+            "rename_table", "drop_table",
+            "create_index", "create_partial_index", "add_unique",
         ))
+    if extra_columns(doltlite, db_path, branch, rng.choice(shape_targets) if shape_targets else "kv"):
+        actions.extend(("drop_column", "rename_column"))
+    else:
+        actions.extend(("add_column_default", "add_column_notnull"))
     if indexes:
         actions.append("drop_index")
     action = rng.choice(actions)
     name = "aux_%d" % step
+    sql = ""
     if action == "create_table":
-        sql = "CREATE TABLE %s(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER);" % name
+        sql = aux_create_sql(name, rng)
     elif action == "add_column":
-        sql = "ALTER TABLE %s ADD COLUMN c%d TEXT;" % (rng.choice(tables), step)
+        sql = "ALTER TABLE %s ADD COLUMN xcol_%d TEXT;" % (rng.choice(shape_targets), step)
+    elif action == "add_column_default":
+        sql = (
+            "ALTER TABLE %s ADD COLUMN xcol_%d TEXT DEFAULT %s;"
+            % (rng.choice(shape_targets), step, sql_quote("d%d" % step))
+        )
+    elif action == "add_column_notnull":
+        sql = (
+            "ALTER TABLE %s ADD COLUMN xcol_%d INTEGER NOT NULL DEFAULT 0;"
+            % (rng.choice(shape_targets), step)
+        )
+    elif action == "drop_column":
+        target = rng.choice(shape_targets)
+        extras = extra_columns(doltlite, db_path, branch, target)
+        if extras:
+            sql = "ALTER TABLE %s DROP COLUMN %s;" % (target, rng.choice(extras))
+    elif action == "rename_column":
+        target = rng.choice(shape_targets)
+        extras = extra_columns(doltlite, db_path, branch, target)
+        if extras:
+            sql = "ALTER TABLE %s RENAME COLUMN %s TO xcol_%d;" % (
+                target, rng.choice(extras), step,
+            )
     elif action == "rename_table":
         sql = "ALTER TABLE %s RENAME TO %s;" % (rng.choice(tables), name)
     elif action == "drop_table":
         sql = "DROP TABLE %s;" % rng.choice(tables)
     elif action == "create_index":
-        sql = "CREATE INDEX aux_idx_%d ON %s(payload);" % (step, rng.choice(tables))
-    elif action == "create_partial_index":
-        sql = (
-            "CREATE INDEX aux_idx_%d ON %s(payload) WHERE payload IS NOT NULL;"
-            % (step, rng.choice(tables))
+        target = rng.choice(tables)
+        cols = data_columns(doltlite, db_path, branch, target) or extra_columns(
+            doltlite, db_path, branch, target
         )
+        if cols:
+            sql = "CREATE INDEX aux_idx_%d ON %s(%s);" % (step, target, cols[0])
+    elif action == "create_partial_index":
+        target = rng.choice(tables)
+        cols = data_columns(doltlite, db_path, branch, target)
+        if cols:
+            sql = (
+                "CREATE INDEX aux_idx_%d ON %s(%s) WHERE %s IS NOT NULL;"
+                % (step, target, cols[0], cols[0])
+            )
+    elif action == "add_unique":
+        target = rng.choice(tables)
+        cols = extra_columns(doltlite, db_path, branch, target)
+        if cols:
+            sql = "CREATE UNIQUE INDEX aux_idx_%d ON %s(%s);" % (step, target, cols[0])
     else:
         sql = "DROP INDEX %s;" % rng.choice(indexes)
-    run_sql(doltlite, db_for_branch(db_path, branch), sql, "ddl_%s_%s" % (action, branch))
+    if not sql:
+        return
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        sql,
+        "ddl_%s_%s" % (action, branch),
+        allowed_errors=(
+            "duplicate column",
+            "no such column",
+            "cannot drop",
+            "UNIQUE constraint failed",
+            "error in view",
+        ),
+    )
     changed = query_schema(doltlite, db_path, branch)
-    if changed == schema or changed != query_schema(doltlite, db_path, branch):
+    if sql and changed == schema and action not in (
+        "drop_column", "rename_column", "add_unique",
+    ):
+        # drop/rename/unique can no-op when there is no extra column.
+        if action == "create_table" or action.startswith("add_column"):
+            raise AssertionError("DDL %s did not persist on %s" % (action, branch))
+    if changed != query_schema(doltlite, db_path, branch):
         raise AssertionError("DDL %s did not persist on %s" % (action, branch))
+
+
+def mutate_shapes(doltlite, db_path, branch, rng, step):
+    """Write a disjoint key range into every PK shape in the same repo."""
+    table = rng.choice(SHAPE_TABLES)
+    key = branch_base(branch) + rng.randrange(1, 80)
+    action = rng.choice(("insert", "update", "delete"))
+    val = "%s_%05d" % (branch, step)
+    n = rng.randrange(1000)
+    k = "k%d" % key
+    if action == "delete":
+        if table in ("t_text", "t_wor"):
+            sql = "DELETE FROM %s WHERE k=%s;" % (table, sql_quote(k))
+        elif table == "t_comp":
+            sql = "DELETE FROM t_comp WHERE a=%d AND b=%d;" % (key, branch_base(branch))
+        else:
+            sql = "DELETE FROM %s WHERE id=%d;" % (table, key)
+    elif table == "t_int":
+        sql = (
+            "INSERT INTO t_int(id, v, n) VALUES(%d, %s, %d) "
+            "ON CONFLICT(id) DO UPDATE SET v=excluded.v, n=excluded.n;"
+            % (key, sql_quote(val), n)
+        )
+    elif table == "t_text":
+        sql = (
+            "INSERT INTO t_text(k, v, n) VALUES(%s, %s, %d) "
+            "ON CONFLICT(k) DO UPDATE SET v=excluded.v, n=excluded.n;"
+            % (sql_quote(k), sql_quote(val), n)
+        )
+    elif table == "t_comp":
+        sql = (
+            "INSERT INTO t_comp(a, b, v, n) VALUES(%d, %d, %s, %d) "
+            "ON CONFLICT(a, b) DO UPDATE SET v=excluded.v, n=excluded.n;"
+            % (key, branch_base(branch), sql_quote(val), n)
+        )
+    elif table == "t_wor":
+        sql = (
+            "INSERT INTO t_wor(k, v, n) VALUES(%s, %s, %d) "
+            "ON CONFLICT(k) DO UPDATE SET v=excluded.v, n=excluded.n;"
+            % (sql_quote(k), sql_quote(val), n)
+        )
+    elif table == "t_desc":
+        sql = (
+            "INSERT INTO t_desc(id, v, n) VALUES(%d, %s, %d) "
+            "ON CONFLICT(id) DO UPDATE SET v=excluded.v, n=excluded.n;"
+            % (key, sql_quote(val), n)
+        )
+    else:
+        sql = (
+            "INSERT INTO t_gen(id, n) VALUES(%d, %d) "
+            "ON CONFLICT(id) DO UPDATE SET n=excluded.n;"
+            % (key, n)
+        )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        sql,
+        "mutate_shape_%s_%s" % (table, branch),
+        allowed_errors=("UNIQUE constraint failed", "CHECK constraint failed"),
+    )
+
+
+def assert_generated_columns(doltlite, db_path, branch):
+    """STORED and VIRTUAL generated columns must match their expressions."""
+    for table, sql in GENERATED_CHECKS:
+        bad = query_scalar(doltlite, db_path, branch, sql, "generated_%s" % table)
+        if bad != "0":
+            raise AssertionError(
+                "generated column drifted on %s %s: %s rows disagree"
+                % (branch, table, bad)
+            )
+
+
+def wrap_vc_rollback(doltlite, db_path, branch, model):
+    """BEGIN; dolt_add; ROLLBACK must leave rows and status untouched."""
+    before_rows = query_rows(doltlite, db_path, branch)
+    before_status = status_counts(doltlite, db_path, branch)
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        "BEGIN; SELECT dolt_add('-A'); ROLLBACK;",
+        "wrap_vc_rollback_%s" % branch,
+    )
+    after_rows = query_rows(doltlite, db_path, branch)
+    after_status = status_counts(doltlite, db_path, branch)
+    if after_rows != before_rows:
+        raise AssertionError("ROLLBACK of dolt_add changed rows on %s" % branch)
+    if after_status != before_status:
+        raise AssertionError("ROLLBACK of dolt_add changed status on %s" % branch)
+    assert_rows(doltlite, db_path, branch, model)
 
 
 def merge_branch(doltlite, db_path, branches, model, rng):
@@ -970,7 +1258,7 @@ def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
             "already exists",
             "cherry-pick of",
             "cherry-picking a merge commit",
-        ),
+        ) + MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, target, model)
 
@@ -1012,7 +1300,11 @@ def rebase_branch(doltlite, db_path, branches, model, rng, step):
         "SELECT dolt_rebase(%s);" % sql_quote(upstream),
         "rebase_%s_onto_%s" % (branch, upstream),
         timeout=30,
-        allowed_errors=("conflict", "rebase aborted", "didn't identify any commits"),
+        allowed_errors=(
+            "conflict",
+            "rebase aborted",
+            "didn't identify any commits",
+        ) + MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, branch, model)
 
@@ -1177,6 +1469,55 @@ def reset_remote_config(doltlite, db_path, remote_path):
 # violation: any violation the engine reports is a bug.
 SEED_PARENTS = 8
 
+# Several PK shapes live in the same repo so one run exercises integer, TEXT,
+# composite, WITHOUT ROWID and DESC keys together. Generated columns are
+# checked after every operation with `g IS NOT <expr>`.
+SHAPE_TABLES = ("t_int", "t_text", "t_comp", "t_wor", "t_desc", "t_gen")
+
+SHAPE_SCHEMA = (
+    "CREATE TABLE t_int(\n"
+    "  id INTEGER PRIMARY KEY,\n"
+    "  v TEXT,\n"
+    "  n INTEGER,\n"
+    "  g INTEGER GENERATED ALWAYS AS (n + 1) STORED\n"
+    ");\n"
+    "CREATE INDEX t_int_g ON t_int(g);\n"
+    "CREATE TABLE t_text(k TEXT PRIMARY KEY, v TEXT, n INTEGER);\n"
+    "CREATE TABLE t_comp(\n"
+    "  a INTEGER NOT NULL,\n"
+    "  b INTEGER NOT NULL,\n"
+    "  v TEXT,\n"
+    "  n INTEGER,\n"
+    "  PRIMARY KEY(a, b)\n"
+    ");\n"
+    "CREATE TABLE t_wor(k TEXT PRIMARY KEY, v TEXT, n INTEGER) WITHOUT ROWID;\n"
+    # PRIMARY KEY(id DESC) on a rowid table corrupts merge; WITHOUT ROWID is the
+    # DESC clustered-PK shape that still round-trips.
+    "CREATE TABLE t_desc(\n"
+    "  id INTEGER NOT NULL,\n"
+    "  v TEXT,\n"
+    "  n INTEGER,\n"
+    "  PRIMARY KEY(id DESC)\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE TABLE t_gen(\n"
+    "  id INTEGER PRIMARY KEY,\n"
+    "  n INTEGER,\n"
+    "  g INTEGER GENERATED ALWAYS AS (n * 2) VIRTUAL\n"
+    ");\n"
+    "CREATE INDEX t_gen_g ON t_gen(g);\n"
+    "INSERT INTO t_int(id, v, n) VALUES(0, 'base', 0);\n"
+    "INSERT INTO t_text VALUES('k0', 'base', 0);\n"
+    "INSERT INTO t_comp VALUES(0, 0, 'base', 0);\n"
+    "INSERT INTO t_wor VALUES('k0', 'base', 0);\n"
+    "INSERT INTO t_desc VALUES(0, 'base', 0);\n"
+    "INSERT INTO t_gen(id, n) VALUES(0, 0);\n"
+)
+
+GENERATED_CHECKS = (
+    ("t_int", "SELECT count(*) FROM t_int WHERE g IS NOT (n + 1);"),
+    ("t_gen", "SELECT count(*) FROM t_gen WHERE g IS NOT (n * 2);"),
+)
+
 RELATED_SCHEMA = (
     "CREATE TABLE parent(id INTEGER PRIMARY KEY, label TEXT);\n"
     "CREATE TABLE child(\n"
@@ -1213,7 +1554,7 @@ RELATED_SCHEMA = (
 # the same), so OR REPLACE inside a trigger can still raise UNIQUE.
 
 
-def setup_repo(doltlite, db_path, remote_path):
+def setup_repo(doltlite, db_path, remote_path=None):
     run_sql(
         doltlite,
         db_path,
@@ -1221,12 +1562,15 @@ def setup_repo(doltlite, db_path, remote_path):
             "CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);\n"
             "INSERT INTO kv VALUES(0, 'base', 0);\n"
             + RELATED_SCHEMA
+            + SHAPE_SCHEMA
             + "INSERT INTO parent SELECT value, 'p' || value "
               "FROM generate_series(1, %d);\n" % SEED_PARENTS
             + "SELECT dolt_commit('-A','-m','init');\n"
         ),
         "setup",
     )
+    if not remote_path:
+        return
     shutil.copyfile(db_path, remote_path)
     remote_url = "file://" + remote_path
     run_sql(
@@ -1240,8 +1584,10 @@ def setup_repo(doltlite, db_path, remote_path):
 OPERATIONS = (
     ["mutate"] * 4
     + ["mutate_related"] * 3
+    + ["mutate_shapes"] * 3
     + ["schema_objects"] * 2
     + ["ddl"] * 3
+    + ["wrap_vc_rollback"]
     + [
         "add",
         "commit_staged",
@@ -1276,9 +1622,42 @@ OPERATIONS = (
 )
 
 
+def setup_check(doltlite, db_path):
+    setup_repo(doltlite, db_path)
+    names = query_list(
+        doltlite,
+        db_path,
+        "main",
+        "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name;",
+        "setup_tables",
+    )
+    missing = [n for n in SHAPE_TABLES if n not in names]
+    if missing:
+        raise AssertionError("setup missing shape tables: %r have=%r" % (missing, names))
+    assert_generated_columns(doltlite, db_path, "main")
+    print("setup_tables " + " ".join(names))
+    print("generated_ok")
+    return 0
+
+
 def main():
-    doltlite = sys.argv[1] if len(sys.argv) > 1 else "./doltlite"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = [a for a in sys.argv[1:] if a.startswith("--")]
+    doltlite = resolve_engine(args[0] if args else "./doltlite")
+    setup_db = args[1] if len(args) > 1 else None
+    if "--setup-check" in flags:
+        tmp = None
+        db_path = setup_db
+        if not db_path:
+            tmp = tempfile.mkdtemp(prefix="doltlite-shape-")
+            db_path = os.path.join(tmp, "stateful.db")
+        try:
+            return setup_check(doltlite, db_path)
+        finally:
+            if tmp and os.environ.get("DOLTLITE_VC_STATEFUL_KEEP_DB") != "1":
+                shutil.rmtree(tmp, ignore_errors=True)
     seconds = int(os.environ.get("DOLTLITE_VC_STATEFUL_SECONDS", "600"))
+    max_steps = int(os.environ.get("DOLTLITE_VC_STATEFUL_STEPS", "0"))
     seed = int(os.environ.get("DOLTLITE_VC_STATEFUL_SEED", str(int(time.time()))))
     rng = random.Random(seed)
     tmp = tempfile.mkdtemp(prefix="doltlite-stateful-")
@@ -1297,12 +1676,15 @@ def main():
     current_op = "setup"
 
     print(
-        "stateful vc fuzzer: seed=%d seconds=%d db=%s" % (seed, seconds, db_path),
+        "stateful vc fuzzer: seed=%d seconds=%d steps=%s db=%s"
+        % (seed, seconds, max_steps or "unlimited", db_path),
         flush=True,
     )
     try:
         setup_repo(doltlite, db_path, remote_path)
         while time.time() < deadline:
+            if max_steps and step >= max_steps:
+                break
             step += 1
             if not operation_cycle:
                 operation_cycle = list(OPERATIONS)
@@ -1315,6 +1697,10 @@ def main():
                 mutate_branch(doltlite, db_path, branch, model, rng, step)
             elif op == "mutate_related":
                 mutate_related(doltlite, db_path, branch, rng, step)
+            elif op == "mutate_shapes":
+                mutate_shapes(doltlite, db_path, branch, rng, step)
+            elif op == "wrap_vc_rollback":
+                wrap_vc_rollback(doltlite, db_path, branch, model)
             elif op == "schema_objects":
                 mutate_schema_objects(doltlite, db_path, branch, rng, step)
             elif op == "reindex":
