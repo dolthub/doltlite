@@ -1017,6 +1017,7 @@ int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry)
     return found ? idx : mm->nEntries;
   }
   if( !mm->keepSorted && mm->orderDirty ){
+    if( mm->appendSorted ) return phys;
     return rankEntryWithoutOrder(mm, phys);
   }
   return mm->aPos[phys];
