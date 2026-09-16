@@ -12,7 +12,77 @@ static void btreeClearCatalogCache(Btree *p){
 
 static int registerDoltiteFunctions(sqlite3 *db);
 
+/* Which key columns collate NOCASE is all the scan needs, and a bitmask of
+** that survives the Index the collations came from. */
+#define NOCASE_MASK_MAX_COL 32
+
+static int recordHasNocaseNulSlow(const u8*, int, int,
+                                  const char *const *, int*);
+
+static u32 nocaseCollMask(int nKeyCol, const char *const *azColl, int *pOk){
+  u32 mask = 0;
+  int i;
+  *pOk = nKeyCol<=NOCASE_MASK_MAX_COL;
+  if( !*pOk ) return 0;
+  for(i=0; i<nKeyCol; i++){
+    if( sqlite3StrICmp(azColl[i], "NOCASE")==0 ) mask |= ((u32)1)<<i;
+  }
+  return mask;
+}
+
+int doltliteRecordMaskHasNocaseNul(
+  const u8 *pRec,
+  int nRec,
+  u32 nocaseMask,
+  int *pHas
+){
+  u64 nHdr;
+  u64 iData;
+  int iHdr;
+  int iField = 0;
+
+  *pHas = 0;
+  if( !pRec || nRec<=0 ) return SQLITE_CORRUPT;
+  iHdr = dlReadVarint(pRec, pRec+nRec, &nHdr);
+  if( iHdr<=0 || nHdr>(u64)nRec || nHdr<(u64)iHdr ) return SQLITE_CORRUPT;
+  iData = nHdr;
+  while( (u64)iHdr<nHdr ){
+    u64 serialType;
+    int nField;
+    int nVarint = dlReadVarint(pRec+iHdr, pRec+(int)nHdr, &serialType);
+    if( nVarint<=0 || (u64)(iHdr+nVarint)>nHdr ) return SQLITE_CORRUPT;
+    nField = dlSerialTypeLen(serialType);
+    if( nField<0 || (u64)nField>(u64)nRec-iData ) return SQLITE_CORRUPT;
+    if( iField<NOCASE_MASK_MAX_COL
+     && (nocaseMask & (((u32)1)<<iField))!=0
+     && serialType>=13 && (serialType&1)!=0
+     && nField>0 && memchr(pRec+(int)iData, 0, (size_t)nField)!=0 ){
+      *pHas = 1;
+    }
+    iHdr += nVarint;
+    iData += nField;
+    iField++;
+  }
+  return iData==(u64)nRec ? SQLITE_OK : SQLITE_CORRUPT;
+}
+
 static int recordHasNocaseNul(
+  const u8 *pRec,
+  int nRec,
+  int nKeyCol,
+  const char *const *azColl,
+  int *pHas
+){
+  int ok = 0;
+  u32 mask;
+  if( nKeyCol<=NOCASE_MASK_MAX_COL ){
+    mask = nocaseCollMask(nKeyCol, azColl, &ok);
+    if( ok ) return doltliteRecordMaskHasNocaseNul(pRec, nRec, mask, pHas);
+  }
+  return recordHasNocaseNulSlow(pRec, nRec, nKeyCol, azColl, pHas);
+}
+
+static int recordHasNocaseNulSlow(
   const u8 *pRec,
   int nRec,
   int nKeyCol,
@@ -123,10 +193,52 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
   }
   prollyCursorClose(&cur);
   if( rc==SQLITE_OK ){
+    int ok = 0;
+    u32 mask = nocaseCollMask(nKeyCol, azColl, &ok);
     pTE->nocaseNulRoot = pTE->root;
     pTE->nocaseNulState = *pHas ? 2 : 1;
+    pTE->nocaseNulMask = mask;
+    pTE->nocaseNulMaskValid = (u8)ok;
   }
   return rc;
+}
+
+/* A flush makes the new tree the old one plus these edits, so a memo saying
+** the tree holds no NOCASE NUL still holds unless one of the inserts brings
+** one in -- which is cheap to check, where rescanning the index is not.
+** Deletes can only remove such a key, so ignoring them errs toward a rescan.
+** Only the negative answer carries: a tree that had one may have just lost
+** it, and saying so without looking would cost plan quality. */
+void doltliteBtreeCarryNocaseNulMemo(
+  struct TableEntry *pTE,
+  ProllyMutMap *pMap,
+  const ProllyHash *pNewRoot
+){
+  int i;
+  if( !pTE ) return;
+  if( pTE->nocaseNulState!=1
+   || !pTE->nocaseNulMaskValid
+   || prollyHashCompare(&pTE->nocaseNulRoot, &pTE->root)!=0 ){
+    goto drop;
+  }
+  if( pMap ){
+    for(i=0; i<pMap->nEntries; i++){
+      ProllyMutMapEntry *pEntry = &pMap->aEntries[i];
+      int has = 0;
+      if( pEntry->op!=PROLLY_EDIT_INSERT || pEntry->nVal<=0 ) continue;
+      if( doltliteRecordMaskHasNocaseNul(pEntry->pVal, pEntry->nVal,
+                                         pTE->nocaseNulMask, &has)!=SQLITE_OK
+       || has ){
+        goto drop;
+      }
+    }
+  }
+  pTE->nocaseNulRoot = *pNewRoot;
+  return;
+
+drop:
+  pTE->nocaseNulState = 0;
+  pTE->nocaseNulMaskValid = 0;
 }
 
 static int btreeApplyChunkSourceError(

@@ -289,6 +289,25 @@ fi
 
 assert_ratio "nocase_plan_50_to_800_statements" "$T_NC_50" "$T_NC_800" 3
 
+# Each commit moves the index root, so a memo keyed on it is only useful if it
+# survives the flush. Autocommit pairs are the shape that exposes that: the
+# per-statement cost must not grow with how many commits came before.
+nocase_autocommit_ms() {
+  python3 -c "
+q = chr(39)
+for i in range(1, $1 + 1):
+    print(f'UPDATE t SET s={q}ch_{i}{q} WHERE id={i};')
+    print(f'SELECT count(*) FROM t WHERE s={q}key_{i}{q};')
+" > "$NC_SQL"
+  time_ms "$DOLTLITE '$DB_NC' < '$NC_SQL'"
+}
+
+T_NC_AC_25=$(nocase_autocommit_ms 25)
+T_NC_AC_400=$(nocase_autocommit_ms 400)
+echo "  25 autocommit pairs: ${T_NC_AC_25}ms"
+echo "  400 autocommit pairs: ${T_NC_AC_400}ms"
+assert_ratio "nocase_plan_25_to_400_autocommit" "$T_NC_AC_25" "$T_NC_AC_400" 4
+
 rm -f "$DB_NC" "$NC_SQL"
 
 echo ""

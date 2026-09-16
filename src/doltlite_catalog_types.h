@@ -20,6 +20,10 @@ struct TableEntry {
   u8 tableRootKnown;
   u8 isTableRoot;
   u8 nocaseNulState;
+  /* Which key columns of the index the memo was taken for collate NOCASE, so
+  ** a flush can re-answer it without the Index that supplied the names. */
+  u8 nocaseNulMaskValid;
+  u32 nocaseNulMask;
   ProllyHash nocaseNulRoot;
   char *zName;
   struct ProllyMutMap *pPending;
