@@ -735,6 +735,8 @@ void prollyInvalidateIncrblobCursors(BtShared*, Pgno, i64, int);
 void prollyInvalidateIncrblobCursorsByKey(BtShared*, Pgno, const u8*, int);
 void refreshCursorRoot(BtCursor*);
 int applyMutMapToTableRoot(BtShared*, struct TableEntry*, ProllyMutMap*);
+void doltliteBtreeCarryNocaseNulMemo(struct TableEntry*, ProllyMutMap*,
+                                     const ProllyHash*);
 int flushAllPending(Btree*, BtShared*, Pgno);
 int flushDeferredEdits(Btree*, BtShared*);
 int saveAllCursors(Btree*, BtShared*, Pgno, BtCursor*);

@@ -103,4 +103,40 @@ run_test_lastline "nocase_nul_integrity_check" "
 PRAGMA integrity_check;
 " "ok" "$NULDB"
 
+# A commit moves the index root, and the answer is carried across the flush by
+# re-reading only the flushed inserts. Committing between probes must not
+# change what the planner concludes, in either direction.
+run_test "nocase_nul_absent_survives_commits" "
+CREATE TABLE n2(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+INSERT INTO n2 VALUES(1,'aa'),(2,'bb');
+CREATE INDEX i_n2 ON n2(s);
+EXPLAIN QUERY PLAN SELECT s FROM n2 ORDER BY s;
+INSERT INTO n2 VALUES(3,'cc');
+INSERT INTO n2 VALUES(4,'dd');
+EXPLAIN QUERY PLAN SELECT s FROM n2 ORDER BY s;
+" "QUERY PLAN
+\`--SCAN n2 USING COVERING INDEX i_n2
+QUERY PLAN
+\`--SCAN n2 USING COVERING INDEX i_n2" "$NULDB"
+
+run_test "nocase_nul_committed_after_clean_probe_is_seen" "
+INSERT INTO n2 VALUES(5,'e'||char(0)||'e');
+EXPLAIN QUERY PLAN SELECT s FROM n2 ORDER BY s;
+" "QUERY PLAN
+|--SCAN n2
+\`--USE TEMP B-TREE FOR ORDER BY" "$NULDB"
+
+run_test "nocase_nul_multicolumn_index_commits" "
+CREATE TABLE n3(a TEXT COLLATE NOCASE, b TEXT COLLATE NOCASE, PRIMARY KEY(a,b));
+INSERT INTO n3 VALUES('p','q'),('r','s');
+CREATE INDEX i_n3 ON n3(b,a);
+EXPLAIN QUERY PLAN SELECT b,a FROM n3 ORDER BY b,a;
+INSERT INTO n3 VALUES('x','y'||char(0)||'y');
+EXPLAIN QUERY PLAN SELECT b,a FROM n3 ORDER BY b,a;
+" "QUERY PLAN
+\`--SCAN n3 USING COVERING INDEX i_n3
+QUERY PLAN
+|--SCAN n3 USING COVERING INDEX i_n3
+\`--USE TEMP B-TREE FOR ORDER BY" "$NULDB"
+
 dltest_finish
