@@ -4,6 +4,7 @@ import argparse
 import math
 import os
 from pathlib import Path
+import random
 import re
 import statistics
 import subprocess
@@ -40,6 +41,8 @@ def parse_session(output, workloads):
     lines = output.splitlines()
     times = {}
     for name, _query, expected in workloads:
+        if isinstance(expected, str):
+            expected = [expected]
         if not lines or lines.pop(0) != f"BEGIN {name}":
             raise ValueError(f"missing start marker for {name}: {output}")
         values = []
@@ -51,10 +54,10 @@ def parse_session(output, workloads):
                 measured.append(positive_us(match[1]))
             else:
                 values.append(line)
-        if not lines or len(measured) != 1 or values != [expected]:
+        if not lines or len(measured) != len(expected) or values != expected:
             raise ValueError(f"invalid timing or result for {name}: {output}")
         lines.pop(0)
-        times[name] = measured[0]
+        times[name] = sum(measured)
     if lines:
         raise ValueError(f"unexpected session output: {lines}")
     return times
@@ -73,7 +76,10 @@ def workloads(rows):
 
 
 def measure_queries(binary, db, rows, cache_kib):
-    cases = workloads(rows)
+    return measure_cases(binary, db, workloads(rows), cache_kib)
+
+
+def measure_cases(binary, db, cases, cache_kib):
     statements = [".headers off", ".mode list", ".output /dev/null",
                   "PRAGMA mmap_size=0;", ".output stdout",
                   f"PRAGMA cache_size=-{cache_kib};",
@@ -94,6 +100,67 @@ def prepare(binary, db, rows):
     sql(binary, db, "\n".join(statements))
     if db.stat().st_size < rows * PAYLOAD_BYTES:
         raise ValueError(f"fixture unexpectedly smaller than its payload: {db}")
+
+
+def index_fixture(path, rows):
+    customers = min(2048, rows)
+    expected = [[0, 0, 0, 0, 0] for _ in range(customers)]
+    rng = random.Random(20260916)
+    with path.open("w") as output:
+        output.write(".bail on\nCREATE TABLE orders("
+                     "id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, "
+                     "amount_cents INTEGER NOT NULL, description TEXT NOT NULL);\n")
+        for first in range(1, rows + 1, 1024):
+            values = []
+            for row_id in range(first, min(first + 1024, rows + 1)):
+                customer = (row_id - 1) % customers
+                amount = row_id * 37 % 100000
+                description = rng.randbytes(PAYLOAD_BYTES // 2).hex()
+                values.append(f"({row_id},{customer},{amount},'{description}')")
+                totals = expected[customer]
+                totals[0] += 1
+                totals[1] += amount
+                totals[2] += len(description)
+                totals[3] += ord(description[0]) + ord(description[-1])
+                totals[4] += row_id
+            output.write("INSERT INTO orders VALUES\n" + ",\n".join(values) + ";\n")
+        output.write("CREATE INDEX orders_customer ON orders(customer_id);\nANALYZE;\n")
+    cases = []
+    for name, columns, fields in (
+        ("index_scan_row_fetch", "count(*),sum(amount_cents),sum(length(description)),"
+         "sum(unicode(substr(description,1,1))+unicode(substr(description,-1,1)))", (0, 1, 2, 3)),
+        ("index_scan", "count(*),sum(id)", (0, 4)),
+    ):
+        queries, results = [], []
+        for i in range(1000):
+            customer = i * 137 % customers
+            queries.append(f"SELECT {columns} FROM orders WHERE customer_id={customer};")
+            results.append("|".join(str(expected[customer][field]) for field in fields))
+        cases.append((name, "\n".join(queries), results))
+    return cases
+
+
+def prepare_index_queries(binary, db, fixture, rows, cases):
+    with fixture.open() as source:
+        output = run([str(binary), str(db)], stdin=source)
+    if output.strip():
+        raise ValueError(f"unexpected index fixture output: {output}")
+    check = sql(binary, db, "SELECT count(*),sum(length(description)) FROM orders;\n"
+                "PRAGMA integrity_check;")
+    if check != f"{rows}|{rows * PAYLOAD_BYTES}\nok\n":
+        raise ValueError(f"invalid index fixture: {check}")
+    for name, query, _expected in cases:
+        plan = sql(binary, db, "EXPLAIN QUERY PLAN " + query.splitlines()[0])
+        index = "COVERING INDEX" if name == "index_scan" else "INDEX"
+        if f"SEARCH orders USING {index} orders_customer (customer_id=?)" not in plan:
+            raise ValueError(f"unexpected {name} plan: {plan}")
+
+
+def measure_index_queries(binary, db, cases, cache_kib):
+    measured = {}
+    for case in cases:
+        measured.update(measure_cases(binary, db, [case], cache_kib))
+    return measured
 
 
 def write_results(samples, rows, cache_kib, sizes, result_path, sample_path):
@@ -145,15 +212,22 @@ def main(argv=None):
     with tempfile.TemporaryDirectory(prefix="doltlite-hotspots-") as directory:
         root = Path(directory)
         databases = {arm: root / f"{arm}.db" for arm in binaries}
+        index_databases = {arm: root / f"{arm}-index.db" for arm in binaries}
+        fixture = root / "index-fixture.sql"
+        index_cases = index_fixture(fixture, args.rows)
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
             prepare(binary, databases[arm], args.rows)
+            prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
         sizes = {arm: db.stat().st_size for arm, db in databases.items()}
+        sizes.update({f"{arm}-index": db.stat().st_size for arm, db in index_databases.items()})
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
             for arm in order:
                 print(f"Hotspots trial {trial+1}/{args.runs}: {arm}", file=sys.stderr, flush=True)
                 measured = measure_queries(binaries[arm], databases[arm], args.rows, args.cache_kib)
+                measured.update(measure_index_queries(binaries[arm], index_databases[arm],
+                                                      index_cases, args.cache_kib))
                 samples[arm].append(measured)
         write_results(samples, args.rows, args.cache_kib, sizes,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),

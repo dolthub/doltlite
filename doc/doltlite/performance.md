@@ -228,12 +228,12 @@ than the wrapped write workloads.
 
 [performance_hotspots.py](../../test/performance_hotspots.py) supplements the
 SQL workloads with large-table reads that expose performance gaps against
-stock SQLite. Its PR comment has one **Large Table Scans** table with all three
+stock SQLite. Its PR comment has one **Large Table Scans** table with all five
 metrics below, each compared with both the PR base and stock SQLite. It reports
 five-trial medians in milliseconds, verifies query results, and gates regressions
 against the PR base.
 
-The three read workloads use 262,144 integer-keyed rows with 1 KiB random BLOB
+The first three workloads use 262,144 integer-keyed rows with 1 KiB random BLOB
 payloads: 256 MiB of payload with a 64 MiB cache per connection. They run in the
 order below on each connection. SQL execution is timed; process startup,
 database open, and fixture construction are excluded. The OS file cache is not
@@ -258,6 +258,25 @@ Performs 10,000 primary-key lookups spread across the table by a deterministic
 key sequence, summing the retrieved payload lengths. The lookups execute inside
 one SQL statement after the two scans. The reported time covers all 10,000
 lookups, including tree traversal and chunk lookup.
+
+### `index_scan_row_fetch`
+
+Executes 1,000 customer lookups on a separate table of 262,144 orders with 1 KiB
+text descriptions and a secondary index on `customer_id`. Each query matches
+128 rows scattered across the primary keys and aggregates amounts, description
+lengths, and description characters. This exercises index traversal followed by
+table-row retrieval without transferring full descriptions to the client.
+
+### `index_scan`
+
+Executes the same 1,000 customer lookups, selecting `count(*)` and `sum(id)`.
+The customer index contains the primary key, so the query uses a covering index
+and does not fetch table rows. This measures index traversal and aggregation.
+
+Both index workloads use identical deterministic data across engines, a 64 MiB
+cache, and a fresh connection for each workload. Each reported sample sums the
+SQL timings of all 1,000 statements. The harness verifies every query result,
+database integrity, and the expected index or covering-index query plan.
 
 ## Version-control latency
 
