@@ -158,11 +158,54 @@ jobs:
     - name: Publish hotspot measurements
       if: always()
       run: |
-        report="$RUNNER_TEMP/hotspot-results/hotspots.md"
-        echo "Performance hotspots gate: ${{ steps.hotspots.outcome }}" >> "$GITHUB_STEP_SUMMARY"
-        if [ -f "$report" ]; then
-          cat "$report" | tee -a "$GITHUB_STEP_SUMMARY"
-        fi
+        results="$RUNNER_TEMP/hotspot-results"
+        mkdir -p "$results"
+        {
+          echo '<!-- benchmark:hotspots -->'
+          echo '**Gate:** ${{ steps.hotspots.outcome }} · [CI run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})'
+          echo ''
+          if [ -s "$results/hotspots.md" ]; then
+            cat "$results/hotspots.md"
+          else
+            echo '## Performance hotspots'
+            echo ''
+            echo 'No complete hotspot measurements were produced. See the CI run for details.'
+          fi
+        } > "$results/summary.md"
+        cat "$results/summary.md" | tee -a "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment PR with performance hotspots
+      if: always()
+      continue-on-error: true
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = `${process.env.RUNNER_TEMP}/hotspot-results/summary.md`;
+          if (!fs.existsSync(path) || !context.issue.number) {
+            console.log('No report or PR context — skipping comment');
+            return;
+          }
+          const body = fs.readFileSync(path, 'utf8');
+          const marker = '<!-- benchmark:hotspots -->';
+          const target = {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          };
+          const comments = await github.paginate(
+            github.rest.issues.listComments,
+            { ...target, issue_number: context.issue.number, per_page: 100 }
+          );
+          const existing = comments.find(comment => comment.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              ...target, comment_id: existing.id, body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              ...target, issue_number: context.issue.number, body,
+            });
+          }
 
     - name: Upload hotspot measurements
       if: always()
