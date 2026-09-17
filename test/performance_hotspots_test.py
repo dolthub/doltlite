@@ -110,6 +110,9 @@ class HotspotTests(unittest.TestCase):
                  patch.object(hotspots, "index_fixture", return_value=[]), \
                  patch.object(hotspots, "prepare_index_queries", side_effect=lambda binary, db, *args: db.touch()), \
                  patch.object(hotspots, "measure_index_queries", return_value=index_values) as index_measure, \
+                 patch.object(hotspots, "add_column_fixture", side_effect=lambda binary, db, rows: db.touch()), \
+                 patch.object(hotspots, "measure_add_column",
+                              return_value={"add_column_default": 100000}) as add_column_measure, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
@@ -120,9 +123,17 @@ class HotspotTests(unittest.TestCase):
                              ["base", "candidate", "stock", "stock", "candidate", "base"])
             self.assertEqual([call.args[0].name for call in index_measure.call_args_list],
                              ["base", "candidate", "stock", "stock", "candidate", "base"])
+            self.assertEqual([call.args[0].name for call in add_column_measure.call_args_list],
+                             ["base", "candidate", "stock", "stock", "candidate", "base"])
+            # Each trial mutates a fresh copy: the work db is never the fixture.
+            for call in add_column_measure.call_args_list:
+                self.assertNotEqual(call.args[1], call.args[2])
+                self.assertTrue(call.args[1].name.endswith("-add-column.db"), call.args[1])
+                self.assertTrue(call.args[2].name.endswith("-add-column-run.db"), call.args[2])
             self.assertEqual(result.read_text(), "".join(
-                f"queries\t{name}\t100000\t100000\n" for name in self.names))
-            self.assertEqual(len(raw.read_text().splitlines()), 11)
+                f"queries\t{name}\t100000\t100000\n" for name in self.names)
+                + "add_column\tadd_column_default\t100000\t100000\n")
+            self.assertEqual(len(raw.read_text().splitlines()), 13)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -157,6 +168,60 @@ class HotspotTests(unittest.TestCase):
             self.assertTrue(analysis["section_failures"])
             self.assertIn(("hotspots", "queries", "index_scan_row_fetch"),
                           analysis["individual_failures"])
+
+    def test_add_column_gets_its_own_section(self):
+        names = ("scan_first", "add_column_default")
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / "results.tsv"
+            raw = Path(directory) / "samples.tsv"
+            samples = {"baseline": [{"scan_first": 120000, "add_column_default": 500}],
+                       "candidate": [{"scan_first": 120000, "add_column_default": 130000}],
+                       "stock": [{"scan_first": 20000, "add_column_default": 400}]}
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                hotspots.write_results(samples, result, raw)
+            text = report.getvalue()
+            self.assertEqual(result.read_text(),
+                             "queries\tscan_first\t120000\t120000\n"
+                             "add_column\tadd_column_default\t500\t130000\n")
+            self.assertIn("add_column\tadd_column_default\t1\t500\t130000\t400\n", raw.read_text())
+            self.assertEqual(text.count("| Workload |"), 2)
+            self.assertLess(text.index("### Large Table Scans"), text.index("### Add Column With Default"))
+            scans, add_column = text.split("### Add Column With Default")
+            self.assertIn("| scan_first |", scans)
+            self.assertNotIn("| add_column_default |", scans)
+            self.assertIn("| add_column_default | 0.500 | 130.000 | 260.00× | 0.400 | 325.00× |", add_column)
+            self.assertNotIn("| scan_first |", add_column)
+            # The new section is gated like any other: a regression there is a failure.
+            parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
+            analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
+            self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
+            self.assertEqual(len(hotspots.SECTIONS), 2)
+
+    def test_measure_add_column_times_only_the_alter(self):
+        rows = 1000
+        session = ("BEGIN add_column_default\nRun Time: real 0.125000 user 0.1 sys 0.0\n"
+                   f"{rows}|{rows * hotspots.ADD_COLUMN_DEFAULT}\nEND add_column_default\n")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "fixture.db"
+            fixture.write_bytes(b"fixture")
+            work = Path(directory) / "work.db"
+            work.write_bytes(b"stale")
+            work.with_name("work.db-lock").write_bytes(b"")
+            with patch.object(hotspots, "sql", return_value=session) as sql:
+                times = hotspots.measure_add_column("bin", fixture, work, rows, 4096)
+            self.assertEqual(times, {"add_column_default": 125000})
+            self.assertEqual(work.read_bytes(), b"fixture")
+            self.assertFalse(work.with_name("work.db-lock").exists())
+            script = sql.call_args.args[2]
+            alter = f"ALTER TABLE ac ADD COLUMN z INTEGER NOT NULL DEFAULT {hotspots.ADD_COLUMN_DEFAULT};"
+            self.assertLess(script.index(".timer on"), script.index(alter))
+            self.assertLess(script.index(alter), script.index(".timer off"))
+            self.assertLess(script.index(".timer off"), script.index("SELECT count(*),sum(z) FROM ac;"))
+            # A wrong row count or default sum is not a timing.
+            bad = session.replace(f"{rows}|{rows * hotspots.ADD_COLUMN_DEFAULT}", f"{rows}|0")
+            with patch.object(hotspots, "sql", return_value=bad), self.assertRaises(ValueError):
+                hotspots.measure_add_column("bin", fixture, work, rows, 4096)
 
     def test_hotspot_failure_reaches_existing_gate(self):
         workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()

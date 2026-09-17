@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -15,6 +16,15 @@ import tempfile
 TEST_DIR = Path(__file__).resolve().parent
 PAYLOAD_BYTES = 1024
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
+ADD_COLUMN_DEFAULT = 7
+# Report sections, in the order they print. A workload belongs to the section
+# whose key prefixes its name; everything else is a query.
+SECTIONS = (("queries", "Large Table Scans"),
+            ("add_column", "Add Column With Default"))
+
+
+def section_of(name):
+    return "add_column" if name.startswith("add_column") else "queries"
 
 
 def run(command, **kwargs):
@@ -163,6 +173,40 @@ def measure_index_queries(binary, db, cases, cache_kib):
     return measured
 
 
+def add_column_fixture(binary, db, rows):
+    """A plain table the ALTER can run against. Stock records a non-NULL
+    default in the schema; doltlite writes it into every row, so the cost
+    scales with the table and the fixture only needs to be big enough for
+    that to show."""
+    sql(binary, db, f"""CREATE TABLE ac(id INTEGER PRIMARY KEY, k INTEGER NOT NULL,
+                                  s TEXT NOT NULL, d REAL NOT NULL);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
+INSERT INTO ac SELECT i,(i*7919)%1000,'str_'||((i*31)%50000),i*0.5 FROM c;""")
+    check = sql(binary, db, "SELECT count(*) FROM ac;")
+    if check != f"{rows}\n":
+        raise ValueError(f"invalid add-column fixture: {check}")
+
+
+def measure_add_column(binary, fixture, work, rows, cache_kib):
+    """ALTER mutates the table, so every trial starts from a fresh copy. The
+    verification query runs after the timer stops so only the ALTER counts."""
+    for stale in (work, work.with_name(work.stem + ".db-lock")):
+        if stale.exists():
+            stale.unlink()
+    shutil.copy(fixture, work)
+    name = "add_column_default"
+    expected = f"{rows}|{rows * ADD_COLUMN_DEFAULT}"
+    statements = [".headers off", ".mode list", ".output /dev/null",
+                  "PRAGMA mmap_size=0;", ".output stdout",
+                  f"PRAGMA cache_size=-{cache_kib};",
+                  "SELECT name FROM sqlite_schema WHERE 0;",
+                  f".print BEGIN {name}", ".timer on",
+                  f"ALTER TABLE ac ADD COLUMN z INTEGER NOT NULL DEFAULT {ADD_COLUMN_DEFAULT};",
+                  ".timer off", "SELECT count(*),sum(z) FROM ac;", f".print END {name}"]
+    return parse_session(sql(binary, work, "\n".join(statements)),
+                         [(name, None, expected)])
+
+
 def write_results(samples, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -172,24 +216,29 @@ def write_results(samples, result_path, sample_path):
     with result_path.open("w") as output, sample_path.open("w") as raw:
         raw.write("section\ttest\trun\tbaseline_us\tcandidate_us\tstock_us\n")
         for name in names:
-            output.write(f"queries\t{name}\t{medians['baseline'][name]:.0f}\t"
+            section = section_of(name)
+            output.write(f"{section}\t{name}\t{medians['baseline'][name]:.0f}\t"
                          f"{medians['candidate'][name]:.0f}\n")
             for i, candidate in enumerate(samples["candidate"]):
                 stock = samples["stock"][i][name]
-                raw.write(f"queries\t{name}\t{i+1}\t"
+                raw.write(f"{section}\t{name}\t{i+1}\t"
                           f"{samples['baseline'][i][name]}\t{candidate[name]}\t{stock}\n")
     print("## Performance hotspots")
     print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
-    print("\n### Large Table Scans")
-    print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
-    print("|---|---:|---:|---:|---:|---:|")
-    for name in names:
-        base, candidate = medians["baseline"][name], medians["candidate"][name]
-        stock = medians["stock"][name]
-        print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
-              f"{candidate/base:.2f}× | {stock/1000:.3f} | {candidate/stock:.2f}× |")
+    for section, title in SECTIONS:
+        section_names = [name for name in names if section_of(name) == section]
+        if not section_names:
+            continue
+        print(f"\n### {title}")
+        print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
+        print("|---|---:|---:|---:|---:|---:|")
+        for name in section_names:
+            base, candidate = medians["baseline"][name], medians["candidate"][name]
+            stock = medians["stock"][name]
+            print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
+                  f"{candidate/base:.2f}× | {stock/1000:.3f} | {candidate/stock:.2f}× |")
 
 
 def main(argv=None):
@@ -210,12 +259,14 @@ def main(argv=None):
         root = Path(directory)
         databases = {arm: root / f"{arm}.db" for arm in binaries}
         index_databases = {arm: root / f"{arm}-index.db" for arm in binaries}
+        add_column_databases = {arm: root / f"{arm}-add-column.db" for arm in binaries}
         fixture = root / "index-fixture.sql"
         index_cases = index_fixture(fixture, args.rows)
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
             prepare(binary, databases[arm], args.rows)
             prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
+            add_column_fixture(binary, add_column_databases[arm], args.rows)
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
             for arm in order:
@@ -223,6 +274,9 @@ def main(argv=None):
                 measured = measure_queries(binaries[arm], databases[arm], args.rows, args.cache_kib)
                 measured.update(measure_index_queries(binaries[arm], index_databases[arm],
                                                       index_cases, args.cache_kib))
+                measured.update(measure_add_column(binaries[arm], add_column_databases[arm],
+                                                   root / f"{arm}-add-column-run.db",
+                                                   args.rows, args.cache_kib))
                 samples[arm].append(measured)
         write_results(samples,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),
