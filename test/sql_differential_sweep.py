@@ -41,6 +41,12 @@ def run_engine(binary, db, sql):
     return proc.returncode, proc.stdout
 
 
+def is_clean_status(rc):
+    # Python uses a negative returncode for a POSIX signal death (SIGABRT is
+    # -6). Treat those as crashes, same as shell-style 128+ codes.
+    return 0 <= rc < 128
+
+
 def maybe_progress(done, total, seed, t0):
     if done != 1 and done != total and done % PROGRESS_EVERY != 0:
         return
@@ -102,7 +108,7 @@ def sweep(doltlite, sqlite3, first, last, groups):
             rc_dl, out_dl = run_engine(doltlite, dl_db, sql)
             rc_sq, out_sq = run_engine(sqlite3, sq_db, sql)
 
-            if rc_dl == rc_sq and rc_dl < 128 and out_dl == out_sq:
+            if rc_dl == rc_sq and is_clean_status(rc_dl) and out_dl == out_sq:
                 pass_n += 1
                 if b"Error" in out_dl or b"error" in out_dl:
                     errored += 1
