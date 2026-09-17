@@ -94,6 +94,36 @@ class SweepHarnessTest(unittest.TestCase):
             self.assertTrue(saved.is_file())
             self.assertIn("CREATE TABLE", saved.read_text())
 
+    def test_matching_crashes_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            stub = tmp / "engine"
+            write_stub(stub,
+                       "import sys\nsys.stdin.read()\nsys.stdout.write('1\\n')\n"
+                       "sys.exit(134)\n")
+            proc = self.run_sweep(1, 1, stub, stub)
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAIL: seed 1", proc.stdout)
+            self.assertIn("Results: 0 passed, 1 failed out of 1 seeds",
+                          proc.stdout)
+
+    @unittest.skipUnless(os.name == "posix", "signal return codes are POSIX")
+    def test_matching_signal_crashes_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            stub = tmp / "engine"
+            write_stub(stub,
+                       "import os, signal, sys\n"
+                       "sys.stdin.read()\n"
+                       "sys.stdout.write('1\\n')\n"
+                       "sys.stdout.flush()\n"
+                       "os.kill(os.getpid(), signal.SIGABRT)\n")
+            proc = self.run_sweep(1, 1, stub, stub)
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAIL: seed 1", proc.stdout)
+            self.assertIn("Results: 0 passed, 1 failed out of 1 seeds",
+                          proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
