@@ -4,8 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENG="${1:-${DOLTLITE:-$SCRIPT_DIR/../build/doltlite}}"
+# A named stock binary is used as given; only an unnamed one is searched
+# for, so a missing named binary reaches the skip below instead of a
+# fallback quietly standing in for it.
 STOCK="${2:-${SQLITE3:-}}"
-if [ -z "$STOCK" ] || [ ! -x "$STOCK" ]; then
+if [ -z "$STOCK" ]; then
   for c in "$SCRIPT_DIR/../build-stockref/sqlite3" ./sqlite3-stock; do
     if [ -x "$c" ]; then STOCK="$c"; break; fi
   done
