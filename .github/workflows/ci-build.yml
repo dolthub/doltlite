@@ -320,6 +320,9 @@ jobs:
           clang $TSAN_CFLAGS -I. -I../src \
             -o threadtest5 ../test/threadtest5.c ci-amalgamation.o \
             $TSAN_LDFLAGS -ldl -lpthread -lm -lz
+          clang $TSAN_CFLAGS -I. -I../src \
+            -o tsan_randomness_pid ../test/tsan_randomness_pid.c \
+            ci-amalgamation.o $TSAN_LDFLAGS -ldl -lpthread -lm -lz
           rm -f ci-amalgamation.o
           make -j2 CC=clang CFLAGS="$TSAN_CFLAGS" LDFLAGS="$TSAN_LDFLAGS" \
             doltlite doltlite-remotesrv vc_concurrency_test \

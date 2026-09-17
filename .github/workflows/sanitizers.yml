@@ -163,6 +163,11 @@ jobs:
         rm -f /tmp/doltlite-threadtest5.db
         ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
 
+    - name: Run PRNG reseed against concurrent opens
+      run: |
+        cd build
+        ./tsan_randomness_pid /tmp/doltlite-tsan-randomness-pid.db
+
     - name: Run version-control concurrency under TSan
       env:
         # Same reason threadtest5 above gets a longer busy window: three forked

@@ -6625,8 +6625,8 @@ static int unixOpen(
   ** the same instant might all reset the PRNG.  But multiple resets
   ** are harmless.
   */
-  if( randomnessPid!=osGetpid(0) ){
-    randomnessPid = osGetpid(0);
+  if( AtomicLoad(&randomnessPid)!=osGetpid(0) ){
+    AtomicStore(&randomnessPid, osGetpid(0));
     sqlite3_randomness(0,0);
   }
   memset(p, 0, sizeof(unixFile));
@@ -7139,7 +7139,7 @@ static int unixRandomness(sqlite3_vfs *NotUsed, int nBuf, char *zBuf){
   ** tests repeatable.
   */
   memset(zBuf, 0, nBuf);
-  randomnessPid = osGetpid(0);
+  AtomicStore(&randomnessPid, osGetpid(0));
 #if !defined(SQLITE_TEST) && !defined(SQLITE_OMIT_RANDOMNESS)
   {
     int fd, got;
