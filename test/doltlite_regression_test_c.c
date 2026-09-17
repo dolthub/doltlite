@@ -10845,6 +10845,46 @@ static void run_mutmap_append_sorted_order(void){
         prollyMutMapInsert(&mm, aKey3, sizeof(aKey3), 0,
                            aVal, sizeof(aVal))==SQLITE_OK);
   check("mutmap_append_sorted_flag_stays_set", mm.appendSorted);
+  check("mutmap_append_sorted_first_rank",
+        prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[0])==0);
+  check("mutmap_append_sorted_middle_rank",
+        prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[1])==1);
+  check("mutmap_append_sorted_last_rank",
+        prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[2])==2);
+  {
+    ProllyMutMap *pClone = 0;
+    check("mutmap_append_sorted_clone", prollyMutMapClone(&pClone, &mm)==SQLITE_OK);
+    if( pClone ){
+      for(i=0; i<3; i++){
+        check("mutmap_append_sorted_clone_rank",
+              prollyMutMapOrderIndexFromEntry(pClone, &pClone->aEntries[i])==i);
+      }
+      prollyMutMapFree(pClone);
+      sqlite3_free(pClone);
+    }
+  }
+  check("mutmap_append_sorted_delete",
+        prollyMutMapDelete(&mm, aKey2, sizeof(aKey2), 0)==SQLITE_OK);
+  check("mutmap_append_sorted_delete_rank",
+        mm.aEntries[1].op==PROLLY_EDIT_DELETE
+     && prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[1])==1
+     && prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[2])==2);
+  check("mutmap_append_sorted_reinsert",
+        prollyMutMapInsert(&mm, aKey2, sizeof(aKey2), 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  prollyMutMapPushSavepoint(&mm, 1);
+  check("mutmap_append_sorted_prepend",
+        prollyMutMapInsert(&mm, aKey0, sizeof(aKey0), 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  check("mutmap_append_sorted_prepend_rank",
+        !mm.appendSorted
+     && prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[3])==0
+     && prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[2])==3);
+  check("mutmap_append_sorted_rollback",
+        prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
+  check("mutmap_append_sorted_rollback_rank",
+        mm.nEntries==3
+     && prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[2])==2);
   prollyMutMapIterFirst(&it, &mm);
   check("mutmap_append_sorted_iter_first",
         prollyMutMapIterValid(&it)
