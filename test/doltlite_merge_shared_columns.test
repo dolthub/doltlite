@@ -1,0 +1,89 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+execsql {
+  CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT, n INTEGER) WITHOUT ROWID;
+  INSERT INTO t VALUES('k0','base',0);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('side');
+  ALTER TABLE t ADD COLUMN y TEXT;
+  ALTER TABLE t ADD COLUMN x INTEGER NOT NULL DEFAULT 0;
+  SELECT dolt_commit('-Am','ours');
+  SELECT dolt_checkout('side');
+  ALTER TABLE t ADD COLUMN x INTEGER NOT NULL DEFAULT 0;
+  SELECT dolt_commit('-Am','theirs');
+  SELECT dolt_checkout('main');
+  BEGIN;
+}
+do_test merge-shared-columns-merge {
+  lindex [catchsql {SELECT dolt_merge('side')}] 0
+} 0
+do_execsql_test merge-shared-columns-types {
+  SELECT k,v,n,typeof(y),x FROM t;
+  PRAGMA integrity_check;
+} {k0 base 0 null 0 ok}
+db close
+sqlite3 db test.db
+do_execsql_test merge-shared-columns-reopen {
+  SELECT k,v,n,typeof(y),x FROM t;
+  PRAGMA integrity_check;
+} {k0 base 0 null 0 ok}
+
+foreach kind {integer text without-rowid} {
+  foreach direction {forward reverse} {
+    foreach shared {one both} {
+      foreach unrelated {0 1} {
+        reset_db
+        set key {k TEXT PRIMARY KEY}
+        set suffix {}
+        if {$kind eq "integer"} {set key {k INTEGER PRIMARY KEY}}
+        if {$kind eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+        execsql "CREATE TABLE t($key, v TEXT, n INTEGER) $suffix"
+        execsql {
+          INSERT INTO t VALUES(0,'base',0),(1,'one',1),(2,'two',2);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+          ALTER TABLE t ADD COLUMN y TEXT;
+          ALTER TABLE t ADD COLUMN x INTEGER NOT NULL DEFAULT 0;
+          UPDATE t SET n=10 WHERE k=0;
+          UPDATE t SET x=11 WHERE k=1;
+          INSERT INTO t(k,v,n) VALUES(3,'ours',3);
+          SELECT dolt_commit('-Am','ours');
+          SELECT dolt_checkout('side');
+          ALTER TABLE t ADD COLUMN x INTEGER NOT NULL DEFAULT 0;
+        }
+        if {$shared eq "both"} {execsql {ALTER TABLE t ADD COLUMN y TEXT}}
+        if {$unrelated} {execsql {CREATE TABLE aux(id INTEGER PRIMARY KEY)}}
+        execsql {
+          UPDATE t SET v='theirs' WHERE k=0;
+          UPDATE t SET x=22 WHERE k=2;
+          INSERT INTO t(k,v,n) VALUES(4,'theirs',4);
+          SELECT dolt_commit('-Am','theirs');
+        }
+        set target main
+        set path test.db/side
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target side
+          set path test.db
+        }
+        set name merge-shared-columns-$kind-$direction-$shared-$unrelated
+        do_test $name-merge {
+          lindex [catchsql "SELECT dolt_merge('$target')"] 0
+        } 0
+        do_execsql_test $name-rows {
+          SELECT k,v,n,typeof(y),x FROM t ORDER BY k;
+        } {0 theirs 10 null 0 1 one 1 null 11 2 two 2 null 22 3 ours 3 null 0 4 theirs 4 null 0}
+        do_execsql_test $name-integrity {PRAGMA integrity_check} ok
+        db close
+        sqlite3 db $path
+        do_execsql_test $name-reopen {
+          SELECT k,v,n,typeof(y),x FROM t ORDER BY k;
+          PRAGMA integrity_check;
+        } {0 theirs 10 null 0 1 one 1 null 11 2 two 2 null 22 3 ours 3 null 0 4 theirs 4 null 0 ok}
+      }
+    }
+  }
+}
+
+finish_test

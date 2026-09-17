@@ -800,15 +800,9 @@ int tryResolveSchemaDivergence(
     return SQLITE_OK;
   }
 
-  if( nAddCols==0 && resolvedDivergence
-   && ppSchemaActions && pnSchemaActions ){
-    rc = recordSchemaAddColumns(ppSchemaActions, pnSchemaActions, zName, 0, 0);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-
   /* Record their deletions too, or sqlite_master conflicts over a
   ** table that merged cleanly. */
-  if( nAddCols>0 || nDropCols>0 || nRenameCols>0 ){
+  if( nAddCols>0 || nDropCols>0 || nRenameCols>0 || resolvedDivergence ){
     if( ppSchemaActions && pnSchemaActions ){
       rc = recordSchemaColumnChanges(ppSchemaActions, pnSchemaActions, zName,
                                      azAddCols, nAddCols,

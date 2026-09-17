@@ -776,9 +776,7 @@ int trySchemaColumnMerge(
           rc = SQLITE_ERROR;
           goto schema_merge_cleanup;
         }
-        if( strcmp(ourCol->zDef, aTheirs[i].zDef)!=0 ){
-          *pResolvedDivergence = 1;
-        }
+        *pResolvedDivergence = 1;
 
       }else if( i<nAnc
              && sqlite3_stricmp(aTheirs[i].zName, aAnc[i].zName)!=0
