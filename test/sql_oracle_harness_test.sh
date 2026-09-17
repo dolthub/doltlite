@@ -85,14 +85,32 @@ export candidate_output=$'first\nsecond (19)\n\n' reference_output=$'first\nseco
 check_case identical_multiline_output 0 success
 [ ! -e "$SQL_ORACLE_TMP/normalizations" ]
 export candidate_output=$'first (19)\nsecond' reference_output=$'first\nsecond'
-check_case normalized_success 0 success
-[ "$(wc -l < "$SQL_ORACLE_TMP/normalizations")" -eq 2 ]
+check_case success_result_code_suffix 1 success
+[ ! -e "$SQL_ORACLE_TMP/normalizations" ]
 export reference_output=$'first\nthird'
 check_case different_multiline_output 1 success
+export candidate_output=$'first\nsecond (19)' reference_output=$'first\nsecond'
+check_case last_row_result_code_suffix 1 success
+for prefix in 'ERROR: ' 'Error near line 2: ' 'Runtime error near line 2: '; do
+  export candidate_output="${prefix}data (19)" reference_output="${prefix}data"
+  check_case successful_error_like_row 1 success
+done
+export candidate_output='Error near line 2: data' reference_output='ERROR: data'
+check_case successful_error_like_prefix 1 success
 export candidate_rc=1 reference_rc=1
 export candidate_output='Error near line 2: shared error (19)'
 export reference_output="$candidate_output"
 check_case identical_errors_still_normalized 0 error 'ERROR: shared error'
+for prefix in 'ERROR: ' 'Error near line 2: ' 'Runtime error near line 2: '; do
+  export candidate_output="${prefix}shared error (19)" reference_output='ERROR: shared error'
+  check_case error_result_code_suffix 0 error 'ERROR: shared error'
+done
+export candidate_output=$'first (19)\nError near line 2: shared error (19)'
+export reference_output=$'first\nRuntime error near line 3: shared error'
+check_case differing_rows_before_error 1 error 'shared error'
+export candidate_output=$'Error near line 2: shared error (19)\nlast (19)'
+export reference_output=$'Runtime error near line 3: shared error\nlast'
+check_case differing_rows_after_error 1 error 'shared error'
 unset -f sed
 
 expect_startup_failure() {
