@@ -46,7 +46,7 @@ foreach kind {integer text without-rowid} {
           ALTER TABLE t ADD COLUMN y TEXT;
           ALTER TABLE t ADD COLUMN x INTEGER NOT NULL DEFAULT 0;
           UPDATE t SET n=10 WHERE k=0;
-          UPDATE t SET x=11 WHERE k=1;
+          UPDATE t SET n=11 WHERE k=1;
           INSERT INTO t(k,v,n) VALUES(3,'ours',3);
           SELECT dolt_commit('-Am','ours');
           SELECT dolt_checkout('side');
@@ -56,7 +56,7 @@ foreach kind {integer text without-rowid} {
         if {$unrelated} {execsql {CREATE TABLE aux(id INTEGER PRIMARY KEY)}}
         execsql {
           UPDATE t SET v='theirs' WHERE k=0;
-          UPDATE t SET x=22 WHERE k=2;
+          UPDATE t SET n=22 WHERE k=2;
           INSERT INTO t(k,v,n) VALUES(4,'theirs',4);
           SELECT dolt_commit('-Am','theirs');
         }
@@ -73,14 +73,14 @@ foreach kind {integer text without-rowid} {
         } 0
         do_execsql_test $name-rows {
           SELECT k,v,n,typeof(y),x FROM t ORDER BY k;
-        } {0 theirs 10 null 0 1 one 1 null 11 2 two 2 null 22 3 ours 3 null 0 4 theirs 4 null 0}
+        } {0 theirs 10 null 0 1 one 11 null 0 2 two 22 null 0 3 ours 3 null 0 4 theirs 4 null 0}
         do_execsql_test $name-integrity {PRAGMA integrity_check} ok
         db close
         sqlite3 db $path
         do_execsql_test $name-reopen {
           SELECT k,v,n,typeof(y),x FROM t ORDER BY k;
           PRAGMA integrity_check;
-        } {0 theirs 10 null 0 1 one 1 null 11 2 two 2 null 22 3 ours 3 null 0 4 theirs 4 null 0 ok}
+        } {0 theirs 10 null 0 1 one 11 null 0 2 two 22 null 0 3 ours 3 null 0 4 theirs 4 null 0 ok}
       }
     }
   }

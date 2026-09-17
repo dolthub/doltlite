@@ -1215,6 +1215,7 @@ int normalizeSideToMergedLayout(
   const char *zOursSql,
   const char *zTheirsSql,
   int bFillSharedDefaults,
+  const char *zSharedSql,
   ProllyHash *pOutRoot
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1333,6 +1334,21 @@ int normalizeSideToMergedLayout(
   if( rc!=SQLITE_OK ) goto done;
   rc = mergeColDefaultsLoad(zTheirsSql, zTable, &theirsDefaults);
   if( rc!=SQLITE_OK ) goto done;
+
+  if( zSharedSql ){
+    ParsedColumn *aShared = 0;
+    int nShared = 0;
+    rc = parseColumns(zSharedSql, &aShared, &nShared);
+    if( rc!=SQLITE_OK ) goto done;
+    /* A column added on both sides has no value in the ancestor. */
+    for(j=0; j<nOurs && j<oursDefaults.nCol; j++){
+      if( parsedColumnIndexByName(aAnc, nAnc, aOurs[j].zName)<0
+       && parsedColumnIndexByName(aShared, nShared, aOurs[j].zName)>=0 ){
+        oursDefaults.aVal[j].eType = SQLITE_NULL;
+      }
+    }
+    freeColumns(aShared, nShared);
+  }
 
   if( !isIntKey ){
     sqlite3 *tmp = 0;

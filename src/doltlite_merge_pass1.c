@@ -710,12 +710,12 @@ static int mergePass1RelayoutToMergedSchema(
   rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pOtherRoot,
                                    flags, zAncSql,
                                    zMergedSql, zOtherSql,
-                                   bFillSharedDefaults, pOtherOut);
+                                   bFillSharedDefaults, 0, pOtherOut);
   if( rc!=SQLITE_OK ) return rc;
   rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pAncRoot,
                                    flags, zAncSql,
                                    zMergedSql, zAncSql,
-                                   bFillSharedDefaults, pAncOut);
+                                   bFillSharedDefaults, zOtherSql, pAncOut);
   if( rc!=SQLITE_OK ) return rc;
   *pbRelaid = 1;
   return SQLITE_OK;

@@ -1617,17 +1617,20 @@ expect_dual_value "both_add_same_column_and_disjoint_drop_row" "$DB" \
 # Cherry-pick shared additions to preserve Dolt's column tags.
 for direction in forward reverse; do
   for shared in one both; do
-    tag="shared_column_positions_${direction}_${shared}"
-    DB="$TMPROOT/$tag.db"
-    ours=main
-    theirs=feat
-    if [ "$direction" = reverse ]; then
-      ours=feat
-      theirs=main
-    fi
-    extra=""
-    if [ "$shared" = both ]; then extra="SELECT dolt_cherry_pick('add_y');"; fi
-    cat <<SQL | dl_setup "$DB" "$tag"
+    for edits in rows shared; do
+      tag="shared_column_positions_${direction}_${shared}_${edits}"
+      DB="$TMPROOT/$tag.db"
+      ours=main
+      theirs=feat
+      if [ "$direction" = reverse ]; then
+        ours=feat
+        theirs=main
+      fi
+      column=n
+      if [ "$edits" = shared ]; then column=x; fi
+      extra=""
+      if [ "$shared" = both ]; then extra="SELECT dolt_cherry_pick('add_y');"; fi
+      cat <<SQL | dl_setup "$DB" "$tag"
 CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT, n INTEGER);
 INSERT INTO t VALUES(0,'base',0),(1,'one',1),(2,'two',2);
 SELECT dolt_commit('-Am','base');
@@ -1642,22 +1645,27 @@ SELECT dolt_commit('-Am','add x');
 SELECT dolt_checkout('$ours');
 SELECT dolt_cherry_pick('$theirs');
 UPDATE t SET n=10 WHERE k=0;
-UPDATE t SET x=11 WHERE k=1;
+UPDATE t SET $column=11 WHERE k=1;
 INSERT INTO t(k,v,n) VALUES(3,'ours',3);
 SELECT dolt_commit('-Am','ours');
 SELECT dolt_checkout('$theirs');
 $extra
 UPDATE t SET v='theirs' WHERE k=0;
-UPDATE t SET x=22 WHERE k=2;
+UPDATE t SET $column=22 WHERE k=2;
 INSERT INTO t(k,v,n) VALUES(4,'theirs',4);
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-    expect_merge_ok "$tag" "$DB"
-    expect_dual_value "${tag}_rows" "$DB" \
-      "0:theirs:10:NULL:0,1:one:1:NULL:11,2:two:2:NULL:22,3:ours:3:NULL:0,4:theirs:4:NULL:0" \
-      "SELECT group_concat(k||':'||v||':'||n||':'||coalesce(y,'NULL')||':'||x, ',') FROM (SELECT * FROM t ORDER BY k);" \
-      "SELECT GROUP_CONCAT(CONCAT(k,':',v,':',n,':',COALESCE(y,'NULL'),':',x) ORDER BY k SEPARATOR ',') FROM t;"
+      if [ "$edits" = shared ]; then
+        expect_merge_conflict "$tag" "$DB"
+      else
+        expect_merge_ok "$tag" "$DB"
+        expect_dual_value "${tag}_rows" "$DB" \
+          "0:theirs:10:NULL:0,1:one:11:NULL:0,2:two:22:NULL:0,3:ours:3:NULL:0,4:theirs:4:NULL:0" \
+          "SELECT group_concat(k||':'||v||':'||n||':'||coalesce(y,'NULL')||':'||x, ',') FROM (SELECT * FROM t ORDER BY k);" \
+          "SELECT GROUP_CONCAT(CONCAT(k,':',v,':',n,':',COALESCE(y,'NULL'),':',x) ORDER BY k SEPARATOR ',') FROM t;"
+      fi
+    done
   done
 done
 
