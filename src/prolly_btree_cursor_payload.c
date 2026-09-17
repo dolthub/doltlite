@@ -455,6 +455,47 @@ static SQLITE_NOINLINE const void *prollyBtCursorPayloadFetchSlow(
   if( pAmt ) *pAmt = (u32)nData;
   return (const void*)pData;
 }
+/* Read one field of the current index entry straight from its sortkey.
+** SQLITE_NOTFOUND whenever the entry's record is not the key itself --
+** stored payload, cached payload, deferred DESC landing -- so the caller
+** falls back to the record path. */
+int sqlite3BtreeProllySortKeyField(
+  BtCursor *pCur,
+  int iField,
+  SortKeyField *pField,
+  u32 *aSerial
+){
+  const u8 *pKey;
+  int nKey;
+
+  if( pCur->pCurOps!=&prollyCursorOps || pCur->curIntKey ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pCur->eState!=CURSOR_VALID || pCur->deferredMergedSeek ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pCur->pCachedPayload && pCur->nCachedPayload>0 ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ) return rc;
+    if( e==0 || (e->nVal>0 && e->pVal) ) return SQLITE_NOTFOUND;
+    pKey = e->pKey;
+    nKey = e->nKey;
+  }else{
+    const u8 *pVal;
+    int nVal;
+    if( pCur->pCur.eState!=PROLLY_CURSOR_VALID ) return SQLITE_NOTFOUND;
+    cursorCurrentTreeValue(pCur, &pVal, &nVal);
+    if( nVal>0 ) return SQLITE_NOTFOUND;
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+  }
+  return sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, iField, pField, aSerial);
+}
+
 const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   if( !pCur->deferredMergedSeek
    && pCur->pCachedPayload && pCur->nCachedPayload>0 ){

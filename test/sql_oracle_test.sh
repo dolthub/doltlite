@@ -6073,4 +6073,72 @@ SELECT count(*) FROM t WHERE x BETWEEN -4 AND -2;
 SELECT group_concat(x) FROM (SELECT x FROM t ORDER BY x);
 "
 
+echo ""
+echo "--- Category 124: Index columns decoded straight from the sortkey ---"
+
+oracle "cat124_covering_reads_every_type" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL, s TEXT, b BLOB, n TEXT COLLATE NOCASE, big INTEGER);
+INSERT INTO t VALUES(1, 5, 1.5, 'abc', x'00ff00', 'Abc', 9223372036854775807);
+INSERT INTO t VALUES(2, NULL, -0.0, 'a'||char(0)||'b', x'', 'abc', -9223372036854775808);
+INSERT INTO t VALUES(3, -7, 1e300, '', zeroblob(3), 'ABD', 4503599627370497);
+INSERT INTO t VALUES(4, 3, 2.0, 'Ä ü', x'0001', NULL, -4503599627370497);
+INSERT INTO t VALUES(5, 3, 2.0, char(0), x'00', 'zz', 0);
+INSERT INTO t VALUES(6, 9007199254740993, 1e-300, 'x', NULL, 'q', 1);
+CREATE INDEX ia ON t(a); CREATE INDEX iad ON t(a DESC, s DESC); CREATE INDEX ir ON t(r);
+CREATE INDEX is_ ON t(s); CREATE INDEX ib ON t(b); CREATE INDEX in_ ON t(n);
+CREATE INDEX ibig ON t(big); CREATE INDEX ias ON t(a, s, b);
+SELECT a, typeof(a), id FROM t INDEXED BY ia ORDER BY a;
+SELECT a, hex(s), id FROM t INDEXED BY iad ORDER BY a DESC, s DESC;
+SELECT r, typeof(r), id FROM t INDEXED BY ir ORDER BY r;
+SELECT hex(s), length(s), typeof(s), id FROM t INDEXED BY is_ ORDER BY s;
+SELECT hex(b), typeof(b), length(b), id FROM t INDEXED BY ib ORDER BY b;
+SELECT n, id FROM t INDEXED BY in_ ORDER BY n;
+SELECT big, typeof(big), id FROM t INDEXED BY ibig ORDER BY big;
+SELECT a, hex(s), hex(b), id FROM t INDEXED BY ias ORDER BY a, s, b;
+SELECT typeof(a), typeof(s), typeof(b), length(s), length(b) FROM t INDEXED BY ias ORDER BY a, s, b;
+SELECT s||'!' FROM t INDEXED BY is_ WHERE s>='a' ORDER BY s;
+SELECT id, r, n FROM t INDEXED BY ia WHERE a=3 ORDER BY id;
+"
+
+oracle "cat124_covering_reads_over_pending_edits" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL, s TEXT, b BLOB);
+INSERT INTO t VALUES(1, 5, 1.5, 'abc', x'00ff00'),(2, NULL, 2.5, 'a'||char(0)||'b', x''),
+  (3, -7, 3.5, '', zeroblob(3)),(4, 3, 4.5, 'Ä', x'0001'),(5, 3, 5.5, char(0), x'00');
+CREATE INDEX ia ON t(a); CREATE INDEX iad ON t(a DESC, s DESC); CREATE INDEX is_ ON t(s);
+CREATE INDEX ias ON t(a, s, b);
+BEGIN;
+INSERT INTO t VALUES(7, 4, 4.5, 'pend'||char(0), x'00');
+UPDATE t SET a=100 WHERE id=1;
+DELETE FROM t WHERE id=3;
+SELECT a, typeof(a), id FROM t INDEXED BY ia ORDER BY a;
+SELECT a, hex(s), id FROM t INDEXED BY iad ORDER BY a DESC, s DESC;
+SELECT hex(s), id FROM t INDEXED BY is_ ORDER BY s DESC;
+SELECT id, r FROM t INDEXED BY ia WHERE a IN (3,4,100) ORDER BY id;
+SELECT a, hex(s), hex(b), id FROM t INDEXED BY ias ORDER BY a, s, b;
+COMMIT;
+SELECT a, hex(s), hex(b), id FROM t INDEXED BY ias ORDER BY a, s, b;
+"
+
+oracle "cat124_integrity_check_after_value_bearing_neighbour" "
+CREATE TABLE w(a PRIMARY KEY, b, c) WITHOUT ROWID;
+INSERT INTO w VALUES(1,2,3),(4,5,6);
+CREATE TABLE k(a TEXT PRIMARY KEY) WITHOUT ROWID;
+INSERT INTO k VALUES('x'),('y');
+CREATE TABLE r(a REAL PRIMARY KEY, n INTEGER NOT NULL) WITHOUT ROWID;
+INSERT INTO r VALUES(1.5, 1),(2.5, 2);
+PRAGMA integrity_check;
+PRAGMA integrity_check(k);
+"
+
+oracle "cat124_without_rowid_keys" "
+CREATE TABLE w(k TEXT, v INTEGER, PRIMARY KEY(k, v)) WITHOUT ROWID;
+INSERT INTO w VALUES('a'||char(0), 1),('b', -2),('', 3);
+SELECT hex(k), v FROM w ORDER BY k, v;
+CREATE TABLE w2(k TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID;
+INSERT INTO w2 VALUES('a', 1),('b', 2);
+CREATE INDEX w2v ON w2(v);
+SELECT v, k FROM w2 INDEXED BY w2v ORDER BY v;
+SELECT k, v FROM w2 ORDER BY k;
+"
+
 sql_oracle_finish

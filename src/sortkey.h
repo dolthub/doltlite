@@ -91,4 +91,24 @@ int recordFromSortKeyBufferColl(
   u8 **ppBuf, int *pnAlloc, int *pnOut
 );
 
+/* One field read straight out of a sortkey, without building the record.
+** TEXT/BLOB fields stay in their escaped, possibly DESC-complemented form;
+** sortKeyFieldCopy() writes the nData plain bytes. */
+typedef struct SortKeyField SortKeyField;
+struct SortKeyField {
+  u8 eType;          /* SORTKEY_NULL, SORTKEY_NUM, SORTKEY_TEXT or SORTKEY_BLOB */
+  u8 isReal;         /* SORTKEY_NUM: rVal holds the value, else iVal */
+  u8 desc;           /* field bytes are complemented in the key */
+  i64 iVal;
+  double rVal;
+  const u8 *pEnc;    /* TEXT/BLOB: escaped bytes in the key */
+  int nEnc;          /* TEXT/BLOB: escaped length, terminator excluded */
+  int nData;         /* TEXT/BLOB: plain length */
+};
+int sortKeyFieldAt(
+  const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
+  int iField, SortKeyField *pField, u32 *aSerial
+);
+void sortKeyFieldCopy(const SortKeyField *pField, u8 *pOut);
+
 #endif

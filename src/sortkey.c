@@ -783,6 +783,178 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
   }
 }
 
+static void decodeNumericSortKeyField(
+  const u8 *pIn,
+  int nIn,
+  SortKeyField *pField
+){
+  u8 buf[8];
+  double d;
+  u64 x;
+  int i;
+
+  pField->eType = SORTKEY_NUM;
+  pField->isReal = 0;
+  if( nIn>=17 && (pIn[8]==0x01 || pIn[8]==0x80) ){
+    u64 u = ((u64)pIn[9] << 56) | ((u64)pIn[10] << 48)
+          | ((u64)pIn[11] << 40) | ((u64)pIn[12] << 32)
+          | ((u64)pIn[13] << 24) | ((u64)pIn[14] << 16)
+          | ((u64)pIn[15] << 8)  | (u64)pIn[16];
+    pField->iVal = (i64)(u ^ ((u64)1 << 63));
+    return;
+  }
+
+  memcpy(buf, pIn, 8);
+  if( buf[0] & 0x80 ){
+    buf[0] ^= 0x80;
+  }else{
+    for(i = 0; i < 8; i++) buf[i] = ~buf[i];
+  }
+  x = ((u64)buf[0] << 56) | ((u64)buf[1] << 48)
+    | ((u64)buf[2] << 40) | ((u64)buf[3] << 32)
+    | ((u64)buf[4] << 24) | ((u64)buf[5] << 16)
+    | ((u64)buf[6] << 8)  | (u64)buf[7];
+  memcpy(&d, &x, 8);
+
+  if( d >= -9223372036854775808.0 && d < 9223372036854775808.0 ){
+    i64 iv = (i64)d;
+    if( (double)iv == d ){
+      pField->iVal = iv;
+      return;
+    }
+  }
+  pField->isReal = 1;
+  pField->rVal = d;
+}
+
+/* Parse the field starting at pos. Returns the position after it, or -1
+** when the bytes are not a well-formed field. pField is filled only when
+** wanted; skipped fields cost their length scan alone. */
+static int sortKeyFieldParse(
+  const u8 *pSortKey, int nSortKey, int pos, int desc, int wanted,
+  SortKeyField *pField
+){
+  u8 tag = desc ? (u8)~pSortKey[pos] : pSortKey[pos];
+
+  if( tag==SORTKEY_NULL ){
+    if( wanted ){
+      pField->eType = SORTKEY_NULL;
+      pField->desc = (u8)desc;
+    }
+    return pos+1;
+  }
+  if( tag==SORTKEY_NUM ){
+    u8 aNum[18];
+    const u8 *pNum = pSortKey + pos;
+    int nAvail = nSortKey - pos;
+    int nNum;
+    if( desc ){
+      int nProbe = nAvail<18 ? nAvail : 18;
+      int i;
+      for(i=0; i<nProbe; i++) aNum[i] = (u8)~pSortKey[pos+i];
+      pNum = aNum;
+    }
+    nNum = numericSortKeyLen(pNum, nAvail);
+    if( nNum==0 || nNum>nAvail ) return -1;
+    if( wanted ){
+      pField->desc = (u8)desc;
+      decodeNumericSortKeyField(pNum+1, numericSortKeyPayloadLen(nNum), pField);
+    }
+    return pos + nNum;
+  }
+  if( tag==SORTKEY_TEXT || tag==SORTKEY_BLOB ){
+    /* Escapes are 0x00 0x01 and the terminator 0x00 0x00, complemented
+    ** under DESC. */
+    const u8 zero = desc ? 0xFF : 0x00;
+    const u8 esc = desc ? 0xFE : 0x01;
+    int start = ++pos;
+    int nData = 0;
+    for(;;){
+      const u8 *pZero;
+      if( pos>=nSortKey ) return -1;
+      pZero = (const u8*)memchr(pSortKey + pos, zero, (size_t)(nSortKey - pos));
+      if( pZero==0 ) return -1;
+      nData += (int)(pZero - (pSortKey + pos));
+      pos = (int)(pZero - pSortKey);
+      if( pos+1>=nSortKey ) return -1;
+      if( pSortKey[pos+1]==zero ){
+        pos += 2;
+        break;
+      }
+      if( pSortKey[pos+1]!=esc ) return -1;
+      nData++;
+      pos += 2;
+    }
+    if( wanted ){
+      pField->eType = tag;
+      pField->desc = (u8)desc;
+      pField->pEnc = pSortKey + start;
+      pField->nEnc = (pos - 2) - start;
+      pField->nData = nData;
+    }
+    return pos;
+  }
+  return -1;
+}
+
+/* A record serial type of the field's class: enough for OP_IsType, which
+** only asks NULL / integer / real / text / blob of the header cache. */
+static u32 sortKeyFieldSerialClass(const SortKeyField *pField){
+  switch( pField->eType ){
+    case SORTKEY_NULL: return 0;
+    case SORTKEY_NUM:  return pField->isReal ? 7 : 6;
+    case SORTKEY_TEXT: return 13;
+    default:           return 12;
+  }
+}
+
+/* iField<0 selects the last field. SQLITE_NOTFOUND when the key holds no
+** such field. aSerial, when given, receives the serial class of every
+** field up to iField, which costs decoding the fields walked past. */
+int sortKeyFieldAt(
+  const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
+  int iField, SortKeyField *pField, u32 *aSerial
+){
+  SortKeyField skipped;
+  int pos = 0;
+  int nField = 0;
+
+  if( nSortKey<0 ) return SQLITE_CORRUPT;
+  while( pos<nSortKey ){
+    int start = pos;
+    int isTarget = nField==iField;
+    SortKeyField *pDst = isTarget ? pField : &skipped;
+    pos = sortKeyFieldParse(pSortKey, nSortKey, pos,
+                            descFromKeyInfo(pKeyInfo, nField),
+                            isTarget || aSerial!=0, pDst);
+    if( pos<0 ) return SQLITE_CORRUPT;
+    if( aSerial ) aSerial[nField] = sortKeyFieldSerialClass(pDst);
+    if( isTarget ) return SQLITE_OK;
+    if( iField<0 && pos>=nSortKey ){
+      sortKeyFieldParse(pSortKey, nSortKey, start,
+                        descFromKeyInfo(pKeyInfo, nField), 1, pField);
+      return SQLITE_OK;
+    }
+    nField++;
+  }
+  return SQLITE_NOTFOUND;
+}
+
+void sortKeyFieldCopy(const SortKeyField *pField, u8 *pOut){
+  const u8 *p = pField->pEnc;
+  const u8 *pEnd = p + pField->nEnc;
+  const u8 zero = pField->desc ? 0xFF : 0x00;
+  while( p<pEnd ){
+    u8 b = *p++;
+    if( b==zero ){
+      *pOut++ = 0x00;
+      p++;
+    }else{
+      *pOut++ = pField->desc ? (u8)~b : b;
+    }
+  }
+}
+
 static int recordFromAllNumericSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
