@@ -299,4 +299,75 @@ run_test "ws_namemap_to" \
 
 rm -f "$DBW"
 
+NEW_DB=/tmp/doltlite_workspace_new_$$.db
+rm -f "$NEW_DB"
+dltest_run_sql "
+SELECT dolt_config('user.name','t');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_commit('-Am', 'seed');
+CREATE TABLE n(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO n VALUES(1, 1), (2, 2);
+" "$NEW_DB" >/dev/null
+
+run_test "workspace_new_table_rows" \
+  "SELECT to_id || '|' || to_v || '|' || staged || '|' || diff_type
+     FROM dolt_workspace_n ORDER BY to_id;" \
+  $'1|1|0|added\n2|2|0|added' "$NEW_DB"
+
+run_test "workspace_new_table_partial_stage" \
+  "UPDATE dolt_workspace_n SET staged=1 WHERE to_id=1;
+   SELECT staged || '|' || to_id FROM dolt_workspace_n ORDER BY to_id;" \
+  $'1|1\n0|2' "$NEW_DB"
+
+run_test "workspace_new_table_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status ORDER BY staged, table_name;" \
+  $'n|0|modified\nn|1|new table' "$NEW_DB"
+
+dltest_run_sql "SELECT dolt_commit('-m','partial n');" "$NEW_DB" >/dev/null
+
+run_test "workspace_new_table_partial_commit" \
+  "SELECT id || '|' || v FROM n ORDER BY id;" \
+  $'1|1\n2|2' "$NEW_DB"
+
+run_test "workspace_new_table_after_commit_status" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "n|0|modified" "$NEW_DB"
+
+run_test "workspace_new_table_committed_row" \
+  "SELECT id || '|' || v FROM dolt_at_n('HEAD') ORDER BY id;" \
+  "1|1" "$NEW_DB"
+rm -f "$NEW_DB"
+
+SCH_DB=/tmp/doltlite_workspace_schema_$$.db
+rm -f "$SCH_DB"
+dltest_run_sql "
+SELECT dolt_config('user.name','t');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_commit('-Am', 'seed');
+ALTER TABLE t ADD COLUMN extra INT DEFAULT 0;
+UPDATE t SET extra = 9 WHERE id = 1;
+" "$SCH_DB" >/dev/null
+
+ws_schema_stage=$(dltest_run_sql "UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;" "$SCH_DB" || true)
+if echo "$ws_schema_stage" | grep -q "not modifiable due to schema change"; then
+  dltest_pass
+else
+  dltest_fail "workspace_schema_change_refuses_stage" "$ws_schema_stage"
+fi
+
+ws_schema_del=$(dltest_run_sql "DELETE FROM dolt_workspace_t WHERE to_id=1;" "$SCH_DB" || true)
+if echo "$ws_schema_del" | grep -q "not modifiable due to schema change"; then
+  dltest_pass
+else
+  dltest_fail "workspace_schema_change_refuses_delete" "$ws_schema_del"
+fi
+
+dltest_run_sql "SELECT dolt_add('t');" "$SCH_DB" >/dev/null
+run_test "workspace_schema_change_add_still_works" \
+  "SELECT sql FROM sqlite_master WHERE name='t';" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, extra INT DEFAULT 0)" "$SCH_DB"
+rm -f "$SCH_DB"
+
 dltest_finish

@@ -602,4 +602,24 @@ SELECT dolt_add('t');
 DELETE FROM dolt_workspace_t WHERE to_id=42;
 "
 
+oracle "workspace_new_table_partial_stage" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_commit('-Am', 'seed');
+CREATE TABLE n(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO n VALUES(1, 1), (2, 2);
+UPDATE dolt_workspace_n SET staged=1 WHERE to_id=1;
+SELECT dolt_commit('-m','partial n');
+" "SELECT CONCAT('R|HEAD|', to_id, '|', to_v) FROM dolt_diff_n('HEAD~1','HEAD') ORDER BY to_id;
+SELECT CONCAT('R|WORK|', id, '|', v) FROM n ORDER BY id;"
+
+oracle_error "workspace_schema_change_stage_rejected" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_commit('-Am', 'seed');
+ALTER TABLE t ADD COLUMN extra INT DEFAULT 0;
+UPDATE t SET extra = 9 WHERE id = 1;
+UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;
+"
+
 vc_oracle_finish
