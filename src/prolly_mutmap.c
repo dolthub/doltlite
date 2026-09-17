@@ -874,6 +874,14 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     mm->nUndo--;
   }
 
+  /* After undo, entries born at or above level form an append-order suffix. */
+  if( mm->nEntries==0
+   || decodeLevel(mm, mm->aEntries[mm->nEntries-1].bornAt)<level ){
+    mm->generation++;
+    mm->currentSavepointLevel = level - 1;
+    return SQLITE_OK;
+  }
+
   {
     int oldN = mm->nEntries;
     int newN = 0;

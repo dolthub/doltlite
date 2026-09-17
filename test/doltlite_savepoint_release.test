@@ -33,4 +33,61 @@ do_execsql_test doltlite_savepoint_release-1.2 {
   PRAGMA integrity_check;
 } {0 ok}
 
+foreach {name schema} {
+  int {id INTEGER PRIMARY KEY, v INTEGER, b BLOB}
+  text {id TEXT PRIMARY KEY, v INTEGER, b BLOB}
+} {
+  do_execsql_test doltlite_savepoint_release-2.$name.1 "
+    CREATE TABLE rb($schema);
+    BEGIN;
+    INSERT INTO rb VALUES(3,30,zeroblob(256)),(1,10,zeroblob(256)),(2,20,zeroblob(256));
+    SELECT id,v,length(b) FROM rb ORDER BY id;
+    SAVEPOINT outer;
+    UPDATE rb SET v=v+100 WHERE id<>1;
+    DELETE FROM rb WHERE id=1;
+    SAVEPOINT inner;
+    UPDATE rb SET v=v+1000,b=zeroblob(1024) WHERE id=2;
+    DELETE FROM rb WHERE id=3;
+    ROLLBACK TO inner;
+    SELECT id,v,length(b) FROM rb ORDER BY id;
+  " {1 10 256 2 20 256 3 30 256 2 120 256 3 130 256}
+
+  do_execsql_test doltlite_savepoint_release-2.$name.2 {
+    RELEASE inner;
+    ROLLBACK TO outer;
+    SELECT id,v,length(b) FROM rb ORDER BY id;
+    SELECT v FROM rb WHERE id=2;
+    ROLLBACK TO outer;
+    SELECT id FROM rb ORDER BY id DESC;
+  } {1 10 256 2 20 256 3 30 256 20 3 2 1}
+
+  do_execsql_test doltlite_savepoint_release-2.$name.3 {
+    INSERT INTO rb VALUES(4,40,zeroblob(256));
+    UPDATE rb SET v=200 WHERE id=2;
+    SAVEPOINT child;
+    INSERT INTO rb VALUES(5,50,zeroblob(256));
+    UPDATE rb SET v=300 WHERE id=3;
+    RELEASE child;
+    ROLLBACK TO outer;
+    SELECT id,v FROM rb ORDER BY id;
+    SELECT count(*) FROM rb WHERE id IN (4,5);
+  } {1 10 2 20 3 30 0}
+
+  do_execsql_test doltlite_savepoint_release-2.$name.4 {
+    DELETE FROM rb WHERE id=3;
+    UPDATE rb SET b=zeroblob(2048) WHERE id=1;
+    SELECT id FROM rb ORDER BY id;
+    ROLLBACK TO outer;
+    SELECT id,v,length(b) FROM rb ORDER BY id DESC;
+    RELEASE outer;
+    COMMIT;
+    PRAGMA integrity_check;
+  } {1 2 3 30 256 2 20 256 1 10 256 ok}
+
+  do_execsql_test doltlite_savepoint_release-2.$name.5 {
+    SELECT id,v,length(b) FROM rb ORDER BY id;
+    DROP TABLE rb;
+  } {1 10 256 2 20 256 3 30 256}
+}
+
 finish_test
