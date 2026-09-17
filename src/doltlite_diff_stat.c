@@ -1287,26 +1287,6 @@ done:
   return rc;
 }
 
-static int dssSkipIgnored(
-  sqlite3 *db, sqlite3_vtab *pVtab, const char *zName, int *pSkip
-){
-  char *zErr = 0;
-  int ignored = 0;
-  int rc;
-  *pSkip = 0;
-  if( !zName ) return SQLITE_OK;
-  rc = doltliteCheckIgnore(db, zName, &ignored, &zErr);
-  if( rc==SQLITE_CONSTRAINT ){
-    sqlite3_free(pVtab->zErrMsg);
-    pVtab->zErrMsg = zErr;
-    return SQLITE_ERROR;
-  }
-  sqlite3_free(zErr);
-  if( rc!=SQLITE_OK ) return rc;
-  *pSkip = ignored;
-  return SQLITE_OK;
-}
-
 static int dssAppendTableChange(
   DssCursor *c,
   sqlite3 *db,
@@ -1396,7 +1376,7 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
     if( pCtx->ignoreWorkingSet && !pFromEntry != !pToEntry ){
       const char *zIgnName = pToEntry ? pToEntry->zName : pFromEntry->zName;
       int skip = 0;
-      rc = dssSkipIgnored(db, c->base.pVtab, zIgnName, &skip);
+      rc = doltliteVtabSkipIgnored(db, c->base.pVtab, zIgnName, &skip);
       if( rc!=SQLITE_OK ) return rc;
       if( skip ) continue;
     }

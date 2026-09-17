@@ -384,6 +384,26 @@ static sqlite3_module doltliteIgnoreModule = {
   ignoreUpdate, ignoreBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
+int doltliteVtabSkipIgnored(
+  sqlite3 *db, sqlite3_vtab *pVtab, const char *zName, int *pSkip
+){
+  char *zErr = 0;
+  int ignored = 0;
+  int rc;
+  *pSkip = 0;
+  if( !zName ) return SQLITE_OK;
+  rc = doltliteCheckIgnore(db, zName, &ignored, &zErr);
+  if( rc==SQLITE_CONSTRAINT ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = zErr;
+    return SQLITE_ERROR;
+  }
+  sqlite3_free(zErr);
+  if( rc!=SQLITE_OK ) return rc;
+  *pSkip = ignored;
+  return SQLITE_OK;
+}
+
 int doltliteIgnoreRegister(sqlite3 *db){
   return sqlite3_create_module(db, "dolt_ignore", &doltliteIgnoreModule, 0);
 }
