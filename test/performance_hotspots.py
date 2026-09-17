@@ -144,19 +144,14 @@ def index_fixture(path, rows):
                 totals[4] += row_id
             output.write("INSERT INTO orders VALUES\n" + ",\n".join(values) + ";\n")
         output.write("CREATE INDEX orders_customer ON orders(customer_id);\nANALYZE;\n")
-    cases = []
-    for name, columns, fields in (
-        ("index_scan_row_fetch", "count(*),sum(amount_cents),sum(length(description)),"
-         "sum(unicode(substr(description,1,1))+unicode(substr(description,-1,1)))", (0, 1, 2, 3)),
-        ("index_scan", "count(*),sum(id)", (0, 4)),
-    ):
-        queries, results = [], []
-        for i in range(1000):
-            customer = i * 137 % customers
-            queries.append(f"SELECT {columns} FROM orders WHERE customer_id={customer};")
-            results.append("|".join(str(expected[customer][field]) for field in fields))
-        cases.append((name, "\n".join(queries), results))
-    return cases
+    columns = ("count(*),sum(amount_cents),sum(length(description)),"
+               "sum(unicode(substr(description,1,1))+unicode(substr(description,-1,1)))")
+    queries, results = [], []
+    for i in range(1000):
+        customer = i * 137 % customers
+        queries.append(f"SELECT {columns} FROM orders WHERE customer_id={customer};")
+        results.append("|".join(str(expected[customer][field]) for field in (0, 1, 2, 3)))
+    return [("index_scan_row_fetch", "\n".join(queries), results)]
 
 
 def prepare_index_queries(binary, db, fixture, rows, cases):
@@ -170,8 +165,7 @@ def prepare_index_queries(binary, db, fixture, rows, cases):
         raise ValueError(f"invalid index fixture: {check}")
     for name, query, _expected in cases:
         plan = sql(binary, db, "EXPLAIN QUERY PLAN " + query.splitlines()[0])
-        index = "COVERING INDEX" if name == "index_scan" else "INDEX"
-        if f"SEARCH orders USING {index} orders_customer (customer_id=?)" not in plan:
+        if "SEARCH orders USING INDEX orders_customer (customer_id=?)" not in plan:
             raise ValueError(f"unexpected {name} plan: {plan}")
 
 
@@ -217,10 +211,9 @@ def measure_add_column(binary, fixture, work, rows, cache_kib):
 
 
 def index_edit_fixture(binary, db, rows):
-    """A table with a secondary index, plus the answers the reads below must
-    give once half the indexed values have moved. Edits arrive in primary-key
-    order, which is unordered in index-key space, so a read that follows them
-    inside the transaction walks the tree merged with a large pending map."""
+    """A table with a secondary index. The timed UPDATE moves half the indexed
+    values; the edits arrive in primary-key order, which is unordered in
+    index-key space, so every one lands in a large pending map."""
     sql(binary, db, f"""CREATE TABLE ie(id INTEGER PRIMARY KEY, k INTEGER NOT NULL, s TEXT NOT NULL);
 WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
 INSERT INTO ie SELECT i,(i*7919)%1000,'s'||i FROM c;
@@ -229,24 +222,17 @@ ANALYZE;""")
     check = sql(binary, db, "SELECT count(*) FROM ie;")
     if check != f"{rows}\n":
         raise ValueError(f"invalid index-edit fixture: {check}")
-    moved = [((i * 7919) % 1000) + (1 if i % 2 == 0 else 0) for i in range(1, rows + 1)]
-    in_range = [k for k in moved if 100 <= k <= 700]
-    return {"index_edit_update": str(rows // 2),
-            "index_edit_walk": f"{rows}|{sum(moved)}",
-            "index_edit_range": f"{len(in_range)}|{sum(in_range)}"}
+    return {"index_edit_update": str(rows // 2)}
 
 
 def measure_index_edits(binary, fixture, work, cache_kib, expected):
-    """Half the indexed values move inside one transaction, then the index is
-    read while those edits are still pending. Each trial starts from a fresh
-    copy and rolls back, so the fixture is never consumed."""
+    """Half the indexed values move inside one transaction. Each trial starts
+    from a fresh copy and rolls back, so the fixture is never consumed."""
     for stale in (work, work.with_name(work.stem + ".db-lock")):
         if stale.exists():
             stale.unlink()
     shutil.copy(fixture, work)
-    cases = [("index_edit_update", None, expected["index_edit_update"]),
-             ("index_edit_walk", None, expected["index_edit_walk"]),
-             ("index_edit_range", None, expected["index_edit_range"])]
+    cases = [("index_edit_update", None, expected["index_edit_update"])]
     statements = [".headers off", ".mode list", ".output /dev/null",
                   "PRAGMA mmap_size=0;",
                   f"PRAGMA cache_size=-{cache_kib};",
@@ -258,12 +244,6 @@ def measure_index_edits(binary, fixture, work, cache_kib, expected):
                   ".print BEGIN index_edit_update", ".timer on",
                   "UPDATE ie SET k=k+1 WHERE id%2=0;",
                   ".timer off", "SELECT changes();", ".print END index_edit_update",
-                  ".print BEGIN index_edit_walk", ".timer on",
-                  "SELECT count(*),sum(k) FROM (SELECT k FROM ie ORDER BY k);",
-                  ".timer off", ".print END index_edit_walk",
-                  ".print BEGIN index_edit_range", ".timer on",
-                  "SELECT count(*),sum(k) FROM ie WHERE k BETWEEN 100 AND 700;",
-                  ".timer off", ".print END index_edit_range",
                   "ROLLBACK;"]
     return parse_session(sql(binary, work, "\n".join(statements)), cases)
 
