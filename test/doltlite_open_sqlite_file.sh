@@ -1,7 +1,7 @@
 #!/bin/bash
 
 DOLTLITE="${1:-./doltlite}"
-SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
+SQLITE3="${SQLITE3:-$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)}"
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
 PASS=0; FAIL=0; SKIP=0
@@ -42,9 +42,6 @@ echo "=== doltlite opens stock-SQLite file ==="
 
 if [ ! -x "$SQLITE3" ]; then
   echo "SKIP: stock sqlite3 binary not found at $SQLITE3"
-  echo ""
-  echo "Results: 0 passed, 0 failed, 1 skipped"
-  echo "__SUITE_COMPLETE__"
   exit 0
 fi
 # shellcheck source=lib/require_stock_sqlite3.sh
