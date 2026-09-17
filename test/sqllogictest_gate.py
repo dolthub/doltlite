@@ -19,6 +19,10 @@ def tokens(output):
     return set(re.findall(rb"!DIVERGE ([0-9]+)", output))
 
 
+def completed(output, rc):
+    return rc != 124 and b"errors out of" in output
+
+
 def main():
     doltlite, stock, directory, manifest, timeout, *files = sys.argv[1:]
     expected = defaultdict(list)
@@ -35,11 +39,17 @@ def main():
         rel = path.removeprefix(directory + "/")
         seen.add(rel)
         output, rc = run(doltlite, path, timeout)
-        if rc == 124 or b"errors out of" not in output:
+        if not completed(output, rc):
             print(f"CRASH/TIMEOUT: {rel} (doltlite rc={rc})")
             crash_lines.append(f"  {rel} (rc={rc})")
             continue
-        stock_output, _ = run(stock, path, timeout)
+        # Stock's divergences are subtracted from doltlite's, so a stock run
+        # that did not finish would erase real misses; it fails the gate.
+        stock_output, stock_rc = run(stock, path, timeout)
+        if not completed(stock_output, stock_rc):
+            print(f"CRASH/TIMEOUT: {rel} (stock rc={stock_rc})")
+            crash_lines.append(f"  {rel} (stock rc={stock_rc})")
+            continue
         divergences = tokens(output) - tokens(stock_output)
         exp = set(expected[rel]) - {b""}
         unexpected, fixed = divergences - exp, exp - divergences

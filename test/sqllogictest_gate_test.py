@@ -19,28 +19,33 @@ sys.exit(rc)
 '''
 cases = [
     ("pass", "", ("0 errors out of 2 tests", 0), ("0 errors out of 2 tests", 0), 0, []),
-    ("stock-only", "", ("0 errors out of 2 tests", 0), ("!DIVERGE 7", 1), 0, []),
-    ("known", "case.test 7\ncase.test 7 # duplicate\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("", 0), 0,
+    ("stock-only", "", ("0 errors out of 2 tests", 0), ("!DIVERGE 7\n1 errors out of 2 tests", 1), 0, []),
+    ("known", "case.test 7\ncase.test 7 # duplicate\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("0 errors out of 2 tests", 0), 0,
      ["OK: case.test (1 known divergences)"]),
-    ("unexpected", "", ("!DIVERGE 2 !DIVERGE 10 !DIVERGE 2\n2 errors out of 3 tests", 1), ("", 0), 1,
+    ("unexpected", "", ("!DIVERGE 2 !DIVERGE 10 !DIVERGE 2\n2 errors out of 3 tests", 1), ("0 errors out of 2 tests", 0), 1,
      ["    line 10\n    line 2", "unexpected=2, crashes=0, to-remove=0"]),
-    ("fixed", "case.test 7\n", ("0 errors out of 2 tests", 0), ("", 0), 1,
+    ("fixed", "case.test 7\n", ("0 errors out of 2 tests", 0), ("0 errors out of 2 tests", 0), 1,
      ["FIXED: case.test", "unexpected=0, crashes=0, to-remove=1"]),
-    ("mixed", "case.test 7\ncase.test 8\n", ("!DIVERGE 7 !DIVERGE 9\n2 errors out of 2 tests", 1), ("", 0), 1,
+    ("mixed", "case.test 7\ncase.test 8\n", ("!DIVERGE 7 !DIVERGE 9\n2 errors out of 2 tests", 1), ("0 errors out of 2 tests", 0), 1,
      ["    line 9", "    line 8", "unexpected=1, crashes=0, to-remove=1"]),
-    ("timeout", "case.test 7\n", ("!DIVERGE 7\n1 errors out of 2 tests", 124), ("", 0), 1,
+    ("timeout", "case.test 7\n", ("!DIVERGE 7\n1 errors out of 2 tests", 124), ("0 errors out of 2 tests", 0), 1,
      ["CRASH/TIMEOUT: case.test (doltlite rc=124)", "unexpected=0, crashes=1, to-remove=0"]),
-    ("crash", "", ("segmentation fault", 139), ("", 0), 1,
+    ("crash", "", ("segmentation fault", 139), ("0 errors out of 2 tests", 0), 1,
      ["CRASH/TIMEOUT: case.test (doltlite rc=139)"]),
-    ("missing-summary", "", ("!DIVERGE 1", 0), ("", 0), 1,
+    ("missing-summary", "", ("!DIVERGE 1", 0), ("0 errors out of 2 tests", 0), 1,
      ["CRASH/TIMEOUT: case.test (doltlite rc=0)"]),
-    ("stock-timeout", "", ("!DIVERGE 1\n1 errors out of 2 tests", 1), ("!DIVERGE 1", 124), 0, []),
-    ("stale", "missing.test 4\nmissing.test 4\nmissing.test 8\n", ("0 errors out of 2 tests", 0), ("", 0), 1,
+    ("stock-timeout", "", ("!DIVERGE 1\n1 errors out of 2 tests", 1), ("!DIVERGE 1", 124), 1,
+     ["CRASH/TIMEOUT: case.test (stock rc=124)", "unexpected=0, crashes=1, to-remove=0"]),
+    ("stock-crash", "", ("0 errors out of 2 tests", 0), ("segmentation fault", 139), 1,
+     ["CRASH/TIMEOUT: case.test (stock rc=139)", "crashes=1"]),
+    ("stock-missing-summary", "case.test 1\n", ("!DIVERGE 1\n1 errors out of 2 tests", 1), ("!DIVERGE 1", 0), 1,
+     ["CRASH/TIMEOUT: case.test (stock rc=0)", "unexpected=0, crashes=1, to-remove=0"]),
+    ("stale", "missing.test 4\nmissing.test 4\nmissing.test 8\n", ("0 errors out of 2 tests", 0), ("0 errors out of 2 tests", 0), 1,
      ["missing.test (file missing, 3 entries)", "to-remove=3"]),
-    ("comments", "  # comment\n\tcase.test\t7 # reason\n\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("", 0), 0, []),
-    ("leading-zero", "case.test 07\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("", 0), 1,
+    ("comments", "  # comment\n\tcase.test\t7 # reason\n\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("0 errors out of 2 tests", 0), 0, []),
+    ("leading-zero", "case.test 07\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("0 errors out of 2 tests", 0), 1,
      ["    line 7", "    line 07", "unexpected=1, crashes=0, to-remove=1"]),
-    ("missing-manifest", None, ("0 errors out of 2 tests", 0), ("", 0), 0, []),
+    ("missing-manifest", None, ("0 errors out of 2 tests", 0), ("0 errors out of 2 tests", 0), 0, []),
 ]
 
 
@@ -72,9 +77,9 @@ def main():
             assert calls.read_text().splitlines() == wanted, name
         second = corpus / "second.test"
         third = corpus / "third.test"
-        path.write_text(json.dumps({"doltlite": ("!DIVERGE 3\n1 errors out of 2 tests", 1), "stock": ("", 0)}))
-        second.write_text(json.dumps({"doltlite": ("!DIVERGE 5\n1 errors out of 2 tests", 1), "stock": ("", 0)}))
-        third.write_text(json.dumps({"doltlite": ("crashed", 139), "stock": ("", 0)}))
+        path.write_text(json.dumps({"doltlite": ("!DIVERGE 3\n1 errors out of 2 tests", 1), "stock": ("0 errors out of 2 tests", 0)}))
+        second.write_text(json.dumps({"doltlite": ("!DIVERGE 5\n1 errors out of 2 tests", 1), "stock": ("0 errors out of 2 tests", 0)}))
+        third.write_text(json.dumps({"doltlite": ("crashed", 139), "stock": ("0 errors out of 2 tests", 0)}))
         manifest.write_text("case.test 3\nsecond.test 7\nmissing.test 8\nmissing.test 8\n")
         result = subprocess.run([sys.executable, str(script), "doltlite", "stock",
                                  str(corpus), str(manifest), "300", str(path), str(second), str(third)],
