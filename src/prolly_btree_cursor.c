@@ -925,7 +925,7 @@ int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
 
   /* The rowid is the last key field, always an exact integer in the key
   ** even when a folded collation put the record in the value. */
-  rc = sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, -1, &f);
+  rc = sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, -1, &f, 0);
   if( rc==SQLITE_NOTFOUND ) return SQLITE_CORRUPT_BKPT;
   if( rc!=SQLITE_OK ) return rc;
   if( f.eType!=SORTKEY_NUM || f.isReal ) return SQLITE_CORRUPT_BKPT;

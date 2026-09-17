@@ -6119,6 +6119,17 @@ COMMIT;
 SELECT a, hex(s), hex(b), id FROM t INDEXED BY ias ORDER BY a, s, b;
 "
 
+oracle "cat124_integrity_check_after_value_bearing_neighbour" "
+CREATE TABLE w(a PRIMARY KEY, b, c) WITHOUT ROWID;
+INSERT INTO w VALUES(1,2,3),(4,5,6);
+CREATE TABLE k(a TEXT PRIMARY KEY) WITHOUT ROWID;
+INSERT INTO k VALUES('x'),('y');
+CREATE TABLE r(a REAL PRIMARY KEY, n INTEGER NOT NULL) WITHOUT ROWID;
+INSERT INTO r VALUES(1.5, 1),(2.5, 2);
+PRAGMA integrity_check;
+PRAGMA integrity_check(k);
+"
+
 oracle "cat124_without_rowid_keys" "
 CREATE TABLE w(k TEXT, v INTEGER, PRIMARY KEY(k, v)) WITHOUT ROWID;
 INSERT INTO w VALUES('a'||char(0), 1),('b', -2),('', 3);

@@ -24,7 +24,7 @@
 #ifdef DOLTLITE_PROLLY
 #include "sortkey.h"
 const void *sqlite3BtreePayloadFetchWithSize(BtCursor*, u32*, u32*);
-int sqlite3BtreeProllySortKeyField(BtCursor*, int, SortKeyField*);
+int sqlite3BtreeProllySortKeyField(BtCursor*, int, SortKeyField*, u32*);
 int doltliteSyntheticRowidFromRecord(const u8*, int, const KeyInfo*, i64*);
 #endif
 #ifdef DOLTLITE_PROLLY
@@ -3163,10 +3163,14 @@ op_column_restart:
       {
         /* An index entry whose record is its sortkey yields the column
         ** without reconstructing the record. pC->aRow stays unset, so
-        ** every column of this row takes this path. */
+        ** every column of this row takes this path. OP_IsType reads
+        ** aType[] through nHdrParsed, and cursor slots are reused without
+        ** clearing either, so the walk publishes the classes it saw. */
         SortKeyField skf;
-        int rcSk = sqlite3BtreeProllySortKeyField(pCrsr, (int)p2, &skf);
+        int rcSk = sqlite3BtreeProllySortKeyField(pCrsr, (int)p2, &skf,
+                                                  pC->aType);
         if( rcSk==SQLITE_OK ){
+          pC->nHdrParsed = (u16)(p2+1);
           pDest = &aMem[pOp->p3];
           memAboutToChange(p, pDest);
           if( VdbeMemDynamic(pDest) ){

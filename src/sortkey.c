@@ -897,23 +897,39 @@ static int sortKeyFieldParse(
   return -1;
 }
 
+/* A record serial type of the field's class: enough for OP_IsType, which
+** only asks NULL / integer / real / text / blob of the header cache. */
+static u32 sortKeyFieldSerialClass(const SortKeyField *pField){
+  switch( pField->eType ){
+    case SORTKEY_NULL: return 0;
+    case SORTKEY_NUM:  return pField->isReal ? 7 : 6;
+    case SORTKEY_TEXT: return 13;
+    default:           return 12;
+  }
+}
+
 /* iField<0 selects the last field. SQLITE_NOTFOUND when the key holds no
-** such field. */
+** such field. aSerial, when given, receives the serial class of every
+** field up to iField, which costs decoding the fields walked past. */
 int sortKeyFieldAt(
   const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
-  int iField, SortKeyField *pField
+  int iField, SortKeyField *pField, u32 *aSerial
 ){
+  SortKeyField skipped;
   int pos = 0;
   int nField = 0;
 
   if( nSortKey<0 ) return SQLITE_CORRUPT;
   while( pos<nSortKey ){
     int start = pos;
+    int isTarget = nField==iField;
+    SortKeyField *pDst = isTarget ? pField : &skipped;
     pos = sortKeyFieldParse(pSortKey, nSortKey, pos,
-                            descFromKeyInfo(pKeyInfo, nField), nField==iField,
-                            pField);
+                            descFromKeyInfo(pKeyInfo, nField),
+                            isTarget || aSerial!=0, pDst);
     if( pos<0 ) return SQLITE_CORRUPT;
-    if( nField==iField ) return SQLITE_OK;
+    if( aSerial ) aSerial[nField] = sortKeyFieldSerialClass(pDst);
+    if( isTarget ) return SQLITE_OK;
     if( iField<0 && pos>=nSortKey ){
       sortKeyFieldParse(pSortKey, nSortKey, start,
                         descFromKeyInfo(pKeyInfo, nField), 1, pField);

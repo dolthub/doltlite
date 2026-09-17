@@ -462,7 +462,8 @@ static SQLITE_NOINLINE const void *prollyBtCursorPayloadFetchSlow(
 int sqlite3BtreeProllySortKeyField(
   BtCursor *pCur,
   int iField,
-  SortKeyField *pField
+  SortKeyField *pField,
+  u32 *aSerial
 ){
   const u8 *pKey;
   int nKey;
@@ -493,7 +494,7 @@ int sqlite3BtreeProllySortKeyField(
     if( nVal>0 ) return SQLITE_NOTFOUND;
     prollyCursorKey(&pCur->pCur, &pKey, &nKey);
   }
-  return sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, iField, pField);
+  return sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, iField, pField, aSerial);
 }
 
 const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){

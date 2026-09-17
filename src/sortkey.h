@@ -107,7 +107,7 @@ struct SortKeyField {
 };
 int sortKeyFieldAt(
   const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
-  int iField, SortKeyField *pField
+  int iField, SortKeyField *pField, u32 *aSerial
 );
 void sortKeyFieldCopy(const SortKeyField *pField, u8 *pOut);
 
