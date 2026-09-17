@@ -380,8 +380,14 @@ static int rebuildHash(ProllyMutMap *mm){
   return SQLITE_OK;
 }
 
-static int ensureHashForInsert(ProllyMutMap *mm){
+static int ensureHashForInsert(ProllyMutMap *mm, const u8 *pKey, int nKey){
   if( mm->keepSorted ) return SQLITE_OK;
+  if( mm->nHashAlloc==0 && mm->appendSorted
+   && (mm->nEntries==0
+    || compareEntryToKey(mm, &mm->aEntries[mm->nEntries-1],
+                         pKey, nKey, keyPrefix64(pKey, nKey))<0) ){
+    return SQLITE_OK;
+  }
   if( mm->nHashAlloc==0 || (mm->nEntries + 1) * 2 > mm->nHashAlloc ){
     return rebuildHash(mm);
   }
@@ -408,7 +414,13 @@ static int findPhysLazy(ProllyMutMap *mm,
   *pPhys = -1;
   if( mm->nEntries==0 ) return SQLITE_OK;
   if( mm->nHashAlloc==0 ){
-    int rc = rebuildHash(mm);
+    int rc;
+    if( mm->appendSorted
+     && compareEntryToKey(mm, &mm->aEntries[mm->nEntries-1],
+                          pKey, nKey, keyPrefix64(pKey, nKey))<0 ){
+      return SQLITE_OK;
+    }
+    rc = rebuildHash(mm);
     if( rc!=SQLITE_OK ) return rc;
   }
   {
@@ -564,7 +576,7 @@ static int appendEntry(
 
   rc = ensureCapacity(mm);
   if( rc!=SQLITE_OK ) return rc;
-  rc = ensureHashForInsert(mm);
+  rc = ensureHashForInsert(mm, pKey, nKey);
   if( rc!=SQLITE_OK ) return rc;
 
   phys = mm->nEntries;
@@ -632,7 +644,11 @@ int prollyMutMapInsert(
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
   if( mm->keepSorted || !mm->orderDirty ){
-    idx = bsearch_key(mm, pKey, nKey, &found);
+    idx = mm->nEntries;
+    if( idx>0 && compareEntryToKey(mm, entryAtOrder(mm, idx-1),
+                                  pKey, nKey, keyPrefix64(pKey, nKey))>=0 ){
+      idx = bsearch_key(mm, pKey, nKey, &found);
+    }
     if( found ){
       phys = mm->aOrder[idx];
     }

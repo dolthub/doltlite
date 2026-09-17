@@ -71,4 +71,21 @@ do_faultsim_test 1.2 -faults oom-transient -prep {
   faultsim_integrity_check
 }
 
+do_faultsim_test 1.3 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(300, 'threehundred');
+    INSERT INTO t VALUES(400, 'fourhundred');
+  }
+} -body {
+  db eval { INSERT INTO t VALUES(350, 'threefifty') }
+  db eval { SELECT a, b FROM t ORDER BY a }
+} -test {
+  faultsim_test_result {0 {100 hundred 200 twohundred 300 threehundred 350 threefifty 400 fourhundred}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
 finish_test
