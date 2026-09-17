@@ -44,6 +44,49 @@ if [ -x "$ENG" ]; then
     exit 1
   fi
   rm -f "$fake"
+
+  crash="$(mktemp "${TMPDIR:-/tmp}/parity-crash.XXXXXX")"
+  ok="$(mktemp "${TMPDIR:-/tmp}/parity-ok.XXXXXX")"
+  printf '%s\n' '#!/bin/sh' 'echo 1' 'exit 134' >"$crash"
+  printf '%s\n' '#!/bin/sh' 'echo 1' 'exit 0' >"$ok"
+  chmod +x "$crash" "$ok"
+  if ! (
+    PASS=0 FAIL=0 ERRORS=""
+    DOLTLITE="$crash" SQLITE3="$ok"
+    . "$SCRIPT_DIR/lib/parity_run.sh"
+    run_parity "rc_mismatch" "SELECT 1;"
+    [ "$FAIL" -eq 1 ]
+  ); then
+    echo "FAIL: run_parity passed when stdout matched and rcs differed"
+    rm -f "$crash" "$ok"
+    exit 1
+  fi
+  echo "PASS: run_parity rejects matching stdout with mismatched rc"
+  if ! (
+    PASS=0 FAIL=0 ERRORS=""
+    DOLTLITE="$crash" SQLITE3="$crash"
+    . "$SCRIPT_DIR/lib/parity_run.sh"
+    run_parity "matching_crashes" "SELECT 1;"
+    [ "$FAIL" -eq 1 ]
+  ); then
+    echo "FAIL: run_parity passed when both sides crashed with matching stdout"
+    rm -f "$crash" "$ok"
+    exit 1
+  fi
+  echo "PASS: run_parity rejects matching crashes"
+  if ! (
+    PASS=0 FAIL=0 ERRORS=""
+    DOLTLITE="$ok" SQLITE3="$ok"
+    . "$SCRIPT_DIR/lib/parity_run.sh"
+    run_parity "matching_success" "SELECT 1;"
+    [ "$PASS" -eq 1 ] && [ "$FAIL" -eq 0 ]
+  ); then
+    echo "FAIL: run_parity rejected matching stdout with rc=0"
+    rm -f "$crash" "$ok"
+    exit 1
+  fi
+  echo "PASS: run_parity accepts matching stdout with rc=0"
+  rm -f "$crash" "$ok"
 else
   echo "SKIP: no DoltLite engine at $ENG"
 fi

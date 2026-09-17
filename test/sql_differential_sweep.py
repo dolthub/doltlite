@@ -102,7 +102,7 @@ def sweep(doltlite, sqlite3, first, last, groups):
             rc_dl, out_dl = run_engine(doltlite, dl_db, sql)
             rc_sq, out_sq = run_engine(sqlite3, sq_db, sql)
 
-            if rc_dl == rc_sq and out_dl == out_sq:
+            if rc_dl == rc_sq and rc_dl < 128 and out_dl == out_sq:
                 pass_n += 1
                 if b"Error" in out_dl or b"error" in out_dl:
                     errored += 1

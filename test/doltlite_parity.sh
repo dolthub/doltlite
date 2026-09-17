@@ -37,21 +37,7 @@ echo "DoltLite:       $DOLTLITE"
 echo "Package sqlite3: $SQLITE3 (version $SQLITE_VERSION)"
 echo ""
 
-run_parity() {
-  local name="$1"
-  local sql="$2"
-
-  local out_dl out_sq
-  out_dl=$(echo "$sql" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" :memory: 2>&1)
-  out_sq=$(echo "$sql" | perl -e 'alarm(10);exec @ARGV' "$SQLITE3" :memory: 2>&1)
-
-  if [ "$out_dl" = "$out_sq" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  --- doltlite ---\n$out_dl\n  --- sqlite3 ---\n$out_sq\n"
-  fi
-}
+source "$SCRIPT_DIR/lib/parity_run.sh"
 
 echo "--- Basic CRUD ---"
 
