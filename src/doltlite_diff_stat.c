@@ -12,6 +12,7 @@
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
 #include "doltlite_ancestor.h"
+#include "doltlite_ignore.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -325,6 +326,7 @@ struct DsFilterCtx {
   ProllyHash toCat;
   char **azNames;
   int nNames;
+  int ignoreWorkingSet;
 };
 
 static void dsFilterCtxClear(DsFilterCtx *pCtx);
@@ -887,6 +889,12 @@ static int dsFilterInit(
   rc = dsApplyRangeSpec(db, pVtab, zName, pCtx);
   if( rc!=SQLITE_OK ) return rc;
 
+  pCtx->ignoreWorkingSet =
+      doltliteRefIsWorking(pCtx->zFromRef)
+      || doltliteRefIsStaged(pCtx->zFromRef)
+      || doltliteRefIsWorking(pCtx->zToRef)
+      || doltliteRefIsStaged(pCtx->zToRef);
+
   rc = doltliteResolveCatalogHashForRef(db, pCtx->zFromRef, &pCtx->fromCat);
   if( rc!=SQLITE_OK ) return dsRefError(
       pVtab, zName, pCtx->zFromRef, rc);
@@ -1364,6 +1372,13 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
     if( pCtx->zTblFilter ){
       if( pToEntry ) zName = pToEntry->zName;
       else if( pFromEntry ) zName = pFromEntry->zName;
+    }
+    if( pCtx->ignoreWorkingSet && !pFromEntry != !pToEntry ){
+      const char *zIgnName = pToEntry ? pToEntry->zName : pFromEntry->zName;
+      int skip = 0;
+      rc = doltliteVtabSkipIgnored(db, c->base.pVtab, zIgnName, &skip);
+      if( rc!=SQLITE_OK ) return rc;
+      if( skip ) continue;
     }
     rc = dssAppendTableChange(c, db, zName, pFromEntry, pToEntry);
     if( rc!=SQLITE_OK ) return rc;

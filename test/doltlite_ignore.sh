@@ -213,4 +213,48 @@ ig_one|1|deleted" "$DB8"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 
+DIFF_DB=/tmp/test_ignore_working_diff_$$.db
+rm -f "$DIFF_DB"
+echo "CREATE TABLE keep(id INTEGER PRIMARY KEY);
+INSERT INTO keep VALUES(1);
+SELECT dolt_commit('-Am','seed');
+INSERT INTO dolt_ignore VALUES('tmp_*', 1);
+CREATE TABLE tmp_secret(id INTEGER PRIMARY KEY);
+INSERT INTO tmp_secret VALUES(1);" | $DOLTLITE "$DIFF_DB" >/dev/null
+
+run_test "working_diff_hides_ignored_untracked" \
+  "SELECT table_name FROM dolt_diff WHERE commit_hash='WORKING' ORDER BY table_name;" \
+  "dolt_ignore" "$DIFF_DB"
+
+run_test "diff_summary_hides_ignored_untracked" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type
+     FROM dolt_diff_summary('HEAD','WORKING') ORDER BY to_table_name;" \
+  "|dolt_ignore|added" "$DIFF_DB"
+
+run_test "diff_stat_still_lists_ignored_untracked" \
+  "SELECT table_name FROM dolt_diff_stat('HEAD','WORKING') ORDER BY table_name;" \
+  $'dolt_ignore\ntmp_secret' "$DIFF_DB"
+
+run_test "diff_summary_named_ignored_table_empty" \
+  "SELECT count(*) FROM dolt_diff_summary('HEAD','WORKING','tmp_secret');" \
+  "0" "$DIFF_DB"
+
+HIST_DB=/tmp/test_ignore_commit_diff_$$.db
+rm -f "$HIST_DB"
+echo "CREATE TABLE keep(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','c1');
+INSERT INTO dolt_ignore VALUES('tmp_*', 1);
+CREATE TABLE tmp_secret(id INTEGER PRIMARY KEY);
+INSERT INTO tmp_secret VALUES(1);
+SELECT dolt_add('-f','tmp_secret');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');" | $DOLTLITE "$HIST_DB" >/dev/null
+
+run_test "commit_diff_summary_keeps_ignored_table" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type
+     FROM dolt_diff_summary('HEAD~1','HEAD') ORDER BY to_table_name;" \
+  $'|dolt_ignore|added\n|tmp_secret|added' "$HIST_DB"
+
+rm -f "$DIFF_DB" "$HIST_DB"
+
 dltest_finish

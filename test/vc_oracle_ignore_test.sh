@@ -495,4 +495,46 @@ SELECT dolt_merge('b1');
 SELECT dolt_merge('b2');
 "
 
+echo "--- working-set diff hides ignored untracked tables ---"
+
+oracle_working_diff() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local q="SELECT CONCAT('D|', table_name) FROM dolt_diff WHERE commit_hash='WORKING' ORDER BY table_name;
+SELECT CONCAT('M|', coalesce(from_table_name,''), '|', coalesce(to_table_name,''), '|', diff_type) FROM dolt_diff_summary('HEAD','WORKING') ORDER BY to_table_name;"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' \
+           | grep -E '^D|^M' | sort)
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      echo "$dolt_setup"
+      echo "$q"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+
+  local dt_out
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep -E '^D|^M' | sort)
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+oracle_working_diff "working_diff_and_summary_hide_ignored_untracked" "
+CREATE TABLE keep(id INTEGER PRIMARY KEY);
+INSERT INTO keep VALUES(1);
+SELECT dolt_commit('-Am','seed');
+INSERT INTO dolt_ignore VALUES('tmp_*', 1);
+CREATE TABLE tmp_secret(id INTEGER PRIMARY KEY);
+INSERT INTO tmp_secret VALUES(1);
+"
+
 vc_oracle_finish
