@@ -17,16 +17,27 @@ workflows = repo / '.github/workflows'
 checks = 0
 
 
+def timeout_budget(value):
+    if re.fullmatch(r'\d+', value):
+        return int(value)
+    conditional = re.fullmatch(
+        r"\$\{\{\s*inputs\.platform\s*==\s*'[^']+'\s*&&\s*(\d+)\s*\|\|\s*(\d+)\s*\}\}",
+        value)
+    if conditional:
+        return max(int(limit) for limit in conditional.groups())
+    return None
+
+
 def jobs(name):
-    """Map job id -> (body, timeout-minutes or None) for one workflow."""
+    """Map job id -> (body, maximum timeout or None) for one workflow."""
     text = (workflows / name).read_text()
     start = re.search(r'^jobs:[ \t]*$', text, re.M)
     assert start, f'{name}: no jobs block'
     parts = re.split(r'^  ([A-Za-z0-9_-]+):[ \t]*$', text[start.end():], flags=re.M)
     found = {}
     for job, body in zip(parts[1::2], parts[2::2]):
-        limit = re.search(r'^    timeout-minutes:[ \t]*(\d+)[ \t]*$', body, re.M)
-        found[job] = (body, int(limit[1]) if limit else None)
+        limit = re.search(r'^    timeout-minutes:[ \t]*([^\n]+)$', body, re.M)
+        found[job] = (body, timeout_budget(limit[1].strip()) if limit else None)
     assert found, f'{name}: parsed no jobs'
     return found
 
@@ -142,6 +153,16 @@ def watchdog_arms_on_every_bad_end():
         f'seed jobs not watched by the watchdog: {sorted(working - watched)}'
     checks += 1
 
+
+for value, expected in (
+    ('45', 45),
+    ("${{ inputs.platform == 'windows' && 30 || 45 }}", 45),
+    ("${{ inputs.platform == 'macos' && 45 || 30 }}", 45),
+    ('${{ inputs.timeout }}', None),
+    ("${{ inputs.platform == 'windows' && 30 || inputs.timeout }}", None),
+):
+    assert timeout_budget(value) == expected, value
+    checks += 1
 
 seed_budgets()
 scheduled_workflows_report()
