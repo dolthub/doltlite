@@ -185,6 +185,26 @@ class HotspotTests(unittest.TestCase):
             self.assertIn(("hotspots", "queries", "index_scan_row_fetch"),
                           analysis["individual_failures"])
 
+    def test_stock_speed_is_reported_but_does_not_change_pr_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / "results.tsv"
+            raw = Path(directory) / "samples.tsv"
+            for candidate, fails in ((100000, False), (130000, True)):
+                for stock in (1000, 1000000):
+                    with self.subTest(candidate=candidate, stock=stock):
+                        samples = {"baseline": [{"scan_first": 100000}],
+                                   "candidate": [{"scan_first": candidate}],
+                                   "stock": [{"scan_first": stock}]}
+                        report = io.StringIO()
+                        with contextlib.redirect_stdout(report):
+                            hotspots.write_results(samples, result, raw)
+                        self.assertIn(f"| {stock/1000:.3f} | {candidate/stock:.2f}× |", report.getvalue())
+                        self.assertIn("1.25× per workload and 1.15× per section/suite", report.getvalue())
+                        self.assertEqual(result.read_text(), f"queries\tscan_first\t100000\t{candidate}\n")
+                        parsed, _ = benchmark_compare.parse_input_artifact(f"hotspots={result}")
+                        analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
+                        self.assertEqual(analysis["failed"], fails)
+
     def test_add_column_gets_its_own_section(self):
         names = ("scan_first", "add_column_default")
         with tempfile.TemporaryDirectory() as directory:

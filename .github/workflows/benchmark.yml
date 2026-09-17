@@ -58,8 +58,8 @@ jobs:
             --suite "${{ matrix.suite.name }}" \
             --results-dir "$results" \
             --max-attempts 3 \
-            --individual-ratio 1.50 \
-            --aggregate-ratio 1.25 \
+            --individual-ratio 1.25 \
+            --aggregate-ratio 1.15 \
             --min-delta-us 10000 \
             --individual-min-delta-us 10000 \
             -- bash "test/${{ matrix.suite.script }}"
@@ -101,8 +101,8 @@ jobs:
             --suite vc \
             --results-dir "$results" \
             --max-attempts 3 \
-            --individual-ratio 2.00 \
-            --aggregate-ratio 1.25 \
+            --individual-ratio 1.50 \
+            --aggregate-ratio 1.15 \
             --min-delta-us 10000 \
             --individual-min-delta-us 50000 \
             -- bash test/vc_perf_ceiling.sh "$GITHUB_WORKSPACE/build/doltlite"
@@ -145,8 +145,8 @@ jobs:
           --suite hotspots \
           --results-dir "$RUNNER_TEMP/hotspot-results" \
           --max-attempts 3 \
-          --individual-ratio 1.50 \
-          --aggregate-ratio 1.25 \
+          --individual-ratio 1.25 \
+          --aggregate-ratio 1.15 \
           --min-delta-us 10000 \
           --individual-min-delta-us 10000 \
           --fail-confirmed \
@@ -294,10 +294,10 @@ jobs:
             --candidate-ref "$candidate" \
             --expected-baseline-ref "$expected_baseline" \
             --expected-candidate-ref "$expected_candidate" \
-            --individual-ratio 1.50 \
-            --aggregate-ratio 1.25 \
+            --individual-ratio 1.25 \
+            --aggregate-ratio 1.15 \
             --min-delta-us 10000 \
-            --suite-individual "vc=2.00:50000" \
+            --suite-individual "vc=1.50:50000" \
             --output "$report"
           report_rc=$?
           set -e
