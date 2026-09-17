@@ -35,7 +35,7 @@ normalize_oracle_output() {
   LC_ALL=C sed -E \
     -e 's/^Error near line [0-9]+: /ERROR: /' \
     -e 's/^Runtime error near line [0-9]+: /ERROR: /' \
-    -e 's/ \([0-9]+\)$//'
+    -e '/^ERROR: /s/ \([0-9]+\)$//'
 }
 
 oracle() {
@@ -59,8 +59,12 @@ oracle_with_flags() {
     pass=$((pass+1))
     return
   fi
-  norm_dl=$(printf '%s\n' "$out_dl" | normalize_oracle_output)
-  norm_sq=$(printf '%s\n' "$out_sq" | normalize_oracle_output)
+  norm_dl="$out_dl"
+  norm_sq="$out_sq"
+  if [ "$expected_rc" -eq 1 ]; then
+    norm_dl=$(printf '%s\n' "$out_dl" | normalize_oracle_output)
+    norm_sq=$(printf '%s\n' "$out_sq" | normalize_oracle_output)
+  fi
   if [ "$rc_dl" -eq "$expected_rc" ] && [ "$rc_sq" -eq "$expected_rc" ] \
      && [ "$norm_dl" = "$norm_sq" ] \
      && { [ "$expected_rc" -eq 0 ] || [[ "$norm_sq" == *"$expected_error"* ]]; }; then
