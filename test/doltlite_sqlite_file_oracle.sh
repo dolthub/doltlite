@@ -1,7 +1,7 @@
 #!/bin/bash
 
 DOLTLITE="${1:-./doltlite}"
-SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
+SQLITE3="${SQLITE3:-$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)}"
 # shellcheck source=lib/require_stock_sqlite3.sh
 source "$(dirname "$0")/lib/require_stock_sqlite3.sh"
 if [ -x "$SQLITE3" ] && ! require_stock_sqlite3 "$SQLITE3"; then
@@ -112,7 +112,6 @@ echo "=== doltlite vs stock sqlite3 on a sqlite3-created file ==="
 
 if [ ! -x "$SQLITE3" ]; then
   echo "SKIP: stock sqlite3 binary not found at $SQLITE3"
-  echo "Results: 0 passed, 0 failed, 1 skipped"
   exit 0
 fi
 

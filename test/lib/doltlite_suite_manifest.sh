@@ -4,6 +4,7 @@ doltlite_all_suites() {
   cat <<'EOF'
 build_artifacts_guard_test.sh
 engine_floor_test.sh
+stock_skip_paths_test.sh
 windows_suite_coverage_test.sh
 frame_size_guard_test.sh
 vc_stateful_schema_universe_test.sh
