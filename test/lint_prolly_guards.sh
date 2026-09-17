@@ -77,7 +77,8 @@ for path in "$SRC"/*.c "$SRC"/*.h; do
     echo "LINT: src/$base differs from $SHA after stripping DOLTLITE_PROLLY"
     echo "      wrap the edit in #ifdef DOLTLITE_PROLLY, or if this is an"
     echo "      upstream merge, update .sqlite-upstream-base"
-    diff -u "$up" "$WORK/head" | head -40 | sed 's/^/      /'
+    diff -u "$up" "$WORK/head" > "$WORK/diff" || true
+    head -40 "$WORK/diff" | sed 's/^/      /'
     FAIL=$((FAIL + 1))
   fi
 done
