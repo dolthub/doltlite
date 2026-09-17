@@ -3205,6 +3205,7 @@ op_column_restart:
           goto op_column_out;
         }
         if( rcSk!=SQLITE_NOTFOUND ){
+          if( rcSk==SQLITE_NOMEM ) goto no_mem;
           if( rcSk==SQLITE_CORRUPT ) goto op_column_corrupt;
           rc = rcSk;
           goto abort_due_to_error;

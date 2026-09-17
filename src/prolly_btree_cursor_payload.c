@@ -480,10 +480,9 @@ int sqlite3BtreeProllySortKeyField(
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
     ProllyMutMapEntry *e;
-    if( currentMutMapEntry(pCur, &e)!=SQLITE_OK || e==0 ){
-      return SQLITE_NOTFOUND;
-    }
-    if( e->nVal>0 && e->pVal ) return SQLITE_NOTFOUND;
+    int rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ) return rc;
+    if( e==0 || (e->nVal>0 && e->pVal) ) return SQLITE_NOTFOUND;
     pKey = e->pKey;
     nKey = e->nKey;
   }else{
