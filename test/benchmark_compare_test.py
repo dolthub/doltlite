@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import re
 import tempfile
 import unittest
 
@@ -71,6 +72,42 @@ def result_metadata(suite="int", producer_id=PRODUCER_ID):
 class BenchmarkCompareTest(unittest.TestCase):
     def analyze(self, results):
         return benchmark_compare.analyze(results, 1.25, 1.15, 5000)
+
+    def test_pr_workflow_uses_matching_tighter_base_gates(self):
+        workflow = (MODULE_PATH.parent.parent / ".github/workflows/benchmark.yml").read_text()
+        jobs = dict(re.findall(r"^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)",
+                               workflow, re.MULTILINE | re.DOTALL))
+        for job, individual, floor in (("sysbench-relative", 1.25, 10000),
+                                       ("vc-relative", 1.50, 50000),
+                                       ("hotspots", 1.25, 10000),
+                                       ("relative-report", 1.25, 10000)):
+            with self.subTest(job=job):
+                args = dict(re.findall(r"--([a-z-]+) ([0-9.]+)", jobs[job]))
+                self.assertEqual(float(args["individual-ratio"]), individual)
+                self.assertEqual(float(args["aggregate-ratio"]), 1.15)
+                self.assertEqual(int(args["min-delta-us"]), 10000)
+                if job != "relative-report":
+                    self.assertEqual(int(args["individual-min-delta-us"]), floor)
+                    self.assertEqual(int(args["max-attempts"]), 3)
+                suite = "vc" if job == "vc-relative" else "int"
+                overrides = {suite: (individual, floor)}
+                measurements = [benchmark_compare.Result(suite, "reads", "slow", 100000, 160000),
+                                benchmark_compare.Result(suite, "reads", "steady", 1000000, 1000000)]
+                analysis = benchmark_compare.analyze(measurements, individual, 1.15, 10000, overrides)
+                self.assertIn((suite, "reads", "slow"), analysis["individual_failures"])
+                measurements[0] = benchmark_compare.Result(suite, "reads", "slow", 100000, 120000)
+                analysis = benchmark_compare.analyze(measurements[:1], individual, 1.15, 10000, overrides)
+                self.assertFalse(analysis["individual_failures"])
+                self.assertIn((suite, "reads"), analysis["section_failures"])
+        self.assertIn('--suite-individual "vc=1.50:50000"', jobs["relative-report"])
+        self.assertIn("BENCH_BASELINE_KIND: doltlite", jobs["sysbench-relative"])
+        self.assertIn("BENCH_CANDIDATE_KIND: doltlite", jobs["sysbench-relative"])
+        self.assertIn("BENCH_GATE_MODE: none", jobs["sysbench-relative"])
+        self.assertIn('VC_PERF_BASELINE="$GITHUB_WORKSPACE/benchmark-baseline/doltlite"',
+                      jobs["vc-relative"])
+        self.assertIn('--baseline "$GITHUB_WORKSPACE/benchmark-baseline/doltlite"', jobs["hotspots"])
+        self.assertIn('--stock "$GITHUB_WORKSPACE/build-hotspots-stock/sqlite3"', jobs["hotspots"])
+        self.assertIn('--fail-confirmed', jobs["hotspots"])
 
     def test_passes_small_absolute_regression(self):
         analysis = self.analyze([result("tiny", 1000, 1400)])

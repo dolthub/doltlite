@@ -285,7 +285,7 @@ def write_results(samples, result_path, sample_path):
                 raw.write(f"{section}\t{name}\t{i+1}\t"
                           f"{samples['baseline'][i][name]}\t{candidate[name]}\t{stock}\n")
     print("## Performance hotspots")
-    print("\nPR-base gates: 1.5× per workload and 1.25× per section/suite, "
+    print("\nPR-base gates: 1.25× per workload and 1.15× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
     for section, title in SECTIONS:
