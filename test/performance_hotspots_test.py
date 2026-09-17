@@ -113,6 +113,11 @@ class HotspotTests(unittest.TestCase):
                  patch.object(hotspots, "add_column_fixture", side_effect=lambda binary, db, rows: db.touch()), \
                  patch.object(hotspots, "measure_add_column",
                               return_value={"add_column_default": 100000}) as add_column_measure, \
+                 patch.object(hotspots, "index_edit_fixture",
+                              side_effect=lambda binary, db, rows: (db.touch(), {"x": "1"})[1]) as index_edit_fixture, \
+                 patch.object(hotspots, "measure_index_edits",
+                              return_value={"index_edit_update": 100000, "index_edit_walk": 100000,
+                                            "index_edit_range": 100000}) as index_edit_measure, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
@@ -130,10 +135,24 @@ class HotspotTests(unittest.TestCase):
                 self.assertNotEqual(call.args[1], call.args[2])
                 self.assertTrue(call.args[1].name.endswith("-add-column.db"), call.args[1])
                 self.assertTrue(call.args[2].name.endswith("-add-column-run.db"), call.args[2])
+            self.assertEqual([call.args[0].name for call in index_edit_measure.call_args_list],
+                             ["base", "candidate", "stock", "stock", "candidate", "base"])
+            for call in index_edit_measure.call_args_list:
+                self.assertNotEqual(call.args[1], call.args[2])
+                self.assertTrue(call.args[1].name.endswith("-index-edits.db"), call.args[1])
+                self.assertTrue(call.args[2].name.endswith("-index-edits-run.db"), call.args[2])
+                self.assertEqual(call.args[3], hotspots.INDEX_EDIT_CACHE_KIB)
+                self.assertEqual(call.args[4], {"x": "1"})
+            # This section sizes itself: the gap only opens up past --rows.
+            self.assertEqual({call.args[2] for call in index_edit_fixture.call_args_list},
+                             {hotspots.INDEX_EDIT_ROWS})
+            self.assertGreater(hotspots.INDEX_EDIT_ROWS, 262144)
             self.assertEqual(result.read_text(), "".join(
                 f"queries\t{name}\t100000\t100000\n" for name in self.names)
-                + "add_column\tadd_column_default\t100000\t100000\n")
-            self.assertEqual(len(raw.read_text().splitlines()), 13)
+                + "add_column\tadd_column_default\t100000\t100000\n"
+                + "".join(f"index_edits\t{name}\t100000\t100000\n"
+                          for name in ("index_edit_update", "index_edit_walk", "index_edit_range")))
+            self.assertEqual(len(raw.read_text().splitlines()), 19)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -196,7 +215,77 @@ class HotspotTests(unittest.TestCase):
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
-            self.assertEqual(len(hotspots.SECTIONS), 2)
+            self.assertEqual(len(hotspots.SECTIONS), 3)
+
+    def test_index_edits_get_their_own_section_after_add_column(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / "results.tsv"
+            raw = Path(directory) / "samples.tsv"
+            names = ("scan_first", "index_scan", "add_column_default",
+                     "index_edit_update", "index_edit_walk", "index_edit_range")
+            samples = {"baseline": [{n: 1000 for n in names}],
+                       "candidate": [{n: 1000 for n in names}],
+                       "stock": [{n: 500 for n in names}]}
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                hotspots.write_results(samples, result, raw)
+            text = report.getvalue()
+            # index_scan is a query; only the index_edit_* names move to the new section.
+            self.assertIn("queries\tindex_scan\t1000\t1000\n", result.read_text())
+            for name in names[3:]:
+                self.assertIn(f"index_edits\t{name}\t1000\t1000\n", result.read_text())
+            self.assertEqual(text.count("| Workload |"), 3)
+            self.assertLess(text.index("### Add Column With Default"), text.index("### Large Index Edits"))
+            edits = text.split("### Large Index Edits")[1]
+            for name in names[3:]:
+                self.assertIn(f"| {name} |", edits)
+            self.assertNotIn("| index_scan |", edits)
+            self.assertNotIn("| add_column_default |", edits)
+
+    def test_index_edit_fixture_expectations_match_real_sql(self):
+        rows = 3000
+        with patch.object(hotspots, "sql", return_value=f"{rows}\n"):
+            expected = hotspots.index_edit_fixture("bin", Path("unused.db"), rows)
+        db = sqlite3.connect(":memory:")
+        db.executescript(f"""CREATE TABLE ie(id INTEGER PRIMARY KEY, k INTEGER NOT NULL, s TEXT NOT NULL);
+            WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
+            INSERT INTO ie SELECT i,(i*7919)%1000,'s'||i FROM c;
+            CREATE INDEX ie_k ON ie(k);
+            UPDATE ie SET k=k+1 WHERE id%2=0;""")
+        self.assertEqual(expected["index_edit_update"], str(rows // 2))
+        self.assertEqual(expected["index_edit_walk"], "%d|%d" % db.execute(
+            "SELECT count(*),sum(k) FROM (SELECT k FROM ie ORDER BY k)").fetchone())
+        self.assertEqual(expected["index_edit_range"], "%d|%d" % db.execute(
+            "SELECT count(*),sum(k) FROM ie WHERE k BETWEEN 100 AND 700").fetchone())
+
+    def test_measure_index_edits_times_each_statement(self):
+        expected = {"index_edit_update": "500", "index_edit_walk": "1000|5000", "index_edit_range": "300|1500"}
+        session = ("BEGIN index_edit_update\nRun Time: real 0.200000 user 0.1 sys 0.0\n500\nEND index_edit_update\n"
+                   "BEGIN index_edit_walk\nRun Time: real 0.020000 user 0.0 sys 0.0\n1000|5000\nEND index_edit_walk\n"
+                   "BEGIN index_edit_range\nRun Time: real 0.010000 user 0.0 sys 0.0\n300|1500\nEND index_edit_range\n")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "fixture.db"
+            fixture.write_bytes(b"fixture")
+            work = Path(directory) / "work.db"
+            work.write_bytes(b"stale")
+            work.with_name("work.db-lock").write_bytes(b"")
+            with patch.object(hotspots, "sql", return_value=session) as sql:
+                times = hotspots.measure_index_edits("bin", fixture, work, 4096, expected)
+            self.assertEqual(times, {"index_edit_update": 200000, "index_edit_walk": 20000,
+                                     "index_edit_range": 10000})
+            self.assertEqual(work.read_bytes(), b"fixture")
+            self.assertFalse(work.with_name("work.db-lock").exists())
+            script = sql.call_args.args[2]
+            self.assertLess(script.index("BEGIN;"), script.index("UPDATE ie SET k=k+1 WHERE id%2=0;"))
+            self.assertLess(script.index("UPDATE ie SET k=k+1"), script.index("SELECT changes();"))
+            self.assertLess(script.index("SELECT changes();"), script.index("ORDER BY k"))
+            self.assertIn("ROLLBACK;", script.rsplit("index_edit_range", 1)[1])
+            # The UPDATE is timed alone: its changes() check sits after the timer stops.
+            update_block = script.split("BEGIN index_edit_update", 1)[1].split("END index_edit_update", 1)[0]
+            self.assertLess(update_block.index(".timer off"), update_block.index("SELECT changes();"))
+            bad = session.replace("1000|5000", "1000|4999")
+            with patch.object(hotspots, "sql", return_value=bad), self.assertRaises(ValueError):
+                hotspots.measure_index_edits("bin", fixture, work, 4096, expected)
 
     def test_measure_add_column_times_only_the_alter(self):
         rows = 1000

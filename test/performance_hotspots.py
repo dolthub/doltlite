@@ -17,14 +17,23 @@ TEST_DIR = Path(__file__).resolve().parent
 PAYLOAD_BYTES = 1024
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
 ADD_COLUMN_DEFAULT = 7
+# The pending-map merge gap opens up with row count: 1.5x the stock update at
+# 262k rows, 2.7x at 1M. The larger table gets a cache that still holds it.
+INDEX_EDIT_ROWS = 1048576
+INDEX_EDIT_CACHE_KIB = 131072
 # Report sections, in the order they print. A workload belongs to the section
 # whose key prefixes its name; everything else is a query.
 SECTIONS = (("queries", "Large Table Scans"),
-            ("add_column", "Add Column With Default"))
+            ("add_column", "Add Column With Default"),
+            ("index_edits", "Large Index Edits"))
 
 
 def section_of(name):
-    return "add_column" if name.startswith("add_column") else "queries"
+    if name.startswith("add_column"):
+        return "add_column"
+    if name.startswith("index_edit"):
+        return "index_edits"
+    return "queries"
 
 
 def run(command, **kwargs):
@@ -207,6 +216,58 @@ def measure_add_column(binary, fixture, work, rows, cache_kib):
                          [(name, None, expected)])
 
 
+def index_edit_fixture(binary, db, rows):
+    """A table with a secondary index, plus the answers the reads below must
+    give once half the indexed values have moved. Edits arrive in primary-key
+    order, which is unordered in index-key space, so a read that follows them
+    inside the transaction walks the tree merged with a large pending map."""
+    sql(binary, db, f"""CREATE TABLE ie(id INTEGER PRIMARY KEY, k INTEGER NOT NULL, s TEXT NOT NULL);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
+INSERT INTO ie SELECT i,(i*7919)%1000,'s'||i FROM c;
+CREATE INDEX ie_k ON ie(k);
+ANALYZE;""")
+    check = sql(binary, db, "SELECT count(*) FROM ie;")
+    if check != f"{rows}\n":
+        raise ValueError(f"invalid index-edit fixture: {check}")
+    moved = [((i * 7919) % 1000) + (1 if i % 2 == 0 else 0) for i in range(1, rows + 1)]
+    in_range = [k for k in moved if 100 <= k <= 700]
+    return {"index_edit_update": str(rows // 2),
+            "index_edit_walk": f"{rows}|{sum(moved)}",
+            "index_edit_range": f"{len(in_range)}|{sum(in_range)}"}
+
+
+def measure_index_edits(binary, fixture, work, cache_kib, expected):
+    """Half the indexed values move inside one transaction, then the index is
+    read while those edits are still pending. Each trial starts from a fresh
+    copy and rolls back, so the fixture is never consumed."""
+    for stale in (work, work.with_name(work.stem + ".db-lock")):
+        if stale.exists():
+            stale.unlink()
+    shutil.copy(fixture, work)
+    cases = [("index_edit_update", None, expected["index_edit_update"]),
+             ("index_edit_walk", None, expected["index_edit_walk"]),
+             ("index_edit_range", None, expected["index_edit_range"])]
+    statements = [".headers off", ".mode list", ".output /dev/null",
+                  "PRAGMA mmap_size=0;",
+                  f"PRAGMA cache_size=-{cache_kib};",
+                  "SELECT count(*) FROM ie WHERE id>0;",
+                  "SELECT count(*) FROM ie INDEXED BY ie_k WHERE k>=0;",
+                  ".output stdout",
+                  "SELECT name FROM sqlite_schema WHERE 0;",
+                  "BEGIN;",
+                  ".print BEGIN index_edit_update", ".timer on",
+                  "UPDATE ie SET k=k+1 WHERE id%2=0;",
+                  ".timer off", "SELECT changes();", ".print END index_edit_update",
+                  ".print BEGIN index_edit_walk", ".timer on",
+                  "SELECT count(*),sum(k) FROM (SELECT k FROM ie ORDER BY k);",
+                  ".timer off", ".print END index_edit_walk",
+                  ".print BEGIN index_edit_range", ".timer on",
+                  "SELECT count(*),sum(k) FROM ie WHERE k BETWEEN 100 AND 700;",
+                  ".timer off", ".print END index_edit_range",
+                  "ROLLBACK;"]
+    return parse_session(sql(binary, work, "\n".join(statements)), cases)
+
+
 def write_results(samples, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -260,6 +321,8 @@ def main(argv=None):
         databases = {arm: root / f"{arm}.db" for arm in binaries}
         index_databases = {arm: root / f"{arm}-index.db" for arm in binaries}
         add_column_databases = {arm: root / f"{arm}-add-column.db" for arm in binaries}
+        index_edit_databases = {arm: root / f"{arm}-index-edits.db" for arm in binaries}
+        index_edit_expected = None
         fixture = root / "index-fixture.sql"
         index_cases = index_fixture(fixture, args.rows)
         for arm, binary in binaries.items():
@@ -267,6 +330,7 @@ def main(argv=None):
             prepare(binary, databases[arm], args.rows)
             prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
             add_column_fixture(binary, add_column_databases[arm], args.rows)
+            index_edit_expected = index_edit_fixture(binary, index_edit_databases[arm], INDEX_EDIT_ROWS)
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
             for arm in order:
@@ -277,6 +341,9 @@ def main(argv=None):
                 measured.update(measure_add_column(binaries[arm], add_column_databases[arm],
                                                    root / f"{arm}-add-column-run.db",
                                                    args.rows, args.cache_kib))
+                measured.update(measure_index_edits(binaries[arm], index_edit_databases[arm],
+                                                    root / f"{arm}-index-edits-run.db",
+                                                    INDEX_EDIT_CACHE_KIB, index_edit_expected))
                 samples[arm].append(measured)
         write_results(samples,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),
