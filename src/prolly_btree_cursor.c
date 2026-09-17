@@ -894,14 +894,8 @@ int sqlite3BtreeIsEmpty(BtCursor *pCur, int *pRes){
 int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
   const u8 *pKey = 0;
   int nKey = 0;
-  u8 *pRec = 0;
-  int nRecAlloc = 0;
-  int nRec = 0;
+  SortKeyField f;
   int rc;
-  u32 szHdr;
-  u32 typeRowid;
-  u32 lenRowid;
-  Mem v;
 
   if( !pCur || pCur->pCurOps!=&prollyCursorOps || pCur->curIntKey ){
     return SQLITE_NOTFOUND;
@@ -929,47 +923,14 @@ int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
     return SQLITE_NOTFOUND;
   }
 
-  rc = recordFromSortKeyBufferColl(
-      pKey, nKey, pCur->pKeyInfo, &pRec, &nRecAlloc, &nRec);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pRec);
-    return rc;
-  }
-
-  getVarint32NR(pRec, szHdr);
-  testcase( szHdr==3 );
-  testcase( szHdr==(u32)nRec );
-  testcase( szHdr>0x7fffffff );
-  if( unlikely(szHdr<3 || szHdr>(u32)nRec) ){
-    goto prolly_idx_rowid_corruption;
-  }
-
-  getVarint32NR(&pRec[szHdr-1], typeRowid);
-  testcase( typeRowid==1 );
-  testcase( typeRowid==2 );
-  testcase( typeRowid==3 );
-  testcase( typeRowid==4 );
-  testcase( typeRowid==5 );
-  testcase( typeRowid==6 );
-  testcase( typeRowid==8 );
-  testcase( typeRowid==9 );
-  if( unlikely(typeRowid<1 || typeRowid>9 || typeRowid==7) ){
-    goto prolly_idx_rowid_corruption;
-  }
-  lenRowid = (u32)dlSerialTypeLen(typeRowid);
-  testcase( (u32)nRec==szHdr+lenRowid );
-  if( unlikely((u32)nRec<szHdr+lenRowid) ){
-    goto prolly_idx_rowid_corruption;
-  }
-
-  sqlite3VdbeSerialGet(&pRec[nRec-lenRowid], typeRowid, &v);
-  *pRowid = v.u.i;
-  sqlite3_free(pRec);
+  /* The rowid is the last key field, always an exact integer in the key
+  ** even when a folded collation put the record in the value. */
+  rc = sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, -1, &f);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_CORRUPT_BKPT;
+  if( rc!=SQLITE_OK ) return rc;
+  if( f.eType!=SORTKEY_NUM || f.isReal ) return SQLITE_CORRUPT_BKPT;
+  *pRowid = f.iVal;
   return SQLITE_OK;
-
-prolly_idx_rowid_corruption:
-  sqlite3_free(pRec);
-  return SQLITE_CORRUPT_BKPT;
 }
 
 void prollyBtCursorCursorPin(BtCursor *pCur){

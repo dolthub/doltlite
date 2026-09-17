@@ -22,7 +22,9 @@
 #include "vdbeInt.h"
 
 #ifdef DOLTLITE_PROLLY
+#include "sortkey.h"
 const void *sqlite3BtreePayloadFetchWithSize(BtCursor*, u32*, u32*);
+int sqlite3BtreeProllySortKeyField(BtCursor*, int, SortKeyField*);
 int doltliteSyntheticRowidFromRecord(const u8*, int, const KeyInfo*, i64*);
 #endif
 #ifdef DOLTLITE_PROLLY
@@ -3158,6 +3160,52 @@ op_column_restart:
       assert( pCrsr );
       assert( sqlite3BtreeCursorIsValid(pCrsr) );
 #ifdef DOLTLITE_PROLLY
+      {
+        /* An index entry whose record is its sortkey yields the column
+        ** without reconstructing the record. pC->aRow stays unset, so
+        ** every column of this row takes this path. */
+        SortKeyField skf;
+        int rcSk = sqlite3BtreeProllySortKeyField(pCrsr, (int)p2, &skf);
+        if( rcSk==SQLITE_OK ){
+          pDest = &aMem[pOp->p3];
+          memAboutToChange(p, pDest);
+          if( VdbeMemDynamic(pDest) ){
+            sqlite3VdbeMemSetNull(pDest);
+          }
+          if( skf.eType==SORTKEY_NULL ){
+            pDest->flags = MEM_Null;
+          }else if( skf.eType==SORTKEY_NUM ){
+            if( skf.isReal ){
+              pDest->u.r = skf.rVal;
+              pDest->flags = sqlite3IsNaN(skf.rVal) ? MEM_Null : MEM_Real;
+            }else{
+              pDest->u.i = skf.iVal;
+              pDest->flags = MEM_Int;
+            }
+          }else{
+            len = skf.nData;
+            pDest->n = len;
+            pDest->enc = encoding;
+            if( pDest->szMalloc < len+2 ){
+              if( len>db->aLimit[SQLITE_LIMIT_LENGTH] ) goto too_big;
+              pDest->flags = MEM_Null;
+              if( sqlite3VdbeMemGrow(pDest, len+2, 0) ) goto no_mem;
+            }else{
+              pDest->z = pDest->zMalloc;
+            }
+            sortKeyFieldCopy(&skf, (u8*)pDest->z);
+            pDest->z[len] = 0;
+            pDest->z[len+1] = 0;
+            pDest->flags = skf.eType==SORTKEY_TEXT ? (MEM_Str|MEM_Term) : MEM_Blob;
+          }
+          goto op_column_out;
+        }
+        if( rcSk!=SQLITE_NOTFOUND ){
+          if( rcSk==SQLITE_CORRUPT ) goto op_column_corrupt;
+          rc = rcSk;
+          goto abort_due_to_error;
+        }
+      }
       pC->aRow = sqlite3BtreePayloadFetchWithSize(
           pCrsr, &pC->szRow, &pC->payloadSize);
 #else
