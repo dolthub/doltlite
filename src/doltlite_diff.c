@@ -11,6 +11,7 @@
 
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_ignore.h"
 #include "prolly_record.h"
 #include <stddef.h>
 #include <string.h>
@@ -201,6 +202,7 @@ struct DoltliteDiffCursor {
   int hasRow;
   int singleCommit;
   int pseudoFilter;   /* 0=STAGED+WORKING, 1=WORKING, 2=STAGED */
+  int ignoreUntracked;
 };
 
 
@@ -339,6 +341,26 @@ static int loadIndexSchemaRows(
                                ppRows, pnRows);
 }
 
+static int diffSkipIgnoredAdd(
+  sqlite3 *db, sqlite3_vtab *pVtab, const char *zName, int *pSkip
+){
+  char *zErr = 0;
+  int ignored = 0;
+  int rc;
+  *pSkip = 0;
+  if( !zName ) return SQLITE_OK;
+  rc = doltliteCheckIgnore(db, zName, &ignored, &zErr);
+  if( rc==SQLITE_CONSTRAINT ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = zErr;
+    return SQLITE_ERROR;
+  }
+  sqlite3_free(zErr);
+  if( rc!=SQLITE_OK ) return rc;
+  *pSkip = ignored;
+  return SQLITE_OK;
+}
+
 static int diffRootHasRows(sqlite3 *db, const ProllyHash *pRoot, u8 *pHasRows){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
@@ -427,6 +449,15 @@ static int diffFilteredTableRoots(
         doltliteFreeCatalog(aParent, nParent);
         return rc;
       }
+      if( pCur->ignoreUntracked ){
+        int skip = 0;
+        rc = diffSkipIgnoredAdd(db, pCur->base.pVtab, e->zName, &skip);
+        if( rc!=SQLITE_OK || skip ){
+          doltliteFreeCatalog(aChild, nChild);
+          doltliteFreeCatalog(aParent, nParent);
+          return rc;
+        }
+      }
     }else if( p && !e
            && diffRenamePartner(aChild,nChild,p,aParent,nParent) ){
       doltliteFreeCatalog(aChild, nChild);
@@ -512,6 +543,12 @@ static int diffCatalogPairOne(
   if( !e && !p ) return SQLITE_OK;
 
   if( !p || !e ){
+    if( e && !p && pCur->ignoreUntracked ){
+      int skip = 0;
+      rc = diffSkipIgnoredAdd(db, pCur->base.pVtab, pCur->zFilterTable, &skip);
+      if( rc!=SQLITE_OK ) return rc;
+      if( skip ) return SQLITE_OK;
+    }
     rc = diffRootHasRows(db, e ? &e->root : &p->root, &dataChange);
     if( rc!=SQLITE_OK ) return rc;
     schemaChange = 1;
@@ -583,6 +620,12 @@ static int diffCatalogPair(
         dataChange = prollyHashCompare(&e->root,&p->root)!=0;
         schemaChange = 1;
       }else{
+        if( pCur->ignoreUntracked ){
+          int skip = 0;
+          rc = diffSkipIgnoredAdd(db, pCur->base.pVtab, e->zName, &skip);
+          if( rc!=SQLITE_OK ) goto diff_done;
+          if( skip ) continue;
+        }
         rc = diffRootHasRows(db, &e->root, &dataChange);
         if( rc!=SQLITE_OK ) goto diff_done;
         schemaChange = 1;
@@ -686,7 +729,9 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
   }
   if( pCur->pseudoFilter!=2 ){
+    pCur->ignoreUntracked = 1;
     rc = computeCatalogPairBatch(pCur, db, &workCat, &stagedCat, "WORKING");
+    pCur->ignoreUntracked = 0;
     if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
@@ -827,6 +872,7 @@ static void diffCursorReset(DoltliteDiffCursor *pCur){
   pCur->phase = 0;
   pCur->hasRow = 0;
   pCur->pseudoFilter = 0;
+  pCur->ignoreUntracked = 0;
 }
 
 static int diffConnect(sqlite3 *db, void *pAux, int argc,
