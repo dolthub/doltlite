@@ -18,7 +18,7 @@ import performance_hotspots as hotspots
 class HotspotTests(unittest.TestCase):
     def setUp(self):
         self.names = ("scan_first", "scan_repeat", "point_10000",
-                      "index_scan_row_fetch", "index_scan")
+                      "index_scan_row_fetch")
         self.cases = [("scan_first", "SELECT 42;", "42"),
                       ("scan_repeat", "SELECT 42;", "42")]
         self.output = ("BEGIN scan_first\n42\n"
@@ -32,11 +32,11 @@ class HotspotTests(unittest.TestCase):
                          {"scan_first": 120000, "scan_repeat": 80000})
 
     def test_batch_timings_validate_every_result_and_timer(self):
-        cases = [("index_scan", "SELECT 42; SELECT 43;", ["42", "43"])]
-        output = ("BEGIN index_scan\n42\n"
+        cases = [("batch", "SELECT 42; SELECT 43;", ["42", "43"])]
+        output = ("BEGIN batch\n42\n"
                   "Run Time: real 0.120000 user 0.100000 sys 0.020000\n43\n"
-                  "Run Time: real 0.080000 user 0.070000 sys 0.010000\nEND index_scan\n")
-        self.assertEqual(hotspots.parse_session(output, cases), {"index_scan": 200000})
+                  "Run Time: real 0.080000 user 0.070000 sys 0.010000\nEND batch\n")
+        self.assertEqual(hotspots.parse_session(output, cases), {"batch": 200000})
         for bad in (output.replace("43", "44"),
                     output.replace("Run Time: real 0.080000 user 0.070000 sys 0.010000\n", ""),
                     output.replace("0.080000", "0.000000")):
@@ -55,8 +55,7 @@ class HotspotTests(unittest.TestCase):
                            for query in queries.splitlines()]
                 self.assertEqual(results, expected)
                 plan = db.execute("EXPLAIN QUERY PLAN " + queries.splitlines()[0]).fetchone()[3]
-                index = "COVERING INDEX" if name == "index_scan" else "INDEX"
-                self.assertIn(f"SEARCH orders USING {index} orders_customer", plan)
+                self.assertIn("SEARCH orders USING INDEX orders_customer", plan)
 
     def test_index_plan_changes_fail(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -116,8 +115,7 @@ class HotspotTests(unittest.TestCase):
                  patch.object(hotspots, "index_edit_fixture",
                               side_effect=lambda binary, db, rows: (db.touch(), {"x": "1"})[1]) as index_edit_fixture, \
                  patch.object(hotspots, "measure_index_edits",
-                              return_value={"index_edit_update": 100000, "index_edit_walk": 100000,
-                                            "index_edit_range": 100000}) as index_edit_measure, \
+                              return_value={"index_edit_update": 100000}) as index_edit_measure, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
@@ -150,9 +148,8 @@ class HotspotTests(unittest.TestCase):
             self.assertEqual(result.read_text(), "".join(
                 f"queries\t{name}\t100000\t100000\n" for name in self.names)
                 + "add_column\tadd_column_default\t100000\t100000\n"
-                + "".join(f"index_edits\t{name}\t100000\t100000\n"
-                          for name in ("index_edit_update", "index_edit_walk", "index_edit_range")))
-            self.assertEqual(len(raw.read_text().splitlines()), 19)
+                + "index_edits\tindex_edit_update\t100000\t100000\n")
+            self.assertEqual(len(raw.read_text().splitlines()), 13)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -221,8 +218,8 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
             raw = Path(directory) / "samples.tsv"
-            names = ("scan_first", "index_scan", "add_column_default",
-                     "index_edit_update", "index_edit_walk", "index_edit_range")
+            names = ("scan_first", "index_scan_row_fetch", "add_column_default",
+                     "index_edit_update")
             samples = {"baseline": [{n: 1000 for n in names}],
                        "candidate": [{n: 1000 for n in names}],
                        "stock": [{n: 500 for n in names}]}
@@ -230,8 +227,8 @@ class HotspotTests(unittest.TestCase):
             with contextlib.redirect_stdout(report):
                 hotspots.write_results(samples, result, raw)
             text = report.getvalue()
-            # index_scan is a query; only the index_edit_* names move to the new section.
-            self.assertIn("queries\tindex_scan\t1000\t1000\n", result.read_text())
+            # index_scan_row_fetch is a query; only index_edit_* moves to the new section.
+            self.assertIn("queries\tindex_scan_row_fetch\t1000\t1000\n", result.read_text())
             for name in names[3:]:
                 self.assertIn(f"index_edits\t{name}\t1000\t1000\n", result.read_text())
             self.assertEqual(text.count("| Workload |"), 3)
@@ -239,7 +236,7 @@ class HotspotTests(unittest.TestCase):
             edits = text.split("### Large Index Edits")[1]
             for name in names[3:]:
                 self.assertIn(f"| {name} |", edits)
-            self.assertNotIn("| index_scan |", edits)
+            self.assertNotIn("| index_scan_row_fetch |", edits)
             self.assertNotIn("| add_column_default |", edits)
 
     def test_index_edit_fixture_expectations_match_real_sql(self):
@@ -252,17 +249,12 @@ class HotspotTests(unittest.TestCase):
             INSERT INTO ie SELECT i,(i*7919)%1000,'s'||i FROM c;
             CREATE INDEX ie_k ON ie(k);
             UPDATE ie SET k=k+1 WHERE id%2=0;""")
-        self.assertEqual(expected["index_edit_update"], str(rows // 2))
-        self.assertEqual(expected["index_edit_walk"], "%d|%d" % db.execute(
-            "SELECT count(*),sum(k) FROM (SELECT k FROM ie ORDER BY k)").fetchone())
-        self.assertEqual(expected["index_edit_range"], "%d|%d" % db.execute(
-            "SELECT count(*),sum(k) FROM ie WHERE k BETWEEN 100 AND 700").fetchone())
+        self.assertEqual(expected, {"index_edit_update": str(rows // 2)})
+        self.assertEqual(db.execute("SELECT changes()").fetchone()[0], rows // 2)
 
     def test_measure_index_edits_times_each_statement(self):
-        expected = {"index_edit_update": "500", "index_edit_walk": "1000|5000", "index_edit_range": "300|1500"}
-        session = ("BEGIN index_edit_update\nRun Time: real 0.200000 user 0.1 sys 0.0\n500\nEND index_edit_update\n"
-                   "BEGIN index_edit_walk\nRun Time: real 0.020000 user 0.0 sys 0.0\n1000|5000\nEND index_edit_walk\n"
-                   "BEGIN index_edit_range\nRun Time: real 0.010000 user 0.0 sys 0.0\n300|1500\nEND index_edit_range\n")
+        expected = {"index_edit_update": "500"}
+        session = "BEGIN index_edit_update\nRun Time: real 0.200000 user 0.1 sys 0.0\n500\nEND index_edit_update\n"
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "fixture.db"
             fixture.write_bytes(b"fixture")
@@ -271,19 +263,17 @@ class HotspotTests(unittest.TestCase):
             work.with_name("work.db-lock").write_bytes(b"")
             with patch.object(hotspots, "sql", return_value=session) as sql:
                 times = hotspots.measure_index_edits("bin", fixture, work, 4096, expected)
-            self.assertEqual(times, {"index_edit_update": 200000, "index_edit_walk": 20000,
-                                     "index_edit_range": 10000})
+            self.assertEqual(times, {"index_edit_update": 200000})
             self.assertEqual(work.read_bytes(), b"fixture")
             self.assertFalse(work.with_name("work.db-lock").exists())
             script = sql.call_args.args[2]
             self.assertLess(script.index("BEGIN;"), script.index("UPDATE ie SET k=k+1 WHERE id%2=0;"))
             self.assertLess(script.index("UPDATE ie SET k=k+1"), script.index("SELECT changes();"))
-            self.assertLess(script.index("SELECT changes();"), script.index("ORDER BY k"))
-            self.assertIn("ROLLBACK;", script.rsplit("index_edit_range", 1)[1])
+            self.assertIn("ROLLBACK;", script.rsplit("index_edit_update", 1)[1])
             # The UPDATE is timed alone: its changes() check sits after the timer stops.
             update_block = script.split("BEGIN index_edit_update", 1)[1].split("END index_edit_update", 1)[0]
             self.assertLess(update_block.index(".timer off"), update_block.index("SELECT changes();"))
-            bad = session.replace("1000|5000", "1000|4999")
+            bad = session.replace("\n500\n", "\n499\n")
             with patch.object(hotspots, "sql", return_value=bad), self.assertRaises(ValueError):
                 hotspots.measure_index_edits("bin", fixture, work, 4096, expected)
 

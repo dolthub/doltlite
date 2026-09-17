@@ -267,16 +267,10 @@ text descriptions and a secondary index on `customer_id`. Each query matches
 lengths, and description characters. This exercises index traversal followed by
 table-row retrieval without transferring full descriptions to the client.
 
-### `index_scan`
-
-Executes the same 1,000 customer lookups, selecting `count(*)` and `sum(id)`.
-The customer index contains the primary key, so the query uses a covering index
-and does not fetch table rows. This measures index traversal and aggregation.
-
-Both index workloads use identical deterministic data across engines, a 64 MiB
-cache, and a fresh connection for each workload. Each reported sample sums the
-SQL timings of all 1,000 statements. The harness verifies every query result,
-database integrity, and the expected index or covering-index query plan.
+The index workload uses identical deterministic data across engines, a 64 MiB
+cache, and a fresh connection. Each reported sample sums the SQL timings of all
+1,000 statements. The harness verifies every query result, database integrity,
+and the expected index query plan.
 
 ## Version-control latency
 
