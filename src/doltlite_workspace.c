@@ -581,6 +581,153 @@ static int wsApplyRowToIndex(
       iPKey, intKey, pKey, nKey, pSrc, nSrc, pTgt, nTgt);
 }
 
+static void wsEmptyEntryRoot(struct TableEntry *p){
+  memset(&p->root, 0, sizeof(p->root));
+  p->pPending = 0;
+  p->pendingFlushSeekEdits = 0;
+  p->tableRootKnown = 0;
+  p->appendSeekFloorValid = 0;
+  memset(&p->appendSeekRoot, 0, sizeof(p->appendSeekRoot));
+  memset(&p->nocaseNulRoot, 0, sizeof(p->nocaseNulRoot));
+}
+
+static int wsCloneEmptyEntry(
+  struct TableEntry **pa, int *pn, const struct TableEntry *pSrc
+){
+  struct TableEntry *aNew;
+  struct TableEntry e;
+  char *zDup = 0;
+  if( pSrc->zName ){
+    zDup = sqlite3_mprintf("%s", pSrc->zName);
+    if( !zDup ) return SQLITE_NOMEM;
+  }
+  aNew = sqlite3_realloc(*pa, (*pn + 1) * (int)sizeof(struct TableEntry));
+  if( !aNew ){
+    sqlite3_free(zDup);
+    return SQLITE_NOMEM;
+  }
+  *pa = aNew;
+  e = *pSrc;
+  e.zName = zDup;
+  wsEmptyEntryRoot(&e);
+  (*pa)[*pn] = e;
+  (*pn)++;
+  return SQLITE_OK;
+}
+
+static int wsTableSchemaChanged(
+  sqlite3 *db, const char *zTable, int *pChanged
+){
+  ProllyHash headHash, headCat, workCat;
+  ProllyHash headRoot, workRoot, headSchema, workSchema;
+  u8 headFlags = 0, workFlags = 0;
+  int headRc, workRc, rc;
+
+  *pChanged = 0;
+  doltliteGetSessionHead(db, &headHash);
+  if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
+  rc = doltliteCommitCatalogHash(db, &headHash, &headCat);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteFlushCatalogToHash(db, &workCat);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&headRoot, 0, sizeof(headRoot));
+  memset(&workRoot, 0, sizeof(workRoot));
+  memset(&headSchema, 0, sizeof(headSchema));
+  memset(&workSchema, 0, sizeof(workSchema));
+  headRc = doltliteLoadTableRootByName(
+      db, &headCat, zTable, &headRoot, &headFlags, &headSchema);
+  workRc = doltliteLoadTableRootByName(
+      db, &workCat, zTable, &workRoot, &workFlags, &workSchema);
+  if( headRc==SQLITE_NOTFOUND && workRc==SQLITE_OK ) return SQLITE_OK;
+  if( headRc==SQLITE_NOTFOUND && workRc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( headRc==SQLITE_NOTFOUND || workRc==SQLITE_NOTFOUND ){
+    *pChanged = 1;
+    return SQLITE_OK;
+  }
+  if( headRc!=SQLITE_OK ) return headRc;
+  if( workRc!=SQLITE_OK ) return workRc;
+  if( prollyHashCompare(&headSchema, &workSchema)!=0 ) *pChanged = 1;
+  return SQLITE_OK;
+}
+
+static int wsEnsureEmptyStagedTable(
+  sqlite3 *db,
+  const char *zTable,
+  struct TableEntry **paStaged,
+  int *pnStaged
+){
+  ProllyHash workCat, composedRoot;
+  struct TableEntry *aWork = 0;
+  struct TableEntry *pWork;
+  struct TableEntry *pWorkMaster;
+  struct TableEntry *pStagedMaster;
+  SchemaEntry *aWorkSchema = 0;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  const char *azTouched[1];
+  Pgno offset = 0;
+  int nWork = 0, nWorkSchema = 0, nBefore, i, rc;
+
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  rc = doltliteFlushCatalogToHash(db, &workCat);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, &workCat, &aWork, &nWork, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = loadSchemaFromCatalog(db, cs, pCache, &workCat, &aWorkSchema, &nWorkSchema);
+  if( rc!=SQLITE_OK ){
+    doltliteFreeCatalog(aWork, nWork);
+    return rc;
+  }
+  pWork = doltliteFindTableByName(aWork, nWork, zTable);
+  if( !pWork ){
+    freeSchemaEntries(aWorkSchema, nWorkSchema);
+    doltliteFreeCatalog(aWork, nWork);
+    return SQLITE_NOTFOUND;
+  }
+  rc = doltliteDisjoinCatalogEntries(db, aWork, nWork, *paStaged, *pnStaged,
+                                     &offset);
+  nBefore = *pnStaged;
+  if( rc==SQLITE_OK ) rc = wsCloneEmptyEntry(paStaged, pnStaged, pWork);
+  if( rc==SQLITE_OK ){
+    rc = addAppendIndexEntriesOfTable(0, paStaged, pnStaged,
+                                      aWork, nWork, aWorkSchema, nWorkSchema,
+                                      zTable);
+  }
+  for(i=nBefore+1; i<*pnStaged; i++) wsEmptyEntryRoot(&(*paStaged)[i]);
+  if( rc==SQLITE_OK ){
+    doltliteAlignStagedEntriesToWorking(aWork, nWork, *paStaged, *pnStaged);
+    doltliteRenumberStaleStagedEntries(*paStaged, *pnStaged, aWork, nWork);
+    pWorkMaster = doltliteFindTableByNumber(aWork, nWork, 1);
+    pStagedMaster = doltliteFindTableByNumber(*paStaged, *pnStaged, 1);
+    if( !pWorkMaster ){
+      rc = SQLITE_CORRUPT;
+    }else{
+      azTouched[0] = zTable;
+      rc = doltliteBuildNamedStageMasterRoot(
+          db, &pWorkMaster->root, pWorkMaster->flags,
+          pStagedMaster ? &pStagedMaster->root : 0,
+          pStagedMaster ? pStagedMaster->flags : 0,
+          azTouched, 1, *paStaged, *pnStaged, 0, &composedRoot);
+      if( rc==SQLITE_OK && pStagedMaster ){
+        pStagedMaster->root = composedRoot;
+        pStagedMaster->schemaHash = pWorkMaster->schemaHash;
+        pStagedMaster->flags = pWorkMaster->flags;
+      }else if( rc==SQLITE_OK ){
+        struct TableEntry composed = *pWorkMaster;
+        composed.zName = 0;
+        composed.root = composedRoot;
+        rc = wsCloneEmptyEntry(paStaged, pnStaged, &composed);
+        if( rc==SQLITE_OK ){
+          (*paStaged)[*pnStaged-1].root = composedRoot;
+        }
+      }
+    }
+  }
+  freeSchemaEntries(aWorkSchema, nWorkSchema);
+  doltliteFreeCatalog(aWork, nWork);
+  return rc;
+}
+
 static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged){
   sqlite3 *db;
   ChunkStore *cs;
@@ -632,6 +779,14 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   rc = doltliteLoadCatalog(db, &stagedCat, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   pData = doltliteFindTableByName(aTables, nTables, p->zTableName);
+  if( !pData && makeStaged ){
+    rc = wsEnsureEmptyStagedTable(db, p->zTableName, &aTables, &nTables);
+    if( rc!=SQLITE_OK ){
+      doltliteFreeCatalog(aTables, nTables);
+      return rc;
+    }
+    pData = doltliteFindTableByName(aTables, nTables, p->zTableName);
+  }
   if( !pData ){
     doltliteFreeCatalog(aTables, nTables);
     return SQLITE_NOTFOUND;
@@ -683,6 +838,7 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   if( argc==1 ){
     const u8 *pVal;
     int nVal;
+    int schemaChanged = 0;
     r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]));
     if( !r ){
       pBase->zErrMsg = sqlite3_mprintf("workspace row is no longer available");
@@ -692,6 +848,16 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
       pBase->zErrMsg = sqlite3_mprintf(
           "cannot delete staged rows from workspace");
       return SQLITE_ERROR;
+    }
+    {
+      int rc = wsTableSchemaChanged(p->db, p->zTableName, &schemaChanged);
+      if( rc!=SQLITE_OK ) return rc;
+      if( schemaChanged ){
+        pBase->zErrMsg = sqlite3_mprintf(
+            "dolt_workspace_%s table is not modifiable due to schema change",
+            p->zTableName);
+        return SQLITE_ERROR;
+      }
     }
     /* Unstaged delete: restore staged/HEAD for this PK. */
     if( r->diffType==PROLLY_DIFF_ADD ){
@@ -718,6 +884,17 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   }
   newStaged = sqlite3_value_int(argv[2 + 1]) ? 1 : 0;
   if( newStaged==r->staged ) return SQLITE_OK;
+  {
+    int schemaChanged = 0;
+    int rc = wsTableSchemaChanged(p->db, p->zTableName, &schemaChanged);
+    if( rc!=SQLITE_OK ) return rc;
+    if( schemaChanged ){
+      pBase->zErrMsg = sqlite3_mprintf(
+          "dolt_workspace_%s table is not modifiable due to schema change",
+          p->zTableName);
+      return SQLITE_ERROR;
+    }
+  }
   return wsApplyRowToStaged(p, r, newStaged);
 }
 
@@ -726,6 +903,10 @@ static sqlite3_module workspaceModule = {
   wsOpen, wsClose, wsFilter, wsNext, wsEof, wsColumn, wsRowid,
   wsUpdate,0,0,0,0,0,0,0,0,0,0,0
 };
+
+const sqlite3_module *doltliteWorkspaceTableModule(void){
+  return &workspaceModule;
+}
 
 int doltliteRegisterWorkspaceTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_workspace_", &workspaceModule);
