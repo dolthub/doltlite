@@ -114,7 +114,7 @@ class HotspotTests(unittest.TestCase):
                  patch.object(hotspots, "measure_add_column",
                               return_value={"add_column_default": 100000}) as add_column_measure, \
                  patch.object(hotspots, "index_edit_fixture",
-                              side_effect=lambda binary, db, rows: (db.touch(), {"x": "1"})[1]), \
+                              side_effect=lambda binary, db, rows: (db.touch(), {"x": "1"})[1]) as index_edit_fixture, \
                  patch.object(hotspots, "measure_index_edits",
                               return_value={"index_edit_update": 100000, "index_edit_walk": 100000,
                                             "index_edit_range": 100000}) as index_edit_measure, \
@@ -141,7 +141,12 @@ class HotspotTests(unittest.TestCase):
                 self.assertNotEqual(call.args[1], call.args[2])
                 self.assertTrue(call.args[1].name.endswith("-index-edits.db"), call.args[1])
                 self.assertTrue(call.args[2].name.endswith("-index-edits-run.db"), call.args[2])
+                self.assertEqual(call.args[3], hotspots.INDEX_EDIT_CACHE_KIB)
                 self.assertEqual(call.args[4], {"x": "1"})
+            # This section sizes itself: the gap only opens up past --rows.
+            self.assertEqual({call.args[2] for call in index_edit_fixture.call_args_list},
+                             {hotspots.INDEX_EDIT_ROWS})
+            self.assertGreater(hotspots.INDEX_EDIT_ROWS, 262144)
             self.assertEqual(result.read_text(), "".join(
                 f"queries\t{name}\t100000\t100000\n" for name in self.names)
                 + "add_column\tadd_column_default\t100000\t100000\n"
