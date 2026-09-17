@@ -116,6 +116,8 @@ class HotspotTests(unittest.TestCase):
                               side_effect=lambda binary, db, rows: (db.touch(), {"x": "1"})[1]) as index_edit_fixture, \
                  patch.object(hotspots, "measure_index_edits",
                               return_value={"index_edit_update": 100000}) as index_edit_measure, \
+                 patch.object(hotspots, "prepare_savepoints") as savepoint_prepare, \
+                 patch.object(hotspots, "measure_savepoints", return_value=100000) as savepoint_measure, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
@@ -145,11 +147,20 @@ class HotspotTests(unittest.TestCase):
             self.assertEqual({call.args[2] for call in index_edit_fixture.call_args_list},
                              {hotspots.INDEX_EDIT_ROWS})
             self.assertGreater(hotspots.INDEX_EDIT_ROWS, 262144)
+            self.assertEqual(savepoint_prepare.call_count, 3)
+            self.assertEqual([call.args[0].name for call in savepoint_measure.call_args_list],
+                             ["base", "candidate", "stock", "stock", "candidate", "base"])
+            paths = [call.args[2] for call in savepoint_measure.call_args_list]
+            self.assertEqual(len(set(paths)), 6)
+            for call in savepoint_measure.call_args_list:
+                self.assertNotEqual(call.args[1], call.args[2])
+                self.assertEqual(call.args[-1], hotspots.SAVEPOINT_CACHE_KIB)
             self.assertEqual(result.read_text(), "".join(
                 f"queries\t{name}\t100000\t100000\n" for name in self.names)
                 + "add_column\tadd_column_default\t100000\t100000\n"
-                + "index_edits\tindex_edit_update\t100000\t100000\n")
-            self.assertEqual(len(raw.read_text().splitlines()), 13)
+                + "index_edits\tindex_edit_update\t100000\t100000\n"
+                + "savepoints\tsavepoint_rollback\t100000\t100000\n")
+            self.assertEqual(len(raw.read_text().splitlines()), 15)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -232,7 +243,7 @@ class HotspotTests(unittest.TestCase):
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
-            self.assertEqual(len(hotspots.SECTIONS), 3)
+            self.assertEqual(len(hotspots.SECTIONS), 4)
 
     def test_index_edits_get_their_own_section_after_add_column(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -258,6 +269,67 @@ class HotspotTests(unittest.TestCase):
                 self.assertIn(f"| {name} |", edits)
             self.assertNotIn("| index_scan_row_fetch |", edits)
             self.assertNotIn("| add_column_default |", edits)
+
+    def test_savepoints_have_separate_report_and_base_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / "results.tsv"
+            raw = Path(directory) / "samples.tsv"
+            for candidate, fails in ((10000, False), (30000, True)):
+                samples = {"baseline": [{"scan_first": 100000, "savepoint_rollback": 10000}],
+                           "candidate": [{"scan_first": 100000, "savepoint_rollback": candidate}],
+                           "stock": [{"scan_first": 20000, "savepoint_rollback": 1000}]}
+                report = io.StringIO()
+                with contextlib.redirect_stdout(report):
+                    hotspots.write_results(samples, result, raw)
+                scans, savepoints = report.getvalue().split("### Savepoint Rollback")
+                self.assertIn("| scan_first |", scans)
+                self.assertNotIn("| savepoint_rollback |", scans)
+                self.assertNotIn("| scan_first |", savepoints)
+                self.assertIn(f"| savepoint_rollback | 10.000 | {candidate/1000:.3f} | "
+                              f"{candidate/10000:.2f}× | 1.000 | {candidate/1000:.2f}× |", savepoints)
+                self.assertIn(f"savepoints\tsavepoint_rollback\t1\t10000\t{candidate}\t1000\n",
+                              raw.read_text())
+                parsed, _ = benchmark_compare.parse_input_artifact(f"hotspots={result}")
+                analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
+                self.assertEqual(bool(analysis["individual_failures"]), fails)
+                self.assertEqual(bool(analysis["section_failures"]), fails)
+
+    def test_savepoint_expected_rows_match_sql(self):
+        for rows, operations in ((17, 50), (5000, 1000)):
+            for rollback_every in (0, 1, 4, 7):
+                with self.subTest(rows=rows, rollback_every=rollback_every), sqlite3.connect(":memory:") as db:
+                    db.executescript("CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER NOT NULL);")
+                    db.executemany("INSERT INTO t VALUES(?,?)", ((i, i % 100) for i in range(1, rows + 1)))
+                    db.commit()
+                    batch, expected = hotspots.savepoint_workload(rows, operations, rollback_every)
+                    db.executescript(batch)
+                    actual = ",".join(f"{i}:{k}" for i, k in db.execute("SELECT id,k FROM t ORDER BY id"))
+                    self.assertEqual(actual + "|ok", expected)
+                    self.assertFalse(db.in_transaction)
+
+    def test_savepoint_measurement_validates_rows_and_cache_size(self):
+        session = ("BEGIN savepoint_rollback\nRun Time: real 0.009000 user 0.009 sys 0.0\n"
+                   "1:2|ok\nEND savepoint_rollback\n")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "fixture.db"
+            fixture.write_bytes(b"fixture")
+            work = Path(directory) / "work.db"
+            batch = "BEGIN; UPDATE t SET k=k+1; COMMIT;"
+            with patch.object(hotspots, "sql", return_value=session) as sql:
+                self.assertEqual(hotspots.measure_savepoints("bin", fixture, work, batch, "1:2|ok", 64), 9000)
+                script = sql.call_args.args[2]
+                self.assertLess(script.index("SELECT sum(k) FROM t;"), script.index(".timer on"))
+                self.assertLess(script.index(".timer on"), script.index(batch))
+                self.assertLess(script.index(batch), script.index(".timer off"))
+                self.assertLess(script.index(".timer off"), script.index("pragma_integrity_check"))
+            for bad in (session.replace("1:2|ok", "1:1|ok"), session.replace("1:2|ok", "1:2|broken")):
+                with patch.object(hotspots, "sql", return_value=bad), self.assertRaises(ValueError):
+                    hotspots.measure_savepoints("bin", fixture, work, batch, "1:2|ok", 64)
+            fixture.write_bytes(bytes(16384))
+            with patch.object(hotspots, "sql", return_value=session), self.assertRaisesRegex(ValueError, "quarter"):
+                hotspots.measure_savepoints("bin", fixture, work, batch, "1:2|ok", 64)
+            with patch.object(hotspots, "sql"), self.assertRaisesRegex(ValueError, "quarter"):
+                hotspots.prepare_savepoints("bin", fixture, 5000, 64)
 
     def test_index_edit_fixture_expectations_match_real_sql(self):
         rows = 3000
