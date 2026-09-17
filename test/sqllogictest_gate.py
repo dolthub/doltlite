@@ -19,8 +19,13 @@ def tokens(output):
     return set(re.findall(rb"!DIVERGE ([0-9]+)", output))
 
 
+# The runner exits with its error count (the OS keeps the low byte), so a
+# run that finished has a summary whose count agrees with the exit code.
+# A crash or timeout after the summary was flushed leaves a signal or 124
+# in its place instead.
 def completed(output, rc):
-    return rc != 124 and b"errors out of" in output
+    summary = re.search(rb"([0-9]+) errors out of [0-9]+ tests", output)
+    return summary is not None and rc == int(summary.group(1)) % 256
 
 
 def main():

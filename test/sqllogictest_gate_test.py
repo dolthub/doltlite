@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -22,11 +23,11 @@ cases = [
     ("stock-only", "", ("0 errors out of 2 tests", 0), ("!DIVERGE 7\n1 errors out of 2 tests", 1), 0, []),
     ("known", "case.test 7\ncase.test 7 # duplicate\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("0 errors out of 2 tests", 0), 0,
      ["OK: case.test (1 known divergences)"]),
-    ("unexpected", "", ("!DIVERGE 2 !DIVERGE 10 !DIVERGE 2\n2 errors out of 3 tests", 1), ("0 errors out of 2 tests", 0), 1,
+    ("unexpected", "", ("!DIVERGE 2 !DIVERGE 10 !DIVERGE 2\n2 errors out of 3 tests", 2), ("0 errors out of 2 tests", 0), 1,
      ["    line 10\n    line 2", "unexpected=2, crashes=0, to-remove=0"]),
     ("fixed", "case.test 7\n", ("0 errors out of 2 tests", 0), ("0 errors out of 2 tests", 0), 1,
      ["FIXED: case.test", "unexpected=0, crashes=0, to-remove=1"]),
-    ("mixed", "case.test 7\ncase.test 8\n", ("!DIVERGE 7 !DIVERGE 9\n2 errors out of 2 tests", 1), ("0 errors out of 2 tests", 0), 1,
+    ("mixed", "case.test 7\ncase.test 8\n", ("!DIVERGE 7 !DIVERGE 9\n2 errors out of 2 tests", 2), ("0 errors out of 2 tests", 0), 1,
      ["    line 9", "    line 8", "unexpected=1, crashes=0, to-remove=1"]),
     ("timeout", "case.test 7\n", ("!DIVERGE 7\n1 errors out of 2 tests", 124), ("0 errors out of 2 tests", 0), 1,
      ["CRASH/TIMEOUT: case.test (doltlite rc=124)", "unexpected=0, crashes=1, to-remove=0"]),
@@ -40,6 +41,15 @@ cases = [
      ["CRASH/TIMEOUT: case.test (stock rc=139)", "crashes=1"]),
     ("stock-missing-summary", "case.test 1\n", ("!DIVERGE 1\n1 errors out of 2 tests", 1), ("!DIVERGE 1", 0), 1,
      ["CRASH/TIMEOUT: case.test (stock rc=0)", "unexpected=0, crashes=1, to-remove=0"]),
+    ("stock-crash-after-summary", "", ("!DIVERGE 1\n1 errors out of 2 tests", 1),
+     ("!DIVERGE 1\n0 errors out of 1 tests", 139), 1,
+     ["CRASH/TIMEOUT: case.test (stock rc=139)", "unexpected=0, crashes=1, to-remove=0"]),
+    ("doltlite-crash-after-summary", "", ("0 errors out of 2 tests", 139), ("0 errors out of 2 tests", 0), 1,
+     ["CRASH/TIMEOUT: case.test (doltlite rc=139)", "crashes=1"]),
+    ("count-mismatch", "", ("!DIVERGE 1\n1 errors out of 2 tests", 0), ("0 errors out of 2 tests", 0), 1,
+     ["CRASH/TIMEOUT: case.test (doltlite rc=0)", "crashes=1"]),
+    ("count-wraps-low-byte", "case.test 1\n", ("!DIVERGE 1\n257 errors out of 300 tests", 1), ("0 errors out of 2 tests", 0), 0,
+     ["OK: case.test (1 known divergences)"]),
     ("stale", "missing.test 4\nmissing.test 4\nmissing.test 8\n", ("0 errors out of 2 tests", 0), ("0 errors out of 2 tests", 0), 1,
      ["missing.test (file missing, 3 entries)", "to-remove=3"]),
     ("comments", "  # comment\n\tcase.test\t7 # reason\n\n", ("!DIVERGE 7\n1 errors out of 2 tests", 1), ("0 errors out of 2 tests", 0), 0, []),
@@ -72,7 +82,8 @@ def main():
             for needle in needles:
                 assert needle in result.stdout, (name, needle, result.stdout)
             wanted = ["doltlite case.test"]
-            if dl[1] != 124 and "errors out of" in dl[0]:
+            errors = re.search(r"([0-9]+) errors out of", dl[0])
+            if errors and dl[1] == int(errors.group(1)) % 256:
                 wanted.append("stock case.test")
             assert calls.read_text().splitlines() == wanted, name
         second = corpus / "second.test"
