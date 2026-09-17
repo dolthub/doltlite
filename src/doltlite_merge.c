@@ -682,6 +682,30 @@ done:
 }
 
 
+int doltliteTableSchemaConflictDetail(
+  const char *zAncestorSql,
+  const char *zOurSql,
+  const char *zTheirSql,
+  char **pzDetail
+){
+  char **azAdd = 0;
+  int nAdd = 0;
+  int schemaChoice = SCHEMA_MERGE_DEFAULT;
+  int resolvedDivergence = 0;
+  int i, rc;
+
+  *pzDetail = 0;
+  if( !zAncestorSql || !zOurSql || !zTheirSql ) return SQLITE_OK;
+  rc = trySchemaColumnMerge(zAncestorSql, zOurSql, zTheirSql,
+                            &azAdd, &nAdd, 0, 0, 0, 0, &schemaChoice,
+                            &resolvedDivergence, pzDetail);
+  for(i=0; i<nAdd; i++) sqlite3_free(azAdd[i]);
+  sqlite3_free(azAdd);
+  if( rc==SQLITE_ERROR ) return SQLITE_OK;
+  return rc;
+}
+
+
 int tryResolveSchemaDivergence(
   sqlite3 *db,
   const char *zName,

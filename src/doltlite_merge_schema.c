@@ -1030,30 +1030,6 @@ schema_merge_cleanup:
   return rc;
 }
 
-int doltliteTableSchemaConflictDetail(
-  const char *zAncestorSql,
-  const char *zOurSql,
-  const char *zTheirSql,
-  char **pzDetail
-){
-  char **azAdd = 0;
-  int nAdd = 0;
-  int schemaChoice = SCHEMA_MERGE_DEFAULT;
-  int resolvedDivergence = 0;
-  int i, rc;
-
-  *pzDetail = 0;
-  if( !zAncestorSql || !zOurSql || !zTheirSql ) return SQLITE_OK;
-  rc = trySchemaColumnMerge(zAncestorSql, zOurSql, zTheirSql,
-                            &azAdd, &nAdd, 0, 0, 0, 0, &schemaChoice,
-                            &resolvedDivergence, pzDetail);
-  for(i=0; i<nAdd; i++) sqlite3_free(azAdd[i]);
-  sqlite3_free(azAdd);
-  if( rc==SQLITE_ERROR ) return SQLITE_OK;
-  return rc;
-}
-
-
 /* Evaluate declared defaults once. A pre-ADD-COLUMN row omits the
 ** new field; reads materialize the default. Rewriting into a wider
 ** record covers that slot, so leaving NULL would replace the default. */
