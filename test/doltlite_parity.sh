@@ -152,6 +152,19 @@ INSERT INTO t VALUES(2,20);
 SELECT TOTAL(val) FROM t;
 "
 
+run_parity "seekle_pending_insert_below_all" "
+CREATE TABLE t(k INTEGER PRIMARY KEY, v);
+CREATE INDEX tv ON t(v);
+INSERT INTO t VALUES(1,-1);
+BEGIN;
+INSERT INTO t VALUES(2,-2);
+SELECT ifnull((SELECT group_concat(v) FROM (
+  SELECT v FROM t WHERE v<=-5 ORDER BY v DESC)), 'none');
+COMMIT;
+SELECT ifnull((SELECT group_concat(v) FROM (
+  SELECT v FROM t WHERE v<=-5 ORDER BY v DESC)), 'none');
+"
+
 echo "--- JOINs ---"
 
 SETUP_JOIN="

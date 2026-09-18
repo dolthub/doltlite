@@ -106,6 +106,41 @@ ROLLBACK;
 2
 2" "$DB"
 
+# Uncommitted insert smaller than every committed key: SeekLE below all keys
+# must not return the committed first row (issue 3013).
+run_test "pending_insert_below_all_seekle" "
+CREATE TABLE tle(k INTEGER PRIMARY KEY, v);
+CREATE INDEX tlev ON tle(v);
+INSERT INTO tle VALUES(1,-1);
+BEGIN;
+INSERT INTO tle VALUES(2,-2);
+SELECT ifnull((SELECT group_concat(v) FROM (
+  SELECT v FROM tle INDEXED BY tlev WHERE v<=-5 ORDER BY v DESC)), 'none');
+SELECT ifnull((SELECT group_concat(v) FROM (
+  SELECT v FROM tle NOT INDEXED WHERE v<=-5 ORDER BY v DESC)), 'none');
+SELECT (SELECT v FROM tle INDEXED BY tlev WHERE v<=-5 ORDER BY v DESC)
+    IS (SELECT v FROM tle NOT INDEXED WHERE v<=-5 ORDER BY v DESC);
+COMMIT;
+SELECT ifnull((SELECT group_concat(v) FROM (
+  SELECT v FROM tle INDEXED BY tlev WHERE v<=-5 ORDER BY v DESC)), 'none');
+" "none
+none
+1
+none" "$DB"
+
+run_test "pending_insert_below_all_seekle_null_pk" "
+CREATE TABLE tn(k1 INTEGER PRIMARY KEY, k2 INT, v);
+CREATE INDEX tnv ON tn(v, k1);
+INSERT INTO tn VALUES(1,0,-1);
+BEGIN;
+INSERT INTO tn VALUES(2,0,NULL);
+SELECT ifnull((SELECT group_concat(k1) FROM (
+  SELECT k1 FROM tn INDEXED BY tnv WHERE v IS NULL AND k1<9e18 ORDER BY k1)), 'none')
+    IS ifnull((SELECT group_concat(k1) FROM (
+  SELECT k1 FROM tn NOT INDEXED WHERE v IS NULL AND k1<9e18 ORDER BY k1)), 'none');
+ROLLBACK;
+" "1" "$DB"
+
 run_test "clustered_composite_pk_prefix" "
 CREATE TABLE c(a INT, b INT, v TEXT, PRIMARY KEY(a,b));
 WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<2000) INSERT INTO c SELECT x%5, x, 'v' FROM s;

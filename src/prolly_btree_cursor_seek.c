@@ -972,11 +972,15 @@ static int indexMovetoPrefixLast(
     if( rc!=SQLITE_OK ) return rc;
     if( empty ){
       pCur->eState = CURSOR_INVALID;
-      break;
+      CLEAR_CACHED_SEEK_KEY(pCur);
+      return SQLITE_OK;
     }
     if( noneBelow ){
       *pRes = 1;
-      break;
+      /* First() already cleared the seek key; do not re-arm it or IdxLE
+      ** trusts a landing that is not <= the bound. */
+      CLEAR_CACHED_SEEK_KEY(pCur);
+      return SQLITE_OK;
     }
     rc = currentMergedKey(pCur, &pKey, &nKey);
     if( rc!=SQLITE_OK ) return rc;
