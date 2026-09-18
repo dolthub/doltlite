@@ -1,7 +1,7 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
-foreach renameTable {0 1} {
+foreach renameTable {0 1 2 3 4} {
   foreach direction {forward reverse} {
     foreach txn {autocommit explicit} {
       reset_db
@@ -15,10 +15,10 @@ foreach renameTable {0 1} {
         CREATE UNIQUE INDEX new_idx ON t(a);
         INSERT INTO t VALUES(2,20);
       }
-      set table t
+      set table [lindex {t renamed {select data} {odd"name} select} $renameTable]
+      set quoted [string map {{"} {""}} $table]
       if {$renameTable} {
-        execsql {ALTER TABLE t RENAME TO renamed}
-        set table renamed
+        execsql "ALTER TABLE t RENAME TO \"$quoted\""
       }
       execsql {
         SELECT dolt_commit('-Am','replace index');
@@ -47,15 +47,15 @@ foreach renameTable {0 1} {
         PRAGMA integrity_check;
       } {new_idx 0 0 ok}
       do_execsql_test $name-rows "
-        SELECT id,b FROM $table INDEXED BY new_idx WHERE b>=10 ORDER BY b;
+        SELECT id,b FROM \"$quoted\" INDEXED BY new_idx WHERE b>=10 ORDER BY b;
       " {1 10 2 20 3 30}
       do_test $name-unique {
-        catchsql "INSERT INTO $table VALUES(4,20)"
+        catchsql "INSERT INTO \"$quoted\" VALUES(4,20)"
       } [list 1 "UNIQUE constraint failed: $table.b"]
       db close
       sqlite3 db [file normalize test.db]/$branch
       do_execsql_test $name-reopen "
-        SELECT id,b FROM $table INDEXED BY new_idx WHERE b>=10 ORDER BY b;
+        SELECT id,b FROM \"$quoted\" INDEXED BY new_idx WHERE b>=10 ORDER BY b;
         SELECT name FROM sqlite_master WHERE type='index' ORDER BY name;
         PRAGMA integrity_check;
       " {1 10 2 20 3 30 new_idx ok}

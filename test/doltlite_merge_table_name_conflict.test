@@ -1,0 +1,87 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc renamed_table_snapshot {} {
+  set result [execsql {
+    SELECT dolt_hashof('HEAD');
+    SELECT name,sql FROM sqlite_master ORDER BY name;
+  }]
+  foreach table [execsql {
+    SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
+  }] {
+    set quoted [string map {{"} {""}} $table]
+    lappend result [execsql "SELECT * FROM \"$quoted\" ORDER BY id"]
+  }
+  return $result
+}
+
+foreach table {renamed {select data} {odd"name}} {
+  foreach direction {forward reverse} {
+    foreach txn {autocommit explicit savepoint} {
+      reset_db
+      set quoted [string map {{"} {""}} $table]
+      execsql {
+        CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('rename_table');
+        SELECT dolt_branch('rename_column');
+        SELECT dolt_checkout('rename_table');
+      }
+      execsql "
+        ALTER TABLE t RENAME TO \"$quoted\";
+        ALTER TABLE \"$quoted\" ADD COLUMN extra INT;
+        INSERT INTO \"$quoted\" VALUES(1,10,100);
+      "
+      execsql {
+        SELECT dolt_commit('-Am','rename table and add column');
+        SELECT dolt_checkout('rename_column');
+        ALTER TABLE t RENAME COLUMN a TO b;
+        INSERT INTO t VALUES(1,10);
+        SELECT dolt_commit('-Am','rename column');
+        SELECT dolt_checkout('main');
+      }
+      set target rename_column
+      set first rename_table
+      if {$direction eq "reverse"} {
+        set target rename_table
+        set first rename_column
+      }
+      execsql "SELECT dolt_merge('$first')"
+      set before [renamed_table_snapshot]
+      if {$txn ne "autocommit"} {execsql BEGIN}
+      if {$txn eq "savepoint"} {execsql {SAVEPOINT before_merge}}
+      set name table-name-conflict-$table-$direction-$txn
+      do_test $name-message {
+        set result [catchsql "SELECT dolt_merge('$target')"]
+        list [lindex $result 0] [string match {*conflict*} [lindex $result 1]]
+      } {1 1}
+      if {$txn eq "explicit"} {
+        do_execsql_test $name-conflicts {
+          SELECT table_name FROM dolt_schema_conflicts ORDER BY table_name;
+          SELECT is_merging FROM dolt_merge_status;
+        } {t 1}
+      }
+      if {$txn eq "savepoint"} {
+        do_execsql_test $name-savepoint {ROLLBACK TO before_merge} {}
+      }
+      if {$txn ne "autocommit"} {execsql ROLLBACK}
+      do_test $name-preserved {
+        list [expr {$before eq [renamed_table_snapshot]}] [execsql {
+          SELECT count(*) FROM dolt_schema_conflicts;
+          SELECT is_merging FROM dolt_merge_status;
+          PRAGMA integrity_check;
+        }]
+      } {1 {0 0 ok}}
+      db close
+      sqlite3 db [file normalize test.db]
+      do_test $name-reopen {
+        list [expr {$before eq [renamed_table_snapshot]}] [execsql {
+          SELECT count(*) FROM dolt_schema_conflicts;
+          PRAGMA integrity_check;
+        }]
+      } {1 {0 ok}}
+    }
+  }
+}
+
+finish_test

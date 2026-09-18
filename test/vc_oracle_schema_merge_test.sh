@@ -1715,4 +1715,44 @@ SQL
   done
 done
 
+for direction in forward reverse; do
+  tag="table_rename_add_column_conflict_${direction}"
+  DB="$TMPROOT/$tag.db"
+  rename_table=main
+  rename_column=feat
+  quoted_table='`select data`'
+  current_table="$quoted_table"
+  current_name="select data"
+  current_columns="id,a,extra"
+  if [ "$direction" = reverse ]; then
+    rename_table=feat
+    rename_column=main
+    current_table=t
+    current_name=t
+    current_columns="id,b"
+  fi
+  cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('$rename_table');
+ALTER TABLE t RENAME TO $quoted_table;
+ALTER TABLE $quoted_table ADD COLUMN extra INT;
+INSERT INTO $quoted_table VALUES(1,10,100);
+SELECT dolt_commit('-Am','rename table and add column');
+SELECT dolt_checkout('$rename_column');
+ALTER TABLE t RENAME COLUMN a TO b;
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','rename column');
+SELECT dolt_checkout('main');
+SQL
+  expect_merge_conflict "$tag" "$DB"
+  expect_dual_value "${tag}_schema_preserved" "$DB" "$current_columns" \
+    "SELECT group_concat(name, ',') FROM pragma_table_info('$current_name');" \
+    "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ',') FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='$current_name';"
+  expect_dual_value "${tag}_rows_preserved" "$DB" "1" \
+    "SELECT count(*) FROM $current_table;" \
+    "SELECT count(*) FROM $current_table;"
+done
+
 vc_oracle_finish
