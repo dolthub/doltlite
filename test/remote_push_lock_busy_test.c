@@ -241,21 +241,22 @@ static void test_push_ref_race(int stage, int sameBranch, int noOp,
     remote->xSetRefsIf = racingSetRefs;
     remote->xCommit = racingCommit;
     rc = doltlitePush(local, remote, deleting ? ":main" : "main", force);
-    if( rc!=SQLITE_OK && !sameBranch && nRaces<=8 ){
+    if( rc!=SQLITE_OK && !sameBranch && nRaces<64 ){
       fprintf(stderr, "race stage=%d noOp=%d delete=%d rc=%d\n",
               stage, noOp, deleting, rc);
     }
     if( sameBranch ){
       check("same_branch_race_rejected_even_with_force", rc==SQLITE_BUSY_SNAPSHOT);
-    }else if( nRaces>8 ){
-      check("unrelated_ref_retry_is_bounded", rc==SQLITE_BUSY_SNAPSHOT && raceCount==8);
+    }else if( nRaces>=64 ){
+      check("unrelated_ref_retry_is_bounded", rc==SQLITE_BUSY_SNAPSHOT && raceCount==64);
     }else{
       check("unrelated_ref_push_retries", rc==SQLITE_OK);
+      check("race: all unrelated updates completed", raceCount==nRaces);
     }
     remote->xClose(remote);
     check("race: refresh peer", chunkStoreLockAndRefresh(doltliteGetChunkStore(racePeer))==SQLITE_OK);
     rc = chunkStoreFindBranch(doltliteGetChunkStore(racePeer), "main", &remoteTip);
-    if( !sameBranch && nRaces<=8 ){
+    if( !sameBranch && nRaces<64 ){
       check("race: expected final target", deleting ? rc==SQLITE_NOTFOUND
           : rc==SQLITE_OK && prollyHashCompare(&localTip, &remoteTip)==0);
     }else{
@@ -285,6 +286,8 @@ int main(void){
   test_push_ref_race(1, 0, 0, 0, 1, 0);
   test_push_ref_race(2, 0, 0, 0, 2, 0);
   test_push_ref_race(3, 0, 0, 0, 2, 0);
+  test_push_ref_race(2, 0, 0, 0, 20, 0);
+  test_push_ref_race(3, 0, 0, 0, 20, 0);
   test_push_ref_race(1, 0, 1, 0, 1, 0);
   test_push_ref_race(1, 1, 0, 0, 1, 0);
   test_push_ref_race(2, 1, 0, 1, 1, 0);

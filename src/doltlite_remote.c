@@ -1411,7 +1411,7 @@ int doltlitePush(
     if( rc!=SQLITE_OK ) return SQLITE_ERROR;
   }
 
-  for(attempt=0; attempt<8; attempt++){
+  for(attempt=0; attempt<64; attempt++){
     ChunkStore refs;
     ProllyHash remoteCommit = {{0}};
     ProllyHash expectedRefsHash = {{0}};
@@ -1419,6 +1419,12 @@ int doltlitePush(
     int nRefsData = 0;
     int exists;
     int noOp;
+    if( attempt ){
+      u8 jitter;
+      int delay = attempt<5 ? 5 << attempt : 100;
+      sqlite3_randomness(1, &jitter);
+      sqlite3_sleep(delay + jitter%delay);
+    }
     memset(&refs, 0, sizeof(refs));
     rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
     if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
