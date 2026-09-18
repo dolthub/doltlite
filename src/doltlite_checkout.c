@@ -1135,7 +1135,8 @@ static void doltCheckoutParsedFunc(
   int argc,
   sqlite3_value **argv,
   int createBranch,
-  int startFirst
+  int startFirst,
+  int forceBranch
 ){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1203,11 +1204,13 @@ static void doltCheckoutParsedFunc(
   if( createBranch ){
     int iBranch = startFirst ? 1 : 0;
     int iStart = startFirst ? 0 : 1;
-    if( argc<1 ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
-    if( startFirst && argc<2 ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
+    const char *zNeedName = forceBranch ? "branch name required after -B"
+                                        : "branch name required after -b";
+    if( argc<1 ){ doltliteVcResultError(ctx, db, zNeedName); return; }
+    if( startFirst && argc<2 ){ doltliteVcResultError(ctx, db, zNeedName); return; }
     if( argc>2 ){ doltliteVcResultError(ctx, db, "too many arguments"); return; }
     zBranch = (const char*)sqlite3_value_text(argv[iBranch]);
-    if( branchNameEmpty(zBranch) ){ doltliteVcResultError(ctx, db, "branch name required after -b"); return; }
+    if( branchNameEmpty(zBranch) ){ doltliteVcResultError(ctx, db, zNeedName); return; }
     if( !doltliteUserRefNameIsValid(zBranch) ){
       doltliteVcResultError(ctx, db, "invalid branch name");
       return;
@@ -1232,6 +1235,8 @@ static void doltCheckoutParsedFunc(
       }
     }
     branchCreate.zName = zBranch;
+    /* -B creates the branch or resets an existing one, then switches. */
+    branchCreate.force = forceBranch;
     rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
     if( rc!=SQLITE_OK ){
       (void)doltliteVcSealSavepointError(db);
@@ -1432,7 +1437,7 @@ static int checkoutStartPointBeforeDashB(
       endOptions = 1;
       continue;
     }
-    if( !endOptions && strcmp(zArg, "-b")==0 ){
+    if( !endOptions && (strcmp(zArg, "-b")==0 || strcmp(zArg, "-B")==0) ){
       return seenPositional;
     }
     seenPositional = 1;
@@ -1444,9 +1449,11 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   DoltliteCmdArgs args;
   int createBranch = 0;
+  int forceBranch = 0;
   int startFirst = 0;
   DoltliteCmdOption aOption[] = {
-    { 0, 'b', DOLTLITE_CMD_OPTION_FLAG, &createBranch, 0 }
+    { 0, 'b', DOLTLITE_CMD_OPTION_FLAG, &createBranch, 0 },
+    { 0, 'B', DOLTLITE_CMD_OPTION_FLAG, &forceBranch, 0 }
   };
   int rc;
 
@@ -1456,7 +1463,8 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
   if( argc==0 ){
-    doltCheckoutParsedFunc(ctx, argc, argv, createBranch, startFirst);
+    doltCheckoutParsedFunc(ctx, argc, argv, createBranch, startFirst,
+                           forceBranch);
     return;
   }
   rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
@@ -1465,11 +1473,12 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     (void)doltliteVcSealSavepointError(sqlite3_context_db_handle(ctx));
     return;
   }
+  if( forceBranch ) createBranch = 1;
   if( createBranch ){
     startFirst = checkoutStartPointBeforeDashB(argc, argv);
   }
   doltCheckoutParsedFunc(ctx, args.nPositional, args.apPositional,
-                         createBranch, startFirst);
+                         createBranch, startFirst, forceBranch);
   doltliteCmdArgsClear(&args);
 }
 

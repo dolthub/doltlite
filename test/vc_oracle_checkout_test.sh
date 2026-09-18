@@ -269,6 +269,74 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout(dolt_hashof('HEAD~1'), '-b', 'from_c1');
 "
 
+echo "--- create-or-reset-and-switch (-B) ---"
+
+oracle "dash_B_creates_when_absent" "
+$SEED
+SELECT dolt_checkout('-B', 'newfeat');
+INSERT INTO t VALUES (2, 'B_feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+"
+
+oracle "dash_B_resets_existing_branch" "
+$SEED
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES (2, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('-B', 'feature');
+"
+
+oracle "dash_B_from_start_point" "
+$SEED
+INSERT INTO t VALUES (2, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('-B', 'newfeat', 'HEAD~1');
+"
+
+oracle "dash_B_resets_existing_to_start_point" "
+$SEED
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES (2, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('feature');
+SELECT dolt_checkout('-B', 'feature', 'main');
+"
+
+oracle "dash_B_on_current_branch" "
+$SEED
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO t VALUES (2, 'feat_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_feat');
+SELECT dolt_checkout('-B', 'feature', 'main');
+"
+
+oracle "dash_B_leaves_dirty_work_on_old_branch" "
+$SEED
+SELECT dolt_branch('other');
+INSERT INTO t VALUES (99, 'uncommitted');
+SELECT dolt_checkout('-B', 'other');
+"
+
+oracle_error "dash_B_requires_a_name" "
+$SEED
+SELECT dolt_checkout('-B');
+"
+
+oracle_error "dash_B_rejects_invalid_name" "
+$SEED
+SELECT dolt_checkout('-B', 'bad name');
+"
+
+oracle_error "dash_B_rejects_missing_start_point" "
+$SEED
+SELECT dolt_checkout('-B', 'x', 'nosuchrev');
+"
+
 echo "--- per-table checkout ---"
 
 oracle "revert_single_table_working" "
