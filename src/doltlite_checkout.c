@@ -412,6 +412,7 @@ void doltConnectBranchFunc(
   (void)argc;
   memset(&m, 0, sizeof(m));
   if( doltliteCmdRejectDetached(ctx) ) return;
+  if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){
     sqlite3_result_error(ctx, doltliteVcUnavailableMessage(db), -1);
     return;
@@ -1147,6 +1148,7 @@ static void doltCheckoutParsedFunc(
   int hadExplicitTxn = !db->autoCommit;
   int rc;
 
+  if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, doltliteVcUnavailableMessage(db)); return; }
   if( argc<1 ){ doltliteVcResultError(ctx, db, "branch name required"); return; }
   zBranch = (const char*)sqlite3_value_text(argv[0]);

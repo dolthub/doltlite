@@ -2135,6 +2135,7 @@ static void doltliteRebaseFunc(
   memset(&args, 0, sizeof(args));
 
   if( doltliteCmdRejectDetached(context) ) return;
+  if( doltliteCmdRejectReadOnly(context) ) return;
   if( !cs ){ sqlite3_result_error(context, "no database", -1); goto rebase_cleanup; }
   if( argc<1 ){
     sqlite3_result_error(context, "usage: dolt_rebase('upstream_branch')", -1);

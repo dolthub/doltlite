@@ -742,9 +742,14 @@ static int csReloadFromDisk(ChunkStore *cs){
   if( cs->staging.nRecentUncommitted > 0 ){
     return SQLITE_BUSY_SNAPSHOT;
   }
-  /* No OPEN_CREATE: a vacated path must fail, not become an empty store. */
-  rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  /* No OPEN_CREATE: a vacated path must fail, not become an empty store.
+  ** Match the connection's read-only bit so a RO handle is not reopened RW. */
+  {
+    int openFlags = SQLITE_OPEN_MAIN_DB;
+    if( cs->readOnly ) openFlags |= SQLITE_OPEN_READONLY;
+    else openFlags |= SQLITE_OPEN_READWRITE;
+    rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename, openFlags);
+  }
   if( rc!=SQLITE_OK ) return rc;
 
   /* Deferred NOTADB opens succeed; reload must not adopt a short/garbage file. */
@@ -759,8 +764,12 @@ static int csReloadFromDisk(ChunkStore *cs){
     return SQLITE_BUSY;
   }
 
-  csCaptureReloadState(cs, &saved);
-  csAdoptOpenedStoreState(cs, &tmp);
+  {
+    int keepReadOnly = cs->readOnly;
+    csCaptureReloadState(cs, &saved);
+    csAdoptOpenedStoreState(cs, &tmp);
+    cs->readOnly = keepReadOnly;
+  }
 
   /* pFile->zPath aliases zFilename; keep each filename with its file. */
   zOldFilename = cs->file.zFilename;

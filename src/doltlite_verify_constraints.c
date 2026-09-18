@@ -188,6 +188,7 @@ static void doltVerifyConstraintsFunc(
   memset(&args, 0, sizeof(args));
 
   if( doltliteCmdRejectDetached(context) ) return;
+  if( doltliteCmdRejectReadOnly(context) ) return;
   for(i=0; i<argc; i++){
     const char *zArg = (const char*)sqlite3_value_text(argv[i]);
     if( !zArg || !zArg[0] ){

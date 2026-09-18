@@ -617,6 +617,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   int rc;
 
   if( doltliteCmdRejectDetached(ctx) ) return;
+  if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   if( argc<2 ){
     doltliteVcResultError(ctx, db, "usage: dolt_pull(remote, branch)");

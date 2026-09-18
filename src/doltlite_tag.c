@@ -177,6 +177,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   int rc;
 
   if( doltliteCmdRejectDetached(ctx) ) return;
+  if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( argc<1 ){
     doltliteVcResultError(ctx, sqlite3_context_db_handle(ctx),
                           "tag name required");

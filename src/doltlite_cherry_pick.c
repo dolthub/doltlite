@@ -403,6 +403,7 @@ static void doltliteCherryPickFunc(
   memset(&ourCommit, 0, sizeof(ourCommit));
 
   if( doltliteCmdRejectDetached(context) ) return;
+  if( doltliteCmdRejectReadOnly(context) ) return;
   if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
   if( argc<1 ){
     sqlite3_result_error(context, "usage: dolt_cherry_pick('commit_hash')", -1);

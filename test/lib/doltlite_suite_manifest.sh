@@ -29,6 +29,7 @@ doltlite_ignore.sh
 doltlite_reserved.sh
 doltlite_diff.sh
 doltlite_reset.sh
+doltlite_readonly_vc.sh
 doltlite_branch.sh
 doltlite_default_branch.sh
 doltlite_connect_branch.sh
@@ -226,6 +227,7 @@ doltlite_rebase.sh
 doltlite_rebase_schema.sh
 doltlite_conflict_rows.sh
 doltlite_reset.sh
+doltlite_readonly_vc.sh
 doltlite_working_set.sh
 doltlite_history.sh
 doltlite_at.sh
