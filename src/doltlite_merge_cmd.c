@@ -1207,6 +1207,7 @@ int doltliteMergeRef(
   int bPeerBusy = 0;
   int bRestoreOnFail = 0;
   int bPersistRestore = 0;
+  int isMerging = !squash;
   const char *zFail = 0;
   char *zOwnedErr = 0;
   SchemaMergeAction *aSchemaActions = 0;
@@ -1321,12 +1322,14 @@ int doltliteMergeRef(
 
   if( nMergeConflicts>0 ){
     ProllyHash conflictsHash;
+    bRestoreOnFail = 1;
+    if( squash ){
+      rc = doltliteSessionHasSchemaConflicts(db, &isMerging);
+      if( rc!=SQLITE_OK ) goto merge_fail;
+    }
     rc = doltliteGetSessionConflictsCatalog(db, &conflictsHash);
     if( rc!=SQLITE_OK ) goto merge_fail;
-    /* isMerging is now set: later failures must restore, not discard,
-    ** or the next merge refuses as already in progress. */
-    bRestoreOnFail = 1;
-    rc = doltliteSetSessionMergeState(db, 1, &theirHead, &conflictsHash);
+    rc = doltliteSetSessionMergeState(db, isMerging, &theirHead, &conflictsHash);
     /* Spec cache only sharpens dolt_merge_status.source; ignore failure. */
     (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
     if( rc!=SQLITE_OK ) goto merge_fail;
@@ -1373,15 +1376,13 @@ int doltliteMergeRef(
     goto merge_fail;
   }
   if( nViolations > 0 ){
-    /* CVs leave the merge unfinished: record it so dolt_merge_status
-    ** reports it. If row/schema conflicts exist too, report both. */
     ProllyHash cvConflictsHash;
     rc = doltliteGetSessionConflictsCatalog(db, &cvConflictsHash);
     if( rc!=SQLITE_OK ){
       bRestoreOnFail = 1;
       goto merge_fail;
     }
-    if( doltliteSetSessionMergeState(db, 1, &theirHead,
+    if( doltliteSetSessionMergeState(db, isMerging, &theirHead,
                                     &cvConflictsHash)==SQLITE_OK ){
       (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
     }

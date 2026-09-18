@@ -92,4 +92,106 @@ foreach {name diverged flags merging} {
   }
 }
 
+foreach squash {0 1} {
+  foreach artifacts {conflicts violations both} {
+    reset_db
+    set conflicts [expr {$artifacts ne "violations"}]
+    set violations [expr {$artifacts ne "conflicts"}]
+    set flags [expr {$squash ? "'--squash'," : ""}]
+    set name merge-txn-artifacts-$artifacts-squash-$squash
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+      CREATE TABLE u(id INTEGER PRIMARY KEY, a INT UNIQUE);
+      INSERT INTO t VALUES(1,1),(2,2);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('feature');
+      SELECT dolt_checkout('feature');
+      INSERT INTO t VALUES(3,3);
+    }
+    if {$conflicts} {execsql {UPDATE t SET a=10 WHERE id=1}}
+    if {$violations} {execsql {INSERT INTO u VALUES(1,10)}}
+    execsql {
+      SELECT dolt_commit('-am','feature');
+      SELECT dolt_checkout('main');
+      UPDATE t SET a=20 WHERE id=2;
+    }
+    if {$conflicts} {execsql {UPDATE t SET a=11 WHERE id=1}}
+    if {$violations} {execsql {INSERT INTO u VALUES(2,10)}}
+    execsql {SELECT dolt_commit('-am','main'); BEGIN}
+    do_test $name-merge {
+      list [catch {execsql "SELECT dolt_merge(${flags}'feature')"}] \
+           [execsql {
+             SELECT is_merging FROM dolt_merge_status;
+             SELECT count(*) FROM dolt_conflicts;
+             SELECT count(*) FROM dolt_constraint_violations;
+           }]
+    } [list 1 [list [expr {!$squash}] $conflicts $violations]]
+    do_test $name-commit-blocked {
+      lindex [catchsql {SELECT dolt_commit('-am','unresolved')}] 0
+    } 1
+    if {$conflicts} {
+      execsql {SELECT dolt_conflicts_resolve('--theirs','t')}
+    }
+    if {$violations} {
+      do_execsql_test $name-repair {
+        DELETE FROM u WHERE id=1;
+        DELETE FROM dolt_constraint_violations_u;
+        SELECT dolt_verify_constraints('--all');
+      } 0
+    }
+    do_execsql_test $name-resolved {
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT count(*) FROM dolt_constraint_violations;
+      SELECT is_merging FROM dolt_merge_status;
+      SELECT id,a FROM t ORDER BY id;
+    } [list 0 0 [expr {!$squash}] 1 [expr {$conflicts ? 10 : 1}] 2 20 3 3]
+    do_test $name-commit {
+      execsql {SELECT length(dolt_commit('-am','resolved'))}
+    } 40
+    db close
+    sqlite3 db test.db
+    do_execsql_test $name-reopen {
+      SELECT count(*) FROM dolt_commit_ancestors
+        WHERE commit_hash=dolt_hashof('HEAD');
+      SELECT count(*) FROM dolt_log;
+      SELECT is_merging FROM dolt_merge_status;
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    } [list [expr {2-$squash}] [expr {5-$squash}] 0 0 ok]
+  }
+}
+
+foreach violations {0 1} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    CREATE TABLE u(id INTEGER PRIMARY KEY, a INT UNIQUE);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+    ALTER TABLE t ADD COLUMN a INT;
+  }
+  if {$violations} {execsql {INSERT INTO u VALUES(1,10)}}
+  execsql {
+    SELECT dolt_commit('-am','feature');
+    SELECT dolt_checkout('main');
+    ALTER TABLE t ADD COLUMN a TEXT;
+  }
+  if {$violations} {execsql {INSERT INTO u VALUES(2,10)}}
+  execsql {SELECT dolt_commit('-am','main'); BEGIN}
+  do_test merge-txn-squash-schema-$violations {
+    list [catch {execsql {SELECT dolt_merge('--squash','feature')}}] \
+         [execsql {
+           SELECT is_merging FROM dolt_merge_status;
+           SELECT table_name FROM dolt_schema_conflicts;
+           SELECT count(*) FROM dolt_constraint_violations;
+         }]
+  } [list 1 [list 1 t $violations]]
+  do_execsql_test merge-txn-squash-schema-$violations-abort {
+    SELECT dolt_merge('--abort');
+    SELECT is_merging FROM dolt_merge_status;
+    SELECT count(*) FROM dolt_schema_conflicts;
+  } {0 0 0}
+}
+
 finish_test
