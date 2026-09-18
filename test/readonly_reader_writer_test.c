@@ -135,12 +135,91 @@ static void test_readonly_still_sees_peer_changes(const char *zPath){
   remove(zPath);
 }
 
+/* A refused reset must not clear cs->readOnly; later VC writers stay refused. */
+static int exec_rc(sqlite3 *db, const char *zSql){
+  return sqlite3_exec(db, zSql, 0, 0, 0);
+}
+
+static void test_readonly_reset_does_not_unlock_writers(const char *zPath){
+  sqlite3 *rw = 0, *ro = 0;
+  char *zBranches = 0, *zTags = 0, *zMsg = 0;
+  sqlite3_stmt *p = 0;
+
+  remove(zPath);
+  check("ro_reset: seed open", sqlite3_open(zPath, &rw)==SQLITE_OK);
+  if( !rw ) return;
+  check("ro_reset: seed", exec_rc(rw,
+      "CREATE TABLE t(a INT PRIMARY KEY, b TEXT);"
+      "INSERT INTO t VALUES(1,'x');"
+      "SELECT dolt_commit('-A','-m','c1');"
+      "SELECT dolt_tag('v1');"
+      "SELECT dolt_branch('feat');"
+      "INSERT INTO t VALUES(2,'y');"
+      "SELECT dolt_add('t');")==SQLITE_OK);
+  sqlite3_close(rw);
+  rw = 0;
+
+  check("ro_reset: open readonly",
+        sqlite3_open_v2(zPath, &ro, SQLITE_OPEN_READONLY, 0)==SQLITE_OK);
+  if( !ro ) return;
+  check("ro_reset: branch before is readonly",
+        exec_rc(ro, "SELECT dolt_branch('before_reset')")==SQLITE_READONLY);
+  check("ro_reset: reset is readonly",
+        exec_rc(ro, "SELECT dolt_reset('t')")==SQLITE_READONLY);
+  check("ro_reset: branch after is still readonly",
+        exec_rc(ro, "SELECT dolt_branch('after_reset')")==SQLITE_READONLY);
+  check("ro_reset: tag is still readonly",
+        exec_rc(ro, "SELECT dolt_tag('ro_tag')")==SQLITE_READONLY);
+  check("ro_reset: tag delete is still readonly",
+        exec_rc(ro, "SELECT dolt_tag('-d','v1')")==SQLITE_READONLY);
+  check("ro_reset: branch delete is still readonly",
+        exec_rc(ro, "SELECT dolt_branch('-D','feat')")==SQLITE_READONLY);
+  check("ro_reset: commit is still readonly",
+        exec_rc(ro, "SELECT dolt_commit('-m','ro commit')")==SQLITE_READONLY);
+  check("ro_reset: insert is still readonly",
+        exec_rc(ro, "INSERT INTO t VALUES(3,'z')")==SQLITE_READONLY);
+  sqlite3_close(ro);
+
+  check("ro_reset: reopen rw", sqlite3_open(zPath, &rw)==SQLITE_OK);
+  if( !rw ){ remove(zPath); return; }
+  if( sqlite3_prepare_v2(rw,
+        "SELECT group_concat(name) FROM (SELECT name FROM dolt_branches ORDER BY name)",
+        -1, &p, 0)==SQLITE_OK && sqlite3_step(p)==SQLITE_ROW ){
+    zBranches = sqlite3_mprintf("%s", (const char*)sqlite3_column_text(p, 0));
+  }
+  sqlite3_finalize(p); p = 0;
+  check("ro_reset: branches unchanged",
+        zBranches && strcmp(zBranches, "feat,main")==0);
+  if( sqlite3_prepare_v2(rw,
+        "SELECT group_concat(tag_name) FROM (SELECT tag_name FROM dolt_tags ORDER BY tag_name)",
+        -1, &p, 0)==SQLITE_OK && sqlite3_step(p)==SQLITE_ROW ){
+    zTags = sqlite3_mprintf("%s", (const char*)sqlite3_column_text(p, 0));
+  }
+  sqlite3_finalize(p); p = 0;
+  check("ro_reset: tags unchanged",
+        zTags && strcmp(zTags, "v1")==0);
+  if( sqlite3_prepare_v2(rw, "SELECT message FROM dolt_log LIMIT 1",
+        -1, &p, 0)==SQLITE_OK && sqlite3_step(p)==SQLITE_ROW ){
+    zMsg = sqlite3_mprintf("%s", (const char*)sqlite3_column_text(p, 0));
+  }
+  sqlite3_finalize(p);
+  check("ro_reset: log unchanged", zMsg && strcmp(zMsg, "c1")==0);
+  check("ro_reset: still staged",
+        scalar(rw, "SELECT count(*) FROM dolt_status WHERE staged=1")==1);
+  sqlite3_free(zBranches);
+  sqlite3_free(zTags);
+  sqlite3_free(zMsg);
+  sqlite3_close(rw);
+  remove(zPath);
+}
+
 int main(void){
   char zPath[256];
   snprintf(zPath, sizeof(zPath), "/tmp/dolt_ro_reader_%d.db", (int)getpid());
 
   test_readonly_status_does_not_starve_a_writer(zPath);
   test_readonly_still_sees_peer_changes(zPath);
+  test_readonly_reset_does_not_unlock_writers(zPath);
 
   printf("readonly_reader_writer_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

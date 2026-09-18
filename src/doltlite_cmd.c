@@ -252,6 +252,14 @@ int doltliteCmdRejectDetached(sqlite3_context *ctx){
   return 1;
 }
 
+int doltliteCmdRejectReadOnly(sqlite3_context *ctx){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  if( !cs || !chunkStoreWriteRefused(cs) ) return 0;
+  sqlite3_result_error_code(ctx, SQLITE_READONLY);
+  return 1;
+}
+
 static void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt){
   char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
   if( zErr ){

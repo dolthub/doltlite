@@ -412,6 +412,7 @@ void doltConnectBranchFunc(
   (void)argc;
   memset(&m, 0, sizeof(m));
   if( doltliteCmdRejectDetached(ctx) ) return;
+  if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){
     sqlite3_result_error(ctx, doltliteVcUnavailableMessage(db), -1);
     return;

@@ -1225,6 +1225,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   int rc;
 
   if( doltliteCmdRejectDetached(ctx) ) return;
+  if( doltliteCmdRejectReadOnly(ctx) ) return;
   rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) return;

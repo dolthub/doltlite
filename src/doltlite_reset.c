@@ -576,12 +576,16 @@ static void doltliteResetFunc(
   int graphLocked = 0;
   u8 isMerging = 0;
   int bSucceeded = 0;
+  int haveSaved = 0;
+  DoltliteTxnState saved;
 
   memset(&args, 0, sizeof(args));
+  memset(&saved, 0, sizeof(saved));
 
   assert( context!=0 );
   assert( argc>=0 );
   if( doltliteCmdRejectDetached(context) ) return;
+  if( doltliteCmdRejectReadOnly(context) ) return;
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     goto reset_cleanup;
@@ -675,6 +679,13 @@ static void doltliteResetFunc(
     nPaths = 0;
   }
 
+  rc = doltliteSaveTxnState(db, &saved);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    goto reset_cleanup;
+  }
+  haveSaved = 1;
+
   if( nPaths>0 ){
     if( isHard || isSoft || zRef ){
       sqlite3_result_error(context,
@@ -700,6 +711,7 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
     sqlite3_result_int(context, 0);
+    bSucceeded = 1;
     goto reset_cleanup;
   }
   sqlite3_free(azPaths);
@@ -707,6 +719,7 @@ static void doltliteResetFunc(
 
   if( isSoft && !zRef ){
     sqlite3_result_int(context, 0);
+    bSucceeded = 1;
     goto reset_cleanup;
   }
 
@@ -839,6 +852,13 @@ static void doltliteResetFunc(
 reset_cleanup:
   sqlite3_free(azPaths);
   doltliteCmdArgsClear(&args);
+  if( haveSaved ){
+    if( !bSucceeded ){
+      (void)doltliteRestoreTxnStateOnFailure(db, &saved, SQLITE_ERROR);
+    }else{
+      doltliteTxnStateClear(&saved);
+    }
+  }
   if( graphLocked ){
     chunkStoreUnlock(cs);
   }
