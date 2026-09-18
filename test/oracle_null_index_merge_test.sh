@@ -136,6 +136,63 @@ INTEGRITY=$(dl "$DB" "PRAGMA integrity_check;")
 [ "$INTEGRITY" = "ok" ] && pass_name "d_integrity" || fail_name "d_integrity; got $INTEGRITY"
 
 echo ""
+echo "--- E: Cell merge sets the trailing indexed column to NULL ---"
+
+# Both sides edit row 2 in different columns; theirs NULLs the indexed
+# trailing column. The merged record stops short of that column, and the
+# index key must still carry the NULL rather than end at the rowid.
+for OP in merge cherry_pick; do
+  DB="$TMPROOT/e_$OP.db"
+  dl "$DB" "$(cat <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT);
+CREATE INDEX ix0 ON t(c);
+INSERT INTO t VALUES(1,1,1),(2,2,2),(3,3,3);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('b');
+SELECT dolt_checkout('b');
+UPDATE t SET c=NULL WHERE id=2;
+SELECT dolt_commit('-am','c null');
+SELECT dolt_checkout('main');
+UPDATE t SET a=73 WHERE id=2;
+SELECT dolt_commit('-am','a 73');
+SELECT dolt_$OP('b');
+SQL
+)" >/dev/null
+
+  SCAN=$(dl "$DB" "SELECT group_concat(id||'|'||a||'|'||coalesce(c,'NULL'),';') FROM (SELECT * FROM t NOT INDEXED ORDER BY id);")
+  IDX=$(dl "$DB" "SELECT group_concat(id||'|'||a||'|'||coalesce(c,'NULL'),';') FROM (SELECT * FROM t INDEXED BY ix0 ORDER BY id);")
+  NULLS=$(dl "$DB" "SELECT count(*) FROM t WHERE c IS NULL;")
+  INTEGRITY=$(dl "$DB" "PRAGMA integrity_check;")
+  [ "$SCAN" = "1|1|1;2|73|NULL;3|3|3" ] && pass_name "e_${OP}_scan" || fail_name "e_${OP}_scan; got $SCAN"
+  [ "$IDX" = "$SCAN" ] && pass_name "e_${OP}_index_matches_scan" || fail_name "e_${OP}_index_matches_scan; got $IDX"
+  [ "$NULLS" = "1" ] && pass_name "e_${OP}_null_lookup" || fail_name "e_${OP}_null_lookup; got $NULLS"
+  [ "$INTEGRITY" = "ok" ] && pass_name "e_${OP}_integrity" || fail_name "e_${OP}_integrity; got $INTEGRITY"
+done
+
+# Trailing INTEGER PRIMARY KEY column: the trimmed record stops before the
+# IPK slot, and the key must still end with the rowid.
+DB="$TMPROOT/e_ipk_tail.db"
+dl "$DB" "$(cat <<'SQL'
+CREATE TABLE t(a INT, c INT, id INTEGER PRIMARY KEY);
+CREATE INDEX ix0 ON t(c);
+INSERT INTO t VALUES(1,1,1),(2,2,2),(3,3,3);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('b');
+SELECT dolt_checkout('b');
+UPDATE t SET c=NULL WHERE id=2;
+SELECT dolt_commit('-am','c null');
+SELECT dolt_checkout('main');
+UPDATE t SET a=73 WHERE id=2;
+SELECT dolt_commit('-am','a 73');
+SELECT dolt_merge('b');
+SQL
+)" >/dev/null
+IDX=$(dl "$DB" "SELECT group_concat(id||'|'||a||'|'||coalesce(c,'NULL'),';') FROM (SELECT * FROM t INDEXED BY ix0 ORDER BY id);")
+INTEGRITY=$(dl "$DB" "PRAGMA integrity_check;")
+[ "$IDX" = "1|1|1;2|73|NULL;3|3|3" ] && pass_name "e_ipk_tail_index" || fail_name "e_ipk_tail_index; got $IDX"
+[ "$INTEGRITY" = "ok" ] && pass_name "e_ipk_tail_integrity" || fail_name "e_ipk_tail_integrity; got $INTEGRITY"
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
