@@ -3234,6 +3234,16 @@ int sqlite3BtreeIsDoltliteFormat(Btree *p){
   return 0;
 }
 
+#ifdef DOLTLITE_PROLLY
+int sqlite3BtreeHasPendingChanges(Btree *p){
+  Pager *pPager;
+  if( !p ) return 0;
+  pPager = sqlite3BtreePager(p);
+  if( !pPager ) return 0;
+  return !sqlite3PagerOkToChangeJournalMode(pPager);
+}
+#endif
+
 int sqlite3BtreeSetAutoVacuum(Btree *p, int autoVacuum){
 #ifdef SQLITE_OMIT_AUTOVACUUM
   return SQLITE_READONLY;

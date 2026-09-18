@@ -108,6 +108,49 @@ run_test "multifile_trigger_rolls_back_main" \
 run_test "multifile_trigger_rolls_back_attached" \
   "ATTACH '$AUX_DB' AS aux; SELECT count(*) FROM aux.t4;" "0" "$MAIN_DB"
 
+DEL_MAIN="$TMP/multifile-del-main.db"
+DEL_AUX="$TMP/multifile-del-aux.db"
+run_test_match "multifile_temp_trigger_delete_rejected" \
+  "ATTACH '$DEL_AUX' AS aux;
+CREATE TABLE t2(c, d);
+CREATE TABLE aux.t1(e, f);
+INSERT INTO aux.t1 VALUES('x','y');
+CREATE TEMP TRIGGER tr3 AFTER DELETE ON t2 BEGIN
+  DELETE FROM aux.t1;
+END;
+INSERT INTO t2 VALUES(1,2);
+DELETE FROM t2;" \
+  "atomic commit across multiple file-backed databases is not supported" \
+  "$DEL_MAIN"
+
+IMM_MAIN="$TMP/immediate-main.db"
+IMM_AUX="$TMP/immediate-aux.db"
+run_test "multifile_immediate_insert_main" \
+  "CREATE TABLE t(a);
+ATTACH '$IMM_AUX' AS a1;
+BEGIN IMMEDIATE;
+INSERT INTO t VALUES(1);
+COMMIT;
+SELECT count(*) FROM t;" \
+  "1" "$IMM_MAIN"
+
+run_test "multifile_exclusive_insert_main" \
+  "ATTACH '$IMM_AUX' AS a1;
+BEGIN EXCLUSIVE;
+INSERT INTO t VALUES(2);
+COMMIT;
+SELECT count(*) FROM t;" \
+  "2" "$IMM_MAIN"
+
+run_test "multifile_immediate_insert_attached" \
+  "ATTACH '$IMM_AUX' AS a1;
+CREATE TABLE IF NOT EXISTS a1.u(a);
+BEGIN IMMEDIATE;
+INSERT INTO a1.u VALUES(1);
+COMMIT;
+SELECT count(*) FROM a1.u;" \
+  "1" "$IMM_MAIN"
+
 CANON_DB="$TMP/sqlite-master-canonical.db"
 run_test_lastline "sqlite_master_sql_canonical" \
   "CREATE TABLE t(a INTEGER PRIMARY KEY,   b   TEXT  );

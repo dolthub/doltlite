@@ -2982,9 +2982,12 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
       sqlite3BtreeEnter(pBt);
       pPager = sqlite3BtreePager(pBt);
 #ifdef DOLTLITE_PROLLY
+      /* BEGIN IMMEDIATE/EXCLUSIVE marks every attached btree TRANS_WRITE.
+      ** Count only btrees with pending changes so a one-file write can
+      ** commit while another file is attached. */
       if( i!=1 && sqlite3PagerIsMemdb(pPager)==0 ){
         const char *zFilename = sqlite3BtreeGetFilename(pBt);
-        if( zFilename && zFilename[0] ){
+        if( zFilename && zFilename[0] && sqlite3BtreeHasPendingChanges(pBt) ){
           nFileWrite++;
           if( sqlite3BtreeIsDoltliteFormat(pBt) ) hasDoltliteWrite = 1;
         }

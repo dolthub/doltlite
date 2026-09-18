@@ -174,6 +174,54 @@ run_config() {
   fi
   if [ "$IS_SQL" = "1" ]; then mk_sq "$ATT_PATH" "$ATT_SEED"
   elif [ "$IS_MEM" != "1" ]; then mk_dl "$ATT_PATH" "$ATT_SEED"; fi
+  R=$(dl_last "$PRELUDE BEGIN IMMEDIATE; INSERT INTO t VALUES(31,'imm_m'); COMMIT; SELECT v FROM t WHERE id=31;" "$M")
+  want_eq "$cfg/T4_immediate_insert_main" "$R" "imm_m"
+
+  if [ "$main_kind" != "dlmem" ]; then
+    rm -f "$M"; printf '%s\n' "$MAIN_SEED" | $DOLTLITE "$M" >/dev/null 2>&1
+  fi
+  if [ "$IS_SQL" = "1" ]; then mk_sq "$ATT_PATH" "$ATT_SEED"
+  elif [ "$IS_MEM" != "1" ]; then mk_dl "$ATT_PATH" "$ATT_SEED"; fi
+  R=$(dl_last "$PRELUDE BEGIN EXCLUSIVE; INSERT INTO t VALUES(32,'exc_m'); COMMIT; SELECT v FROM t WHERE id=32;" "$M")
+  want_eq "$cfg/T5_exclusive_insert_main" "$R" "exc_m"
+
+  if [ "$main_kind" != "dlmem" ]; then
+    rm -f "$M"; printf '%s\n' "$MAIN_SEED" | $DOLTLITE "$M" >/dev/null 2>&1
+  fi
+  if [ "$IS_SQL" = "1" ]; then mk_sq "$ATT_PATH" "$ATT_SEED"
+  elif [ "$IS_MEM" != "1" ]; then mk_dl "$ATT_PATH" "$ATT_SEED"; fi
+  R=$(dl_last "$PRELUDE BEGIN IMMEDIATE; INSERT INTO x.u VALUES(31,'imm_a'); COMMIT; SELECT v FROM x.u WHERE id=31;" "$M")
+  want_eq "$cfg/T6_immediate_insert_attached" "$R" "imm_a"
+
+  if [ "$main_kind" != "dlmem" ] && [ "$attached_kind" != "mem" ]; then
+    if [ "$main_kind" != "dlmem" ]; then
+      rm -f "$M"; printf '%s\n' "$MAIN_SEED" | $DOLTLITE "$M" >/dev/null 2>&1
+    fi
+    if [ "$IS_SQL" = "1" ]; then mk_sq "$ATT_PATH" "$ATT_SEED"
+    else mk_dl "$ATT_PATH" "$ATT_SEED"; fi
+    R=$(dl_all "$PRELUDE BEGIN IMMEDIATE; INSERT INTO t VALUES(33,'both_m'); INSERT INTO x.u VALUES(33,'both_a'); COMMIT;" "$M")
+    case "$R" in
+      *"atomic commit across multiple file-backed databases is not supported"*)
+        PASS=$((PASS+1)) ;;
+      *)
+        FAIL=$((FAIL+1))
+        ERRORS="$ERRORS\n  FAIL: $cfg/T7_immediate_txn_both_rejected\n    got: $(printf %q "$R")" ;;
+    esac
+    RM=$(dl_last "SELECT count(*) FROM t WHERE id=33;" "$M")
+    if [ "$IS_SQL" = "1" ]; then
+      RA=$(sq_last "SELECT count(*) FROM u WHERE id=33;" "$ATT_PATH")
+    else
+      RA=$(dl_last "SELECT count(*) FROM u WHERE id=33;" "$ATT_PATH")
+    fi
+    want_eq "$cfg/T7_immediate_rejected_rolls_back_main" "$RM" "0"
+    want_eq "$cfg/T7_immediate_rejected_rolls_back_attached" "$RA" "0"
+  fi
+
+  if [ "$main_kind" != "dlmem" ]; then
+    rm -f "$M"; printf '%s\n' "$MAIN_SEED" | $DOLTLITE "$M" >/dev/null 2>&1
+  fi
+  if [ "$IS_SQL" = "1" ]; then mk_sq "$ATT_PATH" "$ATT_SEED"
+  elif [ "$IS_MEM" != "1" ]; then mk_dl "$ATT_PATH" "$ATT_SEED"; fi
   if [ "$main_kind" != "dlmem" ] && [ "$attached_kind" != "mem" ]; then
     R=$(dl_all "$PRELUDE BEGIN; INSERT INTO t VALUES(30,'t2_m'); INSERT INTO x.u VALUES(30,'t2_a'); COMMIT;" "$M")
     case "$R" in

@@ -340,6 +340,7 @@ struct Btree {
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;
+  ProllyHash committedCatalogShape;
   DoltVcState committedVc;
   u32 committedAMeta[16];
   ProllyHash catalogCacheHash;
@@ -720,6 +721,7 @@ int doltliteOriginSourceEnable(ChunkStore*, sqlite3*, int*);
 int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 void btreeStoreCommittedFromCurrent(Btree*, const ProllyHash*);
+void btreeCaptureCommittedCatalogShape(Btree *p);
 int syncBtreeSavepoints(Btree*);
 int ensureStatementSavepointsCaptured(Btree*);
 int pushSavepoint(Btree*, int);

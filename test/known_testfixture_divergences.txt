@@ -840,8 +840,6 @@ e_delete e_delete-2.3.2 class=unsupported issue=2490
 e_delete e_delete-2.3.3 class=unsupported issue=2490
 jrnlmode jrnlmode-2.3 class=unsupported issue=2490
 jrnlmode jrnlmode-2.5 class=unsupported issue=2490
-jrnlmode jrnlmode-3.2 class=unsupported issue=2490
-jrnlmode jrnlmode-6.9 class=unsupported issue=2490
 ioerr ioerr-5.11.3 class=unsupported issue=2490
 savepoint savepoint-10.2.9 class=unsupported issue=2490
 savepoint savepoint-10.2.10 class=unsupported issue=2490
@@ -891,7 +889,6 @@ temptrigger temptrigger-7.1 class=unsupported issue=2490
 temptrigger temptrigger-7.3.2 class=unsupported issue=2490
 temptrigger temptrigger-8.1.2 class=unsupported issue=2490
 temptrigger temptrigger-8.2.2 class=unsupported issue=2490
-temptrigger temptrigger-8.3.2 class=unsupported issue=2490
 trigger1 trigger1-10.3 class=unsupported issue=2490
 trigger1 trigger1-10.4 class=unsupported issue=2490
 trigger1 trigger1-10.6 class=unsupported issue=2490
