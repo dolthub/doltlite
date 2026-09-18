@@ -264,7 +264,8 @@ printf '%s\n' keepalive >"$TMP/response-mode"
 : >"$TMP/requests"
 result=$(DOLTLITE_HTTP_TIMEOUT_MS=1000 "$DOLTLITE" \
   "file:$TMP/lazy?mode=memory&cache=private&lazy_origin=1" \
-  "SELECT dolt_clone('--lazy','$URL'); SELECT count(*) FROM dolt_log('main');" 2>&1) || {
+  "SELECT dolt_clone('--lazy','$URL'); SELECT count(*) FROM dolt_log('main');" \
+  2>&1 | tr -d '\r') || {
   echo "FAIL: persistent lazy read failed: $result"
   exit 1
 }
@@ -283,7 +284,8 @@ echo "http remote persistent lazy reads: PASS"
 printf '%s\n' stale >"$TMP/response-mode"
 result=$(DOLTLITE_HTTP_TIMEOUT_MS=1000 "$DOLTLITE" \
   "file:$TMP/stale?mode=memory&cache=private&lazy_origin=1" \
-  "SELECT dolt_clone('--lazy','$URL'); SELECT count(*) FROM dolt_log('main');" 2>&1) || {
+  "SELECT dolt_clone('--lazy','$URL'); SELECT count(*) FROM dolt_log('main');" \
+  2>&1 | tr -d '\r') || {
   echo "FAIL: stale persistent connection was not retried: $result"
   exit 1
 }
