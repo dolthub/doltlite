@@ -370,4 +370,39 @@ run_test "workspace_schema_change_add_still_works" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, extra INT DEFAULT 0)" "$SCH_DB"
 rm -f "$SCH_DB"
 
+HID_DB=/tmp/doltlite_workspace_hidden_$$.db
+rm -f "$HID_DB"
+dltest_run_sql "
+SELECT dolt_config('user.name','t');
+CREATE TABLE u(a INT PRIMARY KEY);
+SELECT dolt_commit('-A','-m','c0');
+CREATE TABLE t(a INT PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_add('t');
+ALTER TABLE t ADD COLUMN c INT;
+INSERT INTO t VALUES(2,'y',2);
+UPDATE dolt_workspace_t SET staged=1 WHERE to_a=2;
+" "$HID_DB" >/dev/null
+
+run_test "workspace_staged_narrower_schema_residual" \
+  "SELECT staged || '|' || diff_type || '|' || to_a
+     FROM dolt_workspace_t ORDER BY staged DESC, to_a, diff_type;" \
+  $'1|added|1\n1|added|2\n0|modified|2' "$HID_DB"
+
+dltest_run_sql "
+SELECT dolt_commit('-m','c1');
+SELECT dolt_reset('--hard');
+" "$HID_DB" >/dev/null
+
+run_test "workspace_staged_narrower_schema_create" \
+  "SELECT sql FROM sqlite_master WHERE name='t';" \
+  "CREATE TABLE t(a INT PRIMARY KEY, b TEXT)" "$HID_DB"
+
+dltest_run_sql "ALTER TABLE t ADD COLUMN c INT DEFAULT 9;" "$HID_DB" >/dev/null
+
+run_test "workspace_staged_narrower_schema_default" \
+  "SELECT a || '|' || b || '|' || c FROM t ORDER BY a;" \
+  $'1|x|9\n2|y|9' "$HID_DB"
+rm -f "$HID_DB"
+
 dltest_finish
