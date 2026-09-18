@@ -1070,6 +1070,31 @@ int mergePreNormalizeRenamedDependents(
       if( mergeRenameMapLookup(azRenT, nRenT, azRenO[i]) ) goto table_done;
     }
 
+    for(i=0; i<nAncSchema; i++){
+      SchemaEntry *pDepAnc = &aAncSchema[i];
+      SchemaEntry *pDepOurs, *pDepTheirs, *pSurvivor;
+      char **azRen;
+      int nRen;
+      if( !pDepAnc->zType || strcmp(pDepAnc->zType, "index")!=0
+       || !pDepAnc->zName || !pDepAnc->zSql || !pDepAnc->zTblName
+       || sqlite3_stricmp(pDepAnc->zTblName, pAncT->zName)!=0 ){
+        continue;
+      }
+      pDepOurs = findSchemaEntry(aOursSchema, nOursSchema, pDepAnc->zName);
+      pDepTheirs = findSchemaEntry(aTheirsSchema, nTheirsSchema, pDepAnc->zName);
+      if( (pDepOurs!=0)==(pDepTheirs!=0) ) continue;
+      pSurvivor = pDepOurs ? pDepOurs : pDepTheirs;
+      azRen = pDepOurs ? azRenO : azRenT;
+      nRen = pDepOurs ? nRenO : nRenT;
+      if( mergeTextsEqualModuloRenames(pDepAnc->zSql, pSurvivor->zSql,
+                                       azRen, nRen) ){
+        char *zSql = sqlite3_mprintf("%s", pDepAnc->zSql);
+        if( !zSql ){ rc = SQLITE_NOMEM; goto table_done; }
+        sqlite3_free(pSurvivor->zSql);
+        pSurvivor->zSql = zSql;
+      }
+    }
+
     /* Old and new names of every rename: the only identifiers whose
     ** presence can differ between the three table texts. */
     azUni = sqlite3_malloc((nRenO+nRenT)*(int)sizeof(char*));

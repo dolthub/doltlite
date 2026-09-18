@@ -1669,4 +1669,50 @@ SQL
   done
 done
 
+for direction in forward reverse; do
+  for replacement in no yes; do
+    tag="dropped_index_renamed_column_${direction}_${replacement}"
+    DB="$TMPROOT/$tag.db"
+    drop_branch=main
+    rename_branch=feat
+    if [ "$direction" = reverse ]; then
+      drop_branch=feat
+      rename_branch=main
+    fi
+    index_sql=""
+    index_count=0
+    if [ "$replacement" = yes ]; then
+      index_sql="CREATE UNIQUE INDEX new_idx ON t(a);"
+      index_count=1
+    fi
+    cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE UNIQUE INDEX old_idx ON t(a);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('$drop_branch');
+DROP INDEX old_idx;
+$index_sql
+INSERT INTO t VALUES(2,20);
+SELECT dolt_commit('-Am','drop index');
+SELECT dolt_checkout('$rename_branch');
+ALTER TABLE t RENAME COLUMN a TO b;
+INSERT INTO t VALUES(3,30);
+SELECT dolt_commit('-Am','rename column');
+SELECT dolt_checkout('main');
+SQL
+    expect_merge_ok "$tag" "$DB"
+    expect_dual_value "${tag}_indexes" "$DB" "$index_count" \
+      "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='t';" \
+      "SELECT count(DISTINCT index_name) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='t' AND index_name<>'PRIMARY';"
+    expect_dual_value "${tag}_dropped" "$DB" "0" \
+      "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='old_idx';" \
+      "SELECT count(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='t' AND index_name='old_idx';"
+    expect_dual_value "${tag}_rows" "$DB" "1:10,2:20,3:30" \
+      "SELECT group_concat(id||':'||b, ',') FROM (SELECT * FROM t ORDER BY id);" \
+      "SELECT GROUP_CONCAT(CONCAT(id,':',b) ORDER BY id SEPARATOR ',') FROM t;"
+  done
+done
+
 vc_oracle_finish
