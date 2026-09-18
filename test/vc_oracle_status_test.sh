@@ -554,4 +554,17 @@ for squash in 0 1; do
   done
 done
 
+# Identical row content must not let an unrelated dropped table claim the
+# renamed one; the schema is what separates them.
+oracle "rename_beside_drop_identical_content" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+INSERT INTO d VALUES(1,'x');
+INSERT INTO r VALUES(1,'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE d;
+ALTER TABLE r RENAME TO r2;
+"
+
 vc_oracle_finish

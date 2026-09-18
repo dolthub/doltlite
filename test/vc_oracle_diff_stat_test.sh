@@ -936,6 +936,47 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
+# Two tables holding identical rows: content alone cannot say which one the
+# renamed table came from, so the pairing has to consult the schema.
+oracle_both "drop_beside_rename_identical_content" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+INSERT INTO d VALUES(1,'x');
+INSERT INTO r VALUES(1,'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE d;
+ALTER TABLE r RENAME TO r2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_beside_rename_identical_content_reversed" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+INSERT INTO d VALUES(1,'x');
+INSERT INTO r VALUES(1,'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE d;
+ALTER TABLE r RENAME TO r2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD" "HEAD~1"
+
+# Newer-to-older ranges resolve the rename from the other side: only the new
+# name is live, so the schema lookup has to try it too.
+oracle_both "rename_reversed_range" "
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+INSERT INTO r VALUES(1,'r1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE r RENAME TO r2;
+INSERT INTO r2 VALUES(2,'r2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD" "HEAD~1"
+
 oracle_both "drop_beside_rename_working" "
 CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
 CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
