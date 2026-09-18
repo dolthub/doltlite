@@ -4,17 +4,68 @@ import argparse
 import json
 from pathlib import Path
 import statistics
+import shutil
 import sys
 import tempfile
 
-from performance_hotspots import (SAVEPOINT_NAME as NAME, SAVEPOINT_ROWS,
-                                  SAVEPOINT_OPERATIONS, SAVEPOINT_ROLLBACK_EVERY,
-                                  SAVEPOINT_CACHE_KIB, savepoint_workload as workload,
-                                  prepare_savepoints as prepare, measure_savepoints as measure,
-                                  run)
+from performance_hotspots import parse_session, run, sql
 
 
 TEST_DIR = Path(__file__).resolve().parent
+NAME = "savepoint_rollback"
+SAVEPOINT_ROWS = 5000
+SAVEPOINT_OPERATIONS = 1000
+SAVEPOINT_ROLLBACK_EVERY = 4
+SAVEPOINT_CACHE_KIB = 65536
+
+
+def workload(rows, operations, rollback_every):
+    values = [i % 100 + 1 for i in range(1, rows + 1)]
+    statements = ["BEGIN;", "UPDATE t SET k=k+1;"]
+    for i in range(operations):
+        row_id = 1 + i * 137 % rows
+        statements.extend(["SAVEPOINT item;",
+                           f"UPDATE t SET k=k+1 WHERE id={row_id};"])
+        if rollback_every and i % rollback_every == 0:
+            statements.append("ROLLBACK TO item;")
+        else:
+            values[row_id - 1] += 1
+        statements.append("RELEASE item;")
+    statements.append("COMMIT;")
+    expected = ",".join(f"{i}:{value}" for i, value in enumerate(values, 1)) + "|ok"
+    return " ".join(statements), expected
+
+
+def prepare(binary, db, rows, cache_kib):
+    sql(binary, db, f"""PRAGMA journal_mode=WAL;
+PRAGMA synchronous=FULL;
+PRAGMA cache_size=-{cache_kib};
+CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER NOT NULL);
+BEGIN;
+WITH RECURSIVE c(i) AS (
+  VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows}
+) INSERT INTO t SELECT i,i%100 FROM c;
+COMMIT;""")
+    if db.stat().st_size >= cache_kib * 1024 // 4:
+        raise ValueError(f"fixture must use less than one quarter of the cache: {db}")
+
+
+def measure(binary, fixture, work, batch, expected, cache_kib):
+    shutil.copyfile(fixture, work)
+    statements = [".headers off", ".mode list", ".output /dev/null",
+                  "PRAGMA mmap_size=0;", "PRAGMA synchronous=FULL;",
+                  f"PRAGMA cache_size=-{cache_kib};", "SELECT sum(k) FROM t;",
+                  ".output stdout", f".print BEGIN {NAME}", ".timer on",
+                  batch, ".timer off",
+                  "SELECT (SELECT group_concat(id||':'||k,',') FROM "
+                  "(SELECT id,k FROM t ORDER BY id)) || '|' || "
+                  "(SELECT group_concat(integrity_check) FROM pragma_integrity_check);",
+                  f".print END {NAME}"]
+    measured = parse_session(sql(binary, work, "\n".join(statements)),
+                             [(NAME, batch, expected)])[NAME]
+    if work.stat().st_size >= cache_kib * 1024 // 4:
+        raise ValueError(f"result must use less than one quarter of the cache: {work}")
+    return measured
 
 
 def main(argv=None):

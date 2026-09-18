@@ -17,11 +17,6 @@ TEST_DIR = Path(__file__).resolve().parent
 PAYLOAD_BYTES = 1024
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
 ADD_COLUMN_DEFAULT = 7
-SAVEPOINT_NAME = "savepoint_rollback"
-SAVEPOINT_ROWS = 5000
-SAVEPOINT_OPERATIONS = 1000
-SAVEPOINT_ROLLBACK_EVERY = 4
-SAVEPOINT_CACHE_KIB = 65536
 # The pending-map merge gap opens up with row count: 1.5x the stock update at
 # 262k rows, 2.7x at 1M. The larger table gets a cache that still holds it.
 INDEX_EDIT_ROWS = 1048576
@@ -30,13 +25,10 @@ INDEX_EDIT_CACHE_KIB = 131072
 # whose key prefixes its name; everything else is a query.
 SECTIONS = (("queries", "Large Table Scans"),
             ("add_column", "Add Column With Default"),
-            ("index_edits", "Large Index Edits"),
-            ("savepoints", "Savepoint Rollback"))
+            ("index_edits", "Large Index Edits"))
 
 
 def section_of(name):
-    if name == SAVEPOINT_NAME:
-        return "savepoints"
     if name.startswith("add_column"):
         return "add_column"
     if name.startswith("index_edit"):
@@ -256,55 +248,6 @@ def measure_index_edits(binary, fixture, work, cache_kib, expected):
     return parse_session(sql(binary, work, "\n".join(statements)), cases)
 
 
-def savepoint_workload(rows, operations, rollback_every):
-    values = [i % 100 + 1 for i in range(1, rows + 1)]
-    statements = ["BEGIN;", "UPDATE t SET k=k+1;"]
-    for i in range(operations):
-        row_id = 1 + i * 137 % rows
-        statements.extend(["SAVEPOINT item;",
-                           f"UPDATE t SET k=k+1 WHERE id={row_id};"])
-        if rollback_every and i % rollback_every == 0:
-            statements.append("ROLLBACK TO item;")
-        else:
-            values[row_id - 1] += 1
-        statements.append("RELEASE item;")
-    statements.append("COMMIT;")
-    expected = ",".join(f"{i}:{value}" for i, value in enumerate(values, 1)) + "|ok"
-    return " ".join(statements), expected
-
-
-def prepare_savepoints(binary, db, rows, cache_kib):
-    sql(binary, db, f"""PRAGMA journal_mode=WAL;
-PRAGMA synchronous=FULL;
-PRAGMA cache_size=-{cache_kib};
-CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER NOT NULL);
-BEGIN;
-WITH RECURSIVE c(i) AS (
-  VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows}
-) INSERT INTO t SELECT i,i%100 FROM c;
-COMMIT;""")
-    if db.stat().st_size >= cache_kib * 1024 // 4:
-        raise ValueError(f"fixture must use less than one quarter of the cache: {db}")
-
-
-def measure_savepoints(binary, fixture, work, batch, expected, cache_kib):
-    shutil.copyfile(fixture, work)
-    statements = [".headers off", ".mode list", ".output /dev/null",
-                  "PRAGMA mmap_size=0;", "PRAGMA synchronous=FULL;",
-                  f"PRAGMA cache_size=-{cache_kib};", "SELECT sum(k) FROM t;",
-                  ".output stdout", f".print BEGIN {SAVEPOINT_NAME}", ".timer on",
-                  batch, ".timer off",
-                  "SELECT (SELECT group_concat(id||':'||k,',') FROM "
-                  "(SELECT id,k FROM t ORDER BY id)) || '|' || "
-                  "(SELECT group_concat(integrity_check) FROM pragma_integrity_check);",
-                  f".print END {SAVEPOINT_NAME}"]
-    measured = parse_session(sql(binary, work, "\n".join(statements)),
-                             [(SAVEPOINT_NAME, batch, expected)])[SAVEPOINT_NAME]
-    if work.stat().st_size >= cache_kib * 1024 // 4:
-        raise ValueError(f"result must use less than one quarter of the cache: {work}")
-    return measured
-
-
 def write_results(samples, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -359,15 +302,11 @@ def main(argv=None):
         index_databases = {arm: root / f"{arm}-index.db" for arm in binaries}
         add_column_databases = {arm: root / f"{arm}-add-column.db" for arm in binaries}
         index_edit_databases = {arm: root / f"{arm}-index-edits.db" for arm in binaries}
-        savepoint_databases = {arm: root / f"{arm}-savepoints.db" for arm in binaries}
-        savepoint_batch, savepoint_expected = savepoint_workload(
-            SAVEPOINT_ROWS, SAVEPOINT_OPERATIONS, SAVEPOINT_ROLLBACK_EVERY)
         index_edit_expected = None
         fixture = root / "index-fixture.sql"
         index_cases = index_fixture(fixture, args.rows)
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
-            prepare_savepoints(binary, savepoint_databases[arm], SAVEPOINT_ROWS, SAVEPOINT_CACHE_KIB)
             prepare(binary, databases[arm], args.rows)
             prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
             add_column_fixture(binary, add_column_databases[arm], args.rows)
@@ -385,10 +324,6 @@ def main(argv=None):
                 measured.update(measure_index_edits(binaries[arm], index_edit_databases[arm],
                                                     root / f"{arm}-index-edits-run.db",
                                                     INDEX_EDIT_CACHE_KIB, index_edit_expected))
-                measured[SAVEPOINT_NAME] = measure_savepoints(
-                    binaries[arm], savepoint_databases[arm],
-                    root / f"{arm}-savepoints-{trial}.db", savepoint_batch,
-                    savepoint_expected, SAVEPOINT_CACHE_KIB)
                 samples[arm].append(measured)
         write_results(samples,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),
