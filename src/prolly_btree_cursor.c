@@ -409,9 +409,10 @@ static int mergeStepBackward(BtCursor *pCur){
   }
   rc = materializeDeferredTreeSeek(pCur, -1);
   if( rc!=SQLITE_OK ) return rc;
-  /* After a forward MUT landing, re-seek the tree below this key. */
-  if( pCur->mergeStepDir > 0
-   && pCur->mergeSrc==MERGE_SRC_MUT
+  /* After a MUT landing the tree may still sit on a greater key (First()
+  ** leaves it on the tree's first entry; mergeStepDir is 0). Re-seek below
+  ** the pending key or Previous yields that row instead of DONE. */
+  if( pCur->mergeSrc==MERGE_SRC_MUT
    && pCur->mmIdx>=0 && pCur->mmIdx<pCur->pMutMap->nEntries ){
     ProllyMutMapEntry *e;
     rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
@@ -568,6 +569,7 @@ int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
     pCur->mmActive = 1;
     rc = mergeFirst(pCur, pRes);
     if( rc!=SQLITE_OK ) return rc;
+    pCur->mergeStepDir = 1;
   }else{
     pCur->mmActive = 0;
   }
@@ -599,6 +601,7 @@ int prollyBtCursorLast(BtCursor *pCur, int *pRes){
     pCur->mmActive = 1;
     rc = mergeLast(pCur, pRes);
     if( rc!=SQLITE_OK ) return rc;
+    pCur->mergeStepDir = -1;
   }else{
     pCur->mmActive = 0;
   }
