@@ -790,10 +790,17 @@ int doltliteApplyMergeSchemaActions(
   }
 
   for(si=0; si<nSchemaActions && rc==SQLITE_OK; si++){
+    const char *zTableName = aSchemaActions[si].zTableName;
     int sj;
+    for(sj=0; sj<nSchemaActions; sj++){
+      if( aSchemaActions[sj].zRenameTable
+       && sqlite3_stricmp(zTableName, aSchemaActions[sj].zTableName)==0 ){
+        zTableName = aSchemaActions[sj].zRenameTable;
+      }
+    }
     for(sj=0; sj<aSchemaActions[si].nAddColumns; sj++){
       char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %s",
-                                      aSchemaActions[si].zTableName,
+                                      zTableName,
                                       aSchemaActions[si].azAddColumns[sj]);
       if( !zAlter ) return SQLITE_NOMEM;
       rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
@@ -806,7 +813,7 @@ int doltliteApplyMergeSchemaActions(
       char *zNew = mergeQuotedIfNeeded(aSchemaActions[si].azRenameColumns[sj+1]);
       char *zAlter = zNew ? sqlite3_mprintf(
           "ALTER TABLE \"%w\" RENAME COLUMN \"%w\" TO %s",
-          aSchemaActions[si].zTableName,
+          zTableName,
           aSchemaActions[si].azRenameColumns[sj], zNew) : 0;
       sqlite3_free(zNew);
       if( !zAlter ) return SQLITE_NOMEM;
@@ -815,7 +822,7 @@ int doltliteApplyMergeSchemaActions(
     }
     for(sj=0; rc==SQLITE_OK && sj<aSchemaActions[si].nDropColumns; sj++){
       char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" DROP COLUMN \"%w\"",
-                                      aSchemaActions[si].zTableName,
+                                      zTableName,
                                       aSchemaActions[si].azDropColumns[sj]);
       if( !zAlter ) return SQLITE_NOMEM;
       rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);

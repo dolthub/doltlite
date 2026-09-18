@@ -51,6 +51,7 @@ doltlite_clean_temp_shadow
 doltlite_merge_generated
 doltlite_merge_generated_notnull
 doltlite_merge_schema_errors
+doltlite_merge_renamed_index
 doltlite_merge_shared_columns
 doltlite_merge_ignored
 doltlite_rebase_plan_hash
