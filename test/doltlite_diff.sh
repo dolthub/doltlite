@@ -333,6 +333,65 @@ run_test "patch_arg_is_canonical" \
   "SELECT DISTINCT table_name FROM dolt_patch('HEAD','WORKING','T');" \
   "t" "$DB20"
 
+SCH_DB=/tmp/test_diff_schemas_$$.db; rm -f "$SCH_DB"
+cat <<'EOF' | $DOLTLITE "$SCH_DB" >/dev/null 2>&1
+CREATE TABLE t(a INT PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-A','-m','c1');
+CREATE VIEW v AS SELECT a FROM t;
+EOF
+run_test "diff_status_reports_dolt_schemas" \
+  "SELECT table_name||'|'||status FROM dolt_status;" \
+  "dolt_schemas|new table" "$SCH_DB"
+run_test "diff_working_reports_dolt_schemas" \
+  "SELECT table_name||'|'||data_change||'|'||schema_change FROM dolt_diff WHERE commit_hash='WORKING';" \
+  "dolt_schemas|1|1" "$SCH_DB"
+run_test "diff_summary_working_view_added" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('HEAD','WORKING');" \
+  "|dolt_schemas|added|1|1" "$SCH_DB"
+run_test "diff_stat_working_view_added" \
+  "SELECT table_name||'|'||rows_added||'|'||rows_deleted||'|'||rows_modified||'|'||cells_added||'|'||old_row_count||'|'||new_row_count FROM dolt_diff_stat('HEAD','WORKING');" \
+  "dolt_schemas|1|0|0|5|0|1" "$SCH_DB"
+dltest_run_sql "SELECT dolt_commit('-A','-m','c2');" "$SCH_DB" >/dev/null
+run_test "diff_summary_commit_view_added" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type FROM dolt_diff_summary('HEAD~1','HEAD');" \
+  "|dolt_schemas|added" "$SCH_DB"
+
+cat <<'EOF' | $DOLTLITE "$SCH_DB" >/dev/null 2>&1
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;
+EOF
+run_test "diff_summary_working_trigger_added" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('HEAD','WORKING');" \
+  "dolt_schemas|dolt_schemas|modified|1|0" "$SCH_DB"
+run_test "diff_stat_working_trigger_added" \
+  "SELECT table_name||'|'||rows_added||'|'||rows_deleted||'|'||rows_modified FROM dolt_diff_stat('HEAD','WORKING');" \
+  "dolt_schemas|1|0|0" "$SCH_DB"
+dltest_run_sql "SELECT dolt_commit('-A','-m','c3');" "$SCH_DB" >/dev/null
+
+cat <<'EOF' | $DOLTLITE "$SCH_DB" >/dev/null 2>&1
+DROP VIEW v;
+CREATE VIEW v AS SELECT a, b FROM t;
+EOF
+run_test "diff_summary_working_view_replaced" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('HEAD','WORKING');" \
+  "dolt_schemas|dolt_schemas|modified|1|0" "$SCH_DB"
+run_test "diff_stat_working_view_replaced" \
+  "SELECT table_name||'|'||rows_added||'|'||rows_deleted||'|'||rows_modified FROM dolt_diff_stat('HEAD','WORKING');" \
+  "dolt_schemas|0|0|1" "$SCH_DB"
+dltest_run_sql "SELECT dolt_reset('--hard');" "$SCH_DB" >/dev/null
+
+cat <<'EOF' | $DOLTLITE "$SCH_DB" >/dev/null 2>&1
+DROP VIEW v;
+DROP TRIGGER tr;
+EOF
+run_test "diff_summary_working_schemas_dropped" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('HEAD','WORKING');" \
+  "dolt_schemas||dropped|1|1" "$SCH_DB"
+run_test "diff_stat_working_schemas_dropped" \
+  "SELECT table_name||'|'||rows_added||'|'||rows_deleted||'|'||rows_modified||'|'||old_row_count||'|'||new_row_count FROM dolt_diff_stat('HEAD','WORKING');" \
+  "dolt_schemas|0|2|0|2|0" "$SCH_DB"
+rm -f "$SCH_DB"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 
 dltest_finish

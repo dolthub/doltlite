@@ -137,6 +137,74 @@ int doltliteMasterViewTriggerRowsDiffer(
   return rc;
 }
 
+static int schemasRowKeyLen(const char *z){
+  const char *p;
+  if( !z ) return 0;
+  p = strchr(z, 1);
+  if( !p ) return (int)strlen(z);
+  p = strchr(p+1, 1);
+  return p ? (int)(p-z) : (int)strlen(z);
+}
+
+static int schemasRowKeyCmp(const char *a, const char *b){
+  int na = schemasRowKeyLen(a);
+  int nb = schemasRowKeyLen(b);
+  int n = na<nb ? na : nb;
+  int c = memcmp(a, b, n);
+  if( c ) return c;
+  return na - nb;
+}
+
+int doltliteSchemasRowDiff(
+  sqlite3 *db,
+  const ProllyHash *pOldRoot, u8 oldFlags,
+  const ProllyHash *pNewRoot, u8 newFlags,
+  int *pOldCount, int *pNewCount,
+  int *pAdded, int *pDeleted, int *pModified
+){
+  char **azOld = 0, **azNew = 0;
+  int nOld = 0, nNew = 0, i = 0, j = 0, rc;
+  int nAdd = 0, nDel = 0, nMod = 0;
+
+  if( pOldCount ) *pOldCount = 0;
+  if( pNewCount ) *pNewCount = 0;
+  if( pAdded ) *pAdded = 0;
+  if( pDeleted ) *pDeleted = 0;
+  if( pModified ) *pModified = 0;
+
+  rc = masterCollectViewTriggerRows(db, pOldRoot, oldFlags, &azOld, &nOld);
+  if( rc==SQLITE_OK ){
+    rc = masterCollectViewTriggerRows(db, pNewRoot, newFlags, &azNew, &nNew);
+  }
+  if( rc==SQLITE_OK ){
+    if( nOld>0 ) qsort(azOld, nOld, sizeof(char*), masterRowStrCmp);
+    if( nNew>0 ) qsort(azNew, nNew, sizeof(char*), masterRowStrCmp);
+    while( i<nOld || j<nNew ){
+      int c;
+      if( i==nOld ){ nAdd++; j++; continue; }
+      if( j==nNew ){ nDel++; i++; continue; }
+      c = schemasRowKeyCmp(azOld[i], azNew[j]);
+      if( c<0 ){ nDel++; i++; }
+      else if( c>0 ){ nAdd++; j++; }
+      else{
+        if( strcmp(azOld[i], azNew[j])!=0 ) nMod++;
+        i++;
+        j++;
+      }
+    }
+    if( pOldCount ) *pOldCount = nOld;
+    if( pNewCount ) *pNewCount = nNew;
+    if( pAdded ) *pAdded = nAdd;
+    if( pDeleted ) *pDeleted = nDel;
+    if( pModified ) *pModified = nMod;
+  }
+  for(i=0; i<nOld; i++) sqlite3_free(azOld[i]);
+  for(j=0; j<nNew; j++) sqlite3_free(azNew[j]);
+  sqlite3_free(azOld);
+  sqlite3_free(azNew);
+  return rc;
+}
+
 static int schemaHasAnyViewOrTrigger(sqlite3 *db,
                                      const ProllyHash *pRoot,
                                      u8 flags,
