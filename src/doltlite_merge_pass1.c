@@ -230,6 +230,9 @@ static int mergePass1MergeTableData(
         schemaChoice==SCHEMA_MERGE_THEIRS
           || (theirSchemaChanged && !ourSchemaChanged),
         &pSchemaDb, &pTab);
+    if( rc==SQLITE_OK ){
+      rc = mergeRebindIndexes(c, aIdxInfo, nIdxInfo, pSchemaDb, pTab);
+    }
     if( rc==SQLITE_OK && zName && (ourSchemaChanged || theirSchemaChanged) ){
       rc = mergeRowPolicy(c, zName, pTab,
           schemaChoice==SCHEMA_MERGE_THEIRS
@@ -242,13 +245,14 @@ static int mergePass1MergeTableData(
                         pAnc->flags, pTheirsEntry->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
                         aIdxInfo, nIdxInfo, pRowPolicy);
+    if( rc==SQLITE_OK ) rc = mergePass1RecordIndexPatches(c, aIdxInfo, nIdxInfo);
+    mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
+    aIdxInfo = 0;
+    nIdxInfo = 0;
     sqlite3_free(rowPolicy.aiDeleteCompareFields);
     sqlite3_free(rowPolicy.aiDropFields);
     sqlite3_close(pSchemaDb);
-    if( rc!=SQLITE_OK ){
-      mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
-      return rc;
-    }
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   rc = mergePass1RecordIndexPatches(c, aIdxInfo, nIdxInfo);

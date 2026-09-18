@@ -35,6 +35,16 @@ int mergeRowTable(
       sqlite3_free(zSql);
     }
   }
+  /* Row merge maintains our indexes over records in the merged layout, so
+  ** their column numbers have to come from this table, not the live one.
+  ** An index a dropped column leaves undefinable is skipped; pass 2 drops it. */
+  for(i=0; rc==SQLITE_OK && i<c->nOursSchema; i++){
+    SchemaEntry *pSe = &c->aOursSchema[i];
+    if( !pSe->zType || strcmp(pSe->zType, "index")!=0 ) continue;
+    if( !pSe->zSql || !pSe->zTblName ) continue;
+    if( sqlite3_stricmp(pSe->zTblName, zName)!=0 ) continue;
+    sqlite3_exec(tmp, pSe->zSql, 0, 0, 0);
+  }
   if( rc==SQLITE_OK ){
     Parse sParse;
     sqlite3_mutex_enter(tmp->mutex);
@@ -122,6 +132,46 @@ int mergeRowPolicy(
   }
   freeColumns(aAnc, nAnc);
   freeColumns(aSelected, nSelected);
+  return SQLITE_OK;
+}
+
+/* mergePass1CollectIndexes reads the live table, whose record layout is
+** ours. Once mergeRowTable has produced the merged-layout table, every
+** index has to be read through it or a column dropped on their side shifts
+** every later index column onto the wrong field. */
+int mergeRebindIndexes(
+  MergePass1Ctx *c,
+  MergeIndexInfo *aIdxInfo,
+  int nIdxInfo,
+  sqlite3 *pSchemaDb,
+  Table *pTab
+){
+  int i;
+  if( !pSchemaDb || !pTab ) return SQLITE_OK;
+  for(i=0; i<nIdxInfo; i++){
+    MergeIndexInfo *mi = &aIdxInfo[i];
+    Index *pMerged;
+    KeyInfo *pKeyInfo;
+    int rc;
+    if( !mi->pIdx || !mi->pIdx->zName ) continue;
+    for(pMerged=pTab->pIndex; pMerged; pMerged=pMerged->pNext){
+      if( pMerged->zName && sqlite3_stricmp(pMerged->zName, mi->pIdx->zName)==0 ){
+        break;
+      }
+    }
+    if( !pMerged ) continue;
+    pKeyInfo = doltliteKeyInfoOfIndex(c->db, pMerged);
+    if( !pKeyInfo ) return SQLITE_NOMEM;
+    sqlite3KeyInfoUnref(mi->pKeyInfo);
+    mi->pKeyInfo = pKeyInfo;
+    doltlitePartialIndexClear(&mi->part);
+    rc = doltlitePartialIndexLoad(pSchemaDb, pMerged, &mi->part);
+    if( rc!=SQLITE_OK ) return rc;
+    mi->nColumn = pMerged->nKeyCol;
+    mi->aiColumn = pMerged->aiColumn;
+    mi->iPKey = pTab->iPKey;
+    mi->pIdx = pMerged;
+  }
   return SQLITE_OK;
 }
 

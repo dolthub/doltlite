@@ -141,6 +141,10 @@ int mergeRowTable(
   MergePass1Ctx *c, const char *zName, int schemaChanged, int useTheirs,
   sqlite3 **ppSchemaDb, Table **ppTab
 );
+int mergeRebindIndexes(
+  MergePass1Ctx *c, MergeIndexInfo *aIdxInfo, int nIdxInfo,
+  sqlite3 *pSchemaDb, Table *pTab
+);
 int mergeGeneratedRecord(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   u8 **ppRecord, int *pnRecord
