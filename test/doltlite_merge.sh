@@ -1138,5 +1138,78 @@ run_test_match "verify_constraints_all_reports_detector_error" \
 run_test_match "verify_constraints_default_reports_detector_error" \
   "SELECT dolt_verify_constraints();" "malformed JSON" "$DB65"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65"
+# --force must keep merge-recorded CVs, matching Dolt (not drop them on commit).
+DB67=/tmp/test_merge67_$$.db; rm -f "$DB67"
+$DOLTLITE "$DB67" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES(1);
+INSERT INTO c VALUES(10,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES(11,1);
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+DELETE FROM c;
+DELETE FROM p;
+SELECT dolt_commit('-Am','drop p');
+SQL
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT dolt_commit('--force','-m','forced');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='c'),0) || '|' ||
+       (SELECT message FROM dolt_log LIMIT 1);" | $DOLTLITE "$DB67" 2>/dev/null | grep '^TX|')
+if [ "$TX_OUT" = "TX|1|1|forced" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: force_commit_keeps_fk_cv_same_session\n  expected: TX|1|1|forced\n  got:      $TX_OUT"
+fi
+run_test "force_commit_keeps_fk_cv_reopen" \
+  "SELECT \"table\" || '|' || num_violations FROM dolt_constraint_violations;" \
+  "c|1" "$DB67"
+run_test "force_commit_keeps_fk_orphan_row" \
+  "SELECT id || '|' || pid FROM c;" \
+  "11|1" "$DB67"
+run_test "force_commit_fk_log_forced" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "forced" "$DB67"
+run_test "force_commit_fk_cvs_survive_checkout_roundtrip" \
+  "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');
+   SELECT \"table\" || '|' || num_violations FROM dolt_constraint_violations;" \
+  "0
+0
+c|1" "$DB67"
+
+DB68=/tmp/test_merge68_$$.db; rm -f "$DB68"
+$DOLTLITE "$DB68" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'b');
+SELECT dolt_commit('-Am','main');
+SQL
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT dolt_commit('--force','-m','forced');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t'),0);" | $DOLTLITE "$DB68" 2>/dev/null | grep '^TX|')
+if [ "$TX_OUT" = "TX|1|2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: force_commit_keeps_unique_cv_same_session\n  expected: TX|1|2\n  got:      $TX_OUT"
+fi
+run_test "force_commit_keeps_unique_cv_reopen" \
+  "SELECT \"table\" || '|' || num_violations FROM dolt_constraint_violations;" \
+  "t|2" "$DB68"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68"
 dltest_finish
