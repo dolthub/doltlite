@@ -728,6 +728,62 @@ static int wsEnsureEmptyStagedTable(
   return rc;
 }
 
+static int wsRecordFieldCount(const DoltliteColInfo *ci){
+  int i;
+  int n = 0;
+  if( !ci || ci->nCol<=0 ) return 0;
+  if( ci->aColToRec ){
+    for(i=0; i<ci->nCol; i++){
+      if( ci->aColToRec[i]>=n ) n = ci->aColToRec[i]+1;
+    }
+    return n;
+  }
+  if( ci->bHasRowid && ci->iPkCol>=0 ) return ci->nCol-1;
+  return ci->nCol;
+}
+
+static int wsProjectRecord(
+  const u8 *pRec, int nRec, int nKeep,
+  u8 **ppOut, int *pnOut
+){
+  DoltliteRecordInfo ri;
+  DoltliteSerialValue *aMem = 0;
+  int i;
+  int rc;
+
+  *ppOut = 0;
+  *pnOut = 0;
+  if( !pRec || nRec<=0 || nKeep<=0 ) return SQLITE_OK;
+  doltliteRecordInfoInit(&ri);
+  rc = doltliteParseRecordStrict(pRec, nRec, &ri);
+  if( rc!=SQLITE_OK ){
+    doltliteRecordInfoClear(&ri);
+    return rc;
+  }
+  if( ri.nField<=nKeep ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_OK;
+  }
+  aMem = sqlite3_malloc(nKeep * (int)sizeof(DoltliteSerialValue));
+  if( !aMem ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; i<nKeep; i++){
+    rc = doltliteSerialValueFromField(pRec, nRec, &ri, i, &aMem[i]);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(aMem);
+      doltliteRecordInfoClear(&ri);
+      return rc;
+    }
+  }
+  *ppOut = doltliteBuildRecord(aMem, nKeep, pnOut);
+  sqlite3_free(aMem);
+  doltliteRecordInfoClear(&ri);
+  if( !*ppOut ) return SQLITE_NOMEM;
+  return SQLITE_OK;
+}
+
 static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged){
   sqlite3 *db;
   ChunkStore *cs;
@@ -748,6 +804,11 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   int nSrc;
   const u8 *pTgt;
   int nTgt;
+  u8 *pProj = 0;
+  int nProj = 0;
+  DoltliteSideCols stagedSide;
+  int nKeep = 0;
+  int stagedExisted = 0;
 
   assert( p!=0 && r!=0 );
   assert( p->zTableName!=0 );
@@ -779,6 +840,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   rc = doltliteLoadCatalog(db, &stagedCat, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   pData = doltliteFindTableByName(aTables, nTables, p->zTableName);
+  stagedExisted = pData!=0;
   if( !pData && makeStaged ){
     rc = wsEnsureEmptyStagedTable(db, p->zTableName, &aTables, &nTables);
     if( rc!=SQLITE_OK ){
@@ -792,6 +854,26 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
     return SQLITE_NOTFOUND;
   }
 
+  memset(&stagedSide, 0, sizeof(stagedSide));
+  if( pTgt && makeStaged && stagedExisted ){
+    rc = doltliteSideColsLoad(db, &stagedCat, &pData->schemaHash,
+                              p->zTableName, &p->cols, 1, &stagedSide);
+    if( rc==SQLITE_OK && stagedSide.valid ){
+      nKeep = wsRecordFieldCount(&stagedSide.ci);
+      rc = wsProjectRecord(pTgt, nTgt, nKeep, &pProj, &nProj);
+      if( rc==SQLITE_OK && pProj ){
+        pTgt = pProj;
+        nTgt = nProj;
+      }
+    }
+    if( rc!=SQLITE_OK ){
+      doltliteSideColsClear(&stagedSide);
+      sqlite3_free(pProj);
+      doltliteFreeCatalog(aTables, nTables);
+      return rc;
+    }
+  }
+
   if( pTgt ){
     rc = prollyMutateInsert(cs, pCache, &pData->root, pData->flags,
                             r->pKey, r->nKey, r->intKey, pTgt, nTgt, &newRoot);
@@ -799,7 +881,12 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
     rc = prollyMutateDelete(cs, pCache, &pData->root, pData->flags,
                             r->pKey, r->nKey, r->intKey, &newRoot);
   }
-  if( rc!=SQLITE_OK ){ doltliteFreeCatalog(aTables, nTables); return rc; }
+  if( rc!=SQLITE_OK ){
+    doltliteSideColsClear(&stagedSide);
+    sqlite3_free(pProj);
+    doltliteFreeCatalog(aTables, nTables);
+    return rc;
+  }
   pData->root = newRoot;
 
   pTab = sqlite3FindTable(db, p->zTableName, "main");
@@ -816,12 +903,19 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
                              pSrc, nSrc, pTgt, nTgt);
     }
   }
-  if( rc!=SQLITE_OK ){ doltliteFreeCatalog(aTables, nTables); return rc; }
+  if( rc!=SQLITE_OK ){
+    doltliteSideColsClear(&stagedSide);
+    sqlite3_free(pProj);
+    doltliteFreeCatalog(aTables, nTables);
+    return rc;
+  }
 
   rc = doltliteSerializeCatalogEntries(db, aTables, nTables, &pCatBuf, &nCatBuf);
   if( rc==SQLITE_OK ) rc = chunkStorePut(cs, pCatBuf, nCatBuf, &newCat);
   sqlite3_free(pCatBuf);
   doltliteFreeCatalog(aTables, nTables);
+  doltliteSideColsClear(&stagedSide);
+  sqlite3_free(pProj);
   if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &newCat);
   return rc;
 }
