@@ -230,7 +230,7 @@ int applyMergedCatalogAndCommit(
     ** for the same reason the branch merge applies them: the rows were relaid
     ** out for the merged schema, and without these the live catalog never
     ** adopts it and the leftover divergence surfaces as a schema conflict. */
-    if( rc==SQLITE_OK && nSchemaActions>0 && *pnConflicts==0 ){
+    if( rc==SQLITE_OK && nSchemaActions>0 ){
       char *zActionErr = 0;
       rc = doltliteApplyMergeSchemaActions(db, ancCatHash, theirCatHash,
                                            aSchemaActions, nSchemaActions,

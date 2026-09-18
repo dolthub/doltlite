@@ -1755,4 +1755,89 @@ SQL
     "SELECT count(*) FROM $current_table;"
 done
 
+for kind in drop_add rename_add same_drop different_drop; do
+  case "$kind" in
+    drop_add)
+      ours="ALTER TABLE t ADD COLUMN d INT DEFAULT 9; DELETE FROM t WHERE id=2;"
+      theirs="ALTER TABLE t DROP COLUMN a;"
+      columns="id,b,c,d"
+      dl_rows="group_concat(id || ':' || b || ':' || c || ':' || d, ',')"
+      dt_rows="GROUP_CONCAT(CONCAT(id,':',b,':',c,':',d) ORDER BY id)"
+      rows="1:100:1000:9,3:300:3000:9"
+      ;;
+    rename_add)
+      ours="ALTER TABLE t RENAME COLUMN a TO renamed; DELETE FROM t WHERE id=2;"
+      theirs="ALTER TABLE t ADD COLUMN d INT DEFAULT 9;"
+      columns="id,renamed,b,c,d"
+      dl_rows="group_concat(id || ':' || renamed || ':' || b || ':' || c || ':' || d, ',')"
+      dt_rows="GROUP_CONCAT(CONCAT(id,':',renamed,':',b,':',c,':',d) ORDER BY id)"
+      rows="1:10:100:1000:9,3:30:300:3000:9"
+      ;;
+    same_drop)
+      ours="ALTER TABLE t DROP COLUMN a; UPDATE t SET b=111 WHERE id=1;"
+      theirs="ALTER TABLE t DROP COLUMN a; INSERT INTO t VALUES(4,400,4000);"
+      columns="id,b,c"
+      dl_rows="group_concat(id || ':' || b || ':' || c, ',')"
+      dt_rows="GROUP_CONCAT(CONCAT(id,':',b,':',c) ORDER BY id)"
+      rows="1:111:1000,2:200:2000,3:300:3000,4:400:4000"
+      ;;
+    different_drop)
+      ours="ALTER TABLE t DROP COLUMN a; DELETE FROM t WHERE id=2;"
+      theirs="ALTER TABLE t DROP COLUMN b;"
+      columns="id,c"
+      dl_rows="group_concat(id || ':' || c, ',')"
+      dt_rows="GROUP_CONCAT(CONCAT(id,':',c) ORDER BY id)"
+      rows="1:1000,3:3000"
+      ;;
+  esac
+  for direction in forward reverse; do
+    tag="relayout_${kind}_${direction}"
+    DB="$TMPROOT/$tag.db"
+    if [ "$direction" = forward ]; then
+      main_sql="$ours"; feat_sql="$theirs"
+    else
+      main_sql="$theirs"; feat_sql="$ours"
+    fi
+    dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES(1,10,100,1000),(2,20,200,2000),(3,30,300,3000);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$main_sql
+SELECT dolt_commit('-am','main');
+SELECT dolt_checkout('feat');
+$feat_sql
+SELECT dolt_commit('-am','feat');
+SELECT dolt_checkout('main');
+SQL
+    expect_merge_ok "$tag" "$DB"
+    expect_dual_value "${tag}_columns" "$DB" "$columns" \
+      "SELECT group_concat(name, ',') FROM pragma_table_info('t');" \
+      "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='t';"
+    expect_dual_value "${tag}_rows" "$DB" "$rows" \
+      "SELECT $dl_rows FROM (SELECT * FROM t ORDER BY id);" \
+      "SELECT $dt_rows FROM t;"
+  done
+done
+
+for changed in a b; do
+  tag="relayout_delete_modify_$changed"
+  DB="$TMPROOT/$tag.db"
+  dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES(1,10,100),(2,20,200);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t ADD COLUMN d INT DEFAULT 9;
+UPDATE t SET $changed=999 WHERE id=1;
+SELECT dolt_commit('-am','edit');
+SELECT dolt_checkout('feat');
+ALTER TABLE t DROP COLUMN a;
+DELETE FROM t WHERE id=1;
+SELECT dolt_commit('-am','delete');
+SELECT dolt_checkout('main');
+SQL
+  expect_merge_conflict "$tag" "$DB"
+done
+
 vc_oracle_finish

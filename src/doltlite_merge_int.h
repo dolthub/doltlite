@@ -161,7 +161,16 @@ struct MergeRowPolicy {
   const char **azDualRename;
   int nDualRename;
   int nDeleteCompareFields;
+  int *aiDeleteCompareFields;
+  int bSchemaIsTheirs;
+  int nDropFields;
+  int *aiDropFields;
 };
+
+int mergeRowPolicy(
+  MergePass1Ctx *c, const char *zName, Table *pTab,
+  int useTheirs, MergeRowPolicy *pPolicy
+);
 
 int mergeTableRows(
   sqlite3 *db,

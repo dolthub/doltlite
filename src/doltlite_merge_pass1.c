@@ -208,34 +208,6 @@ static int mergePass1MergeTableData(
 
   memset(&rowPolicy, 0, sizeof(rowPolicy));
 
-  if( zName && (ourSchemaChanged || theirSchemaChanged) ){
-    SchemaEntry *pAncSe = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
-    SchemaEntry *pOurSe = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
-    SchemaEntry *pTheirSe = findSchemaEntry(
-        c->aTheirsSchema, c->nTheirsSchema, zName);
-    int bOurPrefix = 0, bTheirPrefix = 0;
-    int nAncOur = 0, nAncTheir = 0;
-    int nOur = 0, nTheir = 0;
-    int nAncOurRecord = 0, nAncTheirRecord = 0;
-    if( pAncSe && pOurSe && pTheirSe ){
-      rc = mergePass1SchemaPrefixInfo(
-          pAncSe->zSql, pOurSe->zSql, &bOurPrefix,
-          &nAncOur, &nOur, &nAncOurRecord);
-      if( rc==SQLITE_OK ){
-        rc = mergePass1SchemaPrefixInfo(
-            pAncSe->zSql, pTheirSe->zSql,
-            &bTheirPrefix, &nAncTheir, &nTheir, &nAncTheirRecord);
-      }
-      if( rc!=SQLITE_OK ) return rc;
-      if( bOurPrefix && bTheirPrefix && nAncOur==nAncTheir
-       && nAncOurRecord==nAncTheirRecord
-       && (nOur>nAncOur || nTheir>nAncTheir) ){
-        rowPolicy.nDeleteCompareFields = nAncOurRecord;
-        pRowPolicy = &rowPolicy;
-      }
-    }
-  }
-
   rc = mergePass1CollectIndexes(c, zName, &aIdxInfo, &nIdxInfo);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -258,12 +230,20 @@ static int mergePass1MergeTableData(
         schemaChoice==SCHEMA_MERGE_THEIRS
           || (theirSchemaChanged && !ourSchemaChanged),
         &pSchemaDb, &pTab);
+    if( rc==SQLITE_OK && zName && (ourSchemaChanged || theirSchemaChanged) ){
+      rc = mergeRowPolicy(c, zName, pTab,
+          schemaChoice==SCHEMA_MERGE_THEIRS
+            || (theirSchemaChanged && !ourSchemaChanged), &rowPolicy);
+      pRowPolicy = &rowPolicy;
+    }
     if( rc==SQLITE_OK ) rc = mergeTableRows(c->db, pTab,
                         &pAnc->root, &pOurs->root,
                         pTheirsRoot, pOurs->flags,
                         pAnc->flags, pTheirsEntry->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
                         aIdxInfo, nIdxInfo, pRowPolicy);
+    sqlite3_free(rowPolicy.aiDeleteCompareFields);
+    sqlite3_free(rowPolicy.aiDropFields);
     sqlite3_close(pSchemaDb);
     if( rc!=SQLITE_OK ){
       mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
@@ -959,6 +939,22 @@ static int mergePass1BothSides(
     if( bRelaid ){
       ancAdj = *ancEntry;
       memcpy(&ancAdj.root, &ancNormRoot, sizeof(ProllyHash));
+      pMergeAnc = &ancAdj;
+      pMergeTheirsRoot = &otherNormRoot;
+    }
+  }
+
+  if( zName && ourSchemaChanged && theirSchemaChanged
+   && prollyHashCompare(&c->aOurs[iOurs].schemaHash,
+                        &theirsEntry->schemaHash)==0 ){
+    int bRelaid = 0;
+    rc = mergePass1RelayoutOneSidedSchema(
+        c, zName, 1, &c->aOurs[iOurs], ancEntry, theirsEntry,
+        &otherNormRoot, &ancNormRoot, &bRelaid);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bRelaid ){
+      ancAdj = *ancEntry;
+      ancAdj.root = ancNormRoot;
       pMergeAnc = &ancAdj;
       pMergeTheirsRoot = &otherNormRoot;
     }

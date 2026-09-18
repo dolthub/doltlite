@@ -60,6 +60,71 @@ int mergeRowTable(
   return SQLITE_OK;
 }
 
+int mergeRowPolicy(
+  MergePass1Ctx *c,
+  const char *zName,
+  Table *pTab,
+  int useTheirs,
+  MergeRowPolicy *pPolicy
+){
+  SchemaEntry *pAnc = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+  SchemaEntry *pSelected = useTheirs
+      ? findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName)
+      : findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+  ParsedColumn *aAnc = 0, *aSelected = 0;
+  int nAnc = 0, nSelected = 0;
+  int i, j, k, rc;
+
+  if( !pAnc || !pAnc->zSql || !pSelected || !pTab ) return SQLITE_OK;
+  pPolicy->bSchemaIsTheirs = useTheirs;
+  rc = parseColumns(pAnc->zSql, &aAnc, &nAnc);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = parseColumns(pSelected->zSql, &aSelected, &nSelected);
+  if( rc!=SQLITE_OK ){
+    freeColumns(aAnc, nAnc);
+    return rc;
+  }
+  pPolicy->aiDeleteCompareFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
+  pPolicy->aiDropFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
+  if( !pPolicy->aiDeleteCompareFields || !pPolicy->aiDropFields ){
+    freeColumns(aAnc, nAnc);
+    freeColumns(aSelected, nSelected);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; i<pTab->nCol; i++){
+    const char *zCol = pTab->aCol[i].zCnName;
+    int iAnc = parsedColumnIndexByName(aAnc, nAnc, zCol);
+    int bDrop = 0;
+    if( pTab->aCol[i].colFlags & COLFLAG_VIRTUAL ) continue;
+    if( iAnc<0 && i<nAnc && i<nSelected
+     && parsedColumnDefinitionsMatch(&aAnc[i], &aSelected[i]) ){
+      for(j=0; j<pTab->nCol; j++){
+        if( sqlite3_stricmp(pTab->aCol[j].zCnName, aAnc[i].zName)==0 ) break;
+      }
+      if( j==pTab->nCol ) iAnc = i;
+    }
+    if( iAnc<0 ) continue;
+    for(j=0; c->pnSchemaActions && j<*c->pnSchemaActions; j++){
+      SchemaMergeAction *pAction = &(*c->ppSchemaActions)[j];
+      if( sqlite3_stricmp(pAction->zTableName, zName)!=0 ) continue;
+      for(k=0; k<pAction->nDropColumns; k++){
+        if( sqlite3_stricmp(pAction->azDropColumns[k], zCol)==0 ) bDrop = 1;
+      }
+    }
+    if( bDrop ){
+      pPolicy->aiDropFields[pPolicy->nDropFields++] =
+          HasRowid(pTab) ? sqlite3TableColumnToStorage(pTab, i)
+          : sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), i);
+    }
+    pPolicy->aiDeleteCompareFields[pPolicy->nDeleteCompareFields++] =
+        HasRowid(pTab) ? sqlite3TableColumnToStorage(pTab, i)
+        : sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), i);
+  }
+  freeColumns(aAnc, nAnc);
+  freeColumns(aSelected, nSelected);
+  return SQLITE_OK;
+}
+
 static int mergeGeneratedPrepare(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt
 ){

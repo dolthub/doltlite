@@ -70,3 +70,4 @@ doltlite_blame_seek
 doltlite_merge_transactions
 doltlite_reset_schema
 doltlite_cache_budget
+doltlite_merge_schema_relayout
