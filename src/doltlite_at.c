@@ -888,7 +888,7 @@ static int atRegisterModule(
   int rc;
   zMod = sqlite3_mprintf("%s%s", zPrefix, zName);
   if( !zMod ) return SQLITE_NOMEM;
-  rc = sqlite3_create_module(db, zMod, pModule, 0);
+  rc = doltliteCreateShieldedModule(db, zMod, pModule, 0);
   sqlite3_free(zMod);
   return rc;
 }

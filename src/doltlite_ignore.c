@@ -405,7 +405,7 @@ int doltliteVtabSkipIgnored(
 }
 
 int doltliteIgnoreRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_ignore", &doltliteIgnoreModule, 0);
+  return doltliteCreateShieldedModule(db, "dolt_ignore", &doltliteIgnoreModule, 0);
 }
 
 #endif

@@ -371,7 +371,7 @@ int doltliteTagRegister(sqlite3 *db){
   int rc;
   rc = doltliteCreateCommandFunc(db, "dolt_tag", -1,
                                  doltTagFunc);
-  if( rc==SQLITE_OK ) rc = sqlite3_create_module(db, "dolt_tags", &tagModule, 0);
+  if( rc==SQLITE_OK ) rc = doltliteCreateShieldedModule(db, "dolt_tags", &tagModule, 0);
   return rc;
 }
 

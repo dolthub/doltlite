@@ -1096,7 +1096,7 @@ static sqlite3_module doltliteDiffModule = {
 };
 
 int doltliteDiffRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_diff", &doltliteDiffModule, 0);
+  return doltliteCreateShieldedModule(db, "dolt_diff", &doltliteDiffModule, 0);
 }
 
 #endif

@@ -758,7 +758,7 @@ int doltliteRefreshConstraintViolationTables(sqlite3 *db){
 
 int doltliteConstraintViolationsRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_module(db, "dolt_constraint_violations",
+  rc = doltliteCreateShieldedModule(db, "dolt_constraint_violations",
                              &cvSummaryModule, 0);
   if( rc==SQLITE_OK ){
     rc = doltliteRefreshConstraintViolationTables(db);

@@ -232,7 +232,7 @@ static sqlite3_module doltliteMergeStatusModule = {
 };
 
 int doltliteMergeStatusRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_merge_status",
+  return doltliteCreateShieldedModule(db, "dolt_merge_status",
                                &doltliteMergeStatusModule, 0);
 }
 

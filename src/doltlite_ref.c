@@ -415,7 +415,7 @@ int doltliteForEachUserTable(
         doltliteFreeCatalog(aTables, nTables);
         return SQLITE_NOMEM;
       }
-      rc = sqlite3_create_module(db, zMod, pModule, 0);
+      rc = doltliteCreateShieldedModule(db, zMod, pModule, 0);
       sqlite3_free(zMod);
       if( rc!=SQLITE_OK ){
         doltliteFreeCatalog(aTables, nTables);

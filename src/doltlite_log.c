@@ -690,7 +690,7 @@ static sqlite3_module doltliteLogModule = {
 };
 
 int doltliteLogRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_log", &doltliteLogModule, 0);
+  return doltliteCreateShieldedModule(db, "dolt_log", &doltliteLogModule, 0);
 }
 
 #endif

@@ -961,39 +961,39 @@ static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_va
 
 int doltliteHashofRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_function(db, "dolt_hashof", 1, SQLITE_UTF8, 0,
-                               doltliteHashofFunc, 0, 0);
+  rc = doltliteCreateShieldedFunc(db, "dolt_hashof", 1, SQLITE_UTF8,
+                                  doltliteHashofFunc);
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_table", 1, SQLITE_UTF8, 0,
-                                 doltliteHashofTableFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_table", 1, SQLITE_UTF8,
+                                 doltliteHashofTableFunc);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_table", 2, SQLITE_UTF8, 0,
-                                 doltliteHashofTableFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_table", 2, SQLITE_UTF8,
+                                 doltliteHashofTableFunc);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_db", 0, SQLITE_UTF8, 0,
-                                 doltliteHashofDbFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_db", 0, SQLITE_UTF8,
+                                 doltliteHashofDbFunc);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_db", 1, SQLITE_UTF8, 0,
-                                 doltliteHashofDbFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_db", 1, SQLITE_UTF8,
+                                 doltliteHashofDbFunc);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_catalog", 0, SQLITE_UTF8, 0,
-                                 doltliteHashofCatalogFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_catalog", 0, SQLITE_UTF8,
+                                 doltliteHashofCatalogFunc);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_catalog", 1, SQLITE_UTF8, 0,
-                                 doltliteHashofCatalogFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_catalog", 1, SQLITE_UTF8,
+                                 doltliteHashofCatalogFunc);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_index", 1, SQLITE_UTF8, 0,
-                                 doltliteHashofIndexFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_index", 1, SQLITE_UTF8,
+                                 doltliteHashofIndexFunc);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "dolt_hashof_index", 2, SQLITE_UTF8, 0,
-                                 doltliteHashofIndexFunc, 0, 0);
+    rc = doltliteCreateShieldedFunc(db, "dolt_hashof_index", 2, SQLITE_UTF8,
+                                 doltliteHashofIndexFunc);
   }
   return rc;
 }
