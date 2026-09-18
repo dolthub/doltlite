@@ -73,7 +73,6 @@ corrupt corrupt-3.3 @linux unstable class=harness issue=1963  # outcome varies r
 corrupt corrupt-3.4 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-3.5 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-3.6 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
-corrupt corrupt-5.2 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-8.1 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 corrupt corrupt-8.2 class=intentional  # hexio lands on CTLD bytes, not btree cells (architectural)
 
@@ -307,6 +306,10 @@ pragma pragma-14.2uc class=intentional
 # than stock btree page/index diagnostics ("Tree N page M ..."). Stock
 # Tree/page/cell text is page-format-only — not a small message-parity fix.
 # Later cases cascade from the poisoned attached-db state.
+pragma pragma-2.1 class=intentional  # pragma-1.9 hexio_write breaks the sealed header; test.db is malformed from there on
+pragma pragma-2.2 class=intentional  # pragma-1.9 hexio_write breaks the sealed header; test.db is malformed from there on
+pragma pragma-2.3 class=intentional  # pragma-1.9 hexio_write breaks the sealed header; test.db is malformed from there on
+pragma pragma-2.4 class=intentional  # pragma-1.9 hexio_write breaks the sealed header; test.db is malformed from there on
 pragma pragma-3.10 class=intentional  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
 pragma pragma-3.11 class=intentional  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)
 pragma pragma-3.12 class=intentional  # hexio integrity poke → chunk-store failure text, not Tree/page (architectural)

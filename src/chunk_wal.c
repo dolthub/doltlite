@@ -637,6 +637,11 @@ static int csReplayWalFrom(
     i64 fileSize = 0;
     int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
     if( rc != SQLITE_OK ) return rc;
+    /* A WAL offset past the end of a file that holds a header would read as
+    ** "no WAL tail" and serve the store one commit behind. */
+    if( fileSize>=CHUNK_MANIFEST_SIZE && cs->wal.iWalOffset > fileSize ){
+      return SQLITE_CORRUPT;
+    }
     walSize = fileSize - cs->wal.iWalOffset;
     cs->file.iFileSize = fileSize;
   }

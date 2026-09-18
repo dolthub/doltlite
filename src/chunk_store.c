@@ -278,9 +278,12 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
-  /* Every writer seals the header; a legacy all-zero seal is the only
-  ** unsealed form still accepted. */
-  if( csManifestHashState(aBuf, 0)==CS_MANIFEST_HASH_BAD ) return SQLITE_CORRUPT;
+  /* Every writer seals the header. Files sealed before seals were bound to
+  ** their offset verify offsetless; an all-zero seal is legacy. */
+  if( csManifestHashState(aBuf, 0)==CS_MANIFEST_HASH_BAD
+   && csManifestHashStateOffsetless(aBuf)!=CS_MANIFEST_HASH_OK ){
+    return SQLITE_CORRUPT;
+  }
 
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
@@ -289,9 +292,8 @@ static int csReadManifest(ChunkStore *cs){
   cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
-  /* A WAL offset inside live data makes replay rewind and reclaim rows; one
-  ** past the end of the file makes replay see no WAL and serve the store
-  ** one commit behind. */
+  /* A WAL offset inside live data makes replay rewind and reclaim rows.
+  ** Replay bounds it against the file size when it stats the file. */
   if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
   if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
   /* Do not sum: iIndexOffset + nIndexSize can wrap i64. */
@@ -299,12 +301,6 @@ static int csReadManifest(ChunkStore *cs){
    && ( cs->wal.iWalOffset < cs->index.iIndexOffset
      || cs->wal.iWalOffset - cs->index.iIndexOffset < cs->index.nIndexSize ) ){
     return SQLITE_CORRUPT;
-  }
-  {
-    i64 fileSize = 0;
-    rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
-    if( rc!=SQLITE_OK ) return rc;
-    if( cs->wal.iWalOffset > fileSize ) return SQLITE_CORRUPT;
   }
 
   return SQLITE_OK;
@@ -500,6 +496,17 @@ int chunkStoreOpen(
     /* Stock defers NOTADB until first use; keep the garbage bytes. */
     if( rc==SQLITE_NOTADB ){
       cs->notADatabase = 1;
+      cs->index.nChunks = 0;
+      cs->index.iIndexOffset = 0;
+      cs->index.nIndexSize = 0;
+      cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
+      csMarkRefsCommitted(cs);
+      return SQLITE_OK;
+    }
+    /* A damaged header is likewise surfaced on first use, never served. */
+    if( rc==SQLITE_CORRUPT ){
+      cs->corruptHeader = 1;
+      cs->corruptMidStream = 1;
       cs->index.nChunks = 0;
       cs->index.iIndexOffset = 0;
       cs->index.nIndexSize = 0;

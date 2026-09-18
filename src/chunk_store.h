@@ -224,6 +224,8 @@ struct ChunkStore {
   u32 reloadGen;
   u8 corruptMidStream;    /* Mid-stream WAL damage: reads/commits CORRUPT;
                           ** open still succeeds (stock surfaces on first use) */
+  u8 corruptHeader;       /* Header failed its seal or bounds: nothing was
+                          ** served, so a reload must not adopt it as empty */
   u8 notADatabase;        /* Wrong/missing magic. Open succeeds; first use
                           ** is SQLITE_NOTADB and does not overwrite (misc5-4.1). */
   sqlite3_file *pGraphLockFile;

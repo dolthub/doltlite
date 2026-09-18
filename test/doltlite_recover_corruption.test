@@ -424,6 +424,23 @@ do_test doltlite_recover_corruption-6.4 {
   set res
 } {25 3 ok}
 
+# A legacy header carries no seal; its WAL offset is still bounded by the
+# file size.
+proc wrBytes {file off bytes} {
+  set f [open $file r+]
+  fconfigure $f -translation binary
+  seek $f $off
+  puts -nonewline $f $bytes
+  close $f
+}
+do_test doltlite_recover_corruption-6.5 {
+  forcedelete rcor.db
+  file copy -force header.db rcor.db
+  wrBytes rcor.db 124 [binary format a20 ""]
+  wrBytes rcor.db 84 [binary format w [expr {[file size rcor.db] + 4096}]]
+  openCorrupt rcor.db
+} {database disk image is malformed}
+
 forcedelete rch1.db rch2.db rcor.db header.db checkpoint.db checkpoint-crash.db \
             checkpoint-torn.db checkpoint-bad.db checkpoint-gc.db
 
