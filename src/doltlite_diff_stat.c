@@ -786,6 +786,29 @@ static int dsAppendTableNames(
   return SQLITE_OK;
 }
 
+#define DS_SCHEMAS_NCOL 5
+
+static int dsIsSchemasName(const char *z){
+  return z && sqlite3_stricmp(z, "dolt_schemas")==0;
+}
+
+static void dsMasterRoots(
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
+  const ProllyHash **ppOld, u8 *pOldFlags,
+  const ProllyHash **ppNew, u8 *pNewFlags
+){
+  static const ProllyHash empty;
+  struct TableEntry *pOld;
+  struct TableEntry *pNew;
+  pOld = doltliteFindTableByNumber(aFrom, nFrom, 1);
+  pNew = doltliteFindTableByNumber(aTo, nTo, 1);
+  *ppOld = pOld ? &pOld->root : &empty;
+  *ppNew = pNew ? &pNew->root : &empty;
+  *pOldFlags = pOld ? pOld->flags : (pNew ? pNew->flags : 0);
+  *pNewFlags = pNew ? pNew->flags : (pOld ? pOld->flags : 0);
+}
+
 static int dsCollectTableNames(
   sqlite3 *db,
   const ProllyHash *pFromCat,
@@ -816,6 +839,29 @@ static int dsCollectTableNames(
   rc = dsAppendTableNames(aFrom, nFrom, 0, &az, &n, &alloc);
   if( rc==SQLITE_OK ){
     rc = dsAppendTableNames(aTo, nTo, &fromIdx, &az, &n, &alloc);
+  }
+  if( rc==SQLITE_OK ){
+    const ProllyHash *pOldRoot;
+    const ProllyHash *pNewRoot;
+    u8 oldFlags = 0, newFlags = 0;
+    int nOld = 0, nNew = 0, nAdd = 0, nDel = 0, nMod = 0;
+    dsMasterRoots(aFrom, nFrom, aTo, nTo,
+                  &pOldRoot, &oldFlags, &pNewRoot, &newFlags);
+    rc = doltliteSchemasRowDiff(db, pOldRoot, oldFlags, pNewRoot, newFlags,
+                                &nOld, &nNew, &nAdd, &nDel, &nMod);
+    if( rc==SQLITE_OK && (nAdd || nDel || nMod) ){
+      if( n>=alloc ){
+        int newAlloc = alloc ? alloc*2 : 8;
+        char **aNew = sqlite3_realloc(az, newAlloc*(int)sizeof(char*));
+        if( !aNew ) rc = SQLITE_NOMEM;
+        else{ az = aNew; alloc = newAlloc; }
+      }
+      if( rc==SQLITE_OK ){
+        az[n] = sqlite3_mprintf("%s", "dolt_schemas");
+        if( !az[n] ) rc = SQLITE_NOMEM;
+        else n++;
+      }
+    }
   }
   if( rc!=SQLITE_OK ) goto fail;
 
@@ -937,6 +983,39 @@ static struct TableEntry *dsRenamePartner(
   return p;
 }
 
+static int dstFillSchemasStat(DstCursor *c, sqlite3 *db){
+  const ProllyHash *pOldRoot;
+  const ProllyHash *pNewRoot;
+  u8 oldFlags = 0, newFlags = 0;
+  int nOld = 0, nNew = 0, nAdd = 0, nDel = 0, nMod = 0;
+  int rc;
+
+  dsMasterRoots(c->aFromCat, c->nFromCat, c->aToCat, c->nToCat,
+                &pOldRoot, &oldFlags, &pNewRoot, &newFlags);
+  rc = doltliteSchemasRowDiff(db, pOldRoot, oldFlags, pNewRoot, newFlags,
+                              &nOld, &nNew, &nAdd, &nDel, &nMod);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nAdd==0 && nDel==0 && nMod==0 ) return SQLITE_OK;
+  dstClearRow(c);
+  c->row.zTableName = sqlite3_mprintf("%s",
+      c->fctx.zTblFilter ? c->fctx.zTblFilter : "dolt_schemas");
+  if( !c->row.zTableName ) return SQLITE_NOMEM;
+  c->row.rowsAdded = nAdd;
+  c->row.rowsDeleted = nDel;
+  c->row.rowsModified = nMod;
+  c->row.rowsUnmodified = nOld - nDel - nMod;
+  if( c->row.rowsUnmodified<0 ) c->row.rowsUnmodified = 0;
+  c->row.cellsAdded = (i64)nAdd * DS_SCHEMAS_NCOL;
+  c->row.cellsDeleted = (i64)nDel * DS_SCHEMAS_NCOL;
+  c->row.cellsModified = nMod;
+  c->row.oldRowCount = nOld;
+  c->row.newRowCount = nNew;
+  c->row.oldCellCount = (i64)nOld * DS_SCHEMAS_NCOL;
+  c->row.newCellCount = (i64)nNew * DS_SCHEMAS_NCOL;
+  c->hasRow = 1;
+  return SQLITE_OK;
+}
+
 static int dstAdvance(DstCursor *c, sqlite3 *db){
   DsFilterCtx *pCtx = &c->fctx;
   int rc;
@@ -952,6 +1031,12 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
     DsStatRow row;
 
     if( !dsTableNameMatchesFilter(pCtx, zName) ) continue;
+    if( dsIsSchemasName(zName) ){
+      rc = dstFillSchemasStat(c, db);
+      if( rc!=SQLITE_OK ) return rc;
+      if( c->hasRow ) return SQLITE_OK;
+      continue;
+    }
 
     if( pCtx->zTblFilter ){
       pFromEntry = dsFindTableByNameNoCase(c->aFromCat, c->nFromCat, zName);
@@ -1045,6 +1130,7 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   if( rc!=SQLITE_OK ) goto done;
   /* Table filter must name a table on at least one side; else "table not found". */
   if( c->fctx.zTblFilter
+   && !dsIsSchemasName(c->fctx.zTblFilter)
    && !dsFindTableByNameNoCase(c->aFromCat, c->nFromCat,
                                c->fctx.zTblFilter)
    && !dsFindTableByNameNoCase(c->aToCat, c->nToCat,
@@ -1345,6 +1431,27 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
     struct TableEntry *pFromEntry, *pToEntry;
 
     if( !dsTableNameMatchesFilter(pCtx, zName) ) continue;
+    if( dsIsSchemasName(zName) ){
+      const ProllyHash *pOldRoot;
+      const ProllyHash *pNewRoot;
+      u8 oldFlags = 0, newFlags = 0;
+      int nOld = 0, nNew = 0, nAdd = 0, nDel = 0, nMod = 0;
+      dsMasterRoots(c->aFromCat, c->nFromCat, c->aToCat, c->nToCat,
+                    &pOldRoot, &oldFlags, &pNewRoot, &newFlags);
+      rc = doltliteSchemasRowDiff(db, pOldRoot, oldFlags, pNewRoot, newFlags,
+                                  &nOld, &nNew, &nAdd, &nDel, &nMod);
+      if( rc!=SQLITE_OK ) return rc;
+      if( nAdd==0 && nDel==0 && nMod==0 ) continue;
+      if( nOld==0 ){
+        rc = dssSetRow(c, "", "dolt_schemas", "added", 1, 1);
+      }else if( nNew==0 ){
+        rc = dssSetRow(c, "dolt_schemas", "", "dropped", 1, 1);
+      }else{
+        rc = dssSetRow(c, "dolt_schemas", "dolt_schemas", "modified", 1, 0);
+      }
+      if( rc!=SQLITE_OK ) return rc;
+      return SQLITE_OK;
+    }
 
     if( pCtx->zTblFilter ){
       pFromEntry = dsFindTableByNameNoCase(c->aFromCat, c->nFromCat, zName);

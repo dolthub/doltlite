@@ -1697,6 +1697,13 @@ int doltliteRevertViewsAndTriggers(sqlite3 *db, struct SchemaEntry *aSourceSchem
 int doltliteMasterViewTriggerRowsDiffer(sqlite3 *db, const ProllyHash *pOldRoot,
                                         const ProllyHash *pNewRoot, u8 flags,
                                         int *pDiffer);
+int doltliteSchemasRowDiff(
+  sqlite3 *db,
+  const ProllyHash *pOldRoot, u8 oldFlags,
+  const ProllyHash *pNewRoot, u8 newFlags,
+  int *pOldCount, int *pNewCount,
+  int *pAdded, int *pDeleted, int *pModified
+);
 int doltliteIndexApplyRowDelta(
   sqlite3 *db,
   ChunkStore *cs,
