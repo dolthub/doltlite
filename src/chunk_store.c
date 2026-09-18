@@ -278,6 +278,10 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
+  /* Every writer seals the header; a legacy all-zero seal is the only
+  ** unsealed form still accepted. */
+  if( csManifestHashState(aBuf, 0)==CS_MANIFEST_HASH_BAD ) return SQLITE_CORRUPT;
+
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
   cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
@@ -285,8 +289,9 @@ static int csReadManifest(ChunkStore *cs){
   cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
-  /* A WAL offset inside live data makes replay rewind and reclaim rows.
-  ** Header-seal covers unused bytes, so these bounds are the harmful case. */
+  /* A WAL offset inside live data makes replay rewind and reclaim rows; one
+  ** past the end of the file makes replay see no WAL and serve the store
+  ** one commit behind. */
   if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
   if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
   /* Do not sum: iIndexOffset + nIndexSize can wrap i64. */
@@ -294,6 +299,12 @@ static int csReadManifest(ChunkStore *cs){
    && ( cs->wal.iWalOffset < cs->index.iIndexOffset
      || cs->wal.iWalOffset - cs->index.iIndexOffset < cs->index.nIndexSize ) ){
     return SQLITE_CORRUPT;
+  }
+  {
+    i64 fileSize = 0;
+    rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
+    if( rc!=SQLITE_OK ) return rc;
+    if( cs->wal.iWalOffset > fileSize ) return SQLITE_CORRUPT;
   }
 
   return SQLITE_OK;
