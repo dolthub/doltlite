@@ -585,7 +585,6 @@ static void doltliteResetFunc(
   assert( context!=0 );
   assert( argc>=0 );
   if( doltliteCmdRejectDetached(context) ) return;
-  if( doltliteCmdRejectReadOnly(context) ) return;
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     goto reset_cleanup;
@@ -678,6 +677,10 @@ static void doltliteResetFunc(
   if( nPaths>1 && !isHard && !isSoft && !zRef ){
     nPaths = 0;
   }
+
+  /* After catalog/ref disambiguation so a sourced catalog miss still
+  ** surfaces on a read-only connection; refuse before session mutation. */
+  if( doltliteCmdRejectReadOnly(context) ) goto reset_cleanup;
 
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ){
