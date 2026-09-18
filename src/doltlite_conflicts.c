@@ -1241,9 +1241,9 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
 
 int doltliteConflictsRegister(sqlite3 *db){
   int rc;
-  rc = sqlite3_create_module(db, "dolt_conflicts", &conflictsModule, 0);
+  rc = doltliteCreateShieldedModule(db, "dolt_conflicts", &conflictsModule, 0);
   if( rc==SQLITE_OK )
-    rc = sqlite3_create_module(db, "dolt_schema_conflicts",
+    rc = doltliteCreateShieldedModule(db, "dolt_schema_conflicts",
                                &schemaConflictsModule, 0);
   if( rc==SQLITE_OK )
     rc = doltliteCreateCommandFunc(db, "dolt_conflicts_resolve", -1,

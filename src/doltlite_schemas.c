@@ -246,7 +246,7 @@ static sqlite3_module doltliteSchemasModule = {
 };
 
 int doltliteSchemasRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_schemas", &doltliteSchemasModule, 0);
+  return doltliteCreateShieldedModule(db, "dolt_schemas", &doltliteSchemasModule, 0);
 }
 
 int doltliteRevertViewsAndTriggers(

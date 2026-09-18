@@ -1242,7 +1242,7 @@ int doltliteRemoteSqlRegister(sqlite3 *db){
   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds", -1,
                                  doltCredsFunc);
 #endif
-  if( rc==SQLITE_OK ) rc = sqlite3_create_module(db, "dolt_remotes", &remotesModule, 0);
+  if( rc==SQLITE_OK ) rc = doltliteCreateShieldedModule(db, "dolt_remotes", &remotesModule, 0);
   return rc;
 }
 

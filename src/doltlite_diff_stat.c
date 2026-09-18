@@ -1462,10 +1462,10 @@ static sqlite3_module diffSummaryModule = {
 };
 
 int doltliteDiffStatRegister(sqlite3 *db){
-  int rc = sqlite3_create_module(db, "dolt_diff_stat",
+  int rc = doltliteCreateShieldedModule(db, "dolt_diff_stat",
                                  &diffStatModule, 0);
   if( rc==SQLITE_OK ){
-    rc = sqlite3_create_module(db, "dolt_diff_summary",
+    rc = doltliteCreateShieldedModule(db, "dolt_diff_summary",
                                &diffSummaryModule, 0);
   }
   return rc;

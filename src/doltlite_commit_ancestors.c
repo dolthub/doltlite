@@ -309,7 +309,7 @@ static sqlite3_module commitAncestorsModule = {
 };
 
 int doltliteCommitAncestorsRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_commit_ancestors",
+  return doltliteCreateShieldedModule(db, "dolt_commit_ancestors",
                                 &commitAncestorsModule, 0);
 }
 

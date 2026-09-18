@@ -47,6 +47,21 @@ int doltliteCreateCommandFunc(
   int nArg,
   void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
 );
+int doltliteCreateShieldedFunc(
+  sqlite3 *db,
+  const char *zName,
+  int nArg,
+  int eTextRep,
+  void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
+);
+/* Registers pInner behind a shield: every method runs with the user's
+** authorizer detached, because each one issues internal SQL. */
+int doltliteCreateShieldedModule(
+  sqlite3 *db,
+  const char *zName,
+  const sqlite3_module *pInner,
+  void *pAux
+);
 
 static SQLITE_INLINE int doltliteSplitRevisionRange(
   const char *zSpec,

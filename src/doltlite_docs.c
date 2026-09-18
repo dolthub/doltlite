@@ -286,7 +286,7 @@ static sqlite3_module doltliteDocsModule = {
 };
 
 int doltliteDocsRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_docs", &doltliteDocsModule, 0);
+  return doltliteCreateShieldedModule(db, "dolt_docs", &doltliteDocsModule, 0);
 }
 
 #endif

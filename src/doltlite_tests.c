@@ -858,7 +858,7 @@ static sqlite3_module doltliteTestRunModule = {
 };
 
 int doltliteTestsRegister(sqlite3 *db){
-  int rc = sqlite3_create_module(db, "dolt_tests", &doltliteTestsModule, 0);
+  int rc = doltliteCreateShieldedModule(db, "dolt_tests", &doltliteTestsModule, 0);
   if( rc==SQLITE_OK ){
     rc = sqlite3_create_module(db, "dolt_test_run",
         &doltliteTestRunModule, 0);

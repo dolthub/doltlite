@@ -1558,7 +1558,7 @@ static sqlite3_module patchModule = {
 };
 
 int doltlitePatchRegister(sqlite3 *db){
-  return sqlite3_create_module(db,"dolt_patch",&patchModule,0);
+  return doltliteCreateShieldedModule(db,"dolt_patch",&patchModule,0);
 }
 
 #endif

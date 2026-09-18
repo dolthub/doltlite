@@ -33,14 +33,283 @@ static void doltliteCommandFuncShield(
   doltliteAuthShieldLeave(&shield);
 }
 
+int doltliteCreateShieldedFunc(
+  sqlite3 *db,
+  const char *zName,
+  int nArg,
+  int eTextRep,
+  void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
+){
+  return sqlite3_create_function(db, zName, nArg, eTextRep,
+                                 (void*)xFunc, doltliteCommandFuncShield, 0, 0);
+}
+
 int doltliteCreateCommandFunc(
   sqlite3 *db,
   const char *zName,
   int nArg,
   void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
 ){
-  return sqlite3_create_function(db, zName, nArg, DOLTLITE_COMMAND_FUNC_FLAGS,
-                                 (void*)xFunc, doltliteCommandFuncShield, 0, 0);
+  return doltliteCreateShieldedFunc(db, zName, nArg,
+                                    DOLTLITE_COMMAND_FUNC_FLAGS, xFunc);
+}
+
+/* Every method of a version-control virtual table runs internal SQL on the
+** connection that registered it, so the whole module is shielded. Modules
+** are per connection, and SQLite points each constructed vtab at the
+** registered module, which is how a method finds its inner module. */
+typedef struct ShieldedModule ShieldedModule;
+struct ShieldedModule {
+  sqlite3_module mod;
+  const sqlite3_module *pInner;
+  void *pAux;
+  sqlite3 *db;
+};
+
+#define SM_VTAB(pVtab) ((ShieldedModule*)(pVtab)->pModule)
+#define SM_CUR(pCur) SM_VTAB((pCur)->pVtab)
+#define SM_ENTER(p) DoltliteAuthShield shield; doltliteAuthShieldEnter((p)->db, &shield)
+#define SM_LEAVE() doltliteAuthShieldLeave(&shield)
+
+static int smCreate(sqlite3 *db, void *pAux, int argc, const char *const*argv,
+                    sqlite3_vtab **ppVtab, char **pzErr){
+  ShieldedModule *p = (ShieldedModule*)pAux;
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xCreate(db, p->pAux, argc, argv, ppVtab, pzErr);
+  SM_LEAVE();
+  return rc;
+}
+static int smConnect(sqlite3 *db, void *pAux, int argc, const char *const*argv,
+                     sqlite3_vtab **ppVtab, char **pzErr){
+  ShieldedModule *p = (ShieldedModule*)pAux;
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xConnect(db, p->pAux, argc, argv, ppVtab, pzErr);
+  SM_LEAVE();
+  return rc;
+}
+static int smBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xBestIndex(pVtab, pInfo);
+  SM_LEAVE();
+  return rc;
+}
+static int smDisconnect(sqlite3_vtab *pVtab){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xDisconnect(pVtab);
+  SM_LEAVE();
+  return rc;
+}
+static int smDestroy(sqlite3_vtab *pVtab){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xDestroy(pVtab);
+  SM_LEAVE();
+  return rc;
+}
+static int smOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xOpen(pVtab, ppCursor);
+  SM_LEAVE();
+  return rc;
+}
+static int smClose(sqlite3_vtab_cursor *pCur){
+  ShieldedModule *p = SM_CUR(pCur);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xClose(pCur);
+  SM_LEAVE();
+  return rc;
+}
+static int smFilter(sqlite3_vtab_cursor *pCur, int idxNum, const char *idxStr,
+                    int argc, sqlite3_value **argv){
+  ShieldedModule *p = SM_CUR(pCur);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xFilter(pCur, idxNum, idxStr, argc, argv);
+  SM_LEAVE();
+  return rc;
+}
+static int smNext(sqlite3_vtab_cursor *pCur){
+  ShieldedModule *p = SM_CUR(pCur);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xNext(pCur);
+  SM_LEAVE();
+  return rc;
+}
+static int smEof(sqlite3_vtab_cursor *pCur){
+  ShieldedModule *p = SM_CUR(pCur);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xEof(pCur);
+  SM_LEAVE();
+  return rc;
+}
+static int smColumn(sqlite3_vtab_cursor *pCur, sqlite3_context *ctx, int i){
+  ShieldedModule *p = SM_CUR(pCur);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xColumn(pCur, ctx, i);
+  SM_LEAVE();
+  return rc;
+}
+static int smRowid(sqlite3_vtab_cursor *pCur, sqlite3_int64 *pRowid){
+  ShieldedModule *p = SM_CUR(pCur);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xRowid(pCur, pRowid);
+  SM_LEAVE();
+  return rc;
+}
+static int smUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv,
+                    sqlite3_int64 *pRowid){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xUpdate(pVtab, argc, argv, pRowid);
+  SM_LEAVE();
+  return rc;
+}
+static int smBegin(sqlite3_vtab *pVtab){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xBegin(pVtab);
+  SM_LEAVE();
+  return rc;
+}
+static int smSync(sqlite3_vtab *pVtab){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xSync(pVtab);
+  SM_LEAVE();
+  return rc;
+}
+static int smCommit(sqlite3_vtab *pVtab){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xCommit(pVtab);
+  SM_LEAVE();
+  return rc;
+}
+static int smRollback(sqlite3_vtab *pVtab){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xRollback(pVtab);
+  SM_LEAVE();
+  return rc;
+}
+static int smFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
+                          void (**pxFunc)(sqlite3_context*,int,sqlite3_value**),
+                          void **ppArg){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xFindFunction(pVtab, nArg, zName, pxFunc, ppArg);
+  SM_LEAVE();
+  return rc;
+}
+static int smRename(sqlite3_vtab *pVtab, const char *zNew){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xRename(pVtab, zNew);
+  SM_LEAVE();
+  return rc;
+}
+static int smSavepoint(sqlite3_vtab *pVtab, int iSavepoint){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xSavepoint(pVtab, iSavepoint);
+  SM_LEAVE();
+  return rc;
+}
+static int smRelease(sqlite3_vtab *pVtab, int iSavepoint){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xRelease(pVtab, iSavepoint);
+  SM_LEAVE();
+  return rc;
+}
+static int smRollbackTo(sqlite3_vtab *pVtab, int iSavepoint){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xRollbackTo(pVtab, iSavepoint);
+  SM_LEAVE();
+  return rc;
+}
+static int smIntegrity(sqlite3_vtab *pVtab, const char *zSchema,
+                       const char *zTabName, int mFlags, char **pzErr){
+  ShieldedModule *p = SM_VTAB(pVtab);
+  int rc;
+  SM_ENTER(p);
+  rc = p->pInner->xIntegrity(pVtab, zSchema, zTabName, mFlags, pzErr);
+  SM_LEAVE();
+  return rc;
+}
+
+int doltliteCreateShieldedModule(
+  sqlite3 *db,
+  const char *zName,
+  const sqlite3_module *pInner,
+  void *pAux
+){
+  ShieldedModule *p = sqlite3_malloc(sizeof(*p));
+  sqlite3_module *m;
+  if( !p ) return SQLITE_NOMEM;
+  memset(p, 0, sizeof(*p));
+  p->pInner = pInner;
+  p->pAux = pAux;
+  p->db = db;
+  m = &p->mod;
+  m->iVersion = pInner->iVersion;
+  /* xCreate==xConnect marks an eponymous module; keep that identity. */
+  if( pInner->xCreate ){
+    m->xCreate = pInner->xCreate==pInner->xConnect ? smConnect : smCreate;
+  }
+  if( pInner->xConnect ) m->xConnect = smConnect;
+  if( pInner->xBestIndex ) m->xBestIndex = smBestIndex;
+  if( pInner->xDisconnect ) m->xDisconnect = smDisconnect;
+  if( pInner->xDestroy ){
+    m->xDestroy = pInner->xDestroy==pInner->xDisconnect ? smDisconnect : smDestroy;
+  }
+  if( pInner->xOpen ) m->xOpen = smOpen;
+  if( pInner->xClose ) m->xClose = smClose;
+  if( pInner->xFilter ) m->xFilter = smFilter;
+  if( pInner->xNext ) m->xNext = smNext;
+  if( pInner->xEof ) m->xEof = smEof;
+  if( pInner->xColumn ) m->xColumn = smColumn;
+  if( pInner->xRowid ) m->xRowid = smRowid;
+  if( pInner->xUpdate ) m->xUpdate = smUpdate;
+  if( pInner->xBegin ) m->xBegin = smBegin;
+  if( pInner->xSync ) m->xSync = smSync;
+  if( pInner->xCommit ) m->xCommit = smCommit;
+  if( pInner->xRollback ) m->xRollback = smRollback;
+  if( pInner->xFindFunction ) m->xFindFunction = smFindFunction;
+  if( pInner->xRename ) m->xRename = smRename;
+  if( pInner->iVersion>=2 ){
+    if( pInner->xSavepoint ) m->xSavepoint = smSavepoint;
+    if( pInner->xRelease ) m->xRelease = smRelease;
+    if( pInner->xRollbackTo ) m->xRollbackTo = smRollbackTo;
+  }
+  if( pInner->iVersion>=3 ) m->xShadowName = pInner->xShadowName;
+  if( pInner->iVersion>=4 && pInner->xIntegrity ) m->xIntegrity = smIntegrity;
+  return sqlite3_create_module_v2(db, zName, m, p, sqlite3_free);
 }
 
 static void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt);

@@ -1085,7 +1085,7 @@ static sqlite3_module schemaDiffModule = {
 };
 
 int doltliteSchemaDiffRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "dolt_schema_diff", &schemaDiffModule, 0);
+  return doltliteCreateShieldedModule(db, "dolt_schema_diff", &schemaDiffModule, 0);
 }
 
 #endif

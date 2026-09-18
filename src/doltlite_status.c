@@ -1594,7 +1594,7 @@ static sqlite3_module doltliteStatusModule = {
 };
 
 int doltliteStatusRegister(sqlite3 *db){
-  return sqlite3_create_module(db,"dolt_status",&doltliteStatusModule,0);
+  return doltliteCreateShieldedModule(db,"dolt_status",&doltliteStatusModule,0);
 }
 
 #endif
