@@ -63,10 +63,16 @@ import os
 import socket
 import socketserver
 import sys
+import threading
+import time
 
 upstream_port = int(sys.argv[1])
 marker = sys.argv[2]
 mode_path = sys.argv[3]
+connection_log = sys.argv[4]
+request_log = sys.argv[5]
+budget_lock = threading.Lock()
+budget_get_count = 0
 
 def response_mode():
     try:
@@ -100,57 +106,94 @@ def alter_response(response, mode):
         lines.append(b"Transfer-Encoding: chunked")
     return b"\r\n".join(lines) + sep + body
 
+def keepalive_response(response):
+    head, sep, body = response.partition(b"\r\n\r\n")
+    if not sep:
+        return response
+    lines = [
+        line for line in head.split(b"\r\n")
+        if not line.lower().startswith(b"connection:")
+    ]
+    lines.append(b"Connection: keep-alive")
+    return b"\r\n".join(lines) + sep + body
+
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
-        data = b""
-        while b"\r\n\r\n" not in data:
-            chunk = self.request.recv(1)
-            if not chunk:
-                return
-            data += chunk
-            if len(data) > 65536:
-                return
-        head, rest = data.split(b"\r\n\r\n", 1)
-        lines = head.decode("iso-8859-1").split("\r\n")
-        parts = lines[0].split(" ", 2)
-        if len(parts) < 2:
-            return
-        method, path = parts[0], parts[1]
-        headers = {}
-        for line in lines[1:]:
-            if ":" in line:
-                k, v = line.split(":", 1)
-                headers[k.strip().lower()] = v.strip()
-        if method == "POST" and "content-length" not in headers:
-            self.request.sendall(
-                b"HTTP/1.1 411 Length Required\r\n"
-                b"Content-Length: 15\r\nConnection: close\r\n\r\n"
-                b"Length Required"
-            )
-            return
-        nbody = int(headers.get("content-length", "0"))
-        body = rest
-        while len(body) < nbody:
-            chunk = self.request.recv(nbody - len(body))
-            if not chunk:
-                return
-            body += chunk
-        if method == "POST" and path.endswith("/commit") and headers.get("content-length") == "0":
-            with open(marker, "w") as f:
-                f.write("ok\n")
-        with socket.create_connection(("127.0.0.1", upstream_port), timeout=5) as s:
-            s.sendall(head + b"\r\n\r\n" + body)
-            s.shutdown(socket.SHUT_WR)
-            response = b""
-            while True:
-                chunk = s.recv(65536)
+        global budget_get_count
+        keepalive = response_mode() in ("keepalive", "stale", "budget")
+        if keepalive:
+            with open(connection_log, "a") as f:
+                f.write("connection\n")
+        while True:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = self.request.recv(1)
                 if not chunk:
-                    break
-                response += chunk
-        mode = response_mode()
-        if mode and path.endswith("/refs"):
-            response = alter_response(response, mode)
-        self.request.sendall(response)
+                    return
+                data += chunk
+                if len(data) > 65536:
+                    return
+            head, rest = data.split(b"\r\n\r\n", 1)
+            lines = head.decode("iso-8859-1").split("\r\n")
+            parts = lines[0].split(" ", 2)
+            if len(parts) < 2:
+                return
+            method, path = parts[0], parts[1]
+            headers = {}
+            for line in lines[1:]:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+            if method == "POST" and "content-length" not in headers:
+                self.request.sendall(
+                    b"HTTP/1.1 411 Length Required\r\n"
+                    b"Content-Length: 15\r\nConnection: close\r\n\r\n"
+                    b"Length Required"
+                )
+                return
+            nbody = int(headers.get("content-length", "0"))
+            body = rest
+            while len(body) < nbody:
+                chunk = self.request.recv(nbody - len(body))
+                if not chunk:
+                    return
+                body += chunk
+            if keepalive:
+                with open(request_log, "a") as f:
+                    f.write(path + "\n")
+            budget_request = 0
+            if response_mode() == "budget" and path.endswith("/get-chunks"):
+                with budget_lock:
+                    budget_get_count += 1
+                    budget_request = budget_get_count
+            if method == "POST" and path.endswith("/commit") and headers.get("content-length") == "0":
+                with open(marker, "w") as f:
+                    f.write("ok\n")
+            with socket.create_connection(("127.0.0.1", upstream_port), timeout=5) as s:
+                s.sendall(head + b"\r\n\r\n" + body)
+                s.shutdown(socket.SHUT_WR)
+                response = b""
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    response += chunk
+            mode = response_mode()
+            if mode == "budget" and budget_request == 2:
+                time.sleep(0.65)
+                return
+            if mode == "budget" and budget_request == 3:
+                time.sleep(0.65)
+            if mode in ("keepalive", "stale", "budget"):
+                response = keepalive_response(response)
+            else:
+                response = alter_response(response, mode)
+            try:
+                self.request.sendall(response)
+            except OSError:
+                return
+            if mode not in ("keepalive", "budget"):
+                return
 
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
@@ -162,7 +205,8 @@ PY
 
 : >"$TMP/response-mode"
 python3 "$TMP/proxy.py" "$SRV_PORT" "$TMP/commit-content-length-ok" \
-  "$TMP/response-mode" >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
+  "$TMP/response-mode" "$TMP/connections" "$TMP/requests" \
+  >"$TMP/proxy.log" 2>"$TMP/proxy.err" &
 PROXY_PID=$!
 
 PROXY_PORT=""
@@ -214,5 +258,73 @@ for mode in invalid duplicate overflow truncated transfer; do
 done
 : >"$TMP/response-mode"
 echo "http remote strict response framing: PASS"
+
+printf '%s\n' keepalive >"$TMP/response-mode"
+: >"$TMP/connections"
+: >"$TMP/requests"
+result=$(DOLTLITE_HTTP_TIMEOUT_MS=1000 "$DOLTLITE" \
+  "file:$TMP/lazy?mode=memory&cache=private&lazy_origin=1" \
+  "SELECT dolt_clone('--lazy','$URL'); SELECT count(*) FROM dolt_log('main');" 2>&1) || {
+  echo "FAIL: persistent lazy read failed: $result"
+  exit 1
+}
+if [ "$result" != $'0\n2' ]; then
+  echo "FAIL: unexpected persistent lazy read result: $result"
+  exit 1
+fi
+connections=$(wc -l <"$TMP/connections" | tr -d ' ')
+requests=$(grep -c '/get-chunks$' "$TMP/requests" || true)
+if [ "$connections" != "2" ] || [ "$requests" -lt 2 ]; then
+  echo "FAIL: persistent lazy read used $connections connections for $requests chunk requests"
+  exit 1
+fi
+echo "http remote persistent lazy reads: PASS"
+
+printf '%s\n' stale >"$TMP/response-mode"
+result=$(DOLTLITE_HTTP_TIMEOUT_MS=1000 "$DOLTLITE" \
+  "file:$TMP/stale?mode=memory&cache=private&lazy_origin=1" \
+  "SELECT dolt_clone('--lazy','$URL'); SELECT count(*) FROM dolt_log('main');" 2>&1) || {
+  echo "FAIL: stale persistent connection was not retried: $result"
+  exit 1
+}
+if [ "$result" != $'0\n2' ]; then
+  echo "FAIL: unexpected stale connection retry result: $result"
+  exit 1
+fi
+echo "http remote stale read retry: PASS"
+
+printf '%s\n' budget >"$TMP/response-mode"
+python3 - "$DOLTLITE" "$TMP/deadline" "$URL" <<'PY'
+import os
+import subprocess
+import sys
+import time
+
+doltlite, db_path, url = sys.argv[1:]
+env = os.environ.copy()
+env["DOLTLITE_HTTP_TIMEOUT_MS"] = "1000"
+start = time.monotonic()
+proc = subprocess.run(
+    [
+        doltlite,
+        f"file:{db_path}?mode=memory&cache=private&lazy_origin=1",
+        f"SELECT dolt_clone('--lazy','{url}'); "
+        "SELECT count(*) FROM dolt_log('main');",
+    ],
+    env=env,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    timeout=4,
+    text=True,
+)
+elapsed = time.monotonic() - start
+if proc.returncode == 0:
+    print(f"FAIL: retry received a fresh timeout budget ({elapsed:.2f}s)")
+    sys.exit(1)
+if elapsed > 1.8:
+    print(f"FAIL: logical request exceeded its timeout budget ({elapsed:.2f}s)")
+    sys.exit(1)
+PY
+echo "http remote retry deadline: PASS"
 
 echo "http remote empty POST Content-Length: PASS"

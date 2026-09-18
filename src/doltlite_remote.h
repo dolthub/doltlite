@@ -29,6 +29,7 @@ struct DoltliteRemote {
   /* Last remote error, or NULL. Valid until the next op or xClose. */
   const char *(*xErrMsg)(DoltliteRemote*);
   int bResumePartialPuts;
+  int bCacheForChunkSource;
 };
 
 static inline int doltliteRemotePersistRefs(ChunkStore *cs){
