@@ -459,6 +459,33 @@ static int sdTableIndexInit(
 
 
 
+/* Pair renames the way dolt_status does. iTable is sorted-name numbering, and
+** identical content is neither necessary for a rename nor sufficient to prove
+** one; doltliteCatalogRenameMate weighs schema and content together. The
+** pairing must also be mutual, so two candidates cannot both claim one mate. */
+static struct TableEntry *sdRenamePartner(
+  sqlite3 *db,
+  struct TableEntry *aFromTables, int nFromTables,
+  struct TableEntry *aToTables, int nToTables,
+  const struct TableEntry *pRef,
+  int bRefIsFrom,
+  int *pRc
+){
+  struct TableEntry *pMate = 0;
+  struct TableEntry *pBack = 0;
+  *pRc = SQLITE_OK;
+  if( !pRef ) return 0;
+  *pRc = doltliteCatalogRenameMate(db, aFromTables, nFromTables,
+                                   aToTables, nToTables, pRef, bRefIsFrom,
+                                   &pMate);
+  if( *pRc!=SQLITE_OK || !pMate ) return 0;
+  *pRc = doltliteCatalogRenameMate(db, aFromTables, nFromTables,
+                                   aToTables, nToTables, pMate, !bRefIsFrom,
+                                   &pBack);
+  if( *pRc!=SQLITE_OK ) return 0;
+  return pBack==pRef ? pMate : 0;
+}
+
 static int computeSchemaDiff(
   SdCursor *pCur,
   SchemaEntry *aFrom, int nFrom,
@@ -466,6 +493,7 @@ static int computeSchemaDiff(
   struct TableEntry *aFromTables, int nFromTables,
   struct TableEntry *aToTables, int nToTables
 ){
+  sqlite3 *db = ((SdVtab*)pCur->base.pVtab)->db;
   int i;
   u8 *fromConsumed = 0, *toConsumed = 0;
   SdSchemaIndex fromSchemaIdx, toSchemaIdx;
@@ -511,17 +539,18 @@ static int computeSchemaDiff(
     toTE = addNameIndexFind(&toTableIdx, aTo[i].zName);
     if( !toTE || toTE->iTable==0 ) continue;
 
-    for(j=0; j<nFromTables; j++){
+    {
       SchemaEntry *dropped;
+      struct TableEntry *pMate;
       int k;
-      if( aFromTables[j].iTable != toTE->iTable ) continue;
-      if( !aFromTables[j].zName ) continue;
-      if( prollyHashCompare(&aFromTables[j].root, &toTE->root)!=0 ) break;
+      pMate = sdRenamePartner(db, aFromTables, nFromTables,
+                              aToTables, nToTables, toTE, 0, &rc);
+      if( rc!=SQLITE_OK ) goto done;
+      if( !pMate || !pMate->zName ) continue;
+      if( addNameIndexFind(&toTableIdx, pMate->zName) ) continue;
 
-      if( addNameIndexFind(&toTableIdx, aFromTables[j].zName) ) break;
-
-      dropped = sdSchemaIndexFind(&fromSchemaIdx, aFromTables[j].zName);
-      if( !dropped ) break;
+      dropped = sdSchemaIndexFind(&fromSchemaIdx, pMate->zName);
+      if( !dropped ) continue;
 
       rc = appendSchemaDiffRow(pCur, dropped->zName, aTo[i].zName,
                                dropped->zSql, aTo[i].zSql);
@@ -531,7 +560,6 @@ static int computeSchemaDiff(
       for(k=0; k<nFrom; k++){
         if( &aFrom[k] == dropped ){ fromConsumed[k] = 1; break; }
       }
-      break;
     }
   }
 
@@ -587,6 +615,7 @@ static int sdAppendRenameIfMatches(
   const char *zFilter,
   int *pRenamed
 ){
+  sqlite3 *db = ((SdVtab*)pCur->base.pVtab)->db;
   struct TableEntry *pTo;
   struct TableEntry *pFrom;
   SchemaEntry *pDropped;
@@ -598,10 +627,11 @@ static int sdAppendRenameIfMatches(
 
   pTo = doltliteFindTableByName(aToTables, nToTables, zFilter);
   if( pTo && pTo->iTable!=0 ){
-    pFrom = doltliteFindTableByNumber(aFromTables, nFromTables, pTo->iTable);
+    pFrom = sdRenamePartner(db, aFromTables, nFromTables,
+                            aToTables, nToTables, pTo, 0, &rc);
+    if( rc!=SQLITE_OK ) return rc;
     if( pFrom && pFrom->zName
      && strcmp(pFrom->zName, zFilter)!=0
-     && prollyHashCompare(&pFrom->root, &pTo->root)==0
      && !doltliteFindTableByName(aToTables, nToTables, pFrom->zName) ){
       pDropped = findSchemaEntry(aFrom, nFrom, pFrom->zName);
       pAdded = findSchemaEntry(aTo, nTo, zFilter);
@@ -617,10 +647,11 @@ static int sdAppendRenameIfMatches(
 
   pFrom = doltliteFindTableByName(aFromTables, nFromTables, zFilter);
   if( pFrom && pFrom->iTable!=0 ){
-    pTo = doltliteFindTableByNumber(aToTables, nToTables, pFrom->iTable);
+    pTo = sdRenamePartner(db, aFromTables, nFromTables,
+                          aToTables, nToTables, pFrom, 1, &rc);
+    if( rc!=SQLITE_OK ) return rc;
     if( pTo && pTo->zName
      && strcmp(pTo->zName, zFilter)!=0
-     && prollyHashCompare(&pFrom->root, &pTo->root)==0
      && !doltliteFindTableByName(aToTables, nToTables, zFilter) ){
       pDropped = findSchemaEntry(aFrom, nFrom, zFilter);
       pAdded = findSchemaEntry(aTo, nTo, pTo->zName);
