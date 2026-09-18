@@ -1427,6 +1427,57 @@ static int prollyVcStateEqual(const DoltVcState *a, const DoltVcState *b){
                            &b->constraintViolationsHash)==0;
 }
 
+static void prollyHashCatalogShape(Btree *p, ProllyHash *pOut){
+  u8 stack[4 + 64*(4+PROLLY_HASH_SIZE)];
+  u8 *heap = 0;
+  u8 *buf;
+  int n;
+  int need;
+  int i;
+  int off;
+
+  n = p && p->cat.n>0 ? p->cat.n : 0;
+  need = 4 + n*(4+PROLLY_HASH_SIZE);
+  if( need<=(int)sizeof(stack) ){
+    buf = stack;
+  }else{
+    heap = sqlite3_malloc(need);
+    buf = heap;
+    if( !buf ){
+      memset(pOut, 0xff, sizeof(*pOut));
+      return;
+    }
+  }
+  buf[0] = (u8)n;
+  buf[1] = (u8)(n>>8);
+  buf[2] = (u8)(n>>16);
+  buf[3] = (u8)(n>>24);
+  off = 4;
+  for(i=0; i<n; i++){
+    Pgno t = p->cat.a[i].iTable;
+    buf[off] = (u8)t;
+    buf[off+1] = (u8)(t>>8);
+    buf[off+2] = (u8)(t>>16);
+    buf[off+3] = (u8)(t>>24);
+    off += 4;
+    memcpy(buf+off, p->cat.a[i].root.data, PROLLY_HASH_SIZE);
+    off += PROLLY_HASH_SIZE;
+  }
+  prollyHashCompute(buf, off, pOut);
+  sqlite3_free(heap);
+}
+
+void btreeCaptureCommittedCatalogShape(Btree *p){
+  if( p ) prollyHashCatalogShape(p, &p->committedCatalogShape);
+}
+
+int btreeCatalogShapeChanged(Btree *p){
+  ProllyHash live;
+  if( !p ) return 0;
+  prollyHashCatalogShape(p, &live);
+  return prollyHashCompare(&live, &p->committedCatalogShape)!=0;
+}
+
 static int prollyBtreeHasPendingChanges(Btree *p){
   int i;
   if( !p ) return 0;
@@ -1442,6 +1493,7 @@ static int prollyBtreeHasPendingChanges(Btree *p){
     ChunkStaging *st = &p->pBt->store.staging;
     if( chunkStagingPendingCount(st)>0 || st->nRecentUncommitted>0 ) return 1;
   }
+  if( btreeCatalogShapeChanged(p) ) return 1;
   return 0;
 }
 

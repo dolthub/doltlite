@@ -509,6 +509,7 @@ void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash){
   }
   p->committedVc = p->vc;
   memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));
+  btreeCaptureCommittedCatalogShape(p);
 }
 
 static void btreeBumpExternalDataVersion(Btree *p){
