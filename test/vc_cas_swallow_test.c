@@ -116,8 +116,8 @@ static int setupSchemaMerge(sqlite3 *db){
     "SELECT dolt_commit('-Am','main row');");
 }
 
-/* --force commit must not advance HEAD if clearing CVs fails to persist. */
-static void test_force_commit_checks_cv_clear(void){
+/* --force commit advances HEAD and keeps recorded CVs on the working set. */
+static void test_force_commit_keeps_cvs(void){
   char zPath[256];
   sqlite3 *db;
   char *zHeadBefore = 0, *zHeadAfter = 0, *zErr = 0;
@@ -137,16 +137,17 @@ static void test_force_commit_checks_cv_clear(void){
         queryInt(db, "SELECT count(*) FROM dolt_constraint_violations", &nCv)
           ==SQLITE_OK && nCv>0);
   zHeadBefore = queryText(db, "SELECT dolt_hashof('HEAD')");
-  doltliteTestFailPersistAtCall(1);
   rc = execQuiet(db, "SELECT dolt_commit('--force','-Am','forced')", &zErr);
-  check("cv: force commit fails", rc!=SQLITE_OK);
+  check("cv: force commit succeeds", rc==SQLITE_OK);
+  sqlite3_free(zErr);
   zHeadAfter = queryText(db, "SELECT dolt_hashof('HEAD')");
-  check("cv: HEAD unchanged",
-        zHeadBefore && zHeadAfter && strcmp(zHeadBefore, zHeadAfter)==0);
+  check("cv: HEAD advanced",
+        zHeadBefore && zHeadAfter && strcmp(zHeadBefore, zHeadAfter)!=0);
+  check("cv: violations still recorded",
+        queryInt(db, "SELECT count(*) FROM dolt_constraint_violations", &nCv)
+          ==SQLITE_OK && nCv>0);
   sqlite3_free(zHeadBefore);
   sqlite3_free(zHeadAfter);
-  sqlite3_free(zErr);
-  sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
   closeRm(db, zPath);
 }
 
@@ -303,7 +304,7 @@ static void test_merge_install_unlock_window(void){
 
 int main(void){
   sqlite3_initialize();
-  test_force_commit_checks_cv_clear();
+  test_force_commit_keeps_cvs();
   test_merge_restore_not_voided();
   test_conflicts_resolve_savepoint();
   test_branch_move_ws_read_failure();

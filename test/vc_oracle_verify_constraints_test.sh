@@ -227,6 +227,24 @@ DELETE FROM dolt_constraint_violations_t;
 "'otherTable'" \
 "$FOLLOW_AGG_COUNT" 1
 
+echo "--- FK: --force commit keeps merge-recorded violations ---"
+run_oracle "fk_force_commit_keeps_merge_cvs" \
+"$MERGE_CV_SETUP
+SELECT dolt_commit('--force','-m','forced');
+" \
+"" \
+"$FOLLOW_AGG
+$FOLLOW_CHILD_ROWS" 0
+
+echo "--- unique: --force commit keeps merge-recorded violations ---"
+run_oracle "unique_force_commit_keeps_cvs" \
+"$UNIQUE_SETUP
+SELECT dolt_commit('-Am', 'commit with violations', '--force');
+" \
+"" \
+"$FOLLOW_AGG
+$FOLLOW_T_ROWS" 0
+
 echo "--- unique: --all after force-commit ---"
 run_oracle "unique_all_after_commit" \
 "$UNIQUE_SETUP
