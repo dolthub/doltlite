@@ -1019,6 +1019,20 @@ static int mergePass1MergeOursEntry(MergePass1Ctx *c, int iOurs){
   if( rc!=SQLITE_OK ) return rc;
   if( bSkipMaster ) return SQLITE_OK;
 
+  if( c->bBranchMerge && zName && ancEntry && ancEntry->zName
+   && strcmp(zName, ancEntry->zName)!=0
+   && theirsEntry && theirsEntry->zName
+   && strcmp(theirsEntry->zName, ancEntry->zName)==0
+   && (prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0
+    || prollyHashCompare(&theirsEntry->schemaHash, &ancEntry->schemaHash)!=0) ){
+    rc = mergePass1NoteSchemaConflict(c, ancEntry->zName, zName);
+    if( rc==SQLITE_OK ){
+      rc = mergePass1NoteSchemaConflict(c, ancEntry->zName, ancEntry->zName);
+    }
+    if( rc==SQLITE_OK ) c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+    return rc;
+  }
+
   if( hasSchemaConflictObject(*c->ppConflictTables, *c->pnConflictTables,
                               zSchemaMergeName)
    || (zName && hasSchemaConflictTable(*c->ppConflictTables,

@@ -666,9 +666,38 @@ static const char *mergeRenameMapLookup(char **az, int n, const char *zOld){
   return 0;
 }
 
-/* zSide is zAnc with side renames applied by SQLite's rewriter and nothing
-** else: identical byte-for-byte outside identifier tokens, and each
-** identifier either matches or maps old->new. */
+static int mergeIsIdentifierToken(const char *z, int type){
+  return type==TK_ID || (sqlite3Isalpha(*z) && type!=TK_BLOB);
+}
+
+static int mergeIdentifiersEqual(
+  const char *a, int nA,
+  const char *b, int nB,
+  int bToken
+){
+  char aQuote = 0, bQuote = 0;
+  if( nA>=2 && (*a=='"' || *a=='`' || *a=='[') ){
+    aQuote = *a=='[' ? ']' : *a;
+    a++; nA -= 2;
+  }
+  if( bToken && nB>=2 && (*b=='"' || *b=='`' || *b=='[') ){
+    bQuote = *b=='[' ? ']' : *b;
+    b++; nB -= 2;
+  }
+  while( nA>0 && nB>0 ){
+    u8 ca = (u8)*a++, cb = (u8)*b++;
+    nA--; nB--;
+    if( aQuote && aQuote!=']' && ca==aQuote && nA>0 && *a==aQuote ){
+      a++; nA--;
+    }
+    if( bQuote && bQuote!=']' && cb==bQuote && nB>0 && *b==bQuote ){
+      b++; nB--;
+    }
+    if( sqlite3UpperToLower[ca]!=sqlite3UpperToLower[cb] ) return 0;
+  }
+  return nA==0 && nB==0;
+}
+
 static int mergeTextsEqualModuloRenames(
   const char *zAnc,
   const char *zSide,
@@ -678,57 +707,28 @@ static int mergeTextsEqualModuloRenames(
   const char *s = zSide;
 
   if( !zAnc || !zSide ) return 0;
-  while( *a || *s ){
-    int aId = sqlite3Isalnum(*a) || *a=='_' || *a=='$' || *a=='"' || *a=='`' || *a=='[';
-    int sId = sqlite3Isalnum(*s) || *s=='_' || *s=='$' || *s=='"' || *s=='`' || *s=='[';
-    if( !aId || !sId ){
-      if( *a!=*s ) return 0;
-      if( *a==0 ) break;
-      a++;
-      s++;
+  while( *a && *s ){
+    int aType, sType, i;
+    int nA = sqlite3GetToken((const u8*)a, &aType);
+    int nS = sqlite3GetToken((const u8*)s, &sType);
+    if( nA==nS && memcmp(a, s, nA)==0 ){
+      a += nA; s += nS;
       continue;
     }
-    {
-      const char *aTok, *sTok;
-      int nATok, nSTok;
-      if( *a=='"' || *a=='`' || *a=='[' ){
-        char cEnd = *a=='[' ? ']' : *a;
-        a++; aTok = a;
-        while( *a && *a!=cEnd ) a++;
-        nATok = (int)(a-aTok);
-        if( *a ) a++;
-      }else{
-        aTok = a;
-        while( sqlite3Isalnum(*a) || *a=='_' || *a=='$' ) a++;
-        nATok = (int)(a-aTok);
+    if( !mergeIsIdentifierToken(a, aType)
+     || !mergeIsIdentifierToken(s, sType) ) return 0;
+    if( !mergeIdentifiersEqual(a, nA, s, nS, 1) ){
+      for(i=0; i+1<nPairs; i+=2){
+        if( mergeIdentifiersEqual(a, nA, azPairs[i],
+                                   (int)strlen(azPairs[i]), 0)
+         && mergeIdentifiersEqual(s, nS, azPairs[i+1],
+                                   (int)strlen(azPairs[i+1]), 0) ) break;
       }
-      if( *s=='"' || *s=='`' || *s=='[' ){
-        char cEnd = *s=='[' ? ']' : *s;
-        s++; sTok = s;
-        while( *s && *s!=cEnd ) s++;
-        nSTok = (int)(s-sTok);
-        if( *s ) s++;
-      }else{
-        sTok = s;
-        while( sqlite3Isalnum(*s) || *s=='_' || *s=='$' ) s++;
-        nSTok = (int)(s-sTok);
-      }
-      if( nATok==nSTok && sqlite3_strnicmp(aTok, sTok, nATok)==0 ) continue;
-      {
-        int i;
-        for(i=0; i+1<nPairs; i+=2){
-          if( (int)strlen(azPairs[i])==nATok
-           && sqlite3_strnicmp(azPairs[i], aTok, nATok)==0
-           && (int)strlen(azPairs[i+1])==nSTok
-           && sqlite3_strnicmp(azPairs[i+1], sTok, nSTok)==0 ){
-            break;
-          }
-        }
-        if( i+1>=nPairs ) return 0;
-      }
+      if( i+1>=nPairs ) return 0;
     }
+    a += nA; s += nS;
   }
-  return 1;
+  return *a==0 && *s==0;
 }
 
 static int mergeTableTextHasColumn(const char *zTblSql, const char *zName){
@@ -764,8 +764,6 @@ static void mergeSetEntryText(SchemaEntry *pSe, const char *zSql){
   }
 }
 
-/* zSql with every identifier token equal to zOld replaced by zNew, quoting
-** style preserved. Everything outside identifier tokens is untouched. */
 static char *mergeRewriteIdent(
   const char *zSql,
   const char *zOld,
@@ -776,35 +774,23 @@ static char *mergeRewriteIdent(
   int nOld = (int)strlen(zOld);
 
   while( *z ){
-    if( *z=='"' || *z=='`' || *z=='[' ){
-      char cOpen = *z;
-      char cEnd = *z=='[' ? ']' : *z;
-      const char *zTok;
-      int nTok;
-      z++;
-      zTok = z;
-      while( *z && *z!=cEnd ) z++;
-      nTok = (int)(z-zTok);
-      if( *z ) z++;
-      if( nTok==nOld && sqlite3_strnicmp(zTok, zOld, nOld)==0 ){
-        sqlite3_str_appendf(pOut, "%c%s%c", cOpen, zNew, cEnd);
-      }else{
-        sqlite3_str_appendf(pOut, "%c%.*s%c", cOpen, nTok, zTok, cEnd);
-      }
-    }else if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
-      const char *zTok = z;
-      int nTok;
-      while( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ) z++;
-      nTok = (int)(z-zTok);
-      if( nTok==nOld && sqlite3_strnicmp(zTok, zOld, nOld)==0 ){
+    int type;
+    int n = sqlite3GetToken((const u8*)z, &type);
+    if( mergeIsIdentifierToken(z, type)
+     && mergeIdentifiersEqual(z, n, zOld, nOld, 0) ){
+      int newType;
+      int nNew = sqlite3GetToken((const u8*)zNew, &newType);
+      if( *z!='"' && *z!='`' && *z!='[' && newType==TK_ID
+       && (sqlite3Isalpha(*zNew) || *zNew=='_')
+       && nNew==(int)strlen(zNew) ){
         sqlite3_str_appendall(pOut, zNew);
       }else{
-        sqlite3_str_append(pOut, zTok, nTok);
+        sqlite3_str_appendf(pOut, "\"%w\"", zNew);
       }
     }else{
-      sqlite3_str_appendchar(pOut, 1, *z);
-      z++;
+      sqlite3_str_append(pOut, z, n);
     }
+    z += n;
   }
   return sqlite3_str_finish(pOut);
 }
