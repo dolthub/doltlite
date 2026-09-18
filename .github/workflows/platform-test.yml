@@ -12,13 +12,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}
-    # Several steps here budget 20 minutes, which a 20-minute job cap made
-    # unreachable: the job died first with "The operation was canceled" rather
-    # than the step failing on its own budget and naming itself. Observed runs
-    # are 3-5m on macos, 6-15m on ubuntu. Windows now runs rebase, history,
-    # and the C regression corpus inside the native suite, so 45 keeps a
-    # real ceiling while letting a stuck step report which one it was.
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.platform == 'windows' && 30 || 45 }}
     env:
       CFLAGS: -O2 -g -Werror
       DOLTLITE_AMALG_HTTP_PROBE: ${{ github.workspace }}/build/amalgamation_http_probe${{ matrix.exe }}
