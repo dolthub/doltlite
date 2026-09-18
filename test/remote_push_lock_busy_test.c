@@ -4,6 +4,7 @@
 #include "sqlite3.h"
 #include "doltlite_internal.h"
 #include "chunk_store.h"
+#include "doltlite_remote.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -148,10 +149,152 @@ static void test_diverged_is_not_lock(void){
   rm(zSrc);
 }
 
+static DoltliteRemote originalRemote;
+static sqlite3 *racePeer;
+static int raceStage, raceSameBranch, raceRemaining, raceCount;
+
+static int movePeer(void){
+  char *zSql;
+  int rc;
+  raceRemaining--;
+  raceCount++;
+  zSql = raceSameBranch
+      ? sqlite3_mprintf("INSERT INTO t VALUES(%d,'peer');"
+                         "SELECT dolt_commit('-Am','peer');", 100+raceCount)
+      : sqlite3_mprintf("SELECT dolt_branch('peer%d');", raceCount);
+  if( !zSql ) return SQLITE_NOMEM;
+  rc = exec(racePeer, zSql);
+  sqlite3_free(zSql);
+  return rc;
+}
+
+static int racingGetRefs(DoltliteRemote *p, u8 **ppData, int *pnData){
+  int rc = originalRemote.xGetRefs(p, ppData, pnData);
+  if( rc==SQLITE_OK && raceStage==1 && raceRemaining ) rc = movePeer();
+  return rc;
+}
+
+static int racingSetRefs(DoltliteRemote *p, const ProllyHash *h,
+                         const char *zRef, int force, const u8 *data, int n){
+  if( raceStage==2 && raceRemaining ){
+    ProllyHash wrong = {{0}};
+    int rc = originalRemote.xSetRefsIf(p, &wrong, zRef, force, data, n);
+    if( rc!=SQLITE_BUSY_SNAPSHOT ) return SQLITE_ERROR;
+    rc = movePeer();
+    return rc==SQLITE_OK ? SQLITE_BUSY_SNAPSHOT : rc;
+  }
+  return originalRemote.xSetRefsIf(p, h, zRef, force, data, n);
+}
+
+static int racingCommit(DoltliteRemote *p){
+  if( raceStage==3 && raceRemaining ){
+    ProllyHash wrong = {{0}};
+    int rc = originalRemote.xSetRefsIf(p, &wrong, "main", 0, 0, 0);
+    if( rc!=SQLITE_BUSY_SNAPSHOT ) return SQLITE_ERROR;
+    rc = movePeer();
+    return rc==SQLITE_OK ? SQLITE_BUSY_SNAPSHOT : rc;
+  }
+  return originalRemote.xCommit(p);
+}
+
+static void test_push_ref_race(int stage, int sameBranch, int noOp,
+                              int force, int nRaces, int deleting){
+  char zRemote[256], zSrc[256], zSql[512];
+  sqlite3 *dbSrc = 0;
+  DoltliteRemote *remote;
+  ChunkStore *local;
+  ProllyHash localTip, remoteTip;
+  int rc;
+  snprintf(zRemote, sizeof(zRemote), "/tmp/push_race_remote_%d.db", (int)getpid());
+  snprintf(zSrc, sizeof(zSrc), "/tmp/push_race_src_%d.db", (int)getpid());
+  rm(zRemote);
+  rm(zSrc);
+  check("race: open peer", sqlite3_open(zRemote, &racePeer)==SQLITE_OK);
+  check("race: seed peer", exec(racePeer,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-Am','base');") == SQLITE_OK);
+  if( deleting ){
+    check("race: retain default branch", exec(racePeer,
+      "SELECT dolt_branch('keep'); SELECT dolt_default_branch('keep');")==SQLITE_OK);
+  }
+  check("race: open src", sqlite3_open(zSrc, &dbSrc)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zSql), zSql, "SELECT dolt_clone('file://%s');", zRemote);
+  check("race: clone", exec(dbSrc, zSql)==SQLITE_OK);
+  check("race: checkout main", exec(dbSrc, "SELECT dolt_checkout('main');")==SQLITE_OK);
+  if( !noOp ){
+    check("race: commit local", exec(dbSrc,
+      "INSERT INTO t VALUES(2,'local');"
+      "SELECT dolt_commit('-Am','local');") == SQLITE_OK);
+  }
+  local = doltliteGetChunkStore(dbSrc);
+  check("race: read local head", chunkStoreFindBranch(local, "main", &localTip)==SQLITE_OK);
+  remote = doltliteFsRemoteOpen(sqlite3_vfs_find(0), zRemote);
+  check("race: open transport", remote!=0);
+  if( remote ){
+    originalRemote = *remote;
+    raceStage = stage;
+    raceSameBranch = sameBranch;
+    raceRemaining = nRaces;
+    raceCount = 0;
+    remote->xGetRefs = racingGetRefs;
+    remote->xSetRefsIf = racingSetRefs;
+    remote->xCommit = racingCommit;
+    rc = doltlitePush(local, remote, deleting ? ":main" : "main", force);
+    if( rc!=SQLITE_OK && !sameBranch && nRaces<64 ){
+      fprintf(stderr, "race stage=%d noOp=%d delete=%d rc=%d\n",
+              stage, noOp, deleting, rc);
+    }
+    if( sameBranch ){
+      check("same_branch_race_rejected_even_with_force", rc==SQLITE_BUSY_SNAPSHOT);
+    }else if( nRaces>=64 ){
+      check("unrelated_ref_retry_is_bounded", rc==SQLITE_BUSY_SNAPSHOT && raceCount==64);
+    }else{
+      check("unrelated_ref_push_retries", rc==SQLITE_OK);
+      check("race: all unrelated updates completed", raceCount==nRaces);
+    }
+    remote->xClose(remote);
+    check("race: refresh peer", chunkStoreLockAndRefresh(doltliteGetChunkStore(racePeer))==SQLITE_OK);
+    rc = chunkStoreFindBranch(doltliteGetChunkStore(racePeer), "main", &remoteTip);
+    if( !sameBranch && nRaces<64 ){
+      check("race: expected final target", deleting ? rc==SQLITE_NOTFOUND
+          : rc==SQLITE_OK && prollyHashCompare(&localTip, &remoteTip)==0);
+    }else{
+      check("race: rejected push preserves peer", rc==SQLITE_OK
+          && prollyHashCompare(&localTip, &remoteTip)!=0);
+    }
+    if( !sameBranch ){
+      sqlite3_snprintf(sizeof(zSql), zSql, "peer%d", raceCount);
+      check("race: unrelated ref survives",
+        chunkStoreFindBranch(doltliteGetChunkStore(racePeer), zSql, 0)==SQLITE_OK);
+    }
+    chunkStoreUnlock(doltliteGetChunkStore(racePeer));
+  }
+  sqlite3_close(dbSrc);
+  sqlite3_close(racePeer);
+  racePeer = 0;
+  rm(zRemote);
+  rm(zSrc);
+}
+
 int main(void){
   sqlite3_initialize();
+  check("empty_delete_target_is_misuse",
+        doltlitePush(0, 0, ":", 0)==SQLITE_MISUSE);
   test_lock_busy_not_refs_changed();
   test_diverged_is_not_lock();
+  test_push_ref_race(1, 0, 0, 0, 1, 0);
+  test_push_ref_race(2, 0, 0, 0, 2, 0);
+  test_push_ref_race(3, 0, 0, 0, 2, 0);
+  test_push_ref_race(2, 0, 0, 0, 20, 0);
+  test_push_ref_race(3, 0, 0, 0, 20, 0);
+  test_push_ref_race(1, 0, 1, 0, 1, 0);
+  test_push_ref_race(1, 1, 0, 0, 1, 0);
+  test_push_ref_race(2, 1, 0, 1, 1, 0);
+  test_push_ref_race(3, 1, 0, 1, 1, 0);
+  test_push_ref_race(2, 0, 0, 0, 100, 0);
+  test_push_ref_race(2, 0, 0, 0, 1, 1);
+  test_push_ref_race(2, 1, 0, 1, 1, 1);
   printf("remote_push_lock_busy_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

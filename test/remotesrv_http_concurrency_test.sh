@@ -167,7 +167,7 @@ check_match "losing same-branch push reports conflict/non-fast-forward" \
 check "remote main remains readable after contention" "2" "$same_rows"
 check_match "remote has base plus one contender row" "^(1,10|1,20)$" "$winner_rows"
 
-echo "=== concurrent different-branch pushes with retry ==="
+echo "=== concurrent different-branch pushes ==="
 check "branch clone A succeeds" "0" \
   "$("$DOLTLITE" "$TMP/branch_a.db" "SELECT dolt_clone('$URL');" 2>&1)"
 check "branch clone B succeeds" "0" \
@@ -196,19 +196,8 @@ wait "$pid_b" || true
 branch_a="$(cat "$TMP/branch_a.out")"
 branch_b="$(cat "$TMP/branch_b.out")"
 
-# Different refs do not conflict semantically. Their initial requests may both
-# lose transient server contention, but bounded sequential retries must land
-# both branches.
-if [ "$branch_a" != "0" ]; then
-  push_until_success "$TMP/branch_a.db" branch_a "$TMP/branch_a.out" || true
-fi
-if [ "$branch_b" != "0" ]; then
-  push_until_success "$TMP/branch_b.db" branch_b "$TMP/branch_b.out" || true
-fi
-branch_a="$(cat "$TMP/branch_a.out")"
-branch_b="$(cat "$TMP/branch_b.out")"
-check "branch_a push eventually succeeds" "0" "$branch_a"
-check "branch_b push eventually succeeds" "0" "$branch_b"
+check "branch_a push succeeds without caller retry" "0" "$branch_a"
+check "branch_b push succeeds without caller retry" "0" "$branch_b"
 
 check "branch_a fetch and checkout sees its row" "0
 0
@@ -216,6 +205,45 @@ check "branch_a fetch and checkout sees its row" "0
 check "branch_b fetch and checkout sees its row" "0
 0
 1" "$("$DOLTLITE" "$TMP/check_branches.db" "SELECT dolt_checkout('main'); SELECT dolt_fetch('origin','branch_b'); SELECT dolt_checkout('-b','local_b','origin/branch_b'); SELECT count(*) FROM t WHERE id=200;" 2>&1 | tail -3)"
+
+echo "=== sustained independent pushes ==="
+for branch in a b; do
+  (
+    for i in $(seq 1 20); do
+      "$DOLTLITE" -bail "$TMP/branch_$branch.db" "
+        SELECT dolt_checkout('branch_$branch');
+        INSERT INTO t VALUES(1000+$i,'series-$branch');
+        SELECT dolt_commit('-Am','series-$i');
+        SELECT dolt_push('origin','branch_$branch');" >/dev/null
+    done
+  ) >"$TMP/series_$branch.out" 2>&1 &
+  if [ "$branch" = a ]; then pid_a=$!; else pid_b=$!; fi
+done
+series_a=0; series_b=0
+wait "$pid_a" || series_a=$?
+wait "$pid_b" || series_b=$?
+check "twenty branch_a pushes succeed" "0" "$series_a"
+check "twenty branch_b pushes succeed" "0" "$series_b"
+cat "$TMP/series_a.out" "$TMP/series_b.out"
+for branch in a b; do
+  check "branch_$branch retains all twenty commits" "20" "$(
+    "$DOLTLITE" -bail "$TMP/series_check_$branch.db" "
+      SELECT dolt_clone('$URL');
+      SELECT dolt_checkout('-b','verify','origin/branch_$branch');
+      SELECT count(*) FROM t WHERE id>1000;" | tail -1)"
+  check "branch_$branch remote tip matches its local tip" \
+    "$("$DOLTLITE" "$TMP/branch_$branch.db" "SELECT dolt_hashof('branch_$branch');")" \
+    "$("$DOLTLITE" "$TMP/series_check_$branch.db" "SELECT dolt_hashof('verify');")"
+done
+
+check "HTTP delete succeeds" "0" "$("$DOLTLITE" -bail "$TMP/branch_a.db" \
+  "SELECT dolt_fetch('origin','branch_a'); SELECT dolt_push('origin',':branch_a');" | tail -1)"
+check "HTTP delete removes local tracking" "0" "$("$DOLTLITE" "$TMP/branch_a.db" \
+  "SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/branch_a';")"
+check "HTTP delete preserves other branches" "main,branch_b" "$(
+  "$DOLTLITE" -bail "$TMP/deleted_check.db" "SELECT dolt_clone('$URL');
+    SELECT group_concat(substr(name,16),',') FROM
+      (SELECT name FROM dolt_remote_branches ORDER BY name DESC);" | tail -1)"
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) ;;

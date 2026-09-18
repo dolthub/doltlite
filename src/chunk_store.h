@@ -299,6 +299,8 @@ int chunkStoreAddRemote(ChunkStore *cs, const char *zName, const char *zUrl);
 int chunkStoreDeleteRemote(ChunkStore *cs, const char *zName);
 int chunkStoreFindRemote(ChunkStore *cs, const char *zName, const char **pzUrl);
 
+int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
+                              const char *zBranch);
 int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
                              const char *zBranch, const ProllyHash *pCommit);
 int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,

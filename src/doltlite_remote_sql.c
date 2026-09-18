@@ -335,6 +335,21 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   sqlite3_result_int(ctx, 0);
 }
 
+typedef struct PushTrackingMutation PushTrackingMutation;
+struct PushTrackingMutation {
+  const char *zRemote;
+  const char *zBranch;
+  ProllyHash commit;
+  int bDelete;
+};
+
+static int mutatePushTracking(sqlite3 *db, ChunkStore *cs, void *pArg){
+  PushTrackingMutation *p = (PushTrackingMutation*)pArg;
+  (void)db;
+  if( p->bDelete ) return chunkStoreDeleteTracking(cs, p->zRemote, p->zBranch);
+  return chunkStoreUpdateTracking(cs, p->zRemote, p->zBranch, &p->commit);
+}
+
 static void doltPushParsedFunc(
   sqlite3_context *ctx,
   const char *zRemoteName,
@@ -346,6 +361,8 @@ static void doltPushParsedFunc(
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
   const char *zUrl = 0;
+  PushTrackingMutation mutation;
+  int bBranch = 0;
   int rc;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
@@ -362,7 +379,15 @@ static void doltPushParsedFunc(
     for(i=0; i<nTag && rc==SQLITE_OK; i++){
       rc = doltlitePushTag(cs, pRemote, aTag[i].zName);
     }
-  }else if( chunkStoreFindBranch(cs, zRef, 0)==SQLITE_OK ){
+  }else if( zRef[0]==':'
+         || chunkStoreFindBranch(cs, zRef, 0)==SQLITE_OK ){
+    mutation.zRemote = zRemoteName;
+    mutation.bDelete = zRef[0]==':';
+    mutation.zBranch = zRef + mutation.bDelete;
+    bBranch = 1;
+    if( !mutation.bDelete ){
+      chunkStoreFindBranch(cs, zRef, &mutation.commit);
+    }
     rc = doltlitePush(cs, pRemote, zRef, bForce);
   }else{
     rc = doltlitePushTag(cs, pRemote, zRef);
@@ -370,6 +395,11 @@ static void doltPushParsedFunc(
   if( rc!=SQLITE_OK ){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
     char *zOwned;
+    if( bBranch && mutation.bDelete && rc==SQLITE_CONSTRAINT ){
+      zMsg = "cannot delete the remote default branch";
+    }else if( bBranch && mutation.bDelete && rc==SQLITE_MISUSE ){
+      zMsg = "push failed: branch name required after ':'";
+    }
     if( !zMsg && rc==SQLITE_ERROR ){
       zMsg = "push failed (not a fast-forward?)";
     }else if( !zMsg && rc==SQLITE_NOTFOUND ){
@@ -383,6 +413,14 @@ static void doltPushParsedFunc(
     return;
   }
   pRemote->xClose(pRemote);
+  if( bBranch ){
+    rc = doltliteMutateRefs(db, mutatePushTracking, &mutation);
+    if( rc!=SQLITE_OK ){
+      remoteSqlResultError(ctx, rc, rc==SQLITE_NOTFOUND
+          ? "push failed: remote-tracking branch not found" : 0);
+      return;
+    }
+  }
   sqlite3_result_int(ctx, 0);
 }
 

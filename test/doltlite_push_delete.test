@@ -1,0 +1,76 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set remote [file normalize push-delete-remote.db]
+forcedelete $remote
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1,'base');
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('feature');
+  SELECT dolt_branch('other');
+}
+execsql "SELECT dolt_remote('add','origin','file://$remote')"
+execsql {
+  SELECT dolt_push('origin','main');
+  SELECT dolt_push('origin','feature');
+  SELECT dolt_push('origin','other');
+}
+do_execsql_test push-delete-1 {
+  SELECT dolt_push('origin',':feature');
+  SELECT name FROM dolt_remote_branches ORDER BY name;
+  SELECT name FROM dolt_branches ORDER BY name;
+} {0 remotes/origin/main remotes/origin/other feature main other}
+db close
+sqlite3 db test.db
+do_execsql_test push-delete-2 {
+  SELECT dolt_fetch('origin');
+  SELECT name FROM dolt_remote_branches ORDER BY name;
+} {0 remotes/origin/main remotes/origin/other}
+do_test push-delete-empty {
+  set rc [catch {execsql {SELECT dolt_push('origin',':')}} msg]
+  list $rc [db errorcode] $msg
+} {1 21 {push failed: branch name required after ':'}}
+foreach target {feature missing} {
+  do_test push-delete-missing-$target {
+    set rc [catch {execsql "SELECT dolt_push('origin',':$target')"} msg]
+    list $rc $msg
+  } {1 {push failed: remote-tracking branch not found}}
+}
+do_execsql_test push-delete-invalid-keeps-tracking {
+  SELECT name FROM dolt_remote_branches ORDER BY name;
+} {remotes/origin/main remotes/origin/other}
+do_test push-delete-default-refused {
+  set rc [catch {execsql {SELECT dolt_push('origin',':main')}} msg]
+  list $rc $msg
+} {1 {cannot delete the remote default branch}}
+sqlite3 peer $remote
+do_test push-delete-3 {
+  peer eval {SELECT name FROM dolt_branches ORDER BY name}
+} {main other}
+execsql {SELECT dolt_push('origin','feature'); SELECT dolt_fetch('origin');}
+peer eval {SELECT dolt_checkout('feature'); INSERT INTO t VALUES(2,'dirty');}
+do_test push-delete-dirty-refused {
+  set rc [catch {execsql {SELECT dolt_push('origin',':feature')}} msg]
+  list $rc [string match {*uncommitted*} $msg]
+} {1 1}
+do_test push-delete-force-preserves-dirty {
+  set rc [catch {execsql {SELECT dolt_push('origin',':feature','--force')}} msg]
+  list $rc [string match {*uncommitted*} $msg]
+} {1 1}
+do_execsql_test push-delete-failed-keeps-tracking {
+  SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/feature';
+} {1}
+do_test push-delete-dirty-survives {
+  peer eval {SELECT id,v FROM t ORDER BY id; PRAGMA integrity_check;}
+} {1 base 2 dirty ok}
+peer eval {SELECT dolt_reset('--hard','HEAD');}
+do_execsql_test push-delete-after-clean {
+  SELECT dolt_push('origin',':feature');
+  SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/feature';
+} {0 0}
+peer close
+db close
+sqlite3 db test.db
+forcedelete $remote
+finish_test
