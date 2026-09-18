@@ -530,7 +530,6 @@ static int computeSchemaDiff(
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry;
     struct TableEntry *toTE;
-    int j;
 
     if( sdIsSqliteAutoindex(&aTo[i]) ) continue;
     fromEntry = sdSchemaIndexFind(&fromSchemaIdx, aTo[i].zName);
