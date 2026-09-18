@@ -75,3 +75,4 @@ doltlite_reset_initial
 doltlite_busy_handler
 doltlite_push_delete
 doltlite_status_conflicts
+doltlite_at_missing_table
