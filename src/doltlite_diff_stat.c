@@ -922,19 +922,31 @@ static int dsTableNameMatchesFilter(const DsFilterCtx *pCtx, const char *zName){
       || sqlite3_stricmp(zName, pCtx->zTblFilter)==0;
 }
 
-/* Name missing on the other side: same iTable under a name also absent from
-** this side is a rename. A name still on both sides is coincidental reuse. */
+/* iTable is sorted-name numbering, so a dropped table and an unrelated new
+** one collide on it whenever the drop shifts the order. Pair renames the way
+** dolt_status does: by content, and only when the pairing is unique. */
 static struct TableEntry *dsRenamePartner(
-  struct TableEntry *aOther, int nOther,
+  sqlite3 *db,
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
   const struct TableEntry *pRef,
-  DsNameIndex *pRefSideIdx
+  int bRefIsFrom,
+  int *pRc
 ){
-  struct TableEntry *p;
+  struct TableEntry *pMate = 0;
+  struct TableEntry *pBack = 0;
+  *pRc = SQLITE_OK;
   if( !pRef ) return 0;
-  p = doltliteFindTableByNumber(aOther, nOther, pRef->iTable);
-  if( !p || !p->zName ) return 0;
-  if( addNameIndexFind(pRefSideIdx, p->zName) ) return 0;
-  return p;
+  *pRc = doltliteCatalogRenameMate(db, aFrom, nFrom, aTo, nTo,
+                                   pRef, bRefIsFrom, &pMate);
+  if( *pRc!=SQLITE_OK || !pMate ) return 0;
+  /* Two dropped tables can both match one new table by content. Require the
+  ** pairing to be mutual so only the table the new one actually came from
+  ** claims it; dolt_status gets the same effect from its handled bookkeeping. */
+  *pRc = doltliteCatalogRenameMate(db, aFrom, nFrom, aTo, nTo,
+                                   pMate, !bRefIsFrom, &pBack);
+  if( *pRc!=SQLITE_OK ) return 0;
+  return pBack==pRef ? pMate : 0;
 }
 
 static int dstAdvance(DstCursor *c, sqlite3 *db){
@@ -963,7 +975,9 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
       pToEntry = addNameIndexFind(&c->toIdx, zName);
       if( pFromEntry && !pToEntry ){
         struct TableEntry *pRen =
-            dsRenamePartner(c->aToCat, c->nToCat, pFromEntry, &c->fromIdx);
+            dsRenamePartner(db, c->aFromCat, c->nFromCat,
+                            c->aToCat, c->nToCat, pFromEntry, 1, &rc);
+        if( rc!=SQLITE_OK ) return rc;
         if( pRen ){
           rc = dsComputeTableStats(db, zName, pRen->zName,
                                    &pCtx->fromCat, &pCtx->toCat,
@@ -979,10 +993,12 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
           sqlite3_free(row.zTableName);
           continue;
         }
-      }else if( !pFromEntry && pToEntry
-             && dsRenamePartner(c->aFromCat, c->nFromCat, pToEntry,
-                                &c->toIdx) ){
-        continue;
+      }else if( !pFromEntry && pToEntry ){
+        struct TableEntry *pRen =
+            dsRenamePartner(db, c->aFromCat, c->nFromCat,
+                            c->aToCat, c->nToCat, pToEntry, 0, &rc);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pRen ) continue;
       }
     }
     if( pFromEntry && pToEntry
@@ -1354,7 +1370,9 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
       pToEntry = addNameIndexFind(&c->toIdx, zName);
       if( pFromEntry && !pToEntry ){
         struct TableEntry *pRen =
-            dsRenamePartner(c->aToCat, c->nToCat, pFromEntry, &c->fromIdx);
+            dsRenamePartner(db, c->aFromCat, c->nFromCat,
+                            c->aToCat, c->nToCat, pFromEntry, 1, &rc);
+        if( rc!=SQLITE_OK ) return rc;
         if( pRen ){
           int dataChange =
               prollyHashCompare(&pFromEntry->root, &pRen->root)!=0;
@@ -1363,10 +1381,12 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
           if( rc!=SQLITE_OK ) return rc;
           return SQLITE_OK;
         }
-      }else if( !pFromEntry && pToEntry
-             && dsRenamePartner(c->aFromCat, c->nFromCat, pToEntry,
-                                &c->toIdx) ){
-        continue;
+      }else if( !pFromEntry && pToEntry ){
+        struct TableEntry *pRen =
+            dsRenamePartner(db, c->aFromCat, c->nFromCat,
+                            c->aToCat, c->nToCat, pToEntry, 0, &rc);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pRen ) continue;
       }
     }
     if( pCtx->zTblFilter ){
