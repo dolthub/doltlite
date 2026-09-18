@@ -382,6 +382,9 @@ static int doltliteBuildIndexEntryWithExpr(
       rc = doltliteSerialValueFromField(pRec, nRec, &info, col, &aMem[nOut]);
       if( rc!=SQLITE_OK ) goto expr_fail;
       nOut++;
+    }else if( col>=0 ){
+      aMem[nOut].eType = SQLITE_NULL;
+      nOut++;
     }
   }
   /* SQLite appends rowid even when an IPK is already an index term. */
@@ -482,8 +485,10 @@ static int doltliteBuildIndexEntry(
   doltliteParseRecord(pRec, nRec, &info);
   if( info.nField==0 ) return SQLITE_CORRUPT;
 
-  if( iPKey>=0 && iPKey<info.nField ){
-    int st = info.aType[iPKey];
+  /* A record may stop short of the table's last columns; the missing
+  ** trailing fields are NULL, and the index key must still carry them. */
+  if( iPKey>=0 ){
+    int st = iPKey<info.nField ? info.aType[iPKey] : 0;
     if( st==0 || st==8 || st==9 ){
       useIpk = 1;
       dlIpkSerialType(intKey, &ipkType, &ipkLen);
@@ -503,11 +508,11 @@ static int doltliteBuildIndexEntry(
       int out = 0;
       for(i=0; i<nIdxCol; i++){
         int col = aiColumn[i];
-        if( col>=0 && col<info.nField ){
+        if( col>=0 ){
           aFieldOrder[out++] = col;
         }
       }
-      if( iPKey>=0 && iPKey<info.nField ){
+      if( iPKey>=0 ){
         aFieldOrder[out++] = iPKey;
       }
       nOutField = out;
@@ -515,7 +520,8 @@ static int doltliteBuildIndexEntry(
 
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st = (useIpk && col==iPKey) ? (int)ipkType : info.aType[col];
+      int st = (useIpk && col==iPKey) ? (int)ipkType
+             : (col<info.nField ? info.aType[col] : 0);
       int flen = st>0 ? dlSerialTypeLen((u64)st) : 0;
       hdrLen += sqlite3VarintLen(st);
       bodyLen += flen;
@@ -542,7 +548,8 @@ static int doltliteBuildIndexEntry(
     }
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st = (useIpk && col==iPKey) ? (int)ipkType : info.aType[col];
+      int st = (useIpk && col==iPKey) ? (int)ipkType
+             : (col<info.nField ? info.aType[col] : 0);
       p += sqlite3PutVarint(p, st);
     }
 
@@ -559,6 +566,7 @@ static int doltliteBuildIndexEntry(
         }
         continue;
       }
+      if( col>=info.nField ) continue;
       st = info.aType[col];
       flen = st>0 ? dlSerialTypeLen((u64)st) : 0;
       if( flen>0 ){
