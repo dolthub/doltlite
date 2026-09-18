@@ -1276,7 +1276,7 @@ int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCat
   if( p && !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ) return SQLITE_OK;
   rc = chunkStoreSerializeRefs(cs);
   if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreCommit(cs);
+  return chunkStoreCommitWithBusyHandler(cs, prollyInvokeBusyHandler, p->pBt);
 }
 
 int doltlitePersistWorkingSet(sqlite3 *db){

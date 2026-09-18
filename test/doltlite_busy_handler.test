@@ -1,0 +1,47 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc ref_busy {attempt} {
+  incr ::busy_calls
+  if {!$::release_peer || $attempt>0} {return 1}
+  peer eval ROLLBACK
+  return 0
+}
+
+foreach {name sql} {
+  branch {SELECT dolt_branch('new')}
+  tag {SELECT dolt_tag('new')}
+  checkout {SELECT dolt_checkout('feature')}
+  checkout-new {SELECT dolt_checkout('-b','new')}
+  reset {SELECT dolt_reset('--hard')}
+  clean {SELECT dolt_clean()}
+  vacuum {VACUUM}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+  }
+  sqlite3 peer test.db
+  peer eval {BEGIN IMMEDIATE; INSERT INTO t VALUES(2);}
+  set busy_calls 0
+  set release_peer 0
+  db busy ref_busy
+  do_test ref-busy-$name-decline {
+    set rc [catch {db eval $sql} msg]
+    list $rc [db errorcode] [expr {$busy_calls>0}]
+  } {1 5 1}
+  set busy_calls 0
+  set release_peer 1
+  db busy ref_busy
+  do_test ref-busy-$name-release {
+    set rc [catch {db eval $sql} msg]
+    list $rc $busy_calls
+  } {0 1}
+  db busy {}
+  do_execsql_test ref-busy-$name-rows {SELECT * FROM t} {1}
+  peer close
+}
+finish_test

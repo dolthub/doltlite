@@ -349,6 +349,8 @@ int chunkStorePutSparse(ChunkStore *cs, const u8 *pPrefix, int nPrefix,
                         i64 nZeroTail, ProllyHash *pHash);
 
 int chunkStoreCommit(ChunkStore *cs);
+int chunkStoreCommitWithBusyHandler(ChunkStore *cs, int (*xBusy)(void*),
+                                    void *pBusyArg);
 int chunkStoreWriteRefused(ChunkStore *cs);
 
 int chunkStoreCopyIntoEmpty(ChunkStore *pSrc, ChunkStore *pDest);

@@ -550,7 +550,11 @@ int chunkStoreWriteRefused(ChunkStore *cs){
       || (cs->xWriteGate && cs->xWriteGate(cs->pWriteGateArg));
 }
 
-int chunkStoreCommit(ChunkStore *cs){
+int chunkStoreCommitWithBusyHandler(
+  ChunkStore *cs,
+  int (*xBusy)(void*),
+  void *pBusyArg
+){
   int rc;
   int acquiredLock = 0;
   int preserveRefs = 0;
@@ -572,7 +576,9 @@ int chunkStoreCommit(ChunkStore *cs){
       baseRefsHash = cs->refs.committedRefsHash;
       csDetachSavedRefsState(cs, &savedRefs);
     }
-    rc = chunkStoreLockAndRefresh(cs);
+    do {
+      rc = chunkStoreLockAndRefresh(cs);
+    }while( rc==SQLITE_BUSY && xBusy && xBusy(pBusyArg) );
     if( rc!=SQLITE_OK ){
       if( preserveRefs ){
         csRestoreSavedRefsState(cs, &savedRefs);
@@ -598,6 +604,10 @@ int chunkStoreCommit(ChunkStore *cs){
   rc = csCommitToFile(cs);
   if( acquiredLock ) chunkStoreUnlock(cs);
   return rc;
+}
+
+int chunkStoreCommit(ChunkStore *cs){
+  return chunkStoreCommitWithBusyHandler(cs, 0, 0);
 }
 
 void chunkStoreRollback(ChunkStore *cs){
