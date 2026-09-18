@@ -360,6 +360,71 @@ SELECT dolt_merge('feature', '--no-ff');
 
 echo "--- --no-commit / --squash ---"
 
+for squash in 0 1; do
+  flags=""
+  [ "$squash" = 1 ] && flags="'--squash',"
+  for artifacts in conflicts violations both schema schema_violations; do
+    feature="INSERT INTO t VALUES(3,3);"
+    main="UPDATE t SET a=20 WHERE id=2;"
+    resolve=""
+    case "$artifacts" in
+      conflicts|both)
+        feature+="UPDATE t SET a=10 WHERE id=1;"
+        main+="UPDATE t SET a=11 WHERE id=1;"
+        resolve+="SELECT dolt_conflicts_resolve('--theirs','t');"
+        ;;
+      schema*)
+        feature+="ALTER TABLE t ADD COLUMN extra INT;"
+        main+="ALTER TABLE t ADD COLUMN extra TEXT;"
+        ;;
+    esac
+    case "$artifacts" in
+      violations|both|schema_violations)
+        feature+="INSERT INTO u VALUES(1,10);"
+        main+="INSERT INTO u VALUES(2,10);"
+        resolve+="DELETE FROM u WHERE id=1; DELETE FROM dolt_constraint_violations_u; SELECT dolt_verify_constraints('--all');"
+        ;;
+    esac
+    setup="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, a INT UNIQUE);
+INSERT INTO t VALUES(1,1),(2,2);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+$feature
+SELECT dolt_commit('-am','feature');
+SELECT dolt_checkout('main');
+$main
+SELECT dolt_commit('-am','main');
+BEGIN;
+SELECT dolt_merge(${flags}'feature');"
+    query="
+SELECT CONCAT('Q',CHAR(9),'merging=',is_merging) FROM dolt_merge_status;
+SELECT CONCAT('Q',CHAR(9),'conflicts=',count(*)) FROM dolt_conflicts;
+SELECT CONCAT('Q',CHAR(9),'violations=',count(*)) FROM dolt_constraint_violations;"
+    case "$artifacts" in
+      schema*)
+        query+="
+SELECT CONCAT('Q',CHAR(9),'schema=',table_name) FROM dolt_schema_conflicts;
+SELECT dolt_merge('--abort');"
+        ;;
+      *)
+        query+="
+$resolve
+SELECT dolt_commit('-am','resolved');
+SELECT CONCAT('Q',CHAR(9),'parents=',count(*)) FROM dolt_commit_ancestors
+ WHERE commit_hash=dolt_hashof('HEAD');
+SELECT CONCAT('Q',CHAR(9),'commits=',count(*)) FROM dolt_log;
+SELECT CONCAT('Q',CHAR(9),id,':',a) FROM t ORDER BY id;"
+        ;;
+    esac
+    oracle_same_session "merge_${artifacts}_squash_${squash}" "$setup" \
+      "$query" "$(vc_oracle_translate_for_dolt "$query")"
+  done
+done
+
+
 oracle_reopen_state "ff_squash_applies_without_commit" "
 $SEED
 SELECT dolt_checkout('feature');
