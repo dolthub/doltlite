@@ -33,6 +33,8 @@ int doltliteConnWriteAll(DoltliteConn *conn, const void *buf, int nbuf);
 
 int doltliteConnRead(DoltliteConn *conn, void *buf, int nbuf);
 
+int doltliteConnSetTimeout(DoltliteConn *conn, int timeoutMs);
+
 void doltliteConnClose(DoltliteConn *conn);
 
 #ifdef __cplusplus

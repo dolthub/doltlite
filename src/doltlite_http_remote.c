@@ -20,6 +20,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef DOLTLITE_HAVE_AUTH
+typedef DoltliteConn HttpConn;
+#else
+typedef struct HttpConn HttpConn;
+#endif
+
 typedef struct HttpRemote HttpRemote;
 struct HttpRemote {
   DoltliteRemote base;
@@ -28,6 +34,9 @@ struct HttpRemote {
   int useTls;
   int timeoutMs;
   char *zBasePath;
+#if !defined(__EMSCRIPTEN__)
+  HttpConn *pConn;
+#endif
 
 #ifdef DOLTLITE_HAVE_AUTH
   DoltliteCreds *cred;
@@ -48,6 +57,7 @@ struct HttpRemote {
 };
 
 #define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
+#define HTTP_HEADER_MAX_BYTES ((i64)64 * 1024)
 #define HTTP_UPLOAD_BATCH_MAX ((i64)32 * 1024 * 1024)
 #define HTTP_TIMEOUT_MS 30000
 #define HTTP_BUSY_RETRY_MAX 20
@@ -248,13 +258,12 @@ static int httpHeaderNameEquals(
 }
 
 #ifdef DOLTLITE_HAVE_AUTH
-typedef DoltliteConn HttpConn;
 #define httpConnOpen(H,P,T,M) doltliteConnOpenTimeout((H),(P),(T),(M))
 #define httpConnWriteAll(C,B,N) doltliteConnWriteAll((C),(B),(N))
 #define httpConnRead(C,B,N) doltliteConnRead((C),(B),(N))
+#define httpConnSetTimeout(C,M) doltliteConnSetTimeout((C),(M))
 #define httpConnClose(C) doltliteConnClose((C))
 #else
-typedef struct HttpConn HttpConn;
 struct HttpConn {
   int fd;
   i64 deadlineMs;
@@ -282,6 +291,12 @@ static HttpConn *httpConnOpen(
   sqlite3_snprintf(sizeof(zPort), zPort, "%d", port);
   fd = doltliteTcpConnect(zHost, zPort, timeoutMs);
   if( fd<0 ) return 0;
+#if !defined(_WIN32) && defined(SO_NOSIGPIPE)
+  {
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+  }
+#endif
 
   pConn = sqlite3_malloc(sizeof(HttpConn));
   if( !pConn ){
@@ -298,13 +313,23 @@ static HttpConn *httpConnOpen(
   return pConn;
 }
 
+static int httpConnSetTimeout(HttpConn *pConn, int timeoutMs){
+  pConn->deadlineMs = timeoutMs>0 ? doltliteMonotonicMs() + timeoutMs : 0;
+  if( timeoutMs<=0 ) return doltliteSocketSetTimeout(pConn->fd, 0);
+  return httpConnApplyDeadline(pConn);
+}
+
 static int httpConnWriteAll(HttpConn *pConn, const void *pBuf, int nBuf){
   const char *z = (const char*)pBuf;
   int nSent = 0;
+  int flags = 0;
+#ifdef MSG_NOSIGNAL
+  flags = MSG_NOSIGNAL;
+#endif
   while( nSent<nBuf ){
     int n;
     if( httpConnApplyDeadline(pConn)!=0 ) return 1;
-    n = send(pConn->fd, z+nSent, nBuf-nSent, 0);
+    n = send(pConn->fd, z+nSent, nBuf-nSent, flags);
     if( n<=0 ) return 1;
     nSent += n;
   }
@@ -324,78 +349,62 @@ static void httpConnClose(HttpConn *pConn){
 }
 #endif
 
-static int readUntilEof(HttpConn *conn, u8 **ppOut, int *pnOut){
-  i64 nAlloc = 4096;
-  i64 nUsed = 0;
-  u8 *pBuf = sqlite3_malloc64(nAlloc);
-  if( !pBuf ) return SQLITE_NOMEM;
+typedef struct HttpResponseInfo HttpResponseInfo;
+struct HttpResponseInfo {
+  int status;
+  int bodyStart;
+  int contentLength;
+  int closeConnection;
+};
 
-  for(;;){
-    int n;
-    if( nUsed + 1024 > nAlloc ){
-      u8 *pNew;
-      i64 nNew = nAlloc * 2;
-      if( nNew > HTTP_RESP_MAX_BYTES ) nNew = HTTP_RESP_MAX_BYTES;
-      if( nNew <= nAlloc ){
-        sqlite3_free(pBuf);
-        return SQLITE_TOOBIG;
-      }
-      pNew = sqlite3_realloc64(pBuf, nNew);
-      if( !pNew ){
-        sqlite3_free(pBuf);
-        return SQLITE_NOMEM;
-      }
-      pBuf = pNew;
-      nAlloc = nNew;
-    }
-    n = httpConnRead(conn, pBuf + nUsed, (int)(nAlloc - nUsed));
-    if( n < 0 ){
-      sqlite3_free(pBuf);
-      return SQLITE_IOERR;
-    }
-    if( n == 0 ) break;
-    nUsed += (i64)n;
-  }
-
-  /* Callers scan as a C string; NUL-terminate even when nAlloc is filled. */
-  if( nUsed >= nAlloc ){
-    u8 *pNew = sqlite3_realloc64(pBuf, nUsed + 1);
-    if( !pNew ){
-      sqlite3_free(pBuf);
-      return SQLITE_NOMEM;
-    }
-    pBuf = pNew;
-    nAlloc = nUsed + 1;
-  }
-  pBuf[nUsed] = 0;
-
-  *ppOut = pBuf;
-  *pnOut = (int)nUsed;
-  return SQLITE_OK;
-}
-
-static int httpParseResponse(
-  const u8 *pRaw,
-  int nRaw,
-  int *pStatus,
-  u8 **ppResp,
-  int *pnResp
+static int httpHeaderValueHasToken(
+  const u8 *zValue,
+  int nValue,
+  const char *zToken
 ){
   int i = 0;
-  int bodyStart = -1;
-  int contentLength = -1;
+  int nToken = (int)strlen(zToken);
+  while( i<nValue ){
+    int start;
+    int end;
+    while( i<nValue && (zValue[i]==' ' || zValue[i]=='\t' || zValue[i]==',') ){
+      i++;
+    }
+    start = i;
+    while( i<nValue && zValue[i]!=',' ) i++;
+    end = i;
+    while( end>start && (zValue[end-1]==' ' || zValue[end-1]=='\t') ) end--;
+    if( end-start==nToken
+     && sqlite3_strnicmp((const char*)zValue+start, zToken, nToken)==0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int httpParseResponseHeaders(
+  const u8 *pRaw,
+  int nRaw,
+  HttpResponseInfo *pInfo
+){
+  int i = 0;
   int seenContentLength = 0;
   int seenTransferEncoding = 0;
   int statusStart;
   int statusEnd;
+  int versionEnd;
   uint64_t value;
 
-  *pStatus = 0;
-  *ppResp = 0;
-  *pnResp = 0;
+  memset(pInfo, 0, sizeof(*pInfo));
+  pInfo->bodyStart = -1;
+  pInfo->contentLength = -1;
 
   while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
   if( i>=nRaw || pRaw[i]!=' ' ) return SQLITE_PROTOCOL;
+  versionEnd = i;
+  if( versionEnd!=8 || memcmp(pRaw, "HTTP/1.1", 8)!=0 ){
+    pInfo->closeConnection = 1;
+  }
   statusStart = ++i;
   while( i<nRaw && pRaw[i]!=' ' && pRaw[i]!='\r' && pRaw[i]!='\n' ) i++;
   statusEnd = i;
@@ -406,7 +415,7 @@ static int httpParseResponse(
    || value<100 ){
     return SQLITE_PROTOCOL;
   }
-  *pStatus = (int)value;
+  pInfo->status = (int)value;
 
   while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
   if( i+1>=nRaw ) return SQLITE_PROTOCOL;
@@ -420,7 +429,7 @@ static int httpParseResponse(
     int parseRc;
 
     if( i+1<nRaw && pRaw[i]=='\r' && pRaw[i+1]=='\n' ){
-      bodyStart = i + 2;
+      pInfo->bodyStart = i + 2;
       break;
     }
     while( i+1<nRaw && !(pRaw[i]=='\r' && pRaw[i+1]=='\n') ) i++;
@@ -454,25 +463,161 @@ static int httpParseResponse(
         return parseRc==DOLTLITE_DECIMAL_RANGE
              ? SQLITE_TOOBIG : SQLITE_PROTOCOL;
       }
-      contentLength = (int)value;
+      pInfo->contentLength = (int)value;
     }else if( httpHeaderNameEquals(
                  pRaw+lineStart, colon-lineStart, "Transfer-Encoding") ){
       seenTransferEncoding = 1;
+    }else if( httpHeaderNameEquals(
+                 pRaw+lineStart, colon-lineStart, "Connection")
+           && httpHeaderValueHasToken(
+                pRaw+valueStart, valueEnd-valueStart, "close") ){
+      pInfo->closeConnection = 1;
     }
   }
 
-  if( bodyStart<0 || seenTransferEncoding ) return SQLITE_PROTOCOL;
+  if( pInfo->bodyStart<0 || seenTransferEncoding ) return SQLITE_PROTOCOL;
+  if( pInfo->contentLength<0
+   && ((pInfo->status>=100 && pInfo->status<200)
+       || pInfo->status==204 || pInfo->status==304) ){
+    pInfo->contentLength = 0;
+  }
+  return SQLITE_OK;
+}
 
-  {
-    int nAvail = nRaw - bodyStart;
-    int nCopy = contentLength>=0 ? contentLength : nAvail;
-    if( contentLength>=0 && contentLength!=nAvail ) return SQLITE_PROTOCOL;
-    if( nCopy>0 ){
-      *ppResp = sqlite3_malloc(nCopy);
-      if( !*ppResp ) return SQLITE_NOMEM;
-      memcpy(*ppResp, pRaw + bodyStart, nCopy);
-      *pnResp = nCopy;
+static int readHttpResponse(
+  HttpConn *conn,
+  u8 **ppOut,
+  int *pnOut,
+  int *pCloseConnection,
+  int *pTransportError
+){
+  i64 nAlloc = 4096;
+  i64 nUsed = 0;
+  i64 nTarget = -1;
+  i64 nMax = HTTP_HEADER_MAX_BYTES + HTTP_RESP_MAX_BYTES;
+  HttpResponseInfo info;
+  int headersParsed = 0;
+  int rc = SQLITE_OK;
+  u8 *pBuf = sqlite3_malloc64(nAlloc);
+
+  *ppOut = 0;
+  *pnOut = 0;
+  *pCloseConnection = 0;
+  *pTransportError = 0;
+  if( !pBuf ) return SQLITE_NOMEM;
+
+  for(;;){
+    int n;
+    int nRead;
+    if( nTarget>=0 && nUsed==nTarget ) break;
+    if( nUsed==nAlloc ){
+      u8 *pNew;
+      i64 nNew = nAlloc * 2;
+      if( nNew>nMax ) nNew = nMax;
+      if( nNew<=nAlloc ){
+        rc = SQLITE_TOOBIG;
+        break;
+      }
+      pNew = sqlite3_realloc64(pBuf, nNew);
+      if( !pNew ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      pBuf = pNew;
+      nAlloc = nNew;
     }
+    nRead = (int)(nAlloc - nUsed);
+    if( nTarget>=0 && nTarget-nUsed<nRead ) nRead = (int)(nTarget-nUsed);
+    n = httpConnRead(conn, pBuf+nUsed, nRead);
+    if( n<0 ){
+      *pTransportError = 1;
+      rc = SQLITE_IOERR;
+      break;
+    }
+    if( n==0 ){
+      *pCloseConnection = 1;
+      if( !headersParsed || (nTarget>=0 && nUsed!=nTarget) ){
+        *pTransportError = 1;
+        rc = SQLITE_PROTOCOL;
+      }
+      break;
+    }
+    nUsed += n;
+
+    if( !headersParsed ){
+      int i;
+      for(i=0; i+3<nUsed; i++){
+        if( pBuf[i]=='\r' && pBuf[i+1]=='\n'
+         && pBuf[i+2]=='\r' && pBuf[i+3]=='\n' ){
+          rc = httpParseResponseHeaders(pBuf, (int)nUsed, &info);
+          if( rc!=SQLITE_OK ) break;
+          headersParsed = 1;
+          *pCloseConnection = info.closeConnection;
+          if( info.contentLength>=0 ){
+            nTarget = (i64)info.bodyStart + info.contentLength;
+            if( nTarget>nMax ) rc = SQLITE_TOOBIG;
+            if( nUsed>nTarget ) rc = SQLITE_PROTOCOL;
+          }
+          break;
+        }
+      }
+      if( rc!=SQLITE_OK ) break;
+      if( !headersParsed && nUsed>=HTTP_HEADER_MAX_BYTES ){
+        rc = SQLITE_TOOBIG;
+        break;
+      }
+    }
+  }
+
+  if( rc==SQLITE_OK && !headersParsed ) rc = SQLITE_PROTOCOL;
+  if( rc==SQLITE_OK && info.contentLength<0 ) *pCloseConnection = 1;
+  if( rc==SQLITE_OK ){
+    u8 *pNew;
+    if( nUsed==nAlloc ){
+      pNew = sqlite3_realloc64(pBuf, nUsed+1);
+      if( !pNew ) rc = SQLITE_NOMEM;
+      else pBuf = pNew;
+    }
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBuf);
+    return rc;
+  }
+  pBuf[nUsed] = 0;
+  *ppOut = pBuf;
+  *pnOut = (int)nUsed;
+  return SQLITE_OK;
+}
+
+static int httpParseResponse(
+  const u8 *pRaw,
+  int nRaw,
+  int *pStatus,
+  u8 **ppResp,
+  int *pnResp
+){
+  HttpResponseInfo info;
+  int rc;
+  int nAvail;
+  int nCopy;
+
+  *pStatus = 0;
+  *ppResp = 0;
+  *pnResp = 0;
+
+  rc = httpParseResponseHeaders(pRaw, nRaw, &info);
+  if( rc!=SQLITE_OK ) return rc;
+  nAvail = nRaw - info.bodyStart;
+  nCopy = info.contentLength>=0 ? info.contentLength : nAvail;
+  if( info.contentLength>=0 && info.contentLength!=nAvail ){
+    return SQLITE_PROTOCOL;
+  }
+  *pStatus = info.status;
+  if( nCopy>0 ){
+    *ppResp = sqlite3_malloc(nCopy);
+    if( !*ppResp ) return SQLITE_NOMEM;
+    memcpy(*ppResp, pRaw + info.bodyStart, nCopy);
+    *pnResp = nCopy;
   }
 
   return SQLITE_OK;
@@ -694,30 +839,69 @@ static int httpRequest(
 }
 
 #else
-static int httpRequest(
+static void httpDisconnect(HttpRemote *p){
+  httpConnClose(p->pConn);
+  p->pConn = 0;
+}
+
+static int httpRemainingTimeout(i64 deadlineMs){
+  i64 remaining = deadlineMs - doltliteMonotonicMs();
+  if( remaining<=0 ) return 0;
+  if( remaining>0x7fffffff ) remaining = 0x7fffffff;
+  return (int)remaining;
+}
+
+static int httpRequestMayRetry(const char *zMethod, const char *zPath){
+  int nPath = (int)strlen(zPath);
+  if( sqlite3_stricmp(zMethod, "GET")==0 ) return 1;
+  if( sqlite3_stricmp(zMethod, "POST")!=0 ) return 0;
+  return (nPath>=11 && strcmp(zPath+nPath-11, "/get-chunks")==0)
+      || (nPath>=11 && strcmp(zPath+nPath-11, "/has-chunks")==0);
+}
+
+static int httpRequestOnce(
   HttpRemote *p,
   const char *zMethod,
   const char *zPath,
   const u8 *pBody, i64 nBody,
   int *pStatus,
-  u8 **ppResp, int *pnResp
+  u8 **ppResp, int *pnResp,
+  i64 deadlineMs,
+  int *pWasReused,
+  int *pTransportError
 ){
-  HttpConn *conn;
   char *zAuth = 0;
   char *zHdr;
   u8 *pRaw = 0;
   int nRaw = 0;
+  int closeConnection = 0;
+  int timeoutMs;
   int rc = SQLITE_ERROR;
 
   *pStatus = 0;
   *ppResp = 0;
   *pnResp = 0;
-  httpClearLastError(p);
+  *pWasReused = p->pConn!=0;
+  *pTransportError = 0;
 
-  conn = httpConnOpen(p->zHost, p->port, p->useTls, p->timeoutMs);
-  if( !conn ){
+  timeoutMs = httpRemainingTimeout(deadlineMs);
+  if( timeoutMs<=0 ){
+    *pTransportError = 1;
+    httpDisconnect(p);
+    return SQLITE_IOERR;
+  }
+  if( !p->pConn ){
+    p->pConn = httpConnOpen(p->zHost, p->port, p->useTls, timeoutMs);
+  }
+  if( !p->pConn ){
     httpSetLastError(p, "could not connect to remote");
     return SQLITE_ERROR;
+  }
+  timeoutMs = httpRemainingTimeout(deadlineMs);
+  if( timeoutMs<=0 || httpConnSetTimeout(p->pConn, timeoutMs)!=0 ){
+    *pTransportError = 1;
+    httpDisconnect(p);
+    return SQLITE_IOERR;
   }
 
 #ifdef DOLTLITE_HAVE_AUTH
@@ -737,7 +921,7 @@ static int httpRequest(
       "%s"
       "Content-Length: %lld\r\n"
       "Content-Type: application/octet-stream\r\n"
-      "Connection: close\r\n"
+      "Connection: keep-alive\r\n"
       "\r\n",
       zMethod, zPath, p->zHost, zAuth ? zAuth : "", nBody);
   }else{
@@ -746,35 +930,75 @@ static int httpRequest(
       "Host: %s\r\n"
       "%s"
       "%s"
-      "Connection: close\r\n"
+      "Connection: keep-alive\r\n"
       "\r\n",
       zMethod, zPath, p->zHost, zAuth ? zAuth : "",
       sqlite3_stricmp(zMethod, "GET")==0 ? "" : "Content-Length: 0\r\n");
   }
   sqlite3_free(zAuth);
-  if( !zHdr ){ httpConnClose(conn); return SQLITE_NOMEM; }
+  if( !zHdr ) return SQLITE_NOMEM;
 
-  rc = httpConnWriteAll(conn, zHdr, (int)strlen(zHdr)) ? SQLITE_IOERR : SQLITE_OK;
+  rc = httpConnWriteAll(p->pConn, zHdr, (int)strlen(zHdr))
+     ? SQLITE_IOERR : SQLITE_OK;
   sqlite3_free(zHdr);
-  if( rc != SQLITE_OK ){ httpConnClose(conn); return rc; }
+  if( rc != SQLITE_OK ){
+    *pTransportError = 1;
+    httpDisconnect(p);
+    return rc;
+  }
   if( pBody && nBody > 0 ){
     i64 off = 0;
     while( off<nBody ){
       i64 nRemain = nBody - off;
       int nWrite = nRemain>0x7fffffff ? 0x7fffffff : (int)nRemain;
-      if( httpConnWriteAll(conn, pBody+off, nWrite) ){
-        httpConnClose(conn);
+      if( httpConnWriteAll(p->pConn, pBody+off, nWrite) ){
+        *pTransportError = 1;
+        httpDisconnect(p);
         return SQLITE_IOERR;
       }
       off += nWrite;
     }
   }
 
-  rc = readUntilEof(conn, &pRaw, &nRaw);
-  httpConnClose(conn);
-  if( rc != SQLITE_OK ) return rc;
+  rc = readHttpResponse(p->pConn, &pRaw, &nRaw, &closeConnection,
+                        pTransportError);
+  if( rc != SQLITE_OK ){
+    httpDisconnect(p);
+    return rc;
+  }
+  if( closeConnection ) httpDisconnect(p);
   rc = httpParseResponse(pRaw, nRaw, pStatus, ppResp, pnResp);
   sqlite3_free(pRaw);
+  if( rc!=SQLITE_OK ) httpDisconnect(p);
+  return rc;
+}
+
+static int httpRequest(
+  HttpRemote *p,
+  const char *zMethod,
+  const char *zPath,
+  const u8 *pBody, i64 nBody,
+  int *pStatus,
+  u8 **ppResp, int *pnResp
+){
+  int wasReused = 0;
+  int transportError = 0;
+  i64 deadlineMs = doltliteMonotonicMs() + p->timeoutMs;
+  int rc;
+
+  httpClearLastError(p);
+  rc = httpRequestOnce(p, zMethod, zPath, pBody, nBody,
+                       pStatus, ppResp, pnResp,
+                       deadlineMs,
+                       &wasReused, &transportError);
+  if( rc!=SQLITE_OK && wasReused && transportError
+   && httpRequestMayRetry(zMethod, zPath) ){
+    httpClearLastError(p);
+    rc = httpRequestOnce(p, zMethod, zPath, pBody, nBody,
+                         pStatus, ppResp, pnResp,
+                         deadlineMs,
+                         &wasReused, &transportError);
+  }
   return rc;
 }
 #endif /* __EMSCRIPTEN__ */
@@ -1264,6 +1488,9 @@ static const char *httpErrMsg(DoltliteRemote *pRemote){
 
 static void httpClose(DoltliteRemote *pRemote){
   HttpRemote *p = (HttpRemote*)pRemote;
+#if !defined(__EMSCRIPTEN__)
+  httpDisconnect(p);
+#endif
 #ifdef DOLTLITE_HAVE_AUTH
   doltliteCredsFree(p->cred);
   sqlite3_free(p->zAudience);
@@ -1436,6 +1663,7 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->base.xClose = httpClose;
   p->base.xErrMsg = httpErrMsg;
   p->base.bResumePartialPuts = 1;
+  p->base.bCacheForChunkSource = 1;
 
   return &p->base;
 }

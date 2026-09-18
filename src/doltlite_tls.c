@@ -236,6 +236,12 @@ int doltliteConnRead(DoltliteConn *c, void *buf, int nbuf) {
   }
 }
 
+int doltliteConnSetTimeout(DoltliteConn *c, int timeoutMs) {
+  c->deadlineMs = timeoutMs > 0 ? doltliteMonotonicMs() + timeoutMs : 0;
+  if (timeoutMs <= 0) return doltliteSocketSetTimeout(c->net.fd, 0);
+  return connApplyDeadline(c);
+}
+
 void doltliteConnClose(DoltliteConn *c) {
   if (!c) return;
   if (c->useTls) {

@@ -52,6 +52,10 @@ struct DoltliteChunkSourceState {
   u8 originEnabled;
   int errRc;
   char *zErr;
+#if DOLTLITE_ENABLE_REMOTES
+  DoltliteRemote *pOriginRemote;
+  char *zOriginUrl;
+#endif
 };
 
 static doltlite_chunk_source *csSourceActive(DoltliteChunkSourceState *p){
@@ -64,6 +68,13 @@ static doltlite_chunk_source *csSourceActive(DoltliteChunkSourceState *p){
 }
 
 #if DOLTLITE_ENABLE_REMOTES
+static void csOriginRemoteClose(DoltliteChunkSourceState *p){
+  if( p->pOriginRemote ) p->pOriginRemote->xClose(p->pOriginRemote);
+  p->pOriginRemote = 0;
+  sqlite3_free(p->zOriginUrl);
+  p->zOriginUrl = 0;
+}
+
 static int SQLITE_CALLBACK csOriginGetMany(
   void *pCtx,
   int nHash,
@@ -72,7 +83,8 @@ static int SQLITE_CALLBACK csOriginGetMany(
   int *anBytes
 ){
   ChunkStore *cs = (ChunkStore*)pCtx;
-  DoltliteRemote *pRemote = 0;
+  DoltliteChunkSourceState *p = cs->pChunkSource;
+  DoltliteRemote *pRemote;
   const char *zUrl = 0;
   int any = 0;
   int i;
@@ -85,9 +97,24 @@ static int SQLITE_CALLBACK csOriginGetMany(
   }
   if( nHash<=0 ) return DOLTLITE_SOURCE_OK;
   rc = chunkStoreFindRemote(cs, "origin", &zUrl);
-  if( rc!=SQLITE_OK || !zUrl ) return DOLTLITE_SOURCE_IOERR;
-  pRemote = doltliteRemoteOpenReadOnly(chunkFileGetVfs(&cs->file), zUrl);
-  if( !pRemote ) return DOLTLITE_SOURCE_IOERR;
+  if( rc!=SQLITE_OK || !zUrl || !p ) return DOLTLITE_SOURCE_IOERR;
+  if( p->pOriginRemote
+   && (!p->zOriginUrl || strcmp(p->zOriginUrl, zUrl)!=0) ){
+    csOriginRemoteClose(p);
+  }
+  pRemote = p->pOriginRemote;
+  if( !pRemote ){
+    pRemote = doltliteRemoteOpenReadOnly(chunkFileGetVfs(&cs->file), zUrl);
+    if( !pRemote ) return DOLTLITE_SOURCE_IOERR;
+    if( pRemote->bCacheForChunkSource ){
+      p->zOriginUrl = sqlite3_mprintf("%s", zUrl);
+      if( !p->zOriginUrl ){
+        pRemote->xClose(pRemote);
+        return DOLTLITE_SOURCE_IOERR;
+      }
+      p->pOriginRemote = pRemote;
+    }
+  }
 
   for(offset=0; offset<nHash; offset += CS_SOURCE_REMOTE_BATCH_SIZE){
     ProllyHash aBatch[CS_SOURCE_REMOTE_BATCH_SIZE];
@@ -103,7 +130,8 @@ static int SQLITE_CALLBACK csOriginGetMany(
       rc = pRemote->xGetChunks(pRemote, aBatch, nBatch,
                                (u8**)&apBytes[offset], &anBytes[offset]);
       if( rc!=SQLITE_OK ){
-        pRemote->xClose(pRemote);
+        if( pRemote==p->pOriginRemote ) csOriginRemoteClose(p);
+        else pRemote->xClose(pRemote);
         return DOLTLITE_SOURCE_IOERR;
       }
     }else{
@@ -118,13 +146,14 @@ static int SQLITE_CALLBACK csOriginGetMany(
           continue;
         }
         if( rc!=SQLITE_OK ){
-          pRemote->xClose(pRemote);
+          if( pRemote==p->pOriginRemote ) csOriginRemoteClose(p);
+          else pRemote->xClose(pRemote);
           return DOLTLITE_SOURCE_IOERR;
         }
       }
     }
   }
-  pRemote->xClose(pRemote);
+  if( pRemote!=p->pOriginRemote ) pRemote->xClose(pRemote);
   for(i=0; i<nHash; i++){
     if( apBytes[i] ){
       any = 1;
@@ -660,6 +689,9 @@ void chunkStoreSourceClose(ChunkStore *cs){
   DoltliteChunkSourceState *p = cs->pChunkSource;
   if( !p ) return;
   cs->pChunkSource = 0;
+#if DOLTLITE_ENABLE_REMOTES
+  csOriginRemoteClose(p);
+#endif
   if( p->writerOpen ) chunkStoreClose(&p->writer);
   while( p->pLruTail ) csSourceCacheRemove(p, p->pLruTail);
   csSourceClearError(p);
