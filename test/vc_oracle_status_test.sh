@@ -499,4 +499,59 @@ CREATE TABLE beta(id INT PRIMARY KEY, v INT);
 INSERT INTO beta VALUES (1, 10);
 "
 
+oracle_conflicted_merge() {
+  local name="$1" flags="$2" extra="$3" resolution="$4"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dt"
+  local setup="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE v(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,1);
+INSERT INTO u VALUES(1,1);
+INSERT INTO v VALUES(1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=10;
+UPDATE v SET a=10;
+INSERT INTO u VALUES(2,2);
+$extra
+SELECT dolt_commit('-am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET a=11;
+UPDATE v SET a=11;
+SELECT dolt_commit('-am','main');
+BEGIN;
+SELECT dolt_merge(${flags}'feature');
+SELECT CONCAT('S|conflicted|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY table_name,staged,status;
+SELECT CONCAT('S|staged_rows|',count(*)) FROM dolt_at_u('STAGED');
+SELECT dolt_add('u');
+SELECT CONCAT('S|added_clean|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY table_name,staged,status;
+SELECT dolt_conflicts_resolve('--$resolution','t','v');
+SELECT CONCAT('S|resolved|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY table_name,staged,status;
+SELECT dolt_commit('-am','resolved');
+SELECT CONCAT('S|committed|',count(*)) FROM dolt_status;"
+  local dl_out dt_out dolt_setup
+  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/db" >"$dir/dl.out" 2>"$dir/dl.err"
+  dl_out=$(grep '^S|' "$dir/dl.out")
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup" | sed "s/FROM dolt_at_u('STAGED')/FROM u AS OF 'STAGED'/")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" -r csv
+  dt_out=$(tr -d '\r"' < "$dir/dt.out" | grep '^S|')
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+for squash in 0 1; do
+  flags=""
+  [ "$squash" = 1 ] && flags="'--squash',"
+  for extra in 0 1; do
+    extra_sql=""
+    [ "$extra" = 1 ] && extra_sql="INSERT INTO t VALUES(2,2);"
+    for resolution in ours theirs; do
+      oracle_conflicted_merge "conflicted_merge_${squash}_${extra}_$resolution" \
+        "$flags" "$extra_sql" "$resolution"
+    done
+  done
+done
+
 vc_oracle_finish
