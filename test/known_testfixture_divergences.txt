@@ -3006,7 +3006,6 @@ descidx1 descidx1-6.7 class=intentional
 # "invalid command name db".
 descidx2 descidx2-1.1 class=intentional
 descidx2 descidx2-1.2 class=intentional
-descidx2 descidx2-2.0 class=intentional
 descidx2 descidx2-2.1 class=intentional
 descidx2 descidx2-2.2 class=intentional
 descidx2 descidx2-2.3 class=intentional
@@ -3949,7 +3948,6 @@ corrupt8 corrupt8-2.1024.6 class=intentional  # stock ptrmap page poke; no point
 # large" when computing child pages, "no such table" instead of malformed,
 # or intact rows when the poke never hits a logical structure. Architectural
 # page-layout class — not "make malformed message match."
-corruptB corruptB-1.6.2 class=intentional  # stock btree child/loop poke by page offset (architectural)
 corruptB corruptB-1.7.2 class=intentional  # stock btree child/loop poke by page offset (architectural)
 corruptB corruptB-1.8.2 class=intentional  # stock btree child/loop poke by page offset (architectural)
 corruptB corruptB-2.1.2 class=intentional  # stock btree child/loop poke by page offset (architectural)
