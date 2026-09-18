@@ -74,3 +74,4 @@ doltlite_merge_schema_relayout
 doltlite_reset_initial
 doltlite_busy_handler
 doltlite_push_delete
+doltlite_status_conflicts

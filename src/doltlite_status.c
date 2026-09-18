@@ -428,16 +428,17 @@ static int statusRowExists(
   return 0;
 }
 
-typedef struct StatusSchemaConflictCtx StatusSchemaConflictCtx;
-struct StatusSchemaConflictCtx {
+typedef struct StatusConflictCtx StatusConflictCtx;
+struct StatusConflictCtx {
   DoltliteStatusCursor *pCur;
   const char *zFilter;
 };
 
-static int statusAddSchemaConflict(void *pArg, const char *zTable){
-  StatusSchemaConflictCtx *p = (StatusSchemaConflictCtx*)pArg;
+static int statusAddConflict(void *pArg, const char *zTable, int nConflicts){
+  StatusConflictCtx *p = (StatusConflictCtx*)pArg;
   int i;
   if( p->zFilter && sqlite3_stricmp(p->zFilter, zTable)!=0 ) return SQLITE_OK;
+  if( nConflicts>0 ) return addRow(p->pCur, zTable, 0, "conflict");
   for(i=0; i<p->pCur->nRows; i++){
     if( p->pCur->aRows[i].zName
      && sqlite3_stricmp(p->pCur->aRows[i].zName, zTable)==0 ){
@@ -1496,10 +1497,10 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
 
 status_done:
   if( rc==SQLITE_OK && iStagedOnly!=1 ){
-    StatusSchemaConflictCtx ctx;
+    StatusConflictCtx ctx;
     ctx.pCur = pCur;
     ctx.zFilter = zTableFilter;
-    rc = doltliteForEachSchemaConflict(db, statusAddSchemaConflict, &ctx);
+    rc = doltliteForEachConflict(db, statusAddConflict, &ctx);
   }
   if( headLoaded ) doltliteFreeCatalog(aHead, nHead);
   if( stagedLoaded ) doltliteFreeCatalog(aStaged, nStaged);
@@ -1539,6 +1540,8 @@ static int statusRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
   u64 h = doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET, r->zName);
   h = doltliteFnv1aSep(h);
   h = doltliteFnv1aI64(h, r->staged);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aStr(h, r->zStatus);
   *pRowid = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }

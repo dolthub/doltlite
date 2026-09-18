@@ -1904,8 +1904,8 @@ int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
 int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
     const char *zOurSql, const char *zTheirSql, char **pzDetail);
 int doltliteSessionHasSchemaConflicts(sqlite3 *db, int *pHas);
-int doltliteForEachSchemaConflict(sqlite3 *db,
-    int (*xConflict)(void*, const char*), void *pCtx);
+int doltliteForEachConflict(sqlite3 *db,
+    int (*xConflict)(void*, const char*, int), void *pCtx);
 
 static SQLITE_INLINE const char *doltliteVcUnavailableMessage(sqlite3 *db){
   if( doltliteIsStockSqliteDb(db) ){

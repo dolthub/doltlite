@@ -1,0 +1,122 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach squash {0 1} {
+  foreach extra {0 1} {
+    foreach resolution {ours theirs} {
+      reset_db
+      set name status-conflicts-$squash-$extra-$resolution
+      execsql {
+        CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+        CREATE TABLE u(id INTEGER PRIMARY KEY, a INT);
+        CREATE TABLE v(id INTEGER PRIMARY KEY, a INT);
+        INSERT INTO t VALUES(1,1);
+        INSERT INTO u VALUES(1,1);
+        INSERT INTO v VALUES(1,1);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('feature');
+        SELECT dolt_checkout('feature');
+        UPDATE t SET a=10;
+        UPDATE v SET a=10;
+        INSERT INTO u VALUES(2,2);
+      }
+      if {$extra} {execsql {INSERT INTO t VALUES(2,2)}}
+      execsql {
+        SELECT dolt_commit('-am','feature');
+        SELECT dolt_checkout('main');
+        UPDATE t SET a=11;
+        UPDATE v SET a=11;
+        SELECT dolt_commit('-am','main');
+        BEGIN;
+      }
+      set flags [expr {$squash ? "'--squash'," : ""}]
+      do_test $name-merge {
+        lindex [catchsql "SELECT dolt_merge(${flags}'feature')"] 0
+      } 1
+      set expected {t 0 conflict}
+      if {$extra} {lappend expected t 0 modified}
+      lappend expected u 0 modified v 0 conflict
+      do_execsql_test $name-status {
+        SELECT table_name,staged,status FROM dolt_status
+          ORDER BY table_name,staged,status;
+      } $expected
+      do_execsql_test $name-staged {
+        SELECT count(*) FROM dolt_status WHERE staged=1;
+        SELECT count(*) FROM dolt_at_u('STAGED');
+        SELECT count(*) FROM dolt_at_u('WORKING');
+      } {0 1 2}
+      do_execsql_test $name-rowids {
+        SELECT count(*)=count(DISTINCT rowid) FROM dolt_status;
+      } 1
+      foreach predicate {
+        {table_name='t'} {table_name='v' AND staged=0}
+        {staged=0} {staged=1} {status='conflict'}
+        {table_name='T'} {table_name='T' COLLATE NOCASE}
+      } {
+        set expected [execsql "SELECT table_name,staged,status
+          FROM (SELECT * FROM dolt_status LIMIT -1) WHERE $predicate
+          ORDER BY table_name,staged,status"]
+        do_execsql_test $name-filter-$predicate "
+          SELECT table_name,staged,status FROM dolt_status WHERE $predicate
+          ORDER BY table_name,staged,status
+        " $expected
+      }
+      do_execsql_test $name-add-clean {
+        SELECT dolt_add('u');
+        SELECT table_name,staged,status FROM dolt_status WHERE table_name='u';
+        SELECT count(*) FROM dolt_at_u('STAGED');
+      } {0 u 1 modified 2}
+      execsql "SELECT dolt_conflicts_resolve('--$resolution','t','v')"
+      do_execsql_test $name-resolved {
+        SELECT count(*) FROM dolt_status WHERE status='conflict';
+        SELECT table_name,staged,status FROM dolt_status WHERE table_name='u';
+      } {0 u 1 modified}
+      do_test $name-commit {
+        execsql {SELECT length(dolt_commit('-am','resolved'))}
+      } 40
+      db close
+      sqlite3 db test.db
+      do_execsql_test $name-reopen {
+        SELECT count(*) FROM dolt_status;
+        SELECT count(*) FROM u;
+        PRAGMA integrity_check;
+      } {0 2 ok}
+    }
+  }
+}
+foreach artifact {schema violation} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT UNIQUE);
+    CREATE TABLE u(id INTEGER PRIMARY KEY);
+    INSERT INTO u VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feature');
+    SELECT dolt_checkout('feature');
+    INSERT INTO u VALUES(2);
+  }
+  if {$artifact eq "schema"} {
+    execsql {ALTER TABLE t ADD COLUMN b INT}
+  } else {
+    execsql {INSERT INTO t VALUES(1,10)}
+  }
+  execsql {SELECT dolt_commit('-am','feature'); SELECT dolt_checkout('main')}
+  if {$artifact eq "schema"} {
+    execsql {ALTER TABLE t ADD COLUMN b TEXT}
+  } else {
+    execsql {INSERT INTO t VALUES(2,10)}
+  }
+  execsql {SELECT dolt_commit('-am','main'); BEGIN}
+  do_test status-artifact-$artifact-merge {
+    lindex [catchsql {SELECT dolt_merge('feature')}] 0
+  } 1
+  do_execsql_test status-artifact-$artifact-staged {
+    SELECT table_name,staged,status FROM dolt_status WHERE table_name='u';
+    SELECT count(*) FROM dolt_at_u('STAGED');
+  } {u 0 modified 1}
+  do_execsql_test status-artifact-$artifact-rollback {
+    ROLLBACK;
+    SELECT count(*) FROM dolt_status;
+  } 0
+}
+finish_test

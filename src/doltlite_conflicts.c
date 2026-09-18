@@ -204,9 +204,9 @@ int doltliteSessionHasSchemaConflicts(sqlite3 *db, int *pHas){
   return SQLITE_OK;
 }
 
-int doltliteForEachSchemaConflict(
+int doltliteForEachConflict(
   sqlite3 *db,
-  int (*xConflict)(void*, const char*),
+  int (*xConflict)(void*, const char*, int),
   void *pCtx
 ){
   ConflictTableInfo *aTables = 0;
@@ -216,9 +216,7 @@ int doltliteForEachSchemaConflict(
                             &aTables, &nTables);
   if( rc!=SQLITE_OK ) return rc;
   for(i=0; i<nTables && rc==SQLITE_OK; i++){
-    if( aTables[i].nConflicts==0 ){
-      rc = xConflict(pCtx, aTables[i].zName);
-    }
+    rc = xConflict(pCtx, aTables[i].zName, aTables[i].nConflicts);
   }
   freeConflictTables(aTables, nTables);
   return rc;

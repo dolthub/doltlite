@@ -994,7 +994,6 @@ static int mergeRefInstallMergedCatalog(
   }
   if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pWorkingCat);
   if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
-  if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, pMergedCat);
   if( rc==SQLITE_OK ){
     rc = doltliteUpdateBranchWorkingState(db,
         doltliteGetSessionBranch(db), pWorkingCat, NULL);
@@ -1410,6 +1409,11 @@ int doltliteMergeRef(
     return SQLITE_ERROR;
   }
 
+  rc = doltliteSetSessionStaged(db, &mergedCatHash);
+  if( rc!=SQLITE_OK ){
+    bRestoreOnFail = 1;
+    goto merge_fail;
+  }
   if( noCommit ){
     return mergeRefLeaveUncommitted(
         db, context, &savedState, &ourHead, &theirHead, &workingCatHash,
