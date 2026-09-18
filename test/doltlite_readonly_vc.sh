@@ -24,6 +24,7 @@ RO_OUT=$(
   "$DOLTLITE" -readonly "$DB" 2>&1 <<'SQL' || true
 SELECT dolt_branch('before_reset');
 SELECT dolt_reset('t');
+SELECT dolt_checkout('feat');
 SELECT dolt_branch('after_reset');
 SELECT dolt_tag('ro_tag');
 SELECT dolt_tag('-d','v1');
@@ -37,10 +38,10 @@ expect_all_readonly() {
   local name="$1"
   local n
   n=$(printf '%s\n' "$RO_OUT" | grep -ci 'readonly\|read-only')
-  if [ "$n" -ge 8 ]; then
+  if [ "$n" -ge 9 ]; then
     dltest_pass
   else
-    dltest_fail "$name" "  expected >=8 readonly errors, got $n\n$RO_OUT"
+    dltest_fail "$name" "  expected >=9 readonly errors, got $n\n$RO_OUT"
   fi
 }
 expect_all_readonly "ro_session_every_writer_refused"

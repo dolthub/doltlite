@@ -166,6 +166,17 @@ static void test_readonly_reset_does_not_unlock_writers(const char *zPath){
         exec_rc(ro, "SELECT dolt_branch('before_reset')")==SQLITE_READONLY);
   check("ro_reset: reset is readonly",
         exec_rc(ro, "SELECT dolt_reset('t')")==SQLITE_READONLY);
+  {
+    char *zCheckoutErr = 0;
+    int checkoutRc = sqlite3_exec(ro, "SELECT dolt_checkout('feat')", 0, 0,
+                                  &zCheckoutErr);
+    check("ro_reset: checkout is readonly", checkoutRc==SQLITE_READONLY);
+    check("ro_reset: checkout readonly message",
+          zCheckoutErr
+          && (strstr(zCheckoutErr, "readonly")!=0
+              || strstr(zCheckoutErr, "read-only")!=0));
+    sqlite3_free(zCheckoutErr);
+  }
   check("ro_reset: branch after is still readonly",
         exec_rc(ro, "SELECT dolt_branch('after_reset')")==SQLITE_READONLY);
   check("ro_reset: tag is still readonly",
