@@ -197,6 +197,7 @@ cur_sig=$(format_signature WORKTREE)
 cur_csv=$(chunk_store_version "$cur_sig")
 cur_desc=$(git -C "$REPO_ROOT" describe --tags 2>/dev/null)
 cur_series=$(series_of "$cur_desc")
+cur_release=$(git -C "$REPO_ROOT" describe --tags --exact-match 2>/dev/null)
 
 if [ -z "$cur_csv" ] || [ -z "$cur_series" ]; then
   echo "ERROR: cannot determine current CHUNK_STORE_VERSION ('$cur_csv')"
@@ -246,7 +247,8 @@ for tag in $TAGS; do
     continue
   fi
 
-  if [ "$old_series" = "$cur_series" ] && [ "$old_sig" != "$cur_sig" ]; then
+  if [ -n "$cur_release" ] && [ "$old_series" = "$cur_series" ] \
+     && [ "$old_sig" != "$cur_sig" ]; then
     bad "$tag: format signature changed inside minor series $cur_series — bump the minor version"
     continue
   fi

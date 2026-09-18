@@ -942,8 +942,8 @@ static int positionBeforeBound(
 ** key inside the b-tree search; here the same position is the predecessor
 ** of the prefix's successor. An exact numeric prefix is also a byte prefix
 ** of the 18-byte inexact neighbours that sort right after its matches, so
-** when the landing is one of those the bound moves to prefix+0x80, which
-** every neighbour starts with and no field start does. */
+** when the landing is one of those the bound moves to prefix plus the
+** extension marker, which every neighbour starts with and no field does. */
 static int indexMovetoPrefixLast(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -989,7 +989,7 @@ static int indexMovetoPrefixLast(
     pBound = sqlite3_malloc(nSortKey+1);
     if( !pBound ) return SQLITE_NOMEM;
     memcpy(pBound, pSortKey, nSortKey);
-    pBound[nSortKey] = 0x80;
+    pBound[nSortKey] = SORTKEY_NUM_EXT;
     nBound = nSortKey+1;
   }
   /* First/Last/Previous cleared the cached seek key the following

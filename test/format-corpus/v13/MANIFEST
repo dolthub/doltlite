@@ -1,0 +1,14 @@
+# DoltLite chunk-store version 13
+chunk_store_magic=0x444C5443
+chunk_store_version=13
+working_set_format=v5
+catalog_format=v5
+catalog_format_byte=0x46
+refs_format=v7
+commit_format=v2
+numeric_extension_marker=0xFE
+writer_base_commit=cf6fae98d38f41ce98ba2e321d262ac52cf4871f
+sha256=a1d5c7a5069d34896d1adefc9227f601274309854e7f944f35166cb740a04a17
+recipe=generate.sh
+sql=seed.sql
+file=seed.db

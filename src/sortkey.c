@@ -203,7 +203,7 @@ static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData,
   memcpy(pOut + 1, buf, 8);
   if( isInt && !exactInt ){
     u64 u = ((u64)intVal) ^ ((u64)1 << 63);
-    pOut[9] = 0x80;
+    pOut[9] = SORTKEY_NUM_EXT;
     pOut[10] = (u8)(u >> 56);
     pOut[11] = (u8)(u >> 48);
     pOut[12] = (u8)(u >> 40);
@@ -223,7 +223,7 @@ static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData,
 
 static int numericSortKeyLen(const u8 *pSortKey, int nAvail){
   if( nAvail<9 || pSortKey[0]!=SORTKEY_NUM ) return 0;
-  if( nAvail>=18 && (pSortKey[9]==0x01 || pSortKey[9]==0x80) ){
+  if( nAvail>=18 && pSortKey[9]==SORTKEY_NUM_EXT ){
     return 18;
   }
   if( nAvail>=10 && pSortKey[9]==SORTKEY_NUM_DESC_END ) return 10;
@@ -746,7 +746,7 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
   u64 x;
   int i;
 
-  if( nIn>=17 && (pIn[8]==0x01 || pIn[8]==0x80) ){
+  if( nIn>=17 && pIn[8]==SORTKEY_NUM_EXT ){
     u64 u = ((u64)pIn[9] << 56) | ((u64)pIn[10] << 48)
           | ((u64)pIn[11] << 40) | ((u64)pIn[12] << 32)
           | ((u64)pIn[13] << 24) | ((u64)pIn[14] << 16)
@@ -795,7 +795,7 @@ static void decodeNumericSortKeyField(
 
   pField->eType = SORTKEY_NUM;
   pField->isReal = 0;
-  if( nIn>=17 && (pIn[8]==0x01 || pIn[8]==0x80) ){
+  if( nIn>=17 && pIn[8]==SORTKEY_NUM_EXT ){
     u64 u = ((u64)pIn[9] << 56) | ((u64)pIn[10] << 48)
           | ((u64)pIn[11] << 40) | ((u64)pIn[12] << 32)
           | ((u64)pIn[13] << 24) | ((u64)pIn[14] << 16)

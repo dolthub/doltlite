@@ -199,6 +199,29 @@ else:
         assert key().stdout != changed.stdout
         checks += 1
 
+        old_bin = root / 'compat/v0.50.0/doltlite'
+        executable(old_bin, '#!/bin/sh\ncat >/dev/null\necho 60\n')
+        current_bin = tools / 'doltlite'
+        executable(current_bin, '#!/bin/sh\ncat >/dev/null\necho "file is not a database (26)" >&2\nexit 1\n')
+        (root / 'src/chunk_store.h').write_text('#define CHUNK_STORE_VERSION 13\n#define CHUNK_STORE_MAGIC 7\n')
+        git('add', 'src/chunk_store.h')
+        git('commit', '-qm', 'new format')
+        compat_env = dict(env, DOLTLITE_COMPAT_CACHE=str(root / 'compat'),
+                          DOLTLITE_COMPAT_TAGS='v0.50.0', DOLTLITE_COMPAT_PREBUILT='1')
+        compat_args = ['bash', 'test/doltlite_compat_test.sh', str(current_bin)]
+        result = run(compat_args, cwd=root, env=compat_env)
+        assert result.returncode == 0 and 'incompatible format refused cleanly' in result.stdout, result
+        checks += 1
+        git('tag', 'v0.50.3')
+        result = run(compat_args, cwd=root, env=compat_env)
+        assert result.returncode != 0 and 'bump the minor version' in result.stdout, result
+        checks += 1
+        git('commit', '--allow-empty', '-qm', 'next minor release')
+        git('tag', 'v0.51.0')
+        result = run(compat_args, cwd=root, env=compat_env)
+        assert result.returncode == 0 and 'incompatible format refused cleanly' in result.stdout, result
+        checks += 1
+
 
 def coverage_archives():
     global checks

@@ -8,7 +8,7 @@ DOLTLITE="${1:-./doltlite}"
 source "$SCRIPT_DIR/lib/doltlite_test_common.sh"
 
 CONTRACT="$SCRIPT_DIR/storage_format_contract.tsv"
-CORPUS_DIR="$SCRIPT_DIR/format-corpus/v12"
+CORPUS_DIR="$SCRIPT_DIR/format-corpus/v13"
 CORPUS_DB="$CORPUS_DIR/seed.db"
 CORPUS_MANIFEST="$CORPUS_DIR/MANIFEST"
 CORPUS_RECIPE="$CORPUS_DIR/generate.sh"
@@ -16,7 +16,7 @@ CORPUS_SQL="$CORPUS_DIR/seed.sql"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "=== Storage format contract (version 12) ==="
+echo "=== Storage format contract (version 13) ==="
 
 header="$(head -n 1 "$CONTRACT")"
 if [[ "$header" != $'id\tstatus\tevidence\tcontract' ]]; then
@@ -54,7 +54,7 @@ done < <(tail -n +2 "$CONTRACT")
 
 if [[ ! -f "$CORPUS_DB" || ! -f "$CORPUS_MANIFEST" \
    || ! -x "$CORPUS_RECIPE" || ! -f "$CORPUS_SQL" ]]; then
-  dltest_fail "corpus_present" "  missing version 12 corpus artifact"
+  dltest_fail "corpus_present" "  missing version 13 corpus artifact"
   dltest_finish
   exit 1
 fi
@@ -67,7 +67,7 @@ actual_sha="$(python3 -c \
 if [[ -n "$expected_sha" && "$actual_sha" = "$expected_sha" ]]; then
   dltest_pass
 else
-  dltest_fail "corpus_v12_checksum" "  expected $expected_sha, got $actual_sha"
+  dltest_fail "corpus_v13_checksum" "  expected $expected_sha, got $actual_sha"
 fi
 
 hdr_ver="$(python3 -c "
@@ -76,7 +76,7 @@ h=open(sys.argv[1]).read()
 print(re.search(r'#define CHUNK_STORE_VERSION\s+(\d+)', h).group(1))
 " "$REPO_ROOT/src/chunk_store.h")"
 man_ver="$(sed -n 's/^chunk_store_version=//p' "$CORPUS_MANIFEST")"
-if [[ "$hdr_ver" = "12" && "$man_ver" = "12" ]]; then
+if [[ "$hdr_ver" = "13" && "$man_ver" = "13" ]]; then
   dltest_pass
 else
   dltest_fail "manifest_matches_header" "  source=$hdr_ver manifest=$man_ver"
@@ -87,18 +87,18 @@ import sys
 b=open(sys.argv[1],'rb').read(8)
 sys.exit(0 if len(b)==8
               and int.from_bytes(b[:4],'little')==0x444C5443
-              and int.from_bytes(b[4:8],'little')==12 else 1)
+              and int.from_bytes(b[4:8],'little')==13 else 1)
 " "$CORPUS_DB"; then
   dltest_pass
 else
-  dltest_fail "corpus_v12_header" "  corpus header is not chunk-store version 12"
+  dltest_fail "corpus_v13_header" "  corpus header is not chunk-store version 13"
 fi
 
 OPEN_DB="$TMP/open_seed.db"
 cp "$CORPUS_DB" "$OPEN_DB"
-run_test "corpus_v12_deep_tree" \
+run_test "corpus_v13_deep_tree" \
   "SELECT count(*) FROM deep NOT INDEXED;" "20001" "$OPEN_DB/main"
-run_test "corpus_v12_secondary_indexes" \
+run_test "corpus_v13_secondary_indexes" \
   "SELECT count(*) FROM deep INDEXED BY deep_grp_score;
    SELECT group_concat(id, ',') FROM (
      SELECT id FROM deep INDEXED BY deep_score_partial
@@ -106,10 +106,10 @@ run_test "corpus_v12_secondary_indexes" \
    );" \
   "20001
 30,40" "$OPEN_DB/main"
-run_test "corpus_v12_composite_blob_rows" \
+run_test "corpus_v13_composite_blob_rows" \
   "SELECT group_concat(a || ':' || hex(b) || ':' || v, ',') FROM (SELECT * FROM keyed ORDER BY a, b);" \
   "Alpha:00FF:1.5,beta:1020:-2.25,gamma:FF00:3.75" "$OPEN_DB/main"
-run_test "corpus_v12_catalog_objects" \
+run_test "corpus_v13_catalog_objects" \
   "SELECT count(*) FROM sqlite_schema
     WHERE name IN ('deep','deep_grp_score','deep_score_partial','keyed',
                    'generated_values','deep_even','deep_audit','docs',
@@ -124,33 +124,33 @@ run_test "corpus_v12_catalog_objects" \
 10001
 1
 2" "$OPEN_DB/main"
-run_test "corpus_v12_sequences" \
+run_test "corpus_v13_sequences" \
   "SELECT group_concat(name || ':' || seq, ',')
      FROM (SELECT name, seq FROM sqlite_sequence ORDER BY name);" \
   "audit:2,seq:3" "$OPEN_DB/main"
-run_test "corpus_v12_integrity" \
+run_test "corpus_v13_integrity" \
   "PRAGMA integrity_check;" "ok" "$OPEN_DB/main"
-run_test "corpus_v12_merge_commit" \
+run_test "corpus_v13_merge_commit" \
   "SELECT count(*) FROM dolt_commit_ancestors
     WHERE commit_hash=(
       SELECT commit_hash FROM dolt_log WHERE message LIKE 'Merge branch%'
     );" "2" "$OPEN_DB/main"
-run_test "corpus_v12_branches" \
+run_test "corpus_v13_branches" \
   "SELECT group_concat(name, ',') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
   "dolt_rebase_rebase_source,feature,main,rebase_source,violations,workspace" \
   "$OPEN_DB/main"
-run_test "corpus_v12_annotated_tags" \
+run_test "corpus_v13_annotated_tags" \
   "SELECT group_concat(tag_name || ':' || tagger || ':' || email || ':' || message, '|')
      FROM (SELECT * FROM dolt_tags ORDER BY tag_name);" \
-  "v12-base:Format Tagger:tagger@example.com:annotated format baseline|v12-merge:Merge Tagger:merge@example.com:annotated merge result" \
+  "v13-base:Format Tagger:tagger@example.com:annotated format baseline|v13-merge:Merge Tagger:merge@example.com:annotated merge result" \
   "$OPEN_DB/main"
-run_test "corpus_v12_remote_tracking" \
+run_test "corpus_v13_remote_tracking" \
   "SELECT group_concat(name || ':' || (url GLOB 'file://*/origin.db'), ',')
      FROM dolt_remotes;
    SELECT group_concat(name, ',') FROM dolt_remote_branches;" \
   "origin:1
 remotes/origin/main" "$OPEN_DB/main"
-run_test "corpus_v12_dirty_staged_working_set" \
+run_test "corpus_v13_dirty_staged_working_set" \
   "SELECT group_concat(id || ':' || grp, ',') FROM (
      SELECT id, grp FROM deep WHERE id>20000 ORDER BY id
    );
@@ -159,7 +159,7 @@ run_test "corpus_v12_dirty_staged_working_set" \
    );" \
   "20001:working,20002:unstaged
 deep:modified:0,deep:modified:1" "$OPEN_DB/workspace"
-run_test "corpus_v12_constraint_violations" \
+run_test "corpus_v13_constraint_violations" \
   "SELECT count(*) FROM child;
    SELECT group_concat(\"table\" || ':' || num_violations, ',')
      FROM dolt_constraint_violations;
@@ -167,13 +167,13 @@ run_test "corpus_v12_constraint_violations" \
   "2
 child:1
 foreign key" "$OPEN_DB/violations"
-run_test "corpus_v12_rebase_working_set" \
+run_test "corpus_v13_rebase_working_set" \
   "SELECT count(*) FROM dolt_rebase;
    SELECT group_concat(rebase_order || ':' || action || ':' || commit_message, ',')
      FROM dolt_rebase;" \
   "1
-1.0:pick:v12 rebase source" "$OPEN_DB/dolt_rebase_rebase_source"
-run_test "corpus_v12_rebase_return_branch" \
+1.0:pick:v13 rebase source" "$OPEN_DB/dolt_rebase_rebase_source"
+run_test "corpus_v13_rebase_return_branch" \
   "SELECT count(*) FROM sqlite_schema WHERE name='dolt_rebase';" \
   "1" "$OPEN_DB/main"
 
@@ -182,42 +182,42 @@ if "$CORPUS_RECIPE" "$DOLTLITE" "$REBUILT_DB" >/dev/null \
  && [[ "$("$DOLTLITE" "$REBUILT_DB/main" "SELECT count(*) FROM deep NOT INDEXED;")" = "20001" ]]; then
   dltest_pass
 else
-  dltest_fail "corpus_v12_recipe_rebuild" "  generation recipe did not reproduce the semantic fixture"
+  dltest_fail "corpus_v13_recipe_rebuild" "  generation recipe did not reproduce the semantic fixture"
 fi
 
 WRITE_DB="$TMP/write_seed.db"
 cp "$CORPUS_DB" "$WRITE_DB"
-run_test "corpus_v12_write_commit" \
+run_test "corpus_v13_write_commit" \
   "INSERT INTO deep(id, grp, score, payload)
    VALUES(21000, 'forward', 2100.0, x'11223344');
-   SELECT length(dolt_commit('-A', '-m', 'extend v12'));" \
+   SELECT length(dolt_commit('-A', '-m', 'extend v13'));" \
   "40" "$WRITE_DB/feature"
-run_test "corpus_v12_reopen_after_write" \
+run_test "corpus_v13_reopen_after_write" \
   "SELECT count(*) FROM deep NOT INDEXED;
    SELECT message FROM dolt_log LIMIT 1;" \
   "20001
-extend v12" "$WRITE_DB/feature"
-run_test_match "corpus_v12_gc" \
+extend v13" "$WRITE_DB/feature"
+run_test_match "corpus_v13_gc" \
   "SELECT dolt_gc();" "chunks removed" "$WRITE_DB/feature"
-run_test "corpus_v12_post_gc_rows" \
+run_test "corpus_v13_post_gc_rows" \
   "SELECT count(*) FROM deep NOT INDEXED;
    SELECT count(*) FROM deep WHERE id=21000;
    PRAGMA integrity_check;" \
   "20001
 1
 ok" "$WRITE_DB/feature"
-run_test "corpus_v12_post_gc_working_sets" \
+run_test "corpus_v13_post_gc_working_sets" \
   "SELECT count(*) FROM deep WHERE id IN (20001, 20002);
    SELECT count(*) FROM dolt_status WHERE table_name='deep';" \
   "2
 2" "$WRITE_DB/workspace"
-run_test "corpus_v12_post_gc_constraint_violations" \
+run_test "corpus_v13_post_gc_constraint_violations" \
   "SELECT coalesce(sum(num_violations), 0) FROM dolt_constraint_violations;" \
   "1" "$WRITE_DB/violations"
-run_test "corpus_v12_post_gc_rebase" \
+run_test "corpus_v13_post_gc_rebase" \
   "SELECT count(*) FROM dolt_rebase;" "1" \
   "$WRITE_DB/dolt_rebase_rebase_source"
-run_test "corpus_v12_post_gc_tracking" \
+run_test "corpus_v13_post_gc_tracking" \
   "SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/main';" \
   "1" "$WRITE_DB/main"
 
@@ -250,14 +250,41 @@ expect_exact_notadb() {
   fi
 }
 
-patch_u32 "$CORPUS_DB" "$TMP/v13.db" 4 13
-expect_exact_notadb "skew_version_13_notadb" "$TMP/v13.db"
+patch_u32 "$CORPUS_DB" "$TMP/v14.db" 4 14
+expect_exact_notadb "skew_version_14_notadb" "$TMP/v14.db"
+
+patch_u32 "$CORPUS_DB" "$TMP/v12.db" 4 12
+expect_exact_notadb "skew_version_12_notadb" "$TMP/v12.db"
 
 patch_u32 "$CORPUS_DB" "$TMP/v11.db" 4 11
 expect_exact_notadb "skew_version_11_notadb" "$TMP/v11.db"
 
 patch_u32 "$CORPUS_DB" "$TMP/bad_magic.db" 0 0x01234567
 expect_exact_notadb "skew_magic_notadb" "$TMP/bad_magic.db"
+
+V12_DIR="$SCRIPT_DIR/format-corpus/v12"
+v12_expected_sha="$(sed -n 's/^sha256=//p' "$V12_DIR/MANIFEST")"
+v12_actual_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$V12_DIR/seed.db")"
+if [[ "$v12_actual_sha" = "$v12_expected_sha" ]]; then
+  dltest_pass
+else
+  dltest_fail "corpus_v12_checksum" "  frozen version 12 corpus changed"
+fi
+cp "$V12_DIR/seed.db" "$TMP/old_seed.db"
+expect_exact_notadb "corpus_v12_refused" "$TMP/old_seed.db"
+if cmp -s "$V12_DIR/seed.db" "$TMP/old_seed.db"; then
+  dltest_pass
+else
+  dltest_fail "corpus_v12_refused_unchanged" "  refused file was modified"
+fi
+
+run_test "corpus_v13_numeric_desc" \
+  "SELECT group_concat(k, ',') FROM (SELECT k FROM numeric_keys ORDER BY k);
+   SELECT count(*) FROM numeric_keys WHERE k BETWEEN 9007199254740991 AND 9007199254740992;
+   SELECT count(*) FROM numeric_indexed INDEXED BY numeric_idx WHERE k BETWEEN 9007199254740991 AND 9007199254740992;" \
+  "-9223372036854775808,-9223372036854775807,9007199254740991,9007199254740992,9007199254740993,9007199254740994,9007199254740995,9223372036854775807
+2
+2" "$OPEN_DB/main"
 
 FRESH="$TMP/fresh.db"
 fresh_out="$("$DOLTLITE" "$FRESH" "CREATE TABLE x(i INT PRIMARY KEY); SELECT length(dolt_commit('-Am', 'fresh'));" 2>&1)"
@@ -267,11 +294,11 @@ import sys
 b=open(sys.argv[1],'rb').read(8)
 sys.exit(0 if len(b)==8
               and int.from_bytes(b[:4],'little')==0x444C5443
-              and int.from_bytes(b[4:8],'little')==12 else 1)
+              and int.from_bytes(b[4:8],'little')==13 else 1)
 " "$FRESH"; then
   dltest_pass
 else
-  dltest_fail "fresh_write_v12_header" "  fresh write failed or did not stamp version 12"
+  dltest_fail "fresh_write_v13_header" "  fresh write failed or did not stamp version 13"
 fi
 
 dltest_finish

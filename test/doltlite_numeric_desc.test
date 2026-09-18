@@ -1,0 +1,42 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set values {-9223372036854775808 -9223372036854775807 -9223372036854775806 -9007199254740995 -9007199254740994 -9007199254740993 9007199254740991 9007199254740992 9007199254740993 9007199254740994 9007199254740995 9223372036854775806 9223372036854775807}
+foreach direction {ASC DESC} {
+  foreach shape {index without_rowid} {
+    reset_db
+    if {$shape eq "index"} {
+      execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, a, b); CREATE UNIQUE INDEX ti ON t(a $direction,b DESC)"
+      set scan {t INDEXED BY ti}
+    } else {
+      execsql "CREATE TABLE t(id INTEGER, a, b, PRIMARY KEY(a $direction,b DESC)) WITHOUT ROWID"
+      set scan t
+    }
+    set id 0
+    foreach value $values {
+      execsql "INSERT INTO t VALUES([incr id],$value,'x')"
+    }
+    foreach state {committed pending reopened} {
+      if {$state eq "pending"} {
+        execsql {BEGIN; UPDATE t SET b='y' WHERE id=1}
+      }
+      if {$state eq "reopened"} {
+        execsql ROLLBACK
+        db close
+        sqlite3 db [file normalize test.db]
+      }
+      set name numeric-desc-$direction-$shape-$state
+      do_execsql_test $name-order "SELECT a FROM $scan ORDER BY a" $values
+      do_execsql_test $name-reverse "SELECT a FROM $scan ORDER BY a DESC" [lreverse $values]
+      do_execsql_test $name-greater "SELECT a FROM $scan WHERE a>9007199254740992 ORDER BY a" [lrange $values 8 end]
+      do_execsql_test $name-less "SELECT a FROM $scan WHERE a<-9223372036854775807 ORDER BY a" [lindex $values 0]
+      do_execsql_test $name-between "SELECT count(*) FROM $scan WHERE a BETWEEN 9007199254740991 AND 9007199254740992" {2}
+      do_execsql_test $name-equal "SELECT count(*) FROM $scan WHERE a BETWEEN 9007199254740992 AND 9007199254740992" {1}
+      do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+      do_test $name-unique {
+        lindex [catchsql {INSERT INTO t VALUES(100,9007199254740993,'x')}] 0
+      } {1}
+    }
+  }
+}
+finish_test

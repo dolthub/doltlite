@@ -10,6 +10,9 @@
 #define SORTKEY_TEXT    0x35
 #define SORTKEY_BLOB    0x45
 
+/* Above every ASC/DESC field tag that can follow the exact IEEE base. */
+#define SORTKEY_NUM_EXT 0xFE
+
 /* DESC 9-byte numeric terminator so it is not a prefix of the 18-byte form. */
 #define SORTKEY_NUM_DESC_END 0x00
 

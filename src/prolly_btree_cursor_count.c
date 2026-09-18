@@ -194,7 +194,7 @@ static int blobFieldSuccessor(const u8 *pKey, int nKey, u8 **ppOut, int *pnOut){
     u8 *pOut = sqlite3_malloc(10);
     if( !pOut ) return SQLITE_NOMEM;
     memcpy(pOut, pKey, 9);
-    pOut[9] = 0x80;
+    pOut[9] = SORTKEY_NUM_EXT;
     *ppOut = pOut;
     *pnOut = 10;
     return SQLITE_OK;

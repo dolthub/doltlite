@@ -13636,7 +13636,7 @@ static void storageFormatCheckNotadb(
   sqlite3_close(db);
 }
 
-static void run_storage_format_v12(void){
+static void run_storage_format_v13(void){
   sqlite3 *db = 0;
   ChunkStore *cs;
   ProllyHash wsHash;
@@ -13649,23 +13649,23 @@ static void run_storage_format_v12(void){
   unsigned int version = 0;
   char dbpath[256];
 
-  printf("=== Storage Format Version 12 Test ===\n\n");
-  make_dbpath(dbpath, sizeof(dbpath), "test_storage_format_v12");
+  printf("=== Storage Format Version 13 Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_storage_format_v13");
   removeDbFiles(dbpath);
   memset(&commit, 0, sizeof(commit));
 
-  check("storage_v12_open", open_db(dbpath, &db)==SQLITE_OK);
-  check("storage_v12_setup", execSql(db,
+  check("storage_v13_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("storage_v13_setup", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "CREATE INDEX idx_v ON t(v);"
     "INSERT INTO t VALUES(1,'a');"
-    "SELECT dolt_commit('-A', '-m', 'v12');")==SQLITE_OK);
+    "SELECT dolt_commit('-A', '-m', 'v13');")==SQLITE_OK);
   cs = doltliteGetChunkStore(db);
-  check("storage_v12_chunk_store", cs!=0);
+  check("storage_v13_chunk_store", cs!=0);
 
   rc = chunkStoreGetBranchWorkingSet(cs, "main", &wsHash);
   if( rc==SQLITE_OK ) rc = chunkStoreGet(cs, &wsHash, &pData, &nData);
-  check("storage_v12_working_set_is_v5",
+  check("storage_v13_working_set_is_v5",
         rc==SQLITE_OK && nData>0 && pData[0]==WS_FORMAT_VERSION_V5);
   sqlite3_free(pData);
   pData = 0;
@@ -13674,45 +13674,50 @@ static void run_storage_format_v12(void){
   doltliteGetSessionHead(db, &headHash);
   rc = doltliteLoadCommit(db, &headHash, &commit);
   if( rc==SQLITE_OK ) rc = chunkStoreGet(cs, &commit.catalogHash, &pData, &nData);
-  check("storage_v12_catalog_is_v5",
+  check("storage_v13_catalog_is_v5",
         rc==SQLITE_OK && nData>0 && pData[0]==CATALOG_FORMAT_V5);
   sqlite3_free(pData);
   pData = 0;
   nData = 0;
 
   rc = chunkStoreGet(cs, &headHash, &pData, &nData);
-  check("storage_v12_commit_is_v2",
+  check("storage_v13_commit_is_v2",
         rc==SQLITE_OK && nData>0 && pData[0]==DOLTLITE_COMMIT_V2);
   sqlite3_free(pData);
   pData = 0;
   nData = 0;
 
   rc = chunkStoreSerializeRefsToBlob(cs, &pData, &nData);
-  check("storage_v12_refs_are_v7",
+  check("storage_v13_refs_are_v7",
         rc==SQLITE_OK && nData>0 && pData[0]==7);
   sqlite3_free(pData);
   doltliteCommitClear(&commit);
 
   sqlite3_close(db);
   db = 0;
-  check("storage_v12_header_read",
+  check("storage_v13_header_read",
         storageFormatReadHeader(dbpath, &magic, &version));
-  check("storage_v12_header_magic", magic==CHUNK_STORE_MAGIC);
-  check("storage_v12_header_version", version==CHUNK_STORE_VERSION);
+  check("storage_v13_header_magic", magic==CHUNK_STORE_MAGIC);
+  check("storage_v13_header_version", version==CHUNK_STORE_VERSION);
 
-  check("storage_v12_patch_v13", storageFormatWriteU32(dbpath, 4, 13));
-  storageFormatCheckNotadb(dbpath, "storage_v12_v13_open",
-                          "storage_v12_v13_returns_exact_notadb");
+  check("storage_v13_patch_v14", storageFormatWriteU32(dbpath, 4, 14));
+  storageFormatCheckNotadb(dbpath, "storage_v13_v14_open",
+                          "storage_v13_v14_returns_exact_notadb");
 
-  check("storage_v12_patch_v11", storageFormatWriteU32(dbpath, 4, 11));
-  storageFormatCheckNotadb(dbpath, "storage_v12_v11_open",
-                          "storage_v12_v11_returns_exact_notadb");
+  check("storage_v13_patch_v11", storageFormatWriteU32(dbpath, 4, 11));
+  storageFormatCheckNotadb(dbpath, "storage_v13_v11_open",
+                          "storage_v13_v11_returns_exact_notadb");
 
-  check("storage_v12_restore_version", storageFormatWriteU32(dbpath, 4, 12));
-  check("storage_v12_patch_magic",
+  check("storage_v13_patch_v12", storageFormatWriteU32(dbpath, 4, 12));
+  storageFormatCheckNotadb(dbpath, "storage_v13_v12_open",
+                          "storage_v13_v12_returns_exact_notadb");
+
+  check("storage_v13_restore_version",
+        storageFormatWriteU32(dbpath, 4, CHUNK_STORE_VERSION));
+  check("storage_v13_patch_magic",
         storageFormatWriteU32(dbpath, 0, 0x01234567));
-  storageFormatCheckNotadb(dbpath, "storage_v12_bad_magic_open",
-                          "storage_v12_bad_magic_returns_exact_notadb");
+  storageFormatCheckNotadb(dbpath, "storage_v13_bad_magic_open",
+                          "storage_v13_bad_magic_returns_exact_notadb");
 
   removeDbFiles(dbpath);
 }
@@ -14465,7 +14470,7 @@ static void run_nocase_nul_record_parse(void){
 
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
-  { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
+  { "storage_format_v13", "Storage Format Version 13 Test", run_storage_format_v13 },
   { "directonly_dolt_functions", "Direct-Only Dolt Functions Test", run_directonly_dolt_functions },
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "alter_default_authorizer", "ALTER Default Authorizer Test", run_alter_default_authorizer },
