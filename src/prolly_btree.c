@@ -1417,6 +1417,45 @@ int sqlite3BtreeIsDoltliteFormat(Btree *p){
   return p && p->pOps==&prollyBtreeOps;
 }
 
+static int prollyVcStateEqual(const DoltVcState *a, const DoltVcState *b){
+  return prollyHashCompare(&a->stagedCatalog, &b->stagedCatalog)==0
+      && a->isMerging==b->isMerging
+      && a->pendingReplayCommit==b->pendingReplayCommit
+      && prollyHashCompare(&a->mergeCommitHash, &b->mergeCommitHash)==0
+      && prollyHashCompare(&a->conflictsCatalogHash, &b->conflictsCatalogHash)==0
+      && prollyHashCompare(&a->constraintViolationsHash,
+                           &b->constraintViolationsHash)==0;
+}
+
+static int prollyBtreeHasPendingChanges(Btree *p){
+  int i;
+  if( !p ) return 0;
+  if( p->bSchemaChangedTxn || p->bMasterRootChangedTxn ) return 1;
+  if( memcmp(p->aMeta, p->committedAMeta, sizeof(p->aMeta))!=0 ) return 1;
+  if( !prollyVcStateEqual(&p->vc, &p->committedVc) ) return 1;
+  if( p->isRebasing ) return 1;
+  for(i=0; i<p->cat.n; i++){
+    ProllyMutMap *pMap = (ProllyMutMap*)p->cat.a[i].pPending;
+    if( pMap && !prollyMutMapIsEmpty(pMap) ) return 1;
+  }
+  if( p->pBt ){
+    ChunkStaging *st = &p->pBt->store.staging;
+    if( chunkStagingPendingCount(st)>0 || st->nRecentUncommitted>0 ) return 1;
+  }
+  return 0;
+}
+
+int sqlite3BtreeHasPendingChanges(Btree *p){
+  Pager *pPager;
+  if( !p ) return 0;
+  if( sqlite3BtreeIsDoltliteFormat(p) ){
+    return prollyBtreeHasPendingChanges(p);
+  }
+  pPager = sqlite3BtreePager(p);
+  if( !pPager ) return 0;
+  return !sqlite3PagerOkToChangeJournalMode(pPager);
+}
+
 int prollyBtreeSetAutoVacuum(Btree *p, int autoVacuum){
   (void)p; (void)autoVacuum;
   return SQLITE_OK;
