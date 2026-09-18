@@ -1471,7 +1471,7 @@ void btreeCaptureCommittedCatalogShape(Btree *p){
   if( p ) prollyHashCatalogShape(p, &p->committedCatalogShape);
 }
 
-int btreeCatalogShapeChanged(Btree *p){
+static int btreeCatalogShapeChanged(Btree *p){
   ProllyHash live;
   if( !p ) return 0;
   prollyHashCatalogShape(p, &live);

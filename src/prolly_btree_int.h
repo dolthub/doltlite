@@ -722,7 +722,6 @@ int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 void btreeStoreCommittedFromCurrent(Btree*, const ProllyHash*);
 void btreeCaptureCommittedCatalogShape(Btree *p);
-int btreeCatalogShapeChanged(Btree *p);
 int syncBtreeSavepoints(Btree*);
 int ensureStatementSavepointsCaptured(Btree*);
 int pushSavepoint(Btree*, int);
