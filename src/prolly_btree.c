@@ -334,7 +334,8 @@ int prollyBtreeCheckMaxPageCount(Btree *p){
 }
 
 
-int prollyInvokeBusyHandler(BtShared *pBt){
+int prollyInvokeBusyHandler(void *pArg){
+  BtShared *pBt = (BtShared*)pArg;
   if( !pBt || !pBt->db ) return 0;
   assert( sqlite3_mutex_held(pBt->db->mutex) );
   return sqlite3InvokeBusyHandler(&pBt->db->busyHandler);

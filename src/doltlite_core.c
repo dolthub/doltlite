@@ -450,7 +450,9 @@ int doltliteMutateRefsExpected(
   }
   if( doltliteIsDetached(db) ) return SQLITE_READONLY;
 
-  rc = chunkStoreLockAndRefresh(cs);
+  do {
+    rc = chunkStoreLockAndRefresh(cs);
+  }while( rc==SQLITE_BUSY && sqlite3InvokeBusyHandler(&db->busyHandler) );
   if( rc!=SQLITE_OK ) return rc;
 
   /* xMutate + serializeRefs rewrite the whole refs blob; reload persisted

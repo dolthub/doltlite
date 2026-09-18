@@ -2704,7 +2704,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     rc = chunkStoreSerializeRefs(cs);
   }
   if( rc==SQLITE_OK ){
-    rc = chunkStoreCommit(cs);
+    rc = chunkStoreCommitWithBusyHandler(cs, prollyInvokeBusyHandler, pBt);
   }
   if( rc!=SQLITE_OK ){
     btreeFreeCatalogTables(pBtree);

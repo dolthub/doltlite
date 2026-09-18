@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "doltlite_internal.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -249,6 +250,108 @@ static void test_commit_busy(const char *zPath){
   remove(zPath);
 }
 
+typedef struct RefBusyCtx RefBusyCtx;
+struct RefBusyCtx {
+  sqlite3 *peer;
+  int calls;
+  int release;
+  int releaseRc;
+};
+
+static int refBusyHandler(void *arg, int attempt){
+  RefBusyCtx *p = (RefBusyCtx*)arg;
+  p->calls++;
+  if( !p->release || attempt>4 ) return 0;
+  if( attempt<2 ) return 1;
+  p->releaseRc = exec(p->peer, "ROLLBACK");
+  return p->releaseRc==SQLITE_OK;
+}
+
+static int scalarInt(sqlite3 *db, const char *zSql){
+  sqlite3_stmt *pStmt = 0;
+  int result = -1;
+  if( sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0)==SQLITE_OK
+   && sqlite3_step(pStmt)==SQLITE_ROW ){
+    result = sqlite3_column_int(pStmt, 0);
+  }
+  sqlite3_finalize(pStmt);
+  return result;
+}
+
+static void test_ref_busy_handler(const char *zPath){
+  static const struct {
+    const char *setup;
+    const char *sql;
+    const char *verify;
+  } cases[] = {
+    {"", "SELECT dolt_branch('new')",
+     "SELECT count(*) FROM dolt_branches WHERE name='new'"},
+    {"", "SELECT dolt_branch('-d','feature')",
+     "SELECT count(*)=0 FROM dolt_branches WHERE name='feature'"},
+    {"", "SELECT dolt_branch('-m','feature','renamed')",
+     "SELECT count(*) FROM dolt_branches WHERE name='renamed'"},
+    {"", "SELECT dolt_branch('-c','feature','copied')",
+     "SELECT count(*) FROM dolt_branches WHERE name='copied'"},
+    {"", "SELECT dolt_tag('new')",
+     "SELECT count(*) FROM dolt_tags WHERE tag_name='new'"},
+    {"", "SELECT dolt_tag('-d','v1')",
+     "SELECT count(*)=0 FROM dolt_tags WHERE tag_name='v1'"},
+    {"", "SELECT dolt_checkout('feature')", "SELECT active_branch()='feature'"},
+    {"", "SELECT dolt_checkout('-b','new')", "SELECT active_branch()='new'"},
+    {"UPDATE t SET v='dirty'", "SELECT dolt_reset('--hard')",
+     "SELECT v='a' FROM t WHERE k=1"},
+    {"", "SELECT dolt_clean()", "SELECT count(*) FROM t"},
+    {"CREATE TABLE untracked(id INTEGER PRIMARY KEY)", "SELECT dolt_clean()",
+     "SELECT count(*)=0 FROM sqlite_master WHERE name='untracked'"},
+    {"", "VACUUM", "SELECT count(*) FROM t"}
+  };
+  int i;
+  for(i=0; i<(int)(sizeof(cases)/sizeof(cases[0])); i++){
+    sqlite3 *db = 0;
+    sqlite3 *peer = 0;
+    RefBusyCtx ctx;
+    int rc;
+    remove(zPath);
+    checkRc("ref_busy: open", sqlite3_open(zPath, &db), SQLITE_OK);
+    checkRc("ref_busy: seed", exec(db, seedSql), SQLITE_OK);
+    checkRc("ref_busy: setup", exec(db, cases[i].setup), SQLITE_OK);
+    checkRc("ref_busy: peer open", sqlite3_open(zPath, &peer), SQLITE_OK);
+    checkRc("ref_busy: peer lock",
+            exec(peer, "BEGIN IMMEDIATE; INSERT INTO t VALUES(50,'peer')"),
+            SQLITE_OK);
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.peer = peer;
+    sqlite3_busy_handler(db, refBusyHandler, &ctx);
+    if( strcmp(cases[i].sql, "VACUUM")==0 ){
+      sqlite3_mutex_enter(sqlite3_db_mutex(db));
+      rc = doltliteGcCompactStore(db, doltliteGetChunkStore(db));
+      sqlite3_mutex_leave(sqlite3_db_mutex(db));
+      checkRc("ref_busy: automatic compaction defers", rc, SQLITE_BUSY);
+      check("ref_busy: automatic compaction does not wait", ctx.calls==0);
+    }
+    rc = exec(db, cases[i].sql);
+    checkRc(cases[i].sql, rc, SQLITE_BUSY);
+    if( ctx.calls==0 ) fprintf(stderr, "No busy callback: %s\n", cases[i].sql);
+    check("ref_busy: declining handler is called", ctx.calls>0);
+    check("ref_busy: decline preserves peer transaction", !sqlite3_get_autocommit(peer));
+    ctx.calls = 0;
+    ctx.release = 1;
+    sqlite3_busy_handler(db, refBusyHandler, &ctx);
+    rc = exec(db, cases[i].sql);
+    checkRc(cases[i].sql, rc, SQLITE_OK);
+    check("ref_busy: handler permits retry", ctx.calls>=3);
+    checkRc("ref_busy: peer rollback", ctx.releaseRc, SQLITE_OK);
+    check("ref_busy: peer released", sqlite3_get_autocommit(peer));
+    sqlite3_busy_handler(db, 0, 0);
+    check("ref_busy: operation took effect", scalarInt(db, cases[i].verify)==1);
+    check("ref_busy: peer uncommitted row absent", rowCount(db)==1);
+    if( !sqlite3_get_autocommit(peer) ) exec(peer, "ROLLBACK");
+    sqlite3_close(peer);
+    sqlite3_close(db);
+  }
+  remove(zPath);
+}
+
 int main(void){
   char zPath[256];
   char zBase[256];
@@ -263,6 +366,7 @@ int main(void){
   test_busy_code(zBase, zWork);
   test_no_internal_code_escapes(zPath);
   test_commit_busy(zPath);
+  test_ref_busy_handler(zPath);
 
   printf("vc_result_code_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

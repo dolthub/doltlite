@@ -1042,7 +1042,7 @@ static void gcResultError(sqlite3_context *context, int rc, const char *zMsg){
   }
 }
 
-/* Graph lock for gc. bBusyRetry spins (explicit dolt_gc). Checkpoint
+/* Graph lock for gc. bBusyRetry waits for explicit commands. Checkpoint
 ** compaction must not: testvfs xWrite can re-enter while this thread
 ** already holds the graph lock (self-deadlock). */
 static int gcLockAndRefresh(sqlite3 *db, ChunkStore *cs, int bBusyRetry){
@@ -1184,7 +1184,8 @@ static void doltliteGcFunc(
 static int doltliteGcCompactStoreWithPhase(
   sqlite3 *db,
   ChunkStore *cs,
-  const char **pzPhase
+  const char **pzPhase,
+  int bBusyRetry
 ){
   int nKept = 0, nRemoved = 0;
 
@@ -1198,12 +1199,12 @@ static int doltliteGcCompactStoreWithPhase(
     return SQLITE_OK;
   }
 
-  return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0, 0, 0, 0);
+  return gcRun(db, cs, &nKept, &nRemoved, pzPhase, 0, 0, 0, 0, bBusyRetry);
 }
 
 int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs){
   const char *zPhase = 0;
-  return doltliteGcCompactStoreWithPhase(db, cs, &zPhase);
+  return doltliteGcCompactStoreWithPhase(db, cs, &zPhase, 0);
 }
 
 /* VACUUM INTO for a doltlite-format database: write a compacted copy of
@@ -1316,7 +1317,7 @@ int doltliteGcVacuumInto(
 int doltliteGcCompactDbWithPhase(sqlite3 *db, int iDb, const char **pzPhase){
   if( !db || iDb<0 || iDb>=db->nDb ) return SQLITE_OK;
   return doltliteGcCompactStoreWithPhase(
-      db, doltliteBtreeChunkStore(db->aDb[iDb].pBt), pzPhase);
+      db, doltliteBtreeChunkStore(db->aDb[iDb].pBt), pzPhase, 1);
 }
 
 int doltliteGcRegister(sqlite3 *db){

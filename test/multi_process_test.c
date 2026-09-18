@@ -886,9 +886,104 @@ static void test_many_process_commit_contention(void){
   remove(path);
 }
 
+typedef struct MpRefBusyCtx MpRefBusyCtx;
+struct MpRefBusyCtx {
+  int releaseFd;
+  int readyFd;
+  int calls;
+};
+
+static int mpReleaseBusyPeer(void *arg, int attempt){
+  MpRefBusyCtx *p = (MpRefBusyCtx*)arg;
+  char ch;
+  (void)attempt;
+  if( p->calls++ ) return 0;
+  mpWrite(p->releaseFd, "G");
+  mpRead(p->readyFd, &ch);
+  return ch=='D';
+}
+
+static void test_ref_commands_busy_handler(void){
+  static const char *azSql[] = {
+    "SELECT dolt_branch('new')",
+    "SELECT dolt_tag('new')",
+    "SELECT dolt_checkout('feature')",
+    "SELECT dolt_checkout('-b','new')",
+    "SELECT dolt_reset('--hard')",
+    "SELECT dolt_clean()",
+    "VACUUM"
+  };
+  char path[256];
+  int i, useTimeout;
+  snprintf(path, sizeof(path), "/tmp/mp_ref_busy_%d.db", (int)getpid());
+  for(useTimeout=0; useTimeout<2; useTimeout++){
+    for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
+      sqlite3 *db = 0;
+      int ready[2], release[2];
+      int rc, status;
+      pid_t pid;
+      char ch;
+      MpRefBusyCtx ctx;
+      remove(path);
+      check("mp_ref_busy_open", sqlite3_open(path, &db)==SQLITE_OK);
+      check("mp_ref_busy_seed", execSql(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1);"
+        "SELECT dolt_commit('-Am','base');"
+        "SELECT dolt_branch('feature');")==SQLITE_OK);
+      sqlite3_close(db);
+      mpPipe(ready);
+      mpPipe(release);
+      pid = fork();
+      if( pid==0 ){
+        close(ready[0]);
+        close(release[1]);
+        if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(1);
+        if( execSql(db, "BEGIN IMMEDIATE; INSERT INTO t VALUES(2)")!=SQLITE_OK ) _exit(2);
+        mpWrite(ready[1], "R");
+        mpRead(release[0], &ch);
+        if( useTimeout ) sqlite3_sleep(100);
+        if( execSql(db, "ROLLBACK")!=SQLITE_OK ) _exit(3);
+        mpWrite(ready[1], "D");
+        sqlite3_close(db);
+        _exit(0);
+      }
+      if( pid<0 ){ perror("fork"); _exit(1); }
+      close(ready[1]);
+      close(release[0]);
+      mpRead(ready[0], &ch);
+      check("mp_ref_busy_peer_ready", ch=='R');
+      check("mp_ref_busy_parent_open", sqlite3_open(path, &db)==SQLITE_OK);
+      memset(&ctx, 0, sizeof(ctx));
+      ctx.releaseFd = release[1];
+      ctx.readyFd = ready[0];
+      if( useTimeout ){
+        sqlite3_busy_timeout(db, 5000);
+        mpWrite(release[1], "G");
+      }else{
+        sqlite3_busy_handler(db, mpReleaseBusyPeer, &ctx);
+      }
+      rc = execSql(db, azSql[i]);
+      if( rc!=SQLITE_OK ) fprintf(stderr, "%s: %s\n", azSql[i], sqlite3_errmsg(db));
+      check(useTimeout ? "mp_ref_busy_timeout_waits" : "mp_ref_busy_handler_waits", rc==SQLITE_OK);
+      if( !useTimeout ){
+        check("mp_ref_busy_callback_invoked", ctx.calls>0);
+        if( ctx.calls==0 ) mpWrite(release[1], "G");
+      }
+      waitpid(pid, &status, 0);
+      check("mp_ref_busy_peer_released", WIFEXITED(status) && WEXITSTATUS(status)==0);
+      close(ready[0]);
+      close(release[1]);
+      check("mp_ref_busy_rows_preserved", strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
+      sqlite3_close(db);
+    }
+  }
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
+  test_ref_commands_busy_handler();
   test_two_writers();
   test_reader_during_write();
   test_reader_after_peer_restore();
