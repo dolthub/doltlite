@@ -27,9 +27,19 @@ do_execsql_test push-delete-2 {
   SELECT dolt_fetch('origin');
   SELECT name FROM dolt_remote_branches ORDER BY name;
 } {0 remotes/origin/main remotes/origin/other}
-do_test push-delete-missing {
-  catch {execsql {SELECT dolt_push('origin',':feature')}}
-} {1}
+do_test push-delete-empty {
+  set rc [catch {execsql {SELECT dolt_push('origin',':')}} msg]
+  list $rc [db errorcode] $msg
+} {1 21 {push failed: branch name required after ':'}}
+foreach target {feature missing} {
+  do_test push-delete-missing-$target {
+    set rc [catch {execsql "SELECT dolt_push('origin',':$target')"} msg]
+    list $rc $msg
+  } {1 {push failed: remote-tracking branch not found}}
+}
+do_execsql_test push-delete-invalid-keeps-tracking {
+  SELECT name FROM dolt_remote_branches ORDER BY name;
+} {remotes/origin/main remotes/origin/other}
 do_test push-delete-default-refused {
   set rc [catch {execsql {SELECT dolt_push('origin',':main')}} msg]
   list $rc $msg

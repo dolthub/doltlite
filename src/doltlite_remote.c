@@ -1405,7 +1405,7 @@ int doltlitePush(
   int attempt;
   int rc;
 
-  if( !zBranch[0] ) return SQLITE_ERROR;
+  if( !zBranch[0] ) return SQLITE_MISUSE;
   if( !bDelete ){
     rc = chunkStoreFindBranch(pLocal, zBranch, &localCommit);
     if( rc!=SQLITE_OK ) return SQLITE_ERROR;

@@ -278,6 +278,8 @@ static void test_push_ref_race(int stage, int sameBranch, int noOp,
 
 int main(void){
   sqlite3_initialize();
+  check("empty_delete_target_is_misuse",
+        doltlitePush(0, 0, ":", 0)==SQLITE_MISUSE);
   test_lock_busy_not_refs_changed();
   test_diverged_is_not_lock();
   test_push_ref_race(1, 0, 0, 0, 1, 0);

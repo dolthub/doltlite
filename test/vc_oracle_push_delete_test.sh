@@ -57,4 +57,14 @@ run_dl "SELECT dolt_push('origin','feature'); SELECT dolt_fetch('origin');" >/de
 run_dt "CALL dolt_push('origin','feature'); CALL dolt_fetch('origin');" >/dev/null
 compare_state recreate_deleted_branch
 
+"$DOLTLITE" -bail "$TMPROOT/peer.db" "
+SELECT dolt_clone('file://$TMPROOT/remote.db');
+SELECT dolt_push('origin',':feature');" >/dev/null
+(cd "$TMPROOT" && "$DOLT" clone "file://$TMPROOT/dt_remote" peer >/dev/null)
+(cd "$TMPROOT/peer" && "$DOLT" sql -q "CALL dolt_push('origin',':feature');" >/dev/null)
+compare_state peer_delete_leaves_stale_tracking
+run_dl "SELECT dolt_push('origin',':feature');" >/dev/null
+run_dt "CALL dolt_push('origin',':feature');" >/dev/null
+compare_state delete_cleans_stale_tracking
+
 vc_oracle_finish

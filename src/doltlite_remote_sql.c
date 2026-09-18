@@ -397,6 +397,8 @@ static void doltPushParsedFunc(
     char *zOwned;
     if( bBranch && mutation.bDelete && rc==SQLITE_CONSTRAINT ){
       zMsg = "cannot delete the remote default branch";
+    }else if( bBranch && mutation.bDelete && rc==SQLITE_MISUSE ){
+      zMsg = "push failed: branch name required after ':'";
     }
     if( !zMsg && rc==SQLITE_ERROR ){
       zMsg = "push failed (not a fast-forward?)";
@@ -414,7 +416,8 @@ static void doltPushParsedFunc(
   if( bBranch ){
     rc = doltliteMutateRefs(db, mutatePushTracking, &mutation);
     if( rc!=SQLITE_OK ){
-      remoteSqlResultError(ctx, rc, 0);
+      remoteSqlResultError(ctx, rc, rc==SQLITE_NOTFOUND
+          ? "push failed: remote-tracking branch not found" : 0);
       return;
     }
   }
