@@ -234,6 +234,29 @@ UPDATE u SET v=99 WHERE id=1;
 SELECT dolt_commit('-Am', 'rename and edit');
 "
 
+oracle_summary "summary_drop_beside_rename" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+INSERT INTO d VALUES (1, 10);
+INSERT INTO r VALUES (2, 20);
+SELECT dolt_commit('-Am', 'base');
+DROP TABLE d;
+ALTER TABLE r RENAME TO r2;
+SELECT dolt_commit('-Am', 'drop and rename');
+"
+
+oracle_summary "summary_drop_beside_unrelated_create" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE k(a INT PRIMARY KEY, bk TEXT);
+INSERT INTO d VALUES (1, 10);
+INSERT INTO k VALUES (2, 20);
+SELECT dolt_commit('-Am', 'base');
+DROP TABLE d;
+CREATE TABLE n(a INT PRIMARY KEY, bn TEXT);
+INSERT INTO n VALUES (9, 90);
+SELECT dolt_commit('-Am', 'drop and create');
+"
+
 oracle_summary "summary_table_rename_and_reuse_old_name" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

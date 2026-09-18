@@ -907,4 +907,44 @@ oracle_summary_args "range_three_dot" "$DIVERGE" "'main...f'"
 oracle_summary_args "range_two_arg" "$DIVERGE" "'main','f'"
 oracle_summary_args "range_three_dot_table" "$DIVERGE" "'main...f','t'"
 
+# iTable is sorted-name numbering, so dropping a table renumbers the ones
+# after it. A drop must not be paired with an unrelated table as a rename.
+oracle_both "drop_beside_rename" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+INSERT INTO d VALUES(1,'d1');
+INSERT INTO r VALUES(1,'r1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE d;
+ALTER TABLE r RENAME TO r2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_beside_unrelated_create" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE k(a INT PRIMARY KEY, bk TEXT);
+INSERT INTO d VALUES(1,'d1');
+INSERT INTO k VALUES(1,'k1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE d;
+CREATE TABLE n(a INT PRIMARY KEY, bn TEXT);
+INSERT INTO n VALUES(9,'n9');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_beside_rename_working" "
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+INSERT INTO d VALUES(1,'d1');
+INSERT INTO r VALUES(1,'r1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE d;
+ALTER TABLE r RENAME TO r2;
+" "HEAD" "WORKING"
+
 vc_oracle_finish

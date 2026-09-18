@@ -244,34 +244,31 @@ static void diffNameIndexFree(DiffNameIndex *pIdx){
   doltliteNameIndexFree(pIdx);
 }
 
-static struct TableEntry *diffFindTableByNameNoCase(
-  struct TableEntry *aCat,
-  int nCat,
-  const char *zName
-){
-  int i;
-  if( !zName ) return 0;
-  for(i=0; i<nCat; i++){
-    if( aCat[i].zName && sqlite3_stricmp(aCat[i].zName,zName)==0 ){
-      return &aCat[i];
-    }
-  }
-  return 0;
-}
-
+/* iTable is sorted-name numbering, so a dropped table and an unrelated new
+** one collide on it whenever the drop shifts the order. Pair renames the way
+** dolt_status does: by content, and only when the pairing is unique. */
 static struct TableEntry *diffRenamePartner(
-  struct TableEntry *aOther,
-  int nOther,
+  sqlite3 *db,
+  struct TableEntry *aParent, int nParent,
+  struct TableEntry *aChild, int nChild,
   const struct TableEntry *pRef,
-  struct TableEntry *aRef,
-  int nRef
+  int bRefIsParent,
+  int *pRc
 ){
-  struct TableEntry *p;
+  struct TableEntry *pMate = 0;
+  struct TableEntry *pBack = 0;
+  *pRc = SQLITE_OK;
   if( !pRef ) return 0;
-  p = doltliteFindTableByNumber(aOther, nOther, pRef->iTable);
-  if( !p || !p->zName ) return 0;
-  if( diffFindTableByNameNoCase(aRef,nRef,p->zName) ) return 0;
-  return p;
+  *pRc = doltliteCatalogRenameMate(db, aParent, nParent, aChild, nChild,
+                                   pRef, bRefIsParent, &pMate);
+  if( *pRc!=SQLITE_OK || !pMate ) return 0;
+  /* Two dropped tables can both match one new table by content. Require the
+  ** pairing to be mutual so only the table the new one actually came from
+  ** claims it; dolt_status gets the same effect from its handled bookkeeping. */
+  *pRc = doltliteCatalogRenameMate(db, aParent, nParent, aChild, nChild,
+                                   pMate, !bRefIsParent, &pBack);
+  if( *pRc!=SQLITE_OK ) return 0;
+  return pBack==pRef ? pMate : 0;
 }
 
 
@@ -421,7 +418,12 @@ static int diffFilteredTableRoots(
     e = doltliteFindTableByName(aChild,nChild,pCur->zFilterTable);
     p = doltliteFindTableByName(aParent,nParent,pCur->zFilterTable);
     if( e && !p ){
-      pRen = diffRenamePartner(aParent,nParent,e,aChild,nChild);
+      pRen = diffRenamePartner(db,aParent,nParent,aChild,nChild,e,0,&rc);
+      if( rc!=SQLITE_OK ){
+        doltliteFreeCatalog(aChild, nChild);
+        doltliteFreeCatalog(aParent, nParent);
+        return rc;
+      }
       if( pRen ){
         dataChange = prollyHashCompare(&e->root,&pRen->root)!=0;
         rc = batchAppend(pCur,zHex,e->zName,pCommit,dataChange,1);
@@ -438,11 +440,14 @@ static int diffFilteredTableRoots(
           return rc;
         }
       }
-    }else if( p && !e
-           && diffRenamePartner(aChild,nChild,p,aParent,nParent) ){
-      doltliteFreeCatalog(aChild, nChild);
-      doltliteFreeCatalog(aParent, nParent);
-      return SQLITE_OK;
+    }else if( p && !e ){
+      struct TableEntry *pMate =
+          diffRenamePartner(db,aParent,nParent,aChild,nChild,p,1,&rc);
+      if( rc!=SQLITE_OK || pMate ){
+        doltliteFreeCatalog(aChild, nChild);
+        doltliteFreeCatalog(aParent, nParent);
+        return rc;
+      }
     }
     doltliteFreeCatalog(aChild, nChild);
     doltliteFreeCatalog(aParent, nParent);
@@ -595,7 +600,8 @@ static int diffCatalogPair(
     }
     p = addNameIndexFind(&parentIdx, e->zName);
     if( !p ){
-      p = diffRenamePartner(aParent,nParent,e,aChild,nChild);
+      p = diffRenamePartner(db,aParent,nParent,aChild,nChild,e,0,&rc);
+      if( rc!=SQLITE_OK ) goto diff_done;
       if( p ){
         dataChange = prollyHashCompare(&e->root,&p->root)!=0;
         schemaChange = 1;
@@ -628,7 +634,8 @@ static int diffCatalogPair(
     u8 dataChange;
     if( !p->zName ) continue;
     if( addNameIndexFind(&childIdx, p->zName) ) continue;
-    if( diffRenamePartner(aChild,nChild,p,aParent,nParent) ) continue;
+    if( diffRenamePartner(db,aParent,nParent,aChild,nChild,p,1,&rc) ) continue;
+    if( rc!=SQLITE_OK ) goto diff_done;
     rc = diffRootHasRows(db, &p->root, &dataChange);
     if( rc!=SQLITE_OK ) goto diff_done;
     rc = batchAppend(pCur, zHex, p->zName, pCommit, dataChange, 1);
