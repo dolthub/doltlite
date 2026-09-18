@@ -276,6 +276,9 @@ static int mergeSideRenamedColumnTo(const char *zAncSql, const char *zSideSql,
     if( sqlite3_stricmp(aAnc[i].zName, zColumn)!=0 ) continue;
     if( sqlite3_stricmp(aSide[i].zName, aAnc[i].zName)==0 ) break;
     if( parsedColumnIndexByName(aSide, nSide, aAnc[i].zName)>=0 ) break;
+    /* A drop shifts later ancestor columns into this slot. That is not
+    ** a rename of aAnc[i]. */
+    if( parsedColumnIndexByName(aAnc, nAnc, aSide[i].zName)>=0 ) break;
     if( !parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ) break;
     bRenamed = 1;
     if( pzNew ) *pzNew = sqlite3_mprintf("%s", aSide[i].zName);

@@ -1382,6 +1382,59 @@ run_test "merge_dual_rename_quoting_matches_plain_rename" \
   "CREATE TABLE t(k INTEGER PRIMARY KEY, a2 TEXT, b2 TEXT, n INTEGER)" "$DB"
 rm -f "$DB"
 
+# RENAME of an indexed column vs DROP of a different column: Dolt merges.
+DB=/tmp/test_merge_rename_ix_vs_drop_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+CREATE INDEX ix ON t(b);
+INSERT INTO t VALUES(1,1,1,1),(2,2,2,2);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('b');
+SELECT dolt_checkout('b');
+ALTER TABLE t RENAME COLUMN b TO b_r;
+SELECT dolt_commit('-am','rename b');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-am','drop a');
+EOF
+run_test_match "merge_rename_indexed_vs_drop_hash" "SELECT dolt_merge('b');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_rename_indexed_vs_drop_columns" \
+  "SELECT group_concat(name) FROM pragma_table_info('t');" "id,b_r,c" "$DB"
+run_test "merge_rename_indexed_vs_drop_rows" \
+  "SELECT group_concat(id||','||b_r||','||c) FROM (SELECT id,b_r,c FROM t ORDER BY id);" \
+  "1,1,1,2,2,2" "$DB"
+run_test "merge_rename_indexed_vs_drop_index" \
+  "SELECT sql FROM sqlite_master WHERE name='ix';" \
+  "CREATE INDEX ix ON t(b_r)" "$DB"
+run_test "merge_rename_indexed_vs_drop_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+# Dual rename plus an index on one renamed column: Dolt retargets the index.
+DB=/tmp/test_merge_dual_rename_ix_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+CREATE INDEX ix ON t(b);
+INSERT INTO t VALUES(1,1,1,1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN b TO b_r;
+SELECT dolt_commit('-am','rename b');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN a TO a_r;
+SELECT dolt_commit('-am','rename a');
+EOF
+run_test_match "merge_dual_rename_index_hash" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_dual_rename_index_sql" \
+  "SELECT sql FROM sqlite_master WHERE name='ix';" \
+  "CREATE INDEX ix ON t(b_r)" "$DB"
+run_test "merge_dual_rename_index_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
 # Merged rename must still merge against a hand-made same rename.
 DB=/tmp/test_merge_rename_then_merge_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
