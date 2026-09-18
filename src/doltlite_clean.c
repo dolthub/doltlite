@@ -43,7 +43,8 @@ static int cleanNamesAppend(CleanNames *pNames, const char *zName){
 
 static int cleanIsSystemName(const char *zName){
   return sqlite3_strnicmp(zName, "sqlite_", 7)==0
-      || sqlite3_strnicmp(zName, "dolt_", 5)==0;
+      || (sqlite3_strnicmp(zName, "dolt_", 5)==0
+          && sqlite3_stricmp(zName, "dolt_schemas")!=0);
 }
 
 static int cleanLoadStagedNames(
@@ -67,7 +68,10 @@ static int cleanLoadStagedNames(
   rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedHash,
                              &aSchema, &nSchema);
   for(i=0; rc==SQLITE_OK && i<nSchema; i++){
-    if( aSchema[i].zType && strcmp(aSchema[i].zType, "table")==0
+    if( aSchema[i].zType && (strcmp(aSchema[i].zType, "view")==0
+                         || strcmp(aSchema[i].zType, "trigger")==0) ){
+      rc = cleanNamesAppend(pStaged, "dolt_schemas");
+    }else if( aSchema[i].zType && strcmp(aSchema[i].zType, "table")==0
      && aSchema[i].zName && !cleanIsSystemName(aSchema[i].zName) ){
       rc = cleanNamesAppend(pStaged, aSchema[i].zName);
     }
@@ -88,7 +92,10 @@ static int cleanResolveLiveName(
   rc = sqlite3_prepare_v2(db,
       "SELECT name FROM pragma_table_list "
       "WHERE schema='main' AND name=? COLLATE NOCASE "
-      "AND type IN ('table','virtual')",
+      "AND type IN ('table','virtual') "
+      "UNION SELECT 'dolt_schemas' WHERE ?1='dolt_schemas' COLLATE NOCASE "
+      "AND EXISTS (SELECT 1 FROM main.sqlite_master "
+                  "WHERE type IN ('view','trigger'))",
       -1, &pStmt, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_bind_text(pStmt, 1, zName, -1, SQLITE_STATIC);
   if( rc==SQLITE_OK ){
@@ -114,6 +121,8 @@ static int cleanLoadAllLiveNames(sqlite3 *db, CleanNames *pNames){
       "SELECT name FROM pragma_table_list "
       "WHERE schema='main' AND type IN ('table','virtual') "
       "AND substr(name,1,7)!='sqlite_' AND substr(name,1,5)!='dolt_' "
+      "UNION SELECT 'dolt_schemas' WHERE EXISTS "
+      "(SELECT 1 FROM main.sqlite_master WHERE type IN ('view','trigger')) "
       "ORDER BY name",
       -1, &pStmt, 0);
   while( rc==SQLITE_OK && (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
@@ -130,6 +139,32 @@ static int cleanLoadAllLiveNames(sqlite3 *db, CleanNames *pNames){
   return rc;
 }
 
+static int cleanDropSchemas(sqlite3 *db){
+  CleanNames statements = {0};
+  sqlite3_stmt *pStmt = 0;
+  int i;
+  int rc = sqlite3_prepare_v2(db,
+      "SELECT type, name FROM main.sqlite_master "
+      "WHERE type IN ('view','trigger') ORDER BY type, name", -1, &pStmt, 0);
+  while( rc==SQLITE_OK && (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    const char *zType = (const char*)sqlite3_column_text(pStmt, 0);
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
+    char *zSql = sqlite3_mprintf("DROP %s main.\"%w\"", zType, zName);
+    rc = zSql ? cleanNamesAppend(&statements, zSql) : SQLITE_NOMEM;
+    sqlite3_free(zSql);
+  }
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  {
+    int rc2 = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  for(i=0; rc==SQLITE_OK && i<statements.n; i++){
+    rc = sqlite3_exec(db, statements.az[i], 0, 0, 0);
+  }
+  cleanNamesClear(&statements);
+  return rc;
+}
+
 static int cleanDropTables(sqlite3 *db, const CleanNames *pNames){
   int i;
   int rc = SQLITE_OK;
@@ -140,7 +175,12 @@ static int cleanDropTables(sqlite3 *db, const CleanNames *pNames){
     rc = sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_FKEY, 0, &ignored);
   }
   for(i=pNames->n-1; rc==SQLITE_OK && i>=0; i--){
-    char *zSql = sqlite3_mprintf("DROP TABLE main.\"%w\"", pNames->az[i]);
+    char *zSql;
+    if( sqlite3_stricmp(pNames->az[i], "dolt_schemas")==0 ){
+      rc = cleanDropSchemas(db);
+      continue;
+    }
+    zSql = sqlite3_mprintf("DROP TABLE main.\"%w\"", pNames->az[i]);
     if( !zSql ){
       rc = SQLITE_NOMEM;
       break;

@@ -1,0 +1,122 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach mode {all named} {
+  foreach tracked {none staged committed} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+      INSERT INTO t VALUES(1,'base');
+      SELECT dolt_commit('-Am','base');
+      CREATE VIEW "v""one" AS SELECT * FROM t;
+      CREATE TRIGGER "tr""one" AFTER INSERT ON t
+        BEGIN UPDATE t SET v='triggered' WHERE id=NEW.id; END;
+    }
+    if {$tracked eq "staged"} {
+      execsql {SELECT dolt_add('dolt_schemas')}
+    } elseif {$tracked eq "committed"} {
+      execsql {SELECT dolt_commit('-Am','schemas')}
+    }
+    execsql {
+      CREATE VIEW v2 AS SELECT * FROM t;
+      CREATE TABLE n(id INTEGER PRIMARY KEY);
+      CREATE TEMP VIEW "v""one" AS SELECT 99;
+      CREATE TEMP TRIGGER "tr""one" AFTER INSERT ON main.t BEGIN SELECT 1; END;
+    }
+    set name clean-schemas-$mode-$tracked
+    set args {}
+    set dryargs {'--dry-run'}
+    if {$mode eq "named"} {
+      set args {'DOLT_SCHEMAS'}
+      set dryargs {'dolt_schemas','--dry-run'}
+    }
+    do_execsql_test $name-dry "SELECT dolt_clean($dryargs)" {0}
+    do_execsql_test $name-dry-keeps {
+      SELECT count(*) FROM main.sqlite_master WHERE type IN ('view','trigger');
+      SELECT count(*) FROM n;
+    } {3 0}
+    do_catchsql_test $name-invalid {
+      SELECT dolt_clean('dolt_schemas','missing');
+    } {1 {failed to clean; table not found: 'missing'}}
+    do_execsql_test $name-invalid-keeps {
+      SELECT count(*) FROM main.sqlite_master WHERE type IN ('view','trigger');
+    } {3}
+    do_execsql_test $name-clean "SELECT dolt_clean($args)" {0}
+    set kept [expr {$tracked eq "none" ? 0 : 3}]
+    set nKept [expr {$mode eq "named" ? 1 : 0}]
+    do_execsql_test $name-main {
+      SELECT count(*) FROM main.sqlite_master WHERE type IN ('view','trigger');
+      SELECT count(*) FROM main.sqlite_master WHERE name='n';
+      SELECT v FROM t;
+    } [list $kept $nKept base]
+    do_execsql_test $name-temp {
+      SELECT count(*) FROM temp.sqlite_master WHERE type IN ('view','trigger');
+      SELECT * FROM temp."v""one";
+    } {2 99}
+    db close
+    sqlite3 db test.db
+    do_execsql_test $name-reopen {
+      SELECT count(*) FROM main.sqlite_master WHERE type IN ('view','trigger');
+      SELECT count(*) FROM main.sqlite_master WHERE name='n';
+      PRAGMA integrity_check;
+    } [list $kept $nKept ok]
+    if {$tracked eq "none"} {
+      do_execsql_test $name-status {
+        SELECT count(*) FROM dolt_status WHERE table_name='dolt_schemas';
+        INSERT INTO t VALUES(2,'untouched');
+        SELECT v FROM t WHERE id=2;
+      } {0 untouched}
+    }
+  }
+}
+
+reset_db
+execsql {
+  CREATE VIEW v AS SELECT 1;
+  BEGIN;
+}
+do_execsql_test clean-schemas-rollback {
+  SELECT dolt_clean('dolt_schemas');
+  SELECT count(*) FROM main.sqlite_master WHERE type='view';
+  ROLLBACK;
+  SELECT * FROM v;
+} {0 0 1}
+do_execsql_test clean-schemas-fresh {
+  SELECT dolt_clean();
+  SELECT count(*) FROM main.sqlite_master WHERE type='view';
+  SELECT count(*) FROM dolt_status;
+} {0 0 0}
+do_catchsql_test clean-schemas-absent {
+  SELECT dolt_clean('dolt_schemas');
+} {1 {failed to clean; table not found: 'dolt_schemas'}}
+
+foreach kind {view trigger} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','base');
+  }
+  if {$kind eq "view"} {
+    execsql {CREATE VIEW v AS SELECT * FROM t}
+  } else {
+    execsql {CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END}
+  }
+  do_execsql_test clean-schemas-only-$kind {
+    SELECT dolt_clean();
+    SELECT count(*) FROM main.sqlite_master WHERE type IN ('view','trigger');
+    SELECT count(*) FROM dolt_status;
+  } {0 0 0}
+}
+
+reset_db
+do_execsql_test clean-schemas-view-trigger {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  CREATE VIEW v AS SELECT * FROM t;
+  CREATE TRIGGER tr INSTEAD OF INSERT ON v
+    BEGIN INSERT INTO t VALUES(NEW.id); END;
+  SELECT dolt_clean('dolt_schemas');
+  SELECT count(*) FROM main.sqlite_master WHERE type IN ('view','trigger');
+  SELECT count(*) FROM t;
+} {0 0 0}
+
+finish_test
