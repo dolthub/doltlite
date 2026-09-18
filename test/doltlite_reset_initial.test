@@ -1,0 +1,105 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach ref {ancestor hash branch} {
+  foreach extra {none untracked staged} {
+    foreach txn {autocommit explicit} {
+      reset_db
+      execsql {
+        CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+        CREATE INDEX ix ON t(v);
+        CREATE VIEW tracked_view AS SELECT * FROM t;
+        INSERT INTO t VALUES(1,10);
+        SELECT dolt_commit('-Am','c1');
+        INSERT INTO t VALUES(2,20);
+        SELECT dolt_commit('-am','c2');
+        SELECT dolt_branch('old_tip');
+      }
+      set initial [execsql {SELECT dolt_hashof('HEAD~2')}]
+      set target HEAD~2
+      if {$ref eq "hash"} {set target $initial}
+      if {$ref eq "branch"} {
+        execsql "SELECT dolt_branch('initial','$initial')"
+        set target initial
+      }
+      if {$extra ne "none"} {
+        execsql {
+          CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
+          INSERT INTO u VALUES(1,'keep');
+        }
+        if {$extra eq "staged"} {execsql {SELECT dolt_add('u')}}
+      }
+      execsql {UPDATE t SET v=99 WHERE id=1}
+      if {$txn eq "explicit"} {execsql BEGIN}
+      set name reset-initial-$ref-$extra-$txn
+      set keep [expr {$extra eq "untracked"}]
+      do_test $name-reset {execsql "SELECT dolt_reset('--hard','$target')"} {0}
+      set query {
+        SELECT count(*) FROM dolt_log;
+        SELECT count(*) FROM sqlite_master WHERE name IN ('t','ix','tracked_view');
+        SELECT count(*) FROM sqlite_master WHERE name='u';
+        SELECT count(*) FROM dolt_status WHERE staged=1;
+        SELECT count(*) FROM dolt_status;
+        PRAGMA integrity_check;
+      }
+      set expected [list 1 0 $keep 0 $keep ok]
+      do_execsql_test $name-live $query $expected
+      do_test $name-head {execsql {SELECT dolt_hashof('HEAD')}} $initial
+      if {$txn eq "explicit"} {execsql COMMIT}
+      db close
+      sqlite3 db [file normalize test.db]
+      do_execsql_test $name-reopen $query $expected
+      do_test $name-persisted-head {execsql {SELECT dolt_hashof('HEAD')}} $initial
+      if {$keep} {
+        do_execsql_test $name-untracked-index {
+          SELECT id FROM u WHERE v='keep';
+        } {1}
+      }
+      do_test $name-next-commit {
+        execsql {
+          CREATE TABLE next_table(id INTEGER PRIMARY KEY);
+          INSERT INTO next_table VALUES(3);
+          SELECT dolt_commit('-Am','c3');
+        }
+        list [execsql {SELECT dolt_hashof('HEAD~1')}] \
+             [execsql {SELECT count(*) FROM dolt_log}] \
+             [execsql {SELECT count(*) FROM dolt_status}]
+      } [list $initial 2 0]
+      db close
+      sqlite3 db [file normalize test.db]
+      do_test $name-next-reopen {
+        list [execsql {SELECT dolt_hashof('HEAD~1')}] \
+             [execsql {SELECT id FROM next_table}]
+      } [list $initial 3]
+      do_execsql_test $name-old-tip {
+        SELECT dolt_reset('--hard','old_tip');
+        SELECT count(*) FROM dolt_log;
+        SELECT id,v FROM t ORDER BY id;
+        SELECT count(*) FROM dolt_status;
+      } {0 3 1 10 2 20 0}
+    }
+  }
+}
+
+foreach stage {unstaged staged} {
+  reset_db
+  execsql {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1)}
+  if {$stage eq "staged"} {execsql {SELECT dolt_add('t')}}
+  set keep [expr {$stage eq "unstaged"}]
+  do_execsql_test reset-initial-head-$stage {
+    SELECT dolt_reset('--hard');
+    SELECT count(*) FROM sqlite_master WHERE name='t';
+    SELECT count(*) FROM dolt_status;
+    SELECT count(*) FROM dolt_status WHERE staged=1;
+    PRAGMA integrity_check;
+  } [list 0 $keep $keep 0 ok]
+  db close
+  sqlite3 db [file normalize test.db]
+  do_execsql_test reset-initial-head-$stage-reopen {
+    SELECT count(*) FROM sqlite_master WHERE name='t';
+    SELECT count(*) FROM dolt_status;
+    SELECT count(*) FROM dolt_status WHERE staged=1;
+  } [list $keep $keep 0]
+}
+
+finish_test
