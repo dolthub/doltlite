@@ -1148,4 +1148,44 @@ SELECT dolt_add('--', '--hard');
 SELECT dolt_reset('--', '--hard');
 "
 
+for ref in ancestor hash branch; do
+  case "$ref" in
+    ancestor) target="'HEAD~2'" ;;
+    hash) target="dolt_hashof('initial')" ;;
+    branch) target="'initial'" ;;
+  esac
+  for extra in none untracked staged; do
+    setup="
+$SEED
+INSERT INTO t VALUES(2,20);
+SELECT dolt_commit('-am','c2');
+SELECT dolt_branch('initial','HEAD~2');
+"
+    if [ "$extra" != none ]; then
+      setup="$setup
+CREATE TABLE u(id INTEGER PRIMARY KEY, v VARCHAR(40) UNIQUE);
+INSERT INTO u VALUES(1,'keep');
+"
+      if [ "$extra" = staged ]; then
+        setup="$setup SELECT dolt_add('u');"
+      fi
+    fi
+    setup="$setup SELECT dolt_reset('--hard',$target);"
+    oracle_same_session "reset_initial_${ref}_${extra}" "$setup" \
+      "SELECT concat('Q|head|',dolt_hashof('HEAD')=dolt_hashof('initial'));
+SELECT concat('Q|log|',count(*)) FROM dolt_log;
+SELECT concat('Q|tracked|',count(*)) FROM sqlite_master WHERE type='table' AND name='t';
+SELECT concat('Q|untracked|',count(*)) FROM sqlite_master WHERE type='table' AND name='u';
+SELECT concat('Q|status|',count(*)) FROM dolt_status;
+SELECT concat('Q|staged|',count(*)) FROM dolt_status WHERE staged=1;" \
+      "$setup" \
+      "SELECT concat('Q|head|',dolt_hashof('HEAD')=dolt_hashof('initial'));
+SELECT concat('Q|log|',count(*)) FROM dolt_log;
+SELECT concat('Q|tracked|',count(*)) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='t';
+SELECT concat('Q|untracked|',count(*)) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='u';
+SELECT concat('Q|status|',count(*)) FROM dolt_status;
+SELECT concat('Q|staged|',count(*)) FROM dolt_status WHERE staged=1;"
+  done
+done
+
 vc_oracle_finish

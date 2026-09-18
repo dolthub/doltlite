@@ -555,6 +555,7 @@ static void doltliteResetFunc(
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash targetCatHash;
+  ProllyHash targetWorkingCatHash;
   ProllyHash targetCommit;
   ProllyHash preResetHeadCatHash;
   ProllyHash preResetStagedCatHash;
@@ -590,7 +591,7 @@ static void doltliteResetFunc(
   rc = doltliteGetHeadCatalogHash(db, &preResetHeadCatHash);
   if( rc!=SQLITE_OK && doltliteCmdSourceResultError(context, cs, &rc) ){
     goto reset_cleanup;
-  }else if( rc==SQLITE_OK && !prollyHashIsEmpty(&preResetHeadCatHash) ){
+  }else if( rc==SQLITE_OK ){
     havePreResetHead = 1;
     doltliteGetSessionStaged(db, &preResetStagedCatHash);
     if( prollyHashIsEmpty(&preResetStagedCatHash) ){
@@ -726,7 +727,34 @@ static void doltliteResetFunc(
     }
     memcpy(&targetCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
+  }else{
+    rc = doltliteGetHeadCatalogHash(db, &targetCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to read HEAD", -1);
+      goto reset_cleanup;
+    }
+  }
 
+  targetWorkingCatHash = targetCatHash;
+  if( isHard && prollyHashIsEmpty(&targetWorkingCatHash) ){
+    struct TableEntry master;
+    u8 *pData = 0;
+    int nData = 0;
+    memset(&master, 0, sizeof(master));
+    master.iTable = 1;
+    master.flags = PROLLY_NODE_INTKEY;
+    rc = doltliteSerializeCatalogEntries(db, &master, 1, &pData, &nData);
+    if( rc==SQLITE_OK ){
+      rc = chunkStorePut(cs, pData, nData, &targetWorkingCatHash);
+    }
+    sqlite3_free(pData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
+  }
+
+  if( zRef ){
     doltliteGetSessionHead(db, &sessionHeadBeforeLock);
     rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
     if( rc==SQLITE_BUSY ){
@@ -756,12 +784,6 @@ static void doltliteResetFunc(
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
     }
-  }else{
-    rc = doltliteGetHeadCatalogHash(db, &targetCatHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "failed to read HEAD", -1);
-      goto reset_cleanup;
-    }
   }
 
   if( !isSoft ){
@@ -777,14 +799,9 @@ static void doltliteResetFunc(
     ProllyHash origStagedAfterReset;
     memcpy(&origStagedAfterReset, &targetCatHash, sizeof(ProllyHash));
 
-    if( prollyHashIsEmpty(&targetCatHash) ){
-      sqlite3_result_error(context, "no commit to reset to", -1);
-      goto reset_cleanup;
-    }
-
     if( havePreResetHead ){
       rc = doltlitePreserveUntrackedOnHardReset(
-        db, cs, &preResetStagedCatHash, &targetCatHash
+        db, cs, &preResetStagedCatHash, &targetWorkingCatHash
       );
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
@@ -797,7 +814,7 @@ static void doltliteResetFunc(
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
     }
-    rc = doltliteHardReset(db, &targetCatHash);
+    rc = doltliteHardReset(db, &targetWorkingCatHash);
     if( rc!=SQLITE_OK ){
       /* A specific code carries its own message; only a generic failure
       ** needs one supplied. */
