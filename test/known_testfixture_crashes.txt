@@ -12,7 +12,6 @@
 # "unstable"; they mean the file does not complete, not that a known assertion
 # flaps -- verified for malloc3, which produces no summary line at all.
 
-alter2 class=intentional  # raw file-format setup prevents the db command from opening
 backup_ioerr class=harness  # cap-truncated page-copy fault sequence; unbucketed
 corrupt4 class=harness  # raw-offset outcome varies by build; unbucketed
 crash2 class=harness issue=2072  # crash2-2.* crash test.db-journal, which doltlite never writes, so the child commits instead of crashing; crash2-3.*.2 may recover the committed state because the commit point is a main-file sync; layout-dependent; unbucketed
