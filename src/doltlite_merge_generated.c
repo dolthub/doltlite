@@ -37,7 +37,9 @@ int mergeRowTable(
   }
   /* Row merge maintains our indexes over records in the merged layout, so
   ** their column numbers have to come from this table, not the live one.
-  ** An index a dropped column leaves undefinable is skipped; pass 2 drops it. */
+  ** SQLite refuses to drop an indexed column, so the only index this cannot
+  ** define is one our side added on a column their side dropped; it is left
+  ** unbound here and pass 2 drops it from the merged catalog. */
   for(i=0; rc==SQLITE_OK && i<c->nOursSchema; i++){
     SchemaEntry *pSe = &c->aOursSchema[i];
     if( !pSe->zType || strcmp(pSe->zType, "index")!=0 ) continue;

@@ -277,6 +277,36 @@ SQL
 [ "$(dl "$DB" "SELECT group_concat(id) FROM (SELECT id FROM t INDEXED BY px WHERE flag>0 ORDER BY id);")" = "2,3" ] && pass_name "19_partial_rows" || fail_name "19_partial_rows"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "19_integrity" || fail_name "19_integrity"
 
+# SQLite refuses to drop an indexed column, so the only way an index can
+# outlive its column is our side indexing a column their side drops. The
+# merge must drop that index and keep the others consistent.
+echo ""
+echo "--- 20: Our index on a column their side dropped ---"
+DB="$TMPROOT/20.db"
+dl_pipe "$DB" <<'SQL' >/dev/null
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, n INT);
+CREATE INDEX ix_n ON t(n);
+INSERT INTO t VALUES(1,1,1),(2,2,2),(3,3,3);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('b');
+SELECT dolt_checkout('b');
+ALTER TABLE t DROP COLUMN a;
+UPDATE t SET n=30 WHERE id=3;
+SELECT dolt_commit('-am','drop a, edit row 3');
+SELECT dolt_checkout('main');
+CREATE INDEX ix_a ON t(a);
+UPDATE t SET n=20 WHERE id=2;
+SELECT dolt_commit('-am','index a, edit row 2');
+SELECT dolt_merge('b');
+SQL
+[ "$(dl "$DB" "SELECT group_concat(name) FROM sqlite_master WHERE type='index' ORDER BY name;")" = "ix_n" ] && pass_name "20_dropped_column_index_gone" || fail_name "20_dropped_column_index_gone"
+[ "$(dl "$DB" "SELECT group_concat(name) FROM pragma_table_info('t');")" = "id,n" ] && pass_name "20_columns" || fail_name "20_columns"
+SCAN=$(dl "$DB" "SELECT group_concat(id||'|'||n,';') FROM (SELECT * FROM t NOT INDEXED ORDER BY id);")
+IDX=$(dl "$DB" "SELECT group_concat(id||'|'||n,';') FROM (SELECT * FROM t INDEXED BY ix_n ORDER BY id);")
+[ "$SCAN" = "1|1;2|20;3|30" ] && pass_name "20_scan" || fail_name "20_scan; got $SCAN"
+[ "$IDX" = "$SCAN" ] && pass_name "20_index_matches_scan" || fail_name "20_index_matches_scan; got $IDX"
+[ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "20_integrity" || fail_name "20_integrity"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
