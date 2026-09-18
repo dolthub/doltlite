@@ -1,0 +1,166 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach keymode {integer text without-rowid} {
+  set key {id INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode ne "integer"} {set key {id TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+
+  foreach kind {drop-add rename-add same-drop different-drop} {
+    foreach direction {forward reverse} {
+      reset_db
+      execsql "CREATE TABLE t($key, a INT, b INT, c INT) $suffix"
+      execsql {
+        INSERT INTO t VALUES(1,10,100,1000),(2,20,200,2000),(3,30,300,3000);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('side');
+      }
+      switch $kind {
+        drop-add {
+          set ours {ALTER TABLE t ADD COLUMN d INT DEFAULT 9; DELETE FROM t WHERE id=2;}
+          set theirs {ALTER TABLE t DROP COLUMN a;}
+          set columns {id b c d}
+          set rows {1 100 1000 9 3 300 3000 9}
+        }
+        rename-add {
+          set ours {ALTER TABLE t RENAME COLUMN a TO renamed; DELETE FROM t WHERE id=2;}
+          set theirs {ALTER TABLE t ADD COLUMN d INT DEFAULT 9;}
+          set columns {id renamed b c d}
+          set rows {1 10 100 1000 9 3 30 300 3000 9}
+        }
+        same-drop {
+          set ours {ALTER TABLE t DROP COLUMN a; UPDATE t SET b=111 WHERE id=1;}
+          set theirs {ALTER TABLE t DROP COLUMN a; INSERT INTO t VALUES(4,400,4000);}
+          set columns {id b c}
+          set rows {1 111 1000 2 200 2000 3 300 3000 4 400 4000}
+        }
+        different-drop {
+          set ours {ALTER TABLE t DROP COLUMN a; DELETE FROM t WHERE id=2;}
+          set theirs {ALTER TABLE t DROP COLUMN b;}
+          set columns {id c}
+          set rows {1 1000 3 3000}
+        }
+      }
+      execsql $ours
+      execsql {
+        SELECT dolt_commit('-am','ours');
+        SELECT dolt_checkout('side');
+      }
+      execsql $theirs
+      execsql {SELECT dolt_commit('-am','theirs')}
+      if {$direction eq "forward"} {
+        execsql {SELECT dolt_checkout('main')}
+        set target side
+        set reopen [file normalize test.db]
+      } else {
+        set target main
+        set reopen "[file normalize test.db]/side"
+      }
+      set name schema-relayout-$keymode-$kind-$direction
+      do_test $name-merge {
+        execsql {BEGIN}
+        execsql "SELECT dolt_merge('$target')"
+        execsql {SELECT count(*) FROM dolt_conflicts}
+      } {0}
+      do_execsql_test $name-columns {
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+      } $columns
+      do_execsql_test $name-rows {SELECT * FROM t ORDER BY id} $rows
+      db close
+      sqlite3 db $reopen
+      do_execsql_test $name-reopen-columns {
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+      } $columns
+      do_execsql_test $name-reopen-rows {SELECT * FROM t ORDER BY id} $rows
+    }
+  }
+
+  foreach operation {merge cherry_pick} {
+    foreach resolution {ours theirs} {
+      reset_db
+      execsql "CREATE TABLE t($key, a INT, b INT, c INT) $suffix"
+      execsql {
+        INSERT INTO t VALUES(1,10,100,1000),(2,20,200,2000);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('side');
+        ALTER TABLE t ADD COLUMN d INT DEFAULT 9;
+        UPDATE t SET b=111 WHERE id=1;
+        SELECT dolt_commit('-am','ours');
+        SELECT dolt_checkout('side');
+        ALTER TABLE t DROP COLUMN a;
+        UPDATE t SET b=222 WHERE id=1;
+        SELECT dolt_commit('-am','theirs');
+        SELECT dolt_checkout('main');
+        BEGIN;
+      }
+      do_test schema-relayout-$keymode-$operation-conflict-$resolution {
+        catchsql "SELECT dolt_${operation}('side')"
+        execsql {
+          SELECT count(*) FROM dolt_conflicts;
+          SELECT name FROM pragma_table_info('t') ORDER BY cid;
+        }
+      } {1 id b c d}
+      do_execsql_test schema-relayout-$keymode-$operation-conflict-values-$resolution {
+        SELECT base_b, our_b, their_b FROM dolt_conflicts_t;
+      } {100 111 222}
+      do_test schema-relayout-$keymode-$operation-resolve-$resolution {
+        execsql "SELECT dolt_conflicts_resolve('--$resolution','t')"
+        execsql {SELECT dolt_commit('-am','resolved')}
+        db close
+        sqlite3 db [file normalize test.db]
+        execsql {
+          SELECT name FROM pragma_table_info('t') ORDER BY cid;
+          SELECT id,b,c,d FROM t ORDER BY id;
+        }
+      } [list id b c d 1 [expr {$resolution eq "ours" ? 111 : 222}] 1000 9 2 200 2000 9]
+    }
+  }
+
+  foreach changed {a b} {
+    reset_db
+    execsql "CREATE TABLE t($key, a INT, b INT) $suffix"
+    execsql {
+      INSERT INTO t VALUES(1,10,100),(2,20,200);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('side');
+      ALTER TABLE t ADD COLUMN d INT DEFAULT 9;
+    }
+    execsql "UPDATE t SET $changed=999 WHERE id=1"
+    execsql {
+      SELECT dolt_commit('-am','edit');
+      SELECT dolt_checkout('side');
+      ALTER TABLE t DROP COLUMN a;
+      DELETE FROM t WHERE id=1;
+      SELECT dolt_commit('-am','delete');
+      SELECT dolt_checkout('main');
+      BEGIN;
+    }
+    do_test schema-relayout-$keymode-delete-modify-$changed {
+      catchsql {SELECT dolt_merge('side')}
+      execsql {
+        SELECT count(*) FROM dolt_conflicts;
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+      }
+    } {1 id b d}
+    do_execsql_test schema-relayout-$keymode-rollback-$changed {
+      ROLLBACK;
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT name FROM pragma_table_info('t') ORDER BY cid;
+      SELECT count(*) FROM t;
+    } {0 id a b d 2}
+    do_test schema-relayout-$keymode-autocommit-$changed {
+      catchsql {SELECT dolt_merge('side')}
+      db close
+      sqlite3 db [file normalize test.db]
+      execsql {
+        SELECT count(*) FROM dolt_conflicts;
+        SELECT is_merging FROM dolt_merge_status;
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+        SELECT count(*) FROM t;
+      }
+    } {0 0 id a b d 2}
+  }
+}
+
+finish_test

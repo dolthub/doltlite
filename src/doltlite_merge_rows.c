@@ -142,18 +142,21 @@ static int fieldEquals(const u8 *pRecA, const RecField *fA,
   return memcmp(pRecA + fA->off, pRecB + fB->off, fA->len);
 }
 
-static int recordsEqualPrefix(
+static int recordsEqualFields(
   const u8 *pA,
   int nA,
   const u8 *pB,
   int nB,
+  const int *aiField,
   int nField,
+  const int *aiSkip,
+  int nSkip,
   int *pbEqual
 ){
   static const RecField nullField = { 0, 0, 0 };
   RecField *aA = 0, *aB = 0;
   int nFieldA = 0, nFieldB = 0;
-  int i;
+  int i, j;
 
   *pbEqual = 0;
   if( parseRecordFields(pA, nA, &aA, &nFieldA)<0 ) return SQLITE_CORRUPT;
@@ -163,8 +166,13 @@ static int recordsEqualPrefix(
   }
   *pbEqual = 1;
   for(i=0; i<nField; i++){
-    const RecField *pFieldA = i<nFieldA ? &aA[i] : &nullField;
-    const RecField *pFieldB = i<nFieldB ? &aB[i] : &nullField;
+    int f = aiField[i];
+    const RecField *pFieldA = f<nFieldA ? &aA[f] : &nullField;
+    const RecField *pFieldB = f<nFieldB ? &aB[f] : &nullField;
+    for(j=0; j<nSkip; j++){
+      if( aiSkip[j]==f ) break;
+    }
+    if( j<nSkip ) continue;
     if( fieldEquals(pA, pFieldA, pB, pFieldB)!=0 ){
       *pbEqual = 0;
       break;
@@ -316,6 +324,44 @@ fail:
   sqlite3_free(aTheirs);
   *pnMerged = 0;
   return 0;
+}
+
+static int copyConflictRecord(
+  const MergeRowPolicy *pPolicy,
+  const u8 *pRecord,
+  int nRecord,
+  u8 **ppOut,
+  int *pnOut
+){
+  RecField *aFields = 0;
+  MergeWinner *aWinners;
+  int nFields = 0;
+  int i, j, nKeep = 0;
+
+  if( !pPolicy || pPolicy->nDropFields==0 ){
+    *pnOut = nRecord;
+    return doltliteDupBytes(pRecord, nRecord, ppOut);
+  }
+  if( parseRecordFields(pRecord, nRecord, &aFields, &nFields)<0 ){
+    return SQLITE_CORRUPT;
+  }
+  aWinners = sqlite3_malloc((nFields+1)*sizeof(*aWinners));
+  if( !aWinners ){
+    sqlite3_free(aFields);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; i<nFields; i++){
+    for(j=0; j<pPolicy->nDropFields; j++){
+      if( pPolicy->aiDropFields[j]==i ) break;
+    }
+    if( j<pPolicy->nDropFields ) continue;
+    aWinners[nKeep].pRec = pRecord;
+    aWinners[nKeep++].pField = &aFields[i];
+  }
+  *ppOut = buildMergedRecord(aWinners, nKeep, pnOut);
+  sqlite3_free(aWinners);
+  sqlite3_free(aFields);
+  return *ppOut ? SQLITE_OK : SQLITE_NOMEM;
 }
 
 static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
@@ -488,10 +534,13 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
                                            : pChange->pTheirVal;
         int nSurv = pChange->pOurVal ? pChange->nOurVal : pChange->nTheirVal;
         int bSharedEqual = 0;
-        rc = recordsEqualPrefix(
+        rc = recordsEqualFields(
             pChange->pBaseVal, pChange->nBaseVal,
-            pSurv, nSurv, ctx->pPolicy->nDeleteCompareFields,
-            &bSharedEqual);
+            pSurv, nSurv, ctx->pPolicy->aiDeleteCompareFields,
+            ctx->pPolicy->nDeleteCompareFields,
+            ctx->pPolicy->aiDropFields,
+            (pChange->pOurVal!=0)==ctx->pPolicy->bSchemaIsTheirs
+              ? ctx->pPolicy->nDropFields : 0, &bSharedEqual);
         if( rc!=SQLITE_OK ) return rc;
         if( bSharedEqual ){
           if( pChange->pOurVal && !pChange->pTheirVal ){
@@ -541,26 +590,30 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           cr->nKey = pChange->nKey;
         }
         if( pChange->pBaseVal && pChange->nBaseVal>0 ){
-          rc = doltliteDupBytes(pChange->pBaseVal, pChange->nBaseVal, &cr->pBaseVal);
+          rc = copyConflictRecord(ctx->pPolicy,
+              pChange->pBaseVal, pChange->nBaseVal,
+              &cr->pBaseVal, &cr->nBaseVal);
           if( rc!=SQLITE_OK ){
             sqlite3_free(cr->pKey);
             memset(cr, 0, sizeof(*cr));
             return rc;
           }
-          cr->nBaseVal = pChange->nBaseVal;
         }
         if( pChange->pOurVal && pChange->nOurVal>0 ){
-          rc = doltliteDupBytes(pChange->pOurVal, pChange->nOurVal, &cr->pOurVal);
+          rc = copyConflictRecord(ctx->pPolicy,
+              pChange->pOurVal, pChange->nOurVal,
+              &cr->pOurVal, &cr->nOurVal);
           if( rc!=SQLITE_OK ){
             sqlite3_free(cr->pKey);
             sqlite3_free(cr->pBaseVal);
             memset(cr, 0, sizeof(*cr));
             return rc;
           }
-          cr->nOurVal = pChange->nOurVal;
         }
         if( pChange->pTheirVal && pChange->nTheirVal>0 ){
-          rc = doltliteDupBytes(pChange->pTheirVal, pChange->nTheirVal, &cr->pTheirVal);
+          rc = copyConflictRecord(ctx->pPolicy,
+              pChange->pTheirVal, pChange->nTheirVal,
+              &cr->pTheirVal, &cr->nTheirVal);
           if( rc!=SQLITE_OK ){
             sqlite3_free(cr->pKey);
             sqlite3_free(cr->pBaseVal);
@@ -568,7 +621,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             memset(cr, 0, sizeof(*cr));
             return rc;
           }
-          cr->nTheirVal = pChange->nTheirVal;
         }
         ctx->nConflicts++;
       }

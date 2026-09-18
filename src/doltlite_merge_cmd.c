@@ -943,7 +943,7 @@ static int mergeRefInstallMergedCatalog(
     return rc;
   }
 
-  if( *pnSchemaActions > 0 && nMergeConflicts==0 ){
+  if( *pnSchemaActions > 0 ){
     rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
                                          *paSchemaActions, *pnSchemaActions,
                                          pWorkingCat, pzErr);
