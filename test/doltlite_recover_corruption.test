@@ -380,7 +380,68 @@ do_test doltlite_recover_corruption-5.5 {
 
 unset ::env(DOLTLITE_WAL_CHECKPOINT_THRESHOLD)
 
-forcedelete rch1.db rch2.db rcor.db checkpoint.db checkpoint-crash.db \
+# A header whose WAL offset points past the end of the file makes replay see
+# no WAL tail: the store opens one commit behind and reports itself intact.
+# Every header byte is under the seal, so any flip must be detected.
+do_test doltlite_recover_corruption-6.1 {
+  forcedelete header.db
+  file copy -force rch2.db header.db
+  sqlite3 dbh header.db
+  dbh eval {
+    INSERT INTO t1 VALUES(100,'wal tail');
+    SELECT dolt_commit('-A','-m','c2');
+  }
+  set res [list [dbh eval {SELECT count(*) FROM t1}] \
+                [dbh eval {SELECT count(*) FROM dolt_log}]]
+  dbh close
+  set res
+} {25 3}
+
+do_test doltlite_recover_corruption-6.2 {
+  set res {}
+  for {set off 84} {$off < 92} {incr off} {
+    set r [csDetect $off header.db]
+    if {$r ne "detected"} { lappend res "$off:$r" }
+  }
+  set res
+} {}
+
+do_test doltlite_recover_corruption-6.3 {
+  set res {}
+  for {set off 0} {$off < 168} {incr off} {
+    set r [csDetect $off header.db]
+    if {$r ne "detected"} { lappend res "$off:$r" }
+  }
+  set res
+} {}
+
+do_test doltlite_recover_corruption-6.4 {
+  sqlite3 dbh header.db
+  set res [list [dbh eval {SELECT count(*) FROM t1}] \
+                [dbh eval {SELECT count(*) FROM dolt_log}] \
+                [dbh eval {PRAGMA integrity_check}]]
+  dbh close
+  set res
+} {25 3 ok}
+
+# A legacy header carries no seal; its WAL offset is still bounded by the
+# file size.
+proc wrBytes {file off bytes} {
+  set f [open $file r+]
+  fconfigure $f -translation binary
+  seek $f $off
+  puts -nonewline $f $bytes
+  close $f
+}
+do_test doltlite_recover_corruption-6.5 {
+  forcedelete rcor.db
+  file copy -force header.db rcor.db
+  wrBytes rcor.db 124 [binary format a20 ""]
+  wrBytes rcor.db 84 [binary format w [expr {[file size rcor.db] + 4096}]]
+  openCorrupt rcor.db
+} {database disk image is malformed}
+
+forcedelete rch1.db rch2.db rcor.db header.db checkpoint.db checkpoint-crash.db \
             checkpoint-torn.db checkpoint-bad.db checkpoint-gc.db
 
 finish_test

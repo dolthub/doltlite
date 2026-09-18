@@ -752,10 +752,17 @@ static int csReloadFromDisk(ChunkStore *cs){
   }
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Deferred NOTADB opens succeed; reload must not adopt a short/garbage file. */
+  /* Deferred NOTADB and header-CORRUPT opens succeed; reload must not adopt
+  ** a short, garbage, or damaged file as an empty store. Mid-stream WAL
+  ** damage still reloads: its recovered prefix is what gc needs to name the
+  ** missing chunk. */
   if( tmp.notADatabase ){
     chunkStoreClose(&tmp);
     return SQLITE_NOTADB;
+  }
+  if( tmp.corruptHeader ){
+    chunkStoreClose(&tmp);
+    return SQLITE_CORRUPT;
   }
 
   /* Reload must not replace a writable store with a fallback read-only one. */

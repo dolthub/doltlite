@@ -278,6 +278,13 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
+  /* Every writer seals the header. Files sealed before seals were bound to
+  ** their offset verify offsetless; an all-zero seal is legacy. */
+  if( csManifestHashState(aBuf, 0)==CS_MANIFEST_HASH_BAD
+   && csManifestHashStateOffsetless(aBuf)!=CS_MANIFEST_HASH_OK ){
+    return SQLITE_CORRUPT;
+  }
+
   cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
   cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
   cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
@@ -286,7 +293,7 @@ static int csReadManifest(ChunkStore *cs){
   memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
   /* A WAL offset inside live data makes replay rewind and reclaim rows.
-  ** Header-seal covers unused bytes, so these bounds are the harmful case. */
+  ** Replay bounds it against the file size when it stats the file. */
   if( cs->index.iIndexOffset<0 || cs->index.nIndexSize<0 ) return SQLITE_CORRUPT;
   if( cs->wal.iWalOffset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
   /* Do not sum: iIndexOffset + nIndexSize can wrap i64. */
@@ -489,6 +496,17 @@ int chunkStoreOpen(
     /* Stock defers NOTADB until first use; keep the garbage bytes. */
     if( rc==SQLITE_NOTADB ){
       cs->notADatabase = 1;
+      cs->index.nChunks = 0;
+      cs->index.iIndexOffset = 0;
+      cs->index.nIndexSize = 0;
+      cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
+      csMarkRefsCommitted(cs);
+      return SQLITE_OK;
+    }
+    /* A damaged header is likewise surfaced on first use, never served. */
+    if( rc==SQLITE_CORRUPT ){
+      cs->corruptHeader = 1;
+      cs->corruptMidStream = 1;
       cs->index.nChunks = 0;
       cs->index.iIndexOffset = 0;
       cs->index.nIndexSize = 0;
