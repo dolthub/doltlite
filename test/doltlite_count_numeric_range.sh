@@ -87,4 +87,68 @@ run_test "positive_numeric_pk_between_eq_eq" \
   "1" \
   "$DB"
 
+echo ""
+echo "=== Count index range: DESC column after the range column ==="
+echo ""
+
+db_rm "$DB"
+run_test "index_desc_neighbor_between_keeps_upper_bound" \
+  "CREATE TABLE cd(a, b);
+   INSERT INTO cd VALUES(1,1),(2,2),(3,3),(NULL,4),(5,NULL),(1.5,6),('x',7);
+   CREATE INDEX cd_ab ON cd(a, b DESC);
+   SELECT count(*) FROM cd WHERE a BETWEEN 1 AND 3;
+   SELECT count(*) FROM cd WHERE a BETWEEN 3 AND 3;
+   SELECT count(*) FROM cd WHERE a BETWEEN 2 AND 3;
+   SELECT count(*) FROM cd WHERE a BETWEEN 1 AND 1.5;" \
+  "4
+1
+2
+2" \
+  "$DB"
+
+db_rm "$DB"
+run_test "index_desc_neighbor_between_matches_scan" \
+  "CREATE TABLE cd(a, b);
+   INSERT INTO cd VALUES(1,1),(2,2),(3,3),(NULL,4),(5,NULL),(1.5,6),('x',7);
+   CREATE INDEX cd_ab ON cd(a, b DESC);
+   SELECT count(*) FROM cd WHERE a BETWEEN 1 AND 3;
+   SELECT count(*) FROM (SELECT a FROM cd WHERE a BETWEEN 1 AND 3);
+   SELECT count(*) FROM cd WHERE a >= 1 AND a <= 3;" \
+  "4
+4
+4" \
+  "$DB"
+
+db_rm "$DB"
+run_test "index_asc_neighbor_between_control" \
+  "CREATE TABLE cd(a, b);
+   INSERT INTO cd VALUES(1,1),(2,2),(3,3),(NULL,4),(5,NULL),(1.5,6),('x',7);
+   CREATE INDEX cd_ab ON cd(a, b);
+   SELECT count(*) FROM cd WHERE a BETWEEN 1 AND 3;
+   SELECT count(*) FROM cd WHERE a BETWEEN 3 AND 3;" \
+  "4
+1" \
+  "$DB"
+
+db_rm "$DB"
+run_test "without_rowid_pk_desc_neighbor_between" \
+  "CREATE TABLE w(k1, k2, PRIMARY KEY(k1, k2 DESC)) WITHOUT ROWID;
+   INSERT INTO w VALUES(1,'a'),(1,'b'),(2,'a'),(3,'a'),(4,'a');
+   SELECT count(*) FROM w WHERE k1 BETWEEN 1 AND 3;
+   SELECT count(*) FROM w WHERE k1 BETWEEN 3 AND 3;" \
+  "4
+1" \
+  "$DB"
+
+db_rm "$DB"
+run_test "text_index_desc_neighbor_between" \
+  "CREATE TABLE tx(a TEXT, b);
+   INSERT INTO tx VALUES('a',1),('b',1),('c',1),('c',2),('d',1);
+   CREATE INDEX tx_ab ON tx(a, b DESC);
+   SELECT count(*) FROM tx WHERE a BETWEEN 'a' AND 'c';" \
+  "4" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish

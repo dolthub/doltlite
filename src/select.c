@@ -5594,6 +5594,18 @@ static int exprColumnOfTable(Expr *pExpr, Table *pTab){
   return -2;
 }
 
+/* The range count ends at the sortkey successor of the upper bound's first
+** field. A DESC column after it complements its tag byte above that
+** successor, so entries equal to the upper bound would fall outside. */
+static int indexIsAllAscending(Index *pIdx){
+  int i;
+  if( pIdx->aSortOrder==0 ) return 1;
+  for(i=0; i<pIdx->nColumn; i++){
+    if( pIdx->aSortOrder[i] ) return 0;
+  }
+  return 1;
+}
+
 static Index *findSingleColumnIndex(
   SrcItem *pSrc,
   Table *pTab,
@@ -5608,7 +5620,7 @@ static Index *findSingleColumnIndex(
      && pIdx->bUnordered==0
      && pIdx->nKeyCol>=1
      && pIdx->aiColumn[0]==iColumn
-     && (pIdx->aSortOrder==0 || pIdx->aSortOrder[0]==0)
+     && indexIsAllAscending(pIdx)
      && sqlite3StrICmp(pIdx->azColl[0], zColl)==0
     ){
       return pIdx;
