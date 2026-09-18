@@ -196,6 +196,14 @@ int main(void){
     rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1);
     check("force does not authorize deleting the declared branch",
           rc==SQLITE_CONSTRAINT);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":foo", 0);
+    check("explicit delete authorizes only the named branch", rc==SQLITE_OK);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":main", 1);
+    check("explicit delete cannot omit another branch", rc==SQLITE_CONSTRAINT);
+    rc = doltliteValidateScopedRefsUpdate(&cs, curBlob, nCur, ":foo", 1);
+    check("delete scope cannot install a branch", rc==SQLITE_CONSTRAINT);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":", 1);
+    check("delete scope requires a branch name", rc==SQLITE_MISUSE);
     sqlite3_free(blob);
   }
 

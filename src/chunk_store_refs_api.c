@@ -297,6 +297,16 @@ int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
   return SQLITE_NOTFOUND;
 }
 
+int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
+                              const char *zBranch){
+  int i = findTrackingIdx(cs, zRemote, zBranch);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  sqlite3_free(cs->refs.aTracking[i].zRemote);
+  sqlite3_free(cs->refs.aTracking[i].zBranch);
+  cs->refs.aTracking[i] = cs->refs.aTracking[--cs->refs.nTracking];
+  return SQLITE_OK;
+}
+
 int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
                              const char *zBranch, const ProllyHash *pCommit){
   int i = findTrackingIdx(cs, zRemote, zBranch);

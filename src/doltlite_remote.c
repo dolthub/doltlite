@@ -66,17 +66,6 @@ static int remoteLoadRefsView(const u8 *pData, int nData, ChunkStore *pRefs){
   return chunkStoreLoadRefsFromBlob(pRefs, pData, nData);
 }
 
-static int remoteFindBranchFromRefsBlob(
-  const u8 *pData, int nData, const char *zBranch, ProllyHash *pCommit
-){
-  ChunkStore refsView;
-  int rc = remoteLoadRefsView(pData, nData, &refsView);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = chunkStoreFindBranch(&refsView, zBranch, pCommit);
-  chunkStoreClose(&refsView);
-  return rc;
-}
-
 #define REMOTE_TAG_SCOPE_PREFIX "tag:"
 
 static const char *remoteScopedTagName(const char *zRef){
@@ -224,6 +213,10 @@ int doltliteValidateRefsTargetGraph(
 
   rc = remoteLoadRefsView(pBlob, nBlob, &refsView);
   if( rc!=SQLITE_OK ) return rc;
+  if( zRef && zRef[0]==':' ){
+    chunkStoreClose(&refsView);
+    return SQLITE_OK;
+  }
   if( zTag ){
     refsTableGetTags(&refsView.refs, &nTag, &aTag);
     rc = SQLITE_NOTFOUND;
@@ -1165,9 +1158,14 @@ int doltliteValidateScopedRefsUpdate(
   int nCurRem = 0, nIncRem = 0, nCurTrk = 0, nIncTrk = 0;
   int nCurSeq = 0, nIncSeq = 0;
   const BranchRef *curB = 0, *incB = 0;
+  int bDelete = zRef && zRef[0]==':';
   int rc;
   int i, j;
 
+  if( bDelete ) zRef++;
+  if( bDelete && scopedSameText(zRef, scopedDefaultBranch(&pStore->refs)) ){
+    return SQLITE_CONSTRAINT;
+  }
   if( !zRef || !zRef[0] ) return SQLITE_MISUSE;
   memset(&inc, 0, sizeof(inc));
   rc = csDeserializeRefsIntoTemp(&inc, pBlob, nBlob);
@@ -1273,7 +1271,7 @@ int doltliteValidateScopedRefsUpdate(
   /* Push may not repoint the default branch (clone checkout / GET /root).
   ** An empty target may adopt the pushed branch. */
   if( !scopedSameText(scopedDefaultBranch(&inc.refs),
-                      nCur==0 ? zRef : scopedDefaultBranch(&pStore->refs)) ){
+                      !bDelete && nCur==0 ? zRef : scopedDefaultBranch(&pStore->refs)) ){
     rc = SQLITE_CONSTRAINT;
     goto done;
   }
@@ -1285,8 +1283,7 @@ int doltliteValidateScopedRefsUpdate(
   for(j=0; j<nInc; j++){
     if( strcmp(aInc[j].zName, zRef)==0 ){ incB = &aInc[j]; break; }
   }
-  /* Push creates or advances the declared branch, never deletes it. */
-  if( !incB ){
+  if( bDelete ? incB!=0 : incB==0 ){
     rc = SQLITE_CONSTRAINT;
     goto done;
   }
@@ -1397,148 +1394,120 @@ static int remoteTagsWouldInstall(
 int doltlitePush(
   ChunkStore *pLocal,
   DoltliteRemote *pRemote,
-  const char *zBranch,
+  const char *zRef,
   int bForce
 ){
-  ProllyHash localCommit;
-  ProllyHash remoteCommit;
-  ProllyHash expectedRefsHash;
-  u8 *refsData = 0;
-  int nRefsData = 0;
+  const int bDelete = zRef[0]==':';
+  const char *zBranch = zRef + bDelete;
+  ProllyHash localCommit = {{0}};
+  ProllyHash originalCommit = {{0}};
+  int originalExists = 0;
+  int attempt;
   int rc;
 
-  memset(&expectedRefsHash, 0, sizeof(expectedRefsHash));
-  rc = chunkStoreFindBranch(pLocal, zBranch, &localCommit);
-  if( rc!=SQLITE_OK ){
-    return SQLITE_ERROR;
+  if( !zBranch[0] ) return SQLITE_ERROR;
+  if( !bDelete ){
+    rc = chunkStoreFindBranch(pLocal, zBranch, &localCommit);
+    if( rc!=SQLITE_OK ) return SQLITE_ERROR;
   }
 
-  rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
-  if( rc==SQLITE_OK && refsData ){
-    prollyHashCompute(refsData, nRefsData, &expectedRefsHash);
-  }else if( rc==SQLITE_NOTFOUND ){
-    refsData = 0;
-    nRefsData = 0;
-    rc = SQLITE_OK;
-  }
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(refsData);
-    return rc;
-  }
-
-  if( refsData ){
-    rc = remoteFindBranchFromRefsBlob(refsData, nRefsData, zBranch, &remoteCommit);
-    if( rc==SQLITE_OK && !prollyHashIsEmpty(&remoteCommit) ){
-      int cmp = prollyHashCompare(&remoteCommit, &localCommit);
-      if( cmp==0 ){
-        rc = pRemote->xCheckRefsIf(
-            pRemote, &expectedRefsHash, zBranch, bForce,
-            refsData, nRefsData);
-        sqlite3_free(refsData);
-        return rc;
-      }else if( !bForce ){
+  for(attempt=0; attempt<8; attempt++){
+    ChunkStore refs;
+    ProllyHash remoteCommit = {{0}};
+    ProllyHash expectedRefsHash = {{0}};
+    u8 *refsData = 0;
+    int nRefsData = 0;
+    int exists;
+    int noOp;
+    memset(&refs, 0, sizeof(refs));
+    rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc==SQLITE_OK && refsData ){
+      prollyHashCompute(refsData, nRefsData, &expectedRefsHash);
+      rc = chunkStoreLoadRefsFromBlob(&refs, refsData, nRefsData);
+    }
+    if( rc!=SQLITE_OK ) goto push_done;
+    exists = chunkStoreFindBranch(&refs, zBranch, &remoteCommit)==SQLITE_OK;
+    if( attempt==0 ){
+      originalExists = exists;
+      originalCommit = remoteCommit;
+      if( !bDelete && exists && !bForce
+       && !prollyHashIsEmpty(&remoteCommit)
+       && prollyHashCompare(&remoteCommit, &localCommit)!=0 ){
         int isAnc = 0;
         rc = syncIsAncestor(pLocal, &remoteCommit, &localCommit, &isAnc);
-        if( rc!=SQLITE_OK || !isAnc ){
-          sqlite3_free(refsData);
-          return rc!=SQLITE_OK ? rc : SQLITE_CONSTRAINT;
-        }
+        if( rc==SQLITE_OK && !isAnc ) rc = SQLITE_CONSTRAINT;
+        if( rc!=SQLITE_OK ) goto push_done;
       }
-    }
-    if( rc==SQLITE_NOTFOUND ){
-      rc = SQLITE_OK;
-    }else if( rc!=SQLITE_OK ){
+    }else if( exists!=originalExists
+           || prollyHashCompare(&remoteCommit, &originalCommit)!=0 ){
+      rc = SQLITE_BUSY_SNAPSHOT;
       sqlite3_free(refsData);
+      chunkStoreClose(&refs);
       return rc;
     }
-  }
-  sqlite3_free(refsData);
-  refsData = 0;
-
-  {
-    DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal);
-    if( !pLocalSrc ) return SQLITE_NOMEM;
-    rc = doltliteSyncChunks(pLocalSrc, pRemote, &localCommit, 1);
-    pLocalSrc->xClose(pLocalSrc);
-  }
-  if( rc!=SQLITE_OK ) return rc;
-
-  {
-    u8 *refsData2 = 0; int nRefsData2 = 0;
-    rc = pRemote->xGetRefs(pRemote, &refsData2, &nRefsData2);
-    if( rc==SQLITE_NOTFOUND ){ refsData2 = 0; nRefsData2 = 0; rc = SQLITE_OK; }
-    if( rc!=SQLITE_OK ) return rc;
-
-    {
-      ChunkStore tmpCs;
-      u8 *newRefs = 0; int nNewRefs = 0;
-      memset(&tmpCs, 0, sizeof(tmpCs));
-      if( refsData2 && nRefsData2 > 0 ){
-        rc = chunkStoreLoadRefsFromBlob(&tmpCs, refsData2, nRefsData2);
-      }else{
-        /* A fresh target's default must name a branch it has — the one
-        ** being pushed. Inheriting "main" left clones on a missing ref. */
-        chunkStoreSetDefaultBranch(&tmpCs, zBranch);
-      }
-      sqlite3_free(refsData2);
-      if( rc!=SQLITE_OK ){
-        chunkStoreClose(&tmpCs);
-        return rc;
-      }
-
-      rc = chunkStoreUpdateBranch(&tmpCs, zBranch, &localCommit);
-      if( rc==SQLITE_NOTFOUND ){
-        rc = chunkStoreAddBranch(&tmpCs, zBranch, &localCommit);
-      }
-      if( rc!=SQLITE_OK ){
-        chunkStoreClose(&tmpCs);
-        return rc;
-      }
-
-      /* Working sets do not push; clear any leftover working-set hash so
-      ** cloners are not pointed at an unfetched chunk. */
-      {
-        ProllyHash emptyWs;
-        memset(&emptyWs, 0, sizeof(emptyWs));
-        rc = chunkStoreSetBranchWorkingSet(&tmpCs, zBranch, &emptyWs);
-        if( rc!=SQLITE_OK ){
-          chunkStoreClose(&tmpCs);
-          return rc;
-        }
-      }
-
-      {
-        int iSeq;
-        const SequenceRef *aLocalSeq = 0;
-        int nLocalSeq = 0;
-        refsTableGetSequences(&pLocal->refs, &nLocalSeq, &aLocalSeq);
-        for(iSeq=0; iSeq<nLocalSeq; iSeq++){
-          if( aLocalSeq[iSeq].zTableName ){
-            chunkStoreBumpSequence(&tmpCs, aLocalSeq[iSeq].zTableName,
-                                   aLocalSeq[iSeq].iSeq);
-          }
-        }
-      }
-
-      rc = chunkStoreSerializeRefsToBlob(&tmpCs, &newRefs, &nNewRefs);
-      chunkStoreClose(&tmpCs);
-      if( rc!=SQLITE_OK ) return rc;
-
-      if( pRemote->xSetRefsIf ){
-        rc = pRemote->xSetRefsIf(pRemote, &expectedRefsHash, zBranch, bForce,
-                                 newRefs, nNewRefs);
-      }else{
-        rc = pRemote->xSetRefs(pRemote, zBranch, bForce, newRefs, nNewRefs);
-      }
-      sqlite3_free(newRefs);
-      if( rc!=SQLITE_OK ) return rc;
+    noOp = !bDelete && exists
+        && prollyHashCompare(&remoteCommit, &localCommit)==0;
+    if( noOp ){
+      rc = pRemote->xCheckRefsIf(pRemote, &expectedRefsHash, zRef, bForce,
+                                  refsData, nRefsData);
+      goto push_done;
     }
+    sqlite3_free(refsData);
+    refsData = 0;
+    if( bDelete ){
+      if( strcmp(zBranch, scopedDefaultBranch(&refs.refs))==0 ){
+        rc = SQLITE_CONSTRAINT;
+        goto push_done;
+      }
+      rc = chunkStoreDeleteBranch(&refs, zBranch);
+      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    }else{
+      DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal);
+      const SequenceRef *aSeq = 0;
+      ProllyHash emptyWs = {{0}};
+      int nSeq = 0;
+      int i;
+      if( !pLocalSrc ){
+        rc = SQLITE_NOMEM;
+        goto push_done;
+      }
+      rc = doltliteSyncChunks(pLocalSrc, pRemote, &localCommit, 1);
+      pLocalSrc->xClose(pLocalSrc);
+      if( rc!=SQLITE_OK ) goto push_done;
+      if( refsTableBranchCount(&refs.refs)==0 ){
+        rc = chunkStoreSetDefaultBranch(&refs, zBranch);
+      }
+      if( rc==SQLITE_OK ){
+        rc = exists ? chunkStoreUpdateBranch(&refs, zBranch, &localCommit)
+                    : chunkStoreAddBranch(&refs, zBranch, &localCommit);
+      }
+      if( rc==SQLITE_OK ){
+        rc = chunkStoreSetBranchWorkingSet(&refs, zBranch, &emptyWs);
+      }
+      refsTableGetSequences(&pLocal->refs, &nSeq, &aSeq);
+      for(i=0; i<nSeq && rc==SQLITE_OK; i++){
+        rc = chunkStoreBumpSequence(&refs, aSeq[i].zTableName, aSeq[i].iSeq);
+      }
+    }
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreSerializeRefsToBlob(&refs, &refsData, &nRefsData);
+    }
+    if( rc==SQLITE_OK ){
+      rc = pRemote->xSetRefsIf(pRemote, &expectedRefsHash, zRef, bForce,
+                                refsData, nRefsData);
+    }
+    if( rc==SQLITE_OK ){
+      doltliteTestCrashFinalize("push");
+      rc = pRemote->xCommit(pRemote);
+    }
+
+push_done:
+    sqlite3_free(refsData);
+    chunkStoreClose(&refs);
+    if( rc!=SQLITE_BUSY_SNAPSHOT ) return rc;
   }
-
-  doltliteTestCrashFinalize("push");
-  rc = pRemote->xCommit(pRemote);
-
-  return rc;
+  return SQLITE_BUSY_SNAPSHOT;
 }
 
 int doltlitePushTag(
