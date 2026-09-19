@@ -51,9 +51,23 @@ static int mutateRemoteRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   return chunkStoreAddRemote(cs, p->zName, p->zUrl);
 }
 
-static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
+/* Lock waits inside a remote belong to the statement that asked for them, so
+** they wait exactly as long as this connection's busy_timeout allows. */
+static int remoteSqlBusyHandler(void *pArg){
+  sqlite3 *db = (sqlite3*)pArg;
+  return sqlite3InvokeBusyHandler(&db->busyHandler);
+}
+
+static DoltliteRemote *openRemoteByUrl(
+  sqlite3 *db,
+  sqlite3_vfs *pVfs,
+  const char *zUrl
+){
+  DoltliteRemote *pRemote = 0;
   if( strncmp(zUrl, "file://", 7)==0 ){
-    return doltliteFsRemoteOpen(pVfs, zUrl + 7);
+    pRemote = doltliteFsRemoteOpen(pVfs, zUrl + 7);
+    doltliteRemoteSetBusyHandler(pRemote, remoteSqlBusyHandler, db);
+    return pRemote;
   }
   if( strncmp(zUrl, "http://", 7)==0 || strncmp(zUrl, "https://", 8)==0 ){
 
@@ -131,6 +145,7 @@ static void remoteSqlExpireCurrentStatement(sqlite3 *db){
 }
 
 static int remoteSqlOpenNamedRemote(
+  sqlite3 *db,
   ChunkStore *cs,
   const char *zRemoteName,
   const char **pzUrl,
@@ -141,7 +156,7 @@ static int remoteSqlOpenNamedRemote(
     return SQLITE_NOTFOUND;
   }
 
-  *ppRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), *pzUrl);
+  *ppRemote = openRemoteByUrl(db, chunkFileGetVfs(&cs->file), *pzUrl);
   if( !*ppRemote ){
     return SQLITE_CANTOPEN;
   }
@@ -367,7 +382,7 @@ static void doltPushParsedFunc(
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
 
-  rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
+  rc = remoteSqlOpenNamedRemote(db, cs, zRemoteName, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, 0) ) return;
 
   if( bTags ){
@@ -551,7 +566,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
+  rc = remoteSqlOpenNamedRemote(db, cs, zRemoteName, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, 0) ) return;
 
   if( argc>=2 && sqlite3_value_type(argv[1])!=SQLITE_NULL ){
@@ -600,7 +615,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
 
     for(i=0; i<nNames; i++){
-      DoltliteRemote *pBrRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrlOwned);
+      DoltliteRemote *pBrRemote = openRemoteByUrl(db, chunkFileGetVfs(&cs->file), zUrlOwned);
       if( !pBrRemote ){
         doltliteFreeStringArray(azNames, nNames);
         sqlite3_free(zUrlOwned);
@@ -681,7 +696,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
+  rc = remoteSqlOpenNamedRemote(db, cs, zRemoteName, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, &savedState) ) return;
 
   rc = doltliteFetch(cs, pRemote, zRemoteName, zRemoteBranch);
@@ -895,7 +910,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     chunkStoreClearRefs(cs);
   }
 
-  pRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
+  pRemote = openRemoteByUrl(db, chunkFileGetVfs(&cs->file), zUrl);
   if( !pRemote ){
     /* openRemoteByUrl is NULL for bad schemes and open failures. file:// or
     ** http(s):// that fail to open are CANTOPEN, not a scheme error. */

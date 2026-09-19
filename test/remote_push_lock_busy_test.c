@@ -5,6 +5,7 @@
 #include "doltlite_internal.h"
 #include "chunk_store.h"
 #include "doltlite_remote.h"
+#include <pthread.h>
 
 static int nPass = 0;
 static int nFail = 0;
@@ -277,11 +278,83 @@ static void test_push_ref_race(int stage, int sameBranch, int noOp,
   rm(zSrc);
 }
 
+/* A lock held by a peer is a wait, not a failure: the push must honour this
+** connection's busy_timeout rather than a schedule of its own. A peer thread
+** releases the graph lock partway through the window. */
+struct LockHolder {
+  ChunkStore *cs;
+  int holdMs;
+};
+
+static void *holdGraphLock(void *pArg){
+  struct LockHolder *p = (struct LockHolder*)pArg;
+  sqlite3_sleep(p->holdMs);
+  chunkStoreUnlock(p->cs);
+  return 0;
+}
+
+static void test_push_waits_for_busy_timeout(void){
+  char zRemote[256], zSrc[256], zUrl[512];
+  sqlite3 *dbRemote = 0, *dbSrc = 0;
+  ChunkStore *cs;
+  struct LockHolder holder;
+  pthread_t tid;
+  char *zErr = 0;
+  int rc;
+
+  snprintf(zRemote, sizeof(zRemote), "/tmp/push_wait_remote_%d.db", (int)getpid());
+  snprintf(zSrc, sizeof(zSrc), "/tmp/push_wait_src_%d.db", (int)getpid());
+  rm(zRemote);
+  rm(zSrc);
+
+  check("wait: open remote", sqlite3_open(zRemote, &dbRemote)==SQLITE_OK);
+  check("wait: seed remote",
+        exec(dbRemote,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "INSERT INTO t VALUES(1,'base');"
+          "SELECT dolt_commit('-Am','base');")==SQLITE_OK);
+
+  check("wait: open src", sqlite3_open(zSrc, &dbSrc)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zUrl), zUrl,
+    "SELECT dolt_clone('file://%s');", zRemote);
+  check("wait: clone", exec(dbSrc, zUrl)==SQLITE_OK);
+  check("wait: local commit",
+        exec(dbSrc,
+          "INSERT INTO t VALUES(2,'src');"
+          "SELECT dolt_commit('-Am','src');")==SQLITE_OK);
+
+  cs = doltliteGetChunkStore(dbRemote);
+  check("wait: chunk store", cs!=0);
+  if( !cs ){
+    sqlite3_close(dbSrc);
+    sqlite3_close(dbRemote);
+    return;
+  }
+  check("wait: acquire graph lock", chunkStoreLockAndRefresh(cs)==SQLITE_OK);
+
+  holder.cs = cs;
+  holder.holdMs = 1500;
+  check("wait: start holder", pthread_create(&tid, 0, holdGraphLock, &holder)==0);
+
+  sqlite3_busy_timeout(dbSrc, 20000);
+  rc = execErr(dbSrc, "SELECT dolt_push('origin','main');", &zErr);
+  check("wait: push waits out the peer instead of failing", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK && zErr ) printf("  got: %s\n", zErr);
+  sqlite3_free(zErr);
+  pthread_join(tid, 0);
+
+  sqlite3_close(dbSrc);
+  sqlite3_close(dbRemote);
+  rm(zRemote);
+  rm(zSrc);
+}
+
 int main(void){
   sqlite3_initialize();
   check("empty_delete_target_is_misuse",
         doltlitePush(0, 0, ":", 0)==SQLITE_MISUSE);
   test_lock_busy_not_refs_changed();
+  test_push_waits_for_busy_timeout();
   test_diverged_is_not_lock();
   test_push_ref_race(1, 0, 0, 0, 1, 0);
   test_push_ref_race(2, 0, 0, 0, 2, 0);
