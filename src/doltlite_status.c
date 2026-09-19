@@ -821,26 +821,49 @@ static int isRenamePairContent(
   int shared = 0;
   char *zLiveSql = 0;
 
+  int rootsEqual;
+  int schemaAgrees = 0;
+
   *pMatch = 0;
   if( !pA->zName || !pB->zName ) return SQLITE_OK;
   if( strcmp(pA->zName, pB->zName)==0 ) return SQLITE_OK;
   if( statusCatalogFindName(pFromIdx, pB->zName)!=0 ) return SQLITE_OK;
   if( statusCatalogFindName(pToIdx, pA->zName)!=0 ) return SQLITE_OK;
-  if( !prollyHashIsEmpty(&pA->root)
-   && prollyHashCompare(&pA->root, &pB->root)==0 ){
-    *pMatch = 1;
-    return SQLITE_OK;
-  }
 
+  rootsEqual = !prollyHashIsEmpty(&pA->root)
+            && prollyHashCompare(&pA->root, &pB->root)==0;
+
+  /* Only one of the two names is live, and which one depends on the
+  ** direction of the range, so try the new name and then the old. */
   rc = statusLoadLiveTableSql(db, pB->zName, &foundLive, &zLiveSql);
-  if( rc!=SQLITE_OK || !foundLive ) goto content_done;
-  if( statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName) ){
-    if( prollyHashIsEmpty(&pA->root) && prollyHashIsEmpty(&pB->root) ){
+  if( rc!=SQLITE_OK ) goto content_done;
+  if( foundLive && zLiveSql ){
+    schemaAgrees =
+        statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName);
+  }else{
+    sqlite3_free(zLiveSql);
+    zLiveSql = 0;
+    rc = statusLoadLiveTableSql(db, pA->zName, &foundLive, &zLiveSql);
+    if( rc!=SQLITE_OK ) goto content_done;
+    if( foundLive && zLiveSql ){
+      schemaAgrees =
+          statusSchemaHashMatchesRename(&pB->schemaHash, zLiveSql, pB->zName);
+    }
+  }
+  if( foundLive && zLiveSql ){
+    /* Equal roots cannot tell a rename from an unrelated table that happens
+    ** to hold the same rows; the schema is what separates them. */
+    if( !schemaAgrees ) goto content_done;
+    if( rootsEqual
+     || (prollyHashIsEmpty(&pA->root) && prollyHashIsEmpty(&pB->root)) ){
       shared = 1;
     }else{
       rc = statusRootsShareAnyKey(db, pA, pB, &shared);
     }
     if( rc==SQLITE_OK && shared ) *pMatch = 1;
+  }else if( rootsEqual ){
+    /* Neither name is live, so the rows are the only evidence left. */
+    *pMatch = 1;
   }
 
 content_done:
