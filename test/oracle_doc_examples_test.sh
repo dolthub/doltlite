@@ -81,6 +81,7 @@ SQL
 
 prelude() {  # prelude <page>: extra statements before the page's blocks
   case "$1" in
+    dolt_log.md) echo "SELECT dolt_commit('-am', 'update ratings');" ;;
     dolt_rebase.md) echo "SELECT dolt_checkout('topic'); INSERT INTO orders VALUES(98,1,1); SELECT dolt_commit('-am', 'fixup');" ;;
     dolt_merge.md|dolt_cherry_pick.md) echo "SELECT dolt_reset('--hard'); DROP TABLE tmp_table;" ;;
     dolt_constraint_violations.md) echo "PRAGMA foreign_keys=OFF; INSERT INTO child VALUES(2,2,99);" ;;

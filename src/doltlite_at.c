@@ -721,7 +721,9 @@ static int atFilter(sqlite3_vtab_cursor *cur,
     sqlite3_free(cur->pVtab->zErrMsg);
     cur->pVtab->zErrMsg = 0;
     if( atTakeChunkSourceError(cs, &cur->pVtab->zErrMsg, &rc) ) return rc;
-    return SQLITE_OK;
+    cur->pVtab->zErrMsg = sqlite3_mprintf(
+        "table not found: %s at %s", v->zTableName, zRef);
+    return cur->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
   }
   if(rc!=SQLITE_OK) return rc;
 

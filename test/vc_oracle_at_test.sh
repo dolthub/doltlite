@@ -48,13 +48,13 @@ oracle() {
 }
 
 oracle_error() {
-  local name="$1" setup="$2" ref="$3"
+  local name="$1" setup="$2" ref="$3" table="${4:-t}" expected="${5:-}"
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_sql
   local dl_rc
-  dl_sql=$(printf "%s\nSELECT * FROM dolt_at_t WHERE commit_ref = '%s';\n" "$setup" "$ref")
+  dl_sql=$(printf "%s\nSELECT * FROM dolt_at_${table} WHERE commit_ref = '%s';\n" "$setup" "$ref")
   vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_sql"
   dl_rc=$?
 
@@ -62,11 +62,13 @@ oracle_error() {
   local dt_sql
   local dt_rc
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  dt_sql=$(printf "%s\nSELECT * FROM t AS OF '%s';\n" "$dolt_setup" "$ref")
+  dt_sql=$(printf "%s\nSELECT * FROM ${table} AS OF '%s';\n" "$dolt_setup" "$ref")
   vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dt_sql"
   dt_rc=$?
 
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" \
+     && { [ -z "$expected" ] || { grep -qiF "$expected" "$dir/dl.err" \
+                                 && grep -qiF "$expected" "$dir/dt.err"; }; }; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
@@ -413,5 +415,39 @@ SELECT dolt_merge('feature');
 echo "--- error paths ---"
 
 oracle_error "at_nonexistent_ref" "$SEED" "nope"
+
+MISSING_TABLE_SETUP="
+CREATE TABLE u(id INT PRIMARY KEY);
+SELECT dolt_commit('-Am','before table');
+SELECT dolt_tag('before_create');
+SELECT dolt_branch('without_table');
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','created');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_commit('-Am','renamed');
+"
+for ref in HEAD~1 HEAD~2 before_create without_table; do
+  oracle_error "at_missing_table_$ref" "$MISSING_TABLE_SETUP" "$ref" t2 "table not found"
+done
+oracle_table_after_reopen "at_renamed_table_present" "$MISSING_TABLE_SETUP" t2 HEAD
+oracle_table_after_reopen "at_old_name_before_rename" "$MISSING_TABLE_SETUP" t HEAD~1
+
+EMPTY_TABLE_SETUP="
+$MISSING_TABLE_SETUP
+DELETE FROM t2;
+SELECT dolt_commit('-am','empty');
+SELECT dolt_tag('empty');
+DROP TABLE t2;
+SELECT dolt_commit('-Am','dropped');
+CREATE TABLE t2(id INT PRIMARY KEY, v INT);
+SELECT dolt_commit('-Am','recreated');
+"
+oracle_error "at_dropped_table" "$EMPTY_TABLE_SETUP" HEAD~1 t2 "table not found"
+for ref in empty HEAD; do
+  oracle_query_after_reopen "at_existing_empty_table_$ref" "$EMPTY_TABLE_SETUP" \
+    "SELECT 'A' || char(9) || count(*) FROM dolt_at_t2('$ref')" \
+    "SELECT CONCAT('A',char(9),count(*)) FROM t2 AS OF '$ref'"
+done
 
 vc_oracle_finish

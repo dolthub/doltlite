@@ -1,0 +1,70 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+execsql {
+  CREATE TABLE u(a INTEGER PRIMARY KEY);
+  SELECT dolt_commit('-Am','c0');
+  SELECT dolt_tag('before_create');
+  SELECT dolt_branch('without_table');
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+  INSERT INTO t VALUES(1,'x');
+  SELECT dolt_commit('-Am','c1');
+  ALTER TABLE t RENAME TO t2;
+  SELECT dolt_commit('-Am','c2');
+}
+
+foreach phase {live reopen} {
+  if {$phase eq "reopen"} {
+    db close
+    sqlite3 db test.db
+  }
+  foreach ref {HEAD~1 HEAD~2 before_create without_table} {
+    foreach {form source} {
+      literal {dolt_at_t2('%s')}
+      bound {dolt_at_t2($ref)}
+      hidden {dolt_at_t2 WHERE commit_ref=$ref}
+    } {
+      set sql "SELECT count(*) FROM [format $source $ref]"
+      do_test at-missing-$phase-$ref-$form {
+        set rc [catch {db eval $sql} msg]
+        list $rc [db errorcode] $msg
+      } [list 1 1 "table not found: t2 at $ref"]
+    }
+  }
+  do_execsql_test at-missing-$phase-current {
+    SELECT * FROM dolt_at_t2('HEAD');
+    SELECT * FROM dolt_at_t('HEAD~1');
+  } {1 x 1 x}
+  foreach {step ref} {present HEAD missing HEAD~1 present-again HEAD} {
+    do_test at-missing-$phase-statement-reuse-$step {
+      set rc [catch {db eval {SELECT count(*) FROM dolt_at_t2($ref)}} result]
+      list $rc $result
+    } [expr {$ref eq "HEAD" ? [list 0 1] : [list 1 "table not found: t2 at $ref"]}]
+  }
+}
+
+execsql {
+  DELETE FROM t2;
+  SELECT dolt_commit('-am','empty');
+  SELECT dolt_tag('empty');
+  DROP TABLE t2;
+  SELECT dolt_commit('-Am','dropped');
+  CREATE TABLE t2(a INTEGER PRIMARY KEY, b TEXT);
+  SELECT dolt_commit('-Am','recreated');
+}
+foreach phase {live reopen} {
+  if {$phase eq "reopen"} {
+    db close
+    sqlite3 db test.db
+  }
+  do_execsql_test at-missing-$phase-empty {
+    SELECT count(*) FROM dolt_at_t2('empty');
+    SELECT count(*) FROM dolt_at_t2('HEAD');
+  } {0 0}
+  do_catchsql_test at-missing-$phase-dropped {
+    SELECT count(*) FROM dolt_at_t2('HEAD~1');
+  } {1 {table not found: t2 at HEAD~1}}
+  do_execsql_test at-missing-$phase-integrity {PRAGMA integrity_check} {ok}
+}
+
+finish_test

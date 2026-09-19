@@ -244,9 +244,9 @@ CREATE TABLE t2(id INTEGER PRIMARY KEY);
 INSERT INTO t2 VALUES(1);
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "late_no_t2" \
+run_test_match "late_no_t2" \
   "SELECT count(*) FROM dolt_at_t2( (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1));" \
-  "0" "$DB"
+  "table not found: t2 at" "$DB"
 
 run_test "late_has_t2" \
   "SELECT count(*) FROM dolt_at_t2( (SELECT commit_hash FROM dolt_log LIMIT 1));" \
