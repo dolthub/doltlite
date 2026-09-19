@@ -883,7 +883,9 @@ reset_cleanup:
     chunkStoreUnlock(cs);
   }
   if( bSucceeded ){
-    rc = doltliteVcSealActiveSavepoints(db);
+    /* Dolt ends the SQL txn on dolt_reset; COMMIT then BEGIN so a
+    ** following ROLLBACK does not undo the reset or prior row writes. */
+    rc = doltliteVcSealBranchStyleTxn(db);
   }else{
     rc = doltliteVcSealTopLevelSavepointTxn(db);
   }

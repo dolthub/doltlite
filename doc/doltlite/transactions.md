@@ -7,10 +7,11 @@ statement, with two rules that are easy to miss.
 
 | Inside `BEGIN` | On `ROLLBACK` |
 |---|---|
-| Row writes, `dolt_add`, `dolt_reset('--soft')` | Undone, staging included |
+| Row writes, `dolt_add` | Undone, staging included |
+| `dolt_reset` (`--soft`, `--hard`, or no args) | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
 | `dolt_branch`, `dolt_tag`, `dolt_branch('-d')` | Kept. Refs are durable the moment the call returns. |
-| `dolt_reset('--hard')` | Kept. The working set is already back at `HEAD`. |
-| `dolt_checkout` | Kept. The connection stays on the new branch. |
+| `dolt_checkout -b` | Kept. The SQL transaction is committed, then a new one begun. |
+| `dolt_checkout` of an existing branch | Kept. The connection stays on the new branch. |
 | `dolt_commit`, and any merge, cherry-pick, revert, or pull that completes | Kept, and the SQL transaction is already over |
 
 A Dolt commit is durable when it returns, so a successful `dolt_commit`
