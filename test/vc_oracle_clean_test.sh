@@ -75,6 +75,39 @@ oracle_error() {
   fi
 }
 
+oracle_schemas() {
+  local name="$1" setup="$2" dir="$TMPROOT/$1"
+  local dl_out dt_out dolt_setup
+  local dl_query="SELECT 'C', count(*) FROM dolt_status;
+SELECT 'S', table_name, staged, status FROM dolt_status;
+SELECT 'O', type, name FROM main.sqlite_master WHERE type IN ('view','trigger');
+SELECT 'N', count(*) FROM main.sqlite_master WHERE type='table' AND name='n';
+SELECT 'R', id, v FROM t;"
+  local dt_query="SELECT concat('C,', count(*)) FROM dolt_status;
+SELECT concat('S,', table_name, ',', staged, ',', status) FROM dolt_status;
+SELECT concat('O,view,', table_name) FROM information_schema.views WHERE table_schema=database();
+SELECT concat('O,trigger,', trigger_name) FROM information_schema.triggers WHERE trigger_schema=database();
+SELECT concat('N,', count(*)) FROM information_schema.tables WHERE table_schema=database() AND table_name='n';
+SELECT concat('R,', id, ',', v) FROM t;"
+  mkdir -p "$dir/dt"
+  if ! vc_oracle_run_doltlite_script "$dir/db" "$dir/dl.out" "$dir/dl.err" "$setup" \
+    || ! "$DOLTLITE" -csv "$dir/db" "$dl_query" >"$dir/dl.query" 2>>"$dir/dl.err"; then
+    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (doltlite execution)"; cat "$dir/dl.err"
+    return
+  fi
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup" | sed -E 's/FOR EACH ROW BEGIN (.*); END;/FOR EACH ROW \1;/')
+  if ! vc_oracle_run_dolt_setup_query "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
+    "$dolt_setup" "$dt_query"; then
+    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (dolt execution)"; cat "$dir/dt.err"
+    return
+  fi
+  dl_out=$(tr -d '\r"' <"$dir/dl.query" | grep -E '^[CSONR],' | sort)
+  dt_out=$(tr -d '\r"' <"$dir/dt.out" | grep -E '^[CSONR],' | sort)
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
 SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
@@ -161,5 +194,32 @@ $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY);
 SELECT dolt_clean(NULL);
 "
+
+SCHEMAS="CREATE VIEW v AS SELECT * FROM t;
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW BEGIN UPDATE t SET v='triggered' WHERE id=NEW.id; END;"
+for mode in all named; do
+  args=""
+  if [ "$mode" = named ]; then args="'dolt_schemas'"; fi
+  oracle_schemas "schemas_${mode}" "$SEED $SCHEMAS
+CREATE TABLE n(id INTEGER PRIMARY KEY);
+SELECT dolt_clean($args);"
+  oracle_schemas "schemas_${mode}_dry" "$SEED $SCHEMAS
+SELECT dolt_clean('--dry-run'${args:+,$args});"
+  for tracked in staged committed; do
+    stage="SELECT dolt_add('dolt_schemas');"
+    if [ "$tracked" = committed ]; then stage="SELECT dolt_commit('-Am','schemas');"; fi
+    oracle_schemas "schemas_${mode}_${tracked}" "$SEED $SCHEMAS $stage
+CREATE VIEW v2 AS SELECT * FROM t;
+CREATE TABLE n(id INTEGER PRIMARY KEY);
+SELECT dolt_clean($args);"
+  done
+done
+oracle_schemas "schemas_only_named_table" "$SEED $SCHEMAS
+CREATE TABLE n(id INTEGER PRIMARY KEY);
+SELECT dolt_clean('n');"
+oracle_schemas "schemas_unstaged_again" "$SEED $SCHEMAS
+SELECT dolt_add('dolt_schemas');
+SELECT dolt_reset('dolt_schemas');
+SELECT dolt_clean('dolt_schemas');"
 
 vc_oracle_finish
