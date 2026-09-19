@@ -133,6 +133,17 @@ For a DoltLite-format main database, the compatibility contract is:
   not a SQLite page image or a SQL dump, and is not readable by stock SQLite.
   `sqlite3_deserialize()` of a stock SQLite page image reopens that schema on
   SQLite's original B-tree engine, as stock does, without version control.
+- `sqlite3_commit_hook()` and `sqlite3_rollback_hook()` report SQL transaction
+  boundaries, so they fire for statements that write rows and for a version
+  control command that writes rows on its way, such as `dolt_add`. A command
+  that only moves refs and publishes working state opens no SQL transaction and
+  fires neither: `dolt_commit`, `dolt_branch`, `dolt_tag`, `dolt_checkout` and
+  `dolt_reset('--hard')` are silent, including inside an explicit transaction,
+  because the command seals that transaction itself. A hook is therefore not a
+  way to observe branch movement; read `dolt_log` or `active_branch()` for that.
+  The hooks keep their stock meaning where they do fire, veto included, which is
+  why ref moves stay outside them: a ref that has already advanced cannot honour
+  a hook that asks for a rollback.
 - `dbstat` is not supported on a DoltLite-format database: the chunk store has
   no SQLite page layout. A scan fails with an error rather than reporting an
   empty database. `dbstat` on an attached stock SQLite file still walks pages.

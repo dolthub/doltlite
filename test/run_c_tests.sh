@@ -28,6 +28,7 @@ COVERAGE_TESTS=(
   readonly_reader_writer_test
   authorizer_internal_sql_test
   vc_result_code_test
+  vc_commit_hook_test
   integrity_check_counts_test
   count_range_override_test
   vc_cas_swallow_test
