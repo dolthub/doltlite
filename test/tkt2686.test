@@ -22,6 +22,12 @@ ifcapable !subquery {
   return
 }
 
+ifcapable doltlite {
+  db close
+  testvfs fullvfs -default 1
+  sqlite3 db test.db
+}
+
 db eval {
   PRAGMA page_size=1024;
   PRAGMA max_page_count=50;
@@ -32,10 +38,19 @@ for {set i 1} {$i<2000} {incr i} {
   do_test tkt2686-$i.1 {
     db eval BEGIN
     set rc [catch {
-      while 1 {
-        db eval {INSERT INTO filler (fill) VALUES (randstr(1000, 10000)) }
+      ifcapable doltlite {
+        for {set j 0} {$j<20} {incr j} {
+          db eval {INSERT INTO filler(fill) VALUES(randstr(1000,10000))}
+        }
+        fullvfs full 1 1
+        db eval COMMIT
+      } else {
+        while 1 {
+          db eval {INSERT INTO filler (fill) VALUES (randstr(1000, 10000)) }
+        }
       }
     } msg]
+    ifcapable doltlite {fullvfs full}
     lappend rc $msg
   } {1 {database or disk is full}}
   do_test tkt2686-$i.2 {
@@ -62,10 +77,19 @@ for {set i 10000} {$i<12000} {incr i} {
   do_test tkt2686-$i.1 {
     db eval BEGIN
     set rc [catch {
-      while 1 {
-        db eval {INSERT INTO filler (fill) VALUES (randstr(1000, 10000)) }
+      ifcapable doltlite {
+        for {set j 0} {$j<20} {incr j} {
+          db eval {INSERT INTO filler(fill) VALUES(randstr(1000,10000))}
+        }
+        fullvfs full 1 1
+        db eval COMMIT
+      } else {
+        while 1 {
+          db eval {INSERT INTO filler (fill) VALUES (randstr(1000, 10000)) }
+        }
       }
     } msg]
+    ifcapable doltlite {fullvfs full}
     lappend rc $msg
   } {1 {database or disk is full}}
   do_test tkt2686-$i.2 {
@@ -78,4 +102,8 @@ for {set i 10000} {$i<12000} {incr i} {
   catch {db eval COMMIT}
 }
 
+ifcapable doltlite {
+  db close
+  fullvfs delete
+}
 finish_test

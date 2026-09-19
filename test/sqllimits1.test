@@ -545,9 +545,12 @@ do_test sqllimits1-7.4 {
 # to 1MB, so not that noteworthy an achievement).
 #
 do_test sqllimits1-7.5 {
-  catchsql {
+  ifcapable doltlite {set ::sqlite_diskfull_pending 1}
+  set result [catchsql {
     INSERT INTO trig VALUES (1,10);
-  }
+  }]
+  ifcapable doltlite {set ::sqlite_diskfull_pending 0}
+  set result
 } {1 {database or disk is full}}
 
 do_test sqllimits1-7.6 {

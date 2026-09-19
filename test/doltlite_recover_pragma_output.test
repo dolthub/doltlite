@@ -493,7 +493,8 @@ do_test doltlite_recover_pragma_output-11.4 {
 do_test doltlite_recover_pragma_output-12.1 {
   db close
   forcedelete test2686.db
-  sqlite3 db test2686.db
+  testvfs fullvfs
+  sqlite3 db test2686.db -vfs fullvfs
   execsql {
     PRAGMA page_size=1024;
     PRAGMA max_page_count=50;
@@ -508,11 +509,14 @@ do_test doltlite_recover_pragma_output-12.2 {
     execsql BEGIN
     set nInsert 0
     set rc [catch {
-      while 1 {
+      for {set j 0} {$j<20} {incr j} {
         execsql {INSERT INTO filler(fill) VALUES(randstr(1000,10000))}
         incr nInsert
       }
+      fullvfs full 1 1
+      execsql COMMIT
     } msg]
+    fullvfs full
     if {$rc!=1 || $msg ne "database or disk is full"} {
       error "expected SQLITE_FULL, got rc=$rc msg=$msg"
     }
@@ -532,4 +536,6 @@ do_test doltlite_recover_pragma_output-12.2 {
        [execsql {PRAGMA integrity_check}]
 } {1 1 0 ok}
 
+db close
+fullvfs delete
 finish_test

@@ -1,0 +1,76 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach limit {10 100} {
+  reset_db
+  execsql {
+    CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+    INSERT INTO t VALUES(1,'x');
+  }
+  execsql "PRAGMA max_page_count=$limit"
+  do_execsql_test max-page-count-$limit-insert {
+    INSERT INTO t VALUES(2,'y');
+    SELECT * FROM t ORDER BY a;
+  } {1 x 2 y}
+  do_test max-page-count-$limit-updates {
+    for {set i 0} {$i<100} {incr i} {
+      execsql {UPDATE t SET b=b||'x' WHERE a=1}
+    }
+    execsql {SELECT length(b) FROM t WHERE a=1}
+  } {101}
+  do_execsql_test max-page-count-$limit-transaction {
+    BEGIN;
+    INSERT INTO t VALUES(3,'z');
+    SAVEPOINT s;
+    INSERT INTO t VALUES(4,'rolled back');
+    ROLLBACK TO s;
+    RELEASE s;
+    COMMIT;
+    SELECT a FROM t ORDER BY a;
+  } {1 2 3}
+  do_execsql_test max-page-count-$limit-delete {
+    DELETE FROM t;
+    INSERT INTO t VALUES(5,'reused');
+    SELECT * FROM t;
+    PRAGMA integrity_check;
+  } {5 reused ok}
+  db close
+  sqlite3 db test.db
+  do_execsql_test max-page-count-$limit-reopen {
+    SELECT * FROM t;
+    INSERT INTO t VALUES(6,'reopened');
+    SELECT count(*) FROM t;
+  } {5 reused 2}
+}
+
+reset_db
+execsql {PRAGMA max_page_count=1}
+do_execsql_test max-page-count-bulk {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+  WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<500)
+  INSERT INTO t SELECT x, zeroblob(100) FROM c;
+  SELECT count(*), sum(length(v)) FROM t;
+} {500 50000}
+
+db close
+sqlite3 db test.db -uri 1
+forcedelete page-limit-stock.db
+do_execsql_test max-page-count-sqlite-attach {
+  ATTACH 'file:page-limit-stock.db?doltlite_engine=sqlite' AS stock;
+  CREATE TABLE stock.t(id INTEGER PRIMARY KEY, v BLOB);
+  PRAGMA stock.max_page_count=10;
+  INSERT INTO stock.t VALUES(1,'x'),(2,'y');
+  SELECT count(*) FROM stock.t;
+} {10 2}
+do_catchsql_test max-page-count-sqlite-full {
+  INSERT INTO stock.t VALUES(3,zeroblob(100000));
+} {1 {database or disk is full}}
+do_execsql_test max-page-count-sqlite-intact {
+  SELECT count(*) FROM stock.t;
+  SELECT count(*) FROM main.t;
+  PRAGMA stock.integrity_check;
+} {2 500 ok}
+execsql {DETACH stock}
+forcedelete page-limit-stock.db
+
+finish_test

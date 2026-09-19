@@ -466,7 +466,6 @@ int serializeUnpackedRecordBuffer(
 );
 u32 btreeSerialType(Mem *pMem, u32 *pLen);
 int mutMapShouldDrain(BtCursor *pCur);
-int prollyBtreeCheckMaxPageCount(Btree *p);
 int cacheCursorPayloadZeroTail(BtCursor *pCur, const u8 *pData,
                                int nData, i64 nZeroTail);
 int currentMutMapEntry(BtCursor *pCur, ProllyMutMapEntry **ppEntry);

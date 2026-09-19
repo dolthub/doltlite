@@ -223,6 +223,29 @@ expect_dl cell_size_check "PRAGMA cell_size_check; PRAGMA cell_size_check=1; PRA
 expect_dl checkpoint_fullfsync "PRAGMA checkpoint_fullfsync; PRAGMA checkpoint_fullfsync=1; PRAGMA checkpoint_fullfsync;" "0|1|"
 expect_dl schema_version "PRAGMA schema_version=500; SELECT CASE WHEN (SELECT 1 FROM pragma_schema_version WHERE schema_version=500) IS NULL THEN 'ignored' END;" "ignored|"
 
+for limit in 10 100; do
+  sql="CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES(1,'x');
+PRAGMA max_page_count=$limit;
+INSERT INTO t VALUES(2,'y');"
+  for ((i=0; i<100; i++)); do
+    sql="$sql
+UPDATE t SET b=b||'x' WHERE a=1;"
+  done
+  sql="$sql
+SELECT a, length(b) FROM t ORDER BY a;"
+  run_on "$DOLTLITE" "$TMPDIR/limit-dl-$limit.db" "$sql" "$TMPDIR/limit-dl.out"; dl_rc=$?
+  run_on "$SQLITE3" "$TMPDIR/limit-sq-$limit.db" "$sql" "$TMPDIR/limit-sq.out"; sq_rc=$?
+  dl_rows=$(tail -2 "$TMPDIR/limit-dl.out")
+  sq_rows=$(tail -2 "$TMPDIR/limit-sq.out")
+  if [ "$dl_rc" = 0 ] && [ "$sq_rc" = 0 ] && [ "$dl_rows" = "$sq_rows" ] \
+    && [ "$sq_rows" = $'1|101\n2|1' ]; then
+    ok "max_page_count_${limit}_small_writes"
+  else
+    bad "max_page_count_${limit}_small_writes" "doltlite=$dl_rc stock=$sq_rc; doltlite rows: $dl_rows; stock rows: $sq_rows"
+  fi
+done
+
 unasserted=$(comm -23 <(echo "$inert_list") <(echo "$asserted" | tr ' ' '\n' | sort -u))
 if [ -z "$unasserted" ]; then ok "every inert pragma in pragmas.md has an assertion"
 else bad "inert pragmas documented without an assertion" "$(echo "$unasserted" | tr '\n' ' ')"; fi
