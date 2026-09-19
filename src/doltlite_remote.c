@@ -439,18 +439,31 @@ static int remoteGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
   return chunkStoreGet(pStore, refsTableGetHash(&pStore->refs), ppData, pnData);
 }
 
-static int fsBusyRetry(int nBusy){
+void doltliteRemoteSetBusyHandler(
+  DoltliteRemote *p,
+  int (*xBusy)(void*),
+  void *pBusyArg
+){
+  if( !p ) return;
+  p->xBusy = xBusy;
+  p->pBusyArg = pBusyArg;
+}
+
+/* A remote opened outside a connection has no busy handler to consult; keep
+** the fixed schedule for it rather than failing on the first contention. */
+static int fsBusyRetry(DoltliteRemote *pRemote, int nBusy){
+  if( pRemote && pRemote->xBusy ) return pRemote->xBusy(pRemote->pBusyArg);
   if( nBusy>=20 ) return 0;
   sqlite3_sleep(50);
   return 1;
 }
 
-static int fsLockAndForceRefresh(ChunkStore *cs){
+static int fsLockAndForceRefresh(DoltliteRemote *pRemote, ChunkStore *cs){
   int nBusy = 0;
   int rc;
   do {
     rc = chunkStoreLockAndRefresh(cs);
-  }while( rc==SQLITE_BUSY && fsBusyRetry(nBusy++) );
+  }while( rc==SQLITE_BUSY && fsBusyRetry(pRemote, nBusy++) );
   if( rc==SQLITE_OK ){
     rc = chunkStoreForceRefresh(cs);
     if( rc==SQLITE_CANTOPEN || rc==SQLITE_NOTADB ) rc = SQLITE_OK;
@@ -462,7 +475,7 @@ static int fsLockAndForceRefresh(ChunkStore *cs){
 static int fsEnsureLocked(FsRemote *p){
   int rc;
   if( p->locked ) return SQLITE_OK;
-  rc = fsLockAndForceRefresh(&p->store);
+  rc = fsLockAndForceRefresh(&p->base, &p->store);
   if( rc!=SQLITE_OK ) return rc;
   p->locked = 1;
   return SQLITE_OK;
@@ -482,7 +495,7 @@ static int fsGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
   if( p->locked ){
     return remoteGetRefs(pRemote, ppData, pnData);
   }
-  rc = fsLockAndForceRefresh(&p->store);
+  rc = fsLockAndForceRefresh(pRemote, &p->store);
   if( rc!=SQLITE_OK ) return rc;
   rc = remoteGetRefs(pRemote, ppData, pnData);
   chunkStoreUnlock(&p->store);
@@ -648,7 +661,7 @@ static int localEnsureLocked(LocalAsRemote *p){
   if( p->locked ) return SQLITE_OK;
   do {
     rc = chunkStoreLockAndRefresh(p->pStore);
-  }while( rc==SQLITE_BUSY && fsBusyRetry(nBusy++) );
+  }while( rc==SQLITE_BUSY && fsBusyRetry(&p->base, nBusy++) );
   if( rc==SQLITE_OK ) rc = chunkStoreForceRefresh(p->pStore);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(p->pStore);

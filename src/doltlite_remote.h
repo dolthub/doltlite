@@ -30,6 +30,11 @@ struct DoltliteRemote {
   const char *(*xErrMsg)(DoltliteRemote*);
   int bResumePartialPuts;
   int bCacheForChunkSource;
+  /* Lock waits on a file-backed remote consult the opening connection's busy
+  ** handler. Without one, a contended remote gives up on a fixed schedule
+  ** instead of honouring busy_timeout. */
+  int (*xBusy)(void*);
+  void *pBusyArg;
 };
 
 static inline int doltliteRemotePersistRefs(ChunkStore *cs){
@@ -69,6 +74,8 @@ int doltliteCloneLazy(ChunkStore *pLocal, DoltliteRemote *pRemote,
                       const char *zUrl);
 
 DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath);
+void doltliteRemoteSetBusyHandler(DoltliteRemote *p, int (*xBusy)(void*),
+                                  void *pBusyArg);
 
 DoltliteRemote *doltliteRemoteOpenReadOnly(sqlite3_vfs *pVfs,
                                            const char *zUrl);
