@@ -1232,6 +1232,10 @@ struct DssCursor {
   int nToCat;
   DsNameIndex fromIdx;
   DsNameIndex toIdx;
+  SchemaEntry *aFromSchema;
+  SchemaEntry *aToSchema;
+  int nFromSchema;
+  int nToSchema;
   DsSummaryRow row;
   int iName;
   int hasRow;
@@ -1267,11 +1271,17 @@ static void dssCursorReset(DssCursor *c){
   dsNameIndexClear(&c->toIdx);
   doltliteFreeCatalog(c->aFromCat, c->nFromCat);
   doltliteFreeCatalog(c->aToCat, c->nToCat);
+  freeSchemaEntries(c->aFromSchema, c->nFromSchema);
+  freeSchemaEntries(c->aToSchema, c->nToSchema);
   dsFilterCtxClear(&c->fctx);
   c->aFromCat = 0;
   c->aToCat = 0;
   c->nFromCat = 0;
   c->nToCat = 0;
+  c->aFromSchema = 0;
+  c->aToSchema = 0;
+  c->nFromSchema = 0;
+  c->nToSchema = 0;
   c->iName = 0;
   c->hasRow = 0;
   c->iRowid = 0;
@@ -1408,6 +1418,14 @@ static int dssAppendTableChange(
     int rootsDiffer = prollyHashCompare(&pFromEntry->root, &pToEntry->root)!=0;
     int schemasDiffer = prollyHashCompare(&pFromEntry->schemaHash,
                                           &pToEntry->schemaHash)!=0;
+    /* Index catalog rows are not in schemaHash; CREATE/DROP INDEX is still
+    ** a schema change on the parent table. */
+    if( !schemasDiffer
+     && doltliteIndexSchemaRowsDifferForTable(
+          c->aFromSchema, c->nFromSchema,
+          c->aToSchema, c->nToSchema, zTableName) ){
+      schemasDiffer = 1;
+    }
     if( !rootsDiffer && !schemasDiffer ) return SQLITE_OK;
     if( rootsDiffer && schemasDiffer ){
       rc = dssDataActuallyChanged(db, &c->fctx, zTableName,
@@ -1535,6 +1553,18 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
   if( rc!=SQLITE_OK ) goto done;
   rc = doltliteLoadCatalog(db, &c->fctx.toCat, &c->aToCat, &c->nToCat, 0);
   if( rc!=SQLITE_OK ) goto done;
+  {
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    ProllyCache *pCache = doltliteGetCache(db);
+    if( cs && pCache ){
+      rc = loadSchemaFromCatalog(db, cs, pCache, &c->fctx.fromCat,
+                                 &c->aFromSchema, &c->nFromSchema);
+      if( rc!=SQLITE_OK ) goto done;
+      rc = loadSchemaFromCatalog(db, cs, pCache, &c->fctx.toCat,
+                                 &c->aToSchema, &c->nToSchema);
+      if( rc!=SQLITE_OK ) goto done;
+    }
+  }
   if( !c->fctx.zTblFilter ){
     rc = dsNameIndexInit(&c->fromIdx, c->aFromCat, c->nFromCat);
     if( rc!=SQLITE_OK ) goto done;

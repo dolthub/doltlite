@@ -392,6 +392,32 @@ run_test "diff_stat_working_schemas_dropped" \
   "dolt_schemas|0|2|0|2|0" "$SCH_DB"
 rm -f "$SCH_DB"
 
+IDX_DB=/tmp/test_diff_index_summary_$$.db; rm -f "$IDX_DB"
+cat <<'EOF' | $DOLTLITE "$IDX_DB" >/dev/null 2>&1
+CREATE TABLE t(a INT PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-A','-m','c1');
+CREATE INDEX i1 ON t(b);
+EOF
+run_test "diff_status_index_only_modified" \
+  "SELECT table_name||'|'||status FROM dolt_status;" \
+  "t|modified" "$IDX_DB"
+run_test "diff_working_index_only_schema" \
+  "SELECT table_name||'|'||data_change||'|'||schema_change FROM dolt_diff WHERE commit_hash='WORKING';" \
+  "t|0|1" "$IDX_DB"
+run_test "diff_summary_working_index_only" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('HEAD','WORKING');" \
+  "t|t|modified|0|1" "$IDX_DB"
+dltest_run_sql "SELECT dolt_commit('-A','-m','c2');" "$IDX_DB" >/dev/null
+run_test "diff_summary_commit_index_only" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('HEAD~1','HEAD');" \
+  "t|t|modified|0|1" "$IDX_DB"
+dltest_run_sql "DROP INDEX i1;" "$IDX_DB" >/dev/null
+run_test "diff_summary_working_drop_index" \
+  "SELECT from_table_name||'|'||to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('HEAD','WORKING');" \
+  "t|t|modified|0|1" "$IDX_DB"
+rm -f "$IDX_DB"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 
 dltest_finish
