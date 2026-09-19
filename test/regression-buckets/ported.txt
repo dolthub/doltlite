@@ -77,3 +77,4 @@ doltlite_push_delete
 doltlite_status_conflicts
 doltlite_at_missing_table
 doltlite_clean_schemas
+doltlite_max_page_count

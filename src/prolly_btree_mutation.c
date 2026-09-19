@@ -982,10 +982,6 @@ int prollyBtCursorInsert(
   if( rc!=SQLITE_OK ){
     return rc;
   }
-  rc = prollyBtreeCheckMaxPageCount(pCur->pBtree);
-  if( rc!=SQLITE_OK ){
-    return rc;
-  }
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
