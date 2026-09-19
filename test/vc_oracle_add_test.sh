@@ -671,6 +671,56 @@ $RENAME_SHIFT_SEED
 SELECT dolt_add('z');
 "
 
+oracle "add_rename_source_order_shifting" "
+$RENAME_SHIFT_SEED
+SELECT dolt_add('t');
+"
+
+RENAME_SOURCE_SEED="
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+CREATE INDEX r_br ON r(br);
+INSERT INTO r VALUES (1, 'r1');
+SELECT dolt_commit('-A', '-m', 'base');
+ALTER TABLE r RENAME TO r2;
+"
+
+oracle "add_rename_source" "
+$RENAME_SOURCE_SEED
+SELECT dolt_add('r');
+"
+
+oracle "add_modified_rename_source" "
+$RENAME_SOURCE_SEED
+INSERT INTO r2 VALUES (2, 'r2');
+SELECT dolt_add('r');
+"
+
+oracle "add_rename_source_and_destination" "
+$RENAME_SOURCE_SEED
+SELECT dolt_add('r', 'r2');
+"
+
+oracle "add_rename_destination_and_source" "
+$RENAME_SOURCE_SEED
+SELECT dolt_add('r2', 'r');
+"
+
+oracle "add_empty_rename_source" "
+CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+SELECT dolt_commit('-A', '-m', 'base');
+ALTER TABLE r RENAME TO r2;
+SELECT dolt_add('r');
+"
+
+oracle_reopen "add_rename_source_preserves_other_staged_changes" "
+$RENAME_SHIFT_SEED
+INSERT INTO u VALUES (3, 3);
+SELECT dolt_add('u');
+SELECT dolt_add('t');
+SELECT dolt_commit('-m', 'commit u only');
+" "SELECT concat('Q|', table_name, '|', staged, '|', status) FROM dolt_status;
+SELECT concat('Q|u|', id, '|', v) FROM u ORDER BY id;"
+
 oracle_reopen "add_renamed_table_then_commit_renames_in_head" "
 $RENAME_SHIFT_SEED
 SELECT dolt_add('z');
