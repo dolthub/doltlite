@@ -302,6 +302,53 @@ static void test_merge_install_unlock_window(void){
   closeRm(db1, zPath);
 }
 
+/* A fast-forward becomes irreversible once the branch ref moves. An interrupt
+** that arrives after that point cannot be honoured, and reporting it would
+** describe a merge that did happen as one that did not. */
+static void interruptDuringAdvance(void *pArg){
+  sqlite3_interrupt((sqlite3*)pArg);
+}
+
+static void test_ff_interrupt_after_advance(void){
+  char zPath[256];
+  sqlite3 *db;
+  char *zErr = 0, *zHead = 0, *zFeat = 0;
+  int rc;
+
+  snprintf(zPath, sizeof(zPath), "/tmp/cas_swallow_ffint_%d.db", (int)getpid());
+  db = openDb(zPath);
+  check("ffint: open", db!=0);
+  if( !db ) return;
+  doltliteTestClearFaults();
+  check("ffint: setup", exec(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_branch('feat');"
+    "SELECT dolt_checkout('feat');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-Am','feat row');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+  zFeat = queryText(db, "SELECT dolt_hashof('feat')");
+
+  doltliteTestSetMergeInstallHook(interruptDuringAdvance, db);
+  rc = execQuiet(db, "SELECT dolt_merge('feat')", &zErr);
+  doltliteTestSetMergeInstallHook(0, 0);
+
+  zHead = queryText(db, "SELECT dolt_hashof('HEAD')");
+  check("ffint: fast-forward reported as done",
+        rc==SQLITE_OK);
+  check("ffint: branch advanced",
+        zHead && zFeat && strcmp(zHead, zFeat)==0);
+  check("ffint: merged row present",
+        exec(db, "SELECT 1 FROM t WHERE id=2")==SQLITE_OK);
+  sqlite3_free(zErr);
+  sqlite3_free(zHead);
+  sqlite3_free(zFeat);
+  sqlite3_close(db);
+  remove(zPath);
+}
+
 int main(void){
   sqlite3_initialize();
   test_force_commit_keeps_cvs();
@@ -309,6 +356,7 @@ int main(void){
   test_conflicts_resolve_savepoint();
   test_branch_move_ws_read_failure();
   test_merge_install_unlock_window();
+  test_ff_interrupt_after_advance();
   printf("vc_cas_swallow_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
