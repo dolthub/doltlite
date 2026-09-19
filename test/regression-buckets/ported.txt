@@ -79,3 +79,4 @@ doltlite_at_missing_table
 doltlite_clean_schemas
 doltlite_max_page_count
 doltlite_txn_state_cursor
+doltlite_add_rename_source

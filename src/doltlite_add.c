@@ -780,6 +780,18 @@ int doltliteStageNamedTables(
           break;
         }
       }
+      if( found ){
+        struct TableEntry *pRenameMate = 0;
+        rc = doltliteCatalogRenameMate(db, aStaged, nStaged,
+                                       aWorking, nWorking,
+                                       &aStaged[j], 1, &pRenameMate);
+        if( rc!=SQLITE_OK ){
+          ADDNAMED_FREE_ALL();
+          sqlite3_result_error_code(context, rc);
+          return rc;
+        }
+        if( pRenameMate ) continue;
+      }
       if( !found && findSchemaEntry(aStagedSchema, nStagedSchema, zTable) ){
         /* Dropped vtab: staged schema row but no entry; master adoption stages removal. */
         found = 1;

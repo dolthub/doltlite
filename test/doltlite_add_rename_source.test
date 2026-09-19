@@ -1,0 +1,61 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach variant {plain indexed modified empty order-shift} {
+  reset_db
+  execsql {CREATE TABLE r(a INT PRIMARY KEY, br TEXT)}
+  if {$variant ne "empty"} {
+    execsql {INSERT INTO r VALUES(1,'r1')}
+  }
+  if {$variant eq "indexed"} {
+    execsql {CREATE INDEX r_br ON r(br)}
+  }
+  set dest r2
+  if {$variant eq "order-shift"} {
+    execsql {CREATE TABLE s(a INT PRIMARY KEY)}
+    set dest z
+  }
+  execsql {SELECT dolt_commit('-Am','base')}
+  execsql "ALTER TABLE r RENAME TO $dest"
+  if {$variant eq "modified"} {
+    execsql {INSERT INTO r2 VALUES(2,'r2')}
+  }
+
+  foreach phase {first repeated reopen} {
+    if {$phase eq "reopen"} {
+      db close
+      sqlite3 db test.db
+    }
+    do_execsql_test add-rename-source-$variant-$phase {
+      SELECT dolt_add('r');
+      SELECT table_name, staged, status FROM dolt_status;
+    } [list 0 "r -> $dest" 0 renamed]
+  }
+
+  do_execsql_test add-rename-source-$variant-stage-destination "
+    SELECT dolt_add('$dest');
+    SELECT table_name, staged, status FROM dolt_status;
+  " [list 0 "r -> $dest" 1 renamed]
+
+  do_execsql_test add-rename-source-$variant-commit {
+    SELECT length(dolt_commit('-m','rename'));
+    SELECT count(*) FROM dolt_status;
+  } {40 0}
+}
+
+reset_db
+execsql {
+  CREATE TABLE r(a INT PRIMARY KEY, br TEXT);
+  CREATE INDEX r_br ON r(br);
+  INSERT INTO r VALUES(1,'r1');
+  SELECT dolt_commit('-Am','base');
+  DROP TABLE r;
+}
+do_execsql_test add-rename-source-real-drop {
+  SELECT dolt_add('r');
+  SELECT table_name, staged, status FROM dolt_status;
+  SELECT length(dolt_commit('-m','drop'));
+  SELECT count(*) FROM dolt_status;
+} {0 r 1 deleted 40 0}
+
+finish_test
