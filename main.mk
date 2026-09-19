@@ -2777,6 +2777,7 @@ DOLTLITE_C_TESTS = \
 	readonly_reader_writer_test$(T.exe) \
 	authorizer_internal_sql_test$(T.exe) \
 	vc_result_code_test$(T.exe) \
+	vc_commit_hook_test$(T.exe) \
 	integrity_check_counts_test$(T.exe) \
 	count_range_override_test$(T.exe) \
 	vc_cas_swallow_test$(T.exe) \
@@ -2800,6 +2801,10 @@ authorizer_internal_sql_test$(T.exe): $(TOP)/test/authorizer_internal_sql_test.c
 
 vc_result_code_test$(T.exe): $(TOP)/test/vc_result_code_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/vc_result_code_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+vc_commit_hook_test$(T.exe): $(TOP)/test/vc_commit_hook_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/vc_commit_hook_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 integrity_check_counts_test$(T.exe): $(TOP)/test/integrity_check_counts_test.c libdoltlite$(T.lib)
