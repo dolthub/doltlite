@@ -151,6 +151,15 @@ COMMIT;
 SELECT count(*) FROM a1.u;" \
   "1" "$IMM_MAIN"
 
+DROP_IDX_DB="$TMP/drop-col-index-order.db"
+run_test "drop_column_index_error_catalog_order" \
+  "CREATE TABLE b(r, g);
+CREATE INDEX b_rg ON b(r, g);
+CREATE INDEX b_g ON b(g);
+ALTER TABLE b DROP COLUMN g;" \
+  "Error near line 4: error in index b_g after drop column: no such column: g" \
+  "$DROP_IDX_DB"
+
 CANON_DB="$TMP/sqlite-master-canonical.db"
 run_test_lastline "sqlite_master_sql_canonical" \
   "CREATE TABLE t(a INTEGER PRIMARY KEY,   b   TEXT  );
