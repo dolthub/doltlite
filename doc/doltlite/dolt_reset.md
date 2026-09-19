@@ -52,8 +52,9 @@ committed.
 
 ## Differences from Dolt
 
-`dolt_reset('--hard')` inside `BEGIN` takes effect immediately rather than
-with the transaction.
+`dolt_reset` inside `BEGIN` ends the SQL transaction (commit, then a new
+`BEGIN`), matching Dolt. A following `ROLLBACK` does not undo the reset or
+rows written before it.
 
 ## See also
 

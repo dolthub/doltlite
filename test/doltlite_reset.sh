@@ -469,6 +469,22 @@ run_test "table_reset_beside_staged_new_indexed_table_commit" \
 ok" "$DB18/probe18"
 run_test "table_reset_beside_staged_new_indexed_table_status" "$(reset18_status)" "child|0|modified" "$DB18"
 
+TXN_DB=/tmp/test_reset_txn_seal_$$.db; rm -f "$TXN_DB"
+echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); INSERT INTO t VALUES(1,'x'),(2,'y'),(3,'z'); SELECT dolt_commit('-Am','c1');" | $DOLTLITE "$TXN_DB" >/dev/null 2>&1
+run_test "soft_reset_in_txn_survives_rollback" \
+  "BEGIN; INSERT INTO t VALUES(8,'q'); SELECT dolt_reset('--soft'); ROLLBACK; SELECT count(*) FROM t;" \
+  "0
+4" "$TXN_DB"
+run_test "bare_reset_in_txn_survives_rollback" \
+  "BEGIN; INSERT INTO t VALUES(9,'r'); SELECT dolt_reset(); ROLLBACK; SELECT count(*) FROM t;" \
+  "0
+5" "$TXN_DB"
+run_test "hard_reset_in_txn_keeps_head" \
+  "BEGIN; INSERT INTO t VALUES(10,'s'); SELECT dolt_reset('--hard'); ROLLBACK; SELECT count(*) FROM t;" \
+  "0
+3" "$TXN_DB"
+rm -f "$TXN_DB"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 
 dltest_finish
