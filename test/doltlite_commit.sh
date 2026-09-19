@@ -211,6 +211,16 @@ run_test "one_commit_after_no_change" \
   "SELECT count(*) FROM dolt_log;" \
   "2" "$DB3"
 
+DB_BOTH=/tmp/test_dolt_allow_skip_empty_$$.db
+rm -f "$DB_BOTH"
+echo "CREATE TABLE t(a INT PRIMARY KEY); SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB_BOTH" >/dev/null 2>&1
+run_test "commit_allow_and_skip_empty_refused" \
+  "SELECT dolt_commit('--allow-empty','--skip-empty','-m','both');" \
+  "Error near line 1: cannot use both --allow-empty and --skip-empty" "$DB_BOTH"
+run_test "commit_allow_and_skip_empty_no_commit" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB_BOTH"
+
 DB4=/tmp/test_dolt_multi_$$.db
 rm -f "$DB4"
 
@@ -767,7 +777,7 @@ run_test "amend_during_merge_then_finish_msg" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "merged" "$DB26"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26"
+rm -f "$DB" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

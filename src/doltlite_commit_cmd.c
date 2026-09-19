@@ -153,6 +153,11 @@ static int doltliteCommitParseOptions(
     return SQLITE_ERROR;
   }
   doltliteCmdArgsClear(&args);
+  if( opts->allowEmpty && opts->skipEmpty ){
+    sqlite3_result_error(context,
+      "cannot use both --allow-empty and --skip-empty", -1);
+    return SQLITE_ERROR;
+  }
   return SQLITE_OK;
 }
 
