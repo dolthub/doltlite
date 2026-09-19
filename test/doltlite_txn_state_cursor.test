@@ -1,0 +1,97 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+db close
+foreach engine {prolly sqlite} {
+  foreach {operation sql} {
+    insert {INSERT INTO t VALUES(4,'four')}
+    other-table {INSERT INTO u VALUES(1)}
+    ddl {CREATE TABLE z_added(id INTEGER PRIMARY KEY)}
+    commit {BEGIN; INSERT INTO u VALUES(1); COMMIT}
+  } {
+    forcedelete txn-state.db
+    sqlite3 db "file:txn-state.db?doltlite_engine=$engine" -uri 1
+    execsql {
+      PRAGMA journal_mode=WAL;
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+      CREATE TABLE u(id INTEGER PRIMARY KEY);
+      INSERT INTO t VALUES(1,'one'),(2,'two'),(3,'three');
+    }
+    set name txn-state-$engine-$operation
+    set stmt [sqlite3_prepare_v2 db {SELECT * FROM t ORDER BY id} -1 tail]
+    do_test $name-before {sqlite3_txn_state db main} {0}
+    do_test $name-first {
+      list [sqlite3_step $stmt] [sqlite3_txn_state db main]
+    } {SQLITE_ROW 1}
+    do_execsql_test $name-write $sql {}
+    do_test $name-after {
+      list [sqlite3_txn_state db main] [sqlite3_txn_state db] [sqlite3_get_autocommit db]
+    } {1 1 1}
+    do_test $name-next {
+      list [sqlite3_step $stmt] [sqlite3_column_int $stmt 0] [sqlite3_txn_state db main]
+    } {SQLITE_ROW 2 1}
+    sqlite3_finalize $stmt
+    do_test $name-finalize {sqlite3_txn_state db main} {0}
+    db close
+  }
+
+  forcedelete txn-state.db
+  sqlite3 db "file:txn-state.db?doltlite_engine=$engine" -uri 1
+  execsql {
+    PRAGMA journal_mode=WAL;
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    CREATE TABLE u(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1),(2),(3);
+  }
+  sqlite3 peer "file:txn-state.db?doltlite_engine=$engine" -uri 1
+  set stmt [sqlite3_prepare_v2 db {SELECT * FROM t ORDER BY id} -1 tail]
+  sqlite3_step $stmt
+  execsql {INSERT INTO u VALUES(1)}
+  if {$engine eq "prolly"} {
+    do_test txn-state-$engine-peer {
+      execsql {INSERT INTO t VALUES(4)} peer
+      list [sqlite3_txn_state db main] [sqlite3_txn_state peer main]
+    } {1 0}
+  }
+  do_test txn-state-$engine-snapshot {
+    set rows {}
+    while {[sqlite3_step $stmt] eq "SQLITE_ROW"} {
+      lappend rows [sqlite3_column_int $stmt 0]
+    }
+    list $rows [sqlite3_txn_state db main]
+  } {{2 3} 0}
+  sqlite3_finalize $stmt
+  peer close
+
+  set stmt [sqlite3_prepare_v2 db {SELECT * FROM t} -1 tail]
+  set stmt2 [sqlite3_prepare_v2 db {SELECT * FROM t} -1 tail]
+  sqlite3_step $stmt
+  sqlite3_step $stmt2
+  execsql {INSERT INTO u VALUES(2)}
+  do_test txn-state-$engine-two-cursors {
+    sqlite3_finalize $stmt
+    sqlite3_txn_state db main
+  } {1}
+  do_test txn-state-$engine-reset {
+    sqlite3_reset $stmt2
+    sqlite3_txn_state db main
+  } {0}
+  execsql {INSERT INTO u VALUES(3)}
+  do_test txn-state-$engine-unstepped {sqlite3_txn_state db main} {0}
+  sqlite3_finalize $stmt2
+
+  forcedelete txn-state-aux.db
+  execsql "ATTACH 'file:txn-state-aux.db?doltlite_engine=$engine' AS aux"
+  execsql {CREATE TABLE aux.a(id INTEGER PRIMARY KEY); INSERT INTO aux.a VALUES(1),(2)}
+  set stmt [sqlite3_prepare_v2 db {SELECT * FROM aux.a} -1 tail]
+  sqlite3_step $stmt
+  execsql {INSERT INTO u VALUES(4)}
+  do_test txn-state-$engine-attached {
+    list [sqlite3_txn_state db main] [sqlite3_txn_state db aux] [sqlite3_txn_state db]
+  } {1 1 1}
+  sqlite3_finalize $stmt
+  do_test txn-state-$engine-attached-finalize {sqlite3_txn_state db} {0}
+  db close
+}
+sqlite3 db test.db
+finish_test
