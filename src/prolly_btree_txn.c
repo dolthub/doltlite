@@ -959,8 +959,14 @@ static void commitPhaseTwoAdoptReloadedCatalog(
 }
 
 static void commitPhaseTwoEndWriteTxn(Btree *p){
-  p->inTrans = TRANS_NONE;
-  p->inTransaction = TRANS_NONE;
+  /* Nested VC SQL must release its snapshot for later steps to refresh. */
+  if( p->inTrans>TRANS_NONE && p->db && p->db->nVdbeRead>1
+   && p->db->nVdbeExec<=1 ){
+    p->inTrans = TRANS_READ;
+  }else{
+    p->inTrans = TRANS_NONE;
+  }
+  p->inTransaction = p->inTrans;
   btreeDiscardAllSavepoints(p);
   p->bSchemaChangedTxn = 0;
   p->bMasterRootChangedTxn = 0;
