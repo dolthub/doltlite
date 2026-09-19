@@ -696,6 +696,9 @@ static int mergeFastForward(
                               &workingCatHash, &zErr);
     if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
   }
+  /* Past this point the branch ref moves and the result is durable. Honour a
+  ** pending interrupt here, while stopping still leaves the branch alone. */
+  if( rc==SQLITE_OK && AtomicLoad(&db->u1.isInterrupted) ) rc = SQLITE_INTERRUPT;
   if( squash ){
     if( rc==SQLITE_OK ){
       rc = doltliteSetSessionStaged(db, &theirCommit.catalogHash);
@@ -735,8 +738,13 @@ static int mergeFastForward(
     sqlite3_result_error_code(context, rc);
     return rc;
   }
+  if( xTestMergeInstall ) xTestMergeInstall(pTestMergeInstallArg);
   doltliteTxnStateClear(&savedState);
   doltliteCommitClear(&theirCommit);
+  /* The advance completed and is durable. An interrupt that arrived while it
+  ** ran cannot be honoured any more, and letting it stand would report a
+  ** merge that did happen as one that did not. */
+  AtomicStore(&db->u1.isInterrupted, 0);
   doltliteHashToHex(pTheirHead, hx);
   sqlite3_result_text(context, hx, -1, SQLITE_TRANSIENT);
   return SQLITE_OK;
