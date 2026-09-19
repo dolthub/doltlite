@@ -375,6 +375,11 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   }
   sqlite3_reset(pStmt);
 
+  if( nCol==0 ){
+    sqlite3_finalize(pStmt);
+    return SQLITE_OK;
+  }
+
   ci->azName = sqlite3_malloc(nCol * (int)sizeof(char*));
   if( !ci->azName ){ sqlite3_finalize(pStmt); return SQLITE_NOMEM; }
   memset(ci->azName, 0, nCol * (int)sizeof(char*));

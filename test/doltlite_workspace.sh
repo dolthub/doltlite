@@ -27,6 +27,19 @@ run_test "workspace_partial_commit_visible_rows" \
   "SELECT id || '|' || v || '|' || confidence FROM t ORDER BY id;" \
   $'1|110|1\n2|120|-1\n3|130|2' "$DB"
 
+ws_missing=$(dltest_run_sql "SELECT * FROM dolt_workspace_nope;" "$DB" || true)
+if echo "$ws_missing" | grep -q "no such table: dolt_workspace_nope"; then
+  dltest_pass
+else
+  dltest_fail "workspace_missing_table_no_such_table" "  got: $ws_missing"
+fi
+diff_missing=$(dltest_run_sql "SELECT * FROM dolt_diff_nope;" "$DB" || true)
+if echo "$diff_missing" | grep -q "no such table: dolt_diff_nope"; then
+  dltest_pass
+else
+  dltest_fail "diff_missing_table_no_such_table" "  got: $diff_missing"
+fi
+
 IDX_DB=/tmp/doltlite_workspace_index_$$.db
 rm -rf "$IDX_DB"
 trap 'rm -rf "$DB"; rm -rf "$IDX_DB"' EXIT

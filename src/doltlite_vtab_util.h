@@ -260,12 +260,18 @@ static SQLITE_INLINE int doltliteVtabConnectTable(
   if( historical ){
     rc = doltliteLoadHistoricalTableColumns(db, zMod, v->zTableName,
                                              &v->cols, pzErr);
-    if( rc==SQLITE_NOTFOUND && (!pzErr || !*pzErr) ){
-      if( pzErr ) *pzErr = sqlite3_mprintf("no such table: %s", zMod);
-      rc = pzErr && !*pzErr ? SQLITE_NOMEM : SQLITE_ERROR;
-    }
   }else{
     rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
+  }
+  if( rc==SQLITE_OK && v->cols.nCol<=0 ) rc = SQLITE_NOTFOUND;
+  if( rc==SQLITE_NOTFOUND || (rc==SQLITE_ERROR && v->cols.nCol<=0) ){
+    if( pzErr ){
+      sqlite3_free(*pzErr);
+      *pzErr = sqlite3_mprintf("no such table: %s", zMod);
+      rc = *pzErr ? SQLITE_ERROR : SQLITE_NOMEM;
+    }else{
+      rc = SQLITE_ERROR;
+    }
   }
   if( rc==SQLITE_OK ){
     zSchema = xBuildSchema(&v->cols);
