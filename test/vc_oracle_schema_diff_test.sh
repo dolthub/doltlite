@@ -291,6 +291,50 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'rename_table');
 " "HEAD~1" "HEAD" "t2"
 
+# A rename that also changes rows is still one rename, not a drop plus an add.
+oracle "modified_rename_table_with_data" "
+$SEED
+ALTER TABLE t RENAME TO t2;
+INSERT INTO t2 VALUES (99, 'added');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_and_edit');
+" "HEAD~1" "HEAD"
+
+oracle "modified_rename_table_with_data_filter_old_name" "
+$SEED
+ALTER TABLE t RENAME TO t2;
+INSERT INTO t2 VALUES (99, 'added');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_and_edit');
+" "HEAD~1" "HEAD" "t"
+
+oracle "modified_rename_table_with_data_filter_new_name" "
+$SEED
+ALTER TABLE t RENAME TO t2;
+INSERT INTO t2 VALUES (99, 'added');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_and_edit');
+" "HEAD~1" "HEAD" "t2"
+
+oracle "modified_rename_table_with_data_working" "
+$SEED
+ALTER TABLE t RENAME TO t2;
+INSERT INTO t2 VALUES (99, 'added');
+" "HEAD" "WORKING"
+
+# A drop must not be paired with an unrelated new table as a rename.
+oracle "modified_drop_beside_rename" "
+$SEED
+CREATE TABLE d(a INT PRIMARY KEY, bd TEXT);
+INSERT INTO d VALUES (1, 'd1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_d');
+DROP TABLE d;
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_and_rename');
+" "HEAD~1" "HEAD"
+
 oracle "modified_add_not_null_default" "
 $SEED
 ALTER TABLE t ADD COLUMN extra VARCHAR(32) NOT NULL DEFAULT '';
