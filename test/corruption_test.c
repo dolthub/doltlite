@@ -1437,6 +1437,147 @@ static void test_paged_checkpoint_large_index(void){
   removeDb(dbpath);
 }
 
+static int writeCheckpointPage(
+  ChunkStore *cs, i64 offset, const u8 *body, int size, ProllyHash *hash
+){
+  u8 record[CS_INDEX_PAGE_SIZE+CS_WAL_CHUNK_HDR_SIZE];
+  prollyHashCompute(body, size, hash);
+  record[0] = CS_WAL_TAG_CHUNK;
+  CS_WRITE_U32(record+CS_WAL_CHUNK_LEN_OFF, size);
+  memcpy(record+CS_WAL_CHUNK_HASH_OFF, hash->data, PROLLY_HASH_SIZE);
+  memcpy(record+CS_WAL_CHUNK_HDR_SIZE, body, size);
+  return sqlite3OsWrite(cs->file.pFile, record,
+                        CS_WAL_CHUNK_HDR_SIZE+size, offset);
+}
+
+static void test_checkpoint_cache_validation(void){
+  const char *path = "/tmp/test_corr_checkpoint_cache.db";
+  u8 leaf[CS_INDEX_PAGE_HEADER_SIZE+2*CHUNK_INDEX_ENTRY_SIZE];
+  u8 root[CS_INDEX_PAGE_HEADER_SIZE+CS_INDEX_CHILD_SIZE];
+  const i64 leafOffset = 4096;
+  const i64 rootOffset = 8192;
+  const i64 dataEnd = 2048;
+  ChunkStore cs;
+  ChunkIndexEntry entry;
+  ProllyHash key;
+  ProllyHash leafHash;
+  const sqlite3_io_methods *original;
+  sqlite3_io_methods methods;
+  int found;
+  int rc;
+  int i;
+
+  removeDb(path);
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  check("checkpoint_cache_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  rc = chunkStorePut(&cs, "seed", 4, &key);
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(&cs);
+  check("checkpoint_cache_create_file", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){
+    chunkStoreClose(&cs);
+    removeDb(path);
+    return;
+  }
+  original = cs.file.pFile->pMethods;
+  methods = *original;
+  checkpointRead = original->xRead;
+  methods.xRead = countCheckpointRead;
+  cs.file.pFile->pMethods = &methods;
+
+  memset(leaf, 0, sizeof(leaf));
+  CS_WRITE_U32(leaf, CS_INDEX_PAGE_LEAF_MAGIC);
+  CS_WRITE_U32(leaf+4, 2);
+  for(i=0; i<2; i++){
+    u8 *p = leaf+CS_INDEX_PAGE_HEADER_SIZE+i*CHUNK_INDEX_ENTRY_SIZE;
+    p[0] = (u8)(0x10+i*0x10);
+    CS_WRITE_I64(p+PROLLY_HASH_SIZE, dataEnd-8);
+    CS_WRITE_U32(p+PROLLY_HASH_SIZE+8, 4);
+  }
+  memcpy(key.data, leaf+CS_INDEX_PAGE_HEADER_SIZE, PROLLY_HASH_SIZE);
+  rc = writeCheckpointPage(&cs, leafOffset, leaf, sizeof(leaf), &leafHash);
+  check("checkpoint_cache_write_leaf", rc==SQLITE_OK);
+  memset(root, 0, sizeof(root));
+  CS_WRITE_U32(root, CS_INDEX_PAGE_INTERNAL_MAGIC);
+  CS_WRITE_U32(root+4, 1);
+  root[CS_INDEX_PAGE_HEADER_SIZE] = 0x20;
+  CS_WRITE_I64(root+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE, leafOffset);
+  CS_WRITE_U32(root+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE+8, sizeof(leaf));
+  memcpy(root+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE+12,
+         leafHash.data, PROLLY_HASH_SIZE);
+  cs.index.lazy.active = 1;
+  cs.index.lazy.iDataEnd = dataEnd;
+  cs.index.lazy.iRootOffset = rootOffset;
+  cs.index.lazy.nRootSize = sizeof(root);
+  rc = writeCheckpointPage(&cs, rootOffset, root, sizeof(root),
+                            &cs.index.lazy.rootHash);
+  check("checkpoint_cache_write_root", rc==SQLITE_OK);
+  for(i=0; i<2; i++){
+    checkpointReadCount = 0;
+    rc = csIndexLookup(&cs, &key, &entry, &found);
+    check("checkpoint_cache_valid_lookup",
+          rc==SQLITE_OK && found && entry.offset==dataEnd-8 && entry.size==4);
+    check("checkpoint_cache_read_count",
+          checkpointReadCount==(i==0 ? 2 : 0));
+  }
+
+  cs.index.lazy.iDataEnd = dataEnd-1;
+  rc = csIndexLookup(&cs, &key, &entry, &found);
+  check("checkpoint_cache_changed_data_boundary", rc==SQLITE_CORRUPT && !found);
+  cs.index.lazy.iDataEnd = dataEnd;
+  rc = csIndexLookup(&cs, &key, &entry, &found);
+  check("checkpoint_cache_restored_data_boundary", rc==SQLITE_OK && found);
+
+  root[CS_INDEX_PAGE_HEADER_SIZE] = 0x30;
+  rc = writeCheckpointPage(&cs, rootOffset, root, sizeof(root),
+                            &cs.index.lazy.rootHash);
+  check("checkpoint_cache_write_wrong_parent", rc==SQLITE_OK);
+  rc = csIndexLookup(&cs, &key, &entry, &found);
+  check("checkpoint_cache_checks_parent_maximum", rc==SQLITE_CORRUPT && !found);
+  root[CS_INDEX_PAGE_HEADER_SIZE] = 0x20;
+
+  for(i=0; i<6; i++){
+    u8 badLeaf[sizeof(leaf)];
+    u8 badRoot[sizeof(root)];
+    u8 *p;
+    int repeat;
+    memcpy(badLeaf, leaf, sizeof(leaf));
+    memcpy(badRoot, root, sizeof(root));
+    p = badLeaf+CS_INDEX_PAGE_HEADER_SIZE+CHUNK_INDEX_ENTRY_SIZE;
+    switch( i ){
+      case 0: CS_WRITE_I64(p+PROLLY_HASH_SIZE, dataEnd); break;
+      case 1: p[0] = 0x10; break;
+      case 2: CS_WRITE_U32(p+PROLLY_HASH_SIZE+8, 100); break;
+      case 3:
+        CS_WRITE_I64(badRoot+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE,
+                     rootOffset);
+        break;
+      case 4:
+        CS_WRITE_I64(badRoot+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE,
+                     dataEnd-1);
+        break;
+      case 5: CS_WRITE_U32(badLeaf+4, 0); break;
+    }
+    rc = writeCheckpointPage(&cs, leafOffset, badLeaf, sizeof(badLeaf),
+                              &leafHash);
+    check("checkpoint_cache_write_malformed_leaf", rc==SQLITE_OK);
+    memcpy(badRoot+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE+12,
+           leafHash.data, PROLLY_HASH_SIZE);
+    rc = writeCheckpointPage(&cs, rootOffset, badRoot, sizeof(badRoot),
+                              &cs.index.lazy.rootHash);
+    check("checkpoint_cache_write_malformed_root", rc==SQLITE_OK);
+    for(repeat=0; repeat<2; repeat++){
+      rc = csIndexLookup(&cs, &key, &entry, &found);
+      check("checkpoint_cache_rejects_malformed_page",
+            rc==SQLITE_CORRUPT && !found);
+    }
+  }
+  cs.file.pFile->pMethods = original;
+  chunkStoreClose(&cs);
+  removeDb(path);
+}
+
 static void test_root_seal_binds_file_offset(void){
   unsigned char manifest[CHUNK_MANIFEST_SIZE];
   const long long rootOffset = 4096;
@@ -1756,6 +1897,7 @@ int main(void){
   test_crash_garbage_truncated_on_write();
   test_wal_open_checkpoint();
   test_paged_checkpoint_large_index();
+  test_checkpoint_cache_validation();
   test_root_seal_binds_file_offset();
   test_header_seal_detects_tampered_wal_offset();
   test_unsealed_header_still_opens();
