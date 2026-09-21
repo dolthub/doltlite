@@ -49,4 +49,18 @@ do_faultsim_test shrink -faults oom-* -prep {
   }
 }
 
+do_faultsim_test release -faults oom-* -prep {
+  faultsim_restore_and_reopen
+  db eval {SELECT count(v), sum(length(v)) FROM t}
+} -body {
+  sqlite3_db_release_memory db
+  db eval {SELECT count(v), sum(length(v)), sum(id) FROM t}
+} -test {
+  faultsim_test_result {0 {128 256000 8256}} {1 {out of memory}}
+  if {[db eval {SELECT count(v), sum(length(v)), sum(id) FROM t}]
+      ne {128 256000 8256}} {
+    error "scan changed after cache release failure"
+  }
+}
+
 finish_test

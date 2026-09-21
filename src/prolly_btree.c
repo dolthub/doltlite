@@ -916,7 +916,7 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return SQLITE_NOMEM;
   }
-  pagerShimSetStore(pBt->pPagerShim, &pBt->store);
+  pagerShimSetStore(pBt->pPagerShim, &pBt->store, &pBt->cache);
 
   pBt->db = db;
   pBt->store.xWriteGate = prollyBtreeQueryOnlyWriteGate;

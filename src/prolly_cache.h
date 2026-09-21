@@ -36,6 +36,7 @@ struct ProllyCache {
 int prollyCacheInit(ProllyCache *cache, i64 nMaxByte);
 
 void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte);
+void prollyCacheShrink(ProllyCache *cache);
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash);
 

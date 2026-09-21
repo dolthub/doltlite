@@ -229,6 +229,11 @@ static void cacheRehash(ProllyCache *cache, int nBucket){
   }
 }
 
+void prollyCacheShrink(ProllyCache *cache){
+  cacheTrim(cache, 0);
+  if( cache->nUsed==0 && cache->nBucket>16 ) cacheRehash(cache, 16);
+}
+
 void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte){
   int nBucket = cache->nBucket;
   cache->nMaxByte = MAX(nMaxByte, 4096);

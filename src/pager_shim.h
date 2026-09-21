@@ -7,6 +7,7 @@
 typedef struct PagerShim PagerShim;
 typedef struct PagerOps PagerOps;
 struct ChunkStore;
+struct ProllyCache;
 /* Satisfies sqlite3Pager* calls the btree facade reaches; not a real pager. */
 #define PAGER_SHIM_MAGIC 0x50534D31
 struct PagerShim {
@@ -14,6 +15,7 @@ struct PagerShim {
   const PagerOps *pOps;
   sqlite3_file *pFd;
   struct ChunkStore *pStore;  /* shimPagerFile uses current store pFile */
+  struct ProllyCache *pCache;
   char *zFilename;
   char *zJournal;
   u8 eLock;
@@ -27,7 +29,8 @@ PagerShim *pagerShimCreate(sqlite3_vfs *pVfs, const char *zFilename,
 
 void pagerShimDestroy(PagerShim *pShim);
 
-void pagerShimSetStore(PagerShim *pShim, struct ChunkStore *pStore);
+void pagerShimSetStore(PagerShim *pShim, struct ChunkStore *pStore,
+                       struct ProllyCache *pCache);
 int pagerShimIsShim(const Pager *pPager);
 
 sqlite3_file *sqlite3PagerFile(Pager*);

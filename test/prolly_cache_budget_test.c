@@ -256,6 +256,22 @@ int main(void){
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
+  {
+    i64 nBudget = pCache->nMaxByte;
+    int nSlot = doltliteGetChunkStore(db)->nIndexCacheSlot;
+    check("release cache memory", sqlite3_db_release_memory(db)==SQLITE_OK);
+    check("release frees unpinned node and index caches",
+        pCache->nUsed==0 && pCache->nByte<=4096
+        && csIndexCacheBytes(doltliteGetChunkStore(db))==0);
+    check("release preserves configured budgets", pCache->nMaxByte==nBudget
+        && doltliteGetChunkStore(db)->nIndexCacheSlot==nSlot);
+    scan(db);
+    check("cache refills after release", cacheBytes(pCache)>8*1024*1024
+        && budgetMatches(db, 64*1024*1024));
+    execSql(db, "PRAGMA shrink_memory");
+    check("pragma releases both caches", pCache->nUsed==0
+        && csIndexCacheBytes(doltliteGetChunkStore(db))==0);
+  }
   execSql(db, "PRAGMA cache_size=-32768");
   scan(db);
   check("larger cache retains scan", cacheBytes(pCache)>8*1024*1024);
@@ -269,6 +285,9 @@ int main(void){
   check("prepare pinned scan", sqlite3_prepare_v2(db,
       "SELECT id, v FROM t ORDER BY id", -1, &p, 0)==SQLITE_OK);
   check("pin first row", sqlite3_step(p)==SQLITE_ROW);
+  check("release with pinned cursor", sqlite3_db_release_memory(db)==SQLITE_OK);
+  check("pinned row survives release", sqlite3_column_int(p, 0)==1
+      && sqlite3_column_bytes(p, 1)==100);
   execSql(db, "PRAGMA cache_size=0");
   check("pinned row survives shrink", sqlite3_column_int(p, 0)==1
       && sqlite3_column_bytes(p, 1)==100);
