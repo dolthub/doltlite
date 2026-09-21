@@ -17,6 +17,7 @@ struct ProllyCacheEntry {
   ProllyNode node;
   int nRef;
   u8 bTransient;
+  u8 nEvictChance;
   ProllyCacheEntry *pLruNext;
   ProllyCacheEntry *pLruPrev;
   ProllyCacheEntry *pHashNext;
@@ -35,6 +36,7 @@ struct ProllyCache {
 int prollyCacheInit(ProllyCache *cache, i64 nMaxByte);
 
 void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte);
+void prollyCacheShrink(ProllyCache *cache);
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash);
 

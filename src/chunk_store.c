@@ -365,6 +365,7 @@ int chunkStoreOpen(
   int exists = 0;
 
   memset(cs, 0, sizeof(*cs));
+  csIndexCacheSetBudget(cs, 200*1024);
   if( !pVfs ){
     pVfs = sqlite3_vfs_find(0);
     if( !pVfs ) return SQLITE_CANTOPEN;

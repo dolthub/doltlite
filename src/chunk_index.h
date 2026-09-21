@@ -72,6 +72,8 @@ int csReadIndex(struct ChunkStore *cs);
 int csIndexLookup(struct ChunkStore *cs, const ProllyHash *pHash,
                   ChunkIndexEntry *pEntry, int *pFound);
 void csIndexCacheFree(struct ChunkStore *cs);
+i64 csIndexCacheSetBudget(struct ChunkStore *cs, i64 nByte);
+i64 csIndexCacheBytes(const struct ChunkStore *cs);
 int csMaterializeIndex(struct ChunkStore *cs);
 int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx, const ProllyHash *pHash);
 int csIndexEntryCmp(const void *a, const void *b);

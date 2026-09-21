@@ -11,7 +11,6 @@
 
 #define CS_INDEX_WINDOW_MIN 4096
 #define CS_INDEX_WINDOW_MARGIN_DIV 64
-#define CS_INDEX_CACHE_SLOTS 48
 #define CS_INDEX_CACHE_WAYS 4
 
 typedef struct ChunkIndexCachePage ChunkIndexCachePage;
@@ -25,24 +24,45 @@ struct ChunkIndexCachePage {
 };
 
 struct ChunkIndexCache {
-  ChunkIndexCachePage aPage[CS_INDEX_CACHE_SLOTS];
   u64 clock;
+  i64 nByte;
+  int nSlot;
+  ChunkIndexCachePage aPage[1];
 };
 
 void csIndexCacheFree(ChunkStore *cs){
   int i;
   if( !cs->pIndexCache ) return;
-  for(i=0; i<CS_INDEX_CACHE_SLOTS; i++){
+  for(i=0; i<cs->pIndexCache->nSlot; i++){
     sqlite3_free(cs->pIndexCache->aPage[i].aBody);
   }
   sqlite3_free(cs->pIndexCache);
   cs->pIndexCache = 0;
 }
 
-static int csIndexCacheSlot(const ProllyHash *pHash){
+i64 csIndexCacheSetBudget(ChunkStore *cs, i64 nByte){
+  int nSlot = 0;
+  nByte = MIN(nByte, 4*1024*1024);
+  if( nByte>(i64)sizeof(ChunkIndexCache) ){
+    nSlot = (int)((nByte - sizeof(ChunkIndexCache))
+                 / (CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage)));
+    nSlot -= nSlot % CS_INDEX_CACHE_WAYS;
+  }
+  if( nSlot!=cs->nIndexCacheSlot ) csIndexCacheFree(cs);
+  cs->nIndexCacheSlot = nSlot;
+  return nSlot ? sizeof(ChunkIndexCache)
+      + nSlot*(CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage)) : 0;
+}
+
+i64 csIndexCacheBytes(const ChunkStore *cs){
+  return cs->pIndexCache ? cs->pIndexCache->nByte : 0;
+}
+
+static int csIndexCacheSlot(ChunkStore *cs, const ProllyHash *pHash){
   u32 h;
+  assert( !cs->pIndexCache || cs->pIndexCache->nSlot==cs->nIndexCacheSlot );
   memcpy(&h, pHash->data, sizeof(h));
-  return (int)(h % (CS_INDEX_CACHE_SLOTS/CS_INDEX_CACHE_WAYS))
+  return (int)(h % (cs->nIndexCacheSlot/CS_INDEX_CACHE_WAYS))
          *CS_INDEX_CACHE_WAYS;
 }
 
@@ -52,20 +72,40 @@ static void csIndexCachePut(
 ){
   ChunkIndexCachePage *p;
   u8 *aCopy;
-  int slot = csIndexCacheSlot(pHash);
+  int slot;
   int i;
+  if( cs->nIndexCacheSlot==0 ) return;
+  slot = csIndexCacheSlot(cs, pHash);
   sqlite3BeginBenignMalloc();
   if( !cs->pIndexCache ){
-    cs->pIndexCache = sqlite3MallocZero(sizeof(*cs->pIndexCache));
+    cs->pIndexCache = sqlite3MallocZero(sizeof(*cs->pIndexCache)
+        + (cs->nIndexCacheSlot-1)*sizeof(ChunkIndexCachePage));
+    if( cs->pIndexCache ){
+      cs->pIndexCache->nSlot = cs->nIndexCacheSlot;
+      cs->pIndexCache->nByte = sqlite3_msize(cs->pIndexCache);
+    }
   }
-  aCopy = cs->pIndexCache ? sqlite3_malloc(nBody) : 0;
   sqlite3EndBenignMalloc();
-  if( !aCopy ) return;
+  if( !cs->pIndexCache ) return;
   p = &cs->pIndexCache->aPage[slot];
   for(i=1; i<CS_INDEX_CACHE_WAYS; i++){
     ChunkIndexCachePage *q = &cs->pIndexCache->aPage[slot+i];
     if( q->lastUse<p->lastUse ) p = q;
   }
+  if( !p->aBody ){
+    i64 nLimit = sqlite3_soft_heap_limit64(-1);
+    if( nLimit>0 ){
+      i64 nOther = sqlite3_memory_used() - cs->pIndexCache->nByte;
+      i64 nAvailable = nLimit - MAX(nOther, 0);
+      if( cs->pIndexCache->nByte+nBody>nAvailable/16 ) return;
+    }
+  }
+  sqlite3BeginBenignMalloc();
+  aCopy = sqlite3_malloc(nBody);
+  sqlite3EndBenignMalloc();
+  if( !aCopy ) return;
+  cs->pIndexCache->nByte += (i64)sqlite3_msize(aCopy)
+                            - (i64)sqlite3_msize(p->aBody);
   sqlite3_free(p->aBody);
   p->hash = *pHash;
   p->iOffset = iOffset;
@@ -372,7 +412,7 @@ static int csReadLazyPage(
     return SQLITE_CORRUPT;
   }
   if( aBuffer && cs->pIndexCache ){
-    int slot = csIndexCacheSlot(pHash);
+    int slot = csIndexCacheSlot(cs, pHash);
     int i;
     for(i=0; i<CS_INDEX_CACHE_WAYS; i++){
       ChunkIndexCachePage *p = &cs->pIndexCache->aPage[slot+i];

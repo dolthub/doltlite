@@ -1273,8 +1273,6 @@ reservebytes reservebytes-1.4.4 class=intentional  # no per-page reserved-bytes 
 # shrink — sqlite3_db_release_memory / PRAGMA shrink_memory free the SQLite pager
 # page cache; DoltLite's prolly storage has no equivalent large page cache to
 # release, so the heap-drop assertion fails. Data is intact.
-shrink shrink-1.1 class=intentional  # no SQLite pager page-cache to release (memory model differs)
-shrink shrink-1.3 class=intentional  # no SQLite pager page-cache to release (memory model differs)
 
 # format4 — asserts [file size test.db] equals page-multiple totals
 # (2048/4096); the chunk-store file is its natural chunk-payload size.

@@ -4,6 +4,7 @@
 #include "pager_shim.h"
 #include "sqliteInt.h"
 #include "chunk_store.h"
+#include "prolly_cache.h"
 
 int sqlite3_pager_writej_count = 0;
 int sqlite3_pager_readdb_count = 0;
@@ -207,7 +208,9 @@ static u32 shimPagerDataVersion(Pager *p){
   return SHIM(p)->iDataVersion;
 }
 static void shimPagerShrink(Pager *p){
-  (void)p;
+  PagerShim *s = SHIM(p);
+  if( s->pStore ) csIndexCacheFree(s->pStore);
+  if( s->pCache ) prollyCacheShrink(s->pCache);
 }
 static int shimPagerFlush(Pager *p){
   (void)p; return SQLITE_OK;
@@ -574,9 +577,11 @@ void pagerShimDestroy(PagerShim *pShim){
   sqlite3_free(pShim);
 }
 
-void pagerShimSetStore(PagerShim *pShim, struct ChunkStore *pStore){
+void pagerShimSetStore(PagerShim *pShim, struct ChunkStore *pStore,
+                       struct ProllyCache *pCache){
   if( pShim==0 ) return;
   pShim->pStore = pStore;
+  pShim->pCache = pCache;
 }
 
 sqlite3_file *sqlite3PagerFile(Pager *pPager){

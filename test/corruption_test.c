@@ -1431,6 +1431,47 @@ static void test_paged_checkpoint_large_index(void){
           checkpointReadCount<nChunk);
     check("paged_checkpoint_cache_memory_bounded",
           sqlite3_memory_used()-before < 200*1024);
+    {
+      i64 nBudget = csIndexCacheSetBudget(&cs, 4*1024*1024);
+      int pass;
+      int aRead[2];
+      check("paged_checkpoint_budget_grows_lazily",
+            nBudget>3*1024*1024 && nBudget<=4*1024*1024
+            && csIndexCacheBytes(&cs)==0);
+      for(pass=0; pass<2; pass++){
+        checkpointReadCount = 0;
+        for(i=0; i<nChunk && rc==SQLITE_OK; i++){
+          ProllyHash hash;
+          ChunkIndexEntry e;
+          int found = 0;
+          fill_checkpoint_value(value, i);
+          prollyHashCompute(value, sizeof(value), &hash);
+          rc = csIndexLookup(&cs, &hash, &e, &found);
+          if( rc==SQLITE_OK && (!found || e.size!=(int)sizeof(value)) ){
+            rc = SQLITE_ERROR;
+          }
+        }
+        aRead[pass] = checkpointReadCount;
+      }
+      check("paged_checkpoint_large_cache_preserves_entries", rc==SQLITE_OK);
+      check("paged_checkpoint_large_cache_avoids_rereads",
+            aRead[1]<nChunk/20 && aRead[1]<aRead[0]);
+      check("paged_checkpoint_large_cache_respects_budget",
+            csIndexCacheBytes(&cs)>200*1024
+            && csIndexCacheBytes(&cs)<=nBudget);
+      check("paged_checkpoint_disable_cache",
+            csIndexCacheSetBudget(&cs, 0)==0
+            && csIndexCacheBytes(&cs)==0);
+      for(i=0; i<2; i++){
+        ChunkIndexEntry e;
+        int found = 0;
+        checkpointReadCount = 0;
+        rc = csIndexLookup(&cs, &aHash[0], &e, &found);
+        check("paged_checkpoint_uncached_lookup",
+              rc==SQLITE_OK && found && checkpointReadCount>0
+              && csIndexCacheBytes(&cs)==0);
+      }
+    }
     cs.file.pFile->pMethods = pMethods;
     chunkStoreClose(&cs);
   }
