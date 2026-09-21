@@ -443,7 +443,7 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     doltliteResultSideCol(ctx, &c->side, &v->cols,
                           c->common.pVal, c->common.nVal,
                           c->common.intKey, c->common.rootIntKey, col,
-                          v->cols.aAffinity[col]);
+                          doltliteHistoricalColAffinity(&c->side, &v->cols, col));
   }else{
     int fixedCol=col-nCols;
     switch(fixedCol){

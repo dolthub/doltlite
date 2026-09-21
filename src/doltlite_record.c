@@ -751,6 +751,24 @@ void doltliteSideColsClear(DoltliteSideCols *pSide){
   memset(pSide, 0, sizeof(*pSide));
 }
 
+u8 doltliteHistoricalColAffinity(
+  const DoltliteSideCols *pSide,
+  const DoltliteColInfo *pDeclared,
+  int iDeclaredCol
+){
+  u8 live = SQLITE_AFF_BLOB;
+  if( pDeclared && pDeclared->aAffinity
+   && iDeclaredCol>=0 && iDeclaredCol<pDeclared->nCol ){
+    live = pDeclared->aAffinity[iDeclaredCol];
+  }
+  if( pSide && pSide->valid && pSide->ci.aAffinity && pSide->aDeclToSide
+   && pDeclared && iDeclaredCol>=0 && iDeclaredCol<pDeclared->nCol ){
+    int iSide = pSide->aDeclToSide[iDeclaredCol];
+    if( iSide>=0 && iSide<pSide->ci.nCol ) return pSide->ci.aAffinity[iSide];
+  }
+  return live;
+}
+
 void doltliteResultSideCol(
   sqlite3_context *ctx,
   const DoltliteSideCols *pSide,

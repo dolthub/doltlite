@@ -83,6 +83,10 @@ void doltliteResultSideCol(sqlite3_context *ctx,
     const DoltliteColInfo *pDeclared,
     const u8 *pRec, int nRec,
     i64 intKey, int bRootIntKey, int iDeclaredCol, u8 affinity);
+/* Affinity of the column in the commit that stored the row. The live
+** column is the fallback when that schema was not loaded. */
+u8 doltliteHistoricalColAffinity(const DoltliteSideCols *pSide,
+    const DoltliteColInfo *pDeclared, int iDeclaredCol);
 void doltliteResultUserCol(sqlite3_context *ctx,
                            const DoltliteColInfo *ci,
                            const u8 *pRec, int nRec,

@@ -449,4 +449,60 @@ run_test "at_working_with_working_schema_change" \
 
 rm -f "$DBWSS"
 
+# Integers stored while the column was INT stay integers after it becomes REAL.
+DBRA=/tmp/test_at_real_affinity_$$.db; rm -f "$DBRA"
+$DOLTLITE "$DBRA" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INT);
+INSERT INTO t VALUES(1, 9007199254740993),(2, -9007199254740993),(3, 2);
+SELECT dolt_commit('-Am','c1');
+CREATE TABLE t2(id INTEGER PRIMARY KEY, n REAL);
+INSERT INTO t2 SELECT id, n FROM t;
+DROP TABLE t;
+ALTER TABLE t2 RENAME TO t;
+SELECT dolt_commit('-Am','c2');
+SQL
+run_test "at_old_int_keeps_exact_integer" \
+  "SELECT id || ':' || typeof(n) || ':' || CAST(n AS TEXT) FROM dolt_at_t('HEAD~1') ORDER BY id;" \
+  "1:integer:9007199254740993
+2:integer:-9007199254740993
+3:integer:2" "$DBRA"
+run_test "at_new_real_row_is_real" \
+  "SELECT id || ':' || typeof(n) || ':' || CAST(n AS TEXT) FROM dolt_at_t('HEAD') ORDER BY id;" \
+  "1:real:9007199254740992.0
+2:real:-9007199254740992.0
+3:real:2.0" "$DBRA"
+run_test "history_old_int_keeps_exact_integer" \
+  "SELECT id || ':' || typeof(n) || ':' || CAST(n AS TEXT) FROM dolt_history_t WHERE commit_hash=(SELECT commit_hash FROM dolt_log WHERE message='c1') ORDER BY id;" \
+  "1:integer:9007199254740993
+2:integer:-9007199254740993
+3:integer:2" "$DBRA"
+run_test "history_new_real_row_is_real" \
+  "SELECT id || ':' || typeof(n) || ':' || CAST(n AS TEXT) FROM dolt_history_t WHERE commit_hash=(SELECT commit_hash FROM dolt_log WHERE message='c2') ORDER BY id;" \
+  "1:real:9007199254740992.0
+2:real:-9007199254740992.0
+3:real:2.0" "$DBRA"
+run_test "diff_from_keeps_exact_integer" \
+  "SELECT typeof(from_n) || ':' || CAST(from_n AS TEXT) || ':' || typeof(to_n) || ':' || CAST(to_n AS TEXT) FROM dolt_diff_t('HEAD~1','HEAD') WHERE from_id=1;" \
+  "integer:9007199254740993:real:9007199254740992.0" "$DBRA"
+rm -f "$DBRA"
+
+# A column that was always REAL still comes back as a real.
+DBRR=/tmp/test_at_real_always_$$.db; rm -f "$DBRR"
+$DOLTLITE "$DBRR" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, n REAL);
+INSERT INTO t VALUES(1, 2),(2, 1.5),(3, 9007199254740993);
+SELECT dolt_commit('-Am','c1');
+SQL
+run_test "at_always_real_stays_real" \
+  "SELECT id || ':' || typeof(n) || ':' || CAST(n AS TEXT) FROM dolt_at_t('HEAD') ORDER BY id;" \
+  "1:real:2.0
+2:real:1.5
+3:real:9007199254740992.0" "$DBRR"
+run_test "history_always_real_stays_real" \
+  "SELECT id || ':' || typeof(n) || ':' || CAST(n AS TEXT) FROM dolt_history_t ORDER BY id;" \
+  "1:real:2.0
+2:real:1.5
+3:real:9007199254740992.0" "$DBRR"
+rm -f "$DBRR"
+
 dltest_finish
