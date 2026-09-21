@@ -300,13 +300,14 @@ SELECT dolt_commit('-A','-m','feat committed');
 INSERT INTO t VALUES(3,'uncommitted');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "at_working_uncommitted_count" \
+# The branch name is the tip, so feature's uncommitted row is not visible.
+run_test "at_branch_excludes_uncommitted_count" \
   "SELECT count(*) FROM dolt_at_t('feature');" \
-  "3" "$DB"
+  "2" "$DB"
 
-run_test "at_working_uncommitted_row" \
-  "SELECT v FROM dolt_at_t('feature') WHERE id=3;" \
-  "uncommitted" "$DB"
+run_test "at_branch_excludes_uncommitted_row" \
+  "SELECT count(*) FROM dolt_at_t('feature') WHERE id=3;" \
+  "0" "$DB"
 
 rm -f "$DB"
 

@@ -255,12 +255,10 @@ static const char *atHistoricalLiteralArg(sqlite3 *db, int iArg){
 static int atResolveSchemaRef(
   sqlite3 *db,
   const char *zRef,
-  int branchEffective,
   int allowWorkspace,
   ProllyHash *pCommit,
   ProllyHash *pCatalog
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteCommit commit;
   int rc;
 
@@ -278,16 +276,6 @@ static int atResolveSchemaRef(
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pCommit, &commit);
   if( rc==SQLITE_OK ) *pCatalog = commit.catalogHash;
   doltliteCommitClear(&commit);
-  if( rc==SQLITE_OK && branchEffective && cs ){
-    ProllyHash branchCommit;
-    if( chunkStoreFindBranch(cs, zRef, &branchCommit)==SQLITE_OK
-     && !prollyHashIsEmpty(&branchCommit) ){
-      ProllyHash effective;
-      rc = doltliteResolveBranchEffectiveCatalog(
-          cs, zRef, &branchCommit, pCatalog, &effective);
-      if( rc==SQLITE_OK ) *pCatalog = effective;
-    }
-  }
   return rc;
 }
 
@@ -305,7 +293,6 @@ static int atResolveLiteralScope(
   const char *azRef[2] = {0, 0};
   char *zLeft = 0;
   char *zRight = 0;
-  int branchEffective = 0;
   int allowWorkspace = 0;
   int nRef = 0;
   int rangeType = DOLTLITE_RANGE_NONE;
@@ -319,7 +306,6 @@ static int atResolveLiteralScope(
   if( sqlite3_strnicmp(zModule, "dolt_at_", 8)==0 ){
     if( pArgs->nExpr!=1 ) return SQLITE_OK;
     azRef[0] = atHistoricalLiteralArg(db, 0);
-    branchEffective = 1;
     allowWorkspace = 1;
     nRef = azRef[0] ? 1 : 0;
   }else if( sqlite3_strnicmp(zModule, "dolt_history_", 13)==0 ){
@@ -352,7 +338,7 @@ static int atResolveLiteralScope(
   if( nRef==0 ) goto done;
 
   for(i=0; i<nRef; i++){
-    rc = atResolveSchemaRef(db, azRef[i], branchEffective, allowWorkspace,
+    rc = atResolveSchemaRef(db, azRef[i], allowWorkspace,
                             &aCommit[i], &aCatalog[i]);
     if( rc!=SQLITE_OK ) goto resolve_failed;
   }
@@ -456,6 +442,119 @@ static int atLoadSchemaColumns(
   return rc;
 }
 
+/* Columns present on the current tip but not on the requested snapshot
+** stay in the declaration so a later rename or add still projects as
+** NULL. Their record slot is absent on this snapshot. */
+static int atAppendMissingColumns(
+  DoltliteColInfo *pDst,
+  const DoltliteColInfo *pSrc
+){
+  int i, j, nAdd, nOld, nOut;
+  char **azName, **azDecl;
+  u8 *aAffinity;
+  int *aColToRec;
+  int declWasNull, affWasNull, recWasNull;
+
+  if( !pSrc || pSrc->nCol<=0 || !pSrc->azName ) return SQLITE_OK;
+  nAdd = 0;
+  for(i=0; i<pSrc->nCol; i++){
+    int seen = 0;
+    if( !pSrc->azName[i] ) continue;
+    for(j=0; j<pDst->nCol; j++){
+      if( pDst->azName && pDst->azName[j]
+       && sqlite3_stricmp(pDst->azName[j], pSrc->azName[i])==0 ){
+        seen = 1;
+        break;
+      }
+    }
+    if( !seen ) nAdd++;
+  }
+  if( nAdd==0 ) return SQLITE_OK;
+
+  nOld = pDst->nCol;
+  nOut = nOld + nAdd;
+  declWasNull = pDst->azDecl==0;
+  affWasNull = pDst->aAffinity==0;
+  recWasNull = pDst->aColToRec==0;
+  azName = sqlite3_realloc(pDst->azName, nOut*(int)sizeof(char*));
+  azDecl = sqlite3_realloc(pDst->azDecl, nOut*(int)sizeof(char*));
+  aAffinity = sqlite3_realloc(pDst->aAffinity, nOut);
+  aColToRec = sqlite3_realloc(pDst->aColToRec, nOut*(int)sizeof(int));
+  if( !azName || !azDecl || !aAffinity || !aColToRec ){
+    if( azName ) pDst->azName = azName;
+    if( azDecl ) pDst->azDecl = azDecl;
+    if( aAffinity ) pDst->aAffinity = aAffinity;
+    if( aColToRec ) pDst->aColToRec = aColToRec;
+    return SQLITE_NOMEM;
+  }
+  pDst->azName = azName;
+  pDst->azDecl = azDecl;
+  pDst->aAffinity = aAffinity;
+  pDst->aColToRec = aColToRec;
+  if( declWasNull ){
+    for(i=0; i<nOld; i++) pDst->azDecl[i] = 0;
+  }
+  if( affWasNull ){
+    for(i=0; i<nOld; i++) pDst->aAffinity[i] = SQLITE_AFF_BLOB;
+  }
+  if( recWasNull ){
+    for(i=0; i<nOld; i++) pDst->aColToRec[i] = i;
+  }
+  for(i=nOld; i<nOut; i++){
+    pDst->azName[i] = 0;
+    pDst->azDecl[i] = 0;
+    pDst->aAffinity[i] = SQLITE_AFF_BLOB;
+    pDst->aColToRec[i] = -1;
+  }
+
+  nOut = nOld;
+  for(i=0; i<pSrc->nCol; i++){
+    int seen = 0;
+    if( !pSrc->azName[i] ) continue;
+    for(j=0; j<nOut; j++){
+      if( pDst->azName[j]
+       && sqlite3_stricmp(pDst->azName[j], pSrc->azName[i])==0 ){
+        seen = 1;
+        break;
+      }
+    }
+    if( seen ) continue;
+    pDst->azName[nOut] = sqlite3_mprintf("%s", pSrc->azName[i]);
+    if( !pDst->azName[nOut] ) return SQLITE_NOMEM;
+    if( pSrc->azDecl && pSrc->azDecl[i] ){
+      pDst->azDecl[nOut] = sqlite3_mprintf("%s", pSrc->azDecl[i]);
+      if( !pDst->azDecl[nOut] ) return SQLITE_NOMEM;
+    }
+    if( pSrc->aAffinity ) pDst->aAffinity[nOut] = pSrc->aAffinity[i];
+    pDst->aColToRec[nOut] = -1;
+    nOut++;
+    pDst->nCol = nOut;
+  }
+  return SQLITE_OK;
+}
+
+static int atMergeCommittedHeadColumns(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const char *zTable,
+  DoltliteColInfo *pCols
+){
+  ProllyHash headCat;
+  DoltliteColInfo head;
+  int rc;
+
+  memset(&head, 0, sizeof(head));
+  rc = doltliteResolveCatalogHashForRef(db, "HEAD", &headCat);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  rc = atLoadSchemaColumns(db, cs, pCache, &headCat, zTable, &head);
+  if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK ) rc = atAppendMissingColumns(pCols, &head);
+  doltliteFreeColInfo(&head);
+  return rc;
+}
+
 int doltliteLoadHistoricalTableColumns(
   sqlite3 *db,
   const char *zModule,
@@ -471,13 +570,29 @@ int doltliteLoadHistoricalTableColumns(
   ProllyHash cur;
   int nRef = 0;
   int scoped = 0;
+  int skipLive = 0;
   int has;
   int i;
   int rc;
 
   memset(pCols, 0, sizeof(*pCols));
   pCols->iPkCol = -1;
-  if( sqlite3FindTable(db, zTableName, "main") ){
+  /* A literal commit ref must declare that snapshot's columns. The live
+  ** table is the working schema, so it can hide a column that exists
+  ** only on the requested tip. Columns added on the current tip are
+  ** still declared and read as NULL. WORKING and STAGED keep the live
+  ** declaration. */
+  if( zModule
+   && (sqlite3_strnicmp(zModule, "dolt_at_", 8)==0
+    || sqlite3_strnicmp(zModule, "dolt_history_", 13)==0) ){
+    const char *zScoped = atHistoricalLiteralArg(db, 0);
+    if( zScoped
+     && !doltliteRefIsWorking(zScoped)
+     && !doltliteRefIsStaged(zScoped) ){
+      skipLive = 1;
+    }
+  }
+  if( !skipLive && sqlite3FindTable(db, zTableName, "main") ){
     rc = doltliteGetColumnNames(db, zTableName, pCols);
     if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
     if( rc!=SQLITE_OK ) return rc;
@@ -498,7 +613,14 @@ int doltliteLoadHistoricalTableColumns(
       atTakeChunkSourceError(cs, pzErr, &rc);
     }
   }
-  if( rc!=SQLITE_OK || pCols->nCol>0 ) return rc;
+  if( rc!=SQLITE_OK ) return rc;
+  if( pCols->nCol>0 ){
+    if( skipLive ){
+      rc = atMergeCommittedHeadColumns(
+          db, cs, pCache, zTableName, pCols);
+    }
+    return rc;
+  }
 
   memset(&q, 0, sizeof(q));
   memset(&cur, 0, sizeof(cur));
@@ -530,6 +652,17 @@ int doltliteLoadHistoricalTableColumns(
   }
   doltliteCommitQueueClear(&q);
 
+  if( rc==SQLITE_OK && skipLive && pCols->nCol>0 ){
+    rc = atMergeCommittedHeadColumns(db, cs, pCache, zTableName, pCols);
+  }
+  /* The snapshot never had this table. Declare the live columns anyway
+  ** so the query can report that the table is absent at the ref. */
+  if( rc==SQLITE_OK && pCols->nCol<=0
+   && sqlite3FindTable(db, zTableName, "main") ){
+    rc = doltliteGetColumnNames(db, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
+    if( rc==SQLITE_OK && pCols->nCol<=0 ) doltliteFreeColInfo(pCols);
+  }
   if( rc==SQLITE_OK && pCols->nCol<=0 ) return SQLITE_NOTFOUND;
   return rc;
 }
@@ -703,26 +836,14 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   }
   if(rc!=SQLITE_OK) return rc;
 
-  {
-    ProllyHash branchCommit;
-    ProllyHash effCatHash;
-    int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
-                    && !prollyHashIsEmpty(&branchCommit));
-    if( isBranch ){
-      rc = doltliteResolveBranchEffectiveCatalog(
-          cs, zRef, &branchCommit, &catHash, &effCatHash);
-    }else{
-      memcpy(&effCatHash, &catHash, sizeof(ProllyHash));
-    }
-    if( rc==SQLITE_OK ){
-      rc=doltliteLoadTableRootByName(db,&effCatHash,v->zTableName,&tableRoot,
-                                     &flags,&schemaHash);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteSideColsLoad(db, &effCatHash, &schemaHash,
-                                v->zTableName, &v->cols,
-                                !prollyHashIsEmpty(&tableRoot), &c->side);
-    }
+  /* A branch name is that branch's tip. WORKING and STAGED are the refs
+  ** that read a dirty catalog. */
+  rc=doltliteLoadTableRootByName(db,&catHash,v->zTableName,&tableRoot,
+                                 &flags,&schemaHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSideColsLoad(db, &catHash, &schemaHash,
+                              v->zTableName, &v->cols,
+                              !prollyHashIsEmpty(&tableRoot), &c->side);
   }
   if(rc==SQLITE_NOTFOUND){
     sqlite3_free(cur->pVtab->zErrMsg);
