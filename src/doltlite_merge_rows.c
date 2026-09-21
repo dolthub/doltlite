@@ -187,8 +187,20 @@ typedef struct MergeWinner MergeWinner;
 struct MergeWinner { const u8 *pRec; RecField *pField; };
 
 static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
+  static const RecField kNullField = { 0, 0, 0 };
+  MergeWinner oneNull;
   int hdrSize = 0, bodySize = 0, pos, i;
   u8 *result;
+
+  /* A header with no serial types is unreadable: column fetch always
+  ** parses one type byte and then calls the row corrupt. One explicit
+  ** NULL is the empty row. */
+  if( nFields<=0 ){
+    oneNull.pRec = 0;
+    oneNull.pField = (RecField*)&kNullField;
+    aWinners = &oneNull;
+    nFields = 1;
+  }
 
   for(i=0; i<nFields; i++){
     u64 st = aWinners[i].pField->st;
@@ -308,7 +320,10 @@ static u8 *tryCellMerge(
       if( winners[i].pField->st != 0 ) nEmit = i+1;
     }
 
-    /* Drop trailing NULLs for canonical encoding. */
+    /* Drop trailing NULLs. If that drops every field, keep the full
+    ** width: a header with no types does not read, and a shorter row
+    ** would surface a column default in place of an explicit NULL. */
+    if( nEmit==0 && nfMax>0 ) nEmit = nfMax;
     result = buildMergedRecord(winners, nEmit, pnMerged);
     sqlite3_free(winners);
   }

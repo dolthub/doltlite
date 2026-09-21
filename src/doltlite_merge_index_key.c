@@ -332,8 +332,12 @@ static int doltliteBuildIndexEntryWithExpr(
   int storePayload = 0;
   int i, rc;
 
-  doltliteParseRecord(pRec, nRec, &info);
-  if( info.nField==0 ){ doltliteRecordInfoClear(&info); return SQLITE_CORRUPT; }
+  /* A parsed record with no fields is every column NULL. */
+  rc = doltliteParseRecordStrict(pRec, nRec, &info);
+  if( rc!=SQLITE_OK ){
+    doltliteRecordInfoClear(&info);
+    return rc;
+  }
   hasRowid = pIdx && pIdx->pTable && HasRowid(pIdx->pTable);
 
   nAlloc = nIdxCol + 1;
@@ -482,11 +486,14 @@ static int doltliteBuildIndexEntry(
         pStorePayload);
   }
 
-  doltliteParseRecord(pRec, nRec, &info);
-  if( info.nField==0 ) return SQLITE_CORRUPT;
-
   /* A record may stop short of the table's last columns; the missing
-  ** trailing fields are NULL, and the index key must still carry them. */
+  ** trailing fields are NULL, and the index key must still carry them.
+  ** A parsed record with no fields is every column NULL. */
+  rc = doltliteParseRecordStrict(pRec, nRec, &info);
+  if( rc!=SQLITE_OK ){
+    doltliteRecordInfoClear(&info);
+    return rc;
+  }
   if( iPKey>=0 ){
     int st = iPKey<info.nField ? info.aType[iPKey] : 0;
     if( st==0 || st==8 || st==9 ){

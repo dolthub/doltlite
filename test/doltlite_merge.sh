@@ -1211,5 +1211,113 @@ run_test "force_commit_keeps_unique_cv_reopen" \
   "SELECT \"table\" || '|' || num_violations FROM dolt_constraint_violations;" \
   "t|2" "$DB68"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68"
+# Cell merge that nulls every non-key column must stay readable, including
+# through an index and when those columns have defaults.
+DB69=/tmp/test_merge69_$$.db; rm -f "$DB69"
+$DOLTLITE "$DB69" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES(1,1,1),(2,4,5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_all_null_cell_values" \
+  "SELECT group_concat(id || ':' || coalesce(a,'N') || ':' || coalesce(b,'N'), ',') FROM (SELECT id, a, b FROM t ORDER BY id);" \
+  "1:N:N,2:4:5" "$DB69"
+run_test "merge_all_null_cell_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB69"
+run_test "merge_all_null_cell_log" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "Merge branch 'feature' into main" "$DB69"
+
+DB70=/tmp/test_merge70_$$.db; rm -f "$DB70"
+$DOLTLITE "$DB70" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX ia ON t(a);
+INSERT INTO t VALUES(1,1,1),(2,4,5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_all_null_cell_index" \
+  "SELECT id FROM t INDEXED BY ia WHERE a IS NULL;" \
+  "1" "$DB70"
+run_test "merge_all_null_cell_index_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB70"
+
+DB71=/tmp/test_merge71_$$.db; rm -f "$DB71"
+$DOLTLITE "$DB71" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT DEFAULT 7, b INT DEFAULT 9);
+INSERT INTO t VALUES(1,1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_all_null_cell_keeps_explicit_null_over_default" \
+  "SELECT coalesce(a,'N') || ':' || coalesce(b,'N') FROM t;" \
+  "N:N" "$DB71"
+run_test "merge_all_null_cell_default_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB71"
+
+DB72=/tmp/test_merge72_$$.db; rm -f "$DB72"
+$DOLTLITE "$DB72" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(a INT, b INT);
+CREATE INDEX ia ON t(a);
+INSERT INTO t VALUES(1,1),(4,5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=NULL WHERE a=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE a=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_all_null_cell_rowid_values" \
+  "SELECT group_concat(coalesce(a,'N') || ':' || coalesce(b,'N'), ',') FROM (SELECT a, b FROM t ORDER BY rowid);" \
+  "N:N,4:5" "$DB72"
+run_test "merge_all_null_cell_rowid_index" \
+  "SELECT count(*) FROM t INDEXED BY ia WHERE a IS NULL;" \
+  "1" "$DB72"
+run_test "merge_all_null_cell_rowid_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB72"
+
+DB73=/tmp/test_merge73_$$.db; rm -f "$DB73"
+$DOLTLITE "$DB73" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES(1,1,1),(2,4,5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=8 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_one_null_cell_keeps_other_value" \
+  "SELECT group_concat(id || ':' || coalesce(a,'N') || ':' || coalesce(b,'N'), ',') FROM (SELECT id, a, b FROM t ORDER BY id);" \
+  "1:N:8,2:4:5" "$DB73"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73"
 dltest_finish
