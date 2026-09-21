@@ -372,13 +372,41 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
-# data_change follows values, not the moved table root. An all-zero in-place rename row is expected.
+# In-place rename keeps the row root, so stat emits nothing. Summary still
+# reports the schema change. A rebuilt table (new root, equal row values)
+# is the all-zero stat row and is covered by the revert-schema case.
+oracle_stat "rename_column_no_data_change" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t RENAME COLUMN v TO w;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "" "EXPECT_EMPTY"
 oracle_summary "rename_column_no_data_change" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10), (2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'seed');
 ALTER TABLE t RENAME COLUMN v TO w;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_stat "add_column_empty_table" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t ADD COLUMN w INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "" "EXPECT_EMPTY"
+oracle_summary "add_column_empty_table" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t ADD COLUMN w INT;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"

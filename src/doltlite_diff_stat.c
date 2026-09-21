@@ -186,6 +186,31 @@ static int dsBuildColMap(
   return SQLITE_OK;
 }
 
+/* Column rename, add, or drop. A CHECK/DEFAULT-only rewrite keeps the same
+** columns and is not one of these: that is the all-zero stat row. */
+static int dsInPlaceColumnChange(
+  const DoltliteColInfo *pFrom,
+  const DoltliteColInfo *pTo
+){
+  int i;
+  int renamed = 0;
+  if( !pFrom || !pTo ) return 0;
+  if( pFrom->nCol!=pTo->nCol ) return 1;
+  for(i=0; i<pFrom->nCol; i++){
+    const char *zFromDecl = (pFrom->azDecl && pFrom->azDecl[i])
+        ? pFrom->azDecl[i] : "";
+    const char *zToDecl = (pTo->azDecl && pTo->azDecl[i])
+        ? pTo->azDecl[i] : "";
+    const char *zFromName = (pFrom->azName && pFrom->azName[i])
+        ? pFrom->azName[i] : "";
+    const char *zToName = (pTo->azName && pTo->azName[i])
+        ? pTo->azName[i] : "";
+    if( strcmp(zFromDecl, zToDecl)!=0 ) return 0;
+    if( strcmp(zFromName, zToName)!=0 ) renamed = 1;
+  }
+  return renamed;
+}
+
 /* *pnDiffer is rows_modified: a gained/lost column counts only if it held a
 ** value. *pnModified is cells_modified: added columns count, dropped ones do
 ** not (already in cells_added/cells_deleted). */
@@ -293,6 +318,7 @@ typedef struct DsStatRow DsStatRow;
 struct DsStatRow {
   char *zTableName;
   int schemaChanged;
+  int schemaInPlace;
   i64 rowsUnmodified;
   i64 rowsAdded;
   i64 rowsDeleted;
@@ -635,6 +661,8 @@ static int dsComputeTableStats(
   pOut->zTableName     = sqlite3_mprintf("%s",
                              (hasTo && zToName) ? zToName : zFromName);
   pOut->schemaChanged  = schemaChanged;
+  pOut->schemaInPlace  = schemaChanged
+      && dsInPlaceColumnChange(&fromCi, &toCi);
   pOut->rowsAdded      = rowsAdd;
   pOut->rowsDeleted    = rowsDel;
   pOut->rowsModified   = rowsMod;
@@ -1111,7 +1139,7 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
 
     if( row.rowsAdded==0 && row.rowsDeleted==0 && row.rowsModified==0
      && row.cellsAdded==0 && row.cellsDeleted==0 && row.cellsModified==0 ){
-      if( !row.schemaChanged ){
+      if( !row.schemaChanged || row.schemaInPlace ){
         sqlite3_free(row.zTableName);
         continue;
       }
