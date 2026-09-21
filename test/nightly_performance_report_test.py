@@ -72,6 +72,11 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             "3723\n", encoding="utf-8"
         )
 
+    def rewrite(self, path, old, new):
+        contents = path.read_text(encoding="utf-8")
+        assert old in contents, old
+        path.write_text(contents.replace(old, new), encoding="utf-8")
+
     def write_all_suites(self, directory):
         for name in nightly_report.ALL_SUITES:
             self.write_suite(directory, name)
@@ -82,7 +87,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             "ac_writes", "insert_ac", 100, 600
         )
         self.assertEqual(nightly_report.individual_limit(ordinary), 2.3)
-        self.assertEqual(nightly_report.individual_limit(autocommit), 6.0)
+        self.assertEqual(nightly_report.individual_limit(autocommit), 5.5)
         self.assertEqual(nightly_report.average_limit("mem_reads"), 1.9)
         self.assertEqual(nightly_report.average_limit("ac_writes"), 5.0)
 
@@ -108,7 +113,8 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("BENCH_MAX_MULTIPLIER: 2.3", workflow)
         self.assertIn("BENCH_AVG_MAX_MULTIPLIER: 1.9", workflow)
-        self.assertIn("BENCH_AC_WRITE_MAX_MULTIPLIER: 6", workflow)
+        self.assertIn("BENCH_AC_WRITE_MAX_MULTIPLIER: 5.5", workflow)
+        self.assertIn("BENCH_AC_WRITE_AVG_MAX_MULTIPLIER: 5", workflow)
 
     def test_generates_complete_pass_report(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -135,7 +141,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             report,
         )
         self.assertIn(
-            "Durable autocommit writes use 6.0× and 5.0× ceilings",
+            "Durable autocommit writes use 5.5× and 5.0× ceilings",
             report,
         )
         self.assertIn("Paired-ratio noise", report)
@@ -193,13 +199,19 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
             self.write_all_suites(directory)
-            results_path = directory / "int.tsv"
-            results_path.write_text(
-                results_path.read_text(encoding="utf-8").replace(
-                    "ac_writes\tinsert_ac\t100\t500",
-                    "ac_writes\tinsert_ac\t100\t700",
-                ),
-                encoding="utf-8",
+            self.rewrite(
+                directory / "int.tsv",
+                "ac_writes\tinsert_ac\t100\t500",
+                "ac_writes\tinsert_ac\t100\t700",
+            )
+            self.rewrite(
+                directory / "int-samples.tsv",
+                "ac_writes\tinsert_ac\t1\t100\t480\n"
+                "ac_writes\tinsert_ac\t2\t100\t500\n"
+                "ac_writes\tinsert_ac\t3\t100\t520\n",
+                "ac_writes\tinsert_ac\t1\t100\t680\n"
+                "ac_writes\tinsert_ac\t2\t100\t700\n"
+                "ac_writes\tinsert_ac\t3\t100\t720\n",
             )
             output = directory / "performance-report.md"
             result_output = directory / "performance-report.result"
@@ -226,17 +238,67 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertIn("| Autocommit writes | 400µs | 2.20ms |", report)
         self.assertEqual(result, "FAIL\n")
 
+    def test_unpaired_median_breach_does_not_fail_the_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            self.write_all_suites(directory)
+            self.rewrite(
+                directory / "int.tsv",
+                "ac_writes\tinsert_ac\t100\t500",
+                "ac_writes\tinsert_ac\t100\t700",
+            )
+            self.rewrite(
+                directory / "int-samples.tsv",
+                "ac_writes\tinsert_ac\t1\t100\t480\n"
+                "ac_writes\tinsert_ac\t2\t100\t500\n"
+                "ac_writes\tinsert_ac\t3\t100\t520\n",
+                "ac_writes\tinsert_ac\t1\t100\t700\n"
+                "ac_writes\tinsert_ac\t2\t700\t800\n"
+                "ac_writes\tinsert_ac\t3\t50\t100\n",
+            )
+            suites = [
+                nightly_report.load_suite(directory, name)
+                for name in nightly_report.ALL_SUITES
+            ]
+            report = nightly_report.render_report(
+                suites,
+                "abc123",
+                "https://example.test/run",
+                "now",
+                "ubuntu24",
+            )
+        self.assertEqual(
+            nightly_report.paired_ratio(
+                suites[0],
+                nightly_report.Result("ac_writes", "insert_ac", 100, 700),
+            ),
+            2.0,
+        )
+        self.assertIn("Nightly result: **PASS**", report)
+        self.assertIn(
+            "| ac_writes | `insert_ac` | 100µs | 700µs | "
+            "7.0× (paired 2.0×) | ",
+            report,
+        )
+        self.assertNotIn("| FAIL |", report)
+
     def test_audit_only_section_still_gates_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
             self.write_all_suites(directory)
-            results_path = directory / "int.tsv"
-            results_path.write_text(
-                results_path.read_text(encoding="utf-8").replace(
-                    "ac_reads\tpoint\t200\t210",
-                    "ac_reads\tpoint\t200\t600",
-                ),
-                encoding="utf-8",
+            self.rewrite(
+                directory / "int.tsv",
+                "ac_reads\tpoint\t200\t210",
+                "ac_reads\tpoint\t200\t600",
+            )
+            self.rewrite(
+                directory / "int-samples.tsv",
+                "ac_reads\tpoint\t1\t200\t200\n"
+                "ac_reads\tpoint\t2\t200\t210\n"
+                "ac_reads\tpoint\t3\t200\t220\n",
+                "ac_reads\tpoint\t1\t200\t580\n"
+                "ac_reads\tpoint\t2\t200\t600\n"
+                "ac_reads\tpoint\t3\t200\t620\n",
             )
             suites = [
                 nightly_report.load_suite(directory, name)

@@ -159,11 +159,13 @@ benchmark_gate_note() {
 }
 
 check_ceiling() {
-  python3 "$BENCH_REPORT_SCRIPT" ceiling "$BENCH_RESULTS_FILE" "$1" "$2" "$3"
+  python3 "$BENCH_REPORT_SCRIPT" ceiling \
+    "$BENCH_RESULTS_FILE" "$BENCH_SAMPLES_FILE" "$1" "$2" "$3"
 }
 
 check_average_ceiling() {
-  python3 "$BENCH_REPORT_SCRIPT" average "$BENCH_RESULTS_FILE" "$1" "$2" "$3"
+  python3 "$BENCH_REPORT_SCRIPT" average \
+    "$BENCH_RESULTS_FILE" "$BENCH_SAMPLES_FILE" "$1" "$2" "$3"
 }
 
 benchmark_copy_results() {
