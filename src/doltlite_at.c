@@ -655,6 +655,14 @@ int doltliteLoadHistoricalTableColumns(
   if( rc==SQLITE_OK && skipLive && pCols->nCol>0 ){
     rc = atMergeCommittedHeadColumns(db, cs, pCache, zTableName, pCols);
   }
+  /* The snapshot never had this table. Declare the live columns anyway
+  ** so the query can report that the table is absent at the ref. */
+  if( rc==SQLITE_OK && pCols->nCol<=0
+   && sqlite3FindTable(db, zTableName, "main") ){
+    rc = doltliteGetColumnNames(db, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
+    if( rc==SQLITE_OK && pCols->nCol<=0 ) doltliteFreeColInfo(pCols);
+  }
   if( rc==SQLITE_OK && pCols->nCol<=0 ) return SQLITE_NOTFOUND;
   return rc;
 }
