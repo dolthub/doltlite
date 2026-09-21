@@ -5,9 +5,9 @@
 # test/lib/doltlite_suite_manifest.sh, test/run_c_tests.sh, or main.mk.
 # Else listed in test/ci_suite_allowlist.txt or test/ci_suite_quarantine.txt
 # (with a reason). Same for test/doltlite_*.test (buckets; inherited *.test
-# are gated elsewhere) and test/*_test.c (run_c_tests.sh / workflow /
-# manifest — not merely built by main.mk). Fuzzer GROUPS must be selected
-# by a job. EXCLUDE skips harnesses/libs/perf.
+# are gated elsewhere) and test/*_test.c plus test/doltlite_*.c
+# (run_c_tests.sh / workflow / manifest — not merely built by main.mk).
+# Fuzzer GROUPS must be selected by a job. EXCLUDE skips harnesses/libs/perf.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -97,6 +97,22 @@ c_test_gated() {  # c_test_gated <name-without-.c>
 for path in test/*_test.c; do
   [ -e "$path" ] || continue
   base="$(basename "$path")"
+  if c_test_gated "${base%.c}" || listed_in "$allowlist" "$base"; then
+    continue
+  fi
+  if listed_in "$quarantine" "$base"; then
+    quarantined=$((quarantined + 1))
+    continue
+  fi
+  orphans+=("$base")
+done
+
+# A DoltLite-authored C suite needs a runner whatever it is named; the
+# inherited upstream tree is left to *_test.c above.
+for path in test/doltlite_*.c; do
+  [ -e "$path" ] || continue
+  base="$(basename "$path")"
+  case "$base" in *_test.c) continue ;; esac
   if c_test_gated "${base%.c}" || listed_in "$allowlist" "$base"; then
     continue
   fi
