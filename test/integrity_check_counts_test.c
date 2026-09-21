@@ -144,6 +144,99 @@ static void oneShape(const char *zName, const char *zSchema, int nRow){
   removeDb("icc_test.db");
 }
 
+/* A record wider than its table is the shape a merge left behind before the
+** relayout fix, and the shape a later ADD COLUMN misreads. integrity_check
+** has to name it instead of answering "ok", so plant one directly: a
+** three-field record in a two-column table. */
+static void wideRecord(void){
+  sqlite3 *db = 0;
+  Btree *pBt;
+  BtCursor *pCur;
+  BtreePayload x;
+  sqlite3_stmt *pStmt = 0;
+  /* three NULL fields: header length 4, then three serial types of 0 */
+  static const unsigned char aRec[4] = { 0x04, 0x00, 0x00, 0x00 };
+  Pgno root = 0;
+  int rc;
+
+  removeDb("icc_wide.db");
+  rc = sqlite3_open("icc_wide.db", &db);
+  check("wide: open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ sqlite3_close(db); return; }
+  if( execSql(db, "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);"
+                  "INSERT INTO t VALUES(1,'one');")!=SQLITE_OK ){
+    nFail++;
+    sqlite3_close(db);
+    return;
+  }
+  if( sqlite3_prepare_v2(db,
+          "SELECT rootpage FROM sqlite_master WHERE name='t'", -1, &pStmt, 0)
+       ==SQLITE_OK
+   && sqlite3_step(pStmt)==SQLITE_ROW ){
+    root = (Pgno)sqlite3_column_int64(pStmt, 0);
+  }
+  sqlite3_finalize(pStmt);
+  check("wide: root page", root>0);
+
+  pBt = db->aDb[0].pBt;
+  pCur = sqlite3_malloc(sqlite3BtreeCursorSize());
+  check("wide: cursor alloc", pCur!=0 && pBt!=0);
+  if( !pCur || !pBt || root==0 ){
+    sqlite3_free(pCur);
+    sqlite3_close(db);
+    return;
+  }
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+  check("wide: write txn", sqlite3BtreeBeginTrans(pBt, 1, 0)==SQLITE_OK);
+  check("wide: cursor",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, 0, pCur)==SQLITE_OK);
+  memset(&x, 0, sizeof(x));
+  x.nKey = 2;
+  x.pData = (void*)aRec;
+  x.nData = (int)sizeof(aRec);
+  check("wide: planted the record", sqlite3BtreeInsert(pCur, &x, 0, 0)==SQLITE_OK);
+  sqlite3BtreeCloseCursor(pCur);
+  sqlite3_free(pCur);
+  check("wide: commit", sqlite3BtreeCommit(pBt)==SQLITE_OK);
+
+  if( sqlite3_prepare_v2(db, "PRAGMA integrity_check", -1, &pStmt, 0)
+      ==SQLITE_OK ){
+    int nNamed = 0;
+    int nRow = 0;
+    while( sqlite3_step(pStmt)==SQLITE_ROW ){
+      const char *zRow = (const char*)sqlite3_column_text(pStmt, 0);
+      nRow++;
+      if( zRow && strstr(zRow, "stores 3 fields for 2 columns")!=0 ) nNamed++;
+      if( zRow && strcmp(zRow, "ok")==0 ){
+        fprintf(stderr, "  wide: integrity_check answered 'ok'\n");
+      }
+    }
+    check("wide: integrity_check names the row", nNamed==1);
+    check("wide: integrity_check reported something", nRow>0);
+  }else{
+    nFail++;
+    fprintf(stderr, "FAIL: wide: integrity_check did not run\n");
+  }
+  sqlite3_finalize(pStmt);
+
+  /* The planted row is the one a later ADD COLUMN misreads: its default
+  ** lands on the stale field, while the untouched row reads the default. */
+  check("wide: add column", execSql(db,
+      "ALTER TABLE t ADD COLUMN p INTEGER DEFAULT 7;")==SQLITE_OK);
+  if( sqlite3_prepare_v2(db, "SELECT count(*) FROM t WHERE p IS NULL", -1,
+                         &pStmt, 0)==SQLITE_OK
+   && sqlite3_step(pStmt)==SQLITE_ROW ){
+    checkEq("wide: stale field shadows the default",
+            sqlite3_column_int64(pStmt, 0), 1);
+  }else{
+    nFail++;
+  }
+  sqlite3_finalize(pStmt);
+
+  sqlite3_close(db);
+  removeDb("icc_wide.db");
+}
+
 int main(void){
   oneShape("rowid pk, one index",
       "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);"
@@ -161,6 +254,8 @@ int main(void){
   oneShape("composite pk without rowid",
       "CREATE TABLE t(a INT, b TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;"
       "CREATE INDEX ib ON t(b);", 300);
+
+  wideRecord();
 
   printf("integrity_check_counts_test: %d passed, %d failed\n", nPass, nFail);
   return nFail==0 ? 0 : 1;
