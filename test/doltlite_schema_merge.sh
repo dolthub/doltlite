@@ -2549,4 +2549,171 @@ for shape in rowid without_rowid; do
   done
 done
 
+# VIRTUAL columns are not record fields. Using the CREATE TABLE ordinal
+# misses an edit of a later dropped column, and treats an edit of the
+# next stored column as that drop.
+for dir in ours theirs; do
+  DB=/tmp/test_merge_virt_drop_edit_${dir}_$$.db; rm -f "$DB"
+  if [ "$dir" = ours ]; then
+    MAIN="ALTER TABLE t DROP COLUMN a;"
+    FEAT="UPDATE t SET a=20 WHERE id=1;"
+    EDIT_BRANCH=feature
+  else
+    MAIN="UPDATE t SET a=20 WHERE id=1;"
+    FEAT="ALTER TABLE t DROP COLUMN a;"
+    EDIT_BRANCH=main
+  fi
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  v INT GENERATED ALWAYS AS (1) VIRTUAL,
+  a INT
+);
+INSERT INTO t(id, a) VALUES(1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+$FEAT
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+$MAIN
+SELECT dolt_commit('-Am','ours');
+EOF
+  run_test_match "merge_virtual_hides_drop_vs_edit_${dir}_refused" \
+    "SELECT dolt_merge('feature');" \
+    "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
+  run_test "merge_virtual_hides_drop_vs_edit_${dir}_unmerged" \
+    "SELECT message FROM dolt_log LIMIT 1;" "ours" "$DB"
+  run_test "merge_virtual_hides_drop_vs_edit_${dir}_value" \
+    "SELECT dolt_checkout('$EDIT_BRANCH');
+     SELECT a FROM t WHERE id=1;" \
+    "0
+20" "$DB"
+  rm -f "$DB"
+done
+
+DB=/tmp/test_merge_virt_drop_other_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  v INT GENERATED ALWAYS AS (1) VIRTUAL,
+  a INT,
+  b INT
+);
+INSERT INTO t(id, a, b) VALUES(1, 10, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET b=2 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_virtual_drop_vs_later_column_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_virtual_drop_vs_later_column_rows" \
+  "SELECT b FROM t WHERE id=1;
+   SELECT count(*) FROM pragma_table_info('t') WHERE name='a';
+   SELECT v FROM t WHERE id=1;" \
+  "2
+0
+1" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_drop_virt_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  v INT GENERATED ALWAYS AS (1) VIRTUAL,
+  a INT
+);
+INSERT INTO t(id, a) VALUES(1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+ALTER TABLE t DROP COLUMN v;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=20 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_drop_virtual_vs_stored_edit_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_drop_virtual_vs_stored_edit_rows" \
+  "SELECT a FROM t WHERE id=1;
+   SELECT sql FROM sqlite_master WHERE name='t';" \
+  "20
+CREATE TABLE t( id INTEGER PRIMARY KEY, a INT)" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_virt_worowid_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  v INT GENERATED ALWAYS AS (1) VIRTUAL,
+  a INT
+) WITHOUT ROWID;
+INSERT INTO t(id, a) VALUES(1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=20 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_virtual_drop_vs_edit_without_rowid_refused" \
+  "SELECT dolt_merge('feature');" \
+  "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
+run_test "merge_virtual_drop_vs_edit_without_rowid_unmerged" \
+  "SELECT message FROM dolt_log LIMIT 1;" "ours" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_two_virt_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  v1 INT GENERATED ALWAYS AS (1) VIRTUAL,
+  v2 INT GENERATED ALWAYS AS (2) VIRTUAL,
+  a INT
+);
+INSERT INTO t(id, a) VALUES(1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=20 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_two_virtual_drop_vs_edit_refused" \
+  "SELECT dolt_merge('feature');" \
+  "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_stored_before_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  s INT GENERATED ALWAYS AS (id+1) STORED,
+  a INT
+);
+INSERT INTO t(id, a) VALUES(1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=20 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_stored_before_drop_vs_edit_refused" \
+  "SELECT dolt_merge('feature');" \
+  "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
+rm -f "$DB"
+
 dltest_finish
