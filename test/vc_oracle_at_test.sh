@@ -334,6 +334,19 @@ $SEED
 UPDATE t SET v = 999 WHERE id = 1;
 " "HEAD"
 
+oracle "at_branch_name_excludes_working_modifications" "
+$SEED
+UPDATE t SET v = 999 WHERE id = 1;
+" "main"
+
+oracle "at_other_branch_excludes_its_working_set" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_checkout('main');
+" "feature"
+
 oracle "at_head_excludes_staged_modifications" "
 $SEED
 UPDATE t SET v = 999 WHERE id = 1;

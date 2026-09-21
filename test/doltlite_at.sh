@@ -505,4 +505,41 @@ run_test "history_always_real_stays_real" \
 3:real:9007199254740992.0" "$DBRR"
 rm -f "$DBRR"
 
+# A branch name is the tip. Dirty rows stay on WORKING.
+DBBR=/tmp/test_at_branch_tip_$$.db; rm -f "$DBBR"
+$DOLTLITE "$DBBR" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_checkout('main');
+UPDATE t SET v=9 WHERE id=1;
+SQL
+run_test "at_feature_is_tip" \
+  "SELECT id || '|' || v FROM dolt_at_t('feature') ORDER BY id;" \
+  "1|1" "$DBBR"
+run_test "at_main_is_tip_while_dirty" \
+  "SELECT id || '|' || v FROM dolt_at_t('main') ORDER BY id;" \
+  "1|1" "$DBBR"
+run_test "at_head_matches_branch_tip" \
+  "SELECT id || '|' || v FROM dolt_at_t('HEAD') ORDER BY id;" \
+  "1|1" "$DBBR"
+run_test "at_working_sees_dirty_main" \
+  "SELECT id || '|' || v FROM dolt_at_t('WORKING') ORDER BY id;" \
+  "1|9" "$DBBR"
+run_test "at_feature_connection_table_is_dirty" \
+  "SELECT id || '|' || v FROM t ORDER BY id;" \
+  "1|1
+2|2" "$DBBR/feature"
+run_test "at_feature_connection_branch_is_tip" \
+  "SELECT id || '|' || v FROM dolt_at_t('feature') ORDER BY id;" \
+  "1|1" "$DBBR/feature"
+run_test "at_feature_connection_working_is_dirty" \
+  "SELECT id || '|' || v FROM dolt_at_t('WORKING') ORDER BY id;" \
+  "1|1
+2|2" "$DBBR/feature"
+rm -f "$DBBR"
+
 dltest_finish

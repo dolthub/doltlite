@@ -255,12 +255,10 @@ static const char *atHistoricalLiteralArg(sqlite3 *db, int iArg){
 static int atResolveSchemaRef(
   sqlite3 *db,
   const char *zRef,
-  int branchEffective,
   int allowWorkspace,
   ProllyHash *pCommit,
   ProllyHash *pCatalog
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteCommit commit;
   int rc;
 
@@ -278,16 +276,6 @@ static int atResolveSchemaRef(
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pCommit, &commit);
   if( rc==SQLITE_OK ) *pCatalog = commit.catalogHash;
   doltliteCommitClear(&commit);
-  if( rc==SQLITE_OK && branchEffective && cs ){
-    ProllyHash branchCommit;
-    if( chunkStoreFindBranch(cs, zRef, &branchCommit)==SQLITE_OK
-     && !prollyHashIsEmpty(&branchCommit) ){
-      ProllyHash effective;
-      rc = doltliteResolveBranchEffectiveCatalog(
-          cs, zRef, &branchCommit, pCatalog, &effective);
-      if( rc==SQLITE_OK ) *pCatalog = effective;
-    }
-  }
   return rc;
 }
 
@@ -305,7 +293,6 @@ static int atResolveLiteralScope(
   const char *azRef[2] = {0, 0};
   char *zLeft = 0;
   char *zRight = 0;
-  int branchEffective = 0;
   int allowWorkspace = 0;
   int nRef = 0;
   int rangeType = DOLTLITE_RANGE_NONE;
@@ -319,7 +306,6 @@ static int atResolveLiteralScope(
   if( sqlite3_strnicmp(zModule, "dolt_at_", 8)==0 ){
     if( pArgs->nExpr!=1 ) return SQLITE_OK;
     azRef[0] = atHistoricalLiteralArg(db, 0);
-    branchEffective = 1;
     allowWorkspace = 1;
     nRef = azRef[0] ? 1 : 0;
   }else if( sqlite3_strnicmp(zModule, "dolt_history_", 13)==0 ){
@@ -352,7 +338,7 @@ static int atResolveLiteralScope(
   if( nRef==0 ) goto done;
 
   for(i=0; i<nRef; i++){
-    rc = atResolveSchemaRef(db, azRef[i], branchEffective, allowWorkspace,
+    rc = atResolveSchemaRef(db, azRef[i], allowWorkspace,
                             &aCommit[i], &aCatalog[i]);
     if( rc!=SQLITE_OK ) goto resolve_failed;
   }
@@ -703,26 +689,14 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   }
   if(rc!=SQLITE_OK) return rc;
 
-  {
-    ProllyHash branchCommit;
-    ProllyHash effCatHash;
-    int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
-                    && !prollyHashIsEmpty(&branchCommit));
-    if( isBranch ){
-      rc = doltliteResolveBranchEffectiveCatalog(
-          cs, zRef, &branchCommit, &catHash, &effCatHash);
-    }else{
-      memcpy(&effCatHash, &catHash, sizeof(ProllyHash));
-    }
-    if( rc==SQLITE_OK ){
-      rc=doltliteLoadTableRootByName(db,&effCatHash,v->zTableName,&tableRoot,
-                                     &flags,&schemaHash);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteSideColsLoad(db, &effCatHash, &schemaHash,
-                                v->zTableName, &v->cols,
-                                !prollyHashIsEmpty(&tableRoot), &c->side);
-    }
+  /* A branch name is that branch's tip. WORKING and STAGED are the refs
+  ** that read a dirty catalog. */
+  rc=doltliteLoadTableRootByName(db,&catHash,v->zTableName,&tableRoot,
+                                 &flags,&schemaHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSideColsLoad(db, &catHash, &schemaHash,
+                              v->zTableName, &v->cols,
+                              !prollyHashIsEmpty(&tableRoot), &c->side);
   }
   if(rc==SQLITE_NOTFOUND){
     sqlite3_free(cur->pVtab->zErrMsg);
