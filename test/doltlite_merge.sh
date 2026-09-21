@@ -1319,5 +1319,104 @@ run_test "merge_one_null_cell_keeps_other_value" \
   "SELECT group_concat(id || ':' || coalesce(a,'N') || ':' || coalesce(b,'N'), ',') FROM (SELECT id, a, b FROM t ORDER BY id);" \
   "1:N:8,2:4:5" "$DB73"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73"
+# Expression UNIQUE keys are part of the merge check.
+DB74=/tmp/test_merge74_$$.db; rm -f "$DB74"
+$DOLTLITE "$DB74" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE UNIQUE INDEX ux ON t(a + 1);
+INSERT INTO t VALUES(1,0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES(2,5);
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(3,5);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_expr_unique_detected" \
+  "SELECT dolt_merge('feature');" "constraint violations" "$DB74"
+run_test "merge_expr_unique_no_duplicate" \
+  "SELECT group_concat(id || ':' || a, ',') FROM (SELECT id, a FROM t ORDER BY id);" \
+  "1:0,2:5" "$DB74"
+run_test "merge_expr_unique_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB74"
+TX74=$(echo "BEGIN;
+SELECT dolt_merge('feature');
+SELECT 'CV|' || count(*) || '|' ||
+       coalesce((SELECT num_violations FROM dolt_constraint_violations),0);
+ROLLBACK;" | $DOLTLITE "$DB74" 2>&1 | grep '^CV|')
+if [ "$TX74" = "CV|1|2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: merge_expr_unique_records_both_rows\n  expected: CV|1|2\n  got:      $TX74"
+fi
+
+DB75=/tmp/test_merge75_$$.db; rm -f "$DB75"
+$DOLTLITE "$DB75" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+CREATE UNIQUE INDEX ux ON t(lower(name));
+INSERT INTO t VALUES(1,'A');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES(2,'B');
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(3,'b');
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_expr_unique_function_detected" \
+  "SELECT dolt_merge('feature');" "constraint violations" "$DB75"
+run_test "merge_expr_unique_function_no_duplicate" \
+  "SELECT group_concat(id || ':' || name, ',') FROM (SELECT id, name FROM t ORDER BY id);" \
+  "1:A,2:B" "$DB75"
+
+DB76=/tmp/test_merge76_$$.db; rm -f "$DB76"
+$DOLTLITE "$DB76" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE UNIQUE INDEX ux ON t(a + 1);
+INSERT INTO t VALUES(1,0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES(2,4);
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(3,NULL);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SQL
+run_test_match "merge_expr_unique_distinct_merges" \
+  "SELECT count(*) FROM dolt_log WHERE message LIKE 'Merge%';" "1" "$DB76"
+run_test "merge_expr_unique_distinct_rows" \
+  "SELECT group_concat(id || ':' || coalesce(a,'N'), ',') FROM (SELECT id, a FROM t ORDER BY id);" \
+  "1:0,2:4,3:N" "$DB76"
+run_test "merge_expr_unique_distinct_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB76"
+
+DB77=/tmp/test_merge77_$$.db; rm -f "$DB77"
+$DOLTLITE "$DB77" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INT, a INT, PRIMARY KEY(id)) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(a + 1);
+INSERT INTO t VALUES(1,0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES(2,5);
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(3,5);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_expr_unique_without_rowid_detected" \
+  "SELECT dolt_merge('feature');" "constraint violations" "$DB77"
+run_test "merge_expr_unique_without_rowid_no_duplicate" \
+  "SELECT group_concat(id || ':' || a, ',') FROM (SELECT id, a FROM t ORDER BY id);" \
+  "1:0,2:5" "$DB77"
+run_test "merge_expr_unique_without_rowid_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB77"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77"
 dltest_finish
