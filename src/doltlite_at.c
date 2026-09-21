@@ -166,6 +166,10 @@ static int atOpenSchemaDb(sqlite3 *db, sqlite3 **ppTmp){
   return SQLITE_OK;
 }
 
+static int atLoadColumnDeclarations(
+  sqlite3 *db, const char *zTable, DoltliteColInfo *ci
+);
+
 /* Load columns as pCatHash declares them. Invalid-side fallback to declared
 ** layout is allowed only when the table is absent or the live schema is
 ** identical; otherwise fail rather than decode with the wrong layout. */
@@ -204,6 +208,9 @@ int doltliteSideColsLoad(
   rc = atOpenSchemaDb(db, &tmp);
   if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
   if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTable, &pSide->ci);
+  /* Affinity belongs to this commit. The live REAL affinity rounds an
+  ** integer the commit stored exactly. */
+  if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(tmp, zTable, &pSide->ci);
   if( tmp ) sqlite3_close(tmp);
   clearSchemaEntry(&entry);
   if( rc!=SQLITE_OK || pSide->ci.nCol<=0 ){
@@ -865,7 +872,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     doltliteResultSideCol(ctx, &c->side, &v->cols,
                           c->common.pVal, c->common.nVal,
                           c->common.intKey, c->common.rootIntKey, col,
-                          v->cols.aAffinity[col]);
+                          doltliteHistoricalColAffinity(&c->side, &v->cols, col));
   }
 
   return SQLITE_OK;
