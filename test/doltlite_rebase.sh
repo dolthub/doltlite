@@ -842,8 +842,9 @@ run_test_match "interactive_rebase_reports_detector_error" \
   "$DB10/feat"
 
 # The side branch is reachable through the merge's second parent, so a
-# reversed breadth-first walk replays B before A. Rows match other legal
-# orders; the log must be the first-parent chain A, C then B, D.
+# reversed breadth-first walk replays B before A. B and C share a
+# generation; whichever is older replays first, and both orders keep A
+# before B and B before D.
 DB11=/tmp/test_rebase_merge_order_$$.db; rm -f "$DB11"
 cat <<'SQL' | "$DOLTLITE" "$DB11" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -875,9 +876,9 @@ run_test "rebase_merge_parent_before_child_rows" \
   "SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" \
   "1:B,2:C,3:D,4:U" \
   "$DB11"
-run_test "rebase_merge_parent_before_child_log" \
+run_test_match "rebase_merge_parent_before_child_log" \
   "SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
-  "D,B,C,A,U,R" \
+  "^D,(B,C|C,B),A,U,R$" \
   "$DB11"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3"
