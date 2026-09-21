@@ -1472,7 +1472,7 @@ static void test_checkpoint_cache_validation(void){
       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   check("checkpoint_cache_open", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) return;
-  rc = chunkStorePut(&cs, "seed", 4, &key);
+  rc = chunkStorePut(&cs, (const u8*)"seed", 4, &key);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(&cs);
   check("checkpoint_cache_create_file", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ){
