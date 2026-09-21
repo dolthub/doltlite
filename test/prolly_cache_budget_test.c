@@ -1,4 +1,5 @@
 #include "prolly_btree_int.h"
+#include "chunk_store_int.h"
 #include <stdio.h>
 #include <unistd.h>
 
@@ -29,6 +30,31 @@ static sqlite3_int64 cacheBytes(ProllyCache *pCache){
     n += sqlite3_msize(p) + sqlite3_msize(p->pData);
   }
   return n;
+}
+
+static sqlite3_int64 combinedCacheBytes(sqlite3 *db){
+  return cacheBytes(doltliteGetCache(db))
+       + csIndexCacheBytes(doltliteGetChunkStore(db));
+}
+
+static int budgetMatches(sqlite3 *db, sqlite3_int64 nByte){
+  ProllyCache *pCache = doltliteGetCache(db);
+  return pCache->nMaxByte<=nByte && pCache->nMaxByte>=nByte-nByte/16
+      && nByte-pCache->nMaxByte<=4*1024*1024
+      && combinedCacheBytes(db)<=nByte;
+}
+
+static void testReload(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int nSlot = cs->nIndexCacheSlot;
+  int rc = chunkStoreLockAndRefresh(cs);
+  check("lock for cache reload", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  rc = csReloadFromDiskPreservingLocalRefs(cs);
+  chunkStoreUnlock(cs);
+  check("reload cached store", rc==SQLITE_OK);
+  check("reload preserves configured index cache slots", cs->nIndexCacheSlot==nSlot);
+  check("reload discards differently sized index cache", csIndexCacheBytes(cs)==0);
 }
 
 static void scan(sqlite3 *db){
@@ -77,6 +103,78 @@ static int hasNode(ProllyCache *pCache, int id){
   ProllyCacheEntry *p = prollyCacheGet(pCache, &hash);
   if( p ) prollyCacheRelease(pCache, p);
   return p!=0;
+}
+
+static ProllyCacheEntry *putInternalNode(ProllyCache *pCache, int id){
+  ProllyNodeBuilder builder;
+  ProllyHash hash = nodeHash(id);
+  u8 key[8];
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = SQLITE_OK;
+  int i;
+  prollyNodeBuilderInit(&builder, 1, PROLLY_NODE_INTKEY);
+  for(i=0; i<32 && rc==SQLITE_OK; i++){
+    prollyEncodeIntKey(id*100+i, key);
+    rc = prollyNodeBuilderAdd(&builder, key, sizeof(key), hash.data,
+                              PROLLY_HASH_SIZE);
+  }
+  if( rc==SQLITE_OK ) rc = prollyNodeBuilderFinish(&builder, &pData, &nData);
+  prollyNodeBuilderFree(&builder);
+  check("build internal node", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return 0;
+  return prollyCachePutOwned(pCache, &hash, pData, nData, &rc);
+}
+
+static void testInternalNodes(void){
+  ProllyCache cache;
+  ProllyCacheEntry *p;
+  ProllyCacheEntry *aPinned[4];
+  int i;
+  check("init internal node cache", prollyCacheInit(&cache, 4096)==SQLITE_OK);
+  p = putInternalNode(&cache, 1);
+  check("cache internal node", p!=0);
+  if( !p ){ prollyCacheFree(&cache); return; }
+  prollyCacheRelease(&cache, p);
+  for(i=2; i<=6; i++){
+    p = putNode(&cache, i, 1200);
+    check("insert leaf under pressure", p!=0);
+    if( p ) prollyCacheRelease(&cache, p);
+  }
+  check("internal node survives leaf churn", hasNode(&cache, 1));
+  check("internal preference stays within budget", cache.nByte<=4096
+      && cache.nByte==cacheBytes(&cache));
+  for(i=7; i<80; i++){
+    p = putNode(&cache, i, 1200);
+    if( p ) prollyCacheRelease(&cache, p);
+  }
+  check("unused internal node eventually evicted", !hasNode(&cache, 1));
+  for(i=80; i<100; i++){
+    p = putInternalNode(&cache, i);
+    check("all-internal cache admits nodes", p!=0);
+    if( p ) prollyCacheRelease(&cache, p);
+  }
+  check("all-internal cache remains bounded", cache.nByte<=4096
+      && cache.nByte==cacheBytes(&cache));
+  prollyCacheFree(&cache);
+
+  check("init pinned internal cache", prollyCacheInit(&cache, 16384)==SQLITE_OK);
+  for(i=0; i<4; i++){
+    aPinned[i] = putInternalNode(&cache, i);
+    check("pin internal node", aPinned[i]!=0);
+  }
+  prollyCacheSetBudget(&cache, 4096);
+  check("pinned internal nodes exceed reduced budget", cache.nByte>4096);
+  for(i=0; i<4; i++){
+    if( aPinned[i] ){
+      check("pinned internal remains readable",
+            prollyNodeIntKey(&aPinned[i]->node, 0)==i*100);
+      prollyCacheRelease(&cache, aPinned[i]);
+    }
+  }
+  check("internal nodes honor budget after unpin", cache.nByte<=4096
+      && cache.nByte==cacheBytes(&cache));
+  prollyCacheFree(&cache);
 }
 
 static void testNodes(void){
@@ -150,17 +248,24 @@ int main(void){
   pCache = doltliteGetCache(db);
   scan(db);
   check("default cache retains scan", cacheBytes(pCache)>8*1024*1024);
-  check("default budget", cacheBytes(pCache)<=64*1024*1024);
+  check("default budget", budgetMatches(db, 64*1024*1024));
+  check("index cache allocated lazily within its reservation",
+      csIndexCacheBytes(doltliteGetChunkStore(db))>0
+      && csIndexCacheBytes(doltliteGetChunkStore(db))
+         <=64*1024*1024-pCache->nMaxByte);
+  testReload(db);
+  scan(db);
+  check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
   execSql(db, "PRAGMA cache_size=-32768");
   scan(db);
   check("larger cache retains scan", cacheBytes(pCache)>8*1024*1024);
   execSql(db, "PRAGMA cache_size=100");
-  check("positive budget shrinks immediately", cacheBytes(pCache)<=100*4096);
+  check("positive budget shrinks immediately", combinedCacheBytes(db)<=100*4096);
   scan(db);
-  check("positive budget bounds scan", cacheBytes(pCache)<=100*4096);
+  check("positive budget bounds scan", combinedCacheBytes(db)<=100*4096);
   execSql(db, "PRAGMA cache_size=-2000");
   scan(db);
-  check("negative budget bounds scan", cacheBytes(pCache)<=2000*1024);
+  check("negative budget bounds scan", combinedCacheBytes(db)<=2000*1024);
   check("prepare pinned scan", sqlite3_prepare_v2(db,
       "SELECT id, v FROM t ORDER BY id", -1, &p, 0)==SQLITE_OK);
   check("pin first row", sqlite3_step(p)==SQLITE_ROW);
@@ -172,25 +277,32 @@ int main(void){
   }
   check("pinned scan remains correct", i==100001);
   check("finalize pinned scan", sqlite3_finalize(p)==SQLITE_OK);
-  check("minimum budget after unpin", cacheBytes(pCache)<=4096);
+  check("minimum budget after unpin", combinedCacheBytes(db)<=4096);
   execSql(db, "PRAGMA cache_size=100; PRAGMA page_size=8192");
-  check("positive budget follows page size", pCache->nMaxByte==100*8192);
+  check("positive budget follows page size", budgetMatches(db, 100*8192));
   execSql(db, "PRAGMA cache_size=-2000; PRAGMA page_size=4096");
   check("KiB budget is independent of page size",
-      pCache->nMaxByte==2000*1024);
+      budgetMatches(db, 2000*1024));
   execSql(db, "PRAGMA cache_size=-2147483648");
   check("minimum signed integer KiB budget",
-      pCache->nMaxByte==2147483648LL*1024);
-  check("large budget allocates lazily", cacheBytes(pCache)<=4096);
+      budgetMatches(db, 2147483648LL*1024));
+  check("large budget allocates lazily", combinedCacheBytes(db)<=4096);
   execSql(db, "PRAGMA page_size=8192; PRAGMA cache_size=2147483647");
   check("maximum signed integer page budget",
-      pCache->nMaxByte==2147483647LL*8192);
+      budgetMatches(db, 2147483647LL*8192));
   execSql(db, "PRAGMA cache_size=-1");
   check("tiny KiB budget uses minimum", pCache->nMaxByte==4096);
+  check("tiny budget disables index cache",
+      doltliteGetChunkStore(db)->nIndexCacheSlot==0
+      && csIndexCacheBytes(doltliteGetChunkStore(db))==0);
+  testReload(db);
+  scan(db);
+  check("reloaded cache respects tiny budget", budgetMatches(db, 4096));
 
   check("close", sqlite3_close(db)==SQLITE_OK);
   unlink(zPath);
   testNodes();
+  testInternalNodes();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail!=0;
 }

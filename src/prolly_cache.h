@@ -17,6 +17,7 @@ struct ProllyCacheEntry {
   ProllyNode node;
   int nRef;
   u8 bTransient;
+  u8 nEvictChance;
   ProllyCacheEntry *pLruNext;
   ProllyCacheEntry *pLruPrev;
   ProllyCacheEntry *pHashNext;

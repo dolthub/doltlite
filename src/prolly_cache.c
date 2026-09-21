@@ -7,6 +7,7 @@
 
 /* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
 #define PROLLY_NODE_BUFFER_SLOP 8
+#define PROLLY_CACHE_INTERNAL_CHANCES 8
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
@@ -136,6 +137,8 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   while( pEntry ){
     if( memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)==0 ){
 
+      pEntry->nEvictChance = pEntry->node.level>0
+                          ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
       pEntry->nRef++;
       if( pEntry->pLruPrev!=&cache->lruHead ){
         lruRemove(pEntry);
@@ -149,37 +152,59 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   return 0;
 }
 
-static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
-  ProllyCacheEntry *pEntry;
-
-  pEntry = cache->lruTail.pLruPrev;
-  while( pEntry!=&cache->lruHead ){
+static ProllyCacheEntry *cacheEvictionCandidate(ProllyCache *cache){
+  ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
+  ProllyCacheEntry *pFallback = 0;
+  int nVisit = cache->nUsed;
+  while( nVisit-- && pEntry!=&cache->lruHead ){
+    ProllyCacheEntry *pPrev = pEntry->pLruPrev;
     if( pEntry->nRef==0 ){
+      if( pEntry->nEvictChance==0 ) return pEntry;
+      if( !pFallback ) pFallback = pEntry;
+      pEntry->nEvictChance--;
       lruRemove(pEntry);
-      hashRemove(cache, pEntry);
-      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
-      sqlite3_free(pEntry->pData);
-      memset(pEntry, 0, sizeof(*pEntry));
-      cache->nUsed--;
-      return pEntry;
+      lruInsertHead(cache, pEntry);
     }
-    pEntry = pEntry->pLruPrev;
+    pEntry = pPrev;
   }
-  return 0;
+  return pFallback;
+}
+
+static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
+  ProllyCacheEntry *pEntry = cacheEvictionCandidate(cache);
+  if( pEntry ){
+    lruRemove(pEntry);
+    hashRemove(cache, pEntry);
+    cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+    sqlite3_free(pEntry->pData);
+    memset(pEntry, 0, sizeof(*pEntry));
+    cache->nUsed--;
+  }
+  return pEntry;
 }
 
 static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
-  ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
-  while( cache->nByte>nMaxByte && pEntry!=&cache->lruHead ){
-    ProllyCacheEntry *pPrev = pEntry->pLruPrev;
-    if( pEntry->nRef==0 ){
-      lruRemove(pEntry);
-      hashRemove(cache, pEntry);
-      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
-      cache->nUsed--;
-      cacheEntryFree(pEntry);
+  int pass;
+  for(pass=0; pass<2 && cache->nByte>nMaxByte; pass++){
+    ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
+    int nVisit = cache->nUsed;
+    while( nVisit-- && cache->nByte>nMaxByte && pEntry!=&cache->lruHead ){
+      ProllyCacheEntry *pPrev = pEntry->pLruPrev;
+      if( pEntry->nRef==0 ){
+        if( pEntry->nEvictChance>0 && pass==0 ){
+          pEntry->nEvictChance--;
+          lruRemove(pEntry);
+          lruInsertHead(cache, pEntry);
+        }else{
+          lruRemove(pEntry);
+          hashRemove(cache, pEntry);
+          cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+          cache->nUsed--;
+          cacheEntryFree(pEntry);
+        }
+      }
+      pEntry = pPrev;
     }
-    pEntry = pPrev;
   }
 }
 
@@ -281,6 +306,8 @@ ProllyCacheEntry *prollyCachePutOwned(
     return 0;
   }
 
+  pEntry->nEvictChance = pEntry->node.level>0
+                      ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
   if( cache->nUsed/2>=cache->nBucket && cache->nBucket<0x40000000
       && (i64)cache->nBucket*2*sizeof(*cache->aBucket)<=cache->nMaxByte/16 ){
     cacheRehash(cache, cache->nBucket*2);
