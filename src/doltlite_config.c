@@ -182,7 +182,10 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
   }
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(ctx, rc);
+    /* The code alone reaches ALTER as a bare "constraint failed"; name what
+    ** the backfill hit. result_error first, or the code overwrites it. */
+    sqlite3_result_error(ctx, sqlite3_errmsg(db), -1);
+    sqlite3_result_error_code(ctx, sqlite3_extended_errcode(db));
     return;
   }
   sqlite3_result_int(ctx, 0);
