@@ -60,6 +60,21 @@ fi
 grep -Fq -- '  - fixture_test.c' "$tmp/output"
 grep -Fq -- '  - doltlite_fixture.c' "$tmp/output"
 
+printf '%s\n' 'build/doltlite_fixture_extended' > "$tmp/test/run_c_tests.sh"
+bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1 || true
+if ! grep -Fq -- '  - doltlite_fixture.c' "$tmp/output"; then
+  echo 'ERROR: a longer suite name counted as coverage for a shorter one' >&2
+  exit 1
+fi
+
+printf '%s\n' '# TODO: run doltlite_fixture' > "$tmp/test/run_c_tests.sh"
+bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1 || true
+if ! grep -Fq -- '  - doltlite_fixture.c' "$tmp/output"; then
+  echo 'ERROR: a commented-out mention counted as a runner' >&2
+  exit 1
+fi
+: > "$tmp/test/run_c_tests.sh"
+
 printf '%s\n' 'doltlite_fixture.c' > "$tmp/test/ci_suite_quarantine.txt"
 bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1 || true
 if grep -Fq -- 'doltlite_fixture.c' "$tmp/output"; then

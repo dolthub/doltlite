@@ -87,11 +87,13 @@ for path in test/doltlite_*.test; do
 done
 
 # main.mk only builds the binary; run_c_tests.sh / a workflow / the manifest must run it.
+# A mention is not a runner: the name needs a token boundary, so a longer
+# suite does not cover a shorter one, and a commented-out line does not count.
 c_test_gated() {  # c_test_gated <name-without-.c>
-  grep -rIlF "$1" \
+  grep -rIhE "(^|[^A-Za-z0-9_])$1([^A-Za-z0-9_]|$)" \
       test/run_c_tests.sh "${ci_sources[@]}" \
       test/lib/doltlite_suite_manifest.sh \
-      2>/dev/null | grep -q .
+      2>/dev/null | grep -qvE '^[[:space:]]*#'
 }
 
 for path in test/*_test.c; do
