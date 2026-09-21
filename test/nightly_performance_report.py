@@ -259,7 +259,7 @@ def escape_markdown(value):
 
 
 def individual_limit(result):
-    return 6.0 if result.section == "ac_writes" else 2.3
+    return 5.5 if result.section == "ac_writes" else 2.3
 
 
 def average_limit(section):
@@ -275,6 +275,25 @@ def section_results(suites, section):
     )
 
 
+# Baseline and candidate medians are drawn independently, so runner I/O noise
+# moves them apart; the ratio of the paired samples is what survives it.
+def paired_ratio(suite, result):
+    ratios = sorted(
+        sample.candidate_us / sample.baseline_us
+        for sample in suite.samples[(result.section, result.test)]
+        if sample.baseline_us > 0 and sample.candidate_us >= 0
+    )
+    return ratios[len(ratios) // 2] if ratios else None
+
+
+def result_passes(suite, result):
+    limit = individual_limit(result)
+    if result.candidate_us / result.baseline_us <= limit:
+        return True
+    confirmation = paired_ratio(suite, result)
+    return confirmation is not None and confirmation <= limit
+
+
 def section_passes(suites, section):
     for suite in suites:
         results = [
@@ -285,14 +304,19 @@ def section_passes(suites, section):
         ]
         if not ratios:
             return False
-        if any(
-            ratio > individual_limit(result)
-            for ratio, result in zip(ratios, results)
-        ):
+        if any(not result_passes(suite, result) for result in results):
             return False
         average = float(f"{statistics.mean(ratios):.2f}")
         if average > average_limit(section):
-            return False
+            confirmations = [
+                paired_ratio(suite, result) for result in results
+            ]
+            if any(value is None for value in confirmations):
+                return False
+            if float(
+                f"{statistics.mean(confirmations):.2f}"
+            ) > average_limit(section):
+                return False
     return True
 
 
@@ -399,12 +423,16 @@ def render_sysbench_details(suite):
     ]
     for result in suite.results:
         ratio = result.candidate_us / result.baseline_us
-        status = "PASS" if ratio <= individual_limit(result) else "FAIL"
+        passed = result_passes(suite, result)
+        status = "PASS" if passed else "FAIL"
+        ratio_cell = f"{ratio:.1f}×"
+        if passed and ratio > individual_limit(result):
+            ratio_cell += f" (paired {paired_ratio(suite, result):.1f}×)"
         lines.append(
             f"| {escape_markdown(result.section)} | "
             f"`{escape_markdown(result.test)}` | "
             f"{format_time(result.baseline_us)} | "
-            f"{format_time(result.candidate_us)} | {ratio:.1f}× | "
+            f"{format_time(result.candidate_us)} | {ratio_cell} | "
             f"{workload_noise(suite, result):.1f}% | {status} |"
         )
     lines.extend(["", "</details>", ""])
@@ -469,8 +497,9 @@ def render_report(suites, commit, run_url, generated_at, runner):
     lines.extend(
         [
             "The absolute ceiling is 2.3× per ordinary workload and 1.9× "
-            "for a section average. Durable autocommit writes use 6.0× "
-            "and 5.0× ceilings respectively.",
+            "for a section average. Durable autocommit writes use 5.5× "
+            "and 5.0× ceilings respectively. A breach counts only when the "
+            "median of the paired ratios exceeds the same ceiling.",
             "",
         ]
     )

@@ -120,7 +120,8 @@ jobs:
         BENCH_AC_WRITE_RUNS: ${{ github.event.inputs.runs || '55' }}
         BENCH_MAX_MULTIPLIER: 2.3
         BENCH_AVG_MAX_MULTIPLIER: 1.9
-        BENCH_AC_WRITE_MAX_MULTIPLIER: 6
+        BENCH_AC_WRITE_MAX_MULTIPLIER: 5.5
+        BENCH_AC_WRITE_AVG_MAX_MULTIPLIER: 5
       run: |
         results="$RUNNER_TEMP/nightly-results"
         mkdir -p "$results"
