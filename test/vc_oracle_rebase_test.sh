@@ -1006,6 +1006,44 @@ SELECT CONCAT('LOG|AFTER|', id) FROM t ORDER BY id;
 "
 done
 
+for dirty_mode in unstaged staged staged_only; do
+  dirty_sql="UPDATE t SET v=99 WHERE id=1;"
+  if [ "$dirty_mode" != unstaged ]; then
+    dirty_sql="$dirty_sql SELECT dolt_add('t');"
+  fi
+  if [ "$dirty_mode" = staged_only ]; then
+    dirty_sql="$dirty_sql UPDATE t SET v=1 WHERE id=1;"
+  fi
+  for finish in retry abort; do
+    if [ "$finish" = retry ]; then
+      finish_sql="UPDATE t SET v=1 WHERE id=1;
+        SELECT dolt_reset('t'); SELECT dolt_rebase('--continue');"
+    else
+      finish_sql="SELECT dolt_rebase('--abort');"
+    fi
+    oracle_error_reopen "interactive_dirty_${dirty_mode}_${finish}" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action='reword', commit_message='kept message'
+  WHERE rebase_order=1;
+$dirty_sql
+SELECT dolt_rebase('--continue');
+" "
+SELECT dolt_checkout('dolt_rebase_feat');
+SELECT CONCAT('LOG|P|', action, '|', commit_message)
+  FROM dolt_rebase ORDER BY rebase_order;
+SELECT CONCAT('LOG|S|', staged, '|', status) FROM dolt_status
+  WHERE table_name='t' ORDER BY staged;
+SELECT CONCAT('LOG|W|', id, '|', v) FROM t ORDER BY id;
+SELECT CONCAT('LOG|HEAD|', message) FROM dolt_log LIMIT 1;
+$finish_sql
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|M|', message) FROM dolt_log;
+SELECT CONCAT('LOG|T|', id, '|', v) FROM t ORDER BY id;
+"
+  done
+done
+
 echo "--- rebase dissolves merge commits in range ---"
 
 MERGE_DISSOLVE_SETUP="

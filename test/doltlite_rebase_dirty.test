@@ -1,0 +1,76 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach mode {autocommit transaction savepoint nested} {
+  foreach {change dirty repair} {
+    unstaged {UPDATE t SET v='DIRTY' WHERE id=1} {
+      UPDATE t SET v='a' WHERE id=1;
+    }
+    staged {
+      UPDATE t SET v='DIRTY' WHERE id=1;
+      SELECT dolt_add('t');
+    } {
+      UPDATE t SET v='a' WHERE id=1;
+      SELECT dolt_reset('t');
+    }
+    staged_only {
+      UPDATE t SET v='DIRTY' WHERE id=1;
+      SELECT dolt_add('t');
+      UPDATE t SET v='a' WHERE id=1;
+    } {SELECT dolt_reset('t')}
+    deleted {DELETE FROM t WHERE id=1} {INSERT INTO t VALUES(1,'a')}
+    schema {CREATE INDEX t_v ON t(v)} {DROP INDEX t_v}
+    untracked {CREATE TABLE scratch(x INTEGER)} {DROP TABLE scratch}
+  } {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+      INSERT INTO t VALUES(1,'a');
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_checkout('-b','feat');
+      INSERT INTO t VALUES(2,'f');
+      SELECT dolt_commit('-Am','featrow');
+      SELECT dolt_checkout('main');
+      INSERT INTO t VALUES(3,'m');
+      SELECT dolt_commit('-Am','mainrow');
+      SELECT dolt_checkout('feat');
+      SELECT dolt_rebase('-i','main');
+      UPDATE dolt_rebase SET action='reword', commit_message='kept message';
+    }
+    set feature [db one {SELECT dolt_hashof('feat')}]
+    set working [db one {SELECT dolt_hashof('HEAD')}]
+    switch $mode {
+      transaction {execsql {BEGIN}}
+      savepoint {execsql {SAVEPOINT outer}}
+      nested {execsql {BEGIN; SAVEPOINT inner}}
+    }
+    execsql $dirty
+    set autocommit [sqlite3_get_autocommit db]
+    set before [execsql {SELECT id,v FROM t ORDER BY id}]
+    set status [execsql {SELECT * FROM dolt_status ORDER BY table_name,staged}]
+    set name rebase-dirty-$mode-$change
+    do_catchsql_test $name-reject {
+      SELECT dolt_rebase('--continue');
+    } {1 {cannot start a rebase with uncommitted changes}}
+    do_test $name-preserved {
+      list [db one {SELECT active_branch()}] \
+           [expr {$feature eq [db one {SELECT dolt_hashof('feat')}]}] \
+           [expr {$working eq [db one {SELECT dolt_hashof('HEAD')}]}] \
+           [expr {$before eq [execsql {SELECT id,v FROM t ORDER BY id}]}] \
+           [expr {$status eq [execsql {
+             SELECT * FROM dolt_status ORDER BY table_name,staged
+           }]}] \
+           [expr {$autocommit == [sqlite3_get_autocommit db]}] \
+           [execsql {SELECT action,commit_message FROM dolt_rebase}]
+    } {dolt_rebase_feat 1 1 1 1 1 {reword {kept message}}}
+    do_test $name-retry {
+      execsql $repair
+      execsql {SELECT dolt_rebase('--continue')}
+      list [db one {SELECT active_branch()}] \
+           [execsql {SELECT id,v FROM t ORDER BY id}] \
+           [db one {SELECT message FROM dolt_log LIMIT 1}]
+    } {feat {1 a 2 f 3 m} {kept message}}
+  }
+}
+
+finish_test

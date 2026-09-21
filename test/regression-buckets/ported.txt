@@ -56,6 +56,7 @@ doltlite_merge_table_name_conflict
 doltlite_merge_shared_columns
 doltlite_merge_ignored
 doltlite_rebase_plan_hash
+doltlite_rebase_dirty
 doltlite_conflicts_multi
 doltlite_recover_changes
 doltlite_gc_stop_world
