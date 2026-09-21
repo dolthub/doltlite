@@ -11,7 +11,7 @@ touch "$tmp/test/ci_suite_allowlist.txt" "$tmp/test/ci_suite_quarantine.txt" \
   "$tmp/test/lib/doltlite_suite_manifest.sh" "$tmp/test/run_c_tests.sh" \
   "$tmp/test/regression-buckets/core.txt" "$tmp/main.mk" \
   "$tmp/test/fixture_test.sh" "$tmp/test/fixture_test.c" \
-  "$tmp/test/oracle_fixture_test.sh"
+  "$tmp/test/doltlite_fixture.c" "$tmp/test/oracle_fixture_test.sh"
 cat > "$tmp/test/sql_differential_fuzzer.py" <<'PY'
 GROUPS = [
     "fixture-group",
@@ -32,6 +32,7 @@ runs:
       run: |
         bash test/fixture_test.sh
         build/fixture_test
+        build/doltlite_fixture
         for suite in test/oracle_*_test.sh; do bash "$suite"; done
         DOLTLITE_DIFF_GROUPS=fixture-group python3 test/sql_differential_fuzzer.py
 YAML
@@ -46,14 +47,45 @@ if bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1; then
   echo 'ERROR: guard accepted suites after their action references were removed' >&2
   exit 1
 fi
-for needle in fixture_test.sh fixture_test.c oracle_fixture_test.sh fixture-group; do
+for needle in fixture_test.sh fixture_test.c doltlite_fixture.c \
+  oracle_fixture_test.sh fixture-group; do
   grep -Fq -- "  - $needle" "$tmp/output"
 done
 
-printf '%s\n' 'build/fixture_test' > "$tmp/main.mk"
+printf '%s\n' 'build/fixture_test' 'build/doltlite_fixture' > "$tmp/main.mk"
 if bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1; then
   echo 'ERROR: guard accepted a C suite that is only built' >&2
   exit 1
 fi
 grep -Fq -- '  - fixture_test.c' "$tmp/output"
+grep -Fq -- '  - doltlite_fixture.c' "$tmp/output"
+
+printf '%s\n' 'build/doltlite_fixture_extended' > "$tmp/test/run_c_tests.sh"
+bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1 || true
+if ! grep -Fq -- '  - doltlite_fixture.c' "$tmp/output"; then
+  echo 'ERROR: a longer suite name counted as coverage for a shorter one' >&2
+  exit 1
+fi
+
+printf '%s\n' '# TODO: run doltlite_fixture' > "$tmp/test/run_c_tests.sh"
+bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1 || true
+if ! grep -Fq -- '  - doltlite_fixture.c' "$tmp/output"; then
+  echo 'ERROR: a commented-out mention counted as a runner' >&2
+  exit 1
+fi
+: > "$tmp/test/run_c_tests.sh"
+
+printf '%s\n' 'doltlite_fixture.c' > "$tmp/test/ci_suite_quarantine.txt"
+bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1 || true
+if grep -Fq -- 'doltlite_fixture.c' "$tmp/output"; then
+  echo 'ERROR: guard reported a quarantined DoltLite C suite as an orphan' >&2
+  exit 1
+fi
+: > "$tmp/test/ci_suite_quarantine.txt"
+printf '%s\n' 'build/doltlite_fixture' > "$tmp/test/run_c_tests.sh"
+bash "$tmp/test/lint_orphaned_suites.sh" > "$tmp/output" 2>&1 || true
+if grep -Fq -- 'doltlite_fixture.c' "$tmp/output"; then
+  echo 'ERROR: guard reported a wired DoltLite C suite as an orphan' >&2
+  exit 1
+fi
 echo 'Orphaned-suite guard action tests passed'
