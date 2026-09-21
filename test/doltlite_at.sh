@@ -542,4 +542,35 @@ run_test "at_feature_connection_working_is_dirty" \
 2|2" "$DBBR/feature"
 rm -f "$DBBR"
 
+# The tip's columns, not the current branch's uncommitted schema.
+DBSC=/tmp/test_at_branch_schema_$$.db; rm -f "$DBSC"
+$DOLTLITE "$DBSC" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN extra TEXT;
+UPDATE t SET extra='feat' WHERE id=1;
+SELECT dolt_commit('-Am','feature schema');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN working_extra TEXT;
+SQL
+run_test "at_feature_tip_has_committed_column" \
+  "SELECT id || '|' || v || '|' || extra FROM dolt_at_t('feature');" \
+  "1|base|feat" "$DBSC"
+run_test_match "at_feature_tip_hides_working_column" \
+  "SELECT working_extra FROM dolt_at_t('feature');" \
+  "no such column: working_extra" "$DBSC"
+run_test "at_working_has_uncommitted_column" \
+  "SELECT id || '|' || v || '|' || coalesce(working_extra,'NULL') FROM dolt_at_t('WORKING');" \
+  "1|base|NULL" "$DBSC"
+run_test_match "at_working_hides_other_branch_column" \
+  "SELECT extra FROM dolt_at_t('WORKING');" \
+  "no such column: extra" "$DBSC"
+run_test_match "at_head_hides_other_branch_column" \
+  "SELECT extra FROM dolt_at_t('HEAD');" \
+  "no such column: extra" "$DBSC"
+rm -f "$DBSC"
+
 dltest_finish
