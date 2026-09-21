@@ -6,6 +6,9 @@
 #include "prolly_hash.h"
 #include "prolly_node.h"
 
+/* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
+#define PROLLY_NODE_BUFFER_SLOP 8
+
 typedef struct ProllyCache ProllyCache;
 typedef struct ProllyCacheEntry ProllyCacheEntry;
 

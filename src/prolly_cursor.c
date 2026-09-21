@@ -24,11 +24,41 @@ int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
   return SQLITE_OK;
 }
 
+static int cacheReadAheadNode(
+  void *pCtx, const ProllyHash *pHash, const u8 *pData, int nData
+){
+  ProllyCache *pCache = (ProllyCache*)pCtx;
+  ProllyCacheEntry *pEntry = prollyCacheGet(pCache, pHash);
+  int rc = SQLITE_OK;
+  if( !pEntry ){
+    u8 *pCopy = sqlite3_malloc(nData+PROLLY_NODE_BUFFER_SLOP);
+    if( !pCopy ) return SQLITE_NOMEM;
+    memcpy(pCopy, pData, nData);
+    pEntry = prollyCachePutOwned(pCache, pHash, pCopy, nData, &rc);
+  }
+  if( pEntry ) prollyCacheRelease(pCache, pEntry);
+  return rc;
+}
+
+static void readAheadLeaves(ProllyCursor *cur){
+  ProllyNode *pParent = &cur->aLevel[cur->iLevel-1].pEntry->node;
+  int first = cur->aLevel[cur->iLevel-1].idx;
+  int nHash = MIN(CHUNK_READ_AHEAD_MAX, pParent->nItems-first);
+  ProllyHash aHash[CHUNK_READ_AHEAD_MAX];
+  int i;
+
+  if( nHash<2 || cur->pCache->nMaxByte<2*CHUNK_READ_AHEAD_BYTES ) return;
+  for(i=0; i<nHash; i++) prollyNodeChildHash(pParent, first+i, &aHash[i]);
+  sqlite3BeginBenignMalloc();
+  /* A speculative failure must wait until the cursor requests that chunk. */
+  (void)chunkStoreReadAhead(cur->pStore, aHash, nHash,
+                           cacheReadAheadNode, cur->pCache);
+  sqlite3EndBenignMalloc();
+}
+
 static int prollyLoadNodeMaybeSparse(
-  ChunkStore *pStore,
-  ProllyCache *pCache,
+  ProllyCursor *cur,
   const ProllyHash *pHash,
-  int bAllowSparse,
   ProllyCacheEntry **ppEntry
 ){
   ProllyCacheEntry *pEntry;
@@ -37,21 +67,31 @@ static int prollyLoadNodeMaybeSparse(
   int nDataPhys = 0;
   int rc;
 
-  if( !bAllowSparse ){
-    return prollyLoadNode(pStore, pCache, pHash, ppEntry);
-  }
-
   *ppEntry = 0;
-  pEntry = prollyCacheGet(pCache, pHash);
+  pEntry = prollyCacheGet(cur->pCache, pHash);
   if( pEntry ){
     *ppEntry = pEntry;
     return SQLITE_OK;
   }
 
-  rc = chunkStoreGetSparse(pStore, pHash, &pData, &nData, &nDataPhys);
+  if( cur->nAdvance>=2 && cur->iLevel>0
+   && cur->aLevel[cur->iLevel-1].pEntry->node.level==1 ){
+    readAheadLeaves(cur);
+    pEntry = prollyCacheGet(cur->pCache, pHash);
+    if( pEntry ){
+      *ppEntry = pEntry;
+      return SQLITE_OK;
+    }
+  }
+  if( cur->bAllowSparse ){
+    rc = chunkStoreGetSparse(cur->pStore, pHash, &pData, &nData, &nDataPhys);
+  }else{
+    rc = chunkStoreGet(cur->pStore, pHash, &pData, &nData);
+    nDataPhys = nData;
+  }
   if( rc!=SQLITE_OK ) return rc;
   if( nDataPhys==nData ){
-    pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
+    pEntry = prollyCachePutOwned(cur->pCache, pHash, pData, nData, &rc);
   }else{
     pEntry = prollyCachePutTransientOwned(pHash, pData, nData, nDataPhys, &rc);
   }
@@ -102,8 +142,7 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
   int rc;
   int i;
 
-  rc = prollyLoadNodeMaybeSparse(
-      cur->pStore, cur->pCache, hash, cur->bAllowSparse, ppEntry);
+  rc = prollyLoadNodeMaybeSparse(cur, hash, ppEntry);
   if( rc!=SQLITE_OK ) return rc;
   pNode = &(*ppEntry)->node;
   if( pNode->level==0 || !cur->pStore->pChunkSource ) return SQLITE_OK;
@@ -314,6 +353,7 @@ int prollyCursorNext(ProllyCursor *cur){
   }
 
   level = cur->iLevel;
+  if( cur->nAdvance<2 ) cur->nAdvance++;
   while( level>0 ){
     prollyCacheRelease(cur->pCache, cur->aLevel[level].pEntry);
     cur->aLevel[level].pEntry = 0;
@@ -350,6 +390,7 @@ int prollyCursorPrev(ProllyCursor *cur){
   }
 
   level = cur->iLevel;
+  cur->nAdvance = 0;
   while( level>0 ){
     prollyCacheRelease(cur->pCache, cur->aLevel[level].pEntry);
     cur->aLevel[level].pEntry = 0;
@@ -473,6 +514,7 @@ void prollyCursorReleaseAll(ProllyCursor *cur){
     cur->aLevel[i].idx = 0;
   }
   cur->iLevel = 0;
+  cur->nAdvance = 0;
 
   cur->eState = PROLLY_CURSOR_INVALID;
 }

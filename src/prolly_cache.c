@@ -5,8 +5,6 @@
 #include <string.h>
 #include <assert.h>
 
-/* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
-#define PROLLY_NODE_BUFFER_SLOP 8
 #define PROLLY_CACHE_INTERNAL_CHANCES 8
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){

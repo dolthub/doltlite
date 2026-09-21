@@ -60,13 +60,111 @@ static void testReload(sqlite3 *db){
 static void scan(sqlite3 *db){
   sqlite3_stmt *p = 0;
   check("prepare scan", sqlite3_prepare_v2(db,
-      "SELECT count(v), sum(length(v)), sum(id) FROM t", -1, &p, 0)
+      "SELECT count(v), sum(length(v)), sum(id),"
+      " sum(v=printf('%0100d',id)) FROM t", -1, &p, 0)
       ==SQLITE_OK);
   check("scan result", sqlite3_step(p)==SQLITE_ROW
       && sqlite3_column_int(p, 0)==100000
       && sqlite3_column_int(p, 1)==10000000
-      && sqlite3_column_int64(p, 2)==5000050000LL);
+      && sqlite3_column_int64(p, 2)==5000050000LL
+      && sqlite3_column_int(p, 3)==100000);
   check("finish scan", sqlite3_finalize(p)==SQLITE_OK);
+}
+
+static const sqlite3_io_methods *pReadMethods;
+static int nRead;
+static int nBatchRead;
+static int eReadFault;
+
+static int countedRead(sqlite3_file *pFile, void *pData, int n, sqlite3_int64 off){
+  int rc;
+  nRead++;
+  if( n>16384 ){
+    nBatchRead++;
+    if( eReadFault==1 ) return SQLITE_IOERR_READ;
+  }
+  rc = pReadMethods->xRead(pFile, pData, n, off);
+  if( rc==SQLITE_OK && n>16384 ){
+    if( eReadFault==2 ) ((u8*)pData)[0] ^= 1;
+    if( eReadFault==3 ) ((u8*)pData)[n-1] ^= 1;
+  }
+  return rc;
+}
+
+static void clearNodes(ProllyCache *pCache){
+  sqlite3_int64 nBudget = pCache->nMaxByte;
+  prollyCacheSetBudget(pCache, 4096);
+  prollyCacheSetBudget(pCache, nBudget);
+  nRead = nBatchRead = 0;
+}
+
+static void testReadAhead(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  ProllyCacheEntry *pEntry;
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  char zSql[200];
+  i64 boundary = 0;
+  int nLeaf = 0;
+  int i;
+
+  for(pEntry=pCache->lruHead.pLruNext; pEntry!=&pCache->lruTail;
+      pEntry=pEntry->pLruNext){
+    ProllyNode *pNode = &pEntry->node;
+    if( pNode->level==0 && pNode->nItems>0
+     && (pNode->flags & PROLLY_NODE_INTKEY)!=0 ){
+      i64 key = prollyNodeIntKey(pNode, pNode->nItems-1);
+      nLeaf++;
+      if( key>20000 && key<90000 ) boundary = key;
+    }
+  }
+  check("read-ahead fixture spans many leaves", nLeaf>100 && boundary>0);
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  scan(db);
+  check("scan batches adjacent leaf reads", nBatchRead>0 && nRead<nLeaf/2);
+  nRead = nBatchRead = 0;
+  scan(db);
+  check("cached scan needs no read-ahead", nBatchRead==0);
+
+  clearNodes(pCache);
+  check("prepare point read", sqlite3_prepare_v2(db,
+      "SELECT length(v) FROM t WHERE id=50000", -1, &p, 0)==SQLITE_OK);
+  check("point read result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==100);
+  check("finish point read", sqlite3_finalize(p)==SQLITE_OK);
+  check("point read avoids read-ahead", nBatchRead==0);
+
+  clearNodes(pCache);
+  sqlite3_snprintf(sizeof(zSql), zSql,
+      "SELECT count(v), sum(length(v)) FROM t WHERE id BETWEEN %lld AND %lld",
+      boundary, boundary+1);
+  check("prepare short range", sqlite3_prepare_v2(db, zSql, -1, &p, 0)
+      ==SQLITE_OK);
+  check("short range crosses leaf boundary", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==2 && sqlite3_column_int(p, 1)==200);
+  check("finish short range", sqlite3_finalize(p)==SQLITE_OK);
+  check("short range avoids read-ahead", nBatchRead==0);
+
+  for(i=1; i<=3; i++){
+    clearNodes(pCache);
+    eReadFault = i;
+    scan(db);
+    check("speculative read failure falls back", nBatchRead>0);
+    check("read-ahead obeys cache budget", pCache->nByte<=pCache->nMaxByte);
+  }
+  eReadFault = 0;
+  execSql(db, "PRAGMA cache_size=-64");
+  nRead = nBatchRead = 0;
+  scan(db);
+  check("small cache avoids read-ahead", nBatchRead==0);
+  check("small scan stays within budget", pCache->nByte<=pCache->nMaxByte);
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "PRAGMA cache_size=-65536");
 }
 
 static ProllyHash nodeHash(int id){
@@ -253,6 +351,7 @@ int main(void){
       csIndexCacheBytes(doltliteGetChunkStore(db))>0
       && csIndexCacheBytes(doltliteGetChunkStore(db))
          <=64*1024*1024-pCache->nMaxByte);
+  testReadAhead(db);
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
