@@ -2306,6 +2306,75 @@ int sqlite3HeaderSizeBtree(void){
   return 100;
 }
 
+/* A record wider than its table is a shape stock SQLite cannot store, since
+** DROP COLUMN rewrites every row. Left in place, the next ADD COLUMN reads
+** the stale trailing field instead of the new column's default. */
+static int integrityCheckRecordWidth(
+  sqlite3 *db,
+  Btree *p,
+  Pgno root,
+  struct TableEntry *pTE,
+  int mxErr,
+  int *pnErr,
+  char **pzMsg
+){
+  BtShared *pBt = p->pBt;
+  Table *pTab = 0;
+  Index *pPk;
+  HashElem *k;
+  ProllyCursor cur;
+  int iDb;
+  int nExpect;
+  int res = 0;
+  int rc;
+
+  for(iDb=0; iDb<db->nDb; iDb++){
+    if( db->aDb[iDb].pBt==p ) break;
+  }
+  if( iDb>=db->nDb || !db->aDb[iDb].pSchema ) return SQLITE_OK;
+  for(k=sqliteHashFirst(&db->aDb[iDb].pSchema->tblHash); k; k=sqliteHashNext(k)){
+    Table *pT = (Table*)sqliteHashData(k);
+    if( IsOrdinaryTable(pT) && pT->tnum==root ){
+      pTab = pT;
+      break;
+    }
+  }
+  if( !pTab || pTab->nCol<=0 ) return SQLITE_OK;
+  /* The stored row is the primary key index's row, so that index's column
+  ** count is the width to expect: a column repeated in the key, or one
+  ** collated twice, makes it wider than the table. */
+  pPk = sqlite3PrimaryKeyIndex(pTab);
+  nExpect = pPk && pPk->nColumn>pTab->nCol ? pPk->nColumn : pTab->nCol;
+
+  prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && *pnErr<mxErr && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    DoltliteRecordInfo ri;
+    int nField;
+    doltliteRecordInfoInit(&ri);
+    prollyCursorValue(&cur, &pVal, &nVal);
+    doltliteParseRecord(pVal, nVal, &ri);
+    nField = ri.nField;
+    doltliteRecordInfoClear(&ri);
+    if( nField > nExpect ){
+      (*pnErr)++;
+      if( !*pzMsg ){
+        *pzMsg = sqlite3_mprintf(
+            "row of %s stores %d fields for %d columns",
+            pTab->zName, nField, nExpect);
+      }
+      /* One report per table: every row of it was written the same way. */
+      break;
+    }
+    rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+
 int sqlite3BtreeIntegrityCheck(
   sqlite3 *db,
   Btree *p,
@@ -2322,6 +2391,7 @@ int sqlite3BtreeIntegrityCheck(
   int nErr = 0;
   int rc;
   int bCount = 1;
+  char *zWidthMsg = 0;
 
   if( !p ){
     if( pnErr ) *pnErr = 0;
@@ -2380,6 +2450,10 @@ int sqlite3BtreeIntegrityCheck(
       if( !prollyHashIsEmpty(&pTE->root) ){
         rc = integrityCheckChunkGraph(&ctx, &pTE->root);
         if( rc!=SQLITE_OK ) goto integrity_done;
+        /* A tree too damaged to walk is reported by the graph check above,
+        ** so a failed walk says nothing rather than failing the pragma. */
+        (void)integrityCheckRecordWidth(db, p, aRoot[i], pTE, mxErr, &nErr,
+                                        &zWidthMsg);
       }
     }
   }
@@ -2393,6 +2467,7 @@ integrity_done:
   prollyHashSetFree(&ctx.seen);
   if( rc!=SQLITE_OK ){
     /* OP_IntegrityCk always reads *pnErr and frees *pzOut; count this fail. */
+    sqlite3_free(zWidthMsg);
     if( pnErr ) *pnErr = nErr+1;
     if( pzOut ) *pzOut = 0;
     return rc;
@@ -2401,12 +2476,15 @@ integrity_done:
   if( pnErr ) *pnErr = nErr;
   if( pzOut ){
     if( nErr>0 ){
-      *pzOut = sqlite3_mprintf("integrity check failed");
+      *pzOut = zWidthMsg ? zWidthMsg
+                         : sqlite3_mprintf("integrity check failed");
+      zWidthMsg = 0;
       if( !*pzOut ) return SQLITE_NOMEM;
     }else{
       *pzOut = 0;
     }
   }
+  sqlite3_free(zWidthMsg);
 
   return SQLITE_OK;
 }

@@ -2508,4 +2508,45 @@ run_test "revert_renumbered_indexes_distinct_pages" \
 run_test "revert_renumbered_indexes_reopen" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
+# A row rewritten while a since-reverted column existed keeps that column's
+# field in its record. The revert adopts the narrower layout, so the field has
+# to go with it: the next added column reads its own default rather than the
+# stale slot, and a NOT NULL default does not trip its own backfill. One
+# database per probe, because the first added column consumes the stale slot.
+revert_layout_fixture() {  # revert_layout_fixture <db> <create-table>
+  echo "$2
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+ALTER TABLE t ADD COLUMN xcol TEXT;
+SELECT dolt_commit('-A','-m','add xcol');
+UPDATE t SET v='b';
+SELECT dolt_commit('-A','-m','rewrite row');" | $DOLTLITE "$1" > /dev/null 2>&1
+}
+for shape in rowid without_rowid; do
+  if [ "$shape" = rowid ]; then
+    schema="CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+  else
+    schema="CREATE TABLE t(id INTEGER NOT NULL, v TEXT, PRIMARY KEY(id DESC)) WITHOUT ROWID;"
+  fi
+  for probe in default notnull; do
+    DB=/tmp/test_alter_revert_${shape}_${probe}_$$.db; rm -f "$DB"
+    revert_layout_fixture "$DB" "$schema"
+    run_test_match "revert_add_column_${shape}_${probe}_hash" \
+      "SELECT dolt_revert('HEAD~1');" "^[0-9a-f]{40}$" "$DB"
+    run_test "revert_add_column_${shape}_${probe}_cols" \
+      "SELECT count(*) FROM pragma_table_info('t') WHERE name='xcol';" "0" "$DB"
+    if [ "$probe" = default ]; then
+      run_test "revert_add_column_${shape}_default" \
+        "ALTER TABLE t ADD COLUMN p INTEGER DEFAULT 7; SELECT p FROM t;" "7" "$DB"
+    else
+      run_test "revert_add_column_${shape}_notnull" \
+        "ALTER TABLE t ADD COLUMN q INTEGER NOT NULL DEFAULT 0; SELECT q FROM t;" \
+        "0" "$DB"
+    fi
+    run_test "revert_add_column_${shape}_${probe}_integrity" \
+      "PRAGMA integrity_check;" "ok" "$DB"
+    rm -f "$DB"
+  done
+done
+
 dltest_finish
