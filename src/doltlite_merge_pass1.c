@@ -985,6 +985,17 @@ static int mergePass1BothSides(
     }
   }
 
+  /* A theirs-only schema change moves no rows, so theirsChanged hides it. */
+  if( zName && theirSchemaChanged && !ourSchemaChanged && !theirsChanged
+   && !bDualAddColMerge && pMergeOurs==&c->aOurs[iOurs] ){
+    int bRelaid = 0;
+    oursAdj = c->aOurs[iOurs];
+    rc = mergePass1RelayoutOneSidedSchema(c, zName, 0, &c->aOurs[iOurs],
+        ancEntry, theirsEntry, &oursAdj.root, &ancNormRoot, &bRelaid);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bRelaid ) pMergeOurs = &oursAdj;
+  }
+
   if( bDualAddColMerge || (oursChanged && theirsChanged) ){
     return mergePass1MergeTableData(
         c, zName, zLogicalName, pMergeOurs, pMergeAnc,
