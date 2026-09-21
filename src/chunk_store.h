@@ -329,6 +329,17 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
 
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas);
 
+typedef struct ChunkBuffer ChunkBuffer;
+struct ChunkBuffer {
+  /* Only pAlloc is freed; pData may follow the on-disk length header. */
+  u8 *pAlloc;
+  u8 *pData;
+  int nData;
+  int nDataPhys;
+};
+
+int chunkStoreGetBuffer(ChunkStore *cs, const ProllyHash *hash,
+                        int bSparse, int nPadding, ChunkBuffer *pBuffer);
 int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
                   u8 **ppData, int *pnData);
 int chunkStoreVerifyChunk(const ProllyHash *hash, u8 **ppData, int *pnData);

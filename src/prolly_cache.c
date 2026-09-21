@@ -5,9 +5,6 @@
 #include <string.h>
 #include <assert.h>
 
-/* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
-#define PROLLY_NODE_BUFFER_SLOP 8
-
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
   memcpy(&h, hash->data, sizeof(u32));
@@ -43,59 +40,36 @@ static void hashRemove(ProllyCache *cache, ProllyCacheEntry *pEntry){
 
 static void cacheEntryFree(ProllyCacheEntry *pEntry){
   if( pEntry ){
-    sqlite3_free(pEntry->pData);
+    sqlite3_free(pEntry->pAlloc);
     sqlite3_free(pEntry);
   }
 }
 
-static ProllyCacheEntry *cacheEntryNewOwned(
+static int cacheEntrySetBuffer(
+  ProllyCacheEntry *pEntry,
   const ProllyHash *hash,
-  u8 *pData,
-  int nData,
-  int nDataPhys,
-  int bTransient,
-  int *pRc
+  ChunkBuffer *pBuffer
 ){
-  ProllyCacheEntry *pEntry;
-  int rc;
-
-  if( pRc ) *pRc = SQLITE_OK;
-  pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
-  if( pEntry==0 ){
-    sqlite3_free(pData);
-    if( pRc ) *pRc = SQLITE_NOMEM;
-    return 0;
-  }
-  memset(pEntry, 0, sizeof(*pEntry));
-
-  {
-    u8 *pPadded = (u8*)sqlite3_realloc(
-        pData, nDataPhys + PROLLY_NODE_BUFFER_SLOP);
-    if( pPadded==0 ){
-      sqlite3_free(pData);
-      sqlite3_free(pEntry);
-      if( pRc ) *pRc = SQLITE_NOMEM;
-      return 0;
+  u64 nPrefix = (u64)(pBuffer->pData - pBuffer->pAlloc);
+  u64 nAlloc = nPrefix + pBuffer->nDataPhys + PROLLY_NODE_BUFFER_SLOP;
+  u8 *pAlloc = pBuffer->pAlloc;
+  if( sqlite3_msize(pAlloc)<nAlloc ){
+    pAlloc = sqlite3_realloc64(pAlloc, nAlloc);
+    if( pAlloc==0 ){
+      sqlite3_free(pBuffer->pAlloc);
+      return SQLITE_NOMEM;
     }
-    pData = pPadded;
-    memset(pData + nDataPhys, 0, PROLLY_NODE_BUFFER_SLOP);
   }
-
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
-  pEntry->pData = pData;
-  pEntry->nData = nData;
-  pEntry->nDataPhys = nDataPhys;
+  pEntry->pAlloc = pAlloc;
+  pEntry->pData = pAlloc + nPrefix;
+  pEntry->nData = pBuffer->nData;
+  pEntry->nDataPhys = pBuffer->nDataPhys;
   pEntry->nRef = 1;
-  pEntry->bTransient = bTransient ? 1 : 0;
-
-  rc = prollyNodeParseSparse(&pEntry->node, pData, nData, nDataPhys);
-  if( rc!=SQLITE_OK ){
-    if( pRc ) *pRc = rc;
-    cacheEntryFree(pEntry);
-    return 0;
-  }
-
-  return pEntry;
+  pEntry->bTransient = pBuffer->nDataPhys!=pBuffer->nData;
+  memset(pEntry->pData + pEntry->nDataPhys, 0, PROLLY_NODE_BUFFER_SLOP);
+  return prollyNodeParseSparse(&pEntry->node, pEntry->pData,
+                               pEntry->nData, pEntry->nDataPhys);
 }
 
 int prollyCacheInit(ProllyCache *cache, i64 nMaxByte){
@@ -157,8 +131,8 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     if( pEntry->nRef==0 ){
       lruRemove(pEntry);
       hashRemove(cache, pEntry);
-      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
-      sqlite3_free(pEntry->pData);
+      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pAlloc);
+      sqlite3_free(pEntry->pAlloc);
       memset(pEntry, 0, sizeof(*pEntry));
       cache->nUsed--;
       return pEntry;
@@ -175,7 +149,7 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
     if( pEntry->nRef==0 ){
       lruRemove(pEntry);
       hashRemove(cache, pEntry);
-      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+      cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pAlloc);
       cache->nUsed--;
       cacheEntryFree(pEntry);
     }
@@ -219,11 +193,10 @@ void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte){
   cacheTrim(cache, cache->nMaxByte);
 }
 
-ProllyCacheEntry *prollyCachePutOwned(
+ProllyCacheEntry *prollyCachePutBufferOwned(
   ProllyCache *cache,
   const ProllyHash *hash,
-  u8 *pData,
-  int nData,
+  ChunkBuffer *pBuffer,
   int *pRc
 ){
   int iBucket;
@@ -232,54 +205,37 @@ ProllyCacheEntry *prollyCachePutOwned(
 
   if( pRc ) *pRc = SQLITE_OK;
 
-  pEntry = prollyCacheGet(cache, hash);
+  pEntry = pBuffer->nDataPhys==pBuffer->nData
+         ? prollyCacheGet(cache, hash) : 0;
   if( pEntry ){
-    sqlite3_free(pData);
+    sqlite3_free(pBuffer->pAlloc);
     return pEntry;
   }
 
   pEntry = 0;
-  if( cache->nByte + nData + PROLLY_NODE_BUFFER_SLOP
-      + sizeof(ProllyCacheEntry)>cache->nMaxByte ){
+  if( pBuffer->nDataPhys==pBuffer->nData
+   && cache->nByte + sqlite3_msize(pBuffer->pAlloc)
+      + PROLLY_NODE_BUFFER_SLOP + sizeof(ProllyCacheEntry)>cache->nMaxByte ){
     pEntry = cacheEvictOne(cache);
   }
 
   if( pEntry==0 ){
     pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
     if( pEntry==0 ){
-      sqlite3_free(pData);
+      sqlite3_free(pBuffer->pAlloc);
       if( pRc ) *pRc = SQLITE_NOMEM;
       return 0;
     }
     memset(pEntry, 0, sizeof(*pEntry));
   }
 
-  {
-    u8 *pPadded = (u8*)sqlite3_realloc(pData, nData + PROLLY_NODE_BUFFER_SLOP);
-    if( pPadded==0 ){
-      sqlite3_free(pData);
-      sqlite3_free(pEntry);
-      if( pRc ) *pRc = SQLITE_NOMEM;
-      return 0;
-    }
-    pData = pPadded;
-    memset(pData + nData, 0, PROLLY_NODE_BUFFER_SLOP);
-  }
-
-  memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
-  pEntry->pData = pData;
-  pEntry->nData = nData;
-  pEntry->nDataPhys = nData;
-  pEntry->nRef = 1;
-  pEntry->bTransient = 0;
-
-  rc = prollyNodeParse(&pEntry->node, pData, nData);
+  rc = cacheEntrySetBuffer(pEntry, hash, pBuffer);
   if( rc!=SQLITE_OK ){
     if( pRc ) *pRc = rc;
-    sqlite3_free(pData);
-    sqlite3_free(pEntry);
+    cacheEntryFree(pEntry);
     return 0;
   }
+  if( pEntry->bTransient ) return pEntry;
 
   if( cache->nUsed/2>=cache->nBucket && cache->nBucket<0x40000000
       && (i64)cache->nBucket*2*sizeof(*cache->aBucket)<=cache->nMaxByte/16 ){
@@ -292,19 +248,22 @@ ProllyCacheEntry *prollyCachePutOwned(
   lruInsertHead(cache, pEntry);
 
   cache->nUsed++;
-  cache->nByte += sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+  cache->nByte += sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pAlloc);
   cacheTrim(cache, cache->nMaxByte);
   return pEntry;
 }
 
-ProllyCacheEntry *prollyCachePutTransientOwned(
+ProllyCacheEntry *prollyCachePutOwned(
+  ProllyCache *cache,
   const ProllyHash *hash,
   u8 *pData,
   int nData,
-  int nDataPhys,
   int *pRc
 ){
-  return cacheEntryNewOwned(hash, pData, nData, nDataPhys, 1, pRc);
+  ChunkBuffer buffer;
+  buffer.pAlloc = buffer.pData = pData;
+  buffer.nData = buffer.nDataPhys = nData;
+  return prollyCachePutBufferOwned(cache, hash, &buffer, pRc);
 }
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry){

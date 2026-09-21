@@ -5,25 +5,6 @@
 #include <string.h>
 #include <assert.h>
 
-int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
-                   const ProllyHash *pHash, ProllyCacheEntry **ppEntry){
-  ProllyCacheEntry *pEntry;
-  u8 *pData = 0;
-  int nData = 0;
-  int rc;
-
-  *ppEntry = 0;
-  pEntry = prollyCacheGet(pCache, pHash);
-  if( !pEntry ){
-    rc = chunkStoreGet(pStore, pHash, &pData, &nData);
-    if( rc!=SQLITE_OK ) return rc;
-    pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
-    if( !pEntry ) return rc;
-  }
-  *ppEntry = pEntry;
-  return SQLITE_OK;
-}
-
 static int prollyLoadNodeMaybeSparse(
   ChunkStore *pStore,
   ProllyCache *pCache,
@@ -32,32 +13,25 @@ static int prollyLoadNodeMaybeSparse(
   ProllyCacheEntry **ppEntry
 ){
   ProllyCacheEntry *pEntry;
-  u8 *pData = 0;
-  int nData = 0;
-  int nDataPhys = 0;
+  ChunkBuffer buffer;
   int rc;
-
-  if( !bAllowSparse ){
-    return prollyLoadNode(pStore, pCache, pHash, ppEntry);
-  }
 
   *ppEntry = 0;
   pEntry = prollyCacheGet(pCache, pHash);
-  if( pEntry ){
-    *ppEntry = pEntry;
-    return SQLITE_OK;
+  if( !pEntry ){
+    rc = chunkStoreGetBuffer(pStore, pHash, bAllowSparse,
+                             PROLLY_NODE_BUFFER_SLOP, &buffer);
+    if( rc!=SQLITE_OK ) return rc;
+    pEntry = prollyCachePutBufferOwned(pCache, pHash, &buffer, &rc);
+    if( !pEntry ) return rc;
   }
-
-  rc = chunkStoreGetSparse(pStore, pHash, &pData, &nData, &nDataPhys);
-  if( rc!=SQLITE_OK ) return rc;
-  if( nDataPhys==nData ){
-    pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
-  }else{
-    pEntry = prollyCachePutTransientOwned(pHash, pData, nData, nDataPhys, &rc);
-  }
-  if( !pEntry ) return rc;
   *ppEntry = pEntry;
   return SQLITE_OK;
+}
+
+int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
+                   const ProllyHash *pHash, ProllyCacheEntry **ppEntry){
+  return prollyLoadNodeMaybeSparse(pStore, pCache, pHash, 0, ppEntry);
 }
 
 int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,

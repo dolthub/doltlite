@@ -26,7 +26,7 @@ static sqlite3_int64 cacheBytes(ProllyCache *pCache){
   ProllyCacheEntry *p;
   sqlite3_int64 n = sqlite3_msize(pCache->aBucket);
   for(p=pCache->lruHead.pLruNext; p!=&pCache->lruTail; p=p->pLruNext){
-    n += sqlite3_msize(p) + sqlite3_msize(p->pData);
+    n += sqlite3_msize(p) + sqlite3_msize(p->pAlloc);
   }
   return n;
 }
@@ -132,6 +132,130 @@ static void testNodes(void){
   prollyCacheFree(&cache);
 }
 
+static void testReadBuffer(
+  ChunkStore *pStore, const ProllyHash *pHash, const u8 *pData, int nData,
+  int bSparse, int bDisk, int bExpectSparse
+){
+  ProllyCache cache;
+  ProllyCacheEntry *pEntry;
+  ChunkBuffer buffer;
+  u8 *pAlloc;
+  int rc;
+  int i;
+  check("init read cache", prollyCacheInit(&cache, 4096)==SQLITE_OK);
+  rc = chunkStoreGetBuffer(pStore, pHash, bSparse,
+                           PROLLY_NODE_BUFFER_SLOP, &buffer);
+  check("read chunk buffer", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ prollyCacheFree(&cache); return; }
+  check("chunk buffer contents", buffer.nData==nData
+      && memcmp(buffer.pData, pData, buffer.nDataPhys)==0);
+  check("read retains disk header", buffer.pData==buffer.pAlloc+(bDisk ? 4 : 0));
+  check("read reserves parser padding", sqlite3_msize(buffer.pAlloc)
+      >=(u64)(buffer.pData-buffer.pAlloc)+buffer.nDataPhys
+        +PROLLY_NODE_BUFFER_SLOP);
+  check("sparse read omits zero tail", bExpectSparse
+      ? buffer.nDataPhys<nData : buffer.nDataPhys==nData);
+  pAlloc = buffer.pAlloc;
+  pEntry = prollyCachePutBufferOwned(&cache, pHash, &buffer, &rc);
+  check("adopt read buffer", pEntry!=0 && rc==SQLITE_OK);
+  if( pEntry ){
+    check("cache retains original allocation", pEntry->pAlloc==pAlloc);
+    check("cache parses body after header", prollyNodeIntKey(&pEntry->node, 0)==42);
+    for(i=0; i<PROLLY_NODE_BUFFER_SLOP; i++){
+      if( pEntry->pData[pEntry->nDataPhys+i]!=0 ) break;
+    }
+    check("parser padding is zero", i==PROLLY_NODE_BUFFER_SLOP);
+    check("sparse node remains transient", pEntry->bTransient==bExpectSparse);
+    check("read cache accounting", cache.nByte==cacheBytes(&cache));
+    if( !bExpectSparse ){
+      ProllyCacheEntry *pDuplicate;
+      rc = chunkStoreGetBuffer(pStore, pHash, 0,
+                               PROLLY_NODE_BUFFER_SLOP, &buffer);
+      check("read duplicate buffer", rc==SQLITE_OK);
+      if( rc==SQLITE_OK ){
+        pDuplicate = prollyCachePutBufferOwned(&cache, pHash, &buffer, &rc);
+        check("duplicate releases allocation base", pDuplicate==pEntry
+            && pEntry->nRef==2);
+        if( pDuplicate ) prollyCacheRelease(&cache, pDuplicate);
+      }
+    }
+    prollyCacheRelease(&cache, pEntry);
+  }
+  prollyCacheFree(&cache);
+}
+
+static void testReadBuffers(void){
+  char zPath[160];
+  ChunkStore store;
+  ProllyNodeBuilder builder;
+  ProllyHash hash;
+  ChunkBuffer buffer;
+  ProllyCache cache;
+  ProllyCacheEntry *pEntry;
+  u8 key[8];
+  u8 value[1024];
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+  int phase;
+  i64 nBefore = sqlite3_memory_used();
+  sqlite3_snprintf(sizeof(zPath), zPath, "/tmp/prolly-read-buffer-%d.db",
+                   (int)getpid());
+  unlink(zPath);
+  memset(value, 0, sizeof(value));
+  prollyEncodeIntKey(42, key);
+  prollyNodeBuilderInit(&builder, 0, PROLLY_NODE_INTKEY);
+  rc = prollyNodeBuilderAdd(&builder, key, sizeof(key), value, sizeof(value));
+  if( rc==SQLITE_OK ) rc = prollyNodeBuilderFinish(&builder, &pData, &nData);
+  prollyNodeBuilderFree(&builder);
+  check("build read node", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  rc = chunkStoreOpen(&store, sqlite3_vfs_find(0), zPath,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  check("open read store", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ sqlite3_free(pData); return; }
+  rc = chunkStorePutSparse(&store, pData, nData-sizeof(value), sizeof(value), &hash);
+  check("store sparse node", rc==SQLITE_OK);
+  for(phase=0; phase<3 && rc==SQLITE_OK; phase++){
+    testReadBuffer(&store, &hash, pData, nData, 0, phase!=0, 0);
+    testReadBuffer(&store, &hash, pData, nData, 1, phase!=0, phase<2);
+    if( phase==0 ){
+      int sparse;
+      i64 off = store.staging.aPending[0].offset + 4;
+      store.staging.pWriteBuf[off] ^= 1;
+      for(sparse=0; sparse<2; sparse++){
+        rc = chunkStoreGetBuffer(&store, &hash, sparse,
+                                 PROLLY_NODE_BUFFER_SLOP, &buffer);
+        check("corrupt chunk clears owned buffer", rc==SQLITE_CORRUPT
+            && !buffer.pAlloc && !buffer.pData
+            && buffer.nData==0 && buffer.nDataPhys==0);
+        sqlite3_free(buffer.pAlloc);
+      }
+      store.staging.pWriteBuf[off] ^= 1;
+      rc = chunkStoreCommit(&store);
+      check("commit read store", rc==SQLITE_OK);
+    }else if( phase==1 ){
+      chunkStoreClose(&store);
+      rc = chunkStoreOpen(&store, sqlite3_vfs_find(0), zPath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+      check("reopen read store", rc==SQLITE_OK);
+    }
+  }
+  chunkStoreClose(&store);
+  sqlite3_free(pData);
+  unlink(zPath);
+
+  check("init corrupt read cache", prollyCacheInit(&cache, 4096)==SQLITE_OK);
+  buffer.pAlloc = sqlite3_malloc(32);
+  buffer.pData = buffer.pAlloc + 4;
+  buffer.nData = buffer.nDataPhys = 8;
+  memset(buffer.pAlloc, 0, 32);
+  pEntry = prollyCachePutBufferOwned(&cache, &hash, &buffer, &rc);
+  check("invalid node releases allocation base", pEntry==0 && rc==SQLITE_CORRUPT);
+  prollyCacheFree(&cache);
+  check("read buffers release all memory", sqlite3_memory_used()==nBefore);
+}
+
 int main(void){
   char zPath[160];
   sqlite3 *db = 0;
@@ -191,6 +315,7 @@ int main(void){
   check("close", sqlite3_close(db)==SQLITE_OK);
   unlink(zPath);
   testNodes();
+  testReadBuffers();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail!=0;
 }

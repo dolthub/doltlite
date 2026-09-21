@@ -818,17 +818,14 @@ int chunkStoreVerifyChunk(
   return SQLITE_OK;
 }
 
-int chunkStoreGet(
+static int csGetBuffer(
   ChunkStore *cs,
   const ProllyHash *hash,
-  u8 **ppData,
-  int *pnData
+  int nPadding,
+  ChunkBuffer *pBuffer
 ){
   int idx;
   int rc;
-
-  *ppData = 0;
-  *pnData = 0;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
@@ -840,14 +837,14 @@ int chunkStoreGet(
     i64 off = e->offset;
     int sz = e->size;
     i64 nZ = cs->staging.aPendingZeroTail[idx];
-    u8 *pCopy = (u8 *)sqlite3_malloc(sz);
+    u8 *pCopy = (u8 *)sqlite3_malloc64((u64)sz + nPadding);
     if( pCopy == 0 ) return SQLITE_NOMEM;
 
     memcpy(pCopy, cs->staging.pWriteBuf + off + 4, (size_t)(sz - nZ));
     if( nZ>0 ) memset(pCopy + (sz - nZ), 0, (size_t)nZ);
-    *ppData = pCopy;
-    *pnData = sz;
-    return chunkStoreVerifyChunk(hash, ppData, pnData);
+    pBuffer->pAlloc = pBuffer->pData = pCopy;
+    pBuffer->nData = pBuffer->nDataPhys = sz;
+    return SQLITE_OK;
   }
 
   {
@@ -862,7 +859,16 @@ int chunkStoreGet(
       rc = csIndexLookup(cs, hash, &indexEntry, &found);
       if( rc!=SQLITE_OK ) return rc;
       if( !found ){
-        return chunkStoreSourceGet(cs, hash, ppData, pnData);
+        rc = chunkStoreSourceGet(cs, hash, &pBuffer->pAlloc, &pBuffer->nData);
+        if( rc==SQLITE_OK && nPadding>0 ){
+          u8 *pPadded = sqlite3_realloc64(pBuffer->pAlloc,
+                                         (u64)pBuffer->nData + nPadding);
+          if( pPadded==0 ) return SQLITE_NOMEM;
+          pBuffer->pAlloc = pPadded;
+        }
+        pBuffer->pData = pBuffer->pAlloc;
+        pBuffer->nDataPhys = pBuffer->nData;
+        return rc;
       }
       e = &indexEntry;
     }
@@ -870,12 +876,12 @@ int chunkStoreGet(
     if( cs->file.pFile == 0 ){
       if( cs->staging.pWriteBuf && e->offset >= 0
        && (e->offset + 4 + e->size) <= cs->staging.nWriteBuf ){
-        u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
+        u8 *pCopy = (u8 *)sqlite3_malloc64((u64)e->size + nPadding);
         if( pCopy == 0 ) return SQLITE_NOMEM;
         memcpy(pCopy, cs->staging.pWriteBuf + e->offset + 4, e->size);
-        *ppData = pCopy;
-        *pnData = e->size;
-        return chunkStoreVerifyChunk(hash, ppData, pnData);
+        pBuffer->pAlloc = pBuffer->pData = pCopy;
+        pBuffer->nData = pBuffer->nDataPhys = e->size;
+        return SQLITE_OK;
       }
       return SQLITE_CORRUPT;
     }
@@ -887,7 +893,7 @@ int chunkStoreGet(
       u32 storedLen;
 
       if( sz > INT_MAX - 4 ) return SQLITE_TOOBIG;
-      pBuf = (u8 *)sqlite3_malloc(sz + 4);
+      pBuf = (u8 *)sqlite3_malloc64((u64)sz + 4 + nPadding);
       if( pBuf == 0 ) return SQLITE_NOMEM;
 
       rc = csReadSliced(cs, pBuf, (i64)sz + 4, fileOff);
@@ -902,28 +908,24 @@ int chunkStoreGet(
         return SQLITE_CORRUPT;
       }
 
-      memmove(pBuf, pBuf + 4, sz);
-      *ppData = pBuf;
-      *pnData = sz;
+      pBuffer->pAlloc = pBuf;
+      pBuffer->pData = pBuf + 4;
+      pBuffer->nData = pBuffer->nDataPhys = sz;
     }
   }
 
-  return chunkStoreVerifyChunk(hash, ppData, pnData);
+  return SQLITE_OK;
 }
 
-int chunkStoreGetSparse(
+static int csGetSparseBuffer(
   ChunkStore *cs,
   const ProllyHash *hash,
-  u8 **ppData,
-  int *pnData,
-  int *pnDataPhys
+  int nPadding,
+  ChunkBuffer *pBuffer
 ){
   int idx;
   int rc;
 
-  *ppData = 0;
-  *pnData = 0;
-  *pnDataPhys = 0;
   if( cs->notADatabase ) return SQLITE_NOTADB;
 
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
@@ -939,22 +941,14 @@ int chunkStoreGetSparse(
 
     if( zeroTail<0 || zeroTail>(i64)e->size ) return SQLITE_CORRUPT;
     nPhys = e->size - (int)zeroTail;
-    pBuf = (u8*)sqlite3_malloc(nPhys>0 ? nPhys : 1);
+    pBuf = (u8*)sqlite3_malloc64((u64)(nPhys>0 ? nPhys : 1) + nPadding);
     if( !pBuf ) return SQLITE_NOMEM;
     if( nPhys>0 ){
       memcpy(pBuf, cs->staging.pWriteBuf + e->offset + 4, nPhys);
     }
-    {
-      ProllyHash h;
-      prollyHashComputeZeroTail(pBuf, nPhys, zeroTail, &h);
-      if( memcmp(&h, hash, sizeof(ProllyHash))!=0 ){
-        sqlite3_free(pBuf);
-        return SQLITE_CORRUPT;
-      }
-    }
-    *ppData = pBuf;
-    *pnData = e->size;
-    *pnDataPhys = nPhys;
+    pBuffer->pAlloc = pBuffer->pData = pBuf;
+    pBuffer->nData = e->size;
+    pBuffer->nDataPhys = nPhys;
     return SQLITE_OK;
   }
 
@@ -970,7 +964,7 @@ int chunkStoreGetSparse(
 
     if( zeroTail<0 || zeroTail>(i64)e->size ) return SQLITE_CORRUPT;
     nPhys = e->size - (int)zeroTail;
-    pBuf = (u8*)sqlite3_malloc(nPhys + 4);
+    pBuf = (u8*)sqlite3_malloc64((u64)nPhys + 4 + nPadding);
     if( !pBuf ) return SQLITE_NOMEM;
     rc = csReadSliced(cs, pBuf, (i64)nPhys + 4, e->offset);
     if( rc!=SQLITE_OK ){
@@ -982,23 +976,76 @@ int chunkStoreGetSparse(
       sqlite3_free(pBuf);
       return SQLITE_CORRUPT;
     }
-    memmove(pBuf, pBuf + 4, nPhys);
-    {
-      ProllyHash h;
-      prollyHashComputeZeroTail(pBuf, nPhys, zeroTail, &h);
-      if( memcmp(&h, hash, sizeof(ProllyHash))!=0 ){
-        sqlite3_free(pBuf);
-        return SQLITE_CORRUPT;
-      }
-    }
-    *ppData = pBuf;
-    *pnData = e->size;
-    *pnDataPhys = nPhys;
+    pBuffer->pAlloc = pBuf;
+    pBuffer->pData = pBuf + 4;
+    pBuffer->nData = e->size;
+    pBuffer->nDataPhys = nPhys;
     return SQLITE_OK;
   }
 
-  rc = chunkStoreGet(cs, hash, ppData, pnData);
-  if( rc==SQLITE_OK ) *pnDataPhys = *pnData;
+  return csGetBuffer(cs, hash, nPadding, pBuffer);
+}
+
+int chunkStoreGetBuffer(
+  ChunkStore *cs,
+  const ProllyHash *hash,
+  int bSparse,
+  int nPadding,
+  ChunkBuffer *pBuffer
+){
+  ProllyHash h;
+  int rc;
+  assert( nPadding>=0 );
+  memset(pBuffer, 0, sizeof(*pBuffer));
+  rc = bSparse ? csGetSparseBuffer(cs, hash, nPadding, pBuffer)
+               : csGetBuffer(cs, hash, nPadding, pBuffer);
+  if( rc==SQLITE_OK ){
+    if( pBuffer->nDataPhys==pBuffer->nData ){
+      prollyHashCompute(pBuffer->pData, pBuffer->nData, &h);
+    }else{
+      prollyHashComputeZeroTail(pBuffer->pData, pBuffer->nDataPhys,
+                               pBuffer->nData - pBuffer->nDataPhys, &h);
+    }
+    if( memcmp(&h, hash, sizeof(h))!=0 ) rc = SQLITE_CORRUPT;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBuffer->pAlloc);
+    memset(pBuffer, 0, sizeof(*pBuffer));
+  }
+  return rc;
+}
+
+int chunkStoreGetSparse(
+  ChunkStore *cs,
+  const ProllyHash *hash,
+  u8 **ppData,
+  int *pnData,
+  int *pnDataPhys
+){
+  ChunkBuffer buffer;
+  int rc = chunkStoreGetBuffer(cs, hash, 1, 0, &buffer);
+  if( buffer.pData!=buffer.pAlloc ){
+    memmove(buffer.pAlloc, buffer.pData, buffer.nDataPhys);
+  }
+  *ppData = buffer.pAlloc;
+  *pnData = buffer.nData;
+  *pnDataPhys = buffer.nDataPhys;
+  return rc;
+}
+
+int chunkStoreGet(
+  ChunkStore *cs,
+  const ProllyHash *hash,
+  u8 **ppData,
+  int *pnData
+){
+  ChunkBuffer buffer;
+  int rc = chunkStoreGetBuffer(cs, hash, 0, 0, &buffer);
+  if( buffer.pData!=buffer.pAlloc ){
+    memmove(buffer.pAlloc, buffer.pData, buffer.nData);
+  }
+  *ppData = buffer.pAlloc;
+  *pnData = buffer.nData;
   return rc;
 }
 

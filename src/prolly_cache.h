@@ -5,12 +5,17 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "prolly_node.h"
+#include "chunk_store.h"
+
+/* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
+#define PROLLY_NODE_BUFFER_SLOP 8
 
 typedef struct ProllyCache ProllyCache;
 typedef struct ProllyCacheEntry ProllyCacheEntry;
 
 struct ProllyCacheEntry {
   ProllyHash hash;
+  u8 *pAlloc;
   u8 *pData;
   int nData;
   int nDataPhys;
@@ -43,10 +48,9 @@ ProllyCacheEntry *prollyCachePutOwned(ProllyCache *cache,
                                       u8 *pData, int nData,
                                       int *pRc);
 
-ProllyCacheEntry *prollyCachePutTransientOwned(
-                                      const ProllyHash *hash,
-                                      u8 *pData, int nData, int nDataPhys,
-                                      int *pRc);
+ProllyCacheEntry *prollyCachePutBufferOwned(ProllyCache *cache,
+                                           const ProllyHash *hash,
+                                           ChunkBuffer *pBuffer, int *pRc);
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry);
 
