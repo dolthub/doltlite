@@ -912,6 +912,61 @@ int chunkStoreGet(
   return chunkStoreVerifyChunk(hash, ppData, pnData);
 }
 
+int chunkStoreReadAhead(
+  ChunkStore *cs,
+  const ProllyHash *aHash,
+  int nHash,
+  int (*xRead)(void*, const ProllyHash*, const u8*, int),
+  void *pCtx
+){
+  ChunkIndexEntry aEntry[CHUNK_READ_AHEAD_MAX];
+  i64 iStart = 0;
+  i64 iEnd = 0;
+  u8 *aData;
+  int nEntry = 0;
+  int i;
+  int rc;
+
+  if( cs->notADatabase ) return SQLITE_NOTADB;
+  if( cs->corruptMidStream ) return SQLITE_CORRUPT;
+  if( !cs->file.pFile ) return SQLITE_OK;
+  for(i=0; i<nHash && i<CHUNK_READ_AHEAD_MAX; i++){
+    ChunkIndexEntry e;
+    int found = 0;
+    rc = csIndexLookup(cs, &aHash[i], &e, &found);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !found || e.size<=0 || e.size>CHUNK_READ_AHEAD_BYTES-4
+     || e.offset<CHUNK_MANIFEST_SIZE
+     || e.offset>cs->file.iFileSize-e.size-4 ) break;
+    if( nEntry && (e.offset<iEnd || e.offset-iEnd>CS_WAL_CHUNK_HDR_SIZE) ) break;
+    if( nEntry==0 ) iStart = e.offset;
+    if( e.offset-iStart>CHUNK_READ_AHEAD_BYTES-e.size-4 ) break;
+    iEnd = e.offset+e.size+4;
+    aEntry[nEntry++] = e;
+  }
+  if( nEntry<2 ) return SQLITE_OK;
+  aData = sqlite3_malloc((int)(iEnd-iStart));
+  if( !aData ) return SQLITE_NOMEM;
+  rc = csReadSliced(cs, aData, iEnd-iStart, iStart);
+  for(i=0; rc==SQLITE_OK && i<nEntry; i++){
+    ChunkIndexEntry *e = &aEntry[i];
+    const u8 *p = aData+(e->offset-iStart);
+    ProllyHash actual;
+    if( CS_READ_U32(p)!=(u32)e->size ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+    prollyHashCompute(p+4, e->size, &actual);
+    if( prollyHashCompare(&actual, &e->hash)!=0 ){
+      rc = SQLITE_CORRUPT;
+      break;
+    }
+    rc = xRead(pCtx, &e->hash, p+4, e->size);
+  }
+  sqlite3_free(aData);
+  return rc;
+}
+
 int chunkStoreGetSparse(
   ChunkStore *cs,
   const ProllyHash *hash,
