@@ -173,15 +173,16 @@ ProllyCacheEntry *prollyCacheGetPrefix(
 
 static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   ProllyNode *pNode = &pEntry->node;
-  int nHead, nCompact, i;
-  const int nStride = PROLLY_NODE_VALUE_PREFIX + PROLLY_NODE_BUFFER_SLOP;
+  int nHead, nCompact, nPrefix, nStride, nAverage, i;
   u8 *pData;
   if( !pEntry->bAllowPrefix || pNode->level || pNode->nValuePrefix
-   || pNode->nItems==0
-   || pNode->nDataPhys!=pNode->nData || pNode->nData<4096 ) return 0;
+   || pNode->nItems==0 || pNode->nDataPhys!=pNode->nData ) return 0;
   nHead = (int)(pNode->pValData - pNode->pData);
-  if( nHead>pNode->nData/4
-   || pNode->nData-nHead<(int)pNode->nItems*4096 ) return 0;
+  if( nHead>pNode->nData/4 ) return 0;
+  nAverage = (pNode->nData-nHead)/pNode->nItems;
+  nPrefix = nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
+          : nAverage>=512 ? 32 : 16;
+  nStride = nPrefix + PROLLY_NODE_BUFFER_SLOP;
   nCompact = nHead + pNode->nItems*nStride;
   if( nCompact>pNode->nData/4 ) return 0;
   assert( pEntry->nRef==0 );
@@ -195,7 +196,7 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
     int nVal;
     u8 *pDest = pData + nHead + i*nStride;
     prollyNodeValue(pNode, i, &pVal, &nVal);
-    nVal = MIN(nVal, PROLLY_NODE_VALUE_PREFIX);
+    nVal = MIN(nVal, nPrefix);
     memcpy(pDest, pVal, nVal);
     memset(pDest + nVal, 0, nStride - nVal);
   }
@@ -206,7 +207,7 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   pNode->pValData = pData + nHead;
   pNode->pData = pData;
   pNode->nDataPhys = nCompact;
-  pNode->nValuePrefix = PROLLY_NODE_VALUE_PREFIX;
+  pNode->nValuePrefix = nPrefix;
   pEntry->nEvictChance = PROLLY_CACHE_PREFIX_CHANCES;
   cache->nByte += (i64)sqlite3_msize(pData)-(i64)sqlite3_msize(pEntry->pData);
   sqlite3_free(pEntry->pData);

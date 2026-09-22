@@ -483,6 +483,57 @@ static void testWidePrefixes(sqlite3 *db){
   execSql(db, "DROP TABLE wide; PRAGMA cache_size=-65536");
 }
 
+static void narrowScalarScan(sqlite3 *db, int nPayload){
+  sqlite3_stmt *p = 0;
+  check("prepare narrow scalar scan", sqlite3_prepare_v2(db,
+      "SELECT sum(v),sum(length(b)) FROM narrow NOT INDEXED",
+      -1, &p, 0)==SQLITE_OK);
+  check("narrow scalar result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==8390656
+      && sqlite3_column_int(p, 1)==4096*nPayload);
+  check("finish narrow scalar scan", sqlite3_finalize(p)==SQLITE_OK);
+}
+
+static void testNarrowPrefixes(sqlite3 *db, const char *zKey, int nPayload){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  char *zSql = sqlite3_mprintf(
+      "CREATE TABLE narrow(id %s PRIMARY KEY,v INTEGER,b BLOB,tail TEXT);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096)"
+      " INSERT INTO narrow SELECT i,i,CAST(printf('%%0*d',%d,i) AS BLOB),"
+      " printf('tail-%%d',i) FROM c; PRAGMA cache_size=-512", zKey, nPayload);
+  int nCold;
+  execSql(db, zSql);
+  sqlite3_free(zSql);
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  narrowScalarScan(db, nPayload);
+  nCold = nRead;
+  narrowScalarScan(db, nPayload);
+  nRead = 0;
+  narrowScalarScan(db, nPayload);
+  check("narrow prefixes retain metadata without payload reads",
+      nCold>0 && nRead==0);
+  check("narrow prefix cache accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 512*1024));
+  zSql = sqlite3_mprintf(
+      "SELECT sum(b=CAST(printf('%%0*d',%d,v) AS BLOB)),"
+      " sum(tail=printf('tail-%%d',v)) FROM narrow", nPayload);
+  check("prepare narrow full values", sqlite3_prepare_v2(db, zSql,
+      -1, &p, 0)==SQLITE_OK);
+  sqlite3_free(zSql);
+  check("narrow full values and trailing columns", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==4096 && sqlite3_column_int(p, 1)==4096);
+  check("finish narrow full values", sqlite3_finalize(p)==SQLITE_OK);
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE narrow; PRAGMA cache_size=-65536");
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -672,6 +723,8 @@ int main(void){
   testLargeScans(db);
   testNearBudgetScans(db);
   testWidePrefixes(db);
+  testNarrowPrefixes(db, "INTEGER", 256);
+  testNarrowPrefixes(db, "TEXT", 1024);
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
