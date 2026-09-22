@@ -3207,6 +3207,53 @@ static int whereRangeVectorLen(
 #else
 # define ApplyCostMultiplier(C,T)
 #endif
+#ifdef DOLTLITE_PROLLY
+/* True when p is a literal whose NOCASE comparison cannot see past a
+** NUL, because the literal itself has none. char(0) and column
+** references are not literals. */
+static int doltliteExprTextFreeOfNul(Expr *p){
+  p = sqlite3ExprSkipCollateAndLikely(p);
+  if( !p ) return 0;
+  if( p->op==TK_UPLUS || p->op==TK_UMINUS ){
+    return doltliteExprTextFreeOfNul(p->pLeft);
+  }
+  return p->op==TK_STRING || p->op==TK_INTEGER || p->op==TK_FLOAT
+      || p->op==TK_NULL;
+}
+
+/* Equality may seek a NOCASE index that also holds a NUL byte only when
+** every probe is such a literal. 'a'||char(0)||'b' and
+** 'a'||char(0)||'c' compare equal and do not share a sort key. */
+static int doltliteNocaseEqFreeOfNul(const WhereTerm *pTerm){
+  Expr *pExpr;
+  Expr *pLeft;
+  Expr *pRight;
+  Expr *pVal;
+  int i;
+  if( !pTerm || !(pExpr = pTerm->pExpr) ) return 0;
+  if( pExpr->op==TK_IN ){
+    ExprList *pList;
+    if( ExprUseXSelect(pExpr) ) return 0;
+    pList = pExpr->x.pList;
+    if( !pList ) return 0;
+    for(i=0; i<pList->nExpr; i++){
+      if( !doltliteExprTextFreeOfNul(pList->a[i].pExpr) ) return 0;
+    }
+    return 1;
+  }
+  if( pExpr->op!=TK_EQ && pExpr->op!=TK_IS ) return 0;
+  pLeft = sqlite3ExprSkipCollateAndLikely((Expr*)pExpr->pLeft);
+  pRight = sqlite3ExprSkipCollateAndLikely((Expr*)pExpr->pRight);
+  if( pLeft && (pLeft->op==TK_COLUMN || pLeft->op==TK_AGG_COLUMN) ){
+    pVal = pExpr->pRight;
+  }else if( pRight && (pRight->op==TK_COLUMN || pRight->op==TK_AGG_COLUMN) ){
+    pVal = pExpr->pLeft;
+  }else{
+    return 0;
+  }
+  return doltliteExprTextFreeOfNul(pVal);
+}
+#endif
 
 /*
 ** We have so far matched pBuilder->pNew->u.btree.nEq terms of the
@@ -3232,9 +3279,6 @@ static int whereLoopAddBtreeIndex(
   WhereLoop *pNew;                /* Template WhereLoop under construction */
   WhereTerm *pTerm;               /* A WhereTerm under consideration */
   int opMask;                     /* Valid operators for constraints */
-#ifdef DOLTLITE_PROLLY
-  int doltliteNocaseScan = 0;
-#endif
   WhereScan scan;                 /* Iterator for WHERE terms */
   Bitmask saved_prereq;           /* Original value of pNew->prereq */
   u16 saved_nLTerm;               /* Original value of pNew->nLTerm */
@@ -3269,13 +3313,6 @@ static int whereLoopAddBtreeIndex(
   if( pProbe->bUnordered ){
     opMask &= ~(WO_GT|WO_GE|WO_LT|WO_LE);
   }
-#ifdef DOLTLITE_PROLLY
-  if( pProbe->bNocaseNul
-   && sqlite3StrICmp(pProbe->azColl[pNew->u.btree.nEq], "NOCASE")==0 ){
-    doltliteNocaseScan = 1;
-    opMask = WO_GT|WO_GE|WO_LT|WO_LE;
-  }
-#endif
 
   assert( pNew->u.btree.nEq<pProbe->nColumn );
   assert( pNew->u.btree.nEq<pProbe->nKeyCol
@@ -3303,7 +3340,17 @@ static int whereLoopAddBtreeIndex(
     int nRecValid = pBuilder->nRecValid;
 #endif
 #ifdef DOLTLITE_PROLLY
-    if( doltliteNocaseScan && (pTerm->wtFlags & TERM_LIKEOPT)==0 ) continue;
+    /* Range and ORDER BY stay off via bUnordered. Equality of a
+    ** NUL-free literal still seeks; a probe that may contain a NUL
+    ** has to scan so every equal key is returned. */
+    if( pProbe->bNocaseNul
+     && (eOp & (WO_EQ|WO_IS|WO_IN))!=0
+     && saved_nEq<pProbe->nKeyCol
+     && pProbe->azColl
+     && sqlite3StrICmp(pProbe->azColl[saved_nEq], "NOCASE")==0
+     && !doltliteNocaseEqFreeOfNul(pTerm) ){
+      continue;
+    }
 #endif
     if( (eOp==WO_ISNULL || (pTerm->wtFlags&TERM_VNULL)!=0)
      && indexColumnNotNull(pProbe, saved_nEq)

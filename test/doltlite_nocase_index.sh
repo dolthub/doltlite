@@ -99,6 +99,84 @@ EXPLAIN QUERY PLAN SELECT s FROM n ORDER BY s;
 |--SCAN n
 \`--USE TEMP B-TREE FOR ORDER BY" "$NULDB"
 
+run_test "nocase_nul_equality_keeps_search" "
+EXPLAIN QUERY PLAN SELECT id FROM n WHERE s='aa';
+SELECT id FROM n WHERE s='aa';
+EXPLAIN QUERY PLAN SELECT id FROM n WHERE s='AA';
+SELECT id FROM n WHERE s='AA';
+" "QUERY PLAN
+\`--SEARCH n USING COVERING INDEX i_n (s=?)
+1
+QUERY PLAN
+\`--SEARCH n USING COVERING INDEX i_n (s=?)
+1" "$NULDB"
+
+run_test "nocase_nul_probe_scans_for_every_equal" "
+CREATE TABLE eq(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+CREATE INDEX eq_s ON eq(s);
+INSERT INTO eq(s) VALUES
+  ('a'||char(0)||'b'),('a'||char(0)||'c'),('A'||char(0)||'B'),('k3');
+SELECT group_concat(id) FROM (SELECT id FROM eq WHERE s='a'||char(0)||'c' ORDER BY id);
+SELECT id FROM eq WHERE s='k3';
+EXPLAIN QUERY PLAN SELECT id FROM eq WHERE s='a'||char(0)||'c';
+EXPLAIN QUERY PLAN SELECT id FROM eq WHERE s='k3';
+" "1,2,3
+4
+QUERY PLAN
+\`--SCAN eq
+QUERY PLAN
+\`--SEARCH eq USING COVERING INDEX eq_s (s=?)" "$NULDB"
+
+run_test "nocase_nul_in_list_keeps_search" "
+EXPLAIN QUERY PLAN SELECT id FROM eq WHERE s IN ('k3','AA');
+SELECT group_concat(id) FROM (SELECT id FROM eq WHERE s IN ('k3','aa') ORDER BY id);
+EXPLAIN QUERY PLAN SELECT id FROM eq WHERE s IS 'k3';
+SELECT id FROM eq WHERE s IS 'K3';
+" "QUERY PLAN
+\`--SEARCH eq USING COVERING INDEX eq_s (s=?)
+4
+QUERY PLAN
+\`--SEARCH eq USING COVERING INDEX eq_s (s=?)
+4" "$NULDB"
+
+run_test "nocase_nul_in_list_with_nul_scans" "
+SELECT group_concat(id) FROM (
+  SELECT id FROM eq WHERE s IN ('k3','a'||char(0)||'c') ORDER BY id);
+EXPLAIN QUERY PLAN SELECT id FROM eq WHERE s IN ('k3','a'||char(0)||'c');
+SELECT group_concat(id) FROM (
+  SELECT id FROM eq WHERE s='k3' OR s='a'||char(0)||'c' ORDER BY id);
+SELECT group_concat(id) FROM (
+  SELECT id FROM eq WHERE s LIKE 'k%' ORDER BY id);
+EXPLAIN QUERY PLAN SELECT id FROM eq WHERE s=?;
+" "1,2,3,4
+QUERY PLAN
+\`--SCAN eq
+1,2,3,4
+4
+QUERY PLAN
+\`--SCAN eq" "$NULDB"
+
+run_test "nocase_nul_leading_binary_keeps_search" "
+CREATE TABLE mix(id INTEGER PRIMARY KEY, b TEXT COLLATE BINARY, s TEXT COLLATE NOCASE);
+CREATE INDEX mix_bs ON mix(b, s);
+INSERT INTO mix VALUES(1,'k','a'||char(0)||'b'),(2,'k','aa'),(3,'z','aa');
+EXPLAIN QUERY PLAN SELECT id FROM mix WHERE b='k';
+SELECT group_concat(id) FROM (SELECT id FROM mix WHERE b='k' ORDER BY id);
+EXPLAIN QUERY PLAN SELECT id FROM mix WHERE b='k' AND s='aa';
+SELECT id FROM mix WHERE b='k' AND s='AA';
+EXPLAIN QUERY PLAN SELECT id FROM mix WHERE b='k' AND s='a'||char(0)||'c';
+SELECT group_concat(id) FROM (
+  SELECT id FROM mix WHERE b='k' AND s='a'||char(0)||'c' ORDER BY id);
+" "QUERY PLAN
+\`--SEARCH mix USING COVERING INDEX mix_bs (b=?)
+1,2
+QUERY PLAN
+\`--SEARCH mix USING COVERING INDEX mix_bs (b=? AND s=?)
+2
+QUERY PLAN
+\`--SEARCH mix USING COVERING INDEX mix_bs (b=?)
+1" "$NULDB"
+
 run_test_lastline "nocase_nul_integrity_check" "
 PRAGMA integrity_check;
 " "ok" "$NULDB"
