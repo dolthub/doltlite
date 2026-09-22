@@ -179,4 +179,48 @@ a|41
 b|81
 2" ":memory:"
 
+# sqlite_sequence is the reset surface for AUTOINCREMENT tables only. Every
+# prolly rowid table reads the same shared counter, so a row naming a plain
+# table must leave that table's ids where they were: after deleting the
+# largest row the next id still follows that maximum.
+SEED_DB="$ROOT/seed.db"
+run_test "seq_seed_row_does_not_move_a_plain_table" "
+CREATE TABLE seqdummy(id INTEGER PRIMARY KEY AUTOINCREMENT);
+CREATE TABLE plain(id INTEGER PRIMARY KEY);
+INSERT INTO plain VALUES(8);
+DELETE FROM plain;
+INSERT INTO sqlite_sequence(name, seq) VALUES('plain', 100);
+INSERT INTO plain DEFAULT VALUES;
+SELECT id FROM plain;
+" "9" "$SEED_DB"
+
+run_test "seq_seed_row_for_a_plain_table_is_still_stored" "
+SELECT name, seq FROM sqlite_sequence WHERE name='plain';
+" "plain|100" "$SEED_DB"
+
+run_test "seq_delete_of_a_plain_seed_row_leaves_the_counter" "
+DELETE FROM sqlite_sequence WHERE name='plain';
+INSERT INTO plain DEFAULT VALUES;
+SELECT id FROM plain ORDER BY id;
+" "9
+10" "$SEED_DB"
+
+run_test "seq_seed_row_for_an_unknown_table_is_inert" "
+INSERT INTO sqlite_sequence(name, seq) VALUES('ghost', 100);
+CREATE TABLE ghost(id INTEGER PRIMARY KEY);
+INSERT INTO ghost DEFAULT VALUES;
+SELECT id FROM ghost;
+" "1" "$SEED_DB"
+
+# The path that must stay unguarded: DROP TABLE owns every rowid table's
+# counter, AUTOINCREMENT or not.
+run_test "seq_drop_table_still_clears_a_plain_counter" "
+CREATE TABLE dropme(id INTEGER PRIMARY KEY);
+INSERT INTO dropme VALUES(8);
+DROP TABLE dropme;
+CREATE TABLE dropme(id INTEGER PRIMARY KEY);
+INSERT INTO dropme DEFAULT VALUES;
+SELECT id FROM dropme;
+" "1" "$SEED_DB"
+
 dltest_finish
