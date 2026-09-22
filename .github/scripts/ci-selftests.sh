@@ -12,6 +12,7 @@ ci_selftests() {
   ci_compile python3 "$script_dir/nightly-heartbeat-test.py"
   ci_compile python3 "$script_dir/benchmark-build-test.py"
   ci_compile python3 "$script_dir/benchmark-cache-key-test.py"
+  ci_compile python3 "$script_dir/../../test/performance_hotspot_fuzzer_test.py"
   ci_compile python3 "$script_dir/../../test/sqllogictest_gate_test.py"
   ci_compile python3 "$script_dir/../../test/sysbench_harness_test.py"
   ci_compile python3 "$script_dir/../../test/vc_perf_harness_test.py"
