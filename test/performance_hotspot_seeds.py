@@ -50,6 +50,10 @@ ANALYZE;
 
 def specs():
     yield from large_specs()
+    grouped = {}
     for path in sorted(SEED_DIR.glob('*.json')):
         bundle = json.loads(path.read_text())
-        yield Profile(**bundle['profile']), [Case(**bundle['case'])], bundle['setup_sql']
+        key = Profile(**bundle['profile']), bundle['setup_sql']
+        grouped.setdefault(key, []).append(Case(**bundle['case']))
+    for (profile, setup), cases in grouped.items():
+        yield profile, cases, setup
