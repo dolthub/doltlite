@@ -1094,7 +1094,7 @@ void sqlite3Update(
       if( iSeqDb>=0 ){
         int regSeqName = sqlite3GetTempReg(pParse);
         sqlite3ExprCodeGetColumnOfTable(v, pTab, iDataCur, 0, regSeqName);
-        sqlite3VdbeAddOp3(v, OP_DoltliteSeqDrop, regSeqName, 0, iSeqDb);
+        sqlite3VdbeAddOp3(v, OP_DoltliteSeqDrop, regSeqName, 1, iSeqDb);
         sqlite3ReleaseTempReg(pParse, regSeqName);
       }
     }

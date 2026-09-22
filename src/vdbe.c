@@ -34,6 +34,15 @@ static ChunkStore *vdbeDoltliteSeqStore(sqlite3 *db, int iDb){
   if( iDb<0 || iDb>=db->nDb || iDb==1 ) return 0;
   return doltliteBtreeChunkStore(db->aDb[iDb].pBt);
 }
+/* Every prolly rowid table reads the shared counter, but sqlite_sequence is
+** the reset surface for AUTOINCREMENT tables only: a row naming any other
+** table must not move that table's ids. */
+static int vdbeDoltliteSeqNameIsAutoinc(sqlite3 *db, int iDb, const char *zName){
+  Table *pTab;
+  if( iDb<0 || iDb>=db->nDb ) return 0;
+  pTab = sqlite3FindTable(db, zName, db->aDb[iDb].zDbSName);
+  return pTab!=0 && (pTab->tabFlags & TF_Autoincrement)!=0;
+}
 #endif
 /*
 ** High-resolution hardware timer used for debugging and testing only.
@@ -4205,6 +4214,7 @@ case OP_DoltliteSeqSet: {
   if( !pCs ) break;
   zName = (const char*)pName->z;
   if( !zName ) break;
+  if( !vdbeDoltliteSeqNameIsAutoinc(db, pOp->p3, zName) ) break;
   if( (pCtr->flags & MEM_Int)==0 ){
     chunkStoreDropSequence(pCs, zName);
   }else{
@@ -4214,12 +4224,15 @@ case OP_DoltliteSeqSet: {
   break;
 }
 
-/* Opcode: DoltliteSeqDrop P1 * P3 * *
+/* Opcode: DoltliteSeqDrop P1 P2 P3 * *
 ** Synopsis: chunkStoreDropSequence(r[P1])
 **
 ** Doltlite-only. Remove the shared AUTOINCREMENT counter for the table
 ** name in register P1 on schema P3. Emitted at DROP TABLE so a later
-** CREATE+INSERT of the same name on that schema starts from 1.
+** CREATE+INSERT of the same name on that schema starts from 1, and when a
+** statement removes a sqlite_sequence row. P2 marks that second source:
+** the row may name a table that does not use AUTOINCREMENT, and such a row
+** owns no counter to remove.
 */
 case OP_DoltliteSeqDrop: {
   Mem *pName;
@@ -4229,6 +4242,10 @@ case OP_DoltliteSeqDrop: {
   pCs = vdbeDoltliteSeqStore(db, pOp->p3);
   if( !pCs ) break;
   if( !pName->z ) break;
+  if( pOp->p2
+   && !vdbeDoltliteSeqNameIsAutoinc(db, pOp->p3, (const char*)pName->z) ){
+    break;
+  }
   chunkStoreDropSequence(pCs, (const char*)pName->z);
   break;
 }
