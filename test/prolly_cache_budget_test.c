@@ -75,6 +75,7 @@ static const sqlite3_io_methods *pReadMethods;
 static int nRead;
 static int nBatchRead;
 static int eReadFault;
+static i64 iReadAheadFault = -1;
 
 static int countedRead(sqlite3_file *pFile, void *pData, int n, sqlite3_int64 off){
   int rc;
@@ -84,6 +85,9 @@ static int countedRead(sqlite3_file *pFile, void *pData, int n, sqlite3_int64 of
     if( eReadFault==1 ) return SQLITE_IOERR_READ;
   }
   rc = pReadMethods->xRead(pFile, pData, n, off);
+  if( rc==SQLITE_OK && iReadAheadFault>=off && iReadAheadFault-off<n ){
+    ((u8*)pData)[iReadAheadFault-off] ^= 1;
+  }
   if( rc==SQLITE_OK && n>16384 ){
     if( eReadFault==2 ) ((u8*)pData)[0] ^= 1;
     if( eReadFault==3 ) ((u8*)pData)[n-1] ^= 1;
@@ -165,6 +169,116 @@ static void testReadAhead(sqlite3 *db){
   check("small scan stays within budget", pCache->nByte<=pCache->nMaxByte);
   pStore->file.pFile->pMethods = pReadMethods;
   execSql(db, "PRAGMA cache_size=-65536");
+}
+
+typedef struct ReadAheadCheck ReadAheadCheck;
+struct ReadAheadCheck {
+  ProllyCache *pCache;
+  ProllyHash *aHash;
+  int nCached;
+  int nRead;
+  int seen;
+  int bEvict;
+};
+
+static int readAheadCached(void *pCtx, const ProllyHash *pHash){
+  ReadAheadCheck *p = pCtx;
+  ProllyCacheEntry *pEntry = prollyCacheGetForScan(p->pCache, pHash);
+  if( !pEntry ) return 0;
+  p->nCached++;
+  prollyCacheRelease(p->pCache, pEntry);
+  return 1;
+}
+
+static int readAheadReceived(
+  void *pCtx, const ProllyHash *pHash, const u8 *pData, int nData
+){
+  ReadAheadCheck *p = pCtx;
+  ProllyHash actual;
+  int i;
+  prollyHashCompute(pData, nData, &actual);
+  check("read-ahead delivers verified bytes", prollyHashCompare(&actual, pHash)==0);
+  p->nRead++;
+  for(i=0; i<4; i++){
+    if( prollyHashCompare(pHash, &p->aHash[i])==0 ) p->seen |= 1<<i;
+  }
+  if( p->bEvict ) prollyCacheShrink(p->pCache);
+  return SQLITE_OK;
+}
+
+static void testCachedReadAhead(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  ProllyCacheEntry *pEntry;
+  ChunkIndexEntry aEntry[4];
+  ProllyHash aHash[4];
+  sqlite3_io_methods methods;
+  ReadAheadCheck ctx;
+  int nHash = 0;
+  int rc;
+  int i;
+
+  scan(db);
+  for(pEntry=pCache->lruHead.pLruNext; pEntry!=&pCache->lruTail;
+      pEntry=pEntry->pLruNext){
+    if( pEntry->node.level!=1 || pEntry->node.nItems<4 ) continue;
+    for(i=0; i<4; i++){
+      int found = 0;
+      prollyNodeChildHash(&pEntry->node, i, &aHash[i]);
+      rc = csIndexLookup(pStore, &aHash[i], &aEntry[i], &found);
+      if( rc!=SQLITE_OK || !found ) break;
+      if( i>0 && (aEntry[i].offset<aEntry[i-1].offset+aEntry[i-1].size+4
+       || aEntry[i].offset>aEntry[i-1].offset+aEntry[i-1].size+4
+                                  +CS_WAL_CHUNK_HDR_SIZE) ) break;
+      if( aEntry[i].offset+aEntry[i].size+4-aEntry[0].offset
+          >CHUNK_READ_AHEAD_BYTES ) break;
+    }
+    if( i==4 ){ nHash = 4; break; }
+  }
+  check("find adjacent read-ahead leaves", nHash==4);
+  if( nHash!=4 ) return;
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+
+  prollyCacheShrink(pCache);
+  rc = prollyLoadNode(pStore, pCache, &aHash[1], &pEntry);
+  check("cache one read-ahead leaf", rc==SQLITE_OK);
+  if( pEntry ) prollyCacheRelease(pCache, pEntry);
+  for(i=0; i<3; i++){
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.pCache = pCache;
+    ctx.aHash = aHash;
+    iReadAheadFault = i==0 ? -1 : aEntry[1].offset+(i==2 ? 4 : 0);
+    rc = chunkStoreReadAhead(pStore, aHash, nHash,
+                            readAheadCached, readAheadReceived, &ctx);
+    check("cached leaf is not consumed from read-ahead", rc==SQLITE_OK
+        && ctx.nCached==1 && ctx.nRead==3 && ctx.seen==13);
+  }
+  for(i=0; i<2; i++){
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.pCache = pCache;
+    ctx.aHash = aHash;
+    iReadAheadFault = aEntry[2].offset+(i ? 4 : 0);
+    rc = chunkStoreReadAhead(pStore, aHash, nHash,
+                            readAheadCached, readAheadReceived, &ctx);
+    check("uncached read-ahead corruption never reaches callback",
+          rc==SQLITE_CORRUPT && ctx.nCached==1 && ctx.nRead==1
+          && ctx.seen==1);
+  }
+  iReadAheadFault = -1;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.pCache = pCache;
+  ctx.aHash = aHash;
+  ctx.bEvict = 1;
+  rc = chunkStoreReadAhead(pStore, aHash, nHash,
+                          readAheadCached, readAheadReceived, &ctx);
+  check("recheck cached leaf after earlier callback evicts it", rc==SQLITE_OK
+      && ctx.nCached==0 && ctx.nRead==4 && ctx.seen==15);
+  check("read-ahead cache accounting", pCache->nByte==cacheBytes(pCache)
+      && pCache->nByte<=pCache->nMaxByte);
+  pStore->file.pFile->pMethods = pReadMethods;
 }
 
 static void pointReads(sqlite3 *db){
@@ -439,6 +553,7 @@ int main(void){
       && csIndexCacheBytes(doltliteGetChunkStore(db))
          <=64*1024*1024-pCache->nMaxByte);
   testReadAhead(db);
+  testCachedReadAhead(db);
   testLargeScans(db);
   testReload(db);
   scan(db);

@@ -19,7 +19,7 @@ import savepoint_rollback_perf as savepoints
 class HotspotTests(unittest.TestCase):
     def setUp(self):
         self.names = ("scan_first", "scan_repeat", "point_10000",
-                      "index_scan_row_fetch")
+                      "scan_after_points", "index_scan_row_fetch")
         self.cases = [("scan_first", "SELECT 42;", "42"),
                       ("scan_repeat", "SELECT 42;", "42")]
         self.output = ("BEGIN scan_first\n42\n"
@@ -27,6 +27,18 @@ class HotspotTests(unittest.TestCase):
                        "END scan_first\nBEGIN scan_repeat\n42\n"
                        "Run Time: real 0.080000 user 0.070000 sys 0.010000\n"
                        "END scan_repeat\n")
+
+    def test_query_workloads_validate_results_after_point_reads(self):
+        cases = hotspots.workloads(17)
+        self.assertEqual([name for name, _, _ in cases], list(self.names[:4]))
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:
+            db.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, payload BLOB)")
+            db.executemany("INSERT INTO t VALUES(?,?)",
+                           ((i, bytes(hotspots.PAYLOAD_BYTES)) for i in range(1, 18)))
+            for name, query, expected in cases:
+                with self.subTest(name=name):
+                    self.assertEqual("|".join(map(str, db.execute(query).fetchone())),
+                                     expected)
 
     def test_internal_timings(self):
         self.assertEqual(hotspots.parse_session(self.output, self.cases),
@@ -49,7 +61,7 @@ class HotspotTests(unittest.TestCase):
             fixture = Path(directory) / "fixture.sql"
             cases = hotspots.index_fixture(fixture, 2051)
             db.executescript(fixture.read_text().removeprefix(".bail on\n"))
-            self.assertEqual([case[0] for case in cases], list(self.names[3:]))
+            self.assertEqual([case[0] for case in cases], list(self.names[4:]))
             for name, queries, expected in cases:
                 self.assertEqual(len(expected), 1000)
                 results = ["|".join(map(str, db.execute(query).fetchone()))
@@ -62,7 +74,7 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "fixture.sql"
             fixture.touch()
-            for name in self.names[3:]:
+            for name in self.names[4:]:
                 with self.subTest(name=name), patch.object(hotspots, "run", return_value=""), \
                      patch.object(hotspots, "sql", side_effect=["1|1024\nok\n", "SCAN orders\n"]):
                     with self.assertRaisesRegex(ValueError, "unexpected .* plan"):
@@ -102,8 +114,8 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
             raw = Path(directory) / "samples.tsv"
-            values = {name: 100000 for name in self.names[:3]}
-            index_values = {name: 100000 for name in self.names[3:]}
+            values = {name: 100000 for name in self.names[:4]}
+            index_values = {name: 100000 for name in self.names[4:]}
             with patch.object(hotspots, "run", return_value="validated") as run, \
                  patch.object(hotspots, "prepare", side_effect=lambda binary, db, rows: db.touch()), \
                  patch.object(hotspots, "measure_queries", side_effect=lambda *args: dict(values)) as measure, \
@@ -150,7 +162,7 @@ class HotspotTests(unittest.TestCase):
                 f"queries\t{name}\t100000\t100000\n" for name in self.names)
                 + "add_column\tadd_column_default\t100000\t100000\n"
                 + "index_edits\tindex_edit_update\t100000\t100000\n")
-            self.assertEqual(len(raw.read_text().splitlines()), 13)
+            self.assertEqual(len(raw.read_text().splitlines()), 15)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -24,23 +24,32 @@ int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
   return SQLITE_OK;
 }
 
-static int cacheReadAheadNode(
-  void *pCtx, const ProllyHash *pHash, const u8 *pData, int nData
-){
+static int cacheReadAheadHasNode(void *pCtx, const ProllyHash *pHash){
   ProllyCursor *cur = (ProllyCursor*)pCtx;
   ProllyCache *pCache = cur->pCache;
   ProllyCacheEntry *pEntry = cur->bLargeScan
       ? prollyCacheGetForScan(pCache, pHash)
       : prollyCacheGet(pCache, pHash);
+  if( !pEntry ) return 0;
+  prollyCacheRelease(pCache, pEntry);
+  return 1;
+}
+
+static int cacheReadAheadNode(
+  void *pCtx, const ProllyHash *pHash, const u8 *pData, int nData
+){
+  ProllyCursor *cur = (ProllyCursor*)pCtx;
+  ProllyCache *pCache = cur->pCache;
+  ProllyCacheEntry *pEntry;
+  u8 *pCopy = sqlite3_malloc(nData+PROLLY_NODE_BUFFER_SLOP);
   int rc = SQLITE_OK;
-  if( !pEntry ){
-    u8 *pCopy = sqlite3_malloc(nData+PROLLY_NODE_BUFFER_SLOP);
-    if( !pCopy ) return SQLITE_NOMEM;
-    memcpy(pCopy, pData, nData);
-    pEntry = prollyCachePutOwned(pCache, pHash, pCopy, nData, &rc);
-    if( pEntry ) pEntry->bScanOnly = cur->bLargeScan;
+  if( !pCopy ) return SQLITE_NOMEM;
+  memcpy(pCopy, pData, nData);
+  pEntry = prollyCachePutOwned(pCache, pHash, pCopy, nData, &rc);
+  if( pEntry ){
+    pEntry->bScanOnly = cur->bLargeScan;
+    prollyCacheRelease(pCache, pEntry);
   }
-  if( pEntry ) prollyCacheRelease(pCache, pEntry);
   return rc;
 }
 
@@ -56,7 +65,7 @@ static void readAheadLeaves(ProllyCursor *cur){
   sqlite3BeginBenignMalloc();
   /* A speculative failure must wait until the cursor requests that chunk. */
   (void)chunkStoreReadAhead(cur->pStore, aHash, nHash,
-                           cacheReadAheadNode, cur);
+                           cacheReadAheadHasNode, cacheReadAheadNode, cur);
   sqlite3EndBenignMalloc();
 }
 

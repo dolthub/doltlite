@@ -916,6 +916,7 @@ int chunkStoreReadAhead(
   ChunkStore *cs,
   const ProllyHash *aHash,
   int nHash,
+  int (*xCached)(void*, const ProllyHash*),
   int (*xRead)(void*, const ProllyHash*, const u8*, int),
   void *pCtx
 ){
@@ -952,6 +953,7 @@ int chunkStoreReadAhead(
     ChunkIndexEntry *e = &aEntry[i];
     const u8 *p = aData+(e->offset-iStart);
     ProllyHash actual;
+    if( xCached(pCtx, &e->hash) ) continue;
     if( CS_READ_U32(p)!=(u32)e->size ){
       rc = SQLITE_CORRUPT;
       break;
