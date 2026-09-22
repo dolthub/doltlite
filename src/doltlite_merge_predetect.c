@@ -125,6 +125,18 @@ int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
+/* Record fields skip VIRTUAL columns, so a later column's stored
+** index is the count of non-VIRTUAL columns before it, not its
+** CREATE TABLE ordinal. A VIRTUAL column has no stored value. */
+static int mergeStoredFieldIndex(ParsedColumn *aCols, int iCol){
+  int i, n = 0;
+  if( iCol<0 || parsedColumnIsVirtual(&aCols[iCol]) ) return -1;
+  for(i=0; i<iCol; i++){
+    if( !parsedColumnIsVirtual(&aCols[i]) ) n++;
+  }
+  return n;
+}
+
 /* Drop on one side, edit of that column on the other, in a shared
 ** row. Dolt reports a conflict; refuse rather than pick a winner. */
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
@@ -173,6 +185,7 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
       }
       for(j=0; j<nAncCols; j++){
         int bEdited = 0;
+        int iField;
         int rc;
         if( parsedColumnIndexByName(aDropCols, nDropCols,
                                     aAncCols[j].zName)>=0 ){
@@ -184,9 +197,11 @@ int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
                                     aDropCols[j].zName)<0 ){
           continue;
         }
+        iField = mergeStoredFieldIndex(aAncCols, j);
+        if( iField<0 ) continue;
         rc = mergeRowEditsColumn(c->db, &pAncCat->root, &pEditCatEnt->root,
                                  pAncCat->flags, pEditCatEnt->flags,
-                                 j, !c->bBranchMerge, &bEdited);
+                                 iField, !c->bBranchMerge, &bEdited);
         if( rc!=SQLITE_OK ){
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
