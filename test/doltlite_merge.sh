@@ -1972,6 +1972,146 @@ run_test "chained_virtual_unique_index" \
   "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY sqlite_autoindex_t_2 WHERE key_value IN (3,21,23) ORDER BY id);" \
   "1,2,3" "$DB100"
 
+# An expression unique index that reads a VIRTUAL column has to reject
+# two rows with the same expression value. The primary key is first here,
+# so record order matches table order.
+DB102=/tmp/test_merge102_$$.db; rm -f "$DB102"
+$DOLTLITE "$DB102" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INT PRIMARY KEY,
+  n INT,
+  g INT GENERATED ALWAYS AS (n) VIRTUAL
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(g + 0);
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 10);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "worowid_virtual_expr_unique_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB102"
+run_test "worowid_virtual_expr_unique_rows" \
+  "SELECT group_concat(id || ':' || n || ':' || (g+0), ',') FROM (SELECT id, n, g FROM t ORDER BY id);" \
+  "1:1:1,2:10:10" "$DB102"
+run_test "worowid_virtual_expr_unique_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB102"
+run_test "worowid_virtual_expr_unique_seek" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY ux WHERE g+0=10 ORDER BY id);" \
+  "2" "$DB102"
+
+# The same expression index when the primary key is not the first column.
+# The WITHOUT ROWID record stores the key column first. Binding by storage
+# order read id as n, stored the wrong index key, and committed both rows.
+DB103=/tmp/test_merge103_$$.db; rm -f "$DB103"
+$DOLTLITE "$DB103" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  n INT,
+  id INT PRIMARY KEY,
+  g INT GENERATED ALWAYS AS (n) VIRTUAL
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(g + 0);
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 10);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "worowid_virtual_expr_pk_later_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB103"
+run_test "worowid_virtual_expr_pk_later_rows" \
+  "SELECT group_concat(id || ':' || n, ',') FROM (SELECT id, n FROM t ORDER BY id);" \
+  "1:1,2:10" "$DB103"
+run_test "worowid_virtual_expr_pk_later_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB103"
+
+DB104=/tmp/test_merge104_$$.db; rm -f "$DB104"
+$DOLTLITE "$DB104" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  n INT,
+  id INT PRIMARY KEY,
+  g INT GENERATED ALWAYS AS (n) VIRTUAL
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(g + 0);
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 11);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "worowid_virtual_expr_pk_later_distinct_merges" \
+  "SELECT dolt_merge('right');" "^[0-9a-f]{40}$" "$DB104"
+run_test "worowid_virtual_expr_pk_later_distinct_rows" \
+  "SELECT group_concat(id || ':' || (g+0), ',') FROM (SELECT id, g FROM t ORDER BY id);" \
+  "1:1,2:10,3:11" "$DB104"
+run_test "worowid_virtual_expr_pk_later_distinct_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB104"
+run_test "worowid_virtual_expr_pk_later_distinct_seek" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY ux WHERE g+0 IN (10,11) ORDER BY id);" \
+  "2,3" "$DB104"
+
+# A stored-column expression has the same record layout. n+0 must collide
+# when the primary key is not the leading column.
+DB105=/tmp/test_merge105_$$.db; rm -f "$DB105"
+$DOLTLITE "$DB105" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  n INT,
+  id INT PRIMARY KEY
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(n + 0);
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 10);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "worowid_stored_expr_pk_later_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB105"
+run_test "worowid_stored_expr_pk_later_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB105"
+
+$DOLTLITE "$DB103" > /tmp/test_merge103_txn_$$.out 2>/tmp/test_merge103_txn_$$.err <<'SQL'
+.headers off
+.mode list
+BEGIN;
+SELECT dolt_merge('right');
+SELECT 'TX|' ||
+       (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE "table"='t'),0) || '|' ||
+       COALESCE((SELECT group_concat(id, ',') FROM (SELECT id FROM dolt_constraint_violations_t ORDER BY id)),'') || '|' ||
+       COALESCE((SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY ux WHERE g+0=10 ORDER BY id)),'') || '|' ||
+       CASE WHEN (SELECT group_concat(integrity_check, ' ') FROM pragma_integrity_check)
+                 LIKE '%missing%'
+             OR (SELECT group_concat(integrity_check, ' ') FROM pragma_integrity_check)
+                 LIKE '%malformed%'
+            THEN 'bad' ELSE 'indexed' END;
+ROLLBACK;
+SQL
+TX103=$(grep -E '^TX\|' /tmp/test_merge103_txn_$$.out | head -1)
+if [ "$TX103" = "TX|1|2|2,3|2,3|indexed" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: worowid_virtual_expr_pk_later_txn\n  got=$TX103\n$(cat /tmp/test_merge103_txn_$$.out /tmp/test_merge103_txn_$$.err)"
+fi
+rm -f /tmp/test_merge103_txn_$$.out /tmp/test_merge103_txn_$$.err
+
 # One side changes a column to TEXT. The other side's integer must be
 # stored as text, or integrity_check reports a numeric value.
 DB101=/tmp/test_merge101_$$.db; rm -f "$DB101"

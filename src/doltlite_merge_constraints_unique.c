@@ -1227,7 +1227,10 @@ static int uniqueIndexExprLists(
       sqlite3_str_appendall(pSelect, ", ");
       sqlite3_str_appendall(pJson, ", ");
     }
-    sqlite3_str_appendf(pSelect, "(%s)", az[i]);
+    /* CASE keeps the value but does not match the index expression, so
+    ** the probe is computed from the row. A wrong index entry must not
+    ** hide a collision or invent one. */
+    sqlite3_str_appendf(pSelect, "(CASE WHEN 1 THEN %s END)", az[i]);
     uniqueAppendJsonString(pJson, az[i]);
     sqlite3_free(az[i]);
   }
