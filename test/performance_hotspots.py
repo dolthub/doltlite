@@ -91,7 +91,8 @@ def workloads(rows):
                   WHERE id=1+(c.i*2654435761)%{rows})) FROM c;"""
     return [("scan_first", scan, expected),
             ("scan_repeat", scan, expected),
-            ("point_10000", points, str(10000 * PAYLOAD_BYTES))]
+            ("point_10000", points, str(10000 * PAYLOAD_BYTES)),
+            ("scan_after_points", scan, expected)]
 
 
 def measure_queries(binary, db, rows, cache_kib):

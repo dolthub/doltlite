@@ -341,6 +341,7 @@ int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
 #define CHUNK_READ_AHEAD_MAX 16
 #define CHUNK_READ_AHEAD_BYTES (64*1024)
 int chunkStoreReadAhead(ChunkStore *cs, const ProllyHash *aHash, int nHash,
+    int (*xCached)(void*, const ProllyHash*),
     int (*xRead)(void*, const ProllyHash*, const u8*, int), void *pCtx);
 int chunkStoreVerifyChunk(const ProllyHash *hash, u8 **ppData, int *pnData);
 int chunkStoreGetSparse(ChunkStore *cs, const ProllyHash *hash,
