@@ -2040,6 +2040,26 @@ static void doltliteRebaseInteractiveAbort(
   sqlite3_result_text(context, "Interactive rebase aborted", -1, SQLITE_STATIC);
 }
 
+static int rebaseHasUncommittedChanges(sqlite3 *db, int *pDirty){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  int rc2;
+  *pDirty = 0;
+  rc = sqlite3_prepare_v2(db,
+      "SELECT 1 FROM main.dolt_status WHERE table_name<>'dolt_rebase' LIMIT 1",
+      -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    *pDirty = 1;
+    rc = SQLITE_OK;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+  }
+  rc2 = sqlite3_finalize(pStmt);
+  return rc==SQLITE_OK ? rc2 : rc;
+}
+
 static void doltliteRebaseInteractiveContinue(
   sqlite3_context *context,
   sqlite3 *db
@@ -2060,6 +2080,7 @@ static void doltliteRebaseInteractiveContinue(
   int rebaseActive = 1;
   int i;
   int bPlanDropped = 0;
+  int dirty = 0;
   ProllyHash curCat;
   ProllyHash curHead;
   ProllyHash expectedOrigHead;
@@ -2164,6 +2185,17 @@ static void doltliteRebaseInteractiveContinue(
       }
       goto abort_err_silent;
     }
+  }
+
+  rc = rebaseHasUncommittedChanges(db, &dirty);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    goto abort_err_silent;
+  }
+  if( dirty ){
+    sqlite3_result_error(context,
+      "cannot start a rebase with uncommitted changes", -1);
+    goto abort_err_silent;
   }
 
   /* Claim before replay so a concurrent --abort loses with "no rebase
