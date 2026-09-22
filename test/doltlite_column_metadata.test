@@ -1,0 +1,77 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-column-metadata
+
+foreach encoding {UTF-8 UTF-16le UTF-16be} {
+  reset_db
+  forcedelete column-metadata-oracle.db
+  sqlite3 oracle {file:column-metadata-oracle.db?doltlite_engine=sqlite} -uri 1
+  foreach conn {db oracle} {
+    $conn eval "PRAGMA encoding='$encoding'"
+    $conn eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+      INSERT INTO t VALUES
+        (1,NULL), (2,0), (3,-123456), (4,1.25), (5,''), (6,X''),
+        (7,'hello'), (8,X'610062'), (9,char(233,20013,128512)),
+        (10,char(97,0,98)), (11,zeroblob(262144)),
+        (12,CAST(printf('%0262144d',42) AS BLOB)),
+        (13,printf('%0262144d',42));
+      CREATE TABLE w(id TEXT PRIMARY KEY, v) WITHOUT ROWID;
+      INSERT INTO w SELECT printf('%04d',id),v FROM t;
+      CREATE INDEX w_v ON w(v);
+    }
+  }
+  foreach state {stored pending rollback} {
+    foreach conn {db oracle} {
+      if {$state eq "pending"} {
+        $conn eval {
+          BEGIN;
+          UPDATE t SET v=char(233,20013,128512,0,97) WHERE id=7;
+          UPDATE w SET v=X'6100620063' WHERE id='0007';
+          INSERT INTO t VALUES(14,zeroblob(131072));
+          INSERT INTO w VALUES('0014',zeroblob(131072));
+        }
+      } elseif {$state eq "rollback"} {
+        $conn eval {ROLLBACK}
+      }
+    }
+    foreach {name query} {
+      table {SELECT id,typeof(v),length(v),octet_length(v),hex(substr(v,1,8)),v IS NULL FROM t ORDER BY id}
+      without-rowid {SELECT id,typeof(v),length(v),octet_length(v),hex(substr(v,1,8)) FROM w NOT INDEXED ORDER BY id}
+      covering {SELECT typeof(v),length(v),octet_length(v),hex(substr(v,1,8)) FROM w INDEXED BY w_v ORDER BY v,id}
+      materialized {WITH c AS MATERIALIZED (SELECT * FROM t) SELECT id,length(v),typeof(v),octet_length(v),hex(substr(v,1,8)) FROM c ORDER BY id}
+      repeated {SELECT length(v),hex(substr(v,1,8)),length(v),octet_length(v),typeof(v) FROM t ORDER BY id}
+    } {
+      do_test $encoding-$state-$name [list db eval $query] [oracle eval $query]
+    }
+  }
+  oracle close
+}
+
+reset_db
+db eval {
+  PRAGMA cache_size=-4096;
+  CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB, s TEXT);
+  INSERT INTO t VALUES(1,CAST(printf('%0262144d',42) AS BLOB),
+                        printf('%0262144d',42));
+  SELECT hex(substr(b,1,1)),substr(s,1,1) FROM t;
+}
+foreach {expr expected} {
+  length(b) 262144
+  octet_length(b) 262144
+  typeof(b) blob
+  octet_length(s) 262144
+  typeof(s) text
+} {
+  do_test no-copy-$expr {
+    set stmt [sqlite3_prepare_v2 db "SELECT $expr FROM t" -1 tail]
+    sqlite3_status SQLITE_STATUS_MALLOC_SIZE 1
+    set rc [sqlite3_step $stmt]
+    set size [lindex [sqlite3_status SQLITE_STATUS_MALLOC_SIZE 0] 2]
+    set value [sqlite3_column_text $stmt 0]
+    sqlite3_finalize $stmt
+    list $rc $value [expr {$size<65536}]
+  } [list SQLITE_ROW $expected 1]
+}
+
+finish_test
