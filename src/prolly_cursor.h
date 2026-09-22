@@ -25,6 +25,8 @@ struct ProllyCursor {
   u8 flags;
   u8 bAllowSparse;
   u8 nAdvance;
+  u8 bLargeScan;
+  u8 bScanFromStart;
 
   int iLevel;
   ProllyCursorLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];

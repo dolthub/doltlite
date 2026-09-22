@@ -123,7 +123,9 @@ int prollyCacheInit(ProllyCache *cache, i64 nMaxByte){
   return SQLITE_OK;
 }
 
-ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
+static ProllyCacheEntry *cacheGet(
+  ProllyCache *cache, const ProllyHash *hash, int bScan
+){
   int iBucket;
   ProllyCacheEntry *pEntry;
 
@@ -135,6 +137,7 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   while( pEntry ){
     if( memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)==0 ){
 
+      if( !bScan ) pEntry->bScanOnly = 0;
       pEntry->nEvictChance = pEntry->node.level>0
                           ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
       pEntry->nRef++;
@@ -148,6 +151,26 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   }
 
   return 0;
+}
+
+ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
+  return cacheGet(cache, hash, 0);
+}
+
+ProllyCacheEntry *prollyCacheGetForScan(ProllyCache *cache, const ProllyHash *hash){
+  return cacheGet(cache, hash, 1);
+}
+
+void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry){
+  if( entry->bScanOnly && !entry->bTransient && entry->nRef==1
+   && entry->node.level==0 ){
+    lruRemove(entry);
+    entry->pLruNext = &cache->lruTail;
+    entry->pLruPrev = cache->lruTail.pLruPrev;
+    cache->lruTail.pLruPrev->pLruNext = entry;
+    cache->lruTail.pLruPrev = entry;
+  }
+  prollyCacheRelease(cache, entry);
 }
 
 static ProllyCacheEntry *cacheEvictionCandidate(ProllyCache *cache){

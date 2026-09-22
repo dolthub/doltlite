@@ -167,6 +167,93 @@ static void testReadAhead(sqlite3 *db){
   execSql(db, "PRAGMA cache_size=-65536");
 }
 
+static void pointReads(sqlite3 *db){
+  sqlite3_stmt *p = 0;
+  check("prepare hot point reads", sqlite3_prepare_v2(db,
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c"
+      " WHERE i<200) SELECT sum(v=printf('%0100d',id)) FROM c JOIN t"
+      " ON t.id=1+(i*313)%100000", -1, &p, 0)==SQLITE_OK);
+  check("hot point results", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==200);
+  check("finish hot point reads", sqlite3_finalize(p)==SQLITE_OK);
+}
+
+static void smallScan(sqlite3 *db){
+  sqlite3_stmt *p = 0;
+  check("prepare small scan", sqlite3_prepare_v2(db,
+      "SELECT count(*),sum(v=printf('%0100d',id)) FROM small", -1,
+      &p, 0)==SQLITE_OK);
+  check("small scan results", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==5000
+      && sqlite3_column_int(p, 1)==5000);
+  check("finish small scan", sqlite3_finalize(p)==SQLITE_OK);
+}
+
+static void rangeScan(sqlite3 *db){
+  sqlite3_stmt *p = 0;
+  check("prepare bounded range", sqlite3_prepare_v2(db,
+      "SELECT count(*),sum(v=printf('%0100d',id)) FROM t"
+      " WHERE id BETWEEN 90001 AND 95000", -1, &p, 0)==SQLITE_OK);
+  check("bounded range results", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==5000
+      && sqlite3_column_int(p, 1)==5000);
+  check("finish bounded range", sqlite3_finalize(p)==SQLITE_OK);
+}
+
+static void testLargeScans(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  int nCold;
+  int nPoint;
+
+  execSql(db, "CREATE TABLE small(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO small SELECT * FROM t WHERE id<=5000");
+  execSql(db, "PRAGMA cache_size=-2000");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+
+  clearNodes(pCache);
+  scan(db);
+  clearNodes(pCache);
+  scan(db);
+  nCold = nRead;
+  nRead = 0;
+  scan(db);
+  check("large scan reuses part of previous pass", nCold>0
+      && nRead<nCold*95/100);
+  check("large scan accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 2000*1024));
+
+  clearNodes(pCache);
+  pointReads(db);
+  nPoint = nRead;
+  pointReads(db);
+  scan(db);
+  nRead = 0;
+  pointReads(db);
+  check("large scan preserves hot point leaves", nPoint>0
+      && nRead<nPoint/4);
+  smallScan(db);
+  nRead = 0;
+  smallScan(db);
+  check("small table still fills cache after large scan", nRead==0);
+  scan(db);
+  nRead = 0;
+  smallScan(db);
+  check("large scan preserves small table", nRead==0);
+  rangeScan(db);
+  nRead = 0;
+  rangeScan(db);
+  check("bounded range still fills cache", nRead==0);
+  check("mixed scan accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 2000*1024));
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "PRAGMA cache_size=-65536");
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -352,6 +439,7 @@ int main(void){
       && csIndexCacheBytes(doltliteGetChunkStore(db))
          <=64*1024*1024-pCache->nMaxByte);
   testReadAhead(db);
+  testLargeScans(db);
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
