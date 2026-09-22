@@ -83,7 +83,7 @@ static int mergeIndexSameKey(const char *zSqlA, const char *zSqlB){
 /* One side added an index over columns another index already covers.
 ** Dolt refuses ("cannot be merged"): keeping both would impose one
 ** side's uniqueness. Solo additions are the user's business. */
-int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
+static int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
   int side, i, j;
 
   /* Merge only. Replay (revert/cherry-pick/rebase) has one intended
@@ -142,7 +142,7 @@ static int mergeStoredFieldIndex(ParsedColumn *aCols, int iCol){
 ** other side's cells into the wrong column. A side that kept an ancestor row
 ** dropped nothing, so its columns are the ancestor's in place and a name
 ** that moved slots can only be such a rename: refuse it. */
-int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
+static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
   int side, i, j;
 
   for(side=0; side<2; side++){
@@ -220,7 +220,7 @@ int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
 
 /* Drop on one side, edit of that column on the other, in a shared
 ** row. Dolt reports a conflict; refuse rather than pick a winner. */
-int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
+static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   int side, i, j;
 
   for(side=0; side<2; side++){
@@ -405,7 +405,7 @@ static int mergeSideRenamedAnyColumn(const char *zAncSql, const char *zSideSql){
 /* Dual column-rename plus a dependent that names a renamed column.
 ** Merged catalog takes the table from one side and the object from
 ** the other, so it cannot load. Dolt retargets the object; we refuse. */
-int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
+static int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
   int side, i, j;
 
   for(side=0; side<2; side++){
@@ -499,7 +499,7 @@ int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c){
 /* Trigger on a table the other side renamed or dropped. Triggers
 ** resolve at schema load, so a dangling one cannot be represented.
 ** Dolt keeps the old name; we refuse. Distinguish drop from rename. */
-int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
+static int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
   int side, i, j;
 
   for(side=0; side<2; side++){
@@ -571,7 +571,7 @@ int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c){
 
 /* Index added over a column the other side renamed. Nothing retargets
 ** it, and the catalog cannot load. Dolt keeps the index; we refuse. */
-int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c){
+static int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c){
   int side, i;
 
   for(side=0; side<2; side++){
@@ -616,7 +616,7 @@ int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c){
 ** Dual-add rewrites the CREATE TABLE, but the adopted index is still in
 ** sqlite_master against the pre-rewrite SQL, and sqlite3Init reports
 ** SQLITE_CORRUPT. Refuse until catalog install applies table ALTER first. */
-int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c){
+static int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c){
   int side, i, j, k;
 
   for(side=0; side<2; side++){

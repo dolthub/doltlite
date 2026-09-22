@@ -95,14 +95,7 @@ struct MergePass1Ctx {
   int nPatchesAlloc;
 };
 
-int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c);
-int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c);
-int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c);
-int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c);
-int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c);
 int mergePass1RunChecks(MergePass1Ctx *c);
-int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c);
-int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c);
 int rebuildDisjointSchemaRows(
   sqlite3 *db,
   struct TableEntry *aMerged, int nMerged,
