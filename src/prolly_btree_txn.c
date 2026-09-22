@@ -20,6 +20,10 @@ static int restoreFromCommitted(Btree *p);
 static void btreeDiscardAllSavepoints(Btree *p);
 
 void freeSavepointTables(struct SavepointTableState *pState){
+  csFreeSequenceArray(pState->aSequences, pState->nSequences);
+  pState->aSequences = 0;
+  pState->nSequences = 0;
+  pState->bSequences = 0;
   sqlite3_free(pState->zRebaseOrigBranch);
   pState->zRebaseOrigBranch = 0;
   sqlite3_free(pState->zRebaseReturnBranch);
@@ -124,6 +128,16 @@ static int captureSavepointSessionState(
       return SQLITE_NOMEM;
     }
   }
+  {
+    int rc = csCopySequences(&pBtree->pBt->store, &pState->aSequences,
+                             &pState->nSequences);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zOrigBranch);
+      sqlite3_free(zReturnBranch);
+      return rc;
+    }
+    pState->bSequences = 1;
+  }
   pState->iNextTable = pBtree->cat.iNextTable;
   pState->iLargestRootPage = pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE];
   memcpy(pState->aMeta, pBtree->aMeta, sizeof(pState->aMeta));
@@ -140,6 +154,13 @@ static void restoreSavepointSessionState(
   Btree *pBtree,
   struct SavepointTableState *pState
 ){
+  if( pState->bSequences ){
+    csInstallSequences(&pBtree->pBt->store, pState->aSequences,
+                       pState->nSequences);
+    pState->aSequences = 0;
+    pState->nSequences = 0;
+    pState->bSequences = 0;
+  }
   pBtree->vc = pState->vc;
   memcpy(pBtree->aMeta, pState->aMeta, sizeof(pBtree->aMeta));
   pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = pState->iLargestRootPage;
@@ -608,6 +629,9 @@ int pushSavepoint(Btree *pBtree, int bStatement){
   pState->aTables = 0;
   pState->aCatalogSnapshot = 0;
   pState->bCatalogSnapshot = 0;
+  pState->aSequences = 0;
+  pState->nSequences = 0;
+  pState->bSequences = 0;
   pState->aPendingSnapshot = 0;
   pState->nPendingSnapshot = 0;
   pState->nPendingSnapshotAlloc = 0;
@@ -1490,6 +1514,9 @@ static void btreeDiscardAllSavepoints(Btree *p){
 
 static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
   int rc;
+  /* The savepoint that opened the transaction pushed no btree level, so the
+  ** store's copy is what puts the id counters back. */
+  csRestoreTxnSequences(&pBt->store);
   btreeDiscardAllSavepoints(p);
   rc = rollbackCommittedState(p, pBt);
   if( rc!=SQLITE_OK ) return rc;

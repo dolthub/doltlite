@@ -32,6 +32,8 @@ foreach {kind schema} {
     INSERT INTO t(v) VALUES('kept');
     SELECT last_insert_rowid();
   } {5 5}
+  # ROLLBACK TO keeps the id the rolled-back insert took, like the full
+  # ROLLBACK above and like SQLite. It used to burn it.
   do_execsql_test shared-rowid-$kind-savepoint {
     SAVEPOINT s;
     INSERT INTO t(v) VALUES('rollback');
@@ -40,20 +42,20 @@ foreach {kind schema} {
     RELEASE s;
     INSERT INTO t(v) VALUES('kept');
     SELECT last_insert_rowid();
-  } {6 7}
+  } {6 6}
   do_execsql_test shared-rowid-$kind-rename {
     DELETE FROM t;
     ALTER TABLE t RENAME TO renamed;
     INSERT INTO renamed(v) VALUES('renamed');
     SELECT rowid FROM renamed;
-  } {8}
+  } {7}
   db close
   sqlite3 db test.db
   execsql {SELECT dolt_checkout('other')}
   do_execsql_test shared-rowid-$kind-reopen {
     INSERT INTO renamed(v) VALUES('reopened');
     SELECT last_insert_rowid();
-  } {9}
+  } {8}
   execsql {DROP TABLE renamed}
   execsql "CREATE TABLE renamed($schema)"
   do_execsql_test shared-rowid-$kind-drop {

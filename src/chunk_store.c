@@ -757,6 +757,7 @@ int chunkStoreClose(ChunkStore *cs){
   csFreeRemotes(cs);
   csFreeTracking(cs);
   csFreeSequences(cs);
+  csDropTxnSequences(cs);
   sqlite3_mutex_free(cs->pLockMutex);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;
@@ -1371,6 +1372,7 @@ void chunkStoreClearRefs(ChunkStore *cs){
   csFreeRemotes(cs);
   csFreeTracking(cs);
   csFreeSequences(cs);
+  csDropTxnSequences(cs);
   memset(&cs->refs.refsHash, 0, sizeof(cs->refs.refsHash));
 }
 
