@@ -392,6 +392,97 @@ static void testNearBudgetScans(sqlite3 *db){
   execSql(db, "PRAGMA cache_size=-65536");
 }
 
+static void wideScalarScan(sqlite3 *db){
+  sqlite3_stmt *p = 0;
+  check("prepare wide scalar scan", sqlite3_prepare_v2(db,
+      "SELECT sum(v),sum(length(b)) FROM wide NOT INDEXED", -1, &p, 0)
+      ==SQLITE_OK);
+  check("wide scalar result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==32896
+      && sqlite3_column_int(p, 1)==4194304);
+  check("finish wide scalar scan", sqlite3_finalize(p)==SQLITE_OK);
+}
+
+static void testWidePrefixes(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  int nCold;
+  int i;
+  execSql(db, "CREATE TABLE wide(id TEXT PRIMARY KEY,v INTEGER,b BLOB,tail TEXT);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<256)"
+      " INSERT INTO wide SELECT printf('%08d',i),i,"
+      " CAST(printf('%016384d',i) AS BLOB),printf('tail-%d',i) FROM c;"
+      " PRAGMA cache_size=-512");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  execSql(db, "SELECT sum(v) FROM (SELECT v FROM wide ORDER BY id DESC)");
+  execSql(db, "SELECT sum(v) FROM (SELECT v FROM wide ORDER BY id DESC)");
+  nRead = 0;
+  execSql(db, "SELECT sum(v) FROM (SELECT v FROM wide ORDER BY id DESC)");
+  check("backward scan retains wide prefixes", nRead==0);
+  clearNodes(pCache);
+  execSql(db, "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c"
+      " WHERE i<512) SELECT sum((SELECT v FROM wide"
+      " WHERE id=printf('%08d',1+(i*313)%256))) FROM c");
+  nRead = 0;
+  execSql(db, "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c"
+      " WHERE i<512) SELECT sum((SELECT v FROM wide"
+      " WHERE id=printf('%08d',1+(i*313)%256))) FROM c");
+  check("point lookups retain wide prefixes", nRead==0);
+  clearNodes(pCache);
+  wideScalarScan(db);
+  nCold = nRead;
+  nRead = 0;
+  wideScalarScan(db);
+  check("wide scalar scan retains prefixes without rereading payloads",
+        nCold>0 && nRead==0);
+  check("prefix cache accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 512*1024));
+  check("prepare pinned prefix scan", sqlite3_prepare_v2(db,
+      "SELECT id,v FROM wide ORDER BY id", -1, &p, 0)==SQLITE_OK);
+  check("pin prefix row", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 1)==1);
+  execSql(db, "SELECT sum(b=CAST(printf('%016384d',v) AS BLOB)) FROM wide");
+  execSql(db, "PRAGMA shrink_memory; PRAGMA cache_size=0");
+  for(i=2; sqlite3_step(p)==SQLITE_ROW; i++){
+    if( sqlite3_column_int(p, 1)!=i ) break;
+  }
+  check("pinned prefixes survive full reads and cache shrink", i==257);
+  check("finish pinned prefix scan", sqlite3_finalize(p)==SQLITE_OK);
+  check("prefix cache shrinks to minimum", budgetMatches(db, 4096));
+  execSql(db, "PRAGMA cache_size=-512");
+  wideScalarScan(db);
+  check("prepare full wide values", sqlite3_prepare_v2(db,
+      "SELECT sum(b=CAST(printf('%016384d',v) AS BLOB)),"
+      " sum(tail=printf('tail-%d',v)) FROM wide", -1, &p, 0)==SQLITE_OK);
+  check("reload nonzero payloads and columns beyond prefix",
+      sqlite3_step(p)==SQLITE_ROW && sqlite3_column_int(p, 0)==256
+      && sqlite3_column_int(p, 1)==256);
+  check("finish full wide values", sqlite3_finalize(p)==SQLITE_OK);
+  wideScalarScan(db);
+  wideScalarScan(db);
+  eReadFault = 1;
+  check("prepare failing full value", sqlite3_prepare_v2(db,
+      "SELECT hex(b) FROM wide WHERE id='00000128'", -1, &p, 0)==SQLITE_OK);
+  check("prefix fallback propagates read errors", sqlite3_step(p)==SQLITE_IOERR);
+  sqlite3_finalize(p);
+  eReadFault = 0;
+  eReadFault = 3;
+  check("prepare corrupt full value", sqlite3_prepare_v2(db,
+      "SELECT hex(b) FROM wide WHERE id='00000128'", -1, &p, 0)==SQLITE_OK);
+  check("prefix fallback verifies the entire chunk",
+        sqlite3_step(p)==SQLITE_CORRUPT);
+  sqlite3_finalize(p);
+  eReadFault = 0;
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE wide; PRAGMA cache_size=-65536");
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -580,6 +671,7 @@ int main(void){
   testCachedReadAhead(db);
   testLargeScans(db);
   testNearBudgetScans(db);
+  testWidePrefixes(db);
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));

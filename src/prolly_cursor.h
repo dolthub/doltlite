@@ -24,6 +24,7 @@ struct ProllyCursor {
   ProllyHash root;
   u8 flags;
   u8 bAllowSparse;
+  u8 bAllowPrefix;
   u8 nAdvance;
   u8 bLargeScan;
   u8 bScanFromStart;

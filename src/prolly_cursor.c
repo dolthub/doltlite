@@ -24,12 +24,21 @@ int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
   return SQLITE_OK;
 }
 
+static ProllyCacheEntry *cursorCachedNode(
+  ProllyCursor *cur, const ProllyHash *pHash
+){
+  ProllyCacheEntry *pEntry = cur->bAllowPrefix
+      ? prollyCacheGetPrefix(cur->pCache, pHash, cur->bLargeScan)
+      : cur->bLargeScan ? prollyCacheGetForScan(cur->pCache, pHash)
+                        : prollyCacheGet(cur->pCache, pHash);
+  if( pEntry && cur->bAllowPrefix ) pEntry->bAllowPrefix = 1;
+  return pEntry;
+}
+
 static int cacheReadAheadHasNode(void *pCtx, const ProllyHash *pHash){
   ProllyCursor *cur = (ProllyCursor*)pCtx;
   ProllyCache *pCache = cur->pCache;
-  ProllyCacheEntry *pEntry = cur->bLargeScan
-      ? prollyCacheGetForScan(pCache, pHash)
-      : prollyCacheGet(pCache, pHash);
+  ProllyCacheEntry *pEntry = cursorCachedNode(cur, pHash);
   if( !pEntry ) return 0;
   prollyCacheRelease(pCache, pEntry);
   return 1;
@@ -47,6 +56,7 @@ static int cacheReadAheadNode(
   memcpy(pCopy, pData, nData);
   pEntry = prollyCachePutOwned(pCache, pHash, pCopy, nData, &rc);
   if( pEntry ){
+    pEntry->bAllowPrefix = cur->bAllowPrefix;
     pEntry->bScanOnly = cur->bLargeScan;
     prollyCacheRelease(pCache, pEntry);
   }
@@ -81,9 +91,7 @@ static int prollyLoadNodeMaybeSparse(
   int rc;
 
   *ppEntry = 0;
-  pEntry = cur->bLargeScan
-      ? prollyCacheGetForScan(cur->pCache, pHash)
-      : prollyCacheGet(cur->pCache, pHash);
+  pEntry = cursorCachedNode(cur, pHash);
   if( pEntry ){
     *ppEntry = pEntry;
     return SQLITE_OK;
@@ -92,9 +100,7 @@ static int prollyLoadNodeMaybeSparse(
   if( cur->nAdvance>=2 && cur->iLevel>0
    && cur->aLevel[cur->iLevel-1].pEntry->node.level==1 ){
     readAheadLeaves(cur);
-    pEntry = cur->bLargeScan
-        ? prollyCacheGetForScan(cur->pCache, pHash)
-        : prollyCacheGet(cur->pCache, pHash);
+    pEntry = cursorCachedNode(cur, pHash);
     if( pEntry ){
       *ppEntry = pEntry;
       return SQLITE_OK;
@@ -113,6 +119,7 @@ static int prollyLoadNodeMaybeSparse(
     pEntry = prollyCachePutTransientOwned(pHash, pData, nData, nDataPhys, &rc);
   }
   if( !pEntry ) return rc;
+  pEntry->bAllowPrefix = cur->bAllowPrefix;
   pEntry->bScanOnly = cur->bLargeScan;
   *ppEntry = pEntry;
   return SQLITE_OK;

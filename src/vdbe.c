@@ -788,7 +788,13 @@ static SQLITE_NOINLINE int vdbeColumnFromOverflow(
   int len = sqlite3VdbeSerialTypeLen(t);
   assert( pC->eCurType==CURTYPE_BTREE );
   if( len>db->aLimit[SQLITE_LIMIT_LENGTH] ) return SQLITE_TOOBIG;
+#ifdef DOLTLITE_PROLLY
+  /* Prolly cursors have no physical row offset to key this cache. */
+  if( len > 4000 && pC->pKeyInfo==0
+   && sqlite3BtreeOffset(pC->uc.pCursor)!=0 ){
+#else
   if( len > 4000 && pC->pKeyInfo==0 ){
+#endif
     /* Cache large column values that are on overflow pages using
     ** an RCStr (reference counted string) so that if they are reloaded,
     ** that do not have to be copied a second time.  The overhead of

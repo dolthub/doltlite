@@ -156,6 +156,7 @@ void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey)
 
 void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVal){
   int nAvail;
+  assert( pNode->nValuePrefix==0 );
   prollyNodeValueSpan(pNode, i, ppVal, pnVal, &nAvail);
 }
 
