@@ -418,6 +418,7 @@ static int doltliteBuildIndexEntryWithExpr(
   u8 *pIdxRec = 0;
   int nIdxRec = 0;
   int nOut = 0;
+  int nSort = 0;
   int nAlloc;
   int hasRowid;
   int storePayload = 0;
@@ -432,6 +433,7 @@ static int doltliteBuildIndexEntryWithExpr(
   hasRowid = pIdx && pIdx->pTable && HasRowid(pIdx->pTable);
 
   nAlloc = nIdxCol + 1;
+  if( pIdx && pIdx->nColumn+1>nAlloc ) nAlloc = pIdx->nColumn + 1;
   aMem = sqlite3_malloc(nAlloc * (int)sizeof(DoltliteSerialValue));
   apKeep = sqlite3_malloc(nAlloc * (int)sizeof(u8*));
   if( !aMem || !apKeep ){
@@ -488,6 +490,29 @@ static int doltliteBuildIndexEntryWithExpr(
     aMem[nOut].i = intKey;
     nOut++;
   }
+  nSort = nOut;
+  /* Primary-key columns live in the value record. A payload that omits
+  ** them makes a covering read return NULL for the key. */
+  if( !hasRowid && pIdx && !pIdx->uniqNotNull && pIdx->aiColumn ){
+    for(i=nIdxCol; i<pIdx->nColumn && nOut<nAlloc; i++){
+      int col = pIdx->aiColumn[i];
+      Table *pTab = pIdx->pTable;
+      if( col<0 || !pTab || col>=pTab->nCol ) continue;
+      {
+        int iStore = HasRowid(pTab)
+            ? sqlite3TableColumnToStorage(pTab, col)
+            : sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), col);
+        if( iStore>=0 && iStore<info.nField ){
+          rc = doltliteSerialValueFromField(
+              pRec, nRec, &info, iStore, &aMem[nOut]);
+          if( rc!=SQLITE_OK ) goto expr_fail;
+        }else{
+          aMem[nOut].eType = SQLITE_NULL;
+        }
+      }
+      nOut++;
+    }
+  }
 
   pIdxRec = doltliteBuildRecord(aMem, nOut, &nIdxRec);
   if( !pIdxRec ){
@@ -501,8 +526,9 @@ static int doltliteBuildIndexEntryWithExpr(
   aMem = 0;
 
   storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);
-  rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
-                                    ppSortKey, pnSortKey);
+  rc = sortKeyFromRecordPrefixColl(
+      pIdxRec, nIdxRec, nOut>nSort ? nSort : 0, pKeyInfo,
+      ppSortKey, pnSortKey);
   if( rc==SQLITE_OK && !hasRowid && pTreeKey && nTreeKey>0 ){
     u8 *pCombined = sqlite3_realloc(*ppSortKey, *pnSortKey + nTreeKey);
     if( !pCombined ){
@@ -561,6 +587,8 @@ static int doltliteBuildIndexEntry(
   u32 ipkLen = 0;
   int useIpk = 0;
   int storePayload = 0;
+  int nSortField = 0;
+  int nOutField = 0;
   int rc;
 
   if( ppSortKey ) *ppSortKey = 0;
@@ -598,8 +626,11 @@ static int doltliteBuildIndexEntry(
     int nTotal;
     u8 *p;
 
-    int nOutField;
-    int *aFieldOrder = sqlite3_malloc((nIdxCol + 1) * sizeof(int));
+    int nOrderAlloc;
+    int *aFieldOrder;
+    nOrderAlloc = nIdxCol + 1;
+    if( pIdx && pIdx->nColumn>nOrderAlloc ) nOrderAlloc = pIdx->nColumn + 1;
+    aFieldOrder = sqlite3_malloc(nOrderAlloc * sizeof(int));
     if( !aFieldOrder ){ doltliteRecordInfoClear(&info); return SQLITE_NOMEM; }
 
     {
@@ -612,6 +643,17 @@ static int doltliteBuildIndexEntry(
       }
       if( iPKey>=0 ){
         aFieldOrder[out++] = iPKey;
+      }
+      /* Key columns, then the primary-key suffix. A REAL or NOCASE value
+      ** stores this record as the index payload; readers take the primary
+      ** key from it. The sort key stays the key prefix plus the table key. */
+      nSortField = out;
+      if( pIdx && !pIdx->uniqNotNull && pIdx->pTable
+       && !HasRowid(pIdx->pTable) ){
+        for(i=nIdxCol; i<pIdx->nColumn; i++){
+          int col = pIdx->aiColumn[i];
+          if( col>=0 ) aFieldOrder[out++] = col;
+        }
       }
       nOutField = out;
     }
@@ -677,9 +719,13 @@ static int doltliteBuildIndexEntry(
   }
 
   storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);
-  rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
-                                    ppSortKey, pnSortKey);
-  /* WITHOUT ROWID secondary indexes suffix the table-tree key. */
+  rc = sortKeyFromRecordPrefixColl(
+      pIdxRec, nIdxRec, nOutField>nSortField ? nSortField : 0, pKeyInfo,
+      ppSortKey, pnSortKey);
+  /* WITHOUT ROWID secondary indexes suffix the table-tree key. The
+  ** payload record also carries those primary-key columns; the suffix
+  ** stays on the sort key so it matches entries written before the
+  ** payload was required. */
   if( rc==SQLITE_OK && pIdx && pIdx->pTable
    && !HasRowid(pIdx->pTable) && pTreeKey && nTreeKey>0 ){
     u8 *pCombined = sqlite3_realloc(*ppSortKey, *pnSortKey + nTreeKey);
