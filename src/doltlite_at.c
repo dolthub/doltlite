@@ -1057,6 +1057,59 @@ Module *doltliteHistoricalModuleRegister(sqlite3 *db, const char *zName){
   return (Module*)sqlite3HashFind(&db->aModule, zName);
 }
 
+/* The eponymous table keeps the columns from its first xConnect.
+** Compare those with the columns this statement's literal ref would
+** declare. Callers rebuild only when the lists differ. */
+int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
+  Table *pTab;
+  VTable *pVt;
+  DoltliteVtabCommon *v;
+  DoltliteColInfo want;
+  char *zErr = 0;
+  const char *zName;
+  int i, differ, rc;
+
+  if( !db || !pMod || !pMod->pEpoTab || db->bDoltliteHistoricalCheck ) return 0;
+  zName = pMod->zName;
+  if( !zName ) return 0;
+  if( sqlite3_strnicmp(zName, "dolt_at_", 8)==0 ){
+    if( zName[8]==0 ) return 0;
+  }else if( sqlite3_strnicmp(zName, "dolt_history_", 13)==0 ){
+    if( zName[13]==0 ) return 0;
+  }else{
+    return 0;
+  }
+
+  pTab = pMod->pEpoTab;
+  pVt = pTab->u.vtab.p;
+  if( !pVt || !pVt->pVtab ) return 1;
+  v = (DoltliteVtabCommon *)pVt->pVtab;
+  if( !v->zTableName ) return 1;
+
+  memset(&want, 0, sizeof(want));
+  want.iPkCol = -1;
+  db->bDoltliteHistoricalCheck = 1;
+  rc = doltliteLoadHistoricalTableColumns(
+      db, zName, v->zTableName, &want, &zErr);
+  db->bDoltliteHistoricalCheck = 0;
+  sqlite3_free(zErr);
+  /* A snapshot that never contained the table leaves the cached
+  ** declaration in place. The cursor then reports the table absent
+  ** at that ref. Dropping it here makes the module disappear. */
+  if( rc!=SQLITE_OK ){
+    doltliteFreeColInfo(&want);
+    return 0;
+  }
+  differ = want.nCol!=v->cols.nCol;
+  for(i=0; !differ && i<want.nCol; i++){
+    const char *zHave = v->cols.azName ? v->cols.azName[i] : 0;
+    const char *zNeed = want.azName ? want.azName[i] : 0;
+    if( !zHave || !zNeed || sqlite3_stricmp(zHave, zNeed)!=0 ) differ = 1;
+  }
+  doltliteFreeColInfo(&want);
+  return differ;
+}
+
 void doltliteHistoricalModulesReset(sqlite3 *db){
   HashElem *pElem;
   for(pElem=sqliteHashFirst(&db->aModule); pElem;

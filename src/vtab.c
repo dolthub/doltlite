@@ -1277,6 +1277,16 @@ int sqlite3VtabEponymousTableInit(Parse *pParse, Module *pMod){
   char *zErr = 0;
   int rc;
   sqlite3 *db = pParse->db;
+#ifdef DOLTLITE_PROLLY
+  /* The first xConnect caches this eponymous table's columns. A later
+  ** literal ref can name a different snapshot schema. Rebuild only when
+  ** nothing still references the cached table. */
+  if( pMod->pEpoTab && pMod->pEpoTab->nTabRef==1
+   && !(db->pVtabCtx && db->pVtabCtx->pTab==pMod->pEpoTab)
+   && doltliteHistoricalModuleStale(db, pMod) ){
+    sqlite3VtabEponymousTableClear(db, pMod);
+  }
+#endif
   if( pMod->pEpoTab ) return 1;
   if( pModule->xCreate!=0 && pModule->xCreate!=pModule->xConnect ) return 0;
   pTab = sqlite3DbMallocZero(db, sizeof(Table));

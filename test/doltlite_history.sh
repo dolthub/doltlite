@@ -466,4 +466,24 @@ run_test "pkmap_missing_history_eq" \
 
 rm -f "$DB"
 
+DB=/tmp/test_hist_schema_pin_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES (1, 10, 20), (2, 30, 40);
+SELECT dolt_commit('-Am', 'c1');
+ALTER TABLE t RENAME COLUMN b TO c;
+UPDATE t SET c = 21 WHERE id = 1;
+SELECT dolt_commit('-Am', 'c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "schema_head_then_old" \
+  "SELECT count(*) FROM dolt_history_t('HEAD');
+SELECT id || '|' || a || '|' || b || '|' || coalesce(c,'NULL') FROM dolt_history_t('HEAD~1') WHERE id=1;" \
+  "4
+1|10|20|NULL" "$DB"
+run_test_match "schema_old_then_head_hides_b" \
+  "SELECT b FROM dolt_history_t('HEAD~1') WHERE id=1;
+SELECT b FROM dolt_history_t('HEAD') WHERE id=1;" \
+  "no such column: b" "$DB"
+
+rm -f "$DB"
+
 dltest_finish

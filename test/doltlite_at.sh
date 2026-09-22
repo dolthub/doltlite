@@ -573,4 +573,84 @@ run_test_match "at_head_hides_other_branch_column" \
   "no such column: extra" "$DBSC"
 rm -f "$DBSC"
 
+# One connection, two refs whose column sets differ. The first reference
+# must not pin the eponymous schema for the second.
+DBPIN=/tmp/test_at_schema_pin_$$.db; rm -f "$DBPIN"
+$DOLTLITE "$DBPIN" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1, 10, 20, 30);
+SELECT dolt_commit('-Am', 'c1');
+ALTER TABLE t DROP COLUMN a;
+UPDATE t SET b=21 WHERE id=1;
+SELECT dolt_commit('-Am', 'c2');
+SQL
+run_test "at_drop_head_then_old" \
+  "SELECT id || '|' || b || '|' || c FROM dolt_at_t('HEAD');
+SELECT id || '|' || a || '|' || b || '|' || c FROM dolt_at_t('HEAD~1');" \
+  "1|21|30
+1|10|20|30" "$DBPIN"
+run_test "at_drop_old_then_head" \
+  "SELECT id || '|' || a || '|' || b || '|' || c FROM dolt_at_t('HEAD~1');
+SELECT id || '|' || b || '|' || c FROM dolt_at_t('HEAD');" \
+  "1|10|20|30
+1|21|30" "$DBPIN"
+run_test_match "at_drop_old_then_head_hides_a" \
+  "SELECT b FROM dolt_at_t('HEAD~1');
+SELECT a FROM dolt_at_t('HEAD');" \
+  "no such column: a" "$DBPIN"
+rm -f "$DBPIN"
+
+DBREN=/tmp/test_at_schema_rename_$$.db; rm -f "$DBREN"
+$DOLTLITE "$DBREN" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES (1, 10, 20), (2, 30, 40);
+SELECT dolt_commit('-Am', 'c1');
+ALTER TABLE t RENAME COLUMN b TO c;
+UPDATE t SET c = 21 WHERE id = 1;
+SELECT dolt_commit('-Am', 'c2');
+SQL
+run_test "at_rename_head_then_old" \
+  "SELECT id || '|' || a || '|' || c FROM dolt_at_t('HEAD') ORDER BY id;
+SELECT id || '|' || a || '|' || b || '|' || coalesce(c,'NULL') FROM dolt_at_t('HEAD~1') ORDER BY id;" \
+  "1|10|21
+2|30|40
+1|10|20|NULL
+2|30|40|NULL" "$DBREN"
+run_test "at_rename_old_then_head" \
+  "SELECT id || '|' || a || '|' || b || '|' || coalesce(c,'NULL') FROM dolt_at_t('HEAD~1') ORDER BY id;
+SELECT id || '|' || a || '|' || c FROM dolt_at_t('HEAD') ORDER BY id;" \
+  "1|10|20|NULL
+2|30|40|NULL
+1|10|21
+2|30|40" "$DBREN"
+run_test_match "at_rename_old_then_head_hides_b" \
+  "SELECT b FROM dolt_at_t('HEAD~1');
+SELECT b FROM dolt_at_t('HEAD');" \
+  "no such column: b" "$DBREN"
+run_test "at_working_column_after_head" \
+  "SELECT id || '|' || a || '|' || c FROM dolt_at_t('HEAD') ORDER BY id;
+ALTER TABLE t ADD COLUMN z INT;
+SELECT id || '|' || coalesce(z,'NULL') FROM dolt_at_t('WORKING') ORDER BY id;" \
+  "1|10|21
+2|30|40
+1|NULL
+2|NULL" "$DBREN"
+rm -f "$DBREN"
+
+DBMISS=/tmp/test_at_schema_absent_$$.db; rm -f "$DBMISS"
+$DOLTLITE "$DBMISS" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE u(a INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','c0');
+CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+INSERT INTO t VALUES(1,'x');
+SELECT dolt_commit('-Am','c1');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_commit('-Am','c2');
+SQL
+run_test_match "at_absent_after_present_ref" \
+  "SELECT a FROM dolt_at_t('HEAD~1');
+SELECT a FROM dolt_at_t('HEAD~2');" \
+  "table not found: t at HEAD~2" "$DBMISS"
+rm -f "$DBMISS"
+
 dltest_finish
