@@ -42,6 +42,18 @@ static int tableColumnIndex(const DoltliteColInfo *pCols, const char *zName){
   return -1;
 }
 
+/* Declared column, including generated ones. Column-info indexes skip
+** those, so they are not subscripts of Table.aCol. */
+static int tableDeclIndex(const Table *pTab, const char *zName){
+  int i;
+  if( !pTab || !zName ) return -1;
+  for(i=0; i<pTab->nCol; i++){
+    const char *zCol = pTab->aCol[i].zCnName;
+    if( zCol && sqlite3_stricmp(zCol, zName)==0 ) return i;
+  }
+  return -1;
+}
+
 typedef struct FkParentLookup FkParentLookup;
 struct FkParentLookup {
   int ready;
@@ -51,7 +63,8 @@ struct FkParentLookup {
   struct TableEntry *pParent;
   Table *pTab;
   DoltliteColInfo cols;
-  int *aiCol;
+  int *aiCol;       /* Index in cols, which omits generated columns */
+  int *aiDecl;      /* Index in Table.aCol, collation and affinity */
   ProllyCursor cur;
   Btree *pIndex;
   BtCursor *pIndexCur;
@@ -75,6 +88,7 @@ static void fkParentLookupClear(sqlite3 *db, FkParentLookup *p){
   sqlite3KeyInfoUnref(p->pKeyInfo);
   if( p->ready && p->pParent ) prollyCursorClose(&p->cur);
   sqlite3_free(p->aiCol);
+  sqlite3_free(p->aiDecl);
   doltliteFreeColInfo(&p->cols);
 }
 
@@ -108,14 +122,17 @@ static int fkParentLookupInit(
   if( !pTab ) return SQLITE_ERROR;
   p->pTab = pTab;
   p->aiCol = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(int));
+  p->aiDecl = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(int));
   p->pKeyInfo = sqlite3KeyInfoAlloc(db, nCol, 0);
-  if( !p->aiCol || !p->pKeyInfo ) return SQLITE_NOMEM;
+  if( !p->aiCol || !p->aiDecl || !p->pKeyInfo ) return SQLITE_NOMEM;
   for(int i=0; i<nCol; i++){
     int col = tableColumnIndex(&p->cols, azTo[i]);
+    int decl = tableDeclIndex(pTab, azTo[i]);
     const char *zColl;
-    if( col<0 || col>=pTab->nCol ) return SQLITE_ERROR;
+    if( col<0 || decl<0 ) return SQLITE_ERROR;
     p->aiCol[i] = col;
-    zColl = sqlite3ColumnColl(&pTab->aCol[col]);
+    p->aiDecl[i] = decl;
+    zColl = sqlite3ColumnColl(&pTab->aCol[decl]);
     p->pKeyInfo->aColl[i] = sqlite3FindCollSeq(db, ENC(db),
                                             zColl ? zColl : "BINARY", 0);
     if( !p->pKeyInfo->aColl[i] || !p->pKeyInfo->aColl[i]->xCmp ){
@@ -213,7 +230,7 @@ static int fkParentExistsInCatalog(
     Mem *pValue = &p->pProbe->aMem[i];
     rc = sqlite3VdbeMemCopy(pValue, (Mem*)sqlite3_column_value(pStmt, iFirst+i));
     if( rc!=SQLITE_OK ) return rc;
-    sqlite3ValueApplyAffinity(pValue, p->pTab->aCol[p->aiCol[i]].affinity, ENC(db));
+    sqlite3ValueApplyAffinity(pValue, p->pTab->aCol[p->aiDecl[i]].affinity, ENC(db));
     if( db->mallocFailed ) return SQLITE_NOMEM;
   }
   if( p->isIntPk ){

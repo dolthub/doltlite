@@ -2146,5 +2146,150 @@ run_test "text_affinity_merge_integrity" \
 run_test "text_affinity_merge_no_violations" \
   "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB101"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101"
+# A generated column before the parent key must not lend that key its
+# collation. BINARY 'a' does not match the remaining parent 'A'.
+DB102=/tmp/test_merge102_$$.db; rm -f "$DB102"
+$DOLTLITE "$DB102" > /dev/null 2>&1 <<'SQL'
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(
+  g TEXT COLLATE NOCASE GENERATED ALWAYS AS (code) VIRTUAL,
+  code TEXT UNIQUE,
+  id INTEGER PRIMARY KEY
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  code TEXT REFERENCES p(code)
+);
+INSERT INTO p(id, code) VALUES (1, 'A'), (2, 'a');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('right');
+DELETE FROM p WHERE code = 'a';
+SELECT dolt_commit('-Am', 'left');
+SELECT dolt_checkout('right');
+INSERT INTO c(id, code) VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "fk_virtual_nocase_before_key_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB102"
+run_test "fk_virtual_nocase_before_key_parent" \
+  "SELECT group_concat(id || ':' || code, ',') FROM (SELECT id, code FROM p ORDER BY id);" \
+  "1:A" "$DB102"
+run_test "fk_virtual_nocase_before_key_child" \
+  "SELECT count(*) FROM c;" "0" "$DB102"
+run_test "fk_virtual_nocase_before_key_check" \
+  "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB102"
+
+DB103=/tmp/test_merge103_$$.db; rm -f "$DB103"
+$DOLTLITE "$DB103" > /dev/null 2>&1 <<'SQL'
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(
+  g TEXT COLLATE NOCASE GENERATED ALWAYS AS (code) STORED,
+  code TEXT UNIQUE,
+  id INTEGER PRIMARY KEY
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  code TEXT REFERENCES p(code)
+);
+INSERT INTO p(id, code) VALUES (1, 'A'), (2, 'a');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('right');
+DELETE FROM p WHERE code = 'a';
+SELECT dolt_commit('-Am', 'left');
+SELECT dolt_checkout('right');
+INSERT INTO c(id, code) VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "fk_stored_nocase_before_key_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB103"
+run_test "fk_stored_nocase_before_key_parent" \
+  "SELECT group_concat(id || ':' || code, ',') FROM (SELECT id, code FROM p ORDER BY id);" \
+  "1:A" "$DB103"
+run_test "fk_stored_nocase_before_key_check" \
+  "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB103"
+
+# The same generated column after the key still reports the violation.
+DB104=/tmp/test_merge104_$$.db; rm -f "$DB104"
+$DOLTLITE "$DB104" > /dev/null 2>&1 <<'SQL'
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(
+  code TEXT UNIQUE,
+  g TEXT COLLATE NOCASE GENERATED ALWAYS AS (code) VIRTUAL,
+  id INTEGER PRIMARY KEY
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  code TEXT REFERENCES p(code)
+);
+INSERT INTO p(id, code) VALUES (1, 'A'), (2, 'a');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('right');
+DELETE FROM p WHERE code = 'a';
+SELECT dolt_commit('-Am', 'left');
+SELECT dolt_checkout('right');
+INSERT INTO c(id, code) VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "fk_virtual_nocase_after_key_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB104"
+run_test "fk_virtual_nocase_after_key_check" \
+  "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB104"
+
+# A leading generated column with no collation must not hide the parent
+# key's own NOCASE. Child 'a' matches parent 'A'.
+DB105=/tmp/test_merge105_$$.db; rm -f "$DB105"
+$DOLTLITE "$DB105" > /dev/null 2>&1 <<'SQL'
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(
+  g TEXT GENERATED ALWAYS AS (code) VIRTUAL,
+  code TEXT COLLATE NOCASE UNIQUE,
+  id INTEGER PRIMARY KEY
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  code TEXT REFERENCES p(code)
+);
+INSERT INTO p(id, code) VALUES (1, 'A');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('right');
+INSERT INTO p(id, code) VALUES (2, 'B');
+SELECT dolt_commit('-Am', 'left');
+SELECT dolt_checkout('right');
+INSERT INTO c(id, code) VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "fk_parent_nocase_with_leading_generated_merges" \
+  "SELECT dolt_merge('right');" "^[0-9a-f]{40}$" "$DB105"
+run_test "fk_parent_nocase_with_leading_generated_rows" \
+  "SELECT (SELECT group_concat(id || ':' || code, ',') FROM (SELECT id, code FROM p ORDER BY id)) || '|' || (SELECT group_concat(id || ':' || code, ',') FROM (SELECT id, code FROM c ORDER BY id));" \
+  "1:A,2:B|1:a" "$DB105"
+run_test "fk_parent_nocase_with_leading_generated_check" \
+  "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB105"
+
+$DOLTLITE "$DB102" > /tmp/test_merge102_txn_$$.out 2>/tmp/test_merge102_txn_$$.err <<'SQL'
+.headers off
+.mode list
+BEGIN;
+SELECT dolt_merge('right');
+SELECT 'TX|' ||
+       (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE "table"='c'),0) || '|' ||
+       COALESCE((SELECT id || ':' || code || ':' || violation_type FROM dolt_constraint_violations_c),'') || '|' ||
+       (SELECT count(*) FROM pragma_foreign_key_check);
+ROLLBACK;
+SQL
+TX102=$(grep -E '^TX\|' /tmp/test_merge102_txn_$$.out | head -1)
+if [ "$TX102" = "TX|1|1|1:a:foreign key|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: fk_virtual_nocase_before_key_txn\n  got=$TX102\n$(cat /tmp/test_merge102_txn_$$.out /tmp/test_merge102_txn_$$.err)"
+fi
+rm -f /tmp/test_merge102_txn_$$.out /tmp/test_merge102_txn_$$.err
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105"
 dltest_finish
