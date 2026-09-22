@@ -389,6 +389,7 @@ int normalizeSideToMergedLayout(
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
   u8 flags,
+  u8 srcFlags,
   const char *zAncSql,
   const char *zOursSql,
   const char *zTheirsSql,
