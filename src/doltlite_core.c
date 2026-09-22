@@ -849,6 +849,32 @@ static int doltliteCompareAndAdvanceBranchImpl(
   }
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
 
+  /* An unchanged tip does not mean an unchanged working set. Without a write
+  ** transaction the graph lock was free until the confirm, so a peer may have
+  ** written the working set since this session read it; persisting ours
+  ** would erase that write. The baseline is the catalog the session last
+  ** loaded or persisted; the working catalog can carry uncommitted VC changes.
+  ** A session that has loaded nothing since open has run no transaction, so
+  ** its working catalog is still the one it opened with. */
+  if( !bSwitchCatalog && pWorkingCatHash
+   && sqlite3_txn_state(db, "main")!=SQLITE_TXN_WRITE ){
+    ProllyHash baseCat, diskCat;
+    doltliteGetSessionCommittedCatalog(db, &baseCat);
+    if( prollyHashIsEmpty(&baseCat) ) baseCat = *pWorkingCatHash;
+    rc = doltliteGetBranchWorkingCatalog(db, &diskCat);
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&baseCat)
+     && !prollyHashIsEmpty(&diskCat)
+     && prollyHashCompare(&diskCat, &baseCat)!=0 ){
+      rc = SQLITE_BUSY;
+    }
+    if( rc!=SQLITE_OK ){
+      chunkStoreUnlock(cs);
+      doltliteInvalidateSessionWorkingState(db);
+      doltliteTxnStateClear(&saved);
+      return rc;
+    }
+  }
+
   /* Persist the tip under the confirm lock without SwitchCatalog; lock-cycling
   ** SQL between confirm and commit can let a peer land and then be clobbered. */
   rc = doltliteAdvanceBranchWithState(

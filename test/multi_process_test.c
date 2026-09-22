@@ -1048,6 +1048,65 @@ static void test_write_after_lost_commit_race(void){
   remove(path);
 }
 
+static void test_commit_does_not_erase_peer_write(void){
+  char path[256];
+  sqlite3 *db = 0;
+  int ready[2], release[2];
+  int rc, status;
+  pid_t pid;
+  char ch;
+  MpRefBusyCtx ctx;
+
+  printf("--- Test 6c: dolt_commit does not erase a peer's working-set write ---\n");
+  snprintf(path, sizeof(path), "/tmp/mp_ws_clobber_%d.db", (int)getpid());
+  setup_db(path);
+  check("mp_ws_clobber_open", sqlite3_open(path, &db)==SQLITE_OK);
+  check("mp_ws_clobber_first_write", execSql(db, "INSERT INTO t VALUES(2, 'mine')")==SQLITE_OK);
+  mpPipe(ready);
+  mpPipe(release);
+  pid = fork();
+  if( pid==0 ){
+    close(ready[0]);
+    close(release[1]);
+    db = 0;
+    if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(1);
+    sqlite3_busy_timeout(db, 10000);
+    if( execSql(db, "BEGIN IMMEDIATE")!=SQLITE_OK ) _exit(2);
+    mpWrite(ready[1], "R");
+    mpRead(release[0], &ch);
+    if( execSql(db, "INSERT INTO t VALUES(20, 'peer'); COMMIT")!=SQLITE_OK ) _exit(3);
+    mpWrite(ready[1], "D");
+    sqlite3_close(db);
+    _exit(0);
+  }
+  if( pid<0 ){ perror("fork"); _exit(1); }
+  close(ready[1]);
+  close(release[0]);
+  mpRead(ready[0], &ch);
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.releaseFd = release[1];
+  ctx.readyFd = ready[0];
+  sqlite3_busy_handler(db, mpReleaseBusyPeer, &ctx);
+  rc = execSql(db, "SELECT dolt_commit('-am','mine')");
+  check("mp_ws_clobber_commit_busy", rc==SQLITE_BUSY && ctx.calls>0);
+  if( ctx.calls==0 ) mpWrite(release[1], "G");
+  waitpid(pid, &status, 0);
+  check("mp_ws_clobber_peer_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
+  sqlite3_busy_timeout(db, 10000);
+  check("mp_ws_clobber_peer_write_kept",
+    strcmp(queryScalarText(db, "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)"),
+           "1,2,20")==0);
+  check("mp_ws_clobber_retry_commits",
+    strlen(queryScalarText(db, "SELECT dolt_commit('-am','retry')"))==40);
+  check("mp_ws_clobber_retry_contents",
+    strcmp(queryScalarText(db, "SELECT group_concat(id) FROM (SELECT id FROM dolt_at_t('HEAD') ORDER BY id)"),
+           "1,2,20")==0);
+  sqlite3_close(db);
+  close(ready[0]);
+  close(release[1]);
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
@@ -1062,6 +1121,7 @@ int main(){
   test_gc_blocked_by_writer();
   test_cross_process_commit_conflict();
   test_write_after_lost_commit_race();
+  test_commit_does_not_erase_peer_write();
   test_cross_process_commit_after_peer();
   test_many_process_commit_contention();
 

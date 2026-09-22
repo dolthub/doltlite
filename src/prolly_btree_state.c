@@ -853,6 +853,29 @@ void doltliteInvalidateSessionWorkingState(sqlite3 *db){
   }
 }
 
+void doltliteGetSessionCommittedCatalog(sqlite3 *db, ProllyHash *pCat){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    *pCat = db->aDb[0].pBt->committedCatalogHash;
+  }else{
+    memset(pCat, 0, sizeof(*pCat));
+  }
+}
+
+int doltliteGetBranchWorkingCatalog(sqlite3 *db, ProllyHash *pCat){
+  Btree *p;
+  BtreeBranchState state;
+  int rc;
+  memset(pCat, 0, sizeof(*pCat));
+  if( !db || db->nDb<1 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  p = db->aDb[0].pBt;
+  rc = btreeLoadBranchState(&p->pBt->store, p->zBranch ? p->zBranch : "main",
+                            0, &state);
+  if( rc!=SQLITE_OK ) return rc;
+  *pCat = state.catalog;
+  btreeClearBranchState(&state);
+  return SQLITE_OK;
+}
+
 void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     memcpy(pStaged, &db->aDb[0].pBt->vc.stagedCatalog, sizeof(ProllyHash));
