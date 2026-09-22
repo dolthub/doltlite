@@ -12,6 +12,23 @@ static int cursorHasTreePrefix(BtCursor *pCur){
       && pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry->node.nValuePrefix;
 }
 
+static int cursorLoadFullLeaf(BtCursor *pCur){
+  ProllyCursorLevel *pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
+  ProllyCacheEntry *pFull;
+  int rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
+                          &pLevel->pEntry->hash, &pFull);
+  if( rc!=SQLITE_OK ) return rc;
+  assert( pCur->pCachedFrom==0 );
+  /* Previously fetched fields may borrow the prefix until the cursor moves. */
+  pCur->pCachedFrom = pLevel->pEntry;
+  if( pLevel->pEntry->node.nValuePrefix<PROLLY_NODE_VALUE_PREFIX
+   && !(pCur->curFlags & BTCF_WriteFlag) ){
+    pCur->pCur.bAllowPrefix = 0;
+  }
+  pLevel->pEntry = pFull;
+  return SQLITE_OK;
+}
+
 void prollyBtreeCursorCurrentTreeValueSpan(
   BtCursor *pCur,
   const u8 **ppData,
@@ -47,14 +64,10 @@ int prollyBtreeCursorCurrentTreeValueCopy(
     return SQLITE_CORRUPT_BKPT;
   }
   if( (i64)offset + amt>nAvail && cursorHasTreePrefix(pCur) ){
-    ProllyCursorLevel *pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
-    ProllyCacheEntry *pFull;
-    int rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
-                            &pLevel->pEntry->hash, &pFull);
+    int rc = cursorLoadFullLeaf(pCur);
     if( rc!=SQLITE_OK ) return rc;
-    prollyNodeValue(&pFull->node, pLevel->idx, &pData, &nData);
+    prollyBtreeCursorCurrentTreeValueSpan(pCur, &pData, &nData, &nAvail);
     memcpy(pBuf, pData + offset, amt);
-    prollyCacheRelease(pCur->pCur.pCache, pFull);
     return SQLITE_OK;
   }
   if( amt>0 ){
@@ -243,20 +256,8 @@ int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   }
 
   if( cursorHasTreePrefix(pCur) ){
-    ProllyCursorLevel *pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
-    ProllyCacheEntry *pFull;
-    const u8 *pVal;
-    int nVal;
-    int rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
-                            &pLevel->pEntry->hash, &pFull);
+    int rc = cursorLoadFullLeaf(pCur);
     if( rc!=SQLITE_OK ) return cursorPayloadFault(pCur, rc, ppData, pnData);
-    prollyNodeValue(&pFull->node, pLevel->idx, &pVal, &nVal);
-    rc = cacheCursorPayloadCopy(pCur, pVal, nVal);
-    prollyCacheRelease(pCur->pCur.pCache, pFull);
-    if( rc!=SQLITE_OK ) return cursorPayloadFault(pCur, rc, ppData, pnData);
-    *ppData = pCur->pCachedPayload;
-    *pnData = pCur->nCachedPayload;
-    return SQLITE_OK;
   }
 
   if( pCur->curIntKey ){

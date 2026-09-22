@@ -3,50 +3,53 @@ source $testdir/tester.tcl
 source $testdir/malloc_common.tcl
 set testprefix doltlite-prefix-cache
 
-foreach key {{INTEGER PRIMARY KEY} {TEXT PRIMARY KEY} {TEXT PRIMARY KEY COLLATE NOCASE} {TEXT PRIMARY KEY COLLATE RTRIM}} {
-  reset_db
-  forcedelete prefix-oracle.db
-  sqlite3 oracle {file:prefix-oracle.db?doltlite_engine=sqlite} -uri 1
-  foreach conn {db oracle} {
-    $conn eval "CREATE TABLE t(id $key,v INTEGER,b BLOB,tail TEXT)"
-    $conn eval {
-      PRAGMA cache_size=-256;
-      WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<128)
-      INSERT INTO t SELECT i,i,CAST(printf('%016384d',i) AS BLOB),
-                           printf('tail-%d',i) FROM c;
-      CREATE INDEX tv ON t(v);
-    }
-  }
-  foreach state {stored pending rollback committed} {
+foreach {payload rows cache} {16384 128 256 256 1024 128 1024 1024 128} {
+  set next [expr {$rows+1}]
+  foreach key {{INTEGER PRIMARY KEY} {TEXT PRIMARY KEY} {TEXT PRIMARY KEY COLLATE NOCASE} {TEXT PRIMARY KEY COLLATE RTRIM}} {
+    reset_db
+    forcedelete prefix-oracle.db
+    sqlite3 oracle {file:prefix-oracle.db?doltlite_engine=sqlite} -uri 1
     foreach conn {db oracle} {
-      switch $state {
-        pending {$conn eval {
-          BEGIN;
-          UPDATE t SET b=X'012345',tail='changed' WHERE v=4;
-          DELETE FROM t WHERE v=5;
-          INSERT INTO t VALUES(129,129,zeroblob(32768),'new');
-        }}
-        rollback {$conn eval {ROLLBACK}}
-        committed {$conn eval {
-          UPDATE t SET tail=tail||'-changed' WHERE v=20;
-          DELETE FROM t WHERE v=21;
-        }}
+      $conn eval "CREATE TABLE t(id $key,v INTEGER,b BLOB,tail TEXT)"
+      $conn eval "PRAGMA cache_size=-$cache"
+      $conn eval {
+        WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<$rows)
+        INSERT INTO t SELECT i,i,CAST(printf('%0*d',$payload,i) AS BLOB),
+                             printf('tail-%d',i) FROM c;
+        CREATE INDEX tv ON t(v);
       }
-      $conn eval {SELECT sum(v),sum(length(b)) FROM t NOT INDEXED}
     }
-    foreach {name query} {
-      metadata {SELECT sum(v),sum(length(b)),sum(octet_length(b)),min(typeof(b)) FROM t NOT INDEXED}
-      contents {SELECT id,hex(b),tail,v FROM t ORDER BY id}
-      reverse {SELECT id,tail,length(b),hex(substr(b,-12)) FROM t ORDER BY id DESC}
-      point {SELECT a.id,b.tail,hex(substr(b.b,-12)),a.v FROM t a JOIN t b ON a.id=b.id ORDER BY a.id}
-      range {SELECT id,length(b),tail FROM t WHERE id BETWEEN 10 AND 90 ORDER BY id}
-      indexed {SELECT id,tail,hex(substr(b,-12)) FROM t INDEXED BY tv WHERE v BETWEEN 30 AND 90 ORDER BY v}
-      materialized {WITH c AS MATERIALIZED (SELECT * FROM t) SELECT id,tail,hex(substr(b,-12)) FROM c ORDER BY id}
-    } {
-      do_test $key-$state-$name [list db eval $query] [oracle eval $query]
+    foreach state {stored pending rollback committed} {
+      foreach conn {db oracle} {
+        switch $state {
+          pending {$conn eval {
+            BEGIN;
+            UPDATE t SET b=X'012345',tail='changed' WHERE v=4;
+            DELETE FROM t WHERE v=5;
+            INSERT INTO t VALUES($next,$next,zeroblob(32768),'new');
+          }}
+          rollback {$conn eval {ROLLBACK}}
+          committed {$conn eval {
+            UPDATE t SET tail=tail||'-changed' WHERE v=20;
+            DELETE FROM t WHERE v=21;
+          }}
+        }
+        $conn eval {SELECT sum(v),sum(length(b)) FROM t NOT INDEXED}
+      }
+      foreach {name query} {
+        metadata {SELECT sum(v),sum(length(b)),sum(octet_length(b)),min(typeof(b)) FROM t NOT INDEXED}
+        contents {SELECT id,hex(b),tail,v FROM t ORDER BY id}
+        reverse {SELECT id,tail,length(b),hex(substr(b,-12)) FROM t ORDER BY id DESC}
+        point {SELECT a.id,b.tail,hex(substr(b.b,-12)),a.v FROM t a JOIN t b ON a.id=b.id ORDER BY a.id}
+        range {SELECT id,length(b),tail FROM t WHERE id BETWEEN 10 AND 90 ORDER BY id}
+        indexed {SELECT id,tail,hex(substr(b,-12)) FROM t INDEXED BY tv WHERE v BETWEEN 30 AND 90 ORDER BY v}
+        materialized {WITH c AS MATERIALIZED (SELECT * FROM t) SELECT id,tail,hex(substr(b,-12)) FROM c ORDER BY id}
+      } {
+        do_test $payload-$key-$state-$name [list db eval $query] [oracle eval $query]
+      }
     }
+    oracle close
   }
-  oracle close
 }
 
 reset_db
