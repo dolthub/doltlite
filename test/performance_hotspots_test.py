@@ -245,7 +245,7 @@ class HotspotTests(unittest.TestCase):
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
-            self.assertEqual(len(hotspots.SECTIONS), 3)
+            self.assertEqual(len(hotspots.SECTIONS), 4)
 
     def test_index_edits_get_their_own_section_after_add_column(self):
         with tempfile.TemporaryDirectory() as directory:

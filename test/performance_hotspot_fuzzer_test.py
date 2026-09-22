@@ -154,7 +154,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_main_preserves_timeout_reproducer_without_confirming_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp)/"results"
-            with patch.object(fuzzer.Runner, "run", return_value="ok"), \
+            with patch.object(fuzzer.shutil, "copyfile"), patch.object(fuzzer.Runner, "run", return_value="ok"), \
                  patch.object(fuzzer, "binary_info", return_value={}), \
                  patch.object(fuzzer, "profile_for", return_value=self.profile), \
                  patch.object(fuzzer, "measure_case", side_effect=fuzzer.CaseTimeout("timed out")):

@@ -6,23 +6,23 @@ on:
   workflow_dispatch:
     inputs:
       seed:
-        description: Reproducible workload seed (empty uses the UTC date)
+        description: Reproducible workload seed (empty uses run ID and attempt)
         default: ''
-      profiles:
-        description: Number of randomized table and cache configurations
-        default: '32'
 
 permissions:
   contents: read
 
 concurrency:
-  group: nightly-hotspots-${{ github.ref }}
+  group: nightly-hotspots
   cancel-in-progress: false
 
 jobs:
   discover:
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    permissions:
+      contents: read
+      issues: write
     steps:
     - uses: actions/checkout@v4
 
@@ -45,18 +45,51 @@ jobs:
         bash test/build_stock_reference.sh --shell-only build-stockref build/doltlite
 
     - name: Test discovery harness
-      run: python3 test/performance_hotspot_fuzzer_test.py
+      run: |
+        python3 test/performance_hotspot_fuzzer_test.py
+        python3 test/performance_hotspot_search_test.py
+
+    - name: Restore exploration history
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/hotspot-history.json
+        key: hotspot-history-v2-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: hotspot-history-v2-
+
+    - name: Read known and previously filed hotspots
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python3 test/performance_hotspot_issues.py snapshot --output "$RUNNER_TEMP/hotspot-issues.json"
 
     - name: Search for repeatable 3x hotspots
       env:
         DISCOVERY_SEED: ${{ inputs.seed }}
-        DISCOVERY_PROFILES: ${{ inputs.profiles || '32' }}
       run: |
         python3 test/performance_hotspot_fuzzer.py \
           --doltlite build/doltlite --sqlite build-stockref/sqlite3 \
-          --seed "${DISCOVERY_SEED:-$(date -u +%Y%m%d)}" \
-          --profiles "$DISCOVERY_PROFILES" --runs 5 --seconds 1800 \
+          --seed "${DISCOVERY_SEED:-${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}}" \
+          --search --history "$RUNNER_TEMP/hotspot-history.json" \
+          --issues "$RUNNER_TEMP/hotspot-issues.json" --runs 5 --seconds 1800 \
           --output "$RUNNER_TEMP/hotspot-discovery"
+
+    - name: File new confirmed hotspots
+      if: ${{ !cancelled() }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        if [ -f "$RUNNER_TEMP/hotspot-discovery/results.json" ]; then
+          python3 test/performance_hotspot_issues.py publish \
+            --output "$RUNNER_TEMP/hotspot-discovery" --run-url "$RUN_URL"
+        fi
+
+    - name: Save exploration history
+      if: ${{ !cancelled() }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/hotspot-history.json
+        key: hotspot-history-v2-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Publish discovery summary
       if: always()
@@ -72,7 +105,10 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: hotspot-discovery-${{ github.run_id }}
-        path: ${{ runner.temp }}/hotspot-discovery
+        path: |
+          ${{ runner.temp }}/hotspot-discovery
+          ${{ runner.temp }}/hotspot-history.json
+          ${{ runner.temp }}/hotspot-issues.json
         retention-days: 30
 
   watchdog:

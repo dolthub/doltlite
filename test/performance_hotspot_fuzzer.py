@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 import math
@@ -10,9 +10,12 @@ import platform
 import random
 import re
 import statistics
+import shutil
 import subprocess
 import tempfile
 import time
+
+from performance_hotspot_search import Search, VERSION, family_fingerprint, fingerprint
 
 TEST_DIR = Path(__file__).resolve().parent
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
@@ -38,6 +41,8 @@ class Case:
     name: str
     sql: str
     verify: str = ""
+    prepare: str = ""
+    recipe: dict = field(default_factory=dict)
 
 
 def profile_for(seed, index):
@@ -119,14 +124,18 @@ def prologue(cache_kib):
 
 
 def unit_sql(case, timed):
-    parts = ["BEGIN;"] if case.verify else []
+    parts = ["BEGIN;"] if case.verify or case.prepare else []
+    if case.prepare:
+        parts += [".output /dev/null", case.prepare, ".output stdout"]
     if timed:
         parts.append(".timer on")
     parts.append(case.sql)
     if timed:
         parts.append(".timer off")
     if case.verify:
-        parts += [case.verify, "ROLLBACK;"]
+        parts.append(case.verify)
+    if case.verify or case.prepare:
+        parts.append("ROLLBACK;")
     return "\n".join(parts) + "\n"
 
 
@@ -271,7 +280,7 @@ def save_report(output, report):
               "and measured SQL are in the artifact.", "",
               "Replay a case with the same two binaries:", "```sh",
               "python3 test/performance_hotspot_fuzzer.py --doltlite build/doltlite "
-              "--sqlite build-stockref/sqlite3 --replay ARTIFACT/p000/CASE.json --output replay-results",
+              "--sqlite build-stockref/sqlite3 --replay ARTIFACT/hotspot-discovery/p000/CASE.json --output replay-results",
               "```"]
     if timeouts:
         lines += ["", "### Timed out (unconfirmed)", ""]
@@ -295,6 +304,9 @@ def main(argv=None):
     parser.add_argument("--sqlite", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--seed", type=int, default=20260922)
+    parser.add_argument("--search", action="store_true", help="generate SQL until the time budget expires")
+    parser.add_argument("--history", type=Path)
+    parser.add_argument("--issues", type=Path)
     parser.add_argument("--profiles", type=positive, default=12)
     parser.add_argument("--profile", type=int)
     parser.add_argument("--case", choices=[x.name for x in cases_for(profile_for(0, 0))])
@@ -306,14 +318,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.runs < 5 or args.profiles > 128 or (args.profile is not None and args.profile < 0):
         parser.error("require at least 5 confirmation pairs, at most 128 profiles, and a nonnegative profile index")
+    if args.search and (args.replay or args.profile is not None or args.case):
+        parser.error("--search cannot be combined with replay/profile/case filters")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         parser.error("output directory must be empty")
     binaries = {"doltlite": args.doltlite.resolve(), "sqlite": args.sqlite.resolve()}
+    issues = json.loads(args.issues.read_text()) if args.issues else []
+    search = Search(args.seed, args.history, issues)
     runner = Runner(args.seconds, args.timeout)
     report = {"seed": args.seed, "runs": args.runs, "threshold": 3.0, "min_ms": args.min_ms,
-              "platform": platform.platform(),
+              "generator_version": VERSION, "platform": platform.platform(),
               "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "status": "running", "profiles_completed": 0, "cases": []}
     save_report(output, report)
     try:
@@ -325,17 +341,21 @@ def main(argv=None):
         if args.replay:
             replay = json.loads(args.replay.read_text())
             report["seed"] = replay["seed"]
-            if replay["setup"] != "setup.sql" or replay["case"]["name"] not in {x.name for x in cases_for(profile_for(0, 0))}:
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,80}", replay["case"]["name"]) or replay.get("setup", "setup.sql") != "setup.sql":
                 raise ValueError("invalid reproducer")
             specs = [(0, Profile(**replay["profile"]), [Case(**replay["case"])],
-                      (args.replay.parent/replay["setup"]).read_text())]
+                      replay["setup_sql"] if "setup_sql" in replay else (args.replay.parent/"setup.sql").read_text(), "replay")]
+        elif args.search:
+            specs = search.specs(args.seed)
         else:
             specs = []
             for index in indexes:
                 profile = profile_for(args.seed, index)
                 cases = [x for x in cases_for(profile) if not args.case or x.name == args.case]
-                specs.append((index, profile, cases, fixture_sql(profile)))
-        for index, profile, cases, setup in specs:
+                specs.append((index, profile, cases, fixture_sql(profile), "template"))
+        for index, profile, cases, setup, origin in specs:
+            if time.monotonic() >= runner.deadline:
+                raise BudgetExpired()
             directory = output/f"p{index:03d}"
             directory.mkdir()
             (directory/"setup.sql").write_text(setup)
@@ -344,27 +364,42 @@ def main(argv=None):
                 for arm, binary in binaries.items():
                     runner.run([str(binary), str(databases[arm])], prologue(profile.cache_kib)+setup, setup=True)
                 for case in cases:
-                    record = {"id": f"p{index:03d}/{case.name}", "profile": asdict(profile),
-                              "reproducer": f"p{index:03d}/{case.name}.json"}
-                    repro = {"seed": report["seed"], "profile": asdict(profile), "case": asdict(case), "setup": "setup.sql"}
-                    (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
-                    (directory/(case.name+".sql")).write_text(session_sql(profile, case, 1))
-                    runner.case_deadline = time.monotonic() + args.timeout
-                    try:
-                        record["plans"] = {arm: runner.run([str(binary), str(databases[arm])],
-                            prologue(profile.cache_kib)+"EXPLAIN QUERY PLAN "+case.sql) for arm, binary in binaries.items()}
-                        record.update(measure_case(runner, binaries, databases, profile, case, args.runs, 3.0, args.min_ms))
-                        (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"]))
-                    except CaseTimeout as exc:
-                        record["timeout"] = str(exc)
-                    except (RuntimeError, ValueError) as exc:
-                        record["error"] = str(exc)
-                    finally:
-                        runner.case_deadline = None
-                    report["cases"].append(record)
-                    save_report(output, report)
-                    print(record["id"], "ERROR" if "error" in record else "TIMEOUT (unconfirmed)" if "timeout" in record else
-                          f"{record['ratio'] or 0:.2f}x {'CONFIRMED' if record['confirmed'] else 'screened'}", flush=True)
+                    with tempfile.TemporaryDirectory(prefix="case-", dir=tmp) as scratch:
+                        case_databases = {arm: Path(scratch)/(arm+".db") for arm in binaries}
+                        for arm in binaries:
+                            shutil.copyfile(databases[arm], case_databases[arm])
+                        record = {"id": f"p{index:03d}/{case.name}", "profile": asdict(profile),
+                                  "reproducer": f"p{index:03d}/{case.name}.json",
+                                  "origin": "fresh" if args.search and case.name != "generated_0" else origin}
+                        repro = {"seed": report["seed"], "generator_version": VERSION, "profile": asdict(profile),
+                                 "case": asdict(case), "setup": "setup.sql", "setup_sql": setup}
+                        (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
+                        (directory/(case.name+".sql")).write_text(session_sql(profile, case, 1))
+                        runner.case_deadline = time.monotonic() + args.timeout
+                        try:
+                            record["plans"] = {arm: runner.run([str(binary), str(case_databases[arm])],
+                                prologue(profile.cache_kib)+"EXPLAIN QUERY PLAN "+case.sql) for arm, binary in binaries.items()}
+                            record["family"] = family_fingerprint(profile, case, record["plans"])
+                            record["fingerprint"] = fingerprint(profile, case, record["plans"])
+                            record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms))
+                            (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"]))
+                            repro.update(expected=record["result"], repeats=record["repeats"], fingerprint=record["fingerprint"], family=record["family"])
+                            (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
+                        except BudgetExpired:
+                            record["incomplete"] = "search budget exhausted during confirmation"
+                            report["cases"].append(record)
+                            raise
+                        except CaseTimeout as exc:
+                            record["timeout"] = str(exc)
+                        except (RuntimeError, ValueError) as exc:
+                            record["error"] = str(exc)
+                        finally:
+                            runner.case_deadline = None
+                        search.observe(profile, case, record)
+                        report["cases"].append(record)
+                        save_report(output, report)
+                        print(record["id"], "ERROR" if "error" in record else "TIMEOUT (unconfirmed)" if "timeout" in record else
+                              f"{record['ratio'] or 0:.2f}x {'CONFIRMED' if record['confirmed'] else 'screened'}", flush=True)
             report["profiles_completed"] += 1
         report["status"] = "complete"
     except BudgetExpired:
