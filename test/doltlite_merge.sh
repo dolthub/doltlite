@@ -1691,5 +1691,133 @@ run_test "merge_unique_insert_one_and_one_real_conflicts" \
 run_test "merge_unique_insert_one_and_one_real_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB91"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91"
+# Partial index predicate must see VIRTUAL columns and the stored columns
+# declared after them. A mis-bind used to commit the row outside the index.
+DB92=/tmp/test_merge92_$$.db; rm -f "$DB92"
+$DOLTLITE "$DB92" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id TEXT PRIMARY KEY,
+  x INT,
+  v INT GENERATED ALWAYS AS (x) VIRTUAL
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(x) WHERE v > 0;
+INSERT INTO t(id, x) VALUES('a', 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, x) VALUES('b', 5);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, x) VALUES('c', 5);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "partial_virtual_where_autocommit" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB92"
+run_test "partial_virtual_where_rows" \
+  "SELECT group_concat(id || ':' || x, ',') FROM (SELECT id, x FROM t ORDER BY id);" \
+  "a:1,b:5" "$DB92"
+run_test "partial_virtual_where_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB92"
+$DOLTLITE "$DB92" > /tmp/test_merge92_txn_$$.out 2>/tmp/test_merge92_txn_$$.err <<'SQL'
+.headers off
+.mode list
+BEGIN;
+SELECT dolt_merge('right');
+SELECT count(*) FROM dolt_constraint_violations;
+SELECT CASE WHEN integrity_check LIKE '%missing%' THEN 'missing' ELSE 'present' END
+  FROM pragma_integrity_check;
+ROLLBACK;
+SQL
+TX92=$(grep -E '^[0-9]+$' /tmp/test_merge92_txn_$$.out | head -1)
+PR92=$(grep -E '^(missing|present)$' /tmp/test_merge92_txn_$$.out | head -1)
+if [ "$TX92" != "0" ] && [ -n "$TX92" ] && [ "$PR92" = "present" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: partial_virtual_where_txn_index\n  violations=$TX92 integrity=$PR92\n$(cat /tmp/test_merge92_txn_$$.out /tmp/test_merge92_txn_$$.err)"
+fi
+rm -f /tmp/test_merge92_txn_$$.out /tmp/test_merge92_txn_$$.err
+
+DB93=/tmp/test_merge93_$$.db; rm -f "$DB93"
+$DOLTLITE "$DB93" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  a INT PRIMARY KEY,
+  g INT GENERATED ALWAYS AS (a) VIRTUAL,
+  b INT
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(b) WHERE b > 0;
+INSERT INTO t(a, b) VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(a, b) VALUES(2, 5);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(a, b) VALUES(3, 5);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "partial_after_virtual_autocommit" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB93"
+run_test "partial_after_virtual_rows" \
+  "SELECT group_concat(a || ':' || b, ',') FROM (SELECT a, b FROM t ORDER BY a);" \
+  "1:0,2:5" "$DB93"
+run_test "partial_after_virtual_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB93"
+
+DB94=/tmp/test_merge94_$$.db; rm -f "$DB94"
+$DOLTLITE "$DB94" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  g INT GENERATED ALWAYS AS (id) VIRTUAL,
+  b INT
+);
+CREATE INDEX ix ON t(b) WHERE b > 0;
+INSERT INTO t(id, b) VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, b) VALUES(2, 5);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, b) VALUES(3, 7);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "partial_rowid_after_virtual_merges" \
+  "SELECT dolt_merge('right');" "^[0-9a-f]{40}$" "$DB94"
+run_test "partial_rowid_after_virtual_index" \
+  "SELECT group_concat(id || ':' || b, ',') FROM (SELECT id, b FROM t INDEXED BY ix WHERE b>0 ORDER BY id);" \
+  "2:5,3:7" "$DB94"
+run_test "partial_rowid_after_virtual_scan" \
+  "SELECT group_concat(id || ':' || b, ',') FROM (SELECT id, b FROM t NOT INDEXED WHERE b>0 ORDER BY id);" \
+  "2:5,3:7" "$DB94"
+run_test "partial_rowid_after_virtual_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB94"
+
+DB95=/tmp/test_merge95_$$.db; rm -f "$DB95"
+$DOLTLITE "$DB95" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  s INT GENERATED ALWAYS AS (id) STORED,
+  b INT
+);
+CREATE UNIQUE INDEX ux ON t(b) WHERE b > 0;
+INSERT INTO t(id, b) VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, b) VALUES(2, 5);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, b) VALUES(3, 5);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "partial_after_stored_autocommit" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB95"
+run_test "partial_after_stored_rows" \
+  "SELECT group_concat(id || ':' || b, ',') FROM (SELECT id, b FROM t ORDER BY id);" \
+  "1:0,2:5" "$DB95"
+run_test "partial_after_stored_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB95"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95"
 dltest_finish
