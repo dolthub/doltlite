@@ -1,0 +1,35 @@
+{
+  "seed": 20260922,
+  "profile": {
+    "rows": 65536,
+    "payload": 256,
+    "key": "integer",
+    "groups": 256,
+    "skew": false,
+    "cache_kib": 4096,
+    "stride": 32,
+    "lookups": 1000,
+    "target": 94,
+    "start": 29341,
+    "width": 4096
+  },
+  "case": {
+    "name": "point_payload",
+    "sql": "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<1000) SELECT sum((SELECT length(payload) FROM t WHERE id=1+(c.i*2654435761)%65536)) FROM c;",
+    "verify": "",
+    "prepare": "",
+    "recipe": {}
+  },
+  "setup_sql": "CREATE TABLE t(id INTEGER PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);\nBEGIN;\nWITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(4097) UNION ALL SELECT i+1 FROM c WHERE i<8192) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(8193) UNION ALL SELECT i+1 FROM c WHERE i<12288) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(12289) UNION ALL SELECT i+1 FROM c WHERE i<16384) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(16385) UNION ALL SELECT i+1 FROM c WHERE i<20480) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(20481) UNION ALL SELECT i+1 FROM c WHERE i<24576) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(24577) UNION ALL SELECT i+1 FROM c WHERE i<28672) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(28673) UNION ALL SELECT i+1 FROM c WHERE i<32768) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(32769) UNION ALL SELECT i+1 FROM c WHERE i<36864) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(36865) UNION ALL SELECT i+1 FROM c WHERE i<40960) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(40961) UNION ALL SELECT i+1 FROM c WHERE i<45056) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(45057) UNION ALL SELECT i+1 FROM c WHERE i<49152) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(49153) UNION ALL SELECT i+1 FROM c WHERE i<53248) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(53249) UNION ALL SELECT i+1 FROM c WHERE i<57344) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(57345) UNION ALL SELECT i+1 FROM c WHERE i<61440) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(61441) UNION ALL SELECT i+1 FROM c WHERE i<65536) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nCOMMIT;\nCREATE INDEX t_g ON t(grp);\nCREATE INDEX t_gv ON t(grp,v);\nANALYZE;\n",
+  "issue": 3133,
+  "category": "narrow_rows",
+  "expected": "256000",
+  "repeats": 33,
+  "fingerprint": "c54704d4fe95c5bf53b8bead",
+  "family": "62a098b42ccc00a88c1bc2dc",
+  "discovery": {
+    "commit": "6eea51a61989e4b51ab45105e9b0af6103ca479a",
+    "median_ratio": 4.354563941219355,
+    "minimum_ratio": 4.184378024268593
+  }
+}

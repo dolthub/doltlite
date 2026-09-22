@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -116,6 +117,8 @@ class HotspotTests(unittest.TestCase):
             raw = Path(directory) / "samples.tsv"
             values = {name: 100000 for name in self.names[:4]}
             index_values = {name: 100000 for name in self.names[4:]}
+            retained_values = {f"retained_3133_{category}_probe": 100000
+                               for category in ("wide_rows", "narrow_rows", "zero_row_updates")}
             with patch.object(hotspots, "run", return_value="validated") as run, \
                  patch.object(hotspots, "prepare", side_effect=lambda binary, db, rows: db.touch()), \
                  patch.object(hotspots, "measure_queries", side_effect=lambda *args: dict(values)) as measure, \
@@ -129,10 +132,15 @@ class HotspotTests(unittest.TestCase):
                               side_effect=lambda binary, db, rows: (db.touch(), {"x": "1"})[1]) as index_edit_fixture, \
                  patch.object(hotspots, "measure_index_edits",
                               return_value={"index_edit_update": 100000}) as index_edit_measure, \
+                 patch.object(hotspots, "prepare_retained", return_value=[]) as prepare_retained, \
+                 patch.object(hotspots, "measure_retained", return_value=retained_values) as measure_retained, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
+            prepare_retained.assert_called_once()
+            self.assertEqual([call.args[1] for call in measure_retained.call_args_list],
+                             ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
                                          str(Path("stock").resolve()), str(Path("candidate").resolve())])
             self.assertEqual([call.args[0].name for call in measure.call_args_list],
@@ -161,8 +169,9 @@ class HotspotTests(unittest.TestCase):
             self.assertEqual(result.read_text(), "".join(
                 f"queries\t{name}\t100000\t100000\n" for name in self.names)
                 + "add_column\tadd_column_default\t100000\t100000\n"
-                + "index_edits\tindex_edit_update\t100000\t100000\n")
-            self.assertEqual(len(raw.read_text().splitlines()), 15)
+                + "index_edits\tindex_edit_update\t100000\t100000\n"
+                + "".join(f"{hotspots.section_of(name)}\t{name}\t100000\t100000\n" for name in retained_values))
+            self.assertEqual(len(raw.read_text().splitlines()), 21)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -245,7 +254,78 @@ class HotspotTests(unittest.TestCase):
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
-            self.assertEqual(len(hotspots.SECTIONS), 4)
+            self.assertEqual(len(hotspots.SECTIONS), 7)
+
+    def test_discovered_corpus_categories_and_shared_fixtures(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
+            fixtures = hotspots.prepare_retained({'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
+        counts = {category: 0 for category in ('wide_rows', 'narrow_rows', 'zero_row_updates')}
+        for name, bundle, databases in fixtures:
+            category = hotspots.section_of(name)
+            counts[category] += 1
+            self.assertEqual(category, bundle['category'])
+            self.assertGreaterEqual(bundle['discovery']['minimum_ratio'], 3)
+            self.assertNotIn('COMMIT', bundle['case']['sql'])
+            if category == 'wide_rows':
+                self.assertEqual(bundle['profile']['payload'], 16384)
+                self.assertEqual(bundle['profile']['rows'], 16384)
+            elif category == 'narrow_rows':
+                self.assertIn(bundle['profile']['payload'], (256, 1024))
+            else:
+                self.assertTrue(bundle['expected'].startswith('0|'))
+        self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2})
+        self.assertEqual(sql.call_count, 15)
+        wide = [databases for name, bundle, databases in fixtures if bundle['category'] == 'wide_rows']
+        self.assertTrue(all(databases == wide[0] for databases in wide))
+
+    def test_retained_gate_measures_fixed_batches(self):
+        bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-corpus/narrow_rows_point_pk.json').read_text())
+        bundle['repeats'] = 2
+        expected = bundle['expected']
+        output = f'WARM\n{expected}\nMEASURE\n' + (f'{expected}\nRun Time: real 0.008 user 0.008 sys 0.0\n'*2) + 'END\n'
+        with patch.object(hotspots, 'sql', return_value=output):
+            measured = hotspots.measure_retained('engine', 'candidate', [('case', bundle, {'candidate': 'db'})])
+        self.assertEqual(measured, {'case': 16000})
+
+    def test_zero_row_updates_verify_zero_changes_and_rollback(self):
+        from dataclasses import replace
+        from performance_hotspot_fuzzer import Profile, fixture_sql
+        paths = (hotspots.TEST_DIR/'performance-hotspot-corpus').glob('zero_row_updates_*.json')
+        for path in paths:
+            bundle = json.loads(path.read_text())
+            profile = replace(Profile(**bundle['profile']), rows=64, start=1, width=16)
+            case = bundle['case']
+            with contextlib.closing(sqlite3.connect(':memory:')) as db:
+                db.executescript(fixture_sql(profile))
+                original = list(db.iterdump())
+                for _ in range(2):
+                    db.execute('BEGIN')
+                    db.execute(case['prepare'])
+                    self.assertEqual(db.execute('SELECT changes()').fetchone(), (2,))
+                    db.execute(case['sql'])
+                    result = db.execute(case['verify']).fetchone()
+                    self.assertEqual(result[:2], (0, 62))
+                    db.rollback()
+                    self.assertEqual(list(db.iterdump()), original)
+
+    def test_discovered_sections_are_reported_and_gated(self):
+        names = [f'retained_3133_{category}_probe' for category in ('wide_rows', 'narrow_rows', 'zero_row_updates')]
+        samples = {'baseline': [{name: 100000 for name in names}],
+                   'candidate': [{name: 200000 for name in names}],
+                   'stock': [{name: 10000 for name in names}]}
+        with tempfile.TemporaryDirectory() as directory:
+            result, raw = Path(directory)/'results.tsv', Path(directory)/'samples.tsv'
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                hotspots.write_results(samples, result, raw)
+            parsed, _ = benchmark_compare.parse_input_artifact(f'hotspots={result}')
+            analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
+            for name, title in zip(names, ('Wide Rows', 'Narrow Rows', 'Zero Row Updates')):
+                category = hotspots.section_of(name)
+                self.assertIn(f'### {title}\n', report.getvalue())
+                self.assertIn(('hotspots', category, name), analysis['individual_failures'])
+                self.assertIn(('hotspots', category), analysis['section_failures'])
+            self.assertEqual(report.getvalue().count('https://github.com/dolthub/doltlite/issues/3133'), 3)
 
     def test_index_edits_get_their_own_section_after_add_column(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -27,11 +28,18 @@ INDEX_EDIT_CACHE_KIB = 131072
 SECTIONS = (("queries", "Large Table Scans"),
             ("add_column", "Add Column With Default"),
             ("index_edits", "Large Index Edits"),
+            ("wide_rows", "Wide Rows"),
+            ("narrow_rows", "Narrow Rows"),
+            ("zero_row_updates", "Zero Row Updates"),
             ("retained", "Retained Findings"))
 
 
 def section_of(name):
     if name.startswith("retained_"):
+        workload = name.split("_", 2)[2]
+        for category in ("wide_rows", "narrow_rows", "zero_row_updates"):
+            if workload.startswith(category + "_"):
+                return category
         return "retained"
     if name.startswith("add_column"):
         return "add_column"
@@ -258,20 +266,34 @@ def prepare_retained(binaries, root, corpus=None):
     directory = corpus if corpus is not None else TEST_DIR / 'performance-hotspot-corpus'
     retained = []
     names = set()
+    fixtures = {}
     for path in sorted(directory.glob('*.json')):
         bundle = json.loads(path.read_text())
         if (type(bundle['issue']) is not int or bundle['issue'] <= 0
                 or not re.fullmatch(r'[0-9a-f]{24}', bundle['fingerprint'])
                 or type(bundle['repeats']) is not int or not 1 <= bundle['repeats'] <= 1024):
             raise ValueError(f'invalid retained hotspot: {path}')
-        name = f"retained_{bundle['issue']}_{bundle['fingerprint']}"
+        category = bundle.get('category', 'retained')
+        if category not in ('retained', 'wide_rows', 'narrow_rows', 'zero_row_updates'):
+            raise ValueError(f'invalid retained hotspot category: {path}')
+        suffix = bundle['fingerprint']
+        if category != 'retained':
+            if not re.fullmatch(r'[a-z][a-z0-9_]*', bundle['case']['name']):
+                raise ValueError(f'invalid retained hotspot name: {path}')
+            suffix = f"{category}_{bundle['case']['name']}"
+        name = f"retained_{bundle['issue']}_{suffix}_x{bundle['repeats']}"
         if name in names:
             raise ValueError(f'duplicate retained hotspot: {name}')
         names.add(name)
         profile = Profile(**bundle['profile'])
-        databases = {arm: root / f'{arm}-{name}.db' for arm in binaries}
-        for arm, binary in binaries.items():
-            sql(binary, databases[arm], prologue(profile.cache_kib)+bundle['setup_sql'])
+        setup = prologue(profile.cache_kib)+bundle['setup_sql']
+        fixture = hashlib.sha256(setup.encode()).hexdigest()
+        if fixture not in fixtures:
+            databases = {arm: root / f'{arm}-retained-{fixture}.db' for arm in binaries}
+            for arm, binary in binaries.items():
+                sql(binary, databases[arm], setup)
+            fixtures[fixture] = databases
+        databases = fixtures[fixture]
         retained.append((name, bundle, databases))
     return retained
 
@@ -285,7 +307,7 @@ def measure_retained(binary, arm, retained):
         result = parse_measurement(output, repeats)
         if result['result'] != bundle['expected']:
             raise ValueError(f'{name}: retained hotspot result mismatch')
-        measured[name] = max(1, round(result['ms']*1000/repeats))
+        measured[name] = max(1, round(result['ms']*1000))
     return measured
 
 
@@ -309,6 +331,8 @@ def write_results(samples, result_path, sample_path):
     print("\nPR-base gates: 1.25× per workload and 1.15× per section/suite, "
           "with a 10 ms minimum regression and confirmation across three attempts. "
           "Stock ratios expose standing gaps and are reported separately.")
+    if any(name.startswith("retained_") for name in names):
+        print("\nRetained workloads report fixed batches; xN in a workload name is the number of repetitions.")
     for section, title in SECTIONS:
         section_names = [name for name in names if section_of(name) == section]
         if not section_names:
@@ -319,7 +343,13 @@ def write_results(samples, result_path, sample_path):
         for name in section_names:
             base, candidate = medians["baseline"][name], medians["candidate"][name]
             stock = medians["stock"][name]
-            label = f"[{name}](https://github.com/dolthub/doltlite/issues/{name.split('_')[1]})" if name.startswith("retained_") else name
+            label = name
+            if name.startswith('retained_'):
+                issue, description = name.split('_', 2)[1:]
+                category = section_of(name)
+                if category != 'retained':
+                    description = description[len(category)+1:]
+                label = f'[{description}](https://github.com/dolthub/doltlite/issues/{issue})'
             print(f"| {label} | {base/1000:.3f} | {candidate/1000:.3f} | "
                   f"{candidate/base:.2f}× | {stock/1000:.3f} | {candidate/stock:.2f}× |")
 
