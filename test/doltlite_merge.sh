@@ -1547,5 +1547,149 @@ run_test_match "merge_untyped_inexact_real_conflicts" \
 run_test "merge_untyped_inexact_real_kept" \
   "SELECT typeof(v) FROM t;" "integer" "$DB84"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84"
+# A UNIQUE index sorts 1 and 1.0 as one key. The index value still
+# stores the original record, so the key is added on both sides.
+DB85=/tmp/test_merge85_$$.db; rm -f "$DB85"
+$DOLTLITE "$DB85" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v UNIQUE);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1.0 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_unique_one_and_one_real_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB85"
+run_test "merge_unique_one_and_one_real_value" \
+  "SELECT (v=1) || '|' || typeof(v) FROM t;" "1|real" "$DB85"
+run_test "merge_unique_one_and_one_real_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB85"
+run_test "merge_unique_one_and_one_real_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB85"
+run_test_match "merge_unique_one_and_one_real_duplicate" \
+  "INSERT INTO t VALUES(2, 1.0);" "UNIQUE constraint failed" "$DB85"
+
+DB86=/tmp/test_merge86_$$.db; rm -f "$DB86"
+$DOLTLITE "$DB86" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v UNIQUE);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=1.0 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_unique_one_real_and_one_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB86"
+run_test "merge_unique_one_real_and_one_value" \
+  "SELECT (v=1) || '|' || typeof(v) FROM t;" "1|integer" "$DB86"
+run_test "merge_unique_one_real_and_one_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB86"
+
+DB87=/tmp/test_merge87_$$.db; rm -f "$DB87"
+$DOLTLITE "$DB87" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v UNIQUE);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=2 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_unique_one_and_two_conflicts" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB87"
+run_test "merge_unique_one_and_two_kept" \
+  "SELECT v FROM t;" "1" "$DB87"
+
+DB88=/tmp/test_merge88_$$.db; rm -f "$DB88"
+$DOLTLITE "$DB88" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v UNIQUE);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v='1' WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_unique_one_and_text_conflicts" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB88"
+run_test "merge_unique_one_and_text_kept" \
+  "SELECT typeof(v) FROM t;" "integer" "$DB88"
+
+DB89=/tmp/test_merge89_$$.db; rm -f "$DB89"
+$DOLTLITE "$DB89" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v UNIQUE);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=9007199254740993 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=9007199254740993.0 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_unique_inexact_real_conflicts" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB89"
+run_test "merge_unique_inexact_real_kept" \
+  "SELECT typeof(v) FROM t;" "integer" "$DB89"
+
+DB90=/tmp/test_merge90_$$.db; rm -f "$DB90"
+$DOLTLITE "$DB90" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+CREATE INDEX t_v ON t(v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1.0 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_index_one_and_one_real_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB90"
+run_test "merge_index_one_and_one_real_value" \
+  "SELECT (v=1) || '|' || typeof(v) FROM t;" "1|real" "$DB90"
+run_test "merge_index_one_and_one_real_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB90"
+run_test "merge_index_one_and_one_real_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB90"
+
+DB91=/tmp/test_merge91_$$.db; rm -f "$DB91"
+$DOLTLITE "$DB91" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v UNIQUE);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES(1, 1.0);
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_unique_insert_one_and_one_real_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB91"
+run_test "merge_unique_insert_one_and_one_real_value" \
+  "SELECT (v=1) || '|' || typeof(v) FROM t;" "1|real" "$DB91"
+run_test "merge_unique_insert_one_and_one_real_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB91"
+run_test "merge_unique_insert_one_and_one_real_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB91"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91"
 dltest_finish

@@ -189,6 +189,56 @@ static int fieldNumbersEqual(const u8 *pRecA, const RecField *fA,
   return 0;
 }
 
+/* Every field is byte-identical or the same SQLite number. Trailing
+** omitted fields are NULL, matching the cell merge. */
+static int recordsNumericallyEqual(
+  const u8 *pA, int nA,
+  const u8 *pB, int nB
+){
+  static const RecField kNullField = { 0, 0, 0 };
+  RecField *aA = 0, *aB = 0;
+  int nFieldA = 0, nFieldB = 0;
+  int nField, i;
+
+  if( parseRecordFields(pA, nA, &aA, &nFieldA)<0 ) return 0;
+  if( parseRecordFields(pB, nB, &aB, &nFieldB)<0 ){
+    sqlite3_free(aA);
+    return 0;
+  }
+  nField = nFieldA>nFieldB ? nFieldA : nFieldB;
+  for(i=0; i<nField; i++){
+    const RecField *fA = i<nFieldA ? &aA[i] : &kNullField;
+    const RecField *fB = i<nFieldB ? &aB[i] : &kNullField;
+    if( fieldEquals(pA, fA, pB, fB)!=0
+     && fieldNumbersEqual(pA, fA, pB, fB)==0 ){
+      sqlite3_free(aA);
+      sqlite3_free(aB);
+      return 0;
+    }
+  }
+  sqlite3_free(aA);
+  sqlite3_free(aB);
+  return 1;
+}
+
+/* Index payload for a number: NULL, integer, or IEEE real. Text does not
+** qualify, so an empty value is not treated as equal to a text row. */
+static int recordIsNumberOrNull(const u8 *pRec, int nRec){
+  RecField *a = 0;
+  int nField = 0;
+  int i;
+  if( parseRecordFields(pRec, nRec, &a, &nField)<0 ) return 0;
+  for(i=0; i<nField; i++){
+    int st = (int)a[i].st;
+    if( st!=0 && st!=7 && !dlSerialIsInt(st) ){
+      sqlite3_free(a);
+      return 0;
+    }
+  }
+  sqlite3_free(a);
+  return 1;
+}
+
 static int recordsEqualFields(
   const u8 *pA,
   int nA,
@@ -545,6 +595,28 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
 
       u8 *pMerged = 0;
       int nMerged = 0;
+
+      /* Both sides inserted this key. A unique index sorts 1 and 1.0
+      ** together. The integer fits in the key, so its value is empty;
+      ** the real is stored beside the key. The merged tree is ours. */
+      if( !pChange->pBaseVal || pChange->nBaseVal<=0 ){
+        int oursHas = pChange->pOurVal && pChange->nOurVal>0;
+        int theirsHas = pChange->pTheirVal && pChange->nTheirVal>0;
+        const u8 *pNum = 0;
+        int nNum = 0;
+        if( oursHas!=theirsHas ){
+          pNum = oursHas ? pChange->pOurVal : pChange->pTheirVal;
+          nNum = oursHas ? pChange->nOurVal : pChange->nTheirVal;
+        }
+        if( (!oursHas && !theirsHas)
+         || (pNum && recordIsNumberOrNull(pNum, nNum))
+         || (oursHas && theirsHas
+             && recordsNumericallyEqual(pChange->pOurVal, pChange->nOurVal,
+                                         pChange->pTheirVal,
+                                         pChange->nTheirVal)) ){
+          break;
+        }
+      }
 
       if( pChange->pBaseVal && pChange->nBaseVal>0
        && pChange->pOurVal && pChange->nOurVal>0
