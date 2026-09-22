@@ -1380,7 +1380,7 @@ static int rebaseApplyPlanRowCatalog(
       rc = doltliteSwitchCatalog(db, pMergedCat);
     }
     if( rc==SQLITE_OK && nConflicts==0 && nReindex>0 ){
-      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
+      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex, 0);
       if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, pMergedCat);
       if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pMergedCat);
     }

@@ -934,10 +934,12 @@ static int mergeRefInstallMergedCatalog(
   }
 
   /* Adopted indexes cover only their branch's rows; rebuild over merged
-  ** tables before the flush. Skip when the merge already conflicted:
-  ** those names may belong to an excluded dual-rename parent. */
-  if( *pnReindex>0 && nMergeConflicts==0 ){
-    rc = doltliteReindexNamedIndexes(db, *pazReindex, *pnReindex);
+  ** tables before the flush, conflicted rows included, since those hold our
+  ** value. On a conflicted merge a name may belong to an excluded
+  ** dual-rename parent that the merged schema no longer has. */
+  if( *pnReindex>0 ){
+    rc = doltliteReindexNamedIndexes(db, *pazReindex, *pnReindex,
+                                     nMergeConflicts>0);
   }else{
     rc = SQLITE_OK;
   }
