@@ -153,10 +153,18 @@ static int bindIndexExprRow(
     }
     iField = i;
 #ifndef SQLITE_OMIT_GENERATED_COLUMNS
-    /* Table column numbers are not record field numbers: INTEGER PRIMARY
-    ** KEY is the btree key, and VIRTUAL generated columns are not stored.
-    ** sqlite3TableColumnToStorage skips VIRTUAL; IPK is still field 0 NULL. */
-    iField = sqlite3TableColumnToStorage(pTab, i);
+    /* Table column numbers are not record field numbers. A rowid table
+    ** stores columns in sqlite3TableColumnToStorage order, with the
+    ** INTEGER PRIMARY KEY absent. A WITHOUT ROWID record is the primary
+    ** key index: declared key columns first, then the other stored
+    ** columns. Using storage order there reads the wrong cell once the
+    ** primary key is not the leading column. */
+    if( HasRowid(pTab) ){
+      iField = sqlite3TableColumnToStorage(pTab, i);
+    }else{
+      Index *pPkIdx = sqlite3PrimaryKeyIndex(pTab);
+      iField = pPkIdx ? sqlite3TableColumnToIndex(pPkIdx, i) : -1;
+    }
 #endif
     if( iField>=0 && iField<info.nField ){
       rc = doltliteSerialValueFromField(pRec, nRec, &info, iField, &v);
