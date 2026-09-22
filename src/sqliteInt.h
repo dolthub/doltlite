@@ -1816,6 +1816,7 @@ struct sqlite3 {
   VTable *pDisconnect;          /* Disconnect these in next sqlite3_prepare() */
 #ifdef DOLTLITE_PROLLY
   ExprList *pDoltliteHistoricalArgs;
+  u8 bDoltliteHistoricalCheck;  /* Inside a per-ref schema comparison */
 #endif
 #endif
   Hash aFunc;                   /* Hash table of connection functions */
@@ -5509,6 +5510,7 @@ const char *doltliteBtreeMissingWriteBranch(Btree*);
 int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 Module *doltliteHistoricalModuleRegister(sqlite3*,const char*);
+int doltliteHistoricalModuleStale(sqlite3*,Module*);
 void doltliteHistoricalModulesReset(sqlite3*);
 #endif
 #if !defined(SQLITE_OMIT_BLOB_LITERAL)
