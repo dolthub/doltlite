@@ -72,7 +72,21 @@ class SeedTests(unittest.TestCase):
         specs = list(seeds.specs())
         self.assertEqual(len(specs), 5)
         names = {path.stem for path in seeds.SEED_DIR.glob('*.json')}
-        self.assertEqual(names, {'wide_rows_index_fetch', 'zero_row_updates_after_delete_text_pk'})
+        wide_cases = {'create_index', 'delete_batch', 'distinct', 'index_fetch',
+                      'join_pk', 'point_payload', 'point_pk', 'range_pk',
+                      'reverse_scan', 'scan_payload', 'sort_limit', 'update_batch'}
+        self.assertEqual(names, {'wide_rows_'+name for name in wide_cases}
+                               | {'zero_row_updates_after_delete_text_pk'})
+        wide = [(p, cases, setup) for p, cases, setup in specs if p.payload==16384]
+        self.assertEqual(len(wide), 1)
+        profile, cases, setup = wide[0]
+        self.assertEqual({case.name for case in cases}, wide_cases)
+        self.assertEqual((profile.rows, profile.cache_kib), (16384, 16384))
+        for case in cases:
+            bundle = json.loads((seeds.SEED_DIR/('wide_rows_'+case.name+'.json')).read_text())
+            self.assertEqual(profile, fuzzer.Profile(**bundle['profile']))
+            self.assertEqual(case, fuzzer.Case(**bundle['case']))
+            self.assertEqual(setup, bundle['setup_sql'])
         active = hotspots.TEST_DIR/'performance-hotspot-corpus'
         self.assertTrue(all(not (active/(name+'.json')).exists() for name in names))
         with patch.object(seeds, 'specs', return_value=iter(specs)):
