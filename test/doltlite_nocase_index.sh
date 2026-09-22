@@ -252,4 +252,64 @@ EXPLAIN QUERY PLAN SELECT s FROM au ORDER BY s;
 |--SCAN au
 \`--USE TEMP B-TREE FOR ORDER BY" "$DELDB"
 
+# A NOCASE primary key compares equal when the bytes after a NUL differ.
+# The second key is a constraint failure, and the stored key answers the
+# other spelling.
+PKDB=/tmp/test_doltlite_nocase_pk_$$.db
+WOROWDB=/tmp/test_doltlite_nocase_pk_worow_$$.db
+rm -f "$PKDB" "$WOROWDB"
+trap 'rm -f "$DB" "$NULDB" "$DELDB" "$PKDB" "$WOROWDB"' EXIT
+
+run_test "nocase_pk_nul_rejects_equal_key" "
+CREATE TABLE t(a TEXT PRIMARY KEY COLLATE NOCASE, b);
+INSERT INTO t VALUES ('a', 1);
+INSERT INTO t VALUES ('b', 3);
+INSERT INTO t VALUES ('a'||char(0)||'b', 4);
+INSERT INTO t VALUES ('a'||char(0)||'c', 6);
+SELECT count(*) FROM t;
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a='a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a IN ('a'||char(0)||'c') ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a<'a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a>'a'||char(0)||'a' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a<='a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a>='a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a='A' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t ORDER BY a, b);
+" "Error near line 6: UNIQUE constraint failed: t.a
+3
+4
+4
+1
+3
+1,4
+3,4
+1
+1,4,3" "$PKDB"
+
+run_test "nocase_pk_nul_without_rowid_rejects_equal_key" "
+CREATE TABLE t(a TEXT PRIMARY KEY COLLATE NOCASE, b) WITHOUT ROWID;
+INSERT INTO t VALUES ('a', 1);
+INSERT INTO t VALUES ('b', 3);
+INSERT INTO t VALUES ('a'||char(0)||'b', 4);
+INSERT INTO t VALUES ('a'||char(0)||'c', 6);
+SELECT count(*) FROM t;
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a='a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a IN ('a'||char(0)||'c') ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a<'a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a>'a'||char(0)||'a' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a<='a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a>='a'||char(0)||'c' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t WHERE a='A' ORDER BY b);
+SELECT ifnull(group_concat(b,','),'') FROM (SELECT b FROM t ORDER BY a, b);
+" "Error near line 6: UNIQUE constraint failed: t.a
+3
+4
+4
+1
+3
+1,4
+3,4
+1
+1,4,3" "$WOROWDB"
+
 dltest_finish
