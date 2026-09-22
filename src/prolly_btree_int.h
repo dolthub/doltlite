@@ -324,6 +324,10 @@ struct Btree {
     u8 bSchemaChangedTxn;
     u8 bMasterRootChangedTxn;
 
+    SequenceRef *aSequences;
+    int nSequences;
+    u8 bSequences;
+
     SavepointPendingSnapshot *aPendingSnapshot;
     int nPendingSnapshot;
     int nPendingSnapshotAlloc;

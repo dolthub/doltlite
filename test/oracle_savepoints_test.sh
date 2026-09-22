@@ -603,4 +603,98 @@ ROLLBACK;
 SELECT id, v FROM t ORDER BY id;
 "
 
+echo "--- id counters across a rollback ---"
+
+# ROLLBACK TO has to put back the id the rolled-back statement allocated.
+# DoltLite keeps that counter in the chunk store's refs rather than in
+# sqlite_sequence alone, so the savepoint has to carry it.
+oracle "savepoint_rollback_restores_autoincrement" "
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
+INSERT INTO t(v) VALUES('a');
+BEGIN;
+SAVEPOINT s;
+INSERT INTO t(v) VALUES('b');
+ROLLBACK TO s;
+INSERT INTO t(v) VALUES('c');
+COMMIT;
+SELECT id, v FROM t ORDER BY id;
+SELECT name, seq FROM sqlite_sequence ORDER BY name;
+"
+
+oracle "savepoint_rollback_restores_implicit_rowid" "
+CREATE TABLE u(id INTEGER PRIMARY KEY, v);
+INSERT INTO u VALUES(4, 'a');
+BEGIN;
+SAVEPOINT s;
+INSERT INTO u(v) VALUES('b');
+ROLLBACK TO s;
+INSERT INTO u(v) VALUES('c');
+COMMIT;
+SELECT id, v FROM u ORDER BY id;
+"
+
+# The savepoint that opens the transaction pushes no btree savepoint.
+oracle "transaction_savepoint_rollback_restores_counter" "
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
+INSERT INTO t(v) VALUES('a');
+SAVEPOINT s;
+INSERT INTO t(v) VALUES('b');
+ROLLBACK TO s;
+RELEASE s;
+INSERT INTO t(v) VALUES('c');
+SELECT id, v FROM t ORDER BY id;
+"
+
+oracle "savepoint_release_keeps_the_allocation" "
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
+INSERT INTO t(v) VALUES('a');
+BEGIN;
+SAVEPOINT s;
+INSERT INTO t(v) VALUES('b');
+RELEASE s;
+INSERT INTO t(v) VALUES('c');
+COMMIT;
+SELECT id, v FROM t ORDER BY id;
+"
+
+oracle "rollback_to_outer_after_inner_release_restores_counter" "
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
+INSERT INTO t(v) VALUES('a');
+BEGIN;
+SAVEPOINT o;
+INSERT INTO t(v) VALUES('b');
+SAVEPOINT i;
+INSERT INTO t(v) VALUES('c');
+RELEASE i;
+ROLLBACK TO o;
+INSERT INTO t(v) VALUES('z');
+COMMIT;
+SELECT id, v FROM t ORDER BY id;
+"
+
+oracle "savepoint_rollback_restores_sqlite_sequence_write" "
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
+INSERT INTO t(v) VALUES('a');
+BEGIN;
+SAVEPOINT s;
+UPDATE sqlite_sequence SET seq=100 WHERE name='t';
+ROLLBACK TO s;
+COMMIT;
+INSERT INTO t(v) VALUES('c');
+SELECT id, v FROM t ORDER BY id;
+"
+
+oracle "savepoint_rollback_restores_dropped_table_counter" "
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
+INSERT INTO t(v) VALUES('a');
+INSERT INTO t(v) VALUES('b');
+BEGIN;
+SAVEPOINT s;
+DROP TABLE t;
+ROLLBACK TO s;
+COMMIT;
+INSERT INTO t(v) VALUES('c');
+SELECT id, v FROM t ORDER BY id;
+"
+
 stock_oracle_finish

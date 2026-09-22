@@ -193,6 +193,12 @@ typedef struct DoltliteChunkSourceState DoltliteChunkSourceState;
 struct ChunkStore {
   ChunkFile file;
   RefsTable refs;
+  /* Counters as of the first mutation since the last commit. ROLLBACK TO
+  ** the savepoint that opened a transaction reaches no btree savepoint, so
+  ** this is the only copy of what that rollback has to put back. */
+  SequenceRef *aTxnSequences;
+  int nTxnSequences;
+  u8 bTxnSequences;
   u8 bRefsStale;          /* OOM cleared refs; reload from refsHash */
   ChunkIndex index;
   ChunkIndexCache *pIndexCache;

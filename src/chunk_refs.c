@@ -150,6 +150,67 @@ void csFreeSequences(ChunkStore *cs){
   cs->refs.nSequences = 0;
 }
 
+void csFreeSequenceArray(SequenceRef *a, int n){
+  int k;
+  if( !a ) return;
+  for(k=0; k<n; k++) sqlite3_free(a[k].zTableName);
+  sqlite3_free(a);
+}
+
+int csCopySequences(ChunkStore *cs, SequenceRef **paOut, int *pnOut){
+  SequenceRef *a;
+  int k;
+  *paOut = 0;
+  *pnOut = 0;
+  if( !cs || cs->refs.nSequences<=0 ) return SQLITE_OK;
+  a = sqlite3_malloc((int)(cs->refs.nSequences * sizeof(SequenceRef)));
+  if( !a ) return SQLITE_NOMEM;
+  memset(a, 0, (size_t)cs->refs.nSequences * sizeof(SequenceRef));
+  for(k=0; k<cs->refs.nSequences; k++){
+    a[k].iSeq = cs->refs.aSequences[k].iSeq;
+    a[k].zTableName = sqlite3_mprintf("%s", cs->refs.aSequences[k].zTableName);
+    if( !a[k].zTableName ){
+      csFreeSequenceArray(a, k);
+      return SQLITE_NOMEM;
+    }
+  }
+  *paOut = a;
+  *pnOut = cs->refs.nSequences;
+  return SQLITE_OK;
+}
+
+void csInstallSequences(ChunkStore *cs, SequenceRef *a, int n){
+  if( !cs ) return;
+  csFreeSequences(cs);
+  cs->refs.aSequences = a;
+  cs->refs.nSequences = n;
+}
+
+static int csCaptureTxnSequences(ChunkStore *cs){
+  int rc;
+  if( !cs || cs->bTxnSequences ) return SQLITE_OK;
+  rc = csCopySequences(cs, &cs->aTxnSequences, &cs->nTxnSequences);
+  if( rc!=SQLITE_OK ) return rc;
+  cs->bTxnSequences = 1;
+  return SQLITE_OK;
+}
+
+void csRestoreTxnSequences(ChunkStore *cs){
+  if( !cs || !cs->bTxnSequences ) return;
+  csInstallSequences(cs, cs->aTxnSequences, cs->nTxnSequences);
+  cs->aTxnSequences = 0;
+  cs->nTxnSequences = 0;
+  cs->bTxnSequences = 0;
+}
+
+void csDropTxnSequences(ChunkStore *cs){
+  if( !cs ) return;
+  csFreeSequenceArray(cs->aTxnSequences, cs->nTxnSequences);
+  cs->aTxnSequences = 0;
+  cs->nTxnSequences = 0;
+  cs->bTxnSequences = 0;
+}
+
 i64 chunkStoreGetSequenceValue(ChunkStore *cs, const char *zTableName){
   if( !cs || !zTableName ) return 0;
   return refsTableGetSequence(&cs->refs, zTableName);
@@ -159,6 +220,7 @@ int chunkStoreBumpSequence(ChunkStore *cs, const char *zTableName,
                            i64 newSeq){
   int i;
   if( !cs || !zTableName ) return SQLITE_MISUSE;
+  if( csCaptureTxnSequences(cs) ) return SQLITE_NOMEM;
   i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
                      (int)sizeof(SequenceRef), zTableName);
   if( i>=0 ){
@@ -174,6 +236,7 @@ int chunkStoreSetSequence(ChunkStore *cs, const char *zTableName, i64 seq){
   int i, n;
   char *zCopy;
   if( !cs || !zTableName ) return SQLITE_MISUSE;
+  if( csCaptureTxnSequences(cs) ) return SQLITE_NOMEM;
   i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
                      (int)sizeof(SequenceRef), zTableName);
   if( i>=0 ){
@@ -193,6 +256,7 @@ int chunkStoreSetSequence(ChunkStore *cs, const char *zTableName, i64 seq){
 void chunkStoreDropSequence(ChunkStore *cs, const char *zTableName){
   int i;
   if( !cs || !zTableName ) return;
+  (void)csCaptureTxnSequences(cs);
   i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
                      (int)sizeof(SequenceRef), zTableName);
   if( i<0 ) return;
@@ -209,6 +273,7 @@ int chunkStoreRenameSequence(ChunkStore *cs, const char *zOld,
   int i;
   char *zCopy;
   if( !cs || !zOld || !zNew ) return SQLITE_MISUSE;
+  if( csCaptureTxnSequences(cs) ) return SQLITE_NOMEM;
   i = csFindNamedRef(cs->refs.aSequences, cs->refs.nSequences,
                      (int)sizeof(SequenceRef), zOld);
   if( i<0 ) return SQLITE_OK;

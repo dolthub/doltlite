@@ -140,6 +140,14 @@ void csFreeTags(struct ChunkStore *cs);
 void csFreeRemotes(struct ChunkStore *cs);
 void csFreeTracking(struct ChunkStore *cs);
 void csFreeSequences(struct ChunkStore *cs);
+/* Savepoint rollback has to put back the counter a rolled-back
+** statement bumped. The array holds one entry per table that has
+** allocated an id, so copying it is cheaper than journalling. */
+int csCopySequences(struct ChunkStore *cs, SequenceRef **paOut, int *pnOut);
+void csInstallSequences(struct ChunkStore *cs, SequenceRef *a, int n);
+void csFreeSequenceArray(SequenceRef *a, int n);
+void csRestoreTxnSequences(struct ChunkStore *cs);
+void csDropTxnSequences(struct ChunkStore *cs);
 
 i64 chunkStoreGetSequenceValue(struct ChunkStore *cs, const char *zTableName);
 /* max(existing, newSeq); creates the row if absent. Caller holds the lock. */
