@@ -1819,5 +1819,125 @@ run_test "partial_after_stored_rows" \
 run_test "partial_after_stored_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB95"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95"
+# WITHOUT ROWID UNIQUE on a VIRTUAL column must merge distinct keys and
+# report a constraint violation for a collision, not a corrupt database.
+DB96=/tmp/test_merge96_$$.db; rm -f "$DB96"
+$DOLTLITE "$DB96" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INT PRIMARY KEY,
+  n INT,
+  g INT GENERATED ALWAYS AS (n) VIRTUAL,
+  UNIQUE(g)
+) WITHOUT ROWID;
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 11);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "worowid_virtual_unique_distinct_merges" \
+  "SELECT dolt_merge('right');" "^[0-9a-f]{40}$" "$DB96"
+run_test "worowid_virtual_unique_distinct_rows" \
+  "SELECT group_concat(id || ':' || n || ':' || g, ',') FROM (SELECT id, n, g FROM t ORDER BY id);" \
+  "1:1:1,2:10:10,3:11:11" "$DB96"
+run_test "worowid_virtual_unique_distinct_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB96"
+
+DB97=/tmp/test_merge97_$$.db; rm -f "$DB97"
+$DOLTLITE "$DB97" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INT PRIMARY KEY,
+  n INT,
+  g INT GENERATED ALWAYS AS (n) VIRTUAL
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX ux ON t(g);
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 10);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "worowid_virtual_unique_collision_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB97"
+run_test "worowid_virtual_unique_collision_rows" \
+  "SELECT group_concat(id || ':' || n || ':' || g, ',') FROM (SELECT id, n, g FROM t ORDER BY id);" \
+  "1:1:1,2:10:10" "$DB97"
+run_test "worowid_virtual_unique_collision_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB97"
+$DOLTLITE "$DB97" > /tmp/test_merge97_txn_$$.out 2>/tmp/test_merge97_txn_$$.err <<'SQL'
+.headers off
+.mode list
+BEGIN;
+SELECT dolt_merge('right');
+SELECT count(*) FROM dolt_constraint_violations;
+SELECT CASE WHEN integrity_check LIKE '%missing%' OR integrity_check LIKE '%malformed%'
+            THEN 'bad' ELSE 'present' END
+  FROM pragma_integrity_check;
+ROLLBACK;
+SQL
+TX97=$(grep -E '^[0-9]+$' /tmp/test_merge97_txn_$$.out | head -1)
+PR97=$(grep -E '^(bad|present)$' /tmp/test_merge97_txn_$$.out | head -1)
+if [ -n "$TX97" ] && [ "$TX97" != "0" ] && [ "$PR97" = "present" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: worowid_virtual_unique_collision_txn\n  violations=$TX97 integrity=$PR97\n$(cat /tmp/test_merge97_txn_$$.out /tmp/test_merge97_txn_$$.err)"
+fi
+rm -f /tmp/test_merge97_txn_$$.out /tmp/test_merge97_txn_$$.err
+
+DB98=/tmp/test_merge98_$$.db; rm -f "$DB98"
+$DOLTLITE "$DB98" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  n INT,
+  g INT GENERATED ALWAYS AS (n) VIRTUAL,
+  UNIQUE(g)
+);
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 10);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "rowid_virtual_unique_collision_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB98"
+run_test "rowid_virtual_unique_collision_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB98"
+
+DB99=/tmp/test_merge99_$$.db; rm -f "$DB99"
+$DOLTLITE "$DB99" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INT PRIMARY KEY,
+  n INT,
+  g INT GENERATED ALWAYS AS (n) STORED,
+  UNIQUE(g)
+) WITHOUT ROWID;
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('right');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','left');
+SELECT dolt_checkout('right');
+INSERT INTO t(id, n) VALUES(3, 10);
+SELECT dolt_commit('-Am','right');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "worowid_stored_unique_collision_rolls_back" \
+  "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB99"
+run_test "worowid_stored_unique_collision_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB99"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99"
 dltest_finish
