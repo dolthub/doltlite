@@ -21,6 +21,7 @@ struct ProllyCacheEntry {
   int nRef;
   u8 bTransient;
   u8 nEvictChance;
+  u8 bScanOnly;
   ProllyCacheEntry *pLruNext;
   ProllyCacheEntry *pLruPrev;
   ProllyCacheEntry *pHashNext;
@@ -42,6 +43,8 @@ void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte);
 void prollyCacheShrink(ProllyCache *cache);
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash);
+ProllyCacheEntry *prollyCacheGetForScan(ProllyCache *cache,
+                                      const ProllyHash *hash);
 
 ProllyCacheEntry *prollyCachePutOwned(ProllyCache *cache,
                                       const ProllyHash *hash,
@@ -54,6 +57,7 @@ ProllyCacheEntry *prollyCachePutTransientOwned(
                                       int *pRc);
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry);
+void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry);
 
 void prollyCacheFree(ProllyCache *cache);
 
