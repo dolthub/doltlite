@@ -1866,6 +1866,7 @@ int prollyBtreeCursor(
   prollyCursorInit(&pCur->pCur, &pBt->store, &pBt->cache,
                     &pTE->root, pTE->flags);
   prollyCursorAllowSparse(&pCur->pCur, 1);
+  pCur->pCur.bAllowPrefix = 1;
 
   pCur->pNext = pBt->pCursor;
   pBt->pCursor = pCur;

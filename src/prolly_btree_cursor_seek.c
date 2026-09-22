@@ -412,15 +412,24 @@ static int scanTreeForCustomCollation(
       if( pEntry && pEntry->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
     }
     if( !isDeleted ){
-      prollyCursorValue(&pCur->pCur, &pRec, &nRec);
+      ProllyCacheEntry *pFull = 0;
+      ProllyCursorLevel *pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
+      rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
+                          &pLevel->pEntry->hash, &pFull);
+      if( rc!=SQLITE_OK ) break;
+      prollyNodeValue(&pFull->node, pLevel->idx, &pRec, &nRec);
       if( nRec==0 ){
         rc = recordFromSortKeyBufferColl(pKey, nKey, pCur->pKeyInfo,
                                          &pRecBuf, &nRecBufAlloc, &nRec);
-        if( rc!=SQLITE_OK ) break;
+        if( rc!=SQLITE_OK ){
+          prollyCacheRelease(pCur->pCur.pCache, pFull);
+          break;
+        }
         pRec = pRecBuf;
       }
       pIdxKey->eqSeen = 0;
       cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
+      prollyCacheRelease(pCur->pCur.pCache, pFull);
       if( cmp==0 || pIdxKey->eqSeen ){
         *pFound = 1;
         *pCmp = cmp;
@@ -652,6 +661,27 @@ static int indexMovetoCustomCollation(
   return SQLITE_OK;
 }
 
+static int indexMovetoLeafValue(
+  BtCursor *pCur,
+  ProllyCacheEntry **ppLeaf,
+  int i,
+  const u8 **ppVal,
+  int *pnVal
+){
+  ProllyCacheEntry *pLeaf = *ppLeaf;
+  if( pLeaf->node.nValuePrefix ){
+    ProllyCacheEntry *pFull;
+    int rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
+                            &pLeaf->hash, &pFull);
+    if( rc!=SQLITE_OK ) return rc;
+    prollyCacheRelease(pCur->pCur.pCache, pLeaf);
+    pLeaf = *ppLeaf = pFull;
+    pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry = pLeaf;
+  }
+  prollyNodeValue(&pLeaf->node, i, ppVal, pnVal);
+  return SQLITE_OK;
+}
+
 static int indexMovetoScanTreeLeaf(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -711,7 +741,9 @@ static int indexMovetoScanTreeLeaf(
               eqLanding = 0;
             }else{
               const u8 *pVal2; int nVal2;
-              prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
+              rc = indexMovetoLeafValue(pCur, &pLeaf, i, &pVal2, &nVal2);
+              if( rc!=SQLITE_OK ) break;
+              prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
               if( nVal2==0 ){
                 rc = recordFromSortKeyBufferColl(
                     pSK, nSK, pCur->pKeyInfo,
@@ -748,7 +780,9 @@ static int indexMovetoScanTreeLeaf(
           break;
         }
       }
-      prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
+      rc = indexMovetoLeafValue(pCur, &pLeaf, i, &pVal, &nVal);
+      if( rc!=SQLITE_OK ) break;
+      prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
       if( nVal==0 ){
         rc = recordFromSortKeyBufferColl(
             pSK, nSK, pCur->pKeyInfo, &pRecBuf, &nRecBufAlloc, &nVal);

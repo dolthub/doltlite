@@ -6,6 +6,7 @@
 #include <assert.h>
 
 #define PROLLY_CACHE_INTERNAL_CHANCES 8
+#define PROLLY_CACHE_PREFIX_CHANCES 255
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
@@ -124,7 +125,7 @@ int prollyCacheInit(ProllyCache *cache, i64 nMaxByte){
 }
 
 static ProllyCacheEntry *cacheGet(
-  ProllyCache *cache, const ProllyHash *hash, int bScan
+  ProllyCache *cache, const ProllyHash *hash, int bScan, int bPrefix
 ){
   int iBucket;
   ProllyCacheEntry *pEntry;
@@ -137,8 +138,11 @@ static ProllyCacheEntry *cacheGet(
   while( pEntry ){
     if( memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)==0 ){
 
+      if( pEntry->node.nValuePrefix && !bPrefix ) return 0;
       if( !bScan ) pEntry->bScanOnly = 0;
-      pEntry->nEvictChance = pEntry->node.level>0
+      pEntry->nEvictChance = pEntry->node.nValuePrefix
+                          ? PROLLY_CACHE_PREFIX_CHANCES
+                          : pEntry->node.level>0
                           ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
       pEntry->nRef++;
       if( pEntry->pLruPrev!=&cache->lruHead ){
@@ -154,16 +158,68 @@ static ProllyCacheEntry *cacheGet(
 }
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
-  return cacheGet(cache, hash, 0);
+  return cacheGet(cache, hash, 0, 0);
 }
 
 ProllyCacheEntry *prollyCacheGetForScan(ProllyCache *cache, const ProllyHash *hash){
-  return cacheGet(cache, hash, 1);
+  return cacheGet(cache, hash, 1, 0);
+}
+
+ProllyCacheEntry *prollyCacheGetPrefix(
+  ProllyCache *cache, const ProllyHash *hash, int bScan
+){
+  return cacheGet(cache, hash, bScan, 1);
+}
+
+static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
+  ProllyNode *pNode = &pEntry->node;
+  int nHead, nCompact, i;
+  const int nStride = PROLLY_NODE_VALUE_PREFIX + PROLLY_NODE_BUFFER_SLOP;
+  u8 *pData;
+  if( !pEntry->bAllowPrefix || pNode->level || pNode->nValuePrefix
+   || pNode->nItems==0
+   || pNode->nDataPhys!=pNode->nData || pNode->nData<4096 ) return 0;
+  nHead = (int)(pNode->pValData - pNode->pData);
+  if( nHead>pNode->nData/4
+   || pNode->nData-nHead<(int)pNode->nItems*4096 ) return 0;
+  nCompact = nHead + pNode->nItems*nStride;
+  if( nCompact>pNode->nData/4 ) return 0;
+  assert( pEntry->nRef==0 );
+  sqlite3BeginBenignMalloc();
+  pData = sqlite3_malloc(nCompact + PROLLY_NODE_BUFFER_SLOP);
+  sqlite3EndBenignMalloc();
+  if( !pData ) return 0;
+  memcpy(pData, pEntry->pData, nHead);
+  for(i=0; i<pNode->nItems; i++){
+    const u8 *pVal;
+    int nVal;
+    u8 *pDest = pData + nHead + i*nStride;
+    prollyNodeValue(pNode, i, &pVal, &nVal);
+    nVal = MIN(nVal, PROLLY_NODE_VALUE_PREFIX);
+    memcpy(pDest, pVal, nVal);
+    memset(pDest + nVal, 0, nStride - nVal);
+  }
+  memset(pData + nCompact, 0, PROLLY_NODE_BUFFER_SLOP);
+  pNode->aKeyOff = (const u32*)(pData + ((const u8*)pNode->aKeyOff-pNode->pData));
+  pNode->aValOff = (const u32*)(pData + ((const u8*)pNode->aValOff-pNode->pData));
+  pNode->pKeyData = pData + (pNode->pKeyData-pNode->pData);
+  pNode->pValData = pData + nHead;
+  pNode->pData = pData;
+  pNode->nDataPhys = nCompact;
+  pNode->nValuePrefix = PROLLY_NODE_VALUE_PREFIX;
+  pEntry->nEvictChance = PROLLY_CACHE_PREFIX_CHANCES;
+  cache->nByte += (i64)sqlite3_msize(pData)-(i64)sqlite3_msize(pEntry->pData);
+  sqlite3_free(pEntry->pData);
+  pEntry->pData = pData;
+  pEntry->nDataPhys = nCompact;
+  lruRemove(pEntry);
+  lruInsertHead(cache, pEntry);
+  return 1;
 }
 
 void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry){
   if( entry->bScanOnly && !entry->bTransient && entry->nRef==1
-   && entry->node.level==0 ){
+   && entry->node.level==0 && !entry->node.nValuePrefix ){
     lruRemove(entry);
     entry->pLruNext = &cache->lruTail;
     entry->pLruPrev = cache->lruTail.pLruPrev;
@@ -193,6 +249,7 @@ static ProllyCacheEntry *cacheEvictionCandidate(ProllyCache *cache){
 
 static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
   ProllyCacheEntry *pEntry = cacheEvictionCandidate(cache);
+  if( pEntry && cacheKeepPrefixes(cache, pEntry) ) return 0;
   if( pEntry ){
     lruRemove(pEntry);
     hashRemove(cache, pEntry);
@@ -216,7 +273,7 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
           pEntry->nEvictChance--;
           lruRemove(pEntry);
           lruInsertHead(cache, pEntry);
-        }else{
+        }else if( nMaxByte==0 || !cacheKeepPrefixes(cache, pEntry) ){
           lruRemove(pEntry);
           hashRemove(cache, pEntry);
           cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
@@ -330,6 +387,20 @@ ProllyCacheEntry *prollyCachePutOwned(
     sqlite3_free(pData);
     sqlite3_free(pEntry);
     return 0;
+  }
+
+  {
+    ProllyCacheEntry *pOld = prollyCacheGetPrefix(cache, hash, 1);
+    if( pOld ){
+      assert( pOld->node.nValuePrefix );
+      lruRemove(pOld);
+      hashRemove(cache, pOld);
+      cache->nByte -= sqlite3_msize(pOld) + sqlite3_msize(pOld->pData);
+      cache->nUsed--;
+      /* Other cursors may still borrow the prefix buffer. */
+      pOld->bTransient = 1;
+      prollyCacheRelease(cache, pOld);
+    }
   }
 
   pEntry->nEvictChance = pEntry->node.level>0

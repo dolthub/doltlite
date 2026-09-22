@@ -1048,6 +1048,7 @@ int prollyBtCursorInsert(
       prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                        &pTE2->root, pTE2->flags);
       prollyCursorAllowSparse(&pCur->pCur, 1);
+      pCur->pCur.bAllowPrefix = 1;
     }
   }
   if( pCur->curIntKey ){
@@ -1117,6 +1118,7 @@ int flushIfNeeded(BtCursor *pCur){
     prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                      &pTE->root, pTE->flags);
     prollyCursorAllowSparse(&pCur->pCur, 1);
+    pCur->pCur.bAllowPrefix = 1;
   }
   /* Flush emptied the map; drop stale mmActive/mmIdx. */
   refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
@@ -1175,6 +1177,7 @@ static int btreeDeleteImmediate(BtCursor *pCur){
       prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                        &pTE2->root, pTE2->flags);
       prollyCursorAllowSparse(&pCur->pCur, 1);
+      pCur->pCur.bAllowPrefix = 1;
     }
   }
 

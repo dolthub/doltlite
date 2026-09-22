@@ -16,10 +16,10 @@ void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
 }
 
 void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
-  const u8 *pVal; int nVal;
+  const u8 *pVal; int nVal; int nAvail;
   CLEAR_CACHED_PAYLOAD(pCur);
-  cursorCurrentTreeValue(pCur, &pVal, &nVal);
-  if( nVal > 0 ){
+  prollyBtreeCursorCurrentTreeValueSpan(pCur, &pVal, &nVal, &nAvail);
+  if( nVal > 0 && nAvail==nVal ){
     pCur->pCachedPayload = (u8*)pVal;
     pCur->nCachedPayload = nVal;
     pCur->cachedPayloadOwned = 0;
@@ -173,12 +173,8 @@ static SQLITE_INLINE int prollyBtCursorNextFastMergedLeaf(BtCursor *pCur){
     return SQLITE_NOTFOUND;
   }
   CLEAR_CACHED_SEEK_KEY(pCur);
-  if( pCur->curIntKey ){
-    prollyNodeValueSpanInline(pNode, pLevel->idx, &pVal, &nVal, &nAvail);
-    if( nAvail!=nVal ) nVal = 0;
-  }else{
-    cursorCurrentTreeValue(pCur, &pVal, &nVal);
-  }
+  prollyNodeValueSpanInline(pNode, pLevel->idx, &pVal, &nVal, &nAvail);
+  if( nAvail!=nVal ) nVal = 0;
   pCur->pCachedPayload = nVal>0 ? (u8*)pVal : 0;
   pCur->nCachedPayload = nVal>0 ? nVal : 0;
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);

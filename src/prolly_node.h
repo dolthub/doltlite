@@ -13,6 +13,10 @@
 #define PROLLY_NODE_SUBTREE_COUNTS 0x04
 
 #define PROLLY_NODE_MAX_ITEMS 4096
+#define PROLLY_NODE_VALUE_PREFIX 128
+
+/* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
+#define PROLLY_NODE_BUFFER_SLOP 8
 
 #define PROLLY_NODE_ENTRY_BYTES(level,nKey,nVal) \
   ((nKey) + (nVal) + 8 + ((level)>0 ? 8 : 0))
@@ -31,6 +35,7 @@ struct ProllyNode {
   const u8 *pData;
   int nData;
   int nDataPhys;
+  int nValuePrefix;       /* Logical offsets survive; omitted bytes need a reload. */
   u8 level;
   u16 nItems;
   u8 flags;
@@ -62,6 +67,11 @@ static SQLITE_INLINE void prollyNodeValueSpanInline(
   off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
   off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
   *pnVal = (int)(off1 - off0);
+  if( pNode->nValuePrefix ){
+    *ppVal = pNode->pValData + i*(pNode->nValuePrefix + PROLLY_NODE_BUFFER_SLOP);
+    *pnAvail = MIN(*pnVal, pNode->nValuePrefix);
+    return;
+  }
   nValPhys = pNode->nDataPhys - (int)(pNode->pValData - pNode->pData);
   if( nValPhys<0 ) nValPhys = 0;
   if( (int)off0 < nValPhys ){
