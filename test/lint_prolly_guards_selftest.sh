@@ -117,6 +117,72 @@ else
 $out"
 fi
 
+# The upstream fetch is the one network step in lint. A flake there must
+# cost a retry, not a guard violation, so shadow git and count the calls.
+FETCH_WORK=$(mktemp -d)
+trap 'rm -rf "$WORK" "$FETCH_WORK"' EXIT
+mkdir -p "$FETCH_WORK/bin"
+cat >"$FETCH_WORK/bin/git" <<'GITEOF'
+#!/usr/bin/env bash
+case "$1" in
+  cat-file) exit 1 ;;
+  fetch)
+    count=0
+    [ -f "$FAKE_GIT_FETCHES" ] && count=$(cat "$FAKE_GIT_FETCHES")
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$FAKE_GIT_FETCHES"
+    echo "fake fetch $count"
+    [ "$count" -ge "${FAKE_GIT_FETCH_OK_AT:-0}" ] && [ "${FAKE_GIT_FETCH_OK_AT:-0}" -gt 0 ]
+    exit $?
+    ;;
+  *) exit 0 ;;
+esac
+GITEOF
+chmod +x "$FETCH_WORK/bin/git"
+
+# Runs in a subshell, so the tally goes to a file the caller reads back.
+run_fetch_case() {  # run_fetch_case <succeed-on-call|0> <attempts>
+  rm -f "$FETCH_WORK/count"
+  FAKE_GIT_FETCH_OK_AT="$1" \
+  DOLTLITE_LINT_FETCH_ATTEMPTS="$2" \
+  DOLTLITE_LINT_FETCH_DELAY_SECONDS=0 \
+  FAKE_GIT_FETCHES="$FETCH_WORK/count" \
+  PATH="$FETCH_WORK/bin:$PATH" \
+    bash "$LINT" "$WORK" 2>&1
+}
+fetch_count() { cat "$FETCH_WORK/count" 2>/dev/null || echo 0; }
+
+# Never succeeds: every attempt tries the shallow fetch and the full one.
+out=$(run_fetch_case 0 3)
+if [ "$(fetch_count)" -eq 6 ] \
+ && echo "$out" | grep -q "could not fetch .* in 3 attempts"; then
+  ok
+else
+  bad "fetch_retries_until_attempts_run_out" \
+      "expected 6 fetch calls and a final message, got $(fetch_count)
+$out"
+fi
+
+# Stops as soon as one succeeds.
+out=$(run_fetch_case 3 3)
+if [ "$(fetch_count)" -eq 3 ] && ! echo "$out" | grep -q "could not fetch"; then
+  ok
+else
+  bad "fetch_stops_after_a_success" \
+      "expected 3 fetch calls and no failure message, got $(fetch_count)
+$out"
+fi
+
+# One attempt means no retry at all.
+out=$(run_fetch_case 0 1)
+if [ "$(fetch_count)" -eq 2 ] && ! echo "$out" | grep -q "retrying in"; then
+  ok
+else
+  bad "fetch_attempts_are_configurable" \
+      "expected 2 fetch calls and no retry notice, got $(fetch_count)
+$out"
+fi
+
 echo
 echo "Results: $PASS passed, $FAIL failed out of $((PASS + FAIL)) tests"
 if [ "$FAIL" -gt 0 ]; then
