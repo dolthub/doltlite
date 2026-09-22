@@ -137,6 +137,87 @@ static int mergeStoredFieldIndex(ParsedColumn *aCols, int iCol){
   return n;
 }
 
+/* Without column tags a column is matched by name, so a rename onto a name
+** another ancestor column had (a swap, or b->c then a->b) would route the
+** other side's cells into the wrong column. A side that kept an ancestor row
+** dropped nothing, so its columns are the ancestor's in place and a name
+** that moved slots can only be such a rename: refuse it. */
+int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
+  int side, i, j;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *aRen = side ? c->aTheirsSchema : c->aOursSchema;
+    int nRen = side ? c->nTheirsSchema : c->nOursSchema;
+    SchemaEntry *aOth = side ? c->aOursSchema : c->aTheirsSchema;
+    int nOth = side ? c->nOursSchema : c->nTheirsSchema;
+    struct TableEntry *aRenCat = side ? c->aTheirs : c->aOurs;
+    int nRenCat = side ? c->nTheirs : c->nOurs;
+    struct TableEntry *aOthCat = side ? c->aOurs : c->aTheirs;
+    int nOthCat = side ? c->nOurs : c->nTheirs;
+
+    for(i=0; i<c->nAncSchema; i++){
+      const char *zTable = c->aAncSchema[i].zName;
+      SchemaEntry *pRenSe, *pOthSe;
+      struct TableEntry *pAncCat, *pRenCatEnt, *pOthCatEnt;
+      ParsedColumn *aAncCols = 0, *aRenCols = 0;
+      int nAncCols = 0, nRenCols = 0;
+      const char *zMoved = 0;
+      int bKept = 0;
+      int rc;
+
+      if( !zTable || !c->aAncSchema[i].zType ) continue;
+      if( strcmp(c->aAncSchema[i].zType, "table")!=0 ) continue;
+      pRenSe = findSchemaEntry(aRen, nRen, zTable);
+      pOthSe = findSchemaEntry(aOth, nOth, zTable);
+      if( !pRenSe || !pOthSe || !pRenSe->zSql || !pOthSe->zSql ) continue;
+      if( strcmp(pRenSe->zSql, c->aAncSchema[i].zSql)==0 ) continue;
+      if( strcmp(pRenSe->zSql, pOthSe->zSql)==0 ) continue;
+      pAncCat = doltliteFindTableByName(c->aAnc, c->nAnc, zTable);
+      pRenCatEnt = doltliteFindTableByName(aRenCat, nRenCat, zTable);
+      pOthCatEnt = doltliteFindTableByName(aOthCat, nOthCat, zTable);
+      if( !pAncCat || !pRenCatEnt || !pOthCatEnt ) continue;
+      if( strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0
+       && prollyHashCompare(&pAncCat->root, &pOthCatEnt->root)==0 ){
+        continue;
+      }
+      if( parseColumns(c->aAncSchema[i].zSql, &aAncCols, &nAncCols)!=SQLITE_OK ){
+        continue;
+      }
+      if( parseColumns(pRenSe->zSql, &aRenCols, &nRenCols)!=SQLITE_OK ){
+        freeColumns(aAncCols, nAncCols);
+        continue;
+      }
+      if( nRenCols>=nAncCols ){
+        for(j=0; j<nAncCols && !zMoved; j++){
+          int k;
+          if( sqlite3_stricmp(aRenCols[j].zName, aAncCols[j].zName)==0 ) continue;
+          k = parsedColumnIndexByName(aAncCols, nAncCols, aRenCols[j].zName);
+          if( k>=0 && k!=j ) zMoved = aRenCols[j].zName;
+        }
+      }
+      rc = SQLITE_OK;
+      if( zMoved ){
+        rc = mergeSideKeptAncestorRow(c->db, &pAncCat->root, &pRenCatEnt->root,
+                                      pAncCat->flags, pRenCatEnt->flags,
+                                      &bKept);
+      }
+      if( rc==SQLITE_OK && zMoved && bKept && c->pzErrMsg ){
+        sqlite3_free(*c->pzErrMsg);
+        *c->pzErrMsg = sqlite3_mprintf(
+            "cannot %s: table '%s' renames a column to '%s', a name another "
+            "of its columns had, so the column each change belongs to is "
+            "ambiguous; make the same renames on both branches first",
+            c->bBranchMerge ? "merge" : "apply", zTable, zMoved);
+      }
+      freeColumns(aAncCols, nAncCols);
+      freeColumns(aRenCols, nRenCols);
+      if( rc!=SQLITE_OK ) return rc;
+      if( zMoved && bKept ) return SQLITE_ERROR;
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* Drop on one side, edit of that column on the other, in a shared
 ** row. Dolt reports a conflict; refuse rather than pick a winner. */
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){

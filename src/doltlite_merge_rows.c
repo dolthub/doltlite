@@ -767,6 +767,49 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
 
 /* Other side changed this field in a pre-existing row. Drop vs that
 ** edit is a Dolt conflict; adds/removes and other columns are not. */
+/* DROP COLUMN rewrites every row, so a side that still holds any ancestor
+** row byte for byte has dropped no column since the ancestor. */
+int mergeSideKeptAncestorRow(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags,
+  u8 sideFlags,
+  int *pbKept
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyDiffIter iter;
+  ProllyDiffChange *pChange = 0;
+  u64 nAnc = 0, nTouched = 0;
+  int rc;
+
+  *pbKept = 0;
+  if( !cs || !pCache || prollyHashIsEmpty(pAncRoot) ) return SQLITE_OK;
+  if( prollyHashCompare(pAncRoot, pSideRoot)==0 ){
+    *pbKept = 1;
+    return SQLITE_OK;
+  }
+  if( prollyHashIsEmpty(pSideRoot) ) return SQLITE_OK;
+  rc = prollySubtreeCount(cs, pCache, pAncRoot, &nAnc);
+  if( rc!=SQLITE_OK || nAnc==0 ) return rc;
+  memset(&iter, 0, sizeof(iter));
+  rc = prollyDiffIterOpen(&iter, cs, pCache, pAncRoot, pSideRoot,
+                          ancFlags, sideFlags);
+  if( rc!=SQLITE_OK ) return rc;
+  while( nTouched<nAnc
+      && (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW ){
+    if( pChange->type==PROLLY_DIFF_MODIFY
+     || pChange->type==PROLLY_DIFF_DELETE ){
+      nTouched++;
+    }
+  }
+  prollyDiffIterClose(&iter);
+  if( rc!=SQLITE_ROW && rc!=SQLITE_DONE ) return rc;
+  *pbKept = nTouched<nAnc;
+  return SQLITE_OK;
+}
+
 int mergeRowEditsColumn(
   sqlite3 *db,
   const ProllyHash *pAncRoot,

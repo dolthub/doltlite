@@ -99,6 +99,7 @@ int mergePass1CheckIndexOverRenamedColumn(MergePass1Ctx *c);
 int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c);
 int mergePass1CheckTriggerOverRenamedTable(MergePass1Ctx *c);
 int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c);
+int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c);
 int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c);
 int mergePass1CheckDependentOverDualRename(MergePass1Ctx *c);
 int rebuildDisjointSchemaRows(
@@ -118,6 +119,15 @@ int mergePreNormalizeRenamedDependents(
   SchemaEntry *aOursSchema, int nOursSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema,
   SchemaMergeAction **ppActions, int *pnActions
+);
+
+int mergeSideKeptAncestorRow(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags,
+  u8 sideFlags,
+  int *pbKept
 );
 
 int mergeRowEditsColumn(
