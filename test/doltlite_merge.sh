@@ -1939,5 +1939,38 @@ run_test_match "worowid_stored_unique_collision_rolls_back" \
 run_test "worowid_stored_unique_collision_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB99"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99"
+# A VIRTUAL unique key that reads an earlier VIRTUAL column must be
+# written into the index. Binding that column as NULL left the merged
+# row out of the index while the table still showed the right value.
+DB100=/tmp/test_merge100_$$.db; rm -f "$DB100"
+$DOLTLITE "$DB100" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(
+  id INT PRIMARY KEY,
+  n INT,
+  doubled INT GENERATED ALWAYS AS (n * 2) VIRTUAL,
+  key_value INT GENERATED ALWAYS AS (doubled + 1) VIRTUAL,
+  UNIQUE(key_value)
+) WITHOUT ROWID;
+INSERT INTO t(id, n) VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+INSERT INTO t(id, n) VALUES(2, 10);
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('feature');
+INSERT INTO t(id, n) VALUES(3, 11);
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "chained_virtual_unique_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB100"
+run_test "chained_virtual_unique_rows" \
+  "SELECT group_concat(id || ':' || n || ':' || doubled || ':' || key_value, ',') FROM (SELECT id, n, doubled, key_value FROM t ORDER BY id);" \
+  "1:1:2:3,2:10:20:21,3:11:22:23" "$DB100"
+run_test "chained_virtual_unique_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB100"
+run_test "chained_virtual_unique_index" \
+  "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY sqlite_autoindex_t_2 WHERE key_value IN (3,21,23) ORDER BY id);" \
+  "1,2,3" "$DB100"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100"
 dltest_finish
