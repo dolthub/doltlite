@@ -144,6 +144,47 @@ static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
   }
 }
 
+static SQLITE_INLINE int prollyBtCursorNextFastMergedLeaf(BtCursor *pCur){
+  ProllyCursorLevel *pLevel;
+  ProllyNode *pNode;
+  ProllyMutMap *pMap = pCur->pMutMap;
+  const u8 *pVal;
+  int nVal, nAvail;
+  int rc;
+  if( pCur->eState!=CURSOR_VALID
+   || pCur->pCur.eState!=PROLLY_CURSOR_VALID
+   || !pCur->mmActive || !pMap
+   || pCur->mergeSrc!=MERGE_SRC_TREE || pCur->mergeStepDir<=0
+   || pCur->mmPhysActive || pCur->mmIdx<0 || pMap->orderDirty
+   || pCur->deferredTreeSeek || pCur->deferredMergedSeek
+   || pCur->cachedPayloadOwned || pCur->pCachedFrom
+   || pCur->pgnoRoot==1 || (pCur->curFlags & BTCF_AtLast) ){
+    return SQLITE_NOTFOUND;
+  }
+  pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
+  pNode = &pLevel->pEntry->node;
+  if( pLevel->idx>=pNode->nItems-1 ) return SQLITE_NOTFOUND;
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
+  pLevel->idx++;
+  if( pCur->mmIdx<pMap->nEntries
+   && mergeCompare(pCur, &pMap->aEntries[pMap->aOrder[pCur->mmIdx]])>=0 ){
+    pLevel->idx--;
+    return SQLITE_NOTFOUND;
+  }
+  CLEAR_CACHED_SEEK_KEY(pCur);
+  if( pCur->curIntKey ){
+    prollyNodeValueSpanInline(pNode, pLevel->idx, &pVal, &nVal, &nAvail);
+    if( nAvail!=nVal ) nVal = 0;
+  }else{
+    cursorCurrentTreeValue(pCur, &pVal, &nVal);
+  }
+  pCur->pCachedPayload = nVal>0 ? (u8*)pVal : 0;
+  pCur->nCachedPayload = nVal>0 ? nVal : 0;
+  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
+  return SQLITE_OK;
+}
+
 int mergeScan(BtCursor *pCur, int dir, int *pRes){
   assert( pCur!=0 );
   assert( pCur->pMutMap!=0 );
@@ -717,6 +758,9 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
   (void)flags;
 
   rc = prollyBtCursorNextFastIntLeaf(pCur);
+  if( rc!=SQLITE_NOTFOUND ) return rc;
+
+  rc = prollyBtCursorNextFastMergedLeaf(pCur);
   if( rc!=SQLITE_NOTFOUND ) return rc;
 
   rc = prollyBtCursorStepPrologue(pCur, 1, &immediate);
