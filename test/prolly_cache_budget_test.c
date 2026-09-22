@@ -368,6 +368,30 @@ static void testLargeScans(sqlite3 *db){
   execSql(db, "PRAGMA cache_size=-65536");
 }
 
+static void testNearBudgetScans(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  int nCold;
+
+  execSql(db, "PRAGMA cache_size=-8192");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  scan(db);
+  nCold = nRead;
+  nRead = 0;
+  scan(db);
+  check("scan just beyond cache budget reuses previous pass", nCold>0
+      && nRead<nCold*3/4);
+  check("near-budget scan accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 8192*1024));
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "PRAGMA cache_size=-65536");
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -555,6 +579,7 @@ int main(void){
   testReadAhead(db);
   testCachedReadAhead(db);
   testLargeScans(db);
+  testNearBudgetScans(db);
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
