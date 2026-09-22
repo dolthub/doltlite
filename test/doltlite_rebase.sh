@@ -841,7 +841,47 @@ run_test_match "interactive_rebase_reports_detector_error" \
   "rebase failed — malformed JSON — branch restored to pre-rebase state" \
   "$DB10/feat"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DBE" "$DBE2" "$DBE3"
+# The side branch is reachable through the merge's second parent, so a
+# reversed breadth-first walk replays B before A. B and C share a
+# generation; whichever is older replays first, and both orders keep A
+# before B and B before D.
+DB11=/tmp/test_rebase_merge_order_$$.db; rm -f "$DB11"
+cat <<'SQL' | "$DOLTLITE" "$DB11" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'root');
+SELECT dolt_commit('-Am','R');
+UPDATE t SET v='A' WHERE id=1;
+SELECT dolt_commit('-Am','A');
+SELECT dolt_branch('side');
+INSERT INTO t VALUES(2,'C');
+SELECT dolt_commit('-Am','C');
+SELECT dolt_checkout('side');
+UPDATE t SET v='B' WHERE id=1;
+SELECT dolt_commit('-Am','B');
+INSERT INTO t VALUES(3,'D');
+SELECT dolt_commit('-Am','D');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('side');
+SELECT dolt_branch('onto','main~3');
+SELECT dolt_checkout('onto');
+INSERT INTO t VALUES(4,'U');
+SELECT dolt_commit('-Am','U');
+SELECT dolt_checkout('main');
+SQL
+run_test "rebase_merge_parent_before_child" \
+  "SELECT dolt_rebase('onto');" \
+  "Successfully rebased and updated refs/heads/main" \
+  "$DB11"
+run_test "rebase_merge_parent_before_child_rows" \
+  "SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" \
+  "1:B,2:C,3:D,4:U" \
+  "$DB11"
+run_test_match "rebase_merge_parent_before_child_log" \
+  "SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
+  "^D,(B,C|C,B),A,U,R$" \
+  "$DB11"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

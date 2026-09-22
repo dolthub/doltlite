@@ -111,6 +111,272 @@ static int rebaseRestoreReturnBranchWorkingState(
   doltliteCommitClear(&c);
   return rc;
 }
+
+typedef struct RebaseWalkCommit RebaseWalkCommit;
+struct RebaseWalkCommit {
+  ProllyHash hash;
+  ProllyHash aParents[DOLTLITE_MAX_PARENTS];
+  int nParents;
+  i64 timestamp;
+  int height;
+  int replay;
+  int queued;
+};
+
+static int rebaseWalkFind(
+  const RebaseWalkCommit *a,
+  int n,
+  const ProllyHash *pHash
+){
+  int i;
+  for(i=0; i<n; i++){
+    if( prollyHashCompare(&a[i].hash, pHash)==0 ) return i;
+  }
+  return -1;
+}
+
+/* Higher generation, then newer timestamp. Equal keys are not ordered, so
+** the heap keeps whichever commit was pushed first, matching Dolt's walk. */
+static int rebaseHeapLess(
+  const RebaseWalkCommit *aAll,
+  const int *h,
+  int i,
+  int j
+){
+  const RebaseWalkCommit *ai = &aAll[h[i]];
+  const RebaseWalkCommit *aj = &aAll[h[j]];
+  if( ai->height!=aj->height ) return ai->height>aj->height;
+  if( ai->timestamp!=aj->timestamp ) return ai->timestamp>aj->timestamp;
+  return 0;
+}
+
+static void rebaseHeapSwap(int *h, int i, int j){
+  int tmp = h[i];
+  h[i] = h[j];
+  h[j] = tmp;
+}
+
+static void rebaseHeapUp(const RebaseWalkCommit *aAll, int *h, int j){
+  while( 1 ){
+    int i = (j - 1) / 2;
+    if( i==j || !rebaseHeapLess(aAll, h, j, i) ) break;
+    rebaseHeapSwap(h, i, j);
+    j = i;
+  }
+}
+
+static void rebaseHeapDown(const RebaseWalkCommit *aAll, int *h, int i0, int n){
+  int i = i0;
+  while( 1 ){
+    int j1 = 2*i + 1;
+    int j, j2;
+    if( j1>=n || j1<0 ) break;
+    j = j1;
+    j2 = j1 + 1;
+    if( j2<n && rebaseHeapLess(aAll, h, j2, j1) ) j = j2;
+    if( !rebaseHeapLess(aAll, h, j, i) ) break;
+    rebaseHeapSwap(h, i, j);
+    i = j;
+  }
+}
+
+static void rebaseHeapPush(
+  const RebaseWalkCommit *aAll,
+  int *h,
+  int *pn,
+  int idx
+){
+  int n = *pn;
+  h[n] = idx;
+  *pn = n + 1;
+  rebaseHeapUp(aAll, h, n);
+}
+
+static int rebaseHeapPop(const RebaseWalkCommit *aAll, int *h, int *pn){
+  int n = *pn - 1;
+  int out;
+  rebaseHeapSwap(h, 0, n);
+  rebaseHeapDown(aAll, h, 0, n);
+  out = h[n];
+  *pn = n;
+  return out;
+}
+
+/* Dolt replays the dot-dot walk with merges removed: higher generation
+** and newer timestamps come first, then that list is reversed. A reversed
+** breadth-first walk plays a side-branch child before its parent when a
+** merge reaches that parent by a longer path, and replaying the whole
+** first-parent chain before every other commit plays a later mainline
+** commit before the merge's other parent. */
+static int rebaseOrderReplayCommits(
+  sqlite3 *db,
+  const ProllyHash *pHeadHash,
+  ProllyHashSet *pUpstream,
+  ProllyHash *aReplay,
+  int nReplay
+){
+  RebaseWalkCommit *aAll = 0;
+  ProllyHash *queue = 0;
+  ProllyHash *aNewest = 0;
+  ProllyHashSet seen;
+  int *aKnown = 0;
+  int *aHeap = 0;
+  int nAll = 0, nAlloc = 0;
+  int qHead = 0, qTail = 0, qAlloc = 0;
+  int nHeap = 0;
+  int nNewest = 0;
+  int seenInit = 0;
+  int nKnown = 0;
+  int rc = SQLITE_OK;
+  int i;
+
+  memset(&seen, 0, sizeof(seen));
+  if( nReplay<=1 ) return SQLITE_OK;
+
+  qAlloc = 16;
+  queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
+  if( !queue ) return SQLITE_NOMEM;
+  queue[qTail++] = *pHeadHash;
+  rc = prollyHashSetInit(&seen, nReplay);
+  if( rc!=SQLITE_OK ) goto done;
+  seenInit = 1;
+
+  while( qHead<qTail ){
+    ProllyHash cur = queue[qHead++];
+    DoltliteCommit c;
+    RebaseWalkCommit *p;
+    int nParents;
+    if( prollyHashIsEmpty(&cur) ) continue;
+    if( prollyHashSetContains(pUpstream, &cur) ) continue;
+    if( prollyHashSetContains(&seen, &cur) ) continue;
+    rc = prollyHashSetAdd(&seen, &cur);
+    if( rc!=SQLITE_OK ) goto done;
+
+    memset(&c, 0, sizeof(c));
+    rc = doltliteLoadCommit(db, &cur, &c);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&c);
+      goto done;
+    }
+    if( nAll>=nAlloc ){
+      int nNew = nAlloc ? nAlloc*2 : 16;
+      RebaseWalkCommit *tmp = sqlite3_realloc(
+          aAll, nNew*(int)sizeof(RebaseWalkCommit));
+      if( !tmp ){
+        doltliteCommitClear(&c);
+        rc = SQLITE_NOMEM;
+        goto done;
+      }
+      aAll = tmp;
+      nAlloc = nNew;
+    }
+    p = &aAll[nAll++];
+    memset(p, 0, sizeof(*p));
+    p->hash = cur;
+    p->timestamp = c.timestamp;
+    p->height = -1;
+    nParents = doltliteCommitParentCount(&c);
+    if( nParents>DOLTLITE_MAX_PARENTS ) nParents = DOLTLITE_MAX_PARENTS;
+    p->nParents = nParents;
+    p->replay = nParents<=1;
+    for(i=0; i<nParents; i++){
+      const ProllyHash *pp = doltliteCommitParentHash(&c, i);
+      if( pp ) p->aParents[i] = *pp;
+    }
+    for(i=0; i<nParents; i++){
+      if( prollyHashIsEmpty(&p->aParents[i]) ) continue;
+      if( prollyHashSetContains(pUpstream, &p->aParents[i]) ) continue;
+      if( prollyHashSetContains(&seen, &p->aParents[i]) ) continue;
+      if( qTail>=qAlloc ){
+        int nNew = qAlloc*2;
+        ProllyHash *tmp = sqlite3_realloc(queue, nNew*(int)sizeof(ProllyHash));
+        if( !tmp ){
+          doltliteCommitClear(&c);
+          rc = SQLITE_NOMEM;
+          goto done;
+        }
+        queue = tmp;
+        qAlloc = nNew;
+      }
+      queue[qTail++] = p->aParents[i];
+    }
+    doltliteCommitClear(&c);
+  }
+
+  if( nAll>0 ){
+    aKnown = sqlite3_malloc(nAll * (int)sizeof(int));
+    if( !aKnown ){ rc = SQLITE_NOMEM; goto done; }
+    memset(aKnown, 0, (size_t)nAll * sizeof(int));
+  }
+  while( nKnown<nAll ){
+    int progressed = 0;
+    for(i=0; i<nAll; i++){
+      int ready = 1;
+      int maxH = 0;
+      int pidx;
+      if( aKnown[i] ) continue;
+      for(pidx=0; pidx<aAll[i].nParents; pidx++){
+        int pi;
+        if( prollyHashIsEmpty(&aAll[i].aParents[pidx]) ) continue;
+        if( prollyHashSetContains(pUpstream, &aAll[i].aParents[pidx]) ) continue;
+        pi = rebaseWalkFind(aAll, nAll, &aAll[i].aParents[pidx]);
+        if( pi<0 || aAll[pi].height<0 ){
+          ready = 0;
+          break;
+        }
+        if( aAll[pi].height>maxH ) maxH = aAll[pi].height;
+      }
+      if( !ready ) continue;
+      aAll[i].height = maxH + 1;
+      aKnown[i] = 1;
+      nKnown++;
+      progressed = 1;
+    }
+    if( !progressed ){
+      rc = SQLITE_CORRUPT;
+      goto done;
+    }
+  }
+
+  aHeap = sqlite3_malloc(nAll>0 ? nAll*(int)sizeof(int) : (int)sizeof(int));
+  aNewest = sqlite3_malloc(nReplay * (int)sizeof(ProllyHash));
+  if( !aHeap || !aNewest ){ rc = SQLITE_NOMEM; goto done; }
+  {
+    int headIdx = rebaseWalkFind(aAll, nAll, pHeadHash);
+    int pidx;
+    if( headIdx<0 ){ rc = SQLITE_CORRUPT; goto done; }
+    aAll[headIdx].queued = 1;
+    rebaseHeapPush(aAll, aHeap, &nHeap, headIdx);
+    while( nHeap>0 ){
+      int idx = rebaseHeapPop(aAll, aHeap, &nHeap);
+      for(pidx=0; pidx<aAll[idx].nParents; pidx++){
+        int pi;
+        if( prollyHashIsEmpty(&aAll[idx].aParents[pidx]) ) continue;
+        if( prollyHashSetContains(pUpstream, &aAll[idx].aParents[pidx]) ) continue;
+        pi = rebaseWalkFind(aAll, nAll, &aAll[idx].aParents[pidx]);
+        if( pi<0 ){ rc = SQLITE_CORRUPT; goto done; }
+        if( aAll[pi].queued ) continue;
+        aAll[pi].queued = 1;
+        rebaseHeapPush(aAll, aHeap, &nHeap, pi);
+      }
+      if( !aAll[idx].replay ) continue;
+      if( nNewest>=nReplay ){ rc = SQLITE_CORRUPT; goto done; }
+      aNewest[nNewest++] = aAll[idx].hash;
+    }
+  }
+  if( nNewest!=nReplay ){ rc = SQLITE_CORRUPT; goto done; }
+  for(i=0; i<nNewest; i++) aReplay[i] = aNewest[nNewest-1-i];
+
+done:
+  sqlite3_free(queue);
+  sqlite3_free(aAll);
+  sqlite3_free(aKnown);
+  sqlite3_free(aHeap);
+  sqlite3_free(aNewest);
+  if( seenInit ) prollyHashSetFree(&seen);
+  return rc;
+}
+
 /* Dirty zBranch. Return-branch mirror is loadable only when workingCommit
 ** equals that HEAD; otherwise overlay rebase metadata so restore matches. */
 static int rebaseBranchHasUncommittedWork(
@@ -263,11 +529,9 @@ static int doltliteRebaseCollectReplaySet(
     doltliteCommitClear(&c);
   }
 
-  for(i=0; i<nReplay/2; i++){
-    ProllyHash tmp = aReplay[i];
-    aReplay[i] = aReplay[nReplay-1-i];
-    aReplay[nReplay-1-i] = tmp;
-  }
+  rc = rebaseOrderReplayCommits(db, pHeadHash, &upstreamAncestors,
+                                aReplay, nReplay);
+  if( rc!=SQLITE_OK ) goto cleanup;
 
   *paReplay = aReplay;
   *pnReplay = nReplay;
