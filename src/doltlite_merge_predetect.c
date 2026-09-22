@@ -1405,4 +1405,15 @@ table_done:
   return SQLITE_OK;
 }
 
+int mergePass1RunChecks(MergePass1Ctx *c){
+  int rc = mergePass1CheckRenameReusingColumnName(c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckIndexOverRenamedColumn(c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckIndexOverDivergentAdd(c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckTriggerOverRenamedTable(c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckRowEditOfDroppedColumn(c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckDuplicateIndexColumns(c);
+  if( rc==SQLITE_OK ) rc = mergePass1CheckDependentOverDualRename(c);
+  return rc;
+}
+
 #endif /* DOLTLITE_PROLLY */
