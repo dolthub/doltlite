@@ -136,7 +136,18 @@ static int indexExprToSql(sqlite3_str *p, const Expr *pExpr, Table *pTab){
       return SQLITE_OK;
     case TK_COLUMN:
       if( pExpr->iColumn<0 ){
-        sqlite3_str_appendall(p, "rowid");
+        int k;
+        const char *zRowid = 0;
+        if( pTab && HasRowid(pTab) ){
+          for(k=0; k<pTab->nCol; k++){
+            if( (pTab->aCol[k].colFlags & COLFLAG_PRIMKEY)!=0 ){
+              zRowid = pTab->aCol[k].zCnName;
+              break;
+            }
+          }
+        }
+        if( zRowid ) sqlite3_str_appendf(p, "\"%w\"", zRowid);
+        else sqlite3_str_appendall(p, "rowid");
       }else if( pTab && pExpr->iColumn<pTab->nCol ){
         sqlite3_str_appendf(p, "\"%w\"", pTab->aCol[pExpr->iColumn].zCnName);
       }else{
@@ -191,6 +202,11 @@ static int indexExprToSql(sqlite3_str *p, const Expr *pExpr, Table *pTab){
     default:
       return SQLITE_ERROR;
   }
+}
+
+int doltliteAppendExprSql(sqlite3_str *p, const Expr *pExpr, Table *pTab){
+  if( !p || !pExpr ) return SQLITE_ERROR;
+  return indexExprToSql(p, pExpr, pTab);
 }
 
 static int evalExprOnRecord(
