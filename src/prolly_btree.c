@@ -999,6 +999,7 @@ int sqlite3BtreeOpen(
       rc = SQLITE_OK;
     }else{
       rc = btreeLoadBranchState(&pBt->store, zDef, 1, &state);
+      if( rc==SQLITE_OK ) chunkStoreAdoptWorkingSetBasis(&pBt->store, zDef);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
       if( rc==SQLITE_NOTFOUND
        && !chunkStoreOriginSourceEnabled(&pBt->store) ){

@@ -452,6 +452,7 @@ int btreeReloadBranchWorkingStateInto(
   if( rc!=SQLITE_OK ) return rc;
   rc = btreeLoadBranchState(&pBt->store, zBr, 0, &state);
   if( rc!=SQLITE_OK ) return rc;
+  chunkStoreAdoptWorkingSetBasis(&pBt->store, zBr);
 
   if( bLoadCatalog
    && !prollyHashIsEmpty(&state.catalog)

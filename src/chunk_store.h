@@ -203,6 +203,11 @@ struct ChunkStore {
   int nTxnSequences;
   u8 bTxnSequences;
   u8 bRefsStale;          /* OOM cleared refs; reload from refsHash */
+  /* Working-set ref this connection last adopted or wrote for one branch.
+  ** Refreshes leave it alone, so it differs from refs once a peer writes. */
+  u8 bWsBasis;
+  char zWsBasisBranch[64];
+  ProllyHash wsBasis;
   ChunkIndex index;
   ChunkIndexCache *pIndexCache;
   int nIndexCacheSlot;
@@ -295,6 +300,9 @@ int chunkStoreSerializeRefs(ChunkStore *cs);
 
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash);
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash);
+void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch);
+void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs);
+int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch);
 
 int chunkStoreAddTagFull(ChunkStore *cs, const char *zName, const ProllyHash *pCommit,
                          const char *zTagger, const char *zEmail,
