@@ -1,0 +1,106 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-pending-scan
+
+proc pending_scan_check {name} {
+  foreach {suffix sql} {
+    forward {SELECT id,n,v,length(payload),hex(substr(payload,1,8)) FROM t ORDER BY id}
+    backward {SELECT id,n,v,length(payload),hex(substr(payload,1,8)) FROM t ORDER BY id DESC}
+    seek {SELECT id,n,v FROM t WHERE id>=(SELECT id FROM t WHERE n=101) ORDER BY id LIMIT 150}
+    seek-backward {SELECT id,n,v FROM t WHERE id<=(SELECT id FROM t WHERE n=4001) ORDER BY id DESC LIMIT 150}
+    index {SELECT v,id FROM t INDEXED BY t_v WHERE v>=10 ORDER BY v,id}
+    integrity {PRAGMA integrity_check}
+  } {
+    do_test $name-$suffix [list db eval $sql] [oracle eval $sql]
+  }
+}
+
+proc pending_scan_write {conn} {
+  set rows {}
+  $conn eval {SELECT id,n,v FROM t ORDER BY id} row {
+    if {$row(n)==101} {
+      $conn eval {
+        UPDATE t SET v=v-2 WHERE n=500;
+        DELETE FROM t WHERE n=600;
+      }
+    }
+    lappend rows $row(id) $row(n) $row(v)
+  }
+  return $rows
+}
+
+foreach {keytype declaration keyexpr} {
+  integer {INTEGER PRIMARY KEY} {i*2-4096}
+  text {TEXT PRIMARY KEY} {printf('key-%08d',i*2)}
+} {
+  reset_db
+  forcedelete pending-scan-oracle.db
+  sqlite3 oracle {file:pending-scan-oracle.db?doltlite_engine=sqlite} -uri 1
+  foreach conn {db oracle} {
+    $conn eval "
+      PRAGMA cache_size=-256;
+      CREATE TABLE t(id $declaration, n INTEGER, v INTEGER, payload BLOB);
+      BEGIN;
+      WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)
+      INSERT INTO t SELECT $keyexpr,i,i%127,CAST(printf('%0256d',i) AS BLOB) FROM c;
+      COMMIT;
+      CREATE INDEX t_v ON t(v,id);
+      BEGIN;
+      DELETE FROM t WHERE n=32;
+    "
+  }
+  pending_scan_check $keytype-pending-exhausted
+  foreach conn {db oracle} {$conn eval {DELETE FROM t WHERE n%32=0}}
+  do_execsql_test $keytype-zero-update {
+    UPDATE t SET v=v+1 WHERE n%32=0;
+    SELECT changes(),count(*),sum(n) FROM t;
+  } {0 7936 32505856}
+  pending_scan_check $keytype-deleted
+
+  foreach conn {db oracle} {
+    $conn eval "
+      SAVEPOINT edits;
+      UPDATE t SET v=-n WHERE n%47=0;
+      WITH c(i) AS (VALUES(0),(8193),(127),(1),(1024),(32))
+      INSERT OR REPLACE INTO t SELECT $keyexpr,i,-i,zeroblob(512) FROM c;
+      WITH c(i) AS (VALUES(9000))
+      INSERT INTO t SELECT $keyexpr,i,-i,zeroblob(512) FROM c;
+      DELETE FROM t WHERE n=9000;
+    "
+  }
+  pending_scan_check $keytype-mixed
+  do_test $keytype-write-during-scan {
+    pending_scan_write db
+  } [pending_scan_write oracle]
+  foreach conn {db oracle} {
+    $conn eval {
+      DELETE FROM t WHERE id>=(SELECT id FROM t WHERE n=101) AND n%19=0;
+      UPDATE t SET v=v-1 WHERE n%23=0;
+    }
+  }
+  pending_scan_check $keytype-written
+  foreach conn {db oracle} {$conn eval {ROLLBACK TO edits; RELEASE edits}}
+  pending_scan_check $keytype-savepoint
+  foreach conn {db oracle} {$conn eval {ROLLBACK}}
+  pending_scan_check $keytype-rollback
+  oracle close
+}
+
+reset_db
+do_execsql_test sparse-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+  BEGIN;
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<128)
+  INSERT INTO t SELECT i,zeroblob(65536) FROM c;
+  COMMIT;
+  BEGIN;
+  DELETE FROM t WHERE id%32=0;
+  SELECT count(*),sum(length(v)),sum(v=zeroblob(65536)) FROM t;
+} {124 8126464 124}
+do_execsql_test sparse-update {
+  UPDATE t SET v=X'01' WHERE id%32=0;
+  SELECT changes(),count(*),sum(length(v)),sum(v=zeroblob(65536)) FROM t;
+  ROLLBACK;
+} {0 124 8126464 124}
+
+finish_test
