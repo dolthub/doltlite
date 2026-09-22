@@ -593,8 +593,10 @@ static int indexMovetoCustomCollation(
 
   *pDone = 0;
   if( !pCur->pKeyInfo ) return SQLITE_OK;
-  hasNocaseNul = !pCur->isTableRoot
-    && unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey);
+  /* A table root is the WITHOUT ROWID primary key, and a rowid table's
+  ** NOCASE primary key is stored on that same root. Sort order keeps the
+  ** bytes after a NUL, so an equality seek has to compare the records. */
+  hasNocaseNul = unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey);
   if( !hasNocaseNul
    && (!(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField)
        || !keyInfoHasUnsupportedCollation(
@@ -1237,6 +1239,10 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
     return SQLITE_NOTFOUND;
   }
   if( pCur->eState!=CURSOR_VALID || !pIdxKey || !pCur->pKeyInfo ){
+    return SQLITE_NOTFOUND;
+  }
+  /* Sort keys disagree with NOCASE once a probe contains a NUL. */
+  if( unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey) ){
     return SQLITE_NOTFOUND;
   }
 
