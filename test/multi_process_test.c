@@ -992,6 +992,8 @@ static void test_write_after_lost_commit_race(void){
   printf("--- Test 6a: Autocommit write after a lost commit race ---\n");
   snprintf(path, sizeof(path), "/tmp/mp_lost_race_%d.db", (int)getpid());
   setup_db(path);
+  check("mp_lost_race_open", sqlite3_open(path, &db)==SQLITE_OK);
+  check("mp_lost_race_first_write", execSql(db, "INSERT INTO t VALUES(2, 'mine')")==SQLITE_OK);
   mpPipe(ready);
   mpPipe(release);
   mpPipe(done);
@@ -1000,6 +1002,7 @@ static void test_write_after_lost_commit_race(void){
     close(ready[0]);
     close(release[1]);
     close(done[1]);
+    db = 0;
     if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(1);
     sqlite3_busy_timeout(db, 10000);
     if( execSql(db, "BEGIN IMMEDIATE; INSERT INTO t VALUES(10, 'peer')")!=SQLITE_OK ) _exit(2);
@@ -1017,8 +1020,6 @@ static void test_write_after_lost_commit_race(void){
   close(ready[1]);
   close(release[0]);
   close(done[0]);
-  check("mp_lost_race_open", sqlite3_open(path, &db)==SQLITE_OK);
-  check("mp_lost_race_first_write", execSql(db, "INSERT INTO t VALUES(2, 'mine')")==SQLITE_OK);
   mpRead(ready[0], &ch);
   memset(&ctx, 0, sizeof(ctx));
   ctx.releaseFd = release[1];
@@ -1026,6 +1027,7 @@ static void test_write_after_lost_commit_race(void){
   sqlite3_busy_handler(db, mpReleaseBusyPeer, &ctx);
   rc = execSql(db, "SELECT dolt_commit('-am','mine')");
   check("mp_lost_race_commit_busy", rc==SQLITE_BUSY && ctx.calls>0);
+  if( ctx.calls==0 ) mpWrite(release[1], "G");
   sqlite3_busy_timeout(db, 10000);
   check("mp_lost_race_acked_write", execSql(db, "INSERT INTO t VALUES(3, 'mine')")==SQLITE_OK);
   mpWrite(done[1], "I");
