@@ -968,8 +968,10 @@ static int changeIsSchemaOnly(
     }
     if( toIdx<pToCi->nCol ) continue;
     fromRec = pFromCi->aColToRec ? pFromCi->aColToRec[i] : i;
-    if( fromRec>=fromRi.nField ) continue;
-    if( fromRi.aType[fromRec]!=0 ) return 0;
+    /* Trailing NULLs are omitted, so a dropped all-NULL tail is not a
+    ** row change. A NULL stored ahead of a later value is a real field;
+    ** removing it rewrites the row. */
+    if( fromRec<fromRi.nField ) return 0;
   }
   return 1;
 }
