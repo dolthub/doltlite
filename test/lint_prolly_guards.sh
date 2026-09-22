@@ -41,10 +41,40 @@ if [ -z "$SHA" ]; then
   exit 2
 fi
 
+# The only step in lint that reaches the network. A dropped connection, or
+# progress output landing in a pipe the parallel runner has closed, must not
+# read as a guard violation: keep the transfer quiet, keep its log for a
+# real failure, and give a flake a second chance.
+FETCH_ATTEMPTS="${DOLTLITE_LINT_FETCH_ATTEMPTS:-3}"
+FETCH_DELAY="${DOLTLITE_LINT_FETCH_DELAY_SECONDS:-2}"
+
+fetch_upstream_base() {
+  local log="$1"
+  local attempt
+
+  for ((attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++)); do
+    if git fetch --quiet --depth=1 origin "$SHA" >"$log" 2>&1 \
+     || git fetch --quiet origin "$SHA" >"$log" 2>&1; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$FETCH_ATTEMPTS" ]; then
+      echo "lint_prolly_guards: fetch attempt $attempt/$FETCH_ATTEMPTS" \
+           "failed; retrying in $((attempt * FETCH_DELAY))s" >&2
+      sleep "$((attempt * FETCH_DELAY))"
+    fi
+  done
+  return 1
+}
+
 cd "$REPO"
 if ! git cat-file -e "$SHA:src/vdbe.c" 2>/dev/null; then
   echo "lint_prolly_guards: fetching $SHA for the upstream originals"
-  git fetch --depth=1 origin "$SHA" || git fetch origin "$SHA"
+  FETCH_LOG=$(mktemp)
+  if ! fetch_upstream_base "$FETCH_LOG"; then
+    echo "lint_prolly_guards: could not fetch $SHA in $FETCH_ATTEMPTS attempts" >&2
+    sed -e 's/^/  /' "$FETCH_LOG" >&2
+  fi
+  rm -f "$FETCH_LOG"
   if ! git cat-file -e "$SHA:src/vdbe.c" 2>/dev/null; then
     echo "lint_prolly_guards: cannot read $SHA:src/vdbe.c" >&2
     echo "  that SHA is .sqlite-upstream-base; fetch it or fix the file" >&2
