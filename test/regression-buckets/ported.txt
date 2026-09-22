@@ -82,3 +82,4 @@ doltlite_max_page_count
 doltlite_txn_state_cursor
 doltlite_add_rename_source
 doltlite_pending_scan
+doltlite_column_metadata

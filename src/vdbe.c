@@ -3459,6 +3459,16 @@ op_column_restart:
         static const u16 aFlag[] = { MEM_Blob, MEM_Str|MEM_Term };
         pDest->n = len = (t-12)/2;
         pDest->enc = encoding;
+#ifdef DOLTLITE_PROLLY
+        {
+          u8 p5 = pOp->p5 & OPFLAG_BYTELENARG;
+          if( p5 && (p5==OPFLAG_TYPEOFARG || (t&1)==0
+                     || p5==OPFLAG_BYTELENARG) ){
+            sqlite3VdbeSerialGet((u8*)sqlite3CtypeMap, t, pDest);
+            break;
+          }
+        }
+#endif
         if( pDest->szMalloc < len+2 ){
           if( len>db->aLimit[SQLITE_LIMIT_LENGTH] ) goto too_big;
           pDest->flags = MEM_Null;
