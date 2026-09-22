@@ -97,8 +97,8 @@ class HotspotTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 hotspots.positive_us(value)
 
-    def test_fixture_must_exceed_cache(self):
-        for options in (("--rows", "100"), ("--runs", "0"), ("--cache-kib", "0")):
+    def test_fixture_sizes_must_be_positive(self):
+        for options in (("--rows", "0"), ("--runs", "0"), ("--cache-kib", "0")):
             with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as caught:
                     hotspots.main(["--baseline", "unused", "--candidate", "unused",
@@ -111,31 +111,27 @@ class HotspotTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
-    def test_main_measures_queries_for_all_arms(self):
+    def test_main_measures_only_remaining_workloads_for_all_arms(self):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
             raw = Path(directory) / "samples.tsv"
-            values = {name: 100000 for name in self.names[:4]}
-            index_values = {name: 100000 for name in self.names[4:]}
             retained_values = {f"retained_3133_{category}_probe": 100000
                                for category in ("wide_rows", "narrow_rows", "zero_row_updates")}
+            report = io.StringIO()
             with patch.object(hotspots, "run", return_value="validated") as run, \
-                 patch.object(hotspots, "prepare", side_effect=lambda binary, db, rows: db.touch()), \
-                 patch.object(hotspots, "measure_queries", side_effect=lambda *args: dict(values)) as measure, \
-                 patch.object(hotspots, "index_fixture", return_value=[]), \
-                 patch.object(hotspots, "prepare_index_queries", side_effect=lambda binary, db, *args: db.touch()), \
-                 patch.object(hotspots, "measure_index_queries", return_value=index_values) as index_measure, \
-                 patch.object(hotspots, "add_column_fixture", side_effect=lambda binary, db, rows: db.touch()), \
+                 patch.object(hotspots, "prepare") as prepare, \
+                 patch.object(hotspots, "measure_queries") as measure, \
+                 patch.object(hotspots, "index_fixture") as index_fixture, \
+                 patch.object(hotspots, "measure_index_queries") as index_measure, \
+                 patch.object(hotspots, "add_column_fixture") as add_column_fixture, \
                  patch.object(hotspots, "measure_add_column",
                               return_value={"add_column_default": 100000}) as add_column_measure, \
-                 patch.object(hotspots, "index_edit_fixture",
-                              side_effect=lambda binary, db, rows: (db.touch(), {"x": "1"})[1]) as index_edit_fixture, \
-                 patch.object(hotspots, "measure_index_edits",
-                              return_value={"index_edit_update": 100000}) as index_edit_measure, \
+                 patch.object(hotspots, "index_edit_fixture") as index_edit_fixture, \
+                 patch.object(hotspots, "measure_index_edits") as index_edit_measure, \
                  patch.object(hotspots, "prepare_retained", return_value=[]) as prepare_retained, \
                  patch.object(hotspots, "measure_retained", return_value=retained_values) as measure_retained, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
-                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                 contextlib.redirect_stdout(report), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
@@ -143,35 +139,23 @@ class HotspotTests(unittest.TestCase):
                              ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
                                          str(Path("stock").resolve()), str(Path("candidate").resolve())])
-            self.assertEqual([call.args[0].name for call in measure.call_args_list],
-                             ["base", "candidate", "stock", "stock", "candidate", "base"])
-            self.assertEqual([call.args[0].name for call in index_measure.call_args_list],
-                             ["base", "candidate", "stock", "stock", "candidate", "base"])
+            self.assertEqual(add_column_fixture.call_count, 3)
             self.assertEqual([call.args[0].name for call in add_column_measure.call_args_list],
                              ["base", "candidate", "stock", "stock", "candidate", "base"])
-            # Each trial mutates a fresh copy: the work db is never the fixture.
             for call in add_column_measure.call_args_list:
                 self.assertNotEqual(call.args[1], call.args[2])
                 self.assertTrue(call.args[1].name.endswith("-add-column.db"), call.args[1])
                 self.assertTrue(call.args[2].name.endswith("-add-column-run.db"), call.args[2])
-            self.assertEqual([call.args[0].name for call in index_edit_measure.call_args_list],
-                             ["base", "candidate", "stock", "stock", "candidate", "base"])
-            for call in index_edit_measure.call_args_list:
-                self.assertNotEqual(call.args[1], call.args[2])
-                self.assertTrue(call.args[1].name.endswith("-index-edits.db"), call.args[1])
-                self.assertTrue(call.args[2].name.endswith("-index-edits-run.db"), call.args[2])
-                self.assertEqual(call.args[3], hotspots.INDEX_EDIT_CACHE_KIB)
-                self.assertEqual(call.args[4], {"x": "1"})
-            # This section sizes itself: the gap only opens up past --rows.
-            self.assertEqual({call.args[2] for call in index_edit_fixture.call_args_list},
-                             {hotspots.INDEX_EDIT_ROWS})
-            self.assertGreater(hotspots.INDEX_EDIT_ROWS, 262144)
-            self.assertEqual(result.read_text(), "".join(
-                f"queries\t{name}\t100000\t100000\n" for name in self.names)
-                + "add_column\tadd_column_default\t100000\t100000\n"
-                + "index_edits\tindex_edit_update\t100000\t100000\n"
+            for retired in (prepare, measure, index_fixture, index_measure,
+                            index_edit_fixture, index_edit_measure):
+                retired.assert_not_called()
+            for title in ("Large Table Scans", "Large Index Edits"):
+                self.assertNotIn(title, report.getvalue())
+            for title in ("Wide Rows", "Narrow Rows", "Zero Row Updates"):
+                self.assertIn(title, report.getvalue())
+            self.assertEqual(result.read_text(), "add_column\tadd_column_default\t100000\t100000\n"
                 + "".join(f"{hotspots.section_of(name)}\t{name}\t100000\t100000\n" for name in retained_values))
-            self.assertEqual(len(raw.read_text().splitlines()), 21)
+            self.assertEqual(len(raw.read_text().splitlines()), 9)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -273,8 +257,8 @@ class HotspotTests(unittest.TestCase):
                 self.assertIn(bundle['profile']['payload'], (256, 1024))
             else:
                 self.assertTrue(bundle['expected'].startswith('0|'))
-        self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2})
-        self.assertEqual(sql.call_count, 15)
+        self.assertEqual(counts, {'wide_rows': 11, 'narrow_rows': 5, 'zero_row_updates': 1})
+        self.assertEqual(sql.call_count, 12)
         wide = [databases for name, bundle, databases in fixtures if bundle['category'] == 'wide_rows']
         self.assertTrue(all(databases == wide[0] for databases in wide))
 

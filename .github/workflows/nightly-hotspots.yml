@@ -48,6 +48,7 @@ jobs:
       run: |
         python3 test/performance_hotspot_fuzzer_test.py
         python3 test/performance_hotspot_search_test.py
+        python3 test/performance_hotspot_seeds_test.py
 
     - name: Restore exploration history
       uses: actions/cache/restore@v4
@@ -69,7 +70,7 @@ jobs:
         python3 test/performance_hotspot_fuzzer.py \
           --doltlite build/doltlite --sqlite build-stockref/sqlite3 \
           --seed "${DISCOVERY_SEED:-${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}}" \
-          --search --history "$RUNNER_TEMP/hotspot-history.json" \
+          --search --nightly-seeds --history "$RUNNER_TEMP/hotspot-history.json" \
           --issues "$RUNNER_TEMP/hotspot-issues.json" --runs 5 --seconds 1800 \
           --output "$RUNNER_TEMP/hotspot-discovery"
 

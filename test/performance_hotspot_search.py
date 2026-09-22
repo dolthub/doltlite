@@ -111,9 +111,12 @@ def generated_case(profile, recipe, number=0):
 def family_fingerprint(profile, case, plans):
     def normalized(sql):
         return re.sub(r'\b\d+\b', '?', ' '.join(sql.split()))
-    return digest({'key': profile.key, 'sql': normalized(case.sql), 'indexes': case.recipe.get('indexes'),
+    identity = {'key': profile.key, 'sql': normalized(case.sql), 'indexes': case.recipe.get('indexes'),
                    'prepare': normalized(case.prepare), 'verify': normalized(case.verify),
-                   'plans': {arm: normalized(plan) for arm, plan in plans.items()}})
+                   'plans': {arm: normalized(plan) for arm, plan in plans.items()}}
+    if case.warmup:
+        identity['warmup'] = normalized(case.warmup)
+    return digest(identity)
 
 
 def fingerprint(profile, case, plans):
@@ -199,9 +202,14 @@ class Search:
             temp.write_text(json.dumps(self.state, sort_keys=True)+'\n')
             temp.replace(self.history)
 
-    def specs(self, seed):
+    def specs(self, seed, nightly_seeds=False):
         from performance_hotspot_fuzzer import profile_for
         index = 0
+        if nightly_seeds:
+            from performance_hotspot_seeds import specs
+            for profile, cases, setup in specs():
+                yield index, profile, cases, setup, 'retired'
+                index += 1
         while True:
             profile, recipe, origin = self.choose(profile_for(seed, index))
             cases = [generated_case(profile, recipe)]

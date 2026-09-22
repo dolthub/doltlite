@@ -43,6 +43,7 @@ class Case:
     verify: str = ""
     prepare: str = ""
     recipe: dict = field(default_factory=dict)
+    warmup: str = ""
 
 
 def profile_for(seed, index):
@@ -124,7 +125,9 @@ def prologue(cache_kib):
 
 
 def unit_sql(case, timed):
-    parts = ["BEGIN;"] if case.verify or case.prepare else []
+    parts = [".output /dev/null", case.warmup, ".output stdout"] if case.warmup else []
+    if case.verify or case.prepare:
+        parts.append("BEGIN;")
     if case.prepare:
         parts += [".output /dev/null", case.prepare, ".output stdout"]
     if timed:
@@ -146,11 +149,13 @@ def session_sql(p, case, repeats):
 
 def parse_measurement(output, repeats):
     lines = output.splitlines()
-    if len(lines) < 5 or lines[0] != "WARM" or lines[2] != "MEASURE" or lines[-1] != "END":
+    if (len(lines) < 5 or lines[0] != "WARM" or lines[-1] != "END"
+            or "MEASURE" not in lines):
         raise ValueError(f"invalid measurement framing: {output[:2000]}")
-    expected = lines[1]
+    start = lines.index("MEASURE")
+    expected = lines[1:start]
     values, times = [], []
-    for line in lines[3:-1]:
+    for line in lines[start+1:-1]:
         match = TIMER.fullmatch(line)
         if match:
             value = float(match[1])
@@ -159,9 +164,9 @@ def parse_measurement(output, repeats):
             times.append(value * 1000)
         else:
             values.append(line)
-    if len(times) != repeats or values != [expected]*repeats:
+    if not expected or len(times) != repeats or values != expected*repeats:
         raise ValueError(f"missing timings or unstable results: {output[:2000]}")
-    return {"ms": sum(times), "result": expected}
+    return {"ms": sum(times), "result": "\n".join(expected)}
 
 
 class BudgetExpired(Exception):
@@ -305,6 +310,7 @@ def main(argv=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--seed", type=int, default=20260922)
     parser.add_argument("--search", action="store_true", help="generate SQL until the time budget expires")
+    parser.add_argument("--nightly-seeds", action="store_true", help="revisit retired PR workloads before random search")
     parser.add_argument("--history", type=Path)
     parser.add_argument("--issues", type=Path)
     parser.add_argument("--profiles", type=positive, default=12)
@@ -320,6 +326,8 @@ def main(argv=None):
         parser.error("require at least 5 confirmation pairs, at most 128 profiles, and a nonnegative profile index")
     if args.search and (args.replay or args.profile is not None or args.case):
         parser.error("--search cannot be combined with replay/profile/case filters")
+    if args.nightly_seeds and not args.search:
+        parser.error("--nightly-seeds requires --search")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
@@ -346,7 +354,7 @@ def main(argv=None):
             specs = [(0, Profile(**replay["profile"]), [Case(**replay["case"])],
                       replay["setup_sql"] if "setup_sql" in replay else (args.replay.parent/"setup.sql").read_text(), "replay")]
         elif args.search:
-            specs = search.specs(args.seed)
+            specs = search.specs(args.seed, nightly_seeds=args.nightly_seeds)
         else:
             specs = []
             for index in indexes:
@@ -370,7 +378,7 @@ def main(argv=None):
                             shutil.copyfile(databases[arm], case_databases[arm])
                         record = {"id": f"p{index:03d}/{case.name}", "profile": asdict(profile),
                                   "reproducer": f"p{index:03d}/{case.name}.json",
-                                  "origin": "fresh" if args.search and case.name != "generated_0" else origin}
+                                  "origin": "fresh" if args.search and case.name.startswith("generated_") and case.name != "generated_0" else origin}
                         repro = {"seed": report["seed"], "generator_version": VERSION, "profile": asdict(profile),
                                  "case": asdict(case), "setup": "setup.sql", "setup_sql": setup}
                         (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")

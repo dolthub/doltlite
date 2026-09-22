@@ -122,14 +122,18 @@ def measure_cases(binary, db, cases, cache_kib):
     return parse_session(sql(binary, db, "\n".join(statements)), cases)
 
 
-def prepare(binary, db, rows):
+def scan_setup(rows):
     statements = ["CREATE TABLE t(id INTEGER PRIMARY KEY, payload BLOB NOT NULL);"]
     for first in range(1, rows + 1, 4096):
         last = min(first + 4095, rows)
         statements.append(f"""WITH RECURSIVE c(i) AS (
           VALUES({first}) UNION ALL SELECT i+1 FROM c WHERE i<{last}
         ) INSERT INTO t SELECT i,randomblob({PAYLOAD_BYTES}) FROM c;""")
-    sql(binary, db, "\n".join(statements))
+    return "\n".join(statements)
+
+
+def prepare(binary, db, rows):
+    sql(binary, db, scan_setup(rows))
     if db.stat().st_size < rows * PAYLOAD_BYTES:
         raise ValueError(f"fixture unexpectedly smaller than its payload: {db}")
 
@@ -157,14 +161,18 @@ def index_fixture(path, rows):
                 totals[4] += row_id
             output.write("INSERT INTO orders VALUES\n" + ",\n".join(values) + ";\n")
         output.write("CREATE INDEX orders_customer ON orders(customer_id);\nANALYZE;\n")
+    queries = index_queries(rows)
+    results = ["|".join(str(expected[i * 137 % customers][field]) for field in (0, 1, 2, 3))
+               for i in range(1000)]
+    return [("index_scan_row_fetch", "\n".join(queries), results)]
+
+
+def index_queries(rows):
+    customers = min(2048, rows)
     columns = ("count(*),sum(amount_cents),sum(length(description)),"
                "sum(unicode(substr(description,1,1))+unicode(substr(description,-1,1)))")
-    queries, results = [], []
-    for i in range(1000):
-        customer = i * 137 % customers
-        queries.append(f"SELECT {columns} FROM orders WHERE customer_id={customer};")
-        results.append("|".join(str(expected[customer][field]) for field in (0, 1, 2, 3)))
-    return [("index_scan_row_fetch", "\n".join(queries), results)]
+    return [f"SELECT {columns} FROM orders WHERE customer_id={i * 137 % customers};"
+            for i in range(1000)]
 
 
 def prepare_index_queries(binary, db, fixture, rows, cases):
@@ -223,15 +231,16 @@ def measure_add_column(binary, fixture, work, rows, cache_kib):
                          [(name, None, expected)])
 
 
-def index_edit_fixture(binary, db, rows):
-    """A table with a secondary index. The timed UPDATE moves half the indexed
-    values; the edits arrive in primary-key order, which is unordered in
-    index-key space, so every one lands in a large pending map."""
-    sql(binary, db, f"""CREATE TABLE ie(id INTEGER PRIMARY KEY, k INTEGER NOT NULL, s TEXT NOT NULL);
+def index_edit_setup(rows):
+    return f"""CREATE TABLE ie(id INTEGER PRIMARY KEY, k INTEGER NOT NULL, s TEXT NOT NULL);
 WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
 INSERT INTO ie SELECT i,(i*7919)%1000,'s'||i FROM c;
 CREATE INDEX ie_k ON ie(k);
-ANALYZE;""")
+ANALYZE;"""
+
+
+def index_edit_fixture(binary, db, rows):
+    sql(binary, db, index_edit_setup(rows))
     check = sql(binary, db, "SELECT count(*) FROM ie;")
     if check != f"{rows}\n":
         raise ValueError(f"invalid index-edit fixture: {check}")
@@ -362,41 +371,26 @@ def main(argv=None):
     parser.add_argument("--cache-kib", type=int, default=65536)
     parser.add_argument("--runs", type=int, default=5)
     args = parser.parse_args(argv)
-    if args.runs < 1 or args.cache_kib < 1 or args.rows * PAYLOAD_BYTES < 4 * args.cache_kib * 1024:
-        parser.error("require positive runs/cache and a payload at least four times the cache")
+    if args.runs < 1 or args.cache_kib < 1 or args.rows < 1:
+        parser.error("require positive rows, runs, and cache")
     binaries = {arm: getattr(args, arm).resolve() for arm in ("baseline", "candidate", "stock")}
     run(["bash", str(TEST_DIR / "assert_stock_reference.sh"),
          str(binaries["stock"]), str(binaries["candidate"])])
     samples = {arm: [] for arm in binaries}
     with tempfile.TemporaryDirectory(prefix="doltlite-hotspots-") as directory:
         root = Path(directory)
-        databases = {arm: root / f"{arm}.db" for arm in binaries}
-        index_databases = {arm: root / f"{arm}-index.db" for arm in binaries}
         add_column_databases = {arm: root / f"{arm}-add-column.db" for arm in binaries}
-        index_edit_databases = {arm: root / f"{arm}-index-edits.db" for arm in binaries}
-        index_edit_expected = None
-        fixture = root / "index-fixture.sql"
-        index_cases = index_fixture(fixture, args.rows)
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
-            prepare(binary, databases[arm], args.rows)
-            prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
             add_column_fixture(binary, add_column_databases[arm], args.rows)
-            index_edit_expected = index_edit_fixture(binary, index_edit_databases[arm], INDEX_EDIT_ROWS)
         retained = prepare_retained(binaries, root)
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
             for arm in order:
                 print(f"Hotspots trial {trial+1}/{args.runs}: {arm}", file=sys.stderr, flush=True)
-                measured = measure_queries(binaries[arm], databases[arm], args.rows, args.cache_kib)
-                measured.update(measure_index_queries(binaries[arm], index_databases[arm],
-                                                      index_cases, args.cache_kib))
-                measured.update(measure_add_column(binaries[arm], add_column_databases[arm],
-                                                   root / f"{arm}-add-column-run.db",
-                                                   args.rows, args.cache_kib))
-                measured.update(measure_index_edits(binaries[arm], index_edit_databases[arm],
-                                                    root / f"{arm}-index-edits-run.db",
-                                                    INDEX_EDIT_CACHE_KIB, index_edit_expected))
+                measured = measure_add_column(binaries[arm], add_column_databases[arm],
+                                              root / f"{arm}-add-column-run.db",
+                                              args.rows, args.cache_kib)
                 measured.update(measure_retained(binaries[arm], arm, retained))
                 samples[arm].append(measured)
         write_results(samples,
