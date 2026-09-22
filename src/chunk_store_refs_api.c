@@ -186,11 +186,59 @@ int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHas
   return SQLITE_OK;
 }
 
+static void csNoteWorkingSetBasis(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pHash
+){
+  size_t n = strlen(zBranch);
+  if( n>=sizeof(cs->zWsBasisBranch) ){
+    cs->bWsBasis = 0;
+    return;
+  }
+  memcpy(cs->zWsBasisBranch, zBranch, n+1);
+  memcpy(&cs->wsBasis, pHash, sizeof(ProllyHash));
+  cs->bWsBasis = 1;
+}
+
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash){
   int i = findBranchIdx(cs, zBranch);
   if( i<0 ) return SQLITE_NOTFOUND;
   memcpy(&cs->refs.aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
+  csNoteWorkingSetBasis(cs, zBranch, pHash);
   return SQLITE_OK;
+}
+
+void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch){
+  int i = findBranchIdx(cs, zBranch);
+  if( i<0 ){
+    cs->bWsBasis = 0;
+    return;
+  }
+  csNoteWorkingSetBasis(cs, zBranch, &cs->refs.aBranches[i].workingSetHash);
+}
+
+void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs){
+  int i;
+  if( !cs->bWsBasis ) return;
+  i = findBranchIdx(cs, cs->zWsBasisBranch);
+  if( i<0 ){
+    cs->bWsBasis = 0;
+    return;
+  }
+  memcpy(&cs->wsBasis, &cs->refs.aBranches[i].workingSetHash,
+         sizeof(ProllyHash));
+}
+
+int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch){
+  int i;
+  if( !zBranch || !cs->bWsBasis || strcmp(cs->zWsBasisBranch, zBranch)!=0 ){
+    return 0;
+  }
+  i = findBranchIdx(cs, zBranch);
+  if( i<0 ) return 0;
+  return prollyHashCompare(&cs->refs.aBranches[i].workingSetHash,
+                           &cs->wsBasis)!=0;
 }
 
 int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit){

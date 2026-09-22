@@ -67,7 +67,7 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
 }
 
-static int csRestoreCommittedRefsState(ChunkStore *cs){
+static int csRestoreCommittedRefsStateInner(ChunkStore *cs){
   csRestoreCommittedRefsHash(cs);
   if( prollyHashIsEmpty(&cs->refs.committedRefsHash) ){
     csFreeBranches(cs);
@@ -92,6 +92,12 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
     cs->bRefsStale = 0;
     return SQLITE_OK;
   }
+}
+
+static int csRestoreCommittedRefsState(ChunkStore *cs){
+  int rc = csRestoreCommittedRefsStateInner(cs);
+  chunkStoreReadoptWorkingSetBasis(cs);
+  return rc;
 }
 
 static int csCommitToMemory(ChunkStore *cs){
