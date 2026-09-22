@@ -3207,7 +3207,6 @@ static int whereRangeVectorLen(
 #else
 # define ApplyCostMultiplier(C,T)
 #endif
-
 #ifdef DOLTLITE_PROLLY
 /* True when p is a literal whose NOCASE comparison cannot see past a
 ** NUL, because the literal itself has none. char(0) and column
