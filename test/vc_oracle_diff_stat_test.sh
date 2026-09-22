@@ -330,6 +330,26 @@ SELECT dolt_commit('-m', 'c2');
 echo "--- schema change: DROP COLUMN ---"
 
 # Dropped cells are cells_deleted, never also modified.
+oracle_both "drop_mixed_null_middle_column" "
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES(1, 10, NULL, 7), (2, 10, 5, 7), (3, 10, NULL, 8);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_all_null_middle_column" "
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES(1, 10, NULL, 7), (2, 20, NULL, 8);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
 oracle_both "drop_null_column_no_data_change" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
 INSERT INTO t VALUES(1, 10, NULL), (2, 20, NULL);

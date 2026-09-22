@@ -291,6 +291,38 @@ run_test "namemap_to_at_old_commit" \
   "SELECT to_a || '=' || to_c FROM dolt_diff_t WHERE diff_type='added';" \
   "1=CEE" "$DBN"
 
+# A NULL dropped from the middle of a record was stored. Every such row is
+# modified, not only the rows whose dropped cell held a value.
+DBNULL=/tmp/test_dt_dropnull_$$.db; rm -f "$DBNULL"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1, 10, NULL, 7), (2, 10, 5, 7), (3, 10, NULL, 8);
+SELECT dolt_commit('-Am', 'c1');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am', 'dropb');" | $DOLTLITE "$DBNULL" > /dev/null 2>&1
+
+run_test "drop_mixed_null_rows" \
+  "SELECT group_concat(from_id || ':' || from_a || ':' || from_c || ':' || to_c || ':' || diff_type, ',') FROM (SELECT from_id, from_a, from_c, to_c, diff_type FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY from_id);" \
+  "1:10:7:7:modified,2:10:7:7:modified,3:10:8:8:modified" "$DBNULL"
+run_test "drop_mixed_null_stat" \
+  "SELECT rows_unmodified || '|' || rows_modified || '|' || cells_deleted FROM dolt_diff_stat('HEAD~1','HEAD','t');" \
+  "0|3|3" "$DBNULL"
+
+# A trailing NULL was never stored. Dropping that column leaves the row
+# unmodified, while a stored value in the same column does not.
+DBTAIL=/tmp/test_dt_droptail_$$.db; rm -f "$DBTAIL"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES (1, 10, NULL), (2, 10, 5), (3, 10, NULL);
+SELECT dolt_commit('-Am', 'c1');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am', 'dropb');" | $DOLTLITE "$DBTAIL" > /dev/null 2>&1
+
+run_test "drop_trailing_null_rows" \
+  "SELECT group_concat(from_id || ':' || diff_type, ',') FROM (SELECT from_id, diff_type FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY from_id);" \
+  "2:modified" "$DBTAIL"
+run_test "drop_trailing_null_stat" \
+  "SELECT rows_unmodified || '|' || rows_modified || '|' || cells_deleted FROM dolt_diff_stat('HEAD~1','HEAD','t');" \
+  "2|1|3" "$DBTAIL"
+
 # Re-adding a dropped column moves it to the declared end.
 DBR=/tmp/test_dt_readd_$$.db; rm -f "$DBR"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT, c TEXT);
@@ -322,7 +354,7 @@ run_test "namemap_pkswap_from" \
   "SELECT from_a || '/' || from_b FROM dolt_diff_t WHERE diff_type='removed';" \
   "k1/k2" "$DBK"
 
-rm -f "$DBN" "$DBR" "$DBK"
+rm -f "$DBN" "$DBR" "$DBK" "$DBNULL" "$DBTAIL"
 # Unreachable to_commit is empty; +to_commit must agree with the unfiltered scan.
 DBG=/tmp/test_dt_ancgate_$$.db; rm -f "$DBG"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

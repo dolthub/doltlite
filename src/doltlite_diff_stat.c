@@ -211,9 +211,11 @@ static int dsInPlaceColumnChange(
   return renamed;
 }
 
-/* *pnDiffer is rows_modified: a gained/lost column counts only if it held a
-** value. *pnModified is cells_modified: added columns count, dropped ones do
-** not (already in cells_added/cells_deleted). */
+/* *pnDiffer is rows_modified. An added column counts when the new cell is
+** non-NULL. A dropped column counts when its cell was stored, including a
+** NULL that sat ahead of a later value. A trailing NULL is omitted from
+** the record and is not a row change. *pnModified is cells_modified:
+** added columns count, dropped ones do not (already in cells_deleted). */
 static void dsCountChangedCells(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
@@ -259,7 +261,7 @@ static void dsCountChangedCells(
     if( pColMap->aFromMatched && pColMap->aFromMatched[i] ) continue;
     fromRec = pColMap->aFromRec ? pColMap->aFromRec[i] : i;
     if( fromRec>=fromRi.nField ) continue;
-    if( fromRi.aType[fromRec]!=0 ) nDiffer++;
+    nDiffer++;
   }
 
   *pnDiffer = nDiffer;
