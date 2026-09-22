@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_merge_int.h"
+#include "vdbeInt.h"
 
 #define SCHEMA_IR_OTHER 0
 #define SCHEMA_IR_FK    1
@@ -1152,6 +1153,115 @@ done:
 }
 
 
+static char parsedColumnAffinity(const ParsedColumn *pCol){
+  const char *zType;
+  if( !pCol || !pCol->zDef ) return SQLITE_AFF_NUMERIC;
+  zType = schemaColumnDefinitionTail(pCol->zDef);
+  if( !zType ) return SQLITE_AFF_NUMERIC;
+  return sqlite3AffinityType(zType, 0);
+}
+
+/* True when a column kept its position but the merged declaration
+** would store a different serial type than this side wrote. */
+static int sideAffinityDiffers(
+  ParsedColumn *aMerged, int nMerged,
+  ParsedColumn *aSide, int nSide,
+  const int *aMap
+){
+  int j;
+  for(j=0; j<nSide; j++){
+    int dst = aMap[j];
+    if( dst<0 || dst>=nMerged ) continue;
+    if( parsedColumnAffinity(&aMerged[dst])
+     != parsedColumnAffinity(&aSide[j]) ) return 1;
+  }
+  return 0;
+}
+
+static void clearOwnedFields(u8 **apOwned, int n){
+  int i;
+  if( !apOwned ) return;
+  for(i=0; i<n; i++){
+    sqlite3_free(apOwned[i]);
+    apOwned[i] = 0;
+  }
+}
+
+/* Apply the merged column affinity. TEXT turns the other side's
+** integer into text; a numeric column turns convertible text into
+** a number. *ppOwned is the buffer for a converted text or blob. */
+static int relayoutApplyAffinity(
+  sqlite3 *db,
+  DoltliteSerialValue *m,
+  char aff,
+  u8 **ppOwned
+){
+  sqlite3_value *pVal;
+  int rc = SQLITE_OK;
+  int eType;
+
+  *ppOwned = 0;
+  if( !m || m->eType==SQLITE_NULL || aff==SQLITE_AFF_BLOB
+   || aff==SQLITE_AFF_NONE ){
+    return SQLITE_OK;
+  }
+  pVal = sqlite3ValueNew(db);
+  if( !pVal ) return SQLITE_NOMEM;
+  switch( m->eType ){
+    case SQLITE_INTEGER:
+      sqlite3VdbeMemSetInt64(pVal, m->i);
+      break;
+    case SQLITE_FLOAT:
+      sqlite3VdbeMemSetDouble(pVal, m->r);
+      break;
+    case SQLITE_TEXT:
+      rc = sqlite3VdbeMemSetStr(pVal, (const char*)m->p, m->n,
+                                SQLITE_UTF8, SQLITE_TRANSIENT);
+      break;
+    case SQLITE_BLOB:
+      rc = sqlite3VdbeMemSetStr(pVal, (const char*)m->p, m->n,
+                                0, SQLITE_TRANSIENT);
+      break;
+    default:
+      break;
+  }
+  if( rc==SQLITE_OK ){
+    const void *p = 0;
+    int n = 0;
+    u8 *pCopy = 0;
+    sqlite3ValueApplyAffinity(pVal, (u8)aff, SQLITE_UTF8);
+    eType = sqlite3_value_type(pVal);
+    memset(m, 0, sizeof(*m));
+    m->eType = eType;
+    if( eType==SQLITE_INTEGER ){
+      m->i = sqlite3_value_int64(pVal);
+    }else if( eType==SQLITE_FLOAT ){
+      m->r = sqlite3_value_double(pVal);
+    }else if( eType==SQLITE_TEXT || eType==SQLITE_BLOB ){
+      if( eType==SQLITE_TEXT ) p = sqlite3_value_text(pVal);
+      else p = sqlite3_value_blob(pVal);
+      n = sqlite3_value_bytes(pVal);
+      if( n>0 ){
+        if( !p ) rc = SQLITE_NOMEM;
+        else{
+          pCopy = sqlite3_malloc(n);
+          if( !pCopy ) rc = SQLITE_NOMEM;
+          else memcpy(pCopy, p, n);
+        }
+      }
+      if( rc==SQLITE_OK ){
+        m->p = pCopy;
+        m->n = n;
+        *ppOwned = pCopy;
+      }
+    }else{
+      m->eType = SQLITE_NULL;
+    }
+  }
+  sqlite3ValueFree(pVal);
+  return rc;
+}
+
 static void relayoutFieldValue(
   const u8 *pRec,
   const DoltliteRecordInfo *pInfo,
@@ -1187,6 +1297,7 @@ int normalizeSideToMergedLayout(
   const ProllyHash *pOursRoot,
   const ProllyHash *pTheirsRoot,
   u8 flags,
+  u8 srcFlags,
   const char *zAncSql,
   const char *zOursSql,
   const char *zTheirsSql,
@@ -1218,6 +1329,8 @@ int normalizeSideToMergedLayout(
   ProllyCursor oursCur;
   int oursCurInit = 0;
   DoltliteSerialValue *aMem = 0;
+  u8 **apOwned = 0;
+  int bSameKey;
   int rc, res, j;
 
   memset(&oursDefaults, 0, sizeof(oursDefaults));
@@ -1225,6 +1338,9 @@ int normalizeSideToMergedLayout(
   memset(&sideCi, 0, sizeof(sideCi));
 
   memset(pOutRoot, 0, sizeof(*pOutRoot));
+  /* Reading an int-key tree with a clustered-key cursor (or the reverse)
+  ** is not a place to rewrite values. The fast copy stays. */
+  bSameKey = ((flags ^ srcFlags) & PROLLY_NODE_INTKEY)==0;
   rc = parseColumns(zAncSql, &aAnc, &nAnc);
   if( rc!=SQLITE_OK ) return rc;
   rc = parseColumns(zOursSql, &aOurs, &nOurs);
@@ -1293,8 +1409,11 @@ int normalizeSideToMergedLayout(
     goto done;
   }
 
-  /* Already at merged positions; trailing adds read as absent anyway. */
-  if( nDropped==0 && !bFillSharedDefaults ){
+  /* Already at merged positions; trailing adds read as absent anyway.
+  ** A changed affinity still rewrites each field, so a TEXT column
+  ** does not keep the other side's integer. */
+  if( nDropped==0 && !bFillSharedDefaults
+   && !(bSameKey && sideAffinityDiffers(aOurs, nOurs, aTheirs, nTheirs, aMap)) ){
     int bSamePositions = 1;
     for(j=0; j<nTheirs; j++){
       if( aMap[j]!=j ){ bSamePositions = 0; break; }
@@ -1349,6 +1468,11 @@ int normalizeSideToMergedLayout(
    && !(aMem = sqlite3_malloc64((sqlite3_uint64)nMergedRecord * sizeof(*aMem))) ){
     rc = SQLITE_NOMEM; goto done;
   }
+  if( nMergedRecord>0 ){
+    apOwned = sqlite3_malloc64((sqlite3_uint64)nMergedRecord * sizeof(*apOwned));
+    if( !apOwned ){ rc = SQLITE_NOMEM; goto done; }
+    memset(apOwned, 0, (size_t)nMergedRecord * sizeof(*apOwned));
+  }
 
   prollyCursorInit(&cur, cs, cache, pTheirsRoot, flags);
   curInit = 1;
@@ -1386,6 +1510,7 @@ int normalizeSideToMergedLayout(
       rowOnlyTheirs = 1;
     }
 
+    clearOwnedFields(apOwned, nMergedRecord);
     doltliteParseRecord(pVal, nVal, &info);
     for(k=0; k<nMergedRecord; k++){
       memset(&aMem[k], 0, sizeof(aMem[k]));
@@ -1412,6 +1537,17 @@ int normalizeSideToMergedLayout(
       if( tgt<0 ) continue;
       m = &aMem[tgt];
       relayoutFieldValue(pVal, &info, src, m);
+      if( bSameKey && aMap[j]<nOurs ){
+        char affTo = parsedColumnAffinity(&aOurs[aMap[j]]);
+        char affFrom = parsedColumnAffinity(&aTheirs[j]);
+        if( affTo!=affFrom ){
+          u8 *pOwned = 0;
+          rc = relayoutApplyAffinity(db, m, affTo, &pOwned);
+          if( rc!=SQLITE_OK ) goto done;
+          sqlite3_free(apOwned[tgt]);
+          apOwned[tgt] = pOwned;
+        }
+      }
       if( m->eType==SQLITE_NULL ){
         if( rowOnlyTheirs && tgt+1>nEmit ) nEmit = tgt+1;
       }else if( tgt+1>nEmit ){
@@ -1438,6 +1574,20 @@ int normalizeSideToMergedLayout(
         tgt = aMergedRecord[aMap[j]];
         if( tgt<0 ) continue;
         relayoutFieldValue(pKeyRec, &kinfo, src, &aMem[tgt]);
+        if( bSameKey && aMap[j]<nOurs ){
+          char affTo = parsedColumnAffinity(&aOurs[aMap[j]]);
+          char affFrom = parsedColumnAffinity(&aTheirs[j]);
+          if( affTo!=affFrom ){
+            u8 *pOwned = 0;
+            rc = relayoutApplyAffinity(db, &aMem[tgt], affTo, &pOwned);
+            if( rc!=SQLITE_OK ){
+              doltliteRecordInfoClear(&kinfo);
+              goto done;
+            }
+            sqlite3_free(apOwned[tgt]);
+            apOwned[tgt] = pOwned;
+          }
+        }
         if( aMem[tgt].eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
       }
       doltliteRecordInfoClear(&kinfo);
@@ -1471,6 +1621,8 @@ int normalizeSideToMergedLayout(
   }
 
 done:
+  clearOwnedFields(apOwned, nMergedRecord);
+  sqlite3_free(apOwned);
   sqlite3_free(aMem); sqlite3_free(pKeyRec);
   mergeColDefaultsFree(&oursDefaults);
   mergeColDefaultsFree(&theirsDefaults);

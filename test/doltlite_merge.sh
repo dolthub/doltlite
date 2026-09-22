@@ -1972,5 +1972,39 @@ run_test "chained_virtual_unique_index" \
   "SELECT group_concat(id, ',') FROM (SELECT id FROM t INDEXED BY sqlite_autoindex_t_2 WHERE key_value IN (3,21,23) ORDER BY id);" \
   "1,2,3" "$DB100"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100"
+# One side changes a column to TEXT. The other side's integer must be
+# stored as text, or integrity_check reports a numeric value.
+DB101=/tmp/test_merge101_$$.db; rm -f "$DB101"
+$DOLTLITE "$DB101" > /dev/null 2>&1 <<'SQL'
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pid INT REFERENCES p(id));
+INSERT INTO p VALUES (1);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('right');
+CREATE TABLE p2(id TEXT PRIMARY KEY);
+INSERT INTO p2 SELECT CAST(id AS TEXT) FROM p;
+DROP TABLE c;
+DROP TABLE p;
+ALTER TABLE p2 RENAME TO p;
+CREATE TABLE c(id INTEGER PRIMARY KEY, pid TEXT REFERENCES p(id));
+INSERT INTO c VALUES (1, '1');
+SELECT dolt_commit('-Am', 'left-text');
+SELECT dolt_checkout('right');
+INSERT INTO c VALUES (2, 1);
+SELECT dolt_commit('-Am', 'right-child');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('right');
+SQL
+run_test "text_affinity_merge_types" \
+  "SELECT id || '|' || pid || '|' || typeof(pid) FROM c ORDER BY id;" \
+  "1|1|text
+2|1|text" "$DB101"
+run_test "text_affinity_merge_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB101"
+run_test "text_affinity_merge_no_violations" \
+  "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB101"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101"
 dltest_finish

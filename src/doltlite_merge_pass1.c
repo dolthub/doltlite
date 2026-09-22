@@ -674,6 +674,8 @@ static int mergePass1RelayoutToMergedSchema(
   const char *zMergedSql,
   const char *zOtherSql,
   u8 flags,
+  u8 otherFlags,
+  u8 ancFlags,
   const ProllyHash *pMergedRoot,
   const ProllyHash *pOtherRoot,
   const ProllyHash *pAncRoot,
@@ -692,12 +694,12 @@ static int mergePass1RelayoutToMergedSchema(
   if( rc!=SQLITE_OK ) return rc;
 
   rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pOtherRoot,
-                                   flags, zAncSql,
+                                   flags, otherFlags, zAncSql,
                                    zMergedSql, zOtherSql,
                                    bFillSharedDefaults, 0, pOtherOut);
   if( rc!=SQLITE_OK ) return rc;
   rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pAncRoot,
-                                   flags, zAncSql,
+                                   flags, ancFlags, zAncSql,
                                    zMergedSql, zAncSql,
                                    bFillSharedDefaults, zOtherSql, pAncOut);
   if( rc!=SQLITE_OK ) return rc;
@@ -744,6 +746,8 @@ static int mergePass1RelayoutOneSidedSchema(
       bMergedIsOurs ? ourSE->zSql : theirSE->zSql,
       bMergedIsOurs ? theirSE->zSql : ourSE->zSql,
       pOurs->flags,
+      bMergedIsOurs ? pTheirs->flags : pOurs->flags,
+      pAnc->flags,
       bMergedIsOurs ? &pOurs->root : &pTheirs->root,
       bMergedIsOurs ? &pTheirs->root : &pOurs->root,
       &pAnc->root,
@@ -861,7 +865,8 @@ static int mergePass1BothSides(
         int bRelaid = 0;
         rc = mergePass1RelayoutToMergedSchema(c, zName,
             ancSE->zSql, ourSE->zSql, theirSE->zSql,
-            c->aOurs[iOurs].flags, &c->aOurs[iOurs].root,
+            c->aOurs[iOurs].flags, theirsEntry->flags, ancEntry->flags,
+            &c->aOurs[iOurs].root,
             &theirsEntry->root, &ancEntry->root,
             &theirsNormRoot, &ancNormRoot, &bRelaid);
         if( rc!=SQLITE_OK ) return rc;
@@ -908,6 +913,7 @@ static int mergePass1BothSides(
     if( ancSE && mergedSE ){
       rc = mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
           mergedSE->zSql, zOursPrevSql, c->aOurs[iOurs].flags,
+          c->aOurs[iOurs].flags, ancEntry->flags,
           &theirsEntry->root, &c->aOurs[iOurs].root, &ancEntry->root,
           &otherNormRoot, &ancNormRoot, &bRelaid);
       if( rc!=SQLITE_OK ){
@@ -936,6 +942,7 @@ static int mergePass1BothSides(
     if( ancSE && ourSE && theirSE ){
       rc = mergePass1RelayoutToMergedSchema(c, zName, ancSE->zSql,
           ourSE->zSql, theirSE->zSql, c->aOurs[iOurs].flags,
+          theirsEntry->flags, ancEntry->flags,
           &c->aOurs[iOurs].root, &theirsEntry->root, &ancEntry->root,
           &otherNormRoot, &ancNormRoot, &bRelaid);
       if( rc!=SQLITE_OK ) return rc;
