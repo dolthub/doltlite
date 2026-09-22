@@ -1,0 +1,213 @@
+import hashlib
+import json
+import math
+from pathlib import Path
+import random
+import re
+
+VERSION = 2
+CHOICES = {
+    'source': ['table', 'join', 'exists', 'in'],
+    'predicate': ['all', 'group', 'range', 'or', 'modulo'],
+    'expression': ['v', 'seq', 'length', 'bytes'],
+    'operator': ['aggregate', 'distinct', 'group', 'order', 'window', 'nested', 'update', 'delete', 'create_index', 'add_column'],
+    'indexes': ['none', 'group', 'cover', 'both'],
+    'context': ['plain', 'after_scan', 'after_points', 'after_update', 'after_delete'],
+    'direction': ['ASC', 'DESC'],
+}
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:24]
+
+
+def fresh(rng):
+    return {key: rng.choice(values) for key, values in CHOICES.items()}
+
+
+def valid_recipe(recipe):
+    return isinstance(recipe, dict) and set(recipe) == set(CHOICES) and all(recipe[k] in values for k, values in CHOICES.items())
+
+
+def valid_profile(profile):
+    from performance_hotspot_fuzzer import Profile
+    try:
+        p = Profile(**profile)
+    except (TypeError, KeyError):
+        return False
+    numbers = (p.rows, p.payload, p.groups, p.cache_kib, p.stride, p.lookups, p.target, p.start, p.width)
+    return (all(type(n) is int for n in numbers) and type(p.skew) is bool
+            and p.key in ('integer', 'text') and 1 <= p.rows <= 262144
+            and 1 <= p.payload <= 16384 and p.rows*p.payload <= 256*1024*1024
+            and 1 <= p.groups <= 4096 and 1 <= p.cache_kib <= 65536
+            and 1 <= p.stride <= 32 and 1 <= p.lookups <= 10000
+            and 0 <= p.target < p.groups and 1 <= p.start <= p.rows
+            and 1 <= p.width <= p.rows and p.start+p.width-1 <= p.rows)
+
+
+def setup_sql(profile, recipe):
+    from performance_hotspot_fuzzer import fixture_sql
+    sql = fixture_sql(profile)
+    if recipe['indexes'] in ('none', 'cover'):
+        sql += 'DROP INDEX t_g;\n'
+    if recipe['indexes'] in ('none', 'group'):
+        sql += 'DROP INDEX t_gv;\n'
+    sql += ('CREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\n'
+            f'INSERT INTO u SELECT seq,grp,v FROM t WHERE seq%{profile.stride}=0;\n'
+            'CREATE INDEX u_g ON u(grp);\nANALYZE;\n')
+    return sql
+
+
+def generated_case(profile, recipe, number=0):
+    from performance_hotspot_fuzzer import Case, key_sql
+    if not valid_recipe(recipe):
+        raise ValueError('invalid SQL recipe')
+    p, r = profile, recipe
+    predicates = {
+        'all': '1', 'group': f't.grp={p.target}',
+        'range': f't.id BETWEEN {key_sql(p, p.start)} AND {key_sql(p, p.start+p.width-1)}',
+        'or': f'(t.grp={p.target} OR t.seq%{p.stride}=0)',
+        'modulo': f't.seq%{p.stride}=0',
+    }
+    expression = {'v': 't.v', 'seq': 't.seq', 'length': 'length(t.payload)',
+                  'bytes': 'unicode(substr(CAST(t.payload AS TEXT),-1,1))'}[r['expression']]
+    source, predicate = 't', predicates[r['predicate']]
+    if r['source'] == 'join':
+        source += ' JOIN u ON u.id=t.seq'
+    elif r['source'] == 'exists':
+        predicate += ' AND EXISTS(SELECT 1 FROM u WHERE u.id=t.seq AND u.v>=t.v)'
+    elif r['source'] == 'in':
+        predicate += ' AND t.seq IN (SELECT id FROM u WHERE grp=t.grp)'
+    inner = f'SELECT {expression} AS x,t.seq AS seq,t.grp AS grp FROM {source} WHERE {predicate}'
+    operator = r['operator']
+    if operator == 'distinct':
+        inner = f'SELECT DISTINCT x FROM ({inner})'
+    elif operator == 'group':
+        inner = f'SELECT sum(x) AS x FROM ({inner}) GROUP BY grp'
+    elif operator == 'order':
+        inner += f' ORDER BY x {r["direction"]},t.seq LIMIT {p.width}'
+    elif operator == 'window':
+        inner = f'SELECT row_number() OVER (PARTITION BY grp ORDER BY x {r["direction"]},seq) AS x FROM ({inner})'
+    elif operator == 'nested':
+        inner = f'SELECT x FROM ({inner}) WHERE x%{p.stride}=0'
+    prepare = {
+        'plain': '', 'after_scan': 'SELECT sum(length(payload)),sum(v) FROM t NOT INDEXED;',
+        'after_points': f'WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<1000) SELECT sum((SELECT v FROM t WHERE id={key_sql(p, f"1+(c.i*2654435761)%{p.rows}")})) FROM c;',
+        'after_update': f'UPDATE t SET v=v+1 WHERE seq%{p.stride}=0;',
+        'after_delete': f'DELETE FROM t WHERE seq%{p.stride}=0;',
+    }[r['context']]
+    verify = 'SELECT count(*),sum(v),sum(seq),sum(length(payload)) FROM t;'
+    if operator == 'update':
+        return Case(f'generated_{number}', f'UPDATE t SET v=v+1 WHERE {predicates[r["predicate"]]};', verify, prepare, r)
+    if operator == 'delete':
+        return Case(f'generated_{number}', f'DELETE FROM t WHERE {predicates[r["predicate"]]};', verify, prepare, r)
+    if operator == 'create_index':
+        return Case(f'generated_{number}', f'CREATE INDEX probe ON t(({expression.replace("t.", "")}));', verify, prepare, r)
+    if operator == 'add_column':
+        return Case(f'generated_{number}', 'ALTER TABLE t ADD COLUMN z INTEGER NOT NULL DEFAULT 7;', 'SELECT count(*),sum(z) FROM t;', prepare, r)
+    return Case(f'generated_{number}', f'SELECT count(*),sum(x) FROM ({inner});', prepare=prepare, recipe=r)
+
+
+def family_fingerprint(profile, case, plans):
+    def normalized(sql):
+        return re.sub(r'\b\d+\b', '?', ' '.join(sql.split()))
+    return digest({'key': profile.key, 'sql': normalized(case.sql), 'indexes': case.recipe.get('indexes'),
+                   'prepare': normalized(case.prepare), 'verify': normalized(case.verify),
+                   'plans': {arm: normalized(plan) for arm, plan in plans.items()}})
+
+
+def fingerprint(profile, case, plans):
+    size = profile.rows * (profile.payload + 64)
+    identity = {
+        'version': VERSION, 'family': family_fingerprint(profile, case, plans),
+        'key': profile.key, 'payload': profile.payload, 'rows': profile.rows,
+        'cache_pressure': max(0, math.ceil(math.log2(size/(profile.cache_kib*1024)))),
+        'target_regime': 'hot' if profile.skew and profile.target == 0 else 'ordinary',
+        'skew': profile.skew, 'groups': profile.groups, 'stride': profile.stride,
+        'range_fraction': round(profile.width/profile.rows, 4), 'lookups': profile.lookups,
+    }
+    return digest(identity)
+
+
+class Search:
+    def __init__(self, seed, history=None, issues=()):
+        self.rng = random.Random(f'hotspot-search-v{VERSION}:{seed}')
+        self.history = Path(history) if history else None
+        self.state = {'version': VERSION, 'visits': {}, 'shapes': {}, 'plans': {}, 'corpus': []}
+        if self.history and self.history.exists():
+            state = json.loads(self.history.read_text())
+            if state.get('version') == VERSION:
+                if not all(valid_recipe(x['recipe']) and valid_profile(x['profile']) for x in state['corpus']):
+                    raise ValueError('invalid exploration corpus')
+                self.state = state
+                self.state.setdefault('shapes', {})
+        for issue in issues:
+            for bundle in issue.get('bundles', []):
+                recipe = bundle.get('case', {}).get('recipe', {})
+                if valid_recipe(recipe) and valid_profile(bundle.get('profile', {})):
+                    self.remember(recipe, bundle['profile'])
+
+    def remember(self, recipe, profile):
+        item = {'recipe': recipe, 'profile': profile}
+        corpus = self.state['corpus']
+        if item in corpus:
+            corpus.remove(item)
+        corpus.append(item)
+        del corpus[:-128]
+
+    def choose(self, profile):
+        from performance_hotspot_fuzzer import Profile
+        mode = self.rng.randrange(4)
+        if mode == 0 and self.state['corpus']:
+            parent = self.rng.choice(self.state['corpus'])
+            recipe = dict(parent['recipe'])
+            if self.rng.choice([False, True]):
+                profile = Profile(**parent['profile'])
+            key = self.rng.choice(list(CHOICES))
+            recipe[key] = self.rng.choice([v for v in CHOICES[key] if v != recipe[key]])
+            origin = 'mutation'
+        elif mode == 1:
+            candidates = [fresh(self.rng) for _ in range(16)]
+            recipe = min(candidates, key=lambda r: (self.state['shapes'].get(digest(r), 0),
+                         sum(self.state['visits'].get(f'{k}:{v}', 0) for k, v in r.items())))
+            origin = 'underexplored'
+        else:
+            recipe, origin = fresh(self.rng), 'fresh'
+        return profile, recipe, origin
+
+    def observe(self, profile, case, record):
+        from dataclasses import asdict
+        if not case.recipe:
+            return
+        for k, v in case.recipe.items():
+            name = f'{k}:{v}'
+            self.state['visits'][name] = self.state['visits'].get(name, 0) + 1
+        shape = digest(case.recipe)
+        self.state['shapes'][shape] = self.state['shapes'].get(shape, 0) + 1
+        if len(self.state['shapes']) > 4096:
+            self.state['shapes'].pop(next(iter(self.state['shapes'])))
+        plan = digest(record.get('plans', {}))
+        novel = plan not in self.state['plans']
+        self.state['plans'][plan] = self.state['plans'].get(plan, 0) + 1
+        if novel or record.get('confirmed') or (record.get('ratio') or 0) >= 2:
+            self.remember(case.recipe, asdict(profile))
+        if len(self.state['plans']) > 2048:
+            self.state['plans'].pop(next(iter(self.state['plans'])))
+        if self.history:
+            self.history.parent.mkdir(parents=True, exist_ok=True)
+            temp = self.history.with_suffix('.tmp')
+            temp.write_text(json.dumps(self.state, sort_keys=True)+'\n')
+            temp.replace(self.history)
+
+    def specs(self, seed):
+        from performance_hotspot_fuzzer import profile_for
+        index = 0
+        while True:
+            profile, recipe, origin = self.choose(profile_for(seed, index))
+            cases = [generated_case(profile, recipe)]
+            for number in range(1, 4):
+                variant = fresh(self.rng)
+                variant['indexes'] = recipe['indexes']
+                cases.append(generated_case(profile, variant, number))
+            yield index, profile, cases, setup_sql(profile, recipe), origin
+            index += 1

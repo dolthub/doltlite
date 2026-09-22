@@ -1,0 +1,131 @@
+name: Nightly hotspot discovery
+
+on:
+  schedule:
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Reproducible workload seed (empty uses run ID and attempt)
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-hotspots
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      issues: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh build-essential tcl-dev zlib1g-dev
+
+    - name: Build optimized engines
+      run: |
+        mkdir build
+        cd build
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl="$(dirname "$TCL_CONFIG")"
+        else
+          ../configure
+        fi
+        make -j2 doltlite
+        cd ..
+        bash test/build_stock_reference.sh --shell-only build-stockref build/doltlite
+
+    - name: Test discovery harness
+      run: |
+        python3 test/performance_hotspot_fuzzer_test.py
+        python3 test/performance_hotspot_search_test.py
+
+    - name: Restore exploration history
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/hotspot-history.json
+        key: hotspot-history-v2-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: hotspot-history-v2-
+
+    - name: Read known and previously filed hotspots
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python3 test/performance_hotspot_issues.py snapshot --output "$RUNNER_TEMP/hotspot-issues.json"
+
+    - name: Search for repeatable 3x hotspots
+      env:
+        DISCOVERY_SEED: ${{ inputs.seed }}
+      run: |
+        python3 test/performance_hotspot_fuzzer.py \
+          --doltlite build/doltlite --sqlite build-stockref/sqlite3 \
+          --seed "${DISCOVERY_SEED:-${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}}" \
+          --search --history "$RUNNER_TEMP/hotspot-history.json" \
+          --issues "$RUNNER_TEMP/hotspot-issues.json" --runs 5 --seconds 1800 \
+          --output "$RUNNER_TEMP/hotspot-discovery"
+
+    - name: File new confirmed hotspots
+      if: ${{ !cancelled() }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        if [ -f "$RUNNER_TEMP/hotspot-discovery/results.json" ]; then
+          python3 test/performance_hotspot_issues.py publish \
+            --output "$RUNNER_TEMP/hotspot-discovery" --run-url "$RUN_URL"
+        fi
+
+    - name: Save exploration history
+      if: ${{ !cancelled() }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/hotspot-history.json
+        key: hotspot-history-v2-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Publish discovery summary
+      if: always()
+      run: |
+        if [ -f "$RUNNER_TEMP/hotspot-discovery/summary.md" ]; then
+          cat "$RUNNER_TEMP/hotspot-discovery/summary.md" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo 'Hotspot discovery did not produce a report; see the failed step.' >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Save samples, plans, and reproducers
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: hotspot-discovery-${{ github.run_id }}
+        path: |
+          ${{ runner.temp }}/hotspot-discovery
+          ${{ runner.temp }}/hotspot-history.json
+          ${{ runner.temp }}/hotspot-issues.json
+        retention-days: 30
+
+  watchdog:
+    needs: discover
+    if: failure() || cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Describe the failed discovery run
+      run: |
+        echo 'Hotspot discovery failed or was cancelled. Check the run logs and discovery artifact for seeds, SQL, and diagnostics.' > "$RUNNER_TEMP/hotspot-failure.md"
+    - uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-hotspots-failure
+        title: Nightly hotspot discovery did not finish
+        body-file: ${{ runner.temp }}/hotspot-failure.md
+        token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import math
 import os
 from pathlib import Path
@@ -25,10 +26,13 @@ INDEX_EDIT_CACHE_KIB = 131072
 # whose key prefixes its name; everything else is a query.
 SECTIONS = (("queries", "Large Table Scans"),
             ("add_column", "Add Column With Default"),
-            ("index_edits", "Large Index Edits"))
+            ("index_edits", "Large Index Edits"),
+            ("retained", "Retained Findings"))
 
 
 def section_of(name):
+    if name.startswith("retained_"):
+        return "retained"
     if name.startswith("add_column"):
         return "add_column"
     if name.startswith("index_edit"):
@@ -249,6 +253,42 @@ def measure_index_edits(binary, fixture, work, cache_kib, expected):
     return parse_session(sql(binary, work, "\n".join(statements)), cases)
 
 
+def prepare_retained(binaries, root, corpus=None):
+    from performance_hotspot_fuzzer import Profile, prologue
+    directory = corpus if corpus is not None else TEST_DIR / 'performance-hotspot-corpus'
+    retained = []
+    names = set()
+    for path in sorted(directory.glob('*.json')):
+        bundle = json.loads(path.read_text())
+        if (type(bundle['issue']) is not int or bundle['issue'] <= 0
+                or not re.fullmatch(r'[0-9a-f]{24}', bundle['fingerprint'])
+                or type(bundle['repeats']) is not int or not 1 <= bundle['repeats'] <= 1024):
+            raise ValueError(f'invalid retained hotspot: {path}')
+        name = f"retained_{bundle['issue']}_{bundle['fingerprint']}"
+        if name in names:
+            raise ValueError(f'duplicate retained hotspot: {name}')
+        names.add(name)
+        profile = Profile(**bundle['profile'])
+        databases = {arm: root / f'{arm}-{name}.db' for arm in binaries}
+        for arm, binary in binaries.items():
+            sql(binary, databases[arm], prologue(profile.cache_kib)+bundle['setup_sql'])
+        retained.append((name, bundle, databases))
+    return retained
+
+
+def measure_retained(binary, arm, retained):
+    from performance_hotspot_fuzzer import Case, Profile, parse_measurement, session_sql
+    measured = {}
+    for name, bundle, databases in retained:
+        repeats = bundle['repeats']
+        output = sql(binary, databases[arm], session_sql(Profile(**bundle['profile']), Case(**bundle['case']), repeats))
+        result = parse_measurement(output, repeats)
+        if result['result'] != bundle['expected']:
+            raise ValueError(f'{name}: retained hotspot result mismatch')
+        measured[name] = max(1, round(result['ms']*1000/repeats))
+    return measured
+
+
 def write_results(samples, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -279,7 +319,8 @@ def write_results(samples, result_path, sample_path):
         for name in section_names:
             base, candidate = medians["baseline"][name], medians["candidate"][name]
             stock = medians["stock"][name]
-            print(f"| {name} | {base/1000:.3f} | {candidate/1000:.3f} | "
+            label = f"[{name}](https://github.com/dolthub/doltlite/issues/{name.split('_')[1]})" if name.startswith("retained_") else name
+            print(f"| {label} | {base/1000:.3f} | {candidate/1000:.3f} | "
                   f"{candidate/base:.2f}× | {stock/1000:.3f} | {candidate/stock:.2f}× |")
 
 
@@ -312,6 +353,7 @@ def main(argv=None):
             prepare_index_queries(binary, index_databases[arm], fixture, args.rows, index_cases)
             add_column_fixture(binary, add_column_databases[arm], args.rows)
             index_edit_expected = index_edit_fixture(binary, index_edit_databases[arm], INDEX_EDIT_ROWS)
+        retained = prepare_retained(binaries, root)
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
             for arm in order:
@@ -325,6 +367,7 @@ def main(argv=None):
                 measured.update(measure_index_edits(binaries[arm], index_edit_databases[arm],
                                                     root / f"{arm}-index-edits-run.db",
                                                     INDEX_EDIT_CACHE_KIB, index_edit_expected))
+                measured.update(measure_retained(binaries[arm], arm, retained))
                 samples[arm].append(measured)
         write_results(samples,
                       Path(os.environ.get("BENCH_RESULTS_OUTPUT", "hotspots.tsv")),
