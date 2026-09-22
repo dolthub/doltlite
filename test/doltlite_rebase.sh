@@ -645,9 +645,11 @@ else
 fi
 rm -f "$DB11"
 
-# Failed linear rebase must restore feat even inside BEGIN (not only autocommit).
-DB12=/tmp/test_rebase_fail_txn_$$.db; rm -f "$DB12"
-cat <<'SQL' | "$DOLTLITE" "$DB12" >/dev/null 2>&1
+# Conflicted linear rebase inside BEGIN pauses. Autocommit still aborts.
+seed_rebase_data_conflict() {
+  local d="$1"
+  rm -f "$d"
+  cat <<'SQL' | "$DOLTLITE" "$d" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 1);
 SELECT dolt_commit('-Am','init');
@@ -659,33 +661,185 @@ UPDATE t SET v=3 WHERE id=1;
 SELECT dolt_commit('-am','main changes');
 SELECT dolt_checkout('feat');
 SQL
+}
+
+DB12=/tmp/test_rebase_fail_txn_$$.db
+seed_rebase_data_conflict "$DB12"
 TX_OUT=$(echo "SELECT dolt_checkout('feat');
 BEGIN;
 SELECT dolt_rebase('main');
-SELECT 'AFTER_FAIL|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
-ROLLBACK;
-SELECT 'AFTER_RB|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_status);" | "$DOLTLITE" "$DB12" 2>&1)
+SELECT 'AFTER|' || (SELECT active_branch()) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_rebase) || '|' || (SELECT v FROM t WHERE id=1);
+SELECT dolt_rebase('--continue');" | "$DOLTLITE" "$DB12" 2>&1)
+if echo "$TX_OUT" | grep -q 'data conflict detected while rebasing'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn\n  expected data conflict detected\n  got: $TX_OUT"
+fi
+AFTER=$(echo "$TX_OUT" | grep '^AFTER|')
+if [ "$AFTER" = "AFTER|dolt_rebase_feat|1|1|3" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn_pauses\n  expected: AFTER|dolt_rebase_feat|1|1|3\n  got:      $AFTER"
+fi
+if echo "$TX_OUT" | grep -q 'conflicts detected in tables t'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn_continue\n  expected conflicts detected in tables t\n  got: $TX_OUT"
+fi
+rm -f "$DB12"
+
+DB12A=/tmp/test_rebase_fail_ac_$$.db
+seed_rebase_data_conflict "$DB12A"
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+SELECT 'AFTER|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_conflicts);" | "$DOLTLITE" "$DB12A" 2>&1)
 if echo "$TX_OUT" | grep -q 'conflict rebasing'; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn\n  expected conflict rebasing\n  got: $TX_OUT"
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_autocommit\n  expected conflict rebasing\n  got: $TX_OUT"
 fi
-AFTER_FAIL=$(echo "$TX_OUT" | grep '^AFTER_FAIL|')
-AFTER_RB=$(echo "$TX_OUT" | grep '^AFTER_RB|')
-if [ "$AFTER_FAIL" = "AFTER_FAIL|feat|2" ]; then
+AFTER=$(echo "$TX_OUT" | grep '^AFTER|')
+if [ "$AFTER" = "AFTER|feat|2|0" ]; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn_restores\n  expected: AFTER_FAIL|feat|2\n  got:      $AFTER_FAIL"
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_autocommit_restores\n  expected: AFTER|feat|2|0\n  got:      $AFTER"
 fi
-if [ "$AFTER_RB" = "AFTER_RB|feat|2|0" ]; then
+rm -f "$DB12A"
+
+DB12B=/tmp/test_rebase_fail_resolve_$$.db
+seed_rebase_data_conflict "$DB12B"
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_add('-A');
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
+SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DB12B" 2>&1)
+if echo "$TX_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat'; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_in_txn_rollback\n  expected: AFTER_RB|feat|2|0\n  got:      $AFTER_RB"
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_resolve_continues\n  got: $TX_OUT"
 fi
-rm -f "$DB12"
+DONE=$(echo "$TX_OUT" | grep '^DONE|')
+if [ "$DONE" = "DONE|feat|2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_resolve_value\n  expected: DONE|feat|2\n  got:      $DONE"
+fi
+if echo "$TX_OUT" | grep -q 'feat changes,main changes,init'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_resolve_log\n  got: $TX_OUT"
+fi
+rm -f "$DB12B"
+
+DB12C=/tmp/test_rebase_fail_ours_$$.db
+seed_rebase_data_conflict "$DB12C"
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_add('-A');
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
+SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DB12C" 2>&1)
+if echo "$TX_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_ours_continues\n  got: $TX_OUT"
+fi
+DONE=$(echo "$TX_OUT" | grep '^DONE|')
+if [ "$DONE" = "DONE|feat|3" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_ours_value\n  expected: DONE|feat|3\n  got:      $DONE"
+fi
+LOG=$(echo "$TX_OUT" | grep '^main changes,init$')
+if [ "$LOG" = "main changes,init" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_ours_drops_empty\n  got: $TX_OUT"
+fi
+rm -f "$DB12C"
+
+DB12D=/tmp/test_rebase_fail_unstaged_$$.db
+seed_rebase_data_conflict "$DB12D"
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_rebase('--continue');
+SELECT 'STILL|' || (SELECT active_branch()) || '|' || (SELECT count(*) FROM dolt_rebase);" | "$DOLTLITE" "$DB12D" 2>&1)
+if echo "$TX_OUT" | grep -q 'cannot continue a rebase with unstaged changes'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_unstaged\n  got: $TX_OUT"
+fi
+STILL=$(echo "$TX_OUT" | grep '^STILL|')
+if [ "$STILL" = "STILL|dolt_rebase_feat|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_unstaged_keeps\n  expected: STILL|dolt_rebase_feat|1\n  got:      $STILL"
+fi
+rm -f "$DB12D"
+
+DB12E=/tmp/test_rebase_fail_abort_$$.db
+seed_rebase_data_conflict "$DB12E"
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_rebase('--abort');
+SELECT 'AFTER|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat');" | "$DOLTLITE" "$DB12E" 2>&1)
+if echo "$TX_OUT" | grep -q 'Interactive rebase aborted'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_abort\n  got: $TX_OUT"
+fi
+AFTER=$(echo "$TX_OUT" | grep '^AFTER|')
+if [ "$AFTER" = "AFTER|feat|2|0|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_abort_restores\n  expected: AFTER|feat|2|0|0\n  got:      $AFTER"
+fi
+rm -f "$DB12E"
+
+DB12F=/tmp/test_rebase_fail_sp_$$.db
+seed_rebase_data_conflict "$DB12F"
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SAVEPOINT s;
+SELECT dolt_rebase('main');
+SELECT 'AFTER|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_conflicts);" | "$DOLTLITE" "$DB12F" 2>&1)
+if echo "$TX_OUT" | grep -q 'conflict rebasing'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_savepoint_aborts\n  got: $TX_OUT"
+fi
+AFTER=$(echo "$TX_OUT" | grep '^AFTER|')
+if [ "$AFTER" = "AFTER|feat|2|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_conflict_savepoint_restores\n  expected: AFTER|feat|2|0\n  got:      $AFTER"
+fi
+rm -f "$DB12F"
 
 # Same split after a conflicted interactive --continue.
 DB13=/tmp/test_rebase_iconflict_txn_$$.db; rm -f "$DB13"
