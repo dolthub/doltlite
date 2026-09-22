@@ -1418,5 +1418,134 @@ run_test "merge_expr_unique_without_rowid_no_duplicate" \
 run_test "merge_expr_unique_without_rowid_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB77"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77"
+# An untyped column can store 1 and 1.0. SQLite compares them equal, so
+# both sides setting those values is not a row conflict. The byte-wise
+# change check still keeps a one-sided storage change.
+DB78=/tmp/test_merge78_$$.db; rm -f "$DB78"
+$DOLTLITE "$DB78" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1.0 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_one_and_one_real_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB78"
+run_test "merge_untyped_one_and_one_real_value" \
+  "SELECT (v=1) || '|' || typeof(v) FROM t;" "1|real" "$DB78"
+run_test "merge_untyped_one_and_one_real_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB78"
+
+DB79=/tmp/test_merge79_$$.db; rm -f "$DB79"
+$DOLTLITE "$DB79" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=1.0 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_one_real_and_one_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB79"
+run_test "merge_untyped_one_real_and_one_value" \
+  "SELECT (v=1) || '|' || typeof(v) FROM t;" "1|integer" "$DB79"
+
+DB80=/tmp/test_merge80_$$.db; rm -f "$DB80"
+$DOLTLITE "$DB80" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=2 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_one_and_two_conflicts" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB80"
+run_test "merge_untyped_one_and_two_kept" \
+  "SELECT v FROM t;" "1" "$DB80"
+
+DB81=/tmp/test_merge81_$$.db; rm -f "$DB81"
+$DOLTLITE "$DB81" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=1 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v='1' WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_one_and_text_conflicts" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB81"
+run_test "merge_untyped_one_and_text_kept" \
+  "SELECT typeof(v) FROM t;" "integer" "$DB81"
+
+DB82=/tmp/test_merge82_$$.db; rm -f "$DB82"
+$DOLTLITE "$DB82" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=1.0 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_one_real_onesided_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB82"
+run_test "merge_untyped_one_real_onesided_value" \
+  "SELECT (v=1) || '|' || typeof(v) FROM t;" "1|real" "$DB82"
+
+DB83=/tmp/test_merge83_$$.db; rm -f "$DB83"
+$DOLTLITE "$DB83" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=9007199254740992 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=9007199254740992.0 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_exact_real_merges" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB83"
+run_test "merge_untyped_exact_real_value" \
+  "SELECT v=9007199254740992 FROM t;" "1" "$DB83"
+
+DB84=/tmp/test_merge84_$$.db; rm -f "$DB84"
+$DOLTLITE "$DB84" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1, 0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=9007199254740993 WHERE id=1;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=9007199254740993.0 WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_inexact_real_conflicts" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB84"
+run_test "merge_untyped_inexact_real_kept" \
+  "SELECT typeof(v) FROM t;" "integer" "$DB84"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84"
 dltest_finish

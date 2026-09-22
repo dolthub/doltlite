@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_merge_int.h"
+#include "vdbeInt.h"
 
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
@@ -140,6 +141,52 @@ static int fieldEquals(const u8 *pRecA, const RecField *fA,
   if(fA->len != fB->len) return 1;
   if(fA->len==0) return 0;
   return memcmp(pRecA + fA->off, pRecB + fB->off, fA->len);
+}
+
+static int fieldDecodeInt(const u8 *pRec, const RecField *f, i64 *pOut){
+  int st = (int)f->st;
+  int nNeed;
+  if( !dlSerialIsInt(st) ) return 0;
+  if( st==8 ){ *pOut = 0; return 1; }
+  if( st==9 ){ *pOut = 1; return 1; }
+  nNeed = dlSerialTypeLen((u64)st);
+  if( nNeed<0 || f->len<nNeed ) return 0;
+  *pOut = dlDecodeSerialInt(st, pRec + f->off, f->len);
+  return 1;
+}
+
+static int fieldDecodeReal(const u8 *pRec, const RecField *f, double *pOut){
+  u64 bits;
+  if( f->st!=7 || f->len<8 ) return 0;
+  bits = (u64)dlReadIntBytes(pRec + f->off, 8);
+  memcpy(pOut, &bits, sizeof(*pOut));
+  return 1;
+}
+
+/* Untyped columns store 1 and 1.0 as different serial types. SQLite
+** compares those numbers as equal, including two widths of one integer. */
+static int fieldNumbersEqual(const u8 *pRecA, const RecField *fA,
+                             const u8 *pRecB, const RecField *fB){
+  int aInt = dlSerialIsInt((int)fA->st);
+  int bInt = dlSerialIsInt((int)fB->st);
+  i64 iv, iv2;
+  double rv;
+  if( aInt && bInt ){
+    if( !fieldDecodeInt(pRecA, fA, &iv) ) return 0;
+    if( !fieldDecodeInt(pRecB, fB, &iv2) ) return 0;
+    return iv==iv2;
+  }
+  if( aInt && fB->st==7 ){
+    if( !fieldDecodeInt(pRecA, fA, &iv) ) return 0;
+    if( !fieldDecodeReal(pRecB, fB, &rv) ) return 0;
+    return sqlite3IntFloatCompare(iv, rv)==0;
+  }
+  if( bInt && fA->st==7 ){
+    if( !fieldDecodeInt(pRecB, fB, &iv) ) return 0;
+    if( !fieldDecodeReal(pRecA, fA, &rv) ) return 0;
+    return sqlite3IntFloatCompare(iv, rv)==0;
+  }
+  return 0;
 }
 
 static int recordsEqualFields(
@@ -311,7 +358,8 @@ static u8 *tryCellMerge(
       }else if(!oursChanged){
 
         winners[i].pRec = pTheirs; winners[i].pField = fT;
-      }else if(fieldEquals(pOurs, fO, pTheirs, fT)==0){
+      }else if( fieldEquals(pOurs, fO, pTheirs, fT)==0
+             || fieldNumbersEqual(pOurs, fO, pTheirs, fT) ){
 
         winners[i].pRec = pOurs; winners[i].pField = fO;
       }else{
