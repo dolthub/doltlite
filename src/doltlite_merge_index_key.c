@@ -77,7 +77,7 @@ static int indexNeedsExprBuild(Index *pIdx, const i16 *aiColumn, int nIdxCol){
 
 static int indexExprToSql(sqlite3_str *p, const Expr *pExpr, Table *pTab);
 
-static int indexColumnIsVirtual(const Table *pTab, int iCol){
+int doltliteColumnIsVirtual(const Table *pTab, int iCol){
 #ifndef SQLITE_OMIT_GENERATED_COLUMNS
   return (pTab->aCol[iCol].colFlags & COLFLAG_VIRTUAL)!=0;
 #else
@@ -100,7 +100,7 @@ static int indexExprSourceSql(Table *pTab, char **pzSql){
   pInner = sqlite3_str_new(0);
   sqlite3_str_appendall(pInner, "SELECT ");
   for(i=0; i<pTab->nCol; i++){
-    if( indexColumnIsVirtual(pTab, i) ) continue;
+    if( doltliteColumnIsVirtual(pTab, i) ) continue;
     if( nBind ) sqlite3_str_appendall(pInner, ", ");
     nBind++;
     sqlite3_str_appendf(pInner, "?%d AS \"%w\"", nBind, pTab->aCol[i].zCnName);
@@ -112,7 +112,7 @@ static int indexExprSourceSql(Table *pTab, char **pzSql){
     sqlite3_str *pWrap;
     char *zWrap;
     Expr *pExpr;
-    if( !indexColumnIsVirtual(pTab, i) ) continue;
+    if( !doltliteColumnIsVirtual(pTab, i) ) continue;
     pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[i]);
     pWrap = sqlite3_str_new(0);
     sqlite3_str_appendall(pWrap, "SELECT *, (");
@@ -145,7 +145,7 @@ static int bindIndexExprRow(
   for(i=0, iParam=1; i<pTab->nCol && rc==SQLITE_OK; i++){
     int iField;
     DoltliteSerialValue v;
-    if( indexColumnIsVirtual(pTab, i) ) continue;
+    if( doltliteColumnIsVirtual(pTab, i) ) continue;
     if( i==iPKey ){
       rc = sqlite3_bind_int64(pStmt, iParam, intKey);
       iParam++;

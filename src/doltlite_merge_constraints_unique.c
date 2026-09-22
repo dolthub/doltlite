@@ -18,16 +18,6 @@ static int partialNamedField(const DoltliteColInfo *pCols, const char *zName){
   return -1;
 }
 
-static int partialColumnIsVirtual(const Table *pTab, int iCol){
-#ifndef SQLITE_OMIT_GENERATED_COLUMNS
-  return (pTab->aCol[iCol].colFlags & COLFLAG_VIRTUAL)!=0;
-#else
-  (void)pTab;
-  (void)iCol;
-  return 0;
-#endif
-}
-
 static int partialStoredSlot(
   const Table *pTab,
   const DoltliteColInfo *pCols,
@@ -38,12 +28,12 @@ static int partialStoredSlot(
   if( iField>=0 ) return iField;
   if( !pCols || pCols->bHasRowid ){
     for(j=0; j<iCol; j++){
-      if( !partialColumnIsVirtual(pTab, j) ) nBefore++;
+      if( !doltliteColumnIsVirtual(pTab, j) ) nBefore++;
     }
     return nBefore;
   }
   for(j=0; j<iCol; j++){
-    if( partialColumnIsVirtual(pTab, j) ) continue;
+    if( doltliteColumnIsVirtual(pTab, j) ) continue;
     if( pTab->aCol[j].colFlags & COLFLAG_PRIMKEY ) continue;
     nBefore++;
   }
@@ -64,7 +54,7 @@ static int partialIndexSourceSql(Table *pTab, char **pzSql, int *pNBind){
   pInner = sqlite3_str_new(0);
   sqlite3_str_appendall(pInner, "SELECT ");
   for(i=0; i<pTab->nCol; i++){
-    if( partialColumnIsVirtual(pTab, i) ) continue;
+    if( doltliteColumnIsVirtual(pTab, i) ) continue;
     if( nBind ) sqlite3_str_appendall(pInner, ", ");
     nBind++;
     sqlite3_str_appendf(pInner, "?%d AS \"%w\"", nBind,
@@ -77,7 +67,7 @@ static int partialIndexSourceSql(Table *pTab, char **pzSql, int *pNBind){
     sqlite3_str *pWrap;
     char *zWrap;
     Expr *pExpr;
-    if( !partialColumnIsVirtual(pTab, i) ) continue;
+    if( !doltliteColumnIsVirtual(pTab, i) ) continue;
     pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[i]);
     pWrap = sqlite3_str_new(0);
     sqlite3_str_appendall(pWrap, "SELECT *, (");
@@ -297,7 +287,7 @@ int doltlitePartialIndexMatchesRecord(
   for(i=0, iParam=1; i<pTab->nCol && rc==SQLITE_OK; i++){
     int iField;
     DoltliteSerialValue v;
-    if( partialColumnIsVirtual(pTab, i) ) continue;
+    if( doltliteColumnIsVirtual(pTab, i) ) continue;
     iField = partialStoredSlot(pTab, pCols, i);
     if( iField<0 || iField>=info.nField ){
       rc = sqlite3_bind_null(pStmt, iParam);

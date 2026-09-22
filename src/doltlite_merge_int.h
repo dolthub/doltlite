@@ -356,6 +356,7 @@ struct MergeColDefaults {
 /* Partial-index predicate, shared with index maintenance: the WHERE text is
 ** recovered from the stored CREATE INDEX statement, then evaluated against a
 ** row record. */
+int doltliteColumnIsVirtual(const Table *pTab, int iCol);
 int doltliteAppendExprSql(sqlite3_str *p, const Expr *pExpr, Table *pTab);
 int doltlitePartialIndexWhereSql(sqlite3 *db, Index *pIdx, char **pzWhere);
 int doltlitePartialIndexMatchesRecord(sqlite3 *db, Index *pIdx,
