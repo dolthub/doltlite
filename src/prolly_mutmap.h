@@ -12,6 +12,7 @@ typedef struct ProllyMutMapIter ProllyMutMapIter;
 
 struct ProllyMutMapEntry {
   u8 op;
+  u8 bValInline;
   u8 *pKey;
   int nKey;
   u64 keyPrefix;

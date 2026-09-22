@@ -240,17 +240,18 @@ static int entryHasInlineKey(ProllyMutMapEntry *e){
   return e->pKey==e->aKeyInline;
 }
 
-static void fixInlineKeyPtr(ProllyMutMapEntry *e){
+static void fixInlinePtrs(ProllyMutMapEntry *e){
   if( e->nKey > 0 && e->nKey <= (int)sizeof(e->aKeyInline) ){
     e->pKey = e->aKeyInline;
   }
+  if( e->bValInline ) e->pVal = e->aKeyInline + e->nKey;
 }
 
 static void freeEntryData(ProllyMutMapEntry *e){
   if( !entryHasInlineKey(e) ){
     sqlite3_free(e->pKey);
   }
-  sqlite3_free(e->pVal);
+  if( !e->bValInline ) sqlite3_free(e->pVal);
   e->pKey = 0;
   e->pVal = 0;
   e->nKey = 0;
@@ -258,6 +259,7 @@ static void freeEntryData(ProllyMutMapEntry *e){
   e->keyHash = 0;
   e->nVal = 0;
   e->nValAlloc = 0;
+  e->bValInline = 0;
   e->nZeroTail = 0;
 }
 
@@ -284,7 +286,13 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
     e->keyHash = hashKey(pKey, nKey);
   }
   if( pVal && nVal>0 ){
-    e->pVal = (u8*)sqlite3_malloc(nVal);
+    if( entryHasInlineKey(e)
+     && nVal <= (int)sizeof(e->aKeyInline)-nKey ){
+      e->pVal = e->aKeyInline + nKey;
+      e->bValInline = 1;
+    }else{
+      e->pVal = (u8*)sqlite3_malloc(nVal);
+    }
     if( !e->pVal ){
       if( !entryHasInlineKey(e) ){
         sqlite3_free(e->pKey);
@@ -294,25 +302,27 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
     }
     memcpy(e->pVal, pVal, nVal);
     e->nVal = nVal;
-    e->nValAlloc = nVal;
+    e->nValAlloc = e->bValInline ? (int)sizeof(e->aKeyInline)-nKey : nVal;
   }
   return SQLITE_OK;
 }
 
 static int replaceEntryValue(ProllyMutMapEntry *e, const u8 *pVal, int nVal){
   if( !pVal || nVal<=0 ){
-    sqlite3_free(e->pVal);
+    if( !e->bValInline ) sqlite3_free(e->pVal);
     e->pVal = 0;
     e->nVal = 0;
     e->nValAlloc = 0;
+    e->bValInline = 0;
     e->nZeroTail = 0;
     return SQLITE_OK;
   }
   if( e->nValAlloc < nVal ){
-    u8 *pNew = (u8*)sqlite3_realloc(e->pVal, nVal);
+    u8 *pNew = (u8*)sqlite3_realloc(e->bValInline ? 0 : e->pVal, nVal);
     if( !pNew ) return SQLITE_NOMEM;
     e->pVal = pNew;
     e->nValAlloc = nVal;
+    e->bValInline = 0;
   }
   memcpy(e->pVal, pVal, nVal);
   e->nVal = nVal;
@@ -500,7 +510,7 @@ static int ensureCapacity(ProllyMutMap *mm){
     if( aNew != mm->aEntries && mm->nEntries > 0 ){
       int i;
       for(i=0; i<mm->nEntries; i++){
-        fixInlineKeyPtr(&aNew[i]);
+        fixInlinePtrs(&aNew[i]);
       }
     }
     mm->aEntries = aNew;
@@ -892,7 +902,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
       }else{
         if( newN != i ){
           mm->aEntries[newN] = mm->aEntries[i];
-          fixInlineKeyPtr(&mm->aEntries[newN]);
+          fixInlinePtrs(&mm->aEntries[newN]);
         }
         mm->aPos[i] = newN++;
       }
@@ -1200,7 +1210,12 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
         de->keyHash = se->keyHash;
       }
       if( se->pVal && se->nVal > 0 ){
-        de->pVal = (u8*)sqlite3_malloc(se->nVal);
+        if( se->bValInline ){
+          de->pVal = de->aKeyInline + se->nKey;
+          de->bValInline = 1;
+        }else{
+          de->pVal = (u8*)sqlite3_malloc(se->nVal);
+        }
         if( !de->pVal ){
           if( !entryHasInlineKey(de) ){
             sqlite3_free(de->pKey);
@@ -1213,7 +1228,8 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
         }
         memcpy(de->pVal, se->pVal, se->nVal);
         de->nVal = se->nVal;
-        de->nValAlloc = se->nVal;
+        de->nValAlloc = de->bValInline
+                      ? (int)sizeof(de->aKeyInline)-de->nKey : se->nVal;
       }
       de->nZeroTail = se->nZeroTail;
       dst->nEntries++;

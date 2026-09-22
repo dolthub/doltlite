@@ -10820,6 +10820,84 @@ static void run_mutmap_delete_reinsert_reuses_entry(void){
   }
 }
 
+static void checkMutmapValues(ProllyMutMap *mm, int nKey, int changed){
+  static const int sizes[] = { 0, 1, 32, 33, 80 };
+  int i;
+  for(i=0; i<192; i++){
+    u8 key[41];
+    u8 value[80];
+    ProllyMutMapEntry *e = 0;
+    int nVal = sizes[changed ? 4-i%5 : i%5];
+    memset(key, i, sizeof(key));
+    memset(value, changed ? 255-i : i, sizeof(value));
+    check("mutmap_value_find",
+          prollyMutMapFindRc(mm, mm->isIntKey ? 0 : key,
+                            mm->isIntKey ? 0 : nKey, i, &e)==SQLITE_OK);
+    check("mutmap_value_bytes",
+          e && e->op==PROLLY_EDIT_INSERT && e->nVal==nVal
+            && (nVal==0 || memcmp(e->pVal, value, nVal)==0));
+  }
+}
+
+static void run_mutmap_value_lifetimes(void){
+  static const int keySizes[] = { 8, 12, 39, 40, 41 };
+  static const int sizes[] = { 0, 1, 32, 33, 80 };
+  int mode, k, i;
+  printf("=== MutMap Value Lifetimes Test ===\n\n");
+  for(mode=0; mode<2; mode++){
+    for(k=0; k<5; k++){
+      ProllyMutMap mm;
+      ProllyMutMap *clone = 0;
+      int nKey = keySizes[k];
+      check("mutmap_value_init", prollyMutMapInitMode(&mm, k==0, mode)==SQLITE_OK);
+      for(i=0; i<192; i++){
+        u8 key[41], value[80];
+        memset(key, i, sizeof(key));
+        memset(value, i, sizeof(value));
+        check("mutmap_value_insert",
+              prollyMutMapInsert(&mm, k==0 ? 0 : key, k==0 ? 0 : nKey,
+                                 i, value, sizes[i%5])==SQLITE_OK);
+      }
+      checkMutmapValues(&mm, nKey, 0);
+      check("mutmap_value_clone", prollyMutMapClone(&clone, &mm)==SQLITE_OK);
+      prollyMutMapPushSavepoint(&mm, 1);
+      for(i=0; i<192; i++){
+        u8 key[41], value[80];
+        memset(key, i, sizeof(key));
+        memset(value, 255-i, sizeof(value));
+        check("mutmap_value_resize",
+              prollyMutMapInsert(&mm, k==0 ? 0 : key, k==0 ? 0 : nKey,
+                                 i, value, sizes[4-i%5])==SQLITE_OK);
+      }
+      checkMutmapValues(&mm, nKey, 1);
+      prollyMutMapPushSavepoint(&mm, 2);
+      for(i=0; i<256; i++){
+        u8 key[41], value[32];
+        memset(key, i, sizeof(key));
+        memset(value, i, sizeof(value));
+        check("mutmap_value_nested_delete",
+              prollyMutMapDelete(&mm, k==0 ? 0 : key, k==0 ? 0 : nKey,
+                                 i)==SQLITE_OK);
+        check("mutmap_value_nested_reinsert",
+              prollyMutMapInsert(&mm, k==0 ? 0 : key, k==0 ? 0 : nKey,
+                                 i, value, sizeof(value))==SQLITE_OK);
+      }
+      check("mutmap_value_nested_rollback",
+            prollyMutMapRollbackToSavepoint(&mm, 2)==SQLITE_OK);
+      checkMutmapValues(&mm, nKey, 1);
+      check("mutmap_value_rollback",
+            prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
+      checkMutmapValues(&mm, nKey, 0);
+      prollyMutMapFree(&mm);
+      if( clone ){
+        checkMutmapValues(clone, nKey, 0);
+        prollyMutMapFree(clone);
+        sqlite3_free(clone);
+      }
+    }
+  }
+}
+
 static void run_mutmap_append_sorted_order(void){
   ProllyMutMap mm;
   ProllyMutMapIter it;
@@ -14635,6 +14713,7 @@ static const RegressionCase aCases[] = {
   { "checkout_dash_b_existing_branch_preserves_durable_state", "Checkout -b Existing Branch Preserves Durable State Test", run_checkout_dash_b_existing_branch_preserves_durable_state },
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
+  { "mutmap_value_lifetimes", "MutMap Value Lifetimes Test", run_mutmap_value_lifetimes },
   { "mutmap_delete_reinsert_reuses_entry", "MutMap Delete Reinsert Reuses Entry Test", run_mutmap_delete_reinsert_reuses_entry },
   { "mutmap_sorted_lookup_transition", "MutMap Sorted Lookup Transition Test", run_mutmap_sorted_lookup_transition },
   { "mutmap_append_sorted_order", "MutMap Append Sorted Order Test", run_mutmap_append_sorted_order },
