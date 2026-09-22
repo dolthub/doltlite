@@ -846,6 +846,13 @@ void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead){
   }
 }
 
+void doltliteInvalidateSessionWorkingState(sqlite3 *db){
+  if( db && db->nDb>0 && db->aDb[0].pBt && !db->aDb[0].pBt->isDetached ){
+    Btree *p = db->aDb[0].pBt;
+    p->iLoadedWorkingStateVersion = p->pBt->iWorkingStateVersion - 1;
+  }
+}
+
 void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     memcpy(pStaged, &db->aDb[0].pBt->vc.stagedCatalog, sizeof(ProllyHash));

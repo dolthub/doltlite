@@ -203,6 +203,7 @@ int doltliteRefreshAndConfirmHead(
   rc = chunkStoreForceRefresh(cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
+    doltliteInvalidateSessionWorkingState(db);
     return rc;
   }
 
@@ -210,24 +211,21 @@ int doltliteRefreshAndConfirmHead(
   ** under a reentrant lock, and WAL reuse can hide a peer commit. */
   zBranch = doltliteGetSessionBranch(db);
   rc = chunkStoreReadDiskBranchTip(cs, zBranch, &branchTip, &found);
+  if( rc==SQLITE_OK && found ){
+    if( prollyHashCompare(&branchTip, pExpectedHead)!=0 ) rc = SQLITE_BUSY;
+  }else if( rc==SQLITE_OK && !prollyHashIsEmpty(pExpectedHead) ){
+    /* A non-empty expected tip requires the branch to exist on disk; treating
+    ** missing as confirmed would skip a peer that already created it. */
+    rc = SQLITE_BUSY;
+  }
   if( rc!=SQLITE_OK ){
+    /* The refresh above consumed the store-changed signal, so the next write
+    ** transaction would not reload and would persist the working set under
+    ** the superseded head, which every loader then discards. */
     chunkStoreUnlock(cs);
-    return rc;
+    doltliteInvalidateSessionWorkingState(db);
   }
-  /* A non-empty expected tip requires the branch to exist on disk; treating
-  ** missing as confirmed would skip a peer that already created it. */
-  if( !found ){
-    if( !prollyHashIsEmpty(pExpectedHead) ){
-      chunkStoreUnlock(cs);
-      return SQLITE_BUSY;
-    }
-    return SQLITE_OK;
-  }
-  if( prollyHashCompare(&branchTip, pExpectedHead)!=0 ){
-    chunkStoreUnlock(cs);
-    return SQLITE_BUSY;
-  }
-  return SQLITE_OK;
+  return rc;
 }
 
 int doltliteHasUncommittedChanges(sqlite3 *db, int *pDirty){

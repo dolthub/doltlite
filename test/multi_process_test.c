@@ -980,6 +980,74 @@ static void test_ref_commands_busy_handler(void){
   remove(path);
 }
 
+static void test_write_after_lost_commit_race(void){
+  char path[256];
+  sqlite3 *db = 0;
+  int ready[2], release[2], done[2];
+  int rc, status;
+  pid_t pid;
+  char ch;
+  MpRefBusyCtx ctx;
+
+  printf("--- Test 6a: Autocommit write after a lost commit race ---\n");
+  snprintf(path, sizeof(path), "/tmp/mp_lost_race_%d.db", (int)getpid());
+  setup_db(path);
+  check("mp_lost_race_open", sqlite3_open(path, &db)==SQLITE_OK);
+  check("mp_lost_race_first_write", execSql(db, "INSERT INTO t VALUES(2, 'mine')")==SQLITE_OK);
+  mpPipe(ready);
+  mpPipe(release);
+  mpPipe(done);
+  pid = fork();
+  if( pid==0 ){
+    close(ready[0]);
+    close(release[1]);
+    close(done[1]);
+    db = 0;
+    if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(1);
+    sqlite3_busy_timeout(db, 10000);
+    if( execSql(db, "BEGIN IMMEDIATE; INSERT INTO t VALUES(10, 'peer')")!=SQLITE_OK ) _exit(2);
+    mpWrite(ready[1], "R");
+    mpRead(release[0], &ch);
+    if( strlen(queryScalarText(db, "SELECT dolt_commit('-am','peer')"))!=40 ) _exit(3);
+    mpWrite(ready[1], "D");
+    mpRead(done[0], &ch);
+    if( execSql(db, "INSERT INTO t VALUES(11, 'peer')")!=SQLITE_OK ) _exit(4);
+    if( strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")!=0 ) _exit(5);
+    sqlite3_close(db);
+    _exit(0);
+  }
+  if( pid<0 ){ perror("fork"); _exit(1); }
+  close(ready[1]);
+  close(release[0]);
+  close(done[0]);
+  mpRead(ready[0], &ch);
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.releaseFd = release[1];
+  ctx.readyFd = ready[0];
+  sqlite3_busy_handler(db, mpReleaseBusyPeer, &ctx);
+  rc = execSql(db, "SELECT dolt_commit('-am','mine')");
+  check("mp_lost_race_commit_busy", rc==SQLITE_BUSY && ctx.calls>0);
+  if( ctx.calls==0 ) mpWrite(release[1], "G");
+  sqlite3_busy_timeout(db, 10000);
+  check("mp_lost_race_acked_write", execSql(db, "INSERT INTO t VALUES(3, 'mine')")==SQLITE_OK);
+  mpWrite(done[1], "I");
+  waitpid(pid, &status, 0);
+  check("mp_lost_race_peer_sees_acked_write", WIFEXITED(status) && WEXITSTATUS(status)==0);
+  check("mp_lost_race_own_view",
+    strcmp(queryScalarText(db, "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)"),
+           "1,2,3,10,11")==0);
+  check("mp_lost_race_retry_commits",
+    strlen(queryScalarText(db, "SELECT dolt_commit('-am','retry')"))==40);
+  check("mp_lost_race_retry_contents",
+    strcmp(queryScalarText(db, "SELECT group_concat(id) FROM (SELECT id FROM dolt_at_t('HEAD') ORDER BY id)"),
+           "1,2,3,10,11")==0);
+  sqlite3_close(db);
+  close(ready[0]);
+  close(release[1]);
+  close(done[1]);
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
@@ -993,6 +1061,7 @@ int main(){
   test_gc_during_read();
   test_gc_blocked_by_writer();
   test_cross_process_commit_conflict();
+  test_write_after_lost_commit_race();
   test_cross_process_commit_after_peer();
   test_many_process_commit_contention();
 
