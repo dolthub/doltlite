@@ -299,6 +299,58 @@ static void nocopyCase(const char *zPath){
   unlink(zPath);
 }
 
+static void corruptMemoryImageCase(void){
+  static const char marker[] = "untrusted-deserialized-chunk-payload";
+  sqlite3 *db = 0;
+  sqlite3 *copy = 0;
+  unsigned char *p;
+  unsigned char *pValid;
+  char *z;
+  sqlite3_int64 n = 0;
+  sqlite3_int64 i;
+  int found = 0;
+  int rc;
+
+  check(sqlite3_open(":memory:", &db)==SQLITE_OK, "open memory source");
+  check(sqlite3_exec(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1,'untrusted-deserialized-chunk-payload');",
+      0, 0, 0)==SQLITE_OK, "populate memory source");
+  p = sqlite3_serialize(db, "main", &n, 0);
+  check(p!=0, "serialize memory source");
+  sqlite3_close(db);
+  if( !p ) return;
+  pValid = sqlite3_malloc64(n);
+  check(pValid!=0, "copy valid memory image");
+  if( !pValid ){
+    sqlite3_free(p);
+    return;
+  }
+  memcpy(pValid, p, n);
+  copy = deserializeInto(pValid, n);
+  check(copy!=0, "deserialize valid memory image");
+  if( copy ){
+    z = oneText(copy, "SELECT v FROM t");
+    check(z && strcmp(z, marker)==0, "valid serialized payload is readable");
+    free(z);
+    sqlite3_close(copy);
+    copy = 0;
+  }
+  for(i=0; i+(sqlite3_int64)sizeof(marker)-1<=n; i++){
+    if( memcmp(p+i, marker, sizeof(marker)-1)==0 ){
+      p[i] ^= 1;
+      found++;
+    }
+  }
+  check(found>0, "corrupt serialized payload");
+  check(sqlite3_open(":memory:", &copy)==SQLITE_OK, "open image destination");
+  rc = sqlite3_deserialize(copy, "main", p, n, n,
+                           SQLITE_DESERIALIZE_FREEONCLOSE);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(copy, "SELECT * FROM t", 0, 0, 0);
+  check(rc!=SQLITE_OK, "corrupted serialized payload is not readable");
+  sqlite3_close(copy);
+}
+
 int main(void){
   dirtyTxnCase("serialize_pending_test.db");
   createOnlyCase("serialize_pending_fresh_test.db");
@@ -309,6 +361,7 @@ int main(void){
   attachedDoesNotLeakIntoMain("serialize_pending_crosstalk_main.db",
                               "serialize_pending_crosstalk_aux.db");
   nocopyCase("serialize_pending_nocopy_test.db");
+  corruptMemoryImageCase();
   if( failures ){
     fprintf(stderr, "%d failure(s)\n", failures);
     return 1;
