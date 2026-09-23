@@ -4331,6 +4331,15 @@ static int whereLoopAddBtree(
        && !IsPrimaryKeyIndex(pProbe) ){
         pNew->wsFlags &= ~WHERE_IDX_ONLY;
       }
+      if( m==0 && (pNew->wsFlags & WHERE_IDX_ONLY)==0
+       && !HasRowid(pTab) && !IsPrimaryKeyIndex(pProbe)
+       && (pWInfo->wctrlFlags & WHERE_ONEPASS_DESIRED)!=0 ){
+        int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+        if( iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
+         && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+          m = 1;
+        }
+      }
 #endif
 
       /* Full scan via index */
