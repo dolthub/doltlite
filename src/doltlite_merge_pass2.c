@@ -232,12 +232,16 @@ int mergePreDetectDualIndexOverlap(
     if( !aOurs[i].zType || strcmp(aOurs[i].zType, "index")!=0 ) continue;
     if( !aOurs[i].zName || !aOurs[i].zSql || !aOurs[i].zTblName ) continue;
     if( findSchemaEntry(aAnc, nAnc, aOurs[i].zName) ) continue;
+    /* Both sides added this name: it is one index, even if another of
+    ** their new indexes touches the same column. */
+    if( findSchemaEntry(aTheirs, nTheirs, aOurs[i].zName) ) continue;
     for(j=0; j<nTheirs; j++){
       int added = 0;
       if( !aTheirs[j].zType || strcmp(aTheirs[j].zType, "index")!=0 ) continue;
       if( !aTheirs[j].zName || !aTheirs[j].zSql || !aTheirs[j].zTblName ) continue;
       if( findSchemaEntry(aAnc, nAnc, aTheirs[j].zName) ) continue;
       if( sqlite3_stricmp(aOurs[i].zName, aTheirs[j].zName)==0 ) continue;
+      if( findSchemaEntry(aOurs, nOurs, aTheirs[j].zName) ) continue;
       if( sqlite3_stricmp(aOurs[i].zTblName, aTheirs[j].zTblName)!=0 ) continue;
       if( !mergeIndexColumnsOverlap(aOurs[i].zSql, aTheirs[j].zSql) ) continue;
       rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
@@ -507,9 +511,7 @@ int mergeCatalogPass2(
       }else{
 
         int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;
-        if( theirsChanged ){
-          return SQLITE_ERROR;
-        }
+        if( theirsChanged ) return SQLITE_ERROR;
 
       }
     }

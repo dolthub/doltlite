@@ -303,14 +303,10 @@ int rebuildDisjointSchemaRows(
     if( !schemaEntryChangedByName(aAncSchema, nAncSchema,
                                   aOursSchema, nOursSchema,
                                   pSe->zName) ){
-      /* Unchanged here: theirs' loop below writes it if they changed it,
-      ** and a conflicted object keeps its pre-merge projection. */
-      if( hasSchemaConflictObject(aConflictTables, nConflictTables, pSe->zName)
-       || (pSe->zTblName
-           && hasSchemaConflictTable(aConflictTables, nConflictTables,
-                                     pSe->zTblName)) ){
-        continue;
-      }
+      /* Unchanged here: theirs' loop writes it when they changed it.
+      ** A schema conflict must not skip the row. The live-schema top-up
+      ** would otherwise put this connection's pre-merge text beside a
+      ** table the merge already rewrote. */
       if( findSchemaEntry(aTheirsSchema, nTheirsSchema, pSe->zName)
        && schemaEntryChangedByName(aAncSchema, nAncSchema,
                                    aTheirsSchema, nTheirsSchema,
