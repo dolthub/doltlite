@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 
-from performance_hotspot_search import Search, VERSION, family_fingerprint, fingerprint
+from performance_hotspot_search import CHOICES, Search, VERSION, family_fingerprint, fingerprint
 
 TEST_DIR = Path(__file__).resolve().parent
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
@@ -34,6 +34,7 @@ class Profile:
     target: int
     start: int
     width: int
+    memory: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ def profile_for(seed, index):
         width = min(profile.width, rows//4)
         profile = replace(profile, payload=payload, rows=rows, width=width,
                           start=min(profile.start, rows-width))
-    return profile
+    return replace(profile, memory=rng.randrange(4)==0)
 
 
 def key_sql(p, value):
@@ -142,8 +143,13 @@ def unit_sql(case, timed):
     return "\n".join(parts) + "\n"
 
 
-def session_sql(p, case, repeats):
-    return (prologue(p.cache_kib) + ".print WARM\n" + unit_sql(case, False)
+def session_sql(p, case, repeats, setup=None):
+    prefix = ""
+    if p.memory:
+        if setup is None:
+            raise ValueError("in-memory measurement requires fixture SQL")
+        prefix = prologue(p.cache_kib)+".output /dev/null\n"+setup+"\n.output stdout\n"
+    return (prefix + prologue(p.cache_kib) + ".print WARM\n" + unit_sql(case, False)
             + ".print MEASURE\n" + unit_sql(case, True)*repeats + ".print END\n")
 
 
@@ -202,8 +208,10 @@ class Runner:
             raise RuntimeError(f"command failed: {command}\n{result.stdout[-2000:]}\n{result.stderr[-2000:]}")
         return result.stdout
 
-    def measure(self, binary, db, p, case, repeats):
-        return parse_measurement(self.run([str(binary), str(db)], session_sql(p, case, repeats)), repeats)
+    def measure(self, binary, db, p, case, repeats, setup=None):
+        if p.memory:
+            db = ":memory:"
+        return parse_measurement(self.run([str(binary), str(db)], session_sql(p, case, repeats, setup)), repeats)
 
 
 def classify(pairs, threshold, min_ms, runs):
@@ -218,9 +226,10 @@ def pair_order(index):
     return ("sqlite", "doltlite") if index % 2 == 0 else ("doltlite", "sqlite")
 
 
-def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms):
-    reference = runner.measure(binaries["sqlite"], databases["sqlite"], p, case, 1)
-    pilot = runner.measure(binaries["doltlite"], databases["doltlite"], p, case, 1)
+def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, setup=None):
+    options = {'setup': setup} if p.memory else {}
+    reference = runner.measure(binaries["sqlite"], databases["sqlite"], p, case, 1, **options)
+    pilot = runner.measure(binaries["doltlite"], databases["doltlite"], p, case, 1, **options)
     if pilot["result"] != reference["result"]:
         raise ValueError(f"result mismatch: reference={reference}, pilot={pilot}")
     repeats = min(1024, max(1, math.ceil(min_ms*2.5 / max(reference["ms"], 0.01))),
@@ -229,7 +238,7 @@ def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms):
     for i in range(runs+1):
         measurements = {}
         for arm in pair_order(i):
-            measurements[arm] = runner.measure(binaries[arm], databases[arm], p, case, repeats)
+            measurements[arm] = runner.measure(binaries[arm], databases[arm], p, case, repeats, **options)
         if any(m["result"] != reference["result"] for m in measurements.values()):
             raise ValueError(f"result mismatch: reference={reference}, measurements={measurements}")
         pair = {arm+"_ms": measurements[arm]["ms"] for arm in binaries}
@@ -277,6 +286,7 @@ def save_report(output, report):
         low = min(x["doltlite_ms"]/x["sqlite_ms"] for x in case["pairs"])
         p = case["profile"]
         config = f"{p['rows']:,} rows; {p['key']} PK; {p['payload']} B payload; {p['cache_kib']//1024} MiB cache"
+        config += "; in-memory" if p.get('memory', False) else "; file-backed"
         lines.append(f"| {case['id']} | {config} | {case['doltlite_ms']:.3f} | {case['sqlite_ms']:.3f} | "
                      f"{case['ratio']:.2f}× | {low:.2f}× | `{case['reproducer']}` |")
     if not good:
@@ -310,6 +320,8 @@ def main(argv=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--seed", type=int, default=20260922)
     parser.add_argument("--search", action="store_true", help="generate SQL until the time budget expires")
+    parser.add_argument("--operator", action="append", choices=CHOICES['operator'],
+                        help="restrict generated search to these operators; may be repeated")
     parser.add_argument("--nightly-seeds", action="store_true", help="revisit retired PR workloads before random search")
     parser.add_argument("--history", type=Path)
     parser.add_argument("--issues", type=Path)
@@ -328,6 +340,8 @@ def main(argv=None):
         parser.error("--search cannot be combined with replay/profile/case filters")
     if args.nightly_seeds and not args.search:
         parser.error("--nightly-seeds requires --search")
+    if args.operator and not args.search:
+        parser.error("--operator requires --search")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
@@ -354,7 +368,7 @@ def main(argv=None):
             specs = [(0, Profile(**replay["profile"]), [Case(**replay["case"])],
                       replay["setup_sql"] if "setup_sql" in replay else (args.replay.parent/"setup.sql").read_text(), "replay")]
         elif args.search:
-            specs = search.specs(args.seed, nightly_seeds=args.nightly_seeds)
+            specs = search.specs(args.seed, nightly_seeds=args.nightly_seeds, operators=args.operator)
         else:
             specs = []
             for index in indexes:
@@ -370,27 +384,31 @@ def main(argv=None):
             with tempfile.TemporaryDirectory(prefix="doltlite-hotspots-") as tmp:
                 databases = {arm: Path(tmp)/(arm+".db") for arm in binaries}
                 for arm, binary in binaries.items():
-                    runner.run([str(binary), str(databases[arm])], prologue(profile.cache_kib)+setup, setup=True)
+                    if not profile.memory:
+                        runner.run([str(binary), str(databases[arm])], prologue(profile.cache_kib)+setup, setup=True)
                 for case in cases:
                     with tempfile.TemporaryDirectory(prefix="case-", dir=tmp) as scratch:
                         case_databases = {arm: Path(scratch)/(arm+".db") for arm in binaries}
                         for arm in binaries:
-                            shutil.copyfile(databases[arm], case_databases[arm])
+                            if not profile.memory:
+                                shutil.copyfile(databases[arm], case_databases[arm])
                         record = {"id": f"p{index:03d}/{case.name}", "profile": asdict(profile),
                                   "reproducer": f"p{index:03d}/{case.name}.json",
                                   "origin": "fresh" if args.search and case.name.startswith("generated_") and case.name != "generated_0" else origin}
                         repro = {"seed": report["seed"], "generator_version": VERSION, "profile": asdict(profile),
                                  "case": asdict(case), "setup": "setup.sql", "setup_sql": setup}
                         (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
-                        (directory/(case.name+".sql")).write_text(session_sql(profile, case, 1))
+                        (directory/(case.name+".sql")).write_text(session_sql(profile, case, 1, setup))
                         runner.case_deadline = time.monotonic() + args.timeout
                         try:
-                            record["plans"] = {arm: runner.run([str(binary), str(case_databases[arm])],
-                                prologue(profile.cache_kib)+"EXPLAIN QUERY PLAN "+case.sql) for arm, binary in binaries.items()}
+                            plan_setup = ".output /dev/null\n"+setup+"\n.output stdout\n" if profile.memory else ""
+                            record["plans"] = {arm: runner.run([str(binary), ":memory:" if profile.memory else str(case_databases[arm])],
+                                prologue(profile.cache_kib)+plan_setup+"EXPLAIN QUERY PLAN "+case.sql) for arm, binary in binaries.items()}
                             record["family"] = family_fingerprint(profile, case, record["plans"])
                             record["fingerprint"] = fingerprint(profile, case, record["plans"])
-                            record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms))
-                            (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"]))
+                            options = {'setup': setup} if profile.memory else {}
+                            record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms, **options))
+                            (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"], setup))
                             repro.update(expected=record["result"], repeats=record["repeats"], fingerprint=record["fingerprint"], family=record["family"])
                             (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
                         except BudgetExpired:

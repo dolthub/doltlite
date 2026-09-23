@@ -10,7 +10,12 @@ CHOICES = {
     'source': ['table', 'join', 'exists', 'in'],
     'predicate': ['all', 'group', 'range', 'or', 'modulo'],
     'expression': ['v', 'seq', 'length', 'bytes'],
-    'operator': ['aggregate', 'distinct', 'group', 'order', 'window', 'nested', 'update', 'delete', 'create_index', 'add_column'],
+    'operator': ['aggregate', 'distinct', 'group', 'order', 'window', 'nested',
+                 'update', 'delete', 'create_index', 'add_column',
+                 'update_text', 'update_blob', 'update_pk', 'upsert_update',
+                 'upsert_ignore', 'replace', 'insert_select',
+                 'correlated_aggregate', 'correlated_limit', 'anti_join',
+                 'union_all', 'intersect', 'except', 'window_frame', 'materialized'],
     'indexes': ['none', 'group', 'cover', 'both'],
     'context': ['plain', 'after_scan', 'after_points', 'after_update', 'after_delete'],
     'direction': ['ASC', 'DESC'],
@@ -36,7 +41,7 @@ def valid_profile(profile):
     except (TypeError, KeyError):
         return False
     numbers = (p.rows, p.payload, p.groups, p.cache_kib, p.stride, p.lookups, p.target, p.start, p.width)
-    return (all(type(n) is int for n in numbers) and type(p.skew) is bool
+    return (all(type(n) is int for n in numbers) and type(p.skew) is bool and type(p.memory) is bool
             and p.key in ('integer', 'text') and 1 <= p.rows <= 262144
             and 1 <= p.payload <= 16384 and p.rows*p.payload <= 256*1024*1024
             and 1 <= p.groups <= 4096 and 1 <= p.cache_kib <= 65536
@@ -90,6 +95,20 @@ def generated_case(profile, recipe, number=0):
         inner = f'SELECT row_number() OVER (PARTITION BY grp ORDER BY x {r["direction"]},seq) AS x FROM ({inner})'
     elif operator == 'nested':
         inner = f'SELECT x FROM ({inner}) WHERE x%{p.stride}=0'
+    elif operator in ('union_all', 'intersect', 'except'):
+        compound = operator.replace('_', ' ').upper()
+        inner = f'SELECT x FROM ({inner}) {compound} SELECT v FROM u'
+    elif operator == 'window_frame':
+        inner = (f'SELECT sum(x) OVER (PARTITION BY grp ORDER BY seq {r["direction"]} '
+                 f'ROWS BETWEEN {p.stride} PRECEDING AND CURRENT ROW) AS x FROM ({inner})')
+    elif operator == 'materialized':
+        inner = f'WITH q AS MATERIALIZED ({inner}) SELECT a.x+b.x AS x FROM q a JOIN q b USING(seq)'
+    elif operator in ('correlated_aggregate', 'correlated_limit'):
+        lookup = ('SELECT sum(u.v) FROM u WHERE u.grp=t.grp' if operator == 'correlated_aggregate'
+                  else f'SELECT u.v FROM u WHERE u.grp=t.grp ORDER BY u.v {r["direction"]},u.id LIMIT 1')
+        inner = f'SELECT ({lookup}) AS x FROM t WHERE {predicates[r["predicate"]]} AND t.seq<={p.lookups}'
+    elif operator == 'anti_join':
+        inner = f'SELECT {expression} AS x FROM t LEFT JOIN u ON u.id=t.seq WHERE u.id IS NULL AND {predicates[r["predicate"]]}'
     prepare = {
         'plain': '', 'after_scan': 'SELECT sum(length(payload)),sum(v) FROM t NOT INDEXED;',
         'after_points': f'WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<1000) SELECT sum((SELECT v FROM t WHERE id={key_sql(p, f"1+(c.i*2654435761)%{p.rows}")})) FROM c;',
@@ -105,6 +124,27 @@ def generated_case(profile, recipe, number=0):
         return Case(f'generated_{number}', f'CREATE INDEX probe ON t(({expression.replace("t.", "")}));', verify, prepare, r)
     if operator == 'add_column':
         return Case(f'generated_{number}', 'ALTER TABLE t ADD COLUMN z INTEGER NOT NULL DEFAULT 7;', 'SELECT count(*),sum(z) FROM t;', prepare, r)
+    updates = {
+        'update_text': "tag=printf('updated-%08x',seq)",
+        'update_blob': "payload=CAST(substr(payload,1,length(payload)-1)||'x' AS BLOB)",
+        'update_pk': f'id={key_sql(p, f"seq+{p.rows}")}',
+    }
+    sql = None
+    if operator in updates:
+        sql = f'UPDATE t SET {updates[operator]} WHERE {predicates[r["predicate"]]};'
+    elif operator in ('upsert_update', 'upsert_ignore', 'replace'):
+        insert = 'INSERT OR REPLACE' if operator == 'replace' else 'INSERT'
+        conflict = {'replace': '', 'upsert_ignore': ' ON CONFLICT(id) DO NOTHING',
+                    'upsert_update': " ON CONFLICT(id) DO UPDATE SET v=excluded.v+1,tag=excluded.tag||'x'"}[operator]
+        sql = f'{insert} INTO t SELECT * FROM t WHERE {predicates[r["predicate"]]}{conflict};'
+    elif operator == 'insert_select':
+        sql = (f'INSERT INTO t SELECT {key_sql(p, f"seq+{p.rows}")},seq+{p.rows},grp,v,tag,payload '
+               f'FROM t WHERE {predicates[r["predicate"]]};')
+    if sql:
+        verify = ('SELECT changes(),count(*),sum(v),sum(seq),min(id),max(id),'
+                  'sum(length(payload)),sum(length(tag)),'
+                  'sum(unicode(substr(tag,-1,1))),sum(unicode(substr(CAST(payload AS TEXT),-1,1))) FROM t;')
+        return Case(f'generated_{number}', sql, verify, prepare, r)
     return Case(f'generated_{number}', f'SELECT count(*),sum(x) FROM ({inner});', prepare=prepare, recipe=r)
 
 
@@ -116,6 +156,8 @@ def family_fingerprint(profile, case, plans):
                    'plans': {arm: normalized(plan) for arm, plan in plans.items()}}
     if case.warmup:
         identity['warmup'] = normalized(case.warmup)
+    if profile.memory:
+        identity['memory'] = True
     return digest(identity)
 
 
@@ -158,7 +200,7 @@ class Search:
         corpus.append(item)
         del corpus[:-128]
 
-    def choose(self, profile):
+    def choose(self, profile, operators=None):
         from performance_hotspot_fuzzer import Profile
         mode = self.rng.randrange(4)
         if mode == 0 and self.state['corpus']:
@@ -176,6 +218,8 @@ class Search:
             origin = 'underexplored'
         else:
             recipe, origin = fresh(self.rng), 'fresh'
+        if operators and recipe['operator'] not in operators:
+            recipe['operator'] = self.rng.choice(operators)
         return profile, recipe, origin
 
     def observe(self, profile, case, record):
@@ -202,7 +246,7 @@ class Search:
             temp.write_text(json.dumps(self.state, sort_keys=True)+'\n')
             temp.replace(self.history)
 
-    def specs(self, seed, nightly_seeds=False):
+    def specs(self, seed, nightly_seeds=False, operators=None):
         from performance_hotspot_fuzzer import profile_for
         index = 0
         if nightly_seeds:
@@ -211,11 +255,13 @@ class Search:
                 yield index, profile, cases, setup, 'retired'
                 index += 1
         while True:
-            profile, recipe, origin = self.choose(profile_for(seed, index))
+            profile, recipe, origin = self.choose(profile_for(seed, index), operators)
             cases = [generated_case(profile, recipe)]
             for number in range(1, 4):
                 variant = fresh(self.rng)
                 variant['indexes'] = recipe['indexes']
+                if operators and variant['operator'] not in operators:
+                    variant['operator'] = self.rng.choice(operators)
                 cases.append(generated_case(profile, variant, number))
             yield index, profile, cases, setup_sql(profile, recipe), origin
             index += 1

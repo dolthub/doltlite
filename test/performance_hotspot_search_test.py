@@ -69,6 +69,56 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(modes, {'fresh', 'mutation', 'underexplored'})
         self.assertGreater(len(recipes), 50)
 
+    def test_operator_filter_applies_to_mutations_and_companions(self):
+        operators = ['update_pk', 'upsert_update', 'correlated_limit']
+        a, b = search.Search(123), search.Search(123)
+        parent = dict(self.recipe, operator='aggregate')
+        for s in (a, b):
+            s.remember(parent, asdict(self.profile))
+        specs_a = a.specs(123, operators=operators)
+        specs_b = b.specs(123, operators=operators)
+        seen, origins = set(), set()
+        for _ in range(30):
+            spec = next(specs_a)
+            self.assertEqual(spec, next(specs_b))
+            origins.add(spec[-1])
+            for case in spec[2]:
+                seen.add(case.recipe['operator'])
+        self.assertEqual(seen, set(operators))
+        self.assertIn('mutation', origins)
+
+    def test_operator_filter_requires_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as error:
+                fuzzer.main(['--doltlite', 'unused', '--sqlite', 'unused',
+                             '--operator', 'update_pk', '--output', tmp])
+            self.assertEqual(error.exception.code, 2)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_new_write_families_mutate_and_verify_the_target(self):
+        operators = ('update_text', 'update_blob', 'update_pk', 'upsert_update',
+                     'upsert_ignore', 'replace', 'insert_select')
+        for key in ('integer', 'text'):
+            p = replace(self.profile, key=key)
+            for operator in operators:
+                recipe = dict(self.recipe, operator=operator, predicate='all', context='plain')
+                case = search.generated_case(p, recipe)
+                with self.subTest(key=key, operator=operator), sqlite3.connect(':memory:') as db:
+                    db.executescript(search.setup_sql(p, recipe))
+                    before = db.execute('SELECT * FROM t ORDER BY id').fetchall()
+                    db.execute('BEGIN')
+                    db.execute(case.sql)
+                    verification = db.execute(case.verify).fetchone()
+                    self.assertEqual(verification[0], 0 if operator=='upsert_ignore' else p.rows)
+                    self.assertEqual(verification[1], p.rows * (2 if operator=='insert_select' else 1))
+                    after = db.execute('SELECT * FROM t ORDER BY id').fetchall()
+                    if operator in ('upsert_ignore', 'replace'):
+                        self.assertEqual(after, before)
+                    else:
+                        self.assertNotEqual(after, before)
+                    db.rollback()
+                    self.assertEqual(db.execute('SELECT * FROM t ORDER BY id').fetchall(), before)
+
     def test_history_and_known_issues_remain_mutation_inputs(self):
         case = search.generated_case(self.profile, self.recipe)
         bundle = {'profile': asdict(self.profile), 'case': asdict(case)}
@@ -99,10 +149,14 @@ class SearchTests(unittest.TestCase):
         case = search.generated_case(self.profile, recipe)
         plans = {'doltlite': 'SEARCH t', 'sqlite': 'SEARCH t'}
         fp = search.fingerprint(self.profile, case, plans)
+        legacy = asdict(self.profile)
+        del legacy['memory']
+        self.assertEqual(fp, search.fingerprint(fuzzer.Profile(**legacy), case, plans))
         other = replace(self.profile, start=13, target=4)
         self.assertEqual(fp, search.fingerprint(other, search.generated_case(other, recipe, 3), plans))
         for p in (replace(self.profile, key='text'), replace(self.profile, payload=16384),
-                  replace(self.profile, cache_kib=1), replace(self.profile, skew=True)):
+                  replace(self.profile, cache_kib=1), replace(self.profile, skew=True),
+                  replace(self.profile, memory=True)):
             self.assertNotEqual(fp, search.fingerprint(p, search.generated_case(p, recipe), plans))
         self.assertNotEqual(fp, search.fingerprint(self.profile, case, dict(plans, sqlite='SCAN t')))
 
@@ -157,6 +211,35 @@ class SearchTests(unittest.TestCase):
                 rc = fuzzer.main(['--doltlite', 'unused', '--sqlite', 'unused', '--profiles', '1', '--output', tmp])
             self.assertEqual(rc, 0)
             self.assertEqual(count, 17)
+
+    def test_memory_replay_does_not_create_or_copy_disk_fixtures(self):
+        profile = replace(self.profile, memory=True)
+        case = search.generated_case(profile, dict(self.recipe, operator='update_text'))
+        setup = search.setup_sql(profile, case.recipe)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            replay = root/'case.json'
+            replay.write_text(json.dumps({'seed': 1, 'profile': asdict(profile),
+                                         'case': asdict(case), 'setup_sql': setup}))
+            with patch.object(fuzzer.Runner, 'run', return_value='ok') as run, \
+                 patch.object(fuzzer, 'binary_info', return_value={}), \
+                 patch.object(fuzzer.shutil, 'copyfile') as copy, \
+                 patch.object(fuzzer, 'measure_case', return_value={
+                     'repeats': 1, 'result': '42', 'ratio': 1, 'confirmed': False, 'pairs': []}) as measure:
+                rc = fuzzer.main(['--doltlite', 'unused', '--sqlite', 'unused',
+                                 '--replay', str(replay), '--output', str(root/'out')])
+            self.assertEqual(rc, 0)
+            copy.assert_not_called()
+            self.assertFalse(any(call.kwargs.get('setup') for call in run.call_args_list))
+            self.assertEqual(measure.call_args.kwargs['setup'], setup)
+            self.assertTrue(measure.call_args.args[3].memory)
+            plans = [c for c in run.call_args_list if len(c.args)>1 and 'EXPLAIN QUERY PLAN' in c.args[1]]
+            self.assertEqual(len(plans), 2)
+            for call in plans:
+                self.assertEqual(call.args[0][1], ':memory:')
+                self.assertIn(setup, call.args[1])
+            sql = (root/'out/p000'/f'{case.name}.sql').read_text()
+            self.assertLess(sql.index(setup), sql.index('.print WARM'))
 
     def test_issue_profiles_cannot_inject_sql_into_mutations(self):
         case = search.generated_case(self.profile, self.recipe)
@@ -271,6 +354,23 @@ class IssueTests(unittest.TestCase):
                     retained.measure_retained('new', 'candidate', fixtures)
             with self.assertRaises(FileExistsError):
                 issues.main(['promote', '--replay', str(replay), '--issue', '10', '--output', str(output)])
+
+    def test_promoted_memory_cases_stay_in_memory(self):
+        bundle = dict(self.bundle, issue=10)
+        bundle['profile'] = dict(bundle['profile'], memory=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = root/'corpus'
+            corpus.mkdir()
+            (corpus/'memory.json').write_text(json.dumps(bundle))
+            with patch.object(retained, 'sql') as sql:
+                fixtures = retained.prepare_retained({'candidate': 'new'}, root, corpus)
+                sql.assert_not_called()
+                sql.return_value = 'WARM\n2048|42\nMEASURE\n2048|42\nRun Time: real 0.08 user 0.08 sys 0.0\nEND\n'
+                self.assertEqual(next(iter(retained.measure_retained('new', 'candidate', fixtures).values())), 80000)
+                command = sql.call_args.args
+                self.assertEqual(command[1], ':memory:')
+                self.assertLess(command[2].index(bundle['setup_sql']), command[2].index('.timer on'))
 
     def test_workflow_persists_history_and_serializes_issue_publication(self):
         workflow = (Path(__file__).resolve().parents[1]/'.github/workflows/nightly-hotspots.yml').read_text()

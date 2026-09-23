@@ -96,12 +96,14 @@ class SeedTests(unittest.TestCase):
         active = hotspots.TEST_DIR/'performance-hotspot-corpus'
         self.assertTrue(all(not (active/(name+'.json')).exists() for name in names))
         with patch.object(seeds, 'specs', return_value=iter(specs)):
-            generated = search.Search(123).specs(123, nightly_seeds=True)
+            generated = search.Search(123).specs(123, nightly_seeds=True,
+                                               operators=['update_blob'])
             for index, spec in enumerate(specs):
                 self.assertEqual(next(generated), (index, *spec, 'retired'))
             index, profile, cases, setup, origin = next(generated)
             self.assertEqual(index, 8)
             self.assertEqual(len(cases), 4)
+            self.assertEqual({case.recipe['operator'] for case in cases}, {'update_blob'})
             self.assertIn('CREATE TABLE u', setup)
             self.assertNotEqual(origin, 'retired')
 

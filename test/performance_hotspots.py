@@ -296,11 +296,12 @@ def prepare_retained(binaries, root, corpus=None):
         names.add(name)
         profile = Profile(**bundle['profile'])
         setup = prologue(profile.cache_kib)+bundle['setup_sql']
-        fixture = hashlib.sha256(setup.encode()).hexdigest()
+        fixture = hashlib.sha256((str(profile.memory)+setup).encode()).hexdigest()
         if fixture not in fixtures:
-            databases = {arm: root / f'{arm}-retained-{fixture}.db' for arm in binaries}
+            databases = {arm: ':memory:' if profile.memory else root / f'{arm}-retained-{fixture}.db' for arm in binaries}
             for arm, binary in binaries.items():
-                sql(binary, databases[arm], setup)
+                if not profile.memory:
+                    sql(binary, databases[arm], setup)
             fixtures[fixture] = databases
         databases = fixtures[fixture]
         retained.append((name, bundle, databases))
@@ -312,7 +313,7 @@ def measure_retained(binary, arm, retained):
     measured = {}
     for name, bundle, databases in retained:
         repeats = bundle['repeats']
-        output = sql(binary, databases[arm], session_sql(Profile(**bundle['profile']), Case(**bundle['case']), repeats))
+        output = sql(binary, databases[arm], session_sql(Profile(**bundle['profile']), Case(**bundle['case']), repeats, bundle['setup_sql']))
         result = parse_measurement(output, repeats)
         if result['result'] != bundle['expected']:
             raise ValueError(f'{name}: retained hotspot result mismatch')

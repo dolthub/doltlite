@@ -22,6 +22,27 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(first, fuzzer.profile_for(20260922, 3))
         self.assertNotEqual(first, fuzzer.profile_for(20260923, 3))
         self.assertEqual(fuzzer.fixture_sql(first), fuzzer.fixture_sql(fuzzer.profile_for(20260922, 3)))
+        self.assertEqual({fuzzer.profile_for(20260922, i).memory for i in range(32)}, {False, True})
+
+    def test_memory_measurements_recreate_fixture_before_timing(self):
+        p = replace(self.profile, memory=True)
+        case = fuzzer.Case('update_text', "UPDATE t SET tag='new';", 'SELECT count(*) FROM t;')
+        setup = fuzzer.fixture_sql(p)
+        runner = fuzzer.Runner(30, 5)
+        output = 'WARM\n64\nMEASURE\n64\nRun Time: real 0.01 user 0.01 sys 0.0\nEND\n'
+        with patch.object(runner, 'run', return_value=output) as run:
+            for _ in range(2):
+                result = runner.measure('engine', 'unused.db', p, case, 1, setup)
+                self.assertEqual(result['ms'], 10)
+            for call in run.call_args_list:
+                self.assertEqual(call.args[0], ['engine', ':memory:'])
+                sql = call.args[1]
+                self.assertEqual(sql.count(setup), 1)
+                self.assertLess(sql.index(setup), sql.index('.print WARM'))
+                self.assertLess(sql.index(setup), sql.index('.timer on'))
+                self.assertEqual(sql.count('ROLLBACK;'), 2)
+            with self.assertRaisesRegex(ValueError, 'fixture SQL'):
+                runner.measure('engine', 'unused.db', p, case, 1)
 
     def test_large_payload_profiles_have_bounded_fixture_size(self):
         for seed in range(10):
