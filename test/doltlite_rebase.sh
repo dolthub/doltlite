@@ -841,6 +841,54 @@ else
 fi
 rm -f "$DB12F"
 
+# ROLLBACK drops the conflicts and any edits made after the pause, and
+# keeps the plan. --continue then skips the conflicted commit.
+DB12G=/tmp/test_rebase_fail_rb_$$.db
+seed_rebase_data_conflict "$DB12G"
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+UPDATE t SET v=9 WHERE id=1;
+ROLLBACK;
+SELECT 'POST|' || (SELECT active_branch()) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_rebase) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT action || '|' || commit_message FROM dolt_rebase) || '|' || (SELECT count(*) FROM dolt_status);
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
+SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DB12G" 2>&1)
+if echo "$TX_OUT" | grep -q 'data conflict detected while rebasing'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_rollback_conflict\n  expected data conflict detected\n  got: $TX_OUT"
+fi
+POST=$(echo "$TX_OUT" | grep '^POST|')
+if [ "$POST" = "POST|dolt_rebase_feat|0|1|3|pick|feat changes|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_rollback_keeps_plan\n  expected: POST|dolt_rebase_feat|0|1|3|pick|feat changes|0\n  got:      $POST\n  out: $TX_OUT"
+fi
+if echo "$TX_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_rollback_continue\n  got: $TX_OUT"
+fi
+DONE=$(echo "$TX_OUT" | grep '^DONE|')
+if [ "$DONE" = "DONE|feat|3" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_rollback_continue_value\n  expected: DONE|feat|3\n  got:      $DONE"
+fi
+LOG=$(echo "$TX_OUT" | grep '^main changes,init$')
+if [ "$LOG" = "main changes,init" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_rollback_continue_log\n  got: $TX_OUT"
+fi
+rm -f "$DB12G"
+
 # A conflicted interactive --continue inside BEGIN pauses on the working
 # branch, and ROLLBACK leaves it there; both match Dolt with autocommit off.
 DB13=/tmp/test_rebase_iconflict_txn_$$.db; rm -f "$DB13"
@@ -885,6 +933,66 @@ else
   ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn_rollback\n  expected: AFTER_RB|dolt_rebase_feat|3|0\n  got:      $AFTER_RB"
 fi
 rm -f "$DB13"
+
+# Same rollback, then --continue: the plan is still there and the
+# conflicted pick is skipped.
+DB13B=/tmp/test_rebase_iconflict_rb_$$.db; rm -f "$DB13B"
+cat <<'SQL' | "$DOLTLITE" "$DB13B" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v=2 WHERE id=1;
+SELECT dolt_commit('-am','feat changes');
+SELECT dolt_checkout('main');
+UPDATE t SET v=3 WHERE id=1;
+SELECT dolt_commit('-am','main changes');
+SELECT dolt_checkout('feat');
+SQL
+TX_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='pick';
+SELECT dolt_rebase('--continue');
+ROLLBACK;
+SELECT 'POST|' || (SELECT active_branch()) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_rebase) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT action || '|' || commit_message FROM dolt_rebase);
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
+SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DB13B" 2>&1)
+if echo "$TX_OUT" | grep -q 'data conflict detected while rebasing commit'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_rollback_conflict\n  got: $TX_OUT"
+fi
+POST=$(echo "$TX_OUT" | grep '^POST|')
+if [ "$POST" = "POST|dolt_rebase_feat|0|1|3|pick|feat changes" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_rollback_keeps_plan\n  expected: POST|dolt_rebase_feat|0|1|3|pick|feat changes\n  got:      $POST\n  out: $TX_OUT"
+fi
+if echo "$TX_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_rollback_continue\n  got: $TX_OUT"
+fi
+DONE=$(echo "$TX_OUT" | grep '^DONE|')
+if [ "$DONE" = "DONE|feat|3" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_rollback_continue_value\n  expected: DONE|feat|3\n  got:      $DONE"
+fi
+LOG=$(echo "$TX_OUT" | grep '^main changes,init$')
+if [ "$LOG" = "main changes,init" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_rollback_continue_log\n  got: $TX_OUT"
+fi
+rm -f "$DB13B"
 
 DBE=/tmp/test_rebase_empty_pick_$$.db; rm -f "$DBE"
 cat <<'SQL' | "$DOLTLITE" "$DBE" >/dev/null 2>&1
