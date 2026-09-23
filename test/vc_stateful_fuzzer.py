@@ -1361,20 +1361,31 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         ),
     )
     sync_vc_result(doltlite, db_path, target, model)
-    if out is not None and base is not None:
-        # Three-way rules on entryless objects. Names are branch-scoped, so no
-        # two sides ever define one name differently: an object on both sides
-        # survives, one added on a single side survives, and one that a single
-        # side deleted since the base is the only thing that may go.
-        after = set(schema_objects(doltlite, db_path, target))
-        must_keep = (ours & theirs) | ((ours ^ theirs) - base)
-        missing = must_keep - after
-        resurrected = (base - ours - theirs) & after
-        if missing or resurrected:
+    if out is None:
+        return
+    after = set(schema_objects(doltlite, db_path, target))
+    if "--abort" in merge_sql:
+        # --abort puts the target back. The other side's views stay there.
+        if after != ours:
             raise AssertionError(
-                "merge %s into %s: dropped=%r resurrected=%r"
-                % (source, target, sorted(missing), sorted(resurrected))
+                "aborted merge changed views or triggers on %s\nbefore=%r\nafter=%r"
+                % (target, sorted(ours), sorted(after))
             )
+        return
+    if base is None:
+        return
+    # Three-way rules on entryless objects. Names are branch-scoped, so no
+    # two sides ever define one name differently: an object on both sides
+    # survives, one added on a single side survives, and one that a single
+    # side deleted since the base is the only thing that may go.
+    must_keep = (ours & theirs) | ((ours ^ theirs) - base)
+    missing = must_keep - after
+    resurrected = (base - ours - theirs) & after
+    if missing or resurrected:
+        raise AssertionError(
+            "merge %s into %s: dropped=%r resurrected=%r"
+            % (source, target, sorted(missing), sorted(resurrected))
+        )
 
 
 def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
