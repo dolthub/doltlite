@@ -955,6 +955,7 @@ int doltliteMergeCatalogs(
   int nConflictTables = 0;
 
   assert( db!=0 && ancestor!=0 && ours!=0 && theirs!=0 && pMergedHash!=0 );
+  if( sqlite3FaultSim(963) ) return SQLITE_NOMEM;
   rc = loadMergeCatalogs(db, ancestor, ours, theirs,
                          &aAnc, &nAnc, &iNextAnc,
                          &aOurs, &nOurs, &iNextOurs,

@@ -1371,6 +1371,7 @@ static void doltCheckoutParsedFunc(
       goto checkout_done;
     }
     if( rc!=SQLITE_NOTFOUND ){
+      (void)doltliteVcSealSavepointError(db);
       doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
       return;
     }
@@ -1416,6 +1417,7 @@ checkout_done:
     return;
   }
   if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
     doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
     return;
   }

@@ -4760,6 +4760,108 @@ static void run_blame_wide_primary_key(void){
   removeDbFiles(dbpath);
 }
 
+static void checkReportedCode(
+  sqlite3 *db,
+  const char *sql,
+  int expectRc,
+  const char *zMsgPart,
+  const char *zName
+){
+  char *err = 0;
+  char zCode[160];
+  char zMsg[160];
+  int rc = sqlite3_exec(db, sql, 0, 0, &err);
+  int ext = sqlite3_extended_errcode(db);
+  snprintf(zCode, sizeof(zCode), "%s_code", zName);
+  snprintf(zMsg, sizeof(zMsg), "%s_message", zName);
+  check(zCode, rc==expectRc && ext==expectRc);
+  check(zMsg, err && strstr(err, zMsgPart)!=0);
+  if( !(rc==expectRc && ext==expectRc) || !(err && strstr(err, zMsgPart)) ){
+    fprintf(stderr, "  got rc=%d ext=%d msg=%s\n  sql: %s\n",
+            rc, ext, err ? err : sqlite3_errmsg(db), sql);
+  }
+  sqlite3_free(err);
+}
+
+static void run_vc_internal_error_code(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zFeat[80];
+  char zMain[80];
+  char zSql[160];
+
+  printf("=== VC Internal Error Code Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_vc_internal_error_code");
+  removeDbFiles(dbpath);
+  check("open_db_for_vc_internal_error_code",
+        open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+  check("setup_vc_internal_error_code", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES(1,1);"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_branch('feat');"
+    "UPDATE t SET v=2 WHERE id=1;"
+    "SELECT dolt_commit('-am','main edit');"
+    "SELECT dolt_checkout('feat');"
+    "UPDATE t SET v=3 WHERE id=1;"
+    "SELECT dolt_commit('-am','feat edit');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  snprintf(zFeat, sizeof(zFeat), "%s",
+           queryScalarText(db,
+             "SELECT commit_hash FROM dolt_log('feat') WHERE message='feat edit'"));
+  snprintf(zMain, sizeof(zMain), "%s",
+           queryScalarText(db,
+             "SELECT commit_hash FROM dolt_log WHERE message='main edit'"));
+
+  gRegressionFaultCode = 963;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  checkReportedCode(db, "SELECT dolt_merge('feat');", SQLITE_NOMEM,
+                    "merge failed", "merge_nomem");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  check("merge_nomem_injected", gRegressionFaultHits>=1);
+  check("merge_nomem_keeps_row",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "2")==0);
+
+  snprintf(zSql, sizeof(zSql), "SELECT dolt_cherry_pick('%s');", zFeat);
+  gRegressionFaultCode = 963;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  checkReportedCode(db, zSql, SQLITE_NOMEM,
+                    "cherry-pick of", "cherry_pick_nomem");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  check("cherry_pick_nomem_injected", gRegressionFaultHits>=1);
+
+  snprintf(zSql, sizeof(zSql), "SELECT dolt_revert('%s');", zMain);
+  gRegressionFaultCode = 963;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  checkReportedCode(db, zSql, SQLITE_NOMEM,
+                    "revert of", "revert_nomem");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  check("revert_nomem_injected", gRegressionFaultHits>=1);
+
+  check("checkout_feat_for_rebase_nomem",
+        execSql(db, "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  gRegressionFaultCode = 963;
+  gRegressionFaultHits = 0;
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, regressionFaultCallback);
+  checkReportedCode(db, "SELECT dolt_rebase('main');", SQLITE_NOMEM,
+                    "rebase", "rebase_nomem");
+  sqlite3_test_control(SQLITE_TESTCTRL_FAULT_INSTALL, 0);
+  gRegressionFaultCode = 0;
+  check("rebase_nomem_injected", gRegressionFaultHits>=1);
+  check("rebase_nomem_restores_branch",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_nomem_keeps_row",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "3")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_merge_persist_failure(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -4831,6 +4933,8 @@ static void run_merge_conflict_persist_failure(void){
         gRegressionFaultHits==1);
   check("merge_conflict_persist_failure_is_propagated",
         strcmp(res, "ERROR: merge failed")==0);
+  check("merge_conflict_persist_failure_keeps_ioerr",
+        sqlite3_extended_errcode(db)==SQLITE_IOERR);
   doltliteGetSessionConflictsCatalog(db, &conflictHash);
   check("merge_conflict_persist_failure_does_not_publish_hash",
         prollyHashIsEmpty(&conflictHash));
@@ -14714,6 +14818,7 @@ static const RegressionCase aCases[] = {
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
   { "blame_deep_history_scan", "Blame Deep History Scan Test", run_blame_deep_history_scan },
   { "blame_wide_primary_key", "Blame Wide Primary Key Test", run_blame_wide_primary_key },
+  { "vc_internal_error_code", "VC Internal Error Code Test", run_vc_internal_error_code },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "merge_conflict_persist_failure", "Merge Conflict Persist Failure Test", run_merge_conflict_persist_failure },
   { "conflict_serializer_bounds", "Conflict Serializer Bounds Test", run_conflict_serializer_bounds },

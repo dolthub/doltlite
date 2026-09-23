@@ -1081,7 +1081,8 @@ static int mergeRefCreateMergeCommit(
     if( restoreRc!=SQLITE_OK ){
       sqlite3_result_error_code(context, restoreRc);
     }else{
-      sqlite3_result_error(context, "failed to create merge commit", -1);
+      doltliteVcResultErrorCode(context, db,
+          "failed to create merge commit", rc);
     }
     return SQLITE_ERROR;
   }
@@ -1186,7 +1187,7 @@ static int mergeRefAbortAfterWriteTxn(
     sqlite3CloseSavepoints(db);
   }
   if( zMsg ){
-    sqlite3_result_error(context, zMsg, -1);
+    doltliteVcResultErrorCode(context, db, zMsg, rc);
   }else{
     sqlite3_result_error_code(context, rc);
   }
@@ -1462,9 +1463,9 @@ merge_fail:
   if( bPeerBusy ){
     doltliteCmdResultPeerBranchBusy(context, "merge");
   }else if( zOwnedErr ){
-    sqlite3_result_error(context, zOwnedErr, -1);
+    doltliteVcResultErrorCode(context, db, zOwnedErr, rc);
   }else if( zFail ){
-    sqlite3_result_error(context, zFail, -1);
+    doltliteVcResultErrorCode(context, db, zFail, rc);
   }else{
     sqlite3_result_error_code(context, rc);
   }
