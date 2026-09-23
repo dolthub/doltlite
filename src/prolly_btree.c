@@ -620,6 +620,9 @@ static int doltliteResolveOpenBranchPath(
     zSep--;
     if( *zSep!='/' && *zSep!='\\' && *zSep!='@' ) continue;
     if( zSep==zFilename || zSep[1]=='\0' ) continue;
+    /* Windows resolves "x.db/" to x.db, so an empty component would hand
+    ** the store "x.db//main" as branch "main" instead of "/main". */
+    if( zSep[-1]=='/' || zSep[-1]=='\\' ) continue;
     zParent = sqlite3_mprintf("%.*s", (int)(zSep - zFilename), zFilename);
     if( !zParent ) return SQLITE_NOMEM;
     rc = doltliteFileExists(pVfs, zParent, &exists);
