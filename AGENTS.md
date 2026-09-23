@@ -84,27 +84,8 @@ make DOLTLITE_PROLLY=0 sqlite3   # stock SQLite, for oracle/perf comparison
   diff, three-way merge, chunker, cache, hashing) and `src/chunk_*.c`
   (content-addressed chunk store, WAL, refs, staging, file format).
 - **Version-control surfaces** — `src/doltlite_*.c`, roughly one file per
-  feature: `doltlite_commit` (wire format), `doltlite_commit_cmd` /
-  `doltlite_add` / `doltlite_reset` / `doltlite_merge_cmd` /
-  `doltlite_cherry_pick` / `doltlite_revert` / `doltlite_rebase` /
-  `doltlite_config` (SQL commands), `doltlite_core` (txn seal, catalog flush,
-  create-commit helpers), `doltlite_cmd` (shared command scaffolding: option
-  errors, peer-branch BUSY, conflict/CV txn-mode outcomes), `doltlite_branch`
-  (branch/checkout), `doltlite_merge` (catalog orchestration in
-  `doltlite_merge`, pass1/pass2 in `doltlite_merge_pass1` /
-  `doltlite_merge_pass2`, rows in `doltlite_merge_rows`, schema IR in
-  `doltlite_merge_schema`, plus constraint detectors in
-  `doltlite_merge_constraints` / `_unique` / `_check` / `_fk`),
-  `doltlite_diff` / `doltlite_diff_stat` /
-  `doltlite_diff_table`, `doltlite_log`, `doltlite_history`, `doltlite_blame`,
-  `doltlite_tag`, `doltlite_conflicts`, `doltlite_constraint_violations` /
-  `doltlite_verify_constraints`,
-  `doltlite_schemas` / `doltlite_schema_diff`, `doltlite_patch`,
-  `doltlite_status`, `doltlite_workspace`, `doltlite_ignore`, `doltlite_docs`,
-  `doltlite_tests`, `doltlite_hashof`,
-  `doltlite_gc`, `doltlite_remote` / `doltlite_http_remote` /
-  `doltlite_remotesrv`. Internal header: `src/doltlite_internal.h`; surfaces are
-  registered in `src/doltlite.c`.
+  feature. Internal header: `src/doltlite_internal.h`; surfaces are registered
+  in `src/doltlite.c`.
 
 ## The version-control surface (vtables + functions)
 
