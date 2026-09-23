@@ -849,11 +849,10 @@ int normalizeSideToMergedLayout(
       }
     }
     /* A swap keeps each value in its slot. Matching by name would move
-    ** the cell onto the column that inherited the old name. Both
-    ** declarations still match the ancestor at this position, and each
-    ** name survives on the other side, so this is a rename cycle rather
-    ** than a drop or an add. */
-    if( j<nAnc && j<nOurs
+    ** the cell onto the column that inherited the old name. Same column
+    ** count: a drop shifts later same-typed columns and is not a swap. */
+    if( nAnc==nOurs && nOurs==nTheirs
+     && j<nAnc
      && sqlite3_stricmp(aTheirs[j].zName, aOurs[j].zName)!=0
      && parsedColumnDefinitionsMatch(&aTheirs[j], &aAnc[j])
      && parsedColumnDefinitionsMatch(&aOurs[j], &aAnc[j]) ){
