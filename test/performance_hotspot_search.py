@@ -8,9 +8,9 @@ import re
 VERSION = 2
 CHOICES = {
     'source': ['table', 'join', 'exists', 'in'],
-    'predicate': ['all', 'group', 'range', 'or', 'modulo'],
+    'predicate': ['all', 'group', 'range', 'or', 'modulo', 'group_range'],
     'expression': ['v', 'seq', 'length', 'bytes'],
-    'operator': ['aggregate', 'distinct', 'group', 'order', 'window', 'nested',
+    'operator': ['aggregate', 'distinct', 'group', 'order', 'index_order', 'window', 'nested',
                  'update', 'delete', 'create_index', 'add_column',
                  'update_text', 'update_blob', 'update_pk', 'upsert_update',
                  'upsert_ignore', 'replace', 'insert_select',
@@ -71,6 +71,7 @@ def generated_case(profile, recipe, number=0):
     predicates = {
         'all': '1', 'group': f't.grp={p.target}',
         'range': f't.id BETWEEN {key_sql(p, p.start)} AND {key_sql(p, p.start+p.width-1)}',
+        'group_range': f't.grp<{max(1, p.groups*p.width//p.rows)}',
         'or': f'(t.grp={p.target} OR t.seq%{p.stride}=0)',
         'modulo': f't.seq%{p.stride}=0',
     }
@@ -91,6 +92,8 @@ def generated_case(profile, recipe, number=0):
         inner = f'SELECT sum(x) AS x FROM ({inner}) GROUP BY grp'
     elif operator == 'order':
         inner += f' ORDER BY x {r["direction"]},t.seq LIMIT {p.width}'
+    elif operator == 'index_order':
+        inner += f' ORDER BY t.grp {r["direction"]},t.v {r["direction"]},t.id LIMIT {p.width}'
     elif operator == 'window':
         inner = f'SELECT row_number() OVER (PARTITION BY grp ORDER BY x {r["direction"]},seq) AS x FROM ({inner})'
     elif operator == 'nested':
