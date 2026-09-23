@@ -1,0 +1,66 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-dml-scan-cost
+
+proc dml_scan_plan {conn sql} {
+  set plan {}
+  $conn eval "EXPLAIN QUERY PLAN $sql" row {lappend plan $row(detail)}
+  return $plan
+}
+
+foreach {name type pk keyexpr suffix} {
+  text TEXT id {printf('%016x',i)} {}
+  blob BLOB id {CAST(printf('%016x',i) AS BLOB)} {}
+  composite TEXT {id,seq} {printf('%016x',i%16)} {WITHOUT ROWID}
+  integer INTEGER id i {WITHOUT ROWID}
+} {
+  reset_db
+  forcedelete dml-scan-oracle.db
+  sqlite3 oracle {file:dml-scan-oracle.db?doltlite_engine=sqlite} -uri 1
+  foreach conn {db oracle} {
+    $conn eval "
+      CREATE TABLE t(id $type,seq INTEGER NOT NULL,grp INTEGER NOT NULL,
+                     v INTEGER NOT NULL,tag TEXT,payload BLOB,PRIMARY KEY($pk)) $suffix;
+      WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<1024)
+      INSERT INTO t SELECT $keyexpr,i,i%16,(i*7919)%1000000,
+                           printf('tag-%08x',i),CAST(printf('%032d',i) AS BLOB) FROM c;
+      CREATE INDEX t_g ON t(grp);
+      CREATE INDEX t_gv ON t(grp,v);
+      ANALYZE;
+      BEGIN;
+      DELETE FROM t WHERE seq%32=0;
+    "
+  }
+  set update {UPDATE t SET tag=printf('updated-%08x',seq) WHERE 1}
+  do_test $name-update-plan {dml_scan_plan db $update} {{SCAN t}}
+  do_test $name-delete-plan {dml_scan_plan db {DELETE FROM t WHERE 1}} {{SCAN t}}
+  set selectiveIndex [expr {$name eq "integer" ? "t_g" : "t_gv"}]
+  do_test $name-selective-plan {
+    dml_scan_plan db {UPDATE t SET tag='selective' WHERE grp=14}
+  } [list "SEARCH t USING INDEX $selectiveIndex (grp=?)"]
+  do_test $name-hint-plan {
+    dml_scan_plan db {UPDATE t INDEXED BY t_gv SET tag='hinted' WHERE 1}
+  } {{SCAN t USING INDEX t_gv}}
+  do_test $name-covering-read-plan {
+    dml_scan_plan db {SELECT grp,v FROM t}
+  } {{SCAN t USING COVERING INDEX t_gv}}
+  if {$suffix ne {}} {
+    do_test $name-stock-plan {dml_scan_plan oracle $update} {{SCAN t USING INDEX t_g}}
+  }
+  foreach {step sql} [list \
+      update $update \
+      savepoint {SAVEPOINT edits} \
+      selective {UPDATE t SET tag='selective' WHERE grp=14} \
+      hinted {UPDATE t INDEXED BY t_gv SET tag='hinted' WHERE grp=3} \
+      delete {DELETE FROM t WHERE 1} \
+      rollback-savepoint {ROLLBACK TO edits; RELEASE edits} \
+      rollback {ROLLBACK}] {
+    foreach conn {db oracle} {$conn eval $sql}
+    do_test $name-$step {
+      db eval {SELECT hex(id),seq,grp,v,tag,hex(payload) FROM t ORDER BY id,seq}
+    } [oracle eval {SELECT hex(id),seq,grp,v,tag,hex(payload) FROM t ORDER BY id,seq}]
+  }
+  oracle close
+}
+
+finish_test
