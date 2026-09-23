@@ -282,13 +282,14 @@ def function_spans(text: str):
         yield name, match.start(), body_start, k, text[:match.start()].count("\n") + 1
 
 
+TEST_HARNESS = re.compile(r"^(?:test(?:_|\d)|tclsqlite)|_tcl\.c$")
+
+
 def is_product_path(path: str, root: str) -> bool:
     rel = os.path.relpath(path, root).replace(os.sep, "/")
-    if rel.startswith("test/"):
+    if rel.startswith("test/") or "/tool/" in rel:
         return False
-    if rel.startswith("src/"):
-        return not re.match(r"test(?:_|\d)", os.path.basename(rel))
-    return True
+    return not TEST_HARNESS.search(os.path.basename(rel))
 
 
 def product_files(root: str, src_root: str) -> list[str]:
@@ -300,7 +301,8 @@ def product_files(root: str, src_root: str) -> list[str]:
         rel = os.path.relpath(p, root).replace(os.sep, "/")
         if "/bld/" in rel or "/jswasm/" in rel:
             continue
-        if os.path.isfile(p) and PRODUCT_EXT_FILE.search(p):
+        if (os.path.isfile(p) and PRODUCT_EXT_FILE.search(p)
+                and is_product_path(p, root)):
             files.append(p)
     return sorted(set(os.path.abspath(p) for p in files))
 
@@ -674,6 +676,9 @@ def main() -> int:
     src_root = os.path.abspath(args.src_root or os.path.join(root, "src"))
 
     src_files = expand(src_root, list(SRC_GLOBS))
+    if not os.path.isdir(src_root) or not src_files:
+        print(f"  no owned sources under {src_root}; refusing to report a pass")
+        return 1
     hdrs = expand(src_root, ["*.h"])
     owned_hdrs = expand(src_root, list(OWNED_HDR_GLOBS))
     corpus = expand(src_root, ["*.c", "*.h"]) + expand(root, [

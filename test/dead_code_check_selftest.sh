@@ -300,6 +300,24 @@ expect_scan_no_hit "sqlite3_seam_body_is_an_entry_point" \
   "unreachable from the product: dead_code_gate_seam_helper"
 rm -f "$WORK/src/main.c"
 
+cat > "$WORK/src/doltlite.c" <<'EOF'
+int dead_code_gate_harness_only(int x){ return x; }
+EOF
+mkdir -p "$WORK/ext/demo"
+printf 'int dead_code_gate_harness_only(int x);\nint h(void){ return dead_code_gate_harness_only(0); }\n' \
+  > "$WORK/ext/demo/test_demo.c"
+expect_scan_hit "ext_test_harness_is_not_product" \
+  "unreachable from the product: dead_code_gate_harness_only"
+rm -rf "$WORK/ext/demo"
+
+MISSING_OUT=$(python3 "$SCAN" --root "$WORK" --src-root "$WORK/no-such-src" 2>&1)
+if [ $? -eq 0 ]; then
+  bad "missing_src_root_fails_closed" "scanner passed with no sources:
+$MISSING_OUT"
+else
+  ok
+fi
+
 # Part B: unused extern (definition, no caller) on a one-file src tree.
 mkdir -p "$WORK/tiny/src"
 printf 'int dead_code_gate_unused_extern(void){ return 0; }\n' \
