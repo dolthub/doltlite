@@ -143,11 +143,13 @@
 #define WS_REBASING_OFF     WS_TOTAL_SIZE_V2
 /* Bit 0: rebase in progress. Bit 1: return-branch is a metadata overlay
 ** (must not replace a dirty catalog). Bit 2: the current plan step is
-** already in the working set (a data conflict inside BEGIN). Keep the
-** v5 length; GC uses it. */
+** already in the working set (a data conflict inside BEGIN). Bit 3:
+** --empty=keep, so a replay that does not change the catalog is still
+** committed. Keep the v5 length; GC uses it. */
 #define WS_REBASE_FLAG_ACTIVE      0x01
 #define WS_REBASE_FLAG_META_MIRROR 0x02
 #define WS_REBASE_FLAG_PAUSED      0x04
+#define WS_REBASE_FLAG_EMPTY_KEEP  0x08
 #define WS_PRE_REBASE_CAT_OFF (WS_REBASING_OFF + 1)
 #define WS_REBASE_ONTO_OFF  (WS_PRE_REBASE_CAT_OFF + PROLLY_HASH_SIZE)
 #define WS_REBASE_BRANCH_OFF (WS_REBASE_ONTO_OFF + PROLLY_HASH_SIZE)

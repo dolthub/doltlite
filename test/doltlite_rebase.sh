@@ -1146,7 +1146,96 @@ run_test "rebase_plan_feat_has_row_not_plan" \
 1" \
   "$DBP/feat"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP"
+# --empty=keep records a replay whose tree matches its new parent.
+# The default, and --empty=drop, omit that commit.
+DBEK=/tmp/test_rebase_empty_keep_$$.db; rm -f "$DBEK"
+cat <<'SQL' | "$DOLTLITE" "$DBEK" >/dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'main2');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'f_dup_of_main2');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_commit('-am', 'f2');
+SQL
+run_test "rebase_empty_keep_log" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('--empty', 'keep', 'main');
+   SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
+  "0
+Successfully rebased and updated refs/heads/feat
+f2,f_dup_of_main2,main2,base" \
+  "$DBEK"
+run_test "rebase_empty_keep_rows" \
+  "SELECT dolt_checkout('feat');
+   SELECT group_concat(pk || ':' || v, ',') FROM (SELECT pk, v FROM t ORDER BY pk);" \
+  "0
+1:1,2:2,3:3" \
+  "$DBEK"
+run_test "rebase_empty_keep_same_tree" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_hashof_db('HEAD~1') = dolt_hashof_db('HEAD~2');" \
+  "0
+1" \
+  "$DBEK"
+
+DBED=/tmp/test_rebase_empty_drop_$$.db; rm -f "$DBED"
+cat <<'SQL' | "$DOLTLITE" "$DBED" >/dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'main2');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'f_dup_of_main2');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_commit('-am', 'f2');
+SQL
+run_test "rebase_empty_drop_log" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('--empty=drop', 'main');
+   SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
+  "0
+Successfully rebased and updated refs/heads/feat
+f2,main2,base" \
+  "$DBED"
+run_test_match "rebase_empty_bad_value" \
+  "SELECT dolt_rebase('--empty', 'sideways', 'main');" \
+  "invalid value for --empty" \
+  "$DBED"
+
+DBEI=/tmp/test_rebase_empty_interactive_$$.db; rm -f "$DBEI"
+cat <<'SQL' | "$DOLTLITE" "$DBEI" >/dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'main2');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'f_dup_of_main2');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_commit('-am', 'f2');
+SELECT dolt_rebase('-i', '--empty=keep', 'main');
+SQL
+run_test "rebase_empty_interactive_keep_log" \
+  "SELECT dolt_rebase('--continue');
+   SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" \
+  "Successfully rebased and updated refs/heads/feat
+f2,f_dup_of_main2,main2,base" \
+  "$DBEI/dolt_rebase_feat"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
