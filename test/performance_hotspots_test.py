@@ -166,7 +166,7 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("Add Column With Default", report.getvalue())
             self.assertIn("In Transaction with Mutations", report.getvalue())
             self.assertEqual(report.getvalue().count("### "), 2)
-            self.assertTrue(all(len(call.args[2]) == 3 for call in measure_retained.call_args_list))
+            self.assertTrue(all(len(call.args[2]) == 2 for call in measure_retained.call_args_list))
             expected_rows = ['add_column\tadd_column_default\t100000\t100000']
             for bundle in bundles:
                 name = f"retained_{bundle['issue']}_in_transaction_mutations_{bundle['case']['name']}_x{bundle['repeats']}"
@@ -174,7 +174,7 @@ class HotspotTests(unittest.TestCase):
                 expected_rows.append(f'in_transaction_mutations\t{name}\t{timing}\t{timing}')
                 self.assertIn(f"https://github.com/dolthub/doltlite/issues/{bundle['issue']}", report.getvalue())
             self.assertEqual(result.read_text().splitlines(), expected_rows)
-            self.assertEqual(len(raw.read_text().splitlines()), 9)
+            self.assertEqual(len(raw.read_text().splitlines()), 7)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -264,7 +264,8 @@ class HotspotTests(unittest.TestCase):
             fixtures = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
-        counts = {category: 0 for category in ('wide_rows', 'narrow_rows', 'zero_row_updates')}
+        counts = {category: 0 for category in ('wide_rows', 'narrow_rows', 'zero_row_updates',
+                                              'in_transaction_mutations')}
         for name, bundle, databases in fixtures:
             category = hotspots.section_of(name)
             counts[category] += 1
@@ -276,15 +277,16 @@ class HotspotTests(unittest.TestCase):
                 self.assertEqual(bundle['profile']['rows'], 16384)
             elif category == 'narrow_rows':
                 self.assertIn(bundle['profile']['payload'], (256, 1024))
-            else:
+            elif category == 'zero_row_updates':
                 self.assertTrue(bundle['expected'].startswith('0|'))
-        self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2})
-        self.assertEqual(sql.call_count, 15)
+        self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2,
+                                 'in_transaction_mutations': 1})
+        self.assertEqual(sql.call_count, 18)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 5)
+        self.assertEqual(len(grouped), 6)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -341,8 +343,14 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             fixtures = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
+            self.assertEqual(len(fixtures), 2)
+            self.assertEqual(sql.call_count, 0)
+            retired = hotspots.prepare_retained(
+                {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
+                Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
+            fixtures += [fixture for fixture in retired
+                         if fixture[1]['category'] == 'in_transaction_mutations']
             self.assertEqual(len(fixtures), 3)
-            self.assertEqual(sql.call_count, 3)
             self.assertEqual(sum(b['profile']['memory'] for _, b, _ in fixtures), 2)
             for name, bundle, databases in fixtures:
                 self.assertEqual(hotspots.section_of(name), 'in_transaction_mutations')
