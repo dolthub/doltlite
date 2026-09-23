@@ -54,7 +54,7 @@ class PlannerProbeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             replay = Path(tmp) / 'replay.json'
             replay.write_text(json.dumps(source))
-            with patch.object(probe, 'provenance', return_value={}), \
+            with patch.object(probe, 'provenance', return_value={'compile_options': []}), \
                  patch.object(probe, 'measure', return_value={}) as measure, \
                  patch.object(probe, 'summarize', return_value={}), \
                  patch('builtins.print'):
@@ -64,6 +64,18 @@ class PlannerProbeTests(unittest.TestCase):
                 self.assertEqual(call.args[2:4], (source['setup_sql'], source['cases']))
             saved = json.loads((Path(tmp) / 'profile-0.json').read_text())
             self.assertEqual(saved['seed'], 17)
+
+    def test_rejects_histogram_builds_on_either_side(self):
+        for engine in ('doltlite', 'sqlite'):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tmp:
+                def build(binary):
+                    return {'compile_options': ['ENABLE_STAT4'] if binary == engine else []}
+                with patch.object(probe, 'provenance', side_effect=build), \
+                     patch.object(probe, 'measure') as measure, \
+                     self.assertRaises(SystemExit) as error:
+                    probe.main(['--doltlite', 'doltlite', '--sqlite', 'sqlite', '--output', tmp])
+                self.assertEqual(error.exception.code, 2)
+                measure.assert_not_called()
 
 
 if __name__ == '__main__':

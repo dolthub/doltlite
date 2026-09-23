@@ -219,6 +219,9 @@ def main(argv=None):
     output.mkdir(parents=True, exist_ok=True)
     binaries = {'doltlite': args.doltlite, 'sqlite': args.sqlite}
     builds = {arm: provenance(binary) for arm, binary in binaries.items()}
+    for arm, build in builds.items():
+        if {'ENABLE_STAT3', 'ENABLE_STAT4'} & set(build['compile_options']):
+            parser.error(f'{arm} must use STAT1 without STAT3/STAT4 for storage-cost comparisons')
     for i, record in enumerate(records):
         if args.case:
             unknown = set(args.case) - set(record['cases'])
