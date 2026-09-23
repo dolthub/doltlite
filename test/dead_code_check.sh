@@ -21,10 +21,12 @@
 #           appear elsewhere (include guards skipped).
 #   Part G: identical function bodies copied across owned .c files, or two
 #           differently named functions in the same file.
-#   Part H: non-static one-call wrappers whose only extra-file .c mentions are
-#           under test/ (production-dead). doltliteTest* / *ForTest are the
-#           C-test surface and are skipped: those tests link production
-#           libdoltlite, so SQLITE_TEST cannot hide them.
+#   Part H: functions no product entry point reaches, static or not: only
+#           tests call them, or only other such functions do. Product code is
+#           everything outside test/, src/test*.c and #ifdef SQLITE_TEST.
+#           doltliteTest* / *ForTest are the C-test surface and are skipped:
+#           those tests link production libdoltlite, so SQLITE_TEST cannot
+#           hide them.
 #   Part I: file-local extern of an owned function whose prototype already
 #           appears in a header this .c includes.
 #
@@ -85,7 +87,7 @@ else
   done
 fi
 
-echo "== Part B-I: unused externs / inlines / should-be-static / prototypes / macros / clones / test-only wrappers / redundant local externs / duplicate prototypes / source macros =="
+echo "== Part B-I: unused externs / inlines / should-be-static / prototypes / macros / clones / product-unreachable / redundant local externs / duplicate prototypes / source macros =="
 if ! python3 "$SCRIPT_DIR/lib/dead_code_scan.py" --root "$ROOT" --src-root "$SRC_ROOT"
 then
   fail=1

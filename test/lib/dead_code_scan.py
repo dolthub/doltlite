@@ -13,10 +13,11 @@ F: #define in an owned header or owned .c whose identifier never appears
    elsewhere (include guards skipped).
 G: two owned .c functions have identical normalized bodies (whitespace
    collapsed, length >= MIN_CLONE_BODY), across files or same-file aliases.
-H: non-static .c function whose body is a single return otherFn(...) and
-   whose only extra-file .c mentions are under test/. doltliteTest* and
-   *ForTest names are the C-test surface (tests link production libdoltlite)
-   and are skipped.
+H: owned function no product entry point reaches: only tests call it, or
+   only other such functions do. Entry points are mentions in product code
+   outside every owned function body; test/, src/test*.c and #ifdef
+   SQLITE_TEST code are not product. doltliteTest* and *ForTest names are the
+   C-test surface (tests link production libdoltlite) and are skipped.
 I: file-local extern of an owned function whose prototype already appears
    in a header this .c includes.
 """
@@ -72,9 +73,6 @@ VTBL_PREFIXES = (
     "origCursor",
 )
 SEAM_HDRS = frozenset({"prolly_btree_int.h", "doltlite_internal.h"})
-ONE_CALL = re.compile(
-    r"^return\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(.*\)\s*;$"
-)
 INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.M)
 LOCAL_EXTERN = re.compile(
     r"^\s*extern\s+.+?\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*;",
@@ -183,85 +181,211 @@ def is_test_api_name(name: str) -> bool:
     return name.startswith("doltliteTest") or name.endswith("ForTest")
 
 
-def is_test_path(path: str, root: str) -> bool:
-    rel = os.path.relpath(path, root)
-    return rel.startswith("test" + os.sep) or rel.startswith("test/")
 
 
-def extract_body(stripped: str, match: re.Match[str]) -> str | None:
-    rest = stripped[match.end():]
-    depth = 1
-    i = 0
-    while i < len(rest) and depth:
-        ch = rest[i]
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                break
-        elif ch in ";{":
-            break
-        i += 1
-    if i >= len(rest) or rest[i] != ")":
-        return None
-    j = rest.find("{", i)
-    if j < 0 or ";" in rest[i:j]:
-        return None
-    body_start = match.end() + j + 1
-    depth = 1
-    k = body_start
-    while k < len(stripped) and depth:
-        if stripped[k] == "{":
-            depth += 1
-        elif stripped[k] == "}":
-            depth -= 1
-        k += 1
-    return stripped[body_start:k - 1]
 
 
-def scan_test_only_wrappers(
-    src_files: list[str],
-    corpus: list[str],
-    root: str,
-    texts: dict[str, str],
-    idents: dict[str, set[str]],
-) -> list[str]:
-    dead: list[str] = []
-    for path in src_files:
-        raw = texts.get(path)
-        if raw is None:
+PROTO_LINE = re.compile(
+    r"^(?!\s)(?!#)(?!typedef\b)[^;{}()\n:]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"\([^;{}]*\)\s*;",
+    re.M,
+)
+TEST_IF = re.compile(
+    r"^\s*#\s*(?:ifdef\s+SQLITE_TEST\b"
+    r"|if\s+defined\s*\(?\s*SQLITE_TEST\s*\)?\s*$)"
+)
+PRODUCT_EXT_FILE = re.compile(r"\.(?:c|h|in|js|c-pp)$")
+
+
+def blank_c(text: str) -> str:
+    """Blank comments, string and char literals, keeping every offset and
+    newline, so brace matching and identifier positions stay exact."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(re.sub(r"[^\n]", " ", text[i:j]))
+            i = j
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        elif c in "\"'":
+            j = i + 1
+            while j < n and text[j] != c and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(c + re.sub(r"[^\n]", " ", text[i + 1:j - 1]) + c)
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def sqlite_test_regions(text: str) -> list[tuple[int, int]]:
+    regions: list[tuple[int, int]] = []
+    stack: list[list] = []
+    pos = 0
+    for line in text.split("\n"):
+        st = line.strip()
+        if re.match(r"#\s*if", st):
+            stack.append([bool(TEST_IF.match(line)), pos])
+        elif re.match(r"#\s*(?:else|elif)", st) and stack:
+            if stack[-1][0]:
+                regions.append((stack[-1][1], pos))
+                stack[-1][0] = False
+        elif re.match(r"#\s*endif", st) and stack:
+            top = stack.pop()
+            if top[0]:
+                regions.append((top[1], pos))
+        pos += len(line) + 1
+    return regions
+
+
+def function_spans(text: str):
+    """(name, def_start, body_start, body_end, lineno) per definition."""
+    for match in DEF.finditer(text):
+        name = match.group(1)
+        if name in SKIP_DEF or not looks_like_def(match.group(0), name):
             continue
-        stripped = strip_comments(raw)
-        for match in DEF.finditer(stripped):
-            name = match.group(1)
-            if name in SKIP_DEF or is_test_api_name(name):
+        rest = text[match.end():]
+        depth, i = 1, 0
+        while i < len(rest) and depth:
+            ch = rest[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif ch in ";{":
+                break
+            i += 1
+        if i >= len(rest) or rest[i] != ")":
+            continue
+        j = rest.find("{", i)
+        if j < 0 or ";" in rest[i:j]:
+            continue
+        body_start = match.end() + j + 1
+        depth, k = 1, body_start
+        while k < len(text) and depth:
+            if text[k] == "{":
+                depth += 1
+            elif text[k] == "}":
+                depth -= 1
+            k += 1
+        yield name, match.start(), body_start, k, text[:match.start()].count("\n") + 1
+
+
+TEST_HARNESS = re.compile(r"^(?:test(?:[_.]|\d)|tclsqlite)|_tcl\.c$")
+
+
+def is_product_path(path: str, root: str) -> bool:
+    rel = os.path.relpath(path, root).replace(os.sep, "/")
+    if rel.startswith("test/") or "/tool/" in rel:
+        return False
+    return not TEST_HARNESS.search(os.path.basename(rel))
+
+
+def product_files(root: str, src_root: str) -> list[str]:
+    files = [
+        p for p in expand(src_root, ["*.c", "*.h", "*.in"])
+        if is_product_path(p, root)
+    ]
+    for p in glob.glob(os.path.join(root, "ext", "**", "*"), recursive=True):
+        rel = os.path.relpath(p, root).replace(os.sep, "/")
+        if "/bld/" in rel or "/jswasm/" in rel:
+            continue
+        if (os.path.isfile(p) and PRODUCT_EXT_FILE.search(p)
+                and is_product_path(p, root)):
+            files.append(p)
+    return sorted(set(os.path.abspath(p) for p in files))
+
+
+def scan_product_unreachable(src_files: list[str], root: str, src_root: str,
+                             corpus: list[str], idents: dict[str, set[str]]) -> list[str]:
+    """Owned functions no product entry point reaches. A mention of an owned
+    function in product code outside every owned body (upstream SQLite, ext/,
+    the shell, public headers, file-scope tables) is an entry point; a mention
+    inside an owned body is an edge from that function. Test code (test/,
+    src/test*.c, #ifdef SQLITE_TEST) is not product."""
+    texts: dict[str, str] = {}
+    bodies: dict[str, list[tuple[str, int, int, int]]] = {}
+    defs: dict[str, tuple[str, int]] = {}
+
+    def load(path: str) -> str:
+        if path not in texts:
+            raw = open(path, errors="replace").read()
+            texts[path] = blank_c(raw) if re.search(r"\.(?:c|h|in)$", path) else raw
+        return texts[path]
+
+    for path in src_files:
+        text = load(path)
+        test_regs = sqlite_test_regions(text)
+        for name, s0, bs, be, lineno in function_spans(text):
+            bodies.setdefault(path, []).append((name, s0, bs, be))
+            if any(a <= s0 < b for a, b in test_regs):
                 continue
             if name.startswith("sqlite3") or name.startswith("orig_sqlite3"):
                 continue
-            line = match.group(0)
-            if line.lstrip().startswith("static") or not looks_like_def(line, name):
+            defs.setdefault(name, (path, lineno))
+
+    names = set(defs)
+    edges: dict[str, set[str]] = defaultdict(set)
+    live: set[str] = {n for n in names
+                      if n in ALLOW_EXTERN or is_test_api_name(n)}
+    for path in product_files(root, src_root):
+        text = load(path)
+        skip = [] if path.endswith("sqlite.h.in") else [
+            (m.start(), m.end()) for m in PROTO_LINE.finditer(text)
+        ]
+        skip += sqlite_test_regions(text)
+        spans = bodies.get(path, [])
+        for m in IDENT.finditer(text):
+            name = m.group(0)
+            if name not in names:
                 continue
-            body = extract_body(stripped, match)
-            if body is None:
+            pos = m.start()
+            if any(a <= pos < b for a, b in skip):
                 continue
-            norm = re.sub(r"\s+", " ", body).strip()
-            hit = ONE_CALL.match(norm)
-            if not hit or hit.group(1) == name:
+            owner = None
+            for bn, s0, bs, be in spans:
+                if s0 <= pos < bs:
+                    owner = "" if bn == name else None
+                    if owner == "":
+                        break
+                if bs <= pos < be:
+                    owner = bn
+                    break
+            if owner == "":
                 continue
-            extra_c = [
-                q for q in corpus
-                if q.endswith(".c") and q != path and name in idents.get(q, ())
-            ]
-            prod = [q for q in extra_c if not is_test_path(q, root)]
-            if prod:
-                continue
-            if Counter(IDENT.findall(stripped))[name] > 1:
-                continue
-            lineno = stripped[: match.start()].count("\n") + 1
-            dead.append(
-                f"  test-only wrapper: {name} ({path}:{lineno}) -> {hit.group(1)}"
-            )
+            if owner is None or owner not in names:
+                live.add(name)
+            elif owner != name:
+                edges[owner].add(name)
+
+    stack = list(live)
+    while stack:
+        name = stack.pop()
+        for callee in edges.get(name, ()):
+            if callee not in live:
+                live.add(callee)
+                stack.append(callee)
+
+    dead: list[str] = []
+    for name in sorted(names - live, key=lambda n: (defs[n][0], defs[n][1])):
+        path, lineno = defs[name]
+        tested = any(
+            name in idents.get(q, ()) for q in corpus
+            if q.endswith(".c") and not is_product_path(q, root)
+        )
+        why = "only tests reach it" if tested else "reached only from unreachable code"
+        dead.append(f"  unreachable from the product: {name} ({path}:{lineno}); {why}")
     return dead
 
 
@@ -552,6 +676,9 @@ def main() -> int:
     src_root = os.path.abspath(args.src_root or os.path.join(root, "src"))
 
     src_files = expand(src_root, list(SRC_GLOBS))
+    if not os.path.isdir(src_root) or not src_files:
+        print(f"  no owned sources under {src_root}; refusing to report a pass")
+        return 1
     hdrs = expand(src_root, ["*.h"])
     owned_hdrs = expand(src_root, list(OWNED_HDR_GLOBS))
     corpus = expand(src_root, ["*.c", "*.h"]) + expand(root, [
@@ -571,7 +698,7 @@ def main() -> int:
     dead += scan_duplicate_prototypes(owned_hdrs, texts)
     dead += scan_unused_macros(owned_hdrs + src_files, corpus, texts, idents, counts)
     dead += scan_clones(src_files, texts)
-    dead += scan_test_only_wrappers(src_files, corpus, root, texts, idents)
+    dead += scan_product_unreachable(src_files, root, src_root, corpus, idents)
     dead += scan_redundant_externs(src_files, src_root, texts)
     for line in dead:
         print(line)

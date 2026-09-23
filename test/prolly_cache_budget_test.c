@@ -23,6 +23,10 @@ static void execSql(sqlite3 *db, const char *zSql){
   sqlite3_free(zErr);
 }
 
+static i64 indexCacheBytes(const ChunkStore *cs){
+  return cs->pIndexCache ? cs->pIndexCache->nByte : 0;
+}
+
 static sqlite3_int64 cacheBytes(ProllyCache *pCache){
   ProllyCacheEntry *p;
   sqlite3_int64 n = sqlite3_msize(pCache->aBucket);
@@ -34,7 +38,7 @@ static sqlite3_int64 cacheBytes(ProllyCache *pCache){
 
 static sqlite3_int64 combinedCacheBytes(sqlite3 *db){
   return cacheBytes(doltliteGetCache(db))
-       + csIndexCacheBytes(doltliteGetChunkStore(db));
+       + indexCacheBytes(doltliteGetChunkStore(db));
 }
 
 static int budgetMatches(sqlite3 *db, sqlite3_int64 nByte){
@@ -54,7 +58,7 @@ static void testReload(sqlite3 *db){
   chunkStoreUnlock(cs);
   check("reload cached store", rc==SQLITE_OK);
   check("reload preserves configured index cache slots", cs->nIndexCacheSlot==nSlot);
-  check("reload discards differently sized index cache", csIndexCacheBytes(cs)==0);
+  check("reload discards differently sized index cache", indexCacheBytes(cs)==0);
 }
 
 static void scan(sqlite3 *db){
@@ -715,8 +719,8 @@ int main(void){
   check("default cache retains scan", cacheBytes(pCache)>8*1024*1024);
   check("default budget", budgetMatches(db, 64*1024*1024));
   check("index cache allocated lazily within its reservation",
-      csIndexCacheBytes(doltliteGetChunkStore(db))>0
-      && csIndexCacheBytes(doltliteGetChunkStore(db))
+      indexCacheBytes(doltliteGetChunkStore(db))>0
+      && indexCacheBytes(doltliteGetChunkStore(db))
          <=64*1024*1024-pCache->nMaxByte);
   testReadAhead(db);
   testCachedReadAhead(db);
@@ -734,7 +738,7 @@ int main(void){
     check("release cache memory", sqlite3_db_release_memory(db)==SQLITE_OK);
     check("release frees unpinned node and index caches",
         pCache->nUsed==0 && pCache->nByte<=4096
-        && csIndexCacheBytes(doltliteGetChunkStore(db))==0);
+        && indexCacheBytes(doltliteGetChunkStore(db))==0);
     check("release preserves configured budgets", pCache->nMaxByte==nBudget
         && doltliteGetChunkStore(db)->nIndexCacheSlot==nSlot);
     scan(db);
@@ -742,7 +746,7 @@ int main(void){
         && budgetMatches(db, 64*1024*1024));
     execSql(db, "PRAGMA shrink_memory");
     check("pragma releases both caches", pCache->nUsed==0
-        && csIndexCacheBytes(doltliteGetChunkStore(db))==0);
+        && indexCacheBytes(doltliteGetChunkStore(db))==0);
   }
   execSql(db, "PRAGMA cache_size=-32768");
   scan(db);
@@ -785,7 +789,7 @@ int main(void){
   check("tiny KiB budget uses minimum", pCache->nMaxByte==4096);
   check("tiny budget disables index cache",
       doltliteGetChunkStore(db)->nIndexCacheSlot==0
-      && csIndexCacheBytes(doltliteGetChunkStore(db))==0);
+      && indexCacheBytes(doltliteGetChunkStore(db))==0);
   testReload(db);
   scan(db);
   check("reloaded cache respects tiny budget", budgetMatches(db, 4096));

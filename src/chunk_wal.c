@@ -9,17 +9,6 @@
 #include "../ext/blake3/blake3.h"
 #include <string.h>
 
-i64 walStateGetOffset(const WalState *w){
-  assert( w!=0 );
-  assert( w->iWalOffset>=0 );
-  return w->iWalOffset;
-}
-
-i64 walStateGetDataSize(const WalState *w){
-  assert( w!=0 );
-  assert( w->nWalData>=0 );
-  return w->nWalData;
-}
 
 void walStateSetOffset(WalState *w, i64 iOffset){
   assert( w!=0 );
