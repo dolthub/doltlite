@@ -1013,13 +1013,13 @@ static struct TableEntry *dsRenamePartner(
   struct TableEntry *pBack = 0;
   *pRc = SQLITE_OK;
   if( !pRef ) return 0;
-  *pRc = doltliteCatalogRenameMate(db, aFrom, nFrom, aTo, nTo,
+  *pRc = doltliteCatalogRenameMate(db, aFrom, nFrom, aFrom, nFrom, aTo, nTo,
                                    pRef, bRefIsFrom, &pMate);
   if( *pRc!=SQLITE_OK || !pMate ) return 0;
   /* Two dropped tables can both match one new table by content. Require the
   ** pairing to be mutual so only the table the new one actually came from
   ** claims it; dolt_status gets the same effect from its handled bookkeeping. */
-  *pRc = doltliteCatalogRenameMate(db, aFrom, nFrom, aTo, nTo,
+  *pRc = doltliteCatalogRenameMate(db, aFrom, nFrom, aFrom, nFrom, aTo, nTo,
                                    pMate, !bRefIsFrom, &pBack);
   if( *pRc!=SQLITE_OK ) return 0;
   return pBack==pRef ? pMate : 0;

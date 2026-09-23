@@ -1036,4 +1036,16 @@ DROP TABLE d;
 ALTER TABLE r RENAME TO r2;
 " "HEAD" "WORKING"
 
+oracle_both "rename_beside_identical_unchanged_sibling" "
+CREATE TABLE a(pk INT PRIMARY KEY, v INT);
+CREATE TABLE b(pk INT PRIMARY KEY, v INT);
+INSERT INTO a VALUES(1,1);
+INSERT INTO b VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE b RENAME TO b2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "" "EXPECT_EMPTY"
+
 vc_oracle_finish

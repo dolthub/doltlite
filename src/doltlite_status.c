@@ -192,7 +192,13 @@ typedef struct DoltliteStatusCursor DoltliteStatusCursor;
 struct DoltliteStatusCursor {
   sqlite3_vtab_cursor base;
   StatusRow *aRows; int nRows; int nRowsAlloc; int iRow;
+  /* HEAD while comparing; rename contests are judged against it. */
+  struct TableEntry *aCommitBase; int nCommitBase;
 };
+
+#define STATUS_BASE(pCur, aFrom, nFrom) \
+  ((pCur)->aCommitBase ? (pCur)->aCommitBase : (aFrom)), \
+  ((pCur)->aCommitBase ? (pCur)->nCommitBase : (nFrom))
 
 static void statusFreeRows(DoltliteStatusCursor *pCur){
   int i;
@@ -630,7 +636,9 @@ static int statusCompareIndexSchemaObjects(
     pFromEnt = doltliteFindTableByName(aFromEnt, nFromEnt, pRow->zTblName);
     pToEnt = doltliteFindTableByName(aToEnt, nToEnt, pRow->zTblName);
     if( pFromEnt && !pToEnt ){
-      rc = doltliteCatalogRenameMate(db, aFromEnt, nFromEnt, aToEnt, nToEnt,
+      rc = doltliteCatalogRenameMate(db,
+                                     STATUS_BASE(pCur, aFromEnt, nFromEnt),
+                                     aFromEnt, nFromEnt, aToEnt, nToEnt,
                                      pFromEnt, 1, &pMate);
       if( rc!=SQLITE_OK ) goto index_schema_done;
       if( pMate ){
@@ -643,7 +651,9 @@ static int statusCompareIndexSchemaObjects(
         continue;
       }
     }else if( pToEnt && !pFromEnt ){
-      rc = doltliteCatalogRenameMate(db, aFromEnt, nFromEnt, aToEnt, nToEnt,
+      rc = doltliteCatalogRenameMate(db,
+                                     STATUS_BASE(pCur, aFromEnt, nFromEnt),
+                                     aFromEnt, nFromEnt, aToEnt, nToEnt,
                                      pToEnt, 0, &pMate);
       if( rc!=SQLITE_OK ) goto index_schema_done;
       if( pMate ){
@@ -884,11 +894,16 @@ static int isRenamePair(
   return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB, pMatch);
 }
 
-/* True if another to-side table has the same non-empty content: the rename
-** pairing cannot choose. From-side duplicates and empty tables do not contest.
+/* True if another new to-side table has the same non-empty content: the
+** rename pairing cannot choose. A table the base commit already holds,
+** unchanged under that name, is not new, so it cannot be a rename's other
+** half; the base is not the from side when that is the staged catalog, where
+** a staged new table is still new. From-side duplicates and empty tables do
+** not contest.
 ** A same-number rename's new half is spoken for. Staging is ignored so staging
 ** one of two identical new tables cannot steal the dropped identity. */
 static int renameMateIsContested(
+  const struct TableEntry *aBase, int nBase,
   struct TableEntry *aFrom, int nFrom,
   struct TableEntry *aTo, int nTo,
   const struct TableEntry *pFrom,
@@ -901,6 +916,13 @@ static int renameMateIsContested(
     if( &aTo[i]==pTo || aTo[i].iTable<=1 || !aTo[i].zName ) continue;
     if( pFrom->zName && strcmp(aTo[i].zName, pFrom->zName)==0 ) continue;
     if( prollyHashCompare(&aTo[i].root, &pFrom->root)!=0 ) continue;
+    for(j=0; j<nBase; j++){
+      if( aBase[j].zName && strcmp(aBase[j].zName, aTo[i].zName)==0
+       && prollyHashCompare(&aBase[j].root, &aTo[i].root)==0 ){
+        break;
+      }
+    }
+    if( j<nBase ) continue;
     for(j=0; j<nFrom; j++){
       if( aFrom[j].iTable==aTo[i].iTable
        && aFrom[j].zName
@@ -918,6 +940,7 @@ static int renameMateIsContested(
 /* Rename mate using the same pairing dolt_status renders. */
 int doltliteCatalogRenameMate(
   sqlite3 *db,
+  const struct TableEntry *aBase, int nBase,
   struct TableEntry *aFrom, int nFrom,
   struct TableEntry *aTo, int nTo,
   const struct TableEntry *pKnown,
@@ -971,7 +994,9 @@ int doltliteCatalogRenameMate(
   if( pMate ){
     const struct TableEntry *pF = bKnownIsFrom ? pKnown : pMate;
     const struct TableEntry *pT = bKnownIsFrom ? pMate : pKnown;
-    if( renameMateIsContested(aFrom, nFrom, aTo, nTo, pF, pT) ) pMate = 0;
+    if( renameMateIsContested(aBase, nBase, aFrom, nFrom, aTo, nTo, pF, pT) ){
+      pMate = 0;
+    }
   }
 rename_done:
   statusCatalogIndexFree(&fromIdx);
@@ -1017,7 +1042,8 @@ static int compareCatalogs(
           db, &fromIdx, &toIdx, &aFrom[i], pTo, &isPair);
       if( rc!=SQLITE_OK ) goto compare_done;
       if( isPair
-       && !renameMateIsContested(aFrom, nFrom, aTo, nTo, &aFrom[i], pTo) ){
+       && !renameMateIsContested(STATUS_BASE(pCur, aFrom, nFrom),
+                                 aFrom, nFrom, aTo, nTo, &aFrom[i], pTo) ){
         char *zCompound = sqlite3_mprintf("%s -> %s", aFrom[i].zName, pTo->zName);
         if( !zCompound ){ rc = SQLITE_NOMEM; goto compare_done; }
         rc = addRow(pCur, zCompound, staged, "renamed");
@@ -1046,7 +1072,9 @@ static int compareCatalogs(
         jMate = j;
       }
       if( jMate>=0
-       && renameMateIsContested(aFrom, nFrom, aTo, nTo, &aFrom[i], &aTo[jMate]) ){
+       && renameMateIsContested(STATUS_BASE(pCur, aFrom, nFrom),
+                                aFrom, nFrom, aTo, nTo,
+                                &aFrom[i], &aTo[jMate]) ){
         jMate = -1;
       }
       if( jMate>=0 ){
@@ -1187,7 +1215,9 @@ static int statusMaybeAddRename(
   if( !pFrom || !pTo ) return SQLITE_OK;
   rc = isRenamePair(db, pFromIdx, pToIdx, pFrom, pTo, &isPair);
   if( rc!=SQLITE_OK ) return rc;
-  if( isPair && !renameMateIsContested(pFromIdx->aEntry, pFromIdx->nEntry,
+  if( isPair && !renameMateIsContested(
+                   STATUS_BASE(pCur, pFromIdx->aEntry, pFromIdx->nEntry),
+                   pFromIdx->aEntry, pFromIdx->nEntry,
                              pToIdx->aEntry, pToIdx->nEntry, pFrom, pTo) ){
     char *zCompound;
     *pIsRename = 1;
@@ -1479,6 +1509,8 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
     rc = doltliteLoadCatalog(db, &stagedCatHash, &aStaged, &nStaged, 0);
     if( rc != SQLITE_OK ) goto status_done;
     stagedLoaded = 1;
+    pCur->aCommitBase = aHead;
+    pCur->nCommitBase = nHead;
     rc = compareCatalogsFiltered(pCur, db, &headCatHash, &stagedCatHash,
                                  aHead, nHead, aStaged, nStaged,
                                  1, zTableFilter);
@@ -1511,6 +1543,13 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
       rc = doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
       if( rc != SQLITE_OK ) goto status_done;
       workingLoaded = 1;
+      if( !headLoaded ){
+        rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+        if( rc != SQLITE_OK ) goto status_done;
+        headLoaded = 1;
+      }
+      pCur->aCommitBase = aHead;
+      pCur->nCommitBase = nHead;
       rc = compareCatalogsFiltered(pCur, db, &baseCatHash, &workingCatHash,
                                    aBase, nBase, aWorking, nWorking,
                                    0, zTableFilter);
@@ -1519,6 +1558,8 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   }
 
 status_done:
+  pCur->aCommitBase = 0;
+  pCur->nCommitBase = 0;
   if( rc==SQLITE_OK && iStagedOnly!=1 ){
     StatusConflictCtx ctx;
     ctx.pCur = pCur;

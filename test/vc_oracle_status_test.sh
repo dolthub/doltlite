@@ -567,4 +567,41 @@ DROP TABLE d;
 ALTER TABLE r RENAME TO r2;
 "
 
+# An unchanged table holding the same rows as the renamed one is not new, so
+# it cannot contest the rename.
+oracle "rename_beside_identical_unchanged_sibling" "
+CREATE TABLE a(pk INT PRIMARY KEY, v INT);
+CREATE TABLE b(pk INT PRIMARY KEY, v INT);
+INSERT INTO a VALUES(1,1);
+INSERT INTO b VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE b RENAME TO b2;
+"
+
+oracle "rename_beside_identical_unchanged_sibling_staged" "
+CREATE TABLE a(pk INT PRIMARY KEY, v INT);
+CREATE TABLE b(pk INT PRIMARY KEY, v INT);
+INSERT INTO a VALUES(1,1);
+INSERT INTO b VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE b RENAME TO b2;
+SELECT dolt_add('-A');
+"
+
+oracle "rename_beside_identical_sibling_reset_hard" "
+CREATE TABLE a(pk INT PRIMARY KEY, v INT);
+CREATE TABLE b(pk INT PRIMARY KEY, v INT);
+INSERT INTO a VALUES(1,1);
+INSERT INTO b VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE b RENAME TO b2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_reset('--hard', 'HEAD~1');
+INSERT INTO a VALUES(2,2);
+"
+
 vc_oracle_finish

@@ -629,8 +629,10 @@ int doltliteStageNamedTables(
 ){
   struct TableEntry *aWorking = 0;
   struct TableEntry *aStaged = 0;
+  struct TableEntry *aHead = 0;
   int nWorking = 0;
   int nStaged = 0;
+  int nHead = 0;
   int i;
   int updateMaster = 0;
   /* Views and triggers are master rows with no catalog entry, which
@@ -655,6 +657,7 @@ int doltliteStageNamedTables(
     freeSchemaEntries(aStagedSchema, nStagedSchema); \
     doltliteFreeCatalog(aWorking, nWorking); \
     doltliteFreeCatalog(aStaged, nStaged); \
+    doltliteFreeCatalog(aHead, nHead); \
   } while(0)
 
   #define ADDNAMED_TOUCH(zN) do { \
@@ -676,6 +679,19 @@ int doltliteStageNamedTables(
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "failed to load staged catalog", -1);
     return rc;
+  }
+
+  {
+    ProllyHash headCat;
+    rc = doltliteGetHeadCatalogHash(db, &headCat);
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCat) ){
+      rc = doltliteLoadCatalog(db, &headCat, &aHead, &nHead, 0);
+    }
+    if( rc!=SQLITE_OK ){
+      ADDNAMED_FREE_ALL();
+      sqlite3_result_error(context, "failed to load head catalog", -1);
+      return rc;
+    }
   }
 
   {
@@ -782,7 +798,7 @@ int doltliteStageNamedTables(
       }
       if( found ){
         struct TableEntry *pRenameMate = 0;
-        rc = doltliteCatalogRenameMate(db, aStaged, nStaged,
+        rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
                                        aWorking, nWorking,
                                        &aStaged[j], 1, &pRenameMate);
         if( rc!=SQLITE_OK ){
@@ -846,7 +862,7 @@ int doltliteStageNamedTables(
         updateMaster = 1;
         /* Rename pairs by content identity, not number: numbers are
         ** canonical-by-sorted-name (drop+create reuses; sort-shift rename changes). */
-        rc = doltliteCatalogRenameMate(db, aStaged, nStaged,
+        rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
                                        aWorking, nWorking,
                                        &aWorking[j], 0, &pRenameMate);
         if( rc!=SQLITE_OK ){

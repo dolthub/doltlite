@@ -334,7 +334,8 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
     /* A HEAD table missing from working is a deletion unless it is the old
     ** name of a working-tree rename. -a must not stage that half (bare DROP
     ** would drop the table's history). */
-    rc = doltliteCatalogRenameMate(db, aHead, nHead, aWorking, nWorking,
+    rc = doltliteCatalogRenameMate(db, aHead, nHead, aHead, nHead,
+                                   aWorking, nWorking,
                                    &aHead[k], 1, &pMate);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
