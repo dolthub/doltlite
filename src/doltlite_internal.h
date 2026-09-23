@@ -1901,7 +1901,8 @@ void doltliteRenumberStaleStagedEntries(
 void doltliteAlignStagedEntriesToWorking(
     struct TableEntry *aWorking, int nWorking,
     struct TableEntry *aStaged, int nStaged);
-int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n);
+int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n,
+                                int bSkipMissing);
 int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
     const char *zOurSql, const char *zTheirSql, char **pzDetail);
 int doltliteSessionHasSchemaConflicts(sqlite3 *db, int *pHas);

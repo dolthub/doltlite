@@ -224,7 +224,7 @@ int applyMergedCatalogAndCommit(
       rc = doltlitePrimeSchemaCache(db);
     }
     if( rc==SQLITE_OK && nReindex>0 ){
-      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex);
+      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex, 0);
     }
     /* Column adds, drops and renames the three-way produced are applied here
     ** for the same reason the branch merge applies them: the rows were relaid

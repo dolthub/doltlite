@@ -517,6 +517,83 @@ out=$("$DOLTLITE" "$DB" \
           (SELECT * FROM pragma_integrity_check LIMIT 1);" 2>/dev/null)
 check "indexed_rename_vs_rename_keeps_catalog_valid" "ours_a,theirs_a|i1:ours_a,i2:b|ok" "$out"
 
+theirs_index_base() {
+  "$DOLTLITE" "$1" <<EOF >/dev/null 2>&1
+CREATE TABLE t(id $2 PRIMARY KEY, c1);
+INSERT INTO t VALUES($3, 2),($4, 3);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+UPDATE t SET c1=$5 WHERE id=$3;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('f');
+CREATE INDEX x_t ON t(c1);
+UPDATE t SET c1=$6 WHERE id=$3;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+EOF
+}
+
+DB="$TMPROOT/theirs_index_conflicted.db"
+theirs_index_base "$DB" INTEGER 1 2 9 7
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null
+BEGIN;
+SELECT dolt_merge('f');
+SELECT group_concat(id||':'||c1) FROM (SELECT id, c1 FROM t INDEXED BY x_t WHERE c1 IS NOT NULL ORDER BY id);
+SELECT * FROM pragma_integrity_check;
+EOF
+)
+check "theirs_index_conflicted_merge_matches_rows" "1:9,2:3
+ok" "$out"
+
+DB="$TMPROOT/theirs_index_resolve_ours.db"
+theirs_index_base "$DB" INTEGER 1 2 9 7
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+BEGIN;
+SELECT dolt_merge('f');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_commit('-Am','resolved ours');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT message FROM dolt_log LIMIT 1;
+SELECT count(*) FROM t WHERE c1=9;
+SELECT count(*) FROM t WHERE c1=7;
+SELECT * FROM pragma_integrity_check;" 2>/dev/null)
+check "theirs_index_resolve_ours" "resolved ours
+1
+0
+ok" "$out"
+
+DB="$TMPROOT/theirs_index_resolve_theirs.db"
+theirs_index_base "$DB" INTEGER 1 2 9 7
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+BEGIN;
+SELECT dolt_merge('f');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_commit('-Am','resolved theirs');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT message FROM dolt_log LIMIT 1;
+SELECT count(*) FROM t WHERE c1=9;
+SELECT count(*) FROM t WHERE c1=7;
+SELECT * FROM pragma_integrity_check;" 2>/dev/null)
+check "theirs_index_resolve_theirs" "resolved theirs
+0
+1
+ok" "$out"
+
+DB="$TMPROOT/theirs_index_text_pk.db"
+theirs_index_base "$DB" TEXT "'k0'" "'k1'" 9.5 NULL
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+BEGIN;
+SELECT dolt_merge('f');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_commit('-Am','resolved ours');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT quote(id) FROM t INDEXED BY x_t WHERE c1=9.5;
+SELECT count(*) FROM t INDEXED BY x_t WHERE c1 IS NULL;
+SELECT * FROM pragma_integrity_check;" 2>/dev/null)
+check "theirs_index_text_pk_resolve_ours" "'k0'
+0
+ok" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then

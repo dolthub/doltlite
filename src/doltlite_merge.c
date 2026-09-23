@@ -1160,7 +1160,8 @@ void doltliteFreeNameList(char **az, int n){
 
 /* Rebuild adopted indexes with uniqueness off. Collisions must surface
 ** as constraint violations, as Dolt does, not abort the merge. */
-int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n){
+int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n,
+                                int bSkipMissing){
   int i, rc = SQLITE_OK;
   if( n>0 ){
     /* Reload schema so FindIndex sees the just-switched catalog. */
@@ -1171,7 +1172,9 @@ int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n){
     Index *pIdx = sqlite3FindIndex(db, az[i], "main");
     u8 savedOnError = pIdx ? pIdx->onError : 0;
     int suppressed = pIdx!=0;
-    char *zSql = sqlite3_mprintf("REINDEX \"%w\"", az[i]);
+    char *zSql;
+    if( !pIdx && bSkipMissing ) continue;
+    zSql = sqlite3_mprintf("REINDEX \"%w\"", az[i]);
     if( !zSql ) return SQLITE_NOMEM;
     if( pIdx ) pIdx->onError = OE_None;
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
