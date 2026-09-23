@@ -110,4 +110,196 @@ do_test doltlite_default_materialization-5.1 {
        [db one {SELECT count(*) FROM t WHERE x IS NULL}]
 } {ok 1:a:8|2:bb:7 0}
 
+set defaults {0 1 127 128 -128 -129 32767 32768 8388607 8388608
+              2147483647 2147483648 140737488355327 140737488355328
+              9223372036854775807 -9223372036854775808 '7' 7.0}
+set case 0
+foreach value $defaults {
+  incr case
+  do_test doltlite_default_materialization-6.$case {
+    set hashes {}
+    foreach path {direct alter update} {
+      reset_db
+      set column {}
+      if {$path eq "direct"} {set column ", x INTEGER DEFAULT $value"}
+      execsql "CREATE TABLE t(v TEXT, id INTEGER PRIMARY KEY, r REAL, b BLOB $column)"
+      execsql {
+        WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
+        INSERT INTO t(v,id,r,b)
+          SELECT CASE WHEN i%5 THEN printf('%0400d',i) END, i-256,
+                 CASE WHEN i%3 THEN i*0.5 END, zeroblob(i%100) FROM c;
+        CREATE INDEX t_v ON t(v);
+      }
+      if {$path eq "update"} {db progress 1000 {expr 0}}
+      if {$path ne "direct"} {execsql "ALTER TABLE t ADD COLUMN x INTEGER DEFAULT $value"}
+      db progress 0 {}
+      lappend hashes [db one {SELECT dolt_hashof_table('t')}]
+      if {[db one {PRAGMA integrity_check}] ne "ok"} {error "integrity check failed"}
+      db close
+      sqlite3 db test.db
+      if {[db one {SELECT dolt_hashof_table('t')}] ne [lindex $hashes end]} {
+        error "hash changed on reopen"
+      }
+    }
+    expr {[llength [lsort -unique $hashes]] == 1}
+  } {1}
+}
+
+foreach columns {124 125 126 127 128} {
+  do_test doltlite_default_materialization-7.$columns {
+    set defs {}
+    set vals {}
+    set names {}
+    for {set i 1} {$i <= $columns} {incr i} {
+      lappend defs "c$i INTEGER"
+      lappend names "c$i"
+      lappend vals 1
+    }
+    set hashes {}
+    foreach path {direct alter} {
+      reset_db
+      set column {}
+      if {$path eq "direct"} {set column ", x INTEGER DEFAULT 7"}
+      execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, [join $defs ,] $column)"
+      execsql "INSERT INTO t(id,[join $names ,])
+               VALUES(1,[join $vals ,]),(2,[join $vals ,])"
+      if {$path eq "alter"} {execsql {ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7}}
+      lappend hashes [db one {SELECT dolt_hashof_table('t')}]
+    }
+    expr {[llength [lsort -unique $hashes]] == 1}
+  } {1}
+}
+
+reset_db
+
+do_test doltlite_default_materialization-8.1 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'a'),(2,'b');
+    CREATE INDEX t_v ON t(v);
+    BEGIN;
+    UPDATE t SET v='c' WHERE id=1;
+    INSERT INTO t VALUES(3,'d');
+    DELETE FROM t WHERE id=2;
+    SAVEPOINT s;
+    ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7;
+    UPDATE t SET x=8 WHERE id=3;
+    ROLLBACK TO s;
+  }
+  set rows [execsql {SELECT * FROM t ORDER BY id}]
+  set cols [db one {SELECT count(*) FROM pragma_table_info('t')}]
+  execsql {
+    ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 9;
+    RELEASE s;
+    COMMIT;
+  }
+  list $rows $cols [execsql {SELECT * FROM t ORDER BY id}] \
+       [execsql {SELECT id FROM t INDEXED BY t_v WHERE v='c'}] \
+       [db one {PRAGMA integrity_check}]
+} {{1 c 3 d} 2 {1 c 9 3 d 9} 1 ok}
+
+reset_db
+
+do_execsql_test doltlite_default_materialization-8.2 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1,'a');
+  ALTER TABLE t ADD COLUMN a TEXT;
+  INSERT INTO t VALUES(2,'b','explicit');
+  ALTER TABLE t ADD COLUMN b INTEGER DEFAULT 7;
+  ALTER TABLE t ADD COLUMN c INTEGER DEFAULT 8;
+  SELECT id,v,a,b,c FROM t ORDER BY id;
+  PRAGMA integrity_check;
+} {1 a {} 7 8 2 b explicit 7 8 ok}
+
+reset_db
+
+do_test doltlite_default_materialization-8.3 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+    INSERT INTO t VALUES(1,-1);
+  }
+  set result [catchsql {ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7 CHECK(x<v)}]
+  list [lindex $result 0] [db one {SELECT count(*) FROM pragma_table_info('t')}] \
+       [execsql {SELECT * FROM t}]
+} {1 2 {1 -1}}
+
+reset_db
+
+do_test doltlite_default_materialization-8.4 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);
+    INSERT INTO t VALUES(1,zeroblob(990));
+    BEGIN;
+  }
+  set before [db one {SELECT dolt_hashof_table('t')}]
+  set limit [sqlite3_limit db SQLITE_LIMIT_LENGTH 1000]
+  set result [catchsql {
+    ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 9223372036854775807;
+  }]
+  sqlite3_limit db SQLITE_LIMIT_LENGTH $limit
+  set after [db one {SELECT dolt_hashof_table('t')}]
+  set columns [db one {SELECT count(*) FROM pragma_table_info('t')}]
+  execsql COMMIT
+  list $result [expr {$before eq $after}] $columns
+} {{1 {string or blob too big}} 1 2}
+
+reset_db
+
+do_test doltlite_default_materialization-8.5 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+  }
+  set rows {}
+  db eval {SELECT id,v FROM t ORDER BY id} {
+    lappend rows $id $v
+    if {$id==1} {execsql {ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7}}
+  }
+  list $rows [db one {SELECT sum(x) FROM t}] [db one {PRAGMA integrity_check}]
+} {{1 a 2 b 3 c} 21 ok}
+
+reset_db
+
+do_execsql_test doltlite_default_materialization-8.6 {
+  ATTACH ':memory:' AS aux;
+  CREATE TABLE aux.t(id INTEGER PRIMARY KEY, v TEXT);
+  BEGIN;
+  INSERT INTO aux.t VALUES(1,'a');
+  ALTER TABLE aux.t ADD COLUMN x INTEGER DEFAULT 7;
+  SELECT * FROM aux.t;
+  COMMIT;
+  DETACH aux;
+  CREATE TEMP TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1,'a');
+  ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7;
+  SELECT * FROM t;
+} {1 a 7 1 a 7}
+
+source $testdir/malloc_common.tcl
+reset_db
+do_execsql_test doltlite_default_materialization-9.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<64)
+  INSERT INTO t SELECT i, printf('%0400d',i) FROM c;
+}
+set ::original_hash [db one {SELECT dolt_hashof_table('t')}]
+faultsim_save_and_close
+
+do_faultsim_test doltlite_default_materialization-9.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  execsql {BEGIN; SAVEPOINT s;}
+} -body {
+  execsql {ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 7}
+} -test {
+  faultsim_test_result {0 {}} {1 {disk I/O error}}
+  if {$testrc==0 && [db one {SELECT sum(x) FROM t}]!=448} {
+    error "wrong materialized defaults"
+  }
+  catchsql ROLLBACK
+  if {[db one {SELECT dolt_hashof_table('t')}] ne $::original_hash} {
+    error "rollback changed table hash"
+  }
+  faultsim_integrity_check
+}
+
 finish_test
