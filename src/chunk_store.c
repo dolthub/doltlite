@@ -139,6 +139,65 @@ static int csCanonicalFilename(
   return rc;
 }
 
+int chunkStoreReadFileHeader(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  u8 *aBuf,
+  int nBuf,
+  int *pRead
+){
+  sqlite3_file *pFile = 0;
+  int exists = 0;
+  int outFlags = 0;
+  int nFull;
+  char *zFull = 0;
+  char *zProbe = 0;
+  int rc;
+
+  *pRead = 0;
+  if( !zFilename || zFilename[0]=='\0'
+   || strcmp(zFilename, ":memory:")==0 ){
+    return SQLITE_OK;
+  }
+  if( !pVfs ){
+    pVfs = sqlite3_vfs_find(0);
+    if( !pVfs ) return SQLITE_OK;
+  }
+  rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+  if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
+
+  nFull = pVfs->mxPathname + 1;
+  zFull = sqlite3_malloc(nFull);
+  if( !zFull ) return SQLITE_NOMEM;
+  rc = sqlite3OsFullPathname(pVfs, zFilename, nFull, zFull);
+  if( rc==SQLITE_OK_SYMLINK ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zFull);
+    return rc;
+  }
+  rc = chunkStoreDupFilenameDoubleNul(zFull, &zProbe);
+  sqlite3_free(zFull);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* zProbe must outlive close: unixClose logs pFile->zPath. */
+  rc = sqlite3OsOpenMalloc(pVfs, zProbe, &pFile,
+                           SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
+                           &outFlags);
+  if( rc!=SQLITE_OK ){
+    if( pFile ) sqlite3OsCloseFree(pFile);
+    sqlite3_free(zProbe);
+    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+    return SQLITE_OK;
+  }
+  rc = sqlite3OsRead(pFile, aBuf, nBuf, 0);
+  sqlite3OsCloseFree(pFile);
+  sqlite3_free(zProbe);
+  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
+  if( rc==SQLITE_OK ) *pRead = 1;
+  return SQLITE_OK;
+}
+
 int csSyncFile(ChunkStore *cs){
   if( cs->noSync ) return SQLITE_OK;
   return sqlite3OsSync(cs->file.pFile,

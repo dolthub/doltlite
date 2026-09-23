@@ -560,16 +560,6 @@ int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
   return SQLITE_OK;
 }
 
-static int doltliteLooksLikeDbPath(const char *zFilename){
-  const char *z;
-  const char *zBase = zFilename;
-  if( !zFilename ) return 0;
-  for(z=zFilename; *z; z++){
-    if( *z=='/' || *z=='\\' ) zBase = z + 1;
-  }
-  return strstr(zBase, ".db")!=0 || strstr(zBase, ".sqlite")!=0;
-}
-
 static int doltliteFileExists(sqlite3_vfs *pVfs, const char *zFilename,
                               int *pExists){
   int rc;
@@ -587,33 +577,23 @@ static int doltliteFileExists(sqlite3_vfs *pVfs, const char *zFilename,
   return SQLITE_OK;
 }
 
-static int doltliteReadableFile(sqlite3_vfs *pVfs, const char *zFilename,
-                                int *pIsFile){
-  sqlite3_file *pFile = 0;
-  int outFlags = 0;
+static int doltliteIsChunkStoreFile(sqlite3_vfs *pVfs, const char *zFilename,
+                                    int *pIsStore){
+  u8 aMagic[4];
+  int nRead = 0;
   int rc;
-  i64 nSize = 0;
-  u8 b;
 
-  *pIsFile = 0;
-  rc = sqlite3OsOpenMalloc(pVfs, zFilename, &pFile,
-                           SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
-                           &outFlags);
-  if( rc!=SQLITE_OK ){
-    if( pFile ) sqlite3OsCloseFree(pFile);
-    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
-    return SQLITE_OK;
-  }
-  rc = sqlite3OsFileSize(pFile, &nSize);
-  if( rc==SQLITE_OK && nSize>0 ){
-    rc = sqlite3OsRead(pFile, &b, 1, 0);
-  }
-  sqlite3OsCloseFree(pFile);
-  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
-  if( rc==SQLITE_OK && nSize>0 ) *pIsFile = 1;
+  *pIsStore = 0;
+  rc = chunkStoreReadFileHeader(pVfs, zFilename, aMagic, sizeof(aMagic),
+                                &nRead);
+  if( rc!=SQLITE_OK ) return rc;
+  *pIsStore = nRead && CS_READ_U32(aMagic)==CHUNK_STORE_MAGIC;
   return SQLITE_OK;
 }
 
+/* A path that exists names itself. Otherwise the longest existing prefix
+** decides: a DoltLite store makes the rest a branch or revision, and any
+** other file or directory means an ordinary open. */
 static int doltliteResolveOpenBranchPath(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -622,64 +602,42 @@ static int doltliteResolveOpenBranchPath(
 ){
   const char *zSep;
   const char *zEnd;
-  int parentExists = 0;
+  int exists = 0;
+  int isStore = 0;
   int rc;
   char *zParent;
-  int nParent;
-  int parentIsFile = 0;
-  int parentIsSqlite = 0;
 
   *pzStoreFilename = 0;
   *pzBranch = 0;
   if( !zFilename || zFilename[0]=='\0' || strcmp(zFilename, ":memory:")==0 ){
     return SQLITE_OK;
   }
+  rc = doltliteFileExists(pVfs, zFilename, &exists);
+  if( rc!=SQLITE_OK || exists ) return rc;
 
   zEnd = zFilename + strlen(zFilename);
   for(zSep=zEnd; zSep>zFilename; ){
     zSep--;
     if( *zSep!='/' && *zSep!='\\' && *zSep!='@' ) continue;
     if( zSep==zFilename || zSep[1]=='\0' ) continue;
-    nParent = (int)(zSep - zFilename);
-    zParent = sqlite3_mprintf("%.*s", nParent, zFilename);
+    zParent = sqlite3_mprintf("%.*s", (int)(zSep - zFilename), zFilename);
     if( !zParent ) return SQLITE_NOMEM;
-    if( !doltliteLooksLikeDbPath(zParent) ){
+    rc = doltliteFileExists(pVfs, zParent, &exists);
+    if( rc==SQLITE_OK && exists ){
+      rc = doltliteIsChunkStoreFile(pVfs, zParent, &isStore);
+    }
+    if( rc!=SQLITE_OK || !exists ){
       sqlite3_free(zParent);
+      if( rc!=SQLITE_OK ) return rc;
       continue;
     }
-    parentExists = 0;
-    rc = doltliteFileExists(pVfs, zParent, &parentExists);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zParent);
-      return rc;
-    }
-    if( !parentExists ){
-      sqlite3_free(zParent);
-      continue;
-    }
-    parentIsFile = 0;
-    rc = doltliteReadableFile(pVfs, zParent, &parentIsFile);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zParent);
-      return rc;
-    }
-    if( !parentIsFile ){
-      sqlite3_free(zParent);
-      continue;
-    }
-    parentIsSqlite = 0;
-    rc = origBtreeIsSqliteFile(pVfs, zParent, &parentIsSqlite);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zParent);
-      return rc;
-    }
-    if( parentIsSqlite ){
+    if( !isStore ){
       sqlite3_free(zParent);
       return SQLITE_OK;
     }
     *pzStoreFilename = zParent;
     *pzBranch = zSep + 1;
-    break;
+    return SQLITE_OK;
   }
   return SQLITE_OK;
 }
