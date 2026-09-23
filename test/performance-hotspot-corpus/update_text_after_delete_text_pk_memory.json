@@ -1,0 +1,69 @@
+{
+  "seed": 2026092337,
+  "generator_version": 2,
+  "profile": {
+    "rows": 16384,
+    "payload": 32,
+    "key": "text",
+    "groups": 16,
+    "skew": false,
+    "cache_kib": 65536,
+    "stride": 32,
+    "lookups": 10000,
+    "target": 14,
+    "start": 6144,
+    "width": 128,
+    "memory": true
+  },
+  "case": {
+    "name": "update_text_after_delete_text_pk_memory",
+    "sql": "UPDATE t SET tag=printf('updated-%08x',seq) WHERE 1;",
+    "verify": "SELECT changes(),count(*),sum(v),sum(seq),min(id),max(id),sum(length(payload)),sum(length(tag)),sum(unicode(substr(tag,-1,1))),sum(unicode(substr(CAST(payload AS TEXT),-1,1))) FROM t;",
+    "prepare": "DELETE FROM t WHERE seq%32=0;",
+    "recipe": {
+      "source": "table",
+      "predicate": "all",
+      "expression": "bytes",
+      "operator": "update_text",
+      "indexes": "both",
+      "context": "after_delete",
+      "direction": "ASC"
+    },
+    "warmup": ""
+  },
+  "setup": "setup.sql",
+  "setup_sql": "CREATE TABLE t(id TEXT PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);\nBEGIN;\nWITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096) INSERT INTO t SELECT printf('%016x', i),i,i%16,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(4097) UNION ALL SELECT i+1 FROM c WHERE i<8192) INSERT INTO t SELECT printf('%016x', i),i,i%16,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(8193) UNION ALL SELECT i+1 FROM c WHERE i<12288) INSERT INTO t SELECT printf('%016x', i),i,i%16,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(12289) UNION ALL SELECT i+1 FROM c WHERE i<16384) INSERT INTO t SELECT printf('%016x', i),i,i%16,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nCOMMIT;\nCREATE INDEX t_g ON t(grp);\nCREATE INDEX t_gv ON t(grp,v);\nANALYZE;\nCREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\nINSERT INTO u SELECT seq,grp,v FROM t WHERE seq%32=0;\nCREATE INDEX u_g ON u(grp);\nANALYZE;\n",
+  "expected": "15872|15872|7924494656|130023424|0000000000000001|0000000000003fff|507904|253952|1124352|833530",
+  "repeats": 13,
+  "fingerprint": "c863deb5731f9102f133f7a4",
+  "family": "c1d2282d0742d73246343188",
+  "issue": 3210,
+  "category": "in_transaction_mutations",
+  "discovery": {
+    "source_commit": "1b10990ee640e37067e34c82a2cf72c628017e4b",
+    "median_ratio": 6.038024610574912,
+    "minimum_ratio": 5.927494368141852,
+    "pairs": [
+      {
+        "doltlite_ms": 326.2730000000001,
+        "sqlite_ms": 55.044
+      },
+      {
+        "doltlite_ms": 332.19399999999996,
+        "sqlite_ms": 55.01700000000001
+      },
+      {
+        "doltlite_ms": 332.21000000000004,
+        "sqlite_ms": 54.831
+      },
+      {
+        "doltlite_ms": 330.69800000000004,
+        "sqlite_ms": 54.526
+      },
+      {
+        "doltlite_ms": 327.905,
+        "sqlite_ms": 54.62899999999999
+      }
+    ]
+  }
+}
