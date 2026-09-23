@@ -36,12 +36,6 @@ struct ProllyDiffChange {
   int nNewVal;
 };
 
-typedef int (*ProllyDiffCallback)(void *pCtx, const ProllyDiffChange *pChange);
-
-int prollyDiff(ChunkStore *pStore, ProllyCache *pCache,
-               const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
-               u8 flags, ProllyDiffCallback xCallback, void *pCtx);
-
 int prollyValuesInterchangeable(const u8*, int, const u8*, int, int*);
 
 int prollyValuesEqual(
