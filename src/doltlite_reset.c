@@ -157,7 +157,8 @@ static int resetStageNamedPaths(
       ** a staged rename fully staged when its new name is reset; a new table
       ** leaves with its index entries. */
       struct TableEntry *pMate = 0;
-      rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
+      rc = doltliteCatalogRenameMate(db, aHead, nHead, aHead, nHead,
+                                     aStaged, nStaged,
                                      &aStaged[iS], 0, &pMate);
       if( rc!=SQLITE_OK ) goto done;
       if( pMate ) continue;
@@ -175,7 +176,8 @@ static int resetStageNamedPaths(
       ** rename as one object: retire the staged new-name entry and indexes. */
       struct TableEntry *pMate = 0;
       struct TableEntry *aNew;
-      rc = doltliteCatalogRenameMate(db, aHead, nHead, aStaged, nStaged,
+      rc = doltliteCatalogRenameMate(db, aHead, nHead, aHead, nHead,
+                                     aStaged, nStaged,
                                      &aHead[iH], 1, &pMate);
       if( rc!=SQLITE_OK ) goto done;
       if( pMate ){

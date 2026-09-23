@@ -1522,6 +1522,7 @@ int doltliteStageNamedTables(
 );
 int doltliteCatalogRenameMate(
   sqlite3 *db,
+  const struct TableEntry *aBase, int nBase,
   struct TableEntry *aFrom, int nFrom,
   struct TableEntry *aTo, int nTo,
   const struct TableEntry *pKnown,

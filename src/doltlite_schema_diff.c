@@ -476,10 +476,12 @@ static struct TableEntry *sdRenamePartner(
   *pRc = SQLITE_OK;
   if( !pRef ) return 0;
   *pRc = doltliteCatalogRenameMate(db, aFromTables, nFromTables,
+                                   aFromTables, nFromTables,
                                    aToTables, nToTables, pRef, bRefIsFrom,
                                    &pMate);
   if( *pRc!=SQLITE_OK || !pMate ) return 0;
   *pRc = doltliteCatalogRenameMate(db, aFromTables, nFromTables,
+                                   aFromTables, nFromTables,
                                    aToTables, nToTables, pMate, !bRefIsFrom,
                                    &pBack);
   if( *pRc!=SQLITE_OK ) return 0;
