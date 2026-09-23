@@ -261,6 +261,14 @@ int parsedColumnIsVirtual(const ParsedColumn *pCol){
   return schemaGeneratedTailStart(pCol->zDef, &bVirtual) && bVirtual;
 }
 
+int parsedColumnAddsAsNull(const ParsedColumn *pCol){
+  const char *zEnd;
+  if( !pCol || !pCol->zDef ) return 1;
+  zEnd = pCol->zDef + strlen(pCol->zDef);
+  return schemaFindToken(pCol->zDef, zEnd, "DEFAULT", 7)==0
+      && schemaGeneratedTailStart(pCol->zDef, 0)==0;
+}
+
 static int schemaColumnsMergeEquivalent(
   const char *zOurs,
   const char *zTheirs
