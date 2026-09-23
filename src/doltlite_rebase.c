@@ -880,7 +880,7 @@ rollback:
           "rebase aborted, branch restored to pre-rebase state");
     }
     if( zErr ){
-      sqlite3_result_error(context, zErr, -1);
+      doltliteVcResultErrorCode(context, db, zErr, rc);
       sqlite3_free(zErr);
     }else{
       sqlite3_result_error_code(context, rc);
@@ -1990,7 +1990,7 @@ fail:
   sqlite3_free(zWorking);
   sqlite3_free(aReplay);
   if( zFailMsg ){
-    sqlite3_result_error(context, zFailMsg, -1);
+    doltliteVcResultErrorCode(context, db, zFailMsg, rc);
   }else{
     sqlite3_result_error_code(context, rc);
   }
@@ -2504,11 +2504,11 @@ static void doltliteRebasePausedContinue(
     if( arc!=SQLITE_OK ){
       rebaseResultRecoveryFailure(context, arc);
     }else if( rc==SQLITE_CONSTRAINT ){
-      sqlite3_result_error(context,
-          "data conflicts from rebase — rebase has been aborted", -1);
+      doltliteVcResultErrorCode(context, db,
+          "data conflicts from rebase — rebase has been aborted", rc);
     }else{
-      sqlite3_result_error(context,
-          "rebase failed — branch restored to pre-rebase state", -1);
+      doltliteVcResultErrorCode(context, db,
+          "rebase failed — branch restored to pre-rebase state", rc);
     }
     return;
   }
@@ -2934,8 +2934,8 @@ abort_err_conflict:
   if( recoveryRc!=SQLITE_OK ){
     rebaseResultRecoveryFailure(context, recoveryRc);
   }else{
-    sqlite3_result_error(context,
-      "data conflicts from rebase — rebase has been aborted", -1);
+    doltliteVcResultErrorCode(context, db,
+      "data conflicts from rebase — rebase has been aborted", rc);
   }
   return;
 
@@ -2960,11 +2960,11 @@ abort_err_cas:
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
     if( zMsg ){
-      sqlite3_result_error(context, zMsg, -1);
+      doltliteVcResultErrorCode(context, db, zMsg, rc);
       sqlite3_free(zMsg);
     }else{
-      sqlite3_result_error(context,
-        "rebase aborted due to changes in the source branch", -1);
+      doltliteVcResultErrorCode(context, db,
+        "rebase aborted due to changes in the source branch", SQLITE_NOMEM);
     }
   }
   return;
@@ -2981,7 +2981,7 @@ abort_err:
     if( (stateRc==SQLITE_OK && !rebaseActive) || rc==SQLITE_NOTFOUND ){
       sqlite3_result_error(context, "no rebase in progress", -1);
     }else{
-      sqlite3_result_error(context, "rebase failed", -1);
+      doltliteVcResultErrorCode(context, db, "rebase failed", rc);
     }
     return;
   }
@@ -3004,14 +3004,14 @@ abort_err:
       "rebase failed — %s — branch restored to pre-rebase state", zReplayErr);
     sqlite3_free(zReplayErr);
     if( zMsg ){
-      sqlite3_result_error(context, zMsg, -1);
+      doltliteVcResultErrorCode(context, db, zMsg, rc);
       sqlite3_free(zMsg);
     }else{
       sqlite3_result_error_nomem(context);
     }
   }else{
-    sqlite3_result_error(context,
-      "rebase failed — branch restored to pre-rebase state", -1);
+    doltliteVcResultErrorCode(context, db,
+      "rebase failed — branch restored to pre-rebase state", rc);
   }
   return;
 
