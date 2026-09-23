@@ -604,4 +604,49 @@ SELECT dolt_reset('--hard', 'HEAD~1');
 INSERT INTO a VALUES(2,2);
 "
 
+oracle_violation_merge() {
+  local name="$1" extra="$2"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dt"
+  local setup="
+CREATE TABLE p(id INT PRIMARY KEY);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT, FOREIGN KEY(pid) REFERENCES p(id));
+CREATE TABLE u(id INT PRIMARY KEY, v INT);
+CREATE TABLE w(id INT PRIMARY KEY, v INT);
+INSERT INTO p VALUES(1),(2);
+INSERT INTO u VALUES(1,1);
+INSERT INTO w VALUES(1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO c VALUES(1,2);
+INSERT INTO u VALUES(2,2);
+SELECT dolt_commit('-am','feature');
+SELECT dolt_checkout('main');
+DELETE FROM p WHERE id=2;
+SELECT dolt_commit('-am','main');
+BEGIN;
+SELECT dolt_merge('feature');
+$extra
+SELECT CONCAT('S|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY table_name,staged,status;"
+  local dl_out dt_out dolt_setup
+  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/db" >"$dir/dl.out" 2>"$dir/dl.err"
+  dl_out=$(grep '^S|' "$dir/dl.out")
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" -r csv
+  dt_out=$(tr -d '\r"' < "$dir/dt.out" | grep '^S|')
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+oracle_violation_merge "violation_merge" ""
+oracle_violation_merge "violation_merge_unstaged_edits" "
+INSERT INTO c VALUES(2,1);
+UPDATE w SET v=2;"
+oracle_violation_merge "violation_merge_staged_edits" "
+INSERT INTO c VALUES(2,1);
+UPDATE w SET v=2;
+SELECT dolt_add('c','w');"
+oracle_violation_merge "violation_merge_resolved" "
+DELETE FROM dolt_constraint_violations_c;"
+
 vc_oracle_finish

@@ -363,6 +363,25 @@ struct ConstraintViolationBatch {
   int nDropped;    /* tables removed by BatchDropTables; also a write */
 };
 
+int doltliteForEachConstraintViolationTable(
+  sqlite3 *db,
+  int (*xTable)(void*, const char*, int),
+  void *pCtx
+){
+  ConstraintViolationTable *aTables = 0;
+  int nTables = 0;
+  int i;
+  int rc = loadAllViolations(db, doltliteGetChunkStore(db), &aTables, &nTables);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<nTables && rc==SQLITE_OK; i++){
+    if( aTables[i].nRows>0 && aTables[i].zName ){
+      rc = xTable(pCtx, aTables[i].zName, aTables[i].nRows);
+    }
+  }
+  freeViolationTables(aTables, nTables);
+  return rc;
+}
+
 int doltliteConstraintViolationBatchBegin(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ConstraintViolationBatch *pBatch;
