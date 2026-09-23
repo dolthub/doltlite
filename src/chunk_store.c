@@ -849,6 +849,8 @@ int chunkStoreGet(
     if( nZ>0 ) memset(pCopy + (sz - nZ), 0, (size_t)nZ);
     *ppData = pCopy;
     *pnData = sz;
+    /* Memory-store bytes are private copies hashed by chunkStorePut(). */
+    if( cs->isMemory ) return SQLITE_OK;
     return chunkStoreVerifyChunk(hash, ppData, pnData);
   }
 
@@ -877,6 +879,7 @@ int chunkStoreGet(
         memcpy(pCopy, cs->staging.pWriteBuf + e->offset + 4, e->size);
         *ppData = pCopy;
         *pnData = e->size;
+        if( cs->isMemory ) return SQLITE_OK;
         return chunkStoreVerifyChunk(hash, ppData, pnData);
       }
       return SQLITE_CORRUPT;

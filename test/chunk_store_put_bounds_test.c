@@ -121,6 +121,63 @@ static void testPendingHtNomemKeepsHits(void){
   chunkStoreClose(&cs);
 }
 
+static void testMemoryCopies(void){
+  ChunkStore cs;
+  ProllyHash hash;
+  ProllyHash sparse;
+  u8 data[4096];
+  u8 *pRead = 0;
+  int nRead = 0;
+  int nPhys = 0;
+  int rc;
+  int i;
+  int has = 0;
+
+  rc = chunkStoreOpen(&cs, 0, ":memory:", SQLITE_OPEN_CREATE);
+  check("copies_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  memset(data, 0x5a, sizeof(data));
+  rc = chunkStorePut(&cs, data, sizeof(data), &hash);
+  check("copies_put", rc==SQLITE_OK);
+  memset(data, 0, sizeof(data));
+  for(i=0; i<4; i++){
+    if( i==2 ){
+      rc = chunkStoreCommit(&cs);
+      check("copies_commit", rc==SQLITE_OK);
+    }
+    rc = chunkStoreGet(&cs, &hash, &pRead, &nRead);
+    check("copies_get", rc==SQLITE_OK && nRead==sizeof(data));
+    if( rc==SQLITE_OK && nRead==sizeof(data) ){
+      memset(data, 0x5a, sizeof(data));
+      check("copies_unchanged", memcmp(pRead, data, sizeof(data))==0);
+      memset(pRead, 0, nRead);
+    }
+    sqlite3_free(pRead);
+  }
+  rc = chunkStorePutSparse(&cs, (const u8*)"abc", 3, 4093, &sparse);
+  check("copies_sparse_put", rc==SQLITE_OK);
+  rc = chunkStoreGetSparse(&cs, &sparse, &pRead, &nRead, &nPhys);
+  check("copies_sparse_get", rc==SQLITE_OK && nRead==4096
+        && nPhys==4096);
+  if( rc==SQLITE_OK && nPhys==4096 ){
+    memset(data, 0, sizeof(data));
+    memcpy(data, "abc", 3);
+    check("copies_sparse_content", memcmp(pRead, data, sizeof(data))==0);
+  }
+  sqlite3_free(pRead);
+  chunkStoreRollback(&cs);
+  rc = chunkStoreHas(&cs, &sparse, &has);
+  check("copies_rollback_pending", rc==SQLITE_OK && !has);
+  rc = chunkStoreGet(&cs, &hash, &pRead, &nRead);
+  check("copies_rollback_committed", rc==SQLITE_OK && nRead==sizeof(data));
+  if( rc==SQLITE_OK && nRead==sizeof(data) ){
+    memset(data, 0x5a, sizeof(data));
+    check("copies_rollback_content", memcmp(pRead, data, sizeof(data))==0);
+  }
+  sqlite3_free(pRead);
+  chunkStoreClose(&cs);
+}
+
 int main(void){
   int rc;
 
@@ -143,6 +200,7 @@ int main(void){
 
   testNegativePut();
   testPendingHtNomemKeepsHits();
+  testMemoryCopies();
 
   printf("%d passed, %d failed\n", nPass, nFail);
   sqlite3_shutdown();
