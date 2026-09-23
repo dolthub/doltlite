@@ -114,6 +114,7 @@ class HotspotTests(unittest.TestCase):
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
         bundles = [json.loads(path.read_text()) for path in
                    sorted((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))]
+        self.assertEqual([bundle['issue'] for bundle in bundles], [3210])
 
         def measured_sql(binary, database, statements):
             if '.print WARM' not in statements:
@@ -166,7 +167,7 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("Add Column With Default", report.getvalue())
             self.assertIn("In Transaction with Mutations", report.getvalue())
             self.assertEqual(report.getvalue().count("### "), 2)
-            self.assertTrue(all(len(call.args[2]) == 2 for call in measure_retained.call_args_list))
+            self.assertTrue(all(len(call.args[2]) == 1 for call in measure_retained.call_args_list))
             expected_rows = ['add_column\tadd_column_default\t100000\t100000']
             for bundle in bundles:
                 name = f"retained_{bundle['issue']}_in_transaction_mutations_{bundle['case']['name']}_x{bundle['repeats']}"
@@ -174,7 +175,7 @@ class HotspotTests(unittest.TestCase):
                 expected_rows.append(f'in_transaction_mutations\t{name}\t{timing}\t{timing}')
                 self.assertIn(f"https://github.com/dolthub/doltlite/issues/{bundle['issue']}", report.getvalue())
             self.assertEqual(result.read_text().splitlines(), expected_rows)
-            self.assertEqual(len(raw.read_text().splitlines()), 7)
+            self.assertEqual(len(raw.read_text().splitlines()), 5)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -280,13 +281,13 @@ class HotspotTests(unittest.TestCase):
             elif category == 'zero_row_updates':
                 self.assertTrue(bundle['expected'].startswith('0|'))
         self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2,
-                                 'in_transaction_mutations': 1})
+                                 'in_transaction_mutations': 2})
         self.assertEqual(sql.call_count, 18)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 6)
+        self.assertEqual(len(grouped), 7)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -343,7 +344,7 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             fixtures = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
-            self.assertEqual(len(fixtures), 2)
+            self.assertEqual(len(fixtures), 1)
             self.assertEqual(sql.call_count, 0)
             retired = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
