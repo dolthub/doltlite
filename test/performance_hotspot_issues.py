@@ -64,6 +64,7 @@ def issue_body(report, record, bundle, run_url, previous=None):
              f"Median paired slowdown: **{record['ratio']:.2f}×**. "
              f"DoltLite: {record['doltlite_ms']:.3f} ms/query; SQLite: {record['sqlite_ms']:.3f} ms/query.",
              f"SQLite batch timings use a {report['min_ms']} ms floor for the 3× confirmation test.",
+             f"Storage: **{'in-memory' if bundle['profile'].get('memory', False) else 'file-backed'}**.",
              'Autocommit writes are excluded. Setup, warm-up, and rollback are untimed.', '',
              f"Run: {run_url}", f"Engine/generator commit: `{report['source_commit']}`", '',
              '| Pair | DoltLite batch ms | SQLite batch ms | Ratio |', '| --- | ---: | ---: | ---: |']
