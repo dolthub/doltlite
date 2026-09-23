@@ -58,6 +58,7 @@ static int rebasePauseLinearConflict(
   const ProllyHash *pOrigHead,
   const char *zOrig,
   const char *zMessage,
+  int keepEmpty,
   int *pGraphLocked
 );
 
@@ -553,6 +554,7 @@ static int doltliteRebaseLinearReplay(
   sqlite3 *db,
   sqlite3_context *context,
   const char *zUpstream,
+  int keepEmpty,
   char **pzFinalMessage,
   int *pbPaused
 ){
@@ -737,7 +739,8 @@ static int doltliteRebaseLinearReplay(
         &replayCommit.catalogHash,
         &curHead, 0,
         replayCommit.zMessage ? replayCommit.zMessage : "",
-        0, 0, 0, 1, &nConflicts, &nViolations, &zApplyErr, hexBuf);
+        0, 0, 0, keepEmpty ? 0 : 1,
+        &nConflicts, &nViolations, &zApplyErr, hexBuf);
 
     doltliteCommitClear(&replayCommit);
     doltliteCommitClear(&parentCommit);
@@ -756,7 +759,7 @@ static int doltliteRebaseLinearReplay(
       if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_PLAIN ){
         int pauseRc = rebasePauseLinearConflict(
             db, context, cs, aReplay, i, nReplay,
-            &origCat, &headHash, zOrig, zFailedMsg, &graphLocked);
+            &origCat, &headHash, zOrig, zFailedMsg, keepEmpty, &graphLocked);
         if( pauseRc==SQLITE_OK ){
           *pbPaused = 1;
           doltliteCommitClear(&upstreamCommit);
@@ -1162,7 +1165,8 @@ static int rebaseRestoreInProgress(
   const ProllyHash *pPreRebaseCat,
   const ProllyHash *pExpectedOrigHead,
   const char *zOrigBranch,
-  const char *zReturnBranch
+  const char *zReturnBranch,
+  int keepEmpty
 ){
   int rc;
   /* Retry the whole restore: later writes can hit the CAS-winning peer's
@@ -1172,7 +1176,8 @@ static int rebaseRestoreInProgress(
     rc = rebaseWritePlanRows(db, aPlan, nPlan);
     if( rc==SQLITE_OK ){
       /* Persist overlays metadata on the return branch and keeps its catalog. */
-      u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
+      u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR
+                      | (keepEmpty ? WS_REBASE_FLAG_EMPTY_KEEP : 0));
       rc = doltliteSetSessionRebaseState(db, flags, pPreRebaseCat, pExpectedOrigHead,
                                          zOrigBranch, zReturnBranch);
     }
@@ -1245,6 +1250,7 @@ static int rebasePauseLinearConflict(
   const ProllyHash *pOrigHead,
   const char *zOrig,
   const char *zMessage,
+  int keepEmpty,
   int *pGraphLocked
 ){
   char zHex[PROLLY_HASH_SIZE*2+1];
@@ -1270,7 +1276,8 @@ static int rebasePauseLinearConflict(
         db, aReplay + iConflict, nReplay - iConflict);
   }
   flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_PAUSED
-               | WS_REBASE_FLAG_META_MIRROR);
+               | WS_REBASE_FLAG_META_MIRROR
+               | (keepEmpty ? WS_REBASE_FLAG_EMPTY_KEEP : 0));
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionRebaseState(
         db, flags, pOrigCat, pOrigHead, zOrig, zReturn);
@@ -1413,6 +1420,7 @@ static int rebaseReplayPlanGroup(
   int iStart,
   ProllyHash *pCurCat,
   ProllyHash *pCurHead,
+  int keepEmpty,
   int *piNext,
   char **pzErr
 ){
@@ -1454,7 +1462,9 @@ static int rebaseReplayPlanGroup(
     j++;
   }
 
-  if( prollyHashCompare(pCurCat, &startCat)==0 ){
+  /* Default matches Dolt: a pick whose tree did not change is omitted.
+  ** --empty=keep still records that commit. */
+  if( !keepEmpty && prollyHashCompare(pCurCat, &startCat)==0 ){
     sqlite3_free(combinedMsg);
     *piNext = j;
     return SQLITE_OK;
@@ -1790,7 +1800,8 @@ static int rebaseAbortConflictedContinue(
 static void doltliteRebaseInteractiveStart(
   sqlite3_context *context,
   sqlite3 *db,
-  const char *zUpstream
+  const char *zUpstream,
+  int keepEmpty
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   char *zOrig = 0;
@@ -1803,7 +1814,8 @@ static void doltliteRebaseInteractiveStart(
   int rc;
   int dirty = 0;
   u8 curIsRebasing = 0;
-  u8 rebaseFlags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
+  u8 rebaseFlags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR
+                        | (keepEmpty ? WS_REBASE_FLAG_EMPTY_KEEP : 0));
   int bWorkingBranchCreated = 0;
   const char *zFailMsg = 0;
 
@@ -2222,6 +2234,7 @@ static int rebaseReplayPausedTail(
   RebasePlanRow *aPlan,
   int iStart,
   int nPlan,
+  int keepEmpty,
   int *pbPaused
 ){
   int i;
@@ -2269,7 +2282,8 @@ static int rebaseReplayPausedTail(
         &replayCommit.catalogHash,
         &curHead, 0,
         aPlan[i].zCommitMessage ? aPlan[i].zCommitMessage : "",
-        0, 0, 0, 1, &nConflicts, &nViolations, &zApplyErr, hexBuf);
+        0, 0, 0, keepEmpty ? 0 : 1,
+        &nConflicts, &nViolations, &zApplyErr, hexBuf);
     doltliteCommitClear(&replayCommit);
     doltliteCommitClear(&parentCommit);
     doltliteCommitClear(&curHeadCommit);
@@ -2486,7 +2500,9 @@ static void doltliteRebasePausedContinue(
   }
 
   rc = rebaseReplayPausedTail(
-      db, context, aPlan, idx<nPlan ? idx + 1 : nPlan, nPlan, &pausedAgain);
+      db, context, aPlan, idx<nPlan ? idx + 1 : nPlan, nPlan,
+      (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_EMPTY_KEEP)!=0,
+      &pausedAgain);
   if( pausedAgain ){
     rebaseFreePlan(aPlan, nPlan);
     sqlite3_free(zOrig);
@@ -2669,6 +2685,7 @@ static void doltliteRebaseInteractiveContinue(
   int i;
   int bPlanDropped = 0;
   int dirty = 0;
+  int keepEmpty = 0;
   ProllyHash curCat;
   ProllyHash curHead;
   ProllyHash expectedOrigHead;
@@ -2702,6 +2719,7 @@ static void doltliteRebaseInteractiveContinue(
     sqlite3_result_error(context, "no rebase in progress", -1);
     return;
   }
+  keepEmpty = (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_EMPTY_KEEP)!=0;
   zOrigBranch = sqlite3_mprintf("%s", zOrigBranchConst);
   zReturnBranch = sqlite3_mprintf("%s", zReturnBranchConst);
   zWorking = rebaseBuildWorkingBranchName(zOrigBranchConst);
@@ -2830,7 +2848,7 @@ static void doltliteRebaseInteractiveContinue(
     if( i >= nPlan ) break;
 
     rc = rebaseReplayPlanGroup(
-        db, aPlan, nPlan, i, &curCat, &curHead, &j, &zReplayErr);
+        db, aPlan, nPlan, i, &curCat, &curHead, keepEmpty, &j, &zReplayErr);
     if( rc==SQLITE_CONSTRAINT ) goto abort_err_conflict;
     if( rc==SQLITE_BUSY ) goto abort_err_cas;
     if( rc!=SQLITE_OK ) goto abort_err;
@@ -2921,7 +2939,7 @@ abort_err_conflict:
 abort_err_cas:
   recoveryRc = rebaseRestoreInProgress(
       db, aPlan, nPlan, &preRebaseCat, &expectedOrigHead,
-      zOrigBranch, zReturnBranch);
+      zOrigBranch, zReturnBranch, keepEmpty);
   rebaseFreePlan(aPlan, nPlan);
   sqlite3_free(zReplayErr);
   if( recoveryRc!=SQLITE_OK ){
@@ -3011,11 +3029,14 @@ static void doltliteRebaseFunc(
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteCmdArgs args;
   const char *zArg0 = 0;
+  const char *zEmpty = 0;
   int isAbort = 0, isContinue = 0, isInteractive = 0;
+  int keepEmpty = 0;
   DoltliteCmdOption aOption[] = {
     { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
     { "continue", 0, DOLTLITE_CMD_OPTION_FLAG, &isContinue, 0 },
-    { "interactive", 'i', DOLTLITE_CMD_OPTION_FLAG, &isInteractive, 0 }
+    { "interactive", 'i', DOLTLITE_CMD_OPTION_FLAG, &isInteractive, 0 },
+    { "empty", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &zEmpty }
   };
   int sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
   int keepTopLevelSavepoint = 0;
@@ -3034,6 +3055,15 @@ static void doltliteRebaseFunc(
   rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) goto rebase_cleanup;
+  if( zEmpty ){
+    if( strcmp(zEmpty, "keep")==0 ){
+      keepEmpty = 1;
+    }else if( strcmp(zEmpty, "drop")!=0 ){
+      sqlite3_result_error(context,
+          "invalid value for --empty: expected \"keep\" or \"drop\"", -1);
+      goto rebase_cleanup;
+    }
+  }
   if( isAbort + isContinue + isInteractive > 1 ){
     sqlite3_result_error(context, "conflicting flags", -1);
     goto rebase_cleanup;
@@ -3072,7 +3102,7 @@ static void doltliteRebaseFunc(
       goto rebase_cleanup;
     }
     zUpstream = args.azPositional[0];
-    doltliteRebaseInteractiveStart(context, db, zUpstream);
+    doltliteRebaseInteractiveStart(context, db, zUpstream, keepEmpty);
     goto rebase_cleanup;
   }
 
@@ -3090,7 +3120,7 @@ static void doltliteRebaseFunc(
     char *zFinalMessage = 0;
     int paused = 0;
     int rc = doltliteRebaseLinearReplay(
-        db, context, zArg0, &zFinalMessage, &paused);
+        db, context, zArg0, keepEmpty, &zFinalMessage, &paused);
     if( paused ) keepTopLevelSavepoint = 1;
     if( rc==SQLITE_OK && zFinalMessage ){
       sqlite3_result_text(context, zFinalMessage, -1, sqlite3_free);
