@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Random SQL for differential testing against stock SQLite.
 
-No dolt_*, no rowid identity, no physical row order. Results are aggregates
-or totally ordered. Interleave reads with writes in BEGIN/SAVEPOINT.
+No dolt_*, no physical row order. Results are aggregates or totally ordered.
+The rowid group checks allocation where it matches stock SQLite. A plain
+implicit rowid does not reuse an id after the max row is deleted, so numeric
+checks for that case stay on AUTOINCREMENT. Interleave reads with writes in
+BEGIN/SAVEPOINT.
 
-Usage: sql_differential_fuzzer.py SEED [--include-<group>]... [--all]
+Usage: sql_differential_fuzzer.py SEED [--include-<group>]... [--all] [--rotate]
 Groups: large-ints desc expr agg setops cte window joins writesel ddl
-        constraints triggers returning generated fkeys
+        constraints triggers returning generated fkeys rowid
 """
 
 import random
@@ -14,7 +17,10 @@ import sys
 
 GROUPS = ["large-ints", "desc", "expr", "agg", "setops", "cte", "window",
           "joins", "writesel", "ddl", "constraints", "triggers",
-          "returning", "generated", "fkeys"]
+          "returning", "generated", "fkeys", "rowid"]
+# One of these is added per seed when --rotate is set. large-ints, desc, and
+# rowid stay on for every pull-request seed; they are not in this list.
+ROTATE_GROUPS = [g for g in GROUPS if g not in ("large-ints", "desc", "rowid")]
 
 # Integers past 2^53 (and INT64 extremes) use a longer numeric sort key.
 LARGE_INTS = [
@@ -32,16 +38,34 @@ TEXTS = ["''", "'a'", "'A'", "'ab'", "'AB '", "'b'", "'z'", "'zz'",
 Q = "coalesce(quote(%s), 'N')"
 
 
+def extra_groups(seed, n):
+    """n consecutive rotating groups. seed and seed+1 differ by one slot."""
+    if n <= 0 or not ROTATE_GROUPS:
+        return []
+    n = min(n, len(ROTATE_GROUPS))
+    start = seed % len(ROTATE_GROUPS)
+    return [ROTATE_GROUPS[(start + i) % len(ROTATE_GROUPS)] for i in range(n)]
+
+
 class Gen:
-    def __init__(self, seed, groups):
+    def __init__(self, seed, groups, rotate=0):
         self.r = random.Random(seed)
-        self.g = set(groups)
+        chosen = list(groups)
+        if rotate and set(chosen) != set(GROUPS):
+            for g in extra_groups(seed, rotate):
+                if g not in chosen:
+                    chosen.append(g)
+        self.g = set(chosen)
         self.out = []
         self.in_txn = False
         self.savepoints = []
         self.ncols = 3          # k/j, a, b -- grows if ddl adds one
         self.added_col = False
         self.has_child = False  # fkeys built a table referencing t
+        self.autoinc = False
+        self.has_rowid = False
+        self.k_not_null = False
+        self.rid_seeded = False
 
     def on(self, name):
         return name in self.g
@@ -100,12 +124,15 @@ class Gen:
             "composite_pk", "no_pk", "unique_only",
         ])
         self.key_kind = "int"
+        self.autoinc = False
+        self.has_rowid = False
         wr = ""
         extra = ""
         if self.on("constraints"):
             extra = self.r.choice(
                 ["", "", ", CHECK (a IS NULL OR length(coalesce(quote(a),'')) < 40)",
                  ", CHECK (k IS NOT NULL)"])
+        self.k_not_null = "k IS NOT NULL" in extra
         bdecl = "b TEXT%s" % coll
         if self.on("constraints") and self.r.random() < 0.25:
             bdecl = "b TEXT%s DEFAULT 'dflt'" % coll
@@ -117,7 +144,13 @@ class Gen:
                 bdecl += (", g AS (length(coalesce(quote(b),'')) + "
                           "coalesce(a, 0)) %s" % self.gen_kind)
         if shape == "int_pk":
-            cols = "k INTEGER PRIMARY KEY, a, %s" % bdecl
+            # AUTOINCREMENT matches stock after deletes. A plain INTEGER
+            # PRIMARY KEY does not: its next id is not reused once the max
+            # row is gone, so a later read of k would diverge.
+            ai = " AUTOINCREMENT" if self.on("rowid") else ""
+            self.autoinc = bool(ai)
+            self.has_rowid = True
+            cols = "k INTEGER PRIMARY KEY%s, a, %s" % (ai, bdecl)
         elif shape == "text_pk":
             cols = "k TEXT PRIMARY KEY%s, a, %s" % (coll, bdecl)
             self.key_kind = "text"
@@ -130,8 +163,10 @@ class Gen:
             wr = " WITHOUT ROWID" if self.r.random() < 0.5 else ""
         elif shape == "unique_only":
             cols = "k INTEGER UNIQUE, a, %s" % bdecl
+            self.has_rowid = True
         else:
             cols = "k INTEGER, a, %s" % bdecl
+            self.has_rowid = True
         self.shape = shape
         self.emit("CREATE TABLE t(%s%s)%s;" % (cols, extra, wr))
 
@@ -182,6 +217,15 @@ class Gen:
                       "REFERENCES t(k) ON DELETE %s ON UPDATE %s, note TEXT);"
                       % (ktype, action, action))
             self.emit("PRAGMA foreign_keys=ON;")
+        if self.on("rowid"):
+            # Side tables so rowid checks are not mixed with deletes of t.
+            self.emit("CREATE TABLE rid(id INTEGER PRIMARY KEY, v TEXT);")
+            self.emit("CREATE TABLE rida(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                      "v TEXT);")
+
+    def implicit_ok(self):
+        return (not self.k_not_null) and (
+            self.autoinc or self.shape in ("no_pk", "unique_only"))
 
     def child_write(self):
         """Child write. ORDER BY is load-bearing: LIMIT 1 without it is plan-dependent."""
@@ -259,6 +303,12 @@ class Gen:
         return "a = %s" % self.val()
 
     def insert(self):
+        # Omit the key so SQLite assigns the rowid. Plain INSERT, not
+        # OR REPLACE: replace deletes the old row and the id rules differ.
+        if self.on("rowid") and self.implicit_ok() and self.r.random() < 0.45:
+            self.emit("INSERT INTO t(a, b) VALUES(%s, %s);"
+                      % (self.val(), self.val("text")))
+            return
         kc, kv = self.key_args()
         verb = self.r.choice(["INSERT OR IGNORE", "INSERT OR REPLACE",
                               "INSERT OR IGNORE", "INSERT OR ROLLBACK"])
@@ -280,6 +330,13 @@ class Gen:
             return
         kc, kv = self.key_args()
         target = "k, j" if self.shape == "composite_pk" else "k"
+        # A DO UPDATE whose WHERE rejects the row consumes an id here and
+        # does not in stock. Keep the conflict path, drop the filter.
+        if self.on("rowid"):
+            self.emit("INSERT INTO t(%s, a, b) VALUES(%s, %s, %s) "
+                      "ON CONFLICT(%s) DO NOTHING;"
+                      % (kc, kv, self.val(), self.val("text"), target))
+            return
         if self.r.random() < 0.3:
             self.emit("INSERT INTO t(%s, a, b) VALUES(%s, %s, %s) "
                       "ON CONFLICT(%s) DO NOTHING;"
@@ -292,6 +349,14 @@ class Gen:
 
     def insert_select(self):
         # Same-table INSERT SELECT scans a pending map the statement is filling.
+        # Keyless form assigns rowids in SELECT order. Only AUTOINCREMENT t
+        # publishes those ids in k, and both engines agree on them.
+        if self.on("rowid") and self.autoinc and self.r.random() < 0.5:
+            order = ", ".join(Q % col for col in ("k", "a", "b"))
+            order += ", k, a, b"
+            self.emit("INSERT INTO t(a, b) SELECT a, b FROM t WHERE %s "
+                      "ORDER BY %s;" % (self.pred(), order))
+            return
         kc, _ = self.key_args()
         if self.shape == "composite_pk":
             sel = "k + %d, coalesce(quote(j),'x'), a, b" % self.r.randint(1, 50)
@@ -439,6 +504,9 @@ class Gen:
             self.emit("SELECT group_concat(q,'|') FROM (SELECT %s || '/' || %s "
                       "AS q FROM t ORDER BY 1);" % (Q % "g", Q % "k"))
             self.emit("SELECT count(*) FROM t WHERE g > 2;")
+        if self.on("rowid"):
+            self.emit("SELECT count(*), coalesce(max(id), 0) FROM rida;")
+            self.emit("SELECT count(*), coalesce(max(id), 0) FROM rid;")
         if self.has_child:
             self.emit("SELECT coalesce(group_concat(q,'|'),'none') FROM "
                       "(SELECT %s || '/' || %s AS q FROM ch ORDER BY 1);"
@@ -462,9 +530,53 @@ class Gen:
 
     def release_savepoint(self):
         name = self.savepoints.pop()
-        if self.r.random() < 0.5:
+        rolled = self.r.random() < 0.5
+        if rolled:
             self.emit("ROLLBACK TO %s;" % name)
         self.emit("RELEASE %s;" % name)
+        # The next implicit insert must reuse the id ROLLBACK TO gave back.
+        if rolled and self.on("rowid"):
+            self.emit("INSERT INTO rida(v) VALUES(%s);" % self.text_val())
+            self.emit("SELECT last_insert_rowid();")
+
+    def rowid_step(self):
+        kind = self.r.randrange(5)
+        if kind == 0:
+            self.emit("INSERT INTO rida(v) VALUES(%s);" % self.text_val())
+            self.emit("SELECT last_insert_rowid();")
+            self.emit("SELECT seq FROM sqlite_sequence WHERE name='rida';")
+        elif kind == 1:
+            self.emit("INSERT INTO rida(v) VALUES(%s);" % self.text_val())
+            self.emit("UPDATE sqlite_sequence SET seq = seq + %d "
+                      "WHERE name='rida';" % self.r.randint(1, 7))
+            self.emit("INSERT INTO rida(v) VALUES(%s);" % self.text_val())
+            self.emit("SELECT last_insert_rowid();")
+        elif kind == 2 and not self.rid_seeded:
+            # A seed for a table that is not AUTOINCREMENT must not move
+            # its next id. rida's existence is what creates sqlite_sequence.
+            self.rid_seeded = True
+            self.emit("INSERT INTO rid(v) VALUES('before');")
+            self.emit("INSERT INTO sqlite_sequence(name, seq) VALUES('rid', %d);"
+                      % self.r.randint(40, 90))
+            self.emit("INSERT INTO rid(v) VALUES('after');")
+            self.emit("SELECT max(id) FROM rid;")
+        elif kind == 3:
+            self.emit("INSERT INTO rida(v) SELECT v FROM rida ORDER BY id;")
+            self.emit("SELECT count(*), coalesce(max(id), 0) FROM rida;")
+        else:
+            opened = False
+            if not self.in_txn:
+                self.open_txn()
+                opened = True
+            self.emit("SAVEPOINT ridsp;")
+            self.emit("INSERT INTO rida(v) VALUES('rb');")
+            self.emit("ROLLBACK TO ridsp;")
+            self.emit("RELEASE ridsp;")
+            self.emit("INSERT INTO rida(v) VALUES('kept');")
+            self.emit("SELECT last_insert_rowid();")
+            self.emit("SELECT count(*) FROM rida WHERE v='rb';")
+            if opened:
+                self.close_txn()
 
     def body(self):
         for _ in range(self.r.randint(10, 30)):
@@ -493,6 +605,8 @@ class Gen:
                 self.returning()
             elif r < 0.79 and self.has_child:
                 self.child_write()
+            elif self.on("rowid") and r < 0.86:
+                self.rowid_step()
             else:
                 self.read()
         while self.savepoints:
@@ -514,26 +628,47 @@ class Gen:
 
 
 def parse_groups(flags):
-    if "--all" in flags:
+    rotate = 0
+    rest = []
+    for f in flags:
+        if f == "--rotate":
+            rotate = 1
+        elif f.startswith("--rotate="):
+            try:
+                rotate = int(f.split("=", 1)[1])
+            except ValueError:
+                rest.append(f)
+                continue
+            if rotate < 0:
+                rotate = 0
+        else:
+            rest.append(f)
+    if "--all" in rest:
         groups = list(GROUPS)
     else:
-        groups = [g for g in GROUPS if ("--include-%s" % g) in flags]
-    unknown = [f for f in flags
-               if f != "--all" and f[len("--include-"):] not in GROUPS]
-    return groups, unknown
+        groups = [g for g in GROUPS if ("--include-%s" % g) in rest]
+    unknown = []
+    for f in rest:
+        if f == "--all":
+            continue
+        if f.startswith("--include-") and f[len("--include-"):] in GROUPS:
+            continue
+        unknown.append(f)
+    return groups, unknown, rotate
 
 
 def main():
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: %s SEED [--include-<group>]... [--all]\n"
-                         "groups: %s\n" % (sys.argv[0], " ".join(GROUPS)))
+        sys.stderr.write(
+            "usage: %s SEED [--include-<group>]... [--all] [--rotate]\n"
+            "groups: %s\n" % (sys.argv[0], " ".join(GROUPS)))
         return 2
     seed = int(sys.argv[1])
-    groups, unknown = parse_groups(sys.argv[2:])
+    groups, unknown, rotate = parse_groups(sys.argv[2:])
     if unknown:
         sys.stderr.write("unknown flag(s): %s\n" % " ".join(unknown))
         return 2
-    print(Gen(seed, groups).run())
+    print(Gen(seed, groups, rotate).run())
     return 0
 
 

@@ -25,20 +25,51 @@ def write_stub(path, body):
 
 class ParseGroupsTest(unittest.TestCase):
     def test_default_flags(self):
-        groups, unknown = fuzz.parse_groups(
+        groups, unknown, rotate = fuzz.parse_groups(
             ["--include-large-ints", "--include-desc"])
         self.assertEqual(groups, ["large-ints", "desc"])
         self.assertEqual(unknown, [])
+        self.assertEqual(rotate, 0)
 
     def test_all(self):
-        groups, unknown = fuzz.parse_groups(["--all"])
+        groups, unknown, rotate = fuzz.parse_groups(["--all"])
         self.assertEqual(groups, fuzz.GROUPS)
         self.assertEqual(unknown, [])
+        self.assertEqual(rotate, 0)
 
     def test_unknown(self):
-        groups, unknown = fuzz.parse_groups(["--include-nope"])
+        groups, unknown, rotate = fuzz.parse_groups(["--include-nope"])
         self.assertEqual(groups, [])
         self.assertEqual(unknown, ["--include-nope"])
+        self.assertEqual(rotate, 0)
+
+    def test_rotate_flag(self):
+        groups, unknown, rotate = fuzz.parse_groups(
+            ["--include-large-ints", "--include-desc", "--include-rowid",
+             "--rotate"])
+        self.assertEqual(groups, ["large-ints", "desc", "rowid"])
+        self.assertEqual(unknown, [])
+        self.assertEqual(rotate, 1)
+
+    def test_rotation_covers_every_other_group(self):
+        seen = set()
+        for seed in range(len(fuzz.ROTATE_GROUPS) * 2):
+            seen.update(fuzz.extra_groups(seed, 1))
+        self.assertEqual(seen, set(fuzz.ROTATE_GROUPS))
+        self.assertNotIn("rowid", seen)
+        self.assertNotIn("large-ints", seen)
+
+    def test_rowid_scripts_exercise_allocation(self):
+        blob = "\n".join(fuzz.Gen(s, ["rowid"]).run() for s in range(40))
+        for needle in ("AUTOINCREMENT", "last_insert_rowid", "sqlite_sequence",
+                       "ROLLBACK TO", "INSERT INTO rida(v) SELECT",
+                       "INSERT INTO t(a, b)"):
+            self.assertIn(needle, blob)
+
+    def test_pr_default_selects_rowid_and_rotation(self):
+        text = (HERE / "sql_differential_test.sh").read_text()
+        self.assertIn("for g in large-ints desc rowid; do", text)
+        self.assertIn('GENFLAGS="$GENFLAGS --rotate"', text)
 
 
 class GeneratorParityTest(unittest.TestCase):
