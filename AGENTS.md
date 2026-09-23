@@ -204,8 +204,10 @@ Several independent layers. A change under `src/` should run the relevant ones;
 
 Rules that override convenience:
 
-- **Never delete a test or disable a check.** If a test or assertion fails, fix
-  the change, not the guardrail.
+- **Never delete a test or disable a check to get a change through CI.** If a
+  test or assertion fails, fix the change, not the guardrail. Removing a test
+  that no longer guards anything (it only exercised removed code, or another
+  test fully supersedes it) is fine; say so in the commit message and PR.
 - For an observable bug, prove the fix with a **fail-before / pass-after** test
   (fails on the unfixed engine, passes with the fix). Latent/defensive fixes may
   legitimately have no such test.
