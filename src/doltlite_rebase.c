@@ -1246,6 +1246,33 @@ static int rebaseCreateAndPopulatePlanTable(
   return rc;
 }
 
+/* BeginTrans pins the pre-pause catalog as the rollback snapshot. Pin the
+** plan instead, and put the conflict hash back only on the live session,
+** so ROLLBACK keeps the rebase and still drops the conflicts. */
+static int rebaseAnchorPauseBaseline(sqlite3 *db){
+  ProllyHash savedConflicts;
+  ProllyHash empty;
+  ProllyHash cleanCat;
+  int rc;
+  int rc2;
+
+  if( db->autoCommit ) return SQLITE_OK;
+  memset(&savedConflicts, 0, sizeof(savedConflicts));
+  memset(&empty, 0, sizeof(empty));
+  memset(&cleanCat, 0, sizeof(cleanCat));
+  rc = doltliteGetSessionConflictsCatalog(db, &savedConflicts);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteSetSessionConflictsCatalog(db, &empty);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteFlushCatalogToHash(db, &cleanCat);
+  if( rc==SQLITE_OK ) doltliteAdoptRollbackBaseline(db, &cleanCat);
+  if( !prollyHashIsEmpty(&savedConflicts) ){
+    rc2 = doltliteSetSessionConflictsCatalog(db, &savedConflicts);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  return rc;
+}
+
 /* Data conflict inside BEGIN. Leave the working branch, plan, and
 ** conflict tables in place. META_MIRROR keeps a later save from copying
 ** the conflicted catalog onto the return branch. */
@@ -1292,6 +1319,7 @@ static int rebasePauseLinearConflict(
     rc = doltliteSetSessionRebaseState(
         db, flags, pOrigCat, pOrigHead, zOrig, zReturn);
   }
+  if( rc==SQLITE_OK ) rc = rebaseAnchorPauseBaseline(db);
   if( rc!=SQLITE_OK ){
     (void)doltliteClearSessionRebaseState(db);
     sqlite3_free(zReturn);
@@ -1499,6 +1527,7 @@ static int rebaseEnterPause(
     rc = doltliteSetSessionRebaseState(
         db, flags, pOrigCat, pOrigHead, zOrig, zReturn);
   }
+  if( rc==SQLITE_OK ) rc = rebaseAnchorPauseBaseline(db);
   if( rc!=SQLITE_OK ) return rc;
   doltliteHashToHex(&aRows[0].commitHash, zHex);
   rebaseResultDataConflict(context, zHex,
