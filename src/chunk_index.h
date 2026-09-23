@@ -29,12 +29,24 @@ struct DOLTLITE_PACKED ChunkIndexEntry {
 #  pragma pack(pop)
 #endif
 
-struct ChunkIndexLazy {
+/* One sorted page tree of a checkpoint. Its entries point below iDataEnd
+** and its pages sit at or above it. */
+typedef struct ChunkIndexRun ChunkIndexRun;
+struct ChunkIndexRun {
   i64 iRootOffset;
   i64 iDataEnd;
   int nRootSize;
   int nEntries;
   ProllyHash rootHash;
+};
+
+#define CS_INDEX_MAX_RUNS 8
+
+/* Runs are oldest first; a later run shadows an earlier one. */
+struct ChunkIndexLazy {
+  ChunkIndexRun aRun[CS_INDEX_MAX_RUNS];
+  int nRun;
+  int nEntries;
   u8 active;
 };
 
@@ -59,6 +71,7 @@ struct ChunkStore;
 typedef struct ChunkIndexSpool ChunkIndexSpool;
 typedef int (*CsIndexVisitor)(void*, const ChunkIndexEntry*);
 int csVisitIndex(struct ChunkStore*, CsIndexVisitor, void*);
+int csVisitIndexFrom(struct ChunkStore*, i64, CsIndexVisitor, void*);
 int csIndexSpoolInit(sqlite3_vfs*, ChunkIndexSpool**);
 void csIndexSpoolFree(ChunkIndexSpool*);
 int csIndexSpoolAdd(void*, const ChunkIndexEntry*);

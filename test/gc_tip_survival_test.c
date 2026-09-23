@@ -300,7 +300,7 @@ static int seedAllocationFixture(
   }
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(&cs);
   if( rc==SQLITE_OK ) rc = csWriteWalCheckpoint(&cs, 1, &wrote);
-  if( rc==SQLITE_OK && !wrote ) rc = SQLITE_ERROR;
+  if( rc==SQLITE_OK && !wrote && cs.wal.checkpointMagic==0 ) rc = SQLITE_ERROR;
   chunkStoreUnlock(&cs);
   chunkStoreClose(&cs);
   return rc;

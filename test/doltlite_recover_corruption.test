@@ -317,7 +317,7 @@ do_test doltlite_recover_corruption-5.1 {
   file copy -force checkpoint.db checkpoint-crash.db
   list [format %08x [rdU32 checkpoint.db [expr {$::cpTail + 9}]]] \
        [db eval {SELECT count(*), length(payload) FROM cp}]
-} {32504b43 {1 4096}}
+} {33504b43 {1 4096}}
 
 do_test doltlite_recover_corruption-5.2 {
   sqlite3 dbc checkpoint-crash.db

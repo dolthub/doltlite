@@ -32,6 +32,7 @@ void walStateSetOffset(WalState *w, i64 iOffset){
   w->nCheckpointEntries = 0;
   memset(&w->checkpointHash, 0, sizeof(w->checkpointHash));
   w->checkpointMagic = 0;
+  w->nCheckpointRun = 0;
 }
 
 void walStateSetDataSize(WalState *w, i64 nData){
@@ -55,7 +56,7 @@ static int csReadCheckpointStamp(
 
   magic = CS_READ_U32(aManifest + CS_MANIFEST_CHECKPOINT_MAGIC_OFF);
   if( magic!=CS_WAL_CHECKPOINT_MAGIC_V1
-   && magic!=CS_WAL_CHECKPOINT_MAGIC_V2 ){
+   && !CS_CHECKPOINT_IS_TREE(magic) ){
     return 0;
   }
   iOffset = CS_READ_I64(aManifest + CS_MANIFEST_CHECKPOINT_OFFSET_OFF);
@@ -76,8 +77,14 @@ static int csReadCheckpointStamp(
         aManifest + CS_MANIFEST_CHECKPOINT_DATA_END_OFF);
     nEntries = (int)CS_READ_U32(
         aManifest + CS_MANIFEST_CHECKPOINT_COUNT_OFF);
-    if( nIndex<CS_INDEX_PAGE_HEADER_SIZE || nIndex>CS_INDEX_PAGE_SIZE
-     || iDataEnd<pWal->iWalOffset || iDataEnd>iOffset || nEntries<=0 ){
+    if( iDataEnd<pWal->iWalOffset || iDataEnd>iOffset || nEntries<=0 ){
+      return 0;
+    }
+    if( magic==CS_WAL_CHECKPOINT_MAGIC_V2
+     ? (nIndex<CS_INDEX_PAGE_HEADER_SIZE || nIndex>CS_INDEX_PAGE_SIZE)
+     : (nIndex<8+CS_INDEX_DIR_RUN_SIZE
+        || nIndex>8+CS_INDEX_MAX_RUNS*CS_INDEX_DIR_RUN_SIZE
+        || (nIndex-8)%CS_INDEX_DIR_RUN_SIZE!=0) ){
       return 0;
     }
   }
@@ -94,7 +101,7 @@ static int csReadCheckpointStamp(
   pWal->iCheckpointDataEnd = iDataEnd;
   pWal->nCheckpointEntries = nEntries;
   pWal->checkpointMagic = magic;
-  if( magic==CS_WAL_CHECKPOINT_MAGIC_V2 ){
+  if( CS_CHECKPOINT_IS_TREE(magic) ){
     memcpy(pWal->checkpointHash.data,
            aManifest + CS_MANIFEST_CHECKPOINT_HASH_OFF,
            PROLLY_HASH_SIZE);
@@ -108,7 +115,7 @@ void csStampWalCheckpoint(const ChunkStore *cs, u8 *aManifest){
   if( cs->wal.iCheckpointOffset<=0 || cs->wal.nCheckpointIndex<=0
    || cs->wal.iCheckpointReplay<=0
    || (cs->wal.checkpointMagic!=CS_WAL_CHECKPOINT_MAGIC_V1
-       && cs->wal.checkpointMagic!=CS_WAL_CHECKPOINT_MAGIC_V2) ){
+       && !CS_CHECKPOINT_IS_TREE(cs->wal.checkpointMagic)) ){
     return;
   }
   assert( cs->wal.nCheckpointIndex<=0xffffffffu );
@@ -120,7 +127,7 @@ void csStampWalCheckpoint(const ChunkStore *cs, u8 *aManifest){
                (u32)cs->wal.nCheckpointIndex);
   CS_WRITE_I64(aManifest + CS_MANIFEST_CHECKPOINT_REPLAY_OFF,
                cs->wal.iCheckpointReplay);
-  if( cs->wal.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2 ){
+  if( CS_CHECKPOINT_IS_TREE(cs->wal.checkpointMagic) ){
     CS_WRITE_I64(aManifest + CS_MANIFEST_CHECKPOINT_DATA_END_OFF,
                  cs->wal.iCheckpointDataEnd);
     memcpy(aManifest + CS_MANIFEST_CHECKPOINT_HASH_OFF,
@@ -306,10 +313,54 @@ static int csWriteCheckpointTree(
   return rc;
 }
 
+typedef struct CsCheckpointNew CsCheckpointNew;
+struct CsCheckpointNew {
+  ChunkIndexSpool *pSpool;
+  i64 iMinOffset;
+  int n;
+};
+
+static int csCheckpointCountNew(void *pCtx, const ChunkIndexEntry *e){
+  CsCheckpointNew *p = pCtx;
+  if( e->offset>=p->iMinOffset ) p->n++;
+  return SQLITE_OK;
+}
+
+/* Everything at or past iFrom, which is the data end of the newest run the
+** checkpoint keeps: the file only grows between collections, so the runs it
+** folds in and the chunks written since are exactly that offset range. */
+static int csCheckpointSpoolFrom(ChunkStore *cs, i64 iFrom,
+                                 ChunkIndexSpool **pp){
+  ChunkIndexSpool *p = 0;
+  int rc, i;
+  *pp = 0;
+  rc = csIndexSpoolInit(cs->file.pVfs, &p);
+  if( rc==SQLITE_OK ) rc = csVisitIndexFrom(cs, iFrom, csIndexSpoolAdd, p);
+  for(i=0; rc==SQLITE_OK && i<cs->staging.nRecent; i++){
+    if( cs->staging.aRecent[i].offset<iFrom ) continue;
+    rc = csIndexSpoolAdd(p, &cs->staging.aRecent[i]);
+  }
+  if( rc==SQLITE_OK ) rc = csIndexSpoolFinish(p);
+  if( rc!=SQLITE_OK ) csIndexSpoolFree(p);
+  else *pp = p;
+  return rc;
+}
+
 int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize, int *pWritten){
   ChunkIndexSpool *pIndex = 0;
   CsCheckpointPageRef root;
+  CsCheckpointPageRef dir;
+  CsCheckpointNew count;
+  ChunkIndexRun aRun[CS_INDEX_MAX_RUNS];
+  u8 aDir[8+CS_INDEX_MAX_RUNS*CS_INDEX_DIR_RUN_SIZE];
+  int nDir;
+  int nRun;
+  int nKeep;
+  i64 nMerged;
+  i64 nTotal = 0;
   int nIndex = 0;
+  int i;
+  i64 iFrom;
   i64 iCheckpoint;
   i64 iDataEnd;
   i64 iWrite;
@@ -320,18 +371,63 @@ int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize, int *pWritten){
   int rc;
 
   *pWritten = 0;
-  rc = csIndexSnapshot(cs, 0, &pIndex);
+  nRun = CS_CHECKPOINT_IS_TREE(cs->wal.checkpointMagic)
+       ? cs->wal.nCheckpointRun : 0;
+  memcpy(aRun, cs->wal.aCheckpointRun, nRun*sizeof(aRun[0]));
+  memset(&count, 0, sizeof(count));
+  count.iMinOffset = nRun ? aRun[nRun-1].iDataEnd : 0;
+  rc = csVisitIndexFrom(cs, count.iMinOffset, csCheckpointCountNew, &count);
+  if( rc!=SQLITE_OK ) goto checkpoint_done;
+  for(i=0; i<cs->staging.nRecent; i++){
+    (void)csCheckpointCountNew(&count, &cs->staging.aRecent[i]);
+  }
+  if( count.n==0 ) goto checkpoint_done;
+  nKeep = nRun;
+  nMerged = count.n;
+  while( nKeep>0
+      && (aRun[nKeep-1].nEntries<=CS_WAL_CHECKPOINT_RUN_RATIO*nMerged
+          || nKeep>=CS_INDEX_MAX_RUNS) ){
+    nMerged += aRun[nKeep-1].nEntries;
+    nKeep--;
+  }
+  iFrom = nKeep ? aRun[nKeep-1].iDataEnd : 0;
+  rc = csCheckpointSpoolFrom(cs, iFrom, &pIndex);
   if( rc!=SQLITE_OK ) goto checkpoint_done;
   nIndex = csIndexSpoolCount(pIndex);
   if( nIndex==0 ) goto checkpoint_done;
+  for(i=0; i<nKeep; i++) nTotal += aRun[i].nEntries;
+  nTotal += nIndex;
+  if( nTotal>INT_MAX ){
+    rc = SQLITE_TOOBIG;
+    goto checkpoint_done;
+  }
   iDataEnd = cs->file.iFileSize;
   iWrite = iDataEnd;
   rc = csWriteCheckpointTree(cs, pIndex, &iWrite, &root);
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
+  aRun[nKeep].iRootOffset = root.offset;
+  aRun[nKeep].nRootSize = root.size;
+  aRun[nKeep].rootHash = root.bodyHash;
+  aRun[nKeep].nEntries = nIndex;
+  aRun[nKeep].iDataEnd = iDataEnd;
+  nRun = nKeep+1;
+  CS_WRITE_U32(aDir, CS_INDEX_DIR_MAGIC);
+  CS_WRITE_U32(aDir+4, (u32)nRun);
+  for(i=0; i<nRun; i++){
+    u8 *p = aDir+8+i*CS_INDEX_DIR_RUN_SIZE;
+    CS_WRITE_I64(p, aRun[i].iRootOffset);
+    CS_WRITE_U32(p+8, (u32)aRun[i].nRootSize);
+    memcpy(p+12, aRun[i].rootHash.data, PROLLY_HASH_SIZE);
+    CS_WRITE_U32(p+12+PROLLY_HASH_SIZE, (u32)aRun[i].nEntries);
+    CS_WRITE_I64(p+16+PROLLY_HASH_SIZE, aRun[i].iDataEnd);
+  }
+  nDir = 8+nRun*CS_INDEX_DIR_RUN_SIZE;
+  rc = csWriteCheckpointPage(cs, aDir, nDir, &root.maxHash, &iWrite, &dir);
+  if( rc!=SQLITE_OK ) goto checkpoint_rollback;
   rc = csSyncFile(cs);
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
 
-  iCheckpoint = root.offset;
+  iCheckpoint = dir.offset;
   iRoot = iWrite;
   iRootEnd = iRoot + (i64)sizeof(aRoot);
   iNext = iRootEnd;
@@ -345,15 +441,15 @@ int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize, int *pWritten){
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_NEXT_OFF_OFF, iNext);
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_BATCH_START_OFF, iDataEnd);
   CS_WRITE_U32(aRoot + 1 + CS_MANIFEST_CHECKPOINT_MAGIC_OFF,
-               CS_WAL_CHECKPOINT_MAGIC_V2);
+               CS_WAL_CHECKPOINT_MAGIC_V3);
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_CHECKPOINT_OFFSET_OFF, iCheckpoint);
   CS_WRITE_U32(aRoot + 1 + CS_MANIFEST_CHECKPOINT_SIZE_OFF,
-               (u32)root.size);
+               (u32)dir.size);
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_CHECKPOINT_REPLAY_OFF, iNext);
   CS_WRITE_I64(aRoot + 1 + CS_MANIFEST_CHECKPOINT_DATA_END_OFF, iDataEnd);
   memcpy(aRoot + 1 + CS_MANIFEST_CHECKPOINT_HASH_OFF,
-         root.bodyHash.data, PROLLY_HASH_SIZE);
-  CS_WRITE_U32(aRoot + 1 + CS_MANIFEST_CHECKPOINT_COUNT_OFF, (u32)nIndex);
+         dir.bodyHash.data, PROLLY_HASH_SIZE);
+  CS_WRITE_U32(aRoot + 1 + CS_MANIFEST_CHECKPOINT_COUNT_OFF, (u32)nTotal);
   csManifestSeal(aRoot + 1, iRoot);
   rc = sqlite3OsWrite(cs->file.pFile, aRoot, sizeof(aRoot), iRoot);
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
@@ -361,12 +457,14 @@ int csWriteWalCheckpoint(ChunkStore *cs, int sectorSize, int *pWritten){
   if( rc!=SQLITE_OK ) goto checkpoint_rollback;
 
   cs->wal.iCheckpointOffset = iCheckpoint;
-  cs->wal.nCheckpointIndex = root.size;
+  cs->wal.nCheckpointIndex = dir.size;
   cs->wal.iCheckpointReplay = iNext;
   cs->wal.iCheckpointDataEnd = iDataEnd;
-  cs->wal.nCheckpointEntries = nIndex;
-  cs->wal.checkpointHash = root.bodyHash;
-  cs->wal.checkpointMagic = CS_WAL_CHECKPOINT_MAGIC_V2;
+  cs->wal.nCheckpointEntries = (int)nTotal;
+  cs->wal.checkpointHash = dir.bodyHash;
+  cs->wal.checkpointMagic = CS_WAL_CHECKPOINT_MAGIC_V3;
+  cs->wal.nCheckpointRun = nRun;
+  memcpy(cs->wal.aCheckpointRun, aRun, nRun*sizeof(aRun[0]));
   cs->file.iFileSize = iNext;
   cs->wal.nWalData = iRootEnd - cs->wal.iWalOffset;
   cs->wal.cleanCloseMarker = 1;
@@ -483,6 +581,9 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->wal.nCheckpointEntries = pSrc->wal.nCheckpointEntries;
   pDst->wal.checkpointHash = pSrc->wal.checkpointHash;
   pDst->wal.checkpointMagic = pSrc->wal.checkpointMagic;
+  pDst->wal.nCheckpointRun = pSrc->wal.nCheckpointRun;
+  memcpy(pDst->wal.aCheckpointRun, pSrc->wal.aCheckpointRun,
+         sizeof(pDst->wal.aCheckpointRun));
   pDst->wal.recoveredMidStream = pSrc->wal.recoveredMidStream;
   pDst->wal.cleanCloseMarker = pSrc->wal.cleanCloseMarker;
   pDst->corruptMidStream = pSrc->corruptMidStream;
@@ -503,6 +604,7 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->wal.nCheckpointEntries = 0;
   memset(&pSrc->wal.checkpointHash, 0, sizeof(pSrc->wal.checkpointHash));
   pSrc->wal.checkpointMagic = 0;
+  pSrc->wal.nCheckpointRun = 0;
   pSrc->wal.cleanCloseMarker = 0;
   REFS_OWNED_CLEAR(pSrc->refs);
 }
@@ -763,10 +865,11 @@ static int csReplayWalFrom(
         ChunkIndexEntry existingEntry;
         int existing = 0;
         ChunkIndexEntry *e = 0;
-        if( bTailMode ){
+        if( bTailMode || cs->index.lazy.active==1 ){
           /* Fresh commits are almost never duplicates, and the lazy index
-          ** verifies whole pages per probe. Duplicate entries are
-          ** tolerated everywhere, so probe only the cheap sets. */
+          ** verifies whole pages per probe, in every run of a checkpoint.
+          ** Duplicate entries are tolerated everywhere, so probe only the
+          ** cheap sets. */
           int iRec = -1;
           existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex,
                                    &hash)>=0;
@@ -990,6 +1093,7 @@ int csReplayWalSkipping(ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd){
   cs->wal.nCheckpointEntries = 0;
   memset(&cs->wal.checkpointHash, 0, sizeof(cs->wal.checkpointHash));
   cs->wal.checkpointMagic = 0;
+  cs->wal.nCheckpointRun = 0;
   if( (iSkipStart==0)!=(iSkipEnd==0)
    || (iSkipStart>0
        && (iSkipStart<cs->wal.iWalOffset || iSkipEnd<=iSkipStart)) ){
@@ -1094,9 +1198,115 @@ static void csCheckpointSkipRange(
   i64 *pSkipStart,
   i64 *pSkipEnd
 ){
-  *pSkipStart = pStamp->checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2
+  *pSkipStart = CS_CHECKPOINT_IS_TREE(pStamp->checkpointMagic)
               ? pStamp->iCheckpointDataEnd : pStamp->iCheckpointOffset;
   *pSkipEnd = pStamp->iCheckpointReplay;
+}
+
+static int csCheckpointRootPageOk(ChunkStore *cs, const ChunkIndexRun *pRun){
+  u8 *aPage;
+  ProllyHash bodyHash;
+  u32 pageMagic, nCell;
+  int nCellSize;
+  int rc;
+  if( pRun->nRootSize<CS_INDEX_PAGE_HEADER_SIZE
+   || pRun->nRootSize>CS_INDEX_PAGE_SIZE ){
+    return SQLITE_CORRUPT;
+  }
+  aPage = sqlite3_malloc(pRun->nRootSize+CS_WAL_CHUNK_HDR_SIZE);
+  if( !aPage ) return SQLITE_NOMEM;
+  rc = sqlite3OsRead(cs->file.pFile, aPage,
+                     pRun->nRootSize+CS_WAL_CHUNK_HDR_SIZE, pRun->iRootOffset);
+  if( rc==SQLITE_OK
+   && (aPage[0]!=CS_WAL_TAG_CHUNK
+       || CS_READ_U32(aPage+CS_WAL_CHUNK_LEN_OFF)!=(u32)pRun->nRootSize
+       || memcmp(aPage+CS_WAL_CHUNK_HASH_OFF, pRun->rootHash.data,
+                 PROLLY_HASH_SIZE)!=0) ){
+    rc = SQLITE_CORRUPT;
+  }
+  if( rc==SQLITE_OK ){
+    u8 *aBody = aPage+CS_WAL_CHUNK_HDR_SIZE;
+    prollyHashCompute(aBody, pRun->nRootSize, &bodyHash);
+    pageMagic = CS_READ_U32(aBody);
+    nCell = CS_READ_U32(aBody+4);
+    nCellSize = pageMagic==CS_INDEX_PAGE_LEAF_MAGIC
+              ? CHUNK_INDEX_ENTRY_SIZE
+              : pageMagic==CS_INDEX_PAGE_INTERNAL_MAGIC
+                ? CS_INDEX_CHILD_SIZE : 0;
+    if( prollyHashCompare(&bodyHash, &pRun->rootHash)!=0
+     || nCellSize==0 || nCell==0
+     || (i64)CS_INDEX_PAGE_HEADER_SIZE+(i64)nCell*nCellSize
+          !=pRun->nRootSize ){
+      rc = SQLITE_CORRUPT;
+    }
+  }
+  sqlite3_free(aPage);
+  return rc;
+}
+
+/* Each run's pages were written right after its own data end and before the
+** next run's data, the newest run's before the directory itself. */
+static int csReadCheckpointDir(
+  ChunkStore *cs,
+  const WalState *pStamp,
+  ChunkIndexRun *aRun,
+  int *pnRun
+){
+  u8 aDir[8+CS_INDEX_MAX_RUNS*CS_INDEX_DIR_RUN_SIZE];
+  int nDir = (int)pStamp->nCheckpointIndex;
+  ProllyHash bodyHash;
+  i64 nTotal = 0;
+  u32 nRun;
+  int i;
+  int rc;
+  *pnRun = 0;
+  if( nDir<8+CS_INDEX_DIR_RUN_SIZE || nDir>(int)sizeof(aDir) ){
+    return SQLITE_CORRUPT;
+  }
+  rc = sqlite3OsRead(cs->file.pFile, aDir, nDir,
+                     pStamp->iCheckpointOffset+CS_WAL_CHUNK_HDR_SIZE);
+  if( rc!=SQLITE_OK ) return rc;
+  prollyHashCompute(aDir, nDir, &bodyHash);
+  nRun = CS_READ_U32(aDir+4);
+  if( prollyHashCompare(&bodyHash, &pStamp->checkpointHash)!=0
+   || CS_READ_U32(aDir)!=CS_INDEX_DIR_MAGIC
+   || nRun==0 || nRun>CS_INDEX_MAX_RUNS
+   || (i64)8+(i64)nRun*CS_INDEX_DIR_RUN_SIZE!=nDir ){
+    return SQLITE_CORRUPT;
+  }
+  for(i=0; i<(int)nRun; i++){
+    const u8 *p = aDir+8+i*CS_INDEX_DIR_RUN_SIZE;
+    ChunkIndexRun *r = &aRun[i];
+    r->iRootOffset = CS_READ_I64(p);
+    r->nRootSize = (int)CS_READ_U32(p+8);
+    memcpy(r->rootHash.data, p+12, PROLLY_HASH_SIZE);
+    r->nEntries = (int)CS_READ_U32(p+12+PROLLY_HASH_SIZE);
+    r->iDataEnd = CS_READ_I64(p+16+PROLLY_HASH_SIZE);
+    if( CS_READ_U32(p+12+PROLLY_HASH_SIZE)>(u32)INT_MAX
+     || r->nEntries<=0
+     || r->nRootSize<CS_INDEX_PAGE_HEADER_SIZE
+     || r->nRootSize>CS_INDEX_PAGE_SIZE
+     || r->iDataEnd<pStamp->iWalOffset
+     || (i>0 && r->iDataEnd<=aRun[i-1].iDataEnd)
+     || r->iRootOffset<r->iDataEnd ){
+      return SQLITE_CORRUPT;
+    }
+    nTotal += r->nEntries;
+  }
+  for(i=0; i<(int)nRun; i++){
+    i64 iBound = i+1<(int)nRun ? aRun[i+1].iDataEnd
+                                : pStamp->iCheckpointOffset;
+    if( aRun[i].iRootOffset
+          >iBound-CS_WAL_CHUNK_HDR_SIZE-aRun[i].nRootSize ){
+      return SQLITE_CORRUPT;
+    }
+  }
+  if( aRun[nRun-1].iDataEnd!=pStamp->iCheckpointDataEnd
+   || nTotal!=pStamp->nCheckpointEntries ){
+    return SQLITE_CORRUPT;
+  }
+  *pnRun = (int)nRun;
+  return SQLITE_OK;
 }
 
 int csTryLoadWalCheckpoint(
@@ -1149,12 +1359,12 @@ int csTryLoadWalCheckpoint(
    || rootStamp.nCheckpointIndex!=stamp.nCheckpointIndex
    || rootStamp.iCheckpointReplay!=stamp.iCheckpointReplay
    || rootStamp.checkpointMagic!=stamp.checkpointMagic
-   || (stamp.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2
+   || (CS_CHECKPOINT_IS_TREE(stamp.checkpointMagic)
        && (rootStamp.iCheckpointDataEnd!=stamp.iCheckpointDataEnd
            || rootStamp.nCheckpointEntries!=stamp.nCheckpointEntries
            || prollyHashCompare(&rootStamp.checkpointHash,
                                 &stamp.checkpointHash)!=0))
-   || (stamp.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2
+   || (CS_CHECKPOINT_IS_TREE(stamp.checkpointMagic)
        ? (CS_READ_I64(aRoot+1+CS_MANIFEST_DURABLE_TO_OFF)
               !=stamp.iCheckpointDataEnd
           || CS_READ_I64(aRoot+1+CS_MANIFEST_BATCH_START_OFF)
@@ -1175,40 +1385,29 @@ int csTryLoadWalCheckpoint(
     csCheckpointSkipRange(&stamp, pSkipStart, pSkipEnd);
     return SQLITE_OK;
   }
-  if( stamp.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2 ){
-    u8 *aPage = 0;
-    u32 pageMagic;
-    u32 nCell;
-    int nCellSize;
+  if( CS_CHECKPOINT_IS_TREE(stamp.checkpointMagic) ){
+    ChunkIndexRun aRun[CS_INDEX_MAX_RUNS];
+    int nRun = 0;
+    int i;
     if( memcmp(aHeader+CS_WAL_CHUNK_HASH_OFF,
                stamp.checkpointHash.data, PROLLY_HASH_SIZE)!=0 ){
       csCheckpointSkipRange(&stamp, pSkipStart, pSkipEnd);
       return SQLITE_OK;
     }
-    aPage = sqlite3_malloc((int)stamp.nCheckpointIndex);
-    if( !aPage ) return SQLITE_NOMEM;
-    rc = sqlite3OsRead(cs->file.pFile, aPage, (int)stamp.nCheckpointIndex,
-                       stamp.iCheckpointOffset+CS_WAL_CHUNK_HDR_SIZE);
-    if( rc==SQLITE_OK ){
-      prollyHashCompute(aPage, (int)stamp.nCheckpointIndex, &bodyHash);
-      if( prollyHashCompare(&bodyHash, &stamp.checkpointHash)!=0 ){
-        rc = SQLITE_CORRUPT;
-      }
+    if( stamp.checkpointMagic==CS_WAL_CHECKPOINT_MAGIC_V2 ){
+      aRun[0].iRootOffset = stamp.iCheckpointOffset;
+      aRun[0].nRootSize = (int)stamp.nCheckpointIndex;
+      aRun[0].rootHash = stamp.checkpointHash;
+      aRun[0].nEntries = stamp.nCheckpointEntries;
+      aRun[0].iDataEnd = stamp.iCheckpointDataEnd;
+      nRun = 1;
+      rc = SQLITE_OK;
+    }else{
+      rc = csReadCheckpointDir(cs, &stamp, aRun, &nRun);
     }
-    if( rc==SQLITE_OK ){
-      pageMagic = CS_READ_U32(aPage);
-      nCell = CS_READ_U32(aPage+4);
-      nCellSize = pageMagic==CS_INDEX_PAGE_LEAF_MAGIC
-                ? CHUNK_INDEX_ENTRY_SIZE
-                : pageMagic==CS_INDEX_PAGE_INTERNAL_MAGIC
-                  ? CS_INDEX_CHILD_SIZE : 0;
-      if( nCellSize==0 || nCell==0
-       || (i64)CS_INDEX_PAGE_HEADER_SIZE+(i64)nCell*nCellSize
-            !=stamp.nCheckpointIndex ){
-        rc = SQLITE_CORRUPT;
-      }
+    for(i=0; rc==SQLITE_OK && i<nRun; i++){
+      rc = csCheckpointRootPageOk(cs, &aRun[i]);
     }
-    sqlite3_free(aPage);
     if( rc!=SQLITE_OK ){
       if( rc!=SQLITE_NOMEM ){
         csCheckpointSkipRange(&stamp, pSkipStart, pSkipEnd);
@@ -1222,11 +1421,10 @@ int csTryLoadWalCheckpoint(
     cs->index.nIndex = 0;
     cs->index.aIndexMmapBase = 0;
     cs->index.aIndexMmapSize = 0;
-    cs->index.lazy.iRootOffset = stamp.iCheckpointOffset;
-    cs->index.lazy.iDataEnd = stamp.iCheckpointDataEnd;
-    cs->index.lazy.nRootSize = (int)stamp.nCheckpointIndex;
+    memset(&cs->index.lazy, 0, sizeof(cs->index.lazy));
+    memcpy(cs->index.lazy.aRun, aRun, nRun*sizeof(aRun[0]));
+    cs->index.lazy.nRun = nRun;
     cs->index.lazy.nEntries = stamp.nCheckpointEntries;
-    cs->index.lazy.rootHash = stamp.checkpointHash;
     cs->index.lazy.active = 1;
     cs->index.nChunks = (int)CS_READ_U32(
         aRoot+1+CS_MANIFEST_CHUNK_COUNT_OFF);
@@ -1239,6 +1437,8 @@ int csTryLoadWalCheckpoint(
     cs->wal.nCheckpointEntries = stamp.nCheckpointEntries;
     cs->wal.checkpointHash = stamp.checkpointHash;
     cs->wal.checkpointMagic = stamp.checkpointMagic;
+    cs->wal.nCheckpointRun = nRun;
+    memcpy(cs->wal.aCheckpointRun, aRun, nRun*sizeof(aRun[0]));
     rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0);
     if( rc!=SQLITE_OK ){
       memset(&cs->index.lazy, 0, sizeof(cs->index.lazy));
@@ -1249,6 +1449,7 @@ int csTryLoadWalCheckpoint(
       cs->wal.nCheckpointEntries = 0;
       memset(&cs->wal.checkpointHash, 0, sizeof(cs->wal.checkpointHash));
       cs->wal.checkpointMagic = 0;
+      cs->wal.nCheckpointRun = 0;
       if( rc!=SQLITE_NOMEM ){
         csCheckpointSkipRange(&stamp, pSkipStart, pSkipEnd);
       }

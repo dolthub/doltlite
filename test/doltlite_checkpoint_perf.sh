@@ -215,7 +215,7 @@ init_db "$PROBE_DB"
 CROSSING=0
 for ((i=1; i<=MAX_APPENDS; i++)); do
   append_update "$PROBE_DB" "$i"
-  if [ "$(checkpoint_magic "$PROBE_DB")" = "32504b43" ]; then
+  if [ "$(checkpoint_magic "$PROBE_DB")" = "33504b43" ]; then
     CROSSING="$i"
     break
   fi
@@ -250,7 +250,7 @@ for ((trial=1; trial<=TRIALS; trial++)); do
       < <(measure_trial "$MEASURE_DB" "$trial"); then
     exit 1
   fi
-  if [ "$BELOW_APPEND_MAGIC" = "32504b43" ]; then
+  if [ "$BELOW_APPEND_MAGIC" = "33504b43" ]; then
     echo "append $((CROSSING - 1)) unexpectedly created a checkpoint" >&2
     exit 1
   fi
@@ -259,13 +259,13 @@ for ((trial=1; trial<=TRIALS; trial++)); do
     exit 1
   fi
 
-  if [ "$CHECKPOINT_APPEND_MAGIC" != "32504b43" ]; then
+  if [ "$CHECKPOINT_APPEND_MAGIC" != "33504b43" ]; then
     echo "append $CROSSING did not create a checkpoint during the timed append" >&2
     exit 1
   fi
 
   read -r POST_MAGIC POST_OFFSET POST_REPLAY < <(checkpoint_stamp "$MEASURE_DB")
-  if [ "$POST_APPEND_MAGIC" != "32504b43" ] || [ "$POST_MAGIC" != "32504b43" ] \
+  if [ "$POST_APPEND_MAGIC" != "33504b43" ] || [ "$POST_MAGIC" != "33504b43" ] \
      || [ "$POST_APPEND_OFFSET" -ne "$CHECKPOINT_APPEND_OFFSET" ] \
      || [ "$POST_APPEND_REPLAY" -ne "$CHECKPOINT_APPEND_REPLAY" ] \
      || [ "$POST_OFFSET" -ne "$CHECKPOINT_APPEND_OFFSET" ] \

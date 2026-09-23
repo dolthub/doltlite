@@ -16,6 +16,10 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 set -o pipefail
 
+# Checkpoint on every commit, so each side leaves the WAL checkpoint format
+# it writes for the other to read. Releases before the knob write none.
+export DOLTLITE_WAL_CHECKPOINT_CHUNKS=1
+
 pass=0
 fail=0
 
@@ -174,6 +178,13 @@ smoke_current() {  # smoke_current <db> <tag>
     "$(printf '%s' "$out" | tail -1 | grep -qx '1'; echo $?)" "got '$out'"
 }
 
+old_reads_current() {  # old_reads_current <old-binary> <db> <tag>
+  local bin="$1" db="$2" tag="$3" out
+  out=$(sql "$bin" "$db" "SELECT count(*) FROM people; PRAGMA integrity_check;")
+  check "$tag: old binary reads current writes" \
+    "$([ "$out" = "$(printf '62\nok')" ]; echo $?)" "got '$out'"
+}
+
 assert_refused() {  # assert_refused <db> <tag>
   local db="$1" tag="$2" out rc
   out=$(sql "$DOLTLITE" "$db" "SELECT count(*) FROM people;")
@@ -271,6 +282,7 @@ for tag in $TAGS; do
 
   if [ "$old_sig" = "$cur_sig" ]; then
     smoke_current "$db" "$tag"
+    old_reads_current "$bin" "$db" "$tag"
   else
     assert_refused "$db" "$tag"
   fi

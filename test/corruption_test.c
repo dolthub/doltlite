@@ -1158,7 +1158,7 @@ static void test_wal_open_checkpoint(void){
   check("open_checkpoint_tail_root", tailOff>MANIFEST_SIZE);
   check("open_checkpoint_magic",
     read_u32_le_at(dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
-      ==CS_WAL_CHECKPOINT_MAGIC_V2);
+      ==CS_WAL_CHECKPOINT_MAGIC_V3);
   checkpointOff = read_i64_le_at(
       dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_OFFSET_OFF);
   checkpointSize = read_u32_le_at(
@@ -1209,7 +1209,7 @@ static void test_wal_open_checkpoint(void){
   tailOff = file_size(dbpath) - (1 + MANIFEST_SIZE);
   check("open_checkpoint_propagated",
     read_u32_le_at(dbpath, tailOff+1+CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
-      ==CS_WAL_CHECKPOINT_MAGIC_V2
+      ==CS_WAL_CHECKPOINT_MAGIC_V3
     && read_i64_le_at(dbpath,
          tailOff+1+CS_MANIFEST_CHECKPOINT_OFFSET_OFF)==checkpointOff);
   db = 0;
@@ -1272,7 +1272,7 @@ static void test_wal_open_checkpoint(void){
   }
   check("open_checkpoint_gc_stamp_cleared",
     read_u32_le_at(gcpath, CS_MANIFEST_CHECKPOINT_MAGIC_OFF)
-      !=CS_WAL_CHECKPOINT_MAGIC_V2);
+      !=CS_WAL_CHECKPOINT_MAGIC_V3);
   db = 0;
   rc = sqlite3_open(gcpath, &db);
   check("open_checkpoint_gc_reopen", rc==SQLITE_OK);
@@ -1548,11 +1548,12 @@ static void test_checkpoint_cache_validation(void){
   memcpy(root+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE+12,
          leafHash.data, PROLLY_HASH_SIZE);
   cs.index.lazy.active = 1;
-  cs.index.lazy.iDataEnd = dataEnd;
-  cs.index.lazy.iRootOffset = rootOffset;
-  cs.index.lazy.nRootSize = sizeof(root);
+  cs.index.lazy.nRun = 1;
+  cs.index.lazy.aRun[0].iDataEnd = dataEnd;
+  cs.index.lazy.aRun[0].iRootOffset = rootOffset;
+  cs.index.lazy.aRun[0].nRootSize = sizeof(root);
   rc = writeCheckpointPage(&cs, rootOffset, root, sizeof(root),
-                            &cs.index.lazy.rootHash);
+                            &cs.index.lazy.aRun[0].rootHash);
   check("checkpoint_cache_write_root", rc==SQLITE_OK);
   for(i=0; i<2; i++){
     checkpointReadCount = 0;
@@ -1563,16 +1564,16 @@ static void test_checkpoint_cache_validation(void){
           checkpointReadCount==(i==0 ? 2 : 0));
   }
 
-  cs.index.lazy.iDataEnd = dataEnd-1;
+  cs.index.lazy.aRun[0].iDataEnd = dataEnd-1;
   rc = csIndexLookup(&cs, &key, &entry, &found);
   check("checkpoint_cache_changed_data_boundary", rc==SQLITE_CORRUPT && !found);
-  cs.index.lazy.iDataEnd = dataEnd;
+  cs.index.lazy.aRun[0].iDataEnd = dataEnd;
   rc = csIndexLookup(&cs, &key, &entry, &found);
   check("checkpoint_cache_restored_data_boundary", rc==SQLITE_OK && found);
 
   root[CS_INDEX_PAGE_HEADER_SIZE] = 0x30;
   rc = writeCheckpointPage(&cs, rootOffset, root, sizeof(root),
-                            &cs.index.lazy.rootHash);
+                            &cs.index.lazy.aRun[0].rootHash);
   check("checkpoint_cache_write_wrong_parent", rc==SQLITE_OK);
   rc = csIndexLookup(&cs, &key, &entry, &found);
   check("checkpoint_cache_checks_parent_maximum", rc==SQLITE_CORRUPT && !found);
@@ -1606,7 +1607,7 @@ static void test_checkpoint_cache_validation(void){
     memcpy(badRoot+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE+12,
            leafHash.data, PROLLY_HASH_SIZE);
     rc = writeCheckpointPage(&cs, rootOffset, badRoot, sizeof(badRoot),
-                              &cs.index.lazy.rootHash);
+                              &cs.index.lazy.aRun[0].rootHash);
     check("checkpoint_cache_write_malformed_root", rc==SQLITE_OK);
     for(repeat=0; repeat<2; repeat++){
       rc = csIndexLookup(&cs, &key, &entry, &found);
