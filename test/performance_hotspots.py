@@ -31,13 +31,14 @@ SECTIONS = (("queries", "Large Table Scans"),
             ("wide_rows", "Wide Rows"),
             ("narrow_rows", "Narrow Rows"),
             ("zero_row_updates", "Zero Row Updates"),
+            ("in_transaction_mutations", "In Transaction with Mutations"),
             ("retained", "Retained Findings"))
 
 
 def section_of(name):
     if name.startswith("retained_"):
         workload = name.split("_", 2)[2]
-        for category in ("wide_rows", "narrow_rows", "zero_row_updates"):
+        for category in ("wide_rows", "narrow_rows", "zero_row_updates", "in_transaction_mutations"):
             if workload.startswith(category + "_"):
                 return category
         return "retained"
@@ -283,7 +284,7 @@ def prepare_retained(binaries, root, corpus=None):
                 or type(bundle['repeats']) is not int or not 1 <= bundle['repeats'] <= 1024):
             raise ValueError(f'invalid retained hotspot: {path}')
         category = bundle.get('category', 'retained')
-        if category not in ('retained', 'wide_rows', 'narrow_rows', 'zero_row_updates'):
+        if category not in ('retained', 'wide_rows', 'narrow_rows', 'zero_row_updates', 'in_transaction_mutations'):
             raise ValueError(f'invalid retained hotspot category: {path}')
         suffix = bundle['fingerprint']
         if category != 'retained':
@@ -348,6 +349,8 @@ def write_results(samples, result_path, sample_path):
         if not section_names:
             continue
         print(f"\n### {title}")
+        if section == 'in_transaction_mutations':
+            print("\nEach timed statement follows an untimed mutation in the same transaction; rollback is untimed.")
         print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
         print("|---|---:|---:|---:|---:|---:|")
         for name in section_names:
