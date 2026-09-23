@@ -81,7 +81,7 @@ def show_diff(out_dl, out_sq):
         sys.stdout.write("    %s\n" % line)
 
 
-def sweep(doltlite, sqlite3, first, last, groups):
+def sweep(doltlite, sqlite3, first, last, groups, rotate=0):
     total = last - first + 1
     work = tempfile.mkdtemp()
     dl_db = os.path.join(work, "dl.db")
@@ -94,7 +94,7 @@ def sweep(doltlite, sqlite3, first, last, groups):
     try:
         for i, seed in enumerate(range(first, last + 1), 1):
             try:
-                sql = fuzz.Gen(seed, groups).run()
+                sql = fuzz.Gen(seed, groups, rotate).run()
             except Exception as exc:
                 sys.stdout.write("  ERROR: generator failed for seed %d\n" % seed)
                 sys.stdout.write("    %s\n" % exc)
@@ -144,6 +144,9 @@ def sweep(doltlite, sqlite3, first, last, groups):
             flags = ["--all"]
         else:
             flags = ["--include-%s" % g for g in groups]
+            if rotate:
+                flags.append("--rotate" if rotate == 1
+                             else "--rotate=%d" % rotate)
         sys.stdout.write("Failing seeds:%s\n" % "".join(" %d" % s for s in failed_seeds))
         sys.stdout.write("Reproduce with: python3 test/sql_differential_fuzzer.py <seed>%s\n" %
                          ("".join(" %s" % f for f in flags)))
@@ -156,7 +159,7 @@ def sweep(doltlite, sqlite3, first, last, groups):
 def main():
     if len(sys.argv) < 5:
         sys.stderr.write(
-            "usage: %s DOLTLITE SQLITE FIRST LAST [--include-<group>]... [--all]\n"
+            "usage: %s DOLTLITE SQLITE FIRST LAST [--include-<group>]... [--all] [--rotate]\n"
             "groups: %s\n" % (sys.argv[0], " ".join(fuzz.GROUPS)))
         return 2
     doltlite, sqlite3 = sys.argv[1], sys.argv[2]
@@ -169,7 +172,7 @@ def main():
     if last < first:
         sys.stderr.write("last seed is before first seed\n")
         return 2
-    groups, unknown = fuzz.parse_groups(sys.argv[5:])
+    groups, unknown, rotate = fuzz.parse_groups(sys.argv[5:])
     if unknown:
         sys.stderr.write("unknown flag(s): %s\n" % " ".join(unknown))
         return 2
@@ -177,7 +180,7 @@ def main():
         if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
             sys.stderr.write("ERROR: not executable: %s\n" % binary)
             return 1
-    return sweep(doltlite, sqlite3, first, last, groups)
+    return sweep(doltlite, sqlite3, first, last, groups, rotate)
 
 
 if __name__ == "__main__":

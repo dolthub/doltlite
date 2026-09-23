@@ -18,7 +18,7 @@
 # or "" for the base single-table workload.
 # Running one group is how a divergence gets attributed. Groups:
 #   large-ints desc expr agg setops cte window joins writesel ddl
-#   constraints triggers returning generated fkeys
+#   constraints triggers returning generated fkeys rowid
 
 set -uo pipefail
 
@@ -67,14 +67,14 @@ GENFLAGS=""
 if [ "$SEL_GROUPS" = "all" ]; then
   GENFLAGS="--all"
 elif [ "$SEL_GROUPS" = "default" ]; then
-  # The value axes only. Every group is clean now, so this is about what belongs
-  # in a pull request's path: these two are the cheapest per seed, and a gate
-  # that blocks unrelated work should be the narrow one. The nightly runs every
-  # group over a much wider window, and reports what it finds as an issue
-  # instead of blocking anyone.
-  for g in large-ints desc; do
+  # Every pull-request seed runs the cheap value axes and rowid allocation.
+  # One more group rotates with the seed, so triggers, foreign keys, DDL, and
+  # the rest each appear in a pull request without every seed paying for all
+  # of them. The nightly still runs every group on every seed.
+  for g in large-ints desc rowid; do
     GENFLAGS="$GENFLAGS --include-$g"
   done
+  GENFLAGS="$GENFLAGS --rotate"
 else
   for g in $SEL_GROUPS; do
     GENFLAGS="$GENFLAGS --include-$g"
