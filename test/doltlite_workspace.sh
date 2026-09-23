@@ -418,4 +418,97 @@ run_test "workspace_staged_narrower_schema_default" \
   $'1|x|9\n2|y|9' "$HID_DB"
 rm -f "$HID_DB"
 
+# All-primary-key tables store an empty value. Staging must not report that
+# row again as a modified row whose from and to sides are the same key.
+PK_DB=/tmp/doltlite_workspace_pkonly_$$.db
+rm -f "$PK_DB"
+dltest_run_sql "
+CREATE TABLE pkonly(pk INT PRIMARY KEY);
+CREATE TABLE withcol(pk INT PRIMARY KEY, v INT);
+CREATE TABLE textpk(pk TEXT PRIMARY KEY);
+CREATE TABLE comp(a INT, b INT, PRIMARY KEY(a, b));
+INSERT INTO pkonly VALUES (0);
+INSERT INTO withcol VALUES (0, 0);
+INSERT INTO textpk VALUES ('a');
+INSERT INTO comp VALUES (0, 0);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'seed');
+INSERT INTO pkonly VALUES (1),(2);
+INSERT INTO withcol VALUES (1, 1),(2, 2);
+INSERT INTO textpk VALUES ('b'),('c');
+INSERT INTO comp VALUES (1, 1),(2, 2);
+UPDATE dolt_workspace_pkonly SET staged=1 WHERE to_pk=1;
+UPDATE dolt_workspace_withcol SET staged=1 WHERE to_pk=1;
+UPDATE dolt_workspace_textpk SET staged=1 WHERE to_pk='b';
+UPDATE dolt_workspace_comp SET staged=1 WHERE to_a=1 AND to_b=1;
+" "$PK_DB" >/dev/null
+run_test "workspace_pkonly_no_phantom" \
+  "SELECT staged || '|' || diff_type || '|' || coalesce(to_pk,'') || '|' || coalesce(from_pk,'')
+     FROM dolt_workspace_pkonly ORDER BY staged DESC, to_pk;" \
+  $'1|added|1|\n0|added|2|' "$PK_DB"
+run_test "workspace_pkonly_with_value_column" \
+  "SELECT staged || '|' || diff_type || '|' || coalesce(to_pk,'') || '|' || coalesce(from_pk,'')
+     FROM dolt_workspace_withcol ORDER BY staged DESC, to_pk;" \
+  $'1|added|1|\n0|added|2|' "$PK_DB"
+run_test "workspace_textpk_no_phantom" \
+  "SELECT staged || '|' || diff_type || '|' || coalesce(to_pk,'') || '|' || coalesce(from_pk,'')
+     FROM dolt_workspace_textpk ORDER BY staged DESC, to_pk;" \
+  $'1|added|b|\n0|added|c|' "$PK_DB"
+run_test "workspace_composite_pk_no_phantom" \
+  "SELECT staged || '|' || diff_type || '|' || coalesce(to_a,'') || ',' || coalesce(to_b,'')
+     FROM dolt_workspace_comp ORDER BY staged DESC, to_a, to_b;" \
+  $'1|added|1,1\n0|added|2,2' "$PK_DB"
+run_test "workspace_pkonly_diff_stat" \
+  "SELECT rows_added || '|' || rows_modified
+     FROM dolt_diff_stat('STAGED','WORKING') WHERE table_name='pkonly';" \
+  "1|0" "$PK_DB"
+run_test "workspace_pkonly_unstage" \
+  "UPDATE dolt_workspace_pkonly SET staged=0 WHERE to_pk=1;
+   SELECT staged || '|' || diff_type || '|' || coalesce(to_pk,'') || '|' || coalesce(from_pk,'')
+     FROM dolt_workspace_pkonly ORDER BY to_pk;" \
+  $'0|added|1|\n0|added|2|' "$PK_DB"
+dltest_run_sql "
+UPDATE dolt_workspace_pkonly SET staged=1 WHERE to_pk=1;
+SELECT dolt_commit('-m','stage pk');
+" "$PK_DB" >/dev/null
+run_test "workspace_pkonly_stage_commits_working" \
+  "SELECT pk FROM pkonly ORDER BY pk;" \
+  $'0\n1\n2' "$PK_DB"
+run_test "workspace_pkonly_stage_commits_head" \
+  "SELECT pk FROM dolt_at_pkonly('HEAD') ORDER BY pk;" \
+  $'0\n1' "$PK_DB"
+rm -f "$PK_DB"
+
+# A secondary index has to gain the staged key. The table value stays empty.
+IX_DB=/tmp/doltlite_workspace_pkidx_$$.db
+rm -f "$IX_DB"
+dltest_run_sql "
+CREATE TABLE pkonly(pk INT PRIMARY KEY);
+CREATE INDEX ix ON pkonly(pk);
+INSERT INTO pkonly VALUES (0);
+SELECT dolt_commit('-Am','seed');
+INSERT INTO pkonly VALUES (1),(2);
+UPDATE dolt_workspace_pkonly SET staged=1 WHERE to_pk=1;
+SELECT dolt_commit('-m','stage');
+SELECT dolt_branch('check','HEAD');
+" "$IX_DB" >/dev/null
+run_test "workspace_pkonly_index_branch_rows" \
+  "SELECT pk FROM pkonly NOT INDEXED ORDER BY pk;" \
+  $'0\n1' "$IX_DB/check"
+run_test "workspace_pkonly_index_branch_index" \
+  "SELECT pk FROM pkonly INDEXED BY ix ORDER BY pk;" \
+  $'0\n1' "$IX_DB/check"
+run_test "workspace_pkonly_index_branch_integrity" \
+  "PRAGMA integrity_check;" "ok" "$IX_DB/check"
+dltest_run_sql "
+DELETE FROM pkonly WHERE pk=1;
+DELETE FROM dolt_workspace_pkonly WHERE from_pk=1;
+" "$IX_DB" >/dev/null
+run_test "workspace_pkonly_index_undo_delete" \
+  "SELECT pk FROM pkonly NOT INDEXED ORDER BY pk;" \
+  $'0\n1\n2' "$IX_DB"
+run_test "workspace_pkonly_index_undo_integrity" \
+  "PRAGMA integrity_check;" "ok" "$IX_DB"
+rm -f "$IX_DB"
+
 dltest_finish
