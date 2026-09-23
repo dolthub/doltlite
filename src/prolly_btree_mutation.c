@@ -1636,6 +1636,132 @@ void sqlite3BtreeIncrblobCursor(BtCursor *pCur){
 #endif
 
 
+int doltliteMaterializeIntegerDefault(
+  sqlite3 *db,
+  const char *zDb,
+  const char *zTable,
+  const char *zColumn
+){
+  int iDb = sqlite3FindDbName(db, zDb);
+  Table *pTab = sqlite3FindTable(db, zTable, zDb);
+  Column *pCol;
+  Btree *pBtree;
+  BtShared *pBt;
+  struct TableEntry *pTE;
+  sqlite3_value *pDefault = 0;
+  ProllyCursor cur;
+  ProllyChunker chunker;
+  DoltliteRecordInfo ri;
+  u8 aDefault[8];
+  u8 *pOut = 0;
+  int nAlloc = 0;
+  u32 serialType, nDefault;
+  int rc, res;
+
+  if( iDb<0 || !pTab || !IsOrdinaryTable(pTab) || !HasRowid(pTab)
+   || pTab->iPKey<0 || pTab->pCheck || pTab->u.tab.pFKey
+   || (pTab->tabFlags & (TF_HasGenerated | TF_Strict)) ){
+    return SQLITE_NOTFOUND;
+  }
+#ifndef SQLITE_OMIT_PROGRESS_CALLBACK
+  if( db->xProgress ) return SQLITE_NOTFOUND;
+#endif
+  pCol = &pTab->aCol[pTab->nCol-1];
+  if( sqlite3StrICmp(pCol->zCnName, zColumn)!=0
+   || pCol->affinity!=SQLITE_AFF_INTEGER ) return SQLITE_NOTFOUND;
+  pBtree = db->aDb[iDb].pBt;
+  if( !pBtree || pBtree->pOrigBtree || pBtree->inTrans!=TRANS_WRITE ){
+    return SQLITE_NOTFOUND;
+  }
+  pBt = pBtree->pBt;
+  pTE = findTable(pBtree, pTab->tnum);
+  if( !pTE || !(pTE->flags & PROLLY_NODE_INTKEY) ) return SQLITE_NOTFOUND;
+  rc = sqlite3ValueFromExpr(db, sqlite3ColumnExpr(pTab, pCol), ENC(db),
+                           pCol->affinity, &pDefault);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !pDefault || sqlite3_value_type(pDefault)!=SQLITE_INTEGER ){
+    sqlite3ValueFree(pDefault);
+    return SQLITE_NOTFOUND;
+  }
+  dlIpkSerialType(sqlite3_value_int64(pDefault), &serialType, &nDefault);
+  dlIpkWriteBE(aDefault, sqlite3_value_int64(pDefault), nDefault);
+  sqlite3ValueFree(pDefault);
+
+  rc = syncBtreeSavepoints(pBtree);
+  if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(pBtree);
+  if( rc==SQLITE_OK ) rc = saveAllCursors(pBtree, pBt, pTab->tnum, 0);
+  if( rc==SQLITE_OK ) rc = flushPendingForTable(pBtree, pBt, pTE, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyChunkerInitWithCache(&chunker, &pBt->store, &pBt->cache,
+                                  pTE->flags);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteRecordInfoInit(&ri);
+  prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && prollyCursorIsValid(&cur) ){
+    const u8 *pVal, *pKey;
+    int nVal, nKey, nHdrVarint, nHdr, nNewHdr, nNewVarint, nOut, i;
+    u64 hdr;
+    if( AtomicLoad(&db->u1.isInterrupted) ){
+      rc = SQLITE_INTERRUPT;
+      break;
+    }
+    prollyCursorValue(&cur, &pVal, &nVal);
+    rc = doltliteParseRecordStrict(pVal, nVal, &ri);
+    if( rc!=SQLITE_OK ) break;
+    /* Short records need their earlier defaults materialized by the VDBE. */
+    if( ri.nField!=pTab->nCol-1 ){
+      rc = SQLITE_NOTFOUND;
+      break;
+    }
+    for(i=0; i<ri.nField; i++){
+      if( i!=pTab->iPKey && pTab->aCol[i].notNull && ri.aType[i]==0 ){
+        rc = SQLITE_NOTFOUND;
+        break;
+      }
+    }
+    if( rc!=SQLITE_OK ) break;
+    nHdrVarint = dlReadVarint(pVal, pVal+nVal, &hdr);
+    nHdr = (int)hdr;
+    nNewHdr = nHdr-nHdrVarint+1;
+    nNewVarint = sqlite3VarintLen(nNewHdr);
+    nNewHdr += nNewVarint;
+    if( sqlite3VarintLen(nNewHdr)>nNewVarint ) nNewHdr++;
+    if( (i64)nVal+nNewHdr-nHdr+nDefault>db->aLimit[SQLITE_LIMIT_LENGTH] ){
+      rc = SQLITE_TOOBIG;
+      break;
+    }
+    nOut = nVal+nNewHdr-nHdr+nDefault;
+    if( nAlloc<nOut ){
+      u8 *pNew = sqlite3_realloc64(pOut, (sqlite3_uint64)nOut);
+      if( !pNew ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      pOut = pNew;
+      nAlloc = nOut;
+    }
+    nNewVarint = sqlite3PutVarint(pOut, nNewHdr);
+    memcpy(pOut+nNewVarint, pVal+nHdrVarint, nHdr-nHdrVarint);
+    pOut[nNewHdr-1] = (u8)serialType;
+    memcpy(pOut+nNewHdr, pVal+nHdr, nVal-nHdr);
+    memcpy(pOut+nOut-nDefault, aDefault, nDefault);
+    prollyCursorKey(&cur, &pKey, &nKey);
+    rc = prollyChunkerAdd(&chunker, pKey, nKey, pOut, nOut);
+    if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
+  }
+  if( rc==SQLITE_OK ) rc = prollyChunkerFinish(&chunker);
+  if( rc==SQLITE_OK ){
+    prollyInvalidateIncrblobCursors(pBt, pTab->tnum, 0, 1);
+    prollyChunkerGetRoot(&chunker, &pTE->root);
+  }
+  prollyCursorClose(&cur);
+  prollyChunkerFree(&chunker);
+  doltliteRecordInfoClear(&ri);
+  sqlite3_free(pOut);
+  return rc;
+}
+
 int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
   Btree *pBtree;
   int i;

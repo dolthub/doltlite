@@ -157,6 +157,13 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     return;
   }
 
+  rc = doltliteMaterializeIntegerDefault(db, zDb, zTable, zColumn);
+  if( rc!=SQLITE_NOTFOUND ){
+    if( rc==SQLITE_OK ) sqlite3_result_int(ctx, 0);
+    else sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+
   zSql = sqlite3_mprintf("UPDATE \"%w\".\"%w\" SET \"%w\"=\"%w\"",
                          zDb, zTable, zColumn, zColumn);
   if( !zSql ){
