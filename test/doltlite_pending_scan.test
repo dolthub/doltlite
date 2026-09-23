@@ -4,8 +4,8 @@ set testprefix doltlite-pending-scan
 
 proc pending_scan_check {name} {
   foreach {suffix sql} {
-    forward {SELECT id,n,v,length(payload),hex(substr(payload,1,8)) FROM t ORDER BY id}
-    backward {SELECT id,n,v,length(payload),hex(substr(payload,1,8)) FROM t ORDER BY id DESC}
+    forward {SELECT id,n,v,length(payload),hex(substr(payload,1,8)),hex(substr(payload,-8)) FROM t ORDER BY id}
+    backward {SELECT id,n,v,length(payload),hex(substr(payload,1,8)),hex(substr(payload,-8)) FROM t ORDER BY id DESC}
     seek {SELECT id,n,v FROM t WHERE id>=(SELECT id FROM t WHERE n=101) ORDER BY id LIMIT 150}
     seek-backward {SELECT id,n,v FROM t WHERE id<=(SELECT id FROM t WHERE n=4001) ORDER BY id DESC LIMIT 150}
     index {SELECT v,id FROM t INDEXED BY t_v WHERE v>=10 ORDER BY v,id}
@@ -32,6 +32,7 @@ proc pending_scan_write {conn} {
 foreach {keytype declaration keyexpr} {
   integer {INTEGER PRIMARY KEY} {i*2-4096}
   text {TEXT PRIMARY KEY} {printf('key-%08d',i*2)}
+  blob {BLOB PRIMARY KEY} {CAST(printf('key-%08d',i*2) AS BLOB)}
 } {
   reset_db
   forcedelete pending-scan-oracle.db
@@ -56,6 +57,23 @@ foreach {keytype declaration keyexpr} {
     SELECT changes(),count(*),sum(n) FROM t;
   } {0 7936 32505856}
   pending_scan_check $keytype-deleted
+
+  foreach conn {db oracle} {
+    $conn eval {
+      SAVEPOINT indexed;
+      UPDATE t INDEXED BY t_v SET payload=CAST(printf('%0256d',-n) AS BLOB);
+      UPDATE t INDEXED BY t_v SET payload=CAST(printf('%0256d',n*3) AS BLOB);
+    }
+  }
+  pending_scan_check $keytype-indexed-update
+  foreach conn {db oracle} {
+    $conn eval {
+      UPDATE t NOT INDEXED SET payload=CAST(printf('%0256d',n*5) AS BLOB);
+    }
+  }
+  pending_scan_check $keytype-scan-after-indexed-update
+  foreach conn {db oracle} {$conn eval {ROLLBACK TO indexed; RELEASE indexed}}
+  pending_scan_check $keytype-indexed-rollback
 
   foreach conn {db oracle} {
     $conn eval "
