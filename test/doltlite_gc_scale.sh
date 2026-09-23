@@ -6,13 +6,24 @@ echo "=== GC Tests at Scale ==="
 echo ""
 
 DB1=/tmp/test_gc1_$$.db; rm -f "$DB1"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+dltest_require_slow "gc_10k_setup" "$DB1" "$(cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t SELECT x, hex(randomblob(50))
   FROM (WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000) SELECT x FROM c);
-SELECT dolt_commit('-am','v1');
+SELECT dolt_commit('-Am','v1');
 UPDATE t SET v = hex(randomblob(50)) WHERE id <= 1000;
 SELECT dolt_commit('-am','v2');
-SELECT dolt_gc();" | $DOLTLITE "$DB1" > /dev/null 2>&1
+SELECT dolt_gc();
+SQL
+)"
+
+run_test "gc_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "3" "$DB1"
+
+run_test "gc_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB1"
 
 run_test "gc_10k_count" \
   "SELECT count(*) FROM t;" \
@@ -27,18 +38,37 @@ run_test "gc_10k_data_intact" \
   "10000" "$DB1"
 
 DB2=/tmp/test_gc2_$$.db; rm -f "$DB2"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+dltest_require_slow "gc_branch_setup" "$DB2" "$(cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t SELECT x, hex(randomblob(50))
   FROM (WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000) SELECT x FROM c);
-SELECT dolt_commit('-am','v1');
+SELECT dolt_commit('-Am','v1');
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('feature');
 INSERT INTO t SELECT x, hex(randomblob(50))
   FROM (WITH RECURSIVE c(x) AS (VALUES(10001) UNION ALL SELECT x+1 FROM c WHERE x<15000) SELECT x FROM c);
 SELECT dolt_commit('-am','feature work');
-SELECT dolt_checkout('main');
-SELECT dolt_branch('-d','feature');
-SELECT dolt_gc();" | $DOLTLITE "$DB2" > /dev/null 2>&1
+SQL
+)"
+
+run_test "gc_branch_feature_log" \
+  "SELECT dolt_checkout('feature'); SELECT count(*) FROM dolt_log;" \
+  "0
+3" "$DB2"
+
+dltest_require_slow "gc_branch_delete" "$DB2" "$(cat <<'SQL'
+SELECT dolt_branch('-D','feature');
+SELECT dolt_gc();
+SQL
+)"
+
+run_test "gc_branch_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB2"
+
+run_test "gc_branch_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB2"
 
 run_test "gc_branch_count" \
   "SELECT count(*) FROM t;" \
@@ -49,7 +79,8 @@ run_test "gc_branch_integrity" \
   "ok" "$DB2"
 
 DB3=/tmp/test_gc3_$$.db; rm -f "$DB3"
-echo "CREATE TABLE events(
+dltest_require_slow "gc_index_setup" "$DB3" "$(cat <<'SQL'
+CREATE TABLE events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tid TEXT NOT NULL, seq INTEGER NOT NULL,
   payload TEXT NOT NULL,
@@ -58,10 +89,20 @@ echo "CREATE TABLE events(
 WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<9999)
 INSERT INTO events(tid, seq, payload)
   SELECT 'thread-' || (x/200), x%200, hex(randomblob(100)) FROM c;
-SELECT dolt_commit('-am','v1');
+SELECT dolt_commit('-Am','v1');
 UPDATE events SET payload = hex(randomblob(100)) WHERE id <= 2000;
 SELECT dolt_commit('-am','v2');
-SELECT dolt_gc();" | $DOLTLITE "$DB3" > /dev/null 2>&1
+SELECT dolt_gc();
+SQL
+)"
+
+run_test "gc_index_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "3" "$DB3"
+
+run_test "gc_index_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB3"
 
 run_test "gc_index_count" \
   "SELECT count(*) FROM events;" \
@@ -76,16 +117,27 @@ run_test "gc_index_seek" \
   "200" "$DB3"
 
 DB4=/tmp/test_gc4_$$.db; rm -f "$DB4"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+dltest_require_slow "gc_multi_setup" "$DB4" "$(cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t SELECT x, hex(randomblob(50))
   FROM (WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000) SELECT x FROM c);
-SELECT dolt_commit('-am','v1');
+SELECT dolt_commit('-Am','v1');
 UPDATE t SET v = hex(randomblob(50)) WHERE id <= 500;
 SELECT dolt_commit('-am','v2');
 SELECT dolt_gc();
 UPDATE t SET v = hex(randomblob(50)) WHERE id BETWEEN 501 AND 1000;
 SELECT dolt_commit('-am','v3');
-SELECT dolt_gc();" | $DOLTLITE "$DB4" > /dev/null 2>&1
+SELECT dolt_gc();
+SQL
+)"
+
+run_test "gc_multi_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "4" "$DB4"
+
+run_test "gc_multi_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB4"
 
 run_test "gc_multi_count" \
   "SELECT count(*) FROM t;" \
@@ -106,14 +158,25 @@ if [ -x "$SQLITE3" ]; then
   SQLDB=/tmp/test_gc5_att_$$.db; rm -f "$SQLDB"
   $SQLITE3 "$SQLDB" "CREATE TABLE ext(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO ext VALUES(1,'hello');"
 
-  echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  dltest_require_slow "gc_attach_setup" "$DB5" "$(cat <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t SELECT x, hex(randomblob(50))
   FROM (WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000) SELECT x FROM c);
-SELECT dolt_commit('-am','v1');
+SELECT dolt_commit('-Am','v1');
 UPDATE t SET v = hex(randomblob(50)) WHERE id <= 1000;
 SELECT dolt_commit('-am','v2');
 ATTACH DATABASE '$SQLDB' AS ext;
-SELECT dolt_gc();" | $DOLTLITE "$DB5" > /dev/null 2>&1
+SELECT dolt_gc();
+SQL
+)"
+
+  run_test "gc_attach_log" \
+    "SELECT count(*) FROM dolt_log;" \
+    "3" "$DB5"
+
+  run_test "gc_attach_status" \
+    "SELECT count(*) FROM dolt_status;" \
+    "0" "$DB5"
 
   run_test "gc_attach_count" \
     "SELECT count(*) FROM t;" \

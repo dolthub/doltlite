@@ -60,6 +60,22 @@ dltest_require() {
   return 0
 }
 
+# Same contract as dltest_require, without the per-call alarm. A setup that
+# commits thousands of rows can outlive DLTEST_TIMEOUT.
+dltest_require_slow() {
+  local name="$1"
+  local db="$2"
+  local sql="$3"
+  local out rc
+  out=$(printf '%s\n' "$sql" | "$DOLTLITE" -bail "$db" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    dltest_fail "$name" "  engine rc=$rc\n  $out"
+    return 1
+  fi
+  return 0
+}
+
 dltest_pass() {
   PASS=$((PASS+1))
 }
