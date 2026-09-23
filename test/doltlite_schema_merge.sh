@@ -2716,4 +2716,140 @@ run_test_match "merge_stored_before_drop_vs_edit_refused" \
   "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
 rm -f "$DB"
 
+rename_reuse_base() {
+  cat <<'EOF' | $DOLTLITE "$1" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES(1,1,1),(2,2,2),(3,3,3);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+EOF
+}
+
+DB=/tmp/test_merge_rename_swap_$$.db; rm -f "$DB"
+rename_reuse_base "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN b TO a;
+ALTER TABLE t RENAME COLUMN tmp TO b;
+SELECT dolt_commit('-Am','swap');
+SELECT dolt_checkout('f');
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_commit('-Am','edit a');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_swap_refused" "SELECT dolt_merge('f');" \
+  "table 't' renames a column to 'b', a name another of its columns had" "$DB"
+run_test "merge_rename_swap_rows_untouched" \
+  "SELECT group_concat(id||':'||b||':'||a) FROM t;" "1:1:1,2:2:2,3:3:3" "$DB"
+run_test "merge_rename_swap_head_untouched" \
+  "SELECT message FROM dolt_log LIMIT 1;" "swap" "$DB"
+run_test_match "cherry_pick_rename_swap_refused" \
+  "SELECT dolt_cherry_pick('f');" \
+  "cannot apply: table 't' renames a column to 'b'" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_swap_theirs_$$.db; rm -f "$DB"
+rename_reuse_base "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_commit('-Am','edit a');
+SELECT dolt_checkout('f');
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN b TO a;
+ALTER TABLE t RENAME COLUMN tmp TO b;
+SELECT dolt_commit('-Am','swap');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_swap_theirs_refused" "SELECT dolt_merge('f');" \
+  "renames a column to 'b', a name another of its columns had" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_chain_$$.db; rm -f "$DB"
+rename_reuse_base "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+ALTER TABLE t RENAME COLUMN b TO c;
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','chain');
+SELECT dolt_checkout('f');
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_commit('-Am','edit a');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_chain_refused" "SELECT dolt_merge('f');" \
+  "renames a column to 'b', a name another of its columns had" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_swap_edited_$$.db; rm -f "$DB"
+rename_reuse_base "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN b TO a;
+ALTER TABLE t RENAME COLUMN tmp TO b;
+UPDATE t SET a=20 WHERE id=2;
+SELECT dolt_commit('-Am','swap and edit');
+SELECT dolt_checkout('f');
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_commit('-Am','edit a');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_swap_with_edits_refused" "SELECT dolt_merge('f');" \
+  "renames a column to 'b', a name another of its columns had" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_same_both_$$.db; rm -f "$DB"
+rename_reuse_base "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN b TO a;
+ALTER TABLE t RENAME COLUMN tmp TO b;
+SELECT dolt_commit('-Am','swap');
+SELECT dolt_checkout('f');
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN b TO a;
+ALTER TABLE t RENAME COLUMN tmp TO b;
+UPDATE t SET b=10 WHERE id=1;
+SELECT dolt_commit('-Am','swap and edit');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_same_on_both_merges" "SELECT dolt_merge('f');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_rename_same_on_both_row" \
+  "SELECT id||':'||b||':'||a FROM t WHERE id=1;" "1:10:1" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_drop_shift_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES(1,1,1,1),(2,2,2,2);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','drop a');
+SELECT dolt_checkout('f');
+UPDATE t SET c=30 WHERE id=1;
+SELECT dolt_commit('-Am','edit c');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_drop_shift_not_refused" "SELECT dolt_merge('f');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_drop_shift_row" \
+  "SELECT id||':'||b||':'||c FROM t WHERE id=1;" "1:1:30" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_plain_rename_$$.db; rm -f "$DB"
+rename_reuse_base "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+ALTER TABLE t RENAME COLUMN a TO x;
+SELECT dolt_commit('-Am','rename a');
+SELECT dolt_checkout('f');
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_commit('-Am','edit a');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_plain_rename_merges" "SELECT dolt_merge('f');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_plain_rename_row" \
+  "SELECT id||':'||x||':'||b FROM t WHERE id=1;" "1:10:1" "$DB"
+rm -f "$DB"
+
 dltest_finish
