@@ -3011,8 +3011,20 @@ static void doltliteRebaseInteractiveContinue(
     sqlite3_free(zReplayErr);
     zReplayErr = 0;
     doltliteGetSessionHead(db, &headBefore);
-    rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
-                          &nConflicts, &nViolations, &zReplayErr);
+    /* A peer that lost the claim can still hold the graph lock for a moment.
+    ** That BUSY is contention, not a moved tip: retry while our head stands. */
+    db->busyHandler.nBusy = 0;
+    while( 1 ){
+      ProllyHash headNow;
+      rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
+                            &nConflicts, &nViolations, &zReplayErr);
+      if( !rebaseRetryableRc(rc) ) break;
+      doltliteGetSessionHead(db, &headNow);
+      if( prollyHashCompare(&headNow, &headBefore)!=0 ) break;
+      if( !rebaseEndBusyRetry(db) ) break;
+      sqlite3_free(zReplayErr);
+      zReplayErr = 0;
+    }
     if( rc==SQLITE_BUSY ) goto abort_err_cas;
     if( rc!=SQLITE_OK ) goto abort_err;
     if( nConflicts>0 || nViolations>0 ){

@@ -677,7 +677,7 @@ static void test_concurrent_continue_adoption(void){
 
   printf("--- Test 6: concurrent --continue after default reopen ---\n");
 
-  for(trial=0; trial<12; trial++){
+  for(trial=0; trial<500; trial++){
     pid_t child;
     int status;
     int pipefd[2];
