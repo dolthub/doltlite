@@ -34,8 +34,8 @@ print(struct.unpack_from("<I", rec, 1 + 8)[0])
 ' "$1"
 }
 
-# CS_WAL_CHECKPOINT_MAGIC_V2.
-CHECKPOINT_V2=844122947
+# CS_WAL_CHECKPOINT_MAGIC_V3.
+CHECKPOINT_V3=860900163
 
 seed_db() {
   local db="$1"
@@ -67,13 +67,13 @@ if [ ! -f "$DB" ]; then
   dltest_finish
 fi
 run_test "cli_commit_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
-check_magic "cli_honors_checkpoint_threshold_env" "$DB" "$CHECKPOINT_V2"
+check_magic "cli_honors_checkpoint_threshold_env" "$DB" "$CHECKPOINT_V3"
 unset DOLTLITE_WAL_CHECKPOINT_THRESHOLD
 
 CHUNK_DB="$TMP/chunks.db"
 export DOLTLITE_WAL_CHECKPOINT_CHUNKS=1
 if ! seed_db "$CHUNK_DB"; then dltest_finish; fi
-check_magic "cli_honors_checkpoint_chunks_env" "$CHUNK_DB" "$CHECKPOINT_V2"
+check_magic "cli_honors_checkpoint_chunks_env" "$CHUNK_DB" "$CHECKPOINT_V3"
 unset DOLTLITE_WAL_CHECKPOINT_CHUNKS
 
 # A single small commit is far below both defaults, so nothing checkpoints

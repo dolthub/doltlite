@@ -101,6 +101,7 @@ doltlite_feature_deep.sh
 doltlite_deep_history.sh
 doltlite_checkpoint_perf.sh
 doltlite_checkpoint_threshold_env.sh
+doltlite_checkpoint_runs.sh
 doltlite_perf.sh
 doltlite_count_perf.sh
 doltlite_demo.sh

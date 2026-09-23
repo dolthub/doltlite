@@ -90,6 +90,17 @@
 #define CS_WAL_TAG_ROOT   0x02
 #define CS_WAL_CHECKPOINT_MAGIC_V1 0x31504b43
 #define CS_WAL_CHECKPOINT_MAGIC_V2 0x32504b43
+/* V3 names a directory of up to CS_INDEX_MAX_RUNS page trees instead of one
+** tree, so a checkpoint rewrites only its newest runs. Readers that predate
+** it find no checkpoint and replay the whole WAL. */
+#define CS_WAL_CHECKPOINT_MAGIC_V3 0x33504b43
+#define CS_CHECKPOINT_IS_TREE(m) \
+  ((m)==CS_WAL_CHECKPOINT_MAGIC_V2 || (m)==CS_WAL_CHECKPOINT_MAGIC_V3)
+#define CS_INDEX_DIR_MAGIC 0x52444943
+#define CS_INDEX_DIR_RUN_SIZE (8+4+PROLLY_HASH_SIZE+4+8)
+/* A checkpoint folds in its newest remaining run while that run holds at
+** most this many times the entries gathered so far. */
+#define CS_WAL_CHECKPOINT_RUN_RATIO 4
 #define CS_WAL_CHUNK_HASH_OFF  1
 #define CS_WAL_CHUNK_LEN_OFF   (1 + PROLLY_HASH_SIZE)
 #define CS_WAL_CHUNK_HDR_SIZE  (1 + PROLLY_HASH_SIZE + 4)

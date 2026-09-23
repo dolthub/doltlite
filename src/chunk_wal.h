@@ -20,6 +20,8 @@ struct WalState {
   int nCheckpointEntries;
   ProllyHash checkpointHash;
   u32 checkpointMagic;
+  int nCheckpointRun;
+  ChunkIndexRun aCheckpointRun[CS_INDEX_MAX_RUNS];
   u8 recoveredMidStream;
   u8 cleanCloseMarker;
 };
