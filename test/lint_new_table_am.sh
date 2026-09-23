@@ -25,12 +25,34 @@ SELECT dolt_commit('-Am','v1');
 UPDATE t SET id=2;
 SELECT dolt_commit('-am','v2');" | doltlite db
 EOF
+  # '-A' in a comment is not a staging call.
+  cat > "$tmp/test/unrelated_a.sh" <<'EOF'
+# The letter sequence -A appears in this comment only.
+echo "CREATE TABLE t(id INT);
+SELECT dolt_commit('-am', 'v1');" | doltlite db
+EOF
   fail=0
   if ROOT="$tmp" bash "$SCRIPT_DIR/lint_new_table_am.sh" >/dev/null 2>&1; then
     echo "selftest: bad fixtures were accepted"
     fail=1
   fi
-  rm -f "$tmp/test/bad_block.sh" "$tmp/test/bad_split.sh"
+  rm -f "$tmp/test/bad_block.sh" "$tmp/test/bad_split.sh" "$tmp/test/ok_am.sh"
+  if ROOT="$tmp" bash "$SCRIPT_DIR/lint_new_table_am.sh" >/dev/null 2>&1; then
+    echo "selftest: unrelated -A text was accepted"
+    fail=1
+  fi
+  rm -f "$tmp/test/unrelated_a.sh"
+  cat > "$tmp/test/ok_am.sh" <<'EOF'
+echo "CREATE TABLE t(id INT);
+SELECT dolt_commit('-Am','v1');
+UPDATE t SET id=2;
+SELECT dolt_commit('-am','v2');" | doltlite db
+EOF
+  cat > "$tmp/test/ok_add.sh" <<'EOF'
+echo "CREATE TABLE t(id INT);
+SELECT dolt_add('.');
+SELECT dolt_commit('-am','v1');" | doltlite db
+EOF
   if ! ROOT="$tmp" bash "$SCRIPT_DIR/lint_new_table_am.sh"; then
     echo "selftest: -Am fixture was rejected"
     fail=1
@@ -48,12 +70,16 @@ import os, re, sys
 root = sys.argv[1]
 create_re = re.compile(r"create\s+(?:temp\s+|temporary\s+)?table\b", re.I)
 am_re = re.compile(r"""dolt_commit\(\s*['"]-am['"]""")
+# A staging call, not the letters -A in a comment or a message.
+staged_re = re.compile(
+    r"""dolt_commit\(\s*['"]-A"""
+    r"""|dolt_add\(\s*['"](?:-A|\.)"""
+)
 
 def offending(text):
     return (create_re.search(text)
             and am_re.search(text)
-            and "-A" not in text
-            and "dolt_add" not in text.lower())
+            and not staged_re.search(text))
 
 def heredoc_blocks(text):
     lines = text.splitlines(keepends=True)
