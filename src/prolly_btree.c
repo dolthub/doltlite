@@ -591,6 +591,27 @@ static int doltliteIsChunkStoreFile(sqlite3_vfs *pVfs, const char *zFilename,
   return SQLITE_OK;
 }
 
+/* Directories must not be opened to probe them: an unreadable one logs an
+** OS error for an ordinary open of a new file inside it. "P/" exists only
+** for a directory on POSIX. winAccess already reports a directory as
+** missing (zero size), and resolves "P/" to a file, so skip it there. */
+static int doltlitePathIsDirectory(sqlite3_vfs *pVfs, const char *zPath,
+                                   int *pIsDir){
+#if SQLITE_OS_WIN
+  (void)pVfs;
+  (void)zPath;
+  *pIsDir = 0;
+  return SQLITE_OK;
+#else
+  char *zDir = sqlite3_mprintf("%s/", zPath);
+  int rc;
+  if( !zDir ) return SQLITE_NOMEM;
+  rc = doltliteFileExists(pVfs, zDir, pIsDir);
+  sqlite3_free(zDir);
+  return rc;
+#endif
+}
+
 /* A path that exists names itself. Otherwise the longest existing prefix
 ** decides: a DoltLite store makes the rest a branch or revision, and any
 ** other file or directory means an ordinary open. */
@@ -603,8 +624,10 @@ static int doltliteResolveOpenBranchPath(
   const char *zSep;
   const char *zEnd;
   int exists = 0;
+  int checkedWhole = 0;
+  int isDir = 0;
   int isStore = 0;
-  int rc;
+  int rc = SQLITE_OK;
   char *zParent;
 
   *pzStoreFilename = 0;
@@ -612,8 +635,6 @@ static int doltliteResolveOpenBranchPath(
   if( !zFilename || zFilename[0]=='\0' || strcmp(zFilename, ":memory:")==0 ){
     return SQLITE_OK;
   }
-  rc = doltliteFileExists(pVfs, zFilename, &exists);
-  if( rc!=SQLITE_OK || exists ) return rc;
 
   zEnd = zFilename + strlen(zFilename);
   for(zSep=zEnd; zSep>zFilename; ){
@@ -623,10 +644,18 @@ static int doltliteResolveOpenBranchPath(
     /* Windows resolves "x.db/" to x.db, so an empty component would hand
     ** the store "x.db//main" as branch "main" instead of "/main". */
     if( zSep[-1]=='/' || zSep[-1]=='\\' ) continue;
+    if( !checkedWhole ){
+      checkedWhole = 1;
+      rc = doltliteFileExists(pVfs, zFilename, &exists);
+      if( rc!=SQLITE_OK || exists ) return rc;
+    }
     zParent = sqlite3_mprintf("%.*s", (int)(zSep - zFilename), zFilename);
     if( !zParent ) return SQLITE_NOMEM;
     rc = doltliteFileExists(pVfs, zParent, &exists);
     if( rc==SQLITE_OK && exists ){
+      rc = doltlitePathIsDirectory(pVfs, zParent, &isDir);
+    }
+    if( rc==SQLITE_OK && exists && !isDir ){
       rc = doltliteIsChunkStoreFile(pVfs, zParent, &isStore);
     }
     if( rc!=SQLITE_OK || !exists ){
@@ -634,7 +663,7 @@ static int doltliteResolveOpenBranchPath(
       if( rc!=SQLITE_OK ) return rc;
       continue;
     }
-    if( !isStore ){
+    if( isDir || !isStore ){
       sqlite3_free(zParent);
       return SQLITE_OK;
     }
