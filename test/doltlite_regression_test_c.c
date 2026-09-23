@@ -11727,6 +11727,113 @@ static void run_prolly_mutate_batches_existing_int_replacements(void){
   chunkStoreClose(&cs);
 }
 
+static void run_prolly_mutate_mixed_leaf_replacements(void){
+  const int nSlot = 20004;
+  int mode;
+
+  for(mode=0; mode<8; mode++){
+    ChunkStore cs;
+    ProllyCache cache;
+    ProllyChunker chunker;
+    ProllyHash root, expected;
+    int isInt = mode & 1;
+    int nInitial = (mode & 2) ? 0 : 192;
+    u8 flags = isInt ? PROLLY_NODE_INTKEY : PROLLY_NODE_BLOBKEY;
+    int *aSize = sqlite3_malloc(nSlot * sizeof(int));
+    u8 *aFill = sqlite3_malloc(nSlot);
+    u8 aKey[33], aVal[8192];
+    unsigned int seed = 3193;
+    int round, i, rc;
+
+    check("mixed_leaf_state_allocated", aSize!=0 && aFill!=0);
+    if( !aSize || !aFill ){
+      sqlite3_free(aSize);
+      sqlite3_free(aFill);
+      return;
+    }
+    check("mixed_leaf_store_open",
+          chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+    check("mixed_leaf_cache_init",
+          prollyCacheInit(&cache, (mode & 4) ? 16*1024*1024 : 64*1024)==SQLITE_OK);
+    for(i=0; i<nSlot; i++){
+      aSize[i] = i>0 && i<=20000 && i%2==0 ? nInitial : -1;
+      aFill[i] = 'a';
+    }
+    for(round=0; round<5; round++){
+      ProllyMutMap mm;
+      ProllyMutator mut;
+      if( round>0 ){
+        rc = prollyMutMapInitMode(&mm, isInt, 0);
+        for(i=0; rc==SQLITE_OK && i<400; i++){
+          int key, nKey;
+          seed = seed*1664525u + 1013904223u;
+          key = (int)(seed % 10000 + 1)*2;
+          if( round==2 && i%3==0 ) key--;
+          if( i==0 ) key = round==4 ? 20003 : 2;
+          if( i==0 ){
+            aSize[key] = round==3 ? 8192 : nInitial+1;
+          }else if( round==2 && i%5==0 ){
+            aSize[key] = -1;
+          }else{
+            aSize[key] = nInitial;
+          }
+          aFill[key] = (u8)('a' + round);
+          if( isInt ){
+            prollyEncodeIntKey(key, aKey);
+            nKey = 8;
+          }else{
+            make_prolly_blob_key(key, aKey, sizeof(aKey));
+            nKey = 32;
+          }
+          if( aSize[key]<0 ){
+            rc = prollyMutMapDelete(&mm, aKey, nKey, 0);
+          }else{
+            memset(aVal, aFill[key], aSize[key]);
+            rc = prollyMutMapInsert(&mm, aKey, nKey, 0, aVal, aSize[key]);
+          }
+        }
+        check("mixed_leaf_edits", rc==SQLITE_OK);
+        memset(&mut, 0, sizeof(mut));
+        mut.pStore = &cs;
+        mut.pCache = &cache;
+        mut.oldRoot = root;
+        mut.pEdits = &mm;
+        mut.flags = flags;
+        check("mixed_leaf_flush", prollyMutateFlush(&mut)==SQLITE_OK);
+        root = mut.newRoot;
+        prollyMutMapFree(&mm);
+      }
+      rc = prollyChunkerInit(&chunker, &cs, flags);
+      for(i=0; rc==SQLITE_OK && i<nSlot; i++){
+        int nKey;
+        if( aSize[i]<0 ) continue;
+        if( isInt ){
+          prollyEncodeIntKey(i, aKey);
+          nKey = 8;
+        }else{
+          make_prolly_blob_key(i, aKey, sizeof(aKey));
+          nKey = 32;
+        }
+        memset(aVal, aFill[i], aSize[i]);
+        rc = prollyChunkerAdd(&chunker, aKey, nKey, aVal, aSize[i]);
+      }
+      check("mixed_leaf_canonical_rows", rc==SQLITE_OK);
+      check("mixed_leaf_canonical_finish", prollyChunkerFinish(&chunker)==SQLITE_OK);
+      prollyChunkerGetRoot(&chunker, &expected);
+      prollyChunkerFree(&chunker);
+      if( round==0 ){
+        root = expected;
+      }else{
+        check("mixed_leaf_canonical_hash", memcmp(&root, &expected, sizeof(root))==0);
+      }
+    }
+    sqlite3_free(aSize);
+    sqlite3_free(aFill);
+    prollyCacheFree(&cache);
+    chunkStoreClose(&cs);
+  }
+}
+
 static void run_chunk_store_rollback_restores_refs_hash(void){
   ChunkStore cs;
   ProllyHash emptyHash;
@@ -14728,6 +14835,7 @@ static const RegressionCase aCases[] = {
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
   { "prolly_mutate_blob_right_edge_append", "Prolly Mutate Blob Right Edge Append Test", run_prolly_mutate_appends_blob_key_to_right_edge },
   { "prolly_mutate_batch_int_replace", "Prolly Mutate Batch Int Replacement Test", run_prolly_mutate_batches_existing_int_replacements },
+  { "prolly_mutate_mixed_leaf_replace", "Prolly Mutate Mixed Leaf Replacement Test", run_prolly_mutate_mixed_leaf_replacements },
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
   { "chunk_store_full_pathname", "Chunk Store Uses VFS Full Pathname Test", run_chunk_store_uses_vfs_full_pathname },
