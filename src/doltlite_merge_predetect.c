@@ -139,9 +139,9 @@ static int mergeStoredFieldIndex(ParsedColumn *aCols, int iCol){
 
 /* Without column tags a column is matched by name, so a rename onto a name
 ** another ancestor column had (a swap, or b->c then a->b) would route the
-** other side's cells into the wrong column. A side that kept an ancestor row
-** dropped nothing, so its columns are the ancestor's in place and a name
-** that moved slots can only be such a rename: refuse it. */
+** other side's cells into the wrong column. A name that moved slots can
+** also come from dropping and re-adding a column; refuse only when a row the
+** side kept rules that out. */
 static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
   int side, i, j;
 
@@ -162,6 +162,8 @@ static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
       ParsedColumn *aAncCols = 0, *aRenCols = 0;
       int nAncCols = 0, nRenCols = 0;
       const char *zMoved = 0;
+      MergeLayoutCol *aLayoutCol = 0;
+      int *aAncField = 0;
       int bKept = 0;
       int rc;
 
@@ -197,9 +199,28 @@ static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
       }
       rc = SQLITE_OK;
       if( zMoved ){
+        aLayoutCol = sqlite3_malloc64(sizeof(MergeLayoutCol)*(u64)nRenCols);
+        aAncField = sqlite3_malloc64(sizeof(int)*(u64)nAncCols);
+        if( !aLayoutCol || !aAncField ) rc = SQLITE_NOMEM;
+      }
+      if( rc==SQLITE_OK && zMoved ){
+        MergeLayout layout;
+        for(j=0; j<nAncCols; j++){
+          aAncField[j] = mergeStoredFieldIndex(aAncCols, j);
+        }
+        for(j=0; j<nRenCols; j++){
+          aLayoutCol[j].iField = mergeStoredFieldIndex(aRenCols, j);
+          aLayoutCol[j].iSrcSlot =
+              parsedColumnIndexByName(aAncCols, nAncCols, aRenCols[j].zName);
+          aLayoutCol[j].bAddsAsNull = (u8)parsedColumnAddsAsNull(&aRenCols[j]);
+        }
+        layout.aCol = aLayoutCol;
+        layout.nCol = nRenCols;
+        layout.aAncField = aAncField;
+        layout.nAnc = nAncCols;
         rc = mergeSideKeptAncestorRow(c->db, &pAncCat->root, &pRenCatEnt->root,
                                       pAncCat->flags, pRenCatEnt->flags,
-                                      &bKept);
+                                      &layout, &bKept);
       }
       if( rc==SQLITE_OK && zMoved && bKept && c->pzErrMsg ){
         sqlite3_free(*c->pzErrMsg);
@@ -209,6 +230,8 @@ static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
             "ambiguous; make the same renames on both branches first",
             c->bBranchMerge ? "merge" : "apply", zTable, zMoved);
       }
+      sqlite3_free(aLayoutCol);
+      sqlite3_free(aAncField);
       freeColumns(aAncCols, nAncCols);
       freeColumns(aRenCols, nRenCols);
       if( rc!=SQLITE_OK ) return rc;

@@ -115,12 +115,31 @@ int mergePreNormalizeRenamedDependents(
   SchemaMergeAction **ppActions, int *pnActions
 );
 
+/* One side column: its stored field (-1 for VIRTUAL), the ancestor slot
+** holding its name (-1 if none), and whether ADD COLUMN would fill it
+** with NULL. */
+typedef struct MergeLayoutCol MergeLayoutCol;
+struct MergeLayoutCol {
+  int iField;
+  int iSrcSlot;
+  u8 bAddsAsNull;
+};
+
+typedef struct MergeLayout MergeLayout;
+struct MergeLayout {
+  const MergeLayoutCol *aCol;
+  int nCol;
+  const int *aAncField;
+  int nAnc;
+};
+
 int mergeSideKeptAncestorRow(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
   const ProllyHash *pSideRoot,
   u8 ancFlags,
   u8 sideFlags,
+  const MergeLayout *pLayout,
   int *pbKept
 );
 
@@ -212,6 +231,7 @@ int parsedColumnDefinitionsMatch(
   const ParsedColumn *pB
 );
 int parsedColumnIsVirtual(const ParsedColumn *pCol);
+int parsedColumnAddsAsNull(const ParsedColumn *pCol);
 
 int trySchemaColumnMerge(
   const char *zAncSql,

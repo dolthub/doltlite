@@ -2852,4 +2852,49 @@ run_test "merge_plain_rename_row" \
   "SELECT id||':'||x||':'||b FROM t WHERE id=1;" "1:10:1" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_merge_drop_readd_default_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES('a','1'),('b','2');
+ALTER TABLE t ADD COLUMN x1 INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE t ADD COLUMN x2 INTEGER NOT NULL DEFAULT 0;
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t DROP COLUMN x1;
+ALTER TABLE t ADD COLUMN x1 INTEGER NOT NULL DEFAULT 0;
+SELECT dolt_commit('-Am','drop and re-add x1');
+SELECT dolt_checkout('f');
+UPDATE t SET v='z' WHERE k='a';
+SELECT dolt_commit('-Am','edit v');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_drop_readd_default_merges" "SELECT dolt_merge('f');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_drop_readd_default_rows" \
+  "SELECT group_concat(k||':'||v||':'||x2||':'||x1) FROM t;" "a:z:0:0,b:2:0:0" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_drop_readd_null_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES('a','1'),('b','2');
+ALTER TABLE t ADD COLUMN x1 INTEGER;
+ALTER TABLE t ADD COLUMN x2 INTEGER;
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t DROP COLUMN x1;
+ALTER TABLE t ADD COLUMN x1 INTEGER;
+SELECT dolt_commit('-Am','drop and re-add x1');
+SELECT dolt_checkout('f');
+UPDATE t SET v='z' WHERE k='a';
+SELECT dolt_commit('-Am','edit v');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_drop_readd_null_merges" "SELECT dolt_merge('f');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_drop_readd_null_rows" \
+  "SELECT group_concat(k||':'||v||':'||quote(x2)||':'||quote(x1)) FROM t;" \
+  "a:z:NULL:NULL,b:2:NULL:NULL" "$DB"
+rm -f "$DB"
+
 dltest_finish

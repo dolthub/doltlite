@@ -765,51 +765,130 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   return rc;
 }
 
-/* Other side changed this field in a pre-existing row. Drop vs that
-** edit is a Dolt conflict; adds/removes and other columns are not. */
-/* DROP COLUMN rewrites every row, so a side that still holds any ancestor
-** row byte for byte has dropped no column since the ancestor. */
+static int layoutCellsMatch(const u8 *pRec, const RecField *aF, int nF,
+                            int iA, int iB){
+  if( iA<0 || iB<0 || iA>=nF || iB>=nF ) return 1;
+  return fieldEquals(pRec, &aF[iA], pRec, &aF[iB])==0;
+}
+
+/* Could drops, re-adds and renames to fresh names have produced the side's
+** layout while leaving this row's bytes as they are? Drops keep the
+** survivors' order and cells, and ADD COLUMN appends, so the side must be
+** an in-order run of surviving ancestor columns holding their own cells,
+** followed by added columns holding their default or no cell. A column
+** whose default is not NULL, or whose cell is not stored, is taken to match. */
+static int layoutFitsRow(
+  const u8 *pRec, int nRec,
+  const MergeLayout *pL,
+  u8 *aTailOk
+){
+  RecField *aF = 0;
+  int nF = 0, p, last = -1, bFits = 0;
+
+  if( parseRecordFields(pRec, nRec, &aF, &nF)<0 ) return 1;
+  aTailOk[pL->nCol] = 1;
+  for(p=pL->nCol-1; p>=0; p--){
+    const MergeLayoutCol *pC = &pL->aCol[p];
+    aTailOk[p] = aTailOk[p+1]
+        && !(pC->bAddsAsNull && pC->iField>=0 && pC->iField<nF
+             && aF[pC->iField].st!=0);
+  }
+  for(p=0; p<=pL->nCol; p++){
+    const MergeLayoutCol *pC;
+    int s;
+    if( aTailOk[p] ){
+      bFits = 1;
+      break;
+    }
+    if( p==pL->nCol ) break;
+    pC = &pL->aCol[p];
+    if( pC->iSrcSlot>=0 ){
+      s = pC->iSrcSlot;
+      if( s<=last
+       || !layoutCellsMatch(pRec, aF, nF, pC->iField, pL->aAncField[s]) ){
+        break;
+      }
+    }else{
+      for(s=last+1; s<pL->nAnc; s++){
+        if( layoutCellsMatch(pRec, aF, nF, pC->iField, pL->aAncField[s]) ){
+          break;
+        }
+      }
+      if( s>=pL->nAnc ) break;
+    }
+    last = s;
+  }
+  sqlite3_free(aF);
+  return bFits;
+}
+
+/* A side that still holds, byte for byte, an ancestor row that no sequence
+** of drops, re-adds and fresh renames could have left unchanged made a
+** rename that reuses a name. */
 int mergeSideKeptAncestorRow(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
   const ProllyHash *pSideRoot,
   u8 ancFlags,
   u8 sideFlags,
+  const MergeLayout *pLayout,
   int *pbKept
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyDiffIter iter;
   ProllyDiffChange *pChange = 0;
+  ProllyCursor cur;
+  u8 *aTailOk = 0;
   u64 nAnc = 0, nTouched = 0;
+  int res = 0;
   int rc;
 
   *pbKept = 0;
   if( !cs || !pCache || prollyHashIsEmpty(pAncRoot) ) return SQLITE_OK;
+  if( prollyHashIsEmpty(pSideRoot) ) return SQLITE_OK;
+  aTailOk = sqlite3_malloc64((u64)pLayout->nCol + 1);
+  if( !aTailOk ) return SQLITE_NOMEM;
+  prollyCursorInit(&cur, cs, pCache, pAncRoot, ancFlags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && !res && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( !layoutFitsRow(pVal, nVal, pLayout, aTailOk) ) nAnc++;
+    rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  if( rc!=SQLITE_OK || nAnc==0 ) goto done;
   if( prollyHashCompare(pAncRoot, pSideRoot)==0 ){
     *pbKept = 1;
-    return SQLITE_OK;
+    goto done;
   }
-  if( prollyHashIsEmpty(pSideRoot) ) return SQLITE_OK;
-  rc = prollySubtreeCount(cs, pCache, pAncRoot, &nAnc);
-  if( rc!=SQLITE_OK || nAnc==0 ) return rc;
   memset(&iter, 0, sizeof(iter));
   rc = prollyDiffIterOpen(&iter, cs, pCache, pAncRoot, pSideRoot,
                           ancFlags, sideFlags);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) goto done;
   while( nTouched<nAnc
       && (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW ){
-    if( pChange->type==PROLLY_DIFF_MODIFY
-     || pChange->type==PROLLY_DIFF_DELETE ){
+    if( (pChange->type==PROLLY_DIFF_MODIFY
+      || pChange->type==PROLLY_DIFF_DELETE)
+     && !layoutFitsRow(pChange->pOldVal, pChange->nOldVal, pLayout,
+                       aTailOk) ){
       nTouched++;
     }
   }
   prollyDiffIterClose(&iter);
-  if( rc!=SQLITE_ROW && rc!=SQLITE_DONE ) return rc;
-  *pbKept = nTouched<nAnc;
-  return SQLITE_OK;
+  if( rc==SQLITE_ROW || rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+    *pbKept = nTouched<nAnc;
+  }
+done:
+  sqlite3_free(aTailOk);
+  return rc;
 }
 
+/* Other side changed this field in a pre-existing row. Drop vs that
+** edit is a Dolt conflict; adds/removes and other columns are not. */
 int mergeRowEditsColumn(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
