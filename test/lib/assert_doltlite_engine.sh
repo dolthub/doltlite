@@ -28,8 +28,8 @@ if [ ! -s "$WORK/eng.db" ]; then
   exit 1
 fi
 
-header="$(head -c 15 "$WORK/eng.db" 2>/dev/null)"
-if [ "$header" = "SQLite format 3" ]; then
+header="$(od -An -tx1 -N15 "$WORK/eng.db" | tr -d '[:space:]')"
+if [ "$header" = "53514c69746520666f726d61742033" ]; then
   echo "ERROR: $ENG writes an SQLite database header."
   echo "       Suites that only check SELECT count(*) / PRAGMA integrity_check"
   echo "       go green on stock sqlite3. Build the engine with DOLTLITE_PROLLY=1."

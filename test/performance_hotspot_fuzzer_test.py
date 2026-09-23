@@ -137,6 +137,39 @@ class DiscoveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "failed"):
                     runner.run(["engine"])
 
+    def test_engine_probes_accept_binary_headers_without_stderr(self):
+        root = Path(__file__).resolve().parent
+        runner = fuzzer.Runner(30, 5)
+        with tempfile.TemporaryDirectory() as tmp:
+            binaries = {}
+            for kind, header in (("doltlite", b"CTLD\x0c\x00\x00\x00" + b"\x00"*8),
+                                 ("sqlite", b"SQLite format 3\x00")):
+                binary = Path(tmp)/kind
+                binary.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import pathlib, sys\n"
+                    "if sys.argv[2].startswith('CREATE TABLE'):\n"
+                    f"    pathlib.Path(sys.argv[1]).write_bytes({header!r})\n"
+                    "elif sys.argv[2] == 'SELECT doltlite_engine();':\n"
+                    "    print('prolly')\n"
+                    "elif sys.argv[2] == 'SELECT sqlite_version();':\n"
+                    "    print('3.54.0')\n")
+                binary.chmod(0o755)
+                binaries[kind] = str(binary)
+            engine_probe = ["bash", str(root/"lib/assert_doltlite_engine.sh")]
+            stock_probe = ["bash", str(root/"assert_stock_reference.sh")]
+            self.assertIn("OK:", runner.run(engine_probe + [binaries["doltlite"]]))
+            self.assertIn("OK:", runner.run(stock_probe + [binaries["sqlite"], binaries["doltlite"]]))
+            for probe, binary, message in (
+                (engine_probe, binaries["sqlite"], "writes an SQLite database header"),
+                (stock_probe, binaries["doltlite"], "does not write an SQLite database header"),
+            ):
+                with self.subTest(probe=probe):
+                    result = subprocess.run(probe + [binary], text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stdout)
+                    self.assertEqual(result.stderr, "")
+
     def test_partial_report_and_errors_are_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
             report = {"seed": 1, "runs": 5, "threshold": 3, "min_ms": 20,

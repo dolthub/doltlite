@@ -48,8 +48,8 @@ if [ ! -s "$WORK/ref.db" ]; then
   exit 1
 fi
 
-header="$(head -c 15 "$WORK/ref.db" 2>/dev/null)"
-if [ "$header" != "SQLite format 3" ]; then
+header="$(od -An -tx1 -N15 "$WORK/ref.db" | tr -d '[:space:]')"
+if [ "$header" != "53514c69746520666f726d61742033" ]; then
   echo "ERROR: $REF does not write an SQLite database header."
   echo "       It shares doltlite's storage, so comparing doltlite against it"
   echo "       compares the engine with itself and cannot fail."
