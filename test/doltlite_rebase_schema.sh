@@ -376,6 +376,40 @@ SELECT active_branch() || '|' || a || '|' || b || '|' ||
 FROM t WHERE id=1;
 " "feat|10|1|edit a|0"
 
+# The other branch does not touch the swapped table. Replaying the rename
+# must keep each value in its slot and leave secondary indexes covering it.
+SWAP_UNRELATED_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL);
+CREATE INDEX t_r ON t(r);
+CREATE UNIQUE INDEX t_partial ON t(a) WHERE a IS NOT NULL;
+INSERT INTO t VALUES(0, 1, 1.5);
+CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO kv VALUES(1, 'x');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+ALTER TABLE t RENAME COLUMN a TO flex_swap;
+ALTER TABLE t RENAME COLUMN r TO a;
+ALTER TABLE t RENAME COLUMN flex_swap TO r;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('main');
+INSERT INTO kv VALUES(2, 'side');
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('feat');
+"
+
+run_db_match "rebase_schema_swap_unrelated_ok" "
+$SWAP_UNRELATED_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased"
+
+run_db_eq "rebase_schema_swap_unrelated_row" "
+$SWAP_UNRELATED_SETUP
+SELECT dolt_rebase('main');
+SELECT quote(a) || '|' || typeof(a) || '|' || quote(r) || '|' || typeof(r)
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "1.5|real|1|integer|ok"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

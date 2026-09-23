@@ -55,4 +55,38 @@ if dltest_require "dual_add_noidx_setup" "$DB2" "$SETUP2"; then
     "CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, xcol_b TEXT, xcol_a TEXT DEFAULT 'da')" "$DB2"
 fi
 
+# One side adds an index, the other adds a different index and renames an
+# unrelated column. Schema init used to reject the assembled catalog as
+# malformed. The merge now stops as a schema conflict and leaves main intact.
+DB3=/tmp/test_merge_rename_plus_idx_$$.db
+rm -f "$DB3"
+SETUP3="
+CREATE TABLE t_flex(
+  id INTEGER PRIMARY KEY, a INTEGER, r REAL, num NUMERIC, u, trail TEXT
+);
+CREATE INDEX t_flex_trail ON t_flex(trail);
+CREATE INDEX t_flex_r ON t_flex(r);
+CREATE UNIQUE INDEX t_flex_expr ON t_flex(length(coalesce(trail, '')));
+CREATE UNIQUE INDEX t_flex_partial ON t_flex(a) WHERE a IS NOT NULL;
+INSERT INTO t_flex VALUES(0, 1, 1.5, 1, 1, 'base');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_checkout('-b', 'side');
+CREATE UNIQUE INDEX flex_pu_side ON t_flex(a) WHERE a IS NOT NULL;
+ALTER TABLE t_flex RENAME COLUMN r TO flex_100;
+SELECT dolt_commit('-Am', 'side');
+SELECT dolt_checkout('main');
+CREATE UNIQUE INDEX flex_pu_main ON t_flex(trail) WHERE trail IS NOT NULL;
+SELECT dolt_commit('-Am', 'main');
+"
+if dltest_require "rename_plus_idx_setup" "$DB3" "$SETUP3"; then
+  run_test_match "rename_plus_idx_conflict" \
+    "SELECT dolt_merge('--squash','side');" \
+    "cannot merge: conflicts detected" "$DB3"
+  run_test "rename_plus_idx_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB3"
+  run_test "rename_plus_idx_unmerged" \
+    "SELECT sql FROM sqlite_schema WHERE name='t_flex_r';" \
+    "CREATE INDEX t_flex_r ON t_flex(r)" "$DB3"
+fi
+
 dltest_finish

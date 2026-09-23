@@ -729,10 +729,8 @@ static int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c){
 ** machinery, and the post-action flush serializes the coherent result.
 */
 
-/* Flat old,new rename pairs anc->side when the delta is pure renames:
-** same column count, every definition matches its position, and no name
-** moves to another position. Anything else (adds, drops, swaps, type
-** changes) is not normalizable here. */
+/* Position-stable renames, including a swap: same count, each slot's
+** definition matches. Adds, drops, and type changes are not. */
 static int mergePureRenamePairs(
   const char *zAncSql,
   const char *zSideSql,
@@ -756,8 +754,8 @@ static int mergePureRenamePairs(
   for(i=0; i<nAnc; i++){
     if( !parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ) goto pure_done;
     if( sqlite3_stricmp(aAnc[i].zName, aSide[i].zName)==0 ) continue;
-    if( parsedColumnIndexByName(aSide, nSide, aAnc[i].zName)>=0 ) goto pure_done;
-    if( parsedColumnIndexByName(aAnc, nAnc, aSide[i].zName)>=0 ) goto pure_done;
+    /* A swap keeps the old name at another position. The definition
+    ** still matches this slot, so the value did not move with the name. */
     {
       char **azNew = sqlite3_realloc(az, (n+2)*(int)sizeof(char*));
       if( !azNew ){ rc = SQLITE_NOMEM; goto pure_done; }
@@ -915,6 +913,79 @@ static char *mergeRewriteIdent(
     z += n;
   }
   return sqlite3_str_finish(pOut);
+}
+
+/* Logical pairs may form a chain or a swap. Emit renames whose target
+** is free, breaking a cycle with one temporary name. */
+static int mergeRenameApplyOrder(
+  char **azLogical, int nLogical,
+  char ***pazApply, int *pnApply
+){
+  char **azOld = 0, **azNew = 0, **azOut = 0;
+  int n = nLogical/2;
+  int nOut = 0, nAlloc = 0;
+  int i, guard;
+  int rc = SQLITE_OK;
+
+  *pazApply = 0;
+  *pnApply = 0;
+  if( n<=0 ) return SQLITE_OK;
+  azOld = sqlite3_malloc(n*(int)sizeof(char*));
+  azNew = sqlite3_malloc(n*(int)sizeof(char*));
+  if( !azOld || !azNew ){ rc = SQLITE_NOMEM; goto apply_done; }
+  for(i=0; i<n; i++){
+    azOld[i] = azLogical[i*2];
+    azNew[i] = azLogical[i*2+1];
+  }
+  for(guard=0; guard<n*3+2 && n>0; guard++){
+    int picked = -1;
+    int j;
+    for(i=0; i<n; i++){
+      int blocked = 0;
+      for(j=0; j<n; j++){
+        if( sqlite3_stricmp(azNew[i], azOld[j])==0 ){ blocked = 1; break; }
+      }
+      if( !blocked ){ picked = i; break; }
+    }
+    if( picked<0 ){
+      char *zTmp = sqlite3_mprintf("dl_col_swap_%d", guard);
+      char *zKept;
+      if( !zTmp ){ rc = SQLITE_NOMEM; goto apply_done; }
+      zKept = azNew[0];
+      rc = DOLTLITE_GROW_ARRAY(&azOut, &nAlloc, nOut+2, 4);
+      if( rc!=SQLITE_OK ){ sqlite3_free(zTmp); goto apply_done; }
+      azOut[nOut] = sqlite3_mprintf("%s", azOld[0]);
+      azOut[nOut+1] = zTmp;
+      if( !azOut[nOut] || !azOut[nOut+1] ){
+        rc = SQLITE_NOMEM;
+        goto apply_done;
+      }
+      nOut += 2;
+      azOld[0] = zTmp;
+      azNew[0] = zKept;
+      continue;
+    }
+    rc = DOLTLITE_GROW_ARRAY(&azOut, &nAlloc, nOut+2, 4);
+    if( rc!=SQLITE_OK ) goto apply_done;
+    azOut[nOut] = sqlite3_mprintf("%s", azOld[picked]);
+    azOut[nOut+1] = sqlite3_mprintf("%s", azNew[picked]);
+    if( !azOut[nOut] || !azOut[nOut+1] ){ rc = SQLITE_NOMEM; goto apply_done; }
+    nOut += 2;
+    azOld[picked] = azOld[n-1];
+    azNew[picked] = azNew[n-1];
+    n--;
+  }
+  if( n>0 ){ rc = SQLITE_ERROR; goto apply_done; }
+  *pazApply = azOut;
+  *pnApply = nOut;
+  azOut = 0;
+  nOut = 0;
+
+apply_done:
+  sqlite3_free(azOld);
+  sqlite3_free(azNew);
+  freeAddedColumns(azOut, nOut);
+  return rc;
 }
 
 static int mergeRecordTableRename(
@@ -1131,6 +1202,23 @@ static int mergeCollectDependent(
   return 1;
 }
 
+static int mergePairsReuseAncestorName(
+  const char *zAncSql, char **azPairs, int nPairs
+){
+  ParsedColumn *aAnc = 0;
+  int nAnc = 0, i, bReuse = 0;
+  if( nPairs<=0 || !zAncSql ) return 0;
+  if( parseColumns(zAncSql, &aAnc, &nAnc)!=SQLITE_OK ) return 0;
+  for(i=1; i<nPairs; i+=2){
+    if( parsedColumnIndexByName(aAnc, nAnc, azPairs[i])>=0 ){
+      bReuse = 1;
+      break;
+    }
+  }
+  freeColumns(aAnc, nAnc);
+  return bReuse;
+}
+
 int mergePreNormalizeRenamedDependents(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,
@@ -1171,6 +1259,29 @@ int mergePreNormalizeRenamedDependents(
       rc = mergePureRenamePairs(pAncT->zSql, pTheirT->zSql, &azRenT, &nRenT, &bPureT);
     }
     if( rc!=SQLITE_OK ) goto table_done;
+    /* A swap matched by name is ambiguous once the other side has edited
+    ** a row. Leave that for the reuse check, which refuses it. An
+    ** untouched table can be replayed: the values stay in their slots. */
+    if( bPureO && mergePairsReuseAncestorName(pAncT->zSql, azRenO, nRenO) ){
+      struct TableEntry *pAncEnt =
+          doltliteFindTableByName(aAnc, nAnc, pAncT->zName);
+      struct TableEntry *pOthEnt =
+          doltliteFindTableByName(aTheirs, nTheirs, pAncT->zName);
+      if( pAncEnt && pOthEnt
+       && prollyHashCompare(&pAncEnt->root, &pOthEnt->root)!=0 ){
+        bPureO = 0;
+      }
+    }
+    if( bPureT && mergePairsReuseAncestorName(pAncT->zSql, azRenT, nRenT) ){
+      struct TableEntry *pAncEnt =
+          doltliteFindTableByName(aAnc, nAnc, pAncT->zName);
+      struct TableEntry *pOthEnt =
+          doltliteFindTableByName(aOurs, nOurs, pAncT->zName);
+      if( pAncEnt && pOthEnt
+       && prollyHashCompare(&pAncEnt->root, &pOthEnt->root)!=0 ){
+        bPureT = 0;
+      }
+    }
     if( !bPureO || !bPureT || (nRenO==0 && nRenT==0) ) goto table_done;
     /* The same ancestor column renamed on both sides is a real conflict
     ** (different names) or already coherent (same name); leave both. */
@@ -1265,70 +1376,8 @@ int mergePreNormalizeRenamedDependents(
           }
         }
         if( bBail ) break;
-        if( bOk && c==0 ){
-          /* Everything loads against the ancestor text; but is everything
-          ** also coherent with the text the merge would adopt today? Probe
-          ** the adopted side: with renames on it, an old-name dependent
-          ** cannot load, so normalization is still required. */
-          int bAdoptedIncoherent = 0;
-          const char *zAdopted = 0;
-          int oursChanged = strcmp(pAncT->zSql, pOurT->zSql)!=0;
-          int theirsChanged = strcmp(pAncT->zSql, pTheirT->zSql)!=0;
-          if( oursChanged && theirsChanged ){
-            char **azA=0, **azD=0, **azR=0;
-            int nA=0, nD=0, nR=0, choice=SCHEMA_MERGE_DEFAULT, res=0;
-            char *zErr = 0;
-            if( trySchemaColumnMerge(pAncT->zSql, pOurT->zSql, pTheirT->zSql,
-                                     &azA, &nA, &azD, &nD, &azR, &nR,
-                                     &choice, &res, &zErr)==SQLITE_OK ){
-              zAdopted = choice==SCHEMA_MERGE_THEIRS ? pTheirT->zSql
-                                                     : pOurT->zSql;
-            }
-            sqlite3_free(zErr);
-            freeAddedColumns(azA, nA);
-            freeAddedColumns(azD, nD);
-            freeAddedColumns(azR, nR);
-          }else{
-            zAdopted = oursChanged ? pOurT->zSql : pTheirT->zSql;
-          }
-          if( zAdopted ){
-            for(i=0; i<nOursSchema+nTheirsSchema && !bAdoptedIncoherent; i++){
-              SchemaEntry *pSide = i<nOursSchema ? &aOursSchema[i]
-                                                 : &aTheirsSchema[i-nOursSchema];
-              SchemaEntry *pDepAnc, *pDepOurs, *pDepTheirs, *pPick;
-              int bMech = 0, q;
-              if( !pSide->zName ) continue;
-              if( i>=nOursSchema
-               && findSchemaEntry(aOursSchema, nOursSchema, pSide->zName) ){
-                continue;
-              }
-              pDepAnc = findSchemaEntry(aAncSchema, nAncSchema, pSide->zName);
-              pDepOurs = findSchemaEntry(aOursSchema, nOursSchema, pSide->zName);
-              pDepTheirs = findSchemaEntry(aTheirsSchema, nTheirsSchema,
-                                           pSide->zName);
-              if( pDepAnc==pAncT ) continue;
-              q = mergeCollectDependent(pAncT->zName, pDepAnc, pDepOurs,
-                                        pDepTheirs, azRenO, nRenO,
-                                        azRenT, nRenT, &bMech);
-              if( q<=0 ) continue;
-              /* Today's adoption: the side that changed it, ours on ties. */
-              if( pDepAnc ){
-                int chO = pDepOurs && strcmp(pDepAnc->zSql, pDepOurs->zSql)!=0;
-                int chT = pDepTheirs && strcmp(pDepAnc->zSql, pDepTheirs->zSql)!=0;
-                pPick = chT && !chO ? pDepTheirs : pDepOurs;
-              }else{
-                pPick = pDepOurs ? pDepOurs : pDepTheirs;
-              }
-              if( pPick && !mergeDependentCoherent(pPick, zAdopted, azUni, nUni) ){
-                bAdoptedIncoherent = 1;
-              }
-            }
-          }
-          if( !bAdoptedIncoherent ){
-            /* Today's merge already loads; do not disturb it. */
-            goto table_done;
-          }
-        }
+        /* Rewrite even when a probe thinks the adopted texts already
+        ** load. Pass 1 can still keep an index on the pre-rename column. */
         if( bOk ){
           zBase = azCand[c];
           bBaseOurs = (c==1);
@@ -1356,10 +1405,17 @@ int mergePreNormalizeRenamedDependents(
         if( !azQ[k] ){ freeAddedColumns(azQ, nQ); rc = SQLITE_NOMEM; goto table_done; }
       }
       if( nQ>0 ){
-        /* The action owns azQ from here. */
+        char **azApply = 0;
+        int nApply = 0;
+        /* A swap's target is still a column. Apply through a temporary
+        ** name so the second rename does not land on the first. */
+        rc = mergeRenameApplyOrder(azQ, nQ, &azApply, &nApply);
+        freeAddedColumns(azQ, nQ);
+        azQ = 0;
+        if( rc!=SQLITE_OK ) goto table_done;
         rc = recordSchemaColumnChanges(ppActions, pnActions, pAncT->zName,
-                                       0, 0, 0, 0, azQ, nQ);
-        if( rc!=SQLITE_OK ){ freeAddedColumns(azQ, nQ); goto table_done; }
+                                       0, 0, 0, 0, azApply, nApply);
+        if( rc!=SQLITE_OK ){ freeAddedColumns(azApply, nApply); goto table_done; }
       }else{
         sqlite3_free(azQ);
       }
