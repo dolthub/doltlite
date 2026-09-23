@@ -1366,11 +1366,6 @@ static int stmt_column_text_equals(sqlite3_stmt *stmt, int iCol, const char *zEx
   return z && strcmp((const char*)z, zExpect)==0;
 }
 
-typedef struct DiffCountCtx DiffCountCtx;
-struct DiffCountCtx {
-  int nChange;
-};
-
 typedef struct RepoStateSnapshot RepoStateSnapshot;
 struct RepoStateSnapshot {
   char zBranch[128];
@@ -1386,13 +1381,6 @@ struct RepoStateSnapshot {
   ProllyHash rebaseOntoHash;
   char zOrigBranch[128];
 };
-
-static int count_diff_change(void *pCtx, const ProllyDiffChange *pChange){
-  DiffCountCtx *p = (DiffCountCtx*)pCtx;
-  (void)pChange;
-  p->nChange++;
-  return SQLITE_OK;
-}
 
 static void capture_repo_state_snapshot(sqlite3 *db, RepoStateSnapshot *p){
   const char *zOrigBranch = 0;
@@ -13247,7 +13235,9 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
   u8 *pNode = 0;
   int nNode = 0;
   int rc;
-  DiffCountCtx ctx;
+  int nRow = 0;
+  ProllyDiffIter iter;
+  ProllyDiffChange *pCh = 0;
   static const u8 badRecord[] = { 0x05, 0x01 };
   static const u8 key[] = { 'a' };
   static const u8 key2[] = { 'b' };
@@ -13255,7 +13245,6 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
 
   printf("=== Prolly Diff Leaf Corruption Test ===\n\n");
 
-  memset(&ctx, 0, sizeof(ctx));
   check("open_memory_store_for_diff_leaf_corruption",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
   check("init_cache_for_diff_leaf_corruption", prollyCacheInit(&cache, 4*4096)==SQLITE_OK);
@@ -13287,10 +13276,15 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
   pNode = 0;
   prollyNodeBuilderFree(&b);
 
-  rc = prollyDiff(&cs, &cache, &oldRootHash, &newRootHash,
-                  PROLLY_NODE_BLOBKEY, count_diff_change, &ctx);
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &oldRootHash, &newRootHash,
+                          PROLLY_NODE_BLOBKEY, PROLLY_NODE_BLOBKEY);
+  check("open_diff_iter_leaf_bad_record", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    while( (rc = prollyDiffIterStep(&iter, &pCh))==SQLITE_ROW ) nRow++;
+    prollyDiffIterClose(&iter);
+  }
   check("diff_leaf_bad_record_returns_corrupt", rc==SQLITE_CORRUPT);
-  check("diff_leaf_bad_record_emits_no_changes", ctx.nChange==0);
+  check("diff_leaf_bad_record_emits_no_changes", nRow==0);
 
   prollyCacheFree(&cache);
   chunkStoreClose(&cs);
