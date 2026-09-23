@@ -28,6 +28,67 @@ do_execsql_test 1.1 {
   SELECT count(*), length(max(b)) FROM t1;
 } {300 10000}
 
+foreach {key decl keyexpr} {
+  integer INTEGER i
+  text TEXT {printf('%016x',i)}
+} {
+  do_execsql_test rollback-$key-setup "
+    CREATE TABLE spill(id $decl PRIMARY KEY, v INTEGER, payload BLOB);
+    BEGIN;
+    WITH RECURSIVE c(i) AS (
+      VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<65536
+    )
+    INSERT INTO spill SELECT $keyexpr,i,zeroblob(32) FROM c;
+    COMMIT;
+  " {}
+  db close
+  sqlite3 db test.db
+
+  foreach iteration {1 2} {
+    do_catchsql_test rollback-$key-$iteration {
+      BEGIN;
+      SELECT sum(v) FROM spill;
+      INSERT INTO spill SELECT * FROM spill WHERE 1
+        ON CONFLICT(id) DO UPDATE SET v=excluded.v+1;
+      SELECT changes(),sum(v) FROM spill;
+      ROLLBACK;
+      SELECT sum(v) FROM spill;
+    } {0 {2147516416 65536 2147581952 2147516416}}
+    catchsql {ROLLBACK}
+  }
+
+  do_execsql_test rollback-$key-commit {
+    BEGIN;
+    SELECT sum(v) FROM spill;
+    INSERT INTO spill SELECT * FROM spill WHERE 1
+      ON CONFLICT(id) DO UPDATE SET v=excluded.v+1;
+    COMMIT;
+  } {2147516416}
+  catchsql {ROLLBACK}
+  db close
+  sqlite3 db test.db
+  do_execsql_test rollback-$key-durable {
+    SELECT count(*),sum(v),sum(length(payload)) FROM spill;
+    PRAGMA integrity_check;
+  } {65536 2147581952 2097152 ok}
+
+  sqlite3 db2 test.db
+  db eval {BEGIN; SELECT sum(v) FROM spill}
+  db2 eval {UPDATE spill SET v=v+1 WHERE v=2}
+  do_catchsql_test peer-upgrade-$key {
+    UPDATE spill SET v=v+1 WHERE v=3;
+  } {1 {database is locked}}
+  do_test $testprefix-peer-snapshot-$key {
+    sqlite3_extended_errcode db
+  } {SQLITE_BUSY_SNAPSHOT}
+  db eval {ROLLBACK}
+  db2 close
+  do_execsql_test peer-kept-$key {
+    SELECT sum(v) FROM spill;
+    DROP TABLE spill;
+  } {2147581953}
+}
+
 if {$had_pending_drain_limit} {
   set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) $saved_pending_drain_limit
 } else {

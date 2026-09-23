@@ -628,6 +628,7 @@ void chunkStoreRollback(ChunkStore *cs){
     cs->staging.nWriteBuf = cs->staging.nCommittedWriteBuf;
   }else{
     if( cs->staging.nRecentUncommitted > 0 ){
+      PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
       assert( cs->staging.nRecent >= cs->staging.nRecentUncommitted );
       cs->staging.nRecent -= cs->staging.nRecentUncommitted;
       cs->staging.nRecentUncommitted = 0;
@@ -637,6 +638,11 @@ void chunkStoreRollback(ChunkStore *cs){
         cs->wal.nWalData = cs->file.iFileSize - cs->wal.iWalOffset;
       }else{
         cs->wal.nWalData = 0;
+      }
+      if( cs->file.pFile ){
+        sqlite3BeginBenignMalloc();
+        (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+        sqlite3EndBenignMalloc();
       }
       cs->staging.iUncommittedStart = 0;
     }
