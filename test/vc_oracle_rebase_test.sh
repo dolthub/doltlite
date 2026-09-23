@@ -39,6 +39,28 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+# Run query inside a transaction on both engines: BEGIN for DoltLite,
+# @@autocommit=0 for Dolt, which is how each lets a rebase pause.
+oracle_txn() {
+  local name="$1" setup="$2" query="$3"
+  local dir="$TMPROOT/${name}_txn"
+  mkdir -p "$dir/dl" "$dir/dt"
+  local dl_out dt_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\nBEGIN;\n%s\n" "$setup" "$query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | tr -d '\r' | grep '^LOG|')
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      vc_oracle_translate_for_dolt "$setup"
+      echo "SET @@autocommit=0;"
+      vc_oracle_translate_for_dolt "$query"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^LOG|')
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
 oracle_error() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_err"
@@ -1132,5 +1154,108 @@ SELECT dolt_rebase('main');
 SELECT CONCAT('LOG|child|', id, '=', pid) FROM child ORDER BY id;
 SELECT CONCAT('LOG|parent|', id) FROM parent ORDER BY id;
 SELECT CONCAT('LOG|msg=', message) FROM dolt_log;"
+
+
+PAUSE_SETUP="
+CREATE TABLE t(pk INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1,1),(2,2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+UPDATE t SET v=100 WHERE pk=1;
+UPDATE t SET v=100 WHERE pk=2;
+SELECT dolt_commit('-am', 'main2');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (10,10);
+SELECT dolt_commit('-am', 'f1');
+UPDATE t SET v=200 WHERE pk=1;
+SELECT dolt_commit('-am', 'f2');
+INSERT INTO t VALUES (11,11);
+SELECT dolt_commit('-am', 'f3');
+UPDATE t SET v=300 WHERE pk=2;
+SELECT dolt_commit('-am', 'f4');"
+
+PAUSE_REPORT="
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|M|', REPLACE(message, CHAR(10), '/')) FROM dolt_log;
+SELECT CONCAT('LOG|R|', pk, '=', v) FROM t ORDER BY pk;"
+
+for action in pick squash fixup; do
+  oracle_txn "interactive_pause_on_${action}_conflict" "$PAUSE_SETUP" "
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action='$action' WHERE commit_message='f2';
+DELETE FROM dolt_rebase WHERE commit_message='f4';
+SELECT dolt_rebase('--continue');
+SELECT CONCAT('LOG|PB|', active_branch());
+SELECT CONCAT('LOG|PC|', count(*)) FROM dolt_conflicts;
+UPDATE t SET v=250 WHERE pk=1;
+DELETE FROM dolt_conflicts_t;
+SELECT dolt_add('.');
+SELECT dolt_rebase('--continue');
+$PAUSE_REPORT"
+done
+
+oracle_txn "interactive_pause_twice" "$PAUSE_SETUP" "
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--continue');
+SELECT CONCAT('LOG|PC1|', count(*)) FROM dolt_conflicts;
+UPDATE t SET v=250 WHERE pk=1;
+DELETE FROM dolt_conflicts_t;
+SELECT dolt_add('.');
+SELECT dolt_rebase('--continue');
+SELECT CONCAT('LOG|PC2|', count(*)) FROM dolt_conflicts;
+UPDATE t SET v=350 WHERE pk=2;
+DELETE FROM dolt_conflicts_t;
+SELECT dolt_add('.');
+SELECT dolt_rebase('--continue');
+$PAUSE_REPORT"
+
+oracle_txn "linear_pause_on_later_step" "$PAUSE_SETUP" "
+SELECT dolt_rebase('main');
+SELECT CONCAT('LOG|PB|', active_branch());
+SELECT CONCAT('LOG|PC|', count(*)) FROM dolt_conflicts;
+UPDATE t SET v=250 WHERE pk=1;
+DELETE FROM dolt_conflicts_t;
+SELECT dolt_add('.');
+SELECT dolt_rebase('--continue');
+SELECT CONCAT('LOG|PC2|', count(*)) FROM dolt_conflicts;
+UPDATE t SET v=350 WHERE pk=2;
+DELETE FROM dolt_conflicts_t;
+SELECT dolt_add('.');
+SELECT dolt_rebase('--continue');
+$PAUSE_REPORT"
+
+CV_SETUP="
+CREATE TABLE p(id INT PRIMARY KEY);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT, FOREIGN KEY (pid) REFERENCES p(id));
+INSERT INTO p VALUES (1),(2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+DELETE FROM p WHERE id=2;
+SELECT dolt_commit('-am', 'main_del_parent');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES (1,2);
+SELECT dolt_commit('-am', 'f_child_of_2');
+INSERT INTO c VALUES (2,1);
+SELECT dolt_commit('-am', 'f_child_of_1');"
+
+CV_RESOLVE="
+SELECT CONCAT('LOG|PB|', active_branch());
+SELECT CONCAT('LOG|PV|', count(*)) FROM dolt_constraint_violations;
+UPDATE c SET pid=1 WHERE id=1;
+DELETE FROM dolt_constraint_violations_c;
+SELECT dolt_add('.');
+SELECT dolt_rebase('--continue');
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|M|', message) FROM dolt_log;
+SELECT CONCAT('LOG|R|', id, '=', pid) FROM c ORDER BY id;"
+
+oracle_txn "linear_pause_on_constraint_violation" "$CV_SETUP" "
+SELECT dolt_rebase('main');
+$CV_RESOLVE"
+
+oracle_txn "interactive_pause_on_constraint_violation" "$CV_SETUP" "
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--continue');
+$CV_RESOLVE"
 
 vc_oracle_finish
