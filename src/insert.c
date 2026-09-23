@@ -2979,7 +2979,44 @@ void sqlite3CompleteInsertion(
 #ifdef DOLTLITE_PROLLY
   {
     int iSeqDb = sqlite3DoltliteSeqTableDb(pParse, pTab);
-    if( iSeqDb>=0 ){
+    /* An INSERT that adds a second sqlite_sequence row for a name does
+    ** not move the counter. SQLite's autoincrement read stops at the
+    ** first row of that name and leaves the duplicate alone. UPDATE of
+    ** an existing row still sets the counter. */
+    if( iSeqDb>=0 && update_flags==0 ){
+      int iScan = pParse->nTab++;
+      int regHit = sqlite3GetTempReg(pParse);
+      int regCnt = sqlite3GetTempReg(pParse);
+      int regOne = sqlite3GetTempReg(pParse);
+      int addrRewind, addrLoop, addrNe, addrPrior, addrDone;
+      addrDone = sqlite3VdbeMakeLabel(pParse);
+      sqlite3OpenTable(pParse, iScan, iSeqDb, pTab, OP_OpenRead);
+      sqlite3VdbeAddOp2(v, OP_Integer, 0, regCnt);
+      sqlite3VdbeAddOp2(v, OP_Integer, 1, regOne);
+      addrRewind = sqlite3VdbeAddOp2(v, OP_Rewind, iScan, 0);
+      VdbeCoverage(v);
+      addrLoop = sqlite3VdbeCurrentAddr(v);
+      sqlite3VdbeAddOp3(v, OP_Column, iScan, 0, regHit);
+      addrNe = sqlite3VdbeAddOp3(v, OP_Ne, regNewData+1, 0, regHit);
+      VdbeCoverage(v);
+      sqlite3VdbeAddOp2(v, OP_AddImm, regCnt, 1);
+      addrPrior = sqlite3VdbeAddOp3(v, OP_Gt, regOne, 0, regCnt);
+      VdbeCoverage(v);
+      sqlite3VdbeJumpHere(v, addrNe);
+      sqlite3VdbeAddOp2(v, OP_Next, iScan, addrLoop);
+      VdbeCoverage(v);
+      sqlite3VdbeJumpHere(v, addrRewind);
+      sqlite3VdbeAddOp1(v, OP_Close, iScan);
+      sqlite3VdbeAddOp3(v, OP_DoltliteSeqSet, regNewData+2,
+                        regNewData+1, iSeqDb);
+      sqlite3VdbeGoto(v, addrDone);
+      sqlite3VdbeJumpHere(v, addrPrior);
+      sqlite3VdbeAddOp1(v, OP_Close, iScan);
+      sqlite3VdbeResolveLabel(v, addrDone);
+      sqlite3ReleaseTempReg(pParse, regOne);
+      sqlite3ReleaseTempReg(pParse, regCnt);
+      sqlite3ReleaseTempReg(pParse, regHit);
+    }else if( iSeqDb>=0 ){
       sqlite3VdbeAddOp3(v, OP_DoltliteSeqSet, regNewData+2, regNewData+1,
                         iSeqDb);
     }

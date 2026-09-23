@@ -212,6 +212,33 @@ INSERT INTO ghost DEFAULT VALUES;
 SELECT id FROM ghost;
 " "1" "$SEED_DB"
 
+# A second sqlite_sequence row for the same name does not move the counter.
+# The next AUTOINCREMENT read uses the first row and leaves the duplicate.
+DUP_DB="$ROOT/dup.db"
+run_test "seq_duplicate_row_keeps_the_first" "
+CREATE TABLE c(id INTEGER PRIMARY KEY AUTOINCREMENT, v);
+INSERT INTO c(v) VALUES('x');
+INSERT INTO sqlite_sequence VALUES('c', 200);
+INSERT INTO c(v) VALUES('y');
+SELECT group_concat(id, ',') FROM (SELECT id FROM c ORDER BY id);
+SELECT group_concat(name || ':' || seq, ',') FROM (SELECT name, seq FROM sqlite_sequence ORDER BY seq);
+" "1,2
+c:2,c:200" "$DUP_DB"
+
+run_test "seq_second_duplicate_row_still_keeps_the_first" "
+INSERT INTO sqlite_sequence VALUES('c', 500);
+INSERT INTO c(v) VALUES('z');
+SELECT group_concat(id, ',') FROM (SELECT id FROM c ORDER BY id);
+SELECT group_concat(seq, ',') FROM (SELECT seq FROM sqlite_sequence ORDER BY seq);
+" "1,2,3
+3,200,500" "$DUP_DB"
+
+run_test "seq_case_mismatched_name_does_not_move_counter" "
+INSERT INTO sqlite_sequence VALUES('C', 900);
+INSERT INTO c(v) VALUES('w');
+SELECT group_concat(id, ',') FROM (SELECT id FROM c ORDER BY id);
+" "1,2,3,4" "$DUP_DB"
+
 # The path that must stay unguarded: DROP TABLE owns every rowid table's
 # counter, AUTOINCREMENT or not.
 run_test "seq_drop_table_still_clears_a_plain_counter" "
