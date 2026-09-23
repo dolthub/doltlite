@@ -390,42 +390,6 @@ done:
   return rc;
 }
 
-/* Dirty zBranch. Return-branch mirror is loadable only when workingCommit
-** equals that HEAD; otherwise overlay rebase metadata so restore matches. */
-static int rebaseBranchHasUncommittedWork(
-  sqlite3 *db,
-  const char *zBranch,
-  int *pDirty
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  DoltliteCommit c;
-  ProllyHash headHash, wsHash, wsCat, wsCommit;
-  int rc;
-
-  *pDirty = 0;
-  if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
-  rc = chunkStoreFindBranch(cs, zBranch, &headHash);
-  if( rc!=SQLITE_OK ) return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
-  memset(&wsHash, 0, sizeof(wsHash));
-  memset(&wsCat, 0, sizeof(wsCat));
-  memset(&wsCommit, 0, sizeof(wsCommit));
-  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
-  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
-  if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashIsEmpty(&wsHash) ) return SQLITE_OK;
-  rc = chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCat, &wsCommit);
-  if( rc!=SQLITE_OK ) return rc;
-  memset(&c, 0, sizeof(c));
-  rc = doltliteLoadCommit(db, &headHash, &c);
-  if( rc==SQLITE_OK
-   && prollyHashCompare(&wsCommit, &headHash)==0
-   && prollyHashCompare(&wsCat, &c.catalogHash)!=0 ){
-    *pDirty = 1;
-  }
-  doltliteCommitClear(&c);
-  return rc;
-}
-
 static int doltliteRebaseCollectReplaySet(
   sqlite3 *db,
   const ProllyHash *pHeadHash,
@@ -1207,8 +1171,7 @@ static int rebaseRestoreInProgress(
   do {
     rc = rebaseWritePlanRows(db, aPlan, nPlan);
     if( rc==SQLITE_OK ){
-      /* Persist remirrors the working catalog onto the return branch unless
-      ** META_MIRROR, which would clobber uncommitted work. Overlay metadata. */
+      /* Persist overlays metadata on the return branch and keeps its catalog. */
       u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
       rc = doltliteSetSessionRebaseState(db, flags, pPreRebaseCat, pExpectedOrigHead,
                                          zOrigBranch, zReturnBranch);
@@ -1840,7 +1803,7 @@ static void doltliteRebaseInteractiveStart(
   int rc;
   int dirty = 0;
   u8 curIsRebasing = 0;
-  u8 rebaseFlags = WS_REBASE_FLAG_ACTIVE;
+  u8 rebaseFlags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
   int bWorkingBranchCreated = 0;
   const char *zFailMsg = 0;
 
@@ -1930,19 +1893,6 @@ static void doltliteRebaseInteractiveStart(
     }
   }
 
-  {
-    int dirty = 0;
-    ProllyHash returnHead;
-    rc = rebaseBranchHasUncommittedWork(db, zReturnBranch, &dirty);
-    if( rc!=SQLITE_OK ) goto fail;
-    memset(&returnHead, 0, sizeof(returnHead));
-    rc = chunkStoreFindBranch(cs, zReturnBranch, &returnHead);
-    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-    if( rc!=SQLITE_OK ) goto fail;
-    if( dirty || prollyHashCompare(&returnHead, &upstreamHash)!=0 ){
-      rebaseFlags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR);
-    }
-  }
   if( strlen(zReturnBranch)>=WS_REBASE_BRANCH_LEN ){
     sqlite3_free(zOrig);
     sqlite3_free(zReturnBranch);

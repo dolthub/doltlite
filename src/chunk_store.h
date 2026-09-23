@@ -293,10 +293,6 @@ int chunkStorePublishPathReplacementProof(
   const ProllyHash *pTo
 );
 
-int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
-                                       ProllyHash *pCatHash,
-                                       ProllyHash *pCommitHash);
-
 int chunkStoreReloadRefs(ChunkStore *cs);
 
 const char *chunkStoreGetDefaultBranch(ChunkStore *cs);

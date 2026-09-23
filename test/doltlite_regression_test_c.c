@@ -9085,8 +9085,12 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
   check("reopen_db_after_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_invalid_plan_persists_working_branch",
         strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
-  check("rebase_invalid_plan_persists_plan_table",
-        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
+  /* The plan stays on dolt_rebase_feat. The default branch keeps the
+  ** rebase flag without that table in its catalog. */
+  check("rebase_invalid_plan_reopen_hides_plan_on_default",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"),
+          "0")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_invalid_plan_persists_rebase_flag", isRebasing==1);
   check("rebase_invalid_plan_persists_orig_branch",
@@ -9148,8 +9152,10 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
   check("reopen_db_for_rebase_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_abort_after_reopen_branch_before_abort",
         strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
-  check("rebase_abort_after_reopen_plan_before_abort",
-        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
+  check("rebase_abort_after_reopen_hides_plan_on_default",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"),
+          "0")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_after_reopen_flag_before_abort", isRebasing==1);
 
