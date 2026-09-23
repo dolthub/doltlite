@@ -237,6 +237,63 @@ static void wideRecord(void){
   removeDb("icc_wide.db");
 }
 
+/* DROP COLUMN narrows the live schema before its row rewrite is flushed.
+** integrity_check and quick_check must not compare the old records to the
+** new width while that rewrite is still pending. */
+static int pragmaIsOk(sqlite3 *db, const char *zSql){
+  sqlite3_stmt *pStmt = 0;
+  int ok = 0;
+  if( sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0)==SQLITE_OK
+   && sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *z = (const char*)sqlite3_column_text(pStmt, 0);
+    ok = z && strcmp(z, "ok")==0 && sqlite3_step(pStmt)==SQLITE_DONE;
+    if( !ok && z ) fprintf(stderr, "  %s -> %s\n", zSql, z);
+  }
+  sqlite3_finalize(pStmt);
+  return ok;
+}
+
+static void dropColumnInTxn(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *pStmt = 0;
+
+  removeDb("icc_drop.db");
+  if( sqlite3_open("icc_drop.db", &db)!=SQLITE_OK ){
+    nFail++;
+    sqlite3_close(db);
+    return;
+  }
+  check("drop: setup", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, a, b, c);"
+      "INSERT INTO t VALUES(1,'a1','b1','c1'),(2,'a2','b2','c2');"
+      "BEGIN;"
+      "ALTER TABLE t DROP COLUMN c;")==SQLITE_OK);
+  check("drop: in-txn integrity_check",
+        pragmaIsOk(db, "PRAGMA integrity_check"));
+  check("drop: in-txn quick_check",
+        pragmaIsOk(db, "PRAGMA quick_check"));
+  if( sqlite3_prepare_v2(db,
+          "SELECT id || a || b FROM t ORDER BY id", -1, &pStmt, 0)==SQLITE_OK
+   && sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *z = (const char*)sqlite3_column_text(pStmt, 0);
+    check("drop: first row", z && strcmp(z, "1a1b1")==0);
+    if( sqlite3_step(pStmt)==SQLITE_ROW ){
+      z = (const char*)sqlite3_column_text(pStmt, 0);
+      check("drop: second row", z && strcmp(z, "2a2b2")==0);
+    }else{
+      nFail++;
+    }
+  }else{
+    nFail += 2;
+  }
+  sqlite3_finalize(pStmt);
+  check("drop: commit", execSql(db, "COMMIT;")==SQLITE_OK);
+  check("drop: after-commit integrity_check",
+        pragmaIsOk(db, "PRAGMA integrity_check"));
+  sqlite3_close(db);
+  removeDb("icc_drop.db");
+}
+
 int main(void){
   oneShape("rowid pk, one index",
       "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);"
@@ -256,6 +313,7 @@ int main(void){
       "CREATE INDEX ib ON t(b);", 300);
 
   wideRecord();
+  dropColumnInTxn();
 
   printf("integrity_check_counts_test: %d passed, %d failed\n", nPass, nFail);
   return nFail==0 ? 0 : 1;

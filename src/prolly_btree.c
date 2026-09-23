@@ -2348,6 +2348,15 @@ static int integrityCheckRecordWidth(
   pPk = sqlite3PrimaryKeyIndex(pTab);
   nExpect = pPk && pPk->nColumn>pTab->nCol ? pPk->nColumn : pTab->nCol;
 
+  /* An unflushed edit still sits in front of this tree. DROP COLUMN has
+  ** already narrowed the live schema, while these flushed records keep the
+  ** old width, so the comparison reports a row the reader does not see.
+  ** The entry-count check skips this same state. */
+  {
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    if( pMap && !prollyMutMapIsEmpty(pMap) ) return SQLITE_OK;
+  }
+
   prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
   rc = prollyCursorFirst(&cur, &res);
   while( rc==SQLITE_OK && *pnErr<mxErr && prollyCursorIsValid(&cur) ){
