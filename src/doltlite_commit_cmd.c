@@ -862,7 +862,8 @@ static void doltliteCommitFunc(
       return;
     }
     doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
-    if( isRebasing ){
+    if( isRebasing
+     && (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_EDIT)==0 ){
       sqlite3_result_error(context,
         "you are in the middle of a rebase -- cannot amend", -1);
       return;

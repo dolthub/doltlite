@@ -1506,6 +1506,91 @@ static int rebaseEnterPause(
   return SQLITE_OK;
 }
 
+/* The edit step is already a commit on the working branch. Save the plan
+** rows after it and stay active, without the conflict-pause bit, so the
+** next --continue replays the rest and dolt_commit --amend can rewrite
+** this commit. */
+static int rebaseEnterEditPause(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const RebasePlanRow *aRest,
+  int nRest,
+  const RebasePlanRow *pEdited,
+  const ProllyHash *pOrigCat,
+  const ProllyHash *pOrigHead,
+  const char *zOrig,
+  const char *zReturn,
+  int keepEmpty
+){
+  char zHex[PROLLY_HASH_SIZE*2+1];
+  char *zMsg;
+  u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR
+                  | WS_REBASE_FLAG_EDIT
+                  | (keepEmpty ? WS_REBASE_FLAG_EMPTY_KEEP : 0));
+  int rc;
+  if( !zOrig || !zOrig[0] || strlen(zOrig)>=WS_REBASE_BRANCH_LEN
+   || !zReturn || !zReturn[0] || strlen(zReturn)>=WS_REBASE_BRANCH_LEN ){
+    return SQLITE_TOOBIG;
+  }
+  doltliteHashToHex(&pEdited->commitHash, zHex);
+  zMsg = sqlite3_mprintf(
+      "edit action paused at commit %s (%s). \n\n"
+      "You can now modify the working directory and stage changes. "
+      "When ready, continue the rebase by calling dolt_rebase('--continue')",
+      zHex,
+      pEdited->zCommitMessage ? pEdited->zCommitMessage : "");
+  if( !zMsg ) return SQLITE_NOMEM;
+  rc = doltliteSetSessionPendingReplayCommit(db, 0);
+  if( rc==SQLITE_OK ) rc = rebaseWritePlanRows(db, aRest, nRest);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionRebaseState(
+        db, flags, pOrigCat, pOrigHead, zOrig, zReturn);
+  }
+  /* An open BEGIN already holds the plan and the flag. Persisting here
+  ** races the in-transaction catalog and the later COMMIT reloads a
+  ** working set from before this pause. Autocommit has no such txn, so
+  ** the pause has to be saved before the statement ends. */
+  if( rc==SQLITE_OK && db->autoCommit ){
+    rc = doltlitePersistWorkingSet(db);
+    if( rc==SQLITE_OK ) rc = doltliteVcSealBranchStyleTxn(db);
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zMsg);
+    return rc;
+  }
+  sqlite3ExpirePreparedStatements(db, 0);
+  sqlite3ResetAllSchemasOfConnection(db);
+  sqlite3_result_text(context, zMsg, -1, sqlite3_free);
+  return SQLITE_OK;
+}
+
+static int rebasePauseIfEdit(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const RebasePlanRow *pRow,
+  const RebasePlanRow *aRest,
+  int nRest,
+  const ProllyHash *pHeadBefore,
+  const ProllyHash *pOrigCat,
+  const ProllyHash *pOrigHead,
+  const char *zOrig,
+  const char *zReturn,
+  int keepEmpty,
+  int *pbPaused
+){
+  ProllyHash headAfter;
+  int rc;
+  *pbPaused = 0;
+  if( !pRow->zAction || strcmp(pRow->zAction, "edit")!=0 ) return SQLITE_OK;
+  memset(&headAfter, 0, sizeof(headAfter));
+  doltliteGetSessionHead(db, &headAfter);
+  if( prollyHashCompare(pHeadBefore, &headAfter)==0 ) return SQLITE_OK;
+  rc = rebaseEnterEditPause(db, context, aRest, nRest, pRow,
+                            pOrigCat, pOrigHead, zOrig, zReturn, keepEmpty);
+  if( rc==SQLITE_OK ) *pbPaused = 1;
+  return rc;
+}
+
 static int rebaseFinalizeContinueRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   RebaseFinalizeRefsCtx *p = (RebaseFinalizeRefsCtx*)pArg;
   ProllyHash origHead;
@@ -1659,8 +1744,21 @@ static int rebaseClaimActiveEnd(
   locked = 1;
   rc = chunkStoreForceRefresh(cs);
   if( rc!=SQLITE_OK ) goto claim_done;
-  /* Return branch is a reopen mirror; the temp working branch owns terminal ops. */
-  rc = doltliteLoadWorkingSet(db, zWorkingBranch);
+  /* Return branch is a reopen mirror; the temp working branch owns terminal ops.
+  ** Inside a transaction the session can be ahead of that blob: claim cleared
+  ** it, then an edit pause put the flag back without a COMMIT. Loading here
+  ** would drop that pause. */
+  {
+    int diskActive = 0;
+    int sessionActive = (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_ACTIVE)!=0;
+    int onWorking = sqlite3_stricmp(zBranch, zWorkingBranch)==0;
+    rc = doltliteBranchWorkingSetIsRebasing(db, zWorkingBranch, &diskActive);
+    if( rc==SQLITE_OK && !diskActive && sessionActive && onWorking && !db->autoCommit ){
+      rc = SQLITE_OK;
+    }else if( rc==SQLITE_OK ){
+      rc = doltliteLoadWorkingSet(db, zWorkingBranch);
+    }
+  }
   if( rc!=SQLITE_OK ) goto claim_done;
   savedFlags = doltliteGetSessionRebaseFlags(db);
   doltliteGetSessionRebaseState(db, &isRebasing, &savedPre, &savedOnto,
@@ -2018,8 +2116,14 @@ static int rebaseAdoptPersistedRebase(sqlite3 *db){
   if( !zWorking ) return SQLITE_NOMEM;
   db->busyHandler.nBusy = 0;
   do {
+    int onWorking = zCur && sqlite3_stricmp(zCur, zWorking)==0;
     rc = doltliteBranchWorkingSetIsRebasing(db, zWorking, &active);
-    if( rc==SQLITE_OK && !active ) rc = SQLITE_DONE;
+    /* Claim clears the blob before replay. An edit pause inside the open
+    ** transaction puts the flag back in the session before COMMIT writes
+    ** the blob, so this connection is still the rebase. */
+    if( rc==SQLITE_OK && !active && !(isRebasing && onWorking) ){
+      rc = SQLITE_DONE;
+    }
     if( rc==SQLITE_OK
      && (!zCur || sqlite3_stricmp(zCur, zWorking)!=0) ){
       rc = doltliteCheckoutPersistedRebase(db, zWorking);
@@ -2272,6 +2376,10 @@ static int rebaseReplayPausedTail(
   int iStart,
   int nPlan,
   int keepEmpty,
+  const ProllyHash *pOrigCat,
+  const ProllyHash *pOrigHead,
+  const char *zOrig,
+  const char *zReturn,
   int *pbPaused
 ){
   int bKeepTxn = doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_PLAIN;
@@ -2281,9 +2389,13 @@ static int rebaseReplayPausedTail(
   for(i=iStart; i<nPlan; i++){
     int nConflicts = 0;
     int nViolations = 0;
+    ProllyHash headBefore;
     char *zApplyErr = 0;
-    int rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
-                              &nConflicts, &nViolations, &zApplyErr);
+    int rc;
+    memset(&headBefore, 0, sizeof(headBefore));
+    doltliteGetSessionHead(db, &headBefore);
+    rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
+                          &nConflicts, &nViolations, &zApplyErr);
     sqlite3_free(zApplyErr);
     if( rc!=SQLITE_OK ) return rc;
     if( nConflicts>0 || nViolations>0 ){
@@ -2301,6 +2413,17 @@ static int rebaseReplayPausedTail(
       }
       *pbPaused = 1;
       return SQLITE_OK;
+    }
+    if( strcmp(aPlan[i].zAction, "edit")==0 ){
+      int bEditPause = 0;
+      rc = rebasePauseIfEdit(db, context, &aPlan[i], aPlan+i+1, nPlan-i-1,
+                             &headBefore, pOrigCat, pOrigHead, zOrig, zReturn,
+                             keepEmpty, &bEditPause);
+      if( rc!=SQLITE_OK ) return rc;
+      if( bEditPause ){
+        *pbPaused = 1;
+        return SQLITE_OK;
+      }
     }
   }
   return SQLITE_OK;
@@ -2372,6 +2495,9 @@ static void doltliteRebasePausedContinue(
   sqlite3 *db
 ){
   const char *zOrigConst = 0;
+  const char *zReturnConst = 0;
+  char zPauseOrig[WS_REBASE_BRANCH_LEN];
+  char zPauseReturn[WS_REBASE_BRANCH_LEN];
   char *zOrig = 0;
   char *zWorking = 0;
   char *zNames = 0;
@@ -2383,13 +2509,25 @@ static void doltliteRebasePausedContinue(
   int bDropped = 0;
   int pausedAgain = 0;
   int rc;
+  ProllyHash pauseCat;
+  ProllyHash pauseHead;
 
-  doltliteGetSessionRebaseState(db, 0, 0, 0, &zOrigConst, 0);
-  if( !zOrigConst || !zOrigConst[0] ){
+  memset(&pauseCat, 0, sizeof(pauseCat));
+  memset(&pauseHead, 0, sizeof(pauseHead));
+  zPauseOrig[0] = 0;
+  zPauseReturn[0] = 0;
+  /* Copy the rebase identity before replay. A later commit can free the
+  ** session strings while this transaction still owns the pause. */
+  doltliteGetSessionRebaseState(db, 0, &pauseCat, &pauseHead,
+                                &zOrigConst, &zReturnConst);
+  if( !zOrigConst || !zOrigConst[0]
+   || !zReturnConst || !zReturnConst[0] ){
     sqlite3_result_error(context, "no rebase in progress", -1);
     return;
   }
-  zOrig = sqlite3_mprintf("%s", zOrigConst);
+  sqlite3_snprintf(sizeof(zPauseOrig), zPauseOrig, "%s", zOrigConst);
+  sqlite3_snprintf(sizeof(zPauseReturn), zPauseReturn, "%s", zReturnConst);
+  zOrig = sqlite3_mprintf("%s", zPauseOrig);
   zWorking = rebaseBuildWorkingBranchName(zOrig);
   if( !zOrig || !zWorking ){
     sqlite3_free(zOrig);
@@ -2489,7 +2627,7 @@ static void doltliteRebasePausedContinue(
   rc = rebaseReplayPausedTail(
       db, context, aPlan, idx<nPlan ? idx + 1 : nPlan, nPlan,
       (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_EMPTY_KEEP)!=0,
-      &pausedAgain);
+      &pauseCat, &pauseHead, zPauseOrig, zPauseReturn, &pausedAgain);
   if( pausedAgain ){
     rebaseFreePlan(aPlan, nPlan);
     sqlite3_free(zOrig);
@@ -2736,10 +2874,10 @@ static void doltliteRebaseInteractiveContinue(
     const char *zAct = aPlan[i].zAction;
     if( strcmp(zAct,"pick")!=0 && strcmp(zAct,"reword")!=0
      && strcmp(zAct,"squash")!=0 && strcmp(zAct,"fixup")!=0
-     && strcmp(zAct,"drop")!=0 ){
+     && strcmp(zAct,"drop")!=0 && strcmp(zAct,"edit")!=0 ){
       char *zMsg = sqlite3_mprintf(
           "unknown rebase action \"%s\": expected pick, reword, squash, "
-          "fixup or drop", zAct);
+          "fixup, drop or edit", zAct);
       rc = SQLITE_ERROR;
       if( zMsg ){
         sqlite3_result_error(context, zMsg, -1);
@@ -2751,15 +2889,22 @@ static void doltliteRebaseInteractiveContinue(
     }
   }
 
-  i = 0;
-  while( i < nPlan && strcmp(aPlan[i].zAction, "drop")==0 ) i++;
-  if( i < nPlan
-   && strcmp(aPlan[i].zAction, "pick")!=0
-   && strcmp(aPlan[i].zAction, "reword")!=0 ){
-    rc = SQLITE_ERROR;
-    sqlite3_result_error(context,
-      "first non-drop action must be pick or reword", -1);
-    goto abort_err_silent;
+  /* Squash and fixup amend the commit before them, so a pick or reword
+  ** has to come first. edit applies its own commit and may lead the plan. */
+  {
+    int seenAnchor = 0;
+    for(i=0; i<nPlan; i++){
+      const char *zAct = aPlan[i].zAction;
+      if( strcmp(zAct, "pick")==0 || strcmp(zAct, "reword")==0 ){
+        seenAnchor = 1;
+      }else if( (strcmp(zAct, "squash")==0 || strcmp(zAct, "fixup")==0)
+             && !seenAnchor ){
+        rc = SQLITE_ERROR;
+        sqlite3_result_error(context,
+          "first non-drop action must be pick or reword", -1);
+        goto abort_err_silent;
+      }
+    }
   }
 
   for(i=0; i<nPlan; i++){
@@ -2832,8 +2977,11 @@ static void doltliteRebaseInteractiveContinue(
   for(i=0; i<nPlan; i++){
     int nConflicts = 0;
     int nViolations = 0;
+    ProllyHash headBefore;
+    memset(&headBefore, 0, sizeof(headBefore));
     sqlite3_free(zReplayErr);
     zReplayErr = 0;
+    doltliteGetSessionHead(db, &headBefore);
     rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
                           &nConflicts, &nViolations, &zReplayErr);
     if( rc==SQLITE_BUSY ) goto abort_err_cas;
@@ -2852,6 +3000,27 @@ static void doltliteRebaseInteractiveContinue(
       sqlite3_free(zReturnBranch);
       sqlite3_free(zWorking);
       return;
+    }
+    if( strcmp(aPlan[i].zAction, "edit")==0 ){
+      int bEditPause = 0;
+      rc = rebasePauseIfEdit(db, context, &aPlan[i], aPlan+i+1, nPlan-i-1,
+                             &headBefore, &preRebaseCat, &expectedOrigHead,
+                             zOrigBranch, zReturnBranch, keepEmpty,
+                             &bEditPause);
+      /* Claim already cleared rebase state. A failed pause may have put it
+      ** back; drop that so recovery does not publish it onto the branch. */
+      if( rc!=SQLITE_OK ){
+        (void)doltliteClearSessionRebaseState(db);
+        goto abort_err;
+      }
+      if( bEditPause ){
+        rebaseFreePlan(aPlan, nPlan);
+        sqlite3_free(zReplayErr);
+        sqlite3_free(zOrigBranch);
+        sqlite3_free(zReturnBranch);
+        sqlite3_free(zWorking);
+        return;
+      }
     }
   }
   doltliteGetSessionHead(db, &curHead);
