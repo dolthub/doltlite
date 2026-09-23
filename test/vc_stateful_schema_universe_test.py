@@ -26,6 +26,34 @@ NEEDLES = (
     "CREATE TABLE t_wor",
     "CREATE TABLE t_desc",
     "CREATE TABLE t_gen",
+    "CREATE TABLE t_flex",
+    "r REAL",
+    "num NUMERIC",
+    "trail TEXT",
+    "SET %s=NULL",
+    "SET u=1.0",
+    "length(coalesce(",
+    "WHERE %s IS NOT NULL",
+    "RENAME COLUMN %s TO %s",
+    "dolt_merge('--squash'",
+    "dolt_merge('--no-ff'",
+    "dolt_merge('--no-commit'",
+    "dolt_merge('--abort')",
+    "dolt_cherry_pick('--abort')",
+    "dolt_rebase('-i'",
+    "dolt_rebase('--continue')",
+    "dolt_rebase('--abort')",
+    "dolt_commit('--allow-empty'",
+    "dolt_commit('--skip-empty'",
+    "dolt_commit('--force'",
+    "dolt_commit('--amend'",
+    "dolt_reset('--hard'",
+    "dolt_reset('--soft'",
+    "PRAGMA query_only=ON",
+    "dolt_workspace_t_flex",
+    "dolt_clean()",
+    "dolt_conflicts_resolve('--ours'",
+    "dolt_conflicts_resolve('--theirs'",
 )
 
 
@@ -45,7 +73,7 @@ def main():
         passed += p
         failed += f
 
-    shapes = ("t_int", "t_text", "t_comp", "t_wor", "t_desc", "t_gen")
+    shapes = ("t_int", "t_text", "t_comp", "t_wor", "t_desc", "t_gen", "t_flex")
     p, f = check(
         "multiple_shape_tables",
         all(("CREATE TABLE %s" % n) in src for n in shapes),

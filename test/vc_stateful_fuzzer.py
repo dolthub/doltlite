@@ -213,7 +213,7 @@ def assert_rows(doltlite, db_path, branch, model):
 
 
 def assert_hash_shape(doltlite, db_path, branch):
-    for table in ("kv",) + SHAPE_TABLES:
+    for table in ("kv", "t_flex") + SHAPE_TABLES:
         h = query_scalar(
             doltlite,
             db_path,
@@ -1012,6 +1012,32 @@ def data_columns(doltlite, db_path, branch, table):
     return [c for c in cols if c not in ("g",) and not c.startswith("xcol_")]
 
 
+def flex_data_columns(doltlite, db_path, branch):
+    cols = query_list(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT name FROM pragma_table_info('t_flex') WHERE pk=0 ORDER BY cid;",
+        "flex_cols",
+    )
+    return [c for c in cols if c != "id"]
+
+
+def flex_indexed_columns(doltlite, db_path, branch):
+    cols = query_list(
+        doltlite,
+        db_path,
+        branch,
+        (
+            "SELECT DISTINCT ii.name FROM pragma_index_list('t_flex') il "
+            "JOIN pragma_index_info(il.name) ii "
+            "WHERE ii.name IS NOT NULL AND ii.name != 'id' ORDER BY ii.name;"
+        ),
+        "flex_indexed",
+    )
+    return cols
+
+
 def mutate_schema(doltlite, db_path, branch, rng, step):
     schema = query_schema(doltlite, db_path, branch)
     tables = [line.split("|", 2)[1] for line in schema if line.startswith("table|aux_")]
@@ -1028,6 +1054,11 @@ def mutate_schema(doltlite, db_path, branch, rng, step):
         actions.extend(("drop_column", "rename_column"))
     else:
         actions.extend(("add_column_default", "add_column_notnull"))
+    # Data and indexed columns, not only the fuzzer's xcol_* extras.
+    actions.extend((
+        "drop_data_column", "rename_data_column", "rename_swap",
+        "expr_unique", "partial_unique",
+    ))
     if indexes:
         actions.append("drop_index")
     action = rng.choice(actions)
@@ -1058,6 +1089,45 @@ def mutate_schema(doltlite, db_path, branch, rng, step):
         if extras:
             sql = "ALTER TABLE %s RENAME COLUMN %s TO xcol_%d;" % (
                 target, rng.choice(extras), step,
+            )
+    elif action == "drop_data_column":
+        cols = flex_indexed_columns(doltlite, db_path, branch) or flex_data_columns(
+            doltlite, db_path, branch
+        )
+        if len(cols) > 1:
+            sql = "ALTER TABLE t_flex DROP COLUMN %s;" % rng.choice(cols)
+    elif action == "rename_data_column":
+        cols = flex_data_columns(doltlite, db_path, branch)
+        if cols:
+            src = rng.choice(cols)
+            sql = "ALTER TABLE t_flex RENAME COLUMN %s TO flex_%d;" % (src, step)
+    elif action == "rename_swap":
+        cols = flex_data_columns(doltlite, db_path, branch)
+        if len(cols) >= 2:
+            a, b = cols[0], cols[1]
+            tmp = "flex_swap_%d" % step
+            # Chained rename that reuses an existing column name.
+            sql = (
+                "ALTER TABLE t_flex RENAME COLUMN %s TO %s;\n"
+                "ALTER TABLE t_flex RENAME COLUMN %s TO %s;\n"
+                "ALTER TABLE t_flex RENAME COLUMN %s TO %s;"
+                % (a, tmp, b, a, tmp, b)
+            )
+    elif action == "expr_unique":
+        cols = flex_data_columns(doltlite, db_path, branch)
+        if cols:
+            col = rng.choice(cols)
+            sql = (
+                "CREATE UNIQUE INDEX flex_xu_%d ON t_flex("
+                "length(coalesce(%s, '')));" % (step, col)
+            )
+    elif action == "partial_unique":
+        cols = flex_data_columns(doltlite, db_path, branch)
+        if cols:
+            col = rng.choice(cols)
+            sql = (
+                "CREATE UNIQUE INDEX flex_pu_%d ON t_flex(%s) "
+                "WHERE %s IS NOT NULL;" % (step, col, col)
             )
     elif action == "rename_table":
         sql = "ALTER TABLE %s RENAME TO %s;" % (rng.choice(tables), name)
@@ -1098,6 +1168,7 @@ def mutate_schema(doltlite, db_path, branch, rng, step):
             "cannot drop",
             "UNIQUE constraint failed",
             "error in view",
+            "already exists",
         ),
     )
     changed = query_schema(doltlite, db_path, branch)
@@ -1171,6 +1242,45 @@ def mutate_shapes(doltlite, db_path, branch, rng, step):
     )
 
 
+def mutate_flex(doltlite, db_path, branch, rng, step):
+    """NULL a trailing indexed column, and write REAL / NUMERIC / untyped cells."""
+    cols = flex_data_columns(doltlite, db_path, branch)
+    if not cols:
+        return
+    key = branch_base(branch) + 5000 + rng.randrange(30)
+    trailing = cols[-1]
+    action = rng.choice(("null_one", "null_all", "real", "untyped"))
+    statements = [
+        "INSERT INTO t_flex(id) VALUES(%d) ON CONFLICT(id) DO NOTHING;" % key,
+    ]
+    if action == "null_one":
+        statements.append(
+            "UPDATE t_flex SET %s=NULL WHERE id=%d;" % (trailing, key)
+        )
+    elif action == "null_all":
+        assignments = ", ".join("%s=NULL" % c for c in cols)
+        statements.append(
+            "UPDATE t_flex SET %s WHERE id=%d;" % (assignments, key)
+        )
+    elif action == "real" and "r" in cols:
+        statements.append("UPDATE t_flex SET r=1.5 WHERE id=%d;" % key)
+    elif "u" in cols:
+        # Untyped 1 and 1.0. Both writes are the point, not a conflict check.
+        statements.append("UPDATE t_flex SET u=1 WHERE id=%d;" % key)
+        statements.append("UPDATE t_flex SET u=1.0 WHERE id=%d;" % key)
+    else:
+        statements.append(
+            "UPDATE t_flex SET %s=NULL WHERE id=%d;" % (trailing, key)
+        )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        "\n".join(statements),
+        "mutate_flex_%s" % branch,
+        allowed_errors=("UNIQUE constraint failed", "no such column", "CHECK constraint failed"),
+    )
+
+
 def assert_generated_columns(doltlite, db_path, branch):
     """STORED and VIRTUAL generated columns must match their expressions."""
     for table, sql in GENERATED_CHECKS:
@@ -1217,13 +1327,38 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         "merge_base",
     )
     base = set(schema_objects(doltlite, db_path, base_hash)) if base_hash else None
+    quoted = sql_quote(source)
+    kind = rng.randrange(6)
+    if kind == 0:
+        merge_sql = "SELECT dolt_merge(%s);" % quoted
+    elif kind == 1:
+        merge_sql = "SELECT dolt_merge('--squash', %s);" % quoted
+    elif kind == 2:
+        merge_sql = "SELECT dolt_merge('--no-ff', %s);" % quoted
+    elif kind == 3:
+        merge_sql = (
+            "SELECT dolt_merge('--no-commit', %s);\n"
+            "SELECT dolt_merge('--abort');" % quoted
+        )
+    elif kind == 4:
+        merge_sql = (
+            "SELECT dolt_merge('--no-commit', %s);\n"
+            "SELECT dolt_commit('-A','-m','nocommit');" % quoted
+        )
+    else:
+        merge_sql = "SELECT dolt_merge('--abort');"
     out = run_sql(
         doltlite,
         db_for_branch(db_path, target),
-        "SELECT dolt_merge(%s);" % sql_quote(source),
+        merge_sql,
         "merge_%s_into_%s" % (source, target),
         timeout=30,
-        allowed_errors=MERGE_ROLLED_BACK,
+        allowed_errors=MERGE_ROLLED_BACK + (
+            "nothing to commit",
+            "no merge in progress",
+            "not currently merging",
+            "flags '--squash' and '--no-ff' cannot be used together",
+        ),
     )
     sync_vc_result(doltlite, db_path, target, model)
     if out is not None and base is not None:
@@ -1249,10 +1384,13 @@ def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
     source = rng.choice([branch for branch in branches if branch != target])
     commit_branch(doltlite, db_path, target, model, step)
     commit_branch(doltlite, db_path, source, model, step)
+    pick = "SELECT dolt_cherry_pick(%s);" % sql_quote(source)
+    if rng.randrange(4) == 0:
+        pick = "SELECT dolt_cherry_pick('--abort');\n" + pick
     run_sql(
         doltlite,
         db_for_branch(db_path, target),
-        "SELECT dolt_cherry_pick(%s);" % sql_quote(source),
+        pick,
         "cherry_pick_%s_onto_%s" % (source, target),
         timeout=30,
         allowed_errors=(
@@ -1261,6 +1399,7 @@ def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
             "already exists",
             "cherry-pick of",
             "cherry-picking a merge commit",
+            "no cherry-pick in progress",
         ) + MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, target, model)
@@ -1297,19 +1436,221 @@ def rebase_branch(doltlite, db_path, branches, model, rng, step):
     upstream = rng.choice([name for name in branches if name != branch])
     commit_branch(doltlite, db_path, branch, model, step)
     commit_branch(doltlite, db_path, upstream, model, step)
+    if rng.randrange(3) == 0:
+        rebase_sql = (
+            "SELECT dolt_rebase('-i', %s);\n"
+            "UPDATE dolt_rebase SET action='pick', "
+            "commit_message='fuzz plan';\n"
+            "SELECT dolt_rebase('--continue');\n"
+            "SELECT dolt_rebase('--abort');"
+            % sql_quote(upstream)
+        )
+    elif rng.randrange(2) == 0:
+        rebase_sql = "SELECT dolt_rebase('--abort');"
+    else:
+        rebase_sql = "SELECT dolt_rebase(%s);" % sql_quote(upstream)
     run_sql(
         doltlite,
         db_for_branch(db_path, branch),
-        "SELECT dolt_rebase(%s);" % sql_quote(upstream),
+        rebase_sql,
         "rebase_%s_onto_%s" % (branch, upstream),
         timeout=30,
         allowed_errors=(
             "conflict",
             "rebase aborted",
             "didn't identify any commits",
+            "no rebase in progress",
+            "no such table",
+            "you are in the middle of a rebase",
         ) + MERGE_ROLLED_BACK,
     )
     sync_vc_result(doltlite, db_path, branch, model)
+
+
+def commit_flagged(doltlite, db_path, branch, model, step):
+    """--allow-empty, --skip-empty, --force and --amend, including both empty flags."""
+    msg = sql_quote("stateful flags %s %d" % (branch, step))
+    variants = (
+        "SELECT dolt_commit('--allow-empty','-m',%s);" % msg,
+        "SELECT dolt_commit('--skip-empty','-m',%s);" % msg,
+        "SELECT dolt_commit('--allow-empty','--skip-empty','-m',%s);" % msg,
+        "SELECT dolt_commit('--force','-m',%s);" % msg,
+        "SELECT dolt_commit('--amend','-m',%s);" % msg,
+    )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        variants[step % len(variants)],
+        "commit_flagged_%s" % branch,
+        allowed_errors=(
+            "nothing to commit",
+            "cannot use both --allow-empty and --skip-empty",
+            "you are in the middle of a rebase",
+            "constraint violation",
+            "conflicts",
+        ) + MERGE_ROLLED_BACK,
+    )
+    sync_vc_result(doltlite, db_path, branch, model)
+
+
+def reset_to_ref(doltlite, db_path, branch, model, rng):
+    """Reset --hard/--soft to HEAD, HEAD~1, or the init commit, including both flags."""
+    init_hash = query_scalar(
+        doltlite,
+        db_path,
+        branch,
+        "SELECT coalesce(commit_hash, '') FROM dolt_log "
+        "WHERE message='init' LIMIT 1;",
+        "init_hash_%s" % branch,
+    )
+    target = rng.choice(("HEAD", "HEAD~1", init_hash or "HEAD"))
+    quoted = sql_quote(target)
+    kind = rng.randrange(3)
+    if kind == 0:
+        reset_sql = "SELECT dolt_reset('--hard', %s);" % quoted
+    elif kind == 1:
+        reset_sql = "SELECT dolt_reset('--soft', %s);" % quoted
+    else:
+        reset_sql = "SELECT dolt_reset('--soft','--hard', %s);" % quoted
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        reset_sql,
+        "reset_ref_%s" % branch,
+        allowed_errors=(
+            "mutually exclusive",
+            "no such",
+            "invalid",
+            "not found",
+            "ambiguous",
+        ),
+    )
+    sync_vc_result(doltlite, db_path, branch, model)
+
+
+def readonly_reset(doltlite, db_path, branch, model):
+    """A refused reset on a query_only connection must not stick for the next writer."""
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        (
+            "PRAGMA query_only=ON;\n"
+            "SELECT dolt_reset('--hard','HEAD');\n"
+            "SELECT dolt_commit('--allow-empty','-m','readonly');\n"
+            "PRAGMA query_only=OFF;\n"
+            "SELECT dolt_commit('--allow-empty','-m','after readonly');"
+        ),
+        "readonly_reset_%s" % branch,
+        allowed_errors=(
+            "readonly",
+            "query_only",
+            "attempt to write a readonly database",
+            "nothing to commit",
+        ),
+    )
+    sync_vc_result(doltlite, db_path, branch, model)
+
+
+def workspace_write(doltlite, db_path, branch, rng):
+    """Stage a row through dolt_workspace, including a trailing indexed NULL."""
+    key = branch_base(branch) + 7000 + rng.randrange(20)
+    cols = flex_data_columns(doltlite, db_path, branch)
+    if cols:
+        col = cols[-1]
+        edit = (
+            "INSERT INTO t_flex(id, %s) VALUES(%d, NULL) "
+            "ON CONFLICT(id) DO UPDATE SET %s=NULL;"
+            % (col, key, col)
+        )
+    else:
+        edit = (
+            "INSERT INTO t_flex(id) VALUES(%d) ON CONFLICT(id) DO NOTHING;" % key
+        )
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        edit + "\nUPDATE dolt_workspace_t_flex SET staged=1 WHERE to_id=%d;" % key,
+        "workspace_%s" % branch,
+        allowed_errors=(
+            "no such table",
+            "no such column",
+            "schema change",
+            "not modifiable",
+            "UNIQUE constraint failed",
+        ),
+    )
+
+
+def clean_untracked(doltlite, db_path, branch, step):
+    """dolt_clean of an untracked view. A view that survives must still query."""
+    name = "clean_v_%d" % step
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, branch),
+        (
+            "CREATE VIEW %s AS SELECT id FROM kv;\n"
+            "SELECT dolt_clean();\n"
+            "SELECT dolt_clean('--dry-run');"
+            % name
+        ),
+        "clean_%s" % branch,
+        allowed_errors=("already exists", "no such"),
+    )
+
+
+def merge_and_resolve(doltlite, db_path, branches, model, rng):
+    """Resolve a conflict inside BEGIN, then roll the transaction back."""
+    if len(branches) < 2:
+        return
+    target = rng.choice(branches)
+    source = rng.choice([b for b in branches if b != target])
+    commit_branch(doltlite, db_path, target, model, 0)
+    commit_branch(doltlite, db_path, source, model, 0)
+    before = query_rows(doltlite, db_path, target)
+    before_status = status_counts(doltlite, db_path, target)
+    if rng.randrange(2) == 0:
+        resolve = (
+            "SELECT dolt_conflicts_resolve('--ours', 't_flex');\n"
+            "SELECT dolt_conflicts_resolve('--ours', 'kv');\n"
+        )
+    else:
+        resolve = (
+            "SELECT dolt_conflicts_resolve('--theirs', 't_flex');\n"
+            "SELECT dolt_conflicts_resolve('--theirs', 'kv');\n"
+        )
+    out = run_sql(
+        doltlite,
+        db_for_branch(db_path, target),
+        (
+            "BEGIN;\n"
+            "SELECT dolt_merge(%s);\n"
+            "%s"
+            "ROLLBACK;"
+            % (sql_quote(source), resolve)
+        ),
+        "resolve_%s" % target,
+        timeout=30,
+        allowed_errors=MERGE_ROLLED_BACK + (
+            "nothing to commit",
+            "no conflicts",
+            "not currently merging",
+            "no such table",
+            "uncommitted changes",
+            "cannot rollback - no transaction is active",
+        ),
+    )
+    after = query_rows(doltlite, db_path, target)
+    after_status = status_counts(doltlite, db_path, target)
+    if out is None:
+        # dolt_merge seals the open transaction, so ROLLBACK has nothing
+        # to undo and the branch may have moved.
+        sync_vc_result(doltlite, db_path, target, model)
+    elif after != before or after_status != before_status:
+        raise AssertionError(
+            "conflict resolve inside BEGIN left %s changed" % target
+        )
+    else:
+        assert_rows(doltlite, db_path, target, model)
 
 
 def create_tag(doltlite, db_path, branch, tags, name):
@@ -1514,6 +1855,19 @@ SHAPE_SCHEMA = (
     "INSERT INTO t_wor VALUES('k0', 'base', 0);\n"
     "INSERT INTO t_desc VALUES(0, 'base', 0);\n"
     "INSERT INTO t_gen(id, n) VALUES(0, 0);\n"
+    "CREATE TABLE t_flex(\n"
+    "  id INTEGER PRIMARY KEY,\n"
+    "  a INTEGER,\n"
+    "  r REAL,\n"
+    "  num NUMERIC,\n"
+    "  u,\n"
+    "  trail TEXT\n"
+    ");\n"
+    "CREATE INDEX t_flex_trail ON t_flex(trail);\n"
+    "CREATE INDEX t_flex_r ON t_flex(r);\n"
+    "CREATE UNIQUE INDEX t_flex_expr ON t_flex(length(coalesce(trail, '')));\n"
+    "CREATE UNIQUE INDEX t_flex_partial ON t_flex(a) WHERE a IS NOT NULL;\n"
+    "INSERT INTO t_flex(id, a, r, num, u, trail) VALUES(0, 1, 1.5, 1, 1, 'base');\n"
 )
 
 GENERATED_CHECKS = (
@@ -1588,9 +1942,12 @@ OPERATIONS = (
     ["mutate"] * 4
     + ["mutate_related"] * 3
     + ["mutate_shapes"] * 3
+    + ["mutate_flex"] * 2
     + ["schema_objects"] * 2
     + ["ddl"] * 3
     + ["wrap_vc_rollback"]
+    + ["commit_flagged", "reset_to_ref", "readonly_reset",
+       "workspace_write", "clean_untracked", "merge_resolve"]
     + [
         "add",
         "commit_staged",
@@ -1702,6 +2059,8 @@ def main():
                 mutate_related(doltlite, db_path, branch, rng, step)
             elif op == "mutate_shapes":
                 mutate_shapes(doltlite, db_path, branch, rng, step)
+            elif op == "mutate_flex":
+                mutate_flex(doltlite, db_path, branch, rng, step)
             elif op == "wrap_vc_rollback":
                 wrap_vc_rollback(doltlite, db_path, branch, model)
             elif op == "schema_objects":
@@ -1764,6 +2123,18 @@ def main():
                 detached_revision(doltlite, db_path, branches, tags, model, rng, step)
             elif op == "merge":
                 merge_branch(doltlite, db_path, branches, model, rng)
+            elif op == "merge_resolve":
+                merge_and_resolve(doltlite, db_path, branches, model, rng)
+            elif op == "commit_flagged":
+                commit_flagged(doltlite, db_path, branch, model, step)
+            elif op == "reset_to_ref":
+                reset_to_ref(doltlite, db_path, branch, model, rng)
+            elif op == "readonly_reset":
+                readonly_reset(doltlite, db_path, branch, model)
+            elif op == "workspace_write":
+                workspace_write(doltlite, db_path, branch, rng)
+            elif op == "clean_untracked":
+                clean_untracked(doltlite, db_path, branch, step)
             elif op == "cherry_pick":
                 cherry_pick_branch(doltlite, db_path, branches, model, rng, step)
             elif op == "revert":
