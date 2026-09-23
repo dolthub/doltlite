@@ -22,6 +22,9 @@ struct WorkspaceRow {
   u8 keyIsIntKey;
   u8 *pOldVal; int nOldVal;
   u8 *pNewVal; int nNewVal;
+  /* Display record was rebuilt from the key; the stored value is empty. */
+  u8 oldEmpty;
+  u8 newEmpty;
 };
 
 /* Rows shared by the producing cursor and the table (xUpdate rowids). A
@@ -168,7 +171,6 @@ static int wsAppendRow(
 
   memset(&row, 0, sizeof(row));
   row.id = id;
-  row.xRowid = ++pVtab->nextRowid;
   row.staged = staged;
   row.diffType = pChange->type;
   row.flags = flags;
@@ -208,6 +210,7 @@ static int wsAppendRow(
       if( pRec ){
         row.pOldVal = pRec;
         row.nOldVal = nRec;
+        row.oldEmpty = 1;
       }
     }
     if( row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE ){
@@ -221,9 +224,30 @@ static int wsAppendRow(
       if( pRec ){
         row.pNewVal = pRec;
         row.nNewVal = nRec;
+        row.newEmpty = 1;
       }
     }
   }
+  /* An empty stored value and the record rebuilt from its key are the
+  ** same clustered row. */
+  if( pChange->type==PROLLY_DIFF_MODIFY ){
+    int equal = 0;
+    int rcEq = prollyValuesEqual(row.pOldVal, row.nOldVal,
+                                 row.pNewVal, row.nNewVal, &equal);
+    if( rcEq!=SQLITE_OK ){
+      sqlite3_free(row.pKey);
+      sqlite3_free(row.pOldVal);
+      sqlite3_free(row.pNewVal);
+      return rcEq;
+    }
+    if( equal ){
+      sqlite3_free(row.pKey);
+      sqlite3_free(row.pOldVal);
+      sqlite3_free(row.pNewVal);
+      return SQLITE_DONE;
+    }
+  }
+  row.xRowid = ++pVtab->nextRowid;
   if( pRows->n>=pRows->nAlloc ){
     nNew = pRows->nAlloc ? pRows->nAlloc*2 : 16;
     aNew = sqlite3_realloc(pRows->a, nNew*(int)sizeof(WorkspaceRow));
@@ -384,9 +408,17 @@ static int wsLoadNextRow(WorkspaceCursor *c, WorkspaceVtab *pVtab){
     }
     rc = prollyDiffIterStep(&c->iter, &pChange);
     if( rc==SQLITE_ROW && pChange ){
+      /* A filtered scan still numbers rows as the full scan does.
+      ** A modify whose two display records are the same row is not one. */
+      int arc;
       c->nextId++;
       if( c->stagedOnly<0 || c->stagedOnly==c->iterStaged ){
-        return wsAppendRow(c, c->nextId, c->iterStaged, c->iterFlags, pChange);
+        arc = wsAppendRow(c, c->nextId, c->iterStaged, c->iterFlags, pChange);
+        if( arc==SQLITE_DONE ){
+          c->nextId--;
+          continue;
+        }
+        return arc;
       }
       continue;
     }
@@ -875,8 +907,19 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   }
 
   if( pTgt ){
+    const u8 *pIns = pTgt;
+    int nIns = nTgt;
+    int storeEmpty = (pProj==0) && (
+        (makeStaged && r->newEmpty) || (!makeStaged && r->oldEmpty));
+    /* The table stores an empty value when every column is in the key.
+    ** The index update keeps the record rebuilt for display. */
+    static const u8 zEmpty = 0;
+    if( storeEmpty ){
+      pIns = &zEmpty;
+      nIns = 0;
+    }
     rc = prollyMutateInsert(cs, pCache, &pData->root, pData->flags,
-                            r->pKey, r->nKey, r->intKey, pTgt, nTgt, &newRoot);
+                            r->pKey, r->nKey, r->intKey, pIns, nIns, &newRoot);
   }else{
     rc = prollyMutateDelete(cs, pCache, &pData->root, pData->flags,
                             r->pKey, r->nKey, r->intKey, &newRoot);
@@ -956,6 +999,10 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
     /* Unstaged delete: restore staged/HEAD for this PK. */
     if( r->diffType==PROLLY_DIFF_ADD ){
       pVal = 0;
+      nVal = 0;
+    }else if( r->oldEmpty ){
+      static const u8 zEmpty = 0;
+      pVal = (const u8*)&zEmpty;
       nVal = 0;
     }else{
       pVal = r->pOldVal;

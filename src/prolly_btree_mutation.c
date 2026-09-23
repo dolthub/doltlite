@@ -1849,6 +1849,8 @@ int doltliteApplyRawRowMutation(
   ProllyMutator mut;
   u8 *pOldVal = 0;
   int nOldVal = 0;
+  u8 *pIdxNew = 0;
+  int nIdxNew = 0;
   Table *pTab = 0;
   int rc;
   u8 isIntKey;
@@ -1917,11 +1919,18 @@ int doltliteApplyRawRowMutation(
   }
   prollyMutMapFree(&mm);
 
-  /* Secondary indexes: KeyInfo path so NOCASE/RTRIM match VDBE encoding. */
+  /* Secondary indexes: KeyInfo path so NOCASE/RTRIM match VDBE encoding.
+  ** An empty clustered value still carries the key columns for an insert. */
+  if( rc==SQLITE_OK && pVal && nVal<=0 ){
+    rc = doltliteRecordFromClusteredKey(db, zTable, pKey, nKey,
+                                        &pIdxNew, &nIdxNew);
+  }
   if( rc==SQLITE_OK && pTab && pTab->pIndex
-   && (pOldVal || (pVal && nVal>0)) ){
+   && (nOldVal>0 || (pIdxNew ? nIdxNew : nVal)>0) ){
     Index *pIdx;
     int iPKey = pTab->iPKey;
+    const u8 *pIndexNew = pIdxNew ? pIdxNew : pVal;
+    int nIndexNew = pIdxNew ? nIdxNew : nVal;
     for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
       struct TableEntry *pIdxTE = 0;
       int j;
@@ -1934,13 +1943,16 @@ int doltliteApplyRawRowMutation(
         }
       }
       if( !pIdxTE ) continue;
+      rc = flushPendingForTable(pBtree, pBt, pIdxTE, 0);
+      if( rc!=SQLITE_OK ) break;
       rc = doltliteIndexApplyRowDelta(
           db, &pBt->store, &pBt->cache, &pIdxTE->root, pIdxTE->flags,
           pIdx, iPKey, intKey, pKey, nKey,
-          pOldVal, nOldVal, pVal, nVal);
+          pOldVal, nOldVal, pIndexNew, nIndexNew);
     }
   }
 
+  sqlite3_free(pIdxNew);
   sqlite3_free(pOldVal);
   return rc;
 }
