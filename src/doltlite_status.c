@@ -578,6 +578,8 @@ static int statusIndexRootsDifferForTable(
   return 0;
 }
 
+static int statusHideRebasePlan(sqlite3 *db, const char *zName);
+
 static int statusCompareIndexSchemaObjects(
   DoltliteStatusCursor *pCur,
   sqlite3 *db,
@@ -627,6 +629,7 @@ static int statusCompareIndexSchemaObjects(
       }
     }
     if( seen ) continue;
+    if( statusHideRebasePlan(db, pRow->zTblName) ) continue;
     pFromEnt = doltliteFindTableByName(aFromEnt, nFromEnt, pRow->zTblName);
     pToEnt = doltliteFindTableByName(aToEnt, nToEnt, pRow->zTblName);
     if( pFromEnt && !pToEnt ){
@@ -980,6 +983,13 @@ rename_done:
   return rc;
 }
 
+/* The plan table is not a user change. A user table of the same name on
+** another branch still shows up. */
+static int statusHideRebasePlan(sqlite3 *db, const char *zName){
+  if( !zName || sqlite3_stricmp(zName, "dolt_rebase")!=0 ) return 0;
+  return doltliteSessionOnRebasePlan(db);
+}
+
 static int compareCatalogs(
   DoltliteStatusCursor *pCur, sqlite3 *db,
   const ProllyHash *pFromCat, const ProllyHash *pToCat,
@@ -1075,6 +1085,10 @@ static int compareCatalogs(
     rc = statusTableName(db, &aTo[i], &zName);
     if( rc==SQLITE_NOTFOUND ) continue;
     if( rc!=SQLITE_OK ) goto compare_done;
+    if( statusHideRebasePlan(db, zName) ){
+      sqlite3_free(zName);
+      continue;
+    }
     if( !staged && strcmp(zName, "sqlite_sequence")==0 ){
       int equal = 0;
       char *zIgnErr = 0;
@@ -1146,6 +1160,10 @@ static int compareCatalogs(
       rc = statusTableName(db, &aFrom[i], &zName);
       if( rc==SQLITE_NOTFOUND ) continue;
       if( rc!=SQLITE_OK ) goto compare_done;
+      if( statusHideRebasePlan(db, zName) ){
+        sqlite3_free(zName);
+        continue;
+      }
       rc = addRow(pCur, zName, staged, "deleted");
       sqlite3_free(zName);
       if( rc!=SQLITE_OK ) goto compare_done;
@@ -1236,6 +1254,8 @@ static int compareCatalogsFiltered(
 
   #define DOLT_STATUS_RENAME_CAP 4096
   useRename = (nFrom <= DOLT_STATUS_RENAME_CAP && nTo <= DOLT_STATUS_RENAME_CAP);
+
+  if( statusHideRebasePlan(db, zFilter) ) return SQLITE_OK;
 
   if( !zFilter ){
     return compareCatalogs(pCur, db, pFromCat, pToCat,

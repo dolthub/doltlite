@@ -1035,7 +1035,118 @@ run_test_match "rebase_merge_parent_before_child_log" \
   "^D,(B,C|C,B),A,U,R$" \
   "$DB11"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3"
+# Interactive rebase must not publish dolt_rebase on the default branch, and
+# -A on the plan branch must not commit that table.
+DBU=/tmp/test_rebase_user_plan_name_$$.db
+rm -f "$DBU"
+cat <<'SQL' | "$DOLTLITE" "$DBU" >/dev/null 2>&1
+CREATE TABLE dolt_rebase(id INTEGER PRIMARY KEY);
+INSERT INTO dolt_rebase VALUES (1);
+SELECT dolt_commit('-Am', 'user table');
+INSERT INTO dolt_rebase VALUES (2);
+SQL
+run_test "user_dolt_rebase_still_in_status" \
+  "SELECT table_name || '|' || status FROM dolt_status;" \
+  "dolt_rebase|modified" \
+  "$DBU"
+
+DBP=/tmp/test_rebase_plan_leak_$$.db
+rm -f "$DBP"
+cat <<'SQL' | "$DOLTLITE" "$DBP" >/dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2,2);
+SELECT dolt_commit('-am', 'main2');
+SQL
+START=$(cat <<'SQL' | "$DOLTLITE" "$DBP/feat" 2>&1
+INSERT INTO t VALUES (10,10);
+SELECT dolt_commit('-am', 'f1');
+SELECT dolt_rebase('-i', 'main');
+SQL
+)
+if echo "$START" | grep -q "interactive rebase started"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_plan_start\n  got: $START"
+fi
+run_test "rebase_plan_hidden_on_working_branch" \
+  "SELECT count(*) FROM dolt_status WHERE table_name='dolt_rebase';
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase';
+   SELECT count(*) FROM dolt_rebase;" \
+  "0
+1
+1" \
+  "$DBP/dolt_rebase_feat"
+run_test_match "rebase_plan_commit_all_is_clean" \
+  "SELECT dolt_commit('-Am', 'should_not_commit_plan');" \
+  "nothing to commit" \
+  "$DBP/dolt_rebase_feat"
+run_test "rebase_plan_main_has_no_plan" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase';
+   SELECT count(*) FROM dolt_status;" \
+  "0
+0" \
+  "$DBP"
+run_test_match "rebase_plan_main_commit_all_is_clean" \
+  "SELECT dolt_commit('-Am', 'main_commits_plan_table');" \
+  "nothing to commit" \
+  "$DBP"
+run_test "rebase_plan_main_did_not_commit" \
+  "SELECT count(*) FROM dolt_log WHERE message='main_commits_plan_table';" \
+  "0" \
+  "$DBP"
+run_test "rebase_plan_add_stages_user_table_only" \
+  "INSERT INTO t VALUES (11,11);
+   SELECT table_name || '|' || staged || '|' || status FROM dolt_status ORDER BY 1;
+   SELECT dolt_add('-A');
+   SELECT table_name || '|' || staged || '|' || status FROM dolt_status ORDER BY 1;" \
+  "t|0|modified
+0
+t|1|modified" \
+  "$DBP/dolt_rebase_feat"
+ROWC=$(echo "SELECT dolt_commit('-m', 'row11');" | "$DOLTLITE" "$DBP/dolt_rebase_feat" 2>&1)
+if echo "$ROWC" | grep -q "Error"; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_plan_user_commit\n  got: $ROWC"
+else
+  PASS=$((PASS+1))
+fi
+run_test "rebase_plan_commit_omits_plan" \
+  "SELECT count(*) FROM t WHERE pk=11;
+   SELECT count(*) FROM dolt_rebase;
+   SELECT count(*) FROM dolt_schema_diff('HEAD~1','HEAD')
+     WHERE coalesce(to_table_name,'')='dolt_rebase'
+        OR coalesce(from_table_name,'')='dolt_rebase';" \
+  "1
+1
+0" \
+  "$DBP/dolt_rebase_feat"
+run_test_match "rebase_plan_continue_after_user_commit" \
+  "SELECT dolt_rebase('--continue');" \
+  "Successfully rebased and updated refs/heads/feat" \
+  "$DBP"
+run_test "rebase_plan_main_clean_after_continue" \
+  "SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase';
+   SELECT count(*) FROM dolt_log WHERE message='main_commits_plan_table';
+   SELECT count(*) FROM t WHERE pk=11;" \
+  "0
+0
+0" \
+  "$DBP"
+run_test "rebase_plan_feat_has_row_not_plan" \
+  "SELECT group_concat(pk, ',') FROM (SELECT pk FROM t ORDER BY pk);
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase';
+   SELECT count(*) FROM dolt_log WHERE message='row11';" \
+  "1,2,10,11
+0
+1" \
+  "$DBP/feat"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

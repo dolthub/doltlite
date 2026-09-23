@@ -985,6 +985,26 @@ u8 doltliteGetSessionRebaseFlags(sqlite3 *db){
   return 0;
 }
 
+/* True on dolt_rebase_<orig>, where dolt_rebase is the plan rather than a
+** user table of the same name. */
+int doltliteSessionOnRebasePlan(sqlite3 *db){
+  u8 rebasing = 0;
+  const char *zOrig = 0;
+  const char *zBranch;
+  char *zWorking;
+  int onPlan = 0;
+
+  doltliteGetSessionRebaseState(db, &rebasing, 0, 0, &zOrig, 0);
+  if( !rebasing || !zOrig || !zOrig[0] ) return 0;
+  zBranch = doltliteGetSessionBranch(db);
+  if( !zBranch || !zBranch[0] ) return 0;
+  zWorking = sqlite3_mprintf("dolt_rebase_%s", zOrig);
+  if( !zWorking ) return 0;
+  onPlan = sqlite3_stricmp(zBranch, zWorking)==0;
+  sqlite3_free(zWorking);
+  return onPlan;
+}
+
 int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
                                    const ProllyHash *pPreRebaseCat,
                                    const ProllyHash *pRebaseOnto,
@@ -1202,8 +1222,8 @@ static int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkin
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash workingCatHash;
-  ProllyHash wsHash;
   const char *zBranch;
+  int mirrorReturn = 0;
   int rc;
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
@@ -1223,6 +1243,16 @@ static int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkin
     if( rc != SQLITE_OK ) return rc;
   }
 
+  /* The plan table lives on the working branch. Copying that working-set
+  ** blob onto the return branch publishes it in the default branch catalog. */
+  mirrorReturn = (pBtree->isRebasing & WS_REBASE_FLAG_ACTIVE)
+   && pBtree->zRebaseReturnBranch
+   && pBtree->zRebaseReturnBranch[0]
+   && sqlite3_stricmp(zBranch, pBtree->zRebaseReturnBranch)!=0;
+  if( mirrorReturn ){
+    pBtree->isRebasing = (u8)(pBtree->isRebasing | WS_REBASE_FLAG_META_MIRROR);
+  }
+
   rc = btreeStoreWorkingSetBlob(cs, zBranch, &workingCatHash,
                                 &pBtree->headCommit, &pBtree->vc.stagedCatalog,
                                 pBtree->vc.isMerging, &pBtree->vc.mergeCommitHash,
@@ -1235,33 +1265,12 @@ static int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkin
                                 &pBtree->vc.constraintViolationsHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( (pBtree->isRebasing & WS_REBASE_FLAG_ACTIVE)
-   && pBtree->zRebaseReturnBranch
-   && pBtree->zRebaseReturnBranch[0]
-   && sqlite3_stricmp(zBranch, pBtree->zRebaseReturnBranch)!=0 ){
-    int metaMirror = (pBtree->isRebasing & WS_REBASE_FLAG_META_MIRROR)!=0;
-    if( !metaMirror ){
-      ProllyHash returnHead;
-      memset(&returnHead, 0, sizeof(returnHead));
-      if( chunkStoreFindBranch(cs, pBtree->zRebaseReturnBranch, &returnHead)
-            ==SQLITE_OK
-       && prollyHashCompare(&pBtree->headCommit, &returnHead)!=0 ){
-        metaMirror = 1;
-      }
-    }
-    if( metaMirror ){
-      pBtree->isRebasing = (u8)(pBtree->isRebasing | WS_REBASE_FLAG_META_MIRROR);
-      rc = btreePutRebaseMetadataOnBranch(
-          cs, pBtree->zRebaseReturnBranch,
-          (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR),
-          &pBtree->preRebaseWorkingCat, &pBtree->rebaseOntoCommit,
-          pBtree->zRebaseOrigBranch, pBtree->zRebaseReturnBranch);
-    }else{
-      rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
-      if( rc!=SQLITE_OK ) return rc;
-      rc = chunkStoreSetBranchWorkingSet(cs, pBtree->zRebaseReturnBranch,
-                                         &wsHash);
-    }
+  if( mirrorReturn ){
+    rc = btreePutRebaseMetadataOnBranch(
+        cs, pBtree->zRebaseReturnBranch,
+        (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_META_MIRROR),
+        &pBtree->preRebaseWorkingCat, &pBtree->rebaseOntoCommit,
+        pBtree->zRebaseOrigBranch, pBtree->zRebaseReturnBranch);
     if( rc!=SQLITE_OK ) return rc;
   }
 

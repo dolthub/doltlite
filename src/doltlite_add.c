@@ -257,6 +257,10 @@ static int addComposeStageAllMaster(
   for(i=0; i<nWorking; i++){
     int ignored = 0;
     if( aWorking[i].iTable<=1 || !aWorking[i].zName ) continue;
+    if( sqlite3_stricmp(aWorking[i].zName, "dolt_rebase")==0
+     && doltliteSessionOnRebasePlan(db) ){
+      continue;
+    }
     rc = addCheckIgnore(db, context, aWorking[i].zName, &ignored);
     if( rc!=SQLITE_OK ) break;
     if( !ignored ) azTouched[nTouched++] = aWorking[i].zName;
@@ -318,6 +322,100 @@ int doltliteIndexSchemaRowsDifferForTable(
   return nMatchA!=nBForTable;
 }
 
+static int addRowIsRebasePlan(const SchemaEntry *p){
+  if( p->zName && sqlite3_stricmp(p->zName, "dolt_rebase")==0 ) return 1;
+  if( p->zTblName && sqlite3_stricmp(p->zTblName, "dolt_rebase")==0 ) return 1;
+  return 0;
+}
+
+static int addSchemaRowMatch(const SchemaEntry *pA, const SchemaEntry *pB){
+  if( (pA->zType==0)!=(pB->zType==0) ) return 0;
+  if( pA->zType && strcmp(pA->zType, pB->zType)!=0 ) return 0;
+  if( (pA->zName==0)!=(pB->zName==0) ) return 0;
+  if( pA->zName && strcmp(pA->zName, pB->zName)!=0 ) return 0;
+  if( (pA->zTblName==0)!=(pB->zTblName==0) ) return 0;
+  if( pA->zTblName && strcmp(pA->zTblName, pB->zTblName)!=0 ) return 0;
+  if( (pA->zSql==0)!=(pB->zSql==0) ) return 0;
+  if( pA->zSql && strcmp(pA->zSql, pB->zSql)!=0 ) return 0;
+  return 1;
+}
+
+static int addSchemaRowsMatchExceptPlan(
+  SchemaEntry *aA, int nA,
+  SchemaEntry *aB, int nB
+){
+  int i, j, nUseA = 0, nUseB = 0;
+  for(i=0; i<nA; i++) if( !addRowIsRebasePlan(&aA[i]) ) nUseA++;
+  for(i=0; i<nB; i++) if( !addRowIsRebasePlan(&aB[i]) ) nUseB++;
+  if( nUseA!=nUseB ) return 0;
+  for(i=0; i<nA; i++){
+    int found = 0;
+    if( addRowIsRebasePlan(&aA[i]) ) continue;
+    for(j=0; j<nB; j++){
+      if( addRowIsRebasePlan(&aB[j]) ) continue;
+      if( addSchemaRowMatch(&aA[i], &aB[j]) ){
+        found = 1;
+        break;
+      }
+    }
+    if( !found ) return 0;
+  }
+  return 1;
+}
+
+static int addSchemasMatchExceptPlan(
+  sqlite3 *db,
+  const ProllyHash *pA,
+  const ProllyHash *pB,
+  int *pMatch
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  SchemaEntry *aA = 0;
+  SchemaEntry *aB = 0;
+  int nA = 0;
+  int nB = 0;
+  int rc;
+
+  *pMatch = 0;
+  if( !cs || !pCache || !pA || !pB ) return SQLITE_OK;
+  rc = loadSchemaFromCatalog(db, cs, pCache, pA, &aA, &nA);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = loadSchemaFromCatalog(db, cs, pCache, pB, &aB, &nB);
+  if( rc==SQLITE_OK ){
+    *pMatch = addSchemaRowsMatchExceptPlan(aA, nA, aB, nB);
+  }
+  freeSchemaEntries(aA, nA);
+  freeSchemaEntries(aB, nB);
+  return rc;
+}
+
+static int addNonMasterEqual(
+  const struct TableEntry *aA, int nA,
+  const struct TableEntry *aB, int nB
+){
+  int i, j, nUseA = 0, nUseB = 0;
+  for(i=0; i<nA; i++) if( aA[i].iTable>1 ) nUseA++;
+  for(i=0; i<nB; i++) if( aB[i].iTable>1 ) nUseB++;
+  if( nUseA!=nUseB ) return 0;
+  for(i=0; i<nA; i++){
+    int found = 0;
+    if( aA[i].iTable<=1 ) continue;
+    for(j=0; j<nB; j++){
+      if( aB[j].iTable!=aA[i].iTable ) continue;
+      if( prollyHashCompare(&aA[i].root, &aB[j].root)!=0 ) return 0;
+      if( prollyHashCompare(&aA[i].schemaHash, &aB[j].schemaHash)!=0 ) return 0;
+      if( aA[i].flags!=aB[j].flags ) return 0;
+      if( (aA[i].zName==0)!=(aB[j].zName==0) ) return 0;
+      if( aA[i].zName && strcmp(aA[i].zName, aB[j].zName)!=0 ) return 0;
+      found = 1;
+      break;
+    }
+    if( !found ) return 0;
+  }
+  return 1;
+}
+
 /* True when the staged list has a table entry named zTbl. Index entries
 ** follow their parent through -a staging. */
 int amTableStagedByName(struct TableEntry *aStaged, int nStaged,
@@ -350,6 +448,8 @@ static int addStageAllTables(
   AddNameIndex workingIdx;
   int stagedIdxInit = 0;
   int workingIdxInit = 0;
+  int onPlan;
+  int skippedPlan = 0;
 
   rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash,
                                        &aWorking, &nWorking,
@@ -374,9 +474,16 @@ static int addStageAllTables(
   }
   workingIdxInit = 1;
 
+  onPlan = doltliteSessionOnRebasePlan(db);
+
   for(k=0; k<nWorking; k++){
     const char *zName = aWorking[k].zName;
     struct TableEntry *pUse = &aWorking[k];
+    if( onPlan && zName && sqlite3_stricmp(zName, "dolt_rebase")==0 ){
+      useWorkingHash = 0;
+      skippedPlan = 1;
+      continue;
+    }
     if( aWorking[k].iTable>1 && zName && !bForce ){
       int ignored = 0;
       rc = addCheckIgnore(db, context, zName, &ignored);
@@ -424,6 +531,37 @@ static int addStageAllTables(
       if( workingIdxInit ) addNameIndexFree(&workingIdx);
       if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
       addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
+      return rc;
+    }
+  }
+
+  /* Plan-only edits match the staged catalog once that table is omitted.
+  ** Rebuilding sqlite_master would still be a different hash and -A would
+  ** commit the plan. Keep the staged catalog instead. */
+  if( skippedPlan && addNonMasterEqual(aNew, nNew, aStaged, nStaged) ){
+    ProllyHash baseHash;
+    int schemaMatch = 0;
+    memset(&baseHash, 0, sizeof(baseHash));
+    doltliteGetSessionStaged(db, &baseHash);
+    if( prollyHashIsEmpty(&baseHash) ){
+      rc = doltliteGetHeadCatalogHash(db, &baseHash);
+    }
+    if( rc==SQLITE_OK ){
+      rc = addSchemasMatchExceptPlan(db, pWorkingHash, &baseHash, &schemaMatch);
+    }
+    if( rc==SQLITE_OK && schemaMatch ){
+      rc = doltliteSetSessionStaged(db, &baseHash);
+      if( workingIdxInit ) addNameIndexFree(&workingIdx);
+      if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
+      addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
+      if( rc!=SQLITE_OK ) sqlite3_result_error_code(context, rc);
+      return rc;
+    }
+    if( rc!=SQLITE_OK ){
+      if( workingIdxInit ) addNameIndexFree(&workingIdx);
+      if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
+      addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
+      sqlite3_result_error_code(context, rc);
       return rc;
     }
   }
@@ -1111,6 +1249,23 @@ add_cleanup:
 }
 
 
+
+int doltliteAddStageAll(sqlite3 *db, sqlite3_context *context, int bForce){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash workingHash;
+  int rc;
+
+  if( !cs ){
+    sqlite3_result_error(context, "failed to flush", -1);
+    return SQLITE_ERROR;
+  }
+  rc = doltliteFlushCatalogToHash(db, &workingHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to flush", -1);
+    return rc;
+  }
+  return addStageAllTables(db, context, cs, &workingHash, bForce);
+}
 
 int doltliteAddRegister(sqlite3 *db){
   return doltliteCreateCommandFunc(db, "dolt_add", -1,

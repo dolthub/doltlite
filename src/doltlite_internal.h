@@ -1541,6 +1541,7 @@ int doltliteMergeRef(
 );
 
 int doltliteAddRegister(sqlite3 *db);
+int doltliteAddStageAll(sqlite3 *db, sqlite3_context *context, int bForce);
 int doltliteCleanRegister(sqlite3 *db);
 int doltliteCommitCmdRegister(sqlite3 *db);
 int doltliteResetRegister(sqlite3 *db);
@@ -1761,6 +1762,7 @@ void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                    const char **pzOrigBranch,
                                    const char **pzReturnBranch);
 u8 doltliteGetSessionRebaseFlags(sqlite3 *db);
+int doltliteSessionOnRebasePlan(sqlite3 *db);
 int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
                                   const ProllyHash *pPreRebaseCat,
                                   const ProllyHash *pRebaseOnto,
