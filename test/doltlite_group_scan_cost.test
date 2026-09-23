@@ -1,0 +1,71 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-group-scan-cost
+
+proc group_scan_plan {conn sql} {
+  set plan {}
+  $conn eval "EXPLAIN QUERY PLAN $sql" row {lappend plan $row(detail)}
+  return $plan
+}
+
+reset_db
+forcedelete group-scan-oracle.db
+sqlite3 oracle {file:group-scan-oracle.db?doltlite_engine=sqlite} -uri 1
+foreach conn {db oracle} {
+  $conn eval {
+    CREATE TABLE t(id TEXT,seq INTEGER NOT NULL,grp INTEGER NOT NULL,
+                   v INTEGER NOT NULL,payload BLOB,PRIMARY KEY(id,seq));
+    WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096)
+    INSERT INTO t SELECT printf('%016x',i),i,i%16,(i*7919)%1000000,
+                         CAST(printf('%032d',i) AS BLOB) FROM c;
+    CREATE INDEX t_g ON t(grp);
+    CREATE INDEX t_gv ON t(grp,v);
+    ANALYZE;
+  }
+}
+set grouped {SELECT grp,sum(seq),sum(length(payload)) FROM t GROUP BY grp ORDER BY grp}
+do_test group-plan {group_scan_plan db $grouped} \
+    {{SCAN t} {USE TEMP B-TREE FOR GROUP BY}}
+do_test stock-plan {group_scan_plan oracle $grouped} {{SCAN t USING INDEX t_g}}
+do_test limit-plan {group_scan_plan db "$grouped LIMIT 2 OFFSET 1"} {{SCAN t USING INDEX t_g}}
+do_test bound-limit-plan {
+  set limit 2
+  group_scan_plan db "$grouped LIMIT \$limit"
+} {{SCAN t USING INDEX t_g}}
+do_test covering-plan {
+  group_scan_plan db {SELECT grp,sum(v) FROM t GROUP BY grp}
+} {{SCAN t USING COVERING INDEX t_gv}}
+do_test ordered-limit-plan {
+  group_scan_plan db {SELECT seq,payload FROM t ORDER BY grp,v LIMIT 40}
+} {{SCAN t USING INDEX t_gv}}
+do_test hinted-plan {
+  group_scan_plan db {SELECT grp,sum(length(payload)) FROM t INDEXED BY t_g GROUP BY grp}
+} {{SCAN t USING INDEX t_g}}
+do_test selective-plan {
+  lindex [group_scan_plan db {SELECT grp,sum(length(payload)) FROM t WHERE grp=3 GROUP BY grp}] 0
+} {SEARCH t USING INDEX t_g (grp=?)}
+
+foreach {name query} [list \
+    grouped $grouped \
+    limit "$grouped LIMIT 2 OFFSET 1" \
+    unlimited "$grouped LIMIT -1" \
+    empty "$grouped LIMIT 0" \
+    having {SELECT grp,sum(seq),sum(length(payload)) FROM t GROUP BY grp HAVING sum(seq)>500000 ORDER BY grp} \
+    covering {SELECT grp,sum(v) FROM t GROUP BY grp ORDER BY grp} \
+    selective {SELECT grp,sum(length(payload)) FROM t WHERE grp<4 GROUP BY grp ORDER BY grp} \
+    join {SELECT t.grp,sum(t.seq+u.v) FROM t JOIN t u ON t.id=u.id AND t.seq=u.seq GROUP BY t.grp ORDER BY t.grp} \
+    ordered {SELECT sum(seq),sum(length(payload)) FROM (SELECT seq,payload FROM t ORDER BY grp,v LIMIT 40)}] {
+  do_test results-$name {db eval $query} [oracle eval $query]
+}
+foreach {step sql} {
+  begin {BEGIN}
+  update {UPDATE t SET v=v+1 WHERE seq%32=0}
+  delete {DELETE FROM t WHERE seq%64=0}
+  wide {UPDATE t SET payload=CAST(printf('%01024d',seq) AS BLOB)}
+  rollback {ROLLBACK}
+} {
+  foreach conn {db oracle} {$conn eval $sql}
+  do_test mutation-$step {db eval $grouped} [oracle eval $grouped]
+}
+oracle close
+finish_test

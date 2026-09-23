@@ -4371,6 +4371,17 @@ static int whereLoopAddBtree(
           int ii;
           int iCur = pSrc->iCursor;
           WhereClause *pWC2 = &pWInfo->sWC;
+#ifdef DOLTLITE_PROLLY
+          if( (pWInfo->wctrlFlags & WHERE_GROUPBY)!=0
+           && pWInfo->pTabList->nSrc==1
+           && pWInfo->pSelect && pWInfo->pSelect->pLimit==0 ){
+            int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
+            if( iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
+             && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+              nLookup += 40;
+            }
+          }
+#endif
           for(ii=0; ii<pWC2->nTerm; ii++){
             WhereTerm *pTerm = &pWC2->a[ii];
             if( !sqlite3ExprCoveredByIndex(pTerm->pExpr, iCur, pProbe) ){
