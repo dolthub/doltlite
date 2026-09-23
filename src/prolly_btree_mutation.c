@@ -1636,7 +1636,7 @@ void sqlite3BtreeIncrblobCursor(BtCursor *pCur){
 #endif
 
 
-int doltliteMaterializeIntegerDefault(
+int doltliteMaterializeDefaultColumn(
   sqlite3 *db,
   const char *zDb,
   const char *zTable,
@@ -1652,10 +1652,12 @@ int doltliteMaterializeIntegerDefault(
   ProllyCursor cur;
   ProllyChunker chunker;
   DoltliteRecordInfo ri;
-  u8 aDefault[8];
+  UnpackedRecord record = {0};
+  u8 *pDefaultRecord = 0;
   u8 *pOut = 0;
   int nAlloc = 0;
-  u32 serialType, nDefault;
+  int nDefaultAlloc = 0;
+  int nDefaultRecord, nDefaultHdr, nDefault;
   int rc, res;
 
   if( iDb<0 || !pTab || !IsOrdinaryTable(pTab) || !HasRowid(pTab)
@@ -1667,8 +1669,7 @@ int doltliteMaterializeIntegerDefault(
   if( db->xProgress ) return SQLITE_NOTFOUND;
 #endif
   pCol = &pTab->aCol[pTab->nCol-1];
-  if( sqlite3StrICmp(pCol->zCnName, zColumn)!=0
-   || pCol->affinity!=SQLITE_AFF_INTEGER ) return SQLITE_NOTFOUND;
+  if( sqlite3StrICmp(pCol->zCnName, zColumn)!=0 ) return SQLITE_NOTFOUND;
   pBtree = db->aDb[iDb].pBt;
   if( !pBtree || pBtree->pOrigBtree || pBtree->inTrans!=TRANS_WRITE ){
     return SQLITE_NOTFOUND;
@@ -1679,22 +1680,27 @@ int doltliteMaterializeIntegerDefault(
   rc = sqlite3ValueFromExpr(db, sqlite3ColumnExpr(pTab, pCol), ENC(db),
                            pCol->affinity, &pDefault);
   if( rc!=SQLITE_OK ) return rc;
-  if( !pDefault || sqlite3_value_type(pDefault)!=SQLITE_INTEGER ){
+  if( !pDefault || (pDefault->flags & MEM_Null) ){
     sqlite3ValueFree(pDefault);
     return SQLITE_NOTFOUND;
   }
-  dlIpkSerialType(sqlite3_value_int64(pDefault), &serialType, &nDefault);
-  dlIpkWriteBE(aDefault, sqlite3_value_int64(pDefault), nDefault);
+  record.nField = 1;
+  record.aMem = pDefault;
+  rc = serializeUnpackedRecordBuffer(&record, &pDefaultRecord,
+                                      &nDefaultAlloc, &nDefaultRecord);
   sqlite3ValueFree(pDefault);
+  if( rc!=SQLITE_OK ) goto default_cleanup;
+  nDefaultHdr = pDefaultRecord[0];
+  nDefault = nDefaultRecord-nDefaultHdr;
 
   rc = syncBtreeSavepoints(pBtree);
   if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(pBtree);
   if( rc==SQLITE_OK ) rc = saveAllCursors(pBtree, pBt, pTab->tnum, 0);
   if( rc==SQLITE_OK ) rc = flushPendingForTable(pBtree, pBt, pTE, 0);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) goto default_cleanup;
   rc = prollyChunkerInitWithCache(&chunker, &pBt->store, &pBt->cache,
                                   pTE->flags);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) goto default_cleanup;
   doltliteRecordInfoInit(&ri);
   prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
   rc = prollyCursorFirst(&cur, &res);
@@ -1723,7 +1729,7 @@ int doltliteMaterializeIntegerDefault(
     if( rc!=SQLITE_OK ) break;
     nHdrVarint = dlReadVarint(pVal, pVal+nVal, &hdr);
     nHdr = (int)hdr;
-    nNewHdr = nHdr-nHdrVarint+1;
+    nNewHdr = nHdr-nHdrVarint+nDefaultHdr-1;
     nNewVarint = sqlite3VarintLen(nNewHdr);
     nNewHdr += nNewVarint;
     if( sqlite3VarintLen(nNewHdr)>nNewVarint ) nNewHdr++;
@@ -1743,9 +1749,9 @@ int doltliteMaterializeIntegerDefault(
     }
     nNewVarint = sqlite3PutVarint(pOut, nNewHdr);
     memcpy(pOut+nNewVarint, pVal+nHdrVarint, nHdr-nHdrVarint);
-    pOut[nNewHdr-1] = (u8)serialType;
+    memcpy(pOut+nNewHdr-nDefaultHdr+1, pDefaultRecord+1, nDefaultHdr-1);
     memcpy(pOut+nNewHdr, pVal+nHdr, nVal-nHdr);
-    memcpy(pOut+nOut-nDefault, aDefault, nDefault);
+    memcpy(pOut+nOut-nDefault, pDefaultRecord+nDefaultHdr, nDefault);
     prollyCursorKey(&cur, &pKey, &nKey);
     rc = prollyChunkerAdd(&chunker, pKey, nKey, pOut, nOut);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
@@ -1758,6 +1764,8 @@ int doltliteMaterializeIntegerDefault(
   prollyCursorClose(&cur);
   prollyChunkerFree(&chunker);
   doltliteRecordInfoClear(&ri);
+default_cleanup:
+  sqlite3_free(pDefaultRecord);
   sqlite3_free(pOut);
   return rc;
 }
