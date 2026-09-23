@@ -6,7 +6,8 @@ echo "=== Index Tests at Scale ==="
 echo ""
 
 DB1=/tmp/test_idx1_$$.db; rm -f "$DB1"
-echo "CREATE TABLE events(
+dltest_require_slow "2col_10k_setup" "$DB1" "$(cat <<'SQL'
+CREATE TABLE events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tid TEXT NOT NULL, seq INTEGER NOT NULL,
   payload TEXT NOT NULL,
@@ -15,7 +16,17 @@ echo "CREATE TABLE events(
 WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<9999)
 INSERT INTO events(tid, seq, payload)
   SELECT 'thread-' || (x/200), x%200, hex(randomblob(100)) FROM c;
-SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB1" > /dev/null 2>&1
+SELECT dolt_commit('-Am','load');
+SQL
+)"
+
+run_test "2col_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB1"
+
+run_test "2col_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB1"
 
 run_test "2col_10k_total" \
   "SELECT count(*) FROM events;" \
@@ -46,7 +57,8 @@ run_test "2col_10k_orderby_desc" \
 197" "$DB1"
 
 DB2=/tmp/test_idx2_$$.db; rm -f "$DB2"
-echo "CREATE TABLE events(
+dltest_require_slow "3col_10k_setup" "$DB2" "$(cat <<'SQL'
+CREATE TABLE events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   aggregate_kind TEXT NOT NULL,
   stream_id TEXT NOT NULL,
@@ -57,7 +69,17 @@ echo "CREATE TABLE events(
 WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<9999)
 INSERT INTO events(aggregate_kind, stream_id, stream_version, payload)
   SELECT 'thread', 'stream-' || (x/200), x%200, hex(randomblob(100)) FROM c;
-SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB2" > /dev/null 2>&1
+SELECT dolt_commit('-Am','load');
+SQL
+)"
+
+run_test "3col_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB2"
+
+run_test "3col_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB2"
 
 run_test "3col_10k_total" \
   "SELECT count(*) FROM events;" \
@@ -93,7 +115,8 @@ SELECT count(*) FROM lookups l
   "10000" "$DB2"
 
 DB3=/tmp/test_idx3_$$.db; rm -f "$DB3"
-echo "CREATE TABLE log(
+dltest_require_slow "4col_10k_setup" "$DB3" "$(cat <<'SQL'
+CREATE TABLE log(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   region TEXT NOT NULL,
   service TEXT NOT NULL,
@@ -106,7 +129,17 @@ WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<9999)
 INSERT INTO log(region, service, ts, seq, msg)
   SELECT 'us-east-' || (x%3), 'svc-' || (x%7), 1000+(x/21), x%21,
     hex(randomblob(80)) FROM c;
-SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+SELECT dolt_commit('-Am','load');
+SQL
+)"
+
+run_test "4col_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB3"
+
+run_test "4col_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB3"
 
 run_test "4col_10k_total" \
   "SELECT count(*) FROM log;" \
@@ -125,7 +158,8 @@ run_test "4col_10k_3prefix" \
   "1" "$DB3"
 
 DB4=/tmp/test_idx4_$$.db; rm -f "$DB4"
-echo "CREATE TABLE orders(
+dltest_require_slow "secondary_10k_setup" "$DB4" "$(cat <<'SQL'
+CREATE TABLE orders(
   id INTEGER PRIMARY KEY,
   customer TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -137,7 +171,17 @@ WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000)
 INSERT INTO orders SELECT x, 'cust-' || (x%50),
   CASE WHEN x%3=0 THEN 'shipped' WHEN x%3=1 THEN 'pending' ELSE 'returned' END,
   x*1.5, hex(randomblob(80)) FROM c;
-SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+SELECT dolt_commit('-Am','load');
+SQL
+)"
+
+run_test "secondary_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB4"
+
+run_test "secondary_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB4"
 
 run_test "secondary_10k_total" \
   "SELECT count(*) FROM orders;" \
@@ -156,7 +200,8 @@ run_test "secondary_10k_exact" \
   "67" "$DB4"
 
 DB5=/tmp/test_idx5_$$.db; rm -f "$DB5"
-echo "CREATE TABLE kv(
+dltest_require_slow "wor_10k_setup" "$DB5" "$(cat <<'SQL'
+CREATE TABLE kv(
   ns TEXT NOT NULL,
   key TEXT NOT NULL,
   val TEXT NOT NULL,
@@ -165,7 +210,17 @@ echo "CREATE TABLE kv(
 WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<9999)
 INSERT INTO kv SELECT 'ns-' || (x%20), 'key-' || printf('%05d',x),
   hex(randomblob(80)) FROM c;
-SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+SELECT dolt_commit('-Am','load');
+SQL
+)"
+
+run_test "wor_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB5"
+
+run_test "wor_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB5"
 
 run_test "wor_10k_total" \
   "SELECT count(*) FROM kv;" \
@@ -184,20 +239,38 @@ run_test "wor_10k_exact" \
   "1" "$DB5"
 
 DB6=/tmp/test_idx6_$$.db; rm -f "$DB6"
-echo "CREATE TABLE events(
+dltest_require_slow "batched_10k_create" "$DB6" "$(cat <<'SQL'
+CREATE TABLE events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tid TEXT NOT NULL, seq INTEGER NOT NULL,
   payload TEXT NOT NULL,
   UNIQUE(tid, seq)
-);" | $DOLTLITE "$DB6" > /dev/null 2>&1
+);
+SQL
+)"
 
 for batch in $(seq 0 9); do
-  echo "WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<999)
+  flag="-am"
+  if [ "$batch" -eq 0 ]; then
+    flag="-Am"
+  fi
+  dltest_require_slow "batched_10k_commit_$batch" "$DB6" "$(cat <<SQL
+WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<999)
 INSERT INTO events(tid, seq, payload)
   SELECT 'thread-' || ((c.x + $batch*1000)/200), (c.x + $batch*1000)%200,
     hex(randomblob(100)) FROM c;
-SELECT dolt_commit('-am', 'batch $batch');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+SELECT dolt_commit('$flag', 'batch $batch');
+SQL
+)"
 done
+
+run_test "batched_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "11" "$DB6"
+
+run_test "batched_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB6"
 
 run_test "batched_10k_total" \
   "SELECT count(*) FROM events;" \
@@ -214,7 +287,8 @@ SELECT count(*) FROM lookups l
   "10000" "$DB6"
 
 DB7=/tmp/test_idx7_$$.db; rm -f "$DB7"
-echo "CREATE TABLE mixed(
+dltest_require_slow "mixed_10k_setup" "$DB7" "$(cat <<'SQL'
+CREATE TABLE mixed(
   id INTEGER PRIMARY KEY,
   tag TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -225,7 +299,17 @@ echo "CREATE TABLE mixed(
 WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM c WHERE x<9999)
 INSERT INTO mixed SELECT x, 'tag-' || (x%10), x/10, (x%1000)*0.01,
   hex(randomblob(80)) FROM c;
-SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+SELECT dolt_commit('-Am','load');
+SQL
+)"
+
+run_test "mixed_10k_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB7"
+
+run_test "mixed_10k_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB7"
 
 run_test "mixed_10k_total" \
   "SELECT count(*) FROM mixed;" \
@@ -240,7 +324,8 @@ run_test "mixed_10k_2prefix" \
   "1" "$DB7"
 
 DB8=/tmp/test_idx8_$$.db; rm -f "$DB8"
-echo "CREATE TABLE block_groups (
+dltest_require_slow "txn_composite_setup" "$DB8" "$(cat <<'SQL'
+CREATE TABLE block_groups (
   id BLOB PRIMARY KEY NOT NULL,
   collection_name TEXT NOT NULL,
   sample_name TEXT NOT NULL,
@@ -256,7 +341,17 @@ INSERT INTO block_groups VALUES (
   X'1111111100000000000000000000000000000000000000000000000000000001',
   'simple', 'simple', 'm123', 1000, NULL, 1
 );
-SELECT dolt_commit('-am','load');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+SELECT dolt_commit('-Am','load');
+SQL
+)"
+
+run_test "txn_composite_log" \
+  "SELECT count(*) FROM dolt_log;" \
+  "2" "$DB8"
+
+run_test "txn_composite_status" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB8"
 
 run_test "txn_composite_prefix_seek_excludes_stale_tree_row" \
   "BEGIN;
