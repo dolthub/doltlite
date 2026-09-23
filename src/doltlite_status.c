@@ -884,8 +884,10 @@ static int isRenamePair(
   return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB, pMatch);
 }
 
-/* True if another to-side table has the same non-empty content: the rename
-** pairing cannot choose. From-side duplicates and empty tables do not contest.
+/* True if another new to-side table has the same non-empty content: the
+** rename pairing cannot choose. A to-side name the from side also has is not
+** new, so it cannot be a rename's other half. From-side duplicates and empty
+** tables do not contest.
 ** A same-number rename's new half is spoken for. Staging is ignored so staging
 ** one of two identical new tables cannot steal the dropped identity. */
 static int renameMateIsContested(
@@ -901,6 +903,10 @@ static int renameMateIsContested(
     if( &aTo[i]==pTo || aTo[i].iTable<=1 || !aTo[i].zName ) continue;
     if( pFrom->zName && strcmp(aTo[i].zName, pFrom->zName)==0 ) continue;
     if( prollyHashCompare(&aTo[i].root, &pFrom->root)!=0 ) continue;
+    for(j=0; j<nFrom; j++){
+      if( aFrom[j].zName && strcmp(aFrom[j].zName, aTo[i].zName)==0 ) break;
+    }
+    if( j<nFrom ) continue;
     for(j=0; j<nFrom; j++){
       if( aFrom[j].iTable==aTo[i].iTable
        && aFrom[j].zName
