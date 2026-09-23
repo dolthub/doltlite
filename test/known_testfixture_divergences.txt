@@ -168,6 +168,7 @@ where where-5.8 class=intentional issue=1840  # w+0 IN (same subquery): fewer se
 
 # ── index ──
 index index-11.1 class=intentional  # sqlite_search_count instrumentation not reproduced (value correct)
+index5 index5-1.3 class=intentional  # re-creating the dropped index finds every chunk already stored, so CREATE INDEX writes only its root record; the contiguous-write ratio needs a long write stream
 
 # ── alter ──
 alter alter-6.2 class=intentional issue=1852  # canonical adoption: test binds sqlite_master oids; canonical renumbering reassigns them after schema commit
