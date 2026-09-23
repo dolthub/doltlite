@@ -341,7 +341,7 @@ run_test_match "unknown_plan_action_names_the_action" \
    SELECT dolt_rebase('-i','main');
    UPDATE dolt_rebase SET action='oops';
    SELECT dolt_rebase('--continue');" \
-  'unknown rebase action "oops": expected pick, reword, squash, fixup or drop' \
+  'unknown rebase action "oops": expected pick, reword, squash, fixup, drop or edit' \
   "$DB4"
 
 seed_verb_repo "$DB4"
@@ -1284,7 +1284,212 @@ run_test "rebase_cv_pause_squash_amended" \
 1=1,2=1" \
   "$DBCV/feat"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV"
+# edit applies the commit, pauses, allows --amend, then --continue finishes.
+seed_edit_repo() {
+  rm -f "$1"
+  cat <<'SQL' | "$DOLTLITE" "$1" >/dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2,2);
+SELECT dolt_commit('-am', 'main2');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (10,10);
+SELECT dolt_commit('-am', 'f1');
+INSERT INTO t VALUES (11,11);
+SELECT dolt_commit('-am', 'f2');
+SQL
+}
+
+DBEDIT=/tmp/test_rebase_edit_$$.db
+seed_edit_repo "$DBEDIT"
+EDIT_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT 'HASH|' || commit_hash FROM dolt_rebase WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+SELECT 'MID|' || active_branch() || '|' || (SELECT v FROM t WHERE pk=10) || '|' || (SELECT count(*) FROM dolt_rebase);
+UPDATE t SET v=111 WHERE pk=10;
+SELECT dolt_add('.');
+SELECT dolt_commit('--amend','-m','f1 edited');
+SELECT dolt_rebase('--continue');
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || v FROM t WHERE pk=10;" | "$DOLTLITE" "$DBEDIT" 2>&1)
+EDIT_HASH=$(echo "$EDIT_OUT" | sed -n 's/^HASH|//p')
+if [ -n "$EDIT_HASH" ] && echo "$EDIT_OUT" | grep -q "edit action paused at commit ${EDIT_HASH} (f1)."; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_pauses\n  expected pause at ${EDIT_HASH} (f1)\n  got: $EDIT_OUT"
+fi
+if echo "$EDIT_OUT" | grep -q "You can now modify the working directory and stage changes. When ready, continue the rebase by calling dolt_rebase('--continue')"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_pause_message\n  got: $EDIT_OUT"
+fi
+EDIT_MID=$(echo "$EDIT_OUT" | grep '^MID|')
+if [ "$EDIT_MID" = "MID|dolt_rebase_feat|10|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_pause_state\n  expected: MID|dolt_rebase_feat|10|1\n  got:      $EDIT_MID\n  full: $EDIT_OUT"
+fi
+if echo "$EDIT_OUT" | grep -q "cannot amend"; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_amend_allowed\n  got: $EDIT_OUT"
+else
+  PASS=$((PASS+1))
+fi
+EDIT_LOG=$(echo "$EDIT_OUT" | grep '^LOG|')
+EDIT_ROW=$(echo "$EDIT_OUT" | grep '^ROW|')
+if [ "$EDIT_LOG" = "LOG|f2,f1 edited,main2,base" ] && [ "$EDIT_ROW" = "ROW|111" ] \
+   && echo "$EDIT_OUT" | grep -q "Successfully rebased and updated refs/heads/feat"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_amends_and_finishes\n  log: $EDIT_LOG\n  row: $EDIT_ROW\n  full: $EDIT_OUT"
+fi
+run_test "rebase_edit_survives_reopen" \
+  "SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+   SELECT v FROM t WHERE pk=10;" \
+  "f2,f1 edited,main2,base
+111" \
+  "$DBEDIT/feat"
+
+DBEDIT2=/tmp/test_rebase_edit_plain_$$.db
+seed_edit_repo "$DBEDIT2"
+EDIT2_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+SELECT dolt_rebase('--continue');
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || v FROM t WHERE pk=10;" | "$DOLTLITE" "$DBEDIT2" 2>&1)
+EDIT2_LOG=$(echo "$EDIT2_OUT" | grep '^LOG|')
+EDIT2_ROW=$(echo "$EDIT2_OUT" | grep '^ROW|')
+if echo "$EDIT2_OUT" | grep -q "edit action paused at commit" \
+   && [ "$EDIT2_LOG" = "LOG|f2,f1,main2,base" ] && [ "$EDIT2_ROW" = "ROW|10" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_without_amend\n  log: $EDIT2_LOG\n  row: $EDIT2_ROW\n  full: $EDIT2_OUT"
+fi
+
+DBEDIT3=/tmp/test_rebase_edit_abort_$$.db
+seed_edit_repo "$DBEDIT3"
+EDIT3_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+SELECT dolt_rebase('--abort');
+SELECT 'END|' || active_branch() || '|' || (SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%') || '|' || (SELECT v FROM t WHERE pk=10) || '|' || (SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat');" | "$DOLTLITE" "$DBEDIT3" 2>&1)
+EDIT3_END=$(echo "$EDIT3_OUT" | grep '^END|')
+if echo "$EDIT3_OUT" | grep -q "Interactive rebase aborted" \
+   && [ "$EDIT3_END" = "END|feat|f2,f1,base|10|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_abort\n  end: $EDIT3_END\n  full: $EDIT3_OUT"
+fi
+
+DBEDIT4=/tmp/test_rebase_edit_later_$$.db
+seed_edit_repo "$DBEDIT4"
+EDIT4_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f2';
+SELECT dolt_rebase('--continue');
+SELECT 'MID|' || active_branch() || '|' || (SELECT count(*) FROM dolt_rebase) || '|' || (SELECT v FROM t WHERE pk=11);
+SELECT dolt_rebase('--continue');
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DBEDIT4" 2>&1)
+EDIT4_MID=$(echo "$EDIT4_OUT" | grep '^MID|')
+EDIT4_LOG=$(echo "$EDIT4_OUT" | grep '^LOG|')
+if echo "$EDIT4_OUT" | grep -q "edit action paused at commit" \
+   && echo "$EDIT4_OUT" | grep -q "(f2)." \
+   && [ "$EDIT4_MID" = "MID|dolt_rebase_feat|0|11" ] \
+   && [ "$EDIT4_LOG" = "LOG|f2,f1,main2,base" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_later_in_plan\n  mid: $EDIT4_MID\n  log: $EDIT4_LOG\n  full: $EDIT4_OUT"
+fi
+
+# A later edit still pauses after an earlier step's conflict is resolved.
+DBEDIT6=/tmp/test_rebase_edit_after_conflict_$$.db
+rm -f "$DBEDIT6"
+cat <<'SQL' | "$DOLTLITE" "$DBEDIT6" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v=2 WHERE id=1;
+SELECT dolt_commit('-am','c1');
+INSERT INTO t VALUES(2, 20);
+SELECT dolt_commit('-am','c2');
+SELECT dolt_checkout('main');
+UPDATE t SET v=3 WHERE id=1;
+SELECT dolt_commit('-am','main changes');
+SQL
+EDIT6_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='c2';
+SELECT dolt_rebase('--continue');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_add('-A');
+SELECT dolt_rebase('--continue');
+SELECT 'MID|' || active_branch() || '|' || (SELECT count(*) FROM dolt_rebase) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT v FROM t WHERE id=2);
+SELECT dolt_rebase('--continue');
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DBEDIT6" 2>&1)
+EDIT6_MID=$(echo "$EDIT6_OUT" | grep '^MID|')
+EDIT6_LOG=$(echo "$EDIT6_OUT" | grep '^LOG|')
+if echo "$EDIT6_OUT" | grep -q 'data conflict detected while rebasing commit' \
+   && echo "$EDIT6_OUT" | grep -q 'edit action paused at commit' \
+   && echo "$EDIT6_OUT" | grep -q '(c2).' \
+   && [ "$EDIT6_MID" = "MID|dolt_rebase_feat|0|2|20" ] \
+   && [ "$EDIT6_LOG" = "LOG|c2,c1,main changes,init" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_after_conflict\n  mid: $EDIT6_MID\n  log: $EDIT6_LOG\n  full: $EDIT6_OUT"
+fi
+
+# A replay that --empty drops does not move HEAD, so edit does not pause.
+DBEDIT5=/tmp/test_rebase_edit_empty_$$.db
+rm -f "$DBEDIT5"
+cat <<'SQL' | "$DOLTLITE" "$DBEDIT5" >/dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'main2');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'f_dup_of_main2');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_commit('-am', 'f2');
+SQL
+EDIT5_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f_dup_of_main2';
+SELECT dolt_rebase('--continue');
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DBEDIT5" 2>&1)
+EDIT5_LOG=$(echo "$EDIT5_OUT" | grep '^LOG|')
+if echo "$EDIT5_OUT" | grep -q "edit action paused"; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_empty_drop_does_not_pause\n  full: $EDIT5_OUT"
+elif [ "$EDIT5_LOG" = "LOG|f2,main2,base" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_empty_drop_does_not_pause\n  log: $EDIT5_LOG\n  full: $EDIT5_OUT"
+fi
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

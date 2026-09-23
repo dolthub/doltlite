@@ -55,7 +55,7 @@ the SQL transaction; see [transactions.md](transactions.md).
 | `cannot --amend: HEAD has no parent (initial commit)` | amend on the first commit |
 | `you are in the middle of a merge -- cannot amend` | `--amend` while a merge is in progress |
 | `you are in the middle of a cherry-pick -- cannot amend` | `--amend` while a cherry-pick or revert is in progress |
-| `you are in the middle of a rebase -- cannot amend` | `--amend` while a rebase is in progress |
+| `you are in the middle of a rebase -- cannot amend` | `--amend` while a rebase is in progress, other than an `edit` pause |
 | `unknown option`, `no value for option` | option parsing; the message names the option |
 
 ## dolt_status
