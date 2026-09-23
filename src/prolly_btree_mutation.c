@@ -963,6 +963,7 @@ int prollyBtCursorInsert(
        && pCur->mmMissGeneration==pCur->pMutMap->generation
        && pCur->nMmMissKey==nSortKey
        && memcmp(pCur->aSeekSortKey, pSortKey, nSortKey)==0 ){
+        if( flags & BTREE_SAVEPOSITION ) pCur->pMutMap->preferSorted = 0;
         rc = prollyMutMapInsertAbsent(
             pCur->pMutMap, pSortKey, nSortKey, 0,
             storePayload ? pStoredPayload : NULL,
@@ -1018,10 +1019,10 @@ int prollyBtCursorInsert(
         rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
         if( rc!=SQLITE_OK ) return rc;
         if( pEntry ){
-          pCur->mmIdx = prollyMutMapOrderIndexFromEntry(pCur->pMutMap, pEntry);
-          pCur->mmPhysIdx = -1;
+          pCur->mmIdx = -1;
+          pCur->mmPhysIdx = (int)(pEntry - pCur->pMutMap->aEntries);
           pCur->mmActive = 1;
-          pCur->mmPhysActive = 0;
+          pCur->mmPhysActive = 1;
           pCur->mergeSrc = MERGE_SRC_MUT;
           pCur->eState = CURSOR_VALID;
         }else{

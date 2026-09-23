@@ -88,4 +88,35 @@ do_faultsim_test 1.3 -faults oom-transient -prep {
   faultsim_integrity_check
 }
 
+reset_db
+do_execsql_test 2.0 {
+  CREATE TABLE t(a TEXT PRIMARY KEY, b INTEGER, c TEXT);
+  CREATE INDEX t_b ON t(b);
+  WITH RECURSIVE s(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<16)
+  INSERT INTO t SELECT printf('%04d',i),(i*7)%17,'original' FROM s;
+}
+faultsim_save_and_close
+do_faultsim_test 2.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+    DELETE FROM t WHERE a IN ('0004','0012');
+    SELECT a FROM t ORDER BY a;
+    SAVEPOINT edits;
+  }
+} -body {
+  db eval {UPDATE t INDEXED BY t_b SET c='updated'}
+  db eval {
+    SELECT count(*),sum(c='updated'),sum(b) FROM
+      (SELECT b,c FROM t ORDER BY a DESC);
+  }
+} -test {
+  faultsim_test_result {0 {14 14 109}} {1 {out of memory}} {1 {disk I/O error}}
+  catchsql {ROLLBACK TO edits; RELEASE edits}
+  catchsql ROLLBACK
+  set actual [db eval {SELECT count(*),sum(c='original'),sum(b) FROM t}]
+  if {$actual ne {16 16 136}} {error "rows changed after rollback: $actual"}
+  faultsim_integrity_check
+}
+
 finish_test
