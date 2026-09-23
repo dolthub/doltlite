@@ -685,41 +685,13 @@ static SQLITE_INLINE int doltliteVtabConnectSimple(
 }
 
 /* Branch catalog: working-set catalog wins if recorded against this commit. */
-static SQLITE_INLINE int doltliteResolveBranchEffectiveCatalog(
+int doltliteResolveBranchEffectiveCatalog(
   ChunkStore *cs,
   const char *zBranch,
   const ProllyHash *pBranchCommit,
   const ProllyHash *pCommittedCatHash,
   ProllyHash *pCatHash
-){
-  ProllyHash wsHash, wsCatHash, wsCommitHash;
-  int rc;
-  memset(&wsHash, 0, sizeof(wsHash));
-  memset(&wsCatHash, 0, sizeof(wsCatHash));
-  memset(&wsCommitHash, 0, sizeof(wsCommitHash));
-  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
-  if( rc==SQLITE_NOTFOUND ){
-    memcpy(pCatHash, pCommittedCatHash, sizeof(ProllyHash));
-    return SQLITE_OK;
-  }
-  if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashIsEmpty(&wsHash) ){
-    memcpy(pCatHash, pCommittedCatHash, sizeof(ProllyHash));
-    return SQLITE_OK;
-  }
-  rc = chunkStoreReadBranchWorkingCatalog(
-      cs, zBranch, &wsCatHash, &wsCommitHash);
-  if( rc!=SQLITE_OK ) return rc;
-  /* Unborn branch: working set matches the all-zero commit hash. */
-  if( (!prollyHashIsEmpty(&wsCommitHash) || prollyHashIsEmpty(pBranchCommit))
-   && memcmp(wsCommitHash.data, pBranchCommit->data, PROLLY_HASH_SIZE)==0
-   && memcmp(wsCatHash.data, pCommittedCatHash->data, PROLLY_HASH_SIZE)!=0 ){
-    memcpy(pCatHash, &wsCatHash, sizeof(ProllyHash));
-  }else{
-    memcpy(pCatHash, pCommittedCatHash, sizeof(ProllyHash));
-  }
-  return SQLITE_OK;
-}
+);
 
 static SQLITE_INLINE int doltliteAppendQuotedColumnList(
   sqlite3_str *pStr,

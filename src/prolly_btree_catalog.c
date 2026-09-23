@@ -2759,12 +2759,6 @@ int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
                                   0, 0, &emptyHash);
 }
 
-int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
-                                       ProllyHash *pCatHash,
-                                       ProllyHash *pCommitHash){
-  return btreeReadWorkingCatalog(cs, zBranch, pCatHash, pCommitHash);
-}
-
 /*
 ** SQLITE_DBCONFIG_RESET_DATABASE + VACUUM: drop every stored object on the
 ** current branch working catalog so sqlite_master is empty, and zero
