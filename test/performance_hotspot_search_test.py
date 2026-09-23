@@ -69,6 +69,21 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(modes, {'fresh', 'mutation', 'underexplored'})
         self.assertGreater(len(recipes), 50)
 
+    def test_secondary_ranges_and_index_order_results(self):
+        for key in ('integer', 'text'):
+            for width in (1, 32, 64):
+                p = replace(self.profile, key=key, width=width, start=1)
+                recipe = dict(self.recipe, source='table', operator='index_order',
+                              predicate='group_range', expression='seq', context='plain',
+                              indexes='both', direction='ASC')
+                with self.subTest(key=key, width=width), sqlite3.connect(':memory:') as db:
+                    db.executescript(search.setup_sql(p, recipe))
+                    rows = db.execute('SELECT seq,grp,v,id FROM t').fetchall()
+                    selected = sorted((row for row in rows if row[1] < max(1, p.groups*width//p.rows)),
+                                      key=lambda row: (row[1], row[2], row[3]))[:width]
+                    self.assertEqual(db.execute(search.generated_case(p, recipe).sql).fetchone(),
+                                     (len(selected), sum(row[0] for row in selected)))
+
     def test_operator_filter_applies_to_mutations_and_companions(self):
         operators = ['update_pk', 'upsert_update', 'correlated_limit']
         a, b = search.Search(123), search.Search(123)
