@@ -1150,11 +1150,14 @@ void doltliteVcResultError(sqlite3_context *ctx, sqlite3 *db, const char *zMsg){
 
 /* For sites relaying a result code rather than reporting a usage error.
 ** The code goes on after the message so the message survives; NOTFOUND is an
-** internal sentinel and SQLITE_ERROR is what a bare message already gives. */
+** internal sentinel and SQLITE_ERROR is what a bare message already gives.
+** Do not release savepoints. A restored merge failure must still leave the
+** caller's ROLLBACK TO target in place. */
 void doltliteVcResultErrorCode(
   sqlite3_context *ctx, sqlite3 *db, const char *zMsg, int rc
 ){
-  doltliteVcResultError(ctx, db, zMsg);
+  (void)db;
+  sqlite3_result_error(ctx, zMsg, -1);
   if( rc!=SQLITE_OK && rc!=SQLITE_ERROR && rc!=SQLITE_NOTFOUND ){
     sqlite3_result_error_code(ctx, rc);
   }
