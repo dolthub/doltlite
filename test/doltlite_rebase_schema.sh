@@ -345,6 +345,37 @@ SELECT active_branch() || '|' || d || '|' ||
 FROM t;
 " "feat|feature-live|1|0"
 
+RENAME_REUSE_SETUP="
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES(1,1,1),(2,2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('feat');
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN b TO a;
+ALTER TABLE t RENAME COLUMN tmp TO b;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','swap');
+SELECT dolt_checkout('feat');
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','edit a');
+"
+
+run_db_match "rebase_schema_rename_reuse_error" "
+$RENAME_REUSE_SETUP
+SELECT dolt_rebase('main');
+" "cannot apply: table 't' renames a column to 'b', a name another of its columns had"
+
+run_db_eq "rebase_schema_rename_reuse_rollback" "
+$RENAME_REUSE_SETUP
+SELECT dolt_rebase('main');
+SELECT active_branch() || '|' || a || '|' || b || '|' ||
+  (SELECT message FROM dolt_log LIMIT 1) || '|' ||
+  (SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase')
+FROM t WHERE id=1;
+" "feat|10|1|edit a|0"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

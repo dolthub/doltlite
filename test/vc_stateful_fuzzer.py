@@ -8,10 +8,13 @@ import tempfile
 import time
 
 # Autocommit merge refusals roll back whole; dolt_pull's merge half is the same.
-# UNIQUE/CHECK/FK on the extra shape tables also land here: autocommit merge
-# with conflicts or constraint violations is not a fuzzer failure.
+# Rebase and cherry-pick replay through that merge and say "cannot apply:"
+# for the same kind of refusal (a rename that reuses another column's old
+# name, or a drop that would discard a changed value). Those restore the
+# branch. UNIQUE/CHECK/FK on the extra shape tables also land here.
 MERGE_ROLLED_BACK = (
     "cannot merge:",
+    "cannot apply:",
     "conflict",
     "constraint violation",
     "transaction rolled back",
