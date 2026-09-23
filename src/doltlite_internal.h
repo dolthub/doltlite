@@ -1714,6 +1714,8 @@ int doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
 void doltliteInvalidateSessionWorkingState(sqlite3 *db);
+int doltliteReloadSessionWorkingState(sqlite3 *db);
+int doltliteSyncSessionToBranchTip(sqlite3 *db);
 void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
 int doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
 void doltliteGetSessionMergeState(sqlite3 *db, u8 *pIsMerging,

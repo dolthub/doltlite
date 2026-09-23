@@ -1107,6 +1107,94 @@ static void test_commit_does_not_erase_peer_write(void){
   remove(path);
 }
 
+/* Releases the peer on the first wait, then keeps retrying while the peer
+** finishes letting go of the lock. */
+static int mpReleaseBusyPeerThenRetry(void *arg, int attempt){
+  MpRefBusyCtx *p = (MpRefBusyCtx*)arg;
+  char ch;
+  if( p->calls++==0 ){
+    mpWrite(p->releaseFd, "G");
+    mpRead(p->readyFd, &ch);
+    return ch=='D';
+  }
+  if( attempt>2000 ) return 0;
+  sqlite3_sleep(5);
+  return 1;
+}
+
+static void test_ref_command_binds_post_wait_tip(void){
+  static const char *azSql[] = {
+    "SELECT dolt_branch('x')",
+    "SELECT dolt_tag('x')",
+    "SELECT dolt_checkout('-b','x')"
+  };
+  static const char *azRef[] = { "x", "x", "x" };
+  char path[256];
+  int i;
+
+  printf("--- Test 6d: A ref command that waited binds the post-wait tip ---\n");
+  snprintf(path, sizeof(path), "/tmp/mp_ref_wait_%d.db", (int)getpid());
+  for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
+    sqlite3 *db = 0;
+    int ready[2], release[2];
+    int rc, status;
+    pid_t pid;
+    char ch;
+    char zRef[64], zMain[64], zHead[64];
+    MpRefBusyCtx ctx;
+    char *zQ;
+
+    setup_db(path);
+    check("mp_ref_wait_open", sqlite3_open(path, &db)==SQLITE_OK);
+    check("mp_ref_wait_prime", strlen(queryScalarText(db, "SELECT dolt_hashof('HEAD')"))==40);
+    mpPipe(ready);
+    mpPipe(release);
+    pid = fork();
+    if( pid==0 ){
+      close(ready[0]);
+      close(release[1]);
+      db = 0;
+      if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(1);
+      sqlite3_busy_timeout(db, 10000);
+      if( execSql(db, "BEGIN IMMEDIATE; INSERT INTO t VALUES(10, 'peer')")!=SQLITE_OK ) _exit(2);
+      mpWrite(ready[1], "R");
+      mpRead(release[0], &ch);
+      if( strlen(queryScalarText(db, "SELECT dolt_commit('-am','peer')"))!=40 ) _exit(3);
+      mpWrite(ready[1], "D");
+      sqlite3_close(db);
+      _exit(0);
+    }
+    if( pid<0 ){ perror("fork"); _exit(1); }
+    close(ready[1]);
+    close(release[0]);
+    mpRead(ready[0], &ch);
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.releaseFd = release[1];
+    ctx.readyFd = ready[0];
+    sqlite3_busy_handler(db, mpReleaseBusyPeerThenRetry, &ctx);
+    rc = execSql(db, azSql[i]);
+    if( rc!=SQLITE_OK ) fprintf(stderr, "%s: %s\n", azSql[i], sqlite3_errmsg(db));
+    check("mp_ref_wait_command_ok", rc==SQLITE_OK && ctx.calls>0);
+    if( ctx.calls==0 ) mpWrite(release[1], "G");
+    waitpid(pid, &status, 0);
+    check("mp_ref_wait_peer_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
+    sqlite3_busy_timeout(db, 10000);
+    zQ = sqlite3_mprintf("SELECT dolt_hashof('%s')", azRef[i]);
+    snprintf(zRef, sizeof(zRef), "%s", queryScalarText(db, zQ));
+    sqlite3_free(zQ);
+    snprintf(zMain, sizeof(zMain), "%s", queryScalarText(db, "SELECT dolt_hashof('main')"));
+    snprintf(zHead, sizeof(zHead), "%s", queryScalarText(db, "SELECT dolt_hashof('HEAD')"));
+    check("mp_ref_wait_ref_at_post_wait_tip", strlen(zMain)==40 && strcmp(zRef, zMain)==0);
+    check("mp_ref_wait_head_follows_branch", strcmp(zHead, zMain)==0);
+    check("mp_ref_wait_sees_peer_row",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=10"), "1")==0);
+    sqlite3_close(db);
+    close(ready[0]);
+    close(release[1]);
+  }
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
@@ -1122,6 +1210,7 @@ int main(){
   test_cross_process_commit_conflict();
   test_write_after_lost_commit_race();
   test_commit_does_not_erase_peer_write();
+  test_ref_command_binds_post_wait_tip();
   test_cross_process_commit_after_peer();
   test_many_process_commit_contention();
 

@@ -1228,6 +1228,12 @@ static void doltCheckoutParsedFunc(
         return;
       }
     }else{
+      rc = doltliteSyncSessionToBranchTip(db);
+      if( rc!=SQLITE_OK ){
+        (void)doltliteVcSealSavepointError(db);
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
       doltliteGetSessionHead(db, &branchCreate.head);
       if( prollyHashIsEmpty(&branchCreate.head) ){
         doltliteVcResultError(ctx, db, "no commits yet — commit first");
