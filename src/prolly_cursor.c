@@ -456,11 +456,30 @@ int prollyCursorPrev(ProllyCursor *cur){
   return SQLITE_OK;
 }
 
+static ProllyCacheEntry *cursorCurrentLeaf(ProllyCursor *cur){
+  if( cur->eState!=PROLLY_CURSOR_VALID
+   || !cur->aLevel[0].pEntry
+   || prollyHashCompare(&cur->root, &cur->aLevel[0].pEntry->hash)!=0 ){
+    return 0;
+  }
+  cur->nAdvance = 0;
+  cur->bLargeScan = 0;
+  cur->bScanFromStart = 0;
+  return cur->aLevel[cur->iLevel].pEntry;
+}
+
 int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
   int rc;
   ProllyCacheEntry *pEntry = 0;
   int leafRes;
   int leafIdx;
+
+  pEntry = cursorCurrentLeaf(cur);
+  if( pEntry && intKey>=prollyNodeIntKey(&pEntry->node, 0)
+   && intKey<=prollyNodeIntKey(&pEntry->node, pEntry->node.nItems-1) ){
+    leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes);
+    return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
+  }
 
   rc = initCursorAtRoot(cur, &pEntry);
   if( rc!=SQLITE_OK ) return rc;
@@ -494,6 +513,25 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
   ProllyCacheEntry *pEntry = 0;
   int leafRes;
   int leafIdx;
+
+  pEntry = cursorCurrentLeaf(cur);
+  if( pEntry ){
+    const u8 *pBound;
+    int nBound;
+    prollyNodeKey(&pEntry->node, cur->aLevel[cur->iLevel].idx, &pBound, &nBound);
+    if( nKey==nBound && memcmp(pKey, pBound, nKey)==0 ){
+      *pRes = 0;
+      return SQLITE_OK;
+    }
+    prollyNodeKey(&pEntry->node, 0, &pBound, &nBound);
+    if( prollyKeyCmp(pKey, nKey, pBound, nBound)>=0 ){
+      prollyNodeKey(&pEntry->node, pEntry->node.nItems-1, &pBound, &nBound);
+      if( prollyKeyCmp(pKey, nKey, pBound, nBound)<=0 ){
+        leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes);
+        return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
+      }
+    }
+  }
 
   rc = initCursorAtRoot(cur, &pEntry);
   if( rc!=SQLITE_OK ) return rc;

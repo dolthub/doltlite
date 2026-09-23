@@ -52,8 +52,9 @@ static ProllyMutMapEntry *entryAtOrder(ProllyMutMap *mm, int idx){
   assert( mm!=0 );
   assert( mm->aEntries!=0 && mm->aOrder!=0 );
   assert( idx>=0 && idx<mm->nEntries );
-  assert( mm->aOrder[idx]>=0 && mm->aOrder[idx]<mm->nEntries );
-  return &mm->aEntries[mm->aOrder[idx]];
+  assert( prollyMutMapOrderPhys(mm, idx)>=0
+       && prollyMutMapOrderPhys(mm, idx)<mm->nEntries );
+  return &mm->aEntries[prollyMutMapOrderPhys(mm, idx)];
 }
 
 static int compareEntryToKey(
@@ -336,6 +337,25 @@ static int bsearch_key(ProllyMutMap *mm,
   int lo = 0, hi = mm->nEntries;
   u64 prefix = keyPrefix64(pKey, nKey);
   *pFound = 0;
+  if( mm->iOrderGap>0 && mm->iOrderGap<hi ){
+    int idx = mm->iOrderGap-1;
+    int c = compareEntryToKey(mm, entryAtOrder(mm, idx), pKey, nKey, prefix);
+    if( c==0 ){
+      *pFound = 1;
+      return idx;
+    }
+    if( c<0 ){
+      lo = idx+1;
+      c = compareEntryToKey(mm, entryAtOrder(mm, lo), pKey, nKey, prefix);
+      if( c>=0 ){
+        *pFound = c==0;
+        return lo;
+      }
+      lo++;
+    }else{
+      hi = idx;
+    }
+  }
   while( lo < hi ){
     int mid = lo + (hi - lo) / 2;
     ProllyMutMapEntry *e = entryAtOrder(mm, mid);
@@ -457,6 +477,7 @@ static int ensureOrder(ProllyMutMap *mm){
   if( !mm->orderDirty ){
     return SQLITE_OK;
   }
+  mm->iOrderGap = mm->nEntries;
   if( mm->appendSorted ){
     for(i=0; i<mm->nEntries; i++){
       mm->aOrder[i] = i;
@@ -524,25 +545,40 @@ static int ensureCapacity(ProllyMutMap *mm){
       return SQLITE_NOMEM;
     }
     mm->aPos = aPosNew;
+    if( !mm->orderDirty ){
+      memmove(&mm->aOrder[mm->iOrderGap+nNew-mm->nEntries],
+              &mm->aOrder[mm->iOrderGap+mm->nAlloc-mm->nEntries],
+              (mm->nEntries-mm->iOrderGap) * sizeof(int));
+    }
     mm->nAlloc = nNew;
   }
   return SQLITE_OK;
 }
 
+static void moveOrderGap(ProllyMutMap *mm, int idx){
+  int gap = mm->nAlloc - mm->nEntries;
+  if( idx < mm->iOrderGap ){
+    memmove(&mm->aOrder[idx+gap], &mm->aOrder[idx],
+            (mm->iOrderGap-idx) * sizeof(int));
+  }else if( idx > mm->iOrderGap ){
+    memmove(&mm->aOrder[mm->iOrderGap], &mm->aOrder[mm->iOrderGap+gap],
+            (idx-mm->iOrderGap) * sizeof(int));
+  }
+  mm->iOrderGap = idx;
+}
+
 static void insertOrderEntry(ProllyMutMap *mm, int idx, int phys){
   int shifted = mm->nEntries - idx;
-  assert( mm!=0 );
   assert( idx>=0 && idx<=mm->nEntries );
   assert( phys>=0 && phys<=mm->nEntries );
-  if( idx < mm->nEntries ){
-    memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
-            (mm->nEntries - idx) * sizeof(int));
-  }
-  mm->aOrder[idx] = phys;
+  moveOrderGap(mm, idx);
+  mm->aOrder[mm->iOrderGap++] = phys;
+  mm->aPos[phys] = idx;
   if( shifted <= MUTMAP_POS_UPDATE_LIMIT ){
     int i;
-    for(i=idx; i<=mm->nEntries; i++){
-      mm->aPos[mm->aOrder[i]] = i;
+    for(i=idx; i<mm->nEntries; i++){
+      int slot = i+mm->nAlloc-mm->nEntries;
+      mm->aPos[mm->aOrder[slot]] = i+1;
     }
   }else{
     mm->posDirty = 1;
@@ -601,6 +637,7 @@ static int appendEntry(
   if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
     insertOrderEntry(mm, idx, phys);
   }else{
+    mm->iOrderGap = mm->nEntries+1;
     mm->aOrder[phys] = phys;
     mm->aPos[phys] = phys;
     mm->orderDirty = 1;
@@ -660,7 +697,7 @@ int prollyMutMapInsert(
       idx = bsearch_key(mm, pKey, nKey, &found);
     }
     if( found ){
-      phys = mm->aOrder[idx];
+      phys = prollyMutMapOrderPhys(mm, idx);
     }
   }else{
     rc = findPhysLazy(mm, pKey, nKey, &phys);
@@ -724,7 +761,7 @@ int prollyMutMapInsertZeroTail(
   if( mm->keepSorted || !mm->orderDirty ){
     idx = bsearch_key(mm, pKey, nKey, &found);
     if( found ){
-      phys = mm->aOrder[idx];
+      phys = prollyMutMapOrderPhys(mm, idx);
     }
   }else{
     rc = findPhysLazy(mm, pKey, nKey, &phys);
@@ -786,7 +823,7 @@ int prollyMutMapDelete(
   if( mm->keepSorted || !mm->orderDirty ){
     idx = bsearch_key(mm, pKey, nKey, &found);
     if( found ){
-      phys = mm->aOrder[idx];
+      phys = prollyMutMapOrderPhys(mm, idx);
     }
   }else{
     rc = findPhysLazy(mm, pKey, nKey, &phys);
@@ -915,6 +952,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
         mm->aUndo[j].entryIdx = idx>=0 && idx<oldN ? mm->aPos[idx] : -1;
       }
       if( mm->keepSorted ){
+        moveOrderGap(mm, oldN);
         for(j=0; j<oldN; j++){
           int mapped = mm->aPos[mm->aOrder[j]];
           if( mapped >= 0 ){
@@ -922,6 +960,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
           }
         }
         mm->nEntries = out;
+        mm->iOrderGap = out;
         for(j=0; j<mm->nEntries; j++){
           mm->aPos[mm->aOrder[j]] = j;
         }
@@ -1114,6 +1153,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
     freeEntryData(&mm->aEntries[i]);
   }
   mm->nEntries = 0;
+  mm->iOrderGap = 0;
   mm->orderDirty = 0;
   mm->preferSorted = 0;
   mm->posDirty = 0;
@@ -1235,7 +1275,10 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
       dst->nEntries++;
     }
     if( src->keepSorted || !src->orderDirty ){
-      memcpy(dst->aOrder, src->aOrder, src->nEntries * sizeof(int));
+      for(i=0; i<src->nEntries; i++){
+        dst->aOrder[i] = prollyMutMapOrderPhys(src, i);
+      }
+      dst->iOrderGap = dst->nEntries;
       memcpy(dst->aPos, src->aPos, src->nEntries * sizeof(int));
     }else{
       memset(dst->aOrder, 0, src->nEntries * sizeof(int));

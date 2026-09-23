@@ -340,7 +340,7 @@ SQLITE_INLINE int orderedMutMapEntryAt(
   ProllyMutMapEntry **ppEntry
 ){
   if( pMap->keepSorted || !pMap->orderDirty ){
-    *ppEntry = &pMap->aEntries[pMap->aOrder[idx]];
+    *ppEntry = &pMap->aEntries[prollyMutMapOrderPhys(pMap, idx)];
     return SQLITE_OK;
   }
   return prollyMutMapEntryAt(pMap, idx, ppEntry);

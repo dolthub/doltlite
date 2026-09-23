@@ -168,7 +168,7 @@ static SQLITE_INLINE int prollyBtCursorNextFastMergedLeaf(BtCursor *pCur){
   if( rc!=SQLITE_OK ) return rc;
   pLevel->idx++;
   if( pCur->mmIdx<pMap->nEntries
-   && mergeCompare(pCur, &pMap->aEntries[pMap->aOrder[pCur->mmIdx]])>=0 ){
+   && mergeCompare(pCur, &pMap->aEntries[prollyMutMapOrderPhys(pMap, pCur->mmIdx)])>=0 ){
     pLevel->idx--;
     return SQLITE_NOTFOUND;
   }

@@ -11013,6 +11013,79 @@ static void run_mutmap_append_sorted_order(void){
   prollyMutMapFree(&mm);
 }
 
+static void checkMutmapInterleavedOrder(ProllyMutMap *mm, int stride){
+  int i, idx = 0;
+  char key[32];
+  ProllyMutMapEntry *e = 0;
+  check("interleaved_count", mm->nEntries==1000/stride);
+  for(i=0; i<1000; i+=stride, idx++){
+    int found = 0, rank = -1;
+    int n;
+    sqlite3_snprintf(sizeof(key), key, "common-prefix-%04d", i);
+    n = (int)strlen(key);
+    check("interleaved_seek",
+          prollyMutMapResolveSortedPos(mm, mm->isIntKey ? 0 : (u8*)key,
+              mm->isIntKey ? 0 : n, i, &rank, &found)==SQLITE_OK
+          && found && rank==idx);
+    check("interleaved_entry", prollyMutMapEntryAt(mm, idx, &e)==SQLITE_OK
+          && e && e->op==PROLLY_EDIT_INSERT && e->nVal==sizeof(i)
+          && memcmp(e->pVal, &i, sizeof(i))==0);
+    check("interleaved_rank", e && prollyMutMapOrderIndexFromEntry(mm, e)==idx);
+  }
+  for(idx=mm->nEntries-1; idx>=0; idx--){
+    i = idx*stride;
+    check("interleaved_reverse", prollyMutMapEntryAt(mm, idx, &e)==SQLITE_OK
+          && e && memcmp(e->pVal, &i, sizeof(i))==0);
+  }
+}
+
+static void run_mutmap_interleaved_order(void){
+  int mode, intKey, i, pass;
+  for(mode=0; mode<2; mode++){
+    for(intKey=0; intKey<2; intKey++){
+      ProllyMutMap mm;
+      ProllyMutMap *clone = 0;
+      char key[32];
+      check("interleaved_init", prollyMutMapInitMode(&mm, intKey, mode)==SQLITE_OK);
+      for(pass=0; pass<2; pass++){
+        for(i=0; i<500; i++){
+          int value = pass ? (i%2 ? 1000-i : i+1) : i*2;
+          int n;
+          sqlite3_snprintf(sizeof(key), key, "common-prefix-%04d", value);
+          n = (int)strlen(key);
+          check("interleaved_insert",
+                prollyMutMapInsert(&mm, intKey ? 0 : (u8*)key,
+                    intKey ? 0 : n, value, (u8*)&value, sizeof(value))==SQLITE_OK);
+        }
+        checkMutmapInterleavedOrder(&mm, pass ? 1 : 2);
+        if( pass==0 ) prollyMutMapPushSavepoint(&mm, 1);
+      }
+      check("interleaved_clone", prollyMutMapClone(&clone, &mm)==SQLITE_OK);
+      check("interleaved_rollback", prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
+      checkMutmapInterleavedOrder(&mm, 2);
+      if( clone ){
+        checkMutmapInterleavedOrder(clone, 1);
+        check("interleaved_clone_rollback",
+              prollyMutMapRollbackToSavepoint(clone, 1)==SQLITE_OK);
+        checkMutmapInterleavedOrder(clone, 2);
+        prollyMutMapFree(clone);
+        sqlite3_free(clone);
+      }
+      prollyMutMapClear(&mm);
+      for(i=999; i>=0; i--){
+        int n;
+        sqlite3_snprintf(sizeof(key), key, "common-prefix-%04d", i);
+        n = (int)strlen(key);
+        check("interleaved_reuse", prollyMutMapInsert(&mm,
+              intKey ? 0 : (u8*)key, intKey ? 0 : n,
+              i, (u8*)&i, sizeof(i))==SQLITE_OK);
+      }
+      checkMutmapInterleavedOrder(&mm, 1);
+      prollyMutMapFree(&mm);
+    }
+  }
+}
+
 static void run_mutmap_sorted_lookup_transition(void){
   ProllyMutMap mm;
   ProllyMutMapEntry *e;
@@ -12391,6 +12464,27 @@ static void run_prolly_blob_cursor_seek_across_internal_boundary(void){
           nKey==(int)sizeof(kT) && memcmp(pKey, kT, sizeof(kT))==0);
   }
 
+  {
+    const u8 keys[] = {'u', 'z', 't', 'm', 'h', 'a', 'n', 't', 'z'};
+    const u8 expected[] = {'z', 'z', 't', 'm', 'm', 'a', 't', 't', 'z'};
+    int i;
+    for(i=0; i<(int)sizeof(keys); i++){
+      rc = prollyCursorSeekBlob(&cur, &keys[i], 1, &res);
+      check("blob_repeated_seek", rc==SQLITE_OK && prollyCursorIsValid(&cur)
+            && res==(keys[i]==expected[i] ? 0 : 1));
+      prollyCursorKey(&cur, &pKey, &nKey);
+      check("blob_repeated_seek_key", nKey==1 && pKey[0]==expected[i]);
+    }
+    check("blob_seek_then_prev", prollyCursorPrev(&cur)==SQLITE_OK);
+    prollyCursorKey(&cur, &pKey, &nKey);
+    check("blob_seek_then_prev_key", nKey==1 && pKey[0]=='t');
+    cur.root = leftHash;
+    rc = prollyCursorSeekBlob(&cur, kT, sizeof(kT), &res);
+    check("blob_seek_changed_root", rc==SQLITE_OK && res==-1);
+    prollyCursorKey(&cur, &pKey, &nKey);
+    check("blob_seek_changed_root_key", nKey==1 && pKey[0]=='m');
+  }
+
   prollyCursorClose(&cur);
   prollyCacheFree(&cache);
   chunkStoreClose(&cs);
@@ -12457,6 +12551,24 @@ static void run_prolly_int_cursor_seek_across_internal_boundary(void){
   check("int_cursor_valid_after_seek", prollyCursorIsValid(&cur));
   if( prollyCursorIsValid(&cur) ){
     check("int_cursor_lands_on_right_child_key", prollyCursorIntKey(&cur)==30);
+  }
+
+  {
+    const int keys[] = {35, 40, 30, 20, 15, 10, 25, 30, 40};
+    const int expected[] = {40, 40, 30, 20, 20, 10, 30, 30, 40};
+    int i;
+    for(i=0; i<(int)(sizeof(keys)/sizeof(keys[0])); i++){
+      rc = prollyCursorSeekInt(&cur, keys[i], &res);
+      check("int_repeated_seek", rc==SQLITE_OK && prollyCursorIsValid(&cur)
+            && res==(keys[i]==expected[i] ? 0 : 1));
+      check("int_repeated_seek_key", prollyCursorIntKey(&cur)==expected[i]);
+    }
+    check("int_seek_then_prev", prollyCursorPrev(&cur)==SQLITE_OK
+          && prollyCursorIntKey(&cur)==30);
+    cur.root = leftHash;
+    rc = prollyCursorSeekInt(&cur, 30, &res);
+    check("int_seek_changed_root", rc==SQLITE_OK && res==-1
+          && prollyCursorIntKey(&cur)==20);
   }
 
   prollyCursorClose(&cur);
@@ -14828,6 +14940,7 @@ static const RegressionCase aCases[] = {
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_value_lifetimes", "MutMap Value Lifetimes Test", run_mutmap_value_lifetimes },
   { "mutmap_delete_reinsert_reuses_entry", "MutMap Delete Reinsert Reuses Entry Test", run_mutmap_delete_reinsert_reuses_entry },
+  { "mutmap_interleaved_order", "MutMap Interleaved Order Test", run_mutmap_interleaved_order },
   { "mutmap_sorted_lookup_transition", "MutMap Sorted Lookup Transition Test", run_mutmap_sorted_lookup_transition },
   { "mutmap_append_sorted_order", "MutMap Append Sorted Order Test", run_mutmap_append_sorted_order },
   { "mutmap_resolve_sorted_pos", "MutMap ResolveSortedPos Test", run_mutmap_resolve_sorted_pos },

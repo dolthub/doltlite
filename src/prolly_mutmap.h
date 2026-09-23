@@ -54,6 +54,8 @@ struct ProllyMutMap {
   ProllyMutMapEntry *aEntries;
   /* aEntries is append order; aOrder is key-sorted; aPos maps physical to aOrder. */
   int *aOrder;
+  /* aOrder has nAlloc-nEntries unused slots at iOrderGap; aPos stores ranks. */
+  int iOrderGap;
   int *aPos;
   int *aHash;
   int nHashAlloc;
@@ -66,6 +68,11 @@ struct ProllyMutMap {
   /* Cursors detect map replacement/rollback without comparing recycled pointers. */
   u32 generation;
 };
+
+static SQLITE_INLINE int prollyMutMapOrderPhys(const ProllyMutMap *mm, int idx){
+  assert( idx>=0 && idx<mm->nEntries );
+  return mm->aOrder[idx + (idx>=mm->iOrderGap ? mm->nAlloc-mm->nEntries : 0)];
+}
 
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey);
 int prollyMutMapInitMode(ProllyMutMap *mm, u8 isIntKey, u8 keepSorted);
