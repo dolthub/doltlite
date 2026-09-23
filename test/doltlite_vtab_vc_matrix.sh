@@ -223,10 +223,19 @@ scenario "clean merge with untouched vtabs"
 newdb
 run_sql "$FIXTURE SELECT dolt_commit('-Am','base');" "$DB" > /dev/null
 run_sql "SELECT dolt_checkout('-b','side'); INSERT INTO plain VALUES(2,'s'); SELECT dolt_commit('-am','side');
-SELECT dolt_checkout('main'); INSERT INTO plain VALUES(3,'m'); SELECT dolt_commit('-am','main');
-SELECT dolt_merge('side');" "$DB" > /dev/null
+SELECT dolt_checkout('main'); INSERT INTO plain VALUES(3,'m'); SELECT dolt_commit('-am','main');" "$DB" > /dev/null
+merge=$(run_sql "SELECT dolt_merge('side');" "$DB")
+if printf '%s\n' "$merge" | grep -Eq '^[0-9a-f]{40}$'; then
+  PASS=$((PASS+1))
+else
+  note_fail "merge_clean_hash" "expected |40 hex| got |$merge|"
+fi
 verify "merge_clean_vtabs_survive" "$DB" "$BASE_STATE"
 verify_commit "merge_clean_commit" "$DB" "$BASE_STATE"
+result=$(run_sql "SELECT group_concat(k || ':' || v, ',') FROM (SELECT k, v FROM plain ORDER BY k);" "$DB")
+check "merge_clean_plain_rows" "1:p,2:s,3:m" "$result"
+result=$(run_sql "SELECT count(*) FROM dolt_log;" "$DB")
+check "merge_clean_log" "5" "$result"
 
 scenario "merge adopts one-sided vtab content"
 newdb
