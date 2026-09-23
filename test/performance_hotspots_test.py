@@ -115,8 +115,6 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
             raw = Path(directory) / "samples.tsv"
-            retained_values = {f"retained_3133_{category}_probe": 100000
-                               for category in ("narrow_rows", "zero_row_updates")}
             report = io.StringIO()
             with patch.object(hotspots, "run", return_value="validated") as run, \
                  patch.object(hotspots, "prepare") as prepare, \
@@ -128,8 +126,8 @@ class HotspotTests(unittest.TestCase):
                               return_value={"add_column_default": 100000}) as add_column_measure, \
                  patch.object(hotspots, "index_edit_fixture") as index_edit_fixture, \
                  patch.object(hotspots, "measure_index_edits") as index_edit_measure, \
-                 patch.object(hotspots, "prepare_retained", return_value=[]) as prepare_retained, \
-                 patch.object(hotspots, "measure_retained", return_value=retained_values) as measure_retained, \
+                 patch.object(hotspots, "prepare_retained", wraps=hotspots.prepare_retained) as prepare_retained, \
+                 patch.object(hotspots, "measure_retained", wraps=hotspots.measure_retained) as measure_retained, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(report), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
@@ -149,13 +147,14 @@ class HotspotTests(unittest.TestCase):
             for retired in (prepare, measure, index_fixture, index_measure,
                             index_edit_fixture, index_edit_measure):
                 retired.assert_not_called()
-            for title in ("Large Table Scans", "Large Index Edits", "Wide Rows"):
+            for title in ("Large Table Scans", "Large Index Edits", "Wide Rows",
+                          "Narrow Rows", "Zero Row Updates"):
                 self.assertNotIn(title, report.getvalue())
-            for title in ("Narrow Rows", "Zero Row Updates"):
-                self.assertIn(title, report.getvalue())
-            self.assertEqual(result.read_text(), "add_column\tadd_column_default\t100000\t100000\n"
-                + "".join(f"{hotspots.section_of(name)}\t{name}\t100000\t100000\n" for name in retained_values))
-            self.assertEqual(len(raw.read_text().splitlines()), 7)
+            self.assertIn("Add Column With Default", report.getvalue())
+            self.assertEqual(report.getvalue().count("### "), 1)
+            self.assertTrue(all(call.args[2] == [] for call in measure_retained.call_args_list))
+            self.assertEqual(result.read_text(), "add_column\tadd_column_default\t100000\t100000\n")
+            self.assertEqual(len(raw.read_text().splitlines()), 3)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -240,30 +239,35 @@ class HotspotTests(unittest.TestCase):
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
             self.assertEqual(len(hotspots.SECTIONS), 7)
 
-    def test_discovered_corpus_categories_and_shared_fixtures(self):
+    def test_retired_corpus_categories_and_shared_fixtures(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
-            fixtures = hotspots.prepare_retained({'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
-        counts = {category: 0 for category in ('narrow_rows', 'zero_row_updates')}
+            fixtures = hotspots.prepare_retained(
+                {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
+                Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
+        counts = {category: 0 for category in ('wide_rows', 'narrow_rows', 'zero_row_updates')}
         for name, bundle, databases in fixtures:
             category = hotspots.section_of(name)
             counts[category] += 1
             self.assertEqual(category, bundle['category'])
             self.assertGreaterEqual(bundle['discovery']['minimum_ratio'], 3)
             self.assertNotIn('COMMIT', bundle['case']['sql'])
-            if category == 'narrow_rows':
+            if category == 'wide_rows':
+                self.assertEqual(bundle['profile']['payload'], 16384)
+                self.assertEqual(bundle['profile']['rows'], 16384)
+            elif category == 'narrow_rows':
                 self.assertIn(bundle['profile']['payload'], (256, 1024))
             else:
                 self.assertTrue(bundle['expected'].startswith('0|'))
-        self.assertEqual(counts, {'narrow_rows': 5, 'zero_row_updates': 1})
-        self.assertEqual(sql.call_count, 9)
+        self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2})
+        self.assertEqual(sql.call_count, 15)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 3)
+        self.assertEqual(len(grouped), 5)
 
     def test_retained_gate_measures_fixed_batches(self):
-        bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-corpus/narrow_rows_point_pk.json').read_text())
+        bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
         bundle['repeats'] = 2
         expected = bundle['expected']
         output = f'WARM\n{expected}\nMEASURE\n' + (f'{expected}\nRun Time: real 0.008 user 0.008 sys 0.0\n'*2) + 'END\n'
@@ -274,7 +278,8 @@ class HotspotTests(unittest.TestCase):
     def test_zero_row_updates_verify_zero_changes_and_rollback(self):
         from dataclasses import replace
         from performance_hotspot_fuzzer import Profile, fixture_sql
-        paths = (hotspots.TEST_DIR/'performance-hotspot-corpus').glob('zero_row_updates_*.json')
+        paths = list((hotspots.TEST_DIR/'performance-hotspot-seeds').glob('zero_row_updates_*.json'))
+        self.assertEqual(len(paths), 2)
         for path in paths:
             bundle = json.loads(path.read_text())
             profile = replace(Profile(**bundle['profile']), rows=64, start=1, width=16)

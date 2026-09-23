@@ -70,23 +70,29 @@ class SeedTests(unittest.TestCase):
 
     def test_retired_corpus_moves_to_search_and_random_exploration_continues(self):
         specs = list(seeds.specs())
-        self.assertEqual(len(specs), 5)
+        self.assertEqual(len(specs), 8)
+        self.assertEqual(sum(len(cases) for _, cases, _ in specs), 25)
         names = {path.stem for path in seeds.SEED_DIR.glob('*.json')}
         wide_cases = {'create_index', 'delete_batch', 'distinct', 'index_fetch',
                       'join_pk', 'point_payload', 'point_pk', 'range_pk',
                       'reverse_scan', 'scan_payload', 'sort_limit', 'update_batch'}
+        narrow_cases = {'index_fetch', 'join_pk', 'point_payload', 'point_pk', 'reverse_scan'}
         self.assertEqual(names, {'wide_rows_'+name for name in wide_cases}
-                               | {'zero_row_updates_after_delete_text_pk'})
+                               | {'narrow_rows_'+name for name in narrow_cases}
+                               | {'zero_row_updates_after_delete_text_pk',
+                                  'zero_row_updates_after_delete_integer_pk'})
         wide = [(p, cases, setup) for p, cases, setup in specs if p.payload==16384]
         self.assertEqual(len(wide), 1)
         profile, cases, setup = wide[0]
         self.assertEqual({case.name for case in cases}, wide_cases)
         self.assertEqual((profile.rows, profile.cache_kib), (16384, 16384))
-        for case in cases:
-            bundle = json.loads((seeds.SEED_DIR/('wide_rows_'+case.name+'.json')).read_text())
-            self.assertEqual(profile, fuzzer.Profile(**bundle['profile']))
-            self.assertEqual(case, fuzzer.Case(**bundle['case']))
-            self.assertEqual(setup, bundle['setup_sql'])
+        for name in names:
+            bundle = json.loads((seeds.SEED_DIR/(name+'.json')).read_text())
+            matches = [(p, case, sql) for p, cases, sql in specs for case in cases
+                       if p == fuzzer.Profile(**bundle['profile'])
+                       and case == fuzzer.Case(**bundle['case'])
+                       and sql == bundle['setup_sql']]
+            self.assertEqual(len(matches), 1, name)
         active = hotspots.TEST_DIR/'performance-hotspot-corpus'
         self.assertTrue(all(not (active/(name+'.json')).exists() for name in names))
         with patch.object(seeds, 'specs', return_value=iter(specs)):
@@ -94,7 +100,7 @@ class SeedTests(unittest.TestCase):
             for index, spec in enumerate(specs):
                 self.assertEqual(next(generated), (index, *spec, 'retired'))
             index, profile, cases, setup, origin = next(generated)
-            self.assertEqual(index, 5)
+            self.assertEqual(index, 8)
             self.assertEqual(len(cases), 4)
             self.assertIn('CREATE TABLE u', setup)
             self.assertNotEqual(origin, 'retired')
