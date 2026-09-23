@@ -553,7 +553,7 @@ run_test_match "continue_in_txn_detects_fk_violation" \
    BEGIN;
    SELECT dolt_rebase('--continue');
    COMMIT;" \
-  "data conflicts from rebase" \
+  "data conflict detected while rebasing commit" \
   "$DB9"
 run_test "continue_in_txn_no_orphans" \
   "SELECT count(*) FROM pragma_foreign_key_check;
@@ -841,7 +841,8 @@ else
 fi
 rm -f "$DB12F"
 
-# Same split after a conflicted interactive --continue.
+# A conflicted interactive --continue inside BEGIN pauses on the working
+# branch, and ROLLBACK leaves it there; both match Dolt with autocommit off.
 DB13=/tmp/test_rebase_iconflict_txn_$$.db; rm -f "$DB13"
 cat <<'SQL' | "$DOLTLITE" "$DB13" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -863,25 +864,25 @@ SELECT dolt_rebase('--continue');
 SELECT 'AFTER_CONT|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
 ROLLBACK;
 SELECT 'AFTER_RB|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_status);" | "$DOLTLITE" "$DB13" 2>&1)
-if echo "$TX_OUT" | grep -q 'data conflicts from rebase'; then
+if echo "$TX_OUT" | grep -q 'data conflict detected while rebasing commit'; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn\n  expected data conflicts from rebase\n  got: $TX_OUT"
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn\n  expected the rebase to pause on the data conflict\n  got: $TX_OUT"
 fi
 AFTER_CONT=$(echo "$TX_OUT" | grep '^AFTER_CONT|')
 AFTER_RB=$(echo "$TX_OUT" | grep '^AFTER_RB|')
-if [ "$AFTER_CONT" = "AFTER_CONT|feat|2" ]; then
+if [ "$AFTER_CONT" = "AFTER_CONT|dolt_rebase_feat|3" ]; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn_restores\n  expected: AFTER_CONT|feat|2\n  got:      $AFTER_CONT"
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn_pauses\n  expected: AFTER_CONT|dolt_rebase_feat|3\n  got:      $AFTER_CONT"
 fi
-if [ "$AFTER_RB" = "AFTER_RB|feat|2|0" ]; then
+if [ "$AFTER_RB" = "AFTER_RB|dolt_rebase_feat|3|0" ]; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn_rollback\n  expected: AFTER_RB|feat|2|0\n  got:      $AFTER_RB"
+  ERRORS="$ERRORS\nFAIL: interactive_rebase_conflict_in_txn_rollback\n  expected: AFTER_RB|dolt_rebase_feat|3|0\n  got:      $AFTER_RB"
 fi
 rm -f "$DB13"
 
@@ -1235,7 +1236,55 @@ run_test "rebase_empty_interactive_keep_log" \
 f2,f_dup_of_main2,main2,base" \
   "$DBEI/dolt_rebase_feat"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI"
+# A pause on constraint violations holds no conflicts, so COMMIT makes it
+# durable: a later connection on the working branch resolves and continues,
+# and the paused squash still amends the commit before it.
+DBCV=/tmp/test_rebase_cv_pause_durable_$$.db; rm -f "$DBCV"
+cat <<'SQL' | "$DOLTLITE" "$DBCV" >/dev/null 2>&1
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INT PRIMARY KEY);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT REFERENCES p(id));
+INSERT INTO p VALUES(1),(2);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+DELETE FROM p WHERE id=2;
+SELECT dolt_commit('-am','main_del_parent');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES(1,1);
+SELECT dolt_commit('-am','f_child_of_1');
+INSERT INTO c VALUES(2,2);
+SELECT dolt_commit('-am','f_child_of_2');
+SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='squash' WHERE commit_message='f_child_of_2';
+SELECT dolt_rebase('--continue');
+COMMIT;
+SQL
+run_test "rebase_cv_pause_survives_commit" \
+  "SELECT count(*) FROM dolt_rebase;
+   SELECT count(*) FROM dolt_constraint_violations_c;" \
+  "1
+1" \
+  "$DBCV/dolt_rebase_feat"
+run_test "rebase_cv_pause_continues_after_reopen" \
+  "UPDATE c SET pid=1 WHERE id=2;
+   DELETE FROM dolt_constraint_violations_c;
+   SELECT dolt_add('.');
+   SELECT dolt_rebase('--continue');
+   SELECT active_branch();" \
+  "0
+Successfully rebased and updated refs/heads/feat
+feat" \
+  "$DBCV/dolt_rebase_feat"
+run_test "rebase_cv_pause_squash_amended" \
+  "SELECT group_concat(replace(message, char(10), '/'), ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+   SELECT group_concat(id||'='||pid) FROM c;" \
+  "f_child_of_1//f_child_of_2,main_del_parent,base
+1=1,2=1" \
+  "$DBCV/feat"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

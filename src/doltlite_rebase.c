@@ -583,6 +583,7 @@ static int doltliteRebaseLinearReplay(
   char *zApplyErr = 0;
   int bConflict = 0;
   int bViolation = 0;
+  int bKeepTxn = 0;
   assert( db!=0 && context!=0 && zUpstream!=0 && pzFinalMessage!=0 );
   assert( pbPaused!=0 );
   cs = doltliteGetChunkStore(db);
@@ -696,6 +697,7 @@ static int doltliteRebaseLinearReplay(
   rc = rebaseSwitchToWorkingBranch(db, zWorking);
   if( rc!=SQLITE_OK ) goto rollback;
 
+  bKeepTxn = doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_PLAIN;
   for(i=0; i<nReplay; i++){
     DoltliteCommit replayCommit, parentCommit, curHeadCommit;
     ProllyHash curHead;
@@ -752,10 +754,18 @@ static int doltliteRebaseLinearReplay(
       continue;
     }
     if( rc!=SQLITE_OK ) goto rollback;
-    /* Violations cannot be kept and continued. Data conflicts inside
-    ** BEGIN can: autocommit and a nested savepoint still abort. */
-    if( nViolations>0 ){ bViolation = 1; rc = SQLITE_ERROR; goto rollback; }
-    if( nConflicts>0 ){
+    if( nConflicts==0 && nViolations==0 && bKeepTxn && db->autoCommit ){
+      rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+      if( rc!=SQLITE_OK ) goto rollback;
+    }
+    /* Inside BEGIN conflicts and violations pause for resolution, as in
+    ** Dolt; autocommit and a nested savepoint abort. */
+    if( nViolations>0 && doltliteVcTxnMode(db)!=DOLTLITE_VC_TXN_PLAIN ){
+      bViolation = 1;
+      rc = SQLITE_ERROR;
+      goto rollback;
+    }
+    if( nConflicts>0 || nViolations>0 ){
       if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_PLAIN ){
         int pauseRc = rebasePauseLinearConflict(
             db, context, cs, aReplay, i, nReplay,
@@ -1310,72 +1320,6 @@ static int rebasePauseLinearConflict(
   return SQLITE_OK;
 }
 
-static int rebaseApplyPlanRowCatalog(
-  sqlite3 *db,
-  const RebasePlanRow *pRow,
-  const ProllyHash *pCurCat,
-  ProllyHash *pMergedCat,
-  char **pzMessage,
-  char **pzErr
-){
-  DoltliteCommit parentC, replayC;
-  int nConflicts = 0;
-  int nViolations = 0;
-  int rc;
-
-  *pzMessage = 0;
-  memset(&parentC, 0, sizeof(parentC));
-  memset(&replayC, 0, sizeof(replayC));
-
-  rc = doltliteLoadCommit(db, &pRow->commitHash, &replayC);
-  if( rc!=SQLITE_OK ) return rc;
-  if( doltliteCommitParentCount(&replayC)==0 ){
-    doltliteCommitClear(&replayC);
-    return SQLITE_ERROR;
-  }
-  rc = doltliteLoadFirstParentCommit(db, &replayC, &parentC);
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&replayC);
-    return rc;
-  }
-
-  {
-    char **azReindex = 0;
-    int nReindex = 0;
-    rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
-                               &replayC.catalogHash, pMergedCat,
-                               &nConflicts, 0, 0, 0, 0, 0,
-                               &azReindex, &nReindex, 0, 0);
-    if( rc==SQLITE_OK && nConflicts==0 ){
-      rc = doltliteSwitchCatalog(db, pMergedCat);
-    }
-    if( rc==SQLITE_OK && nConflicts==0 && nReindex>0 ){
-      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex, 0);
-      if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, pMergedCat);
-      if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pMergedCat);
-    }
-    doltliteFreeNameList(azReindex, nReindex);
-  }
-  if( rc==SQLITE_OK && nConflicts==0 ){
-    rc = doltliteDetectConstraintViolationsFiltered(
-        db, &parentC.catalogHash, 0, 0, 1, &nViolations, pzErr);
-  }
-  if( rc==SQLITE_OK && (nConflicts>0 || nViolations>0) ){
-    rc = SQLITE_CONSTRAINT;
-  }
-  if( rc==SQLITE_OK ){
-    const char *zMessage = replayC.zMessage;
-    if( strcmp(pRow->zAction, "reword")==0 && pRow->zCommitMessage[0] ){
-      zMessage = pRow->zCommitMessage;
-    }
-    *pzMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
-    if( !*pzMessage ) rc = SQLITE_NOMEM;
-  }
-  doltliteCommitClear(&parentC);
-  doltliteCommitClear(&replayC);
-  return rc;
-}
-
 static void (*rebaseBeforeAdvanceHook)(void) = 0;
 
 void doltliteTestSetRebaseBeforeAdvanceHook(void (*xHook)(void)){
@@ -1413,82 +1357,152 @@ static int rebaseAdvanceWorkingBranch(
   return rc;
 }
 
-static int rebaseReplayPlanGroup(
+/* Squash and fixup rewrite the commit before them, as Dolt's cherry-pick
+** --amend does: same parents, the step's catalog, and for squash both
+** messages. pStepHead is the commit the step just made on top of it. */
+static int rebaseAmendStep(
   sqlite3 *db,
-  RebasePlanRow *aPlan,
-  int nPlan,
-  int iStart,
-  ProllyHash *pCurCat,
-  ProllyHash *pCurHead,
+  const ProllyHash *pStepHead,
+  const ProllyHash *pCatalog,
+  const DoltliteCommit *pPrev,
+  const char *zSquashMsg
+){
+  ProllyHash newCommit;
+  char *zMsg;
+  int nParents = doltliteCommitParentCount(pPrev);
+  int rc;
+  if( nParents==0 ) return SQLITE_ERROR;
+  zMsg = zSquashMsg
+       ? sqlite3_mprintf("%s\n\n%s", pPrev->zMessage ? pPrev->zMessage : "",
+                         zSquashMsg)
+       : sqlite3_mprintf("%s", pPrev->zMessage ? pPrev->zMessage : "");
+  if( !zMsg ) return SQLITE_NOMEM;
+  rc = doltliteCreateAndStoreCommit(db, doltliteCommitParentHash(pPrev, 0),
+                                    pCatalog, zMsg, NULL, NULL,
+                                    nParents>1 ? &pPrev->aParents[1] : 0,
+                                    nParents-1, &newCommit);
+  sqlite3_free(zMsg);
+  if( rc==SQLITE_OK ){
+    rc = rebaseAdvanceWorkingBranch(db, pStepHead, &newCommit, pCatalog);
+  }
+  return rc;
+}
+
+/* One plan step, the way Dolt runs it: a cherry-pick of the commit, amended
+** into the previous one for squash and fixup. Conflicts and violations are
+** left for the caller to pause on or abort over. The cherry-pick commit ends
+** the SQL transaction; bKeepTxn opens a new one, as Dolt does, so a later
+** step still pauses inside a transaction. */
+static int rebaseReplayStep(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const RebasePlanRow *pRow,
   int keepEmpty,
-  int *piNext,
+  int bKeepTxn,
+  int *pnConflicts,
+  int *pnViolations,
   char **pzErr
 ){
-  char *combinedMsg = 0;
-  ProllyHash startCat;
+  DoltliteCommit replayC, parentC, headC;
+  ProllyHash curHead;
+  const char *zMsg;
+  char hexBuf[PROLLY_HASH_SIZE*2+1];
+  int bAmend;
   int rc;
-  int j;
 
-  startCat = *pCurCat;
-  rc = rebaseApplyPlanRowCatalog(
-      db, &aPlan[iStart], pCurCat, pCurCat, &combinedMsg, pzErr);
+  *pnConflicts = 0;
+  *pnViolations = 0;
+  if( strcmp(pRow->zAction, "drop")==0 ) return SQLITE_OK;
+  bAmend = strcmp(pRow->zAction, "squash")==0
+        || strcmp(pRow->zAction, "fixup")==0;
+  memset(&replayC, 0, sizeof(replayC));
+  memset(&parentC, 0, sizeof(parentC));
+  memset(&headC, 0, sizeof(headC));
+  rc = doltliteLoadCommit(db, &pRow->commitHash, &replayC);
   if( rc!=SQLITE_OK ) return rc;
+  if( doltliteCommitParentCount(&replayC)==0 ){
+    rc = SQLITE_ERROR;
+    goto step_done;
+  }
+  rc = doltliteLoadFirstParentCommit(db, &replayC, &parentC);
+  if( rc!=SQLITE_OK ) goto step_done;
+  doltliteGetSessionHead(db, &curHead);
+  rc = doltliteLoadCommit(db, &curHead, &headC);
+  if( rc!=SQLITE_OK ) goto step_done;
 
-  j = iStart + 1;
-  while( j < nPlan
-      && (strcmp(aPlan[j].zAction, "squash")==0
-       || strcmp(aPlan[j].zAction, "fixup")==0
-       || strcmp(aPlan[j].zAction, "drop")==0) ){
-    char *zMessage = 0;
-    if( strcmp(aPlan[j].zAction, "drop")==0 ){
-      j++;
-      continue;
+  zMsg = replayC.zMessage;
+  if( strcmp(pRow->zAction, "reword")==0 && pRow->zCommitMessage[0] ){
+    zMsg = pRow->zCommitMessage;
+  }
+  rc = applyMergedCatalogAndCommit(db, context,
+      &parentC.catalogHash, &headC.catalogHash, &replayC.catalogHash,
+      &curHead, 0, zMsg ? zMsg : "",
+      0, 0, 0, keepEmpty ? 0 : 1, pnConflicts, pnViolations, pzErr, hexBuf);
+  if( rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+    goto step_done;
+  }
+  if( rc!=SQLITE_OK || *pnConflicts>0 || *pnViolations>0 ) goto step_done;
+  if( bAmend ){
+    ProllyHash stepHead, stepCat;
+    doltliteGetSessionHead(db, &stepHead);
+    rc = doltliteFlushCatalogToHash(db, &stepCat);
+    if( rc==SQLITE_OK ){
+      rc = rebaseAmendStep(db, &stepHead, &stepCat, &headC,
+          strcmp(pRow->zAction, "squash")==0
+            ? (replayC.zMessage ? replayC.zMessage : "") : 0);
     }
-
-    rc = rebaseApplyPlanRowCatalog(
-        db, &aPlan[j], pCurCat, pCurCat, &zMessage, pzErr);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(combinedMsg);
-      return rc;
-    }
-
-    if( strcmp(aPlan[j].zAction, "squash")==0 ){
-      char *zNew = sqlite3_mprintf("%s\n\n%s", combinedMsg, zMessage);
-      sqlite3_free(combinedMsg);
-      combinedMsg = zNew;
-    }
-    sqlite3_free(zMessage);
-    if( !combinedMsg ) return SQLITE_NOMEM;
-    j++;
+  }
+  if( rc==SQLITE_OK && bKeepTxn && db->autoCommit ){
+    rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
   }
 
-  /* Default matches Dolt: a pick whose tree did not change is omitted.
-  ** --empty=keep still records that commit. */
-  if( !keepEmpty && prollyHashCompare(pCurCat, &startCat)==0 ){
-    sqlite3_free(combinedMsg);
-    *piNext = j;
-    return SQLITE_OK;
-  }
+step_done:
+  doltliteCommitClear(&replayC);
+  doltliteCommitClear(&parentC);
+  doltliteCommitClear(&headC);
+  return rc;
+}
 
-  {
-    ProllyHash newCommit;
-    rc = doltliteCreateAndStoreCommit(db, pCurHead, pCurCat, combinedMsg,
-                                      NULL, NULL, NULL, 0, &newCommit);
-    if( rc==SQLITE_OK ){
-      rc = doltliteSwitchCatalog(db, pCurCat);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteSetSessionStaged(db, pCurCat);
-    }
-    if( rc==SQLITE_OK ){
-      rc = rebaseAdvanceWorkingBranch(db, pCurHead, &newCommit, pCurCat);
-    }
-    if( rc==SQLITE_OK ) *pCurHead = newCommit;
+static void rebaseResultDataConflict(
+  sqlite3_context *context,
+  const char *zHash,
+  const char *zMessage
+);
+
+/* Leave the rebase paused at aRows[0], as Dolt does inside a transaction:
+** the plan from that step on, the working branch, and the conflict or
+** violation tables stay for the user to resolve and --continue. */
+static int rebaseEnterPause(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const RebasePlanRow *aRows,
+  int nRows,
+  const ProllyHash *pOrigCat,
+  const ProllyHash *pOrigHead,
+  const char *zOrig,
+  const char *zReturn,
+  int keepEmpty
+){
+  char zHex[PROLLY_HASH_SIZE*2+1];
+  u8 flags = (u8)(WS_REBASE_FLAG_ACTIVE | WS_REBASE_FLAG_PAUSED
+                  | WS_REBASE_FLAG_META_MIRROR
+                  | (keepEmpty ? WS_REBASE_FLAG_EMPTY_KEEP : 0));
+  int rc;
+  if( !zOrig || !zOrig[0] || strlen(zOrig)>=WS_REBASE_BRANCH_LEN
+   || !zReturn || !zReturn[0] || strlen(zReturn)>=WS_REBASE_BRANCH_LEN ){
+    return SQLITE_TOOBIG;
   }
-  sqlite3_free(combinedMsg);
+  rc = doltliteSetSessionPendingReplayCommit(db, 0);
+  if( rc==SQLITE_OK ) rc = rebaseWritePlanRows(db, aRows, nRows);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionRebaseState(
+        db, flags, pOrigCat, pOrigHead, zOrig, zReturn);
+  }
   if( rc!=SQLITE_OK ) return rc;
-
-  *piNext = j;
+  doltliteHashToHex(&aRows[0].commitHash, zHex);
+  rebaseResultDataConflict(context, zHex,
+      aRows[0].zCommitMessage ? aRows[0].zCommitMessage : "");
   return SQLITE_OK;
 }
 
@@ -2170,9 +2184,11 @@ static int rebaseHashesFromPlan(
   return SQLITE_OK;
 }
 
+/* Commit what the user resolved for the paused step. Squash and fixup
+** amend the commit before it, as the step itself would have. */
 static int rebaseCommitResolvedStep(
   sqlite3 *db,
-  const char *zMessage,
+  const RebasePlanRow *pRow,
   int *pCommitted
 ){
   ProllyHash cat;
@@ -2194,8 +2210,29 @@ static int rebaseCommitResolvedStep(
     return SQLITE_OK;
   }
   doltliteGetSessionHead(db, &curHead);
+  if( strcmp(pRow->zAction, "squash")==0
+   || strcmp(pRow->zAction, "fixup")==0 ){
+    DoltliteCommit prev, replay;
+    memset(&prev, 0, sizeof(prev));
+    memset(&replay, 0, sizeof(replay));
+    rc = doltliteLoadCommit(db, &curHead, &prev);
+    if( rc==SQLITE_OK && strcmp(pRow->zAction, "squash")==0 ){
+      rc = doltliteLoadCommit(db, &pRow->commitHash, &replay);
+    }
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &cat);
+    if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &cat);
+    if( rc==SQLITE_OK ){
+      rc = rebaseAmendStep(db, &curHead, &cat, &prev,
+          strcmp(pRow->zAction, "squash")==0
+            ? (replay.zMessage ? replay.zMessage : "") : 0);
+    }
+    doltliteCommitClear(&prev);
+    doltliteCommitClear(&replay);
+    if( rc==SQLITE_OK ) *pCommitted = 1;
+    return rc;
+  }
   rc = doltliteCreateAndStoreCommit(
-      db, &curHead, &cat, zMessage ? zMessage : "",
+      db, &curHead, &cat, pRow->zCommitMessage ? pRow->zCommitMessage : "",
       0, 0, 0, 0, &newCommit);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteSwitchCatalog(db, &cat);
@@ -2226,8 +2263,8 @@ static void rebaseResultDataConflict(
   }
 }
 
-/* Replay plan rows after the paused step. A later data conflict inside
-** BEGIN pauses again. Anything else asks the caller to abort. */
+/* Replay plan rows after the paused step. A later conflict or violation
+** inside BEGIN pauses again. Anything else asks the caller to abort. */
 static int rebaseReplayPausedTail(
   sqlite3 *db,
   sqlite3_context *context,
@@ -2237,85 +2274,33 @@ static int rebaseReplayPausedTail(
   int keepEmpty,
   int *pbPaused
 ){
+  int bKeepTxn = doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_PLAIN;
   int i;
 
   *pbPaused = 0;
   for(i=iStart; i<nPlan; i++){
-    DoltliteCommit replayCommit;
-    DoltliteCommit parentCommit;
-    DoltliteCommit curHeadCommit;
-    ProllyHash curHead;
     int nConflicts = 0;
     int nViolations = 0;
     char *zApplyErr = 0;
-    char hexBuf[PROLLY_HASH_SIZE*2+1];
-    int rc;
-
-    if( strcmp(aPlan[i].zAction, "drop")==0 ) continue;
-    memset(&replayCommit, 0, sizeof(replayCommit));
-    memset(&parentCommit, 0, sizeof(parentCommit));
-    memset(&curHeadCommit, 0, sizeof(curHeadCommit));
-    memset(&curHead, 0, sizeof(curHead));
-    hexBuf[0] = 0;
-
-    rc = doltliteLoadCommit(db, &aPlan[i].commitHash, &replayCommit);
-    if( rc!=SQLITE_OK ) return rc;
-    if( doltliteCommitParentCount(&replayCommit)==0 ){
-      doltliteCommitClear(&replayCommit);
-      return SQLITE_ERROR;
-    }
-    rc = doltliteLoadFirstParentCommit(db, &replayCommit, &parentCommit);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&replayCommit);
-      return rc;
-    }
-    doltliteGetSessionHead(db, &curHead);
-    rc = doltliteLoadCommit(db, &curHead, &curHeadCommit);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&replayCommit);
-      doltliteCommitClear(&parentCommit);
-      return rc;
-    }
-    rc = applyMergedCatalogAndCommit(db, context,
-        &parentCommit.catalogHash,
-        &curHeadCommit.catalogHash,
-        &replayCommit.catalogHash,
-        &curHead, 0,
-        aPlan[i].zCommitMessage ? aPlan[i].zCommitMessage : "",
-        0, 0, 0, keepEmpty ? 0 : 1,
-        &nConflicts, &nViolations, &zApplyErr, hexBuf);
-    doltliteCommitClear(&replayCommit);
-    doltliteCommitClear(&parentCommit);
-    doltliteCommitClear(&curHeadCommit);
-    if( rc==SQLITE_DONE ){
-      sqlite3_free(zApplyErr);
-      continue;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zApplyErr);
-      return rc;
-    }
+    int rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
+                              &nConflicts, &nViolations, &zApplyErr);
     sqlite3_free(zApplyErr);
-    if( nViolations>0 ) return SQLITE_CONSTRAINT;
-    if( nConflicts>0 ){
-      (void)doltliteSetSessionPendingReplayCommit(db, 0);
-      if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_PLAIN ){
-        ProllyHash *aLeft = 0;
-        int nLeft = 0;
+    if( rc!=SQLITE_OK ) return rc;
+    if( nConflicts>0 || nViolations>0 ){
+      if( doltliteVcTxnMode(db)!=DOLTLITE_VC_TXN_PLAIN ){
+        return SQLITE_CONSTRAINT;
+      }
+      rc = doltliteSetSessionPendingReplayCommit(db, 0);
+      if( rc==SQLITE_OK ) rc = rebaseWritePlanRows(db, aPlan+i, nPlan-i);
+      if( rc!=SQLITE_OK ) return rc;
+      {
         char zHex[PROLLY_HASH_SIZE*2+1];
-        int prc = rebaseHashesFromPlan(aPlan, i, nPlan, &aLeft, &nLeft);
-        if( prc==SQLITE_OK ){
-          prc = rebaseCreateAndPopulatePlanTable(db, aLeft, nLeft);
-        }
-        sqlite3_free(aLeft);
-        if( prc!=SQLITE_OK ) return prc;
         doltliteHashToHex(&aPlan[i].commitHash, zHex);
         rebaseResultDataConflict(context, zHex,
             aPlan[i].zCommitMessage ? aPlan[i].zCommitMessage : "");
-        *pbPaused = 1;
-        return SQLITE_OK;
       }
-      return SQLITE_CONSTRAINT;
+      *pbPaused = 1;
+      return SQLITE_OK;
     }
   }
   return SQLITE_OK;
@@ -2435,6 +2420,20 @@ static void doltliteRebasePausedContinue(
     return;
   }
 
+  {
+    ProllyHash cv;
+    doltliteGetSessionConstraintViolationsCatalog(db, &cv);
+    if( !prollyHashIsEmpty(&cv) ){
+      sqlite3_free(zOrig);
+      sqlite3_free(zWorking);
+      sqlite3_result_error(context,
+          "constraint violations remain; resolve them and remove them from "
+          "the dolt_constraint_violations_<table> tables before continuing "
+          "the rebase", -1);
+      return;
+    }
+  }
+
   rc = rebaseHasUnstagedResolution(db, &unstaged);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zOrig);
@@ -2461,24 +2460,12 @@ static void doltliteRebasePausedContinue(
   }
   idx = 0;
   while( idx<nPlan && strcmp(aPlan[idx].zAction, "drop")==0 ) idx++;
-  if( idx<nPlan
-   && strcmp(aPlan[idx].zAction, "pick")!=0
-   && strcmp(aPlan[idx].zAction, "reword")!=0 ){
-    rebaseFreePlan(aPlan, nPlan);
-    sqlite3_free(zOrig);
-    sqlite3_free(zWorking);
-    sqlite3_result_error(context,
-        "first non-drop action must be pick or reword", -1);
-    return;
-  }
 
   rc = rebaseDropPlan(db);
   if( rc==SQLITE_OK ) bDropped = 1;
   if( rc==SQLITE_OK && idx<nPlan ){
     int committed = 0;
-    const char *zMsg = aPlan[idx].zCommitMessage
-        ? aPlan[idx].zCommitMessage : "";
-    rc = rebaseCommitResolvedStep(db, zMsg, &committed);
+    rc = rebaseCommitResolvedStep(db, &aPlan[idx], &committed);
     (void)committed;
   }
   if( rc!=SQLITE_OK ){
@@ -2686,6 +2673,7 @@ static void doltliteRebaseInteractiveContinue(
   int bPlanDropped = 0;
   int dirty = 0;
   int keepEmpty = 0;
+  int bKeepTxn = 0;
   ProllyHash curCat;
   ProllyHash curHead;
   ProllyHash expectedOrigHead;
@@ -2840,20 +2828,35 @@ static void doltliteRebaseInteractiveContinue(
   if( rc!=SQLITE_OK ) goto abort_err;
   doltliteGetSessionHead(db, &curHead);
 
-  i = 0;
-  while( i < nPlan ){
-    int j;
-
-    while( i < nPlan && strcmp(aPlan[i].zAction, "drop")==0 ) i++;
-    if( i >= nPlan ) break;
-
-    rc = rebaseReplayPlanGroup(
-        db, aPlan, nPlan, i, &curCat, &curHead, keepEmpty, &j, &zReplayErr);
-    if( rc==SQLITE_CONSTRAINT ) goto abort_err_conflict;
+  bKeepTxn = doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_PLAIN;
+  for(i=0; i<nPlan; i++){
+    int nConflicts = 0;
+    int nViolations = 0;
+    sqlite3_free(zReplayErr);
+    zReplayErr = 0;
+    rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
+                          &nConflicts, &nViolations, &zReplayErr);
     if( rc==SQLITE_BUSY ) goto abort_err_cas;
     if( rc!=SQLITE_OK ) goto abort_err;
-    i = j;
+    if( nConflicts>0 || nViolations>0 ){
+      if( doltliteVcTxnMode(db)!=DOLTLITE_VC_TXN_PLAIN ){
+        goto abort_err_conflict;
+      }
+      rc = rebaseEnterPause(db, context, aPlan+i, nPlan-i,
+                            &preRebaseCat, &expectedOrigHead,
+                            zOrigBranch, zReturnBranch, keepEmpty);
+      if( rc!=SQLITE_OK ) goto abort_err;
+      rebaseFreePlan(aPlan, nPlan);
+      sqlite3_free(zReplayErr);
+      sqlite3_free(zOrigBranch);
+      sqlite3_free(zReturnBranch);
+      sqlite3_free(zWorking);
+      return;
+    }
   }
+  doltliteGetSessionHead(db, &curHead);
+  rc = doltliteFlushCatalogToHash(db, &curCat);
+  if( rc!=SQLITE_OK ) goto abort_err;
 
   memset(&refsCtx, 0, sizeof(refsCtx));
   refsCtx.zOrigBranch = zOrigBranch;

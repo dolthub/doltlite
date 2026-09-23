@@ -277,7 +277,11 @@ int applyMergedCatalogAndCommit(
     if( rc!=SQLITE_OK ){
       if( zDetectErrMsg ){
         sqlite3_result_error(context, zDetectErrMsg, -1);
-        sqlite3_free(zDetectErrMsg);
+        if( pzApplyErr && *pzApplyErr==0 ){
+          *pzApplyErr = zDetectErrMsg;
+        }else{
+          sqlite3_free(zDetectErrMsg);
+        }
       }
       goto apply_rollback;
     }
