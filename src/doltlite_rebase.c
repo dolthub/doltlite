@@ -1492,6 +1492,38 @@ step_done:
   return rc;
 }
 
+/* A peer can hold the graph lock for a moment, e.g. while backing out of a
+** lost claim. That BUSY is contention, not a moved tip: retry while this
+** session's head stands. */
+static int rebaseReplayStepRetry(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const RebasePlanRow *pRow,
+  int keepEmpty,
+  int bKeepTxn,
+  int *pnConflicts,
+  int *pnViolations,
+  char **pzErr
+){
+  ProllyHash headBefore;
+  int rc;
+
+  doltliteGetSessionHead(db, &headBefore);
+  db->busyHandler.nBusy = 0;
+  while( 1 ){
+    ProllyHash headNow;
+    rc = rebaseReplayStep(db, context, pRow, keepEmpty, bKeepTxn,
+                          pnConflicts, pnViolations, pzErr);
+    if( !rebaseRetryableRc(rc) ) break;
+    doltliteGetSessionHead(db, &headNow);
+    if( prollyHashCompare(&headNow, &headBefore)!=0 ) break;
+    if( !rebaseEndBusyRetry(db) ) break;
+    sqlite3_free(*pzErr);
+    *pzErr = 0;
+  }
+  return rc;
+}
+
 static void rebaseResultDataConflict(
   sqlite3_context *context,
   const char *zHash,
@@ -2423,8 +2455,8 @@ static int rebaseReplayPausedTail(
     int rc;
     memset(&headBefore, 0, sizeof(headBefore));
     doltliteGetSessionHead(db, &headBefore);
-    rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
-                          &nConflicts, &nViolations, &zApplyErr);
+    rc = rebaseReplayStepRetry(db, context, &aPlan[i], keepEmpty, bKeepTxn,
+                               &nConflicts, &nViolations, &zApplyErr);
     sqlite3_free(zApplyErr);
     if( rc!=SQLITE_OK ) return rc;
     if( nConflicts>0 || nViolations>0 ){
@@ -3011,8 +3043,8 @@ static void doltliteRebaseInteractiveContinue(
     sqlite3_free(zReplayErr);
     zReplayErr = 0;
     doltliteGetSessionHead(db, &headBefore);
-    rc = rebaseReplayStep(db, context, &aPlan[i], keepEmpty, bKeepTxn,
-                          &nConflicts, &nViolations, &zReplayErr);
+    rc = rebaseReplayStepRetry(db, context, &aPlan[i], keepEmpty, bKeepTxn,
+                               &nConflicts, &nViolations, &zReplayErr);
     if( rc==SQLITE_BUSY ) goto abort_err_cas;
     if( rc!=SQLITE_OK ) goto abort_err;
     if( nConflicts>0 || nViolations>0 ){

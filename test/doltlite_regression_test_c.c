@@ -5276,6 +5276,104 @@ static void run_cherry_pick_stale_conflict_clears_session(void){
   removeDbFiles(dbpath);
 }
 
+static void rebaseBusySetup(sqlite3 *db, const char *zLabel){
+  char zName[128];
+  snprintf(zName, sizeof(zName), "%s_setup", zLabel);
+  check(zName, execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES(1,1);"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_checkout('-b','feat');"
+    "INSERT INTO t VALUES(2,2);"
+    "SELECT dolt_commit('-Am','f1');"
+    "INSERT INTO t VALUES(3,3);"
+    "SELECT dolt_commit('-Am','f2');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES(10,10);"
+    "SELECT dolt_commit('-Am','main');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+}
+
+static void run_rebase_continue_rides_out_busy_replay(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Rebase Continue Rides Out Busy Replay Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_continue_busy_replay");
+  removeDbFiles(dbpath);
+
+  check("rebase_busy_replay_open", open_db(dbpath, &db)==SQLITE_OK);
+  rebaseBusySetup(db, "rebase_busy_replay");
+  res = queryScalarText(db, "SELECT dolt_rebase('-i','main')");
+  check("rebase_busy_replay_started",
+        strstr(res, "interactive rebase started")!=0);
+
+  doltliteTestFailNextHeadConfirm();
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_busy_replay_succeeds", strstr(res, "Successfully rebased")!=0);
+  check("rebase_busy_replay_on_feat",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_busy_replay_rows",
+        strcmp(queryScalarText(db, "SELECT group_concat(id) FROM t"),
+               "1,2,3,10")==0);
+  check("rebase_busy_replay_no_working_branch",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'"),
+          "0")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_rebase_paused_continue_rides_out_busy_replay(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Rebase Paused Continue Rides Out Busy Replay Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_paused_continue_busy_replay");
+  removeDbFiles(dbpath);
+
+  check("rebase_paused_busy_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_paused_busy_setup", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES(1,1);"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_checkout('-b','feat');"
+    "UPDATE t SET v=2 WHERE id=1;"
+    "SELECT dolt_commit('-Am','f1');"
+    "INSERT INTO t VALUES(3,3);"
+    "SELECT dolt_commit('-Am','f2');"
+    "SELECT dolt_checkout('main');"
+    "UPDATE t SET v=10 WHERE id=1;"
+    "SELECT dolt_commit('-Am','main');"
+    "SELECT dolt_checkout('feat');"
+    "BEGIN;")==SQLITE_OK);
+  res = queryScalarText(db, "SELECT dolt_rebase('main')");
+  check("rebase_paused_busy_paused", strstr(res, "data conflict detected")!=0);
+  check("rebase_paused_busy_resolve", execSql(db,
+    "SELECT dolt_conflicts_resolve('--ours','t');"
+    "SELECT dolt_add('-A');")==SQLITE_OK);
+
+  doltliteTestFailNextHeadConfirm();
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_paused_busy_succeeds", strstr(res, "Successfully rebased")!=0);
+  check("rebase_paused_busy_on_feat",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_paused_busy_rows",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id||':'||v) FROM t"), "1:10,3:3")==0);
+  check("rebase_paused_busy_log",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(message, ',') FROM "
+          "(SELECT message FROM dolt_log LIMIT 3)"),
+          "f2,main,base")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_cherry_pick_conflict_is_not_a_merge(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -14939,6 +15037,8 @@ static const RegressionCase aCases[] = {
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
   { "cherry_pick_stale_conflict_clears_session", "Cherry-pick Stale Conflict Clears Session Test", run_cherry_pick_stale_conflict_clears_session },
   { "cherry_pick_conflict_is_not_a_merge", "Cherry-pick Conflict Is Not A Merge Test", run_cherry_pick_conflict_is_not_a_merge },
+  { "rebase_continue_busy_replay", "Rebase Continue Rides Out Busy Replay Test", run_rebase_continue_rides_out_busy_replay },
+  { "rebase_paused_continue_busy_replay", "Rebase Paused Continue Rides Out Busy Replay Test", run_rebase_paused_continue_rides_out_busy_replay },
   { "cherry_pick_conflict_ours_commits_single_parent", "Cherry-pick Conflict Ours Commits Single Parent Test", run_cherry_pick_conflict_ours_commits_single_parent },
   { "revert_conflict_is_not_a_merge", "Revert Conflict Is Not A Merge Test", run_revert_conflict_is_not_a_merge },
   { "cherry_pick_seal_fail_keeps_advanced_tip", "Cherry-pick Seal Failure Keeps Advanced Tip Test", run_cherry_pick_seal_fail_keeps_advanced_tip },
