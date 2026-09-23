@@ -310,6 +310,12 @@ expect_scan_hit "ext_test_harness_is_not_product" \
   "unreachable from the product: dead_code_gate_harness_only"
 rm -rf "$WORK/ext/demo"
 
+printf 'int dead_code_gate_harness_only(int x);\nint h(void){ return dead_code_gate_harness_only(0); }\n' \
+  > "$WORK/src/test.c"
+expect_scan_hit "bare_test_c_is_not_product" \
+  "unreachable from the product: dead_code_gate_harness_only"
+rm -f "$WORK/src/test.c"
+
 MISSING_OUT=$(python3 "$SCAN" --root "$WORK" --src-root "$WORK/no-such-src" 2>&1)
 if [ $? -eq 0 ]; then
   bad "missing_src_root_fails_closed" "scanner passed with no sources:

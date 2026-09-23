@@ -282,7 +282,7 @@ def function_spans(text: str):
         yield name, match.start(), body_start, k, text[:match.start()].count("\n") + 1
 
 
-TEST_HARNESS = re.compile(r"^(?:test(?:_|\d)|tclsqlite)|_tcl\.c$")
+TEST_HARNESS = re.compile(r"^(?:test(?:[_.]|\d)|tclsqlite)|_tcl\.c$")
 
 
 def is_product_path(path: str, root: str) -> bool:
