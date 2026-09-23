@@ -9,6 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int tryReplaceBatchLeafDirect(
+  ProllyMutator*, const ProllyNode*, ProllyMutMapIter*, int,
+  ProllyHash*, int*
+);
+
 static int parentChildSubtreeCount(
   ChunkStore *pStore,
   ProllyCache *pCache,
@@ -233,7 +238,20 @@ static int streamingMergeNode(
       }
 #endif
       if( pChildEntry->node.level == 0 ){
-        rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
+        rc = SQLITE_NOTFOUND;
+        if( prollyChunkerLevelsBelowEmpty(pChunker, 1) ){
+          int changed = 0;
+          rc = tryReplaceBatchLeafDirect(pMut, &pChildEntry->node, pIter,
+                                         childIsLast, &childHash, &changed);
+          if( rc==SQLITE_OK ){
+            rc = prollyChunkerAddAtLevelWithCount(pChunker, 1,
+                      pBoundKey, nBoundKey, childHash.data, PROLLY_HASH_SIZE,
+                      pChildEntry->node.nItems);
+          }
+        }
+        if( rc==SQLITE_NOTFOUND ){
+          rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
+        }
       }else{
         rc = streamingMergeNode(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
       }
@@ -1170,37 +1188,54 @@ static int tryReplaceBatchLeafDirect(
   int *pChanged
 ){
   ProllyMutMapIter iter = *pIter;
-  u8 *pData = copyNodeData(pLeaf);
+  u8 *pData = 0;
+  const u8 *pLastKey;
+  int nLastKey;
   int changed = 0;
-  int i;
+  int i = -1;
   int rc;
 
-  if( pData==0 ) return SQLITE_NOTFOUND;
-  for(i=0; i<(int)pLeaf->nItems; i++){
-    const u8 *pCurKey;
+  if( pLeaf->nItems==0 || pLeaf->nDataPhys!=pLeaf->nData ){
+    return SQLITE_NOTFOUND;
+  }
+  prollyNodeKey(pLeaf, pLeaf->nItems - 1, &pLastKey, &nLastKey);
+  while( prollyMutMapIterValid(&iter) ){
+    ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
     const u8 *pVal;
-    int nCurKey;
     int nVal;
-    ProllyMutMapEntry *pEd = 0;
-    int cmp = 1;
-
-    prollyNodeKey(pLeaf, i, &pCurKey, &nCurKey);
-    prollyNodeValue(pLeaf, i, &pVal, &nVal);
-    if( prollyMutMapIterValid(&iter) ){
-      pEd = prollyMutMapIterEntry(&iter);
-      cmp = prollyKeyCmp(pEd->pKey, pEd->nKey, pCurKey, nCurKey);
+    int res = 1;
+    if( ++i<(int)pLeaf->nItems ){
+      const u8 *pKey;
+      int nKey;
+      prollyNodeKey(pLeaf, i, &pKey, &nKey);
+      res = prollyKeyCmp(pEd->pKey, pEd->nKey, pKey, nKey);
     }
-    if( cmp<0 || (cmp==0 && (pEd->nZeroTail || pEd->nVal!=nVal)) ){
+    if( res!=0 ){
+      if( prollyKeyCmp(pEd->pKey, pEd->nKey, pLastKey, nLastKey)>0 ) break;
+      if( pLeaf->flags & PROLLY_NODE_INTKEY ){
+        i = prollyNodeSearchInt(pLeaf, prollyMutMapEntryIntKey(pEd), &res);
+      }else{
+        i = prollyNodeSearchBlob(pLeaf, pEd->pKey, pEd->nKey, &res);
+      }
+    }
+    if( res!=0 || pEd->op!=PROLLY_EDIT_INSERT || pEd->nZeroTail ){
       sqlite3_free(pData);
       return SQLITE_NOTFOUND;
     }
-    if( cmp==0 ){
-      if( nVal>0 ){
-        memcpy(pData + (pVal - pLeaf->pData), pEd->pVal, nVal);
-      }
-      changed = 1;
-      prollyMutMapIterNext(&iter);
+    prollyNodeValue(pLeaf, i, &pVal, &nVal);
+    if( pEd->nVal!=nVal ){
+      sqlite3_free(pData);
+      return SQLITE_NOTFOUND;
     }
+    if( !pData ){
+      pData = copyNodeData(pLeaf);
+      if( !pData ) return SQLITE_NOTFOUND;
+    }
+    if( nVal>0 ){
+      memcpy(pData + (pVal - pLeaf->pData), pEd->pVal, nVal);
+    }
+    changed = 1;
+    prollyMutMapIterNext(&iter);
   }
   if( isLast && prollyMutMapIterValid(&iter) ){
     sqlite3_free(pData);
