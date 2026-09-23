@@ -514,25 +514,6 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
   int leafRes;
   int leafIdx;
 
-  pEntry = cursorCurrentLeaf(cur);
-  if( pEntry ){
-    const u8 *pBound;
-    int nBound;
-    prollyNodeKey(&pEntry->node, cur->aLevel[cur->iLevel].idx, &pBound, &nBound);
-    if( nKey==nBound && memcmp(pKey, pBound, nKey)==0 ){
-      *pRes = 0;
-      return SQLITE_OK;
-    }
-    prollyNodeKey(&pEntry->node, 0, &pBound, &nBound);
-    if( prollyKeyCmp(pKey, nKey, pBound, nBound)>=0 ){
-      prollyNodeKey(&pEntry->node, pEntry->node.nItems-1, &pBound, &nBound);
-      if( prollyKeyCmp(pKey, nKey, pBound, nBound)<=0 ){
-        leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes);
-        return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
-      }
-    }
-  }
-
   rc = initCursorAtRoot(cur, &pEntry);
   if( rc!=SQLITE_OK ) return rc;
   if( cur->eState==PROLLY_CURSOR_EOF ){
