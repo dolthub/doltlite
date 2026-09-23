@@ -456,6 +456,27 @@ static int statusAddConflict(void *pArg, const char *zTable, int nConflicts){
   return addRow(p->pCur, zTable, 0, "schema conflict");
 }
 
+/* A table holding constraint violations is reported once, unstaged, as a
+** constraint violation, in place of its staged and unstaged changes. */
+static int statusAddConstraintViolation(void *pArg, const char *zTable,
+                                        int nRows){
+  StatusConflictCtx *p = (StatusConflictCtx*)pArg;
+  DoltliteStatusCursor *pCur = p->pCur;
+  int i, j;
+  (void)nRows;
+  if( p->zFilter && sqlite3_stricmp(p->zFilter, zTable)!=0 ) return SQLITE_OK;
+  for(i=j=0; i<pCur->nRows; i++){
+    if( pCur->aRows[i].zName
+     && sqlite3_stricmp(pCur->aRows[i].zName, zTable)==0 ){
+      sqlite3_free(pCur->aRows[i].zName);
+      continue;
+    }
+    pCur->aRows[j++] = pCur->aRows[i];
+  }
+  pCur->nRows = j;
+  return addRow(pCur, zTable, 0, "constraint violation");
+}
+
 static int statusMaybeAddParentSchemaChange(
   DoltliteStatusCursor *pCur,
   const char *zParent,
@@ -1584,7 +1605,11 @@ status_done:
     StatusConflictCtx ctx;
     ctx.pCur = pCur;
     ctx.zFilter = zTableFilter;
-    rc = doltliteForEachConflict(db, statusAddConflict, &ctx);
+    rc = doltliteForEachConstraintViolationTable(
+        db, statusAddConstraintViolation, &ctx);
+    if( rc==SQLITE_OK ){
+      rc = doltliteForEachConflict(db, statusAddConflict, &ctx);
+    }
   }
   if( headLoaded ) doltliteFreeCatalog(aHead, nHead);
   if( stagedLoaded ) doltliteFreeCatalog(aStaged, nStaged);

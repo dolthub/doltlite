@@ -1885,6 +1885,8 @@ int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n,
 int doltliteTableSchemaConflictDetail(const char *zAncestorSql,
     const char *zOurSql, const char *zTheirSql, char **pzDetail);
 int doltliteSessionHasSchemaConflicts(sqlite3 *db, int *pHas);
+int doltliteForEachConstraintViolationTable(sqlite3 *db,
+  int (*xTable)(void*, const char*, int), void *pCtx);
 int doltliteForEachConflict(sqlite3 *db,
     int (*xConflict)(void*, const char*, int), void *pCtx);
 
