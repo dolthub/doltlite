@@ -408,6 +408,11 @@ static void doltBranchParsedFunc(
           return;
         }
       }else{
+        rc = doltliteSyncSessionToBranchTip(db);
+        if( rc!=SQLITE_OK ){
+          branchErrorCode(ctx, hadSavepoint, rc);
+          return;
+        }
         doltliteGetSessionHead(db, &m.head);
         if( prollyHashIsEmpty(&m.head) ){
           branchError(ctx, hadSavepoint, "no commits yet — commit first");

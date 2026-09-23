@@ -459,7 +459,20 @@ int doltliteMutateRefsExpected(
   rc = chunkStoreForceRefresh(cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
+    doltliteInvalidateSessionWorkingState(db);
     return rc;
+  }
+  {
+    /* The refresh consumed the store-changed signal; a peer that moved this
+    ** session's branch would otherwise leave its head stale for good. */
+    ProllyHash head, tip;
+    int found = 0;
+    doltliteGetSessionHead(db, &head);
+    if( chunkStoreReadDiskBranchTip(cs, doltliteGetSessionBranch(db),
+                                    &tip, &found)!=SQLITE_OK
+     || (found && prollyHashCompare(&tip, &head)!=0) ){
+      doltliteInvalidateSessionWorkingState(db);
+    }
   }
 
   rc = chunkStoreSnapshotRefs(cs, &snapshot);
@@ -512,6 +525,37 @@ int doltliteMutateRefsExpected(
   }
 
   chunkStoreUnlock(cs);
+  return rc;
+}
+
+/* A command that names no start point binds HEAD. It must be the branch's
+** tip once the peer it waited on is done, not the head this session read
+** before the wait; inside a transaction the snapshot's head stands. */
+int doltliteSyncSessionToBranchTip(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash head, tip;
+  int found = 0;
+  int rc;
+  if( !cs || !db->autoCommit || doltliteIsDetached(db)
+   || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE ){
+    return SQLITE_OK;
+  }
+  do {
+    rc = chunkStoreLockAndRefresh(cs);
+  }while( rc==SQLITE_BUSY && sqlite3InvokeBusyHandler(&db->busyHandler) );
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreForceRefresh(cs);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreReadDiskBranchTip(cs, doltliteGetSessionBranch(db),
+                                     &tip, &found);
+  }
+  chunkStoreUnlock(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteGetSessionHead(db, &head);
+  if( found && prollyHashCompare(&tip, &head)!=0 ){
+    doltliteInvalidateSessionWorkingState(db);
+    rc = doltliteReloadSessionWorkingState(db);
+  }
   return rc;
 }
 

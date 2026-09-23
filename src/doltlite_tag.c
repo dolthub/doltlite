@@ -119,6 +119,12 @@ static void doltTagParsedFunc(
       return;
     }
   }else{
+    rc = doltliteSyncSessionToBranchTip(db);
+    if( rc!=SQLITE_OK ){
+      tagSealSavepointError(ctx);
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     doltliteGetSessionHead(db, &m.commitHash);
     if( prollyHashIsEmpty(&m.commitHash) ){
       doltliteVcResultError(ctx, db, "no commits to tag");
