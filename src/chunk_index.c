@@ -13,23 +13,6 @@
 #define CS_INDEX_WINDOW_MARGIN_DIV 64
 #define CS_INDEX_CACHE_WAYS 4
 
-typedef struct ChunkIndexCachePage ChunkIndexCachePage;
-struct ChunkIndexCachePage {
-  ProllyHash hash;
-  i64 iOffset;
-  i64 iDataEnd;
-  int nBody;
-  u8 *aBody;
-  u64 lastUse;
-};
-
-struct ChunkIndexCache {
-  u64 clock;
-  i64 nByte;
-  int nSlot;
-  ChunkIndexCachePage aPage[1];
-};
-
 void csIndexCacheFree(ChunkStore *cs){
   int i;
   if( !cs->pIndexCache ) return;
@@ -52,10 +35,6 @@ i64 csIndexCacheSetBudget(ChunkStore *cs, i64 nByte){
   cs->nIndexCacheSlot = nSlot;
   return nSlot ? sizeof(ChunkIndexCache)
       + nSlot*(CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage)) : 0;
-}
-
-i64 csIndexCacheBytes(const ChunkStore *cs){
-  return cs->pIndexCache ? cs->pIndexCache->nByte : 0;
 }
 
 static int csIndexCacheSlot(ChunkStore *cs, const ProllyHash *pHash){

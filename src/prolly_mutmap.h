@@ -148,8 +148,6 @@ int prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
 
 int prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm);
 
-int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src);
-
 void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level);
 int  prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level);
 void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level);

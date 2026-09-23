@@ -32,9 +32,6 @@ int doltliteCredsFromSeed(const unsigned char seed[DOLTLITE_SEED_LEN],
                           DoltliteCreds **out);
 void doltliteCredsFree(DoltliteCreds *cred);
 
-const unsigned char *doltliteCredsPubKey(const DoltliteCreds *cred);
-const unsigned char *doltliteCredsSeed(const DoltliteCreds *cred);
-
 char *doltliteCredsKid(const DoltliteCreds *cred);
 char *doltliteCredsPubKeyB32(const DoltliteCreds *cred);
 

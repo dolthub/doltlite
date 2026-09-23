@@ -1771,22 +1771,6 @@ default_cleanup:
   return rc;
 }
 
-int doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
-  Btree *pBtree;
-  int i;
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt || !pH ){
-    return SQLITE_MISUSE;
-  }
-  pBtree = db->aDb[0].pBt;
-  for(i=0; i<pBtree->cat.n; i++){
-    if( pBtree->cat.a[i].iTable==iTable ){
-      memcpy(&pBtree->cat.a[i].schemaHash, pH, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
-}
-
 /* Forward-declared: doltlite_internal.h redefines TableEntry incompatibly. */
 extern int doltliteIndexApplyRowDelta(
   sqlite3 *db,

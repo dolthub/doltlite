@@ -369,11 +369,6 @@ int doltliteUpdateSchemaHashesForBtree(Btree *pBtree){
   return rc;
 }
 
-int doltliteUpdateSchemaHashes(sqlite3 *db){
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_MISUSE;
-  return doltliteUpdateSchemaHashesForBtree(db->aDb[0].pBt);
-}
-
 int doltliteLoadLiveSchemaSql(
   sqlite3 *db,
   const char *zType,

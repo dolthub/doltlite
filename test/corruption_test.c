@@ -23,6 +23,10 @@ static void check(const char *name, int condition){
   }
 }
 
+static i64 indexCacheBytes(const ChunkStore *cs){
+  return cs->pIndexCache ? cs->pIndexCache->nByte : 0;
+}
+
 static char result_buf[8192];
 static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
@@ -1437,7 +1441,7 @@ static void test_paged_checkpoint_large_index(void){
       int aRead[2];
       check("paged_checkpoint_budget_grows_lazily",
             nBudget>3*1024*1024 && nBudget<=4*1024*1024
-            && csIndexCacheBytes(&cs)==0);
+            && indexCacheBytes(&cs)==0);
       for(pass=0; pass<2; pass++){
         checkpointReadCount = 0;
         for(i=0; i<nChunk && rc==SQLITE_OK; i++){
@@ -1457,11 +1461,11 @@ static void test_paged_checkpoint_large_index(void){
       check("paged_checkpoint_large_cache_avoids_rereads",
             aRead[1]<nChunk/20 && aRead[1]<aRead[0]);
       check("paged_checkpoint_large_cache_respects_budget",
-            csIndexCacheBytes(&cs)>200*1024
-            && csIndexCacheBytes(&cs)<=nBudget);
+            indexCacheBytes(&cs)>200*1024
+            && indexCacheBytes(&cs)<=nBudget);
       check("paged_checkpoint_disable_cache",
             csIndexCacheSetBudget(&cs, 0)==0
-            && csIndexCacheBytes(&cs)==0);
+            && indexCacheBytes(&cs)==0);
       for(i=0; i<2; i++){
         ChunkIndexEntry e;
         int found = 0;
@@ -1469,7 +1473,7 @@ static void test_paged_checkpoint_large_index(void){
         rc = csIndexLookup(&cs, &aHash[0], &e, &found);
         check("paged_checkpoint_uncached_lookup",
               rc==SQLITE_OK && found && checkpointReadCount>0
-              && csIndexCacheBytes(&cs)==0);
+              && indexCacheBytes(&cs)==0);
       }
     }
     cs.file.pFile->pMethods = pMethods;

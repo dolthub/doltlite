@@ -1468,23 +1468,6 @@ static void make_prolly_blob_key(int iKey, u8 *aBuf, int nBuf){
   snprintf((char*)aBuf, nBuf, "key-%028d", iKey);
 }
 
-static Pgno table_rootpage(sqlite3 *db, const char *zName){
-  sqlite3_stmt *stmt = 0;
-  Pgno pgno = 0;
-  if( sqlite3_prepare_v2(
-          db,
-          "SELECT rootpage FROM sqlite_master "
-          "WHERE type='table' AND name=?1",
-          -1, &stmt, 0)==SQLITE_OK ){
-    sqlite3_bind_text(stmt, 1, zName, -1, SQLITE_STATIC);
-    if( sqlite3_step(stmt)==SQLITE_ROW ){
-      pgno = (Pgno)sqlite3_column_int(stmt, 0);
-    }
-  }
-  sqlite3_finalize(stmt);
-  return pgno;
-}
-
 typedef struct FailFile FailFile;
 struct FailFile {
   sqlite3_file base;
@@ -1939,11 +1922,11 @@ static void run_savepoint_catalog_restore(void){
   sqlite3 *db = 0;
   char dbpath[256];
   u8 *aBefore = 0;
+  u8 *aMid = 0;
   u8 *aAfter = 0;
   int nBefore = 0;
+  int nMid = 0;
   int nAfter = 0;
-  Pgno iTable;
-  ProllyHash fakeHash;
 
   printf("=== Savepoint Catalog Restore Test ===\n\n");
   printf("--- Test 1: savepoint rollback restores schema metadata ---\n");
@@ -1958,13 +1941,14 @@ static void run_savepoint_catalog_restore(void){
   check("serialize_before",
       doltliteFlushAndSerializeCatalog(db, &aBefore, &nBefore)==SQLITE_OK);
 
-  iTable = table_rootpage(db, "t");
-  check("lookup_rootpage", iTable>0);
-
-  memset(&fakeHash, 0x5a, sizeof(fakeHash));
   check("savepoint_begin", execSql(db, "SAVEPOINT sp;")==SQLITE_OK);
-  check("set_fake_schema_hash",
-      doltliteSetTableSchemaHash(db, iTable, &fakeHash)==SQLITE_OK);
+  check("savepoint_schema_and_row_change", execSql(db,
+      "ALTER TABLE t ADD COLUMN extra TEXT;"
+      "INSERT INTO t VALUES(1, 'a', 'b');")==SQLITE_OK);
+  check("serialize_mid",
+      doltliteFlushAndSerializeCatalog(db, &aMid, &nMid)==SQLITE_OK);
+  check("catalog_changed_inside_savepoint",
+      nMid!=nBefore || memcmp(aMid, aBefore, nBefore)!=0);
   check("rollback_to", execSql(db, "ROLLBACK TO sp;")==SQLITE_OK);
   check("release_sp", execSql(db, "RELEASE sp;")==SQLITE_OK);
 
@@ -1974,6 +1958,7 @@ static void run_savepoint_catalog_restore(void){
       nBefore==nAfter && memcmp(aBefore, aAfter, nBefore)==0);
 
   sqlite3_free(aBefore);
+  sqlite3_free(aMid);
   sqlite3_free(aAfter);
   sqlite3_close(db);
 }
@@ -2388,10 +2373,17 @@ static void run_alter_default_session_changeset(void){
 }
 #endif
 
+static int flushAndSerializeRc(sqlite3 *db){
+  u8 *p = 0;
+  int n = 0;
+  int rc = doltliteFlushAndSerializeCatalog(db, &p, &n);
+  sqlite3_free(p);
+  return rc;
+}
+
 static void run_schema_hash_error_propagation(void){
   sqlite3 *db = 0;
   char dbpath[256];
-  ProllyHash fakeHash;
   const char *zResult;
   int nLogBefore;
 
@@ -2411,19 +2403,14 @@ static void run_schema_hash_error_propagation(void){
   check("schema_hash_set_authorizer",
       sqlite3_set_authorizer(db, denySchemaMasterRead, 0)==SQLITE_OK);
   check("schema_hash_prepare_error_propagated",
-      doltliteUpdateSchemaHashes(db)==SQLITE_AUTH);
+      flushAndSerializeRc(db)==SQLITE_AUTH);
   check("schema_hash_clear_authorizer",
       sqlite3_set_authorizer(db, 0, 0)==SQLITE_OK);
-
-  memset(&fakeHash, 0x5a, sizeof(fakeHash));
-  check("schema_hash_missing_table_reported",
-      doltliteSetTableSchemaHash(
-          db, (Pgno)0x7ffffffe, &fakeHash)==SQLITE_NOTFOUND);
 
   check("schema_hash_create_virtual_table", execSql(db,
       "CREATE VIRTUAL TABLE docs USING fts5(body);")==SQLITE_OK);
   check("schema_hash_virtual_root_ignored",
-      doltliteUpdateSchemaHashes(db)==SQLITE_OK);
+      flushAndSerializeRc(db)==SQLITE_OK);
   check("schema_hash_commit_virtual_table",
       strlen(queryScalarText(
           db, "SELECT dolt_commit('-A', '-m', 'virtual table')"))==40);
@@ -5829,20 +5816,9 @@ static void run_record_decode_corruption(void){
   ** fails only at the final payload-endpoint check. */
   static const u8 trailingPayloadByte[] = { 0x03, 0x0f, 0x0f, 0x78, 0x79, 0x7a };
   DoltliteRecordInfo info = {0};
-  char *z;
   int rc;
 
   printf("=== Record Decode Corruption Test ===\n\n");
-  z = doltliteDecodeRecord(badRecord, (int)sizeof(badRecord));
-  check("corrupt_record_decodes_to_null", z==0);
-  sqlite3_free(z);
-
-  check("decode_null_record_rejected", doltliteDecodeRecord(0, 1)==0);
-  check("decode_zero_length_record_rejected",
-        doltliteDecodeRecord(badRecord, 0)==0);
-  check("decode_negative_length_record_rejected",
-        doltliteDecodeRecord(badRecord, -1)==0);
-
   memset(&info, 0xff, sizeof(info));
   rc = doltliteParseRecordStrict(0, 1, &info);
   check("parse_null_record_rejected", rc==SQLITE_CORRUPT && info.nField==0);
@@ -5858,18 +5834,10 @@ static void run_record_decode_corruption(void){
   check("oversized_serial_type_is_corrupt",
         doltliteParseRecordStrict(serialTypeOverflow,
           (int)sizeof(serialTypeOverflow), &info)==SQLITE_CORRUPT);
-  z = doltliteDecodeRecord(serialTypeOverflow,
-                           (int)sizeof(serialTypeOverflow));
-  check("oversized_serial_type_does_not_decode", z==0);
-  sqlite3_free(z);
 
   check("oversized_header_size_is_corrupt",
         doltliteParseRecordStrict(headerSizeOverflow,
           (int)sizeof(headerSizeOverflow), &info)==SQLITE_CORRUPT);
-  z = doltliteDecodeRecord(headerSizeOverflow,
-                           (int)sizeof(headerSizeOverflow));
-  check("oversized_header_size_does_not_decode", z==0);
-  sqlite3_free(z);
 
   check("maximum_varint_serial_type_is_corrupt",
         doltliteParseRecordStrict(maxVarintSerialType,
@@ -7362,11 +7330,11 @@ static void run_truncated_wal_is_rejected(void){
 
   check("open_store_for_wal_tag_corruption", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
-  check("have_wal_region", walStateGetDataSize(&cs.wal) > 0);
-  if( walStateGetDataSize(&cs.wal) > 0 ){
+  check("have_wal_region", cs.wal.nWalData > 0);
+  if( cs.wal.nWalData > 0 ){
     unsigned char badTag = 0xff;
     check("corrupt_first_wal_tag",
-          sqlite3OsWrite(cs.file.pFile, &badTag, 1, walStateGetOffset(&cs.wal))==SQLITE_OK);
+          sqlite3OsWrite(cs.file.pFile, &badTag, 1, cs.wal.iWalOffset)==SQLITE_OK);
   }
   chunkStoreClose(&cs);
 
@@ -7450,7 +7418,7 @@ static void run_wal_offset_corruption_is_rejected(void){
   {
     int i;
     for(i=0; i<cs.index.nIndex; i++){
-      if( cs.index.aIndex[i].offset >= walStateGetOffset(&cs.wal) ){
+      if( cs.index.aIndex[i].offset >= cs.wal.iWalOffset ){
         iWal = i;
         break;
       }
@@ -7494,8 +7462,8 @@ static void run_wal_mid_corruption_rejected(void){
 
   check("open_store_for_wal_mid", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
-  walOff = walStateGetOffset(&cs.wal);
-  walSize = walStateGetDataSize(&cs.wal);
+  walOff = cs.wal.iWalOffset;
+  walSize = cs.wal.nWalData;
   check("have_wal_for_mid_corruption", walSize > 256);
 
   if( walSize > 0 ){
@@ -7584,7 +7552,7 @@ static void run_integrity_check_walks_prolly_nodes(void){
       if( prollyHashCompare(&cs.index.aIndex[i].hash, &pTable->root)==0 ){
         check("root_chunk_is_compacted", cs.index.aIndex[i].offset >= 0);
         if( cs.index.aIndex[i].offset < 0 ){
-          dataOff = walStateGetOffset(&cs.wal) + (-(cs.index.aIndex[i].offset + 1));
+          dataOff = cs.wal.iWalOffset + (-(cs.index.aIndex[i].offset + 1));
         }else{
           dataOff = cs.index.aIndex[i].offset + 4;
         }
@@ -11043,7 +11011,6 @@ static void run_mutmap_value_lifetimes(void){
   for(mode=0; mode<2; mode++){
     for(k=0; k<5; k++){
       ProllyMutMap mm;
-      ProllyMutMap *clone = 0;
       int nKey = keySizes[k];
       check("mutmap_value_init", prollyMutMapInitMode(&mm, k==0, mode)==SQLITE_OK);
       for(i=0; i<192; i++){
@@ -11055,7 +11022,6 @@ static void run_mutmap_value_lifetimes(void){
                                  i, value, sizes[i%5])==SQLITE_OK);
       }
       checkMutmapValues(&mm, nKey, 0);
-      check("mutmap_value_clone", prollyMutMapClone(&clone, &mm)==SQLITE_OK);
       prollyMutMapPushSavepoint(&mm, 1);
       for(i=0; i<192; i++){
         u8 key[41], value[80];
@@ -11085,11 +11051,6 @@ static void run_mutmap_value_lifetimes(void){
             prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
       checkMutmapValues(&mm, nKey, 0);
       prollyMutMapFree(&mm);
-      if( clone ){
-        checkMutmapValues(clone, nKey, 0);
-        prollyMutMapFree(clone);
-        sqlite3_free(clone);
-      }
     }
   }
 }
@@ -11125,18 +11086,6 @@ static void run_mutmap_append_sorted_order(void){
         prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[1])==1);
   check("mutmap_append_sorted_last_rank",
         prollyMutMapOrderIndexFromEntry(&mm, &mm.aEntries[2])==2);
-  {
-    ProllyMutMap *pClone = 0;
-    check("mutmap_append_sorted_clone", prollyMutMapClone(&pClone, &mm)==SQLITE_OK);
-    if( pClone ){
-      for(i=0; i<3; i++){
-        check("mutmap_append_sorted_clone_rank",
-              prollyMutMapOrderIndexFromEntry(pClone, &pClone->aEntries[i])==i);
-      }
-      prollyMutMapFree(pClone);
-      sqlite3_free(pClone);
-    }
-  }
   check("mutmap_append_sorted_delete",
         prollyMutMapDelete(&mm, aKey2, sizeof(aKey2), 0)==SQLITE_OK);
   check("mutmap_append_sorted_delete_rank",
@@ -11234,7 +11183,6 @@ static void run_mutmap_interleaved_order(void){
   for(mode=0; mode<2; mode++){
     for(intKey=0; intKey<2; intKey++){
       ProllyMutMap mm;
-      ProllyMutMap *clone = 0;
       char key[32];
       check("interleaved_init", prollyMutMapInitMode(&mm, intKey, mode)==SQLITE_OK);
       for(pass=0; pass<2; pass++){
@@ -11250,17 +11198,8 @@ static void run_mutmap_interleaved_order(void){
         checkMutmapInterleavedOrder(&mm, pass ? 1 : 2);
         if( pass==0 ) prollyMutMapPushSavepoint(&mm, 1);
       }
-      check("interleaved_clone", prollyMutMapClone(&clone, &mm)==SQLITE_OK);
       check("interleaved_rollback", prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
       checkMutmapInterleavedOrder(&mm, 2);
-      if( clone ){
-        checkMutmapInterleavedOrder(clone, 1);
-        check("interleaved_clone_rollback",
-              prollyMutMapRollbackToSavepoint(clone, 1)==SQLITE_OK);
-        checkMutmapInterleavedOrder(clone, 2);
-        prollyMutMapFree(clone);
-        sqlite3_free(clone);
-      }
       prollyMutMapClear(&mm);
       for(i=999; i>=0; i--){
         int n;
@@ -11702,24 +11641,6 @@ static void run_mutmap_differential_randomized(void){
     check("mutmap_diff_lazy_matches_model",
           mutmapAssertMatchesModel("lazy", &lazy, &model));
 
-    if( (i % 97)==0 ){
-      ProllyMutMap *pClone = 0;
-      check("mutmap_diff_clone_sorted_rc", prollyMutMapClone(&pClone, &sorted)==SQLITE_OK);
-      if( pClone ){
-        check("mutmap_diff_clone_sorted_matches_model",
-              mutmapAssertMatchesModel("sorted_clone", pClone, &model));
-        prollyMutMapFree(pClone);
-        sqlite3_free(pClone);
-      }
-      pClone = 0;
-      check("mutmap_diff_clone_lazy_rc", prollyMutMapClone(&pClone, &lazy)==SQLITE_OK);
-      if( pClone ){
-        check("mutmap_diff_clone_lazy_matches_model",
-              mutmapAssertMatchesModel("lazy_clone", pClone, &model));
-        prollyMutMapFree(pClone);
-        sqlite3_free(pClone);
-      }
-    }
   }
 
   while( level > 0 ){

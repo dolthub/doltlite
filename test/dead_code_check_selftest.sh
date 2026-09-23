@@ -235,17 +235,70 @@ EOF
 rm -f "$WORK/src/doltlite_samefile.c"
 expect_scan_hit "redundant_local_extern_is_rejected" "redundant local extern: dead_code_gate_already_proto"
 
-# Part H: one-call wrapper only mentioned from test/.
+# Part H: reachability from the product. main.c stands in for upstream
+# SQLite: a non-owned product file whose mentions are entry points.
+expect_scan_no_hit() {
+  local name="$1" needle="$2" out
+  out=$(python3 "$SCAN" --root "$WORK" --src-root "$WORK/src" 2>&1)
+  if printf '%s' "$out" | grep -q -- "$needle"; then
+    bad "$name" "scanner flagged '$needle':
+$out"
+  else
+    ok
+  fi
+}
+
+rm -f "$WORK/src/doltlite_fixture.h" "$WORK/src/doltlite_other.c"
 cat > "$WORK/src/doltlite.c" <<'EOF'
-int dead_code_gate_inner(int x){ return x+1; }
-int dead_code_gate_test_wrapper(int x){
-  return dead_code_gate_inner(x);
+static int dead_code_gate_test_helper(int x){ return x+1; }
+int dead_code_gate_test_only(int x){
+  char c = '{';
+  return dead_code_gate_test_helper(x)*2 + c;
+}
+static int dead_code_gate_brace_helper(int x){ return x; }
+static int dead_code_gate_label_helper(int x){ return x; }
+int dead_code_gate_live(int x){
+  if( x ) goto done;
+  x = dead_code_gate_brace_helper(x);
+done:
+  return dead_code_gate_label_helper(x);
+}
+static int dead_code_gate_seam_helper(int x){ return x; }
+int sqlite3DeadCodeGateSeam(int x){
+  return dead_code_gate_seam_helper(x);
+}
+int dead_code_gate_sqlite_test_only(int x){ return x; }
+EOF
+cat > "$WORK/src/main.c" <<'EOF'
+int dead_code_gate_live(int x);
+int sqlite3DeadCodeGateSeam(int x);
+int dead_code_gate_sqlite_test_only(int x);
+int upstream(void){
+  int r = dead_code_gate_live(1) + sqlite3DeadCodeGateSeam(2);
+#ifdef SQLITE_TEST
+  r += dead_code_gate_sqlite_test_only(3);
+#endif
+  return r;
 }
 EOF
 mkdir -p "$WORK/test"
-printf 'int dead_code_gate_test_wrapper(int x);\nvoid use(void){ (void)dead_code_gate_test_wrapper(0); }\n' \
+printf 'int dead_code_gate_test_only(int x);\nint t(void){ return dead_code_gate_test_only(0); }\n' \
   > "$WORK/test/caller.c"
-expect_scan_hit "test_only_wrapper_is_rejected" "test-only wrapper: dead_code_gate_test_wrapper"
+expect_scan_hit "test_only_extern_is_rejected" \
+  "unreachable from the product: dead_code_gate_test_only .*only tests reach it"
+expect_scan_hit "static_behind_test_only_extern_is_rejected" \
+  "unreachable from the product: dead_code_gate_test_helper"
+expect_scan_hit "sqlite_test_only_caller_is_not_product" \
+  "unreachable from the product: dead_code_gate_sqlite_test_only"
+expect_scan_no_hit "product_caller_keeps_function_live" \
+  "unreachable from the product: dead_code_gate_live "
+expect_scan_no_hit "char_literal_brace_keeps_body_span" \
+  "unreachable from the product: dead_code_gate_brace_helper"
+expect_scan_no_hit "label_before_call_is_not_a_prototype" \
+  "unreachable from the product: dead_code_gate_label_helper"
+expect_scan_no_hit "sqlite3_seam_body_is_an_entry_point" \
+  "unreachable from the product: dead_code_gate_seam_helper"
+rm -f "$WORK/src/main.c"
 
 # Part B: unused extern (definition, no caller) on a one-file src tree.
 mkdir -p "$WORK/tiny/src"

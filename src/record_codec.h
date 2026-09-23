@@ -4,8 +4,6 @@
 #include "prolly_record.h"
 #include "prolly_hash.h"
 
-char *doltliteDecodeRecord(const u8 *pData, int nData);
-
 typedef struct DoltliteColInfo DoltliteColInfo;
 struct DoltliteColInfo {
   char **azName;

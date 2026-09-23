@@ -217,9 +217,6 @@ void doltliteCredsFree(DoltliteCreds *c) {
   sqlite3_free(c);
 }
 
-const unsigned char *doltliteCredsPubKey(const DoltliteCreds *c) { return c->pub; }
-const unsigned char *doltliteCredsSeed(const DoltliteCreds *c) { return c->seed; }
-
 char *doltliteCredsKid(const DoltliteCreds *c) {
   unsigned char raw[DOLTLITE_KID_RAW_LEN];
   doltliteSha512_224(c->pub, DOLTLITE_PUBKEY_LEN, raw);

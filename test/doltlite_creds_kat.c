@@ -101,9 +101,39 @@ static const char *EXP_CLAIMS =
     "\"sub\":\"doltClientCredentials/7ku1cgd7ujkcri5u4smmrsrpcp3ejsmgc9t7o3dkdbars\","
     "\"aud\":[\"doltremoteapi.dolthub.com\"],\"iat\":1700000000,\"exp\":1700000030}";
 
+/* The seed and public key as the shipped JWK export publishes them. */
+static int jwkBytes(const DoltliteCreds *c, const char *zField,
+                    unsigned char out[32]) {
+  char *json = doltliteCredsToJwk(c);
+  char key[8];
+  const char *p, *e;
+  unsigned char *dec = NULL;
+  size_t n = 0;
+  int ok = 0;
+  snprintf(key, sizeof(key), "\"%s\":\"", zField);
+  if (json && (p = strstr(json, key)) != NULL) {
+    char *val;
+    p += strlen(key);
+    e = strchr(p, '"');
+    if (e && (val = (char *)malloc((size_t)(e - p) + 1)) != NULL) {
+      memcpy(val, p, (size_t)(e - p));
+      val[e - p] = 0;
+      if (doltliteBase64UrlDecode(val, &dec, &n) == 0 && n == 32) {
+        memcpy(out, dec, 32);
+        ok = 1;
+      }
+      free(val);
+    }
+  }
+  sqlite3_free(dec);
+  sqlite3_free(json);
+  return ok;
+}
+
 int main(int argc, char **argv) {
   char hexbuf[256];
   unsigned char seed[32];
+  unsigned char pub[32], jwkSeed[32];
   DoltliteCreds *c = NULL, *c2 = NULL;
 
   {
@@ -123,7 +153,10 @@ int main(int argc, char **argv) {
     printf("  FAIL  doltliteCredsFromSeed\n");
     return 1;
   }
-  hexenc(doltliteCredsPubKey(c), 32, hexbuf);
+  check_bool("JWK exports the public key", jwkBytes(c, "x", pub));
+  check_bool("JWK exports the seed it was built from",
+             jwkBytes(c, "d", jwkSeed) && memcmp(jwkSeed, seed, 32) == 0);
+  hexenc(pub, 32, hexbuf);
   check_str("pubkey from seed", hexbuf, PUB_HEX);
 
   {
@@ -141,7 +174,7 @@ int main(int argc, char **argv) {
     hexenc(sig, sizeof(sig), hexbuf);
     check_str("ed25519 sign(\"doltlite auth\")", hexbuf, SIG_HEX);
     if (ed25519_verify(sig, (const unsigned char *)MSG, strlen(MSG),
-                       doltliteCredsPubKey(c)) == 1) {
+                       pub) == 1) {
       printf("  PASS  ed25519 verify\n");
     } else {
       failures++;
@@ -150,15 +183,15 @@ int main(int argc, char **argv) {
   }
 
   {
-    char *x = doltliteBase64UrlEncode(doltliteCredsPubKey(c), 32);
-    char *d = doltliteBase64UrlEncode(doltliteCredsSeed(c), 32);
+    char *x = doltliteBase64UrlEncode(pub, 32);
+    char *d = doltliteBase64UrlEncode(jwkSeed, 32);
     check_str("base64url(pub) == JWK x", x, JWK_X);
     check_str("base64url(seed) == JWK d", d, JWK_D);
     {
       unsigned char *dec = NULL;
       size_t dlen = 0;
       if (doltliteBase64UrlDecode(x, &dec, &dlen) == 0 && dlen == 32 &&
-          memcmp(dec, doltliteCredsPubKey(c), 32) == 0) {
+          memcmp(dec, pub, 32) == 0) {
         printf("  PASS  base64url decode round-trip\n");
       } else {
         failures++;
@@ -178,8 +211,9 @@ int main(int argc, char **argv) {
     } else {
       char *k1 = doltliteCredsKid(c);
       char *k2 = doltliteCredsKid(c2);
+      unsigned char seed2[32];
       if (k1 && k2 && strcmp(k1, k2) == 0 &&
-          memcmp(doltliteCredsSeed(c), doltliteCredsSeed(c2), 32) == 0) {
+          jwkBytes(c2, "d", seed2) && memcmp(jwkSeed, seed2, 32) == 0) {
         printf("  PASS  JWK round-trip\n");
       } else {
         failures++;
@@ -229,7 +263,7 @@ int main(int argc, char **argv) {
                      ed25519_verify((const unsigned char *)sig,
                                     (const unsigned char *)jwt,
                                     (size_t)(d2 - jwt),
-                                    doltliteCredsPubKey(c)) == 1);
+                                    pub) == 1);
         }
         free(hdr);
         free(cls);
@@ -242,6 +276,7 @@ int main(int argc, char **argv) {
   {
     const char *dir = (argc > 1) ? argv[1] : NULL;
     DoltliteCreds *loaded = NULL;
+    unsigned char loadedPub[32];
     char *kid = doltliteCredsKid(c);
     if (doltliteCredsSave(c, dir) != 0) {
       failures++;
@@ -249,7 +284,8 @@ int main(int argc, char **argv) {
     } else if (doltliteCredsLoad(dir, kid, &loaded) != 0) {
       failures++;
       printf("  FAIL  creds load\n");
-    } else if (memcmp(doltliteCredsPubKey(c), doltliteCredsPubKey(loaded), 32) != 0) {
+    } else if (!jwkBytes(loaded, "x", loadedPub)
+               || memcmp(pub, loadedPub, 32) != 0) {
       failures++;
       printf("  FAIL  creds load (pubkey mismatch)\n");
     } else {
