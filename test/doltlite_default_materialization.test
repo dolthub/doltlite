@@ -275,6 +275,105 @@ do_execsql_test doltlite_default_materialization-8.6 {
   SELECT * FROM t;
 } {1 a 7 1 a 7}
 
+set typed_defaults {
+  {TEXT 'snow☃雪'} {TEXT ''} {TEXT {'it''s a default'}}
+  {TEXT 7} {TEXT 7.0} {TEXT 1.5} {TEXT X'00FF'}
+  {BLOB X'0001FF8000'} {BLOB X''} {BLOB 'snow☃雪'}
+  {BLOB 7} {BLOB 7.0} {BLOB -0.0}
+  {REAL 1.5} {REAL -1.25} {REAL 7.0} {REAL -0.0}
+  {REAL 140737488355327} {REAL 140737488355328}
+  {REAL -140737488355328} {REAL -140737488355329}
+  {REAL 9007199254740993} {REAL 1e999} {REAL -1e999} {REAL 5e-324}
+  {REAL '7.0'} {REAL {'not numeric'}} {REAL X'0001'}
+  {NUMERIC '7.0'} {NUMERIC '7.5'} {INTEGER 1.5} {{} 7.0} {{} 'snow☃雪'}
+  {TEXT {(CAST(NULL AS TEXT))}}
+}
+foreach size {57 58 127 8192} {
+  lappend typed_defaults [list TEXT "'[string repeat a $size]'"]
+  lappend typed_defaults [list BLOB "X'[string repeat 00 $size]'"]
+}
+set case 0
+foreach encoding {UTF-8 UTF-16le UTF-16be} {
+  foreach spec $typed_defaults {
+    incr case
+    lassign $spec type value
+    do_test doltlite_default_materialization-10.$case {
+      set hashes {}
+      set values {}
+      foreach path {direct alter update} {
+        reset_db
+        execsql "PRAGMA encoding='$encoding'"
+        set column {}
+        if {$path eq "direct"} {set column ", x $type DEFAULT $value"}
+        execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT$column)"
+        execsql {
+          WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<64)
+          INSERT INTO t(id,v) SELECT i, printf('%0400d',i) FROM c;
+          CREATE INDEX t_v ON t(v);
+        }
+        if {$path eq "update"} {db progress 1000 {expr 0}}
+        if {$path ne "direct"} {
+          execsql "ALTER TABLE t ADD COLUMN x $type DEFAULT $value"
+        }
+        db progress 0 {}
+        lappend hashes [db one {SELECT dolt_hashof_table('t')}]
+        lappend values [execsql {SELECT typeof(x),hex(x) FROM t WHERE id=1}]
+        if {[db one {PRAGMA integrity_check}] ne "ok"} {error "integrity check failed"}
+        db close
+        sqlite3 db test.db
+        if {[db one {SELECT dolt_hashof_table('t')}] ne [lindex $hashes end]} {
+          error "hash changed on reopen"
+        }
+      }
+      list [llength [lsort -unique $hashes]] [llength [lsort -unique $values]]
+    } {1 1}
+  }
+}
+
+foreach columns {124 125 126 127 128} {
+  foreach size {57 58 8192} {
+    do_test doltlite_default_materialization-12.$columns.$size {
+      set defs {}
+      set vals {}
+      set names {}
+      for {set i 1} {$i <= $columns} {incr i} {
+        lappend defs "c$i INTEGER"
+        lappend names "c$i"
+        lappend vals 1
+      }
+      set value "X'[string repeat ab $size]'"
+      set hashes {}
+      foreach path {direct alter update} {
+        reset_db
+        set column {}
+        if {$path eq "direct"} {set column ", x BLOB DEFAULT $value"}
+        execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, [join $defs ,]$column)"
+        execsql "INSERT INTO t(id,[join $names ,])
+                 VALUES(1,[join $vals ,]),(2,[join $vals ,])"
+        if {$path eq "update"} {db progress 1000 {expr 0}}
+        if {$path ne "direct"} {execsql "ALTER TABLE t ADD COLUMN x BLOB DEFAULT $value"}
+        db progress 0 {}
+        lappend hashes [db one {SELECT dolt_hashof_table('t')}]
+      }
+      expr {[llength [lsort -unique $hashes]] == 1}
+    } {1}
+  }
+}
+
+reset_db
+do_test doltlite_default_materialization-13.1 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'a');
+  }
+  set before [db one {SELECT dolt_hashof_table('t')}]
+  set result [catchsql {
+    ALTER TABLE t ADD COLUMN x TEXT NOT NULL DEFAULT (CAST(NULL AS TEXT));
+  }]
+  list $result [expr {$before eq [db one {SELECT dolt_hashof_table('t')}]}] \
+       [db one {SELECT count(*) FROM pragma_table_info('t')}]
+} {{1 {NOT NULL constraint failed: t.x}} 1 2}
+
 source $testdir/malloc_common.tcl
 reset_db
 do_execsql_test doltlite_default_materialization-9.0 {
@@ -300,6 +399,29 @@ do_faultsim_test doltlite_default_materialization-9.1 -faults oom-transient -pre
     error "rollback changed table hash"
   }
   faultsim_integrity_check
+}
+
+foreach {case type value} {
+  11.1 TEXT 'snow☃雪'
+  11.2 BLOB X'0001FF8000'
+  11.3 REAL 140737488355328
+} {
+  do_faultsim_test doltlite_default_materialization-$case -faults oom-transient -prep {
+    faultsim_restore_and_reopen
+    execsql {BEGIN; SAVEPOINT s;}
+  } -body {
+    execsql "ALTER TABLE t ADD COLUMN x $::type DEFAULT $::value"
+  } -test {
+    faultsim_test_result {0 {}} {1 {disk I/O error}}
+    if {$testrc==0 && [db one {SELECT count(x) FROM t}]!=64} {
+      error "wrong materialized defaults"
+    }
+    catchsql ROLLBACK
+    if {[db one {SELECT dolt_hashof_table('t')}] ne $::original_hash} {
+      error "rollback changed table hash"
+    }
+    faultsim_integrity_check
+  }
 }
 
 finish_test

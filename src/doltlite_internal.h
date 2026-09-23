@@ -1691,7 +1691,7 @@ int doltliteIndexApplyRowDelta(
   const u8 *pNewVal, int nNewVal
 );
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
-int doltliteMaterializeIntegerDefault(sqlite3*, const char*, const char*,
+int doltliteMaterializeDefaultColumn(sqlite3*, const char*, const char*,
                                        const char*);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
