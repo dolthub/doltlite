@@ -713,23 +713,9 @@ static int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
-/* ================= dependents follow their table =================
-**
-** A table's dependents (indexes, triggers, views) are adopted per name,
-** independently of the table, so a column rename on one side can pair an
-** adopted table with a dependent that names a column it does not have,
-** and the merged catalog cannot load. Dolt retargets the dependent.
-**
-** Rather than repairing the assembled catalog, subtract the rename from
-** the merge's view of the world: rewrite the three schema arrays so the
-** table and its dependents carry one baseline text on every side, equalize
-** the table entries' schema hashes so pass1 sees the schema as unchanged,
-** and queue the renames as post-load schema actions. ALTER TABLE RENAME
-** COLUMN then rewrites the table and every dependent through SQLite's own
-** machinery, and the post-action flush serializes the coherent result.
-*/
-
-/* Position-stable renames, including a swap: same count, each slot's
+/* Dependents are adopted per name. Replay a rename from one baseline so
+** an index cannot name a column the adopted table does not have.
+** Position-stable renames, including a swap: same count, each slot's
 ** definition matches. Adds, drops, and type changes are not. */
 static int mergePureRenamePairs(
   const char *zAncSql,
@@ -915,51 +901,59 @@ static char *mergeRewriteIdent(
   return sqlite3_str_finish(pOut);
 }
 
-/* Logical pairs may form a chain or a swap. Emit renames whose target
-** is free, breaking a cycle with one temporary name. */
+/* Pairs are (ancestor, side). One pass maps a post-rename index back. */
+static char *mergeRewriteInverse(const char *zSql, char **az, int n){
+  sqlite3_str *pOut = sqlite3_str_new(0);
+  const char *z = zSql ? zSql : "";
+  if( !pOut ) return 0;
+  while( *z ){
+    int type, i;
+    int nTok = sqlite3GetToken((const u8*)z, &type);
+    const char *zRep = 0;
+    if( mergeIsIdentifierToken(z, type) ){
+      for(i=0; i+1<n; i+=2){
+        if( mergeIdentifiersEqual(z, nTok, az[i+1], (int)strlen(az[i+1]), 0) ){
+          zRep = az[i];
+          break;
+        }
+      }
+    }
+    if( zRep ) sqlite3_str_appendall(pOut, zRep);
+    else sqlite3_str_append(pOut, z, nTok);
+    z += nTok;
+  }
+  return sqlite3_str_finish(pOut);
+}
+
+/* Emit renames whose target is free. A cycle is broken with a temp name. */
 static int mergeRenameApplyOrder(
-  char **azLogical, int nLogical,
-  char ***pazApply, int *pnApply
+  char **azLogical, int nLogical, char ***pazApply, int *pnApply
 ){
   char **azOld = 0, **azNew = 0, **azOut = 0;
-  int n = nLogical/2;
-  int nOut = 0, nAlloc = 0;
-  int i, guard;
-  int rc = SQLITE_OK;
-
+  int n = nLogical/2, nOut = 0, nAlloc = 0, i, guard, rc = SQLITE_OK;
   *pazApply = 0;
   *pnApply = 0;
   if( n<=0 ) return SQLITE_OK;
   azOld = sqlite3_malloc(n*(int)sizeof(char*));
   azNew = sqlite3_malloc(n*(int)sizeof(char*));
   if( !azOld || !azNew ){ rc = SQLITE_NOMEM; goto apply_done; }
-  for(i=0; i<n; i++){
-    azOld[i] = azLogical[i*2];
-    azNew[i] = azLogical[i*2+1];
-  }
+  for(i=0; i<n; i++){ azOld[i] = azLogical[i*2]; azNew[i] = azLogical[i*2+1]; }
   for(guard=0; guard<n*3+2 && n>0; guard++){
-    int picked = -1;
-    int j;
-    for(i=0; i<n; i++){
-      int blocked = 0;
-      for(j=0; j<n; j++){
-        if( sqlite3_stricmp(azNew[i], azOld[j])==0 ){ blocked = 1; break; }
-      }
-      if( !blocked ){ picked = i; break; }
+    int picked = -1, j, blocked;
+    for(i=0; i<n && picked<0; i++){
+      blocked = 0;
+      for(j=0; j<n; j++) if( sqlite3_stricmp(azNew[i], azOld[j])==0 ) blocked = 1;
+      if( !blocked ) picked = i;
     }
     if( picked<0 ){
       char *zTmp = sqlite3_mprintf("dl_col_swap_%d", guard);
-      char *zKept;
+      char *zKept = azNew[0];
       if( !zTmp ){ rc = SQLITE_NOMEM; goto apply_done; }
-      zKept = azNew[0];
       rc = DOLTLITE_GROW_ARRAY(&azOut, &nAlloc, nOut+2, 4);
       if( rc!=SQLITE_OK ){ sqlite3_free(zTmp); goto apply_done; }
       azOut[nOut] = sqlite3_mprintf("%s", azOld[0]);
       azOut[nOut+1] = zTmp;
-      if( !azOut[nOut] || !azOut[nOut+1] ){
-        rc = SQLITE_NOMEM;
-        goto apply_done;
-      }
+      if( !azOut[nOut] || !azOut[nOut+1] ){ rc = SQLITE_NOMEM; goto apply_done; }
       nOut += 2;
       azOld[0] = zTmp;
       azNew[0] = zKept;
@@ -976,11 +970,7 @@ static int mergeRenameApplyOrder(
     n--;
   }
   if( n>0 ){ rc = SQLITE_ERROR; goto apply_done; }
-  *pazApply = azOut;
-  *pnApply = nOut;
-  azOut = 0;
-  nOut = 0;
-
+  *pazApply = azOut; *pnApply = nOut; azOut = 0; nOut = 0;
 apply_done:
   sqlite3_free(azOld);
   sqlite3_free(azNew);
@@ -1009,13 +999,8 @@ static int mergeRecordTableRename(
   return SQLITE_OK;
 }
 
-/* One side renamed a table the other side put a trigger on. Un-rename the
-** table in that side's arrays and queue ALTER TABLE RENAME TO instead, so
-** the trigger lands on a table the catalog has, and the post-load rename
-** carries it — and every other dependent — to the new name. Dolt instead
-** keeps an orphaned trigger no loadable catalog can hold and that rebinds
-** to any future table with the old name (dolthub/dolt#11588); following
-** the table is a deliberate divergence. */
+/* One side renamed a table the other side put a trigger on. Replay
+** RENAME TO after load so the trigger is not left on a missing table. */
 static int mergePreNormalizeTableRename(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,
@@ -1449,6 +1434,23 @@ int mergePreNormalizeRenamedDependents(
       if( pDepAnc==pAncT ) continue;
       q = mergeCollectDependent(pAncT->zName, pDepAnc, pDepOurs, pDepTheirs,
                                 azRenO, nRenO, azRenT, nRenT, &bMech);
+      if( q>0 && !bMech && !pDepAnc ){
+        SchemaEntry *pNew = 0;
+        char **azMap = 0;
+        int nMap = 0;
+        char *zBack;
+        if( pDepOurs && !pDepTheirs && !bBaseOurs ){
+          pNew = pDepOurs; azMap = azRenO; nMap = nRenO;
+        }else if( pDepTheirs && !pDepOurs && !bBaseTheirs ){
+          pNew = pDepTheirs; azMap = azRenT; nMap = nRenT;
+        }
+        if( pNew && nMap>0 && pNew->zSql ){
+          zBack = mergeRewriteInverse(pNew->zSql, azMap, nMap);
+          if( !zBack ){ rc = SQLITE_NOMEM; goto table_done; }
+          sqlite3_free(pNew->zSql);
+          pNew->zSql = zBack;
+        }
+      }
       if( q<=0 || !bMech ) continue;
       pFrom = bBaseOurs ? pDepOurs : (bBaseTheirs ? pDepTheirs : pDepAnc);
       if( !pFrom || !pFrom->zSql ) continue;

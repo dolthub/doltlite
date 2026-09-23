@@ -824,9 +824,13 @@ def add_branch(doltlite, db_path, branch, model, all_tables):
 
 
 def commit_branch(doltlite, db_path, branch, model, step, stage_all=True):
-    staged, total = status_counts(doltlite, db_path, branch)
-    if (stage_all and total == 0) or (not stage_all and staged == 0):
-        return
+    # dolt_status can be empty while the working catalog hash still differs
+    # from HEAD. commit -A records that difference. Skipping it leaves pull
+    # and merge refusing with "uncommitted changes".
+    if not stage_all:
+        staged, _total = status_counts(doltlite, db_path, branch)
+        if staged == 0:
+            return
     msg = "stateful %s %d" % (branch, step)
     args = "'-A','-m',%s" % sql_quote(msg) if stage_all else "'-m',%s" % sql_quote(msg)
     # A failed statement rolls back -A's restage; complete it before treating as a no-op.
@@ -1514,7 +1518,17 @@ def reset_to_ref(doltlite, db_path, branch, model, rng):
         "WHERE message='init' LIMIT 1;",
         "init_hash_%s" % branch,
     )
-    target = rng.choice(("HEAD", "HEAD~1", init_hash or "HEAD"))
+    # The commit before 'init' is the empty repository, which has no kv.
+    nlog = query_scalar(
+        doltlite, db_path, branch, "SELECT count(*) FROM dolt_log;",
+        "log_count_%s" % branch,
+    )
+    choices = ["HEAD"]
+    if init_hash:
+        choices.append(init_hash)
+    if nlog.isdigit() and int(nlog) > 2:
+        choices.append("HEAD~1")
+    target = rng.choice(choices)
     quoted = sql_quote(target)
     kind = rng.randrange(3)
     if kind == 0:
