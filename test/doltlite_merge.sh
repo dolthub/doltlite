@@ -2291,5 +2291,76 @@ else
 fi
 rm -f /tmp/test_merge102_txn_$$.out /tmp/test_merge102_txn_$$.err
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105"
+# ADD COLUMN on one side and a REAL insert on the other. The secondary
+# index payload must keep the primary key; a covering read used to return NULL.
+DB106=/tmp/test_merge106_$$.db; rm -f "$DB106"
+$DOLTLITE "$DB106" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id TEXT PRIMARY KEY, c1);
+CREATE INDEX i2 ON t(c1);
+INSERT INTO t VALUES('k0', 5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t ADD COLUMN n INT DEFAULT 0;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES('k6', 1.0);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_real_index_pk_merges" \
+  "SELECT dolt_merge('f');" "^[0-9a-f]{40}$" "$DB106"
+run_test "merge_real_index_pk_lookup" \
+  "SELECT quote(id) || ':' || quote(c1) FROM t WHERE c1=1.0;" \
+  "'k6':1.0" "$DB106"
+run_test "merge_real_index_pk_indexed" \
+  "SELECT group_concat(quote(id), ',') FROM (SELECT id FROM t INDEXED BY i2 WHERE c1 IS NOT NULL ORDER BY c1);" \
+  "'k6','k0'" "$DB106"
+run_test "merge_real_index_pk_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB106"
+
+DB107=/tmp/test_merge107_$$.db; rm -f "$DB107"
+$DOLTLITE "$DB107" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INT PRIMARY KEY, c1);
+CREATE INDEX i2 ON t(c1);
+INSERT INTO t VALUES(1, 5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t ADD COLUMN n INT DEFAULT 0;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(6, 1.0);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_int_pk_real_index_merges" \
+  "SELECT dolt_merge('f');" "^[0-9a-f]{40}$" "$DB107"
+run_test "merge_int_pk_real_index_row" \
+  "SELECT id || ':' || c1 FROM t WHERE c1=1.0;" \
+  "6:1.0" "$DB107"
+run_test "merge_int_pk_real_index_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB107"
+
+DB108=/tmp/test_merge108_$$.db; rm -f "$DB108"
+$DOLTLITE "$DB108" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id TEXT PRIMARY KEY, c1 TEXT COLLATE NOCASE) WITHOUT ROWID;
+CREATE INDEX i2 ON t(c1);
+INSERT INTO t VALUES('k0', 'aa');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t ADD COLUMN n INT DEFAULT 0;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES('k6', 'Ab');
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_nocase_index_pk_merges" \
+  "SELECT dolt_merge('f');" "^[0-9a-f]{40}$" "$DB108"
+run_test "merge_nocase_index_pk_lookup" \
+  "SELECT id FROM t WHERE c1='ab';" \
+  "k6" "$DB108"
+run_test "merge_nocase_index_pk_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB108"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108"
 dltest_finish
