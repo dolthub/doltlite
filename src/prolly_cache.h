@@ -33,6 +33,8 @@ struct ProllyCache {
   ProllyCacheEntry **aBucket;
   ProllyCacheEntry lruHead;
   ProllyCacheEntry lruTail;
+  ProllyCacheEntry prefixHead;
+  ProllyCacheEntry prefixTail;
 };
 
 int prollyCacheInit(ProllyCache *cache, i64 nMaxByte);

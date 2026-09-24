@@ -33,6 +33,9 @@ static sqlite3_int64 cacheBytes(ProllyCache *pCache){
   for(p=pCache->lruHead.pLruNext; p!=&pCache->lruTail; p=p->pLruNext){
     n += sqlite3_msize(p) + sqlite3_msize(p->pData);
   }
+  for(p=pCache->prefixHead.pLruNext; p!=&pCache->prefixTail; p=p->pLruNext){
+    n += sqlite3_msize(p) + sqlite3_msize(p->pData);
+  }
   return n;
 }
 
