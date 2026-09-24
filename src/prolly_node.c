@@ -615,6 +615,24 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
   *pnOut = 0;
   *pnZeroTail = 0;
 
+  /* An empty leaf is the 8-byte header. Its offset arrays are absent, so
+  ** copying the usual sentinel offset would read NULL. An empty internal
+  ** node is not a valid node. */
+  if( b->nItems==0 ){
+    u8 *pEmpty;
+    if( b->level!=0 ) return SQLITE_ERROR;
+    assert( b->nValZeroTail==0 );
+    pEmpty = (u8*)sqlite3_malloc(PROLLY_HDR_SIZE);
+    if( !pEmpty ) return SQLITE_NOMEM;
+    PROLLY_PUT_U32(pEmpty + PROLLY_MAGIC_OFF, PROLLY_NODE_MAGIC);
+    pEmpty[PROLLY_LEVEL_OFF] = 0;
+    PROLLY_PUT_U16(pEmpty + PROLLY_COUNT_OFF, 0);
+    pEmpty[PROLLY_FLAGS_OFF] = (u8)(b->flags & (u8)~PROLLY_NODE_SUBTREE_COUNTS);
+    *ppOut = pEmpty;
+    *pnOut = PROLLY_HDR_SIZE;
+    return SQLITE_OK;
+  }
+
   writeCounts = (b->level > 0 && b->aSubtreeCount != 0 && b->nItems > 0) ? 1 : 0;
   flagsOut = b->flags;
   if( writeCounts ){
