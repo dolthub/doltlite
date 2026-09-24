@@ -219,11 +219,11 @@ static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
         layout.aAncField = aAncField;
         layout.nAnc = nAncCols;
         rc = mergeSideKeptAncestorRow(c->db, &pAncCat->root, &pRenCatEnt->root,
-                                      pAncCat->flags, pRenCatEnt->flags,
-                                      &layout, &bKept);
+                                      pAncCat->flags, pRenCatEnt->flags, &layout,
+                                      strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0,
+                                      &bKept);
       }
-      if( rc==SQLITE_OK && zMoved && c->pzErrMsg
-       && (bKept || strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0) ){
+      if( rc==SQLITE_OK && zMoved && c->pzErrMsg && bKept ){
         sqlite3_free(*c->pzErrMsg);
         *c->pzErrMsg = sqlite3_mprintf(
             "cannot %s: table '%s' renames a column to '%s', a name another "
@@ -236,7 +236,7 @@ static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
       freeColumns(aAncCols, nAncCols);
       freeColumns(aRenCols, nRenCols);
       if( rc!=SQLITE_OK ) return rc;
-      if( zMoved && (bKept || strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0) ) return SQLITE_ERROR;
+      if( zMoved && bKept ) return SQLITE_ERROR;
     }
   }
   return SQLITE_OK;

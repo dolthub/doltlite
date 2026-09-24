@@ -822,9 +822,10 @@ static int layoutFitsRow(
   return bFits;
 }
 
-/* A side that still holds, byte for byte, an ancestor row that no sequence
-** of drops, re-adds and fresh renames could have left unchanged made a
-** rename that reuses a name. */
+/* A rename that reuses a name. bOtherUnchanged: the other side kept the
+** ancestor schema, so any row this layout cannot explain as a drop and
+** re-add is ambiguous even if this side rewrote it. Otherwise only a row
+** still byte-for-byte from the ancestor counts. */
 int mergeSideKeptAncestorRow(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
@@ -832,6 +833,7 @@ int mergeSideKeptAncestorRow(
   u8 ancFlags,
   u8 sideFlags,
   const MergeLayout *pLayout,
+  int bOtherUnchanged,
   int *pbKept
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -860,7 +862,7 @@ int mergeSideKeptAncestorRow(
   }
   prollyCursorClose(&cur);
   if( rc!=SQLITE_OK || nAnc==0 ) goto done;
-  if( prollyHashCompare(pAncRoot, pSideRoot)==0 ){
+  if( prollyHashCompare(pAncRoot, pSideRoot)==0 || bOtherUnchanged ){
     *pbKept = 1;
     goto done;
   }

@@ -140,6 +140,7 @@ int mergeSideKeptAncestorRow(
   u8 ancFlags,
   u8 sideFlags,
   const MergeLayout *pLayout,
+  int bOtherUnchanged,
   int *pbKept
 );
 

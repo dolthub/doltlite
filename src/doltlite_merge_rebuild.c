@@ -118,6 +118,63 @@ static SchemaEntry *mergedSchemaChoice(
   return pAnc;
 }
 
+static int indexIdentEq(const char *z, int n, const char *zName){
+  int nName;
+  if( n>=2 && (z[0]=='"' || z[0]=='`' || z[0]=='[') ){
+    z++;
+    n -= 2;
+  }
+  nName = (int)strlen(zName);
+  return n==nName && sqlite3_strnicmp(z, zName, n)==0;
+}
+
+/* Index built against zAncSql, catalog table is the position-stable
+** rename in zNewSql. One pass, so a swap (a->b, b->a) does not chain. */
+static char *retargetIndexSqlToRenamedSlots(
+  const char *zIndexSql,
+  const char *zAncSql,
+  const char *zNewSql
+){
+  ParsedColumn *aAnc = 0, *aNew = 0;
+  int nAnc = 0, nNew = 0, i, changed = 0;
+  sqlite3_str *pOut = 0;
+  const char *z;
+  char *zOut = 0;
+
+  if( !zIndexSql || !zAncSql || !zNewSql ) return 0;
+  if( parseColumns(zAncSql, &aAnc, &nAnc)!=SQLITE_OK ) return 0;
+  if( parseColumns(zNewSql, &aNew, &nNew)!=SQLITE_OK ){
+    freeColumns(aAnc, nAnc);
+    return 0;
+  }
+  if( nAnc!=nNew ) goto retarget_done;
+  for(i=0; i<nAnc; i++){
+    if( !parsedColumnDefinitionsMatch(&aNew[i], &aAnc[i]) ) goto retarget_done;
+    if( sqlite3_stricmp(aAnc[i].zName, aNew[i].zName)!=0 ) changed = 1;
+  }
+  if( !changed ) goto retarget_done;
+  pOut = sqlite3_str_new(0);
+  if( !pOut ) goto retarget_done;
+  z = zIndexSql;
+  while( *z ){
+    int type, nTok, slot = -1;
+    nTok = sqlite3GetToken((const u8*)z, &type);
+    if( type==TK_ID || type==TK_STRING || (nTok>0 && (z[0]=='"' || z[0]=='`' || z[0]=='[')) ){
+      for(i=0; i<nAnc; i++){
+        if( indexIdentEq(z, nTok, aAnc[i].zName) ){ slot = i; break; }
+      }
+    }
+    if( slot>=0 ) sqlite3_str_appendall(pOut, aNew[slot].zName);
+    else sqlite3_str_append(pOut, z, nTok);
+    z += nTok;
+  }
+  zOut = sqlite3_str_finish(pOut);
+retarget_done:
+  freeColumns(aAnc, nAnc);
+  freeColumns(aNew, nNew);
+  return zOut;
+}
+
 static int appendMergedSchemaCatalogRecord(
   sqlite3 *db,
   ProllyHash *pRoot,
@@ -312,6 +369,24 @@ int rebuildDisjointSchemaRows(
                                    aTheirsSchema, nTheirsSchema,
                                    pSe->zName) ){
         continue;
+      }
+    }
+    {
+      SchemaEntry *pAncTbl = findSchemaEntry(aAncSchema, nAncSchema, pSe->zTblName);
+      SchemaEntry *pWinTbl = mergedSchemaChoice(
+          aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+          aTheirsSchema, nTheirsSchema, aConflictTables, nConflictTables,
+          pSe->zTblName);
+      char *zSql;
+      /* Ancestor indexes are rewritten by the side that renamed them.
+      ** Only an index added on this side still speaks the old names. */
+      if( pAncTbl && pWinTbl && pAncTbl->zSql && pWinTbl->zSql
+       && !findSchemaEntry(aAncSchema, nAncSchema, pSe->zName) ){
+        zSql = retargetIndexSqlToRenamedSlots(pSe->zSql, pAncTbl->zSql, pWinTbl->zSql);
+        if( zSql ){
+          sqlite3_free(pSe->zSql);
+          pSe->zSql = zSql;
+        }
       }
     }
     rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
@@ -861,6 +936,19 @@ int normalizeSideToMergedLayout(
         found = j;
         bInAnc = 1;
       }
+    }
+    /* The side being moved still has the ancestor name in this slot, and
+    ** the merged slot kept that definition under a new name (a->b then
+    ** b->c). The value did not follow the old name. A dropped column's
+    ** neighbor fails the ancestor-name test and is not pulled along. */
+    if( nAnc==nOurs && nOurs==nTheirs
+     && j<nAnc
+     && sqlite3_stricmp(aTheirs[j].zName, aAnc[j].zName)==0
+     && sqlite3_stricmp(aOurs[j].zName, aAnc[j].zName)!=0
+     && parsedColumnDefinitionsMatch(&aTheirs[j], &aAnc[j])
+     && parsedColumnDefinitionsMatch(&aOurs[j], &aAnc[j]) ){
+      found = j;
+      bInAnc = 1;
     }
     if( found>=0 ){
       aMap[j] = found;

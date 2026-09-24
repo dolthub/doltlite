@@ -410,6 +410,85 @@ SELECT quote(a) || '|' || typeof(a) || '|' || quote(r) || '|' || typeof(r)
 FROM t WHERE id=0;
 " "1.5|real|1|integer|ok"
 
+# After the swap, renaming the column that now holds the real value drops
+# the original integer name. Rebase onto an unrelated edit must keep each
+# value in its slot and leave both indexes covering that row.
+CHAIN_SETUP="
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  flex_68 INTEGER,
+  r REAL,
+  num NUMERIC,
+  u,
+  trail TEXT
+);
+CREATE UNIQUE INDEX t_partial ON t(flex_68) WHERE flex_68 IS NOT NULL;
+CREATE INDEX t_r ON t(r);
+INSERT INTO t VALUES(0, 1, 1.5, 1, 1, 'base');
+CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO kv VALUES(1, 'x');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+ALTER TABLE t RENAME COLUMN flex_68 TO flex_swap;
+ALTER TABLE t RENAME COLUMN r TO flex_68;
+ALTER TABLE t RENAME COLUMN flex_swap TO r;
+ALTER TABLE t RENAME COLUMN flex_68 TO flex_203;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('main');
+INSERT INTO kv VALUES(2, 'side');
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('feat');
+"
+
+run_db_match "rebase_schema_rename_chain_ok" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased"
+
+# An index created on the upstream names the pre-swap column. Replaying the
+# swap must point that index at the slot's new name.
+INDEX_SWAP_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL, num NUMERIC, u, trail TEXT);
+CREATE UNIQUE INDEX t_partial ON t(a) WHERE a IS NOT NULL;
+CREATE INDEX t_r ON t(r);
+INSERT INTO t VALUES(0, 1, 1.5, 1, 1, 'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN r TO a;
+ALTER TABLE t RENAME COLUMN tmp TO r;
+SELECT dolt_commit('-Am','swap');
+SELECT dolt_checkout('main');
+CREATE UNIQUE INDEX pu ON t(r) WHERE r IS NOT NULL;
+SELECT dolt_commit('-Am','idx');
+SELECT dolt_checkout('feat');
+"
+
+run_db_match "rebase_schema_index_follows_swap_ok" "
+$INDEX_SWAP_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased"
+
+run_db_eq "rebase_schema_index_follows_swap_row" "
+$INDEX_SWAP_SETUP
+SELECT dolt_rebase('main');
+SELECT typeof(r) || '|' || r || '|' || typeof(a) || '|' || a
+  || '|' || (SELECT sql FROM sqlite_schema WHERE name='pu')
+  || '|' || (SELECT id FROM t INDEXED BY pu WHERE a=1.5)
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "integer|1|real|1.5|CREATE UNIQUE INDEX pu ON t(a) WHERE a IS NOT NULL|0|ok"
+
+run_db_eq "rebase_schema_rename_chain_row" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+SELECT typeof(r) || '|' || r || '|' || typeof(flex_203) || '|' || flex_203
+  || '|' || (SELECT id FROM t INDEXED BY t_partial WHERE r=1)
+  || '|' || (SELECT id FROM t INDEXED BY t_r WHERE flex_203=1.5)
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "integer|1|real|1.5|0|0|ok"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
