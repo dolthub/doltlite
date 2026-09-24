@@ -1537,7 +1537,7 @@ def reset_to_ref(doltlite, db_path, branch, model, rng):
         reset_sql = "SELECT dolt_reset('--soft', %s);" % quoted
     else:
         reset_sql = "SELECT dolt_reset('--soft','--hard', %s);" % quoted
-    run_sql(
+    out = run_sql(
         doltlite,
         db_for_branch(db_path, branch),
         reset_sql,
@@ -1550,7 +1550,19 @@ def reset_to_ref(doltlite, db_path, branch, model, rng):
             "ambiguous",
         ),
     )
-    sync_vc_result(doltlite, db_path, branch, model)
+    # A refused reset changes nothing. --soft moves HEAD only: the index
+    # stays, and unstaged working rows are not staged. Treating working as
+    # staged makes the next commit -m look like it dropped those rows.
+    if out is None:
+        return
+    if kind == 0:
+        rows = query_rows(doltlite, db_path, branch)
+        committed = query_committed_rows(doltlite, db_path, branch)
+        model[branch]["working"] = dict(rows)
+        model[branch]["committed"] = dict(committed)
+        model[branch]["staged"] = dict(committed)
+        return
+    model[branch]["committed"] = query_committed_rows(doltlite, db_path, branch)
 
 
 def readonly_reset(doltlite, db_path, branch, model):
@@ -2007,6 +2019,56 @@ OPERATIONS = (
 )
 
 
+class _FixedRng(object):
+    def __init__(self, kind):
+        self.kind = kind
+
+    def choice(self, seq):
+        return "HEAD"
+
+    def randrange(self, n):
+        return self.kind
+
+
+def check_reset_to_ref_staged(doltlite, db_path):
+    """An unstaged row must not become staged across reset --soft."""
+    run_sql(
+        doltlite,
+        db_path,
+        "CREATE TABLE kv(id INTEGER PRIMARY KEY, v, n);\n"
+        "INSERT INTO kv VALUES(1, 'base', 0);\n"
+        "SELECT dolt_commit('-Am','init');",
+        "reset_model_init",
+    )
+    model = {"main": new_branch_state(query_rows(doltlite, db_path, "main"))}
+    run_sql(
+        doltlite,
+        db_path,
+        "UPDATE kv SET n=1 WHERE id=1;\nSELECT dolt_add('kv');",
+        "reset_model_stage",
+    )
+    model["main"]["working"] = query_rows(doltlite, db_path, "main")
+    model["main"]["staged"] = dict(model["main"]["working"])
+    run_sql(
+        doltlite,
+        db_path,
+        "INSERT INTO kv VALUES(2480050, 'b248_06504_5013', 981582);",
+        "reset_model_unstaged",
+    )
+    model["main"]["working"] = query_rows(doltlite, db_path, "main")
+    reset_to_ref(doltlite, db_path, "main", model, _FixedRng(1))
+    if 2480050 in model["main"]["staged"]:
+        raise AssertionError("soft reset staged an unstaged row")
+    commit_branch(doltlite, db_path, "main", model, 6534, stage_all=False)
+    if 2480050 in model["main"]["committed"]:
+        raise AssertionError("commit -m stored an unstaged row")
+    working = query_rows(doltlite, db_path, "main")
+    if working.get(2480050) != ("b248_06504_5013", 981582):
+        raise AssertionError("unstaged row disappeared from the working tree")
+    print("reset_soft_keeps_unstaged")
+    return 0
+
+
 def setup_check(doltlite, db_path):
     setup_repo(doltlite, db_path)
     names = query_list(
@@ -2030,13 +2092,15 @@ def main():
     flags = [a for a in sys.argv[1:] if a.startswith("--")]
     doltlite = resolve_engine(args[0] if args else "./doltlite")
     setup_db = args[1] if len(args) > 1 else None
-    if "--setup-check" in flags:
+    if "--setup-check" in flags or "--reset-staged-check" in flags:
         tmp = None
         db_path = setup_db
         if not db_path:
             tmp = tempfile.mkdtemp(prefix="doltlite-shape-")
             db_path = os.path.join(tmp, "stateful.db")
         try:
+            if "--reset-staged-check" in flags:
+                return check_reset_to_ref_staged(doltlite, db_path)
             return setup_check(doltlite, db_path)
         finally:
             if tmp and os.environ.get("DOLTLITE_VC_STATEFUL_KEEP_DB") != "1":
