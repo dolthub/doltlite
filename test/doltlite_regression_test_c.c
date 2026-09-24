@@ -6250,6 +6250,80 @@ static void run_refresh_refs_corruption_preserves_state(void){
   removeDbFiles(dbpath);
 }
 
+/* Finish on a builder that never received an item. */
+static void run_empty_node_builder_finish(void){
+  ProllyNodeBuilder b;
+  ProllyNode node;
+  u8 *pData = 0;
+  int nData = 0;
+  i64 nZero = -1;
+  int res = 99;
+  static const u8 emptyBlob[] = {
+    'D','O','N','P', 0, 0, 0, PROLLY_NODE_BLOBKEY
+  };
+  static const u8 emptyInt[] = {
+    'D','O','N','P', 0, 0, 0, PROLLY_NODE_INTKEY
+  };
+
+  printf("=== Empty Node Builder Finish Test ===\n\n");
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("finish_empty_blob_leaf",
+        prollyNodeBuilderFinish(&b, &pData, &nData)==SQLITE_OK);
+  check("finish_empty_blob_bytes",
+        nData==(int)sizeof(emptyBlob) && pData
+        && memcmp(pData, emptyBlob, sizeof(emptyBlob))==0);
+  check("parse_empty_blob_leaf",
+        pData && prollyNodeParse(&node, pData, nData)==SQLITE_OK
+        && node.nItems==0 && node.level==0);
+  check("search_empty_blob_leaf",
+        prollyNodeSearchBlob(&node, (const u8*)"k", 1, &res)==0 && res<0);
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&b);
+
+  pData = 0;
+  nData = -1;
+  nZero = -1;
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_INTKEY);
+  check("finish_sparse_empty_int_leaf",
+        prollyNodeBuilderFinishSparse(&b, &pData, &nData, &nZero)==SQLITE_OK);
+  check("finish_sparse_empty_int_bytes",
+        nZero==0 && nData==(int)sizeof(emptyInt) && pData
+        && memcmp(pData, emptyInt, sizeof(emptyInt))==0);
+  check("parse_empty_int_leaf",
+        pData && prollyNodeParse(&node, pData, nData)==SQLITE_OK
+        && node.nItems==0
+        && (node.flags & PROLLY_NODE_INTKEY)!=0);
+  res = 99;
+  check("search_empty_int_leaf",
+        prollyNodeSearchInt(&node, 1, &res)==0 && res<0);
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY | PROLLY_NODE_SUBTREE_COUNTS);
+  check("add_before_reset",
+        prollyNodeBuilderAdd(&b, (const u8*)"k", 1,
+                             (const u8*)"v", 1)==SQLITE_OK);
+  prollyNodeBuilderReset(&b);
+  pData = 0;
+  nData = 0;
+  check("finish_after_reset",
+        prollyNodeBuilderFinish(&b, &pData, &nData)==SQLITE_OK
+        && nData==(int)sizeof(emptyBlob) && pData
+        && memcmp(pData, emptyBlob, sizeof(emptyBlob))==0);
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&b);
+
+  pData = (u8*)1;
+  nData = 7;
+  nZero = 3;
+  prollyNodeBuilderInit(&b, 1, PROLLY_NODE_BLOBKEY);
+  check("finish_empty_internal_rejected",
+        prollyNodeBuilderFinishSparse(&b, &pData, &nData, &nZero)==SQLITE_ERROR
+        && pData==0 && nData==0 && nZero==0);
+  prollyNodeBuilderFree(&b);
+}
+
 static void run_prolly_node_corruption(void){
   static const u8 badIntKeyNode[] = {
     'D','O','N','P',
@@ -14971,6 +15045,7 @@ static const RegressionCase aCases[] = {
   { "sortkey_mem_matches_record", "Sortkey Mem Matches Record Test", run_sortkey_mem_matches_record },
   { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
   { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
+  { "empty_node_builder_finish", "Empty Node Builder Finish Test", run_empty_node_builder_finish },
   { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption },
   { "truncated_wal_rejected", "Truncated WAL Rejected Test", run_truncated_wal_is_rejected },
   { "refresh_open_path_transactional", "Refresh Open Path Transactional Test", run_refresh_open_path_transactional },
