@@ -990,6 +990,15 @@ static int mergeRefInstallMergedCatalog(
     }
   }
 
+  /* FTS rebuild writes sit in the open SQL transaction. A clean merge
+  ** COMMITs before the flush so the stored catalog has the rebuilt
+  ** shadows. Ignored tables are split back out below. A conflicted merge
+  ** stays inside BEGIN so the caller can still roll it back. */
+  if( nMergeConflicts==0 ){
+    rc = doltliteVcSealEnclosingTxn(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   rc = doltliteFlushCatalogToHash(db, pWorkingCat);
   if( rc==SQLITE_OK ){
     *pMergedCat = *pWorkingCat;
@@ -1052,27 +1061,10 @@ static int mergeRefCreateMergeCommit(
   int nExtraParents
 ){
   ProllyHash commitHash;
-  ProllyHash sealedCat;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
   char msg[256];
   int rc;
   int restoreRc;
-
-  /* FTS rebuild writes land in the open SQL transaction. Flushing before
-  ** COMMIT records the pre-rebuild shadows. Seal first, then hash. */
-  rc = doltliteVcSealEnclosingTxn(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return SQLITE_ERROR;
-  }
-  sealedCat = *pMergedCat;
-  rc = doltliteFlushCatalogToHash(db, &sealedCat);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "failed to flush", -1);
-    return SQLITE_ERROR;
-  }
-  pMergedCat = &sealedCat;
-  pWorkingCat = &sealedCat;
 
   rc = doltliteSetSessionStaged(db, pMergedCat);
   if( rc!=SQLITE_OK ){
@@ -1119,6 +1111,11 @@ static int mergeRefCreateMergeCommit(
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context,
         doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+    return SQLITE_ERROR;
+  }
+  rc = doltliteVcSealEnclosingTxn(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
     return SQLITE_ERROR;
   }
   doltliteTxnStateClear(pSaved);
