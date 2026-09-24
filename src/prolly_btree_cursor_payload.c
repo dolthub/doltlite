@@ -18,6 +18,7 @@ static int cursorLoadFullLeaf(BtCursor *pCur){
   int rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
                           &pLevel->pEntry->hash, &pFull);
   if( rc!=SQLITE_OK ) return rc;
+  if( pCur->curFlags & BTCF_WriteFlag ) pFull->bAllowPrefix = 1;
   assert( pCur->pCachedFrom==0 );
   /* Previously fetched fields may borrow the prefix until the cursor moves. */
   pCur->pCachedFrom = pLevel->pEntry;
