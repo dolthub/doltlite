@@ -469,6 +469,40 @@ $INDEX_SWAP_SETUP
 SELECT dolt_rebase('main');
 " "Successfully rebased"
 
+# The swapped branch indexed the integer column under its new name. The other
+# branch renamed an unrelated column. The merged index has to name the slot
+# the merged table kept.
+EXPR_SWAP_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL, num NUMERIC, u, trail TEXT);
+INSERT INTO t VALUES(0, 1, 1.5, 1, 1, 'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('swapped');
+SELECT dolt_checkout('swapped');
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN r TO a;
+ALTER TABLE t RENAME COLUMN tmp TO r;
+CREATE UNIQUE INDEX xu ON t(length(coalesce(r, '')));
+SELECT dolt_commit('-Am','swapidx');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN u TO flex_u;
+SELECT dolt_commit('-Am','rename u');
+"
+
+run_db_match "rebase_schema_expr_index_swap_merges" "
+$EXPR_SWAP_SETUP
+SELECT dolt_merge('swapped');
+" "^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_expr_index_swap_row" "
+$EXPR_SWAP_SETUP
+SELECT dolt_merge('swapped');
+SELECT typeof(r) || '|' || r || '|' || typeof(a) || '|' || a
+  || '|' || (SELECT sql FROM sqlite_schema WHERE name='xu')
+  || '|' || (SELECT id FROM t INDEXED BY xu WHERE length(coalesce(r, ''))=length(1))
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "integer|1|real|1.5|CREATE UNIQUE INDEX xu ON t(length(coalesce(r, '')))|0|ok"
+
 run_db_eq "rebase_schema_index_follows_swap_row" "
 $INDEX_SWAP_SETUP
 SELECT dolt_rebase('main');

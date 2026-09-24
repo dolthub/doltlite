@@ -128,8 +128,8 @@ static int indexIdentEq(const char *z, int n, const char *zName){
   return n==nName && sqlite3_strnicmp(z, zName, n)==0;
 }
 
-/* Index built against zAncSql, catalog table is the position-stable
-** rename in zNewSql. One pass, so a swap (a->b, b->a) does not chain. */
+/* Index text uses zFromSql's column names. zToSql is the merged table,
+** a position-stable rename of that side. One pass, so a swap does not chain. */
 static char *retargetIndexSqlToRenamedSlots(
   const char *zIndexSql,
   const char *zAncSql,
@@ -372,17 +372,15 @@ int rebuildDisjointSchemaRows(
       }
     }
     {
-      SchemaEntry *pAncTbl = findSchemaEntry(aAncSchema, nAncSchema, pSe->zTblName);
+      SchemaEntry *pSrcTbl = findSchemaEntry(aOursSchema, nOursSchema, pSe->zTblName);
       SchemaEntry *pWinTbl = mergedSchemaChoice(
           aAncSchema, nAncSchema, aOursSchema, nOursSchema,
           aTheirsSchema, nTheirsSchema, aConflictTables, nConflictTables,
           pSe->zTblName);
       char *zSql;
-      /* Ancestor indexes are rewritten by the side that renamed them.
-      ** Only an index added on this side still speaks the old names. */
-      if( pAncTbl && pWinTbl && pAncTbl->zSql && pWinTbl->zSql
-       && !findSchemaEntry(aAncSchema, nAncSchema, pSe->zName) ){
-        zSql = retargetIndexSqlToRenamedSlots(pSe->zSql, pAncTbl->zSql, pWinTbl->zSql);
+      if( pSrcTbl && pWinTbl && pSrcTbl->zSql && pWinTbl->zSql
+       && pSrcTbl!=pWinTbl ){
+        zSql = retargetIndexSqlToRenamedSlots(pSe->zSql, pSrcTbl->zSql, pWinTbl->zSql);
         if( zSql ){
           sqlite3_free(pSe->zSql);
           pSe->zSql = zSql;
@@ -461,6 +459,22 @@ int rebuildDisjointSchemaRows(
           iRootpage = pOurSe->iRootpage;
         }else{
           iRootpage = pSe->iRootpage;
+        }
+      }
+    }
+    {
+      SchemaEntry *pSrcTbl = findSchemaEntry(aTheirsSchema, nTheirsSchema, pSe->zTblName);
+      SchemaEntry *pWinTbl = mergedSchemaChoice(
+          aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+          aTheirsSchema, nTheirsSchema, aConflictTables, nConflictTables,
+          pSe->zTblName);
+      char *zSql;
+      if( pSrcTbl && pWinTbl && pSrcTbl->zSql && pWinTbl->zSql
+       && pSrcTbl!=pWinTbl ){
+        zSql = retargetIndexSqlToRenamedSlots(pSe->zSql, pSrcTbl->zSql, pWinTbl->zSql);
+        if( zSql ){
+          sqlite3_free(pSe->zSql);
+          pSe->zSql = zSql;
         }
       }
     }
