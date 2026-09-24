@@ -376,6 +376,153 @@ SELECT active_branch() || '|' || a || '|' || b || '|' ||
 FROM t WHERE id=1;
 " "feat|10|1|edit a|0"
 
+# The other branch does not touch the swapped table. Replaying the rename
+# must keep each value in its slot and leave secondary indexes covering it.
+SWAP_UNRELATED_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL);
+CREATE INDEX t_r ON t(r);
+CREATE UNIQUE INDEX t_partial ON t(a) WHERE a IS NOT NULL;
+INSERT INTO t VALUES(0, 1, 1.5);
+CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO kv VALUES(1, 'x');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+ALTER TABLE t RENAME COLUMN a TO flex_swap;
+ALTER TABLE t RENAME COLUMN r TO a;
+ALTER TABLE t RENAME COLUMN flex_swap TO r;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('main');
+INSERT INTO kv VALUES(2, 'side');
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('feat');
+"
+
+run_db_match "rebase_schema_swap_unrelated_ok" "
+$SWAP_UNRELATED_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased"
+
+run_db_eq "rebase_schema_swap_unrelated_row" "
+$SWAP_UNRELATED_SETUP
+SELECT dolt_rebase('main');
+SELECT quote(a) || '|' || typeof(a) || '|' || quote(r) || '|' || typeof(r)
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "1.5|real|1|integer|ok"
+
+# After the swap, renaming the column that now holds the real value drops
+# the original integer name. Rebase onto an unrelated edit must keep each
+# value in its slot and leave both indexes covering that row.
+CHAIN_SETUP="
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  flex_68 INTEGER,
+  r REAL,
+  num NUMERIC,
+  u,
+  trail TEXT
+);
+CREATE UNIQUE INDEX t_partial ON t(flex_68) WHERE flex_68 IS NOT NULL;
+CREATE INDEX t_r ON t(r);
+INSERT INTO t VALUES(0, 1, 1.5, 1, 1, 'base');
+CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO kv VALUES(1, 'x');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+ALTER TABLE t RENAME COLUMN flex_68 TO flex_swap;
+ALTER TABLE t RENAME COLUMN r TO flex_68;
+ALTER TABLE t RENAME COLUMN flex_swap TO r;
+ALTER TABLE t RENAME COLUMN flex_68 TO flex_203;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('main');
+INSERT INTO kv VALUES(2, 'side');
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('feat');
+"
+
+run_db_match "rebase_schema_rename_chain_ok" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased"
+
+# An index created on the upstream names the pre-swap column. Replaying the
+# swap must point that index at the slot's new name.
+INDEX_SWAP_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL, num NUMERIC, u, trail TEXT);
+CREATE UNIQUE INDEX t_partial ON t(a) WHERE a IS NOT NULL;
+CREATE INDEX t_r ON t(r);
+INSERT INTO t VALUES(0, 1, 1.5, 1, 1, 'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_checkout('-b','feat');
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN r TO a;
+ALTER TABLE t RENAME COLUMN tmp TO r;
+SELECT dolt_commit('-Am','swap');
+SELECT dolt_checkout('main');
+CREATE UNIQUE INDEX pu ON t(r) WHERE r IS NOT NULL;
+SELECT dolt_commit('-Am','idx');
+SELECT dolt_checkout('feat');
+"
+
+run_db_match "rebase_schema_index_follows_swap_ok" "
+$INDEX_SWAP_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased"
+
+# The swapped branch indexed the integer column under its new name. The other
+# branch renamed an unrelated column. The merged index has to name the slot
+# the merged table kept.
+EXPR_SWAP_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL, num NUMERIC, u, trail TEXT);
+INSERT INTO t VALUES(0, 1, 1.5, 1, 1, 'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('swapped');
+SELECT dolt_checkout('swapped');
+ALTER TABLE t RENAME COLUMN a TO tmp;
+ALTER TABLE t RENAME COLUMN r TO a;
+ALTER TABLE t RENAME COLUMN tmp TO r;
+CREATE UNIQUE INDEX xu ON t(length(coalesce(r, '')));
+SELECT dolt_commit('-Am','swapidx');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN u TO flex_u;
+SELECT dolt_commit('-Am','rename u');
+"
+
+run_db_match "rebase_schema_expr_index_swap_merges" "
+$EXPR_SWAP_SETUP
+SELECT dolt_merge('swapped');
+" "^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_expr_index_swap_row" "
+$EXPR_SWAP_SETUP
+SELECT dolt_merge('swapped');
+SELECT typeof(r) || '|' || r || '|' || typeof(a) || '|' || a
+  || '|' || (SELECT sql FROM sqlite_schema WHERE name='xu')
+  || '|' || (SELECT id FROM t INDEXED BY xu WHERE length(coalesce(r, ''))=length(1))
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "integer|1|real|1.5|CREATE UNIQUE INDEX xu ON t(length(coalesce(r, '')))|0|ok"
+
+run_db_eq "rebase_schema_index_follows_swap_row" "
+$INDEX_SWAP_SETUP
+SELECT dolt_rebase('main');
+SELECT typeof(r) || '|' || r || '|' || typeof(a) || '|' || a
+  || '|' || (SELECT sql FROM sqlite_schema WHERE name='pu')
+  || '|' || (SELECT id FROM t INDEXED BY pu WHERE a=1.5)
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "integer|1|real|1.5|CREATE UNIQUE INDEX pu ON t(a) WHERE a IS NOT NULL|0|ok"
+
+run_db_eq "rebase_schema_rename_chain_row" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+SELECT typeof(r) || '|' || r || '|' || typeof(flex_203) || '|' || flex_203
+  || '|' || (SELECT id FROM t INDEXED BY t_partial WHERE r=1)
+  || '|' || (SELECT id FROM t INDEXED BY t_r WHERE flex_203=1.5)
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1)
+FROM t WHERE id=0;
+" "integer|1|real|1.5|0|0|ok"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

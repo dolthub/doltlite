@@ -1284,14 +1284,16 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
                                          c->aTheirsSchema, c->nTheirsSchema));
 
   if( !ancEntry ){
-    if( theirsEntry ){
-      if( prollyHashCompare(&c->aOurs[iTable1Idx].root, &theirsEntry->root)!=0
-       || prollyHashCompare(&c->aOurs[iTable1Idx].schemaHash,
-                            &theirsEntry->schemaHash)!=0 ){
-        return SQLITE_ERROR;
-      }
-    }
+    /* Both sides built sqlite_master with no ancestor copy. Table roots
+    ** are already merged; keep ours and let the schema rebuild write the
+    ** rows. A root mismatch is not a failure by itself. */
     c->aMerged[(*c->pnMerged)++] = c->aOurs[iTable1Idx];
+    if( theirsEntry
+     && (prollyHashCompare(&c->aOurs[iTable1Idx].root, &theirsEntry->root)!=0
+      || prollyHashCompare(&c->aOurs[iTable1Idx].schemaHash,
+                           &theirsEntry->schemaHash)!=0) ){
+      return mergePass1NoteAuxSchemaConflicts(c);
+    }
     return SQLITE_OK;
   }
   if( !theirsEntry ){
