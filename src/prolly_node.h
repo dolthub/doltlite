@@ -14,6 +14,11 @@
 
 #define PROLLY_NODE_MAX_ITEMS 4096
 #define PROLLY_NODE_VALUE_PREFIX 128
+/* Omitted field-0 payload restored from the key. 32 is the largest raw
+** prefix this applies to; 64 is the longest field it will drop. */
+#define PROLLY_PREFIX_ELIDE_MIN 8
+#define PROLLY_PREFIX_ELIDE_MAX 64
+#define PROLLY_PREFIX_EXPAND (32 + PROLLY_PREFIX_ELIDE_MAX)
 
 /* Trailing zeros so parsing the last cell can over-read one varint (max 9 bytes). */
 #define PROLLY_NODE_BUFFER_SLOP 8
@@ -39,6 +44,8 @@ struct ProllyNode {
   u8 level;
   u16 nItems;
   u8 flags;
+  u8 bPrefixElideFirst;   /* Cached prefix omits field 0; the key restores it. */
+  u8 nPrefixElide;        /* Shared omitted length, or 0 when rows differ. */
   const u32 *aKeyOff;
   const u32 *aValOff;
   const u8 *pKeyData;
@@ -53,6 +60,12 @@ int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
 void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey);
 
 void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVal);
+static SQLITE_INLINE int prollyNodePrefixStride(const ProllyNode *pNode){
+  /* Elided prefixes are only copied out into a padded cursor buffer. */
+  return pNode->nValuePrefix
+      + (pNode->bPrefixElideFirst ? 0 : PROLLY_NODE_BUFFER_SLOP);
+}
+
 static SQLITE_INLINE void prollyNodeValueSpanInline(
   const ProllyNode *pNode,
   int i,
@@ -68,7 +81,7 @@ static SQLITE_INLINE void prollyNodeValueSpanInline(
   off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
   *pnVal = (int)(off1 - off0);
   if( pNode->nValuePrefix ){
-    *ppVal = pNode->pValData + i*(pNode->nValuePrefix + PROLLY_NODE_BUFFER_SLOP);
+    *ppVal = pNode->pValData + i*prollyNodePrefixStride(pNode);
     *pnAvail = MIN(*pnVal, pNode->nValuePrefix);
     return;
   }

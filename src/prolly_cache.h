@@ -64,4 +64,10 @@ void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry);
 
 void prollyCacheFree(ProllyCache *cache);
 
+/* Rebuild the record prefix for an elided cache entry into pOut.
+** *pnAvail is the number of original record bytes available. */
+int prollyCacheExpandElidedPrefix(
+  const ProllyNode *pNode, int iItem,
+  u8 *pOut, int nOutCap, int *pnAvail);
+
 #endif
