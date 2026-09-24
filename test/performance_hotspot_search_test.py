@@ -102,6 +102,52 @@ class SearchTests(unittest.TestCase):
                                 self.assertEqual(db.execute(search.generated_case(p, recipe).sql).fetchone(),
                                                  (len(selected), sum(groups[g] for g in selected) if selected else None))
 
+    def test_layouts_preserve_histograms_and_order_limit_results(self):
+        for key in ('integer', 'text'):
+            for skew in (False, True):
+                p = replace(self.profile, rows=67, key=key, skew=skew)
+                histograms = []
+                for layout in search.CHOICES['layout']:
+                    recipe = dict(self.recipe, source='table', predicate='group_range',
+                                  expression='seq', context='plain', indexes='ordered', layout=layout)
+                    with self.subTest(key=key, skew=skew, layout=layout), sqlite3.connect(':memory:') as db:
+                        db.executescript(search.setup_sql(p, recipe))
+                        histograms.append(db.execute('SELECT grp,count(*) FROM t GROUP BY grp').fetchall())
+                        rows = db.execute('SELECT seq,grp FROM t ORDER BY seq').fetchall()
+                        if layout != 'scattered':
+                            groups = [row[1] for row in rows]
+                            self.assertEqual(groups, sorted(groups, reverse=layout == 'late'))
+                        for direction in ('ASC', 'DESC'):
+                            for operator in ('ordered_limit', 'ordered_offset'):
+                                recipe.update(direction=direction, operator=operator)
+                                selected = sorted((seq for seq, grp in rows
+                                                   if grp < max(1, p.groups*p.width//p.rows)),
+                                                  reverse=direction == 'DESC')
+                                offset = p.start-1 if operator == 'ordered_offset' else 0
+                                selected = selected[offset:offset+p.stride]
+                                self.assertEqual(db.execute(search.generated_case(p, recipe).sql).fetchone(),
+                                                 (len(selected), sum(selected) if selected else None))
+                self.assertEqual(histograms, [histograms[0]]*3)
+
+    def test_legacy_recipes_and_layout_fingerprints(self):
+        legacy = dict(self.recipe)
+        legacy.pop('layout')
+        scattered = dict(legacy, layout='scattered')
+        self.assertTrue(search.valid_recipe(legacy))
+        self.assertTrue(search.valid_recipe(scattered))
+        self.assertFalse(search.valid_recipe(dict(legacy, layout='unknown')))
+        self.assertFalse(search.valid_recipe(dict(legacy, extra='scattered')))
+        self.assertEqual(search.setup_sql(self.profile, legacy), search.setup_sql(self.profile, scattered))
+        fingerprints = [search.family_fingerprint(self.profile, search.generated_case(self.profile, r), {})
+                        for r in (legacy, scattered, dict(legacy, layout='early'), dict(legacy, layout='late'))]
+        self.assertEqual(fingerprints[0], fingerprints[1])
+        self.assertEqual(len(set(fingerprints)), 3)
+        s = search.Search(123)
+        s.remember(legacy, asdict(self.profile))
+        with patch.object(s.rng, 'randrange', return_value=0):
+            for _ in range(100):
+                self.assertTrue(search.valid_recipe(s.choose(self.profile)[1]))
+
     def test_operator_filter_applies_to_mutations_and_companions(self):
         operators = ['update_pk', 'upsert_update', 'correlated_limit']
         a, b = search.Search(123), search.Search(123)
@@ -200,6 +246,7 @@ class SearchTests(unittest.TestCase):
             self.assertEqual(len(cases), 4)
             self.assertIn('CREATE TABLE u', setup)
             self.assertEqual(len({c.recipe['indexes'] for c in cases}), 1)
+            self.assertEqual(len({c.recipe.get('layout', 'scattered') for c in cases}), 1)
         self.assertEqual(index, 129)
 
     def test_deadline_saves_incomplete_case_without_confirmation(self):

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 
 from performance_hotspot_fuzzer import TIMER
+from performance_hotspot_search import layout_sql
 
 
 def fixture(p):
@@ -30,6 +31,7 @@ INSERT INTO t SELECT {key},i,{group},(i*7919)%1000000,printf('tag-%08x',i),
 COMMIT;
 CREATE INDEX t_g ON t(grp);
 CREATE INDEX t_gv ON t(grp,v);
+{layout_sql(p.get('layout', 'scattered'))}{'CREATE INDEX t_s ON t(seq);' if p.get('ordered_limit') else ''}
 CREATE TABLE u(id {u_decl},seq INTEGER,grp INTEGER,v INTEGER);
 INSERT INTO u SELECT id,seq,grp,v FROM t WHERE seq%{p['stride']}=0;
 CREATE INDEX u_g ON u(grp);
@@ -41,6 +43,17 @@ def cases(p):
     primary = 'NOT INDEXED' if p['key'] == 'integer' else 'INDEXED BY sqlite_autoindex_t_1'
     hints = {'auto': '', 'primary': primary, 'group': 'INDEXED BY t_g', 'group_value': 'INDEXED BY t_gv'}
     out = {}
+    if p.get('ordered_limit'):
+        hints = {'auto': '', 'ordered': 'INDEXED BY t_s', 'filter': 'INDEXED BY t_g',
+                 'primary': primary}
+        for limit, offset in ((1, 0), (5, 0), (max(1, p['rows']//100), 0), (5, p['rows']//2)):
+            name = f'ordered_limit_{limit}_offset_{offset}'
+            out[name] = {
+                a: 'SELECT sum(seq),sum(length(payload)) FROM '
+                   f'(SELECT seq,payload FROM t {h} WHERE grp<{max(1,p["groups"]//16)} '
+                   f'ORDER BY seq LIMIT {limit} OFFSET {offset});'
+                for a, h in hints.items()}
+        return out
     predicates = [('hot_group', 'grp=0')] + [
         (f'range_{pc}', f"grp<{max(1, p['groups'] * pc // 100)}") for pc in (6, 25, 50, 90)]
     for name, pred in predicates:
@@ -210,18 +223,28 @@ def main(argv=None):
     parser.add_argument('--seed', type=int, default=3235)
     parser.add_argument('--min-batch-ms', type=float, default=20)
     parser.add_argument('--replay', help='Previously saved profile JSON; executes its recorded setup and queries')
+    parser.add_argument('--layout', choices=['scattered', 'early', 'late'], default='scattered')
+    parser.add_argument('--ordered-limit', action='store_true', help='Compare filtered versus ordered LIMIT access')
     parser.add_argument('--case', action='append', help='Restrict to named cases; may be repeated')
     args = parser.parse_args(argv)
     if min(args.profiles, args.rows, args.runs, args.repeats, args.min_batch_ms) <= 0:
         parser.error('counts and minimum batch duration must be positive')
     if args.payload and (args.replay or min(args.payload) <= 0):
         parser.error('payload sizes must be positive and cannot override replayed SQL')
+    selected_profiles = profiles(args.seed, args.profiles, args.rows)
+    for profile in selected_profiles:
+        if args.layout != 'scattered':
+            profile['layout'] = args.layout
+        if args.ordered_limit:
+            profile['ordered_limit'] = True
     records = [{'seed': args.seed, 'profile': p, 'setup_sql': fixture(p), 'cases': cases(p)}
-               for p in profiles(args.seed, args.profiles, args.rows)]
+               for p in selected_profiles]
     if args.profile_index:
         if args.replay or any(i < 0 or i >= len(records) for i in args.profile_index):
             parser.error('profile indices require generated profiles and must be in range')
         records = [records[i] for i in args.profile_index]
+    if args.replay and (args.ordered_limit or args.layout != 'scattered'):
+        parser.error('layout and ordered-limit options cannot override replayed SQL')
     if args.replay:
         source = json.loads(Path(args.replay).read_text())
         records = [{key: source[key] for key in ('seed', 'profile', 'setup_sql', 'cases')}]
