@@ -175,12 +175,15 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   ProllyNode *pNode = &pEntry->node;
   int nHead, nCompact, nPrefix, nStride, nAverage, i;
   u8 *pData;
-  if( !pEntry->bAllowPrefix || pNode->level || pNode->nValuePrefix
-   || pNode->nItems==0 || pNode->nDataPhys!=pNode->nData ) return 0;
+  if( !pEntry->bAllowPrefix || pNode->level || pNode->nItems==0 ) return 0;
+  if( pNode->nValuePrefix ){
+    if( pNode->nValuePrefix!=PROLLY_NODE_VALUE_PREFIX ) return 0;
+  }else if( pNode->nDataPhys!=pNode->nData ) return 0;
   nHead = (int)(pNode->pValData - pNode->pData);
   if( nHead>pNode->nData/4 ) return 0;
   nAverage = (pNode->nData-nHead)/pNode->nItems;
-  nPrefix = nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
+  nPrefix = pNode->nValuePrefix ? PROLLY_NODE_VALUE_PREFIX/2
+          : nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
           : nAverage>=512 ? 32 : 16;
   nStride = nPrefix + PROLLY_NODE_BUFFER_SLOP;
   nCompact = nHead + pNode->nItems*nStride;
@@ -193,10 +196,10 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   memcpy(pData, pEntry->pData, nHead);
   for(i=0; i<pNode->nItems; i++){
     const u8 *pVal;
-    int nVal;
+    int nVal, nAvail;
     u8 *pDest = pData + nHead + i*nStride;
-    prollyNodeValue(pNode, i, &pVal, &nVal);
-    nVal = MIN(nVal, nPrefix);
+    prollyNodeValueSpan(pNode, i, &pVal, &nVal, &nAvail);
+    nVal = MIN(nAvail, nPrefix);
     memcpy(pDest, pVal, nVal);
     memset(pDest + nVal, 0, nStride - nVal);
   }

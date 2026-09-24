@@ -487,6 +487,68 @@ static void testWidePrefixes(sqlite3 *db){
   execSql(db, "DROP TABLE wide; PRAGMA cache_size=-65536");
 }
 
+static void testWidePrefixPressure(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  int i, nCold;
+  execSql(db, "CREATE TABLE wide_pressure(id TEXT PRIMARY KEY,v INTEGER,"
+      " pad TEXT,b BLOB,tail TEXT);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096)"
+      " INSERT INTO wide_pressure SELECT printf('%016x',i),i,"
+      " printf('%080d',i),CAST(printf('%016384d',i) AS BLOB),"
+      " printf('tail-%d',i) FROM c; PRAGMA cache_size=-1024");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  nCold = 0;
+  for(i=0; i<3; i++){
+    nRead = 0;
+    check("prepare pressure scan", sqlite3_prepare_v2(db,
+        "SELECT sum(v),sum(length(b)) FROM wide_pressure", -1, &p, 0)
+        ==SQLITE_OK);
+    check("pressure scan result", sqlite3_step(p)==SQLITE_ROW
+        && sqlite3_column_int(p, 0)==8390656
+        && sqlite3_column_int(p, 1)==67108864);
+    check("finish pressure scan", sqlite3_finalize(p)==SQLITE_OK);
+    if( i==0 ) nCold = nRead;
+  }
+  check("wide prefixes compact before eviction", nCold>0 && nRead<nCold/20);
+  check("compacted prefix accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 1024*1024));
+  for(i=0; i<3; i++){
+    nRead = 0;
+    check("prepare larger prefix scan", sqlite3_prepare_v2(db,
+        "SELECT sum(pad=printf('%080d',v)) FROM wide_pressure", -1, &p, 0)
+        ==SQLITE_OK);
+    check("larger prefix scan result", sqlite3_step(p)==SQLITE_ROW
+        && sqlite3_column_int(p, 0)==4096);
+    check("finish larger prefix scan", sqlite3_finalize(p)==SQLITE_OK);
+  }
+  check("prefix fallback preserves reuse for later rows", nRead<nCold*9/10);
+  check("prepare compacted prefix fallback", sqlite3_prepare_v2(db,
+      "SELECT sum(pad=printf('%080d',v)),"
+      " sum(b=CAST(printf('%016384d',v) AS BLOB)),"
+      " sum(tail=printf('tail-%d',v)) FROM wide_pressure", -1, &p, 0)
+      ==SQLITE_OK);
+  check("compacted prefixes reload complete rows", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==4096 && sqlite3_column_int(p, 1)==4096
+      && sqlite3_column_int(p, 2)==4096);
+  check("finish compacted prefix fallback", sqlite3_finalize(p)==SQLITE_OK);
+  execSql(db, "PRAGMA cache_size=-4096");
+  clearNodes(pCache);
+  for(i=0; i<3; i++){
+    nRead = 0;
+    execSql(db, "SELECT sum(pad=printf('%080d',v)) FROM wide_pressure");
+  }
+  check("larger prefixes survive without pressure", nRead==0);
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE wide_pressure; PRAGMA cache_size=-65536");
+}
+
 static void narrowScalarScan(sqlite3 *db, int nPayload){
   sqlite3_stmt *p = 0;
   check("prepare narrow scalar scan", sqlite3_prepare_v2(db,
@@ -727,6 +789,7 @@ int main(void){
   testLargeScans(db);
   testNearBudgetScans(db);
   testWidePrefixes(db);
+  testWidePrefixPressure(db);
   testNarrowPrefixes(db, "INTEGER", 256);
   testNarrowPrefixes(db, "TEXT", 1024);
   testReload(db);
