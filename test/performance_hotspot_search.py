@@ -173,9 +173,15 @@ def generated_case(profile, recipe, number=0):
     return Case(f'generated_{number}', f'SELECT count(*),sum(x) FROM ({inner});', prepare=prepare, recipe=r)
 
 
+def normalized(sql):
+    return re.sub(r'\b\d+\b', '?', ' '.join(sql.split()))
+
+
+def statement_fingerprint(case):
+    return digest({'sql': normalized(case.sql)})
+
+
 def family_fingerprint(profile, case, plans):
-    def normalized(sql):
-        return re.sub(r'\b\d+\b', '?', ' '.join(sql.split()))
     identity = {'key': profile.key, 'sql': normalized(case.sql), 'indexes': case.recipe.get('indexes'),
                    'prepare': normalized(case.prepare), 'verify': normalized(case.verify),
                    'plans': {arm: normalized(plan) for arm, plan in plans.items()}}

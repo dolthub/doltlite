@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 
-from performance_hotspot_search import CHOICES, Search, VERSION, family_fingerprint, fingerprint
+from performance_hotspot_search import CHOICES, Search, VERSION, family_fingerprint, fingerprint, statement_fingerprint
 
 TEST_DIR = Path(__file__).resolve().parent
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
@@ -405,11 +405,12 @@ def main(argv=None):
                             record["plans"] = {arm: runner.run([str(binary), ":memory:" if profile.memory else str(case_databases[arm])],
                                 prologue(profile.cache_kib)+plan_setup+"EXPLAIN QUERY PLAN "+case.sql) for arm, binary in binaries.items()}
                             record["family"] = family_fingerprint(profile, case, record["plans"])
+                            record["statement"] = statement_fingerprint(case)
                             record["fingerprint"] = fingerprint(profile, case, record["plans"])
                             options = {'setup': setup} if profile.memory else {}
                             record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms, **options))
                             (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"], setup))
-                            repro.update(expected=record["result"], repeats=record["repeats"], fingerprint=record["fingerprint"], family=record["family"])
+                            repro.update(expected=record["result"], repeats=record["repeats"], fingerprint=record["fingerprint"], family=record["family"], statement=record["statement"])
                             (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
                         except BudgetExpired:
                             record["incomplete"] = "search budget exhausted during confirmation"

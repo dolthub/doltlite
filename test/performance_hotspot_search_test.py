@@ -367,9 +367,31 @@ class IssueTests(unittest.TestCase):
         known.update(state='closed', state_reason='completed')
         self.assertEqual(issues.disposition('b'*24, [known], 'f'*24)[0], 'regression')
 
+    def test_statement_matching_spans_profiles_and_requires_known_scope(self):
+        known = dict(self.issue, statements=['c'*24])
+        self.assertEqual(issues.disposition('b'*24, [known], 'e'*24, 'c'*24)[0], 'new')
+        known['labels'] = ['known-performance-hotspot']
+        self.assertEqual(issues.disposition('b'*24, [known], 'e'*24, 'c'*24)[0], 'duplicate')
+        self.assertEqual(issues.disposition('b'*24, [known], 'e'*24, 'd'*24)[0], 'new')
+        known.update(state='closed', state_reason='completed')
+        self.assertEqual(issues.disposition('b'*24, [known], 'e'*24, 'c'*24)[0], 'regression')
+
+    def test_statement_fingerprint_ignores_profile_context_and_constants(self):
+        plain = fuzzer.Profile(64, 32, 'integer', 16, False, 4096, 8, 10, 3, 12, 8)
+        other = fuzzer.Profile(128, 1024, 'text', 256, True, 16384, 2, 10, 3, 12, 8, True)
+        recipe = dict(search.fresh(random.Random(1)), operator='add_column', context='plain')
+        base = search.generated_case(plain, recipe)
+        variant = search.generated_case(other, dict(recipe, context='after_delete', indexes='none'))
+        self.assertEqual(search.statement_fingerprint(base), search.statement_fingerprint(variant))
+        self.assertNotEqual(search.family_fingerprint(plain, base, {}), search.family_fingerprint(other, variant, {}))
+        update = search.generated_case(plain, dict(recipe, operator='update'))
+        self.assertNotEqual(search.statement_fingerprint(base), search.statement_fingerprint(update))
+
     def test_issue_body_contains_standalone_reproducer_and_raw_evidence(self):
-        body = issues.issue_body(self.report, dict(self.record, family='f'*24), self.bundle, 'run-url', self.issue)
+        body = issues.issue_body(self.report, dict(self.record, family='f'*24, statement='c'*24), self.bundle, 'run-url', self.issue)
         self.assertEqual(issues.FAMILY.findall(body), [])
+        self.assertEqual(issues.STATEMENT.findall(body), [])
+        self.assertIn('Statement ID: `' + 'c'*24 + '`', body)
         self.assertEqual(issues.MARKER.findall(body), [self.fp])
         self.assertEqual(json.loads(issues.BUNDLE.search(body)[1]), self.bundle)
         self.assertIn('Recurrence of previously fixed', body)
