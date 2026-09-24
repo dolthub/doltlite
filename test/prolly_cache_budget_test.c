@@ -447,6 +447,15 @@ static void testWidePrefixes(sqlite3 *db){
         nCold>0 && nRead==0);
   check("prefix cache accounting", cacheBytes(pCache)==pCache->nByte
       && budgetMatches(db, 512*1024));
+  for(i=0; i<3; i++){
+    execSql(db, "BEGIN; UPDATE wide SET tail=tail||'-pending' WHERE v%2=0");
+    nRead = 0;
+    wideScalarScan(db);
+    check("updates retain prefixes for the first scalar scan", nRead==0);
+    check("updated prefix cache accounting", cacheBytes(pCache)==pCache->nByte
+        && budgetMatches(db, 512*1024));
+    execSql(db, "ROLLBACK");
+  }
   check("prepare pinned prefix scan", sqlite3_prepare_v2(db,
       "SELECT id,v FROM wide ORDER BY id", -1, &p, 0)==SQLITE_OK);
   check("pin prefix row", sqlite3_step(p)==SQLITE_ROW
