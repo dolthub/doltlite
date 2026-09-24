@@ -82,6 +82,27 @@ static int subtreeHasEdits(
   return (cmp <= 0);
 }
 
+/* Whether the edits up to pBound delete exactly the nChild rows beneath it.
+** Each counted delete names a distinct key present in this tree, so a count
+** match means the subtree is emptied and need not be read. */
+static int subtreeFullyDeleted(
+  ProllyMutMapIter *pIter,
+  const u8 *pBound, int nBound,
+  u64 nChild
+){
+  ProllyMutMapIter it = *pIter;
+  u64 n = 0;
+  while( prollyMutMapIterValid(&it) ){
+    ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&it);
+    if( prollyKeyCmp(pEd->pKey, pEd->nKey, pBound, nBound)>0 ) break;
+    if( pEd->op!=PROLLY_EDIT_DELETE || !pEd->bInTree || ++n>nChild ) return 0;
+    prollyMutMapIterNext(&it);
+  }
+  if( n==0 || n!=nChild ) return 0;
+  *pIter = it;
+  return 1;
+}
+
 static int mergeLeaf(
   ProllyMutator *pMut,
   ProllyNode *pLeaf,
@@ -183,6 +204,8 @@ static int streamingMergeNode(
   ProllyCache *pCache = pMut->pCache;
   int rc = SQLITE_OK;
   int i;
+  int bPrune = prollyNodeHasSubtreeCounts(pNode)
+            && prollyMutMapInTreeRootIs(pMut->pEdits, &pMut->oldRoot);
 
 #ifdef DOLTLITE_PROLLY_CHECK
   if( pNode->level == 0 ){
@@ -206,6 +229,11 @@ static int streamingMergeNode(
 
     forceDescend = childIsLast && prollyMutMapIterValid(pIter);
 
+    if( bPrune && !childIsLast
+     && subtreeFullyDeleted(pIter, pBoundKey, nBoundKey,
+                            prollyNodeChildSubtreeCount(pNode, i)) ){
+      continue;
+    }
     if( !forceDescend
      && !subtreeHasEdits(pIter, pBoundKey, nBoundKey)
      && prollyChunkerLevelsBelowEmpty(pChunker, pNode->level) ){

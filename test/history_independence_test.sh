@@ -3774,6 +3774,82 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'both');
 "
 
+assert_table_hash_pair \
+  "range_delete_vs_direct_build" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT i, CAST(printf('%0100d', i) AS BLOB) FROM c;
+SELECT dolt_commit('-Am', 'base');
+BEGIN;
+DELETE FROM t WHERE id BETWEEN 2001 AND 17000;
+COMMIT;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT i, CAST(printf('%0100d', i) AS BLOB) FROM c
+WHERE i NOT BETWEEN 2001 AND 17000;
+"
+
+assert_table_hash_pair \
+  "range_delete_with_new_keys_vs_direct_build" \
+  "
+CREATE TABLE t(k TEXT PRIMARY KEY, n INT, v BLOB) WITHOUT ROWID;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT printf('k%08d', i*2), i*2, CAST(printf('%0100d', i) AS BLOB) FROM c;
+SELECT dolt_commit('-Am', 'base');
+BEGIN;
+WITH RECURSIVE c(i) AS (VALUES(10001) UNION ALL SELECT i+2 FROM c WHERE i<29999)
+INSERT INTO t SELECT printf('k%08d', i), i, x'00' FROM c;
+DELETE FROM t WHERE n BETWEEN 10000 AND 30000 AND (n%2=1 OR n%4=0);
+COMMIT;
+" \
+  "
+CREATE TABLE t(k TEXT PRIMARY KEY, n INT, v BLOB) WITHOUT ROWID;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT printf('k%08d', i*2), i*2, CAST(printf('%0100d', i) AS BLOB) FROM c
+WHERE i*2 NOT BETWEEN 10000 AND 30000 OR (i*2)%4=2;
+"
+
+assert_table_hash_pair \
+  "range_delete_savepoint_rollback_vs_direct_build" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT i, CAST(printf('%0100d', i) AS BLOB) FROM c;
+SELECT dolt_commit('-Am', 'base');
+BEGIN;
+DELETE FROM t WHERE id BETWEEN 1001 AND 6000;
+SAVEPOINT s;
+DELETE FROM t WHERE id BETWEEN 8001 AND 14000;
+ROLLBACK TO s;
+RELEASE s;
+DELETE FROM t WHERE id BETWEEN 15001 AND 19000;
+COMMIT;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT i, CAST(printf('%0100d', i) AS BLOB) FROM c
+WHERE i NOT BETWEEN 1001 AND 6000 AND i NOT BETWEEN 15001 AND 19000;
+"
+
+assert_table_hash_pair \
+  "delete_all_vs_empty" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT i, CAST(printf('%0100d', i) AS BLOB) FROM c;
+SELECT dolt_commit('-Am', 'base');
+BEGIN;
+DELETE FROM t WHERE 1;
+COMMIT;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+"
+
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "======================================="
