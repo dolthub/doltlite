@@ -609,6 +609,51 @@ static void testNarrowPrefixes(sqlite3 *db, const char *zKey, int nPayload){
   execSql(db, "DROP TABLE narrow; PRAGMA cache_size=-65536");
 }
 
+static void testShortPrefixWriteScan(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  int i;
+  execSql(db,
+      "CREATE TABLE prefix_delete(id TEXT PRIMARY KEY,seq INTEGER NOT NULL,"
+      " grp INTEGER NOT NULL,v INTEGER NOT NULL,tag TEXT NOT NULL,"
+      " payload BLOB NOT NULL);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<16384)"
+      " INSERT INTO prefix_delete SELECT printf('%016x',i),i,i%256,"
+      " (i*7919)%1000000,printf('tag-%08x',i%10000),"
+      " CAST(printf('%0256d',i) AS BLOB) FROM c;"
+      "CREATE INDEX prefix_delete_gv ON prefix_delete(grp,v);"
+      "PRAGMA cache_size=-4096");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  for(i=0; i<3; i++){
+    execSql(db, "BEGIN;DELETE FROM prefix_delete WHERE seq%32=0");
+    nRead = nBatchRead = 0;
+    execSql(db, "UPDATE prefix_delete SET v=v+1 WHERE seq%32=0");
+    check("short prefix fallback preserves batched write-scan reads",
+        nRead>0 && nBatchRead>nRead/2);
+    check("empty write scan changes no rows", sqlite3_changes(db)==0);
+    check("prepare scan after prefix fallback", sqlite3_prepare_v2(db,
+        "SELECT count(*),sum(v),sum(seq),sum(length(payload))"
+        " FROM prefix_delete", -1, &p, 0)==SQLITE_OK);
+    check("scan after prefix fallback result", sqlite3_step(p)==SQLITE_ROW
+        && sqlite3_column_int(p, 0)==15872
+        && sqlite3_column_int64(p, 1)==7924494656LL
+        && sqlite3_column_int64(p, 2)==130023424
+        && sqlite3_column_int(p, 3)==4063232);
+    check("finish scan after prefix fallback", sqlite3_finalize(p)==SQLITE_OK);
+    check("write-scan prefix accounting", cacheBytes(pCache)==pCache->nByte
+        && budgetMatches(db, 4096*1024));
+    execSql(db, "ROLLBACK");
+  }
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE prefix_delete; PRAGMA cache_size=-65536");
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -801,6 +846,7 @@ int main(void){
   testWidePrefixPressure(db);
   testNarrowPrefixes(db, "INTEGER", 256);
   testNarrowPrefixes(db, "TEXT", 1024);
+  testShortPrefixWriteScan(db);
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
