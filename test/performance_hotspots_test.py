@@ -264,13 +264,13 @@ class HotspotTests(unittest.TestCase):
             elif category == 'zero_row_updates':
                 self.assertTrue(bundle['expected'].startswith('0|'))
         self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2,
-                                 'in_transaction_mutations': 3})
-        self.assertEqual(sql.call_count, 18)
+                                 'in_transaction_mutations': 4})
+        self.assertEqual(sql.call_count, 21)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 8)
+        self.assertEqual(len(grouped), 9)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -334,7 +334,7 @@ class HotspotTests(unittest.TestCase):
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
             fixtures += [fixture for fixture in retired
                          if fixture[1]['category'] == 'in_transaction_mutations']
-            self.assertEqual(len(fixtures), 3)
+            self.assertEqual(len(fixtures), 4)
             self.assertEqual(sum(b['profile']['memory'] for _, b, _ in fixtures), 2)
             for name, bundle, databases in fixtures:
                 self.assertEqual(hotspots.section_of(name), 'in_transaction_mutations')

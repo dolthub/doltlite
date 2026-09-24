@@ -37,5 +37,33 @@
   "repeats": 25,
   "fingerprint": "7e92309c75b7c3d6417a759d",
   "family": "31b3e793c25acf3799d94114",
-  "retired_issue": "https://github.com/dolthub/doltlite/issues/3259"
+  "issue": 3259,
+  "category": "in_transaction_mutations",
+  "discovery": {
+    "source_commit": "1066294abad4c33a71ee6ba6615a6460fa32fec9",
+    "median_ratio": 19.427570559489382,
+    "minimum_ratio": 16.90642820114049,
+    "pairs": [
+      {
+        "doltlite_ms": 792.064,
+        "sqlite_ms": 38.035
+      },
+      {
+        "doltlite_ms": 779.201,
+        "sqlite_ms": 40.108
+      },
+      {
+        "doltlite_ms": 772.52,
+        "sqlite_ms": 38.921
+      },
+      {
+        "doltlite_ms": 774.849,
+        "sqlite_ms": 42.19
+      },
+      {
+        "doltlite_ms": 782.7,
+        "sqlite_ms": 46.296
+      }
+    ]
+  }
 }
