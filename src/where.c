@@ -4380,12 +4380,12 @@ static int whereLoopAddBtree(
             int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
             int iCol;
             int iGroup;
-            int nUsed = 0;
+            int nField = pWInfo->pOrderBy->nExpr + pSrc->fg.rowidUsed;
             for(iCol=0; iCol<pTab->nCol; iCol++){
               if( (pSrc->colUsed & MASKBIT(MIN(iCol,BMS-1)))!=0 ){
                 if( pTab->aCol[iCol].affinity<=SQLITE_AFF_TEXT
                  || (pTab->aCol[iCol].colFlags & COLFLAG_GENERATED)!=0
-                 || ++nUsed>8 ) break;
+                 || ++nField>8 ) break;
               }
             }
             for(iGroup=0; iGroup<pWInfo->pOrderBy->nExpr; iGroup++){
@@ -4393,7 +4393,7 @@ static int whereLoopAddBtree(
               if( pExpr->op!=TK_COLUMN && pExpr->op!=TK_AGG_COLUMN ) break;
             }
             if( iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
-             && iCol==pTab->nCol
+             && iCol==pTab->nCol && nField<=8
              && iGroup==pWInfo->pOrderBy->nExpr
              && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
               nLookup += estLog(rSize);

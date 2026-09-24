@@ -126,6 +126,12 @@ do_test loose-blob-results {
 do_test generated-plan {
   group_scan_plan db {SELECT grp,sum(generated) FROM t GROUP BY grp}
 } {{SCAN t USING INDEX t_g}}
+do_test small-projection-plan {
+  group_scan_plan db {SELECT grp,sum(v+a+b+c+d+e) FROM many GROUP BY grp}
+} {{SCAN many} {USE TEMP B-TREE FOR GROUP BY}}
+do_test small-projection-results {
+  db eval {SELECT grp,sum(v+a+b+c+d+e) FROM many GROUP BY grp}
+} [oracle eval {SELECT grp,sum(v+a+b+c+d+e) FROM many GROUP BY grp}]
 do_test many-plan {
   group_scan_plan db {SELECT grp,sum(v+a+b+c+d+e+f+g) FROM many GROUP BY grp}
 } {{SCAN many USING INDEX many_g}}
