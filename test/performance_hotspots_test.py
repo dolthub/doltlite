@@ -112,7 +112,7 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 13)
+        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 11)
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -156,11 +156,12 @@ class HotspotTests(unittest.TestCase):
                           "Narrow Rows", "Zero Row Updates", "In Transaction with Mutations"):
                 self.assertNotIn(title, report.getvalue())
             self.assertIn("Add Column With Default", report.getvalue())
-            self.assertEqual(report.getvalue().count("### "), 6)
-            self.assertTrue(all(len(call.args[2]) == 13 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 14)
+            self.assertEqual(report.getvalue().count("### "), 5)
+            self.assertNotIn("### Integer Keys", report.getvalue())
+            self.assertTrue(all(len(call.args[2]) == 11 for call in measure_retained.call_args_list))
+            self.assertEqual(len(result.read_text().splitlines()), 12)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 29)
+            self.assertEqual(len(raw.read_text().splitlines()), 25)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -251,12 +252,16 @@ class HotspotTests(unittest.TestCase):
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
         counts = {category: 0 for category in ('wide_rows', 'narrow_rows', 'zero_row_updates',
-                                              'in_transaction_mutations')}
+                                              'in_transaction_mutations', 'integer_keys')}
         for name, bundle, databases in fixtures:
             category = hotspots.section_of(name)
             counts[category] += 1
             self.assertEqual(category, bundle['category'])
-            self.assertGreaterEqual(bundle['discovery']['minimum_ratio'], 3)
+            if category == 'integer_keys':
+                self.assertIn(bundle['issue'], (3249, 3250))
+                self.assertTrue(bundle['profile']['memory'])
+            else:
+                self.assertGreaterEqual(bundle['discovery']['minimum_ratio'], 3)
             self.assertNotIn('COMMIT', bundle['case']['sql'])
             if category == 'wide_rows':
                 self.assertEqual(bundle['profile']['payload'], 16384)
@@ -266,13 +271,13 @@ class HotspotTests(unittest.TestCase):
             elif category == 'zero_row_updates':
                 self.assertTrue(bundle['expected'].startswith('0|'))
         self.assertEqual(counts, {'wide_rows': 12, 'narrow_rows': 5, 'zero_row_updates': 2,
-                                 'in_transaction_mutations': 4})
+                                 'in_transaction_mutations': 4, 'integer_keys': 2})
         self.assertEqual(sql.call_count, 21)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 9)
+        self.assertEqual(len(grouped), 10)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -331,7 +336,6 @@ class HotspotTests(unittest.TestCase):
             'small_cache': {3263, 3264, 3265, 3266},
             'after_deletes': {3258, 3270, 3271},
             'bulk_deletes': {3267},
-            'integer_keys': {3249, 3250},
         }
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             root = Path(directory)
@@ -342,7 +346,7 @@ class HotspotTests(unittest.TestCase):
                 category = hotspots.section_of(name)
                 actual.setdefault(category, set()).add(bundle['issue'])
                 self.assertEqual(category, bundle['category'])
-                self.assertEqual(databases['candidate'] == ':memory:', category == 'integer_keys')
+                self.assertNotEqual(databases['candidate'], ':memory:')
             self.assertEqual(actual, expected)
             names = [name for name, _, _ in fixtures]
             samples = {arm: [{name: value for name in names}] for arm, value in
@@ -353,7 +357,8 @@ class HotspotTests(unittest.TestCase):
             parsed, _ = benchmark_compare.parse_input_artifact(f'hotspots={root}/results.tsv')
             analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
             text = report.getvalue()
-            self.assertEqual(text.count('| Workload |'), 5)
+            self.assertEqual(text.count('| Workload |'), 4)
+            self.assertNotIn('### Integer Keys', text)
             for name, bundle, _ in fixtures:
                 category = bundle['category']
                 section = text.split(f'### {dict(hotspots.SECTIONS)[category]}\n', 1)[1].split('### ', 1)[0]
