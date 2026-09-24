@@ -355,8 +355,6 @@ def write_results(samples, result_path, sample_path):
         print(f"\n### {title}")
         if section == 'in_transaction_mutations':
             print("\nEach timed statement follows an untimed mutation in the same transaction; rollback is untimed.")
-        elif section == 'integer_keys':
-            print("\nConfirmed above 3× on Linux; local macOS replays were below 3×.")
         elif section == 'add_column':
             print("\n[#3233](https://github.com/dolthub/doltlite/issues/3233): deferred to the storage-format upgrade.")
         print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
