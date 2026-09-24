@@ -10,13 +10,14 @@ CHOICES = {
     'source': ['table', 'join', 'exists', 'in'],
     'predicate': ['all', 'group', 'range', 'or', 'modulo', 'group_range'],
     'expression': ['v', 'seq', 'length', 'bytes'],
-    'operator': ['aggregate', 'distinct', 'group', 'order', 'index_order', 'window', 'nested',
+    'operator': ['aggregate', 'distinct', 'group', 'order', 'index_order', 'ordered_limit', 'ordered_offset', 'window', 'nested',
                  'update', 'delete', 'create_index', 'add_column',
                  'update_text', 'update_blob', 'update_pk', 'upsert_update',
                  'upsert_ignore', 'replace', 'insert_select',
                  'correlated_aggregate', 'correlated_limit', 'anti_join',
                  'union_all', 'intersect', 'except', 'window_frame', 'materialized', 'group_limit'],
-    'indexes': ['none', 'group', 'cover', 'both'],
+    'indexes': ['none', 'group', 'cover', 'both', 'ordered'],
+    'layout': ['scattered', 'early', 'late'],
     'context': ['plain', 'after_scan', 'after_points', 'after_update', 'after_delete'],
     'direction': ['ASC', 'DESC'],
 }
@@ -31,7 +32,9 @@ def fresh(rng):
 
 
 def valid_recipe(recipe):
-    return isinstance(recipe, dict) and set(recipe) == set(CHOICES) and all(recipe[k] in values for k, values in CHOICES.items())
+    return (isinstance(recipe, dict)
+            and set(CHOICES)-{'layout'} <= set(recipe) <= set(CHOICES)
+            and all(recipe.get(k, 'scattered') in values for k, values in CHOICES.items()))
 
 
 def valid_profile(profile):
@@ -50,13 +53,26 @@ def valid_profile(profile):
             and 1 <= p.width <= p.rows and p.start+p.width-1 <= p.rows)
 
 
+def layout_sql(layout):
+    if layout == 'scattered':
+        return ''
+    direction = {'early': 'ASC', 'late': 'DESC'}[layout]
+    return ('CREATE TEMP TABLE hotspot_groups(seq INTEGER PRIMARY KEY,grp INTEGER);\n'
+            'INSERT INTO hotspot_groups SELECT row_number() OVER '
+            f'(ORDER BY grp {direction},seq),grp FROM t;\n'
+            'UPDATE t SET grp=(SELECT grp FROM hotspot_groups WHERE hotspot_groups.seq=t.seq);\n'
+            'DROP TABLE hotspot_groups;\n')
+
+
 def setup_sql(profile, recipe):
     from performance_hotspot_fuzzer import fixture_sql
-    sql = fixture_sql(profile)
+    sql = fixture_sql(profile) + layout_sql(recipe.get('layout', 'scattered'))
     if recipe['indexes'] in ('none', 'cover'):
         sql += 'DROP INDEX t_g;\n'
     if recipe['indexes'] in ('none', 'group'):
         sql += 'DROP INDEX t_gv;\n'
+    if recipe['indexes'] == 'ordered':
+        sql += 'CREATE INDEX t_s ON t(seq);\n'
     sql += ('CREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\n'
             f'INSERT INTO u SELECT seq,grp,v FROM t WHERE seq%{profile.stride}=0;\n'
             'CREATE INDEX u_g ON u(grp);\nANALYZE;\n')
@@ -96,6 +112,10 @@ def generated_case(profile, recipe, number=0):
         inner += f' ORDER BY x {r["direction"]},t.seq LIMIT {p.width}'
     elif operator == 'index_order':
         inner += f' ORDER BY t.grp {r["direction"]},t.v {r["direction"]},t.id LIMIT {p.width}'
+    elif operator in ('ordered_limit', 'ordered_offset'):
+        inner += f' ORDER BY t.seq {r["direction"]} LIMIT {p.stride}'
+        if operator == 'ordered_offset':
+            inner += f' OFFSET {p.start-1}'
     elif operator == 'window':
         inner = f'SELECT row_number() OVER (PARTITION BY grp ORDER BY x {r["direction"]},seq) AS x FROM ({inner})'
     elif operator == 'nested':
@@ -159,6 +179,8 @@ def family_fingerprint(profile, case, plans):
     identity = {'key': profile.key, 'sql': normalized(case.sql), 'indexes': case.recipe.get('indexes'),
                    'prepare': normalized(case.prepare), 'verify': normalized(case.verify),
                    'plans': {arm: normalized(plan) for arm, plan in plans.items()}}
+    if case.recipe.get('layout', 'scattered') != 'scattered':
+        identity['layout'] = case.recipe['layout']
     if case.warmup:
         identity['warmup'] = normalized(case.warmup)
     if profile.memory:
@@ -211,6 +233,7 @@ class Search:
         if mode == 0 and self.state['corpus']:
             parent = self.rng.choice(self.state['corpus'])
             recipe = dict(parent['recipe'])
+            recipe.setdefault('layout', 'scattered')
             if self.rng.choice([False, True]):
                 profile = Profile(**parent['profile'])
             key = self.rng.choice(list(CHOICES))
@@ -265,6 +288,7 @@ class Search:
             for number in range(1, 4):
                 variant = fresh(self.rng)
                 variant['indexes'] = recipe['indexes']
+                variant['layout'] = recipe.get('layout', 'scattered')
                 if operators and variant['operator'] not in operators:
                     variant['operator'] = self.rng.choice(operators)
                 cases.append(generated_case(profile, variant, number))

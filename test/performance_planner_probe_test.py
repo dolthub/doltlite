@@ -64,6 +64,19 @@ class PlannerProbeTests(unittest.TestCase):
             self.assertEqual(error.exception.code, 2)
             measure.assert_not_called()
 
+    def test_ordered_limit_layouts_keep_statistics_and_results(self):
+        for profile in probe.profiles(3235, 8, 128):
+            statistics = []
+            for layout in ('scattered', 'early', 'late'):
+                p = dict(profile, layout=layout, ordered_limit=True)
+                with self.subTest(profile=p), sqlite3.connect(':memory:') as db:
+                    db.executescript(probe.fixture(p))
+                    statistics.append(db.execute("SELECT idx,stat FROM sqlite_stat1 WHERE tbl='t' ORDER BY idx").fetchall())
+                    for name, variants in probe.cases(p).items():
+                        results = [db.execute(sql).fetchall() for sql in variants.values()]
+                        self.assertTrue(all(result == results[0] for result in results), name)
+            self.assertEqual(statistics, [statistics[0]]*3)
+
     def test_measure_requires_every_variant(self):
         profile = probe.profiles(3235, 1, 8)[0]
         with patch.object(probe, 'execute', return_value=''), self.assertRaises(ValueError):
@@ -112,6 +125,15 @@ class PlannerProbeTests(unittest.TestCase):
                     probe.main(['--doltlite', 'doltlite', '--sqlite', 'sqlite', '--output', tmp])
                 self.assertEqual(error.exception.code, 2)
                 measure.assert_not_called()
+
+    def test_replay_rejects_layout_overrides(self):
+        for args in (['--layout', 'late'], ['--ordered-limit']):
+            with self.subTest(args=args), patch.object(probe, 'measure') as measure, \
+                 self.assertRaises(SystemExit) as error:
+                probe.main(['--doltlite', 'unused', '--sqlite', 'unused', '--output', '/unused',
+                            '--replay', '/unused/replay.json'] + args)
+            self.assertEqual(error.exception.code, 2)
+            measure.assert_not_called()
 
 
 if __name__ == '__main__':
