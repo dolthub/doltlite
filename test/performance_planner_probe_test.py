@@ -28,6 +28,42 @@ class PlannerProbeTests(unittest.TestCase):
             with self.subTest(output=broken), self.assertRaises(ValueError):
                 probe.parse_output(broken, 1)
 
+    def test_payload_matrix_preserves_other_inputs_and_statistics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(probe, 'provenance', return_value={'compile_options': []}), \
+                 patch.object(probe, 'measure', return_value={}), \
+                 patch.object(probe, 'summarize', return_value={}), patch('builtins.print'):
+                probe.main(['--doltlite', 'unused', '--sqlite', 'unused', '--output', tmp,
+                            '--rows', '128', '--profile-index', '7', '--payload', '1', '--payload', '32', '--payload', '1024',
+                            '--case', 'group_aggregate', '--case', 'group_limit', '--case', 'group_having'])
+            records = [json.loads((Path(tmp)/f'profile-{i}.json').read_text()) for i in range(3)]
+        self.assertEqual(records[0]['cases'], records[1]['cases'])
+        self.assertEqual(records[1]['cases'], records[2]['cases'])
+        statistics = []
+        base = probe.profiles(3235, 8, 128)[7]
+        for record, size in zip(records, (1, 32, 1024)):
+            self.assertEqual(record['profile'], dict(base, payload=size))
+            with sqlite3.connect(':memory:') as db:
+                db.executescript(record['setup_sql'])
+                self.assertEqual(db.execute('SELECT min(length(payload)),max(length(payload)) FROM t').fetchone(),
+                                 (size, size))
+                statistics.append(db.execute('SELECT * FROM sqlite_stat1 ORDER BY tbl,idx').fetchall())
+                for name, variants in record['cases'].items():
+                    results = [db.execute(sql).fetchall() for sql in variants.values()]
+                    self.assertTrue(all(result == results[0] for result in results), name)
+                    if name == 'group_limit':
+                        self.assertEqual(results[0], db.execute(record['cases']['group_aggregate']['auto']).fetchall()[1:2])
+        self.assertEqual(statistics[0], statistics[1])
+        self.assertEqual(statistics[1], statistics[2])
+
+    def test_payload_matrix_rejects_invalid_sizes_and_replay_overrides(self):
+        for args in (['--payload', '0'], ['--payload', '-1'], ['--payload', '32', '--replay', '/unused']):
+            with self.subTest(args=args), patch.object(probe, 'measure') as measure, \
+                 self.assertRaises(SystemExit) as error:
+                probe.main(['--doltlite', 'unused', '--sqlite', 'unused', '--output', '/unused'] + args)
+            self.assertEqual(error.exception.code, 2)
+            measure.assert_not_called()
+
     def test_measure_requires_every_variant(self):
         profile = probe.profiles(3235, 1, 8)[0]
         with patch.object(probe, 'execute', return_value=''), self.assertRaises(ValueError):
