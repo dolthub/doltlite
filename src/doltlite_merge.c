@@ -706,6 +706,10 @@ int doltliteTableSchemaConflictDetail(
 }
 
 
+static int schemaEntrySameType(const SchemaEntry *pA, const SchemaEntry *pB){
+  return pA && pB && pA->zType && pB->zType && strcmp(pA->zType, pB->zType)==0;
+}
+
 int tryResolveSchemaDivergence(
   sqlite3 *db,
   const char *zName,
@@ -751,12 +755,14 @@ int tryResolveSchemaDivergence(
   ancSchEntry = findSchemaEntry(aAncSchema, nAncSchema, zName);
   ourSchEntry = findSchemaEntry(aOursSchema, nOursSchema, zName);
   theirSchEntry = findSchemaEntry(aTheirsSchema, nTheirsSchema, zName);
+  /* Rootpages are per-branch numbering, so only fall back to one when the
+  ** name no longer finds an object of the same type. */
   if( ourSchEntry && ourSchEntry->iRootpage ){
-    if( !ancSchEntry || (ancSchEntry->zType && strcmp(ancSchEntry->zType, "table")!=0) ){
+    if( !schemaEntrySameType(ancSchEntry, ourSchEntry) ){
       ancSchEntry = findSchemaEntryByRootpage(
           aAncSchema, nAncSchema, ourSchEntry->iRootpage);
     }
-    if( !theirSchEntry || (theirSchEntry->zType && strcmp(theirSchEntry->zType, "table")!=0) ){
+    if( !schemaEntrySameType(theirSchEntry, ourSchEntry) ){
       theirSchEntry = findSchemaEntryByRootpage(
           aTheirsSchema, nTheirsSchema, ourSchEntry->iRootpage);
     }

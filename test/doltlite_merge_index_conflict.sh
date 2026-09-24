@@ -594,6 +594,34 @@ check "theirs_index_text_pk_resolve_ours" "'k0'
 0
 ok" "$out"
 
+DB="$TMPROOT/renumbered_dual_rename.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL);
+CREATE UNIQUE INDEX t_p ON t(a) WHERE a IS NOT NULL;
+CREATE INDEX t_r ON t(r);
+INSERT INTO t VALUES(1,1,1.5),(2,2,2.5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+CREATE TABLE a0(x);
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','ours renumbers');
+SELECT dolt_checkout('other');
+ALTER TABLE t RENAME COLUMN a TO b;
+ALTER TABLE t RENAME COLUMN r TO s;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT length(dolt_merge('other'))>0;" 2>&1)
+check "renumbered_dual_rename_merges" "1" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT sql FROM sqlite_master WHERE name IN ('t','t_p','t_r') ORDER BY name;
+SELECT id FROM t INDEXED BY t_r WHERE s>2;
+SELECT * FROM pragma_integrity_check;" 2>&1)
+check "renumbered_dual_rename_index_follows" "CREATE TABLE t(id INTEGER PRIMARY KEY, b INTEGER, s REAL)
+CREATE UNIQUE INDEX t_p ON t(b) WHERE b IS NOT NULL
+CREATE INDEX t_r ON t(s)
+2
+ok" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
