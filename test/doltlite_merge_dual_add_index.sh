@@ -110,6 +110,15 @@ if dltest_require "empty_anc_same_branches" "$DB4" \
     "SELECT group_concat(id || '|' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" \
     "1|L,2|R" "$DB4/left"
   run_test "empty_anc_same_integrity" "PRAGMA integrity_check;" "ok" "$DB4/left"
+  tip=$(dltest_run_sql "SELECT dolt_hashof('HEAD');" "$DB4/left" | tr -d '[:space:]')
+  run_test "empty_anc_same_reopen_rows" \
+    "SELECT group_concat(id || '|' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" \
+    "1|L,2|R" "$DB4/$tip"
+  run_test "empty_anc_same_reopen_schema" \
+    "SELECT sql FROM sqlite_schema WHERE name='t';" \
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)" "$DB4/$tip"
+  run_test "empty_anc_same_reopen_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB4/$tip"
 fi
 
 DB5=/tmp/test_merge_empty_anc_diff_$$.db
