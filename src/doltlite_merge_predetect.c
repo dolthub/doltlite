@@ -926,12 +926,13 @@ static char *mergeRewriteInverse(const char *zSql, char **az, int n){
   return sqlite3_str_finish(pOut);
 }
 
-/* Emit renames whose target is free. A cycle is broken with a temp name. */
+/* Emit renames whose target is free. A cycle is broken with a temp name.
+** limit stays at the initial pair count; n shrinks as renames are emitted. */
 static int mergeRenameApplyOrder(
   char **azLogical, int nLogical, char ***pazApply, int *pnApply
 ){
   char **azOld = 0, **azNew = 0, **azOut = 0;
-  int n = nLogical/2, nOut = 0, nAlloc = 0, i, guard, rc = SQLITE_OK;
+  int n = nLogical/2, nOut = 0, nAlloc = 0, i, guard, limit, rc = SQLITE_OK;
   *pazApply = 0;
   *pnApply = 0;
   if( n<=0 ) return SQLITE_OK;
@@ -939,7 +940,7 @@ static int mergeRenameApplyOrder(
   azNew = sqlite3_malloc(n*(int)sizeof(char*));
   if( !azOld || !azNew ){ rc = SQLITE_NOMEM; goto apply_done; }
   for(i=0; i<n; i++){ azOld[i] = azLogical[i*2]; azNew[i] = azLogical[i*2+1]; }
-  for(guard=0; guard<n*3+2 && n>0; guard++){
+  for(limit=n*3+2, guard=0; guard<limit && n>0; guard++){
     int picked = -1, j, blocked;
     for(i=0; i<n && picked<0; i++){
       blocked = 0;
@@ -948,7 +949,6 @@ static int mergeRenameApplyOrder(
     }
     if( picked<0 ){
       char *zTmp = sqlite3_mprintf("dl_col_swap_%d", guard);
-      char *zKept = azNew[0];
       if( !zTmp ){ rc = SQLITE_NOMEM; goto apply_done; }
       rc = DOLTLITE_GROW_ARRAY(&azOut, &nAlloc, nOut+2, 4);
       if( rc!=SQLITE_OK ){ sqlite3_free(zTmp); goto apply_done; }
@@ -957,7 +957,6 @@ static int mergeRenameApplyOrder(
       if( !azOut[nOut] || !azOut[nOut+1] ){ rc = SQLITE_NOMEM; goto apply_done; }
       nOut += 2;
       azOld[0] = zTmp;
-      azNew[0] = zKept;
       continue;
     }
     rc = DOLTLITE_GROW_ARRAY(&azOut, &nAlloc, nOut+2, 4);

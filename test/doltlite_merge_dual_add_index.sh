@@ -214,4 +214,35 @@ if dltest_require "rename_post_idx_setup" "$DB7" "$SETUP7"; then
     "CREATE TABLE t(id INTEGER PRIMARY KEY, r INTEGER, a REAL, trail TEXT)" "$DB7"
 fi
 
+# A swap plus several other renames used to stop ordering early and return
+# a bare merge failure. Values stay in their slots.
+DB8=/tmp/test_merge_rename_order_$$.db
+rm -f "$DB8"
+SETUP8="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, r REAL, c1 NUMERIC, c2, c3 TEXT);
+INSERT INTO t VALUES(1, 10, 1.5, 7, 'u', 'trail');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'side');
+ALTER TABLE t RENAME COLUMN a TO swap;
+ALTER TABLE t RENAME COLUMN r TO a;
+ALTER TABLE t RENAME COLUMN swap TO r;
+ALTER TABLE t RENAME COLUMN c3 TO c3b;
+SELECT dolt_commit('-Am', 'side');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN c1 TO d1;
+ALTER TABLE t RENAME COLUMN c2 TO d2;
+SELECT dolt_commit('-Am', 'main');
+"
+if dltest_require "rename_order_setup" "$DB8" "$SETUP8"; then
+  run_test_match "rename_order_merge" \
+    "SELECT dolt_merge('side');" "^[0-9a-f]{40}$" "$DB8"
+  run_test "rename_order_sql" \
+    "SELECT sql FROM sqlite_schema WHERE name='t';" \
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, r INTEGER, a REAL, d1 NUMERIC, d2, c3b TEXT)" "$DB8"
+  run_test "rename_order_row" \
+    "SELECT r || '|' || a || '|' || d1 || '|' || d2 || '|' || c3b FROM t;" \
+    "10|1.5|7|u|trail" "$DB8"
+  run_test "rename_order_integrity" "PRAGMA integrity_check;" "ok" "$DB8"
+fi
+
 dltest_finish
