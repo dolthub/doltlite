@@ -9,6 +9,7 @@ import subprocess
 
 MARKER = re.compile(r'<!-- doltlite-hotspot:([0-9a-f]{24}) -->')
 FAMILY = re.compile(r'<!-- doltlite-hotspot-family:([0-9a-f]{24}) -->')
+STATEMENT = re.compile(r'<!-- doltlite-hotspot-statement:([0-9a-f]{24}) -->')
 BUNDLE = re.compile(r'<!-- hotspot-reproducer -->\s*```json\n(.*?)\n```', re.S)
 LABELS = {'performance-hotspot': 'Confirmed DoltLite/SQLite performance gap awaiting investigation',
           'known-performance-hotspot': 'Investigated performance gap retained in the PR hotspot suite'}
@@ -43,14 +44,18 @@ def read_issues(repo):
                     'number': issue['number'], 'url': issue['html_url'], 'state': issue['state'],
                     'state_reason': issue.get('state_reason'),
                     'labels': [x['name'] for x in issue['labels']],
-                    'fingerprints': MARKER.findall(body), 'families': FAMILY.findall(body), 'bundles': bundles,
+                    'fingerprints': MARKER.findall(body), 'families': FAMILY.findall(body),
+                    'statements': STATEMENT.findall(body), 'bundles': bundles,
                 }
     return list(issues.values())
 
 
-def disposition(fingerprint, issues, family=None):
+def disposition(fingerprint, issues, family=None, statement=None):
+    def known(i):
+        return 'known-performance-hotspot' in i['labels']
     matches = [i for i in issues if fingerprint in i['fingerprints']
-               or (family and family in i.get('families', []) and 'known-performance-hotspot' in i['labels'])]
+               or (family and family in i.get('families', []) and known(i))
+               or (statement and statement in i.get('statements', []) and known(i))]
     for issue in matches:
         if issue['state'] == 'open' or issue['state_reason'] != 'completed':
             return 'duplicate', issue
@@ -90,6 +95,10 @@ def issue_body(report, record, bundle, run_url, previous=None):
         lines += ['', f"Parameter-family ID: `{record['family']}`. To explicitly accept other parameters of this same SQL shape and access plans, "
                   'add an HTML comment containing `doltlite-hotspot-family:` immediately followed by this ID, '
                   'with one space inside each comment delimiter. This broader match applies only with the known-hotspot label.']
+    if record.get('statement'):
+        lines += ['', f"Statement ID: `{record['statement']}`. To accept this statement under every profile, context, and plan, "
+                  'add an HTML comment containing `doltlite-hotspot-statement:` immediately followed by this ID, '
+                  'with one space inside each comment delimiter. This broadest match also applies only with the known-hotspot label.']
     body = '\n'.join(lines)
     if len(body) > 60000:
         raise ValueError('issue reproducer exceeds durable issue size limit')
@@ -103,7 +112,7 @@ def publish(repo, output, run_url):
     for record in report['cases']:
         if not record.get('confirmed'):
             continue
-        status, previous = disposition(record['fingerprint'], issues, record.get('family'))
+        status, previous = disposition(record['fingerprint'], issues, record.get('family'), record.get('statement'))
         if status == 'duplicate':
             proposals.append({'fingerprint': record['fingerprint'], 'status': status, 'url': previous['url']})
             continue
