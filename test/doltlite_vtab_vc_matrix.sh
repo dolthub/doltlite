@@ -277,6 +277,29 @@ result=$(run_sql "INSERT INTO f5(f5) VALUES('integrity-check'); SELECT 'ok'; PRA
 check "merge_conflict_rebuilt_index_valid" "ok
 ok" "$result"
 
+# A merge inside BEGIN used to store the pre-rebuild FTS shadows. The
+# session still searched, and a later reset reopened the bad commit.
+scenario "in-transaction fts5 merge commits the rebuilt index"
+newdb
+run_sql "CREATE VIRTUAL TABLE docs USING fts5(body);
+INSERT INTO docs(body) VALUES('base doc');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+INSERT INTO docs(body) VALUES('main doc');
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('feat');
+INSERT INTO docs(body) VALUES('feat doc');
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('feat');
+COMMIT;" "$DB" > /dev/null
+tip=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "merge_in_txn_commit_rows" "base doc,feat doc,main doc" \
+  "$(run_sql "SELECT group_concat(body, ',') FROM (SELECT body FROM docs ORDER BY body);" "$DB/$tip")"
+check "merge_in_txn_commit_integrity" "ok" \
+  "$(run_sql "PRAGMA integrity_check;" "$DB/$tip")"
+
 scenario "clean fts5 shadow merge rebuilds from content"
 newdb
 run_sql "CREATE VIRTUAL TABLE docs USING fts5(body);
