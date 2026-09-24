@@ -230,7 +230,7 @@ static SQLITE_INLINE int prollyKeyComparePrefix(
   const u8 *pRight,
   int n
 ){
-  if( n>=8 ){
+  while( n>=8 ){
     u64 left = ((u64)pLeft[0]<<56) | ((u64)pLeft[1]<<48)
              | ((u64)pLeft[2]<<40) | ((u64)pLeft[3]<<32)
              | ((u64)pLeft[4]<<24) | ((u64)pLeft[5]<<16)
@@ -244,9 +244,26 @@ static SQLITE_INLINE int prollyKeyComparePrefix(
     pLeft += 8;
     pRight += 8;
     n -= 8;
+    if( n>16 ) return memcmp(pLeft, pRight, n);
     if( n==0 ) return 0;
   }
-  return memcmp(pLeft, pRight, n);
+  if( n>=4 ){
+    u32 left = ((u32)pLeft[0]<<24) | ((u32)pLeft[1]<<16)
+             | ((u32)pLeft[2]<<8) | pLeft[3];
+    u32 right = ((u32)pRight[0]<<24) | ((u32)pRight[1]<<16)
+              | ((u32)pRight[2]<<8) | pRight[3];
+    if( left<right ) return -1;
+    if( left>right ) return 1;
+    pLeft += 4;
+    pRight += 4;
+    n -= 4;
+  }
+  while( n-- ){
+    if( *pLeft!=*pRight ) return (int)*pLeft-(int)*pRight;
+    pLeft++;
+    pRight++;
+  }
+  return 0;
 }
 
 int prollyNodeSearchBlob(

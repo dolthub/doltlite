@@ -37,6 +37,7 @@ COVERAGE_TESTS=(
   prolly_cache_budget_test
   prolly_hashset_test
   prolly_chunker_boundary_test
+  prolly_node_search_test
   scoped_refs_push_test
   remote_chunk_integrity_test
   chunk_source_test
