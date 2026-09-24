@@ -199,6 +199,19 @@ check_eq "detached_reader_stays_on_pinned_commit" $'1\nNULL\n1' "$res"
 res=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t; SELECT count(*) FROM dolt_tags WHERE tag_name='v1';" | normalize_output)
 check_eq "peer_advance_and_tag_delete_are_durable" $'4\n0' "$res"
 
+PLAIN=/tmp/test_open_branch_plain_$$
+rm -f "$PLAIN"
+cp "$DB" "$PLAIN"
+res=$("$DOLTLITE" "$PLAIN/renamed" "SELECT active_branch(); SELECT v FROM t WHERE id=1;" 2>&1 | normalize_output)
+check_eq "slash_branch_opens_store_without_db_extension" $'renamed\nside' "$res"
+res=$("$DOLTLITE" "$PLAIN/feature/x" "SELECT active_branch();" 2>&1 | normalize_output)
+check_eq "slash_nested_branch_opens_store_without_db_extension" "feature/x" "$res"
+res=$("$DOLTLITE" "$PLAIN@renamed" "SELECT active_branch();" 2>&1 | normalize_output)
+check_eq "at_branch_opens_store_without_db_extension" "renamed" "$res"
+res=$("$DOLTLITE" "$PLAIN/nope" "SELECT 1;" 2>&1 | normalize_output)
+check_match "missing_revision_without_db_extension" 'branch or revision "nope" not found' "$res"
+rm -f "$PLAIN" "/tmp/.test_open_branch_plain_$$-lock"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 if [ $FAIL -gt 0 ]; then

@@ -413,4 +413,9 @@ int chunkStoreForceRefresh(ChunkStore *cs);
 /* Duplicate z with two trailing nuls (SQLITE_OPEN_MAIN_DB xOpen URI term). */
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
 
+/* Read the first nBuf bytes of an existing file. *pRead is 0 when it is
+** missing, unopenable or shorter; only OOM is an error. */
+int chunkStoreReadFileHeader(sqlite3_vfs *pVfs, const char *zFilename,
+                             u8 *aBuf, int nBuf, int *pRead);
+
 #endif
