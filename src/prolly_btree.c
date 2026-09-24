@@ -888,7 +888,8 @@ int sqlite3BtreeOpen(
   pBt->store.corruptMidStream = 0;
 
   rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_BYTES
-      - csIndexCacheSetBudget(&pBt->store, PROLLY_DEFAULT_CACHE_BYTES/16));
+      - csIndexCacheSetBudget(&pBt->store,
+            csIndexCacheBudgetFor(&pBt->store, PROLLY_DEFAULT_CACHE_BYTES)));
   if( rc!=SQLITE_OK ){
     chunkStoreClose(&pBt->store);
     sqlite3_free(zStoreFilename);
@@ -1240,7 +1241,8 @@ int prollyBtreeSetCacheSize(Btree *p, int mxPage){
   }
   p->pBt->cacheSize = mxPage;
   nByte = MAX(nByte, 4096);
-  nByte -= csIndexCacheSetBudget(&p->pBt->store, nByte/16);
+  nByte -= csIndexCacheSetBudget(&p->pBt->store,
+                                 csIndexCacheBudgetFor(&p->pBt->store, nByte));
   prollyCacheSetBudget(&p->pBt->cache, nByte);
   return SQLITE_OK;
 }
