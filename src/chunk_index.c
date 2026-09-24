@@ -37,10 +37,10 @@ i64 csIndexCacheSetBudget(ChunkStore *cs, i64 nByte){
       + nSlot*(CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage)) : 0;
 }
 
-static int csIndexCacheSlot(ChunkStore *cs, const ProllyHash *pHash){
+static int csIndexCacheSlot(ChunkStore *cs, const ProllyHash *pHash, int iChoice){
   u32 h;
   assert( !cs->pIndexCache || cs->pIndexCache->nSlot==cs->nIndexCacheSlot );
-  memcpy(&h, pHash->data, sizeof(h));
+  memcpy(&h, pHash->data+iChoice*sizeof(h), sizeof(h));
   return (int)(h % (cs->nIndexCacheSlot/CS_INDEX_CACHE_WAYS))
          *CS_INDEX_CACHE_WAYS;
 }
@@ -53,8 +53,9 @@ static void csIndexCachePut(
   u8 *aCopy;
   int slot;
   int i;
+  int choice;
   if( cs->nIndexCacheSlot==0 ) return;
-  slot = csIndexCacheSlot(cs, pHash);
+  slot = csIndexCacheSlot(cs, pHash, 0);
   sqlite3BeginBenignMalloc();
   if( !cs->pIndexCache ){
     cs->pIndexCache = sqlite3MallocZero(sizeof(*cs->pIndexCache)
@@ -67,9 +68,12 @@ static void csIndexCachePut(
   sqlite3EndBenignMalloc();
   if( !cs->pIndexCache ) return;
   p = &cs->pIndexCache->aPage[slot];
-  for(i=1; i<CS_INDEX_CACHE_WAYS; i++){
-    ChunkIndexCachePage *q = &cs->pIndexCache->aPage[slot+i];
-    if( q->lastUse<p->lastUse ) p = q;
+  for(choice=0; choice<2; choice++){
+    slot = csIndexCacheSlot(cs, pHash, choice);
+    for(i=0; i<CS_INDEX_CACHE_WAYS; i++){
+      ChunkIndexCachePage *q = &cs->pIndexCache->aPage[slot+i];
+      if( q->lastUse<p->lastUse ) p = q;
+    }
   }
   if( !p->aBody ){
     i64 nLimit = sqlite3_soft_heap_limit64(-1);
@@ -394,17 +398,20 @@ static int csReadLazyPage(
     return SQLITE_CORRUPT;
   }
   if( aBuffer && cs->pIndexCache ){
-    int slot = csIndexCacheSlot(cs, pHash);
-    int i;
-    for(i=0; i<CS_INDEX_CACHE_WAYS; i++){
-      ChunkIndexCachePage *p = &cs->pIndexCache->aPage[slot+i];
-      if( p->aBody && p->iOffset==iOffset && p->nBody==nBody
-       && p->iDataEnd==pRun->iDataEnd
-       && prollyHashCompare(&p->hash, pHash)==0 ){
-        aBody = p->aBody;
-        p->lastUse = ++cs->pIndexCache->clock;
-        *ppBody = aBody;
-        return SQLITE_OK;
+    int choice;
+    for(choice=0; choice<2; choice++){
+      int slot = csIndexCacheSlot(cs, pHash, choice);
+      int i;
+      for(i=0; i<CS_INDEX_CACHE_WAYS; i++){
+        ChunkIndexCachePage *p = &cs->pIndexCache->aPage[slot+i];
+        if( p->aBody && p->iOffset==iOffset && p->nBody==nBody
+         && p->iDataEnd==pRun->iDataEnd
+         && prollyHashCompare(&p->hash, pHash)==0 ){
+          aBody = p->aBody;
+          p->lastUse = ++cs->pIndexCache->clock;
+          *ppBody = aBody;
+          return SQLITE_OK;
+        }
       }
     }
   }

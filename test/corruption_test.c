@@ -1495,6 +1495,77 @@ static int writeCheckpointPage(
                         CS_WAL_CHUNK_HDR_SIZE+size, offset);
 }
 
+static void test_checkpoint_cache_collisions(void){
+  const char *path = "/tmp/test_corr_checkpoint_collisions.db";
+  u8 leaf[CS_INDEX_PAGE_HEADER_SIZE+CHUNK_INDEX_ENTRY_SIZE];
+  ProllyHash keys[5], hashes[5];
+  ChunkStore cs;
+  const sqlite3_io_methods *original;
+  sqlite3_io_methods methods;
+  i64 budget;
+  int i, pass, rc;
+  u32 nonce = 0;
+
+  removeDb(path);
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  check("checkpoint_collisions_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  rc = chunkStorePut(&cs, (const u8*)"seed", 4, &keys[0]);
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(&cs);
+  check("checkpoint_collisions_create_file", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto done;
+  budget = csIndexCacheSetBudget(&cs, sizeof(ChunkIndexCache)
+      + 16*(CS_INDEX_PAGE_SIZE+sizeof(ChunkIndexCachePage)));
+  check("checkpoint_collisions_capacity", cs.nIndexCacheSlot==16);
+  memset(leaf, 0, sizeof(leaf));
+  CS_WRITE_U32(leaf, CS_INDEX_PAGE_LEAF_MAGIC);
+  CS_WRITE_U32(leaf+4, 1);
+  CS_WRITE_I64(leaf+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE, 2040);
+  CS_WRITE_U32(leaf+CS_INDEX_PAGE_HEADER_SIZE+PROLLY_HASH_SIZE+8, 4);
+  for(i=0; i<5; i++){
+    u32 first, second;
+    do{
+      CS_WRITE_U32(leaf+CS_INDEX_PAGE_HEADER_SIZE, ++nonce);
+      prollyHashCompute(leaf, sizeof(leaf), &hashes[i]);
+      memcpy(&first, hashes[i].data, sizeof(first));
+      memcpy(&second, hashes[i].data+sizeof(first), sizeof(second));
+    }while( first%4!=0 || second%4==0 );
+    memcpy(keys[i].data, leaf+CS_INDEX_PAGE_HEADER_SIZE, PROLLY_HASH_SIZE);
+    rc = writeCheckpointPage(&cs, 4096*(i+1), leaf, sizeof(leaf), &hashes[i]);
+    check("checkpoint_collisions_write_page", rc==SQLITE_OK);
+    if( rc!=SQLITE_OK ) goto done;
+  }
+  original = cs.file.pFile->pMethods;
+  methods = *original;
+  checkpointRead = original->xRead;
+  methods.xRead = countCheckpointRead;
+  cs.file.pFile->pMethods = &methods;
+  cs.index.lazy.active = 1;
+  cs.index.lazy.nRun = 1;
+  cs.index.lazy.aRun[0].iDataEnd = 2048;
+  cs.index.lazy.aRun[0].nRootSize = sizeof(leaf);
+  for(pass=0; pass<3; pass++){
+    checkpointReadCount = 0;
+    for(i=0; i<5; i++){
+      ChunkIndexEntry entry;
+      int found = 0;
+      cs.index.lazy.aRun[0].iRootOffset = 4096*(i+1);
+      cs.index.lazy.aRun[0].rootHash = hashes[i];
+      rc = csIndexLookup(&cs, &keys[i], &entry, &found);
+      check("checkpoint_collisions_lookup",
+            rc==SQLITE_OK && found && entry.offset==2040 && entry.size==4);
+    }
+    check("checkpoint_collisions_retain_pages",
+          checkpointReadCount==(pass==0 ? 5 : 0));
+    check("checkpoint_collisions_respect_budget", indexCacheBytes(&cs)<=budget);
+  }
+  cs.file.pFile->pMethods = original;
+done:
+  chunkStoreClose(&cs);
+  removeDb(path);
+}
+
 static void test_checkpoint_cache_validation(void){
   const char *path = "/tmp/test_corr_checkpoint_cache.db";
   u8 leaf[CS_INDEX_PAGE_HEADER_SIZE+2*CHUNK_INDEX_ENTRY_SIZE];
@@ -1943,6 +2014,7 @@ int main(void){
   test_crash_garbage_truncated_on_write();
   test_wal_open_checkpoint();
   test_paged_checkpoint_large_index();
+  test_checkpoint_cache_collisions();
   test_checkpoint_cache_validation();
   test_root_seal_binds_file_offset();
   test_header_seal_detects_tampered_wal_offset();
