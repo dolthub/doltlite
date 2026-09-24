@@ -31,6 +31,7 @@ static ProllyCacheEntry *cursorCachedNode(
       ? prollyCacheGetPrefix(cur->pCache, pHash, cur->bLargeScan)
       : cur->bLargeScan ? prollyCacheGetForScan(cur->pCache, pHash)
                         : prollyCacheGet(cur->pCache, pHash);
+  if( pEntry ) pEntry->bLookup = 0;
   if( pEntry && cur->bAllowPrefix ) pEntry->bAllowPrefix = 1;
   return pEntry;
 }
@@ -282,6 +283,7 @@ static int finalizeSeekOnLeaf(ProllyCursor *cur, ProllyCacheEntry *pLeaf,
                               int leafIdx, int leafRes, int *pRes){
   int rc;
 
+  pLeaf->bLookup = 1;
   cur->aLevel[cur->iLevel].idx = leafIdx;
 
   if( leafRes==0 ){

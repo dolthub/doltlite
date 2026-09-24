@@ -762,6 +762,65 @@ static void testInternalNodes(void){
   prollyCacheFree(&cache);
 }
 
+static ProllyCacheEntry *putLookupNode(ProllyCache *pCache, int id){
+  ProllyCacheEntry *p = putNode(pCache, id, 16384);
+  ProllyHash hash = nodeHash(id);
+  ProllyCursor cursor;
+  int res = -1;
+  int rc;
+  if( !p ) return 0;
+  prollyCursorInit(&cursor, 0, pCache, &hash, PROLLY_NODE_INTKEY);
+  cursor.bAllowPrefix = 1;
+  rc = prollyCursorSeekInt(&cursor, id, &res);
+  prollyCursorReleaseAll(&cursor);
+  if( rc!=SQLITE_OK || res!=0 ){
+    prollyCacheRelease(pCache, p);
+    return 0;
+  }
+  return p;
+}
+
+static void testPrefixAdmission(void){
+  ProllyCache cache;
+  ProllyCacheEntry *p;
+  ProllyHash hash = nodeHash(1);
+  int i;
+  check("init prefix admission cache", prollyCacheInit(&cache, 65536)==SQLITE_OK);
+  for(i=1; i<=8; i++){
+    p = putLookupNode(&cache, i);
+    if( !p ) break;
+    prollyCacheRelease(&cache, p);
+  }
+  check("seed prefix admission cache", i==9);
+  p = prollyCacheGetPrefix(&cache, &hash, 0);
+  check("reuse prefix before cold churn", p && p->node.nValuePrefix);
+  if( p ) prollyCacheRelease(&cache, p);
+  for(i=9; i<409; i++){
+    p = putLookupNode(&cache, i);
+    if( !p ) break;
+    prollyCacheRelease(&cache, p);
+  }
+  check("admit cold prefixes", i==409);
+  p = prollyCacheGetPrefix(&cache, &hash, 0);
+  check("reused prefix survives cold prefix churn", p && p->node.nValuePrefix
+      && prollyNodeIntKey(&p->node, 0)==1);
+  if( p ) prollyCacheRelease(&cache, p);
+  check("prefix admission remains bounded", cache.nByte<=cache.nMaxByte
+      && cache.nByte==cacheBytes(&cache));
+  for(i=409; i<2409; i++){
+    p = putLookupNode(&cache, i);
+    if( !p ) break;
+    prollyCacheRelease(&cache, p);
+  }
+  check("continue cold prefix churn", i==2409);
+  p = prollyCacheGetPrefix(&cache, &hash, 0);
+  check("unused prefix eventually evicted", p==0);
+  if( p ) prollyCacheRelease(&cache, p);
+  check("continued prefix churn remains bounded", cache.nByte<=cache.nMaxByte
+      && cache.nByte==cacheBytes(&cache));
+  prollyCacheFree(&cache);
+}
+
 static void testNodes(void){
   ProllyCache cache;
   ProllyCacheEntry *a, *b, *c;
@@ -916,6 +975,7 @@ int main(void){
   unlink(zPath);
   testNodes();
   testInternalNodes();
+  testPrefixAdmission();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail!=0;
 }

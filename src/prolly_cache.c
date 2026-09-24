@@ -7,6 +7,7 @@
 
 #define PROLLY_CACHE_INTERNAL_CHANCES 8
 #define PROLLY_CACHE_PREFIX_CHANCES 255
+#define PROLLY_CACHE_LOOKUP_PREFIX_CHANCES 32
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
@@ -84,7 +85,7 @@ static ProllyCacheEntry *cacheEntryNewOwned(
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pData;
   pEntry->nData = nData;
-  pEntry->nDataPhys = nDataPhys;
+  pEntry->bLookup = 0;
   pEntry->nRef = 1;
   pEntry->bTransient = bTransient ? 1 : 0;
 
@@ -211,11 +212,11 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   pNode->pData = pData;
   pNode->nDataPhys = nCompact;
   pNode->nValuePrefix = nPrefix;
-  pEntry->nEvictChance = PROLLY_CACHE_PREFIX_CHANCES;
+  pEntry->nEvictChance = pEntry->bLookup ? PROLLY_CACHE_LOOKUP_PREFIX_CHANCES
+                                      : PROLLY_CACHE_PREFIX_CHANCES;
   cache->nByte += (i64)sqlite3_msize(pData)-(i64)sqlite3_msize(pEntry->pData);
   sqlite3_free(pEntry->pData);
   pEntry->pData = pData;
-  pEntry->nDataPhys = nCompact;
   lruRemove(pEntry);
   lruInsertHead(cache, pEntry);
   return 1;
@@ -381,7 +382,7 @@ ProllyCacheEntry *prollyCachePutOwned(
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pData;
   pEntry->nData = nData;
-  pEntry->nDataPhys = nData;
+  pEntry->bLookup = 0;
   pEntry->nRef = 1;
   pEntry->bTransient = 0;
 

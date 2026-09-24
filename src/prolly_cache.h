@@ -13,7 +13,7 @@ struct ProllyCacheEntry {
   ProllyHash hash;
   u8 *pData;
   int nData;
-  int nDataPhys;
+  int bLookup;
   ProllyNode node;
   int nRef;
   u8 bTransient;
