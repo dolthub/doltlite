@@ -9,6 +9,7 @@ proc pending_scan_check {name} {
     seek {SELECT id,n,v FROM t WHERE id>=(SELECT id FROM t WHERE n=101) ORDER BY id LIMIT 150}
     seek-backward {SELECT id,n,v FROM t WHERE id<=(SELECT id FROM t WHERE n=4001) ORDER BY id DESC LIMIT 150}
     index {SELECT v,id FROM t INDEXED BY t_v WHERE v>=10 ORDER BY v,id}
+    exact {SELECT count(t.id),sum(t.n),sum(t.v) FROM probes p LEFT JOIN t ON t.id=p.id}
     integrity {PRAGMA integrity_check}
   } {
     do_test $name-$suffix [list db eval $sql] [oracle eval $sql]
@@ -46,6 +47,7 @@ foreach {keytype declaration keyexpr} {
       INSERT INTO t SELECT $keyexpr,i,i%127,CAST(printf('%0256d',i) AS BLOB) FROM c;
       COMMIT;
       CREATE INDEX t_v ON t(v,id);
+      CREATE TABLE probes AS SELECT id FROM t;
       BEGIN;
       DELETE FROM t WHERE n=32;
     "

@@ -525,7 +525,8 @@ static int indexMovetoExactMutMap(
   int nSortKey,
   int exactMutMapKey,
   int *pRes,
-  int *pDone
+  int *pDone,
+  int *pDeleted
 ){
   struct TableEntry *pTE;
   ProllyMutMap *pPending;
@@ -534,6 +535,7 @@ static int indexMovetoExactMutMap(
   int rc;
 
   *pDone = 0;
+  *pDeleted = 0;
   if( !pCur->pKeyInfo
    || !(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
     return SQLITE_OK;
@@ -544,6 +546,7 @@ static int indexMovetoExactMutMap(
     rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
     cursorMapMiss = pEntry==0;
+    *pDeleted = pEntry && pEntry->op==PROLLY_EDIT_DELETE;
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
       if( pCur->isPinned ) return SQLITE_CONSTRAINT_PINNED;
       setCursorToMutMapEntryPhys(
@@ -859,6 +862,7 @@ static int indexMovetoExactTreeHit(
   const u8 *pSortKey,
   int nSortKey,
   int exactMutMapKey,
+  int isDeleted,
   int *pRes,
   int *pDone
 ){
@@ -872,13 +876,6 @@ static int indexMovetoExactTreeHit(
    && pCur->pCur.eState==PROLLY_CURSOR_VALID
    && pCur->pKeyInfo
    && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
-    int isDeleted = 0;
-    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-      ProllyMutMapEntry *mmE = 0;
-      rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &mmE);
-      if( rc!=SQLITE_OK ) return rc;
-      if( mmE && mmE->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
-    }
     if( !isDeleted ){
       *pRes = 0;
       pIdxKey->eqSeen = 1;
@@ -1066,6 +1063,7 @@ int prollyBtCursorIndexMoveto(
     ProllyMutMapEntry *mutE = 0;
     int mutFromCursorMap = 0;
     int exactMutMapKey = 0;
+    int isDeleted = 0;
     u8 *pSortKey = 0;
     int nSortKey = 0;
     int nSeekKeyField = 0;
@@ -1084,11 +1082,13 @@ int prollyBtCursorIndexMoveto(
     }
 
     rc = indexMovetoExactMutMap(
-        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey, pRes, &done);
+        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey,
+        pRes, &done, &isDeleted);
     if( rc!=SQLITE_OK || done ) return rc;
 
     rc = indexMovetoExactTreeHit(
-        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey, pRes, &done);
+        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey,
+        isDeleted, pRes, &done);
     if( rc!=SQLITE_OK || done ) return rc;
     /* Do not swallow a failed tree seek as "not found". */
     rc = indexMovetoScanTreeLeaf(
