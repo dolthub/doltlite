@@ -22,8 +22,7 @@ static int cursorLoadFullLeaf(BtCursor *pCur){
   assert( pCur->pCachedFrom==0 );
   /* Previously fetched fields may borrow the prefix until the cursor moves. */
   pCur->pCachedFrom = pLevel->pEntry;
-  if( pLevel->pEntry->node.nValuePrefix<PROLLY_NODE_VALUE_PREFIX/2
-   && !(pCur->curFlags & BTCF_WriteFlag) ){
+  if( pLevel->pEntry->node.nValuePrefix<PROLLY_NODE_VALUE_PREFIX/2 ){
     pCur->pCur.bAllowPrefix = 0;
   }
   pLevel->pEntry = pFull;
