@@ -990,15 +990,6 @@ static int mergeRefInstallMergedCatalog(
     }
   }
 
-  /* FTS rebuild writes sit in the open SQL transaction. A clean merge
-  ** COMMITs before the flush so the stored catalog has the rebuilt
-  ** shadows. Ignored tables are split back out below. A conflicted merge
-  ** stays inside BEGIN so the caller can still roll it back. */
-  if( nMergeConflicts==0 ){
-    rc = doltliteVcSealEnclosingTxn(db);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-
   rc = doltliteFlushCatalogToHash(db, pWorkingCat);
   if( rc==SQLITE_OK ){
     *pMergedCat = *pWorkingCat;
@@ -1427,6 +1418,36 @@ int doltliteMergeRef(
         db, context, &savedState, nMergeConflicts, "Merge", 0);
     bHaveSaved = 0;
     return SQLITE_ERROR;
+  }
+
+  /* FTS rebuild writes sit in the open SQL transaction, so the flush in
+  ** install can miss them. Seal only once the merge is actually going to
+  ** commit: a conflict or constraint failure must still be able to roll
+  ** the caller's BEGIN back. Ignored tables are split back out of the
+  ** hash the commit stores. */
+  if( !noCommit ){
+    ProllyHash trackedBase = mergedCatHash;
+    ProllyHash ignoredOut;
+    char *zSplitErr = 0;
+    rc = doltliteVcSealEnclosingTxn(db);
+    if( rc!=SQLITE_OK ){
+      bRestoreOnFail = 1;
+      goto merge_fail;
+    }
+    rc = doltliteFlushCatalogToHash(db, &workingCatHash);
+    if( rc==SQLITE_OK ){
+      mergedCatHash = workingCatHash;
+      if( !prollyHashIsEmpty(&ignoredCatHash) ){
+        rc = mergeSplitWorkingCatalog(db, &ignoredCatHash, &trackedBase, 1,
+                                      &mergedCatHash, &ignoredOut, &zSplitErr);
+      }
+    }
+    sqlite3_free(zSplitErr);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
+    if( rc!=SQLITE_OK ){
+      bRestoreOnFail = 1;
+      goto merge_fail;
+    }
   }
 
   rc = doltliteSetSessionStaged(db, &mergedCatHash);
