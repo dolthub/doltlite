@@ -12,7 +12,7 @@ static int cursorHasTreePrefix(BtCursor *pCur){
       && pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry->node.nValuePrefix;
 }
 
-static int cursorLoadFullLeaf(BtCursor *pCur){
+static int cursorLoadFullLeaf(BtCursor *pCur, u32 nRequired){
   ProllyCursorLevel *pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
   ProllyCacheEntry *pFull;
   int rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
@@ -22,7 +22,11 @@ static int cursorLoadFullLeaf(BtCursor *pCur){
   assert( pCur->pCachedFrom==0 );
   /* Previously fetched fields may borrow the prefix until the cursor moves. */
   pCur->pCachedFrom = pLevel->pEntry;
-  if( pLevel->pEntry->node.nValuePrefix<PROLLY_NODE_VALUE_PREFIX/2 ){
+  if( pLevel->pEntry->node.nValuePrefix<PROLLY_NODE_VALUE_PREFIX/2
+   && ((pCur->curFlags & BTCF_WriteFlag)
+       || (!pCur->pCur.bScanFromStart && pCur->mergeStepDir==0
+           && pCur->pCur.pCache->nSharedPrefix==0)
+       || nRequired>PROLLY_CACHE_SHARED_PREFIX) ){
     pCur->pCur.bAllowPrefix = 0;
   }
   pLevel->pEntry = pFull;
@@ -64,7 +68,7 @@ int prollyBtreeCursorCurrentTreeValueCopy(
     return SQLITE_CORRUPT_BKPT;
   }
   if( (i64)offset + amt>nAvail && cursorHasTreePrefix(pCur) ){
-    int rc = cursorLoadFullLeaf(pCur);
+    int rc = cursorLoadFullLeaf(pCur, offset+amt);
     if( rc!=SQLITE_OK ) return rc;
     prollyBtreeCursorCurrentTreeValueSpan(pCur, &pData, &nData, &nAvail);
     memcpy(pBuf, pData + offset, amt);
@@ -256,7 +260,7 @@ int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   }
 
   if( cursorHasTreePrefix(pCur) ){
-    int rc = cursorLoadFullLeaf(pCur);
+    int rc = cursorLoadFullLeaf(pCur, ~(u32)0);
     if( rc!=SQLITE_OK ) return cursorPayloadFault(pCur, rc, ppData, pnData);
   }
 

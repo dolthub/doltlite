@@ -112,4 +112,27 @@ foreach warm {0 1} {
   }
 }
 
+reset_db
+db eval {
+  CREATE TABLE packed(id TEXT PRIMARY KEY,seq INTEGER,b BLOB);
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
+  INSERT INTO packed SELECT printf('%016x',i),i,CAST(printf('%0256d',i) AS BLOB) FROM c;
+}
+faultsim_save_and_close
+foreach warm {0 1} {
+  do_faultsim_test shared-oom-$warm -faults oom-* -prep {
+    faultsim_restore_and_reopen
+    db eval {PRAGMA cache_size=-32}
+    if {$::warm} {db eval {SELECT sum(seq) FROM packed}}
+  } -body {
+    db eval {SELECT sum(seq),sum(b=CAST(printf('%0256d',seq) AS BLOB)) FROM packed}
+  } -test {
+    faultsim_test_result {0 {131328 512}} {1 {out of memory}}
+    set actual [db eval {SELECT sum(seq),sum(b=CAST(printf('%0256d',seq) AS BLOB)) FROM packed}]
+    if {$actual ne {131328 512}} {
+      error "shared prefixes changed after allocation failure: $actual"
+    }
+  }
+}
+
 finish_test

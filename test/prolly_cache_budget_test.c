@@ -29,13 +29,19 @@ static i64 indexCacheBytes(const ChunkStore *cs){
 
 static sqlite3_int64 cacheBytes(ProllyCache *pCache){
   ProllyCacheEntry *p;
+  int nShared = 0;
   sqlite3_int64 n = sqlite3_msize(pCache->aBucket);
   for(p=pCache->lruHead.pLruNext; p!=&pCache->lruTail; p=p->pLruNext){
-    n += sqlite3_msize(p) + sqlite3_msize(p->pData);
+    if( p->pPacked ) nShared++;
+    n += sqlite3_msize(p) + sqlite3_msize(p->pData)
+       + sqlite3_msize(p->pPacked);
   }
   for(p=pCache->prefixHead.pLruNext; p!=&pCache->prefixTail; p=p->pLruNext){
-    n += sqlite3_msize(p) + sqlite3_msize(p->pData);
+    if( p->pPacked ) nShared++;
+    n += sqlite3_msize(p) + sqlite3_msize(p->pData)
+       + sqlite3_msize(p->pPacked);
   }
+  check("shared-prefix entry count", nShared==pCache->nSharedPrefix);
   return n;
 }
 
@@ -862,6 +868,105 @@ static void testNodes(void){
   prollyCacheFree(&cache);
 }
 
+static void sharedPrefixValue(u8 *pValue, int row, int varying){
+  int j;
+  for(j=0; j<256; j++) pValue[j] = (u8)(j^0xa5);
+  if( varying==34 ){
+    memset(pValue, 0, 256);
+    pValue[0] = (u8)row;
+    pValue[31] = 5;
+  }else if( varying==32 ){
+    for(j=0; j<32; j++) pValue[j] ^= (u8)row;
+  }else if( varying>=0 ){
+    pValue[varying] ^= (u8)row;
+  }
+}
+
+static void testSharedPrefixes(void){
+  int varying;
+  for(varying=-1; varying<=34; varying++){
+    ProllyCache cache;
+    ProllyNodeBuilder builder;
+    ProllyHash hash = nodeHash(varying+1);
+    ProllyCacheEntry *pEntry, *pFull;
+    u8 key[8], value[256];
+    u8 *pData = 0, *pOriginal = 0;
+    const u8 *pBorrowed;
+    int nData = 0, nValue, nAvail;
+    int nRowValue = varying==33 ? 145 : sizeof(value);
+    int rc, i, pass;
+    sqlite3_int64 nBefore = sqlite3_memory_used();
+    check("init shared-prefix cache", prollyCacheInit(&cache, 65536)==SQLITE_OK);
+    prollyNodeBuilderInit(&builder, 0, PROLLY_NODE_INTKEY);
+    for(i=0; i<64; i++){
+      prollyEncodeIntKey(i, key);
+      sharedPrefixValue(value, i, varying);
+      if( varying==34 ) nRowValue = i%8==0 ? i%32 : sizeof(value);
+      check("build shared-prefix row", prollyNodeBuilderAdd(&builder,
+          key, sizeof(key), value, nRowValue)==SQLITE_OK);
+    }
+    rc = prollyNodeBuilderFinish(&builder, &pData, &nData);
+    prollyNodeBuilderFree(&builder);
+    check("finish shared-prefix node", rc==SQLITE_OK);
+    if( rc!=SQLITE_OK ){ prollyCacheFree(&cache); continue; }
+    pOriginal = sqlite3_malloc(nData);
+    check("save shared-prefix source", pOriginal!=0);
+    if( !pOriginal ){
+      sqlite3_free(pData);
+      prollyCacheFree(&cache);
+      continue;
+    }
+    memcpy(pOriginal, pData, nData);
+    pEntry = prollyCachePutOwned(&cache, &hash, pData, nData, &rc);
+    check("cache shared-prefix node", pEntry!=0 && rc==SQLITE_OK);
+    if( !pEntry ){
+      sqlite3_free(pOriginal);
+      prollyCacheFree(&cache);
+      continue;
+    }
+    pEntry->bAllowPrefix = 1;
+    pEntry->bScanOnly = 1;
+    prollyCacheRelease(&cache, pEntry);
+    prollyCacheSetBudget(&cache, 4096);
+    for(pass=0; pass<2; pass++){
+      pEntry = prollyCacheGetPrefix(&cache, &hash, 1);
+      check("retain shared-prefix node", pEntry!=0);
+      if( !pEntry ) break;
+      for(i=0; i<64; i++){
+        prollyNodeValueSpan(&pEntry->node, i, &pBorrowed, &nValue, &nAvail);
+        sharedPrefixValue(value, i, varying);
+        if( varying==34 ) nRowValue = i%8==0 ? i%32 : sizeof(value);
+        check("shared prefix reproduces bytes and keys", nValue==nRowValue
+            && nAvail==MIN(nRowValue, varying==32 || varying==33 ? 16 : 32)
+            && memcmp(pBorrowed, value, nAvail)==0
+            && prollyNodeIntKey(&pEntry->node, i)==i);
+      }
+      prollyCacheRelease(&cache, pEntry);
+      check("shared prefix stays within budget", cache.nByte<=4096
+          && cache.nByte==cacheBytes(&cache));
+    }
+    pEntry = prollyCacheGetPrefix(&cache, &hash, 0);
+    if( pEntry ){
+      prollyNodeValueSpan(&pEntry->node, 31, &pBorrowed, &nValue, &nAvail);
+      prollyCacheShrink(&cache);
+      sharedPrefixValue(value, 31, varying);
+      check("pinned prefix survives shrink", memcmp(pBorrowed, value, nAvail)==0);
+      pFull = prollyCachePutOwned(&cache, &hash, pOriginal, nData, &rc);
+      pOriginal = 0;
+      check("replace prefix with full leaf", pFull!=0 && rc==SQLITE_OK);
+      check("borrowed prefix survives replacement",
+            memcmp(pBorrowed, value, nAvail)==0);
+      if( pFull ) prollyCacheRelease(&cache, pFull);
+      prollyCacheRelease(&cache, pEntry);
+    }
+    sqlite3_free(pOriginal);
+    check("shared-prefix replacement accounting", cache.nByte<=4096
+        && cache.nByte==cacheBytes(&cache));
+    prollyCacheFree(&cache);
+    check("shared prefixes release all allocations", sqlite3_memory_used()==nBefore);
+  }
+}
+
 int main(void){
   char zPath[160];
   sqlite3 *db = 0;
@@ -964,6 +1069,7 @@ int main(void){
   unlink(zPath);
   testNodes();
   testInternalNodes();
+  testSharedPrefixes();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail!=0;
 }

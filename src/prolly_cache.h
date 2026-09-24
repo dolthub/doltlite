@@ -6,14 +6,15 @@
 #include "prolly_hash.h"
 #include "prolly_node.h"
 
+#define PROLLY_CACHE_SHARED_PREFIX 32
+
 typedef struct ProllyCache ProllyCache;
 typedef struct ProllyCacheEntry ProllyCacheEntry;
 
 struct ProllyCacheEntry {
   ProllyHash hash;
   u8 *pData;
-  int nData;
-  int nDataPhys;
+  u8 *pPacked;
   ProllyNode node;
   int nRef;
   u8 bTransient;
@@ -29,6 +30,7 @@ struct ProllyCache {
   i64 nMaxByte;
   i64 nByte;
   int nUsed;
+  int nSharedPrefix;
   int nBucket;
   ProllyCacheEntry **aBucket;
   ProllyCacheEntry lruHead;
