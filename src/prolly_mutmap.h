@@ -2,6 +2,7 @@
 #define SQLITE_PROLLY_MUTMAP_H
 
 #include "sqliteInt.h"
+#include "prolly_hash.h"
 
 #define PROLLY_EDIT_INSERT 1
 #define PROLLY_EDIT_DELETE 2
@@ -13,6 +14,7 @@ typedef struct ProllyMutMapIter ProllyMutMapIter;
 struct ProllyMutMapEntry {
   u8 op;
   u8 bValInline;
+  u8 bInTree;
   u8 *pKey;
   int nKey;
   u64 keyPrefix;
@@ -67,6 +69,10 @@ struct ProllyMutMap {
   int nUndoAlloc;
   /* Cursors detect map replacement/rollback without comparing recycled pointers. */
   u32 generation;
+  /* Every entry with bInTree set deletes a key present in the tree whose
+  ** root is inTreeRoot. */
+  u8 bInTreeRoot;
+  ProllyHash inTreeRoot;
 };
 
 static SQLITE_INLINE int prollyMutMapOrderPhys(const ProllyMutMap *mm, int idx){
@@ -106,6 +112,20 @@ int prollyMutMapDeleteEntry(
   ProllyMutMap *mm,
   ProllyMutMapEntry *e
 );
+
+int prollyMutMapDeleteGetEntry(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyMutMapEntry **ppEntry
+);
+
+void prollyMutMapNoteInTree(
+  ProllyMutMap *mm,
+  ProllyMutMapEntry *e,
+  const ProllyHash *pRoot
+);
+
+int prollyMutMapInTreeRootIs(const ProllyMutMap *mm, const ProllyHash *pRoot);
 
 int prollyMutMapFindRc(
   ProllyMutMap *mm,

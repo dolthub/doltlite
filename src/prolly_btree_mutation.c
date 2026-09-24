@@ -1206,6 +1206,7 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   int savedDelKeyOwned = 0;
   i64 savedIntKey = 0;
   int hasSavedKey = 0;
+  ProllyMutMapEntry *pDelEntry = 0;
 
   pCur->deferredMergedSeek = 0;
 
@@ -1341,11 +1342,14 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       if( pEntry->op==PROLLY_EDIT_INSERT
        && prollyMutMapEntryIntKey(pEntry)==iKey ){
         rc = prollyMutMapDeleteEntry(pCur->pMutMap, pEntry);
+        pDelEntry = pEntry;
       }else{
-        rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
+        rc = prollyMutMapDeleteGetEntry(pCur->pMutMap, NULL, 0, iKey,
+                                        &pDelEntry);
       }
     }else{
-      rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
+      rc = prollyMutMapDeleteGetEntry(pCur->pMutMap, NULL, 0, iKey,
+                                      &pDelEntry);
     }
   } else {
     pKey = pSavedDelKey;
@@ -1368,15 +1372,34 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
        && nKey>0
        && memcmp(pEntry->pKey, pKey, nKey)==0 ){
         rc = prollyMutMapDeleteEntry(pCur->pMutMap, pEntry);
+        pDelEntry = pEntry;
       }else{
-        rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
+        rc = prollyMutMapDeleteGetEntry(pCur->pMutMap, pKey, nKey, 0,
+                                        &pDelEntry);
       }
     }else{
-      rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
+      rc = prollyMutMapDeleteGetEntry(pCur->pMutMap, pKey, nKey, 0,
+                                      &pDelEntry);
     }
   }
 
   if( rc!=SQLITE_OK ) goto delete_cleanup;
+  if( pDelEntry && prollyCursorIsValid(&pCur->pCur) ){
+    struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+    int bAtKey;
+    if( pCur->curIntKey ){
+      bAtKey = prollyCursorIntKey(&pCur->pCur)==iKey;
+    }else{
+      const u8 *pTreeKey;
+      int nTreeKey;
+      prollyCursorKey(&pCur->pCur, &pTreeKey, &nTreeKey);
+      bAtKey = nTreeKey==nKey && memcmp(pTreeKey, pKey, nKey)==0;
+    }
+    if( bAtKey && pTE && pCur->pMutMap==pTE->pPending
+     && prollyHashCompare(&pCur->pCur.root, &pTE->root)==0 ){
+      prollyMutMapNoteInTree(pCur->pMutMap, pDelEntry, &pTE->root);
+    }
+  }
 
   {
     int canDefer = (pCur->pgnoRoot > 1);

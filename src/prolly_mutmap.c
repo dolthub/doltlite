@@ -816,8 +816,18 @@ int prollyMutMapDelete(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey
 ){
+  ProllyMutMapEntry *e;
+  return prollyMutMapDeleteGetEntry(mm, pKey, nKey, intKey, &e);
+}
+
+int prollyMutMapDeleteGetEntry(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyMutMapEntry **ppEntry
+){
   int found = 0, idx = 0, rc, phys = -1;
   u8 keyBuf[8];
+  *ppEntry = 0;
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
   if( mm->keepSorted || !mm->orderDirty ){
@@ -842,13 +852,14 @@ int prollyMutMapDelete(
       e->op = PROLLY_EDIT_DELETE;
       e->nVal = 0;
       e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-      return SQLITE_OK;
     }
-
+    *ppEntry = e;
     return SQLITE_OK;
   }
 
-  return appendEntry(mm, pKey, nKey, 0, 0, idx, PROLLY_EDIT_DELETE, 0);
+  rc = appendEntry(mm, pKey, nKey, 0, 0, idx, PROLLY_EDIT_DELETE, 0);
+  if( rc==SQLITE_OK ) *ppEntry = &mm->aEntries[mm->nEntries-1];
+  return rc;
 }
 
 int prollyMutMapDeleteAbsent(
@@ -887,6 +898,24 @@ int prollyMutMapDeleteEntry(
   e->nVal = 0;
   e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
   return SQLITE_OK;
+}
+
+void prollyMutMapNoteInTree(
+  ProllyMutMap *mm,
+  ProllyMutMapEntry *e,
+  const ProllyHash *pRoot
+){
+  if( !mm->bInTreeRoot || prollyHashCompare(&mm->inTreeRoot, pRoot)!=0 ){
+    int i;
+    for(i=0; i<mm->nEntries; i++) mm->aEntries[i].bInTree = 0;
+    memcpy(&mm->inTreeRoot, pRoot, sizeof(ProllyHash));
+    mm->bInTreeRoot = 1;
+  }
+  if( e->op==PROLLY_EDIT_DELETE ) e->bInTree = 1;
+}
+
+int prollyMutMapInTreeRootIs(const ProllyMutMap *mm, const ProllyHash *pRoot){
+  return mm->bInTreeRoot && prollyHashCompare(&mm->inTreeRoot, pRoot)==0;
 }
 
 void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level){

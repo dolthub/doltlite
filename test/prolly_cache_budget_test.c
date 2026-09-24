@@ -80,6 +80,7 @@ static void scan(sqlite3 *db){
 
 static const sqlite3_io_methods *pReadMethods;
 static int nRead;
+static i64 nReadBytes;
 static int nBatchRead;
 static int eReadFault;
 static i64 iReadAheadFault = -1;
@@ -87,6 +88,7 @@ static i64 iReadAheadFault = -1;
 static int countedRead(sqlite3_file *pFile, void *pData, int n, sqlite3_int64 off){
   int rc;
   nRead++;
+  nReadBytes += n;
   if( n>16384 ){
     nBatchRead++;
     if( eReadFault==1 ) return SQLITE_IOERR_READ;
@@ -657,6 +659,48 @@ static void testShortPrefixWriteScan(sqlite3 *db){
   execSql(db, "DROP TABLE prefix_delete; PRAGMA cache_size=-65536");
 }
 
+static void testBulkDeleteReadsOnce(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  i64 nScanBytes;
+  execSql(db, "CREATE TABLE bulk_delete(id INTEGER PRIMARY KEY, g INT, v BLOB);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)"
+      " INSERT INTO bulk_delete SELECT i, i%16, CAST(printf('%04096d',i) AS BLOB)"
+      " FROM c;"
+      "CREATE INDEX bulk_delete_g ON bulk_delete(g);"
+      "PRAGMA cache_size=-4096");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  nReadBytes = 0;
+  execSql(db, "SELECT sum(length(v)) FROM bulk_delete");
+  nScanBytes = nReadBytes;
+  clearNodes(pCache);
+  nReadBytes = 0;
+  execSql(db, "BEGIN;DELETE FROM bulk_delete WHERE id BETWEEN 1 AND 8000;COMMIT");
+  check("bulk delete reads the table once",
+      nScanBytes>0 && nReadBytes<nScanBytes*3/2);
+  pStore->file.pFile->pMethods = pReadMethods;
+  check("prepare bulk delete survivors", sqlite3_prepare_v2(db,
+      "SELECT count(*),sum(id),sum(g) FROM bulk_delete", -1, &p, 0)==SQLITE_OK);
+  check("bulk delete survivors", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==192
+      && sqlite3_column_int64(p, 1)==1554528
+      && sqlite3_column_int(p, 2)==1440);
+  check("finish bulk delete survivors", sqlite3_finalize(p)==SQLITE_OK);
+  check("prepare bulk delete index", sqlite3_prepare_v2(db,
+      "SELECT count(*) FROM bulk_delete INDEXED BY bulk_delete_g WHERE g>=0",
+      -1, &p, 0)==SQLITE_OK);
+  check("bulk delete index survivors", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==192);
+  check("finish bulk delete index", sqlite3_finalize(p)==SQLITE_OK);
+  execSql(db, "DROP TABLE bulk_delete; PRAGMA cache_size=-65536");
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -850,6 +894,7 @@ int main(void){
   testNarrowPrefixes(db, "INTEGER", 256);
   testNarrowPrefixes(db, "TEXT", 1024);
   testShortPrefixWriteScan(db);
+  testBulkDeleteReadsOnce(db);
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));
