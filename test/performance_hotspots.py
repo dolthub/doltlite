@@ -23,22 +23,26 @@ ADD_COLUMN_DEFAULT = 7
 # 262k rows, 2.7x at 1M. The larger table gets a cache that still holds it.
 INDEX_EDIT_ROWS = 1048576
 INDEX_EDIT_CACHE_KIB = 131072
-# Report sections, in the order they print. A workload belongs to the section
-# whose key prefixes its name; everything else is a query.
+RETAINED_SECTIONS = (("wide_rows", "Wide Rows"),
+                     ("narrow_rows", "Narrow Rows"),
+                     ("zero_row_updates", "Zero Row Updates"),
+                     ("in_transaction_mutations", "In Transaction with Mutations"),
+                     ("wide_fetches", "Wide Row Fetches"),
+                     ("small_cache", "Small Cache"),
+                     ("after_deletes", "After Deletes"),
+                     ("bulk_deletes", "Bulk Deletes"),
+                     ("integer_keys", "Integer Keys"))
 SECTIONS = (("queries", "Large Table Scans"),
             ("add_column", "Add Column With Default"),
             ("index_edits", "Large Index Edits"),
-            ("wide_rows", "Wide Rows"),
-            ("narrow_rows", "Narrow Rows"),
-            ("zero_row_updates", "Zero Row Updates"),
-            ("in_transaction_mutations", "In Transaction with Mutations"),
+            *RETAINED_SECTIONS,
             ("retained", "Retained Findings"))
 
 
 def section_of(name):
     if name.startswith("retained_"):
         workload = name.split("_", 2)[2]
-        for category in ("wide_rows", "narrow_rows", "zero_row_updates", "in_transaction_mutations"):
+        for category, _title in RETAINED_SECTIONS:
             if workload.startswith(category + "_"):
                 return category
         return "retained"
@@ -284,7 +288,7 @@ def prepare_retained(binaries, root, corpus=None):
                 or type(bundle['repeats']) is not int or not 1 <= bundle['repeats'] <= 1024):
             raise ValueError(f'invalid retained hotspot: {path}')
         category = bundle.get('category', 'retained')
-        if category not in ('retained', 'wide_rows', 'narrow_rows', 'zero_row_updates', 'in_transaction_mutations'):
+        if category != 'retained' and category not in dict(RETAINED_SECTIONS):
             raise ValueError(f'invalid retained hotspot category: {path}')
         suffix = bundle['fingerprint']
         if category != 'retained':
@@ -351,6 +355,10 @@ def write_results(samples, result_path, sample_path):
         print(f"\n### {title}")
         if section == 'in_transaction_mutations':
             print("\nEach timed statement follows an untimed mutation in the same transaction; rollback is untimed.")
+        elif section == 'integer_keys':
+            print("\nConfirmed above 3× on Linux; local macOS replays were below 3×.")
+        elif section == 'add_column':
+            print("\n[#3233](https://github.com/dolthub/doltlite/issues/3233): deferred to the storage-format upgrade.")
         print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
         print("|---|---:|---:|---:|---:|---:|")
         for name in section_names:

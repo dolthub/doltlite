@@ -112,7 +112,7 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json')), [])
+        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 13)
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -130,13 +130,14 @@ class HotspotTests(unittest.TestCase):
                  patch.object(hotspots, "index_edit_fixture") as index_edit_fixture, \
                  patch.object(hotspots, "measure_index_edits") as index_edit_measure, \
                  patch.object(hotspots, "prepare_retained", wraps=hotspots.prepare_retained) as prepare_retained, \
-                 patch.object(hotspots, "measure_retained", wraps=hotspots.measure_retained) as measure_retained, \
+                 patch.object(hotspots, "measure_retained",
+                              side_effect=lambda binary, arm, fixtures: {name: 100000 for name, _, _ in fixtures}) as measure_retained, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(report), contextlib.redirect_stderr(io.StringIO()):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            sql.assert_not_called()
+            self.assertEqual(sql.call_count, 15)
             self.assertEqual([call.args[1] for call in measure_retained.call_args_list],
                              ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
@@ -155,10 +156,11 @@ class HotspotTests(unittest.TestCase):
                           "Narrow Rows", "Zero Row Updates", "In Transaction with Mutations"):
                 self.assertNotIn(title, report.getvalue())
             self.assertIn("Add Column With Default", report.getvalue())
-            self.assertEqual(report.getvalue().count("### "), 1)
-            self.assertTrue(all(call.args[2] == [] for call in measure_retained.call_args_list))
-            self.assertEqual(result.read_text(), 'add_column\tadd_column_default\t100000\t100000\n')
-            self.assertEqual(len(raw.read_text().splitlines()), 3)
+            self.assertEqual(report.getvalue().count("### "), 6)
+            self.assertTrue(all(len(call.args[2]) == 13 for call in measure_retained.call_args_list))
+            self.assertEqual(len(result.read_text().splitlines()), 14)
+            self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
+            self.assertEqual(len(raw.read_text().splitlines()), 29)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -241,7 +243,7 @@ class HotspotTests(unittest.TestCase):
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
-            self.assertEqual(len(hotspots.SECTIONS), 8)
+            self.assertEqual(len(hotspots.SECTIONS), 13)
 
     def test_retired_corpus_categories_and_shared_fixtures(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
@@ -323,16 +325,53 @@ class HotspotTests(unittest.TestCase):
                 self.assertIn(('hotspots', category), analysis['section_failures'])
             self.assertEqual(report.getvalue().count('https://github.com/dolthub/doltlite/issues/3133'), 4)
 
+    def test_remaining_issue_themes_are_reported_and_gated(self):
+        expected = {
+            'wide_fetches': {3251, 3252, 3253},
+            'small_cache': {3263, 3264, 3265, 3266},
+            'after_deletes': {3258, 3270, 3271},
+            'bulk_deletes': {3267},
+            'integer_keys': {3249, 3250},
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
+            root = Path(directory)
+            fixtures = hotspots.prepare_retained({'candidate': 'new'}, root)
+            self.assertEqual(sql.call_count, 5)
+            actual = {}
+            for name, bundle, databases in fixtures:
+                category = hotspots.section_of(name)
+                actual.setdefault(category, set()).add(bundle['issue'])
+                self.assertEqual(category, bundle['category'])
+                self.assertEqual(databases['candidate'] == ':memory:', category == 'integer_keys')
+            self.assertEqual(actual, expected)
+            names = [name for name, _, _ in fixtures]
+            samples = {arm: [{name: value for name in names}] for arm, value in
+                       (('baseline', 100000), ('candidate', 200000), ('stock', 50000))}
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                hotspots.write_results(samples, root/'results.tsv', root/'samples.tsv')
+            parsed, _ = benchmark_compare.parse_input_artifact(f'hotspots={root}/results.tsv')
+            analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
+            text = report.getvalue()
+            self.assertEqual(text.count('| Workload |'), 5)
+            for name, bundle, _ in fixtures:
+                category = bundle['category']
+                section = text.split(f'### {dict(hotspots.SECTIONS)[category]}\n', 1)[1].split('### ', 1)[0]
+                self.assertIn(f"[{bundle['case']['name']}_x{bundle['repeats']}]", section)
+                self.assertIn(f"https://github.com/dolthub/doltlite/issues/{bundle['issue']}", section)
+                self.assertIn(('hotspots', category, name), analysis['individual_failures'])
+                self.assertIn(('hotspots', category), analysis['section_failures'])
+
     def test_transaction_mutations_preserve_storage_mode_and_timing(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             fixtures = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
-            self.assertEqual(fixtures, [])
-            self.assertEqual(sql.call_count, 0)
+            self.assertFalse(any(bundle['category'] == 'in_transaction_mutations'
+                                 for _, bundle, _ in fixtures))
             retired = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
-            fixtures += [fixture for fixture in retired
+            fixtures = [fixture for fixture in retired
                          if fixture[1]['category'] == 'in_transaction_mutations']
             self.assertEqual(len(fixtures), 4)
             self.assertEqual(sum(b['profile']['memory'] for _, b, _ in fixtures), 2)
