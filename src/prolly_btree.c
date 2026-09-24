@@ -914,6 +914,8 @@ int sqlite3BtreeOpen(
   pBt->store.pWriteGateArg = p;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
   pBt->cacheSize = DOLTLITE_DEFAULT_CACHE_SIZE;
+  pBt->indexBudgetActive = pBt->store.index.lazy.active;
+  pBt->nIndexBudgetEntries = pBt->store.index.lazy.nEntries;
   pBt->iWorkingStateVersion = 1;
   pBt->nRef = 1;
   p->inTransaction = TRANS_NONE;
@@ -1240,11 +1242,21 @@ int prollyBtreeSetCacheSize(Btree *p, int mxPage){
     nByte = -(i64)mxPage * 1024;
   }
   p->pBt->cacheSize = mxPage;
+  p->pBt->indexBudgetActive = p->pBt->store.index.lazy.active;
+  p->pBt->nIndexBudgetEntries = p->pBt->store.index.lazy.nEntries;
   nByte = MAX(nByte, 4096);
   nByte -= csIndexCacheSetBudget(&p->pBt->store,
                                  csIndexCacheBudgetFor(&p->pBt->store, nByte));
   prollyCacheSetBudget(&p->pBt->cache, nByte);
   return SQLITE_OK;
+}
+
+void prollyBtreeRefreshIndexBudget(Btree *p){
+  BtShared *pBt = p->pBt;
+  if( pBt->indexBudgetActive!=pBt->store.index.lazy.active
+   || pBt->nIndexBudgetEntries!=pBt->store.index.lazy.nEntries ){
+    prollyBtreeSetCacheSize(p, pBt->cacheSize);
+  }
 }
 
 int sqlite3BtreeSetCacheSize(Btree *p, int mxPage){

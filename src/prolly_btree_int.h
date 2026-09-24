@@ -180,6 +180,9 @@ struct BtShared {
   u16 btsFlags;
   u32 pageSize;
   int cacheSize;
+  /* Paged-index shape the index cache reservation was last sized for. */
+  u8 indexBudgetActive;
+  int nIndexBudgetEntries;
   u32 iWorkingStateVersion;
   int nRef;
   int nIncrblobCur;
@@ -517,6 +520,7 @@ int prollyBtreeClose(Btree*);
 int prollyBtreeNewDb(Btree*);
 int prollyBtreeSetCacheSize(Btree*, int);
 int prollyBtreeSetSpillSize(Btree*, int);
+void prollyBtreeRefreshIndexBudget(Btree*);
 int prollyBtreeSetMmapLimit(Btree*, sqlite3_int64);
 int prollyBtreeSetPagerFlags(Btree*, unsigned);
 int prollyBtreeSetPageSize(Btree*, int, int, int);
