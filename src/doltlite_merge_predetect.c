@@ -222,7 +222,8 @@ static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
                                       pAncCat->flags, pRenCatEnt->flags,
                                       &layout, &bKept);
       }
-      if( rc==SQLITE_OK && zMoved && bKept && c->pzErrMsg ){
+      if( rc==SQLITE_OK && zMoved && c->pzErrMsg
+       && (bKept || strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0) ){
         sqlite3_free(*c->pzErrMsg);
         *c->pzErrMsg = sqlite3_mprintf(
             "cannot %s: table '%s' renames a column to '%s', a name another "
@@ -235,7 +236,7 @@ static int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
       freeColumns(aAncCols, nAncCols);
       freeColumns(aRenCols, nRenCols);
       if( rc!=SQLITE_OK ) return rc;
-      if( zMoved && bKept ) return SQLITE_ERROR;
+      if( zMoved && (bKept || strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0) ) return SQLITE_ERROR;
     }
   }
   return SQLITE_OK;
@@ -1244,9 +1245,7 @@ int mergePreNormalizeRenamedDependents(
       rc = mergePureRenamePairs(pAncT->zSql, pTheirT->zSql, &azRenT, &nRenT, &bPureT);
     }
     if( rc!=SQLITE_OK ) goto table_done;
-    /* A swap matched by name is ambiguous once the other side has edited
-    ** a row. Leave that for the reuse check, which refuses it. An
-    ** untouched table can be replayed: the values stay in their slots. */
+    /* A name-reusing rename is ambiguous once the other side edited a row. */
     if( bPureO && mergePairsReuseAncestorName(pAncT->zSql, azRenO, nRenO) ){
       struct TableEntry *pAncEnt =
           doltliteFindTableByName(aAnc, nAnc, pAncT->zName);
@@ -1336,8 +1335,6 @@ int mergePreNormalizeRenamedDependents(
           q = mergeCollectDependent(pAncT->zName, pDepAnc, pDepOurs, pDepTheirs,
                                     azRenO, nRenO, azRenT, nRenT, &bMech);
           if( q<0 ){
-            /* Materially edited beside a rename: only a problem if it
-            ** names a renamed column, then no baseline is safe. */
             SchemaEntry *pDep = pDepOurs ? pDepOurs : pDepTheirs;
             int u;
             for(u=0; u<nUni; u++){
@@ -1349,20 +1346,23 @@ int mergePreNormalizeRenamedDependents(
             continue;
           }
           if( q==0 ) continue;
-          if( bMech ){
-            /* Mechanical shadow: the version from the baseline's own side
-            ** is coherent with it by construction. */
-            continue;
-          }
-          /* New on one side: its only text must load against the baseline. */
+          if( bMech ) continue;
+          /* Probe a one-sided index in ancestor column names. */
           pPick = pDepOurs ? pDepOurs : pDepTheirs;
-          if( !mergeDependentCoherent(pPick, azCand[c], azUni, nUni) ){
-            bOk = 0;
+          {
+            char *zBack = 0, *zKeep = 0;
+            if( pPick && pPick->zSql && !pDepAnc ){
+              if( pDepTheirs && !pDepOurs && c!=2 && nRenT>0 )
+                zBack = mergeRewriteInverse(pPick->zSql, azRenT, nRenT);
+              else if( pDepOurs && !pDepTheirs && c!=1 && nRenO>0 )
+                zBack = mergeRewriteInverse(pPick->zSql, azRenO, nRenO);
+              if( zBack ){ zKeep = pPick->zSql; pPick->zSql = zBack; }
+            }
+            if( !pPick || !mergeDependentCoherent(pPick, azCand[c], azUni, nUni) ) bOk = 0;
+            if( zKeep ){ pPick->zSql = zKeep; sqlite3_free(zBack); }
           }
         }
         if( bBail ) break;
-        /* Rewrite even when a probe thinks the adopted texts already
-        ** load. Pass 1 can still keep an index on the pre-rename column. */
         if( bOk ){
           zBase = azCand[c];
           bBaseOurs = (c==1);

@@ -172,4 +172,37 @@ if dltest_require "rename_shared_idx_setup" "$DB6" "$SETUP6"; then
   run_test "rename_shared_idx_integrity" "PRAGMA integrity_check;" "ok" "$DB6"
 fi
 
+# One side renames columns, then both sides add an index under one name on
+# that column's local spelling. The catalog used to load the pre-rename
+# index text and report a malformed schema.
+DB7=/tmp/test_merge_rename_post_idx_$$.db
+rm -f "$DB7"
+SETUP7="
+CREATE TABLE t(id INTEGER PRIMARY KEY, r INTEGER, a REAL, trail TEXT);
+CREATE UNIQUE INDEX ix ON t(r) WHERE r IS NOT NULL;
+INSERT INTO t VALUES(1, 1, 1.5, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'side');
+ALTER TABLE t RENAME COLUMN r TO swap;
+ALTER TABLE t RENAME COLUMN a TO r;
+ALTER TABLE t RENAME COLUMN swap TO a;
+ALTER TABLE t RENAME COLUMN trail TO flex_86;
+CREATE UNIQUE INDEX ix_both ON t(a) WHERE a IS NOT NULL;
+CREATE UNIQUE INDEX ix_new ON t(flex_86);
+SELECT dolt_commit('-Am', 'side');
+SELECT dolt_checkout('main');
+CREATE UNIQUE INDEX ix_both ON t(r) WHERE r IS NOT NULL;
+CREATE UNIQUE INDEX ix_extra ON t(r);
+SELECT dolt_commit('-Am', 'main');
+"
+if dltest_require "rename_post_idx_setup" "$DB7" "$SETUP7"; then
+  run_test_match "rename_post_idx_merge" \
+    "SELECT dolt_merge('side');" \
+    "cannot merge: conflicts detected" "$DB7"
+  run_test "rename_post_idx_integrity" "PRAGMA integrity_check;" "ok" "$DB7"
+  run_test "rename_post_idx_unmerged" \
+    "SELECT sql FROM sqlite_schema WHERE name='t';" \
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, r INTEGER, a REAL, trail TEXT)" "$DB7"
+fi
+
 dltest_finish
