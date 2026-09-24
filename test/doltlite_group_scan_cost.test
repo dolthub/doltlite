@@ -14,16 +14,17 @@ sqlite3 oracle {file:group-scan-oracle.db?doltlite_engine=sqlite} -uri 1
 foreach conn {db oracle} {
   $conn eval {
     CREATE TABLE t(id TEXT,seq INTEGER NOT NULL,grp INTEGER NOT NULL,
-                   v INTEGER NOT NULL,payload BLOB,PRIMARY KEY(id,seq));
+                   v INTEGER NOT NULL,w REAL,payload BLOB,PRIMARY KEY(id,seq)) STRICT;
     WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096)
     INSERT INTO t SELECT printf('%016x',i),i,i%16,(i*7919)%1000000,
+                         CASE WHEN i%7<>0 THEN i*1.5 END,
                          CAST(printf('%032d',i) AS BLOB) FROM c;
     CREATE INDEX t_g ON t(grp);
     CREATE INDEX t_gv ON t(grp,v);
     ANALYZE;
   }
 }
-set grouped {SELECT grp,sum(seq),sum(length(payload)) FROM t GROUP BY grp ORDER BY grp}
+set grouped {SELECT grp,sum(w) FROM t GROUP BY grp ORDER BY grp}
 do_test group-plan {group_scan_plan db $grouped} \
     {{SCAN t} {USE TEMP B-TREE FOR GROUP BY}}
 do_test stock-plan {group_scan_plan oracle $grouped} {{SCAN t USING INDEX t_g}}
@@ -31,6 +32,9 @@ do_test limit-plan {group_scan_plan db "$grouped LIMIT 2 OFFSET 1"} {{SCAN t USI
 do_test bound-limit-plan {
   set limit 2
   group_scan_plan db "$grouped LIMIT \$limit"
+} {{SCAN t USING INDEX t_g}}
+do_test payload-plan {
+  group_scan_plan db {SELECT grp,sum(length(payload)) FROM t GROUP BY grp}
 } {{SCAN t USING INDEX t_g}}
 do_test covering-plan {
   group_scan_plan db {SELECT grp,sum(v) FROM t GROUP BY grp}
@@ -59,7 +63,7 @@ foreach {name query} [list \
 }
 foreach {step sql} {
   begin {BEGIN}
-  update {UPDATE t SET v=v+1 WHERE seq%32=0}
+  update {UPDATE t SET w=coalesce(w,0)+1 WHERE seq%32=0}
   delete {DELETE FROM t WHERE seq%64=0}
   wide {UPDATE t SET payload=CAST(printf('%01024d',seq) AS BLOB)}
   rollback {ROLLBACK}
@@ -67,5 +71,78 @@ foreach {step sql} {
   foreach conn {db oracle} {$conn eval $sql}
   do_test mutation-$step {db eval $grouped} [oracle eval $grouped]
 }
+foreach conn {db oracle} {
+  $conn eval {
+    CREATE TABLE loose(id TEXT,seq INTEGER NOT NULL,grp INTEGER NOT NULL,
+                       v INTEGER NOT NULL,w REAL,payload BLOB,
+                       PRIMARY KEY(id,seq));
+    INSERT INTO loose SELECT * FROM t;
+    CREATE INDEX loose_g ON loose(grp);
+    ANALYZE loose;
+    CREATE TABLE integer_key(id INTEGER PRIMARY KEY,grp INTEGER,v INTEGER) STRICT;
+    INSERT INTO integer_key SELECT seq,grp,v FROM t;
+    CREATE INDEX integer_g ON integer_key(grp);
+    ANALYZE integer_key;
+    CREATE TABLE record_key(id INTEGER PRIMARY KEY,grp INTEGER,v INTEGER)
+        STRICT, WITHOUT ROWID;
+    INSERT INTO record_key SELECT seq,grp,v FROM t;
+    CREATE INDEX record_g ON record_key(grp);
+    ANALYZE record_key;
+    CREATE TABLE unanalyzed(id TEXT PRIMARY KEY,grp INTEGER,v INTEGER) STRICT;
+    INSERT INTO unanalyzed SELECT id,grp,v FROM t;
+    CREATE INDEX unanalyzed_g ON unanalyzed(grp);
+  }
+}
+foreach {name table expected} {
+  loose loose {{SCAN loose USING INDEX loose_g}}
+  integer integer_key {{SCAN integer_key USING INDEX integer_g}}
+  record record_key {{SCAN record_key} {USE TEMP B-TREE FOR GROUP BY}}
+  unanalyzed unanalyzed {{SCAN unanalyzed USING INDEX unanalyzed_g}}
+} {
+  set sql "SELECT grp,sum(v) FROM $table GROUP BY grp ORDER BY grp"
+  do_test $name-plan {group_scan_plan db $sql} $expected
+  do_test $name-results {db eval $sql} [oracle eval $sql]
+}
+do_test stock-record-plan {
+  group_scan_plan oracle {SELECT grp,sum(v) FROM record_key GROUP BY grp}
+} {{SCAN record_key USING INDEX record_g}}
+foreach conn {db oracle} {
+  $conn eval {
+    UPDATE loose SET w=CAST(printf('%04096d',seq) AS BLOB);
+    ALTER TABLE t ADD COLUMN generated REAL GENERATED ALWAYS AS (w*2) VIRTUAL;
+    CREATE TABLE many(id TEXT PRIMARY KEY,grp INTEGER,v INTEGER,
+                     a REAL,b REAL,c REAL,d REAL,e REAL,f REAL,g REAL) STRICT;
+    INSERT INTO many SELECT id,grp,v,w,w,w,w,w,w,w FROM t;
+    CREATE INDEX many_g ON many(grp);
+    ANALYZE many;
+  }
+}
+do_test loose-blob-plan {
+  group_scan_plan db {SELECT grp,sum(length(w)) FROM loose GROUP BY grp}
+} {{SCAN loose USING INDEX loose_g}}
+do_test loose-blob-results {
+  db eval {SELECT grp,sum(length(w)) FROM loose GROUP BY grp}
+} [oracle eval {SELECT grp,sum(length(w)) FROM loose GROUP BY grp}]
+do_test generated-plan {
+  group_scan_plan db {SELECT grp,sum(generated) FROM t GROUP BY grp}
+} {{SCAN t USING INDEX t_g}}
+do_test many-plan {
+  group_scan_plan db {SELECT grp,sum(v+a+b+c+d+e+f+g) FROM many GROUP BY grp}
+} {{SCAN many USING INDEX many_g}}
+do_test many-results {
+  db eval {SELECT grp,sum(v+a+b+c+d+e+f+g) FROM many GROUP BY grp}
+} [oracle eval {SELECT grp,sum(v+a+b+c+d+e+f+g) FROM many GROUP BY grp}]
+foreach conn {db oracle} {
+  $conn eval {CREATE INDEX t_expr ON t(printf('%01024d',grp))}
+}
+do_test expression-plan {
+  group_scan_plan db {SELECT printf('%01024d',grp),sum(w) FROM t
+                     GROUP BY printf('%01024d',grp)}
+} {{SCAN t USING INDEX t_expr}}
+do_test expression-results {
+  db eval {SELECT printf('%01024d',grp),sum(w) FROM t
+           GROUP BY printf('%01024d',grp)}
+} [oracle eval {SELECT printf('%01024d',grp),sum(w) FROM t
+                GROUP BY printf('%01024d',grp)}]
 oracle close
 finish_test

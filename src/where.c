@@ -4374,11 +4374,29 @@ static int whereLoopAddBtree(
 #ifdef DOLTLITE_PROLLY
           if( (pWInfo->wctrlFlags & WHERE_GROUPBY)!=0
            && pWInfo->pTabList->nSrc==1
+           && !HasRowid(pTab) && (pTab->tabFlags & TF_Strict)!=0
+           && pProbe->hasStat1
            && pWInfo->pSelect && pWInfo->pSelect->pLimit==0 ){
             int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
+            int iCol;
+            int iGroup;
+            int nUsed = 0;
+            for(iCol=0; iCol<pTab->nCol; iCol++){
+              if( (pSrc->colUsed & MASKBIT(MIN(iCol,BMS-1)))!=0 ){
+                if( pTab->aCol[iCol].affinity<=SQLITE_AFF_TEXT
+                 || (pTab->aCol[iCol].colFlags & COLFLAG_GENERATED)!=0
+                 || ++nUsed>8 ) break;
+              }
+            }
+            for(iGroup=0; iGroup<pWInfo->pOrderBy->nExpr; iGroup++){
+              Expr *pExpr = sqlite3ExprSkipCollate(pWInfo->pOrderBy->a[iGroup].pExpr);
+              if( pExpr->op!=TK_COLUMN && pExpr->op!=TK_AGG_COLUMN ) break;
+            }
             if( iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
+             && iCol==pTab->nCol
+             && iGroup==pWInfo->pOrderBy->nExpr
              && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
-              nLookup += 40;
+              nLookup += estLog(rSize);
             }
           }
 #endif
