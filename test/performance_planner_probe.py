@@ -26,7 +26,7 @@ def fixture(p):
 BEGIN;
 WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{p['rows']})
 INSERT INTO t SELECT {key},i,{group},(i*7919)%1000000,printf('tag-%08x',i),
-  CAST(printf('%0{p['payload']}d',i) AS BLOB) FROM c;
+  CAST(substr(printf('%0{p['payload']}d',i),1,{p['payload']}) AS BLOB) FROM c;
 COMMIT;
 CREATE INDEX t_g ON t(grp);
 CREATE INDEX t_gv ON t(grp,v);
@@ -48,6 +48,12 @@ def cases(p):
                      for a, h in hints.items()}
     out['group_aggregate'] = {
         a: f'SELECT grp,sum(seq),sum(length(payload)) FROM t {h} GROUP BY grp ORDER BY grp;'
+        for a, h in hints.items()}
+    out['group_limit'] = {
+        a: f'SELECT grp,sum(seq),sum(length(payload)) FROM t {h} GROUP BY grp ORDER BY grp LIMIT 1 OFFSET 1;'
+        for a, h in hints.items()}
+    out['group_having'] = {
+        a: f'SELECT grp,sum(seq),sum(length(payload)) FROM t {h} GROUP BY grp HAVING sum(seq)>0 ORDER BY grp;'
         for a, h in hints.items()}
     for pc in (1, 50, 100):
         limit = max(1, p['rows'] * pc // 100)
@@ -197,6 +203,8 @@ def main(argv=None):
     parser.add_argument('--profiles', type=int, default=8)
     parser.add_argument('--profile-index', type=int, action='append', help='Select zero-based generated profile indices')
     parser.add_argument('--rows', type=int, default=32768)
+    parser.add_argument('--payload', type=int, action='append',
+                        help='Generate each selected profile at these payload sizes in bytes; may be repeated')
     parser.add_argument('--runs', type=int, default=5)
     parser.add_argument('--repeats', type=int, default=20)
     parser.add_argument('--seed', type=int, default=3235)
@@ -206,6 +214,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if min(args.profiles, args.rows, args.runs, args.repeats, args.min_batch_ms) <= 0:
         parser.error('counts and minimum batch duration must be positive')
+    if args.payload and (args.replay or min(args.payload) <= 0):
+        parser.error('payload sizes must be positive and cannot override replayed SQL')
     records = [{'seed': args.seed, 'profile': p, 'setup_sql': fixture(p), 'cases': cases(p)}
                for p in profiles(args.seed, args.profiles, args.rows)]
     if args.profile_index:
@@ -215,6 +225,10 @@ def main(argv=None):
     if args.replay:
         source = json.loads(Path(args.replay).read_text())
         records = [{key: source[key] for key in ('seed', 'profile', 'setup_sql', 'cases')}]
+    if args.payload:
+        selected = [dict(record['profile'], payload=size) for record in records for size in args.payload]
+        records = [{'seed': args.seed, 'profile': p, 'setup_sql': fixture(p), 'cases': cases(p)}
+                   for p in selected]
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     binaries = {'doltlite': args.doltlite, 'sqlite': args.sqlite}

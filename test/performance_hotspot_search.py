@@ -15,7 +15,7 @@ CHOICES = {
                  'update_text', 'update_blob', 'update_pk', 'upsert_update',
                  'upsert_ignore', 'replace', 'insert_select',
                  'correlated_aggregate', 'correlated_limit', 'anti_join',
-                 'union_all', 'intersect', 'except', 'window_frame', 'materialized'],
+                 'union_all', 'intersect', 'except', 'window_frame', 'materialized', 'group_limit'],
     'indexes': ['none', 'group', 'cover', 'both'],
     'context': ['plain', 'after_scan', 'after_points', 'after_update', 'after_delete'],
     'direction': ['ASC', 'DESC'],
@@ -88,8 +88,10 @@ def generated_case(profile, recipe, number=0):
     operator = r['operator']
     if operator == 'distinct':
         inner = f'SELECT DISTINCT x FROM ({inner})'
-    elif operator == 'group':
+    elif operator in ('group', 'group_limit'):
         inner = f'SELECT sum(x) AS x FROM ({inner}) GROUP BY grp'
+        if operator == 'group_limit':
+            inner += f' ORDER BY grp {r["direction"]} LIMIT {p.stride} OFFSET {p.target}'
     elif operator == 'order':
         inner += f' ORDER BY x {r["direction"]},t.seq LIMIT {p.width}'
     elif operator == 'index_order':

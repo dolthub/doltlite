@@ -84,6 +84,24 @@ class SearchTests(unittest.TestCase):
                     self.assertEqual(db.execute(search.generated_case(p, recipe).sql).fetchone(),
                                      (len(selected), sum(row[0] for row in selected)))
 
+    def test_group_limit_returns_selected_groups(self):
+        for key in ('integer', 'text'):
+            for skew in (False, True):
+                for stride in (1, 8):
+                    for offset in (1, 15):
+                        p = replace(self.profile, key=key, skew=skew, stride=stride, target=offset)
+                        for direction in ('ASC', 'DESC'):
+                            recipe = dict(self.recipe, source='table', operator='group_limit',
+                                          predicate='all', expression='seq', context='plain', direction=direction)
+                            with self.subTest(profile=p, direction=direction), sqlite3.connect(':memory:') as db:
+                                db.executescript(search.setup_sql(p, recipe))
+                                groups = {}
+                                for seq, grp in db.execute('SELECT seq,grp FROM t'):
+                                    groups[grp] = groups.get(grp, 0) + seq
+                                selected = sorted(groups, reverse=direction == 'DESC')[offset:offset+stride]
+                                self.assertEqual(db.execute(search.generated_case(p, recipe).sql).fetchone(),
+                                                 (len(selected), sum(groups[g] for g in selected) if selected else None))
+
     def test_operator_filter_applies_to_mutations_and_companions(self):
         operators = ['update_pk', 'upsert_update', 'correlated_limit']
         a, b = search.Search(123), search.Search(123)
