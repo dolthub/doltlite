@@ -130,8 +130,8 @@ class HotspotTests(unittest.TestCase):
                  patch.object(hotspots, "index_edit_fixture") as index_edit_fixture, \
                  patch.object(hotspots, "wide_fixture") as wide_fixture, \
                  patch.object(hotspots, "measure_wide",
-                              side_effect=lambda binary, db: {f"wide_p{p}_{op}": 100000 for p in hotspots.WIDE_PAYLOADS
-                                                              for op, _, _ in hotspots.wide_workloads(p, rows=64, lookups=8)}) as measure_wide, \
+                              side_effect=lambda binary, db: {hotspots.wide_name(*case): 100000
+                                                              for case in hotspots.WIDE_CASES}) as measure_wide, \
                  patch.object(hotspots, "measure_index_edits") as index_edit_measure, \
                  patch.object(hotspots, "prepare_retained", wraps=hotspots.prepare_retained) as prepare_retained, \
                  patch.object(hotspots, "measure_retained",
@@ -172,9 +172,9 @@ class HotspotTests(unittest.TestCase):
             self.assertNotIn("### Integer Keys", report.getvalue())
             self.assertNotIn("### After Deletes", report.getvalue())
             self.assertTrue(all(len(call.args[2]) == 4 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 40)
+            self.assertEqual(len(result.read_text().splitlines()), 13)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 81)
+            self.assertEqual(len(raw.read_text().splitlines()), 27)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -290,20 +290,24 @@ class HotspotTests(unittest.TestCase):
 
         with patch.object(hotspots, "sql", side_effect=fake):
             measured = hotspots.measure_wide("engine", "db")
-        self.assertEqual(len(measured), len(hotspots.WIDE_PAYLOADS) * 7)
+        self.assertEqual(sorted(measured), sorted(hotspots.wide_name(*case) for case in hotspots.WIDE_CASES))
+        self.assertEqual(len(measured), 8)
+        self.assertIn("wide_thrash_p16384_index_fetch_small", measured)
         self.assertTrue(all(value == 2000 for value in measured.values()))
         for script in scripts:
             query = script.split(".timer on\n", 1)[1].split("\n", 1)[0]
             self.assertLess(script.index(query), script.index(".timer on"))
-            self.assertIn(f"PRAGMA cache_size=-{hotspots.WIDE_CACHE_KIB};", script)
+            name = script.split(".print BEGIN ", 1)[1].split("\n", 1)[0]
+            cache = hotspots.WIDE_THRASH_CACHE_KIB if "_thrash_" in name else hotspots.WIDE_CACHE_KIB
+            self.assertIn(f"PRAGMA cache_size=-{cache};", script)
             if query.startswith("UPDATE"):
                 self.assertEqual(script.count("ROLLBACK;"), 2)
                 self.assertLess(script.index(".timer off"), script.index("SELECT changes();"))
             else:
                 self.assertNotIn("BEGIN;", script)
 
-    def test_wide_section_reports_matrix_and_is_gated(self):
-        names = [f"wide_p{p}_{op}" for p in (256, 16384) for op in ("scan_small", "point_blob")]
+    def test_wide_section_is_reported_and_gated(self):
+        names = [hotspots.wide_name(*case) for case in hotspots.WIDE_CASES]
         samples = {"baseline": [{name: 100000 for name in names}],
                    "candidate": [{name: 200000 for name in names}],
                    "stock": [{name: 50000 for name in names}]}
@@ -315,10 +319,8 @@ class HotspotTests(unittest.TestCase):
             text = report.getvalue()
             section = text.split("### Wide Row Trade-offs\n", 1)[1]
             self.assertIn("https://github.com/dolthub/doltlite/issues/3325", section)
-            self.assertIn("| Operation | 256 B | 16,384 B |", section)
-            self.assertIn("| scan_small | 4.00× | 4.00× |", section)
-            self.assertIn("| point_blob | 4.00× | 4.00× |", section)
-            self.assertIn("| wide_p16384_point_blob | 100.000 | 200.000 | 2.00× | 50.000 | 4.00× |", section)
+            self.assertEqual(section.count("| wide_"), 8)
+            self.assertIn("| wide_thrash_p16384_index_fetch_small | 100.000 | 200.000 | 2.00× | 50.000 | 4.00× |", section)
             parsed, _ = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
             self.assertIn(("hotspots", "wide_tradeoffs"), analysis["section_failures"])

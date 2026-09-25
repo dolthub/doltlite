@@ -25,9 +25,18 @@ INDEX_EDIT_ROWS = 1048576
 INDEX_EDIT_CACHE_KIB = 131072
 WIDE_ROWS = 8192
 WIDE_CACHE_KIB = 4096
-WIDE_PAYLOADS = (256, 1024, 2048, 4096, 16384)
+WIDE_THRASH_CACHE_KIB = 1024
+WIDE_CASES = (("scan_small", 4096, WIDE_CACHE_KIB),
+              ("point_small", 4096, WIDE_CACHE_KIB),
+              ("point_blob", 4096, WIDE_CACHE_KIB),
+              ("scan_blob", 16384, WIDE_CACHE_KIB),
+              ("point_blob", 16384, WIDE_CACHE_KIB),
+              ("update_small", 16384, WIDE_CACHE_KIB),
+              ("index_fetch_small", 16384, WIDE_CACHE_KIB),
+              ("index_fetch_small", 16384, WIDE_THRASH_CACHE_KIB))
+WIDE_PAYLOADS = tuple(sorted({payload for _op, payload, _cache in WIDE_CASES}))
 WIDE_LOOKUPS = 4096
-WIDE_NAME = re.compile(r"wide_p([0-9]+)_([a-z_]+)")
+WIDE_NAME = re.compile(r"wide_(?:thrash_)?p([0-9]+)_([a-z_]+)")
 RETAINED_SECTIONS = (("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
                      ("small_cache", "Small Cache"),
@@ -336,25 +345,31 @@ def wide_fixture(binary, db):
         raise ValueError(f"invalid wide-row fixture: {check}")
 
 
+def wide_name(op, payload, cache_kib):
+    thrash = "thrash_" if cache_kib != WIDE_CACHE_KIB else ""
+    return f"wide_{thrash}p{payload}_{op}"
+
+
 def measure_wide(binary, db):
     """One fresh connection per workload, warmed by an untimed run of the
     same statement, so each timing is the steady state of that access
-    pattern alone under a cache far smaller than the wide tables."""
+    pattern alone. The thrash case shrinks the cache until the compacted
+    rows no longer fit, so every run reads each leaf again."""
     measured = {}
-    for payload in WIDE_PAYLOADS:
-        for op, query, expected in wide_workloads(payload):
-            name = f"wide_p{payload}_{op}"
-            write = op.startswith("update")
-            statements = [".headers off", ".mode list", ".output /dev/null",
-                          "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{WIDE_CACHE_KIB};",
-                          *(["BEGIN;", query, "ROLLBACK;"] if write else [query]),
-                          ".output stdout", "SELECT name FROM sqlite_schema WHERE 0;",
-                          *(["BEGIN;"] if write else []),
-                          f".print BEGIN {name}", ".timer on", query, ".timer off",
-                          *(["SELECT changes();"] if write else []),
-                          f".print END {name}", *(["ROLLBACK;"] if write else [])]
-            measured.update(parse_session(sql(binary, db, "\n".join(statements)),
-                                          [(name, None, expected)]))
+    for op, payload, cache_kib in WIDE_CASES:
+        query, expected = {o: (q, e) for o, q, e in wide_workloads(payload)}[op]
+        name = wide_name(op, payload, cache_kib)
+        write = op.startswith("update")
+        statements = [".headers off", ".mode list", ".output /dev/null",
+                      "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{cache_kib};",
+                      *(["BEGIN;", query, "ROLLBACK;"] if write else [query]),
+                      ".output stdout", "SELECT name FROM sqlite_schema WHERE 0;",
+                      *(["BEGIN;"] if write else []),
+                      f".print BEGIN {name}", ".timer on", query, ".timer off",
+                      *(["SELECT changes();"] if write else []),
+                      f".print END {name}", *(["ROLLBACK;"] if write else [])]
+        measured.update(parse_session(sql(binary, db, "\n".join(statements)),
+                                      [(name, None, expected)]))
     return measured
 
 
@@ -409,24 +424,6 @@ def measure_retained(binary, arm, retained):
     return measured
 
 
-def print_wide_matrix(names, medians):
-    cells = {}
-    for name in names:
-        payload, op = WIDE_NAME.fullmatch(name).groups()
-        cells.setdefault(op, {})[int(payload)] = medians["candidate"][name] / medians["stock"][name]
-    payloads = sorted({p for row in cells.values() for p in row})
-    print(f"\n{WIDE_ROWS:,} rows per table, {WIDE_CACHE_KIB // 1024} MiB cache, warm. "
-          "`*_small` reads only the small columns; `*_blob` reads the payload. "
-          "Wide values are never cached and are read from disk when fetched until they move "
-          "out of band: [#3325](https://github.com/dolthub/doltlite/issues/3325). "
-          "Workloads are named `wide_p<payload bytes>_<operation>`.")
-    print("\nCandidate/stock by payload bytes:\n")
-    print("| Operation | " + " | ".join(f"{p:,} B" for p in payloads) + " |")
-    print("|---|" + "---:|" * len(payloads))
-    for op, row in cells.items():
-        print(f"| {op} | " + " | ".join(f"{row[p]:.2f}×" if p in row else "" for p in payloads) + " |")
-
-
 def write_results(samples, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -459,7 +456,12 @@ def write_results(samples, result_path, sample_path):
         elif section == 'add_column':
             print("\n[#3233](https://github.com/dolthub/doltlite/issues/3233): deferred to the storage-format upgrade.")
         elif section == 'wide_tradeoffs':
-            print_wide_matrix(section_names, medians)
+            print("\nWide values are read from disk whenever they are fetched until they move "
+                  "out of band: [#3325](https://github.com/dolthub/doltlite/issues/3325). "
+                  f"{WIDE_ROWS:,} rows per table, {WIDE_CACHE_KIB // 1024} MiB cache "
+                  f"({WIDE_THRASH_CACHE_KIB // 1024} MiB for `wide_thrash_*`). "
+                  "`*_small` reads only the small columns; `*_blob` reads the payload. "
+                  "Stock is SQLite.")
         print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
         print("|---|---:|---:|---:|---:|---:|")
         for name in section_names:
