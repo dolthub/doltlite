@@ -135,6 +135,9 @@ int main(void){
   static const int prefixes[] = {0, 7, 8, 15, 16, 23, 24, 31, 32, 64, 128};
   int i, wide;
   sqlite3_initialize();
+  check("empty keys compare equal", prollyKeyCmp(0, 0, 0, 0)==0);
+  check("empty key sorts first", prollyKeyCmp(0, 0, (const u8*)"x", 1)<0);
+  check("nonempty key sorts last", prollyKeyCmp((const u8*)"x", 1, 0, 0)>0);
   for(wide=0; wide<=1; wide++){
     for(i=0; i<(int)(sizeof(prefixes)/sizeof(prefixes[0])); i++){
       testOrder(prefixes[i], 512, wide, 0);

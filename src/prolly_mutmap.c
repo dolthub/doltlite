@@ -384,7 +384,7 @@ static int hashEntryMatches(
   if( mm->isIntKey ){
     return e->keyPrefix==keyPrefix64(pKey, nKey);
   }
-  return e->nKey==nKey && memcmp(e->pKey, pKey, nKey)==0;
+  return e->nKey==nKey && (nKey==0 || memcmp(e->pKey, pKey, nKey)==0);
 }
 
 static int rebuildHash(ProllyMutMap *mm){
