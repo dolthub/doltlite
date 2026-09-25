@@ -84,6 +84,7 @@ doltlite_add_rename_source
 doltlite_pending_scan
 doltlite_dml_scan_cost
 doltlite_index_cost_tie
+doltlite_group_metadata
 doltlite_column_metadata
 doltlite_prefix_cache
 doltlite_batch_replacement

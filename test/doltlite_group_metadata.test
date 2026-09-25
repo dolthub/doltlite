@@ -1,0 +1,172 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+set testprefix doltlite-group-metadata
+
+proc metadata_sort_positions {sql} {
+  set sorted 0
+  set positions {}
+  db eval "EXPLAIN $sql" row {
+    if {$row(opcode) eq "SorterInsert"} {set sorted 1}
+    if {$row(opcode) eq "Function" &&
+        $row(p4) in {length(1) octet_length(1) typeof(1)}} {
+      lappend positions $sorted
+    }
+  }
+  return $positions
+}
+
+foreach encoding {UTF-8 UTF-16le UTF-16be} {
+  reset_db
+  forcedelete group-metadata-oracle.db
+  sqlite3 oracle {file:group-metadata-oracle.db?doltlite_engine=sqlite} -uri 1
+  foreach conn {db oracle} {
+    $conn eval "PRAGMA encoding='$encoding'"
+    $conn eval {
+      PRAGMA cache_size=-128;
+      CREATE TABLE t(id TEXT PRIMARY KEY,seq INTEGER,grp INTEGER,b BLOB);
+      WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<256)
+      INSERT INTO t SELECT printf('%016x',i),i,
+        CASE WHEN i%11=0 THEN NULL ELSE i%7 END,
+        CASE i%6 WHEN 0 THEN NULL WHEN 1 THEN i WHEN 2 THEN i/8.0
+          WHEN 3 THEN CAST(printf('%0256d',i) AS BLOB)
+          WHEN 4 THEN char(233,128512,0,120)||i ELSE '' END FROM c;
+      CREATE TABLE u(id INTEGER PRIMARY KEY,g INTEGER);
+      INSERT INTO u VALUES(1,1),(2,3),(3,9);
+    }
+  }
+  do_test $encoding-before-sort {
+    metadata_sort_positions {
+      SELECT grp,sum(length(b)),sum(octet_length(b)),min(typeof(b))
+      FROM t GROUP BY grp
+    }
+  } {0 0 0 1}
+  foreach state {stored pending ordered expression-index} {
+    foreach conn {db oracle} {
+      switch $state {
+        pending {$conn eval {
+          BEGIN;
+          UPDATE t SET b=X'00010203' WHERE seq%5=0;
+          DELETE FROM t WHERE seq%13=0;
+          INSERT INTO t VALUES('new',257,4,'new text');
+        }}
+        ordered {$conn eval {ROLLBACK; CREATE INDEX tg ON t(grp)}}
+        expression-index {$conn eval {CREATE INDEX tl ON t(length(b))}}
+      }
+    }
+    set source t
+    if {$state eq "ordered"} {set source {t INDEXED BY tg}}
+    if {$state eq "expression-index"} {set source {t INDEXED BY tl}}
+    foreach {name sql} {
+      metadata {SELECT grp,sum(length(b)),sum(octet_length(b)),min(typeof(b)),
+                       max(typeof(b)),count(length(b)) FROM SOURCE GROUP BY grp ORDER BY grp}
+      reuse {SELECT grp,sum(length(b)),avg(length(b)),min(length(b)),max(length(b)),
+                    sum(length(b)+octet_length(b)) FROM SOURCE GROUP BY grp ORDER BY grp}
+      payload {SELECT grp,sum(length(b)),max(hex(b)),sum(length(hex(b)))
+               FROM SOURCE GROUP BY grp ORDER BY grp}
+      bare {SELECT grp,seq,hex(b),min(length(b)),sum(octet_length(b))
+            FROM SOURCE GROUP BY grp ORDER BY grp}
+      distinct {SELECT grp,sum(DISTINCT length(b)),count(DISTINCT typeof(b))
+                FROM SOURCE GROUP BY grp ORDER BY grp}
+      filter {SELECT grp,sum(length(b)) FILTER(WHERE seq%2=0),
+                count(*) FILTER(WHERE typeof(b)='blob'),
+                sum(octet_length(b)) FILTER(WHERE 0)
+              FROM SOURCE GROUP BY grp ORDER BY grp}
+      conditional {SELECT grp,sum(CASE WHEN seq%2=0 THEN length(b) ELSE 7 END)
+                   FROM SOURCE GROUP BY grp ORDER BY grp}
+      ordered-aggregate {SELECT grp,group_concat(typeof(b) ORDER BY seq DESC),
+                          group_concat(length(b) ORDER BY octet_length(b),seq)
+                         FROM SOURCE GROUP BY grp ORDER BY grp}
+      having {SELECT grp,sum(length(b)) FROM SOURCE GROUP BY grp
+              HAVING sum(octet_length(b))>100 ORDER BY sum(length(b)),grp LIMIT 3 OFFSET 1}
+      grouped-expression {SELECT typeof(b),sum(length(b)) FROM SOURCE
+                          GROUP BY typeof(b) ORDER BY typeof(b)}
+      correlated {SELECT grp,sum(length(b)+(SELECT count(*) FROM u WHERE u.g=t.grp))
+                  FROM SOURCE GROUP BY grp ORDER BY grp}
+      nested-metadata {SELECT grp,sum((SELECT length(b) FROM u WHERE u.g=t.grp LIMIT 1)),
+                         sum(octet_length(b)) FROM SOURCE GROUP BY grp ORDER BY grp}
+      left-join {SELECT u.g,sum(length(t.b)),min(typeof(t.b)) FROM u
+                 LEFT JOIN SOURCE ON t.grp=u.g GROUP BY u.g ORDER BY u.g}
+      no-group {SELECT sum(length(b)),sum(octet_length(b)),min(typeof(b)) FROM SOURCE}
+    } {
+      set sql [string map [list SOURCE $source] $sql]
+      do_test $encoding-$state-$name [list db eval $sql] [oracle eval $sql]
+    }
+  }
+  do_test $encoding-many-inputs {
+    set args {}
+    for {set i 1} {$i<=20} {incr i} {lappend args "sum(length(b)+$i)"}
+    set sql "SELECT grp,[join $args ,] FROM t NOT INDEXED GROUP BY grp ORDER BY grp"
+    expr {[db eval $sql] eq [oracle eval $sql]}
+  } {1}
+  do_test $encoding-virtual {
+    set sql {SELECT type,sum(length(value)),min(typeof(value))
+             FROM json_each('[1,"abc",null,12.5,"é"]') GROUP BY type ORDER BY type}
+    list [expr {[db eval $sql] eq [oracle eval $sql]}] [metadata_sort_positions $sql]
+  } {1 {1 1}}
+  oracle close
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,g INTEGER,b BLOB);
+  INSERT INTO t VALUES(1,1,X'000102'),(2,1,'hello'),(3,2,NULL);
+}
+foreach function {length octet_length typeof} {
+  set ::metadata_calls 0
+  db function $function -argcount 1 metadata_override
+}
+proc metadata_override {value} {incr ::metadata_calls; return 123}
+do_test override-filter {
+  set ::metadata_calls 0
+  set result [db eval {SELECT g,sum(length(b)) FILTER(WHERE 0),
+    sum(octet_length(b)) FILTER(WHERE 0),min(typeof(b)) FILTER(WHERE 0)
+    FROM t GROUP BY g ORDER BY g}]
+  list $result $::metadata_calls
+} {{1 {} {} {} 2 {} {} {}} 0}
+do_test override-call-count {
+  set ::metadata_calls 0
+  list [db eval {SELECT g,sum(length(b)) FROM t GROUP BY g ORDER BY g}] $::metadata_calls
+} {{1 246 2 123} 3}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,g INTEGER,n INTEGER,r REAL,s TEXT,b);
+  INSERT INTO t VALUES(1,1,123,12.5,'hello',X'000102');
+}
+foreach column {id n r s b} {
+  do_test scalar-$column {
+    metadata_sort_positions "SELECT g,sum(length($column)),
+      sum(octet_length($column)),min(typeof($column)) FROM t GROUP BY g"
+  } {1 1 1}
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(g INTEGER,b BLOB);
+  INSERT INTO t VALUES(1,X'010203');
+}
+set limit [sqlite3_limit db SQLITE_LIMIT_COLUMN 4]
+do_execsql_test column-limit {
+  SELECT g,sum(length(b)+octet_length(b)+length(b)+length(b)+length(b))
+  FROM t GROUP BY g;
+} {1 15}
+sqlite3_limit db SQLITE_LIMIT_COLUMN $limit
+
+reset_db
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,g INTEGER,b BLOB);
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<32)
+  INSERT INTO t SELECT i,i%2,zeroblob(256) FROM c;
+}
+faultsim_save_and_close
+do_faultsim_test oom -faults oom-* -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {SELECT g,sum(length(b)),sum(octet_length(b)),min(typeof(b))
+           FROM t GROUP BY g ORDER BY g}
+} -test {
+  faultsim_test_result {0 {0 4096 4096 blob 1 4096 4096 blob}}
+}
+
+finish_test
