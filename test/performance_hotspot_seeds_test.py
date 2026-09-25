@@ -89,7 +89,7 @@ class SeedTests(unittest.TestCase):
                                   'issue_3263', 'issue_3264', 'issue_3266',
                                   'issue_3251', 'issue_3252',
                                   'issue_3258', 'issue_3271',
-                                  'bulk_deletes_delete_plain'})
+                                  'bulk_writes_delete_plain'})
         wide = [(p, cases, setup) for p, cases, setup in specs if p.payload==16384]
         self.assertEqual(len(wide), 1)
         profile, cases, setup = wide[0]
