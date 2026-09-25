@@ -811,6 +811,42 @@ static void testBulkDeleteReadsOnce(sqlite3 *db){
   execSql(db, "DROP TABLE bulk_delete; PRAGMA cache_size=-65536");
 }
 
+static void testBulkUpdateReadsOnce(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  i64 nScanBytes;
+  execSql(db, "CREATE TABLE bulk_update(id INTEGER PRIMARY KEY, g INT, v BLOB);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)"
+      " INSERT INTO bulk_update SELECT i, 10, CAST(printf('%04096d',i) AS BLOB)"
+      " FROM c; PRAGMA cache_size=-4096");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  nReadBytes = 0;
+  execSql(db, "SELECT sum(length(v)) FROM bulk_update");
+  nScanBytes = nReadBytes;
+  clearNodes(pCache);
+  nReadBytes = 0;
+  execSql(db, "BEGIN; UPDATE bulk_update SET g=g+1; COMMIT");
+  check("bulk update reads the table once",
+      nScanBytes>0 && nReadBytes<nScanBytes*3/2);
+  pStore->file.pFile->pMethods = pReadMethods;
+  check("prepare bulk update result", sqlite3_prepare_v2(db,
+      "SELECT count(*),sum(g),sum(length(v)),sum(CAST(v AS INT))"
+      " FROM bulk_update", -1, &p, 0)==SQLITE_OK);
+  check("bulk update preserves all payloads", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==8192
+      && sqlite3_column_int(p, 1)==90112
+      && sqlite3_column_int(p, 2)==33554432
+      && sqlite3_column_int(p, 3)==33558528);
+  check("finish bulk update result", sqlite3_finalize(p)==SQLITE_OK);
+  execSql(db, "DROP TABLE bulk_update; PRAGMA cache_size=-65536");
+}
+
 static void testIndexCacheSizedByIndex(void){
   char zPath[160];
   sqlite3 *db = 0;
@@ -1140,6 +1176,7 @@ int main(void){
   testShortPrefixWriteScan(db);
   testElidedTextPkPrefix(db);
   testBulkDeleteReadsOnce(db);
+  testBulkUpdateReadsOnce(db);
   testIndexCacheSizedByIndex();
   testReload(db);
   scan(db);

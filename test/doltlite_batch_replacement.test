@@ -1,0 +1,81 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-batch-replacement
+
+foreach {name type pk keyexpr suffix} {
+  integer INTEGER id seq {}
+  text TEXT id {printf('%064d',seq)} {}
+  blob BLOB id {CAST(printf('%064d',seq) AS BLOB)} {}
+  composite TEXT {id,seq} {printf('%064d',seq)} {WITHOUT ROWID}
+} {
+  reset_db
+  sqlite3 oracle :memory:
+  set schema "CREATE TABLE t(id $type,seq INTEGER,v INTEGER,payload BLOB,
+                            PRIMARY KEY($pk)) $suffix"
+  set source {WITH RECURSIVE c(seq) AS (
+    VALUES(2) UNION ALL SELECT seq+2 FROM c WHERE seq<8192
+  )}
+  foreach conn {db oracle} {
+    $conn eval $schema
+    $conn eval {CREATE INDEX t_v ON t(v)}
+  }
+  db eval "$source INSERT INTO t SELECT $keyexpr,seq,10,
+           CAST(printf('%01024d',seq) AS BLOB) FROM c"
+  db eval {PRAGMA cache_size=-512}
+  set original [db one {SELECT dolt_hashof_table('t')}]
+  foreach {mode predicate extraSeq growSeq} {
+    full 1 0 0
+    alternating {seq%6=0} 0 0
+    gap {seq!=4096} 0 0
+    insert 1 8191 0
+    append 1 9000 0
+    grow 1 0 8190
+    shrink 1 0 8190
+    zeros 1 0 8190
+  } {
+    set payload {CAST(printf('%01024d',seq) AS BLOB)}
+    if {$growSeq} {
+      set replacement {CAST(printf('%02048d',seq) AS BLOB)}
+      if {$mode eq "shrink"} {
+        set replacement {CAST(printf('%0016d',seq) AS BLOB)}
+      } elseif {$mode eq "zeros"} {
+        set replacement {zeroblob(8192)}
+      }
+      set payload "CASE WHEN seq=$growSeq THEN $replacement ELSE $payload END"
+    }
+    oracle eval {DELETE FROM t}
+    oracle eval "$source INSERT INTO t SELECT $keyexpr,seq,
+      10+CASE WHEN $predicate THEN 1 ELSE 0 END,
+      $payload FROM c"
+    db eval "BEGIN; UPDATE t SET v=v+1 WHERE $predicate"
+    if {$growSeq} {
+      db eval "UPDATE t SET payload=$replacement WHERE seq=$growSeq"
+    }
+    if {$extraSeq} {
+      foreach conn {db oracle} {
+        $conn eval "INSERT INTO t SELECT $keyexpr,seq,11,
+          CAST(printf('%01024d',seq) AS BLOB) FROM (SELECT $extraSeq AS seq)"
+      }
+    }
+    do_test $name-$mode-hash {
+      expr {[db one {SELECT dolt_hashof_table('t')}]
+         eq [oracle one {SELECT dolt_hashof_table('t')}]}
+    } {1}
+    do_test $name-$mode-rows {
+      db eval {SELECT seq,v,hex(payload) FROM t ORDER BY seq}
+    } [oracle eval {SELECT seq,v,hex(payload) FROM t ORDER BY seq}]
+    do_execsql_test $name-$mode-integrity {PRAGMA integrity_check} {ok}
+    do_test $name-$mode-index {
+      db eval {SELECT v,seq FROM t INDEXED BY t_v WHERE v>=0 ORDER BY v,seq}
+    } [oracle eval {
+      SELECT v,seq FROM t INDEXED BY t_v WHERE v>=0 ORDER BY v,seq
+    }]
+    db eval ROLLBACK
+    do_test $name-$mode-rollback {
+      expr {[db one {SELECT dolt_hashof_table('t')}] eq $original}
+    } {1}
+  }
+  oracle close
+}
+
+finish_test
