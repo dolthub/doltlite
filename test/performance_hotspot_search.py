@@ -6,6 +6,10 @@ import random
 import re
 
 VERSION = 2
+# Wide rows are measured by the fixed trade-off section of the PR hotspot
+# job and tracked in one issue until values move out of band, so the search
+# never explores them.
+WIDE_PAYLOAD = 2048
 CHOICES = {
     'source': ['table', 'join', 'exists', 'in'],
     'predicate': ['all', 'group', 'range', 'or', 'modulo', 'group_range'],
@@ -51,6 +55,10 @@ def valid_profile(profile):
             and 1 <= p.stride <= 32 and 1 <= p.lookups <= 10000
             and 0 <= p.target < p.groups and 1 <= p.start <= p.rows
             and 1 <= p.width <= p.rows and p.start+p.width-1 <= p.rows)
+
+
+def wide(profile):
+    return profile['payload'] >= WIDE_PAYLOAD
 
 
 def layout_sql(layout):
@@ -219,6 +227,7 @@ class Search:
                     raise ValueError('invalid exploration corpus')
                 self.state = state
                 self.state.setdefault('shapes', {})
+                self.state['corpus'] = [x for x in state['corpus'] if not wide(x['profile'])]
         for issue in issues:
             for bundle in issue.get('bundles', []):
                 recipe = bundle.get('case', {}).get('recipe', {})
@@ -226,6 +235,8 @@ class Search:
                     self.remember(recipe, bundle['profile'])
 
     def remember(self, recipe, profile):
+        if wide(profile):
+            return
         item = {'recipe': recipe, 'profile': profile}
         corpus = self.state['corpus']
         if item in corpus:
