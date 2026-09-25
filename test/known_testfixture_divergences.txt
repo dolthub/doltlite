@@ -957,6 +957,7 @@ cffault cffault-2.1-shmerr-transient.1 class=intentional  # cacheflush fault dur
 vacuum5 vacuum5-1.3.2 class=intentional  # VACUUM page-count/size metric
 vacuum5 vacuum5-1.3.3 class=intentional  # VACUUM size metric
 vacuum5 vacuum5-3.2 class=intentional  # VACUUM size metric
+vacuummem vacuummem-1.3 class=intentional  # right after VACUUM, before any read: the old paged index's cached pages are freed and the node cache regrows on the next read, so usage dips below the warm baseline; 1.5 checks it after that read
 
 # autoinc — sqlite_master enumeration order differs. AUTOINCREMENT itself
 # works, including writable_schema sqlite_sequence corruption tests.
