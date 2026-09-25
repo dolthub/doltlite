@@ -93,6 +93,7 @@ delete2
 distinct
 distinct2
 distinctagg
+doltlite_delete_all
 doltlite_fts3_oom
 e_blobbytes
 e_blobopen

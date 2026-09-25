@@ -278,6 +278,14 @@ Expr *sqlite3LimitWhere(
 #endif /* defined(SQLITE_ENABLE_UPDATE_DELETE_LIMIT) */
        /*      && !defined(SQLITE_OMIT_SUBQUERY) */
 #ifdef DOLTLITE_PROLLY
+#ifndef SQLITE_OMIT_TRUNCATE_OPTIMIZATION
+static int doltliteDeleteAllRows(const Expr *pWhere){
+  int value;
+  return ExprAlwaysTrue(pWhere)
+      || (sqlite3ExprIsInteger(pWhere, &value, 0, 0) && value!=0);
+}
+#endif
+
 static int doltliteExprContainsOr(const Expr *pExpr){
   if( pExpr==0 ) return 0;
   if( pExpr->op==TK_OR ) return 1;
@@ -477,7 +485,12 @@ void sqlite3DeleteFrom(
   ** individually.
   */
   if( rcauth==SQLITE_OK
+#ifdef DOLTLITE_PROLLY
+   && (pWhere==0 || (sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt)
+                    && doltliteDeleteAllRows(pWhere)))
+#else
    && pWhere==0
+#endif
    && !bComplex
    && !IsVirtual(pTab)
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
