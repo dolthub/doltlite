@@ -309,14 +309,13 @@ int prollyCacheExpandElidedPrefix(
   u8 aPlain[PROLLY_PREFIX_ELIDE_MAX];
 
   *pnAvail = 0;
-  if( !pNode->bPrefixElideFirst || nOutCap<=0 ) return SQLITE_NOTFOUND;
+  if( (pNode->flags & PROLLY_NODE_PREFIX_ELIDE)==0 || nOutCap<=0 ){
+    return SQLITE_NOTFOUND;
+  }
   prollyNodeValueSpan(pNode, iItem, &pStored, &nVal, &nAvail);
   prollyNodeKey(pNode, iItem, &pKey, &nKey);
   if( nAvail<=0 || !pStored || !pKey ) return SQLITE_NOTFOUND;
-  if( pNode->nPrefixElide && pStored[0]<0x80 ){
-    hdr = pStored[0];
-    flen = pNode->nPrefixElide;
-  }else{
+  {
     int typ = 0;
     if( !prefixHeaderField0(pStored, nAvail, &hdr, &flen, &typ) || typ<12 ){
       return SQLITE_NOTFOUND;
@@ -356,7 +355,7 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   ProllyNode *pNode = &pEntry->node;
   int nHead, nCompact, nPrefix, nStride, nAverage, i;
   int nBasePrefix;
-  int bElide = 0, nElide = -1;
+  int bElide = 0;
   u8 *pPacked = 0;
   u8 *pData;
   if( pEntry->pPacked ){
@@ -438,7 +437,11 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
     /* A raw prefix stops inside a long text primary key. Drop that field:
     ** the leaf key still has it, and the same slot then reaches later columns.
     ** Shared packing above already kept a dense raw prefix when it paid off. */
-    if( !pNode->nValuePrefix && (pNode->flags & PROLLY_NODE_BLOBKEY)
+    /* Point lookups keep the raw prefix. Eliding those copies makes a
+    ** following payload fetch rebuild the record and then read the leaf
+    ** anyway. Large scans still drop a redundant text key. */
+    if( pEntry->bScanOnly
+     && !pNode->nValuePrefix && (pNode->flags & PROLLY_NODE_BLOBKEY)
      && (nPrefix==16 || nPrefix==32) ){
       bElide = 1;
       for(i=0; i<pNode->nItems; i++){
@@ -451,8 +454,6 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
           bElide = 0;
           break;
         }
-        if( nElide<0 ) nElide = flen;
-        else if( nElide!=flen ) nElide = 0;
       }
     }
     nStride = nPrefix+(bElide ? 0 : PROLLY_NODE_BUFFER_SLOP);
@@ -496,8 +497,8 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   pNode->pData = pData;
   pNode->nDataPhys = nCompact;
   pNode->nValuePrefix = nPrefix;
-  pNode->bPrefixElideFirst = bElide ? 1 : 0;
-  pNode->nPrefixElide = (bElide && nElide>0) ? (u8)nElide : 0;
+  if( bElide ) pNode->flags |= PROLLY_NODE_PREFIX_ELIDE;
+  else pNode->flags = (u8)(pNode->flags & (u8)~PROLLY_NODE_PREFIX_ELIDE);
   pEntry->nEvictChance = 0;
   cache->nByte += (i64)sqlite3_msize(pData)-(i64)sqlite3_msize(pEntry->pData);
   sqlite3_free(pEntry->pData);

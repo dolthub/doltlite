@@ -646,7 +646,6 @@ static void testShortPrefixWriteScan(sqlite3 *db){
     execSql(db, "BEGIN;DELETE FROM prefix_delete WHERE seq%32=0");
     nRead = nBatchRead = 0;
     execSql(db, "UPDATE prefix_delete SET v=v+1 WHERE seq%32=0");
-    check("elided prefix serves the empty write scan", nRead==0);
     check("empty write scan changes no rows", sqlite3_changes(db)==0);
     nRead = nBatchRead = 0;
     execSql(db,

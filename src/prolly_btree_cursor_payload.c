@@ -52,7 +52,7 @@ void prollyBtreeCursorCurrentTreeValueSpan(
   i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
   assert( i>=0 && i<(int)pNode->nItems );
   prollyNodeValueSpan(pNode, i, ppData, pnData, pnAvail);
-  if( pNode->bPrefixElideFirst ){
+  if( pNode->flags & PROLLY_NODE_PREFIX_ELIDE ){
     int nExp = 0;
     u8 *pBuf = pCur->pCur.aPrefixExpand;
     int nCap = (int)sizeof(pCur->pCur.aPrefixExpand)-PROLLY_NODE_BUFFER_SLOP;

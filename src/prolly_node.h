@@ -11,6 +11,8 @@
 #define PROLLY_NODE_INTKEY        0x01
 #define PROLLY_NODE_BLOBKEY       0x02
 #define PROLLY_NODE_SUBTREE_COUNTS 0x04
+/* In-memory only: a cached prefix omitted field 0. Not written to the node. */
+#define PROLLY_NODE_PREFIX_ELIDE  0x80
 
 #define PROLLY_NODE_MAX_ITEMS 4096
 #define PROLLY_NODE_VALUE_PREFIX 128
@@ -44,8 +46,6 @@ struct ProllyNode {
   u8 level;
   u16 nItems;
   u8 flags;
-  u8 bPrefixElideFirst;   /* Cached prefix omits field 0; the key restores it. */
-  u8 nPrefixElide;        /* Shared omitted length, or 0 when rows differ. */
   const u32 *aKeyOff;
   const u32 *aValOff;
   const u8 *pKeyData;
@@ -63,7 +63,7 @@ void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVa
 static SQLITE_INLINE int prollyNodePrefixStride(const ProllyNode *pNode){
   /* Elided prefixes are only copied out into a padded cursor buffer. */
   return pNode->nValuePrefix
-      + (pNode->bPrefixElideFirst ? 0 : PROLLY_NODE_BUFFER_SLOP);
+      + ((pNode->flags & PROLLY_NODE_PREFIX_ELIDE) ? 0 : PROLLY_NODE_BUFFER_SLOP);
 }
 
 static SQLITE_INLINE void prollyNodeValueSpanInline(
