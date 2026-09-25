@@ -41,13 +41,30 @@ EOF
 cat > "$work/stub.c" <<'EOF'
 #include "sqlite3.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
+static int open_handles;
+
+static void fail_unclosed(void){
+  if( open_handles!=0 ){
+    fprintf(stderr, "FAIL: %d database handle(s) were not closed\n",
+            open_handles);
+    _exit(1);
+  }
+}
+
 int sqlite3_open(const char *filename, sqlite3 **ppDb){
+  static int registered = 0;
   FILE *f = fopen(filename, "a");
   if( !f ) return SQLITE_CANTOPEN;
   fclose(f);
   *ppDb = (sqlite3*)1;
+  open_handles++;
+  if( !registered ){
+    atexit(fail_unclosed);
+    registered = 1;
+  }
   return SQLITE_OK;
 }
 
@@ -58,18 +75,19 @@ int sqlite3_exec(sqlite3 *db, const char *sql,
 }
 
 int sqlite3_close(sqlite3 *db){
-  (void)db;
+  if( db ) open_handles--;
   return SQLITE_OK;
 }
 
 int sqlite3_open_v2(const char *filename, sqlite3 **ppDb, int flags,
                     const char *zVfs){
   (void)zVfs;
+  *ppDb = (sqlite3*)1;
+  open_handles++;
   if( flags & SQLITE_OPEN_NOFOLLOW ){
     char linkbuf[8];
     if( readlink(filename, linkbuf, sizeof(linkbuf))>=0 ) return SQLITE_CANTOPEN;
   }
-  *ppDb = (sqlite3*)1;
   return SQLITE_OK;
 }
 

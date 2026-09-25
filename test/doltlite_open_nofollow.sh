@@ -35,17 +35,24 @@ int main(void){
   unlink(realp); unlink(linkp);
 
   rc = sqlite3_open(realp, &db);
-  if( rc!=SQLITE_OK ){ fprintf(stderr, "open real failed %d\n", rc); return 1; }
+  if( rc!=SQLITE_OK ){
+    fprintf(stderr, "open real failed %d\n", rc);
+    sqlite3_close(db);
+    return 1;
+  }
   sqlite3_exec(db, "CREATE TABLE t(x);", 0, 0, 0);
   sqlite3_close(db);
+  db = 0;
 
   if( symlink(realp, linkp)!=0 ){ perror("symlink"); return 1; }
 
   rc = sqlite3_open_v2(linkp, &db,
                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW, 0);
+  /* A refused open still returns a handle. */
+  sqlite3_close(db);
+  db = 0;
   if( rc==SQLITE_OK ){
     fprintf(stderr, "FAIL: NOFOLLOW open of symlink succeeded\n");
-    sqlite3_close(db);
     return 1;
   }
   if( (rc & 0xff)!=SQLITE_CANTOPEN ){
@@ -58,6 +65,7 @@ int main(void){
   rc = sqlite3_open_v2(linkp, &db, SQLITE_OPEN_READWRITE, 0);
   if( rc!=SQLITE_OK ){
     fprintf(stderr, "FAIL: follow-symlink open failed %d\n", rc);
+    sqlite3_close(db);
     return 1;
   }
   sqlite3_close(db);
