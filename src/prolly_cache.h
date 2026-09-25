@@ -7,6 +7,10 @@
 #include "prolly_node.h"
 
 #define PROLLY_CACHE_SHARED_PREFIX 32
+/* Bit 0 is cleared by a point read. Bit 1 stays set when a write scan
+** loaded the leaf, so that scan can still drop a text key from the prefix. */
+#define PROLLY_CACHE_SCAN_ONLY 0x01
+#define PROLLY_CACHE_SCAN_KEEP 0x02
 
 typedef struct ProllyCache ProllyCache;
 typedef struct ProllyCacheEntry ProllyCacheEntry;

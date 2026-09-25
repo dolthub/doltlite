@@ -5,6 +5,15 @@
 #include <string.h>
 #include <assert.h>
 
+static void cacheNoteLargeScan(ProllyCacheEntry *pEntry, int bLarge){
+  if( bLarge ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_ONLY;
+  else pEntry->bScanOnly &= (u8)~PROLLY_CACHE_SCAN_ONLY;
+}
+
+static void cacheNoteWriteScan(ProllyCacheEntry *pEntry, int bWrite){
+  if( bWrite ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_KEEP;
+}
+
 int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
                    const ProllyHash *pHash, ProllyCacheEntry **ppEntry){
   ProllyCacheEntry *pEntry;
@@ -32,6 +41,7 @@ static ProllyCacheEntry *cursorCachedNode(
       : cur->bLargeScan ? prollyCacheGetForScan(cur->pCache, pHash)
                         : prollyCacheGet(cur->pCache, pHash);
   if( pEntry && cur->bAllowPrefix ) pEntry->bAllowPrefix = 1;
+  if( pEntry && cur->bWriteScan ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_KEEP;
   return pEntry;
 }
 
@@ -57,7 +67,8 @@ static int cacheReadAheadNode(
   pEntry = prollyCachePutOwned(pCache, pHash, pCopy, nData, &rc);
   if( pEntry ){
     pEntry->bAllowPrefix = cur->bAllowPrefix;
-    pEntry->bScanOnly = cur->bLargeScan;
+    cacheNoteLargeScan(pEntry, cur->bLargeScan);
+    cacheNoteWriteScan(pEntry, cur->bWriteScan);
     prollyCacheRelease(pCache, pEntry);
   }
   return rc;
@@ -120,7 +131,8 @@ static int prollyLoadNodeMaybeSparse(
   }
   if( !pEntry ) return rc;
   pEntry->bAllowPrefix = cur->bAllowPrefix;
-  pEntry->bScanOnly = cur->bLargeScan;
+  cacheNoteLargeScan(pEntry, cur->bLargeScan);
+  cacheNoteWriteScan(pEntry, cur->bWriteScan);
   *ppEntry = pEntry;
   return SQLITE_OK;
 }

@@ -193,7 +193,9 @@ static ProllyCacheEntry *cacheGet(
     pEntry->pData = pData;
     cache->nByte += sqlite3_msize(pData);
   }
-  if( !bScan ) pEntry->bScanOnly = 0;
+  /* A point read is not a large scan. A write scan's mark stays, so its
+  ** leaf can still drop a text key when it is evicted. */
+  if( !bScan ) pEntry->bScanOnly &= (u8)~PROLLY_CACHE_SCAN_ONLY;
   pEntry->nEvictChance = pEntry->node.level>0
                       ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
   pEntry->nRef++;
@@ -377,7 +379,11 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   nBasePrefix = pNode->nValuePrefix ? PROLLY_NODE_VALUE_PREFIX/2
               : nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
               : nAverage>=512 ? 32 : 16;
-  nPrefix = pEntry->bScanOnly && nAverage>=128 && nAverage<=1024
+  /* A write scan drops the text key below instead of sharing a raw prefix.
+  ** The shorter slot then reaches the column that scan reads next. */
+  nPrefix = (pEntry->bScanOnly & PROLLY_CACHE_SCAN_ONLY)
+         && (pEntry->bScanOnly & PROLLY_CACHE_SCAN_KEEP)==0
+         && nAverage>=128 && nAverage<=1024
           ? PROLLY_CACHE_SHARED_PREFIX : nBasePrefix;
   nStride = nPrefix + PROLLY_NODE_BUFFER_SLOP;
   nCompact = nHead + pNode->nItems*nStride;
@@ -388,7 +394,9 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   }
   if( nCompact>pNode->nData/4 ) return 0;
   assert( pEntry->nRef==0 );
-  if( pEntry->bScanOnly && nPrefix==PROLLY_CACHE_SHARED_PREFIX
+  if( (pEntry->bScanOnly & PROLLY_CACHE_SCAN_ONLY)
+   && (pEntry->bScanOnly & PROLLY_CACHE_SCAN_KEEP)==0
+   && nPrefix==PROLLY_CACHE_SHARED_PREFIX
    && nAverage>=128 && nAverage<=1024 ){
     u32 mask = 0;
     u8 aDiff[PROLLY_CACHE_SHARED_PREFIX] = {0};
@@ -436,11 +444,10 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
     nPrefix = nBasePrefix;
     /* A raw prefix stops inside a long text primary key. Drop that field:
     ** the leaf key still has it, and the same slot then reaches later columns.
-    ** Shared packing above already kept a dense raw prefix when it paid off. */
-    /* Point lookups keep the raw prefix. Eliding those copies makes a
-    ** following payload fetch rebuild the record and then read the leaf
-    ** anyway. Large scans still drop a redundant text key. */
-    if( pEntry->bScanOnly
+    ** Shared packing above already kept a dense raw prefix when it paid off.
+    ** Point lookups stay raw: a following payload fetch would rebuild the
+    ** record and then read the leaf anyway. */
+    if( (pEntry->bScanOnly & (PROLLY_CACHE_SCAN_ONLY|PROLLY_CACHE_SCAN_KEEP))
      && !pNode->nValuePrefix && (pNode->flags & PROLLY_NODE_BLOBKEY)
      && (nPrefix==16 || nPrefix==32) ){
       bElide = 1;
@@ -515,7 +522,8 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
 }
 
 void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry){
-  if( entry->bScanOnly && !entry->bTransient && entry->nRef==1
+  if( (entry->bScanOnly & PROLLY_CACHE_SCAN_ONLY) && !entry->bTransient
+   && entry->nRef==1
    && entry->node.level==0 && !entry->node.nValuePrefix ){
     lruRemove(entry);
     entry->pLruNext = &cache->lruTail;
