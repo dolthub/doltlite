@@ -114,6 +114,7 @@ doltlite_open_sqlite_file.sh
 doltlite_sqlite_file_oracle.sh
 doltlite_sqlite_file_oracle_failure.sh
 doltlite_open_nofollow.sh
+doltlite_open_nofollow_link_test.sh
 doltlite_readonly_directory.sh
 doltlite_readonly_file_replacement.sh
 doltlite_open_missing_path.sh
