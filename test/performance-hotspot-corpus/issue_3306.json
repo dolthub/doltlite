@@ -1,0 +1,71 @@
+{
+  "seed": 361283163751,
+  "generator_version": 2,
+  "profile": {
+    "rows": 65536,
+    "payload": 4096,
+    "key": "text",
+    "groups": 4096,
+    "skew": true,
+    "cache_kib": 4096,
+    "stride": 2,
+    "lookups": 1000,
+    "target": 3514,
+    "start": 49152,
+    "width": 16384,
+    "memory": false
+  },
+  "case": {
+    "name": "update_pk_after_update",
+    "sql": "UPDATE t SET id=printf('%016x', seq+65536) WHERE t.id BETWEEN printf('%016x', 49152) AND printf('%016x', 65535);",
+    "verify": "SELECT changes(),count(*),sum(v),sum(seq),min(id),max(id),sum(length(payload)),sum(length(tag)),sum(unicode(substr(tag,-1,1))),sum(unicode(substr(CAST(payload AS TEXT),-1,1))) FROM t;",
+    "prepare": "UPDATE t SET v=v+1 WHERE seq%2=0;",
+    "recipe": {
+      "source": "table",
+      "predicate": "range",
+      "expression": "v",
+      "operator": "update_pk",
+      "indexes": "ordered",
+      "layout": "scattered",
+      "context": "after_update",
+      "direction": "ASC"
+    },
+    "warmup": ""
+  },
+  "setup": "setup.sql",
+  "setup_sql": "CREATE TABLE t(id TEXT PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);\nBEGIN;\nWITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(4097) UNION ALL SELECT i+1 FROM c WHERE i<8192) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(8193) UNION ALL SELECT i+1 FROM c WHERE i<12288) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(12289) UNION ALL SELECT i+1 FROM c WHERE i<16384) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(16385) UNION ALL SELECT i+1 FROM c WHERE i<20480) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(20481) UNION ALL SELECT i+1 FROM c WHERE i<24576) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(24577) UNION ALL SELECT i+1 FROM c WHERE i<28672) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(28673) UNION ALL SELECT i+1 FROM c WHERE i<32768) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(32769) UNION ALL SELECT i+1 FROM c WHERE i<36864) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(36865) UNION ALL SELECT i+1 FROM c WHERE i<40960) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(40961) UNION ALL SELECT i+1 FROM c WHERE i<45056) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(45057) UNION ALL SELECT i+1 FROM c WHERE i<49152) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(49153) UNION ALL SELECT i+1 FROM c WHERE i<53248) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(53249) UNION ALL SELECT i+1 FROM c WHERE i<57344) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(57345) UNION ALL SELECT i+1 FROM c WHERE i<61440) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(61441) UNION ALL SELECT i+1 FROM c WHERE i<65536) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%04096d',i) AS BLOB) FROM c;\nCOMMIT;\nCREATE INDEX t_g ON t(grp);\nCREATE INDEX t_gv ON t(grp,v);\nANALYZE;\nCREATE INDEX t_s ON t(seq);\nCREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\nINSERT INTO u SELECT seq,grp,v FROM t WHERE seq%2=0;\nCREATE INDEX u_g ON u(grp);\nANALYZE;\n",
+  "expected": "16384|65536|32766531072|2147516416|0000000000000001|000000000001ffff|268435456|786432|4595712|3440634",
+  "repeats": 1,
+  "fingerprint": "78008cf1171ecb4062548f21",
+  "family": "df8bd4356dba903579c45d85",
+  "statement": "74dd1000185e3f87bf6ed0ea",
+  "category": "in_transaction_mutations",
+  "discovery": {
+    "source_commit": "c0799675eebac9ff8c4914e4604245a1b29dd8c3",
+    "median_ratio": 12.510334076470489,
+    "minimum_ratio": 12.20941281507581,
+    "pairs": [
+      {
+        "doltlite_ms": 750.162,
+        "sqlite_ms": 59.862
+      },
+      {
+        "doltlite_ms": 746.329,
+        "sqlite_ms": 59.657
+      },
+      {
+        "doltlite_ms": 752.249,
+        "sqlite_ms": 58.954
+      },
+      {
+        "doltlite_ms": 748.416,
+        "sqlite_ms": 60.656
+      },
+      {
+        "doltlite_ms": 765.811,
+        "sqlite_ms": 62.723
+      }
+    ]
+  },
+  "issue": 3306
+}

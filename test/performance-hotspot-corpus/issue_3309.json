@@ -1,0 +1,71 @@
+{
+  "seed": 361283163751,
+  "generator_version": 2,
+  "profile": {
+    "rows": 16384,
+    "payload": 16384,
+    "key": "text",
+    "groups": 4096,
+    "skew": true,
+    "cache_kib": 4096,
+    "stride": 32,
+    "lookups": 1000,
+    "target": 1051,
+    "start": 8195,
+    "width": 1024,
+    "memory": false
+  },
+  "case": {
+    "name": "index_order_plain",
+    "sql": "SELECT count(*),sum(x) FROM (SELECT t.seq AS x,t.seq AS seq,t.grp AS grp FROM t JOIN u ON u.id=t.seq WHERE t.grp<256 ORDER BY t.grp ASC,t.v ASC,t.id LIMIT 1024);",
+    "verify": "",
+    "prepare": "",
+    "recipe": {
+      "source": "join",
+      "predicate": "group_range",
+      "expression": "seq",
+      "operator": "index_order",
+      "indexes": "cover",
+      "layout": "late",
+      "context": "plain",
+      "direction": "ASC"
+    },
+    "warmup": ""
+  },
+  "setup": "setup.sql",
+  "setup_sql": "CREATE TABLE t(id TEXT PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);\nBEGIN;\nWITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%016384d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(4097) UNION ALL SELECT i+1 FROM c WHERE i<8192) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%016384d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(8193) UNION ALL SELECT i+1 FROM c WHERE i<12288) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%016384d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(12289) UNION ALL SELECT i+1 FROM c WHERE i<16384) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%4096 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%016384d',i) AS BLOB) FROM c;\nCOMMIT;\nCREATE INDEX t_g ON t(grp);\nCREATE INDEX t_gv ON t(grp,v);\nANALYZE;\nCREATE TEMP TABLE hotspot_groups(seq INTEGER PRIMARY KEY,grp INTEGER);\nINSERT INTO hotspot_groups SELECT row_number() OVER (ORDER BY grp DESC,seq),grp FROM t;\nUPDATE t SET grp=(SELECT grp FROM hotspot_groups WHERE hotspot_groups.seq=t.seq);\nDROP TABLE hotspot_groups;\nDROP INDEX t_g;\nCREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\nINSERT INTO u SELECT seq,grp,v FROM t WHERE seq%32=0;\nCREATE INDEX u_g ON u(grp);\nANALYZE;\n",
+  "expected": "464|4164864",
+  "repeats": 5,
+  "fingerprint": "d17fcadb86604ef21e507b8a",
+  "family": "5c48c05db92b502230e3f40b",
+  "statement": "f2e79915e42a3b0f04512dde",
+  "category": "wide_fetches",
+  "discovery": {
+    "source_commit": "c0799675eebac9ff8c4914e4604245a1b29dd8c3",
+    "median_ratio": 28.799127532497952,
+    "minimum_ratio": 27.86412675101672,
+    "pairs": [
+      {
+        "doltlite_ms": 983.663,
+        "sqlite_ms": 34.156
+      },
+      {
+        "doltlite_ms": 989.629,
+        "sqlite_ms": 33.383
+      },
+      {
+        "doltlite_ms": 987.4,
+        "sqlite_ms": 34.195
+      },
+      {
+        "doltlite_ms": 982.57,
+        "sqlite_ms": 34.488
+      },
+      {
+        "doltlite_ms": 986.613,
+        "sqlite_ms": 35.408
+      }
+    ]
+  },
+  "issue": 3309
+}

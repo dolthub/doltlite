@@ -76,7 +76,7 @@ expect_violation() {
   rc=$?
   if [ "$rc" -eq 0 ]; then
     bad "$name" "expected a violation, but lint passed"
-  elif ! printf '%s' "$out" | grep -q -- "$needle"; then
+  elif ! grep -q -- "$needle" <<<"$out"; then
     bad "$name" "exited $rc but never mentioned '$needle':
 $out"
   else

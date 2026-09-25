@@ -26,11 +26,11 @@ INDEX_EDIT_CACHE_KIB = 131072
 RETAINED_SECTIONS = (("wide_rows", "Wide Rows"),
                      ("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
-                     ("in_transaction_mutations", "In Transaction with Mutations"),
                      ("wide_fetches", "Wide Row Fetches"),
                      ("small_cache", "Small Cache"),
+                     ("in_transaction_mutations", "In Transaction with Mutations"),
+                     ("bulk_writes", "Bulk Writes"),
                      ("after_deletes", "After Deletes"),
-                     ("bulk_deletes", "Bulk Deletes"),
                      ("integer_keys", "Integer Keys"))
 SECTIONS = (("queries", "Large Table Scans"),
             ("add_column", "Add Column With Default"),
