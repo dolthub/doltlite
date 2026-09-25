@@ -383,9 +383,19 @@ def main(argv=None):
             (directory/"setup.sql").write_text(setup)
             with tempfile.TemporaryDirectory(prefix="doltlite-hotspots-") as tmp:
                 databases = {arm: Path(tmp)/(arm+".db") for arm in binaries}
-                for arm, binary in binaries.items():
-                    if not profile.memory:
-                        runner.run([str(binary), str(databases[arm])], prologue(profile.cache_kib)+setup, setup=True)
+                try:
+                    for arm, binary in binaries.items():
+                        if not profile.memory:
+                            runner.run([str(binary), str(databases[arm])], prologue(profile.cache_kib)+setup, setup=True)
+                except CaseTimeout as exc:
+                    # One slow fixture is a finding about that profile, not a
+                    # reason to abandon the rest of the search.
+                    record = {"id": f"p{index:03d}/setup", "profile": asdict(profile),
+                              "reproducer": f"p{index:03d}/setup.sql", "timeout": str(exc)}
+                    report["cases"].append(record)
+                    save_report(output, report)
+                    print(record["id"], "TIMEOUT (setup; profile skipped)", flush=True)
+                    continue
                 for case in cases:
                     with tempfile.TemporaryDirectory(prefix="case-", dir=tmp) as scratch:
                         case_databases = {arm: Path(scratch)/(arm+".db") for arm in binaries}

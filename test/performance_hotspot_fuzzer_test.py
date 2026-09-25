@@ -223,6 +223,54 @@ class DiscoveryTests(unittest.TestCase):
             self.assertTrue((output/"p000/setup.sql").is_file())
             self.assertTrue((output/"p000/scan_payload.sql").is_file())
 
+    def test_setup_timeout_skips_only_that_profile(self):
+        setups = []
+        def run(runner, command, sql=None, setup=False):
+            if setup:
+                setups.append(command)
+                if len(setups)==1:
+                    raise fuzzer.CaseTimeout("command timed out: setup")
+            return "ok"
+        def measure(*args, **kwargs):
+            return {"pairs": [], "ratio": 1.0, "confirmed": False, "result": "1", "repeats": 1,
+                    "doltlite_ms": 1.0, "sqlite_ms": 1.0}
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/"results"
+            with patch.object(fuzzer.shutil, "copyfile"), \
+                 patch.object(fuzzer.Runner, "run", autospec=True, side_effect=run), \
+                 patch.object(fuzzer, "binary_info", return_value={}), \
+                 patch.object(fuzzer, "profile_for", return_value=self.profile), \
+                 patch.object(fuzzer, "measure_case", side_effect=measure):
+                rc = fuzzer.main(["--doltlite", "unused", "--sqlite", "unused", "--output", str(output),
+                                  "--profiles", "2", "--case", "scan_payload"])
+            self.assertEqual(rc, 0)
+            report = json.loads((output/"results.json").read_text())
+            ids = [case["id"] for case in report["cases"]]
+            self.assertEqual(ids, ["p000/setup", "p001/scan_payload"])
+            self.assertEqual(len(setups), 3)
+            self.assertEqual(report["cases"][0]["timeout"], "command timed out: setup")
+            self.assertEqual(report["cases"][0]["reproducer"], "p000/setup.sql")
+            self.assertTrue((output/"p000/setup.sql").is_file())
+            self.assertEqual(report["profiles_completed"], 1)
+            self.assertEqual(report["status"], "complete")
+            self.assertIn("p000/setup", (output/"summary.md").read_text())
+
+    def test_setup_failure_other_than_timeout_still_fails_the_search(self):
+        def run(runner, command, sql=None, setup=False):
+            if setup:
+                raise RuntimeError("command failed: setup")
+            return "ok"
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/"results"
+            with patch.object(fuzzer.Runner, "run", autospec=True, side_effect=run), \
+                 patch.object(fuzzer, "binary_info", return_value={}), \
+                 patch.object(fuzzer, "profile_for", return_value=self.profile):
+                rc = fuzzer.main(["--doltlite", "unused", "--sqlite", "unused", "--output", str(output),
+                                  "--profiles", "2", "--case", "scan_payload"])
+            self.assertEqual(rc, 1)
+            report = json.loads((output/"results.json").read_text())
+            self.assertEqual(report["status"], "error")
+
     def test_nightly_is_independent_and_preserves_reproducers(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root/".github/workflows/nightly-hotspots.yml").read_text()
