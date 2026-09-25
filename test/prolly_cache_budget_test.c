@@ -52,7 +52,9 @@ static sqlite3_int64 combinedCacheBytes(sqlite3 *db){
 
 static int budgetMatches(sqlite3 *db, sqlite3_int64 nByte){
   ProllyCache *pCache = doltliteGetCache(db);
-  return pCache->nMaxByte<=nByte && pCache->nMaxByte>=nByte-nByte/16
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  return pCache->nMaxByte<=nByte && pCache->nMaxByte>=nByte-nByte/4
+      && pCache->nMaxByte>=nByte-csIndexCacheBudgetFor(pStore, nByte)
       && nByte-pCache->nMaxByte<=4*1024*1024
       && combinedCacheBytes(db)<=nByte;
 }
@@ -707,6 +709,41 @@ static void testBulkDeleteReadsOnce(sqlite3 *db){
   execSql(db, "DROP TABLE bulk_delete; PRAGMA cache_size=-65536");
 }
 
+static void testIndexCacheSizedByIndex(void){
+  char zPath[160];
+  sqlite3 *db = 0;
+  ChunkStore *pStore;
+  i64 nReserved;
+  sqlite3_snprintf(sizeof(zPath), zPath, "/tmp/prolly-index-budget-%d.db",
+                   (int)getpid());
+  unlink(zPath);
+  check("open index budget db", sqlite3_open(zPath, &db)==SQLITE_OK);
+  execSql(db, "CREATE TABLE big(id INTEGER PRIMARY KEY, v BLOB);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c"
+      " WHERE i<32768) INSERT INTO big SELECT i, CAST(printf('%02048d',i) AS BLOB)"
+      " FROM c;"
+      "SELECT dolt_commit('-Am','big');"
+      "INSERT INTO big VALUES(40000, x'00');"
+      "SELECT dolt_commit('-Am','checkpoint')");
+  check("close index budget db", sqlite3_close(db)==SQLITE_OK);
+  check("reopen index budget db", sqlite3_open(zPath, &db)==SQLITE_OK);
+  execSql(db, "PRAGMA cache_size=-4096");
+  pStore = doltliteGetChunkStore(db);
+  nReserved = (i64)pStore->nIndexCacheSlot
+            * (CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage));
+  check("large index is paged", pStore->index.lazy.active==1
+      && pStore->index.lazy.nEntries>8192);
+  check("paged index cache grows past a sixteenth",
+      nReserved>4096*1024/16 && nReserved<=4096*1024/4);
+  check("grown index cache stays within the budget",
+      budgetMatches(db, 4096*1024));
+  execSql(db, "SELECT sum(length(v)) FROM big");
+  check("grown index cache fills within its reservation",
+      budgetMatches(db, 4096*1024));
+  check("close grown index db", sqlite3_close(db)==SQLITE_OK);
+  unlink(zPath);
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -1000,6 +1037,7 @@ int main(void){
   testNarrowPrefixes(db, "TEXT", 1024);
   testShortPrefixWriteScan(db);
   testBulkDeleteReadsOnce(db);
+  testIndexCacheSizedByIndex();
   testReload(db);
   scan(db);
   check("reloaded cache respects default budget", budgetMatches(db, 64*1024*1024));

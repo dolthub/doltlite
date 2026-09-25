@@ -706,6 +706,8 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     return SQLITE_BUSY_SNAPSHOT;
   }
 
+  prollyBtreeRefreshIndexBudget(p);
+
   if( !wrFlag ){
     rc = btreeRefreshFromDisk(p);
     if( rc!=SQLITE_OK ) return rc;
