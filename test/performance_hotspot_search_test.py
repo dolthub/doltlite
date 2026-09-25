@@ -212,6 +212,25 @@ class SearchTests(unittest.TestCase):
                 self.assertEqual(restored.state['visits'][f'{k}:{v}'], 1)
             self.assertFalse(path.with_suffix('.tmp').exists())
 
+    def test_wide_profiles_never_seed_mutations(self):
+        case = search.generated_case(self.profile, self.recipe)
+        wide = replace(self.profile, payload=search.WIDE_PAYLOAD)
+        bundles = [{'profile': asdict(p), 'case': asdict(case)} for p in (self.profile, wide)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'history.json'
+            s = search.Search(123, path, [{'bundles': bundles}])
+            self.assertEqual([x['profile'] for x in s.state['corpus']], [asdict(self.profile)])
+            s.observe(wide, search.generated_case(wide, self.recipe), {'confirmed': True, 'plans': {}})
+            self.assertEqual(len(s.state['corpus']), 1)
+            state = json.loads(path.read_text())
+            state['corpus'].append({'recipe': self.recipe, 'profile': asdict(wide)})
+            path.write_text(json.dumps(state))
+            restored = search.Search(999, path)
+            self.assertEqual([x['profile'] for x in restored.state['corpus']], [asdict(self.profile)])
+            for _ in range(64):
+                profile, _recipe, _origin = restored.choose(self.profile)
+                self.assertLess(profile.payload, search.WIDE_PAYLOAD)
+
     def test_underexplored_selection_uses_feature_counts(self):
         s = search.Search(1)
         recipe = dict(self.recipe, context='plain')

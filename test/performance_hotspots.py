@@ -23,10 +23,13 @@ ADD_COLUMN_DEFAULT = 7
 # 262k rows, 2.7x at 1M. The larger table gets a cache that still holds it.
 INDEX_EDIT_ROWS = 1048576
 INDEX_EDIT_CACHE_KIB = 131072
-RETAINED_SECTIONS = (("wide_rows", "Wide Rows"),
-                     ("narrow_rows", "Narrow Rows"),
+WIDE_ROWS = 8192
+WIDE_CACHE_KIB = 4096
+WIDE_PAYLOADS = (256, 1024, 2048, 4096, 16384)
+WIDE_LOOKUPS = 4096
+WIDE_NAME = re.compile(r"wide_p([0-9]+)_([a-z_]+)")
+RETAINED_SECTIONS = (("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
-                     ("wide_fetches", "Wide Row Fetches"),
                      ("small_cache", "Small Cache"),
                      ("in_transaction_mutations", "In Transaction with Mutations"),
                      ("bulk_writes", "Bulk Writes"),
@@ -35,6 +38,7 @@ RETAINED_SECTIONS = (("wide_rows", "Wide Rows"),
 SECTIONS = (("queries", "Large Table Scans"),
             ("add_column", "Add Column With Default"),
             ("index_edits", "Large Index Edits"),
+            ("wide_tradeoffs", "Wide Row Trade-offs"),
             *RETAINED_SECTIONS,
             ("retained", "Retained Findings"))
 
@@ -50,6 +54,8 @@ def section_of(name):
         return "add_column"
     if name.startswith("index_edit"):
         return "index_edits"
+    if WIDE_NAME.fullmatch(name):
+        return "wide_tradeoffs"
     return "queries"
 
 
@@ -275,6 +281,83 @@ def measure_index_edits(binary, fixture, work, cache_kib, expected):
     return parse_session(sql(binary, work, "\n".join(statements)), cases)
 
 
+def wide_setup(rows=WIDE_ROWS, payloads=WIDE_PAYLOADS):
+    statements = []
+    for payload in payloads:
+        statements.append(f"""CREATE TABLE w{payload}(id INTEGER PRIMARY KEY, grp INTEGER NOT NULL,
+  v INTEGER NOT NULL, k INTEGER NOT NULL, payload BLOB NOT NULL);
+BEGIN;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
+INSERT INTO w{payload} SELECT i,i%64,(i*7919)%100000,i*3,
+  CAST(printf('%0{payload}d',i) AS BLOB) FROM c;
+COMMIT;
+CREATE INDEX w{payload}_gv ON w{payload}(grp,v);""")
+    return "\n".join(statements) + "\nANALYZE;\n"
+
+
+def wide_workloads(payload, rows=WIDE_ROWS, lookups=WIDE_LOOKUPS):
+    """Each operation touches either only the small columns or the blob, so
+    the section shows what wide rows cost reads that never need the blob
+    against reads that do, across payload sizes on both sides of the
+    wide-leaf threshold."""
+    table = f"w{payload}"
+    ids = [1 + (i * 2654435761) % rows for i in range(1, lookups + 1)]
+    v = {i: (i * 7919) % 100000 for i in range(1, rows + 1)}
+    ordered = sorted(range(1, rows + 1), key=lambda i: (i % 64, v[i]))
+    ranks, seen = {}, {}
+    for i in ordered:
+        seen[i % 64] = ranks[i] = seen.get(i % 64, 0) + 1
+    points = (f"WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c "
+              f"WHERE i<{lookups}) SELECT sum((SELECT {{}} FROM {table} "
+              f"WHERE id=1+(c.i*2654435761)%{rows})) FROM c;")
+    tail = "CAST(substr(payload,-3) AS INTEGER)"
+    return [
+        ("scan_small", f"SELECT sum(v) FROM {table} NOT INDEXED;", str(sum(v.values()))),
+        ("scan_blob", f"SELECT sum({tail}) FROM {table} NOT INDEXED;",
+         str(sum(i % 1000 for i in range(1, rows + 1)))),
+        ("point_small", points.format("v"), str(sum(v[i] for i in ids))),
+        ("point_blob", points.format(tail), str(sum(i % 1000 for i in ids))),
+        ("index_fetch_small", f"SELECT sum(k) FROM (SELECT k FROM {table} INDEXED BY "
+         f"{table}_gv ORDER BY grp,v LIMIT {rows // 4});",
+         str(sum(i * 3 for i in ordered[:rows // 4]))),
+        ("window_small", f"SELECT sum(r*v) FROM (SELECT v,row_number() OVER "
+         f"(PARTITION BY grp ORDER BY v) r FROM {table} NOT INDEXED);",
+         str(sum(ranks[i] * v[i] for i in range(1, rows + 1)))),
+        ("update_small", f"UPDATE {table} SET v=v+1 WHERE id%8=0;", str(rows // 8)),
+    ]
+
+
+def wide_fixture(binary, db):
+    sql(binary, db, wide_setup())
+    check = sql(binary, db, "\n".join(
+        f"SELECT count(*),sum(length(payload)) FROM w{p};" for p in WIDE_PAYLOADS))
+    expected = "".join(f"{WIDE_ROWS}|{WIDE_ROWS * p}\n" for p in WIDE_PAYLOADS)
+    if check != expected:
+        raise ValueError(f"invalid wide-row fixture: {check}")
+
+
+def measure_wide(binary, db):
+    """One fresh connection per workload, warmed by an untimed run of the
+    same statement, so each timing is the steady state of that access
+    pattern alone under a cache far smaller than the wide tables."""
+    measured = {}
+    for payload in WIDE_PAYLOADS:
+        for op, query, expected in wide_workloads(payload):
+            name = f"wide_p{payload}_{op}"
+            write = op.startswith("update")
+            statements = [".headers off", ".mode list", ".output /dev/null",
+                          "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{WIDE_CACHE_KIB};",
+                          *(["BEGIN;", query, "ROLLBACK;"] if write else [query]),
+                          ".output stdout", "SELECT name FROM sqlite_schema WHERE 0;",
+                          *(["BEGIN;"] if write else []),
+                          f".print BEGIN {name}", ".timer on", query, ".timer off",
+                          *(["SELECT changes();"] if write else []),
+                          f".print END {name}", *(["ROLLBACK;"] if write else [])]
+            measured.update(parse_session(sql(binary, db, "\n".join(statements)),
+                                          [(name, None, expected)]))
+    return measured
+
+
 def prepare_retained(binaries, root, corpus=None):
     from performance_hotspot_fuzzer import Profile, prologue
     directory = corpus if corpus is not None else TEST_DIR / 'performance-hotspot-corpus'
@@ -326,6 +409,24 @@ def measure_retained(binary, arm, retained):
     return measured
 
 
+def print_wide_matrix(names, medians):
+    cells = {}
+    for name in names:
+        payload, op = WIDE_NAME.fullmatch(name).groups()
+        cells.setdefault(op, {})[int(payload)] = medians["candidate"][name] / medians["stock"][name]
+    payloads = sorted({p for row in cells.values() for p in row})
+    print(f"\n{WIDE_ROWS:,} rows per table, {WIDE_CACHE_KIB // 1024} MiB cache, warm. "
+          "`*_small` reads only the small columns; `*_blob` reads the payload. "
+          "Wide values are never cached and are read from disk when fetched until they move "
+          "out of band: [#3325](https://github.com/dolthub/doltlite/issues/3325). "
+          "Workloads are named `wide_p<payload bytes>_<operation>`.")
+    print("\nCandidate/stock by payload bytes:\n")
+    print("| Operation | " + " | ".join(f"{p:,} B" for p in payloads) + " |")
+    print("|---|" + "---:|" * len(payloads))
+    for op, row in cells.items():
+        print(f"| {op} | " + " | ".join(f"{row[p]:.2f}×" if p in row else "" for p in payloads) + " |")
+
+
 def write_results(samples, result_path, sample_path):
     names = list(samples["candidate"][0])
     medians = {arm: {name: statistics.median(sample[name] for sample in runs)
@@ -357,6 +458,8 @@ def write_results(samples, result_path, sample_path):
             print("\nEach timed statement follows an untimed mutation in the same transaction; rollback is untimed.")
         elif section == 'add_column':
             print("\n[#3233](https://github.com/dolthub/doltlite/issues/3233): deferred to the storage-format upgrade.")
+        elif section == 'wide_tradeoffs':
+            print_wide_matrix(section_names, medians)
         print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
         print("|---|---:|---:|---:|---:|---:|")
         for name in section_names:
@@ -390,9 +493,11 @@ def main(argv=None):
     with tempfile.TemporaryDirectory(prefix="doltlite-hotspots-") as directory:
         root = Path(directory)
         add_column_databases = {arm: root / f"{arm}-add-column.db" for arm in binaries}
+        wide_databases = {arm: root / f"{arm}-wide.db" for arm in binaries}
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
             add_column_fixture(binary, add_column_databases[arm], args.rows)
+            wide_fixture(binary, wide_databases[arm])
         retained = prepare_retained(binaries, root)
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
@@ -401,6 +506,7 @@ def main(argv=None):
                 measured = measure_add_column(binaries[arm], add_column_databases[arm],
                                               root / f"{arm}-add-column-run.db",
                                               args.rows, args.cache_kib)
+                measured.update(measure_wide(binaries[arm], wide_databases[arm]))
                 measured.update(measure_retained(binaries[arm], arm, retained))
                 samples[arm].append(measured)
         write_results(samples,

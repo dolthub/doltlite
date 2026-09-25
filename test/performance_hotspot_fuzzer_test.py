@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import performance_hotspot_fuzzer as fuzzer
+import performance_hotspot_search as search
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -44,12 +45,11 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'fixture SQL'):
                 runner.measure('engine', 'unused.db', p, case, 1)
 
-    def test_large_payload_profiles_have_bounded_fixture_size(self):
+    def test_generated_profiles_are_never_wide(self):
         for seed in range(10):
-            for index, width in ((6, 4096), (7, 16384)):
+            for index in range(16):
                 p = fuzzer.profile_for(seed, index)
-                self.assertEqual(p.payload, width)
-                self.assertLessEqual(p.payload*p.rows, 256*1024*1024)
+                self.assertLess(p.payload, search.WIDE_PAYLOAD)
                 self.assertLessEqual(p.start+p.width, p.rows)
 
     def test_all_generated_workloads_execute_and_writes_roll_back(self):

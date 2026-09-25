@@ -57,12 +57,6 @@ def profile_for(seed, index):
                    rng.choice([False, True]), rng.choice([4096, 16384, 65536]),
                    rng.choice([2, 8, 32]), rng.choice([1000, 10000]),
                    rng.randrange(groups), rng.randint(1, rows-width), width)
-    if index % 8 in (6, 7):
-        payload = 4096 if index % 8 == 6 else 16384
-        rows = min(rows, 256*1024*1024//payload)
-        width = min(profile.width, rows//4)
-        profile = replace(profile, payload=payload, rows=rows, width=width,
-                          start=min(profile.start, rows-width))
     return replace(profile, memory=rng.randrange(4)==0)
 
 
