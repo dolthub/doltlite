@@ -989,7 +989,7 @@ do_test e_fkey-25.1 {
 } {}
 do_detail_test e_fkey-25.2 {
   PRAGMA foreign_keys = OFF;
-  EXPLAIN QUERY PLAN DELETE FROM artist WHERE 1;
+  EXPLAIN QUERY PLAN DELETE FROM artist WHERE artistname IS NOT NULL;
   EXPLAIN QUERY PLAN SELECT rowid FROM track WHERE trackartist = ?;
 } {
   {SCAN artist} 
@@ -997,7 +997,7 @@ do_detail_test e_fkey-25.2 {
 }
 do_detail_test e_fkey-25.3 {
   PRAGMA foreign_keys = ON;
-  EXPLAIN QUERY PLAN DELETE FROM artist WHERE 1;
+  EXPLAIN QUERY PLAN DELETE FROM artist WHERE artistname IS NOT NULL;
 } {
   {SCAN artist} 
   {SCAN track}
