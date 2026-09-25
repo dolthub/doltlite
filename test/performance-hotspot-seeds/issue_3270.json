@@ -38,5 +38,32 @@
   "fingerprint": "c74616b4e2cb8099c2e66639",
   "family": "32b4efff367c17d59f29ee56",
   "issue": 3270,
-  "category": "after_deletes"
+  "category": "after_deletes",
+  "discovery": {
+    "source_commit": "1066294abad4c33a71ee6ba6615a6460fa32fec9",
+    "median_ratio": 3.4504187145358287,
+    "minimum_ratio": 3.323755065100685,
+    "pairs": [
+      {
+        "doltlite_ms": 164.938,
+        "sqlite_ms": 49.141
+      },
+      {
+        "doltlite_ms": 164.900,
+        "sqlite_ms": 47.681
+      },
+      {
+        "doltlite_ms": 161.591,
+        "sqlite_ms": 48.617
+      },
+      {
+        "doltlite_ms": 163.574,
+        "sqlite_ms": 47.407
+      },
+      {
+        "doltlite_ms": 163.027,
+        "sqlite_ms": 46.768
+      }
+    ]
+  }
 }
