@@ -2962,6 +2962,10 @@ struct Token {
 ** fields do not need to be freed when deallocating the AggInfo structure.
 */
 struct AggInfo {
+#ifdef DOLTLITE_PROLLY
+  int nMetadata;
+  u8 sortMetadata;
+#endif
   u8 directMode;          /* Direct rendering mode means take data directly
                           ** from source tables rather than from accumulators */
   u8 useSortingIdx;       /* In direct mode, reference the sorting index rather
@@ -2972,6 +2976,9 @@ struct AggInfo {
   int iFirstReg;          /* First register in range for aCol[] and aFunc[] */
   ExprList *pGroupBy;     /* The group by clause */
   struct AggInfo_col {    /* For each column used in source tables */
+#ifdef DOLTLITE_PROLLY
+    FuncDef *pLength;
+#endif
     Table *pTab;             /* Source table */
     Expr *pCExpr;            /* The original expression */
     int iTable;              /* Cursor number of the source table */
@@ -5295,6 +5302,9 @@ void sqlite3AggInfoPersistWalkerInit(Walker*,Parse*);
 void sqlite3ExprAnalyzeAggregates(NameContext*, Expr*);
 void sqlite3ExprAnalyzeAggList(NameContext*,ExprList*);
 int sqlite3ExprCoveredByIndex(Expr*, int iCur, Index *pIdx);
+#ifdef DOLTLITE_PROLLY
+void sqlite3ExprCodeGroupLength(Parse*, const FuncDef*, int, int);
+#endif
 int sqlite3ReferencesSrcList(Parse*, Expr*, SrcList*);
 Vdbe *sqlite3GetVdbe(Parse*);
 #ifndef SQLITE_UNTESTABLE

@@ -4620,6 +4620,22 @@ void sqlite3ExprToRegister(Expr *pExpr, int iReg){
   }
 }
 
+#ifdef DOLTLITE_PROLLY
+/* Sort TEXT intact; other types carry their length through the sorter. */
+void sqlite3ExprCodeGroupLength(
+  Parse *pParse, const FuncDef *pFunc, int regValue, int bText
+){
+  Vdbe *v = pParse->pVdbe;
+  int regArg = sqlite3GetTempReg(pParse);
+  int addr = sqlite3VdbeAddOp3(v, OP_IsType, -1, 0, regValue);
+  sqlite3VdbeChangeP5(v, bText ? 0x1b : 0x04);
+  VdbeCoverage(v);
+  sqlite3VdbeAddOp3(v, OP_Move, regValue, regArg, 1);
+  sqlite3VdbeAddFunctionCall(pParse, 0, regArg, regValue, 1, pFunc, 0);
+  sqlite3VdbeJumpHere(v, addr);
+  sqlite3ReleaseTempReg(pParse, regArg);
+}
+#endif
 /*
 ** Evaluate an expression (either a vector or a scalar expression) and store
 ** the result in contiguous temporary registers.  Return the index of
@@ -5108,6 +5124,11 @@ expr_code_doover:
             sqlite3VdbeAddOp1(v, OP_RealAffinity, target);
           }
         }
+#ifdef DOLTLITE_PROLLY
+        if( pCol->pLength ){
+          sqlite3ExprCodeGroupLength(pParse, pCol->pLength, target, 1);
+        }
+#endif
         return target;
       }else if( pExpr->y.pTab==0 ){
         /* This case happens when the argument to an aggregate function
@@ -7499,6 +7520,50 @@ fix_up_expr:
   pExpr->iAgg = (i16)k;
 }
 
+#ifdef DOLTLITE_PROLLY
+static int doltliteAggregateMetadata(NameContext *pNC, Expr *pExpr){
+  Parse *pParse = pNC->pParse;
+  AggInfo *pAggInfo = pNC->uNC.pAggInfo;
+  Expr *pArg;
+  FuncDef *pDef;
+  Expr tmp;
+  int i;
+  if( !pAggInfo->pGroupBy || pExpr->op!=TK_FUNCTION
+   || !ExprUseXList(pExpr) || !pExpr->x.pList
+   || pExpr->x.pList->nExpr!=1 || pExpr->pAggInfo ) return 0;
+  pArg = pExpr->x.pList->a[0].pExpr;
+  if( (pArg->op!=TK_COLUMN && pArg->op!=TK_AGG_COLUMN)
+   || !pArg->y.pTab || IsVirtual(pArg->y.pTab) || pArg->iColumn<0
+   || pArg->y.pTab->aCol[pArg->iColumn].eCType!=COLTYPE_BLOB ) return 0;
+  pDef = sqlite3FindFunction(pParse->db, pExpr->u.zToken, 1,
+                            ENC(pParse->db), 0);
+  if( !pDef || !(pDef->funcFlags & SQLITE_FUNC_BYTELEN)
+   || (pDef->funcFlags & SQLITE_SUBTYPE) ) return 0;
+  for(i=0; i<pNC->pSrcList->nSrc; i++){
+    if( pNC->pSrcList->a[i].iCursor==pArg->iTable ) break;
+  }
+  if( i==pNC->pSrcList->nSrc ) return 0;
+  if( !pAggInfo->sortMetadata ){
+    pAggInfo->nMetadata++;
+    return 0;
+  }
+  memset(&tmp, 0, sizeof(tmp));
+  tmp.op = TK_AGG_COLUMN;
+  tmp.iTable = -1;
+  tmp.iColumn = pAggInfo->nColumn;
+  findOrCreateAggInfoColumn(pParse, pAggInfo, &tmp);
+  if( pParse->nErr || pParse->db->mallocFailed ) return 1;
+  pAggInfo->aCol[tmp.iAgg].pCExpr = pExpr;
+  if( (pDef->funcFlags & SQLITE_FUNC_BYTELEN)==SQLITE_FUNC_LENGTH ){
+    pAggInfo->aCol[tmp.iAgg].pLength = pDef;
+  }
+  pExpr->pAggInfo = pAggInfo;
+  pExpr->iAgg = tmp.iAgg;
+  pArg->op = TK_COLUMN;
+  pArg->pAggInfo = 0;
+  return 1;
+}
+#endif
 /*
 ** This is the xExprCallback for a tree walker.  It is used to
 ** implement sqlite3ExprAnalyzeAggregates().  See sqlite3ExprAnalyzeAggregates
@@ -7519,6 +7584,11 @@ static int analyzeAggregate(Walker *pWalker, Expr *pExpr){
       Expr tmp;
       assert( pParse->iSelfTab==0 );
       if( (pNC->ncFlags & NC_InAggFunc)==0 ) break;
+#ifdef DOLTLITE_PROLLY
+      if( pWalker->walkerDepth==0 && doltliteAggregateMetadata(pNC, pExpr) ){
+        return WRC_Prune;
+      }
+#endif
       if( pParse->pIdxEpr==0 ) break;
       for(pIEpr=pParse->pIdxEpr; pIEpr; pIEpr=pIEpr->pIENext){
         int iDataCur = pIEpr->iDataCur;

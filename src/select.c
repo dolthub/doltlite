@@ -8864,11 +8864,16 @@ int sqlite3Select(
       ** will be converted into a Noop. 
       */
       pAggInfo->sortingIdx = pParse->nTab++;
+#ifdef DOLTLITE_PROLLY
+      addrSortingIdx = sqlite3VdbeAddOp2(v, OP_SorterOpen,
+          pAggInfo->sortingIdx, pAggInfo->nSortingColumn);
+#else
       pKeyInfo = sqlite3KeyInfoFromExprList(pParse, pGroupBy,
                                             0, pAggInfo->nColumn);
       addrSortingIdx = sqlite3VdbeAddOp4(v, OP_SorterOpen,
           pAggInfo->sortingIdx, pAggInfo->nSortingColumn,
           0, (char*)pKeyInfo, P4_KEYINFO);
+#endif
 
       /* Initialize memory locations used by GROUP BY aggregate processing
       */
@@ -8902,9 +8907,22 @@ int sqlite3Select(
         sqlite3ExprListDelete(db, pDistinct);
         goto select_end;
       }
+#ifdef DOLTLITE_PROLLY
+      pAggInfo->sortMetadata = pAggInfo->nMetadata>0 && !pParse->pIdxEpr
+          && pAggInfo->nMetadata<=db->aLimit[SQLITE_LIMIT_COLUMN]-pAggInfo->nColumn
+          && sqlite3WhereIsOrdered(pWInfo)!=pGroupBy->nExpr;
+      if( pParse->pIdxEpr || pAggInfo->sortMetadata ){
+#else
       if( pParse->pIdxEpr ){
+#endif
         optimizeAggregateUseOfIndexedExpr(pParse, p, pAggInfo, &sNC);
       }
+#ifdef DOLTLITE_PROLLY
+      pKeyInfo = sqlite3KeyInfoFromExprList(pParse, pGroupBy,
+                                            0, pAggInfo->nColumn);
+      sqlite3VdbeChangeP4(v, addrSortingIdx, (char*)pKeyInfo, P4_KEYINFO);
+      sqlite3VdbeChangeP2(v, addrSortingIdx, pAggInfo->nSortingColumn);
+#endif
       assignAggregateRegisters(pParse, pAggInfo);
       eDist = sqlite3WhereIsDistinct(pWInfo);
       TREETRACE(0x2,pParse,p,("WhereBegin returns\n"));
@@ -8950,6 +8968,14 @@ int sqlite3Select(
         for(i=0; i<pAggInfo->nColumn; i++){
           struct AggInfo_col *pCol = &pAggInfo->aCol[i];
           if( pCol->iSorterColumn>=j ){
+#ifdef DOLTLITE_PROLLY
+            if( pCol->pLength ){
+              Expr *pArg = pCol->pCExpr->x.pList->a[0].pExpr;
+              pArg->op2 = OPFLAG_LENGTHARG;
+              sqlite3ExprCode(pParse, pArg, j + regBase);
+              sqlite3ExprCodeGroupLength(pParse, pCol->pLength, j + regBase, 0);
+            }else
+#endif
             sqlite3ExprCode(pParse, pCol->pCExpr, j + regBase);
             j++;
           }
@@ -8980,7 +9006,11 @@ int sqlite3Select(
       ** in optimizeAggregateUseOfIndexedExpr()) then those subexpressions
       ** must now be converted into a TK_AGG_COLUMN node so that the value
       ** is correctly pulled from the index rather than being recomputed. */
+#ifdef DOLTLITE_PROLLY
+      if( pParse->pIdxEpr || pAggInfo->sortMetadata ){
+#else
       if( pParse->pIdxEpr ){
+#endif
         aggregateConvertIndexedExprRefToColumn(pAggInfo);
 #if TREETRACE_ENABLED
         if( sqlite3TreeTrace & 0x20 ){
