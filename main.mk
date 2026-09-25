@@ -2768,6 +2768,7 @@ DOLTLITE_C_TESTS = \
 	prolly_hashset_test$(T.exe) \
 	prolly_chunker_boundary_test$(T.exe) \
 	prolly_node_search_test$(T.exe) \
+	prolly_mutmap_order_test$(T.exe) \
 	scoped_refs_push_test$(T.exe) \
 	remote_chunk_integrity_test$(T.exe) \
 	chunk_source_test$(T.exe) \
@@ -2965,6 +2966,11 @@ prolly_chunker_boundary_test$(T.exe): $(TOP)/test/prolly_chunker_boundary_test.c
 prolly_node_search_test$(T.exe): $(TOP)/test/prolly_node_search_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/prolly_node_search_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+prolly_mutmap_order_test$(T.exe): $(TOP)/test/prolly_mutmap_order_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/prolly_mutmap_order_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 # scoped_refs_push_test drives the push-scope validator directly; like the
