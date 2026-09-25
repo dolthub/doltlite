@@ -71,7 +71,7 @@ class SeedTests(unittest.TestCase):
     def test_retired_corpus_moves_to_search_and_random_exploration_continues(self):
         specs = list(seeds.specs())
         self.assertEqual(len(specs), 17)
-        self.assertEqual(sum(len(cases) for _, cases, _ in specs), 37)
+        self.assertEqual(sum(len(cases) for _, cases, _ in specs), 39)
         names = {path.stem for path in seeds.SEED_DIR.glob('*.json')}
         wide_cases = {'create_index', 'delete_batch', 'distinct', 'index_fetch',
                       'join_pk', 'point_payload', 'point_pk', 'range_pk',
@@ -88,6 +88,7 @@ class SeedTests(unittest.TestCase):
                                   'issue_3249', 'issue_3250',
                                   'issue_3263', 'issue_3264', 'issue_3266',
                                   'issue_3251', 'issue_3252',
+                                  'issue_3258', 'issue_3271',
                                   'bulk_deletes_delete_plain'})
         wide = [(p, cases, setup) for p, cases, setup in specs if p.payload==16384]
         self.assertEqual(len(wide), 1)
