@@ -2433,6 +2433,11 @@ void *sqlite3_update_hook(
 #endif
   sqlite3_mutex_enter(db->mutex);
   pRet = db->pUpdateArg;
+#ifdef DOLTLITE_PROLLY
+  if( xCallback && db->xUpdateCallback==0 ){
+    sqlite3ExpirePreparedStatements(db, 0);
+  }
+#endif
   db->xUpdateCallback = xCallback;
   db->pUpdateArg = pArg;
   sqlite3_mutex_leave(db->mutex);

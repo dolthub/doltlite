@@ -33,7 +33,7 @@ foreach {name type pk keyexpr suffix} {
   }
   set update {UPDATE t SET tag=printf('updated-%08x',seq) WHERE 1}
   do_test $name-update-plan {dml_scan_plan db $update} {{SCAN t}}
-  do_test $name-delete-plan {dml_scan_plan db {DELETE FROM t WHERE 1}} {{SCAN t}}
+  do_test $name-delete-plan {dml_scan_plan db {DELETE FROM t WHERE tag IS NOT NULL}} {{SCAN t}}
   set selectiveIndex [expr {$name eq "integer" ? "t_g" : "t_gv"}]
   do_test $name-selective-plan {
     dml_scan_plan db {UPDATE t SET tag='selective' WHERE grp=14}
@@ -52,7 +52,7 @@ foreach {name type pk keyexpr suffix} {
       savepoint {SAVEPOINT edits} \
       selective {UPDATE t SET tag='selective' WHERE grp=14} \
       hinted {UPDATE t INDEXED BY t_gv SET tag='hinted' WHERE grp=3} \
-      delete {DELETE FROM t WHERE 1} \
+      delete {DELETE FROM t WHERE tag IS NOT NULL} \
       rollback-savepoint {ROLLBACK TO edits; RELEASE edits} \
       rollback {ROLLBACK}] {
     foreach conn {db oracle} {$conn eval $sql}

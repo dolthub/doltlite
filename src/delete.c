@@ -487,6 +487,8 @@ void sqlite3DeleteFrom(
   if( rcauth==SQLITE_OK
 #ifdef DOLTLITE_PROLLY
    && (pWhere==0 || (sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt)
+                    && pTab->tnum!=1
+                    && db->xUpdateCallback==0
                     && doltliteDeleteAllRows(pWhere)))
 #else
    && pWhere==0

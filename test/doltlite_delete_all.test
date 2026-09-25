@@ -153,4 +153,44 @@ ifcapable preupdate {
   db preupdate hook {}
 }
 
+do_execsql_test 10.0 {
+  CREATE TABLE hooked(id INTEGER PRIMARY KEY, v INTEGER);
+  INSERT INTO hooked VALUES(1,10),(2,20);
+} {}
+do_test 10.1 {
+  set ::updates {}
+  db update_hook [list lappend ::updates]
+  uses_clear {DELETE FROM hooked WHERE 1}
+} {0}
+do_test 10.2 {
+  db eval {BEGIN; DELETE FROM hooked WHERE 1; ROLLBACK;}
+  set ::updates
+} {DELETE main hooked 1 DELETE main hooked 2}
+db update_hook {}
+do_test 10.3 {
+  set stmt [sqlite3_prepare_v2 db {DELETE FROM hooked WHERE 1} -1 tail]
+  set ::updates {}
+  db update_hook [list lappend ::updates]
+  db eval BEGIN
+  set result [list [sqlite3_step $stmt] $::updates]
+  sqlite3_finalize $stmt
+  db eval ROLLBACK
+  db update_hook {}
+  set result
+} {SQLITE_DONE {DELETE main hooked 1 DELETE main hooked 2}}
+do_test 10.4 { uses_clear {DELETE FROM hooked WHERE 1} } {1}
+
+do_test 11.1 {
+  sqlite3_db_config db DEFENSIVE 0
+  db eval {PRAGMA writable_schema=ON}
+  uses_clear {DELETE FROM sqlite_schema WHERE 1}
+} {0}
+do_execsql_test 11.2 {
+  BEGIN;
+  DELETE FROM sqlite_schema WHERE 1;
+  SELECT count(*) FROM sqlite_schema;
+  ROLLBACK;
+  PRAGMA writable_schema=OFF;
+} {0}
+
 finish_test
