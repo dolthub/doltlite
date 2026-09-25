@@ -1064,9 +1064,8 @@ int prollyBtCursorInsert(
     }
   } else {
     int res = 0;
-    rc = prollyCursorSeekBlob(&pCur->pCur,
-                               (const u8*)pPayload->pKey,
-                               (int)pPayload->nKey, &res);
+    /* The tree holds sort keys; the payload is the record it came from. */
+    rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &res);
     if( rc==SQLITE_OK ) pCur->eState = CURSOR_VALID;
   }
 
