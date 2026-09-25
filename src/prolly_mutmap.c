@@ -3,6 +3,7 @@
 
 #include "prolly_mutmap.h"
 #include "prolly_node.h"
+#include "prolly_xxhash.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -10,6 +11,7 @@
 #define MUTMAP_MIN_HASH 32
 #define MUTMAP_POS_UPDATE_LIMIT 64
 #define MUTMAP_RADIX_SORT_MIN 128
+#define MUTMAP_RADIX_PREFIX_LIMIT 32
 
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
   if( e->nKey != 8 || e->pKey == 0 ) return 0;
@@ -74,26 +76,12 @@ static int compareEntryToKey(
 ** so a large key hashes a head+tail window instead of all of it. Bulk index
 ** builds carry multi-KB keys and the full scan dominated their insert cost. */
 static u32 hashKey(const u8 *pKey, int nKey){
-  u32 h = 2166136261u;
-  int i;
-  if( nKey > 128 ){
-    for(i=0; i<64; i++){
-      h ^= pKey[i];
-      h *= 16777619u;
-    }
-    for(i=nKey-64; i<nKey; i++){
-      h ^= pKey[i];
-      h *= 16777619u;
-    }
-  }else{
-    for(i=0; i<nKey; i++){
-      h ^= pKey[i];
-      h *= 16777619u;
-    }
+  if( nKey==0 ) return 0;
+  if( nKey>128 ){
+    u32 h = prollyXXH32(pKey, 64, (u32)nKey);
+    return prollyXXH32(pKey+nKey-64, 64, h);
   }
-  h ^= (u32)nKey;
-  h *= 16777619u;
-  return h;
+  return prollyXXH32(pKey, nKey, 0);
 }
 
 typedef struct OrderPair {
@@ -153,6 +141,50 @@ static void mutmapQuickSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
   mutmapInsertionSort(mm, a, lo, hi);
 }
 
+static void mutmapSortPrefixes(
+  ProllyMutMap *mm, OrderPair *a, OrderPair *aux, int n, int offset
+){
+  OrderPair *out = a;
+  u64 different = 0;
+  int pass, i;
+  for(i=1; i<n; i++) different |= a[i].prefix ^ a[0].prefix;
+  for(pass=0; pass<8; pass++){
+    int count[256] = {0};
+    int pos[256];
+    int shift = pass * 8;
+    OrderPair *tmp;
+    if( ((different >> shift) & 0xff)==0 ) continue;
+    for(i=0; i<n; i++) count[(a[i].prefix >> shift) & 0xff]++;
+    pos[0] = 0;
+    for(i=1; i<256; i++) pos[i] = pos[i-1] + count[i-1];
+    for(i=0; i<n; i++){
+      int b = (a[i].prefix >> shift) & 0xff;
+      aux[pos[b]++] = a[i];
+    }
+    tmp = a;
+    a = aux;
+    aux = tmp;
+  }
+  for(i=0; i<n; ){
+    int j = i + 1;
+    while( j<n && a[j].prefix==a[i].prefix ) j++;
+    if( j-i >= MUTMAP_RADIX_SORT_MIN && !mm->isIntKey
+     && offset<MUTMAP_RADIX_PREFIX_LIMIT ){
+      int k;
+      for(k=i; k<j; k++){
+        ProllyMutMapEntry *e = &mm->aEntries[a[k].phys];
+        a[k].prefix = e->nKey>offset
+            ? keyPrefix64(e->pKey+offset, e->nKey-offset) : 0;
+      }
+      mutmapSortPrefixes(mm, a+i, aux+i, j-i, offset+8);
+    }else if( j-i > 1 ){
+      mutmapQuickSort(mm, a, i, j-1);
+    }
+    i = j;
+  }
+  if( a!=out ) memcpy(out, a, n*sizeof(*a));
+}
+
 static int mutmapSortOrder(ProllyMutMap *mm){
   int n = mm->nEntries;
   OrderPair *scratch;
@@ -185,38 +217,8 @@ static int mutmapSortOrder(ProllyMutMap *mm){
     scratch[i].pad = 0;
   }
   if( n >= MUTMAP_RADIX_SORT_MIN ){
-    int pass;
     aux = scratch + mm->nAlloc;
-    for(pass=0; pass<8; pass++){
-      int count[256];
-      int pos[256];
-      int shift = pass * 8;
-      memset(count, 0, sizeof(count));
-      for(i=0; i<n; i++){
-        count[(scratch[i].prefix >> shift) & 0xff]++;
-      }
-      pos[0] = 0;
-      for(i=1; i<256; i++){
-        pos[i] = pos[i-1] + count[i-1];
-      }
-      for(i=0; i<n; i++){
-        int b = (scratch[i].prefix >> shift) & 0xff;
-        aux[pos[b]++] = scratch[i];
-      }
-      {
-        OrderPair *tmp = scratch;
-        scratch = aux;
-        aux = tmp;
-      }
-    }
-    for(i=0; i<n; ){
-      int j = i + 1;
-      while( j<n && scratch[j].prefix==scratch[i].prefix ) j++;
-      if( j-i > 1 ){
-        mutmapQuickSort(mm, scratch, i, j - 1);
-      }
-      i = j;
-    }
+    mutmapSortPrefixes(mm, scratch, aux, n, 8);
   }else{
     mutmapQuickSort(mm, scratch, 0, n - 1);
   }
@@ -382,7 +384,7 @@ static int hashEntryMatches(
   if( mm->isIntKey ){
     return e->keyPrefix==keyPrefix64(pKey, nKey);
   }
-  return e->nKey==nKey && memcmp(e->pKey, pKey, nKey)==0;
+  return e->nKey==nKey && (nKey==0 || memcmp(e->pKey, pKey, nKey)==0);
 }
 
 static int rebuildHash(ProllyMutMap *mm){

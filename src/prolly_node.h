@@ -30,7 +30,7 @@
 
 static inline int prollyKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
   int n = nA < nB ? nA : nB;
-  int c = memcmp(pA, pB, n);
+  int c = n>0 ? memcmp(pA, pB, n) : 0;
   if( c ) return c;
   return nA - nB;
 }
