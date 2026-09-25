@@ -25,6 +25,10 @@ struct ProllyCacheEntry {
   u8 nEvictChance;
   u8 bScanOnly;
   u8 bAllowPrefix;
+  u8 bReadAheadUnused;
+  u8 bWideFull;
+  u8 bWideRow;
+  u64 iTouch;
   ProllyCacheEntry *pLruNext;
   ProllyCacheEntry *pLruPrev;
   ProllyCacheEntry *pHashNext;
@@ -36,11 +40,17 @@ struct ProllyCache {
   int nUsed;
   int nSharedPrefix;
   int nBucket;
+  u64 iClock;
+  i64 nWideFull;
   ProllyCacheEntry **aBucket;
   ProllyCacheEntry lruHead;
   ProllyCacheEntry lruTail;
   ProllyCacheEntry prefixHead;
   ProllyCacheEntry prefixTail;
+  ProllyCacheEntry wideHead;
+  ProllyCacheEntry wideTail;
+  ProllyCacheEntry rowHead;
+  ProllyCacheEntry rowTail;
 };
 
 int prollyCacheInit(ProllyCache *cache, i64 nMaxByte);

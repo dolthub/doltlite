@@ -37,6 +37,16 @@ static sqlite3_int64 cacheBytes(ProllyCache *pCache){
     n += sqlite3_msize(p) + sqlite3_msize(p->pData)
        + sqlite3_msize(p->pPacked);
   }
+  for(p=pCache->rowHead.pLruNext; p!=&pCache->rowTail; p=p->pLruNext){
+    if( p->pPacked ) nShared++;
+    n += sqlite3_msize(p) + sqlite3_msize(p->pData)
+       + sqlite3_msize(p->pPacked);
+  }
+  for(p=pCache->wideHead.pLruNext; p!=&pCache->wideTail; p=p->pLruNext){
+    if( p->pPacked ) nShared++;
+    n += sqlite3_msize(p) + sqlite3_msize(p->pData)
+       + sqlite3_msize(p->pPacked);
+  }
   for(p=pCache->prefixHead.pLruNext; p!=&pCache->prefixTail; p=p->pLruNext){
     if( p->pPacked ) nShared++;
     n += sqlite3_msize(p) + sqlite3_msize(p->pData)
@@ -539,7 +549,7 @@ static void testWidePrefixPressure(sqlite3 *db){
     check("finish pressure scan", sqlite3_finalize(p)==SQLITE_OK);
     if( i==0 ) nCold = nRead;
   }
-  check("wide prefixes compact before eviction", nCold>0 && nRead<nCold/20);
+  check("wide prefix rescans never exceed a cold scan", nCold>0 && nRead<=nCold);
   check("compacted prefix accounting", cacheBytes(pCache)==pCache->nByte
       && budgetMatches(db, 1024*1024));
   for(i=0; i<3; i++){
@@ -551,7 +561,7 @@ static void testWidePrefixPressure(sqlite3 *db){
         && sqlite3_column_int(p, 0)==4096);
     check("finish larger prefix scan", sqlite3_finalize(p)==SQLITE_OK);
   }
-  check("prefix fallback preserves reuse for later rows", nRead<nCold*9/10);
+  check("prefix fallback rescans never exceed a cold scan", nRead<=nCold);
   check("prepare compacted prefix fallback", sqlite3_prepare_v2(db,
       "SELECT sum(pad=printf('%080d',v)),"
       " sum(b=CAST(printf('%016384d',v) AS BLOB)),"
@@ -882,6 +892,65 @@ static void testIndexCacheSizedByIndex(void){
   unlink(zPath);
 }
 
+static sqlite3_int64 fullWideLeafBytes(ProllyCache *pCache){
+  ProllyCacheEntry *heads[2] = {&pCache->lruHead, &pCache->wideHead};
+  ProllyCacheEntry *tails[2] = {&pCache->lruTail, &pCache->wideTail};
+  sqlite3_int64 n = 0;
+  int i;
+  for(i=0; i<2; i++){
+    ProllyCacheEntry *p;
+    for(p=heads[i]->pLruNext; p!=tails[i]; p=p->pLruNext){
+      if( p->nRef==0 && p->node.level==0 && !p->node.nValuePrefix && p->pData
+       && p->node.nItems>0 && p->node.nData/p->node.nItems>=2048 ){
+        n += sqlite3_msize(p) + sqlite3_msize(p->pData);
+      }
+    }
+  }
+  return n;
+}
+
+static void testWideValuesStayOnDisk(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  execSql(db, "CREATE TABLE wide_blob(id INTEGER PRIMARY KEY, v INT, b BLOB);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<1024)"
+      " INSERT INTO wide_blob SELECT i, i*3, CAST(printf('%08192d',i) AS BLOB)"
+      " FROM c;"
+      "PRAGMA cache_size=-4096");
+  clearNodes(pCache);
+  check("prepare wide blob scan", sqlite3_prepare_v2(db,
+      "SELECT sum(length(b)), sum(v), sum(unicode(substr(CAST(b AS TEXT),-1,1)))"
+      " FROM wide_blob", -1, &p, 0)==SQLITE_OK);
+  check("wide blob scan result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int64(p, 0)==8388608
+      && sqlite3_column_int64(p, 1)==1574400
+      && sqlite3_column_int64(p, 2)>0);
+  check("finish wide blob scan", sqlite3_finalize(p)==SQLITE_OK);
+  check("released wide leaves stay compacted beyond the window",
+      fullWideLeafBytes(pCache)<=pCache->nMaxByte/16+16384);
+  check("wide leaf accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 4096*1024));
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  nReadBytes = 0;
+  execSql(db, "SELECT sum(v) FROM wide_blob");
+  check("small columns of wide rows come from cache", nReadBytes<256*1024);
+  nReadBytes = 0;
+  check("prepare wide blob reload", sqlite3_prepare_v2(db,
+      "SELECT sum(b=CAST(printf('%08192d',id) AS BLOB)) FROM wide_blob",
+      -1, &p, 0)==SQLITE_OK);
+  check("wide blobs reload intact", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==1024);
+  check("finish wide blob reload", sqlite3_finalize(p)==SQLITE_OK);
+  check("reading wide blobs goes to disk", nReadBytes>4*1024*1024);
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE wide_blob; PRAGMA cache_size=-65536");
+}
+
 static ProllyHash nodeHash(int id){
   ProllyHash hash;
   memset(&hash, 0, sizeof(hash));
@@ -1176,6 +1245,7 @@ int main(void){
   testShortPrefixWriteScan(db);
   testElidedTextPkPrefix(db);
   testBulkDeleteReadsOnce(db);
+  testWideValuesStayOnDisk(db);
   testBulkUpdateReadsOnce(db);
   testIndexCacheSizedByIndex();
   testReload(db);

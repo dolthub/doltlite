@@ -7,6 +7,13 @@
 #include <string.h>
 #include <assert.h>
 
+/* Wide leaves are cached only as their compacted rows: a blob is read from
+** disk each time it is needed, so full wide leaves never crowd out the
+** internal nodes and small rows every lookup reuses. A few recently released
+** ones stay whole so neighbouring rows of one leaf share a single read. */
+#define PROLLY_CACHE_WIDE_VALUE 2048
+#define PROLLY_CACHE_WIDE_WINDOW_DIV 16
+
 static void cacheTrim(ProllyCache*, i64);
 
 #define PROLLY_CACHE_INTERNAL_CHANCES 8
@@ -28,7 +35,8 @@ static void lruRemove(ProllyCacheEntry *pEntry){
 ** without losing the packed copy. */
 static ProllyCacheEntry *lruHeadFor(ProllyCache *cache, ProllyCacheEntry *p){
   return p->pPacked ? (p->pData ? &cache->lruHead : &cache->prefixHead)
-       : p->node.nValuePrefix ? &cache->prefixHead : &cache->lruHead;
+       : p->node.nValuePrefix ? (p->bWideRow ? &cache->rowHead : &cache->prefixHead)
+       : p->bWideFull ? &cache->wideHead : &cache->lruHead;
 }
 
 static void lruInsertHead(ProllyCache *cache, ProllyCacheEntry *pEntry){
@@ -37,6 +45,18 @@ static void lruInsertHead(ProllyCache *cache, ProllyCacheEntry *pEntry){
   pEntry->pLruPrev = pHead;
   pHead->pLruNext->pLruPrev = pEntry;
   pHead->pLruNext = pEntry;
+}
+
+static i64 cacheEntryBytes(const ProllyCacheEntry *p){
+  return sqlite3_msize((void*)p) + sqlite3_msize(p->pData)
+       + sqlite3_msize(p->pPacked);
+}
+
+static void cacheWideForget(ProllyCache *cache, ProllyCacheEntry *p){
+  if( p->bWideFull ){
+    cache->nWideFull -= cacheEntryBytes(p);
+    p->bWideFull = 0;
+  }
 }
 
 static void hashRemove(ProllyCache *cache, ProllyCacheEntry *pEntry){
@@ -134,6 +154,14 @@ int prollyCacheInit(ProllyCache *cache, i64 nMaxByte){
   cache->prefixHead.pLruPrev = 0;
   cache->prefixTail.pLruPrev = &cache->prefixHead;
   cache->prefixTail.pLruNext = 0;
+  cache->wideHead.pLruNext = &cache->wideTail;
+  cache->wideHead.pLruPrev = 0;
+  cache->wideTail.pLruPrev = &cache->wideHead;
+  cache->wideTail.pLruNext = 0;
+  cache->rowHead.pLruNext = &cache->rowTail;
+  cache->rowHead.pLruPrev = 0;
+  cache->rowTail.pLruPrev = &cache->rowHead;
+  cache->rowTail.pLruNext = 0;
 
   return SQLITE_OK;
 }
@@ -199,6 +227,8 @@ static ProllyCacheEntry *cacheGet(
   pEntry->nEvictChance = pEntry->node.level>0
                       ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
   pEntry->nRef++;
+  pEntry->iTouch = ++cache->iClock;
+  pEntry->bReadAheadUnused = 0;
   if( pEntry->pLruPrev!=lruHeadFor(cache, pEntry) ){
     lruRemove(pEntry);
     lruInsertHead(cache, pEntry);
@@ -503,6 +533,9 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   pNode->pValData = pData + nHead;
   pNode->pData = pData;
   pNode->nDataPhys = nCompact;
+  if( !pNode->nValuePrefix && nAverage>=PROLLY_CACHE_WIDE_VALUE ){
+    pEntry->bWideRow = 1;
+  }
   pNode->nValuePrefix = nPrefix;
   if( bElide ) pNode->flags |= PROLLY_NODE_PREFIX_ELIDE;
   else pNode->flags = (u8)(pNode->flags & (u8)~PROLLY_NODE_PREFIX_ELIDE);
@@ -561,14 +594,28 @@ static ProllyCacheEntry *cachePrefixCandidate(ProllyCache *cache){
   return 0;
 }
 
+static ProllyCacheEntry *cacheRowCandidate(ProllyCache *cache){
+  ProllyCacheEntry *pEntry = cache->rowTail.pLruPrev;
+  while( pEntry!=&cache->rowHead ){
+    if( pEntry->nRef==0 ) return pEntry;
+    pEntry = pEntry->pLruPrev;
+  }
+  return 0;
+}
+
 static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
   ProllyCacheEntry *pEntry = cacheEvictionCandidate(cache);
-  if( !pEntry || pEntry->nEvictChance>0 ){
+  ProllyCacheEntry *pRow = cacheRowCandidate(cache);
+  if( pRow && (!pEntry || pEntry->nEvictChance>0
+               || pRow->iTouch<pEntry->iTouch) ){
+    pEntry = pRow;
+  }else if( !pEntry || pEntry->nEvictChance>0 ){
     ProllyCacheEntry *pPrefix = cachePrefixCandidate(cache);
     if( pPrefix ) pEntry = pPrefix;
   }
   if( pEntry && cacheKeepPrefixes(cache, pEntry) ) return 0;
   if( pEntry ){
+    cacheWideForget(cache, pEntry);
     lruRemove(pEntry);
     hashRemove(cache, pEntry);
     cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
@@ -583,6 +630,7 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
 }
 
 static void cacheEvictEntry(ProllyCache *cache, ProllyCacheEntry *pEntry){
+  cacheWideForget(cache, pEntry);
   lruRemove(pEntry);
   hashRemove(cache, pEntry);
   cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
@@ -592,9 +640,26 @@ static void cacheEvictEntry(ProllyCache *cache, ProllyCacheEntry *pEntry){
   cacheEntryFree(pEntry);
 }
 
-static void cacheTrimPrefixes(ProllyCache *cache, i64 nMaxByte){
-  ProllyCacheEntry *pEntry = cache->prefixTail.pLruPrev;
-  while( cache->nByte>nMaxByte && pEntry!=&cache->prefixHead ){
+static void cacheDrainWide(ProllyCache *cache, i64 nCap, i64 nMaxByte){
+  ProllyCacheEntry *pEntry = cache->wideTail.pLruPrev;
+  while( pEntry!=&cache->wideHead
+      && (cache->nWideFull>nCap || cache->nByte>nMaxByte) ){
+    ProllyCacheEntry *pPrev = pEntry->pLruPrev;
+    if( pEntry->nRef==0 ){
+      cacheWideForget(cache, pEntry);
+      if( !cacheKeepPrefixes(cache, pEntry) ){
+        lruRemove(pEntry);
+        lruInsertHead(cache, pEntry);
+      }
+    }
+    pEntry = pPrev;
+  }
+}
+
+static void cacheTrimList(ProllyCache *cache, ProllyCacheEntry *pHead,
+                          ProllyCacheEntry *pTail, i64 nMaxByte){
+  ProllyCacheEntry *pEntry = pTail->pLruPrev;
+  while( cache->nByte>nMaxByte && pEntry!=pHead ){
     ProllyCacheEntry *pPrev = pEntry->pLruPrev;
     if( pEntry->nRef==0
      && (nMaxByte==0 || !cacheKeepPrefixes(cache, pEntry)) ){
@@ -606,15 +671,28 @@ static void cacheTrimPrefixes(ProllyCache *cache, i64 nMaxByte){
 
 static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
   int pass;
+  if( cache->nByte>nMaxByte && cache->nWideFull>0 ){
+    cacheDrainWide(cache, 0, nMaxByte);
+  }
   for(pass=0; pass<2 && cache->nByte>nMaxByte; pass++){
     ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
     int nVisit = cache->nUsed;
     if( pass==1 ){
-      cacheTrimPrefixes(cache, nMaxByte);
+      cacheTrimList(cache, &cache->rowHead, &cache->rowTail, nMaxByte);
+      cacheTrimList(cache, &cache->prefixHead, &cache->prefixTail, nMaxByte);
       if( cache->nByte<=nMaxByte ) break;
     }
     while( nVisit-- && cache->nByte>nMaxByte && pEntry!=&cache->lruHead ){
       ProllyCacheEntry *pPrev = pEntry->pLruPrev;
+      if( pass==0 && pEntry->nRef==0 ){
+        ProllyCacheEntry *pOld = cacheRowCandidate(cache);
+        if( pOld && pOld->iTouch<pEntry->iTouch ){
+          if( nMaxByte==0 || !cacheKeepPrefixes(cache, pOld) ){
+            cacheEvictEntry(cache, pOld);
+          }
+          continue;
+        }
+      }
       if( pEntry->nRef==0 ){
         if( pEntry->nEvictChance>0 && pass==0 ){
           pEntry->nEvictChance--;
@@ -643,6 +721,18 @@ static void cacheRehash(ProllyCache *cache, int nBucket){
   cache->aBucket = aBucket;
   cache->nBucket = nBucket;
   for(pEntry=cache->lruHead.pLruNext; pEntry!=&cache->lruTail;
+      pEntry=pEntry->pLruNext){
+    int iBucket = cacheHashBucket(cache, &pEntry->hash);
+    pEntry->pHashNext = cache->aBucket[iBucket];
+    cache->aBucket[iBucket] = pEntry;
+  }
+  for(pEntry=cache->rowHead.pLruNext; pEntry!=&cache->rowTail;
+      pEntry=pEntry->pLruNext){
+    int iBucket = cacheHashBucket(cache, &pEntry->hash);
+    pEntry->pHashNext = cache->aBucket[iBucket];
+    cache->aBucket[iBucket] = pEntry;
+  }
+  for(pEntry=cache->wideHead.pLruNext; pEntry!=&cache->wideTail;
       pEntry=pEntry->pLruNext){
     int iBucket = cacheHashBucket(cache, &pEntry->hash);
     pEntry->pHashNext = cache->aBucket[iBucket];
@@ -763,6 +853,7 @@ ProllyCacheEntry *prollyCachePutOwned(
   pEntry->pHashNext = cache->aBucket[iBucket];
   cache->aBucket[iBucket] = pEntry;
 
+  pEntry->iTouch = ++cache->iClock;
   lruInsertHead(cache, pEntry);
 
   cache->nUsed++;
@@ -782,9 +873,27 @@ ProllyCacheEntry *prollyCachePutTransientOwned(
   return cacheEntryNewOwned(hash, pData, nData, nDataPhys, 1, pRc);
 }
 
+static int cacheIsWideLeaf(const ProllyCacheEntry *p){
+  return p->node.level==0 && !p->node.nValuePrefix && p->pData
+      && p->node.nItems>0
+      && p->node.nData/p->node.nItems>=PROLLY_CACHE_WIDE_VALUE;
+}
+
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry){
   assert( entry->nRef>0 );
   entry->nRef--;
+  /* A read-ahead leaf stays whole until a cursor has read it once. */
+  if( entry->nRef==0 && !entry->bTransient && !entry->bReadAheadUnused
+   && entry->bAllowPrefix && cacheIsWideLeaf(entry) ){
+    if( !entry->bWideFull ){
+      lruRemove(entry);
+      entry->bWideFull = 1;
+      cache->nWideFull += cacheEntryBytes(entry);
+      lruInsertHead(cache, entry);
+    }
+    cacheDrainWide(cache, cache->nMaxByte/PROLLY_CACHE_WIDE_WINDOW_DIV,
+                   cache->nMaxByte);
+  }
   if( entry->nRef==0 && entry->bTransient ){
     cacheEntryFree(entry);
   }else if( entry->nRef==0 && cache->nByte>cache->nMaxByte ){
@@ -800,6 +909,20 @@ void prollyCacheFree(ProllyCache *cache){
 
   pEntry = cache->lruHead.pLruNext;
   while( pEntry!=&cache->lruTail ){
+    pNext = pEntry->pLruNext;
+    assert( pEntry->nRef==0 );
+    cacheEntryFree(pEntry);
+    pEntry = pNext;
+  }
+  pEntry = cache->rowHead.pLruNext;
+  while( pEntry!=&cache->rowTail ){
+    pNext = pEntry->pLruNext;
+    assert( pEntry->nRef==0 );
+    cacheEntryFree(pEntry);
+    pEntry = pNext;
+  }
+  pEntry = cache->wideHead.pLruNext;
+  while( pEntry!=&cache->wideTail ){
     pNext = pEntry->pLruNext;
     assert( pEntry->nRef==0 );
     cacheEntryFree(pEntry);

@@ -69,6 +69,7 @@ static int cacheReadAheadNode(
     pEntry->bAllowPrefix = cur->bAllowPrefix;
     cacheNoteLargeScan(pEntry, cur->bLargeScan);
     cacheNoteWriteScan(pEntry, cur->bWriteScan);
+    pEntry->bReadAheadUnused = 1;
     prollyCacheRelease(pCache, pEntry);
   }
   return rc;
