@@ -70,8 +70,8 @@ class SeedTests(unittest.TestCase):
 
     def test_retired_corpus_moves_to_search_and_random_exploration_continues(self):
         specs = list(seeds.specs())
-        self.assertEqual(len(specs), 14)
-        self.assertEqual(sum(len(cases) for _, cases, _ in specs), 32)
+        self.assertEqual(len(specs), 16)
+        self.assertEqual(sum(len(cases) for _, cases, _ in specs), 35)
         names = {path.stem for path in seeds.SEED_DIR.glob('*.json')}
         wide_cases = {'create_index', 'delete_batch', 'distinct', 'index_fetch',
                       'join_pk', 'point_payload', 'point_pk', 'range_pk',
@@ -86,6 +86,7 @@ class SeedTests(unittest.TestCase):
                                   'update_text_after_delete_text_pk_memory',
                                   'scan_after_update_wide_text_pk',
                                   'issue_3249', 'issue_3250',
+                                  'issue_3263', 'issue_3264', 'issue_3266',
                                   'bulk_deletes_delete_plain'})
         wide = [(p, cases, setup) for p, cases, setup in specs if p.payload==16384]
         self.assertEqual(len(wide), 1)
@@ -107,7 +108,7 @@ class SeedTests(unittest.TestCase):
             for index, spec in enumerate(specs):
                 self.assertEqual(next(generated), (index, *spec, 'retired'))
             index, profile, cases, setup, origin = next(generated)
-            self.assertEqual(index, 14)
+            self.assertEqual(index, 16)
             self.assertEqual(len(cases), 4)
             self.assertEqual({case.recipe['operator'] for case in cases}, {'update_blob'})
             self.assertIn('CREATE TABLE u', setup)
