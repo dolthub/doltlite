@@ -5,6 +5,8 @@
 #include <string.h>
 #include <assert.h>
 
+static void cacheTrim(ProllyCache*, i64);
+
 #define PROLLY_CACHE_INTERNAL_CHANCES 8
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
@@ -20,10 +22,11 @@ static void lruRemove(ProllyCacheEntry *pEntry){
   pEntry->pLruPrev = 0;
 }
 
-/* Compacted prefixes keep their own LRU so trimming never walks them to
-** reach a full node: they are evicted only after the main list is spent. */
+/* Packed prefixes share the prefix LRU; decoded buffers can be discarded
+** without losing the packed copy. */
 static ProllyCacheEntry *lruHeadFor(ProllyCache *cache, ProllyCacheEntry *p){
-  return p->node.nValuePrefix ? &cache->prefixHead : &cache->lruHead;
+  return p->pPacked ? (p->pData ? &cache->lruHead : &cache->prefixHead)
+       : p->node.nValuePrefix ? &cache->prefixHead : &cache->lruHead;
 }
 
 static void lruInsertHead(ProllyCache *cache, ProllyCacheEntry *pEntry){
@@ -50,6 +53,7 @@ static void hashRemove(ProllyCache *cache, ProllyCacheEntry *pEntry){
 static void cacheEntryFree(ProllyCacheEntry *pEntry){
   if( pEntry ){
     sqlite3_free(pEntry->pData);
+    sqlite3_free(pEntry->pPacked);
     sqlite3_free(pEntry);
   }
 }
@@ -89,8 +93,6 @@ static ProllyCacheEntry *cacheEntryNewOwned(
 
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pData;
-  pEntry->nData = nData;
-  pEntry->nDataPhys = nDataPhys;
   pEntry->nRef = 1;
   pEntry->bTransient = bTransient ? 1 : 0;
 
@@ -134,35 +136,71 @@ int prollyCacheInit(ProllyCache *cache, i64 nMaxByte){
   return SQLITE_OK;
 }
 
+static ProllyCacheEntry *cacheFind(ProllyCache *cache, const ProllyHash *hash){
+  ProllyCacheEntry *pEntry;
+  if( !cache->aBucket ) return 0;
+  pEntry = cache->aBucket[cacheHashBucket(cache, hash)];
+  while( pEntry && memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)!=0 ){
+    pEntry = pEntry->pHashNext;
+  }
+  return pEntry;
+}
+
 static ProllyCacheEntry *cacheGet(
   ProllyCache *cache, const ProllyHash *hash, int bScan, int bPrefix
 ){
-  int iBucket;
-  ProllyCacheEntry *pEntry;
-
-  if( cache->aBucket==0 ) return 0;
-
-  iBucket = cacheHashBucket(cache, hash);
-  pEntry = cache->aBucket[iBucket];
-
-  while( pEntry ){
-    if( memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)==0 ){
-
-      if( pEntry->node.nValuePrefix && !bPrefix ) return 0;
-      if( !bScan ) pEntry->bScanOnly = 0;
-      pEntry->nEvictChance = pEntry->node.level>0
-                          ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
-      pEntry->nRef++;
-      if( pEntry->pLruPrev!=lruHeadFor(cache, pEntry) ){
-        lruRemove(pEntry);
-        lruInsertHead(cache, pEntry);
-      }
-      return pEntry;
+  ProllyCacheEntry *pEntry = cacheFind(cache, hash);
+  if( !pEntry ) return 0;
+  if( pEntry->node.nValuePrefix && !bPrefix ) return 0;
+  if( pEntry->pPacked && !pEntry->pData ){
+    ProllyNode node;
+    int nPrefix = pEntry->node.nValuePrefix;
+    int n = pEntry->node.nDataPhys;
+    int nHead = n-pEntry->node.nItems
+                *(PROLLY_CACHE_SHARED_PREFIX+PROLLY_NODE_BUFFER_SLOP);
+    int nVar = 0, i, j;
+    u8 aPos[PROLLY_CACHE_SHARED_PREFIX];
+    const u8 *p = pEntry->pPacked+nHead;
+    u32 mask = PROLLY_GET_U32(p);
+    u8 *pData;
+    sqlite3BeginBenignMalloc();
+    pData = sqlite3_malloc(n + PROLLY_NODE_BUFFER_SLOP);
+    sqlite3EndBenignMalloc();
+    if( !pData ) return 0;
+    memcpy(pData, pEntry->pPacked, nHead);
+    for(i=0; i<PROLLY_CACHE_SHARED_PREFIX; i++){
+      if( mask & ((u32)1<<i) ) aPos[nVar++] = i;
     }
-    pEntry = pEntry->pHashNext;
+    p += 4+PROLLY_CACHE_SHARED_PREFIX;
+    for(i=0; i<pEntry->node.nItems; i++){
+      u8 *pRow = pData+nHead
+               + i*(PROLLY_CACHE_SHARED_PREFIX+PROLLY_NODE_BUFFER_SLOP);
+      memcpy(pRow, pEntry->pPacked+nHead+4, PROLLY_CACHE_SHARED_PREFIX);
+      for(j=0; j<nVar; j++) pRow[aPos[j]] = *p++;
+      memset(pRow+PROLLY_CACHE_SHARED_PREFIX, 0, PROLLY_NODE_BUFFER_SLOP);
+    }
+    assert( p<=pEntry->pPacked+sqlite3_msize(pEntry->pPacked) );
+    memset(pData+n, 0, PROLLY_NODE_BUFFER_SLOP);
+    if( prollyNodeParseSparse(&node, pData, pEntry->node.nData, n)
+        !=SQLITE_OK ){
+      sqlite3_free(pData);
+      return 0;
+    }
+    node.nValuePrefix = nPrefix;
+    pEntry->node = node;
+    pEntry->pData = pData;
+    cache->nByte += sqlite3_msize(pData);
   }
-
-  return 0;
+  if( !bScan ) pEntry->bScanOnly = 0;
+  pEntry->nEvictChance = pEntry->node.level>0
+                      ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
+  pEntry->nRef++;
+  if( pEntry->pLruPrev!=lruHeadFor(cache, pEntry) ){
+    lruRemove(pEntry);
+    lruInsertHead(cache, pEntry);
+  }
+  if( cache->nByte>cache->nMaxByte ) cacheTrim(cache, cache->nMaxByte);
+  return pEntry;
 }
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
@@ -182,7 +220,18 @@ ProllyCacheEntry *prollyCacheGetPrefix(
 static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   ProllyNode *pNode = &pEntry->node;
   int nHead, nCompact, nPrefix, nStride, nAverage, i;
+  int nBasePrefix;
+  u8 *pPacked = 0;
   u8 *pData;
+  if( pEntry->pPacked ){
+    if( !pEntry->pData ) return 0;
+    cache->nByte -= sqlite3_msize(pEntry->pData);
+    sqlite3_free(pEntry->pData);
+    pEntry->pData = 0;
+    lruRemove(pEntry);
+    lruInsertHead(cache, pEntry);
+    return 1;
+  }
   if( !pEntry->bAllowPrefix || pNode->level || pNode->nItems==0 ) return 0;
   if( pNode->nValuePrefix ){
     if( pNode->nValuePrefix!=PROLLY_NODE_VALUE_PREFIX ) return 0;
@@ -190,28 +239,84 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   nHead = (int)(pNode->pValData - pNode->pData);
   if( nHead>pNode->nData/4 ) return 0;
   nAverage = (pNode->nData-nHead)/pNode->nItems;
-  nPrefix = pNode->nValuePrefix ? PROLLY_NODE_VALUE_PREFIX/2
-          : nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
-          : nAverage>=512 ? 32 : 16;
+  nBasePrefix = pNode->nValuePrefix ? PROLLY_NODE_VALUE_PREFIX/2
+              : nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
+              : nAverage>=512 ? 32 : 16;
+  nPrefix = pEntry->bScanOnly && nAverage>=128 && nAverage<=1024
+          ? PROLLY_CACHE_SHARED_PREFIX : nBasePrefix;
   nStride = nPrefix + PROLLY_NODE_BUFFER_SLOP;
   nCompact = nHead + pNode->nItems*nStride;
+  if( nCompact>pNode->nData/4 && nPrefix!=nBasePrefix ){
+    nPrefix = nBasePrefix;
+    nStride = nPrefix+PROLLY_NODE_BUFFER_SLOP;
+    nCompact = nHead+pNode->nItems*nStride;
+  }
   if( nCompact>pNode->nData/4 ) return 0;
   assert( pEntry->nRef==0 );
-  sqlite3BeginBenignMalloc();
-  pData = sqlite3_malloc(nCompact + PROLLY_NODE_BUFFER_SLOP);
-  sqlite3EndBenignMalloc();
-  if( !pData ) return 0;
-  memcpy(pData, pEntry->pData, nHead);
-  for(i=0; i<pNode->nItems; i++){
+  if( pEntry->bScanOnly && nPrefix==PROLLY_CACHE_SHARED_PREFIX
+   && nAverage>=128 && nAverage<=1024 ){
+    u32 mask = 0;
+    u8 aDiff[PROLLY_CACHE_SHARED_PREFIX] = {0};
+    u8 aPos[PROLLY_CACHE_SHARED_PREFIX];
+    u8 aFirst[PROLLY_CACHE_SHARED_PREFIX] = {0};
+    int nVar = 0, j, n, nVal, nAvail;
     const u8 *pVal;
-    int nVal, nAvail;
-    u8 *pDest = pData + nHead + i*nStride;
-    prollyNodeValueSpan(pNode, i, &pVal, &nVal, &nAvail);
-    nVal = MIN(nAvail, nPrefix);
-    memcpy(pDest, pVal, nVal);
-    memset(pDest + nVal, 0, nStride - nVal);
+    prollyNodeValueSpan(pNode, 0, &pVal, &nVal, &nAvail);
+    memcpy(aFirst, pVal, MIN(nAvail, PROLLY_CACHE_SHARED_PREFIX));
+
+    for(i=1; i<pNode->nItems; i++){
+      u8 aShort[PROLLY_CACHE_SHARED_PREFIX] = {0};
+      prollyNodeValueSpan(pNode, i, &pVal, &nVal, &nAvail);
+      if( nAvail<PROLLY_CACHE_SHARED_PREFIX ){
+        memcpy(aShort, pVal, nAvail);
+        pVal = aShort;
+      }
+      for(j=0; j<PROLLY_CACHE_SHARED_PREFIX; j++){
+        aDiff[j] |= aFirst[j]^pVal[j];
+      }
+    }
+    for(j=0; j<PROLLY_CACHE_SHARED_PREFIX; j++){
+      if( aDiff[j] ){
+        mask |= (u32)1<<j;
+        aPos[nVar++] = j;
+      }
+    }
+    n = nHead+4+PROLLY_CACHE_SHARED_PREFIX+pNode->nItems*nVar;
+    sqlite3BeginBenignMalloc();
+    pPacked = n<=nCompact*3/4 ? sqlite3_malloc(n) : 0;
+    sqlite3EndBenignMalloc();
+    if( pPacked ){
+      u8 *p = pPacked+nHead+4+PROLLY_CACHE_SHARED_PREFIX;
+      memcpy(pPacked, pEntry->pData, nHead);
+      PROLLY_PUT_U32(pPacked+nHead, mask);
+      memcpy(pPacked+nHead+4, aFirst, PROLLY_CACHE_SHARED_PREFIX);
+      for(i=0; i<pNode->nItems; i++){
+        prollyNodeValueSpan(pNode, i, &pVal, &nVal, &nAvail);
+        for(j=0; j<nVar; j++) *p++ = aPos[j]<nAvail ? pVal[aPos[j]] : 0;
+      }
+    }
   }
-  memset(pData + nCompact, 0, PROLLY_NODE_BUFFER_SLOP);
+  pData = pPacked;
+  if( !pPacked ){
+    nPrefix = nBasePrefix;
+    nStride = nPrefix+PROLLY_NODE_BUFFER_SLOP;
+    nCompact = nHead+pNode->nItems*nStride;
+    sqlite3BeginBenignMalloc();
+    pData = sqlite3_malloc(nCompact+PROLLY_NODE_BUFFER_SLOP);
+    sqlite3EndBenignMalloc();
+    if( !pData ) return 0;
+    memcpy(pData, pEntry->pData, nHead);
+    for(i=0; i<pNode->nItems; i++){
+      const u8 *pVal;
+      int nVal, nAvail;
+      u8 *pDest = pData+nHead+i*nStride;
+      prollyNodeValueSpan(pNode, i, &pVal, &nVal, &nAvail);
+      nVal = MIN(nAvail, nPrefix);
+      memcpy(pDest, pVal, nVal);
+      memset(pDest+nVal, 0, nStride-nVal);
+    }
+    memset(pData+nCompact, 0, PROLLY_NODE_BUFFER_SLOP);
+  }
   pNode->aKeyOff = (const u32*)(pData + ((const u8*)pNode->aKeyOff-pNode->pData));
   pNode->aValOff = (const u32*)(pData + ((const u8*)pNode->aValOff-pNode->pData));
   pNode->pKeyData = pData + (pNode->pKeyData-pNode->pData);
@@ -223,7 +328,12 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   cache->nByte += (i64)sqlite3_msize(pData)-(i64)sqlite3_msize(pEntry->pData);
   sqlite3_free(pEntry->pData);
   pEntry->pData = pData;
-  pEntry->nDataPhys = nCompact;
+  if( pPacked ){
+    pEntry->pPacked = pPacked;
+    cache->nSharedPrefix++;
+    pEntry->pData = 0;
+  }
+
   lruRemove(pEntry);
   lruInsertHead(cache, pEntry);
   return 1;
@@ -278,8 +388,11 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
   if( pEntry ){
     lruRemove(pEntry);
     hashRemove(cache, pEntry);
-    cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+    cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
+                + sqlite3_msize(pEntry->pPacked);
     sqlite3_free(pEntry->pData);
+    if( pEntry->pPacked ) cache->nSharedPrefix--;
+    sqlite3_free(pEntry->pPacked);
     memset(pEntry, 0, sizeof(*pEntry));
     cache->nUsed--;
   }
@@ -289,8 +402,10 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
 static void cacheEvictEntry(ProllyCache *cache, ProllyCacheEntry *pEntry){
   lruRemove(pEntry);
   hashRemove(cache, pEntry);
-  cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+  cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
+                + sqlite3_msize(pEntry->pPacked);
   cache->nUsed--;
+  if( pEntry->pPacked ) cache->nSharedPrefix--;
   cacheEntryFree(pEntry);
 }
 
@@ -427,8 +542,6 @@ ProllyCacheEntry *prollyCachePutOwned(
 
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pData;
-  pEntry->nData = nData;
-  pEntry->nDataPhys = nData;
   pEntry->nRef = 1;
   pEntry->bTransient = 0;
 
@@ -441,13 +554,16 @@ ProllyCacheEntry *prollyCachePutOwned(
   }
 
   {
-    ProllyCacheEntry *pOld = prollyCacheGetPrefix(cache, hash, 1);
+    ProllyCacheEntry *pOld = cacheFind(cache, hash);
     if( pOld ){
       assert( pOld->node.nValuePrefix );
+      pOld->nRef++;
       lruRemove(pOld);
       hashRemove(cache, pOld);
-      cache->nByte -= sqlite3_msize(pOld) + sqlite3_msize(pOld->pData);
+      cache->nByte -= sqlite3_msize(pOld) + sqlite3_msize(pOld->pData)
+                  + sqlite3_msize(pOld->pPacked);
       cache->nUsed--;
+      if( pOld->pPacked ) cache->nSharedPrefix--;
       /* Other cursors may still borrow the prefix buffer. */
       pOld->bTransient = 1;
       prollyCacheRelease(cache, pOld);
@@ -467,7 +583,8 @@ ProllyCacheEntry *prollyCachePutOwned(
   lruInsertHead(cache, pEntry);
 
   cache->nUsed++;
-  cache->nByte += sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData);
+  cache->nByte += sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
+                + sqlite3_msize(pEntry->pPacked);
   cacheTrim(cache, cache->nMaxByte);
   return pEntry;
 }

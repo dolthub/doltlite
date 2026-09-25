@@ -389,7 +389,7 @@ int prollyCursorNext(ProllyCursor *cur){
         for(i=0; i<pRoot->nItems; i++){
           nRow += (double)prollyNodeChildSubtreeCount(pRoot, i);
         }
-        cur->bLargeScan = nRow*pLeaf->nData
+        cur->bLargeScan = nRow*pLeaf->node.nData
             > (double)cur->pCache->nMaxByte*pLeaf->node.nItems;
       }
     }

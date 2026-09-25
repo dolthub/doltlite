@@ -3907,8 +3907,8 @@ static void run_ancestor_criss_cross_single_walk(void){
         1, 1001, &right);
   }
   for(i=1; rc==SQLITE_OK && i<=CRISS_CROSS_DEPTH; i++){
-    ProllyHash nextLeft;
-    ProllyHash nextRight;
+    ProllyHash nextLeft = left;
+    ProllyHash nextRight = right;
     previousLeft = left;
     previousRight = right;
     snprintf(zMessage, sizeof(zMessage), "left-%d", i);
@@ -13207,7 +13207,7 @@ static void run_prolly_diff_iter_copies_blob_keys(void){
         ProllyCacheEntry *pEntry = cache.aBucket[i];
         while( pEntry ){
           if( pCh->pKey >= pEntry->pData &&
-              pCh->pKey < pEntry->pData + pEntry->nData ){
+              pCh->pKey < pEntry->pData + pEntry->node.nData ){
             keyBackedByCache = 1;
           }
           pEntry = pEntry->pHashNext;
