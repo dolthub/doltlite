@@ -80,4 +80,17 @@ foreach {name type pk keyexpr suffix} {
   oracle close
 }
 
+reset_db
+do_test ipk-not-indexed-plan {
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+    CREATE INDEX idx ON t(val);
+    INSERT INTO t VALUES(1,10),(2,20),(3,30);
+  }
+  dml_scan_plan db {SELECT id FROM t NOT INDEXED WHERE val > 15 ORDER BY id}
+} {{SCAN t}}
+do_test ipk-not-indexed-rows {
+  db eval {SELECT id FROM t NOT INDEXED WHERE val > 15 ORDER BY id}
+} {2 3}
+
 finish_test

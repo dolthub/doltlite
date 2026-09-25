@@ -4197,7 +4197,11 @@ static int whereLoopAddBtree(
       pProbe=(pSrc->fg.isIndexedBy ? 0 : pProbe->pNext), iSortIdx++
   ){
 #ifdef DOLTLITE_PROLLY
-    if( pSrc->fg.notIndexed && !IsPrimaryKeyIndex(pProbe) ) break;
+    /* The integer primary key is a fake IPK index, not a secondary index.
+    ** NOT INDEXED must still scan it. */
+    if( pSrc->fg.notIndexed
+     && pProbe->idxType!=SQLITE_IDXTYPE_IPK
+     && !IsPrimaryKeyIndex(pProbe) ) break;
     if( pProbe->idxType!=SQLITE_IDXTYPE_IPK
      && (HasRowid(pProbe->pTable) || !IsPrimaryKeyIndex(pProbe)) ){
       int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
