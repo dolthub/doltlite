@@ -46,6 +46,7 @@ require_on_windows doltlite_regression_test_c.sh
 require_on_windows doltlite_gc.sh
 
 forbid_on_windows doltlite_open_nofollow.sh
+forbid_on_windows doltlite_open_nofollow_link_test.sh
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

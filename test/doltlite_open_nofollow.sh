@@ -1,6 +1,8 @@
 #!/bin/bash
 DOLTLITE_SRC="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${DOLTLITE_BUILD_DIR:-$DOLTLITE_SRC/build}"
+# shellcheck source=lib/build_artifacts.sh
+. "$DOLTLITE_SRC/test/lib/build_artifacts.sh"
 
 if [ ! -f "$BUILD/libdoltlite.a" ]; then
   echo "SKIP: no libdoltlite.a in $BUILD"
@@ -64,11 +66,30 @@ int main(void){
 }
 EOF
 
-cc -O2 -I"$BUILD" -I"$DOLTLITE_SRC/src" -o "$TMP/nofollow" "$TMP/nofollow.c" \
-  "$BUILD/libdoltlite.a" -lpthread -lz -lm || {
-  echo "SKIP: could not link nofollow probe"
-  exit 0
-}
+# The sanitizer job ships an instrumented archive and does not export the
+# build's CFLAGS. Link with those runtimes, or the probe never runs.
+cc_bin="${CC:-cc}"
+compile_flags=${CFLAGS:-"-O2"}
+link_flags=${LDFLAGS:-}
+sans=$(dl_archive_sanitizers "$BUILD/libdoltlite.a")
+if [ -n "$sans" ]; then
+  case "$compile_flags $link_flags" in
+    *-fsanitize*) ;;
+    *)
+      compile_flags="$compile_flags -fsanitize=$sans"
+      link_flags="$link_flags -fsanitize=$sans"
+      ;;
+  esac
+fi
+
+# shellcheck disable=SC2086
+if ! "$cc_bin" $compile_flags -I"$BUILD" -I"$DOLTLITE_SRC/src" \
+     -o "$TMP/nofollow" "$TMP/nofollow.c" \
+     "$BUILD/libdoltlite.a" $link_flags -lpthread -lz -lm; then
+  echo "FAIL: could not link nofollow probe"
+  echo "__SUITE_COMPLETE__"
+  exit 1
+fi
 
 if DL_TMP="$TMP" "$TMP/nofollow"; then
   echo "__SUITE_COMPLETE__"
