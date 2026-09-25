@@ -4102,7 +4102,13 @@ static int whereLoopAddBtree(
     /* An INDEXED BY clause specifies a particular index to use */
     pProbe = pSrc->u2.pIBIndex;
   }else if( !HasRowid(pTab) ){
+#ifdef DOLTLITE_PROLLY
+    /* NOT INDEXED still scans the primary key. It does not consider
+    ** secondary indexes. */
+    pProbe = pSrc->fg.notIndexed ? sqlite3PrimaryKeyIndex(pTab) : pTab->pIndex;
+#else
     pProbe = pTab->pIndex;
+#endif
   }else{
     /* There is no INDEXED BY clause.  Create a fake Index object in local
     ** variable sPk to represent the rowid primary key index.  Make this
@@ -4191,6 +4197,11 @@ static int whereLoopAddBtree(
       pProbe=(pSrc->fg.isIndexedBy ? 0 : pProbe->pNext), iSortIdx++
   ){
 #ifdef DOLTLITE_PROLLY
+    /* The integer primary key is a fake IPK index, not a secondary index.
+    ** NOT INDEXED must still scan it. */
+    if( pSrc->fg.notIndexed
+     && pProbe->idxType!=SQLITE_IDXTYPE_IPK
+     && !IsPrimaryKeyIndex(pProbe) ) break;
     if( pProbe->idxType!=SQLITE_IDXTYPE_IPK
      && (HasRowid(pProbe->pTable) || !IsPrimaryKeyIndex(pProbe)) ){
       int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
@@ -4371,6 +4382,14 @@ static int whereLoopAddBtree(
           int ii;
           int iCur = pSrc->iCursor;
           WhereClause *pWC2 = &pWInfo->sWC;
+#ifdef DOLTLITE_PROLLY
+          if( !HasRowid(pTab) ){
+            /* Each lookup seeks the primary key. That is much more than
+            ** a rowid move, so a full scan of a secondary index loses to
+            ** scanning the table. */
+            nLookup = rSize + 70;
+          }
+#endif
           for(ii=0; ii<pWC2->nTerm; ii++){
             WhereTerm *pTerm = &pWC2->a[ii];
             if( !sqlite3ExprCoveredByIndex(pTerm->pExpr, iCur, pProbe) ){
