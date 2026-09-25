@@ -123,4 +123,29 @@ do_execsql_test sparse-update {
   ROLLBACK;
 } {0 124 8126464 124}
 
+# One UPDATE past the pending-edit drain limit flushes mid-statement and must
+# resume after the row it wrote, not revisit rows it already updated.
+foreach {name ddl} {
+  rowid   {CREATE TABLE t(id TEXT PRIMARY KEY, seq INT, tag TEXT)}
+  norowid {CREATE TABLE t(id TEXT PRIMARY KEY, seq INT, tag TEXT) WITHOUT ROWID}
+} {
+  reset_db
+  execsql $ddl
+  do_execsql_test drain-update-$name-setup {
+    WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<65600)
+    INSERT INTO t SELECT printf('%016x', i), i, 'x' FROM c;
+    SELECT count(*) FROM t;
+  } {65600}
+  set ::drain_ops 0
+  db progress 100000 {expr {[incr ::drain_ops]>200}}
+  do_catchsql_test drain-update-$name {
+    UPDATE t SET tag=tag||'y';
+  } {0 {}}
+  db progress 0 {}
+  do_execsql_test drain-update-$name-once {
+    SELECT count(*), sum(tag='xy'), min(seq), max(seq) FROM t;
+  } {65600 65600 1 65600}
+  do_execsql_test drain-update-$name-integrity {PRAGMA integrity_check} ok
+}
+
 finish_test
