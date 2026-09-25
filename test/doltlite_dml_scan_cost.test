@@ -44,6 +44,23 @@ foreach {name type pk keyexpr suffix} {
   do_test $name-covering-read-plan {
     dml_scan_plan db {SELECT grp,v FROM t}
   } {{SCAN t USING COVERING INDEX t_gv}}
+  do_test $name-not-indexed-plan {
+    dml_scan_plan db {SELECT v FROM t NOT INDEXED WHERE grp=1 OR seq%2=0}
+  } {{SCAN t}}
+  # seq is not in t_g or t_gv unless it is part of the primary key.
+  # A secondary scan would seek the table once per row.
+  if {$name ne "composite"} {
+    do_test $name-or-group-plan {
+      set plan [dml_scan_plan db {
+        SELECT count(*) FROM (
+          SELECT sum(v) AS x FROM t WHERE (grp=1 OR seq%2=0) GROUP BY grp
+        )
+      }]
+      expr {[lsearch -glob $plan {*INDEX t_g*}] < 0
+            && [lsearch -glob $plan {*INDEX t_gv*}] < 0
+            && [lsearch -glob $plan {SCAN t*}] >= 0}
+    } {1}
+  }
   if {$suffix ne {}} {
     do_test $name-stock-plan {dml_scan_plan oracle $update} {{SCAN t USING INDEX t_g}}
   }
