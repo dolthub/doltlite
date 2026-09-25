@@ -2722,6 +2722,9 @@ static void whereLoopAdjustCost(const WhereLoop *p, WhereLoop *pTemplate){
   }
 }
 
+#ifdef DOLTLITE_PROLLY
+static int whereLoopIsNoBetter(const WhereLoop*, const WhereLoop*);
+#endif
 /*
 ** Search the list of WhereLoops in *ppPrev looking for one that can be
 ** replaced by pTemplate.
@@ -2737,6 +2740,9 @@ static void whereLoopAdjustCost(const WhereLoop *p, WhereLoop *pTemplate){
 ** tail of the list.
 */
 static WhereLoop **whereLoopFindLesser(
+#ifdef DOLTLITE_PROLLY
+  WhereClause *pWC,
+#endif
   WhereLoop **ppPrev,
   const WhereLoop *pTemplate
 ){
@@ -2781,6 +2787,25 @@ static WhereLoop **whereLoopFindLesser(
      && p->rRun<=pTemplate->rRun                      /* (2b) */
      && p->nOut<=pTemplate->nOut                      /* (2c) */
     ){
+#ifdef DOLTLITE_PROLLY
+      if( p->prereq==pTemplate->prereq
+       && p->rSetup==pTemplate->rSetup
+       && p->rRun==pTemplate->rRun
+       && p->nOut==pTemplate->nOut
+       && ((p->wsFlags|pTemplate->wsFlags)&(WHERE_IDX_ONLY|WHERE_EXPRIDX))==0
+       && !whereLoopIsNoBetter(pTemplate, p)
+      ){
+        int i;
+        int iCur = pWC->pWInfo->pTabList->a[pTemplate->iTab].iCursor;
+        for(i=0; i<pWC->nTerm; i++){
+          Expr *pExpr = pWC->a[i].pExpr;
+          if( ExprHasProperty(pExpr, EP_Subquery)
+           || !sqlite3ExprCoveredByIndex(pExpr, iCur, pTemplate->u.btree.pIndex)
+          ) break;
+        }
+        if( i==pWC->nTerm ) break;
+      }
+#endif
       return 0;  /* Discard pTemplate */
     }
 
@@ -2863,7 +2888,11 @@ static int whereLoopInsert(WhereLoopBuilder *pBuilder, WhereLoop *pTemplate){
 
   /* Look for an existing WhereLoop to replace with pTemplate
   */
+#ifdef DOLTLITE_PROLLY
+  ppPrev = whereLoopFindLesser(pBuilder->pWC, &pWInfo->pLoops, pTemplate);
+#else
   ppPrev = whereLoopFindLesser(&pWInfo->pLoops, pTemplate);
+#endif
 
   if( ppPrev==0 ){
     /* There already exists a WhereLoop on the list that is better
@@ -2908,7 +2937,11 @@ static int whereLoopInsert(WhereLoopBuilder *pBuilder, WhereLoop *pTemplate){
     WhereLoop **ppTail = &p->pNextLoop;
     WhereLoop *pToDel;
     while( *ppTail ){
+#ifdef DOLTLITE_PROLLY
+      ppTail = whereLoopFindLesser(pBuilder->pWC, ppTail, pTemplate);
+#else
       ppTail = whereLoopFindLesser(ppTail, pTemplate);
+#endif
       if( ppTail==0 ) break;
       pToDel = *ppTail;
       if( pToDel==0 ) break;
