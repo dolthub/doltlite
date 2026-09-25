@@ -1,0 +1,57 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-index-cost-tie
+
+proc index_cost_plan {sql} {
+  set plan {}
+  db eval "EXPLAIN QUERY PLAN $sql" row {lappend plan $row(detail)}
+  return $plan
+}
+
+foreach reverse {0 1} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,seq INTEGER,grp INTEGER,
+                   v INTEGER,tag TEXT,payload BLOB);
+    WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096)
+    INSERT INTO t SELECT i,i,i/256,(i*7919)%1000000,
+                         printf('tag-%08x',i),zeroblob(32) FROM c;
+  }
+  set indexes {{CREATE INDEX t_g ON t(grp)} {CREATE INDEX t_gv ON t(grp,v)}}
+  if {$reverse} {set indexes [lreverse $indexes]}
+  foreach sql $indexes {db eval $sql}
+  db eval {ANALYZE}
+
+  set query {
+    SELECT count(*),sum(v) FROM (
+      SELECT v FROM t WHERE grp<16 ORDER BY seq LIMIT 32 OFFSET 3000
+    )
+  }
+  do_test $reverse-range-plan {
+    expr {[lsearch -exact [index_cost_plan $query] \
+        {SEARCH t USING INDEX t_g (grp<?)}] >= 0}
+  } {1}
+  do_test $reverse-range-result {db eval $query} \
+      [db eval [string map {{FROM t WHERE} {FROM t NOT INDEXED WHERE}} $query]]
+
+  do_test $reverse-covering {
+    index_cost_plan {SELECT sum(v) FROM t WHERE grp<16}
+  } {{SEARCH t USING COVERING INDEX t_gv (grp<?)}}
+  do_test $reverse-ordering {
+    index_cost_plan {SELECT seq FROM t WHERE grp=8 ORDER BY v DESC LIMIT 5}
+  } {{SEARCH t USING INDEX t_gv (grp=?)}}
+  do_test $reverse-selective {
+    index_cost_plan {SELECT seq FROM t WHERE grp=8 AND v<1000}
+  } {{SEARCH t USING INDEX t_gv (grp=? AND v<?)}}
+  do_test $reverse-residual-filter {
+    index_cost_plan {SELECT sum(seq) FROM t WHERE grp<16 AND v<1000}
+  } {{SEARCH t USING INDEX t_gv (grp<?)}}
+  do_test $reverse-hint {
+    index_cost_plan {SELECT seq FROM t INDEXED BY t_gv WHERE grp<16}
+  } {{SEARCH t USING INDEX t_gv (grp<?)}}
+  do_test $reverse-primary {
+    index_cost_plan {SELECT seq FROM t WHERE id=12}
+  } {{SEARCH t USING INTEGER PRIMARY KEY (rowid=?)}}
+}
+
+finish_test

@@ -83,6 +83,7 @@ doltlite_txn_state_cursor
 doltlite_add_rename_source
 doltlite_pending_scan
 doltlite_dml_scan_cost
+doltlite_index_cost_tie
 doltlite_column_metadata
 doltlite_prefix_cache
 doltlite_batch_replacement
