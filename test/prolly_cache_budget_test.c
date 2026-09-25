@@ -1,6 +1,7 @@
 #include "prolly_btree_int.h"
 #include "chunk_store_int.h"
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 static int nPass;
@@ -647,9 +648,13 @@ static void testShortPrefixWriteScan(sqlite3 *db){
     execSql(db, "BEGIN;DELETE FROM prefix_delete WHERE seq%32=0");
     nRead = nBatchRead = 0;
     execSql(db, "UPDATE prefix_delete SET v=v+1 WHERE seq%32=0");
+    check("empty write scan changes no rows", sqlite3_changes(db)==0);
+    nRead = nBatchRead = 0;
+    execSql(db,
+        "SELECT sum(payload=CAST(printf('%0256d',seq) AS BLOB))"
+        " FROM prefix_delete");
     check("short prefix fallback preserves batched write-scan reads",
         nRead>0 && nBatchRead>nRead/2);
-    check("empty write scan changes no rows", sqlite3_changes(db)==0);
     check("prepare scan after prefix fallback", sqlite3_prepare_v2(db,
         "SELECT count(*),sum(v),sum(seq),sum(length(payload))"
         " FROM prefix_delete", -1, &p, 0)==SQLITE_OK);
@@ -665,6 +670,103 @@ static void testShortPrefixWriteScan(sqlite3 *db){
   }
   pStore->file.pFile->pMethods = pReadMethods;
   execSql(db, "DROP TABLE prefix_delete; PRAGMA cache_size=-65536");
+}
+
+static void testElidedTextPkPrefix(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  int nCold;
+  execSql(db,
+      "CREATE TABLE elide_pk(id TEXT PRIMARY KEY, seq INTEGER NOT NULL,"
+      " grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL,"
+      " payload BLOB NOT NULL);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<16384)"
+      " INSERT INTO elide_pk SELECT printf('%016x',i),i,i%16,"
+      " (i*7919)%1000000,printf('tag-%08x',i%10000),"
+      " CAST(printf('%0256d',i) AS BLOB) FROM c;"
+      "PRAGMA cache_size=-4096");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  check("prepare elided scalar scan", sqlite3_prepare_v2(db,
+      "SELECT sum(seq),sum(id=printf('%016x',seq)),sum(length(payload))"
+      " FROM elide_pk NOT INDEXED", -1, &p, 0)==SQLITE_OK);
+  check("elided scalar result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int64(p, 0)==134225920
+      && sqlite3_column_int(p, 1)==16384
+      && sqlite3_column_int(p, 2)==4194304);
+  check("finish elided scalar scan", sqlite3_finalize(p)==SQLITE_OK);
+  nCold = nRead;
+  nRead = 0;
+  check("prepare warm elided scalar scan", sqlite3_prepare_v2(db,
+      "SELECT sum(seq),sum(id=printf('%016x',seq)),sum(length(payload))"
+      " FROM elide_pk NOT INDEXED", -1, &p, 0)==SQLITE_OK);
+  check("warm elided scalar result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int64(p, 0)==134225920
+      && sqlite3_column_int(p, 1)==16384
+      && sqlite3_column_int(p, 2)==4194304);
+  check("finish warm elided scalar scan", sqlite3_finalize(p)==SQLITE_OK);
+  check("elided text key reaches seq without rereading", nCold>0 && nRead==0);
+  execSql(db, "DROP TABLE elide_pk");
+  execSql(db,
+      "CREATE TABLE elide_pk(id TEXT PRIMARY KEY, seq INTEGER NOT NULL,"
+      " grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL,"
+      " payload BLOB NOT NULL);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<65536)"
+      " INSERT INTO elide_pk SELECT printf('%016x',i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,"
+      " (i*7919)%1000000,printf('tag-%08x',i%10000),"
+      " CAST(printf('%0256d',i) AS BLOB) FROM c;"
+      "CREATE INDEX elide_g ON elide_pk(grp);"
+      "PRAGMA cache_size=-4096");
+  clearNodes(pCache);
+  execSql(db, "BEGIN; DELETE FROM elide_pk WHERE seq%8=0");
+  execSql(db, "UPDATE elide_pk SET tag=printf('updated-%08x',seq) WHERE seq%8=0");
+  check("empty update after delete changes no rows", sqlite3_changes(db)==0);
+  execSql(db, "ROLLBACK");
+  check("prepare 64k scalar", sqlite3_prepare_v2(db,
+      "SELECT sum(seq),sum(id=printf('%016x',seq)) FROM elide_pk NOT INDEXED",
+      -1, &p, 0)==SQLITE_OK);
+  check("64k scalar", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int64(p, 0)==2147516416LL
+      && sqlite3_column_int(p, 1)==65536);
+  check("finish 64k scalar", sqlite3_finalize(p)==SQLITE_OK);
+  check("prepare 64k scalar warm", sqlite3_prepare_v2(db,
+      "SELECT sum(seq),sum(id=printf('%016x',seq)) FROM elide_pk NOT INDEXED",
+      -1, &p, 0)==SQLITE_OK);
+  check("64k scalar warm", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int64(p, 0)==2147516416LL
+      && sqlite3_column_int(p, 1)==65536);
+  check("finish 64k scalar warm", sqlite3_finalize(p)==SQLITE_OK);
+  check("prepare payload past the elided prefix", sqlite3_prepare_v2(db,
+      "SELECT sum(payload=CAST(printf('%0256d',seq) AS BLOB)) FROM elide_pk",
+      -1, &p, 0)==SQLITE_OK);
+  check("payload past the elided prefix", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==65536);
+  check("finish payload past the elided prefix", sqlite3_finalize(p)==SQLITE_OK);
+  execSql(db,
+      "CREATE TABLE nocase_pk(id TEXT PRIMARY KEY COLLATE NOCASE, seq INT,"
+      " payload BLOB);"
+      "INSERT INTO nocase_pk VALUES('ZzZzZzZz',7,"
+      " CAST(printf('%0256d',7) AS BLOB));"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<2048)"
+      " INSERT INTO nocase_pk SELECT printf('Key-%04d',i),i,"
+      " CAST(printf('%0256d',i) AS BLOB) FROM c;"
+      "PRAGMA cache_size=-128");
+  clearNodes(pCache);
+  execSql(db, "SELECT sum(seq) FROM nocase_pk NOT INDEXED");
+  check("nocase scan compacted a prefix",
+        pCache->prefixHead.pLruNext!=&pCache->prefixTail);
+  check("prepare nocase key", sqlite3_prepare_v2(db,
+      "SELECT id FROM nocase_pk WHERE id='zzzzzzzz'", -1, &p, 0)==SQLITE_OK);
+  check("nocase key keeps original case", sqlite3_step(p)==SQLITE_ROW
+      && strcmp((const char*)sqlite3_column_text(p, 0), "ZzZzZzZz")==0);
+  check("finish nocase key", sqlite3_finalize(p)==SQLITE_OK);
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE elide_pk; DROP TABLE nocase_pk; PRAGMA cache_size=-65536");
 }
 
 static void testBulkDeleteReadsOnce(sqlite3 *db){
@@ -1036,6 +1138,7 @@ int main(void){
   testNarrowPrefixes(db, "INTEGER", 256);
   testNarrowPrefixes(db, "TEXT", 1024);
   testShortPrefixWriteScan(db);
+  testElidedTextPkPrefix(db);
   testBulkDeleteReadsOnce(db);
   testIndexCacheSizedByIndex();
   testReload(db);

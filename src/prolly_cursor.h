@@ -28,11 +28,14 @@ struct ProllyCursor {
   u8 nAdvance;
   u8 bLargeScan;
   u8 bScanFromStart;
+  u8 bWriteScan;
 
   int iLevel;
   ProllyCursorLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
 
   u8 eState;
+  /* One restored prefix. OP_Column holds this until the cursor moves. */
+  u8 aPrefixExpand[PROLLY_PREFIX_EXPAND + PROLLY_NODE_BUFFER_SLOP];
 };
 
 #define PROLLY_CURSOR_VALID    0

@@ -52,6 +52,19 @@ void prollyBtreeCursorCurrentTreeValueSpan(
   i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
   assert( i>=0 && i<(int)pNode->nItems );
   prollyNodeValueSpan(pNode, i, ppData, pnData, pnAvail);
+  if( pNode->flags & PROLLY_NODE_PREFIX_ELIDE ){
+    int nExp = 0;
+    u8 *pBuf = pCur->pCur.aPrefixExpand;
+    int nCap = (int)sizeof(pCur->pCur.aPrefixExpand)-PROLLY_NODE_BUFFER_SLOP;
+    if( prollyCacheExpandElidedPrefix(pNode, i, pBuf, nCap, &nExp)==SQLITE_OK
+     && nExp>0 ){
+      memset(pBuf+nExp, 0, PROLLY_NODE_BUFFER_SLOP);
+      *ppData = pBuf;
+      *pnAvail = nExp;
+    }else{
+      *pnAvail = 0;
+    }
+  }
 }
 
 int prollyBtreeCursorCurrentTreeValueCopy(

@@ -599,6 +599,7 @@ int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
+  pCur->pCur.bWriteScan = (pCur->curFlags & BTCF_WriteFlag) ? 1 : 0;
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
   clearMergeCursorState(pCur);
@@ -752,6 +753,7 @@ static SQLITE_INLINE int prollyCursorFinishTreeStep(BtCursor *pCur, int rc){
 int prollyBtCursorNext(BtCursor *pCur, int flags){
   int rc, immediate;
   (void)flags;
+  pCur->pCur.bWriteScan = (pCur->curFlags & BTCF_WriteFlag) ? 1 : 0;
 
   rc = prollyBtCursorNextFastIntLeaf(pCur);
   if( rc!=SQLITE_NOTFOUND ) return rc;

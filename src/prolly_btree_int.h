@@ -804,7 +804,7 @@ static SQLITE_INLINE void cursorCurrentTreeValue(
   off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
   off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
   *ppData = pNode->pValData + (pNode->nValuePrefix
-      ? i*(pNode->nValuePrefix + PROLLY_NODE_BUFFER_SLOP) : off0);
+      ? i*prollyNodePrefixStride(pNode) : off0);
   *pnData = (int)(off1 - off0);
 }
 
