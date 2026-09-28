@@ -11,6 +11,7 @@
 ** loaded the leaf, so that scan can still drop a text key from the prefix. */
 #define PROLLY_CACHE_SCAN_ONLY 0x01
 #define PROLLY_CACHE_SCAN_KEEP 0x02
+#define PROLLY_CACHE_SCAN_DROP 0x04
 
 typedef struct ProllyCache ProllyCache;
 typedef struct ProllyCacheEntry ProllyCacheEntry;
@@ -75,6 +76,7 @@ ProllyCacheEntry *prollyCachePutTransientOwned(
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry);
 void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry);
+i64 prollyCacheCompactBytes(const ProllyNode *pNode);
 
 void prollyCacheFree(ProllyCache *cache);
 

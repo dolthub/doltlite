@@ -892,6 +892,50 @@ static void testIndexCacheSizedByIndex(void){
   unlink(zPath);
 }
 
+static sqlite3_int64 indexFetchReads(sqlite3 *db){
+  sqlite3_stmt *p = 0;
+  nRead = 0;
+  check("prepare index fetch", sqlite3_prepare_v2(db,
+      "SELECT count(*),sum(seq) FROM (SELECT seq FROM scan_ws WHERE grp=5"
+      " ORDER BY grp DESC,v DESC,id LIMIT 4096)", -1, &p, 0)==SQLITE_OK);
+  check("index fetch result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==512
+      && sqlite3_column_int64(p, 1)==1442048);
+  check("finish index fetch", sqlite3_finalize(p)==SQLITE_OK);
+  return nRead;
+}
+
+static void testLargeScanKeepsWorkingSet(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  int nCold, nWarm, nAfter;
+  execSql(db, "CREATE TABLE scan_ws(id INTEGER PRIMARY KEY, seq INT, grp INT,"
+      " v INT, payload BLOB);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<32768)"
+      " INSERT INTO scan_ws SELECT i,i,(i-1)/512,(i*7919)%1000000,"
+      " CAST(printf('%01024d',i) AS BLOB) FROM c;"
+      "CREATE INDEX scan_ws_gv ON scan_ws(grp,v);"
+      "PRAGMA cache_size=-1024");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  nCold = indexFetchReads(db);
+  nWarm = indexFetchReads(db);
+  execSql(db, "BEGIN; SELECT sum(length(payload)),sum(v) FROM scan_ws NOT INDEXED");
+  nAfter = indexFetchReads(db);
+  execSql(db, "ROLLBACK");
+  check("index fetch working set is cached", nCold>0 && nWarm==0);
+  check("a scan larger than the cache keeps the working set",
+      nAfter*8<nCold);
+  check("scan working set accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 1024*1024));
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE scan_ws; PRAGMA cache_size=-65536");
+}
+
 static sqlite3_int64 fullWideLeafBytes(ProllyCache *pCache){
   ProllyCacheEntry *heads[2] = {&pCache->lruHead, &pCache->wideHead};
   ProllyCacheEntry *tails[2] = {&pCache->lruTail, &pCache->wideTail};
@@ -1246,6 +1290,7 @@ int main(void){
   testElidedTextPkPrefix(db);
   testBulkDeleteReadsOnce(db);
   testWideValuesStayOnDisk(db);
+  testLargeScanKeepsWorkingSet(db);
   testBulkUpdateReadsOnce(db);
   testIndexCacheSizedByIndex();
   testReload(db);

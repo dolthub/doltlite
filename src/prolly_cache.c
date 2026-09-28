@@ -223,7 +223,9 @@ static ProllyCacheEntry *cacheGet(
   }
   /* A point read is not a large scan. A write scan's mark stays, so its
   ** leaf can still drop a text key when it is evicted. */
-  if( !bScan ) pEntry->bScanOnly &= (u8)~PROLLY_CACHE_SCAN_ONLY;
+  if( !bScan ){
+    pEntry->bScanOnly &= (u8)~(PROLLY_CACHE_SCAN_ONLY|PROLLY_CACHE_SCAN_DROP);
+  }
   pEntry->nEvictChance = pEntry->node.level>0
                       ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
   pEntry->nRef++;
@@ -400,6 +402,13 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
     return 1;
   }
   if( !pEntry->bAllowPrefix || pNode->level || pNode->nItems==0 ) return 0;
+  /* A scan whose compacted rows cannot fit anyway would only push out what
+  ** other reads reuse. */
+  if( (pEntry->bScanOnly & (PROLLY_CACHE_SCAN_ONLY|PROLLY_CACHE_SCAN_DROP
+                            |PROLLY_CACHE_SCAN_KEEP))
+      ==(PROLLY_CACHE_SCAN_ONLY|PROLLY_CACHE_SCAN_DROP) ){
+    return 0;
+  }
   if( pNode->nValuePrefix ){
     if( pNode->nValuePrefix!=PROLLY_NODE_VALUE_PREFIX ) return 0;
   }else if( pNode->nDataPhys!=pNode->nData ) return 0;
@@ -552,6 +561,26 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   lruRemove(pEntry);
   lruInsertHead(cache, pEntry);
   return 1;
+}
+
+/* The least a leaf shaped like pNode costs once compacted, or 0 when such a
+** leaf is never compacted. */
+i64 prollyCacheCompactBytes(const ProllyNode *pNode){
+  int nHead, nAverage, nPrefix;
+  i64 nCompact;
+  if( pNode->level || pNode->nItems==0 ) return 0;
+  nHead = (int)(pNode->pValData - pNode->pData);
+  if( nHead>pNode->nData/4 ) return 0;
+  nAverage = (pNode->nData-nHead)/pNode->nItems;
+  if( nAverage>=128 && nAverage<=1024 ){
+    nCompact = nHead + 4 + PROLLY_CACHE_SHARED_PREFIX;
+  }else{
+    nPrefix = nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
+            : nAverage>=512 ? 32 : 16;
+    nCompact = nHead + (i64)pNode->nItems*(nPrefix+PROLLY_NODE_BUFFER_SLOP);
+    if( nCompact>pNode->nData/4 ) return 0;
+  }
+  return nCompact + (i64)sizeof(ProllyCacheEntry);
 }
 
 void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry){
