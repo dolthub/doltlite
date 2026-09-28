@@ -12,7 +12,7 @@ FAMILY = re.compile(r'<!-- doltlite-hotspot-family:([0-9a-f]{24}) -->')
 STATEMENT = re.compile(r'<!-- doltlite-hotspot-statement:([0-9a-f]{24}) -->')
 BUNDLE = re.compile(r'<!-- hotspot-reproducer -->\s*```json\n(.*?)\n```', re.S)
 LABELS = {'performance-hotspot': 'Confirmed DoltLite/SQLite performance gap awaiting investigation',
-          'known-performance-hotspot': 'Investigated performance gap retained in the PR hotspot suite'}
+          'known-performance-hotspot': 'Accepted performance gap that will not be fixed'}
 
 
 def api(repo, endpoint, payload=None, paginate=False):
@@ -88,9 +88,10 @@ def issue_body(report, record, bundle, run_url, previous=None):
               '--sqlite build-stockref/sqlite3 --replay case.json --output replay-results', '```', '',
               '<!-- hotspot-reproducer -->', '```json', json.dumps(bundle, indent=2), '```', '',
               'Triage: investigate and optimize, or retain a representative reproducer in '
-              '`test/performance-hotspot-corpus/` using `performance_hotspot_issues.py promote`. '
-              'After that benchmark lands, add `known-performance-hotspot` and keep this issue open. '
-              'Fixed cases should retain their benchmark and close as completed. '
+              '`test/performance-hotspot-corpus/` using `performance_hotspot_issues.py promote` '
+              'and keep this issue open. Add `known-performance-hotspot` only when the gap is '
+              'accepted as won\'t-fix. Fixed cases move their benchmark to the nightly seeds and '
+              'close as completed. '
               'Keep the fingerprint marker when editing or grouping findings.']
     if record.get('family'):
         lines += ['', f"Parameter-family ID: `{record['family']}`. To explicitly accept other parameters of this same SQL shape and access plans, "
