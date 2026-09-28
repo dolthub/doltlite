@@ -877,9 +877,19 @@ static int doltliteCompareAndAdvanceBranchImpl(
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteTxnState saved;
   ProllyHash diskTip;
+  ProllyHash wsAtSnapshot;
   int found = 0;
+  int haveWsSnapshot = 0;
   int rc;
   if( !cs ) return SQLITE_ERROR;
+  if( !bSwitchCatalog ){
+    const char *zBranch = doltliteGetSessionBranch(db);
+    memset(&wsAtSnapshot, 0, sizeof(wsAtSnapshot));
+    if( zBranch
+     && chunkStoreGetBranchWorkingSet(cs, zBranch, &wsAtSnapshot)==SQLITE_OK ){
+      haveWsSnapshot = 1;
+    }
+  }
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteRefreshAndConfirmHead(db, cs, pExpectedHead);
@@ -900,6 +910,27 @@ static int doltliteCompareAndAdvanceBranchImpl(
     doltliteInvalidateSessionWorkingState(db);
     doltliteTxnStateClear(&saved);
     return SQLITE_BUSY;
+  }
+
+  /* A local edit changes the catalog without publishing a new working set.
+  ** Only a working-set hash that moved after the snapshot is a peer write. */
+  if( !bSwitchCatalog && haveWsSnapshot ){
+    ProllyHash wsNow;
+    int haveNow = 0;
+    int prc = chunkStoreReadDiskBranchWorkingSet(
+        cs, doltliteGetSessionBranch(db), &wsNow, &haveNow);
+    if( prc!=SQLITE_OK ){
+      chunkStoreUnlock(cs);
+      doltliteInvalidateSessionWorkingState(db);
+      doltliteTxnStateClear(&saved);
+      return prc;
+    }
+    if( haveNow && prollyHashCompare(&wsNow, &wsAtSnapshot)!=0 ){
+      chunkStoreUnlock(cs);
+      doltliteInvalidateSessionWorkingState(db);
+      doltliteTxnStateClear(&saved);
+      return SQLITE_BUSY;
+    }
   }
 
   /* Persist the tip under the confirm lock without SwitchCatalog; lock-cycling
