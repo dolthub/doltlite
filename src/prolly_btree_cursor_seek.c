@@ -240,6 +240,8 @@ static int findMatchingMutMapEntry(
   const u8 *pSortKey,
   int nSortKey,
   int bExactKey,
+  const u8 *pTreeKey,
+  int nTreeKey,
   ProllyMutMapEntry **ppMatch,
   int *pCmp,
   int *pEqSeen
@@ -282,6 +284,11 @@ static int findMatchingMutMapEntry(
 
     rc = prollyMutMapEntryAt(pMap, lo, &pEntry);
     if( rc!=SQLITE_OK ) break;
+    if( pTreeKey ){
+      int nCmp = pEntry->nKey < nTreeKey ? pEntry->nKey : nTreeKey;
+      int treeCmp = memcmp(pEntry->pKey, pTreeKey, nCmp);
+      if( treeCmp>0 || (treeCmp==0 && pEntry->nKey>nTreeKey) ) break;
+    }
     pRec = pEntry->pVal;
     nRec = pEntry->nVal;
 
@@ -1107,10 +1114,14 @@ int prollyBtCursorIndexMoveto(
             || (pCur->pKeyInfo
                 && pIdxKey->nField>=pCur->pKeyInfo->nAllField)) ){
       int savedEqSeen = pIdxKey->eqSeen;
+      const u8 *pTreeKey = 0;
+      int nTreeKey = 0;
+      if( treeFound ) prollyCursorKey(&pCur->pCur, &pTreeKey, &nTreeKey);
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
                                    pCur->pKeyInfo,
                                    pIdxKey, pSortKey, nSortKey,
                                    exactMutMapKey,
+                                   pTreeKey, nTreeKey,
                                    &mutE, &mutCmp, &mutEqSeen);
       if( rc!=SQLITE_OK ){
         return rc;
@@ -1121,6 +1132,7 @@ int prollyBtCursorIndexMoveto(
                                      pCur->pKeyInfo,
                                      pIdxKey, pSortKey, nSortKey,
                                      exactMutMapKey,
+                                     pTreeKey, nTreeKey,
                                      &mutE, &mutCmp, &mutEqSeen);
         if( rc!=SQLITE_OK ){
           return rc;

@@ -1,0 +1,66 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-index-pending-bound
+
+foreach {kind type key} {
+  integer INTEGER {i*4}
+  extended INTEGER {9007199254740992+i*4}
+  real NUMERIC {i*4+0.5}
+  nocase {TEXT COLLATE NOCASE} {printf('Key-%04d',i*4)}
+  rtrim {TEXT COLLATE RTRIM} {printf('key-%04d ',i*4)}
+} {
+  foreach direction {ASC DESC} {
+    reset_db
+    forcedelete pending-bound-oracle.db
+    sqlite3 oracle {file:pending-bound-oracle.db?doltlite_engine=sqlite} -uri 1
+    foreach conn {db oracle} {
+      $conn eval "CREATE TABLE t(id INTEGER PRIMARY KEY,k $type,v TEXT)"
+      $conn eval "CREATE INDEX tk ON t(k $direction)"
+      $conn eval "
+        WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
+        INSERT INTO t SELECT i,$key,printf('v-%d',i) FROM c;
+        CREATE TABLE probes AS SELECT * FROM t;
+        BEGIN;
+        DELETE FROM t WHERE id%8=0;
+      "
+    }
+    foreach state {deleted inserted savepoint rollback committed} {
+      foreach conn {db oracle} {
+        switch $state {
+          inserted {$conn eval {
+            INSERT INTO t SELECT id,k,'reinserted' FROM probes WHERE id%32=0;
+            INSERT INTO t SELECT id+512,k,'duplicate' FROM probes WHERE id%64=1;
+          }}
+          savepoint {$conn eval {
+            SAVEPOINT s;
+            DELETE FROM t WHERE id BETWEEN 100 AND 400;
+            INSERT INTO t SELECT id,k,'in-gap' FROM probes WHERE id IN (128,256,384);
+          }}
+          rollback {$conn eval {ROLLBACK TO s; RELEASE s}}
+          committed {$conn eval {COMMIT}}
+        }
+      }
+      do_test $kind-$direction-$state-equality {
+        set query {
+          SELECT p.id,t.id,t.v FROM probes p CROSS JOIN t INDEXED BY tk
+          WHERE t.k=p.k ORDER BY p.id,t.id
+        }
+        expr {[db eval $query] eq [oracle eval $query]}
+      } 1
+      foreach id {1 8 16 32 104 128 256 384 400 504 512} {
+        foreach op {> >= < <=} {
+          foreach order {ASC DESC} {
+            set query "SELECT id,k,v FROM t INDEXED BY tk
+              WHERE k $op (SELECT k FROM probes WHERE id=$id)
+              ORDER BY k $order,id LIMIT 3"
+            do_test $kind-$direction-$state-$id-$op-$order \
+                [list db eval $query] [oracle eval $query]
+          }
+        }
+      }
+    }
+    oracle close
+  }
+}
+
+finish_test
