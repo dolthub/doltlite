@@ -3241,6 +3241,18 @@ static int whereRangeVectorLen(
 # define ApplyCostMultiplier(C,T)
 #endif
 #ifdef DOLTLITE_PROLLY
+/* True when fetching every row of pTab through a secondary index costs far
+** more than scanning it. Each fetch seeks the table's tree, and once the
+** table outgrows the node cache that seek reads and verifies a chunk. Only
+** ANALYZE says a table is large; without it every table is assumed to be,
+** and a small table stays cached. 120 is sqlite3LogEst(4096). */
+static int doltliteRowFetchIsCostly(WhereInfo *pWInfo, Table *pTab, LogEst nRow){
+  sqlite3 *db = pWInfo->pParse->db;
+  int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+  return (pTab->tabFlags & TF_HasStat1)!=0 && nRow>=120
+      && iDb>=0 && iDb<db->nDb
+      && db->aDb[iDb].pBt!=0 && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt);
+}
 /* True when p is a literal whose NOCASE comparison cannot see past a
 ** NUL, because the literal itself has none. char(0) and column
 ** references are not literals. */
@@ -4416,10 +4428,11 @@ static int whereLoopAddBtree(
           int iCur = pSrc->iCursor;
           WhereClause *pWC2 = &pWInfo->sWC;
 #ifdef DOLTLITE_PROLLY
-          if( !HasRowid(pTab) ){
-            /* Each lookup seeks the primary key. That is much more than
-            ** a rowid move, so a full scan of a secondary index loses to
-            ** scanning the table. */
+          /* A full scan of a secondary index that fetches every row loses
+          ** to scanning the table. A fixed LIMIT can stop an ordered scan
+          ** after a few fetches, so it keeps the stock cost. */
+          if( (pWInfo->wctrlFlags & WHERE_USE_LIMIT)==0
+           && (!HasRowid(pTab) || doltliteRowFetchIsCostly(pWInfo, pTab, rSize)) ){
             nLookup = rSize + 70;
           }
 #endif
