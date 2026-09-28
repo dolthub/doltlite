@@ -1403,9 +1403,12 @@ tkt3457 tkt3457-1.5 class=intentional  # no rollback-journal file to back up
 # DROP immediately, so CREATE TEMP TRIGGER fails "no such table: t1" and the
 # orphan never exists; temp.sqlite_master is empty.
 
-# orderby5-2.3/2.4 fake a 1,000,000-row t1 and expect ORDER BY to walk
-# t1bc and fetch every row. In DoltLite each fetch seeks the table's tree, so
-# the planner scans t1 and sorts instead; the rows are the same.
+# orderby5-2.3/2.4 and analyzeC-1.3/1.3x fake large analyzed tables and
+# expect ORDER BY to walk an index and fetch every row. In DoltLite each fetch
+# seeks the table's tree, so the planner scans the table and sorts instead;
+# the rows are the same.
+analyzeC analyzeC-1.3 class=intentional  # plan shape: table scan and sort instead of fetching every row through t1a
+analyzeC analyzeC-1.3x class=intentional  # plan shape: table scan and sort instead of fetching every row through t1a
 orderby5 orderby5-2.3 class=intentional  # plan shape: table scan and sort instead of fetching every row through t1bc
 orderby5 orderby5-2.4 class=intentional  # plan shape: table scan and sort instead of fetching every row through t1bc
 
