@@ -112,7 +112,7 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 2)
+        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 3)
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -141,7 +141,7 @@ class HotspotTests(unittest.TestCase):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 6)
+            self.assertEqual(sql.call_count, 9)
             self.assertEqual([call.args[1] for call in measure_retained.call_args_list],
                              ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
@@ -168,14 +168,14 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("Add Column With Default", report.getvalue())
             self.assertIn("### Wide Row Trade-offs", report.getvalue())
             self.assertNotIn("### Wide Row Fetches", report.getvalue())
-            self.assertEqual(report.getvalue().count("### "), 3)
+            self.assertEqual(report.getvalue().count("### "), 4)
             self.assertNotIn("### Small Cache", report.getvalue())
             self.assertNotIn("### Integer Keys", report.getvalue())
-            self.assertNotIn("### After Deletes", report.getvalue())
-            self.assertTrue(all(len(call.args[2]) == 2 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 11)
+            self.assertIn("### After Deletes", report.getvalue())
+            self.assertTrue(all(len(call.args[2]) == 3 for call in measure_retained.call_args_list))
+            self.assertEqual(len(result.read_text().splitlines()), 12)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 23)
+            self.assertEqual(len(raw.read_text().splitlines()), 25)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -414,11 +414,12 @@ class HotspotTests(unittest.TestCase):
     def test_remaining_issue_themes_are_reported_and_gated(self):
         expected = {
             'in_transaction_mutations': {3304, 3306},
+            'after_deletes': {3352},
         }
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             root = Path(directory)
             fixtures = hotspots.prepare_retained({'candidate': 'new'}, root)
-            self.assertEqual(sql.call_count, 2)
+            self.assertEqual(sql.call_count, 3)
             actual = {}
             for name, bundle, databases in fixtures:
                 category = hotspots.section_of(name)
@@ -435,11 +436,11 @@ class HotspotTests(unittest.TestCase):
             parsed, _ = benchmark_compare.parse_input_artifact(f'hotspots={root}/results.tsv')
             analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
             text = report.getvalue()
-            self.assertEqual(text.count('| Workload |'), 1)
-            titles = ('In Transaction with Mutations',)
+            self.assertEqual(text.count('| Workload |'), 2)
+            titles = ('In Transaction with Mutations', 'After Deletes')
             self.assertNotIn('### Small Cache', text)
             self.assertNotIn('### Bulk Writes', text)
-            self.assertNotIn('### After Deletes', text)
+            self.assertIn('### After Deletes', text)
             positions = [text.index('### '+title+'\n') for title in titles]
             self.assertEqual(positions, sorted(positions))
             self.assertNotIn('### Bulk Deletes', text)
@@ -457,8 +458,8 @@ class HotspotTests(unittest.TestCase):
             fixtures = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
             active = [fixture for fixture in fixtures
-                      if fixture[1]['category'] == 'in_transaction_mutations']
-            self.assertEqual({b['issue'] for _, b, _ in active}, {3304, 3306})
+                      if fixture[1]['category'] in ('in_transaction_mutations', 'after_deletes')]
+            self.assertEqual({b['issue'] for _, b, _ in active}, {3304, 3306, 3352})
             retired = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
@@ -471,7 +472,7 @@ class HotspotTests(unittest.TestCase):
             self.assertEqual(sum(b['profile']['memory'] for _, b, _ in fixtures), 2)
             for name, bundle, databases in fixtures + active + bulk:
                 self.assertEqual(hotspots.section_of(name), bundle['category'])
-                self.assertIn(bundle['category'], ('in_transaction_mutations', 'bulk_writes'))
+                self.assertIn(bundle['category'], ('in_transaction_mutations', 'bulk_writes', 'after_deletes'))
                 self.assertEqual(bundle['profile']['memory'], databases['candidate']==':memory:')
                 expected, repeats = bundle['expected'], bundle['repeats']
                 sql.return_value = (f'WARM\n{expected}\nMEASURE\n' +

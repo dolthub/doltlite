@@ -39,5 +39,6 @@
   "fingerprint": "f9449125de0cea5c3a610a7d",
   "family": "729be2457231d6ac4c5040be",
   "statement": "78d84889686d2096200997a8",
-  "issue": 3352
+  "issue": 3352,
+  "category": "after_deletes"
 }
