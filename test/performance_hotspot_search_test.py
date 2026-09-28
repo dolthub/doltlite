@@ -293,7 +293,7 @@ class SearchTests(unittest.TestCase):
 
         count = 0
 
-        def measure(runner, binaries, databases, profile, case, *args):
+        def measure(runner, binaries, databases, profile, case, *args, **kwargs):
             nonlocal count
             self.assertEqual(databases['doltlite'].read_text(), 'pristine')
             count += 1

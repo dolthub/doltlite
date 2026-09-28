@@ -122,6 +122,26 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(len(runner.calls), 14)
         self.assertEqual(runner.calls[2:6], ["sqlite", "doltlite", "doltlite", "sqlite"])
 
+    def test_queries_under_the_sqlite_floor_need_three_times_the_floor(self):
+        class FakeRunner:
+            def __init__(self, sqlite_ms, doltlite_ms):
+                self.ms = {"sqlite": sqlite_ms, "doltlite": doltlite_ms}
+
+            def measure(self, binary, db, profile, case, repeats):
+                return {"ms": self.ms[binary]*repeats, "result": "42"}
+
+        binaries = {"sqlite": "sqlite", "doltlite": "doltlite"}
+        case = fuzzer.cases_for(self.profile)[0]
+        for sqlite_ms, doltlite_ms, confirmed in ((1, 29, False), (1, 31, True),
+                                                  (5, 29, False), (12, 37, True),
+                                                  (12, 35, False)):
+            with self.subTest(sqlite_ms=sqlite_ms, doltlite_ms=doltlite_ms):
+                result = fuzzer.measure_case(FakeRunner(sqlite_ms, doltlite_ms), binaries,
+                                             binaries, self.profile, case, 5, 3, 20,
+                                             min_query_ms=10)
+                self.assertEqual(result["confirmed"], confirmed)
+                self.assertEqual(bool(result["pairs"]), confirmed or doltlite_ms >= 24)
+
     def test_extreme_slowdowns_do_not_multiply_into_long_batches(self):
         runner = unittest.mock.Mock()
         runner.measure.side_effect = lambda binary, db, p, case, repeats: {
