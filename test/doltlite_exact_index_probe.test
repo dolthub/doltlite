@@ -1,0 +1,72 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-exact-index-probe
+
+foreach {kind type key update pk} {
+  text TEXT {printf('key-%04d',i)} {'new-'||id} {id}
+  blob BLOB {CAST(printf('key-%04d',i) AS BLOB)} {CAST('new-'||id AS BLOB)} {id}
+  composite TEXT {printf('key-%04d',i/4)} {'new-'||id} {id,g}
+  nocase {TEXT COLLATE NOCASE} {printf('Key-%04d',i)} {lower(id)||'-new'} {id}
+  rtrim {TEXT COLLATE RTRIM} {printf('key-%04d ',i)} {rtrim(id)||'-new '} {id}
+  numeric NUMERIC {i*2} {id+2000} {id}
+} {
+  foreach layout {rowid without-rowid} {
+    reset_db
+    forcedelete exact-probe-oracle.db
+    sqlite3 oracle {file:exact-probe-oracle.db?doltlite_engine=sqlite} -uri 1
+    set suffix [expr {$layout eq "without-rowid" ? "WITHOUT ROWID" : ""}]
+    foreach conn {db oracle} {
+      $conn eval "
+        CREATE TABLE t(id $type, g INTEGER, seq INTEGER UNIQUE, v TEXT,
+                       PRIMARY KEY($pk)) $suffix;
+        CREATE INDEX tv ON t(v,id);
+        CREATE UNIQUE INDEX tg ON t(g,v) WHERE seq%2=0;
+        WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
+        INSERT INTO t SELECT $key,i%4,i,printf('v-%04d',i) FROM c;
+        CREATE TABLE original AS SELECT * FROM t;
+        BEGIN;
+        DELETE FROM t WHERE seq%8=0;
+        INSERT INTO t SELECT * FROM original WHERE seq%16=0;
+        SAVEPOINT s;
+      "
+    }
+    foreach phase {updated ignored replaced rollback updated-again committed} {
+      foreach conn {db oracle} {
+        switch $phase {
+          updated - updated-again {$conn eval "UPDATE t SET id=$update"}
+          ignored {$conn eval {
+            INSERT OR IGNORE INTO t SELECT * FROM original;
+          }}
+          replaced {$conn eval {
+            INSERT OR REPLACE INTO t SELECT * FROM original WHERE seq%4=0;
+          }}
+          rollback {$conn eval {ROLLBACK TO s; RELEASE s}}
+          committed {$conn eval {COMMIT}}
+        }
+      }
+      foreach {name query} {
+        rows {SELECT id,g,seq,v FROM t ORDER BY id,g}
+        backward {SELECT id,g,seq,v FROM t ORDER BY id DESC,g DESC LIMIT 20}
+        index {SELECT id,g,seq,v FROM t INDEXED BY tv WHERE v>='v-0200' ORDER BY v,id,g}
+        missing {SELECT seq FROM original WHERE id NOT IN (SELECT id FROM t) ORDER BY seq}
+        found {SELECT seq FROM original WHERE id IN (SELECT id FROM t) ORDER BY seq}
+        integrity {PRAGMA integrity_check}
+      } {
+        do_test $kind-$layout-$phase-$name {
+          db eval $query
+        } [oracle eval $query]
+      }
+    }
+    foreach conn {db oracle} {$conn eval {BEGIN}}
+    do_test $kind-$layout-constraint {
+      catchsql {UPDATE t SET seq=1}
+    } [catchsql {UPDATE t SET seq=1} oracle]
+    do_test $kind-$layout-constraint-atomic {
+      db eval {SELECT id,g,seq,v FROM t ORDER BY seq}
+    } [oracle eval {SELECT id,g,seq,v FROM t ORDER BY seq}]
+    foreach conn {db oracle} {$conn eval {ROLLBACK}}
+    oracle close
+  }
+}
+
+finish_test

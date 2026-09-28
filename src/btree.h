@@ -276,6 +276,7 @@ int sqlite3BtreeIndexMoveto(
   int *pRes
 );
 #if defined(DOLTLITE_PROLLY)
+int sqlite3BtreeProllyIndexMovetoExact(BtCursor*, UnpackedRecord*, int*);
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor*,
   UnpackedRecord *pUnKey,
