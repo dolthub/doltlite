@@ -211,3 +211,4 @@ win32lock
 win32longpath
 win32nolock
 zerodamage
+doltlite_index_pending_bound
