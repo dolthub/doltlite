@@ -1,0 +1,71 @@
+{
+  "seed": 362381021581,
+  "generator_version": 2,
+  "profile": {
+    "rows": 16384,
+    "payload": 32,
+    "key": "text",
+    "groups": 256,
+    "skew": true,
+    "cache_kib": 65536,
+    "stride": 8,
+    "lookups": 10000,
+    "target": 186,
+    "start": 9776,
+    "width": 1024,
+    "memory": false
+  },
+  "case": {
+    "name": "update_pk_group_after_scan",
+    "sql": "UPDATE t SET id=printf('%016x', seq+16384) WHERE t.grp<16;",
+    "verify": "SELECT changes(),count(*),sum(v),sum(seq),min(id),max(id),sum(length(payload)),sum(length(tag)),sum(unicode(substr(tag,-1,1))),sum(unicode(substr(CAST(payload AS TEXT),-1,1))) FROM t;",
+    "prepare": "SELECT sum(length(payload)),sum(v) FROM t NOT INDEXED;",
+    "recipe": {
+      "source": "in",
+      "predicate": "group_range",
+      "expression": "bytes",
+      "operator": "update_pk",
+      "indexes": "ordered",
+      "layout": "early",
+      "context": "after_scan",
+      "direction": "DESC"
+    },
+    "warmup": ""
+  },
+  "setup": "setup.sql",
+  "setup_sql": "CREATE TABLE t(id TEXT PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);\nBEGIN;\nWITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%256 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(4097) UNION ALL SELECT i+1 FROM c WHERE i<8192) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%256 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(8193) UNION ALL SELECT i+1 FROM c WHERE i<12288) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%256 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(12289) UNION ALL SELECT i+1 FROM c WHERE i<16384) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%256 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nCOMMIT;\nCREATE INDEX t_g ON t(grp);\nCREATE INDEX t_gv ON t(grp,v);\nANALYZE;\nCREATE TEMP TABLE hotspot_groups(seq INTEGER PRIMARY KEY,grp INTEGER);\nINSERT INTO hotspot_groups SELECT row_number() OVER (ORDER BY grp ASC,seq),grp FROM t;\nUPDATE t SET grp=(SELECT grp FROM hotspot_groups WHERE hotspot_groups.seq=t.seq);\nDROP TABLE hotspot_groups;\nCREATE INDEX t_s ON t(seq);\nCREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\nINSERT INTO u SELECT seq,grp,v FROM t WHERE seq%8=0;\nCREATE INDEX u_g ON u(grp);\nANALYZE;\n",
+  "expected": "14848|16384|8180060480|134225920|0000000000003a01|0000000000007a00|524288|196608|1148928|860152",
+  "repeats": 3,
+  "fingerprint": "72e30bdf69bdb861e5a2e8d8",
+  "family": "9f6abfb59c8d967d4daca350",
+  "statement": "8f8c8b8f0f316556841e2917",
+  "issue": 3342,
+  "category": "bulk_writes",
+  "discovery": {
+    "source_commit": "b4f19b30af06c5217d41ae6e993b3f85af517caf",
+    "median_ratio": 6.964575645756457,
+    "minimum_ratio": 6.644668702695525,
+    "pairs": [
+      {
+        "doltlite_ms": 356.336,
+        "sqlite_ms": 50.514
+      },
+      {
+        "doltlite_ms": 352.561,
+        "sqlite_ms": 49.391
+      },
+      {
+        "doltlite_ms": 350.287,
+        "sqlite_ms": 52.717
+      },
+      {
+        "doltlite_ms": 349.169,
+        "sqlite_ms": 50.135
+      },
+      {
+        "doltlite_ms": 349.118,
+        "sqlite_ms": 50.943
+      }
+    ]
+  }
+}

@@ -112,7 +112,7 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 10)
+        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 12)
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -141,7 +141,7 @@ class HotspotTests(unittest.TestCase):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 27)
+            self.assertEqual(sql.call_count, 30)
             self.assertEqual([call.args[1] for call in measure_retained.call_args_list],
                              ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
@@ -174,10 +174,10 @@ class HotspotTests(unittest.TestCase):
                 self.assertIn(f"### {title}\n", report.getvalue())
             self.assertNotIn("### Integer Keys", report.getvalue())
             self.assertIn("### After Deletes", report.getvalue())
-            self.assertTrue(all(len(call.args[2]) == 10 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 19)
+            self.assertTrue(all(len(call.args[2]) == 12 for call in measure_retained.call_args_list))
+            self.assertEqual(len(result.read_text().splitlines()), 21)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 39)
+            self.assertEqual(len(raw.read_text().splitlines()), 43)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -420,13 +420,13 @@ class HotspotTests(unittest.TestCase):
             'index_row_fetches': {3367},
             'planner_choices': {3360},
             'in_transaction_mutations': {3306, 3334},
-            'bulk_writes': {3332, 3348, 3350, 3361, 3364},
+            'bulk_writes': {3332, 3342, 3348, 3350, 3356, 3361, 3364},
             'after_deletes': {3352},
         }
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             root = Path(directory)
             fixtures = hotspots.prepare_retained({'candidate': 'new'}, root)
-            self.assertEqual(sql.call_count, 9)
+            self.assertEqual(sql.call_count, 10)
             actual = {}
             for name, bundle, databases in fixtures:
                 category = hotspots.section_of(name)

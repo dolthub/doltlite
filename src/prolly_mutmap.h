@@ -69,6 +69,7 @@ struct ProllyMutMap {
   int nUndoAlloc;
   /* Cursors detect map replacement/rollback without comparing recycled pointers. */
   u32 generation;
+  u32 orderGeneration;
   /* Every entry with bInTree set deletes a key present in the tree whose
   ** root is inTreeRoot. */
   u8 bInTreeRoot;

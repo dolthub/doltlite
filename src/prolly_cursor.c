@@ -535,6 +535,34 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
   int leafRes;
   int leafIdx;
 
+  pEntry = cursorCurrentLeaf(cur);
+  if( pEntry && pEntry->node.nItems>0 ){
+    const u8 *pBound;
+    int nBound;
+    leafIdx = cur->aLevel[cur->iLevel].idx;
+    prollyNodeKey(&pEntry->node, leafIdx, &pBound, &nBound);
+    leafRes = prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0);
+    if( leafRes==0 ){
+      *pRes = 0;
+      return SQLITE_OK;
+    }
+    if( leafRes>0 && leafIdx<pEntry->node.nItems-1 ){
+      prollyNodeKey(&pEntry->node, leafIdx+1, &pBound, &nBound);
+      leafRes = prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0);
+      if( leafRes<=0 ){
+        return finalizeSeekOnLeaf(cur, pEntry, leafIdx+1, leafRes, pRes);
+      }
+    }
+    prollyNodeKey(&pEntry->node, 0, &pBound, &nBound);
+    if( prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0)>=0 ){
+      prollyNodeKey(&pEntry->node, pEntry->node.nItems-1, &pBound, &nBound);
+      if( prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0)<=0 ){
+        leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes);
+        return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
+      }
+    }
+  }
+
   rc = initCursorAtRoot(cur, &pEntry);
   if( rc!=SQLITE_OK ) return rc;
   if( cur->eState==PROLLY_CURSOR_EOF ){

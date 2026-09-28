@@ -1094,13 +1094,29 @@ static int prollyIndexMoveto(
         pRes, &done, &isDeleted);
     if( rc!=SQLITE_OK || done ) return rc;
 
+    exactOnly = exactOnly && pIdxKey->default_rc==0
+        && (exactMutMapKey || (!pCur->isTableRoot && pCur->pKeyInfo
+                              && pIdxKey->nField>=pCur->pKeyInfo->nAllField));
+    if( exactOnly ){
+      ProllyCacheEntry *pRoot = pCur->pCur.aLevel[0].pEntry;
+      if( pRoot && pRoot->node.nItems>0
+       && prollyHashCompare(&pCur->pCur.root, &pRoot->hash)==0 ){
+        const u8 *pLast;
+        int nLast;
+        prollyNodeKey(&pRoot->node, pRoot->node.nItems-1, &pLast, &nLast);
+        if( prollyCompareKeys(0, pSortKey, nSortKey, 0, pLast, nLast, 0)>0 ){
+          pCur->eState = CURSOR_INVALID;
+          *pRes = -1;
+          return SQLITE_OK;
+        }
+      }
+    }
+
     rc = indexMovetoExactTreeHit(
         pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey,
         isDeleted, pRes, &done);
     if( rc!=SQLITE_OK || done ) return rc;
-    if( exactOnly && pIdxKey->default_rc==0
-     && (exactMutMapKey || (!pCur->isTableRoot && pCur->pKeyInfo
-                           && pIdxKey->nField>=pCur->pKeyInfo->nAllField)) ){
+    if( exactOnly ){
       pCur->eState = CURSOR_INVALID;
       *pRes = -1;
       return SQLITE_OK;

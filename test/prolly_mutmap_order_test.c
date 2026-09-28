@@ -131,10 +131,38 @@ static void testOrder(int nPrefix, int nKeys, int wide, int isInt){
   prollyMutMapFree(&mm);
 }
 
+static void testWritePhases(int isInt){
+  ProllyMutMap mm;
+  TestKey keys[768];
+  int phase, i;
+  prollyMutMapInitMode(&mm, isInt, 0);
+  for(phase=0; phase<3; phase++){
+    if( phase==1 ) prollyMutMapPushSavepoint(&mm, 1);
+    for(i=0; i<256; i++){
+      int value = phase*256 + (i%2 ? 255-i/2 : i/2);
+      TestKey *k = &keys[phase*256+i];
+      memset(k, 0, sizeof(*k));
+      prollyEncodeIntKey(value, k->key);
+      k->nKey = 8;
+      k->value = value;
+      check("insert after ordered scan", prollyMutMapInsert(&mm,
+            k->key, k->nKey, intKey(&mm, k),
+            (const u8*)&value, sizeof(value))==SQLITE_OK);
+    }
+    qsort(keys, (phase+1)*256, sizeof(keys[0]), keyCmp);
+    verify(&mm, keys, (phase+1)*256, 0);
+  }
+  check("rollback write phases", prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
+  verify(&mm, keys, 256, 0);
+  prollyMutMapFree(&mm);
+}
+
 int main(void){
   static const int prefixes[] = {0, 7, 8, 15, 16, 23, 24, 31, 32, 64, 128};
   int i, wide;
   sqlite3_initialize();
+  testWritePhases(0);
+  testWritePhases(1);
   check("empty keys compare equal", prollyKeyCmp(0, 0, 0, 0)==0);
   check("empty key sorts first", prollyKeyCmp(0, 0, (const u8*)"x", 1)<0);
   check("nonempty key sorts last", prollyKeyCmp((const u8*)"x", 1, 0, 0)>0);
