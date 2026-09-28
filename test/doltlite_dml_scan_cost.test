@@ -92,4 +92,38 @@ do_test ipk-not-indexed-rows {
   db eval {SELECT id FROM t NOT INDEXED WHERE val > 15 ORDER BY id}
 } {2 3}
 
+reset_db
+do_execsql_test lookup-cost-setup {
+  CREATE TABLE r(id INTEGER PRIMARY KEY, seq INTEGER NOT NULL,
+                 grp INTEGER NOT NULL, v INTEGER NOT NULL, payload BLOB);
+  CREATE TABLE k(id TEXT PRIMARY KEY, seq INTEGER NOT NULL,
+                 grp INTEGER NOT NULL, v INTEGER NOT NULL, payload BLOB);
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)
+  INSERT INTO r SELECT i,i,i%256,(i*7919)%1000000,
+                       CAST(printf('%0256d',i) AS BLOB) FROM c;
+  INSERT INTO k SELECT printf('%016x',id),seq,grp,v,payload FROM r;
+  CREATE INDEX r_g ON r(grp);
+  CREATE INDEX k_s ON k(seq);
+  ANALYZE;
+} {}
+# Every row fetched through a secondary index seeks the table's tree, so
+# grouping by an index order that fetches each row loses to a sort.
+do_test lookup-cost-rowid-group-plan {
+  dml_scan_plan db {SELECT grp,sum(v) FROM r GROUP BY grp}
+} {{SCAN r} {USE TEMP B-TREE FOR GROUP BY}}
+do_execsql_test lookup-cost-rowid-group-rows {
+  SELECT count(*),sum(s) FROM (SELECT grp,sum(v) AS s FROM r GROUP BY grp)
+} [db eval {SELECT 256,sum(v) FROM r}]
+# A fixed LIMIT stops an ordered index scan after a few fetches.
+do_test lookup-cost-limit-plan {
+  dml_scan_plan db {SELECT v FROM k ORDER BY seq LIMIT 10}
+} {{SCAN k USING INDEX k_s}}
+do_test lookup-cost-rowid-limit-plan {
+  dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT 10}
+} {{SCAN r USING INDEX r_g}}
+do_test lookup-cost-selective-plans {
+  list [dml_scan_plan db {SELECT v FROM k WHERE seq=77}] \
+       [dml_scan_plan db {SELECT sum(v) FROM k WHERE seq BETWEEN 100 AND 140}]
+} {{{SEARCH k USING INDEX k_s (seq=?)}} {{SEARCH k USING INDEX k_s (seq>? AND seq<?)}}}
+
 finish_test
