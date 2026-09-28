@@ -1,0 +1,71 @@
+{
+  "seed": 362381021581,
+  "generator_version": 2,
+  "profile": {
+    "rows": 65536,
+    "payload": 256,
+    "key": "integer",
+    "groups": 256,
+    "skew": false,
+    "cache_kib": 4096,
+    "stride": 32,
+    "lookups": 1000,
+    "target": 69,
+    "start": 30681,
+    "width": 512,
+    "memory": false
+  },
+  "case": {
+    "name": "ordered_limit_after_update",
+    "sql": "SELECT count(*),sum(x) FROM (SELECT t.seq AS x,t.seq AS seq,t.grp AS grp FROM t WHERE t.seq%32=0 AND t.seq IN (SELECT id FROM u WHERE grp=t.grp) ORDER BY t.seq DESC LIMIT 32);",
+    "verify": "",
+    "prepare": "UPDATE t SET v=v+1 WHERE seq%32=0;",
+    "recipe": {
+      "source": "in",
+      "predicate": "modulo",
+      "expression": "seq",
+      "operator": "ordered_limit",
+      "indexes": "cover",
+      "layout": "early",
+      "context": "after_update",
+      "direction": "DESC"
+    },
+    "warmup": ""
+  },
+  "setup": "setup.sql",
+  "setup_sql": "CREATE TABLE t(id INTEGER PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);\nBEGIN;\nWITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(4097) UNION ALL SELECT i+1 FROM c WHERE i<8192) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(8193) UNION ALL SELECT i+1 FROM c WHERE i<12288) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(12289) UNION ALL SELECT i+1 FROM c WHERE i<16384) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(16385) UNION ALL SELECT i+1 FROM c WHERE i<20480) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(20481) UNION ALL SELECT i+1 FROM c WHERE i<24576) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(24577) UNION ALL SELECT i+1 FROM c WHERE i<28672) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(28673) UNION ALL SELECT i+1 FROM c WHERE i<32768) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(32769) UNION ALL SELECT i+1 FROM c WHERE i<36864) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(36865) UNION ALL SELECT i+1 FROM c WHERE i<40960) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(40961) UNION ALL SELECT i+1 FROM c WHERE i<45056) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(45057) UNION ALL SELECT i+1 FROM c WHERE i<49152) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(49153) UNION ALL SELECT i+1 FROM c WHERE i<53248) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(53249) UNION ALL SELECT i+1 FROM c WHERE i<57344) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(57345) UNION ALL SELECT i+1 FROM c WHERE i<61440) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(61441) UNION ALL SELECT i+1 FROM c WHERE i<65536) INSERT INTO t SELECT i,i,i%256,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;\nCOMMIT;\nCREATE INDEX t_g ON t(grp);\nCREATE INDEX t_gv ON t(grp,v);\nANALYZE;\nCREATE TEMP TABLE hotspot_groups(seq INTEGER PRIMARY KEY,grp INTEGER);\nINSERT INTO hotspot_groups SELECT row_number() OVER (ORDER BY grp ASC,seq),grp FROM t;\nUPDATE t SET grp=(SELECT grp FROM hotspot_groups WHERE hotspot_groups.seq=t.seq);\nDROP TABLE hotspot_groups;\nDROP INDEX t_g;\nCREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\nINSERT INTO u SELECT seq,grp,v FROM t WHERE seq%32=0;\nCREATE INDEX u_g ON u(grp);\nANALYZE;\n",
+  "expected": "32|2081280",
+  "repeats": 6,
+  "fingerprint": "7e49832744ef56766e8f7c95",
+  "family": "ebe715dd7057faeb93f092d0",
+  "statement": "d1de2284169fdd894da0186a",
+  "category": "in_transaction_mutations",
+  "issue": 3334,
+  "discovery": {
+    "source_commit": "b4f19b30af06c5217d41ae6e993b3f85af517caf",
+    "median_ratio": 4.1251499329711425,
+    "minimum_ratio": 3.975148330225462,
+    "pairs": [
+      {
+        "doltlite_ms": 233.863,
+        "sqlite_ms": 56.692
+      },
+      {
+        "doltlite_ms": 233.915,
+        "sqlite_ms": 58.705
+      },
+      {
+        "doltlite_ms": 234.359,
+        "sqlite_ms": 54.687
+      },
+      {
+        "doltlite_ms": 234.494,
+        "sqlite_ms": 58.99
+      },
+      {
+        "doltlite_ms": 233.096,
+        "sqlite_ms": 55.245
+      }
+    ]
+  }
+}

@@ -40,6 +40,8 @@ WIDE_NAME = re.compile(r"wide_(?:thrash_)?p([0-9]+)_([a-z_]+)")
 RETAINED_SECTIONS = (("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
                      ("small_cache", "Small Cache"),
+                     ("index_row_fetches", "Index Row Fetches"),
+                     ("planner_choices", "Planner Choices"),
                      ("in_transaction_mutations", "In Transaction with Mutations"),
                      ("bulk_writes", "Bulk Writes"),
                      ("after_deletes", "After Deletes"),
