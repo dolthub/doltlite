@@ -1067,7 +1067,23 @@ static void doltliteCommitFunc(
 
   {
     ProllyHash workingCatHash;
+    const char *zPause = getenv("DOLTLITE_PAUSE_BEFORE_BRANCH_ADVANCE");
     rc = doltliteFlushCatalogToHash(db, &workingCatHash);
+    /* Test hook: stop after the catalog hash exists and before it is stored,
+    ** so a peer insert can land in that gap. */
+    if( rc==SQLITE_OK && zPause && zPause[0] ){
+      FILE *ready;
+      char zReady[512];
+      sqlite3_snprintf(sizeof(zReady), zReady, "%s.ready", zPause);
+      ready = fopen(zReady, "w");
+      if( ready ) fclose(ready);
+      while( 1 ){
+        FILE *hold = fopen(zPause, "r");
+        if( !hold ) break;
+        fclose(hold);
+        sqlite3_sleep(20);
+      }
+    }
     if( rc==SQLITE_OK ){
       rc = doltliteCompareAndAdvanceBranchCurrentCatalog(
           db, &sessionHeadBeforeLock, &commitHash, &catalogHash,

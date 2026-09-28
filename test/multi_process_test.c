@@ -1048,6 +1048,71 @@ static void test_write_after_lost_commit_race(void){
   remove(path);
 }
 
+/* Holds dolt_commit after it has hashed its working catalog and before it
+** publishes that catalog. A peer insert in the gap must survive. */
+static void test_commit_keeps_peer_insert_during_publish(void){
+  char path[256];
+  char pause[256];
+  char ready[300];
+  sqlite3 *db = 0;
+  int status = 0;
+  int i;
+  pid_t pid;
+
+  printf("--- Test 6e: dolt_commit does not drop an insert that landed before publish ---\n");
+  snprintf(path, sizeof(path), "/tmp/mp_commit_gap_%d.db", (int)getpid());
+  snprintf(pause, sizeof(pause), "/tmp/mp_commit_gap_%d.pause", (int)getpid());
+  snprintf(ready, sizeof(ready), "%s.ready", pause);
+  remove(path);
+  remove(pause);
+  remove(ready);
+  setup_db(path);
+  {
+    FILE *hold = fopen(pause, "w");
+    if( !hold ){ perror("pause"); _exit(1); }
+    fclose(hold);
+  }
+  pid = fork();
+  if( pid==0 ){
+    int rc;
+    setenv("DOLTLITE_PAUSE_BEFORE_BRANCH_ADVANCE", pause, 1);
+    db = 0;
+    if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(1);
+    sqlite3_busy_timeout(db, 10000);
+    if( execSql(db, "INSERT INTO t VALUES(10, 'snap')")!=SQLITE_OK ) _exit(2);
+    rc = execSql(db, "SELECT dolt_commit('-Am','snap')");
+    sqlite3_close(db);
+    if( rc==SQLITE_BUSY ) _exit(10);
+    if( rc==SQLITE_OK ) _exit(0);
+    _exit(3);
+  }
+  if( pid<0 ){ perror("fork"); _exit(1); }
+  for( i=0; i<500 && access(ready, F_OK)!=0; i++ ) sqlite3_sleep(20);
+  check("mp_commit_gap_reached_pause", access(ready, F_OK)==0);
+  check("mp_commit_gap_open", sqlite3_open(path, &db)==SQLITE_OK);
+  sqlite3_busy_timeout(db, 10000);
+  check("mp_commit_gap_peer_insert",
+        execSql(db, "INSERT INTO t VALUES(11, 'peer')")==SQLITE_OK);
+  remove(pause);
+  waitpid(pid, &status, 0);
+  check("mp_commit_gap_commit_busy",
+        WIFEXITED(status) && WEXITSTATUS(status)==10);
+  check("mp_commit_gap_peer_kept",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)"),
+          "1,10,11")==0);
+  check("mp_commit_gap_retry",
+        strlen(queryScalarText(db, "SELECT dolt_commit('-Am','retry')"))==40);
+  check("mp_commit_gap_head",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id) FROM (SELECT id FROM dolt_at_t('HEAD') ORDER BY id)"),
+          "1,10,11")==0);
+  sqlite3_close(db);
+  remove(path);
+  remove(pause);
+  remove(ready);
+}
+
 static void test_commit_does_not_erase_peer_write(void){
   char path[256];
   sqlite3 *db = 0;
@@ -1210,6 +1275,7 @@ int main(){
   test_cross_process_commit_conflict();
   test_write_after_lost_commit_race();
   test_commit_does_not_erase_peer_write();
+  test_commit_keeps_peer_insert_during_publish();
   test_ref_command_binds_post_wait_tip();
   test_cross_process_commit_after_peer();
   test_many_process_commit_contention();
