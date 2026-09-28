@@ -27,6 +27,7 @@ struct ProllyCursor {
   u8 bAllowPrefix;
   u8 nAdvance;
   u8 bLargeScan;
+  u8 bDropScan;
   u8 bScanFromStart;
   u8 bWriteScan;
 

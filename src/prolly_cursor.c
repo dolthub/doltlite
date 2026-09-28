@@ -5,9 +5,10 @@
 #include <string.h>
 #include <assert.h>
 
-static void cacheNoteLargeScan(ProllyCacheEntry *pEntry, int bLarge){
-  if( bLarge ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_ONLY;
+static void cacheNoteLargeScan(ProllyCacheEntry *pEntry, ProllyCursor *cur){
+  if( cur->bLargeScan ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_ONLY;
   else pEntry->bScanOnly &= (u8)~PROLLY_CACHE_SCAN_ONLY;
+  if( cur->bDropScan ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_DROP;
 }
 
 static void cacheNoteWriteScan(ProllyCacheEntry *pEntry, int bWrite){
@@ -67,7 +68,7 @@ static int cacheReadAheadNode(
   pEntry = prollyCachePutOwned(pCache, pHash, pCopy, nData, &rc);
   if( pEntry ){
     pEntry->bAllowPrefix = cur->bAllowPrefix;
-    cacheNoteLargeScan(pEntry, cur->bLargeScan);
+    cacheNoteLargeScan(pEntry, cur);
     cacheNoteWriteScan(pEntry, cur->bWriteScan);
     pEntry->bReadAheadUnused = 1;
     prollyCacheRelease(pCache, pEntry);
@@ -132,7 +133,7 @@ static int prollyLoadNodeMaybeSparse(
   }
   if( !pEntry ) return rc;
   pEntry->bAllowPrefix = cur->bAllowPrefix;
-  cacheNoteLargeScan(pEntry, cur->bLargeScan);
+  cacheNoteLargeScan(pEntry, cur);
   cacheNoteWriteScan(pEntry, cur->bWriteScan);
   *ppEntry = pEntry;
   return SQLITE_OK;
@@ -404,6 +405,11 @@ int prollyCursorNext(ProllyCursor *cur){
         }
         cur->bLargeScan = nRow*pLeaf->node.nData
             > (double)cur->pCache->nMaxByte*pLeaf->node.nItems;
+        if( cur->bLargeScan ){
+          i64 nCompact = prollyCacheCompactBytes(&pLeaf->node);
+          cur->bDropScan = nCompact>0 && nRow*(double)nCompact
+              > (double)cur->pCache->nMaxByte*pLeaf->node.nItems;
+        }
       }
     }
   }
@@ -449,6 +455,7 @@ int prollyCursorPrev(ProllyCursor *cur){
   level = cur->iLevel;
   cur->nAdvance = 0;
   cur->bLargeScan = 0;
+  cur->bDropScan = 0;
   cur->bScanFromStart = 0;
   while( level>0 ){
     prollyCacheRelease(cur->pCache, cur->aLevel[level].pEntry);
@@ -477,6 +484,7 @@ static ProllyCacheEntry *cursorCurrentLeaf(ProllyCursor *cur){
   }
   cur->nAdvance = 0;
   cur->bLargeScan = 0;
+  cur->bDropScan = 0;
   cur->bScanFromStart = 0;
   return cur->aLevel[cur->iLevel].pEntry;
 }
@@ -594,6 +602,7 @@ void prollyCursorReleaseAll(ProllyCursor *cur){
   cur->iLevel = 0;
   cur->nAdvance = 0;
   cur->bLargeScan = 0;
+  cur->bDropScan = 0;
   cur->bScanFromStart = 0;
 
   cur->eState = PROLLY_CURSOR_INVALID;
