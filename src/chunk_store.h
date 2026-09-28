@@ -307,6 +307,8 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName);
 int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
                                 ProllyHash *pTip, int *pFound);
+int chunkStoreReadDiskBranchWorkingSet(ChunkStore *cs, const char *zName,
+                                       ProllyHash *pWorkingSet, int *pFound);
 int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
 int chunkStoreSerializeRefs(ChunkStore *cs);
 

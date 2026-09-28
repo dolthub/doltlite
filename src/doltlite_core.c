@@ -866,36 +866,6 @@ int doltliteAdvanceBranch(
       db, pNewHead, pCatalogHash, pWorkingCatHash, &saved, 1);
 }
 
-/* Published working catalog, read by opening the file again so a stale
-** in-memory refs image cannot hide a peer commit. */
-static int doltlitePublishedWorkingCatalog(
-  ChunkStore *cs,
-  const char *zBranch,
-  ProllyHash *pCat
-){
-  ChunkStore tmp;
-  int rc;
-
-  memset(pCat, 0, sizeof(*pCat));
-  if( !cs || !zBranch ) return SQLITE_MISUSE;
-  if( cs->isMemory || cs->isBuffer || !cs->file.zFilename ){
-    rc = btreeReadWorkingCatalog(cs, zBranch, pCat, 0);
-  }else{
-    memset(&tmp, 0, sizeof(tmp));
-    /* Read-only so closing this view cannot append a clean-close marker. */
-    rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                        SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = btreeReadWorkingCatalog(&tmp, zBranch, pCat, 0);
-    chunkStoreClose(&tmp);
-  }
-  if( rc==SQLITE_NOTFOUND ){
-    memset(pCat, 0, sizeof(*pCat));
-    return SQLITE_OK;
-  }
-  return rc;
-}
-
 static int doltliteCompareAndAdvanceBranchImpl(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
@@ -907,9 +877,19 @@ static int doltliteCompareAndAdvanceBranchImpl(
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteTxnState saved;
   ProllyHash diskTip;
+  ProllyHash wsAtSnapshot;
   int found = 0;
+  int haveWsSnapshot = 0;
   int rc;
   if( !cs ) return SQLITE_ERROR;
+  if( !bSwitchCatalog ){
+    const char *zBranch = doltliteGetSessionBranch(db);
+    memset(&wsAtSnapshot, 0, sizeof(wsAtSnapshot));
+    if( zBranch
+     && chunkStoreGetBranchWorkingSet(cs, zBranch, &wsAtSnapshot)==SQLITE_OK ){
+      haveWsSnapshot = 1;
+    }
+  }
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteRefreshAndConfirmHead(db, cs, pExpectedHead);
@@ -932,23 +912,20 @@ static int doltliteCompareAndAdvanceBranchImpl(
     return SQLITE_BUSY;
   }
 
-  /* The catalog about to be stored was hashed before this lock. If the
-  ** published working set is a different catalog, a peer commit landed in
-  ** between and storing ours would drop that write. */
-  if( !bSwitchCatalog
-   && pWorkingCatHash
-   && !prollyHashIsEmpty(pWorkingCatHash) ){
-    ProllyHash published;
-    int prc = doltlitePublishedWorkingCatalog(
-        cs, doltliteGetSessionBranch(db), &published);
+  /* A local edit changes the catalog without publishing a new working set.
+  ** Only a working-set hash that moved after the snapshot is a peer write. */
+  if( !bSwitchCatalog && haveWsSnapshot ){
+    ProllyHash wsNow;
+    int haveNow = 0;
+    int prc = chunkStoreReadDiskBranchWorkingSet(
+        cs, doltliteGetSessionBranch(db), &wsNow, &haveNow);
     if( prc!=SQLITE_OK ){
       chunkStoreUnlock(cs);
       doltliteInvalidateSessionWorkingState(db);
       doltliteTxnStateClear(&saved);
       return prc;
     }
-    if( !prollyHashIsEmpty(&published)
-     && prollyHashCompare(&published, pWorkingCatHash)!=0 ){
+    if( haveNow && prollyHashCompare(&wsNow, &wsAtSnapshot)!=0 ){
       chunkStoreUnlock(cs);
       doltliteInvalidateSessionWorkingState(db);
       doltliteTxnStateClear(&saved);

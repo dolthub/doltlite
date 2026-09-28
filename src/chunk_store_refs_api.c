@@ -138,6 +138,37 @@ int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
   return SQLITE_OK;
 }
 
+/* Same short-circuit as the tip read. An insert does not move the branch
+** tip, so the tip check cannot see it. */
+int chunkStoreReadDiskBranchWorkingSet(ChunkStore *cs, const char *zName,
+                                       ProllyHash *pWorkingSet, int *pFound){
+  ChunkStore tmp;
+  int rc;
+
+  *pFound = 0;
+  memset(pWorkingSet, 0, sizeof(*pWorkingSet));
+  if( cs->isMemory || cs->isBuffer || !cs->file.zFilename ){
+    if( chunkStoreGetBranchWorkingSet(cs, zName, pWorkingSet)==SQLITE_OK ){
+      *pFound = 1;
+    }
+    return SQLITE_OK;
+  }
+  if( csDiskStateMatchesMemory(cs) ){
+    if( chunkStoreGetBranchWorkingSet(cs, zName, pWorkingSet)==SQLITE_OK ){
+      *pFound = 1;
+    }
+    return SQLITE_OK;
+  }
+  rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  if( rc!=SQLITE_OK ) return rc;
+  if( chunkStoreGetBranchWorkingSet(&tmp, zName, pWorkingSet)==SQLITE_OK ){
+    *pFound = 1;
+  }
+  chunkStoreClose(&tmp);
+  return SQLITE_OK;
+}
+
 int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
   int n = cs->refs.nBranches;
   if( chunkStoreFindBranch(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
