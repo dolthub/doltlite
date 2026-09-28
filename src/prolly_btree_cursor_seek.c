@@ -1043,10 +1043,11 @@ static int indexMovetoPrefixLast(
   return SQLITE_OK;
 }
 
-int prollyBtCursorIndexMoveto(
+static int prollyIndexMoveto(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
-  int *pRes
+  int *pRes,
+  int exactOnly
 ){
   int rc;
   int done = 0;
@@ -1097,6 +1098,13 @@ int prollyBtCursorIndexMoveto(
         pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey,
         isDeleted, pRes, &done);
     if( rc!=SQLITE_OK || done ) return rc;
+    if( exactOnly && pIdxKey->default_rc==0
+     && (exactMutMapKey || (!pCur->isTableRoot && pCur->pKeyInfo
+                           && pIdxKey->nField>=pCur->pKeyInfo->nAllField)) ){
+      pCur->eState = CURSOR_INVALID;
+      *pRes = -1;
+      return SQLITE_OK;
+    }
     /* Do not swallow a failed tree seek as "not found". */
     rc = indexMovetoScanTreeLeaf(
         pCur, pIdxKey, pSortKey, nSortKey, nSeekKeyField,
@@ -1241,6 +1249,23 @@ int prollyBtCursorIndexMoveto(
     }
   }
   return SQLITE_OK;
+}
+int prollyBtCursorIndexMoveto(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  int *pRes
+){
+  return prollyIndexMoveto(pCur, pIdxKey, pRes, 0);
+}
+int sqlite3BtreeProllyIndexMovetoExact(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  int *pRes
+){
+  if( pCur && pCur->pCurOps==&prollyCursorOps ){
+    return prollyIndexMoveto(pCur, pIdxKey, pRes, 1);
+  }
+  return sqlite3BtreeIndexMoveto(pCur, pIdxKey, pRes);
 }
 int sqlite3BtreeIndexMoveto(
   BtCursor *pCur,
