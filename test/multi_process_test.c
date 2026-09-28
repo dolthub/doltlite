@@ -1068,8 +1068,10 @@ static void test_commit_keeps_peer_insert_during_publish(void){
   remove(ready);
   setup_db(path);
   {
+    /* SQLite xAccess treats a zero-length file as absent. */
     FILE *hold = fopen(pause, "w");
     if( !hold ){ perror("pause"); _exit(1); }
+    if( fputc('x', hold)==EOF ){ perror("pause"); _exit(1); }
     fclose(hold);
   }
   pid = fork();

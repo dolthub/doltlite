@@ -1072,16 +1072,23 @@ static void doltliteCommitFunc(
     /* Test hook: stop after the catalog hash exists and before it is stored,
     ** so a peer insert can land in that gap. */
     if( rc==SQLITE_OK && zPause && zPause[0] ){
-      FILE *ready;
+      sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
       char zReady[512];
+      int exists = 1;
       sqlite3_snprintf(sizeof(zReady), zReady, "%s.ready", zPause);
-      ready = fopen(zReady, "w");
-      if( ready ) fclose(ready);
-      while( 1 ){
-        FILE *hold = fopen(zPause, "r");
-        if( !hold ) break;
-        fclose(hold);
-        sqlite3_sleep(20);
+      if( pVfs ){
+        sqlite3_file *pReady = 0;
+        int openRc = sqlite3OsOpenMalloc(pVfs, zReady, &pReady,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB, 0);
+        if( openRc==SQLITE_OK ){
+          /* xAccess reports an empty file as missing. */
+          sqlite3OsWrite(pReady, "x", 1, 0);
+          sqlite3OsCloseFree(pReady);
+        }
+        while( sqlite3OsAccess(pVfs, zPause, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+            && exists ){
+          sqlite3_sleep(20);
+        }
       }
     }
     if( rc==SQLITE_OK ){
