@@ -220,7 +220,8 @@ def pair_order(index):
     return ("sqlite", "doltlite") if index % 2 == 0 else ("doltlite", "sqlite")
 
 
-def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, setup=None):
+def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, setup=None,
+                 min_query_ms=0):
     options = {'setup': setup} if p.memory else {}
     reference = runner.measure(binaries["sqlite"], databases["sqlite"], p, case, 1, **options)
     pilot = runner.measure(binaries["doltlite"], databases["doltlite"], p, case, 1, **options)
@@ -228,6 +229,9 @@ def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, 
         raise ValueError(f"result mismatch: reference={reference}, pilot={pilot}")
     repeats = min(1024, max(1, math.ceil(min_ms*2.5 / max(reference["ms"], 0.01))),
                   max(1, int(1000/max(reference["ms"], pilot["ms"], 0.01))))
+    # Sub-floor SQLite queries are too fast to compare, so a finding needs
+    # DoltLite at the threshold times the floor for every single query.
+    floor = max(min_ms, min_query_ms*repeats)
     pairs = []
     for i in range(runs+1):
         measurements = {}
@@ -238,7 +242,8 @@ def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, 
         pair = {arm+"_ms": measurements[arm]["ms"] for arm in binaries}
         if i == 0:
             screen = pair
-            if pair["sqlite_ms"] <= 0 or pair["doltlite_ms"] < threshold*0.8*pair["sqlite_ms"]:
+            if (pair["sqlite_ms"] <= 0
+                    or pair["doltlite_ms"] < threshold*0.8*max(pair["sqlite_ms"], floor)):
                 break
         else:
             pairs.append(pair)
@@ -248,7 +253,7 @@ def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, 
             "result": reference["result"], "ratio": statistics.median(ratios) if ratios else None,
             "doltlite_ms": statistics.median(x["doltlite_ms"] for x in samples)/repeats,
             "sqlite_ms": statistics.median(x["sqlite_ms"] for x in samples)/repeats,
-            "confirmed": classify(pairs, threshold, min_ms, runs)}
+            "confirmed": classify(pairs, threshold, floor, runs)}
 
 
 def binary_info(runner, path):
@@ -271,7 +276,8 @@ def save_report(output, report):
              f"Search status: **{report['status']}**.", "",
              f"Confirmed means every one of {report['runs']} confirmation pairs was at least "
              f"{report['threshold']:g}× slower. For confirmation, SQLite timings below "
-             f"{report['min_ms']:g} ms per batch are conservatively raised to that floor.",
+             f"{report.get('min_query_ms', 0):g} ms per query and {report['min_ms']:g} ms per batch "
+             "are conservatively raised to that floor.",
              "Fresh connections, one untimed warm-up, identical byte cache budgets, mmap disabled. "
              "All writes use explicit transactions and roll back; setup and rollback are untimed.", "",
              "| Case | Configuration | DoltLite ms | SQLite ms | Median ratio | Minimum pair ratio | Reproducer |",
@@ -327,6 +333,8 @@ def main(argv=None):
     parser.add_argument("--seconds", type=positive, default=1800)
     parser.add_argument("--timeout", type=positive, default=60, help="seconds per case, including warm-up and confirmation")
     parser.add_argument("--min-ms", type=positive, default=20)
+    parser.add_argument("--min-query-ms", type=positive, default=10,
+                        help="SQLite per-query floor: faster queries count as this slow")
     args = parser.parse_args(argv)
     if args.runs < 5 or args.profiles > 128 or (args.profile is not None and args.profile < 0):
         parser.error("require at least 5 confirmation pairs, at most 128 profiles, and a nonnegative profile index")
@@ -345,6 +353,7 @@ def main(argv=None):
     search = Search(args.seed, args.history, issues)
     runner = Runner(args.seconds, args.timeout)
     report = {"seed": args.seed, "runs": args.runs, "threshold": 3.0, "min_ms": args.min_ms,
+              "min_query_ms": args.min_query_ms,
               "generator_version": VERSION, "platform": platform.platform(),
               "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "status": "running", "profiles_completed": 0, "cases": []}
     save_report(output, report)
@@ -412,7 +421,8 @@ def main(argv=None):
                             record["statement"] = statement_fingerprint(case)
                             record["fingerprint"] = fingerprint(profile, case, record["plans"])
                             options = {'setup': setup} if profile.memory else {}
-                            record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms, **options))
+                            record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms,
+                                                       min_query_ms=args.min_query_ms, **options))
                             (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"], setup))
                             repro.update(expected=record["result"], repeats=record["repeats"], fingerprint=record["fingerprint"], family=record["family"], statement=record["statement"])
                             (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
