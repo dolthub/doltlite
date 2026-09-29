@@ -112,7 +112,7 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 4)
+        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 5)
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -186,10 +186,10 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("### Bulk Writes\n", report.getvalue())
             self.assertNotIn("### Integer Keys", report.getvalue())
             self.assertIn("### After Deletes", report.getvalue())
-            self.assertTrue(all(len(call.args[2]) == 4 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 18)
+            self.assertTrue(all(len(call.args[2]) == 5 for call in measure_retained.call_args_list))
+            self.assertEqual(len(result.read_text().splitlines()), 19)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 37)
+            self.assertEqual(len(raw.read_text().splitlines()), 39)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -462,7 +462,7 @@ class HotspotTests(unittest.TestCase):
 
     def test_remaining_issue_themes_are_reported_and_gated(self):
         expected = {
-            'bulk_writes': {3342, 3348, 3361},
+            'bulk_writes': {3341, 3342, 3348, 3361},
             'after_deletes': {3352},
         }
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
