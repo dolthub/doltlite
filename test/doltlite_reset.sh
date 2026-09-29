@@ -485,6 +485,54 @@ run_test "hard_reset_in_txn_keeps_head" \
 3" "$TXN_DB"
 rm -f "$TXN_DB"
 
+# A branch created at HEAD has no working-set blob, so the staged hash is
+# empty and means "the index is HEAD". Moving HEAD must keep that tree.
+echo "--- soft reset with an empty staged hash ---"
+EMPTY_DB=/tmp/test_reset_empty_staged_$$.db; rm -f "$EMPTY_DB"
+echo "CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO kv VALUES(1,'a'); SELECT dolt_commit('-Am','c1'); INSERT INTO kv VALUES(2,'b'); SELECT dolt_commit('-Am','c2'); SELECT dolt_branch('side','HEAD');" | $DOLTLITE "$EMPTY_DB" > /dev/null 2>&1
+echo "SELECT dolt_reset('--soft','HEAD');" | $DOLTLITE "$EMPTY_DB/side" > /dev/null 2>&1
+run_test "soft_reset_same_commit_stays_clean_when_staged_empty" \
+  "SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM dolt_status; SELECT id||v FROM kv ORDER BY id;" \
+  "clean
+1a
+2b" "$EMPTY_DB/side"
+echo "SELECT dolt_reset('--soft','HEAD~1');" | $DOLTLITE "$EMPTY_DB/side" > /dev/null 2>&1
+run_test "soft_reset_keeps_index_when_staged_hash_empty" \
+  "SELECT id||v FROM dolt_at_kv('HEAD') ORDER BY id; SELECT id||v FROM dolt_at_kv('STAGED') ORDER BY id; SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM (SELECT * FROM dolt_status ORDER BY table_name, staged);" \
+  "1a
+1a
+2b
+kv|1|modified" "$EMPTY_DB/side"
+echo "SELECT dolt_commit('-m','keep index');" | $DOLTLITE "$EMPTY_DB/side" > /dev/null 2>&1
+run_test "commit_after_soft_reset_publishes_empty_staged_index" \
+  "SELECT id||v FROM dolt_at_kv('HEAD') ORDER BY id; SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM dolt_status;" \
+  "1a
+2b
+clean" "$EMPTY_DB/side"
+
+DIRTY_DB=/tmp/test_reset_empty_staged_dirty_$$.db; rm -f "$DIRTY_DB"
+echo "CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO kv VALUES(1,'a'); SELECT dolt_commit('-Am','c1'); INSERT INTO kv VALUES(2,'b'); SELECT dolt_commit('-Am','c2'); SELECT dolt_branch('side','HEAD');" | $DOLTLITE "$DIRTY_DB" > /dev/null 2>&1
+echo "INSERT INTO kv VALUES(3,'c');" | $DOLTLITE "$DIRTY_DB/side" > /dev/null 2>&1
+echo "SELECT dolt_reset('--soft','HEAD~1');" | $DOLTLITE "$DIRTY_DB/side" > /dev/null 2>&1
+run_test "soft_reset_empty_staged_keeps_unstaged_working" \
+  "SELECT id||v FROM dolt_at_kv('HEAD') ORDER BY id; SELECT id||v FROM dolt_at_kv('STAGED') ORDER BY id; SELECT id||v FROM kv ORDER BY id; SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM (SELECT * FROM dolt_status ORDER BY staged);" \
+  "1a
+1a
+2b
+1a
+2b
+3c
+kv|0|modified kv|1|modified" "$DIRTY_DB/side"
+
+HARD_DB=/tmp/test_reset_empty_staged_hard_$$.db; rm -f "$HARD_DB"
+echo "CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO kv VALUES(1,'a'); SELECT dolt_commit('-Am','c1'); INSERT INTO kv VALUES(2,'b'); SELECT dolt_commit('-Am','c2'); SELECT dolt_branch('side','HEAD');" | $DOLTLITE "$HARD_DB" > /dev/null 2>&1
+echo "SELECT dolt_reset('--hard','HEAD~1');" | $DOLTLITE "$HARD_DB/side" > /dev/null 2>&1
+run_test "hard_reset_still_drops_index_when_staged_hash_empty" \
+  "SELECT id||v FROM kv ORDER BY id; SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM dolt_status;" \
+  "1a
+clean" "$HARD_DB/side"
+rm -f "$EMPTY_DB" "$DIRTY_DB" "$HARD_DB"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 
 dltest_finish

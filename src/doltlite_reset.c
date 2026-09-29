@@ -802,6 +802,22 @@ static void doltliteResetFunc(
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
     }
+
+    /* An empty staged hash means the index is the pre-move HEAD tree.
+    ** Persist that catalog, or the index follows the new commit and a
+    ** later commit -m drops those rows. */
+    if( isSoft && havePreResetHead
+     && prollyHashCompare(&sessionHeadBeforeLock, &targetCommit)!=0 ){
+      ProllyHash stagedLive;
+      doltliteGetSessionStaged(db, &stagedLive);
+      if( prollyHashIsEmpty(&stagedLive) ){
+        rc = doltliteSetSessionStaged(db, &preResetStagedCatHash);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(context, rc);
+          goto reset_cleanup;
+        }
+      }
+    }
   }
 
   if( !isSoft ){
