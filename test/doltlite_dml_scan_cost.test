@@ -126,4 +126,63 @@ do_test lookup-cost-selective-plans {
        [dml_scan_plan db {SELECT sum(v) FROM k WHERE seq BETWEEN 100 AND 140}]
 } {{{SEARCH k USING INDEX k_s (seq=?)}} {{SEARCH k USING INDEX k_s (seq>? AND seq<?)}}}
 
+do_execsql_test lookup-cost-join-setup {
+  CREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);
+  INSERT INTO u SELECT seq,grp,v FROM r WHERE seq%2=0;
+  CREATE INDEX u_g ON u(grp);
+  CREATE INDEX r_s ON r(seq);
+  ANALYZE;
+} {}
+foreach table {r k} {
+  set query "SELECT count(*),sum(x) FROM (
+    SELECT t.seq AS x FROM $table AS t JOIN u ON u.id=t.seq
+    WHERE t.grp=15 OR t.seq%2=0 EXCEPT SELECT v FROM u
+  )"
+  do_test lookup-cost-$table-join-plan {
+    set plan [dml_scan_plan db $query]
+    expr {[lsearch -exact $plan {SCAN t}] >= 0
+          && [lsearch -exact $plan {SEARCH u USING INTEGER PRIMARY KEY (rowid=?)}] >= 0}
+  } {1}
+  do_test lookup-cost-$table-join-rows {db eval $query} [db eval "
+    SELECT count(*),sum(x) FROM (
+      SELECT t.seq AS x FROM $table AS t NOT INDEXED CROSS JOIN u ON u.id=t.seq
+      WHERE t.grp=15 OR t.seq%2=0 EXCEPT SELECT v FROM u
+    )
+  "]
+  do_test lookup-cost-$table-point-join {
+    set plan [dml_scan_plan db "
+      SELECT t.v FROM $table AS t JOIN u ON u.id=t.seq WHERE u.id=8
+    "]
+    expr {[lsearch -exact $plan "SEARCH t USING INDEX ${table}_s (seq=?)"] >= 0}
+  } {1}
+  do_test lookup-cost-$table-small-range-join {
+    set plan [dml_scan_plan db "
+      SELECT t.v FROM $table AS t JOIN u ON u.id=t.seq WHERE u.id BETWEEN 8 AND 10
+    "]
+    list [expr {[lsearch -glob $plan "SEARCH t USING INDEX ${table}_s (*)"] >= 0}] \
+        [db eval "
+          SELECT t.v FROM $table AS t JOIN u ON u.id=t.seq
+          WHERE u.id BETWEEN 8 AND 10 ORDER BY t.seq
+        "]
+  } {1 {63352 79190}}
+  do_test lookup-cost-$table-covering-join {
+    set plan [dml_scan_plan db "SELECT t.seq FROM $table AS t JOIN u ON u.id=t.seq"]
+    expr {[lsearch -exact $plan "SEARCH t USING COVERING INDEX ${table}_s (seq=?)"] >= 0}
+  } {1}
+}
+
+do_execsql_test lookup-cost-sparse-join-setup {
+  DELETE FROM u WHERE id%8!=0;
+  ANALYZE;
+} {}
+foreach table {r k} {
+  do_test lookup-cost-$table-sparse-join {
+    set plan [dml_scan_plan db "
+      SELECT count(*),sum(t.v) FROM $table AS t JOIN u ON u.id=t.seq
+      WHERE (t.grp=35 OR t.seq%8=0) AND t.v%8=0
+    "]
+    expr {[lsearch -exact $plan "SEARCH t USING INDEX ${table}_s (seq=?)"] >= 0}
+  } {1}
+}
+
 finish_test
