@@ -43,6 +43,7 @@ struct ProllyCache {
   int nBucket;
   u64 iClock;
   i64 nWideFull;
+  u32 nReadAheadStarved;
   ProllyCacheEntry **aBucket;
   ProllyCacheEntry lruHead;
   ProllyCacheEntry lruTail;
