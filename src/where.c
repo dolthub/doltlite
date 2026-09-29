@@ -3678,6 +3678,12 @@ static int whereLoopAddBtreeIndex(
     pNew->rRun = rCostIdx;
     if( (pNew->wsFlags & (WHERE_IDX_ONLY|WHERE_IPK|WHERE_EXPRIDX))==0 ){
       pNew->rRun = sqlite3LogEstAdd(pNew->rRun, pNew->nOut + 16);
+#ifdef DOLTLITE_PROLLY
+      if( pNew->prereq!=0
+       && doltliteRowFetchIsCostly(pBuilder->pWInfo, pSrc->pSTab, rSize) ){
+        pNew->rRun = sqlite3LogEstAdd(pNew->rRun, 50);
+      }
+#endif
     }
     ApplyCostMultiplier(pNew->rRun, pProbe->pTable->costMult);
 
