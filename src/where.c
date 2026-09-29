@@ -3246,6 +3246,15 @@ static int whereRangeVectorLen(
 ** table outgrows the node cache that seek reads and verifies a chunk. Only
 ** ANALYZE says a table is large; without it every table is assumed to be,
 ** and a small table stays cached. 120 is sqlite3LogEst(4096). */
+/* True when pTab's tree is larger than the node cache, so fetching a row
+** through a secondary index usually reads and verifies a chunk. */
+static int doltliteTableOutgrowsCache(WhereInfo *pWInfo, Table *pTab){
+  sqlite3 *db = pWInfo->pParse->db;
+  int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+  return iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt!=0
+      && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+      && sqlite3BtreeProllyTableOutgrowsCache(db->aDb[iDb].pBt, pTab->tnum);
+}
 static int doltliteRowFetchIsCostly(WhereInfo *pWInfo, Table *pTab, LogEst nRow){
   sqlite3 *db = pWInfo->pParse->db;
   int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
@@ -3677,7 +3686,14 @@ static int whereLoopAddBtreeIndex(
     */
     pNew->rRun = rCostIdx;
     if( (pNew->wsFlags & (WHERE_IDX_ONLY|WHERE_IPK|WHERE_EXPRIDX))==0 ){
+#ifdef DOLTLITE_PROLLY
+      /* 30 is about the ratio of reading and verifying a chunk to a cached
+      ** seek. */
+      pNew->rRun = sqlite3LogEstAdd(pNew->rRun, pNew->nOut + 16
+          + (doltliteTableOutgrowsCache(pBuilder->pWInfo, pProbe->pTable) ? 30 : 0));
+#else
       pNew->rRun = sqlite3LogEstAdd(pNew->rRun, pNew->nOut + 16);
+#endif
     }
     ApplyCostMultiplier(pNew->rRun, pProbe->pTable->costMult);
 

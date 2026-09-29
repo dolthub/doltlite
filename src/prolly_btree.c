@@ -129,6 +129,68 @@ int doltliteRecordHasNocaseNulForTest(
   return recordHasNocaseNul(pRec, nRec, nKeyCol, azColl, pHas);
 }
 
+/* Estimates the committed tree's bytes from its row count and the first
+** leaf's rows and size. The memo is keyed by root, so any committed change
+** re-estimates; pending edits are not counted. */
+static int prollyTableSizeEstimate(Btree *pBtree, struct TableEntry *pTE,
+                                   i64 *pnByte){
+  ProllyCache *pCache = &pBtree->pBt->cache;
+  ChunkStore *pStore = &pBtree->pBt->store;
+  ProllyCacheEntry *pEntry = 0;
+  ProllyHash hash;
+  double nRow = 0;
+  int i, rc;
+
+  *pnByte = 0;
+  if( pTE->sizeEstValid && prollyHashCompare(&pTE->sizeEstRoot, &pTE->root)==0 ){
+    *pnByte = pTE->sizeEst;
+    return SQLITE_OK;
+  }
+  if( prollyHashIsEmpty(&pTE->root) ) goto size_done;
+  rc = prollyLoadNode(pStore, pCache, &pTE->root, &pEntry);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pEntry->node.level>0 ){
+    if( !prollyNodeHasSubtreeCounts(&pEntry->node) ){
+      prollyCacheRelease(pCache, pEntry);
+      goto size_done;
+    }
+    for(i=0; i<pEntry->node.nItems; i++){
+      nRow += (double)prollyNodeChildSubtreeCount(&pEntry->node, i);
+    }
+  }
+  while( pEntry->node.level>0 && pEntry->node.nItems>0 ){
+    prollyNodeChildHash(&pEntry->node, 0, &hash);
+    prollyCacheRelease(pCache, pEntry);
+    pEntry = 0;
+    rc = prollyLoadNode(pStore, pCache, &hash, &pEntry);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  if( pEntry->node.nItems>0 ){
+    *pnByte = nRow>0
+        ? (i64)(nRow*pEntry->node.nData/pEntry->node.nItems)
+        : pEntry->node.nData;
+  }
+  prollyCacheRelease(pCache, pEntry);
+size_done:
+  pTE->sizeEst = *pnByte;
+  memcpy(&pTE->sizeEstRoot, &pTE->root, sizeof(ProllyHash));
+  pTE->sizeEstValid = 1;
+  return SQLITE_OK;
+}
+
+/* True when the table's committed tree is larger than the node cache, so a
+** probe that lands on a random leaf usually has to read and verify it. */
+int sqlite3BtreeProllyTableOutgrowsCache(Btree *pBtree, Pgno iTable){
+  struct TableEntry *pTE;
+  i64 nByte = 0;
+  if( !pBtree || !pBtree->pBt ) return 0;
+  pTE = findTable(pBtree, iTable);
+  if( !pTE || prollyTableSizeEstimate(pBtree, pTE, &nByte)!=SQLITE_OK ){
+    return 0;
+  }
+  return nByte > pBtree->pBt->cache.nMaxByte;
+}
+
 int sqlite3BtreeProllyIndexHasNocaseNul(
   Btree *pBtree,
   Pgno iTable,

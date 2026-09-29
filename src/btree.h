@@ -358,6 +358,7 @@ i64 sqlite3BtreeSqlRowid(BtCursor*);
 int sqlite3BtreeProllyIndexHasNocaseNul(
   Btree*, Pgno, int, const char *const*, int*
 );
+int sqlite3BtreeProllyTableOutgrowsCache(Btree*, Pgno);
 #endif
 void sqlite3BtreeCursorPin(BtCursor*);
 void sqlite3BtreeCursorUnpin(BtCursor*);

@@ -126,4 +126,47 @@ do_test lookup-cost-selective-plans {
        [dml_scan_plan db {SELECT sum(v) FROM k WHERE seq BETWEEN 100 AND 140}]
 } {{{SEARCH k USING INDEX k_s (seq=?)}} {{SEARCH k USING INDEX k_s (seq>? AND seq<?)}}}
 
+reset_db
+do_execsql_test size-cost-setup {
+  CREATE TABLE k(id TEXT PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL,
+                 v INTEGER NOT NULL, payload BLOB);
+  CREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)
+  INSERT INTO k SELECT printf('%016x',i),i,i%256,(i*7919)%1000000,
+                       CAST(printf('%0256d',i) AS BLOB) FROM c;
+  INSERT INTO u SELECT seq,grp,v FROM k WHERE seq%2=0;
+  CREATE INDEX k_s ON k(seq);
+  CREATE INDEX u_g ON u(grp);
+  ANALYZE;
+} {}
+set sizeJoin {
+  SELECT count(*),sum(k.v) FROM k JOIN u ON u.id=k.seq
+   WHERE k.grp=15 OR k.seq%2=0
+}
+# Once k outgrows the node cache, probing it through k_s reads a chunk per
+# match, so the join scans k and probes the small table by rowid instead.
+do_test size-cost-outgrown-plan {
+  db eval {PRAGMA cache_size=-256}
+  db cache flush
+  dml_scan_plan db $sizeJoin
+} {{SCAN k} {SEARCH u USING INTEGER PRIMARY KEY (rowid=?)}}
+do_test size-cost-cached-plan {
+  db eval {PRAGMA cache_size=-65536}
+  db cache flush
+  dml_scan_plan db $sizeJoin
+} {{SCAN u USING COVERING INDEX u_g} {SEARCH k USING INDEX k_s (seq=?)}}
+do_test size-cost-rows {
+  db eval {PRAGMA cache_size=-256}
+  db cache flush
+  set a [db eval $sizeJoin]
+  db eval {PRAGMA cache_size=-65536}
+  db cache flush
+  list [expr {$a eq [db eval $sizeJoin]}] $a
+} [list 1 [db eval {SELECT count(*),sum(v) FROM k WHERE seq%2=0}]]
+do_test size-cost-point-plan {
+  db eval {PRAGMA cache_size=-256}
+  db cache flush
+  dml_scan_plan db {SELECT v FROM k WHERE seq=77}
+} {{SEARCH k USING INDEX k_s (seq=?)}}
+
 finish_test

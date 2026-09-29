@@ -648,6 +648,7 @@ proc emit_doltlite_storage_block {} {
     sqlite3BtreeProllyIndexMovetoExact
     sqlite3BtreeProllyIndexRowid
     sqlite3BtreeProllyIndexHasNocaseNul
+    sqlite3BtreeProllyTableOutgrowsCache
     sqlite3BtreeProllyClearCompareKey
     sqlite3BtreeSqlRowid
   }
