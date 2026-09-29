@@ -642,6 +642,10 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     ProllyCacheEntry *pPrefix = cachePrefixCandidate(cache);
     if( pPrefix ) pEntry = pPrefix;
   }
+  if( pEntry && pEntry->bReadAheadUnused ){
+    ProllyCacheEntry *pPrefix = pRow ? pRow : cachePrefixCandidate(cache);
+    if( pPrefix ) pEntry = pPrefix;
+  }
   if( pEntry && cacheKeepPrefixes(cache, pEntry) ) return 0;
   if( pEntry ){
     cacheWideForget(cache, pEntry);
@@ -713,6 +717,18 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
     }
     while( nVisit-- && cache->nByte>nMaxByte && pEntry!=&cache->lruHead ){
       ProllyCacheEntry *pPrev = pEntry->pLruPrev;
+      /* A chunk read ahead for a cursor that has not reached it yet is about
+      ** to be used; evicting it only reads it again, so a cached prefix goes
+      ** first. */
+      if( pass==0 && nMaxByte>0 && pEntry->nRef==0
+       && pEntry->bReadAheadUnused ){
+        ProllyCacheEntry *pOld = cacheRowCandidate(cache);
+        if( !pOld ) pOld = cachePrefixCandidate(cache);
+        if( pOld ){
+          if( !cacheKeepPrefixes(cache, pOld) ) cacheEvictEntry(cache, pOld);
+          continue;
+        }
+      }
       if( pass==0 && pEntry->nRef==0 ){
         ProllyCacheEntry *pOld = cacheRowCandidate(cache);
         if( pOld && pOld->iTouch<pEntry->iTouch ){
