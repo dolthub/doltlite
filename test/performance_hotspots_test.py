@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import itertools
 import json
 import os
 import sqlite3
@@ -685,16 +686,24 @@ class HotspotTests(unittest.TestCase):
                     (root / f"benchmark-results/{suite}{suffix}").write_text("fixture\n")
             for arm, value in (("baseline", "base"), ("candidate", "candidate")):
                 (root / f"benchmark-{arm}-sha").write_text(value)
-            for status in ("success", "failure", "skipped", "cancelled"):
-                with self.subTest(status=status):
+            statuses = ("success", "failure", "skipped", "cancelled")
+            for status, measurements in itertools.product(statuses, repeat=2):
+                with self.subTest(status=status, measurements=measurements):
                     env = dict(os.environ, PATH=f"{root / 'bin'}:{os.environ['PATH']}",
                                RUNNER_TEMP=str(root), GITHUB_STEP_SUMMARY=str(root / "summary"),
                                GITHUB_OUTPUT=str(root / "output"))
-                    subprocess.run(["bash", "-e", "-o", "pipefail", "-c",
-                                    report.replace("${{ needs.hotspots.result }}", status)],
+                    script = report.replace("${{ needs.hotspots.result }}", status)
+                    script = script.replace("${{ steps.measurements.outcome }}", measurements)
+                    subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script],
                                    cwd=root, env=env, check=True, capture_output=True)
+                    passed = status == measurements == "success"
                     self.assertEqual((root / "output").read_text().splitlines()[-1],
-                                     f"report_rc={0 if status == 'success' else 1}")
+                                     f"report_rc={0 if passed else 1}")
+                    summary = (root / "benchmark-results/summary.md").read_text()
+                    self.assertEqual("unable to download the latest benchmark measurements" in summary,
+                                     measurements != "success")
+                    self.assertEqual("FAILED:** performance hotspots" in summary,
+                                     status != "success")
 
     def test_hotspot_comment_summary(self):
         workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()
