@@ -15,8 +15,29 @@ static int cursorHasTreePrefix(BtCursor *pCur){
 static int cursorLoadFullLeaf(BtCursor *pCur, u32 nRequired){
   ProllyCursorLevel *pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
   ProllyCacheEntry *pFull;
-  int rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
-                          &pLevel->pEntry->hash, &pFull);
+  int rc;
+  /* A write scan that needs whole rows only now and then keeps reading the
+  ** cached prefixes and reads each whole leaf just for that row, so the
+  ** leaves it loads do not push out the prefixes other statements reuse.
+  ** Once most rows need the whole leaf, it switches to caching full leaves
+  ** so their reads stay batched. */
+  if( (pCur->curFlags & BTCF_WriteFlag)
+   && (u64)(++pCur->nWriteFullLoad)*8 <= (u64)pCur->nWriteStep + 8 ){
+    u8 *pData = 0;
+    int nData = 0;
+    rc = chunkStoreGet(pCur->pCur.pStore, &pLevel->pEntry->hash,
+                       &pData, &nData);
+    if( rc!=SQLITE_OK ) return rc;
+    pFull = prollyCachePutTransientOwned(&pLevel->pEntry->hash, pData, nData,
+                                         nData, &rc);
+    if( !pFull ) return rc;
+    pFull->bAllowPrefix = 1;
+    pCur->pCachedFrom = pLevel->pEntry;
+    pLevel->pEntry = pFull;
+    return SQLITE_OK;
+  }
+  rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
+                      &pLevel->pEntry->hash, &pFull);
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->curFlags & BTCF_WriteFlag ) pFull->bAllowPrefix = 1;
   assert( pCur->pCachedFrom==0 );
