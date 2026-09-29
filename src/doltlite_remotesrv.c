@@ -242,8 +242,8 @@ static int remoteSrvCommitPending(ChunkStore *pStore){
 
 /* Unauthenticated protocol caps. Response matches HTTP_RESP_MAX_BYTES so
 ** batch get-chunks cannot materialize an unbounded reply. */
-#define MAX_CHUNK_BYTES    (64 * 1024 * 1024)
-#define MAX_REQUEST_BYTES  (128 * 1024 * 1024)
+#define MAX_CHUNK_BYTES    ((i64)1024 * 1024 * 1024)
+#define MAX_REQUEST_BYTES  MAX_CHUNK_BYTES
 #define MAX_RESPONSE_BYTES MAX_REQUEST_BYTES
 
 /* Header must arrive in one timeout; body then sustains BODY_MIN_RATE
@@ -687,7 +687,7 @@ static int remoteSrvStoreChunkBatch(
         | ((u32)pBody[offset+3] << 24);
     offset += 4;
 
-    if( len > (u32)MAX_CHUNK_BYTES
+    if( (i64)len > MAX_CHUNK_BYTES
      || len > (u32)(nBody - offset) ){
       rc = SQLITE_PROTOCOL;
       goto store_error;

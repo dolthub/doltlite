@@ -56,7 +56,7 @@ struct HttpRemote {
   char *zLastError;
 };
 
-#define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
+#define HTTP_RESP_MAX_BYTES ((i64)1024 * 1024 * 1024)
 #define HTTP_HEADER_MAX_BYTES ((i64)64 * 1024)
 #define HTTP_UPLOAD_BATCH_MAX ((i64)32 * 1024 * 1024)
 #define HTTP_TIMEOUT_MS 30000
