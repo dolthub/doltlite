@@ -52,6 +52,13 @@ static i64 cacheEntryBytes(const ProllyCacheEntry *p){
        + sqlite3_msize(p->pPacked);
 }
 
+/* Evicting a chunk read ahead before its cursor reached it means the main
+** list cannot hold a read-ahead batch; the next reads that use read-ahead
+** keep it ahead of cached prefixes. */
+static void cacheNoteEvicted(ProllyCache *cache, ProllyCacheEntry *p){
+  if( p->bReadAheadUnused ) cache->nReadAheadStarved = 64;
+}
+
 static void cacheWideForget(ProllyCache *cache, ProllyCacheEntry *p){
   if( p->bWideFull ){
     cache->nWideFull -= cacheEntryBytes(p);
@@ -230,6 +237,9 @@ static ProllyCacheEntry *cacheGet(
                       ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
   pEntry->nRef++;
   pEntry->iTouch = ++cache->iClock;
+  if( pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
+    cache->nReadAheadStarved--;
+  }
   pEntry->bReadAheadUnused = 0;
   if( pEntry->pLruPrev!=lruHeadFor(cache, pEntry) ){
     lruRemove(pEntry);
@@ -630,6 +640,20 @@ static ProllyCacheEntry *cachePrefixCandidate(ProllyCache *cache){
   return 0;
 }
 
+/* The oldest unpinned prefix a write scan left behind, looking only at the
+** tail of the prefix list. */
+static ProllyCacheEntry *cacheWriteLeftoverCandidate(ProllyCache *cache){
+  ProllyCacheEntry *pEntry = cache->prefixTail.pLruPrev;
+  int n = 0;
+  while( pEntry!=&cache->prefixHead && n++<16 ){
+    if( pEntry->nRef==0 && (pEntry->bScanOnly & PROLLY_CACHE_SCAN_KEEP) ){
+      return pEntry;
+    }
+    pEntry = pEntry->pLruPrev;
+  }
+  return 0;
+}
+
 static ProllyCacheEntry *cacheRowCandidate(ProllyCache *cache){
   ProllyCacheEntry *pEntry = cache->rowTail.pLruPrev;
   while( pEntry!=&cache->rowHead ){
@@ -649,8 +673,13 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     ProllyCacheEntry *pPrefix = cachePrefixCandidate(cache);
     if( pPrefix ) pEntry = pPrefix;
   }
+  if( pEntry && pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
+    ProllyCacheEntry *pPrefix = cacheWriteLeftoverCandidate(cache);
+    if( pPrefix ) pEntry = pPrefix;
+  }
   if( pEntry && cacheKeepPrefixes(cache, pEntry) ) return 0;
   if( pEntry ){
+    cacheNoteEvicted(cache, pEntry);
     cacheWideForget(cache, pEntry);
     lruRemove(pEntry);
     hashRemove(cache, pEntry);
@@ -666,6 +695,7 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
 }
 
 static void cacheEvictEntry(ProllyCache *cache, ProllyCacheEntry *pEntry){
+  cacheNoteEvicted(cache, pEntry);
   cacheWideForget(cache, pEntry);
   lruRemove(pEntry);
   hashRemove(cache, pEntry);
@@ -720,6 +750,17 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
     }
     while( nVisit-- && cache->nByte>nMaxByte && pEntry!=&cache->lruHead ){
       ProllyCacheEntry *pPrev = pEntry->pLruPrev;
+      /* A chunk read ahead for a cursor that has not reached it yet is about
+      ** to be used; once read-ahead is being wasted, evicting it only reads
+      ** it again, so a prefix a write scan left behind goes first. */
+      if( pass==0 && nMaxByte>0 && pEntry->nRef==0
+       && pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
+        ProllyCacheEntry *pOld = cacheWriteLeftoverCandidate(cache);
+        if( pOld ){
+          if( !cacheKeepPrefixes(cache, pOld) ) cacheEvictEntry(cache, pOld);
+          continue;
+        }
+      }
       if( pass==0 && pEntry->nRef==0 ){
         ProllyCacheEntry *pOld = cacheRowCandidate(cache);
         if( pOld && pOld->iTouch<pEntry->iTouch ){
