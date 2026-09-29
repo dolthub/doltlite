@@ -489,6 +489,7 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
     if( (pEntry->bScanOnly & (PROLLY_CACHE_SCAN_ONLY|PROLLY_CACHE_SCAN_KEEP))
      && !pNode->nValuePrefix && (pNode->flags & PROLLY_NODE_BLOBKEY)
      && (nPrefix==16 || nPrefix==32) ){
+      int nElide = nAverage<PROLLY_CACHE_WIDE_VALUE ? 16 : nPrefix;
       bElide = 1;
       for(i=0; i<pNode->nItems; i++){
         const u8 *pKey, *pVal;
@@ -500,7 +501,9 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
           bElide = 0;
           break;
         }
+        if( pVal[0]>nElide ) nElide = nPrefix;
       }
+      if( bElide ) nPrefix = nElide;
     }
     nStride = nPrefix+(bElide ? 0 : PROLLY_NODE_BUFFER_SLOP);
     nCompact = nHead+pNode->nItems*nStride;
@@ -577,7 +580,11 @@ i64 prollyCacheCompactBytes(const ProllyNode *pNode){
   }else{
     nPrefix = nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
             : nAverage>=512 ? 32 : 16;
-    nCompact = nHead + (i64)pNode->nItems*(nPrefix+PROLLY_NODE_BUFFER_SLOP);
+    if( nAverage<PROLLY_CACHE_WIDE_VALUE
+     && (pNode->flags & PROLLY_NODE_BLOBKEY) ) nPrefix = 16;
+    nCompact = nHead + (i64)pNode->nItems*(nPrefix
+        + ((pNode->flags & PROLLY_NODE_BLOBKEY) && nPrefix<=32
+           ? 0 : PROLLY_NODE_BUFFER_SLOP));
     if( nCompact>pNode->nData/4 ) return 0;
   }
   return nCompact + (i64)sizeof(ProllyCacheEntry);

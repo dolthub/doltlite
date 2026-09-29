@@ -925,6 +925,54 @@ static void testElidedTextPkPrefix(sqlite3 *db){
   execSql(db, "DROP TABLE elide_pk; DROP TABLE nocase_pk; PRAGMA cache_size=-65536");
 }
 
+static void testCompactTextPkScan(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  sqlite3_stmt *p = 0;
+  int i, nCold = 0;
+  execSql(db,
+      "CREATE TABLE compact_pk(id TEXT PRIMARY KEY,seq INTEGER NOT NULL,"
+      " grp INTEGER NOT NULL,v INTEGER NOT NULL,tag TEXT NOT NULL,"
+      " payload BLOB NOT NULL);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<16384)"
+      " INSERT INTO compact_pk SELECT printf('%016x',i),i,i%16,"
+      " (i*7919)%1000000,printf('tag-%08x',i%10000),"
+      " CAST(printf('%01024d',i) AS BLOB) FROM c;"
+      "PRAGMA cache_size=-2304");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  for(i=0; i<3; i++){
+    nRead = 0;
+    check("prepare compact text-key scan", sqlite3_prepare_v2(db,
+        "SELECT sum(seq),sum(id=printf('%016x',seq)),sum(grp),"
+        " sum(length(payload)) FROM compact_pk NOT INDEXED",
+        -1, &p, 0)==SQLITE_OK);
+    check("compact text-key scan result", sqlite3_step(p)==SQLITE_ROW
+        && sqlite3_column_int64(p, 0)==134225920
+        && sqlite3_column_int(p, 1)==16384
+        && sqlite3_column_int(p, 2)==122880
+        && sqlite3_column_int(p, 3)==16777216);
+    check("finish compact text-key scan", sqlite3_finalize(p)==SQLITE_OK);
+    if( i==0 ) nCold = nRead;
+  }
+  check("compact text-key scan reuses cached rows", nCold>0 && nRead==0);
+  check("compact text-key cache accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 2304*1024));
+  check("prepare compact text-key full payload", sqlite3_prepare_v2(db,
+      "SELECT sum(payload=CAST(printf('%01024d',seq) AS BLOB)),"
+      " sum(tag=printf('tag-%08x',seq%10000)) FROM compact_pk NOT INDEXED",
+      -1, &p, 0)==SQLITE_OK);
+  check("compact text-key full payload result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==16384 && sqlite3_column_int(p, 1)==16384);
+  check("finish compact text-key full payload", sqlite3_finalize(p)==SQLITE_OK);
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE compact_pk; PRAGMA cache_size=-65536");
+}
+
 static void testBulkDeleteReadsOnce(sqlite3 *db){
   ProllyCache *pCache = doltliteGetCache(db);
   ChunkStore *pStore = doltliteGetChunkStore(db);
@@ -1436,6 +1484,7 @@ int main(void){
   testShortPrefixWriteScan(db);
   testSelectiveWriteKeepsScanPrefixes(db);
   testElidedTextPkPrefix(db);
+  testCompactTextPkScan(db);
   testBulkDeleteReadsOnce(db);
   testWideValuesStayOnDisk(db);
   testLargeScanKeepsWorkingSet(db);

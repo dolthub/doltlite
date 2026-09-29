@@ -407,8 +407,21 @@ int prollyCursorNext(ProllyCursor *cur){
             > (double)cur->pCache->nMaxByte*pLeaf->node.nItems;
         if( cur->bLargeScan ){
           i64 nCompact = prollyCacheCompactBytes(&pLeaf->node);
-          cur->bDropScan = nCompact>0 && nRow*(double)nCompact
-              > (double)cur->pCache->nMaxByte*pLeaf->node.nItems;
+          double nPerRow = (double)nCompact/pLeaf->node.nItems;
+          ProllyNode *pParent = &cur->aLevel[level-1].pEntry->node;
+          if( nCompact>0 && prollyNodeHasSubtreeCounts(pParent) ){
+            double nParentRow = 0;
+            for(i=0; i<pParent->nItems; i++){
+              nParentRow += (double)prollyNodeChildSubtreeCount(pParent, i);
+            }
+            if( nParentRow>0 ){
+              nPerRow = (double)(nCompact-sizeof(ProllyCacheEntry))
+                      /pLeaf->node.nItems
+                      + (double)sizeof(ProllyCacheEntry)*pParent->nItems/nParentRow;
+            }
+          }
+          cur->bDropScan = nCompact>0
+              && nRow*nPerRow>(double)cur->pCache->nMaxByte;
         }
       }
     }
