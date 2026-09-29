@@ -12,6 +12,7 @@
 #define MUTMAP_POS_UPDATE_LIMIT 64
 #define MUTMAP_RADIX_SORT_MIN 128
 #define MUTMAP_RADIX_PREFIX_LIMIT 32
+#define MUTMAP_SORTED_WRITE_WINDOW 64
 
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
   if( e->nKey != 8 || e->pKey == 0 ) return 0;
@@ -475,6 +476,7 @@ static int ensureOrder(ProllyMutMap *mm){
   int i;
   int rc;
   mm->preferSorted = 1;
+  mm->orderGeneration = mm->generation;
   if( mm->keepSorted ) return SQLITE_OK;
   if( !mm->orderDirty ){
     return SQLITE_OK;
@@ -636,6 +638,12 @@ static int appendEntry(
   if( rc!=SQLITE_OK ) return rc;
   e->nZeroTail = nZeroTail;
   updateAppendSorted(mm, phys);
+  if( mm->preferSorted
+   && mm->generation-mm->orderGeneration>=MUTMAP_SORTED_WRITE_WINDOW
+   && (idx-mm->iOrderGap>MUTMAP_POS_UPDATE_LIMIT
+       || mm->iOrderGap-idx>MUTMAP_POS_UPDATE_LIMIT) ){
+    mm->preferSorted = 0;
+  }
   if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
     insertOrderEntry(mm, idx, phys);
   }else{
