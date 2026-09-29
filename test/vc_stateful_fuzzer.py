@@ -1492,7 +1492,7 @@ def commit_flagged(doltlite, db_path, branch, model, step):
         "SELECT dolt_commit('--force','-m',%s);" % msg,
         "SELECT dolt_commit('--amend','-m',%s);" % msg,
     )
-    run_sql(
+    out = run_sql(
         doltlite,
         db_for_branch(db_path, branch),
         variants[step % len(variants)],
@@ -1505,7 +1505,14 @@ def commit_flagged(doltlite, db_path, branch, model, step):
             "conflicts",
         ) + MERGE_ROLLED_BACK,
     )
-    sync_vc_result(doltlite, db_path, branch, model)
+    # These flags do not stage the worktree. A refusal or a --skip-empty
+    # no-op ("0") leaves the index alone. A hash means that index was
+    # published, so HEAD catches up to it and unstaged rows stay unstaged.
+    # Copying working into staged makes the next commit -m look like it
+    # dropped those rows.
+    if out is None or out.strip() == "0":
+        return
+    model[branch]["committed"] = dict(model[branch]["staged"])
 
 
 def reset_to_ref(doltlite, db_path, branch, model, rng):
@@ -2087,18 +2094,95 @@ def setup_check(doltlite, db_path):
     return 0
 
 
+def check_commit_flag_keeps_unstaged(doltlite, db_path):
+    """Commit flags without -A must not mark an unstaged row staged."""
+    def seed(path):
+        run_sql(
+            doltlite,
+            path,
+            "CREATE TABLE kv(id INTEGER PRIMARY KEY, v, n);\n"
+            "INSERT INTO kv VALUES(1, 'base', 0);\n"
+            "SELECT dolt_commit('-Am','c1');\n"
+            "INSERT INTO kv VALUES(2, 'parent', 0);\n"
+            "SELECT dolt_commit('-Am','c2');\n"
+            "SELECT dolt_branch('side', 'HEAD');",
+            "flag_init",
+        )
+        model = {"main": new_branch_state(query_rows(doltlite, path, "main"))}
+        run_sql(
+            doltlite,
+            path,
+            "INSERT INTO kv VALUES(3770035, 'b377_10138_2843', 185199);",
+            "flag_unstaged",
+        )
+        model["main"]["working"] = query_rows(doltlite, path, "main")
+        return model
+
+    def assert_unstaged(model, branch, label):
+        if 3770035 in model[branch]["staged"]:
+            raise AssertionError("%s staged an unstaged row" % label)
+        if 3770035 in model[branch]["committed"]:
+            raise AssertionError("%s committed an unstaged row" % label)
+        if model[branch]["working"].get(3770035) != ("b377_10138_2843", 185199):
+            raise AssertionError("%s dropped the unstaged row" % label)
+
+    # Explicit staged hash equal to HEAD: --skip-empty returns 0.
+    model = seed(db_path)
+    commit_flagged(doltlite, db_path, "main", model, 1)
+    assert_unstaged(model, "main", "skip-empty")
+    run_sql(
+        doltlite,
+        db_path,
+        "CREATE TABLE other(id INTEGER PRIMARY KEY);\n"
+        "INSERT INTO other VALUES(1);\n"
+        "SELECT dolt_add('other');",
+        "flag_stage_other",
+    )
+    commit_branch(doltlite, db_path, "main", model, 10167, stage_all=False)
+    if 3770035 in model["main"]["committed"]:
+        raise AssertionError("commit -m stored an unstaged row after skip-empty")
+    working = query_rows(doltlite, db_path, "main")
+    if working.get(3770035) != ("b377_10138_2843", 185199):
+        raise AssertionError("unstaged row disappeared from the working tree")
+
+    # allow-empty, force, amend, and the conflicting flag pair.
+    for step, label in ((0, "allow-empty"), (3, "force"), (4, "amend"),
+                        (2, "both-empty-flags")):
+        path = db_path + "-%s" % label
+        flagged = seed(path)
+        commit_flagged(doltlite, path, "main", flagged, step)
+        assert_unstaged(flagged, "main", label)
+
+    # A new branch has an empty staged hash. --skip-empty is "nothing to commit".
+    empty_model = {"side": new_branch_state(query_rows(doltlite, db_path, "side"))}
+    run_sql(
+        doltlite,
+        db_for_branch(db_path, "side"),
+        "INSERT INTO kv VALUES(3770035, 'b377_10138_2843', 185199);",
+        "flag_side_unstaged",
+    )
+    empty_model["side"]["working"] = query_rows(doltlite, db_path, "side")
+    commit_flagged(doltlite, db_path, "side", empty_model, 1)
+    assert_unstaged(empty_model, "side", "empty-staged skip-empty")
+    print("commit_flag_keeps_unstaged")
+    return 0
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = [a for a in sys.argv[1:] if a.startswith("--")]
     doltlite = resolve_engine(args[0] if args else "./doltlite")
     setup_db = args[1] if len(args) > 1 else None
-    if "--setup-check" in flags or "--reset-staged-check" in flags:
+    if ("--setup-check" in flags or "--reset-staged-check" in flags
+            or "--commit-flag-staged-check" in flags):
         tmp = None
         db_path = setup_db
         if not db_path:
             tmp = tempfile.mkdtemp(prefix="doltlite-shape-")
             db_path = os.path.join(tmp, "stateful.db")
         try:
+            if "--commit-flag-staged-check" in flags:
+                return check_commit_flag_keeps_unstaged(doltlite, db_path)
             if "--reset-staged-check" in flags:
                 return check_reset_to_ref_staged(doltlite, db_path)
             return setup_check(doltlite, db_path)
