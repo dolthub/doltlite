@@ -34,7 +34,7 @@ reports the same synthetic rowid as `SELECT rowid`.
 
 | Pragma | Behaviour |
 |---|---|
-| `cache_size` | Sizes the chunk cache. Negative values are a KiB budget as in SQLite. The floor is the engine default of 16384 chunks; smaller requests are raised to it. Reads back `-2000` (SQLite's default) until set, which understates the real capacity. |
+| `cache_size` | Sets one byte budget for the chunk cache, shared by the chunk-index cache and the node cache. A positive value is that many pages of `page_size` bytes (4096 by default, so roughly that many 4 KB chunks); a negative value is KiB, as in SQLite. The default is 64 MiB and reads back as `-65536`; requests below 4 KiB are raised to 4 KiB. Every chunk read from the file is verified against its BLAKE3 content address, so a working set larger than the budget is re-read and re-verified on each pass: size it to the working set. |
 | `synchronous` | `OFF` skips fsync on commit; every other level syncs. |
 | `integrity_check`, `quick_check` | Run SQLite's row and index checks, then walk the chunk graph of the named tables and of every branch, tag, and working set. Missing or corrupt chunks count as errors. |
 | `table_info`, `table_xinfo` | Non-integer primary key columns report `notnull=1`, because clustered keys are `NOT NULL`. |
