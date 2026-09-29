@@ -415,6 +415,8 @@ struct BtCursor {
   u8 isTableRoot;
   u8 isPinned;
   u8 flushSeekEdits;
+  u32 nWriteStep;
+  u32 nWriteFullLoad;
 
   int mmIdx;
   int mmPhysIdx;

@@ -754,6 +754,7 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
   int rc, immediate;
   (void)flags;
   pCur->pCur.bWriteScan = (pCur->curFlags & BTCF_WriteFlag) ? 1 : 0;
+  if( pCur->pCur.bWriteScan && pCur->nWriteStep<0xffffffff ) pCur->nWriteStep++;
 
   rc = prollyBtCursorNextFastIntLeaf(pCur);
   if( rc!=SQLITE_NOTFOUND ) return rc;

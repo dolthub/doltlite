@@ -633,6 +633,52 @@ static void testNarrowPrefixes(sqlite3 *db, const char *zKey, int nPayload){
   execSql(db, "DROP TABLE narrow; PRAGMA cache_size=-65536");
 }
 
+static int selectiveScanReads(sqlite3 *db){
+  sqlite3_stmt *p = 0;
+  nRead = 0;
+  check("prepare scan beside selective write", sqlite3_prepare_v2(db,
+      "SELECT count(*),sum(seq) FROM selective_write WHERE seq%32=0",
+      -1, &p, 0)==SQLITE_OK);
+  check("scan beside selective write result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==2048
+      && sqlite3_column_int64(p, 1)==67141632);
+  check("finish scan beside selective write", sqlite3_finalize(p)==SQLITE_OK);
+  return nRead;
+}
+
+static void testSelectiveWriteKeepsScanPrefixes(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  int i, nCold, nAfter = 0;
+  execSql(db,
+      "CREATE TABLE selective_write(id INTEGER PRIMARY KEY,seq INTEGER NOT NULL,"
+      " grp INTEGER NOT NULL,v INTEGER NOT NULL,tag TEXT NOT NULL,"
+      " payload BLOB NOT NULL);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<65536)"
+      " INSERT INTO selective_write SELECT i,i,i%256,(i*7919)%1000000,"
+      " printf('tag-%08x',i%10000),CAST(printf('%0256d',i) AS BLOB) FROM c;"
+      "PRAGMA cache_size=-4096");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  nCold = selectiveScanReads(db);
+  for(i=0; i<3; i++){
+    execSql(db, "BEGIN;UPDATE selective_write SET v=v+1 WHERE seq%32=0");
+    check("selective write changes its rows", sqlite3_changes(db)==2048);
+    nAfter = selectiveScanReads(db);
+    execSql(db, "ROLLBACK");
+  }
+  check("selective write keeps the prefixes a later scan reuses",
+      nCold>0 && nAfter*4<nCold);
+  check("selective write prefix accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 4096*1024));
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE selective_write; PRAGMA cache_size=-65536");
+}
+
 static void testShortPrefixWriteScan(sqlite3 *db){
   ProllyCache *pCache = doltliteGetCache(db);
   ChunkStore *pStore = doltliteGetChunkStore(db);
@@ -1287,6 +1333,7 @@ int main(void){
   testNarrowPrefixes(db, "INTEGER", 256);
   testNarrowPrefixes(db, "TEXT", 1024);
   testShortPrefixWriteScan(db);
+  testSelectiveWriteKeepsScanPrefixes(db);
   testElidedTextPkPrefix(db);
   testBulkDeleteReadsOnce(db);
   testWideValuesStayOnDisk(db);
