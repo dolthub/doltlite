@@ -1592,7 +1592,7 @@ def readonly_reset(doltlite, db_path, branch, model):
             "nothing to commit",
         ),
     )
-    sync_vc_result(doltlite, db_path, branch, model)
+    model[branch]["committed"] = query_committed_rows(doltlite, db_path, branch)
 
 
 def workspace_write(doltlite, db_path, branch, rng):
@@ -2164,6 +2164,29 @@ def check_commit_flag_keeps_unstaged(doltlite, db_path):
     empty_model["side"]["working"] = query_rows(doltlite, db_path, "side")
     commit_flagged(doltlite, db_path, "side", empty_model, 1)
     assert_unstaged(empty_model, "side", "empty-staged skip-empty")
+    for staged in (False, True):
+        for step in range(5):
+            path = db_path + "-readonly-%d-%d" % (staged, step)
+            flagged = seed(path)
+            if staged:
+                run_sql(doltlite, path, "SELECT dolt_add('kv');", "flag_stage_kv")
+                flagged["main"]["staged"] = dict(flagged["main"]["working"])
+            run_sql(
+                doltlite, path, "INSERT INTO kv VALUES(3, 'unstaged', 1);",
+                "flag_readonly_unstaged",
+            )
+            flagged["main"]["working"][3] = ("unstaged", 1)
+            expected_staged = dict(flagged["main"]["staged"])
+            readonly_reset(doltlite, path, "main", flagged)
+            if flagged["main"]["staged"] != expected_staged:
+                raise AssertionError("readonly reset changed the staged model")
+            if query_revision_rows(doltlite, path, "STAGED") != expected_staged:
+                raise AssertionError("readonly reset changed staged rows")
+            if flagged["main"]["committed"] != expected_staged:
+                raise AssertionError("post-readonly commit did not publish staged rows")
+            assert_rows(doltlite, path, "main", flagged)
+            commit_flagged(doltlite, path, "main", flagged, step)
+            assert_rows(doltlite, path, "main", flagged)
     print("commit_flag_keeps_unstaged")
     return 0
 
