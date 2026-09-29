@@ -19,6 +19,11 @@ from performance_hotspot_search import CHOICES, Search, VERSION, family_fingerpr
 
 TEST_DIR = Path(__file__).resolve().parent
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
+# A confirmed finding is re-checked with a cache that holds the whole table.
+# If the gap then closes, it is the verify-on-read cost of re-reading chunks
+# (#3408), which is known and not filed.
+CACHED_CHECK_KIB = 1048576
+UNCACHED_READS_ISSUE = 3408
 
 
 @dataclass(frozen=True)
@@ -270,6 +275,7 @@ def save_report(output, report):
     good = sorted((x for x in report["cases"] if x.get("confirmed")), key=lambda x: -x["ratio"])
     errors = [x for x in report["cases"] if "error" in x]
     timeouts = [x for x in report["cases"] if "timeout" in x]
+    uncached = [x for x in report["cases"] if x.get("uncached_reads")]
     lines = ["## Performance hotspot discovery", "",
              f"Seed: `{report['seed']}`. Profiles completed: {report['profiles_completed']}. "
              f"Cases measured: {sum('pairs' in x for x in report['cases'])}/{len(report['cases'])} attempted. "
@@ -297,6 +303,13 @@ def save_report(output, report):
               "python3 test/performance_hotspot_fuzzer.py --doltlite build/doltlite "
               "--sqlite build-stockref/sqlite3 --replay ARTIFACT/hotspot-discovery/p000/CASE.json --output replay-results",
               "```"]
+    if uncached:
+        lines += ["", f"### Known: uncached reads (#{UNCACHED_READS_ISSUE})", "",
+                  "Confirmed at the profile's cache but not with a cache that holds the table, "
+                  "so the gap is re-reading and verifying chunks. Not filed.", ""]
+        for case in uncached:
+            lines.append(f"- `{case['id']}`: {case['ratio']:.2f}× at the profile cache, "
+                         f"{case.get('cached_ratio') or 0:.2f}× cached. `{case['reproducer']}`")
     if timeouts:
         lines += ["", "### Timed out (unconfirmed)", ""]
         for case in timeouts:
@@ -423,6 +436,16 @@ def main(argv=None):
                             options = {'setup': setup} if profile.memory else {}
                             record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms,
                                                        min_query_ms=args.min_query_ms, **options))
+                            if record["confirmed"] and profile.cache_kib<CACHED_CHECK_KIB:
+                                runner.case_deadline = time.monotonic() + args.timeout
+                                cached = measure_case(runner, binaries, case_databases,
+                                                      replace(profile, cache_kib=CACHED_CHECK_KIB), case,
+                                                      args.runs, 3.0, args.min_ms,
+                                                      min_query_ms=args.min_query_ms, **options)
+                                record["cached_ratio"] = cached["ratio"]
+                                if not cached["confirmed"]:
+                                    record["confirmed"] = False
+                                    record["uncached_reads"] = True
                             (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"], setup))
                             repro.update(expected=record["result"], repeats=record["repeats"], fingerprint=record["fingerprint"], family=record["family"], statement=record["statement"])
                             (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")

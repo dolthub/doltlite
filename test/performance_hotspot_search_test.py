@@ -285,6 +285,37 @@ class SearchTests(unittest.TestCase):
             self.assertTrue((output/'p000/generated_0.json').exists())
 
 
+    def test_gaps_that_close_with_a_full_cache_are_not_filed(self):
+        def run(command, sql=None, setup=False):
+            if setup:
+                Path(command[1]).write_text('fixture')
+            return 'ok'
+
+        for persists in (False, True):
+            def measure(runner, binaries, databases, profile, case, *args, **kwargs):
+                cached = profile.cache_kib==fuzzer.CACHED_CHECK_KIB
+                confirmed = persists or not cached
+                ratio = 3.5 if confirmed else 1.2
+                return {'repeats': 1, 'result': '42', 'ratio': ratio, 'confirmed': confirmed,
+                        'pairs': [{'doltlite_ms': ratio, 'sqlite_ms': 1}]*5,
+                        'doltlite_ms': ratio, 'sqlite_ms': 1}
+
+            with self.subTest(persists=persists), tempfile.TemporaryDirectory() as tmp:
+                with patch.object(fuzzer.Runner, 'run', side_effect=run), \
+                     patch.object(fuzzer, 'binary_info', return_value={}), \
+                     patch.object(fuzzer, 'profile_for', return_value=self.profile), \
+                     patch.object(fuzzer, 'measure_case', side_effect=measure), patch('builtins.print'):
+                    fuzzer.main(['--doltlite', 'unused', '--sqlite', 'unused', '--profiles', '1',
+                                 '--output', tmp])
+                report = json.loads((Path(tmp)/'results.json').read_text())
+                cases = [c for c in report['cases'] if 'ratio' in c]
+                self.assertTrue(cases)
+                summary = (Path(tmp)/'summary.md').read_text()
+                for case in cases:
+                    self.assertEqual(case['confirmed'], persists)
+                    self.assertEqual(case.get('uncached_reads', False), not persists)
+                self.assertEqual('Known: uncached reads (#3408)' in summary, not persists)
+
     def test_timeout_cannot_contaminate_next_fixture(self):
         def run(command, sql=None, setup=False):
             if setup:
