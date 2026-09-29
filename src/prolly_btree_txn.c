@@ -826,7 +826,10 @@ const char *doltliteBtreeMissingWriteBranch(Btree *p){
 int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   if( wrFlag && p && p->db && p->db->nDb>0 && p->db->aDb[0].pBt
    && p->db->aDb[0].pBt->isDetached ){
-    return SQLITE_READONLY;
+    int i;
+    for(i=0; i<p->db->nDb; i++){
+      if( p->db->aDb[i].pBt==p ) return SQLITE_READONLY;
+    }
   }
   if( !p ) return SQLITE_OK;
   return p->pOps->xBeginTrans(p, wrFlag, pSchemaVersion);
