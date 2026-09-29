@@ -43,6 +43,24 @@ int applyMutMapToTableRoot(
 
 int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
   u8 *pCopy = 0;
+  if( nData>0 && nData<=PROLLY_NODE_VALUE_PREFIX ){
+    pCopy = pCur->pReconPayload;
+    if( pCur->nReconPayloadAlloc<nData ){
+      pCopy = sqlite3_malloc(PROLLY_NODE_VALUE_PREFIX);
+      if( !pCopy ) return SQLITE_NOMEM;
+    }
+    memmove(pCopy, pData, nData);
+    CLEAR_CACHED_PAYLOAD(pCur);
+    if( pCopy!=pCur->pReconPayload ){
+      sqlite3_free(pCur->pReconPayload);
+      pCur->pReconPayload = pCopy;
+      pCur->nReconPayloadAlloc = PROLLY_NODE_VALUE_PREFIX;
+    }
+    pCur->pCachedPayload = pCopy;
+    pCur->nCachedPayload = nData;
+    pCur->cachedPayloadOwned = BTCACHE_BUFFER;
+    return SQLITE_OK;
+  }
   if( nData > 0 ){
     pCopy = sqlite3_malloc(nData);
     if( !pCopy ) return SQLITE_NOMEM;
@@ -51,7 +69,7 @@ int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
   CLEAR_CACHED_PAYLOAD(pCur);
   pCur->pCachedPayload = pCopy;
   pCur->nCachedPayload = nData;
-  pCur->cachedPayloadOwned = 1;
+  pCur->cachedPayloadOwned = BTCACHE_HEAP;
   return SQLITE_OK;
 }
 
@@ -72,7 +90,7 @@ int cacheCursorPayloadZeroTail(BtCursor *pCur, const u8 *pData,
   CLEAR_CACHED_PAYLOAD(pCur);
   pCur->pCachedPayload = pCopy;
   pCur->nCachedPayload = nTotal;
-  pCur->cachedPayloadOwned = 1;
+  pCur->cachedPayloadOwned = BTCACHE_HEAP;
   return SQLITE_OK;
 }
 

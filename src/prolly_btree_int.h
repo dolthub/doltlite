@@ -90,8 +90,11 @@ u32 prollyBtreeGetU32LE(const u8 *p);
 
 #define BTS_READ_ONLY       0x0001
 
+#define BTCACHE_HEAP 1
+#define BTCACHE_BUFFER 2
+
 #define CLEAR_CACHED_PAYLOAD(pCsr) do{ \
-  if( (pCsr)->cachedPayloadOwned && (pCsr)->pCachedPayload ){ \
+  if( (pCsr)->cachedPayloadOwned==BTCACHE_HEAP && (pCsr)->pCachedPayload ){ \
     sqlite3_free((pCsr)->pCachedPayload); \
   } \
   if( (pCsr)->pCachedFrom ){ \

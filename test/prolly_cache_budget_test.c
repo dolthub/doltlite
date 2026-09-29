@@ -16,6 +16,106 @@ static void check(const char *zName, int ok){
   }
 }
 
+static sqlite3_mem_methods payloadAllocator;
+static int nPayloadAlloc;
+static int failPayloadAlloc;
+
+static void *payloadMalloc(int n){
+  nPayloadAlloc++;
+  return failPayloadAlloc ? 0 : payloadAllocator.xMalloc(n);
+}
+
+static void *payloadRealloc(void *p, int n){
+  nPayloadAlloc++;
+  return failPayloadAlloc ? 0 : payloadAllocator.xRealloc(p, n);
+}
+
+static void testPayloadCopies(void){
+  sqlite3_mem_methods methods;
+  BtCursor *pCur;
+  u8 data[303];
+  u8 expected[128];
+  u8 *pKey = 0;
+  int nKey = 0;
+  int nWarm;
+  int i, rc;
+  sqlite3_int64 nBefore;
+
+  check("get payload allocator",
+      sqlite3_config(SQLITE_CONFIG_GETMALLOC, &payloadAllocator)==SQLITE_OK);
+  methods = payloadAllocator;
+  methods.xMalloc = payloadMalloc;
+  methods.xRealloc = payloadRealloc;
+  check("install payload allocator",
+      sqlite3_config(SQLITE_CONFIG_MALLOC, &methods)==SQLITE_OK);
+  check("initialize payload allocator", sqlite3_initialize()==SQLITE_OK);
+  nBefore = sqlite3_memory_used();
+  pCur = sqlite3_malloc64(sizeof(*pCur));
+  check("allocate payload cursor", pCur!=0);
+  if( !pCur ) goto payload_done;
+  memset(pCur, 0, sizeof(*pCur));
+  memset(data, 0x5a, sizeof(data));
+  check("warm payload copy", cacheCursorPayloadCopy(pCur, data, 128)==SQLITE_OK);
+  nWarm = nPayloadAlloc;
+  for(i=1; i<=128; i++){
+    CLEAR_CACHED_PAYLOAD(pCur);
+    memset(data, i, sizeof(data));
+    rc = cacheCursorPayloadCopy(pCur, data, i);
+    check("small payload copy bytes", rc==SQLITE_OK
+        && pCur->nCachedPayload==i && memcmp(pCur->pCachedPayload, data, i)==0);
+  }
+  check("small payload copies reuse allocation", nPayloadAlloc==nWarm);
+  memcpy(expected, data, 128);
+  data[0] ^= 0xff;
+  check("payload copy is independent", memcmp(pCur->pCachedPayload, expected, 128)==0);
+  failPayloadAlloc = 1;
+  rc = cacheCursorPayloadCopy(pCur, data, sizeof(data));
+  failPayloadAlloc = 0;
+  check("failed large copy preserves payload", rc==SQLITE_NOMEM
+      && pCur->nCachedPayload==128 && memcmp(pCur->pCachedPayload, expected, 128)==0);
+  failPayloadAlloc = 1;
+  rc = cacheCursorPayloadCopy(pCur, data, 64);
+  failPayloadAlloc = 0;
+  check("warm copy needs no allocation", rc==SQLITE_OK
+      && pCur->nCachedPayload==64 && memcmp(pCur->pCachedPayload, data, 64)==0);
+  if( rc==SQLITE_OK ){
+    memcpy(expected, pCur->pCachedPayload+1, 63);
+    rc = cacheCursorPayloadCopy(pCur, pCur->pCachedPayload+1, 63);
+    check("overlapping payload copy", rc==SQLITE_OK
+        && pCur->nCachedPayload==63 && memcmp(pCur->pCachedPayload, expected, 63)==0);
+  }
+  rc = cacheCursorPayloadCopy(pCur, data, sizeof(data));
+  check("large payload copy bytes", rc==SQLITE_OK
+      && pCur->nCachedPayload==sizeof(data)
+      && memcmp(pCur->pCachedPayload, data, sizeof(data))==0);
+  rc = cacheCursorPayloadCopy(pCur, pCur->pCachedPayload+1, 64);
+  check("small copy from large payload", rc==SQLITE_OK
+      && pCur->nCachedPayload==64 && memcmp(pCur->pCachedPayload, data+1, 64)==0);
+  check("copy buffer stays bounded", pCur->nReconPayloadAlloc<=128);
+  data[0] = 3;
+  data[1] = 0x84;
+  data[2] = 0x64;
+  rc = sortKeyFromRecord(data, sizeof(data), &pKey, &nKey);
+  if( rc==SQLITE_OK ) rc = cacheCursorPayloadReconstructed(pCur, pKey, nKey);
+  check("reconstruct after buffered copy", rc==SQLITE_OK
+      && pCur->nCachedPayload==sizeof(data)
+      && memcmp(pCur->pCachedPayload, data, sizeof(data))==0);
+  sqlite3_free(pKey);
+  rc = cacheCursorPayloadCopy(pCur, pCur->pCachedPayload+3, 64);
+  check("copy reconstructed payload", rc==SQLITE_OK
+      && pCur->nCachedPayload==64 && memcmp(pCur->pCachedPayload, data+3, 64)==0);
+  rc = cacheCursorPayloadCopy(pCur, 0, 0);
+  check("empty payload copy", rc==SQLITE_OK && pCur->nCachedPayload==0);
+  CLEAR_CACHED_PAYLOAD(pCur);
+  sqlite3_free(pCur->pReconPayload);
+  sqlite3_free(pCur);
+  check("payload copies release allocations", sqlite3_memory_used()==nBefore);
+payload_done:
+  check("shutdown payload allocator", sqlite3_shutdown()==SQLITE_OK);
+  check("restore payload allocator",
+      sqlite3_config(SQLITE_CONFIG_MALLOC, &payloadAllocator)==SQLITE_OK);
+}
+
 static void execSql(sqlite3 *db, const char *zSql){
   char *zErr = 0;
   int rc = sqlite3_exec(db, zSql, 0, 0, &zErr);
@@ -1307,6 +1407,7 @@ int main(void){
   ProllyCache *pCache;
   sqlite3_stmt *p = 0;
   int i;
+  testPayloadCopies();
   sqlite3_snprintf(sizeof(zPath), zPath, "/tmp/prolly-cache-budget-%d.db",
                    (int)getpid());
   unlink(zPath);
