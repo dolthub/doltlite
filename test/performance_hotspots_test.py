@@ -146,7 +146,7 @@ class HotspotTests(unittest.TestCase):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 12)
+            self.assertEqual(sql.call_count, 9)
             self.assertEqual([call.args[1] for call in measure_retained.call_args_list],
                              ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
@@ -401,14 +401,14 @@ class HotspotTests(unittest.TestCase):
                 self.assertTrue(bundle['expected'].startswith('0|'))
         self.assertEqual(counts, {'narrow_rows': 5, 'zero_row_updates': 2,
                                  'in_transaction_mutations': 6, 'integer_keys': 2,
-                                 'bulk_writes': 5, 'small_cache': 7, 'after_deletes': 3,
+                                 'bulk_writes': 6, 'small_cache': 7, 'after_deletes': 3,
                                  'index_row_fetches': 2, 'planner_choices': 1})
-        self.assertEqual(sql.call_count, 54)
+        self.assertEqual(sql.call_count, 57)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 24)
+        self.assertEqual(len(grouped), 25)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -463,13 +463,13 @@ class HotspotTests(unittest.TestCase):
 
     def test_remaining_issue_themes_are_reported_and_gated(self):
         expected = {
-            'bulk_writes': {3332, 3342, 3348, 3361},
+            'bulk_writes': {3341, 3342, 3348, 3361},
             'after_deletes': {3352},
         }
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             root = Path(directory)
             fixtures = hotspots.prepare_retained({'candidate': 'new'}, root)
-            self.assertEqual(sql.call_count, 4)
+            self.assertEqual(sql.call_count, 3)
             actual = {}
             for name, bundle, databases in fixtures:
                 category = hotspots.section_of(name)
