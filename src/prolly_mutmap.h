@@ -74,6 +74,9 @@ struct ProllyMutMap {
   ** root is inTreeRoot. */
   u8 bInTreeRoot;
   ProllyHash inTreeRoot;
+  /* Bytes of keys, values, entries and undo copies added since the last
+  ** clear; it never shrinks before then. */
+  i64 nBytes;
 };
 
 static SQLITE_INLINE int prollyMutMapOrderPhys(const ProllyMutMap *mm, int idx){
@@ -145,6 +148,7 @@ int prollyMutMapEntryAt(ProllyMutMap *mm, int idx, ProllyMutMapEntry **ppEntry);
 int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry);
 
 int prollyMutMapCount(ProllyMutMap *mm);
+i64 prollyMutMapBytes(ProllyMutMap *mm);
 
 int prollyMutMapIsEmpty(ProllyMutMap *mm);
 

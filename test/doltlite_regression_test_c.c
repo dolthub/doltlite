@@ -14428,8 +14428,8 @@ static void run_count_flush_keeps_scan(void){
 }
 
 /* A pending map that drains mid-build must not leave cursors pointing past
-** nEntries; PROLLY_MUTMAP_PENDING_FLUSH_LIMIT is 65536, so the index build
-** has to cross it. */
+** nEntries; the index build has to cross the 64 MiB pending-byte drain, so
+** each indexed entry carries a 1 KB value. */
 static void run_index_build_flush_resets_cursor(void){
   sqlite3 *db = 0;
   sqlite3_stmt *stmt = 0;
@@ -14443,11 +14443,11 @@ static void run_index_build_flush_resets_cursor(void){
 
   check("open_db_for_index_build_flush", open_db(dbpath, &db)==SQLITE_OK);
   check("setup_rows_for_index_build_flush", execSql(db,
-    "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);"
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c TEXT);"
     "WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<70000)"
-    "  INSERT INTO t(a,b) SELECT 1, x FROM s;")==SQLITE_OK);
+    "  INSERT INTO t(a,b,c) SELECT 1, x, printf('%01000d', x) FROM s;")==SQLITE_OK);
   check("index_build_crosses_flush_limit", execSql(db,
-    "CREATE INDEX iab ON t(a,b);")==SQLITE_OK);
+    "CREATE INDEX iab ON t(a,b,c);")==SQLITE_OK);
 
   rc = sqlite3_prepare_v2(db,
     "SELECT (SELECT max(b) FROM t INDEXED BY iab WHERE a=1)"
