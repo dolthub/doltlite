@@ -669,9 +669,12 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
   if( pRow && (!pEntry || pEntry->nEvictChance>0
                || pRow->iTouch<pEntry->iTouch) ){
     pEntry = pRow;
-  }else if( !pEntry || pEntry->nEvictChance>0 ){
+  }else{
     ProllyCacheEntry *pPrefix = cachePrefixCandidate(cache);
-    if( pPrefix ) pEntry = pPrefix;
+    if( pPrefix && (!pEntry || pEntry->nEvictChance>0
+                    || pPrefix->iTouch<pEntry->iTouch) ){
+      pEntry = pPrefix;
+    }
   }
   if( pEntry && pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
     ProllyCacheEntry *pPrefix = cacheWriteLeftoverCandidate(cache);
@@ -763,6 +766,8 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
       }
       if( pass==0 && pEntry->nRef==0 ){
         ProllyCacheEntry *pOld = cacheRowCandidate(cache);
+        ProllyCacheEntry *pPrefix = cachePrefixCandidate(cache);
+        if( pPrefix && (!pOld || pPrefix->iTouch<pOld->iTouch) ) pOld = pPrefix;
         if( pOld && pOld->iTouch<pEntry->iTouch ){
           if( nMaxByte==0 || !cacheKeepPrefixes(cache, pOld) ){
             cacheEvictEntry(cache, pOld);
