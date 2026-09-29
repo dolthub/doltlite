@@ -125,6 +125,9 @@ do_execsql_test sparse-update {
 
 # One UPDATE past the pending-edit drain limit flushes mid-statement and must
 # resume after the row it wrote, not revisit rows it already updated.
+set saved_mutmap_drain [expr {[info exists env(DOLTLITE_MUTMAP_DRAIN_BYTES)] ? $env(DOLTLITE_MUTMAP_DRAIN_BYTES) : ""}]
+set had_mutmap_drain [info exists env(DOLTLITE_MUTMAP_DRAIN_BYTES)]
+set env(DOLTLITE_MUTMAP_DRAIN_BYTES) 1000000
 foreach {name ddl} {
   rowid   {CREATE TABLE t(id TEXT PRIMARY KEY, seq INT, tag TEXT)}
   norowid {CREATE TABLE t(id TEXT PRIMARY KEY, seq INT, tag TEXT) WITHOUT ROWID}
@@ -146,6 +149,11 @@ foreach {name ddl} {
     SELECT count(*), sum(tag='xy'), min(seq), max(seq) FROM t;
   } {65600 65600 1 65600}
   do_execsql_test drain-update-$name-integrity {PRAGMA integrity_check} ok
+}
+if {$had_mutmap_drain} {
+  set env(DOLTLITE_MUTMAP_DRAIN_BYTES) $saved_mutmap_drain
+} else {
+  unset env(DOLTLITE_MUTMAP_DRAIN_BYTES)
 }
 
 finish_test

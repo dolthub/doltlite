@@ -723,7 +723,7 @@ run_test "bulk_threshold_savepoint_rollback" \
      SELECT x+1 FROM gen WHERE x<66000
    )
    INSERT INTO t
-   SELECT x, printf('row-%d', x) FROM gen;
+   SELECT x, printf('row-%01020d', x) FROM gen;
    ROLLBACK TO sp1;
    COMMIT;
    SELECT count(*) FROM t;" \

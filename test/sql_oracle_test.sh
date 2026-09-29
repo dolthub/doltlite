@@ -1648,7 +1648,7 @@ CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
 CREATE INDEX t_v ON t(v);
 BEGIN;
 WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
-  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
+  INSERT INTO t SELECT randomblob(32), printf('v%05d%01000d', i, 0) FROM c;
 UPDATE t SET v = v || 'X' WHERE v < 'v00500';
 SELECT count(*) FROM t;
 SELECT count(*) FROM t WHERE v LIKE '%X';
@@ -1660,7 +1660,7 @@ oracle "cat16_savepos_blob_pk_bulk_delete" "
 CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
 BEGIN;
 WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
-  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
+  INSERT INTO t SELECT randomblob(32), printf('v%05d%01000d', i, 0) FROM c;
 DELETE FROM t WHERE v < 'v00500';
 SELECT count(*) FROM t;
 COMMIT;

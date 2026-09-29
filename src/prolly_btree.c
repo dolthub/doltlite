@@ -260,11 +260,28 @@ static int btreeApplyChunkSourceError(
 }
 
 
-#define PROLLY_MUTMAP_PENDING_FLUSH_LIMIT 65536
+/* Pending edits drain into the tree once they hold this much memory, not
+** after a fixed number of rows: every drain builds and hashes the edited
+** chunks, which a rolled-back statement throws away and a later drain or
+** the commit rebuilds. The entry cap bounds sorting tiny-row maps. */
+#define PROLLY_MUTMAP_PENDING_FLUSH_BYTES (64*1024*1024)
+#define PROLLY_MUTMAP_PENDING_FLUSH_LIMIT (1<<20)
+
+static i64 mutMapDrainBytes(void){
+#if defined(SQLITE_TEST) || defined(DOLTLITE_MECH_REPRO)
+  const char *zEnv = getenv("DOLTLITE_MUTMAP_DRAIN_BYTES");
+  if( zEnv && zEnv[0] ){
+    i64 n = atoll(zEnv);
+    if( n>0 ) return n;
+  }
+#endif
+  return PROLLY_MUTMAP_PENDING_FLUSH_BYTES;
+}
 
 int mutMapShouldDrain(BtCursor *pCur){
-  return pCur && pCur->pMutMap
-      && prollyMutMapCount(pCur->pMutMap) >= PROLLY_MUTMAP_PENDING_FLUSH_LIMIT;
+  ProllyMutMap *pMap = pCur ? pCur->pMutMap : 0;
+  return pMap && (prollyMutMapBytes(pMap) >= mutMapDrainBytes()
+                  || prollyMutMapCount(pMap) >= PROLLY_MUTMAP_PENDING_FLUSH_LIMIT);
 }
 
 static i64 prollyBtreeSyntheticPageCount(Btree *p){
