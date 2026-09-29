@@ -112,7 +112,7 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 12)
+        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 9)
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -141,7 +141,7 @@ class HotspotTests(unittest.TestCase):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 30)
+            self.assertEqual(sql.call_count, 24)
             self.assertEqual([call.args[1] for call in measure_retained.call_args_list],
                              ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
@@ -174,10 +174,10 @@ class HotspotTests(unittest.TestCase):
                 self.assertIn(f"### {title}\n", report.getvalue())
             self.assertNotIn("### Integer Keys", report.getvalue())
             self.assertIn("### After Deletes", report.getvalue())
-            self.assertTrue(all(len(call.args[2]) == 12 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 21)
+            self.assertTrue(all(len(call.args[2]) == 9 for call in measure_retained.call_args_list))
+            self.assertEqual(len(result.read_text().splitlines()), 18)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 43)
+            self.assertEqual(len(raw.read_text().splitlines()), 37)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -354,15 +354,15 @@ class HotspotTests(unittest.TestCase):
             elif category == 'zero_row_updates':
                 self.assertTrue(bundle['expected'].startswith('0|'))
         self.assertEqual(counts, {'narrow_rows': 5, 'zero_row_updates': 2,
-                                 'in_transaction_mutations': 5, 'integer_keys': 2,
-                                 'bulk_writes': 3, 'small_cache': 7, 'after_deletes': 3,
+                                 'in_transaction_mutations': 6, 'integer_keys': 2,
+                                 'bulk_writes': 5, 'small_cache': 7, 'after_deletes': 3,
                                  'index_row_fetches': 2})
-        self.assertEqual(sql.call_count, 45)
+        self.assertEqual(sql.call_count, 51)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 20)
+        self.assertEqual(len(grouped), 23)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -419,14 +419,14 @@ class HotspotTests(unittest.TestCase):
         expected = {
             'index_row_fetches': {3367},
             'planner_choices': {3360},
-            'in_transaction_mutations': {3306, 3334},
-            'bulk_writes': {3332, 3342, 3348, 3350, 3356, 3361, 3364},
+            'in_transaction_mutations': {3306},
+            'bulk_writes': {3332, 3342, 3348, 3361, 3364},
             'after_deletes': {3352},
         }
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             root = Path(directory)
             fixtures = hotspots.prepare_retained({'candidate': 'new'}, root)
-            self.assertEqual(sql.call_count, 10)
+            self.assertEqual(sql.call_count, 8)
             actual = {}
             for name, bundle, databases in fixtures:
                 category = hotspots.section_of(name)
@@ -465,7 +465,7 @@ class HotspotTests(unittest.TestCase):
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
             active = [fixture for fixture in fixtures
                       if fixture[1]['category'] in ('in_transaction_mutations', 'after_deletes')]
-            self.assertEqual({b['issue'] for _, b, _ in active}, {3306, 3334, 3352})
+            self.assertEqual({b['issue'] for _, b, _ in active}, {3306, 3352})
             retired = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
@@ -474,7 +474,7 @@ class HotspotTests(unittest.TestCase):
             self.assertTrue(bulk[0][1]['profile']['memory'])
             fixtures = [fixture for fixture in retired
                          if fixture[1]['category'] == 'in_transaction_mutations']
-            self.assertEqual(len(fixtures), 5)
+            self.assertEqual(len(fixtures), 6)
             self.assertEqual(sum(b['profile']['memory'] for _, b, _ in fixtures), 2)
             for name, bundle, databases in fixtures + active + bulk:
                 self.assertEqual(hotspots.section_of(name), bundle['category'])
