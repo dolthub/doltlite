@@ -37,11 +37,15 @@ WIDE_CASES = (("scan_small", 4096, WIDE_CACHE_KIB),
 WIDE_PAYLOADS = tuple(sorted({payload for _op, payload, _cache in WIDE_CASES}))
 WIDE_LOOKUPS = 4096
 WIDE_NAME = re.compile(r"wide_(?:thrash_)?p([0-9]+)_([a-z_]+)")
+UNCACHED_ROWS = 65536
+UNCACHED_PAYLOAD = 1024
+UNCACHED_CACHE_KIB = 4096
+UNCACHED_LOOKUPS = 16384
+UNCACHED_ISSUE = 3408
 RETAINED_SECTIONS = (("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
                      ("small_cache", "Small Cache"),
                      ("index_row_fetches", "Index Row Fetches"),
-                     ("over_cache_scans", "Scans Larger Than Cache"),
                      ("planner_choices", "Planner Choices"),
                      ("in_transaction_mutations", "In Transaction with Mutations"),
                      ("bulk_writes", "Bulk Writes"),
@@ -51,6 +55,7 @@ SECTIONS = (("queries", "Large Table Scans"),
             ("add_column", "Add Column With Default"),
             ("index_edits", "Large Index Edits"),
             ("wide_tradeoffs", "Wide Row Trade-offs"),
+            ("uncached_reads", "Uncached Reads"),
             *RETAINED_SECTIONS,
             ("retained", "Retained Findings"))
 
@@ -68,6 +73,8 @@ def section_of(name):
         return "index_edits"
     if WIDE_NAME.fullmatch(name):
         return "wide_tradeoffs"
+    if name.startswith("uncached_"):
+        return "uncached_reads"
     return "queries"
 
 
@@ -353,26 +360,82 @@ def wide_name(op, payload, cache_kib):
     return f"wide_{thrash}p{payload}_{op}"
 
 
+def measure_warm_statement(binary, db, name, query, expected, cache_kib):
+    """A fresh connection, warmed by an untimed run of the same statement, so
+    the timing is the steady state of that access pattern alone. Writes run
+    and roll back inside a transaction."""
+    write = query.lstrip().upper().startswith("UPDATE")
+    statements = [".headers off", ".mode list", ".output /dev/null",
+                  "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{cache_kib};",
+                  *(["BEGIN;", query, "ROLLBACK;"] if write else [query]),
+                  ".output stdout", "SELECT name FROM sqlite_schema WHERE 0;",
+                  *(["BEGIN;"] if write else []),
+                  f".print BEGIN {name}", ".timer on", query, ".timer off",
+                  *(["SELECT changes();"] if write else []),
+                  f".print END {name}", *(["ROLLBACK;"] if write else [])]
+    return parse_session(sql(binary, db, "\n".join(statements)),
+                         [(name, None, expected)])
+
+
 def measure_wide(binary, db):
-    """One fresh connection per workload, warmed by an untimed run of the
-    same statement, so each timing is the steady state of that access
-    pattern alone. The thrash case shrinks the cache until the compacted
-    rows no longer fit, so every run reads each leaf again."""
+    """The thrash case shrinks the cache until the compacted rows no longer
+    fit, so every run reads each leaf again."""
     measured = {}
     for op, payload, cache_kib in WIDE_CASES:
         query, expected = {o: (q, e) for o, q, e in wide_workloads(payload)}[op]
-        name = wide_name(op, payload, cache_kib)
-        write = op.startswith("update")
-        statements = [".headers off", ".mode list", ".output /dev/null",
-                      "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{cache_kib};",
-                      *(["BEGIN;", query, "ROLLBACK;"] if write else [query]),
-                      ".output stdout", "SELECT name FROM sqlite_schema WHERE 0;",
-                      *(["BEGIN;"] if write else []),
-                      f".print BEGIN {name}", ".timer on", query, ".timer off",
-                      *(["SELECT changes();"] if write else []),
-                      f".print END {name}", *(["ROLLBACK;"] if write else [])]
-        measured.update(parse_session(sql(binary, db, "\n".join(statements)),
-                                      [(name, None, expected)]))
+        measured.update(measure_warm_statement(
+            binary, db, wide_name(op, payload, cache_kib), query, expected, cache_kib))
+    return measured
+
+
+def uncached_setup(rows=UNCACHED_ROWS, payload=UNCACHED_PAYLOAD):
+    return f"""CREATE TABLE uc(id INTEGER PRIMARY KEY, grp INTEGER NOT NULL,
+  v INTEGER NOT NULL, k INTEGER NOT NULL, payload BLOB NOT NULL);
+BEGIN;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
+INSERT INTO uc SELECT i,i%256,(i*7919)%100000,i*3,
+  CAST(printf('%0{payload}d',i) AS BLOB) FROM c;
+COMMIT;
+CREATE INDEX uc_g ON uc(grp);
+ANALYZE;
+"""
+
+
+def uncached_workloads(rows=UNCACHED_ROWS, lookups=UNCACHED_LOOKUPS):
+    """A table many times the node cache, so each access pattern reads and
+    verifies chunks from disk on every run while SQLite reads the same pages
+    from the OS cache."""
+    v = {i: (i * 7919) % 100000 for i in range(1, rows + 1)}
+    ids = [1 + (i * 2654435761) % rows for i in range(1, lookups + 1)]
+    fetched = [i for i in range(1, rows + 1) if i % 256 < 128]
+    return [
+        ("uncached_scan_small", "SELECT sum(v) FROM uc NOT INDEXED;", str(sum(v.values()))),
+        ("uncached_scan_payload",
+         "SELECT sum(CAST(substr(payload,-3) AS INTEGER)) FROM uc NOT INDEXED;",
+         str(sum(i % 1000 for i in range(1, rows + 1)))),
+        ("uncached_point_lookups",
+         f"WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{lookups})"
+         f" SELECT sum((SELECT v FROM uc WHERE id=1+(c.i*2654435761)%{rows})) FROM c;",
+         str(sum(v[i] for i in ids))),
+        ("uncached_index_fetch",
+         "SELECT sum(k) FROM uc INDEXED BY uc_g WHERE grp<128;",
+         str(sum(i * 3 for i in fetched))),
+        ("uncached_update", "UPDATE uc SET v=v+1 WHERE id%256=0;", str(rows // 256)),
+    ]
+
+
+def uncached_fixture(binary, db):
+    sql(binary, db, uncached_setup())
+    check = sql(binary, db, "SELECT count(*),sum(length(payload)) FROM uc;")
+    if check != f"{UNCACHED_ROWS}|{UNCACHED_ROWS * UNCACHED_PAYLOAD}\n":
+        raise ValueError(f"invalid uncached-read fixture: {check}")
+
+
+def measure_uncached(binary, db):
+    measured = {}
+    for name, query, expected in uncached_workloads():
+        measured.update(measure_warm_statement(
+            binary, db, name, query, expected, UNCACHED_CACHE_KIB))
     return measured
 
 
@@ -458,6 +521,14 @@ def write_results(samples, result_path, sample_path):
             print("\nEach timed statement follows an untimed mutation in the same transaction; rollback is untimed.")
         elif section == 'add_column':
             print("\n[#3233](https://github.com/dolthub/doltlite/issues/3233): deferred to the storage-format upgrade.")
+        elif section == 'uncached_reads':
+            print(f"\n{UNCACHED_ROWS:,} rows with {UNCACHED_PAYLOAD} B payloads, about "
+                  f"{UNCACHED_ROWS * (UNCACHED_PAYLOAD + 64) // (1 << 20)} MB, under a "
+                  f"{UNCACHED_CACHE_KIB // 1024} MiB cache: every chunk read is verified "
+                  "against its BLAKE3 content address, while SQLite reads the same pages "
+                  "from the OS cache ("
+                  f"[#{UNCACHED_ISSUE}](https://github.com/dolthub/doltlite/issues/{UNCACHED_ISSUE})). "
+                  "Stock is SQLite.")
         elif section == 'wide_tradeoffs':
             print("\nWide values are read from disk whenever they are fetched until they move "
                   "out of band: [#3325](https://github.com/dolthub/doltlite/issues/3325). "
@@ -499,10 +570,12 @@ def main(argv=None):
         root = Path(directory)
         add_column_databases = {arm: root / f"{arm}-add-column.db" for arm in binaries}
         wide_databases = {arm: root / f"{arm}-wide.db" for arm in binaries}
+        uncached_databases = {arm: root / f"{arm}-uncached.db" for arm in binaries}
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
             add_column_fixture(binary, add_column_databases[arm], args.rows)
             wide_fixture(binary, wide_databases[arm])
+            uncached_fixture(binary, uncached_databases[arm])
         retained = prepare_retained(binaries, root)
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
@@ -512,6 +585,7 @@ def main(argv=None):
                                               root / f"{arm}-add-column-run.db",
                                               args.rows, args.cache_kib)
                 measured.update(measure_wide(binaries[arm], wide_databases[arm]))
+                measured.update(measure_uncached(binaries[arm], uncached_databases[arm]))
                 measured.update(measure_retained(binaries[arm], arm, retained))
                 samples[arm].append(measured)
         write_results(samples,
