@@ -119,7 +119,7 @@ def workers():
         shutil.copy(repo / 'test/run_lint_selftests.sh', root / 'test')
         manifest = (scripts / 'ci-selftests.sh').read_text()
         names = [str((Path('.github/scripts') / name)) for name in
-                 re.findall(r'ci_compile (?:python3|bash) "\$script_dir/([^"]+)"', manifest)]
+                 re.findall(r'ci_compile (?:python3|bash|node) "\$script_dir/([^"]+)"', manifest)]
         extras = ['test/lint_layers_selftest.sh', 'test/stock_oracle_harness_test.sh']
         worker = root / 'worker.py'
         worker.write_text('''import fcntl, json, os, sys, time
@@ -152,11 +152,17 @@ sys.exit(42 if os.environ.get('FAIL') == name else 0)
         for name in names + extras:
             if name.endswith('.py'):
                 body = f'import runpy, sys\nsys.argv = [{str(worker)!r}, {name!r}]\nrunpy.run_path({str(worker)!r}, run_name="__main__")\n'
+            elif name.endswith('.js'):
+                body = ('const {spawnSync} = require("node:child_process");\n'
+                        f'const result = spawnSync("python3", {json.dumps([str(worker), name])}, '
+                        '{stdio: "inherit"});\n'
+                        'process.exit(result.status === null ? 1 : result.status);\n')
             else:
                 body = f'#!/bin/bash\nexec python3 "{worker}" "{name}"\n'
             executable(root / name, body)
         for standalone, jobs, fail in [(False, 3, ''), (False, 1, ''), (True, 3, '')] + [
-                (False, 3, name) for name in [extras[0], extras[1], names[0], names[-1]]]:
+                (False, 3, name) for name in [extras[0], extras[1], names[0], names[-1],
+                                             next(name for name in names if name.endswith('.js'))]]:
             state = root / 'state.json'
             state.write_text(json.dumps(dict(start=[], end=[], active=0, max=0)))
             command = ['bash', str(scripts / 'ci-optimization-test.sh')] if standalone else [
