@@ -662,8 +662,9 @@ jobs:
           --exit-status \
           --interval 15
 
-        for attempt in $(seq 1 20); do
-          published=$(npm view "@dolthub/doltlite@${version}" version 2>/dev/null || true)
+        for attempt in $(seq 1 90); do
+          published=$(npm view "@dolthub/doltlite@${version}" version \
+            --registry=https://registry.npmjs.org/ --prefer-online 2>/dev/null || true)
           if [ "$published" = "$version" ]; then
             echo "@dolthub/doltlite ${version} is available from npm"
             exit 0
