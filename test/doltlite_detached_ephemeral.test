@@ -1,0 +1,71 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_detached_ephemeral
+db close
+forcedelete detached.doltlite_db auxiliary.db
+sqlite3 db detached.doltlite_db
+
+db eval {
+  CREATE TABLE t(id TEXT PRIMARY KEY, v INTEGER);
+  INSERT INTO t VALUES('a',1),('b',2),('c',2);
+  SELECT dolt_commit('-Am','snapshot');
+}
+set hash [db one {SELECT dolt_hashof('HEAD')}]
+db eval {INSERT INTO t VALUES('d',9)}
+db close
+sqlite3 aux auxiliary.db
+aux eval {CREATE TABLE u(id INTEGER PRIMARY KEY); INSERT INTO u VALUES(1)}
+aux close
+
+foreach {separator label} {/ slash @ at} {
+  foreach readonly {0 1} {
+    foreach temp_store {0 1 2} {
+      sqlite3 db "detached.doltlite_db${separator}${hash}" -readonly $readonly
+      db eval "PRAGMA temp_store=$temp_store"
+      db eval {ATTACH 'auxiliary.db' AS aux}
+      set prefix "$testprefix.$label.$readonly.$temp_store"
+      do_execsql_test $prefix.snapshot {SELECT id,v FROM t ORDER BY id} {a 1 b 2 c 2}
+      foreach query_only {0 1} {
+        db eval "PRAGMA query_only=$query_only"
+        foreach {name sql expected} {
+          in-list {SELECT count(*) FROM t WHERE id IN ('a','b')} 2
+          in-json {SELECT count(*) FROM t WHERE id IN (
+            SELECT value FROM json_each('["a","b"]'))} 2
+          in-query {SELECT count(*) FROM t WHERE v IN (
+            SELECT v FROM t WHERE id='b')} 2
+          distinct {SELECT DISTINCT v FROM t} {1 2}
+          count-distinct {SELECT count(DISTINCT v) FROM t} 2
+          materialized {WITH q AS MATERIALIZED (SELECT v FROM t)
+            SELECT count(*) FROM q} 3
+          recursive {WITH RECURSIVE q(v) AS (VALUES(1) UNION ALL
+            SELECT v+1 FROM q WHERE v<3) SELECT sum(v) FROM q} 6
+          union {SELECT id FROM t UNION SELECT id FROM t} {a b c}
+          order {SELECT id FROM t ORDER BY v DESC,id} {b c a}
+        } {
+          do_execsql_test $prefix.$query_only.$name $sql $expected
+        }
+      }
+      db eval {PRAGMA query_only=OFF}
+      foreach {name sql} {
+        insert {INSERT INTO t VALUES('z',5)}
+        update {UPDATE t SET v=5 WHERE id='a'}
+        delete {DELETE FROM t WHERE id='a'}
+        ddl {CREATE TABLE blocked(id INTEGER PRIMARY KEY)}
+        temp-ddl {CREATE TEMP TABLE blocked(id INTEGER PRIMARY KEY)}
+        attached-write {INSERT INTO aux.u VALUES(2)}
+      } {
+        do_catchsql_test $prefix.$name $sql {1 {attempt to write a readonly database}}
+      }
+      do_execsql_test $prefix.preserved {
+        SELECT id,v FROM t ORDER BY id;
+        SELECT id FROM aux.u;
+      } {a 1 b 2 c 2 1}
+      db close
+    }
+  }
+}
+sqlite3 db detached.doltlite_db
+do_execsql_test main-preserved {SELECT id,v FROM t ORDER BY id} {a 1 b 2 c 2 d 9}
+db close
+forcedelete detached.doltlite_db auxiliary.db
+finish_test
