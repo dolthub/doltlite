@@ -2510,5 +2510,174 @@ run_test "merge_add_column_unstored_keeps_default" \
 run_test "merge_add_column_unstored_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB115"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115"
+# Both branches add the same column. The ancestor has no value there, so
+# each side's value is a change: NULL against another value conflicts, and
+# equal values merge. A stored NULL still matches an omitted field.
+DB116=/tmp/test_merge116_$$.db; rm -f "$DB116"
+$DOLTLITE "$DB116" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=9 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SQL
+run_test_match "merge_dual_add_null_vs_value" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB116"
+run_test "merge_dual_add_null_vs_value_kept" \
+  "SELECT id || ':' || a || ':' || coalesce(b,'N') FROM t;" "1:1:9" "$DB116"
+run_test "merge_dual_add_null_vs_value_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB116"
+run_test "merge_dual_add_null_vs_value_schema" \
+  "SELECT count(*) FROM dolt_schema_conflicts;" "0" "$DB116"
+$DOLTLITE "$DB116" > /tmp/test_merge116_txn_$$.out 2>/tmp/test_merge116_txn_$$.err <<'SQL'
+.headers off
+.mode list
+BEGIN;
+SELECT dolt_merge('feature');
+SELECT 'N|' || count(*) FROM dolt_conflicts_t;
+SELECT 'SC|' || count(*) FROM dolt_schema_conflicts;
+ROLLBACK;
+SQL
+N116=$(grep -E '^N\|' /tmp/test_merge116_txn_$$.out | head -1)
+SC116=$(grep -E '^SC\|' /tmp/test_merge116_txn_$$.out | head -1)
+if [ "$N116" = "N|1" ] && [ "$SC116" = "SC|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: merge_dual_add_null_vs_value_txn\n  rows=$N116 schema=$SC116\n$(cat /tmp/test_merge116_txn_$$.out /tmp/test_merge116_txn_$$.err)"
+fi
+rm -f /tmp/test_merge116_txn_$$.out /tmp/test_merge116_txn_$$.err
+
+DB117=/tmp/test_merge117_$$.db; rm -f "$DB117"
+$DOLTLITE "$DB117" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+SELECT dolt_commit('-Am','main');
+SQL
+run_test_match "merge_dual_add_null_vs_default" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB117"
+run_test "merge_dual_add_null_vs_default_kept" \
+  "SELECT coalesce(b,'N') FROM t;" "7" "$DB117"
+run_test "merge_dual_add_null_vs_default_schema" \
+  "SELECT count(*) FROM dolt_schema_conflicts;" "0" "$DB117"
+
+DB118=/tmp/test_merge118_$$.db; rm -f "$DB118"
+$DOLTLITE "$DB118" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=9 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=9 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_dual_add_same_value" \
+  "SELECT coalesce(b,'N') FROM t;" "9" "$DB118"
+run_test "merge_dual_add_same_value_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB118"
+run_test "merge_dual_add_same_value_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB118"
+
+DB119=/tmp/test_merge119_$$.db; rm -f "$DB119"
+$DOLTLITE "$DB119" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_dual_add_both_null" \
+  "SELECT coalesce(b,'N') FROM t;" "N" "$DB119"
+run_test "merge_dual_add_both_null_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB119"
+
+DB120=/tmp/test_merge120_$$.db; rm -f "$DB120"
+$DOLTLITE "$DB120" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT;
+UPDATE t SET b=5 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SQL
+run_test_match "merge_dual_add_value_vs_omit" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB120"
+run_test "merge_dual_add_value_vs_omit_kept" \
+  "SELECT coalesce(b,'N') FROM t;" "5" "$DB120"
+
+DB121=/tmp/test_merge121_$$.db; rm -f "$DB121"
+$DOLTLITE "$DB121" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_dual_add_null_vs_omit" \
+  "SELECT coalesce(b,'N') FROM t;" "N" "$DB121"
+run_test "merge_dual_add_null_vs_omit_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB121"
+
+DB122=/tmp/test_merge122_$$.db; rm -f "$DB122"
+$DOLTLITE "$DB122" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INT PRIMARY KEY, a INT) WITHOUT ROWID;
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=9 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SQL
+run_test_match "merge_dual_add_null_vs_value_without_rowid" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB122"
+run_test "merge_dual_add_null_vs_value_without_rowid_kept" \
+  "SELECT coalesce(b,'N') FROM t;" "9" "$DB122"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish

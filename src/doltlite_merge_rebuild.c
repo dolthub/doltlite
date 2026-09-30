@@ -873,8 +873,11 @@ int normalizeSideToMergedLayout(
   DoltliteSerialValue *aMem = 0;
   u8 **apOwned = 0;
   int bSameKey;
+  int bAncestorGap;
+  int nMem;
   int rc, res, j;
 
+  bAncestorGap = 0;
   memset(&oursDefaults, 0, sizeof(oursDefaults));
   memset(&theirsDefaults, 0, sizeof(theirsDefaults));
   memset(&sideCi, 0, sizeof(sideCi));
@@ -1008,11 +1011,14 @@ int normalizeSideToMergedLayout(
     int nShared = 0;
     rc = parseColumns(zSharedSql, &aShared, &nShared);
     if( rc!=SQLITE_OK ) goto done;
-    /* A column added on both sides has no value in the ancestor. */
+    /* A column added on both sides has no ancestor value. NULL stays
+    ** NULL here; an extra field below keeps that row distinct from a
+    ** stored NULL, which compares equal to an omitted field. */
     for(j=0; j<nOurs && j<oursDefaults.nCol; j++){
       if( parsedColumnIndexByName(aAnc, nAnc, aOurs[j].zName)<0
        && parsedColumnIndexByName(aShared, nShared, aOurs[j].zName)>=0 ){
         oursDefaults.aVal[j].eType = SQLITE_NULL;
+        bAncestorGap = 1;
       }
     }
     freeColumns(aShared, nShared);
@@ -1037,8 +1043,9 @@ int normalizeSideToMergedLayout(
     oursCurInit = 1;
   }
 
-  if( nMergedRecord>0
-   && !(aMem = sqlite3_malloc64((sqlite3_uint64)nMergedRecord * sizeof(*aMem))) ){
+  nMem = nMergedRecord + bAncestorGap;
+  if( nMem>0
+   && !(aMem = sqlite3_malloc64((sqlite3_uint64)nMem * sizeof(*aMem))) ){
     rc = SQLITE_NOMEM; goto done;
   }
   if( nMergedRecord>0 ){
@@ -1163,6 +1170,15 @@ int normalizeSideToMergedLayout(
         if( tgt+1>nEmit ) nEmit = tgt+1;
       }
       doltliteRecordInfoClear(&kinfo);
+    }
+
+    /* Past the real columns, so neither side has this field. The diff
+    ** then sees both branches as edits, and the cell merge leaves it off. */
+    if( bAncestorGap ){
+      memset(&aMem[nMergedRecord], 0, sizeof(aMem[0]));
+      aMem[nMergedRecord].eType = SQLITE_INTEGER;
+      aMem[nMergedRecord].i = 1;
+      nEmit = nMergedRecord + 1;
     }
 
     if( nEmit>0 ){
