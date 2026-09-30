@@ -42,6 +42,14 @@ UNCACHED_PAYLOAD = 1024
 UNCACHED_CACHE_KIB = 4096
 UNCACHED_LOOKUPS = 16384
 UNCACHED_ISSUE = 3408
+BUCKET_ROWS = 65536
+BUCKET_PAYLOAD = 256
+BUCKET_CACHE_KIB = 65536
+BUCKET_PROBES = 8192
+MEMORY_LOOKUPS = 16384
+PK_REWRITE_ISSUE = 3419
+PENDING_EDITS_ISSUE = 3418
+MEMORY_CACHE_ISSUE = 3417
 RETAINED_SECTIONS = (("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
                      ("small_cache", "Small Cache"),
@@ -56,6 +64,9 @@ SECTIONS = (("queries", "Large Table Scans"),
             ("index_edits", "Large Index Edits"),
             ("wide_tradeoffs", "Wide Row Trade-offs"),
             ("uncached_reads", "Uncached Reads"),
+            ("pk_rewrites", "Primary Key Index Rewrites"),
+            ("pending_edits", "Pending Edit Map"),
+            ("memory_cache", "In-Memory Node Cache"),
             *RETAINED_SECTIONS,
             ("retained", "Retained Findings"))
 
@@ -75,6 +86,10 @@ def section_of(name):
         return "wide_tradeoffs"
     if name.startswith("uncached_"):
         return "uncached_reads"
+    for prefix, section in (("pk_rewrite_", "pk_rewrites"), ("pending_", "pending_edits"),
+                            ("memory_", "memory_cache")):
+        if name.startswith(prefix):
+            return section
     return "queries"
 
 
@@ -437,6 +452,115 @@ def measure_uncached(binary, db):
         measured.update(measure_warm_statement(
             binary, db, name, query, expected, UNCACHED_CACHE_KIB))
     return measured
+BUCKET_NOTES = {
+    "pk_rewrites": (PK_REWRITE_ISSUE,
+                    "Secondary index entries carry the primary key, so changing a non-integer "
+                    "key rewrites every index entry of the row, while SQLite's indexes point at "
+                    "an unchanged rowid; the no-index and integer-key cases are the controls"),
+    "pending_edits": (PENDING_EDITS_ISSUE,
+                      "Uncommitted edits live in a sorted pending map: writes pay to fill it, and "
+                      "reads in the transaction merge it with the tree and skip its deletes. The "
+                      "file-backed update and live-row probes are the controls"),
+    "memory_cache": (MEMORY_CACHE_ISSUE,
+                     "An in-memory database still reads through the bounded node cache and copies "
+                     "each missed chunk out of the store, while SQLite's in-memory pages never "
+                     "leave; the 1 GiB case is the control"),
+}
+
+
+def bucket_setup(key, indexes, rows=BUCKET_ROWS, payload=BUCKET_PAYLOAD):
+    kind, value = (("TEXT", "printf('%016x',i)") if key == "text" else ("INTEGER", "i"))
+    create = {"none": "",
+              "gv": "CREATE INDEX t_gv ON t(grp,v);",
+              "three": "CREATE INDEX t_g ON t(grp); CREATE INDEX t_gv ON t(grp,v); "
+                       "CREATE INDEX t_k ON t(k);"}[indexes]
+    return f"""CREATE TABLE t(id {kind} PRIMARY KEY, grp INTEGER NOT NULL, v INTEGER NOT NULL,
+  k INTEGER NOT NULL, payload BLOB NOT NULL);
+BEGIN;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{rows})
+INSERT INTO t SELECT {value},i%256,(i*7919)%100000,i*3,
+  CAST(printf('%0{payload}d',i) AS BLOB) FROM c;
+COMMIT;
+{create}
+ANALYZE;
+"""
+
+
+def bucket_workloads(rows=BUCKET_ROWS, probes=BUCKET_PROBES, lookups=MEMORY_LOOKUPS):
+    """Each case isolates one cause against stock, next to a control that
+    lacks it: a primary-key change with and without secondary indexes, the
+    same write in memory and on disk, the same index probes over live and
+    pending-deleted rows, and the same in-memory reads under a small and a
+    large node cache. Every case is
+    (name, storage, key, indexes, cache KiB, untimed prepare, query, expected)."""
+    v = {i: (i * 7919) % 100000 for i in range(1, rows + 1)}
+    ids = [1 + (i * 2654435761) % rows for i in range(1, lookups + 1)]
+    probe = (f"WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{probes}) "
+             f"SELECT count(*),coalesce(sum((SELECT v FROM t WHERE k=24*c.i)),0) FROM c;")
+    lookup = (f"WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{lookups}) "
+              f"SELECT count(*),sum((SELECT v FROM t WHERE id=1+(c.i*2654435761)%{rows})) FROM c;")
+    text_key = f"UPDATE t SET id=printf('%016x',k/3+{rows});"
+    payload = f"UPDATE t SET payload=CAST(printf('%0{BUCKET_PAYLOAD}d',k) AS BLOB);"
+    live = sum(v[8 * i] for i in range(1, probes + 1) if 8 * i <= rows)
+    return [
+        ("pk_rewrite_text_no_indexes", "file", "text", "none", BUCKET_CACHE_KIB, "",
+         text_key, str(rows)),
+        ("pk_rewrite_text_three_indexes", "file", "text", "three", BUCKET_CACHE_KIB, "",
+         text_key, str(rows)),
+        ("pk_rewrite_integer_three_indexes", "file", "integer", "three", BUCKET_CACHE_KIB, "",
+         f"UPDATE t SET id=id+{rows};", str(rows)),
+        ("pending_update_memory", "memory", "integer", "none", BUCKET_CACHE_KIB, "",
+         "UPDATE t SET v=v+1;", str(rows)),
+        ("pending_update_payload_memory", "memory", "integer", "none", BUCKET_CACHE_KIB, "",
+         payload, str(rows)),
+        ("pending_update_file", "file", "integer", "none", BUCKET_CACHE_KIB, "",
+         "UPDATE t SET v=v+1;", str(rows)),
+        ("pending_index_probes_live", "file", "integer", "three", BUCKET_CACHE_KIB, "",
+         probe, f"{probes}|{live}"),
+        ("pending_index_probes_deleted", "file", "integer", "three", BUCKET_CACHE_KIB,
+         "DELETE FROM t WHERE id%8=0;", probe, f"{probes}|0"),
+        ("memory_point_lookups_4mib", "memory", "integer", "gv", 4096, "",
+         lookup, f"{lookups}|{sum(v[i] for i in ids)}"),
+        ("memory_update_indexed_4mib", "memory", "integer", "gv", 4096, "",
+         "UPDATE t SET v=v+1 WHERE id%4=0;", str(rows // 4)),
+        ("memory_point_lookups_1gib", "memory", "integer", "gv", 1048576, "",
+         lookup, f"{lookups}|{sum(v[i] for i in ids)}"),
+    ]
+
+
+def bucket_fixture_names():
+    return sorted({(key, indexes) for _n, storage, key, indexes, *_rest in bucket_workloads()
+                   if storage == "file"})
+
+
+def bucket_fixture(binary, db, key, indexes):
+    sql(binary, db, bucket_setup(key, indexes))
+    check = sql(binary, db, "SELECT count(*),sum(length(payload)) FROM t;")
+    if check != f"{BUCKET_ROWS}|{BUCKET_ROWS * BUCKET_PAYLOAD}\n":
+        raise ValueError(f"invalid bucket fixture: {check}")
+
+
+def measure_bucket(binary, databases):
+    """A fresh connection per case. An in-memory case loads its table in the
+    same session, under the case's cache size. An untimed run of the prepare
+    and the query warms the cache; the timed run repeats both inside a
+    transaction that rolls back, and only the query is timed."""
+    measured = {}
+    for name, storage, key, indexes, cache_kib, prepare, query, expected in bucket_workloads():
+        write = query.lstrip().upper().startswith("UPDATE")
+        memory = storage == "memory"
+        statements = [".headers off", ".mode list", ".output /dev/null",
+                      "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{cache_kib};",
+                      *([bucket_setup(key, indexes)] if memory else []),
+                      "BEGIN;", prepare, query, "ROLLBACK;",
+                      "BEGIN;", prepare, ".output stdout",
+                      f".print BEGIN {name}", ".timer on", query, ".timer off",
+                      *(["SELECT changes();"] if write else []),
+                      f".print END {name}", "ROLLBACK;"]
+        db = ":memory:" if memory else databases[(key, indexes)]
+        measured.update(parse_session(sql(binary, db, "\n".join(statements)),
+                                      [(name, None, expected)]))
+    return measured
 
 
 def prepare_retained(binaries, root, corpus=None):
@@ -529,6 +653,11 @@ def write_results(samples, result_path, sample_path):
                   "from the OS cache ("
                   f"[#{UNCACHED_ISSUE}](https://github.com/dolthub/doltlite/issues/{UNCACHED_ISSUE})). "
                   "Stock is SQLite.")
+        elif section in BUCKET_NOTES:
+            issue, note = BUCKET_NOTES[section]
+            print(f"\n{note} ([#{issue}](https://github.com/dolthub/doltlite/issues/{issue})). "
+                  f"{BUCKET_ROWS:,} rows with {BUCKET_PAYLOAD} B payloads; each timed statement "
+                  "runs in a transaction that rolls back. Stock is SQLite.")
         elif section == 'wide_tradeoffs':
             print("\nWide values are read from disk whenever they are fetched until they move "
                   "out of band: [#3325](https://github.com/dolthub/doltlite/issues/3325). "
@@ -571,11 +700,15 @@ def main(argv=None):
         add_column_databases = {arm: root / f"{arm}-add-column.db" for arm in binaries}
         wide_databases = {arm: root / f"{arm}-wide.db" for arm in binaries}
         uncached_databases = {arm: root / f"{arm}-uncached.db" for arm in binaries}
+        bucket_databases = {arm: {fixture: root / f"{arm}-bucket-{'-'.join(fixture)}.db"
+                                  for fixture in bucket_fixture_names()} for arm in binaries}
         for arm, binary in binaries.items():
             print(f"Preparing {arm} hotspot fixture", file=sys.stderr, flush=True)
             add_column_fixture(binary, add_column_databases[arm], args.rows)
             wide_fixture(binary, wide_databases[arm])
             uncached_fixture(binary, uncached_databases[arm])
+            for fixture, db in bucket_databases[arm].items():
+                bucket_fixture(binary, db, *fixture)
         retained = prepare_retained(binaries, root)
         for trial in range(args.runs):
             order = ("baseline", "candidate", "stock") if trial % 2 == 0 else ("stock", "candidate", "baseline")
@@ -586,6 +719,7 @@ def main(argv=None):
                                               args.rows, args.cache_kib)
                 measured.update(measure_wide(binaries[arm], wide_databases[arm]))
                 measured.update(measure_uncached(binaries[arm], uncached_databases[arm]))
+                measured.update(measure_bucket(binaries[arm], bucket_databases[arm]))
                 measured.update(measure_retained(binaries[arm], arm, retained))
                 samples[arm].append(measured)
         write_results(samples,

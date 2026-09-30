@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 import benchmark_compare
 import performance_hotspots as hotspots
@@ -113,7 +113,7 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 5)
+        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 0)
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -121,14 +121,12 @@ class HotspotTests(unittest.TestCase):
             report = io.StringIO()
             with patch.object(hotspots, "run", return_value="validated") as run, \
                  patch.object(hotspots, "sql") as sql, \
-                 patch.object(hotspots, "prepare") as prepare, \
-                 patch.object(hotspots, "measure_queries") as measure, \
-                 patch.object(hotspots, "index_fixture") as index_fixture, \
-                 patch.object(hotspots, "measure_index_queries") as index_measure, \
+                 patch.multiple(hotspots, prepare=DEFAULT, measure_queries=DEFAULT,
+                                index_fixture=DEFAULT, measure_index_queries=DEFAULT,
+                                index_edit_fixture=DEFAULT, measure_index_edits=DEFAULT) as retired, \
                  patch.object(hotspots, "add_column_fixture") as add_column_fixture, \
                  patch.object(hotspots, "measure_add_column",
                               return_value={"add_column_default": 100000}) as add_column_measure, \
-                 patch.object(hotspots, "index_edit_fixture") as index_edit_fixture, \
                  patch.object(hotspots, "wide_fixture") as wide_fixture, \
                  patch.object(hotspots, "measure_wide",
                               side_effect=lambda binary, db: {hotspots.wide_name(*case): 100000
@@ -137,16 +135,25 @@ class HotspotTests(unittest.TestCase):
                  patch.object(hotspots, "measure_uncached",
                               side_effect=lambda binary, db: {name: 100000 for name, _, _
                                                               in hotspots.uncached_workloads(64, 8)}) as measure_uncached, \
-                 patch.object(hotspots, "measure_index_edits") as index_edit_measure, \
+                 patch.multiple(hotspots, bucket_fixture=DEFAULT, measure_bucket=DEFAULT) as bucket, \
                  patch.object(hotspots, "prepare_retained", wraps=hotspots.prepare_retained) as prepare_retained, \
                  patch.object(hotspots, "measure_retained",
                               side_effect=lambda binary, arm, fixtures: {name: 100000 for name, _, _ in fixtures}) as measure_retained, \
                  patch.dict(os.environ, BENCH_RESULTS_OUTPUT=str(result), BENCH_SAMPLES_OUTPUT=str(raw)), \
                  contextlib.redirect_stdout(report), contextlib.redirect_stderr(io.StringIO()):
+                bucket["measure_bucket"].side_effect = lambda binary, dbs: {
+                    name: 100000 for name, *_ in hotspots.bucket_workloads()}
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 9)
+            self.assertEqual(sql.call_count, 0)
+            bucket_fixture, measure_bucket = bucket["bucket_fixture"], bucket["measure_bucket"]
+            fixtures = hotspots.bucket_fixture_names()
+            self.assertEqual(bucket_fixture.call_count, 3 * len(fixtures))
+            self.assertEqual([call.args[0].name for call in measure_bucket.call_args_list],
+                             ["base", "candidate", "stock", "stock", "candidate", "base"])
+            for call in measure_bucket.call_args_list:
+                self.assertEqual(sorted(call.args[1]), fixtures)
             self.assertEqual([call.args[1] for call in measure_retained.call_args_list],
                              ["baseline", "candidate", "stock", "stock", "candidate", "baseline"])
             run.assert_called_once_with(["bash", str(hotspots.TEST_DIR / "assert_stock_reference.sh"),
@@ -168,9 +175,8 @@ class HotspotTests(unittest.TestCase):
                 self.assertNotEqual(call.args[1], call.args[2])
                 self.assertTrue(call.args[1].name.endswith("-add-column.db"), call.args[1])
                 self.assertTrue(call.args[2].name.endswith("-add-column-run.db"), call.args[2])
-            for retired in (prepare, measure, index_fixture, index_measure,
-                            index_edit_fixture, index_edit_measure):
-                retired.assert_not_called()
+            for mock in retired.values():
+                mock.assert_not_called()
             for title in ("Large Table Scans", "Large Index Edits", "Wide Rows",
                           "Narrow Rows", "Zero Row Updates",
                           "Bulk Deletes", "Planner Choices"):
@@ -178,19 +184,21 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("Add Column With Default", report.getvalue())
             self.assertIn("### Wide Row Trade-offs", report.getvalue())
             self.assertNotIn("### Wide Row Fetches", report.getvalue())
-            self.assertEqual(report.getvalue().count("### "), 5)
+            self.assertEqual(report.getvalue().count("### "), 6)
             self.assertIn("### Uncached Reads\n", report.getvalue())
             self.assertIn("https://github.com/dolthub/doltlite/issues/3408", report.getvalue())
             self.assertNotIn("### In Transaction with Mutations", report.getvalue())
             self.assertNotIn("### Small Cache", report.getvalue())
             self.assertNotIn("### Index Row Fetches", report.getvalue())
-            self.assertIn("### Bulk Writes\n", report.getvalue())
+            self.assertNotIn("### Bulk Writes", report.getvalue())
             self.assertNotIn("### Integer Keys", report.getvalue())
-            self.assertIn("### After Deletes", report.getvalue())
-            self.assertTrue(all(len(call.args[2]) == 5 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 19)
+            self.assertNotIn("### After Deletes", report.getvalue())
+            for title in ("Primary Key Index Rewrites", "Pending Edit Map", "In-Memory Node Cache"):
+                self.assertIn(f"### {title}\n", report.getvalue())
+            self.assertTrue(all(len(call.args[2]) == 0 for call in measure_retained.call_args_list))
+            self.assertEqual(len(result.read_text().splitlines()), 25)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 39)
+            self.assertEqual(len(raw.read_text().splitlines()), 51)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -273,7 +281,7 @@ class HotspotTests(unittest.TestCase):
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
-            self.assertEqual(len(hotspots.SECTIONS), 15)
+            self.assertEqual(len(hotspots.SECTIONS), 18)
 
     def test_wide_workloads_results_and_rollback(self):
         payloads = (256, 2048)
@@ -392,7 +400,7 @@ class HotspotTests(unittest.TestCase):
             if category == 'integer_keys':
                 self.assertIn(bundle['issue'], (3249, 3250))
                 self.assertTrue(bundle['profile']['memory'])
-            else:
+            elif bundle['issue'] != 3352:
                 self.assertGreaterEqual(bundle['discovery']['minimum_ratio'], 3)
             self.assertNotIn('COMMIT', bundle['case']['sql'])
             if category == 'narrow_rows':
@@ -401,14 +409,14 @@ class HotspotTests(unittest.TestCase):
                 self.assertTrue(bundle['expected'].startswith('0|'))
         self.assertEqual(counts, {'narrow_rows': 5, 'zero_row_updates': 2,
                                  'in_transaction_mutations': 6, 'integer_keys': 2,
-                                 'bulk_writes': 6, 'small_cache': 7, 'after_deletes': 3,
+                                 'bulk_writes': 10, 'small_cache': 7, 'after_deletes': 4,
                                  'index_row_fetches': 2, 'planner_choices': 1})
-        self.assertEqual(sql.call_count, 57)
+        self.assertEqual(sql.call_count, 66)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 25)
+        self.assertEqual(len(grouped), 30)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -461,48 +469,73 @@ class HotspotTests(unittest.TestCase):
                 self.assertIn(('hotspots', category), analysis['section_failures'])
             self.assertEqual(report.getvalue().count('https://github.com/dolthub/doltlite/issues/3133'), 3)
 
-    def test_remaining_issue_themes_are_reported_and_gated(self):
-        expected = {
-            'bulk_writes': {3341, 3342, 3348, 3361},
-            'after_deletes': {3352},
-        }
-        with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
-            root = Path(directory)
-            fixtures = hotspots.prepare_retained({'candidate': 'new'}, root)
-            self.assertEqual(sql.call_count, 3)
-            actual = {}
-            for name, bundle, databases in fixtures:
-                category = hotspots.section_of(name)
-                actual.setdefault(category, set()).add(bundle['issue'])
-                self.assertEqual(category, bundle['category'])
-                self.assertEqual(bundle['profile']['memory'], databases['candidate']==':memory:')
-            self.assertEqual(actual, expected)
-            names = [name for name, _, _ in fixtures]
-            samples = {arm: [{name: value for name in names}] for arm, value in
-                       (('baseline', 100000), ('candidate', 200000), ('stock', 50000))}
+    def test_bucket_workloads_results_and_rollback(self):
+        workloads = hotspots.bucket_workloads(rows=512, probes=64, lookups=200)
+        self.assertEqual([hotspots.section_of(name) for name, *_ in workloads],
+                         ["pk_rewrites"]*3 + ["pending_edits"]*5 + ["memory_cache"]*3)
+        for name, storage, key, indexes, cache_kib, prepare, query, expected in workloads:
+            with self.subTest(name=name), contextlib.closing(sqlite3.connect(":memory:")) as db:
+                db.executescript(hotspots.bucket_setup(key, indexes, rows=512, payload=16))
+                original = list(db.iterdump())
+                db.execute("BEGIN")
+                if prepare:
+                    db.execute(prepare)
+                row = db.execute(query).fetchone()
+                if query.startswith("UPDATE"):
+                    row = db.execute("SELECT changes()").fetchone()
+                self.assertEqual("|".join(str(value) for value in row), expected)
+                db.rollback()
+                self.assertEqual(list(db.iterdump()), original)
+
+    def test_bucket_measurement_warms_times_only_the_query_and_rolls_back(self):
+        workloads = hotspots.bucket_workloads()
+        outputs = [f"BEGIN {name}\n{expected}\nRun Time: real 0.01 user 0.01 sys 0.0\nEND {name}\n"
+                   if not query.startswith("UPDATE") else
+                   f"BEGIN {name}\nRun Time: real 0.01 user 0.01 sys 0.0\n{expected}\nEND {name}\n"
+                   for name, _s, _k, _i, _c, _p, query, expected in workloads]
+        databases = {fixture: Path(f"{'-'.join(fixture)}.db") for fixture in hotspots.bucket_fixture_names()}
+        with patch.object(hotspots, "sql", side_effect=outputs) as sql:
+            measured = hotspots.measure_bucket("new", databases)
+        self.assertEqual(measured, {name: 10000 for name, *_ in workloads})
+        for call, (name, storage, key, indexes, cache_kib, prepare, query, _e) in zip(sql.call_args_list, workloads):
+            db, script = call.args[1], call.args[2]
+            setup = hotspots.bucket_setup(key, indexes)
+            if storage == "memory":
+                self.assertEqual(db, ":memory:")
+                self.assertLess(script.index(setup), script.index("BEGIN;"))
+            else:
+                self.assertEqual(db, databases[(key, indexes)])
+                self.assertNotIn(setup, script)
+            self.assertIn(f"PRAGMA cache_size=-{cache_kib};", script)
+            timed = script.split(f".print BEGIN {name}", 1)[1]
+            self.assertEqual(script.count(query), 2)
+            self.assertLess(timed.index(".timer on"), timed.index(query))
+            self.assertLess(timed.index(query), timed.index(".timer off"))
+            self.assertTrue(script.rstrip().endswith("ROLLBACK;"))
+            body = script.split(setup, 1)[1] if storage == "memory" else script
+            self.assertEqual(body.count("BEGIN;"), 2)
+            self.assertEqual(body.count("ROLLBACK;"), 2)
+            if prepare:
+                self.assertLess(script.rindex(prepare), script.index(".timer on"))
+
+    def test_bucket_sections_are_reported_and_gated(self):
+        names = [name for name, *_ in hotspots.bucket_workloads()]
+        samples = {arm: [{name: value for name in names}] for arm, value in
+                   (("baseline", 100000), ("candidate", 200000), ("stock", 50000))}
+        with tempfile.TemporaryDirectory() as directory:
+            result, raw = Path(directory)/"results.tsv", Path(directory)/"samples.tsv"
             report = io.StringIO()
             with contextlib.redirect_stdout(report):
-                hotspots.write_results(samples, root/'results.tsv', root/'samples.tsv')
-            parsed, _ = benchmark_compare.parse_input_artifact(f'hotspots={root}/results.tsv')
-            analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
+                hotspots.write_results(samples, result, raw)
             text = report.getvalue()
-            self.assertEqual(text.count('| Workload |'), 2)
-            self.assertNotIn('### Index Row Fetches', text)
-            self.assertNotIn('### In Transaction with Mutations', text)
-            self.assertNotIn('### Small Cache', text)
-            self.assertNotIn('### Planner Choices', text)
-            titles = ('Bulk Writes', 'After Deletes')
-            positions = [text.index('### '+title+'\n') for title in titles]
-            self.assertEqual(positions, sorted(positions))
-            self.assertNotIn('### Bulk Deletes', text)
-            self.assertNotIn('### Integer Keys', text)
-            for name, bundle, _ in fixtures:
-                category = bundle['category']
-                section = text.split(f'### {dict(hotspots.SECTIONS)[category]}\n', 1)[1].split('### ', 1)[0]
-                self.assertIn(f"[{bundle['case']['name']}_x{bundle['repeats']}]", section)
-                self.assertIn(f"https://github.com/dolthub/doltlite/issues/{bundle['issue']}", section)
-                self.assertIn(('hotspots', category, name), analysis['individual_failures'])
-                self.assertIn(('hotspots', category), analysis['section_failures'])
+            parsed, _ = benchmark_compare.parse_input_artifact(f"hotspots={result}")
+            analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
+        for section, issue, count in (("pk_rewrites", 3419, 3), ("pending_edits", 3418, 5),
+                                      ("memory_cache", 3417, 3)):
+            body = text.split(f"### {dict(hotspots.SECTIONS)[section]}\n", 1)[1].split("### ", 1)[0]
+            self.assertIn(f"https://github.com/dolthub/doltlite/issues/{issue}", body)
+            self.assertEqual(sum(1 for name in names if f"| {name} |" in body), count)
+            self.assertIn(("hotspots", section), analysis["section_failures"])
 
     def test_transaction_mutations_preserve_storage_mode_and_timing(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
@@ -510,10 +543,12 @@ class HotspotTests(unittest.TestCase):
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
             active = [fixture for fixture in fixtures
                       if fixture[1]['category'] in ('in_transaction_mutations', 'after_deletes')]
-            self.assertEqual({b['issue'] for _, b, _ in active}, {3352})
+            self.assertEqual(active, [])
             retired = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
+            active = [fixture for fixture in retired if fixture[1]['issue'] == 3352]
+            self.assertEqual(len(active), 1)
             bulk = [fixture for fixture in retired if fixture[1]['issue'] == 3301]
             self.assertEqual(len(bulk), 1)
             self.assertTrue(bulk[0][1]['profile']['memory'])
