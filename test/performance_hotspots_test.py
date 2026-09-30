@@ -184,7 +184,7 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("Add Column With Default", report.getvalue())
             self.assertIn("### Wide Row Trade-offs", report.getvalue())
             self.assertNotIn("### Wide Row Fetches", report.getvalue())
-            self.assertEqual(report.getvalue().count("### "), 6)
+            self.assertEqual(report.getvalue().count("### "), 5)
             self.assertIn("### Uncached Reads\n", report.getvalue())
             self.assertIn("https://github.com/dolthub/doltlite/issues/3408", report.getvalue())
             self.assertNotIn("### In Transaction with Mutations", report.getvalue())
@@ -193,12 +193,12 @@ class HotspotTests(unittest.TestCase):
             self.assertNotIn("### Bulk Writes", report.getvalue())
             self.assertNotIn("### Integer Keys", report.getvalue())
             self.assertNotIn("### After Deletes", report.getvalue())
-            for title in ("Primary Key Index Rewrites", "Pending Edit Map", "In-Memory Node Cache"):
+            for title in ("Primary Key Index Rewrites", "Pending Edit Map"):
                 self.assertIn(f"### {title}\n", report.getvalue())
             self.assertTrue(all(len(call.args[2]) == 0 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 25)
+            self.assertEqual(len(result.read_text().splitlines()), 22)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 51)
+            self.assertEqual(len(raw.read_text().splitlines()), 45)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -281,7 +281,7 @@ class HotspotTests(unittest.TestCase):
             parsed, _metadata = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.5, 1.25, 10000)
             self.assertIn(("hotspots", "add_column", "add_column_default"), analysis["individual_failures"])
-            self.assertEqual(len(hotspots.SECTIONS), 18)
+            self.assertEqual(len(hotspots.SECTIONS), 17)
 
     def test_wide_workloads_results_and_rollback(self):
         payloads = (256, 2048)
@@ -470,9 +470,9 @@ class HotspotTests(unittest.TestCase):
             self.assertEqual(report.getvalue().count('https://github.com/dolthub/doltlite/issues/3133'), 3)
 
     def test_bucket_workloads_results_and_rollback(self):
-        workloads = hotspots.bucket_workloads(rows=512, probes=64, lookups=200)
+        workloads = hotspots.bucket_workloads(rows=512, probes=64)
         self.assertEqual([hotspots.section_of(name) for name, *_ in workloads],
-                         ["pk_rewrites"]*3 + ["pending_edits"]*5 + ["memory_cache"]*3)
+                         ["pk_rewrites"]*3 + ["pending_edits"]*5)
         for name, storage, key, indexes, cache_kib, prepare, query, expected in workloads:
             with self.subTest(name=name), contextlib.closing(sqlite3.connect(":memory:")) as db:
                 db.executescript(hotspots.bucket_setup(key, indexes, rows=512, payload=16))
@@ -530,8 +530,7 @@ class HotspotTests(unittest.TestCase):
             text = report.getvalue()
             parsed, _ = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
-        for section, issue, count in (("pk_rewrites", 3419, 3), ("pending_edits", 3418, 5),
-                                      ("memory_cache", 3417, 3)):
+        for section, issue, count in (("pk_rewrites", 3419, 3), ("pending_edits", 3418, 5)):
             body = text.split(f"### {dict(hotspots.SECTIONS)[section]}\n", 1)[1].split("### ", 1)[0]
             self.assertIn(f"https://github.com/dolthub/doltlite/issues/{issue}", body)
             self.assertEqual(sum(1 for name in names if f"| {name} |" in body), count)

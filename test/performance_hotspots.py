@@ -46,10 +46,8 @@ BUCKET_ROWS = 65536
 BUCKET_PAYLOAD = 256
 BUCKET_CACHE_KIB = 65536
 BUCKET_PROBES = 8192
-MEMORY_LOOKUPS = 16384
 PK_REWRITE_ISSUE = 3419
 PENDING_EDITS_ISSUE = 3418
-MEMORY_CACHE_ISSUE = 3417
 RETAINED_SECTIONS = (("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
                      ("small_cache", "Small Cache"),
@@ -66,7 +64,6 @@ SECTIONS = (("queries", "Large Table Scans"),
             ("uncached_reads", "Uncached Reads"),
             ("pk_rewrites", "Primary Key Index Rewrites"),
             ("pending_edits", "Pending Edit Map"),
-            ("memory_cache", "In-Memory Node Cache"),
             *RETAINED_SECTIONS,
             ("retained", "Retained Findings"))
 
@@ -86,8 +83,7 @@ def section_of(name):
         return "wide_tradeoffs"
     if name.startswith("uncached_"):
         return "uncached_reads"
-    for prefix, section in (("pk_rewrite_", "pk_rewrites"), ("pending_", "pending_edits"),
-                            ("memory_", "memory_cache")):
+    for prefix, section in (("pk_rewrite_", "pk_rewrites"), ("pending_", "pending_edits")):
         if name.startswith(prefix):
             return section
     return "queries"
@@ -461,17 +457,12 @@ BUCKET_NOTES = {
                       "Uncommitted edits live in a sorted pending map: writes pay to fill it, and "
                       "reads in the transaction merge it with the tree and skip its deletes. The "
                       "file-backed update and live-row probes are the controls"),
-    "memory_cache": (MEMORY_CACHE_ISSUE,
-                     "An in-memory database still reads through the bounded node cache and copies "
-                     "each missed chunk out of the store, while SQLite's in-memory pages never "
-                     "leave; the 1 GiB case is the control"),
 }
 
 
 def bucket_setup(key, indexes, rows=BUCKET_ROWS, payload=BUCKET_PAYLOAD):
     kind, value = (("TEXT", "printf('%016x',i)") if key == "text" else ("INTEGER", "i"))
     create = {"none": "",
-              "gv": "CREATE INDEX t_gv ON t(grp,v);",
               "three": "CREATE INDEX t_g ON t(grp); CREATE INDEX t_gv ON t(grp,v); "
                        "CREATE INDEX t_k ON t(k);"}[indexes]
     return f"""CREATE TABLE t(id {kind} PRIMARY KEY, grp INTEGER NOT NULL, v INTEGER NOT NULL,
@@ -486,19 +477,15 @@ ANALYZE;
 """
 
 
-def bucket_workloads(rows=BUCKET_ROWS, probes=BUCKET_PROBES, lookups=MEMORY_LOOKUPS):
+def bucket_workloads(rows=BUCKET_ROWS, probes=BUCKET_PROBES):
     """Each case isolates one cause against stock, next to a control that
     lacks it: a primary-key change with and without secondary indexes, the
-    same write in memory and on disk, the same index probes over live and
-    pending-deleted rows, and the same in-memory reads under a small and a
-    large node cache. Every case is
+    same write in memory and on disk, and the same index probes over live and
+    pending-deleted rows. Every case is
     (name, storage, key, indexes, cache KiB, untimed prepare, query, expected)."""
     v = {i: (i * 7919) % 100000 for i in range(1, rows + 1)}
-    ids = [1 + (i * 2654435761) % rows for i in range(1, lookups + 1)]
     probe = (f"WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{probes}) "
              f"SELECT count(*),coalesce(sum((SELECT v FROM t WHERE k=24*c.i)),0) FROM c;")
-    lookup = (f"WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<{lookups}) "
-              f"SELECT count(*),sum((SELECT v FROM t WHERE id=1+(c.i*2654435761)%{rows})) FROM c;")
     text_key = f"UPDATE t SET id=printf('%016x',k/3+{rows});"
     payload = f"UPDATE t SET payload=CAST(printf('%0{BUCKET_PAYLOAD}d',k) AS BLOB);"
     live = sum(v[8 * i] for i in range(1, probes + 1) if 8 * i <= rows)
@@ -519,12 +506,6 @@ def bucket_workloads(rows=BUCKET_ROWS, probes=BUCKET_PROBES, lookups=MEMORY_LOOK
          probe, f"{probes}|{live}"),
         ("pending_index_probes_deleted", "file", "integer", "three", BUCKET_CACHE_KIB,
          "DELETE FROM t WHERE id%8=0;", probe, f"{probes}|0"),
-        ("memory_point_lookups_4mib", "memory", "integer", "gv", 4096, "",
-         lookup, f"{lookups}|{sum(v[i] for i in ids)}"),
-        ("memory_update_indexed_4mib", "memory", "integer", "gv", 4096, "",
-         "UPDATE t SET v=v+1 WHERE id%4=0;", str(rows // 4)),
-        ("memory_point_lookups_1gib", "memory", "integer", "gv", 1048576, "",
-         lookup, f"{lookups}|{sum(v[i] for i in ids)}"),
     ]
 
 
