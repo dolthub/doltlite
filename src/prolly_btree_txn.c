@@ -749,8 +749,12 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
 
+    /* bStoreChanged is consumed by any refresh, including a VC command's; the
+    ** basis still says whether a peer wrote the working set since we loaded. */
     if( p->inTrans==TRANS_READ
      || bStoreChanged
+     || chunkStoreWorkingSetMovedFromBasis(&pBt->store,
+                                           p->zBranch ? p->zBranch : "main")
      || p->iLoadedWorkingStateVersion!=pBt->iWorkingStateVersion
      || (prollyHashIsEmpty(&p->committedCatalogHash) && p->cat.n>1) ){
       ProllyHash loadedCatHash;

@@ -1262,6 +1262,54 @@ static void test_ref_command_binds_post_wait_tip(void){
   remove(path);
 }
 
+static void test_ref_command_keeps_peer_write(void){
+  static const char *azSql[] = {
+    "SELECT dolt_branch('x')",
+    "SELECT dolt_tag('x')",
+    "SELECT dolt_remote('add','o','file:///nonexistent')",
+    "SELECT dolt_gc()"
+  };
+  char path[256];
+  int i;
+
+  printf("--- Test 6e: A ref command does not let the next write erase a peer's ---\n");
+  snprintf(path, sizeof(path), "/tmp/mp_ref_peer_ws_%d.db", (int)getpid());
+  for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
+    sqlite3 *db = 0;
+    int status;
+    pid_t pid;
+
+    setup_db(path);
+    check("mp_ref_peer_ws_open", sqlite3_open(path, &db)==SQLITE_OK);
+    sqlite3_busy_timeout(db, 10000);
+    check("mp_ref_peer_ws_first_write",
+          execSql(db, "INSERT INTO t VALUES(2, 'mine')")==SQLITE_OK);
+    pid = fork();
+    if( pid==0 ){
+      db = 0;
+      if( sqlite3_open(path, &db)!=SQLITE_OK ) _exit(1);
+      sqlite3_busy_timeout(db, 10000);
+      if( execSql(db, "INSERT INTO t VALUES(20, 'peer')")!=SQLITE_OK ) _exit(2);
+      sqlite3_close(db);
+      _exit(0);
+    }
+    if( pid<0 ){ perror("fork"); _exit(1); }
+    waitpid(pid, &status, 0);
+    check("mp_ref_peer_ws_peer_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
+    check("mp_ref_peer_ws_command_ok", execSql(db, azSql[i])==SQLITE_OK);
+    check("mp_ref_peer_ws_next_write",
+          execSql(db, "INSERT INTO t VALUES(3, 'mine')")==SQLITE_OK);
+    sqlite3_close(db);
+    db = 0;
+    sqlite3_open(path, &db);
+    check("mp_ref_peer_ws_peer_write_kept",
+      strcmp(queryScalarText(db, "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)"),
+             "1,2,3,20")==0);
+    sqlite3_close(db);
+  }
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
@@ -1279,6 +1327,7 @@ int main(){
   test_commit_does_not_erase_peer_write();
   test_commit_keeps_peer_insert_during_publish();
   test_ref_command_binds_post_wait_tip();
+  test_ref_command_keeps_peer_write();
   test_cross_process_commit_after_peer();
   test_many_process_commit_contention();
 
