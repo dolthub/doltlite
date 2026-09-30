@@ -1597,7 +1597,122 @@ else
   ERRORS="$ERRORS\nFAIL: rebase_edit_empty_drop_does_not_pause\n  log: $EDIT5_LOG\n  full: $EDIT5_OUT"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6"
+# A named dolt_add during a rebase pause inside BEGIN must stage that
+# table. Table numbers follow sorted names, and the pause catalog includes
+# dolt_rebase, so a number taken from the live schema can name a neighbour.
+seed_rebase_named_add() {
+  local d="$1" t1="$2" t2="$3"
+  rm -f "$d"
+  cat <<SQL | "$DOLTLITE" "$d" >/dev/null 2>&1
+CREATE TABLE ${t1}(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE ${t2}(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO ${t1} VALUES(1,1);
+INSERT INTO ${t2} VALUES(1,1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE ${t1} SET v=2;
+UPDATE ${t2} SET v=2;
+SELECT dolt_commit('-am','f1');
+SELECT dolt_checkout('main');
+UPDATE ${t1} SET v=3;
+SELECT dolt_commit('-am','m1');
+SELECT dolt_checkout('feat');
+SQL
+}
+
+check_rebase_named_add() {
+  local n="$1" d="$2" t1="$3" t2="$4"
+  local out a b
+  out=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i','main');
+SELECT dolt_rebase('--continue');
+SELECT dolt_conflicts_resolve('--theirs','${t1}');
+SELECT dolt_add('${t1}');
+SELECT dolt_add('${t2}');
+SELECT 'A|' || id || '|' || v FROM dolt_at_${t1}('STAGED');
+SELECT 'B|' || id || '|' || v FROM dolt_at_${t2}('STAGED');
+SELECT dolt_commit('-m','manual');
+SELECT dolt_add('.');
+SELECT dolt_rebase('--continue');
+SELECT 'L|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'H|' || id || '|' || v FROM dolt_at_${t1}('feat');
+SELECT 'H2|' || id || '|' || v FROM dolt_at_${t2}('feat');
+SELECT 'P|' || id || '|' || v FROM dolt_at_${t1}('feat~1');" | "$DOLTLITE" "$d" 2>&1)
+  a=$(echo "$out" | grep '^A|')
+  b=$(echo "$out" | grep '^B|')
+  if [ "$a" = "A|1|2" ] && [ "$b" = "B|1|2" ] \
+     && echo "$out" | grep -q '^L|manual,m1,base$' \
+     && echo "$out" | grep -q '^H|1|2$' \
+     && echo "$out" | grep -q '^H2|1|2$' \
+     && echo "$out" | grep -q '^P|1|3$'; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: $n\n  A: $a\n  B: $b\n  full: $out"
+  fi
+}
+
+DBADD1=/tmp/test_rebase_named_add_t_$$.db
+seed_rebase_named_add "$DBADD1" t u
+check_rebase_named_add "rebase_named_add_conflict_t_u" "$DBADD1" t u
+
+DBADD2=/tmp/test_rebase_named_add_ab_$$.db
+seed_rebase_named_add "$DBADD2" a b
+check_rebase_named_add "rebase_named_add_conflict_a_b" "$DBADD2" a b
+
+DBADD3=/tmp/test_rebase_named_add_ut_$$.db
+seed_rebase_named_add "$DBADD3" u t
+check_rebase_named_add "rebase_named_add_conflict_u_t" "$DBADD3" u t
+
+DBADD4=/tmp/test_rebase_named_add_at_$$.db
+seed_rebase_named_add "$DBADD4" a t
+check_rebase_named_add "rebase_named_add_conflict_a_t" "$DBADD4" a t
+
+DBADD5=/tmp/test_rebase_named_add_ta_$$.db
+seed_rebase_named_add "$DBADD5" t a
+check_rebase_named_add "rebase_named_add_conflict_t_a" "$DBADD5" t a
+
+# Edit pause: the named add must stage the edited rows, including a row
+# that came from the branch being rebased onto.
+DBADDE=/tmp/test_rebase_named_add_edit_$$.db
+rm -f "$DBADDE"
+cat <<'SQL' | "$DOLTLITE" "$DBADDE" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET v=2;
+SELECT dolt_commit('-am','f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(9,9);
+SELECT dolt_commit('-am','m1');
+SELECT dolt_checkout('feat');
+SQL
+EDITADD_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit';
+SELECT dolt_rebase('--continue');
+UPDATE t SET v=5 WHERE id=1;
+SELECT dolt_add('t');
+SELECT 'S|' || id || '|' || v FROM dolt_at_t('STAGED') ORDER BY id;
+SELECT dolt_commit('--amend','-m','f1e');
+SELECT 'H|' || id || '|' || v FROM dolt_at_t('HEAD') ORDER BY id;" | "$DOLTLITE" "$DBADDE" 2>&1)
+EDITADD_S=$(echo "$EDITADD_OUT" | grep '^S|' | tr '\n' ',')
+EDITADD_H=$(echo "$EDITADD_OUT" | grep '^H|' | tr '\n' ',')
+if [ "$EDITADD_S" = "S|1|5,S|9|9," ] && [ "$EDITADD_H" = "H|1|5,H|9|9," ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_named_add_edit_pause\n  S: $EDITADD_S\n  H: $EDITADD_H\n  full: $EDITADD_OUT"
+fi
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
