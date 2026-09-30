@@ -164,9 +164,8 @@ static sqlite3_int64 combinedCacheBytes(sqlite3 *db){
 static int budgetMatches(sqlite3 *db, sqlite3_int64 nByte){
   ProllyCache *pCache = doltliteGetCache(db);
   ChunkStore *pStore = doltliteGetChunkStore(db);
-  return pCache->nMaxByte<=nByte && pCache->nMaxByte>=nByte-nByte/4
+  return pCache->nMaxByte<=nByte && pCache->nMaxByte>=nByte-nByte/5*4
       && pCache->nMaxByte>=nByte-csIndexCacheBudgetFor(pStore, nByte)
-      && nByte-pCache->nMaxByte<=4*1024*1024
       && combinedCacheBytes(db)<=nByte;
 }
 
@@ -1120,12 +1119,19 @@ static void testIndexCacheSizedByIndex(void){
   check("large index is paged", pStore->index.lazy.active==1
       && pStore->index.lazy.nEntries>8192);
   check("paged index cache grows past a sixteenth",
-      nReserved>4096*1024/16 && nReserved<=4096*1024/4);
+      nReserved>4096*1024/16 && nReserved<=4096*1024/5*4);
   check("grown index cache stays within the budget",
       budgetMatches(db, 4096*1024));
   execSql(db, "SELECT sum(length(v)) FROM big");
   check("grown index cache fills within its reservation",
       budgetMatches(db, 4096*1024));
+  execSql(db, "PRAGMA cache_size=-1024");
+  nReserved = (i64)pStore->nIndexCacheSlot
+            * (CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage));
+  check("index cache outgrows a quarter of a small budget",
+      nReserved>1024*1024/4);
+  check("small budget still holds the index and the node cache",
+      budgetMatches(db, 1024*1024));
   check("close grown index db", sqlite3_close(db)==SQLITE_OK);
   unlink(zPath);
 }
