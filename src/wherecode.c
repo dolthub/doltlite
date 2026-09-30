@@ -1363,10 +1363,12 @@ static void codeDeferredSeek(
 
 #ifdef DOLTLITE_PROLLY
 /*
-** A primary-key table scanned through one of its indexes seeks the table
-** row only when a column needs it, as codeDeferredSeek() does for rowid
-** tables; a read-only scan that filters most index entries then skips most
-** of those seeks. P4 lists the index record slot of each primary-key column.
+** A rowid table clustered by its primary key, scanned through one of its
+** indexes, seeks the table row only when a column needs it, as
+** codeDeferredSeek() does for the rowid table it replaces; a read-only scan
+** that filters most index entries then skips most of those seeks. Explicit
+** WITHOUT ROWID tables keep SQLite's eager seek. P4 lists the index record
+** slot of each primary-key column.
 */
 static int codeDeferredPkSeek(
   WhereInfo *pWInfo,
@@ -2360,7 +2362,8 @@ Bitmask sqlite3WhereCodeOneLoopStart(
     }else if( iCur!=iIdxCur ){
       Index *pPk = sqlite3PrimaryKeyIndex(pIdx->pTable);
 #ifdef DOLTLITE_PROLLY
-      if( (pWInfo->wctrlFlags & (WHERE_OR_SUBCLAUSE|WHERE_RIGHT_JOIN))==0
+      if( (pIdx->pTable->tabFlags & TF_NoVisibleRowid)==0
+       && (pWInfo->wctrlFlags & (WHERE_OR_SUBCLAUSE|WHERE_RIGHT_JOIN))==0
        && DbMaskAllZero(sqlite3ParseToplevel(pParse)->writeMask)
        && codeDeferredPkSeek(pWInfo, pIdx, pPk, iCur, iIdxCur) ){
         goto where_pk_seek_coded;
