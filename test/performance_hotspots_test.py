@@ -121,14 +121,12 @@ class HotspotTests(unittest.TestCase):
             report = io.StringIO()
             with patch.object(hotspots, "run", return_value="validated") as run, \
                  patch.object(hotspots, "sql") as sql, \
-                 patch.object(hotspots, "prepare") as prepare, \
-                 patch.object(hotspots, "measure_queries") as measure, \
-                 patch.object(hotspots, "index_fixture") as index_fixture, \
-                 patch.object(hotspots, "measure_index_queries") as index_measure, \
+                 patch.multiple(hotspots, prepare=DEFAULT, measure_queries=DEFAULT,
+                                index_fixture=DEFAULT, measure_index_queries=DEFAULT,
+                                index_edit_fixture=DEFAULT, measure_index_edits=DEFAULT) as retired, \
                  patch.object(hotspots, "add_column_fixture") as add_column_fixture, \
                  patch.object(hotspots, "measure_add_column",
                               return_value={"add_column_default": 100000}) as add_column_measure, \
-                 patch.object(hotspots, "index_edit_fixture") as index_edit_fixture, \
                  patch.object(hotspots, "wide_fixture") as wide_fixture, \
                  patch.object(hotspots, "measure_wide",
                               side_effect=lambda binary, db: {hotspots.wide_name(*case): 100000
@@ -138,7 +136,6 @@ class HotspotTests(unittest.TestCase):
                               side_effect=lambda binary, db: {name: 100000 for name, _, _
                                                               in hotspots.uncached_workloads(64, 8)}) as measure_uncached, \
                  patch.multiple(hotspots, bucket_fixture=DEFAULT, measure_bucket=DEFAULT) as bucket, \
-                 patch.object(hotspots, "measure_index_edits") as index_edit_measure, \
                  patch.object(hotspots, "prepare_retained", wraps=hotspots.prepare_retained) as prepare_retained, \
                  patch.object(hotspots, "measure_retained",
                               side_effect=lambda binary, arm, fixtures: {name: 100000 for name, _, _ in fixtures}) as measure_retained, \
@@ -178,9 +175,8 @@ class HotspotTests(unittest.TestCase):
                 self.assertNotEqual(call.args[1], call.args[2])
                 self.assertTrue(call.args[1].name.endswith("-add-column.db"), call.args[1])
                 self.assertTrue(call.args[2].name.endswith("-add-column-run.db"), call.args[2])
-            for retired in (prepare, measure, index_fixture, index_measure,
-                            index_edit_fixture, index_edit_measure):
-                retired.assert_not_called()
+            for mock in retired.values():
+                mock.assert_not_called()
             for title in ("Large Table Scans", "Large Index Edits", "Wide Rows",
                           "Narrow Rows", "Zero Row Updates",
                           "Bulk Deletes", "Planner Choices"):
