@@ -99,7 +99,7 @@ int main(void){
   testKeys(0, 0);
   testKeys(0, 1);
   for(i=0; i<=40; i++) testKeys(i, 64);
-  testKeys(64, 64);
+  for(i=63; i<=73; i++) testKeys(i, 64);
   testKeys(255, 64);
   testKeys(1024, 64);
   printf("%d passed, %d failed\n", nPass, nFail);

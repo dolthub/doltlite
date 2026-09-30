@@ -244,7 +244,7 @@ static SQLITE_INLINE int prollyKeyComparePrefix(
     pLeft += 8;
     pRight += 8;
     n -= 8;
-    if( n>16 ) return memcmp(pLeft, pRight, n);
+    if( n>64 ) return memcmp(pLeft, pRight, n);
     if( n==0 ) return 0;
   }
   if( n>=4 ){
