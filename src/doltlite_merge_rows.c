@@ -365,8 +365,18 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   return result;
 }
 
+static int fieldIsDualAdd(const MergeRowPolicy *pPolicy, int iField){
+  int i;
+  if( !pPolicy ) return 0;
+  for(i=0; i<pPolicy->nDualAddFields; i++){
+    if( pPolicy->aiDualAddFields[i]==iField ) return 1;
+  }
+  return 0;
+}
+
 static u8 *tryCellMerge(
   Table *pGeneratedTable,
+  const MergeRowPolicy *pPolicy,
   const u8 *pBase, int nBase,
   const u8 *pOurs, int nOurs,
   const u8 *pTheirs, int nTheirs,
@@ -387,8 +397,10 @@ static u8 *tryCellMerge(
 
   {
     MergeWinner *winners;
-    /* Past stored width is a trailing NULL (SQLite omits them). Treat
-    ** absent and explicit NULL the same so dual ADD COLUMN can merge. */
+    /* Past stored width is a missing field. It compares equal to an
+    ** encoded NULL, so an omitted NULL and a stored NULL still merge.
+    ** A column added on both sides has no ancestor value; those fields
+    ** are changes on each side, then the two values are compared. */
     static const RecField kNullField = { 0, 0, 0 };
     int nEmit = 0;
 
@@ -399,8 +411,14 @@ static u8 *tryCellMerge(
       RecField *fB = (i<nfBase)   ? &aBase[i]   : (RecField*)&kNullField;
       RecField *fO = (i<nfOurs)   ? &aOurs[i]   : (RecField*)&kNullField;
       RecField *fT = (i<nfTheirs) ? &aTheirs[i] : (RecField*)&kNullField;
-      int oursChanged   = fieldEquals(pBase, fB, pOurs, fO)!=0;
-      int theirsChanged = fieldEquals(pBase, fB, pTheirs, fT)!=0;
+      int oursChanged, theirsChanged;
+      if( fieldIsDualAdd(pPolicy, i) ){
+        oursChanged = 1;
+        theirsChanged = 1;
+      }else{
+        oursChanged   = fieldEquals(pBase, fB, pOurs, fO)!=0;
+        theirsChanged = fieldEquals(pBase, fB, pTheirs, fT)!=0;
+      }
 
       if( mergeGeneratedField(pGeneratedTable, i) || !theirsChanged ){
 
@@ -625,7 +643,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
        && pChange->pOurVal && pChange->nOurVal>0
        && pChange->pTheirVal && pChange->nTheirVal>0 ){
         pMerged = tryCellMerge(
-            ctx->pGeneratedTable,
+            ctx->pGeneratedTable, ctx->pPolicy,
             pChange->pBaseVal, pChange->nBaseVal,
             pChange->pOurVal, pChange->nOurVal,
             pChange->pTheirVal, pChange->nTheirVal,

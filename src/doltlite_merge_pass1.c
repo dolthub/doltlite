@@ -251,6 +251,7 @@ static int mergePass1MergeTableData(
     nIdxInfo = 0;
     sqlite3_free(rowPolicy.aiDeleteCompareFields);
     sqlite3_free(rowPolicy.aiDropFields);
+    sqlite3_free(rowPolicy.aiDualAddFields);
     sqlite3_close(pSchemaDb);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -498,8 +499,7 @@ static int mergePass1OursModifyTheirsDelete(
 
   if( !oursChanged ) return SQLITE_OK;
 
-  /* Index root moves with table data; only a definition change conflicts.
-  ** Unchanged definition: DROP wins. */
+  /* Index root moves with table data. Only a definition change conflicts; otherwise DROP wins. */
   if( !zName && zSchemaMergeName && zSchemaMergeName[0]
    && !schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
                                 c->aOursSchema, c->nOursSchema,
@@ -998,7 +998,10 @@ static int mergePass1BothSides(
     if( bRelaid ) pMergeOurs = &oursAdj;
   }
 
-  if( bDualAddColMerge || (oursChanged && theirsChanged) ){
+  /* Identical schemas still merge when a NULL add left the data root unchanged. */
+  if( bDualAddColMerge || (oursChanged && theirsChanged)
+   || (ourSchemaChanged && theirSchemaChanged &&
+       !prollyHashCompare(&c->aOurs[iOurs].schemaHash, &theirsEntry->schemaHash)) ){
     return mergePass1MergeTableData(
         c, zName, zLogicalName, pMergeOurs, pMergeAnc,
         pMergeTheirsRoot, ourSchemaChanged, theirSchemaChanged,

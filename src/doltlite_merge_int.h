@@ -193,6 +193,10 @@ struct MergeRowPolicy {
   int bSchemaIsTheirs;
   int nDropFields;
   int *aiDropFields;
+  /* Storage indexes of columns added on both sides. The ancestor has no
+  ** value there, so each side's value is a change. */
+  int nDualAddFields;
+  int *aiDualAddFields;
 };
 
 int mergeRowPolicy(

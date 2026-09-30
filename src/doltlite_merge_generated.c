@@ -83,8 +83,11 @@ int mergeRowPolicy(
   SchemaEntry *pSelected = useTheirs
       ? findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName)
       : findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
-  ParsedColumn *aAnc = 0, *aSelected = 0;
-  int nAnc = 0, nSelected = 0;
+  SchemaEntry *pOther = useTheirs
+      ? findSchemaEntry(c->aOursSchema, c->nOursSchema, zName)
+      : findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName);
+  ParsedColumn *aAnc = 0, *aSelected = 0, *aOther = 0;
+  int nAnc = 0, nSelected = 0, nOther = 0;
   int i, j, k, rc;
 
   if( !pAnc || !pAnc->zSql || !pSelected || !pTab ) return SQLITE_OK;
@@ -96,11 +99,22 @@ int mergeRowPolicy(
     freeColumns(aAnc, nAnc);
     return rc;
   }
+  if( pOther && pOther->zSql ){
+    rc = parseColumns(pOther->zSql, &aOther, &nOther);
+    if( rc!=SQLITE_OK ){
+      freeColumns(aAnc, nAnc);
+      freeColumns(aSelected, nSelected);
+      return rc;
+    }
+  }
   pPolicy->aiDeleteCompareFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
   pPolicy->aiDropFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
-  if( !pPolicy->aiDeleteCompareFields || !pPolicy->aiDropFields ){
+  pPolicy->aiDualAddFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
+  if( !pPolicy->aiDeleteCompareFields || !pPolicy->aiDropFields
+   || !pPolicy->aiDualAddFields ){
     freeColumns(aAnc, nAnc);
     freeColumns(aSelected, nSelected);
+    freeColumns(aOther, nOther);
     return SQLITE_NOMEM;
   }
   for(i=0; i<pTab->nCol; i++){
@@ -114,6 +128,15 @@ int mergeRowPolicy(
         if( sqlite3_stricmp(pTab->aCol[j].zCnName, aAnc[i].zName)==0 ) break;
       }
       if( j==pTab->nCol ) iAnc = i;
+    }
+    /* Present on both branches and missing from the ancestor. Each side's
+    ** value, including an omitted field or an encoded NULL, is a change. */
+    if( iAnc<0 && aOther
+     && parsedColumnIndexByName(aSelected, nSelected, zCol)>=0
+     && parsedColumnIndexByName(aOther, nOther, zCol)>=0 ){
+      pPolicy->aiDualAddFields[pPolicy->nDualAddFields++] =
+          HasRowid(pTab) ? sqlite3TableColumnToStorage(pTab, i)
+          : sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), i);
     }
     if( iAnc<0 ) continue;
     for(j=0; c->pnSchemaActions && j<*c->pnSchemaActions; j++){
@@ -134,6 +157,7 @@ int mergeRowPolicy(
   }
   freeColumns(aAnc, nAnc);
   freeColumns(aSelected, nSelected);
+  freeColumns(aOther, nOther);
   return SQLITE_OK;
 }
 
