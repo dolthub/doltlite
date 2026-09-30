@@ -213,3 +213,4 @@ win32nolock
 zerodamage
 doltlite_index_pending_bound
 doltlite_exact_index_probe
+doltlite_pending_text_update

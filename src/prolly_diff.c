@@ -113,6 +113,15 @@ static int diffRecordsEqualFieldwise(
 
   rc = doltliteParseRecordStrict(pA, nA, &aInfo);
   if( rc!=SQLITE_OK ) return rc;
+  if( nA==nB && pB ){
+    int nHdr = aInfo.nField ? aInfo.aOffset[0] : nA;
+    if( memcmp(pA, pB, nHdr)==0 ){
+      if( pnFieldA ) *pnFieldA = aInfo.nField;
+      if( pnFieldB ) *pnFieldB = aInfo.nField;
+      *pEqual = memcmp(pA+nHdr, pB+nHdr, nA-nHdr)==0;
+      goto diff_eq_done;
+    }
+  }
   rc = doltliteParseRecordStrict(pB, nB, &bInfo);
   if( rc!=SQLITE_OK ){
     doltliteRecordInfoClear(&aInfo);

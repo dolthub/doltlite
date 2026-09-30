@@ -91,6 +91,11 @@ int prollyMutMapInsert(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey,
                        const u8 *pVal, int nVal);
 
+int prollyMutMapInsertGetEntry(ProllyMutMap *mm,
+                               const u8 *pKey, int nKey, i64 intKey,
+                               const u8 *pVal, int nVal,
+                               ProllyMutMapEntry **ppEntry);
+
 int prollyMutMapInsertAbsent(ProllyMutMap *mm,
                              const u8 *pKey, int nKey, i64 intKey,
                              const u8 *pVal, int nVal);

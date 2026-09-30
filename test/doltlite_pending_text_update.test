@@ -1,0 +1,42 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach coll {BINARY NOCASE} {
+  do_execsql_test pending-text-$coll-setup "
+    CREATE TABLE t(id TEXT COLLATE $coll PRIMARY KEY, v INTEGER, payload BLOB);
+    WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096)
+    INSERT INTO t SELECT printf('Key-%08x',i),i,CAST(printf('%032d',i) AS BLOB) FROM c;
+    BEGIN;
+    UPDATE t SET v=v+1 WHERE v%32=0;
+    SAVEPOINT s;
+  " {}
+  do_execsql_test pending-text-$coll-update {
+    UPDATE t SET payload=CAST(substr(payload,1,31)||'x' AS BLOB);
+    SELECT changes(),count(*),sum(v),sum(length(payload)),
+           sum(substr(payload,32,1)=x'78') FROM t;
+  } {4096 4096 8390784 131072 4096}
+  do_execsql_test pending-text-$coll-replace {
+    UPDATE t SET payload=CAST(substr(payload,1,31)||'y' AS BLOB);
+    SELECT changes(),sum(substr(payload,32,1)=x'79') FROM t;
+  } {4096 4096}
+  do_execsql_test pending-text-$coll-rollback {
+    ROLLBACK TO s;
+    SELECT sum(v),sum(payload=CAST(printf('%032d',v-1) AS BLOB))
+      FROM t WHERE id IN ('Key-00000020','Key-00000040');
+    SELECT sum(substr(payload,32,1)=x'78' OR substr(payload,32,1)=x'79') FROM t;
+    RELEASE s;
+    ROLLBACK;
+    SELECT count(*),sum(v),sum(payload=CAST(printf('%032d',v) AS BLOB)) FROM t;
+  } {98 2 0 4096 8390656 4096}
+  do_execsql_test pending-text-$coll-commit {
+    BEGIN;
+    UPDATE t SET v=v+1 WHERE v%32=0;
+    UPDATE t SET payload=CAST(substr(payload,1,31)||'x' AS BLOB);
+    COMMIT;
+    SELECT count(*),sum(v),sum(substr(payload,32,1)=x'78') FROM t;
+    PRAGMA integrity_check;
+  } {4096 8390784 4096 ok}
+  do_execsql_test pending-text-$coll-cleanup {DROP TABLE t;} {}
+}
+
+finish_test

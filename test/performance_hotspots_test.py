@@ -113,7 +113,9 @@ class HotspotTests(unittest.TestCase):
             hotspots.run(["sh", "-c", "echo 'error' >&2"])
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
-        self.assertEqual(len(list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))), 0)
+        paths = list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))
+        self.assertEqual([path.name for path in paths], ['issue_3427.json'])
+        retained_name = 'retained_3427_pending_edits_generated_3_x1'
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -146,7 +148,7 @@ class HotspotTests(unittest.TestCase):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 0)
+            self.assertEqual(sql.call_count, 3)
             bucket_fixture, measure_bucket = bucket["bucket_fixture"], bucket["measure_bucket"]
             fixtures = hotspots.bucket_fixture_names()
             self.assertEqual(bucket_fixture.call_count, 3 * len(fixtures))
@@ -195,10 +197,15 @@ class HotspotTests(unittest.TestCase):
             self.assertNotIn("### After Deletes", report.getvalue())
             for title in ("Primary Key Index Rewrites", "Pending Edit Map"):
                 self.assertIn(f"### {title}\n", report.getvalue())
-            self.assertTrue(all(len(call.args[2]) == 0 for call in measure_retained.call_args_list))
-            self.assertEqual(len(result.read_text().splitlines()), 22)
+            for call in measure_retained.call_args_list:
+                self.assertEqual([name for name, _, _ in call.args[2]], [retained_name])
+            self.assertIn('[generated_3_x1](https://github.com/dolthub/doltlite/issues/3427)',
+                          report.getvalue())
+            self.assertEqual(report.getvalue().count('### Pending Edit Map\n'), 1)
+            self.assertIn(f'pending_edits\t{retained_name}\t100000\t100000\n', result.read_text())
+            self.assertEqual(len(result.read_text().splitlines()), 23)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 45)
+            self.assertEqual(len(raw.read_text().splitlines()), 47)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -783,6 +783,7 @@ int prollyBtCursorInsert(
   int rc;
   const u8 *pInsertedPayload = 0;
   int nInsertedPayload = 0;
+  ProllyMutMapEntry *pInsertedEntry = 0;
   u8 aLocalSortKey[128];
   const u8 *pSortKey = 0;
   int nSortKey = 0;
@@ -987,13 +988,13 @@ int prollyBtCursorInsert(
             storePayload ? pStoredPayload : NULL,
             storePayload ? nStoredPayload : 0);
       }else if( storePayload ){
-        rc = prollyMutMapInsert(pCur->pMutMap,
+        rc = prollyMutMapInsertGetEntry(pCur->pMutMap,
                                  pSortKey, nSortKey, 0,
-                                 pStoredPayload, nStoredPayload);
+                                 pStoredPayload, nStoredPayload, &pInsertedEntry);
       }else{
-        rc = prollyMutMapInsert(pCur->pMutMap,
+        rc = prollyMutMapInsertGetEntry(pCur->pMutMap,
                                  pSortKey, nSortKey, 0,
-                                 NULL, 0);
+                                 NULL, 0, &pInsertedEntry);
       }
     }
   }
@@ -1025,7 +1026,7 @@ int prollyBtCursorInsert(
         pCur->mmActive = 0;
         pCur->flushSeekEdits = 0;
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
-        ProllyMutMapEntry *pEntry = 0;
+        ProllyMutMapEntry *pEntry = pInsertedEntry;
         CLEAR_CACHED_PAYLOAD(pCur);
         /* Advance the tree only if it sat on the written row; MUT-only
         ** already parks on the next committed row. */
@@ -1034,7 +1035,9 @@ int prollyBtCursorInsert(
           int trc = prollyCursorNext(&pCur->pCur);
           if( trc!=SQLITE_OK ) return trc;
         }
-        rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
+        if( !pEntry ){
+          rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
+        }
         if( rc!=SQLITE_OK ) return rc;
         if( pEntry ){
           pCur->mmIdx = -1;

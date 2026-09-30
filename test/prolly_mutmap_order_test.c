@@ -107,8 +107,13 @@ static void testOrder(int nPrefix, int nKeys, int wide, int isInt){
   }
   for(i=0; i<n; i++){
     TestKey *k = &keys[order[i]];
-    check("insert shuffled key", prollyMutMapInsert(&mm, k->key, k->nKey,
-          intKey(&mm, k), (const u8*)&k->value, sizeof(k->value))==SQLITE_OK);
+    ProllyMutMapEntry *e = 0;
+    check("insert shuffled key", prollyMutMapInsertGetEntry(&mm, k->key, k->nKey,
+          intKey(&mm, k), (const u8*)&k->value, sizeof(k->value), &e)==SQLITE_OK);
+    check("insert returns stored entry", e && e->nKey==k->nKey
+          && (e->nKey==0 || memcmp(e->pKey, k->key, e->nKey)==0)
+          && e->nVal==sizeof(k->value)
+          && memcmp(e->pVal, &k->value, sizeof(k->value))==0);
   }
   qsort(keys, n, sizeof(keys[0]), keyCmp);
   check("distinct keys retained", prollyMutMapCount(&mm)==n);
@@ -121,8 +126,11 @@ static void testOrder(int nPrefix, int nKeys, int wide, int isInt){
             intKey(&mm, k))==SQLITE_OK);
     }else if( i%5==0 ){
       int value = -1;
-      check("replace key", prollyMutMapInsert(&mm, k->key, k->nKey,
-            intKey(&mm, k), (const u8*)&value, sizeof(value))==SQLITE_OK);
+      ProllyMutMapEntry *e = 0;
+      check("replace key", prollyMutMapInsertGetEntry(&mm, k->key, k->nKey,
+            intKey(&mm, k), (const u8*)&value, sizeof(value), &e)==SQLITE_OK);
+      check("replacement returns stored entry", e && e->op==PROLLY_EDIT_INSERT
+            && e->nVal==sizeof(value) && memcmp(e->pVal, &value, sizeof(value))==0);
     }
   }
   verify(&mm, keys, n, 1);
