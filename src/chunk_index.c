@@ -25,7 +25,7 @@ void csIndexCacheFree(ChunkStore *cs){
 
 i64 csIndexCacheSetBudget(ChunkStore *cs, i64 nByte){
   int nSlot = 0;
-  nByte = MIN(nByte, 4*1024*1024);
+  nByte = MIN(nByte, (i64)INT_MAX/2*CS_INDEX_PAGE_SIZE);
   if( nByte>(i64)sizeof(ChunkIndexCache) ){
     nSlot = (int)((nByte - sizeof(ChunkIndexCache))
                  / (CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage)));
@@ -37,9 +37,10 @@ i64 csIndexCacheSetBudget(ChunkStore *cs, i64 nByte){
       + nSlot*(CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage)) : 0;
 }
 
-/* A lookup that misses this cache costs a verified 4 KB page read, and chunk
-** hashes spread lookups evenly over the leaves. Past the base sixteenth, grow
-** only as far as the whole paged index needs, and never past a quarter. */
+/* A lookup that misses this cache costs a verified 4 KB page read before the
+** chunk itself can be read, and chunk hashes spread lookups evenly over the
+** leaves. Past the base sixteenth, grow as far as the whole paged index
+** needs, up to four fifths of the budget. */
 i64 csIndexCacheBudgetFor(ChunkStore *cs, i64 nByte){
   i64 nWant = 0;
   if( cs->index.lazy.active==1 ){
@@ -53,7 +54,7 @@ i64 csIndexCacheBudgetFor(ChunkStore *cs, i64 nByte){
     nWant = sizeof(ChunkIndexCache)
           + nPage*(CS_INDEX_PAGE_SIZE + sizeof(ChunkIndexCachePage));
   }
-  return MAX(nByte/16, MIN(nByte/4, nWant));
+  return MAX(nByte/16, MIN(nByte/5*4, nWant));
 }
 
 static int csIndexCacheSlot(ChunkStore *cs, const ProllyHash *pHash, int iChoice){
