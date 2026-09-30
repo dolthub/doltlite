@@ -114,6 +114,9 @@ static int csCommitToMemory(ChunkStore *cs){
     cs->staging.nPending = 0;
     csPendHTReset(cs);
     cs->staging.nCommittedWriteBuf = cs->staging.nWriteBuf;
+    sqlite3BeginBenignMalloc();
+    (void)csMemSeal(cs);
+    sqlite3EndBenignMalloc();
   }
   csMarkRefsCommitted(cs);
   return SQLITE_OK;

@@ -29,6 +29,7 @@ struct ProllyCacheEntry {
   u8 bReadAheadUnused;
   u8 bWideFull;
   u8 bWideRow;
+  void *pBorrow;
   u64 iTouch;
   ProllyCacheEntry *pLruNext;
   ProllyCacheEntry *pLruPrev;
@@ -70,6 +71,12 @@ ProllyCacheEntry *prollyCachePutOwned(ProllyCache *cache,
                                       u8 *pData, int nData,
                                       int *pRc);
 
+/* Caches a committed chunk the store lends in place (chunkStoreBorrow). The
+** entry holds the loan and counts only its own bytes against the budget. */
+ProllyCacheEntry *prollyCachePutBorrowed(ProllyCache *cache,
+                                         const ProllyHash *hash,
+                                         const u8 *pData, int nData,
+                                         void *pBorrow, int *pRc);
 ProllyCacheEntry *prollyCachePutTransientOwned(
                                       const ProllyHash *hash,
                                       u8 *pData, int nData, int nDataPhys,

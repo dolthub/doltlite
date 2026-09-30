@@ -49,4 +49,43 @@ run_test_lastline "main_and_attached_isolated" \
   "ATTACH ':memory:' AS aux; CREATE TABLE main.t(id INTEGER); INSERT INTO main.t VALUES(1); SELECT count(*) FROM aux.sqlite_master WHERE name='t';" \
   "0" ":memory:"
 
+BORROW_SETUP="PRAGMA cache_size=-128;
+CREATE TABLE t(id INTEGER PRIMARY KEY, g INTEGER, v INTEGER, p BLOB);
+CREATE INDEX t_gv ON t(g,v);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<20000)
+INSERT INTO t SELECT i,i%97,i,zeroblob(200) FROM c;"
+for i in $(seq 20001 20200); do
+  BORROW_SETUP="$BORROW_SETUP
+INSERT INTO t VALUES($i,$i%97,$i,zeroblob(100));"
+done
+
+run_test_lastline "memory_small_cache_reads_after_many_commits" \
+  "$BORROW_SETUP
+SELECT count(*),sum(v),sum(length(p)) FROM t;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<5000)
+SELECT sum((SELECT v FROM t WHERE id=1+(c.i*7919)%20200)) FROM c;
+SELECT count(*),sum(v) FROM t WHERE g=7;" \
+  "209|2109855" ":memory:"
+
+run_test_lastline "memory_small_cache_rollback_keeps_committed_rows" \
+  "$BORROW_SETUP
+BEGIN; UPDATE t SET v=v+1; DELETE FROM t WHERE id%3=0; SELECT sum(v) FROM t; ROLLBACK;
+SELECT count(*),sum(v),sum(length(p)) FROM t;" \
+  "20200|204030100|4020000" ":memory:"
+
+RESTORE_SRC=/tmp/test_memory_restore_src_$$.db
+rm -f "$RESTORE_SRC"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, g INTEGER, v INTEGER, p BLOB);
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<30000)
+INSERT INTO t SELECT i,i%50,i,zeroblob(64) FROM c;" | $DOLTLITE "$RESTORE_SRC" > /dev/null 2>&1
+run_test_lastline "memory_restore_replaces_store_under_cached_nodes" \
+  "$BORROW_SETUP
+SELECT count(*),sum(v) FROM t;
+.restore $RESTORE_SRC
+SELECT count(*),sum(v),sum(length(p)) FROM t;
+INSERT INTO t SELECT id+100000,g,v,p FROM t WHERE id<=3000;
+SELECT count(*),sum(v),sum(length(p)) FROM t;" \
+  "33000|454516500|2112000" ":memory:"
+rm -f "$RESTORE_SRC" "$(dirname "$RESTORE_SRC")/.$(basename "$RESTORE_SRC")-lock"
+
 dltest_finish

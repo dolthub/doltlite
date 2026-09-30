@@ -339,4 +339,86 @@ int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
   return SQLITE_OK;
 }
 
+void csMemSegRelease(ChunkMemSeg *pSeg){
+  if( pSeg && --pSeg->nRef==0 ){
+    sqlite3_free(pSeg->a);
+    sqlite3_free(pSeg);
+  }
+}
+
+void csMemSegFreeAll(ChunkStore *cs){
+  int i;
+  for(i=0; i<cs->staging.nMemSeg; i++) csMemSegRelease(cs->staging.aMemSeg[i]);
+  sqlite3_free(cs->staging.aMemSeg);
+  cs->staging.aMemSeg = 0;
+  cs->staging.nMemSeg = 0;
+  cs->staging.nMemSegAlloc = 0;
+}
+
+/* Everything in an in-memory store's write buffer has just committed. Hand
+** the buffer to a segment instead of copying it, so its chunks stay put for
+** cache entries that borrow them. */
+int csMemSeal(ChunkStore *cs){
+  ChunkStaging *st = &cs->staging;
+  ChunkMemSeg *pSeg;
+  u8 *a;
+  assert( cs->isMemory );
+  if( st->nWriteBuf==0 ) return SQLITE_OK;
+  if( st->nMemSeg>=st->nMemSegAlloc ){
+    int nNew = st->nMemSegAlloc ? st->nMemSegAlloc*2 : 16;
+    ChunkMemSeg **aNew = sqlite3_realloc64(st->aMemSeg,
+                                           (sqlite3_uint64)nNew*sizeof(*aNew));
+    if( !aNew ) return SQLITE_NOMEM;
+    st->aMemSeg = aNew;
+    st->nMemSegAlloc = nNew;
+  }
+  pSeg = sqlite3_malloc(sizeof(*pSeg));
+  if( !pSeg ) return SQLITE_NOMEM;
+  a = st->pWriteBuf;
+  if( st->nWriteBufAlloc - st->nWriteBuf > st->nWriteBuf/8 ){
+    u8 *aFit = sqlite3_realloc64(a, (sqlite3_uint64)st->nWriteBuf);
+    if( aFit ) a = aFit;
+  }
+  pSeg->a = a;
+  pSeg->iBase = st->iMemBase;
+  pSeg->n = st->nWriteBuf;
+  pSeg->nRef = 1;
+  st->aMemSeg[st->nMemSeg++] = pSeg;
+  st->iMemBase += st->nWriteBuf;
+  st->pWriteBuf = 0;
+  st->nWriteBuf = 0;
+  st->nWriteBufAlloc = 0;
+  st->nCommittedWriteBuf = 0;
+  return SQLITE_OK;
+}
+
+/* The chunk at a logical offset of an in-memory store, or 0 when the offset
+** and size do not name one. *ppSeg is the segment holding a committed chunk,
+** or 0 for one still in the write buffer. */
+const u8 *csMemChunk(ChunkStore *cs, i64 iOffset, int nData, ChunkMemSeg **ppSeg){
+  ChunkStaging *st = &cs->staging;
+  int lo = 0, hi = st->nMemSeg-1;
+  *ppSeg = 0;
+  if( iOffset<0 || nData<0 ) return 0;
+  if( iOffset>=st->iMemBase ){
+    i64 iRel = iOffset - st->iMemBase;
+    if( !st->pWriteBuf || iRel+4+nData>st->nWriteBuf ) return 0;
+    return st->pWriteBuf + iRel + 4;
+  }
+  while( lo<=hi ){
+    int mid = lo + (hi-lo)/2;
+    ChunkMemSeg *p = st->aMemSeg[mid];
+    if( iOffset<p->iBase ){
+      hi = mid-1;
+    }else if( iOffset>=p->iBase+p->n ){
+      lo = mid+1;
+    }else{
+      if( iOffset-p->iBase+4+nData+CHUNK_STORE_BORROW_PAD>p->n ) return 0;
+      *ppSeg = p;
+      return p->a + (iOffset-p->iBase) + 4;
+    }
+  }
+  return 0;
+}
+
 #endif
