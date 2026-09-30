@@ -15,6 +15,20 @@ static void cacheNoteWriteScan(ProllyCacheEntry *pEntry, int bWrite){
   if( bWrite ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_KEEP;
 }
 
+/* SQLITE_NOTFOUND when the store cannot lend the chunk in place. */
+static int loadBorrowedNode(ChunkStore *pStore, ProllyCache *pCache,
+                            const ProllyHash *pHash, ProllyCacheEntry **ppEntry){
+  const u8 *pData = 0;
+  int nData = 0;
+  void *pSeg = 0;
+  int rc;
+  assert( PROLLY_NODE_BUFFER_SLOP<=CHUNK_STORE_BORROW_PAD );
+  rc = chunkStoreBorrow(pStore, pHash, &pData, &nData, &pSeg);
+  if( rc!=SQLITE_OK ) return rc;
+  *ppEntry = prollyCachePutBorrowed(pCache, pHash, pData, nData, pSeg, &rc);
+  return *ppEntry ? SQLITE_OK : rc;
+}
+
 int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
                    const ProllyHash *pHash, ProllyCacheEntry **ppEntry){
   ProllyCacheEntry *pEntry;
@@ -25,6 +39,8 @@ int prollyLoadNode(ChunkStore *pStore, ProllyCache *pCache,
   *ppEntry = 0;
   pEntry = prollyCacheGet(pCache, pHash);
   if( !pEntry ){
+    rc = loadBorrowedNode(pStore, pCache, pHash, ppEntry);
+    if( rc!=SQLITE_NOTFOUND ) return rc;
     rc = chunkStoreGet(pStore, pHash, &pData, &nData);
     if( rc!=SQLITE_OK ) return rc;
     pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
@@ -119,6 +135,15 @@ static int prollyLoadNodeMaybeSparse(
       return SQLITE_OK;
     }
   }
+  rc = loadBorrowedNode(cur->pStore, cur->pCache, pHash, &pEntry);
+  if( rc==SQLITE_OK ){
+    pEntry->bAllowPrefix = cur->bAllowPrefix;
+    cacheNoteLargeScan(pEntry, cur);
+    cacheNoteWriteScan(pEntry, cur->bWriteScan);
+    *ppEntry = pEntry;
+    return SQLITE_OK;
+  }
+  if( rc!=SQLITE_NOTFOUND ) return rc;
   if( cur->bAllowSparse ){
     rc = chunkStoreGetSparse(cur->pStore, pHash, &pData, &nData, &nDataPhys);
   }else{

@@ -6,6 +6,16 @@
 #include "chunk_index.h"
 
 typedef struct ChunkStaging ChunkStaging;
+typedef struct ChunkMemSeg ChunkMemSeg;
+
+/* Committed bytes of an in-memory store. They never move or change, so cache
+** entries borrow them; the store holds one reference. */
+struct ChunkMemSeg {
+  u8 *a;
+  i64 iBase;
+  i64 n;
+  int nRef;
+};
 
 struct ChunkStaging {
   ChunkIndexEntry *aPending;
@@ -32,6 +42,10 @@ struct ChunkStaging {
   i64 nWriteBuf;
   i64 nWriteBufAlloc;
   i64 nCommittedWriteBuf;
+  ChunkMemSeg **aMemSeg;
+  int nMemSeg;
+  int nMemSegAlloc;
+  i64 iMemBase;
 };
 
 void chunkStagingGetPending(const ChunkStaging *st, int *pn, const ChunkIndexEntry **par);
@@ -52,5 +66,10 @@ int csGrowRecent(struct ChunkStore *cs, int nAdd);
 int csGrowWriteBuf(struct ChunkStore *cs, int nNeeded);
 int csSearchPending(struct ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 int csSearchRecent(struct ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
+int csMemSeal(struct ChunkStore *cs);
+const u8 *csMemChunk(struct ChunkStore *cs, i64 iOffset, int nData,
+                     ChunkMemSeg **ppSeg);
+void csMemSegRelease(ChunkMemSeg *pSeg);
+void csMemSegFreeAll(struct ChunkStore *cs);
 
 #endif

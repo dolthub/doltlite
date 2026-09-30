@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_cache.h"
+#include "chunk_store.h"
 #include "prolly_record.h"
 #include "sortkey.h"
 #include <string.h>
@@ -48,8 +49,20 @@ static void lruInsertHead(ProllyCache *cache, ProllyCacheEntry *pEntry){
 }
 
 static i64 cacheEntryBytes(const ProllyCacheEntry *p){
-  return sqlite3_msize((void*)p) + sqlite3_msize(p->pData)
+  return sqlite3_msize((void*)p) + (p->pBorrow ? 0 : sqlite3_msize(p->pData))
        + sqlite3_msize(p->pPacked);
+}
+
+static void cacheEntryFreeData(ProllyCacheEntry *p){
+  if( p->pBorrow ){
+    chunkStoreBorrowRelease(p->pBorrow);
+    p->pBorrow = 0;
+  }else{
+    sqlite3_free(p->pData);
+  }
+  p->pData = 0;
+  sqlite3_free(p->pPacked);
+  p->pPacked = 0;
 }
 
 /* Evicting a chunk read ahead before its cursor reached it means the main
@@ -81,8 +94,7 @@ static void hashRemove(ProllyCache *cache, ProllyCacheEntry *pEntry){
 
 static void cacheEntryFree(ProllyCacheEntry *pEntry){
   if( pEntry ){
-    sqlite3_free(pEntry->pData);
-    sqlite3_free(pEntry->pPacked);
+    cacheEntryFreeData(pEntry);
     sqlite3_free(pEntry);
   }
 }
@@ -402,6 +414,7 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   int bElide = 0;
   u8 *pPacked = 0;
   u8 *pData;
+  if( pEntry->pBorrow ) return 0;
   if( pEntry->pPacked ){
     if( !pEntry->pData ) return 0;
     cache->nByte -= sqlite3_msize(pEntry->pData);
@@ -683,11 +696,9 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     cacheWideForget(cache, pEntry);
     lruRemove(pEntry);
     hashRemove(cache, pEntry);
-    cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
-                + sqlite3_msize(pEntry->pPacked);
-    sqlite3_free(pEntry->pData);
+    cache->nByte -= cacheEntryBytes(pEntry);
     if( pEntry->pPacked ) cache->nSharedPrefix--;
-    sqlite3_free(pEntry->pPacked);
+    cacheEntryFreeData(pEntry);
     memset(pEntry, 0, sizeof(*pEntry));
     cache->nUsed--;
   }
@@ -699,8 +710,7 @@ static void cacheEvictEntry(ProllyCache *cache, ProllyCacheEntry *pEntry){
   cacheWideForget(cache, pEntry);
   lruRemove(pEntry);
   hashRemove(cache, pEntry);
-  cache->nByte -= sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
-                + sqlite3_msize(pEntry->pPacked);
+  cache->nByte -= cacheEntryBytes(pEntry);
   cache->nUsed--;
   if( pEntry->pPacked ) cache->nSharedPrefix--;
   cacheEntryFree(pEntry);
@@ -843,11 +853,14 @@ void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte){
   cacheTrim(cache, cache->nMaxByte);
 }
 
-ProllyCacheEntry *prollyCachePutOwned(
+/* Owns pData, or holds the loan pBorrow of a chunk the store lends in place,
+** either way releasing it on failure. */
+static ProllyCacheEntry *cacheInsert(
   ProllyCache *cache,
   const ProllyHash *hash,
   u8 *pData,
   int nData,
+  void *pBorrow,
   int *pRc
 ){
   int iBucket;
@@ -858,12 +871,13 @@ ProllyCacheEntry *prollyCachePutOwned(
 
   pEntry = prollyCacheGet(cache, hash);
   if( pEntry ){
-    sqlite3_free(pData);
+    if( pBorrow ) chunkStoreBorrowRelease(pBorrow);
+    else sqlite3_free(pData);
     return pEntry;
   }
 
   pEntry = 0;
-  if( cache->nByte + nData + PROLLY_NODE_BUFFER_SLOP
+  if( cache->nByte + (pBorrow ? 0 : nData + PROLLY_NODE_BUFFER_SLOP)
       + sizeof(ProllyCacheEntry)>cache->nMaxByte ){
     pEntry = cacheEvictOne(cache);
   }
@@ -871,14 +885,15 @@ ProllyCacheEntry *prollyCachePutOwned(
   if( pEntry==0 ){
     pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
     if( pEntry==0 ){
-      sqlite3_free(pData);
+      if( pBorrow ) chunkStoreBorrowRelease(pBorrow);
+      else sqlite3_free(pData);
       if( pRc ) *pRc = SQLITE_NOMEM;
       return 0;
     }
     memset(pEntry, 0, sizeof(*pEntry));
   }
 
-  {
+  if( !pBorrow ){
     u8 *pPadded = (u8*)sqlite3_realloc(pData, nData + PROLLY_NODE_BUFFER_SLOP);
     if( pPadded==0 ){
       sqlite3_free(pData);
@@ -892,14 +907,14 @@ ProllyCacheEntry *prollyCachePutOwned(
 
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pData;
+  pEntry->pBorrow = pBorrow;
   pEntry->nRef = 1;
   pEntry->bTransient = 0;
 
   rc = prollyNodeParse(&pEntry->node, pData, nData);
   if( rc!=SQLITE_OK ){
     if( pRc ) *pRc = rc;
-    sqlite3_free(pData);
-    sqlite3_free(pEntry);
+    cacheEntryFree(pEntry);
     return 0;
   }
 
@@ -910,8 +925,7 @@ ProllyCacheEntry *prollyCachePutOwned(
       pOld->nRef++;
       lruRemove(pOld);
       hashRemove(cache, pOld);
-      cache->nByte -= sqlite3_msize(pOld) + sqlite3_msize(pOld->pData)
-                  + sqlite3_msize(pOld->pPacked);
+      cache->nByte -= cacheEntryBytes(pOld);
       cache->nUsed--;
       if( pOld->pPacked ) cache->nSharedPrefix--;
       /* Other cursors may still borrow the prefix buffer. */
@@ -934,10 +948,31 @@ ProllyCacheEntry *prollyCachePutOwned(
   lruInsertHead(cache, pEntry);
 
   cache->nUsed++;
-  cache->nByte += sqlite3_msize(pEntry) + sqlite3_msize(pEntry->pData)
-                + sqlite3_msize(pEntry->pPacked);
+  cache->nByte += cacheEntryBytes(pEntry);
   cacheTrim(cache, cache->nMaxByte);
   return pEntry;
+}
+
+ProllyCacheEntry *prollyCachePutOwned(
+  ProllyCache *cache,
+  const ProllyHash *hash,
+  u8 *pData,
+  int nData,
+  int *pRc
+){
+  return cacheInsert(cache, hash, pData, nData, 0, pRc);
+}
+
+ProllyCacheEntry *prollyCachePutBorrowed(
+  ProllyCache *cache,
+  const ProllyHash *hash,
+  const u8 *pData,
+  int nData,
+  void *pBorrow,
+  int *pRc
+){
+  assert( pBorrow!=0 );
+  return cacheInsert(cache, hash, (u8*)pData, nData, pBorrow, pRc);
 }
 
 ProllyCacheEntry *prollyCachePutTransientOwned(

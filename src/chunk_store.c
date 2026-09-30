@@ -810,6 +810,7 @@ int chunkStoreClose(ChunkStore *cs){
   csPendHTClear(cs);
   csRecentHTClear(cs);
   sqlite3_free(cs->staging.pWriteBuf);
+  csMemSegFreeAll(cs);
   sqlite3_free(cs->refs.zDefaultBranch);
   csFreeBranches(cs);
   csFreeTags(cs);
@@ -904,7 +905,8 @@ int chunkStoreGet(
     u8 *pCopy = (u8 *)sqlite3_malloc(sz);
     if( pCopy == 0 ) return SQLITE_NOMEM;
 
-    memcpy(pCopy, cs->staging.pWriteBuf + off + 4, (size_t)(sz - nZ));
+    memcpy(pCopy, cs->staging.pWriteBuf + (off - cs->staging.iMemBase) + 4,
+           (size_t)(sz - nZ));
     if( nZ>0 ) memset(pCopy + (sz - nZ), 0, (size_t)nZ);
     *ppData = pCopy;
     *pnData = sz;
@@ -931,11 +933,12 @@ int chunkStoreGet(
     }
 
     if( cs->file.pFile == 0 ){
-      if( cs->staging.pWriteBuf && e->offset >= 0
-       && (e->offset + 4 + e->size) <= cs->staging.nWriteBuf ){
+      ChunkMemSeg *pSeg;
+      const u8 *pChunk = csMemChunk(cs, e->offset, e->size, &pSeg);
+      if( pChunk ){
         u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
         if( pCopy == 0 ) return SQLITE_NOMEM;
-        memcpy(pCopy, cs->staging.pWriteBuf + e->offset + 4, e->size);
+        memcpy(pCopy, pChunk, e->size);
         *ppData = pCopy;
         *pnData = e->size;
         if( cs->isMemory ) return SQLITE_OK;
@@ -973,6 +976,41 @@ int chunkStoreGet(
   }
 
   return chunkStoreVerifyChunk(hash, ppData, pnData);
+}
+
+int chunkStoreBorrow(
+  ChunkStore *cs,
+  const ProllyHash *hash,
+  const u8 **ppData,
+  int *pnData,
+  void **ppSeg
+){
+  ChunkIndexEntry e;
+  ChunkMemSeg *pSeg = 0;
+  const u8 *pChunk;
+  int found = 0;
+  int rc;
+
+  *ppData = 0;
+  *pnData = 0;
+  *ppSeg = 0;
+  if( !cs->isMemory || cs->notADatabase || cs->corruptMidStream ){
+    return SQLITE_NOTFOUND;
+  }
+  rc = csIndexLookup(cs, hash, &e, &found);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !found || e.offset>=cs->staging.iMemBase ) return SQLITE_NOTFOUND;
+  pChunk = csMemChunk(cs, e.offset, e.size, &pSeg);
+  if( !pChunk || !pSeg ) return SQLITE_CORRUPT;
+  pSeg->nRef++;
+  *ppData = pChunk;
+  *pnData = e.size;
+  *ppSeg = pSeg;
+  return SQLITE_OK;
+}
+
+void chunkStoreBorrowRelease(void *pSeg){
+  csMemSegRelease((ChunkMemSeg*)pSeg);
 }
 
 int chunkStoreReadAhead(
@@ -1063,7 +1101,8 @@ int chunkStoreGetSparse(
     pBuf = (u8*)sqlite3_malloc(nPhys>0 ? nPhys : 1);
     if( !pBuf ) return SQLITE_NOMEM;
     if( nPhys>0 ){
-      memcpy(pBuf, cs->staging.pWriteBuf + e->offset + 4, nPhys);
+      memcpy(pBuf, cs->staging.pWriteBuf + (e->offset - cs->staging.iMemBase) + 4,
+             nPhys);
     }
     {
       ProllyHash h;
@@ -1260,7 +1299,7 @@ int chunkStorePut(
   if( rc != SQLITE_OK ) return rc;
 
   if( cs->isMemory ){
-    rc = csGrowWriteBuf(cs, 4 + nData);
+    rc = csGrowWriteBuf(cs, 4 + nData + CHUNK_STORE_BORROW_PAD);
   }else{
     rc = csGrowWriteBuf(cs, CS_WAL_CHUNK_HDR_SIZE + nData);
   }
@@ -1269,7 +1308,7 @@ int chunkStorePut(
   {
     ChunkIndexEntry *e = &cs->staging.aPending[cs->staging.nPending];
     e->hash = h;
-    e->offset = (i64)cs->staging.nWriteBuf;
+    e->offset = cs->staging.iMemBase + cs->staging.nWriteBuf;
     if( !cs->isMemory ) e->offset += CS_WAL_CHUNK_LEN_OFF;
     e->size = nData;
     cs->staging.aPendingZeroTail[cs->staging.nPending] = 0;
@@ -1286,6 +1325,11 @@ int chunkStorePut(
   }
   memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pData, nData);
   cs->staging.nWriteBuf += nData;
+  if( cs->isMemory ){
+    memset(cs->staging.pWriteBuf + cs->staging.nWriteBuf, 0,
+           CHUNK_STORE_BORROW_PAD);
+    cs->staging.nWriteBuf += CHUNK_STORE_BORROW_PAD;
+  }
 
   if( cs->staging.nWriteBuf >= csPendingDrainLimit() ){
     rc = csDrainPendingToWal(cs);

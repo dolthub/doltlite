@@ -363,6 +363,14 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas);
 
 int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
                   u8 **ppData, int *pnData);
+/* A committed chunk of an in-memory store, without a copy. *ppData stays
+** valid, followed by CHUNK_STORE_BORROW_PAD zero bytes, until *ppSeg is
+** passed to chunkStoreBorrowRelease(). SQLITE_NOTFOUND when the chunk is not
+** one the store can lend. */
+#define CHUNK_STORE_BORROW_PAD 8
+int chunkStoreBorrow(ChunkStore *cs, const ProllyHash *hash,
+                     const u8 **ppData, int *pnData, void **ppSeg);
+void chunkStoreBorrowRelease(void *pSeg);
 #define CHUNK_READ_AHEAD_MAX 16
 #define CHUNK_READ_AHEAD_BYTES (64*1024)
 int chunkStoreReadAhead(ChunkStore *cs, const ProllyHash *aHash, int nHash,
