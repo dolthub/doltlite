@@ -12,6 +12,56 @@
 
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 
+static int hashofResolveRef(
+  sqlite3 *db,
+  const char *zRef,
+  ProllyHash *pCommit
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const BranchRef *aBranch;
+  const TagRef *aTag;
+  const char *zName = 0;
+  char *zCanonical;
+  int nBase = (int)strcspn(zRef, "~^");
+  int nRef, i, rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  if( nBase==4 && sqlite3_strnicmp(zRef, "HEAD", 4)==0 ){
+    zName = "HEAD";
+  }else{
+    rc = chunkStoreEnsureRefsFresh(cs);
+    if( rc!=SQLITE_OK ) return rc;
+    refsTableGetBranches(&cs->refs, &nRef, &aBranch);
+    for(i=0; i<nRef; i++){
+      const char *zHave = aBranch[i].zName;
+      if( (int)strlen(zHave)==nBase
+       && sqlite3_strnicmp(zHave, zRef, nBase)==0 ){
+        if( zName ) return SQLITE_NOTFOUND;
+        zName = zHave;
+      }
+    }
+    if( !zName ){
+      refsTableGetTags(&cs->refs, &nRef, &aTag);
+      for(i=0; i<nRef; i++){
+        const char *zHave = aTag[i].zName;
+        if( (int)strlen(zHave)==nBase
+         && sqlite3_strnicmp(zHave, zRef, nBase)==0 ){
+          if( zName ) return SQLITE_NOTFOUND;
+          zName = zHave;
+        }
+      }
+    }
+  }
+  if( !zName || strncmp(zName, zRef, nBase)==0 ){
+    return doltliteResolveRef(db, zRef, pCommit);
+  }
+  zCanonical = sqlite3_mprintf("%s%s", zName, zRef+nBase);
+  if( !zCanonical ) return SQLITE_NOMEM;
+  rc = doltliteResolveRef(db, zCanonical, pCommit);
+  sqlite3_free(zCanonical);
+  return rc;
+}
+
 static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   const char *zRef;
@@ -33,7 +83,7 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
     return;
   }
   db = sqlite3_context_db_handle(ctx);
-  rc = doltliteResolveRef(db, zRef, &commitHash);
+  rc = hashofResolveRef(db, zRef, &commitHash);
   if( rc==SQLITE_NOTFOUND ){
     sqlite3_result_error(ctx, "dolt_hashof: invalid ref spec", -1);
     return;

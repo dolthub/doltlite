@@ -47,10 +47,10 @@ query_pair_separate() {
   local name="$1" dl_query="$2" dt_query="$3"
   local dl dt
   dl=$("$DOLTLITE" "$TMPROOT/$name.db" "$dl_query" \
-    2>>"$TMPROOT/$name.dl.query.err" | tr -d '\r"')
+    2>>"$TMPROOT/$name.dl.query.err" | tail -n 1 | tr -d '\r"')
   dt=$(cd "$TMPROOT/$name.dolt" \
     && "$DOLT" sql -r csv -q "$dt_query" \
-      2>>"$TMPROOT/$name.dt.query.err" | tail -n +2 | tr -d '\r"')
+      2>>"$TMPROOT/$name.dt.query.err" | tail -n 1 | tr -d '\r"')
   printf '%s|%s\n' "$dl" "$dt"
 }
 
@@ -570,13 +570,56 @@ shape "main_hash_shape" "$H_MAIN"
 H_HEAD_PARENT=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD~1');")
 different "HEAD_differs_from_HEAD_parent" "$H_HEAD" "$H_HEAD_PARENT"
 
+for ref in head HeAd MAIN; do
+  H_CASE=$(run_hash_on "$DB" "SELECT dolt_hashof('$ref');")
+  same "hashof_${ref}_equals_HEAD" "$H_HEAD" "$H_CASE"
+done
+for suffix in '~1' '^' '~0^1'; do
+  H_CASE=$(run_hash_on "$DB" "SELECT dolt_hashof('head$suffix');")
+  same "hashof_lowercase_head_$suffix" "$H_HEAD_PARENT" "$H_CASE"
+done
+
 both_error "oversized_parent_number_is_rejected" "$DB" \
   "SELECT dolt_hashof('HEAD^4294967297');"
+both_error "lowercase_head_oversized_parent_is_rejected" "$DB" \
+  "SELECT dolt_hashof('head^4294967297');"
+both_error "unknown_hashof_ref_is_rejected" "$DB" \
+  "SELECT dolt_hashof('NoSuchRef');"
 
 H_ID_OUT=$(query_pair_separate "$DB" \
   "SELECT dolt_hashof('$(pair_dl "$H_HEAD")');" \
   "SELECT dolt_hashof('$(pair_dt "$H_HEAD")');")
 same "commit_hash_is_identity_on_hashof" "$H_HEAD" "$H_ID_OUT"
+
+exec_pair "$DB" "SELECT dolt_branch('Feat'); SELECT dolt_checkout('Feat');
+INSERT INTO t VALUES (3, 'c'); SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feature');
+SELECT dolt_tag('Release', 'HEAD~1');"
+H_FEATURE=$(run_hash_on "$DB" "SELECT dolt_hashof('Feat');")
+different "feature_tip_differs_from_main" "$H_FEATURE" "$H_MAIN"
+for ref in feat FEAT; do
+  H_CASE=$(run_hash_on "$DB" "SELECT dolt_hashof('$ref');")
+  same "hashof_${ref}_equals_feature_tip" "$H_FEATURE" "$H_CASE"
+done
+for ref in head HeAd; do
+  H_CASE=$(query_pair_separate "$DB" \
+    "SELECT dolt_checkout('Feat'); SELECT dolt_hashof('$ref');" \
+    "CALL dolt_checkout('Feat'); SELECT dolt_hashof('$ref');")
+  same "hashof_${ref}_equals_feature_tip" "$H_FEATURE" "$H_CASE"
+done
+for ref in 'feat~1' 'FEAT^1' Release release RELEASE 'release~0'; do
+  H_CASE=$(run_hash_on "$DB" "SELECT dolt_hashof('$ref');")
+  same "hashof_${ref}_equals_main_tip" "$H_MAIN" "$H_CASE"
+done
+for ref in 'head~1' 'HeAd^'; do
+  H_CASE=$(query_pair_separate "$DB" \
+    "SELECT dolt_checkout('Feat'); SELECT dolt_hashof('$ref');" \
+    "CALL dolt_checkout('Feat'); SELECT dolt_hashof('$ref');")
+  same "hashof_${ref}_equals_main_tip" "$H_MAIN" "$H_CASE"
+done
+H_CASE=$(run_hash_on "$DB" "SELECT dolt_hashof('release~1');")
+same "hashof_lowercase_tag_parent" "$H_HEAD_PARENT" "$H_CASE"
+both_error "log_branch_lookup_remains_case_sensitive" "$DB" \
+  "SELECT * FROM dolt_log('FEAT');"
 
 COLLIDE_SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -599,7 +642,13 @@ H_BRANCH=$(run_hash_on "$DB" "SELECT hash FROM dolt_branches WHERE name='feat';"
 H_NAME=$(run_hash_on "$DB" "SELECT dolt_hashof('feat');")
 same "hashof_colliding_name_equals_branch" "$H_BRANCH" "$H_NAME"
 different "hashof_colliding_name_differs_from_tag" "$H_TAG" "$H_NAME"
+H_CASE=$(run_hash_on "$DB" "SELECT dolt_hashof('FEAT');")
+same "hashof_case_folded_collision_equals_branch" "$H_BRANCH" "$H_CASE"
 both_error "checkout_colliding_name_is_tag" "$DB" "SELECT dolt_checkout('feat');"
+
+exec_pair "$DB" "SELECT dolt_branch('-m', 'feat', 'Feat');"
+H_CASE=$(run_hash_on "$DB" "SELECT dolt_hashof('feat');")
+same "hashof_case_folded_branch_precedes_exact_tag" "$H_BRANCH" "$H_CASE"
 
 echo ""
 
