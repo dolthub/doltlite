@@ -999,8 +999,6 @@ static int mergeRecordTableRename(
   return SQLITE_OK;
 }
 
-/* One side renamed a table the other side put a trigger on. Replay
-** RENAME TO after load so the trigger is not left on a missing table. */
 static int mergePreNormalizeTableRename(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,
@@ -1077,28 +1075,30 @@ static int mergePreNormalizeTableRename(
       azPair[0] = pAncT->zName;
       azPair[1] = pNewT->zName;
 
-      /* Un-rename the side's dependents first, while the new name still
-      ** identifies them. Ancestor text when the change is mechanical,
-      ** a token rewrite when the dependent was created after the rename. */
       for(i=0; i<nSide; i++){
         SchemaEntry *pDep = &aSide[i];
         SchemaEntry *pDepAnc;
+        int mechanical;
         if( pDep==pNewT || !pDep->zType || !pDep->zName ) continue;
         if( strcmp(pDep->zType, "table")==0 ) continue;
+        pDepAnc = findSchemaEntry(aAncSchema, nAncSchema, pDep->zName);
+        mechanical = pDepAnc && pDepAnc->zSql && pDep->zSql
+          && mergeTextsEqualModuloRenames(pDepAnc->zSql, pDep->zSql,
+                                          azPair, 2);
         if( !pDep->zTblName
          || sqlite3_stricmp(pDep->zTblName, pNewT->zName)!=0 ){
-          /* Views name themselves; catch ones shadow-rewritten to the
-          ** new table name by content. */
-          if( strcmp(pDep->zType, "view")!=0 || !pDep->zSql
+          if( strcmp(pDep->zType, "trigger")==0 ){
+            if( !mechanical ) continue;
+          }else if( strcmp(pDep->zType, "view")!=0 || !pDep->zSql
            || !mergeSqlNamesColumn(pDep->zSql, pDep->zType, pNewT->zName) ){
             continue;
           }
         }
-        pDepAnc = findSchemaEntry(aAncSchema, nAncSchema, pDep->zName);
-        if( pDepAnc && pDepAnc->zSql && pDep->zSql
-         && mergeTextsEqualModuloRenames(pDepAnc->zSql, pDep->zSql,
-                                         azPair, 2) ){
-          mergeSetEntryText(pDep, pDepAnc->zSql);
+        if( mechanical ){
+          char *z = sqlite3_mprintf("%s", pDepAnc->zSql);
+          if( !z ) return SQLITE_NOMEM;
+          sqlite3_free(pDep->zSql);
+          pDep->zSql = z;
         }else if( pDep->zSql ){
           char *z = mergeRewriteIdent(pDep->zSql, pNewT->zName, pAncT->zName);
           if( !z ) return SQLITE_NOMEM;

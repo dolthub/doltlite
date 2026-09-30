@@ -1,0 +1,92 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach table {u2 select {select data} {odd"name}} {
+  set quoted [string map {{"} {""}} $table]
+  foreach direction {forward reverse} {
+    foreach txn {autocommit explicit rollback} {
+      foreach edit {0 1} {
+        reset_db
+        execsql {
+          CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, u2 INT);
+          CREATE TABLE u(id INTEGER PRIMARY KEY, value INT, label TEXT);
+          CREATE TABLE other(id INTEGER PRIMARY KEY, v INT);
+          CREATE TRIGGER tr AFTER INSERT ON t BEGIN
+            INSERT INTO u VALUES(new.id,new.u2,'u2');
+          END;
+          INSERT INTO t VALUES(1,1,10);
+          SELECT dolt_commit('-Am','init');
+          SELECT dolt_branch('feat');
+          SELECT dolt_checkout('feat');
+        }
+        execsql "ALTER TABLE u RENAME TO \"$quoted\""
+        execsql {
+          SELECT dolt_commit('-Am','rename');
+          SELECT dolt_checkout('main');
+          INSERT INTO other VALUES(1,7);
+        }
+        if {$edit} {
+          execsql {
+            DROP TRIGGER tr;
+            CREATE TRIGGER tr AFTER INSERT ON t BEGIN
+              INSERT INTO u VALUES(new.id,new.u2+1,'u2');
+            END;
+          }
+        }
+        execsql {SELECT dolt_commit('-Am','side')}
+        if {$direction eq "forward"} {
+          set branch main
+          set target feat
+        } else {
+          execsql {SELECT dolt_checkout('feat')}
+          set branch feat
+          set target main
+        }
+        set before [execsql {SELECT sql FROM sqlite_schema WHERE name='tr'}]
+        set head [execsql {SELECT dolt_hashof('HEAD')}]
+        if {$txn ne "autocommit"} {execsql {BEGIN}}
+        set name trigger-reference-$table-$direction-$txn-$edit
+        set options [expr {$txn eq "rollback" ? "'--no-commit'," : ""}]
+        do_test $name-merge {
+          string length [execsql "SELECT dolt_merge($options'$target')"]
+        } [expr {$txn eq "rollback" ? 1 : 40}]
+        do_execsql_test $name-schema {
+          SELECT tbl_name FROM sqlite_schema WHERE name='tr';
+          SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='u';
+          SELECT id,v FROM other;
+          SELECT count(*) FROM dolt_conflicts;
+          PRAGMA integrity_check;
+        } {t 0 1 7 0 ok}
+        do_execsql_test $name-fire "
+          INSERT INTO t VALUES(2,2,20);
+          SELECT id,value,label FROM \"$quoted\" ORDER BY id;
+        " [list 1 10 u2 2 [expr {20+$edit}] u2]
+        if {$txn eq "rollback"} {
+          execsql {ROLLBACK}
+          do_test $name-restored {
+            list [expr {$head eq [execsql {SELECT dolt_hashof('HEAD')}]}] \
+                 [expr {$before eq [execsql {SELECT sql FROM sqlite_schema WHERE name='tr'}]}]
+          } {1 1}
+          set readTable [expr {$direction eq "forward" ? "u" : $table}]
+          set readQuoted [string map {{"} {""}} $readTable]
+          set expected {1 10 u2}
+        } else {
+          set readQuoted $quoted
+          set expected [list 1 10 u2 2 [expr {20+$edit}] u2]
+        }
+        db close
+        sqlite3 db [file normalize test.db]/$branch
+        do_execsql_test $name-reopen "
+          SELECT id,value,label FROM \"$readQuoted\" ORDER BY id;
+          PRAGMA integrity_check;
+        " [concat $expected ok]
+        do_execsql_test $name-fire-reopen "
+          INSERT INTO t VALUES(3,3,30);
+          SELECT value,label FROM \"$readQuoted\" WHERE id=3;
+        " [list [expr {30+($txn eq "rollback" && $direction eq "reverse" ? 0 : $edit)}] u2]
+      }
+    }
+  }
+}
+
+finish_test
