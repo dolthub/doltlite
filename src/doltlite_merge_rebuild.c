@@ -1121,11 +1121,9 @@ int normalizeSideToMergedLayout(
           apOwned[tgt] = pOwned;
         }
       }
-      if( m->eType==SQLITE_NULL ){
-        if( rowOnlyTheirs && tgt+1>nEmit ) nEmit = tgt+1;
-      }else if( tgt+1>nEmit ){
-        nEmit = tgt+1;
-      }
+      /* Copied from the source record, so an encoded NULL is present.
+      ** A column this loop skipped stays omitted and keeps its default. */
+      if( tgt+1>nEmit ) nEmit = tgt+1;
     }
     for(k=0; k<nMergedRecord; k++){
       if( aMem[k].eType!=SQLITE_NULL && k+1>nEmit ) nEmit = k+1;
@@ -1161,7 +1159,8 @@ int normalizeSideToMergedLayout(
             apOwned[tgt] = pOwned;
           }
         }
-        if( aMem[tgt].eType!=SQLITE_NULL && tgt+1>nEmit ) nEmit = tgt+1;
+        /* Parsed from the key record, including an encoded NULL. */
+        if( tgt+1>nEmit ) nEmit = tgt+1;
       }
       doltliteRecordInfoClear(&kinfo);
     }
