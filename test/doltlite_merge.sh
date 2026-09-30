@@ -2362,5 +2362,153 @@ run_test "merge_nocase_index_pk_lookup" \
 run_test "merge_nocase_index_pk_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB108"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108"
+# An encoded trailing NULL stays NULL when another column merges. A column
+# that was never stored still reads its declared default.
+DB109=/tmp/test_merge109_$$.db; rm -f "$DB109"
+$DOLTLITE "$DB109" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT DEFAULT 7);
+CREATE INDEX ib ON t(b);
+INSERT INTO t VALUES (1,1,7),(2,3,7);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=2 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_trailing_null_keeps_null_over_default" \
+  "SELECT group_concat(id || ':' || coalesce(a,'N') || ':' || coalesce(b,'N'), ',') FROM (SELECT id, a, b FROM t ORDER BY id);" \
+  "1:2:N,2:3:7" "$DB109"
+run_test "merge_trailing_null_index" \
+  "SELECT id FROM t INDEXED BY ib WHERE b IS NULL;" \
+  "1" "$DB109"
+run_test "merge_trailing_null_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB109"
+run_test "merge_trailing_null_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB109"
+
+DB110=/tmp/test_merge110_$$.db; rm -f "$DB110"
+$DOLTLITE "$DB110" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT DEFAULT 'zz');
+INSERT INTO t VALUES (1,1,'zz');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=2 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_trailing_null_text_default" \
+  "SELECT a || ':' || coalesce(b,'N') FROM t;" \
+  "2:N" "$DB110"
+run_test "merge_trailing_null_text_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB110"
+
+DB111=/tmp/test_merge111_$$.db; rm -f "$DB111"
+$DOLTLITE "$DB111" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT DEFAULT 7) WITHOUT ROWID;
+INSERT INTO t VALUES (1,1,7);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=2 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_trailing_null_without_rowid" \
+  "SELECT id || ':' || a || ':' || coalesce(b,'N') FROM t;" \
+  "1:2:N" "$DB111"
+run_test "merge_trailing_null_without_rowid_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB111"
+
+DB112=/tmp/test_merge112_$$.db; rm -f "$DB112"
+$DOLTLITE "$DB112" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=2 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_add_column_explicit_null" \
+  "SELECT id || ':' || a || ':' || coalesce(b,'N') FROM t;" \
+  "1:2:N" "$DB112"
+run_test "merge_add_column_explicit_null_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB112"
+run_test "merge_add_column_explicit_null_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB112"
+
+DB113=/tmp/test_merge113_$$.db; rm -f "$DB113"
+$DOLTLITE "$DB113" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET a=2 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_add_column_explicit_null_from_other" \
+  "SELECT id || ':' || a || ':' || coalesce(b,'N') FROM t;" \
+  "1:2:N" "$DB113"
+
+DB114=/tmp/test_merge114_$$.db; rm -f "$DB114"
+$DOLTLITE "$DB114" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT DEFAULT 7, c INT);
+INSERT INTO t(id,a,b,c) VALUES (1,1,7,4);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=2 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+UPDATE t SET b=NULL WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_nontrailing_null_stays_null" \
+  "SELECT id || ':' || a || ':' || coalesce(b,'N') || ':' || c FROM t;" \
+  "1:2:N:4" "$DB114"
+
+DB115=/tmp/test_merge115_$$.db; rm -f "$DB115"
+$DOLTLITE "$DB115" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET a=2 WHERE id=1;
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feature');
+SQL
+run_test "merge_add_column_unstored_keeps_default" \
+  "SELECT id || ':' || a || ':' || coalesce(b,'N') FROM t;" \
+  "1:2:7" "$DB115"
+run_test "merge_add_column_unstored_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB115"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115"
 dltest_finish

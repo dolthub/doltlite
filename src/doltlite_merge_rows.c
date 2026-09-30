@@ -415,12 +415,15 @@ static u8 *tryCellMerge(
       }else{
         sqlite3_free(winners); goto fail;
       }
-      if( winners[i].pField->st != 0 ) nEmit = i+1;
+      /* An encoded NULL is stored (serial type 0). Only the synthetic
+      ** absent field is left off, so a missing column still takes its
+      ** default instead of becoming NULL. */
+      if( winners[i].pField!=(RecField*)&kNullField ) nEmit = i+1;
     }
 
-    /* Drop trailing NULLs. If that drops every field, keep the full
-    ** width: a header with no types does not read, and a shorter row
-    ** would surface a column default in place of an explicit NULL. */
+    /* If every winner was absent, keep the full width: a header with no
+    ** types does not read, and a shorter row would surface a column
+    ** default in place of an explicit NULL. */
     if( nEmit==0 && nfMax>0 ) nEmit = nfMax;
     result = buildMergedRecord(winners, nEmit, pnMerged);
     sqlite3_free(winners);
