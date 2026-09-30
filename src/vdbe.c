@@ -6873,6 +6873,12 @@ case OP_Rowid: {                 /* out2, ncycle */
   if( pC->nullRow ){
     pOut->flags = MEM_Null;
     break;
+#ifdef DOLTLITE_PROLLY
+  }else if( pC->deferredMoveto && !pC->isTable ){
+    rc = sqlite3VdbeFinishMoveto(pC);
+    if( rc ) goto abort_due_to_error;
+    v = sqlite3BtreeSqlRowid(pC->uc.pCursor);
+#endif
   }else if( pC->deferredMoveto ){
     v = pC->movetoTarget;
 #ifndef SQLITE_OMIT_VIRTUALTABLE
@@ -7507,6 +7513,22 @@ case OP_IdxRowid: {           /* out2, ncycle */
   /* The IdxRowid and Seek opcodes are combined because of the commonality
   ** of sqlite3VdbeCursorRestore() and sqlite3VdbeIdxRowid(). */
   rc = sqlite3VdbeCursorRestore(pC);
+#ifdef DOLTLITE_PROLLY
+  if( pOp->opcode==OP_DeferredSeek && pOp->p5 ){
+    if( rc!=SQLITE_OK ) goto abort_due_to_error;
+    pTabCur = p->apCsr[pOp->p3];
+    assert( pTabCur!=0 && pTabCur->eCurType==CURTYPE_BTREE );
+    assert( !pTabCur->isTable && !pTabCur->isEphemeral );
+    assert( pOp->p4type==P4_INTARRAY );
+    pTabCur->nullRow = 0;
+    pTabCur->deferredMoveto = 1;
+    pTabCur->cacheStatus = CACHE_STALE;
+    pTabCur->ub.aAltMap = 0;
+    pTabCur->aPkSeekMap = pOp->p4.ai;
+    pTabCur->pAltCursor = pC;
+    break;
+  }
+#endif
 
   /* sqlite3VdbeCursorRestore() may fail if the cursor has been disturbed
   ** since it was last positioned and an error (e.g. OOM or an IO error)

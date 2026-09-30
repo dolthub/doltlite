@@ -3867,12 +3867,72 @@ void sqlite3VdbeDelete(Vdbe *p){
 ** carried out.  Seek the cursor now.  If an error occurs, return
 ** the appropriate error code.
 */
+#ifdef DOLTLITE_PROLLY
+/* Seek a primary-key table cursor to the row its pAltCursor index entry
+** names, from the key columns aPkSeekMap locates in that entry. */
+static int vdbeFinishPkMoveto(VdbeCursor *p){
+  VdbeCursor *pIdx = p->pAltCursor;
+  KeyInfo *pIdxInfo = pIdx->pKeyInfo;
+  const u32 *aMap = p->aPkSeekMap;
+  sqlite3 *db = pIdxInfo->db;
+  UnpackedRecord *pIdxRec;
+  UnpackedRecord *pPk;
+  u64 nIdx = ROUND8P(sizeof(UnpackedRecord)) + sizeof(Mem)*pIdxInfo->nAllField;
+  u32 nPayload;
+  Mem m;
+  int res = 0;
+  int rc;
+  u32 j;
+
+  nPayload = sqlite3BtreePayloadSize(pIdx->uc.pCursor);
+  sqlite3VdbeMemInit(&m, db, 0);
+  rc = sqlite3VdbeMemFromBtreeZeroOffset(pIdx->uc.pCursor, nPayload, &m);
+  if( rc ) return rc;
+  pIdxRec = (UnpackedRecord*)sqlite3DbMallocRaw(db, nIdx
+      + ROUND8P(sizeof(UnpackedRecord)) + sizeof(Mem)*aMap[0]);
+  if( !pIdxRec ){
+    sqlite3VdbeMemRelease(&m);
+    return SQLITE_NOMEM_BKPT;
+  }
+  pIdxRec->aMem = (Mem*)&((char*)pIdxRec)[ROUND8P(sizeof(UnpackedRecord))];
+  pIdxRec->pKeyInfo = pIdxInfo;
+  pIdxRec->nField = pIdxInfo->nAllField;
+  sqlite3VdbeRecordUnpack(m.n, m.z, pIdxRec);
+  pPk = (UnpackedRecord*)&((char*)pIdxRec)[nIdx];
+  pPk->aMem = (Mem*)&((char*)pPk)[ROUND8P(sizeof(UnpackedRecord))];
+  pPk->pKeyInfo = p->pKeyInfo;
+  pPk->nField = (u16)aMap[0];
+  pPk->default_rc = 0;
+  pPk->eqSeen = 0;
+  for(j=0; j<aMap[0]; j++){
+    if( aMap[j+1]>=pIdxInfo->nAllField ){
+      rc = SQLITE_CORRUPT_BKPT;
+      break;
+    }
+    pPk->aMem[j] = pIdxRec->aMem[aMap[j+1]];
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3BtreeProllyIndexMovetoExact(p->uc.pCursor, pPk, &res);
+  }
+  sqlite3DbFreeNN(db, pIdxRec);
+  sqlite3VdbeMemRelease(&m);
+  if( rc ) return rc;
+  if( res!=0 ) return SQLITE_CORRUPT_BKPT;
+  p->deferredMoveto = 0;
+  p->cacheStatus = CACHE_STALE;
+  return SQLITE_OK;
+}
+#endif
+
 int SQLITE_NOINLINE sqlite3VdbeFinishMoveto(VdbeCursor *p){
   int res, rc;
 #ifdef SQLITE_TEST
   extern int sqlite3_search_count;
 #endif
   assert( p->deferredMoveto );
+#ifdef DOLTLITE_PROLLY
+  if( !p->isTable ) return vdbeFinishPkMoveto(p);
+#endif
   assert( p->isTable );
   assert( p->eCurType==CURTYPE_BTREE );
   rc = sqlite3BtreeTableMoveto(p->uc.pCursor, p->movetoTarget, 0, &res);

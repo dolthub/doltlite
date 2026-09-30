@@ -111,6 +111,8 @@ struct VdbeCursor {
 #ifdef DOLTLITE_PROLLY
   u8 idxRowidCacheValid;  /* True if idxRowidCache is valid */
   i64 idxRowidCache;      /* Rowid decoded from the current index entry */
+  u32 *aPkSeekMap;        /* Deferred seek by primary key: PK column slots
+                          ** in the pAltCursor index record */
 #endif
 
   /* When a new VdbeCursor is allocated, only the fields above are zeroed.
