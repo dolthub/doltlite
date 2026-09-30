@@ -11,8 +11,9 @@ struct DoltliteColInfo {
   u8 *aAffinity;
   int nCol;
   int iPkCol;
-  /* aColToRec[i] is the record field index for the i-th declared
-  ** column. Identity for rowid-aliased and keyless tables. For
+  /* aColToRec[i] is the record field index for the i-th named
+  ** column. -1 means the column is not stored (VIRTUAL generated).
+  ** Identity for rowid-aliased and keyless tables. For
   ** WITHOUT ROWID tables (including all doltlite tables with a
   ** non-INT-PK, which build.c auto-converts) the layout is
   ** PK-first: PK columns in PRIMARY KEY declaration order, then
@@ -20,6 +21,14 @@ struct DoltliteColInfo {
   ** SQLite's convertToWithoutRowidTable builds for the covering
   ** PK index. */
   int *aColToRec;
+  /* aGenerated[i] is DOLTLITE_GEN_*. NULL when this ColInfo omitted
+  ** generated columns (merge and patch). Readers allocate it. */
+  u8 *aGenerated;
+  /* CREATE TABLE text and table name, so a VIRTUAL column can be
+  ** computed from the schema that stored the row. */
+  char *zCreateSql;
+  char *zTable;
+  void *pGenEval;
   /* Clustered-key metadata, filled from the same table the names came
   ** from, so a historical schema decodes its own keys. */
   int bHasRowid;
@@ -40,7 +49,21 @@ struct DoltliteSideCols {
   int valid;
 };
 
+/* aGenerated[] values. Merge and patch ColInfos leave aGenerated NULL. */
+#define DOLTLITE_GEN_NONE    0
+#define DOLTLITE_GEN_STORED  1
+#define DOLTLITE_GEN_VIRTUAL 2
+
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci);
+/* Same map, but STORED and VIRTUAL generated columns keep their names.
+** STORED still occupies its record slot. VIRTUAL has aColToRec -1. */
+int doltliteGetReaderColumnNames(sqlite3 *db, const char *zTable,
+                                 DoltliteColInfo *ci);
+
+static inline int doltliteColIsVirtual(const DoltliteColInfo *ci, int i){
+  return ci && ci->aGenerated && i>=0 && i<ci->nCol
+      && ci->aGenerated[i]==DOLTLITE_GEN_VIRTUAL;
+}
 
 static inline int doltliteLoadUserTableColumns(
   sqlite3 *db,
@@ -48,7 +71,7 @@ static inline int doltliteLoadUserTableColumns(
   DoltliteColInfo *pCols,
   char **pzErr
 ){
-  int rc = doltliteGetColumnNames(db, zTable, pCols);
+  int rc = doltliteGetReaderColumnNames(db, zTable, pCols);
   if( rc!=SQLITE_OK ) return rc;
   if( pCols->nCol<=0 ){
     if( pzErr ){
@@ -77,6 +100,14 @@ int doltliteSideColsLoad(sqlite3 *db,
     const char *zTable, const DoltliteColInfo *pDeclared,
     int bSideHasData, DoltliteSideCols *pSide);
 void doltliteResultSideCol(sqlite3_context *ctx,
+    const DoltliteSideCols *pSide,
+    const DoltliteColInfo *pDeclared,
+    const u8 *pRec, int nRec,
+    i64 intKey, int bRootIntKey, int iDeclaredCol, u8 affinity);
+/* History and AS OF. VIRTUAL columns are computed from that side's
+** CREATE TABLE. Diff and workspace stay on doltliteResultSideCol, which
+** leaves VIRTUAL cells NULL. */
+void doltliteResultHistoricalCol(sqlite3_context *ctx,
     const DoltliteSideCols *pSide,
     const DoltliteColInfo *pDeclared,
     const u8 *pRec, int nRec,

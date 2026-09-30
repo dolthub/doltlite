@@ -386,13 +386,15 @@ UPDATE g SET c='c2';
 SELECT dolt_commit('-am','upd','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBG1" > /dev/null 2>&1
 
 run_test "gencol_diff_sides" \
-  "SELECT to_c || '/' || from_c FROM dolt_diff_g WHERE diff_type='modified';" \
-  "c2/c1" "$DBG1"
+  "SELECT to_gs || '/' || from_gs || '/' || ifnull(to_gv,'~') || '/' || ifnull(from_gv,'~') || '/' || to_c || '/' || from_c FROM dolt_diff_g WHERE diff_type='modified';" \
+  "xS/xS/~/~/c2/c1" "$DBG1"
 run_test "gencol_live_matches_diff" "SELECT c FROM g;" "c2" "$DBG1"
 run_test "gencol_history" \
-  "SELECT group_concat(c,',') FROM (SELECT c FROM dolt_history_g ORDER BY commit_date);" \
-  "c1,c2" "$DBG1"
-run_test "gencol_at" "SELECT c FROM dolt_at_g WHERE commit_ref='HEAD~1';" "c1" "$DBG1"
+  "SELECT group_concat(gs || ':' || gv, ',') FROM (SELECT gs, gv FROM dolt_history_g ORDER BY commit_date);" \
+  "xS:xV,xS:xV" "$DBG1"
+run_test "gencol_at" \
+  "SELECT gs || ':' || gv FROM dolt_at_g WHERE commit_ref='HEAD~1';" \
+  "xS:xV" "$DBG1"
 
 # Clustered layout puts keys first, generated included.
 DBG2=/tmp/test_dt_gencol_wr_$$.db; rm -f "$DBG2"
@@ -403,11 +405,11 @@ UPDATE w SET c='c2';
 SELECT dolt_commit('-am','upd','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBG2" > /dev/null 2>&1
 
 run_test "gencol_clustered_diff_sides" \
-  "SELECT to_c || '/' || from_c FROM dolt_diff_w WHERE diff_type='modified';" \
-  "c2/c1" "$DBG2"
+  "SELECT to_gs || '/' || from_gs || '/' || to_c || '/' || from_c FROM dolt_diff_w WHERE diff_type='modified';" \
+  "xS/xS/c2/c1" "$DBG2"
 run_test "gencol_clustered_history" \
-  "SELECT group_concat(c,',') FROM (SELECT c FROM dolt_history_w ORDER BY commit_date);" \
-  "c1,c2" "$DBG2"
+  "SELECT group_concat(gs, ',') FROM (SELECT gs FROM dolt_history_w ORDER BY commit_date);" \
+  "xS,xS" "$DBG2"
 
 DBG3=/tmp/test_dt_gencol_nlpk_$$.db; rm -f "$DBG3"
 echo "CREATE TABLE z(a TEXT, k TEXT PRIMARY KEY, gs TEXT GENERATED ALWAYS AS (a||'S') STORED, c TEXT) WITHOUT ROWID;
@@ -417,10 +419,167 @@ UPDATE z SET c='c2';
 SELECT dolt_commit('-am','upd');" | $DOLTLITE "$DBG3" > /dev/null 2>&1
 
 run_test "gencol_nonleading_pk_diff" \
-  "SELECT to_a || '/' || to_c FROM dolt_diff_z WHERE diff_type='modified';" \
-  "av/c2" "$DBG3"
+  "SELECT to_gs || '/' || from_gs || '/' || to_a || '/' || to_c FROM dolt_diff_z WHERE diff_type='modified';" \
+  "avS/avS/av/c2" "$DBG3"
 
 rm -f "$DBG1" "$DBG2" "$DBG3"
+
+# Readers name STORED generated columns and return the stored value.
+# Patch DML stays executable, so it does not assign s.
+DBGS=/tmp/test_dt_gencol_stored_$$.db; rm -f "$DBGS"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT,
+               s INT GENERATED ALWAYS AS (a+2) STORED, b INT);
+INSERT INTO t(pk,a,b) VALUES (1,10,7);
+SELECT dolt_commit('-Am','base','--date','2020-01-01T00:00:00');
+UPDATE t SET a=11 WHERE pk=1;
+SELECT dolt_commit('-am','upd','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBGS" > /dev/null 2>&1
+
+run_test "gencol_stored_diff" \
+  "SELECT to_pk||','||to_a||','||to_s||','||to_b||','||from_a||','||from_s||','||from_b FROM dolt_diff_t WHERE diff_type='modified';" \
+  "1,11,13,7,10,12,7" "$DBGS"
+run_test "gencol_stored_stat" \
+  "SELECT rows_modified||','||cells_modified||','||old_cell_count||','||new_cell_count FROM dolt_diff_stat('HEAD~1','HEAD','t');" \
+  "1,2,4,4" "$DBGS"
+run_test "gencol_stored_history" \
+  "SELECT group_concat(pk||','||a||','||s||','||b,'|') FROM (SELECT pk,a,s,b FROM dolt_history_t ORDER BY commit_date, pk);" \
+  "1,10,12,7|1,11,13,7" "$DBGS"
+run_test "gencol_stored_history_type" \
+  "SELECT typeof(s) FROM dolt_history_t WHERE a=10;" \
+  "integer" "$DBGS"
+run_test "gencol_stored_at" \
+  "SELECT pk||','||a||','||s||','||b FROM dolt_at_t WHERE commit_ref='HEAD~1';" \
+  "1,10,12,7" "$DBGS"
+run_test "gencol_stored_patch" \
+  "SELECT statement FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type='data';" \
+  "UPDATE \"t\" SET \"a\"=11 WHERE \"pk\"=1;" "$DBGS"
+run_test "gencol_stored_violations_column" \
+  "SELECT count(*) FROM dolt_constraint_violations_t WHERE s IS NOT NULL;" \
+  "0" "$DBGS"
+run_test_lastline "gencol_stored_patch_applies" \
+  "SELECT dolt_reset('--hard','HEAD~1');
+UPDATE \"t\" SET \"a\"=11 WHERE \"pk\"=1;
+SELECT pk||','||a||','||s||','||b FROM t;" \
+  "1,11,13,7" "$DBGS"
+
+DBGW=/tmp/test_dt_gencol_ws_stored_$$.db; rm -f "$DBGW"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT,
+               s INT GENERATED ALWAYS AS (a+2) STORED, b INT);
+INSERT INTO t(pk,a,b) VALUES (1,10,7);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET a=11 WHERE pk=1;" | $DOLTLITE "$DBGW" > /dev/null 2>&1
+
+run_test "gencol_stored_workspace" \
+  "SELECT to_a||','||to_s||','||to_b||','||from_a||','||from_s||','||from_b FROM dolt_workspace_t WHERE diff_type='modified';" \
+  "11,13,7,10,12,7" "$DBGW"
+
+# VIRTUAL columns are named. Diff and workspace leave the cells null.
+# History and AS OF compute the expression from that commit's schema.
+DBGV=/tmp/test_dt_gencol_virt_$$.db; rm -f "$DBGV"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT,
+               s INT GENERATED ALWAYS AS (a+2) VIRTUAL, b INT);
+INSERT INTO t(pk,a,b) VALUES (1,10,7);
+SELECT dolt_commit('-Am','base','--date','2020-01-01T00:00:00');
+UPDATE t SET a=11 WHERE pk=1;
+SELECT dolt_commit('-am','upd','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBGV" > /dev/null 2>&1
+
+run_test "gencol_virtual_diff_blank" \
+  "SELECT to_a||','||ifnull(to_s,'~')||','||from_a||','||ifnull(from_s,'~') FROM dolt_diff_t WHERE diff_type='modified';" \
+  "11,~,10,~" "$DBGV"
+run_test "gencol_virtual_stat" \
+  "SELECT rows_modified||','||cells_modified||','||old_cell_count||','||new_cell_count FROM dolt_diff_stat('HEAD~1','HEAD','t');" \
+  "1,1,3,3" "$DBGV"
+run_test "gencol_virtual_history" \
+  "SELECT group_concat(pk||','||a||','||s||','||b,'|') FROM (SELECT pk,a,s,b FROM dolt_history_t ORDER BY commit_date, pk);" \
+  "1,10,12,7|1,11,13,7" "$DBGV"
+run_test "gencol_virtual_at" \
+  "SELECT a||','||s FROM dolt_at_t WHERE commit_ref='HEAD~1';" \
+  "10,12" "$DBGV"
+
+DBGWV=/tmp/test_dt_gencol_ws_virt_$$.db; rm -f "$DBGWV"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT,
+               s INT GENERATED ALWAYS AS (a+2) VIRTUAL, b INT);
+INSERT INTO t(pk,a,b) VALUES (1,10,7);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET a=11 WHERE pk=1;" | $DOLTLITE "$DBGWV" > /dev/null 2>&1
+
+run_test "gencol_virtual_workspace" \
+  "SELECT to_a||','||ifnull(to_s,'~')||','||from_a||','||ifnull(from_s,'~') FROM dolt_workspace_t WHERE diff_type='modified';" \
+  "11,~,10,~" "$DBGWV"
+
+# Rebuilding a STORED expression changes the stored value, so the diff is data.
+DBGE=/tmp/test_dt_gencol_expr_$$.db; rm -f "$DBGE"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT, b INT,
+               s INT GENERATED ALWAYS AS (a+b) STORED);
+INSERT INTO t(pk,a,b) VALUES (1,2,3),(2,4,5);
+SELECT dolt_commit('-Am','base','--date','2020-01-01T00:00:00');
+CREATE TABLE t2(pk INT PRIMARY KEY, a INT, b INT,
+                s INT GENERATED ALWAYS AS (a*b) STORED);
+INSERT INTO t2(pk,a,b) SELECT pk,a,b FROM t;
+DROP TABLE t;
+ALTER TABLE t2 RENAME TO t;
+SELECT dolt_commit('-Am','expr','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBGE" > /dev/null 2>&1
+
+run_test "gencol_expr_summary" \
+  "SELECT diff_type||','||data_change||','||schema_change FROM dolt_diff_summary('HEAD~1','HEAD') WHERE to_table_name='t';" \
+  "modified,1,1" "$DBGE"
+run_test "gencol_expr_history" \
+  "SELECT group_concat(s,',') FROM (SELECT s FROM dolt_history_t ORDER BY commit_date, pk);" \
+  "5,9,6,20" "$DBGE"
+run_test "gencol_expr_diff" \
+  "SELECT group_concat(to_s||'/'||from_s,'|') FROM (SELECT to_pk, to_s, from_s FROM dolt_diff_t WHERE diff_type='modified' ORDER BY to_pk);" \
+  "6/5|20/9" "$DBGE"
+run_test "gencol_expr_patch_omits_generated" \
+  "SELECT count(*) FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type='data' AND statement LIKE '%\"s\"%';" \
+  "0" "$DBGE"
+
+# A VIRTUAL expression rewrite is schema-only. History still shows each commit's value.
+DBGVE=/tmp/test_dt_gencol_vexpr_$$.db; rm -f "$DBGVE"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT,
+               s INT GENERATED ALWAYS AS (a+1) VIRTUAL);
+INSERT INTO t(pk,a) VALUES (1,4);
+SELECT dolt_commit('-Am','base','--date','2020-01-01T00:00:00');
+CREATE TABLE t2(pk INT PRIMARY KEY, a INT,
+                s INT GENERATED ALWAYS AS (a*10) VIRTUAL);
+INSERT INTO t2(pk,a) SELECT pk,a FROM t;
+DROP TABLE t;
+ALTER TABLE t2 RENAME TO t;
+SELECT dolt_commit('-Am','expr','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBGVE" > /dev/null 2>&1
+
+run_test "gencol_vexpr_summary" \
+  "SELECT data_change||','||schema_change FROM dolt_diff_summary('HEAD~1','HEAD') WHERE to_table_name='t';" \
+  "0,1" "$DBGVE"
+run_test "gencol_vexpr_history" \
+  "SELECT group_concat(s,',') FROM (SELECT s FROM dolt_history_t ORDER BY commit_date);" \
+  "5,40" "$DBGVE"
+run_test "gencol_vexpr_at" \
+  "SELECT s FROM dolt_at_t WHERE commit_ref='HEAD~1';" \
+  "5" "$DBGVE"
+run_test "gencol_vexpr_diff_blank" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_s IS NOT NULL OR from_s IS NOT NULL;" \
+  "0" "$DBGVE"
+
+# A later virtual column may read an earlier stored or virtual column.
+DBGC=/tmp/test_dt_gencol_chain_$$.db; rm -f "$DBGC"
+echo "CREATE TABLE t(pk INTEGER PRIMARY KEY, a INT,
+               gs INT GENERATED ALWAYS AS (a+2) STORED,
+               v INT GENERATED ALWAYS AS (gs+1) VIRTUAL,
+               w INT GENERATED ALWAYS AS (v+1) VIRTUAL);
+INSERT INTO t(pk,a) VALUES (1,10);
+SELECT dolt_commit('-Am','base','--date','2020-01-01T00:00:00');
+UPDATE t SET a=11 WHERE pk=1;
+SELECT dolt_commit('-am','upd','--date','2020-01-02T00:00:00');" | $DOLTLITE "$DBGC" > /dev/null 2>&1
+
+run_test "gencol_chain_history" \
+  "SELECT group_concat(a||','||gs||','||v||','||w,'|') FROM (SELECT a,gs,v,w FROM dolt_history_t ORDER BY commit_date);" \
+  "10,12,13,14|11,13,14,15" "$DBGC"
+run_test "gencol_chain_diff" \
+  "SELECT to_gs||'/'||from_gs||'/'||ifnull(to_v,'~')||'/'||ifnull(from_v,'~')||'/'||ifnull(to_w,'~')||'/'||ifnull(from_w,'~') FROM dolt_diff_t WHERE diff_type='modified';" \
+  "13/12/~/~/~/~" "$DBGC"
+run_test "gencol_chain_at" \
+  "SELECT gs||','||v||','||w FROM dolt_at_t WHERE commit_ref='HEAD~1';" \
+  "12,13,14" "$DBGC"
+
+rm -f "$DBGS" "$DBGW" "$DBGV" "$DBGWV" "$DBGE" "$DBGVE" "$DBGC"
 
 # Revision specs in from_commit/to_commit constraints resolve like the
 # function form; both-ends-named is the arbitrary-pair diff.

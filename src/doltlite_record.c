@@ -194,28 +194,90 @@ int doltliteFieldValuesEqual(
   return memcmp(pA+aOff, pB+bOff, aLen)==0;
 }
 
+typedef struct GenEval GenEval;
+struct GenEval {
+  sqlite3 *db;
+  sqlite3_stmt *pDel;
+  sqlite3_stmt *pIns;
+  sqlite3_stmt **apSel;
+  int nSel;
+  int *aBind;
+  int nBind;
+};
+
+static void genEvalFree(void *p){
+  GenEval *ev = (GenEval*)p;
+  int i;
+  if( !ev ) return;
+  if( ev->apSel ){
+    for(i=0; i<ev->nSel; i++) sqlite3_finalize(ev->apSel[i]);
+    sqlite3_free(ev->apSel);
+  }
+  sqlite3_finalize(ev->pDel);
+  sqlite3_finalize(ev->pIns);
+  sqlite3_free(ev->aBind);
+  if( ev->db ) sqlite3_close(ev->db);
+  sqlite3_free(ev);
+}
+
 void doltliteFreeColInfo(DoltliteColInfo *ci){
   int i;
   for(i=0; i<ci->nCol; i++){
     sqlite3_free(ci->azName[i]);
     if( ci->azDecl ) sqlite3_free(ci->azDecl[i]);
   }
+  genEvalFree(ci->pGenEval);
   sqlite3_free(ci->azName);
   sqlite3_free(ci->azDecl);
   sqlite3_free(ci->aAffinity);
   sqlite3_free(ci->aColToRec);
+  sqlite3_free(ci->aGenerated);
   sqlite3_free(ci->aPkSortFlags);
+  sqlite3_free(ci->zCreateSql);
+  sqlite3_free(ci->zTable);
   ci->azName = 0;
   ci->azDecl = 0;
   ci->aAffinity = 0;
   ci->aColToRec = 0;
+  ci->aGenerated = 0;
   ci->aPkSortFlags = 0;
+  ci->zCreateSql = 0;
+  ci->zTable = 0;
+  ci->pGenEval = 0;
   ci->nCol = 0;
   ci->nPk = 0;
   ci->bHasRowid = 0;
 }
 
-int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
+static int columnNamesLoadCreateSql(sqlite3 *db, DoltliteColInfo *ci){
+  sqlite3_stmt *pStmt = 0;
+  char *zSql;
+  int rc;
+  const char *zCreate;
+
+  zSql = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master WHERE type='table' AND name=%Q",
+      ci->zTable);
+  if( !zSql ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ) return rc;
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    zCreate = (const char*)sqlite3_column_text(pStmt, 0);
+    if( zCreate && zCreate[0] ){
+      ci->zCreateSql = sqlite3_mprintf("%s", zCreate);
+      if( !ci->zCreateSql ){
+        sqlite3_finalize(pStmt);
+        return SQLITE_NOMEM;
+      }
+    }
+  }
+  return sqlite3_finalize(pStmt);
+}
+
+static int columnNamesLoad(
+  sqlite3 *db, const char *zTable, DoltliteColInfo *ci, int includeGen
+){
   char *zSql;
   sqlite3_stmt *pStmt = 0;
   int rc, nCol;
@@ -225,6 +287,7 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   int *aRecPos = 0;
   int *aStoredPk = 0;
   int *aStoredDecl = 0;
+  u8 *aGen = 0;
   int nStored = 0;
   int nRecPos = 0;
   int i, iNonPk;
@@ -264,15 +327,18 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     aRecPos = sqlite3_malloc(nCol * (int)sizeof(int));
     aStoredPk = sqlite3_malloc(nCol * (int)sizeof(int));
     aStoredDecl = sqlite3_malloc(nCol * (int)sizeof(int));
-    if( !aPk || !aRecPos || !aStoredPk || !aStoredDecl ){
+    if( includeGen ) aGen = sqlite3_malloc(nCol);
+    if( !aPk || !aRecPos || !aStoredPk || !aStoredDecl || (includeGen && !aGen) ){
       sqlite3_free(aPk);
       sqlite3_free(aRecPos);
       sqlite3_free(aStoredPk);
       sqlite3_free(aStoredDecl);
+      sqlite3_free(aGen);
       doltliteFreeColInfo(ci);
       sqlite3_finalize(pStmt);
       return SQLITE_NOMEM;
     }
+    if( aGen ) memset(aGen, 0, (size_t)nCol);
   }
 
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
@@ -281,11 +347,11 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
     int hidden = sqlite3_column_int(pStmt, 6);
 
-    if( hidden==2 ){
-      /* Virtual: absent from the record. */
+    if( hidden==2 && !includeGen ){
+      /* Virtual: absent from the record and from this name list. */
       continue;
     }
-    if( hidden==3 ){
+    if( hidden==3 && !includeGen ){
       /* Stored: occupies a field every later column sits behind. */
       aStoredPk[nStored] = pk;
       aStoredDecl[nStored] = -1;
@@ -294,22 +360,32 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
       continue;
     }
 
-    if( pk>0 ) nPkCols++;
-    if( pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0 ){
-      iCandidateAlias = ci->nCol;
+    if( hidden!=2 ){
+      if( pk>0 ) nPkCols++;
+      if( pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0 ){
+        iCandidateAlias = ci->nCol;
+      }
+      aPk[ci->nCol] = pk;
+      aRecPos[ci->nCol] = nRecPos++;
+      aStoredPk[nStored] = pk;
+      aStoredDecl[nStored] = ci->nCol;
+      nStored++;
+      if( aGen ){
+        aGen[ci->nCol] = hidden==3 ? DOLTLITE_GEN_STORED : DOLTLITE_GEN_NONE;
+      }
+    }else{
+      /* Virtual: named, but no record slot. */
+      aPk[ci->nCol] = 0;
+      aRecPos[ci->nCol] = -1;
+      if( aGen ) aGen[ci->nCol] = DOLTLITE_GEN_VIRTUAL;
     }
-
-    aPk[ci->nCol] = pk;
-    aRecPos[ci->nCol] = nRecPos++;
-    aStoredPk[nStored] = pk;
-    aStoredDecl[nStored] = ci->nCol;
-    nStored++;
     ci->azName[ci->nCol] = sqlite3_mprintf("%s", zName ? zName : "");
     if( !ci->azName[ci->nCol] ){
       sqlite3_free(aPk);
       sqlite3_free(aRecPos);
       sqlite3_free(aStoredPk);
       sqlite3_free(aStoredDecl);
+      sqlite3_free(aGen);
       doltliteFreeColInfo(ci);
       sqlite3_finalize(pStmt);
       return SQLITE_NOMEM;
@@ -321,6 +397,7 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     sqlite3_free(aRecPos);
     sqlite3_free(aStoredPk);
     sqlite3_free(aStoredDecl);
+    sqlite3_free(aGen);
     doltliteFreeColInfo(ci);
     sqlite3_finalize(pStmt);
     return rc;
@@ -342,6 +419,7 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
           ci->aPkSortFlags = sqlite3_malloc(pPk->nKeyCol);
           if( !ci->aPkSortFlags ){
             sqlite3_free(aPk);
+            sqlite3_free(aGen);
             doltliteFreeColInfo(ci);
             sqlite3_finalize(pStmt);
             return SQLITE_NOMEM;
@@ -361,13 +439,18 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     ci->aColToRec = sqlite3_malloc(ci->nCol * (int)sizeof(int));
     if( !ci->aColToRec ){
       sqlite3_free(aPk);
+      sqlite3_free(aGen);
       doltliteFreeColInfo(ci);
       sqlite3_finalize(pStmt);
       return SQLITE_NOMEM;
     }
+    for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = -1;
     if( ci->iPkCol>=0 || nPkCols==0 ){
-      /* Declared order over record slots: a stored generated column consumes one. */
-      for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = aRecPos[i];
+      /* Declared order over record slots: a stored generated column consumes one.
+      ** A virtual column keeps -1. */
+      for(i=0; i<ci->nCol; i++){
+        if( aRecPos[i]>=0 ) ci->aColToRec[i] = aRecPos[i];
+      }
     }else{
       /* Clustered: key columns in key order, then other stored columns in
       ** declared order (generated included). */
@@ -386,12 +469,47 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     }
   }
 
+  if( includeGen && ci->nCol>0 ){
+    ci->aGenerated = sqlite3_malloc(ci->nCol);
+    if( !ci->aGenerated ){
+      sqlite3_free(aPk);
+      sqlite3_free(aRecPos);
+      sqlite3_free(aStoredPk);
+      sqlite3_free(aStoredDecl);
+      sqlite3_free(aGen);
+      doltliteFreeColInfo(ci);
+      sqlite3_finalize(pStmt);
+      return SQLITE_NOMEM;
+    }
+    memcpy(ci->aGenerated, aGen, (size_t)ci->nCol);
+  }
+
   sqlite3_free(aPk);
   sqlite3_free(aRecPos);
   sqlite3_free(aStoredPk);
   sqlite3_free(aStoredDecl);
+  sqlite3_free(aGen);
   sqlite3_finalize(pStmt);
-  return SQLITE_OK;
+
+  if( !includeGen ) return SQLITE_OK;
+  ci->zTable = sqlite3_mprintf("%s", zTable ? zTable : "");
+  if( !ci->zTable ){
+    doltliteFreeColInfo(ci);
+    return SQLITE_NOMEM;
+  }
+  rc = columnNamesLoadCreateSql(db, ci);
+  if( rc!=SQLITE_OK ) doltliteFreeColInfo(ci);
+  return rc;
+}
+
+int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
+  return columnNamesLoad(db, zTable, ci, 0);
+}
+
+int doltliteGetReaderColumnNames(
+  sqlite3 *db, const char *zTable, DoltliteColInfo *ci
+){
+  return columnNamesLoad(db, zTable, ci, 1);
 }
 
 int doltliteParseRecordStrict(
@@ -545,6 +663,200 @@ void doltliteResultUserCol(
   const u8 *pRec, int nRec, i64 intKey, int bRootIntKey, int iDeclaredCol
 ){
   resultUserCol(ctx,ci,pRec,nRec,intKey,bRootIntKey,iDeclaredCol,SQLITE_AFF_BLOB);
+}
+
+static int genBindValue(sqlite3_stmt *pStmt, int iParam,
+                        const DoltliteSerialValue *v){
+  if( v->eType==SQLITE_NULL ) return sqlite3_bind_null(pStmt, iParam);
+  if( v->eType==SQLITE_INTEGER ) return sqlite3_bind_int64(pStmt, iParam, v->i);
+  if( v->eType==SQLITE_FLOAT ) return sqlite3_bind_double(pStmt, iParam, v->r);
+  if( v->eType==SQLITE_TEXT ){
+    return sqlite3_bind_text(pStmt, iParam, (const char*)v->p, v->n,
+                             SQLITE_TRANSIENT);
+  }
+  return sqlite3_bind_blob(pStmt, iParam, v->p, v->n, SQLITE_TRANSIENT);
+}
+
+/* Rebuild one row in a scratch database whose CREATE TABLE is this
+** commit's, then read the VIRTUAL column. STORED generated columns are
+** recomputed by that CREATE TABLE; only ordinary columns are bound. */
+static int genEvalCreate(DoltliteColInfo *ci){
+  GenEval *ev;
+  sqlite3_str *pSql;
+  char *zSql;
+  int i, rc;
+
+  ev = sqlite3_malloc(sizeof(*ev));
+  if( !ev ) return SQLITE_NOMEM;
+  memset(ev, 0, sizeof(*ev));
+  ev->nSel = ci->nCol;
+  ev->apSel = sqlite3_malloc(ci->nCol * (int)sizeof(sqlite3_stmt*));
+  ev->aBind = sqlite3_malloc(ci->nCol * (int)sizeof(int));
+  if( !ev->apSel || !ev->aBind ){
+    genEvalFree(ev);
+    return SQLITE_NOMEM;
+  }
+  memset(ev->apSel, 0, (size_t)ci->nCol * sizeof(sqlite3_stmt*));
+  rc = sqlite3_open(":memory:", &ev->db);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_exec(ev->db,
+        "PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON;",
+        0, 0, 0);
+  }
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(ev->db, ci->zCreateSql, 0, 0, 0);
+  if( rc==SQLITE_OK ){
+    zSql = sqlite3_mprintf("DELETE FROM \"%w\"", ci->zTable);
+    if( !zSql ) rc = SQLITE_NOMEM;
+    else{
+      rc = sqlite3_prepare_v2(ev->db, zSql, -1, &ev->pDel, 0);
+      sqlite3_free(zSql);
+    }
+  }
+  pSql = sqlite3_str_new(0);
+  sqlite3_str_appendf(pSql, "INSERT INTO \"%w\"(", ci->zTable);
+  for(i=0; i<ci->nCol; i++){
+    if( ci->aGenerated[i]!=DOLTLITE_GEN_NONE ) continue;
+    if( ev->nBind ) sqlite3_str_appendall(pSql, ",");
+    sqlite3_str_appendf(pSql, "\"%w\"", ci->azName[i] ? ci->azName[i] : "");
+    ev->aBind[ev->nBind++] = i;
+  }
+  sqlite3_str_appendall(pSql, ") VALUES (");
+  for(i=0; i<ev->nBind; i++){
+    if( i ) sqlite3_str_appendchar(pSql, 1, ',');
+    sqlite3_str_appendchar(pSql, 1, '?');
+  }
+  sqlite3_str_appendchar(pSql, 1, ')');
+  zSql = sqlite3_str_finish(pSql);
+  if( !zSql ) rc = SQLITE_NOMEM;
+  if( rc==SQLITE_OK && ev->nBind==0 ){
+    sqlite3_free(zSql);
+    genEvalFree(ev);
+    return SQLITE_ERROR;
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_prepare_v2(ev->db, zSql, -1, &ev->pIns, 0);
+  }
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ){
+    genEvalFree(ev);
+    return rc;
+  }
+  ci->pGenEval = ev;
+  return SQLITE_OK;
+}
+
+static void resultVirtualCol(
+  sqlite3_context *ctx,
+  DoltliteColInfo *ci,
+  const u8 *pRec, int nRec,
+  i64 intKey, int bRootIntKey, int iCol
+){
+  GenEval *ev;
+  DoltliteRecordInfo ri;
+  sqlite3_stmt *pSel;
+  char *zSql;
+  int i, rc;
+
+  if( !ci || !ci->zCreateSql || !ci->zTable || !ci->aGenerated
+   || iCol<0 || iCol>=ci->nCol ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+  if( !ci->pGenEval ){
+    rc = genEvalCreate(ci);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+  }
+  ev = (GenEval*)ci->pGenEval;
+  doltliteRecordInfoInit(&ri);
+  if( pRec && nRec>0 ) doltliteParseRecord(pRec, nRec, &ri);
+  rc = sqlite3_reset(ev->pDel);
+  if( rc==SQLITE_OK ) rc = sqlite3_step(ev->pDel);
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK ) rc = sqlite3_reset(ev->pIns);
+  if( rc==SQLITE_OK ) rc = sqlite3_clear_bindings(ev->pIns);
+  for(i=0; rc==SQLITE_OK && i<ev->nBind; i++){
+    int iColBind = ev->aBind[i];
+    int iField;
+    DoltliteSerialValue v;
+    if( iColBind==ci->iPkCol && ci->iPkCol>=0 && bRootIntKey ){
+      rc = sqlite3_bind_int64(ev->pIns, i+1, intKey);
+      continue;
+    }
+    iField = ci->aColToRec ? ci->aColToRec[iColBind] : iColBind;
+    if( iField<0 || iField>=ri.nField ){
+      rc = sqlite3_bind_null(ev->pIns, i+1);
+      continue;
+    }
+    rc = doltliteSerialValueFromField(pRec, nRec, &ri, iField, &v);
+    if( rc==SQLITE_OK ) rc = genBindValue(ev->pIns, i+1, &v);
+  }
+  if( rc==SQLITE_OK ) rc = sqlite3_step(ev->pIns);
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  doltliteRecordInfoClear(&ri);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+  pSel = ev->apSel[iCol];
+  if( !pSel ){
+    zSql = sqlite3_mprintf("SELECT \"%w\" FROM \"%w\"",
+                           ci->azName[iCol] ? ci->azName[iCol] : "",
+                           ci->zTable);
+    if( !zSql ){
+      sqlite3_result_error_nomem(ctx);
+      return;
+    }
+    rc = sqlite3_prepare_v2(ev->db, zSql, -1, &ev->apSel[iCol], 0);
+    sqlite3_free(zSql);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    pSel = ev->apSel[iCol];
+  }
+  rc = sqlite3_reset(pSel);
+  if( rc==SQLITE_OK ) rc = sqlite3_step(pSel);
+  if( rc==SQLITE_ROW ){
+    sqlite3_result_value(ctx, sqlite3_column_value(pSel, 0));
+    return;
+  }
+  sqlite3_result_error_code(ctx, rc==SQLITE_DONE ? SQLITE_ERROR : rc);
+}
+
+void doltliteResultHistoricalCol(
+  sqlite3_context *ctx,
+  const DoltliteSideCols *pSide,
+  const DoltliteColInfo *pDeclared,
+  const u8 *pRec, int nRec,
+  i64 intKey, int bRootIntKey, int iDeclaredCol, u8 affinity
+){
+  const DoltliteColInfo *ci;
+  int iCol;
+
+  if( pSide && pSide->valid && pDeclared ){
+    int iSide = -1;
+    if( iDeclaredCol>=0 && iDeclaredCol<pDeclared->nCol && pSide->aDeclToSide ){
+      iSide = pSide->aDeclToSide[iDeclaredCol];
+    }
+    if( iSide<0 ){
+      sqlite3_result_null(ctx);
+      return;
+    }
+    ci = &pSide->ci;
+    iCol = iSide;
+  }else{
+    ci = pDeclared;
+    iCol = iDeclaredCol;
+  }
+  if( doltliteColIsVirtual(ci, iCol) ){
+    resultVirtualCol(ctx, (DoltliteColInfo*)ci, pRec, nRec,
+                     intKey, bRootIntKey, iCol);
+    return;
+  }
+  resultUserCol(ctx, ci, pRec, nRec, intKey, bRootIntKey, iCol, affinity);
 }
 
 /* Reconstruct a clustered row whose stored value is empty (PK covers every

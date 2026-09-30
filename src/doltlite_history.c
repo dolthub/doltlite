@@ -440,7 +440,7 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   nCols=v->cols.nCol;
 
   if(nCols>0 && col<nCols){
-    doltliteResultSideCol(ctx, &c->side, &v->cols,
+    doltliteResultHistoricalCol(ctx, &c->side, &v->cols,
                           c->common.pVal, c->common.nVal,
                           c->common.intKey, c->common.rootIntKey, col,
                           doltliteHistoricalColAffinity(&c->side, &v->cols, col));
