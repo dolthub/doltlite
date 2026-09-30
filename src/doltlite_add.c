@@ -991,12 +991,17 @@ int doltliteStageNamedTables(
       continue;
     }
 
+    /* Working numbers can disagree with the live schema: a rebase pause
+    ** re-adopts a baseline whose catalog includes dolt_rebase, and table
+    ** numbers follow sorted names. The live number is then a neighbour.
+    ** Pair the flushed working entry by name. */
     for(j=0; j<nWorking; j++){
-      if( aWorking[j].iTable==iTable ){
+      if( aWorking[j].zName && strcmp(aWorking[j].zName, zTable)==0 ){
         int k;
         int updated = 0;
         int iRetired = -1;
         struct TableEntry *pRenameMate = 0;
+        iTable = aWorking[j].iTable;
         updateMaster = 1;
         /* Rename pairs by content identity, not number: numbers are
         ** canonical-by-sorted-name (drop+create reuses; sort-shift rename changes). */
