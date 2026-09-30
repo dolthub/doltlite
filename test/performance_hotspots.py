@@ -48,7 +48,8 @@ BUCKET_CACHE_KIB = 65536
 BUCKET_PROBES = 8192
 PK_REWRITE_ISSUE = 3419
 PENDING_EDITS_ISSUE = 3418
-RETAINED_SECTIONS = (("narrow_rows", "Narrow Rows"),
+RETAINED_SECTIONS = (("pending_edits", "Pending Edit Map"),
+                     ("narrow_rows", "Narrow Rows"),
                      ("zero_row_updates", "Zero Row Updates"),
                      ("small_cache", "Small Cache"),
                      ("index_row_fetches", "Index Row Fetches"),
@@ -63,7 +64,6 @@ SECTIONS = (("queries", "Large Table Scans"),
             ("wide_tradeoffs", "Wide Row Trade-offs"),
             ("uncached_reads", "Uncached Reads"),
             ("pk_rewrites", "Primary Key Index Rewrites"),
-            ("pending_edits", "Pending Edit Map"),
             *RETAINED_SECTIONS,
             ("retained", "Retained Findings"))
 
@@ -637,8 +637,9 @@ def write_results(samples, result_path, sample_path):
         elif section in BUCKET_NOTES:
             issue, note = BUCKET_NOTES[section]
             print(f"\n{note} ([#{issue}](https://github.com/dolthub/doltlite/issues/{issue})). "
-                  f"{BUCKET_ROWS:,} rows with {BUCKET_PAYLOAD} B payloads; each timed statement "
-                  "runs in a transaction that rolls back. Stock is SQLite.")
+                  f"Fixed workloads use {BUCKET_ROWS:,} rows with {BUCKET_PAYLOAD} B payloads; "
+                  "retained workloads use the parameters in their linked issues. Each timed "
+                  "statement runs in a transaction that rolls back. Stock is SQLite.")
         elif section == 'wide_tradeoffs':
             print("\nWide values are read from disk whenever they are fetched until they move "
                   "out of band: [#3325](https://github.com/dolthub/doltlite/issues/3325). "
