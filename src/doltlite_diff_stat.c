@@ -69,8 +69,9 @@ static int dsLoadColInfo(sqlite3 *db,
     rc = sqlite3_exec(tmp, zAliased ? zAliased : entry.zSql, 0, 0, 0);
   }
   if( rc==SQLITE_OK ){
-    rc = doltliteGetColumnNames(tmp, reserved ? DS_RESERVED_ALIAS : zTableName,
-                                pOut);
+    rc = doltliteGetReaderColumnNames(tmp,
+                                     reserved ? DS_RESERVED_ALIAS : zTableName,
+                                     pOut);
   }
   if( tmp ) sqlite3_close(tmp);
   sqlite3_free(zAliased);
@@ -135,6 +136,25 @@ struct DsColMap {
   int nFrom;
 };
 
+/* Stored columns, including STORED generated. VIRTUAL is not a cell. */
+static int dsValueCols(const DoltliteColInfo *ci){
+  int i, n;
+  if( !ci ) return 0;
+  if( !ci->aGenerated ) return ci->nCol;
+  n = 0;
+  for(i=0; i<ci->nCol; i++){
+    if( ci->aGenerated[i]!=DOLTLITE_GEN_VIRTUAL ) n++;
+  }
+  return n;
+}
+
+/* -2: VIRTUAL (present, unstored). -1: not on this side. */
+static int dsMapRec(const DoltliteColInfo *ci, int i){
+  if( doltliteColIsVirtual(ci, i) ) return -2;
+  if( ci->aColToRec ) return ci->aColToRec[i];
+  return i;
+}
+
 static void dsFreeColMap(DsColMap *pMap){
   sqlite3_free(pMap->aToRecTo);
   sqlite3_free(pMap->aToRecFrom);
@@ -169,11 +189,11 @@ static int dsBuildColMap(
     }
     memset(pMap->aFromMatched, 0, pFrom->nCol * (int)sizeof(u8));
     for(j=0; j<pFrom->nCol; j++){
-      pMap->aFromRec[j] = pFrom->aColToRec ? pFrom->aColToRec[j] : j;
+      pMap->aFromRec[j] = dsMapRec(pFrom, j);
     }
   }
   for(i=0; i<pTo->nCol; i++){
-    pMap->aToRecTo[i] = pTo->aColToRec ? pTo->aColToRec[i] : i;
+    pMap->aToRecTo[i] = dsMapRec(pTo, i);
     pMap->aToRecFrom[i] = -1;
     for(j=0; j<pFrom->nCol; j++){
       if( strcmp(pFrom->azName[j], pTo->azName[i])==0 ){
@@ -238,12 +258,16 @@ static void dsCountChangedCells(
     int toRec = pColMap->aToRecTo ? pColMap->aToRecTo[i] : i;
     int fromRec = pColMap->aToRecFrom ? pColMap->aToRecFrom[i] : -1;
     int fromType, fromOffset, toType, toOffset;
+    /* VIRTUAL on either side is not a stored cell. -2 marks that. */
+    if( toRec==-2 && fromRec==-2 ) continue;
+    if( toRec==-2 ) continue;
     if( fromRec<0 ){
       /* Trailing NULLs are omitted from the record even when the to-column exists. */
       nModified++;
-      if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) nDiffer++;
+      if( toRec>=0 && toRec<toRi.nField && toRi.aType[toRec]!=0 ) nDiffer++;
       continue;
     }
+    if( toRec<0 ) continue;
     fromType = fromRec<fromRi.nField ? fromRi.aType[fromRec] : 0;
     fromOffset = fromRec<fromRi.nField ? fromRi.aOffset[fromRec] : 0;
     toType = toRec<toRi.nField ? toRi.aType[toRec] : 0;
@@ -260,7 +284,7 @@ static void dsCountChangedCells(
     int fromRec;
     if( pColMap->aFromMatched && pColMap->aFromMatched[i] ) continue;
     fromRec = pColMap->aFromRec ? pColMap->aFromRec[i] : i;
-    if( fromRec>=fromRi.nField ) continue;
+    if( fromRec<0 || fromRec>=fromRi.nField ) continue;
     nDiffer++;
   }
 
@@ -564,7 +588,7 @@ static int dsComputeTableStats(
     if( rc!=SQLITE_OK ) return rc;
     rc = dsLoadColInfo(db, pFromCatHash, zFromName, &fromCi);
     if( rc!=SQLITE_OK ) goto done;
-    nFromCols = fromCi.nCol;
+    nFromCols = dsValueCols(&fromCi);
   }
   if( hasTo ){
     rc = dsLoadCreateSql(db, pToCatHash, zToName, &zToSql);
@@ -573,7 +597,7 @@ static int dsComputeTableStats(
     if( rc!=SQLITE_OK ){
       goto done;
     }
-    nToCols = toCi.nCol;
+    nToCols = dsValueCols(&toCi);
   }
 
   schemaChanged =

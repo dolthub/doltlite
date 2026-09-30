@@ -410,6 +410,8 @@ static int patchSchemaLoad(const SchemaEntry *pEntry, PatchSchema *pOut){
   if( rc!=SQLITE_OK ) goto done;
   rc = sqlite3_exec(pOut->db, pEntry->zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) goto done;
+  /* Omit generated columns. SQLite rejects INSERT/UPDATE of a GENERATED
+  ** ALWAYS column, and table_info (used for aPk) skips them too. */
   rc = doltliteGetColumnNames(pOut->db, pEntry->zName, &pOut->col);
   if( rc!=SQLITE_OK ) goto done;
   pOut->aPk = sqlite3_malloc64((sqlite3_uint64)pOut->col.nCol*sizeof(int));

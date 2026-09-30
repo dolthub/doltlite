@@ -207,7 +207,7 @@ int doltliteSideColsLoad(
 
   rc = atOpenSchemaDb(db, &tmp);
   if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
-  if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTable, &pSide->ci);
+  if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTable, &pSide->ci);
   /* Affinity belongs to this commit. The live REAL affinity rounds an
   ** integer the commit stored exactly. */
   if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(tmp, zTable, &pSide->ci);
@@ -430,7 +430,7 @@ static int atLoadSchemaColumns(
   if( rc==SQLITE_OK && found && entry.zSql ){
     rc = atOpenSchemaDb(db, &tmp);
     if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
-    if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTableName, pCols);
     if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(tmp, zTableName, pCols);
     if( rc==SQLITE_OK && pCols->nCol<=0 ){
       doltliteFreeColInfo(pCols);
@@ -452,8 +452,9 @@ static int atAppendMissingColumns(
   int i, j, nAdd, nOld, nOut;
   char **azName, **azDecl;
   u8 *aAffinity;
+  u8 *aGenerated;
   int *aColToRec;
-  int declWasNull, affWasNull, recWasNull;
+  int declWasNull, affWasNull, recWasNull, genWasNull;
 
   if( !pSrc || pSrc->nCol<=0 || !pSrc->azName ) return SQLITE_OK;
   nAdd = 0;
@@ -476,21 +477,25 @@ static int atAppendMissingColumns(
   declWasNull = pDst->azDecl==0;
   affWasNull = pDst->aAffinity==0;
   recWasNull = pDst->aColToRec==0;
+  genWasNull = pDst->aGenerated==0;
   azName = sqlite3_realloc(pDst->azName, nOut*(int)sizeof(char*));
   azDecl = sqlite3_realloc(pDst->azDecl, nOut*(int)sizeof(char*));
   aAffinity = sqlite3_realloc(pDst->aAffinity, nOut);
   aColToRec = sqlite3_realloc(pDst->aColToRec, nOut*(int)sizeof(int));
-  if( !azName || !azDecl || !aAffinity || !aColToRec ){
+  aGenerated = genWasNull ? 0 : sqlite3_realloc(pDst->aGenerated, nOut);
+  if( !azName || !azDecl || !aAffinity || !aColToRec || (!genWasNull && !aGenerated) ){
     if( azName ) pDst->azName = azName;
     if( azDecl ) pDst->azDecl = azDecl;
     if( aAffinity ) pDst->aAffinity = aAffinity;
     if( aColToRec ) pDst->aColToRec = aColToRec;
+    if( aGenerated ) pDst->aGenerated = aGenerated;
     return SQLITE_NOMEM;
   }
   pDst->azName = azName;
   pDst->azDecl = azDecl;
   pDst->aAffinity = aAffinity;
   pDst->aColToRec = aColToRec;
+  pDst->aGenerated = aGenerated;
   if( declWasNull ){
     for(i=0; i<nOld; i++) pDst->azDecl[i] = 0;
   }
@@ -505,6 +510,7 @@ static int atAppendMissingColumns(
     pDst->azDecl[i] = 0;
     pDst->aAffinity[i] = SQLITE_AFF_BLOB;
     pDst->aColToRec[i] = -1;
+    if( pDst->aGenerated ) pDst->aGenerated[i] = DOLTLITE_GEN_NONE;
   }
 
   nOut = nOld;
@@ -526,6 +532,10 @@ static int atAppendMissingColumns(
       if( !pDst->azDecl[nOut] ) return SQLITE_NOMEM;
     }
     if( pSrc->aAffinity ) pDst->aAffinity[nOut] = pSrc->aAffinity[i];
+    if( pDst->aGenerated ){
+      pDst->aGenerated[nOut] = (pSrc->aGenerated && i<pSrc->nCol)
+          ? pSrc->aGenerated[i] : DOLTLITE_GEN_NONE;
+    }
     pDst->aColToRec[nOut] = -1;
     nOut++;
     pDst->nCol = nOut;
@@ -593,7 +603,7 @@ int doltliteLoadHistoricalTableColumns(
     }
   }
   if( !skipLive && sqlite3FindTable(db, zTableName, "main") ){
-    rc = doltliteGetColumnNames(db, zTableName, pCols);
+    rc = doltliteGetReaderColumnNames(db, zTableName, pCols);
     if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
     if( rc!=SQLITE_OK ) return rc;
     if( pCols->nCol>0 ) return SQLITE_OK;
@@ -659,7 +669,7 @@ int doltliteLoadHistoricalTableColumns(
   ** so the query can report that the table is absent at the ref. */
   if( rc==SQLITE_OK && pCols->nCol<=0
    && sqlite3FindTable(db, zTableName, "main") ){
-    rc = doltliteGetColumnNames(db, zTableName, pCols);
+    rc = doltliteGetReaderColumnNames(db, zTableName, pCols);
     if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
     if( rc==SQLITE_OK && pCols->nCol<=0 ) doltliteFreeColInfo(pCols);
   }
@@ -990,7 +1000,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     sqlite3_result_text(ctx, c->zCommitRef ? c->zCommitRef : "",
                         -1, SQLITE_TRANSIENT);
   }else if(nCols>0 && col<nCols){
-    doltliteResultSideCol(ctx, &c->side, &v->cols,
+    doltliteResultHistoricalCol(ctx, &c->side, &v->cols,
                           c->common.pVal, c->common.nVal,
                           c->common.intKey, c->common.rootIntKey, col,
                           doltliteHistoricalColAffinity(&c->side, &v->cols, col));
