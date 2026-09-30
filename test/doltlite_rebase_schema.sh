@@ -5,33 +5,51 @@ set -o pipefail
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
+TMPROOT=$(mktemp -d)
+trap 'rm -rf "$TMPROOT"' EXIT
+
+run_db() {
+  local n="$1" s="$2" expected_error="${3:-}"
+  local db="$TMPROOT/$n.db" status
+  r=$(printf '.bail on\n%s\n' "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>"$TMPROOT/error")
+  status=$?
+  error=$(tr -d '\r' < "$TMPROOT/error")
+  r=$(printf '%s\n' "$r" | tr -d '\r')
+  rm -f "$db"
+  if [ -n "$expected_error" ]; then
+    [ "$status" -eq 1 ] && [ "$(printf '%s\n' "$error" | sed -E 's/^Error near line [0-9]+: //')" = "$expected_error" ]
+  else
+    [ "$status" -eq 0 ] && [ -z "$error" ]
+  fi
+}
+
 run_db_match() {
-  local n="$1" s="$2" p="$3"
-  local db="/tmp/${n}_$$.db"
-  rm -f "$db"
-  local r
-  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>&1 | tr -d '\r')
-  rm -f "$db"
-  if echo "$r" | grep -qE "$p"; then
+  local n="$1" s="$2" p="$3" r error
+  if run_db "$n" "$s" && printf '%s\n' "$r" | tail -n 1 | grep -qE "$p"; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"
+    ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r\n  stderr:  $error"
   fi
 }
 
 run_db_eq() {
-  local n="$1" s="$2" e="$3"
-  local db="/tmp/${n}_$$.db"
-  rm -f "$db"
-  local r
-  r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>&1 | tr -d '\r' | tail -n 1)
-  rm -f "$db"
-  if [ "$r" = "$e" ]; then
+  local n="$1" s="$2" e="$3" expected_error="${4:-}" r error
+  if run_db "$n" "$s" "$expected_error" && [ "$(printf '%s\n' "$r" | tail -n 1)" = "$e" ]; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"
+    ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r\n  stderr:   $error"
+  fi
+}
+
+run_db_error() {
+  local n="$1" s="$2" e="$3" r error
+  if run_db "$n" "$s" "$e"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: $n\n  expected error: $e\n  stdout: $r\n  stderr: $error"
   fi
 }
 
@@ -57,10 +75,23 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','feat table');
 "
 
+run_db_eq "rebase_schema_table_check_schema" "
+$TABLE_CHECK_SETUP
+SELECT dolt_rebase('main');
+SELECT instr(replace(upper(sql),' ',''),'CHECK(V>0)')>0
+  FROM sqlite_schema WHERE type='table' AND name='base';
+" "1"
+
+run_db_error "rebase_schema_table_check_enforced" "
+$TABLE_CHECK_SETUP
+SELECT dolt_rebase('main');
+INSERT INTO base VALUES(2,-1);
+" "CHECK constraint failed: v > 0"
+
 run_db_match "rebase_schema_table_check_hash" "
 $TABLE_CHECK_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased|^[0-9a-f]{40}$"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 run_db_eq "rebase_schema_table_check_feat_tbl" "
 $TABLE_CHECK_SETUP
@@ -94,7 +125,7 @@ SELECT dolt_commit('-m','feat idx');
 run_db_match "rebase_schema_disjoint_idx_hash" "
 $INDEX_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased|^[0-9a-f]{40}$"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 run_db_eq "rebase_schema_disjoint_idx_main" "
 $INDEX_SETUP
@@ -114,13 +145,16 @@ SELECT dolt_rebase('main');
 " "Successfully rebased and updated refs/heads/feat"
 
 {
-  db="/tmp/rebase_schema_disjoint_idx_feat_reopen_current_dolt_behavior_$$.db"
+  db="$TMPROOT/reopen.db"
   rm -f "$db"
-  echo "$INDEX_SETUP
-SELECT dolt_rebase('main');" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" >/dev/null 2>&1
-  r=$(printf ".headers off\n.mode list\nSELECT count(*) FROM pragma_index_list('b') WHERE name='idx_b_v';\n" | "$DOLTLITE" "$db" 2>&1 | tail -n 1)
-  rm -f "$db"
-  if [ "$r" = "0" ]; then
+  setup_ok=0
+  if r=$(printf ".bail on\n%s\nSELECT dolt_rebase('main');\n" "$INDEX_SETUP" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 2>&1) \
+     && [ "$(printf '%s\n' "$r" | tail -n 1)" = "Successfully rebased and updated refs/heads/feat" ]; then
+    setup_ok=1
+  fi
+  if [ "$setup_ok" -eq 1 ] \
+     && r=$(printf ".bail on\n.headers off\n.mode list\nSELECT count(*) FROM pragma_index_list('b') WHERE name='idx_b_v';\n" | "$DOLTLITE" "$db" 2>&1) \
+     && [ "$r" = "0" ]; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
@@ -149,10 +183,23 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','feat fk tables');
 "
 
+run_db_eq "rebase_schema_fk_tables_schema" "
+$FK_TABLES_SETUP
+SELECT dolt_rebase('main');
+SELECT instr(replace(upper(sql),' ',''),'CHECK(V>0)')>0
+  FROM sqlite_schema WHERE type='table' AND name='t';
+" "1"
+
+run_db_error "rebase_schema_fk_tables_enforced" "
+$FK_TABLES_SETUP
+SELECT dolt_rebase('main');
+INSERT INTO t VALUES(2,-1);
+" "CHECK constraint failed: v > 0"
+
 run_db_match "rebase_schema_fk_tables_hash" "
 $FK_TABLES_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased|^[0-9a-f]{40}$"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 run_db_eq "rebase_schema_fk_tables_parent" "
 $FK_TABLES_SETUP
@@ -202,7 +249,7 @@ SELECT dolt_commit('-m','feat_recreate_fk_family');
 run_db_match "rebase_schema_recreate_fk_family_hash" "
 $RECREATE_FK_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased|^[0-9a-f]{40}$"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 run_db_eq "rebase_schema_recreate_fk_family_parent" "
 $RECREATE_FK_SETUP
@@ -263,7 +310,7 @@ SELECT dolt_commit('-m','feat descendant');
 run_db_match "rebase_schema_self_ref_fk_hash" "
 $SELF_REF_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased|^[0-9a-f]{40}$"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 run_db_eq "rebase_schema_self_ref_fk_cascade" "
 $SELF_REF_SETUP
@@ -303,7 +350,7 @@ SELECT dolt_commit('-m','feat child');
 run_db_match "rebase_schema_fk_chain_hash" "
 $CHAIN_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased|^[0-9a-f]{40}$"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 run_db_eq "rebase_schema_fk_chain_cascade" "
 $CHAIN_SETUP
@@ -331,19 +378,20 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','restore d feature');
 "
 
-run_db_match "rebase_schema_drop_changed_column_error" "
+run_db_error "rebase_schema_drop_changed_column_error" "
 $DROP_RESTORE_SETUP
 SELECT dolt_rebase('main');
 " "cannot apply: column 'd' of table 't' would be dropped, discarding a changed value"
 
 run_db_eq "rebase_schema_drop_changed_column_rollback" "
 $DROP_RESTORE_SETUP
+.bail off
 SELECT dolt_rebase('main');
 SELECT active_branch() || '|' || d || '|' ||
   (SELECT count(*) FROM dolt_log WHERE message='restore d feature') || '|' ||
   (SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase')
 FROM t;
-" "feat|feature-live|1|0"
+" "feat|feature-live|1|0" "cannot apply: column 'd' of table 't' would be dropped, discarding a changed value"
 
 RENAME_REUSE_SETUP="
 CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT);
@@ -362,19 +410,20 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','edit a');
 "
 
-run_db_match "rebase_schema_rename_reuse_error" "
+run_db_error "rebase_schema_rename_reuse_error" "
 $RENAME_REUSE_SETUP
 SELECT dolt_rebase('main');
-" "cannot apply: table 't' renames a column to 'b', a name another of its columns had"
+" "cannot apply: table 't' renames a column to 'b', a name another of its columns had, so the column each change belongs to is ambiguous; make the same renames on both branches first"
 
 run_db_eq "rebase_schema_rename_reuse_rollback" "
 $RENAME_REUSE_SETUP
+.bail off
 SELECT dolt_rebase('main');
 SELECT active_branch() || '|' || a || '|' || b || '|' ||
   (SELECT message FROM dolt_log LIMIT 1) || '|' ||
   (SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase')
 FROM t WHERE id=1;
-" "feat|10|1|edit a|0"
+" "feat|10|1|edit a|0" "cannot apply: table 't' renames a column to 'b', a name another of its columns had, so the column each change belongs to is ambiguous; make the same renames on both branches first"
 
 # The other branch does not touch the swapped table. Replaying the rename
 # must keep each value in its slot and leave secondary indexes covering it.
@@ -400,7 +449,7 @@ SELECT dolt_checkout('feat');
 run_db_match "rebase_schema_swap_unrelated_ok" "
 $SWAP_UNRELATED_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 run_db_eq "rebase_schema_swap_unrelated_row" "
 $SWAP_UNRELATED_SETUP
@@ -443,7 +492,7 @@ SELECT dolt_checkout('feat');
 run_db_match "rebase_schema_rename_chain_ok" "
 $CHAIN_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 # An index created on the upstream names the pre-swap column. Replaying the
 # swap must point that index at the slot's new name.
@@ -467,7 +516,7 @@ SELECT dolt_checkout('feat');
 run_db_match "rebase_schema_index_follows_swap_ok" "
 $INDEX_SWAP_SETUP
 SELECT dolt_rebase('main');
-" "Successfully rebased"
+" "^Successfully rebased and updated refs/heads/feat$"
 
 # The swapped branch indexed the integer column under its new name. The other
 # branch renamed an unrelated column. The merged index has to name the slot
