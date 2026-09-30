@@ -121,6 +121,32 @@ do_test lookup-cost-limit-plan {
 do_test lookup-cost-rowid-limit-plan {
   dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT 10}
 } {{SCAN r USING INDEX r_g}}
+# A LIMIT expression is not fixed, but it still stops the scan.
+do_test lookup-cost-expr-limit-plan {
+  dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT 10+0}
+} {{SCAN r USING INDEX r_g}}
+do_test lookup-cost-textpk-expr-limit-plan {
+  dml_scan_plan db {SELECT v FROM k ORDER BY seq LIMIT 10+0}
+} {{SCAN k USING INDEX k_s}}
+do_test lookup-cost-subq-limit-plan {
+  dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT (SELECT 10)}
+} {{SCALAR SUBQUERY 1} {SCAN CONSTANT ROW} {SCAN r USING INDEX r_g}}
+do_test lookup-cost-group-limit-plan {
+  dml_scan_plan db {SELECT grp, sum(v) FROM r GROUP BY grp LIMIT 5}
+} {{SCAN r USING INDEX r_g}}
+do_test lookup-cost-group-subq-limit-plan {
+  dml_scan_plan db {SELECT grp, sum(v) FROM r GROUP BY grp LIMIT (SELECT 5)}
+} {{SCALAR SUBQUERY 1} {SCAN CONSTANT ROW} {SCAN r USING INDEX r_g}}
+# No LIMIT, or a LIMIT that means every row, still scans and sorts.
+do_test lookup-cost-order-nolimit-plan {
+  dml_scan_plan db {SELECT v FROM r ORDER BY grp}
+} {{SCAN r} {USE TEMP B-TREE FOR ORDER BY}}
+do_test lookup-cost-limit-all-plan {
+  dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT -1}
+} {{SCAN r} {USE TEMP B-TREE FOR ORDER BY}}
+do_test lookup-cost-expr-limit-rows {
+  db eval {SELECT id FROM r ORDER BY grp, id LIMIT 10+0}
+} [db eval {SELECT id FROM r ORDER BY grp, id LIMIT 10}]
 do_test lookup-cost-selective-plans {
   list [dml_scan_plan db {SELECT v FROM k WHERE seq=77}] \
        [dml_scan_plan db {SELECT sum(v) FROM k WHERE seq BETWEEN 100 AND 140}]
@@ -184,5 +210,31 @@ foreach table {r k} {
     expr {[lsearch -exact $plan "SEARCH t USING INDEX ${table}_s (seq=?)"] >= 0}
   } {1}
 }
+
+do_execsql_test lookup-cost-wor-setup {
+  CREATE TABLE w(id INTEGER PRIMARY KEY, grp INTEGER NOT NULL,
+                 v INTEGER NOT NULL) WITHOUT ROWID;
+  INSERT INTO w SELECT id, grp, v FROM r;
+  CREATE INDEX w_g ON w(grp);
+  ANALYZE w;
+} {}
+do_test lookup-cost-wor-expr-limit-plan {
+  dml_scan_plan db {SELECT v FROM w ORDER BY grp LIMIT 10+0}
+} {{SCAN w USING INDEX w_g}}
+do_test lookup-cost-wor-subq-group-plan {
+  dml_scan_plan db {SELECT grp, sum(v) FROM w GROUP BY grp LIMIT (SELECT 5)}
+} {{SCALAR SUBQUERY 1} {SCAN CONSTANT ROW} {SCAN w USING INDEX w_g}}
+do_test lookup-cost-wor-nolimit-plan {
+  dml_scan_plan db {SELECT v FROM w ORDER BY grp}
+} {{SCAN w} {USE TEMP B-TREE FOR ORDER BY}}
+do_test lookup-cost-wor-limit-all-plan {
+  dml_scan_plan db {SELECT v FROM w ORDER BY grp LIMIT -1}
+} {{SCAN w} {USE TEMP B-TREE FOR ORDER BY}}
+do_test lookup-cost-qpsg-param-limit-plan {
+  sqlite3_db_config db ENABLE_QPSG 1
+  set plan [dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT ?}]
+  sqlite3_db_config db ENABLE_QPSG 0
+  set plan
+} {{SCAN r USING INDEX r_g}}
 
 finish_test
