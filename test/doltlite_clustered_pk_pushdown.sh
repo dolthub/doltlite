@@ -99,4 +99,23 @@ run_test "history_filtered_after_pk_change" \
   "1" "$DB"
 
 rm -f "$DB"
+DPK=/tmp/test_deferred_pk_seek_$$.db
+rm -f "$DPK"
+echo "CREATE TABLE t(id TEXT PRIMARY KEY, g INTEGER, v INTEGER);
+CREATE INDEX t_g ON t(g);
+INSERT INTO t VALUES('a',1,10),('b',2,20),('c',1,30);" | $DOLTLITE "$DPK" > /dev/null 2>&1
+
+run_test "index_scan_defers_pk_seek" \
+  "SELECT count(*) FROM bytecode('SELECT sum(v) FROM t INDEXED BY t_g WHERE g%2=1') WHERE opcode='DeferredSeek';" \
+  "1" "$DPK"
+
+run_test "index_scan_deferred_pk_seek_result" \
+  "SELECT sum(v) FROM t INDEXED BY t_g WHERE g%2=1;" \
+  "40" "$DPK"
+
+run_test "index_write_keeps_eager_pk_seek" \
+  "SELECT count(*) FROM bytecode('UPDATE t INDEXED BY t_g SET v=v+1 WHERE g%2=1') WHERE opcode='DeferredSeek';" \
+  "0" "$DPK"
+rm -f "$DPK" "$(dirname "$DPK")/.$(basename "$DPK")-lock"
+
 dltest_finish

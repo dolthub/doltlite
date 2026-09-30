@@ -1361,6 +1361,38 @@ static void codeDeferredSeek(
   }
 }
 
+#ifdef DOLTLITE_PROLLY
+/*
+** A primary-key table scanned through one of its indexes seeks the table
+** row only when a column needs it, as codeDeferredSeek() does for rowid
+** tables; a read-only scan that filters most index entries then skips most
+** of those seeks. P4 lists the index record slot of each primary-key column.
+*/
+static int codeDeferredPkSeek(
+  WhereInfo *pWInfo,
+  Index *pIdx,
+  Index *pPk,
+  int iCur,
+  int iIdxCur
+){
+  Parse *pParse = pWInfo->pParse;
+  Vdbe *v = pParse->pVdbe;
+  u32 *ai;
+  int j;
+  ai = (u32*)sqlite3DbMallocZero(pParse->db, sizeof(u32)*(pPk->nKeyCol+1));
+  if( ai==0 ) return 0;
+  ai[0] = pPk->nKeyCol;
+  for(j=0; j<pPk->nKeyCol; j++){
+    ai[j+1] = sqlite3TableColumnToIndex(pIdx, pPk->aiColumn[j]);
+  }
+  pWInfo->bDeferredSeek = 1;
+  sqlite3VdbeAddOp3(v, OP_DeferredSeek, iIdxCur, 0, iCur);
+  sqlite3VdbeChangeP4(v, -1, (char*)ai, P4_INTARRAY);
+  sqlite3VdbeChangeP5(v, 1);
+  return 1;
+}
+#endif
+
 /*
 ** If the expression passed as the second argument is a vector, generate
 ** code to write the first nReg elements of the vector into an array
@@ -2327,6 +2359,13 @@ Bitmask sqlite3WhereCodeOneLoopStart(
       codeDeferredSeek(pWInfo, pIdx, iCur, iIdxCur);
     }else if( iCur!=iIdxCur ){
       Index *pPk = sqlite3PrimaryKeyIndex(pIdx->pTable);
+#ifdef DOLTLITE_PROLLY
+      if( (pWInfo->wctrlFlags & (WHERE_OR_SUBCLAUSE|WHERE_RIGHT_JOIN))==0
+       && DbMaskAllZero(sqlite3ParseToplevel(pParse)->writeMask)
+       && codeDeferredPkSeek(pWInfo, pIdx, pPk, iCur, iIdxCur) ){
+        goto where_pk_seek_coded;
+      }
+#endif
       iRowidReg = sqlite3GetTempRange(pParse, pPk->nKeyCol);
       for(j=0; j<pPk->nKeyCol; j++){
         k = sqlite3TableColumnToIndex(pIdx, pPk->aiColumn[j]);
@@ -2334,6 +2373,9 @@ Bitmask sqlite3WhereCodeOneLoopStart(
       }
       sqlite3VdbeAddOp4Int(v, OP_NotFound, iCur, addrCont,
                            iRowidReg, pPk->nKeyCol); VdbeCoverage(v);
+#ifdef DOLTLITE_PROLLY
+      where_pk_seek_coded: ;
+#endif
     }
 
     if( pLevel->iLeftJoin==0 ){
