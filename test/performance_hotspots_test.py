@@ -114,8 +114,7 @@ class HotspotTests(unittest.TestCase):
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
         paths = list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))
-        self.assertEqual([path.name for path in paths], ['issue_3427.json'])
-        retained_name = 'retained_3427_pending_edits_generated_3_x1'
+        self.assertEqual(paths, [])
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -148,7 +147,7 @@ class HotspotTests(unittest.TestCase):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 3)
+            self.assertEqual(sql.call_count, 0)
             bucket_fixture, measure_bucket = bucket["bucket_fixture"], bucket["measure_bucket"]
             fixtures = hotspots.bucket_fixture_names()
             self.assertEqual(bucket_fixture.call_count, 3 * len(fixtures))
@@ -198,14 +197,13 @@ class HotspotTests(unittest.TestCase):
             for title in ("Primary Key Index Rewrites", "Pending Edit Map"):
                 self.assertIn(f"### {title}\n", report.getvalue())
             for call in measure_retained.call_args_list:
-                self.assertEqual([name for name, _, _ in call.args[2]], [retained_name])
-            self.assertIn('[generated_3_x1](https://github.com/dolthub/doltlite/issues/3427)',
-                          report.getvalue())
+                self.assertEqual(call.args[2], [])
+            self.assertNotIn('https://github.com/dolthub/doltlite/issues/3427', report.getvalue())
             self.assertEqual(report.getvalue().count('### Pending Edit Map\n'), 1)
-            self.assertIn(f'pending_edits\t{retained_name}\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(result.read_text().splitlines()), 23)
+            self.assertNotIn('retained_3427_', result.read_text())
+            self.assertEqual(len(result.read_text().splitlines()), 22)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 47)
+            self.assertEqual(len(raw.read_text().splitlines()), 45)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -399,7 +397,7 @@ class HotspotTests(unittest.TestCase):
         counts = {category: 0 for category in ('narrow_rows', 'zero_row_updates',
                                               'in_transaction_mutations', 'integer_keys',
                                               'bulk_writes', 'small_cache', 'after_deletes',
-                                              'index_row_fetches', 'planner_choices')}
+                                              'index_row_fetches', 'planner_choices', 'pending_edits')}
         for name, bundle, databases in fixtures:
             category = hotspots.section_of(name)
             counts[category] += 1
@@ -407,7 +405,7 @@ class HotspotTests(unittest.TestCase):
             if category == 'integer_keys':
                 self.assertIn(bundle['issue'], (3249, 3250))
                 self.assertTrue(bundle['profile']['memory'])
-            elif bundle['issue'] != 3352:
+            elif bundle['issue'] not in (3352, 3427):
                 self.assertGreaterEqual(bundle['discovery']['minimum_ratio'], 3)
             self.assertNotIn('COMMIT', bundle['case']['sql'])
             if category == 'narrow_rows':
@@ -417,13 +415,13 @@ class HotspotTests(unittest.TestCase):
         self.assertEqual(counts, {'narrow_rows': 5, 'zero_row_updates': 2,
                                  'in_transaction_mutations': 6, 'integer_keys': 2,
                                  'bulk_writes': 10, 'small_cache': 7, 'after_deletes': 4,
-                                 'index_row_fetches': 2, 'planner_choices': 1})
-        self.assertEqual(sql.call_count, 66)
+                                 'index_row_fetches': 2, 'planner_choices': 1, 'pending_edits': 1})
+        self.assertEqual(sql.call_count, 69)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 30)
+        self.assertEqual(len(grouped), 31)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())
@@ -458,7 +456,7 @@ class HotspotTests(unittest.TestCase):
 
     def test_discovered_sections_are_reported_and_gated(self):
         names = [f'retained_3133_{category}_probe' for category in
-                 ('narrow_rows', 'zero_row_updates', 'in_transaction_mutations')]
+                 ('narrow_rows', 'zero_row_updates', 'in_transaction_mutations', 'pending_edits')]
         samples = {'baseline': [{name: 100000 for name in names}],
                    'candidate': [{name: 200000 for name in names}],
                    'stock': [{name: 10000 for name in names}]}
@@ -469,12 +467,13 @@ class HotspotTests(unittest.TestCase):
                 hotspots.write_results(samples, result, raw)
             parsed, _ = benchmark_compare.parse_input_artifact(f'hotspots={result}')
             analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
-            for name, title in zip(names, ('Narrow Rows', 'Zero Row Updates', 'In Transaction with Mutations')):
+            for name, title in zip(names, ('Narrow Rows', 'Zero Row Updates',
+                                          'In Transaction with Mutations', 'Pending Edit Map')):
                 category = hotspots.section_of(name)
                 self.assertIn(f'### {title}\n', report.getvalue())
                 self.assertIn(('hotspots', category, name), analysis['individual_failures'])
                 self.assertIn(('hotspots', category), analysis['section_failures'])
-            self.assertEqual(report.getvalue().count('https://github.com/dolthub/doltlite/issues/3133'), 3)
+            self.assertEqual(report.getvalue().count('https://github.com/dolthub/doltlite/issues/3133'), 4)
 
     def test_bucket_workloads_results_and_rollback(self):
         workloads = hotspots.bucket_workloads(rows=512, probes=64)
