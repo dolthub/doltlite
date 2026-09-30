@@ -138,11 +138,18 @@ do_test lookup-cost-group-subq-limit-plan {
   dml_scan_plan db {SELECT grp, sum(v) FROM r GROUP BY grp LIMIT (SELECT 5)}
 } {{SCALAR SUBQUERY 1} {SCAN CONSTANT ROW} {SCAN r USING INDEX r_g}}
 # No LIMIT, or a LIMIT that means every row, still scans and sorts.
+# A fixed limit at the stat1 row count does not reduce the estimate.
 do_test lookup-cost-order-nolimit-plan {
   dml_scan_plan db {SELECT v FROM r ORDER BY grp}
 } {{SCAN r} {USE TEMP B-TREE FOR ORDER BY}}
 do_test lookup-cost-limit-all-plan {
   dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT -1}
+} {{SCAN r} {USE TEMP B-TREE FOR ORDER BY}}
+do_test lookup-cost-limit-full-plan {
+  dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT 8192}
+} {{SCAN r} {USE TEMP B-TREE FOR ORDER BY}}
+do_test lookup-cost-limit-over-plan {
+  dml_scan_plan db {SELECT v FROM r ORDER BY grp LIMIT 8193}
 } {{SCAN r} {USE TEMP B-TREE FOR ORDER BY}}
 do_test lookup-cost-expr-limit-rows {
   db eval {SELECT id FROM r ORDER BY grp, id LIMIT 10+0}

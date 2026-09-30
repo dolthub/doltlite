@@ -3300,10 +3300,11 @@ static int doltliteNocaseEqFreeOfNul(const WhereTerm *pTerm){
 }
 
 /* True when a LIMIT can stop this scan before every row is fetched.
-** WHERE_USE_LIMIT covers a fixed positive LIMIT. Any other LIMIT
-** expression still counts rows and stops, including arithmetic and a
-** subquery. A missing LIMIT, LIMIT -1, or a limit that does not reduce
-** the row estimate still reads the whole index. */
+** WHERE_USE_LIMIT is set for any positive integer limit, including one
+** as large as this scan, so the limit is compared to rSize. Arithmetic
+** and a subquery still count rows and stop. A missing LIMIT, LIMIT -1,
+** or a limit that does not reduce the row estimate still reads the
+** whole index. */
 static int doltliteLimitStopsEarly(WhereInfo *pWInfo, LogEst rSize){
   Select *pSel;
   Expr *pLim;
@@ -3313,9 +3314,14 @@ static int doltliteLimitStopsEarly(WhereInfo *pWInfo, LogEst rSize){
   int off = 0;
   u64 nVisit;
 
-  if( (pWInfo->wctrlFlags & WHERE_USE_LIMIT)!=0 ) return 1;
   pSel = pWInfo->pSelect;
-  if( pSel==0 || (pLim = pSel->pLimit)==0 || pLim->pLeft==0 ) return 0;
+  if( pSel==0 || (pLim = pSel->pLimit)==0 || pLim->pLeft==0 ){
+    /* The limit expression was already consumed. iLimit is its logest. */
+    if( (pWInfo->wctrlFlags & WHERE_USE_LIMIT)!=0 ){
+      return rSize > pWInfo->iLimit;
+    }
+    return 0;
+  }
   pOff = pLim->pRight;
   if( sqlite3ExprIsInteger(pLim->pLeft, &n, pWInfo->pParse, 0) ){
     if( n<=0 ) return 0;
