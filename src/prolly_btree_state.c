@@ -492,7 +492,8 @@ int btreeReloadBranchWorkingStateInto(
 
   if( bLoadCatalog
    && !prollyHashIsEmpty(&state.catalog)
-   && (prollyHashIsEmpty(&p->committedCatalogHash)
+   && (p->bForceCatalogReload
+       || prollyHashIsEmpty(&p->committedCatalogHash)
        || prollyHashCompare(&state.catalog, &p->committedCatalogHash)!=0) ){
     u8 *catData = 0;
     int nCatData = 0;
@@ -504,6 +505,7 @@ int btreeReloadBranchWorkingStateInto(
         btreeClearBranchState(&state);
         return rc;
       }
+      p->bForceCatalogReload = 0;
     }else{
       sqlite3_free(catData);
       if( rc!=SQLITE_OK ){
@@ -887,6 +889,9 @@ void doltliteInvalidateSessionWorkingState(sqlite3 *db){
   if( db && db->nDb>0 && db->aDb[0].pBt && !db->aDb[0].pBt->isDetached ){
     Btree *p = db->aDb[0].pBt;
     p->iLoadedWorkingStateVersion = p->pBt->iWorkingStateVersion - 1;
+    /* A refresh may have advanced committedCatalogHash to the peer's catalog
+    ** while the live one stayed stale; the reload must not skip it as equal. */
+    p->bForceCatalogReload = 1;
   }
 }
 
