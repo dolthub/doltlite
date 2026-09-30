@@ -25,7 +25,7 @@ INDEX_EDIT_ROWS = 1048576
 INDEX_EDIT_CACHE_KIB = 131072
 WIDE_ROWS = 8192
 WIDE_CACHE_KIB = 4096
-WIDE_THRASH_CACHE_KIB = 1024
+WIDE_THRASH_CACHE_KIB = 768
 WIDE_CASES = (("scan_small", 4096, WIDE_CACHE_KIB),
               ("point_small", 4096, WIDE_CACHE_KIB),
               ("point_blob", 4096, WIDE_CACHE_KIB),
@@ -643,7 +643,7 @@ def write_results(samples, result_path, sample_path):
             print("\nWide values are read from disk whenever they are fetched until they move "
                   "out of band: [#3325](https://github.com/dolthub/doltlite/issues/3325). "
                   f"{WIDE_ROWS:,} rows per table, {WIDE_CACHE_KIB // 1024} MiB cache "
-                  f"({WIDE_THRASH_CACHE_KIB // 1024} MiB for `wide_thrash_*`). "
+                  f"({WIDE_THRASH_CACHE_KIB} KiB for `wide_thrash_*`). "
                   "`*_small` reads only the small columns; `*_blob` reads the payload. "
                   "Stock is SQLite.")
         print("\n| Workload | PR base ms | Candidate ms | Candidate/base | Stock ms | Candidate/stock |")
