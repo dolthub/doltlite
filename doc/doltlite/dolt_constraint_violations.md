@@ -20,7 +20,7 @@ SELECT dolt_verify_constraints('--output-only', 'child');
 
 Merges apply cell by cell and do not run referential actions inline, so a
 merged working set can hold rows no single side could have inserted. Those
-land in `dolt_constraint_violations_<table>`. A merge that produces
+are recorded in `dolt_constraint_violations_<table>`. A merge that produces
 violations in autocommit mode is rolled back: `Committing this transaction
 resulted in a working set with constraint violations, transaction rolled
 back.` Inside `BEGIN` they persist and block `dolt_commit` until resolved.
@@ -38,10 +38,12 @@ generated columns may produce NULL.
 
 The per-table vtable exists only while that table has recorded violations.
 `violation_type` is `foreign key`, `unique index`, `check constraint`, `not
-null`, or `strict type`. Foreign-key, check, not-null, and strict-type
-violators stay in the base table. A unique-index collision records every
-member, and the higher-rowid row is moved out of the table into the violations
-vtable. Resolve by fixing the data and `DELETE`-ing the violation row.
+null`, or `strict type`. Violating rows stay in the base table. A unique-index
+collision records every member and retains every member in both the table
+and the index, matching Dolt. Resolve by fixing the base-table data, then
+running `dolt_verify_constraints('--all')` to refresh the findings or
+`DELETE`-ing the resolved violation rows. Deleting a violation record alone
+does not repair the base-table data.
 
 ## dolt_verify_constraints
 
@@ -62,6 +64,11 @@ dolt_constraint_violations. Resolve them (DELETE from the per-table vtable)
 then retry, or pass --force to commit anyway.` `--force` commits with the
 violations still recorded. Unlike conflicts, violations do persist to disk
 and follow the branch.
+
+`--force` does not repair the data or waive `PRAGMA integrity_check` checks.
+While duplicate unique-index values remain, `integrity_check` reports
+`non-unique entry in index <name>`, including after a forced commit and reopen.
+Fixing the duplicate values resolves that warning.
 
 ## See also
 
