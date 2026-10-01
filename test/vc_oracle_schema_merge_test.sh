@@ -2008,4 +2008,48 @@ SQL
   done
 done
 
+for indexcols in n a,n; do
+  for mutation in insert update; do
+    for operation in merge cherry_pick; do
+      for direction in forward reverse; do
+        tag="added_unique_${indexcols//,/}_${mutation}_${operation}_${direction}"
+        DB="$TMPROOT/$tag.db"
+        base_sql=''
+        ours='INSERT INTO t(id,a) VALUES(1,1),(2,1);'
+        theirs="ALTER TABLE t ADD COLUMN n INT; CREATE UNIQUE INDEX u ON t($indexcols); INSERT INTO t(id,a,n) VALUES(3,1,9);"
+        rows=$'1|1|NULL\n2|1|NULL\n3|1|9'
+        if [ "$mutation" = update ]; then
+          base_sql='INSERT INTO t VALUES(1,0),(2,0),(3,0);'
+          ours='UPDATE t SET a=1 WHERE id=1;'
+          theirs="ALTER TABLE t ADD COLUMN n INT; CREATE UNIQUE INDEX u ON t($indexcols); UPDATE t SET n=9 WHERE id=3;"
+          rows=$'1|1|NULL\n2|0|NULL\n3|0|9'
+        fi
+        main_sql="$ours"; feat_sql="$theirs"
+        if [ "$direction" = reverse ]; then main_sql="$theirs"; feat_sql="$ours"; fi
+        dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, a INT);
+$base_sql
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$main_sql
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('feat');
+$feat_sql
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_${operation}('feat');
+SQL
+        query="SELECT concat(id,'|',a,'|',coalesce(cast(n AS CHAR),'NULL')) FROM t ORDER BY id;"
+        expect_dual_value "${tag}_rows" "$DB" "$rows" "$query" "$query"
+        expect_dual_value "${tag}_nulls" "$DB" "1,2" \
+          "SELECT group_concat(id,',') FROM (SELECT id FROM t INDEXED BY u WHERE n IS NULL ORDER BY id);" \
+          "SELECT GROUP_CONCAT(CASE WHEN n IS NULL THEN id END ORDER BY id SEPARATOR ',') FROM t;"
+        expect_dual_value "${tag}_violations" "$DB" "0" \
+          "SELECT count(*) FROM dolt_constraint_violations;" \
+          "SELECT count(*) FROM dolt_constraint_violations;"
+      done
+    done
+  done
+done
+
 vc_oracle_finish
