@@ -1894,19 +1894,24 @@ SQL
   done
 done
 
-for values in distinct first_ambiguous; do
-  seed_sql=""
-  if [ "$values" = first_ambiguous ]; then seed_sql='UPDATE t SET c=d WHERE id=1;'; fi
-  for operation in merge cherry_pick; do
-    for direction in forward reverse; do
-      tag="multiple_drop_rename_${values}_${operation}_${direction}"
-      DB="$TMPROOT/$tag.db"
-      ddl='ALTER TABLE t DROP COLUMN a; ALTER TABLE t DROP COLUMN c; ALTER TABLE t RENAME COLUMN d TO dd;'
-      dml="ALTER TABLE t RENAME COLUMN b TO bb; INSERT INTO t VALUES(3,'A3','B3','C3','D3','E3');"
-      main_sql="$ddl"; feat_sql="$dml"
-      if [ "$direction" = reverse ]; then main_sql="$dml"; feat_sql="$ddl"; fi
-      dl_setup "$DB" "$tag" <<SQL
-CREATE TABLE t(id INT PRIMARY KEY, a TEXT, b TEXT, c TEXT, d TEXT, e TEXT);
+for indexmode in none regular unique; do
+  for values in distinct first_ambiguous; do
+    seed_sql=""
+    if [ "$values" = first_ambiguous ]; then seed_sql='UPDATE t SET c=d WHERE id=1;'; fi
+    for operation in merge cherry_pick; do
+      for direction in forward reverse; do
+        tag="multiple_drop_rename_${indexmode}_${values}_${operation}_${direction}"
+        DB="$TMPROOT/$tag.db"
+        index_sql=''
+        if [ "$indexmode" = regular ]; then index_sql='CREATE INDEX idx_d ON t(d);'; fi
+        if [ "$indexmode" = unique ]; then index_sql='CREATE UNIQUE INDEX idx_d ON t(d);'; fi
+        ddl='ALTER TABLE t DROP COLUMN a; ALTER TABLE t DROP COLUMN c; ALTER TABLE t RENAME COLUMN d TO dd;'
+        dml="ALTER TABLE t RENAME COLUMN b TO bb; INSERT INTO t VALUES(3,'A3','B3','C3','D3','E3');"
+        main_sql="$ddl"; feat_sql="$dml"
+        if [ "$direction" = reverse ]; then main_sql="$dml"; feat_sql="$ddl"; fi
+        dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, a VARCHAR(64), b VARCHAR(64), c VARCHAR(64), d VARCHAR(64), e VARCHAR(64));
+$index_sql
 INSERT INTO t VALUES(1,'A1','B1','C1','D1','E1'),(2,'A2','B2','C2','D2','E2');
 $seed_sql
 SELECT dolt_commit('-Am','base');
@@ -1919,9 +1924,40 @@ SELECT dolt_commit('-am','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_${operation}('feat');
 SQL
-      query="SELECT concat(id,'|',bb,'|',coalesce(dd,'NULL'),'|',e) FROM t ORDER BY id;"
-      expect_dual_value "$tag" "$DB" $'1|B1|D1|E1\n2|B2|D2|E2\n3|B3|D3|E3' "$query" "$query"
+        query="SELECT concat(id,'|',bb,'|',coalesce(dd,'NULL'),'|',e) FROM t ORDER BY id;"
+        expect_dual_value "$tag" "$DB" $'1|B1|D1|E1\n2|B2|D2|E2\n3|B3|D3|E3' "$query" "$query"
+      done
     done
+  done
+
+done
+
+for operation in merge cherry_pick; do
+  for direction in forward reverse; do
+    tag="opposing_drop_rename_${operation}_${direction}"
+    DB="$TMPROOT/$tag.db"
+    main_sql='ALTER TABLE t DROP COLUMN a; ALTER TABLE t RENAME COLUMN b TO a;'
+    feat_sql='ALTER TABLE t DROP COLUMN b; ALTER TABLE t RENAME COLUMN a TO b;'
+    column=a; rows=$'1|B1\n2|B2'
+    if [ "$direction" = reverse ]; then
+      swap_sql="$main_sql"; main_sql="$feat_sql"; feat_sql="$swap_sql"
+      column=b; rows=$'1|A1\n2|A2'
+    fi
+    dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, a TEXT, b TEXT);
+INSERT INTO t VALUES(1,'A1','B1'),(2,'A2','B2');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$main_sql
+SELECT dolt_commit('-am','main');
+SELECT dolt_checkout('feat');
+$feat_sql
+SELECT dolt_commit('-am','feat');
+SELECT dolt_checkout('main');
+SQL
+    run_dual_command_outcome "$tag" "$DB" "SELECT dolt_${operation}('feat');" "CALL dolt_${operation}('feat');" error
+    query="SELECT concat(id,'|',$column) FROM t ORDER BY id;"
+    expect_dual_value "${tag}_unchanged" "$DB" "$rows" "$query" "$query"
   done
 done
 

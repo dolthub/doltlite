@@ -207,6 +207,97 @@ retarget_done:
   return zOut;
 }
 
+static int retargetRelayoutIndexBeforeActions(
+  sqlite3 *db, SchemaEntry *pIndex, const SchemaEntry *pTable,
+  const ProllyHash *pSourceCatalog,
+  SchemaMergeAction *aActions, int nActions,
+  char ***pazReindex, int *pnReindex
+){
+  SchemaEntry *aSource = 0, *pSource;
+  int nSource = 0;
+  ParsedColumn *aCol = 0, *aSrcCol = 0;
+  int nCol = 0, nSrcCol = 0, i, j, rc = SQLITE_OK, bRewrite = 0;
+  sqlite3 *tmp = 0;
+  sqlite3_stmt *stmt = 0;
+
+  if( !pTable || !pTable->zSql || !pIndex->zSql ) return SQLITE_OK;
+  for(i=0; i<nActions; i++){
+    SchemaMergeAction *pAction = &aActions[i];
+    if( sqlite3_stricmp(pAction->zTableName, pTable->zName)!=0
+     || pAction->nRenameColumns==0 ) continue;
+    if( !aCol ){
+      rc = parseColumns(pTable->zSql, &aCol, &nCol);
+      if( rc!=SQLITE_OK ) goto done;
+    }
+    for(j=0; j+1<pAction->nRenameColumns; j+=2){
+      const char *zOld = pAction->azRenameColumns[j];
+      const char *zNew = pAction->azRenameColumns[j+1];
+      Table *pSrcTable;
+      char *zSql;
+      int bUses;
+      if( parsedColumnIndexByName(aCol, nCol, zOld)<0
+       || parsedColumnIndexByName(aCol, nCol, zNew)>=0 ) continue;
+      rc = mergeIndexNamesColumn(pIndex->zSql, zNew, &bUses);
+      if( rc!=SQLITE_OK ) goto done;
+      if( !bUses ) continue;
+      if( !tmp ){
+        rc = loadSchemaFromCatalog(db, doltliteGetChunkStore(db),
+            doltliteGetCache(db), pSourceCatalog, &aSource, &nSource);
+        if( rc!=SQLITE_OK ) goto done;
+        pSource = findSchemaEntry(aSource, nSource, pIndex->zTblName);
+        if( !pSource || !pSource->zSql ){ rc = SQLITE_CORRUPT; goto done; }
+        rc = parseColumns(pSource->zSql, &aSrcCol, &nSrcCol);
+        if( rc!=SQLITE_OK || nSrcCol==nCol ) goto done;
+        rc = sqlite3_open(":memory:", &tmp);
+        if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, pSource->zSql, 0, 0, 0);
+        if( rc!=SQLITE_OK ) goto done;
+      }
+      rc = sqlite3_exec(tmp, "SELECT 1 FROM sqlite_schema LIMIT 1", 0, 0, 0);
+      if( rc!=SQLITE_OK ) goto done;
+      pSrcTable = sqlite3FindTable(tmp, pIndex->zTblName, "main");
+      if( !pSrcTable ){ rc = SQLITE_CORRUPT; goto done; }
+      if( sqlite3ColumnIndex(pSrcTable, zNew)<0
+       || sqlite3ColumnIndex(pSrcTable, zOld)>=0 ) continue;
+      if( !bRewrite ){
+        rc = sqlite3_exec(tmp, pIndex->zSql, 0, 0, 0);
+        if( rc!=SQLITE_OK ) goto done;
+        bRewrite = 1;
+      }
+      zSql = sqlite3_mprintf("ALTER TABLE \"%w\" RENAME COLUMN \"%w\" TO \"%w\"",
+                             pIndex->zTblName, zNew, zOld);
+      if( !zSql ){ rc = SQLITE_NOMEM; goto done; }
+      rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
+      sqlite3_free(zSql);
+      if( rc!=SQLITE_OK ) goto done;
+    }
+  }
+  if( bRewrite ){
+    rc = sqlite3_prepare_v2(tmp,
+        "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?",
+        -1, &stmt, 0);
+    if( rc==SQLITE_OK ) rc = sqlite3_bind_text(stmt, 1, pIndex->zName, -1, SQLITE_STATIC);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_step(stmt);
+      if( rc==SQLITE_ROW ){
+        char *zSql = sqlite3_mprintf("%s", sqlite3_column_text(stmt, 0));
+        if( !zSql ){ rc = SQLITE_NOMEM; goto done; }
+        sqlite3_free(pIndex->zSql);
+        pIndex->zSql = zSql;
+        rc = mergeAppendReindexName(pazReindex, pnReindex, pIndex->zName);
+      }else if( rc==SQLITE_DONE ){
+        rc = SQLITE_CORRUPT;
+      }
+    }
+  }
+done:
+  sqlite3_finalize(stmt);
+  sqlite3_close(tmp);
+  freeColumns(aCol, nCol);
+  freeColumns(aSrcCol, nSrcCol);
+  freeSchemaEntries(aSource, nSource);
+  return rc;
+}
+
 static int appendMergedSchemaCatalogRecord(
   sqlite3 *db,
   ProllyHash *pRoot,
@@ -322,7 +413,10 @@ int rebuildDisjointSchemaRows(
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aOursSchema, int nOursSchema,
   MergeConflictTable *aConflictTables, int nConflictTables,
-  SchemaRootpageRemap *aRemap, int nRemap
+  SchemaRootpageRemap *aRemap, int nRemap,
+  const ProllyHash *pOurCatalog, const ProllyHash *pTheirCatalog,
+  SchemaMergeAction *aActions, int nActions,
+  char ***pazReindex, int *pnReindex
 ){
   struct TableEntry *pMaster = 0;
   ProllyHash root;
@@ -415,6 +509,9 @@ int rebuildDisjointSchemaRows(
           aTheirsSchema, nTheirsSchema, aConflictTables, nConflictTables,
           pSe->zTblName);
       char *zSql;
+      rc = retargetRelayoutIndexBeforeActions(db, pSe, pWinTbl,
+          pOurCatalog, aActions, nActions, pazReindex, pnReindex);
+      if( rc!=SQLITE_OK ) return rc;
       if( pSrcTbl && pWinTbl && pSrcTbl->zSql && pWinTbl->zSql
        && pSrcTbl!=pWinTbl ){
         zSql = retargetIndexSqlToRenamedSlots(pSe->zSql, pSrcTbl->zSql, pWinTbl->zSql);
@@ -506,6 +603,9 @@ int rebuildDisjointSchemaRows(
           aTheirsSchema, nTheirsSchema, aConflictTables, nConflictTables,
           pSe->zTblName);
       char *zSql;
+      rc = retargetRelayoutIndexBeforeActions(db, pSe, pWinTbl,
+          pTheirCatalog, aActions, nActions, pazReindex, pnReindex);
+      if( rc!=SQLITE_OK ) return rc;
       if( pSrcTbl && pWinTbl && pSrcTbl->zSql && pWinTbl->zSql
        && pSrcTbl!=pWinTbl ){
         zSql = retargetIndexSqlToRenamedSlots(pSe->zSql, pSrcTbl->zSql, pWinTbl->zSql);

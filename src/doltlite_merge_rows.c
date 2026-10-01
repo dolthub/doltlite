@@ -1019,7 +1019,7 @@ int mergeRenameHoldingDroppedName(
   ProllyCursor ancCur, sideCur;
   DoltliteRecordInfo ancInfo, sideInfo;
   int *aAssign = 0;
-  int sawName = 0, sawAssign = 0, bShifted = 0;
+  int sawName = 0, sawAssign = 0;
   int ancInit = 0, sideInit = 0;
   int i, res = 0, rc = SQLITE_OK;
 
@@ -1037,11 +1037,6 @@ int mergeRenameHoldingDroppedName(
     if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
     goto done;
   }
-  for(i=0; i<sideCi.nCol; i++){
-    int k = colInfoIndex(&ancCi, sideCi.azName[i]);
-    if( k>=0 && k!=i ) bShifted = 1;
-  }
-  if( !bShifted ) goto done;
   if( aSideAnc && nSide!=sideCi.nCol ) goto done;
   i = colsMatchParsed(zAncSql, &ancCi);
   if( i<0 || (i==1 && (i = colsMatchParsed(zSideSql, &sideCi))<0) ){
