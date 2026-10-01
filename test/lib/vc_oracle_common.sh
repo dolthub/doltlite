@@ -1,5 +1,57 @@
 #!/bin/bash
 
+vc_oracle_init_execution() {
+  VC_ORACLE_EXECUTION_DIR="$1/execution"
+  mkdir -p "$VC_ORACLE_EXECUTION_DIR" || exit 1
+}
+
+vc_oracle_run_doltlite() (
+  local expectation=${VC_ORACLE_EXPECTATION:-success} err rc statuses
+  case "${1:-}" in
+    --success) expectation=success; shift ;;
+    --error|--expect-error) expectation=error; shift ;;
+    --allow-error) expectation=allow-error; shift ;;
+  esac
+  err=$(mktemp "$VC_ORACLE_EXECUTION_DIR/session.XXXXXX") || exit 1
+  printf '  FAIL: %s:%s (doltlite session did not complete; database %s)\n' \
+    "${BASH_SOURCE[1]##*/}" "${BASH_LINENO[0]}" "${1:-}" > "$err.failure"
+  if [ /dev/fd/1 -ef /dev/fd/2 ]; then
+    if "$DOLTLITE" "$@" 2>&1 | tee "$err"; then
+      statuses=("${PIPESTATUS[@]}")
+    else
+      statuses=("${PIPESTATUS[@]}")
+    fi
+    rc=${statuses[0]}
+    [ "${statuses[1]}" -eq 0 ] || return 1
+  else
+    if "$DOLTLITE" "$@" 2>"$err"; then rc=0; else rc=$?; fi
+    cat "$err" >&2
+  fi
+  if [ "$rc" -ge 128 ] \
+     || { [ "$expectation" = success ] && [ "$rc" -ne 0 ]; } \
+     || { [ "$expectation" = error ] && [ "$rc" -eq 0 ]; }; then
+    printf '  FAIL: %s:%s (doltlite rc=%s, expected %s; database %s)\n' \
+      "${BASH_SOURCE[1]##*/}" "${BASH_LINENO[0]}" "$rc" "$expectation" "${1:-}" > "$err.failure"
+  else
+    rm -f "$err" "$err.failure"
+  fi
+  return "$rc"
+)
+
+# Pipeline and command-substitution subshells cannot update the suite's tally.
+vc_oracle_check_execution() {
+  local failure
+  [ -n "${VC_ORACLE_EXECUTION_DIR:-}" ] || return 0
+  for failure in "$VC_ORACLE_EXECUTION_DIR"/*.failure; do
+    [ -f "$failure" ] || continue
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES execution"
+    cat "$failure"
+    sed 's/^/      /' "${failure%.failure}"
+    rm -f "$failure" "${failure%.failure}"
+  done
+}
+
 # True only for a handled non-zero exit. Status >=128 is a crash, not an orderly error.
 vc_oracle_is_clean_error() {
   [ "$1" -ne 0 ] && [ "$1" -lt 128 ]
@@ -41,7 +93,7 @@ vc_oracle_run_doltlite_script() {
   local out="$2"
   local err="$3"
   local sql="$4"
-  printf '%s\n' "$sql" | "$DOLTLITE" "$db" >"$out" 2>"$err"
+  printf '%s\n' "$sql" | vc_oracle_run_doltlite "${5:---${VC_ORACLE_EXPECTATION:-success}}" "$db" >"$out" 2>"$err"
 }
 
 vc_oracle_run_dolt_script() {
@@ -68,6 +120,33 @@ vc_oracle_run_dolt_script_for_error() {
     vc_oracle_init_repo
     printf '%s\n' "$sql" | "$DOLT" sql "$@" >"$out" 2>"$err"
   )
+}
+
+vc_oracle_error() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_err"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
+  dl_rc=$?
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_rc
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to error)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+    sed 's/^/      /' "$dir/dl.err" "$dir/dt.err"
+  fi
 }
 
 vc_oracle_tail_csv_body() {
@@ -165,6 +244,7 @@ SELECT count(*) FROM oracle_probe;"
 # still prints whatever it reached. Only the real end emits the sentinel.
 # A suite that compared nothing, or only separator-empty strings, is not a pass.
 vc_oracle_finish() {
+  vc_oracle_check_execution
   nonempty=${nonempty:-0}
   compared=${compared:-0}
   if [ "$pass" -eq 0 ]; then
@@ -206,3 +286,4 @@ vc_oracle_check_dolt_version() {
 if [ -n "${DOLT:-}" ]; then
   vc_oracle_check_dolt_version "$DOLT" || exit 1
 fi
+if [ -n "${TMPROOT:-}" ]; then vc_oracle_init_execution "$TMPROOT"; fi

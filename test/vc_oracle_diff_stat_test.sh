@@ -38,7 +38,7 @@ oracle_stat() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize_stat)
 
   local dolt_setup
@@ -74,7 +74,7 @@ oracle_summary() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize_summary)
 
   local dolt_setup
@@ -107,7 +107,7 @@ oracle_stat_args() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' | awk -F'\t' 'NF >= 6 && $1 == "S" { print }' | sort)
 
   local dolt_setup
@@ -141,7 +141,7 @@ oracle_summary_args() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize_summary)
 
   local dolt_setup
@@ -175,7 +175,7 @@ oracle_error() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
   dl_rc=$?
 
   local dolt_setup

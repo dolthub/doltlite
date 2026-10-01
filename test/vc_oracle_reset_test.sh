@@ -37,12 +37,12 @@ oracle() {
 
   local dl_log dl_status
   dl_log=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'L' || char(9) || commit_hash || char(9) || message FROM dolt_log;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize_log)
   dl_status=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S' || char(9) || table_name || char(9) || staged || char(9) || status FROM dolt_status;\n" "$setup" \
-              | "$DOLTLITE" "$dir/dl/db.s" 2>>"$dir/dl.err" \
+              | vc_oracle_run_doltlite "$dir/dl/db.s" 2>>"$dir/dl.err" \
               | grep -v '^[0-9]*$' \
               | grep -v '^[0-9a-f]\{40\}$' \
               | normalize_status)
@@ -74,38 +74,13 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_error_match() {
   local name="$1" setup="$2" pattern="$3"
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --allow-error
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -131,7 +106,7 @@ oracle_same_session() {
   dl_out=$(
     {
       printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_setup" "$dl_query"
-    } | "$DOLTLITE" "$dir/dl/db" 2>&1 \
+    } | vc_oracle_run_doltlite "$dir/dl/db" 2>&1 \
       | tr -d '\r' \
       | awk '/^Q\|/ {print; next} /[Nn]o such savepoint:|SAVEPOINT .*does not exist/ {print "E|savepoint"}'
   )
@@ -461,7 +436,7 @@ oracle "reset_path_is_case_insensitive" "
 $CASE_RESET_SEED
 "
 
-oracle_error "reset_case_insensitive_clears_staged_indexes" "
+vc_oracle_error "reset_case_insensitive_clears_staged_indexes" "
 $CASE_RESET_SEED
 SELECT dolt_commit('-m', 'nothing is staged');
 "
@@ -772,39 +747,39 @@ SELECT concat('Q|u2|', id, '|', v) FROM u2;"
 
 echo "--- error paths ---"
 
-oracle_error "reset_to_nonexistent_ref" "
+vc_oracle_error "reset_to_nonexistent_ref" "
 $SEED
 SELECT dolt_reset('--hard', 'nope');
 "
 
-oracle_error "reset_unknown_flag" "
+vc_oracle_error "reset_unknown_flag" "
 $SEED
 SELECT dolt_reset('--bogus');
 "
 
-oracle_error "reset_mixed_no_ref_unsupported" "
+vc_oracle_error "reset_mixed_no_ref_unsupported" "
 $SEED
 SELECT dolt_reset('--mixed');
 "
 
-oracle_error "reset_mixed_with_ref_unsupported" "
+vc_oracle_error "reset_mixed_with_ref_unsupported" "
 $SEED
 SELECT dolt_reset('--mixed', 'HEAD');
 "
 
-oracle_error "reset_soft_hard_mutually_exclusive" "
+vc_oracle_error "reset_soft_hard_mutually_exclusive" "
 $SEED
 SELECT dolt_reset('--soft', '--hard');
 "
 
-oracle_error "reset_soft_hard_mutually_exclusive_with_ref" "
+vc_oracle_error "reset_soft_hard_mutually_exclusive_with_ref" "
 $SEED
 SELECT dolt_reset('--soft', '--hard', 'HEAD');
 "
 
 echo "--- merge conflict guards ---"
 
-oracle_error_match "reset_no_args_during_merge_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_match "reset_no_args_during_merge_conflict" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -822,7 +797,7 @@ SELECT dolt_merge('feature');
 SELECT dolt_reset();
 " "(Merge conflict detected|cannot merge: conflicts detected)"
 
-oracle_error_match "reset_soft_during_merge_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_match "reset_soft_during_merge_conflict" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -842,7 +817,7 @@ SELECT dolt_reset('--soft');
 
 echo "--- savepoint parity ---"
 
-oracle_same_session "reset_hard_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "reset_hard_savepoint_invalidated" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_commit('-A', '-m', 'c1');
@@ -858,7 +833,7 @@ CALL dolt_reset('--hard', 'HEAD');
 " "SELECT concat('Q|', v) FROM t;
 ROLLBACK TO sp1;"
 
-oracle_same_session "reset_bad_ref_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "reset_bad_ref_savepoint_invalidated" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_commit('-A', '-m', 'c1');
@@ -876,7 +851,7 @@ CALL dolt_reset('--hard', 'bogus');
 " "SELECT concat('Q|', v) FROM t;
 ROLLBACK TO sp1;"
 
-oracle_same_session "reset_bad_ref_nested_savepoint_rolls_back_locally" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "reset_bad_ref_nested_savepoint_rolls_back_locally" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_commit('-A', '-m', 'c1');
@@ -1005,7 +980,7 @@ SELECT dolt_add('t2');
 SELECT dolt_reset('t2');
 "
 
-oracle_error "reset_path_staged_new_indexed_table_commit_errors" "
+vc_oracle_error "reset_path_staged_new_indexed_table_commit_errors" "
 $SEED
 CREATE TABLE t2(a INTEGER PRIMARY KEY, b INT);
 CREATE INDEX t2i ON t2(b);
@@ -1041,7 +1016,7 @@ $RENAME_SEED
 SELECT dolt_reset('t');
 "
 
-oracle_error "reset_path_staged_rename_old_name_commit_errors" "
+vc_oracle_error "reset_path_staged_rename_old_name_commit_errors" "
 $RENAME_SEED
 SELECT dolt_reset('t');
 SELECT dolt_commit('-m', 'nothing is staged');
@@ -1054,7 +1029,7 @@ SELECT dolt_add('t');
 SELECT dolt_reset('t');
 "
 
-oracle_error "reset_path_staged_index_only_change_commit_errors" "
+vc_oracle_error "reset_path_staged_index_only_change_commit_errors" "
 $SEED
 CREATE INDEX ti ON t(v);
 SELECT dolt_add('t');

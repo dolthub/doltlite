@@ -20,7 +20,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -45,31 +45,6 @@ oracle() {
   fi
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_error_poststate() {
   local name="$1" dl_setup="$2" dl_call="$3" dl_query="$4" dolt_setup="${5:-$2}" dolt_call="${6:-$3}" dolt_query="${7:-$4}"
@@ -78,12 +53,12 @@ oracle_error_poststate() {
 
   local dl_rc
   vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup
-$dl_call"
+$dl_call" --expect-error
   dl_rc=$?
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.post.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.post.err" \
       | tr -d '\r' \
       | grep '^Q|'
   )
@@ -121,7 +96,7 @@ oracle_same_session() {
   dl_out=$(
     {
       printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_setup" "$dl_query"
-    } | "$DOLTLITE" "$dir/dl/db" 2>&1 \
+    } | vc_oracle_run_doltlite --expect-error "$dir/dl/db" 2>&1 \
       | tr -d '\r' \
       | awk '/^Q\|/ {print; next} /[Nn]o such savepoint:|SAVEPOINT .*does not exist/ {print "E|savepoint"}'
   )
@@ -153,7 +128,7 @@ oracle_reopen() {
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.post.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.post.err" \
       | tr -d '\r' \
       | grep '^Q|'
   )
@@ -210,7 +185,7 @@ INSERT INTO b VALUES (1);
 SELECT dolt_add('-A');
 "
 
-oracle "all_dash_lowercase_a" "
+VC_ORACLE_EXPECTATION=allow-error oracle "all_dash_lowercase_a" "
 CREATE TABLE a(id INTEGER PRIMARY KEY);
 CREATE TABLE b(id INTEGER PRIMARY KEY);
 INSERT INTO a VALUES (1);
@@ -539,11 +514,11 @@ SELECT dolt_add('-A');
 
 echo "--- error paths ---"
 
-oracle_error "no_args" "
+vc_oracle_error "no_args" "
 SELECT dolt_add();
 "
 
-oracle_error "nonexistent_table" "
+vc_oracle_error "nonexistent_table" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
 SELECT dolt_add('nonexistent');

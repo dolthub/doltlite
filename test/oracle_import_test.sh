@@ -24,7 +24,7 @@ oracle_import() {
 
   local dl_out
   dl_out=$(printf '.mode csv\n.import %s t\n.headers off\nSELECT * FROM t;\n' "$dir/data.csv" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize)
 
   local pk_arg=""
@@ -58,7 +58,7 @@ assert_dl_columns() {
   local actual
   actual=$(printf '.mode csv\n.import %s t\nSELECT count(*) FROM pragma_table_info(%s);\n' \
                   "$dir/data.csv" "'t'" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r')
 
   if [ "$actual" = "$expected_ncols" ]; then
@@ -129,6 +129,7 @@ done
 oracle_import "fifty_rows" "$big_csv"
 
 echo ""
+vc_oracle_check_execution
 echo "=== Results: $pass passed, $fail failed ==="
 echo "__SUITE_COMPLETE__"
 if [ $fail -gt 0 ]; then

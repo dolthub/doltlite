@@ -5,6 +5,7 @@ DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -12,7 +13,7 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
-dl() { "$DOLTLITE" "$1" "$2" 2>/dev/null; }
+dl() { vc_oracle_run_doltlite "$1" "$2" 2>/dev/null; }
 
 echo "=== REINDEX Tests ==="
 
@@ -133,13 +134,14 @@ DB="$TMPROOT/14.db"
   echo "COMMIT;"
   echo "SELECT dolt_commit('-Am','init');"
   echo "REINDEX;"
-} | "$DOLTLITE" "$DB" >/dev/null 2>&1
+} | vc_oracle_run_doltlite "$DB" >/dev/null 2>&1
 [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "1000" ] && pass_name "14_count" || fail_name "14_count"
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=500;")" = "1" ] && pass_name "14_idx" || fail_name "14_idx"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "14_integrity" || fail_name "14_integrity"
 
 echo ""
 echo "======================================="
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
 echo "__SUITE_COMPLETE__"

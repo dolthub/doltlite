@@ -20,7 +20,7 @@ setup_pair() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   if ! printf '%s\n' "$setup" \
-      | "$DOLTLITE" "$dir/dl/db.sqlite" >"$dir/dl.setup.out" 2>"$dir/dl.setup.err"; then
+      | vc_oracle_run_doltlite "$dir/dl/db.sqlite" >"$dir/dl.setup.out" 2>"$dir/dl.setup.err"; then
     echo "doltlite setup failed for $name" >&2
     sed 's/^/  /' "$dir/dl.setup.err" >&2
     exit 1
@@ -41,7 +41,7 @@ setup_pair() {
 dl_exec() {
   local name="$1" sql="$2" dbspec="${3:-$TMPROOT/$1/dl/db.sqlite}"
   if ! printf '%s\n' "$sql" \
-      | "$DOLTLITE" "$dbspec" >"$TMPROOT/$name/dl.exec.out" 2>"$TMPROOT/$name/dl.exec.err"; then
+      | vc_oracle_run_doltlite "$dbspec" >"$TMPROOT/$name/dl.exec.out" 2>"$TMPROOT/$name/dl.exec.err"; then
     echo "doltlite connection failed for $name" >&2
     sed 's/^/  /' "$TMPROOT/$name/dl.exec.err" >&2
     exit 1
@@ -51,7 +51,7 @@ dl_exec() {
 dl_exec_conflicting_merge() {
   local name="$1" sql="$2" rc
   printf '%s\n' "$sql" \
-    | "$DOLTLITE" "$TMPROOT/$name/dl/db.sqlite" \
+    | vc_oracle_run_doltlite "$TMPROOT/$name/dl/db.sqlite" \
         >"$TMPROOT/$name/dl.exec.out" 2>"$TMPROOT/$name/dl.exec.err"
   rc=$?
   # Conflict is a handled SQL error; the shell still COMMITs. Next connection proves persistence.
@@ -101,7 +101,7 @@ paired_query() {
 
   dl_out=$(
     printf ".headers off\n.mode list\n%s\n" "$dl_sql" \
-      | "$DOLTLITE" "$TMPROOT/$name/dl/db.sqlite" 2>"$TMPROOT/$name/dl.query.err" \
+      | vc_oracle_run_doltlite "$TMPROOT/$name/dl/db.sqlite" 2>"$TMPROOT/$name/dl.query.err" \
       | tr -d '\r' | grep '^Q|'
   )
   dt_out=$(
@@ -121,7 +121,7 @@ paired_branch_query() {
 
   dl_out=$(
     printf ".headers off\n.mode list\n%s\n" "$dl_sql" \
-      | "$DOLTLITE" "$TMPROOT/$name/dl/db.sqlite@$branch" 2>"$TMPROOT/$name/dl.query.err" \
+      | vc_oracle_run_doltlite "$TMPROOT/$name/dl/db.sqlite@$branch" 2>"$TMPROOT/$name/dl.query.err" \
       | tr -d '\r' | grep '^Q|'
   )
   dt_out=$(

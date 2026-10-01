@@ -25,7 +25,7 @@ oracle_schemas() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^S' \
            | normalize)
 
@@ -60,7 +60,7 @@ oracle_diff_touches_schemas() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^D.*dolt_schemas' \
            | sed -e 's/	true$/	1/' -e 's/	false$/	0/' \
            | normalize)
@@ -98,7 +98,7 @@ oracle_schemas_dual() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$dl_setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^S' \
            | normalize)
 
@@ -133,7 +133,7 @@ oracle_diff_touches_schemas_dual() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$dl_setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^D.*dolt_schemas' \
            | sed -e 's/	true$/	1/' -e 's/	false$/	0/' \
            | normalize)

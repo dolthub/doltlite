@@ -30,19 +30,19 @@ remote_tag_flow() {
   mkdir -p "$dir"
 
   printf '%s\n' "${seed//@REMOTE@/$dl_remote}" \
-    | "$DOLTLITE" "$dl_src" >"$dir/dl_seed.out" 2>"$dir/dl_seed.err"
+    | vc_oracle_run_doltlite "$dl_src" >"$dir/dl_seed.out" 2>"$dir/dl_seed.err"
   dl_seed_rc=$?
   printf "SELECT dolt_clone('%s');\n" "$dl_remote" \
-    | "$DOLTLITE" "$dl_con" >"$dir/dl_clone.out" 2>"$dir/dl_clone.err"
+    | vc_oracle_run_doltlite "$dl_con" >"$dir/dl_clone.out" 2>"$dir/dl_clone.err"
   dl_clone_rc=$?
   printf '%s\n' "${advance//@REMOTE@/$dl_remote}" \
-    | "$DOLTLITE" "$dl_src" >"$dir/dl_advance.out" 2>"$dir/dl_advance.err"
+    | vc_oracle_run_doltlite "$dl_src" >"$dir/dl_advance.out" 2>"$dir/dl_advance.err"
   dl_advance_rc=$?
   printf '%s\n' "$consume" \
-    | "$DOLTLITE" "$dl_con" >"$dir/dl_consume.out" 2>"$dir/dl_consume.err"
+    | vc_oracle_run_doltlite "$dl_con" >"$dir/dl_consume.out" 2>"$dir/dl_consume.err"
   dl_consume_rc=$?
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
-    | "$DOLTLITE" "$dl_con" 2>"$dir/dl_query.err" \
+    | vc_oracle_run_doltlite "$dl_con" 2>"$dir/dl_query.err" \
     | tr -d '\r' | grep '^R|' | sort)
   dl_query_rc=$?
 
@@ -94,20 +94,20 @@ remote_tag_error_flow() {
   mkdir -p "$dir"
 
   printf '%s\n' "${seed//@REMOTE@/$dl_remote}" \
-    | "$DOLTLITE" "$dl_src" >"$dir/dl_seed.out" 2>"$dir/dl_seed.err"
+    | vc_oracle_run_doltlite "$dl_src" >"$dir/dl_seed.out" 2>"$dir/dl_seed.err"
   dl_seed_rc=$?
   printf "SELECT dolt_clone('%s');\n" "$dl_remote" \
-    | "$DOLTLITE" "$dl_con" >"$dir/dl_clone.out" 2>"$dir/dl_clone.err"
+    | vc_oracle_run_doltlite "$dl_con" >"$dir/dl_clone.out" 2>"$dir/dl_clone.err"
   dl_clone_rc=$?
   if [ "$side" = "src" ]; then dl_action_db="$dl_src"; else dl_action_db="$dl_con"; fi
-  printf '%s\n' "$action" | "$DOLTLITE" "$dl_action_db" \
+  printf '%s\n' "$action" | vc_oracle_run_doltlite --expect-error "$dl_action_db" \
     >"$dir/dl_action.out" 2>"$dir/dl_action.err"
   dl_action_rc=$?
-  printf '%s\n' "$after" | "$DOLTLITE" "$dl_con" \
+  printf '%s\n' "$after" | vc_oracle_run_doltlite "$dl_con" \
     >"$dir/dl_after.out" 2>"$dir/dl_after.err"
   dl_after_rc=$?
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
-    | "$DOLTLITE" "$dl_con" 2>"$dir/dl_query.err" \
+    | vc_oracle_run_doltlite "$dl_con" 2>"$dir/dl_query.err" \
     | tr -d '\r' | grep '^R|' | sort)
   dl_query_rc=$?
 

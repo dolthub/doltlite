@@ -22,10 +22,10 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/dl/db" >/dev/null 2>"$dir/dl.err"
+  printf '%s\n' "$setup" | vc_oracle_run_doltlite "$dir/dl/db" >/dev/null 2>"$dir/dl.err"
   local dl_out
   dl_out=$(printf ".headers off\n.mode list\n.separator '\t'\n%s;\n" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
            | normalize)
 
   local dolt_setup

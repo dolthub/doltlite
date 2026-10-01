@@ -31,7 +31,7 @@ oracle_query() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query_dl" \
-    | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | $norm)
+    | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" | $norm)
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -66,7 +66,7 @@ oracle_error() {
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
   vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup
-$query_dl"
+$query_dl" --expect-error
   local dl_rc=$?
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")

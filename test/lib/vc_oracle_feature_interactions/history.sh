@@ -151,7 +151,7 @@ SELECT dolt_commit('-m','main commit');
 
 echo "--- tag interactions ---"
 
-oracle "tag_survives_branch_delete" "
+VC_ORACLE_EXPECTATION=error oracle "tag_survives_branch_delete" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1069,7 +1069,7 @@ SELECT dolt_merge('main');
 
 echo "--- net-no-op commit + merge ---"
 
-oracle "roundtrip_update_no_net_change" "
+VC_ORACLE_EXPECTATION=error oracle "roundtrip_update_no_net_change" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'original');
 SELECT dolt_add('-A');
@@ -1086,7 +1086,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-oracle "delete_reinsert_same_value_merge" "
+VC_ORACLE_EXPECTATION=error oracle "delete_reinsert_same_value_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'keep'),(2,'target');
 SELECT dolt_add('-A');
@@ -1103,7 +1103,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-oracle "insert_delete_net_zero_merge" "
+VC_ORACLE_EXPECTATION=error oracle "insert_delete_net_zero_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1475,7 +1475,7 @@ SELECT dolt_merge('b6');
 
 echo "--- merge then revert ---"
 
-oracle "revert_merge_commit" "
+VC_ORACLE_EXPECTATION=error oracle "revert_merge_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_add('-A');
@@ -1667,7 +1667,7 @@ SELECT dolt_merge('feat');
 
 echo "--- cherry-pick edge probes ---"
 
-oracle "cherry_pick_same_commit_twice" "
+VC_ORACLE_EXPECTATION=error oracle "cherry_pick_same_commit_twice" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1681,7 +1681,7 @@ SELECT dolt_cherry_pick('feat');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-oracle "cherry_pick_empty_commit" "
+VC_ORACLE_EXPECTATION=error oracle "cherry_pick_empty_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1740,7 +1740,7 @@ SELECT dolt_reset('--hard','snap');
 
 echo "--- pre-merge staging probes ---"
 
-oracle "merge_with_uncommitted_working_changes" "
+VC_ORACLE_EXPECTATION=error oracle "merge_with_uncommitted_working_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1756,7 +1756,7 @@ SELECT dolt_merge('feat');
 
 echo "--- merge+revert probes ---"
 
-oracle "revert_noff_merge_commit_row_count" "
+VC_ORACLE_EXPECTATION=error oracle "revert_noff_merge_commit_row_count" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_add('-A');
@@ -1836,7 +1836,7 @@ SELECT dolt_commit('-m','main adds to keep');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM keep ORDER BY id;"
 
-oracle "table_dropped_on_main_with_feat_modifying" "
+VC_ORACLE_EXPECTATION=error oracle "table_dropped_on_main_with_feat_modifying" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a'),(2,'b');
 SELECT dolt_add('-A');
@@ -3450,7 +3450,7 @@ SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
 echo "--- revert merge-commit probes ---"
 
-oracle "revert_noff_merge_reverses_feat_data" "
+VC_ORACLE_EXPECTATION=error oracle "revert_noff_merge_reverses_feat_data" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_add('-A');
@@ -3742,7 +3742,7 @@ SELECT dolt_merge('feat');
 
 echo "--- multi-commit conflict resolve ---"
 
-oracle "resolve_multi_commit_conflict_via_ours" "
+VC_ORACLE_EXPECTATION=error oracle "resolve_multi_commit_conflict_via_ours" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
 INSERT INTO t VALUES(1,1);
 SELECT dolt_add('-A');

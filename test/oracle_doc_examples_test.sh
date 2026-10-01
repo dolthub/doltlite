@@ -12,12 +12,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCS="$SCRIPT_DIR/../doc/doltlite"
 TMPDIR=$(mktemp -d)
 [ -n "${DOC_EXAMPLES_KEEP:-}" ] && echo "keeping $TMPDIR" || trap 'rm -rf "$TMPDIR"' EXIT
+TMPROOT="$TMPDIR"
+source "$SCRIPT_DIR/lib/vc_oracle_common.sh"
 ONLY="${3:-}"
 export DOLTLITE_CREDS_DIR="$TMPDIR/creds"
 pass=0; fail=0
 
 case "$DOLTLITE" in /*) ;; *) DOLTLITE="$PWD/$DOLTLITE" ;; esac
-if [ ! -x "$DOLTLITE" ] || [ "$("$DOLTLITE" :memory: "SELECT doltlite_engine();" 2>/dev/null)" != prolly ]; then
+if [ ! -x "$DOLTLITE" ] || [ "$(vc_oracle_run_doltlite :memory: "SELECT doltlite_engine();" 2>/dev/null)" != prolly ]; then
   echo "FAIL: $DOLTLITE is not a runnable doltlite (doltlite_engine() must return prolly)"; echo "Results: 0 passed, 1 failed"; echo "__SUITE_COMPLETE__"; exit 1
 fi
 
@@ -31,7 +33,7 @@ SKIP="demo.md vec1.md building.md using-existing-sqlite-bindings.md"
 fixture() {  # fixture <db>: schema, three commits on main, a conflicting feature branch, tags, a remote
   local db="$1" remote="$TMPDIR/remote.db"
   rm -f "$db" "$remote"
-  "$DOLTLITE" "$db" <<SQL >"$TMPDIR/fixture.out" 2>&1
+  vc_oracle_run_doltlite "$db" <<SQL >"$TMPDIR/fixture.out" 2>&1
 SELECT dolt_config('user.name', 'Fixture'); SELECT dolt_config('user.email', 'fixture@example.com');
 CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, email TEXT, active INT, confidence REAL);
 CREATE INDEX users_by_email ON users(email);
@@ -91,7 +93,7 @@ prelude() {  # prelude <page>: extra statements before the page's blocks
 
 substitute() {  # substitute <db>: rewrite doc placeholders into fixture values
   local db="$1" hash cred
-  hash=$("$DOLTLITE" "$db" "SELECT dolt_hashof('topic');" 2>/dev/null)
+  hash=$(vc_oracle_run_doltlite "$db" "SELECT dolt_hashof('topic');" 2>/dev/null)
   cred=$(ls "$DOLTLITE_CREDS_DIR" 2>/dev/null | head -1 | sed 's/\.jwk$//')
   sed -e "s|0123abcd\.\.\.|$hash|g" \
       -e "s|<credential-id>|$cred|g" -e "s|<kid>|$cred|g" \
@@ -108,7 +110,7 @@ substitute() {  # substitute <db>: rewrite doc placeholders into fixture values
 }
 
 mkdir -p "$TMPDIR/authorized-keys"
-if ! "$DOLTLITE" "file:$TMPDIR/events.sqlite?doltlite_engine=sqlite" \
+if ! vc_oracle_run_doltlite "file:$TMPDIR/events.sqlite?doltlite_engine=sqlite" \
   "CREATE TABLE events(id INTEGER PRIMARY KEY, thread_id INT, type TEXT); CREATE TABLE threads(id INTEGER PRIMARY KEY, title TEXT, archived INT); CREATE TABLE archive(id INTEGER PRIMARY KEY, title TEXT, archived INT); INSERT INTO events VALUES(1,1,'click');" >"$TMPDIR/events.out" 2>&1; then
   echo "FAIL: could not create the stock SQLite fixture: $(head -c 300 "$TMPDIR/events.out")"; echo "Results: 0 passed, 1 failed"; echo "__SUITE_COMPLETE__"; exit 1
 fi
@@ -139,7 +141,7 @@ for page in "$DOCS"/*.md; do
   fi
   if ! fixture "$db"; then fail=$((fail+1)); echo "FAIL: $name (fixture)"; continue; fi
   { echo ".bail off"; prelude "$name"; substitute "$db" < "$TMPDIR/blocks.sql"; } > "$TMPDIR/run.sql"
-  "$DOLTLITE" "$db" < "$TMPDIR/run.sql" > "$TMPDIR/out.txt" 2>&1
+  vc_oracle_run_doltlite --allow-error "$db" < "$TMPDIR/run.sql" > "$TMPDIR/out.txt" 2>&1
   rc=$?
   bad_lines=""
   if ! engine_ok "$rc"; then
@@ -168,6 +170,7 @@ if [ "$pass" -eq 0 ]; then fail=$((fail+1)); echo "FAIL: no documentation page w
 
 echo ""
 echo "================================"
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "================================"
 echo "__SUITE_COMPLETE__"

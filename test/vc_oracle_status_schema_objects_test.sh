@@ -22,7 +22,7 @@ oracle_status() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -54,7 +54,7 @@ oracle_status_dual() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$dl_setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -103,7 +103,7 @@ EXPLAIN QUERY PLAN SELECT * FROM dolt_status WHERE $filter;"
 
   local out actual expected plan
   out=$(printf "%s\n" "$script" \
-        | "$DOLTLITE" "$dir/db" 2>"$dir/err" \
+        | vc_oracle_run_doltlite "$dir/db" 2>"$dir/err" \
         | tr -d '\r')
   expected=$(printf "%s\n" "$out" | grep '^A|' | sed 's/^A|//')
   actual=$(printf "%s\n" "$out" | grep '^B|' | sed 's/^B|//')

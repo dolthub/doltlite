@@ -92,4 +92,57 @@ foreach {form ddl changes} {
   }
 }
 
+foreach keymode {integer without-rowid} {
+  set suffix {}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+  set columns {}
+  set values {}
+  for {set i 1} {$i<=80} {incr i} {
+    lappend columns "c$i INT"
+    lappend values $i
+  }
+  foreach collation {BINARY NOCASE} {
+    foreach operation {merge cherry_pick revert} {
+      reset_db
+      execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, [join $columns ,]) $suffix"
+      execsql "CREATE INDEX idx ON t(c40 COLLATE $collation)"
+      execsql "INSERT INTO t VALUES(1,[join $values ,])"
+      execsql {SELECT dolt_commit('-Am','base')}
+      if {$operation ne "revert"} {
+        execsql {
+          SELECT dolt_branch('other');
+          INSERT INTO t(id,c1,c40) VALUES(3,20,600);
+          SELECT dolt_commit('-Am','main');
+          SELECT dolt_checkout('other');
+        }
+      }
+      execsql {
+        UPDATE t SET c40=999 WHERE id=1;
+        INSERT INTO t(id,c1,c40) VALUES(2,10,500);
+        SELECT dolt_commit('-Am','changes');
+      }
+      set target HEAD
+      set rows {1 40}
+      if {$operation ne "revert"} {
+        execsql {SELECT dolt_checkout('main')}
+        set target other
+        set rows {1 999 2 500 3 600}
+      }
+      set name wide-index-$keymode-$collation-$operation
+      do_test $name-apply {
+        string length [execsql "SELECT dolt_${operation}('$target')"]
+      } 40
+      do_execsql_test $name-rows {SELECT id,c40 FROM t NOT INDEXED ORDER BY id} $rows
+      do_execsql_test $name-index {SELECT id,c40 FROM t INDEXED BY idx ORDER BY id} $rows
+      do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+      db close
+      sqlite3 db test.db
+      do_execsql_test $name-reopen {
+        SELECT id,c40 FROM t INDEXED BY idx ORDER BY id;
+        PRAGMA integrity_check;
+      } [concat $rows ok]
+    }
+  }
+}
+
 finish_test

@@ -28,11 +28,11 @@ oracle() {
   mkdir -p "$dir/dl" "$dir/dt"
   cp -R "$DOLT_TEMPLATE/.dolt" "$dir/dt/.dolt"
 
-  printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" \
+  printf "%s\n" "$setup" | vc_oracle_run_doltlite "$dir/dl/db" \
       >/dev/null 2>"$dir/dl.err"
   local dl_out
   dl_out=$(printf ".headers off\n.mode csv\n%s\n" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+           | vc_oracle_run_doltlite --success "$dir/dl/db" 2>>"$dir/dl.err" \
            | grep -vi 'already up to date' \
            | grep -vi 'Fast-forward' \
            | tr -d '"' \

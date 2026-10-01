@@ -53,17 +53,17 @@ oracle() {
 
   local dl_log dl_status dl_table
   dl_log=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'L' || char(9) || commit_hash || char(9) || message FROM dolt_log;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize_log)
   dl_status=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S' || char(9) || table_name || char(9) || staged || char(9) || status FROM dolt_status;\n" "$setup" \
-              | "$DOLTLITE" "$dir/dl/db.s" 2>>"$dir/dl.err" \
+              | vc_oracle_run_doltlite "$dir/dl/db.s" 2>>"$dir/dl.err" \
               | grep -v '^[0-9]*$' \
               | grep -v '^[0-9a-f]\{40\}$' \
               | normalize_status)
   dl_table=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$table_query" \
-             | "$DOLTLITE" "$dir/dl/db.t" 2>>"$dir/dl.err" \
+             | vc_oracle_run_doltlite "$dir/dl/db.t" 2>>"$dir/dl.err" \
              | grep -v '^[0-9]*$' \
              | grep -v '^[0-9a-f]\{40\}$' \
              | normalize_table)

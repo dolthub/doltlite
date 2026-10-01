@@ -20,7 +20,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S|' || table_name || '|' || staged || '|' || status FROM dolt_status;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^S|' \
            | normalize)
 
@@ -48,7 +48,7 @@ doltlite_schema_reject() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_rej"
   mkdir -p "$dir/dl"
-  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  echo "$sql" | vc_oracle_run_doltlite --expect-error "$dir/dl/db" > "$dir/out" 2>&1
   if grep -qiE 'dolt_ignore|reserved for internal use' "$dir/out" \
      && grep -qiE 'error|fail' "$dir/out"; then
     pass=$((pass+1))
@@ -60,31 +60,6 @@ doltlite_schema_reject() {
   fi
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 echo "=== Version Control Oracle Tests: dolt_ignore ==="
 echo ""
@@ -186,28 +161,28 @@ CREATE TABLE foo_keep_never(x INT PRIMARY KEY);
 
 echo "--- conflicts ---"
 
-oracle_error "conflict_two_wild" "
+vc_oracle_error "conflict_two_wild" "
 INSERT INTO dolt_ignore VALUES ('foo_%', 1);
 INSERT INTO dolt_ignore VALUES ('%_bar', 0);
 CREATE TABLE foo_bar(x INT PRIMARY KEY);
 SELECT table_name FROM dolt_status;
 "
 
-oracle_error "conflict_dolt_add_A" "
+vc_oracle_error "conflict_dolt_add_A" "
 INSERT INTO dolt_ignore VALUES ('foo_%', 1);
 INSERT INTO dolt_ignore VALUES ('%_bar', 0);
 CREATE TABLE foo_bar(x INT PRIMARY KEY);
 SELECT dolt_add('-A');
 "
 
-oracle_error "conflict_dolt_add_name" "
+vc_oracle_error "conflict_dolt_add_name" "
 INSERT INTO dolt_ignore VALUES ('foo_%', 1);
 INSERT INTO dolt_ignore VALUES ('%_bar', 0);
 CREATE TABLE foo_bar(x INT PRIMARY KEY);
 SELECT dolt_add('foo_bar');
 "
 
-oracle_error "conflict_incomparable_specificity" "
+vc_oracle_error "conflict_incomparable_specificity" "
 INSERT INTO dolt_ignore VALUES ('a*bc', 1);
 INSERT INTO dolt_ignore VALUES ('ab*', 0);
 CREATE TABLE abxbc(x INT PRIMARY KEY);
@@ -382,7 +357,7 @@ doltlite_schema_accept() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_acc"
   mkdir -p "$dir/dl"
-  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  echo "$sql" | vc_oracle_run_doltlite "$dir/dl/db" > "$dir/out" 2>&1
   if ! grep -qiE 'error|fail' "$dir/out"; then
     pass=$((pass+1))
   else
@@ -410,7 +385,7 @@ doltlite_runtime_expect() {
   local dir="$TMPROOT/${name}_rt"
   mkdir -p "$dir/dl"
   printf "%s\n.headers off\n.mode list\n.separator '|'\nSELECT table_name || '|' || staged || '|' || status FROM dolt_status;\n" "$sql" \
-    | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+    | vc_oracle_run_doltlite "$dir/dl/db" > "$dir/out" 2>&1
   local got
   got=$(grep '^[^|].*|' "$dir/out" | grep -v '^dolt_ignore|' | sort)
   if [ "$got" = "$expect" ]; then
@@ -480,7 +455,7 @@ CREATE TABLE tmp_new(x INT PRIMARY KEY);
 CREATE TABLE keep(x INT PRIMARY KEY);
 "
 
-oracle_error "merge_conflicting_patterns" "
+vc_oracle_error "merge_conflicting_patterns" "
 CREATE TABLE sentinel(x INT PRIMARY KEY);
 SELECT dolt_commit('-A', '-m', 'base');
 SELECT dolt_checkout('-b', 'b1');
@@ -507,7 +482,7 @@ SELECT CONCAT('M|', coalesce(from_table_name,''), '|', coalesce(to_table_name,''
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep -E '^D|^M' | sort)
 

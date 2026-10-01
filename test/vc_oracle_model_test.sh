@@ -179,7 +179,7 @@ run_model_case() {
   generate_case "$seed" "$dir/dl.sql" "$dir/dt.sql"
 
   local dl_rc dt_rc
-  "$DOLTLITE" "$dir/dl/db" < "$dir/dl.sql" > "$dir/dl.raw" 2> "$dir/dl.err"
+  vc_oracle_run_doltlite "$dir/dl/db" < "$dir/dl.sql" > "$dir/dl.raw" 2> "$dir/dl.err"
   dl_rc=$?
 
   (

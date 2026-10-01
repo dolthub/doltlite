@@ -14,7 +14,7 @@ dl_scalar() {
   local name="$1" sql="$2"
   local db="$TMPROOT/$name.db"
   rm -f "$db"
-  "$DOLTLITE" "$db" "$sql" 2>"$TMPROOT/$name.err"
+  vc_oracle_run_doltlite "$db" "$sql" 2>"$TMPROOT/$name.err"
 }
 
 dolt_scalar() {
@@ -34,7 +34,7 @@ dl_errored() {
   local name="$1" sql="$2"
   local db="$TMPROOT/${name}_err.db"
   rm -f "$db"
-  "$DOLTLITE" "$db" "$sql" >"$TMPROOT/${name}.out" 2>"$TMPROOT/${name}.err"
+  vc_oracle_run_doltlite --expect-error "$db" "$sql" >"$TMPROOT/${name}.out" 2>"$TMPROOT/${name}.err"
   grep -qiE 'error|Error' "$TMPROOT/${name}.out" "$TMPROOT/${name}.err" 2>/dev/null
 }
 
@@ -119,8 +119,8 @@ expect_equal "dolt_version_same_twice" "$V1" "$V2"
 
 DB="$TMPROOT/session.db"
 rm -f "$DB"
-V3=$("$DOLTLITE" "$DB" "SELECT dolt_version();" 2>"$TMPROOT/session.err")
-V4=$("$DOLTLITE" "$DB" "SELECT dolt_version();" 2>>"$TMPROOT/session.err")
+V3=$(vc_oracle_run_doltlite "$DB" "SELECT dolt_version();" 2>"$TMPROOT/session.err")
+V4=$(vc_oracle_run_doltlite "$DB" "SELECT dolt_version();" 2>>"$TMPROOT/session.err")
 expect_equal "dolt_version_stable_across_reopen" "$V3" "$V4"
 
 echo ""
@@ -148,7 +148,7 @@ echo "--- 4. Callable mid-transaction ---"
 DB="$TMPROOT/mid_txn.db"
 rm -f "$DB"
 V_MID=$(printf 'CREATE TABLE t(id INT PRIMARY KEY);\nBEGIN;\nINSERT INTO t VALUES(1);\nSELECT dolt_version();\nROLLBACK;\n' \
-  | "$DOLTLITE" "$DB" 2>"$TMPROOT/mid_txn.err" | tail -1)
+  | vc_oracle_run_doltlite "$DB" 2>"$TMPROOT/mid_txn.err" | tail -1)
 expect_nonempty "dolt_version_mid_transaction" "$V_MID"
 expect_equal    "dolt_version_same_in_txn"     "$V_MID" "$V"
 

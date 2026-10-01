@@ -12,12 +12,12 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 dl() {
   local db="$1" sql="$2" tag="$3"
-  "$DOLTLITE" "$db" "$sql" 2>"$TMPROOT/$tag.err"
+  vc_oracle_run_doltlite "$db" "$sql" 2>"$TMPROOT/$tag.err"
 }
 
 dl_setup() {
   local db="$1" tag="$2"
-  "$DOLTLITE" "$db" >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
+  vc_oracle_run_doltlite "$db" >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
 }
 
 pass_name() {
@@ -45,7 +45,7 @@ expect_eq() {
 expect_error_match() {
   local name="$1" db="$2" sql="$3" pat="$4" tag="$5"
   local out
-  out=$("$DOLTLITE" "$db" "$sql" 2>"$TMPROOT/$tag.err" || true)
+  out=$(vc_oracle_run_doltlite --expect-error "$db" "$sql" 2>"$TMPROOT/$tag.err" || true)
   if printf '%s\n' "$out" && cat "$TMPROOT/$tag.err" | grep -qiE "$pat"; then
     pass_name "$name"
   elif printf '%s\n%s\n' "$out" "$(cat "$TMPROOT/$tag.err")" | grep -qiE "$pat"; then
@@ -68,7 +68,7 @@ run_tx_oracle_case() {
 
   printf '%s\n' "$dl_setup_sql" | dl_setup "$dl_db" "${name}_dl_setup"
   local dl_out
-  dl_out=$(printf '%s\n' "$dl_tx_sql" | "$DOLTLITE" "$dl_db" 2>"$TMPROOT/${name}_dl.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
+  dl_out=$(printf '%s\n' "$dl_tx_sql" | vc_oracle_run_doltlite "$dl_db" 2>"$TMPROOT/${name}_dl.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
 
   (
     cd "$dt_dir" || exit 1
@@ -91,7 +91,7 @@ run_tx_expected_case() {
 
   printf '%s\n' "$setup_sql" | dl_setup "$db" "${name}_setup"
   local out
-  out=$(printf '%s\n' "$tx_sql" | "$DOLTLITE" "$db" 2>"$TMPROOT/${name}.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
+  out=$(printf '%s\n' "$tx_sql" | vc_oracle_run_doltlite --expect-error "$db" 2>"$TMPROOT/${name}.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
   expect_eq "${name}_expected_state" "$expected" "$out"
 }
 
@@ -102,7 +102,7 @@ run_success_expected_case() {
 
   printf '%s\n' "$setup_sql" | dl_setup "$db" "${name}_setup"
   local out
-  out=$("$DOLTLITE" "$db" "$query" 2>"$TMPROOT/${name}_query.err" | tr -d '\r')
+  out=$(vc_oracle_run_doltlite "$db" "$query" 2>"$TMPROOT/${name}_query.err" | tr -d '\r')
   expect_eq "${name}_${op}_expected_state" "$expected" "$out"
 }
 
@@ -116,7 +116,7 @@ run_success_oracle_case() {
 
   printf '%s\n' "$setup_sql" | dl_setup "$dl_db" "${name}_dl_setup"
   local dl_out
-  dl_out=$("$DOLTLITE" "$dl_db" "$query" 2>"$TMPROOT/${name}_dl_query.err" | tr -d '\r')
+  dl_out=$(vc_oracle_run_doltlite "$dl_db" "$query" 2>"$TMPROOT/${name}_dl_query.err" | tr -d '\r')
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup_sql")

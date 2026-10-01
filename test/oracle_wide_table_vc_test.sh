@@ -5,6 +5,7 @@ DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -12,7 +13,7 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
-dl() { "$DOLTLITE" "$1" "$2" 2>/dev/null; }
+dl() { vc_oracle_run_doltlite "$1" "$2" 2>/dev/null; }
 
 gen_cols() { local n=$1; for i in $(seq 1 $n); do echo -n "c$i INT"; [ $i -lt $n ] && echo -n ", "; done; }
 gen_vals() { local n=$1; for i in $(seq 1 $n); do echo -n "$i"; [ $i -lt $n ] && echo -n ","; done; }
@@ -44,7 +45,7 @@ echo ""
 echo "--- 3: 100-column conflict (same column both sides) ---"
 DB="$TMPROOT/3.db"
 CONF=$(
-  "$DOLTLITE" "$DB" 2>/dev/null <<SQL | awk -F'|' '$1=="CONF"{print $2}'
+  vc_oracle_run_doltlite --expect-error "$DB" 2>/dev/null <<SQL | awk -F'|' '$1=="CONF"{print $2}'
 CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS);
 INSERT INTO t VALUES(1, $VALS);
 SELECT dolt_commit('-Am','base');
@@ -119,13 +120,14 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1,
 echo ""
 echo "--- 10: Reopen after 100-column merge ---"
 DB="$TMPROOT/10.db"
-dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1, $VALS); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET c1=111 WHERE id=1; SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); UPDATE t SET c100=999 WHERE id=1; SELECT dolt_commit('-Am','main'); SELECT dolt_merge('feat'); SELECT dolt_commit('-Am','merged');" >/dev/null
+dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1, $VALS); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET c1=111 WHERE id=1; SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); UPDATE t SET c100=999 WHERE id=1; SELECT dolt_commit('-Am','main'); SELECT dolt_merge('feat'); SELECT dolt_commit('--allow-empty','-Am','merged');" >/dev/null
 [ "$(dl "$DB" "SELECT c1 FROM t WHERE id=1;")" = "111" ] && pass_name "10_c1" || fail_name "10_c1"
 [ "$(dl "$DB" "SELECT c100 FROM t WHERE id=1;")" = "999" ] && pass_name "10_c100" || fail_name "10_c100"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "10_integrity" || fail_name "10_integrity"
 
 echo ""
 echo "======================================="
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
 echo "__SUITE_COMPLETE__"

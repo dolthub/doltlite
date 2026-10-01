@@ -7,6 +7,7 @@ VC_PINNED_VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/../.dolt-oracle-version")
 export VC_PINNED_VERSION
 VC_HARNESS_DIR=$(mktemp -d)
 trap 'rm -rf "$VC_HARNESS_DIR"' EXIT
+vc_oracle_init_execution "$VC_HARNESS_DIR"
 export VC_HARNESS_DIR
 mkdir -p "$VC_HARNESS_DIR/bin dir" "$VC_HARNESS_DIR/repo"
 
@@ -176,5 +177,113 @@ for base in vc_oracle_clean_test.sh vc_oracle_status_test.sh \
   fi
   checks=$((checks+1))
 done
+
+cat > "$VC_HARNESS_DIR/branch-candidate" <<'STUB'
+#!/usr/bin/env bash
+cat >/dev/null
+if [ "${VC_MERGED_STREAMS:-}" = 1 ]; then
+  echo 'stdout first'
+  echo 'stderr second' >&2
+  echo 'stdout third'
+  exit 0
+fi
+case "$1" in
+  */checkout_feature/*) branch=feature ;;
+  */checkout_create_branch/*) branch=new_branch ;;
+  *) branch=main ;;
+esac
+printf '%s\n' "$branch"
+echo 'candidate session diagnostic' >&2
+exit "${VC_SESSION_RC:-0}"
+STUB
+cat > "$VC_HARNESS_DIR/branch-reference" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  version) echo "dolt version ${VC_PINNED_VERSION#v}"; exit 0 ;;
+  init) exit 0 ;;
+esac
+cat >/dev/null
+case "$PWD" in
+  */checkout_feature/*) branch=feature ;;
+  */checkout_create_branch/*) branch=new_branch ;;
+  *) branch=main ;;
+esac
+printf 'active_branch()\n%s\n' "$branch"
+STUB
+chmod +x "$VC_HARNESS_DIR/branch-candidate" "$VC_HARNESS_DIR/branch-reference"
+
+bash "$SCRIPT_DIR/vc_oracle_active_branch_test.sh" "$VC_HARNESS_DIR/branch-candidate" \
+  "$VC_HARNESS_DIR/branch-reference" > "$VC_HARNESS_DIR/branch.log" 2>&1
+check grep -q 'Results: 4 passed, 0 failed' "$VC_HARNESS_DIR/branch.log"
+for rc in 1 139; do
+  if VC_SESSION_RC="$rc" bash "$SCRIPT_DIR/vc_oracle_active_branch_test.sh" \
+      "$VC_HARNESS_DIR/branch-candidate" "$VC_HARNESS_DIR/branch-reference" \
+      > "$VC_HARNESS_DIR/branch.log" 2>&1; then
+    echo "FAIL: active-branch suite accepted valid output with exit $rc" >&2
+    exit 1
+  fi
+  check grep -q "doltlite rc=$rc, expected success" "$VC_HARNESS_DIR/branch.log"
+  check grep -q 'candidate session diagnostic' "$VC_HARNESS_DIR/branch.log"
+  check grep -qx '__SUITE_COMPLETE__' "$VC_HARNESS_DIR/branch.log"
+done
+
+DOLTLITE="$VC_HARNESS_DIR/branch-candidate"
+for expectation in --success --expect-error --allow-error; do
+  for rc in 0 1 127 128 139 143; do
+    pass=1; fail=0; compared=0; nonempty=0; FAILED_NAMES=""
+    export VC_SESSION_RC="$rc"
+    output=$(printf 'SELECT 1;\n' | vc_oracle_run_doltlite "$expectation" "$VC_HARNESS_DIR/db" \
+      2>/dev/null | tail -1) || true
+    check test "$output" = main
+    expected_fail=0
+    if [ "$rc" -ge 128 ] \
+       || { [ "$expectation" = --success ] && [ "$rc" -ne 0 ]; } \
+       || { [ "$expectation" = --expect-error ] && [ "$rc" -eq 0 ]; }; then
+      expected_fail=1
+    fi
+    finish_rc=0
+    vc_oracle_finish > "$VC_HARNESS_DIR/execution.log" || finish_rc=$?
+    check test "$finish_rc" = "$expected_fail"
+    if [ "$expected_fail" -eq 1 ]; then
+      check grep -q "doltlite rc=$rc" "$VC_HARNESS_DIR/execution.log"
+      check grep -q 'candidate session diagnostic' "$VC_HARNESS_DIR/execution.log"
+    fi
+  done
+done
+unset VC_SESSION_RC
+
+pass=1; fail=0; FAILED_NAMES=""
+rc=0
+VC_SESSION_RC=1 VC_ORACLE_EXPECTATION=error vc_oracle_run_doltlite_script \
+  "$VC_HARNESS_DIR/checkout_feature/db" "$VC_HARNESS_DIR/scoped.out" \
+  "$VC_HARNESS_DIR/scoped.err" 'SELECT active_branch();' || rc=$?
+check test "$rc" = 1
+check test "$(cat "$VC_HARNESS_DIR/scoped.out")" = feature
+vc_oracle_finish > "$VC_HARNESS_DIR/scoped.log"
+check test "$fail" = 0
+
+pass=1; fail=0; FAILED_NAMES=""
+VC_SESSION_RC=1 VC_ORACLE_EXPECTATION=allow-error vc_oracle_run_doltlite --success \
+  "$VC_HARNESS_DIR/setup-db" >/dev/null 2>/dev/null || true
+if vc_oracle_finish > "$VC_HARNESS_DIR/strict.log"; then
+  echo 'FAIL: explicit success mode inherited an error expectation' >&2
+  exit 1
+fi
+check grep -q 'expected success' "$VC_HARNESS_DIR/strict.log"
+
+for attempt in 1 2 3; do
+  VC_MERGED_STREAMS=1 vc_oracle_run_doltlite "$VC_HARNESS_DIR/order-db" \
+    > "$VC_HARNESS_DIR/merged.out" 2>&1
+  check test "$(cat "$VC_HARNESS_DIR/merged.out")" = $'stdout first\nstderr second\nstdout third'
+done
+
+pass=1; fail=0; FAILED_NAMES=""
+VC_SESSION_RC=139 vc_oracle_run_doltlite "$VC_HARNESS_DIR/setup-db" \
+  >/dev/null 2>/dev/null || true
+if vc_oracle_finish > "$VC_HARNESS_DIR/setup.log"; then
+  echo 'FAIL: discarded setup status accepted' >&2
+  exit 1
+fi
+check grep -q 'setup-db' "$VC_HARNESS_DIR/setup.log"
 
 printf 'VC oracle harness: %s checks passed\n' "$checks"

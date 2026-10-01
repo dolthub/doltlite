@@ -58,12 +58,12 @@ oracle() {
 
   local dl_log dl_status
   dl_log=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'L' || char(9) || commit_hash || char(9) || message || char(9) || coalesce(email, '') || char(9) || coalesce(date, '') FROM dolt_log;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize_log)
   dl_status=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S' || char(9) || table_name || char(9) || staged || char(9) || status FROM dolt_status;\n" "$setup" \
-              | "$DOLTLITE" "$dir/dl/db.s" 2>>"$dir/dl.err" \
+              | vc_oracle_run_doltlite "$dir/dl/db.s" 2>>"$dir/dl.err" \
               | grep -v '^[0-9]*$' \
               | grep -v '^[0-9a-f]\{40\}$' \
               | normalize_status)
@@ -104,31 +104,6 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_query() {
   local name="$1" setup="$2" dl_query="$3" dt_query="$4"
@@ -137,7 +112,7 @@ oracle_query() {
 
   local dl_out dt_out dolt_setup dolt_query
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$dl_query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' | grep '^R|' | sort)
 
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -160,7 +135,7 @@ oracle_query_dual() {
 
   local dl_out dt_out dolt_setup dolt_query
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' | grep '^R|' | sort)
 
   dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
@@ -210,7 +185,7 @@ INSERT INTO t VALUES (1, 10);
 SELECT dolt_commit('-A', '-m', 'first commit');
 "
 
-oracle_error "commit_all_long_new_table_errors" "
+vc_oracle_error "commit_all_long_new_table_errors" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_commit('--all', '-m', 'first commit');
@@ -225,7 +200,7 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('--all', '-m', 'modify');
 "
 
-oracle_error "commit_lowercase_a_new_table_errors" "
+vc_oracle_error "commit_lowercase_a_new_table_errors" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_commit('-a', '-m', 'first commit');
@@ -249,7 +224,7 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('-am', 'modify');
 "
 
-oracle_error "commit_combo_am_new_table_errors" "
+vc_oracle_error "commit_combo_am_new_table_errors" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_commit('-am', 'first commit');
@@ -278,14 +253,14 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--author', 'Alice Author <alice@example.com');
 "
 
-oracle_error "commit_malformed_author" "
+vc_oracle_error "commit_malformed_author" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--author', 'not-an-author');
 "
 
-oracle_error "commit_empty_author_email" "
+vc_oracle_error "commit_empty_author_email" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -343,7 +318,7 @@ SELECT dolt_commit('--amend', '--date', '2020-06-15T12:00:00Z');
 "
 
 # Amending a merge must keep every parent; dropping them makes a later merge of the same branch replay.
-oracle_error "commit_amend_during_merge" "
+vc_oracle_error "commit_amend_during_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -454,7 +429,7 @@ SELECT dolt_commit('-m', 'day', '--date', '2024-01-15');
 " "SELECT 'R|' || date FROM dolt_log WHERE message='day';" \
   "SELECT concat('R|', DATE_FORMAT(date, '%Y-%m-%d %H:%i:%s')) FROM dolt_log WHERE message='day';"
 
-oracle_error "commit_date_junk_rejected" "
+vc_oracle_error "commit_date_junk_rejected" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -625,70 +600,70 @@ INSERT INTO t VALUES (3, 30);
 
 echo "--- error paths ---"
 
-oracle_error "commit_no_message" "
+vc_oracle_error "commit_no_message" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit();
 "
 
-oracle_error "commit_empty_message" "
+vc_oracle_error "commit_empty_message" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', '');
 "
 
-oracle_error "commit_extra_positional_arg" "
+vc_oracle_error "commit_extra_positional_arg" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', 'extra');
 "
 
-oracle_error "commit_missing_short_message_value" "
+vc_oracle_error "commit_missing_short_message_value" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m');
 "
 
-oracle_error "commit_missing_long_message_value" "
+vc_oracle_error "commit_missing_long_message_value" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('--message');
 "
 
-oracle_error "commit_missing_author_value" "
+vc_oracle_error "commit_missing_author_value" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--author');
 "
 
-oracle_error "commit_missing_date_value" "
+vc_oracle_error "commit_missing_date_value" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--date');
 "
 
-oracle_error "commit_unknown_short_flag" "
+vc_oracle_error "commit_unknown_short_flag" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-z', '-m', 'first');
 "
 
-oracle_error "commit_unknown_long_flag" "
+vc_oracle_error "commit_unknown_long_flag" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('--bogus', '-m', 'first');
 "
 
-oracle_error "commit_nothing_staged" "
+vc_oracle_error "commit_nothing_staged" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -696,7 +671,7 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_commit('-m', 'nothing-to-do');
 "
 
-oracle_error "commit_with_unresolved_conflicts" "
+vc_oracle_error "commit_with_unresolved_conflicts" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -714,7 +689,7 @@ SELECT dolt_merge('feature');
 SELECT dolt_commit('-m', 'force-commit-with-conflict');
 "
 
-oracle_error "commit_missing_fk_parent_empty" "
+vc_oracle_error "commit_missing_fk_parent_empty" "
 CREATE TABLE parents(id INTEGER PRIMARY KEY);
 CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
   FOREIGN KEY(parent_id) REFERENCES parents(id));
@@ -722,7 +697,7 @@ SELECT dolt_add('children');
 SELECT dolt_commit('-m', 'child only');
 "
 
-oracle_error "commit_missing_fk_parent_populated" "
+vc_oracle_error "commit_missing_fk_parent_populated" "
 CREATE TABLE parents(id INTEGER PRIMARY KEY);
 CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
   FOREIGN KEY(parent_id) REFERENCES parents(id));
@@ -760,7 +735,7 @@ SELECT dolt_add('children');
 SELECT dolt_commit('--force', '-m', 'child only');
 "
 
-oracle_error "commit_missing_fk_renamed_parent" "
+vc_oracle_error "commit_missing_fk_renamed_parent" "
 CREATE TABLE parents(id INTEGER PRIMARY KEY);
 CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
   FOREIGN KEY(parent_id) REFERENCES parents(id));
@@ -781,12 +756,12 @@ SELECT dolt_commit('-m', 'c1');
 ALTER TABLE t RENAME TO t2;
 "
 
-oracle "commit_a_leaves_unstaged_rename_alone" "
+VC_ORACLE_EXPECTATION=allow-error oracle "commit_a_leaves_unstaged_rename_alone" "
 $COMMIT_A_RENAME_SEED
 SELECT dolt_commit('-am', 'nothing stageable');
 "
 
-oracle_query "commit_a_unstaged_rename_head_keeps_table" "
+VC_ORACLE_EXPECTATION=allow-error oracle_query "commit_a_unstaged_rename_head_keeps_table" "
 $COMMIT_A_RENAME_SEED
 SELECT dolt_commit('-am', 'nothing stageable');
 SELECT dolt_reset('--hard');
@@ -854,9 +829,9 @@ SELECT dolt_commit('-m','initial');
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('feature');"
     oracle_query "indexed_${mode}_${count}" "$setup" "$dl_query" "$dt_query"
-    oracle_error "indexed_${mode}_${count}_duplicate" "$setup
+    vc_oracle_error "indexed_${mode}_${count}_duplicate" "$setup
 INSERT INTO items_0 VALUES('duplicate','label_0');"
-    oracle_error "indexed_${mode}_${count}_missing_add" "$setup
+    vc_oracle_error "indexed_${mode}_${count}_missing_add" "$setup
 SELECT dolt_add('items_0','missing_table');"
   done
 done
@@ -909,7 +884,7 @@ UPDATE parents SET label='Working Alpha' WHERE id='p1';
 UPDATE children SET slug='working-s1' WHERE id='k1';
 SELECT dolt_commit('-m','staged snapshot');
 CREATE TABLE extra(id INTEGER PRIMARY KEY, label VARCHAR(40));
-INSERT INTO extra VALUES('e','extra');
+INSERT INTO extra VALUES(1,'extra');
 SELECT dolt_commit('-am','working edits');
 SELECT dolt_reset('--hard');
 " "SELECT 'R|p|' || id || '|' || label FROM parents WHERE id='p1';

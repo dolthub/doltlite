@@ -20,7 +20,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^ANS|' \
            | sed 's/^ANS|//')
@@ -51,7 +51,7 @@ oracle_in_set() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^ANS|' \
            | sed 's/^ANS|//')
@@ -87,31 +87,6 @@ oracle_in_set() {
   fi
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 echo "=== Version Control Oracle Tests: dolt_merge_base ==="
 echo ""
@@ -329,27 +304,27 @@ oracle "fanin_head_parent_feat" "$FANIN" "'HEAD~1'" "'feat'"
 
 echo "--- error paths ---"
 
-oracle_error "bad_ref1" "
+vc_oracle_error "bad_ref1" "
 $LINEAR
 SELECT dolt_merge_base('nope', 'main');
 "
 
-oracle_error "bad_ref2" "
+vc_oracle_error "bad_ref2" "
 $LINEAR
 SELECT dolt_merge_base('main', 'nope');
 "
 
-oracle_error "no_args" "
+vc_oracle_error "no_args" "
 $LINEAR
 SELECT dolt_merge_base();
 "
 
-oracle_error "one_arg" "
+vc_oracle_error "one_arg" "
 $LINEAR
 SELECT dolt_merge_base('main');
 "
 
-oracle_error "three_args" "
+vc_oracle_error "three_args" "
 $LINEAR
 SELECT dolt_merge_base('main', 'main', 'main');
 "

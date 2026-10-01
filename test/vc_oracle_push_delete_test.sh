@@ -3,15 +3,21 @@ set -euo pipefail
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 DOLTLITE=$(vc_oracle_resolve_binary "${1:-build/doltlite}")
 DOLT=$(vc_oracle_resolve_binary "${2:-dolt}")
+vc_oracle_check_dolt_version "$DOLT"
 TMPROOT=$(mktemp -d)
 trap 'rm -rf "$TMPROOT"' EXIT
+vc_oracle_init_execution "$TMPROOT"
 pass=0
 fail=0
 FAILED_NAMES=""
 mkdir -p "$TMPROOT/dt" "$TMPROOT/dt_remote"
 (cd "$TMPROOT/dt" && vc_oracle_init_repo)
 
-run_dl() { "$DOLTLITE" -bail "$TMPROOT/dl.db" "$1"; }
+run_dl() {
+  local sql="$1"
+  shift
+  vc_oracle_run_doltlite "$@" -bail "$TMPROOT/dl.db" "$sql"
+}
 run_dt() { (cd "$TMPROOT/dt" && "$DOLT" sql -r csv -q "$1"); }
 
 setup="CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -44,7 +50,7 @@ run_dl "SELECT dolt_fetch('origin');" >/dev/null
 run_dt "CALL dolt_fetch('origin');" >/dev/null
 compare_state fetch_does_not_resurrect_deleted_branch
 dl_rc=0; dt_rc=0
-run_dl "SELECT dolt_push('origin',':feature');" >"$TMPROOT/dl.err" 2>&1 || dl_rc=$?
+run_dl "SELECT dolt_push('origin',':feature');" --expect-error >"$TMPROOT/dl.err" 2>&1 || dl_rc=$?
 run_dt "CALL dolt_push('origin',':feature');" >"$TMPROOT/dt.err" 2>&1 || dt_rc=$?
 if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
   pass=$((pass+1))
@@ -57,7 +63,7 @@ run_dl "SELECT dolt_push('origin','feature'); SELECT dolt_fetch('origin');" >/de
 run_dt "CALL dolt_push('origin','feature'); CALL dolt_fetch('origin');" >/dev/null
 compare_state recreate_deleted_branch
 
-"$DOLTLITE" -bail "$TMPROOT/peer.db" "
+vc_oracle_run_doltlite -bail "$TMPROOT/peer.db" "
 SELECT dolt_clone('file://$TMPROOT/remote.db');
 SELECT dolt_push('origin',':feature');" >/dev/null
 (cd "$TMPROOT" && "$DOLT" clone "file://$TMPROOT/dt_remote" peer >/dev/null)

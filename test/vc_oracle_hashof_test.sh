@@ -17,7 +17,7 @@ setup_pair() {
   rm -f "$dl_db"
   mkdir -p "$dt_repo"
   printf "%s\n" "$setup" \
-    | "$DOLTLITE" "$dl_db" >/dev/null 2>"$TMPROOT/$name.dl.setup.err"
+    | vc_oracle_run_doltlite "$dl_db" >/dev/null 2>"$TMPROOT/$name.dl.setup.err"
   dl_rc=$?
   (
     cd "$dt_repo" || exit 1
@@ -35,7 +35,7 @@ setup_pair() {
 query_pair() {
   local name="$1" query="$2"
   local dl dt
-  dl=$("$DOLTLITE" "$TMPROOT/$name.db" "$query" \
+  dl=$(vc_oracle_run_doltlite "$TMPROOT/$name.db" "$query" \
     2>>"$TMPROOT/$name.dl.query.err" | tr -d '\r"')
   dt=$(cd "$TMPROOT/$name.dolt" \
     && "$DOLT" sql -r csv -q "$query" \
@@ -46,7 +46,7 @@ query_pair() {
 query_pair_separate() {
   local name="$1" dl_query="$2" dt_query="$3"
   local dl dt
-  dl=$("$DOLTLITE" "$TMPROOT/$name.db" "$dl_query" \
+  dl=$(vc_oracle_run_doltlite "$TMPROOT/$name.db" "$dl_query" \
     2>>"$TMPROOT/$name.dl.query.err" | tail -n 1 | tr -d '\r"')
   dt=$(cd "$TMPROOT/$name.dolt" \
     && "$DOLT" sql -r csv -q "$dt_query" \
@@ -69,7 +69,7 @@ run_hash_on() {
 
 exec_pair() {
   local name="$1" sql="$2" dt_sql
-  printf '%s\n' "$sql" | "$DOLTLITE" "$TMPROOT/$name.db" \
+  printf '%s\n' "$sql" | vc_oracle_run_doltlite "$TMPROOT/$name.db" \
     >/dev/null 2>>"$TMPROOT/$name.dl.exec.err"
   dt_sql=$(vc_oracle_translate_for_dolt "$sql")
   (cd "$TMPROOT/$name.dolt" && printf '%s\n' "$dt_sql" | "$DOLT" sql -c) \
@@ -123,7 +123,7 @@ different() {
 both_error() {
   local name="$1" db="$2" query="$3"
   local dl_rc dt_rc
-  "$DOLTLITE" "$TMPROOT/$db.db" "$query" \
+  vc_oracle_run_doltlite --expect-error "$TMPROOT/$db.db" "$query" \
     >/dev/null 2>"$TMPROOT/$name.dl.err"
   dl_rc=$?
   (cd "$TMPROOT/$db.dolt" && "$DOLT" sql -q "$query") \

@@ -27,7 +27,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^R|' | sort)
 
@@ -64,7 +64,7 @@ oracle_conflict() {
 
   local dl_out
   dl_out=$(printf "%s" "$dl_script" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | grep -v '^Merge has' \
@@ -136,7 +136,7 @@ INSERT INTO t VALUES(3.75,30);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','ADD');
 " "SELECT CONCAT('R|',pk,'|',message) FROM dolt_blame_t ORDER BY pk;"
 
-oracle_conflict "a_real_pk_conflict_ours" "
+VC_ORACLE_EXPECTATION=allow-error oracle_conflict "a_real_pk_conflict_ours" "
 CREATE TABLE t(pk REAL PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1.5,'base'),(2.25,'stable');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');
@@ -152,7 +152,7 @@ SELECT dolt_merge('feat');
 SELECT dolt_conflicts_resolve('--ours','t');
 SELECT CONCAT('R|',pk,'|',v) FROM t ORDER BY pk;"
 
-oracle_conflict "a_real_pk_conflict_theirs" "
+VC_ORACLE_EXPECTATION=allow-error oracle_conflict "a_real_pk_conflict_theirs" "
 CREATE TABLE t(pk REAL PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1.5,'base'),(2.25,'stable');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');
@@ -192,7 +192,7 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m','UPD');
    FROM dolt_history_t h LEFT JOIN dolt_log l ON l.commit_hash=h.commit_hash
    ORDER BY h.a, h.b, l.message;"
 
-oracle_conflict "b_int_real_pk_conflict_ours" "
+VC_ORACLE_EXPECTATION=allow-error oracle_conflict "b_int_real_pk_conflict_ours" "
 CREATE TABLE t(a INTEGER, b REAL, v TEXT, PRIMARY KEY(a, b));
 INSERT INTO t VALUES(1,1.5,'base');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');
@@ -230,7 +230,7 @@ UPDATE t SET v=95 WHERE cat='alice' AND tag='math';
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','BUMP');
 " "SELECT CONCAT('R|',cat,'|',tag,'|',message) FROM dolt_blame_t ORDER BY cat,tag;"
 
-oracle_conflict "c_text_text_pk_conflict_ours" "
+VC_ORACLE_EXPECTATION=allow-error oracle_conflict "c_text_text_pk_conflict_ours" "
 CREATE TABLE t(cat VARCHAR(32), tag VARCHAR(32), v INT, PRIMARY KEY(cat, tag));
 INSERT INTO t VALUES('alice','math',90);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');
@@ -246,7 +246,7 @@ SELECT dolt_merge('feat');
 SELECT dolt_conflicts_resolve('--ours','t');
 SELECT CONCAT('R|',cat,'|',tag,'|',v) FROM t ORDER BY cat,tag;"
 
-oracle_conflict "c_text_text_pk_conflict_theirs" "
+VC_ORACLE_EXPECTATION=allow-error oracle_conflict "c_text_text_pk_conflict_theirs" "
 CREATE TABLE t(cat VARCHAR(32), tag VARCHAR(32), v INT, PRIMARY KEY(cat, tag));
 INSERT INTO t VALUES('alice','math',90),('bob','sci',70);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');

@@ -31,7 +31,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -55,31 +55,6 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_with_rows() {
   local name="$1" setup="$2"
@@ -91,12 +66,12 @@ oracle_with_rows() {
 
   local dl_br dl_rows
   dl_br=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q_br" \
-          | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+          | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
           | grep -v '^[0-9]*$' \
           | grep -v '^[0-9a-f]\{40\}$' \
           | normalize)
   dl_rows=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q_rows" \
-            | "$DOLTLITE" "$dir/dl/db.rows" 2>>"$dir/dl.err" \
+            | vc_oracle_run_doltlite "$dir/dl/db.rows" 2>>"$dir/dl.err" \
             | grep -v '^[0-9]*$' \
             | grep -v '^[0-9a-f]\{40\}$')
 
@@ -140,7 +115,7 @@ oracle_same_session() {
       if [ -n "$dl_query" ]; then
         printf "%s\n" "$dl_query"
       fi
-    } | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+    } | vc_oracle_run_doltlite --expect-error "$dir/dl/db" 2>"$dir/dl.err" \
       | tr -d '\r' \
       | awk -F'\t' '$1=="Q"{print}'
   )
@@ -247,7 +222,7 @@ SELECT dolt_branch('feature');
 SELECT dolt_branch('-D', 'feature');
 "
 
-oracle_error "delete_unmerged_requires_force" "
+vc_oracle_error "delete_unmerged_requires_force" "
 $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('feature');
@@ -393,127 +368,127 @@ SELECT concat('Q', char(9), 'after_rb', char(9), active_branch());"
 
 echo "--- error paths ---"
 
-oracle_error "delete_nonexistent" "
+vc_oracle_error "delete_nonexistent" "
 $SEED
 SELECT dolt_branch('-d', 'nope');
 "
 
-oracle_error "force_delete_nonexistent" "
+vc_oracle_error "force_delete_nonexistent" "
 $SEED
 SELECT dolt_branch('-D', 'nope');
 "
 
-oracle_error "copy_source_missing" "
+vc_oracle_error "copy_source_missing" "
 $SEED
 SELECT dolt_branch('-c', 'nope', 'dest');
 "
 
-oracle_error "move_source_missing" "
+vc_oracle_error "move_source_missing" "
 $SEED
 SELECT dolt_branch('-m', 'nope', 'dest');
 "
 
-oracle_error "create_duplicate" "
+vc_oracle_error "create_duplicate" "
 $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_branch('feature');
 "
 
-oracle_error "create_empty_name" "
+vc_oracle_error "create_empty_name" "
 $SEED
 SELECT dolt_branch('');
 "
 
-oracle_error "create_reserved_head" "
+vc_oracle_error "create_reserved_head" "
 $SEED
 SELECT dolt_branch('HEAD');
 "
 
-oracle_error "create_reserved_lower_head" "
+vc_oracle_error "create_reserved_lower_head" "
 $SEED
 SELECT dolt_branch('head');
 "
 
-oracle_error "create_invalid_double_dot" "
+vc_oracle_error "create_invalid_double_dot" "
 $SEED
 SELECT dolt_branch('bad..name');
 "
 
-oracle_error "create_invalid_dot_component" "
+vc_oracle_error "create_invalid_dot_component" "
 $SEED
 SELECT dolt_branch('feature/.hidden');
 "
 
-oracle_error "create_invalid_lock_suffix" "
+vc_oracle_error "create_invalid_lock_suffix" "
 $SEED
 SELECT dolt_branch('feature.lock');
 "
 
-oracle_error "create_invalid_space" "
+vc_oracle_error "create_invalid_space" "
 $SEED
 SELECT dolt_branch('bad name');
 "
 
-oracle_error "create_invalid_reflog_syntax" "
+vc_oracle_error "create_invalid_reflog_syntax" "
 $SEED
 SELECT dolt_branch('bad@{name}');
 "
 
-oracle_error "copy_empty_source" "
+vc_oracle_error "copy_empty_source" "
 $SEED
 SELECT dolt_branch('-c', '', 'dest');
 "
 
-oracle_error "copy_empty_dest" "
+vc_oracle_error "copy_empty_dest" "
 $SEED
 SELECT dolt_branch('-c', 'main', '');
 "
 
-oracle_error "copy_invalid_dest" "
+vc_oracle_error "copy_invalid_dest" "
 $SEED
 SELECT dolt_branch('-c', 'main', 'bad..copy');
 "
 
-oracle_error "move_empty_source" "
+vc_oracle_error "move_empty_source" "
 $SEED
 SELECT dolt_branch('-m', '', 'dest');
 "
 
-oracle_error "move_empty_dest" "
+vc_oracle_error "move_empty_dest" "
 $SEED
 SELECT dolt_branch('-m', 'main', '');
 "
 
-oracle_error "move_invalid_dest" "
+vc_oracle_error "move_invalid_dest" "
 $SEED
 SELECT dolt_branch('source');
 SELECT dolt_branch('-m', 'source', 'bad..move');
 "
 
-oracle_error "create_extra_arg" "
+vc_oracle_error "create_extra_arg" "
 $SEED
 SELECT dolt_branch('feature', 'main', 'extra');
 "
 
-oracle_error "copy_extra_arg" "
+vc_oracle_error "copy_extra_arg" "
 $SEED
 SELECT dolt_branch('src');
 SELECT dolt_branch('-c', 'src', 'dest', 'extra');
 "
 
-oracle_error "move_extra_arg" "
+vc_oracle_error "move_extra_arg" "
 $SEED
 SELECT dolt_branch('src');
 SELECT dolt_branch('-m', 'src', 'dest', 'extra');
 "
 
-oracle_error "delete_multiple_with_missing" "
+vc_oracle_error "delete_multiple_with_missing" "
 $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_branch('-d', 'feature', 'missing');
 "
 
-oracle_error "no_args" "
+vc_oracle_error "no_args" "
 SELECT dolt_branch();
 "
 
@@ -524,32 +499,32 @@ SELECT dolt_commit('-Am', 'c1');
 SELECT dolt_branch('feat');
 "
 
-oracle_error "create_case_variant_of_existing_branch" "
+vc_oracle_error "create_case_variant_of_existing_branch" "
 $SEED_CASE
 SELECT dolt_branch('Feat');
 "
 
-oracle_error "create_case_variant_of_default_branch" "
+vc_oracle_error "create_case_variant_of_default_branch" "
 $SEED_CASE
 SELECT dolt_branch('MAIN');
 "
 
-oracle_error "copy_to_case_variant" "
+vc_oracle_error "copy_to_case_variant" "
 $SEED_CASE
 SELECT dolt_branch('-c', 'main', 'MAIN');
 "
 
-oracle_error "force_create_case_variant" "
+vc_oracle_error "force_create_case_variant" "
 $SEED_CASE
 SELECT dolt_branch('-f', 'Main', 'main');
 "
 
-oracle_error "checkout_b_case_variant" "
+vc_oracle_error "checkout_b_case_variant" "
 $SEED_CASE
 SELECT dolt_checkout('-b', 'MAIN');
 "
 
-oracle_error "move_onto_case_variant_of_other_branch" "
+vc_oracle_error "move_onto_case_variant_of_other_branch" "
 $SEED_CASE
 SELECT dolt_branch('-m', 'feat', 'MAIN');
 "

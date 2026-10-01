@@ -34,7 +34,7 @@ oracle_both_error() {
   mkdir -p "$dir/dl"
 
   printf "%s\n%s\n" "$SEED" "$query" \
-    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
+    | vc_oracle_run_doltlite --expect-error "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
   local dl_rc=$?
 
   local dolt_seed

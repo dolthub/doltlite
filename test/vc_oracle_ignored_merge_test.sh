@@ -41,7 +41,7 @@ oracle() {
     SELECT concat('R|runtime|',id,'|',kind) FROM runtime_jobs ORDER BY id;
     SELECT concat('R|after|',table_name,'|',staged,'|',status)
       FROM dolt_status ORDER BY table_name,staged;"
-  printf '.bail on\n%s\n' "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
+  printf '.bail on\n%s\n' "$setup" | vc_oracle_run_doltlite "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
   dl_rc=$?
   vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
     "$(vc_oracle_translate_for_dolt "$setup")" -r csv

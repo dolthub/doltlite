@@ -576,6 +576,7 @@ static int doltliteBuildIndexEntry(
     pIdxRec = sqlite3_malloc(nTotal);
     if( !pIdxRec ){
       sqlite3_free(aFieldOrder);
+      doltliteRecordInfoClear(&info);
       return SQLITE_NOMEM;
     }
 
@@ -616,6 +617,7 @@ static int doltliteBuildIndexEntry(
     nIdxRec = (int)(p - pIdxRec);
     sqlite3_free(aFieldOrder);
   }
+  doltliteRecordInfoClear(&info);
 
   storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);
   rc = sortKeyFromRecordPrefixColl(

@@ -32,7 +32,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$dl_q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^LOG|' \
            | sed 's/^LOG|//' \
            | normalize)
@@ -83,7 +83,7 @@ oracle_commit_relations() {
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n%s\n" "$dl_sql" \
-      | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
       | grep -E '^(C[0-9]+|H[0-9]+|L[0-9]+|LOG)[|]' \
       | normalize_commit_relations
   )
@@ -119,12 +119,12 @@ oracle_commit_error_poststate() {
 
   local dl_rc
   printf ".headers off\n.mode list\n%s\n%s\n" "$dl_setup" "$dl_call" \
-    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
+    | vc_oracle_run_doltlite --expect-error "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
   dl_rc=$?
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n%s\n" "$dl_query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
       | grep -E '^(H|L|LOG)[|]' \
       | normalize_commit_relations
   )

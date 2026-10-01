@@ -53,12 +53,12 @@ oracle() {
 
   local dl_log dl_table
   dl_log=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'L' || char(9) || commit_hash || char(9) || message FROM dolt_log;\n" "$setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize_log)
   dl_table=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'T' || char(9) || coalesce(id, '') || char(9) || coalesce(v, '') FROM t;\n" "$setup" \
-              | "$DOLTLITE" "$dir/dl/db.s" 2>>"$dir/dl.err" \
+              | vc_oracle_run_doltlite "$dir/dl/db.s" 2>>"$dir/dl.err" \
               | grep -v '^[0-9]*$' \
               | grep -v '^[0-9a-f]\{40\}$' \
               | normalize_table)
@@ -90,42 +90,17 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_error_poststate() {
   local name="$1" setup="$2" dl_query="$3" dolt_query="${4:-$3}"
   local dir="$TMPROOT/${name}_post"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" || true
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --allow-error || true
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n%s;\n" "$dl_query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
       | tr -d '\r'
   )
 
@@ -157,7 +132,7 @@ oracle_poststate() {
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n%s;\n" "$dl_query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
       | tr -d '\r'
   )
 
@@ -533,9 +508,9 @@ oracle_no_merge_commit() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_count
-  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/dl/db" >/dev/null 2>"$dir/dl.err" || true
+  printf '%s\n' "$setup" | vc_oracle_run_doltlite "$dir/dl/db" >/dev/null 2>"$dir/dl.err" || true
   dl_count=$(printf ".headers off\n.mode list\nSELECT count(*) FROM dolt_log;\n" \
-             | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+             | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
              | grep -E '^[0-9]+$' | tail -1)
 
   local dolt_setup
@@ -561,7 +536,7 @@ oracle_no_merge_commit() {
   fi
 }
 
-oracle_no_merge_commit "cherry_pick_modify_modify_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle_no_merge_commit "cherry_pick_modify_modify_conflict" "
 $SEED
 SELECT dolt_checkout('feature');
 UPDATE t SET v = 99 WHERE id = 1;
@@ -575,7 +550,7 @@ SELECT dolt_commit('-m', 'main_11');
 SELECT dolt_cherry_pick('feat-conflict');
 "
 
-oracle_no_merge_commit "revert_with_later_overlap_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle_no_merge_commit "revert_with_later_overlap_conflict" "
 $SEED
 UPDATE t SET v = 50 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -586,7 +561,7 @@ SELECT dolt_commit('-m', 'c3_set_99');
 SELECT dolt_revert('HEAD~1');
 "
 
-oracle_error_poststate "cherry_pick_conflict_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_conflict_rolls_back" "
 $SEED
 SELECT dolt_checkout('feature');
 UPDATE t SET v = 99 WHERE id = 1;
@@ -601,7 +576,7 @@ SELECT dolt_cherry_pick('feat-conflict');
  " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_error_poststate "revert_conflict_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "revert_conflict_rolls_back" "
 $SEED
 UPDATE t SET v = 50 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -613,7 +588,7 @@ SELECT dolt_revert('HEAD~1');
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_error_poststate "revert_added_column_edit_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "revert_added_column_edit_rolls_back" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'a');
 SELECT dolt_commit('-Am', 'base');
@@ -625,7 +600,7 @@ SELECT dolt_revert('HEAD~1');
 " "SELECT 'Q|' || d || '|' || (SELECT message FROM dolt_log LIMIT 1) FROM t WHERE id = 1" \
 "SELECT CONCAT('Q|', d, '|', (SELECT message FROM dolt_log LIMIT 1)) FROM t WHERE id = 1"
 
-oracle_error_poststate "cherry_pick_drop_edited_column_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_drop_edited_column_rolls_back" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, d TEXT);
 INSERT INTO t VALUES (1, 'a', NULL);
 SELECT dolt_commit('-Am', 'base');
@@ -641,22 +616,22 @@ SELECT dolt_cherry_pick('dropper');
 
 echo "--- error paths ---"
 
-oracle_error "cherry_pick_no_args" "
+vc_oracle_error "cherry_pick_no_args" "
 $SEED
 SELECT dolt_cherry_pick();
 "
 
-oracle_error "cherry_pick_nonexistent_ref" "
+vc_oracle_error "cherry_pick_nonexistent_ref" "
 $SEED
 SELECT dolt_cherry_pick('does-not-exist');
 "
 
-oracle_error "cherry_pick_extra_arg" "
+vc_oracle_error "cherry_pick_extra_arg" "
 $SEED
 SELECT dolt_cherry_pick('HEAD', 'extra');
 "
 
-oracle_error "cherry_pick_dirty_working_set" "
+vc_oracle_error "cherry_pick_dirty_working_set" "
 $SEED
 SELECT dolt_checkout('feature');
 INSERT INTO t VALUES (2, 20);
@@ -667,7 +642,7 @@ UPDATE t SET v = 11 WHERE id = 1;
 SELECT dolt_cherry_pick('feature');
 "
 
-oracle_error "cherry_pick_staged_changes" "
+vc_oracle_error "cherry_pick_staged_changes" "
 $SEED
 SELECT dolt_checkout('feature');
 INSERT INTO t VALUES (2, 20);
@@ -684,17 +659,17 @@ $SEED
 SELECT dolt_revert();
 "
 
-oracle_error "revert_nonexistent_ref" "
+vc_oracle_error "revert_nonexistent_ref" "
 $SEED
 SELECT dolt_revert('does-not-exist');
 "
 
-oracle_error "revert_extra_arg" "
+vc_oracle_error "revert_extra_arg" "
 $SEED
 SELECT dolt_revert('HEAD', 'extra');
 "
 
-oracle_error "revert_dirty_working_set" "
+vc_oracle_error "revert_dirty_working_set" "
 $SEED
 UPDATE t SET v = 50 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -703,7 +678,7 @@ UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_revert('HEAD');
 "
 
-oracle_error "revert_staged_changes" "
+vc_oracle_error "revert_staged_changes" "
 $SEED
 UPDATE t SET v = 50 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -713,12 +688,12 @@ SELECT dolt_add('-A');
 SELECT dolt_revert('HEAD');
 "
 
-oracle_error "cherry_pick_initial_commit" "
+vc_oracle_error "cherry_pick_initial_commit" "
 $SEED
 SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message = 'Initialize data repository'));
 "
 
-oracle_error "cherry_pick_already_applied" "
+vc_oracle_error "cherry_pick_already_applied" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
 SELECT dolt_add('-A');
@@ -729,7 +704,7 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_cherry_pick(dolt_hashof('HEAD~1'));
 "
 
-oracle_error "cherry_pick_merge_commit" "
+vc_oracle_error "cherry_pick_merge_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
 SELECT dolt_add('-A');
@@ -768,7 +743,7 @@ SELECT dolt_merge('feat', '--no-ff', '-m', 'mf');
 SELECT dolt_revert('HEAD');
 "
 
-oracle_error_poststate "cherry_pick_constraint_violation_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_constraint_violation_rolls_back" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
 SELECT dolt_add('-A');
@@ -786,7 +761,7 @@ SELECT dolt_cherry_pick('feature');
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_error_poststate "revert_constraint_violation_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "revert_constraint_violation_rolls_back" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
 SELECT dolt_add('-A');
@@ -801,7 +776,7 @@ SELECT dolt_revert('HEAD~1');
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_error_poststate "cherry_pick_constraint_violation_txn_rollback" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_constraint_violation_txn_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
 SELECT dolt_add('-A');
@@ -821,7 +796,7 @@ ROLLBACK;
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_error_poststate "revert_constraint_violation_txn_rollback" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "revert_constraint_violation_txn_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
 SELECT dolt_add('-A');
@@ -838,7 +813,7 @@ ROLLBACK;
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_error_poststate "cherry_pick_fk_violation_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_fk_violation_rolls_back" "
 CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
 CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));
 INSERT INTO parent VALUES (1,1),(2,2);
@@ -860,7 +835,7 @@ SELECT dolt_cherry_pick('feature');
           (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM child ORDER BY pk) AS ordered_child)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM parent), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM child))"
 
-oracle_error_poststate "cherry_pick_fk_violation_txn_rollback" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_fk_violation_txn_rollback" "
 CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
 CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));
 INSERT INTO parent VALUES (1,1),(2,2);
@@ -886,7 +861,7 @@ ROLLBACK;
 
 echo "--- savepoint parity ---"
 
-oracle_error_poststate "cherry_pick_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_savepoint_invalidated" "
 $SEED
 SELECT dolt_checkout('feature');
 INSERT INTO t VALUES (2, 20);
@@ -901,7 +876,7 @@ ROLLBACK TO sp1;
           (SELECT count(*) FROM dolt_log);" \
   "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_log))"
 
-oracle_error_poststate "revert_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "revert_savepoint_invalidated" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -917,7 +892,7 @@ ROLLBACK TO sp1;
           (SELECT count(*) FROM dolt_log);" \
   "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_log))"
 
-oracle_error_poststate "cherry_pick_conflict_top_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "cherry_pick_conflict_top_savepoint_invalidated" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_add('-A');
@@ -940,7 +915,7 @@ ROLLBACK TO sp1;
           (SELECT count(*) FROM dolt_conflicts);" \
   "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_conflicts))"
 
-oracle_error_poststate "revert_conflict_top_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "revert_conflict_top_savepoint_invalidated" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_add('-A');
@@ -972,7 +947,7 @@ oracle_dual_poststate() {
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n%s;\n" "$dl_query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
       | tr -d '\r'
   )
 
@@ -1075,7 +1050,7 @@ SELECT dolt_revert('HEAD');
        (SELECT group_concat(id, ',') FROM (SELECT id FROM a ORDER BY id))" \
 "SELECT concat('Q|', (SELECT group_concat(table_name ORDER BY table_name SEPARATOR ',') FROM information_schema.tables WHERE table_name IN ('a','b','c','d')), '|', (SELECT group_concat(index_name ORDER BY index_name SEPARATOR ',') FROM information_schema.statistics WHERE index_name IN ('i1','i2','i3')), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM a))"
 
-oracle_error "revert_view_add_after_modify_conflicts" "
+vc_oracle_error "revert_view_add_after_modify_conflicts" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_commit('-Am', 'base');
 CREATE VIEW w AS SELECT id FROM t;
@@ -1108,7 +1083,7 @@ SELECT dolt_cherry_pick('feat');
 " "SELECT 'Q|' || (SELECT count(*) FROM sqlite_master WHERE type = 'view') || '|' || (SELECT group_concat(id, ',') FROM (SELECT id FROM w ORDER BY id))" \
 "SELECT concat('Q|', (SELECT count(*) FROM dolt_schemas WHERE type = 'view'), '|', (SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM w))"
 
-oracle_error "cherry_pick_view_add_conflicts_same_name" "
+vc_oracle_error "cherry_pick_view_add_conflicts_same_name" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_commit('-Am', 'base');
 SELECT dolt_checkout('-b', 'feat');

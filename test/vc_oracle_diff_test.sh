@@ -48,7 +48,7 @@ oracle() {
 
   local dl_table
   dl_table=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$dl_table_q" \
-             | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+             | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
              | grep -v '^[0-9]*$' \
              | grep -v '^[0-9a-f]\{40\}$' \
              | normalize_diff_table)
@@ -103,7 +103,7 @@ oracle_summary() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize_summary)
 
   local dolt_setup
@@ -133,7 +133,7 @@ oracle_summary_dual() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$dl_setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize_summary)
 
   local dolt_setup
@@ -162,7 +162,7 @@ oracle_summary_filter_name() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | normalize_summary)
 
   local dolt_setup

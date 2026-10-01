@@ -5,6 +5,7 @@ DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -12,7 +13,7 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
-dl() { "$DOLTLITE" "$1" "$2" 2>/dev/null; }
+dl() { vc_oracle_run_doltlite "$1" "$2" 2>/dev/null; }
 
 echo "=== Schema-Changing Cherry-Pick / Revert Tests ==="
 
@@ -171,6 +172,7 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
   && pass_name "14_merged_values" || fail_name "14_merged_values"
 
 echo "======================================="
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
 echo "__SUITE_COMPLETE__"

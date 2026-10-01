@@ -46,7 +46,7 @@ SELECT dolt_merge('feature');"
       continue
     fi
     query="SELECT concat('R|',x,'|',y,'|',z,'|',w,'|',v) FROM t WHERE id=1;"
-    dl_out=$("$DOLTLITE" "$dir/db" "$query")
+    dl_out=$(vc_oracle_run_doltlite "$dir/db" "$query")
     dt_out=$(cd "$dir/dolt" && "$DOLT" sql -r csv -q "$query")
     dt_out=$(printf '%s\n' "$dt_out" | tail -n +2)
     vc_oracle_assert_match "$name" "$dl_out" "$dt_out" || true
@@ -103,7 +103,7 @@ $tail_sql")
     continue
   fi
   query="SELECT concat('R|',id,'|',x,'|',y,'|',z) FROM t ORDER BY id;"
-  dl_out=$("$DOLTLITE" "$dir/db" "$query")
+  dl_out=$(vc_oracle_run_doltlite "$dir/db" "$query")
   dt_out=$(cd "$dir/dolt" && "$DOLT" sql -r csv -q "$query")
   dt_out=$(printf '%s\n' "$dt_out" | tail -n +2)
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out" || true

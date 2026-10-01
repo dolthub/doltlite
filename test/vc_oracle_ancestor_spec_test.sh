@@ -13,7 +13,7 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 run_dl_query() {
   local db="$1" query="$2" out="$3" err="$4"
-  printf "%s\n" "$query" | "$DOLTLITE" "$db" >"$out" 2>"$err"
+  printf "%s\n" "$query" | vc_oracle_run_doltlite "${5:---success}" "$db" >"$out" 2>"$err"
 }
 
 run_dt_query() {
@@ -76,7 +76,7 @@ oracle_both_error() {
   mkdir -p "$dir/dl"
 
   local dl_query="SELECT dolt_hashof('$ref');"
-  run_dl_query "$dir/dl/db" "$(printf '%s\n%s\n' "$setup" "$dl_query")" "$dir/dl.out" "$dir/dl.err"
+  run_dl_query "$dir/dl/db" "$(printf '%s\n%s\n' "$setup" "$dl_query")" "$dir/dl.out" "$dir/dl.err" --expect-error
   local dl_rc=$?
 
   local dolt_setup
@@ -212,7 +212,7 @@ END;"
 run_lca_doltlite() {
   local setup="$1" db="$2" out="$3" err="$4"
   printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$lca_query_dl" \
-    | "$DOLTLITE" "$db" >"$out" 2>"$err"
+    | vc_oracle_run_doltlite "${5:---success}" "$db" >"$out" 2>"$err"
 }
 
 assert_deterministic_lca() {

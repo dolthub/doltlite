@@ -47,7 +47,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$dl_query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | $norm)
 
   local dolt_setup
@@ -80,12 +80,14 @@ oracle_divergence() {
   local name="$1" setup="$2" dl_query="$3" dt_query="$4"
   local dl_expected="$5" dt_expected="$6"
   local dl_expect_error="$7" dt_expect_error="$8"
+  local expectation=--success
+  if [ "$dl_expect_error" = 1 ]; then expectation=--expect-error; fi
   local dir="$TMPROOT/${name}_div"
   local dl_rc dt_rc dl_out dt_out dl_rc_ok=0 dt_rc_ok=0
   mkdir -p "$dir/dl" "$dir/dt"
 
   printf "%s\n%s\n" "$setup" "$dl_query" \
-    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.raw" 2>"$dir/dl.err"
+    | vc_oracle_run_doltlite "$expectation" "$dir/dl/db" >"$dir/dl.raw" 2>"$dir/dl.err"
   dl_rc=$?
   dl_out=$(tr -d '\r"' < "$dir/dl.raw" | grep '^X|')
 
@@ -126,31 +128,6 @@ oracle_divergence() {
   fi
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 echo "=== Version Control Oracle Tests: dolt_docs ==="
 echo ""
@@ -225,20 +202,20 @@ UPDATE Dolt_Docs SET doc_text = 'v2';
 
 echo "--- constraints ---"
 
-oracle_error "dup_pk_rejected" "
+vc_oracle_error "dup_pk_rejected" "
 INSERT INTO dolt_docs VALUES ('README.md', 'v1');
 INSERT INTO dolt_docs VALUES ('README.md', 'v2');
 "
 
-oracle_error "null_doc_text_rejected" "
+vc_oracle_error "null_doc_text_rejected" "
 INSERT INTO dolt_docs VALUES ('README.md', NULL);
 "
 
-oracle_error "null_doc_name_rejected" "
+vc_oracle_error "null_doc_name_rejected" "
 INSERT INTO dolt_docs VALUES (NULL, 'text');
 "
 
-oracle_error "drop_without_backing_table" "
+vc_oracle_error "drop_without_backing_table" "
 DROP TABLE dolt_docs;
 "
 
@@ -295,7 +272,7 @@ SELECT dolt_commit('-A', '-m', 'main edits readme');
 SELECT dolt_merge('b1');
 "
 
-oracle_error "merge_conflicting_docs" "
+vc_oracle_error "merge_conflicting_docs" "
 INSERT INTO dolt_docs VALUES ('README.md', 'base');
 SELECT dolt_commit('-A', '-m', 'base');
 SELECT dolt_checkout('-b', 'b1');
@@ -384,7 +361,7 @@ doltlite_schema_reject() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_rej"
   mkdir -p "$dir/dl"
-  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  echo "$sql" | vc_oracle_run_doltlite --expect-error "$dir/dl/db" > "$dir/out" 2>&1
   if grep -qi 'dolt_docs' "$dir/out" \
      && grep -qiE 'error|fail' "$dir/out"; then
     pass=$((pass+1))
@@ -400,7 +377,7 @@ doltlite_schema_accept() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_acc"
   mkdir -p "$dir/dl"
-  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  echo "$sql" | vc_oracle_run_doltlite "$dir/dl/db" > "$dir/out" 2>&1
   if ! grep -qiE 'error|fail' "$dir/out"; then
     pass=$((pass+1))
   else

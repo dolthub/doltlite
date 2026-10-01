@@ -24,7 +24,7 @@ oracle_data() {
       printf '%s\n' "$setup"
       printf "%s\n" ".mode list" ".separator |" \
         "SELECT 'P',statement_order,table_name,diff_type,lower(hex(replace(replace(statement,'\"',''),' ',''))) FROM dolt_patch($args) WHERE $where;"
-    } | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | grep '^P|' || true
+    } | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" | grep '^P|' || true
   )
 
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -50,7 +50,7 @@ oracle_shape() {
       printf '%s\n' "$setup"
       printf "%s\n" ".mode list" ".separator |" \
         "SELECT 'P',$projection FROM dolt_patch($args) WHERE $where;"
-    } | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | grep '^P|' || true
+    } | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" | grep '^P|' || true
   )
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   dt_out=$(
@@ -69,7 +69,7 @@ oracle_error() {
   local dir="$TMPROOT/$name"
   local dl_rc dt_rc dolt_setup
   mkdir -p "$dir/dl" "$dir/dt"
-  printf '%s\n%s\n' "$setup" "$query" | "$DOLTLITE" "$dir/dl/db" \
+  printf '%s\n%s\n' "$setup" "$query" | vc_oracle_run_doltlite --expect-error "$dir/dl/db" \
     >"$dir/dl.out" 2>"$dir/dl.err"
   dl_rc=$?
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -92,31 +92,32 @@ oracle_error() {
 # Both patch directions vs a fingerprint. setup must create tags base and target.
 apply_bidirectional() {
   local name="$1" setup="$2" fingerprint_sql="$3"
+  local base_fingerprint_sql="${4:-$3}"
   local dir="$TMPROOT/apply_$name"
   local db="$TMPROOT/apply_$name/forward.db"
   local reverse_db="$TMPROOT/apply_$name/reverse.db"
   local base_fingerprint target_fingerprint actual
   mkdir -p "$dir"
-  if ! printf '%s\n' "$setup" | "$DOLTLITE" "$db" \
+  if ! printf '%s\n' "$setup" | vc_oracle_run_doltlite "$db" \
       >"$dir/setup.out" 2>"$dir/setup.err"; then
     vc_oracle_assert_match "${name}_setup" \
       "setup failed: $(cat "$dir/setup.err")" "setup succeeded"
     return
   fi
-  if ! printf '%s\n' "$setup" | "$DOLTLITE" "$reverse_db" \
+  if ! printf '%s\n' "$setup" | vc_oracle_run_doltlite "$reverse_db" \
       >"$dir/reverse_setup.out" 2>"$dir/reverse_setup.err"; then
     vc_oracle_assert_match "${name}_reverse_setup" \
       "setup failed: $(cat "$dir/reverse_setup.err")" "setup succeeded"
     return
   fi
-  if ! "$DOLTLITE" "$db" \
+  if ! vc_oracle_run_doltlite "$db" \
       "SELECT statement FROM dolt_patch('base','target');" \
       >"$dir/forward.sql" 2>"$dir/forward.err"; then
     vc_oracle_assert_match "${name}_forward_generation" \
       "generation failed: $(cat "$dir/forward.err")" "generation succeeded"
     return
   fi
-  if ! "$DOLTLITE" "$db" \
+  if ! vc_oracle_run_doltlite "$db" \
       "SELECT statement FROM dolt_patch('target','base');" \
       >"$dir/reverse.sql" 2>"$dir/reverse.err"; then
     vc_oracle_assert_match "${name}_reverse_generation" \
@@ -124,20 +125,20 @@ apply_bidirectional() {
     return
   fi
 
-  target_fingerprint=$("$DOLTLITE" "$db" "$fingerprint_sql" 2>"$dir/target.err")
-  "$DOLTLITE" "$db" "SELECT dolt_reset('--hard','base');" >/dev/null
-  base_fingerprint=$("$DOLTLITE" "$db" "$fingerprint_sql" 2>"$dir/base.err")
+  target_fingerprint=$(vc_oracle_run_doltlite "$db" "$fingerprint_sql" 2>"$dir/target.err")
+  vc_oracle_run_doltlite "$db" "SELECT dolt_reset('--hard','base');" >/dev/null
+  base_fingerprint=$(vc_oracle_run_doltlite "$db" "$base_fingerprint_sql" 2>"$dir/base.err")
 
-  if "$DOLTLITE" "$db" <"$dir/forward.sql" >"$dir/forward.out" 2>"$dir/forward_apply.err"; then
-    actual=$("$DOLTLITE" "$db" "$fingerprint_sql" 2>"$dir/forward_actual.err")
+  if vc_oracle_run_doltlite "$db" <"$dir/forward.sql" >"$dir/forward.out" 2>"$dir/forward_apply.err"; then
+    actual=$(vc_oracle_run_doltlite "$db" "$fingerprint_sql" 2>"$dir/forward_actual.err")
   else
     actual="apply failed: $(cat "$dir/forward_apply.err")"
   fi
   vc_oracle_assert_match "${name}_forward" "$actual" "$target_fingerprint"
 
-  if "$DOLTLITE" "$reverse_db" <"$dir/reverse.sql" \
+  if vc_oracle_run_doltlite "$reverse_db" <"$dir/reverse.sql" \
       >"$dir/reverse.out" 2>"$dir/reverse_apply.err"; then
-    actual=$("$DOLTLITE" "$reverse_db" "$fingerprint_sql" \
+    actual=$(vc_oracle_run_doltlite "$reverse_db" "$base_fingerprint_sql" \
       2>"$dir/reverse_actual.err")
   else
     actual="apply failed: $(cat "$dir/reverse_apply.err")"
@@ -151,25 +152,25 @@ apply_forward() {
   local db="$dir/db"
   local target_fingerprint actual
   mkdir -p "$dir"
-  if ! printf '%s\n' "$setup" | "$DOLTLITE" "$db" \
+  if ! printf '%s\n' "$setup" | vc_oracle_run_doltlite "$db" \
       >"$dir/setup.out" 2>"$dir/setup.err"; then
     vc_oracle_assert_match "${name}_setup" \
       "setup failed: $(cat "$dir/setup.err")" "setup succeeded"
     return
   fi
-  if ! "$DOLTLITE" "$db" \
+  if ! vc_oracle_run_doltlite "$db" \
       "SELECT statement FROM dolt_patch('base','target');" \
       >"$dir/forward.sql" 2>"$dir/forward.err"; then
     vc_oracle_assert_match "${name}_generation" \
       "generation failed: $(cat "$dir/forward.err")" "generation succeeded"
     return
   fi
-  target_fingerprint=$("$DOLTLITE" "$db" "$fingerprint_sql" \
+  target_fingerprint=$(vc_oracle_run_doltlite "$db" "$fingerprint_sql" \
     2>"$dir/target.err")
-  "$DOLTLITE" "$db" "SELECT dolt_reset('--hard','base');" >/dev/null
-  if "$DOLTLITE" "$db" <"$dir/forward.sql" \
+  vc_oracle_run_doltlite "$db" "SELECT dolt_reset('--hard','base');" >/dev/null
+  if vc_oracle_run_doltlite "$db" <"$dir/forward.sql" \
       >"$dir/forward.out" 2>"$dir/forward_apply.err"; then
-    actual=$("$DOLTLITE" "$db" "$fingerprint_sql" \
+    actual=$(vc_oracle_run_doltlite "$db" "$fingerprint_sql" \
       2>"$dir/forward_actual.err")
   else
     actual="apply failed: $(cat "$dir/forward_apply.err")"
@@ -407,14 +408,14 @@ apply_db="$apply_dir/db"
     "CREATE UNIQUE INDEX ix_t_c1 ON t(c1);" \
     "CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET n=9 WHERE pk=new.pk; END;" \
     "SELECT dolt_commit('-A','-m','target');"
-} | "$DOLTLITE" "$apply_db" >/dev/null
-target_fingerprint=$("$DOLTLITE" "$apply_db" \
+} | vc_oracle_run_doltlite "$apply_db" >/dev/null
+target_fingerprint=$(vc_oracle_run_doltlite "$apply_db" \
   "SELECT group_concat(pk||':'||c1||':'||n,',') FROM (SELECT * FROM t ORDER BY pk);" \
   "SELECT group_concat(type||':'||name,',') FROM (SELECT type,name FROM sqlite_master WHERE tbl_name='t' ORDER BY type,name);")
-"$DOLTLITE" "$apply_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$apply_dir/patch.sql"
-"$DOLTLITE" "$apply_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
-if "$DOLTLITE" "$apply_db" <"$apply_dir/patch.sql" >"$apply_dir/apply.out" 2>"$apply_dir/apply.err"; then
-  actual_fingerprint=$("$DOLTLITE" "$apply_db" \
+vc_oracle_run_doltlite "$apply_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$apply_dir/patch.sql"
+vc_oracle_run_doltlite "$apply_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
+if vc_oracle_run_doltlite "$apply_db" <"$apply_dir/patch.sql" >"$apply_dir/apply.out" 2>"$apply_dir/apply.err"; then
+  actual_fingerprint=$(vc_oracle_run_doltlite "$apply_db" \
     "SELECT group_concat(pk||':'||c1||':'||n,',') FROM (SELECT * FROM t ORDER BY pk);" \
     "SELECT group_concat(type||':'||name,',') FROM (SELECT type,name FROM sqlite_master WHERE tbl_name='t' ORDER BY type,name);")
 else
@@ -432,13 +433,13 @@ literal_db="$literal_dir/db"
     "SELECT dolt_commit('-A','-m','base');" \
     "INSERT INTO t VALUES(1,'it''s'||char(0)||'nul',x'00ff10',1.25,NULL);" \
     "SELECT dolt_commit('-A','-m','target');"
-} | "$DOLTLITE" "$literal_db" >/dev/null
-target_fingerprint=$("$DOLTLITE" "$literal_db" \
+} | vc_oracle_run_doltlite "$literal_db" >/dev/null
+target_fingerprint=$(vc_oracle_run_doltlite "$literal_db" \
   "SELECT pk||'|'||hex(txt)||'|'||hex(b)||'|'||printf('%.17g',r)||'|'||(n IS NULL) FROM t;")
-"$DOLTLITE" "$literal_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$literal_dir/patch.sql"
-"$DOLTLITE" "$literal_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
-if "$DOLTLITE" "$literal_db" <"$literal_dir/patch.sql" 2>"$literal_dir/apply.err"; then
-  actual_fingerprint=$("$DOLTLITE" "$literal_db" \
+vc_oracle_run_doltlite "$literal_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$literal_dir/patch.sql"
+vc_oracle_run_doltlite "$literal_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
+if vc_oracle_run_doltlite "$literal_db" <"$literal_dir/patch.sql" 2>"$literal_dir/apply.err"; then
+  actual_fingerprint=$(vc_oracle_run_doltlite "$literal_db" \
     "SELECT pk||'|'||hex(txt)||'|'||hex(b)||'|'||printf('%.17g',r)||'|'||(n IS NULL) FROM t;")
 else
   actual_fingerprint="apply failed: $(cat "$literal_dir/apply.err")"
@@ -457,17 +458,17 @@ rename_db="$rename_dir/db"
     "SELECT dolt_commit('-A','-m','base');" \
     'ALTER TABLE "odd table" RENAME TO "new table";' \
     "SELECT dolt_commit('-A','-m','target');"
-} | "$DOLTLITE" "$rename_db" >/dev/null
-target_fingerprint=$("$DOLTLITE" "$rename_db" \
+} | vc_oracle_run_doltlite "$rename_db" >/dev/null
+target_fingerprint=$(vc_oracle_run_doltlite "$rename_db" \
   "SELECT group_concat(\"pk col\"||':'||\"value\",',') FROM (SELECT * FROM \"new table\" ORDER BY \"pk col\");" \
   "SELECT group_concat(type||':'||name,',') FROM (SELECT type,name FROM sqlite_master WHERE tbl_name='new table' ORDER BY type,name);")
-"$DOLTLITE" "$rename_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$rename_dir/patch.sql"
+vc_oracle_run_doltlite "$rename_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$rename_dir/patch.sql"
 actual_rename=$(grep '^ALTER TABLE ' "$rename_dir/patch.sql" || true)
 vc_oracle_assert_match native_table_rename_sql "$actual_rename" \
   'ALTER TABLE "odd table" RENAME TO "new table";'
-"$DOLTLITE" "$rename_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
-if "$DOLTLITE" "$rename_db" <"$rename_dir/patch.sql" 2>"$rename_dir/apply.err"; then
-  actual_fingerprint=$("$DOLTLITE" "$rename_db" \
+vc_oracle_run_doltlite "$rename_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
+if vc_oracle_run_doltlite "$rename_db" <"$rename_dir/patch.sql" 2>"$rename_dir/apply.err"; then
+  actual_fingerprint=$(vc_oracle_run_doltlite "$rename_db" \
     "SELECT group_concat(\"pk col\"||':'||\"value\",',') FROM (SELECT * FROM \"new table\" ORDER BY \"pk col\");" \
     "SELECT group_concat(type||':'||name,',') FROM (SELECT type,name FROM sqlite_master WHERE tbl_name='new table' ORDER BY type,name);")
 else
@@ -489,13 +490,13 @@ columns_db="$columns_dir/db"
     "ALTER TABLE t ADD COLUMN c6 INTEGER;" \
     "UPDATE t SET c6=60 WHERE pk=1;" \
     "SELECT dolt_commit('-A','-m','target');"
-} | "$DOLTLITE" "$columns_db" >/dev/null
-target_fingerprint=$("$DOLTLITE" "$columns_db" \
+} | vc_oracle_run_doltlite "$columns_db" >/dev/null
+target_fingerprint=$(vc_oracle_run_doltlite "$columns_db" \
   "SELECT group_concat(pk||':'||c0||':'||c2||':'||c3||':'||c5||':'||coalesce(c6,'NULL'),',') FROM (SELECT * FROM t ORDER BY pk);")
-"$DOLTLITE" "$columns_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$columns_dir/forward.sql"
-"$DOLTLITE" "$columns_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
-if "$DOLTLITE" "$columns_db" <"$columns_dir/forward.sql" 2>"$columns_dir/apply.err"; then
-  actual_fingerprint=$("$DOLTLITE" "$columns_db" \
+vc_oracle_run_doltlite "$columns_db" "SELECT statement FROM dolt_patch('HEAD~1','HEAD');" >"$columns_dir/forward.sql"
+vc_oracle_run_doltlite "$columns_db" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
+if vc_oracle_run_doltlite "$columns_db" <"$columns_dir/forward.sql" 2>"$columns_dir/apply.err"; then
+  actual_fingerprint=$(vc_oracle_run_doltlite "$columns_db" \
     "SELECT group_concat(pk||':'||c0||':'||c2||':'||c3||':'||c5||':'||coalesce(c6,'NULL'),',') FROM (SELECT * FROM t ORDER BY pk);")
 else
   actual_fingerprint="apply failed: $(cat "$columns_dir/apply.err")"
@@ -522,8 +523,8 @@ SELECT group_concat(name||':'||sql,';') FROM (
   WHERE type='table' AND name NOT LIKE 'dolt_%' AND name NOT LIKE 'sqlite_%'
   ORDER BY name
 );
-SELECT count(*) FROM dolt_diff('base','WORKING');
-SELECT count(*) FROM dolt_diff('target','WORKING');
+SELECT coalesce(sum(rows_added+rows_deleted+rows_modified),0) FROM dolt_diff_stat('base','WORKING');
+SELECT coalesce(sum(rows_added+rows_deleted+rows_modified),0) FROM dolt_diff_stat('target','WORKING');
 "
 
 apply_bidirectional without_rowid_pk_only "
@@ -775,6 +776,11 @@ SELECT dolt_tag('target');
 " "
 SELECT group_concat(pk||':'||v,',') FROM __doltlite_patch_1;
 SELECT group_concat(pk||':'||v||':'||n,',') FROM t;
+SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name);
+" "
+SELECT group_concat(pk||':'||v,',') FROM __doltlite_patch_1;
+SELECT group_concat(pk||':'||v,',') FROM t;
+SELECT count(*) FROM pragma_table_info('t') WHERE name='n';
 SELECT group_concat(name,',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt_%' ORDER BY name);
 "
 

@@ -22,7 +22,7 @@ oracle_triggers_dual() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode csv\n%s\n" "$dl_setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | grep -v '^$' \
