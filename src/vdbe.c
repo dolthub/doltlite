@@ -3071,6 +3071,11 @@ case OP_Offset: {          /* out3 */
       rc = sqlite3VdbeFinishMoveto(pC);
       if( rc ) goto abort_due_to_error;
     }
+#ifdef DOLTLITE_PROLLY
+    if( pC->nullRow ){
+      sqlite3VdbeMemSetNull(pOut);
+    }else
+#endif
     if( sqlite3BtreeEof(pC->uc.pCursor) ){
 #ifdef DOLTLITE_PROLLY
       rc = doltliteBtreeCursorFaultCode(pC->uc.pCursor);
@@ -3166,6 +3171,9 @@ op_column_restart:
         }
         rc = sqlite3VdbeFinishMoveto(pC);
         if( rc ) goto abort_due_to_error;
+#ifdef DOLTLITE_PROLLY
+        if( pC->nullRow ) goto op_column_restart;
+#endif
       }else if( sqlite3BtreeCursorHasMoved(pCrsr) ){
         rc = sqlite3VdbeHandleMovedCursor(pC);
         if( rc ) goto abort_due_to_error;
@@ -6877,6 +6885,10 @@ case OP_Rowid: {                 /* out2, ncycle */
   }else if( pC->deferredMoveto && !pC->isTable ){
     rc = sqlite3VdbeFinishMoveto(pC);
     if( rc ) goto abort_due_to_error;
+    if( pC->nullRow ){
+      pOut->flags = MEM_Null;
+      break;
+    }
     v = sqlite3BtreeSqlRowid(pC->uc.pCursor);
 #endif
   }else if( pC->deferredMoveto ){
@@ -7526,6 +7538,7 @@ case OP_IdxRowid: {           /* out2, ncycle */
     pTabCur->ub.aAltMap = 0;
     pTabCur->aPkSeekMap = pOp->p4.ai;
     pTabCur->pAltCursor = pC;
+    pTabCur->movetoTarget = db->nTotalChange;
     break;
   }
 #endif

@@ -655,6 +655,58 @@ static void test_content_change_aborts_open_cursor(void){
 }
 
 
+/* A write between steps of an index scan, before the deferred primary-key
+** seek runs, must not hand the scan another row's columns. */
+static void deferredPkSeekScan(sqlite3 *db, int txn, char *zOut, int nOut){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  int i;
+  int n = 0;
+
+  zOut[0] = 0;
+  sqlite3_exec(db,
+    "DROP TABLE IF EXISTS t; DROP TABLE IF EXISTS y;"
+    "CREATE TABLE t(pk TEXT PRIMARY KEY, a INT, b TEXT);"
+    "CREATE INDEX ta ON t(a);"
+    "INSERT INTO t VALUES('p1',1,'b1'),('p2',2,'b2'),('p3',3,'b3');"
+    "CREATE TABLE y(v INT); INSERT INTO y VALUES(0),(1);", 0, 0, 0);
+  if( txn ) sqlite3_exec(db, "BEGIN", 0, 0, 0);
+  sqlite3_prepare_v2(db,
+    "SELECT t.pk, CASE WHEN y.v=1 THEN t.b END "
+    "FROM t INDEXED BY ta CROSS JOIN y WHERE t.a>0", -1, &pStmt, 0);
+  for(i=0; (rc = sqlite3_step(pStmt))==SQLITE_ROW; i++){
+    const char *zPk = (const char*)sqlite3_column_text(pStmt, 0);
+    const char *zB = (const char*)sqlite3_column_text(pStmt, 1);
+    n += snprintf(zOut+n, nOut-n, "%s%s/%s", i ? " " : "",
+                  zPk ? zPk : "NULL", zB ? zB : "NULL");
+    if( i==0 ) sqlite3_exec(db, "DELETE FROM t WHERE pk='p1'", 0, 0, 0);
+  }
+  if( rc!=SQLITE_DONE ) snprintf(zOut+n, nOut-n, " rc=%d", rc);
+  sqlite3_finalize(pStmt);
+  if( txn ) sqlite3_exec(db, "COMMIT", 0, 0, 0);
+}
+
+static void test_deferred_pk_seek_after_write(void){
+  char zPath[256];
+  char zOut[256];
+  sqlite3 *db = 0;
+
+  snprintf(zPath, sizeof(zPath), "/tmp/deferred_pk_seek_%d.db", (int)getpid());
+  remove(zPath);
+  sqlite3_open(zPath, &db);
+  deferredPkSeekScan(db, 0, zOut, sizeof(zOut));
+  check_str("deferred_pk_seek_autocommit", zOut,
+            "p1/NULL NULL/NULL p2/NULL p2/b2 p3/NULL p3/b3");
+  deferredPkSeekScan(db, 1, zOut, sizeof(zOut));
+  check("deferred_pk_seek_txn_no_error", strstr(zOut, "rc=")==0);
+  check("deferred_pk_seek_txn_deleted_row_has_no_columns",
+        strstr(zOut, "/b1")==0);
+  check("deferred_pk_seek_txn_later_rows",
+        strstr(zOut, "p2/NULL p2/b2 p3/NULL p3/b3")!=0);
+  sqlite3_close(db);
+  remove(zPath);
+}
+
 int main(int argc, char **argv){
   (void)argc; (void)argv;
 
@@ -695,6 +747,9 @@ int main(int argc, char **argv){
 
   printf("--- content changes abort open cursors ---\n");
   test_content_change_aborts_open_cursor();
+
+  printf("--- deferred primary-key seek after a write ---\n");
+  test_deferred_pk_seek_after_write();
 
   printf("\n=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail > 0 ? 1 : 0;
