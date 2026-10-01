@@ -47,6 +47,7 @@ BUCKET_PAYLOAD = 256
 BUCKET_CACHE_KIB = 65536
 BUCKET_PROBES = 8192
 PK_REWRITE_ISSUE = 3419
+TEXT_KEY_FETCH_ISSUE = 3492
 PENDING_EDITS_ISSUE = 3418
 RETAINED_SECTIONS = (("pending_edits", "Pending Edit Map"),
                      ("narrow_rows", "Narrow Rows"),
@@ -64,6 +65,7 @@ SECTIONS = (("queries", "Large Table Scans"),
             ("wide_tradeoffs", "Wide Row Trade-offs"),
             ("uncached_reads", "Uncached Reads"),
             ("pk_rewrites", "Primary Key Index Rewrites"),
+            ("text_key_fetches", "Text Key Index Fetches"),
             *RETAINED_SECTIONS,
             ("retained", "Retained Findings"))
 
@@ -83,7 +85,8 @@ def section_of(name):
         return "wide_tradeoffs"
     if name.startswith("uncached_"):
         return "uncached_reads"
-    for prefix, section in (("pk_rewrite_", "pk_rewrites"), ("pending_", "pending_edits")):
+    for prefix, section in (("pk_rewrite_", "pk_rewrites"), ("key_fetch_", "text_key_fetches"),
+                            ("pending_", "pending_edits")):
         if name.startswith(prefix):
             return section
     return "queries"
@@ -453,6 +456,11 @@ BUCKET_NOTES = {
                     "Secondary index entries carry the primary key, so changing a non-integer "
                     "key rewrites every index entry of the row, while SQLite's indexes point at "
                     "an unchanged rowid; the no-index and integer-key cases are the controls"),
+    "text_key_fetches": (TEXT_KEY_FETCH_ISSUE,
+                         "Rows are clustered by their primary key and there is no rowid, so "
+                         "a non-covering index fetch searches the table by the key the index "
+                         "entry carries; a text key costs a byte-wise search where SQLite "
+                         "seeks an integer rowid. The integer-key case is the control"),
     "pending_edits": (PENDING_EDITS_ISSUE,
                       "Uncommitted edits live in a sorted pending map: writes pay to fill it, and "
                       "reads in the transaction merge it with the tree and skip its deletes. The "
@@ -489,6 +497,9 @@ def bucket_workloads(rows=BUCKET_ROWS, probes=BUCKET_PROBES):
     text_key = f"UPDATE t SET id=printf('%016x',k/3+{rows});"
     payload = f"UPDATE t SET payload=CAST(printf('%0{BUCKET_PAYLOAD}d',k) AS BLOB);"
     live = sum(v[8 * i] for i in range(1, probes + 1) if 8 * i <= rows)
+    fetch = "SELECT count(*),sum(k) FROM t INDEXED BY t_gv WHERE grp<64;"
+    fetched = [i for i in range(1, rows + 1) if i % 256 < 64]
+    fetch_expected = f"{len(fetched)}|{3 * sum(fetched)}"
     return [
         ("pk_rewrite_text_no_indexes", "file", "text", "none", BUCKET_CACHE_KIB, "",
          text_key, str(rows)),
@@ -496,6 +507,10 @@ def bucket_workloads(rows=BUCKET_ROWS, probes=BUCKET_PROBES):
          text_key, str(rows)),
         ("pk_rewrite_integer_three_indexes", "file", "integer", "three", BUCKET_CACHE_KIB, "",
          f"UPDATE t SET id=id+{rows};", str(rows)),
+        ("key_fetch_text", "file", "text", "three", BUCKET_CACHE_KIB, "",
+         fetch, fetch_expected),
+        ("key_fetch_integer", "file", "integer", "three", BUCKET_CACHE_KIB, "",
+         fetch, fetch_expected),
         ("pending_update_memory", "memory", "integer", "none", BUCKET_CACHE_KIB, "",
          "UPDATE t SET v=v+1;", str(rows)),
         ("pending_update_payload_memory", "memory", "integer", "none", BUCKET_CACHE_KIB, "",
