@@ -787,6 +787,155 @@ static void test_concurrent_continue_adoption(void){
   remove(path);
 }
 
+/* A peer commit on main fired from the operation's progress handler at step
+** fireAt, so it lands between the operation planning its result and
+** advancing the branch for some step. */
+typedef struct PeerCommit PeerCommit;
+struct PeerCommit {
+  sqlite3 *peer;
+  int fireAt;
+  int nCalls;
+  int fired;
+  int committed;
+};
+
+static int peerCommitAtStep(void *arg){
+  PeerCommit *p = (PeerCommit*)arg;
+  if( ++p->nCalls==p->fireAt && !p->fired ){
+    p->fired = 1;
+    if( execSql(p->peer, "INSERT INTO t VALUES(900, 'peer')")==SQLITE_OK ){
+      p->committed = is_commit_hash(
+          queryScalarText(p->peer, "SELECT dolt_commit('-am','peer')"));
+    }
+  }
+  return 0;
+}
+
+/* Runs zOp on a fresh connection to zPath while the peer commits at step
+** k. Returns 0 once k is past the operation's last step. */
+static int runOpWithPeerAt(const char *zPath, const char *zOp, int k,
+                           char *zResult, int nResult, int *pCommitted){
+  sqlite3 *db = 0;
+  PeerCommit ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  sqlite3_open(zPath, &db);
+  sqlite3_open(zPath, &ctx.peer);
+  ctx.fireAt = k;
+  sqlite3_progress_handler(db, 1, peerCommitAtStep, &ctx);
+  snprintf(zResult, nResult, "%s", queryScalarText(db, zOp));
+  sqlite3_progress_handler(db, 0, 0, 0);
+  sqlite3_close(ctx.peer);
+  sqlite3_close(db);
+  *pCommitted = ctx.committed;
+  return ctx.fired;
+}
+
+/* Revert advances main from the result it planned. A peer commit that lands
+** before the advance must survive: the revert either commits on top of it or
+** refuses and leaves main at the peer's commit. */
+static void test_revert_racing_peer_commit(void){
+  const char *path = "/tmp/test_revert_racing_peer.db";
+  int k;
+  int nLanded = 0;
+  int nBad = 0;
+
+  printf("--- Test 7: revert racing a peer commit on main ---\n");
+  for(k=1; k<2000; k++){
+    sqlite3 *db = 0;
+    char zTarget[64], zResult[256], zOp[128];
+    int committed = 0;
+    int reverted, peerKept, rowKept, targetKept;
+
+    setup_base(path, 10);
+    sqlite3_open(path, &db);
+    execSql(db, "INSERT INTO t VALUES(50, 'x')");
+    snprintf(zTarget, sizeof(zTarget), "%s",
+             queryScalarText(db, "SELECT dolt_commit('-am','x')"));
+    sqlite3_close(db);
+    snprintf(zOp, sizeof(zOp), "SELECT dolt_revert('%s')", zTarget);
+    if( !runOpWithPeerAt(path, zOp, k, zResult, sizeof(zResult), &committed) ){
+      break;
+    }
+    if( !committed ) continue;
+    nLanded++;
+    sqlite3_open(path, &db);
+    reverted = is_commit_hash(zResult);
+    peerKept = countRows(db, "SELECT count(*) FROM dolt_log WHERE message='peer'")==1;
+    rowKept = countRows(db, "SELECT count(*) FROM t WHERE id=900")==1;
+    targetKept = countRows(db, "SELECT count(*) FROM t WHERE id=50")==1;
+    if( !peerKept || !rowKept || (reverted && targetKept)
+     || (!reverted && !targetKept) ){
+      if( nBad++==0 ){
+        fprintf(stderr, "revert at step %d: result=%s peer=%d row=%d target=%d\n",
+                k, zResult, peerKept, rowKept, targetKept);
+      }
+    }
+    sqlite3_close(db);
+  }
+  check("revert_vs_peer_commit_swept", k>1);
+  check("revert_vs_peer_commit_raced", nLanded>0);
+  check("revert_vs_peer_commit_kept", nBad==0);
+  remove(path);
+}
+
+/* Pull advances main from the remote tip it fetched. A peer commit on main
+** that lands before the advance must survive the same way. */
+static void test_pull_racing_peer_commit(void){
+  char local[128], remote[128], client[128];
+  int k;
+  int nLanded = 0;
+  int nBad = 0;
+
+  printf("--- Test 8: pull racing a peer commit on main ---\n");
+  snprintf(local, sizeof(local), "/tmp/test_pull_race_local_%d.db", (int)getpid());
+  snprintf(remote, sizeof(remote), "/tmp/test_pull_race_remote_%d.db", (int)getpid());
+  snprintf(client, sizeof(client), "/tmp/test_pull_race_client_%d.db", (int)getpid());
+  for(k=1; k<4000; k++){
+    sqlite3 *db = 0;
+    char sql[512], zResult[256];
+    int committed = 0;
+    int pulled, peerKept, rowKept, remoteKept;
+
+    remove(local); remove(remote); remove(client);
+    setup_base(local, 10);
+    sqlite3_open(local, &db);
+    snprintf(sql, sizeof(sql),
+             "SELECT dolt_remote('add','origin','file://%s');"
+             "SELECT dolt_push('origin','main','--force');", remote);
+    execSql(db, sql);
+    sqlite3_close(db);
+    sqlite3_open(client, &db);
+    snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remote);
+    execSql(db, sql);
+    execSql(db, "INSERT INTO t VALUES(2000, 'remote');"
+                "SELECT dolt_commit('-am','remote update');"
+                "SELECT dolt_push('origin','main');");
+    sqlite3_close(db);
+    if( !runOpWithPeerAt(local, "SELECT dolt_pull('origin','main')", k,
+                         zResult, sizeof(zResult), &committed) ){
+      break;
+    }
+    if( !committed ) continue;
+    nLanded++;
+    sqlite3_open(local, &db);
+    pulled = !looks_like_error(zResult);
+    peerKept = countRows(db, "SELECT count(*) FROM dolt_log WHERE message='peer'")==1;
+    rowKept = countRows(db, "SELECT count(*) FROM t WHERE id=900")==1;
+    remoteKept = countRows(db, "SELECT count(*) FROM t WHERE id=2000")==1;
+    if( !peerKept || !rowKept || (pulled && !remoteKept) ){
+      if( nBad++==0 ){
+        fprintf(stderr, "pull at step %d: result=%s peer=%d row=%d remote=%d\n",
+                k, zResult, peerKept, rowKept, remoteKept);
+      }
+    }
+    sqlite3_close(db);
+  }
+  check("pull_vs_peer_commit_swept", k>1);
+  check("pull_vs_peer_commit_raced", nLanded>0);
+  check("pull_vs_peer_commit_kept", nBad==0);
+  remove(local); remove(remote); remove(client);
+}
+
 int main(void){
   setvbuf(stdout, 0, _IOLBF, 0);
   printf("=== Multi-Process Merge & Rebase Concurrency Tests ===\n\n");
@@ -797,6 +946,8 @@ int main(void){
   test_rebase_racing_checkout();
   test_concurrent_continue_abort();
   test_concurrent_continue_adoption();
+  test_revert_racing_peer_commit();
+  test_pull_racing_peer_commit();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
