@@ -3883,7 +3883,20 @@ static int vdbeFinishPkMoveto(VdbeCursor *p){
   int res = 0;
   int rc;
   u32 j;
+  int bMoved;
 
+  /* A write since OP_DeferredSeek may have moved the index cursor; the row
+  ** is the one its restored entry names, or none if that entry is gone. */
+  bMoved = sqlite3BtreeCursorHasMoved(pIdx->uc.pCursor)
+        || p->movetoTarget!=db->nTotalChange;
+  rc = sqlite3VdbeCursorRestore(pIdx);
+  if( rc ) return rc;
+  if( pIdx->nullRow ){
+    p->nullRow = 1;
+    p->deferredMoveto = 0;
+    p->cacheStatus = CACHE_STALE;
+    return SQLITE_OK;
+  }
   nPayload = sqlite3BtreePayloadSize(pIdx->uc.pCursor);
   sqlite3VdbeMemInit(&m, db, 0);
   rc = sqlite3VdbeMemFromBtreeZeroOffset(pIdx->uc.pCursor, nPayload, &m);
@@ -3917,7 +3930,14 @@ static int vdbeFinishPkMoveto(VdbeCursor *p){
   sqlite3DbFreeNN(db, pIdxRec);
   sqlite3VdbeMemRelease(&m);
   if( rc ) return rc;
-  if( res!=0 ) return SQLITE_CORRUPT_BKPT;
+  if( res!=0 ){
+    /* A write since OP_DeferredSeek (movetoTarget holds the change count
+    ** then) can leave the entry naming a deleted row, which a pending edit
+    ** does not even report as a moved cursor; the row is gone, as a moved
+    ** table cursor would report. */
+    if( !bMoved ) return SQLITE_CORRUPT_BKPT;
+    p->nullRow = 1;
+  }
   p->deferredMoveto = 0;
   p->cacheStatus = CACHE_STALE;
   return SQLITE_OK;
