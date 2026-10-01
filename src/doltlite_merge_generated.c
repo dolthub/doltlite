@@ -72,6 +72,103 @@ int mergeRowTable(
   return SQLITE_OK;
 }
 
+int mergeRowAddedDefaults(
+  MergePass1Ctx *c, const char *zName, sqlite3 *pSchemaDb,
+  const struct TableEntry *pOurs, const struct TableEntry *pAnc,
+  const ProllyHash *pTheirsRoot, int useTheirs,
+  ProllyHash *pOurOut, ProllyHash *pAncOut, ProllyHash *pTheirOut
+){
+  SchemaEntry *aOriginal = 0, *pOriginal, *pOther, *pAncestor, *pSelected;
+  ProllyHash ancestor;
+  struct TableEntry *pAncestorTable;
+  int nOriginal = 0, nOurs = 0, nOther = 0, i, rc = SQLITE_OK;
+  ParsedColumn *aOurs = 0, *aOther = 0;
+  sqlite3_stmt *stmt = 0;
+  sqlite3_str *shared = 0;
+  char *zShared = 0, *zSql = 0;
+  int bAdds = 0;
+
+  *pOurOut = pOurs->root;
+  *pAncOut = pAnc->root;
+  *pTheirOut = *pTheirsRoot;
+  if( !zName || !pSchemaDb ) return SQLITE_OK;
+  for(i=0; c->pnSchemaActions && i<*c->pnSchemaActions; i++){
+    SchemaMergeAction *pAction = &(*c->ppSchemaActions)[i];
+    if( sqlite3_stricmp(pAction->zTableName, zName)==0
+     && pAction->nAddColumns>0 ) bAdds = 1;
+  }
+  if( !bAdds ) return SQLITE_OK;
+  pAncestor = findSchemaEntry(c->aAncSchema, c->nAncSchema, zName);
+  pOther = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zName);
+  pSelected = useTheirs ? pOther
+      : findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
+  pAncestorTable = doltliteFindTableByNumber(c->aAnc, c->nAnc, pAnc->iTable);
+  if( !pAncestor || !pOther || !pSelected || !pAncestorTable ) return SQLITE_CORRUPT;
+  rc = loadSchemaFromCatalog(c->db, doltliteGetChunkStore(c->db),
+      doltliteGetCache(c->db), c->pCatOurs, &aOriginal, &nOriginal);
+  if( rc!=SQLITE_OK ) goto done;
+  pOriginal = findSchemaEntry(aOriginal, nOriginal, zName);
+  if( !pOriginal || !pOriginal->zSql ){ rc = SQLITE_CORRUPT; goto done; }
+  rc = parseColumns(pOriginal->zSql, &aOurs, &nOurs);
+  if( rc==SQLITE_OK ) rc = parseColumns(pOther->zSql, &aOther, &nOther);
+  if( rc!=SQLITE_OK ) goto done;
+  shared = sqlite3_str_new(0);
+  sqlite3_str_appendf(shared, "CREATE TABLE \"%w\"(", zName);
+  bAdds = 0;
+  for(i=0; i<nOurs; i++){
+    if( parsedColumnIndexByName(aOther, nOther, aOurs[i].zName)<0 ) continue;
+    sqlite3_str_appendf(shared, "%s\"%w\"", bAdds ? "," : "", aOurs[i].zName);
+    bAdds = 1;
+  }
+  sqlite3_str_appendall(shared, ")");
+  zShared = sqlite3_str_finish(shared);
+  shared = 0;
+  if( !zShared ){ rc = SQLITE_NOMEM; goto done; }
+  rc = sqlite3_prepare_v2(pSchemaDb,
+      "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?",
+      -1, &stmt, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_bind_text(stmt, 1, zName, -1, SQLITE_STATIC);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_step(stmt);
+    if( rc==SQLITE_ROW ){
+      zSql = sqlite3_mprintf("%s", sqlite3_column_text(stmt, 0));
+      rc = zSql ? SQLITE_OK : SQLITE_NOMEM;
+    }else if( rc==SQLITE_DONE ){
+      rc = SQLITE_CORRUPT;
+    }
+  }
+  if( rc!=SQLITE_OK ) goto done;
+  rc = normalizeSideToMergedLayout(c->db, zName, &pOurs->root, &pOurs->root,
+      pOurs->flags, pOurs->flags, zSql, zSql, zSql,
+      1, 0, 0, pAncestorTable->flags, pOurOut);
+  if( rc==SQLITE_OK ){
+    rc = normalizeSideToMergedLayout(c->db, zName, &pOurs->root, pTheirsRoot,
+        pOurs->flags, pOurs->flags, zSql, zSql, zSql,
+        1, 0, 0, pAncestorTable->flags, pTheirOut);
+  }
+  if( rc==SQLITE_OK ){
+    rc = normalizeSideToMergedLayout(c->db, zName,
+        &pOurs->root, &pAncestorTable->root,
+        pOurs->flags, pAncestorTable->flags,
+        pAncestor->zSql, pSelected->zSql, pAncestor->zSql,
+        1, zShared, &pAncestorTable->root, pAncestorTable->flags, &ancestor);
+  }
+  if( rc==SQLITE_OK ){
+    rc = normalizeSideToMergedLayout(c->db, zName, &pOurs->root, &ancestor,
+        pOurs->flags, pOurs->flags, pAncestor->zSql, zSql, pSelected->zSql,
+        1, zShared, 0, pAncestorTable->flags, pAncOut);
+  }
+done:
+  sqlite3_finalize(stmt);
+  sqlite3_free(sqlite3_str_finish(shared));
+  sqlite3_free(zSql);
+  sqlite3_free(zShared);
+  freeColumns(aOurs, nOurs);
+  freeColumns(aOther, nOther);
+  freeSchemaEntries(aOriginal, nOriginal);
+  return rc;
+}
+
 int mergeRowPolicy(
   MergePass1Ctx *c,
   const char *zName,

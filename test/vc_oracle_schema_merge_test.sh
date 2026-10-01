@@ -1961,4 +1961,51 @@ SQL
   done
 done
 
+for shape in later_column rename_with_add explicit_null null_with_add; do
+  case "$shape" in
+    later_column)
+      ours='ALTER TABLE t ADD COLUMN x INT;'
+      theirs='ALTER TABLE t ADD COLUMN w INT DEFAULT 5; ALTER TABLE t ADD COLUMN y INT; UPDATE t SET y=10 WHERE id=2; INSERT INTO t VALUES(3,3,3,8,30);'
+      query="SELECT concat(id,'|',a,'|',b,'|',coalesce(cast(x AS CHAR),'NULL'),'|',w,'|',coalesce(cast(y AS CHAR),'NULL')) FROM t ORDER BY id;"
+      rows=$'1|1|1|NULL|5|NULL\n2|2|2|NULL|5|10\n3|3|3|NULL|8|30' ;;
+    rename_with_add)
+      ours="ALTER TABLE t ADD COLUMN x INT DEFAULT 0; ALTER TABLE t ADD COLUMN y TEXT; UPDATE t SET y='B' WHERE id=1; INSERT INTO t VALUES(3,3,3,9,'C');"
+      theirs='ALTER TABLE t RENAME COLUMN b TO bb;'
+      query="SELECT concat(id,'|',a,'|',bb,'|',x,'|',coalesce(y,'NULL')) FROM t ORDER BY id;"
+      rows=$'1|1|1|0|B\n2|2|2|0|NULL\n3|3|3|9|C' ;;
+    explicit_null)
+      ours='ALTER TABLE t RENAME COLUMN b TO bb;'
+      theirs='ALTER TABLE t ADD COLUMN n INT DEFAULT 7; UPDATE t SET n=NULL WHERE id=1; INSERT INTO t VALUES(3,3,3,NULL);'
+      query="SELECT concat(id,'|',a,'|',bb,'|',coalesce(cast(n AS CHAR),'NULL')) FROM t ORDER BY id;"
+      rows=$'1|1|1|NULL\n2|2|2|7\n3|3|3|NULL' ;;
+    null_with_add)
+      ours='ALTER TABLE t ADD COLUMN x INT DEFAULT 4;'
+      theirs='ALTER TABLE t ADD COLUMN n INT DEFAULT 7; UPDATE t SET n=NULL WHERE id=1; INSERT INTO t VALUES(3,3,3,NULL);'
+      query="SELECT concat(id,'|',a,'|',b,'|',x,'|',coalesce(cast(n AS CHAR),'NULL')) FROM t ORDER BY id;"
+      rows=$'1|1|1|4|NULL\n2|2|2|4|7\n3|3|3|4|NULL' ;;
+  esac
+  for operation in merge cherry_pick; do
+    for direction in forward reverse; do
+      tag="default_replay_${shape}_${operation}_${direction}"
+      DB="$TMPROOT/$tag.db"
+      main_sql="$ours"; feat_sql="$theirs"
+      if [ "$direction" = reverse ]; then main_sql="$theirs"; feat_sql="$ours"; fi
+      dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT);
+INSERT INTO t VALUES(1,1,1),(2,2,2);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$main_sql
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('feat');
+$feat_sql
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_${operation}('feat');
+SQL
+      expect_dual_value "$tag" "$DB" "$rows" "$query" "$query"
+    done
+  done
+done
+
 vc_oracle_finish

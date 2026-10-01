@@ -149,6 +149,10 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
         "doltlite_internal_materialize_default_column() takes 3 arguments", -1);
     return;
   }
+  if( db->mDbFlags & DBFLAG_MergeSchemaAdd ){
+    sqlite3_result_int(ctx, 0);
+    return;
+  }
   zDb = (const char*)sqlite3_value_text(argv[0]);
   zTable = (const char*)sqlite3_value_text(argv[1]);
   zColumn = (const char*)sqlite3_value_text(argv[2]);

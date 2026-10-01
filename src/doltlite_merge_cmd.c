@@ -814,11 +814,14 @@ int doltliteApplyMergeSchemaActions(
       }
     }
     for(sj=0; sj<aSchemaActions[si].nAddColumns; sj++){
+      int bWasSet = (db->mDbFlags & DBFLAG_MergeSchemaAdd)!=0;
       char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %s",
                                       zTableName,
                                       aSchemaActions[si].azAddColumns[sj]);
       if( !zAlter ) return SQLITE_NOMEM;
+      db->mDbFlags |= DBFLAG_MergeSchemaAdd;
       rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
+      if( !bWasSet ) db->mDbFlags &= ~DBFLAG_MergeSchemaAdd;
       sqlite3_free(zAlter);
       if( rc!=SQLITE_OK ) break;
     }
