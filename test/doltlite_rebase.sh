@@ -1860,7 +1860,190 @@ else
   ERRORS="$ERRORS\nFAIL: rebase_edit_continue_staged_reopen\n  log: $EDITRO_LOG\n  rows: $EDITRO_ROWS\n  full: $EDITRO_OUT"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE" "$DBEDITST" "$DBEDITUS" "$DBEDITMAN" "$DBEDITAM" "$DBEDITRO"
+# A schema change on the conflicted table stays unstaged. Clean tables
+# from the same replayed commit stay staged.
+DBST=/tmp/test_rebase_conflict_schema_status_$$.db
+rm -f "$DBST"
+cat <<'SQL' | "$DOLTLITE" "$DBST" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN w INT;
+UPDATE t SET v=5, w=5 WHERE id=1;
+SELECT dolt_commit('-am', 'f1');
+SELECT dolt_checkout('main');
+UPDATE t SET v=7 WHERE id=1;
+SELECT dolt_commit('-am', 'm1');
+SELECT dolt_checkout('feat');
+SQL
+ST_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT 'STAT|' || table_name || '|' || staged || '|' || dolt_status.status FROM dolt_status ORDER BY table_name, staged, dolt_status.status;
+SELECT 'HEADSTAGED|' || count(*) FROM dolt_schema_diff('HEAD','STAGED');
+SELECT 'ROW|' || id || '|' || v || '|' || ifnull(w,'') FROM t WHERE id=1;
+SELECT 'BR|' || active_branch();" | "$DOLTLITE" "$DBST" 2>&1)
+ST_ROWS=$(echo "$ST_OUT" | grep '^STAT|' | tr '\n' ',')
+if [ "$ST_ROWS" = "STAT|t|0|conflict,STAT|t|0|modified," ] \
+   && echo "$ST_OUT" | grep -q '^HEADSTAGED|0$' \
+   && echo "$ST_OUT" | grep -q '^ROW|1|7|$' \
+   && echo "$ST_OUT" | grep -q '^BR|dolt_rebase_feat$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_conflict_schema_unstaged\n  stats: $ST_ROWS\n  full: $ST_OUT"
+fi
+
+DBST3=/tmp/test_rebase_conflict_schema_mixed_$$.db
+rm -f "$DBST3"
+cat <<'SQL' | "$DOLTLITE" "$DBST3" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE s(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+INSERT INTO u VALUES (1, 1);
+INSERT INTO s VALUES (1, 1);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN w INT;
+UPDATE t SET v=5, w=5 WHERE id=1;
+UPDATE u SET v=9 WHERE id=1;
+ALTER TABLE s ADD COLUMN extra INT;
+UPDATE s SET extra=4 WHERE id=1;
+SELECT dolt_commit('-am', 'f1');
+SELECT dolt_checkout('main');
+UPDATE t SET v=7 WHERE id=1;
+SELECT dolt_commit('-am', 'm1');
+SELECT dolt_checkout('feat');
+SQL
+ST3_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT 'STAT|' || table_name || '|' || staged || '|' || dolt_status.status FROM dolt_status ORDER BY table_name, staged, dolt_status.status;
+SELECT 'HEADSTAGED|' || ifnull(to_table_name,'') FROM dolt_schema_diff('HEAD','STAGED') ORDER BY to_table_name;
+SELECT 'U|' || id || '|' || v FROM u WHERE id=1;
+SELECT 'S|' || id || '|' || v || '|' || ifnull(extra,'') FROM s WHERE id=1;
+SELECT 'T|' || id || '|' || v || '|' || ifnull(w,'') FROM t WHERE id=1;" | "$DOLTLITE" "$DBST3" 2>&1)
+ST3_ROWS=$(echo "$ST3_OUT" | grep '^STAT|' | tr '\n' ',')
+ST3_SCH=$(echo "$ST3_OUT" | grep '^HEADSTAGED|' | tr '\n' ',')
+if [ "$ST3_ROWS" = "STAT|s|1|modified,STAT|t|0|conflict,STAT|t|0|modified,STAT|u|1|modified," ] \
+   && [ "$ST3_SCH" = "HEADSTAGED|s," ] \
+   && echo "$ST3_OUT" | grep -q '^U|1|9$' \
+   && echo "$ST3_OUT" | grep -q '^S|1|1|4$' \
+   && echo "$ST3_OUT" | grep -q '^T|1|7|$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_conflict_clean_tables_staged\n  stats: $ST3_ROWS\n  schema: $ST3_SCH\n  full: $ST3_OUT"
+fi
+
+DBSTD=/tmp/test_rebase_conflict_data_status_$$.db
+rm -f "$DBSTD"
+cat <<'SQL' | "$DOLTLITE" "$DBSTD" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET v=2 WHERE id=1;
+SELECT dolt_commit('-am', 'f1');
+SELECT dolt_checkout('main');
+UPDATE t SET v=3 WHERE id=1;
+SELECT dolt_commit('-am', 'm1');
+SELECT dolt_checkout('feat');
+SQL
+STD_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT 'STAT|' || table_name || '|' || staged || '|' || dolt_status.status FROM dolt_status ORDER BY table_name, staged, dolt_status.status;
+SELECT 'HEADSTAGED|' || count(*) FROM dolt_schema_diff('HEAD','STAGED');
+SELECT 'ROW|' || id || '|' || v FROM t WHERE id=1;" | "$DOLTLITE" "$DBSTD" 2>&1)
+STD_ROWS=$(echo "$STD_OUT" | grep '^STAT|' | tr '\n' ',')
+if [ "$STD_ROWS" = "STAT|t|0|conflict," ] \
+   && echo "$STD_OUT" | grep -q '^HEADSTAGED|0$' \
+   && echo "$STD_OUT" | grep -q '^ROW|1|3$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_conflict_data_only_status\n  stats: $STD_ROWS\n  full: $STD_OUT"
+fi
+
+DBSTC=/tmp/test_rebase_conflict_schema_continue_$$.db
+rm -f "$DBSTC"
+cat <<'SQL' | "$DOLTLITE" "$DBSTC" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN w INT;
+UPDATE t SET v=5, w=5 WHERE id=1;
+SELECT dolt_commit('-am', 'f1');
+SELECT dolt_checkout('main');
+UPDATE t SET v=7 WHERE id=1;
+SELECT dolt_commit('-am', 'm1');
+SELECT dolt_checkout('feat');
+SQL
+STC_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_add('-A');
+SELECT dolt_rebase('--continue');
+SELECT 'BR|' || active_branch();
+SELECT 'HASW|' || count(*) FROM pragma_table_info('t') WHERE name='w';
+SELECT 'VAL|' || id || '|' || v || '|' || ifnull(w,'') FROM t WHERE id=1;
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DBSTC" 2>&1)
+if echo "$STC_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$STC_OUT" | grep -q '^BR|feat$' \
+   && echo "$STC_OUT" | grep -q '^HASW|1$' \
+   && echo "$STC_OUT" | grep -q '^VAL|1|7|$' \
+   && echo "$STC_OUT" | grep -q '^LOG|f1,m1,base$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_conflict_schema_continue\n  full: $STC_OUT"
+fi
+
+DBCP=/tmp/test_rebase_cherrypick_conflict_status_$$.db
+rm -f "$DBCP"
+cat <<'SQL' | "$DOLTLITE" "$DBCP" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+INSERT INTO u VALUES (1, 1);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN w INT;
+UPDATE t SET v=5, w=5 WHERE id=1;
+UPDATE u SET v=9 WHERE id=1;
+SELECT dolt_commit('-am', 'f1');
+SELECT dolt_checkout('main');
+UPDATE t SET v=7 WHERE id=1;
+SELECT dolt_commit('-am', 'm1');
+SQL
+CP_OUT=$(echo "BEGIN;
+SELECT dolt_cherry_pick('feat');
+SELECT 'STAT|' || table_name || '|' || staged || '|' || dolt_status.status FROM dolt_status ORDER BY table_name, staged, dolt_status.status;
+SELECT 'HEADSTAGED|' || count(*) FROM dolt_schema_diff('HEAD','STAGED');
+SELECT 'U|' || id || '|' || v FROM u WHERE id=1;" | "$DOLTLITE" "$DBCP" 2>&1)
+CP_ROWS=$(echo "$CP_OUT" | grep '^STAT|' | tr '\n' ',')
+if [ "$CP_ROWS" = "STAT|t|0|conflict,STAT|t|0|modified,STAT|u|1|modified," ] \
+   && echo "$CP_OUT" | grep -q '^HEADSTAGED|0$' \
+   && echo "$CP_OUT" | grep -q '^U|1|9$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: cherry_pick_conflict_clean_table_staged\n  stats: $CP_ROWS\n  full: $CP_OUT"
+fi
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE" "$DBEDITST" "$DBEDITUS" "$DBEDITMAN" "$DBEDITAM" "$DBEDITRO" "$DBST" "$DBST3" "$DBSTD" "$DBSTC" "$DBCP"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
