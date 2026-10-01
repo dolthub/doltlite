@@ -54,6 +54,7 @@ COVERAGE_TESTS=(
   serialize_pending_test
   chunk_store_put_bounds_test
   crash_recovery_test
+  concurrent_refs_merge_test
 )
 
 SPECIALIZED_TESTS=(
