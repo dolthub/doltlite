@@ -21,16 +21,18 @@ dltest_run_sql() {
   # macOS /bin/bash 3.2 + set -u treats empty "${arr[@]}" as unbound.
   if [ "${3:-}" = "bail" ]; then
     if [ "$DLTEST_STRIP_CR" = "1" ]; then
-      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-        "$DOLTLITE" -bail "$db" 2>&1 | tr -d '\r'
+      ( set -o pipefail
+        echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+          "$DOLTLITE" -bail "$db" 2>&1 | tr -d '\r' )
     else
       echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
         "$DOLTLITE" -bail "$db" 2>&1
     fi
   else
     if [ "$DLTEST_STRIP_CR" = "1" ]; then
-      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-        "$DOLTLITE" "$db" 2>&1 | tr -d '\r'
+      ( set -o pipefail
+        echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+          "$DOLTLITE" "$db" 2>&1 | tr -d '\r' )
     else
       echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
         "$DOLTLITE" "$db" 2>&1
@@ -87,6 +89,16 @@ dltest_fail() {
   ERRORS="$ERRORS\nFAIL: $name\n$msg"
 }
 
+# An error status can be the expected outcome; a signal never is.
+dltest_check_signal() {
+  local name="$1" rc="$2" result="$3"
+  if [ "$rc" -ge 128 ]; then
+    dltest_fail "$name" "  engine died of a signal (rc=$rc)\n  got: $result"
+    return 1
+  fi
+  return 0
+}
+
 dltest_expected_error() {
   case "$1" in
     Error*|*"Error near"*|*"Parse error"*) return 0 ;;
@@ -111,6 +123,8 @@ run_test() {
     else
       dltest_fail "$name" "  engine rc=$rc\n  expected: $expected\n  got:      $result"
     fi
+  elif ! dltest_check_signal "$name" "$rc" "$result"; then
+    :
   elif [ "$result" = "$expected" ]; then
     dltest_pass
   else
@@ -123,9 +137,13 @@ run_test_lastline() {
   local sql="$2"
   local expected="$3"
   local db="$4"
-  local result
-  result=$(dltest_run_sql "$sql" "$db" | tail -1)
-  if [ "$result" = "$expected" ]; then
+  local out result rc
+  out=$(dltest_run_sql "$sql" "$db")
+  rc=$?
+  result=$(printf '%s\n' "$out" | tail -1)
+  if ! dltest_check_signal "$name" "$rc" "$out"; then
+    :
+  elif [ "$result" = "$expected" ]; then
     dltest_pass
   else
     dltest_fail "$name" "  expected: $expected\n  got:      $result"
@@ -137,9 +155,12 @@ run_test_match() {
   local sql="$2"
   local pattern="$3"
   local db="$4"
-  local result
+  local result rc
   result=$(dltest_run_sql "$sql" "$db")
-  if echo "$result" | grep -qE${DLTEST_MATCH_FLAGS} -- "$pattern"; then
+  rc=$?
+  if ! dltest_check_signal "$name" "$rc" "$result"; then
+    :
+  elif echo "$result" | grep -qE${DLTEST_MATCH_FLAGS} -- "$pattern"; then
     dltest_pass
   else
     dltest_fail "$name" "  pattern: $pattern\n  got:     $result"
