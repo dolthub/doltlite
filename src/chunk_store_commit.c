@@ -520,6 +520,7 @@ static int csCommitToFile(ChunkStore *cs){
   cs->wal.cleanCloseMarker = 0;
 
   csCommitPublishStaging(cs, useRecent, aCommittedPending, aMerged, nMerged);
+  chunkStoreNoteSelfPublishedWorkingSet(cs);
   if( aCommittedPending!=aSmallCommittedPending ){
     sqlite3_free(aCommittedPending);
   }

@@ -866,9 +866,78 @@ int doltliteAdvanceBranch(
       db, pNewHead, pCatalogHash, pWorkingCatHash, &saved, 1);
 }
 
+void doltliteGetSessionWorkingSetBasis(sqlite3 *db, ProllyHash *pHash){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  if( !cs ){
+    memset(pHash, 0, sizeof(ProllyHash));
+    return;
+  }
+  chunkStoreGetWorkingSetBasis(cs, doltliteGetSessionBranch(db), pHash);
+}
+
+/* The command replaces the working set it checked clean; a peer write since
+** then is not in the replacement and would be erased. Graph lock held. */
+/* SQLITE_BUSY when zBranch's published working set is neither pExpected nor
+** one this connection wrote itself. Graph lock held. */
+int doltliteBranchWorkingSetUnmoved(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pExpected
+){
+  ProllyHash wsNow;
+  int haveNow = 0;
+  int rc;
+  if( !pExpected || prollyHashIsEmpty(pExpected) || !chunkStoreHasPeers(cs) ){
+    return SQLITE_OK;
+  }
+  rc = chunkStoreReadPublishedBranchWorkingSet(cs, zBranch, &wsNow, &haveNow);
+  if( rc==SQLITE_OK && haveNow
+   && prollyHashCompare(&wsNow, pExpected)!=0
+   && !chunkStoreWorkingSetSelfPublished(cs, zBranch, &wsNow) ){
+    rc = SQLITE_BUSY;
+  }
+  return rc;
+}
+
+int doltliteConfirmWorkingSet(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const ProllyHash *pExpectedWorkingSet
+){
+  int rc = doltliteBranchWorkingSetUnmoved(
+      cs, doltliteGetSessionBranch(db), pExpectedWorkingSet);
+  if( rc==SQLITE_OK && pExpectedWorkingSet
+   && !prollyHashIsEmpty(pExpectedWorkingSet) && chunkStoreHasPeers(cs)
+   && cs->nWsForeignAdopt!=cs->nWsForeignAdoptAtCapture ){
+    rc = SQLITE_BUSY;
+  }
+  if( rc!=SQLITE_OK ) doltliteInvalidateSessionWorkingState(db);
+  return rc;
+}
+
+/* Persist a working set computed from pExpected; in autocommit, refuse with
+** SQLITE_BUSY rather than erase a peer write that landed since. */
+int doltlitePersistWorkingSetConfirmed(
+  sqlite3 *db,
+  const ProllyHash *pExpected
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash head;
+  int rc;
+  if( !cs || !db->autoCommit ) return doltlitePersistWorkingSet(db);
+  doltliteGetSessionHead(db, &head);
+  rc = doltliteRefreshAndConfirmHead(db, cs, &head);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteConfirmWorkingSet(db, cs, pExpected);
+  if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
+  chunkStoreUnlock(cs);
+  return rc;
+}
+
 static int doltliteCompareAndAdvanceBranchImpl(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
+  const ProllyHash *pExpectedWorkingSet,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash,
@@ -933,6 +1002,13 @@ static int doltliteCompareAndAdvanceBranchImpl(
     }
   }
 
+  rc = doltliteConfirmWorkingSet(db, cs, pExpectedWorkingSet);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    doltliteTxnStateClear(&saved);
+    return rc;
+  }
+
   /* Persist the tip under the confirm lock without SwitchCatalog; lock-cycling
   ** SQL between confirm and commit can let a peer land and then be clobbered. */
   rc = doltliteAdvanceBranchWithState(
@@ -971,12 +1047,14 @@ static int doltliteCompareAndAdvanceBranchImpl(
 int doltliteCompareAndAdvanceBranch(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
+  const ProllyHash *pExpectedWorkingSet,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash
 ){
   return doltliteCompareAndAdvanceBranchImpl(
-      db, pExpectedHead, pNewHead, pCatalogHash, pWorkingCatHash, 1);
+      db, pExpectedHead, pExpectedWorkingSet, pNewHead, pCatalogHash,
+      pWorkingCatHash, 1);
 }
 
 int doltliteCompareAndAdvanceBranchCurrentCatalog(
@@ -987,7 +1065,7 @@ int doltliteCompareAndAdvanceBranchCurrentCatalog(
   const ProllyHash *pWorkingCatHash
 ){
   return doltliteCompareAndAdvanceBranchImpl(
-      db, pExpectedHead, pNewHead, pCatalogHash, pWorkingCatHash, 0);
+      db, pExpectedHead, 0, pNewHead, pCatalogHash, pWorkingCatHash, 0);
 }
 
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db){

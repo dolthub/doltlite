@@ -1103,6 +1103,17 @@ static int gcRun(
       *pzPhase = "failed to refresh store for gc";
       return rc;
     }
+  }else if( cs->snapshotPinned ){
+    /* Marking from a statement's pinned snapshot would sweep a peer write
+    ** made since it began out of the republished store. */
+    int bChanged = 0;
+    rc = chunkStoreHasExternalChanges(cs, &bChanged);
+    if( rc==SQLITE_OK && bChanged ) rc = SQLITE_BUSY;
+    if( rc!=SQLITE_OK ){
+      chunkStoreUnlock(cs);
+      *pzPhase = "database changed during gc; retry";
+      return rc;
+    }
   }
 
   rc = gcMarksInit(&marked, cs);

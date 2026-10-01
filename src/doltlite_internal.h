@@ -1242,9 +1242,25 @@ int doltliteAdvanceBranch(
 int doltliteCompareAndAdvanceBranch(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
+  const ProllyHash *pExpectedWorkingSet,
   const ProllyHash *pNewHead,
   const ProllyHash *pCatalogHash,
   const ProllyHash *pWorkingCatHash
+);
+void doltliteGetSessionWorkingSetBasis(sqlite3 *db, ProllyHash *pHash);
+int doltliteBranchWorkingSetUnmoved(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pExpected
+);
+int doltliteConfirmWorkingSet(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const ProllyHash *pExpectedWorkingSet
+);
+int doltlitePersistWorkingSetConfirmed(
+  sqlite3 *db,
+  const ProllyHash *pExpected
 );
 int doltliteCompareAndAdvanceBranchCurrentCatalog(
   sqlite3 *db,
