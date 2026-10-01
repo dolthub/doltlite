@@ -32,7 +32,7 @@ static int tableSqlNeedsClusteredPkAutoindex(
   int rc;
 
   *pNeeds = 0;
-  rc = sqlite3_open(":memory:", &tmp);
+  rc = sqlite3_open_v2(":memory:", &tmp, SQLITE_OPEN_READONLY, 0);
   if( rc==SQLITE_OK ){
     sqlite3_mutex_enter(tmp->mutex);
     rc = sqlite3Init(tmp, &zErr);
