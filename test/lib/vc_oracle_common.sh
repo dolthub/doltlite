@@ -186,3 +186,23 @@ vc_oracle_finish() {
   echo "__SUITE_COMPLETE__"
   return 0
 }
+
+vc_oracle_check_dolt_version() {
+  local pin expected output actual
+  pin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.dolt-oracle-version"
+  expected=$(tr -d '[:space:]' < "$pin") || return 1
+  if ! output=$("$1" version); then
+    echo "ERROR: cannot read Dolt oracle version from $1" >&2
+    return 1
+  fi
+  actual=$(awk '$1=="dolt" && $2=="version" {print "v" $3; exit}' <<<"$output")
+  if [ "$actual" != "$expected" ]; then
+    echo "ERROR: Dolt oracle reports ${actual:-an unrecognized version}; expected $expected from $pin" >&2
+    echo "Install the pinned oracle with .github/scripts/install-dolt-oracle.sh." >&2
+    return 1
+  fi
+}
+
+if [ -n "${DOLT:-}" ]; then
+  vc_oracle_check_dolt_version "$DOLT" || exit 1
+fi

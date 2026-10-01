@@ -58,13 +58,15 @@ jobs:
       run: |
         cd build
         bash ../test/assert_stock_reference.sh ./sqlite3 ./doltlite || exit 1
-        bash ../test/run_guarded_suite.sh ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || exit 1
-        bash ../test/run_guarded_suite.sh ../test/oracle_import_test.sh ./doltlite dolt || exit 1
+        failed=0
+        bash ../test/run_guarded_suite.sh ../test/sql_oracle_test.sh ./doltlite ./sqlite3 || failed=1
+        bash ../test/run_guarded_suite.sh ../test/oracle_import_test.sh ./doltlite dolt || failed=1
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename "$f")" = "oracle_import_test.sh" ] && continue
           echo "--- $(basename "$f") ---"
-          bash ../test/run_guarded_suite.sh "$f" ./doltlite ./sqlite3 || exit 1
+          bash ../test/run_guarded_suite.sh "$f" ./doltlite ./sqlite3 || failed=1
         done
+        test "$failed" -eq 0
       timeout-minutes: 15
 
     # One job per bucket, matching oracle-tests. The manifest check is what
@@ -78,13 +80,15 @@ jobs:
       if: matrix.bucket
       run: |
         cd build
+        failed=0
         for bucket in ${{ matrix.bucket }}; do
           while IFS= read -r oracle; do
             [ -z "$oracle" ] && continue
             echo "--- $oracle ---"
-            bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || exit 1
+            bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || failed=1
           done < "../test/oracle-buckets/$bucket.txt"
         done
+        test "$failed" -eq 0
       timeout-minutes: 25
 
     - name: Correctness regression tests

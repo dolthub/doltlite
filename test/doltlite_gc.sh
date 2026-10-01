@@ -406,9 +406,10 @@ db_rm "$DB"
 # VACUUM INTO renames the copy over its output path, so closing the handle
 # logs through the output filename; that name must outlive the handle
 # (a use-after-free under ASAN otherwise).
-# The copy path is relative to the cwd: a /tmp path is not a valid VFS path
-# for the Windows build.
-DB=/tmp/test_gc_vacuum_into_$$.db; db_rm "$DB"; COPY=test_gc_vacuum_into_copy_$$.db; db_rm "$COPY"
+# MSYS translates argv paths, but not the VACUUM INTO path inside SQL.
+VACUUM_TMP=$(mktemp -d ./.doltlite-gc-vacuum.XXXXXX) || exit 1
+trap 'rm -rf "$VACUUM_TMP"' EXIT
+DB="$VACUUM_TMP/source.db"; COPY="$VACUUM_TMP/copy.db"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a'),(2,'b');
 SELECT dolt_commit('-A','-m','seed');" | $DOLTLITE "$DB" > /dev/null 2>&1

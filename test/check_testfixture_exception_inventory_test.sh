@@ -31,7 +31,7 @@ write_ratchet
 # qualifier, one harness crash row.
 write_fixture() {
   printf '%s\n' \
-    'alpha alpha-1 class=intentional' \
+    'alpha alpha-1 class=intentional  # clustered primary keys' \
     'beta beta-1 @linux class=unsupported issue=42  # platform case' \
     > "$DIVERGENCES"
   printf '%s\n' \
@@ -69,27 +69,27 @@ expect_failure "two class= fields on one gate"
 write_fixture
 
 printf '%s\n' \
-  'alpha alpha-1 class=intentional' \
+  'alpha alpha-1 class=intentional  # clustered primary keys' \
   'alpha alpha-1 class=harness' \
   'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 expect_failure "a duplicated gate"
 write_fixture
 
 printf '%s\n' \
-  'alpha alpha-1 class=intentional' \
+  'alpha alpha-1 class=intentional  # clustered primary keys' \
   'beta beta-1 @linux class=unsupported' > "$DIVERGENCES"
 expect_failure "an unsupported surface without an issue"
 write_fixture
 
 printf '%s\n' \
-  'alpha alpha-1 class=intentional' \
+  'alpha alpha-1 class=intentional  # clustered primary keys' \
   'beta beta-1 @linux class=engine-gap issue=https://example.com/42' \
   > "$DIVERGENCES"
 expect_failure "an issue= that is not a DoltLite issue number"
 write_fixture
 
 printf '%s\n' \
-  'alpha alpha-1 class=intentional' \
+  'alpha alpha-1 class=intentional  # clustered primary keys' \
   'beta beta-1 @linux class=unsupported issue=42 issue=43' > "$DIVERGENCES"
 expect_failure "two issue= fields on one gate"
 write_fixture
@@ -107,7 +107,7 @@ expect_failure "an unrecognized field"
 write_fixture
 
 printf '%s\n' \
-  'alpha alpha-1 @nosuchplatform class=intentional' \
+  'alpha alpha-1 @nosuchplatform class=intentional  # clustered primary keys' \
   'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 expect_failure "an unknown qualifier"
 write_fixture
@@ -128,7 +128,7 @@ write_fixture
 # Gates are keyed individually, so one assertion in a file can be dispositioned
 # differently from its neighbours -- the whole point of keying per gate.
 printf '%s\n' \
-  'alpha alpha-1 class=intentional' \
+  'alpha alpha-1 class=intentional  # clustered primary keys' \
   'alpha alpha-2 class=engine-gap issue=42' \
   'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 write_ratchet 4 1 1 1 1
@@ -138,19 +138,19 @@ write_ratchet
 
 # Counted patterns retain their represented assertion count in the ratchet.
 printf '%s\n' \
-  'alpha alpha-1.transient.*{2} class=intentional' \
+  'alpha alpha-1.transient.*{2} class=intentional  # clustered primary keys' \
   'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 write_ratchet 4 2 1 1 0
 run_check
 
 printf '%s\n' \
-  'alpha alpha-1.transient.*{0} class=intentional' \
+  'alpha alpha-1.transient.*{0} class=intentional  # clustered primary keys' \
   'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 expect_failure "a zero-count pattern"
 
 printf '%s\n' \
-  'alpha alpha-1.transient.*{2} class=intentional' \
-  'alpha alpha-1.transient.7 class=intentional' \
+  'alpha alpha-1.transient.*{2} class=intentional  # clustered primary keys' \
+  'alpha alpha-1.transient.7 class=intentional  # clustered primary keys' \
   'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
 expect_failure "overlapping exact and counted gates"
 
@@ -228,5 +228,20 @@ for dup in gates intentional unsupported harness engine-gap; do
   } > "$RATCHET"
   expect_failure "a ratchet baseline listing '$dup' twice"
 done
+
+write_fixture
+printf '%s\n' 'alpha alpha-1 class=intentional' 'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+write_ratchet
+expect_failure "an intentional group without a reason"
+write_fixture
+printf '%s\n' 'alpha alpha-1 class=intentional  # clustered primary keys' \
+  'alpha alpha-2 class=intentional' 'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+write_ratchet 4 2 1 1 0
+run_check
+printf '%s\n' 'alpha alpha-1 class=intentional  # clustered primary keys' '' \
+  'alpha alpha-2 class=intentional' 'beta beta-1 @linux class=unsupported issue=42' > "$DIVERGENCES"
+expect_failure "a reason carried across a blank group boundary"
+write_fixture
+write_ratchet
 
 echo "OK: testfixture exception inventory checker self-test"

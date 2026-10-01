@@ -233,11 +233,13 @@ jobs:
       if: matrix.bucket != 'sql'
       run: |
         cd build-coverage
+        failed=0
         while IFS= read -r oracle; do
           [ -z "$oracle" ] && continue
           echo "--- $oracle ---"
-          bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || exit 1
+          bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || failed=1
         done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
+        test "$failed" -eq 0
       timeout-minutes: 18
 
     # Checked here too, not just where it is built: every suite below is a
@@ -253,13 +255,15 @@ jobs:
       if: matrix.bucket == 'sql'
       run: |
         cd build-coverage
-        bash ../test/run_guarded_suite.sh ../test/sql_oracle_test.sh ./doltlite ./sqlite3-stock || exit 1
-        bash ../test/run_guarded_suite.sh ../test/oracle_import_test.sh ./doltlite dolt || exit 1
+        failed=0
+        bash ../test/run_guarded_suite.sh ../test/sql_oracle_test.sh ./doltlite ./sqlite3-stock || failed=1
+        bash ../test/run_guarded_suite.sh ../test/oracle_import_test.sh ./doltlite dolt || failed=1
         for f in ../test/oracle_*_test.sh; do
           [ "$(basename $f)" = "oracle_import_test.sh" ] && continue
           echo "--- $(basename $f) ---"
-          bash ../test/run_guarded_suite.sh "$f" ./doltlite ./sqlite3-stock || exit 1
+          bash ../test/run_guarded_suite.sh "$f" ./doltlite ./sqlite3-stock || failed=1
         done
+        test "$failed" -eq 0
       timeout-minutes: 10
 
     - name: Merge per-process coverage profiles
@@ -544,6 +548,7 @@ jobs:
         bash ../test/creds_path_test.sh ./doltlite
         bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/run_guarded_suite.sh ../test/http_remote_large_chunk_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_bind_warning_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_concurrency_test.sh ./doltlite ./doltlite-remotesrv

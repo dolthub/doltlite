@@ -100,6 +100,8 @@ def alter_response(response, mode):
         lines.insert(length_index + 1, f"Content-Length: {length}".encode())
     elif mode == "overflow":
         lines[length_index] = b"Content-Length: 999999999999999999999999"
+    elif mode == "over-cap":
+        lines[length_index] = b"Content-Length: 1073741825"
     elif mode == "truncated":
         lines[length_index] = f"Content-Length: {length + 1}".encode()
     elif mode == "transfer":
@@ -248,7 +250,7 @@ if "$DOLTLITE" "$TMP/bad-port.db" "SELECT dolt_clone('$bad_url');" \
 fi
 echo "http remote checked URL port: PASS"
 
-for mode in invalid duplicate overflow truncated transfer; do
+for mode in invalid duplicate overflow over-cap truncated transfer; do
   printf '%s\n' "$mode" >"$TMP/response-mode"
   if "$DOLTLITE" "$TMP/bad-response-$mode.db" \
       "SELECT dolt_clone('$URL');" >"$TMP/bad-response-$mode.out" 2>&1; then

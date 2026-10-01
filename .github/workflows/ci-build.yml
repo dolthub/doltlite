@@ -143,13 +143,19 @@ jobs:
           build-coverage/doltlite-remotesrv \
           build-coverage/doltlite_regression_test_c \
           build-coverage/testfixture \
+          build-coverage/libdoltlite.a \
+          build-coverage/sqlite3.h \
           build-coverage/prolly_hash.o \
           build-coverage/blake3*.o \
           build-coverage/*_test \
           coverage-artifact/build-coverage/
         cp build-stockref/sqlite3 \
           coverage-artifact/build-coverage/sqlite3-stock
-        llvm-strip --strip-debug coverage-artifact/build-coverage/*
+        strip_artifacts=()
+        for artifact in coverage-artifact/build-coverage/*; do
+          [ "$(basename "$artifact")" = sqlite3.h ] || strip_artifacts+=("$artifact")
+        done
+        llvm-strip --strip-debug "${strip_artifacts[@]}"
         # The consumers compare against this copy, so assert the copy: it is
         # what ships, and stripping it is the last thing that touches it.
         bash test/assert_stock_reference.sh \

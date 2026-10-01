@@ -15,7 +15,7 @@ check() {
   shift
   out=$(SQLITE3="$MISSING" bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$suite" "$@" 2>&1); rc=$?
   last=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1)
-  if [ "$rc" -eq 0 ] && printf '%s' "$last" | grep -qE '^SKIP[: ]' \
+  if [ "$rc" -eq 77 ] && printf '%s' "$last" | grep -qE '^SKIP[: ]' \
      && ! printf '%s\n' "$out" | grep -qx '__SUITE_COMPLETE__'; then
     echo "PASS: $suite ends on its SKIP line"; pass=$((pass+1))
   else

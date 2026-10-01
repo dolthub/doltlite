@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 source "$SCRIPT_DIR/lib/vc_oracle_common.sh"
+VC_PINNED_VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/../.dolt-oracle-version")
+export VC_PINNED_VERSION
 VC_HARNESS_DIR=$(mktemp -d)
 trap 'rm -rf "$VC_HARNESS_DIR"' EXIT
 export VC_HARNESS_DIR
@@ -11,6 +13,7 @@ mkdir -p "$VC_HARNESS_DIR/bin dir" "$VC_HARNESS_DIR/repo"
 cat > "$VC_HARNESS_DIR/bin dir/reference" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
+  version) echo "dolt version ${VC_DOLT_VERSION:-${VC_PINNED_VERSION#v}}"; exit "${VC_VERSION_RC:-0}" ;;
   init) stage=init; rc=23 ;;
   sql)
     if [ "${2:-}" = -r ]; then
@@ -50,6 +53,20 @@ check() {
 }
 
 absolute="$VC_HARNESS_DIR/bin dir/reference"
+check vc_oracle_check_dolt_version "$absolute"
+for version in 0.0.0 invalid; do
+  if VC_DOLT_VERSION="$version" vc_oracle_check_dolt_version "$absolute" 2>"$VC_HARNESS_DIR/version.err"; then
+    echo "FAIL: mismatched oracle version accepted" >&2
+    exit 1
+  fi
+  check grep -q "expected $VC_PINNED_VERSION" "$VC_HARNESS_DIR/version.err"
+done
+if VC_VERSION_RC=23 vc_oracle_check_dolt_version "$absolute" 2>"$VC_HARNESS_DIR/version.err"; then
+  echo "FAIL: failed version command accepted" >&2
+  exit 1
+fi
+check grep -q 'cannot read Dolt oracle version' "$VC_HARNESS_DIR/version.err"
+
 resolved=$(vc_oracle_resolve_binary "$absolute")
 check test "$resolved" = "$absolute"
 resolved=$(cd "$VC_HARNESS_DIR" && vc_oracle_resolve_binary './bin dir/reference')
@@ -129,9 +146,16 @@ if ! vc_oracle_finish > "$VC_HARNESS_DIR/okfloor.log" 2>&1; then
   exit 1
 fi
 
+cat > "$VC_HARNESS_DIR/false-reference" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = version ]; then echo "dolt version ${VC_PINNED_VERSION#v}"; exit 0; fi
+exit 1
+STUB
+chmod +x "$VC_HARNESS_DIR/false-reference"
+
 # Sabotaged engines must not report success. /usr/bin/false used to make
 # vc_oracle_clean_test.sh print 11 passed / 0 failed.
-if bash "$SCRIPT_DIR/vc_oracle_clean_test.sh" /usr/bin/false /usr/bin/false \
+if bash "$SCRIPT_DIR/vc_oracle_clean_test.sh" /usr/bin/false "$VC_HARNESS_DIR/false-reference" \
     > "$VC_HARNESS_DIR/clean_false.log" 2>&1; then
   echo 'FAIL: clean oracle accepted /usr/bin/false' >&2
   tail -10 "$VC_HARNESS_DIR/clean_false.log" >&2
@@ -144,7 +168,7 @@ check grep -q 'FAIL:' "$VC_HARNESS_DIR/clean_false.log"
 for base in vc_oracle_clean_test.sh vc_oracle_status_test.sh \
             vc_oracle_commit_test.sh vc_oracle_branch_test.sh \
             vc_oracle_add_test.sh vc_oracle_docs_test.sh; do
-  if bash "$SCRIPT_DIR/$base" /usr/bin/false /usr/bin/false \
+  if bash "$SCRIPT_DIR/$base" /usr/bin/false "$VC_HARNESS_DIR/false-reference" \
       > "$VC_HARNESS_DIR/sabotage.log" 2>&1; then
     echo "FAIL: $base accepted /usr/bin/false" >&2
     tail -8 "$VC_HARNESS_DIR/sabotage.log" >&2

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "lib/temp_db_dir.h"
 #include "sqlite3.h"
 
 static int nPass = 0;
@@ -707,13 +708,12 @@ static void test_deferred_pk_seek_after_write(void){
       "SELECT t.pk, t.a FROM t INDEXED BY ta CROSS JOIN y WHERE t.a>0",
       "p1/1 NULL/NULL p2/2 p2/2 p3/3 p3/3" }
   };
-  char zPath[256];
+  const char *zPath = "deferred_pk_seek.db";
   char zOut[256];
   char zName[64];
   sqlite3 *db = 0;
   int i, txn;
 
-  snprintf(zPath, sizeof(zPath), "/tmp/deferred_pk_seek_%d.db", (int)getpid());
   remove(zPath);
   sqlite3_open(zPath, &db);
   for(i=0; i<(int)(sizeof(aCase)/sizeof(aCase[0])); i++){
@@ -729,6 +729,11 @@ static void test_deferred_pk_seek_after_write(void){
 }
 
 int main(int argc, char **argv){
+  TestTempDir temp;
+  if( !testTempDirSetup(&temp) ){
+    perror("temporary test directory");
+    return 1;
+  }
   (void)argc; (void)argv;
 
   printf("=== Prepared Statement Reuse Tests ===\n\n");
@@ -772,6 +777,7 @@ int main(int argc, char **argv){
   printf("--- deferred primary-key seek after a write ---\n");
   test_deferred_pk_seek_after_write();
 
+  check("temporary directory cleanup", testTempDirCleanup(&temp));
   printf("\n=== Results: %d passed, %d failed ===\n", nPass, nFail);
   return nFail > 0 ? 1 : 0;
 }

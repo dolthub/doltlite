@@ -2839,7 +2839,7 @@ DOLTLITE_C_TESTS = \
 	crash_recovery_test$(T.exe) \
 	concurrent_branch_test$(T.exe)
 
-serialize_pending_test$(T.exe): $(TOP)/test/serialize_pending_test.c libdoltlite$(T.lib)
+serialize_pending_test$(T.exe): $(TOP)/test/serialize_pending_test.c $(TOP)/test/lib/temp_db_dir.h libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/serialize_pending_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
@@ -2971,7 +2971,7 @@ detached_head_test$(T.exe): $(TOP)/test/detached_head_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/detached_head_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
-prepared_stmt_reuse_test$(T.exe): $(TOP)/test/prepared_stmt_reuse_test.c libdoltlite$(T.lib)
+prepared_stmt_reuse_test$(T.exe): $(TOP)/test/prepared_stmt_reuse_test.c $(TOP)/test/lib/temp_db_dir.h libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/prepared_stmt_reuse_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
