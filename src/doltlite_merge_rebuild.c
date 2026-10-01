@@ -966,6 +966,15 @@ int normalizeSideToMergedLayout(
     bReuse = zReuse!=0;
     sqlite3_free(zReuse);
   }
+  if( pAncRoot ){
+    rc = mergeMapUnmatchedColumns(db, pAncRoot, pOursRoot, ancFlags, flags,
+                                  zAncSql, zOursSql, zTable, aOursAnc, nOurs);
+    if( rc==SQLITE_OK ){
+      rc = mergeMapUnmatchedColumns(db, pAncRoot, pTheirsRoot, ancFlags, srcFlags,
+                                    zAncSql, zTheirsSql, zTable, aTheirsAnc, nTheirs);
+    }
+    if( rc!=SQLITE_OK ) goto done;
+  }
   for(j=0; j<nOurs; j++){
     aMergedRecord[j] = parsedColumnIsVirtual(&aOurs[j])
         ? -1 : nMergedRecord++;

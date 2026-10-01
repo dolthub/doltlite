@@ -931,35 +931,6 @@ static int colInfoIndex(const DoltliteColInfo *ci, const char *zName){
   return -1;
 }
 
-/* Omitted trailing fields are NULL. VIRTUAL slots are not compared. */
-static int storedFieldsEqual(
-  const u8 *pA, int nA, const DoltliteRecordInfo *pAi, int iA,
-  const u8 *pB, int nB, const DoltliteRecordInfo *pBi, int iB
-){
-  int aNull, bNull;
-  if( iA<0 || iB<0 ) return 1;
-  aNull = iA>=pAi->nField || pAi->aType[iA]==0;
-  bNull = iB>=pBi->nField || pBi->aType[iB]==0;
-  if( aNull || bNull ) return aNull && bNull;
-  return doltliteFieldValuesEqual(
-      pAi->aType[iA], pA, nA, pAi->aOffset[iA],
-      pBi->aType[iB], pB, nB, pBi->aOffset[iB]);
-}
-
-static int loadReaderCols(
-  const char *zSql, const char *zTable, DoltliteColInfo *ci
-){
-  sqlite3 *tmp = 0;
-  int rc;
-  memset(ci, 0, sizeof(*ci));
-  if( !zSql || !zTable ) return SQLITE_OK;
-  rc = sqlite3_open(":memory:", &tmp);
-  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
-  if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTable, ci);
-  if( tmp ) sqlite3_close(tmp);
-  return rc;
-}
-
 /* 1 when reader columns are the parsed declared list, so ancestor slots
 ** line up with the merge's column indexes. 0 when they do not. -1 on OOM. */
 static int colsMatchParsed(const char *zSql, const DoltliteColInfo *ci){
@@ -978,11 +949,6 @@ static int colsMatchParsed(const char *zSql, const DoltliteColInfo *ci){
   freeColumns(a, n);
   return rc;
 }
-static int recSlot(const DoltliteColInfo *ci, int i){
-  if( !ci || i<0 || i>=ci->nCol ) return -1;
-  return ci->aColToRec ? ci->aColToRec[i] : i;
-}
-
 /* Names say each side column is that ancestor column. */
 static int rowFitsColumnNames(
   const DoltliteColInfo *pSide, const DoltliteColInfo *pAnc,
@@ -993,8 +959,8 @@ static int rowFitsColumnNames(
   for(i=0; i<pSide->nCol; i++){
     int k = colInfoIndex(pAnc, pSide->azName[i]);
     if( k<0 ) return 0;
-    if( !storedFieldsEqual(pSideRec, nSideRec, pSideInfo, recSlot(pSide, i),
-                           pAncRec, nAncRec, pAncInfo, recSlot(pAnc, k)) ){
+    if( !mergeStoredFieldsEqual(pSideRec, nSideRec, pSideInfo, mergeReaderRecordSlot(pSide, i),
+                           pAncRec, nAncRec, pAncInfo, mergeReaderRecordSlot(pAnc, k)) ){
       return 0;
     }
   }
@@ -1011,16 +977,16 @@ static int assignColumnsByCells(
 ){
   int i, next = 0;
   for(i=0; i<pSide->nCol; i++){
-    int iS = recSlot(pSide, i);
+    int iS = mergeReaderRecordSlot(pSide, i);
     int nHit = 0, hit = -1, k;
     if( iS<0 ){
       aSideAnc[i] = colInfoIndex(pAnc, pSide->azName[i]);
       continue;
     }
     for(k=next; k<pAnc->nCol; k++){
-      int iA = recSlot(pAnc, k);
+      int iA = mergeReaderRecordSlot(pAnc, k);
       if( iA<0 ) continue;
-      if( storedFieldsEqual(pSideRec, nSideRec, pSideInfo, iS,
+      if( mergeStoredFieldsEqual(pSideRec, nSideRec, pSideInfo, iS,
                             pAncRec, nAncRec, pAncInfo, iA) ){
         nHit++;
         hit = k;
@@ -1065,8 +1031,8 @@ int mergeRenameHoldingDroppedName(
     return SQLITE_OK;
   }
   if( ((ancFlags ^ sideFlags) & PROLLY_NODE_INTKEY)!=0 ) return SQLITE_OK;
-  rc = loadReaderCols(zAncSql, zTable, &ancCi);
-  if( rc==SQLITE_OK ) rc = loadReaderCols(zSideSql, zTable, &sideCi);
+  rc = mergeLoadReaderColumns(zAncSql, zTable, &ancCi);
+  if( rc==SQLITE_OK ) rc = mergeLoadReaderColumns(zSideSql, zTable, &sideCi);
   if( rc!=SQLITE_OK || sideCi.nCol<=0 || sideCi.nCol>=ancCi.nCol ){
     if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
     goto done;

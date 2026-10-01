@@ -61,6 +61,171 @@ int parsedColumnIndexByName(
   return -1;
 }
 
+/* Omitted trailing fields are NULL. VIRTUAL slots are not compared. */
+int mergeStoredFieldsEqual(
+  const u8 *pA, int nA, const DoltliteRecordInfo *pAi, int iA,
+  const u8 *pB, int nB, const DoltliteRecordInfo *pBi, int iB
+){
+  int aNull, bNull;
+  if( iA<0 || iB<0 ) return 1;
+  aNull = iA>=pAi->nField || pAi->aType[iA]==0;
+  bNull = iB>=pBi->nField || pBi->aType[iB]==0;
+  if( aNull || bNull ) return aNull && bNull;
+  return doltliteFieldValuesEqual(
+      pAi->aType[iA], pA, nA, pAi->aOffset[iA],
+      pBi->aType[iB], pB, nB, pBi->aOffset[iB]);
+}
+
+int mergeLoadReaderColumns(
+  const char *zSql, const char *zTable, DoltliteColInfo *ci
+){
+  sqlite3 *tmp = 0;
+  int rc;
+  memset(ci, 0, sizeof(*ci));
+  if( !zSql || !zTable ) return SQLITE_OK;
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTable, ci);
+  if( tmp ) sqlite3_close(tmp);
+  return rc;
+}
+
+int mergeReaderRecordSlot(const DoltliteColInfo *ci, int i){
+  if( !ci || i<0 || i>=ci->nCol ) return -1;
+  return ci->aColToRec ? ci->aColToRec[i] : i;
+}
+
+int mergeMapUnmatchedColumns(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags, u8 sideFlags,
+  const char *zAncSql, const char *zSideSql, const char *zTable,
+  int *aSideAnc, int nSide
+){
+  ParsedColumn *aAnc = 0, *aSide = 0;
+  int nAnc = 0, nParsed = 0;
+  DoltliteColInfo ancCi, sideCi;
+  DoltliteRecordInfo ancInfo, sideInfo;
+  ProllyCursor ancCur, sideCur;
+  u8 *aCandidate = 0;
+  int i, k, j, res, rc, bPending = 0, curInit = 0;
+
+  for(i=0; i<nSide; i++) if( aSideAnc[i]<0 ) bPending = 1;
+  if( !bPending ) return SQLITE_OK;
+  memset(&ancCi, 0, sizeof(ancCi));
+  memset(&sideCi, 0, sizeof(sideCi));
+  doltliteRecordInfoInit(&ancInfo);
+  doltliteRecordInfoInit(&sideInfo);
+  rc = parseColumns(zAncSql, &aAnc, &nAnc);
+  if( rc==SQLITE_OK ) rc = parseColumns(zSideSql, &aSide, &nParsed);
+  if( rc!=SQLITE_OK || nParsed!=nSide || nAnc==0 ) goto done;
+  aCandidate = sqlite3_malloc64((u64)nSide * nAnc);
+  if( !aCandidate ){ rc = SQLITE_NOMEM; goto done; }
+  memset(aCandidate, 0, (size_t)nSide * nAnc);
+  bPending = 0;
+  for(i=0; i<nSide; i++){
+    int nHit = 0, hit = -1, first = 0, end = nAnc;
+    if( aSideAnc[i]>=0 ) continue;
+    for(j=i-1; j>=0; j--){
+      if( aSideAnc[j]>=0 ){ first = aSideAnc[j]+1; break; }
+    }
+    for(j=i+1; j<nSide; j++){
+      if( aSideAnc[j]>=0 ){ end = aSideAnc[j]; break; }
+    }
+    for(k=first; k<end; k++){
+      for(j=0; j<nSide && aSideAnc[j]!=k; j++){}
+      if( j<nSide || !parsedColumnDefinitionsMatch(&aSide[i], &aAnc[k]) ){
+        continue;
+      }
+      aCandidate[i*nAnc+k] = 1;
+      nHit++;
+      hit = k;
+    }
+    if( nHit==1 ){
+      aSideAnc[i] = hit;
+      aCandidate[i*nAnc+hit] = 0;
+    }else if( nHit>1 ){
+      bPending = 1;
+    }
+  }
+  if( !bPending ) goto done;
+  rc = mergeLoadReaderColumns(zAncSql, zTable, &ancCi);
+  if( rc==SQLITE_OK ) rc = mergeLoadReaderColumns(zSideSql, zTable, &sideCi);
+  if( rc!=SQLITE_OK ) goto done;
+  if( ancCi.nCol!=nAnc || sideCi.nCol!=nSide ){
+    rc = SQLITE_ERROR;
+    goto done;
+  }
+  if( !prollyHashIsEmpty(pAncRoot) && !prollyHashIsEmpty(pSideRoot)
+   && ((ancFlags ^ sideFlags) & PROLLY_NODE_INTKEY)==0 ){
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    ProllyCache *cache = doltliteGetCache(db);
+    prollyCursorInit(&ancCur, cs, cache, pAncRoot, ancFlags);
+    prollyCursorInit(&sideCur, cs, cache, pSideRoot, sideFlags);
+    curInit = 1;
+    rc = prollyCursorFirst(&ancCur, &res);
+    while( rc==SQLITE_OK && !res && prollyCursorIsValid(&ancCur) ){
+      const u8 *pAncVal, *pSideVal, *pKey;
+      int nAncVal, nSideVal, nKey, sideRes;
+      if( ancFlags & PROLLY_NODE_INTKEY ){
+        rc = prollyCursorSeekInt(&sideCur, prollyCursorIntKey(&ancCur), &sideRes);
+      }else{
+        prollyCursorKey(&ancCur, &pKey, &nKey);
+        rc = prollyCursorSeekBlob(&sideCur, pKey, nKey, &sideRes);
+      }
+      if( rc!=SQLITE_OK ) break;
+      if( sideRes==0 && prollyCursorIsValid(&sideCur) ){
+        prollyCursorValue(&ancCur, &pAncVal, &nAncVal);
+        prollyCursorValue(&sideCur, &pSideVal, &nSideVal);
+        rc = doltliteParseRecordStrict(pAncVal, nAncVal, &ancInfo);
+        if( rc==SQLITE_OK ){
+          rc = doltliteParseRecordStrict(pSideVal, nSideVal, &sideInfo);
+        }
+        if( rc!=SQLITE_OK ) break;
+        for(i=0; i<nSide; i++){
+          for(k=0; k<nAnc; k++){
+            if( aCandidate[i*nAnc+k]==1
+             && !mergeStoredFieldsEqual(
+                  pSideVal, nSideVal, &sideInfo, mergeReaderRecordSlot(&sideCi, i),
+                  pAncVal, nAncVal, &ancInfo, mergeReaderRecordSlot(&ancCi, k)) ){
+              aCandidate[i*nAnc+k] = 2;
+            }
+          }
+        }
+      }
+      rc = prollyCursorNext(&ancCur);
+    }
+  }
+  if( rc!=SQLITE_OK ) goto done;
+  for(i=0; i<nSide; i++){
+    int nHit = 0, hit = -1, bPossible = 0;
+    for(k=0; k<nAnc; k++){
+      if( aCandidate[i*nAnc+k] ) bPossible = 1;
+      if( aCandidate[i*nAnc+k]==1 ){ nHit++; hit = k; }
+    }
+    if( !bPossible ) continue;
+    if( nHit!=1 ){ rc = SQLITE_ERROR; goto done; }
+    for(j=0; j<nSide; j++){
+      if( aSideAnc[j]==hit ){ rc = SQLITE_ERROR; goto done; }
+    }
+    aSideAnc[i] = hit;
+  }
+done:
+  if( curInit ){
+    prollyCursorClose(&ancCur);
+    prollyCursorClose(&sideCur);
+  }
+  doltliteRecordInfoClear(&ancInfo);
+  doltliteRecordInfoClear(&sideInfo);
+  doltliteFreeColInfo(&ancCi);
+  doltliteFreeColInfo(&sideCi);
+  freeColumns(aAnc, nAnc);
+  freeColumns(aSide, nParsed);
+  sqlite3_free(aCandidate);
+  return rc;
+}
+
 void mergeMapColumnsToAncestor(
   ParsedColumn *aAnc, int nAnc,
   ParsedColumn *aSide, int nSide,

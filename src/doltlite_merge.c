@@ -710,9 +710,85 @@ static int schemaEntrySameType(const SchemaEntry *pA, const SchemaEntry *pB){
   return pA && pB && pA->zType && pB->zType && strcmp(pA->zType, pB->zType)==0;
 }
 
+static int mergeResolveColumnRenames(
+  sqlite3 *db, const char *zName,
+  const struct TableEntry *pAnc, const struct TableEntry *pSide,
+  const char *zAncSql, const char *zSideSql, const char *zSelectedSql,
+  char ***pazAdd, int *pnAdd,
+  char ***pazDrop, int *pnDrop,
+  char ***pazRename, int *pnRename
+){
+  ParsedColumn *aAnc = 0, *aSide = 0, *aSelected = 0;
+  int nAnc = 0, nSide = 0, nSelected = 0;
+  int *aMap = 0;
+  int i, j, rc;
+
+  if( !pAnc || !pSide ) return SQLITE_OK;
+  rc = parseColumns(zAncSql, &aAnc, &nAnc);
+  if( rc==SQLITE_OK ) rc = parseColumns(zSideSql, &aSide, &nSide);
+  if( rc!=SQLITE_OK || nSide>=nAnc ) goto done;
+  rc = parseColumns(zSelectedSql, &aSelected, &nSelected);
+  if( rc!=SQLITE_OK ) goto done;
+  aMap = sqlite3_malloc64((u64)(nSide ? nSide : 1) * sizeof(int));
+  if( !aMap ){ rc = SQLITE_NOMEM; goto done; }
+  mergeMapColumnsToAncestor(aAnc, nAnc, aSide, nSide, aMap);
+  rc = mergeMapUnmatchedColumns(db, &pAnc->root, &pSide->root,
+                                pAnc->flags, pSide->flags,
+                                zAncSql, zSideSql, zName, aMap, nSide);
+  if( rc!=SQLITE_OK ) goto done;
+  for(i=0; i<nSide; i++){
+    char **azNew;
+    const char *zOld;
+    if( aMap[i]<0 ) continue;
+    zOld = aAnc[aMap[i]].zName;
+    if( parsedColumnIndexByName(aAnc, nAnc, aSide[i].zName)>=0
+     || parsedColumnIndexByName(aSelected, nSelected, aSide[i].zName)>=0
+     || parsedColumnIndexByName(aSelected, nSelected, zOld)<0 ) continue;
+    for(j=0; j<*pnRename; j+=2){
+      if( sqlite3_stricmp((*pazRename)[j], zOld)==0 ) break;
+    }
+    if( j<*pnRename ) continue;
+    azNew = sqlite3_realloc64(*pazRename, (u64)(*pnRename+2) * sizeof(char*));
+    if( !azNew ){ rc = SQLITE_NOMEM; goto done; }
+    *pazRename = azNew;
+    azNew[*pnRename] = sqlite3_mprintf("%s", zOld);
+    azNew[*pnRename+1] = sqlite3_mprintf("%s", aSide[i].zName);
+    *pnRename += 2;
+    if( !azNew[*pnRename-2] || !azNew[*pnRename-1] ){
+      rc = SQLITE_NOMEM;
+      goto done;
+    }
+    for(j=0; j<*pnAdd; j++){
+      if( strcmp((*pazAdd)[j], aSide[i].zDef)==0 ){
+        sqlite3_free((*pazAdd)[j]);
+        (*pnAdd)--;
+        memmove(*pazAdd+j, *pazAdd+j+1, (size_t)(*pnAdd-j) * sizeof(char*));
+        break;
+      }
+    }
+    for(j=0; j<*pnDrop; j++){
+      if( sqlite3_stricmp((*pazDrop)[j], zOld)==0 ){
+        sqlite3_free((*pazDrop)[j]);
+        (*pnDrop)--;
+        memmove(*pazDrop+j, *pazDrop+j+1, (size_t)(*pnDrop-j) * sizeof(char*));
+        break;
+      }
+    }
+  }
+done:
+  sqlite3_free(aMap);
+  freeColumns(aAnc, nAnc);
+  freeColumns(aSide, nSide);
+  freeColumns(aSelected, nSelected);
+  return rc;
+}
+
 int tryResolveSchemaDivergence(
   sqlite3 *db,
   const char *zName,
+  const struct TableEntry *pAnc,
+  const struct TableEntry *pOurs,
+  const struct TableEntry *pTheirs,
   const ProllyHash *pCatAnc,
   const ProllyHash *pCatOurs,
   const ProllyHash *pCatTheirs,
@@ -776,6 +852,14 @@ int tryResolveSchemaDivergence(
       &azAddCols, &nAddCols, &azDropCols, &nDropCols,
       &azRenameCols, &nRenameCols, &schemaChoice,
       &resolvedDivergence, &zSchemaErr);
+    if( rc==SQLITE_OK ){
+      int bTheirs = schemaChoice==SCHEMA_MERGE_THEIRS;
+      rc = mergeResolveColumnRenames(db, zName, pAnc, bTheirs ? pOurs : pTheirs,
+          ancSchEntry->zSql, bTheirs ? ourSchEntry->zSql : theirSchEntry->zSql,
+          bTheirs ? theirSchEntry->zSql : ourSchEntry->zSql,
+          &azAddCols, &nAddCols, &azDropCols, &nDropCols,
+          &azRenameCols, &nRenameCols);
+    }
   }else{
     rc = SQLITE_ERROR;
     zSchemaErr = sqlite3_mprintf("cannot load schemas for merge");
@@ -800,6 +884,7 @@ int tryResolveSchemaDivergence(
     sqlite3_free(zSchemaErr);
     freeAddedColumns(azAddCols, nAddCols);
     freeAddedColumns(azDropCols, nDropCols);
+    freeAddedColumns(azRenameCols, nRenameCols);
     return SQLITE_ERROR;
   }
   sqlite3_free(zSchemaErr);

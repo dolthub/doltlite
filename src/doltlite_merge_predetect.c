@@ -194,6 +194,13 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
             pAncCat->flags, pDropCatEnt->flags,
             c->aAncSchema[i].zSql, pDropSe->zSql, zTable,
             aHeld, nDropCols, &zReuse);
+        if( rcHold==SQLITE_OK ){
+          rcHold = mergeMapUnmatchedColumns(
+              c->db, &pAncCat->root, &pDropCatEnt->root,
+              pAncCat->flags, pDropCatEnt->flags,
+              c->aAncSchema[i].zSql, pDropSe->zSql, zTable,
+              aHeld, nDropCols);
+        }
         if( rcHold!=SQLITE_OK ){
           sqlite3_free(zReuse);
           sqlite3_free(aHeld);

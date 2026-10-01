@@ -301,4 +301,71 @@ foreach keymode {integer text without-rowid} {
   }
 }
 
+foreach keymode {integer text without-rowid} {
+  set key {id INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode ne "integer"} {set key {id TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+  foreach operation {merge cherry_pick} {
+    foreach direction {forward reverse} {
+      foreach values {distinct first-ambiguous ambiguous} {
+        reset_db
+        execsql "CREATE TABLE t($key, a TEXT, b TEXT, c TEXT, d TEXT, e TEXT) $suffix"
+        execsql {
+          INSERT INTO t VALUES(1,'A1','B1','C1','D1','E1'),(2,'A2','B2','C2','D2','E2');
+        }
+        if {$values eq "first-ambiguous"} {execsql {UPDATE t SET c=d WHERE id=1}}
+        if {$values eq "ambiguous"} {execsql {UPDATE t SET c=d}}
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+          ALTER TABLE t DROP COLUMN a;
+          ALTER TABLE t DROP COLUMN c;
+          ALTER TABLE t RENAME COLUMN d TO dd;
+          SELECT dolt_commit('-Am','drop rename');
+          SELECT dolt_checkout('side');
+          ALTER TABLE t RENAME COLUMN b TO bb;
+          INSERT INTO t VALUES(3,'A3','B3','C3','D3','E3');
+          SELECT dolt_commit('-Am','rename insert');
+        }
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target side
+          set reopen [file normalize test.db]
+        } else {
+          set target main
+          set reopen "[file normalize test.db]/side"
+        }
+        set name multiple-drop-rename-$keymode-$operation-$direction-$values
+        if {$values eq "ambiguous"} {
+          set rows [execsql {SELECT * FROM t NOT INDEXED ORDER BY id}]
+          do_test $name-refused {lindex [catchsql "SELECT dolt_${operation}('$target')"] 0} {1}
+          do_execsql_test $name-unchanged {SELECT * FROM t NOT INDEXED ORDER BY id} $rows
+          do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+          db close
+          sqlite3 db $reopen
+          do_execsql_test $name-reopen {
+            SELECT * FROM t NOT INDEXED ORDER BY id;
+            PRAGMA integrity_check;
+          } [concat $rows ok]
+          continue
+        }
+        do_test $name-apply {
+          execsql "SELECT dolt_${operation}('$target')"
+          execsql {SELECT count(*) FROM dolt_conflicts}
+        } {0}
+        set rows {1 B1 D1 E1 2 B2 D2 E2 3 B3 D3 E3}
+        do_execsql_test $name-rows {SELECT id,bb,dd,e FROM t NOT INDEXED ORDER BY id} $rows
+        do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+        db close
+        sqlite3 db $reopen
+        do_execsql_test $name-reopen {
+          SELECT id,bb,dd,e FROM t NOT INDEXED ORDER BY id;
+          PRAGMA integrity_check;
+        } [concat $rows ok]
+      }
+    }
+  }
+}
+
 finish_test
