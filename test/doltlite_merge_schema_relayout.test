@@ -163,4 +163,93 @@ foreach keymode {integer text without-rowid} {
   }
 }
 
+foreach keymode {integer text without-rowid} {
+  set key {id INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode ne "integer"} {set key {id TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+  foreach indexmode {none regular unique expression} {
+    foreach change {insert update null} {
+      foreach fixture {populated empty} {
+        if {$fixture eq "empty" && $change ne "insert"} {continue}
+        foreach operation {merge cherry_pick} {
+          foreach direction {forward reverse} {
+            reset_db
+            set default {DEFAULT 18}
+            if {$fixture eq "empty"} {set default {}}
+            execsql "CREATE TABLE t($key, a INT, b INT, c INT $default) $suffix"
+            switch $indexmode {
+              regular {execsql {CREATE INDEX u ON t(c)}}
+              unique {execsql {CREATE UNIQUE INDEX u ON t(c)}}
+              expression {execsql {CREATE INDEX u ON t(c+0)}}
+            }
+            if {$fixture eq "populated"} {
+              execsql {INSERT INTO t VALUES(1,NULL,10,100),(2,NULL,20,200)}
+            }
+            execsql {
+              SELECT dolt_commit('-Am','base');
+              SELECT dolt_branch('side');
+              ALTER TABLE t DROP COLUMN a;
+              ALTER TABLE t RENAME COLUMN c TO cc;
+              SELECT dolt_commit('-am','ddl');
+              SELECT dolt_checkout('side');
+            }
+            switch $change {
+              insert {
+                execsql {INSERT INTO t VALUES(3,NULL,30,777)}
+                set rows {1 10 100 2 20 200 3 30 777}
+                set count 3
+              }
+              update {
+                execsql {UPDATE t SET c=777 WHERE id=1}
+                set rows {1 10 777 2 20 200}
+                set count 2
+              }
+              null {
+                execsql {INSERT INTO t VALUES(3,NULL,30,NULL)}
+                set rows {1 10 100 2 20 200 3 30 NULL}
+                set count 3
+              }
+            }
+            if {$fixture eq "empty"} {set rows {3 30 777}; set count 1}
+            execsql {SELECT dolt_commit('-am','dml')}
+            if {$direction eq "forward"} {
+              execsql {SELECT dolt_checkout('main')}
+              set target side
+              set reopen [file normalize test.db]
+            } else {
+              set target main
+              set reopen "[file normalize test.db]/side"
+            }
+            set name drop-rename-$keymode-$indexmode-$change-$fixture-$operation-$direction
+            do_test $name-apply {
+              execsql "SELECT dolt_${operation}('$target')"
+              execsql {SELECT count(*) FROM dolt_conflicts}
+            } {0}
+            do_execsql_test $name-columns {
+              SELECT name FROM pragma_table_info('t') ORDER BY cid;
+            } {id b cc}
+            do_execsql_test $name-rows {
+              SELECT id,b,quote(cc) FROM t NOT INDEXED ORDER BY id;
+            } $rows
+            do_execsql_test $name-count {SELECT count(*) FROM t} $count
+            if {$indexmode ne "none"} {
+              do_execsql_test $name-index-count {
+                SELECT count(*) FROM t INDEXED BY u;
+              } $count
+            }
+            do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+            db close
+            sqlite3 db $reopen
+            do_execsql_test $name-reopen {
+              SELECT id,b,quote(cc) FROM t NOT INDEXED ORDER BY id;
+              PRAGMA integrity_check;
+            } [concat $rows ok]
+          }
+        }
+      }
+    }
+  }
+}
+
 finish_test

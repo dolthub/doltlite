@@ -1840,4 +1840,50 @@ SQL
   expect_merge_conflict "$tag" "$DB"
 done
 
+for indexmode in none regular unique; do
+  index_sql=""
+  case "$indexmode" in
+    regular) index_sql='CREATE INDEX u ON t(c);' ;;
+    unique) index_sql='CREATE UNIQUE INDEX u ON t(c);' ;;
+  esac
+  for change in insert update null; do
+    case "$change" in
+      insert)
+        dml='INSERT INTO t VALUES(3,NULL,30,777);'
+        rows=$'1|10|100\n2|20|200\n3|30|777' ;;
+      update)
+        dml='UPDATE t SET c=777 WHERE id=1;'
+        rows=$'1|10|777\n2|20|200' ;;
+      null)
+        dml='INSERT INTO t VALUES(3,NULL,30,NULL);'
+        rows=$'1|10|100\n2|20|200\n3|30|NULL' ;;
+    esac
+    for operation in merge cherry_pick; do
+      for direction in forward reverse; do
+        tag="drop_rename_${indexmode}_${change}_${operation}_${direction}"
+        DB="$TMPROOT/$tag.db"
+        ddl='ALTER TABLE t DROP COLUMN a; ALTER TABLE t RENAME COLUMN c TO cc;'
+        main_sql="$ddl"; feat_sql="$dml"
+        if [ "$direction" = reverse ]; then main_sql="$dml"; feat_sql="$ddl"; fi
+        dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT DEFAULT 18);
+$index_sql
+INSERT INTO t VALUES(1,NULL,10,100),(2,NULL,20,200);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$main_sql
+SELECT dolt_commit('-am','main');
+SELECT dolt_checkout('feat');
+$feat_sql
+SELECT dolt_commit('-am','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_${operation}('feat');
+SQL
+        query="SELECT concat(id,'|',b,'|',coalesce(cast(cc AS CHAR),'NULL')) FROM t ORDER BY id;"
+        expect_dual_value "$tag" "$DB" "$rows" "$query" "$query"
+      done
+    done
+  done
+done
+
 vc_oracle_finish

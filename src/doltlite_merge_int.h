@@ -155,6 +155,12 @@ int mergeRenameHoldingDroppedName(
   char **pzReused
 );
 
+void mergeMapColumnsToAncestor(
+  ParsedColumn *aAnc, int nAnc,
+  ParsedColumn *aSide, int nSide,
+  int *aSideAnc
+);
+
 int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c);
 
 int mergeRowEditsColumn(

@@ -61,6 +61,43 @@ int parsedColumnIndexByName(
   return -1;
 }
 
+void mergeMapColumnsToAncestor(
+  ParsedColumn *aAnc, int nAnc,
+  ParsedColumn *aSide, int nSide,
+  int *aSideAnc
+){
+  int i, start = 0, last = -1;
+  for(i=0; i<nSide; i++){
+    aSideAnc[i] = parsedColumnIndexByName(aAnc, nAnc, aSide[i].zName);
+  }
+  while( start<nSide ){
+    int end = start, next, nMissing = 0, k;
+    if( aSideAnc[start]>=0 ){
+      last = aSideAnc[start++];
+      continue;
+    }
+    while( end<nSide && aSideAnc[end]<0 ) end++;
+    next = end<nSide ? aSideAnc[end] : nAnc;
+    for(k=last+1; k<next; k++){
+      if( parsedColumnIndexByName(aSide, nSide, aAnc[k].zName)<0 ){
+        nMissing++;
+      }
+    }
+    if( nMissing==end-start ){
+      i = start;
+      for(k=last+1; k<next; k++){
+        if( parsedColumnIndexByName(aSide, nSide, aAnc[k].zName)<0 ){
+          if( parsedColumnDefinitionsMatch(&aSide[i], &aAnc[k]) ){
+            aSideAnc[i] = k;
+          }
+          i++;
+        }
+      }
+    }
+    start = end;
+  }
+}
+
 static ParsedColumn *findColumn(ParsedColumn *aCols, int nCols, const char *zName){
   int i = parsedColumnIndexByName(aCols, nCols, zName);
   return i>=0 ? &aCols[i] : 0;
