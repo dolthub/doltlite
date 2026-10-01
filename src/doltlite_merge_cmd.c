@@ -670,6 +670,7 @@ static int mergeFastForward(
   DoltliteCommit theirCommit;
   DoltliteTxnState savedState;
   ProllyHash workingCatHash;
+  ProllyHash cleanWorkingSet;
   char *zErr = 0;
   int rc;
   char hx[PROLLY_HASH_SIZE*2+1];
@@ -677,6 +678,7 @@ static int mergeFastForward(
   assert( db!=0 && cs!=0 && pOurHead!=0 && pTheirHead!=0 );
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&savedState, 0, sizeof(savedState));
+  doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
 
   rc = doltliteLoadCommit(db, pTheirHead, &theirCommit);
   if( rc!=SQLITE_OK ){
@@ -705,6 +707,10 @@ static int mergeFastForward(
     }
     if( rc==SQLITE_OK ){
       rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
+      if( rc==SQLITE_OK && db->autoCommit ){
+        rc = doltliteConfirmWorkingSet(db, cs, &cleanWorkingSet);
+        if( rc!=SQLITE_OK ) chunkStoreUnlock(cs);
+      }
     }
     if( rc==SQLITE_OK ){
       int persistRc = db->autoCommit
@@ -720,7 +726,8 @@ static int mergeFastForward(
     }
     if( rc==SQLITE_OK ){
       rc = doltliteCompareAndAdvanceBranch(
-          db, pOurHead, pTheirHead, &theirCommit.catalogHash, &workingCatHash);
+          db, pOurHead, &cleanWorkingSet, pTheirHead, &theirCommit.catalogHash,
+          &workingCatHash);
     }
   }
   if( rc!=SQLITE_OK ){
@@ -1047,6 +1054,7 @@ static int mergeRefCreateMergeCommit(
   const ProllyHash *pTheirHead,
   const ProllyHash *pMergedCat,
   const ProllyHash *pWorkingCat,
+  const ProllyHash *pCleanWorkingSet,
   const char *zBranch,
   const char *zMessage,
   int nExtraParents
@@ -1089,7 +1097,7 @@ static int mergeRefCreateMergeCommit(
 
   doltliteTestCrashFinalize("merge");
   rc = doltliteCompareAndAdvanceBranch(
-      db, pOurHead, &commitHash, pMergedCat, pWorkingCat);
+      db, pOurHead, pCleanWorkingSet, &commitHash, pMergedCat, pWorkingCat);
   if( rc==SQLITE_BUSY ){
     restoreRc = doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
     if( restoreRc!=rc ){
@@ -1122,6 +1130,7 @@ static int mergeRefLeaveUncommitted(
   const ProllyHash *pOurHead,
   const ProllyHash *pTheirHead,
   const ProllyHash *pWorkingCat,
+  const ProllyHash *pCleanWorkingSet,
   const char *zBranch,
   int bSetMergeState
 ){
@@ -1143,6 +1152,10 @@ static int mergeRefLeaveUncommitted(
   }
 
   rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
+  if( rc==SQLITE_OK && db->autoCommit ){
+    rc = doltliteConfirmWorkingSet(db, cs, pCleanWorkingSet);
+    if( rc!=SQLITE_OK ) chunkStoreUnlock(cs);
+  }
   if( rc==SQLITE_BUSY ){
     doltliteCmdResultPeerBranchBusy(context, "merge");
     doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
@@ -1227,6 +1240,7 @@ int doltliteMergeRef(
   char **azRebuildVtabs = 0;
   int nRebuildVtabs = 0;
   int nViolations = 0;
+  ProllyHash cleanWorkingSet;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
   memset(&theirCommit, 0, sizeof(theirCommit));
@@ -1265,6 +1279,7 @@ int doltliteMergeRef(
     return SQLITE_OK;
   }
 
+  doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
     return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
@@ -1458,11 +1473,11 @@ int doltliteMergeRef(
   if( noCommit ){
     return mergeRefLeaveUncommitted(
         db, context, &savedState, &ourHead, &theirHead, &workingCatHash,
-        zBranch, !squash);
+        &cleanWorkingSet, zBranch, !squash);
   }
   return mergeRefCreateMergeCommit(
       db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
-      &workingCatHash,
+      &workingCatHash, &cleanWorkingSet,
       zBranch, zMessage, squash ? 0 : 1);
 
 merge_fail:

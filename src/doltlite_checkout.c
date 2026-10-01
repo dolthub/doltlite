@@ -184,6 +184,7 @@ struct CheckoutMutationCtx {
   ProllyHash savedPreRebaseCat;
   ProllyHash savedRebaseOnto;
   ProllyHash oldCatHash;
+  ProllyHash oldWorkingSet;
   ProllyHash oldCommitHash;
   ProllyHash targetCommit;
   ProllyHash targetCatHash;
@@ -204,9 +205,10 @@ struct CheckoutMutationCtx {
 /* Snapshot the current working catalog into *pOldCatHash: serialize
 ** uncommitted changes, else the persisted working hash (else HEAD). */
 static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
-                                     ProllyHash *pOldCatHash){
+                                     ProllyHash *pOldCatHash, ProllyHash *pWs){
   int dirty;
   int rc;
+  doltliteGetSessionWorkingSetBasis(db, pWs);
   if( doltliteIsDetached(db) ){
     ProllyHash head;
     doltliteGetSessionHead(db, &head);
@@ -279,8 +281,10 @@ static int checkoutRestoreDurableState(
 ){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
   int rc = SQLITE_OK;
-  UNUSED_PARAMETER(cs);
-  if( p->haveOldState && !p->savedWasDetached && p->oldBranchExists ){
+  /* A peer that rewrote the branch being left owns its state now. */
+  if( p->haveOldState && !p->savedWasDetached && p->oldBranchExists
+   && doltliteBranchWorkingSetUnmoved(cs, p->zCurrentBranch,
+                                      &p->oldWorkingSet)==SQLITE_OK ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
                                           &p->oldCatHash, &p->oldCommitHash);
     if( rc!=SQLITE_OK ) return rc;
@@ -299,6 +303,9 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     p->oldBranchExists =
         chunkStoreFindBranch(cs, p->zCurrentBranch, 0)==SQLITE_OK;
   }
+  rc = doltliteBranchWorkingSetUnmoved(cs, p->zCurrentBranch,
+      p->oldBranchExists ? &p->oldWorkingSet : 0);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = checkoutLoadAndApply(db, cs, p->zTargetBranch,
                             &p->targetCommit, &p->targetCatHash);
@@ -437,7 +444,7 @@ void doltConnectBranchFunc(
   m.zCurrentBranch = zCurrentBranch;
   m.haveOldState = 1;
   checkoutSaveSession(db, &m);
-  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zCurrentBranch);
     sqlite3_result_error_code(ctx, rc);
@@ -497,7 +504,7 @@ static int checkoutBranchForRebase(
   if( pKnownOldCatHash ){
     memcpy(&m.oldCatHash, pKnownOldCatHash, sizeof(ProllyHash));
   }else{
-    rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+    rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zCurrentBranch);
       return rc;
@@ -827,7 +834,7 @@ static int doltliteCheckoutTables(
   const char **pzMissing
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash workingHash, headCatHash, stagedHash;
+  ProllyHash workingHash, headCatHash, stagedHash, cleanWs;
   ProllyHash sourceCatHash;
   ProllyHash newWorkingHash;
   CheckoutSchemaInfo *aSchema = 0;
@@ -840,6 +847,7 @@ static int doltliteCheckoutTables(
 
   if( !cs ) return SQLITE_ERROR;
   if( nNames<=0 ) return SQLITE_NOTFOUND;
+  doltliteGetSessionWorkingSetBasis(db, &cleanWs);
 
   if( zSourceRef ){
     ProllyHash sourceCommit;
@@ -1110,9 +1118,7 @@ static int doltliteCheckoutTables(
       rc = doltliteStageNamedTables(db, context, cs, &newWorkingHash,
                                     nNames, argv+iFirstName, 0);
     }
-    if( rc==SQLITE_OK ){
-      rc = doltlitePersistWorkingSet(db);
-    }
+    if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSetConfirmed(db, &cleanWs);
   }
 
   freeSchemaEntries(aSourceSchema, nSourceSchema);
@@ -1312,7 +1318,7 @@ static void doltCheckoutParsedFunc(
     sqlite3_result_error_nomem(ctx);
     return;
   }
-  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zCurrentBranch);
     doltliteVcResultError(ctx, db, "failed to snapshot current branch state");
@@ -1346,7 +1352,7 @@ static void doltCheckoutParsedFunc(
         sqlite3_result_error_nomem(ctx);
         return;
       }
-      rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+      rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zCurrentBranch);
         doltliteVcResultError(ctx, db, "failed to snapshot current branch state");

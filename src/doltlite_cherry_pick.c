@@ -123,7 +123,10 @@ static int cherryPickRestoreAndPersist(
   }
 
   restoreRc = doltliteRestoreTxnStateOnFailure(db, pSaved, opRc);
-  if( restoreRc==opRc && !prollyHashIsEmpty(&restoredCat) ){
+  /* BUSY means a peer moved the tip or the working set; the disk holds its
+  ** write, and persisting the pre-op catalog over it would erase it. */
+  if( restoreRc==opRc && opRc!=SQLITE_BUSY
+   && !prollyHashIsEmpty(&restoredCat) ){
     persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
     if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) restoreRc = persistRc;
   }
@@ -284,6 +287,7 @@ int applyMergedCatalogAndCommit(
   ProllyHash commitCatHash;
   int commitSplit = 0;
   ProllyHash commitHash;
+  ProllyHash cleanWorkingSet;
   char *zMergeErr = 0;
   int graphLocked = 0;
   const char *zOpLabel;
@@ -299,6 +303,10 @@ int applyMergedCatalogAndCommit(
   if( hexBuf ) hexBuf[0] = '\0';
   zOpLabel = bPreferOurMaster ? "Revert" : "Cherry-pick";
   zBranch = doltliteGetSessionBranch(db);
+  memset(&cleanWorkingSet, 0, sizeof(cleanWorkingSet));
+  if( !doltliteGetSessionRebaseFlags(db) ){
+    doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
+  }
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ){
@@ -494,7 +502,7 @@ int applyMergedCatalogAndCommit(
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteCompareAndAdvanceBranch(
-      db, ourHead, &commitHash, &commitCatHash,
+      db, ourHead, &cleanWorkingSet, &commitHash, &commitCatHash,
       commitSplit ? &liveMergedCatHash : 0);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 

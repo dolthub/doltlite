@@ -227,6 +227,24 @@ struct ChunkStore {
   u8 bWsBasis;
   char zWsBasisBranch[64];
   ProllyHash wsBasis;
+  /* The working set this connection last wrote, and the same once a commit
+  ** made it durable, so a command can tell its own write from a peer's.
+  ** Adopting a peer's working set never sets these. */
+  u8 bWsSelfWritten;
+  u8 bWsSelfPublished;
+  char zWsSelfBranch[64];
+  char zWsSelfPublishedBranch[64];
+  ProllyHash wsSelfWritten;
+  ProllyHash wsSelfPublished;
+  /* Bumped when this connection adopts a working set other than the last
+  ** one it knew to be durable (adopted or published itself); a command that
+  ** saw it bump picked up a peer's write mid-flight. Comparing against the
+  ** basis instead would count a rolled-back local write as foreign. */
+  u8 bWsKnown;
+  char zWsKnownBranch[64];
+  ProllyHash wsKnown;
+  u32 nWsForeignAdopt;
+  u32 nWsForeignAdoptAtCapture;
   ChunkIndex index;
   ChunkIndexCache *pIndexCache;
   int nIndexCacheSlot;
@@ -320,6 +338,21 @@ int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const Pro
 void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch);
 void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs);
 int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch);
+void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
+                                  ProllyHash *pHash);
+void chunkStoreNoteSelfPublishedWorkingSet(ChunkStore *cs);
+int chunkStoreHasPeers(ChunkStore *cs);
+int chunkStoreWorkingSetSelfPublished(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pHash
+);
+int chunkStoreReadPublishedBranchWorkingSet(
+  ChunkStore *cs,
+  const char *zName,
+  ProllyHash *pWorkingSet,
+  int *pFound
+);
 
 int chunkStoreAddTagFull(ChunkStore *cs, const char *zName, const ProllyHash *pCommit,
                          const char *zTagger, const char *zEmail,

@@ -1380,6 +1380,88 @@ static void test_busy_command_keeps_peer_write(void){
   remove(path);
 }
 
+typedef struct MpPeerDuringOp MpPeerDuringOp;
+struct MpPeerDuringOp {
+  sqlite3 *peer;
+  int fireAt;
+  int nCalls;
+  int fired;
+  int peerRc;
+};
+
+static int mpPeerWritesDuringOp(void *arg){
+  MpPeerDuringOp *p = (MpPeerDuringOp*)arg;
+  if( ++p->nCalls==p->fireAt && !p->fired ){
+    p->fired = 1;
+    p->peerRc = execSql(p->peer, "INSERT INTO t VALUES(20, 'peer')");
+  }
+  return 0;
+}
+
+/* A peer's autocommit on main lands at every step of an operation that
+** replaces or rewrites main's working set; its row must survive. */
+static void test_op_keeps_peer_write_on_main(void){
+  static const struct {
+    const char *zPre;
+    const char *zOp;
+  } aCase[] = {
+    { "SELECT 1", "SELECT dolt_merge('f')" },
+    { "SELECT 1", "SELECT dolt_merge('--no-ff','f')" },
+    { "SELECT 1", "SELECT dolt_merge('--squash','f')" },
+    { "SELECT 1", "SELECT dolt_merge('--no-ff','--no-commit','f')" },
+    { "SELECT 1", "SELECT dolt_cherry_pick('f')" },
+    { "SELECT dolt_merge('f')", "SELECT dolt_revert('HEAD')" },
+    { "INSERT INTO t VALUES(2, 'mine')", "SELECT dolt_checkout('f')" },
+    { "INSERT INTO t VALUES(2, 'mine')", "SELECT dolt_checkout('u')" },
+    { "INSERT INTO t VALUES(2, 'mine')", "VACUUM" }
+  };
+  char path[256];
+  int i;
+
+  printf("--- Test 6g: An operation on main keeps a peer's mid-operation write ---\n");
+  snprintf(path, sizeof(path), "/tmp/mp_op_peer_ws_%d.db", (int)getpid());
+  for(i=0; i<(int)(sizeof(aCase)/sizeof(aCase[0])); i++){
+    int k;
+    int nLost = 0;
+    for(k=1; ; k++){
+      sqlite3 *db = 0;
+      sqlite3 *check = 0;
+      MpPeerDuringOp ctx;
+
+      setup_db(path);
+      sqlite3_open(path, &db);
+      execSql(db,
+        "CREATE TABLE u(x); SELECT dolt_commit('-Am','u');"
+        "SELECT dolt_branch('f'); SELECT dolt_checkout('f');"
+        "INSERT INTO u VALUES(9); SELECT dolt_commit('-am','f1');"
+        "SELECT dolt_checkout('main');");
+      execSql(db, aCase[i].zPre);
+      memset(&ctx, 0, sizeof(ctx));
+      sqlite3_open(path, &ctx.peer);
+      ctx.fireAt = k;
+      ctx.peerRc = -1;
+      sqlite3_progress_handler(db, 1, mpPeerWritesDuringOp, &ctx);
+      execSql(db, aCase[i].zOp);
+      sqlite3_progress_handler(db, 0, 0, 0);
+      sqlite3_close(ctx.peer);
+      sqlite3_close(db);
+      if( !ctx.fired ) break;
+      sqlite3_open(path, &check);
+      if( ctx.peerRc==SQLITE_OK
+       && strcmp(queryScalarText(check,
+            "SELECT count(*) FROM main.t WHERE id=20"), "1")!=0 ){
+        if( nLost++==0 ){
+          fprintf(stderr, "%s: peer row lost at step %d\n", aCase[i].zOp, k);
+        }
+      }
+      sqlite3_close(check);
+    }
+    check("mp_op_peer_ws_swept", k>1);
+    check("mp_op_peer_ws_peer_write_kept", nLost==0);
+  }
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
@@ -1396,6 +1478,7 @@ int main(){
   test_write_after_lost_commit_race();
   test_commit_does_not_erase_peer_write();
   test_commit_keeps_peer_insert_during_publish();
+  test_op_keeps_peer_write_on_main();
   test_busy_command_keeps_peer_write();
   test_ref_command_binds_post_wait_tip();
   test_ref_command_keeps_peer_write();

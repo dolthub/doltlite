@@ -1380,7 +1380,7 @@ static int rebaseAdvanceWorkingBranch(
   db->busyHandler.nBusy = 0;
   do {
     rc = doltliteCompareAndAdvanceBranch(
-        db, pExpectedHead, pNewHead, pCatalogHash, 0);
+        db, pExpectedHead, 0, pNewHead, pCatalogHash, 0);
   }while( rebaseRetryableRc(rc) && rebaseEndBusyRetry(db) );
   return rc;
 }
