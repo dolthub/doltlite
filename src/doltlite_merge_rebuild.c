@@ -915,6 +915,7 @@ int normalizeSideToMergedLayout(
   int bAncestorGap;
   int nMem;
   int *aOursAnc;
+  int *aTheirsAnc = 0;
   int bReuse;
   int rc, res, j;
 
@@ -944,23 +945,35 @@ int normalizeSideToMergedLayout(
       (nOurs+nTheirs>0 ? nOurs+nTheirs : 1) * (int)sizeof(int));
   aTheirsRecord = sqlite3_malloc(
       (nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
-  if( !aMap || !aMergedRecord || !aTheirsRecord ){
+  aOursAnc = sqlite3_malloc((nOurs>0 ? nOurs : 1) * (int)sizeof(int));
+  aTheirsAnc = sqlite3_malloc((nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
+  if( !aMap || !aMergedRecord || !aTheirsRecord
+   || !aOursAnc || !aTheirsAnc ){
     rc = SQLITE_NOMEM;
     goto done;
   }
+  mergeMapColumnsToAncestor(aAnc, nAnc, aOurs, nOurs, aOursAnc);
+  mergeMapColumnsToAncestor(aAnc, nAnc, aTheirs, nTheirs, aTheirsAnc);
   /* Dropping b and renaming a to b leaves the same names as dropping a.
   ** Kept cells tell them apart. Pair by those cells so the dropped
   ** column's values do not overwrite the renamed column. */
   if( nOurs<nAnc && pAncRoot ){
     char *zReuse = 0;
-    aOursAnc = sqlite3_malloc((nOurs>0 ? nOurs : 1) * (int)sizeof(int));
-    if( !aOursAnc ){ rc = SQLITE_NOMEM; goto done; }
     rc = mergeRenameHoldingDroppedName(
         db, pAncRoot, pOursRoot, ancFlags, flags,
         zAncSql, zOursSql, zTable, aOursAnc, nOurs, &zReuse);
     if( rc!=SQLITE_OK ){ sqlite3_free(zReuse); goto done; }
     bReuse = zReuse!=0;
     sqlite3_free(zReuse);
+  }
+  if( pAncRoot ){
+    rc = mergeMapUnmatchedColumns(db, pAncRoot, pOursRoot, ancFlags, flags,
+                                  zAncSql, zOursSql, zTable, aOursAnc, nOurs);
+    if( rc==SQLITE_OK ){
+      rc = mergeMapUnmatchedColumns(db, pAncRoot, pTheirsRoot, ancFlags, srcFlags,
+                                    zAncSql, zTheirsSql, zTable, aTheirsAnc, nTheirs);
+    }
+    if( rc!=SQLITE_OK ) goto done;
   }
   for(j=0; j<nOurs; j++){
     aMergedRecord[j] = parsedColumnIsVirtual(&aOurs[j])
@@ -984,24 +997,14 @@ int normalizeSideToMergedLayout(
     }
     found = parsedColumnIndexByName(
         aOurs, nOurs, aTheirs[j].zName);
-    if( found<0 ){
-      int ai = parsedColumnIndexByName(
-          aAnc, nAnc, aTheirs[j].zName);
-      if( ai<0 && j<nAnc
-       && sqlite3_stricmp(aTheirs[j].zName, aAnc[j].zName)!=0
-       && parsedColumnIndexByName(aTheirs, nTheirs, aAnc[j].zName)<0
-       && parsedColumnDefinitionsMatch(&aTheirs[j], &aAnc[j]) ){
-        ai = j;
-      }
-      if( ai>=0 ){
-        bInAnc = 1;
-        found = parsedColumnIndexByName(
-            aOurs, nOurs, aAnc[ai].zName);
-        if( found<0 && ai<nOurs
-         && sqlite3_stricmp(aOurs[ai].zName, aAnc[ai].zName)!=0
-         && parsedColumnIndexByName(aOurs, nOurs, aAnc[ai].zName)<0
-         && parsedColumnDefinitionsMatch(&aOurs[ai], &aAnc[ai]) ){
-          found = ai;
+    if( found<0 && aTheirsAnc[j]>=0 ){
+      int k;
+      bInAnc = 1;
+      for(k=0; k<nOurs; k++){
+        if( aOursAnc[k]==aTheirsAnc[j]
+         && parsedColumnIndexByName(aTheirs, nTheirs, aOurs[k].zName)<0 ){
+          found = k;
+          break;
         }
       }
     }
@@ -1048,6 +1051,13 @@ mapped:
       aMergedRecord[nMerged] = parsedColumnIsVirtual(&aTheirs[j])
           ? -1 : nMergedRecord++;
       nMerged++;
+    }
+  }
+  for(j=0; j<nTheirs; j++){
+    int k;
+    if( aMap[j]<0 ) continue;
+    for(k=0; k<j; k++){
+      if( aMap[k]==aMap[j] ){ rc = SQLITE_ERROR; goto done; }
     }
   }
   if( nMergedRecord > DOLTLITE_MAX_RECORD_FIELDS ){
@@ -1292,6 +1302,7 @@ done:
   sqlite3_free(aMergedRecord);
   sqlite3_free(aTheirsRecord);
   sqlite3_free(aOursAnc);
+  sqlite3_free(aTheirsAnc);
   freeColumns(aAnc, nAnc);
   freeColumns(aOurs, nOurs);
   freeColumns(aTheirs, nTheirs);

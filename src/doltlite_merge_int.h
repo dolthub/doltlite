@@ -155,6 +155,28 @@ int mergeRenameHoldingDroppedName(
   char **pzReused
 );
 
+void mergeMapColumnsToAncestor(
+  ParsedColumn *aAnc, int nAnc,
+  ParsedColumn *aSide, int nSide,
+  int *aSideAnc
+);
+
+int mergeStoredFieldsEqual(
+  const u8 *pA, int nA, const DoltliteRecordInfo *pAi, int iA,
+  const u8 *pB, int nB, const DoltliteRecordInfo *pBi, int iB
+);
+int mergeLoadReaderColumns(const char *zSql, const char *zTable, DoltliteColInfo *ci);
+int mergeReaderRecordSlot(const DoltliteColInfo *ci, int i);
+
+int mergeMapUnmatchedColumns(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags, u8 sideFlags,
+  const char *zAncSql, const char *zSideSql, const char *zTable,
+  int *aSideAnc, int nSide
+);
+
 int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c);
 
 int mergeRowEditsColumn(
@@ -443,6 +465,9 @@ int normalizeSideToMergedLayout(
 int tryResolveSchemaDivergence(
   sqlite3 *db,
   const char *zName,
+  const struct TableEntry *pAnc,
+  const struct TableEntry *pOurs,
+  const struct TableEntry *pTheirs,
   const ProllyHash *pCatAnc,
   const ProllyHash *pCatOurs,
   const ProllyHash *pCatTheirs,

@@ -808,9 +808,9 @@ static int mergePass1BothSides(
        || prollyHashCompare(&c->aOurs[iOurs].schemaHash,
                             &theirsEntry->schemaHash)!=0) ){
     rc = tryResolveSchemaDivergence(
-      c->db, zSchemaMergeName, c->pCatAnc, c->pCatOurs, c->pCatTheirs,
-      c->ppSchemaActions, c->pnSchemaActions, &skipRowMerge,
-      &schemaChoice, c->pzErrMsg);
+      c->db, zSchemaMergeName, ancEntry, &c->aOurs[iOurs], theirsEntry,
+      c->pCatAnc, c->pCatOurs, c->pCatTheirs, c->ppSchemaActions,
+      c->pnSchemaActions, &skipRowMerge, &schemaChoice, c->pzErrMsg);
     if( rc==SQLITE_ERROR ){
       sqlite3_free(c->pzErrMsg ? *c->pzErrMsg : 0);
       if( c->pzErrMsg ) *c->pzErrMsg = 0;

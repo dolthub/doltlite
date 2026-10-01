@@ -187,21 +187,26 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
           freeColumns(aDropCols, nDropCols);
           return SQLITE_NOMEM;
         }
+        mergeMapColumnsToAncestor(
+            aAncCols, nAncCols, aDropCols, nDropCols, aHeld);
         rcHold = mergeRenameHoldingDroppedName(
             c->db, &pAncCat->root, &pDropCatEnt->root,
             pAncCat->flags, pDropCatEnt->flags,
             c->aAncSchema[i].zSql, pDropSe->zSql, zTable,
             aHeld, nDropCols, &zReuse);
+        if( rcHold==SQLITE_OK ){
+          rcHold = mergeMapUnmatchedColumns(
+              c->db, &pAncCat->root, &pDropCatEnt->root,
+              pAncCat->flags, pDropCatEnt->flags,
+              c->aAncSchema[i].zSql, pDropSe->zSql, zTable,
+              aHeld, nDropCols);
+        }
         if( rcHold!=SQLITE_OK ){
           sqlite3_free(zReuse);
           sqlite3_free(aHeld);
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
           return rcHold;
-        }
-        if( !zReuse ){
-          sqlite3_free(aHeld);
-          aHeld = 0;
         }
         sqlite3_free(zReuse);
       }
@@ -219,7 +224,7 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
           if( bHeld ) continue;
         }
         /* Rename, not drop. */
-        if( j<nDropCols
+        if( nDropCols>=nAncCols && j<nDropCols
          && parsedColumnIndexByName(aAncCols, nAncCols,
                                     aDropCols[j].zName)<0 ){
           continue;
