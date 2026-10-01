@@ -487,7 +487,7 @@ run_test "gencol_virtual_diff_blank" \
   "11,~,10,~" "$DBGV"
 run_test "gencol_virtual_stat" \
   "SELECT rows_modified||','||cells_modified||','||old_cell_count||','||new_cell_count FROM dolt_diff_stat('HEAD~1','HEAD','t');" \
-  "1,1,3,3" "$DBGV"
+  "1,1,4,4" "$DBGV"
 run_test "gencol_virtual_history" \
   "SELECT group_concat(pk||','||a||','||s||','||b,'|') FROM (SELECT pk,a,s,b FROM dolt_history_t ORDER BY commit_date, pk);" \
   "1,10,12,7|1,11,13,7" "$DBGV"

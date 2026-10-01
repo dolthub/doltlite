@@ -691,6 +691,68 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
+echo "--- VIRTUAL generated columns in cell totals ---"
+
+oracle_stat "diff_stat_virtual_and_stored_cells" "
+CREATE TABLE g(id INT PRIMARY KEY, a INT, s INT GENERATED ALWAYS AS (a*2) STORED, vv INT GENERATED ALWAYS AS (a+1) VIRTUAL);
+INSERT INTO g(id,a) VALUES(1,1),(2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE g SET a=10 WHERE id=1;
+INSERT INTO g(id,a) VALUES(3,3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_stat "diff_stat_virtual_modify_skips_cells_modified" "
+CREATE TABLE t(pk INT PRIMARY KEY, a INT, b INT, s INT GENERATED ALWAYS AS (a+2) VIRTUAL);
+INSERT INTO t(pk,a,b) VALUES(1,10,7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET a=11 WHERE pk=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "t"
+
+oracle_stat "diff_stat_add_virtual_column" "
+CREATE TABLE e(id INT PRIMARY KEY, a INT);
+INSERT INTO e VALUES(1,1),(2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE e ADD COLUMN vv INT GENERATED ALWAYS AS (a+1) VIRTUAL;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "e"
+
+oracle_stat "diff_stat_add_virtual_empty" "
+CREATE TABLE z(id INT PRIMARY KEY, a INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE z ADD COLUMN vv INT GENERATED ALWAYS AS (a+1) VIRTUAL;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "z" "EXPECT_EMPTY"
+
+oracle_stat "diff_stat_delete_row_counts_virtual" "
+CREATE TABLE d(id INT PRIMARY KEY, a INT, vv INT GENERATED ALWAYS AS (a+1) VIRTUAL);
+INSERT INTO d(id,a) VALUES(1,1),(2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DELETE FROM d WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "d"
+
+oracle_stat "diff_stat_drop_virtual_column" "
+CREATE TABLE x(id INT PRIMARY KEY, a INT, vv INT GENERATED ALWAYS AS (a+1) VIRTUAL);
+INSERT INTO x(id,a) VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE x DROP COLUMN vv;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "x"
+
 echo "--- replay after schema changes ---"
 
 oracle_both "diff_stat_merge_replay_add_table_plus_check" "

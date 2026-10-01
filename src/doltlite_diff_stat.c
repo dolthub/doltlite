@@ -136,18 +136,6 @@ struct DsColMap {
   int nFrom;
 };
 
-/* Stored columns, including STORED generated. VIRTUAL is not a cell. */
-static int dsValueCols(const DoltliteColInfo *ci){
-  int i, n;
-  if( !ci ) return 0;
-  if( !ci->aGenerated ) return ci->nCol;
-  n = 0;
-  for(i=0; i<ci->nCol; i++){
-    if( ci->aGenerated[i]!=DOLTLITE_GEN_VIRTUAL ) n++;
-  }
-  return n;
-}
-
 /* -2: VIRTUAL (present, unstored). -1: not on this side. */
 static int dsMapRec(const DoltliteColInfo *ci, int i){
   if( doltliteColIsVirtual(ci, i) ) return -2;
@@ -588,7 +576,9 @@ static int dsComputeTableStats(
     if( rc!=SQLITE_OK ) return rc;
     rc = dsLoadColInfo(db, pFromCatHash, zFromName, &fromCi);
     if( rc!=SQLITE_OK ) goto done;
-    nFromCols = dsValueCols(&fromCi);
+    /* Cell totals count every schema column, including VIRTUAL.
+    ** cells_modified still skips VIRTUAL; those values are not stored. */
+    nFromCols = fromCi.nCol;
   }
   if( hasTo ){
     rc = dsLoadCreateSql(db, pToCatHash, zToName, &zToSql);
@@ -597,7 +587,7 @@ static int dsComputeTableStats(
     if( rc!=SQLITE_OK ){
       goto done;
     }
-    nToCols = dsValueCols(&toCi);
+    nToCols = toCi.nCol;
   }
 
   schemaChanged =
