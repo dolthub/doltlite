@@ -130,6 +130,135 @@ static int cherryPickRestoreAndPersist(
   return restoreRc;
 }
 
+typedef struct ApplyConflictNames ApplyConflictNames;
+struct ApplyConflictNames {
+  char **az;
+  int n;
+  int nAlloc;
+};
+
+static int applyCollectConflictName(
+  void *pCtx,
+  const char *zName,
+  int nConflicts
+){
+  ApplyConflictNames *p = (ApplyConflictNames*)pCtx;
+  char *zCopy;
+  int rc;
+  (void)nConflicts;
+  if( !zName || !zName[0] ) return SQLITE_OK;
+  rc = DOLTLITE_GROW_ARRAY(&p->az, &p->nAlloc, p->n + 1, 8);
+  if( rc!=SQLITE_OK ) return rc;
+  zCopy = sqlite3_mprintf("%s", zName);
+  if( !zCopy ) return SQLITE_NOMEM;
+  p->az[p->n++] = zCopy;
+  return SQLITE_OK;
+}
+
+static int applyNameIsConflict(char **az, int n, const char *zName){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<n; i++){
+    if( az[i] && strcmp(az[i], zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+/* Conflicted cherry-pick and rebase keep each conflicted table at its
+** pre-merge staged entry and stage every other table from the merge.
+** Working stays the merged catalog, so a schema change on a conflicted
+** table is an unstaged modification beside the conflict row. */
+static int applyStageConflictsAtBase(
+  sqlite3 *db,
+  const ProllyHash *pBaseCat,
+  const ProllyHash *pMergedCat
+){
+  ChunkStore *cs;
+  struct TableEntry *aBase = 0;
+  struct TableEntry *aMerged = 0;
+  struct TableEntry *pWorkMaster;
+  struct TableEntry *pBaseMaster;
+  struct TableEntry *pBaseEntry;
+  ApplyConflictNames names;
+  const char **azTouched = 0;
+  ProllyHash composedRoot;
+  ProllyHash stagedHash;
+  u8 *buf = 0;
+  int nBuf = 0;
+  int nBase = 0;
+  int nMerged = 0;
+  int nTouched = 0;
+  int i;
+  int rc;
+
+  memset(&names, 0, sizeof(names));
+  memset(&composedRoot, 0, sizeof(composedRoot));
+  memset(&stagedHash, 0, sizeof(stagedHash));
+  cs = doltliteGetChunkStore(db);
+  if( !cs || !pBaseCat || !pMergedCat ) return SQLITE_ERROR;
+
+  rc = doltliteForEachConflict(db, applyCollectConflictName, &names);
+  if( rc!=SQLITE_OK ) goto stage_done;
+  rc = doltliteLoadCatalog(db, pMergedCat, &aMerged, &nMerged, 0);
+  if( rc!=SQLITE_OK ) goto stage_done;
+  rc = doltliteLoadCatalog(db, pBaseCat, &aBase, &nBase, 0);
+  if( rc!=SQLITE_OK ) goto stage_done;
+
+  for(i=0; i<nMerged; i++){
+    if( aMerged[i].iTable<=1 || !aMerged[i].zName ) continue;
+    if( !applyNameIsConflict(names.az, names.n, aMerged[i].zName) ) continue;
+    pBaseEntry = doltliteFindTableByName(aBase, nBase, aMerged[i].zName);
+    if( !pBaseEntry ) continue;
+    aMerged[i].root = pBaseEntry->root;
+    aMerged[i].schemaHash = pBaseEntry->schemaHash;
+    aMerged[i].flags = pBaseEntry->flags;
+  }
+
+  if( nMerged>0 ){
+    azTouched = sqlite3_malloc64((sqlite3_uint64)nMerged * sizeof(*azTouched));
+    if( !azTouched ){
+      rc = SQLITE_NOMEM;
+      goto stage_done;
+    }
+  }
+  for(i=0; i<nMerged; i++){
+    if( aMerged[i].iTable<=1 || !aMerged[i].zName ) continue;
+    if( applyNameIsConflict(names.az, names.n, aMerged[i].zName) ) continue;
+    if( sqlite3_stricmp(aMerged[i].zName, "dolt_rebase")==0 ) continue;
+    azTouched[nTouched++] = aMerged[i].zName;
+  }
+
+  pWorkMaster = doltliteFindTableByNumber(aMerged, nMerged, 1);
+  pBaseMaster = doltliteFindTableByNumber(aBase, nBase, 1);
+  if( !pWorkMaster ){
+    rc = SQLITE_CORRUPT;
+    goto stage_done;
+  }
+  rc = doltliteBuildNamedStageMasterRoot(db,
+      &pWorkMaster->root, pWorkMaster->flags,
+      pBaseMaster ? &pBaseMaster->root : 0,
+      pBaseMaster ? pBaseMaster->flags : 0,
+      azTouched, nTouched, aMerged, nMerged, 1, &composedRoot);
+  if( rc!=SQLITE_OK ) goto stage_done;
+  pWorkMaster->root = composedRoot;
+
+  rc = doltliteSerializeCatalogEntries(db, aMerged, nMerged, &buf, &nBuf);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(cs, buf, nBuf, &stagedHash);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionStaged(db, &stagedHash);
+  }
+
+stage_done:
+  sqlite3_free(buf);
+  sqlite3_free(azTouched);
+  doltliteFreeCatalog(aMerged, nMerged);
+  doltliteFreeCatalog(aBase, nBase);
+  doltliteFreeNameList(names.az, names.n);
+  return rc;
+}
+
 int applyMergedCatalogAndCommit(
   sqlite3 *db,
   sqlite3_context *context,
@@ -256,7 +385,15 @@ int applyMergedCatalogAndCommit(
   }
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  rc = doltliteSetSessionStaged(db, &liveMergedCatHash);
+  if( *pnConflicts>0 ){
+    const ProllyHash *pStageBase = ourCatHash;
+    if( !prollyHashIsEmpty(&savedState.sessionStaged) ){
+      pStageBase = &savedState.sessionStaged;
+    }
+    rc = applyStageConflictsAtBase(db, pStageBase, &liveMergedCatHash);
+  }else{
+    rc = doltliteSetSessionStaged(db, &liveMergedCatHash);
+  }
   if( rc==SQLITE_OK ){
     rc = doltliteUpdateBranchWorkingState(db,
         doltliteGetSessionBranch(db), &liveMergedCatHash, NULL);
