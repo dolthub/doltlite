@@ -5,8 +5,7 @@
 #include "vdbeInt.h"
 
 /* DoltliteColInfo omits VIRTUAL columns, so aColToRec[i] is not declared
-** column i. Match the stored column by name. VIRTUAL values are computed
-** in the predicate SQL from those stored columns. */
+** column i. Match the stored column by name. */
 static int partialNamedField(const DoltliteColInfo *pCols, const char *zName){
   int j;
   if( !pCols || !pCols->azName || !zName ) return -1;
@@ -38,55 +37,6 @@ static int partialStoredSlot(
     nBefore++;
   }
   return pCols->nPk + nBefore;
-}
-
-/* Stored columns are bound parameters. Each VIRTUAL column is a SELECT
-** alias of its generation expression so the WHERE clause sees the value
-** SQLite would, not NULL and not the next stored field. *pNBind is the
-** number of parameters. */
-static int partialIndexSourceSql(Table *pTab, char **pzSql, int *pNBind){
-  sqlite3_str *pInner;
-  char *zCur;
-  int i, nBind = 0;
-
-  *pzSql = 0;
-  *pNBind = 0;
-  pInner = sqlite3_str_new(0);
-  sqlite3_str_appendall(pInner, "SELECT ");
-  for(i=0; i<pTab->nCol; i++){
-    if( doltliteColumnIsVirtual(pTab, i) ) continue;
-    if( nBind ) sqlite3_str_appendall(pInner, ", ");
-    nBind++;
-    sqlite3_str_appendf(pInner, "?%d AS \"%w\"", nBind,
-                        pTab->aCol[i].zCnName);
-  }
-  if( nBind==0 ) sqlite3_str_appendall(pInner, "NULL AS \"_\"");
-  zCur = sqlite3_str_finish(pInner);
-  if( !zCur ) return SQLITE_NOMEM;
-  for(i=0; i<pTab->nCol; i++){
-    sqlite3_str *pWrap;
-    char *zWrap;
-    Expr *pExpr;
-    if( !doltliteColumnIsVirtual(pTab, i) ) continue;
-    pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[i]);
-    pWrap = sqlite3_str_new(0);
-    sqlite3_str_appendall(pWrap, "SELECT *, (");
-    if( doltliteAppendExprSql(pWrap, pExpr, pTab)!=SQLITE_OK ){
-      sqlite3_free(sqlite3_str_finish(pWrap));
-      sqlite3_free(zCur);
-      return SQLITE_ERROR;
-    }
-    sqlite3_str_appendf(pWrap, ") AS \"%w\" FROM (", pTab->aCol[i].zCnName);
-    sqlite3_str_appendall(pWrap, zCur);
-    sqlite3_str_appendall(pWrap, ")");
-    zWrap = sqlite3_str_finish(pWrap);
-    sqlite3_free(zCur);
-    if( !zWrap ) return SQLITE_NOMEM;
-    zCur = zWrap;
-  }
-  *pzSql = zCur;
-  *pNBind = nBind;
-  return SQLITE_OK;
 }
 
 /* Record every member of a colliding group, including pre-merge
@@ -253,36 +203,12 @@ int doltlitePartialIndexMatchesRecord(
     sqlite3_reset(pStmt);
     sqlite3_clear_bindings(pStmt);
   }else{
-    sqlite3_str *pSql = sqlite3_str_new(0);
-    char *zSrc = 0;
-    char *zSql;
-    int nBind = 0;
-    rc = partialIndexSourceSql(pTab, &zSrc, &nBind);
-    if( rc==SQLITE_OK ){
-      sqlite3_str_appendall(pSql, "SELECT 1 FROM (");
-      sqlite3_str_appendall(pSql, zSrc);
-      sqlite3_str_appendf(pSql, ") WHERE (%s)", zWhere);
-      if( sqlite3_str_errcode(pSql) ) rc = sqlite3_str_errcode(pSql);
-    }
-    sqlite3_free(zSrc);
-    zSql = sqlite3_str_finish(pSql);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zSql);
-      doltliteRecordInfoClear(&info);
-      return rc;
-    }
-    if( !zSql ){
-      doltliteRecordInfoClear(&info);
-      return SQLITE_NOMEM;
-    }
-    rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
-    sqlite3_free(zSql);
+    rc = doltlitePrepareIndexExpr(db, pTab, pIdx->pPartIdxWhere, -1, &pStmt);
     if( rc!=SQLITE_OK ){
       doltliteRecordInfoClear(&info);
       return rc;
     }
     if( ppCached ) *ppCached = pStmt;
-    (void)nBind;
   }
   for(i=0, iParam=1; i<pTab->nCol && rc==SQLITE_OK; i++){
     int iField;
@@ -312,7 +238,7 @@ int doltlitePartialIndexMatchesRecord(
   if( rc==SQLITE_OK ){
     rc = sqlite3_step(pStmt);
     if( rc==SQLITE_ROW ){
-      *pMatch = 1;
+      *pMatch = sqlite3VdbeBooleanValue(sqlite3_column_value(pStmt, 0), 0);
       rc = SQLITE_OK;
     }else if( rc==SQLITE_DONE ){
       rc = SQLITE_OK;

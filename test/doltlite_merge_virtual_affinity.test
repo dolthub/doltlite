@@ -1,0 +1,180 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {shape key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  textpk {id TEXT PRIMARY KEY} {}
+  without-rowid {id INT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach {aff expr} {
+    integer {b||a}
+    real {b||a}
+    numeric {b||a}
+    text {a+10}
+    blob {b||a}
+  } {
+    foreach op {merge cherry_pick revert} {
+      foreach path {one-side cell} {
+        reset_db
+        set expression $expr
+        if {$path eq "cell" && $aff ne "text"} {
+          set expression {b||'-'||a}
+        }
+        set ddl "CREATE TABLE t($key,a INT,b TEXT,g $aff AS($expression) VIRTUAL) $suffix"
+        set indexes {
+          CREATE INDEX ig ON t(g);
+          CREATE INDEX im ON t(g,a DESC);
+          CREATE INDEX ie ON t(typeof(g));
+          CREATE UNIQUE INDEX iu ON t(g);
+          CREATE INDEX iq ON t(g) WHERE g='116';
+          CREATE INDEX ip ON t(g) WHERE typeof(g)='integer';
+        }
+        sqlite3 oracle :memory:
+        oracle eval $ddl
+        oracle eval {
+          INSERT INTO t(id,a,b) VALUES(11,5,'1'),(12,7,'x'),(13,NULL,NULL);
+        }
+        oracle eval $indexes
+        oracle eval {INSERT INTO t(id,a,b) VALUES(1001,1,'z')}
+        if {$path eq "cell"} {oracle eval {UPDATE t SET b='' WHERE id=11}}
+        if {$op ne "revert"} {oracle eval {UPDATE t SET a=16 WHERE id=11}}
+        set query {SELECT id,a,b,g,typeof(g) FROM t NOT INDEXED ORDER BY id}
+        set expected [oracle eval $query]
+        set partial [oracle eval {
+          SELECT id,g,typeof(g) FROM t INDEXED BY ip
+            WHERE typeof(g)='integer' ORDER BY id;
+        }]
+        set quoted [oracle eval {
+          SELECT id,g,typeof(g) FROM t INDEXED BY iq WHERE g='116' ORDER BY id;
+        }]
+        set target [oracle eval {SELECT quote(g) FROM t WHERE id=11}]
+        oracle close
+        execsql $ddl
+        execsql {
+          INSERT INTO t(id,a,b) VALUES(11,5,'1'),(12,7,'x'),(13,NULL,NULL);
+        }
+        execsql $indexes
+        execsql {SELECT dolt_commit('-Am','base')}
+        if {$op eq "revert"} {
+          execsql {
+            UPDATE t SET a=16 WHERE id=11;
+            SELECT dolt_commit('-Am','target');
+          }
+        } else {
+          execsql {SELECT dolt_branch('other')}
+        }
+        execsql {INSERT INTO t(id,a,b) VALUES(1001,1,'z')}
+        if {$path eq "cell"} {execsql {UPDATE t SET b='' WHERE id=11}}
+        execsql {SELECT dolt_commit('-Am','ours')}
+        if {$op eq "revert"} {
+          set ref HEAD~1
+        } else {
+          execsql {
+            SELECT dolt_checkout('other');
+            UPDATE t SET a=16 WHERE id=11;
+            SELECT dolt_commit('-Am','theirs');
+            SELECT dolt_checkout('main');
+          }
+          set ref other
+        }
+        set name virtual-affinity-$shape-$aff-$op-$path
+        do_test $name-apply {
+          string length [execsql "SELECT dolt_${op}('$ref')"]
+        } 40
+        foreach reopen {0 1} {
+          if {$reopen} {
+            db close
+            sqlite3 db test.db
+          }
+          do_execsql_test $name-$reopen-table $query $expected
+          foreach index {ig im ie iu} {
+            do_execsql_test $name-$reopen-$index "
+              SELECT id,a,b,g,typeof(g) FROM t INDEXED BY $index ORDER BY id;
+            " $expected
+          }
+          do_execsql_test $name-$reopen-partial {
+            SELECT id,g,typeof(g) FROM t INDEXED BY ip
+              WHERE typeof(g)='integer' ORDER BY id;
+          } $partial
+          do_execsql_test $name-$reopen-quoted {
+            SELECT id,g,typeof(g) FROM t INDEXED BY iq WHERE g='116' ORDER BY id;
+          } $quoted
+          do_execsql_test $name-$reopen-lookup "
+            SELECT id FROM t INDEXED BY ig WHERE g=$target AND id=11;
+          " 11
+          do_execsql_test $name-$reopen-integrity {PRAGMA integrity_check} ok
+        }
+      }
+    }
+  }
+}
+
+foreach order {forward backward} {
+  foreach op {merge cherry_pick revert} {
+    reset_db
+    set generated {
+      h TEXT AS(typeof(g)||':'||g) VIRTUAL,
+      g INT AS(b||a) VIRTUAL
+    }
+    if {$order eq "backward"} {
+      set generated {
+        g INT AS(b||a) VIRTUAL,
+        h TEXT AS(typeof(g)||':'||g) VIRTUAL
+      }
+    }
+    execsql "CREATE TABLE t(id INT PRIMARY KEY,a INT,b TEXT,$generated)"
+    execsql {
+      INSERT INTO t(id,a,b) VALUES(1,5,'1');
+      CREATE INDEX ih ON t(h);
+      CREATE INDEX ip ON t(h) WHERE g='116';
+      SELECT dolt_commit('-Am','base');
+    }
+    if {$op eq "revert"} {
+      execsql {
+        UPDATE t SET a=16 WHERE id=1;
+        SELECT dolt_commit('-Am','target');
+      }
+    } else {
+      execsql {SELECT dolt_branch('other')}
+    }
+    execsql {
+      INSERT INTO t(id,a,b) VALUES(2,7,'2');
+      SELECT dolt_commit('-Am','ours');
+    }
+    if {$op eq "revert"} {
+      set ref HEAD~1
+      set expected {1 integer:15 2 integer:27}
+      set partial {}
+    } else {
+      execsql {
+        SELECT dolt_checkout('other');
+        UPDATE t SET a=16 WHERE id=1;
+        SELECT dolt_commit('-Am','theirs');
+        SELECT dolt_checkout('main');
+      }
+      set ref other
+      set expected {1 integer:116 2 integer:27}
+      set partial {1 integer:116}
+    }
+    set name virtual-affinity-chain-$order-$op
+    do_test $name-apply {
+      string length [execsql "SELECT dolt_${op}('$ref')"]
+    } 40
+    foreach reopen {0 1} {
+      if {$reopen} {
+        db close
+        sqlite3 db test.db
+      }
+      do_execsql_test $name-$reopen-index {
+        SELECT id,h FROM t INDEXED BY ih ORDER BY id;
+      } $expected
+      do_execsql_test $name-$reopen-partial {
+        SELECT id,h FROM t INDEXED BY ip WHERE g='116' ORDER BY id;
+      } $partial
+      do_execsql_test $name-$reopen-integrity {PRAGMA integrity_check} ok
+    }
+  }
+}
+
+finish_test
