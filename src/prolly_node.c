@@ -225,45 +225,37 @@ u64 prollyNodeChildSubtreeCount(const ProllyNode *pNode, int i){
   return v;
 }
 
-static SQLITE_INLINE int prollyKeyComparePrefix(
+/* Compares from byte i, where both keys are already known to agree, and
+** reports in *pMatch how many leading bytes they share. */
+static SQLITE_INLINE int prollyKeyCompareFrom(
   const u8 *pLeft,
   const u8 *pRight,
-  int n
+  int i,
+  int n,
+  int *pMatch
 ){
-  while( n>=8 ){
-    u64 left = ((u64)pLeft[0]<<56) | ((u64)pLeft[1]<<48)
-             | ((u64)pLeft[2]<<40) | ((u64)pLeft[3]<<32)
-             | ((u64)pLeft[4]<<24) | ((u64)pLeft[5]<<16)
-             | ((u64)pLeft[6]<<8) | (u64)pLeft[7];
-    u64 right = ((u64)pRight[0]<<56) | ((u64)pRight[1]<<48)
-              | ((u64)pRight[2]<<40) | ((u64)pRight[3]<<32)
-              | ((u64)pRight[4]<<24) | ((u64)pRight[5]<<16)
-              | ((u64)pRight[6]<<8) | (u64)pRight[7];
-    if( left<right ) return -1;
-    if( left>right ) return 1;
-    pLeft += 8;
-    pRight += 8;
-    n -= 8;
-    if( n>64 ) return memcmp(pLeft, pRight, n);
-    if( n==0 ) return 0;
+  while( i+8<=n ){
+    u64 left = ((u64)pLeft[i]<<56) | ((u64)pLeft[i+1]<<48)
+             | ((u64)pLeft[i+2]<<40) | ((u64)pLeft[i+3]<<32)
+             | ((u64)pLeft[i+4]<<24) | ((u64)pLeft[i+5]<<16)
+             | ((u64)pLeft[i+6]<<8) | (u64)pLeft[i+7];
+    u64 right = ((u64)pRight[i]<<56) | ((u64)pRight[i+1]<<48)
+              | ((u64)pRight[i+2]<<40) | ((u64)pRight[i+3]<<32)
+              | ((u64)pRight[i+4]<<24) | ((u64)pRight[i+5]<<16)
+              | ((u64)pRight[i+6]<<8) | (u64)pRight[i+7];
+    if( left!=right ){
+#if defined(__GNUC__) || defined(__clang__)
+      *pMatch = i + __builtin_clzll(left^right)/8;
+      return left<right ? -1 : 1;
+#else
+      break;
+#endif
+    }
+    i += 8;
   }
-  if( n>=4 ){
-    u32 left = ((u32)pLeft[0]<<24) | ((u32)pLeft[1]<<16)
-             | ((u32)pLeft[2]<<8) | pLeft[3];
-    u32 right = ((u32)pRight[0]<<24) | ((u32)pRight[1]<<16)
-              | ((u32)pRight[2]<<8) | pRight[3];
-    if( left<right ) return -1;
-    if( left>right ) return 1;
-    pLeft += 4;
-    pRight += 4;
-    n -= 4;
-  }
-  while( n-- ){
-    if( *pLeft!=*pRight ) return (int)*pLeft-(int)*pRight;
-    pLeft++;
-    pRight++;
-  }
-  return 0;
+  while( i<n && pLeft[i]==pRight[i] ) i++;
+  *pMatch = i;
+  return i<n ? (int)pLeft[i]-(int)pRight[i] : 0;
 }
 
 int prollyNodeSearchBlob(
@@ -279,6 +271,11 @@ int prollyNodeSearchBlob(
   const u8 *pMidKey;
   int nMidKey;
   int nCmp;
+  /* Bytes the key shares with the entries just below lo and above hi.
+  ** Every entry between them shares the smaller count, so skip it. */
+  int nLoMatch = 0;
+  int nHiMatch = 0;
+  int nMatch;
 
   if( pNode->nItems==0 ){
     *pRes = -1;
@@ -290,7 +287,9 @@ int prollyNodeSearchBlob(
     prollyNodeKey(pNode, mid, &pMidKey, &nMidKey);
 
     nCmp = nMidKey < nKey ? nMidKey : nKey;
-    c = prollyKeyComparePrefix(pKey, pMidKey, nCmp);
+    c = prollyKeyCompareFrom(pKey, pMidKey,
+                             nLoMatch<nHiMatch ? nLoMatch : nHiMatch,
+                             nCmp, &nMatch);
     if( c==0 ) c = nKey - nMidKey;
 
     if( c==0 ){
@@ -298,8 +297,10 @@ int prollyNodeSearchBlob(
       return mid;
     }else if( c<0 ){
       hi = mid - 1;
+      nHiMatch = nMatch;
     }else{
       lo = mid + 1;
+      nLoMatch = nMatch;
     }
   }
 
