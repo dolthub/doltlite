@@ -2836,6 +2836,196 @@ run_test "merge_drop_shift_row" \
   "SELECT id||':'||b||':'||c FROM t WHERE id=1;" "1:1:30" "$DB"
 rm -f "$DB"
 
+# Drop b and rename a to b. The kept cells are still a's. The other side's
+# b must not land in the renamed column. Dolt accepts this direction and
+# refuses the reverse.
+DB=/tmp/test_merge_rename_onto_drop_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','ours: drop b, rename a to b');
+SELECT dolt_checkout('other');
+INSERT INTO t VALUES (4,40,41,42);
+SELECT dolt_commit('-Am','theirs: insert');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_onto_drop_hash" "SELECT dolt_merge('other');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_rename_onto_drop_old" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=1;" "1|10|12" "$DB"
+run_test "merge_rename_onto_drop_old2" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=2;" "2|20|22" "$DB"
+run_test "merge_rename_onto_drop_new" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=4;" "4|40|42" "$DB"
+run_test "merge_rename_onto_drop_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+run_test "merge_rename_onto_drop_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_cp_rename_onto_drop_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','ours: drop b, rename a to b');
+SELECT dolt_checkout('other');
+INSERT INTO t VALUES (4,40,41,42);
+SELECT dolt_commit('-Am','theirs: insert');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "cherry_pick_rename_onto_drop_hash" \
+  "SELECT dolt_cherry_pick('other');" "^[0-9a-f]{40}$" "$DB"
+run_test "cherry_pick_rename_onto_drop_new" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=4;" "4|40|42" "$DB"
+run_test "cherry_pick_rename_onto_drop_old" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=1;" "1|10|12" "$DB"
+run_test "cherry_pick_rename_onto_drop_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_onto_drop_rev_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+INSERT INTO t VALUES (4,40,41,42);
+SELECT dolt_commit('-Am','insert');
+SELECT dolt_checkout('other');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_onto_drop_rev_refused" "SELECT dolt_merge('other');" \
+  "renames a column to 'b', a name another of its columns had" "$DB"
+run_test "merge_rename_onto_drop_rev_row" \
+  "SELECT id||'|'||a||'|'||b||'|'||c FROM t WHERE id=4;" "4|40|41|42" "$DB"
+run_test "merge_rename_onto_drop_rev_head" \
+  "SELECT message FROM dolt_log LIMIT 1;" "insert" "$DB"
+run_test_match "cherry_pick_rename_onto_drop_rev_refused" \
+  "SELECT dolt_cherry_pick('other');" \
+  "cannot apply: table 't' renames a column to 'b'" "$DB"
+run_test "cherry_pick_rename_onto_drop_rev_row" \
+  "SELECT id||'|'||a||'|'||b||'|'||c FROM t WHERE id=4;" "4|40|41|42" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_onto_drop_ff_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+SELECT dolt_checkout('other');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_onto_drop_ff_hash" "SELECT dolt_merge('other');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_rename_onto_drop_ff_cols" \
+  "SELECT group_concat(name, ',') FROM pragma_table_info('t');" "id,b,c" "$DB"
+run_test "merge_rename_onto_drop_ff_row" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=1;" "1|10|12" "$DB"
+run_test "merge_rename_onto_drop_ff_row2" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=2;" "2|20|22" "$DB"
+rm -f "$DB"
+
+# A real drop of a shifts b onto a's old slot. Name pairing still holds:
+# the surviving b keeps b's cells, including a row inserted on the other side.
+DB=/tmp/test_merge_drop_a_distinct_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','drop a');
+SELECT dolt_checkout('other');
+INSERT INTO t VALUES (4,40,41,42);
+SELECT dolt_commit('-Am','insert');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_drop_a_distinct_hash" "SELECT dolt_merge('other');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_drop_a_distinct_old" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=1;" "1|11|12" "$DB"
+run_test "merge_drop_a_distinct_new" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=4;" "4|41|42" "$DB"
+run_test "merge_drop_a_distinct_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_drop_a_distinct_rev_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+INSERT INTO t VALUES (4,40,41,42);
+SELECT dolt_commit('-Am','insert');
+SELECT dolt_checkout('other');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','drop a');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_drop_a_distinct_rev_hash" "SELECT dolt_merge('other');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "merge_drop_a_distinct_rev_new" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=4;" "4|41|42" "$DB"
+run_test "merge_drop_a_distinct_rev_old" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=1;" "1|11|12" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_onto_drop_edit_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('other');
+UPDATE t SET a=99, b=98 WHERE id=1;
+SELECT dolt_commit('-Am','edit a and b');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_onto_drop_edit_hash" \
+  "SELECT dolt_merge('other');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_rename_onto_drop_edit_row" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=1;" "1|99|12" "$DB"
+run_test "merge_rename_onto_drop_edit_row2" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=2;" "2|20|22" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_rename_onto_drop_editb_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES (1,10,11,12),(2,20,21,22);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t RENAME COLUMN a TO b;
+SELECT dolt_commit('-Am','rename');
+SELECT dolt_checkout('other');
+UPDATE t SET b=98 WHERE id=1;
+SELECT dolt_commit('-Am','edit dropped b');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "merge_rename_onto_drop_editb_hash" \
+  "SELECT dolt_merge('other');" "^[0-9a-f]{40}$" "$DB"
+run_test "merge_rename_onto_drop_editb_row" \
+  "SELECT id||'|'||b||'|'||c FROM t WHERE id=1;" "1|10|12" "$DB"
+rm -f "$DB"
+
 DB=/tmp/test_merge_plain_rename_$$.db; rm -f "$DB"
 rename_reuse_base "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1

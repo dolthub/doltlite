@@ -133,16 +133,29 @@ struct MergeLayout {
   int nAnc;
 };
 
-int mergeSideKeptAncestorRow(
+/* Stored record slot of a parsed column, or -1 for VIRTUAL. The INTEGER
+** PRIMARY KEY still occupies its NULL placeholder slot. */
+int mergeStoredFieldIndex(ParsedColumn *aCols, int iCol);
+
+/* Side dropped a column and renamed another onto that name. *pzReused is
+** a malloc'd copy of the reused name, or NULL when the kept rows still
+** match the names. aSideAnc, when non-NULL, receives the ancestor column
+** each side column still holds. */
+int mergeRenameHoldingDroppedName(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
   const ProllyHash *pSideRoot,
   u8 ancFlags,
   u8 sideFlags,
-  const MergeLayout *pLayout,
-  int bOtherUnchanged,
-  int *pbKept
+  const char *zAncSql,
+  const char *zSideSql,
+  const char *zTable,
+  int *aSideAnc,
+  int nSide,
+  char **pzReused
 );
+
+int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c);
 
 int mergeRowEditsColumn(
   sqlite3 *db,
@@ -422,6 +435,8 @@ int normalizeSideToMergedLayout(
   const char *zTheirsSql,
   int bFillSharedDefaults,
   const char *zSharedSql,
+  const ProllyHash *pAncRoot,
+  u8 ancFlags,
   ProllyHash *pOutRoot
 );
 

@@ -847,7 +847,7 @@ static int layoutFitsRow(
 ** ancestor schema, so any row this layout cannot explain as a drop and
 ** re-add is ambiguous even if this side rewrote it. Otherwise only a row
 ** still byte-for-byte from the ancestor counts. */
-int mergeSideKeptAncestorRow(
+static int mergeSideKeptAncestorRow(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
   const ProllyHash *pSideRoot,
@@ -908,6 +908,378 @@ int mergeSideKeptAncestorRow(
 done:
   sqlite3_free(aTailOk);
   return rc;
+}
+
+/* Record fields skip VIRTUAL columns, so a later column's stored
+** index is the count of non-VIRTUAL columns before it, not its
+** CREATE TABLE ordinal. A VIRTUAL column has no stored value. */
+int mergeStoredFieldIndex(ParsedColumn *aCols, int iCol){
+  int i, n = 0;
+  if( iCol<0 || parsedColumnIsVirtual(&aCols[iCol]) ) return -1;
+  for(i=0; i<iCol; i++){
+    if( !parsedColumnIsVirtual(&aCols[i]) ) n++;
+  }
+  return n;
+}
+
+static int colInfoIndex(const DoltliteColInfo *ci, const char *zName){
+  int i;
+  if( !ci || !zName ) return -1;
+  for(i=0; i<ci->nCol; i++){
+    if( ci->azName[i] && sqlite3_stricmp(ci->azName[i], zName)==0 ) return i;
+  }
+  return -1;
+}
+
+/* Omitted trailing fields are NULL. VIRTUAL slots are not compared. */
+static int storedFieldsEqual(
+  const u8 *pA, int nA, const DoltliteRecordInfo *pAi, int iA,
+  const u8 *pB, int nB, const DoltliteRecordInfo *pBi, int iB
+){
+  int aNull, bNull;
+  if( iA<0 || iB<0 ) return 1;
+  aNull = iA>=pAi->nField || pAi->aType[iA]==0;
+  bNull = iB>=pBi->nField || pBi->aType[iB]==0;
+  if( aNull || bNull ) return aNull && bNull;
+  return doltliteFieldValuesEqual(
+      pAi->aType[iA], pA, nA, pAi->aOffset[iA],
+      pBi->aType[iB], pB, nB, pBi->aOffset[iB]);
+}
+
+static int loadReaderCols(
+  const char *zSql, const char *zTable, DoltliteColInfo *ci
+){
+  sqlite3 *tmp = 0;
+  int rc;
+  memset(ci, 0, sizeof(*ci));
+  if( !zSql || !zTable ) return SQLITE_OK;
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTable, ci);
+  if( tmp ) sqlite3_close(tmp);
+  return rc;
+}
+
+/* 1 when reader columns are the parsed declared list, so ancestor slots
+** line up with the merge's column indexes. 0 when they do not. -1 on OOM. */
+static int colsMatchParsed(const char *zSql, const DoltliteColInfo *ci){
+  ParsedColumn *a = 0;
+  int n = 0, i, rc;
+  rc = parseColumns(zSql, &a, &n);
+  if( rc!=SQLITE_OK ){
+    freeColumns(a, n);
+    return rc==SQLITE_NOMEM ? -1 : 0;
+  }
+  rc = n==ci->nCol;
+  for(i=0; rc==1 && i<n; i++){
+    if( !a[i].zName || !ci->azName[i]
+     || sqlite3_stricmp(a[i].zName, ci->azName[i])!=0 ) rc = 0;
+  }
+  freeColumns(a, n);
+  return rc;
+}
+static int recSlot(const DoltliteColInfo *ci, int i){
+  if( !ci || i<0 || i>=ci->nCol ) return -1;
+  return ci->aColToRec ? ci->aColToRec[i] : i;
+}
+
+/* Names say each side column is that ancestor column. */
+static int rowFitsColumnNames(
+  const DoltliteColInfo *pSide, const DoltliteColInfo *pAnc,
+  const u8 *pSideRec, int nSideRec, const DoltliteRecordInfo *pSideInfo,
+  const u8 *pAncRec, int nAncRec, const DoltliteRecordInfo *pAncInfo
+){
+  int i;
+  for(i=0; i<pSide->nCol; i++){
+    int k = colInfoIndex(pAnc, pSide->azName[i]);
+    if( k<0 ) return 0;
+    if( !storedFieldsEqual(pSideRec, nSideRec, pSideInfo, recSlot(pSide, i),
+                           pAncRec, nAncRec, pAncInfo, recSlot(pAnc, k)) ){
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* In-order ancestor column whose cell the side column still holds.
+** A value that matches two ancestor columns does not decide. */
+static int assignColumnsByCells(
+  const DoltliteColInfo *pSide, const DoltliteColInfo *pAnc,
+  const u8 *pSideRec, int nSideRec, const DoltliteRecordInfo *pSideInfo,
+  const u8 *pAncRec, int nAncRec, const DoltliteRecordInfo *pAncInfo,
+  int *aSideAnc
+){
+  int i, next = 0;
+  for(i=0; i<pSide->nCol; i++){
+    int iS = recSlot(pSide, i);
+    int nHit = 0, hit = -1, k;
+    if( iS<0 ){
+      aSideAnc[i] = colInfoIndex(pAnc, pSide->azName[i]);
+      continue;
+    }
+    for(k=next; k<pAnc->nCol; k++){
+      int iA = recSlot(pAnc, k);
+      if( iA<0 ) continue;
+      if( storedFieldsEqual(pSideRec, nSideRec, pSideInfo, iS,
+                            pAncRec, nAncRec, pAncInfo, iA) ){
+        nHit++;
+        hit = k;
+        if( nHit>1 ) return 0;
+      }
+    }
+    if( nHit!=1 ) return 0;
+    aSideAnc[i] = hit;
+    next = hit+1;
+  }
+  return 1;
+}
+
+int mergeRenameHoldingDroppedName(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags,
+  u8 sideFlags,
+  const char *zAncSql,
+  const char *zSideSql,
+  const char *zTable,
+  int *aSideAnc,
+  int nSide,
+  char **pzReused
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  DoltliteColInfo ancCi, sideCi;
+  ProllyCursor ancCur, sideCur;
+  DoltliteRecordInfo ancInfo, sideInfo;
+  int *aAssign = 0;
+  int sawName = 0, sawAssign = 0, bShifted = 0;
+  int ancInit = 0, sideInit = 0;
+  int i, res = 0, rc = SQLITE_OK;
+
+  if( pzReused ) *pzReused = 0;
+  memset(&ancCi, 0, sizeof(ancCi));
+  memset(&sideCi, 0, sizeof(sideCi));
+  if( !cs || !pCache || !zAncSql || !zSideSql || !zTable ) return SQLITE_OK;
+  if( prollyHashIsEmpty(pAncRoot) || prollyHashIsEmpty(pSideRoot) ){
+    return SQLITE_OK;
+  }
+  if( ((ancFlags ^ sideFlags) & PROLLY_NODE_INTKEY)!=0 ) return SQLITE_OK;
+  rc = loadReaderCols(zAncSql, zTable, &ancCi);
+  if( rc==SQLITE_OK ) rc = loadReaderCols(zSideSql, zTable, &sideCi);
+  if( rc!=SQLITE_OK || sideCi.nCol<=0 || sideCi.nCol>=ancCi.nCol ){
+    if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+    goto done;
+  }
+  for(i=0; i<sideCi.nCol; i++){
+    int k = colInfoIndex(&ancCi, sideCi.azName[i]);
+    if( k>=0 && k!=i ) bShifted = 1;
+  }
+  if( !bShifted ) goto done;
+  if( aSideAnc && nSide!=sideCi.nCol ) goto done;
+  i = colsMatchParsed(zAncSql, &ancCi);
+  if( i<0 || (i==1 && (i = colsMatchParsed(zSideSql, &sideCi))<0) ){
+    rc = SQLITE_NOMEM;
+    goto done;
+  }
+  if( i!=1 ) goto done;
+  aAssign = sqlite3_malloc(sideCi.nCol * (int)sizeof(int));
+  if( !aAssign ){ rc = SQLITE_NOMEM; goto done; }
+  doltliteRecordInfoInit(&ancInfo);
+  doltliteRecordInfoInit(&sideInfo);
+  prollyCursorInit(&ancCur, cs, pCache, pAncRoot, ancFlags);
+  prollyCursorInit(&sideCur, cs, pCache, pSideRoot, sideFlags);
+  ancInit = 1;
+  sideInit = 1;
+  rc = prollyCursorFirst(&ancCur, &res);
+  while( rc==SQLITE_OK && !res && prollyCursorIsValid(&ancCur) ){
+    const u8 *pAncVal = 0, *pSideVal = 0, *pKey = 0;
+    int nAncVal = 0, nSideVal = 0, nKey = 0, sideRes = 0;
+    prollyCursorValue(&ancCur, &pAncVal, &nAncVal);
+    if( (ancFlags & PROLLY_NODE_INTKEY)!=0 ){
+      rc = prollyCursorSeekInt(&sideCur, prollyCursorIntKey(&ancCur), &sideRes);
+    }else{
+      prollyCursorKey(&ancCur, &pKey, &nKey);
+      rc = prollyCursorSeekBlob(&sideCur, pKey, nKey, &sideRes);
+    }
+    if( rc!=SQLITE_OK ) break;
+    if( sideRes==0 && prollyCursorIsValid(&sideCur) ){
+      prollyCursorValue(&sideCur, &pSideVal, &nSideVal);
+      doltliteParseRecord(pAncVal, nAncVal, &ancInfo);
+      doltliteParseRecord(pSideVal, nSideVal, &sideInfo);
+      if( rowFitsColumnNames(&sideCi, &ancCi, pSideVal, nSideVal, &sideInfo,
+                             pAncVal, nAncVal, &ancInfo) ){
+        sawName = 1;
+      }else if( !sawAssign ){
+        sawAssign = assignColumnsByCells(
+            &sideCi, &ancCi, pSideVal, nSideVal, &sideInfo,
+            pAncVal, nAncVal, &ancInfo, aAssign);
+      }else{
+        int *aTmp = sqlite3_malloc(sideCi.nCol * (int)sizeof(int));
+        int same = 1;
+        if( !aTmp ){ rc = SQLITE_NOMEM; break; }
+        if( assignColumnsByCells(&sideCi, &ancCi, pSideVal, nSideVal, &sideInfo,
+                                 pAncVal, nAncVal, &ancInfo, aTmp) ){
+          for(i=0; i<sideCi.nCol; i++) if( aTmp[i]!=aAssign[i] ) same = 0;
+          if( !same ) sawAssign = 0;
+        }
+        sqlite3_free(aTmp);
+        if( !sawAssign ) break;
+      }
+    }
+    rc = prollyCursorNext(&ancCur);
+  }
+  doltliteRecordInfoClear(&ancInfo);
+  doltliteRecordInfoClear(&sideInfo);
+  if( rc==SQLITE_OK && !sawName && sawAssign && pzReused ){
+    const char *zReuse = 0;
+    for(i=0; i<sideCi.nCol; i++){
+      int k = colInfoIndex(&ancCi, sideCi.azName[i]);
+      if( k>=0 && k!=aAssign[i] ){ zReuse = sideCi.azName[i]; break; }
+    }
+    if( zReuse ){
+      *pzReused = sqlite3_mprintf("%s", zReuse);
+      if( !*pzReused ) rc = SQLITE_NOMEM;
+      else if( aSideAnc ) memcpy(aSideAnc, aAssign, (size_t)nSide*sizeof(int));
+    }
+  }
+done:
+  if( ancInit ) prollyCursorClose(&ancCur);
+  if( sideInit ) prollyCursorClose(&sideCur);
+  sqlite3_free(aAssign);
+  doltliteFreeColInfo(&ancCi);
+  doltliteFreeColInfo(&sideCi);
+  return rc;
+}
+
+/* Without column tags a column is matched by name, so a rename onto a name
+** another ancestor column had (a swap, or b->c then a->b) would route the
+** other side's cells into the wrong column. A name that moved slots can
+** also come from dropping and re-adding a column; refuse only when a row the
+** side kept rules that out. Fewer columns are the same trap when the rename
+** took a dropped column's name: the kept cells no longer match that name.
+** Only the incoming side is refused then. The branch that did the rename
+** still accepts the other side's rows, mapped by those cells. */
+int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
+  int side, i, j;
+
+  for(side=0; side<2; side++){
+    SchemaEntry *aRen = side ? c->aTheirsSchema : c->aOursSchema;
+    int nRen = side ? c->nTheirsSchema : c->nOursSchema;
+    SchemaEntry *aOth = side ? c->aOursSchema : c->aTheirsSchema;
+    int nOth = side ? c->nOursSchema : c->nTheirsSchema;
+    struct TableEntry *aRenCat = side ? c->aTheirs : c->aOurs;
+    int nRenCat = side ? c->nTheirs : c->nOurs;
+    struct TableEntry *aOthCat = side ? c->aOurs : c->aTheirs;
+    int nOthCat = side ? c->nOurs : c->nTheirs;
+
+    for(i=0; i<c->nAncSchema; i++){
+      const char *zTable = c->aAncSchema[i].zName;
+      SchemaEntry *pRenSe, *pOthSe;
+      struct TableEntry *pAncCat, *pRenCatEnt, *pOthCatEnt;
+      ParsedColumn *aAncCols = 0, *aRenCols = 0;
+      int nAncCols = 0, nRenCols = 0;
+      const char *zMoved = 0;
+      MergeLayoutCol *aLayoutCol = 0;
+      int *aAncField = 0;
+      int bKept = 0;
+      int bReuseDecided = 0;
+      int rc;
+
+      if( !zTable || !c->aAncSchema[i].zType ) continue;
+      if( strcmp(c->aAncSchema[i].zType, "table")!=0 ) continue;
+      pRenSe = findSchemaEntry(aRen, nRen, zTable);
+      pOthSe = findSchemaEntry(aOth, nOth, zTable);
+      if( !pRenSe || !pOthSe || !pRenSe->zSql || !pOthSe->zSql ) continue;
+      if( strcmp(pRenSe->zSql, c->aAncSchema[i].zSql)==0 ) continue;
+      if( strcmp(pRenSe->zSql, pOthSe->zSql)==0 ) continue;
+      pAncCat = doltliteFindTableByName(c->aAnc, c->nAnc, zTable);
+      pRenCatEnt = doltliteFindTableByName(aRenCat, nRenCat, zTable);
+      pOthCatEnt = doltliteFindTableByName(aOthCat, nOthCat, zTable);
+      if( !pAncCat || !pRenCatEnt || !pOthCatEnt ) continue;
+      if( strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0
+       && prollyHashCompare(&pAncCat->root, &pOthCatEnt->root)==0 ){
+        continue;
+      }
+      if( parseColumns(c->aAncSchema[i].zSql, &aAncCols, &nAncCols)!=SQLITE_OK ){
+        continue;
+      }
+      if( parseColumns(pRenSe->zSql, &aRenCols, &nRenCols)!=SQLITE_OK ){
+        freeColumns(aAncCols, nAncCols);
+        continue;
+      }
+      if( nRenCols>=nAncCols ){
+        for(j=0; j<nAncCols && !zMoved; j++){
+          int k;
+          if( sqlite3_stricmp(aRenCols[j].zName, aAncCols[j].zName)==0 ) continue;
+          k = parsedColumnIndexByName(aAncCols, nAncCols, aRenCols[j].zName);
+          if( k>=0 && k!=j ) zMoved = aRenCols[j].zName;
+        }
+      }else if( side==1 ){
+        char *zReuse = 0;
+        rc = mergeRenameHoldingDroppedName(
+            c->db, &pAncCat->root, &pRenCatEnt->root,
+            pAncCat->flags, pRenCatEnt->flags,
+            c->aAncSchema[i].zSql, pRenSe->zSql, zTable,
+            0, 0, &zReuse);
+        if( rc!=SQLITE_OK ){
+          freeColumns(aAncCols, nAncCols);
+          freeColumns(aRenCols, nRenCols);
+          return rc;
+        }
+        if( zReuse ){
+          int kReuse = parsedColumnIndexByName(aRenCols, nRenCols, zReuse);
+          sqlite3_free(zReuse);
+          if( kReuse>=0 ){
+            zMoved = aRenCols[kReuse].zName;
+            bKept = 1;
+            bReuseDecided = 1;
+          }
+        }
+      }
+      rc = SQLITE_OK;
+      if( zMoved && !bReuseDecided ){
+        aLayoutCol = sqlite3_malloc64(sizeof(MergeLayoutCol)*(u64)nRenCols);
+        aAncField = sqlite3_malloc64(sizeof(int)*(u64)nAncCols);
+        if( !aLayoutCol || !aAncField ) rc = SQLITE_NOMEM;
+      }
+      if( rc==SQLITE_OK && zMoved && !bReuseDecided ){
+        MergeLayout layout;
+        for(j=0; j<nAncCols; j++){
+          aAncField[j] = mergeStoredFieldIndex(aAncCols, j);
+        }
+        for(j=0; j<nRenCols; j++){
+          aLayoutCol[j].iField = mergeStoredFieldIndex(aRenCols, j);
+          aLayoutCol[j].iSrcSlot =
+              parsedColumnIndexByName(aAncCols, nAncCols, aRenCols[j].zName);
+          aLayoutCol[j].bAddsAsNull = (u8)parsedColumnAddsAsNull(&aRenCols[j]);
+        }
+        layout.aCol = aLayoutCol;
+        layout.nCol = nRenCols;
+        layout.aAncField = aAncField;
+        layout.nAnc = nAncCols;
+        rc = mergeSideKeptAncestorRow(c->db, &pAncCat->root, &pRenCatEnt->root,
+                                      pAncCat->flags, pRenCatEnt->flags, &layout,
+                                      strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0,
+                                      &bKept);
+      }
+      if( rc==SQLITE_OK && zMoved && c->pzErrMsg && bKept ){
+        sqlite3_free(*c->pzErrMsg);
+        *c->pzErrMsg = sqlite3_mprintf(
+            "cannot %s: table '%s' renames a column to '%s', a name another "
+            "of its columns had, so the column each change belongs to is "
+            "ambiguous; make the same renames on both branches first",
+            c->bBranchMerge ? "merge" : "apply", zTable, zMoved);
+      }
+      sqlite3_free(aLayoutCol);
+      sqlite3_free(aAncField);
+      freeColumns(aAncCols, nAncCols);
+      freeColumns(aRenCols, nRenCols);
+      if( rc!=SQLITE_OK ) return rc;
+      if( zMoved && bKept ) return SQLITE_ERROR;
+    }
+  }
+  return SQLITE_OK;
 }
 
 /* Other side changed this field in a pre-existing row. Drop vs that

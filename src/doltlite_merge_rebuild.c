@@ -882,6 +882,8 @@ int normalizeSideToMergedLayout(
   const char *zTheirsSql,
   int bFillSharedDefaults,
   const char *zSharedSql,
+  const ProllyHash *pAncRoot,
+  u8 ancFlags,
   ProllyHash *pOutRoot
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -912,9 +914,13 @@ int normalizeSideToMergedLayout(
   int bSameKey;
   int bAncestorGap;
   int nMem;
+  int *aOursAnc;
+  int bReuse;
   int rc, res, j;
 
   bAncestorGap = 0;
+  aOursAnc = 0;
+  bReuse = 0;
   memset(&oursDefaults, 0, sizeof(oursDefaults));
   memset(&theirsDefaults, 0, sizeof(theirsDefaults));
   memset(&sideCi, 0, sizeof(sideCi));
@@ -942,16 +948,42 @@ int normalizeSideToMergedLayout(
     rc = SQLITE_NOMEM;
     goto done;
   }
+  /* Dropping b and renaming a to b leaves the same names as dropping a.
+  ** Kept cells tell them apart. Pair by those cells so the dropped
+  ** column's values do not overwrite the renamed column. */
+  if( nOurs<nAnc && pAncRoot ){
+    char *zReuse = 0;
+    aOursAnc = sqlite3_malloc((nOurs>0 ? nOurs : 1) * (int)sizeof(int));
+    if( !aOursAnc ){ rc = SQLITE_NOMEM; goto done; }
+    rc = mergeRenameHoldingDroppedName(
+        db, pAncRoot, pOursRoot, ancFlags, flags,
+        zAncSql, zOursSql, zTable, aOursAnc, nOurs, &zReuse);
+    if( rc!=SQLITE_OK ){ sqlite3_free(zReuse); goto done; }
+    bReuse = zReuse!=0;
+    sqlite3_free(zReuse);
+  }
   for(j=0; j<nOurs; j++){
     aMergedRecord[j] = parsedColumnIsVirtual(&aOurs[j])
         ? -1 : nMergedRecord++;
   }
   for(j=0; j<nTheirs; j++){
-    int found = parsedColumnIndexByName(
-        aOurs, nOurs, aTheirs[j].zName);
+    int found = -1;
     int bInAnc = 0;
     aTheirsRecord[j] = parsedColumnIsVirtual(&aTheirs[j])
         ? -1 : nTheirsRecord++;
+    if( bReuse ){
+      int ai = parsedColumnIndexByName(aAnc, nAnc, aTheirs[j].zName);
+      if( ai>=0 ){
+        int k;
+        bInAnc = 1;
+        for(k=0; k<nOurs; k++){
+          if( aOursAnc[k]==ai ){ found = k; break; }
+        }
+        goto mapped;
+      }
+    }
+    found = parsedColumnIndexByName(
+        aOurs, nOurs, aTheirs[j].zName);
     if( found<0 ){
       int ai = parsedColumnIndexByName(
           aAnc, nAnc, aTheirs[j].zName);
@@ -1004,6 +1036,7 @@ int normalizeSideToMergedLayout(
       found = j;
       bInAnc = 1;
     }
+mapped:
     if( found>=0 ){
       aMap[j] = found;
     }else if( bInAnc ){
@@ -1258,6 +1291,7 @@ done:
   sqlite3_free(aMap);
   sqlite3_free(aMergedRecord);
   sqlite3_free(aTheirsRecord);
+  sqlite3_free(aOursAnc);
   freeColumns(aAnc, nAnc);
   freeColumns(aOurs, nOurs);
   freeColumns(aTheirs, nTheirs);
