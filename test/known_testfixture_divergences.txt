@@ -1308,6 +1308,8 @@ stat stat-7.2.4 class=intentional  # cascade of 7.2: x3 never dropped, CREATE co
 stat stat-8.2 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
 stat stat-8.3 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
 stat stat-8.4 class=unsupported issue=2508  # dbstat scan errors; chunk store has no page layout
+stat stat-10.1 class=intentional  # chunk-store page_count is not SQLite's five 1024-byte B-tree pages
+stat stat-10.2 class=unsupported issue=2508  # dbstat page numbers and byte offsets require SQLite page layout
 # io — counts VFS write/sync operations and checks on-disk file size via a test
 # VFS. DoltLite's chunk store batches I/O differently and its file layout is not
 # SQLite-page-sized, so the operation counts and file sizes differ. I/O-model
@@ -3347,10 +3349,8 @@ incrblob2 incrblob2-5.8 class=intentional  # cascade from 5.6: stale $blob chann
 # Table data lives in the prolly chunk store, not pager pages, so the
 # SQLITE_CONFIG_PAGECACHE pool registers almost no usage: the build
 # workload touches 2 pages instead of filling the 20-page pool (2.4,
-# 3.2.4) or 45-50 of 50 (4.3), and never overflows it (2.3, expected
-# 1024 got 0). Chunk encoding also issues mallocs >=9000 bytes, so the
+# 3.2.4) or 45-50 of 50 (4.3). Chunk encoding also issues mallocs >=9000 bytes, so the
 # MALLOC_SIZE<9000 expectation fails (4.5).
-memsubsys1 memsubsys1-2.3 class=intentional
 memsubsys1 memsubsys1-2.4 class=intentional
 memsubsys1 memsubsys1-3.2.4 class=intentional
 memsubsys1 memsubsys1-4.3 class=intentional

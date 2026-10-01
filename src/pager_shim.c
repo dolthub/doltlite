@@ -508,6 +508,15 @@ int pagerShimIsShim(const Pager *p){
   return p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC;
 }
 
+#if defined(SQLITE_DEBUG) || defined(SQLITE_ENABLE_WALSTAT)
+extern void orig_sqlite3PagerWalStat(Pager*, sqlite3_str*);
+void sqlite3PagerWalStat(Pager *pPager, sqlite3_str *pStr){
+  if( !pagerShimIsShim(pPager) ){
+    orig_sqlite3PagerWalStat(pPager, pStr);
+  }
+}
+#endif
+
 #if defined(SQLITE_USE_SEH) && !defined(SQLITE_OMIT_WAL)
 int sqlite3PagerWalSystemErrno(Pager *pPager){
   if( pagerShimIsShim(pPager) ) return 0;

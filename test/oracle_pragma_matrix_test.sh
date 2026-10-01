@@ -37,7 +37,7 @@ in_scope=$(awk '
   /^  NAME:/ {n=$2; gate=""}
   /^  IF:/   {gate=$0}
   /^$/ && n {
-    if (gate !~ /SQLITE_DEBUG|SQLITE_TEST|SQLITE_ENABLE_CEROD|SQLITE_OS_WIN|SQLITE_ENABLE_LOCKING_STYLE/) print n
+    if (gate !~ /SQLITE_DEBUG|SQLITE_TEST|SQLITE_ENABLE_CEROD|SQLITE_OS_WIN|_WIN32|SQLITE_ENABLE_LOCKING_STYLE/) print n
     n=""
   }' "$PRAGTAB" | sort -u)
 

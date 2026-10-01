@@ -1,0 +1,31 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-pager-walstat
+
+if {[db one {SELECT count(*) FROM pragma_function_list WHERE name='sqlite_walstat'}]==0} {
+  finish_test
+  return
+}
+
+sqlite3 db test.db -uri 1
+do_execsql_test 1.0 {
+  CREATE TABLE t(id INT PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+  SELECT sqlite_walstat('main')='{}';
+  SELECT sqlite_walstat('unknown')='{}';
+} {1 1}
+
+forcedelete walstat-legacy.db walstat-legacy.db-wal walstat-legacy.db-shm
+sqlite3 legacy {file:walstat-legacy.db?doltlite_engine=sqlite} -uri 1
+legacy eval {CREATE TABLE t(id INTEGER PRIMARY KEY)}
+legacy close
+do_execsql_test 1.1 {
+  ATTACH 'walstat-legacy.db' AS legacy;
+  PRAGMA legacy.journal_mode=WAL;
+  INSERT INTO legacy.t VALUES(1);
+  SELECT json_valid(sqlite_walstat('legacy'),2);
+  SELECT sqlite_walstat('main')='{}';
+  DETACH legacy;
+} {wal 1 1}
+
+finish_test

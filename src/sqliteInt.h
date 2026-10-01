@@ -5567,7 +5567,16 @@ int doltliteBtreeDeserialize(
 const char *sqlite3ErrStr(int);
 int sqlite3ReadSchema(Parse *pParse);
 CollSeq *sqlite3FindCollSeq(sqlite3*,u8 enc, const char*,int);
+int sqlite3BinaryCompare(void*,int,const void*,int,const void*);
+#if SQLITE_USES_INLINE
+static SQLITE_INLINE int sqlite3IsBinary(const CollSeq *p){
+  assert( p==0 || p->xCmp!=sqlite3BinaryCompare
+       || strcmp(p->zName,"BINARY")==0 );
+  return p==0 || p->xCmp==sqlite3BinaryCompare;
+}
+#else
 int sqlite3IsBinary(const CollSeq*);
+#endif
 #ifdef DOLTLITE_PROLLY
 int sqlite3DoltliteIsBuiltinCollation(const CollSeq*);
 int sqlite3DoltliteSeqTableDb(Parse*, Table*);
