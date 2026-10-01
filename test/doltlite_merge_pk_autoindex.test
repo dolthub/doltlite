@@ -1,0 +1,95 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {form ddl changes} {
+  inline-alias {CREATE TABLE t(id INTEGER PRIMARY KEY, b INT, c INT)} {0 1}
+  autoincrement-alias {CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, b INT, c INT)} {0 1}
+  custom-collation {CREATE TABLE t(id INTEGER PRIMARY KEY, b INT COLLATE merge_pk_collation, c INT)} {0}
+  table-alias {CREATE TABLE t(id INTEGER, b INT, c INT, PRIMARY KEY(id))} {0 1}
+  quoted-alias {CREATE TABLE t("id" INTEGER, b INT, c INT, PRIMARY KEY("id"))} {0 1}
+  commented-alias {CREATE TABLE t(id INTEGER /* key */ PRIMARY KEY, b INT, c INT)} {0 1}
+  table-desc-alias {CREATE TABLE t(id INTEGER, b INT, c INT, PRIMARY KEY(id DESC))} {0 1}
+  without-rowid {CREATE TABLE t(id INT, b INT, c INT, PRIMARY KEY(id)) WITHOUT ROWID} {0 1}
+  pk-check-string {CREATE TABLE t(id INT PRIMARY KEY, b INT, c INT, CHECK('INTEGER PRIMARY KEY' <> ''))} {0 1}
+  inline-desc {CREATE TABLE t(id INTEGER PRIMARY KEY DESC, b INT, c INT)} {0 1}
+  unique-before-pk {CREATE TABLE t(id INT, b INT UNIQUE, c INT, PRIMARY KEY(id))} {0 1}
+} {
+  foreach op {merge cherry_pick revert} {
+    foreach schemaChange $changes {
+      reset_db
+      db collate merge_pk_collation {string compare}
+      execsql $ddl
+      execsql {
+        INSERT INTO t VALUES(1,1,1),(2,2,2);
+        SELECT dolt_commit('-Am','base');
+      }
+      set catalog [execsql {
+        SELECT type,name,tbl_name,sql IS NULL FROM sqlite_master
+          WHERE tbl_name='t' ORDER BY name;
+      }]
+      if {$op ne "revert"} {execsql {SELECT dolt_branch('other')}}
+      if {$schemaChange} {
+        execsql {ALTER TABLE t ADD COLUMN d INT DEFAULT 7}
+      }
+      execsql {
+        UPDATE t SET b=5 WHERE id=1;
+        SELECT dolt_commit('-Am','ours');
+      }
+      if {$op eq "revert"} {
+        set target HEAD~1
+      } else {
+        execsql {SELECT dolt_checkout('other')}
+        set target other
+      }
+      execsql {
+        UPDATE t SET c=6 WHERE id=2;
+        SELECT dolt_commit('-Am','theirs');
+      }
+      if {$op ne "revert"} {execsql {SELECT dolt_checkout('main')}}
+      set name merge-pk-autoindex-$form-$op-$schemaChange
+      do_test $name-apply {
+        string length [execsql "SELECT dolt_${op}('$target')"]
+      } 40
+      set rows {1 5 1 2 2 6}
+      if {$op eq "revert"} {set rows {1 1 1 2 2 6}}
+      do_execsql_test $name-rows {
+        SELECT id,b,c FROM t ORDER BY id;
+      } $rows
+      do_execsql_test $name-catalog {
+        SELECT type,name,tbl_name,sql IS NULL FROM sqlite_master
+          WHERE tbl_name='t' ORDER BY name;
+      } $catalog
+      set columns {id b c}
+      if {$schemaChange && $op ne "revert"} {lappend columns d}
+      do_execsql_test $name-columns {
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+      } $columns
+      do_execsql_test $name-integrity {
+        SELECT count(*) FROM dolt_conflicts;
+        PRAGMA integrity_check;
+      } {0 ok}
+      do_catchsql_test $name-primary-key-before-reopen {
+        INSERT INTO t(id,b,c) VALUES(1,9,9);
+      } {1 {UNIQUE constraint failed: t.id}}
+      do_execsql_test $name-after-failed-write {
+        SELECT id,b,c FROM t ORDER BY id;
+        SELECT count(*) FROM dolt_status;
+      } [concat $rows 0]
+      db close
+      sqlite3 db test.db
+      db collate merge_pk_collation {string compare}
+      do_execsql_test $name-reopen {
+        SELECT id,b,c FROM t ORDER BY id;
+        SELECT type,name,tbl_name,sql IS NULL FROM sqlite_master
+          WHERE tbl_name='t' ORDER BY name;
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+        PRAGMA integrity_check;
+      } [concat $rows $catalog $columns ok]
+      do_catchsql_test $name-primary-key {
+        INSERT INTO t(id,b,c) VALUES(1,9,9);
+      } {1 {UNIQUE constraint failed: t.id}}
+    }
+  }
+}
+
+finish_test

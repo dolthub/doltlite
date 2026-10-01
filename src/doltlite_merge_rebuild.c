@@ -19,16 +19,48 @@ static Pgno remapSchemaRootpage(
   return iRootpage;
 }
 
-static int tableSqlNeedsClusteredPkAutoindex(const char *zSql){
-  const char *z;
-  if( !zSql ) return 0;
-  for(z=zSql; *z; z++){
-    if( sqlite3_strnicmp(z, "INTEGER PRIMARY KEY", 19)==0 ) return 0;
+static int tableSqlNeedsClusteredPkAutoindex(
+  const char *zSql,
+  const char *zName,
+  int *pNeeds
+){
+  sqlite3 *tmp = 0;
+  InitData initData;
+  char *zErr = 0;
+  char *azRow[5];
+  Table *pTab;
+  int rc;
+
+  *pNeeds = 0;
+  rc = sqlite3_open_v2(":memory:", &tmp, SQLITE_OPEN_READONLY, 0);
+  if( rc==SQLITE_OK ){
+    sqlite3_mutex_enter(tmp->mutex);
+    rc = sqlite3Init(tmp, &zErr);
+    if( rc==SQLITE_OK ){
+      memset(&initData, 0, sizeof(initData));
+      initData.db = tmp;
+      initData.pzErrMsg = &zErr;
+      azRow[0] = "table";
+      azRow[1] = (char*)zName;
+      azRow[2] = (char*)zName;
+      azRow[3] = "2";
+      azRow[4] = (char*)zSql;
+      tmp->init.busy = 1;
+      sqlite3InitCallback(&initData, 5, azRow, 0);
+      tmp->init.busy = 0;
+      rc = initData.rc;
+      pTab = sqlite3FindTable(tmp, zName, "main");
+      if( !pTab && rc==SQLITE_OK ) rc = SQLITE_CORRUPT;
+      if( rc==SQLITE_OK ){
+        *pNeeds = IsDoltClusteredPk(pTab) && pTab->iPKey<0
+            && sqlite3PrimaryKeyIndex(pTab)!=0;
+      }
+    }
+    sqlite3DbFree(tmp, zErr);
+    sqlite3_mutex_leave(tmp->mutex);
   }
-  for(z=zSql; *z; z++){
-    if( sqlite3_strnicmp(z, "PRIMARY KEY", 11)==0 ) return 1;
-  }
-  return 0;
+  sqlite3_close(tmp);
+  return rc;
 }
 
 static int schemaHasName(SchemaEntry *a, int n, const char *zName){
@@ -309,6 +341,7 @@ int rebuildDisjointSchemaRows(
   for(i=0; i<nMerged; i++){
     const char *zName = aMerged[i].zName;
     SchemaEntry *pSe = 0;
+    int needsAutoindex = 0;
 
     if( aMerged[i].iTable<=1 || !zName ) continue;
     pSe = mergedSchemaChoice(aAncSchema, nAncSchema,
@@ -320,7 +353,11 @@ int rebuildDisjointSchemaRows(
                                          pSe, aMerged[i].iTable);
     if( rc!=SQLITE_OK ) return rc;
     if( pSe && pSe->zType && strcmp(pSe->zType, "table")==0
-     && pSe->zSql && tableSqlNeedsClusteredPkAutoindex(pSe->zSql) ){
+     && pSe->zSql ){
+      rc = tableSqlNeedsClusteredPkAutoindex(pSe->zSql, zName, &needsAutoindex);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    if( needsAutoindex ){
       SchemaEntry autoIdx;
       char *zAuto = mergedClusteredPkAutoindexName(
           zName, aAncSchema, nAncSchema, aOursSchema, nOursSchema,

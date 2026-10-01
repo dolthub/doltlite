@@ -955,14 +955,14 @@ static int doltliteCompareAndAdvanceBranchImpl(
   chunkStoreUnlock(cs);
 
   if( rc==SQLITE_OK && bSwitchCatalog ){
+    const ProllyHash *pAdoptCat =
+        pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash)
+            ? pWorkingCatHash : pCatalogHash;
     /* Adopt the catalog after the durable tip is on disk. Failure leaves HEAD
     ** advanced with a recoverable working-set mismatch on reopen. */
-    if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
-      int src = doltliteSwitchCatalog(db, pWorkingCatHash);
-      if( src!=SQLITE_OK ) rc = src;
-    }else{
-      int src = doltliteSwitchCatalog(db, pCatalogHash);
-      if( src!=SQLITE_OK ) rc = src;
+    rc = doltliteSwitchCatalog(db, pAdoptCat);
+    if( rc==SQLITE_OK ){
+      doltliteAdoptRollbackBaseline(db, pAdoptCat);
     }
   }
   return rc;
