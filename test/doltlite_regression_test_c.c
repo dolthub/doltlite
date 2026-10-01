@@ -14428,6 +14428,93 @@ static void run_scan_update_current_row(void){
   removeDbFiles(dbpath);
 }
 
+/* Step a SELECT and delete each row just returned. Pending inserts must
+** be visited once. */
+static void step_delete_pending(
+  sqlite3 *db,
+  const char *zName,
+  const char *zPkDecl,
+  const char *zQuery,
+  int wantB
+){
+  sqlite3_stmt *st = 0;
+  char sql[240];
+  char seen[128];
+  int hits[6];
+  int n = 0;
+  int i;
+  int rc = SQLITE_OK;
+  int ok = 1;
+  memset(hits, 0, sizeof(hits));
+  seen[0] = 0;
+  execSql(db, "DROP TABLE IF EXISTS t");
+  snprintf(sql, sizeof(sql), "CREATE TABLE t(%s, a INT, b TEXT)", zPkDecl);
+  if( execSql(db, sql)!=SQLITE_OK ) ok = 0;
+  if( execSql(db,
+        "CREATE INDEX ta ON t(a);"
+        "INSERT INTO t VALUES(1,1,'b1'),(3,3,'b3'),(5,5,'b5');"
+        "BEGIN;"
+        "INSERT INTO t VALUES(2,2,'b2'),(4,4,'b4');")!=SQLITE_OK ){
+    ok = 0;
+  }
+  rc = sqlite3_prepare_v2(db, zQuery, -1, &st, 0);
+  if( rc!=SQLITE_OK ) ok = 0;
+  while( ok && st && (rc = sqlite3_step(st))==SQLITE_ROW && n<20 ){
+    int pk = sqlite3_column_int(st, 0);
+    const char *zB = 0;
+    n++;
+    if( seen[0] ) strcat(seen, " ");
+    snprintf(seen+strlen(seen), sizeof(seen)-strlen(seen), "%d", pk);
+    if( pk<1 || pk>5 || hits[pk] ) ok = 0;
+    else hits[pk] = 1;
+    if( wantB ){
+      zB = (const char*)sqlite3_column_text(st, 1);
+      if( !zB ) ok = 0;
+      else {
+        char expect[8];
+        snprintf(expect, sizeof(expect), "b%d", pk);
+        if( strcmp(zB, expect)!=0 ) ok = 0;
+      }
+    }
+    snprintf(sql, sizeof(sql), "DELETE FROM t WHERE pk=%d", pk);
+    if( execSql(db, sql)!=SQLITE_OK ) ok = 0;
+  }
+  if( ok && rc!=SQLITE_DONE ) ok = 0;
+  sqlite3_finalize(st);
+  st = 0;
+  if( ok && execSql(db, "COMMIT;")!=SQLITE_OK ) ok = 0;
+  if( ok ){
+    rc = sqlite3_prepare_v2(db, "SELECT count(*) FROM t", -1, &st, 0);
+    if( rc!=SQLITE_OK || sqlite3_step(st)!=SQLITE_ROW
+     || sqlite3_column_int(st, 0)!=0 ){
+      ok = 0;
+    }
+  }
+  sqlite3_finalize(st);
+  for(i=1; ok && i<=5; i++) if( !hits[i] ) ok = 0;
+  if( !ok ) fprintf(stderr, "FAIL detail %s: %s rc=%d\n", zName, seen, rc);
+  check(zName, ok);
+}
+
+static void run_step_delete_pending_rows(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Step Delete Pending Rows Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_step_delete_pending_rows");
+  removeDbFiles(dbpath);
+  check("open_db_for_step_delete_pending", open_db(dbpath, &db)==SQLITE_OK);
+  step_delete_pending(db, "text_pk_table_scan_delete",
+    "pk TEXT PRIMARY KEY", "SELECT pk, b FROM t", 1);
+  step_delete_pending(db, "int_pk_index_scan_delete",
+    "pk INT PRIMARY KEY", "SELECT pk FROM t INDEXED BY ta WHERE a>0", 0);
+  step_delete_pending(db, "integer_pk_index_scan_delete",
+    "pk INTEGER PRIMARY KEY",
+    "SELECT pk, b FROM t INDEXED BY ta WHERE a>0", 1);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_intpk_scan_delete_keeps_scan(void){
   sqlite3 *db = 0;
   sqlite3_stmt *scan = 0;
@@ -15304,6 +15391,7 @@ static const RegressionCase aCases[] = {
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
   { "scan_update_current_row", "Scan Update Current Row Test", run_scan_update_current_row },
+  { "step_delete_pending_rows", "Step Delete Pending Rows Test", run_step_delete_pending_rows },
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
   { "index_build_flush_resets_cursor", "Index Build Flush Resets Cursor Test", run_index_build_flush_resets_cursor },

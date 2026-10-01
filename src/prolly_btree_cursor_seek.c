@@ -1314,6 +1314,27 @@ int cachedSeekKeyMatchesCurrent(BtCursor *pCur){
       && memcmp(pKey, pCur->pSeekSortKey, nKey)==0;
 }
 
+/* First visible entry at or above pKey. *pExact is 1 when that key matches. */
+int prollyBtCursorSeekMergedAtOrAfter(
+  BtCursor *pCur,
+  const u8 *pKey,
+  int nKey,
+  int *pExact
+){
+  const u8 *pLand = 0;
+  int nLand = 0;
+  int rc;
+  if( pExact ) *pExact = 0;
+  rc = seekMergedLowerBound(pCur, pKey, nKey);
+  if( rc!=SQLITE_OK || pCur->eState!=CURSOR_VALID ) return rc;
+  rc = currentMergedKey(pCur, &pLand, &nLand);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pExact && nLand==nKey && memcmp(pLand, pKey, (size_t)nKey)==0 ){
+    *pExact = 1;
+  }
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
