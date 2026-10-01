@@ -103,29 +103,53 @@ echo ""
 echo "--- Point SELECT (100 lookups, one process) ---"
 
 # One script, not 100 process starts. A primary-key lookup stays flat from
-# 100K to 1M; a scan of the same statements grows with the table.
+# 100K to 1M; a scan of the same statements grows with the table. A failing
+# command is not a timing: the ratio checks run only after all three succeed.
 point_select_ms() {
   local db="$1" id="$2"
   local sql="/tmp/perf_sel_$$.sql"
+  local start end rc
   python3 -c "
 for i in range(100):
     print('SELECT v FROM t WHERE id=$id;')
 " > "$sql"
-  time_ms "$DOLTLITE '$db' < '$sql'"
+  start=$(python3 -c 'import time; print(int(time.time()*1000))')
+  $DOLTLITE "$db" < "$sql" > /dev/null 2>&1
+  rc=$?
+  end=$(python3 -c 'import time; print(int(time.time()*1000))')
   rm -f "$sql"
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL $rc"
+    return
+  fi
+  echo $((end - start))
+}
+
+note_point_select() {
+  local label="$1" value="$2"
+  case "$value" in
+    FAIL\ *)
+      FAIL=$((FAIL+1))
+      ERRORS="$ERRORS\nFAIL: point_select_$label\n  doltlite exited ${value#FAIL }"
+      echo "  FAIL: point select $label exited ${value#FAIL }"
+      ;;
+    *)
+      echo "  $label: ${value}ms"
+      ;;
+  esac
 }
 
 T_SEL_1K=$(point_select_ms "$DB_1K" 500)
-echo "  1K: ${T_SEL_1K}ms"
-
+note_point_select "1K" "$T_SEL_1K"
 T_SEL_100K=$(point_select_ms "$DB_100K" 50000)
-echo "  100K: ${T_SEL_100K}ms"
-
+note_point_select "100K" "$T_SEL_100K"
 T_SEL_1M=$(point_select_ms "$DB_1M" 500000)
-echo "  1M: ${T_SEL_1M}ms"
+note_point_select "1M" "$T_SEL_1M"
 
-assert_ratio "select_1k_to_100k" "$T_SEL_1K" "$T_SEL_100K" 10
-assert_ratio "select_100k_to_1m" "$T_SEL_100K" "$T_SEL_1M" 3
+if [[ "$T_SEL_1K" != FAIL\ * && "$T_SEL_100K" != FAIL\ * && "$T_SEL_1M" != FAIL\ * ]]; then
+  assert_ratio "select_1k_to_100k" "$T_SEL_1K" "$T_SEL_100K" 10
+  assert_ratio "select_100k_to_1m" "$T_SEL_100K" "$T_SEL_1M" 3
+fi
 
 echo ""
 echo "--- Single-row UPDATE ---"
