@@ -237,6 +237,12 @@ struct MergeRowPolicy {
   int *aiDualAddFields;
 };
 
+int mergeRowAddedDefaults(
+  MergePass1Ctx *c, const char *zName, sqlite3 *pSchemaDb,
+  const struct TableEntry *pOurs, const struct TableEntry *pAnc,
+  const ProllyHash *pTheirsRoot, int useTheirs,
+  ProllyHash *pOurOut, ProllyHash *pAncOut, ProllyHash *pTheirOut
+);
 int mergeRowPolicy(
   MergePass1Ctx *c, const char *zName, Table *pTab,
   int useTheirs, MergeRowPolicy *pPolicy

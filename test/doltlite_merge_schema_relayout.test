@@ -484,4 +484,95 @@ foreach operation {merge cherry_pick} {
   }
 }
 
+foreach keymode {integer text without-rowid} {
+  set key {id INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode ne "integer"} {set key {id TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+  foreach shape {later-column rename-with-add explicit-null null-with-add} {
+    foreach operation {merge cherry_pick} {
+      foreach direction {forward reverse} {
+        reset_db
+        execsql "CREATE TABLE t($key, a INT, b INT) $suffix"
+        execsql {
+          INSERT INTO t VALUES(1,1,1),(2,2,2);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+        }
+        switch $shape {
+          later-column {
+            set ours {ALTER TABLE t ADD COLUMN x INT;}
+            set theirs {
+              ALTER TABLE t ADD COLUMN w INT DEFAULT 5;
+              ALTER TABLE t ADD COLUMN y INT;
+              UPDATE t SET y=10 WHERE id=2;
+              INSERT INTO t VALUES(3,3,3,8,30);
+            }
+            set query {SELECT id,a,b,quote(x),w,quote(y) FROM t ORDER BY id}
+            set rows {1 1 1 NULL 5 NULL 2 2 2 NULL 5 10 3 3 3 NULL 8 30}
+          }
+          rename-with-add {
+            set ours {
+              ALTER TABLE t ADD COLUMN x INT DEFAULT 0;
+              ALTER TABLE t ADD COLUMN y TEXT;
+              UPDATE t SET y='B' WHERE id=1;
+              INSERT INTO t VALUES(3,3,3,9,'C');
+            }
+            set theirs {ALTER TABLE t RENAME COLUMN b TO bb;}
+            set query {SELECT id,a,bb,x,quote(y) FROM t ORDER BY id}
+            set rows {1 1 1 0 'B' 2 2 2 0 NULL 3 3 3 9 'C'}
+          }
+          explicit-null - null-with-add {
+            if {$shape eq "explicit-null"} {
+              set ours {ALTER TABLE t RENAME COLUMN b TO bb;}
+              set query {SELECT id,a,bb,quote(n) FROM t ORDER BY id}
+              set rows {1 1 1 NULL 2 2 2 7 3 3 3 NULL}
+            } else {
+              set ours {ALTER TABLE t ADD COLUMN x INT DEFAULT 4;}
+              set query {SELECT id,a,b,x,quote(n) FROM t ORDER BY id}
+              set rows {1 1 1 4 NULL 2 2 2 4 7 3 3 3 4 NULL}
+            }
+            set theirs {
+              ALTER TABLE t ADD COLUMN n INT DEFAULT 7;
+              UPDATE t SET n=NULL WHERE id=1;
+              INSERT INTO t VALUES(3,3,3,NULL);
+            }
+          }
+        }
+        execsql $ours
+        execsql {
+          SELECT dolt_commit('-Am','ours');
+          SELECT dolt_checkout('side');
+        }
+        execsql $theirs
+        execsql {SELECT dolt_commit('-Am','theirs')}
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target side
+          set reopen [file normalize test.db]
+        } else {
+          set target main
+          set reopen "[file normalize test.db]/side"
+        }
+        set name default-replay-$keymode-$shape-$operation-$direction
+        do_test $name-apply {
+          execsql "SELECT dolt_${operation}('$target')"
+          execsql {SELECT count(*) FROM dolt_conflicts}
+        } {0}
+        do_test $name-rows {execsql $query} $rows
+        do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+        db close
+        sqlite3 db $reopen
+        do_test $name-reopen {execsql $query} $rows
+        do_execsql_test $name-reopen-integrity {PRAGMA integrity_check} {ok}
+        do_test $name-normal-alter {
+          execsql {ALTER TABLE t ADD COLUMN after_merge TEXT DEFAULT 'ordinary'}
+          execsql {SELECT after_merge FROM t ORDER BY id}
+        } {ordinary ordinary ordinary}
+        do_test $name-normal-alter-rows {execsql $query} $rows
+      }
+    }
+  }
+}
+
 finish_test

@@ -1944,6 +1944,7 @@ struct sqlite3 {
 #ifdef DOLTLITE_PROLLY
 #define DBFLAG_VacuumOrig     0x0080  /* Open the VACUUM target as orig-format */
 #define DBFLAG_InternalDml    0x0100  /* Running DML the user did not write */
+#define DBFLAG_MergeSchemaAdd 0x0200
 #endif
 
 /*
