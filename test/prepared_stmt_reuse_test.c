@@ -655,9 +655,15 @@ static void test_content_change_aborts_open_cursor(void){
 }
 
 
-/* A write between steps of an index scan, before the deferred primary-key
-** seek runs, must not hand the scan another row's columns. */
-static void deferredPkSeekScan(sqlite3 *db, int txn, char *zOut, int nOut){
+/* Steps zSql over t joined to a two-row y, deleting t's first row after the
+** first output row, and records "col0/col1" for every row. */
+static void scanDeletingCurrentRow(
+  sqlite3 *db,
+  const char *zSql,
+  int txn,
+  char *zOut,
+  int nOut
+){
   sqlite3_stmt *pStmt = 0;
   int rc;
   int i;
@@ -671,9 +677,7 @@ static void deferredPkSeekScan(sqlite3 *db, int txn, char *zOut, int nOut){
     "INSERT INTO t VALUES('p1',1,'b1'),('p2',2,'b2'),('p3',3,'b3');"
     "CREATE TABLE y(v INT); INSERT INTO y VALUES(0),(1);", 0, 0, 0);
   if( txn ) sqlite3_exec(db, "BEGIN", 0, 0, 0);
-  sqlite3_prepare_v2(db,
-    "SELECT t.pk, CASE WHEN y.v=1 THEN t.b END "
-    "FROM t INDEXED BY ta CROSS JOIN y WHERE t.a>0", -1, &pStmt, 0);
+  sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
   for(i=0; (rc = sqlite3_step(pStmt))==SQLITE_ROW; i++){
     const char *zPk = (const char*)sqlite3_column_text(pStmt, 0);
     const char *zB = (const char*)sqlite3_column_text(pStmt, 1);
@@ -686,23 +690,40 @@ static void deferredPkSeekScan(sqlite3 *db, int txn, char *zOut, int nOut){
   if( txn ) sqlite3_exec(db, "COMMIT", 0, 0, 0);
 }
 
+/* A write between steps of an index scan, before the deferred primary-key
+** seek runs, must not hand the scan another row's columns; a covering read
+** of the deleted row must not see it either, inside a transaction too. */
 static void test_deferred_pk_seek_after_write(void){
+  static const struct {
+    const char *zName;
+    const char *zSql;
+    const char *zExpect;
+  } aCase[] = {
+    { "deferred_pk_seek",
+      "SELECT t.pk, CASE WHEN y.v=1 THEN t.b END "
+      "FROM t INDEXED BY ta CROSS JOIN y WHERE t.a>0",
+      "p1/NULL NULL/NULL p2/NULL p2/b2 p3/NULL p3/b3" },
+    { "covering_index_read",
+      "SELECT t.pk, t.a FROM t INDEXED BY ta CROSS JOIN y WHERE t.a>0",
+      "p1/1 NULL/NULL p2/2 p2/2 p3/3 p3/3" }
+  };
   char zPath[256];
   char zOut[256];
+  char zName[64];
   sqlite3 *db = 0;
+  int i, txn;
 
   snprintf(zPath, sizeof(zPath), "/tmp/deferred_pk_seek_%d.db", (int)getpid());
   remove(zPath);
   sqlite3_open(zPath, &db);
-  deferredPkSeekScan(db, 0, zOut, sizeof(zOut));
-  check_str("deferred_pk_seek_autocommit", zOut,
-            "p1/NULL NULL/NULL p2/NULL p2/b2 p3/NULL p3/b3");
-  deferredPkSeekScan(db, 1, zOut, sizeof(zOut));
-  check("deferred_pk_seek_txn_no_error", strstr(zOut, "rc=")==0);
-  check("deferred_pk_seek_txn_deleted_row_has_no_columns",
-        strstr(zOut, "/b1")==0);
-  check("deferred_pk_seek_txn_later_rows",
-        strstr(zOut, "p2/NULL p2/b2 p3/NULL p3/b3")!=0);
+  for(i=0; i<(int)(sizeof(aCase)/sizeof(aCase[0])); i++){
+    for(txn=0; txn<2; txn++){
+      scanDeletingCurrentRow(db, aCase[i].zSql, txn, zOut, sizeof(zOut));
+      snprintf(zName, sizeof(zName), "%s_%s",
+               aCase[i].zName, txn ? "txn" : "autocommit");
+      check_str(zName, zOut, aCase[i].zExpect);
+    }
+  }
   sqlite3_close(db);
   remove(zPath);
 }
