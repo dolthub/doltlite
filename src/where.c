@@ -4303,19 +4303,30 @@ static int whereLoopAddBtree(
     if( pSrc->fg.notIndexed
      && pProbe->idxType!=SQLITE_IDXTYPE_IPK
      && !IsPrimaryKeyIndex(pProbe) ) break;
-    if( pProbe->idxType!=SQLITE_IDXTYPE_IPK
-     && (HasRowid(pProbe->pTable) || !IsPrimaryKeyIndex(pProbe)) ){
+    if( pProbe->idxType!=SQLITE_IDXTYPE_IPK ){
       int iDb = sqlite3SchemaToIndex(db, pProbe->pSchema);
       int hasNocaseNul = 0;
+      int nOrderCol = IsPrimaryKeyIndex(pProbe)
+        ? pProbe->nKeyCol : pProbe->nColumn;
       if( iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
        && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
         /* Ask every time rather than latch the first positive answer: the
         ** key that made it positive can be deleted, and the index is then
         ** ordered again. The btree memoises this, so asking is cheap. */
         rc = sqlite3BtreeProllyIndexHasNocaseNul(
-            db->aDb[iDb].pBt, pProbe->tnum, pProbe->nKeyCol,
+            db->aDb[iDb].pBt, pProbe->tnum, nOrderCol,
             pProbe->azColl, &hasNocaseNul);
         if( rc!=SQLITE_OK ) break;
+        /* Trigger and RETURNING reads may see NUL keys inserted by this VM. */
+        if( pWInfo->pParse->pTriggerTab ){
+          int iCol;
+          for(iCol=0; iCol<nOrderCol; iCol++){
+            if( sqlite3StrICmp(pProbe->azColl[iCol], "NOCASE")==0 ){
+              hasNocaseNul = 1;
+              break;
+            }
+          }
+        }
         pProbe->bNocaseNul = hasNocaseNul ? 1 : 0;
       }
       if( pProbe->bNocaseNul ){

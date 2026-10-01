@@ -1338,6 +1338,7 @@ int prollyBtCursorSeekMergedAtOrAfter(
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
+  int bStorageOrder,
   int *pRes
 ){
   const u8 *pKey = 0;
@@ -1352,7 +1353,8 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
     return SQLITE_NOTFOUND;
   }
   /* Sort keys disagree with NOCASE once a probe contains a NUL. */
-  if( unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey) ){
+  if( !bStorageOrder
+   && unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey) ){
     return SQLITE_NOTFOUND;
   }
 

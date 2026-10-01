@@ -141,6 +141,89 @@ SELECT a, b, v FROM t;
 
 echo "--- PK collation ---"
 
+for suffix in "" "WITHOUT ROWID"; do
+  oracle "nocase_nul_composite_${suffix:-rowid}" "
+CREATE TABLE t(e TEXT COLLATE NOCASE NOT NULL, a INT NOT NULL,
+               PRIMARY KEY(e,a)) $suffix;
+INSERT INTO t VALUES
+  ('x'||char(0)||'b',1),('x'||char(0)||'a',2),
+  ('X'||char(0)||'b',3),('x'||char(0)||'a',4);
+SELECT group_concat(a) FROM (SELECT a FROM t
+  WHERE e='x'||char(0)||'q' ORDER BY a);
+SELECT group_concat(a) FROM (SELECT a FROM t
+  WHERE e='x'||char(0)||'q' AND a>1 ORDER BY a);
+SELECT count(*) FROM t WHERE e='x'||char(0)||'q' AND a BETWEEN 2 AND 3;
+SELECT group_concat(a) FROM (SELECT a FROM t ORDER BY e,a DESC LIMIT 3);
+SELECT min(a), max(a) FROM t WHERE e='x'||char(0)||'q';
+SELECT count(DISTINCT e) FROM t;
+SELECT count(*) FROM t GROUP BY e;
+PRAGMA integrity_check;
+"
+
+  oracle "nocase_nul_nonleading_${suffix:-rowid}" "
+CREATE TABLE t(v TEXT, b TEXT NOT NULL, e TEXT COLLATE NOCASE NOT NULL,
+               a INT NOT NULL, PRIMARY KEY(b,e,a DESC)) $suffix;
+INSERT INTO t VALUES
+  ('v1','k','x'||char(0)||'b',1),('v2','k','x'||char(0)||'a',2),
+  ('v3','k','X'||char(0)||'b',3),('v4','k','x'||char(0)||'a',4),
+  ('other','z','x'||char(0)||'a',5);
+SELECT group_concat(a) FROM (SELECT a FROM t
+  WHERE b='k' AND e='x'||char(0)||'q' ORDER BY a);
+SELECT group_concat(v) FROM (SELECT v FROM t
+  WHERE b='k' AND e='x'||char(0)||'q' AND a BETWEEN 2 AND 3 ORDER BY a);
+SELECT group_concat(a) FROM (SELECT a FROM t WHERE b='k' ORDER BY e,a DESC);
+CREATE INDEX t_b ON t(b);
+SELECT group_concat(a) FROM (SELECT a FROM t INDEXED BY t_b
+  WHERE b='k' AND e='x'||char(0)||'q' ORDER BY a);
+SELECT group_concat(a) FROM (SELECT a FROM t INDEXED BY t_b
+  WHERE b='k' ORDER BY e,a DESC);
+PRAGMA integrity_check;
+"
+
+  oracle "nocase_nul_single_${suffix:-rowid}" "
+CREATE TABLE t(k TEXT COLLATE NOCASE NOT NULL PRIMARY KEY) $suffix;
+INSERT INTO t VALUES
+  ('x'||char(0)||'b'),('X'||char(0)||'aa'),('x'||char(0)||'zzzz'),('a');
+SELECT hex(k) FROM t ORDER BY k;
+SELECT hex(k) FROM t WHERE k>'x'||char(0)||'q' ORDER BY k DESC;
+SELECT hex(min(k)), hex(max(k)) FROM t;
+PRAGMA integrity_check;
+"
+
+  oracle "nocase_nul_trigger_${suffix:-rowid}" "
+CREATE TABLE t(e TEXT COLLATE NOCASE NOT NULL, a INT NOT NULL,
+               PRIMARY KEY(e,a)) $suffix;
+CREATE TABLE logs(k INTEGER PRIMARY KEY, s TEXT);
+CREATE TRIGGER ti AFTER INSERT ON t BEGIN
+  INSERT INTO logs(s) SELECT group_concat(a) FROM (SELECT a FROM t ORDER BY e,a);
+END;
+INSERT INTO t VALUES
+  ('x'||char(0)||'b',1),('x'||char(0)||'a',2),
+  ('x'||char(0)||'b',3),('x'||char(0)||'a',4);
+SELECT s FROM logs ORDER BY k;
+PRAGMA integrity_check;
+"
+
+  oracle "nocase_nul_returning_${suffix:-rowid}" "
+CREATE TABLE t(e TEXT COLLATE NOCASE NOT NULL, a INT NOT NULL,
+               PRIMARY KEY(e,a)) $suffix;
+INSERT INTO t VALUES
+  ('x'||char(0)||'b',1),('x'||char(0)||'a',2),
+  ('x'||char(0)||'b',3),('x'||char(0)||'a',4)
+RETURNING (SELECT group_concat(a) FROM (SELECT a FROM t ORDER BY e,a));
+PRAGMA integrity_check;
+"
+
+  oracle_error "nocase_nul_duplicate_${suffix:-rowid}"     "UNIQUE constraint failed: t.e, t.a" "
+CREATE TABLE t(e TEXT COLLATE NOCASE NOT NULL, a INT NOT NULL,
+               PRIMARY KEY(e,a)) $suffix;
+INSERT INTO t VALUES('x'||char(0)||'a',1);
+INSERT INTO t VALUES('X'||char(0)||'b',1);
+SELECT a FROM t;
+"
+done
+
+
 oracle_error "text_pk_nocase" "UNIQUE constraint failed: t.k" "
 CREATE TABLE t(k TEXT PRIMARY KEY COLLATE NOCASE, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES('Alice', 1);

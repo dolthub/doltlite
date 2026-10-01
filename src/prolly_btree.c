@@ -17,7 +17,7 @@ static int registerDoltiteFunctions(sqlite3 *db);
 #define NOCASE_MASK_MAX_COL 32
 
 static int recordHasNocaseNulSlow(const u8*, int, int,
-                                  const char *const *, int*);
+                                  const char *const *, const KeyInfo*, int*);
 
 static u32 nocaseCollMask(int nKeyCol, const char *const *azColl, int *pOk){
   u32 mask = 0;
@@ -79,7 +79,7 @@ static int recordHasNocaseNul(
     mask = nocaseCollMask(nKeyCol, azColl, &ok);
     if( ok ) return doltliteRecordMaskHasNocaseNul(pRec, nRec, mask, pHas);
   }
-  return recordHasNocaseNulSlow(pRec, nRec, nKeyCol, azColl, pHas);
+  return recordHasNocaseNulSlow(pRec, nRec, nKeyCol, azColl, 0, pHas);
 }
 
 static int recordHasNocaseNulSlow(
@@ -87,6 +87,7 @@ static int recordHasNocaseNulSlow(
   int nRec,
   int nKeyCol,
   const char *const *azColl,
+  const KeyInfo *pKeyInfo,
   int *pHas
 ){
   u64 nHdr;
@@ -102,13 +103,19 @@ static int recordHasNocaseNulSlow(
   while( (u64)iHdr<nHdr ){
     u64 serialType;
     int nField;
+    const char *zColl = 0;
     int nVarint = dlReadVarint(pRec+iHdr, pRec+(int)nHdr, &serialType);
     if( nVarint<=0 || (u64)(iHdr+nVarint)>nHdr ) return SQLITE_CORRUPT;
     nField = dlSerialTypeLen(serialType);
     if( nField<0 || (u64)nField>(u64)nRec-iData ) return SQLITE_CORRUPT;
+    if( iField<nKeyCol ){
+      zColl = pKeyInfo
+        ? (pKeyInfo->aColl[iField] ? pKeyInfo->aColl[iField]->zName : 0)
+        : azColl[iField];
+    }
     if( iField<nKeyCol
      && serialType>=13 && (serialType&1)!=0
-     && sqlite3StrICmp(azColl[iField], "NOCASE")==0
+     && zColl && sqlite3StrICmp(zColl, "NOCASE")==0
      && nField>0 && memchr(pRec+(int)iData, 0, (size_t)nField)!=0 ){
       *pHas = 1;
     }
@@ -127,6 +134,27 @@ int doltliteRecordHasNocaseNulForTest(
   int *pHas
 ){
   return recordHasNocaseNul(pRec, nRec, nKeyCol, azColl, pHas);
+}
+
+int doltliteBtreeNocaseNulInsert(BtCursor *pCur, const u8 *pRec, int nRec){
+  struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  int has = 0;
+  int rc;
+  if( !pTE || pTE->nocaseNulState!=1 || !pCur->pKeyInfo ){
+    return SQLITE_OK;
+  }
+  if( pTE->nocaseNulMaskValid ){
+    rc = doltliteRecordMaskHasNocaseNul(pRec, nRec, pTE->nocaseNulMask, &has);
+  }else{
+    rc = recordHasNocaseNulSlow(pRec, nRec, pCur->pKeyInfo->nAllField,
+                               0, pCur->pKeyInfo, &has);
+  }
+  if( rc==SQLITE_OK && has ){
+    pTE->nocaseNulState = 0;
+    pTE->nocaseNulMaskValid = 0;
+    sqlite3ExpirePreparedStatements(pCur->pBtree->db, 1);
+  }
+  return rc;
 }
 
 int sqlite3BtreeProllyIndexHasNocaseNul(

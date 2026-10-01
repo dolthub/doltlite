@@ -277,9 +277,11 @@ int sqlite3BtreeIndexMoveto(
 );
 #if defined(DOLTLITE_PROLLY)
 int sqlite3BtreeProllyIndexMovetoExact(BtCursor*, UnpackedRecord*, int*);
+#define BTREE_COMPARE_STORAGE_ORDER 0x02
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor*,
   UnpackedRecord *pUnKey,
+  int bStorageOrder,
   int *pRes
 );
 int sqlite3BtreeProllyIndexRowid(BtCursor*, i64*);
