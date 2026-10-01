@@ -83,7 +83,7 @@ void mergeMapColumnsToAncestor(
         nMissing++;
       }
     }
-    if( nMissing==end-start ){
+    if( nMissing<=end-start ){
       i = start;
       for(k=last+1; k<next; k++){
         if( parsedColumnIndexByName(aSide, nSide, aAnc[k].zName)<0 ){

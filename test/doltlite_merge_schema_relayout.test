@@ -252,4 +252,53 @@ foreach keymode {integer text without-rowid} {
   }
 }
 
+foreach keymode {integer text without-rowid} {
+  set key {id INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode ne "integer"} {set key {id TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+  foreach operation {merge cherry_pick} {
+    foreach direction {forward reverse} {
+      reset_db
+      execsql "CREATE TABLE t($key, v TEXT) $suffix"
+      execsql {
+        CREATE INDEX u ON t(v);
+        INSERT INTO t VALUES(1,'base');
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('side');
+        ALTER TABLE t RENAME COLUMN v TO val;
+        ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'remote-default';
+        UPDATE t SET note='remote-note' WHERE id=1;
+        INSERT INTO t VALUES(200,'from-remote','remote-row');
+        SELECT dolt_commit('-am','ddl');
+        SELECT dolt_checkout('side');
+        INSERT INTO t VALUES(100,'from-local');
+        SELECT dolt_commit('-am','dml');
+      }
+      if {$direction eq "forward"} {
+        execsql {SELECT dolt_checkout('main')}
+        set target side
+        set reopen [file normalize test.db]
+      } else {
+        set target main
+        set reopen "[file normalize test.db]/side"
+      }
+      set name rename-add-$keymode-$operation-$direction
+      do_test $name-apply {
+        execsql "SELECT dolt_${operation}('$target')"
+        execsql {SELECT count(*) FROM dolt_conflicts}
+      } {0}
+      set rows {1 base remote-note 100 from-local remote-default 200 from-remote remote-row}
+      do_execsql_test $name-rows {SELECT * FROM t NOT INDEXED ORDER BY id} $rows
+      do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+      db close
+      sqlite3 db $reopen
+      do_execsql_test $name-reopen {
+        SELECT * FROM t NOT INDEXED ORDER BY id;
+        PRAGMA integrity_check;
+      } [concat $rows ok]
+    }
+  }
+}
+
 finish_test
