@@ -2837,7 +2837,8 @@ DOLTLITE_C_TESTS = \
 	record_info_stack_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe) \
 	crash_recovery_test$(T.exe) \
-	concurrent_branch_test$(T.exe)
+	concurrent_branch_test$(T.exe) \
+	concurrent_refs_merge_test$(T.exe)
 
 serialize_pending_test$(T.exe): $(TOP)/test/serialize_pending_test.c $(TOP)/test/lib/temp_db_dir.h libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/serialize_pending_test.c \
@@ -3053,6 +3054,10 @@ crash_recovery_test$(T.exe): $(TOP)/test/crash_recovery_test.c libdoltlite$(T.li
 
 concurrent_branch_test$(T.exe): $(TOP)/test/concurrent_branch_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/concurrent_branch_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+concurrent_refs_merge_test$(T.exe): $(TOP)/test/concurrent_refs_merge_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/concurrent_refs_merge_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 doltlite-c-tests-build: $(DOLTLITE_C_TESTS)
