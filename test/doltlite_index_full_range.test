@@ -1,0 +1,125 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-index-full-range
+
+foreach {shape schema index predicate} {
+  rowid {id INTEGER PRIMARY KEY,c INT,v TEXT} {c} {c=1}
+  multicolumn {id INTEGER PRIMARY KEY,c INT,v TEXT} {c,v} {c=1 AND v='a'}
+  nocase {id INTEGER PRIMARY KEY,c TEXT,v TEXT} {c COLLATE NOCASE} {c='A' COLLATE NOCASE}
+  primary {id INT NOT NULL PRIMARY KEY,c INT,v TEXT} {id} {1}
+  primary-desc {id INT NOT NULL PRIMARY KEY,c INT,v TEXT} {id DESC} {1}
+  partial {id INT NOT NULL PRIMARY KEY,c INT,v TEXT} {id} {id>2}
+  without-rowid {id INT PRIMARY KEY,c INT,v TEXT} {id} {1}
+  composite {id INT,c INT,v TEXT,PRIMARY KEY(c,id)} {c} {c=1}
+} {
+  foreach origin {empty mixed} {
+    foreach scale {small extended} {
+      reset_db
+      forcedelete full-range-oracle.db
+      sqlite3 oracle {file:full-range-oracle.db?doltlite_engine=sqlite} -uri 1
+      if {$shape eq "nocase"} {set c1 'a'; set c2 'b'} else {set c1 1; set c2 2}
+      if {$scale eq "small"} {set offset 0} else {set offset 9007199254740992}
+      set suffix {}
+      set where {}
+      if {$shape eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+      if {$shape eq "partial"} {set where {WHERE id>2}}
+      foreach conn {db oracle} {
+        $conn eval "CREATE TABLE t($schema) $suffix"
+        $conn eval "CREATE INDEX tc ON t($index) $where"
+        if {$origin eq "mixed"} {
+          $conn eval "INSERT INTO t VALUES
+            ($offset-5,$c1,'a'),($offset+2,$c1,'a'),
+            ($offset+6,$c1,'a'),($offset+8,$c2,'a')"
+        }
+        $conn eval "BEGIN; INSERT INTO t VALUES
+          ($offset-3,$c1,'a'),($offset+1,$c1,'a'),
+          ($offset+3,$c1,'a'),($offset+5,$c2,'a'),
+          ($offset+7,$c1,'b')"
+        if {$origin eq "mixed"} {
+          $conn eval "DELETE FROM t WHERE id=$offset+6;
+            UPDATE t SET c=$c2 WHERE id=$offset+2"
+        }
+      }
+      foreach state {pending savepoint rollback committed reopened} {
+        foreach conn {db oracle} {
+          switch $state {
+            savepoint {$conn eval "SAVEPOINT s;
+              DELETE FROM t WHERE id=$offset+1;
+              INSERT INTO t VALUES($offset+4,$c1,'a')"}
+            rollback {$conn eval {ROLLBACK TO s; RELEASE s}}
+            committed {$conn eval {COMMIT}}
+            reopened {
+              if {$conn eq "db"} {sqlite3 db test.db} else {
+                oracle close
+                sqlite3 oracle {file:full-range-oracle.db?doltlite_engine=sqlite} -uri 1
+              }
+            }
+          }
+        }
+        foreach bound {-10 -3 0 1 2 2.5 3 4 7 10} {
+          foreach op {< <= > >=} {
+            foreach order {ASC DESC} {
+              set query "SELECT id,c,v FROM t INDEXED BY tc
+                WHERE $predicate AND id $op ($offset+$bound) ORDER BY id $order"
+              do_test $shape-$origin-$scale-$state-$bound-$op-$order \
+                  [list db eval $query] [oracle eval $query]
+              if {$bound in {1 2 3}} {
+                do_test $shape-$origin-$scale-$state-$bound-$op-$order-limit \
+                    [list db eval "$query LIMIT 1"] [oracle eval "$query LIMIT 1"]
+              }
+            }
+            if {$bound in {1 2 3}} {
+              foreach aggregate {min max} {
+                set query "SELECT ${aggregate}(id) FROM t INDEXED BY tc
+                  WHERE $predicate AND id $op ($offset+$bound)"
+                do_test $shape-$origin-$scale-$state-$bound-$op-$aggregate \
+                    [list db eval $query] [oracle eval $query]
+              }
+            }
+          }
+        }
+      }
+      foreach conn {db oracle} {$conn eval {CREATE TABLE saved AS SELECT * FROM t}}
+      foreach op {< <= > >=} {
+        foreach action {UPDATE MOVE DELETE} {
+          foreach conn {db oracle} {
+            $conn eval {DELETE FROM t}
+            if {$origin eq "mixed"} {
+              $conn eval "INSERT INTO t SELECT * FROM saved WHERE id<$offset"
+              set remaining "WHERE id>=$offset"
+            } else {set remaining {}}
+            $conn eval "BEGIN; INSERT INTO t SELECT * FROM saved $remaining;
+              INSERT INTO t VALUES($offset+4,$c1,'a')"
+          }
+          switch $action {
+            UPDATE {set sql {UPDATE t INDEXED BY tc SET v='updated'}}
+            MOVE {set sql "UPDATE t INDEXED BY tc SET c=$c2,v='moved'"}
+            DELETE {set sql {DELETE FROM t INDEXED BY tc}}
+          }
+          set sql "$sql WHERE $predicate AND id $op ($offset+2)"
+          set expected [oracle eval "$sql; SELECT changes()"]
+          do_test $shape-$origin-$scale-$op-$action-changes \
+              [list db eval "$sql; SELECT changes()"] $expected
+          do_test $shape-$origin-$scale-$op-$action-rows {
+            expr {[db eval {SELECT * FROM t ORDER BY id,c}] eq
+                  [oracle eval {SELECT * FROM t ORDER BY id,c}]}
+          } 1
+          foreach conn {db oracle} {$conn eval {COMMIT}}
+          do_test $shape-$origin-$scale-$op-$action-committed {
+            expr {[db eval {SELECT * FROM t ORDER BY id,c}] eq
+                  [oracle eval {SELECT * FROM t ORDER BY id,c}]}
+          } 1
+          do_execsql_test $shape-$origin-$scale-$op-$action-integrity {
+            PRAGMA integrity_check;
+          } {ok}
+          foreach conn {db oracle} {
+            $conn eval {DELETE FROM t; INSERT INTO t SELECT * FROM saved}
+          }
+        }
+      }
+      oracle close
+    }
+  }
+}
+
+finish_test

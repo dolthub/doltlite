@@ -260,8 +260,9 @@ static int findMatchingMutMapEntry(
     return SQLITE_OK;
   }
 
-  if( bExactKey
-   || (pKeyInfo && pIdxKey->nField >= pKeyInfo->nAllField) ){
+  if( pIdxKey->default_rc==0
+   && (bExactKey
+       || (pKeyInfo && pIdxKey->nField >= pKeyInfo->nAllField)) ){
     ProllyMutMapEntry *pEntry = 0;
     rc = prollyMutMapFindRc(pMap, pSortKey, nSortKey, 0, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
@@ -1134,9 +1135,10 @@ static int prollyIndexMoveto(
          || (pPending && pPending!=pCur->pMutMap
              && !prollyMutMapIsEmpty(pPending)))
        && !(treeFound && treeCmp==0)
-       && !(exactMutMapKey
-            || (pCur->pKeyInfo
-                && pIdxKey->nField>=pCur->pKeyInfo->nAllField)) ){
+       && !(pIdxKey->default_rc==0
+            && (exactMutMapKey
+                || (pCur->pKeyInfo
+                    && pIdxKey->nField>=pCur->pKeyInfo->nAllField))) ){
       int savedEqSeen = pIdxKey->eqSeen;
       const u8 *pTreeKey = 0;
       int nTreeKey = 0;
