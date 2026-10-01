@@ -519,8 +519,10 @@ A separate case compares preparing and executing 50 versus 800 indexed
 validation of the committed index during statement preparation.
 
 These shell-level timings include process startup and open, and some include
-SQL generation. Several cases use five-sample medians; the ratio denominator
-has a 50 ms floor. Use the paired SQL and hotspot suites for finer latency
+SQL generation. Point SELECT runs its 100 lookups as one script, and the
+100,000-to-1,000,000 ratio is near-constant so a lookup that becomes a scan
+fails. Several cases use five-sample medians; the ratio denominator has a
+50 ms floor. Use the paired SQL and hotspot suites for finer latency
 comparisons.
 
 ## COUNT performance
