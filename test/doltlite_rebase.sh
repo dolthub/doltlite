@@ -889,6 +889,75 @@ else
 fi
 rm -f "$DB12G"
 
+# The pause catalog has to survive a new connection. ROLLBACK, a failed
+# COMMIT, and closing the paused transaction all used to save a working
+# set whose chunks were still staged in that transaction.
+reopen_paused_rebase() {
+  local name="$1"
+  local first="$2"
+  local db="/tmp/test_rebase_reopen_${name}_$$.db"
+  local tx ic plan fin log
+  seed_rebase_data_conflict "$db"
+  echo "$first" | "$DOLTLITE" "$db" >/dev/null 2>&1
+  tx=$(echo "PRAGMA integrity_check;
+SELECT dolt_checkout('dolt_rebase_feat');
+SELECT 'PLAN|' || (SELECT count(*) FROM dolt_rebase) || '|' || (SELECT v FROM t WHERE id=1) || '|' || (SELECT count(*) FROM dolt_conflicts);
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || (SELECT active_branch()) || '|' || (SELECT v FROM t WHERE id=1);
+SELECT group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$db" 2>&1)
+  ic=$(echo "$tx" | grep -x 'ok')
+  if [ "$ic" = "ok" ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: linear_rebase_${name}_reopen_integrity\n  got: $tx"
+  fi
+  plan=$(echo "$tx" | grep '^PLAN|')
+  if [ "$plan" = "PLAN|1|3|0" ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: linear_rebase_${name}_reopen_plan\n  expected: PLAN|1|3|0\n  got:      $plan\n  out: $tx"
+  fi
+  if echo "$tx" | grep -q 'Successfully rebased and updated refs/heads/feat'; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: linear_rebase_${name}_reopen_continue\n  got: $tx"
+  fi
+  fin=$(echo "$tx" | grep '^DONE|')
+  if [ "$fin" = "DONE|feat|3" ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: linear_rebase_${name}_reopen_value\n  expected: DONE|feat|3\n  got:      $fin"
+  fi
+  log=$(echo "$tx" | grep '^main changes,init$')
+  if [ "$log" = "main changes,init" ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: linear_rebase_${name}_reopen_log\n  got: $tx"
+  fi
+  rm -f "$db"
+}
+reopen_paused_rebase rollback "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+ROLLBACK;"
+reopen_paused_rebase close "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');"
+reopen_paused_rebase commit "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+COMMIT;"
+reopen_paused_rebase unstaged "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_rebase('--continue');"
+
 # A conflicted interactive --continue inside BEGIN pauses on the working
 # branch, and ROLLBACK leaves it there; both match Dolt with autocommit off.
 DB13=/tmp/test_rebase_iconflict_txn_$$.db; rm -f "$DB13"

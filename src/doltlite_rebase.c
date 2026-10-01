@@ -1248,11 +1248,15 @@ static int rebaseCreateAndPopulatePlanTable(
 
 /* BeginTrans pins the pre-pause catalog as the rollback snapshot. Pin the
 ** plan instead, and put the conflict hash back only on the live session,
-** so ROLLBACK keeps the rebase and still drops the conflicts. */
+** so ROLLBACK keeps the rebase and still drops the conflicts. ROLLBACK
+** then discards chunks still staged in this transaction and saves a
+** working set that names the pinned catalog, so those chunks have to be
+** on disk before the pin. */
 static int rebaseAnchorPauseBaseline(sqlite3 *db){
   ProllyHash savedConflicts;
   ProllyHash empty;
   ProllyHash cleanCat;
+  ChunkStore *cs;
   int rc;
   int rc2;
 
@@ -1265,6 +1269,14 @@ static int rebaseAnchorPauseBaseline(sqlite3 *db){
   rc = doltliteSetSessionConflictsCatalog(db, &empty);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteFlushCatalogToHash(db, &cleanCat);
+  cs = doltliteGetChunkStore(db);
+  if( rc==SQLITE_OK && !cs ) rc = SQLITE_ERROR;
+  if( rc==SQLITE_OK ){
+    db->busyHandler.nBusy = 0;
+    do {
+      rc = chunkStoreCommit(cs);
+    }while( rebaseRetryableRc(rc) && rebaseEndBusyRetry(db) );
+  }
   if( rc==SQLITE_OK ) doltliteAdoptRollbackBaseline(db, &cleanCat);
   if( !prollyHashIsEmpty(&savedConflicts) ){
     rc2 = doltliteSetSessionConflictsCatalog(db, &savedConflicts);
