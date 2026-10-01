@@ -699,7 +699,7 @@ int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
 int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   int rc = SQLITE_OK;
   int res = 0;
-  int tombstone = 0;
+  int placed = 0;
 
   assert( pCur!=0 );
   if( pCur->eState!=CURSOR_REQUIRESEEK ){
@@ -713,31 +713,24 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
     rc = prollyBtCursorTableMoveto(pCur, pCur->nKey, 0, &res);
   } else {
     struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+    int exact = 0;
     if( pTE && pTE->pPending && pCur->pMutMap!=(ProllyMutMap*)pTE->pPending ){
       pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
     }
     if( pCur->pKey && pCur->nKey>0 ){
-      int landedMut = 0;
-      if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-        ProllyMutMapEntry *pEntry = 0;
-        rc = prollyMutMapFindRc(pCur->pMutMap,
-                                (const u8*)pCur->pKey, (int)pCur->nKey,
-                                0, &pEntry);
-        if( rc==SQLITE_OK && pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
-          setCursorToMutMapEntryPhys(
-              pCur, (int)(pEntry - pCur->pMutMap->aEntries));
-          pCur->deferredTreeSeek = 1;
-          res = 0;
-          landedMut = 1;
-        }else if( rc==SQLITE_OK && pEntry && pEntry->op==PROLLY_EDIT_DELETE ){
-          /* Keep the tree position so the next step advances. */
-          tombstone = 1;
-        }
-      }
-      if( rc==SQLITE_OK && !landedMut ){
-        rc = prollyCursorSeekBlob(&pCur->pCur,
-                                   (const u8*)pCur->pKey, (int)pCur->nKey,
-                                   &res);
+      /* Merged tree+pending position. A deleted key lands on the next
+      ** live entry; the following forward step must not move again. */
+      rc = prollyBtCursorSeekMergedAtOrAfter(
+          pCur, (const u8*)pCur->pKey, (int)pCur->nKey, &exact);
+      if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID && exact ){
+        res = 0;
+      }else if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+        pCur->skipNext = 1;
+        pCur->eState = CURSOR_SKIPNEXT;
+        placed = 1;
+      }else if( rc==SQLITE_OK ){
+        pCur->eState = CURSOR_INVALID;
+        placed = 1;
       }
     } else {
       pCur->eState = CURSOR_INVALID;
@@ -751,13 +744,15 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
     pCur->pKey = 0;
   }
 
-  if( rc==SQLITE_OK ){
+  if( placed ){
+    if( pDifferentRow ) *pDifferentRow = 1;
+  }else if( rc==SQLITE_OK ){
     if( res==0 || pCur->deferredMergedSeek ){
       pCur->eState = CURSOR_VALID;
       if( pDifferentRow ){
-        /* Exact hit of the saved key is that row, even when the new
-        ** bytes are a pending update. A delete hole is not. */
-        *pDifferentRow = pCur->deferredMergedSeek || tombstone;
+        /* Exact hit of the saved key is that row, including a pending
+        ** update. A delete-masked integer hole is not. */
+        *pDifferentRow = pCur->deferredMergedSeek;
       }
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       pCur->skipNext = res;

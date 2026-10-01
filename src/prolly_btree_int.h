@@ -758,6 +758,7 @@ int flushDeferredEdits(Btree*, BtShared*);
 int saveAllCursors(Btree*, BtShared*, Pgno, BtCursor*);
 int saveCursorPosition(BtCursor*);
 int restoreCursorPosition(BtCursor*, int*);
+int prollyBtCursorSeekMergedAtOrAfter(BtCursor*, const u8*, int, int*);
 int countTreeEntries(Btree*, Pgno, i64*);
 int sortKeyFromUnpackedForCount(BtCursor*, UnpackedRecord*, u8**, int*, int*);
 int materializeDeferredMergedSeekBackward(BtCursor *pCur);
