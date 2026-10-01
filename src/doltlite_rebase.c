@@ -1619,6 +1619,13 @@ static int rebaseEnterEditPause(
     sqlite3_free(zMsg);
     return rc;
   }
+  {
+    ProllyHash headNow;
+    memset(&headNow, 0, sizeof(headNow));
+    doltliteGetSessionHead(db, &headNow);
+    /* Staged changes at the next continue reuse this step's message. */
+    doltliteSetSessionRebaseEditCommit(db, &headNow);
+  }
   sqlite3ExpirePreparedStatements(db, 0);
   sqlite3ResetAllSchemasOfConnection(db);
   sqlite3_result_text(context, zMsg, -1, sqlite3_free);
@@ -2409,6 +2416,44 @@ static int rebaseCommitResolvedStep(
   return rc;
 }
 
+/* The edited step is no longer in the plan. Commit staged work as a new
+** commit with that step's message, then let continue replay the rest.
+** A clean tree, including one just amended, commits nothing. */
+static int rebaseCommitEditedStaged(sqlite3 *db){
+  DoltliteCommit src;
+  RebasePlanRow row;
+  ProllyHash srcHash;
+  ProllyHash curHead;
+  int committed = 0;
+  int rc;
+
+  memset(&src, 0, sizeof(src));
+  memset(&row, 0, sizeof(row));
+  memset(&srcHash, 0, sizeof(srcHash));
+  memset(&curHead, 0, sizeof(curHead));
+  doltliteGetSessionRebaseEditCommit(db, &srcHash);
+  if( prollyHashIsEmpty(&srcHash) ){
+    doltliteGetSessionHead(db, &srcHash);
+  }
+  rc = doltliteLoadCommit(db, &srcHash, &src);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&src);
+    doltliteGetSessionHead(db, &curHead);
+    if( prollyHashCompare(&curHead, &srcHash)==0 ) return rc;
+    rc = doltliteLoadCommit(db, &curHead, &src);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&src);
+      return rc;
+    }
+  }
+  row.zAction = "pick";
+  row.zCommitMessage = src.zMessage ? src.zMessage : "";
+  rc = rebaseCommitResolvedStep(db, &row, &committed);
+  doltliteCommitClear(&src);
+  (void)committed;
+  return rc;
+}
+
 static void rebaseResultDataConflict(
   sqlite3_context *context,
   const char *zHash,
@@ -2988,6 +3033,35 @@ static void doltliteRebaseInteractiveContinue(
       }else{
         sqlite3_result_error_code(context, rc);
       }
+      goto abort_err_silent;
+    }
+  }
+
+  if( (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_EDIT)!=0 ){
+    int unstaged = 0;
+    rc = rebaseHasUnstagedResolution(db, &unstaged);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto abort_err_silent;
+    }
+    if( unstaged ){
+      sqlite3_result_error(context,
+        "cannot continue a rebase with unstaged changes. "
+        "Use dolt_add() to stage tables and then continue the rebase",
+        -1);
+      goto abort_err_silent;
+    }
+    /* Drop the plan before the commit so the new commit does not contain
+    ** dolt_rebase. Replay still has aPlan. Put the plan back on failure. */
+    rc = rebaseDropPlan(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto abort_err_silent;
+    }
+    rc = rebaseCommitEditedStaged(db);
+    if( rc!=SQLITE_OK ){
+      (void)rebaseWritePlanRows(db, aPlan, nPlan);
+      sqlite3_result_error_code(context, rc);
       goto abort_err_silent;
     }
   }

@@ -369,6 +369,8 @@ struct Btree {
   ProllyHash rebaseOntoCommit;
   char *zRebaseOrigBranch;
   char *zRebaseReturnBranch;
+  /* Edit-pause step commit. Continue reuses its message for staged changes. */
+  ProllyHash rebaseEditCommit;
 
   void *pCvBatch;  /* merge-pass CV batch; owned by doltlite_constraint_violations.c */
 
