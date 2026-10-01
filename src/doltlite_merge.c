@@ -1146,7 +1146,10 @@ int doltliteMergeCatalogs(
                                  aAncSchema, nAncSchema,
                                  aOursSchema, nOursSchema,
                                  aConflictTables, nConflictTables,
-                                 aRemap, nRemap);
+                                 aRemap, nRemap, ours, theirs,
+                                 ppActions ? *ppActions : 0,
+                                 pnActions ? *pnActions : 0,
+                                 pazReindex, pnReindex);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   if( rc==SQLITE_OK && nConflictTables>0 && pazRebuildVtabs ){

@@ -100,6 +100,25 @@ static int mergeIndexEachColumn(
   return rc;
 }
 
+typedef struct MergeIndexColumnName MergeIndexColumnName;
+struct MergeIndexColumnName { const char *zName; int bFound; };
+
+static int mergeIndexMatchColumnName(void *pCtx, const char *zName){
+  MergeIndexColumnName *p = pCtx;
+  if( sqlite3_stricmp(p->zName, zName)==0 ) p->bFound = 1;
+  return SQLITE_OK;
+}
+
+int mergeIndexNamesColumn(const char *zSql, const char *zName, int *pbFound){
+  MergeIndexColumnName ctx;
+  int rc;
+  ctx.zName = zName;
+  ctx.bFound = 0;
+  rc = mergeIndexEachColumn(zSql, mergeIndexMatchColumnName, &ctx);
+  *pbFound = ctx.bFound;
+  return rc;
+}
+
 typedef struct MergeIndexColCtx MergeIndexColCtx;
 struct MergeIndexColCtx {
   ParsedColumn *aAnc; int nAnc;

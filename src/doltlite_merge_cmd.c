@@ -940,6 +940,17 @@ static int mergeRefInstallMergedCatalog(
     xTestMergeInstall(pTestMergeInstallArg);
   }
 
+  rc = SQLITE_OK;
+  if( *pnSchemaActions > 0 ){
+    rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
+                                         *paSchemaActions, *pnSchemaActions,
+                                         pWorkingCat, pzErr);
+  }
+  freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
+  *paSchemaActions = 0;
+  *pnSchemaActions = 0;
+  if( rc!=SQLITE_OK ) return rc;
+
   /* Adopted indexes cover only their branch's rows; rebuild over merged
   ** tables before the flush, conflicted rows included, since those hold our
   ** value. On a conflicted merge a name may belong to an excluded
@@ -953,21 +964,6 @@ static int mergeRefInstallMergedCatalog(
   doltliteFreeNameList(*pazReindex, *pnReindex);
   *pazReindex = 0;
   *pnReindex = 0;
-  if( rc!=SQLITE_OK ){
-    freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
-    *paSchemaActions = 0;
-    *pnSchemaActions = 0;
-    return rc;
-  }
-
-  if( *pnSchemaActions > 0 ){
-    rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
-                                         *paSchemaActions, *pnSchemaActions,
-                                         pWorkingCat, pzErr);
-  }
-  freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
-  *paSchemaActions = 0;
-  *pnSchemaActions = 0;
   if( rc!=SQLITE_OK ) return rc;
 
   /* Rebuild derived vtab shadows from merged %_base while the catalog

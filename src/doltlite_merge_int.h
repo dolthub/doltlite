@@ -103,7 +103,10 @@ int rebuildDisjointSchemaRows(
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aOursSchema, int nOursSchema,
   MergeConflictTable *aConflictTables, int nConflictTables,
-  SchemaRootpageRemap *aRemap, int nRemap
+  SchemaRootpageRemap *aRemap, int nRemap,
+  const ProllyHash *pOurCatalog, const ProllyHash *pTheirCatalog,
+  SchemaMergeAction *aActions, int nActions,
+  char ***pazReindex, int *pnReindex
 );
 int mergePreNormalizeRenamedDependents(
   struct TableEntry *aAnc, int nAnc,
@@ -356,6 +359,7 @@ int mergePreDetectDualIndexOverlap(
   int *pTotalConflicts
 );
 
+int mergeIndexNamesColumn(const char *zSql, const char *zName, int *pbFound);
 int mergeIndexColumnRenamedAway(
   const char *zIndexSql,
   const char *zAncTableSql,
