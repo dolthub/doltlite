@@ -36,7 +36,8 @@ with tempfile.TemporaryDirectory() as tmp:
     build = root / 'build-coverage'
     (test / 'lib').mkdir(parents=True)
     build.mkdir()
-    for name in ('run_doltlite_tests.sh', 'run_guarded_suite.sh'):
+    for name in ('run_doltlite_tests.sh', 'run_guarded_suite.sh',
+                 'lib/dltest_engine_guard.pl'):
         shutil.copy(repo / 'test' / name, test / name)
     engine = build / 'doltlite'
     engine.touch()
@@ -62,6 +63,18 @@ with tempfile.TemporaryDirectory() as tmp:
     suite(test / 'second.sh')
     (test / 'last.sh').write_text(
         '[ "$1" = "$DOLTLITE_BUILD_DIR/doltlite" ] || exit 1\n'
+        'echo __SUITE_COMPLETE__\n')
+    result = run(['bash', str(test / 'run_doltlite_tests.sh')], root,
+                 DOLTLITE_BUILD_DIR=str(build), TRACE=str(trace), DOLTLITE='',
+                 DLTEST_ENGINE_GUARD='0')
+    check(result.returncode == 0, result.stdout)
+    check('3 passed, 0 failed, 0 skipped' in result.stdout, result.stdout)
+    # The engine guard stands in for the resolved engine, by argument and
+    # DOLTLITE, and runs that engine.
+    (test / 'last.sh').write_text(
+        '[ "$1" = "$DOLTLITE" ] || exit 1\n'
+        '[ "${1##*/}" = dltest_engine_guard.pl ] || exit 1\n'
+        '[ "$DLTEST_REAL_DOLTLITE" = "$DOLTLITE_BUILD_DIR/doltlite" ] || exit 1\n'
         'echo __SUITE_COMPLETE__\n')
     result = run(['bash', str(test / 'run_doltlite_tests.sh')], root,
                  DOLTLITE_BUILD_DIR=str(build), TRACE=str(trace), DOLTLITE='')
