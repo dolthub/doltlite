@@ -185,6 +185,7 @@
 #endif
 #define sqlite3PagerWalFramesize orig_sqlite3PagerWalFramesize
 #define sqlite3PagerWalSupported orig_sqlite3PagerWalSupported
+#define sqlite3PagerWalStat orig_sqlite3PagerWalStat
 #define sqlite3PagerWalSystemErrno orig_sqlite3PagerWalSystemErrno
 #if !defined(SQLITE_OMIT_WAL) && defined(SQLITE_ENABLE_SETLK_TIMEOUT)
 #define sqlite3PagerWalWriteLock orig_sqlite3PagerWalWriteLock

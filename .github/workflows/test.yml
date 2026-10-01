@@ -284,8 +284,12 @@ jobs:
       matrix:
         include:
           - first: 1
+            last: 2500
+          - first: 2501
             last: 5000
           - first: 5001
+            last: 7500
+          - first: 7501
             last: 10000
 
     steps:

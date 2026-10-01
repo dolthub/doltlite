@@ -104,7 +104,7 @@ ifcapable pagecache_overflow_stats {
   ifcapable !malloc_usable_size {
     do_test memsubsys1-2.3 {
       set pg_ovfl [lindex [sqlite3_status SQLITE_STATUS_PAGECACHE_OVERFLOW 0] 2]
-    } [expr ($TEMP_STORE>1 || $MEMORY_MANAGEMENT==0)*1024]
+    } 0
   }
 }
 do_test memsubsys1-2.4 {

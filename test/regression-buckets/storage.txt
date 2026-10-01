@@ -215,3 +215,4 @@ doltlite_index_pending_bound
 doltlite_index_full_range
 doltlite_exact_index_probe
 doltlite_pending_text_update
+doltlite_pager_walstat

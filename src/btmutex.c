@@ -257,7 +257,12 @@ int sqlite3SchemaMutexHeld(sqlite3 *db, int iDb, Schema *pSchema){
   assert( iDb>=0 && iDb<db->nDb );
   if( !sqlite3_mutex_held(db->mutex) ) return 0;
   if( iDb==1 ) return 1;
+#ifdef DOLTLITE_PROLLY
+  p = (Btree*)doltliteBtreeOrigPtr(db->aDb[iDb].pBt);
+  if( p==0 ) return 1;
+#else
   p = db->aDb[iDb].pBt;
+#endif
   assert( p!=0 );
   return p->sharable==0 || p->locked==1;
 }
