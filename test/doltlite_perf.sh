@@ -100,19 +100,32 @@ echo "  100K: ${T_INS_100K}ms"
 assert_ratio "insert_1k_to_100k" "$T_INS_1K" "$T_INS_100K" 300
 
 echo ""
-echo "--- Point SELECT (100 lookups) ---"
+echo "--- Point SELECT (100 lookups, one process) ---"
 
-T_SEL_1K=$(time_ms "for i in \$(seq 1 100); do echo 'SELECT v FROM t WHERE id=500;' | $DOLTLITE '$DB_1K'; done")
+# One script, not 100 process starts. A primary-key lookup stays flat from
+# 100K to 1M; a scan of the same statements grows with the table.
+point_select_ms() {
+  local db="$1" id="$2"
+  local sql="/tmp/perf_sel_$$.sql"
+  python3 -c "
+for i in range(100):
+    print('SELECT v FROM t WHERE id=$id;')
+" > "$sql"
+  time_ms "$DOLTLITE '$db' < '$sql'"
+  rm -f "$sql"
+}
+
+T_SEL_1K=$(point_select_ms "$DB_1K" 500)
 echo "  1K: ${T_SEL_1K}ms"
 
-T_SEL_100K=$(time_ms "for i in \$(seq 1 100); do echo 'SELECT v FROM t WHERE id=50000;' | $DOLTLITE '$DB_100K'; done")
+T_SEL_100K=$(point_select_ms "$DB_100K" 50000)
 echo "  100K: ${T_SEL_100K}ms"
 
-T_SEL_1M=$(time_ms "for i in \$(seq 1 100); do echo 'SELECT v FROM t WHERE id=500000;' | $DOLTLITE '$DB_1M'; done")
+T_SEL_1M=$(point_select_ms "$DB_1M" 500000)
 echo "  1M: ${T_SEL_1M}ms"
 
 assert_ratio "select_1k_to_100k" "$T_SEL_1K" "$T_SEL_100K" 10
-assert_ratio "select_100k_to_1m" "$T_SEL_100K" "$T_SEL_1M" 10
+assert_ratio "select_100k_to_1m" "$T_SEL_100K" "$T_SEL_1M" 3
 
 echo ""
 echo "--- Single-row UPDATE ---"
