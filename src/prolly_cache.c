@@ -438,6 +438,14 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   nHead = (int)(pNode->pValData - pNode->pData);
   if( nHead>pNode->nData/4 ) return 0;
   nAverage = (pNode->nData-nHead)/pNode->nItems;
+  /* A narrow leaf only point reads touched keeps a 16-byte prefix, which
+  ** rarely holds what the next lookup reads and pushes out the internal
+  ** nodes those lookups reuse. Wider leaves keep prefixes that do serve
+  ** their leading columns. */
+  if( !pNode->nValuePrefix && nAverage<512
+   && (pEntry->bScanOnly & (PROLLY_CACHE_SCAN_ONLY|PROLLY_CACHE_SCAN_KEEP))==0 ){
+    return 0;
+  }
   nBasePrefix = pNode->nValuePrefix ? PROLLY_NODE_VALUE_PREFIX/2
               : nAverage>=4096 ? PROLLY_NODE_VALUE_PREFIX
               : nAverage>=512 ? 32 : 16;

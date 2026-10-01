@@ -1400,6 +1400,40 @@ static void testNodes(void){
   prollyCacheFree(&cache);
 }
 
+/* Evicting a narrow leaf only point reads touched frees it; its 16-byte
+** prefix would rarely serve a later read and pushes out internal nodes those
+** reads reuse. A scan's narrow leaf is still compacted. */
+static void testPointReadLeavesNotCompacted(void){
+  int bScan;
+  for(bScan=0; bScan<2; bScan++){
+    ProllyCache cache;
+    ProllyCacheEntry *p;
+    ProllyHash hash = nodeHash(1);
+    int i;
+    check("init point-read cache", prollyCacheInit(&cache, 8192)==SQLITE_OK);
+    p = putNode(&cache, 1, 300);
+    check("cache point-read leaf", p!=0);
+    if( !p ){ prollyCacheFree(&cache); continue; }
+    p->bAllowPrefix = 1;
+    p->bScanOnly = bScan ? PROLLY_CACHE_SCAN_ONLY : 0;
+    prollyCacheRelease(&cache, p);
+    for(i=2; i<80; i++){
+      p = putNode(&cache, i, 300);
+      if( p ) prollyCacheRelease(&cache, p);
+    }
+    p = prollyCacheGetPrefix(&cache, &hash, 0);
+    if( bScan ){
+      check("scan leaf keeps a compacted prefix", p!=0);
+    }else{
+      check("point-read leaf is freed, not compacted", p==0);
+    }
+    if( p ) prollyCacheRelease(&cache, p);
+    check("point-read cache accounting", cache.nByte<=8192
+        && cache.nByte==cacheBytes(&cache));
+    prollyCacheFree(&cache);
+  }
+}
+
 static void sharedPrefixValue(u8 *pValue, int row, int varying){
   int j;
   for(j=0; j<256; j++) pValue[j] = (u8)(j^0xa5);
@@ -1611,6 +1645,7 @@ int main(void){
   testNodes();
   testInternalNodes();
   testSharedPrefixes();
+  testPointReadLeavesNotCompacted();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail!=0;
 }
