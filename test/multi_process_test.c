@@ -1310,6 +1310,76 @@ static void test_ref_command_keeps_peer_write(void){
   remove(path);
 }
 
+typedef struct MpMidOpPeer MpMidOpPeer;
+struct MpMidOpPeer {
+  sqlite3 *peer;
+  int fireAt;
+  int nCalls;
+  int fired;
+  int peerRc;
+};
+
+static int mpFirePeerMidOp(void *arg){
+  MpMidOpPeer *p = (MpMidOpPeer*)arg;
+  if( ++p->nCalls==p->fireAt && !p->fired ){
+    p->fired = 1;
+    p->peerRc = execSql(p->peer, "INSERT INTO t VALUES(20, 'peer')");
+  }
+  return 0;
+}
+
+/* The peer's autocommit lands inside the command, which is then refused
+** busy; the session's next write must still keep the peer's row. */
+static void test_busy_command_keeps_peer_write(void){
+  static const char *azSql[] = {
+    "SELECT dolt_commit('-am','mine')",
+    "SELECT dolt_add('.')"
+  };
+  char path[256];
+  int i;
+
+  printf("--- Test 6f: A command refused busy mid-peer-write keeps the peer's row ---\n");
+  snprintf(path, sizeof(path), "/tmp/mp_busy_peer_ws_%d.db", (int)getpid());
+  for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
+    int k;
+    int nLost = 0;
+    for(k=1; ; k++){
+      sqlite3 *db = 0;
+      sqlite3 *check = 0;
+      MpMidOpPeer ctx;
+
+      setup_db(path);
+      sqlite3_open(path, &db);
+      memset(&ctx, 0, sizeof(ctx));
+      sqlite3_open(path, &ctx.peer);
+      ctx.fireAt = k;
+      ctx.peerRc = -1;
+      execSql(db, "INSERT INTO t VALUES(2, 'mine')");
+      sqlite3_progress_handler(db, 1, mpFirePeerMidOp, &ctx);
+      execSql(db, azSql[i]);
+      sqlite3_progress_handler(db, 0, 0, 0);
+      if( !ctx.fired ){
+        sqlite3_close(ctx.peer);
+        sqlite3_close(db);
+        break;
+      }
+      execSql(db, "INSERT INTO t VALUES(3, 'mine')");
+      sqlite3_open(path, &check);
+      if( ctx.peerRc==SQLITE_OK
+       && strcmp(queryScalarText(check,
+            "SELECT count(*) FROM t WHERE id IN (2,3,20)"), "3")!=0 ){
+        if( nLost++==0 ) fprintf(stderr, "%s: peer row lost at step %d\n", azSql[i], k);
+      }
+      sqlite3_close(check);
+      sqlite3_close(ctx.peer);
+      sqlite3_close(db);
+    }
+    check("mp_busy_peer_ws_swept", k>1);
+    check("mp_busy_peer_ws_peer_write_kept", nLost==0);
+  }
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process Concurrency Tests ===\n\n");
 
@@ -1326,6 +1396,7 @@ int main(){
   test_write_after_lost_commit_race();
   test_commit_does_not_erase_peer_write();
   test_commit_keeps_peer_insert_during_publish();
+  test_busy_command_keeps_peer_write();
   test_ref_command_binds_post_wait_tip();
   test_ref_command_keeps_peer_write();
   test_cross_process_commit_after_peer();

@@ -312,6 +312,7 @@ struct Btree {
   u8 bMasterRootChangedTxn;
   u8 bFilterSchemaPlaceholders;
   u8 bCatalogDropped;     /* OOM drop: empty committedCatalogHash is not a new db */
+  u8 bForceCatalogReload; /* Invalidated: live catalog may lag committedCatalogHash */
   u8 bDeferredOpen;
   u8 bDeferredRegister;
   u8 bBeginTransBranchMissing;

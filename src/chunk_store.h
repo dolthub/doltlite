@@ -219,6 +219,9 @@ struct ChunkStore {
   int nTxnSequences;
   u8 bTxnSequences;
   u8 bRefsStale;          /* OOM cleared refs; reload from refsHash */
+  /* A refs merge failed and reinstated refs that never reached disk; the
+  ** next refresh must reload so the session does not write over the peer. */
+  u8 bReloadAfterRefsConflict;
   /* Working-set ref this connection last adopted or wrote for one branch.
   ** Refreshes leave it alone, so it differs from refs once a peer writes. */
   u8 bWsBasis;

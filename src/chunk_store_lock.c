@@ -275,6 +275,7 @@ int csRestoreOrMergeLocalRefs(
     return SQLITE_OK;
   }
   rc = rc==SQLITE_NOMEM ? SQLITE_NOMEM : SQLITE_BUSY_SNAPSHOT;
+  cs->bReloadAfterRefsConflict = 1;
   csFreeRefsState(cs);
   csRestoreSavedRefsState(cs, pSaved);
   cs->refs.refsHash = *pSavedRefsHash;
@@ -690,6 +691,13 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
   if( cs->snapshotPinned ) return SQLITE_OK;
+  if( cs->bReloadAfterRefsConflict ){
+    rc = csReloadFromDisk(cs);
+    if( rc!=SQLITE_OK ) return rc;
+    cs->bReloadAfterRefsConflict = 0;
+    *pChanged = 1;
+    return SQLITE_OK;
+  }
   rc = csDetectExternalChanges(cs, &bChanged, &bMovedAdopt);
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
