@@ -1712,7 +1712,155 @@ else
   ERRORS="$ERRORS\nFAIL: rebase_named_add_edit_pause\n  S: $EDITADD_S\n  H: $EDITADD_H\n  full: $EDITADD_OUT"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE"
+# An edit pause commits staged changes with the step's message and replays
+# the rest. Unstaged changes stay in the rebase and can be staged next.
+seed_edit_stage_repo() {
+  rm -f "$1"
+  cat <<'SQL' | "$DOLTLITE" "$1" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-am','f1');
+INSERT INTO t VALUES(3,3);
+SELECT dolt_commit('-am','f2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(10,10);
+SELECT dolt_commit('-am','m1');
+SELECT dolt_checkout('feat');
+SQL
+}
+
+DBEDITST=/tmp/test_rebase_edit_stage_$$.db
+seed_edit_stage_repo "$DBEDITST"
+EDITST_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+INSERT INTO t VALUES(4,4);
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'BR|' || active_branch();
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || id || '=' || v FROM t ORDER BY id;" | "$DOLTLITE" "$DBEDITST" 2>&1)
+EDITST_LOG=$(echo "$EDITST_OUT" | grep '^LOG|')
+EDITST_ROWS=$(echo "$EDITST_OUT" | grep '^ROW|' | tr '\n' ',')
+if echo "$EDITST_OUT" | grep -q "Successfully rebased and updated refs/heads/feat" \
+   && echo "$EDITST_OUT" | grep -q '^BR|feat$' \
+   && [ "$EDITST_LOG" = "LOG|f2,f1,f1,m1,base" ] \
+   && [ "$EDITST_ROWS" = "ROW|1=1,ROW|2=2,ROW|3=3,ROW|4=4,ROW|10=10," ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_staged\n  log: $EDITST_LOG\n  rows: $EDITST_ROWS\n  full: $EDITST_OUT"
+fi
+
+DBEDITUS=/tmp/test_rebase_edit_unstaged_$$.db
+seed_edit_stage_repo "$DBEDITUS"
+EDITUS_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+INSERT INTO t VALUES(4,4);
+SELECT dolt_rebase('--continue');
+SELECT 'MID|' || active_branch() || '|' || (SELECT count(*) FROM dolt_rebase);
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || id || '=' || v FROM t ORDER BY id;" | "$DOLTLITE" "$DBEDITUS" 2>&1)
+EDITUS_MID=$(echo "$EDITUS_OUT" | grep '^MID|')
+EDITUS_LOG=$(echo "$EDITUS_OUT" | grep '^LOG|')
+EDITUS_ROWS=$(echo "$EDITUS_OUT" | grep '^ROW|' | tr '\n' ',')
+if echo "$EDITUS_OUT" | grep -q "cannot continue a rebase with unstaged changes. Use dolt_add() to stage tables and then continue the rebase" \
+   && ! echo "$EDITUS_OUT" | grep -q "cannot start a rebase" \
+   && [ "$EDITUS_MID" = "MID|dolt_rebase_feat|1" ] \
+   && [ "$EDITUS_LOG" = "LOG|f2,f1,f1,m1,base" ] \
+   && [ "$EDITUS_ROWS" = "ROW|1=1,ROW|2=2,ROW|3=3,ROW|4=4,ROW|10=10," ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_unstaged\n  mid: $EDITUS_MID\n  log: $EDITUS_LOG\n  rows: $EDITUS_ROWS\n  full: $EDITUS_OUT"
+fi
+
+DBEDITMAN=/tmp/test_rebase_edit_manual_$$.db
+seed_edit_stage_repo "$DBEDITMAN"
+EDITMAN_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+INSERT INTO t VALUES(4,4);
+SELECT dolt_add('t');
+SELECT dolt_commit('-m','manual');
+INSERT INTO t VALUES(5,5);
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'BR|' || active_branch();
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || id || '=' || v FROM t ORDER BY id;" | "$DOLTLITE" "$DBEDITMAN" 2>&1)
+EDITMAN_LOG=$(echo "$EDITMAN_OUT" | grep '^LOG|')
+EDITMAN_ROWS=$(echo "$EDITMAN_OUT" | grep '^ROW|' | tr '\n' ',')
+if echo "$EDITMAN_OUT" | grep -q '^BR|feat$' \
+   && [ "$EDITMAN_LOG" = "LOG|f2,f1,manual,f1,m1,base" ] \
+   && [ "$EDITMAN_ROWS" = "ROW|1=1,ROW|2=2,ROW|3=3,ROW|4=4,ROW|5=5,ROW|10=10," ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_after_manual_commit\n  log: $EDITMAN_LOG\n  rows: $EDITMAN_ROWS\n  full: $EDITMAN_OUT"
+fi
+
+DBEDITAM=/tmp/test_rebase_edit_amend_stage_$$.db
+seed_edit_stage_repo "$DBEDITAM"
+EDITAM_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+UPDATE t SET v=5 WHERE id=2;
+SELECT dolt_add('t');
+SELECT dolt_commit('--amend','-m','f1 edited');
+INSERT INTO t VALUES(5,5);
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || id || '=' || v FROM t ORDER BY id;" | "$DOLTLITE" "$DBEDITAM" 2>&1)
+EDITAM_LOG=$(echo "$EDITAM_OUT" | grep '^LOG|')
+EDITAM_ROWS=$(echo "$EDITAM_OUT" | grep '^ROW|' | tr '\n' ',')
+if [ "$EDITAM_LOG" = "LOG|f2,f1,f1 edited,m1,base" ] \
+   && [ "$EDITAM_ROWS" = "ROW|1=1,ROW|2=5,ROW|3=3,ROW|5=5,ROW|10=10," ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_after_amend\n  log: $EDITAM_LOG\n  rows: $EDITAM_ROWS\n  full: $EDITAM_OUT"
+fi
+
+# A new connection has no saved step commit. HEAD is still that step, so
+# staged changes keep its message.
+DBEDITRO=/tmp/test_rebase_edit_reopen_$$.db
+seed_edit_stage_repo "$DBEDITRO"
+echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');" | "$DOLTLITE" "$DBEDITRO" >/dev/null 2>&1
+EDITRO_OUT=$(echo "INSERT INTO t VALUES(4,4);
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'BR|' || active_branch();
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || id || '=' || v FROM t ORDER BY id;" | "$DOLTLITE" "$DBEDITRO/dolt_rebase_feat" 2>&1)
+EDITRO_LOG=$(echo "$EDITRO_OUT" | grep '^LOG|')
+EDITRO_ROWS=$(echo "$EDITRO_OUT" | grep '^ROW|' | tr '\n' ',')
+if echo "$EDITRO_OUT" | grep -q '^BR|feat$' \
+   && [ "$EDITRO_LOG" = "LOG|f2,f1,f1,m1,base" ] \
+   && [ "$EDITRO_ROWS" = "ROW|1=1,ROW|2=2,ROW|3=3,ROW|4=4,ROW|10=10," ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_staged_reopen\n  log: $EDITRO_LOG\n  rows: $EDITRO_ROWS\n  full: $EDITRO_OUT"
+fi
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE" "$DBEDITST" "$DBEDITUS" "$DBEDITMAN" "$DBEDITAM" "$DBEDITRO"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

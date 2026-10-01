@@ -536,6 +536,9 @@ int btreeReloadBranchWorkingStateInto(
   sqlite3_free(p->zRebaseReturnBranch);
   p->zRebaseReturnBranch = state.zRebaseReturnBranch;
   p->vc.constraintViolationsHash = state.constraintViolations;
+  if( (state.isRebasing & WS_REBASE_FLAG_EDIT)==0 ){
+    memset(&p->rebaseEditCommit, 0, sizeof(p->rebaseEditCommit));
+  }
   return SQLITE_OK;
 }
 
@@ -1078,6 +1081,9 @@ int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
       return rc;
     }
     p->isRebasing = isRebasing;
+    if( (isRebasing & WS_REBASE_FLAG_EDIT)==0 ){
+      memset(&p->rebaseEditCommit, 0, sizeof(p->rebaseEditCommit));
+    }
     if( pPreRebaseCat ) memcpy(&p->preRebaseWorkingCat, pPreRebaseCat, sizeof(ProllyHash));
     else memset(&p->preRebaseWorkingCat, 0, sizeof(ProllyHash));
     if( pRebaseOnto ) memcpy(&p->rebaseOntoCommit, pRebaseOnto, sizeof(ProllyHash));
@@ -1092,6 +1098,24 @@ int doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
 
 int doltliteClearSessionRebaseState(sqlite3 *db){
   return doltliteSetSessionRebaseState(db, 0, 0, 0, 0, 0);
+}
+
+void doltliteGetSessionRebaseEditCommit(sqlite3 *db, ProllyHash *pCommit){
+  if( db && db->nDb>0 && db->aDb[0].pBt && pCommit ){
+    memcpy(pCommit, &db->aDb[0].pBt->rebaseEditCommit, sizeof(ProllyHash));
+  }else if( pCommit ){
+    memset(pCommit, 0, sizeof(ProllyHash));
+  }
+}
+
+void doltliteSetSessionRebaseEditCommit(sqlite3 *db, const ProllyHash *pCommit){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    if( pCommit ){
+      memcpy(&db->aDb[0].pBt->rebaseEditCommit, pCommit, sizeof(ProllyHash));
+    }else{
+      memset(&db->aDb[0].pBt->rebaseEditCommit, 0, sizeof(ProllyHash));
+    }
+  }
 }
 
 int doltliteBranchWorkingSetRebaseFlags(
@@ -1246,6 +1270,8 @@ int doltliteSeedSessionHashes(
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseOntoCommit);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.constraintViolationsHash);
+    /* Amend replaces this commit; the session still needs its message. */
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseEditCommit);
     /* Live catalog roots, including a runtime master root GC would otherwise drop. */
     {
       int k;
@@ -1421,6 +1447,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     memset(&pBtree->vc.mergeCommitHash, 0, sizeof(ProllyHash));
     memset(&pBtree->vc.conflictsCatalogHash, 0, sizeof(ProllyHash));
     pBtree->isRebasing = 0;
+    memset(&pBtree->rebaseEditCommit, 0, sizeof(pBtree->rebaseEditCommit));
     memset(&pBtree->preRebaseWorkingCat, 0, sizeof(ProllyHash));
     memset(&pBtree->rebaseOntoCommit, 0, sizeof(ProllyHash));
     sqlite3_free(pBtree->zRebaseOrigBranch);
@@ -1444,6 +1471,9 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     pBtree->zRebaseOrigBranch = zNewRebaseOrigBranch;
     sqlite3_free(pBtree->zRebaseReturnBranch);
     pBtree->zRebaseReturnBranch = zNewRebaseReturnBranch;
+    if( (isRebasing & WS_REBASE_FLAG_EDIT)==0 ){
+      memset(&pBtree->rebaseEditCommit, 0, sizeof(pBtree->rebaseEditCommit));
+    }
   }else{
     sqlite3_free(zNewRebaseOrigBranch);
     sqlite3_free(zNewRebaseReturnBranch);
