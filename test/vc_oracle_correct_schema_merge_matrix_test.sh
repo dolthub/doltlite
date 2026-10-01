@@ -158,13 +158,13 @@ base_variant_dt() {
 
 dl_state() {
   local db="$1" tbl cols c out idx
-  tbl=$("$DOLTLITE" "$db" \
+  tbl=$(vc_oracle_run_doltlite "$db" \
     "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('t','t2') LIMIT 1;" 2>/dev/null)
   [ -z "$tbl" ] && { echo "MISSING TABLE"; return; }
-  cols=$("$DOLTLITE" "$db" \
+  cols=$(vc_oracle_run_doltlite "$db" \
     "SELECT group_concat(name) FROM pragma_table_info('$tbl');" 2>/dev/null)
   echo "cols=$cols"
-  idx=$("$DOLTLITE" "$db" "SELECT group_concat(x, ' ') FROM (
+  idx=$(vc_oracle_run_doltlite "$db" "SELECT group_concat(x, ' ') FROM (
       SELECT m.name || '(' || (SELECT group_concat(ii.name)
         FROM pragma_index_info(m.name) ii) || ')' AS x
       FROM sqlite_master m WHERE m.type='index' AND m.sql IS NOT NULL
@@ -176,14 +176,14 @@ dl_state() {
   # when it should have gone, or left pointing at another table shows up here.
   # Without this a merge could match on columns, indexes and rows while its
   # view or trigger was missing.
-  dep=$("$DOLTLITE" "$db" "SELECT group_concat(x, ' ') FROM (
+  dep=$(vc_oracle_run_doltlite "$db" "SELECT group_concat(x, ' ') FROM (
       SELECT type || ':' || name || '->' || coalesce(tbl_name,'') AS x
       FROM sqlite_master WHERE type IN ('view','trigger') ORDER BY x);" 2>&1)
   case "$(printf '%s' "$dep" | tr 'A-Z' 'a-z')" in
     *error*|*"table not found"*|*malformed*) dep=UNREADABLE;; esac
   echo "dep=$dep"
   for c in $(echo "$cols" | tr ',' ' '); do
-    out=$("$DOLTLITE" "$db" \
+    out=$(vc_oracle_run_doltlite "$db" \
       "SELECT group_concat(v, '|') FROM (SELECT coalesce(CAST(\"$c\" AS TEXT),'~') AS v
         FROM \"$tbl\" ORDER BY k);" 2>/dev/null)
     echo "data.$c=$out"
@@ -245,7 +245,7 @@ run_case() {
 $(base_extra "$o")
 $(base_extra "$t")"
 
-  dl_setup_out=$("$DOLTLITE" "$db" 2>&1 <<EOF
+  dl_setup_out=$(vc_oracle_run_doltlite --allow-error "$db" 2>&1 <<EOF
 CREATE TABLE t(k INT PRIMARY KEY, a VARCHAR(9), b VARCHAR(9), n INT);
 INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
 $(base_variant_dl "$BASE_VARIANT")
@@ -278,13 +278,13 @@ EOF
   dt_setup_err=$(printf '%s\n' "$dt_setup_out" | grep -iE '^error|error:' | head -1 | cut -c1-40)
 
   # Setup must produce the table on both sides.
-  if ! "$DOLTLITE" "$db" "SELECT 1 FROM sqlite_master WHERE name IN ('t','t2') LIMIT 1;" \
+  if ! vc_oracle_run_doltlite "$db" "SELECT 1 FROM sqlite_master WHERE name IN ('t','t2') LIMIT 1;" \
         >/dev/null 2>&1; then
     fail_name "$name (doltlite setup failed)"; return
   fi
 
   # SQLite may reject DDL MySQL accepts (e.g. drop a covered column); skip mismatched setups.
-  dl_pre=$("$DOLTLITE" "$db" \
+  dl_pre=$(vc_oracle_run_doltlite "$db" \
     "SELECT group_concat(name) FROM pragma_table_info((SELECT name FROM sqlite_master
        WHERE type='table' AND name IN ('t','t2') LIMIT 1));" 2>/dev/null)
   dt_pre=$(cd "$repo" && "$DOLT" sql -r csv -q "SELECT group_concat(column_name ORDER BY ordinal_position)
@@ -296,7 +296,7 @@ EOF
     return
   fi
 
-  dl_out=$("$DOLTLITE" "$db" "SELECT coalesce(dolt_merge('feat'),'NULL');" 2>&1)
+  dl_out=$(vc_oracle_run_doltlite --allow-error "$db" "SELECT coalesce(dolt_merge('feat'),'NULL');" 2>&1)
   dl_rc=$?
   # dolt_merge's result has a "conflicts" column; read that value, not the text.
   dt_out=$(cd "$repo" && "$DOLT" sql -r csv -q "CALL dolt_merge('feat');" 2>&1)

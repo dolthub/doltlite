@@ -23,7 +23,7 @@ run_pair() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^R|' | sort)
 
@@ -188,7 +188,7 @@ run_pair "log_correlated_revision_from_branch" "$BRANCHY" \
  JOIN dolt_log c ON c.commit_hash = b.hash
  WHERE b.name IN ('feat', 'side');"
 
-run_pair "log_correlated_parent_revision" "$CORRELATED_LOG" \
+VC_ORACLE_EXPECTATION=allow-error run_pair "log_correlated_parent_revision" "$CORRELATED_LOG" \
 "SELECT CONCAT('R|', r.label, '|', p.message)
  FROM requested r
  JOIN dolt_commit_ancestors a
@@ -200,7 +200,7 @@ run_pair "log_correlated_parent_revision" "$CORRELATED_LOG" \
    ON a.commit_hash = r.commit_hash AND a.parent_index = 0
  JOIN dolt_log p ON p.commit_hash = a.parent_hash;"
 
-run_pair "log_correlated_revision_through_cte" "$CORRELATED_LOG" \
+VC_ORACLE_EXPECTATION=allow-error run_pair "log_correlated_revision_through_cte" "$CORRELATED_LOG" \
 "WITH parents AS (
    SELECT r.label, a.parent_hash
    FROM requested r
@@ -560,7 +560,7 @@ oracle "cte_over_history_join" "$LINEAR" \
  SELECT CONCAT('R|', a.id, '|', a.v, '|', coalesce(t.v, 'GONE'))
  FROM t_at_c2 a LEFT JOIN t ON t.id = a.id;"
 
-oracle_in_merge "conflicts_join_merge_status_and_rows" "
+VC_ORACLE_EXPECTATION=allow-error oracle_in_merge "conflicts_join_merge_status_and_rows" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10), (2, 20);
 SELECT dolt_add('-A');
@@ -582,7 +582,7 @@ SELECT dolt_merge('feat');
  JOIN dolt_merge_status m
  JOIN (SELECT count(*) AS n FROM dolt_conflicts_t) r;"
 
-oracle_in_merge "conflict_rows_join_current_and_branch_tip" "
+VC_ORACLE_EXPECTATION=allow-error oracle_in_merge "conflict_rows_join_current_and_branch_tip" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10), (2, 20);
 SELECT dolt_add('-A');
@@ -644,8 +644,10 @@ oracle_as_of "as_of_three_way_compare" "$BRANCHY" \
  LEFT JOIN t AS OF 'feat' AS f ON f.id = base.id
  JOIN t AS cur ON cur.id = base.id;"
 
+case_number=0
 for column in commit_ref CoMmIt_ReF; do
-  oracle_as_of "as_of_commit_ref_collision_$column" "
+  case_number=$((case_number+1))
+  oracle_as_of "as_of_commit_ref_collision_${column}_case$case_number" "
 CREATE TABLE t(id INT PRIMARY KEY, $column TEXT, commit_ref_1 TEXT);
 INSERT INTO t VALUES(1, 'payload', 'keep');
 SELECT dolt_commit('-Am', 'base');

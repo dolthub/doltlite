@@ -24,7 +24,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^R|' | sort)
 
@@ -57,7 +57,7 @@ oracle_error() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" \
-    "$dir/dl.err" "$(printf '%s\n%s\n' "$setup" "$query")"
+    "$dir/dl.err" "$(printf '%s\n%s\n' "$setup" "$query")" --expect-error
   dl_rc=$?
 
   dolt_setup=$(echo "$setup" | translate_for_dolt)
@@ -80,10 +80,10 @@ oracle_reopen() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.setup" 2>"$dir/dl.setup.err"
+  printf "%s\n" "$setup" | vc_oracle_run_doltlite "$dir/dl/db" >"$dir/dl.setup" 2>"$dir/dl.setup.err"
   local dl_out
   dl_out=$(printf ".headers off\n.mode list\n%s\n" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^R|' | sort)
 

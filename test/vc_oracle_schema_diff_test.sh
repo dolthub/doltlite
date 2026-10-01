@@ -30,7 +30,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^ROW|' \
            | sort)
@@ -64,7 +64,7 @@ oracle_error() {
   local dl_rc
   local dl_sql
   dl_sql=$(printf "%s\n%s\n" "$setup" "$q")
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_sql"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_sql" --expect-error
   dl_rc=$?
 
   local dolt_setup
@@ -93,7 +93,7 @@ oracle_query() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^ROW|' \
            | sort)
@@ -801,7 +801,7 @@ pinned_shapes() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$DL_SHAPE_Q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' | grep -a '^ROW|' | LC_ALL=C sort)
   if [ "$dl_out" != "$dl_expected" ]; then
     ok=0
@@ -969,7 +969,7 @@ filter_check() {
   local q="SELECT 'ROW|' || coalesce(nullif(from_table_name,''),'~') || '|' || coalesce(nullif(to_table_name,''),'~') FROM dolt_schema_diff('HEAD~1','HEAD','$filter') ORDER BY 1;"
   local out
   out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$DL_FILTER_SETUP" "$q" \
-        | "$DOLTLITE" "$dir/db" 2>"$dir/err" \
+        | vc_oracle_run_doltlite "$dir/db" 2>"$dir/err" \
         | tr -d '\r' | grep -a '^ROW|' | sort)
   if [ "$out" = "$expected" ]; then
     pass=$((pass+1))

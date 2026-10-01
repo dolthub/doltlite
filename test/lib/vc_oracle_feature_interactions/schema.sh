@@ -20,7 +20,7 @@ SELECT dolt_commit('-m','insert on main');
 SELECT dolt_merge('feat');
 " "SELECT id, val, extra FROM t ORDER BY id;"
 
-oracle "merge_add_col_both_sides_same" "
+VC_ORACLE_EXPECTATION=error oracle "merge_add_col_both_sides_same" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1155,7 +1155,7 @@ SELECT dolt_merge('feat');
 
 echo "--- PK/UNIQUE conflict probes ---"
 
-oracle "both_sides_insert_same_pk_different_values" "
+VC_ORACLE_EXPECTATION=error oracle "both_sides_insert_same_pk_different_values" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1171,7 +1171,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t WHERE id=1;"
 
-oracle "unique_col_same_value_both_sides_different_pk" "
+VC_ORACLE_EXPECTATION=error oracle "unique_col_same_value_both_sides_different_pk" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, code TEXT UNIQUE);
 INSERT INTO t VALUES(1,'orig');
 SELECT dolt_add('-A');

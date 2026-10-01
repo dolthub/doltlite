@@ -20,17 +20,17 @@ remote_flow() {
   local dl_remote="file://$dir/remote.db"
   local dl_src="$dir/src.db" dl_con="$dir/con.db"
   printf '%s\n' "${seed//@REMOTE@/$dl_remote}" \
-    | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_seed.err"
+    | vc_oracle_run_doltlite "$dl_src" >/dev/null 2>"$dir/dl_seed.err"
   printf 'SELECT dolt_clone('"'"'%s'"'"');\n' "$dl_remote" \
-    | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_clone.err"
+    | vc_oracle_run_doltlite "$dl_con" >/dev/null 2>"$dir/dl_clone.err"
   if [ -n "$advance" ]; then
     printf '%s\n' "${advance//@REMOTE@/$dl_remote}" \
-      | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_advance.err"
+      | vc_oracle_run_doltlite "$dl_src" >/dev/null 2>"$dir/dl_advance.err"
   fi
-  printf '%s\n' "$consume" | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_consume.err"
+  printf '%s\n' "$consume" | vc_oracle_run_doltlite "$dl_con" >/dev/null 2>"$dir/dl_consume.err"
   local dl_out
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
-           | "$DOLTLITE" "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
+           | vc_oracle_run_doltlite "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
 
   local dt_remote="$dir/dt_remote"
   local dt_seed dt_advance dt_consume dt_q
@@ -173,7 +173,7 @@ remote_flow "pull_remote_ref_merges_into_divergent_current" \
    SELECT CONCAT('R|rows|',group_concat(CONCAT(id,':',v) ORDER BY id SEPARATOR ',')) FROM t;
    SELECT CONCAT('R|local-other|',count(*)) FROM dolt_branches WHERE name='other';"
 
-remote_flow "pull_remote_ref_dirty_current_fails_without_local_branch" \
+VC_ORACLE_EXPECTATION=allow-error remote_flow "pull_remote_ref_dirty_current_fails_without_local_branch" \
   "$REMOTE_REF_SEED" "$REMOTE_REF_ADVANCE" \
   "INSERT INTO t VALUES (3,'dirty-main');
    SELECT dolt_pull('origin','other');" \
@@ -296,7 +296,7 @@ UPDATE t SET v='from-local' WHERE id=1;
 SELECT dolt_commit('-A','-m','local update');
 SELECT dolt_pull('origin','main');
 "
-remote_flow "pull_conflict_poststate" "$MERGE_SEED" "$CONFLICT_ADVANCE" "$CONFLICT_PULL" \
+VC_ORACLE_EXPECTATION=allow-error remote_flow "pull_conflict_poststate" "$MERGE_SEED" "$CONFLICT_ADVANCE" "$CONFLICT_PULL" \
   "SELECT 'R|'||(SELECT count(*) FROM dolt_conflicts)||'|'||(SELECT v FROM t WHERE id=1);" \
   "SELECT CONCAT('R|',(SELECT COUNT(*) FROM dolt_conflicts),'|',(SELECT v FROM t WHERE id=1));"
 
@@ -357,7 +357,7 @@ UPDATE t SET v='from-local' WHERE id=1;
 SELECT dolt_commit('-A','-m','local edit');
 SELECT dolt_pull('origin','main');
 "
-remote_flow "pull_drop_edit_conflict_poststate" "$MERGE_SEED" "$DROP_ADVANCE" "$DROP_PULL" \
+VC_ORACLE_EXPECTATION=allow-error remote_flow "pull_drop_edit_conflict_poststate" "$MERGE_SEED" "$DROP_ADVANCE" "$DROP_PULL" \
   "SELECT 'R|conflicts|'||(SELECT count(*) FROM dolt_conflicts)
    UNION ALL
    SELECT 'R|tables|'||count(*) FROM sqlite_master WHERE type='table' AND name='t';" \
@@ -404,17 +404,17 @@ remote_flow_dual() {
   local dl_remote="file://$dir/remote.db"
   local dl_src="$dir/src.db" dl_con="$dir/con.db"
   printf '%s\n' "${dl_seed//@REMOTE@/$dl_remote}" \
-    | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_seed.err"
+    | vc_oracle_run_doltlite "$dl_src" >/dev/null 2>"$dir/dl_seed.err"
   printf 'SELECT dolt_clone('"'"'%s'"'"');\n' "$dl_remote" \
-    | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_clone.err"
+    | vc_oracle_run_doltlite "$dl_con" >/dev/null 2>"$dir/dl_clone.err"
   if [ -n "$advance_dl" ]; then
     printf '%s\n' "${advance_dl//@REMOTE@/$dl_remote}" \
-      | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_advance.err"
+      | vc_oracle_run_doltlite "$dl_src" >/dev/null 2>"$dir/dl_advance.err"
   fi
-  printf '%s\n' "$consume" | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_consume.err"
+  printf '%s\n' "$consume" | vc_oracle_run_doltlite "$dl_con" >/dev/null 2>"$dir/dl_consume.err"
   local dl_out
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
-           | "$DOLTLITE" "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
+           | vc_oracle_run_doltlite "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
 
   local dt_remote="$dir/dt_remote"
   local dt_seed dt_advance dt_consume dt_q
@@ -571,7 +571,7 @@ INSERT INTO t VALUES (5);
   "SELECT 'R|'||count(*)||'|'||coalesce((SELECT id FROM audit), '~') FROM audit;" \
   "SELECT CONCAT('R|', count(*), '|', coalesce((SELECT id FROM audit), '~')) FROM audit;"
 
-remote_flow_dual "ff_pull_dirty_working_set_refused" \
+VC_ORACLE_EXPECTATION=allow-error remote_flow_dual "ff_pull_dirty_working_set_refused" \
   "$TRG_DL_SEED" "$TRG_DT_SEED" \
   "
 CREATE VIEW w AS SELECT id FROM t;

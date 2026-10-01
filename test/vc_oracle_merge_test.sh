@@ -33,7 +33,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -60,9 +60,9 @@ oracle_no_merge_commit() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_count
-  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/dl/db" >/dev/null 2>"$dir/dl.err" || true
+  printf '%s\n' "$setup" | vc_oracle_run_doltlite "$dir/dl/db" >/dev/null 2>"$dir/dl.err" || true
   dl_count=$(printf ".headers off\n.mode list\nSELECT count(*) FROM dolt_log;\n" \
-             | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+             | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
              | grep -E '^[0-9]+$' | tail -1)
 
   local dolt_setup
@@ -95,42 +95,17 @@ oracle_no_merge_commit() {
   fi
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_error_poststate() {
   local name="$1" setup="$2" query="$3" dolt_query="${4:-$3}"
   local dir="$TMPROOT/${name}_post"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" || true
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --allow-error || true
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n%s;\n" "$query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
       | tr -d '\r'
   )
 
@@ -157,7 +132,7 @@ oracle_same_session() {
   dl_out=$(
     {
       printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s\n" "$setup" "$dl_query"
-    } | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+    } | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
       | tr -d '\r' \
       | awk -F'\t' '$1=="Q"{print}'
   )
@@ -190,7 +165,7 @@ oracle_reopen_state() {
   dl_out=$(
     {
       printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_query"
-    } | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+    } | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
       | tr -d '\r' \
       | awk -F'\t' '$1=="Q"{print}'
   )
@@ -419,7 +394,7 @@ SELECT CONCAT('Q',CHAR(9),'commits=',count(*)) FROM dolt_log;
 SELECT CONCAT('Q',CHAR(9),id,':',a) FROM t ORDER BY id;"
         ;;
     esac
-    oracle_same_session "merge_${artifacts}_squash_${squash}" "$setup" \
+    VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_${artifacts}_squash_${squash}" "$setup" \
       "$query" "$(vc_oracle_translate_for_dolt "$query")"
   done
 done
@@ -495,7 +470,7 @@ SELECT dolt_merge('--squash', '--no-commit', 'feature');
 SELECT dolt_commit('-m', 'squashed');
 "
 
-oracle_error "squash_and_no_ff_rejected" "
+vc_oracle_error "squash_and_no_ff_rejected" "
 $SEED
 SELECT dolt_checkout('feature');
 INSERT INTO t VALUES (2, 20);
@@ -524,7 +499,7 @@ for mode in ff ff_no_commit no_ff no_ff_no_commit ff_squash \
 SELECT dolt_commit('-Am', 'main2');" ;;
   esac
   for finish in ROLLBACK COMMIT; do
-    oracle_reopen_state "txn_${mode}_${finish}" "
+    VC_ORACLE_EXPECTATION=allow-error oracle_reopen_state "txn_${mode}_${finish}" "
 $SEED
 $diverge
 SELECT dolt_checkout('feature');
@@ -588,7 +563,7 @@ SELECT dolt_merge('feature', '--message=release sync');
 
 echo "--- conflict (no merge commit) ---"
 
-oracle_no_merge_commit "modify_modify_conflict_blocks_merge" "
+VC_ORACLE_EXPECTATION=allow-error oracle_no_merge_commit "modify_modify_conflict_blocks_merge" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -601,7 +576,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-oracle_error_poststate "modify_modify_conflict_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "modify_modify_conflict_rolls_back" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -615,7 +590,7 @@ SELECT dolt_merge('feature');
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_reopen_state "modify_modify_conflict_explicit_txn_reconnect_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_reopen_state "modify_modify_conflict_explicit_txn_reconnect_rolls_back" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -634,7 +609,7 @@ SELECT concat('Q', char(9), count(*)) FROM dolt_conflicts;"
 
 echo "--- savepoint parity ---"
 
-oracle_same_session "merge_savepoint_success_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_savepoint_success_invalidated" "
 $SEED
 SELECT dolt_checkout('feature');
 INSERT INTO t VALUES (2, 20);
@@ -649,7 +624,7 @@ SELECT 'Q' || char(9) || count(*) FROM dolt_log;" \
 "SELECT concat('Q', char(9), count(*)) FROM t;
 SELECT concat('Q', char(9), count(*)) FROM dolt_log;"
 
-oracle_same_session "merge_abort_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_abort_savepoint_invalidated" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_add('-A');
@@ -673,7 +648,7 @@ SELECT 'Q' || char(9) || (SELECT v FROM t WHERE id = 1);" \
 "SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts));
 SELECT concat('Q', char(9), (SELECT v FROM t WHERE id = 1));"
 
-oracle_same_session "merge_conflict_nested_savepoint_rollback" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_conflict_nested_savepoint_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_add('-A');
@@ -696,7 +671,7 @@ SELECT 'Q' || char(9) || (SELECT v FROM t WHERE id = 1);" \
 "SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts));
 SELECT concat('Q', char(9), (SELECT v FROM t WHERE id = 1));"
 
-oracle_same_session "merge_conflict_top_savepoint_invalidated" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_conflict_top_savepoint_invalidated" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_add('-A');
@@ -758,7 +733,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-oracle_no_merge_commit "add_add_same_key_different_value_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle_no_merge_commit "add_add_same_key_different_value_conflict" "
 $SEED
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
@@ -789,7 +764,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-oracle_no_merge_commit "delete_modify_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle_no_merge_commit "delete_modify_conflict" "
 $SEED
 DELETE FROM t WHERE id = 1;
 SELECT dolt_add('-A');
@@ -1188,7 +1163,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('release-1');
 "
 
-oracle "merge_from_commit_hash" "
+VC_ORACLE_EXPECTATION=allow-error oracle "merge_from_commit_hash" "
 $SEED
 SELECT dolt_checkout('feature');
 INSERT INTO t VALUES (2, 20);
@@ -1236,21 +1211,21 @@ SELECT dolt_merge('feature');
 
 echo "--- error paths ---"
 
-oracle_error "merge_nonexistent_branch" "
+vc_oracle_error "merge_nonexistent_branch" "
 $SEED
 SELECT dolt_merge('nope');
 "
 
-oracle_error "merge_unknown_flag" "
+vc_oracle_error "merge_unknown_flag" "
 $SEED
 SELECT dolt_merge('feature', '--bogus');
 "
 
-oracle_error "merge_no_args" "
+vc_oracle_error "merge_no_args" "
 SELECT dolt_merge();
 "
 
-oracle_error "merge_abort_with_extra_args" "
+vc_oracle_error "merge_abort_with_extra_args" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
 SELECT dolt_commit('-A', '-m', 'init');
@@ -1265,7 +1240,7 @@ SELECT dolt_merge('feature');
 SELECT dolt_merge('--abort', 'extra');
 "
 
-oracle_error_poststate "merge_constraint_violation_rolls_back" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "merge_constraint_violation_rolls_back" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1, 1, 'base1'), (2, 2, 'base2');
 SELECT dolt_add('-A');
@@ -1283,7 +1258,7 @@ SELECT dolt_merge('feature');
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_error_poststate "merge_conflict_txn_rollback" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "merge_conflict_txn_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_add('-A');
@@ -1303,7 +1278,7 @@ ROLLBACK;
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT v FROM t WHERE id = 1)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT v FROM t WHERE id = 1))"
 
-oracle_error_poststate "merge_schema_conflict_autocommit_rollback" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "merge_schema_conflict_autocommit_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-Am', 'init');
 SELECT dolt_branch('feature');
@@ -1319,7 +1294,7 @@ SELECT dolt_merge('feature');
           (SELECT count(*) FROM dolt_status WHERE status = 'schema conflict')" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_status WHERE status = 'schema conflict'))"
 
-oracle_same_session "merge_schema_conflict_in_session" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_schema_conflict_in_session" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-Am', 'init');
 SELECT dolt_branch('feature');
@@ -1342,7 +1317,7 @@ SELECT dolt_merge('feature');
                (SELECT COALESCE(SUM(num_conflicts), -1) FROM dolt_conflicts), char(9),
                (SELECT COUNT(*) FROM dolt_status WHERE status = 'schema conflict'));"
 
-oracle_same_session "merge_schema_conflict_ours_deleted" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_schema_conflict_ours_deleted" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
 SELECT dolt_commit('-Am', 'init');
 SELECT dolt_branch('feature');
@@ -1365,7 +1340,7 @@ SELECT dolt_merge('feature');
                (SELECT COUNT(*) FROM dolt_status WHERE status = 'schema conflict'), char(9),
                (SELECT our_schema FROM dolt_schema_conflicts));"
 
-oracle_error_poststate "merge_constraint_violation_txn_rollback" "
+VC_ORACLE_EXPECTATION=allow-error oracle_error_poststate "merge_constraint_violation_txn_rollback" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1, 1, 'base1'), (2, 2, 'base2');
 SELECT dolt_add('-A');
@@ -1398,7 +1373,7 @@ oracle_dual_poststate() {
   local dl_out
   dl_out=$(
     printf ".headers off\n.mode list\n%s;\n" "$dl_query" \
-      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
       | tr -d '\r'
   )
 
@@ -1422,7 +1397,7 @@ oracle_dual_error() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup" --expect-error
   dl_rc=$?
 
   local dolt_setup
@@ -1482,7 +1457,7 @@ SELECT dolt_merge('feature');
 " "SELECT (SELECT count(*) FROM v) || '|' || (SELECT group_concat(a, ',') FROM (SELECT a FROM v ORDER BY a))" \
 "SELECT CONCAT((SELECT COUNT(*) FROM v), '|', (SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM v))"
 
-oracle_error "merge_view_both_add_different" "
+vc_oracle_error "merge_view_both_add_different" "
 $VIEW_BASE
 CREATE VIEW v AS SELECT b FROM t;
 SELECT dolt_commit('-Am', 'feat_view');
@@ -1500,7 +1475,7 @@ SELECT dolt_commit('-Am', 'base');
 SELECT dolt_checkout('-b', 'feature');
 "
 
-oracle_error "merge_view_both_modify_different" "
+vc_oracle_error "merge_view_both_modify_different" "
 $VIEW_MOD_BASE
 DROP VIEW v;
 CREATE VIEW v AS SELECT b FROM t;
@@ -1512,7 +1487,7 @@ SELECT dolt_commit('-Am', 'main_view');
 SELECT dolt_merge('feature');
 "
 
-oracle_error "merge_view_modify_vs_drop" "
+vc_oracle_error "merge_view_modify_vs_drop" "
 $VIEW_MOD_BASE
 DROP VIEW v;
 CREATE VIEW v AS SELECT b FROM t;
@@ -1546,7 +1521,7 @@ SELECT dolt_merge('feature');
 " "SELECT group_concat(b, ',') FROM (SELECT b FROM v ORDER BY b)" \
 "SELECT GROUP_CONCAT(b ORDER BY b SEPARATOR ',') FROM v"
 
-oracle_same_session "merge_view_conflict_in_session" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_view_conflict_in_session" "
 $VIEW_MOD_BASE
 DROP VIEW v;
 CREATE VIEW v AS SELECT b FROM t;
@@ -1560,7 +1535,7 @@ SELECT dolt_merge('feature');
 " "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts WHERE \"table\"='(sqlite_master)') || '|' || (SELECT CASE WHEN (SELECT count(*) FROM dolt_conflicts)+(SELECT count(*) FROM dolt_schema_conflicts)>0 THEN 1 ELSE 0 END);" \
 "SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts WHERE \`table\`='(sqlite_master)'), '|', CASE WHEN (SELECT count(*) FROM dolt_conflicts)+(SELECT count(*) FROM dolt_schema_conflicts)>0 THEN 1 ELSE 0 END);"
 
-oracle_same_session "merge_view_both_add_different_not_master" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "merge_view_both_add_different_not_master" "
 $VIEW_BASE
 CREATE VIEW v AS SELECT b FROM t;
 SELECT dolt_commit('-Am', 'feat_view');
@@ -1735,7 +1710,7 @@ SELECT dolt_merge('feature');
 " "SELECT group_concat(a, ',') FROM (SELECT a FROM t WHERE b = 20 ORDER BY a)" \
 "SELECT GROUP_CONCAT(a ORDER BY a SEPARATOR ',') FROM t WHERE b = 20"
 
-oracle_error "merge_index_same_name_different" "
+vc_oracle_error "merge_index_same_name_different" "
 $IDX_BASE
 CREATE INDEX idx ON t(b);
 SELECT dolt_commit('-Am', 'feat_index');
@@ -1827,7 +1802,7 @@ SELECT dolt_merge('feature');
 " "SELECT group_concat(id || ':' || coalesce(a,'~') || ':' || coalesce(c,'~'), ',') FROM (SELECT id, a, c FROM t ORDER BY id)" \
 "SELECT GROUP_CONCAT(CONCAT(id, ':', coalesce(a,'~'), ':', coalesce(c,'~')) ORDER BY id SEPARATOR ',') FROM t"
 
-oracle_error "dual_addcol_same_cell_conflict" "
+vc_oracle_error "dual_addcol_same_cell_conflict" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
 INSERT INTO t VALUES (1, 'one');
 SELECT dolt_commit('-Am', 'base');
@@ -1947,7 +1922,7 @@ SELECT dolt_merge('feature');
 " "SELECT group_concat(a || ':' || b || ':' || c, ',') FROM (SELECT a, b, c FROM t ORDER BY a)" \
 "SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', c) ORDER BY a SEPARATOR ',') FROM t"
 
-oracle_error "dual_defaults_delete_vs_ancestor_column_edit" "
+vc_oracle_error "dual_defaults_delete_vs_ancestor_column_edit" "
 CREATE TABLE t(a INT PRIMARY KEY, b INT);
 INSERT INTO t VALUES (1, 1), (2, 2);
 SELECT dolt_commit('-Am', 'base');
@@ -1982,7 +1957,7 @@ SELECT dolt_merge('feature');
 "SELECT GROUP_CONCAT(CONCAT(a, ':', b, ':', gv, ':', c, ':', d) ORDER BY a SEPARATOR ',') FROM t"
 
 # Concluding a conflicted merge must still record the second parent.
-oracle "conflict_resolved_commit_keeps_merged_branch_in_log" "
+VC_ORACLE_EXPECTATION=allow-error oracle "conflict_resolved_commit_keeps_merged_branch_in_log" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_commit('-Am', 'init');
@@ -2000,7 +1975,7 @@ COMMIT;
 "
 
 # Cherry-pick stays a single-parent commit.
-oracle "conflict_resolved_cherry_pick_stays_single_parent" "
+VC_ORACLE_EXPECTATION=allow-error oracle "conflict_resolved_cherry_pick_stays_single_parent" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_commit('-Am', 'init');
@@ -2017,7 +1992,7 @@ SELECT dolt_commit('-Am', 'picked');
 COMMIT;
 "
 
-oracle_reopen_state "conflict_resolved_commit_makes_merged_branch_an_ancestor" "
+VC_ORACLE_EXPECTATION=allow-error oracle_reopen_state "conflict_resolved_commit_makes_merged_branch_an_ancestor" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_commit('-Am', 'init');
@@ -2110,7 +2085,7 @@ SELECT dolt_merge('feat');
 " "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id))" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-oracle_same_session "dual_add_table_same_pk_is_row_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "dual_add_table_same_pk_is_row_conflict" "
 SELECT dolt_commit('-Am', 'init empty');
 SELECT dolt_branch('feat');
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -2126,7 +2101,7 @@ SELECT dolt_merge('feat');
 " "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_schema_conflicts) || char(9) || (SELECT count(*) FROM dolt_conflicts) || char(9) || (SELECT coalesce(sum(num_conflicts), 0) FROM dolt_conflicts) || char(9) || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id));" \
 "SELECT CONCAT('Q', char(9), (SELECT COUNT(*) FROM dolt_schema_conflicts), char(9), (SELECT COUNT(*) FROM dolt_conflicts), char(9), (SELECT COALESCE(SUM(num_conflicts), 0) FROM dolt_conflicts), char(9), (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t));"
 
-oracle_error "dual_add_table_different_schema_refused" "
+vc_oracle_error "dual_add_table_different_schema_refused" "
 SELECT dolt_commit('-Am', 'init empty');
 SELECT dolt_branch('feat');
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

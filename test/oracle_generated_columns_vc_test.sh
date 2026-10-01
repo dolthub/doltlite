@@ -5,6 +5,7 @@ DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -14,12 +15,12 @@ fail_name() {
 
 dl() {
   local db="$1"; shift
-  "$DOLTLITE" "$db" "$@" 2>/dev/null
+  vc_oracle_run_doltlite "$db" "$@" 2>/dev/null
 }
 
 dlq() {
   local db="$1" sql="$2"
-  printf ".headers off\n.mode list\n%s\n" "$sql" | "$DOLTLITE" "$db" 2>/dev/null
+  printf ".headers off\n.mode list\n%s\n" "$sql" | vc_oracle_run_doltlite "$db" 2>/dev/null
 }
 
 echo "=== Generated Columns + Version Control Tests ==="
@@ -112,7 +113,7 @@ echo ""
 echo "--- E: Conflict on base column of generated col ---"
 
 DB="$TMPROOT/e.db"
-dl "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, x INT, y INT GENERATED ALWAYS AS (x*2) STORED);
 INSERT INTO t(id,x) VALUES(1,10);
 SELECT dolt_commit('-Am','base');
@@ -128,15 +129,15 @@ SELECT dolt_merge('feat');
 SQL
 )" >/dev/null
 
-CONFLICTS=$(dlq "$DB" "BEGIN;
+CONFLICTS=$(VC_ORACLE_EXPECTATION=error dlq "$DB" "BEGIN;
 SELECT dolt_merge('feat');
 SELECT count(*) FROM dolt_conflicts;
 ROLLBACK;")
-XVAL=$(dlq "$DB" "BEGIN;
+XVAL=$(VC_ORACLE_EXPECTATION=error dlq "$DB" "BEGIN;
 SELECT dolt_merge('feat');
 SELECT x FROM t WHERE id=1;
 ROLLBACK;")
-YVAL=$(dlq "$DB" "BEGIN;
+YVAL=$(VC_ORACLE_EXPECTATION=error dlq "$DB" "BEGIN;
 SELECT dolt_merge('feat');
 SELECT y FROM t WHERE id=1;
 ROLLBACK;")
@@ -275,6 +276,7 @@ PROD2=$(dl "$DB" "SELECT prod_ab FROM t WHERE id=2;")
 
 echo ""
 echo "======================================="
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
 echo "__SUITE_COMPLETE__"

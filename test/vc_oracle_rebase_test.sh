@@ -18,7 +18,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^LOG|')
 
@@ -47,7 +47,7 @@ oracle_txn() {
   mkdir -p "$dir/dl" "$dir/dt"
   local dl_out dt_out
   dl_out=$(printf "%s\n.headers off\n.mode list\nBEGIN;\n%s\n" "$setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | tr -d '\r' | grep '^LOG|')
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" | tr -d '\r' | grep '^LOG|')
   (
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
@@ -61,31 +61,6 @@ oracle_txn() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_savepoint_abort_poststate() {
   local name="$1" setup="$2"
@@ -96,7 +71,7 @@ oracle_savepoint_abort_poststate() {
 
   vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
   dl_out=$(printf ".headers off\n.mode list\nSELECT active_branch() || '|AB';\nSELECT count(*) || '|RB' FROM dolt_branches WHERE name='dolt_rebase_feat';\nSELECT count(*) || '|T' FROM t;\n" \
-           | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
            | tr -d '\r')
 
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -120,11 +95,11 @@ oracle_error_reopen() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
   dl_rc=$?
   local dl_out
   dl_out=$(printf ".headers off\n.mode list\n%s\n" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.post.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.post.err" \
            | tr -d '\r' \
            | grep '^LOG|')
 
@@ -167,7 +142,7 @@ oracle_reopen() {
   dl_rc=$?
   local dl_out
   dl_out=$(printf ".headers off\n.mode list\n%s\n" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.post.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.post.err" \
            | tr -d '\r' \
            | grep '^LOG|')
 
@@ -208,7 +183,7 @@ oracle_poststate() {
   dl_rc=$?
   local dl_out
   dl_out=$(printf ".headers off\n.mode list\n%s\n" "$dl_query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.post.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.post.err" \
            | tr -d '\r')
 
   local dolt_setup
@@ -354,7 +329,7 @@ oracle "multi_commit_table" "$MULTI_SETUP" \
 
 echo "--- schema-edge replay ---"
 
-oracle_poststate "rebase_disjoint_add_table_plus_check" "
+VC_ORACLE_EXPECTATION=allow-error oracle_poststate "rebase_disjoint_add_table_plus_check" "
 CREATE TABLE base(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO base VALUES (1, 1);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
@@ -391,7 +366,7 @@ SELECT dolt_rebase('main');
           (SELECT count(*) FROM pragma_index_list('b') WHERE name='idx_b_v')" \
   "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.statistics WHERE table_name='a' AND index_name='idx_a_v'), '|', (SELECT COUNT(*) FROM information_schema.statistics WHERE table_name='b' AND index_name='idx_b_v'))"
 
-oracle_poststate "rebase_disjoint_fk_tables_plus_check" "
+VC_ORACLE_EXPECTATION=allow-error oracle_poststate "rebase_disjoint_fk_tables_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
@@ -515,13 +490,13 @@ SELECT CONCAT('LOG|C|', pk, ':', u) FROM child ORDER BY pk;
 
 echo "--- error paths ---"
 
-oracle_error "no_divergent_commits" "
+vc_oracle_error "no_divergent_commits" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase('main');
 "
 
-oracle_error "behind_upstream" "
+vc_oracle_error "behind_upstream" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_checkout('-b', 'feat');
@@ -532,7 +507,7 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 "
 
-oracle_error "uncommitted_changes" "
+vc_oracle_error "uncommitted_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_checkout('-b', 'feat');
@@ -540,20 +515,20 @@ INSERT INTO t VALUES (1);
 SELECT dolt_rebase('main');
 "
 
-oracle_error "unknown_upstream" "
+vc_oracle_error "unknown_upstream" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_checkout('-b', 'feat');
 SELECT dolt_rebase('nope');
 "
 
-oracle_error "abort_without_active_rebase" "
+vc_oracle_error "abort_without_active_rebase" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase('--abort');
 "
 
-oracle_error "conflict_rebase" "
+vc_oracle_error "conflict_rebase" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
@@ -567,13 +542,13 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 "
 
-oracle_error "no_args" "
+vc_oracle_error "no_args" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase();
 "
 
-oracle_error "too_many_args" "
+vc_oracle_error "too_many_args" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_checkout('-b', 'feat');
@@ -586,7 +561,7 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main', 'extra');
 "
 
-oracle_error "unknown_flag" "
+vc_oracle_error "unknown_flag" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase('--bogus');
@@ -795,7 +770,7 @@ SELECT dolt_rebase('-i', 'main');
 SELECT dolt_rebase('--abort');
 " "SELECT CONCAT('LOG|', active_branch());"
 
-oracle_savepoint_abort_poststate "interactive_abort_savepoint_poststate" "
+VC_ORACLE_EXPECTATION=allow-error oracle_savepoint_abort_poststate "interactive_abort_savepoint_poststate" "
 $INTERACTIVE_SETUP
 SAVEPOINT sp1;
 SELECT dolt_rebase('-i', 'main');
@@ -840,13 +815,13 @@ SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 1;
 SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
 "
 
-oracle_error "continue_without_active" "
+vc_oracle_error "continue_without_active" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase('--continue');
 "
 
-oracle_error "interactive_too_many_args" "
+vc_oracle_error "interactive_too_many_args" "
 $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main', 'extra');
 "
@@ -1180,7 +1155,7 @@ SELECT CONCAT('LOG|M|', REPLACE(message, CHAR(10), '/')) FROM dolt_log;
 SELECT CONCAT('LOG|R|', pk, '=', v) FROM t ORDER BY pk;"
 
 for action in pick squash fixup; do
-  oracle_txn "interactive_pause_on_${action}_conflict" "$PAUSE_SETUP" "
+  VC_ORACLE_EXPECTATION=allow-error oracle_txn "interactive_pause_on_${action}_conflict" "$PAUSE_SETUP" "
 SELECT dolt_rebase('-i', 'main');
 UPDATE dolt_rebase SET action='$action' WHERE commit_message='f2';
 DELETE FROM dolt_rebase WHERE commit_message='f4';
@@ -1194,7 +1169,7 @@ SELECT dolt_rebase('--continue');
 $PAUSE_REPORT"
 done
 
-oracle_txn "interactive_pause_twice" "$PAUSE_SETUP" "
+VC_ORACLE_EXPECTATION=allow-error oracle_txn "interactive_pause_twice" "$PAUSE_SETUP" "
 SELECT dolt_rebase('-i', 'main');
 SELECT dolt_rebase('--continue');
 SELECT CONCAT('LOG|PC1|', count(*)) FROM dolt_conflicts;
@@ -1209,7 +1184,7 @@ SELECT dolt_add('.');
 SELECT dolt_rebase('--continue');
 $PAUSE_REPORT"
 
-oracle_txn "linear_pause_on_later_step" "$PAUSE_SETUP" "
+VC_ORACLE_EXPECTATION=allow-error oracle_txn "linear_pause_on_later_step" "$PAUSE_SETUP" "
 SELECT dolt_rebase('main');
 SELECT CONCAT('LOG|PB|', active_branch());
 SELECT CONCAT('LOG|PC|', count(*)) FROM dolt_conflicts;
@@ -1249,11 +1224,11 @@ SELECT CONCAT('LOG|B|', active_branch());
 SELECT CONCAT('LOG|M|', message) FROM dolt_log;
 SELECT CONCAT('LOG|R|', id, '=', pid) FROM c ORDER BY id;"
 
-oracle_txn "linear_pause_on_constraint_violation" "$CV_SETUP" "
+VC_ORACLE_EXPECTATION=allow-error oracle_txn "linear_pause_on_constraint_violation" "$CV_SETUP" "
 SELECT dolt_rebase('main');
 $CV_RESOLVE"
 
-oracle_txn "interactive_pause_on_constraint_violation" "$CV_SETUP" "
+VC_ORACLE_EXPECTATION=allow-error oracle_txn "interactive_pause_on_constraint_violation" "$CV_SETUP" "
 SELECT dolt_rebase('-i', 'main');
 SELECT dolt_rebase('--continue');
 $CV_RESOLVE"

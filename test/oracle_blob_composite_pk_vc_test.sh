@@ -5,6 +5,7 @@ DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -14,12 +15,12 @@ fail_name() {
 
 dl() {
   local db="$1"; shift
-  "$DOLTLITE" "$db" "$@" 2>/dev/null
+  vc_oracle_run_doltlite "$db" "$@" 2>/dev/null
 }
 
 dlq() {
   local db="$1" sql="$2"
-  printf ".headers off\n.mode list\n%s\n" "$sql" | "$DOLTLITE" "$db" 2>/dev/null
+  printf ".headers off\n.mode list\n%s\n" "$sql" | vc_oracle_run_doltlite "$db" 2>/dev/null
 }
 
 echo "=== BLOB Composite PK + Version Control Tests ==="
@@ -85,7 +86,7 @@ echo ""
 echo "--- C: Modify-modify conflict ---"
 
 DB="$TMPROOT/c.db"
-dl "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl "$DB" "$(cat <<'SQL'
 CREATE TABLE t(a BLOB, b INT, v TEXT, PRIMARY KEY(a,b));
 INSERT INTO t VALUES(X'DEADBEEF', 1, 'base');
 SELECT dolt_commit('-Am','base');
@@ -101,11 +102,11 @@ SELECT dolt_merge('feat');
 SQL
 )" >/dev/null
 
-CONF=$(dlq "$DB" "BEGIN;
+CONF=$(VC_ORACLE_EXPECTATION=error dlq "$DB" "BEGIN;
 SELECT dolt_merge('feat');
 SELECT count(*) FROM dolt_conflicts;
 ROLLBACK;")
-VAL=$(dlq "$DB" "BEGIN;
+VAL=$(VC_ORACLE_EXPECTATION=error dlq "$DB" "BEGIN;
 SELECT dolt_merge('feat');
 SELECT v FROM t WHERE a=X'DEADBEEF';
 ROLLBACK;")
@@ -116,7 +117,7 @@ echo ""
 echo "--- D: Delete vs modify conflict ---"
 
 DB="$TMPROOT/d.db"
-dl "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl "$DB" "$(cat <<'SQL'
 CREATE TABLE t(a BLOB, b INT, v TEXT, PRIMARY KEY(a,b));
 INSERT INTO t VALUES(X'AABB', 1, 'target');
 INSERT INTO t VALUES(X'CCDD', 1, 'bystander');
@@ -133,7 +134,7 @@ SELECT dolt_merge('feat');
 SQL
 )" >/dev/null
 
-CONF=$(dlq "$DB" "BEGIN;
+CONF=$(VC_ORACLE_EXPECTATION=error dlq "$DB" "BEGIN;
 SELECT dolt_merge('feat');
 SELECT count(*) FROM dolt_conflicts;
 ROLLBACK;")
@@ -281,6 +282,7 @@ CONF=$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")
 
 echo ""
 echo "======================================="
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
 echo "__SUITE_COMPLETE__"

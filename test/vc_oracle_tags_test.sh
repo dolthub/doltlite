@@ -33,7 +33,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -58,31 +58,6 @@ oracle() {
   fi
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_savepoint_tag_poststate() {
   local name="$1" setup="$2"
@@ -91,12 +66,12 @@ oracle_savepoint_tag_poststate() {
 
   local dl_rc dt_rc dl_v dl_tags dt_v dt_tags
 
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
   dl_rc=$?
   dl_v=$(printf ".headers off\n.mode list\nSELECT v FROM t WHERE id=1;\n" \
-         | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+         | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err")
   dl_tags=$(printf ".headers off\n.mode list\nSELECT coalesce(group_concat(tag_name), '') FROM dolt_tags;\n" \
-            | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+            | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err")
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -167,7 +142,7 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('v1.0', '--author', 'Alice Author <alice@example.com');
 "
 
-oracle_error "tag_malformed_author" "
+vc_oracle_error "tag_malformed_author" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
 SELECT dolt_add('-A');
@@ -290,35 +265,35 @@ SELECT dolt_tag('temp');
 
 echo "--- invalid names ---"
 
-oracle_error "tag_empty_name" "
+vc_oracle_error "tag_empty_name" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('');
 "
 
-oracle_error "tag_reserved_head" "
+vc_oracle_error "tag_reserved_head" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('HEAD');
 "
 
-oracle_error "tag_invalid_double_dot" "
+vc_oracle_error "tag_invalid_double_dot" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('bad..name');
 "
 
-oracle_error "tag_invalid_space" "
+vc_oracle_error "tag_invalid_space" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('bad name');
 "
 
-oracle_error "checkout_colliding_tag_is_detached" "
+vc_oracle_error "checkout_colliding_tag_is_detached" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
 SELECT dolt_add('-A');

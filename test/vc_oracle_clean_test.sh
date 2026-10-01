@@ -26,9 +26,9 @@ oracle() {
 
   local dl_status dl_rows
   dl_status=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S' || char(9) || table_name || char(9) || staged || char(9) || status FROM dolt_status;\nSELECT 'T' || char(9) || name FROM pragma_table_list WHERE schema='main' AND type IN ('table','virtual');\n" "$setup" \
-    | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" | normalize_state)
+    | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" | normalize_state)
   dl_rows=$(printf "%s\nSELECT count(*) FROM t;\n" "$setup" \
-    | "$DOLTLITE" "$dir/dl.rows" 2>>"$dir/dl.err" | tail -1)
+    | vc_oracle_run_doltlite "$dir/dl.rows" 2>>"$dir/dl.err" | tail -1)
 
   local dolt_setup dt_status dt_rows
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -61,7 +61,7 @@ oracle_error() {
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
   local dl_rc dt_rc dolt_setup
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
   dl_rc=$?
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
@@ -91,7 +91,7 @@ SELECT concat('N,', count(*)) FROM information_schema.tables WHERE table_schema=
 SELECT concat('R,', id, ',', v) FROM t;"
   mkdir -p "$dir/dt"
   if ! vc_oracle_run_doltlite_script "$dir/db" "$dir/dl.out" "$dir/dl.err" "$setup" \
-    || ! "$DOLTLITE" -csv "$dir/db" "$dl_query" >"$dir/dl.query" 2>>"$dir/dl.err"; then
+    || ! vc_oracle_run_doltlite -csv "$dir/db" "$dl_query" >"$dir/dl.query" 2>>"$dir/dl.err"; then
     fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
     echo "  FAIL: $name (doltlite execution)"; cat "$dir/dl.err"
     return

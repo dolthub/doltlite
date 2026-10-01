@@ -40,7 +40,7 @@ run_oracle() {
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n%s\n" \
              "$setup" "$dl_verify" "$follow" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^R|' \
            | tr -d '"' \
            | normalize)
@@ -160,7 +160,7 @@ SELECT dolt_merge('br');
 "
 
 echo "--- FK: merge-recorded violation survives a scoped verify ---"
-run_oracle "fk_merge_cv_survives_named_other" "$MERGE_CV_SETUP" "'otherTable'" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "fk_merge_cv_survives_named_other" "$MERGE_CV_SETUP" "'otherTable'" \
   "$FOLLOW_AGG_COUNT" 1
 
 echo "--- FK: default clean after force-commit ---"
@@ -206,12 +206,12 @@ COMMIT;
 FOLLOW_T_ROWS="SELECT CONCAT('R|row=', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' WHEN 1 THEN 'FK' WHEN 2 THEN 'UQ' WHEN 3 THEN 'CK' ELSE '?' END, ':', pk, ':', col1) FROM dolt_constraint_violations_t ORDER BY pk;"
 
 echo "--- unique: after merge ---"
-run_oracle "unique_after_merge" "$UNIQUE_SETUP" "" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_after_merge" "$UNIQUE_SETUP" "" \
   "$FOLLOW_AGG
 $FOLLOW_T_ROWS" 0
 
 echo "--- unique: re-verify after clearing ---"
-run_oracle "unique_reverify" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_reverify" \
 "$UNIQUE_SETUP
 DELETE FROM dolt_constraint_violations_t;
 " \
@@ -220,7 +220,7 @@ DELETE FROM dolt_constraint_violations_t;
 $FOLLOW_T_ROWS" 0
 
 echo "--- unique: named otherTable ---"
-run_oracle "unique_named_other" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_named_other" \
 "$UNIQUE_SETUP
 DELETE FROM dolt_constraint_violations_t;
 " \
@@ -228,7 +228,7 @@ DELETE FROM dolt_constraint_violations_t;
 "$FOLLOW_AGG_COUNT" 1
 
 echo "--- FK: --force commit keeps merge-recorded violations ---"
-run_oracle "fk_force_commit_keeps_merge_cvs" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "fk_force_commit_keeps_merge_cvs" \
 "$MERGE_CV_SETUP
 SELECT dolt_commit('--force','-m','forced');
 " \
@@ -237,7 +237,7 @@ SELECT dolt_commit('--force','-m','forced');
 $FOLLOW_CHILD_ROWS" 0
 
 echo "--- unique: --force commit keeps merge-recorded violations ---"
-run_oracle "unique_force_commit_keeps_cvs" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_force_commit_keeps_cvs" \
 "$UNIQUE_SETUP
 SELECT dolt_commit('-Am', 'commit with violations', '--force');
 " \
@@ -246,7 +246,7 @@ SELECT dolt_commit('-Am', 'commit with violations', '--force');
 $FOLLOW_T_ROWS" 0
 
 echo "--- unique: --all after force-commit ---"
-run_oracle "unique_all_after_commit" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_all_after_commit" \
 "$UNIQUE_SETUP
 SELECT dolt_commit('-Am', 'commit with violations', '--force');
 DELETE FROM dolt_constraint_violations_t;
@@ -256,7 +256,7 @@ DELETE FROM dolt_constraint_violations_t;
 $FOLLOW_T_ROWS" 0
 
 echo "--- unique: --all --output-only ---"
-run_oracle "unique_output_only" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_output_only" \
 "$UNIQUE_SETUP
 SELECT dolt_commit('-Am', 'commit with violations', '--force');
 DELETE FROM dolt_constraint_violations_t;
@@ -265,7 +265,7 @@ DELETE FROM dolt_constraint_violations_t;
 "$FOLLOW_AGG_COUNT" 1
 
 echo "--- unique: --output-only preserves recorded violations ---"
-run_oracle "unique_output_only_preserves_recorded" \
+VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_output_only_preserves_recorded" \
 "$UNIQUE_SETUP
 DELETE FROM t WHERE pk=2;
 " \

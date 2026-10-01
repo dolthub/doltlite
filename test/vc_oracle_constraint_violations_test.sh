@@ -27,7 +27,7 @@ oracle() {
   dl_script=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" \
               | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
   dl_out=$(printf "%s" "$dl_script" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite --expect-error "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^R|' \
            | tr -d '"' \
            | normalize)
@@ -57,7 +57,7 @@ dl_expect() {
   dl_script=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" \
               | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
   dl_out=$(printf "%s" "$dl_script" \
-           | "$DOLTLITE" "$dir/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite --allow-error "$dir/db" 2>"$dir/dl.err" \
            | grep '^R|' \
            | tr -d '"' \
            | normalize)

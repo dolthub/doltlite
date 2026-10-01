@@ -28,7 +28,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT \"table\" || char(9) || num_conflicts FROM dolt_conflicts ORDER BY \"table\";\n" "$dl_setup" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -84,7 +84,7 @@ SELECT dolt_merge('feature');
 
 echo "--- single-table conflict ---"
 
-oracle "modify_modify_one_row" "
+VC_ORACLE_EXPECTATION=allow-error oracle "modify_modify_one_row" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -101,7 +101,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-oracle "modify_modify_three_rows" "
+VC_ORACLE_EXPECTATION=allow-error oracle "modify_modify_three_rows" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 INSERT INTO t VALUES (2, 20);
@@ -122,7 +122,7 @@ SELECT dolt_merge('feature');
 
 echo "--- multi-table conflict ---"
 
-oracle "two_tables_each_with_conflict" "
+VC_ORACLE_EXPECTATION=allow-error oracle "two_tables_each_with_conflict" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO a VALUES (1, 10);
@@ -145,7 +145,7 @@ SELECT dolt_merge('feature');
 
 echo "--- resolution clears conflicts ---"
 
-oracle "resolve_ours_clears" "
+VC_ORACLE_EXPECTATION=allow-error oracle "resolve_ours_clears" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -163,7 +163,7 @@ SELECT dolt_merge('feature');
 SELECT dolt_conflicts_resolve('--ours', 't');
 " "EXPECT_EMPTY"
 
-oracle "resolve_theirs_clears" "
+VC_ORACLE_EXPECTATION=allow-error oracle "resolve_theirs_clears" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -181,7 +181,7 @@ SELECT dolt_merge('feature');
 SELECT dolt_conflicts_resolve('--theirs', 't');
 " "EXPECT_EMPTY"
 
-oracle "resolve_one_of_two_tables" "
+VC_ORACLE_EXPECTATION=allow-error oracle "resolve_one_of_two_tables" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO a VALUES (1, 10);
@@ -205,7 +205,7 @@ SELECT dolt_conflicts_resolve('--ours', 'a');
 
 echo "--- abort ---"
 
-oracle "abort_clears_conflicts" "
+VC_ORACLE_EXPECTATION=allow-error oracle "abort_clears_conflicts" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');

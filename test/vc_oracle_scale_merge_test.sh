@@ -31,7 +31,7 @@ oracle_scenario() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   dl_all=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$queries" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' | grep '^R|' | sort)
 
   (

@@ -38,11 +38,11 @@ expect_contains() {
 
 dl_query() {
   local db="$1"; shift
-  "$DOLTLITE" "$db" "$@" 2>/dev/null
+  vc_oracle_run_doltlite "--${VC_ORACLE_EXPECTATION:-success}" "$db" "$@" 2>/dev/null
 }
 
 dl_script() {
-  printf '%s\n' "$2" | "$DOLTLITE" "$1" 2>/dev/null
+  printf '%s\n' "$2" | vc_oracle_run_doltlite "--${VC_ORACLE_EXPECTATION:-success}" "$1" 2>/dev/null
 }
 
 dolt_query() {
@@ -58,7 +58,7 @@ echo "--- BEGIN + dolt_commit + ROLLBACK ---"
 
 DB="$TMPROOT/a.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 BEGIN;
@@ -99,7 +99,7 @@ echo "--- SAVEPOINT + dolt_commit + ROLLBACK TO ---"
 
 DB="$TMPROOT/b.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SAVEPOINT sp1;
@@ -161,7 +161,7 @@ echo "--- BEGIN + multiple inserts + dolt_commit + ROLLBACK ---"
 
 DB="$TMPROOT/d.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;
 INSERT INTO t VALUES(1,'a');
@@ -185,7 +185,7 @@ echo "--- Nested savepoints + dolt_commit ---"
 
 DB="$TMPROOT/e.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 SAVEPOINT outer;
 INSERT INTO t VALUES(1,'a');
@@ -254,7 +254,7 @@ echo "--- BEGIN + bad dolt_commit option ---"
 
 DB="$TMPROOT/h.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_commit('-Am','c1');
@@ -267,8 +267,8 @@ DL_H=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ -n "$DOLT" ]; then
   DOLT_H_DIR="$TMPROOT/dolt_h"
-  mkdir -p "$DOLT_H_DIR" && cd "$DOLT_H_DIR" && dolt init >/dev/null 2>&1
-  dolt sql 2>/dev/null <<'SQL'
+  mkdir -p "$DOLT_H_DIR" && cd "$DOLT_H_DIR" && vc_oracle_init_repo
+  "$DOLT" sql 2>/dev/null <<'SQL'
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 CALL dolt_commit('-Am','c1');
@@ -294,7 +294,7 @@ echo "--- Nested savepoint + bad dolt_commit option ---"
 
 DB="$TMPROOT/i.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_commit('-Am','c1');
@@ -308,8 +308,8 @@ DL_I=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ -n "$DOLT" ]; then
   DOLT_I_DIR="$TMPROOT/dolt_i"
-  mkdir -p "$DOLT_I_DIR" && cd "$DOLT_I_DIR" && dolt init >/dev/null 2>&1
-  dolt sql 2>/dev/null <<'SQL'
+  mkdir -p "$DOLT_I_DIR" && cd "$DOLT_I_DIR" && vc_oracle_init_repo
+  "$DOLT" sql 2>/dev/null <<'SQL'
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 CALL dolt_commit('-Am','c1');
@@ -336,7 +336,7 @@ echo "--- ROLLBACK TO nested savepoint before dolt_commit ---"
 
 DB="$TMPROOT/j.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_commit('-A','-m','base');
@@ -372,7 +372,7 @@ echo "--- DDL in nested savepoint + dolt_commit ---"
 
 DB="$TMPROOT/k.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_commit('-A','-m','base');
@@ -508,7 +508,7 @@ echo "--- BEGIN + BEGIN + COMMIT + dolt_commit ---"
 
 DB="$TMPROOT/m.db"
 rm -f "$DB"
-dl_script "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;
 INSERT INTO t VALUES(1,'in-outer');
@@ -541,7 +541,7 @@ echo "--- BEGIN + BEGIN + dolt_commit + COMMIT ---"
 
 DB="$TMPROOT/n.db"
 rm -f "$DB"
-dl_script "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;
 INSERT INTO t VALUES(1,'in-outer');
@@ -574,7 +574,7 @@ echo "--- BEGIN IMMEDIATE + BEGIN + COMMIT + dolt_commit ---"
 
 DB="$TMPROOT/o.db"
 rm -f "$DB"
-dl_script "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN IMMEDIATE;
 INSERT INTO t VALUES(1,'in-immediate');
@@ -607,7 +607,7 @@ echo "--- BEGIN IMMEDIATE + BEGIN + dolt_commit + COMMIT ---"
 
 DB="$TMPROOT/p.db"
 rm -f "$DB"
-dl_script "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_script "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN IMMEDIATE;
 INSERT INTO t VALUES(1,'in-immediate');
@@ -640,7 +640,7 @@ echo "--- BEGIN IMMEDIATE + nested savepoint + dolt_commit ---"
 
 DB="$TMPROOT/q.db"
 rm -f "$DB"
-dl_query "$DB" "$(cat <<'SQL'
+VC_ORACLE_EXPECTATION=error dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN IMMEDIATE;
 INSERT INTO t VALUES(1,'in-immediate');
@@ -674,7 +674,7 @@ echo "--- Deferred FK failure under BEGIN ---"
 
 DB="$TMPROOT/r.db"
 rm -f "$DB"
-DL_R_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+DL_R_OUT=$(vc_oracle_run_doltlite --expect-error "$DB" 2>&1 <<'SQL'
 .bail off
 PRAGMA foreign_keys=ON;
 CREATE TABLE p(id INTEGER PRIMARY KEY);
@@ -715,7 +715,7 @@ echo "--- Deferred FK failure under top-level SAVEPOINT ---"
 
 DB="$TMPROOT/s.db"
 rm -f "$DB"
-DL_S_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+DL_S_OUT=$(vc_oracle_run_doltlite --expect-error "$DB" 2>&1 <<'SQL'
 .bail off
 PRAGMA foreign_keys=ON;
 CREATE TABLE p(id INTEGER PRIMARY KEY);
@@ -749,7 +749,7 @@ echo "--- Deferred FK failure under nested SAVEPOINT ---"
 
 DB="$TMPROOT/t.db"
 rm -f "$DB"
-DL_T_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+DL_T_OUT=$(vc_oracle_run_doltlite --expect-error "$DB" 2>&1 <<'SQL'
 .bail off
 PRAGMA foreign_keys=ON;
 CREATE TABLE p(id INTEGER PRIMARY KEY);
@@ -782,7 +782,7 @@ echo "--- Repair deferred FK after failed dolt_commit ---"
 
 DB="$TMPROOT/u.db"
 rm -f "$DB"
-DL_U_OUT=$("$DOLTLITE" "$DB" 2>&1 <<'SQL'
+DL_U_OUT=$(vc_oracle_run_doltlite --expect-error "$DB" 2>&1 <<'SQL'
 .bail off
 PRAGMA foreign_keys=ON;
 CREATE TABLE p(id INTEGER PRIMARY KEY);

@@ -18,7 +18,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$select_sql" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^BL|' | sort)
 
@@ -443,7 +443,7 @@ UPDATE t SET v = 'b' WHERE id = 1;
 SELECT dolt_commit('-Am', 'UPDATE');
 CREATE TEMP TABLE t(x TEXT PRIMARY KEY, y INT);
 SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t;
-" | "$DOLTLITE" "$dir/db" 2>"$dir/err" | tr -d '\r' | grep '^BL|')
+" | vc_oracle_run_doltlite "$dir/db" 2>"$dir/err" | tr -d '\r' | grep '^BL|')
   if [ "$out" = "BL|1|UPDATE" ]; then
     pass=$((pass+1))
   else

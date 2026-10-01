@@ -70,7 +70,7 @@ abort_oracle() {
     printf '\nSELECT dolt_cherry_pick(%s);\n' "$abort_args"
     state_sqlite AFTER
     printf '\nCOMMIT;\n'
-  } | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err" || true
+  } | vc_oracle_run_doltlite --allow-error "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err" || true
   dl_out=$(tr -d '\r' < "$dir/dl.out" | grep -E '^(BEFORE|AFTER)\|' || true)
 
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -99,7 +99,7 @@ error_oracle() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   vc_oracle_run_doltlite_script \
-    "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+    "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
   dl_rc=$?
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   vc_oracle_run_dolt_script_for_error \

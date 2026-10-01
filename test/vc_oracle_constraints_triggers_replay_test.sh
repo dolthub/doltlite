@@ -22,7 +22,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf ".bail off\n%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^R|' | sort)
 
@@ -57,7 +57,7 @@ oracle_replay_fail() {
   local dl_out
   dl_out=$(printf ".bail off\n%s\n%s\n.headers off\n.mode list\n%s\n" \
                   "$setup" "$replay" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite --expect-error "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^R|' | sort)
 
@@ -89,7 +89,7 @@ oracle_triggers_dual() {
 
   local dl_out
   dl_out=$(printf ".bail off\n%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | grep -v '^$' \

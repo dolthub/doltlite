@@ -33,18 +33,23 @@ oracle() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_branch dl_rows dl_status
+  local rows_query="SELECT 'R' || char(9) || id || char(9) || v FROM t ORDER BY id;"
+  local row_expectation=--success
+  if ! printf '%s\n' "$setup" | grep -qiE 'CREATE TABLE t\('; then
+    row_expectation=--expect-error
+  fi
   dl_branch=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'B' || char(9) || active_branch();\n" "$setup" \
-              | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+              | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
               | grep -v '^[0-9]*$' \
               | grep -v '^[0-9a-f]\{40\}$' \
               | normalize_branch)
-  dl_rows=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'R' || char(9) || id || char(9) || v FROM t ORDER BY id;\n" "$setup" \
-            | "$DOLTLITE" "$dir/dl/db.r" 2>>"$dir/dl.err" \
+  dl_rows=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s\n" "$setup" "$rows_query" \
+            | vc_oracle_run_doltlite "$row_expectation" "$dir/dl/db.r" 2>>"$dir/dl.err" \
             | grep -v '^[0-9]*$' \
             | grep -v '^[0-9a-f]\{40\}$' \
             | normalize_rows)
   dl_status=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S' || char(9) || table_name || char(9) || staged || char(9) || status FROM dolt_status;\n" "$setup" \
-              | "$DOLTLITE" "$dir/dl/db.s" 2>>"$dir/dl.err" \
+              | vc_oracle_run_doltlite "$dir/dl/db.s" 2>>"$dir/dl.err" \
               | grep -v '^[0-9]*$' \
               | grep -v '^[0-9a-f]\{40\}$' \
               | normalize_status)
@@ -74,31 +79,6 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
-oracle_error() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
-  dl_rc=$?
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
-
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite rc: $dl_rc"
-    echo "    dolt rc:     $dt_rc"
-  fi
-}
 
 oracle_error_poststate() {
   local name="$1" setup="$2" query="$3"
@@ -107,10 +87,10 @@ oracle_error_poststate() {
 
   local dl_rc dt_rc dl_post dt_post
 
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
   dl_rc=$?
   dl_post=$(printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$query" \
-            | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+            | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
             | tr -d '\r')
 
   local dolt_setup
@@ -137,10 +117,10 @@ oracle_savepoint_poststate() {
 
   local dl_rc dt_rc dl_post dt_post
 
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
   dl_rc=$?
   dl_post=$(printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$query" \
-            | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+            | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.err" \
             | tr -d '\r')
 
   local dolt_setup
@@ -288,7 +268,7 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout('-B', 'feature');
 "
 
-oracle "dash_B_from_start_point" "
+oracle "dash_upper_B_from_start_point" "
 $SEED
 INSERT INTO t VALUES (2, 'main_b');
 SELECT dolt_add('-A');
@@ -322,17 +302,17 @@ INSERT INTO t VALUES (99, 'uncommitted');
 SELECT dolt_checkout('-B', 'other');
 "
 
-oracle_error "dash_B_requires_a_name" "
+vc_oracle_error "dash_B_requires_a_name" "
 $SEED
 SELECT dolt_checkout('-B');
 "
 
-oracle_error "dash_B_rejects_invalid_name" "
+vc_oracle_error "dash_B_rejects_invalid_name" "
 $SEED
 SELECT dolt_checkout('-B', 'bad name');
 "
 
-oracle_error "dash_B_rejects_missing_start_point" "
+vc_oracle_error "dash_B_rejects_missing_start_point" "
 $SEED
 SELECT dolt_checkout('-B', 'x', 'nosuchrev');
 "
@@ -560,12 +540,12 @@ SELECT (SELECT group_concat(v, ',') FROM (SELECT v FROM a ORDER BY id)) AS id,
 
 echo "--- error paths ---"
 
-oracle_error "checkout_nonexistent" "
+vc_oracle_error "checkout_nonexistent" "
 $SEED
 SELECT dolt_checkout('nope');
 "
 
-oracle_error "checkout_raw_hash_refuses_detached_head" "
+vc_oracle_error "checkout_raw_hash_refuses_detached_head" "
 $SEED
 INSERT INTO t VALUES (2, 'main_b');
 SELECT dolt_add('-A');
@@ -573,38 +553,38 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout(dolt_hashof('HEAD~1'));
 "
 
-oracle_error "dash_b_existing_branch" "
+vc_oracle_error "dash_b_existing_branch" "
 $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('-b', 'feature');
 "
 
-oracle_error "no_args" "
+vc_oracle_error "no_args" "
 $SEED
 SELECT dolt_checkout();
 "
 
-oracle_error "dash_b_no_name" "
+vc_oracle_error "dash_b_no_name" "
 $SEED
 SELECT dolt_checkout('-b');
 "
 
-oracle_error "dash_b_empty_name" "
+vc_oracle_error "dash_b_empty_name" "
 $SEED
 SELECT dolt_checkout('-b', '');
 "
 
-oracle_error "dash_b_bad_start_point" "
+vc_oracle_error "dash_b_bad_start_point" "
 $SEED
 SELECT dolt_checkout('-b', 'newfeat', 'does-not-exist');
 "
 
-oracle_error "checkout_table_from_missing_ref" "
+vc_oracle_error "checkout_table_from_missing_ref" "
 $SEED
 SELECT dolt_checkout('does-not-exist', 't');
 "
 
-oracle_error "checkout_branch_with_missing_table" "
+vc_oracle_error "checkout_branch_with_missing_table" "
 $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('feature', 'nope');
@@ -901,7 +881,7 @@ oracle_dual_poststate() {
   # Same session: checkout is session-scoped. Rows tagged Q|/V|/I|.
   local dl_post
   dl_post=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query" \
-            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+            | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
             | tr -d '\r' \
             | grep -aE '^[QVI]\|')
 
@@ -1023,7 +1003,7 @@ SELECT dolt_checkout('feature');
 " "SELECT 'Q|' || group_concat(b, ',') FROM (SELECT b FROM v ORDER BY b);" \
 "SELECT concat('Q|', group_concat(b ORDER BY b SEPARATOR ',')) FROM v;"
 
-oracle_error "checkout_view_by_name_errors" "
+vc_oracle_error "checkout_view_by_name_errors" "
 CREATE TABLE t(a INTEGER PRIMARY KEY);
 CREATE VIEW v AS SELECT a FROM t;
 SELECT dolt_commit('-Am', 'base');

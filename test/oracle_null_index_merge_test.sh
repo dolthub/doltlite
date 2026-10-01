@@ -5,6 +5,7 @@ DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -14,7 +15,7 @@ fail_name() {
 
 dl() {
   local db="$1"; shift
-  "$DOLTLITE" "$db" "$@" 2>/dev/null
+  vc_oracle_run_doltlite "$db" "$@" 2>/dev/null
 }
 
 echo "=== NULL Index Merge Tests ==="
@@ -194,6 +195,7 @@ INTEGRITY=$(dl "$DB" "PRAGMA integrity_check;")
 
 echo ""
 echo "======================================="
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
 echo "__SUITE_COMPLETE__"

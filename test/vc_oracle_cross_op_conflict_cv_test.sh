@@ -50,7 +50,7 @@ oracle_tx_poststate() {
   dl_script=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$POST_QUERY_DL" \
               | perl -0pe "s/\nSELECT ${op_pat}\\(/\nBEGIN;\\nSELECT ${op_pat}\\(/")
   dl_out=$(printf "%s" "$dl_script" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^S|' \
            | tr -d '"' \
            | normalize)
@@ -77,13 +77,13 @@ echo "=== Version Control Oracle Tests: cross-op conflict + constraint violation
 echo ""
 
 echo "--- merge: dual conflict + unique CV under open txn ---"
-oracle_tx_poststate "merge_conflict_and_cv" \
+VC_ORACLE_EXPECTATION=allow-error oracle_tx_poststate "merge_conflict_and_cv" \
 "$DUAL_SEED
 SELECT dolt_merge('feat');
 " "dolt_merge"
 
 echo "--- cherry-pick: dual conflict + unique CV under open txn ---"
-oracle_tx_poststate "cherry_pick_conflict_and_cv" \
+VC_ORACLE_EXPECTATION=allow-error oracle_tx_poststate "cherry_pick_conflict_and_cv" \
 "$DUAL_SEED
 SELECT dolt_cherry_pick('feat');
 " "dolt_cherry_pick"
@@ -91,7 +91,7 @@ SELECT dolt_cherry_pick('feat');
 echo "--- revert: dual conflict + unique CV under open txn ---"
 # Revert of A: restore id=1 to (1,1,base) but u=1 is now on id=2 (unique CV);
 # B also changed id=1's v (conflict).
-oracle_tx_poststate "revert_conflict_and_cv" \
+VC_ORACLE_EXPECTATION=allow-error oracle_tx_poststate "revert_conflict_and_cv" \
 "
 CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base'),(2,2,'base');
@@ -120,17 +120,17 @@ INSERT INTO t VALUES (1,1,'base'),(2,2,'base');
 SELECT dolt_commit('-Am','init');
 SELECT dolt_remote('add','origin','$remote');
 SELECT dolt_push('origin','main');
-" | "$DOLTLITE" "$src" >/dev/null 2>"$dir/dl_seed.err"
+" | vc_oracle_run_doltlite "$src" >/dev/null 2>"$dir/dl_seed.err"
 
   printf "SELECT dolt_clone('%s');\n" "$remote" \
-    | "$DOLTLITE" "$con" >/dev/null 2>"$dir/dl_clone.err"
+    | vc_oracle_run_doltlite "$con" >/dev/null 2>"$dir/dl_clone.err"
 
   printf '%s\n' "
 UPDATE t SET v='feat' WHERE id=1;
 UPDATE t SET u=9 WHERE id=2;
 SELECT dolt_commit('-Am','src_feat_side');
 SELECT dolt_push('origin','main');
-" | "$DOLTLITE" "$src" >/dev/null 2>"$dir/dl_src_adv.err"
+" | vc_oracle_run_doltlite "$src" >/dev/null 2>"$dir/dl_src_adv.err"
 
   local dl_out
   dl_out=$(printf '%s\n' "
@@ -141,7 +141,7 @@ SELECT dolt_pull('origin','main');
 .headers off
 .mode list
 $POST_QUERY_DL
-" | "$DOLTLITE" "$con" 2>"$dir/dl_pull.err" | grep '^S|' | tr -d '"' | normalize)
+" | vc_oracle_run_doltlite "$con" 2>"$dir/dl_pull.err" | grep '^S|' | tr -d '"' | normalize)
 
   local dt_remote="$dir/dt_remote" dt_src="$dir/dt_src" dt_con="$dir/dt_con"
   mkdir -p "$dt_remote" "$dt_src" "$dt_con"
@@ -191,7 +191,6 @@ CALL dolt_commit('-Am','src_feat_side');
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
-pull_dual_flow "pull_conflict_and_cv"
+VC_ORACLE_EXPECTATION=allow-error pull_dual_flow "pull_conflict_and_cv"
 
 vc_oracle_finish
-exit 0

@@ -29,7 +29,7 @@ oracle_dual() {
 
   local dl_out dl_rc dt_out dt_rc dolt_setup
   printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$dl_setup" \
-    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.raw" 2>"$dir/dl.err"
+    | vc_oracle_run_doltlite "$dir/dl/db" >"$dir/dl.raw" 2>"$dir/dl.err"
   dl_rc=$?
 
   dolt_setup=$(vc_oracle_translate_for_dolt "$dt_setup")
@@ -82,7 +82,7 @@ EXPLAIN QUERY PLAN SELECT * FROM dolt_status WHERE $filter;"
 
   local out actual expected plan
   out=$(printf "%s\n" "$script" \
-        | "$DOLTLITE" "$dir/db" 2>"$dir/err" \
+        | vc_oracle_run_doltlite "$dir/db" 2>"$dir/err" \
         | tr -d '\r')
   expected=$(printf "%s\n" "$out" | grep '^A|' | sed 's/^A|//')
   actual=$(printf "%s\n" "$out" | grep '^B|' | sed 's/^B|//')
@@ -533,7 +533,7 @@ SELECT CONCAT('S|resolved|',table_name,'|',staged,'|',status) FROM dolt_status O
 SELECT dolt_commit('-am','resolved');
 SELECT CONCAT('S|committed|',count(*)) FROM dolt_status;"
   local dl_out dt_out dolt_setup
-  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/db" >"$dir/dl.out" 2>"$dir/dl.err"
+  printf '%s\n' "$setup" | vc_oracle_run_doltlite "$dir/db" >"$dir/dl.out" 2>"$dir/dl.err"
   dl_out=$(grep '^S|' "$dir/dl.out")
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup" | sed "s/FROM dolt_at_u('STAGED')/FROM u AS OF 'STAGED'/")
   vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" -r csv
@@ -548,7 +548,7 @@ for squash in 0 1; do
     extra_sql=""
     [ "$extra" = 1 ] && extra_sql="INSERT INTO t VALUES(2,2);"
     for resolution in ours theirs; do
-      oracle_conflicted_merge "conflicted_merge_${squash}_${extra}_$resolution" \
+      VC_ORACLE_EXPECTATION=allow-error oracle_conflicted_merge "conflicted_merge_${squash}_${extra}_$resolution" \
         "$flags" "$extra_sql" "$resolution"
     done
   done
@@ -630,7 +630,7 @@ SELECT dolt_merge('feature');
 $extra
 SELECT CONCAT('S|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY table_name,staged,status;"
   local dl_out dt_out dolt_setup
-  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/db" >"$dir/dl.out" 2>"$dir/dl.err"
+  printf '%s\n' "$setup" | vc_oracle_run_doltlite "$dir/db" >"$dir/dl.out" 2>"$dir/dl.err"
   dl_out=$(grep '^S|' "$dir/dl.out")
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" -r csv
@@ -638,15 +638,15 @@ SELECT CONCAT('S|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY t
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
-oracle_violation_merge "violation_merge" ""
-oracle_violation_merge "violation_merge_unstaged_edits" "
+VC_ORACLE_EXPECTATION=allow-error oracle_violation_merge "violation_merge" ""
+VC_ORACLE_EXPECTATION=allow-error oracle_violation_merge "violation_merge_unstaged_edits" "
 INSERT INTO c VALUES(2,1);
 UPDATE w SET v=2;"
-oracle_violation_merge "violation_merge_staged_edits" "
+VC_ORACLE_EXPECTATION=allow-error oracle_violation_merge "violation_merge_staged_edits" "
 INSERT INTO c VALUES(2,1);
 UPDATE w SET v=2;
 SELECT dolt_add('c','w');"
-oracle_violation_merge "violation_merge_resolved" "
+VC_ORACLE_EXPECTATION=allow-error oracle_violation_merge "violation_merge_resolved" "
 DELETE FROM dolt_constraint_violations_c;"
 
 vc_oracle_finish

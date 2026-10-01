@@ -33,7 +33,7 @@ oracle_state() {
   dl_out=$(
     {
       printf ".headers off\n.mode list\n.separator '|'\n%s\n" "$dl_query"
-    } | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.setup.err" \
+    } | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.setup.err" \
       | normalize_state
   )
 
@@ -136,7 +136,7 @@ SELECT CONCAT('L|', message) FROM dolt_log
   WHERE message IN ('schema', 'add 1', 'add 2') OR message LIKE 'Revert%';
 "
 
-oracle_state "revert_head_dirty_same_table_rejected" "
+VC_ORACLE_EXPECTATION=allow-error oracle_state "revert_head_dirty_same_table_rejected" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
 SELECT dolt_commit('-Am', 'schema');
 INSERT INTO t VALUES(1, 'a');
@@ -157,7 +157,7 @@ SELECT CONCAT('L|', message) FROM dolt_log
   WHERE message IN ('schema', 'add row') OR message LIKE 'Revert%';
 "
 
-oracle_state "revert_head_staged_unrelated_table_committed" "
+VC_ORACLE_EXPECTATION=allow-error oracle_state "revert_head_staged_unrelated_table_committed" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
 CREATE TABLE meta(id INTEGER PRIMARY KEY, note TEXT);
 SELECT dolt_commit('-Am', 'schema');

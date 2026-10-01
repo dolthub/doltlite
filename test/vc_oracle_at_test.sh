@@ -25,7 +25,7 @@ oracle() {
   local dl_q="SELECT 'A' || char(9) || coalesce(id,'') || char(9) || coalesce(v,'') FROM dolt_at_t WHERE commit_ref = '${ref}' ORDER BY id"
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$dl_q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -55,7 +55,7 @@ oracle_error() {
   local dl_sql
   local dl_rc
   dl_sql=$(printf "%s\nSELECT * FROM dolt_at_${table} WHERE commit_ref = '%s';\n" "$setup" "$ref")
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_sql"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_sql" --expect-error
   dl_rc=$?
 
   local dolt_setup
@@ -96,7 +96,7 @@ oracle_query_after_reopen() {
 
   local dl_out
   dl_out=$(printf ".headers off\n.mode list\n.separator '\t'\n%s;\n" "$dl_q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)

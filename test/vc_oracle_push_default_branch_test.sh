@@ -36,7 +36,7 @@ consume_branch() {
     SELECT dolt_checkout('$branch');
     SELECT dolt_remote('add','origin','file://$CONSUME_DL');
     SELECT dolt_push('origin','$branch');
-  " | "$DOLTLITE" "$base/src.db" >"$base/dl_push.out" 2>"$base/dl_push.err"
+  " | vc_oracle_run_doltlite "$base/src.db" >"$base/dl_push.out" 2>"$base/dl_push.err"
 
   (
     mkdir -p "$base/dsrc" "$base/drem"
@@ -86,9 +86,9 @@ consume_two_branches() {
     INSERT INTO example VALUES (3, '$second');
     SELECT dolt_commit('-A','-m','c3 on $second');
     SELECT dolt_push('origin','$second');
-  " | "$DOLTLITE" "$base/src.db" >"$base/dl_push.out" 2>"$base/dl_push.err"
+  " | vc_oracle_run_doltlite "$base/src.db" >"$base/dl_push.out" 2>"$base/dl_push.err"
   printf 'SELECT dolt_clone('"'"'file://%s'"'"');\n' "$dl_remote" \
-    | "$DOLTLITE" "$CONSUME_DL" >/dev/null 2>"$base/dl_clone.err"
+    | vc_oracle_run_doltlite "$CONSUME_DL" >/dev/null 2>"$base/dl_clone.err"
 
   (
     mkdir -p "$base/dsrc" "$base/drem"
@@ -128,7 +128,7 @@ compare() {
     dl_db="$dir/tgt.db"; dt_repo="$dir/clone"
     forcecopy_db "$CONSUME_DL" "$dl_db"
     cp -R "$CONSUME_DT" "$dt_repo"
-    printf '%s\n' "$mut" | "$DOLTLITE" "$dl_db" >/dev/null 2>"$dir/dl_mut.err"
+    printf '%s\n' "$mut" | vc_oracle_run_doltlite "$dl_db" >/dev/null 2>"$dir/dl_mut.err"
     dl_rc=$?
     ( cd "$dt_repo" && printf '%s\n' "$(vc_oracle_translate_for_dolt "$mut")" \
         | "$DOLT" sql -c >/dev/null 2>"$dir/dt_mut.err" )
@@ -146,7 +146,7 @@ compare() {
 
   local dl_out dt_out
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
-           | "$DOLTLITE" "$dl_db" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
+           | vc_oracle_run_doltlite "$dl_db" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
   dt_out=$( ( cd "$dt_repo" && printf '%s\n' "$dt_query" \
                | "$DOLT" sql -r csv 2>"$dir/dt.err" ) | tr -d '"\r' | grep '^R|' | sort)
 

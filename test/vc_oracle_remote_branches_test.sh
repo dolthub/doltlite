@@ -20,19 +20,19 @@ remote_flow() {
   local dl_remote="file://$dir/remote.db"
   local dl_src="$dir/src.db" dl_con="$dir/con.db"
   printf '%s\n' "${seed//@REMOTE@/$dl_remote}" \
-    | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_seed.err"
+    | vc_oracle_run_doltlite "$dl_src" >/dev/null 2>"$dir/dl_seed.err"
   printf 'SELECT dolt_clone('"'"'%s'"'"');\n' "$dl_remote" \
-    | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_clone.err"
+    | vc_oracle_run_doltlite "$dl_con" >/dev/null 2>"$dir/dl_clone.err"
   if [ -n "$advance" ]; then
     printf '%s\n' "${advance//@REMOTE@/$dl_remote}" \
-      | "$DOLTLITE" "$dl_src" >/dev/null 2>"$dir/dl_advance.err"
+      | vc_oracle_run_doltlite "$dl_src" >/dev/null 2>"$dir/dl_advance.err"
   fi
   if [ -n "$consume" ]; then
-    printf '%s\n' "$consume" | "$DOLTLITE" "$dl_con" >/dev/null 2>"$dir/dl_consume.err"
+    printf '%s\n' "$consume" | vc_oracle_run_doltlite "$dl_con" >/dev/null 2>"$dir/dl_consume.err"
   fi
   local dl_out
   dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_query" \
-           | "$DOLTLITE" "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
+           | vc_oracle_run_doltlite "$dl_con" 2>"$dir/dl.err" | tr -d '\r' | grep '^R|' | sort)
 
   local dt_remote="$dir/dt_remote"
   local dt_seed dt_advance dt_consume dt_q

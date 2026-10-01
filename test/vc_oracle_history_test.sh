@@ -56,7 +56,7 @@ oracle() {
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$dl_q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize_history)
@@ -92,10 +92,10 @@ noncurrent_oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.setup" 2>"$dir/dl.setup.err"
+  printf "%s\n" "$setup" | vc_oracle_run_doltlite "$dir/dl/db" >"$dir/dl.setup" 2>"$dir/dl.setup.err"
   local dl_out
   dl_out=$(printf ".headers off\n.mode list\n%s\n" "$dl_query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' | grep '^H|' | sort)
 
   local dolt_setup

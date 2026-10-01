@@ -23,7 +23,7 @@ SELECT CONCAT('ROW|IDX|', parent_index, '|', count(*)) FROM dolt_commit_ancestor
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^ROW|' \
            | sort)

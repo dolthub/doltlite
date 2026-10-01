@@ -14,7 +14,7 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 run_dl() {
   local dbspec="$1" query="$2"
   printf ".headers off\n.mode list\n%s\n" "$query" \
-    | "$DOLTLITE" "$dbspec"
+    | vc_oracle_run_doltlite "${3:---success}" "$dbspec"
 }
 
 run_dt() {
@@ -46,7 +46,7 @@ INSERT INTO t VALUES(2,'main2');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main2');
 SQL
-  "$DOLTLITE" "$dir/dl/db.sqlite" <"$dir/setup_dl.sql" >/dev/null 2>"$dir/dl.err"
+  vc_oracle_run_doltlite "$dir/dl/db.sqlite" <"$dir/setup_dl.sql" >/dev/null 2>"$dir/dl.err"
 
   cat >"$dir/setup_dt.sql" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -131,7 +131,7 @@ oracle_error() {
     )
   fi
 
-  run_dl "$dbspec" "$query" >/dev/null 2>>"$dir/dl.err"
+  run_dl "$dbspec" "$query" --expect-error >/dev/null 2>>"$dir/dl.err"
   dl_rc=$?
   parent=$(dirname "$dir/dt")
   repo_name=$(basename "$dir/dt")
@@ -201,7 +201,7 @@ oracle_detached_command_error() {
   local parent repo_name dl_rc dt_rc
 
   setup_pair "$dir"
-  run_dl "$dir/dl/db.sqlite/v1" "$dl_query" \
+  run_dl "$dir/dl/db.sqlite/v1" "$dl_query" --expect-error \
     >"$dir/dl.out" 2>"$dir/dl.err"
   dl_rc=$?
   parent=$(dirname "$dir/dt")
@@ -275,7 +275,7 @@ oracle_detached_pull_error() {
       | "$DOLT" sql -c >/dev/null
   )
 
-  run_dl "$dir/dl/db.sqlite/v1" "SELECT dolt_pull('origin','main');" \
+  run_dl "$dir/dl/db.sqlite/v1" "SELECT dolt_pull('origin','main');" --expect-error \
     >"$dir/dl.out" 2>"$dir/dl.err"
   dl_rc=$?
   parent=$(dirname "$dir/dt")

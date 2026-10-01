@@ -25,7 +25,7 @@ dl_setup() {
     (cd "$repo" && vc_oracle_init_repo)
   fi
 
-  printf '%s\n' "$sql" | "$DOLTLITE" "$db" \
+  printf '%s\n' "$sql" | vc_oracle_run_doltlite "$db" \
     >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
   dl_rc=$?
   dt_sql=$(printf '%s\n' "$sql" | schema_sql_for_dolt)
@@ -64,7 +64,7 @@ run_merge_outcome() {
   local engine="$1" db="$2" tag="$3"
   local rc repo
   if [ "$engine" = "doltlite" ]; then
-    "$DOLTLITE" "$db" "SELECT dolt_merge('feat');" \
+    vc_oracle_run_doltlite "${4:---success}" "$db" "SELECT dolt_merge('feat');" \
       >"$TMPROOT/$tag.dl.out" 2>"$TMPROOT/$tag.dl.err"
     rc=$?
     if output_is_error "$rc" "$TMPROOT/$tag.dl.out" "$TMPROOT/$tag.dl.err"; then
@@ -88,7 +88,9 @@ run_merge_outcome() {
 
 expect_merge_outcome() {
   local name="$1" db="$2" want="$3" dl_got dt_got
-  dl_got=$(run_merge_outcome doltlite "$db" "$name")
+  local expectation=--success
+  if [ "$want" = conflict ]; then expectation=--expect-error; fi
+  dl_got=$(run_merge_outcome doltlite "$db" "$name" "$expectation")
   dt_got=$(run_merge_outcome dolt "$db" "$name")
   if [ "$dl_got" = "$want" ] && [ "$dt_got" = "$want" ]; then
     pass_name "$name"
@@ -106,7 +108,9 @@ expect_merge_conflict() { expect_merge_outcome "$1" "$2" conflict; }
 # DoltLite refuses this merge; Dolt completes it. Pin both sides.
 expect_merge_divergence() {
   local name="$1" db="$2" dl_want="$3" dt_want="$4" dl_got dt_got
-  dl_got=$(run_merge_outcome doltlite "$db" "$name")
+  local expectation=--success
+  if [ "$dl_want" = conflict ]; then expectation=--expect-error; fi
+  dl_got=$(run_merge_outcome doltlite "$db" "$name" "$expectation")
   dt_got=$(run_merge_outcome dolt "$db" "$name")
   if [ "$dl_got" = "$dl_want" ] && [ "$dt_got" = "$dt_want" ]; then
     pass_name "$name"
@@ -119,8 +123,10 @@ expect_merge_divergence() {
 run_dual_command_outcome() {
   local name="$1" db="$2" dl_sql="$3" dt_sql="$4" want="$5"
   local repo dl_rc dt_rc dl_got=ok dt_got=ok
+  local expectation=--success
+  if [ "$want" = error ]; then expectation=--expect-error; fi
   repo=$(dt_repo_for_db "$db")
-  printf '%s\n' "$dl_sql" | "$DOLTLITE" "$db" \
+  printf '%s\n' "$dl_sql" | vc_oracle_run_doltlite "$expectation" "$db" \
     >"$TMPROOT/$name.dl.out" 2>"$TMPROOT/$name.dl.err"
   dl_rc=$?
   (cd "$repo" && printf '%s\n' "$dt_sql" | "$DOLT" sql) \
@@ -137,7 +143,7 @@ run_dual_command_outcome() {
 }
 
 query_doltlite_scalar() {
-  printf '%s\n' "$2" | "$DOLTLITE" "$1" \
+  printf '%s\n' "$2" | vc_oracle_run_doltlite "${4:---success}" "$1" \
     2>"$TMPROOT/$3.dl.query.err" | tr -d '\r"'
 }
 
@@ -151,7 +157,9 @@ query_dolt_scalar() {
 expect_dual_value() {
   local name="$1" db="$2" want="$3" dl_sql="$4" dt_sql="$5"
   local dl_got dt_got
-  dl_got=$(query_doltlite_scalar "$db" "$dl_sql" "$name")
+  local expectation=--success
+  case "$dl_sql" in *"dolt_merge("*) expectation=--expect-error ;; esac
+  dl_got=$(query_doltlite_scalar "$db" "$dl_sql" "$name" "$expectation")
   dt_got=$(query_dolt_scalar "$db" "$dt_sql" "$name")
   if [ "$dl_got" = "$want" ] && [ "$dt_got" = "$want" ]; then
     pass_name "$name"
@@ -228,7 +236,7 @@ expect_dual_value "schema_conflicts_existing_autocommit_rollback" "$DB" "0|0|0" 
   "SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts), '|', (SELECT count(*) FROM dolt_conflicts), '|', (SELECT count(*) FROM dolt_status WHERE status='schema conflict'));"
 printf '%s\n' "BEGIN; SELECT dolt_merge('feat');
 COMMIT;" \
-  | "$DOLTLITE" "$DB" >"$TMPROOT/schema_conflicts_persist.dl.out" \
+  | vc_oracle_run_doltlite --expect-error "$DB" >"$TMPROOT/schema_conflicts_persist.dl.out" \
       2>"$TMPROOT/schema_conflicts_persist.dl.err" || true
 DT_T2=$(dt_repo_for_db "$DB")
 (cd "$DT_T2" && printf '%s\n' \

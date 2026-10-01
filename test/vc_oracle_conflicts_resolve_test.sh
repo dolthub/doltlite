@@ -20,7 +20,7 @@ oracle() {
   local dl_out
   dl_script=$(printf "%s\n%s\n" "$setup" "$resolve_and_query" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
   dl_out=$(printf "%s" "$dl_script" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | vc_oracle_run_doltlite --allow-error "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | grep -v '^Merge has' \
@@ -53,7 +53,7 @@ oracle_error() {
   local dl_setup
   local dl_rc
   dl_setup=$(printf "%s\n" "$setup" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup"
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup" --expect-error
   dl_rc=$?
 
   local dolt_setup

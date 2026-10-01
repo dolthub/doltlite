@@ -17,7 +17,7 @@ oracle_error() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" \
-    "$dir/dl.err" "$(printf '%s\n%s\n' "$setup" "$dl_query")"
+    "$dir/dl.err" "$(printf '%s\n%s\n' "$setup" "$dl_query")" --expect-error
   dl_rc=$?
 
   dt_setup=$(vc_oracle_translate_for_dolt "$setup")

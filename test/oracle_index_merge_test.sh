@@ -5,6 +5,7 @@ DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -12,8 +13,8 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
-dl() { "$DOLTLITE" "$1" "$2" 2>/dev/null; }
-dl_pipe() { "$DOLTLITE" "$1" 2>/dev/null; }
+dl() { vc_oracle_run_doltlite "$1" "$2" 2>/dev/null; }
+dl_pipe() { vc_oracle_run_doltlite "$1" 2>/dev/null; }
 
 echo "=== Comprehensive Index Merge Tests ==="
 
@@ -111,7 +112,7 @@ DELETE FROM dolt_conflicts_t;
 REINDEX;
 SELECT dolt_commit('-Am','resolved');
 SQL
-  } | dl_pipe "$DB" | awk -F'|' '$1=="CONF"{print $2}'
+  } | VC_ORACLE_EXPECTATION=error dl_pipe "$DB" | awk -F'|' '$1=="CONF"{print $2}'
 )
 [ "$CONF" = "1" ] && pass_name "10_conflict" || fail_name "10_conflict"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "10_integrity_after_resolve" || fail_name "10_integrity_after_resolve"
@@ -161,7 +162,7 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, v INT); CREATE INDEX
 echo ""
 echo "--- 14: Index survives reopen after merge ---"
 DB="$TMPROOT/14.db"
-dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k); INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,20); SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(3,30); SELECT dolt_commit('-Am','main'); SELECT dolt_merge('feat'); SELECT dolt_commit('-Am','merged');" >/dev/null
+dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); CREATE INDEX idx ON t(k); INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,20); SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(3,30); SELECT dolt_commit('-Am','main'); SELECT dolt_merge('feat'); SELECT dolt_commit('--allow-empty','-Am','merged');" >/dev/null
 [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "3" ] && pass_name "14_count" || fail_name "14_count"
 [ "$(dl "$DB" "SELECT count(*) FROM t WHERE k=20;")" = "1" ] && pass_name "14_idx_after_reopen" || fail_name "14_idx_after_reopen"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "14_integrity" || fail_name "14_integrity"
@@ -309,6 +310,7 @@ IDX=$(dl "$DB" "SELECT group_concat(id||'|'||n,';') FROM (SELECT * FROM t INDEXE
 
 echo ""
 echo "======================================="
+vc_oracle_check_execution
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
 echo "__SUITE_COMPLETE__"

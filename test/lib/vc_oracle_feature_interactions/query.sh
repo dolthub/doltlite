@@ -986,7 +986,7 @@ SELECT dolt_merge('feat');
 
 echo "--- string funcs in UPDATE + merge ---"
 
-oracle "update_lower_then_merge" "
+VC_ORACLE_EXPECTATION=error oracle "update_lower_then_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'ABC'),(2,'DEF');
 SELECT dolt_add('-A');
@@ -1135,7 +1135,7 @@ SELECT dolt_merge('feat');
 
 echo "--- REPLACE vs merge probes ---"
 
-oracle "replace_then_other_side_replaces_same_pk" "
+VC_ORACLE_EXPECTATION=error oracle "replace_then_other_side_replaces_same_pk" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'orig');
 SELECT dolt_add('-A');
@@ -1181,7 +1181,7 @@ SELECT dolt_merge('feat');
 
 echo "--- update pattern probes ---"
 
-oracle "update_then_update_back_same_value_merge" "
+VC_ORACLE_EXPECTATION=error oracle "update_then_update_back_same_value_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'orig');
 SELECT dolt_add('-A');
@@ -1481,7 +1481,7 @@ SELECT dolt_merge('feat');
 
 echo "--- aggregate on empty table probes ---"
 
-oracle "delete_all_sum_null_after_merge" "
+VC_ORACLE_EXPECTATION=error oracle "delete_all_sum_null_after_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
 INSERT INTO t VALUES(1,10),(2,20);
 SELECT dolt_add('-A');
@@ -1741,7 +1741,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-oracle "delete_all_then_reinsert_subset_merge" "
+VC_ORACLE_EXPECTATION=error oracle "delete_all_then_reinsert_subset_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
 INSERT INTO t VALUES(1,10),(2,20),(3,30);
 SELECT dolt_add('-A');
@@ -2476,7 +2476,7 @@ SELECT dolt_merge('feat');
 
 echo "--- update affecting nothing ---"
 
-oracle "update_where_false_merge" "
+VC_ORACLE_EXPECTATION=error oracle "update_where_false_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
 INSERT INTO t VALUES(1,10),(2,20);
 SELECT dolt_add('-A');

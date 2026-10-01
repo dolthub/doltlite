@@ -254,7 +254,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-oracle "cherry_pick_empty_diff" "
+VC_ORACLE_EXPECTATION=error oracle "cherry_pick_empty_diff" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -299,7 +299,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-oracle "both_sides_delete_and_reinsert" "
+VC_ORACLE_EXPECTATION=error oracle "both_sides_delete_and_reinsert" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'original');
 SELECT dolt_add('-A');
@@ -396,7 +396,7 @@ SELECT dolt_merge('feat');
 
 echo "--- idempotent operations ---"
 
-oracle "update_to_same_value" "
+VC_ORACLE_EXPECTATION=error oracle "update_to_same_value" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'same');
 SELECT dolt_add('-A');
@@ -406,7 +406,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','noop update');
 " "SELECT id, val FROM t ORDER BY id;"
 
-oracle "delete_nonexistent_row" "
+VC_ORACLE_EXPECTATION=error oracle "delete_nonexistent_row" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -416,7 +416,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','noop delete');
 " "SELECT id, val FROM t ORDER BY id;"
 
-oracle "insert_delete_same_row_before_commit" "
+VC_ORACLE_EXPECTATION=error oracle "insert_delete_same_row_before_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -698,7 +698,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-oracle "conflict_same_field_safe_rows_preserved" "
+VC_ORACLE_EXPECTATION=error oracle "conflict_same_field_safe_rows_preserved" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'conflict_target'),(2,'safe'),(3,'safe2');
 SELECT dolt_add('-A');
@@ -714,7 +714,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t WHERE id>=2 ORDER BY id;"
 
-oracle "conflict_null_vs_value_same_field" "
+VC_ORACLE_EXPECTATION=error oracle "conflict_null_vs_value_same_field" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT, other TEXT);
 INSERT INTO t VALUES(1,'orig','keep');
 SELECT dolt_add('-A');
@@ -730,7 +730,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, other FROM t WHERE id=1;"
 
-oracle "delete_modify_conflict_safe_rows" "
+VC_ORACLE_EXPECTATION=error oracle "delete_modify_conflict_safe_rows" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'target'),(2,'safe'),(3,'safe2');
 SELECT dolt_add('-A');
@@ -979,7 +979,7 @@ SELECT dolt_commit('-m','main ins');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-oracle "delete_modify_both_sides" "
+VC_ORACLE_EXPECTATION=error oracle "delete_modify_both_sides" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'orig'),(2,'b');
 SELECT dolt_add('-A');
@@ -1011,7 +1011,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t;"
 
-oracle "conflicting_update_same_col_different_values" "
+VC_ORACLE_EXPECTATION=error oracle "conflicting_update_same_col_different_values" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'orig'),(2,'unaffected');
 SELECT dolt_add('-A');
@@ -1077,7 +1077,7 @@ SELECT dolt_merge('feat');
 
 echo "--- batch + partial conflict probes ---"
 
-oracle "batch_50_with_one_conflict_elsewhere" "
+VC_ORACLE_EXPECTATION=error oracle "batch_50_with_one_conflict_elsewhere" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'conflict_target');
 SELECT dolt_add('-A');
@@ -1191,7 +1191,7 @@ SELECT dolt_commit('-m','c3');
 
 echo "--- explicit transaction probes ---"
 
-oracle "begin_commit_across_dolt_commit" "
+VC_ORACLE_EXPECTATION=error oracle "begin_commit_across_dolt_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1208,7 +1208,7 @@ SELECT dolt_commit('-m','post');
 
 echo "--- complex flow final state probes ---"
 
-oracle "complex_flow_final_state" "
+VC_ORACLE_EXPECTATION=error oracle "complex_flow_final_state" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a'),(2,'b');
 SELECT dolt_add('-A');
@@ -1253,7 +1253,7 @@ SELECT dolt_merge('feat');
 
 echo "--- conflict resolution in txn probes ---"
 
-oracle "resolve_conflict_via_update_their_in_txn" "
+VC_ORACLE_EXPECTATION=error oracle "resolve_conflict_via_update_their_in_txn" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_add('-A');
@@ -1275,7 +1275,7 @@ SELECT dolt_commit('-m','resolved');
 COMMIT;
 " "SELECT id, v FROM t;"
 
-oracle "resolve_conflict_commit_conflicts_flag" "
+VC_ORACLE_EXPECTATION=error oracle "resolve_conflict_commit_conflicts_flag" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_add('-A');
@@ -1296,7 +1296,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','clean post');
 " "SELECT id, v FROM t ORDER BY id;"
 
-oracle "txn_merge_rollback_leaves_clean_state" "
+VC_ORACLE_EXPECTATION=error oracle "txn_merge_rollback_leaves_clean_state" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -1422,7 +1422,7 @@ SELECT dolt_merge('b');
 
 echo "--- row manipulation edges ---"
 
-oracle "swap_pks_via_temp_sentinel" "
+VC_ORACLE_EXPECTATION=error oracle "swap_pks_via_temp_sentinel" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a'),(2,'b');
 SELECT dolt_add('-A');
@@ -1440,7 +1440,7 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-oracle "pk_change_one_side_value_change_other_side" "
+VC_ORACLE_EXPECTATION=error oracle "pk_change_one_side_value_change_other_side" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a'),(2,'b');
 SELECT dolt_add('-A');
@@ -1516,7 +1516,7 @@ SELECT dolt_commit('-m','main update pk');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-oracle "update_back_to_original_then_merge" "
+VC_ORACLE_EXPECTATION=error oracle "update_back_to_original_then_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'original');
 SELECT dolt_add('-A');
@@ -1641,7 +1641,7 @@ SELECT dolt_commit('-m','post b');
 
 echo "--- conflict resolve multi-row probes ---"
 
-oracle "resolve_multiple_conflicts_via_update" "
+VC_ORACLE_EXPECTATION=error oracle "resolve_multiple_conflicts_via_update" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base1'),(2,'base2');
 SELECT dolt_add('-A');
@@ -1806,7 +1806,7 @@ SELECT dolt_merge('feat');
 
 echo "--- multi-conflict txn resolve ---"
 
-oracle "resolve_three_conflicts_via_ours" "
+VC_ORACLE_EXPECTATION=error oracle "resolve_three_conflicts_via_ours" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base1'),(2,'base2'),(3,'base3');
 SELECT dolt_add('-A');
@@ -1832,7 +1832,7 @@ COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
 echo "--- conflict resolve variations ---"
 
-oracle "resolve_with_mixed_take_ours_take_theirs" "
+VC_ORACLE_EXPECTATION=error oracle "resolve_with_mixed_take_ours_take_theirs" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base1'),(2,'base2'),(3,'base3');
 SELECT dolt_add('-A');
@@ -1862,7 +1862,7 @@ COMMIT;
 
 echo "--- batch conflict + resolve probes ---"
 
-oracle "ten_rows_conflict_resolve_via_ours" "
+VC_ORACLE_EXPECTATION=error oracle "ten_rows_conflict_resolve_via_ours" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'x'),(2,'x'),(3,'x'),(4,'x'),(5,'x');
 INSERT INTO t VALUES(6,'x'),(7,'x'),(8,'x'),(9,'x'),(10,'x');
@@ -1937,7 +1937,7 @@ SELECT dolt_merge('feat');
 
 echo "--- conflict resolve patterns ---"
 
-oracle "conflict_inspect_via_dolt_conflicts_count" "
+VC_ORACLE_EXPECTATION=error oracle "conflict_inspect_via_dolt_conflicts_count" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SELECT dolt_add('-A');
@@ -1959,7 +1959,7 @@ SELECT dolt_commit('-m','resolved');
 COMMIT;
 " "SELECT id, v FROM t;"
 
-oracle "merge_then_resolve_with_delete_row" "
+VC_ORACLE_EXPECTATION=error oracle "merge_then_resolve_with_delete_row" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base1'),(2,'keep');
 SELECT dolt_add('-A');
@@ -2018,7 +2018,7 @@ SELECT dolt_merge('feat');
 
 echo "--- savepoint + dolt_add parity ---"
 
-oracle "savepoint_then_dolt_add_rollback_is_noop" "
+VC_ORACLE_EXPECTATION=error oracle "savepoint_then_dolt_add_rollback_is_noop" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -2031,7 +2031,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after sp sealed');
 " "SELECT count(*) FROM t;"
 
-oracle "savepoint_without_dolt_add_rolls_back" "
+VC_ORACLE_EXPECTATION=error oracle "savepoint_without_dolt_add_rolls_back" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
@@ -2045,7 +2045,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after sp rollback');
 " "SELECT count(*) FROM t;"
 
-oracle "savepoint_error_seals_savepoint" "
+VC_ORACLE_EXPECTATION=error oracle "savepoint_error_seals_savepoint" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
