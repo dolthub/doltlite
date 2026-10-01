@@ -39,8 +39,17 @@ validate_records() {
       return g ~ /^[A-Za-z0-9_.()-]+[.][*][{][1-9][0-9]*[}]$/
     }
     {
+      rationale = $0
+      if (rationale ~ /#/) {
+        sub(/^[^#]*#/, "", rationale)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", rationale)
+      } else {
+        rationale = ""
+      }
       sub(/#.*/, "")
-      if (NF == 0) next
+      if (NF == 0) { group_reason = ""; group_suite = ""; next }
+      if (group_suite != $1) group_reason = ""
+      group_suite = $1
       if (NF < nkey + 1) {
         printf "%s:%d: expected at least %d fields (gate plus class=)\n",
                FILENAME, NR, nkey + 1
@@ -102,6 +111,13 @@ validate_records() {
       if ((category == "unsupported" || category == "engine-gap") && !nissue) {
         printf "%s:%d: %s requires issue=<number>\n", FILENAME, NR, category
         bad = 1
+      }
+      if (category == "intentional") {
+        if (rationale != "" || nissue) group_reason = "yes"
+        if (group_reason == "") {
+          printf "%s:%d: intentional group requires a rationale or issue=<number>\n", FILENAME, NR
+          bad = 1
+        }
       }
       if (nunstable > 1) {
         printf "%s:%d: expected at most one unstable, found %d\n",

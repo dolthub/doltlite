@@ -23,8 +23,9 @@ rc=${PIPESTATUS[0]}
 # already fails the run.
 if [ "$rc" -eq 0 ]; then
   last_line=$(grep -v '^[[:space:]]*$' "$OUT" | tail -1)
-  if ! grep -qx '__SUITE_COMPLETE__' "$OUT" \
-     && ! printf '%s' "$last_line" | grep -qE '^[[:space:]]*SKIP[: ]'; then
+  if printf '%s' "$last_line" | grep -qE '^[[:space:]]*SKIP[: ]'; then
+    rc=77
+  elif ! grep -qx '__SUITE_COMPLETE__' "$OUT"; then
     echo ""
     echo "GUARD FAIL: $(basename "$SUITE") exited 0 without reporting completion."
     echo "  A suite that stops early reports no failures; that is not a pass."

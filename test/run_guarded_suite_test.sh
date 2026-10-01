@@ -96,7 +96,7 @@ exit 0
 SH
 
 expect_rc "completed_pass_stays_zero" 0 "$tmp/complete_pass.sh"
-expect_rc "ending_on_skip_is_a_pass" 0 "$tmp/ends_on_skip.sh"
+expect_rc "ending_on_skip_is_separate" 77 "$tmp/ends_on_skip.sh"
 expect_rc "intermediate_skip_does_not_count" 1 "$tmp/skips_then_dies.sh"
 expect_rc "completed_failure_stays_nonzero" 1 "$tmp/complete_fail.sh"
 expect_rc "sentinel_then_fail_status_is_nonzero" 1 "$tmp/complete_then_status.sh"

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "lib/temp_db_dir.h"
 
 static int failures = 0;
 
@@ -352,6 +353,11 @@ static void corruptMemoryImageCase(void){
 }
 
 int main(void){
+  TestTempDir temp;
+  if( !testTempDirSetup(&temp) ){
+    perror("temporary test directory");
+    return 1;
+  }
   dirtyTxnCase("serialize_pending_test.db");
   createOnlyCase("serialize_pending_fresh_test.db");
   attachedDirtyTxnCase("serialize_pending_attach_main.db",
@@ -362,6 +368,7 @@ int main(void){
                               "serialize_pending_crosstalk_aux.db");
   nocopyCase("serialize_pending_nocopy_test.db");
   corruptMemoryImageCase();
+  check(testTempDirCleanup(&temp), "temporary directory cleanup");
   if( failures ){
     fprintf(stderr, "%d failure(s)\n", failures);
     return 1;

@@ -9,7 +9,7 @@ ENG="${1:-${DOLTLITE:-$SCRIPT_DIR/../build/doltlite}}"
 # fallback quietly standing in for it.
 STOCK="${2:-${SQLITE3:-}}"
 if [ -z "$STOCK" ]; then
-  for c in "$SCRIPT_DIR/../build-stockref/sqlite3" ./sqlite3-stock; do
+  for c in "$SCRIPT_DIR/../build-stockref/sqlite3" ./sqlite3-stock ./sqlite3; do
     if [ -x "$c" ]; then STOCK="$c"; break; fi
   done
 fi

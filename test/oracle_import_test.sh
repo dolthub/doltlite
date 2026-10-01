@@ -8,6 +8,9 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
+DOLTLITE=$(vc_oracle_resolve_binary "$DOLTLITE") || exit 1
+DOLT=$(vc_oracle_resolve_binary "$DOLT") || exit 1
 
 normalize() {
   tr -d '"\r' | sort

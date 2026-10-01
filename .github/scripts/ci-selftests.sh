@@ -20,5 +20,6 @@ ci_selftests() {
   ci_compile python3 "$script_dir/../../test/sqllogictest_gate_test.py"
   ci_compile python3 "$script_dir/../../test/sysbench_harness_test.py"
   ci_compile python3 "$script_dir/../../test/vc_perf_harness_test.py"
+  ci_compile python3 "$script_dir/../../test/test_harness_housekeeping_test.py"
   ci_compile bash "$script_dir/ci-artifact-tests.sh"
 }

@@ -9,6 +9,8 @@ cli=(build-coverage/doltlite build-coverage/doltlite-remotesrv \
 for file in "${cli[@]}" build-coverage/testfixture; do
   test -x "$source_dir/$file"
 done
+test -f "$source_dir/build-coverage/libdoltlite.a"
+test -f "$source_dir/build-coverage/sqlite3.h"
 bash "$script_dir/package-ci-build.sh" "$output_dir/coverage-build.tar.gz" \
   -C "$source_dir" build-coverage
 bash "$script_dir/package-ci-build.sh" "$output_dir/coverage-cli.tar.gz" \

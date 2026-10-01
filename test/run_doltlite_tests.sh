@@ -22,6 +22,13 @@ if [ -z "${DOLTLITE:-}" ] \
   exit 1
 fi
 
+BUILD_DIR="$(cd "$BUILD_DIR" && pwd)"
+export DOLTLITE_BUILD_DIR="$BUILD_DIR"
+if [ -z "${DOLTLITE:-}" ]; then
+  DOLTLITE="$BUILD_DIR/doltlite"
+  [ ! -x "$BUILD_DIR/doltlite.exe" ] || DOLTLITE="$BUILD_DIR/doltlite.exe"
+fi
+
 TESTS=()
 case "${DOLTLITE_SUITE_SET:-all}" in
   all) suite_manifest=doltlite_all_suites ;;
@@ -54,6 +61,8 @@ fi
 
 total_pass=0
 total_fail=0
+total_skip=0
+skipped=""
 failed=""
 
 cd "$BUILD_DIR"
@@ -61,14 +70,16 @@ cd "$BUILD_DIR"
 for t in "${TESTS[@]}"; do
   echo ""
   echo "━━━ $t ━━━"
-  if [ -n "${DOLTLITE:-}" ]; then
-    guarded=(bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t" "$DOLTLITE")
-  else
-    guarded=(bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t")
-  fi
+  guarded=(bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t" "$DOLTLITE")
   if "${guarded[@]}"; then
     total_pass=$((total_pass + 1))
   else
+    rc=$?
+    if [ "$rc" -eq 77 ]; then
+      total_skip=$((total_skip + 1))
+      skipped="$skipped $t"
+      continue
+    fi
     total_fail=$((total_fail + 1))
     failed="$failed $t"
     echo "FAIL: $t"
@@ -77,8 +88,11 @@ done
 
 echo ""
 echo "════════════════════════════════════════"
-echo "Doltlite tests: $total_pass passed, $total_fail failed out of $((total_pass + total_fail)) suites"
-if [ $total_fail -gt 0 ]; then
+echo "Doltlite tests: $total_pass passed, $total_fail failed, $total_skip skipped out of $((total_pass + total_fail + total_skip)) suites"
+if [ "$total_skip" -gt 0 ]; then
+  echo "Unexpected skips:$skipped"
+fi
+if [ "$total_fail" -gt 0 ] || [ "$total_skip" -gt 0 ]; then
   echo "Failures:$failed"
   echo "════════════════════════════════════════"
   exit 1

@@ -1,6 +1,7 @@
 # Known divergences from upstream sqlite testfixture
 #
-# Format: <test_file> <test_name> [qualifiers...]  # reason (optional)
+# Format: <test_file> <test_name> [qualifiers...]  # reason
+# Every contiguous same-suite intentional group needs an inline reason or issue.
 # Qualifiers: @linux, @darwin, @windows, @coverage, @no-coverage
 # A counted gate ending in .*{N} matches exactly N failures with that prefix.
 # Index movement passes; adding or resolving a failure does not.
@@ -291,7 +292,7 @@ e_fkey e_fkey-57.7 class=intentional issue=1840
 e_fkey e_fkey-56.4 class=intentional issue=1840  # canonical adoption: sqlite_master row order after schema commit
 
 # ── pragma ── (completes now that attached-db writes work; PRAGMA output / attached-db / integrity divergences)
-pragma pragma-1.10 class=intentional
+pragma pragma-1.10 class=intentional  # Pager cache/default_cache and synthetic page_count outputs differ; raw header pokes corrupt chunk metadata and later assertions cascade.
 pragma pragma-1.11.1 class=intentional
 pragma pragma-1.11.2 class=intentional
 pragma pragma-1.12 class=intentional
@@ -471,7 +472,7 @@ shared2 shared2-1.3 class=unsupported issue=1837
 # no VACUUM work to crash inside of). The test file has 294 cases:
 # 148 pass (the non-VACUUM-specific setup/teardown paths) and 146
 # fail. The 146 are listed below.
-crash7 crash7-1.1.crash class=intentional
+crash7 crash7-1.1.crash class=intentional  # VACUUM uses chunk-store GC, so stock pager VACUUM crash hooks do not fire.
 crash7 crash7-1.2.crash class=intentional
 crash7 crash7-1.3.crash class=intentional
 crash7 crash7-1.4.crash class=intentional
@@ -558,7 +559,7 @@ crash7 crash7-2.20.1 class=intentional
 # only support BINARY, NOCASE, and RTRIM. CREATE INDEX with a custom
 # collation now errors rather than silently producing wrong results.
 enc enc-11.1 class=unsupported issue=1838
-collate3 collate3-1.6.1 class=intentional
+collate3 collate3-1.6.1 class=intentional  # Custom collation indexes rejected: doltlite's prolly-tree sort keys only support BINARY, NOCASE, and RTRIM. CREATE INDEX with a custom collation now errors rather than silently producing wrong results.
 collate3 collate3-1.6.3 class=intentional
 collate3 collate3-1.6.4 class=intentional
 collate3 collate3-1.7.1 class=intentional
@@ -582,7 +583,7 @@ collate3 collate3-4.6 class=intentional
 # support built-in BINARY, NOCASE, and RTRIM comparisons. These failures are
 # either direct rejection of those indexes or downstream plan/search-count
 # checks that assume the rejected index exists.
-collate4 collate4-1.1.0 class=intentional
+collate4 collate4-1.1.0 class=intentional  # collate4 defines a custom TEXT collation. DoltLite rejects indexes that depend on custom collations because persisted prolly sort keys can only support built-in BINARY, NOCASE, and RTRIM comparisons. These failures are either direct rejection of those indexes or downstream plan/search-count checks that assume the rejected index exists.
 collate4 collate4-1.1.4 class=intentional
 collate4 collate4-1.1.5 class=intentional
 collate4 collate4-1.1.21 class=intentional
@@ -647,9 +648,9 @@ without_rowid7 without_rowid7-3.6 class=intentional
 # identity semantics. Captured from CI run 26832495839. Tracked for granular
 # review in https://github.com/dolthub/doltlite/issues/1119
 # ---------------------------------------------------------------------------
-attach attach-10.2 class=intentional
-attach attach-8.3 class=intentional
-attach attach-8.4 class=intentional
+attach attach-10.2 class=intentional  # The rejected locked ATTACH in 8.3 succeeds under MVCC, shifting database_list sequence numbers.
+attach attach-8.3 class=intentional  # MVCC allows ATTACH while a peer holds BEGIN EXCLUSIVE; no SQLite pager exclusive-read lock.
+attach attach-8.4 class=intentional  # Successful MVCC ATTACH reports SQLITE_OK rather than the expected SQLITE_BUSY.
 attach attach-2.10 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 attach attach-2.15 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 attach attach-2.16 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
@@ -681,9 +682,9 @@ intpkey intpkey-3.6 class=intentional  # sqlite_search_count metric; row (5|hell
 # seek counter) or, in minmax3, also poke the file format via hexio_write. The
 # min()/max() query results match stock exactly; only the seek-count metric (and
 # raw page bytes) differ — doltlite's prolly engine drives different VDBE probes.
-minmax minmax-1.6 class=intentional
-minmax2 minmax2-1.6 class=intentional
-minmax3 minmax3-1.0 class=intentional
+minmax minmax-1.6 class=intentional  # minmax/minmax2/minmax3: all assert sqlite_search_count (the internal btree seek counter) or, in minmax3, also poke the file format via hexio_write. The min()/max() query results match stock exactly; only the seek-count metric (and raw page bytes) differ — doltlite's prolly engine drives different VDBE probes.
+minmax2 minmax2-1.6 class=intentional  # minmax/minmax2/minmax3: all assert sqlite_search_count (the internal btree seek counter) or, in minmax3, also poke the file format via hexio_write. The min()/max() query results match stock exactly; only the seek-count metric (and raw page bytes) differ — doltlite's prolly engine drives different VDBE probes.
+minmax3 minmax3-1.0 class=intentional  # minmax/minmax2/minmax3: all assert sqlite_search_count (the internal btree seek counter) or, in minmax3, also poke the file format via hexio_write. The min()/max() query results match stock exactly; only the seek-count metric (and raw page bytes) differ — doltlite's prolly engine drives different VDBE probes.
 minmax3 minmax3-1.1.1 class=intentional
 minmax3 minmax3-1.1.2 class=intentional
 minmax3 minmax3-1.1.3 class=intentional
@@ -758,7 +759,7 @@ where where-1.1.1 class=intentional issue=1840  # sqlite_search_count metric; SE
 # suites carry an assertion that moves with the WAL layout because a crash
 # torn during a commit's own sync may legitimately recover the committed
 # state. #2072 tracks narrowing that to per-assertion gates.
-crash3 crash3-1.41.3 class=intentional
+crash3 crash3-1.41.3 class=intentional  # Crash recovery setup and fault indices exercise SQLite pager journals rather than chunk-store transactions.
 crash3 crash3-1.43.3 class=intentional
 crash3 crash3-1.45.3 class=intentional
 crash3 crash3-1.47.3 class=intentional
@@ -788,7 +789,7 @@ enc4 enc4-3.1 class=unsupported issue=1838  # doltlite-format ignores non-UTF-8 
 # cache_size, lock_status. Prolly storage has no SQLite freelist pages or pager
 # locks, so these read 0/empty/different. PRAGMA cache_size=N still echoes N; the
 # underlying DROP/UPDATE row outcomes match stock.
-pragma2 pragma2-1.3 class=intentional
+pragma2 pragma2-1.3 class=intentional  # pragma2-*: assert pager-internal metrics — freelist_count, cache_spill, cache_size, lock_status. Prolly storage has no SQLite freelist pages or pager locks, so these read 0/empty/different. PRAGMA cache_size=N still echoes N; the underlying DROP/UPDATE row outcomes match stock.
 pragma2 pragma2-1.4 class=intentional
 pragma2 pragma2-2.4 class=intentional
 pragma2 pragma2-2.5 class=intentional
@@ -813,7 +814,7 @@ shared2 shared2-3.2 class=unsupported issue=1837
 # auto_vacuum artifacts.
 # tkt-2d1a5c67d-3.6: WAL-checkpoint/recovery test driven by ~99 open incrblob
 # handles + raw test.db-wal file copy; computed value ('xyz') matches stock.
-tkt-2d1a5c67d tkt-2d1a5c67d-3.6 class=intentional
+tkt-2d1a5c67d tkt-2d1a5c67d-3.6 class=intentional  # A raw SQLite WAL-file copy does not carry chunk-store commits; the computed SQL value matches stock.
 # tkt-f3e5abed55-*: multi-database (ATTACH) commit / master-journal locking ticket.
 # Every assertion needs two on-disk connections + a testvfs snapshot: 1.4/2.3 expect
 # "database is locked" (doltlite has no pager write-lock), 1.5/2.4/2.5 ride on that
@@ -2709,7 +2710,7 @@ sqllimits1 sqllimits1-7.7.3 class=intentional issue=2493  # max_page_count/page_
 
 # Raw NaN bit-pokes into the header/manifest region; the store reads them
 # back through its own validation instead of stock page semantics.
-nan nan-3.1 class=intentional
+nan nan-3.1 class=intentional  # Raw NaN bit-pokes into the header/manifest region; the store reads them back through its own validation instead of stock page semantics.
 nan nan-3.3 class=intentional
 nan nan-3.4 class=intentional
 nan nan-3.5 class=intentional
@@ -2717,13 +2718,13 @@ nan nan-3.6 class=intentional
 
 # journal_mode is not configurable on doltlite-format databases; setup
 # rejection cascades.
-tkt-5d863f876e tkt-5d863f876e-1.1 class=intentional
+tkt-5d863f876e tkt-5d863f876e-1.1 class=intentional  # journal_mode is not configurable on doltlite-format databases; setup rejection cascades.
 tkt-5d863f876e tkt-5d863f876e-1.3 class=intentional
 tkt-5d863f876e tkt-5d863f876e-2.1 class=intentional
 tkt-5d863f876e tkt-5d863f876e-2.3 class=intentional
 
 # journal_mode rejection cascade (see tkt-5d863f876e).
-tkt-fc62af4523 tkt-fc62af4523.2 class=intentional
+tkt-fc62af4523 tkt-fc62af4523.2 class=intentional  # journal_mode rejection cascade (see tkt-5d863f876e).
 tkt-fc62af4523 tkt-fc62af4523.3 class=intentional
 tkt-fc62af4523 tkt-fc62af4523.4 class=intentional
 
@@ -2865,10 +2866,10 @@ badutf badutf-1.20 class=unsupported issue=1838
 
 # group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly
 # chunks, not legacy pager pages, so pager_cache_size expectations never match
-cache cache-1.2 class=intentional
+cache cache-1.2 class=intentional  # group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly chunks, not legacy pager pages, so pager_cache_size expectations never match
 # group (b): journal_mode=DELETE rejection in cache-2.0's setup execsql aborts
 # the table creation, so 2.3.x/2.4.x cascade with "no such table" / 0 pages
-cache cache-2.0 class=intentional
+cache cache-2.0 class=intentional  # group (b): journal_mode=DELETE rejection in cache-2.0's setup execsql aborts the table creation, so 2.3.x/2.4.x cascade with "no such table" / 0 pages
 cache cache-2.3.1 class=intentional
 cache cache-2.3.2 class=intentional
 cache cache-2.3.3 class=intentional
@@ -2884,7 +2885,7 @@ cache cache-2.4.4 class=intentional
 # keeps uncommitted writes in chunk staging so the on-disk file copy only has
 # committed rows, and the "database is locked" cases never fire (MVCC, no
 # file locks)
-cacheflush cacheflush-1.1.2 class=intentional
+cacheflush cacheflush-1.1.2 class=intentional  # sqlite3_db_cacheflush flushes dirty pager pages mid-transaction; doltlite keeps uncommitted writes in chunk staging so the on-disk file copy only has committed rows, and the "database is locked" cases never fire (MVCC, no file locks)
 cacheflush cacheflush-1.2.2 class=intentional
 cacheflush cacheflush-1.3.2 class=intentional
 cacheflush cacheflush-1.4.2 class=intentional
@@ -2903,7 +2904,7 @@ cacheflush cacheflush-4.4 class=intentional
 # pager cache-spill behavior: doltlite's chunk file isn't page-sized and
 # uncommitted writes stage in memory/chunk-staging, never spilling into the
 # main file mid-transaction, so the file-size expectations can't match
-cachespill cachespill-1.2 class=intentional
+cachespill cachespill-1.2 class=intentional  # pager cache-spill behavior: doltlite's chunk file isn't page-sized and uncommitted writes stage in memory/chunk-staging, never spilling into the main file mid-transaction, so the file-size expectations can't match
 cachespill cachespill-1.3 class=intentional
 cachespill cachespill-1.4 class=intentional
 cachespill cachespill-1.5 class=intentional
@@ -2931,7 +2932,7 @@ capi3b capi3b-2.12 class=intentional  # final scan shows every polled insert (fo
 # one execsql; doltlite rejects the journal_mode pragma so t1 is never created
 # and all 66 section tests cascade — the changes()/total_changes() semantics
 # under test are never actually exercised
-changes changes-1.1.0 class=intentional
+changes changes-1.1.0 class=intentional  # every section's setup is "PRAGMA journal_mode = off; CREATE TABLE t1..." in one execsql; doltlite rejects the journal_mode pragma so t1 is never created and all 66 section tests cascade — the changes()/total_changes() semantics under test are never actually exercised
 changes changes-1.2.0 class=intentional
 changes changes-1.3.0 class=intentional
 changes changes-1.4.0 class=intentional
@@ -2940,7 +2941,7 @@ changes changes-1.6.0 class=intentional
 
 # journal_mode=delete rejected (wal accepted), and FCNTL_CHUNK_SIZE rounding
 # doesn't apply: the chunk file is its natural size, not page-multiple padded
-chunksize chunksize-1.0 class=intentional
+chunksize chunksize-1.0 class=intentional  # journal_mode=delete rejected (wal accepted), and FCNTL_CHUNK_SIZE rounding doesn't apply: the chunk file is its natural size, not page-multiple padded
 chunksize chunksize-1.2 class=intentional
 chunksize chunksize-2.2 class=intentional
 
@@ -2948,7 +2949,7 @@ chunksize chunksize-2.2 class=intentional
 # index keys need a stable serialized byte order); 1.5/3.1 are the rejection,
 # the rest cascade: sort-vs-nosort instrumentation (rows still correct) and an
 # integrity_check that upstream expects to fail via the stale collated index
-collate9 collate9-1.5 class=intentional
+collate9 collate9-1.5 class=intentional  # doltlite rejects CREATE INDEX over application-registered collations (prolly index keys need a stable serialized byte order); 1.5/3.1 are the rejection, the rest cascade: sort-vs-nosort instrumentation (rows still correct) and an integrity_check that upstream expects to fail via the stale collated index
 collate9 collate9-1.6 class=intentional
 collate9 collate9-3.1 class=intentional
 collate9 collate9-3.3 class=intentional
@@ -2959,7 +2960,7 @@ collate9 collate9-4.5 class=intentional
 # doltlite PKs are the prolly key and are NOT NULL (Dolt semantics, enforced —
 # INSERT NULL fails); table_column_metadata reports notnull=1 where stock's
 # rowid-table quirk reports nullable non-INTEGER PKs
-colmeta colmeta-5.1 class=intentional
+colmeta colmeta-5.1 class=intentional  # doltlite PKs are the prolly key and are NOT NULL (Dolt semantics, enforced — INSERT NULL fails); table_column_metadata reports notnull=1 where stock's rowid-table quirk reports nullable non-INTEGER PKs
 colmeta colmeta-5.2 class=intentional
 
 # dbfuzz001 injects corrupt raw SQLite-format images via `db deserialize
@@ -2971,13 +2972,13 @@ colmeta colmeta-5.2 class=intentional
 # ("ok" / "no such table" instead of "database disk image is malformed").
 # PRAGMA journal_mode = memory/PERSIST is rejected ("journal_mode is not
 # configurable on doltlite-format databases") — intentional rejection class.
-dbfuzz001 dbfuzz001-420 class=intentional
+dbfuzz001 dbfuzz001-420 class=intentional  # dbfuzz001 injects corrupt raw SQLite-format images via `db deserialize [decode_hexdb ...]`. doltlite's serialize/deserialize does not carry the SQLite file format (serialize returns empty, deserialize fails "unable to set MEMDB content" — verified with a roundtrip repro), so every image fails to load: 100/200/310 error in the do_test body, and 101a/110/320/330 are cascades that then see an empty db instead of the corrupt content ("ok" / "no such table" instead of "database disk image is malformed"). PRAGMA journal_mode = memory/PERSIST is rejected ("journal_mode is not configurable on doltlite-format databases") — intentional rejection class.
 dbfuzz001 dbfuzz001-440 class=intentional
 
 # Table q(s, id, constraint pk_q primary key(id)) is PK-keyed in doltlite.
 # DELETE WHERE rowid now resolves (1.6/1.9 pass). 1.8/1.11 still diverge
 # on remaining rows after that delete.
-delete2 delete2-1.8 class=intentional
+delete2 delete2-1.8 class=intentional  # Table q(s, id, constraint pk_q primary key(id)) is PK-keyed in doltlite. DELETE WHERE rowid now resolves (1.6/1.9 pass). 1.8/1.11 still diverge on remaining rows after that delete.
 delete2 delete2-1.11 class=intentional
 
 # doltlite never creates -journal/-wal/-shm sidecars (verified: no sidecar
@@ -2985,7 +2986,7 @@ delete2 delete2-1.11 class=intentional
 # them fail. 1.4.0 additionally sees more multiplexor chunks (test3.database
 # 001..010 vs 003) because the doltlite-format file is larger at the same
 # multiplex chunk_size. The actual delete_database calls all pass.
-delete_db delete_db-1.1.0 class=intentional
+delete_db delete_db-1.1.0 class=intentional  # doltlite never creates -journal/-wal/-shm sidecars (verified: no sidecar exists mid-write-transaction), so the file-listing assertions that expect them fail. 1.4.0 additionally sees more multiplexor chunks (test3.database 001..010 vs 003) because the doltlite-format file is larger at the same multiplex chunk_size. The actual delete_database calls all pass.
 delete_db delete_db-1.2.0 class=intentional
 delete_db delete_db-1.3.0 class=intentional
 delete_db delete_db-1.4.0 class=intentional
@@ -2994,7 +2995,7 @@ delete_db delete_db-1.4.0 class=intentional
 # files (no SQLite header), so every file-format assertion fails. All the
 # substantive DESC-index behavior tests (sections 2-5, ordering/lookup)
 # pass.
-descidx1 descidx1-1.1 class=intentional
+descidx1 descidx1-1.1 class=intentional  # get_file_format (hexio_read test.db 44 4) returns 0 on doltlite-format files (no SQLite header), so every file-format assertion fails. All the substantive DESC-index behavior tests (sections 2-5, ordering/lookup) pass.
 descidx1 descidx1-1.2 class=intentional
 descidx1 descidx1-6.3 class=intentional
 descidx1 descidx1-6.3.1 class=intentional
@@ -3008,7 +3009,7 @@ descidx1 descidx1-6.7 class=intentional
 # file, so reopening at 2.0 fails "database disk image is malformed" and the
 # db handle is gone — every later test in the file cascades with
 # "invalid command name db".
-descidx2 descidx2-1.1 class=intentional
+descidx2 descidx2-1.1 class=intentional  # descidx2 manipulates the SQLite file-format word directly: get_file_format (hexio_read offset 44) returns 0 on doltlite files (1.1/1.2), and set_file_format (hexio_write offsets 40/44) corrupts the doltlite-format file, so reopening at 2.0 fails "database disk image is malformed" and the db handle is gone — every later test in the file cascades with "invalid command name db".
 descidx2 descidx2-1.2 class=intentional
 descidx2 descidx2-2.1 class=intentional
 descidx2 descidx2-2.2 class=intentional
@@ -3040,7 +3041,7 @@ descidx2 descidx2-3.26 class=intentional
 # but doltlite rejects ("NOT NULL constraint failed: t0.c0") because the PK
 # is the real storage key. 2000/3000 fail in setup; 2010/2020/3010/3030 are
 # cascades querying the rows that were never inserted.
-distinct2 distinct2-2000 class=intentional
+distinct2 distinct2-2000 class=intentional  # t0 declares PRIMARY KEY(c0,c1) / PRIMARY KEY(c0,c1 NOT NULL); the setup INSERTs leave PK columns NULL, which stock's legacy rowid-PK quirk allows but doltlite rejects ("NOT NULL constraint failed: t0.c0") because the PK is the real storage key. 2000/3000 fail in setup; 2010/2020/3010/3030 are cascades querying the rows that were never inserted.
 distinct2 distinct2-2010 class=intentional
 distinct2 distinct2-2020 class=intentional
 distinct2 distinct2-3000 class=intentional
@@ -3051,7 +3052,7 @@ distinct2 distinct2-3030 class=intentional
 # "main unlocked" where stock reports shared/reserved while blob handles or
 # write transactions are open (verified: lock_status is unlocked even inside
 # an open write transaction).
-e_blobclose e_blobclose-1.2 class=intentional
+e_blobclose e_blobclose-1.2 class=intentional  # doltlite takes no SQLite-level file locks, so PRAGMA lock_status reports "main unlocked" where stock reports shared/reserved while blob handles or write transactions are open (verified: lock_status is unlocked even inside an open write transaction).
 e_blobclose e_blobclose-2.1.1 class=intentional
 e_blobclose e_blobclose-2.1.2 class=intentional
 e_blobclose e_blobclose-2.1.3 class=intentional
@@ -3068,14 +3069,14 @@ e_blobclose e_blobclose-2.3.5 class=intentional
 # reader keeps its snapshot and sees the new data after its transaction
 # ends (verified with a two-connection repro). So blob_close returns OK
 # (3.3/3.4) and the transaction persists instead of rolling back (3.5).
-e_blobclose e_blobclose-3.3 class=intentional
+e_blobclose e_blobclose-3.3 class=intentional  # Stock: closing a read-write blob handle commits, and a second connection holding an open read transaction makes that commit fail SQLITE_BUSY and roll back. doltlite's MVCC commit succeeds with the reader open — the reader keeps its snapshot and sees the new data after its transaction ends (verified with a two-connection repro). So blob_close returns OK (3.3/3.4) and the transaction persists instead of rolling back (3.5).
 e_blobclose e_blobclose-3.4 class=intentional
 e_blobclose e_blobclose-3.5 class=intentional
 
 # t3 is clustered TEXT PK. blob_open is allowed, but iRow=1 is not the
 # hashed SQL rowid of 'aaaa', so 4.8.1.* reads and 4.8.2.3/4 writes that
 # stock allows still fail. Indexed-column write guards now match stock.
-e_blobopen e_blobopen-4.8.1.1.1 class=intentional
+e_blobopen e_blobopen-4.8.1.1.1 class=intentional  # t3 is clustered TEXT PK. blob_open is allowed, but iRow=1 is not the hashed SQL rowid of 'aaaa', so 4.8.1.* reads and 4.8.2.3/4 writes that stock allows still fail. Indexed-column write guards now match stock.
 e_blobopen e_blobopen-4.8.1.1.2 class=intentional
 e_blobopen e_blobopen-4.8.1.1.3 class=intentional
 e_blobopen e_blobopen-4.8.1.1.4 class=intentional
@@ -3121,7 +3122,7 @@ e_blobopen e_blobopen-4.8.2.4.4 class=intentional
 # gated for collate*/windowE), so 2.0 errors and every test in section 2
 # cascades: empty results from t1, and "no such table: t2/t3" for the
 # tables the failed setup never created.
-e_reindex e_reindex-2.0 class=intentional
+e_reindex e_reindex-2.0 class=intentional  # e_reindex-1.3 hides the indexes via writable_schema, mutates the table, restores the index rows, and checks integrity_check output. doltlite detects the same corruption but emits only the per-row diagnostics ("row 3/4 missing from index i1/i2") without stock's two "wrong # of entries in index" summary lines (reproduced standalone; REINDEX then repairs and 1.4 passes). Diagnostic-detail wording divergence. Section 2 builds its dataset with CREATE INDEX ... COLLATE collA/collB where collA/collB are tcl-registered collations. doltlite explicitly rejects indexes with custom collations ("doltlite does not support indexes with custom collation 'collA'" — same intentional class already gated for collate*/windowE), so 2.0 errors and every test in section 2 cascades: empty results from t1, and "no such table: t2/t3" for the tables the failed setup never created.
 e_reindex e_reindex-2.1.1 class=intentional
 e_reindex e_reindex-2.1.2 class=intentional
 e_reindex e_reindex-2.1.3 class=intentional
@@ -3223,7 +3224,7 @@ e_reindex e_reindex-2.6.8 class=intentional
 # right file but empty params (3.2/3.3); for absolute paths the recorded
 # open is the eager ".{db}-lock" sidecar (4.2-4.4, 12.x, 13.x), so both the
 # filename and the parameter list differ.
-e_uri e_uri-3.2 class=intentional
+e_uri e_uri-3.2 class=intentional  # parse_uri records the LAST xOpen seen by a testvfs. doltlite's chunk store performs extra VFS opens after the initial URI open (traced with a log-all-xOpens repro): for relative paths it re-opens the resolved absolute path with no URI parameter block, so the recorded open has the right file but empty params (3.2/3.3); for absolute paths the recorded open is the eager ".{db}-lock" sidecar (4.2-4.4, 12.x, 13.x), so both the filename and the parameter list differ.
 e_uri e_uri-3.3 class=intentional
 e_uri e_uri-4.1 class=intentional
 e_uri e_uri-4.2 class=intentional
@@ -3239,7 +3240,7 @@ e_uri e_uri-13.3 class=intentional
 # another connection; doltlite has no shared-cache table locks (MVCC
 # snapshot read succeeds, "not an error"). Same no-lock class as
 # e_blobclose/lock_status.
-e_uri e_uri-11.1.2 class=intentional
+e_uri e_uri-11.1.2 class=intentional  # Shared-cache table locks: stock returns "database table is locked: t1" when a shared-cache connection reads a table mid-write-transaction of another connection; doltlite has no shared-cache table locks (MVCC snapshot read succeeds, "not an error"). Same no-lock class as e_blobclose/lock_status.
 e_uri e_uri-11.1.5 class=intentional
 e_uri e_uri-11.1.6 class=intentional
 e_uri e_uri-11.3.1 class=intentional
@@ -3253,7 +3254,7 @@ e_uri e_uri-11.3.6 class=intentional
 # UPDATE. doltlite never dirties pager-cache pages (verified: CACHE_WRITE
 # stays 0 even after a 100KB insert), so every expected page count compares
 # against 0. The data-correctness check (integrity_check 1.4) passes.
-expridx2 expridx2-1.1 class=intentional
+expridx2 expridx2-1.1 class=intentional  # expridx2's nWrite proc measures sqlite3_db_status CACHE_WRITE around each UPDATE. doltlite never dirties pager-cache pages (verified: CACHE_WRITE stays 0 even after a 100KB insert), so every expected page count compares against 0. The data-correctness check (integrity_check 1.4) passes.
 expridx2 expridx2-1.2 class=intentional
 expridx2 expridx2-1.3 class=intentional
 expridx2 expridx2-1.5 class=intentional
@@ -3265,14 +3266,14 @@ expridx2 expridx2-1.7 class=intentional
 # sidecars or shm read-marks (its readers hold MVCC snapshots, not WAL read
 # locks), so the file control reports 0. The same-process variant (1.2.4,
 # bExternal=0) and all other steps pass.
-external_reader external_reader-1.1.4 class=intentional
+external_reader external_reader-1.1.4 class=intentional  # 1.1.4 starts a read transaction from an external process and expects file_control_external_reader to report 1. doltlite has no -wal/-shm sidecars or shm read-marks (its readers hold MVCC snapshots, not WAL read locks), so the file control reports 0. The same-process variant (1.2.4, bExternal=0) and all other steps pass.
 
 # doltlite-format ignores non-UTF-8 database encodings
 fts3ai fts3ai-1.0 class=intentional  # PRAGMA encoding=UTF-16le reports UTF-8
 
 # sqlite_master enumeration order: doltlite returns schema rows in name
 # order, upstream in creation order (segdir sorts before segments)
-fts3ao fts3ao-2.7 class=intentional
+fts3ao fts3ao-2.7 class=intentional  # sqlite_master enumeration order: doltlite returns schema rows in name order, upstream in creation order (segdir sorts before segments)
 fts3ao fts3ao-2.11 class=intentional
 fts3ao fts3ao-2.1 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 fts3ao fts3ao-2.4 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
@@ -3304,13 +3305,13 @@ fts3shared fts3shared-2.5.5 class=unsupported issue=1837
 
 # doltlite does not materialize sqlite_autoindex_* rows for the
 # WITHOUT-ROWID-converted %_segdir shadow table (fordelete class)
-fts4content fts4content-5.1.1 class=intentional
+fts4content fts4content-5.1.1 class=intentional  # doltlite does not materialize sqlite_autoindex_* rows for the WITHOUT-ROWID-converted %_segdir shadow table (fordelete class)
 fts4content fts4content-5.1.3 class=intentional
 fts4content fts4content-6.2.3 class=intentional
 # content= table dropped/recreated with mismatched columns: doltlite
 # re-prepares and returns "no such table" (6.2.2) or an empty/NULL row
 # (6.2.8/6.2.9) where stock's stale vtab schema errors "SQL logic error"
-fts4content fts4content-6.2.2 class=intentional
+fts4content fts4content-6.2.2 class=intentional  # content= table dropped/recreated with mismatched columns: doltlite re-prepares and returns "no such table" (6.2.2) or an empty/NULL row (6.2.8/6.2.9) where stock's stale vtab schema errors "SQL logic error"
 fts4content fts4content-6.2.8 class=intentional
 fts4content fts4content-6.2.9 class=intentional
 fts4content fts4content-7.2.3 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
@@ -3318,7 +3319,7 @@ fts4content fts4content-7.2.3 class=intentional issue=1852  # canonical adoption
 # %_segdir level/idx layout ordering differs after large inserts and
 # deletes. Segment sizes now match upstream; only row order / idx
 # assignment diverges in these assertions.
-fts4growth fts4growth-1.6 class=intentional
+fts4growth fts4growth-1.6 class=intentional  # %_segdir level/idx layout ordering differs after large inserts and deletes. Segment sizes now match upstream; only row order / idx assignment diverges in these assertions.
 fts4growth fts4growth-5.4 class=intentional
 fts4growth fts4growth-6.3 class=intentional
 fts4growth fts4growth-6.5 class=intentional
@@ -3328,7 +3329,7 @@ fts4growth fts4growth-6.5 class=intentional
 # sql_uses_stmt instrumentation: doltlite deliberately opens statement
 # scope for every vtab write (hasVUpdate), upstream's onepass docid=?
 # forms use none
-fts4onepass fts4onepass-1.1.2 class=intentional
+fts4onepass fts4onepass-1.1.2 class=intentional  # sql_uses_stmt instrumentation: doltlite deliberately opens statement scope for every vtab write (hasVUpdate), upstream's onepass docid=? forms use none
 fts4onepass fts4onepass-1.1.3 class=intentional
 
 # ── incrblob2 ──
@@ -3351,7 +3352,7 @@ incrblob2 incrblob2-5.8 class=intentional  # cascade from 5.6: stale $blob chann
 # workload touches 2 pages instead of filling the 20-page pool (2.4,
 # 3.2.4) or 45-50 of 50 (4.3). Chunk encoding also issues mallocs >=9000 bytes, so the
 # MALLOC_SIZE<9000 expectation fails (4.5).
-memsubsys1 memsubsys1-2.4 class=intentional
+memsubsys1 memsubsys1-2.4 class=intentional  # Table data lives in the prolly chunk store, not pager pages, so the SQLITE_CONFIG_PAGECACHE pool registers almost no usage: the build workload touches 2 pages instead of filling the 20-page pool (2.4, 3.2.4) or 45-50 of 50 (4.3). Chunk encoding also issues mallocs >=9000 bytes, so the MALLOC_SIZE<9000 expectation fails (4.5).
 memsubsys1 memsubsys1-3.2.4 class=intentional
 memsubsys1 memsubsys1-4.3 class=intentional
 memsubsys1 memsubsys1-4.5 class=intentional
@@ -3368,7 +3369,7 @@ memsubsys1 memsubsys1-4.5 class=intentional
 # super-journal (*mj* file, observed via a testvfs xOpen hook). doltlite
 # commits each chunk store through its internal WAL and never uses the
 # super-journal protocol, so no *mj* file is opened.
-mjournal mjournal-2.1 class=intentional
+mjournal mjournal-2.1 class=intentional  # A transaction spanning two file databases is expected to open a super-journal (*mj* file, observed via a testvfs xOpen hook). doltlite commits each chunk store through its internal WAL and never uses the super-journal protocol, so no *mj* file is opened.
 
 # ── mutex1 ──
 # The per-mode mutex inventory differs from stock in all three
@@ -3379,7 +3380,7 @@ mjournal mjournal-2.1 class=intentional
 # (static_open) or the pcache1 page-allocator mutex (static_pmem)
 # because file locking and page caching go through the chunk store
 # instead.
-mutex1 mutex1.2.singlethread.4 class=intentional
+mutex1 mutex1.2.singlethread.4 class=intentional  # The per-mode mutex inventory differs from stock in all three threading modes: the chunk store allocates and enters a recursive lock mutex (chunk_store.c, sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE)) which the counter shim records even in singlethread mode, and the open/insert workload never engages the unix inode-list mutex (static_open) or the pcache1 page-allocator mutex (static_pmem) because file locking and page caching go through the chunk store instead.
 mutex1 mutex1.2.multithread.4 class=intentional
 mutex1 mutex1.2.serialized.4 class=intentional
 
@@ -3388,7 +3389,7 @@ mutex1 mutex1.2.serialized.4 class=intentional
 # from the SQLITE_CONFIG_PAGECACHE pool, so PAGECACHE_USED stays 0
 # where stock reports 2/4 pages after opening connections (1.2, 1.3)
 # and 13 pages after the write workload (1.4).
-pcache2 pcache2-1.2 class=intentional
+pcache2 pcache2-1.2 class=intentional  # Database content is cached as prolly chunks, not pager pages drawn from the SQLITE_CONFIG_PAGECACHE pool, so PAGECACHE_USED stays 0 where stock reports 2/4 pages after opening connections (1.2, 1.3) and 13 pages after the write workload (1.4).
 pcache2 pcache2-1.3 class=intentional
 pcache2 pcache2-1.4 class=intentional
 
@@ -3398,7 +3399,7 @@ pcache2 pcache2-1.4 class=intentional
 # collations/indexes that were never created, giving "unable to identify
 # the object to be reindexed" (3.1/3.2) or success where stock errors
 # about the missing collation (3.3).
-reindex reindex-2.1 class=intentional
+reindex reindex-2.1 class=intentional  # CREATE TABLE t2 with an index using custom collation c1 is rejected (2.1), so t2 never exists and 2.2-2.8 cascade with "no such table: t2"; 2.5.1 checks the same state. 3.x REINDEX-by-collation then targets collations/indexes that were never created, giving "unable to identify the object to be reindexed" (3.1/3.2) or success where stock errors about the missing collation (3.3).
 reindex reindex-2.2 class=intentional
 reindex reindex-2.3 class=intentional
 reindex reindex-2.4 class=intentional
@@ -3414,7 +3415,7 @@ reindex reindex-3.3 class=intentional
 # md5file over raw db bytes after skipping PRAGMA page_size bytes: the
 # chunk-store file is not a SQLite page image, so page-size-dependent slices
 # differ even when the SQL content is logically equivalent.
-schema6 schema6-100-1 class=intentional
+schema6 schema6-100-1 class=intentional  # md5file over raw db bytes after skipping PRAGMA page_size bytes: the chunk-store file is not a SQLite page image, so page-size-dependent slices differ even when the SQL content is logically equivalent.
 schema6 schema6-100-2 class=intentional
 schema6 schema6-100-3 class=intentional
 schema6 schema6-100-4 class=intentional
@@ -3433,7 +3434,7 @@ schema6 schema6-120-7 class=intentional
 schema6 schema6-120-8 class=intentional
 
 # freelist_count page accounting: no page freelist in the chunk store
-shortread1 shortread1-1.2 class=intentional
+shortread1 shortread1-1.2 class=intentional  # freelist_count page accounting: no page freelist in the chunk store
 
 # doltlite PK-keyed storage gives these UPDATE OR REPLACE stress tests
 # stock WITHOUT ROWID semantics (verified byte-for-byte against stock
@@ -3441,7 +3442,7 @@ shortread1 shortread1-1.2 class=intentional
 # 2.x: SET a=(SELECT b FROM chng WHERE a=t1.a) yields NULL for unmatched
 # rows; a is the table key, so the statement errors "NOT NULL constraint
 # failed: t1.a" instead of keeping NULL rows in a UNIQUE column.
-sidedelete sidedelete-2.2.1 class=intentional
+sidedelete sidedelete-2.2.1 class=intentional  # doltlite PK-keyed storage gives these UPDATE OR REPLACE stress tests stock WITHOUT ROWID semantics (verified byte-for-byte against stock sqlite3 using WITHOUT ROWID variants of the same schema): 2.x: SET a=(SELECT b FROM chng WHERE a=t1.a) yields NULL for unmatched rows; a is the table key, so the statement errors "NOT NULL constraint failed: t1.a" instead of keeping NULL rows in a UNIQUE column.
 sidedelete sidedelete-2.3.1 class=intentional
 sidedelete sidedelete-2.4.1 class=intentional
 sidedelete sidedelete-2.5.1 class=intentional
@@ -3543,7 +3544,7 @@ sidedelete sidedelete-2.100.1 class=intentional
 # 3.x: UPDATE OR REPLACE t1 SET a=a+1 on the PK-keyed table cascades the
 # REPLACE deletes in key order, collapsing the table to a single row
 # (count=1, max value), exactly as stock does for WITHOUT ROWID.
-sidedelete sidedelete-3.2.1 class=intentional
+sidedelete sidedelete-3.2.1 class=intentional  # 3.x: UPDATE OR REPLACE t1 SET a=a+1 on the PK-keyed table cascades the REPLACE deletes in key order, collapsing the table to a single row (count=1, max value), exactly as stock does for WITHOUT ROWID.
 sidedelete sidedelete-3.3.1 class=intentional
 sidedelete sidedelete-3.4.1 class=intentional
 sidedelete sidedelete-3.5.1 class=intentional
@@ -3670,23 +3671,23 @@ statfault statfault-2-shmerr-transient.1 class=unsupported issue=2508
 # writable_schema rootpage aliasing (raw-format poke): the post-DDL schema
 # reload can't rebind tables whose rootpage was pointed at another table's
 # root, so 3.0 dies with "malformed database schema (t1nn)"
-strict2 strict2-3.0 class=intentional
+strict2 strict2-3.0 class=intentional  # writable_schema rootpage aliasing (raw-format poke): the post-DDL schema reload can't rebind tables whose rootpage was pointed at another table's root, so 3.0 dies with "malformed database schema (t1nn)"
 
 # backup step count derived from PRAGMA page_count: synthetic page count
 # on the chunk store finishes the backup in one step (SQLITE_DONE)
-subjournal subjournal-2.1 class=intentional
+subjournal subjournal-2.1 class=intentional  # backup step count derived from PRAGMA page_count: synthetic page count on the chunk store finishes the backup in one step (SQLITE_DONE)
 
 # sections 1/1.2.x: open/getcwd/fstat fault injection — the chunk store
 # performs different syscalls at each fault index, so some fault points
 # surface "disk I/O error" / "attempt to write a readonly database" where
 # the test only allows its own short error list; later indexes recover.
-sysfault sysfault-1.2.1-vfsfault-transient.8 class=intentional
+sysfault sysfault-1.2.1-vfsfault-transient.8 class=intentional  # sections 1/1.2.x: open/getcwd/fstat fault injection — the chunk store performs different syscalls at each fault index, so some fault points surface "disk I/O error" / "attempt to write a readonly database" where the test only allows its own short error list; later indexes recover.
 sysfault sysfault-1.2.2-vfsfault-transient.8 class=intentional
 # sections 2.1/2.2: the body runs PRAGMA journal_mode=truncate, which
 # doltlite intentionally rejects ("journal_mode is not configurable on
 # doltlite-format databases"), so every fault index — including the
 # fault-free final iteration — fails with that error.
-sysfault sysfault-2.1-vfsfault-transient.1 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.1 class=intentional  # sections 2.1/2.2: the body runs PRAGMA journal_mode=truncate, which doltlite intentionally rejects ("journal_mode is not configurable on doltlite-format databases"), so every fault index — including the fault-free final iteration — fails with that error.
 sysfault sysfault-2.1-vfsfault-transient.2 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.3 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.4 class=intentional
@@ -3794,17 +3795,17 @@ sysfault sysfault-2.2-vfsfault-transient.111 @coverage class=intentional
 # section 3: fstat/fallocate EIO injection — stock expects every fault
 # point to still succeed ({0 20000}); doltlite hits fstat/fallocate in
 # paths where the fault becomes a "disk I/O error".
-sysfault sysfault-3-vfsfault-persistent.1 class=intentional
+sysfault sysfault-3-vfsfault-persistent.1 class=intentional  # section 3: fstat/fallocate EIO injection — stock expects every fault point to still succeed ({0 20000}); doltlite hits fstat/fallocate in paths where the fault becomes a "disk I/O error".
 sysfault sysfault-3-vfsfault-transient.1 class=intentional
 
 # MVCC: no reader-blocks-writer / exclusive-blocks-reader lock errors
-tclsqlite tcl-10.18 class=intentional
+tclsqlite tcl-10.18 class=intentional  # MVCC: no reader-blocks-writer / exclusive-blocks-reader lock errors
 tclsqlite tcl-10.22 class=intentional
 
 # post-DDL schema reload under trusted_schema=off re-parses t2's unsafe
 # CHECK and fails schema load (stock fresh-connection behavior, hit
 # mid-session); the rest cascades from tables that were never created
-trustschema1 trustschema1-1.310 class=intentional
+trustschema1 trustschema1-1.310 class=intentional  # post-DDL schema reload under trusted_schema=off re-parses t2's unsafe CHECK and fails schema load (stock fresh-connection behavior, hit mid-session); the rest cascades from tables that were never created
 trustschema1 trustschema1-1.311 class=intentional
 trustschema1 trustschema1-1.320 class=intentional
 trustschema1 trustschema1-1.400 class=intentional
@@ -3822,7 +3823,7 @@ trustschema1 trustschema1-1.540 class=intentional
 
 # NULL into a (typo-typed) PRIMARY KEY column: PK-keyed storage enforces
 # NOT NULL (stock WITHOUT ROWID semantics) + cascade onto views from 5.1
-unionall unionall-5.1 class=intentional
+unionall unionall-5.1 class=intentional  # NULL into a (typo-typed) PRIMARY KEY column: PK-keyed storage enforces NOT NULL (stock WITHOUT ROWID semantics) + cascade onto views from 5.1
 unionall unionall-5.10 class=intentional
 unionall unionall-5.20 class=intentional
 unionall unionall-5.30 class=intentional
@@ -3833,7 +3834,7 @@ unionall unionall-5.30 class=intentional
 # but with an empty parameter list), so every expected key/value list
 # comes back empty. The vfs= parameter itself still works (resolved by
 # the core before open), which is why 2.4 and 2.11 pass.
-uri uri-2.1.1 class=intentional
+uri uri-2.1.1 class=intentional  # URI query parameters are not visible to the VFS layer: doltlite re-dups the main-db filename (double-nul form) before xOpen, dropping the URI parameter tail (verified with a testvfs repro: xOpen fires for test.db but with an empty parameter list), so every expected key/value list comes back empty. The vfs= parameter itself still works (resolved by the core before open), which is why 2.4 and 2.11 pass.
 uri uri-2.1.2 class=intentional
 uri uri-2.2.1 class=intentional
 uri uri-2.2.2 class=intentional
@@ -3855,13 +3856,13 @@ uri uri-2.12.1 class=intentional
 uri uri-2.12.2 class=intentional
 # Shared-cache table locks don't exist on doltlite (MVCC snapshots):
 # a reader sees its own snapshot instead of "database table is locked".
-uri uri-4.2.1 class=intentional
+uri uri-4.2.1 class=intentional  # Shared-cache table locks don't exist on doltlite (MVCC snapshots): a reader sees its own snapshot instead of "database table is locked".
 uri uri-4.2.3 class=intentional
 uri uri-4.2.6 class=intentional
 # 5.1: PRAGMA journal_mode=PERSIST/WAL is rejected on doltlite-format
 # attached dbs, and the chunk store never touches -journal/-wal sidecar
 # names through the per-db VFS, so the recorded VFS call set differs.
-uri uri-5.1.1 class=intentional
+uri uri-5.1.1 class=intentional  # 5.1: PRAGMA journal_mode=PERSIST/WAL is rejected on doltlite-format attached dbs, and the chunk store never touches -journal/-wal sidecar names through the per-db VFS, so the recorded VFS call set differs.
 uri uri-5.1.2 class=intentional
 
 # custom-collation index rejection
@@ -3957,7 +3958,7 @@ corruptB corruptB-2.1.2 class=intentional  # stock btree child/loop poke by page
 # createtab: raw-format file-size compare; the doltlite chunk file is not
 # sized in 1024-byte pages and does not grow with auto_vacuum pointer-map
 # pages (auto_vacuum is a no-op on doltlite format).
-createtab createtab-0.2 class=intentional
+createtab createtab-0.2 class=intentional  # createtab: raw-format file-size compare; the doltlite chunk file is not sized in 1024-byte pages and does not grow with auto_vacuum pointer-map pages (auto_vacuum is a no-op on doltlite format).
 createtab createtab-1.2 class=intentional
 createtab createtab-2.2 class=intentional
 
@@ -4012,7 +4013,7 @@ fallocate fallocate-2.8 class=intentional  # file size = chunk payload
 # Section 2's "truncation" to 22KB is actually a harmless zero-EXTENSION of
 # the smaller (~15.5KB) doltlite file -- no damage occurs; rows, blobs and
 # integrity_check verified intact on reopen.
-incrcorrupt incrcorrupt-1.0 class=intentional
+incrcorrupt incrcorrupt-1.0 class=intentional  # incrcorrupt pokes the stock header freelist fields (e.g. byte 36) and expects PRAGMA incremental_vacuum / incrblob reads to detect corruption. On doltlite the section-1 pokes miss chunk-store structures and incremental_vacuum is a no-op that never reads a freelist (succeeds where stock reports malformed / SQLITE_CORRUPT); page_count reflects chunk pages. Section 2's "truncation" to 22KB is actually a harmless zero-EXTENSION of the smaller (~15.5KB) doltlite file -- no damage occurs; rows, blobs and integrity_check verified intact on reopen.
 incrcorrupt incrcorrupt-1.2 class=intentional
 incrcorrupt incrcorrupt-1.3 class=intentional
 incrcorrupt incrcorrupt-1.4 class=intentional
@@ -4051,7 +4052,7 @@ incrcorrupt incrcorrupt-2.17 class=intentional
 # tbl1') until the tester's 1000-error cap aborts the file. The cap also
 # means sections 8-15 never run. Entry list pinned to the cap-truncated,
 # 3/3-stable failure set.
-incrvacuum incrvacuum-1.2.0 class=intentional
+incrvacuum incrvacuum-1.2.0 class=intentional  # The whole file exercises incremental-vacuum semantics prolly storage doesn't have: auto_vacuum mode read-back round-trips (always 0 here), freelist_count, and file-shrink-after-vacuum sizes. Section 7 is a `while 1` loop that only breaks when `db eval {PRAGMA incremental_vacuum}` steps its body ($nRow == $iWrite); the no-op returns zero rows, so the loop repeats (3 failures per lap, incl. a cascading 'no such table: tbl1') until the tester's 1000-error cap aborts the file. The cap also means sections 8-15 never run. Entry list pinned to the cap-truncated, 3/3-stable failure set.
 incrvacuum incrvacuum-1.2 class=intentional
 incrvacuum incrvacuum-1.3 class=intentional
 incrvacuum incrvacuum-1.4 class=intentional
@@ -5294,7 +5295,7 @@ mmap1 mmap1-6.2 class=intentional issue=2493  # mmap_size reads back 0 / mmap st
 # journal_mode=delete/truncate per cycle), multiplex chunk-boundary and
 # size/journal-shape expectations differ. The native initialized-wrapper
 # contract is covered by doltlite_recover_vfs_wrappers.
-multiplex multiplex-2.1.3 class=intentional
+multiplex multiplex-2.1.3 class=intentional  # multiplex VFS over a chunk store: journal_mode is not configurable on doltlite-format databases (dominant failure: the multiplex tests set journal_mode=delete/truncate per cycle), multiplex chunk-boundary and size/journal-shape expectations differ. The native initialized-wrapper contract is covered by doltlite_recover_vfs_wrappers.
 multiplex multiplex-2.2.3 class=intentional
 multiplex multiplex-2.4.4 class=intentional
 multiplex multiplex-2.5.2 class=intentional
@@ -5398,14 +5399,14 @@ multiplex multiplex-3.2.1a class=intentional
 
 # pragma4: doltlite stores non-INTEGER-PK tables PK-keyed (WITHOUT
 # ROWID-equivalent), so PRAGMA table_list reports wr=1 for them.
-pragma4 pragma4-6.2 class=intentional
+pragma4 pragma4-6.2 class=intentional  # pragma4: doltlite stores non-INTEGER-PK tables PK-keyed (WITHOUT ROWID-equivalent), so PRAGMA table_list reports wr=1 for them.
 
 # quota-VFS byte thresholds never trip at chunk-store file sizes (979 < 4096), unlike stock
 # page-file sizes, and the journal_mode pragma the suite issues errors
 # ("journal_mode is not configurable on doltlite-format databases"),
 # cascading into "no such table: t1" for the rest of the batch. The
 # native wrapper contract is covered by doltlite_recover_vfs_wrappers.
-quota quota-2.1.2 class=intentional
+quota quota-2.1.2 class=intentional  # quota-VFS byte thresholds never trip at chunk-store file sizes (979 < 4096), unlike stock page-file sizes, and the journal_mode pragma the suite issues errors ("journal_mode is not configurable on doltlite-format databases"), cascading into "no such table: t1" for the rest of the batch. The native wrapper contract is covered by doltlite_recover_vfs_wrappers.
 quota quota-2.1.3 class=intentional
 quota quota-2.1.5 class=intentional
 quota quota-2.2.2 class=intentional
@@ -5423,14 +5424,14 @@ quota quota-3.3.1 class=intentional
 
 # PRAGMA lock_status expects stock rollback-journal RESERVED locks. DoltLite's
 # prolly storage does not expose those pager locks, so writes stay "unlocked".
-savepoint savepoint-3.2 class=intentional
+savepoint savepoint-3.2 class=intentional  # PRAGMA lock_status expects stock rollback-journal RESERVED locks. DoltLite's prolly storage does not expose those pager locks, so writes stay "unlocked".
 savepoint savepoint-3.3 class=intentional
 savepoint savepoint-3.4 class=intentional
 
 # Second connection read locks do not block DoltLite savepoint release the way
 # stock rollback-journal pager locks do; savepoint-5.4.4 is the follow-on after
 # RELEASE succeeds instead of returning "database is locked".
-savepoint savepoint-5.4.3 class=intentional
+savepoint savepoint-5.4.3 class=intentional  # Second connection read locks do not block DoltLite savepoint release the way stock rollback-journal pager locks do; savepoint-5.4.4 is the follow-on after RELEASE succeeds instead of returning "database is locked".
 savepoint savepoint-5.4.4 class=intentional
 
 # auto_vacuum=incremental is accepted as a no-op and the section's workload
@@ -5438,12 +5439,12 @@ savepoint savepoint-5.4.4 class=intentional
 # stock 1024-byte-pager file-growth instrumentation. DoltLite reports a fixed
 # 4096-byte page_size with page_count derived from the chunk-format file
 # (reproduced: page_count 15, 11 rows intact, auto_vacuum reads back 0).
-savepoint savepoint-7.1 class=intentional
+savepoint savepoint-7.1 class=intentional  # auto_vacuum=incremental is accepted as a no-op and the section's workload completes with data intact, but savepoint-7.1 asserts PRAGMA page_count > 20 — stock 1024-byte-pager file-growth instrumentation. DoltLite reports a fixed 4096-byte page_size with page_count derived from the chunk-format file (reproduced: page_count 15, 11 rows intact, auto_vacuum reads back 0).
 
 # ATTACH + savepoint data operations pass; the remaining 10.2.* labels are
 # PRAGMA lock_status assertions expecting stock RESERVED pager locks on the
 # main/attached page files mid-transaction. DoltLite reports "unlocked".
-savepoint savepoint-10.2.3 class=intentional
+savepoint savepoint-10.2.3 class=intentional  # ATTACH + savepoint data operations pass; the remaining 10.2.* labels are PRAGMA lock_status assertions expecting stock RESERVED pager locks on the main/attached page files mid-transaction. DoltLite reports "unlocked".
 savepoint savepoint-10.2.4 class=intentional
 savepoint savepoint-10.2.5 class=intentional
 savepoint savepoint-10.2.8 class=intentional
@@ -5451,15 +5452,15 @@ savepoint savepoint-10.2.8 class=intentional
 # savepoint-11.8 asserts `file size test.db` == 8192 after wal_checkpoint, a
 # stock page-format size; the doltlite chunk-format file is 5354 bytes. The
 # rollback/data assertions around it (11.2-11.7, 11.9-11.10) pass.
-savepoint savepoint-11.8 class=intentional
+savepoint savepoint-11.8 class=intentional  # savepoint-11.8 asserts `file size test.db` == 8192 after wal_checkpoint, a stock page-format size; the doltlite chunk-format file is 5354 bytes. The rollback/data assertions around it (11.2-11.7, 11.9-11.10) pass.
 
 # journal_mode=off is not configurable for DoltLite-format databases.
-savepoint savepoint-13.1 class=intentional
+savepoint savepoint-13.1 class=intentional  # journal_mode=off is not configurable for DoltLite-format databases.
 
 # Multi-client tests that assert stock rollback-journal lock failures.
 # DoltLite lets the write/release complete, so the following rollback/transaction
 # labels see different savepoint state.
-savepoint savepoint-14.1.2 class=intentional
+savepoint savepoint-14.1.2 class=intentional  # Multi-client tests that assert stock rollback-journal lock failures. DoltLite lets the write/release complete, so the following rollback/transaction labels see different savepoint state.
 savepoint savepoint-14.1.3 class=intentional
 savepoint savepoint-14.1.4 class=intentional
 savepoint savepoint-14.1.5 class=intentional
@@ -5527,7 +5528,7 @@ vacuum3 vacuum3-2.10.2 class=intentional  # file size = chunk payload
 vacuum3 vacuum3-5.2 class=intentional issue=2493  # memdb page_size read-back after VACUUM (no rebuild)
 # extra sqlite_schema INSERT for clustered PK autoindexes shifts this OOM
 # injection: count(*) from sqlite_master is no longer 4 at fail-point 90.
-doltlite_fts3_oom doltlite_fts3_oom-2.2.1 class=intentional
+doltlite_fts3_oom doltlite_fts3_oom-2.2.1 class=intentional  # extra sqlite_schema INSERT for clustered PK autoindexes shifts this OOM injection: count(*) from sqlite_master is no longer 4 at fail-point 90.
 
 # ── pager2 ── (was crash-listed on the journal_mode rejection; now completes)
 pager2 pager2-2.1 class=intentional issue=2493  # journal_mode is a no-op reporting the fixed "wal", not the requested "off"
@@ -5536,7 +5537,7 @@ pager2 pager2-2.2 class=intentional  # file size = chunk payload (13088), not a 
 # ── pragma3 ── (was crash-listed on the journal_mode rejection; now completes)
 # data_version is not bumped by another connection's write (MVCC/chunk-store
 # change-detection model); the row data in the same assertions is correct.
-pragma3 pragma3-400 class=intentional
+pragma3 pragma3-400 class=intentional  # data_version is not bumped by another connection's write (MVCC/chunk-store change-detection model); the row data in the same assertions is correct.
 pragma3 pragma3-410 class=intentional
 pragma3 pragma3-420 class=intentional
 pragma3 pragma3-430 class=intentional
@@ -5544,7 +5545,7 @@ pragma3 pragma3-430 class=intentional
 # ── incrvacuum3 ── (was crash-listed on the journal_mode rejection; now completes)
 # raw corruption-injection probe: the poke lands in chunk-store structures and
 # the store reports "database disk image is malformed" at a different point.
-incrvacuum3 incrvacuum3-1.1.1.3 class=intentional
+incrvacuum3 incrvacuum3-1.1.1.3 class=intentional  # raw corruption-injection probe: the poke lands in chunk-store structures and the store reports "database disk image is malformed" at a different point.
 incrvacuum3 incrvacuum3-1.1.2.3 class=intentional
 incrvacuum3 incrvacuum3-1.1.3.3 class=intentional
 incrvacuum3 incrvacuum3-1.1.4.3 class=intentional
@@ -5563,7 +5564,7 @@ incrvacuum3 incrvacuum3-2.1.8.3 class=intentional
 
 # sysfault §2 vfsfault indices that fail now that journal_mode=truncate no-ops
 # (the body runs instead of erroring at the pragma); fault-index set, Linux CI is the oracle.
-sysfault sysfault-2.1-vfsfault-transient.100 class=intentional
+sysfault sysfault-2.1-vfsfault-transient.100 class=intentional  # sysfault §2 vfsfault indices that fail now that journal_mode=truncate no-ops (the body runs instead of erroring at the pragma); fault-index set, Linux CI is the oracle.
 sysfault sysfault-2.1-vfsfault-transient.101 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.102 class=intentional
 sysfault sysfault-2.1-vfsfault-transient.103 class=intentional
