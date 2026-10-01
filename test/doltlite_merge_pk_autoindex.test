@@ -68,6 +68,13 @@ foreach {form ddl changes} {
         SELECT count(*) FROM dolt_conflicts;
         PRAGMA integrity_check;
       } {0 ok}
+      do_catchsql_test $name-primary-key-before-reopen {
+        INSERT INTO t(id,b,c) VALUES(1,9,9);
+      } {1 {UNIQUE constraint failed: t.id}}
+      do_execsql_test $name-after-failed-write {
+        SELECT id,b,c FROM t ORDER BY id;
+        SELECT count(*) FROM dolt_status;
+      } [concat $rows 0]
       db close
       sqlite3 db test.db
       db collate merge_pk_collation {string compare}
