@@ -2176,6 +2176,18 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     catNew.iNextTable = maxCatalogTable + 1;
   }
 
+  if( pBtree->db ){
+    for(i=0; i<pBtree->cat.n; i++){
+      struct TableEntry *pOld = &pBtree->cat.a[i];
+      struct TableEntry *pNew;
+      if( pOld->nocaseNulState!=1 ) continue;
+      pNew = catFind(&catNew, pOld->iTable);
+      if( !pNew || prollyHashCompare(&pOld->root, &pNew->root)!=0 ){
+        sqlite3ExpirePreparedStatements(pBtree->db, 0);
+        break;
+      }
+    }
+  }
   btreeFreeCatalogTables(pBtree);
   pBtree->cat = catNew;
   memcpy(pBtree->aMeta, aMetaNew, sizeof(aMetaNew));

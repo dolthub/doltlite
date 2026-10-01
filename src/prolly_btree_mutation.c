@@ -997,6 +997,10 @@ int prollyBtCursorInsert(
     }
   }
 
+  if( rc==SQLITE_OK && !pCur->curIntKey ){
+    rc = doltliteBtreeNocaseNulInsert(
+        pCur, (const u8*)pPayload->pKey, (int)pPayload->nKey);
+  }
   if( rc!=SQLITE_OK ){
     return rc;
   }

@@ -470,4 +470,97 @@ do_test doltlite_recover_collation-12.7 {
   execsql { PRAGMA integrity_check }
 } {ok}
 
+do_test doltlite_recover_collation-13.1 {
+  execsql {
+    CREATE TABLE nulpk(e TEXT COLLATE NOCASE NOT NULL, a INT NOT NULL,
+                       PRIMARY KEY(e,a));
+    INSERT INTO nulpk VALUES('plain',9);
+  }
+  set nulpk_order {SELECT group_concat(a) FROM (
+    SELECT a FROM nulpk ORDER BY e,a)}
+  set ::sqlite_sort_count 0
+  set result [db eval $nulpk_order]
+  lappend result $::sqlite_sort_count
+} {9 0}
+do_test doltlite_recover_collation-13.2 {
+  execsql {
+    BEGIN;
+    INSERT INTO nulpk VALUES
+      ('x'||char(0)||'b',1),('x'||char(0)||'a',2),
+      ('X'||char(0)||'b',3),('x'||char(0)||'a',4);
+  }
+  set ::sqlite_sort_count 0
+  set result [db eval $nulpk_order]
+  lappend result [expr {$::sqlite_sort_count>0}]
+} {9,1,2,3,4 1}
+do_test doltlite_recover_collation-13.3 {
+  execsql {
+    SELECT group_concat(a) FROM (SELECT a FROM nulpk
+      WHERE e='x'||char(0)||'q' AND a>1 ORDER BY a);
+    SELECT count(*) FROM nulpk
+      WHERE e='x'||char(0)||'q' AND a BETWEEN 2 AND 3;
+    PRAGMA integrity_check(nulpk);
+    COMMIT;
+  }
+} {2,3,4 2 ok}
+do_test doltlite_recover_collation-13.4 {
+  db close
+  sqlite3 db test.db
+  execsql {
+    SELECT group_concat(a) FROM (SELECT a FROM nulpk
+      WHERE e='x'||char(0)||'q' ORDER BY a DESC);
+    PRAGMA integrity_check(nulpk);
+  }
+} {4,3,2,1 ok}
+
+do_test doltlite_recover_collation-13.5 {
+  set cols {}
+  set keys {}
+  set vals {}
+  set terms {}
+  for {set i 0} {$i<32} {incr i} {
+    lappend cols "c$i INT NOT NULL"
+    lappend keys c$i
+    lappend vals 0
+    lappend terms "c$i=0"
+  }
+  lappend cols "e TEXT COLLATE NOCASE NOT NULL" "a INT NOT NULL"
+  lappend keys e a
+  execsql "CREATE TABLE widepk([join $cols ,], PRIMARY KEY([join $keys ,]))"
+  set widepk_values [join $vals ,]
+  execsql "INSERT INTO widepk VALUES($widepk_values,'plain',9)"
+  set widepk_order "SELECT group_concat(a) FROM (SELECT a FROM widepk
+    WHERE [join $terms { AND }] ORDER BY e,a)"
+  db eval $widepk_order
+} {9}
+do_test doltlite_recover_collation-13.6 {
+  execsql "BEGIN; INSERT INTO widepk VALUES
+    ($widepk_values,'x'||char(0)||'b',1),
+    ($widepk_values,'x'||char(0)||'a',2)"
+  set result [db eval $widepk_order]
+  execsql {ROLLBACK}
+  set result
+} {9,1,2}
+
+do_test doltlite_recover_collation-13.7 {
+  execsql {
+    CREATE TABLE peerpk(e TEXT COLLATE NOCASE NOT NULL, a INT NOT NULL,
+                       PRIMARY KEY(e,a));
+    INSERT INTO peerpk VALUES('plain',9);
+  }
+  sqlite3 peer test.db
+  set peerpk_order {SELECT group_concat(a) FROM (
+    SELECT a FROM peerpk ORDER BY e,a)}
+  peer eval $peerpk_order
+} {9}
+do_test doltlite_recover_collation-13.8 {
+  execsql {
+    INSERT INTO peerpk VALUES
+      ('x'||char(0)||'b',1),('x'||char(0)||'a',2);
+  }
+  set result [peer eval $peerpk_order]
+  peer close
+  set result
+} {9,1,2}
+
 finish_test

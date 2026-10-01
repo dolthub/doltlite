@@ -4751,7 +4751,12 @@ case OP_Transaction: {
   assert( pOp->p5==0 || pOp->p4type==P4_INT32 );
   if( rc==SQLITE_OK
    && pOp->p5
+#ifdef DOLTLITE_PROLLY
+   && (iMeta!=pOp->p3 || pDb->pSchema->iGeneration!=pOp->p4.i
+       || p->expired==1)
+#else
    && (iMeta!=pOp->p3 || pDb->pSchema->iGeneration!=pOp->p4.i)
+#endif
   ){
     /*
     ** IMPLEMENTATION-OF: R-03189-51135 As each SQL statement runs, the schema
@@ -7721,7 +7726,8 @@ case OP_IdxGE:  {       /* jump, ncycle */
     if( pOp->p5 ){
       sqlite3BtreeProllyClearCompareKey(pCur);
     }
-    rc = sqlite3BtreeProllyCachedIndexKeyCompare(pCur, &r, &res);
+    rc = sqlite3BtreeProllyCachedIndexKeyCompare(
+        pCur, &r, (pOp->p5 & BTREE_COMPARE_STORAGE_ORDER)!=0, &res);
     if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_OK;
     }else if( rc ){

@@ -753,6 +753,7 @@ void refreshCursorRoot(BtCursor*);
 int applyMutMapToTableRoot(BtShared*, struct TableEntry*, ProllyMutMap*);
 void doltliteBtreeCarryNocaseNulMemo(struct TableEntry*, ProllyMutMap*,
                                      const ProllyHash*);
+int doltliteBtreeNocaseNulInsert(BtCursor*, const u8*, int);
 int flushAllPending(Btree*, BtShared*, Pgno);
 int flushDeferredEdits(Btree*, BtShared*);
 int saveAllCursors(Btree*, BtShared*, Pgno, BtCursor*);

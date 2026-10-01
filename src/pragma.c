@@ -1913,8 +1913,9 @@ void sqlite3Pragma(
             VdbeCoverage(v);
 #if defined(DOLTLITE_PROLLY)
             /* r2 is reloaded from each row; the prolly compare-key cache
-            ** must not reuse the previous iteration's probe. */
-            sqlite3VdbeChangeP5(v, 1);
+            ** must not reuse the previous iteration's probe. Format-v12
+            ** NOCASE keys retain post-NUL bytes, so check encoded order. */
+            sqlite3VdbeChangeP5(v, 1 | BTREE_COMPARE_STORAGE_ORDER);
 #endif
             sqlite3VdbeAddOp1(v, OP_IsNull, r2); VdbeCoverage(v);
             zErr = sqlite3MPrintf(db,
