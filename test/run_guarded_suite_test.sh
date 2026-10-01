@@ -95,7 +95,19 @@ echo "carrying on"
 exit 0
 SH
 
+cat > "$tmp/complete_then_output.sh" <<'SH'
+echo "__SUITE_COMPLETE__"
+echo "diagnostic-after-completion"
+SH
+
+cat > "$tmp/complete_then_blanks.sh" <<'SH'
+echo "__SUITE_COMPLETE__"
+printf '\n \t\n'
+SH
+
 expect_rc "completed_pass_stays_zero" 0 "$tmp/complete_pass.sh"
+expect_rc "output_after_completion_fails" 1 "$tmp/complete_then_output.sh"
+expect_rc "blank_lines_after_completion_pass" 0 "$tmp/complete_then_blanks.sh"
 expect_rc "ending_on_skip_is_separate" 77 "$tmp/ends_on_skip.sh"
 expect_rc "intermediate_skip_does_not_count" 1 "$tmp/skips_then_dies.sh"
 expect_rc "completed_failure_stays_nonzero" 1 "$tmp/complete_fail.sh"

@@ -25,9 +25,9 @@ if [ "$rc" -eq 0 ]; then
   last_line=$(grep -v '^[[:space:]]*$' "$OUT" | tail -1)
   if printf '%s' "$last_line" | grep -qE '^[[:space:]]*SKIP[: ]'; then
     rc=77
-  elif ! grep -qx '__SUITE_COMPLETE__' "$OUT"; then
+  elif [ "$last_line" != __SUITE_COMPLETE__ ]; then
     echo ""
-    echo "GUARD FAIL: $(basename "$SUITE") exited 0 without reporting completion."
+    echo "GUARD FAIL: $(basename "$SUITE") exited 0 without ending on its completion marker."
     echo "  A suite that stops early reports no failures; that is not a pass."
     echo "  End through dltest_finish / vc_oracle_finish / stock_oracle_finish,"
     echo "  or print __SUITE_COMPLETE__ as the last thing the suite does."
