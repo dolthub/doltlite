@@ -14294,6 +14294,140 @@ static void run_blob_restore_mutmap_keeps_scan(void){
   removeDbFiles(dbpath);
 }
 
+/* Step one join row and compare its text to "a|b|c". NULL cells match "NULL". */
+static int step_join_row(sqlite3_stmt *st, const char *zExpect){
+  char buf[128];
+  int i, n = 0;
+  int rc = sqlite3_step(st);
+  if( rc!=SQLITE_ROW ) return 0;
+  buf[0] = 0;
+  for(i=0; i<sqlite3_column_count(st); i++){
+    const char *z = (const char*)sqlite3_column_text(st, i);
+    int nVal;
+    if( !z ) z = "NULL";
+    nVal = (int)strlen(z);
+    if( n + (i ? 1 : 0) + nVal >= (int)sizeof(buf) ) return 0;
+    if( i ) buf[n++] = '|';
+    memcpy(buf + n, z, (size_t)nVal);
+    n += nVal;
+    buf[n] = 0;
+  }
+  return strcmp(buf, zExpect)==0;
+}
+
+/* An open join that updates or deletes the current outer row. */
+static void scan_write_current_row(
+  sqlite3 *db,
+  const char *zName,
+  const char *zSetup,
+  const char *zSelect,
+  const char *zWrite,
+  const char *zRow0,
+  const char *zRow1,
+  const char *zRow2,
+  const char *zRow3
+){
+  sqlite3_stmt *st = 0;
+  char zCheck[96];
+  int rc;
+  sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_setup", zName);
+  check(zCheck, execSql(db, zSetup)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_begin", zName);
+  check(zCheck, execSql(db, "BEGIN;")==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db, zSelect, -1, &st, 0);
+  sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_prepare", zName);
+  check(zCheck, rc==SQLITE_OK);
+  if( st ){
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_row0", zName);
+    check(zCheck, step_join_row(st, zRow0));
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_write", zName);
+    check(zCheck, execSql(db, zWrite)==SQLITE_OK);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_row1", zName);
+    check(zCheck, step_join_row(st, zRow1));
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_row2", zName);
+    check(zCheck, step_join_row(st, zRow2));
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_row3", zName);
+    check(zCheck, step_join_row(st, zRow3));
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_done", zName);
+    check(zCheck, sqlite3_step(st)==SQLITE_DONE);
+  }
+  sqlite3_finalize(st);
+  sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_rollback", zName);
+  check(zCheck, execSql(db, "ROLLBACK;")==SQLITE_OK);
+}
+
+static void run_scan_update_current_row(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Scan Update Current Row Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_scan_update_current_row");
+  removeDbFiles(dbpath);
+  check("open_db_for_scan_update_current_row", open_db(dbpath, &db)==SQLITE_OK);
+
+  scan_write_current_row(db, "integer_pk_update",
+    "CREATE TABLE t(pk INTEGER PRIMARY KEY, b TEXT);"
+    "INSERT INTO t VALUES(1,'b1'),(2,'b2');"
+    "CREATE TABLE y(v INT); INSERT INTO y VALUES(0),(1);",
+    "SELECT t.pk, y.v, t.b FROM t CROSS JOIN y",
+    "UPDATE t SET b='q' WHERE pk=1",
+    "1|0|b1", "1|1|q", "2|0|b2", "2|1|b2");
+  scan_write_current_row(db, "int_pk_update",
+    "CREATE TABLE ti(pk INT PRIMARY KEY, b TEXT);"
+    "INSERT INTO ti VALUES(1,'b1'),(2,'b2');"
+    "CREATE TABLE yi(v INT); INSERT INTO yi VALUES(0),(1);",
+    "SELECT ti.pk, yi.v, ti.b FROM ti CROSS JOIN yi",
+    "UPDATE ti SET b='q' WHERE pk=1",
+    "1|0|b1", "1|1|q", "2|0|b2", "2|1|b2");
+  scan_write_current_row(db, "text_pk_update",
+    "CREATE TABLE tt(pk TEXT PRIMARY KEY, b TEXT);"
+    "INSERT INTO tt VALUES('1','b1'),('2','b2');"
+    "CREATE TABLE yt(v INT); INSERT INTO yt VALUES(0),(1);",
+    "SELECT tt.pk, yt.v, tt.b FROM tt CROSS JOIN yt",
+    "UPDATE tt SET b='q' WHERE pk='1'",
+    "1|0|b1", "1|1|q", "2|0|b2", "2|1|b2");
+  scan_write_current_row(db, "indexed_column_update",
+    "CREATE TABLE ix(pk INTEGER PRIMARY KEY, b TEXT, c INT);"
+    "CREATE INDEX ix_c ON ix(c);"
+    "INSERT INTO ix VALUES(1,'b1',10),(2,'b2',20);"
+    "CREATE TABLE yx(v INT); INSERT INTO yx VALUES(0),(1);",
+    "SELECT ix.pk, yx.v, ix.b, ix.c FROM ix CROSS JOIN yx",
+    "UPDATE ix SET c=11 WHERE pk=1",
+    "1|0|b1|10", "1|1|b1|11", "2|0|b2|20", "2|1|b2|20");
+  scan_write_current_row(db, "index_scan_update_other_column",
+    "CREATE TABLE isc(pk INTEGER PRIMARY KEY, b TEXT, c INT);"
+    "CREATE INDEX isc_c ON isc(c);"
+    "INSERT INTO isc VALUES(1,'b1',10),(2,'b2',20);"
+    "CREATE TABLE ysc(v INT); INSERT INTO ysc VALUES(0),(1);",
+    "SELECT isc.pk, ysc.v, isc.b, isc.c FROM isc INDEXED BY isc_c CROSS JOIN ysc",
+    "UPDATE isc SET b='q' WHERE pk=1",
+    "1|0|b1|10", "1|1|q|10", "2|0|b2|20", "2|1|b2|20");
+  scan_write_current_row(db, "integer_pk_delete",
+    "CREATE TABLE d(pk INTEGER PRIMARY KEY, b TEXT);"
+    "INSERT INTO d VALUES(1,'b1'),(2,'b2');"
+    "CREATE TABLE yd(v INT); INSERT INTO yd VALUES(0),(1);",
+    "SELECT d.pk, yd.v, d.b FROM d CROSS JOIN yd",
+    "DELETE FROM d WHERE pk=1",
+    "1|0|b1", "NULL|1|NULL", "2|0|b2", "2|1|b2");
+  scan_write_current_row(db, "int_pk_delete",
+    "CREATE TABLE di(pk INT PRIMARY KEY, b TEXT);"
+    "INSERT INTO di VALUES(1,'b1'),(2,'b2');"
+    "CREATE TABLE ydi(v INT); INSERT INTO ydi VALUES(0),(1);",
+    "SELECT di.pk, ydi.v, di.b FROM di CROSS JOIN ydi",
+    "DELETE FROM di WHERE pk=1",
+    "1|0|b1", "NULL|1|NULL", "2|0|b2", "2|1|b2");
+  scan_write_current_row(db, "text_pk_delete",
+    "CREATE TABLE dt(pk TEXT PRIMARY KEY, b TEXT);"
+    "INSERT INTO dt VALUES('1','b1'),('2','b2');"
+    "CREATE TABLE ydt(v INT); INSERT INTO ydt VALUES(0),(1);",
+    "SELECT dt.pk, ydt.v, dt.b FROM dt CROSS JOIN ydt",
+    "DELETE FROM dt WHERE pk='1'",
+    "1|0|b1", "NULL|1|NULL", "2|0|b2", "2|1|b2");
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_intpk_scan_delete_keeps_scan(void){
   sqlite3 *db = 0;
   sqlite3_stmt *scan = 0;
@@ -15169,6 +15303,7 @@ static const RegressionCase aCases[] = {
   { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
+  { "scan_update_current_row", "Scan Update Current Row Test", run_scan_update_current_row },
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
   { "index_build_flush_resets_cursor", "Index Build Flush Resets Cursor Test", run_index_build_flush_resets_cursor },

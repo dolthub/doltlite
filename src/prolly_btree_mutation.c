@@ -699,6 +699,7 @@ int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
 int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   int rc = SQLITE_OK;
   int res = 0;
+  int tombstone = 0;
 
   assert( pCur!=0 );
   if( pCur->eState!=CURSOR_REQUIRESEEK ){
@@ -728,6 +729,9 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
           pCur->deferredTreeSeek = 1;
           res = 0;
           landedMut = 1;
+        }else if( rc==SQLITE_OK && pEntry && pEntry->op==PROLLY_EDIT_DELETE ){
+          /* Keep the tree position so the next step advances. */
+          tombstone = 1;
         }
       }
       if( rc==SQLITE_OK && !landedMut ){
@@ -751,10 +755,9 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
     if( res==0 || pCur->deferredMergedSeek ){
       pCur->eState = CURSOR_VALID;
       if( pDifferentRow ){
-        *pDifferentRow = pCur->deferredMergedSeek
-                       || (pCur->mmActive
-                           && (pCur->mergeSrc==MERGE_SRC_MUT
-                               || pCur->mergeSrc==MERGE_SRC_BOTH));
+        /* Exact hit of the saved key is that row, even when the new
+        ** bytes are a pending update. A delete hole is not. */
+        *pDifferentRow = pCur->deferredMergedSeek || tombstone;
       }
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       pCur->skipNext = res;
