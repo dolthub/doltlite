@@ -30,7 +30,7 @@ time_ms_median_delete() {
   local i
   local times=""
   for i in $(seq 1 "$n"); do
-    times="$times$(time_ms "echo 'DELETE FROM t WHERE id=$((base - i));' | $DOLTLITE '$db'")"$'\n'
+    times="$times$(time_ms "echo 'DELETE FROM t WHERE id=$((base - i));' | \"$DOLTLITE\" '$db'")"$'\n'
   done
   printf '%s' "$times" | grep -v '^$' | sort -n | awk -v n="$n" 'NR==int((n+1)/2){print; exit}'
 }
@@ -68,7 +68,7 @@ for i in range($SIZE):
     print(f'INSERT INTO t VALUES({i}, \"row_{i}\");')
 print('COMMIT;')
 print(\"SELECT dolt_commit('-A','-m','init');\")
-" | $DOLTLITE "$DB" > /dev/null 2>&1
+" | "$DOLTLITE" "$DB" > /dev/null 2>&1
   echo "  ${SIZE} rows: done"
 done
 
@@ -85,7 +85,7 @@ print('BEGIN;')
 for i in range(1000):
     print(f'INSERT INTO t2 VALUES({i}, \\\"row_{i}\\\");')
 print('COMMIT;')
-\" | $DOLTLITE '$DB_1K'")
+\" | \"$DOLTLITE\" '$DB_1K'")
 echo "  1K: ${T_INS_1K}ms"
 
 T_INS_100K=$(time_ms "python3 -c \"
@@ -94,7 +94,7 @@ print('BEGIN;')
 for i in range(100000):
     print(f'INSERT INTO t2 VALUES({i}, \\\"row_{i}\\\");')
 print('COMMIT;')
-\" | $DOLTLITE '$DB_100K'")
+\" | \"$DOLTLITE\" '$DB_100K'")
 echo "  100K: ${T_INS_100K}ms"
 
 assert_ratio "insert_1k_to_100k" "$T_INS_1K" "$T_INS_100K" 300
@@ -114,7 +114,7 @@ for i in range(100):
     print('SELECT v FROM t WHERE id=$id;')
 " > "$sql"
   start=$(python3 -c 'import time; print(int(time.time()*1000))')
-  $DOLTLITE "$db" < "$sql" > /dev/null 2>&1
+  "$DOLTLITE" "$db" < "$sql" > /dev/null 2>&1
   rc=$?
   end=$(python3 -c 'import time; print(int(time.time()*1000))')
   rm -f "$sql"
@@ -154,13 +154,13 @@ fi
 echo ""
 echo "--- Single-row UPDATE ---"
 
-T_UPD_1K=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=500;' | $DOLTLITE '$DB_1K'")
+T_UPD_1K=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=500;' | \"$DOLTLITE\" '$DB_1K'")
 echo "  1K: ${T_UPD_1K}ms"
 
-T_UPD_100K=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=50000;' | $DOLTLITE '$DB_100K'")
+T_UPD_100K=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=50000;' | \"$DOLTLITE\" '$DB_100K'")
 echo "  100K: ${T_UPD_100K}ms"
 
-T_UPD_1M=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=500000;' | $DOLTLITE '$DB_1M'")
+T_UPD_1M=$(time_ms_median 5 "echo 'UPDATE t SET v=\"updated\" WHERE id=500000;' | \"$DOLTLITE\" '$DB_1M'")
 echo "  1M: ${T_UPD_1M}ms"
 
 assert_ratio "update_1k_to_100k" "$T_UPD_1K" "$T_UPD_100K" 10
@@ -185,19 +185,19 @@ echo ""
 echo "--- dolt_diff after single-row UPDATE ---"
 
 echo "SELECT dolt_commit('-A','-m','baseline');
-UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_1K" > /dev/null 2>&1
+UPDATE t SET v='diffme' WHERE id=0;" | "$DOLTLITE" "$DB_1K" > /dev/null 2>&1
 echo "SELECT dolt_commit('-A','-m','baseline');
-UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_100K" > /dev/null 2>&1
+UPDATE t SET v='diffme' WHERE id=0;" | "$DOLTLITE" "$DB_100K" > /dev/null 2>&1
 echo "SELECT dolt_commit('-A','-m','baseline');
-UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_1M" > /dev/null 2>&1
+UPDATE t SET v='diffme' WHERE id=0;" | "$DOLTLITE" "$DB_1M" > /dev/null 2>&1
 
-T_DIFF_1K=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1K'")
+T_DIFF_1K=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | \"$DOLTLITE\" '$DB_1K'")
 echo "  1K: ${T_DIFF_1K}ms"
 
-T_DIFF_100K=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_100K'")
+T_DIFF_100K=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | \"$DOLTLITE\" '$DB_100K'")
 echo "  100K: ${T_DIFF_100K}ms"
 
-T_DIFF_1M=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1M'")
+T_DIFF_1M=$(time_ms_median 5 "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | \"$DOLTLITE\" '$DB_1M'")
 echo "  1M: ${T_DIFF_1M}ms"
 
 assert_ratio "diff_1k_to_100k" "$T_DIFF_1K" "$T_DIFF_100K" 10
@@ -208,7 +208,7 @@ echo "--- Diff correctness ---"
 
 for pair in "1K:$DB_1K"; do
   name="${pair%%:*}"; db="${pair#*:}"
-  val=$(echo "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" | $DOLTLITE "$db" 2>&1)
+  val=$(echo "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" | "$DOLTLITE" "$db" 2>&1)
   if [ "$val" = "1" ]; then
     PASS=$((PASS+1)); echo "  PASS: diff_correct_$name — 1 change detected"
   else
@@ -229,7 +229,7 @@ for i in range(1000000):
     print(f'INSERT INTO t VALUES({i}, \"row_{i}\");')
 print('COMMIT;')
 print(\"SELECT dolt_commit('-A','-m','init');\")
-" | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
+" | "$DOLTLITE" "$DB_DIFF" > /dev/null 2>&1
 echo "  Setup: 1M rows committed"
 
 python3 -c "
@@ -238,18 +238,18 @@ for i in range(10):
     print(f'UPDATE t SET v=\"changed_{i}\" WHERE id={i};')
 print('COMMIT;')
 print(\"SELECT dolt_commit('-A','-m','10 changes');\")
-" | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
+" | "$DOLTLITE" "$DB_DIFF" > /dev/null 2>&1
 
 T_DIFF_10=$(time_ms "echo \"SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
   (SELECT commit_hash FROM dolt_log LIMIT 1),
-  't');\" | $DOLTLITE '$DB_DIFF'")
+  't');\" | \"$DOLTLITE\" '$DB_DIFF'")
 echo "  10 changes (1M table): ${T_DIFF_10}ms"
 
 DIFF_10_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
   (SELECT commit_hash FROM dolt_log LIMIT 1),
-  't');" | $DOLTLITE "$DB_DIFF" 2>&1)
+  't');" | "$DOLTLITE" "$DB_DIFF" 2>&1)
 echo "  (correctness: $DIFF_10_COUNT changes; expected nonzero on large tables)"
 
 echo "  Applying 1000 changes..."
@@ -259,18 +259,18 @@ for i in range(100, 1100):
     print(f'UPDATE t SET v=\"changed2_{i}\" WHERE id={i};')
 print('COMMIT;')
 print(\"SELECT dolt_commit('-A','-m','1000 changes');\")
-" | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
+" | "$DOLTLITE" "$DB_DIFF" > /dev/null 2>&1
 
 T_DIFF_1000=$(time_ms "echo \"SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
   (SELECT commit_hash FROM dolt_log LIMIT 1),
-  't');\" | $DOLTLITE '$DB_DIFF'")
+  't');\" | \"$DOLTLITE\" '$DB_DIFF'")
 echo "  1000 changes (1M table): ${T_DIFF_1000}ms"
 
 DIFF_1000_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
   (SELECT commit_hash FROM dolt_log LIMIT 1),
-  't');" | $DOLTLITE "$DB_DIFF" 2>&1)
+  't');" | "$DOLTLITE" "$DB_DIFF" 2>&1)
 echo "  (correctness: $DIFF_1000_COUNT changes)"
 
 assert_ratio "diff_10_to_1000_changes" "$T_DIFF_10" "$T_DIFF_1000" 200
@@ -295,7 +295,7 @@ for i in range(1, 200001):
     print(f'INSERT INTO t VALUES({i},{q}key_{i}{q});')
 print('COMMIT;')
 print('CREATE INDEX i_s ON t(s);')
-" | $DOLTLITE "$DB_NC" > /dev/null 2>&1
+" | "$DOLTLITE" "$DB_NC" > /dev/null 2>&1
 
 nocase_plan_ms() {
   python3 -c "
@@ -306,14 +306,14 @@ for i in range(1, $1 + 1):
     print(f'SELECT count(*) FROM t WHERE s={q}key_{i}{q};')
 print('COMMIT;')
 " > "$NC_SQL"
-  time_ms "$DOLTLITE '$DB_NC' < '$NC_SQL'"
+  time_ms "\"$DOLTLITE\" '$DB_NC' < '$NC_SQL'"
 }
 
 T_NC_50=$(nocase_plan_ms 50)
 T_NC_800=$(nocase_plan_ms 800)
 echo "  50 statements: ${T_NC_50}ms"
 echo "  800 statements: ${T_NC_800}ms"
-NC_ROWS=$($DOLTLITE "$DB_NC" "SELECT count(*) FROM t WHERE s='changed';" 2>&1)
+NC_ROWS=$("$DOLTLITE" "$DB_NC" "SELECT count(*) FROM t WHERE s='changed';" 2>&1)
 echo "  (correctness: $NC_ROWS changed row; expected 1)"
 if [ "$NC_ROWS" != "1" ]; then
   FAIL=$((FAIL+1))
