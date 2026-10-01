@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_merge_int.h"
+#include "vdbeInt.h"
 
 /* Index key encoding for merge and DML row-delta. VIRTUAL generated
 ** columns are not record fields; table column numbers after them are not
@@ -75,8 +76,6 @@ static int indexNeedsExprBuild(Index *pIdx, const i16 *aiColumn, int nIdxCol){
   return 0;
 }
 
-static int indexExprToSql(sqlite3_str *p, const Expr *pExpr, Table *pTab);
-
 int doltliteColumnIsVirtual(const Table *pTab, int iCol){
 #ifndef SQLITE_OMIT_GENERATED_COLUMNS
   return (pTab->aCol[iCol].colFlags & COLFLAG_VIRTUAL)!=0;
@@ -87,49 +86,65 @@ int doltliteColumnIsVirtual(const Table *pTab, int iCol){
 #endif
 }
 
-/* Stored columns are parameters, in declared order. VIRTUAL columns are
-** projected from their generation expressions so a later VIRTUAL column
-** can read an earlier one. Binding those columns as NULL made
-** UNIQUE(doubled+1) store a NULL key and drop the merged row. */
-static int indexExprSourceSql(Table *pTab, char **pzSql){
-  sqlite3_str *pInner;
-  char *zCur;
-  int i, nBind = 0;
+int doltlitePrepareIndexExpr(
+  sqlite3 *db,
+  Table *pTab,
+  Expr *pExpr,
+  int iGenerated,
+  sqlite3_stmt **ppStmt
+){
+  Parse sParse;
+  Vdbe *v;
+  int regOut = pTab->nCol+2;
+  int i, iParam = 1, rc;
 
-  *pzSql = 0;
-  pInner = sqlite3_str_new(0);
-  sqlite3_str_appendall(pInner, "SELECT ");
-  for(i=0; i<pTab->nCol; i++){
-    if( doltliteColumnIsVirtual(pTab, i) ) continue;
-    if( nBind ) sqlite3_str_appendall(pInner, ", ");
-    nBind++;
-    sqlite3_str_appendf(pInner, "?%d AS \"%w\"", nBind, pTab->aCol[i].zCnName);
+  *ppStmt = 0;
+  sqlite3ParseObjectInit(&sParse, db);
+  v = sqlite3GetVdbe(&sParse);
+  if( !v ){
+    sqlite3ParseObjectReset(&sParse);
+    return SQLITE_NOMEM;
   }
-  if( nBind==0 ) sqlite3_str_appendall(pInner, "NULL AS \"_\"");
-  zCur = sqlite3_str_finish(pInner);
-  if( !zCur ) return SQLITE_NOMEM;
+  sParse.nVar = pTab->nNVCol+1;
+  sParse.nMem = regOut;
+  sqlite3VdbeAddOp2(v, OP_Variable, sParse.nVar, 1);
   for(i=0; i<pTab->nCol; i++){
-    sqlite3_str *pWrap;
-    char *zWrap;
-    Expr *pExpr;
-    if( !doltliteColumnIsVirtual(pTab, i) ) continue;
-    pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[i]);
-    pWrap = sqlite3_str_new(0);
-    sqlite3_str_appendall(pWrap, "SELECT *, (");
-    if( indexExprToSql(pWrap, pExpr, pTab)!=SQLITE_OK ){
-      sqlite3_free(sqlite3_str_finish(pWrap));
-      sqlite3_free(zCur);
-      return SQLITE_ERROR;
+    if( doltliteColumnIsVirtual(pTab, i) ){
+      pTab->aCol[i].colFlags |= COLFLAG_NOTAVAIL;
+    }else{
+      sqlite3VdbeAddOp2(v, OP_Variable, iParam++,
+          2+sqlite3TableColumnToStorage(pTab, i));
     }
-    sqlite3_str_appendf(pWrap, ") AS \"%w\" FROM (", pTab->aCol[i].zCnName);
-    sqlite3_str_appendall(pWrap, zCur);
-    sqlite3_str_appendall(pWrap, ")");
-    zWrap = sqlite3_str_finish(pWrap);
-    sqlite3_free(zCur);
-    if( !zWrap ) return SQLITE_NOMEM;
-    zCur = zWrap;
   }
-  *pzSql = zCur;
+  sParse.iSelfTab = -2;
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+  if( iGenerated>=0 ){
+    sqlite3ExprCodeGeneratedColumn(&sParse, pTab,
+        &pTab->aCol[iGenerated], regOut);
+  }else
+#else
+  UNUSED_PARAMETER(iGenerated);
+#endif
+  {
+    sqlite3ExprCode(&sParse, pExpr, regOut);
+  }
+  for(i=0; i<pTab->nCol; i++){
+    if( doltliteColumnIsVirtual(pTab, i) ){
+      pTab->aCol[i].colFlags &= ~COLFLAG_NOTAVAIL;
+    }
+  }
+  sParse.iSelfTab = 0;
+  sqlite3VdbeAddOp2(v, OP_ResultRow, regOut, 1);
+  sqlite3VdbeSetNumCols(v, 1);
+  sqlite3FinishCoding(&sParse);
+  rc = db->mallocFailed ? SQLITE_NOMEM : sParse.rc;
+  sqlite3DbFree(db, sParse.zErrMsg);
+  sqlite3ParseObjectReset(&sParse);
+  if( rc!=SQLITE_DONE ){
+    sqlite3_finalize((sqlite3_stmt*)v);
+    return rc;
+  }
+  *ppStmt = (sqlite3_stmt*)v;
   return SQLITE_OK;
 }
 
@@ -190,105 +205,16 @@ static int bindIndexExprRow(
   return rc;
 }
 
-static int indexExprToSql(sqlite3_str *p, const Expr *pExpr, Table *pTab){
-  int i;
-  if( !pExpr ) return SQLITE_ERROR;
-  switch( pExpr->op ){
-    case TK_COLLATE:
-    case TK_UPLUS:
-      return indexExprToSql(p, pExpr->pLeft, pTab);
-    case TK_UMINUS:
-      sqlite3_str_appendall(p, "-(");
-      if( indexExprToSql(p, pExpr->pLeft, pTab) ) return SQLITE_ERROR;
-      sqlite3_str_appendall(p, ")");
-      return SQLITE_OK;
-    case TK_COLUMN:
-      if( pExpr->iColumn<0 ){
-        int k;
-        const char *zRowid = 0;
-        if( pTab && HasRowid(pTab) ){
-          for(k=0; k<pTab->nCol; k++){
-            if( (pTab->aCol[k].colFlags & COLFLAG_PRIMKEY)!=0 ){
-              zRowid = pTab->aCol[k].zCnName;
-              break;
-            }
-          }
-        }
-        if( zRowid ) sqlite3_str_appendf(p, "\"%w\"", zRowid);
-        else sqlite3_str_appendall(p, "rowid");
-      }else if( pTab && pExpr->iColumn<pTab->nCol ){
-        sqlite3_str_appendf(p, "\"%w\"", pTab->aCol[pExpr->iColumn].zCnName);
-      }else{
-        return SQLITE_ERROR;
-      }
-      return SQLITE_OK;
-    case TK_STRING:
-      sqlite3_str_appendf(p, "%Q", pExpr->u.zToken);
-      return SQLITE_OK;
-    case TK_FLOAT:
-      sqlite3_str_appendall(p, pExpr->u.zToken);
-      return SQLITE_OK;
-    case TK_NULL:
-      sqlite3_str_appendall(p, "NULL");
-      return SQLITE_OK;
-    case TK_INTEGER:
-      if( ExprHasProperty(pExpr, EP_IntValue) ){
-        sqlite3_str_appendf(p, "%d", pExpr->u.iValue);
-      }else{
-        sqlite3_str_appendall(p, pExpr->u.zToken);
-      }
-      return SQLITE_OK;
-    case TK_FUNCTION:
-      sqlite3_str_appendf(p, "%s(", pExpr->u.zToken);
-      if( pExpr->x.pList ){
-        for(i=0; i<pExpr->x.pList->nExpr; i++){
-          if( i ) sqlite3_str_appendall(p, ",");
-          if( indexExprToSql(p, pExpr->x.pList->a[i].pExpr, pTab) ){
-            return SQLITE_ERROR;
-          }
-        }
-      }
-      sqlite3_str_appendall(p, ")");
-      return SQLITE_OK;
-    case TK_PLUS:
-    case TK_MINUS:
-    case TK_STAR:
-    case TK_SLASH:
-    case TK_REM:
-    case TK_CONCAT:
-      sqlite3_str_appendall(p, "(");
-      if( indexExprToSql(p, pExpr->pLeft, pTab) ) return SQLITE_ERROR;
-      sqlite3_str_appendall(p,
-          pExpr->op==TK_PLUS ? "+" :
-          pExpr->op==TK_MINUS ? "-" :
-          pExpr->op==TK_STAR ? "*" :
-          pExpr->op==TK_SLASH ? "/" :
-          pExpr->op==TK_REM ? "%" : "||");
-      if( indexExprToSql(p, pExpr->pRight, pTab) ) return SQLITE_ERROR;
-      sqlite3_str_appendall(p, ")");
-      return SQLITE_OK;
-    default:
-      return SQLITE_ERROR;
-  }
-}
-
-int doltliteAppendExprSql(sqlite3_str *p, const Expr *pExpr, Table *pTab){
-  if( !p || !pExpr ) return SQLITE_ERROR;
-  return indexExprToSql(p, pExpr, pTab);
-}
-
 static int evalExprOnRecord(
+  sqlite3 *db,
   Table *pTab,
-  const Expr *pExpr,
-  const char *zSpan,
+  Expr *pExpr,
+  int iGenerated,
   const u8 *pRec, int nRec,
   int iPKey, i64 intKey,
   DoltliteSerialValue *pOut,
   u8 **ppKeep
 ){
-  sqlite3 *pEval = 0;
-  sqlite3_str *pSql;
-  char *zSql;
   sqlite3_stmt *pStmt = 0;
   sqlite3_value *pVal;
   int n, rc;
@@ -296,38 +222,15 @@ static int evalExprOnRecord(
 
   *ppKeep = 0;
   memset(pOut, 0, sizeof(*pOut));
-  if( !pTab || (!pExpr && (!zSpan || !zSpan[0])) ) return SQLITE_ERROR;
-  pSql = sqlite3_str_new(0);
-  sqlite3_str_appendall(pSql, "SELECT (");
-  if( zSpan && zSpan[0] ){
-    sqlite3_str_appendall(pSql, zSpan);
-  }else if( indexExprToSql(pSql, pExpr, pTab) ){
-    sqlite3_free(sqlite3_str_finish(pSql));
-    return SQLITE_ERROR;
-  }
-  sqlite3_str_appendall(pSql, ") FROM (");
-  {
-    char *zSrc = 0;
-    int srcRc = indexExprSourceSql(pTab, &zSrc);
-    if( srcRc!=SQLITE_OK ){
-      sqlite3_free(zSrc);
-      sqlite3_free(sqlite3_str_finish(pSql));
-      return srcRc;
-    }
-    sqlite3_str_appendall(pSql, zSrc);
-    sqlite3_free(zSrc);
-  }
-  sqlite3_str_appendall(pSql, ")");
-  zSql = sqlite3_str_finish(pSql);
-  if( !zSql ) return SQLITE_NOMEM;
-  rc = sqlite3_open(":memory:", &pEval);
-  if( rc==SQLITE_OK ) rc = sqlite3_prepare_v2(pEval, zSql, -1, &pStmt, 0);
-  sqlite3_free(zSql);
+  if( !pTab || !pExpr ) return SQLITE_ERROR;
+  rc = doltlitePrepareIndexExpr(db, pTab, pExpr, iGenerated, &pStmt);
   if( rc==SQLITE_OK ) rc = bindIndexExprRow(pStmt, pTab, pRec, nRec, iPKey, intKey);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_bind_int64(pStmt, pTab->nNVCol+1, intKey);
+  }
   if( rc==SQLITE_OK ) rc = sqlite3_step(pStmt);
   if( rc!=SQLITE_ROW ){
     sqlite3_finalize(pStmt);
-    sqlite3_close(pEval);
     return rc==SQLITE_DONE ? SQLITE_ERROR : rc;
   }
   pVal = sqlite3_column_value(pStmt, 0);
@@ -343,7 +246,6 @@ static int evalExprOnRecord(
     *ppKeep = sqlite3_malloc(n ? n : 1);
     if( !*ppKeep ){
       sqlite3_finalize(pStmt);
-      sqlite3_close(pEval);
       return SQLITE_NOMEM;
     }
     if( n>0 ){
@@ -358,7 +260,6 @@ static int evalExprOnRecord(
     pOut->eType = SQLITE_NULL;
   }
   sqlite3_finalize(pStmt);
-  sqlite3_close(pEval);
   return SQLITE_OK;
 }
 
@@ -371,19 +272,17 @@ static int evalIndexExprColumn(
   DoltliteSerialValue *pOut,
   u8 **ppKeep
 ){
-  const char *zSpan;
-  (void)db;
   if( !pIdx || !pIdx->pTable || !pIdx->aColExpr
    || iIdxCol<0 || iIdxCol>=pIdx->aColExpr->nExpr ){
     return SQLITE_ERROR;
   }
-  zSpan = pIdx->aColExpr->a[iIdxCol].zEName;
-  return evalExprOnRecord(pIdx->pTable, pIdx->aColExpr->a[iIdxCol].pExpr, zSpan,
+  return evalExprOnRecord(db, pIdx->pTable, pIdx->aColExpr->a[iIdxCol].pExpr, -1,
                           pRec, nRec, iPKey, intKey, pOut, ppKeep);
 }
 
 #ifndef SQLITE_OMIT_GENERATED_COLUMNS
 static int evalGeneratedColumn(
+  sqlite3 *db,
   Table *pTab,
   const u8 *pRec, int nRec,
   int iPKey, i64 intKey,
@@ -395,7 +294,7 @@ static int evalGeneratedColumn(
   if( !pTab || iCol<0 || iCol>=pTab->nCol ) return SQLITE_ERROR;
   pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[iCol]);
   if( !pExpr ) return SQLITE_ERROR;
-  return evalExprOnRecord(pTab, pExpr, 0, pRec, nRec, iPKey, intKey,
+  return evalExprOnRecord(db, pTab, pExpr, iCol, pRec, nRec, iPKey, intKey,
                           pOut, ppKeep);
 }
 #endif
@@ -458,7 +357,7 @@ static int doltliteBuildIndexEntryWithExpr(
 #ifndef SQLITE_OMIT_GENERATED_COLUMNS
     }else if( pTab && col>=0 && col<pTab->nCol
            && (pTab->aCol[col].colFlags & COLFLAG_VIRTUAL) ){
-      rc = evalGeneratedColumn(pTab, pRec, nRec, iPKey, intKey, col,
+      rc = evalGeneratedColumn(db, pTab, pRec, nRec, iPKey, intKey, col,
                                &aMem[nOut], &apKeep[nOut]);
       if( rc!=SQLITE_OK ) goto expr_fail;
       nOut++;

@@ -50,6 +50,7 @@ doltlite_constraint_temp_shadow
 doltlite_clean_temp_shadow
 doltlite_merge_generated
 doltlite_merge_generated_notnull
+doltlite_merge_virtual_affinity
 doltlite_merge_schema_errors
 doltlite_merge_renamed_index
 doltlite_merge_pk_autoindex
