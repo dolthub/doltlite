@@ -3298,6 +3298,56 @@ static int doltliteNocaseEqFreeOfNul(const WhereTerm *pTerm){
   }
   return doltliteExprTextFreeOfNul(pVal);
 }
+
+/* True when a LIMIT can stop this scan before every row is fetched.
+** WHERE_USE_LIMIT is set for any positive integer limit, including one
+** as large as this scan, so the limit is compared to rSize. Arithmetic
+** and a subquery still count rows and stop. A missing LIMIT, LIMIT -1,
+** or a limit that does not reduce the row estimate still reads the
+** whole index. */
+static int doltliteLimitStopsEarly(WhereInfo *pWInfo, LogEst rSize){
+  Select *pSel;
+  Expr *pLim;
+  Expr *pOff;
+  Expr *pLit;
+  int n = 0;
+  int off = 0;
+  u64 nVisit;
+
+  pSel = pWInfo->pSelect;
+  if( pSel==0 || (pLim = pSel->pLimit)==0 || pLim->pLeft==0 ){
+    /* The limit expression was already consumed. iLimit is its logest. */
+    if( (pWInfo->wctrlFlags & WHERE_USE_LIMIT)!=0 ){
+      return rSize > pWInfo->iLimit;
+    }
+    return 0;
+  }
+  pOff = pLim->pRight;
+  if( sqlite3ExprIsInteger(pLim->pLeft, &n, pWInfo->pParse, 0) ){
+    if( n<=0 ) return 0;
+    nVisit = (u64)n;
+    if( pOff ){
+      if( !sqlite3ExprIsInteger(pOff, &off, pWInfo->pParse, 0) || off<0 ){
+        return 0;
+      }
+      nVisit += (u64)off;
+    }
+    return rSize > sqlite3LogEst(nVisit);
+  }
+  /* An integer literal sqlite3ExprIsInteger rejected is at least 2^31. */
+  pLit = pLim->pLeft;
+  while( pLit && (pLit->op==TK_UPLUS || pLit->op==TK_UMINUS) ){
+    pLit = pLit->pLeft;
+  }
+  if( pLit && pLit->op==TK_INTEGER ) return 0;
+  if( pOff ){
+    if( !sqlite3ExprIsInteger(pOff, &off, pWInfo->pParse, 0) || off<0 ){
+      return 0;
+    }
+    if( rSize<=sqlite3LogEst((u64)off) ) return 0;
+  }
+  return 1;
+}
 #endif
 
 /*
@@ -4435,9 +4485,10 @@ static int whereLoopAddBtree(
           WhereClause *pWC2 = &pWInfo->sWC;
 #ifdef DOLTLITE_PROLLY
           /* A full scan of a secondary index that fetches every row loses
-          ** to scanning the table. A fixed LIMIT can stop an ordered scan
-          ** after a few fetches, so it keeps the stock cost. */
-          if( (pWInfo->wctrlFlags & WHERE_USE_LIMIT)==0
+          ** to scanning the table. A LIMIT that can stop after a few
+          ** fetches keeps the stock cost, including one that is not a
+          ** fixed integer. A missing LIMIT still reads every row. */
+          if( !doltliteLimitStopsEarly(pWInfo, rSize)
            && (!HasRowid(pTab) || doltliteRowFetchIsCostly(pWInfo, pTab, rSize)) ){
             nLookup = rSize + 70;
           }
