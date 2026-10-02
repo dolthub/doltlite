@@ -490,7 +490,7 @@ static int indexMovetoBuildSeekKey(
       pCur->nSeekSortKeyAlloc = 0;
     }
     rc = sortKeyFromUnpackedIntRecordBuffer(
-        pIdxKey, nIntField,
+        pIdxKey, nIntField, pCur->pKeyInfo,
         &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
   }else{
     if( pCur->pSeekSortKey==pCur->aSeekSortKey ){

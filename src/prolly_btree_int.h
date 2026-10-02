@@ -777,7 +777,7 @@ static SQLITE_INLINE int prollyCursorCheckInterrupt(BtCursor *pCur){
 int advanceTreeCursor(BtCursor*, int);
 int orderedMutMapEntryAt(ProllyMutMap*, int, ProllyMutMapEntry**);
 int unpackedRecordCanUseIntSortKey(BtCursor*, UnpackedRecord*, int);
-int sortKeyFromUnpackedIntRecordBuffer(UnpackedRecord*, int, u8**, int*, int*);
+int sortKeyFromUnpackedIntRecordBuffer(UnpackedRecord*, int, const KeyInfo*, u8**, int*, int*);
 int prollyInvokeBusyHandler(void*);
 ChunkStore *doltliteGetChunkStore(sqlite3*);
 ChunkStore *doltliteBtreeChunkStore(Btree*);

@@ -4,10 +4,16 @@
 No dolt_*, no physical row order. Results are aggregates or totally ordered.
 The rowid group checks allocation where it matches stock SQLite. A plain
 implicit rowid does not reuse an id after the max row is deleted, so numeric
-checks for that case stay on AUTOINCREMENT. Interleave reads with writes in
-BEGIN/SAVEPOINT.
+checks for that case stay on AUTOINCREMENT.
+
+Every script pauses a SELECT after a few rows (.scan-pause), runs a write and
+a savepoint on that same connection, then finishes the scan (.scan-resume).
+--bulk N adds a generate_series load of wide rows so the prolly tree has more
+than one leaf. The sweep runs that load on every Nth seed (--bulk-every) and
+reopens the database before the trailing reads.
 
 Usage: sql_differential_fuzzer.py SEED [--include-<group>]... [--all] [--rotate]
+       [--bulk N] [--bulk-every K]
 Groups: large-ints desc expr agg setops cte window joins writesel ddl
         constraints triggers returning generated fkeys rowid
 """
@@ -37,6 +43,14 @@ TEXTS = ["''", "'a'", "'A'", "'ab'", "'AB '", "'b'", "'z'", "'zz'",
 # quote() so 2, 2.0, and '2' stay distinguishable.
 Q = "coalesce(quote(%s), 'N')"
 
+# Wide, per-row unique values. A shared prefix would collapse under prolly
+# value elision and 600 short rows can still fit in one 16KB leaf. The chunk
+# floor is 512 bytes and the ceiling is 16KB, so a few hundred of these cross
+# a leaf boundary and force an internal node.
+BULK_PAYLOAD = "substr(printf('%08d', value) || hex(zeroblob(160)), 1, 320)"
+BULK_START = 100000
+REOPEN_MARK = "-- @@REOPEN@@"
+
 
 def extra_groups(seed, n):
     """n consecutive rotating groups. seed and seed+1 differ by one slot."""
@@ -48,8 +62,9 @@ def extra_groups(seed, n):
 
 
 class Gen:
-    def __init__(self, seed, groups, rotate=0):
+    def __init__(self, seed, groups, rotate=0, bulk=0):
         self.r = random.Random(seed)
+        self.bulk = bulk if bulk and bulk > 0 else 0
         chosen = list(groups)
         if rotate and set(chosen) != set(GROUPS):
             for g in extra_groups(seed, rotate):
@@ -80,6 +95,10 @@ class Gen:
 
     def text_val(self):
         return self.r.choice(TEXTS)
+
+    def blob_lit(self):
+        return self.r.choice(
+            ["x'00'", "x'01'", "x'ff'", "x'0001'", "x'61'", "x'0061'"])
 
     def val(self, kind="any"):
         if kind == "int":
@@ -120,10 +139,11 @@ class Gen:
     def schema(self):
         coll = self.r.choice(["", "", " COLLATE NOCASE", " COLLATE RTRIM"])
         shape = self.r.choice([
-            "int_pk", "int_pk", "text_pk", "numeric_pk",
+            "int_pk", "int_pk", "text_pk", "numeric_pk", "blob_pk",
             "composite_pk", "no_pk", "unique_only",
         ])
         self.key_kind = "int"
+        desc_pk = self.on("desc") and self.r.random() < 0.5
         self.autoinc = False
         self.has_rowid = False
         wr = ""
@@ -152,15 +172,32 @@ class Gen:
             self.has_rowid = True
             cols = "k INTEGER PRIMARY KEY%s, a, %s" % (ai, bdecl)
         elif shape == "text_pk":
-            cols = "k TEXT PRIMARY KEY%s, a, %s" % (coll, bdecl)
             self.key_kind = "text"
-            wr = " WITHOUT ROWID" if self.r.random() < 0.5 else ""
+            if desc_pk:
+                cols = "k TEXT%s, a, %s, PRIMARY KEY(k DESC)" % (coll, bdecl)
+                wr = " WITHOUT ROWID"
+            else:
+                cols = "k TEXT PRIMARY KEY%s, a, %s" % (coll, bdecl)
+                wr = " WITHOUT ROWID" if self.r.random() < 0.5 else ""
+        elif shape == "blob_pk":
+            self.key_kind = "blob"
+            if desc_pk:
+                cols = "k BLOB, a, %s, PRIMARY KEY(k DESC)" % bdecl
+                wr = " WITHOUT ROWID"
+            else:
+                cols = "k BLOB PRIMARY KEY, a, %s" % bdecl
+                wr = " WITHOUT ROWID" if self.r.random() < 0.5 else ""
         elif shape == "numeric_pk":
-            cols = "k NUMERIC PRIMARY KEY, a, %s" % bdecl
-            wr = " WITHOUT ROWID" if self.r.random() < 0.5 else ""
+            if desc_pk:
+                cols = "k NUMERIC, a, %s, PRIMARY KEY(k DESC)" % bdecl
+                wr = " WITHOUT ROWID"
+            else:
+                cols = "k NUMERIC PRIMARY KEY, a, %s" % bdecl
+                wr = " WITHOUT ROWID" if self.r.random() < 0.5 else ""
         elif shape == "composite_pk":
-            cols = "k INTEGER, j TEXT%s, a, %s, PRIMARY KEY(k, j)" % (coll, bdecl)
-            wr = " WITHOUT ROWID" if self.r.random() < 0.5 else ""
+            pk = "PRIMARY KEY(k DESC, j)" if desc_pk else "PRIMARY KEY(k, j)"
+            cols = "k INTEGER, j TEXT%s, a, %s, %s" % (coll, bdecl, pk)
+            wr = " WITHOUT ROWID" if desc_pk or self.r.random() < 0.5 else ""
         elif shape == "unique_only":
             cols = "k INTEGER UNIQUE, a, %s" % bdecl
             self.has_rowid = True
@@ -257,26 +294,29 @@ class Gen:
         else:
             self.emit("DELETE FROM t WHERE %s RETURNING %s;" % (eq, cols))
 
+    def key_literal(self):
+        if self.key_kind == "text":
+            return self.text_val()
+        if self.key_kind == "blob":
+            return self.blob_lit()
+        return self.int_val()
+
     def key_eq(self):
         if self.shape == "composite_pk":
             return "k = %s AND j = %s" % (self.int_val(), self.text_val())
-        kv = self.text_val() if self.key_kind == "text" else self.int_val()
-        return "k = %s" % kv
+        return "k = %s" % self.key_literal()
 
     def key_args(self):
         if self.shape == "composite_pk":
             return "k, j", "%s, %s" % (self.int_val(), self.text_val())
-        if self.key_kind == "text":
-            return "k", self.text_val()
-        return "k", self.int_val()
+        return "k", self.key_literal()
 
     def pred(self):
         r = self.r.random()
         if self.shape == "composite_pk" and r < 0.2:
             return "k = %s AND j = %s" % (self.int_val(), self.text_val())
         if r < 0.24:
-            kv = self.text_val() if self.key_kind == "text" else self.int_val()
-            return "k = %s" % kv
+            return "k = %s" % self.key_literal()
         if r < 0.4:
             return "k > %s AND k < %s" % (self.int_val(), self.int_val())
         if r < 0.5:
@@ -363,8 +403,12 @@ class Gen:
             order = ", ".join(Q % col for col in ("k", "j", "a", "b"))
             order += ", k, j, a, b"
         else:
-            base = "coalesce(quote(k),'x') || 'x'" if self.key_kind == "text" \
-                else "k + %d" % self.r.randint(1, 50)
+            if self.key_kind == "text":
+                base = "coalesce(quote(k),'x') || 'x'"
+            elif self.key_kind == "blob":
+                base = "CAST(coalesce(quote(k),'x') || 'x' AS BLOB)"
+            else:
+                base = "k + %d" % self.r.randint(1, 50)
             sel = "%s, a, b" % base
             order = ", ".join(Q % col for col in ("k", "a", "b"))
             order += ", k, a, b"
@@ -614,17 +658,154 @@ class Gen:
         if self.in_txn:
             self.close_txn()
 
+    def bulk_load(self):
+        """One statement, enough wide rows to cross a prolly leaf boundary."""
+        if self.bulk <= 0:
+            return
+        end = BULK_START + self.bulk - 1
+        if self.shape == "composite_pk":
+            self.emit(
+                "INSERT INTO t(k, j, a, b) SELECT value, "
+                "printf('j%%08d', value), value, %s "
+                "FROM generate_series(%d, %d);"
+                % (BULK_PAYLOAD, BULK_START, end))
+            return
+        if self.key_kind == "text":
+            key = "printf('k%08d', value)"
+        elif self.key_kind == "blob":
+            key = "CAST(printf('k%08d', value) AS BLOB)"
+        else:
+            key = "value"
+        self.emit(
+            "INSERT INTO t(k, a, b) SELECT %s, value, %s "
+            "FROM generate_series(%d, %d);"
+            % (key, BULK_PAYLOAD, BULK_START, end))
+
+    def scan_interleave(self):
+        """Pause a scan, mutate on this connection, then finish the scan.
+
+        The shell steps the SELECT, runs the following statements while that
+        cursor is open, and .scan-resume steps the rest. ROLLBACK TO while
+        the statement is open aborts it, so the savepoint is released and
+        the insert stays. The resumed scan has to agree on whether that row
+        is visited.
+        """
+        order = "%s, k" % (Q % "k")
+        if self.shape == "composite_pk":
+            order = "%s, %s, k, j" % (Q % "k", Q % "j")
+        self.emit(".scan-pause 2")
+        self.emit("SELECT %s FROM t ORDER BY %s;" % (Q % "k", order))
+        self.emit("UPDATE t SET a = %s WHERE %s;" % (self.val(), self.pred()))
+        self.emit("CREATE INDEX IF NOT EXISTS i_scan ON t(a);")
+        self.emit("SAVEPOINT sps;")
+        kc, kv = self.key_args()
+        self.emit("INSERT OR IGNORE INTO t(%s, a, b) VALUES(%s, %s, %s);"
+                  % (kc, kv, self.val(), self.val("text")))
+        self.emit("RELEASE sps;")
+        self.emit(".scan-resume")
+
     def run(self):
         self.schema()
+        self.bulk_load()
         for _ in range(self.r.randint(2, 10)):
             self.insert()
+        # The table is non-empty here, so the pause actually stops mid-scan.
+        self.scan_interleave()
         self.body()
+        if self.bulk:
+            self.emit(REOPEN_MARK)
         self.tail_reads()
         self.full_read()
         if self.on("ddl"):
             self.emit("SELECT count(*) FROM t;")
         self.emit("PRAGMA integrity_check;")
         return "\n".join(self.out)
+
+
+def bulk_for(seed, bulk, every):
+    """Rows to load for this seed. every<=0 or bulk<=0 loads nothing."""
+    if bulk <= 0 or every <= 0:
+        return 0
+    if seed % every != 0:
+        return 0
+    return bulk
+
+
+def count_prolly_nodes(blob):
+    """Count prolly leaf and internal nodes in a database image.
+
+    Nodes start with magic PNOD (little-endian 0x504E4F44). A one-leaf table
+    has no internal node; a tree that crossed a chunk boundary does.
+    """
+    magic = b"\x44\x4f\x4e\x50"
+    leaves = 0
+    internals = 0
+    start = 0
+    n = len(blob)
+    while True:
+        i = blob.find(magic, start)
+        if i < 0 or i + 8 > n:
+            break
+        level = blob[i + 4]
+        nitems = blob[i + 5] | (blob[i + 6] << 8)
+        flags = blob[i + 7]
+        key = flags & 0x03
+        if level <= 12 and nitems <= 4096 and key in (1, 2):
+            if level == 0:
+                leaves += 1
+            else:
+                internals += 1
+        start = i + 4
+    return leaves, internals
+
+
+def parse_workload(flags):
+    """Groups plus --bulk N / --bulk-every K. Unknown flags stay unknown."""
+    bulk = 0
+    every = 1
+    rest = []
+    i = 0
+    while i < len(flags):
+        f = flags[i]
+        if f in ("--bulk", "--bulk-every"):
+            if i + 1 >= len(flags):
+                rest.append(f)
+                break
+            try:
+                n = int(flags[i + 1])
+            except ValueError:
+                rest.append(f)
+                rest.append(flags[i + 1])
+                i += 2
+                continue
+            if f == "--bulk":
+                bulk = n
+            else:
+                every = n
+            i += 2
+            continue
+        if f.startswith("--bulk=") or f.startswith("--bulk-every="):
+            name, raw = f.split("=", 1)
+            try:
+                n = int(raw)
+            except ValueError:
+                rest.append(f)
+                i += 1
+                continue
+            if name == "--bulk":
+                bulk = n
+            else:
+                every = n
+            i += 1
+            continue
+        rest.append(f)
+        i += 1
+    if bulk < 0:
+        bulk = 0
+    if every < 1:
+        every = 1
+    groups, unknown, rotate = parse_groups(rest)
+    return groups, unknown, rotate, bulk, every
 
 
 def parse_groups(flags):
@@ -661,14 +842,15 @@ def main():
     if len(sys.argv) < 2:
         sys.stderr.write(
             "usage: %s SEED [--include-<group>]... [--all] [--rotate]\n"
+            "       [--bulk N] [--bulk-every K]\n"
             "groups: %s\n" % (sys.argv[0], " ".join(GROUPS)))
         return 2
     seed = int(sys.argv[1])
-    groups, unknown, rotate = parse_groups(sys.argv[2:])
+    groups, unknown, rotate, bulk, every = parse_workload(sys.argv[2:])
     if unknown:
         sys.stderr.write("unknown flag(s): %s\n" % " ".join(unknown))
         return 2
-    print(Gen(seed, groups, rotate).run())
+    print(Gen(seed, groups, rotate, bulk_for(seed, bulk, every)).run())
     return 0
 
 

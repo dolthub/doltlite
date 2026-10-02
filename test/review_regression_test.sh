@@ -1156,6 +1156,54 @@ run_test "desc_pk_integrity_large_ints" \
 
 rm -f "$DB"
 
+# A secondary index appends the primary key. When that key is DESC its
+# inverted tag is above the 18-byte integer marker, so a short integer in
+# the index sorted after a larger inexact neighbour.
+DB=/tmp/test_rg_desc_pk_secondary_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k BLOB, a, b TEXT, PRIMARY KEY(k DESC)) WITHOUT ROWID;
+CREATE INDEX i_a ON t(a);
+INSERT INTO t VALUES(x'0061', 9007199254740994, 'b');
+INSERT INTO t VALUES(x'02', 9007199254740995, 'c');
+INSERT INTO t VALUES(x'03', 18014398509481984, x'00');
+INSERT INTO t VALUES(x'04', 10, 'e');
+CREATE TABLE c(k INTEGER, j TEXT, a, b TEXT, PRIMARY KEY(k DESC, j)) WITHOUT ROWID;
+CREATE INDEX c_a ON c(a);
+INSERT INTO c VALUES(38, 'zz', 18014398509481984, x'00');
+CREATE TABLE tab2(pk INTEGER PRIMARY KEY, col0 INTEGER, col4 FLOAT);
+CREATE INDEX idx_tab2_0 ON tab2 (col0, col4 DESC);
+INSERT INTO tab2 VALUES(5,97,16.15),(9,25,59.80);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "desc_pk_secondary_gap_is_empty" \
+  "SELECT count(*) FROM t INDEXED BY i_a WHERE a > 9007199254740995 AND a < 18014398509481984;" \
+  "0" "$DB"
+run_test "desc_pk_secondary_includes_exact_below" \
+  "SELECT count(*) FROM t INDEXED BY i_a WHERE a = 18014398509481984 AND a < 18014398509481985;" \
+  "1" "$DB"
+run_test "desc_pk_secondary_equality" \
+  "SELECT b FROM t INDEXED BY i_a WHERE a = 9007199254740994;" \
+  "b" "$DB"
+run_test "desc_following_small_int_equality" \
+  "SELECT b FROM t INDEXED BY i_a WHERE a = 10;" \
+  "e" "$DB"
+run_test "desc_following_small_int_order" \
+  "SELECT group_concat(pk || ':' || col0, '|') FROM (
+     SELECT pk, col0 FROM tab2 WHERE col0 IN (97,25) ORDER BY col0 DESC);" \
+  "5:97|9:25" "$DB"
+run_test "desc_pk_secondary_order" \
+  "SELECT group_concat(a, '|') FROM (SELECT a FROM t ORDER BY a);" \
+  "10|9007199254740994|9007199254740995|18014398509481984" "$DB"
+run_test "desc_pk_secondary_update_misses" \
+  "UPDATE t SET b = 'z' WHERE a > 18014398509481985 AND a < 'AB ';
+   SELECT quote(b) FROM t WHERE a = 18014398509481984;" \
+  "X'00'" "$DB"
+run_test "desc_pk_secondary_composite_includes" \
+  "SELECT count(*) FROM c INDEXED BY c_a WHERE a > 42.464 AND a < 18014398509481985;" \
+  "1" "$DB"
+run_test "desc_pk_secondary_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+
+rm -f "$DB"
+
 # Reconstructing rows from a DESC numeric PK (ORDER BY a ASC walks the key
 # backwards) must return each inserted row once. The short DESC form is
 # 10 bytes (base + terminator); decoding must strip the terminator rather

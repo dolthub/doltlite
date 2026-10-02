@@ -168,7 +168,7 @@ int sortKeyFromUnpackedForCount(
         pCur, pRec, nKeyField>0 ? nKeyField : (int)pRec->nField) ){
     return sortKeyFromUnpackedIntRecordBuffer(
         pRec, nKeyField>0 ? nKeyField : (int)pRec->nField,
-        ppBuf, pnAlloc, pnOut);
+        pCur->pKeyInfo, ppBuf, pnAlloc, pnOut);
   }
   rc = sortKeyFromMemPrefixCollBuffer(
       pRec->aMem, (int)pRec->nField, nKeyField, pCur->pKeyInfo,
