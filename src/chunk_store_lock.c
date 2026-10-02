@@ -320,7 +320,7 @@ int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
 }
 
 
-static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs);
+static int csMovedFileIsOursAfterTail(ChunkStore *cs, int *pIsOurs);
 
 static int csAdoptMatchingCloseMarker(
   ChunkStore *cs,
@@ -382,7 +382,7 @@ static int csNoteMovedUnderLock(ChunkStore *cs){
   }
   {
     int bOurs = 0;
-    rc = csMovedFileIsOurs(cs, &bOurs);
+    rc = csMovedFileIsOursAfterTail(cs, &bOurs);
     if( rc!=SQLITE_OK ) return rc;
     cs->movedReadOnly = bOurs ? 0 : 1;
   }
@@ -508,6 +508,23 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   return rc;
 }
 
+static int csIncrementalTailRefresh(ChunkStore *cs);
+
+/* A peer's amend or reset followed by GC sweeps every tip we remember.
+** The tips it moved to were appended to the file we still hold open, so
+** learn them from that tail and retry the proof. */
+static int csMovedFileIsOursAfterTail(ChunkStore *cs, int *pIsOurs){
+  i64 heldSize = 0;
+  int rc = csMovedFileIsOurs(cs, pIsOurs);
+  if( rc!=SQLITE_OK || *pIsOurs ) return rc;
+  rc = sqlite3OsFileSize(cs->file.pFile, &heldSize);
+  if( rc!=SQLITE_OK || heldSize<=cs->file.iFileSize ) return rc;
+  rc = csIncrementalTailRefresh(cs);
+  if( rc==SQLITE_MISMATCH ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  return csMovedFileIsOurs(cs, pIsOurs);
+}
+
 /* *pMovedAdopt distinguishes "the inode at our path changed and the new
 ** file proved to be ours" from same-file growth: adoption must reload
 ** by path, never ingest a tail through the stale handle. */
@@ -553,7 +570,7 @@ static int csDetectExternalChanges(
   }
   if( bMoved ){
     int bOurs = 0;
-    rc = csMovedFileIsOurs(cs, &bOurs);
+    rc = csMovedFileIsOursAfterTail(cs, &bOurs);
     if( rc!=SQLITE_OK ) return rc;
     if( !bOurs ){
       /* Do not reload-by-path (would adopt foreign content). Reads stay on
