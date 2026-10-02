@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 repo = Path(__file__).resolve().parents[1]
 checks = 0
@@ -20,10 +21,15 @@ with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
     engine = root / 'engine'
     engine.write_text('''#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, time
 with open(os.environ['INTEGRITY_TRACE'], 'a') as f:
     f.write(json.dumps(sys.argv[1:])+'\\n')
 if 'PRAGMA integrity_check;' in sys.argv:
+    expected_null = os.environ.get('INTEGRITY_INIT_NULL', os.environ.get('DOLTLITE_SYSTEM_NULL', '/dev/null'))
+    if sys.argv[sys.argv.index('-init')+1] != expected_null:
+        print('cannot open init file', file=sys.stderr)
+        sys.exit(1)
+    time.sleep(float(os.environ.get('INTEGRITY_DELAY', '0')))
     if any(a.endswith('/retired') for a in sys.argv):
         print('branch or revision "retired" not found', file=sys.stderr)
         sys.exit(1)
@@ -57,6 +63,20 @@ sys.exit(int(os.environ.get('SESSION_RC', '0')))
     check('missing chunk' in log.read_text(), 'failure not recorded')
     calls = [json.loads(line) for line in trace.read_text().splitlines()]
     check('-readonly' in calls[1] and '-init' in calls[1], 'probe was not read-only/isolated')
+    result = run(db, DOLTLITE_SYSTEM_NULL='NUL', INTEGRITY_INIT_NULL='NUL')
+    check(result.returncode == 0 and len(trace.read_text().splitlines()) == 2,
+          'probe did not use native Windows null device')
+    timer = root / 'finished-ms'
+    start = int(time.time()*1000)
+    result = run(db, DLTEST_ENGINE_FINISHED_MS=str(timer), INTEGRITY_DELAY='0.4')
+    finished = int(timer.read_text())
+    check(start <= finished < int(time.time()*1000)-250,
+          'session timing included the integrity probe')
+    check(result.returncode == 0 and len(trace.read_text().splitlines()) == 2,
+          'timed session did not check integrity')
+    result = run(db, DLTEST_ENGINE_FINISHED_MS=str(timer), INTEGRITY_RESULT='missing chunk')
+    check(result.returncode == 125 and 'missing chunk' in log.read_text(),
+          'timed session accepted corruption')
     for rc in ('0', '1'):
         result = run(db, SESSION_RC=rc)
         check(result.returncode == int(rc), 'healthy file changed session status')

@@ -4,9 +4,10 @@
 # engine runs as a child; a death by signal is appended to the log the suite
 # runner checks, and the status is passed through. A caller's timeout signal
 # is forwarded, so the child is not left running when the suite moves on.
-# No modules: this runs once per engine session, so startup cost matters.
 my $real = $ENV{DLTEST_REAL_DOLTLITE}
   or die "dltest_engine_guard: DLTEST_REAL_DOLTLITE is not set\n";
+my $finished = $ENV{DLTEST_ENGINE_FINISHED_MS};
+require Time::HiRes if $finished;
 my $pid = fork();
 die "dltest_engine_guard: fork failed: $!\n" unless defined $pid;
 if( $pid==0 ){
@@ -16,6 +17,12 @@ $SIG{$_} = sub { kill $_[0], $pid } for qw(ALRM TERM INT HUP);
 # A forwarded signal interrupts the wait while the child is still alive.
 1 while waitpid($pid, 0)==-1 && kill(0, $pid);
 my $signal = $? & 127;
+my $rc = $? >> 8;
+if( $finished ){
+  open(my $fh, '>', $finished) or die "session timing failed: $!\n";
+  print $fh int(Time::HiRes::time()*1000), "\n";
+  close $fh;
+}
 if( $signal ){
   my $log = $ENV{DLTEST_ENGINE_SIGNAL_LOG};
   if( $log && open(my $fh, '>>', $log) ){
@@ -24,7 +31,6 @@ if( $signal ){
   }
   exit 128 + $signal;
 }
-my $rc = $? >> 8;
 my $db;
 for(my $i=0; $i<@ARGV; $i++){
   my $arg = $ARGV[$i];
@@ -69,6 +75,7 @@ if( $exceptions && open(my $fh, '<', $exceptions) ){
 }
 exit $rc if $expected && $expected =~ /^skip:.+/;
 my $probe = $db;
+my $null = $ENV{DOLTLITE_SYSTEM_NULL} || ($^O eq 'MSWin32' ? 'NUL' : '/dev/null');
 $probe =~ s/([?&]mode=)rwc?(?=&|$)/${1}ro/ if $probe =~ /^file:/;
 CHECK:
 pipe(my $reader, my $writer) or die "integrity pipe failed: $!\n";
@@ -76,12 +83,12 @@ $pid = fork();
 die "integrity fork failed: $!\n" unless defined $pid;
 if( $pid==0 ){
   close $reader;
-  open(STDIN, '<', '/dev/null') or exit 127;
+  open(STDIN, '<', $^O eq 'MSWin32' ? 'NUL' : '/dev/null') or exit 127;
   open(STDOUT, '>&', $writer) or exit 127;
   open(STDERR, '>&', $writer) or exit 127;
   close $writer;
   exec { $real } $real, '-readonly', '-bail', '-batch', '-noheader',
-      '-list', '-init', '/dev/null', $probe, 'PRAGMA integrity_check;' or exit 127;
+      '-list', '-init', $null, $probe, 'PRAGMA integrity_check;' or exit 127;
 }
 close $writer;
 my $result = do { local $/; <$reader> };

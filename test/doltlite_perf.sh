@@ -5,11 +5,21 @@ PASS=0; FAIL=0; ERRORS=""
 echo "=== Doltlite Performance Tests ==="
 echo ""
 
+session_end_ms() {
+  if [ -s "$1" ]; then
+    cat "$1"
+  else
+    python3 -c 'import time; print(int(time.time()*1000))'
+  fi
+  rm -f "$1"
+}
+
 time_ms() {
-  local start end
+  local start end timer
+  timer=$(mktemp "${TMPDIR:-/tmp}/dltest_timing.XXXXXX")
   start=$(python3 -c 'import time; print(int(time.time()*1000))')
-  eval "$@" > /dev/null 2>&1
-  end=$(python3 -c 'import time; print(int(time.time()*1000))')
+  DLTEST_ENGINE_FINISHED_MS="$timer" eval "$@" > /dev/null 2>&1
+  end=$(session_end_ms "$timer")
   echo $((end - start))
 }
 
@@ -108,15 +118,16 @@ echo "--- Point SELECT (100 lookups, one process) ---"
 point_select_ms() {
   local db="$1" id="$2"
   local sql="/tmp/perf_sel_$$.sql"
-  local start end rc
+  local start end rc timer
   python3 -c "
 for i in range(100):
     print('SELECT v FROM t WHERE id=$id;')
 " > "$sql"
+  timer=$(mktemp "${TMPDIR:-/tmp}/dltest_timing.XXXXXX")
   start=$(python3 -c 'import time; print(int(time.time()*1000))')
-  "$DOLTLITE" "$db" < "$sql" > /dev/null 2>&1
+  DLTEST_ENGINE_FINISHED_MS="$timer" "$DOLTLITE" "$db" < "$sql" > /dev/null 2>&1
   rc=$?
-  end=$(python3 -c 'import time; print(int(time.time()*1000))')
+  end=$(session_end_ms "$timer")
   rm -f "$sql"
   if [ "$rc" -ne 0 ]; then
     echo "FAIL $rc"
