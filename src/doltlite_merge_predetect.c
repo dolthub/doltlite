@@ -140,10 +140,6 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
     struct TableEntry *aEditCat = side ? c->aOurs : c->aTheirs;
     int nEditCat = side ? c->nOurs : c->nTheirs;
 
-    /* Replay: Dolt protects non-NULL live values; NULL or already-absent
-    ** can drop. */
-    if( !c->bBranchMerge && side==0 ) continue;
-
     for(i=0; i<c->nAncSchema; i++){
       const char *zTable = c->aAncSchema[i].zName;
       SchemaEntry *pDropSe;
@@ -233,7 +229,7 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
         if( iField<0 ) continue;
         rc = mergeRowEditsColumn(c->db, &pAncCat->root, &pEditCatEnt->root,
                                  pAncCat->flags, pEditCatEnt->flags,
-                                 iField, !c->bBranchMerge, &bEdited);
+                                 iField, !c->bBranchMerge && side==1, &bEdited);
         if( rc!=SQLITE_OK ){
           sqlite3_free(aHeld);
           freeColumns(aAncCols, nAncCols);

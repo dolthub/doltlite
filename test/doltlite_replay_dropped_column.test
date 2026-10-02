@@ -1,0 +1,122 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach keymode {integer text without-rowid} {
+  set key {id INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode ne "integer"} {set key {id TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+
+  foreach position {middle trailing} {
+    set columns {a INT, c INT}
+    if {$position eq "middle"} {set columns {c INT, a INT}}
+    foreach operation {cherry_pick revert rebase} {
+      foreach change {edited-only edited-kept null-only null-kept kept-only} {
+        foreach mode {autocommit transaction savepoint} {
+          reset_db
+          execsql "CREATE TABLE t($key, $columns) $suffix"
+          execsql {
+            INSERT INTO t(id,a,c) VALUES(1,1,1),(2,2,2);
+            SELECT dolt_commit('-Am','base');
+            SELECT dolt_checkout('-b','feat');
+          }
+          if {$operation eq "rebase"} {
+            execsql {
+              UPDATE t SET a=20 WHERE id=2;
+              SELECT dolt_commit('-am','early clean edit');
+            }
+          }
+          set edit {c=30}
+          switch $change {
+            edited-kept {set edit {c=30,a=10}}
+            null-only {set edit {c=NULL}}
+            null-kept {set edit {c=NULL,a=10}}
+            kept-only {set edit {a=10}}
+          }
+          if {$operation eq "revert" && [string match null-* $change]} {
+            execsql {
+              UPDATE t SET c=NULL WHERE id=1;
+              SELECT dolt_commit('-am','null base');
+            }
+            set edit {c=30}
+            if {$change eq "null-kept"} {set edit {c=30,a=10}}
+          }
+          execsql "UPDATE t SET $edit WHERE id=1"
+          execsql {SELECT dolt_commit('-am','edit')}
+          if {$operation ne "revert"} {
+            execsql {SELECT dolt_checkout('main')}
+          }
+          execsql {
+            ALTER TABLE t DROP COLUMN c;
+            SELECT dolt_commit('-am','drop');
+          }
+          switch $operation {
+            cherry_pick {set apply {SELECT dolt_cherry_pick('feat')}}
+            revert {set apply {SELECT dolt_revert('HEAD~1')}}
+            rebase {
+              execsql {SELECT dolt_checkout('feat')}
+              set apply {SELECT dolt_rebase('main')}
+            }
+          }
+          set before [execsql {SELECT * FROM t ORDER BY id}]
+          set schema [execsql {SELECT sql FROM sqlite_schema ORDER BY name}]
+          set refs [execsql {
+            SELECT name,hash FROM dolt_branches ORDER BY name;
+          }]
+          set branch [db one {SELECT active_branch()}]
+          set reopen [file normalize test.db]
+          if {$branch ne "main"} {append reopen /$branch}
+          switch $mode {
+            transaction {execsql {BEGIN}}
+            savepoint {execsql {SAVEPOINT outer}}
+          }
+          set name replay-drop-$keymode-$position-$operation-$change-$mode
+          if {$change ne "kept-only"} {
+            do_catchsql_test $name-refuse $apply \
+              {1 {cannot apply: column 'c' of table 't' would be dropped, discarding a changed value}}
+            do_test $name-preserved {
+              list [db one {SELECT active_branch()}] \
+                   [expr {$before eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+                   [expr {$schema eq [execsql {
+                     SELECT sql FROM sqlite_schema ORDER BY name
+                   }]}] \
+                   [expr {$refs eq [execsql {
+                     SELECT name,hash FROM dolt_branches ORDER BY name
+                   }]}] \
+                   [execsql {SELECT count(*) FROM dolt_status}] \
+                   [execsql {SELECT count(*) FROM dolt_conflicts}]
+            } [list $branch 1 1 1 0 0]
+            if {![sqlite3_get_autocommit db]} {execsql {ROLLBACK}}
+            db close
+            sqlite3 db $reopen
+            do_test $name-reopen {
+              list [expr {$before eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+                   [expr {$schema eq [execsql {
+                     SELECT sql FROM sqlite_schema ORDER BY name
+                   }]}] \
+                   [expr {$refs eq [execsql {
+                     SELECT name,hash FROM dolt_branches ORDER BY name
+                   }]}] \
+                   [execsql {SELECT count(*) FROM dolt_status}]
+            } {1 1 1 0}
+          } else {
+            set rows {1 10 2 2}
+            if {$operation eq "revert"} {set rows {1 1 2 2}}
+            if {$operation eq "rebase"} {set rows {1 10 2 20}}
+            do_test $name-apply {catch {execsql $apply}} {0}
+            do_execsql_test $name-columns {
+              SELECT name FROM pragma_table_info('t') ORDER BY cid;
+            } {id a}
+            do_execsql_test $name-rows {SELECT * FROM t ORDER BY id} $rows
+            db close
+            sqlite3 db $reopen
+            do_execsql_test $name-reopen {SELECT * FROM t ORDER BY id} $rows
+          }
+          do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+        }
+      }
+    }
+  }
+}
+
+finish_test
