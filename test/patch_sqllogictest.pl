@@ -1,7 +1,8 @@
 #!/usr/bin/perl
-# Patch sqllogictest.c to emit one stable "!DIVERGE <query-start-line>" token
-# per query record that produced any verify mismatch. The harness pairs these
-# with the per-file path it is running to build/check the known-divergence list.
+# Patch sqllogictest.c to emit one stable "!DIVERGE <record-start-line>" token
+# per query or statement record that produced any verify mismatch. The harness
+# pairs these with the per-file path it is running to build/check the
+# known-divergence list.
 use strict; use warnings;
 local $/; my $s = <STDIN>;
 
@@ -19,5 +20,12 @@ my $repl2   = "        pEngine->xFreeResults(pConn, azResult, nResult);\n       
 my $anchor3 = "      /* Free the query results */\n      pEngine->xFreeResults(pConn, azResult, nResult);\n";
 my $repl3   = $anchor3 . "      if( nErr > dErr0 ) fprintf(stdout, \"!DIVERGE %d\\n\", qDivLine);\n";
 ($s =~ s/\Q$anchor3\E/$repl3/) or die "anchor3 (free query results) not found\n";
+
+# 4) statement record whose ok/error expectation failed: the same token, so a
+#    doltlite-only statement failure, or an expected error that succeeds, is
+#    a divergence like any query mismatch.
+my $anchor4 = "        fprintf(stderr, \"%s:%d: statement error\\n\",\n                zScriptFile, sScript.startLine);\n        nErr++;\n      }\n";
+my $repl4   = "        fprintf(stderr, \"%s:%d: statement error\\n\",\n                zScriptFile, sScript.startLine);\n        nErr++;\n        fprintf(stdout, \"!DIVERGE %d\\n\", sScript.startLine);\n      }\n";
+($s =~ s/\Q$anchor4\E/$repl4/) or die "anchor4 (statement error path) not found\n";
 
 print $s;
