@@ -36,6 +36,15 @@ while IFS=$'\t' read -r id status evidence contract; do
   esac
 
   IFS=',' read -ra checks <<<"$evidence"
+  # Naming a function in src/ proves only that it is still spelled there;
+  # every guarantee needs a test that would fail without it.
+  has_test=0
+  for check in "${checks[@]}"; do
+    case "$check" in test/*) has_test=1 ;; esac
+  done
+  if [ "$has_test" -eq 0 ]; then
+    dltest_fail "contract_test_evidence" "  $id cites no test/ evidence"
+  fi
   for check in "${checks[@]}"; do
     path="${check%%#*}"
     needle="${check#*#}"
