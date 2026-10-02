@@ -264,7 +264,7 @@ check test "$fail" = 0
 
 pass=1; fail=0; FAILED_NAMES=""
 VC_SESSION_RC=1 VC_ORACLE_EXPECTATION=allow-error vc_oracle_run_doltlite --success \
-  "$VC_HARNESS_DIR/setup-db" >/dev/null 2>/dev/null || true
+  "$VC_HARNESS_DIR/setup-db" </dev/null >/dev/null 2>/dev/null || true
 if vc_oracle_finish > "$VC_HARNESS_DIR/strict.log"; then
   echo 'FAIL: explicit success mode inherited an error expectation' >&2
   exit 1
@@ -273,13 +273,13 @@ check grep -q 'expected success' "$VC_HARNESS_DIR/strict.log"
 
 for attempt in 1 2 3; do
   VC_MERGED_STREAMS=1 vc_oracle_run_doltlite "$VC_HARNESS_DIR/order-db" \
-    > "$VC_HARNESS_DIR/merged.out" 2>&1
+    </dev/null > "$VC_HARNESS_DIR/merged.out" 2>&1
   check test "$(cat "$VC_HARNESS_DIR/merged.out")" = $'stdout first\nstderr second\nstdout third'
 done
 
 pass=1; fail=0; FAILED_NAMES=""
 VC_SESSION_RC=139 vc_oracle_run_doltlite "$VC_HARNESS_DIR/setup-db" \
-  >/dev/null 2>/dev/null || true
+  </dev/null >/dev/null 2>/dev/null || true
 if vc_oracle_finish > "$VC_HARNESS_DIR/setup.log"; then
   echo 'FAIL: discarded setup status accepted' >&2
   exit 1
