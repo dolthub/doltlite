@@ -126,6 +126,7 @@ rollback
 rollback2
 savepoint6
 schema6
+doltlite_failed_ddl_reader
 securedel
 securedel2
 shared
