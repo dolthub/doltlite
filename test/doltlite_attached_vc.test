@@ -1,0 +1,193 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc attached_vc_main_state {} {
+  db eval {
+    SELECT dolt_hashof('HEAD'),dolt_hashof_db('WORKING'),dolt_hashof_db('STAGED');
+    SELECT id,v FROM main.t ORDER BY id;
+    SELECT name,sql FROM main.sqlite_schema ORDER BY name;
+    SELECT * FROM dolt_status ORDER BY table_name,staged;
+  }
+}
+
+proc attached_vc_aux_state {schema} {
+  db eval "SELECT id,v FROM $schema.t ORDER BY id;
+           SELECT name,sql FROM $schema.sqlite_schema ORDER BY name;"
+}
+
+foreach kind {doltlite sqlite memory temp} {
+  foreach materialized {0 1} {
+    reset_db
+    forcedelete attached-vc.db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+      INSERT INTO t VALUES(1,'base');
+      SELECT dolt_commit('-Am','main base');
+      INSERT INTO t VALUES(2,'main working');
+    }
+    if {$materialized} {
+      execsql {
+        INSERT INTO dolt_ignore VALUES('main_pattern',1);
+        INSERT INTO dolt_docs VALUES('main_doc','main text');
+        INSERT INTO dolt_tests VALUES('main_test',NULL,'SELECT 1','expected_rows','==','1');
+      }
+    }
+    set schema aux
+    switch $kind {
+      doltlite {
+        sqlite3 aux attached-vc.db
+        aux eval {
+          CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+          INSERT INTO t VALUES(5,'attached base');
+          SELECT dolt_commit('-Am','attached base');
+          INSERT INTO t VALUES(6,'attached working');
+        }
+        set staged [aux one {SELECT dolt_hashof_db('STAGED')}]
+        aux close
+        execsql {ATTACH 'attached-vc.db' AS aux}
+      }
+      sqlite {
+        sqlite3 aux {file:attached-vc.db?doltlite_engine=sqlite} -uri 1
+        aux eval {CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT); INSERT INTO t VALUES(5,'attached')}
+        aux close
+        execsql {ATTACH 'attached-vc.db' AS aux}
+      }
+      memory {
+        execsql {ATTACH ':memory:' AS aux; CREATE TABLE aux.t(id INTEGER PRIMARY KEY,v TEXT)}
+      }
+      temp {
+        set schema temp
+        execsql {CREATE TEMP TABLE t(id INTEGER PRIMARY KEY,v TEXT)}
+      }
+    }
+    set mainBefore [attached_vc_main_state]
+    set auxBefore [attached_vc_aux_state $schema]
+    foreach {table columns values assignment} {
+      dolt_ignore {pattern,ignored} {'attached',1} {ignored=0}
+      dolt_docs {doc_name,doc_text} {'attached','wrong database'} {doc_text='wrong database'}
+      dolt_tests {test_name,test_group,test_query,assertion_type,assertion_comparator,assertion_value}
+        {'attached',NULL,'SELECT 1','expected_rows','==','1'} {test_group='wrong database'}
+      dolt_workspace_t {staged} {1} {staged=1}
+    } {
+      foreach {operation sql} [list \
+        select "SELECT * FROM $schema.$table" \
+        insert "INSERT INTO $schema.${table}($columns) VALUES($values)" \
+        insert-select "INSERT INTO $schema.${table}($columns) SELECT $values" \
+        replace "REPLACE INTO $schema.${table}($columns) VALUES($values)" \
+        update "UPDATE $schema.$table SET $assignment" \
+        delete "DELETE FROM $schema.$table"] {
+        set name attached-vc-$kind-$materialized-$table-$operation
+        do_catchsql_test $name-refuse $sql \
+          [list 1 "$table is only available in the main database"]
+        do_test $name-main-preserved {
+          expr {$mainBefore eq [attached_vc_main_state]}
+        } {1}
+        do_test $name-aux-preserved {
+          expr {$auxBefore eq [attached_vc_aux_state $schema]}
+        } {1}
+      }
+    }
+    if {$kind eq "doltlite"} {
+      sqlite3 aux attached-vc.db
+      do_test attached-vc-$kind-$materialized-staged-preserved {
+        expr {$staged eq [aux one {SELECT dolt_hashof_db('STAGED')}]}
+      } {1}
+      aux close
+    }
+    do_execsql_test attached-vc-$kind-$materialized-integrity \
+      "PRAGMA main.integrity_check; PRAGMA $schema.integrity_check" {ok ok}
+    do_execsql_test attached-vc-$kind-$materialized-json \
+      "SELECT value FROM $schema.json_each('\[1,2\]')" {1 2}
+  }
+}
+
+reset_db
+forcedelete attached-vc.db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+  SELECT dolt_commit('-Am','base');
+  ATTACH 'attached-vc.db' AS aux;
+  CREATE TABLE aux.t(id INTEGER PRIMARY KEY,v TEXT);
+  CREATE VIEW aux.v AS SELECT id,v FROM t;
+  CREATE VIEW aux.vc AS SELECT * FROM dolt_ignore;
+  CREATE TRIGGER aux.tr AFTER INSERT ON t BEGIN
+    INSERT INTO dolt_docs VALUES('attached','wrong database');
+  END;
+  CREATE TRIGGER aux.vi INSTEAD OF INSERT ON v BEGIN
+    INSERT INTO dolt_ignore VALUES('attached',1);
+  END;
+}
+set mainBefore [attached_vc_main_state]
+foreach {name sql table} {
+  trigger {INSERT INTO aux.t VALUES(5,'attached')} dolt_docs
+  view-trigger {INSERT INTO aux.v VALUES(5,'attached')} dolt_ignore
+  view {SELECT * FROM aux.vc} dolt_ignore
+} {
+  do_catchsql_test attached-vc-fixed-$name $sql \
+    [list 1 "$table is only available in the main database"]
+  do_test attached-vc-fixed-$name-main {
+    expr {$mainBefore eq [attached_vc_main_state]}
+  } {1}
+  do_execsql_test attached-vc-fixed-$name-aux {SELECT count(*) FROM aux.t} {0}
+}
+execsql {DROP TRIGGER aux.tr; DROP TRIGGER aux.vi; DETACH aux}
+
+sqlite3 aux attached-vc.db
+aux eval {
+  INSERT INTO dolt_ignore VALUES('attached_pattern',1);
+  INSERT INTO dolt_docs VALUES('attached_doc','attached text');
+  INSERT INTO dolt_tests VALUES('attached_test',NULL,'SELECT 1','expected_rows','==','1');
+}
+aux close
+execsql {ATTACH 'attached-vc.db' AS aux}
+do_execsql_test attached-vc-real-tables {
+  INSERT INTO aux.dolt_ignore VALUES('other_pattern',1);
+  UPDATE aux.dolt_ignore SET ignored=0 WHERE pattern='attached_pattern';
+  DELETE FROM aux.dolt_ignore WHERE pattern='other_pattern';
+  INSERT INTO aux.dolt_docs VALUES('other_doc','other text');
+  UPDATE aux.dolt_docs SET doc_text='updated' WHERE doc_name='attached_doc';
+  DELETE FROM aux.dolt_docs WHERE doc_name='other_doc';
+  INSERT INTO aux.dolt_tests VALUES('other_test',NULL,'SELECT 1','expected_rows','==','1');
+  UPDATE aux.dolt_tests SET test_group='updated' WHERE test_name='attached_test';
+  DELETE FROM aux.dolt_tests WHERE test_name='other_test';
+  SELECT pattern,ignored FROM aux.dolt_ignore;
+  SELECT doc_text FROM aux.dolt_docs WHERE doc_name='attached_doc';
+  SELECT test_name,test_group FROM aux.dolt_tests;
+} {attached_pattern 0 updated attached_test updated}
+do_test attached-vc-real-tables-main {
+  expr {$mainBefore eq [attached_vc_main_state]}
+} {1}
+do_execsql_test attached-vc-main-writes {
+  INSERT INTO main.dolt_ignore VALUES('main_pattern',1);
+  INSERT INTO main.dolt_docs VALUES('main_doc','main text');
+  INSERT INTO main.dolt_tests VALUES('main_test',NULL,'SELECT 1','expected_rows','==','1');
+  INSERT INTO main.t VALUES(1,'main');
+  UPDATE main.dolt_workspace_t SET staged=1;
+  SELECT count(*) FROM dolt_ignore;
+  SELECT doc_text FROM dolt_docs WHERE doc_name='main_doc';
+  SELECT count(*) FROM dolt_tests;
+  SELECT staged FROM dolt_status WHERE table_name='t';
+} {1 {main text} 1 1}
+execsql {ATTACH ':memory:' AS other}
+set id 100
+foreach {mode begin finish} {
+  transaction BEGIN COMMIT
+  savepoint {SAVEPOINT outer} {RELEASE outer}
+} {
+  execsql $begin
+  execsql "INSERT INTO main.t VALUES($id,'pending')"
+  set before [attached_vc_main_state]
+  do_catchsql_test attached-vc-$mode-refuse {
+    INSERT INTO "OTHER"."dolt_docs" VALUES('attached','wrong database');
+  } {1 {dolt_docs is only available in the main database}}
+  do_test attached-vc-$mode-preserved {
+    expr {$before eq [attached_vc_main_state]}
+  } {1}
+  execsql $finish
+  incr id
+}
+do_execsql_test attached-vc-transactions-kept {SELECT count(*) FROM main.t WHERE id>=100} {2}
+do_execsql_test attached-vc-integrity {PRAGMA main.integrity_check; PRAGMA aux.integrity_check} {ok ok}
+db close
+forcedelete attached-vc.db
+finish_test
