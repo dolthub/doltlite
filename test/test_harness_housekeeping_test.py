@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (test / 'lib').mkdir(parents=True)
     build.mkdir()
     for name in ('run_doltlite_tests.sh', 'run_guarded_suite.sh',
-                 'lib/dltest_engine_guard.pl'):
+                 'lib/dltest_engine_guard.pl', 'lib/doltlite_integrity_common.sh'):
         shutil.copy(repo / 'test' / name, test / name)
     engine = build / 'doltlite'
     engine.touch()

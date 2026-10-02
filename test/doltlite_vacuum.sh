@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "$0")/lib/doltlite_integrity_common.sh"
 DOLTLITE=${DOLTLITE:-./doltlite}
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); echo "  PASS: $n"; else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; echo "  FAIL: $n"; echo "    expected: $e"; echo "    got:      $r"; fi; }
@@ -198,6 +199,7 @@ echo "--- VACUUM replays catalog SQL like stock ---"
 # Malformed CREATE text left by writable_schema must fail VACUUM with the
 # parser's error, not survive the GC copy.
 DB=/tmp/test_vac_writable_schema_$$.db; db_rm "$DB"
+dltest_expect_integrity "$DB" 'skip:deliberately malformed writable_schema SQL'
 OUT=$(echo "CREATE TABLE t7(x);
 INSERT INTO t7 VALUES(1);
 .dbconfig defensive off

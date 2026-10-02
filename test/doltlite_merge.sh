@@ -1184,6 +1184,7 @@ run_test "force_commit_fk_cvs_survive_checkout_roundtrip" \
 c|1" "$DB67"
 
 DB68=/tmp/test_merge68_$$.db; rm -f "$DB68"
+dltest_expect_integrity "$DB68" '^non-unique entry in index sqlite_autoindex_t_1$'
 $DOLTLITE "$DB68" > /dev/null 2>&1 <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
 INSERT INTO t VALUES(1,'a');

@@ -24,6 +24,7 @@ PRAGMA writable_schema=ON; PRAGMA writable_schema=OFF; PRAGMA writable_schema;" 
 rm -f "$DB"
 
 DB=/tmp/test_dl_writable_schema_null_row_$$.db; rm -f "$DB"
+dltest_expect_integrity "$DB" 'skip:deliberately malformed all-NULL schema row'
 cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null
 CREATE TABLE t(a);
 .dbconfig defensive off
@@ -36,6 +37,7 @@ run_test_match "all_null_schema_row_malformed_on_reopen" \
 rm -f "$DB"
 
 DB=/tmp/test_dl_writable_schema_root_$$.db; rm -f "$DB"
+dltest_expect_integrity "$DB" 'skip:deliberately swapped table and index rootpages'
 cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null
 CREATE TABLE t1(oid INTEGER PRIMARY KEY, a INT);
 CREATE INDEX t1i1 ON t1(a);
@@ -61,6 +63,7 @@ run_test_match "rootpage_swap_fails_loudly" \
 rm -f "$DB"
 
 DB=/tmp/test_dl_writable_schema_xfer_$$.db; rm -f "$DB"
+dltest_expect_integrity "$DB" '^row [0-9]+ missing from index t2a$'
 cat <<'SQL' | "$DOLTLITE" "$DB" >/dev/null
 CREATE TABLE t1(a, b, c, d INTEGER PRIMARY KEY);
 CREATE TABLE t2(a, b, c, d INTEGER PRIMARY KEY);

@@ -139,6 +139,7 @@ run_test "source_falls_back_to_hash" \
 # Violations-only merge still reports as unfinished.
 mk_cv_only_merge() {
   local db="$1"
+  dltest_expect_integrity "$db" '^non-unique entry in index sqlite_autoindex_t_1$'
   rm -f "$db"
   echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT UNIQUE); INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$db" > /dev/null 2>&1
   echo "INSERT INTO t VALUES(2,99); SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$db/src" > /dev/null 2>&1
