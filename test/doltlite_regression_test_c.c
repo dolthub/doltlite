@@ -6588,6 +6588,110 @@ static void run_prepared_stmt_reuse_after_commit(void){
   removeDbFiles(dbpath);
 }
 
+static void run_active_readers_after_schema_commit(void){
+  static const struct {
+    const char *zSql;
+    int bRollback;
+    int bTemp;
+  } aDdl[] = {
+    { "CREATE TABLE %s.a0(x)", 0, 0 },
+    { "ALTER TABLE %s.zz RENAME TO a0", 0, 0 },
+    { "ALTER TABLE %s.t RENAME TO zzz", 0, 0 },
+    { "CREATE TABLE %s.a0 AS SELECT k FROM t", 0, 0 },
+    { "BEGIN; CREATE TABLE %s.a0(x); COMMIT", 0, 0 },
+    { "CREATE TABLE %s.a0(x); CREATE TABLE %s.a1(x)", 0, 0 },
+    { "ALTER TABLE %s.t RENAME TO a0", 0, 0 },
+    { "BEGIN; CREATE TABLE %s.a0(x); ROLLBACK", 1, 0 },
+    { "CREATE TABLE %s.zzz(x)", 0, 0 },
+    { "CREATE INDEX %s.tc ON t(b)", 0, 0 },
+    { "CREATE VIEW %s.a0 AS SELECT * FROM t", 0, 0 },
+    { "CREATE TEMP TABLE a0(x)", 0, 1 },
+  };
+  static const struct {
+    const char *zSql;
+    int bDesc;
+    int nTempRow;
+  } aQuery[] = {
+    { "SELECT k,a FROM %s.t NOT INDEXED ORDER BY k", 0, 4 },
+    { "SELECT k,a FROM %s.t INDEXED BY ta ORDER BY a", 0, 4 },
+    { "SELECT k,b FROM %s.t INDEXED BY ta ORDER BY a", 0, 4 },
+    { "SELECT k,a FROM %s.t NOT INDEXED ORDER BY k DESC", 1, 4 },
+    { "SELECT k,b FROM %s.t INDEXED BY ta ORDER BY a DESC", 1, 4 },
+    { "SELECT k,a FROM %s.t WHERE k<=2 UNION ALL "
+      "SELECT k,a FROM %s.t WHERE k>2", 0, 2 },
+    { "SELECT k,(SELECT a FROM %s.zz WHERE zz.k=t.k) FROM %s.t ORDER BY k", 0, 1 },
+    { "SELECT k,a FROM %s.t WHERE a=5 OR b=6 OR a=7 OR b=8", 0, 1 },
+  };
+  int iDb, iDdl, iQuery, iRow;
+  printf("=== Active Readers After Schema Commit Test ===\n\n");
+  for(iDb=0; iDb<2; iDb++){
+    const char *zDb = iDb ? "aux" : "main";
+    for(iDdl=0; iDdl<(int)(sizeof(aDdl)/sizeof(aDdl[0])); iDdl++){
+      sqlite3 *db = 0;
+      sqlite3_stmt *aStmt[sizeof(aQuery)/sizeof(aQuery[0])] = {0};
+      char dbpath[256], auxpath[256], zName[128];
+      char *zSql;
+      int rc;
+      make_dbpath(dbpath, sizeof(dbpath), "test_active_readers_schema");
+      make_dbpath(auxpath, sizeof(auxpath), "test_active_readers_schema_aux");
+      removeDbFiles(dbpath);
+      removeDbFiles(auxpath);
+      check("active_schema_open", open_db(dbpath, &db)==SQLITE_OK);
+      if( iDb ){
+        zSql = sqlite3_mprintf("ATTACH %Q AS aux", auxpath);
+        check("active_schema_attach", execSql(db, zSql)==SQLITE_OK);
+        sqlite3_free(zSql);
+      }
+      zSql = sqlite3_mprintf(
+        "CREATE TABLE %s.t(k INTEGER PRIMARY KEY,a,b);"
+        "CREATE INDEX %s.ta ON t(a);"
+        "CREATE INDEX %s.tb ON t(b);"
+        "INSERT INTO %s.t VALUES(1,5,5),(2,6,6),(3,7,7),(4,8,8);"
+        "CREATE TABLE %s.zz(k INTEGER PRIMARY KEY,a,b);"
+        "INSERT INTO %s.zz SELECT * FROM %s.t;",
+        zDb, zDb, zDb, zDb, zDb, zDb, zDb);
+      check("active_schema_setup", execSql(db, zSql)==SQLITE_OK);
+      sqlite3_free(zSql);
+      for(iQuery=0; iQuery<(int)(sizeof(aQuery)/sizeof(aQuery[0])); iQuery++){
+        zSql = sqlite3_mprintf(aQuery[iQuery].zSql, zDb, zDb);
+        rc = sqlite3_prepare_v2(db, zSql, -1, &aStmt[iQuery], 0);
+        sqlite3_free(zSql);
+        check("active_schema_prepare", rc==SQLITE_OK);
+        check("active_schema_first_step", sqlite3_step(aStmt[iQuery])==SQLITE_ROW);
+        check("active_schema_first_key",
+          sqlite3_column_int(aStmt[iQuery], 0)==(aQuery[iQuery].bDesc ? 4 : 1));
+      }
+      zSql = sqlite3_mprintf(aDdl[iDdl].zSql, zDb, zDb);
+      check("active_schema_ddl", execSql(db, zSql)==SQLITE_OK);
+      sqlite3_free(zSql);
+      for(iQuery=0; iQuery<(int)(sizeof(aQuery)/sizeof(aQuery[0])); iQuery++){
+        int nRow = aDdl[iDdl].bRollback ? 1
+          : aDdl[iDdl].bTemp ? aQuery[iQuery].nTempRow : 4;
+        for(iRow=1; iRow<nRow; iRow++){
+          int k = aQuery[iQuery].bDesc ? 4-iRow : iRow+1;
+          rc = sqlite3_step(aStmt[iQuery]);
+          snprintf(zName, sizeof(zName), "active_schema_%d_%d_%d_row_%d",
+                   iDb, iDdl, iQuery, iRow);
+          check(zName, rc==SQLITE_ROW
+            && sqlite3_column_int(aStmt[iQuery], 0)==k
+            && sqlite3_column_int(aStmt[iQuery], 1)==k+4);
+          if( rc!=SQLITE_ROW ) break;
+        }
+        rc = sqlite3_step(aStmt[iQuery]);
+        check("active_schema_done", nRow==4 ? rc==SQLITE_DONE : rc==SQLITE_ABORT);
+        check("active_schema_finalize", sqlite3_finalize(aStmt[iQuery])
+          ==(nRow==4 ? SQLITE_OK : SQLITE_ABORT));
+      }
+      zSql = sqlite3_mprintf("PRAGMA %s.integrity_check", zDb);
+      check("active_schema_integrity", strcmp(queryScalarText(db, zSql), "ok")==0);
+      sqlite3_free(zSql);
+      check("active_schema_close", sqlite3_close(db)==SQLITE_OK);
+      removeDbFiles(dbpath);
+      removeDbFiles(auxpath);
+    }
+  }
+}
+
 static void run_prepared_stmt_reuse_after_schema_checkout(void){
   sqlite3 *db = 0;
   sqlite3_stmt *stmt = 0;
@@ -15278,6 +15382,7 @@ static const RegressionCase aCases[] = {
   { "integrity_check_repo_state", "Integrity Check Repository State Test", run_integrity_check_repo_state },
   { "integrity_check_session_merge_state", "Integrity Check Session Merge State Test", run_integrity_check_session_merge_state },
   { "prepared_stmt_reuse_after_commit", "Prepared Statement Reuse After Commit Test", run_prepared_stmt_reuse_after_commit },
+  { "active_readers_after_schema_commit", "Active Readers After Schema Commit", run_active_readers_after_schema_commit },
   { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
   { "persist_does_not_resurrect_deleted_branch", "Persist Does Not Resurrect Deleted Branch Test", run_persist_does_not_resurrect_deleted_branch },
   { "peer_commit_keeps_local_row_durable", "Peer Commit Keeps Local Row Durable Test", run_peer_commit_keeps_local_row_durable },

@@ -1687,6 +1687,10 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         }
       }
     }
+    if( aTables==pBtree->cat.a && pBtree->pBt->inCatalogSerialize
+     && pBtree->bSchemaChangedTxn ){
+      for(i=0; i<nTables; i++) aTables[i].iCommitTable = aSorted[i].iTable;
+    }
     sqlite3_free(aRowRef);
     qsort(aSorted, nTables, sizeof(CatalogSerializeEntry), catalogSerializeEntryCmp);
   }else{

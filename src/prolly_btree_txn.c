@@ -957,16 +957,62 @@ static int commitPhaseTwoPrepSchemaReload(
   return SQLITE_OK;
 }
 
+static void commitPhaseTwoRemapReaders(Btree *p, Btree *pReload){
+  BtCursor *pC;
+  Vdbe *pV;
+  int i;
+
+  for(pV=p->db ? p->db->pVdbe : 0; pV; pV=pV->pVNext){
+    if( pV->eVdbeState!=VDBE_RUN_STATE || pV->pc<0 ) continue;
+    if( pV->readOnly ){
+      for(i=0; i<pV->nOp; i++){
+        Op *pOp = &pV->aOp[i];
+        TableEntry *pTE;
+        if( pOp->opcode!=OP_OpenRead && pOp->opcode!=OP_ReopenIdx ) continue;
+        if( pV->db->aDb[pOp->p3].pBt!=p ) continue;
+        pTE = findTable(p, (Pgno)pOp->p2);
+        if( pTE && findTable(pReload, pTE->iCommitTable) ){
+          pOp->p2 = (int)pTE->iCommitTable;
+        }else{
+          pV->expired = 1;
+        }
+      }
+    }
+    for(i=0; i<pV->nCursor; i++){
+      VdbeCursor *pVC = pV->apCsr[i];
+      TableEntry *pTE;
+      if( !pVC || pVC->eCurType!=CURTYPE_BTREE || pVC->isEphemeral
+       || pVC->uc.pCursor->pBtree!=p ) continue;
+      pTE = findTable(p, pVC->pgnoRoot);
+      if( pTE ) pVC->pgnoRoot = pTE->iCommitTable;
+      pVC->cacheStatus = CACHE_STALE;
+      pVC->aRow = 0;
+      pVC->idxRowidCacheValid = 0;
+    }
+  }
+  for(pC=p->pBt->pCursor; pC; pC=pC->pNext){
+    TableEntry *pTE;
+    if( pC->pBtree!=p || pC->eState==CURSOR_FAULT ) continue;
+    pTE = findTable(p, pC->pgnoRoot);
+    if( pTE && findTable(pReload, pTE->iCommitTable) ){
+      pC->pgnoRoot = pTE->iCommitTable;
+    }else{
+      pC->eState = CURSOR_FAULT;
+      pC->skipNext = SQLITE_ABORT;
+      prollyCursorReleaseAll(&pC->pCur);
+    }
+  }
+}
+
 static void commitPhaseTwoAdoptReloadedCatalog(
   Btree *p,
-  BtShared *pBt,
   Btree *pReload,
   int *pbHaveReload,
   u32 nativeSchemaCookie
 ){
-  BtCursor *pC;
-
+  if( p->db ) sqlite3ExpirePreparedStatements(p->db, 1);
   if( *pbHaveReload ){
+    commitPhaseTwoRemapReaders(p, pReload);
     btreeFreeCatalogTables(p);
     p->cat = pReload->cat;
     memcpy(p->aMeta, pReload->aMeta, sizeof(p->aMeta));
@@ -975,20 +1021,8 @@ static void commitPhaseTwoAdoptReloadedCatalog(
     memset(&pReload->cat, 0, sizeof(pReload->cat));
     *pbHaveReload = 0;
   }
-  /* Fault saved cursors whose table vanished in the reload. */
-  for(pC = pBt->pCursor; pC; pC = pC->pNext){
-    if( pC->pBtree==p && pC->eState==CURSOR_REQUIRESEEK
-     && findTable(p, pC->pgnoRoot)==0 ){
-      pC->eState = CURSOR_FAULT;
-      pC->skipNext = SQLITE_ABORT;
-    }
-  }
   invalidateSchema(p);
-  if( p->db ){
-    /* Hard expiry: canonical numbering can move compiled rootpages. */
-    sqlite3ExpirePreparedStatements(p->db, 1);
-    sqlite3ResetAllSchemasOfConnection(p->db);
-  }
+  if( p->db ) sqlite3ResetAllSchemasOfConnection(p->db);
 }
 
 static void commitPhaseTwoEndWriteTxn(Btree *p){
@@ -1115,7 +1149,7 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   btreeMarkWorkingStateChanged(p, 1);
   if( bReloadSchema ){
     commitPhaseTwoAdoptReloadedCatalog(
-        p, pBt, &reloadBtree, &bHaveReloadCatalog, nativeSchemaCookie);
+        p, &reloadBtree, &bHaveReloadCatalog, nativeSchemaCookie);
   }
   commitPhaseTwoEndWriteTxn(p);
 

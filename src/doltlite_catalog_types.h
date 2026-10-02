@@ -10,6 +10,7 @@ typedef struct SchemaEntry SchemaEntry;
 
 struct TableEntry {
   Pgno iTable;
+  Pgno iCommitTable;
   ProllyHash root;
   ProllyHash schemaHash;
   u8 flags;
