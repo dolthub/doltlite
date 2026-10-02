@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Run generated SQL through doltlite and stock SQLite.
 
+A script may contain a `-- @@REOPEN@@` line. The sweep runs everything above
+that line, closes the process (the database stays on disk), then runs the
+rest in a new process. On a mismatch it delta-debugs the statement list
+before saving the script.
+
 Usage: sql_differential_sweep.py DOLTLITE SQLITE FIRST LAST [--include-<group>]... [--all]
+       [--rotate] [--bulk N] [--bulk-every K]
 """
 
 import difflib
@@ -81,7 +87,141 @@ def show_diff(out_dl, out_sq):
         sys.stdout.write("    %s\n" % line)
 
 
-def sweep(doltlite, sqlite3, first, last, groups, rotate=0):
+def split_phases(sql):
+    """SQL before the reopen mark, and the reads that run after a fresh open."""
+    exec_lines = []
+    reopen_lines = []
+    mode = "exec"
+    for line in sql.split("\n"):
+        if line == fuzz.REOPEN_MARK:
+            mode = "reopen"
+            continue
+        if mode == "exec":
+            exec_lines.append(line)
+        else:
+            reopen_lines.append(line)
+
+    def join(lines):
+        while lines and lines[-1] == "":
+            lines = lines[:-1]
+        if not lines:
+            return ""
+        return "\n".join(lines) + "\n"
+
+    return join(exec_lines), join(reopen_lines)
+
+
+def pack_phases(phases):
+    """One comparable blob. A signal or abort rc replaces a later clean rc."""
+    chunks = []
+    crash = None
+    for rc, out in phases:
+        if crash is None and not is_clean_status(rc):
+            crash = rc
+        chunks.append(("RC %d\n" % rc).encode() + out)
+    rc_out = crash if crash is not None else (phases[-1][0] if phases else 0)
+    return rc_out, b"\n".join(chunks)
+
+
+def run_phases(binary, db, exec_sql, reopen_sql):
+    phases = [run_engine(binary, db, exec_sql)]
+    if reopen_sql and is_clean_status(phases[0][0]):
+        phases.append(run_engine(binary, db, reopen_sql))
+    return pack_phases(phases)
+
+
+def agree(doltlite, sqlite3, dl_db, sq_db, sql):
+    exec_sql, reopen_sql = split_phases(sql)
+    unlink_db(dl_db)
+    unlink_db(sq_db)
+    rc_dl, out_dl = run_phases(doltlite, dl_db, exec_sql, reopen_sql)
+    rc_sq, out_sq = run_phases(sqlite3, sq_db, exec_sql, reopen_sql)
+    ok = rc_dl == rc_sq and is_clean_status(rc_dl) and out_dl == out_sq
+    return ok, rc_dl, rc_sq, out_dl, out_sq
+
+
+def ddmin(parts, test, limit=48):
+    """Smallest subset of parts that still fails.
+
+    test(candidate) is true when that subset still mismatches. An empty
+    script that already mismatches is not a statement we can drop, so the
+    original list is returned. Past the probe limit, untested subsets are
+    rejected and the last known failure is kept.
+    """
+    probes = [0]
+
+    def check(candidate):
+        if probes[0] >= limit:
+            return False
+        probes[0] += 1
+        return test(candidate)
+
+    if not parts:
+        return []
+    if check([]):
+        return list(parts)
+    current = list(parts)
+    n = 2
+    while len(current) >= 2:
+        if probes[0] >= limit:
+            break
+        chunk = (len(current) + n - 1) // n
+        pieces = [current[i:i + chunk] for i in range(0, len(current), chunk)]
+        reduced = None
+        for i in range(len(pieces)):
+            trial = [line for j, piece in enumerate(pieces) if j != i
+                     for line in piece]
+            if check(trial):
+                reduced = trial
+                break
+        if reduced is None:
+            for piece in pieces:
+                if check(piece):
+                    reduced = list(piece)
+                    break
+        if reduced is None:
+            if n >= len(current):
+                break
+            n = min(len(current), n * 2)
+            continue
+        current = reduced
+        n = max(2, n - 1)
+    return current
+
+
+def shrink_sql(doltlite, sqlite3, dl_db, sq_db, sql):
+    lines = sql.split("\n")
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    def test(candidate):
+        body = "\n".join(candidate)
+        if body:
+            body += "\n"
+        ok, _, _, _, _ = agree(doltlite, sqlite3, dl_db, sq_db, body)
+        return not ok
+
+    shrunk = ddmin(lines, test)
+    body = "\n".join(shrunk)
+    if body and not body.endswith("\n"):
+        body += "\n"
+    return body
+
+
+def reproduce_flags(groups, rotate, bulk, every):
+    if set(groups) == set(fuzz.GROUPS):
+        flags = ["--all"]
+    else:
+        flags = ["--include-%s" % g for g in groups]
+        if rotate:
+            flags.append("--rotate" if rotate == 1 else "--rotate=%d" % rotate)
+    if bulk > 0:
+        flags.append("--bulk=%d" % bulk)
+        flags.append("--bulk-every=%d" % every)
+    return flags
+
+
+def sweep(doltlite, sqlite3, first, last, groups, rotate=0, bulk=0, every=1):
     total = last - first + 1
     work = tempfile.mkdtemp()
     dl_db = os.path.join(work, "dl.db")
@@ -94,7 +234,8 @@ def sweep(doltlite, sqlite3, first, last, groups, rotate=0):
     try:
         for i, seed in enumerate(range(first, last + 1), 1):
             try:
-                sql = fuzz.Gen(seed, groups, rotate).run()
+                sql = fuzz.Gen(seed, groups, rotate,
+                               fuzz.bulk_for(seed, bulk, every)).run()
             except Exception as exc:
                 sys.stdout.write("  ERROR: generator failed for seed %d\n" % seed)
                 sys.stdout.write("    %s\n" % exc)
@@ -103,12 +244,10 @@ def sweep(doltlite, sqlite3, first, last, groups, rotate=0):
                 maybe_progress(i, total, seed, t0)
                 continue
 
-            unlink_db(dl_db)
-            unlink_db(sq_db)
-            rc_dl, out_dl = run_engine(doltlite, dl_db, sql)
-            rc_sq, out_sq = run_engine(sqlite3, sq_db, sql)
+            ok, rc_dl, rc_sq, out_dl, out_sq = agree(
+                doltlite, sqlite3, dl_db, sq_db, sql)
 
-            if rc_dl == rc_sq and is_clean_status(rc_dl) and out_dl == out_sq:
+            if ok:
                 pass_n += 1
                 if b"Error" in out_dl or b"error" in out_dl:
                     errored += 1
@@ -117,11 +256,19 @@ def sweep(doltlite, sqlite3, first, last, groups, rotate=0):
 
             fail_n += 1
             failed_seeds.append(seed)
-            save_failing(sql, seed)
+            n_before = len([ln for ln in sql.splitlines() if ln.strip()])
+            reduced = shrink_sql(doltlite, sqlite3, dl_db, sq_db, sql)
+            n_after = len([ln for ln in reduced.splitlines() if ln.strip()])
+            save_failing(reduced, seed)
+            _, rc_dl, rc_sq, out_dl, out_sq = agree(
+                doltlite, sqlite3, dl_db, sq_db, reduced)
             if fail_n <= 5:
                 sys.stdout.write(
                     "  FAIL: seed %d (doltlite rc=%d, stock rc=%d)\n" % (
                         seed, rc_dl, rc_sq))
+                if n_after < n_before:
+                    sys.stdout.write(
+                        "  reduced %d statements to %d\n" % (n_before, n_after))
                 show_diff(out_dl, out_sq)
             elif fail_n == 6:
                 sys.stdout.write(
@@ -139,14 +286,7 @@ def sweep(doltlite, sqlite3, first, last, groups, rotate=0):
             "          (%d of the passing seeds had a statement both engines\n"
             "           rejected, and they agreed on the rejection)\n" % errored)
     if fail_n:
-        flags = []
-        if set(groups) == set(fuzz.GROUPS):
-            flags = ["--all"]
-        else:
-            flags = ["--include-%s" % g for g in groups]
-            if rotate:
-                flags.append("--rotate" if rotate == 1
-                             else "--rotate=%d" % rotate)
+        flags = reproduce_flags(groups, rotate, bulk, every)
         sys.stdout.write("Failing seeds:%s\n" % "".join(" %d" % s for s in failed_seeds))
         sys.stdout.write("Reproduce with: python3 test/sql_differential_fuzzer.py <seed>%s\n" %
                          ("".join(" %s" % f for f in flags)))
@@ -159,7 +299,8 @@ def sweep(doltlite, sqlite3, first, last, groups, rotate=0):
 def main():
     if len(sys.argv) < 5:
         sys.stderr.write(
-            "usage: %s DOLTLITE SQLITE FIRST LAST [--include-<group>]... [--all] [--rotate]\n"
+            "usage: %s DOLTLITE SQLITE FIRST LAST [--include-<group>]... [--all]\n"
+            "       [--rotate] [--bulk N] [--bulk-every K]\n"
             "groups: %s\n" % (sys.argv[0], " ".join(fuzz.GROUPS)))
         return 2
     doltlite, sqlite3 = sys.argv[1], sys.argv[2]
@@ -172,7 +313,7 @@ def main():
     if last < first:
         sys.stderr.write("last seed is before first seed\n")
         return 2
-    groups, unknown, rotate = fuzz.parse_groups(sys.argv[5:])
+    groups, unknown, rotate, bulk, every = fuzz.parse_workload(sys.argv[5:])
     if unknown:
         sys.stderr.write("unknown flag(s): %s\n" % " ".join(unknown))
         return 2
@@ -180,7 +321,7 @@ def main():
         if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
             sys.stderr.write("ERROR: not executable: %s\n" % binary)
             return 1
-    return sweep(doltlite, sqlite3, first, last, groups, rotate)
+    return sweep(doltlite, sqlite3, first, last, groups, rotate, bulk, every)
 
 
 if __name__ == "__main__":
