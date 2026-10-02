@@ -1,0 +1,121 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_failed_ddl_reader
+
+proc failed_ddl_reader_rows {stmt} {
+  set rows {}
+  while {[set rc [sqlite3_step $stmt]] eq "SQLITE_ROW"} {
+    lappend rows [list [sqlite3_column_int $stmt 0] [sqlite3_column_int $stmt 1]]
+  }
+  return [list $rows $rc [sqlite3_finalize $stmt]]
+}
+
+db close
+foreach engine {sqlite prolly} {
+  foreach schema {main aux} {
+    foreach txn {autocommit explicit} {
+      foreach {operation sql} {
+        drop-index {DROP INDEX %s.ta}
+        drop-table {DROP TABLE %s.t}
+        drop-other {DROP TABLE %s.u}
+        unique-index {CREATE UNIQUE INDEX %s.unique_b ON t(b)}
+        create-existing {CREATE TABLE %s.t(k)}
+        insert-duplicate {INSERT INTO %s.t VALUES(1,1,1)}
+        repeated-drop {DROP INDEX %s.ta}
+      } {
+        forcedelete failed-ddl-reader.db failed-ddl-reader-aux.db
+        sqlite3 db "file:failed-ddl-reader.db?doltlite_engine=$engine" -uri 1
+        if {$schema eq "aux"} {
+          execsql "ATTACH 'file:failed-ddl-reader-aux.db?doltlite_engine=$engine' AS aux"
+        }
+        execsql [string map [list @db $schema] {
+          CREATE TABLE @db.t(k INTEGER PRIMARY KEY, a, b);
+          CREATE INDEX @db.ta ON t(a);
+          CREATE INDEX @db.tb ON t(b);
+          INSERT INTO @db.t VALUES(1,1,5),(2,2,5),(3,3,6),(4,4,6);
+          CREATE TABLE @db.u(k INTEGER PRIMARY KEY, a);
+          INSERT INTO @db.u SELECT k,a FROM @db.t;
+        }]
+        if {$txn eq "explicit"} {execsql BEGIN}
+        set stmts {}
+        set first {}
+        foreach query {
+          {SELECT k,a FROM @db.t NOT INDEXED ORDER BY k}
+          {SELECT k,a FROM @db.t INDEXED BY ta ORDER BY a}
+          {SELECT k,b FROM @db.t INDEXED BY ta ORDER BY a}
+          {SELECT k,a FROM @db.t NOT INDEXED ORDER BY k DESC}
+          {SELECT k,b FROM @db.t INDEXED BY ta ORDER BY a DESC}
+          {SELECT k,a FROM @db.t WHERE k<=2 UNION ALL SELECT k,a FROM @db.t WHERE k>2}
+          {SELECT k,(SELECT a FROM @db.u WHERE u.k=t.k) FROM @db.t ORDER BY k}
+          {SELECT k,a FROM @db.t WHERE a=1 OR b=5 OR a=3 OR b=6}
+        } {
+          set stmt [sqlite3_prepare_v2 db [string map [list @db $schema] $query] -1 tail]
+          lappend stmts $stmt
+          lappend first [list [sqlite3_step $stmt] [sqlite3_column_int $stmt 0]]
+        }
+        set name $schema-$txn-$operation
+        do_test $engine-$name-first {set first} {{SQLITE_ROW 1} {SQLITE_ROW 1} {SQLITE_ROW 1} {SQLITE_ROW 4} {SQLITE_ROW 4} {SQLITE_ROW 1} {SQLITE_ROW 1} {SQLITE_ROW 1}}
+        set ddl [format $sql $schema]
+        set error [catchsql $ddl]
+        if {$engine eq "sqlite"} {set expected($name-error) $error}
+        do_test $engine-$name-error {set error} $expected($name-error)
+        if {$operation eq "repeated-drop"} {
+          do_test $engine-$name-repeat {catchsql $ddl} $expected($name-error)
+        }
+        set state [sqlite3_txn_state db $schema]
+        if {$engine eq "sqlite"} {set expected($name-state) $state}
+        do_test $engine-$name-state {set state} $expected($name-state)
+        set i 0
+        foreach stmt $stmts {
+          set result [failed_ddl_reader_rows $stmt]
+          if {$engine eq "sqlite"} {set expected($name-$i) $result}
+          do_test $engine-$name-$i {set result} $expected($name-$i)
+          incr i
+        }
+        if {$txn eq "explicit"} {execsql COMMIT}
+        do_execsql_test $engine-$name-intact [format {
+          SELECT k,a,b FROM %s.t ORDER BY k;
+        } $schema] {1 1 5 2 2 5 3 3 6 4 4 6}
+        do_execsql_test $engine-$name-integrity "PRAGMA $schema.integrity_check" {ok}
+        db close
+      }
+    }
+  }
+}
+foreach engine {prolly} {
+  forcedelete failed-ddl-reader.db
+  sqlite3 db "file:failed-ddl-reader.db?doltlite_engine=$engine" -uri 1
+  execsql {
+    CREATE TABLE t(k INTEGER PRIMARY KEY, a);
+    CREATE INDEX ta ON t(a);
+    INSERT INTO t VALUES(1,1),(2,2),(3,3),(4,4);
+    PRAGMA journal_mode=WAL;
+  }
+  set stmt [sqlite3_prepare_v2 db {SELECT k,a FROM t ORDER BY k} -1 tail]
+  sqlite3_step $stmt
+  do_catchsql_test $engine-peer-snapshot-locked {
+    DROP INDEX ta;
+  } {1 {database table is locked}}
+  execsql BEGIN
+  do_test $engine-peer-snapshot-state {sqlite3_txn_state db main} {1}
+  sqlite3 peer "file:failed-ddl-reader.db?doltlite_engine=$engine" -uri 1
+  do_execsql_test -db peer $engine-peer-snapshot-peer-write {
+    UPDATE t SET a=a+100;
+  } {}
+  do_test $engine-peer-snapshot-upgrade {
+    catchsql {INSERT INTO t VALUES(5,5)}
+    sqlite3_extended_errcode db
+  } {SQLITE_BUSY_SNAPSHOT}
+  do_test $engine-peer-snapshot-reader {
+    failed_ddl_reader_rows $stmt
+  } {{{2 2} {3 3} {4 4}} SQLITE_DONE SQLITE_OK}
+  execsql ROLLBACK
+  do_execsql_test $engine-peer-snapshot-fresh {
+    SELECT k,a FROM t ORDER BY k;
+  } {1 101 2 102 3 103 4 104}
+  peer close
+  db close
+}
+sqlite3 db test.db
+finish_test

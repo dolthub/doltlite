@@ -1277,9 +1277,25 @@ static void rollbackAbandonWriteTxn(Btree *p, BtShared *pBt){
   pBt->store.snapshotPinned = 0;
 }
 
+static void rollbackResetSchema(Btree *p, int bImmediate){
+  invalidateSchema(p);
+  if( p->db ){
+    Vdbe *pV;
+    for(pV=p->db->pVdbe; pV; pV=pV->pVNext){
+      if( bImmediate || pV->expired==1 ){
+        pV->expired = 1;
+      }else{
+        pV->expired = 2;
+      }
+    }
+    sqlite3ResetAllSchemasOfConnection(p->db);
+  }
+}
+
 int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
+  int cursorRc = SQLITE_OK;
   int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
   int bAutocommitOomRollback = writeOnly
       && p->db
@@ -1290,19 +1306,27 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
 
   if( p->inTrans==TRANS_WRITE ){
     PROLLY_ASSERT_GRAPH_LOCKED(pBt);
-    /* Save read cursors; fault writers. Null map aliases after save (UAF). */
     {
       BtCursor *pC;
-      int tc = tripCode ? tripCode : SQLITE_ABORT;
+      if( tripCode==SQLITE_OK || writeOnly ){
+        for(pC=pBt->pCursor; pC; pC=pC->pNext){
+          if( pC->pBtree!=p ) continue;
+          if( tripCode && (pC->curFlags & BTCF_WriteFlag)!=0 ) continue;
+          if( pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT ){
+            cursorRc = saveCursorPosition(pC);
+            if( cursorRc!=SQLITE_OK ){
+              tripCode = cursorRc;
+              writeOnly = 0;
+              break;
+            }
+          }
+        }
+      }
       for(pC = pBt->pCursor; pC; pC = pC->pNext){
         if( pC->pBtree!=p ) continue;
-        if( writeOnly
-         && (pC->curFlags & BTCF_WriteFlag)==0
-         && (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
-         && saveCursorPosition(pC)==SQLITE_OK ){
-        }else{
+        if( tripCode && (!writeOnly || (pC->curFlags & BTCF_WriteFlag)!=0) ){
           pC->eState = CURSOR_FAULT;
-          pC->skipNext = tc;
+          pC->skipNext = tripCode;
           pC->mmActive = 0;
           prollyCursorReleaseAll(&pC->pCur);
         }
@@ -1318,6 +1342,15 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     rc = restoreFromCommitted(p);
     if( rc!=SQLITE_OK ){
+      BtCursor *pC;
+      for(pC=pBt->pCursor; pC; pC=pC->pNext){
+        if( pC->pBtree!=p ) continue;
+        if( pC->eState!=CURSOR_FAULT ){
+          pC->eState = CURSOR_FAULT;
+          pC->skipNext = rc;
+        }
+        prollyCursorReleaseAll(&pC->pCur);
+      }
       btreeFreeCatalogTables(p);
       memset(&p->committedCatalogHash, 0, sizeof(p->committedCatalogHash));
       p->bCatalogDropped = 1;
@@ -1332,7 +1365,8 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       return rc;
     }
     if( bSchemaChangedRollback ){
-      resetConnectionSchema(p);
+      rollbackResetSchema(p, p->db && p->db->init.busy==0
+        && (p->db->mDbFlags & DBFLAG_SchemaChange)!=0);
     }
     chunkStoreRollback(&pBt->store);
     if( bAutocommitOomRollback ){
@@ -1412,14 +1446,12 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
   }
 
-  p->inTrans = TRANS_NONE;
-  p->inTransaction = TRANS_NONE;
-  btreeDiscardAllSavepoints(p);
+  commitPhaseTwoEndWriteTxn(p);
 
   chunkStoreUnlock(&pBt->store);
-  pBt->store.snapshotPinned = 0;
+  pBt->store.snapshotPinned = p->inTrans==TRANS_READ;
 
-  return rc;
+  return rc==SQLITE_OK ? cursorRc : rc;
 }
 int sqlite3BtreeRollback(Btree *p, int tripCode, int writeOnly){
   if( !p ) return SQLITE_OK;
@@ -1541,6 +1573,7 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   int j;
   int rc;
   int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
+  int bStatement = pState->bStatement;
   if( p->db && p->db->mallocFailed ){
     for(pC=pBt->pCursor; pC; pC=pC->pNext){
       if( pC->pBtree!=p ) continue;
@@ -1583,7 +1616,7 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
     pC->mmPhysIdx = -1;
   }
   if( bSchemaChangedRollback ){
-    resetConnectionSchema(p);
+    rollbackResetSchema(p, !bStatement);
   }else{
     invalidateSchema(p);
   }
