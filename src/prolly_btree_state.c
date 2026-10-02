@@ -2,6 +2,99 @@
 
 #include "prolly_btree_int.h"
 
+int btreeParseWorkingSetBlob(
+  const u8 *data,
+  int nData,
+  ProllyHash *pWorkingCat,
+  ProllyHash *pWorkingCommit,
+  ProllyHash *pStaged,
+  u8 *pIsMerging,
+  ProllyHash *pMergeCommit,
+  ProllyHash *pConflicts,
+  u8 *pIsRebasing,
+  ProllyHash *pPreRebaseCat,
+  ProllyHash *pRebaseOnto,
+  char **pzRebaseOrigBranch,
+  char **pzRebaseReturnBranch,
+  ProllyHash *pConstraintViolations
+){
+  int rc;
+  u8 version;
+
+  if( pWorkingCat ) memset(pWorkingCat, 0, sizeof(ProllyHash));
+  if( pWorkingCommit ) memset(pWorkingCommit, 0, sizeof(ProllyHash));
+  if( pStaged ) memset(pStaged, 0, sizeof(ProllyHash));
+  if( pIsMerging ) *pIsMerging = 0;
+  if( pMergeCommit ) memset(pMergeCommit, 0, sizeof(ProllyHash));
+  if( pConflicts ) memset(pConflicts, 0, sizeof(ProllyHash));
+  if( pIsRebasing ) *pIsRebasing = 0;
+  if( pPreRebaseCat ) memset(pPreRebaseCat, 0, sizeof(ProllyHash));
+  if( pRebaseOnto ) memset(pRebaseOnto, 0, sizeof(ProllyHash));
+  if( pzRebaseOrigBranch ) *pzRebaseOrigBranch = 0;
+  if( pzRebaseReturnBranch ) *pzRebaseReturnBranch = 0;
+  if( pConstraintViolations ) memset(pConstraintViolations, 0, sizeof(ProllyHash));
+
+  rc = chunkStoreValidateWorkingSetBlob(data, nData);
+  if( rc!=SQLITE_OK ) return rc;
+  version = data[0];
+
+  if( pWorkingCat ) memcpy(pWorkingCat->data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
+  if( pWorkingCommit ) memcpy(pWorkingCommit->data, data + WS_WORKING_COMMIT_OFF, PROLLY_HASH_SIZE);
+  if( pStaged ) memcpy(pStaged->data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+  if( pIsMerging ) *pIsMerging = data[WS_MERGING_OFF];
+  if( pMergeCommit ) memcpy(pMergeCommit->data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
+  if( pConflicts ) memcpy(pConflicts->data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
+
+  if( (version == WS_FORMAT_VERSION_V3
+    || version == WS_FORMAT_VERSION_V4
+    || version == WS_FORMAT_VERSION_V5)
+   && nData >= WS_TOTAL_SIZE_V3 ){
+    if( pIsRebasing ) *pIsRebasing = data[WS_REBASING_OFF];
+    if( pPreRebaseCat ) memcpy(pPreRebaseCat->data,
+                                data + WS_PRE_REBASE_CAT_OFF, PROLLY_HASH_SIZE);
+    if( pRebaseOnto ) memcpy(pRebaseOnto->data,
+                              data + WS_REBASE_ONTO_OFF, PROLLY_HASH_SIZE);
+    if( pzRebaseOrigBranch ){
+      const char *src = (const char*)(data + WS_REBASE_BRANCH_OFF);
+      int n = 0;
+      char *z;
+      while( n < WS_REBASE_BRANCH_LEN && src[n] ) n++;
+      if( n > 0 ){
+        z = sqlite3_malloc(n + 1);
+        if( !z ) return SQLITE_NOMEM;
+        memcpy(z, src, n);
+        z[n] = 0;
+        *pzRebaseOrigBranch = z;
+      }
+    }
+  }
+  if( version == WS_FORMAT_VERSION_V4 && nData >= WS_TOTAL_SIZE_V4 ){
+    if( pConstraintViolations ){
+      memcpy(pConstraintViolations->data,
+             data + WS_CONSTRAINT_VIOLATIONS_OFF_V4, PROLLY_HASH_SIZE);
+    }
+  }else if( version == WS_FORMAT_VERSION_V5 && nData >= WS_TOTAL_SIZE ){
+    if( pzRebaseReturnBranch ){
+      const char *src = (const char*)(data + WS_REBASE_RETURN_BRANCH_OFF);
+      int n = 0;
+      char *z;
+      while( n < WS_REBASE_BRANCH_LEN && src[n] ) n++;
+      if( n > 0 ){
+        z = sqlite3_malloc(n + 1);
+        if( !z ) return SQLITE_NOMEM;
+        memcpy(z, src, n);
+        z[n] = 0;
+        *pzRebaseReturnBranch = z;
+      }
+    }
+    if( pConstraintViolations ){
+      memcpy(pConstraintViolations->data,
+             data + WS_CONSTRAINT_VIOLATIONS_OFF, PROLLY_HASH_SIZE);
+    }
+  }
+  return SQLITE_OK;
+}
+
 int btreeLoadWorkingSetBlob(
   ChunkStore *cs,
   const char *zBranch,
@@ -22,7 +115,6 @@ int btreeLoadWorkingSetBlob(
   u8 *data = 0;
   int nData = 0;
   int rc;
-  u8 version;
 
   assert( cs!=0 && zBranch!=0 );
   if( pWorkingCat ) memset(pWorkingCat, 0, sizeof(ProllyHash));
@@ -45,67 +137,12 @@ int btreeLoadWorkingSetBlob(
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  rc = chunkStoreValidateWorkingSetBlob(data, nData);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(data);
-    return rc;
-  }
-  version = data[0];
-
-  if( pWorkingCat ) memcpy(pWorkingCat->data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
-  if( pWorkingCommit ) memcpy(pWorkingCommit->data, data + WS_WORKING_COMMIT_OFF, PROLLY_HASH_SIZE);
-  if( pStaged ) memcpy(pStaged->data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
-  if( pIsMerging ) *pIsMerging = data[WS_MERGING_OFF];
-  if( pMergeCommit ) memcpy(pMergeCommit->data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
-  if( pConflicts ) memcpy(pConflicts->data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
-
-  if( (version == WS_FORMAT_VERSION_V3
-    || version == WS_FORMAT_VERSION_V4
-    || version == WS_FORMAT_VERSION_V5)
-   && nData >= WS_TOTAL_SIZE_V3 ){
-    if( pIsRebasing ) *pIsRebasing = data[WS_REBASING_OFF];
-    if( pPreRebaseCat ) memcpy(pPreRebaseCat->data,
-                                data + WS_PRE_REBASE_CAT_OFF, PROLLY_HASH_SIZE);
-    if( pRebaseOnto ) memcpy(pRebaseOnto->data,
-                              data + WS_REBASE_ONTO_OFF, PROLLY_HASH_SIZE);
-    if( pzRebaseOrigBranch ){
-      const char *src = (const char*)(data + WS_REBASE_BRANCH_OFF);
-      int n = 0;
-      while( n < WS_REBASE_BRANCH_LEN && src[n] ) n++;
-      if( n > 0 ){
-        char *z = sqlite3_malloc(n + 1);
-        if( !z ){ sqlite3_free(data); return SQLITE_NOMEM; }
-        memcpy(z, src, n);
-        z[n] = 0;
-        *pzRebaseOrigBranch = z;
-      }
-    }
-  }
-  if( version == WS_FORMAT_VERSION_V4 && nData >= WS_TOTAL_SIZE_V4 ){
-    if( pConstraintViolations ){
-      memcpy(pConstraintViolations->data,
-             data + WS_CONSTRAINT_VIOLATIONS_OFF_V4, PROLLY_HASH_SIZE);
-    }
-  }else if( version == WS_FORMAT_VERSION_V5 && nData >= WS_TOTAL_SIZE ){
-    if( pzRebaseReturnBranch ){
-      const char *src = (const char*)(data + WS_REBASE_RETURN_BRANCH_OFF);
-      int n = 0;
-      while( n < WS_REBASE_BRANCH_LEN && src[n] ) n++;
-      if( n > 0 ){
-        char *z = sqlite3_malloc(n + 1);
-        if( !z ){ sqlite3_free(data); return SQLITE_NOMEM; }
-        memcpy(z, src, n);
-        z[n] = 0;
-        *pzRebaseReturnBranch = z;
-      }
-    }
-    if( pConstraintViolations ){
-      memcpy(pConstraintViolations->data,
-             data + WS_CONSTRAINT_VIOLATIONS_OFF, PROLLY_HASH_SIZE);
-    }
-  }
+  rc = btreeParseWorkingSetBlob(
+      data, nData, pWorkingCat, pWorkingCommit, pStaged, pIsMerging,
+      pMergeCommit, pConflicts, pIsRebasing, pPreRebaseCat, pRebaseOnto,
+      pzRebaseOrigBranch, pzRebaseReturnBranch, pConstraintViolations);
   sqlite3_free(data);
-  return SQLITE_OK;
+  return rc;
 }
 
 static int btreeLoadBranchHeadCatalog(

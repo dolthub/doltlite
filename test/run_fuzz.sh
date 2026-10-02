@@ -2,8 +2,10 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <target> [libFuzzer args...]" >&2
-  echo "  target: replaywal | prolly_node | deserialize_refs | read_index | deserialize_catalog | wire_response | commit | working_set | conflicts | constraint_violations" >&2
+  echo "usage: $0 <target> [--merge <incoming-dir>] [libFuzzer args...]" >&2
+  echo "  target: replaywal | prolly_node | deserialize_refs | read_index | deserialize_catalog | wire_response | commit | working_set | conflicts | constraint_violations | database" >&2
+  echo "  New inputs are written to a scratch directory. The tracked corpus is read-only." >&2
+  echo "  --merge copies minimized inputs from <incoming-dir> into the tracked corpus." >&2
   exit 2
 fi
 
@@ -35,7 +37,7 @@ case "$target" in
     src="fuzz_wire_response.c"
     corpus="wire_response"
     ;;
-  commit|working_set|conflicts|constraint_violations)
+  commit|working_set|conflicts|constraint_violations|database)
     src="fuzz_$target.c"
     corpus="$target"
     ;;
@@ -44,6 +46,16 @@ case "$target" in
     exit 2
     ;;
 esac
+
+merge_dir=""
+if [ "${1:-}" = "--merge" ]; then
+  merge_dir="${2:-}"
+  if [ -z "$merge_dir" ] || [ ! -d "$merge_dir" ]; then
+    echo "ERROR: --merge needs an incoming corpus directory" >&2
+    exit 2
+  fi
+  shift 2
+fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -83,5 +95,12 @@ echo "=== Compiling fuzz_$target harness ==="
   "$build_dir/libdoltlite.a" \
   -lz -lpthread
 
-echo "=== Running fuzz_$target ==="
-exec "$build_dir/fuzz_$target" "$corpus_dir" "$@"
+if [ -n "$merge_dir" ]; then
+  echo "=== Merging $merge_dir into tracked corpus $corpus_dir ==="
+  exec "$build_dir/fuzz_$target" -merge=1 "$corpus_dir" "$merge_dir" "$@"
+fi
+
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/dl-fuzz-$target.XXXXXX")"
+trap 'rm -rf "$scratch"' EXIT
+echo "=== Running fuzz_$target (seeds: $corpus_dir, new inputs: $scratch) ==="
+"$build_dir/fuzz_$target" "$scratch" "$corpus_dir" "$@"

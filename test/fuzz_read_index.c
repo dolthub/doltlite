@@ -10,6 +10,31 @@
 
 static int g_initialized = 0;
 
+/* A store image carries its index location in the manifest. A bare blob is
+** the index itself, and nChunks has to cover every entry or the reader
+** rejects the table before decoding it. */
+static void indexFieldsFromInput(const uint8_t *data, size_t size,
+                                 ChunkStore *cs) {
+  cs->index.iIndexOffset = 0;
+  cs->index.nIndexSize = (i64)size;
+  cs->index.nChunks = 1;
+  if (size >= CHUNK_MANIFEST_SIZE
+   && CS_READ_U32(data + CS_MANIFEST_MAGIC_OFF) == CHUNK_STORE_MAGIC
+   && CS_READ_U32(data + CS_MANIFEST_VERSION_OFF) == CHUNK_STORE_VERSION) {
+    u32 nChunks = CS_READ_U32(data + CS_MANIFEST_CHUNK_COUNT_OFF);
+    u32 nIndex = CS_READ_U32(data + CS_MANIFEST_INDEX_SIZE_OFF);
+    i64 iIndex = CS_READ_I64(data + CS_MANIFEST_INDEX_OFFSET_OFF);
+    if (nChunks <= (u32)0x7fffffff) cs->index.nChunks = (int)nChunks;
+    cs->index.nIndexSize = (i64)nIndex;
+    cs->index.iIndexOffset = iIndex;
+    return;
+  }
+  if (size >= CHUNK_INDEX_ENTRY_SIZE) {
+    size_t nEnt = size / CHUNK_INDEX_ENTRY_SIZE;
+    if (nEnt > 1 && nEnt <= (size_t)0x7fffffff) cs->index.nChunks = (int)nEnt;
+  }
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   ChunkStore cs;
   sqlite3_vfs *pVfs;
@@ -46,9 +71,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     cs.file.zFilename = sqlite3_mprintf("%s", path);
     cs.file.pVfs = pVfs;
     cs.pGraphLockFile = 0;
-    cs.index.iIndexOffset = 0;
-    cs.index.nIndexSize = (i64)size;
-    cs.index.nChunks = 1;
+    indexFieldsFromInput(data, size, &cs);
 
     (void)csReadIndex(&cs);
 
