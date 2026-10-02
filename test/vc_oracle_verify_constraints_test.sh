@@ -40,9 +40,10 @@ run_oracle() {
     dl_verify="SELECT CONCAT('R|rc=', dolt_verify_constraints($verify_args));"
   fi
 
-  local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n%s\n" \
-             "$setup" "$dl_verify" "$follow" \
+  local dl_fed dl_out
+  dl_fed=$(printf "%s\n.headers off\n.mode list\n%s\n%s\n" \
+             "$setup" "$dl_verify" "$follow")
+  dl_out=$(printf '%s' "$dl_fed" \
            | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^R|' \
            | tr -d '"' \
@@ -56,18 +57,13 @@ run_oracle() {
     call_sql="CALL dolt_verify_constraints($verify_args);"
   fi
 
-  local dt_raw
+  local dt_fed dt_raw
+  dt_fed=$(printf 'SET @@autocommit = 0;\nSET @@dolt_force_transaction_commit = 1;\nSET @@dolt_allow_commit_conflicts = 1;\n%s\n%s\n%s\n' \
+    "$dolt_setup" "$call_sql" "$(vc_oracle_translate_for_dolt "$follow")")
   dt_raw=$(
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
-    {
-      printf 'SET @@autocommit = 0;\n'
-      printf 'SET @@dolt_force_transaction_commit = 1;\n'
-      printf 'SET @@dolt_allow_commit_conflicts = 1;\n'
-      printf '%s\n' "$dolt_setup"
-      printf '%s\n' "$call_sql"
-      printf '%s\n' "$(vc_oracle_translate_for_dolt "$follow")"
-    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+    printf '%s' "$dt_fed" | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
 
   # CALL emits header "violations" then 0/1; grab the last 0/1 before R| rows.
@@ -86,6 +82,7 @@ run_oracle() {
     dt_out=$(printf 'R|rc=%s\n%s\n' "$dt_rc" "$dt_follow" | grep -v '^$' | normalize)
   fi
 
+  vc_oracle_assert_refusal_files "$name" "$dl_fed" "$dir/dl.err" "$dt_fed" "$dir/dt.err"
   if [ "$allow_empty" = "1" ]; then
     vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else

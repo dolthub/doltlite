@@ -22,32 +22,50 @@ oracle() {
   local dl_setup="$setup"
 
   if printf '%s' "$setup" | grep -q "SELECT dolt_merge('"; then
+    # Begin at the first merge so a later dolt_merge('--abort') still has a
+    # merge open. Beginning at the last call leaves the conflicted merge in
+    # autocommit, which rolls it back, and abort then reports no merge.
     dl_setup=$(printf '%s' "$setup" | perl -0pe \
-      "s/(SELECT dolt_merge\\('[^']+'\\);)(?!.*SELECT dolt_merge\\('[^']+'\\);)/BEGIN;\\n\$1/s")
+      "s/SELECT dolt_merge\\('[^']+'\\);/BEGIN;\\n\$&/")
   fi
 
-  local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT \"table\" || char(9) || num_conflicts FROM dolt_conflicts ORDER BY \"table\";\n" "$dl_setup" \
+  local dl_fed dl_out
+  dl_fed=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT \"table\" || char(9) || num_conflicts FROM dolt_conflicts ORDER BY \"table\";\n" "$dl_setup")
+  dl_out=$(printf '%s' "$dl_fed" \
            | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
 
-  local dolt_setup
+  local dolt_setup dt_fed dt_query
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  dt_fed=$(printf 'SET @@dolt_allow_commit_conflicts = 1;\n%s\n' "$dolt_setup")
+  dt_query="SELECT concat(\`table\`, char(9), num_conflicts) FROM dolt_conflicts ORDER BY \`table\`;"
 
   (
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
-    {
-      printf '%s\n' "SET @@dolt_allow_commit_conflicts = 1;"
-      printf '%s\n' "$dolt_setup"
-    } | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
-    "$DOLT" sql -r csv -q "SELECT concat(\`table\`, char(9), num_conflicts) FROM dolt_conflicts ORDER BY \`table\`;" 2>>"$dir/dt.err"
+    printf '%s' "$dt_fed" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
+    "$DOLT" sql -r csv -q "$dt_query" 2>"$dir/dt.query.err"
   ) > "$dir/dt.raw"
 
   local dt_out
   dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" | normalize)
+  if [ "${VC_ORACLE_EXPECTATION:-}" = allow-error ]; then
+    local dl_bits dt_bits
+    dl_bits=$(vc_oracle_refusal_bits "$dl_fed" "$dir/dl.err")
+    dt_bits=$(vc_oracle_join_bits \
+      "$(vc_oracle_refusal_bits "$dt_fed" "$dir/dt.err")" \
+      "$(vc_oracle_refusal_bits "$dt_query" "$dir/dt.query.err")")
+    vc_oracle_assert_refusals "$name" "$dl_bits" "$dt_bits" || {
+      echo "    --- doltlite ---"
+      vc_oracle_refusal_rows "$dl_fed" "$dir/dl.err" | sed 's/^/    /'
+      echo "    --- dolt setup ---"
+      vc_oracle_refusal_rows "$dt_fed" "$dir/dt.err" | sed 's/^/    /'
+      echo "    --- dolt query ---"
+      vc_oracle_refusal_rows "$dt_query" "$dir/dt.query.err" | sed 's/^/    /'
+    }
+  fi
 
   if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
     vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"

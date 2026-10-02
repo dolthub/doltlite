@@ -529,10 +529,15 @@ static int doltliteLogFilter(
       return SQLITE_OK;
     }
   }else if( (idxNum & LOG_IDX_REVISION) && argc>0 ){
-    const char *zSpec = (const char*)sqlite3_value_text(argv[0]);
+    const char *zSpec;
     char *zLeft = 0;
     char *zRight = 0;
     int rangeType = DOLTLITE_RANGE_NONE;
+
+    /* NULL is an empty log. Joining dolt_log(parent_hash) walks a root's
+    ** NULL parent without failing the rest of the query. */
+    if( sqlite3_value_type(argv[0])==SQLITE_NULL ) return SQLITE_OK;
+    zSpec = (const char*)sqlite3_value_text(argv[0]);
 
     rc = doltliteSplitRevisionRange(zSpec, &zLeft, &zRight, &rangeType);
     if( rc==SQLITE_NOTFOUND ){

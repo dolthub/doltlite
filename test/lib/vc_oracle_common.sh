@@ -291,6 +291,78 @@ vc_oracle_check_dolt_version() {
   fi
 }
 
+# Tokens are 1 where that statement failed and 0 where it ran. Session-setup
+# statements that only one engine runs are omitted, even when they fail. A
+# documented conflict or constraint-violation refusal from a merge-family
+# call is D: it agrees with a success or with another refusal of that call.
+# Error text is not part of the vector.
+_VC_ORACLE_REFUSALS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vc_oracle_refusals.py"
+
+vc_oracle_refusal_bits() {
+  local sql="$1" err="${2:-}"
+  printf '%s' "$sql" | python3 "$_VC_ORACLE_REFUSALS" bits "$err"
+}
+
+vc_oracle_refusal_rows() {
+  local sql="$1" err="${2:-}"
+  printf '%s' "$sql" | python3 "$_VC_ORACLE_REFUSALS" rows "$err"
+}
+
+vc_oracle_join_bits() {
+  local acc="$1" part="$2"
+  if [ -z "$part" ]; then
+    printf '%s' "$acc"
+  elif [ -z "$acc" ]; then
+    printf '%s' "$part"
+  else
+    printf '%s,%s' "$acc" "$part"
+  fi
+}
+
+# Compare refusal vectors. No-op unless this case is an allow-error case.
+vc_oracle_assert_refusals() {
+  local name="$1" dl="$2" dt="$3"
+  [ "${VC_ORACLE_EXPECTATION:-}" = allow-error ] || return 0
+  if python3 "$_VC_ORACLE_REFUSALS" match "$dl" "$dt"; then
+    return 0
+  fi
+  fail=$((fail+1))
+  FAILED_NAMES="$FAILED_NAMES ${name}_refusal"
+  echo "  FAIL: $name (statement refusals differ)"
+  echo "    doltlite: ${dl:-<none>}"
+  echo "    dolt:     ${dt:-<none>}"
+  return 1
+}
+
+# Arguments after the name are (doltlite sql, doltlite stderr, dolt sql,
+# dolt stderr) repeated once per session.
+vc_oracle_assert_refusal_files() {
+  local name="$1"
+  shift
+  [ "${VC_ORACLE_EXPECTATION:-}" = allow-error ] || return 0
+  local dl="" dt="" bits
+  local -a parts=()
+  while [ "$#" -ge 4 ]; do
+    bits=$(vc_oracle_refusal_bits "$1" "$2")
+    dl=$(vc_oracle_join_bits "$dl" "$bits")
+    bits=$(vc_oracle_refusal_bits "$3" "$4")
+    dt=$(vc_oracle_join_bits "$dt" "$bits")
+    parts+=("$1" "$2" "$3" "$4")
+    shift 4
+  done
+  vc_oracle_assert_refusals "$name" "$dl" "$dt" || {
+    local i=0
+    while [ "$i" -lt "${#parts[@]}" ]; do
+      echo "    --- session $((i / 4 + 1)) doltlite ---"
+      vc_oracle_refusal_rows "${parts[$i]}" "${parts[$((i + 1))]}" | sed 's/^/    /'
+      echo "    --- session $((i / 4 + 1)) dolt ---"
+      vc_oracle_refusal_rows "${parts[$((i + 2))]}" "${parts[$((i + 3))]}" | sed 's/^/    /'
+      i=$((i + 4))
+    done
+    return 1
+  }
+}
+
 if [ -n "${DOLT:-}" ]; then
   vc_oracle_check_dolt_version "$DOLT" || exit 1
 fi
