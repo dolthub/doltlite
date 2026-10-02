@@ -29,13 +29,10 @@ oracle_state() {
 
   vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.setup.out" \
     "$dir/dl.setup.err" "$setup" || true
-  local dl_out
-  dl_out=$(
-    {
-      printf ".headers off\n.mode list\n.separator '|'\n%s\n" "$dl_query"
-    } | vc_oracle_run_doltlite "$dir/dl/db" 2>>"$dir/dl.setup.err" \
-      | normalize_state
-  )
+  local dl_q dl_out
+  dl_q=$(printf ".headers off\n.mode list\n.separator '|'\n%s\n" "$dl_query")
+  dl_out=$(printf '%s' "$dl_q" | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.query.err" \
+      | normalize_state)
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -44,11 +41,14 @@ oracle_state() {
   local dt_out
   dt_out=$(
     cd "$dir/dt" || exit 1
-    "$DOLT" sql -r csv -q "$dolt_query" 2>>"$dir/dt.setup.err" \
+    "$DOLT" sql -r csv -q "$dolt_query" 2>"$dir/dt.query.err" \
       | tail -n +2 \
       | normalize_state
   )
 
+  vc_oracle_assert_refusal_files "$name" \
+    "$setup" "$dir/dl.setup.err" "$dolt_setup" "$dir/dt.setup.err" \
+    "$dl_q" "$dir/dl.query.err" "$dolt_query" "$dir/dt.query.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 

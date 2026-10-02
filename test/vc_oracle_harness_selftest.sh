@@ -286,4 +286,6 @@ if vc_oracle_finish > "$VC_HARNESS_DIR/setup.log"; then
 fi
 check grep -q 'setup-db' "$VC_HARNESS_DIR/setup.log"
 
+python3 "$SCRIPT_DIR/lib/vc_oracle_refusals.py" selftest
+
 printf 'VC oracle harness: %s checks passed\n' "$checks"

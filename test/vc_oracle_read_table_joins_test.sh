@@ -21,8 +21,9 @@ run_pair() {
     dt_prefix="SET @@autocommit = 0;"
   fi
 
-  local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query" \
+  local dl_fed dl_out
+  dl_fed=$(printf "%s\n.headers off\n.mode list\n%s\n" "$dl_setup" "$dl_query")
+  dl_out=$(printf '%s' "$dl_fed" \
            | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | tr -d '\r' \
            | grep '^R|' | sort)
@@ -42,6 +43,9 @@ run_pair() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
 
+  local dt_fed
+  dt_fed=$(printf '%s\n%s\n%s\n' "$dt_prefix" "$dolt_setup" "$dt_query")
+  vc_oracle_assert_refusal_files "$name" "$dl_fed" "$dir/dl.err" "$dt_fed" "$dir/dt.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
@@ -188,7 +192,7 @@ run_pair "log_correlated_revision_from_branch" "$BRANCHY" \
  JOIN dolt_log c ON c.commit_hash = b.hash
  WHERE b.name IN ('feat', 'side');"
 
-VC_ORACLE_EXPECTATION=allow-error run_pair "log_correlated_parent_revision" "$CORRELATED_LOG" \
+run_pair "log_correlated_parent_revision" "$CORRELATED_LOG" \
 "SELECT CONCAT('R|', r.label, '|', p.message)
  FROM requested r
  JOIN dolt_commit_ancestors a
@@ -200,7 +204,7 @@ VC_ORACLE_EXPECTATION=allow-error run_pair "log_correlated_parent_revision" "$CO
    ON a.commit_hash = r.commit_hash AND a.parent_index = 0
  JOIN dolt_log p ON p.commit_hash = a.parent_hash;"
 
-VC_ORACLE_EXPECTATION=allow-error run_pair "log_correlated_revision_through_cte" "$CORRELATED_LOG" \
+run_pair "log_correlated_revision_through_cte" "$CORRELATED_LOG" \
 "WITH parents AS (
    SELECT r.label, a.parent_hash
    FROM requested r

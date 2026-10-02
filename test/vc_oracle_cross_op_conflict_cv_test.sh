@@ -70,6 +70,10 @@ oracle_tx_poststate() {
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^S|' | normalize)
 
+  local dt_fed
+  dt_fed=$(printf 'SET @@autocommit = 0;\nSET @@dolt_allow_commit_conflicts = 1;\n%s\n%s\n' \
+    "$dolt_setup" "$POST_QUERY_DT")
+  vc_oracle_assert_refusal_files "$name" "$dl_script" "$dir/dl.err" "$dt_fed" "$dir/dt.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
@@ -132,8 +136,8 @@ SELECT dolt_commit('-Am','src_feat_side');
 SELECT dolt_push('origin','main');
 " | vc_oracle_run_doltlite "$src" >/dev/null 2>"$dir/dl_src_adv.err"
 
-  local dl_out
-  dl_out=$(printf '%s\n' "
+  local dl_pull dl_out
+  dl_pull=$(printf '%s\n' "
 UPDATE t SET v='main', u=9 WHERE id=1;
 SELECT dolt_commit('-Am','con_main_side');
 BEGIN;
@@ -141,7 +145,8 @@ SELECT dolt_pull('origin','main');
 .headers off
 .mode list
 $POST_QUERY_DL
-" | vc_oracle_run_doltlite "$con" 2>"$dir/dl_pull.err" | grep '^S|' | tr -d '"' | normalize)
+")
+  dl_out=$(printf '%s' "$dl_pull" | vc_oracle_run_doltlite "$con" 2>"$dir/dl_pull.err" | grep '^S|' | tr -d '"' | normalize)
 
   local dt_remote="$dir/dt_remote" dt_src="$dir/dt_src" dt_con="$dir/dt_con"
   mkdir -p "$dt_remote" "$dt_src" "$dt_con"
@@ -188,6 +193,13 @@ CALL dolt_commit('-Am','src_feat_side');
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^S|' | normalize)
 
+  local dt_pull
+  dt_pull=$(printf 'SET @@autocommit = 0;\nSET @@dolt_allow_commit_conflicts = 1;\n%s\n' \
+"UPDATE t SET v='main', u=9 WHERE id=1;
+CALL dolt_commit('-Am','con_main_side');
+CALL dolt_pull('origin','main');
+$POST_QUERY_DT")
+  vc_oracle_assert_refusal_files "$name" "$dl_pull" "$dir/dl_pull.err" "$dt_pull" "$dir/dt_pull.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 

@@ -148,20 +148,11 @@ for page in "$DOCS"/*.md; do
     bad_lines="
     engine exited $rc: $(grep -m2 -iE 'Sanitizer|runtime error|Abort|Segmentation' "$TMPDIR/out.txt" | tr '\n' ' ' | cut -c1-300)"
   fi
-  while IFS= read -r line; do
-    case "$line" in
-      *"error near line "*|*"Error near line "*|*"error in "*) ;;
-      *) continue ;;
-    esac
-    n=$(echo "$line" | grep -oE 'line [0-9]+' | grep -oE '[0-9]+')
-    stmt=$(sed -n "${n}p" "$TMPDIR/run.sql")
-    # Allowed when the statement's own line, or the one before it, says so.
-    prev=$(sed -n "$((n-1))p" "$TMPDIR/run.sql")
-    if echo "$stmt$prev" | grep -qiE -- '--.*(error|fails|refused)'; then continue; fi
-    bad_lines="$bad_lines
-    $line
-      > $stmt"
-  done < "$TMPDIR/out.txt"
+  # A comment that says the statement errors is the expected refusal. Hiding
+  # that error, or erroring on a statement that does not say so, fails the page.
+  refusal_msg=$(python3 "$SCRIPT_DIR/lib/vc_oracle_refusals.py" annotated \
+    "$TMPDIR/run.sql" "$TMPDIR/out.txt") || bad_lines="$bad_lines
+    $refusal_msg"
   if [ -z "$bad_lines" ]; then pass=$((pass+1)); echo "PASS: $name"
   else fail=$((fail+1)); echo "FAIL: $name$bad_lines"; fi
 done

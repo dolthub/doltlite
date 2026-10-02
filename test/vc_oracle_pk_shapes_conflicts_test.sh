@@ -86,6 +86,9 @@ oracle_conflict() {
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^R|' | tr -d '\r' | sort)
 
+  local dt_fed
+  dt_fed=$(printf 'SET @@autocommit = 0;\nSET @@dolt_allow_commit_conflicts = 1;\n%s\n' "$dolt_all")
+  vc_oracle_assert_refusal_files "$name" "$dl_script" "$dir/dl.err" "$dt_fed" "$dir/dt.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 

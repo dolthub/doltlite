@@ -538,6 +538,7 @@ SELECT CONCAT('S|committed|',count(*)) FROM dolt_status;"
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup" | sed "s/FROM dolt_at_u('STAGED')/FROM u AS OF 'STAGED'/")
   vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" -r csv
   dt_out=$(tr -d '\r"' < "$dir/dt.out" | grep '^S|')
+  vc_oracle_assert_refusal_files "$name" "$setup" "$dir/dl.err" "$dolt_setup" "$dir/dt.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
@@ -635,6 +636,7 @@ SELECT CONCAT('S|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY t
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" -r csv
   dt_out=$(tr -d '\r"' < "$dir/dt.out" | grep '^S|')
+  vc_oracle_assert_refusal_files "$name" "$setup" "$dir/dl.err" "$dolt_setup" "$dir/dt.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 

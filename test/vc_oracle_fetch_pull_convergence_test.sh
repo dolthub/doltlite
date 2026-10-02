@@ -55,6 +55,23 @@ remote_flow() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
 
+  local dl_seed_sql dl_adv_sql dl_con_sql dl_q
+  dl_seed_sql=$(printf '%s\n' "${seed//@REMOTE@/$dl_remote}")
+  dl_adv_sql=$(printf '%s\n' "${advance//@REMOTE@/$dl_remote}")
+  dl_con_sql=$(printf '%s\n' "$consume")
+  dl_q=$(printf '.headers off\n.mode list\n%s\n' "$dl_query")
+  if [ -n "$advance" ]; then
+    vc_oracle_assert_refusal_files "$name" \
+      "$dl_seed_sql" "$dir/dl_seed.err" "$dt_seed" "$dir/dt_seed.err" \
+      "$dl_adv_sql" "$dir/dl_advance.err" "$dt_advance" "$dir/dt_advance.err" \
+      "$dl_con_sql" "$dir/dl_consume.err" "$dt_consume" "$dir/dt_consume.err" \
+      "$dl_q" "$dir/dl.err" "$dt_q" "$dir/dt.err"
+  else
+    vc_oracle_assert_refusal_files "$name" \
+      "$dl_seed_sql" "$dir/dl_seed.err" "$dt_seed" "$dir/dt_seed.err" \
+      "$dl_con_sql" "$dir/dl_consume.err" "$dt_consume" "$dir/dt_consume.err" \
+      "$dl_q" "$dir/dl.err" "$dt_q" "$dir/dt.err"
+  fi
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
@@ -439,6 +456,23 @@ remote_flow_dual() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
 
+  local dl_seed_sql dl_adv_sql dl_con_sql dl_q
+  dl_seed_sql=$(printf '%s\n' "${dl_seed//@REMOTE@/$dl_remote}")
+  dl_adv_sql=$(printf '%s\n' "${advance_dl//@REMOTE@/$dl_remote}")
+  dl_con_sql=$(printf '%s\n' "$consume")
+  dl_q=$(printf '.headers off\n.mode list\n%s\n' "$dl_query")
+  if [ -n "$advance_dl$advance_dt" ]; then
+    vc_oracle_assert_refusal_files "$name" \
+      "$dl_seed_sql" "$dir/dl_seed.err" "$dt_seed" "$dir/dt_seed.err" \
+      "$dl_adv_sql" "$dir/dl_advance.err" "$dt_advance" "$dir/dt_advance.err" \
+      "$dl_con_sql" "$dir/dl_consume.err" "$dt_consume" "$dir/dt_consume.err" \
+      "$dl_q" "$dir/dl.err" "$dt_q" "$dir/dt.err"
+  else
+    vc_oracle_assert_refusal_files "$name" \
+      "$dl_seed_sql" "$dir/dl_seed.err" "$dt_seed" "$dir/dt_seed.err" \
+      "$dl_con_sql" "$dir/dl_consume.err" "$dt_consume" "$dir/dt_consume.err" \
+      "$dl_q" "$dir/dl.err" "$dt_q" "$dir/dt.err"
+  fi
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 

@@ -76,8 +76,9 @@ $DL_PROJECT;"
 $DT_PROJECT;"
   fi
 
-  local dl_out
-  dl_out=$(printf '.headers off\n.mode list\n%s\n' "$dl_script" \
+  local dl_fed dl_out
+  dl_fed=$(printf '.headers off\n.mode list\n%s\n' "$dl_script")
+  dl_out=$(printf '%s' "$dl_fed" \
            | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -F '|' \
            | tail -1 \
@@ -92,6 +93,7 @@ $DT_PROJECT;"
   local dt_out
   dt_out=$(grep -F '|' "$dir/dt.raw" | tail -1 | normalize)
 
+  vc_oracle_assert_refusal_files "$name" "$dl_fed" "$dir/dl.err" "$dt_script" "$dir/dt.err"
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
