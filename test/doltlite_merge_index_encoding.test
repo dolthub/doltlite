@@ -1,0 +1,160 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach keymode {integer clustered text without-rowid} {
+  set key {id INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode eq "clustered"} {set key {id INT PRIMARY KEY}}
+  if {$keymode in {text without-rowid}} {set key {id TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+
+  foreach kind {affinity collation} {
+    if {$kind eq "affinity"} {
+      set oldtype INT
+      set newtype TEXT
+      set values {(1,1,1),(2,2,2),(4,4,4)}
+      set insert {(3,3,3)}
+      set theirs {(5,5,5)}
+      set predicate {a='3'}
+      set expression {typeof(a)}
+      set exprpredicate {typeof(a)='text'}
+    } else {
+      set oldtype TEXT
+      set newtype {TEXT COLLATE NOCASE}
+      set values {(1,'a',1),(2,'B',2),(4,'D',4)}
+      set insert {(3,'A',3)}
+      set theirs {(5,'a',5)}
+      set predicate {a='a'}
+      set expression {a='a'}
+      set exprpredicate {(a='a')=1}
+    }
+    set indexes "
+      CREATE INDEX ia ON t(a);
+      CREATE INDEX idesc ON t(a DESC,b);
+      CREATE INDEX iexpr ON t($expression);
+      CREATE INDEX ipartial ON t(b) WHERE $predicate;
+      CREATE INDEX ibinary ON t(a COLLATE BINARY);
+    "
+
+    foreach direction {forward reverse} {
+      foreach transaction {autocommit explicit} {
+        reset_db
+        execsql "CREATE TABLE t($key,a $oldtype,b INT) $suffix"
+        execsql $indexes
+        execsql "INSERT INTO t VALUES $values"
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+          UPDATE t SET b=20 WHERE id=2;
+          DELETE FROM t WHERE id=4;
+        }
+        execsql "INSERT INTO t VALUES $insert"
+        execsql {
+          SELECT dolt_commit('-am','ours');
+          SELECT dolt_checkout('side');
+        }
+        execsql "CREATE TABLE t2($key,a $newtype,b INT) $suffix"
+        execsql {
+          INSERT INTO t2 SELECT * FROM t;
+          DROP TABLE t;
+          ALTER TABLE t2 RENAME TO t;
+        }
+        execsql $indexes
+        execsql "INSERT INTO t VALUES $theirs"
+        execsql {SELECT dolt_commit('-am','theirs')}
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target side
+          set reopen [file normalize test.db]
+        } else {
+          set target main
+          set reopen "[file normalize test.db]/side"
+        }
+        set name index-encoding-$keymode-$kind-$direction-$transaction
+        do_test $name-merge {
+          if {$transaction eq "explicit"} {execsql {BEGIN}}
+          if {$transaction eq "explicit"} {
+            execsql "SELECT dolt_merge('--no-commit','$target')"
+          } else {
+            execsql "SELECT dolt_merge('$target')"
+          }
+          execsql {SELECT count(*) FROM dolt_conflicts}
+        } {0}
+        do_execsql_test $name-rows {
+          SELECT id,b,typeof(a) FROM t NOT INDEXED ORDER BY id;
+        } {1 1 text 2 20 text 3 3 text 5 5 text}
+        foreach index {ia idesc iexpr ipartial ibinary} {
+          set where $predicate
+          if {$index eq "iexpr"} {set where $exprpredicate}
+          if {$index eq "ibinary"} {set where "a COLLATE BINARY='A'"}
+          set query "SELECT id,b FROM t INDEXED BY $index WHERE $where ORDER BY id"
+          set scan "SELECT id,b FROM t NOT INDEXED WHERE $where ORDER BY id"
+          do_test $name-$index {
+            list [execsql $query] [execsql $scan]
+          } [list [execsql $scan] [execsql $scan]]
+        }
+        do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+        if {$transaction eq "explicit"} {
+          do_test $name-commit {execsql {COMMIT}} {}
+        }
+        db close
+        sqlite3 db $reopen
+        do_execsql_test $name-reopen-integrity {PRAGMA integrity_check} {ok}
+        do_execsql_test $name-reopen-rows {
+          SELECT id,b,typeof(a) FROM t NOT INDEXED ORDER BY id;
+        } {1 1 text 2 20 text 3 3 text 5 5 text}
+        do_test $name-reindex {
+          set before [execsql "SELECT id,b FROM t INDEXED BY ia WHERE $predicate ORDER BY id"]
+          execsql {REINDEX}
+          set after [execsql "SELECT id,b FROM t INDEXED BY ia WHERE $predicate ORDER BY id"]
+          expr {$before eq $after}
+        } {1}
+      }
+    }
+  }
+}
+
+foreach resolution {ours theirs} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY,a INT,b INT);
+    CREATE UNIQUE INDEX ia ON t(a);
+    INSERT INTO t VALUES(1,1,1),(2,2,2);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+    UPDATE t SET b=20 WHERE id=1;
+    SELECT dolt_commit('-am','ours');
+    SELECT dolt_checkout('side');
+    CREATE TABLE t2(id INT PRIMARY KEY,a TEXT,b INT);
+    INSERT INTO t2 SELECT * FROM t;
+    DROP TABLE t;
+    ALTER TABLE t2 RENAME TO t;
+    CREATE UNIQUE INDEX ia ON t(a);
+    UPDATE t SET b=30 WHERE id=1;
+    SELECT dolt_commit('-am','theirs');
+    SELECT dolt_checkout('main');
+    BEGIN;
+  }
+  do_test index-encoding-conflict-$resolution-merge {
+    catchsql {SELECT dolt_merge('side')}
+    execsql {SELECT count(*) FROM dolt_conflicts}
+  } {1}
+  do_execsql_test index-encoding-conflict-$resolution-index {
+    SELECT id,a,b,typeof(a) FROM t INDEXED BY ia WHERE a='1';
+  } {1 1 20 text}
+  do_execsql_test index-encoding-conflict-$resolution-integrity {
+    PRAGMA integrity_check;
+  } {ok}
+  do_test index-encoding-conflict-$resolution-resolve {
+    execsql "SELECT dolt_conflicts_resolve('--$resolution','t')"
+    execsql {SELECT dolt_commit('-am','resolved')}
+    db close
+    sqlite3 db [file normalize test.db]
+    execsql {
+      SELECT id,a,b,typeof(a) FROM t INDEXED BY ia WHERE a='1';
+      PRAGMA integrity_check;
+    }
+  } [list 1 1 [expr {$resolution eq "ours" ? 20 : 30}] text ok]
+}
+
+finish_test

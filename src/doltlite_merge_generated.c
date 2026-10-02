@@ -258,6 +258,22 @@ int mergeRowPolicy(
   return SQLITE_OK;
 }
 
+static int mergeIndexColumnSemanticsChanged(Table *pOurs, Table *pMerged){
+  int i;
+  for(i=0; i<pOurs->nCol; i++){
+    Column *pOld = &pOurs->aCol[i];
+    int j = sqlite3ColumnIndex(pMerged, pOld->zCnName);
+    const char *zOldColl, *zNewColl;
+    if( j<0 ) continue;
+    if( pOld->affinity!=pMerged->aCol[j].affinity ) return 1;
+    zOldColl = sqlite3ColumnColl(pOld);
+    zNewColl = sqlite3ColumnColl(&pMerged->aCol[j]);
+    if( sqlite3_stricmp(zOldColl ? zOldColl : "BINARY",
+                       zNewColl ? zNewColl : "BINARY")!=0 ) return 1;
+  }
+  return 0;
+}
+
 /* mergePass1CollectIndexes reads the live table, whose record layout is
 ** ours. Once mergeRowTable has produced the merged-layout table, every
 ** index has to be read through it or a column dropped on their side shifts
@@ -283,6 +299,10 @@ int mergeRebindIndexes(
       }
     }
     if( !pMerged ) continue;
+    if( mergeIndexColumnSemanticsChanged(mi->pIdx->pTable, pTab) ){
+      rc = mergeAppendReindexName(c->pazReindex, c->pnReindex, pMerged->zName);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     pKeyInfo = doltliteKeyInfoOfIndex(c->db, pMerged);
     if( !pKeyInfo ) return SQLITE_NOMEM;
     sqlite3KeyInfoUnref(mi->pKeyInfo);
