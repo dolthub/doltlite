@@ -308,6 +308,45 @@ IDX=$(dl "$DB" "SELECT group_concat(id||'|'||n,';') FROM (SELECT * FROM t INDEXE
 [ "$IDX" = "$SCAN" ] && pass_name "20_index_matches_scan" || fail_name "20_index_matches_scan; got $IDX"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "20_integrity" || fail_name "20_integrity"
 
+redefine_setup="CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+CREATE INDEX ib ON t(b);
+INSERT INTO t VALUES (1,1,1,1),(2,2,2,2),(3,3,3,3);
+SELECT dolt_commit('-Am','init');"
+redefine="DROP INDEX ib; CREATE INDEX ib ON t(c);"
+edit="UPDATE t SET c=99 WHERE id=1; INSERT INTO t VALUES (4,4,4,4);"
+
+check_redefined_index() {
+  local name="$1" db="$2" idx scan
+  [ "$(dl "$db" "PRAGMA integrity_check;")" = "ok" ] && pass_name "${name}_integrity" || fail_name "${name}_integrity"
+  [ "$(dl "$db" "SELECT sql FROM sqlite_master WHERE name='ib';")" = "CREATE INDEX ib ON t(c)" ] && pass_name "${name}_definition" || fail_name "${name}_definition"
+  idx=$(dl "$db" "SELECT group_concat(id) FROM (SELECT id FROM t INDEXED BY ib WHERE c>0 ORDER BY id);")
+  scan=$(dl "$db" "SELECT group_concat(id) FROM (SELECT id FROM t NOT INDEXED WHERE c>0 ORDER BY id);")
+  [ "$scan" = "1,2,3,4" ] && pass_name "${name}_scan" || fail_name "${name}_scan; got $scan"
+  [ "$idx" = "$scan" ] && pass_name "${name}_index_matches_scan" || fail_name "${name}_index_matches_scan; got $idx"
+  [ "$(dl "$db" "SELECT id FROM t WHERE c=99;")" = "1" ] && pass_name "${name}_lookup" || fail_name "${name}_lookup"
+}
+
+echo ""
+echo "--- 21: Same-name index redefined on one side ---"
+DB="$TMPROOT/21a.db"
+dl "$DB" "$redefine_setup SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); $edit SELECT dolt_commit('-am','edit'); SELECT dolt_checkout('main'); $redefine SELECT dolt_commit('-am','redefine'); SELECT dolt_merge('feat');" >/dev/null
+check_redefined_index "21_ours_redefines" "$DB"
+DB="$TMPROOT/21b.db"
+dl "$DB" "$redefine_setup SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); $redefine SELECT dolt_commit('-am','redefine'); SELECT dolt_checkout('main'); $edit SELECT dolt_commit('-am','edit'); SELECT dolt_merge('feat');" >/dev/null
+check_redefined_index "21_theirs_redefines" "$DB"
+DB="$TMPROOT/21c.db"
+dl "$DB" "$redefine_setup SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); $redefine SELECT dolt_commit('-am','redefine'); SELECT dolt_checkout('main'); $edit SELECT dolt_commit('-am','edit'); SELECT dolt_cherry_pick('feat');" >/dev/null
+check_redefined_index "21_cherry_pick" "$DB"
+DB="$TMPROOT/21d.db"
+dl "$DB" "CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+CREATE INDEX ib ON t(c);
+INSERT INTO t VALUES (1,1,1,1),(2,2,2,2),(3,3,3,3);
+SELECT dolt_commit('-Am','init');
+DROP INDEX ib; CREATE INDEX ib ON t(b); SELECT dolt_commit('-am','redefine');
+$edit SELECT dolt_commit('-am','edit');
+SELECT dolt_revert('HEAD~1');" >/dev/null
+check_redefined_index "21_revert" "$DB"
+
 echo ""
 echo "======================================="
 vc_oracle_check_execution

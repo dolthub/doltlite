@@ -19,6 +19,24 @@ int mergeAppendReindexName(char ***paz, int *pn, const char *zName){
   return SQLITE_OK;
 }
 
+/* A same-name index redefined on either side pairs trees built from
+** different definitions; neither one indexes the merged rows. */
+int mergeNoteRedefinedIndex(MergePass1Ctx *c, const char *zIndex){
+  SchemaEntry *pAnc = findSchemaEntry(c->aAncSchema, c->nAncSchema, zIndex);
+  SchemaEntry *pOurs = findSchemaEntry(c->aOursSchema, c->nOursSchema, zIndex);
+  SchemaEntry *pTheirs = findSchemaEntry(
+      c->aTheirsSchema, c->nTheirsSchema, zIndex);
+  if( !pAnc || !pOurs || !pTheirs
+   || !pAnc->zSql || !pOurs->zSql || !pTheirs->zSql ){
+    return SQLITE_OK;
+  }
+  if( strcmp(pAnc->zSql, pOurs->zSql)==0
+   && strcmp(pAnc->zSql, pTheirs->zSql)==0 ){
+    return SQLITE_OK;
+  }
+  return mergeAppendReindexName(c->pazReindex, c->pnReindex, zIndex);
+}
+
 static const char *mergeIndexSkipQuoted(const char *z, char q){
   char qEnd = (q=='[') ? ']' : q;
   z++;
