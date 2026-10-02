@@ -14515,6 +14515,78 @@ static void run_step_delete_pending_rows(void){
   removeDbFiles(dbpath);
 }
 
+/* Step once, run zDelete, then drain; the remaining first-column values
+** must be zWant. */
+static void step_once_then_delete(
+  sqlite3 *db,
+  const char *zName,
+  const char *zSetup,
+  const char *zQuery,
+  const char *zDelete,
+  const char *zWant
+){
+  sqlite3_stmt *st = 0;
+  char seen[128];
+  int rc;
+  int ok = 1;
+  seen[0] = 0;
+  execSql(db, "DROP TABLE IF EXISTS t");
+  if( execSql(db, zSetup)!=SQLITE_OK ) ok = 0;
+  if( ok && sqlite3_prepare_v2(db, zQuery, -1, &st, 0)!=SQLITE_OK ) ok = 0;
+  if( ok && sqlite3_step(st)!=SQLITE_ROW ) ok = 0;
+  if( ok && execSql(db, zDelete)!=SQLITE_OK ) ok = 0;
+  while( ok && (rc = sqlite3_step(st))==SQLITE_ROW && strlen(seen)<100 ){
+    if( seen[0] ) strcat(seen, " ");
+    strcat(seen, (const char*)sqlite3_column_text(st, 0));
+  }
+  if( ok && rc!=SQLITE_DONE ) ok = 0;
+  sqlite3_finalize(st);
+  execSqlSilent(db, "COMMIT");
+  if( ok && strcmp(seen, zWant)!=0 ) ok = 0;
+  if( !ok ) fprintf(stderr, "FAIL detail %s: got '%s' want '%s'\n",
+                    zName, seen, zWant);
+  check(zName, ok);
+}
+
+static void run_reverse_scan_delete_last(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *zIdx =
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);"
+    "CREATE INDEX ta ON t(a);"
+    "INSERT INTO t VALUES(1,10),(2,20),(3,30),(4,40);";
+  const char *zWor =
+    "CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;"
+    "INSERT INTO t VALUES('a',1),('b',2),('c',3),('d',4);";
+
+  printf("=== Reverse Scan Delete Last Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_reverse_scan_delete_last");
+  removeDbFiles(dbpath);
+  check("open_db_for_reverse_scan_delete_last", open_db(dbpath, &db)==SQLITE_OK);
+  step_once_then_delete(db, "reverse_index_scan_delete_last", zIdx,
+    "SELECT a FROM t ORDER BY a DESC", "DELETE FROM t WHERE id=4",
+    "30 20 10");
+  step_once_then_delete(db, "reverse_index_scan_delete_tail", zIdx,
+    "SELECT a FROM t ORDER BY a DESC", "DELETE FROM t WHERE a>=30",
+    "20 10");
+  step_once_then_delete(db, "reverse_index_scan_delete_all", zIdx,
+    "SELECT a FROM t ORDER BY a DESC", "DELETE FROM t", "");
+  step_once_then_delete(db, "forward_index_scan_delete_last", zIdx,
+    "SELECT a FROM t INDEXED BY ta WHERE a>=40", "DELETE FROM t WHERE id=4",
+    "");
+  step_once_then_delete(db, "reverse_without_rowid_delete_last", zWor,
+    "SELECT k FROM t ORDER BY k DESC", "DELETE FROM t WHERE k='d'",
+    "c b a");
+  step_once_then_delete(db, "reverse_scan_delete_pending_last",
+    "CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;"
+    "INSERT INTO t VALUES('a',1),('c',3);"
+    "BEGIN; INSERT INTO t VALUES('b',2),('d',4);",
+    "SELECT k FROM t ORDER BY k DESC", "DELETE FROM t WHERE k='d'",
+    "c b a");
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_intpk_scan_delete_keeps_scan(void){
   sqlite3 *db = 0;
   sqlite3_stmt *scan = 0;
@@ -15392,6 +15464,7 @@ static const RegressionCase aCases[] = {
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
   { "scan_update_current_row", "Scan Update Current Row Test", run_scan_update_current_row },
   { "step_delete_pending_rows", "Step Delete Pending Rows Test", run_step_delete_pending_rows },
+  { "reverse_scan_delete_last", "Reverse Scan Delete Last Test", run_reverse_scan_delete_last },
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },
   { "count_flush_keeps_scan", "Count Flush Keeps Scan Test", run_count_flush_keeps_scan },
   { "index_build_flush_resets_cursor", "Index Build Flush Resets Cursor Test", run_index_build_flush_resets_cursor },

@@ -729,7 +729,14 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
         pCur->eState = CURSOR_SKIPNEXT;
         placed = 1;
       }else if( rc==SQLITE_OK ){
-        pCur->eState = CURSOR_INVALID;
+        int empty = 1;
+        rc = prollyBtCursorLast(pCur, &empty);
+        if( rc==SQLITE_OK && !empty && pCur->eState==CURSOR_VALID ){
+          pCur->skipNext = -1;
+          pCur->eState = CURSOR_SKIPNEXT;
+        }else if( rc==SQLITE_OK ){
+          pCur->eState = CURSOR_INVALID;
+        }
         placed = 1;
       }
     } else {
