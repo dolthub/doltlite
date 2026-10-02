@@ -327,6 +327,54 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
+echo "--- schema change plus row adds and deletes ---"
+
+oracle_both "add_column_plus_delete" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+DELETE FROM t WHERE id = 3;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "add_two_columns_plus_delete" "
+$SEED
+ALTER TABLE t ADD COLUMN e1 INT;
+ALTER TABLE t ADD COLUMN e2 INT;
+DELETE FROM t WHERE id = 3;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "add_column_plus_insert_and_delete" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+INSERT INTO t VALUES(4, 40, 'dave', 1);
+DELETE FROM t WHERE id = 2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+oracle_both "drop_column_plus_insert" "
+$SEED
+ALTER TABLE t DROP COLUMN name;
+INSERT INTO t VALUES(4, 40), (5, 50);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
+# Same total cell count before and after, with more rows added than deleted.
+oracle_both "drop_column_plus_insert_same_cell_count" "
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES(1, 1, 1, 1), (2, 2, 2, 2), (3, 3, 3, 3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN c;
+INSERT INTO t VALUES(4, 4, 4);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
 echo "--- schema change: DROP COLUMN ---"
 
 # Dropped cells are cells_deleted, never also modified.
