@@ -1817,11 +1817,7 @@ dbstatus2 dbstatus2-1.4 class=intentional  # DBSTATUS cache stats zero under chu
 dbstatus2 dbstatus2-1.5 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.8 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-1.9 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
-dbstatus2 dbstatus2-2.2 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
-dbstatus2 dbstatus2-2.3 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-2.6 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
-dbstatus2 dbstatus2-2.7 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
-dbstatus2 dbstatus2-2.8 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-3.2 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 dbstatus2 dbstatus2-3.3 class=intentional  # DBSTATUS cache stats zero under chunk store; dbstat on WITHOUT ROWID
 e_wal e_wal-1.1.1 class=unsupported issue=1836  # journal_mode fixed at wal-reporting; locking-model cascades re-ran setup

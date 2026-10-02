@@ -897,7 +897,9 @@ static ProllyCacheEntry *cacheInsert(
 
   if( pRc ) *pRc = SQLITE_OK;
 
-  pEntry = prollyCacheGet(cache, hash);
+  /* Existence check for a chunk the caller already looked up or just built.
+  ** Counting it as a miss doubles every cold load. */
+  pEntry = cacheGet(cache, hash, 0, 0);
   if( pEntry ){
     if( pBorrow ) chunkStoreBorrowRelease(pBorrow);
     else sqlite3_free(pData);
