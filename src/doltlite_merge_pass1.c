@@ -894,6 +894,10 @@ static int mergePass1BothSides(
     return SQLITE_OK;
   }
 
+  if( bNamedSchemaObject && !bSchemaConflict ){
+    rc = mergeNoteRedefinedIndex(c, zSchemaMergeName);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   /* Adopted their schema for a rename: our rows are off-layout. Judge
   ** the move on the schema, not on whether either side wrote rows. */
   if( zName && zOursPrevSql ){
