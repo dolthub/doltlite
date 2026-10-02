@@ -1233,4 +1233,94 @@ SELECT dolt_rebase('-i', 'main');
 SELECT dolt_rebase('--continue');
 $CV_RESOLVE"
 
+oracle_peer_working_write() {
+  local original="$1" change="$2" name="peer-working-$1-$2"
+  local dir="$TMPROOT/$name" upstream=f dl_rc dt_rc dl_out dt_out
+  local setup edit query dt_query
+  mkdir -p "$dir/dt"
+  setup="CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+INSERT INTO t VALUES(1,'base');
+CREATE TABLE u(x INT PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','f');
+INSERT INTO u VALUES(9);
+SELECT dolt_commit('-am','f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'two');
+SELECT dolt_commit('-am','m1');"
+  if [ "$original" = f ]; then
+    setup="$setup
+SELECT dolt_checkout('f');"
+    upstream=main
+  fi
+  setup="$setup
+SELECT dolt_rebase('-i','$upstream');"
+  vc_oracle_run_doltlite_script "$dir/db" "$dir/dl.setup.out" "$dir/dl.setup.err" "$setup"
+  dl_rc=$?
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.setup.out" "$dir/dt.setup.err" \
+    "$(vc_oracle_translate_for_dolt "$setup")"
+  dt_rc=$?
+  if [ "$dl_rc" -ne 0 ] || [ "$dt_rc" -ne 0 ]; then
+    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES ${name}_setup"
+    echo "  FAIL: $name (setup: doltlite=$dl_rc dolt=$dt_rc)"
+    return
+  fi
+  case "$change" in
+    insert) edit="INSERT INTO t VALUES(900,'peer');" ;;
+    staged) edit="INSERT INTO t VALUES(900,'peer'); SELECT dolt_add('t');" ;;
+    delete) edit="DELETE FROM t WHERE id=1;" ;;
+    schema) edit="CREATE TABLE peer_table(id INT PRIMARY KEY);" ;;
+  esac
+  vc_oracle_run_doltlite_script "$dir/db/$original" "$dir/dl.peer.out" "$dir/dl.peer.err" "$edit"
+  dl_rc=$?
+  (cd "$dir" && "$DOLT" --use-db "dt/$original" sql -q \
+    "$(vc_oracle_translate_for_dolt "$edit")") >"$dir/dt.peer.out" 2>"$dir/dt.peer.err"
+  dt_rc=$?
+  if [ "$dl_rc" -ne 0 ] || [ "$dt_rc" -ne 0 ]; then
+    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES ${name}_peer"
+    echo "  FAIL: $name (peer write: doltlite=$dl_rc dolt=$dt_rc)"
+    return
+  fi
+  vc_oracle_run_doltlite_script "$dir/db/dolt_rebase_$original" \
+    "$dir/dl.cont.out" "$dir/dl.cont.err" "SELECT dolt_rebase('--continue');" --expect-error
+  dl_rc=$?
+  (cd "$dir" && "$DOLT" --use-db "dt/dolt_rebase_$original" sql -q \
+    "CALL dolt_rebase('--continue');") >"$dir/dt.cont.out" 2>"$dir/dt.cont.err"
+  dt_rc=$?
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" \
+     && grep -q "changes in branch $original" "$dir/dl.cont.err" \
+     && grep -q "changes in branch $original" "$dir/dt.cont.err"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES ${name}_refusal"
+    echo "  FAIL: $name (refusal: doltlite=$dl_rc dolt=$dt_rc)"
+    sed 's/^/    /' "$dir/dl.cont.err" "$dir/dt.cont.err"
+  fi
+  query="SELECT CONCAT('LOG|R|',id,'|',v) FROM t ORDER BY id;
+SELECT CONCAT('LOG|U|',x) FROM u ORDER BY x;
+SELECT CONCAT('LOG|S|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY table_name,staged;
+SELECT CONCAT('LOG|H|',message) FROM dolt_log LIMIT 1;"
+  dt_query="$query
+SELECT CONCAT('LOG|T|',COUNT(*)) FROM information_schema.tables
+ WHERE table_schema=DATABASE() AND table_name='peer_table';"
+  query="$query
+SELECT CONCAT('LOG|T|',COUNT(*)) FROM sqlite_schema WHERE name='peer_table';"
+  dl_out=$(printf '.headers off\n.mode list\n%s\n' "$query" \
+    | vc_oracle_run_doltlite "$dir/db/$original" 2>"$dir/dl.post.err" | grep '^LOG|')
+  dt_out=$(cd "$dir" && "$DOLT" --use-db "dt/$original" sql -r csv -q "$dt_query" \
+    2>"$dir/dt.post.err" | tr -d '"\r' | grep '^LOG|')
+  dt_rc=$?
+  if [ "$dt_rc" -ne 0 ]; then
+    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES ${name}_poststate"
+    echo "  FAIL: $name (dolt poststate failed; rc=$dt_rc)"
+  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+for original in main f; do
+  for change in insert staged delete schema; do
+    oracle_peer_working_write "$original" "$change"
+  done
+done
+
 vc_oracle_finish

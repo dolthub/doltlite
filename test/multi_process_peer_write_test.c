@@ -169,6 +169,7 @@ static const Op aOp[] = {
   { "revert", "SELECT dolt_revert('HEAD')", "peer_write_kept_revert" },
   { "rebase_interactive", "SELECT dolt_rebase('-i','f')",
     "peer_write_kept_rebase_interactive" },
+  { "rebase", "SELECT dolt_rebase('f')", "peer_write_kept_rebase" },
   { "clean", "SELECT dolt_clean()", "peer_write_kept_clean" },
   { "fetch", "SELECT dolt_fetch('origin')", "peer_write_kept_fetch" },
   { "pull", "SELECT dolt_pull('origin','main')", "peer_write_kept_pull" },

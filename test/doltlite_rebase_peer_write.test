@@ -1,0 +1,90 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc rebase_peer_state {connection} {
+  $connection eval {
+    SELECT dolt_hashof('HEAD'),dolt_hashof_db('WORKING'),dolt_hashof_db('STAGED');
+    SELECT id,v FROM t ORDER BY id;
+    SELECT name,sql FROM sqlite_schema ORDER BY name;
+    SELECT * FROM dolt_status ORDER BY table_name,staged;
+  }
+}
+
+foreach {original phase} {main plan f plan main edit f edit} {
+  foreach change {unstaged staged staged-only schema deleted} {
+    foreach mode {autocommit transaction savepoint} {
+      reset_db
+      execsql {
+        CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+        INSERT INTO t VALUES(1,'base');
+        CREATE TABLE u(x INTEGER PRIMARY KEY);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_checkout('-b','f');
+        INSERT INTO u VALUES(9);
+        SELECT dolt_commit('-am','f1');
+        SELECT dolt_checkout('main');
+        INSERT INTO t VALUES(2,'two');
+        SELECT dolt_commit('-am','m1');
+      }
+      set upstream f
+      if {$original eq "f"} {
+        execsql {SELECT dolt_checkout('f')}
+        set upstream main
+      }
+      execsql "SELECT dolt_rebase('-i','$upstream')"
+      if {$phase eq "edit"} {
+        execsql {
+          UPDATE dolt_rebase SET action='edit';
+          SELECT dolt_rebase('--continue');
+        }
+      }
+      set path "[file normalize test.db]/$original"
+      sqlite3 peer $path
+      switch $change {
+        unstaged {peer eval {INSERT INTO t VALUES(900,'peer')}}
+        staged {peer eval {INSERT INTO t VALUES(900,'peer'); SELECT dolt_add('t')}}
+        staged-only {
+          peer eval {
+            INSERT INTO t VALUES(900,'peer');
+            SELECT dolt_add('t');
+            DELETE FROM t WHERE id=900;
+          }
+        }
+        schema {peer eval {CREATE TABLE peer_table(id INTEGER PRIMARY KEY)}}
+        deleted {peer eval {DELETE FROM t WHERE id=1}}
+      }
+      set before [rebase_peer_state peer]
+      peer close
+      switch $mode {
+        transaction {execsql {BEGIN}}
+        savepoint {execsql {SAVEPOINT outer}}
+      }
+      set name rebase-peer-$original-$phase-$change-$mode
+      do_catchsql_test $name-refuse {
+        SELECT dolt_rebase('--continue');
+      } [list 1 "rebase aborted due to changes in branch $original"]
+      sqlite3 reader $path
+      do_test $name-preserved {
+        expr {$before eq [rebase_peer_state reader]}
+      } {1}
+      reader close
+      do_test $name-plan-kept {
+        list [db one {SELECT active_branch()}] \
+             [db one {SELECT count(*) FROM dolt_rebase}] \
+             [db one {SELECT count(*) FROM dolt_branches}]
+      } [list dolt_rebase_$original [expr {$phase eq "plan" ? 1 : 0}] 3]
+      do_test $name-abort {
+        execsql {SELECT dolt_rebase('--abort')}
+      } {{Interactive rebase aborted}}
+      db close
+      sqlite3 db $path
+      do_test $name-reopen {
+        list [expr {$before eq [rebase_peer_state db]}] \
+             [db one {SELECT count(*) FROM dolt_branches}]
+      } {1 2}
+      do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+    }
+  }
+}
+
+finish_test

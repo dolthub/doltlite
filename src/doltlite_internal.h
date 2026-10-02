@@ -1716,6 +1716,9 @@ int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
 int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
                                          const ProllyHash *pCatHash,
                                          const ProllyHash *pCommitHash);
+int doltliteConfirmBranchWorkingCatalog(sqlite3 *db, const char *zBranch,
+                                         const ProllyHash *pCatHash,
+                                         const ProllyHash *pCommitHash);
 int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr);
 
 const char *doltliteGetSessionBranch(sqlite3 *db);
