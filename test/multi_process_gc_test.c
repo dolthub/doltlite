@@ -1016,7 +1016,7 @@ static void test_peer_rewrite_then_gc(void){
   };
   static const char *azExpect[] = { "1,2,3,4", "1,4" };
   static const char *azCompact[] = { "SELECT dolt_gc()", "VACUUM" };
-  const char *path = "/tmp/test_peer_rewrite_gc.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_peer_rewrite_gc.db";
   int i, j;
 
   printf("--- Test: idle connection after a peer rewrites the tip and compacts ---\n");
