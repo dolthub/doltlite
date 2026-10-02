@@ -14600,6 +14600,73 @@ static void step_delete_pending(
   check(zName, ok);
 }
 
+static void stepCollect(sqlite3_stmt *st, char *zOut, int nOut, int *pRc){
+  int rc;
+  zOut[0] = 0;
+  while( (rc = sqlite3_step(st))==SQLITE_ROW ){
+    int n = (int)strlen(zOut);
+    snprintf(zOut+n, nOut-n, "%s%s", n ? " " : "",
+             (const char*)sqlite3_column_text(st, 0));
+  }
+  *pRc = rc;
+}
+
+static void run_rollback_to_txn_savepoint_keeps_readers(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *pTbl = 0, *pIdx = 0, *pOther = 0;
+  char dbpath[256];
+  char got[128];
+  int rc;
+
+  printf("=== Rollback To Txn Savepoint Keeps Readers Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rollback_to_txn_sp_readers");
+  removeDbFiles(dbpath);
+  check("open_db_for_rollback_to_txn_sp", open_db(dbpath, &db)==SQLITE_OK);
+  execSql(db,
+    "CREATE TABLE t(k TEXT PRIMARY KEY, a INT);"
+    "CREATE INDEX ta ON t(a);"
+    "INSERT INTO t VALUES('a',1),('b',2),('c',3);"
+    "CREATE TABLE o(z);");
+  sqlite3_prepare_v2(db, "SELECT k FROM t ORDER BY k", -1, &pTbl, 0);
+  sqlite3_prepare_v2(db, "SELECT a FROM t INDEXED BY ta WHERE a>0", -1,
+                     &pIdx, 0);
+  check("rollback_to_txn_sp_readers_start",
+        sqlite3_step(pTbl)==SQLITE_ROW && sqlite3_step(pIdx)==SQLITE_ROW);
+  check("rollback_to_txn_sp_writes",
+        execSql(db, "SAVEPOINT sp;"
+                    "INSERT INTO o VALUES(1);"
+                    "INSERT INTO t VALUES('bb',9);"
+                    "UPDATE t SET a=5 WHERE k='c';"
+                    "ROLLBACK TO sp;")==SQLITE_OK);
+  stepCollect(pTbl, got, sizeof(got), &rc);
+  check("rollback_to_txn_sp_table_reader_continues",
+        rc==SQLITE_DONE && strcmp(got, "b c")==0);
+  stepCollect(pIdx, got, sizeof(got), &rc);
+  check("rollback_to_txn_sp_index_reader_continues",
+        rc==SQLITE_DONE && strcmp(got, "2 3")==0);
+  check("rollback_to_txn_sp_release", execSql(db, "RELEASE sp")==SQLITE_OK);
+  sqlite3_prepare_v2(db,
+    "SELECT (SELECT count(*) FROM o) || ':' || group_concat(k||a) FROM t",
+    -1, &pOther, 0);
+  stepCollect(pOther, got, sizeof(got), &rc);
+  check("rollback_to_txn_sp_writes_undone",
+        rc==SQLITE_DONE && strcmp(got, "0:a1,b2,c3")==0);
+  sqlite3_finalize(pOther);
+
+  sqlite3_reset(pTbl);
+  check("rollback_to_txn_sp_ddl_reader_start",
+        sqlite3_step(pTbl)==SQLITE_ROW);
+  execSql(db, "SAVEPOINT sp2; CREATE TABLE z(x); ROLLBACK TO sp2;");
+  check("rollback_to_txn_sp_ddl_aborts_reader",
+        sqlite3_step(pTbl)==SQLITE_ABORT);
+  execSqlSilent(db, "RELEASE sp2");
+
+  sqlite3_finalize(pTbl);
+  sqlite3_finalize(pIdx);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_step_delete_pending_rows(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -15568,6 +15635,7 @@ static const RegressionCase aCases[] = {
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
   { "scan_update_current_row", "Scan Update Current Row Test", run_scan_update_current_row },
+  { "rollback_to_txn_savepoint_keeps_readers", "Rollback To Txn Savepoint Keeps Readers Test", run_rollback_to_txn_savepoint_keeps_readers },
   { "step_delete_pending_rows", "Step Delete Pending Rows Test", run_step_delete_pending_rows },
   { "reverse_scan_delete_last", "Reverse Scan Delete Last Test", run_reverse_scan_delete_last },
   { "intpk_scan_delete_keeps_scan", "INT PK Scan Delete Keeps Scan Test", run_intpk_scan_delete_keeps_scan },

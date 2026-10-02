@@ -1489,10 +1489,16 @@ int doltliteBtreeCaptureStatement(void *pArg){
   return ensureStatementSavepointsCaptured(p);
 }
 
-static int rollbackCommittedState(Btree *p, BtShared *pBt){
+static int rollbackCommittedState(Btree *p, BtShared *pBt, int bKeepReaders){
   BtCursor *pC;
   int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
-  int rc = restoreFromCommitted(p);
+  int rc;
+  if( !bKeepReaders || bSchemaChangedRollback
+   || (p->db && p->db->mallocFailed)
+   || saveAllCursors(p, pBt, 0, 0)!=SQLITE_OK ){
+    bKeepReaders = 0;
+  }
+  rc = restoreFromCommitted(p);
   if( rc!=SQLITE_OK ){
     /* Reload OOM: drop pointers into chunks rollback is about to discard. */
     btreeFreeCatalogTables(p);
@@ -1505,6 +1511,15 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
   }
   /* Keep an existing fault code; do not clobber SQLITE_ABORT_ROLLBACK. */
   for(pC=pBt->pCursor; pC; pC=pC->pNext){
+    if( bKeepReaders && pC->pBtree==p && pC->eState!=CURSOR_FAULT ){
+      pC->pMutMap = 0;
+      pC->mmActive = 0;
+      pC->mmPhysActive = 0;
+      pC->deferredTreeSeek = 0;
+      pC->mmIdx = -1;
+      pC->mmPhysIdx = -1;
+      continue;
+    }
     if( pC->eState!=CURSOR_FAULT ){
       pC->eState = CURSOR_FAULT;
       pC->skipNext = SQLITE_ABORT;
@@ -1561,7 +1576,7 @@ static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
   ** store's copy is what puts the id counters back. */
   csRestoreTxnSequences(&pBt->store);
   btreeDiscardAllSavepoints(p);
-  rc = rollbackCommittedState(p, pBt);
+  rc = rollbackCommittedState(p, pBt, 1);
   if( rc!=SQLITE_OK ) return rc;
   if( p->db && p->db->isTransactionSavepoint ){
     return persistRolledBackSessionState(p, pBt);
