@@ -1,4 +1,5 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_integrity_common.sh"
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 run_test() {
@@ -881,6 +882,7 @@ echo "--- Guard 22: sparse >2GiB database opens ---"
 
 TMPROOT=$(mktemp -d)
 DB="$TMPROOT/large_open.db"
+dltest_expect_integrity "$DB" 'skip:synthetic sparse file contains an invalid chunk hash'
 
 GUARD22_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD22_VERSION=$(grep '^#define CHUNK_STORE_VERSION ' "$GUARD22_SCRIPT_DIR/../src/chunk_store.h" | awk '{print $3}')

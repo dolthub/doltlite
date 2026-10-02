@@ -235,6 +235,7 @@ with open(dst, 'r+b') as f:
 
 expect_exact_notadb() {
   local name="$1" db="$2"
+  dltest_expect_integrity "$db" 'skip:deliberately unsupported version or bad magic'
   local err status
   err="$("$DOLTLITE" "$db" "SELECT count(*) FROM t;" 2>&1)"
   status=$?

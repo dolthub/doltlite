@@ -1,8 +1,11 @@
 #!/bin/bash
 
+source "$(dirname "${BASH_SOURCE[0]}")/doltlite_integrity_common.sh"
+
 vc_oracle_init_execution() {
   VC_ORACLE_EXECUTION_DIR="$1/execution"
   mkdir -p "$VC_ORACLE_EXECUTION_DIR" || exit 1
+  export DLTEST_INTEGRITY_EXPECTATIONS="$VC_ORACLE_EXECUTION_DIR/integrity-exceptions"
 }
 
 vc_oracle_run_doltlite() (
@@ -12,11 +15,14 @@ vc_oracle_run_doltlite() (
     --error|--expect-error) expectation=error; shift ;;
     --allow-error) expectation=allow-error; shift ;;
   esac
+  local command=(env DLTEST_REAL_DOLTLITE="$DOLTLITE"
+      DLTEST_ENGINE_INTEGRITY_LOG="$VC_ORACLE_EXECUTION_DIR/integrity.failure"
+      "$_dltest_integrity_guard")
   err=$(mktemp "$VC_ORACLE_EXECUTION_DIR/session.XXXXXX") || exit 1
   printf '  FAIL: %s:%s (doltlite session did not complete; database %s)\n' \
     "${BASH_SOURCE[1]##*/}" "${BASH_LINENO[0]}" "${1:-}" > "$err.failure"
   if [ /dev/fd/1 -ef /dev/fd/2 ]; then
-    if "$DOLTLITE" "$@" 2>&1 | tee "$err"; then
+    if "${command[@]}" "$@" 2>&1 | tee "$err"; then
       statuses=("${PIPESTATUS[@]}")
     else
       statuses=("${PIPESTATUS[@]}")
@@ -24,7 +30,7 @@ vc_oracle_run_doltlite() (
     rc=${statuses[0]}
     [ "${statuses[1]}" -eq 0 ] || return 1
   else
-    if "$DOLTLITE" "$@" 2>"$err"; then rc=0; else rc=$?; fi
+    if "${command[@]}" "$@" 2>"$err"; then rc=0; else rc=$?; fi
     cat "$err" >&2
   fi
   if [ "$rc" -ge 128 ] \
@@ -47,7 +53,9 @@ vc_oracle_check_execution() {
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES execution"
     cat "$failure"
-    sed 's/^/      /' "${failure%.failure}"
+    if [ -f "${failure%.failure}" ]; then
+      sed 's/^/      /' "${failure%.failure}"
+    fi
     rm -f "$failure" "${failure%.failure}"
   done
 }

@@ -1,6 +1,12 @@
 #!/bin/bash
 
+source "$(dirname "${BASH_SOURCE[0]}")/doltlite_integrity_common.sh"
+
 DOLTLITE="${1:-${DOLTLITE:-./doltlite}}"
+_dltest_integrity_real="$DOLTLITE"
+if [ "${DOLTLITE##*/}" = dltest_engine_guard.pl ]; then
+  _dltest_integrity_real="$DLTEST_REAL_DOLTLITE"
+fi
 PASS="${PASS:-0}"
 FAIL="${FAIL:-0}"
 ERRORS="${ERRORS:-}"
@@ -22,20 +28,20 @@ dltest_run_sql() {
   if [ "${3:-}" = "bail" ]; then
     if [ "$DLTEST_STRIP_CR" = "1" ]; then
       ( set -o pipefail
-        echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-          "$DOLTLITE" -bail "$db" 2>&1 | tr -d '\r' )
+        echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+          "$_dltest_integrity_guard" -bail "$db" 2>&1 | tr -d '\r' )
     else
-      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-        "$DOLTLITE" -bail "$db" 2>&1
+      echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+        "$_dltest_integrity_guard" -bail "$db" 2>&1
     fi
   else
     if [ "$DLTEST_STRIP_CR" = "1" ]; then
       ( set -o pipefail
-        echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-          "$DOLTLITE" "$db" 2>&1 | tr -d '\r' )
+        echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+          "$_dltest_integrity_guard" "$db" 2>&1 | tr -d '\r' )
     else
-      echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-        "$DOLTLITE" "$db" 2>&1
+      echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+        "$_dltest_integrity_guard" "$db" 2>&1
     fi
   fi
 }
@@ -44,8 +50,8 @@ dltest_run_sql() {
 dltest_engine() {
   local db="$1"
   local sql="$2"
-  printf '%s\n' "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-    "$DOLTLITE" -bail "$db" 2>&1
+  printf '%s\n' "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
+    "$_dltest_integrity_guard" -bail "$db" 2>&1
 }
 
 dltest_require() {
@@ -69,7 +75,7 @@ dltest_require_slow() {
   local db="$2"
   local sql="$3"
   local out rc
-  out=$(printf '%s\n' "$sql" | "$DOLTLITE" -bail "$db" 2>&1)
+  out=$(printf '%s\n' "$sql" | dltest_checked_engine -bail "$db" 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     dltest_fail "$name" "  engine rc=$rc\n  $out"
@@ -92,6 +98,10 @@ dltest_fail() {
 # An error status can be the expected outcome; a signal never is.
 dltest_check_signal() {
   local name="$1" rc="$2" result="$3"
+  if [ "$rc" -eq 125 ]; then
+    dltest_fail "$name" "  engine integrity check failed\n  got: $result"
+    return 1
+  fi
   if [ "$rc" -ge 128 ]; then
     dltest_fail "$name" "  engine died of a signal (rc=$rc)\n  got: $result"
     return 1

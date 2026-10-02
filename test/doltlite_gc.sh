@@ -333,6 +333,7 @@ db_rm "$DB"
 
 # Mark failure must name the chunk (hash, source, rc). Flip the first WAL tag to make later chunks unreachable.
 DB=/tmp/test_gc_mark_diag_$$.db; db_rm "$DB"
+dltest_expect_integrity "$DB" 'skip:deliberately damaged WAL tag'
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','seed');" | $DOLTLITE "$DB" > /dev/null 2>&1

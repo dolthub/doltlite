@@ -29,6 +29,9 @@ run_oracle() {
   local name="$1" setup="$2" verify_args="$3" follow="$4" allow_empty="$5"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
+  if [ -n "${6:-}" ]; then
+    dltest_expect_integrity "$dir/dl/db" "$6"
+  fi
 
   local dl_verify
   if [ -z "$verify_args" ]; then
@@ -208,7 +211,7 @@ FOLLOW_T_ROWS="SELECT CONCAT('R|row=', CASE violation_type WHEN 'foreign key' TH
 echo "--- unique: after merge ---"
 VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_after_merge" "$UNIQUE_SETUP" "" \
   "$FOLLOW_AGG
-$FOLLOW_T_ROWS" 0
+$FOLLOW_T_ROWS" 0 '^non-unique entry in index sqlite_autoindex_t_1$'
 
 echo "--- unique: re-verify after clearing ---"
 VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_reverify" \
@@ -217,7 +220,7 @@ DELETE FROM dolt_constraint_violations_t;
 " \
 "" \
 "$FOLLOW_AGG
-$FOLLOW_T_ROWS" 0
+$FOLLOW_T_ROWS" 0 '^non-unique entry in index sqlite_autoindex_t_1$'
 
 echo "--- unique: named otherTable ---"
 VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_named_other" \
@@ -225,7 +228,7 @@ VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_named_other" \
 DELETE FROM dolt_constraint_violations_t;
 " \
 "'otherTable'" \
-"$FOLLOW_AGG_COUNT" 1
+"$FOLLOW_AGG_COUNT" 1 '^non-unique entry in index sqlite_autoindex_t_1$'
 
 echo "--- FK: --force commit keeps merge-recorded violations ---"
 VC_ORACLE_EXPECTATION=allow-error run_oracle "fk_force_commit_keeps_merge_cvs" \
@@ -243,7 +246,7 @@ SELECT dolt_commit('-Am', 'commit with violations', '--force');
 " \
 "" \
 "$FOLLOW_AGG
-$FOLLOW_T_ROWS" 0
+$FOLLOW_T_ROWS" 0 '^non-unique entry in index sqlite_autoindex_t_1$'
 
 echo "--- unique: --all after force-commit ---"
 VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_all_after_commit" \
@@ -253,7 +256,7 @@ DELETE FROM dolt_constraint_violations_t;
 " \
 "'--all'" \
 "$FOLLOW_AGG
-$FOLLOW_T_ROWS" 0
+$FOLLOW_T_ROWS" 0 '^non-unique entry in index sqlite_autoindex_t_1$'
 
 echo "--- unique: --all --output-only ---"
 VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_output_only" \
@@ -262,7 +265,7 @@ SELECT dolt_commit('-Am', 'commit with violations', '--force');
 DELETE FROM dolt_constraint_violations_t;
 " \
 "'--all', '--output-only'" \
-"$FOLLOW_AGG_COUNT" 1
+"$FOLLOW_AGG_COUNT" 1 '^non-unique entry in index sqlite_autoindex_t_1$'
 
 echo "--- unique: --output-only preserves recorded violations ---"
 VC_ORACLE_EXPECTATION=allow-error run_oracle "unique_output_only_preserves_recorded" \

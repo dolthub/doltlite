@@ -1,4 +1,5 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_integrity_common.sh"
 
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
@@ -57,6 +58,7 @@ db_rm "$DB"
 DB=/tmp/test_s6_wal_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
+dltest_expect_integrity "$DB" 'skip:deliberately flipped byte in stored chunk'
 file_size=$(stat -f%z "$DB" 2>/dev/null || stat -c%s "$DB" 2>/dev/null)
 mid=$((file_size / 2))
 perl -e '

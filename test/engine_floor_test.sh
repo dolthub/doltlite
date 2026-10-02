@@ -48,12 +48,13 @@ if [ -x "$ENG" ]; then
   fi
   rm -f "$fake"
 
+  guard_log="$(mktemp "${TMPDIR:-/tmp}/dltest-guard.XXXXXX")"
   sig="$(mktemp "${TMPDIR:-/tmp}/dltest-signal.XXXXXX")"
   printf '%s\n' '#!/bin/sh' 'cat >/dev/null' 'echo "${DLTEST_STUB_OUT:-1}"' \
     'kill -SEGV $$' >"$sig"
   chmod +x "$sig"
   for helper in run_test_match run_test_lastline; do
-    if DLTEST_SKIP_ENGINE_FLOOR=1 DOLTLITE="$sig" bash -c '
+    if DLTEST_ENGINE_SIGNAL_LOG="$guard_log" DLTEST_SKIP_ENGINE_FLOOR=1 DOLTLITE="$sig" bash -c '
       . "'"$SCRIPT_DIR"'/lib/doltlite_test_common.sh"
       '"$helper"' "signal" "SELECT 1;" "1" ":memory:"
       [ "$FAIL" -gt 0 ]
@@ -65,7 +66,7 @@ if [ -x "$ENG" ]; then
       exit 1
     fi
   done
-  if DLTEST_SKIP_ENGINE_FLOOR=1 DLTEST_STUB_OUT="Error: boom" DOLTLITE="$sig" bash -c '
+  if DLTEST_ENGINE_SIGNAL_LOG="$guard_log" DLTEST_SKIP_ENGINE_FLOOR=1 DLTEST_STUB_OUT="Error: boom" DOLTLITE="$sig" bash -c '
     . "'"$SCRIPT_DIR"'/lib/doltlite_test_common.sh"
     run_test "signal_expected_error" "SELECT 1;" "Error: boom" ":memory:"
     [ "$FAIL" -gt 0 ]
@@ -77,7 +78,7 @@ if [ -x "$ENG" ]; then
     exit 1
   fi
 
-  guard_log="$(mktemp "${TMPDIR:-/tmp}/dltest-guard.XXXXXX")"
+  : > "$guard_log"
   guard_rc=0
   guard_out=$(echo "SELECT 1;" | DLTEST_REAL_DOLTLITE="$sig" \
     DLTEST_ENGINE_SIGNAL_LOG="$guard_log" \

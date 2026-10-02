@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="${DOLTLITE_BUILD_DIR:-$REPO_ROOT/build}"
 
 source "$SCRIPT_DIR/lib/doltlite_suite_manifest.sh"
+source "$SCRIPT_DIR/lib/doltlite_integrity_common.sh"
 
 if [ ! -d "$BUILD_DIR" ]; then
   echo "ERROR: build directory not found: $BUILD_DIR"
@@ -89,7 +90,9 @@ for t in "${TESTS[@]}"; do
   signal_log=""
   if [ -n "$ENGINE_GUARD" ]; then
     signal_log=$(mktemp "${TMPDIR:-/tmp}/dltest_signals.XXXXXX")
-    guarded=(env DLTEST_ENGINE_SIGNAL_LOG="$signal_log" DOLTLITE="$ENGINE_GUARD"
+    guarded=(env DLTEST_ENGINE_SIGNAL_LOG="$signal_log"
+             DLTEST_ENGINE_INTEGRITY_LOG="$signal_log"
+             DLTEST_INTEGRITY_EXPECTATIONS="$signal_log.exceptions" DOLTLITE="$ENGINE_GUARD"
              bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t" "$ENGINE_GUARD")
   else
     guarded=(bash "$SCRIPT_DIR/run_guarded_suite.sh" "$SCRIPT_DIR/$t" "$DOLTLITE")
@@ -98,11 +101,11 @@ for t in "${TESTS[@]}"; do
   "${guarded[@]}" || rc=$?
   if [ -n "$signal_log" ]; then
     if [ -s "$signal_log" ]; then
-      echo "ENGINE SIGNAL: $t ran engine sessions that died of a signal:"
+      echo "ENGINE FAILURE: $t ran engine sessions with signal or integrity failures:"
       sed -n '1,20s/^/  /p' "$signal_log"
       rc=1
     fi
-    rm -f "$signal_log"
+    rm -f "$signal_log" "$signal_log.exceptions"
   fi
   if [ "$rc" -eq 0 ]; then
     total_pass=$((total_pass + 1))
