@@ -213,22 +213,21 @@ static int remoteSqlSelectLazyRevision(
 ){
   ProllyHash commitHash;
   ProllyHash catalogHash;
-  u8 isBranch = 0;
+  char *zBranch = 0;
   int rc;
 
   memset(&commitHash, 0, sizeof(commitHash));
   memset(&catalogHash, 0, sizeof(catalogHash));
   rc = doltliteResolveOpenRevision(
-      cs, zRevision, &commitHash, &catalogHash, &isBranch);
-  if( rc!=SQLITE_OK ) return rc;
+      cs, zRevision, &commitHash, &catalogHash, &zBranch);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zBranch);
+    return rc;
+  }
 
-  if( isBranch ){
-    const char *zBranch = zRevision;
-    if( strcmp(zRevision, "HEAD")==0 || strcmp(zRevision, "head")==0 ){
-      zBranch = chunkStoreGetDefaultBranch(cs);
-      if( !zBranch ) return SQLITE_NOTFOUND;
-    }
+  if( zBranch ){
     rc = doltliteSetSessionBranch(db, zBranch);
+    sqlite3_free(zBranch);
     if( rc!=SQLITE_OK ) return rc;
     pBtree->headCommit = commitHash;
     pBtree->isDetached = 0;

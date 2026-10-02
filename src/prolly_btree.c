@@ -785,6 +785,7 @@ int sqlite3BtreeOpen(
   int hasMainBtree;
   u8 poisonAfterOpen = 0;
   char *zStoreFilename = 0;
+  char *zResolvedBranch = 0;
   const char *zBranchFromPath = 0;
   const char *zOpenFilename = zFilename;
 
@@ -990,7 +991,6 @@ int sqlite3BtreeOpen(
     BtreeBranchState state;
     ProllyHash branchCommit;
     ProllyHash revisionCatalog;
-    u8 isBranchRevision = 0;
     u8 bDeferredOpen = 0;
     const char *zDef = zBranchFromPath ? zBranchFromPath :
       chunkStoreGetDefaultBranch(&pBt->store);
@@ -999,9 +999,9 @@ int sqlite3BtreeOpen(
     memset(&revisionCatalog, 0, sizeof(revisionCatalog));
     if( zBranchFromPath ){
       rc = doltliteResolveOpenRevision(&pBt->store, zDef, &branchCommit,
-                                       &revisionCatalog, &isBranchRevision);
+                                       &revisionCatalog, &zResolvedBranch);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
-      if( rc==SQLITE_NOTFOUND && isBranchRevision
+      if( rc==SQLITE_NOTFOUND && zResolvedBranch
        && !chunkStoreOriginSourceEnabled(&pBt->store) ){
         bDeferredOpen = 1;
         rc = SQLITE_OK;
@@ -1027,11 +1027,13 @@ int sqlite3BtreeOpen(
       prollyCacheFree(&pBt->cache);
       chunkStoreClose(&pBt->store);
       sqlite3_free(zStoreFilename);
+      sqlite3_free(zResolvedBranch);
       sqlite3_free(pBt);
       sqlite3_free(p);
       return openRc;
     }
-    if( zBranchFromPath && !isBranchRevision ){
+    if( zResolvedBranch ) zDef = zBranchFromPath = zResolvedBranch;
+    if( zBranchFromPath && !zResolvedBranch ){
       memset(&state, 0, sizeof(state));
       state.catalog = revisionCatalog;
       state.stagedCatalog = revisionCatalog;
@@ -1055,6 +1057,7 @@ int sqlite3BtreeOpen(
       prollyCacheFree(&pBt->cache);
       chunkStoreClose(&pBt->store);
       sqlite3_free(zStoreFilename);
+      sqlite3_free(zResolvedBranch);
       sqlite3_free(pBt);
       sqlite3_free(p);
       return rc;
@@ -1072,6 +1075,7 @@ int sqlite3BtreeOpen(
           prollyCacheFree(&pBt->cache);
           chunkStoreClose(&pBt->store);
           sqlite3_free(zStoreFilename);
+          sqlite3_free(zResolvedBranch);
           sqlite3_free(pBt);
           sqlite3_free(p);
           return rc;
@@ -1092,6 +1096,7 @@ int sqlite3BtreeOpen(
           prollyCacheFree(&pBt->cache);
           chunkStoreClose(&pBt->store);
           sqlite3_free(zStoreFilename);
+          sqlite3_free(zResolvedBranch);
           sqlite3_free(pBt);
           sqlite3_free(p);
           return rc;
@@ -1124,6 +1129,7 @@ int sqlite3BtreeOpen(
     prollyCacheFree(&pBt->cache);
     chunkStoreClose(&pBt->store);
     sqlite3_free(zStoreFilename);
+    sqlite3_free(zResolvedBranch);
     sqlite3_free(pBt);
     sqlite3_free(p);
     return SQLITE_NOMEM;
@@ -1142,7 +1148,9 @@ int sqlite3BtreeOpen(
       chunkStoreGetDefaultBranch(&pBt->store);
     ProllyHash branchCommit;
     if( !defBranch ) defBranch = "main";
-    p->zBranch = sqlite3_mprintf("%s", defBranch);
+    p->zBranch = zResolvedBranch ? zResolvedBranch :
+      sqlite3_mprintf("%s", defBranch);
+    zResolvedBranch = 0;
     if( p->zBranch==0 ){
       sqlite3_free(zStoreFilename);
       sqlite3BtreeClose(p);
