@@ -627,11 +627,9 @@ static int dsComputeTableStats(
       switch( pChange->type ){
         case PROLLY_DIFF_ADD:
           rowsAdd++;
-          cellsAdd += nToCols;
           break;
         case PROLLY_DIFF_DELETE:
           rowsDel++;
-          cellsDel += nFromCols;
           break;
         case PROLLY_DIFF_MODIFY: {
           int nDiffer = 0, nModified = 0;
@@ -655,13 +653,23 @@ static int dsComputeTableStats(
     rc = SQLITE_OK;
   }
 
+  /* Dolt's net formula: row adds and deletes at the new width, with the
+  ** change in total cell count folded into one side. */
   if( hasFrom && hasTo ){
-    i64 rowsInBoth = oldCount - rowsDel;
-    if( rowsInBoth < 0 ) rowsInBoth = 0;
-    if( nToCols > nFromCols ){
-      cellsAdd += (i64)rowsInBoth * (nToCols - nFromCols);
-    }else if( nFromCols > nToCols ){
-      cellsDel += (i64)rowsInBoth * (nFromCols - nToCols);
+    i64 rowCellsAdd = rowsAdd * nToCols;
+    i64 rowCellsDel = rowsDel * nToCols;
+    i64 cellDiff = newCount * nToCols - oldCount * nFromCols;
+    if( cellDiff>0 ){
+      cellsAdd = cellDiff + rowCellsDel;
+      cellsDel = rowCellsDel;
+    }else if( cellDiff<0 ){
+      cellsAdd = rowCellsAdd;
+      cellsDel = -cellDiff + rowCellsAdd;
+    }else if( rowCellsAdd!=rowCellsDel ){
+      cellsAdd = cellsDel = rowCellsAdd>rowCellsDel ? rowCellsAdd : rowCellsDel;
+    }else{
+      cellsAdd = rowCellsAdd;
+      cellsDel = rowCellsDel;
     }
   }
 
