@@ -7,6 +7,7 @@
 #include "chunk_store.h"
 #include "prolly_mutate.h"
 #include "prolly_three_way_diff.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -186,7 +187,7 @@ static void test_identical(void){
   ProllyCache cache;
   ProllyHash root;
   int rc;
-  const char *path = "/tmp/test_3wd_identical";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_identical";
 
   rc = openTestStore(&cs, &cache, path);
   check("identical: open store", rc==SQLITE_OK);
@@ -214,7 +215,7 @@ static void test_left_add(void){
   ProllyCache cache;
   ProllyHash ancestor, ours;
   int rc;
-  const char *path = "/tmp/test_3wd_ladd";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_ladd";
 
   rc = openTestStore(&cs, &cache, path);
   check("left_add: open", rc==SQLITE_OK);
@@ -252,7 +253,7 @@ static void test_right_add(void){
   ProllyCache cache;
   ProllyHash ancestor, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_radd";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_radd";
 
   rc = openTestStore(&cs, &cache, path);
   check("right_add: open", rc==SQLITE_OK);
@@ -288,7 +289,7 @@ static void test_left_delete(void){
   ProllyCache cache;
   ProllyHash ancestor, ours;
   int rc;
-  const char *path = "/tmp/test_3wd_ldel";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_ldel";
 
   rc = openTestStore(&cs, &cache, path);
   check("left_delete: open", rc==SQLITE_OK);
@@ -325,7 +326,7 @@ static void test_right_delete(void){
   ProllyCache cache;
   ProllyHash ancestor, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_rdel";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_rdel";
 
   rc = openTestStore(&cs, &cache, path);
   check("right_delete: open", rc==SQLITE_OK);
@@ -362,7 +363,7 @@ static void test_left_modify(void){
   ProllyCache cache;
   ProllyHash ancestor, ours;
   int rc;
-  const char *path = "/tmp/test_3wd_lmod";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_lmod";
 
   rc = openTestStore(&cs, &cache, path);
   check("left_modify: open", rc==SQLITE_OK);
@@ -403,7 +404,7 @@ static void test_right_modify(void){
   ProllyCache cache;
   ProllyHash ancestor, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_rmod";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_rmod";
 
   rc = openTestStore(&cs, &cache, path);
   check("right_modify: open", rc==SQLITE_OK);
@@ -440,7 +441,7 @@ static void test_convergent_modify(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_conv_mod";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_conv_mod";
 
   rc = openTestStore(&cs, &cache, path);
   check("conv_modify: open", rc==SQLITE_OK);
@@ -481,7 +482,7 @@ static void test_convergent_delete(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_conv_del";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_conv_del";
 
   rc = openTestStore(&cs, &cache, path);
   check("conv_delete: open", rc==SQLITE_OK);
@@ -522,7 +523,7 @@ static void test_convergent_add(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_conv_add";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_conv_add";
 
   rc = openTestStore(&cs, &cache, path);
   check("conv_add: open", rc==SQLITE_OK);
@@ -563,7 +564,7 @@ static void test_conflict_mm(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_conf_mm";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_conf_mm";
 
   rc = openTestStore(&cs, &cache, path);
   check("conflict_mm: open", rc==SQLITE_OK);
@@ -608,7 +609,7 @@ static void test_conflict_dm(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_conf_dm";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_conf_dm";
 
   rc = openTestStore(&cs, &cache, path);
   check("conflict_dm: open", rc==SQLITE_OK);
@@ -649,7 +650,7 @@ static void test_conflict_dm_reversed(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_conf_dm_r";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_conf_dm_r";
 
   rc = openTestStore(&cs, &cache, path);
   check("conflict_dm_r: open", rc==SQLITE_OK);
@@ -691,7 +692,7 @@ static void test_mixed(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs, tmp;
   int rc;
-  const char *path = "/tmp/test_3wd_mixed";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_mixed";
   int foundLeftAdd=0, foundRightDel=0, foundConflict=0;
   int i;
 
@@ -748,7 +749,7 @@ static void test_empty_ancestor(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_empty_anc";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_empty_anc";
 
   rc = openTestStore(&cs, &cache, path);
   check("empty_anc: open", rc==SQLITE_OK);
@@ -799,7 +800,7 @@ static void test_mixed_shape_empty_ancestor(void){
   int rc;
   int i;
   int leftAdds = 0, rightAdds = 0, paired = 0;
-  const char *path = "/tmp/test_3wd_mixed_shape";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_mixed_shape";
 
   rc = openTestStore(&cs, &cache, path);
   check("mixed_shape: open", rc==SQLITE_OK);
@@ -846,7 +847,7 @@ static void test_conflict_add(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_conf_add";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_conf_add";
 
   rc = openTestStore(&cs, &cache, path);
   check("conflict_add: open", rc==SQLITE_OK);
@@ -887,7 +888,7 @@ static void test_many_rows(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs, tmp;
   int rc;
-  const char *path = "/tmp/test_3wd_many";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_many";
   int i;
 
   rc = openTestStore(&cs, &cache, path);
@@ -962,7 +963,7 @@ static void test_sorted_output(void){
   ProllyCache cache;
   ProllyHash ancestor, ours, theirs, tmp;
   int rc;
-  const char *path = "/tmp/test_3wd_sorted";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_sorted";
   int i;
 
   rc = openTestStore(&cs, &cache, path);
@@ -1013,7 +1014,7 @@ static void test_open_failure_cleanup(void){
   ProllyCache cache;
   ProllyHash bogus, theirs;
   int rc;
-  const char *path = "/tmp/test_3wd_openfail";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_openfail";
 
   rc = openTestStore(&cs, &cache, path);
   check("open_fail: open", rc==SQLITE_OK);

@@ -8,6 +8,7 @@
 #include <time.h>
 #include "sqlite3.h"
 #include "chunk_store.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -76,7 +77,7 @@ static int g_test_seq = 0;
 static char g_dbpath[512];
 static const char *fresh_db(void){
   snprintf(g_dbpath, sizeof(g_dbpath),
-           "/tmp/crash_test_%d_%d.db", (int)getpid(), g_test_seq++);
+           DOLTLITE_TEST_TMPDIR "/crash_test_%d_%d.db", (int)getpid(), g_test_seq++);
   removeDbFiles(g_dbpath);
   return g_dbpath;
 }

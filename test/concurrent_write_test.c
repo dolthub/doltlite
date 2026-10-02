@@ -3,6 +3,7 @@
 #include <string.h>
 #include <pthread.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -167,7 +168,7 @@ static int heldSqlFinish(HeldThreadSql *p){
 static void test_cross_thread_transaction(void){
   sqlite3 *db = 0;
   sqlite3 *peer = 0;
-  const char *dbpath = "/tmp/test_cross_thread_transaction.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_cross_thread_transaction.db";
   int i;
   int rc;
   int allOk = 1;
@@ -249,7 +250,7 @@ static void test_cross_thread_transaction(void){
 
 static void test_multi_writer_dml(void){
   sqlite3 *a = 0, *b = 0, *fresh = 0;
-  const char *dbpath = "/tmp/test_multi_writer_dml.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_multi_writer_dml.db";
   const char *r;
   int rc;
 
@@ -364,7 +365,7 @@ static const char *exec1_busy(sqlite3 *db, const char *sql, int maxRetries){
 
 int main(){
   sqlite3 *db1 = 0, *db2 = 0, *db3 = 0, *db4 = 0;
-  const char *dbpath = "/tmp/test_concurrent_write.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_concurrent_write.db";
   int rc;
 
   remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }

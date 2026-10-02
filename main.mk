@@ -446,8 +446,14 @@ T.cc.extension = $(T.compile) -I. -I$(TOP)/src $(T.cc.sqlite.extras) -DSQLITE_CO
 # $(T.link.gcov) = optional config-specific flags for $(T.link),
 # intended for use with gcov-related flags.
 #
+# $(T.test.tmpdir) = scratch root for C test databases, unique per build
+# directory so concurrent checkouts on one host do not share /tmp paths.
+#
+ifndef T.test.tmpdir
+T.test.tmpdir := /tmp/dltest-$(shell printf '%s' "$(CURDIR)" | cksum | cut -d' ' -f1)
+endif
 T.link = $(T.compile) $(T.cc.sqlite.extras) $(CFLAGS.intree_includes) \
-    $(T.link.gcov)
+    $(T.link.gcov) -DDOLTLITE_TEST_TMPDIR='"$(T.test.tmpdir)"'
 #
 # $(T.link.shared) = $(T.link) invocation specifically for shared libraries
 #

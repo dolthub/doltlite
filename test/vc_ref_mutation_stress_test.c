@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include "sqlite3.h"
 #include "doltlite_internal.h"
+#include "lib/test_tmpdir.h"
 
 #define N_WORKERS 3
 #define N_ROUNDS 4
@@ -502,7 +503,7 @@ static int runDefaultSetterChild(const char *path, int readFd, int writeFd){
 }
 
 static void runDefaultRenameStress(void){
-  const char *path = "/tmp/test_vc_default_rename_stress.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_vc_default_rename_stress.db";
   sqlite3 *db = 0;
   int toChild[2];
   int fromChild[2];
@@ -592,7 +593,7 @@ static int addMutationBranch(sqlite3 *db, ChunkStore *cs, void *pArg){
 }
 
 static void runAtomicMutationTests(void){
-  const char *path = "/tmp/test_vc_atomic_mutation.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_vc_atomic_mutation.db";
   sqlite3 *db1 = 0;
   sqlite3 *db2 = 0;
   FailingMutationCtx mutation;
@@ -644,7 +645,7 @@ static void runAtomicMutationTests(void){
 }
 
 static void runPeerCommitRetryTest(void){
-  const char *path = "/tmp/test_vc_ref_retry.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_vc_ref_retry.db";
   sqlite3 *db = 0;
   char out[256];
   int count = 0;
@@ -684,7 +685,7 @@ static void runPeerCommitRetryTest(void){
 }
 
 int main(void){
-  const char *path = "/tmp/test_vc_ref_mutation_stress.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_vc_ref_mutation_stress.db";
   pid_t pids[N_WORKERS];
   int status;
   int i;

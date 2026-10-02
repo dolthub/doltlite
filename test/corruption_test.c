@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include "sqlite3.h"
 #include "chunk_store.h"
+#include "lib/test_tmpdir.h"
 
 #define MANIFEST_SIZE 168
 
@@ -369,7 +370,7 @@ static int open_fails_or_errors(const char *path){
 
 
 static void test_truncate_mid_manifest(void){
-  const char *dbpath = "/tmp/test_corr_trunc_manifest.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_trunc_manifest.db";
   int err;
 
   printf("--- Test 1: Truncate mid-manifest (100 bytes) ---\n");
@@ -384,8 +385,8 @@ static void test_truncate_mid_manifest(void){
 }
 
 static void test_truncate_mid_wal(void){
-  const char *dbpath = "/tmp/test_corr_trunc_wal.db";
-  const char *goodpath = "/tmp/test_corr_trunc_wal_good.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_trunc_wal.db";
+  const char *goodpath = DOLTLITE_TEST_TMPDIR "/test_corr_trunc_wal_good.db";
   off_t sz;
 
   printf("--- Test 2: Truncate mid-WAL ---\n");
@@ -414,7 +415,7 @@ static void test_truncate_mid_wal(void){
 }
 
 static void test_zero_manifest(void){
-  const char *dbpath = "/tmp/test_corr_zero_manifest.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_zero_manifest.db";
   unsigned char zeros[MANIFEST_SIZE];
   int err;
 
@@ -432,7 +433,7 @@ static void test_zero_manifest(void){
 }
 
 static void test_corrupt_chunk_data(void){
-  const char *dbpath = "/tmp/test_corr_chunk.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_chunk.db";
   off_t sz;
 
   printf("--- Test 4: Corrupt chunk data ---\n");
@@ -488,7 +489,7 @@ static void test_corrupt_chunk_data(void){
 }
 
 static void test_truncate_past_manifest(void){
-  const char *dbpath = "/tmp/test_corr_just_manifest.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_just_manifest.db";
   int err;
 
   printf("--- Test 5: Truncate to just past manifest ---\n");
@@ -503,7 +504,7 @@ static void test_truncate_past_manifest(void){
 }
 
 static void test_zero_refs_hash(void){
-  const char *dbpath = "/tmp/test_corr_refs.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_refs.db";
   unsigned char zeros[20];
 
   printf("--- Test 6: Zero out refs hash (compacted DB) ---\n");
@@ -530,7 +531,7 @@ static void test_zero_refs_hash(void){
 }
 
 static void test_append_garbage(void){
-  const char *dbpath = "/tmp/test_corr_append.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_append.db";
   off_t sz;
 
   printf("--- Test 7: Append garbage after WAL ---\n");
@@ -572,7 +573,7 @@ static void test_append_garbage(void){
 }
 
 static void test_empty_file(void){
-  const char *dbpath = "/tmp/test_corr_empty.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_empty.db";
 
   printf("--- Test 8: Empty file (0 bytes) ---\n");
   removeDb(dbpath);
@@ -605,7 +606,7 @@ static void test_empty_file(void){
 }
 
 static void test_manifest_only(void){
-  const char *dbpath = "/tmp/test_corr_manifest_only.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_manifest_only.db";
 
   printf("--- Test 9: File with only manifest header ---\n");
 
@@ -630,7 +631,7 @@ static void test_manifest_only(void){
 }
 
 static void test_corrupt_wal_tag(void){
-  const char *dbpath = "/tmp/test_corr_wal_tag.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_wal_tag.db";
   off_t sz;
 
   printf("--- Test 10: Corrupt WAL tag byte ---\n");
@@ -669,7 +670,7 @@ static void test_corrupt_wal_tag(void){
 }
 
 static void test_corrupt_wal_chunk_body_stops_replay(void){
-  const char *dbpath = "/tmp/test_corr_wal_chunk_body.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_wal_chunk_body.db";
   sqlite3 *db = 0;
   int rc;
   off_t bodyOff;
@@ -709,7 +710,7 @@ static void test_corrupt_wal_chunk_body_stops_replay(void){
 }
 
 static void test_corrupt_initial_wal_chunk_body_detected(void){
-  const char *dbpath = "/tmp/test_corr_initial_wal_chunk_body.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_initial_wal_chunk_body.db";
   off_t bodyOff;
   unsigned char bad = 0x5A;
 
@@ -747,7 +748,7 @@ static void test_corrupt_initial_wal_chunk_body_detected(void){
 }
 
 static void test_corrupt_final_committed_wal_chunk_detected(void){
-  const char *dbpath = "/tmp/test_corr_final_committed_wal_chunk.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_final_committed_wal_chunk.db";
   sqlite3 *db = 0;
   off_t bodyOff;
   unsigned char bad = 0x3C;
@@ -776,7 +777,7 @@ static void test_corrupt_final_committed_wal_chunk_detected(void){
 }
 
 static void test_wrong_file_size_in_manifest(void){
-  const char *dbpath = "/tmp/test_corr_filesize.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_filesize.db";
   unsigned char bad_offset[8] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
   };
@@ -796,7 +797,7 @@ static void test_wrong_file_size_in_manifest(void){
 }
 
 static void test_corrupt_magic(void){
-  const char *dbpath = "/tmp/test_corr_magic.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_magic.db";
   unsigned char bad_magic[4] = { 0x00, 0x00, 0x00, 0x00 };
   int err;
 
@@ -814,7 +815,7 @@ static void test_corrupt_magic(void){
 }
 
 static void test_corrupt_version(void){
-  const char *dbpath = "/tmp/test_corr_version.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_version.db";
   unsigned char bad_ver[4] = { 0xFF, 0x00, 0x00, 0x00 };
   int err;
 
@@ -832,7 +833,7 @@ static void test_corrupt_version(void){
 }
 
 static void test_corrupt_head_commit(void){
-  const char *dbpath = "/tmp/test_corr_head.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_head.db";
   unsigned char bad_hash[20];
 
   printf("--- Test 17: Corrupt former head_commit bytes (compacted) ---\n");
@@ -867,7 +868,7 @@ static void test_corrupt_head_commit(void){
 }
 
 static void test_corrupt_chunk_count(void){
-  const char *dbpath = "/tmp/test_corr_chunkcount.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_chunkcount.db";
   unsigned char huge_count[4] = { 0xFF, 0xFF, 0xFF, 0x7F };
 
   printf("--- Test 18: Corrupt chunk_count field (compacted) ---\n");
@@ -883,7 +884,7 @@ static void test_corrupt_chunk_count(void){
 }
 
 static void test_corrupt_index_offset(void){
-  const char *dbpath = "/tmp/test_corr_idxoff.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_idxoff.db";
   unsigned char bad_idx[8] = {
     0xFF, 0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00
   };
@@ -912,7 +913,7 @@ static void test_corrupt_index_offset(void){
 }
 
 static void test_corrupt_index_entry_offset(void){
-  const char *dbpath = "/tmp/test_corr_idxentryoff.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_idxentryoff.db";
   long long indexOffset;
   unsigned char bad_off[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
@@ -931,7 +932,7 @@ static void test_corrupt_index_entry_offset(void){
 }
 
 static void test_corrupt_index_order(void){
-  const char *dbpath = "/tmp/test_corr_idxorder.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_idxorder.db";
   long long indexOffset;
   unsigned char zero_hash[20];
 
@@ -952,7 +953,7 @@ static void test_corrupt_index_order(void){
 
 
 static void test_crash_garbage_truncated_on_write(void){
-  const char *dbpath = "/tmp/test_corr_garbage_reclaim.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_garbage_reclaim.db";
   off_t szWithGarbage;
   int rc;
 
@@ -1041,7 +1042,7 @@ static off_t wal_chunk_body_offset_by_len(const char *path, unsigned int want){
 }
 
 static void test_damage_far_before_sealing_root_poisons(void){
-  const char *dbpath = "/tmp/test_corr_scan_window.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_scan_window.db";
   ChunkStore cs;
   ProllyHash h1, h2, h3;
   unsigned char small1[32], small3[32];
@@ -1113,9 +1114,9 @@ static void test_damage_far_before_sealing_root_poisons(void){
 }
 
 static void test_wal_open_checkpoint(void){
-  const char *dbpath = "/tmp/test_corr_open_checkpoint.db";
-  const char *tornpath = "/tmp/test_corr_open_checkpoint_torn.db";
-  const char *gcpath = "/tmp/test_corr_open_checkpoint_gc.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_open_checkpoint.db";
+  const char *tornpath = DOLTLITE_TEST_TMPDIR "/test_corr_open_checkpoint_torn.db";
+  const char *gcpath = DOLTLITE_TEST_TMPDIR "/test_corr_open_checkpoint_gc.db";
   sqlite3 *db = 0;
   off_t tailOff;
   long long checkpointOff;
@@ -1345,7 +1346,7 @@ static int countCheckpointRead(sqlite3_file *p, void *a, int n, sqlite3_int64 of
 }
 
 static void test_paged_checkpoint_large_index(void){
-  const char *dbpath = "/tmp/test_corr_paged_checkpoint.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_paged_checkpoint.db";
   const int nChunk = 40000;
   const int aWant[] = { 0, 9999, 19999 };
   ProllyHash aHash[3];
@@ -1496,7 +1497,7 @@ static int writeCheckpointPage(
 }
 
 static void test_checkpoint_cache_collisions(void){
-  const char *path = "/tmp/test_corr_checkpoint_collisions.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_corr_checkpoint_collisions.db";
   u8 leaf[CS_INDEX_PAGE_HEADER_SIZE+CHUNK_INDEX_ENTRY_SIZE];
   ProllyHash keys[5], hashes[5];
   ChunkStore cs;
@@ -1567,7 +1568,7 @@ done:
 }
 
 static void test_checkpoint_cache_validation(void){
-  const char *path = "/tmp/test_corr_checkpoint_cache.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_corr_checkpoint_cache.db";
   u8 leaf[CS_INDEX_PAGE_HEADER_SIZE+2*CHUNK_INDEX_ENTRY_SIZE];
   u8 root[CS_INDEX_PAGE_HEADER_SIZE+CS_INDEX_CHILD_SIZE];
   const i64 leafOffset = 4096;
@@ -1751,7 +1752,7 @@ static const char *rowCountOf(const char *path){
 ** rows are still readable, so failing closed keeps a recoverable file
 ** recoverable instead of destroying it on the next write. */
 static void test_header_seal_detects_tampered_wal_offset(void){
-  const char *dbpath = "/tmp/test_corr_hdrseal.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_hdrseal.db";
   unsigned char buf[8];
   off_t before, after;
 
@@ -1777,7 +1778,7 @@ static void test_header_seal_detects_tampered_wal_offset(void){
 ** value, so version-current files carrying an all-zero self hash are in the
 ** field and must keep opening. */
 static void test_unsealed_header_still_opens(void){
-  const char *dbpath = "/tmp/test_corr_legacyhdr.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_legacyhdr.db";
   unsigned char zeros[PROLLY_HASH_SIZE];
 
   printf("--- Test 27: Pre-seal header still opens ---\n");
@@ -1795,7 +1796,7 @@ static void test_unsealed_header_still_opens(void){
 /* Pre-seal headers are covered by the same bounds check, so they do not keep
 ** the destructive path to themselves. */
 static void test_unsealed_header_bounds_checks_wal_offset(void){
-  const char *dbpath = "/tmp/test_corr_legacybounds.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_legacybounds.db";
   unsigned char zeros[PROLLY_HASH_SIZE];
   unsigned char buf[8];
   off_t before, after;
@@ -1823,7 +1824,7 @@ static void test_unsealed_header_bounds_checks_wal_offset(void){
 ** subtractive bounds check must still refuse a low WAL offset that aims at
 ** live data, and must not truncate the file. */
 static void test_index_end_overflow_bounds_wal_offset(void){
-  const char *dbpath = "/tmp/test_corr_idxoverflow.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_idxoverflow.db";
   unsigned char buf[8];
   unsigned char sizeBuf[4];
   off_t before, after;
@@ -1854,8 +1855,8 @@ static void test_index_end_overflow_bounds_wal_offset(void){
 }
 
 static void test_sealed_wal_root_manifest_validation(void){
-  const char *base = "/tmp/test_corr_wal_root_manifest_base.db";
-  const char *dbpath = "/tmp/test_corr_wal_root_manifest.db";
+  const char *base = DOLTLITE_TEST_TMPDIR "/test_corr_wal_root_manifest_base.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_wal_root_manifest.db";
   sqlite3 *db = 0;
   off_t rootOff;
   long long walOffset;
@@ -1939,7 +1940,7 @@ static void test_sealed_wal_root_manifest_validation(void){
 ** tag+magic+version and the rest zeros (SIZE_HINT / sector prealloc).
 ** Replay must not treat that all-zero self-hash as a commit. */
 static void test_unsealed_wal_root_keeps_prior_commit(void){
-  const char *dbpath = "/tmp/test_corr_unsealed_wal_root.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_unsealed_wal_root.db";
   unsigned char torn[1 + CHUNK_MANIFEST_SIZE];
   unsigned char lastRec[1 + CHUNK_MANIFEST_SIZE];
   off_t sz;

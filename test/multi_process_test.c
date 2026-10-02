@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -97,7 +98,7 @@ static void setup_db(const char *path){
 }
 
 static void test_two_writers(void){
-  const char *path = "/tmp/test_mp_writers.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_writers.db";
   pid_t pid;
   int status;
 
@@ -144,7 +145,7 @@ static void test_two_writers(void){
 }
 
 static void test_reader_during_write(void){
-  const char *path = "/tmp/test_mp_readwrite.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_readwrite.db";
   pid_t pid;
   int status;
 
@@ -189,10 +190,10 @@ static void test_reader_during_write(void){
 }
 
 static void test_reader_after_peer_restore(void){
-  const char *path = "/tmp/test_mp_restore_refresh.db";
-  const char *source = "/tmp/test_mp_restore_source.db";
-  const char *saved = "/tmp/test_mp_restore_refresh_saved.db";
-  const char *foreignPath = "/tmp/test_mp_restore_foreign.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_restore_refresh.db";
+  const char *source = DOLTLITE_TEST_TMPDIR "/test_mp_restore_source.db";
+  const char *saved = DOLTLITE_TEST_TMPDIR "/test_mp_restore_refresh_saved.db";
+  const char *foreignPath = DOLTLITE_TEST_TMPDIR "/test_mp_restore_foreign.db";
   sqlite3 *reader = 0;
   sqlite3 *idle = 0;
   sqlite3 *gc = 0;
@@ -304,7 +305,7 @@ static void test_reader_after_peer_restore(void){
 }
 
 static void test_reader_close_during_write_upgrade(void){
-  const char *path = "/tmp/test_mp_reader_close_upgrade.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_reader_close_upgrade.db";
   int start[2];
   int done[2];
   pid_t pid;
@@ -372,7 +373,7 @@ static void test_reader_close_during_write_upgrade(void){
 }
 
 static void test_add_during_transaction(void){
-  const char *path = "/tmp/test_mp_add_txn.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_add_txn.db";
   int ready[2];
   int release[2];
   pid_t pid;
@@ -446,7 +447,7 @@ static void test_add_during_transaction(void){
 }
 
 static void test_sequential_processes(void){
-  const char *path = "/tmp/test_mp_seq.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_seq.db";
   pid_t pid;
   int status;
 
@@ -483,7 +484,7 @@ static void test_sequential_processes(void){
 }
 
 static void test_gc_during_read(void){
-  const char *path = "/tmp/test_mp_gc_read.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_gc_read.db";
   pid_t pid;
   int status;
   int pipefd[2];
@@ -555,7 +556,7 @@ static void test_gc_during_read(void){
 }
 
 static void test_gc_blocked_by_writer(void){
-  const char *path = "/tmp/test_mp_gc_write.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_gc_write.db";
   pid_t pid;
   int status;
   int pipefd[2];
@@ -620,7 +621,7 @@ static void test_gc_blocked_by_writer(void){
 ** sql-server sessions: the second commit is accepted and both commits and
 ** both rows survive. */
 static void test_cross_process_commit_after_peer(void){
-  const char *path = "/tmp/test_mp_commit_after_peer.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_commit_after_peer.db";
   pid_t pid;
   int status;
   sqlite3 *db = 0;
@@ -662,8 +663,8 @@ static void test_cross_process_commit_after_peer(void){
 }
 
 static void test_cross_process_commit_conflict(void){
-  const char *stalePath = "/tmp/test_mp_conflict_stale.db";
-  const char *freshPath = "/tmp/test_mp_conflict_fresh.db";
+  const char *stalePath = DOLTLITE_TEST_TMPDIR "/test_mp_conflict_stale.db";
+  const char *freshPath = DOLTLITE_TEST_TMPDIR "/test_mp_conflict_fresh.db";
   pid_t pid;
   int status;
   int pipefd[2];
@@ -812,7 +813,7 @@ static int commit_worker(const char *path, int worker, int nOps, int fdReady, in
 }
 
 static void test_many_process_commit_contention(void){
-  const char *path = "/tmp/test_mp_commit_contention.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_mp_commit_contention.db";
   enum { N_WORKERS = 6 };
   int nOps = envInt("DOLTLITE_MP_COMMIT_OPS", 200);
   pid_t pids[N_WORKERS];
@@ -915,7 +916,7 @@ static void test_ref_commands_busy_handler(void){
   };
   char path[256];
   int i, useTimeout;
-  snprintf(path, sizeof(path), "/tmp/mp_ref_busy_%d.db", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_ref_busy_%d.db", (int)getpid());
   for(useTimeout=0; useTimeout<2; useTimeout++){
     for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
       sqlite3 *db = 0;
@@ -990,7 +991,7 @@ static void test_write_after_lost_commit_race(void){
   MpRefBusyCtx ctx;
 
   printf("--- Test 6a: Autocommit write after a lost commit race ---\n");
-  snprintf(path, sizeof(path), "/tmp/mp_lost_race_%d.db", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_lost_race_%d.db", (int)getpid());
   setup_db(path);
   check("mp_lost_race_open", sqlite3_open(path, &db)==SQLITE_OK);
   check("mp_lost_race_first_write", execSql(db, "INSERT INTO t VALUES(2, 'mine')")==SQLITE_OK);
@@ -1060,8 +1061,8 @@ static void test_commit_keeps_peer_insert_during_publish(void){
   pid_t pid;
 
   printf("--- Test 6e: dolt_commit does not drop an insert that landed before publish ---\n");
-  snprintf(path, sizeof(path), "/tmp/mp_commit_gap_%d.db", (int)getpid());
-  snprintf(pause, sizeof(pause), "/tmp/mp_commit_gap_%d.pause", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_commit_gap_%d.db", (int)getpid());
+  snprintf(pause, sizeof(pause), DOLTLITE_TEST_TMPDIR "/mp_commit_gap_%d.pause", (int)getpid());
   snprintf(ready, sizeof(ready), "%s.ready", pause);
   remove(path);
   remove(pause);
@@ -1125,7 +1126,7 @@ static void test_commit_does_not_erase_peer_write(void){
   MpRefBusyCtx ctx;
 
   printf("--- Test 6c: dolt_commit does not erase a peer's working-set write ---\n");
-  snprintf(path, sizeof(path), "/tmp/mp_ws_clobber_%d.db", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_ws_clobber_%d.db", (int)getpid());
   setup_db(path);
   check("mp_ws_clobber_open", sqlite3_open(path, &db)==SQLITE_OK);
   check("mp_ws_clobber_first_write", execSql(db, "INSERT INTO t VALUES(2, 'mine')")==SQLITE_OK);
@@ -1200,7 +1201,7 @@ static void test_ref_command_binds_post_wait_tip(void){
   int i;
 
   printf("--- Test 6d: A ref command that waited binds the post-wait tip ---\n");
-  snprintf(path, sizeof(path), "/tmp/mp_ref_wait_%d.db", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_ref_wait_%d.db", (int)getpid());
   for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
     sqlite3 *db = 0;
     int ready[2], release[2];
@@ -1273,7 +1274,7 @@ static void test_ref_command_keeps_peer_write(void){
   int i;
 
   printf("--- Test 6e: A ref command does not let the next write erase a peer's ---\n");
-  snprintf(path, sizeof(path), "/tmp/mp_ref_peer_ws_%d.db", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_ref_peer_ws_%d.db", (int)getpid());
   for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
     sqlite3 *db = 0;
     int status;
@@ -1339,7 +1340,7 @@ static void test_busy_command_keeps_peer_write(void){
   int i;
 
   printf("--- Test 6f: A command refused busy mid-peer-write keeps the peer's row ---\n");
-  snprintf(path, sizeof(path), "/tmp/mp_busy_peer_ws_%d.db", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_busy_peer_ws_%d.db", (int)getpid());
   for(i=0; i<(int)(sizeof(azSql)/sizeof(azSql[0])); i++){
     int k;
     int nLost = 0;
@@ -1414,7 +1415,7 @@ static void test_op_keeps_peer_write_on_main(void){
     { "INSERT INTO t VALUES(2, 'mine')", "SELECT dolt_checkout('f')" },
     { "INSERT INTO t VALUES(2, 'mine')", "SELECT dolt_checkout('u')" },
     { "INSERT INTO t VALUES(2, 'mine')", "VACUUM" },
-    { "SELECT dolt_remote('add','origin','file:///tmp/mp_op_peer_ws_remote.db');"
+    { "SELECT dolt_remote('add','origin','file://" DOLTLITE_TEST_TMPDIR "/mp_op_peer_ws_remote.db');"
       "SELECT dolt_push('origin','f','--force')",
       "SELECT dolt_pull('origin','f')" }
   };
@@ -1422,7 +1423,7 @@ static void test_op_keeps_peer_write_on_main(void){
   int i;
 
   printf("--- Test 6g: An operation on main keeps a peer's mid-operation write ---\n");
-  snprintf(path, sizeof(path), "/tmp/mp_op_peer_ws_%d.db", (int)getpid());
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/mp_op_peer_ws_%d.db", (int)getpid());
   for(i=0; i<(int)(sizeof(aCase)/sizeof(aCase[0])); i++){
     int k;
     int nLost = 0;
@@ -1463,7 +1464,7 @@ static void test_op_keeps_peer_write_on_main(void){
     check("mp_op_peer_ws_peer_write_kept", nLost==0);
   }
   remove(path);
-  remove("/tmp/mp_op_peer_ws_remote.db");
+  remove(DOLTLITE_TEST_TMPDIR "/mp_op_peer_ws_remote.db");
 }
 
 int main(){

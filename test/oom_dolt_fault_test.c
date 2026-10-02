@@ -7,6 +7,7 @@
 #include "sqlite3.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
+#include "lib/test_tmpdir.h"
 
 #ifndef MAX_FAIL_N
 # define MAX_FAIL_N 500
@@ -492,7 +493,7 @@ static OpEntry kOps[] = {
 };
 #define N_OPS (int)(sizeof(kOps)/sizeof(kOps[0]))
 
-static const char *kDbBase = "/tmp/test_oom_dolt.db";
+static const char *kDbBase = DOLTLITE_TEST_TMPDIR "/test_oom_dolt.db";
 
 #define CHILD_OK 0
 #define CHILD_ERR_OK 1

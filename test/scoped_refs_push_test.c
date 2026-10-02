@@ -5,6 +5,7 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_remote.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -94,7 +95,7 @@ int main(void){
   u8 *curBlob = 0;
   int nCur = 0;
   int rc;
-  const char *path = "/tmp/scoped_refs_push_test.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/scoped_refs_push_test.db";
 
   sqlite3_initialize();
   printf("Scoped refs-push authorization tests\n");
@@ -130,7 +131,7 @@ int main(void){
     ** do) silently hijacks main. This is the reported vulnerability. */
     {
       ChunkStore victim;
-      check("open victim", openStore(&victim, "/tmp/scoped_refs_victim.db")==SQLITE_OK);
+      check("open victim", openStore(&victim, DOLTLITE_TEST_TMPDIR "/scoped_refs_victim.db")==SQLITE_OK);
       chunkStoreAddBranch(&victim, "main", &Ha);
       chunkStoreAddBranch(&victim, "foo", &Hb);
       chunkStoreSerializeRefs(&victim);
@@ -140,7 +141,7 @@ int main(void){
       check("pre-fix: raw install hijacks main (vuln demo)",
             memcmp(&found, &Hc, sizeof(found))==0);
       chunkStoreClose(&victim);
-      remove("/tmp/scoped_refs_victim.db");
+      remove(DOLTLITE_TEST_TMPDIR "/scoped_refs_victim.db");
     }
     sqlite3_free(blob);
   }
@@ -273,7 +274,7 @@ int main(void){
     u8 *tagBlob = 0; int nTag = 0;
 
     check("open tagged store",
-          openStore(&tagged, "/tmp/scoped_refs_tagged.db")==SQLITE_OK);
+          openStore(&tagged, DOLTLITE_TEST_TMPDIR "/scoped_refs_tagged.db")==SQLITE_OK);
     chunkStoreSetDefaultBranch(&tagged, "main");
     chunkStoreAddBranch(&tagged, "main", &Ha);
     chunkStoreAddBranch(&tagged, "foo", &Hb);
@@ -326,7 +327,7 @@ int main(void){
     sqlite3_free(blob);
     sqlite3_free(tagBlob);
     chunkStoreClose(&tagged);
-    remove("/tmp/scoped_refs_tagged.db");
+    remove(DOLTLITE_TEST_TMPDIR "/scoped_refs_tagged.db");
   }
 
   /* Sequences are shared AUTOINCREMENT counters that a push legitimately
@@ -336,7 +337,7 @@ int main(void){
     u8 *seqBlob = 0; int nSeq = 0;
 
     check("open sequence store",
-          openStore(&seqStore, "/tmp/scoped_refs_seq.db")==SQLITE_OK);
+          openStore(&seqStore, DOLTLITE_TEST_TMPDIR "/scoped_refs_seq.db")==SQLITE_OK);
     chunkStoreSetDefaultBranch(&seqStore, "main");
     chunkStoreAddBranch(&seqStore, "main", &Ha);
     chunkStoreAddBranch(&seqStore, "foo", &Hb);
@@ -385,7 +386,7 @@ int main(void){
 
     sqlite3_free(seqBlob);
     chunkStoreClose(&seqStore);
-    remove("/tmp/scoped_refs_seq.db");
+    remove(DOLTLITE_TEST_TMPDIR "/scoped_refs_seq.db");
   }
 
   /* A fresh target legitimately adopts the pushed branch as its default, the
@@ -395,7 +396,7 @@ int main(void){
     ChunkStore tmp;
     u8 *blob = 0; int n = 0;
     check("open fresh target",
-          openStore(&fresh, "/tmp/scoped_refs_fresh.db")==SQLITE_OK);
+          openStore(&fresh, DOLTLITE_TEST_TMPDIR "/scoped_refs_fresh.db")==SQLITE_OK);
     memset(&tmp, 0, sizeof(tmp));
     chunkStoreSetDefaultBranch(&tmp, "foo");
     chunkStoreAddBranch(&tmp, "foo", &Hb);
@@ -406,7 +407,7 @@ int main(void){
           rc==SQLITE_OK);
     sqlite3_free(blob);
     chunkStoreClose(&fresh);
-    remove("/tmp/scoped_refs_fresh.db");
+    remove(DOLTLITE_TEST_TMPDIR "/scoped_refs_fresh.db");
   }
 
   {
@@ -420,7 +421,7 @@ int main(void){
     u8 *commitData = 0; int nCommit = 0;
     u8 wsData[WS_TOTAL_SIZE];
     check("open target with dirty working set",
-          openStore(&working, "/tmp/scoped_refs_working.db")==SQLITE_OK);
+          openStore(&working, DOLTLITE_TEST_TMPDIR "/scoped_refs_working.db")==SQLITE_OK);
     memset(&commit, 0, sizeof(commit));
     commit.catalogHash = Ha;
     commit.zName = "test";
@@ -474,7 +475,7 @@ int main(void){
     check("allow push over clean target working set", rc==SQLITE_OK);
     sqlite3_free(blob);
     chunkStoreClose(&working);
-    remove("/tmp/scoped_refs_working.db");
+    remove(DOLTLITE_TEST_TMPDIR "/scoped_refs_working.db");
   }
 
   sqlite3_free(curBlob);

@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "sqlite3.h"
 #include "doltlite_internal.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -358,9 +359,9 @@ int main(void){
   char zWork[256];
   int pid = (int)getpid();
 
-  snprintf(zPath, sizeof(zPath), "/tmp/dolt_rc_%d.db", pid);
-  snprintf(zBase, sizeof(zBase), "/tmp/dolt_rc_base_%d.db", pid);
-  snprintf(zWork, sizeof(zWork), "/tmp/dolt_rc_work_%d.db", pid);
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/dolt_rc_%d.db", pid);
+  snprintf(zBase, sizeof(zBase), DOLTLITE_TEST_TMPDIR "/dolt_rc_base_%d.db", pid);
+  snprintf(zWork, sizeof(zWork), DOLTLITE_TEST_TMPDIR "/dolt_rc_work_%d.db", pid);
 
   test_readonly_code(zPath);
   test_busy_code(zBase, zWork);

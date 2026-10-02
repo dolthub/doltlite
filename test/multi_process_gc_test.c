@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <errno.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -145,7 +146,7 @@ static void make_garbage(const char *path, int n){
 
 
 static void test_gc_vs_gc_parallel(void){
-  const char *path = "/tmp/test_gc_vs_gc.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_vs_gc.db";
   pid_t pid1, pid2;
   int status1, status2;
 
@@ -196,7 +197,7 @@ static void test_gc_vs_gc_parallel(void){
 
 
 static void test_gc_blocked_then_retries(void){
-  const char *path = "/tmp/test_gc_blocked_retry.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_blocked_retry.db";
   pid_t pid;
   int status;
   int pipefd[2];
@@ -259,7 +260,7 @@ static void test_gc_blocked_then_retries(void){
 
 
 static void test_gc_waits_for_busy_writer(void){
-  const char *path = "/tmp/test_gc_waits_busy_writer.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_waits_busy_writer.db";
   pid_t pid;
   int status;
   int pipefd[2];
@@ -320,7 +321,7 @@ static void test_gc_waits_for_busy_writer(void){
 
 
 static void test_gc_vs_dolt_commit(void){
-  const char *path = "/tmp/test_gc_vs_commit.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_vs_commit.db";
   pid_t pid;
   int status;
 
@@ -382,7 +383,7 @@ static void test_gc_vs_dolt_commit(void){
 
 
 static void test_reader_iterator_during_gc(void){
-  const char *path = "/tmp/test_reader_iter_gc.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_reader_iter_gc.db";
   pid_t pid;
   int status;
   int pipefd_go[2];
@@ -458,7 +459,7 @@ static void test_reader_iterator_during_gc(void){
 
 
 static void test_gc_vs_branch_create(void){
-  const char *path = "/tmp/test_gc_vs_branch.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_vs_branch.db";
   pid_t pid;
   int status;
 
@@ -523,7 +524,7 @@ static void test_gc_vs_branch_create(void){
 
 
 static void test_gc_vs_merge(void){
-  const char *path = "/tmp/test_gc_vs_merge.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_vs_merge.db";
   pid_t pid;
   int status;
   int pipefd[2];
@@ -618,7 +619,7 @@ static void test_gc_vs_merge(void){
 
 
 static void test_gc_vs_checkout(void){
-  const char *path = "/tmp/test_gc_vs_checkout.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_vs_checkout.db";
   pid_t pid;
   int status;
 
@@ -706,7 +707,7 @@ static void test_gc_vs_checkout(void){
 
 
 static void test_continuous_writes_with_gc(void){
-  const char *path = "/tmp/test_continuous_gc.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_continuous_gc.db";
   pid_t writer_pid, gc_pid;
   int status1, status2;
   const int N_WRITES = 40;
@@ -775,7 +776,7 @@ static void test_continuous_writes_with_gc(void){
 
 
 static void test_kill_gc_mid_sweep(void){
-  const char *path = "/tmp/test_kill_gc.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_kill_gc.db";
   pid_t pid;
   int status;
   int iter;
@@ -830,7 +831,7 @@ static void test_kill_gc_mid_sweep(void){
 
 
 static void test_gc_tmp_file_cleanup(void){
-  const char *path = "/tmp/test_gc_tmp_cleanup.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_gc_tmp_cleanup.db";
   char tmpPath[256];
   pid_t pid;
   int status;
@@ -881,7 +882,7 @@ static void test_gc_tmp_file_cleanup(void){
 
 
 static void test_concurrent_staging_then_gc(void){
-  const char *path = "/tmp/test_concurrent_stage.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_concurrent_stage.db";
   pid_t pid;
   int status;
   int pipefd_stage[2], pipefd_gc[2];
@@ -959,7 +960,7 @@ static void test_concurrent_staging_then_gc(void){
 }
 
 static void test_stale_session_roots_after_gc(void){
-  const char *path = "/tmp/test_stale_session_roots.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_stale_session_roots.db";
   sqlite3 *db1 = 0;
   sqlite3 *db2 = 0;
   sqlite3 *db3 = 0;

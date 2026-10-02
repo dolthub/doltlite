@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include "sqliteInt.h"
 #include "chunk_store.h"
+#include "lib/test_tmpdir.h"
 
 static int g_initialized = 0;
 
@@ -41,7 +42,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   sqlite3_file *pFile = 0;
   int outFlags = 0;
   int rc;
-  char path[] = "/tmp/dl-fuzz-idx-XXXXXX";
+  char path[] = DOLTLITE_TEST_TMPDIR "/dl-fuzz-idx-XXXXXX";
   int fd;
 
   if (size > 1024 * 1024) return 0;

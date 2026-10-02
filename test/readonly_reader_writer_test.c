@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -226,7 +227,7 @@ static void test_readonly_reset_does_not_unlock_writers(const char *zPath){
 
 int main(void){
   char zPath[256];
-  snprintf(zPath, sizeof(zPath), "/tmp/dolt_ro_reader_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/dolt_ro_reader_%d.db", (int)getpid());
 
   test_readonly_status_does_not_starve_a_writer(zPath);
   test_readonly_still_sees_peer_changes(zPath);

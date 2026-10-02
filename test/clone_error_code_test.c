@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -26,9 +27,9 @@ static void test_clone_error_code_propagates(void){
   char url[256];
   int rc;
 
-  snprintf(target, sizeof(target), "/tmp/dolt_clone_ec_target_%d.db", (int)getpid());
+  snprintf(target, sizeof(target), DOLTLITE_TEST_TMPDIR "/dolt_clone_ec_target_%d.db", (int)getpid());
   snprintf(url, sizeof(url),
-           "file:///tmp/dolt_clone_ec_nodir_%d/remote.db", (int)getpid());
+           "file://" DOLTLITE_TEST_TMPDIR "/dolt_clone_ec_nodir_%d/remote.db", (int)getpid());
   remove(target);
 
   rc = sqlite3_open(target, &db);

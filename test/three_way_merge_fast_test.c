@@ -7,6 +7,7 @@
 #include "prolly_mutate.h"
 #include "prolly_three_way_merge.h"
 #include "chunk_store.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -64,7 +65,7 @@ static void test_same_shape_still_handles(void){
   ProllyHash empty, anc, ours, theirs, merged;
   int rc, handled = 0;
   u8 val = 1;
-  const char *path = "/tmp/test_3wm_same";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_same";
 
   rc = openStore(&cs, &cache, path);
   check("same_shape: open", rc==SQLITE_OK);
@@ -94,7 +95,7 @@ static void test_mixed_shape_does_not_handle(void){
   int rc, handled = 0;
   u8 val = 1;
   u8 blobKey[3] = {'a','b','c'};
-  const char *path = "/tmp/test_3wm_mixed";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_mixed";
 
   rc = openStore(&cs, &cache, path);
   check("mixed: open", rc==SQLITE_OK);
@@ -126,7 +127,7 @@ static void test_flags_disagree_with_nodes(void){
   u8 blobA[3] = {'a','a','a'};
   u8 blobB[3] = {'b','b','b'};
   u8 blobC[3] = {'c','c','c'};
-  const char *path = "/tmp/test_3wm_flags";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_flags";
 
   rc = openStore(&cs, &cache, path);
   check("flags: open", rc==SQLITE_OK);

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -56,7 +57,7 @@ int main(void){
   sqlite3 *db = 0;
 
   sqlite3_initialize();
-  snprintf(zPath, sizeof(zPath), "/tmp/vc_commit_hook_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/vc_commit_hook_%d.db", (int)getpid());
   remove(zPath);
   check("open", sqlite3_open(zPath, &db)==SQLITE_OK);
   if( !db ) return 1;

@@ -6,6 +6,7 @@
 #include "chunk_store.h"
 #include "doltlite_remote.h"
 #include <pthread.h>
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -55,8 +56,8 @@ static void test_lock_busy_not_refs_changed(void){
   char *zErr = 0;
   int rc;
 
-  snprintf(zRemote, sizeof(zRemote), "/tmp/push_lock_remote_%d.db", (int)getpid());
-  snprintf(zSrc, sizeof(zSrc), "/tmp/push_lock_src_%d.db", (int)getpid());
+  snprintf(zRemote, sizeof(zRemote), DOLTLITE_TEST_TMPDIR "/push_lock_remote_%d.db", (int)getpid());
+  snprintf(zSrc, sizeof(zSrc), DOLTLITE_TEST_TMPDIR "/push_lock_src_%d.db", (int)getpid());
   rm(zRemote);
   rm(zSrc);
 
@@ -112,8 +113,8 @@ static void test_diverged_is_not_lock(void){
   char *zErr = 0;
   int rc;
 
-  snprintf(zRemote, sizeof(zRemote), "/tmp/push_nff_remote_%d.db", (int)getpid());
-  snprintf(zSrc, sizeof(zSrc), "/tmp/push_nff_src_%d.db", (int)getpid());
+  snprintf(zRemote, sizeof(zRemote), DOLTLITE_TEST_TMPDIR "/push_nff_remote_%d.db", (int)getpid());
+  snprintf(zSrc, sizeof(zSrc), DOLTLITE_TEST_TMPDIR "/push_nff_src_%d.db", (int)getpid());
   rm(zRemote);
   rm(zSrc);
 
@@ -206,8 +207,8 @@ static void test_push_ref_race(int stage, int sameBranch, int noOp,
   ChunkStore *local;
   ProllyHash localTip, remoteTip;
   int rc;
-  snprintf(zRemote, sizeof(zRemote), "/tmp/push_race_remote_%d.db", (int)getpid());
-  snprintf(zSrc, sizeof(zSrc), "/tmp/push_race_src_%d.db", (int)getpid());
+  snprintf(zRemote, sizeof(zRemote), DOLTLITE_TEST_TMPDIR "/push_race_remote_%d.db", (int)getpid());
+  snprintf(zSrc, sizeof(zSrc), DOLTLITE_TEST_TMPDIR "/push_race_src_%d.db", (int)getpid());
   rm(zRemote);
   rm(zSrc);
   check("race: open peer", sqlite3_open(zRemote, &racePeer)==SQLITE_OK);
@@ -302,8 +303,8 @@ static void test_push_waits_for_busy_timeout(void){
   char *zErr = 0;
   int rc;
 
-  snprintf(zRemote, sizeof(zRemote), "/tmp/push_wait_remote_%d.db", (int)getpid());
-  snprintf(zSrc, sizeof(zSrc), "/tmp/push_wait_src_%d.db", (int)getpid());
+  snprintf(zRemote, sizeof(zRemote), DOLTLITE_TEST_TMPDIR "/push_wait_remote_%d.db", (int)getpid());
+  snprintf(zSrc, sizeof(zSrc), DOLTLITE_TEST_TMPDIR "/push_wait_src_%d.db", (int)getpid());
   rm(zRemote);
   rm(zSrc);
 

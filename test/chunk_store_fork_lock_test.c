@@ -3,6 +3,7 @@
 #include <string.h>
 #include "sqlite3.h"
 #include "chunk_store_int.h"
+#include "lib/test_tmpdir.h"
 
 #ifndef _WIN32
 # include <unistd.h>
@@ -59,7 +60,7 @@ static void test_fork_child_does_not_keep_parent_lock(void){
 #ifdef _WIN32
   check("fork_lock_test_skipped_on_windows", 1);
 #else
-  const char *zPath = "/tmp/test_chunk_store_fork_lock.db";
+  const char *zPath = DOLTLITE_TEST_TMPDIR "/test_chunk_store_fork_lock.db";
   sqlite3_vfs *pVfs;
   ChunkStore cs1, cs2;
   pid_t pid;
@@ -123,7 +124,7 @@ static void test_graph_lock_promotion_has_one_winner(void){
 #ifdef _WIN32
   check("graph_lock_promotion_skipped_on_windows", 1);
 #else
-  char zPath[] = "/tmp/test_chunk_store_lock_promotion\0";
+  char zPath[] = DOLTLITE_TEST_TMPDIR "/test_chunk_store_lock_promotion\0";
   sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
   sqlite3_file *pFile1 = 0;
   sqlite3_file *pFile2 = 0;

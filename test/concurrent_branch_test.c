@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -52,8 +53,8 @@ static int execSql(sqlite3 *db, const char *sql){
 int main(){
   sqlite3 *db1 = 0, *db2 = 0;
   sqlite3 *db3 = 0;
-  const char *dbpath = "/tmp/test_concurrent_branch.db";
-  const char *defaultPath = "/tmp/test_concurrent_default_branch.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_concurrent_branch.db";
+  const char *defaultPath = DOLTLITE_TEST_TMPDIR "/test_concurrent_default_branch.db";
   int rc;
 
   remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }

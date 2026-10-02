@@ -24,6 +24,7 @@
 #include "vdbeInt.h"
 #include "sortkey.h"
 #include "doltlite_remote.h"
+#include "lib/test_tmpdir.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -1421,7 +1422,7 @@ static int repo_state_snapshot_eq(const RepoStateSnapshot *a, const RepoStateSna
 }
 
 static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase){
-  snprintf(zBuf, nBuf, "/tmp/%s_%ld.db", zBase, (long)getpid());
+  snprintf(zBuf, nBuf, DOLTLITE_TEST_TMPDIR "/%s_%ld.db", zBase, (long)getpid());
 }
 
 static void removeDbFiles(const char *path){
@@ -2508,7 +2509,7 @@ static void run_refs_blob_corruption(void){
         chunkStoreAddTagFull(&cs, "v1", &commitHash, "A", "a@b", 42,
                              "tag message")==SQLITE_OK);
   check("add_remote_ref",
-        chunkStoreAddRemote(&cs, "origin", "file:///tmp/origin")==SQLITE_OK);
+        chunkStoreAddRemote(&cs, "origin", "file://" DOLTLITE_TEST_TMPDIR "/origin")==SQLITE_OK);
   check("add_tracking_ref",
         chunkStoreUpdateTracking(
           &cs, "origin", "main", &commitHash)==SQLITE_OK);
@@ -10996,15 +10997,15 @@ static void run_remote_add_duplicate_preserves_durable_state(void){
 
   check("open_db_for_remote_add_duplicate", open_db(dbpath, &db)==SQLITE_OK);
   check("setup_repo_for_remote_add_duplicate", execSql(db,
-    "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');")==SQLITE_OK);
+    "SELECT dolt_remote('add', 'origin', 'file://" DOLTLITE_TEST_TMPDIR "/oracle_origin');")==SQLITE_OK);
 
-  res = queryScalarText(db, "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_other')");
+  res = queryScalarText(db, "SELECT dolt_remote('add', 'origin', 'file://" DOLTLITE_TEST_TMPDIR "/oracle_other')");
   check("remote_add_duplicate_returns_error", strstr(res, "ERROR:")!=0);
   check("remote_add_duplicate_keeps_remote_count",
         strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
   check("remote_add_duplicate_keeps_origin_url",
         strcmp(queryScalarText(db,
-          "SELECT url FROM dolt_remotes WHERE name='origin'"), "file:///tmp/oracle_origin")==0);
+          "SELECT url FROM dolt_remotes WHERE name='origin'"), "file://" DOLTLITE_TEST_TMPDIR "/oracle_origin")==0);
 
   sqlite3_close(db);
   db = 0;
@@ -11014,7 +11015,7 @@ static void run_remote_add_duplicate_preserves_durable_state(void){
         strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
   check("remote_add_duplicate_persists_origin_url",
         strcmp(queryScalarText(db,
-          "SELECT url FROM dolt_remotes WHERE name='origin'"), "file:///tmp/oracle_origin")==0);
+          "SELECT url FROM dolt_remotes WHERE name='origin'"), "file://" DOLTLITE_TEST_TMPDIR "/oracle_origin")==0);
 
   sqlite3_close(db);
   removeDbFiles(dbpath);
@@ -11031,7 +11032,7 @@ static void run_remote_remove_missing_preserves_durable_state(void){
 
   check("open_db_for_remote_remove_missing", open_db(dbpath, &db)==SQLITE_OK);
   check("setup_repo_for_remote_remove_missing", execSql(db,
-    "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');")==SQLITE_OK);
+    "SELECT dolt_remote('add', 'origin', 'file://" DOLTLITE_TEST_TMPDIR "/oracle_origin');")==SQLITE_OK);
 
   res = queryScalarText(db, "SELECT dolt_remote('remove', 'nonexistent')");
   check("remote_remove_missing_returns_error", strstr(res, "ERROR:")!=0);
@@ -14076,7 +14077,7 @@ static void run_directonly_dolt_functions(void){
     "SELECT dolt_commit('-A','-m','direct call');"
     "SELECT dolt_branch('feature');"
     "SELECT dolt_tag('v1');"
-    "SELECT dolt_remote('add','origin','file:///tmp/direct-only-unused');"
+    "SELECT dolt_remote('add','origin','file://" DOLTLITE_TEST_TMPDIR "/direct-only-unused');"
     "SELECT dolt_remote('remove','origin');");
   check("direct_command_calls_still_work", rc==SQLITE_OK);
   zResult = queryScalarText(db, "SELECT dolt_gc()");

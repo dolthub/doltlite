@@ -6,6 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 #define N_WORKERS 4
 #define N_KEYS_PER_WORKER 32
@@ -289,7 +290,7 @@ static int runStressIteration(int iter, unsigned baseSeed){
   sqlite3 *db = 0;
   int rc;
 
-  snprintf(path, sizeof(path), "/tmp/test_concurrent_stress_%d.db", iter);
+  snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/test_concurrent_stress_%d.db", iter);
   printf("--- iteration=%d seed=0x%x workers=%d ops_per_worker=%d keys_per_worker=%d ---\n",
          iter, baseSeed, N_WORKERS, N_OPS_PER_WORKER, N_KEYS_PER_WORKER);
 

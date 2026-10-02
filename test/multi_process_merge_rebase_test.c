@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -236,7 +237,7 @@ static int commitMainRowWithRetry(const char *path, int iRow){
 
 
 static void test_concurrent_mergers_into_main(void){
-  const char *path = "/tmp/test_concurrent_mergers.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_concurrent_mergers.db";
   const int N_MERGERS = 8;
   const int N_PER = 10;
   pid_t pids[8];
@@ -289,7 +290,7 @@ static void test_concurrent_mergers_into_main(void){
 
 
 static void test_merge_racing_target_commits(void){
-  const char *path = "/tmp/test_merge_racing_commits.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_merge_racing_commits.db";
   const int N_MAIN_COMMITS = 8;
   pid_t writer, merger;
   int status1, status2;
@@ -376,7 +377,7 @@ static int doRebaseOnce(const char *path){
 }
 
 static void test_rebase_racing_gc(void){
-  const char *path = "/tmp/test_rebase_vs_gc.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_rebase_vs_gc.db";
   pid_t gc_pid;
   int status, rebase_rc;
   int i;
@@ -445,7 +446,7 @@ static void test_rebase_racing_gc(void){
 
 
 static void test_rebase_racing_checkout(void){
-  const char *path = "/tmp/test_rebase_vs_checkout.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_rebase_vs_checkout.db";
   pid_t co_pid;
   int status, rebase_rc;
   int i;
@@ -513,7 +514,7 @@ static void test_rebase_racing_checkout(void){
 ** Exactly one must win cleanly; the loser must report "no rebase in progress"
 ** (not "rebase recovery failed"). Final state must be usable. */
 static void test_concurrent_continue_abort(void){
-  const char *path = "/tmp/test_rebase_continue_abort_race.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_rebase_continue_abort_race.db";
   int trial, wins_continue = 0, wins_abort = 0, bad = 0;
 
   printf("--- Test 5: concurrent --continue vs --abort ---\n");
@@ -672,7 +673,7 @@ static void test_concurrent_continue_abort(void){
 }
 
 static void test_concurrent_continue_adoption(void){
-  const char *path = "/tmp/test_rebase_continue_adoption_race.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_rebase_continue_adoption_race.db";
   int trial, bad = 0;
 
   printf("--- Test 6: concurrent --continue after default reopen ---\n");
@@ -834,7 +835,7 @@ static int runOpWithPeerAt(const char *zPath, const char *zOp, int k,
 ** before the advance must survive: the revert either commits on top of it or
 ** refuses and leaves main at the peer's commit. */
 static void test_revert_racing_peer_commit(void){
-  const char *path = "/tmp/test_revert_racing_peer.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_revert_racing_peer.db";
   int k;
   int nLanded = 0;
   int nBad = 0;
@@ -887,9 +888,9 @@ static void test_pull_racing_peer_commit(void){
   int nBad = 0;
 
   printf("--- Test 8: pull racing a peer commit on main ---\n");
-  snprintf(local, sizeof(local), "/tmp/test_pull_race_local_%d.db", (int)getpid());
-  snprintf(remote, sizeof(remote), "/tmp/test_pull_race_remote_%d.db", (int)getpid());
-  snprintf(client, sizeof(client), "/tmp/test_pull_race_client_%d.db", (int)getpid());
+  snprintf(local, sizeof(local), DOLTLITE_TEST_TMPDIR "/test_pull_race_local_%d.db", (int)getpid());
+  snprintf(remote, sizeof(remote), DOLTLITE_TEST_TMPDIR "/test_pull_race_remote_%d.db", (int)getpid());
+  snprintf(client, sizeof(client), DOLTLITE_TEST_TMPDIR "/test_pull_race_client_%d.db", (int)getpid());
   for(k=1; k<4000; k++){
     sqlite3 *db = 0;
     char sql[512], zResult[256];

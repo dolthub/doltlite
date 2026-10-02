@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -307,7 +308,7 @@ static void test_user_sql_is_still_authorized(const char *zPath){
 
 int main(void){
   char zPath[256];
-  snprintf(zPath, sizeof(zPath), "/tmp/dolt_auth_internal_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/dolt_auth_internal_%d.db", (int)getpid());
 
   test_commands_run_under_a_sandbox(zPath);
   test_function_denial_still_applies(zPath);

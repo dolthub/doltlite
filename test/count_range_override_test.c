@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -181,7 +182,7 @@ static void test_overridden_count_one_arg(const char *zPath){
 
 int main(void){
   char zPath[256];
-  snprintf(zPath, sizeof(zPath), "/tmp/count_range_override_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/count_range_override_%d.db", (int)getpid());
   test_builtin_shortcut(zPath);
   test_overridden_count(zPath);
   test_overridden_count_one_arg(zPath);
