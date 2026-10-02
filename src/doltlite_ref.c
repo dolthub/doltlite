@@ -219,7 +219,7 @@ static int doltliteResolveBaseRef(
   static const char zTrackingPrefix[] = "refs/remotes/";
   int rc;
 
-  if( strcmp(zRef, "HEAD")==0 ){
+  if( sqlite3_stricmp(zRef, "HEAD")==0 ){
     doltliteGetSessionHead(db, pCommit);
     if( prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
     return SQLITE_OK;
