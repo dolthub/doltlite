@@ -1,0 +1,107 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach keymode {integer clustered without-rowid composite} {
+  set key {id INTEGER PRIMARY KEY, a INT}
+  set suffix {}
+  set cols {id,a}
+  set first {1,0}
+  set second {2,0}
+  set third {3,0}
+  set inserted {1,1),(2,1}
+  set other {3,1,9}
+  if {$keymode eq "clustered"} {set key {id INT PRIMARY KEY, a INT}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+  if {$keymode eq "composite"} {
+    set key {id INT, k TEXT, a INT, PRIMARY KEY(k,id)}
+    set cols {id,k,a}
+    set first {1,'k',0}
+    set second {2,'k',0}
+    set third {3,'k',0}
+    set inserted {1,'k',1),(2,'k',1}
+    set other {3,'k',1,9}
+  }
+  foreach indexcols {n a,n} {
+    foreach mutation {insert update} {
+      foreach operation {merge cherry_pick} {
+        foreach direction {forward reverse} {
+          reset_db
+          execsql "CREATE TABLE t($key) $suffix"
+          if {$mutation eq "update"} {
+            execsql "INSERT INTO t($cols) VALUES($first),($second),($third)"
+          }
+          execsql {
+            SELECT dolt_commit('-Am','base');
+            SELECT dolt_branch('side');
+          }
+          if {$mutation eq "insert"} {
+            execsql "INSERT INTO t($cols) VALUES($inserted)"
+            set rows {1 1 NULL 2 1 NULL 3 1 9}
+          } else {
+            execsql {UPDATE t SET a=1 WHERE id=1}
+            set rows {1 1 NULL 2 0 NULL 3 0 9}
+          }
+          execsql {
+            SELECT dolt_commit('-Am','ours');
+            SELECT dolt_checkout('side');
+            ALTER TABLE t ADD COLUMN n INT;
+          }
+          execsql "CREATE UNIQUE INDEX u ON t($indexcols)"
+          if {$mutation eq "insert"} {
+            execsql "INSERT INTO t($cols,n) VALUES($other)"
+          } else {
+            execsql {UPDATE t SET n=9 WHERE id=3}
+          }
+          execsql {SELECT dolt_commit('-Am','theirs')}
+          set target main
+          set reopen test.db/side
+          if {$direction eq "forward"} {
+            execsql {SELECT dolt_checkout('main')}
+            set target side
+            set reopen test.db
+          }
+          set name added-unique-$keymode-$indexcols-$mutation-$operation-$direction
+          do_test $name-apply {
+            lindex [catchsql "SELECT dolt_${operation}('$target')"] 0
+          } {0}
+          do_execsql_test $name-rows {
+            SELECT id,a,quote(n) FROM t ORDER BY id;
+          } $rows
+          do_execsql_test $name-violations {
+            SELECT count(*) FROM dolt_conflicts;
+            SELECT count(*) FROM dolt_constraint_violations;
+          } {0 0}
+          do_execsql_test $name-index {
+            SELECT id,a,quote(n) FROM t INDEXED BY u ORDER BY id;
+          } $rows
+          do_execsql_test $name-null-seek {
+            SELECT id FROM t INDEXED BY u WHERE n IS NULL ORDER BY id;
+          } {1 2}
+          do_execsql_test $name-value-seek {
+            SELECT id FROM t INDEXED BY u WHERE n=9 ORDER BY id;
+          } {3}
+          set duplicate {4,1,9}
+          if {$mutation eq "update"} {set duplicate {4,0,9}}
+          if {$keymode eq "composite"} {
+            set duplicate {4,'k',1,9}
+            if {$mutation eq "update"} {set duplicate {4,'k',0,9}}
+          }
+          set error {UNIQUE constraint failed: t.n}
+          if {$indexcols eq "a,n"} {set error {UNIQUE constraint failed: t.a, t.n}}
+          do_test $name-enforce {
+            catchsql "INSERT INTO t($cols,n) VALUES($duplicate)"
+          } [list 1 $error]
+          do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+          db close
+          sqlite3 db $reopen
+          do_execsql_test $name-reopen {
+            SELECT id,a,quote(n) FROM t INDEXED BY u ORDER BY id;
+            PRAGMA integrity_check;
+          } [concat $rows ok]
+        }
+      }
+    }
+  }
+}
+
+finish_test

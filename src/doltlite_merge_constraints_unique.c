@@ -560,8 +560,12 @@ static int uniqueRecordFromTableRow(
 #endif
     {
       iRecord = uniqueStoredField(pTab, iColumn);
-      rc = doltliteSerialValueFromField(
-          pRecord, nRecord, pInfo, iRecord, &aValue[i]);
+      if( iRecord>=pInfo->nField ){
+        aValue[i].eType = SQLITE_NULL;
+      }else{
+        rc = doltliteSerialValueFromField(
+            pRecord, nRecord, pInfo, iRecord, &aValue[i]);
+      }
     }
     if( rc!=SQLITE_OK ) break;
     if( pHasNull && aValue[i].eType==SQLITE_NULL ) *pHasNull = 1;
