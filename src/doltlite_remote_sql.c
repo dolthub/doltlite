@@ -665,6 +665,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   const char *zRemoteBranch;
   const char *zLocalBranch;
   ProllyHash trackingCommit, localCommit;
+  ProllyHash cleanWorkingSet;
   DoltliteTxnState savedState;
   int dirty = 0;
   int rc;
@@ -769,6 +770,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
+  doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
@@ -780,9 +782,27 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  /* CAS-advance the branch: force-refresh under the graph lock, compare the
-  ** on-disk tip to the fast-forward base, restore refs on failure. A stale
-  ** view would clobber a peer ref change. */
+  /* The reset below replaces the working set checked clean above. Hold the
+  ** graph lock from confirming it is still that one until the reset is
+  ** durable, or a peer write landing in between is erased. */
+  rc = doltliteRefreshAndConfirmHead(db, cs, &localCommit);
+  if( rc==SQLITE_OK ){
+    rc = doltliteConfirmWorkingSet(db, cs, &cleanWorkingSet);
+    if( rc!=SQLITE_OK ) chunkStoreUnlock(cs);
+  }
+  if( rc!=SQLITE_OK ){
+    if( rc==SQLITE_BUSY ){
+      doltliteCmdResultPeerBranchBusy(ctx, "pull");
+      (void)doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+    }else{
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
+    }
+    return;
+  }
+
+  /* CAS-advance the branch: compare the on-disk tip to the fast-forward
+  ** base, restore refs on failure. A stale view would clobber a peer ref
+  ** change. */
   {
     DoltliteBranchExpectation exp;
     PullAdvanceCtx adv;
@@ -793,6 +813,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     rc = doltliteMutateRefsExpected(db, &exp, 1, mutatePullAdvance, &adv);
   }
   if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
     if( rc==SQLITE_BUSY ){
       doltliteCmdResultPeerBranchBusy(ctx, "pull");
       (void)doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
@@ -804,6 +825,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
+  chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
                               "failed to update working tree from branch");

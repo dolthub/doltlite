@@ -1413,7 +1413,10 @@ static void test_op_keeps_peer_write_on_main(void){
     { "SELECT dolt_merge('f')", "SELECT dolt_revert('HEAD')" },
     { "INSERT INTO t VALUES(2, 'mine')", "SELECT dolt_checkout('f')" },
     { "INSERT INTO t VALUES(2, 'mine')", "SELECT dolt_checkout('u')" },
-    { "INSERT INTO t VALUES(2, 'mine')", "VACUUM" }
+    { "INSERT INTO t VALUES(2, 'mine')", "VACUUM" },
+    { "SELECT dolt_remote('add','origin','file:///tmp/mp_op_peer_ws_remote.db');"
+      "SELECT dolt_push('origin','f','--force')",
+      "SELECT dolt_pull('origin','f')" }
   };
   char path[256];
   int i;
@@ -1460,6 +1463,7 @@ static void test_op_keeps_peer_write_on_main(void){
     check("mp_op_peer_ws_peer_write_kept", nLost==0);
   }
   remove(path);
+  remove("/tmp/mp_op_peer_ws_remote.db");
 }
 
 int main(){
