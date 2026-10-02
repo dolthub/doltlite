@@ -1005,6 +1005,56 @@ static void test_stale_session_roots_after_gc(void){
 }
 
 
+/* A peer rewrites the only branch tip, then compacts. Every tip the idle
+** connection remembers is gone from the new file, which must still be
+** recognised as the same store: fresh reads, and writes still allowed. */
+static void test_peer_rewrite_then_gc(void){
+  static const char *azRewrite[] = {
+    "SELECT dolt_commit('-a','--amend','-m','c2 amended')",
+    "SELECT dolt_reset('--hard','HEAD~1')",
+  };
+  static const char *azExpect[] = { "1,2,3,4", "1,4" };
+  static const char *azCompact[] = { "SELECT dolt_gc()", "VACUUM" };
+  const char *path = "/tmp/test_peer_rewrite_gc.db";
+  int i, j;
+
+  printf("--- Test: idle connection after a peer rewrites the tip and compacts ---\n");
+  for(i=0; i<2; i++){
+    for(j=0; j<2; j++){
+      sqlite3 *a = 0, *b = 0, *c = 0;
+      char name[96];
+      remove(path);
+      sqlite3_open(path, &a);
+      sqlite3_busy_timeout(a, 5000);
+      execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+                 "INSERT INTO t VALUES(1,'base');"
+                 "SELECT dolt_commit('-Am','init');"
+                 "INSERT INTO t VALUES(2,'two');"
+                 "SELECT dolt_commit('-am','c2');");
+      queryScalarText(a, "SELECT group_concat(id) FROM t");
+      sqlite3_open(path, &b);
+      sqlite3_busy_timeout(b, 5000);
+      execSql(b, "INSERT INTO t VALUES(3,'three')");
+      queryScalarText(b, azRewrite[i]);
+      snprintf(name, sizeof(name), "peer_rewrite_%d_compact_%d_ok", i, j);
+      check(name, !looks_like_error(queryScalarText(b, azCompact[j])));
+      sqlite3_close(b);
+      snprintf(name, sizeof(name), "peer_rewrite_%d_compact_%d_write", i, j);
+      check(name, execSql(a, "INSERT INTO t VALUES(4,'mine')")==SQLITE_OK);
+      sqlite3_close(a);
+      sqlite3_open(path, &c);
+      snprintf(name, sizeof(name), "peer_rewrite_%d_compact_%d_rows", i, j);
+      check(name, strcmp(queryScalarText(c,
+            "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)"),
+            azExpect[i])==0);
+      snprintf(name, sizeof(name), "peer_rewrite_%d_compact_%d_integrity", i, j);
+      check(name, strcmp(queryScalarText(c, "PRAGMA integrity_check"), "ok")==0);
+      sqlite3_close(c);
+    }
+  }
+  remove(path);
+}
+
 int main(){
   printf("=== Multi-Process GC Concurrency Tests ===\n\n");
 
@@ -1021,6 +1071,7 @@ int main(){
   test_gc_tmp_file_cleanup();
   test_concurrent_staging_then_gc();
   test_stale_session_roots_after_gc();
+  test_peer_rewrite_then_gc();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
