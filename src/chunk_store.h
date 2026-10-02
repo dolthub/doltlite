@@ -166,6 +166,14 @@
 
 int chunkStoreValidateWorkingSetBlob(const u8 *data, int nData);
 
+/* Field decode of a working-set blob. Branch-name outputs are sqlite3_malloc'd. */
+int btreeParseWorkingSetBlob(const u8 *data, int nData,
+  ProllyHash *pWorkingCat, ProllyHash *pWorkingCommit, ProllyHash *pStaged,
+  u8 *pIsMerging, ProllyHash *pMergeCommit, ProllyHash *pConflicts,
+  u8 *pIsRebasing, ProllyHash *pPreRebaseCat, ProllyHash *pRebaseOnto,
+  char **pzRebaseOrigBranch, char **pzRebaseReturnBranch,
+  ProllyHash *pConstraintViolations);
+
 #define CATALOG_FORMAT_V3       0x44
 #define CATALOG_FORMAT_V4       0x45
 #define CATALOG_FORMAT_V5       0x46

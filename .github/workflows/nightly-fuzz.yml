@@ -47,6 +47,7 @@ jobs:
           - working_set
           - conflicts
           - constraint_violations
+          - database
 
     steps:
     - uses: actions/checkout@v4
@@ -86,7 +87,9 @@ jobs:
 
     # Carry the corpus forward between nights. The key is unique per run (so
     # each run saves a fresh, larger corpus) and restore-keys grabs the most
-    # recent prior corpus for this target as the starting point.
+    # recent prior corpus for this target as the starting point. To fold a
+    # downloaded cache back into the tracked seeds:
+    #   bash test/run_fuzz.sh <target> --merge <cache-dir>
     - name: Restore/seed corpus
       uses: actions/cache@v4
       with:
