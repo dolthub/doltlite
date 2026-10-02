@@ -973,13 +973,17 @@ UPDATE t SET d='after' WHERE k=1;
 SELECT dolt_commit('-Am','edit d');
 ALTER TABLE t DROP COLUMN d;
 SELECT dolt_commit('-Am','drop d');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "rv_edit_of_already_dropped_column_hash" \
+run_test_match "rv_edit_of_already_dropped_column_refuses" \
   "SELECT dolt_revert('HEAD~1');" \
-  "nothing to commit" "$DB"
+  "cannot apply: column 'd'.*discarding a changed value" "$DB"
 run_test "rv_edit_of_already_dropped_column_schema" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='d';" "0" "$DB"
 run_test "rv_edit_of_already_dropped_column_row" \
   "SELECT k || '|' || a FROM t;" "1|a1" "$DB"
+run_test "rv_edit_of_already_dropped_column_no_commit" \
+  "SELECT message FROM dolt_log LIMIT 1;" "drop d" "$DB"
+run_test "rv_edit_of_already_dropped_column_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
 # Clean cherry-pick/revert seals the enclosing BEGIN when it advances the ref.
