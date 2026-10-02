@@ -419,39 +419,39 @@ else
 fi
 
 bench_sql "status_clean_many_tables" "many_clean.db" \
-  "SELECT count(*) FROM dolt_status;" 130
+  "SELECT count(*) FROM dolt_status;" 38
 bench_sql "status_dirty_many_tables" "many_data.db" \
-  "SELECT count(*) FROM dolt_status;" 130
+  "SELECT count(*) FROM dolt_status;" 42
 bench_sql "diff_regular_working_one_table" "many_data.db" \
-  "SELECT count(*) FROM dolt_diff_t0001 WHERE to_commit='WORKING';" 120
+  "SELECT count(*) FROM dolt_diff_t0001 WHERE to_commit='WORKING';" 33
 bench_sql "diff_regular_working_many_tables" "many_data.db" \
-  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND data_change=1;" 140
+  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND data_change=1;" 50
 bench_sql "diff_stat_working_many_tables" "many_data.db" \
-  "SELECT count(*), coalesce(sum(data_change),0) FROM dolt_diff WHERE commit_hash='WORKING';" 140
+  "SELECT count(*), coalesce(sum(data_change),0) FROM dolt_diff WHERE commit_hash='WORKING';" 48
 bench_sql "diff_schema_working_many_tables" "many_schema.db" \
-  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND schema_change=1;" 140
+  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING' AND schema_change=1;" 48
 bench_sql "branch_list_many_branches" "branches.db" \
-  "SELECT count(*) FROM dolt_branches;" 35
+  "SELECT count(*) FROM dolt_branches;" 25
 bench_sql "branch_create_delete" "branches.db" \
-  "SELECT dolt_branch('tmp_perf'); SELECT dolt_branch('-D','tmp_perf');" 40
+  "SELECT dolt_branch('tmp_perf'); SELECT dolt_branch('-D','tmp_perf');" 27
 bench_sql "at_literal_deep_history" "history.db" \
-  "SELECT count(*) FROM dolt_at_history_only('zz_history');" 100
+  "SELECT count(*) FROM dolt_at_history_only('zz_history');" 28
 bench_sql "diff_literal_deep_history" "history.db" \
-  "SELECT count(*) FROM dolt_diff_history_only('main','zz_history');" 120
+  "SELECT count(*) FROM dolt_diff_history_only('main','zz_history');" 28
 bench_sql "history_literal_deep_history" "history.db" \
-  "SELECT count(*) FROM dolt_history_history_only('zz_history');" 150
+  "SELECT count(*) FROM dolt_history_history_only('zz_history');" 30
 bench_sql "checkout_branch_clean" "checkout.db" \
-  "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');" 150
+  "SELECT dolt_checkout('feat'); SELECT dolt_checkout('main');" 43
 bench_sql "merge_data_no_conflicts" "merge_data.db" \
-  "SELECT dolt_merge('feat');" 50
+  "SELECT dolt_merge('feat');" 33
 bench_sql "merge_data_secondary_index" "merge_index.db" \
-  "SELECT dolt_merge('feat');" 2500
+  "SELECT dolt_merge('feat');" 944
 bench_sql "merge_schema_no_conflicts" "merge_schema.db" \
-  "SELECT dolt_merge('feat');" 35
+  "SELECT dolt_merge('feat');" 24
 bench_sql "merge_data_conflicts" "merge_conflict.db" \
-  "$(vc_perf_conflict_sql conflicts)" 180 conflicts
+  "$(vc_perf_conflict_sql conflicts)" 33 conflicts
 bench_sql "merge_data_conflicts_with_resolve" "merge_conflict.db" \
-  "$(vc_perf_conflict_sql resolved)" 180 resolved
+  "$(vc_perf_conflict_sql resolved)" 34 resolved
 
 if [ -n "${VC_PERF_RESULTS_OUTPUT:-}" ]; then
   mkdir -p "$(dirname "$VC_PERF_RESULTS_OUTPUT")"
