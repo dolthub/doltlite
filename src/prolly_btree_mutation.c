@@ -243,6 +243,7 @@ static int sortKeyFromIntRecordLocal(
   u32 dataOff;
   int nField = 0;
   int outPos = 0;
+  int lastShort = 0;
 
   *pnOut = 0;
   if( !pRec || nRec<=0 ) return SQLITE_NOTFOUND;
@@ -285,12 +286,22 @@ static int sortKeyFromIntRecordLocal(
     if( outPos + 18 > nOutCap ) return SQLITE_NOTFOUND;
     rc = sortKeyFromInt64(v, pOut + outPos, &n);
     if( rc!=SQLITE_OK ) return rc;
+    lastShort = (n==9);
     outPos += n;
     dataOff += fieldLen;
     nField++;
   }
   if( nField<=0 || (nKeyField>0 && nField<nKeyField) ){
     return SQLITE_NOTFOUND;
+  }
+  /* The full key ends a short integer with 0x00 when the next column is
+  ** DESC. A prefix seek has to use that same byte or it misses the row. */
+  if( lastShort
+   && pCur->pKeyInfo && pCur->pKeyInfo->aSortFlags
+   && nField < pCur->pKeyInfo->nAllField
+   && (pCur->pKeyInfo->aSortFlags[nField] & KEYINFO_ORDER_DESC) ){
+    if( outPos + 1 > nOutCap ) return SQLITE_NOTFOUND;
+    pOut[outPos++] = SORTKEY_NUM_DESC_END;
   }
   *pnOut = outPos;
   return SQLITE_OK;
@@ -299,12 +310,14 @@ static int sortKeyFromIntRecordLocal(
 int sortKeyFromUnpackedIntRecordBuffer(
   UnpackedRecord *pRec,
   int nField,
+  const KeyInfo *pKeyInfo,
   u8 **ppBuf,
   int *pnAlloc,
   int *pnOut
 ){
   int i;
   int nOut = 0;
+  int lastShort = 0;
   int nAlloc = nField * 18;
   if( *pnAlloc < nAlloc ){
     u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)nAlloc);
@@ -318,11 +331,25 @@ int sortKeyFromUnpackedIntRecordBuffer(
     if( sortKeyInt64FitsExact(v) ){
       sortKeyWriteExactInt64(v, *ppBuf + nOut);
       nOut += 9;
+      lastShort = 1;
     }else{
       int rc = sortKeyFromInt64(v, *ppBuf + nOut, &n);
       if( rc!=SQLITE_OK ) return rc;
       nOut += n;
+      lastShort = 0;
     }
+  }
+  if( lastShort
+   && pKeyInfo && pKeyInfo->aSortFlags
+   && nField < pKeyInfo->nAllField
+   && (pKeyInfo->aSortFlags[nField] & KEYINFO_ORDER_DESC) ){
+    if( *pnAlloc < nOut + 1 ){
+      u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)(nOut + 1));
+      if( !pNew ) return SQLITE_NOMEM;
+      *ppBuf = pNew;
+      *pnAlloc = nOut + 1;
+    }
+    (*ppBuf)[nOut++] = SORTKEY_NUM_DESC_END;
   }
   *pnOut = nOut;
   return SQLITE_OK;

@@ -1168,7 +1168,10 @@ INSERT INTO t VALUES(x'03', 18014398509481984, x'00');
 INSERT INTO t VALUES(x'04', 10, 'e');
 CREATE TABLE c(k INTEGER, j TEXT, a, b TEXT, PRIMARY KEY(k DESC, j)) WITHOUT ROWID;
 CREATE INDEX c_a ON c(a);
-INSERT INTO c VALUES(38, 'zz', 18014398509481984, x'00');" | $DOLTLITE "$DB" > /dev/null 2>&1
+INSERT INTO c VALUES(38, 'zz', 18014398509481984, x'00');
+CREATE TABLE tab2(pk INTEGER PRIMARY KEY, col0 INTEGER, col4 FLOAT);
+CREATE INDEX idx_tab2_0 ON tab2 (col0, col4 DESC);
+INSERT INTO tab2 VALUES(5,97,16.15),(9,25,59.80);" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "desc_pk_secondary_gap_is_empty" \
   "SELECT count(*) FROM t INDEXED BY i_a WHERE a > 9007199254740995 AND a < 18014398509481984;" \
@@ -1179,6 +1182,13 @@ run_test "desc_pk_secondary_includes_exact_below" \
 run_test "desc_pk_secondary_equality" \
   "SELECT b FROM t INDEXED BY i_a WHERE a = 9007199254740994;" \
   "b" "$DB"
+run_test "desc_following_small_int_equality" \
+  "SELECT b FROM t INDEXED BY i_a WHERE a = 10;" \
+  "e" "$DB"
+run_test "desc_following_small_int_order" \
+  "SELECT group_concat(pk || ':' || col0, '|') FROM (
+     SELECT pk, col0 FROM tab2 WHERE col0 IN (97,25) ORDER BY col0 DESC);" \
+  "5:97|9:25" "$DB"
 run_test "desc_pk_secondary_order" \
   "SELECT group_concat(a, '|') FROM (SELECT a FROM t ORDER BY a);" \
   "10|9007199254740994|9007199254740995|18014398509481984" "$DB"
