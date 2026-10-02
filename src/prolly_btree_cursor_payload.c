@@ -77,7 +77,8 @@ void prollyBtreeCursorCurrentTreeValueSpan(
     int nExp = 0;
     u8 *pBuf = pCur->pCur.aPrefixExpand;
     int nCap = (int)sizeof(pCur->pCur.aPrefixExpand)-PROLLY_NODE_BUFFER_SLOP;
-    if( prollyCacheExpandElidedPrefix(pNode, i, pBuf, nCap, &nExp)==SQLITE_OK
+    if( prollyCacheExpandElidedPrefix(pNode, i, pBuf, nCap, &nExp,
+            pCur->pBt ? &pCur->pBt->stats : 0)==SQLITE_OK
      && nExp>0 ){
       memset(pBuf+nExp, 0, PROLLY_NODE_BUFFER_SLOP);
       *ppData = pBuf;
@@ -570,7 +571,8 @@ int sqlite3BtreeProllySortKeyField(
     if( nVal>0 ) return SQLITE_NOTFOUND;
     prollyCursorKey(&pCur->pCur, &pKey, &nKey);
   }
-  return sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, iField, pField, aSerial);
+  return sortKeyFieldAt(pKey, nKey, pCur->pKeyInfo, iField, pField, aSerial,
+                        pCur->pBt ? &pCur->pBt->stats : 0);
 }
 
 const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){

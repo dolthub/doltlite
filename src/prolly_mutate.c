@@ -49,6 +49,7 @@ static int buildFromEdits(
   }
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
+    prollyStatAdd(pMut->pEdits->pStats, nPendingMerge, 1);
     if( pEntry->op==PROLLY_EDIT_INSERT ){
       rc = prollyChunkerAddZeroTail(&chunker, pEntry->pKey, pEntry->nKey,
                                     pEntry->pVal, pEntry->nVal,
@@ -1223,7 +1224,10 @@ static int tryReplaceBatchLeafDirect(
   int nCopied = 0;
   int i = -1;
   int rc;
+  ProllyStats *pStats;
 
+  pStats = pMut->pCache ? pMut->pCache->pStats : 0;
+  if( !pStats && pMut->pEdits ) pStats = pMut->pEdits->pStats;
   if( pLeaf->nItems==0
    || (pLeaf->nDataPhys!=pLeaf->nData && !pLeaf->nValuePrefix) ){
     return SQLITE_NOTFOUND;
@@ -1243,9 +1247,10 @@ static int tryReplaceBatchLeafDirect(
     if( res!=0 ){
       if( prollyKeyCmp(pEd->pKey, pEd->nKey, pLastKey, nLastKey)>0 ) break;
       if( pLeaf->flags & PROLLY_NODE_INTKEY ){
-        i = prollyNodeSearchInt(pLeaf, prollyMutMapEntryIntKey(pEd), &res);
+        i = prollyNodeSearchInt(pLeaf, prollyMutMapEntryIntKey(pEd), &res,
+                                pStats);
       }else{
-        i = prollyNodeSearchBlob(pLeaf, pEd->pKey, pEd->nKey, &res);
+        i = prollyNodeSearchBlob(pLeaf, pEd->pKey, pEd->nKey, &res, pStats);
       }
     }
     if( res!=0 || pEd->op!=PROLLY_EDIT_INSERT || pEd->nZeroTail ){
@@ -1291,6 +1296,7 @@ static int tryReplaceBatchLeafDirect(
     rc = writeOwnedNode(pMut->pStore, 0, pData, pLeaf->nData, pHash);
     pData = 0;
     if( rc!=SQLITE_OK ) return rc;
+    prollyStatAdd(pStats, nPendingMerge, nChanged);
   }
   sqlite3_free(pData);
   *pIter = iter;

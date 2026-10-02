@@ -10,6 +10,7 @@
 #include "chunk_index.h"
 #include "chunk_staging.h"
 #include "chunk_file.h"
+#include "prolly_stats.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443
 #define CHUNK_STORE_VERSION 12
@@ -257,6 +258,7 @@ struct ChunkStore {
   ChunkIndexCache *pIndexCache;
   int nIndexCacheSlot;
   WalState wal;
+  ProllyStats *pStats;
   ChunkStaging staging;
 
   u8 readOnly;
@@ -420,7 +422,8 @@ void chunkStoreBorrowRelease(void *pSeg);
 int chunkStoreReadAhead(ChunkStore *cs, const ProllyHash *aHash, int nHash,
     int (*xCached)(void*, const ProllyHash*),
     int (*xRead)(void*, const ProllyHash*, const u8*, int), void *pCtx);
-int chunkStoreVerifyChunk(const ProllyHash *hash, u8 **ppData, int *pnData);
+int chunkStoreVerifyChunk(const ProllyHash *hash, u8 **ppData, int *pnData,
+                          ProllyStats *pStats);
 int chunkStoreGetSparse(ChunkStore *cs, const ProllyHash *hash,
                         u8 **ppData, int *pnData, int *pnDataPhys);
 int chunkStoreSourceHas(ChunkStore *cs, const ProllyHash *pHash, int *pHas);

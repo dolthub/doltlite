@@ -261,6 +261,42 @@ def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, 
             "confirmed": classify(pairs, threshold, floor, runs)}
 
 
+def counter_scale_superlinear(small, large, plan):
+    """4x rows should stay under 6x for a plan stock answers with one scan."""
+    scans = sum(1 for line in (plan or "").splitlines() if "SCAN" in line)
+    if small < 100 or small <= 0:
+        return False
+    return (large / small) > 6 and scans <= 1
+
+
+def _counter_total(runner, binary, profile, case):
+    names = ("cache_miss", "chunk_read", "compare", "seek", "sortkey_parse",
+             "hash_bytes")
+    listed = ",".join("'" + name + "'" for name in names)
+    query = (prologue(profile.cache_kib) + ".output /dev/null\n"
+             + fixture_sql(profile) + case.sql + "\n.output stdout\n"
+             + "SELECT coalesce(sum(value),0) FROM dolt_engine_stats "
+             + f"WHERE name IN ({listed});\n")
+    output = runner.run([str(binary), ":memory:"], query)
+    return int(output.strip().splitlines()[-1])
+
+
+def probe_counter_scale(runner, binary, profile, case, record):
+    small_p = replace(profile, rows=64, lookups=8, width=8, start=1, target=0,
+                      memory=True)
+    large_p = replace(profile, rows=256, lookups=8, width=8, start=1, target=0,
+                      memory=True)
+    small_case = next((c for c in cases_for(small_p) if c.name == case.name), None)
+    large_case = next((c for c in cases_for(large_p) if c.name == case.name), None)
+    if small_case is None or large_case is None:
+        return None
+    small = _counter_total(runner, binary, small_p, small_case)
+    large = _counter_total(runner, binary, large_p, large_case)
+    plan = record.get("plans", {}).get("sqlite", "")
+    return {"counter_small": small, "counter_large": large,
+            "counter_superlinear": counter_scale_superlinear(small, large, plan)}
+
+
 def binary_info(runner, path):
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -310,6 +346,14 @@ def save_report(output, report):
         for case in uncached:
             lines.append(f"- `{case['id']}`: {case['ratio']:.2f}× at the profile cache, "
                          f"{case.get('cached_ratio') or 0:.2f}× cached. `{case['reproducer']}`")
+    scaled = [x for x in report["cases"] if x.get("counter_superlinear")]
+    if scaled:
+        lines += ["", "### Counter scaling", "",
+                  "These cases grew faster than 6× from 64 rows to 256 rows while "
+                  "stock's plan scanned at most one table. The wall-clock gate is separate.", ""]
+        for case in scaled:
+            lines.append(f"- `{case['id']}`: {case.get('counter_small')} at 64 rows, "
+                         f"{case.get('counter_large')} at 256 rows. `{case.get('reproducer', '')}`")
     if timeouts:
         lines += ["", "### Timed out (unconfirmed)", ""]
         for case in timeouts:
@@ -436,6 +480,15 @@ def main(argv=None):
                             options = {'setup': setup} if profile.memory else {}
                             record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms,
                                                        min_query_ms=args.min_query_ms, **options))
+                            try:
+                                scaled = probe_counter_scale(
+                                    runner, binaries["doltlite"], profile, case, record)
+                                if scaled is not None:
+                                    record.update(scaled)
+                            except BudgetExpired:
+                                raise
+                            except (CaseTimeout, RuntimeError, ValueError) as exc:
+                                record["counter_error"] = str(exc)
                             if record["confirmed"] and profile.cache_kib<CACHED_CHECK_KIB:
                                 runner.case_deadline = time.monotonic() + args.timeout
                                 cached = measure_case(runner, binaries, case_databases,

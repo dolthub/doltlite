@@ -211,6 +211,13 @@ class DiscoveryTests(unittest.TestCase):
                     self.assertIn(message, result.stdout)
                     self.assertEqual(result.stderr, "")
 
+    def test_counter_scale_flags_quadratic_single_scan(self):
+        plan = "QUERY PLAN\n`--SCAN t\n"
+        self.assertFalse(fuzzer.counter_scale_superlinear(99, 2000, plan))
+        self.assertFalse(fuzzer.counter_scale_superlinear(100, 533, plan))
+        self.assertFalse(fuzzer.counter_scale_superlinear(100, 1600, "SCAN t\nSCAN u\n"))
+        self.assertTrue(fuzzer.counter_scale_superlinear(100, 1600, plan))
+
     def test_partial_report_and_errors_are_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
             report = {"seed": 1, "runs": 5, "threshold": 3, "min_ms": 20,

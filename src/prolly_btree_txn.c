@@ -298,6 +298,7 @@ static int allocEmptyPendingLike(ProllyMutMap *pSrc, ProllyMutMap **ppOut){
     return rc;
   }
   pNew->currentSavepointLevel = pSrc->currentSavepointLevel;
+  pNew->pStats = pSrc->pStats;
   *ppOut = pNew;
   return SQLITE_OK;
 }

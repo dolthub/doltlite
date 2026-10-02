@@ -105,9 +105,11 @@ struct SortKeyField {
   int nEnc;          /* TEXT/BLOB: escaped length, terminator excluded */
   int nData;         /* TEXT/BLOB: plain length */
 };
+struct ProllyStats;
 int sortKeyFieldAt(
   const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
-  int iField, SortKeyField *pField, u32 *aSerial
+  int iField, SortKeyField *pField, u32 *aSerial,
+  struct ProllyStats *pStats
 );
 void sortKeyFieldCopy(const SortKeyField *pField, u8 *pOut);
 

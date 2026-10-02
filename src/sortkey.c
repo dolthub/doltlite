@@ -4,6 +4,7 @@
 #include "sortkey.h"
 #include "vdbeInt.h"
 #include "prolly_record.h"
+#include "prolly_stats.h"
 #include <limits.h>
 #include <string.h>
 
@@ -854,9 +855,10 @@ static void decodeNumericSortKeyField(
 ** wanted; skipped fields cost their length scan alone. */
 static int sortKeyFieldParse(
   const u8 *pSortKey, int nSortKey, int pos, int desc, int wanted,
-  SortKeyField *pField
+  SortKeyField *pField, ProllyStats *pStats
 ){
   u8 tag = desc ? (u8)~pSortKey[pos] : pSortKey[pos];
+  prollyStatAdd(pStats, nSortKeyParse, 1);
 
   if( tag==SORTKEY_NULL ){
     if( wanted ){
@@ -935,7 +937,7 @@ static u32 sortKeyFieldSerialClass(const SortKeyField *pField){
 ** field up to iField, which costs decoding the fields walked past. */
 int sortKeyFieldAt(
   const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
-  int iField, SortKeyField *pField, u32 *aSerial
+  int iField, SortKeyField *pField, u32 *aSerial, ProllyStats *pStats
 ){
   SortKeyField skipped;
   int pos = 0;
@@ -948,13 +950,13 @@ int sortKeyFieldAt(
     SortKeyField *pDst = isTarget ? pField : &skipped;
     pos = sortKeyFieldParse(pSortKey, nSortKey, pos,
                             descFromKeyInfo(pKeyInfo, nField),
-                            isTarget || aSerial!=0, pDst);
+                            isTarget || aSerial!=0, pDst, pStats);
     if( pos<0 ) return SQLITE_CORRUPT;
     if( aSerial ) aSerial[nField] = sortKeyFieldSerialClass(pDst);
     if( isTarget ) return SQLITE_OK;
     if( iField<0 && pos>=nSortKey ){
       sortKeyFieldParse(pSortKey, nSortKey, start,
-                        descFromKeyInfo(pKeyInfo, nField), 1, pField);
+                        descFromKeyInfo(pKeyInfo, nField), 1, pField, pStats);
       return SQLITE_OK;
     }
     nField++;

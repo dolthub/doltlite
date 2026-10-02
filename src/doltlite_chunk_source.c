@@ -321,7 +321,7 @@ static int csSourceCacheGet(
   csSourceCacheTouch(p, pEntry);
   *ppData = pCopy;
   *pnData = pEntry->nData;
-  return chunkStoreVerifyChunk(pHash, ppData, pnData);
+  return chunkStoreVerifyChunk(pHash, ppData, pnData, 0);
 }
 
 static void csSourceClearError(DoltliteChunkSourceState *p){
@@ -563,7 +563,7 @@ int chunkStoreSourceGet(
         p, SQLITE_IOERR_CHUNK_SOURCE, "chunk source I/O error for", pHash);
     return SQLITE_IOERR_CHUNK_SOURCE;
   }
-  rc = chunkStoreVerifyChunk(pHash, &pData, &nData);
+  rc = chunkStoreVerifyChunk(pHash, &pData, &nData, 0);
   if( rc!=SQLITE_OK ){
     csSourceSetHashError(
         p, rc, "chunk source returned corrupt bytes for", pHash);
@@ -656,7 +656,7 @@ int chunkStoreSourcePrefetchMany(
       rc = SQLITE_IOERR_CHUNK_SOURCE;
       goto prefetch_done;
     }
-    rc = chunkStoreVerifyChunk(&aMissing[i], &apData[i], &anData[i]);
+    rc = chunkStoreVerifyChunk(&aMissing[i], &apData[i], &anData[i], 0);
     if( rc!=SQLITE_OK ){
       csSourceSetHashError(p, rc, "chunk source returned corrupt bytes for",
                            &aMissing[i]);

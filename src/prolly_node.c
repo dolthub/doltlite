@@ -270,7 +270,8 @@ int prollyNodeSearchBlob(
   const ProllyNode *pNode,
   const u8 *pKey,
   int nKey,
-  int *pRes
+  int *pRes,
+  ProllyStats *pStats
 ){
   int lo = 0;
   int hi = pNode->nItems - 1;
@@ -287,6 +288,7 @@ int prollyNodeSearchBlob(
 
   while( lo<=hi ){
     mid = lo + (hi - lo) / 2;
+    prollyStatAdd(pStats, nCompare, 1);
     prollyNodeKey(pNode, mid, &pMidKey, &nMidKey);
 
     nCmp = nMidKey < nKey ? nMidKey : nKey;
@@ -312,7 +314,8 @@ int prollyNodeSearchBlob(
   }
 }
 
-int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes){
+int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes,
+                        ProllyStats *pStats){
   int lo = 0;
   int hi = pNode->nItems;
   int mid;
@@ -327,6 +330,7 @@ int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes){
   while( lo<hi ){
     const u8 *p;
     mid = lo + (hi - lo) / 2;
+    prollyStatAdd(pStats, nCompare, 1);
     p = pNode->pKeyData + mid*8;
     midKey = prollyReadEncodedIntKey(p);
 

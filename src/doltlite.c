@@ -37,6 +37,7 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltliteConstraintViolationsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteVerifyConstraintsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteDocsRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteEngineStatsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteTestsRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteIgnoreRegister(db))!=SQLITE_OK ) return rc;
   rc = doltliteMaybeSeedRepo(db);

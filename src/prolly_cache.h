@@ -5,6 +5,7 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "prolly_node.h"
+#include "prolly_stats.h"
 
 #define PROLLY_CACHE_SHARED_PREFIX 32
 /* Bit 0 is cleared by a point read. Bit 1 stays set when a write scan
@@ -54,6 +55,7 @@ struct ProllyCache {
   ProllyCacheEntry wideTail;
   ProllyCacheEntry rowHead;
   ProllyCacheEntry rowTail;
+  ProllyStats *pStats;
 };
 
 int prollyCacheInit(ProllyCache *cache, i64 nMaxByte);
@@ -92,6 +94,6 @@ void prollyCacheFree(ProllyCache *cache);
 ** *pnAvail is the number of original record bytes available. */
 int prollyCacheExpandElidedPrefix(
   const ProllyNode *pNode, int iItem,
-  u8 *pOut, int nOutCap, int *pnAvail);
+  u8 *pOut, int nOutCap, int *pnAvail, ProllyStats *pStats);
 
 #endif

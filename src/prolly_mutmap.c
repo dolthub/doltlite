@@ -711,6 +711,7 @@ int prollyMutMapInsertGetEntry(
   u8 keyBuf[8];
   assert( mm!=0 );
   assert( nKey>=0 && nVal>=0 );
+  prollyStatAdd(mm->pStats, nPendingInsert, 1);
   if( ppEntry ) *ppEntry = 0;
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
@@ -1088,6 +1089,7 @@ int prollyMutMapFindRc(
 ){
   int found, idx, phys, rc;
   u8 keyBuf[8];
+  prollyStatAdd(mm->pStats, nPendingLookup, 1);
   *ppEntry = 0;
   if( mm->nEntries==0 ) return SQLITE_OK;
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);

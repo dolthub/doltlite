@@ -101,6 +101,7 @@ static void readAheadLeaves(ProllyCursor *cur){
 
   if( nHash<2 || cur->pCache->nMaxByte<2*CHUNK_READ_AHEAD_BYTES ) return;
   for(i=0; i<nHash; i++) prollyNodeChildHash(pParent, first+i, &aHash[i]);
+  prollyStatAdd(cur->pCache->pStats, nReadAhead, nHash);
   sqlite3BeginBenignMalloc();
   /* A speculative failure must wait until the cursor requests that chunk. */
   (void)chunkStoreReadAhead(cur->pStore, aHash, nHash,
@@ -536,7 +537,8 @@ int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
   pEntry = cursorCurrentLeaf(cur);
   if( pEntry && intKey>=prollyNodeIntKey(&pEntry->node, 0)
    && intKey<=prollyNodeIntKey(&pEntry->node, pEntry->node.nItems-1) ){
-    leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes);
+    leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes,
+                                 cur->pCache->pStats);
     return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
   }
 
@@ -550,7 +552,8 @@ int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
 
   while( pEntry->node.level>0 ){
     int searchRes;
-    int idx = prollyNodeSearchInt(&pEntry->node, intKey, &searchRes);
+    int idx = prollyNodeSearchInt(&pEntry->node, intKey, &searchRes,
+                                 cur->pCache->pStats);
     idx = childIndexForSearchResult(idx, searchRes, pEntry->node.nItems);
     cur->aLevel[cur->iLevel].idx = idx;
     rc = descendToChild(cur, idx, 0, &pEntry);
@@ -562,7 +565,8 @@ int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
     *pRes = -1;
     return SQLITE_OK;
   }
-  leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes);
+  leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes,
+                               cur->pCache->pStats);
   return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
 }
 
@@ -572,13 +576,16 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
   ProllyCacheEntry *pEntry = 0;
   int leafRes;
   int leafIdx;
+  ProllyStats *pStats;
 
+  pStats = cur->pCache ? cur->pCache->pStats : 0;
   pEntry = cursorCurrentLeaf(cur);
   if( pEntry && pEntry->node.nItems>0 ){
     const u8 *pBound;
     int nBound;
     leafIdx = cur->aLevel[cur->iLevel].idx;
     prollyNodeKey(&pEntry->node, leafIdx, &pBound, &nBound);
+    prollyStatAdd(pStats, nCompare, 1);
     leafRes = prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0);
     if( leafRes==0 ){
       *pRes = 0;
@@ -586,16 +593,20 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     }
     if( leafRes>0 && leafIdx<pEntry->node.nItems-1 ){
       prollyNodeKey(&pEntry->node, leafIdx+1, &pBound, &nBound);
+      prollyStatAdd(pStats, nCompare, 1);
       leafRes = prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0);
       if( leafRes<=0 ){
         return finalizeSeekOnLeaf(cur, pEntry, leafIdx+1, leafRes, pRes);
       }
     }
     prollyNodeKey(&pEntry->node, 0, &pBound, &nBound);
+    prollyStatAdd(pStats, nCompare, 1);
     if( prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0)>=0 ){
       prollyNodeKey(&pEntry->node, pEntry->node.nItems-1, &pBound, &nBound);
+      prollyStatAdd(pStats, nCompare, 1);
       if( prollyCompareKeys(0, pKey, nKey, 0, pBound, nBound, 0)<=0 ){
-        leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes);
+        leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes,
+                                       pStats);
         return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
       }
     }
@@ -611,7 +622,8 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
 
   while( pEntry->node.level>0 ){
     int searchRes;
-    int idx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &searchRes);
+    int idx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &searchRes,
+                                  cur->pCache->pStats);
     idx = childIndexForSearchResult(idx, searchRes, pEntry->node.nItems);
     cur->aLevel[cur->iLevel].idx = idx;
     rc = descendToChild(cur, idx, 0, &pEntry);
@@ -623,7 +635,8 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     *pRes = -1;
     return SQLITE_OK;
   }
-  leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes);
+  leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes,
+                                cur->pCache->pStats);
   return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
 }
 

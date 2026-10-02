@@ -262,17 +262,26 @@ static ProllyCacheEntry *cacheGet(
 }
 
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
-  return cacheGet(cache, hash, 0, 0);
+  ProllyCacheEntry *pEntry = cacheGet(cache, hash, 0, 0);
+  if( pEntry ) prollyStatAdd(cache->pStats, nCacheHit, 1);
+  else prollyStatAdd(cache->pStats, nCacheMiss, 1);
+  return pEntry;
 }
 
 ProllyCacheEntry *prollyCacheGetForScan(ProllyCache *cache, const ProllyHash *hash){
-  return cacheGet(cache, hash, 1, 0);
+  ProllyCacheEntry *pEntry = cacheGet(cache, hash, 1, 0);
+  if( pEntry ) prollyStatAdd(cache->pStats, nCacheHit, 1);
+  else prollyStatAdd(cache->pStats, nCacheMiss, 1);
+  return pEntry;
 }
 
 ProllyCacheEntry *prollyCacheGetPrefix(
   ProllyCache *cache, const ProllyHash *hash, int bScan
 ){
-  return cacheGet(cache, hash, bScan, 1);
+  ProllyCacheEntry *pEntry = cacheGet(cache, hash, bScan, 1);
+  if( pEntry ) prollyStatAdd(cache->pStats, nCacheHit, 1);
+  else prollyStatAdd(cache->pStats, nCacheMiss, 1);
+  return pEntry;
 }
 
 /* Header must sit inside n. Field 0's payload may extend past n. */
@@ -314,7 +323,8 @@ static int plainTextField0(const u8 *pKey, int nKey, const u8 **pp, int *pn){
 }
 
 static int keyField0Matches(
-  const u8 *pKey, int nKey, const u8 *pField, int nField, int serial
+  const u8 *pKey, int nKey, const u8 *pField, int nField, int serial,
+  ProllyStats *pStats
 ){
   const u8 *pPlain;
   int nPlain;
@@ -324,7 +334,9 @@ static int keyField0Matches(
     if( serial<13 || (serial&1)==0 ) return 0;
     return nPlain==nField && memcmp(pPlain, pField, nField)==0;
   }
-  if( sortKeyFieldAt(pKey, nKey, 0, 0, &field, 0)!=SQLITE_OK ) return 0;
+  if( sortKeyFieldAt(pKey, nKey, 0, 0, &field, 0, pStats)!=SQLITE_OK ){
+    return 0;
+  }
   /* nData is uninitialized for numeric and NULL keys. */
   if( field.eType==SORTKEY_TEXT ){
     if( serial<13 || (serial&1)==0 ) return 0;
@@ -341,7 +353,8 @@ static int keyField0Matches(
 /* True when a raw prefix would be spent on a long field 0 that the key
 ** already holds, and the value continues past that prefix. */
 static int rowElidesFirstField(
-  const u8 *pKey, int nKey, const u8 *pVal, int nVal, int nPrefix, int *pLen
+  const u8 *pKey, int nKey, const u8 *pVal, int nVal, int nPrefix, int *pLen,
+  ProllyStats *pStats
 ){
   int hdr, flen, typ;
   if( nVal<=nPrefix ) return 0;
@@ -350,14 +363,14 @@ static int rowElidesFirstField(
   if( flen<PROLLY_PREFIX_ELIDE_MIN || flen>PROLLY_PREFIX_ELIDE_MAX ) return 0;
   if( nPrefix+flen>PROLLY_PREFIX_EXPAND ) return 0;
   if( (i64)hdr+(i64)flen>nVal ) return 0;
-  if( !keyField0Matches(pKey, nKey, pVal+hdr, flen, typ) ) return 0;
+  if( !keyField0Matches(pKey, nKey, pVal+hdr, flen, typ, pStats) ) return 0;
   *pLen = flen;
   return 1;
 }
 
 int prollyCacheExpandElidedPrefix(
   const ProllyNode *pNode, int iItem,
-  u8 *pOut, int nOutCap, int *pnAvail
+  u8 *pOut, int nOutCap, int *pnAvail, ProllyStats *pStats
 ){
   const u8 *pStored, *pKey, *pPlain;
   int nVal, nAvail, nKey, hdr, flen, nPlain, nLogical, nTail;
@@ -387,7 +400,7 @@ int prollyCacheExpandElidedPrefix(
   if( plainTextField0(pKey, nKey, &pPlain, &nPlain) && nPlain==flen ){
     /* Key text is already the field bytes. */
   }else{
-    if( sortKeyFieldAt(pKey, nKey, 0, 0, &field, 0)!=SQLITE_OK ){
+    if( sortKeyFieldAt(pKey, nKey, 0, 0, &field, 0, pStats)!=SQLITE_OK ){
       return SQLITE_NOTFOUND;
     }
     if( field.eType!=SORTKEY_TEXT && field.eType!=SORTKEY_BLOB ){
@@ -528,7 +541,8 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
         prollyNodeKey(pNode, i, &pKey, &nKey);
         prollyNodeValueSpan(pNode, i, &pVal, &nVal, &nAvail);
         (void)nVal;
-        if( !rowElidesFirstField(pKey, nKey, pVal, nAvail, nPrefix, &flen) ){
+        if( !rowElidesFirstField(pKey, nKey, pVal, nAvail, nPrefix, &flen,
+                                 cache->pStats) ){
           bElide = 0;
           break;
         }
@@ -699,6 +713,9 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     if( pPrefix ) pEntry = pPrefix;
   }
   if( pEntry && cacheKeepPrefixes(cache, pEntry) ) return 0;
+  if( pEntry && pEntry->bReadAheadUnused ){
+    prollyStatAdd(cache->pStats, nReadAheadUnused, 1);
+  }
   if( pEntry ){
     cacheNoteEvicted(cache, pEntry);
     cacheWideForget(cache, pEntry);
@@ -714,6 +731,9 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
 }
 
 static void cacheEvictEntry(ProllyCache *cache, ProllyCacheEntry *pEntry){
+  if( pEntry->bReadAheadUnused ){
+    prollyStatAdd(cache->pStats, nReadAheadUnused, 1);
+  }
   cacheNoteEvicted(cache, pEntry);
   cacheWideForget(cache, pEntry);
   lruRemove(pEntry);

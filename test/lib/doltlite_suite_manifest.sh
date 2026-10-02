@@ -24,6 +24,7 @@ doltlite_staging.sh
 doltlite_clean.sh
 doltlite_workspace.sh
 doltlite_docs.sh
+doltlite_engine_stats.sh
 doltlite_tests.sh
 doltlite_ignore.sh
 doltlite_reserved.sh
@@ -207,6 +208,7 @@ doltlite_staging.sh
 doltlite_clean.sh
 doltlite_workspace.sh
 doltlite_docs.sh
+doltlite_engine_stats.sh
 doltlite_tests.sh
 doltlite_ignore.sh
 doltlite_reserved.sh

@@ -3,6 +3,7 @@
 #define SQLITE_PAGER_SHIM_H
 
 #include "sqliteInt.h"
+#include "prolly_stats.h"
 
 typedef struct PagerShim PagerShim;
 typedef struct PagerOps PagerOps;
@@ -22,6 +23,7 @@ struct PagerShim {
   u8 journalMode;
   u32 iDataVersion;
   sqlite3_vfs *pVfs;
+  ProllyStats *pStats;
 };
 
 PagerShim *pagerShimCreate(sqlite3_vfs *pVfs, const char *zFilename,
@@ -53,6 +55,7 @@ u32 sqlite3PagerDataVersion(Pager*);
 void sqlite3PagerShrink(Pager*);
 int sqlite3PagerFlush(Pager*);
 void sqlite3PagerCacheStat(Pager*, int, int, u64*);
+ProllyStats *pagerShimStats(Pager*);
 int sqlite3PagerIsMemdb(Pager*);
 int sqlite3PagerLockingMode(Pager*, int);
 

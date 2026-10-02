@@ -6277,7 +6277,7 @@ static void run_empty_node_builder_finish(void){
         pData && prollyNodeParse(&node, pData, nData)==SQLITE_OK
         && node.nItems==0 && node.level==0);
   check("search_empty_blob_leaf",
-        prollyNodeSearchBlob(&node, (const u8*)"k", 1, &res)==0 && res<0);
+        prollyNodeSearchBlob(&node, (const u8*)"k", 1, &res, 0)==0 && res<0);
   sqlite3_free(pData);
   prollyNodeBuilderFree(&b);
 
@@ -6296,7 +6296,7 @@ static void run_empty_node_builder_finish(void){
         && (node.flags & PROLLY_NODE_INTKEY)!=0);
   res = 99;
   check("search_empty_int_leaf",
-        prollyNodeSearchInt(&node, 1, &res)==0 && res<0);
+        prollyNodeSearchInt(&node, 1, &res, 0)==0 && res<0);
   sqlite3_free(pData);
   prollyNodeBuilderFree(&b);
 

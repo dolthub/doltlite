@@ -102,6 +102,7 @@ int cacheCursorPayloadReconstructed(
       pSortKey, nSortKey, pCur->pKeyInfo,
       &pCur->pReconPayload, &pCur->nReconPayloadAlloc, &nRec);
   if( rc!=SQLITE_OK ) return rc;
+  if( pCur->pBt ) prollyStatAdd(&pCur->pBt->stats, nRecordBytes, (u64)nRec);
   CLEAR_CACHED_PAYLOAD(pCur);
   pCur->pCachedPayload = pCur->pReconPayload;
   pCur->nCachedPayload = nRec;
@@ -583,6 +584,7 @@ static int ensureMutMap(BtCursor *pCur){
      && pExisting->currentSavepointLevel != pCur->pBtree->nSavepoint ){
       pExisting->currentSavepointLevel = pCur->pBtree->nSavepoint;
     }
+    if( pCur->pBt ) pExisting->pStats = &pCur->pBt->stats;
     pCur->pMutMap = pExisting;
     assert( pCur->pMutMap==pTE->pPending );
     return SQLITE_OK;
@@ -598,6 +600,7 @@ static int ensureMutMap(BtCursor *pCur){
   if( pCur->pBtree ){
     pMap->currentSavepointLevel = pCur->pBtree->nSavepoint;
   }
+  if( pCur->pBt ) pMap->pStats = &pCur->pBt->stats;
   pTE->pPending = pMap;
   refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pMap);
   assert( pCur->pMutMap==pMap );
