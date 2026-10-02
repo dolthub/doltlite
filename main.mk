@@ -2805,6 +2805,7 @@ DOLTLITE_C_TESTS = \
 	multi_process_test$(T.exe) \
 	multi_process_gc_test$(T.exe) \
 	multi_process_merge_rebase_test$(T.exe) \
+	multi_process_peer_write_test$(T.exe) \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
 	gc_tip_survival_test$(T.exe) \
@@ -2932,6 +2933,10 @@ multi_process_gc_test$(T.exe): $(TOP)/test/multi_process_gc_test.c libdoltlite$(
 
 multi_process_merge_rebase_test$(T.exe): $(TOP)/test/multi_process_merge_rebase_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/multi_process_merge_rebase_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+multi_process_peer_write_test$(T.exe): $(TOP)/test/multi_process_peer_write_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/multi_process_peer_write_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 sequence_reload_test$(T.exe): $(TOP)/test/sequence_reload_test.c libdoltlite$(T.lib)
