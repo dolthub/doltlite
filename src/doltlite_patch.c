@@ -462,23 +462,6 @@ static int patchHasPrimaryKey(const PatchSchema *p){
   return 0;
 }
 
-static int patchPrimaryKeyChanged(
-  const PatchSchema *pFrom,
-  const PatchSchema *pTo
-){
-  int i, j, nFrom = 0, nTo = 0;
-  for(i=0; i<pFrom->col.nCol; i++) if( pFrom->aPk[i]>0 ) nFrom++;
-  for(i=0; i<pTo->col.nCol; i++) if( pTo->aPk[i]>0 ) nTo++;
-  if( nFrom!=nTo ) return 1;
-  for(i=0; i<pTo->col.nCol; i++){
-    if( pTo->aPk[i]<=0 ) continue;
-    j = patchColumnIndex(pFrom,pTo->col.azName[i]);
-    if( j<0 && pFrom->col.nCol==pTo->col.nCol ) j = i;
-    if( j<0 || pFrom->aPk[j]!=pTo->aPk[i] ) return 1;
-  }
-  return 0;
-}
-
 static int patchAppendAssociated(
   PatchCursor *pCur,
   const char *zTable,
@@ -668,21 +651,17 @@ static int patchObjectsDiffer(
 static int patchAppendRebuild(
   PatchCursor *pCur,
   const PatchTable *pTable,
-  const PatchSchema *pFrom,
-  const PatchSchema *pTo,
   SchemaEntry *aFromSchema,
   int nFromSchema,
   SchemaEntry *aToSchema,
   int nToSchema,
-  int iTemp,
-  int bCopyData
+  int iTemp
 ){
   const char *zBody = patchSchemaBody(pTable->pToSchema->zSql);
   sqlite3_str *pStr;
   char *zSql;
   char *zTemp = 0;
-  int *aUsed = 0;
-  int i, j, nMap = 0, rc = SQLITE_OK;
+  int rc = SQLITE_OK;
   if( !zBody ) return SQLITE_CORRUPT;
   do{
     sqlite3_free(zTemp);
@@ -701,44 +680,6 @@ static int patchAppendRebuild(
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ) goto done;
 
-  if( bCopyData ){
-    aUsed = sqlite3_malloc64((sqlite3_uint64)pFrom->col.nCol*sizeof(int));
-    if( pFrom->col.nCol && !aUsed ){ rc = SQLITE_NOMEM; goto done; }
-    memset(aUsed, 0, (size_t)pFrom->col.nCol*sizeof(int));
-    pStr = sqlite3_str_new(0);
-    sqlite3_str_appendall(pStr, "INSERT INTO ");
-    patchAppendIdent(pStr, zTemp);
-    sqlite3_str_appendchar(pStr, 1, '(');
-    for(i=0; i<pTo->col.nCol; i++){
-      j = patchColumnIndex(pFrom, pTo->col.azName[i]);
-      if( j<0 && pFrom->col.nCol==pTo->col.nCol && i<pFrom->col.nCol
-       && !aUsed[i] ) j = i;
-      if( j<0 ) continue;
-      if( nMap++ ) sqlite3_str_appendall(pStr, ",");
-      patchAppendIdent(pStr, pTo->col.azName[i]);
-      aUsed[j] = 1;
-    }
-    sqlite3_str_appendall(pStr, ") SELECT ");
-    nMap = 0;
-    memset(aUsed, 0, (size_t)pFrom->col.nCol*sizeof(int));
-    for(i=0; i<pTo->col.nCol; i++){
-      j = patchColumnIndex(pFrom, pTo->col.azName[i]);
-      if( j<0 && pFrom->col.nCol==pTo->col.nCol && i<pFrom->col.nCol
-       && !aUsed[i] ) j = i;
-      if( j<0 ) continue;
-      if( nMap++ ) sqlite3_str_appendall(pStr, ",");
-      patchAppendIdent(pStr, pFrom->col.azName[j]);
-      aUsed[j] = 1;
-    }
-    sqlite3_str_appendall(pStr, " FROM ");
-    patchAppendIdent(pStr, pTable->zFromName);
-    zSql = sqlite3_str_finish(pStr);
-    if( !zSql ){ rc = SQLITE_NOMEM; goto done; }
-    if( nMap>0 ) rc = patchAppendRow(pCur,pTable->zToName,"schema",zSql);
-    sqlite3_free(zSql);
-    if( rc!=SQLITE_OK ) goto done;
-  }
-
   zSql = sqlite3_mprintf("DROP TABLE \"%w\"", pTable->zFromName);
   if( !zSql ){ rc = SQLITE_NOMEM; goto done; }
   rc = patchAppendRow(pCur,pTable->zToName,"schema",zSql);
@@ -753,7 +694,6 @@ static int patchAppendRebuild(
     rc = patchAppendAssociated(pCur,pTable->zToName,aToSchema,nToSchema);
   }
 done:
-  sqlite3_free(aUsed);
   sqlite3_free(zTemp);
   return rc;
 }
@@ -893,16 +833,27 @@ static int patchNativeAlter(
           pTable->zFromName,pFrom->col.azName[iDiff],nIdent,zItem);
     }
   }else if( pTo->col.nCol==pFrom->col.nCol+1 ){
+    Table *pTab = sqlite3FindTable(pTo->db,pTable->zToName,"main");
     const char *zItem = 0;
     int nItem = 0;
     for(i=0; i<pFrom->col.nCol; i++){
       if( strcmp(pFrom->col.azName[i],pTo->col.azName[i])!=0 ) return SQLITE_OK;
     }
-    rc = patchSchemaItem(pTable->pToSchema->zSql,-1,&zItem,&nItem);
+    if( !pTab ) return SQLITE_CORRUPT;
+    i = sqlite3ColumnIndex(pTab,pTo->col.azName[pTo->col.nCol-1]);
+    if( i<0 ) return SQLITE_CORRUPT;
+    rc = patchSchemaItem(pTable->pToSchema->zSql,i,&zItem,&nItem);
     if( rc!=SQLITE_OK ) return rc;
     isCandidate = 1;
     zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %.*s",
                              pTable->zFromName,nItem,zItem);
+  }else if( pFrom->col.nCol==pTo->col.nCol+1 ){
+    for(i=0; i<pTo->col.nCol; i++){
+      if( strcmp(pFrom->col.azName[i],pTo->col.azName[i])!=0 ) return SQLITE_OK;
+    }
+    isCandidate = 1;
+    zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" DROP COLUMN \"%w\"",
+                             pTable->zFromName,pFrom->col.azName[i]);
   }
   if( !zAlter ) return isCandidate ? SQLITE_NOMEM : SQLITE_OK;
   rc = sqlite3_open(":memory:",&tmp);
@@ -1030,15 +981,16 @@ static int patchValuesEqual(const PatchValue *a, const PatchValue *b){
 static void patchAppendWhere(
   sqlite3_str *pStr,
   const PatchSchema *pSchema,
+  const PatchSchema *pTo,
   const u8 *pRec, int nRec,
   i64 intKey
 ){
-  int i, nPk = 0;
+  int i, j, nPk = 0;
   PatchValue v;
   sqlite3_str_appendall(pStr," WHERE ");
   for(i=0; i<pSchema->col.nCol; i++) if( pSchema->aPk[i]>0 ) nPk++;
   if( nPk==0 ){
-    const char *zRowid = patchRowidName(pSchema);
+    const char *zRowid = patchRowidName(pTo);
     assert( zRowid!=0 );
     patchAppendIdent(pStr,zRowid);
     sqlite3_str_appendf(pStr,"=%lld",intKey);
@@ -1048,7 +1000,9 @@ static void patchAppendWhere(
   for(i=0; i<pSchema->col.nCol; i++){
     if( pSchema->aPk[i]<=0 ) continue;
     if( nPk++ ) sqlite3_str_appendall(pStr," AND ");
-    patchAppendIdent(pStr,pSchema->col.azName[i]);
+    for(j=0; j<pTo->col.nCol && pTo->aPk[j]!=pSchema->aPk[i]; j++){}
+    assert( j<pTo->col.nCol );
+    patchAppendIdent(pStr,pTo->col.azName[j]);
     patchGetValue(pSchema,pRec,nRec,intKey,i,&v);
     if( v.eType==SQLITE_NULL ) sqlite3_str_appendall(pStr," IS NULL");
     else{
@@ -1097,11 +1051,12 @@ static int patchAppendInsert(PatchCursor *pCur, const char *zTable,
 }
 
 static int patchAppendDelete(PatchCursor *pCur, const char *zTable,
-  const PatchSchema *pFrom, const u8 *pRec, int nRec, i64 intKey){
+  const PatchSchema *pFrom, const PatchSchema *pTo,
+  const u8 *pRec, int nRec, i64 intKey){
   sqlite3_str *pStr;
   char *zSql;
   int rc;
-  if( !patchHasPrimaryKey(pFrom) && !patchRowidName(pFrom) ){
+  if( !patchHasPrimaryKey(pTo) && !patchRowidName(pTo) ){
     patchSetError(pCur->base.pVtab,
       "dolt_patch: table '%s' shadows every rowid alias",zTable);
     return SQLITE_ERROR;
@@ -1109,7 +1064,7 @@ static int patchAppendDelete(PatchCursor *pCur, const char *zTable,
   pStr = sqlite3_str_new(0);
   sqlite3_str_appendall(pStr,"DELETE FROM ");
   patchAppendIdent(pStr,zTable);
-  patchAppendWhere(pStr,pFrom,pRec,nRec,intKey);
+  patchAppendWhere(pStr,pFrom,pTo,pRec,nRec,intKey);
   zSql = sqlite3_str_finish(pStr);
   if( !zSql ) return SQLITE_NOMEM;
   rc = patchAppendRow(pCur,zTable,"data",zSql);
@@ -1124,7 +1079,7 @@ static int patchAppendUpdate(PatchCursor *pCur, const char *zTable,
   PatchValue oldV, newV;
   char *zSql;
   int i, j, nSet = 0, rc;
-  if( !patchHasPrimaryKey(pFrom) && !patchRowidName(pFrom) ){
+  if( !patchHasPrimaryKey(pTo) && !patchRowidName(pTo) ){
     patchSetError(pCur->base.pVtab,
       "dolt_patch: table '%s' shadows every rowid alias",zTable);
     return SQLITE_ERROR;
@@ -1151,7 +1106,7 @@ static int patchAppendUpdate(PatchCursor *pCur, const char *zTable,
     sqlite3_free(zSql);
     return rc;
   }
-  patchAppendWhere(pStr,pFrom,pOld,nOld,intKey);
+  patchAppendWhere(pStr,pFrom,pTo,pOld,nOld,intKey);
   zSql = sqlite3_str_finish(pStr);
   if( !zSql ) return SQLITE_NOMEM;
   rc = patchAppendRow(pCur,zTable,"data",zSql);
@@ -1206,7 +1161,8 @@ static int patchAppendData(
     if( pChange->type==PROLLY_DIFF_ADD ){
       rc = patchAppendInsert(pCur,pTable->zToName,pTo,pNew,nNew,pChange->intKey);
     }else if( pChange->type==PROLLY_DIFF_DELETE ){
-      rc = patchAppendDelete(pCur,pTable->zToName,pFrom,pOld,nOld,pChange->intKey);
+      rc = patchAppendDelete(pCur,pTable->zToName,pFrom,pTo,
+                            pOld,nOld,pChange->intKey);
     }else{
       rc = patchAppendUpdate(pCur,pTable->zToName,pFrom,pTo,pOld,nOld,pNew,nNew,
                              pChange->intKey);
@@ -1249,7 +1205,7 @@ static int patchGenerateTable(
 ){
   PatchSchema from, to;
   char *zNativeAlter = 0;
-  int schemaChanged, pkChanged = 0;
+  int schemaChanged, bRebuild = 0;
   int rc = SQLITE_OK;
   memset(&from,0,sizeof(from));
   memset(&to,0,sizeof(to));
@@ -1282,10 +1238,9 @@ static int patchGenerateTable(
   schemaChanged = strcmp(pTable->zFromName,pTable->zToName)!=0
       || strcmp(pTable->pFromSchema->zSql,pTable->pToSchema->zSql)!=0;
   if( schemaChanged ){
-    pkChanged = pTable->pFromTable->flags!=pTable->pToTable->flags
-             || patchPrimaryKeyChanged(&from,&to);
     rc = patchNativeAlter(pTable,&from,&to,&zNativeAlter);
-    if( rc==SQLITE_OK && zNativeAlter ){
+    if( rc==SQLITE_OK && zNativeAlter
+     && pTable->pFromTable->flags==pTable->pToTable->flags ){
       rc = patchAppendObjectDrops(pCur,pTable->zFromName,
               aFromSchema,nFromSchema,aToSchema,nToSchema);
       if( rc==SQLITE_OK ){
@@ -1296,15 +1251,16 @@ static int patchGenerateTable(
                 aFromSchema,nFromSchema,aToSchema,nToSchema);
       }
     }else if( rc==SQLITE_OK ){
-      rc = patchAppendRebuild(pCur,pTable,&from,&to,aFromSchema,nFromSchema,
-                              aToSchema,nToSchema,iTemp,!pkChanged);
+      bRebuild = 1;
+      rc = patchAppendRebuild(pCur,pTable,aFromSchema,nFromSchema,
+                              aToSchema,nToSchema,iTemp);
     }
   }else{
     rc = patchAppendObjectDiffs(pCur,pTable->zToName,
            aFromSchema,nFromSchema,aToSchema,nToSchema);
   }
   if( rc==SQLITE_OK ){
-    if( pkChanged ) rc=patchAppendAllData(pCur,db,pTable,&to);
+    if( bRebuild ) rc=patchAppendAllData(pCur,db,pTable,&to);
     else rc=patchAppendData(pCur,db,pTable,&from,&to);
   }
 done:
