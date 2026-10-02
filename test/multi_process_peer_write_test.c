@@ -167,6 +167,8 @@ static const Op aOp[] = {
   { "merge", "SELECT dolt_merge('f')", "peer_write_kept_merge" },
   { "cherry_pick", "SELECT dolt_cherry_pick('f')", "peer_write_kept_cherry_pick" },
   { "revert", "SELECT dolt_revert('HEAD')", "peer_write_kept_revert" },
+  { "rebase_interactive", "SELECT dolt_rebase('-i','f')",
+    "peer_write_kept_rebase_interactive" },
   { "clean", "SELECT dolt_clean()", "peer_write_kept_clean" },
   { "fetch", "SELECT dolt_fetch('origin')", "peer_write_kept_fetch" },
   { "pull", "SELECT dolt_pull('origin','main')", "peer_write_kept_pull" },
