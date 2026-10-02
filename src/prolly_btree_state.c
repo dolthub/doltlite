@@ -1148,6 +1148,29 @@ int doltliteClearBranchRebaseMetadata(sqlite3 *db, const char *zBranch){
   return btreeClearRebaseMetadataOnBranch(cs, zBranch);
 }
 
+int doltliteConfirmBranchWorkingCatalog(
+  sqlite3 *db,
+  const char *zBranch,
+  const ProllyHash *pCatHash,
+  const ProllyHash *pCommitHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  BtreeBranchState state;
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  rc = btreeLoadBranchState(cs, zBranch, 0, &state);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashCompare(&state.headCommit, pCommitHash)!=0
+   || prollyHashCompare(&state.catalog, pCatHash)!=0
+   || (!prollyHashIsEmpty(&state.stagedCatalog)
+       && prollyHashCompare(&state.stagedCatalog, pCatHash)!=0) ){
+    rc = SQLITE_BUSY;
+  }
+  btreeClearBranchState(&state);
+  return rc;
+}
+
 int doltliteSessionHasUnresolvedConflicts(sqlite3 *db){
   Btree *p;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;

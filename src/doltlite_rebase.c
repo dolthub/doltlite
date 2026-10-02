@@ -23,6 +23,7 @@ struct RebaseFinalizeRefsCtx {
   const char *zOrigBranch;
   const char *zWorkingBranch;
   const ProllyHash *pExpectedOrigHead;
+  const ProllyHash *pExpectedOrigCat;
   const ProllyHash *pCurHead;
   const ProllyHash *pCurCat;
 };
@@ -38,8 +39,6 @@ typedef struct RebaseAbortRefsCtx RebaseAbortRefsCtx;
 struct RebaseAbortRefsCtx {
   const char *zOrigBranch;
   const char *zWorkingBranch;
-  const ProllyHash *pExpectedOrigHead;
-  const ProllyHash *pOrigCatalog;
 };
 
 static char *rebaseBuildWorkingBranchName(const char *zOrigBranch);
@@ -85,15 +84,9 @@ static int rebaseAbortLinearRefs(
   void *pArg
 ){
   RebaseAbortRefsCtx *p = (RebaseAbortRefsCtx*)pArg;
-  ProllyHash origHead;
   int rc;
-  rc = chunkStoreFindBranch(cs, p->zOrigBranch, &origHead);
+  rc = doltliteClearBranchRebaseMetadata(db, p->zOrigBranch);
   if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashCompare(&origHead, p->pExpectedOrigHead)==0 ){
-    rc = doltliteWriteBranchCleanWorkingState(
-        db, p->zOrigBranch, p->pOrigCatalog, p->pExpectedOrigHead);
-    if( rc!=SQLITE_OK ) return rc;
-  }
   rc = chunkStoreDeleteBranch(cs, p->zWorkingBranch);
   return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
 }
@@ -677,6 +670,8 @@ static int doltliteRebaseLinearReplay(
     rc = SQLITE_BUSY;
     goto rollback;
   }
+  rc = doltliteConfirmBranchWorkingCatalog(db, zOrig, &origCat, &headHash);
+  if( rc!=SQLITE_OK ) goto rollback;
 
   memset(&createCtx, 0, sizeof(createCtx));
   createCtx.zWorkingBranch = zWorking;
@@ -800,6 +795,7 @@ static int doltliteRebaseLinearReplay(
   refsCtx.zOrigBranch = zOrig;
   refsCtx.zWorkingBranch = zWorking;
   refsCtx.pExpectedOrigHead = &headHash;
+  refsCtx.pExpectedOrigCat = &origCat;
   refsCtx.pCurHead = &curHead;
   refsCtx.pCurCat = &curCat;
   {
@@ -845,16 +841,10 @@ rollback:
     memset(&abortCtx, 0, sizeof(abortCtx));
     abortCtx.zOrigBranch = zOrig;
     abortCtx.zWorkingBranch = zWorking;
-    abortCtx.pExpectedOrigHead = &headHash;
-    abortCtx.pOrigCatalog = &origCommit.catalogHash;
     (void)doltliteMutateRefs(db, rebaseAbortLinearRefs, &abortCtx);
   }
   doltliteCommitClear(&origCommit);
-  if( rebaseRestoreBranchState(db, zOrig)==SQLITE_OK ){
-    if( workingCreated && !prollyHashIsEmpty(&origCat) ){
-      doltliteAdoptRollbackBaseline(db, &origCat);
-    }
-  }
+  (void)rebaseRestoreBranchState(db, zOrig);
   if( graphLocked ) chunkStoreUnlock(cs);
   sqlite3_free(aReplay);
   {
@@ -1083,6 +1073,7 @@ static char *rebaseBuildWorkingBranchName(const char *zOrigBranch){
 static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;
+  ProllyHash workingCat;
   ProllyHash emptyHash;
   DoltliteCommit headCommit;
   int rc;
@@ -1093,7 +1084,9 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCommit(db, &headHash, &headCommit);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteSwitchCatalog(db, &headCommit.catalogHash);
+  rc = doltliteResolveBranchEffectiveCatalog(
+      cs, zBranch, &headHash, &headCommit.catalogHash, &workingCat);
+  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCat);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&headCommit);
     return rc;
@@ -1110,19 +1103,10 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
   }
+  if( rc==SQLITE_OK ) rc = doltliteLoadWorkingSet(db, zBranch);
+  if( rc==SQLITE_OK ) doltliteAdoptRollbackBaseline(db, &workingCat);
   doltliteCommitClear(&headCommit);
   return rc;
-}
-
-/* SwitchCatalog does not update the txn rollback snapshot. Pin HEAD's
-** catalog so ROLLBACK of an enclosing BEGIN keeps the restored branch. */
-static void rebaseAdoptRestoredCatalog(sqlite3 *db){
-  ProllyHash cat;
-  memset(&cat, 0, sizeof(cat));
-  if( doltliteGetHeadCatalogHash(db, &cat)==SQLITE_OK
-   && !prollyHashIsEmpty(&cat) ){
-    doltliteAdoptRollbackBaseline(db, &cat);
-  }
 }
 
 static int rebaseWritePlanRows(
@@ -1684,6 +1668,9 @@ static int rebaseFinalizeContinueRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( prollyHashCompare(&origHead, p->pExpectedOrigHead)!=0 ){
     return SQLITE_BUSY;
   }
+  rc = doltliteConfirmBranchWorkingCatalog(
+      db, p->zOrigBranch, p->pExpectedOrigCat, p->pExpectedOrigHead);
+  if( rc!=SQLITE_OK ) return rc;
   rc = chunkStoreUpdateBranch(cs, p->zOrigBranch, p->pCurHead);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteWriteBranchCleanWorkingState(
@@ -1992,7 +1979,6 @@ static int rebaseAbortConflictedContinue(
   if( zOrigBranch && zOrigBranch[0] ){
     rc2 = rebaseRestoreBranchState(db, zOrigBranch);
     rebaseKeepFirstError(&rc, rc2);
-    if( rc2==SQLITE_OK ) rebaseAdoptRestoredCatalog(db);
     rc2 = doltliteClearSessionRebaseState(db);
     rebaseKeepFirstError(&rc, rc2);
   }
@@ -2319,20 +2305,16 @@ static int rebaseAbortPausedSession(sqlite3 *db){
   const char *zOrigConst = 0;
   char *zOrig = 0;
   char *zWorking = 0;
-  ProllyHash origHead;
-  ProllyHash origCat;
   ProllyHash head;
   ProllyHash empty;
   DoltliteCommit c;
   RebaseAbortRefsCtx abortCtx;
   int rc;
 
-  memset(&origHead, 0, sizeof(origHead));
-  memset(&origCat, 0, sizeof(origCat));
   memset(&head, 0, sizeof(head));
   memset(&empty, 0, sizeof(empty));
   memset(&c, 0, sizeof(c));
-  doltliteGetSessionRebaseState(db, 0, &origCat, &origHead, &zOrigConst, 0);
+  doltliteGetSessionRebaseState(db, 0, 0, 0, &zOrigConst, 0);
   if( !zOrigConst || !zOrigConst[0] ) return SQLITE_ERROR;
   zOrig = sqlite3_mprintf("%s", zOrigConst);
   zWorking = rebaseBuildWorkingBranchName(zOrig);
@@ -2357,14 +2339,9 @@ static int rebaseAbortPausedSession(sqlite3 *db){
     memset(&abortCtx, 0, sizeof(abortCtx));
     abortCtx.zOrigBranch = zOrig;
     abortCtx.zWorkingBranch = zWorking;
-    abortCtx.pExpectedOrigHead = &origHead;
-    abortCtx.pOrigCatalog = &origCat;
     rc = doltliteMutateRefs(db, rebaseAbortLinearRefs, &abortCtx);
   }
   if( rc==SQLITE_OK ) rc = rebaseRestoreBranchState(db, zOrig);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(&origCat) ){
-    doltliteAdoptRollbackBaseline(db, &origCat);
-  }
   sqlite3_free(zOrig);
   sqlite3_free(zWorking);
   return rc;
@@ -2575,6 +2552,7 @@ static int rebaseFinishPaused(
   const char *zWorking
 ){
   ProllyHash expectedOrig;
+  ProllyHash expectedOrigCat;
   ProllyHash curHead;
   ProllyHash curCat;
   ProllyHash empty;
@@ -2582,10 +2560,11 @@ static int rebaseFinishPaused(
   int rc;
 
   memset(&expectedOrig, 0, sizeof(expectedOrig));
+  memset(&expectedOrigCat, 0, sizeof(expectedOrigCat));
   memset(&curHead, 0, sizeof(curHead));
   memset(&curCat, 0, sizeof(curCat));
   memset(&empty, 0, sizeof(empty));
-  doltliteGetSessionRebaseState(db, 0, 0, &expectedOrig, 0, 0);
+  doltliteGetSessionRebaseState(db, 0, &expectedOrigCat, &expectedOrig, 0, 0);
   doltliteGetSessionHead(db, &curHead);
   rc = doltliteFlushCatalogToHash(db, &curCat);
   if( rc!=SQLITE_OK ) return rc;
@@ -2596,6 +2575,7 @@ static int rebaseFinishPaused(
   refsCtx.zOrigBranch = zOrig;
   refsCtx.zWorkingBranch = zWorking;
   refsCtx.pExpectedOrigHead = &expectedOrig;
+  refsCtx.pExpectedOrigCat = &expectedOrigCat;
   refsCtx.pCurHead = &curHead;
   refsCtx.pCurCat = &curCat;
   {
@@ -3201,6 +3181,7 @@ static void doltliteRebaseInteractiveContinue(
   refsCtx.zOrigBranch = zOrigBranch;
   refsCtx.zWorkingBranch = zWorking;
   refsCtx.pExpectedOrigHead = &expectedOrigHead;
+  refsCtx.pExpectedOrigCat = &preRebaseCat;
   refsCtx.pCurHead = &curHead;
   refsCtx.pCurCat = &curCat;
   {

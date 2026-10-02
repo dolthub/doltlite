@@ -62,6 +62,7 @@ doltlite_merge_added_unique
 doltlite_merge_ignored
 doltlite_rebase_plan_hash
 doltlite_rebase_dirty
+doltlite_rebase_peer_write
 doltlite_conflicts_multi
 doltlite_recover_changes
 doltlite_gc_stop_world
