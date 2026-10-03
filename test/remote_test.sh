@@ -1227,6 +1227,20 @@ check_match "uncached lazy data fails without the URI parameter with its chunk h
 check "uncached no-parameter failure is not reported as corruption" "0" \
   "$(echo "$result" | grep -Eic 'corrupt|malformed|database disk image')"
 
+echo "=== Fast-forward pull persists the branch's staged catalog ==="
+FF="$TMPDIR/ffstaged"
+mkdir -p "$FF"
+"$DB" "$FF/x.db" "CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO kv VALUES(1,'a'); SELECT dolt_commit('-Am','c1'); SELECT dolt_remote('add','origin','file://$FF/remote.db'); SELECT dolt_branch('b'); SELECT dolt_branch('other');" >/dev/null
+"$DB" "$FF/x.db/b" "INSERT INTO kv VALUES(2,'b'); SELECT dolt_commit('-Am','b2'); SELECT dolt_push('origin','b');" >/dev/null 2>&1
+"$DB" "$FF/x.db/b" "SELECT dolt_reset('--hard','HEAD~1');" >/dev/null
+result=$("$DB" "$FF/x.db/b" "SELECT dolt_pull('origin','b');")
+check "rewound branch pulls" "0" "$result"
+# Another session's checkout loads b's persisted working set.
+"$DB" "$FF/x.db/other" "SELECT dolt_checkout('b');" >/dev/null
+result=$("$DB" "$FF/x.db/b" "SELECT group_concat(id) FROM dolt_at_kv('STAGED'); SELECT count(*) FROM dolt_status;")
+check "pulled branch stays clean after another session checks it out" "1,2
+0" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
