@@ -5,6 +5,7 @@
 #include "sqliteInt.h"
 #include "prolly_encoding.h"
 #include "prolly_hash.h"
+#include "prolly_stats.h"
 
 #define PROLLY_NODE_MAGIC 0x504E4F44
 
@@ -108,9 +109,11 @@ int prollyNodeHasSubtreeCounts(const ProllyNode *pNode);
 u64 prollyNodeChildSubtreeCount(const ProllyNode *pNode, int i);
 
 int prollyNodeSearchBlob(const ProllyNode *pNode,
-                         const u8 *pKey, int nKey, int *pRes);
+                         const u8 *pKey, int nKey, int *pRes,
+                         ProllyStats *pStats);
 
-int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes);
+int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes,
+                        ProllyStats *pStats);
 
 void prollyEncodeIntKey(i64 v, u8 buf[8]);
 

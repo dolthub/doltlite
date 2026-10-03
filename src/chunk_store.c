@@ -867,16 +867,21 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
 int chunkStoreVerifyChunk(
   const ProllyHash *hash,
   u8 **ppData,
-  int *pnData
+  int *pnData,
+  ProllyStats *pStats
 ){
   ProllyHash h;
-  prollyHashCompute(*ppData, *pnData, &h);
+  int nData;
+  nData = *pnData;
+  prollyHashCompute(*ppData, nData, &h);
   if( memcmp(&h, hash, sizeof(ProllyHash)) != 0 ){
     sqlite3_free(*ppData);
     *ppData = 0;
     *pnData = 0;
     return SQLITE_CORRUPT;
   }
+  prollyStatAdd(pStats, nChunkRead, 1);
+  prollyStatAdd(pStats, nVerifyBytes, (u64)nData);
   return SQLITE_OK;
 }
 
@@ -911,8 +916,11 @@ int chunkStoreGet(
     *ppData = pCopy;
     *pnData = sz;
     /* Memory-store bytes are private copies hashed by chunkStorePut(). */
-    if( cs->isMemory ) return SQLITE_OK;
-    return chunkStoreVerifyChunk(hash, ppData, pnData);
+    if( cs->isMemory ){
+      prollyStatAdd(cs->pStats, nChunkRead, 1);
+      return SQLITE_OK;
+    }
+    return chunkStoreVerifyChunk(hash, ppData, pnData, cs->pStats);
   }
 
   {
@@ -942,7 +950,7 @@ int chunkStoreGet(
         *ppData = pCopy;
         *pnData = e->size;
         if( cs->isMemory ) return SQLITE_OK;
-        return chunkStoreVerifyChunk(hash, ppData, pnData);
+        return chunkStoreVerifyChunk(hash, ppData, pnData, cs->pStats);
       }
       return SQLITE_CORRUPT;
     }
@@ -975,7 +983,7 @@ int chunkStoreGet(
     }
   }
 
-  return chunkStoreVerifyChunk(hash, ppData, pnData);
+  return chunkStoreVerifyChunk(hash, ppData, pnData, cs->pStats);
 }
 
 int chunkStoreBorrow(
@@ -1284,6 +1292,7 @@ int chunkStorePut(
   if( cs->notADatabase ) return SQLITE_NOTADB;
   if( nData<0 ) return SQLITE_TOOBIG;
   prollyHashCompute(pData, nData, &h);
+  prollyStatAdd(cs->pStats, nHashBytes, (u64)nData);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
   {
@@ -1336,6 +1345,7 @@ int chunkStorePut(
     if( rc!=SQLITE_OK ) return rc;
   }
 
+  prollyStatAdd(cs->pStats, nChunkWrite, 1);
   return SQLITE_OK;
 }
 
@@ -1370,6 +1380,7 @@ int chunkStorePutSparse(
   }
 
   prollyHashComputeZeroTail(pPrefix, nPrefix, nZeroTail, &h);
+  prollyStatAdd(cs->pStats, nHashBytes, (u64)nData);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
   {
@@ -1408,6 +1419,7 @@ int chunkStorePutSparse(
     if( rc!=SQLITE_OK ) return rc;
   }
 
+  prollyStatAdd(cs->pStats, nChunkWrite, 1);
   return SQLITE_OK;
 }
 

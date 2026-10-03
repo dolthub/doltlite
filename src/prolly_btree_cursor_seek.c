@@ -61,6 +61,7 @@ int prollyBtCursorTableMoveto(
 
   pCur->nSeek++;
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
+  if( pCur->pBt ) prollyStatAdd(&pCur->pBt->stats, nSeek, 1);
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
@@ -1056,6 +1057,7 @@ static int prollyIndexMoveto(
   assert( !pCur->curIntKey );
 
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
+  if( pCur->pBt ) prollyStatAdd(&pCur->pBt->stats, nSeek, 1);
 
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);

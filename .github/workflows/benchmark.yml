@@ -133,6 +133,12 @@ jobs:
     - name: Extract paired optimized build
       run: tar -xzf benchmark-build.tar.gz
 
+    - name: Gate deterministic engine counters
+      run: |
+        python3 test/performance_counters.py \
+          --baseline "$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
+          --candidate "$GITHUB_WORKSPACE/build/doltlite"
+
     - name: Build verified stock SQLite reference
       run: bash test/build_stock_reference.sh --shell-only build-hotspots-stock build/doltlite
 

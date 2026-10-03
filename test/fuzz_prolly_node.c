@@ -32,18 +32,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     int res;
     if (node.flags & PROLLY_NODE_INTKEY) {
       i64 k = prollyNodeIntKey(&node, 0);
-      (void)prollyNodeSearchInt(&node, k, &res);
-      (void)prollyNodeSearchInt(&node, 0, &res);
-      (void)prollyNodeSearchInt(&node, INT64_MAX, &res);
-      (void)prollyNodeSearchInt(&node, INT64_MIN, &res);
+      (void)prollyNodeSearchInt(&node, k, &res, 0);
+      (void)prollyNodeSearchInt(&node, 0, &res, 0);
+      (void)prollyNodeSearchInt(&node, INT64_MAX, &res, 0);
+      (void)prollyNodeSearchInt(&node, INT64_MIN, &res, 0);
     } else {
       const u8 *p;
       int n;
       prollyNodeKey(&node, 0, &p, &n);
       if (n > 0) {
-        (void)prollyNodeSearchBlob(&node, p, n, &res);
+        (void)prollyNodeSearchBlob(&node, p, n, &res, 0);
       }
-      (void)prollyNodeSearchBlob(&node, (const u8 *)"", 0, &res);
+      (void)prollyNodeSearchBlob(&node, (const u8 *)"", 0, &res, 0);
     }
   }
 

@@ -216,8 +216,24 @@ static int shimPagerFlush(Pager *p){
   (void)p; return SQLITE_OK;
 }
 static void shimPagerCacheStat(Pager *p, int eStat, int reset, u64 *pStat){
-  (void)p; (void)eStat; (void)reset;
-  if( pStat ) *pStat = 0;
+  PagerShim *s;
+  u64 n;
+  if( pStat==0 ) return;
+  n = 0;
+  if( pagerShimIsShim(p) ){
+    s = SHIM(p);
+    if( s->pStats ){
+      if( eStat==SQLITE_DBSTATUS_CACHE_HIT ) n = s->pStats->nCacheHit;
+      else if( eStat==SQLITE_DBSTATUS_CACHE_MISS ) n = s->pStats->nCacheMiss;
+      else if( eStat==SQLITE_DBSTATUS_CACHE_WRITE ) n = s->pStats->nChunkWrite;
+      if( reset ){
+        if( eStat==SQLITE_DBSTATUS_CACHE_HIT ) s->pStats->nCacheHit = 0;
+        else if( eStat==SQLITE_DBSTATUS_CACHE_MISS ) s->pStats->nCacheMiss = 0;
+        else if( eStat==SQLITE_DBSTATUS_CACHE_WRITE ) s->pStats->nChunkWrite = 0;
+      }
+    }
+  }
+  *pStat += n;
 }
 static int shimPagerIsMemdb(Pager *p){
   const char *z = SHIM(p)->zFilename;
@@ -506,6 +522,11 @@ static inline const PagerOps *getPagerOps(const Pager *p){
 
 int pagerShimIsShim(const Pager *p){
   return p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC;
+}
+
+ProllyStats *pagerShimStats(Pager *p){
+  if( !pagerShimIsShim(p) ) return 0;
+  return SHIM(p)->pStats;
 }
 
 #if defined(SQLITE_DEBUG) || defined(SQLITE_ENABLE_WALSTAT)

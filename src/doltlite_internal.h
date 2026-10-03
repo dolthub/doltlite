@@ -1555,6 +1555,7 @@ int doltliteSchemaDiffRegister(sqlite3 *db);
 int doltlitePatchRegister(sqlite3 *db);
 int doltliteRemoteSqlRegister(sqlite3 *db);
 int doltliteHashofRegister(sqlite3 *db);
+int doltliteEngineStatsRegister(sqlite3 *db);
 int doltliteDocsRegister(sqlite3 *db);
 int doltliteTestsRegister(sqlite3 *db);
 int doltliteMaybeSeedRepo(sqlite3 *db);

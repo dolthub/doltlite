@@ -31,7 +31,7 @@ static void search(const ProllyNode *pNode, const u8 *pKey, int nKey){
     expectedRes = c<0 ? -1 : c>0;
     if( c<=0 ) break;
   }
-  actual = prollyNodeSearchBlob(pNode, pKey, nKey, &actualRes);
+  actual = prollyNodeSearchBlob(pNode, pKey, nKey, &actualRes, 0);
   check("search matches linear comparison",
         actual==expected && actualRes==expectedRes);
 }

@@ -3,6 +3,7 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
+#include "prolly_stats.h"
 
 #define PROLLY_EDIT_INSERT 1
 #define PROLLY_EDIT_DELETE 2
@@ -77,6 +78,7 @@ struct ProllyMutMap {
   /* Bytes of keys, values, entries and undo copies added since the last
   ** clear; it never shrinks before then. */
   i64 nBytes;
+  ProllyStats *pStats;
 };
 
 static SQLITE_INLINE int prollyMutMapOrderPhys(const ProllyMutMap *mm, int idx){

@@ -255,7 +255,7 @@ if {$doltlite} {
     chunk_file.h chunk_index.h chunk_refs.h chunk_staging.h chunk_store.h chunk_store_int.h chunk_wal.h
     prolly_cache.h prolly_check.h prolly_chunk_walk.h prolly_chunker.h prolly_cursor.h
     prolly_diff.h prolly_encoding.h prolly_hash.h prolly_hashset.h prolly_mutate.h
-    prolly_mutmap.h prolly_node.h prolly_record.h prolly_three_way_diff.h
+    prolly_mutmap.h prolly_node.h prolly_record.h prolly_stats.h prolly_three_way_diff.h
     prolly_three_way_merge.h prolly_xxhash.h prolly_btree_int.h
     doltlite_ancestor.h doltlite_catalog_types.h doltlite_commit.h
     doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
@@ -851,6 +851,7 @@ proc emit_doltlite_engine_block {} {
     doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c doltlite_patch.c
     doltlite_schemas.c doltlite_diff_stat.c doltlite_record.c doltlite_ignore.c
     doltlite_docs.c
+    doltlite_engine_stats.c
     doltlite_tests.c
     doltlite_hashof.c doltlite_constraint_violations.c doltlite_verify_constraints.c doltlite_merge_constraints.c doltlite_merge_constraints_unique.c doltlite_merge_constraints_check.c doltlite_merge_constraints_fk.c doltlite_merge_constraints_notnull.c doltlite_merge_constraints_strict.c
     doltlite_dbpage.c doltlite_remote.c doltlite_remote_sql.c
