@@ -1011,6 +1011,30 @@ feature
 base_t,feature_t,main_t
 4" "$result"
 
+"$DB" "$TMPDIR/lazy_revision_origin.db" "SELECT dolt_default_branch('feature');" >/dev/null
+lazy_head_case=0
+for revision in HEAD head; do
+  lazy_head_case=$((lazy_head_case+1))
+  lazy_head_file="$TMPDIR/lazy_revision_head_$lazy_head_case.db"
+  result=$("$DB" "file:lazy_revision_$revision?mode=memory&lazy_origin=1" \
+    "SELECT dolt_clone('--lazy','--revision','$revision','$R/lazy_revision_origin.db'); SELECT active_branch(); $lazy_revision_tables SELECT count(*) FROM feature_t;")
+  check "lazy clone resolves $revision to the default branch" "0
+feature
+base_t,feature_t,main_t
+4" "$result"
+  result=$("$DB" "file:$lazy_head_file?lazy_origin=1" \
+    "SELECT dolt_clone('--lazy','--revision','$revision','$R/lazy_revision_origin.db'); SELECT active_branch(); $lazy_revision_tables SELECT count(*) FROM feature_t;")
+  check "lazy file clone resolves $revision to the default branch" "0
+feature
+base_t,feature_t,main_t
+4" "$result"
+  result=$("$DB" "file:$lazy_head_file/$revision?lazy_origin=1" \
+    "SELECT active_branch(); SELECT count(*) FROM feature_t;")
+  check "lazy $revision path reopens the default branch" "feature
+4" "$result"
+done
+"$DB" "$TMPDIR/lazy_revision_origin.db" "SELECT dolt_default_branch('main');" >/dev/null
+
 result=$("$DB" "file:lazy_revision_commit?mode=memory&lazy_origin=1" \
   "SELECT dolt_clone('--lazy','--revision','$lazy_revision_base','$R/lazy_revision_origin.db'); SELECT IFNULL(active_branch(),'NULL'); SELECT dolt_hashof('HEAD'); $lazy_revision_tables SELECT count(*) FROM base_t;")
 check "lazy clone opens a detached commit" "0

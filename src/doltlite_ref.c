@@ -30,20 +30,21 @@ static int doltliteOpenRevisionBase(
   ChunkStore *cs,
   const char *zRef,
   ProllyHash *pCommit,
-  u8 *pIsBranch
+  char **pzBranch
 ){
   DoltliteCommit commit;
   const char *zBranch = zRef;
   int rc;
 
-  *pIsBranch = 0;
+  *pzBranch = 0;
   if( strcmp(zRef, "HEAD")==0 || strcmp(zRef, "head")==0 ){
     zBranch = chunkStoreGetDefaultBranch(cs);
     if( !zBranch ) return SQLITE_NOTFOUND;
   }
   rc = chunkStoreFindBranch(cs, zBranch, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
-    *pIsBranch = 1;
+    *pzBranch = sqlite3_mprintf("%s", zBranch);
+    if( !*pzBranch ) return SQLITE_NOMEM;
   }else{
     rc = chunkStoreFindTag(cs, zRef, pCommit);
     if( rc!=SQLITE_OK && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
@@ -84,15 +85,16 @@ int doltliteResolveOpenRevision(
   const char *zRef,
   ProllyHash *pCommit,
   ProllyHash *pCatalog,
-  u8 *pIsBranch
+  char **pzBranch
 ){
   DoltliteCommit commit;
   char *zBase = 0;
   int nRef, nBase, i, rc;
 
-  if( !cs || !zRef || !pCommit || !pCatalog || !pIsBranch ){
+  if( !cs || !zRef || !pCommit || !pCatalog || !pzBranch ){
     return SQLITE_MISUSE;
   }
+  *pzBranch = 0;
   nRef = (int)strlen(zRef);
   nBase = nRef;
   for(;;){
@@ -106,13 +108,14 @@ int doltliteResolveOpenRevision(
   }
   if( nBase==0 ) return SQLITE_NOTFOUND;
   if( nBase==nRef ){
-    rc = doltliteOpenRevisionBase(cs, zRef, pCommit, pIsBranch);
+    rc = doltliteOpenRevisionBase(cs, zRef, pCommit, pzBranch);
   }else{
     zBase = sqlite3_mprintf("%.*s", nBase, zRef);
     if( !zBase ) return SQLITE_NOMEM;
-    rc = doltliteOpenRevisionBase(cs, zBase, pCommit, pIsBranch);
+    rc = doltliteOpenRevisionBase(cs, zBase, pCommit, pzBranch);
+    sqlite3_free(*pzBranch);
+    *pzBranch = 0;
     sqlite3_free(zBase);
-    *pIsBranch = 0;
   }
   if( rc!=SQLITE_OK ) return rc;
 
