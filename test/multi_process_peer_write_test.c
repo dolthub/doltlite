@@ -1,7 +1,8 @@
 /*
 ** A peer connection's acknowledged write must survive whatever version
 ** control operation this connection runs. Each operation runs on main
-** against a peer that autocommits a row to main in three ways:
+** against a peer that autocommits a row to main, either leaving it in the
+** working set or committing it, in three ways:
 **
 **   stale:  the peer's write is acknowledged before the operation, after
 **           this connection last read, so the operation starts stale;
@@ -11,8 +12,10 @@
 **           commits after it.
 **
 ** A fresh connection then checks that every acknowledged peer row is on
-** main and that the store passes integrity_check. Two connections in one
-** process contend through the VFS lock exactly as two processes do.
+** main and that the store passes integrity_check. Every operation must also
+** have succeeded in some mid-operation run, or its row tested nothing. Two
+** connections in one process contend through the VFS lock exactly as two
+** processes do.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +88,7 @@ static int copyFile(const char *zFrom, const char *zTo){
   return ok;
 }
 
-/* main has t and u, an extra commit c2 (so f diverges), branch f with a
+/* main has t and u, an extra commit c2 tagged c2 (so f diverges), branch f with a
 ** commit on u, branch ff one commit ahead of main, branch f2, tag v0,
 ** remote o0, and remote origin, a file remote that holds main plus one
 ** newer commit on u. */
@@ -113,6 +116,7 @@ static void buildTemplate(void){
     "SELECT dolt_checkout('main');"
     "INSERT INTO t VALUES(2,'two');"
     "SELECT dolt_commit('-am','c2');"
+    "SELECT dolt_tag('c2');"
     "SELECT dolt_branch('ff');"
     "SELECT dolt_checkout('ff');"
     "INSERT INTO u VALUES(7);"
@@ -145,38 +149,79 @@ static int freshCopy(void){
 typedef struct Op Op;
 struct Op {
   const char *zName;
+  const char *zPre;
   const char *zSql;
   const char *zCheck;
 };
 
 static const Op aOp[] = {
-  { "add", "SELECT dolt_add('.')", "peer_write_kept_add" },
-  { "commit", "SELECT dolt_commit('-Am','mine')", "peer_write_kept_commit" },
-  { "branch_create", "SELECT dolt_branch('x')", "peer_write_kept_branch_create" },
-  { "branch_delete", "SELECT dolt_branch('-d','f2')", "peer_write_kept_branch_delete" },
-  { "branch_rename", "SELECT dolt_branch('-m','f2','f3')", "peer_write_kept_branch_rename" },
-  { "tag_create", "SELECT dolt_tag('v1')", "peer_write_kept_tag_create" },
-  { "tag_delete", "SELECT dolt_tag('-d','v0')", "peer_write_kept_tag_delete" },
-  { "remote_add", "SELECT dolt_remote('add','o1','file:///nonexistent-peer-write-1')",
+  { "add", 0, "SELECT dolt_add('.')", "peer_write_kept_add" },
+  { "commit", "INSERT INTO u VALUES(77)", "SELECT dolt_commit('-Am','mine')",
+    "peer_write_kept_commit" },
+  { "commit_amend", "INSERT INTO u VALUES(77)",
+    "SELECT dolt_commit('-a','--amend','-m','mine')",
+    "peer_write_kept_commit_amend" },
+  { "branch_create", 0, "SELECT dolt_branch('x')",
+    "peer_write_kept_branch_create" },
+  { "branch_copy", 0, "SELECT dolt_branch('-c','f2','f4')",
+    "peer_write_kept_branch_copy" },
+  { "branch_delete", 0, "SELECT dolt_branch('-d','f2')",
+    "peer_write_kept_branch_delete" },
+  { "branch_rename", 0, "SELECT dolt_branch('-m','f2','f3')",
+    "peer_write_kept_branch_rename" },
+  { "tag_create", 0, "SELECT dolt_tag('v1')", "peer_write_kept_tag_create" },
+  { "tag_delete", 0, "SELECT dolt_tag('-d','v0')",
+    "peer_write_kept_tag_delete" },
+  { "remote_add", 0,
+    "SELECT dolt_remote('add','o1','file:///nonexistent-peer-write-1')",
     "peer_write_kept_remote_add" },
-  { "remote_remove", "SELECT dolt_remote('remove','o0')", "peer_write_kept_remote_remove" },
-  { "reset_soft", "SELECT dolt_reset('--soft')", "peer_write_kept_reset_soft" },
-  { "reset_table", "SELECT dolt_reset('u')", "peer_write_kept_reset_table" },
-  { "checkout_branch", "SELECT dolt_checkout('f')", "peer_write_kept_checkout_branch" },
-  { "checkout_table", "SELECT dolt_checkout('u')", "peer_write_kept_checkout_table" },
-  { "merge_ff", "SELECT dolt_merge('ff')", "peer_write_kept_merge_ff" },
-  { "merge", "SELECT dolt_merge('f')", "peer_write_kept_merge" },
-  { "cherry_pick", "SELECT dolt_cherry_pick('f')", "peer_write_kept_cherry_pick" },
-  { "revert", "SELECT dolt_revert('HEAD')", "peer_write_kept_revert" },
-  { "rebase_interactive", "SELECT dolt_rebase('-i','f')",
+  { "remote_remove", 0, "SELECT dolt_remote('remove','o0')",
+    "peer_write_kept_remote_remove" },
+  { "reset_soft", 0, "SELECT dolt_reset('--soft')",
+    "peer_write_kept_reset_soft" },
+  { "reset_table", 0, "SELECT dolt_reset('u')", "peer_write_kept_reset_table" },
+  { "checkout_branch", 0, "SELECT dolt_checkout('f')",
+    "peer_write_kept_checkout_branch" },
+  { "checkout_new", 0, "SELECT dolt_checkout('-b','f5')",
+    "peer_write_kept_checkout_new" },
+  { "checkout_table", 0, "SELECT dolt_checkout('u')",
+    "peer_write_kept_checkout_table" },
+  { "merge_ff", 0, "SELECT dolt_merge('ff')", "peer_write_kept_merge_ff" },
+  { "merge", 0, "SELECT dolt_merge('f')", "peer_write_kept_merge" },
+  { "merge_squash", 0, "SELECT dolt_merge('--squash','f')",
+    "peer_write_kept_merge_squash" },
+  { "cherry_pick", 0, "SELECT dolt_cherry_pick('f')",
+    "peer_write_kept_cherry_pick" },
+  { "revert", 0, "SELECT dolt_revert('c2')", "peer_write_kept_revert" },
+  { "rebase_interactive", 0, "SELECT dolt_rebase('-i','f')",
     "peer_write_kept_rebase_interactive" },
-  { "rebase", "SELECT dolt_rebase('f')", "peer_write_kept_rebase" },
-  { "clean", "SELECT dolt_clean()", "peer_write_kept_clean" },
-  { "fetch", "SELECT dolt_fetch('origin')", "peer_write_kept_fetch" },
-  { "pull", "SELECT dolt_pull('origin','main')", "peer_write_kept_pull" },
-  { "gc", "SELECT dolt_gc()", "peer_write_kept_gc" },
-  { "vacuum", "VACUUM", "peer_write_kept_vacuum" },
-  { "vacuum_into", "VACUUM INTO '%s'", "peer_write_kept_vacuum_into" },
+  { "rebase", 0, "SELECT dolt_rebase('f')", "peer_write_kept_rebase" },
+  { "clean", 0, "SELECT dolt_clean()", "peer_write_kept_clean" },
+  { "fetch", 0, "SELECT dolt_fetch('origin')", "peer_write_kept_fetch" },
+  { "pull", 0, "SELECT dolt_pull('origin','main')", "peer_write_kept_pull" },
+  { "push", 0, "SELECT dolt_push('origin','f2')", "peer_write_kept_push" },
+  { "gc", 0, "SELECT dolt_gc()", "peer_write_kept_gc" },
+  { "vacuum", 0, "VACUUM", "peer_write_kept_vacuum" },
+  { "vacuum_into", 0, "VACUUM INTO '%s'", "peer_write_kept_vacuum_into" },
+};
+
+/* The peer either leaves its row in main's working set or commits it, so
+** a dirty working set does not refuse every operation that needs a clean
+** one before it can race the peer. */
+#define PEER_WRITE  0
+#define PEER_COMMIT 1
+static const char *azPeerAction[] = { "write", "commit" };
+
+#define MODE_STALE 0
+#define MODE_MIDOP 1
+#define MODE_TXN   2
+static const char *azMode[] = { "stale", "midop", "txn" };
+
+typedef struct Tally Tally;
+struct Tally {
+  int nAcked;
+  int nOpOk;
+  int nLost;
 };
 
 static void opSql(const Op *p, char *zOut, int nOut){
@@ -187,8 +232,26 @@ static void opSql(const Op *p, char *zOut, int nOut){
   }
 }
 
+static int runOpSql(sqlite3 *db, const char *zSql, int *pBusy){
+  char *zErr = 0;
+  int rc = sqlite3_exec(db, zSql, 0, 0, &zErr);
+  if( pBusy ){
+    *pBusy = rc!=SQLITE_OK
+          && ((rc&0xff)==SQLITE_BUSY || (zErr && isBusy(zErr)));
+  }
+  sqlite3_free(zErr);
+  return rc;
+}
+
+/* Acknowledged once the peer's INSERT autocommits; the commit is extra. */
+static int peerAct(sqlite3 *peer, int action){
+  if( execSql(peer, "INSERT INTO t VALUES(900,'peer')")!=SQLITE_OK ) return 0;
+  if( action==PEER_COMMIT ) execSql(peer, "SELECT dolt_commit('-am','peer')");
+  return 1;
+}
+
 /* The peer's row is on main and the store is intact. */
-static int peerRowKept(const char *zOp, const char *zMode, int k){
+static int peerRowKept(const char *zOp, const char *zMode, int action, int k){
   sqlite3 *db = 0;
   const char *z;
   int ok;
@@ -200,38 +263,47 @@ static int peerRowKept(const char *zOp, const char *zMode, int k){
     z = queryText(db, "PRAGMA integrity_check");
     ok = strcmp(z, "ok")==0;
   }
-  if( !ok ) fprintf(stderr, "%s/%s step %d: %s\n", zOp, zMode, k, z);
+  if( !ok ){
+    fprintf(stderr, "%s/%s/%s step %d: %s\n",
+            zOp, zMode, azPeerAction[action], k, z);
+  }
   sqlite3_close(db);
   return ok;
 }
 
-static int runStale(const Op *p){
+static void tallyRun(Tally *t, int acked, int opOk, int kept){
+  t->nAcked += acked;
+  t->nOpOk += opOk;
+  if( acked && !kept ) t->nLost++;
+}
+
+static void runStale(const Op *p, int action, Tally *t){
   sqlite3 *db = 0, *peer = 0;
   char zSql[512];
-  int ok = 1;
-  if( !freshCopy() ) return 0;
+  int acked, opOk;
+  if( !freshCopy() ){ t->nLost++; return; }
   opSql(p, zSql, sizeof(zSql));
   sqlite3_open(zDb, &db);
   sqlite3_open(zDb, &peer);
   sqlite3_busy_timeout(db, 5000);
   sqlite3_busy_timeout(peer, 5000);
+  if( p->zPre ) execSql(db, p->zPre);
   queryText(db, "SELECT count(*) FROM t");
-  if( execSql(peer, "INSERT INTO t VALUES(900,'peer')")==SQLITE_OK ){
-    queryText(db, zSql);
-    execSql(db, "INSERT INTO t VALUES(3,'mine')");
-    sqlite3_close(peer);
-    sqlite3_close(db);
-    ok = peerRowKept(p->zName, "stale", 0);
-  }else{
-    sqlite3_close(peer);
-    sqlite3_close(db);
-  }
-  return ok;
+  acked = peerAct(peer, action);
+  opOk = runOpSql(db, zSql, 0)==SQLITE_OK;
+  execSql(db, "INSERT INTO t VALUES(3,'mine')");
+  sqlite3_close(peer);
+  sqlite3_close(db);
+  tallyRun(t, acked, opOk,
+           acked ? peerRowKept(p->zName, "stale", action, 0) : 1);
 }
 
+/* The peer runs inside the operation's progress handler on the same
+** thread, so it never waits on a lock the paused operation holds. */
 typedef struct MidOp MidOp;
 struct MidOp {
   sqlite3 *peer;
+  int action;
   int fireAt;
   int nCalls;
   int fired;
@@ -242,54 +314,62 @@ static int fireMidOp(void *arg){
   MidOp *m = (MidOp*)arg;
   if( ++m->nCalls==m->fireAt && !m->fired ){
     m->fired = 1;
-    m->acked = execSql(m->peer, "INSERT INTO t VALUES(900,'peer')")==SQLITE_OK;
+    m->acked = peerAct(m->peer, m->action);
   }
   return 0;
 }
 
-/* Returns -1 once k is past the operation's last step. */
-static int runMidOp(const Op *p, int k, int *pAcked){
+/* Returns 0 once k is past the operation's last step. A run refused as
+** busy because the peer moved is retried, as an application would. */
+static int runMidOp(const Op *p, int action, int k, Tally *t){
   sqlite3 *db = 0;
   MidOp m;
-  char zSql[512], zRes[512];
-  *pAcked = 0;
-  if( !freshCopy() ) return 0;
+  char zSql[512];
+  int rc, busy = 0;
+  if( !freshCopy() ){ t->nLost++; return 0; }
   opSql(p, zSql, sizeof(zSql));
   memset(&m, 0, sizeof(m));
   sqlite3_open(zDb, &db);
   sqlite3_open(zDb, &m.peer);
   sqlite3_busy_timeout(db, 5000);
+  if( p->zPre ) execSql(db, p->zPre);
+  m.action = action;
   m.fireAt = k;
   sqlite3_progress_handler(db, 1, fireMidOp, &m);
-  snprintf(zRes, sizeof(zRes), "%s", queryText(db, zSql));
+  rc = runOpSql(db, zSql, &busy);
   sqlite3_progress_handler(db, 0, 0, 0);
-  if( m.fired && isBusy(zRes) ) queryText(db, zSql);
+  if( m.fired && busy ) rc = runOpSql(db, zSql, 0);
   execSql(db, "INSERT INTO t VALUES(3,'mine')");
   sqlite3_close(m.peer);
   sqlite3_close(db);
-  if( !m.fired ) return -1;
-  *pAcked = m.acked;
-  return m.acked ? peerRowKept(p->zName, "midop", k) : 1;
+  if( !m.fired ) return 0;
+  tallyRun(t, m.acked, rc==SQLITE_OK,
+           m.acked ? peerRowKept(p->zName, "midop", action, k) : 1);
+  return 1;
 }
 
-static int runTxn(const Op *p){
+/* The peer's transaction holds the write lock across the operation, so
+** write operations are refused; the commit that follows must still land. */
+static void runTxn(const Op *p, Tally *t){
   sqlite3 *db = 0, *peer = 0;
   char zSql[512];
-  int committed;
-  if( !freshCopy() ) return 0;
+  int committed, opOk;
+  if( !freshCopy() ){ t->nLost++; return; }
   opSql(p, zSql, sizeof(zSql));
   sqlite3_open(zDb, &db);
   sqlite3_open(zDb, &peer);
   sqlite3_busy_timeout(db, 200);
   sqlite3_busy_timeout(peer, 5000);
+  if( p->zPre ) execSql(db, p->zPre);
   execSql(peer, "BEGIN; INSERT INTO t VALUES(900,'peer')");
-  queryText(db, zSql);
+  opOk = runOpSql(db, zSql, 0)==SQLITE_OK;
   committed = execSql(peer, "COMMIT")==SQLITE_OK;
   if( !committed ) execSql(peer, "ROLLBACK");
   execSql(db, "INSERT INTO t VALUES(3,'mine')");
   sqlite3_close(peer);
   sqlite3_close(db);
-  return committed ? peerRowKept(p->zName, "txn", 0) : 1;
+  tallyRun(t, committed, opOk,
+           committed ? peerRowKept(p->zName, "txn", PEER_WRITE, 0) : 1);
 }
 
 int main(void){
@@ -310,19 +390,32 @@ int main(void){
 
   for(i=0; i<(int)(sizeof(aOp)/sizeof(aOp[0])); i++){
     const Op *p = &aOp[i];
-    int k, nAcked = 0, nBad = 0;
-    int stale = runStale(p);
-    int txn = runTxn(p);
-    for(k=1; k<5000; k++){
-      int acked;
-      int r = runMidOp(p, k, &acked);
-      if( r<0 ) break;
-      nAcked += acked;
-      if( !r ) nBad++;
+    Tally aT[3][2];
+    int a, mode, k, nSteps = 0, nLost = 0;
+    char zName[96];
+    memset(aT, 0, sizeof(aT));
+    for(a=0; a<2; a++){
+      runStale(p, a, &aT[MODE_STALE][a]);
+      for(k=1; k<5000 && runMidOp(p, a, k, &aT[MODE_MIDOP][a]); k++){}
+      if( k-1>nSteps ) nSteps = k-1;
     }
-    printf("  %-16s steps=%d peer_writes=%d bad_midop=%d stale=%s txn=%s\n",
-           p->zName, k-1, nAcked, nBad, stale ? "ok" : "LOST", txn ? "ok" : "LOST");
-    check(p->zCheck, stale && txn && nBad==0 && nAcked>0);
+    runTxn(p, &aT[MODE_TXN][PEER_WRITE]);
+    printf("  %-18s steps=%-4d", p->zName, nSteps);
+    for(mode=0; mode<3; mode++){
+      for(a=0; a<(mode==MODE_TXN ? 1 : 2); a++){
+        Tally *t = &aT[mode][a];
+        printf(" %s/%s=%d/%d/%d", azMode[mode], azPeerAction[a],
+               t->nAcked, t->nOpOk, t->nLost);
+        nLost += t->nLost;
+      }
+    }
+    printf("\n");
+    check(p->zCheck, nLost==0);
+    /* A matrix row where the operation never ran next to the peer's write
+    ** would pass without testing anything. */
+    snprintf(zName, sizeof(zName), "op_ran_against_peer_%s", p->zName);
+    check(zName, aT[MODE_MIDOP][PEER_WRITE].nOpOk>0
+              || aT[MODE_MIDOP][PEER_COMMIT].nOpOk>0);
   }
 
   remove(zDb); remove(zInto); remove(zRemote); remove(zTemplate);
