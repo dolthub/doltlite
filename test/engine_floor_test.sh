@@ -110,8 +110,8 @@ if [ -x "$ENG" ]; then
 
   crash="$(mktemp "${TMPDIR:-/tmp}/parity-crash.XXXXXX")"
   ok="$(mktemp "${TMPDIR:-/tmp}/parity-ok.XXXXXX")"
-  printf '%s\n' '#!/bin/sh' 'echo 1' 'exit 134' >"$crash"
-  printf '%s\n' '#!/bin/sh' 'echo 1' 'exit 0' >"$ok"
+  printf '%s\n' '#!/bin/sh' 'cat >/dev/null' 'echo 1' 'exit 134' >"$crash"
+  printf '%s\n' '#!/bin/sh' 'cat >/dev/null' 'echo 1' 'exit 0' >"$ok"
   chmod +x "$crash" "$ok"
   if ! (
     PASS=0 FAIL=0 ERRORS=""
@@ -142,7 +142,9 @@ if [ -x "$ENG" ]; then
     DOLTLITE="$ok" SQLITE3="$ok"
     . "$SCRIPT_DIR/lib/parity_run.sh"
     run_parity "matching_success" "SELECT 1;"
-    [ "$PASS" -eq 1 ] && [ "$FAIL" -eq 0 ]
+    printf -v sql "SELECT 1; -- %1048576s" ""
+    run_parity "matching_success_large_input" "$sql"
+    [ "$PASS" -eq 2 ] && [ "$FAIL" -eq 0 ]
   ); then
     echo "FAIL: run_parity rejected matching stdout with rc=0"
     rm -f "$crash" "$ok"
