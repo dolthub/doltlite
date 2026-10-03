@@ -1,0 +1,180 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc commit_peer_setup {} {
+  catch {peer close}
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+  }
+  sqlite3 peer test.db
+  db eval {SELECT count(*) FROM t}
+}
+
+foreach advance {0 1} {
+  foreach staged {0 1} {
+    foreach kind {all modified staged allow skip amend} {
+      if {$kind eq "staged" && !$staged} continue
+      commit_peer_setup
+      if {$advance} {
+        peer eval {
+          INSERT INTO t VALUES(3,'peer committed');
+          SELECT dolt_commit('-am','peer commit');
+        }
+      }
+      set parent [peer one {SELECT dolt_hashof('HEAD')}]
+      if {$kind eq "amend"} {
+        set parent [peer one {SELECT dolt_hashof('HEAD~1')}]
+      }
+      peer eval {INSERT INTO t VALUES(2,'peer working')}
+      if {$staged} {peer eval {SELECT dolt_add('t')}}
+      switch $kind {
+        all      {set sql {SELECT dolt_commit('-Am','fresh commit')}}
+        modified {set sql {SELECT dolt_commit('-am','fresh commit')}}
+        staged   {set sql {SELECT dolt_commit('-m','fresh commit')}}
+        allow    {set sql {SELECT dolt_commit('-A','--allow-empty','-m','fresh commit')}}
+        skip     {set sql {SELECT dolt_commit('-A','--skip-empty','-m','fresh commit')}}
+        amend    {set sql {SELECT dolt_commit('-A','--amend','-m','fresh commit')}}
+      }
+      set prefix commit-peer-$advance-$staged-$kind
+      do_test $prefix-first-statement {
+        set result [catchsql $sql]
+        expr {[lindex $result 0]==0
+           && [regexp {^[0-9a-f]{40}$} [lindex $result 1]]}
+      } {1}
+      do_test $prefix-parent {
+        expr {$parent eq [db one {SELECT dolt_hashof('HEAD~1')}]}
+      } {1}
+      set expected [expr {$advance ? {1 2 3} : {1 2}}]
+      do_execsql_test $prefix-rows {
+        SELECT id FROM t ORDER BY id;
+      } $expected
+      do_execsql_test $prefix-status {
+        SELECT count(*) FROM dolt_status;
+        SELECT message FROM dolt_log LIMIT 1;
+      } {0 {fresh commit}}
+      db close
+      sqlite3 db test.db
+      do_execsql_test $prefix-reopen {
+        SELECT id FROM t ORDER BY id;
+        PRAGMA integrity_check;
+      } [concat $expected ok]
+    }
+  }
+}
+
+commit_peer_setup
+peer eval {
+  INSERT INTO t VALUES(2,'peer working');
+  CREATE TABLE u(id INTEGER PRIMARY KEY);
+  INSERT INTO u VALUES(4);
+}
+do_test commit-peer-schema-first-statement {
+  set result [catchsql {SELECT dolt_commit('-Am','peer schema')}]
+  expr {[lindex $result 0]==0
+     && [regexp {^[0-9a-f]{40}$} [lindex $result 1]]}
+} {1}
+do_execsql_test commit-peer-schema-kept {
+  SELECT id FROM t ORDER BY id;
+  SELECT id FROM u;
+  SELECT count(*) FROM dolt_status;
+  PRAGMA integrity_check;
+} {1 2 4 0 ok}
+
+commit_peer_setup
+peer eval {
+  INSERT INTO t VALUES(2,'peer committed');
+  SELECT dolt_commit('-am','peer commit');
+}
+do_catchsql_test commit-peer-clean-first-statement {
+  SELECT dolt_commit('-Am','no changes');
+} {1 {nothing to commit, working tree clean (use dolt_add to stage changes)}}
+do_execsql_test commit-peer-clean-failure-fresh {
+  SELECT id FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_status;
+  SELECT message FROM dolt_log LIMIT 1;
+} {1 2 0 {peer commit}}
+
+commit_peer_setup
+db eval {INSERT INTO t VALUES(4,'local working')}
+peer eval {INSERT INTO t VALUES(2,'peer working')}
+do_test commit-peer-local-working-first-statement {
+  set result [catchsql {SELECT dolt_commit('-am','both writers')}]
+  expr {[lindex $result 0]==0
+     && [regexp {^[0-9a-f]{40}$} [lindex $result 1]]}
+} {1}
+do_execsql_test commit-peer-local-working-kept {
+  SELECT id FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_status;
+  PRAGMA integrity_check;
+} {1 2 4 0 ok}
+
+commit_peer_setup
+peer eval {INSERT INTO t VALUES(2,'peer unstaged')}
+do_catchsql_test commit-peer-unstaged-first-statement {
+  SELECT dolt_commit('-m','unstaged');
+} {1 {nothing to commit, working tree clean (use dolt_add to stage changes)}}
+do_execsql_test commit-peer-unstaged-failure-fresh {
+  SELECT id FROM t ORDER BY id;
+  SELECT staged,status FROM dolt_status WHERE table_name='t';
+  SELECT message FROM dolt_log LIMIT 1;
+} {1 2 0 modified base}
+
+commit_peer_setup
+set stmt [sqlite3_prepare_v2 db {SELECT dolt_commit('-Am','prepared commit')} -1 tail]
+peer eval {INSERT INTO t VALUES(2,'peer working')}
+do_test commit-peer-prepared-step {
+  sqlite3_step $stmt
+} {SQLITE_ROW}
+do_test commit-peer-prepared-result {
+  regexp {^[0-9a-f]{40}$} [sqlite3_column_text $stmt 0]
+} {1}
+do_test commit-peer-prepared-finalize {
+  sqlite3_finalize $stmt
+} {SQLITE_OK}
+do_execsql_test commit-peer-prepared-kept {
+  SELECT id FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_status;
+} {1 2 0}
+
+commit_peer_setup
+db eval {BEGIN; SELECT count(*) FROM t}
+peer eval {
+  INSERT INTO t VALUES(2,'peer working');
+}
+do_execsql_test commit-peer-pinned-view {
+  SELECT id FROM t ORDER BY id;
+} {1}
+do_test commit-peer-pinned-commit {
+  set result [catchsql {SELECT dolt_commit('-Am','pinned')}]
+  expr {[lindex $result 0]==0
+     && [regexp {^[0-9a-f]{40}$} [lindex $result 1]]}
+} {1}
+do_test commit-peer-pinned-peer-kept {
+  peer eval {SELECT id FROM t ORDER BY id}
+} {1 2}
+catch {db eval {ROLLBACK}}
+peer close
+
+db close
+sqlite3 db "file:commit-peer-memory?mode=memory&cache=shared" -uri 1
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+  SELECT dolt_commit('-Am','base');
+}
+sqlite3 peer "file:commit-peer-memory?mode=memory&cache=shared" -uri 1
+peer eval {INSERT INTO t VALUES(2); SELECT dolt_add('t')}
+do_test commit-peer-shared-memory-first-statement {
+  set result [catchsql {SELECT dolt_commit('-m','shared commit')}]
+  expr {[lindex $result 0]==0
+     && [regexp {^[0-9a-f]{40}$} [lindex $result 1]]}
+} {1}
+do_execsql_test commit-peer-shared-memory-kept {
+  SELECT id FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_status;
+} {1 2 0}
+peer close
+finish_test

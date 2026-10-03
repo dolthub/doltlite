@@ -72,6 +72,7 @@ doltlite_readonly_status
 doltlite_detached_ephemeral
 doltlite_attached_vc
 doltlite_open_head
+doltlite_commit_peer_refresh
 doltlite_reload_uncommitted_recent
 doltlite_recover_cacheflush_oom
 doltlite_rebase_messages

@@ -886,6 +886,12 @@ static void doltliteCommitFunc(
   skipEmpty = opts.skipEmpty;
   force = opts.force;
 
+  rc = doltliteRefreshAutocommitWorkingState(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
   if( amend ){
     u8 isMerging = 0;
     u8 isRebasing = 0;

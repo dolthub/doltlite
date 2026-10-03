@@ -940,6 +940,19 @@ int doltliteReloadSessionWorkingState(sqlite3 *db){
   return btreeRefreshSharedWorkingState(db->aDb[0].pBt);
 }
 
+int doltliteRefreshAutocommitWorkingState(sqlite3 *db){
+  Btree *p;
+  int rc;
+  if( !db || db->nDb<1 || !db->aDb[0].pBt ) return SQLITE_OK;
+  p = db->aDb[0].pBt;
+  if( !db->autoCommit || db->pSavepoint || p->inTrans!=TRANS_NONE ){
+    return SQLITE_OK;
+  }
+  rc = btreeRefreshFromDisk(p);
+  if( rc!=SQLITE_OK ) return rc;
+  return btreeRefreshSharedWorkingState(p);
+}
+
 void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     memcpy(pStaged, &db->aDb[0].pBt->vc.stagedCatalog, sizeof(ProllyHash));

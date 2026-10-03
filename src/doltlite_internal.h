@@ -1733,6 +1733,7 @@ void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
 void doltliteInvalidateSessionWorkingState(sqlite3 *db);
 int doltliteReloadSessionWorkingState(sqlite3 *db);
+int doltliteRefreshAutocommitWorkingState(sqlite3 *db);
 int doltliteSyncSessionToBranchTip(sqlite3 *db);
 void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
 int doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
