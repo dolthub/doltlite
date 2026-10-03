@@ -671,6 +671,21 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_commit('-m', 'nothing-to-do');
 "
 
+vc_oracle_error "commit_am_fresh_db_nothing" "
+SELECT dolt_commit('-Am', 'nothing on a fresh database');
+"
+
+vc_oracle_error "commit_add_all_fresh_db_nothing" "
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'nothing on a fresh database');
+"
+
+vc_oracle_error "commit_create_drop_fresh_db_nothing" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+DROP TABLE t;
+SELECT dolt_commit('-Am', 'nothing on a fresh database');
+"
+
 vc_oracle_error "commit_with_unresolved_conflicts" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

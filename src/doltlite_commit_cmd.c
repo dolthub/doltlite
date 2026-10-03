@@ -798,6 +798,40 @@ static int doltliteCommitValidateForeignKeyParents(
   return SQLITE_ERROR;
 }
 
+/* The seed commit records the empty catalog hash. A catalog holding only
+** an empty schema table with no user_version or application_id is that
+** same empty database. */
+static int commitCatalogIsPristine(
+  sqlite3 *db,
+  const ProllyHash *pCat,
+  int *pPristine
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  struct TableEntry *aTables = 0;
+  const u8 *pEntries = 0;
+  u8 *pData = 0;
+  int nData = 0, nTables = 0, iFormat = 0;
+  int rc;
+
+  *pPristine = prollyHashIsEmpty(pCat);
+  if( *pPristine || !cs ) return SQLITE_OK;
+  rc = chunkStoreGet(cs, pCat, &pData, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( catalogParseHeaderEx(pData, nData, &iFormat, &nTables, &pEntries)
+   && nTables==1
+   && (iFormat!=CATALOG_FORMAT_V5
+       || memcmp(pData + CAT_HEADER_SIZE_V3, "\0\0\0\0\0\0\0\0", 8)==0) ){
+    rc = doltliteLoadCatalog(db, pCat, &aTables, &nTables, 0);
+    if( rc==SQLITE_OK ){
+      *pPristine = nTables==1 && aTables[0].iTable==1
+                && prollyHashIsEmpty(&aTables[0].root);
+      doltliteFreeCatalog(aTables, nTables);
+    }
+  }
+  sqlite3_free(pData);
+  return rc;
+}
+
 static void doltliteCommitFunc(
   sqlite3_context *context,
   int argc,
@@ -1017,9 +1051,18 @@ static void doltliteCommitFunc(
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
     if( !isMerging && !amend && !doltliteSessionHasPendingReplayCommit(db) ){
       ProllyHash headCatHash;
+      int bSame = 0;
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash)
-       && prollyHashCompare(&catalogHash, &headCatHash)==0 ){
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash) ){
+        bSame = prollyHashCompare(&catalogHash, &headCatHash)==0;
+      }else if( rc==SQLITE_OK ){
+        rc = commitCatalogIsPristine(db, &catalogHash, &bSame);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(context, rc);
+          return;
+        }
+      }
+      if( rc==SQLITE_OK && bSame ){
         if( allowEmpty ){
 
         }else if( skipEmpty ){
