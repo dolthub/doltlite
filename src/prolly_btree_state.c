@@ -1446,6 +1446,11 @@ int doltlitePersistWorkingSet(sqlite3 *db){
   return doltlitePersistWorkingSetWithHash(db, 0);
 }
 
+int doltliteCommitWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash){
+  if( doltliteSessionHasUnresolvedConflicts(db) ) return SQLITE_BUSY;
+  return doltlitePersistWorkingSetWithHash(db, pWorkingCatHash);
+}
+
 void doltliteAdoptRollbackBaseline(
   sqlite3 *db,
   const ProllyHash *pCatalogHash

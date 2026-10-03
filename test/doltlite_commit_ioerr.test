@@ -1,0 +1,96 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set rejected 0
+set committed 0
+foreach mode {peer local schema} {
+  for {set fault 1} {$fault <= 100} {incr fault} {
+    catch {peer close}
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+      INSERT INTO t VALUES(1,'base');
+      SELECT dolt_commit('-Am','base');
+    }
+    set head [db one {SELECT dolt_hashof('HEAD')}]
+    set logs [db one {SELECT count(*) FROM dolt_log}]
+    sqlite3 peer test.db
+    if {$mode eq "local"} {
+      db eval {INSERT INTO t VALUES(2,'working')}
+    } else {
+      peer eval {INSERT INTO t VALUES(2,'working')}
+    }
+    if {$mode eq "schema"} {
+      peer eval {
+        CREATE TABLE u(id INTEGER PRIMARY KEY);
+        INSERT INTO u VALUES(3);
+      }
+    }
+    set ::sqlite_io_error_persist 0
+    set ::sqlite_io_error_hit 0
+    set ::sqlite_io_error_pending $fault
+    set first [catchsql {SELECT dolt_commit('-Am','attempt')}]
+    set ::sqlite_io_error_pending 0
+    set ::sqlite_io_error_hit 0
+    set ::sqlite_io_error_persist 0
+
+    sqlite3 observer test.db -readonly 1
+    set prefix commit-ioerr-$mode-$fault
+    do_test $prefix-outcome {
+      set current [observer one {SELECT dolt_hashof('HEAD')}]
+      if {[lindex $first 0]} {
+        incr rejected
+        expr {$current eq $head
+           && [observer one {SELECT count(*) FROM dolt_status}]>0}
+      } else {
+        incr committed
+        expr {[regexp {^[0-9a-f]{40}$} [lindex $first 1]]
+           && $current eq [lindex $first 1]}
+      }
+    } {1}
+    do_test $prefix-working-kept {
+      observer eval {SELECT id FROM t ORDER BY id}
+    } {1 2}
+    if {$mode eq "schema"} {
+      do_test $prefix-schema-kept {
+        observer eval {SELECT id FROM u}
+      } {3}
+    }
+    observer close
+
+    do_test $prefix-retry {
+      if {[lindex $first 0]} {
+        set result [catchsql {SELECT dolt_commit('-Am','attempt')}]
+      } else {
+        set result $first
+      }
+      expr {[lindex $result 0]==0
+         && [regexp {^[0-9a-f]{40}$} [lindex $result 1]]}
+    } {1}
+    peer close
+    db close
+    sqlite3 db test.db
+    do_execsql_test $prefix-durable {
+      SELECT id FROM dolt_at_t('HEAD') ORDER BY id;
+      SELECT count(*) FROM dolt_status;
+      SELECT message FROM dolt_log LIMIT 1;
+      SELECT count(*) FROM dolt_log;
+      PRAGMA integrity_check;
+    } [list 1 2 0 attempt [expr {$logs+1}] ok]
+    do_test $prefix-parent {
+      expr {$head eq [db one {SELECT dolt_hashof('HEAD~1')}]}
+    } {1}
+    if {$mode eq "schema"} {
+      do_execsql_test $prefix-modules {
+        SELECT id FROM u;
+        SELECT count(*) FROM dolt_workspace_u;
+        SELECT count(*) FROM dolt_blame_u;
+        SELECT count(*) FROM dolt_constraint_violations_u;
+      } {3 0 1 0}
+    }
+  }
+}
+do_test commit-ioerr-sweep-exercised {
+  expr {$rejected>0 && $committed>0}
+} {1}
+finish_test

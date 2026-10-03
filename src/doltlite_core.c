@@ -841,7 +841,7 @@ static int doltliteAdvanceBranchWithState(
   ** written working set: the persist then binds the peer's content to the
   ** new head and the staleness gate waves it through. Advancing with no
   ** explicit working catalog means the working set IS the new catalog. */
-  rc = doltlitePersistWorkingSetWithHash(
+  rc = doltliteCommitWorkingSetWithHash(
       db, pWorkingCatHash ? pWorkingCatHash : pCatalogHash);
   if( rc!=SQLITE_OK ){
     return doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
@@ -945,9 +945,8 @@ static int doltliteCompareAndAdvanceBranchImpl(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteTxnState saved;
-  ProllyHash diskTip;
+  ProllyHash branchTip;
   ProllyHash wsAtSnapshot;
-  int found = 0;
   int haveWsSnapshot = 0;
   int rc;
   if( !cs ) return SQLITE_ERROR;
@@ -1014,17 +1013,11 @@ static int doltliteCompareAndAdvanceBranchImpl(
   rc = doltliteAdvanceBranchWithState(
       db, pNewHead, pCatalogHash, pWorkingCatHash, &saved, 0);
   if( rc==SQLITE_OK ){
-    /* Durable tip must be ours before unlock. PersistWorkingSetWithHash can
-    ** skip the commit when a conflicts catalog is present. */
-    rc = chunkStoreReadDiskBranchTip(
-        cs, doltliteGetSessionBranch(db), &diskTip, &found);
-    if( rc==SQLITE_OK
-     && (!found || prollyHashCompare(&diskTip, pNewHead)!=0) ){
+    /* The required commit sealed these refs while the graph lock stayed held. */
+    rc = chunkStoreFindBranch(cs, doltliteGetSessionBranch(db), &branchTip);
+    if( rc==SQLITE_NOTFOUND
+     || (rc==SQLITE_OK && prollyHashCompare(&branchTip, pNewHead)!=0) ){
       rc = SQLITE_BUSY;
-    }
-    if( rc!=SQLITE_OK ){
-      /* AdvanceBranchWithState already cleared saved on success; cannot rebuild
-      ** a restore here. BUSY so the caller retries on a fresh view. */
     }
   }
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);

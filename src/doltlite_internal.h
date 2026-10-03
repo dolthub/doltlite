@@ -1565,10 +1565,12 @@ int doltliteSeedStoreIfNeeded(sqlite3*, ChunkStore*, const char*,
 int doltliteRegisterConflictTables(sqlite3 *db);
 int doltliteRegisterWorkspaceTables(sqlite3 *db);
 int doltliteRegisterBlameTables(sqlite3 *db);
+const sqlite3_module *doltliteBlameTableModule(void);
 const sqlite3_module *doltliteDiffTableModule(void);
 const sqlite3_module *doltliteHistoryTableModule(void);
 const sqlite3_module *doltliteWorkspaceTableModule(void);
 int doltliteRefreshConstraintViolationTables(sqlite3 *db);
+const sqlite3_module *doltliteConstraintViolationTableModule(void);
 
 /* nTables<=0 scans every user table. */
 int doltliteDetectMergeFkViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
@@ -1643,6 +1645,9 @@ int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
 
 int doltliteForEachUserTable(sqlite3 *db, const char *zPrefix,
                              const sqlite3_module *pModule);
+int doltliteForEachUserTableInCatalog(sqlite3 *db, const char *zPrefix,
+                                    const sqlite3_module *pModule,
+                                    const ProllyHash *pCatalog);
 
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
@@ -1781,6 +1786,7 @@ int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
 int doltliteSaveWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
+int doltliteCommitWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 void doltliteAdoptRollbackBaseline(sqlite3 *db, const ProllyHash *pCatalogHash);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
 int doltliteBranchWorkingSetIsRebasing(sqlite3 *db, const char *zBranch,

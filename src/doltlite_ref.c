@@ -392,23 +392,16 @@ int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
   return rc;
 }
 
-int doltliteForEachUserTable(
+int doltliteForEachUserTableInCatalog(
   sqlite3 *db,
   const char *zPrefix,
-  const sqlite3_module *pModule
+  const sqlite3_module *pModule,
+  const ProllyHash *pCatalog
 ){
-  ProllyHash headCommit;
-  ProllyHash headCat;
   struct TableEntry *aTables = 0;
   int nTables = 0, i, rc;
 
-  doltliteGetSessionHead(db, &headCommit);
-  if( prollyHashIsEmpty(&headCommit) ) return SQLITE_OK;
-
-  rc = doltliteCommitCatalogHash(db, &headCommit, &headCat);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteLoadCatalog(db, &headCat, &aTables, &nTables, 0);
+  rc = doltliteLoadCatalog(db, pCatalog, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nTables; i++){
@@ -428,6 +421,20 @@ int doltliteForEachUserTable(
   }
   doltliteFreeCatalog(aTables, nTables);
   return SQLITE_OK;
+}
+
+int doltliteForEachUserTable(
+  sqlite3 *db,
+  const char *zPrefix,
+  const sqlite3_module *pModule
+){
+  ProllyHash headCommit, headCat;
+  int rc;
+  doltliteGetSessionHead(db, &headCommit);
+  if( prollyHashIsEmpty(&headCommit) ) return SQLITE_OK;
+  rc = doltliteCommitCatalogHash(db, &headCommit, &headCat);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteForEachUserTableInCatalog(db, zPrefix, pModule, &headCat);
 }
 
 #endif
