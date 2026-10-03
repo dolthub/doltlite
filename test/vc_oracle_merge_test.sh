@@ -2086,7 +2086,8 @@ SELECT dolt_merge('feat');
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
 VC_ORACLE_EXPECTATION=allow-error oracle_same_session "dual_add_table_same_pk_is_row_conflict" "
-SELECT dolt_commit('-Am', 'init empty');
+CREATE TABLE base(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'init');
 SELECT dolt_branch('feat');
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'main');

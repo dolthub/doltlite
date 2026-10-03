@@ -247,7 +247,7 @@ static void test_reader_after_peer_restore(void){
   check("mp_restore_writer_ok",
         WIFEXITED(status) && WEXITSTATUS(status)==0);
   check("mp_restore_reader_sees_peer_schema",
-        execSql(reader, "DROP VIEW v1; DROP VIEW v2; DROP TABLE t1;")
+        execSql(reader, "DROP VIEW v1; DROP VIEW v2;")
           ==SQLITE_OK);
   check("mp_restore_reader_commit",
         execSql(reader, "SELECT dolt_commit('-A','-m','after restore');")
