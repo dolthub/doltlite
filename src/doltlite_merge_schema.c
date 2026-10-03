@@ -101,7 +101,7 @@ int mergeMapUnmatchedColumns(
   const ProllyHash *pSideRoot,
   u8 ancFlags, u8 sideFlags,
   const char *zAncSql, const char *zSideSql, const char *zTable,
-  int *aSideAnc, int nSide
+  int *aSideAnc, int nSide, char **pzErrMsg
 ){
   ParsedColumn *aAnc = 0, *aSide = 0;
   int nAnc = 0, nParsed = 0;
@@ -110,6 +110,7 @@ int mergeMapUnmatchedColumns(
   ProllyCursor ancCur, sideCur;
   u8 *aCandidate = 0;
   int i, k, j, res, rc, bPending = 0, curInit = 0;
+  const char *zAmbiguous = 0;
 
   for(i=0; i<nSide; i++) if( aSideAnc[i]<0 ) bPending = 1;
   if( !bPending ) return SQLITE_OK;
@@ -205,13 +206,28 @@ int mergeMapUnmatchedColumns(
       if( aCandidate[i*nAnc+k]==1 ){ nHit++; hit = k; }
     }
     if( !bPossible ) continue;
-    if( nHit!=1 ){ rc = SQLITE_ERROR; goto done; }
+    if( nHit!=1 ){
+      zAmbiguous = aSide[i].zName;
+      rc = SQLITE_ERROR;
+      goto done;
+    }
     for(j=0; j<nSide; j++){
-      if( aSideAnc[j]==hit ){ rc = SQLITE_ERROR; goto done; }
+      if( aSideAnc[j]==hit ){
+        zAmbiguous = aSide[i].zName;
+        rc = SQLITE_ERROR;
+        goto done;
+      }
     }
     aSideAnc[i] = hit;
   }
 done:
+  if( zAmbiguous && pzErrMsg ){
+    sqlite3_free(*pzErrMsg);
+    *pzErrMsg = sqlite3_mprintf(
+        "cannot merge: column '%s' in table '%s' has ambiguous ancestry",
+        zAmbiguous, zTable);
+    if( !*pzErrMsg ) rc = SQLITE_NOMEM;
+  }
   if( curInit ){
     prollyCursorClose(&ancCur);
     prollyCursorClose(&sideCur);

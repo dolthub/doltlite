@@ -195,7 +195,7 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
               c->db, &pAncCat->root, &pDropCatEnt->root,
               pAncCat->flags, pDropCatEnt->flags,
               c->aAncSchema[i].zSql, pDropSe->zSql, zTable,
-              aHeld, nDropCols);
+              aHeld, nDropCols, c->pzErrMsg);
         }
         if( rcHold!=SQLITE_OK ){
           sqlite3_free(zReuse);

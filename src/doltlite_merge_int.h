@@ -178,7 +178,7 @@ int mergeMapUnmatchedColumns(
   const ProllyHash *pSideRoot,
   u8 ancFlags, u8 sideFlags,
   const char *zAncSql, const char *zSideSql, const char *zTable,
-  int *aSideAnc, int nSide
+  int *aSideAnc, int nSide, char **pzErrMsg
 );
 
 int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c);
@@ -470,7 +470,8 @@ int normalizeSideToMergedLayout(
   const char *zSharedSql,
   const ProllyHash *pAncRoot,
   u8 ancFlags,
-  ProllyHash *pOutRoot
+  ProllyHash *pOutRoot,
+  char **pzErrMsg
 );
 
 int tryResolveSchemaDivergence(

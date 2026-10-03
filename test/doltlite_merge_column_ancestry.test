@@ -1,0 +1,109 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc ancestry_snapshot {} {
+  execsql {
+    SELECT dolt_hashof('HEAD'), dolt_hashof_db();
+    SELECT name, sql FROM sqlite_schema ORDER BY name;
+    SELECT * FROM t ORDER BY k;
+    SELECT table_name, staged, status FROM dolt_status ORDER BY table_name;
+    SELECT is_merging FROM dolt_merge_status;
+    SELECT count(*) FROM dolt_conflicts;
+  }
+}
+
+foreach keymode {integer text without-rowid} {
+  set key {k INTEGER PRIMARY KEY}
+  set suffix {}
+  if {$keymode ne "integer"} {set key {k TEXT PRIMARY KEY}}
+  if {$keymode eq "without-rowid"} {set suffix {WITHOUT ROWID}}
+  foreach values {ambiguous distinct} {
+    set changes {rename}
+    if {$values eq "ambiguous"} {lappend changes replace}
+    foreach change $changes {
+      foreach direction {forward reverse} {
+        foreach txn {autocommit explicit} {
+          reset_db
+          execsql "CREATE TABLE t($key, v TEXT, a INTEGER NOT NULL DEFAULT 0,
+                      b INTEGER NOT NULL DEFAULT 0) $suffix"
+          if {$values eq "ambiguous"} {
+            execsql {INSERT INTO t(k,v) VALUES(1,'base')}
+          } else {
+            execsql {INSERT INTO t VALUES(1,'base',10,20)}
+          }
+          execsql {
+            SELECT dolt_commit('-Am','base');
+            SELECT dolt_branch('side');
+            ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'value';
+            INSERT INTO t(k,v) VALUES(2,'ours');
+            SELECT dolt_commit('-Am','ours');
+            SELECT dolt_checkout('side');
+            ALTER TABLE t DROP COLUMN a;
+          }
+          if {$change eq "rename"} {
+            execsql {ALTER TABLE t RENAME COLUMN b TO renamed}
+          } else {
+            execsql {
+              ALTER TABLE t DROP COLUMN b;
+              ALTER TABLE t ADD COLUMN renamed INTEGER NOT NULL DEFAULT 0;
+            }
+          }
+          execsql {
+            INSERT INTO t(k,v) VALUES(3,'theirs');
+            SELECT dolt_commit('-Am','theirs');
+          }
+          if {$direction eq "forward"} {
+            execsql {SELECT dolt_checkout('main')}
+            set target side
+            set reopen [file normalize test.db]
+          } else {
+            set target main
+            set reopen "[file normalize test.db]/side"
+          }
+          set name column-ancestry-$keymode-$values-$change-$direction-$txn
+          set before [ancestry_snapshot]
+          if {$txn eq "explicit"} {execsql {BEGIN; SAVEPOINT before_merge}}
+          if {$values eq "ambiguous"} {
+            do_test $name-error {
+              set result [catchsql "SELECT dolt_merge('$target')"]
+              list [lindex $result 0] [string match \
+                  {*cannot merge: column 'renamed' in table 't' has ambiguous ancestry*} \
+                  [lindex $result 1]]
+            } {1 1}
+            do_test $name-restored {
+              expr {$before eq [ancestry_snapshot]}
+            } 1
+            do_test $name-retry {
+              catchsql "SELECT dolt_merge('$target')"
+            } $result
+            if {$txn eq "explicit"} {
+              do_execsql_test $name-savepoint {ROLLBACK TO before_merge; COMMIT} {}
+            }
+            db close
+            sqlite3 db $reopen
+            do_test $name-reopen {
+              list [expr {$before eq [ancestry_snapshot]}] \
+                  [execsql {PRAGMA integrity_check}]
+            } {1 ok}
+          } else {
+            do_test $name-merge {
+              execsql "SELECT dolt_merge('$target')"
+              execsql {
+                SELECT count(*) FROM dolt_conflicts;
+                SELECT k,v,renamed,extra FROM t ORDER BY k;
+              }
+            } {0 1 base 20 value 2 ours 0 value 3 theirs 0 value}
+            db close
+            sqlite3 db $reopen
+            do_execsql_test $name-reopen {
+              SELECT k,v,renamed,extra FROM t ORDER BY k;
+              PRAGMA integrity_check;
+            } {1 base 20 value 2 ours 0 value 3 theirs 0 value ok}
+          }
+        }
+      }
+    }
+  }
+}
+
+finish_test

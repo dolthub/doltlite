@@ -716,7 +716,7 @@ static int mergeResolveColumnRenames(
   const char *zAncSql, const char *zSideSql, const char *zSelectedSql,
   char ***pazAdd, int *pnAdd,
   char ***pazDrop, int *pnDrop,
-  char ***pazRename, int *pnRename
+  char ***pazRename, int *pnRename, char **pzErrMsg
 ){
   ParsedColumn *aAnc = 0, *aSide = 0, *aSelected = 0;
   int nAnc = 0, nSide = 0, nSelected = 0;
@@ -734,7 +734,7 @@ static int mergeResolveColumnRenames(
   mergeMapColumnsToAncestor(aAnc, nAnc, aSide, nSide, aMap);
   rc = mergeMapUnmatchedColumns(db, &pAnc->root, &pSide->root,
                                 pAnc->flags, pSide->flags,
-                                zAncSql, zSideSql, zName, aMap, nSide);
+                                zAncSql, zSideSql, zName, aMap, nSide, pzErrMsg);
   if( rc!=SQLITE_OK ) goto done;
   for(i=0; i<nSide; i++){
     char **azNew;
@@ -858,7 +858,7 @@ int tryResolveSchemaDivergence(
           ancSchEntry->zSql, bTheirs ? ourSchEntry->zSql : theirSchEntry->zSql,
           bTheirs ? theirSchEntry->zSql : ourSchEntry->zSql,
           &azAddCols, &nAddCols, &azDropCols, &nDropCols,
-          &azRenameCols, &nRenameCols);
+          &azRenameCols, &nRenameCols, &zSchemaErr);
     }
   }else{
     rc = SQLITE_ERROR;
