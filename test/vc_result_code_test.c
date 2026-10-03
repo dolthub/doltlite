@@ -180,6 +180,63 @@ static void test_no_internal_code_escapes(const char *zPath){
   remove(zPath);
 }
 
+/* A detached session's commit is collected by a peer. Reading it must
+** report corruption, never the store's internal not-found sentinel. */
+static void test_detached_after_gc(const char *zPath){
+  static const char *azRead[] = {
+    "SELECT count(*), sum(length(v)) FROM t",
+    "SELECT count(*) FROM dolt_log",
+    "PRAGMA integrity_check",
+    0
+  };
+  sqlite3 *db = 0, *peer = 0;
+  sqlite3_stmt *stmt = 0;
+  char zHash[41];
+  char zDetached[320];
+  int i;
+
+  remove(zPath);
+  zHash[0] = 0;
+  check("detached_gc: open", sqlite3_open(zPath, &db)==SQLITE_OK);
+  check("detached_gc: seed", exec(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1,'a');"
+      "SELECT dolt_commit('-Am','c1');"
+      "SELECT dolt_branch('x');"
+      "SELECT dolt_checkout('x');"
+      "WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i+1 FROM n"
+      "  WHERE i<2001) INSERT INTO t SELECT i, randomblob(200) FROM n;"
+      "SELECT dolt_commit('-am','on x');"
+      "SELECT dolt_checkout('main');")==SQLITE_OK);
+  if( sqlite3_prepare_v2(db, "SELECT dolt_hashof('x')", -1, &stmt, 0)==SQLITE_OK
+   && sqlite3_step(stmt)==SQLITE_ROW ){
+    snprintf(zHash, sizeof(zHash), "%s", sqlite3_column_text(stmt, 0));
+  }
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
+  db = 0;
+
+  snprintf(zDetached, sizeof(zDetached), "%s/%s", zPath, zHash);
+  check("detached_gc: open detached", sqlite3_open(zDetached, &db)==SQLITE_OK);
+  check("detached_gc: point read", exec(db,
+      "SELECT count(*) FROM t WHERE id=1")==SQLITE_OK);
+  check("detached_gc: peer open", sqlite3_open(zPath, &peer)==SQLITE_OK);
+  check("detached_gc: peer deletes branch",
+        exec(peer, "SELECT dolt_branch('-D','x')")==SQLITE_OK);
+  check("detached_gc: peer gc", exec(peer, "SELECT dolt_gc()")==SQLITE_OK);
+  sqlite3_close(peer);
+
+  for(i=0; azRead[i]; i++){
+    char *zErr = 0;
+    int rc = sqlite3_exec(db, azRead[i], 0, 0, &zErr);
+    checkRc(azRead[i], rc, SQLITE_CORRUPT);
+    check("detached_gc: says why", zErr!=0 && zErr[0]!=0);
+    sqlite3_free(zErr);
+  }
+  sqlite3_close(db);
+  remove(zPath);
+}
+
 typedef struct CommitBusyCtx CommitBusyCtx;
 struct CommitBusyCtx {
   sqlite3 *peer;
@@ -367,6 +424,7 @@ int main(void){
   test_no_internal_code_escapes(zPath);
   test_commit_busy(zPath);
   test_ref_busy_handler(zPath);
+  test_detached_after_gc(zPath);
 
   printf("vc_result_code_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

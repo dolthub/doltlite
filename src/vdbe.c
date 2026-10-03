@@ -10248,6 +10248,17 @@ abort_due_to_error:
       rc = chunkSourceRc;
     }
   }
+  /* Outside a function's own result and without a chunk source (which may
+  ** report NOTFOUND by contract), NOTFOUND is the store's internal miss
+  ** sentinel: referenced data is gone. */
+  if( rc==SQLITE_NOTFOUND
+   && pOp->opcode!=OP_Function && pOp->opcode!=OP_PureFunc
+   && pOp->opcode!=OP_AggStep && pOp->opcode!=OP_AggStep1
+   && pOp->opcode!=OP_AggValue && pOp->opcode!=OP_AggInverse
+   && pOp->opcode!=OP_AggFinal
+   && !doltliteChunkSourceActive(db) ){
+    rc = SQLITE_CORRUPT_BKPT;
+  }
 #endif
   assert( rc );
 #ifdef SQLITE_DEBUG
