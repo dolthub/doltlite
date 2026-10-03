@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 #define N_WORKERS 2
 #define N_COMMITS_PER_WORKER 6
@@ -483,7 +484,7 @@ static void verifyBranchesAndMerge(const char *path){
 }
 
 int main(void){
-  const char *path = "/tmp/test_vc_concurrency.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_vc_concurrency.db";
   pid_t pids[N_WORKERS];
   int status;
   int i;

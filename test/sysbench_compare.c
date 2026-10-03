@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 #ifndef ENGINE_NAME
 #define ENGINE_NAME "Unknown"
@@ -598,10 +599,10 @@ static void bench_read_write(sqlite3 *db){
 
 static void fresh_db(sqlite3 **ppDb){
   if( *ppDb ) sqlite3_close(*ppDb);
-  remove("/tmp/sysbench_compare.db");
-  remove("/tmp/sysbench_compare.db-wal");
-  remove("/tmp/sysbench_compare.db-journal");
-  sqlite3_open("/tmp/sysbench_compare.db", ppDb);
+  remove(DOLTLITE_TEST_TMPDIR "/sysbench_compare.db");
+  remove(DOLTLITE_TEST_TMPDIR "/sysbench_compare.db-wal");
+  remove(DOLTLITE_TEST_TMPDIR "/sysbench_compare.db-journal");
+  sqlite3_open(DOLTLITE_TEST_TMPDIR "/sysbench_compare.db", ppDb);
   rng_seed(SEED);
   prepare(*ppDb);
 }
@@ -640,9 +641,9 @@ static void run_benchmarks(void){
   rng_seed(SEED + 23); fresh_db(&db); bench_read_write(db);
 
   sqlite3_close(db);
-  remove("/tmp/sysbench_compare.db");
-  remove("/tmp/sysbench_compare.db-wal");
-  remove("/tmp/sysbench_compare.db-journal");
+  remove(DOLTLITE_TEST_TMPDIR "/sysbench_compare.db");
+  remove(DOLTLITE_TEST_TMPDIR "/sysbench_compare.db-wal");
+  remove(DOLTLITE_TEST_TMPDIR "/sysbench_compare.db-journal");
 
   printf("{\"engine\":\"%s\",\"rows\":%d,\"results\":{", ENGINE_NAME, ROWS);
   for(i=0; i<nResults; i++){

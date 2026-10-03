@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -65,7 +66,7 @@ static sqlite3 *open_db(const char *path){
 }
 
 static void test_insert_conflict(void){
-  const char *path = "/tmp/test_txn_insert.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_insert.db";
   sqlite3 *a, *b;
   int rc_a_ins, rc_b_ins;
 
@@ -103,7 +104,7 @@ static void test_insert_conflict(void){
 }
 
 static void test_update_conflict(void){
-  const char *path = "/tmp/test_txn_update.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_update.db";
   sqlite3 *a, *b;
   int rc;
 
@@ -140,7 +141,7 @@ static void test_update_conflict(void){
 }
 
 static void test_delete_update_conflict(void){
-  const char *path = "/tmp/test_txn_delupd.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_delupd.db";
   sqlite3 *a, *b;
   int rc;
 
@@ -177,7 +178,7 @@ static void test_delete_update_conflict(void){
 }
 
 static void test_non_conflicting_inserts(void){
-  const char *path = "/tmp/test_txn_noconflict.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_noconflict.db";
   sqlite3 *a, *b;
   int rc;
 
@@ -217,7 +218,7 @@ static void test_non_conflicting_inserts(void){
 }
 
 static void test_sequential_transactions(void){
-  const char *path = "/tmp/test_txn_seq.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_seq.db";
   sqlite3 *a, *b;
   int rc;
 
@@ -257,7 +258,7 @@ static void test_sequential_transactions(void){
 }
 
 static void test_read_during_write(void){
-  const char *path = "/tmp/test_txn_readwrite.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_readwrite.db";
   sqlite3 *a, *b;
 
   printf("--- Test 6: Read during write transaction ---\n");
@@ -284,7 +285,7 @@ static void test_read_during_write(void){
 }
 
 static void test_rollback_releases(void){
-  const char *path = "/tmp/test_txn_rollback.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_rollback.db";
   sqlite3 *a, *b;
   int rc;
 
@@ -316,7 +317,7 @@ static void test_rollback_releases(void){
 }
 
 static void test_busy_retry(void){
-  const char *path = "/tmp/test_txn_retry.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_txn_retry.db";
   sqlite3 *a, *b;
   int rc;
 

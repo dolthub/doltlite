@@ -6,6 +6,7 @@
 #include "sqlite3.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "lib/test_tmpdir.h"
 
 /* SQL tag and remote edits are durable when the call returns, so a later
 ** COMMIT of row writes keeps a peer's other ref edits. Uncommitted tag,
@@ -84,7 +85,7 @@ static int execf(sqlite3 *db, const char *fmt, ...){
 }
 
 static void dbPath(char *out, int n, const char *role){
-  snprintf(out, n, "/tmp/refsmerge_%s_%s.db", gPid, role);
+  snprintf(out, n, DOLTLITE_TEST_TMPDIR "/refsmerge_%s_%s.db", gPid, role);
 }
 
 static void wipe(const char *path){
@@ -244,7 +245,7 @@ static void scenarioTagDelete(void){
   if( !a ) return;
   check("tag_delete_base", execSql(a,
       "SELECT dolt_tag('base_tag');"
-      "SELECT dolt_remote('add','origin','file:///tmp/refsmerge-origin');"
+      "SELECT dolt_remote('add','origin','file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin');"
       )==SQLITE_OK);
   b = peerAndBegin(a, path);
   check("tag_delete_peer", b!=0);
@@ -283,13 +284,13 @@ static void scenarioRemoteAdd(void){
   check("remote_add_setup", a!=0);
   if( !a ) return;
   check("remote_add_origin", execSql(a,
-      "SELECT dolt_remote('add','origin','file:///tmp/refsmerge-origin');"
+      "SELECT dolt_remote('add','origin','file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin');"
       )==SQLITE_OK);
   b = peerAndBegin(a, path);
   check("remote_add_peer", b!=0);
   if( b ){
     check("remote_add_ra", execSql(a,
-        "SELECT dolt_remote('add','ra','file:///tmp/refsmerge-ra');")==SQLITE_OK);
+        "SELECT dolt_remote('add','ra','file://" DOLTLITE_TEST_TMPDIR "/refsmerge-ra');")==SQLITE_OK);
     check("remote_add_branch", execSql(b, "SELECT dolt_branch('b_b')")==SQLITE_OK);
     check("remote_add_commit", commitWrite(a)==SQLITE_OK);
   }
@@ -318,7 +319,7 @@ static void scenarioRemoteRetarget(void){
   check("remote_retarget_setup", a!=0);
   if( !a ) return;
   check("remote_retarget_origin", execSql(a,
-      "SELECT dolt_remote('add','origin','file:///tmp/refsmerge-old');"
+      "SELECT dolt_remote('add','origin','file://" DOLTLITE_TEST_TMPDIR "/refsmerge-old');"
       )==SQLITE_OK);
   b = peerAndBegin(a, path);
   check("remote_retarget_peer", b!=0);
@@ -326,7 +327,7 @@ static void scenarioRemoteRetarget(void){
     check("remote_retarget_remove",
           execSql(a, "SELECT dolt_remote('remove','origin')")==SQLITE_OK);
     check("remote_retarget_add", execSql(a,
-        "SELECT dolt_remote('add','origin','file:///tmp/refsmerge-new');"
+        "SELECT dolt_remote('add','origin','file://" DOLTLITE_TEST_TMPDIR "/refsmerge-new');"
         )==SQLITE_OK);
     check("remote_retarget_branch",
           execSql(b, "SELECT dolt_branch('b_b')")==SQLITE_OK);
@@ -338,7 +339,7 @@ static void scenarioRemoteRetarget(void){
   if( c ){
     expectEq("remote_retarget_url", queryScalar(c,
       "SELECT url FROM dolt_remotes WHERE name='origin'"),
-      "file:///tmp/refsmerge-new");
+      "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-new");
     expectEq("remote_retarget_branch", queryScalar(c,
       "SELECT count(*) FROM dolt_branches WHERE name='b_b'"), "1");
   }
@@ -462,7 +463,7 @@ static void storeEqualUntouched(void){
   check("cs_equal_seed", seedBase(&local, path));
   check("cs_equal_refs",
         chunkStoreAddTagFull(&local, "keep", &tag, "ann", "a@x", 1, "keep")==SQLITE_OK
-        && chunkStoreAddRemote(&local, "origin", "file:///tmp/refsmerge-origin")==SQLITE_OK
+        && chunkStoreAddRemote(&local, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin")==SQLITE_OK
         && chunkStoreUpdateTracking(&local, "origin", "main", &track)==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   check("cs_equal_peer", peerAddBranch(path, "peer_b"));
@@ -474,7 +475,7 @@ static void storeEqualUntouched(void){
   freshOpen = 1;
   if( freshOpen ){
     check("cs_equal_tag", tagIs(&fresh, "keep", &tag));
-    check("cs_equal_remote", remoteIs(&fresh, "origin", "file:///tmp/refsmerge-origin"));
+    check("cs_equal_remote", remoteIs(&fresh, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin"));
     check("cs_equal_tracking", trackingIs(&fresh, &track));
     check("cs_equal_peer_branch", branchIs(&fresh, "peer_b"));
     check("cs_equal_local_branch", branchIs(&fresh, "local_b"));
@@ -614,11 +615,11 @@ static void storeRemoteAdd(void){
   check("cs_remote_add_seed", seedBase(&local, path));
   check("cs_remote_add_peer", peerAddBranch(path, "peer_b"));
   check("cs_remote_add_local",
-        chunkStoreAddRemote(&local, "ra", "file:///tmp/refsmerge-ra")==SQLITE_OK
+        chunkStoreAddRemote(&local, "ra", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-ra")==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   chunkStoreClose(&local);
   check("cs_remote_add_reopen", openStore(&fresh, path, 0)==SQLITE_OK);
-  check("cs_remote_add_url", remoteIs(&fresh, "ra", "file:///tmp/refsmerge-ra"));
+  check("cs_remote_add_url", remoteIs(&fresh, "ra", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-ra"));
   check("cs_remote_add_peer", branchIs(&fresh, "peer_b"));
   chunkStoreClose(&fresh);
   wipe(path);
@@ -630,17 +631,17 @@ static void storeRemoteReplace(void){
   dbPath(path, (int)sizeof(path), "csremmove");
   check("cs_remote_move_seed", seedBase(&local, path));
   check("cs_remote_move_base",
-        chunkStoreAddRemote(&local, "origin", "file:///tmp/refsmerge-old")==SQLITE_OK
+        chunkStoreAddRemote(&local, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-old")==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   check("cs_remote_move_peer", peerAddBranch(path, "peer_b"));
   check("cs_remote_move_local",
         chunkStoreDeleteRemote(&local, "origin")==SQLITE_OK
-        && chunkStoreAddRemote(&local, "origin", "file:///tmp/refsmerge-new")==SQLITE_OK
+        && chunkStoreAddRemote(&local, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-new")==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   chunkStoreClose(&local);
   check("cs_remote_move_reopen", openStore(&fresh, path, 0)==SQLITE_OK);
   check("cs_remote_move_url",
-        remoteIs(&fresh, "origin", "file:///tmp/refsmerge-new"));
+        remoteIs(&fresh, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-new"));
   check("cs_remote_move_peer", branchIs(&fresh, "peer_b"));
   chunkStoreClose(&fresh);
   wipe(path);
@@ -652,7 +653,7 @@ static void storeRemoteDelete(void){
   dbPath(path, (int)sizeof(path), "csremdel");
   check("cs_remote_del_seed", seedBase(&local, path));
   check("cs_remote_del_base",
-        chunkStoreAddRemote(&local, "origin", "file:///tmp/refsmerge-origin")==SQLITE_OK
+        chunkStoreAddRemote(&local, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin")==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   check("cs_remote_del_peer", peerAddBranch(path, "peer_b"));
   check("cs_remote_del_local",
@@ -675,7 +676,7 @@ static void storeTrackingAdd(void){
   hashOf(&track, "track-new");
   check("cs_track_add_seed", seedBase(&local, path));
   check("cs_track_add_remote",
-        chunkStoreAddRemote(&local, "origin", "file:///tmp/refsmerge-origin")==SQLITE_OK
+        chunkStoreAddRemote(&local, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin")==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   check("cs_track_add_peer", peerAddBranch(path, "peer_b"));
   check("cs_track_add_local",
@@ -698,7 +699,7 @@ static void storeTrackingReplace(void){
   hashOf(&newH, "track-new");
   check("cs_track_move_seed", seedBase(&local, path));
   check("cs_track_move_base",
-        chunkStoreAddRemote(&local, "origin", "file:///tmp/refsmerge-origin")==SQLITE_OK
+        chunkStoreAddRemote(&local, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin")==SQLITE_OK
         && chunkStoreUpdateTracking(&local, "origin", "main", &oldH)==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   check("cs_track_move_peer", peerAddBranch(path, "peer_b"));
@@ -721,7 +722,7 @@ static void storeTrackingDelete(void){
   hashOf(&oldH, "track-old");
   check("cs_track_del_seed", seedBase(&local, path));
   check("cs_track_del_base",
-        chunkStoreAddRemote(&local, "origin", "file:///tmp/refsmerge-origin")==SQLITE_OK
+        chunkStoreAddRemote(&local, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin")==SQLITE_OK
         && chunkStoreUpdateTracking(&local, "origin", "main", &oldH)==SQLITE_OK
         && commitRefs(&local)==SQLITE_OK);
   check("cs_track_del_peer", peerAddBranch(path, "peer_b"));
@@ -733,7 +734,7 @@ static void storeTrackingDelete(void){
   check("cs_track_del_gone",
         chunkStoreFindTracking(&fresh, "origin", "main", 0)==SQLITE_NOTFOUND);
   check("cs_track_del_remote",
-        remoteIs(&fresh, "origin", "file:///tmp/refsmerge-origin"));
+        remoteIs(&fresh, "origin", "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-origin"));
   check("cs_track_del_peer", branchIs(&fresh, "peer_b"));
   chunkStoreClose(&fresh);
   wipe(path);

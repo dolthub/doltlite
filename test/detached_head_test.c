@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass;
 static int nFail;
@@ -77,7 +78,7 @@ static void checkDetached(sqlite3 *db, const char *zName){
 }
 
 int main(void){
-  char zDir[] = "/tmp/doltlite-detached-head-XXXXXX";
+  char zDir[] = DOLTLITE_TEST_TMPDIR "/doltlite-detached-head-XXXXXX";
   char zPath[sizeof(zDir) + sizeof("/test.db")];
   char zOpen[sizeof(zPath) + 128];
   char zLock[sizeof(zPath) + sizeof("-lock")];

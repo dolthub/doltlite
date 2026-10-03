@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -48,7 +49,7 @@ static int execSql(sqlite3 *db, const char *sql){
 
 static void test_aaron_scenario(void){
   sqlite3 *db1 = 0, *db2 = 0;
-  const char *dbpath = "/tmp/test_concurrent_commit.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_concurrent_commit.db";
   int rc;
   const char *res;
 
@@ -111,7 +112,7 @@ static void test_aaron_scenario(void){
 ** a stale head. */
 static void test_pinned_session_commit_rejected(void){
   sqlite3 *db1 = 0, *db2 = 0;
-  const char *dbpath = "/tmp/test_pinned_commit.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_pinned_commit.db";
   int rc;
   const char *res;
 
@@ -153,7 +154,7 @@ static void test_pinned_session_commit_rejected(void){
 
 static void test_single_connection(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_single_commit.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_single_commit.db";
   int rc;
   const char *res;
 
@@ -188,7 +189,7 @@ static void test_single_connection(void){
 
 static void test_sequential_multi_connection(void){
   sqlite3 *db1 = 0, *db2 = 0;
-  const char *dbpath = "/tmp/test_sequential_commit.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_sequential_commit.db";
   int rc;
   const char *res;
 

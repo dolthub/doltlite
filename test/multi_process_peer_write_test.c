@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -295,7 +296,7 @@ int main(void){
   int i;
   setvbuf(stdout, 0, _IOLBF, 0);
   printf("=== Peer write survives each VC operation ===\n\n");
-  snprintf(zDir, sizeof(zDir), "/tmp/mp_peer_write_%d", (int)getpid());
+  snprintf(zDir, sizeof(zDir), DOLTLITE_TEST_TMPDIR "/mp_peer_write_%d", (int)getpid());
   mkdir(zDir, 0700);
   snprintf(zDb, sizeof(zDb), "%s/db.db", zDir);
   snprintf(zRemote, sizeof(zRemote), "%s/template_remote_run.db", zDir);

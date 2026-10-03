@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -48,14 +49,14 @@ static int execSql(sqlite3 *db, const char *sql){
 
 int main(){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_ancestor.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_ancestor.db";
   int rc;
   const char *main_head, *feature_head, *ancestor, *c2_hash;
   char main_head_buf[128], feature_head_buf[128], merge_head_buf[128];
   char c2_hash_buf[128];
 
   remove(dbpath);
-  remove("/tmp/test_ancestor.db-chunks");
+  remove(DOLTLITE_TEST_TMPDIR "/test_ancestor.db-chunks");
 
   rc = sqlite3_open(dbpath, &db);
   check("open db", rc==SQLITE_OK);
@@ -154,7 +155,7 @@ int main(){
 
   sqlite3_close(db);
   remove(dbpath);
-  remove("/tmp/test_ancestor.db-chunks");
+  remove(DOLTLITE_TEST_TMPDIR "/test_ancestor.db-chunks");
 
   printf("\n%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;

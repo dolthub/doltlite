@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -304,7 +305,7 @@ static void check_str(const char *name, const char *got, const char *expected){
 
 
 static void test_mixed_tree_mut_scan(void){
-  const char *path = "/tmp/cursor_merge_mixed.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/cursor_merge_mixed.db";
   sqlite3 *db;
   Model m;
   int i, n = 200;
@@ -366,7 +367,7 @@ static void test_mixed_tree_mut_scan(void){
 }
 
 static void test_nested_savepoint_cursor(void){
-  const char *path = "/tmp/cursor_merge_savepoint.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/cursor_merge_savepoint.db";
   sqlite3 *db;
   Model m;
   int n = 64;
@@ -430,7 +431,7 @@ static void test_nested_savepoint_cursor(void){
 }
 
 static void test_multi_cursor_interleaved(void){
-  const char *path = "/tmp/cursor_merge_multicur.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/cursor_merge_multicur.db";
   sqlite3 *db;
   Model m;
   sqlite3_stmt *pA = 0, *pB = 0;
@@ -488,7 +489,7 @@ static void test_multi_cursor_interleaved(void){
 }
 
 static void test_burst_mutmap_scans(void){
-  const char *path = "/tmp/cursor_merge_burst.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/cursor_merge_burst.db";
   sqlite3 *db;
   Model m;
   int base = 128;
@@ -554,7 +555,7 @@ static void test_burst_mutmap_scans(void){
 }
 
 static void test_without_rowid_mut_scan(void){
-  const char *path = "/tmp/cursor_merge_wor.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/cursor_merge_wor.db";
   sqlite3 *db;
   int i, cnt = -1, rc;
   int ids[64], n = 0;
@@ -622,7 +623,7 @@ static void test_without_rowid_mut_scan(void){
 }
 
 static void test_constraint_fail_then_scan(void){
-  const char *path = "/tmp/cursor_merge_constraint.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/cursor_merge_constraint.db";
   sqlite3 *db;
   int cnt = -1;
 
@@ -658,7 +659,7 @@ static void test_constraint_fail_then_scan(void){
 
 
 static void test_nested_dml_mutmap(void){
-  const char *path = "/tmp/sp_txn_dml.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_dml.db";
   sqlite3 *db;
   int cnt = -1, sum = -1;
 
@@ -717,7 +718,7 @@ static void test_nested_dml_mutmap(void){
 }
 
 static void test_nested_ddl_catalog(void){
-  const char *path = "/tmp/sp_txn_ddl.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_ddl.db";
   sqlite3 *db;
   int cnt = -1;
   sqlite3_stmt *stale = 0;
@@ -794,7 +795,7 @@ static void test_nested_ddl_catalog(void){
 }
 
 static void test_ddl_release_persists(void){
-  const char *path = "/tmp/sp_txn_ddl_rel.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_ddl_rel.db";
   sqlite3 *db;
   int cnt = -1;
 
@@ -831,7 +832,7 @@ static void test_ddl_release_persists(void){
 }
 
 static void test_vc_commit_mid_savepoint(void){
-  const char *path = "/tmp/sp_txn_vc_commit.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_vc_commit.db";
   sqlite3 *db;
   int logs = -1, cnt = -1;
   const char *hash;
@@ -884,7 +885,7 @@ static void test_vc_commit_mid_savepoint(void){
 }
 
 static void test_vc_add_mid_savepoint(void){
-  const char *path = "/tmp/sp_txn_vc_add.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_vc_add.db";
   sqlite3 *db;
   int cnt = -1;
   int staged = -1;
@@ -919,7 +920,7 @@ static void test_vc_add_mid_savepoint(void){
 }
 
 static void test_multitable_view_savepoint(void){
-  const char *path = "/tmp/sp_txn_multi.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_multi.db";
   sqlite3 *db;
   int cnt = -1;
 
@@ -973,7 +974,7 @@ static void test_multitable_view_savepoint(void){
 }
 
 static void test_constraint_in_nested_savepoint(void){
-  const char *path = "/tmp/sp_txn_constraint.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_constraint.db";
   sqlite3 *db;
   int cnt = -1;
 
@@ -1019,7 +1020,7 @@ static void test_constraint_in_nested_savepoint(void){
 }
 
 static void test_index_bulk_mutmap_savepoint(void){
-  const char *path = "/tmp/sp_txn_idx_bulk.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_idx_bulk.db";
   sqlite3 *db;
   int i, cnt = -1;
   char sql[128];
@@ -1088,7 +1089,7 @@ static void test_index_bulk_mutmap_savepoint(void){
 }
 
 static void test_drop_recreate_under_savepoint(void){
-  const char *path = "/tmp/sp_txn_recreate.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_recreate.db";
   sqlite3 *db;
   int cnt = -1;
 
@@ -1131,7 +1132,7 @@ static void test_drop_recreate_under_savepoint(void){
 }
 
 static void test_deep_release_then_outer_rollback(void){
-  const char *path = "/tmp/sp_txn_deep_rel.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_deep_rel.db";
   sqlite3 *db;
   int cnt = -1;
 
@@ -1169,7 +1170,7 @@ static void test_deep_release_then_outer_rollback(void){
 }
 
 static void test_prepared_dml_across_savepoint_ddl(void){
-  const char *path = "/tmp/sp_txn_prep_ddl.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/sp_txn_prep_ddl.db";
   sqlite3 *db;
   sqlite3_stmt *ins = 0;
   int cnt = -1;

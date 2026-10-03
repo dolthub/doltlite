@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "sqlite3.h"
 #include "doltlite_internal.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -123,7 +124,7 @@ static void test_force_commit_keeps_cvs(void){
   char *zHeadBefore = 0, *zHeadAfter = 0, *zErr = 0;
   int nCv = -1, rc;
 
-  snprintf(zPath, sizeof(zPath), "/tmp/cas_swallow_cv_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/cas_swallow_cv_%d.db", (int)getpid());
   db = openDb(zPath);
   check("cv: open", db!=0);
   if( !db ) return;
@@ -159,7 +160,7 @@ static void test_merge_restore_not_voided(void){
   char *zErr = 0;
   int rc;
 
-  snprintf(zPath, sizeof(zPath), "/tmp/cas_swallow_restore_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/cas_swallow_restore_%d.db", (int)getpid());
   db = openDb(zPath);
   check("restore: open", db!=0);
   if( !db ) return;
@@ -194,7 +195,7 @@ static void test_conflicts_resolve_savepoint(void){
   char *zErr = 0;
   int nT = -1, nU = -1, nAll = -1, rc;
 
-  snprintf(zPath, sizeof(zPath), "/tmp/cas_swallow_resolve_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/cas_swallow_resolve_%d.db", (int)getpid());
   db = openDb(zPath);
   check("resolve: open", db!=0);
   if( !db ) return;
@@ -228,7 +229,7 @@ static void test_branch_move_ws_read_failure(void){
   char *zErr = 0;
   int nFeat = -1, nRenamed = -1, rc;
 
-  snprintf(zPath, sizeof(zPath), "/tmp/cas_swallow_move_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/cas_swallow_move_%d.db", (int)getpid());
   db = openDb(zPath);
   check("move: open", db!=0);
   if( !db ) return;
@@ -275,7 +276,7 @@ static void test_merge_install_unlock_window(void){
   PeerCommit peer;
   int rc;
 
-  snprintf(zPath, sizeof(zPath), "/tmp/cas_swallow_lock_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/cas_swallow_lock_%d.db", (int)getpid());
   db1 = openDb(zPath);
   check("lock: open", db1!=0);
   if( !db1 ) return;
@@ -315,7 +316,7 @@ static void test_ff_interrupt_after_advance(void){
   char *zErr = 0, *zHead = 0, *zFeat = 0;
   int rc;
 
-  snprintf(zPath, sizeof(zPath), "/tmp/cas_swallow_ffint_%d.db", (int)getpid());
+  snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/cas_swallow_ffint_%d.db", (int)getpid());
   db = openDb(zPath);
   check("ffint: open", db!=0);
   if( !db ) return;

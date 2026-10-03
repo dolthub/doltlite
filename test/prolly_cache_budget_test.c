@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "lib/test_tmpdir.h"
 
 static int nPass;
 static int nFail;
@@ -1099,7 +1100,7 @@ static void testIndexCacheSizedByIndex(void){
   sqlite3 *db = 0;
   ChunkStore *pStore;
   i64 nReserved;
-  sqlite3_snprintf(sizeof(zPath), zPath, "/tmp/prolly-index-budget-%d.db",
+  sqlite3_snprintf(sizeof(zPath), zPath, DOLTLITE_TEST_TMPDIR "/prolly-index-budget-%d.db",
                    (int)getpid());
   unlink(zPath);
   check("open index budget db", sqlite3_open(zPath, &db)==SQLITE_OK);
@@ -1540,7 +1541,7 @@ int main(void){
   sqlite3_stmt *p = 0;
   int i;
   testPayloadCopies();
-  sqlite3_snprintf(sizeof(zPath), zPath, "/tmp/prolly-cache-budget-%d.db",
+  sqlite3_snprintf(sizeof(zPath), zPath, DOLTLITE_TEST_TMPDIR "/prolly-cache-budget-%d.db",
                    (int)getpid());
   unlink(zPath);
   check("open", sqlite3_open(zPath, &db)==SQLITE_OK);

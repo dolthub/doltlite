@@ -13,6 +13,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "lib/test_tmpdir.h"
 
 #define BASE_ROWS 2400
 #define EXTRA_ROWS 100
@@ -2790,7 +2791,7 @@ int main(void){
   sqlite3_initialize();
   memset(&source, 0, sizeof(source));
   snprintf(zPrefix, sizeof(zPrefix),
-           "/tmp/doltlite_chunk_source_%ld", (long)getpid());
+           DOLTLITE_TEST_TMPDIR "/doltlite_chunk_source_%ld", (long)getpid());
   snprintf(zSource, sizeof(zSource), "%s_source.db", zPrefix);
   snprintf(zWrite, sizeof(zWrite), "%s_write.db", zPrefix);
   snprintf(zReadOnly, sizeof(zReadOnly), "%s_readonly.db", zPrefix);

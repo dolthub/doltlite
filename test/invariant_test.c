@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -245,7 +246,7 @@ static void removeDb(const char *path){
 
 static void test_basic_commit(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_basic.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_basic.db";
 
   printf("--- Test 1: Basic create/insert/commit ---\n");
   removeDb(dbpath);
@@ -265,7 +266,7 @@ static void test_basic_commit(void){
 
 static void test_multi_branch(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_multibranch.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_multibranch.db";
 
   printf("--- Test 2: Multiple branches with commits ---\n");
   removeDb(dbpath);
@@ -303,7 +304,7 @@ static void test_multi_branch(void){
 
 static void test_merge(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_merge.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_merge.db";
 
   printf("--- Test 3: Merge two branches ---\n");
   removeDb(dbpath);
@@ -334,7 +335,7 @@ static void test_merge(void){
 
 static void test_insert_delete(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_del.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_del.db";
 
   printf("--- Test 4: Insert then delete rows ---\n");
   removeDb(dbpath);
@@ -363,7 +364,7 @@ static void test_insert_delete(void){
 
 static void test_sequential_commits(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_seq.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_seq.db";
   int i;
 
   printf("--- Test 5: 10 sequential commits ---\n");
@@ -411,7 +412,7 @@ static void test_sequential_commits(void){
 
 static void test_schema_change(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_schema.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_schema.db";
   const char *r;
 
   printf("--- Test 6: Schema change on branch ---\n");
@@ -444,7 +445,7 @@ static void test_schema_change(void){
 
 static void test_gc(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_gc.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_gc.db";
 
   printf("--- Test 7: GC preserves invariants ---\n");
   removeDb(dbpath);
@@ -472,7 +473,7 @@ static void test_gc(void){
 
 static void test_reset_hard(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_reset.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_reset.db";
 
   printf("--- Test 8: Reset --hard preserves invariants ---\n");
   removeDb(dbpath);
@@ -503,7 +504,7 @@ static void test_reset_hard(void){
 
 static void test_random_operations(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_random.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_random.db";
   int i;
 
   printf("--- Test 9: 100 random operations ---\n");
@@ -553,7 +554,7 @@ static void test_random_operations(void){
 
 static void test_multi_table(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_multi.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_multi.db";
 
   printf("--- Test 10: Multiple tables ---\n");
   removeDb(dbpath);
@@ -586,7 +587,7 @@ static void test_multi_table(void){
 
 static void test_diverge_merge(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_divmerge.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_divmerge.db";
 
   printf("--- Test 11: Diverge and merge ---\n");
   removeDb(dbpath);
@@ -625,7 +626,7 @@ static void test_diverge_merge(void){
 
 static void test_gc_after_branch_delete(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_gcbr.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_gcbr.db";
 
   printf("--- Test 12: GC after branch deletion ---\n");
   removeDb(dbpath);
@@ -655,7 +656,7 @@ static void test_gc_after_branch_delete(void){
 
 static void test_persistence(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_persist.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_persist.db";
 
   printf("--- Test 13: Persistence across reopen ---\n");
   removeDb(dbpath);
@@ -683,7 +684,7 @@ static void test_persistence(void){
 
 static void test_large_table(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_large.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_large.db";
   int i;
 
   printf("--- Test 14: Large table (500 rows) ---\n");
@@ -711,7 +712,7 @@ static void test_large_table(void){
 
 static void test_drop_table(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_drop.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_drop.db";
   const char *r;
 
   printf("--- Test 15: Drop table ---\n");
@@ -740,7 +741,7 @@ static void test_drop_table(void){
 
 static void test_staging(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_staging.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_staging.db";
 
   printf("--- Test 16: Staging workflow ---\n");
   removeDb(dbpath);
@@ -769,7 +770,7 @@ static void test_staging(void){
 
 static void test_reset_to_hash(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_resethash.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_resethash.db";
   const char *h;
   char hash1[64];
 
@@ -810,7 +811,7 @@ static void test_reset_to_hash(void){
 
 static void test_single_row_mutation_fast_path(void){
   sqlite3 *db = 0;
-  const char *dbpath = "/tmp/test_inv_single_mutation.db";
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_inv_single_mutation.db";
   int i;
 
   printf("--- Test 18: Single-row mutation fast path shape ---\n");

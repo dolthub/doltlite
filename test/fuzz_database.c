@@ -6,6 +6,7 @@
 #include <fcntl.h>
 
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int g_initialized = 0;
 
@@ -18,7 +19,7 @@ static const char *const kProbeSql[] = {
 };
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-  char path[] = "/tmp/dl-fuzz-db-XXXXXX";
+  char path[] = DOLTLITE_TEST_TMPDIR "/dl-fuzz-db-XXXXXX";
   sqlite3 *db = 0;
   int fd;
   int i;

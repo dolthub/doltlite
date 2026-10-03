@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include "sqlite3.h"
 #include "prolly_hash.h"
+#include "lib/test_tmpdir.h"
 
 extern int doltliteFlushAndSerializeCatalog(sqlite3 *db,
                                             unsigned char **ppOut, int *pnOut);
@@ -50,7 +51,7 @@ static int sameBytes(const unsigned char *a, int na,
   return na==nb && (na==0 || memcmp(a, b, na)==0);
 }
 
-#define DBPATH "/tmp/test_catser_determinism.db"
+#define DBPATH DOLTLITE_TEST_TMPDIR "/test_catser_determinism.db"
 
 static void buildFixture(void){
   sqlite3 *db = 0;

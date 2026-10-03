@@ -7,6 +7,7 @@
 #include "sqliteInt.h"
 #include "chunk_store.h"
 #include "prolly_hash.h"
+#include "lib/test_tmpdir.h"
 
 static int g_initialized = 0;
 
@@ -43,7 +44,7 @@ size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size, size_t MaxSize,
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-  char path[] = "/tmp/dl-fuzz-XXXXXX";
+  char path[] = DOLTLITE_TEST_TMPDIR "/dl-fuzz-XXXXXX";
   unsigned char header = 0;
   sqlite3_vfs *pVfs;
   sqlite3_file *pFile = 0;

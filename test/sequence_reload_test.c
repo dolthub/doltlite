@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "sqlite3.h"
+#include "lib/test_tmpdir.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -45,7 +46,7 @@ static sqlite3 *open_db(const char *path){
 }
 
 static void test_seq_bump_visible(void){
-  const char *path = "/tmp/test_seq_bump.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_seq_bump.db";
   sqlite3 *b;
   pid_t pid;
   int status;
@@ -89,7 +90,7 @@ static void test_seq_bump_visible(void){
 }
 
 static void test_new_seq_visible(void){
-  const char *path = "/tmp/test_seq_new.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_seq_new.db";
   sqlite3 *b;
   pid_t pid;
   int status;
