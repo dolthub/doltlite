@@ -1195,4 +1195,13 @@ SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
 }
 
 #endif
+
+int doltliteChunkSourceActive(sqlite3 *db){
+  int i;
+  for(i=0; i<db->nDb; i++){
+    ChunkStore *cs = doltliteBtreeChunkStore(db->aDb[i].pBt);
+    if( cs && chunkStoreSourceEnabled(cs) ) return 1;
+  }
+  return 0;
+}
 #endif
