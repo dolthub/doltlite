@@ -521,6 +521,16 @@ Table *sqlite3LocateTableItem(
       p->fg.isTabFunc ? p->u1.pFuncArg : 0;
   pTab = sqlite3LocateTable(pParse, flags, p->zName, zDb);
   pParse->db->pDoltliteHistoricalArgs = pSavedHistoricalArgs;
+  if( pTab && IsVirtual(pTab)
+   && pTab->u.vtab.nArg>0
+   && pTab->u.vtab.azArg[0]
+   && sqlite3StrNICmp(pTab->u.vtab.azArg[0], "dolt_", 5)==0
+   && zDb && sqlite3StrICmp(zDb, "main")!=0
+  ){
+    sqlite3ErrorMsg(pParse, "%s is only available in the main database",
+                    pTab->zName);
+    return 0;
+  }
   return pTab;
 #else
   return sqlite3LocateTable(pParse, flags, p->zName, zDb);
