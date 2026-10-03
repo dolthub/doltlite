@@ -824,6 +824,9 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
+  /* The hard reset kept the branch's old staged catalog; record the pulled
+  ** head's, or the next load of this working set stages a revert of it. */
+  if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
