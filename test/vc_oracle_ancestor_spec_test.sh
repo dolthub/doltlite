@@ -146,6 +146,61 @@ oracle_both_error "bare_caret_1" "$MERGED" "^1"
 # Walks past the root; must error. Iterative so deep chains stay O(1) stack.
 oracle_both_error "head_many_carets" "$MERGED" "HEAD$(printf '^%.0s' $(seq 1 64))"
 
+# A VC call takes a lowercase or mixed-case head; the check prints REF_OK on
+# both engines only if the call ran and resolved the ref as HEAD.
+oracle_ref_consumer() {
+  local name="$1" setup="$2" check="$3"
+  local dir="$TMPROOT/consumer_$name"
+  local query="SELECT CASE WHEN $check THEN 'REF_OK' ELSE 'REF_WRONG' END AS result;"
+  mkdir -p "$dir/dl"
+  run_dl_query "$dir/dl/db" "$(printf '%s\n%s\n' "$setup" "$query")" "$dir/dl.out" "$dir/dl.err"
+  local dl_rc=$?
+  dolt_repo_setup "$dir/dt" "$(vc_oracle_translate_for_dolt "$setup")"
+  run_dt_query "$dir/dt" "$query" "$dir/dt.out" "$dir/dt.err"
+  if [ "$dl_rc" -eq 0 ] && grep -q '^REF_OK$' "$dir/dl.out" \
+     && grep -q 'REF_OK' "$dir/dt.out"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (dl_rc=$dl_rc)"
+    echo "    doltlite: $(cat "$dir/dl.out" "$dir/dl.err" 2>/dev/null)"
+    echo "    dolt:     $(cat "$dir/dt.out" "$dir/dt/.setup.err" 2>/dev/null)"
+  fi
+}
+
+echo ""
+echo "--- head in any case resolves as HEAD in every VC call ---"
+
+oracle_ref_consumer "branch_lower_head" "$MERGED
+SELECT dolt_branch('x', 'head~1');" \
+  "dolt_hashof('x') = dolt_hashof('main_premerge')"
+oracle_ref_consumer "tag_mixed_head" "$MERGED
+SELECT dolt_tag('tx', 'HeAd');" \
+  "dolt_hashof('tx') = dolt_hashof('main')"
+oracle_ref_consumer "checkout_b_lower_head" "$MERGED
+SELECT dolt_checkout('-b', 'cx', 'head~1');" \
+  "dolt_hashof('cx') = dolt_hashof('main_premerge')"
+oracle_ref_consumer "reset_hard_lower_head" "$MERGED
+SELECT dolt_reset('--hard', 'head~1');" \
+  "dolt_hashof('main') = dolt_hashof('main_premerge')"
+oracle_ref_consumer "revert_lower_head" "$MERGED
+SELECT dolt_reset('--hard', 'main_premerge');
+SELECT dolt_revert('head');" \
+  "(SELECT count(*) FROM t WHERE id = 2) = 0"
+oracle_ref_consumer "log_lower_head" "$MERGED" \
+  "(SELECT count(*) FROM dolt_log('head~1')) = (SELECT count(*) FROM dolt_log('HEAD~1'))"
+oracle_ref_consumer "diff_stat_lower_head" "$MERGED" \
+  "(SELECT count(*) FROM dolt_diff_stat('head~1', 'head')) = 1"
+oracle_ref_consumer "diff_summary_lower_head" "$MERGED" \
+  "(SELECT count(*) FROM dolt_diff_summary('head~1', 'head')) = 1"
+oracle_ref_consumer "patch_lower_head" "$MERGED" \
+  "(SELECT count(*) FROM dolt_patch('head~1', 'head')) = 1"
+oracle_ref_consumer "schema_diff_lower_head" "$MERGED
+CREATE TABLE u(a INT PRIMARY KEY);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add u');" \
+  "(SELECT count(*) FROM dolt_schema_diff('head~1', 'head')) = 1"
+
 echo ""
 echo "--- F4: LCA must be deterministic on criss-cross merge ---"
 
