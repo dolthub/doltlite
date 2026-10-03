@@ -194,6 +194,150 @@ def sync_vc_result(doltlite, db_path, branch, model):
         "committed": dict(committed),
     }
 
+def run_script(doltlite, db_path, sql, label, timeout=30):
+    """Run without raising: multi-statement VC scripts keep going after an
+    error, so the end state, not the exit code, says what happened."""
+    if os.environ.get("DOLTLITE_VC_STATEFUL_TRACE") == "1":
+        print("TRACE %s db=%s sql=%r" % (label, db_path, sql), file=sys.stderr, flush=True)
+    p = subprocess.run(
+        [doltlite, db_path],
+        input=sql,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+    return p.returncode, p.stdout.strip() + "\n" + p.stderr.strip()
+
+
+def three_way(base, ours, theirs):
+    """Dolt's cell-wise three-way merge of kv rows. Returns (rows, conflict)."""
+    merged = {}
+    conflict = False
+    for key in set(base) | set(ours) | set(theirs):
+        b, o, t = base.get(key), ours.get(key), theirs.get(key)
+        if o == t:
+            r = o
+        elif o == b:
+            r = t
+        elif t == b:
+            r = o
+        elif b is None or o is None or t is None:
+            conflict = True
+            r = o
+        else:
+            cells = []
+            for i in range(len(o)):
+                if o[i] == t[i] or t[i] == b[i]:
+                    cells.append(o[i])
+                elif o[i] == b[i]:
+                    cells.append(t[i])
+                else:
+                    conflict = True
+                    cells.append(o[i])
+            r = tuple(cells)
+        if r is not None:
+            merged[key] = r
+    return merged, conflict
+
+
+def query_staged_rows(doltlite, db_path, branch):
+    sql = (
+        ".mode list\n"
+        ".separator |\n"
+        "SELECT id, v, n FROM dolt_at_kv('STAGED') ORDER BY id;\n"
+    )
+    out = run_sql(doltlite, db_for_branch(db_path, branch), sql, "query_staged_rows")
+    rows = {}
+    if not out:
+        return rows
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) != 3:
+            raise RuntimeError("unexpected staged row output: %r" % line)
+        rows[int(parts[0])] = (parts[1], int(parts[2]))
+    return rows
+
+
+def kv_state(doltlite, db_path, branch):
+    return {
+        "working": query_rows(doltlite, db_path, branch),
+        "staged": query_staged_rows(doltlite, db_path, branch),
+        "committed": query_committed_rows(doltlite, db_path, branch),
+    }
+
+
+def state_of(working, staged, committed):
+    return {
+        "working": dict(working),
+        "staged": dict(staged),
+        "committed": dict(committed),
+    }
+
+
+def clean_state(rows):
+    return state_of(rows, rows, rows)
+
+
+def refused(output, needles):
+    return any(needle in output for needle in needles)
+
+
+def expect_one_of(doltlite, db_path, branch, model, outcomes, label, output):
+    """The engine's kv state must be exactly one predicted outcome. A VC op
+    that silently did nothing, or did something else, matches none."""
+    actual = kv_state(doltlite, db_path, branch)
+    for name, state in outcomes:
+        if actual == state:
+            model[branch] = state
+            return name
+    raise AssertionError(
+        "%s on %s matched no predicted outcome\npredicted=%r\nactual=%r\noutput:\n%s"
+        % (label, branch, outcomes, actual, output)
+    )
+
+
+def branch_hash(doltlite, db_path, branch, ref="HEAD"):
+    return query_scalar(
+        doltlite, db_path, branch, "SELECT dolt_hashof(%s);" % sql_quote(ref),
+        "hashof_%s" % ref,
+    )
+
+
+def commit_rows(doltlite, db_path, commit):
+    """kv rows at a commit; the repository's seed commit predates kv."""
+    parents = query_scalar(
+        doltlite, db_path, "main",
+        "SELECT count(*) FROM dolt_commit_ancestors "
+        "WHERE commit_hash=%s AND parent_hash IS NOT NULL;"
+        % sql_quote(commit),
+        "commit_rows_parents",
+    )
+    if parents == "0":
+        return {}
+    return query_revision_rows(doltlite, db_path, commit)
+
+
+def merge_prediction(doltlite, db_path, ours_branch, ours_rows, theirs_ref,
+                     theirs_rows):
+    """kv after merging theirs_ref into ours_branch, whether it conflicts, and
+    whether it fast-forwards. The base rows are read back from history, which
+    the merge never writes."""
+    base_hash = query_scalar(
+        doltlite, db_path, ours_branch,
+        "SELECT coalesce(dolt_merge_base('HEAD', %s), '');" % sql_quote(theirs_ref),
+        "merge_base",
+    )
+    ours_hash = branch_hash(doltlite, db_path, ours_branch)
+    theirs_hash = branch_hash(doltlite, db_path, ours_branch, theirs_ref)
+    if base_hash == theirs_hash:
+        return dict(ours_rows), False, False
+    if base_hash == ours_hash:
+        return dict(theirs_rows), False, True
+    base = commit_rows(doltlite, db_path, base_hash) if base_hash else {}
+    merged, conflict = three_way(base, ours_rows, theirs_rows)
+    return merged, conflict, False
+
 
 def assert_rows(doltlite, db_path, branch, model):
     actual = query_rows(doltlite, db_path, branch)
@@ -209,6 +353,12 @@ def assert_rows(doltlite, db_path, branch, model):
         raise AssertionError(
             "HEAD model mismatch on %s\nexpected=%r\nactual=%r"
             % (branch, expected_committed, committed)
+        )
+    staged = query_staged_rows(doltlite, db_path, branch)
+    if staged != model[branch]["staged"]:
+        raise AssertionError(
+            "staged model mismatch on %s\nexpected=%r\nactual=%r"
+            % (branch, model[branch]["staged"], staged)
         )
 
 
@@ -291,9 +441,10 @@ def check_invariants(doltlite, db_path, branches, tags, model, rng):
         raise AssertionError("schema changed across reopen on %s" % branch)
 
     if rng.randrange(4) == 0:
-        out = query_scalar(doltlite, db_path, branch, "PRAGMA integrity_check;", "integrity")
-        if out != "ok":
-            raise AssertionError("integrity_check on %s returned %r" % (branch, out))
+        for each in branches:
+            out = query_scalar(doltlite, db_path, each, "PRAGMA integrity_check;", "integrity")
+            if out != "ok":
+                raise AssertionError("integrity_check on %s returned %r" % (each, out))
     if rng.randrange(4) == 0:
         assert_refs(doltlite, db_path, branches, tags)
     assert_related_consistent(doltlite, db_path, branch)
@@ -1315,6 +1466,40 @@ def wrap_vc_rollback(doltlite, db_path, branch, model):
     assert_rows(doltlite, db_path, branch, model)
 
 
+
+def rebase_prediction(doltlite, db_path, branch, upstream, upstream_rows):
+    """kv after replaying the branch's own non-merge commits, oldest first,
+    onto upstream, and whether any replay step conflicts. Each step is a
+    three-way merge from the commit's parent, so a later commit (a revert)
+    can remove rows the upstream already had."""
+    upstream_log = set(query_list(
+        doltlite, db_path, upstream, "SELECT commit_hash FROM dolt_log;",
+        "rebase_upstream_log"))
+    own = [h for h in query_list(
+        doltlite, db_path, branch, "SELECT commit_hash FROM dolt_log;",
+        "rebase_branch_log") if h not in upstream_log]
+    rows = dict(upstream_rows)
+    for commit in reversed(own):
+        parents = query_scalar(
+            doltlite, db_path, branch,
+            "SELECT count(*) FROM dolt_commit_ancestors "
+        "WHERE commit_hash=%s AND parent_hash IS NOT NULL;"
+            % sql_quote(commit),
+            "rebase_parents",
+        )
+        if parents != "1":
+            continue
+        parent = query_scalar(
+            doltlite, db_path, branch, "SELECT dolt_hashof(%s);"
+            % sql_quote(commit + "~1"), "rebase_parent")
+        rows, conflict = three_way(
+            commit_rows(doltlite, db_path, parent), rows,
+            commit_rows(doltlite, db_path, commit))
+        if conflict:
+            return rows, True
+    return rows, False
+
+
 def merge_branch(doltlite, db_path, branches, model, rng):
     if len(branches) < 2:
         return
@@ -1331,6 +1516,11 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         "merge_base",
     )
     base = set(schema_objects(doltlite, db_path, base_hash)) if base_hash else None
+    pre = state_of(**model[target])
+    head = model[target]["committed"]
+    merged, conflict, fast_forward = merge_prediction(
+        doltlite, db_path, target, head, source, model[source]["committed"])
+    source_tip = branch_hash(doltlite, db_path, source)
     quoted = sql_quote(source)
     kind = rng.randrange(6)
     if kind == 0:
@@ -1351,24 +1541,41 @@ def merge_branch(doltlite, db_path, branches, model, rng):
         )
     else:
         merge_sql = "SELECT dolt_merge('--abort');"
-    out = run_sql(
-        doltlite,
-        db_for_branch(db_path, target),
-        merge_sql,
+    rc, output = run_script(
+        doltlite, db_for_branch(db_path, target), merge_sql,
         "merge_%s_into_%s" % (source, target),
-        timeout=30,
-        allowed_errors=MERGE_ROLLED_BACK + (
-            "nothing to commit",
-            "no merge in progress",
-            "not currently merging",
-            "flags '--squash' and '--no-ff' cannot be used together",
-        ),
     )
-    sync_vc_result(doltlite, db_path, target, model)
-    if out is None:
+    outcomes = []
+    if kind == 5:
+        if rc == 0 or not refused(output, ("no merge in progress",
+                                           "not currently merging")):
+            raise AssertionError(
+                "--abort with no merge in progress on %s did not refuse:\n%s"
+                % (target, output))
+        outcomes.append(("unchanged", pre))
+    else:
+        if refused(output, MERGE_ROLLED_BACK):
+            outcomes.append(("refused", pre))
+        if not conflict:
+            if kind == 1 and fast_forward:
+                # Dolt stages a fast-forward squash; any other squash commits.
+                outcomes.append(("squashed", state_of(merged, merged, head)))
+            elif kind == 3:
+                outcomes.append(("aborted", clean_state(merged) if fast_forward else pre))
+            else:
+                outcomes.append(("merged", clean_state(merged)))
+    outcome = expect_one_of(doltlite, db_path, target, model, outcomes,
+                            "merge %s (kind %d)" % (source, kind), output)
+    if outcome in ("refused", "unchanged"):
         return
+    if outcome == "merged" and fast_forward and kind in (0, 4):
+        tip = branch_hash(doltlite, db_path, target)
+        if tip != source_tip:
+            raise AssertionError(
+                "fast-forward merge left %s at %s, not %s's tip %s\n%s"
+                % (target, tip, source, source_tip, output))
     after = set(schema_objects(doltlite, db_path, target))
-    if "--abort" in merge_sql:
+    if kind == 3 and not fast_forward:
         # --abort puts the target back. The other side's views stay there.
         if after != ours:
             raise AssertionError(
@@ -1376,7 +1583,7 @@ def merge_branch(doltlite, db_path, branches, model, rng):
                 % (target, sorted(ours), sorted(after))
             )
         return
-    if base is None:
+    if base is None or kind == 3:
         return
     # Three-way rules on entryless objects. Names are branch-scoped, so no
     # two sides ever define one name differently: an object on both sides
@@ -1399,25 +1606,44 @@ def cherry_pick_branch(doltlite, db_path, branches, model, rng, step):
     source = rng.choice([branch for branch in branches if branch != target])
     commit_branch(doltlite, db_path, target, model, step)
     commit_branch(doltlite, db_path, source, model, step)
-    pick = "SELECT dolt_cherry_pick(%s);" % sql_quote(source)
     if rng.randrange(4) == 0:
-        pick = "SELECT dolt_cherry_pick('--abort');\n" + pick
-    run_sql(
-        doltlite,
-        db_for_branch(db_path, target),
-        pick,
-        "cherry_pick_%s_onto_%s" % (source, target),
-        timeout=30,
-        allowed_errors=(
-            "conflict",
-            "nothing to commit",
-            "already exists",
-            "cherry-pick of",
-            "cherry-picking a merge commit",
-            "no cherry-pick in progress",
-        ) + MERGE_ROLLED_BACK,
+        rc, output = run_script(
+            doltlite, db_for_branch(db_path, target),
+            "SELECT dolt_cherry_pick('--abort');", "cherry_pick_abort_%s" % target)
+        if rc == 0 or "no cherry-pick in progress" not in output:
+            raise AssertionError(
+                "cherry-pick --abort with nothing in progress did not refuse:\n%s"
+                % output)
+        assert_rows(doltlite, db_path, target, model)
+    pre = state_of(**model[target])
+    head = model[target]["committed"]
+    parents = query_scalar(
+        doltlite, db_path, source,
+        "SELECT count(*) FROM dolt_commit_ancestors "
+        "WHERE commit_hash = dolt_hashof('HEAD') AND parent_hash IS NOT NULL;",
+        "cherry_pick_parents",
     )
-    sync_vc_result(doltlite, db_path, target, model)
+    outcomes = []
+    if parents == "1":
+        parent_rows = commit_rows(
+            doltlite, db_path, branch_hash(doltlite, db_path, source, "HEAD~1"))
+        merged, conflict = three_way(parent_rows, head, model[source]["committed"])
+        if not conflict:
+            outcomes.append(("picked", clean_state(merged)))
+    rc, output = run_script(
+        doltlite, db_for_branch(db_path, target),
+        "SELECT dolt_cherry_pick(%s);" % sql_quote(source),
+        "cherry_pick_%s_onto_%s" % (source, target),
+    )
+    if rc != 0 and refused(output, (
+            "nothing to commit",
+            "cherry-picking a merge commit",
+            "cherry-pick of",
+            "already exists",
+        ) + MERGE_ROLLED_BACK):
+        outcomes.append(("refused", pre))
+    expect_one_of(doltlite, db_path, target, model, outcomes,
+                  "cherry-pick %s" % source, output)
 
 
 def revert_branch(doltlite, db_path, branch, model, step):
@@ -1433,15 +1659,26 @@ def revert_branch(doltlite, db_path, branch, model, step):
     )
     if count < 3:
         return
-    run_sql(
-        doltlite,
-        db_for_branch(db_path, branch),
-        "SELECT dolt_revert('HEAD');",
-        "revert_%s" % branch,
-        timeout=30,
-        allowed_errors=("conflict", "nothing to commit"),
+    pre = state_of(**model[branch])
+    parents = query_scalar(
+        doltlite, db_path, branch,
+        "SELECT count(*) FROM dolt_commit_ancestors "
+        "WHERE commit_hash = dolt_hashof('HEAD') AND parent_hash IS NOT NULL;",
+        "revert_parents",
     )
-    sync_vc_result(doltlite, db_path, branch, model)
+    outcomes = []
+    if parents != "0":
+        # A merge commit reverts against its first parent, as in Dolt.
+        parent_rows = commit_rows(
+            doltlite, db_path, branch_hash(doltlite, db_path, branch, "HEAD~1"))
+        outcomes.append(("reverted", clean_state(parent_rows)))
+    rc, output = run_script(
+        doltlite, db_for_branch(db_path, branch), "SELECT dolt_revert('HEAD');",
+        "revert_%s" % branch,
+    )
+    if rc != 0 and refused(output, ("conflict", "nothing to commit", "merge commit")):
+        outcomes.append(("refused", pre))
+    expect_one_of(doltlite, db_path, branch, model, outcomes, "revert HEAD", output)
 
 
 def rebase_branch(doltlite, db_path, branches, model, rng, step):
@@ -1451,35 +1688,48 @@ def rebase_branch(doltlite, db_path, branches, model, rng, step):
     upstream = rng.choice([name for name in branches if name != branch])
     commit_branch(doltlite, db_path, branch, model, step)
     commit_branch(doltlite, db_path, upstream, model, step)
-    if rng.randrange(3) == 0:
-        rebase_sql = (
+    pre = state_of(**model[branch])
+    db = db_for_branch(db_path, branch)
+    if rng.randrange(3) != 0 and rng.randrange(2) == 0:
+        rc, output = run_script(doltlite, db, "SELECT dolt_rebase('--abort');",
+                                "rebase_abort_%s" % branch)
+        if rc == 0 or "no rebase in progress" not in output:
+            raise AssertionError(
+                "rebase --abort with nothing in progress did not refuse:\n%s" % output)
+        expect_one_of(doltlite, db_path, branch, model, [("unchanged", pre)],
+                      "rebase --abort", output)
+        return
+    # A replay step that conflicts restores the branch whole.
+    merged, conflict = rebase_prediction(
+        doltlite, db_path, branch, upstream, model[upstream]["committed"])
+    interactive = rng.randrange(3) == 0
+    if interactive:
+        rc, output = run_script(
+            doltlite, db,
             "SELECT dolt_rebase('-i', %s);\n"
-            "UPDATE dolt_rebase SET action='pick', "
-            "commit_message='fuzz plan';\n"
-            "SELECT dolt_rebase('--continue');\n"
-            "SELECT dolt_rebase('--abort');"
-            % sql_quote(upstream)
+            "UPDATE dolt_rebase SET action='pick', commit_message='fuzz plan';\n"
+            "SELECT dolt_rebase('--continue');" % sql_quote(upstream),
+            "rebase_i_%s_onto_%s" % (branch, upstream),
         )
-    elif rng.randrange(2) == 0:
-        rebase_sql = "SELECT dolt_rebase('--abort');"
+        if "Successfully rebased" not in output:
+            run_script(doltlite, db, "SELECT dolt_rebase('--abort');",
+                       "rebase_i_abort_%s" % branch)
     else:
-        rebase_sql = "SELECT dolt_rebase(%s);" % sql_quote(upstream)
-    run_sql(
-        doltlite,
-        db_for_branch(db_path, branch),
-        rebase_sql,
-        "rebase_%s_onto_%s" % (branch, upstream),
-        timeout=30,
-        allowed_errors=(
-            "conflict",
+        rc, output = run_script(
+            doltlite, db, "SELECT dolt_rebase(%s);" % sql_quote(upstream),
+            "rebase_%s_onto_%s" % (branch, upstream),
+        )
+    outcomes = []
+    if "Successfully rebased" in output and not conflict:
+        outcomes.append(("rebased", clean_state(merged)))
+    if refused(output, (
             "rebase aborted",
             "didn't identify any commits",
-            "no rebase in progress",
             "no such table",
-            "you are in the middle of a rebase",
-        ) + MERGE_ROLLED_BACK,
-    )
-    sync_vc_result(doltlite, db_path, branch, model)
+        ) + MERGE_ROLLED_BACK):
+        outcomes.append(("refused", pre))
+    expect_one_of(doltlite, db_path, branch, model, outcomes,
+                  "rebase onto %s" % upstream, output)
 
 
 def commit_flagged(doltlite, db_path, branch, model, step):
@@ -1544,33 +1794,28 @@ def reset_to_ref(doltlite, db_path, branch, model, rng):
         reset_sql = "SELECT dolt_reset('--soft', %s);" % quoted
     else:
         reset_sql = "SELECT dolt_reset('--soft','--hard', %s);" % quoted
-    out = run_sql(
-        doltlite,
-        db_for_branch(db_path, branch),
-        reset_sql,
+    pre = state_of(**model[branch])
+    if target == "HEAD":
+        ref_rows = dict(pre["committed"])
+    else:
+        ref_rows = commit_rows(
+            doltlite, db_path, branch_hash(doltlite, db_path, branch, target))
+    rc, output = run_script(
+        doltlite, db_for_branch(db_path, branch), reset_sql,
         "reset_ref_%s" % branch,
-        allowed_errors=(
-            "mutually exclusive",
-            "no such",
-            "invalid",
-            "not found",
-            "ambiguous",
-        ),
     )
-    # A refused reset changes nothing. --soft moves HEAD only: the index
-    # stays, and unstaged working rows are not staged. Treating working as
-    # staged makes the next commit -m look like it dropped those rows.
-    if out is None:
-        return
-    if kind == 0:
-        rows = query_rows(doltlite, db_path, branch)
-        committed = query_committed_rows(doltlite, db_path, branch)
-        model[branch]["working"] = dict(rows)
-        model[branch]["committed"] = dict(committed)
-        model[branch]["staged"] = dict(committed)
-        return
-    model[branch]["committed"] = query_committed_rows(doltlite, db_path, branch)
-
+    if kind == 2:
+        if rc == 0 or "mutually exclusive" not in output:
+            raise AssertionError(
+                "reset with both --soft and --hard did not refuse:\n%s" % output)
+        outcomes = [("refused", pre)]
+    elif kind == 0:
+        outcomes = [("hard", clean_state(ref_rows))]
+    else:
+        # --soft moves HEAD only: the index and the working rows stay.
+        outcomes = [("soft", state_of(pre["working"], pre["staged"], ref_rows))]
+    expect_one_of(doltlite, db_path, branch, model, outcomes,
+                  "reset to %s (kind %d)" % (target, kind), output)
 
 def readonly_reset(doltlite, db_path, branch, model):
     """A refused reset on a query_only connection must not stick for the next writer."""
@@ -1808,7 +2053,7 @@ def remote_operation(doltlite, db_path, branches, model, pushed, rng, step, op):
         branch = rng.choice(branches)
     commit_branch(doltlite, db_path, branch, model, step)
     if op == "push":
-        run_sql(
+        out = run_sql(
             doltlite,
             db_for_branch(db_path, branch),
             "SELECT dolt_push('origin',%s);" % sql_quote(branch),
@@ -1816,25 +2061,97 @@ def remote_operation(doltlite, db_path, branches, model, pushed, rng, step, op):
             timeout=30,
             allowed_errors=("non-fast-forward", "not a fast-forward"),
         )
-        pushed.add(branch)
+        if out is not None:
+            pushed[branch] = (
+                branch_hash(doltlite, db_path, branch),
+                dict(model[branch]["committed"]),
+            )
+        else:
+            pushed.setdefault(branch, None)
     elif pushed:
         remote_branch = branch if op == "pull" else rng.choice(sorted(pushed))
+        sql = "SELECT dolt_%s('origin',%s);" % (op, sql_quote(remote_branch))
+        label = "%s_%s" % (op, remote_branch)
+        if op != "pull" or pushed.get(branch) is None:
+            run_sql(
+                doltlite,
+                db_for_branch(db_path, branch),
+                sql,
+                label,
+                timeout=30,
+                allowed_errors=(
+                    "conflict",
+                    "diverged",
+                    "non-fast-forward",
+                )
+                + MERGE_ROLLED_BACK,
+            )
+            if op == "pull":
+                # No push of ours to this branch succeeded (the setup's
+                # push of main is not modelled); take the result as given.
+                sync_vc_result(doltlite, db_path, branch, model)
+            return
+        # Nothing but this repository pushes, so the remote branch is what
+        # we last pushed there, and pull merges it.
+        remote_hash, remote_rows = pushed[branch]
+        # Fetch first: a reset and GC may have dropped the pushed commit
+        # locally. Fetching never touches the working set.
         run_sql(
             doltlite,
             db_for_branch(db_path, branch),
-            "SELECT dolt_%s('origin',%s);" % (op, sql_quote(remote_branch)),
-            "%s_%s" % (op, remote_branch),
+            "SELECT dolt_fetch('origin',%s);" % sql_quote(branch),
+            "pull_fetch_%s" % branch,
             timeout=30,
-            allowed_errors=(
-                "conflict",
-                "diverged",
-                "non-fast-forward",
-            )
-            + MERGE_ROLLED_BACK,
         )
-        if op == "pull":
-            sync_vc_result(doltlite, db_path, branch, model)
-
+        tracking = "origin/" + branch
+        fetched = branch_hash(doltlite, db_path, branch, tracking)
+        if fetched != remote_hash:
+            raise AssertionError(
+                "fetched %s is %s, but the last push there was %s"
+                % (tracking, fetched, remote_hash))
+        # The branch only pulls back what it pushed, so half the time step it
+        # behind the pushed commit to give the pull a fast-forward to make.
+        if rng.randrange(2) == 0 and query_scalar(
+                doltlite, db_path, branch,
+                "SELECT count(*) FROM dolt_commit_ancestors "
+                "WHERE commit_hash=%s AND parent_hash IS NOT NULL;"
+                % sql_quote(remote_hash),
+                "pull_rewind_parents") != "0":
+            behind = branch_hash(doltlite, db_path, branch, tracking + "~1")
+        else:
+            behind = None
+        # The seed commit predates kv, so never rewind onto it.
+        if behind and query_scalar(
+                doltlite, db_path, branch,
+                "SELECT count(*) FROM dolt_commit_ancestors "
+                "WHERE commit_hash=%s AND parent_hash IS NOT NULL;"
+                % sql_quote(behind),
+                "pull_rewind_root") != "0":
+            rc, output = run_script(
+                doltlite, db_for_branch(db_path, branch),
+                "SELECT dolt_reset('--hard',%s);" % sql_quote(behind),
+                "pull_rewind_%s" % branch)
+            expect_one_of(doltlite, db_path, branch, model,
+                          [("rewound", clean_state(commit_rows(doltlite, db_path, behind)))],
+                          "rewind before pull", output)
+        pre = state_of(**model[branch])
+        merged, conflict, fast_forward = merge_prediction(
+            doltlite, db_path, branch, pre["committed"], tracking, remote_rows)
+        rc, output = run_script(doltlite, db_for_branch(db_path, branch), sql, label)
+        outcomes = []
+        if rc != 0 and refused(output, ("diverged", "non-fast-forward") + MERGE_ROLLED_BACK):
+            outcomes.append(("refused", pre))
+        if not conflict:
+            outcomes.append(("pulled", clean_state(merged)))
+        outcome = expect_one_of(doltlite, db_path, branch, model, outcomes, "pull", output)
+        # Rows alone cannot tell a fast-forward from a no-op when the pushed
+        # commit left kv alone; the tip can.
+        if outcome == "pulled" and fast_forward:
+            tip = branch_hash(doltlite, db_path, branch)
+            if tip != remote_hash:
+                raise AssertionError(
+                    "fast-forward pull left %s at %s, not the pushed %s\n%s"
+                    % (branch, tip, remote_hash, output))
 
 def reset_remote_config(doltlite, db_path, remote_path):
     run_sql(
@@ -2223,7 +2540,7 @@ def main():
     step = 0
     branches = ["main"]
     tags = []
-    pushed = {"main"}
+    pushed = {"main": None}
     model = {"main": new_branch_state({0: ("base", 0)})}
     next_branch = 1
     next_tag = 1
