@@ -687,14 +687,14 @@ static int mergePass1RelayoutToMergedSchema(
   if( rc!=SQLITE_OK ) return rc;
 
   rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pOtherRoot,
-                                   flags, otherFlags, zAncSql,
-                                   zMergedSql, zOtherSql,
-                                   bFillSharedDefaults, 0, pAncRoot, ancFlags, pOtherOut);
+                                   flags, otherFlags, zAncSql, zMergedSql, zOtherSql,
+                                   bFillSharedDefaults, 0, pAncRoot, ancFlags,
+                                   pOtherOut, c->pzErrMsg);
   if( rc!=SQLITE_OK ) return rc;
   rc = normalizeSideToMergedLayout(c->db, zName, pMergedRoot, pAncRoot,
-                                   flags, ancFlags, zAncSql,
-                                   zMergedSql, zAncSql,
-                                   bFillSharedDefaults, zOtherSql, pAncRoot, ancFlags, pAncOut);
+                                   flags, ancFlags, zAncSql, zMergedSql, zAncSql,
+                                   bFillSharedDefaults, zOtherSql, pAncRoot, ancFlags,
+                                   pAncOut, c->pzErrMsg);
   if( rc!=SQLITE_OK ) return rc;
   *pbRelaid = 1;
   return SQLITE_OK;

@@ -140,23 +140,24 @@ int mergeRowAddedDefaults(
   if( rc!=SQLITE_OK ) goto done;
   rc = normalizeSideToMergedLayout(c->db, zName, &pOurs->root, &pOurs->root,
       pOurs->flags, pOurs->flags, zSql, zSql, zSql,
-      1, 0, 0, pAncestorTable->flags, pOurOut);
+      1, 0, 0, pAncestorTable->flags, pOurOut, c->pzErrMsg);
   if( rc==SQLITE_OK ){
     rc = normalizeSideToMergedLayout(c->db, zName, &pOurs->root, pTheirsRoot,
         pOurs->flags, pOurs->flags, zSql, zSql, zSql,
-        1, 0, 0, pAncestorTable->flags, pTheirOut);
+        1, 0, 0, pAncestorTable->flags, pTheirOut, c->pzErrMsg);
   }
   if( rc==SQLITE_OK ){
     rc = normalizeSideToMergedLayout(c->db, zName,
         &pOurs->root, &pAncestorTable->root,
         pOurs->flags, pAncestorTable->flags,
         pAncestor->zSql, pSelected->zSql, pAncestor->zSql,
-        1, zShared, &pAncestorTable->root, pAncestorTable->flags, &ancestor);
+        1, zShared, &pAncestorTable->root, pAncestorTable->flags,
+        &ancestor, c->pzErrMsg);
   }
   if( rc==SQLITE_OK ){
     rc = normalizeSideToMergedLayout(c->db, zName, &pOurs->root, &ancestor,
         pOurs->flags, pOurs->flags, pAncestor->zSql, zSql, pSelected->zSql,
-        1, zShared, 0, pAncestorTable->flags, pAncOut);
+        1, zShared, 0, pAncestorTable->flags, pAncOut, c->pzErrMsg);
   }
 done:
   sqlite3_finalize(stmt);

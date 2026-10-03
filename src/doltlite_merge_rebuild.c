@@ -984,7 +984,8 @@ int normalizeSideToMergedLayout(
   const char *zSharedSql,
   const ProllyHash *pAncRoot,
   u8 ancFlags,
-  ProllyHash *pOutRoot
+  ProllyHash *pOutRoot,
+  char **pzErrMsg
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *cache = doltliteGetCache(db);
@@ -1068,10 +1069,10 @@ int normalizeSideToMergedLayout(
   }
   if( pAncRoot ){
     rc = mergeMapUnmatchedColumns(db, pAncRoot, pOursRoot, ancFlags, flags,
-                                  zAncSql, zOursSql, zTable, aOursAnc, nOurs);
+                                  zAncSql, zOursSql, zTable, aOursAnc, nOurs, pzErrMsg);
     if( rc==SQLITE_OK ){
       rc = mergeMapUnmatchedColumns(db, pAncRoot, pTheirsRoot, ancFlags, srcFlags,
-                                    zAncSql, zTheirsSql, zTable, aTheirsAnc, nTheirs);
+                                    zAncSql, zTheirsSql, zTable, aTheirsAnc, nTheirs, pzErrMsg);
     }
     if( rc!=SQLITE_OK ) goto done;
   }
