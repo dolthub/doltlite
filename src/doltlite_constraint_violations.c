@@ -771,6 +771,10 @@ static sqlite3_module cvRowModule = {
   0,0,0,0,0,0,0,0,0,0,0
 };
 
+const sqlite3_module *doltliteConstraintViolationTableModule(void){
+  return &cvRowModule;
+}
+
 int doltliteRefreshConstraintViolationTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_constraint_violations_", &cvRowModule);
 }

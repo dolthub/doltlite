@@ -886,6 +886,12 @@ static void doltliteCommitFunc(
   skipEmpty = opts.skipEmpty;
   force = opts.force;
 
+  rc = doltliteRefreshAutocommitWorkingState(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
   if( amend ){
     u8 isMerging = 0;
     u8 isRebasing = 0;
@@ -1085,6 +1091,21 @@ static void doltliteCommitFunc(
   rc = doltliteCommitCreateObject(db, context, &opts, &catalogHash, &commitHash);
   if( rc!=SQLITE_OK ) return;
 
+  rc = doltliteForEachUserTableInCatalog(db, "dolt_workspace_",
+      doltliteWorkspaceTableModule(), &catalogHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteForEachUserTableInCatalog(db, "dolt_blame_",
+        doltliteBlameTableModule(), &catalogHash);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteForEachUserTableInCatalog(db, "dolt_constraint_violations_",
+        doltliteConstraintViolationTableModule(), &catalogHash);
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
   doltliteGetSessionHead(db, &sessionHeadBeforeLock);
   rc = doltliteSaveTxnState(db, &mutationState);
   if( rc!=SQLITE_OK ){
@@ -1160,22 +1181,7 @@ static void doltliteCommitFunc(
 
   doltliteHashToHex(&commitHash, hexBuf);
 
-  rc = doltliteRegisterWorkspaceTables(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
   doltliteHistoricalModulesReset(db);
-  rc = doltliteRegisterBlameTables(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
-  rc = doltliteRefreshConstraintViolationTables(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
 
   sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
 }

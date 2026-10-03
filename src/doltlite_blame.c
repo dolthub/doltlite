@@ -1144,6 +1144,10 @@ static sqlite3_module doltliteBlameModule = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
+const sqlite3_module *doltliteBlameTableModule(void){
+  return &doltliteBlameModule;
+}
+
 int doltliteRegisterBlameTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_blame_", &doltliteBlameModule);
 }
