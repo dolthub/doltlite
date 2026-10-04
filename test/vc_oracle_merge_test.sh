@@ -2075,9 +2075,13 @@ SELECT dolt_merge('feat');
 " "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id))" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_schema_conflicts), '|', (SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-VC_ORACLE_EXPECTATION=allow-error oracle_same_session "dual_add_table_same_pk_is_row_conflict" "
-CREATE TABLE base(id INTEGER PRIMARY KEY);
-SELECT dolt_commit('-Am', 'init');
+for ancestor in committed seed; do
+  base="CREATE TABLE base(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'init');"
+  name=dual_add_table_same_pk_is_row_conflict
+  if [ "$ancestor" = seed ]; then base=""; name="${name}_from_seed"; fi
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "$name" "
+$base
 SELECT dolt_branch('feat');
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'main');
@@ -2091,6 +2095,21 @@ BEGIN;
 SELECT dolt_merge('feat');
 " "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_schema_conflicts) || char(9) || (SELECT count(*) FROM dolt_conflicts) || char(9) || (SELECT coalesce(sum(num_conflicts), 0) FROM dolt_conflicts) || char(9) || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id));" \
 "SELECT CONCAT('Q', char(9), (SELECT COUNT(*) FROM dolt_schema_conflicts), char(9), (SELECT COUNT(*) FROM dolt_conflicts), char(9), (SELECT COALESCE(SUM(num_conflicts), 0) FROM dolt_conflicts), char(9), (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t));"
+done
+
+oracle_same_session "dual_add_table_disjoint_rows_from_seed" "
+SELECT dolt_branch('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main');
+SELECT dolt_commit('-Am', 'main adds t');
+SELECT dolt_checkout('feat');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (2, 'feat');
+SELECT dolt_commit('-Am', 'feat adds t');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts) || char(9) || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id));" \
+"SELECT CONCAT('Q', char(9), (SELECT COUNT(*) FROM dolt_conflicts), char(9), (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t));"
 
 vc_oracle_error "dual_add_table_different_schema_refused" "
 CREATE TABLE base(id INTEGER PRIMARY KEY);

@@ -58,6 +58,7 @@ doltlite_merge_renamed_index
 doltlite_merge_pk_autoindex
 doltlite_merge_trigger_reference
 doltlite_merge_table_name_conflict
+doltlite_merge_seed
 doltlite_merge_shared_columns
 doltlite_merge_added_unique
 doltlite_merge_ignored

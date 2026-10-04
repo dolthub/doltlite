@@ -1,0 +1,102 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach layout {rowid without-rowid} {
+  foreach rows {conflict disjoint identical} {
+    reset_db
+    set suffix {}
+    if {$layout eq "without-rowid"} {set suffix { WITHOUT ROWID}}
+    set seed [execsql {SELECT dolt_hashof('HEAD')}]
+    execsql {SELECT dolt_branch('feat')}
+    execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)$suffix"
+    execsql {
+      CREATE INDEX ix ON t(v);
+      INSERT INTO t VALUES(1,'main'),(3,'ours');
+      SELECT dolt_commit('-Am','main adds t');
+    }
+    set main [execsql {SELECT dolt_hashof('HEAD')}]
+    set name seed-$layout-$rows
+    do_execsql_test $name-checkout {
+      SELECT dolt_checkout('feat');
+      SELECT count(*) FROM sqlite_master WHERE name IN ('t','ix');
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    } {0 0 0 ok}
+    do_test $name-head {execsql {SELECT dolt_hashof('HEAD')}} $seed
+    execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)$suffix"
+    execsql {CREATE INDEX ix ON t(v)}
+    if {$rows eq "conflict"} {
+      execsql {INSERT INTO t VALUES(1,'feat'),(2,'theirs')}
+      set expected {1 main 2 theirs 3 ours}
+    } elseif {$rows eq "disjoint"} {
+      execsql {INSERT INTO t VALUES(2,'theirs')}
+      set expected {1 main 2 theirs 3 ours}
+    } else {
+      execsql {INSERT INTO t VALUES(1,'main'),(3,'ours')}
+      set expected {1 main 3 ours}
+    }
+    execsql {
+      SELECT dolt_commit('-Am','feat adds t');
+      SELECT dolt_checkout('main');
+      BEGIN;
+    }
+    if {$rows eq "conflict"} {
+      do_test $name-conflict {
+        set result [catchsql {SELECT dolt_merge('feat')}]
+        list [lindex $result 0] \
+             [string match {*Merge has 1 conflict(s)*} [lindex $result 1]]
+      } {1 1}
+      do_execsql_test $name-conflict-count {
+        SELECT count(*) FROM dolt_schema_conflicts;
+        SELECT count(*),sum(num_conflicts) FROM dolt_conflicts;
+      } {0 1 1}
+      do_execsql_test $name-rows {SELECT id,v FROM t ORDER BY id} $expected
+      do_test $name-commit-refused {
+        lindex [catchsql COMMIT] 0
+      } 1
+      do_execsql_test $name-commit-refusal-preserved {
+        SELECT id,v FROM t ORDER BY id;
+        SELECT count(*) FROM dolt_conflicts;
+      } {1 main 3 ours 0}
+      do_test $name-head-preserved {
+        execsql {SELECT dolt_hashof('HEAD')}
+      } $main
+      execsql BEGIN
+      catchsql {SELECT dolt_merge('feat')}
+      do_execsql_test $name-rollback {
+        ROLLBACK;
+        SELECT id,v FROM t ORDER BY id;
+        SELECT count(*) FROM dolt_conflicts;
+      } {1 main 3 ours 0}
+      do_test $name-autocommit-refused {
+        lindex [catchsql {SELECT dolt_merge('feat')}] 0
+      } 1
+      do_execsql_test $name-autocommit-preserved {
+        SELECT id,v FROM t ORDER BY id;
+        SELECT count(*) FROM dolt_conflicts;
+      } {1 main 3 ours 0}
+      execsql BEGIN
+      catchsql {SELECT dolt_merge('feat')}
+      execsql {SELECT dolt_conflicts_resolve('t','--ours')}
+      execsql {SELECT dolt_commit('-Am','resolve')}
+    } else {
+      execsql {SELECT dolt_merge('feat')}
+    }
+    do_execsql_test $name-merged {SELECT id,v FROM t ORDER BY id} $expected
+    do_execsql_test $name-index {
+      SELECT id FROM t INDEXED BY ix WHERE v='ours';
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    } {3 0 0 ok}
+    db close
+    sqlite3 db [file normalize test.db]
+    do_execsql_test $name-reopen {SELECT id,v FROM t ORDER BY id} $expected
+    do_execsql_test $name-reopen-index {
+      SELECT id FROM t INDEXED BY ix WHERE v='main';
+      PRAGMA integrity_check;
+    } {1 ok}
+  }
+}
+
+finish_test

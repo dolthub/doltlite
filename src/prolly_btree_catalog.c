@@ -2611,6 +2611,24 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
   return z ? sqlite3_mprintf("%s", z) : 0;
 }
 
+int doltliteMaterializeEmptyCatalog(sqlite3 *db, ProllyHash *pCatHash){
+  struct TableEntry master;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+
+  if( !prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
+  memset(&master, 0, sizeof(master));
+  master.iTable = 1;
+  master.flags = PROLLY_NODE_INTKEY;
+  rc = doltliteSerializeCatalogEntries(db, &master, 1, &pData, &nData);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(doltliteGetChunkStore(db), pData, nData, pCatHash);
+  }
+  sqlite3_free(pData);
+  return rc;
+}
+
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   BtShared *pBt = doltliteGetBtShared(db);
   Btree *pBtree;
