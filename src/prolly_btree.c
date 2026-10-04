@@ -2382,27 +2382,6 @@ static int integrityCheckRepoGraph(Btree *p, IntegrityCheckCtx *pCtx){
   return rc;
 }
 
-int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
-  IntegrityCheckCtx ctx;
-  int nErr = 0;
-  int rc;
-
-  if( pnErr ) *pnErr = 0;
-  if( !p || !p->pBt || p->pOrigBtree ) return SQLITE_OK;
-  memset(&ctx, 0, sizeof(ctx));
-  ctx.pBt = p->pBt;
-  ctx.mxErr = mxErr;
-  ctx.pnErr = &nErr;
-  rc = prollyHashSetInit(&ctx.seen, 256);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = integrityCheckRepoGraph(p, &ctx);
-  sqlite3_free(ctx.aPending);
-  prollyHashSetFree(&ctx.seen);
-  if( pnErr ) *pnErr = nErr;
-  return rc;
-}
-
-
 int sqlite3BtreeSetVersion(Btree *p, int iVersion){
   if( p->inTrans!=TRANS_WRITE ){
     int rc = sqlite3BtreeBeginTrans(p, 2, 0);
