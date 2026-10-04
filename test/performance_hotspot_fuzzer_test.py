@@ -298,6 +298,39 @@ class DiscoveryTests(unittest.TestCase):
             report = json.loads((output/"results.json").read_text())
             self.assertEqual(report["status"], "error")
 
+    def test_retired_seeds_confirm_against_their_own_baseline(self):
+        import performance_hotspot_seeds as seeds
+        retired = fuzzer.Case("generated_1", "SELECT 1;")
+        fresh = fuzzer.Case("generated_2", "SELECT 2;")
+        calls = []
+        def measure(runner, binaries, databases, p, case, runs, threshold, min_ms, setup=None, min_query_ms=0):
+            calls.append((case.name, threshold, min_query_ms))
+            return {"pairs": [], "ratio": 1.0, "confirmed": False, "result": "1", "repeats": 1,
+                    "doltlite_ms": 1.0, "sqlite_ms": 1.0}
+        specs = [(0, self.profile, [retired], "", "retired"), (1, self.profile, [fresh], "", "fresh")]
+        with tempfile.TemporaryDirectory() as tmp:
+            baselines = Path(tmp)/"baselines.json"
+            baselines.write_text(json.dumps({seeds.seed_key(self.profile, retired): 2.4}))
+            output = Path(tmp)/"results"
+            with patch.object(fuzzer.shutil, "copyfile"), patch.object(fuzzer.Runner, "run", return_value="ok"), \
+                 patch.object(fuzzer, "binary_info", return_value={}), \
+                 patch.object(fuzzer, "probe_counter_scale", return_value=None), \
+                 patch.object(fuzzer.Search, "specs", return_value=iter(specs)), \
+                 patch.object(seeds, "BASELINES", baselines), \
+                 patch.object(fuzzer, "measure_case", side_effect=measure):
+                rc = fuzzer.main(["--doltlite", "unused", "--sqlite", "unused", "--output", str(output),
+                                  "--search", "--nightly-seeds"])
+            self.assertEqual(rc, 0)
+            report = json.loads((output/"results.json").read_text())
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0], "generated_1")
+        self.assertAlmostEqual(calls[0][1], 3.6)
+        self.assertEqual(calls[0][2], 0)
+        self.assertEqual(calls[1], ("generated_2", 3.0, 10))
+        self.assertEqual([case["origin"] for case in report["cases"]], ["retired", "fresh"])
+        self.assertAlmostEqual(report["cases"][0]["threshold"], 3.6)
+        self.assertNotIn("threshold", report["cases"][1])
+
     def test_nightly_is_independent_and_preserves_reproducers(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root/".github/workflows/nightly-hotspots.yml").read_text()

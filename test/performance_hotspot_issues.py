@@ -68,8 +68,10 @@ def issue_body(report, record, bundle, run_url, previous=None):
              f"Confirmed in all {len(pairs)} fresh-connection confirmation pairs; results match stock SQLite.",
              f"Median paired slowdown: **{record['ratio']:.2f}×**. "
              f"DoltLite: {record['doltlite_ms']:.3f} ms/query; SQLite: {record['sqlite_ms']:.3f} ms/query.",
-             f"SQLite timings use a {report.get('min_query_ms', 0)} ms per-query and {report['min_ms']} ms "
-             "per-batch floor for the 3× confirmation test.",
+             (f"Retired nightly seed: confirmed at **{record['threshold']:.2f}×**, 1.5× its recorded "
+              f"stock ratio (minimum 1.5×), with a {report['min_ms']} ms per-batch floor." if 'threshold' in record else
+              f"SQLite timings use a {report.get('min_query_ms', 0)} ms per-query and {report['min_ms']} ms "
+              "per-batch floor for the 3× confirmation test."),
              f"Storage: **{'in-memory' if bundle['profile'].get('memory', False) else 'file-backed'}**.",
              'Autocommit writes are excluded. Setup, warm-up, and rollback are untimed.', '',
              f"Run: {run_url}", f"Engine/generator commit: `{report['source_commit']}`", '',
@@ -91,7 +93,8 @@ def issue_body(report, record, bundle, run_url, previous=None):
               '`test/performance-hotspot-corpus/` using `performance_hotspot_issues.py promote` '
               'and keep this issue open. Add `known-performance-hotspot` only when the gap is '
               'accepted as won\'t-fix. Fixed cases move their benchmark to the nightly seeds and '
-              'close as completed. '
+              'close as completed; record the retired seed\'s nightly stock ratio in '
+              '`test/performance_hotspot_seed_baselines.json`. '
               'Keep the fingerprint marker when editing or grouping findings.']
     if record.get('family'):
         lines += ['', f"Parameter-family ID: `{record['family']}`. To explicitly accept other parameters of this same SQL shape and access plans, "

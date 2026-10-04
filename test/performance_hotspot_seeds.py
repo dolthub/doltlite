@@ -1,3 +1,5 @@
+from dataclasses import asdict
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,6 +9,17 @@ from performance_hotspots import (INDEX_EDIT_CACHE_KIB, INDEX_EDIT_ROWS, PAYLOAD
 
 
 SEED_DIR = Path(__file__).resolve().parent / 'performance-hotspot-seeds'
+BASELINES = Path(__file__).resolve().parent / 'performance_hotspot_seed_baselines.json'
+DRIFT = 1.5
+
+
+def seed_key(profile, case):
+    identity = json.dumps([asdict(profile), asdict(case)], sort_keys=True)
+    return hashlib.sha256(identity.encode()).hexdigest()[:24]
+
+
+def drift_threshold(profile, case, baselines):
+    return max(DRIFT*baselines[seed_key(profile, case)], DRIFT)
 
 
 def large_specs(rows=262144, edit_rows=INDEX_EDIT_ROWS):
