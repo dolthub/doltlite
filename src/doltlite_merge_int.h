@@ -116,7 +116,8 @@ int mergePreNormalizeRenamedDependents(
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aOursSchema, int nOursSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema,
-  SchemaMergeAction **ppActions, int *pnActions
+  SchemaMergeAction **ppActions, int *pnActions,
+  int bTableRenames
 );
 
 /* One side column: its stored field (-1 for VIRTUAL), the ancestor slot

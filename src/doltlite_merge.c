@@ -1065,17 +1065,19 @@ int doltliteMergeCatalogs(
     if( rc!=SQLITE_OK ) goto merge_cleanup;
   }
 
-  /* Column renames with dependents in play are lifted out of the merge
-  ** here and re-applied as post-load schema actions, so every later pass
-  ** sees a world where the rename never happened. Only a branch merge has
-  ** the action plumbing to re-apply them. */
-  if( ppActions && pnActions && bBranchMerge ){
+  /* Renames with dependents in play are lifted out of the merge here and
+  ** re-applied as post-load schema actions, so every later pass sees a
+  ** world where the rename never happened. Only callers that collect
+  ** actions re-apply them; a table rename is lifted only for a branch
+  ** merge, as Dolt's cherry-pick conflicts on it. */
+  if( ppActions && pnActions ){
     rc = mergePreNormalizeRenamedDependents(aAnc, nAnc, aOurs, nOurs,
                                             aTheirs, nTheirs,
                                             aAncSchema, nAncSchema,
                                             aOursSchema, nOursSchema,
                                             aTheirsSchema, nTheirsSchema,
-                                            ppActions, pnActions);
+                                            ppActions, pnActions,
+                                            bBranchMerge);
     if( rc!=SQLITE_OK ) goto merge_cleanup;
   }
 

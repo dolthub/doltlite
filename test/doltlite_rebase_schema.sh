@@ -572,6 +572,53 @@ SELECT typeof(r) || '|' || r || '|' || typeof(flex_203) || '|' || flex_203
 FROM t WHERE id=0;
 " "integer|1|real|1.5|0|0|ok"
 
+# A rename carries an index over the renamed column while both branches add
+# the same index under different names. The replay must report the index
+# conflict, not build a catalog whose old index text names the old column.
+RENAME_TWIN_INDEX_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, num NUMERIC, trail TEXT);
+CREATE INDEX t_trail ON t(trail);
+INSERT INTO t VALUES(0, 1, 'base'), (5, NULL, NULL);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('up');
+SELECT dolt_checkout('up');
+CREATE INDEX up_u ON t(num);
+SELECT dolt_commit('-Am','up');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN trail TO flex;
+CREATE INDEX my_u ON t(num);
+SELECT dolt_commit('-Am','mine');
+"
+
+run_db_error "rebase_schema_rename_twin_index_conflict" "
+$RENAME_TWIN_INDEX_SETUP
+SELECT dolt_rebase('up');
+" 'conflict rebasing "mine"; rebase aborted, branch restored to pre-rebase state'
+
+run_db_error "rebase_schema_rename_twin_index_cherry_pick_conflict" "
+$RENAME_TWIN_INDEX_SETUP
+SELECT dolt_checkout('up');
+SELECT dolt_cherry_pick('main');
+" "cannot merge: conflicts detected, autocommit transaction rolled back. Run the merge inside BEGIN/COMMIT to inspect dolt_conflicts and dolt_schema_conflicts, resolve with dolt_conflicts_resolve(), then commit with dolt_commit(). Conflicts are never committed as conflicts"
+
+run_db_eq "rebase_schema_rename_dependent_index_row" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, num NUMERIC, trail TEXT);
+CREATE INDEX t_trail ON t(trail);
+INSERT INTO t VALUES(0, 1, 'base'), (5, NULL, NULL);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('up');
+SELECT dolt_checkout('up');
+UPDATE t SET trail='upstream' WHERE id=5;
+SELECT dolt_commit('-Am','up');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN trail TO flex;
+SELECT dolt_commit('-Am','mine');
+SELECT dolt_rebase('up');
+SELECT (SELECT group_concat(id || '=' || flex, ',') FROM t INDEXED BY t_trail WHERE flex IS NOT NULL)
+  || '|' || (SELECT sql FROM sqlite_master WHERE name='t_trail')
+  || '|' || (SELECT integrity_check FROM pragma_integrity_check LIMIT 1);
+" "0=base,5=upstream|CREATE INDEX t_trail ON t(flex)|ok"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
