@@ -386,6 +386,11 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_commit('--allow-empty', '-m', 'empty followup');
 "
 
+oracle "commit_allow_empty_fresh_repo" "
+SELECT dolt_commit('--allow-empty', '-m', 'empty on fresh');
+SELECT dolt_commit('--allow-empty', '-m', 'empty again');
+"
+
 oracle "commit_skip_empty_no_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
