@@ -754,18 +754,8 @@ static void doltliteResetFunc(
   }
 
   targetWorkingCatHash = targetCatHash;
-  if( isHard && prollyHashIsEmpty(&targetWorkingCatHash) ){
-    struct TableEntry master;
-    u8 *pData = 0;
-    int nData = 0;
-    memset(&master, 0, sizeof(master));
-    master.iTable = 1;
-    master.flags = PROLLY_NODE_INTKEY;
-    rc = doltliteSerializeCatalogEntries(db, &master, 1, &pData, &nData);
-    if( rc==SQLITE_OK ){
-      rc = chunkStorePut(cs, pData, nData, &targetWorkingCatHash);
-    }
-    sqlite3_free(pData);
+  if( isHard ){
+    rc = doltliteMaterializeEmptyCatalog(db, &targetWorkingCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;

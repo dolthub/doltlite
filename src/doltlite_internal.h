@@ -797,6 +797,7 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                         struct TableEntry **ppTables, int *pnTables,
                         Pgno *piNextTable);
 void doltliteFreeCatalog(struct TableEntry *a, int n);
+int doltliteMaterializeEmptyCatalog(sqlite3 *db, ProllyHash *pCatHash);
 
 int doltliteLoadTableRootByName(
   sqlite3 *db,

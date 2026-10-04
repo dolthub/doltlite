@@ -160,6 +160,7 @@ static int checkoutLoadAndApply(
 
   rc = doltliteResolveBranchEffectiveCatalog(
       cs, zBranch, pCommitHash, &committedCatHash, pCatHash);
+  if( rc==SQLITE_OK ) rc = doltliteMaterializeEmptyCatalog(db, pCatHash);
   if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pCatHash);
   return rc;
 }
