@@ -1038,7 +1038,7 @@ static void doltliteCommitFunc(
     if( allowEmpty ){
       ProllyHash headCatHash;
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash) ){
+      if( rc==SQLITE_OK ){
         memcpy(&catalogHash, &headCatHash, sizeof(ProllyHash));
       }else{
         sqlite3_result_error(context,
