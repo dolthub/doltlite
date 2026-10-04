@@ -24,25 +24,26 @@ dltest_mark_complete() {
 dltest_run_sql() (
   local sql="$1"
   local db="$2"
-  if [ -n "${4:-}" ]; then exec 3>"$4"; else exec 3>&1; fi
+  local errfd=1
+  if [ -n "${4:-}" ]; then exec 3>"$4"; errfd=3; fi
   # macOS /bin/bash 3.2 + set -u treats empty "${arr[@]}" as unbound.
   if [ "${3:-}" = "bail" ]; then
     if [ "$DLTEST_STRIP_CR" = "1" ]; then
       ( set -o pipefail
         echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-          "$_dltest_integrity_guard" -bail "$db" 2>&3 | tr -d '\r' )
+          "$_dltest_integrity_guard" -bail "$db" 2>&"$errfd" | tr -d '\r' )
     else
       echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-        "$_dltest_integrity_guard" -bail "$db" 2>&3
+        "$_dltest_integrity_guard" -bail "$db" 2>&"$errfd"
     fi
   else
     if [ "$DLTEST_STRIP_CR" = "1" ]; then
       ( set -o pipefail
         echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-          "$_dltest_integrity_guard" "$db" 2>&3 | tr -d '\r' )
+          "$_dltest_integrity_guard" "$db" 2>&"$errfd" | tr -d '\r' )
     else
       echo "$sql" | DLTEST_REAL_DOLTLITE="$_dltest_integrity_real" perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" \
-        "$_dltest_integrity_guard" "$db" 2>&3
+        "$_dltest_integrity_guard" "$db" 2>&"$errfd"
     fi
   fi
 )

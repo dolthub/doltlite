@@ -46,6 +46,11 @@ for rc in 125 134 139 142; do
 done
 export DLTEST_STUB_RC=0 DLTEST_STUB_STDOUT=$'1\r\n' DLTEST_STUB_STDERR=''
 DLTEST_STRIP_CR=1 expect 1 run_test_match '^1$'
+export DLTEST_STUB_RC=1 DLTEST_STUB_STDERR=$'Error near line 1: expected refusal\r\n'
+DLTEST_STRIP_CR=1 expect 1 run_test $'1\nError near line 1: expected refusal'
+DLTEST_STRIP_CR=1 expect 1 run_test_error_match '^Error near line 1: expected refusal$'
+export DLTEST_STUB_RC=0
+DLTEST_STRIP_CR=1 expect 0 run_test $'1\nError near line 1: expected refusal'
 export DLTEST_STUB_RC=1 DLTEST_STUB_STDOUT=$'1\n'
 expect 0 run_test_lastline 1
 export DLTEST_STUB_STDERR='Error near line 1: expected refusal'
