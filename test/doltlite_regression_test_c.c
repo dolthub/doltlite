@@ -6480,6 +6480,7 @@ static void run_prolly_diff_record_corruption(void){
 
 static void run_integrity_check_repo_state(void){
   sqlite3 *db = 0;
+  char *zOut = 0;
   ChunkStore cs;
   char dbpath[256];
   ProllyHash badHash;
@@ -6510,15 +6511,19 @@ static void run_integrity_check_repo_state(void){
   chunkStoreClose(&cs);
 
   check("reopen_repo_state_db", open_db(dbpath, &db)==SQLITE_OK);
-  rc = doltliteCheckRepoGraphIntegrity(db->aDb[0].pBt, 100, &nErr);
+  rc = sqlite3BtreeIntegrityCheck(db, db->aDb[0].pBt, 0, 0, 0,
+                                100, &nErr, &zOut);
   check("repo_graph_integrity_call_succeeds", rc==SQLITE_OK);
   check("integrity_check_reports_repo_state_corruption", nErr>0);
+  check("repo_state_integrity_error_message", zOut!=0);
+  sqlite3_free(zOut);
   sqlite3_close(db);
   removeDbFiles(dbpath);
 }
 
 static void run_integrity_check_session_merge_state(void){
   sqlite3 *db = 0;
+  char *zOut = 0;
   char dbpath[256];
   ProllyHash badHash;
   int nErr = 0;
@@ -6537,9 +6542,12 @@ static void run_integrity_check_session_merge_state(void){
   memset(&badHash, 0x4c, sizeof(badHash));
   doltliteSetSessionMergeState(db, 1, &badHash, &badHash);
 
-  rc = doltliteCheckRepoGraphIntegrity(db->aDb[0].pBt, 100, &nErr);
+  rc = sqlite3BtreeIntegrityCheck(db, db->aDb[0].pBt, 0, 0, 0,
+                                100, &nErr, &zOut);
   check("session_merge_state_integrity_call_succeeds", rc==SQLITE_OK);
   check("integrity_check_reports_session_merge_state_corruption", nErr>0);
+  check("session_merge_state_integrity_error_message", zOut!=0);
+  sqlite3_free(zOut);
 
   sqlite3_close(db);
   removeDbFiles(dbpath);

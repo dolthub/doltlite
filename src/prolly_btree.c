@@ -2232,6 +2232,10 @@ typedef struct IntegrityCheckCtx IntegrityCheckCtx;
 struct IntegrityCheckCtx {
   BtShared *pBt;
   ProllyHashSet seen;
+  ProllyHashSet *pSeen;
+  Table *pTab;
+  int nExpect;
+  char *zWidthMsg;
   ProllyHash *aPending;
   int nPending;
   int nAlloc;
@@ -2241,10 +2245,11 @@ struct IntegrityCheckCtx {
 
 static int integrityCheckChildCb(void *pArg, const ProllyHash *pHash){
   IntegrityCheckCtx *pCtx = (IntegrityCheckCtx*)pArg;
+  ProllyHashSet *pSeen = pCtx->pSeen ? pCtx->pSeen : &pCtx->seen;
   int rc;
   if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
   if( pCtx->mxErr>0 && *pCtx->pnErr>=pCtx->mxErr ) return SQLITE_OK;
-  if( prollyHashSetContains(&pCtx->seen, pHash) ) return SQLITE_OK;
+  if( prollyHashSetContains(pSeen, pHash) ) return SQLITE_OK;
   if( pCtx->nPending==pCtx->nAlloc ){
     int nNew;
     ProllyHash *aNew;
@@ -2258,8 +2263,47 @@ static int integrityCheckChildCb(void *pArg, const ProllyHash *pHash){
     pCtx->aPending = aNew;
     pCtx->nAlloc = nNew;
   }
-  rc = prollyHashSetAdd(&pCtx->seen, pHash);
+  rc = prollyHashSetAdd(pSeen, pHash);
+  if( rc==SQLITE_OK && pSeen!=&pCtx->seen ){
+    rc = prollyHashSetAdd(&pCtx->seen, pHash);
+  }
   if( rc==SQLITE_OK ) pCtx->aPending[pCtx->nPending++] = *pHash;
+  return rc;
+}
+
+static int integrityCheckChunkData(
+  IntegrityCheckCtx *pCtx,
+  const u8 *pData,
+  int nData
+){
+  int rc = doltliteEnumerateChunkChildren(
+      pData, nData, integrityCheckChildCb, pCtx);
+  if( rc==SQLITE_OK && pCtx->pTab
+   && doltliteClassifyChunk(pData, nData)==CHUNK_PROLLY_NODE ){
+    ProllyNode node;
+    int i;
+    rc = prollyNodeParse(&node, pData, nData);
+    for(i=0; rc==SQLITE_OK && node.level==0 && i<node.nItems; i++){
+      const u8 *pVal;
+      int nVal;
+      DoltliteRecordInfo ri;
+      prollyNodeValue(&node, i, &pVal, &nVal);
+      doltliteRecordInfoInit(&ri);
+      doltliteParseRecord(pVal, nVal, &ri);
+      if( ri.nField>pCtx->nExpect ){
+        (*pCtx->pnErr)++;
+        if( !pCtx->zWidthMsg ){
+          pCtx->zWidthMsg = sqlite3_mprintf(
+              "row of %s stores %d fields for %d columns",
+              pCtx->pTab->zName, ri.nField, pCtx->nExpect);
+        }
+        pCtx->pTab = 0;
+        doltliteRecordInfoClear(&ri);
+        break;
+      }
+      doltliteRecordInfoClear(&ri);
+    }
+  }
   return rc;
 }
 
@@ -2284,7 +2328,7 @@ static int integrityCheckChunkGraph(
       continue;
     }
     if( rc!=SQLITE_OK ) break;
-    rc = doltliteEnumerateChunkChildren(pData, nData, integrityCheckChildCb, pCtx);
+    rc = integrityCheckChunkData(pCtx, pData, nData);
     sqlite3_free(pData);
     if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
       (*pCtx->pnErr)++;
@@ -2295,37 +2339,22 @@ static int integrityCheckChunkGraph(
   return rc;
 }
 
-int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
-  BtShared *pBt;
-  IntegrityCheckCtx ctx;
+static int integrityCheckRepoGraph(Btree *p, IntegrityCheckCtx *pCtx){
+  BtShared *pBt = p->pBt;
   int i;
-  int nErr = 0;
   int rc;
-
-  if( pnErr ) *pnErr = 0;
-  if( !p || !p->pBt ) return SQLITE_OK;
-  if( p->pOrigBtree ) return SQLITE_OK;
-
-  pBt = p->pBt;
   if( pBt->store.corruptMidStream ){
-    if( pnErr ) *pnErr = 1;
+    (*pCtx->pnErr)++;
     return SQLITE_OK;
   }
-  memset(&ctx, 0, sizeof(ctx));
-  ctx.pBt = pBt;
-  ctx.mxErr = mxErr;
-  ctx.pnErr = &nErr;
-  rc = prollyHashSetInit(&ctx.seen, 256);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = integrityCheckChunkGraph(&ctx, refsTableGetHash(&pBt->store.refs));
+  rc = integrityCheckChunkGraph(pCtx, refsTableGetHash(&pBt->store.refs));
   {
     int nBr; const BranchRef *aBr;
     refsTableGetBranches(&pBt->store.refs, &nBr, &aBr);
     for(i=0; rc==SQLITE_OK && i<nBr; i++){
-      rc = integrityCheckChunkGraph(&ctx, &aBr[i].commitHash);
+      rc = integrityCheckChunkGraph(pCtx, &aBr[i].commitHash);
       if( rc==SQLITE_OK ){
-        rc = integrityCheckChunkGraph(&ctx, &aBr[i].workingSetHash);
+        rc = integrityCheckChunkGraph(pCtx, &aBr[i].workingSetHash);
       }
     }
   }
@@ -2333,26 +2362,23 @@ int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
     int nTg; const TagRef *aTg;
     refsTableGetTags(&pBt->store.refs, &nTg, &aTg);
     for(i=0; rc==SQLITE_OK && i<nTg; i++){
-      rc = integrityCheckChunkGraph(&ctx, &aTg[i].commitHash);
+      rc = integrityCheckChunkGraph(pCtx, &aTg[i].commitHash);
     }
   }
   {
     int nTk; const TrackingBranch *aTk;
     refsTableGetTracking(&pBt->store.refs, &nTk, &aTk);
     for(i=0; rc==SQLITE_OK && i<nTk; i++){
-      rc = integrityCheckChunkGraph(&ctx, &aTk[i].commitHash);
+      rc = integrityCheckChunkGraph(pCtx, &aTk[i].commitHash);
     }
   }
   if( rc==SQLITE_OK && p->vc.isMerging ){
-    rc = integrityCheckChunkGraph(&ctx, &p->vc.mergeCommitHash);
+    rc = integrityCheckChunkGraph(pCtx, &p->vc.mergeCommitHash);
   }
   if( rc==SQLITE_OK ){
-    rc = integrityCheckChunkGraph(&ctx, &p->vc.conflictsCatalogHash);
+    rc = integrityCheckChunkGraph(pCtx, &p->vc.conflictsCatalogHash);
   }
 
-  sqlite3_free(ctx.aPending);
-  prollyHashSetFree(&ctx.seen);
-  if( pnErr ) *pnErr = nErr;
   return rc;
 }
 
@@ -2373,29 +2399,22 @@ int sqlite3HeaderSizeBtree(void){
 /* A record wider than its table is a shape stock SQLite cannot store, since
 ** DROP COLUMN rewrites every row. Left in place, the next ADD COLUMN reads
 ** the stale trailing field instead of the new column's default. */
-static int integrityCheckRecordWidth(
+static Table *integrityCheckRecordTable(
   sqlite3 *db,
   Btree *p,
   Pgno root,
   struct TableEntry *pTE,
-  int mxErr,
-  int *pnErr,
-  char **pzMsg
+  int *pnExpect
 ){
-  BtShared *pBt = p->pBt;
   Table *pTab = 0;
   Index *pPk;
   HashElem *k;
-  ProllyCursor cur;
   int iDb;
-  int nExpect;
-  int res = 0;
-  int rc;
 
   for(iDb=0; iDb<db->nDb; iDb++){
     if( db->aDb[iDb].pBt==p ) break;
   }
-  if( iDb>=db->nDb || !db->aDb[iDb].pSchema ) return SQLITE_OK;
+  if( iDb>=db->nDb || !db->aDb[iDb].pSchema ) return 0;
   for(k=sqliteHashFirst(&db->aDb[iDb].pSchema->tblHash); k; k=sqliteHashNext(k)){
     Table *pT = (Table*)sqliteHashData(k);
     if( IsOrdinaryTable(pT) && pT->tnum==root ){
@@ -2403,12 +2422,12 @@ static int integrityCheckRecordWidth(
       break;
     }
   }
-  if( !pTab || pTab->nCol<=0 ) return SQLITE_OK;
+  if( !pTab || pTab->nCol<=0 ) return 0;
   /* The stored row is the primary key index's row, so that index's column
   ** count is the width to expect: a column repeated in the key, or one
   ** collated twice, makes it wider than the table. */
   pPk = sqlite3PrimaryKeyIndex(pTab);
-  nExpect = pPk && pPk->nColumn>pTab->nCol ? pPk->nColumn : pTab->nCol;
+  *pnExpect = pPk && pPk->nColumn>pTab->nCol ? pPk->nColumn : pTab->nCol;
 
   /* An unflushed edit still sits in front of this tree. DROP COLUMN has
   ** already narrowed the live schema, while these flushed records keep the
@@ -2416,35 +2435,10 @@ static int integrityCheckRecordWidth(
   ** The entry-count check skips this same state. */
   {
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-    if( pMap && !prollyMutMapIsEmpty(pMap) ) return SQLITE_OK;
+    if( pMap && !prollyMutMapIsEmpty(pMap) ) return 0;
   }
 
-  prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
-  rc = prollyCursorFirst(&cur, &res);
-  while( rc==SQLITE_OK && *pnErr<mxErr && prollyCursorIsValid(&cur) ){
-    const u8 *pVal = 0;
-    int nVal = 0;
-    DoltliteRecordInfo ri;
-    int nField;
-    doltliteRecordInfoInit(&ri);
-    prollyCursorValue(&cur, &pVal, &nVal);
-    doltliteParseRecord(pVal, nVal, &ri);
-    nField = ri.nField;
-    doltliteRecordInfoClear(&ri);
-    if( nField > nExpect ){
-      (*pnErr)++;
-      if( !*pzMsg ){
-        *pzMsg = sqlite3_mprintf(
-            "row of %s stores %d fields for %d columns",
-            pTab->zName, nField, nExpect);
-      }
-      /* One report per table: every row of it was written the same way. */
-      break;
-    }
-    rc = prollyCursorNext(&cur);
-  }
-  prollyCursorClose(&cur);
-  return rc;
+  return pTab;
 }
 
 
@@ -2464,7 +2458,6 @@ int sqlite3BtreeIntegrityCheck(
   int nErr = 0;
   int rc;
   int bCount = 1;
-  char *zWidthMsg = 0;
 
   if( !p ){
     if( pnErr ) *pnErr = 0;
@@ -2521,26 +2514,32 @@ int sqlite3BtreeIntegrityCheck(
       struct TableEntry *pTE = findTable(p, aRoot[i]);
       if( !pTE ) continue;
       if( !prollyHashIsEmpty(&pTE->root) ){
+        ProllyHashSet tableSeen;
+        ctx.pTab = integrityCheckRecordTable(db, p, aRoot[i], pTE,
+                                             &ctx.nExpect);
+        if( ctx.pTab ){
+          rc = prollyHashSetInit(&tableSeen, 256);
+          if( rc!=SQLITE_OK ) goto integrity_done;
+          /* Shared row chunks still need validation against each schema. */
+          ctx.pSeen = &tableSeen;
+        }
         rc = integrityCheckChunkGraph(&ctx, &pTE->root);
+        if( ctx.pSeen ) prollyHashSetFree(&tableSeen);
+        ctx.pSeen = 0;
+        ctx.pTab = 0;
         if( rc!=SQLITE_OK ) goto integrity_done;
-        /* A tree too damaged to walk is reported by the graph check above,
-        ** so a failed walk says nothing rather than failing the pragma. */
-        (void)integrityCheckRecordWidth(db, p, aRoot[i], pTE, mxErr, &nErr,
-                                        &zWidthMsg);
       }
     }
   }
 
-  rc = doltliteCheckRepoGraphIntegrity(p, mxErr, &i);
-  if( rc!=SQLITE_OK ) goto integrity_done;
-  nErr += i;
+  rc = integrityCheckRepoGraph(p, &ctx);
 
 integrity_done:
   sqlite3_free(ctx.aPending);
   prollyHashSetFree(&ctx.seen);
   if( rc!=SQLITE_OK ){
     /* OP_IntegrityCk always reads *pnErr and frees *pzOut; count this fail. */
-    sqlite3_free(zWidthMsg);
+    sqlite3_free(ctx.zWidthMsg);
     if( pnErr ) *pnErr = nErr+1;
     if( pzOut ) *pzOut = 0;
     return rc;
@@ -2549,15 +2548,15 @@ integrity_done:
   if( pnErr ) *pnErr = nErr;
   if( pzOut ){
     if( nErr>0 ){
-      *pzOut = zWidthMsg ? zWidthMsg
-                         : sqlite3_mprintf("integrity check failed");
-      zWidthMsg = 0;
+      *pzOut = ctx.zWidthMsg ? ctx.zWidthMsg
+                            : sqlite3_mprintf("integrity check failed");
+      ctx.zWidthMsg = 0;
       if( !*pzOut ) return SQLITE_NOMEM;
     }else{
       *pzOut = 0;
     }
   }
-  sqlite3_free(zWidthMsg);
+  sqlite3_free(ctx.zWidthMsg);
 
   return SQLITE_OK;
 }
