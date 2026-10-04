@@ -1204,6 +1204,29 @@ run_test "desc_pk_secondary_integrity" \
 
 rm -f "$DB"
 
+# A 6-byte text or blob encodes to 9 bytes, the length of a short integer
+# that gets a terminator before a DESC field; only integers may grow.
+DB=/tmp/test_rg_desc_pk_nine_byte_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(k INT, a, b TEXT, PRIMARY KEY(k DESC)) WITHOUT ROWID;
+CREATE INDEX i_a ON t(a);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "desc_pk_secondary_six_byte_text_insert" \
+  "INSERT INTO t VALUES(1, 'abcdef', 'x'); SELECT k FROM t INDEXED BY i_a WHERE a = 'abcdef';" \
+  "1" "$DB"
+run_test "desc_pk_secondary_six_byte_blob_insert" \
+  "INSERT INTO t VALUES(2, x'aabbccddeeff', 'y'); SELECT k FROM t INDEXED BY i_a WHERE a = x'aabbccddeeff';" \
+  "2" "$DB"
+run_test "desc_pk_secondary_six_byte_update" \
+  "INSERT INTO t VALUES(3, NULL, 'z'); UPDATE t SET a = 'uvwxyz' WHERE a IS NULL; SELECT k FROM t INDEXED BY i_a WHERE a = 'uvwxyz';" \
+  "3" "$DB"
+run_test "desc_pk_secondary_six_byte_seek_with_key" \
+  "SELECT count(*) FROM t INDEXED BY i_a WHERE a = 'abcdef' AND k = 1;" \
+  "1" "$DB"
+run_test "desc_pk_secondary_six_byte_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+
+rm -f "$DB"
+
 # Reconstructing rows from a DESC numeric PK (ORDER BY a ASC walks the key
 # backwards) must return each inserted row once. The short DESC form is
 # 10 bytes (base + terminator); decoding must strip the terminator rather

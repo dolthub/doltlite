@@ -346,11 +346,11 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
         invertSortKeyBytes(pOut + fieldStart, outPos - fieldStart);
       }
     }else{
-      sqlite3_int64 nFieldSize = finishAscNumeric(
-          0,
-          (int)encodedFieldSize(serialType, pField, fieldLen, coll,
-                                descFromKeyInfo(pKeyInfo, nField)),
-          pKeyInfo, nField);
+      sqlite3_int64 nFieldSize = encodedFieldSize(
+          serialType, pField, fieldLen, coll, descFromKeyInfo(pKeyInfo, nField));
+      if( serialTypeTag(serialType)==SORTKEY_NUM ){
+        nFieldSize = finishAscNumeric(0, (int)nFieldSize, pKeyInfo, nField);
+      }
       if( nFieldSize > INT_MAX || outSize > INT_MAX - nFieldSize ){
         return -2;
       }
@@ -586,11 +586,11 @@ static int sortKeyEncodeMemArray(
         invertSortKeyBytes(pOut + fieldStart, outPos - fieldStart);
       }
     }else{
-      sqlite3_int64 nFieldSize = finishAscNumeric(
-          0,
-          (int)encodedFieldSize(serialType, pField, fieldLen, coll,
-                                descFromKeyInfo(pKeyInfo, i)),
-          pKeyInfo, i);
+      sqlite3_int64 nFieldSize = encodedFieldSize(
+          serialType, pField, fieldLen, coll, descFromKeyInfo(pKeyInfo, i));
+      if( serialTypeTag(serialType)==SORTKEY_NUM ){
+        nFieldSize = finishAscNumeric(0, (int)nFieldSize, pKeyInfo, i);
+      }
       if( nFieldSize > INT_MAX || outSize > INT_MAX - nFieldSize ){
         return -2;
       }
