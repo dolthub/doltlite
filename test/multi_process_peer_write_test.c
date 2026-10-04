@@ -179,6 +179,8 @@ static const Op aOp[] = {
     "peer_write_kept_remote_remove" },
   { "reset_soft", 0, "SELECT dolt_reset('--soft')",
     "peer_write_kept_reset_soft" },
+  { "reset_hard", 0, "SELECT dolt_reset('--hard')",
+    "peer_commit_kept_reset_hard" },
   { "reset_table", 0, "SELECT dolt_reset('u')", "peer_write_kept_reset_table" },
   { "checkout_branch", 0, "SELECT dolt_checkout('f')",
     "peer_write_kept_checkout_branch" },
@@ -243,10 +245,12 @@ static int runOpSql(sqlite3 *db, const char *zSql, int *pBusy){
   return rc;
 }
 
-/* Acknowledged once the peer's INSERT autocommits; the commit is extra. */
-static int peerAct(sqlite3 *peer, int action){
+static int peerAct(sqlite3 *peer, int action, int requireCommit){
   if( execSql(peer, "INSERT INTO t VALUES(900,'peer')")!=SQLITE_OK ) return 0;
-  if( action==PEER_COMMIT ) execSql(peer, "SELECT dolt_commit('-am','peer')");
+  if( action==PEER_COMMIT ){
+    int rc = execSql(peer, "SELECT dolt_commit('-am','peer')");
+    if( requireCommit && rc!=SQLITE_OK ) return 0;
+  }
   return 1;
 }
 
@@ -259,6 +263,10 @@ static int peerRowKept(const char *zOp, const char *zMode, int action, int k){
   sqlite3_busy_timeout(db, 5000);
   z = queryText(db, "SELECT count(*) FROM t WHERE id=900");
   ok = strcmp(z, "1")==0;
+  if( ok && strcmp(zOp, "reset_hard")==0 && action==PEER_COMMIT ){
+    ok = strcmp(queryText(db, "SELECT message FROM dolt_log LIMIT 1"),
+                "peer")==0;
+  }
   if( ok ){
     z = queryText(db, "PRAGMA integrity_check");
     ok = strcmp(z, "ok")==0;
@@ -289,7 +297,7 @@ static void runStale(const Op *p, int action, Tally *t){
   sqlite3_busy_timeout(peer, 5000);
   if( p->zPre ) execSql(db, p->zPre);
   queryText(db, "SELECT count(*) FROM t");
-  acked = peerAct(peer, action);
+  acked = peerAct(peer, action, strcmp(p->zName, "reset_hard")==0);
   opOk = runOpSql(db, zSql, 0)==SQLITE_OK;
   execSql(db, "INSERT INTO t VALUES(3,'mine')");
   sqlite3_close(peer);
@@ -308,13 +316,14 @@ struct MidOp {
   int nCalls;
   int fired;
   int acked;
+  int requireCommit;
 };
 
 static int fireMidOp(void *arg){
   MidOp *m = (MidOp*)arg;
   if( ++m->nCalls==m->fireAt && !m->fired ){
     m->fired = 1;
-    m->acked = peerAct(m->peer, m->action);
+    m->acked = peerAct(m->peer, m->action, m->requireCommit);
   }
   return 0;
 }
@@ -334,6 +343,7 @@ static int runMidOp(const Op *p, int action, int k, Tally *t){
   sqlite3_busy_timeout(db, 5000);
   if( p->zPre ) execSql(db, p->zPre);
   m.action = action;
+  m.requireCommit = strcmp(p->zName, "reset_hard")==0;
   m.fireAt = k;
   sqlite3_progress_handler(db, 1, fireMidOp, &m);
   rc = runOpSql(db, zSql, &busy);
@@ -392,9 +402,11 @@ int main(void){
     const Op *p = &aOp[i];
     Tally aT[3][2];
     int a, mode, k, nSteps = 0, nLost = 0;
+    int firstAction = strcmp(p->zName, "reset_hard")==0
+                    ? PEER_COMMIT : PEER_WRITE;
     char zName[96];
     memset(aT, 0, sizeof(aT));
-    for(a=0; a<2; a++){
+    for(a=firstAction; a<2; a++){
       runStale(p, a, &aT[MODE_STALE][a]);
       for(k=1; k<5000 && runMidOp(p, a, k, &aT[MODE_MIDOP][a]); k++){}
       if( k-1>nSteps ) nSteps = k-1;
@@ -402,7 +414,8 @@ int main(void){
     runTxn(p, &aT[MODE_TXN][PEER_WRITE]);
     printf("  %-18s steps=%-4d", p->zName, nSteps);
     for(mode=0; mode<3; mode++){
-      for(a=0; a<(mode==MODE_TXN ? 1 : 2); a++){
+      for(a=mode==MODE_TXN ? PEER_WRITE : firstAction;
+          a<(mode==MODE_TXN ? 1 : 2); a++){
         Tally *t = &aT[mode][a];
         printf(" %s/%s=%d/%d/%d", azMode[mode], azPeerAction[a],
                t->nAcked, t->nOpOk, t->nLost);
@@ -416,6 +429,11 @@ int main(void){
     snprintf(zName, sizeof(zName), "op_ran_against_peer_%s", p->zName);
     check(zName, aT[MODE_MIDOP][PEER_WRITE].nOpOk>0
               || aT[MODE_MIDOP][PEER_COMMIT].nOpOk>0);
+    if( firstAction==PEER_COMMIT ){
+      check("peer_commit_acked_reset_hard",
+            aT[MODE_STALE][PEER_COMMIT].nAcked>0
+            && aT[MODE_MIDOP][PEER_COMMIT].nAcked>0);
+    }
   }
 
   remove(zDb); remove(zInto); remove(zRemote); remove(zTemplate);

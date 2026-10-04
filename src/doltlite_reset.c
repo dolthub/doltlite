@@ -593,6 +593,7 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }
 
+  doltliteGetSessionHead(db, &sessionHeadBeforeLock);
   rc = doltliteGetHeadCatalogHash(db, &preResetHeadCatHash);
   if( rc!=SQLITE_OK && doltliteCmdSourceResultError(context, cs, &rc) ){
     goto reset_cleanup;
@@ -772,13 +773,13 @@ static void doltliteResetFunc(
     }
   }
 
-  if( zRef ){
-    doltliteGetSessionHead(db, &sessionHeadBeforeLock);
+  if( zRef || isHard ){
     rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
     if( rc==SQLITE_BUSY ){
       sqlite3_result_error(context,
         "reset conflict: another connection moved this branch. "
         "Please retry your transaction.", -1);
+      sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
     }
     if( rc!=SQLITE_OK ){
@@ -786,7 +787,9 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
     graphLocked = 1;
+  }
 
+  if( zRef ){
     /* Move the ref before the session head. The other order leaves the
     ** session reading a commit the branch never reached if the update fails.
     ** reset --hard is not atomic (nor in Dolt). */

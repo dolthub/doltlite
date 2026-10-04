@@ -1171,7 +1171,8 @@ int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
 
   if( p->inTrans!=TRANS_WRITE ){
     commitPhaseTwoEndWriteTxn(p);
-    commitPhaseTwoReleaseGraph(pBt);
+    /* A read txn owns no graph lock; an enclosing VC command may hold it. */
+    pBt->store.snapshotPinned = 0;
     return SQLITE_OK;
   }
   return commitPhaseTwoWrite(p, pBt);
@@ -1479,11 +1480,11 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
         return rc;
       }
     }
+    chunkStoreUnlock(&pBt->store);
   }
 
   commitPhaseTwoEndWriteTxn(p);
 
-  chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = p->inTrans==TRANS_READ;
 
   return rc==SQLITE_OK ? cursorRc : rc;

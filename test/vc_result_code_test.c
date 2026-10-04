@@ -410,6 +410,44 @@ static void test_ref_busy_handler(const char *zPath){
   remove(zPath);
 }
 
+static void test_reset_head_busy(const char *zPath){
+  const char *azSql[] = {
+    "SELECT dolt_reset('--hard')",
+    "SELECT dolt_reset('--hard','HEAD')"
+  };
+  int i;
+  for(i=0; i<2; i++){
+    sqlite3 *db = 0;
+    char *zErr = 0;
+    int rc;
+    remove(zPath);
+    checkRc("reset_busy: open", sqlite3_open(zPath, &db), SQLITE_OK);
+    checkRc("reset_busy: seed", exec(db, seedSql), SQLITE_OK);
+    checkRc("reset_busy: dirty", exec(db, "UPDATE t SET v='dirty'"), SQLITE_OK);
+    doltliteTestFailNextHeadConfirm();
+    rc = sqlite3_exec(db, azSql[i], 0, 0, &zErr);
+    checkRc("reset_busy: retryable code", rc, SQLITE_BUSY);
+    check("reset_busy: message names moved branch",
+          zErr && strstr(zErr, "another connection moved this branch"));
+    sqlite3_free(zErr);
+    check("reset_busy: prior write survives",
+          scalarInt(db, "SELECT count(*) FROM t WHERE v='dirty'")==1);
+    checkRc("reset_busy: retry", exec(db, azSql[i]), SQLITE_OK);
+    check("reset_busy: reset took effect",
+          scalarInt(db, "SELECT count(*) FROM t WHERE v='a'")==1);
+    check("reset_busy: status clean",
+          scalarInt(db, "SELECT count(*) FROM dolt_status")==0);
+    checkRc("reset_busy: following commit", exec(db,
+        "INSERT INTO t VALUES(2,'after'); SELECT dolt_commit('-am','after')"),
+        SQLITE_OK);
+    sqlite3_close(db);
+    checkRc("reset_busy: reopen", sqlite3_open(zPath, &db), SQLITE_OK);
+    check("reset_busy: reopened rows", rowCount(db)==2);
+    sqlite3_close(db);
+  }
+  remove(zPath);
+}
+
 int main(void){
   char zPath[256];
   char zBase[256];
@@ -426,6 +464,7 @@ int main(void){
   test_commit_busy(zPath);
   test_ref_busy_handler(zPath);
   test_detached_after_gc(zPath);
+  test_reset_head_busy(zPath);
 
   printf("vc_result_code_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
