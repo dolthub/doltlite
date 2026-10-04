@@ -319,7 +319,9 @@ def save_report(output, report):
              f"Confirmed means every one of {report['runs']} confirmation pairs was at least "
              f"{report['threshold']:g}× slower. For confirmation, SQLite timings below "
              f"{report.get('min_query_ms', 0):g} ms per query and {report['min_ms']:g} ms per batch "
-             "are conservatively raised to that floor.",
+             "are conservatively raised to that floor. Retired nightly seeds instead confirm at "
+             "1.5× their recorded stock ratio (at least 1.5×) with no per-query floor, "
+             "so a fixed hotspot that drifts back is filed before it reaches 3×.",
              "Fresh connections, one untimed warm-up, identical byte cache budgets, mmap disabled. "
              "All writes use explicit transactions and roll back; setup and rollback are untimed.", "",
              "| Case | Configuration | DoltLite ms | SQLite ms | Median ratio | Minimum pair ratio | Reproducer |",
@@ -429,6 +431,9 @@ def main(argv=None):
                       replay["setup_sql"] if "setup_sql" in replay else (args.replay.parent/"setup.sql").read_text(), "replay")]
         elif args.search:
             specs = search.specs(args.seed, nightly_seeds=args.nightly_seeds, operators=args.operator)
+            if args.nightly_seeds:
+                from performance_hotspot_seeds import BASELINES
+                baselines = json.loads(BASELINES.read_text())
         else:
             specs = []
             for index in indexes:
@@ -464,7 +469,7 @@ def main(argv=None):
                                 shutil.copyfile(databases[arm], case_databases[arm])
                         record = {"id": f"p{index:03d}/{case.name}", "profile": asdict(profile),
                                   "reproducer": f"p{index:03d}/{case.name}.json",
-                                  "origin": "fresh" if args.search and case.name.startswith("generated_") and case.name != "generated_0" else origin}
+                                  "origin": "fresh" if origin != "retired" and args.search and case.name.startswith("generated_") and case.name != "generated_0" else origin}
                         repro = {"seed": report["seed"], "generator_version": VERSION, "profile": asdict(profile),
                                  "case": asdict(case), "setup": "setup.sql", "setup_sql": setup}
                         (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
@@ -478,8 +483,13 @@ def main(argv=None):
                             record["statement"] = statement_fingerprint(case)
                             record["fingerprint"] = fingerprint(profile, case, record["plans"])
                             options = {'setup': setup} if profile.memory else {}
-                            record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, 3.0, args.min_ms,
-                                                       min_query_ms=args.min_query_ms, **options))
+                            threshold, min_query_ms = 3.0, args.min_query_ms
+                            if origin == "retired":
+                                from performance_hotspot_seeds import drift_threshold
+                                threshold, min_query_ms = drift_threshold(profile, case, baselines), 0
+                                record["threshold"] = threshold
+                            record.update(measure_case(runner, binaries, case_databases, profile, case, args.runs, threshold, args.min_ms,
+                                                       min_query_ms=min_query_ms, **options))
                             try:
                                 scaled = probe_counter_scale(
                                     runner, binaries["doltlite"], profile, case, record)
@@ -493,8 +503,8 @@ def main(argv=None):
                                 runner.case_deadline = time.monotonic() + args.timeout
                                 cached = measure_case(runner, binaries, case_databases,
                                                       replace(profile, cache_kib=CACHED_CHECK_KIB), case,
-                                                      args.runs, 3.0, args.min_ms,
-                                                      min_query_ms=args.min_query_ms, **options)
+                                                      args.runs, threshold, args.min_ms,
+                                                      min_query_ms=min_query_ms, **options)
                                 record["cached_ratio"] = cached["ratio"]
                                 if not cached["confirmed"]:
                                     record["confirmed"] = False

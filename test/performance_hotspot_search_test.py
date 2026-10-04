@@ -449,6 +449,13 @@ class IssueTests(unittest.TestCase):
         self.assertIn('| 5 | 80.000 | 20.000 | 4.00× |', body)
         self.assertIn('known-performance-hotspot', body)
 
+    def test_issue_body_states_a_retired_seed_threshold(self):
+        body = issues.issue_body(self.report, self.record, self.bundle, 'run-url')
+        self.assertIn('for the 3× confirmation test', body)
+        body = issues.issue_body(self.report, dict(self.record, threshold=3.6), self.bundle, 'run-url')
+        self.assertIn('Retired nightly seed: confirmed at **3.60×**', body)
+        self.assertNotIn('3× confirmation', body)
+
     def test_issue_lookup_paginates_both_labels_including_closed_issues(self):
         item = {'number': 10, 'html_url': self.issue['url'], 'state': 'closed', 'state_reason': 'completed',
                 'labels': [{'name': 'performance-hotspot'}],

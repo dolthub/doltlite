@@ -68,6 +68,20 @@ class SeedTests(unittest.TestCase):
         self.assertNotEqual(search.family_fingerprint(profile, case, {}),
                             search.family_fingerprint(profile, other, {}))
 
+    def test_every_retired_case_has_a_drift_baseline(self):
+        baselines = json.loads(seeds.BASELINES.read_text())
+        keys = [seeds.seed_key(p, case) for p, cases, _ in seeds.specs() for case in cases]
+        self.assertEqual(len(set(keys)), len(keys))
+        self.assertEqual(set(baselines), set(keys))
+        for key in keys:
+            self.assertGreaterEqual(baselines[key], 0)
+        profile, cases, _ = next(seeds.specs())
+        key = seeds.seed_key(profile, cases[0])
+        self.assertEqual(seeds.drift_threshold(profile, cases[0], {key: 0.2}), 1.5)
+        self.assertAlmostEqual(seeds.drift_threshold(profile, cases[0], {key: 2.4}), 3.6)
+        with self.assertRaises(KeyError):
+            seeds.drift_threshold(profile, cases[0], {})
+
     def test_retired_corpus_moves_to_search_and_random_exploration_continues(self):
         specs = list(seeds.specs())
         self.assertEqual(len(specs), 34)
