@@ -286,6 +286,77 @@ if vc_oracle_finish > "$VC_HARNESS_DIR/setup.log"; then
 fi
 check grep -q 'setup-db' "$VC_HARNESS_DIR/setup.log"
 
+for runner in vc_oracle_run_dolt_script vc_oracle_run_dolt_script_for_error; do
+  export VC_FAIL_STAGE=init
+  : > "$VC_HARNESS_DIR/trace"
+  printf 'stale output\n' > "$VC_HARNESS_DIR/out"
+  rc=0
+  "$runner" "$VC_HARNESS_DIR/repo" "$VC_HARNESS_DIR/out" \
+    "$VC_HARNESS_DIR/err" 'SELECT 1;' || rc=$?
+  check test "$rc" = 23
+  check test "$(cat "$VC_HARNESS_DIR/trace")" = init
+  check grep -qx 'init failure detail' "$VC_HARNESS_DIR/err"
+  check test ! -s "$VC_HARNESS_DIR/out"
+done
+unset VC_FAIL_STAGE
+
+for scenario in setup_both setup_candidate setup_reference setup_and_target \
+                target_both target_missing unlocated crash conflicted conflict_missing \
+                wrong_target_class; do
+  if ! (
+    vc_oracle_run_doltlite_script() {
+      printf '%s\n' "$dl_output" > "$2"
+      printf '%s\n' "$dl_error" > "$3"
+      return "$candidate_rc"
+    }
+    vc_oracle_run_dolt_script_for_error() {
+      printf '%s\n' "$dt_output" > "$2"
+      printf '%s\n' "$dt_error" > "$3"
+      return "$reference_rc"
+    }
+    TMPROOT="$VC_HARNESS_DIR/target-errors"
+    pass=0; fail=0; FAILED_NAMES=""
+    sql=$'SELECT 1;\nSELECT 2;'
+    candidate_rc=1; reference_rc=1
+    dl_output=""; dt_output=""
+    dl_error='Error near line 2: target failure'
+    dt_error='error on line 2 for query SELECT 2: target failure'
+    mode=""; pattern=""
+    expected=0
+    case "$scenario" in
+      setup_both) dl_error='Error near line 1: setup failure'; dt_error='error on line 1 for query SELECT 1: setup failure' ;;
+      setup_candidate) dl_error='Error near line 1: setup failure' ;;
+      setup_reference) dt_error='error on line 1 for query SELECT 1: setup failure' ;;
+      setup_and_target) dl_error=$'Error near line 1: setup failure\nError near line 2: target failure' ;;
+      target_both) expected=1 ;;
+      target_missing) candidate_rc=0; dl_error="" ;;
+      unlocated) dl_error='startup failure' ;;
+      crash) candidate_rc=139 ;;
+      conflicted|conflict_missing|wrong_target_class)
+        sql=$'BEGIN;\nSELECT dolt_merge(\'feature\');\nSELECT \'VC_ORACLE_CONFLICTS\', COUNT(*) FROM dolt_conflicts;\nSELECT dolt_commit(\'-m\',\'conflict\');'
+        dl_error=$'Error near line 2: Merge has 1 conflict(s). Resolve and then commit with dolt_commit.\nError near line 4: cannot commit: unresolved merge conflicts'
+        dt_error="error on line 4 for query CALL dolt_commit('-m','conflict'): the table(s) t are in conflict"
+        dl_output='VC_ORACLE_CONFLICTS|1'; dt_output='VC_ORACLE_CONFLICTS,1'
+        mode=--conflicted-setup
+        pattern='unresolved merge conflicts|are in conflict'
+        case "$scenario" in
+          conflicted) expected=1 ;;
+          conflict_missing) dl_output='VC_ORACLE_CONFLICTS|0' ;;
+          wrong_target_class) dt_error='error on line 4 for query CALL dolt_commit: nothing to commit' ;;
+        esac
+        ;;
+    esac
+    vc_oracle_error "$scenario" "$sql" "$mode" "$pattern" \
+      > "$VC_HARNESS_DIR/target-errors.log" || true
+    [ "$pass" -eq "$expected" ] && [ "$fail" -eq $((1-expected)) ]
+  ); then
+    echo "FAIL: vc_oracle_error accepted or rejected the wrong statement: $scenario" >&2
+    cat "$VC_HARNESS_DIR/target-errors.log" >&2
+    exit 1
+  fi
+  checks=$((checks+1))
+done
+
 python3 "$SCRIPT_DIR/lib/vc_oracle_refusals.py" selftest
 
 printf 'VC oracle harness: %s checks passed\n' "$checks"

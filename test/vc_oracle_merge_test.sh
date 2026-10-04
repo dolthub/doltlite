@@ -1225,18 +1225,8 @@ vc_oracle_error "merge_no_args" "
 SELECT dolt_merge();
 "
 
-vc_oracle_error "merge_abort_with_extra_args" "
-CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
-INSERT INTO t VALUES (1, 1);
-SELECT dolt_commit('-A', '-m', 'init');
-SELECT dolt_branch('feature');
-SELECT dolt_checkout('feature');
-UPDATE t SET v = 100 WHERE id = 1;
-SELECT dolt_commit('-A', '-m', 'feat1');
-SELECT dolt_checkout('main');
-UPDATE t SET v = 999 WHERE id = 1;
-SELECT dolt_commit('-A', '-m', 'main2');
-SELECT dolt_merge('feature');
+vc_oracle_error "merge_abort_with_extra_args_without_active_merge" "
+$SEED
 SELECT dolt_merge('--abort', 'extra');
 "
 
@@ -2103,7 +2093,8 @@ SELECT dolt_merge('feat');
 "SELECT CONCAT('Q', char(9), (SELECT COUNT(*) FROM dolt_schema_conflicts), char(9), (SELECT COUNT(*) FROM dolt_conflicts), char(9), (SELECT COALESCE(SUM(num_conflicts), 0) FROM dolt_conflicts), char(9), (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t));"
 
 vc_oracle_error "dual_add_table_different_schema_refused" "
-SELECT dolt_commit('-Am', 'init empty');
+CREATE TABLE base(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'init');
 SELECT dolt_branch('feat');
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'main');

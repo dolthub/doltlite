@@ -75,28 +75,6 @@ oracle() {
 }
 
 
-oracle_error_match() {
-  local name="$1" setup="$2" pattern="$3"
-  local dir="$TMPROOT/${name}_err"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --allow-error
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-
-  if grep -qE "$pattern" "$dir/dl.err" "$dir/dl.out" \
-    && grep -qE "$pattern" "$dir/dt.err" "$dir/dt.out"; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to match error pattern)"
-    echo "    pattern: $pattern"
-  fi
-}
-
 oracle_same_session() {
   local name="$1" dl_setup="$2" dl_query="$3" dolt_setup="${4:-$2}" dolt_query="${5:-$3}"
   local dir="$TMPROOT/${name}_ss"
@@ -779,7 +757,7 @@ SELECT dolt_reset('--soft', '--hard', 'HEAD');
 
 echo "--- merge conflict guards ---"
 
-VC_ORACLE_EXPECTATION=allow-error oracle_error_match "reset_no_args_during_merge_conflict" "
+vc_oracle_error "reset_no_args_during_merge_conflict" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -793,11 +771,13 @@ UPDATE t SET v = 11 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
+BEGIN;
 SELECT dolt_merge('feature');
+SELECT 'VC_ORACLE_CONFLICTS', COUNT(*) FROM dolt_conflicts;
 SELECT dolt_reset();
-" "(Merge conflict detected|cannot merge: conflicts detected)"
+" --conflicted-setup "Merge conflict detected|cannot merge: conflicts detected"
 
-VC_ORACLE_EXPECTATION=allow-error oracle_error_match "reset_soft_during_merge_conflict" "
+vc_oracle_error "reset_soft_during_merge_conflict" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
@@ -811,9 +791,11 @@ UPDATE t SET v = 11 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
+BEGIN;
 SELECT dolt_merge('feature');
+SELECT 'VC_ORACLE_CONFLICTS', COUNT(*) FROM dolt_conflicts;
 SELECT dolt_reset('--soft');
-" "(Merge conflict detected|cannot merge: conflicts detected)"
+" --conflicted-setup "Merge conflict detected|cannot merge: conflicts detected"
 
 echo "--- savepoint parity ---"
 

@@ -700,9 +700,11 @@ UPDATE t SET v = 11 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
+BEGIN;
 SELECT dolt_merge('feature');
+SELECT 'VC_ORACLE_CONFLICTS', COUNT(*) FROM dolt_conflicts;
 SELECT dolt_commit('-m', 'force-commit-with-conflict');
-"
+" --conflicted-setup "unresolved merge conflicts|are in conflict"
 
 vc_oracle_error "commit_missing_fk_parent_empty" "
 CREATE TABLE parents(id INTEGER PRIMARY KEY);
