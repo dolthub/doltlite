@@ -1,18 +1,9 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
-run_test() {
-  local n="$1" s="$2" e="$3" d="$4"
-  local r=$(printf '%s\n' "$s" | $DOLTLITE "$d" 2>&1)
-  if [ "$r" = "$e" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"
-  fi
-}
 
 db_rm() { rm -f "$1" "${1}-wal"; }
 
@@ -84,11 +75,4 @@ else
 fi
 db_rm "$DB"
 
-echo ""
-if [ $FAIL -gt 0 ]; then
-  printf "$ERRORS\n"
-  echo "RESULTS: $PASS passed, $FAIL failed"
-  exit 1
-fi
-echo "RESULTS: $PASS passed, $FAIL failed"
-echo "__SUITE_COMPLETE__"
+dltest_finish

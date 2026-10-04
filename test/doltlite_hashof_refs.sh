@@ -68,12 +68,12 @@ SELECT dolt_hashof_db('STAGED') != dolt_hashof_db('HEAD');")" \
   "1" \
   "$DB"
 
-run_test_match "hashof_working_still_errors" \
+run_test_error_match "hashof_working_still_errors" \
   "$(dirty "SELECT dolt_hashof('WORKING');")" \
   "invalid ref spec" \
   "$DB"
 
-run_test_match "hashof_staged_still_errors" \
+run_test_error_match "hashof_staged_still_errors" \
   "$(dirty "SELECT dolt_hashof('STAGED');")" \
   "invalid ref spec" \
   "$DB"
@@ -99,7 +99,7 @@ run_test "hashof_index_distinguishes_indexes" \
 run_test "hashof_index_accepts_a_ref" \
   "SELECT dolt_hashof_index('child_grp') = dolt_hashof_index('child_grp','HEAD');" \
   "1" "$DBI"
-run_test_match "hashof_index_unknown_name_errors" \
+run_test_error_match "hashof_index_unknown_name_errors" \
   "SELECT dolt_hashof_index('nope');" \
   "index not found" "$DBI"
 run_test "hashof_index_null_is_null" \

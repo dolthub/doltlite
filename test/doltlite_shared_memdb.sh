@@ -27,7 +27,7 @@ INSERT INTO a.t VALUES(5);
 SELECT id FROM b.t;
 " "5" "$DB"
 
-run_test_match "private_mode_memory_not_shared" "
+run_test_error_match "private_mode_memory_not_shared" "
 ATTACH 'file:dlsh_c?mode=memory' AS a;
 ATTACH 'file:dlsh_c?mode=memory' AS b;
 CREATE TABLE a.t(id INT PRIMARY KEY);

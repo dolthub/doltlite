@@ -1,20 +1,10 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 # dsCountRows sums INTERNAL subtree counts; tables >800 rows so the tree is multi-level.
 
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
-run_test() {
-  local n="$1" s="$2" e="$3" d="$4"
-  local r
-  r=$(printf '%s\n' "$s" | "$DOLTLITE" "$d" 2>&1)
-  if [ "$r" = "$e" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"
-  fi
-}
 
 DB=/tmp/test_diff_stat_scale_$$.db
 rm -f "$DB" "${DB}-wal"
@@ -55,9 +45,4 @@ run_test "scale_incremental_rows_unmodified" \
 
 rm -f "$DB" "${DB}-wal"
 
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ "$FAIL" -ne 0 ]; then
-  printf '%b\n' "$ERRORS"
-  exit 1
-fi
-echo "__SUITE_COMPLETE__"
+dltest_finish

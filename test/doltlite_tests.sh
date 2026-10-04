@@ -34,19 +34,19 @@ run_test "status_new_table" \
   "SELECT table_name, staged, status FROM dolt_status;" \
   "dolt_tests|0|new table" "$DB"
 
-run_test_match "duplicate_name_rejected" \
+run_test_error_match "duplicate_name_rejected" \
   "INSERT INTO dolt_tests VALUES('rows','x','SELECT 1','expected_rows','==','1');" \
   "UNIQUE constraint failed: dolt_tests.test_name" "$DB"
 
-run_test_match "null_query_rejected" \
+run_test_error_match "null_query_rejected" \
   "INSERT INTO dolt_tests VALUES('null_query',NULL,NULL,'expected_rows','==','1');" \
   "NOT NULL constraint failed: dolt_tests.test_query" "$DB"
 
-run_test_match "invalid_assertion_rejected" \
+run_test_error_match "invalid_assertion_rejected" \
   "INSERT INTO dolt_tests VALUES('bad_type',NULL,'SELECT 1','row_count','==','1');" \
   "CHECK constraint failed" "$DB"
 
-run_test_match "invalid_comparator_rejected" \
+run_test_error_match "invalid_comparator_rejected" \
   "INSERT INTO dolt_tests VALUES('bad_cmp',NULL,'SELECT 1','expected_rows','=','1');" \
   "CHECK constraint failed" "$DB"
 
@@ -194,11 +194,11 @@ run_test "runner_query_error" \
    SELECT test_name, status, message FROM dolt_test_run('errors');" \
   "query_error|FAIL|query error: table not found: absent" "$DB"
 
-run_test_match "runner_missing_argument" \
+run_test_error_match "runner_missing_argument" \
   "SELECT * FROM dolt_test_run('missing');" \
   "could not find tests for argument: missing" "$DB"
 
-run_test_match "runner_nonliteral_argument" \
+run_test_error_match "runner_nonliteral_argument" \
   "SELECT * FROM dolt_test_run(upper('errors'));" \
   "dolt_test_run requires literal arguments" "$DB"
 
@@ -233,7 +233,7 @@ run_test "rollback_undoes_materialization" \
   "0
 0" "$DB"
 
-run_test_match "runner_without_tests_errors" \
+run_test_error_match "runner_without_tests_errors" \
   "SELECT * FROM dolt_test_run();" \
   "could not find tests for argument: *" "$DB"
 
@@ -263,7 +263,7 @@ rm -f "$DB"
 DB=/tmp/test_dolt_tests_bad_schema_$$.db
 rm -f "$DB"
 
-run_test_match "hand_created_wrong_check_rejected" \
+run_test_error_match "hand_created_wrong_check_rejected" \
   "CREATE TABLE dolt_tests(
      test_name TEXT NOT NULL,
      test_group TEXT,

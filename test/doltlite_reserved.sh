@@ -16,31 +16,31 @@ run_test "system_log_still_readable" \
   "SELECT count(*) FROM dolt_log;" \
   "2" "$DB"
 
-run_test_match "create_table_dolt_log_reserved" \
+run_test_error_match "create_table_dolt_log_reserved" \
   "CREATE TABLE dolt_log(x);" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "create_table_dolt_status_case_reserved" \
+run_test_error_match "create_table_dolt_status_case_reserved" \
   "CREATE TABLE DOLT_STATUS(x);" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "create_view_dolt_branches_reserved" \
+run_test_error_match "create_view_dolt_branches_reserved" \
   "CREATE VIEW dolt_branches AS SELECT 1 AS x;" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "create_vtable_dolt_conflicts_reserved" \
+run_test_error_match "create_vtable_dolt_conflicts_reserved" \
   "CREATE VIRTUAL TABLE dolt_conflicts USING fts5(a);" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "create_index_dolt_name_reserved" \
+run_test_error_match "create_index_dolt_name_reserved" \
   "CREATE INDEX dolt_idx ON t(v);" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "create_trigger_dolt_name_reserved" \
+run_test_error_match "create_trigger_dolt_name_reserved" \
   "CREATE TRIGGER dolt_trg AFTER INSERT ON t BEGIN SELECT 1; END;" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "rename_to_dolt_status_reserved" \
+run_test_error_match "rename_to_dolt_status_reserved" \
   "ALTER TABLE t RENAME TO dolt_status;" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
@@ -52,15 +52,15 @@ run_test "log_unshadowed_after_refused_create" \
   "SELECT count(*) FROM dolt_log;" \
   "2" "$DB"
 
-run_test_match "create_view_dolt_ignore_reserved" \
+run_test_error_match "create_view_dolt_ignore_reserved" \
   "CREATE VIEW dolt_ignore AS SELECT 1 AS x;" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "create_vtable_dolt_docs_reserved" \
+run_test_error_match "create_vtable_dolt_docs_reserved" \
   "CREATE VIRTUAL TABLE dolt_docs USING fts5(a);" \
   "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_match "create_dolt_ignore_extra_col_shape" \
+run_test_error_match "create_dolt_ignore_extra_col_shape" \
   "CREATE TABLE dolt_ignore(
       pattern TEXT NOT NULL,
       ignored TINYINT NOT NULL,
@@ -77,7 +77,7 @@ run_test "create_dolt_ignore_shape_ok" \
    SELECT * FROM dolt_ignore;" \
   "tmp_*|1" "$DB"
 
-run_test_match "add_column_dolt_ignore_refused" \
+run_test_error_match "add_column_dolt_ignore_refused" \
   "ALTER TABLE dolt_ignore ADD COLUMN extra INT;" \
   "table dolt_ignore may not be altered" "$DB"
 
@@ -85,11 +85,11 @@ run_test "add_column_refused_status_still_works" \
   "SELECT table_name, status FROM dolt_status WHERE table_name='dolt_ignore';" \
   "dolt_ignore|new table" "$DB"
 
-run_test_match "rename_column_dolt_ignore_refused" \
+run_test_error_match "rename_column_dolt_ignore_refused" \
   "ALTER TABLE dolt_ignore RENAME COLUMN ignored TO flagged;" \
   "table dolt_ignore may not be altered" "$DB"
 
-run_test_match "drop_column_dolt_ignore_refused" \
+run_test_error_match "drop_column_dolt_ignore_refused" \
   "ALTER TABLE dolt_ignore DROP COLUMN ignored;" \
   "table dolt_ignore may not be altered" "$DB"
 
@@ -107,7 +107,7 @@ run_test "create_dolt_docs_shape_ok" \
    SELECT doc_name FROM dolt_docs;" \
   "README.md" "$DB"
 
-run_test_match "add_column_dolt_docs_refused" \
+run_test_error_match "add_column_dolt_docs_refused" \
   "ALTER TABLE dolt_docs ADD COLUMN extra INT;" \
   "may not be altered" "$DB"
 
@@ -127,7 +127,7 @@ run_test "create_dolt_rebase_still_allowed" \
    SELECT id FROM dolt_rebase;" \
   "1" "$DB"
 
-run_test_match "add_column_dolt_rebase_refused" \
+run_test_error_match "add_column_dolt_rebase_refused" \
   "ALTER TABLE dolt_rebase ADD COLUMN extra INT;" \
   "table dolt_rebase may not be altered" "$DB"
 

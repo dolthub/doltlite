@@ -65,22 +65,22 @@ run_test_lastline "date_fractional_comma_truncated" \
   "2024-01-15 10:00:00" \
   "$DB"
 
-run_test_match "date_junk_rejected" \
+run_test_error_match "date_junk_rejected" \
   "$(err_setup '2024-01-15T10:00:00junk')" \
   "could not parse --date" \
   "$DB"
 
-run_test_match "date_space_rejected" \
+run_test_error_match "date_space_rejected" \
   "$(err_setup '2024-01-15 10:00:00')" \
   "could not parse --date" \
   "$DB"
 
-run_test_match "date_invalid_day_rejected" \
+run_test_error_match "date_invalid_day_rejected" \
   "$(err_setup '2024-02-31T00:00:00Z')" \
   "could not parse --date" \
   "$DB"
 
-run_test_match "date_offset_without_colon_rejected" \
+run_test_error_match "date_offset_without_colon_rejected" \
   "$(err_setup '2024-01-15T10:00:00-0500')" \
   "could not parse --date" \
   "$DB"

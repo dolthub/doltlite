@@ -317,6 +317,9 @@ lint:
 	@bash $(TOP)/test/lint_new_table_am.sh --selftest
 	@bash $(TOP)/test/lint_suite_finish_exit.sh
 	@bash $(TOP)/test/lint_suite_finish_exit.sh --selftest
+	@bash $(TOP)/test/lint_native_test_helpers.sh
+	@bash $(TOP)/test/lint_native_test_helpers.sh --selftest
+	@bash $(TOP)/test/doltlite_test_harness_test.sh
 	@bash $(TOP)/test/lint_no_raw_os_fileio.sh $(TOP)/src
 	@bash $(TOP)/test/lint_export_filters.sh $(TOP)/src
 	@bash $(TOP)/test/lint_orig_btree_adapter.sh $(TOP)/src

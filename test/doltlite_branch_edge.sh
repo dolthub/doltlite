@@ -1,8 +1,7 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 DOLTLITE=${DOLTLITE:-./doltlite}
 PASS=0; FAIL=0; ERRORS=""
-run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); echo "  PASS: $n"; else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; echo "  FAIL: $n"; echo "    expected: $e"; echo "    got:      $r"; fi; }
-run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if echo "$r"|grep -qE "$p"; then PASS=$((PASS+1)); echo "  PASS: $n"; else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"; echo "  FAIL: $n"; echo "    pattern: $p"; echo "    got:     $r"; fi; }
 
 db_rm() { rm -f "$1" "${1}-wal" "${1}-journal"; }
 
@@ -34,21 +33,21 @@ db_rm "$DB"
 DB=/tmp/test_bedge_delnone_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "delete_nonexistent_branch" "SELECT dolt_branch('-d','nope');" "not found" "$DB"
+run_test_error_match "delete_nonexistent_branch" "SELECT dolt_branch('-d','nope');" "not found" "$DB"
 db_rm "$DB"
 
 DB=/tmp/test_bedge_dup_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "create_duplicate_branch" "SELECT dolt_branch('feature');" "already exists" "$DB"
+run_test_error_match "create_duplicate_branch" "SELECT dolt_branch('feature');" "already exists" "$DB"
 db_rm "$DB"
 
 DB=/tmp/test_bedge_delcur_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "delete_current_branch" "SELECT dolt_branch('-d','feat');" "cannot delete" "$DB/feat"
+run_test_error_match "delete_current_branch" "SELECT dolt_branch('-d','feat');" "cannot delete" "$DB/feat"
 db_rm "$DB"
 
 DB=/tmp/test_bedge_tag_branch_$$.db; db_rm "$DB"
@@ -299,7 +298,7 @@ INSERT INTO new_table VALUES(1,'from_feat');
 SELECT dolt_commit('-A','-m','add new_table');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "schema_merge_pre_no_table" \
+run_test_error_match "schema_merge_pre_no_table" \
   "SELECT count(*) FROM new_table;" \
   "no such table" "$DB"
 
@@ -325,7 +324,7 @@ run_test "schema_drop_pre" "SELECT count(*) FROM drop_me;" "1" "$DB"
 
 echo "SELECT dolt_merge('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "schema_drop_post" \
+run_test_error_match "schema_drop_post" \
   "SELECT count(*) FROM drop_me;" \
   "no such table" "$DB"
 run_test "schema_drop_other_intact" "SELECT v FROM t WHERE id=1;" "keep" "$DB"
@@ -456,7 +455,7 @@ SELECT dolt_commit('-A','-m','c2');
 INSERT INTO t VALUES(3,'c3');
 SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "force_current_branch_rejected" \
+run_test_error_match "force_current_branch_rejected" \
   "SELECT dolt_branch('-f','main','HEAD~2');" \
   "cannot force-update the current branch" "$DB"
 
@@ -488,22 +487,18 @@ run_test_match "force_create_new_branch_allowed" \
   "SELECT dolt_branch('-f','brand_new');" \
   "^$|0" "$DB"
 
-run_test_match "reserved_working_branch_rejected" \
+run_test_error_match "reserved_working_branch_rejected" \
   "SELECT dolt_branch('WORKING');" \
   "invalid branch name" "$DB"
 
-run_test_match "reserved_staged_branch_rejected" \
+run_test_error_match "reserved_staged_branch_rejected" \
   "SELECT dolt_checkout('-b','staged');" \
   "invalid branch name" "$DB"
 
-run_test_match "hash_branch_rejected" \
+run_test_error_match "hash_branch_rejected" \
   "SELECT dolt_branch('0123456789012345678901234567890123456789');" \
   "invalid branch name" "$DB"
 
 db_rm "$DB"
 
-echo ""
-
-echo "=== Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests ==="
-if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
-echo "__SUITE_COMPLETE__"
+dltest_finish

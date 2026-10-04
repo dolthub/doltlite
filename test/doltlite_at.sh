@@ -188,7 +188,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "notable" \
+run_test_error_match "notable" \
   "SELECT count(*) FROM dolt_at_nonexistent( (SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "no such table" "$DB"
 
@@ -199,7 +199,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "noref" \
+run_test_error_match "noref" \
   "SELECT count(*) FROM dolt_at_t( 'nonexistent_branch');" \
   "ref not found" "$DB"
 
@@ -244,7 +244,7 @@ CREATE TABLE t2(id INTEGER PRIMARY KEY);
 INSERT INTO t2 VALUES(1);
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "late_no_t2" \
+run_test_error_match "late_no_t2" \
   "SELECT count(*) FROM dolt_at_t2( (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1));" \
   "table not found: t2 at" "$DB"
 
@@ -559,16 +559,16 @@ SQL
 run_test "at_feature_tip_has_committed_column" \
   "SELECT id || '|' || v || '|' || extra FROM dolt_at_t('feature');" \
   "1|base|feat" "$DBSC"
-run_test_match "at_feature_tip_hides_working_column" \
+run_test_error_match "at_feature_tip_hides_working_column" \
   "SELECT working_extra FROM dolt_at_t('feature');" \
   "no such column: working_extra" "$DBSC"
 run_test "at_working_has_uncommitted_column" \
   "SELECT id || '|' || v || '|' || coalesce(working_extra,'NULL') FROM dolt_at_t('WORKING');" \
   "1|base|NULL" "$DBSC"
-run_test_match "at_working_hides_other_branch_column" \
+run_test_error_match "at_working_hides_other_branch_column" \
   "SELECT extra FROM dolt_at_t('WORKING');" \
   "no such column: extra" "$DBSC"
-run_test_match "at_head_hides_other_branch_column" \
+run_test_error_match "at_head_hides_other_branch_column" \
   "SELECT extra FROM dolt_at_t('HEAD');" \
   "no such column: extra" "$DBSC"
 rm -f "$DBSC"
@@ -594,7 +594,7 @@ run_test "at_drop_old_then_head" \
 SELECT id || '|' || b || '|' || c FROM dolt_at_t('HEAD');" \
   "1|10|20|30
 1|21|30" "$DBPIN"
-run_test_match "at_drop_old_then_head_hides_a" \
+run_test_error_match "at_drop_old_then_head_hides_a" \
   "SELECT b FROM dolt_at_t('HEAD~1');
 SELECT a FROM dolt_at_t('HEAD');" \
   "no such column: a" "$DBPIN"
@@ -623,7 +623,7 @@ SELECT id || '|' || a || '|' || c FROM dolt_at_t('HEAD') ORDER BY id;" \
 2|30|40|NULL
 1|10|21
 2|30|40" "$DBREN"
-run_test_match "at_rename_old_then_head_hides_b" \
+run_test_error_match "at_rename_old_then_head_hides_b" \
   "SELECT b FROM dolt_at_t('HEAD~1');
 SELECT b FROM dolt_at_t('HEAD');" \
   "no such column: b" "$DBREN"
@@ -647,7 +647,7 @@ SELECT dolt_commit('-Am','c1');
 ALTER TABLE t RENAME TO t2;
 SELECT dolt_commit('-Am','c2');
 SQL
-run_test_match "at_absent_after_present_ref" \
+run_test_error_match "at_absent_after_present_ref" \
   "SELECT a FROM dolt_at_t('HEAD~1');
 SELECT a FROM dolt_at_t('HEAD~2');" \
   "table not found: t at HEAD~2" "$DBMISS"

@@ -87,7 +87,7 @@ UPDATE t SET extra='feat_val';
 SELECT dolt_commit('-A','-m','feat adds extra');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "alter_same_col_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
+run_test_error_match "alter_same_col_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
 
 rm -f "$DB"
 
@@ -111,7 +111,7 @@ run_test_match "schema_diff_cols_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]"
 
 run_test_match "schema_diff_cols_has_col_main" \
   "SELECT col_main FROM t WHERE id=1;" \
-  "m" "$DB"
+  "^m$" "$DB"
 
 run_test_match "schema_diff_cols_has_col_feat" \
   "SELECT typeof(col_feat) FROM t WHERE id=1;" \
@@ -135,7 +135,7 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','insert into t');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "drop_vs_modify_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
+run_test_error_match "drop_vs_modify_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
 
 run_test "drop_vs_modify_keep" "SELECT w FROM keep WHERE id=1;" "x" "$DB"
 
@@ -472,7 +472,7 @@ ALTER TABLE t ADD COLUMN extra TEXT;
 SELECT dolt_commit('-A','-m','feat adds extra TEXT');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "schema_merge_same_col_diff_type" "SELECT dolt_merge('feat');" "schema conflict|conflict|Error" "$DB"
+run_test_error_match "schema_merge_same_col_diff_type" "SELECT dolt_merge('feat');" "schema conflict|conflict|Error" "$DB"
 run_test "schema_merge_autocommit_schema_conflicts_empty" \
   "SELECT count(*) FROM dolt_schema_conflicts;" "0" "$DB"
 run_test "schema_merge_autocommit_conflicts_empty" \
@@ -502,19 +502,19 @@ sc() { printf "BEGIN;\nSELECT dolt_merge('feat');\n%s\nROLLBACK;\n" "$1"; }
 run_test "schema_conflicts_columns" \
   "SELECT group_concat(name, '|') FROM (SELECT name FROM pragma_table_info('dolt_schema_conflicts') ORDER BY cid);" \
   "table_name|base_schema|our_schema|their_schema|description" "$DB"
-run_test_lastline "schema_conflicts_summary" \
+run_test_error_lastline "schema_conflicts_summary" \
   "$(sc "SELECT \"table\" || '|' || num_conflicts FROM dolt_conflicts;")" \
-  "t|0" "$DB"
-run_test_lastline "schema_conflicts_status" \
+  "t|0" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
+run_test_error_lastline "schema_conflicts_status" \
   "$(sc "SELECT table_name || '|' || staged || '|' || status FROM dolt_status WHERE status='schema conflict';")" \
-  "t|0|schema conflict" "$DB"
-run_test_lastline "schema_conflicts_row" \
+  "t|0|schema conflict" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
+run_test_error_lastline "schema_conflicts_row" \
   "$(sc "SELECT table_name || '|' || (base_schema LIKE 'CREATE TABLE t%') || '|' || (our_schema LIKE '%extra INTEGER%') || '|' || (their_schema LIKE '%extra TEXT%') || '|' || description FROM dolt_schema_conflicts;")" \
-  "t|1|1|1|both branches add column 'extra' with different definitions" "$DB"
-run_test_match "schema_conflicts_resolve_refused" \
+  "t|1|1|1|both branches add column 'extra' with different definitions" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
+run_test_error_match "schema_conflicts_resolve_refused" \
   "$(sc "SELECT dolt_conflicts_resolve('--ours','t');")" \
   "Unable to automatically resolve schema conflicts|Error" "$DB"
-run_test_match "schema_conflicts_commit_refused" \
+run_test_error_match "schema_conflicts_commit_refused" \
   "$(sc "SELECT dolt_commit('-Am','must fail');")" \
   "unresolved schema conflicts|Error" "$DB"
 
@@ -522,9 +522,9 @@ run_test_match "schema_conflicts_commit_refused" \
 run_test "schema_conflicts_not_persisted" \
   "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts);" \
   "0|0" "$DB"
-run_test_match "schema_conflicts_abort" \
+run_test_error_output_match "schema_conflicts_abort" \
   "BEGIN; SELECT dolt_merge('feat');
-SELECT dolt_merge('--abort');" "^[0-9]+$" "$DB"
+SELECT dolt_merge('--abort');" "^[0-9]+$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 run_test "schema_conflicts_abort_clears" \
   "SELECT (SELECT count(*) FROM dolt_schema_conflicts) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_status WHERE status='schema conflict');" \
   "0|0|0" "$DB"
@@ -703,7 +703,7 @@ run_test "schema_tokenizer_default_value" \
 run_test "schema_tokenizer_check" \
   "SELECT count(*) FROM pragma_table_xinfo('t_check') WHERE name IN ('main_col','feat_col');" \
   "2" "$DB"
-run_test_match "schema_tokenizer_check_value" \
+run_test_error_match "schema_tokenizer_check_value" \
   "INSERT INTO t_check(id,v) VALUES(1,')');" \
   "CHECK constraint failed" "$DB"
 run_test "schema_tokenizer_generated" \
@@ -1538,7 +1538,7 @@ run_test_match "merge_unique_index_over_renamed_column_merges" \
 run_test "merge_unique_index_over_renamed_column_retargeted" \
   "SELECT sql FROM sqlite_master WHERE type='index';" \
   "CREATE UNIQUE INDEX ux ON t(b2)" "$DB"
-run_test_match "merge_unique_index_over_renamed_column_enforces" \
+run_test_error_match "merge_unique_index_over_renamed_column_enforces" \
   "INSERT INTO t VALUES(2,'x','b1');" "UNIQUE constraint failed" "$DB"
 rm -f "$DB"
 
@@ -1759,7 +1759,7 @@ SELECT dolt_checkout('main');
 $MAIN
 SELECT dolt_commit('-Am','main side');
 EOF
-  run_test_match "merge_drop_vs_edit_of_that_column_${dir}_refused" \
+  run_test_error_match "merge_drop_vs_edit_of_that_column_${dir}_refused" \
     "SELECT dolt_merge('feat');" \
     "column 'b' of table 't' was dropped on one branch and its value changed" "$DB"
   run_test "merge_drop_vs_edit_of_that_column_${dir}_integrity" \
@@ -1782,7 +1782,7 @@ SELECT dolt_checkout('main');
 UPDATE t SET b='edit' WHERE k=1;
 SELECT dolt_commit('-Am','main edits b');
 EOF
-run_test_match "merge_drop_vs_edit_added_column_refused" \
+run_test_error_match "merge_drop_vs_edit_added_column_refused" \
   "SELECT dolt_merge('feat');" \
   "column 'b' of table 't' was dropped on one branch and its value changed" "$DB"
 run_test "merge_drop_vs_edit_added_column_kept" \
@@ -1824,7 +1824,7 @@ SELECT dolt_checkout('main');
 CREATE INDEX ia ON t(a);
 SELECT dolt_commit('-Am','main duplicates the index');
 EOF
-run_test_match "merge_duplicate_index_columns_refused" "SELECT dolt_merge('feat');" \
+run_test_error_match "merge_duplicate_index_columns_refused" "SELECT dolt_merge('feat');" \
   "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB"
 rm -f "$DB"
 
@@ -1847,7 +1847,7 @@ SELECT dolt_reset('--hard','HEAD~1');
 ALTER TABLE t DROP COLUMN b;
 SELECT dolt_commit('-Am','feat drops b after reset');
 EOF
-run_test_match "pull_duplicate_index_columns_refused" \
+run_test_error_match "pull_duplicate_index_columns_refused" \
   "SELECT dolt_pull('origin','feat');" \
   "indexes 'ia' and 'ix0' cover the same columns of table 't'" "$DB/feat"
 run_test "pull_duplicate_index_columns_integrity" \
@@ -2047,13 +2047,13 @@ SELECT dolt_checkout('main');
 $MAIN
 SELECT dolt_commit('-Am','main side');
 EOF
-  run_test_match "merge_both_add_same_col_and_drop_other_${dir}_refused" \
+  run_test_error_match "merge_both_add_same_col_and_drop_other_${dir}_refused" \
     "SELECT dolt_merge('feat');" \
     "cannot merge: conflicts detected" "$DB"
   sc_both_add() { printf "BEGIN;\nSELECT dolt_merge('feat');\n%s\nROLLBACK;\n" "$1"; }
-  run_test_lastline "merge_both_add_same_col_and_drop_other_${dir}_description" \
+  run_test_error_lastline "merge_both_add_same_col_and_drop_other_${dir}_description" \
     "$(sc_both_add "SELECT description FROM dolt_schema_conflicts;")" \
-    "column 'c1899' dropped on one branch while both branches add column 'c1699'" "$DB"
+    "column 'c1899' dropped on one branch while both branches add column 'c1699'" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
   run_test "merge_both_add_same_col_and_drop_other_${dir}_integrity" \
     "PRAGMA integrity_check;" "ok" "$DB"
   rm -f "$DB"
@@ -2112,7 +2112,7 @@ ALTER TABLE t ADD COLUMN c1699 TEXT;
 SELECT dolt_commit('-Am','main side');
 EOF
   if [ "$4" = refuse ]; then
-    run_test_match "merge_bothadd_$1_refused" "SELECT dolt_merge('feat');" \
+    run_test_error_match "merge_bothadd_$1_refused" "SELECT dolt_merge('feat');" \
       "cannot merge: conflicts detected" "$DB"
   else
     run_test_match "merge_bothadd_$1_merges" "SELECT dolt_merge('feat');" \
@@ -2579,7 +2579,7 @@ SELECT dolt_checkout('main');
 $MAIN
 SELECT dolt_commit('-Am','ours');
 EOF
-  run_test_match "merge_virtual_hides_drop_vs_edit_${dir}_refused" \
+  run_test_error_match "merge_virtual_hides_drop_vs_edit_${dir}_refused" \
     "SELECT dolt_merge('feature');" \
     "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
   run_test "merge_virtual_hides_drop_vs_edit_${dir}_unmerged" \
@@ -2664,7 +2664,7 @@ UPDATE t SET a=20 WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_virtual_drop_vs_edit_without_rowid_refused" \
+run_test_error_match "merge_virtual_drop_vs_edit_without_rowid_refused" \
   "SELECT dolt_merge('feature');" \
   "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
 run_test "merge_virtual_drop_vs_edit_without_rowid_unmerged" \
@@ -2689,7 +2689,7 @@ UPDATE t SET a=20 WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_two_virtual_drop_vs_edit_refused" \
+run_test_error_match "merge_two_virtual_drop_vs_edit_refused" \
   "SELECT dolt_merge('feature');" \
   "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
 rm -f "$DB"
@@ -2711,7 +2711,7 @@ UPDATE t SET a=20 WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_stored_before_drop_vs_edit_refused" \
+run_test_error_match "merge_stored_before_drop_vs_edit_refused" \
   "SELECT dolt_merge('feature');" \
   "column 'a' of table 't' was dropped on one branch and its value changed" "$DB"
 rm -f "$DB"
@@ -2737,13 +2737,13 @@ UPDATE t SET a=10 WHERE id=1;
 SELECT dolt_commit('-Am','edit a');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_rename_swap_refused" "SELECT dolt_merge('f');" \
+run_test_error_match "merge_rename_swap_refused" "SELECT dolt_merge('f');" \
   "table 't' renames a column to 'b', a name another of its columns had" "$DB"
 run_test "merge_rename_swap_rows_untouched" \
   "SELECT group_concat(id||':'||b||':'||a) FROM t;" "1:1:1,2:2:2,3:3:3" "$DB"
 run_test "merge_rename_swap_head_untouched" \
   "SELECT message FROM dolt_log LIMIT 1;" "swap" "$DB"
-run_test_match "cherry_pick_rename_swap_refused" \
+run_test_error_match "cherry_pick_rename_swap_refused" \
   "SELECT dolt_cherry_pick('f');" \
   "cannot apply: table 't' renames a column to 'b'" "$DB"
 rm -f "$DB"
@@ -2760,7 +2760,7 @@ ALTER TABLE t RENAME COLUMN tmp TO b;
 SELECT dolt_commit('-Am','swap');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_rename_swap_theirs_refused" "SELECT dolt_merge('f');" \
+run_test_error_match "merge_rename_swap_theirs_refused" "SELECT dolt_merge('f');" \
   "renames a column to 'b', a name another of its columns had" "$DB"
 rm -f "$DB"
 
@@ -2775,7 +2775,7 @@ UPDATE t SET a=10 WHERE id=1;
 SELECT dolt_commit('-Am','edit a');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_rename_chain_refused" "SELECT dolt_merge('f');" \
+run_test_error_match "merge_rename_chain_refused" "SELECT dolt_merge('f');" \
   "renames a column to 'b', a name another of its columns had" "$DB"
 rm -f "$DB"
 
@@ -2792,7 +2792,7 @@ UPDATE t SET a=10 WHERE id=1;
 SELECT dolt_commit('-Am','edit a');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_rename_swap_with_edits_refused" "SELECT dolt_merge('f');" \
+run_test_error_match "merge_rename_swap_with_edits_refused" "SELECT dolt_merge('f');" \
   "renames a column to 'b', a name another of its columns had" "$DB"
 rm -f "$DB"
 
@@ -2904,13 +2904,13 @@ ALTER TABLE t RENAME COLUMN a TO b;
 SELECT dolt_commit('-Am','rename');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "merge_rename_onto_drop_rev_refused" "SELECT dolt_merge('other');" \
+run_test_error_match "merge_rename_onto_drop_rev_refused" "SELECT dolt_merge('other');" \
   "renames a column to 'b', a name another of its columns had" "$DB"
 run_test "merge_rename_onto_drop_rev_row" \
   "SELECT id||'|'||a||'|'||b||'|'||c FROM t WHERE id=4;" "4|40|41|42" "$DB"
 run_test "merge_rename_onto_drop_rev_head" \
   "SELECT message FROM dolt_log LIMIT 1;" "insert" "$DB"
-run_test_match "cherry_pick_rename_onto_drop_rev_refused" \
+run_test_error_match "cherry_pick_rename_onto_drop_rev_refused" \
   "SELECT dolt_cherry_pick('other');" \
   "cannot apply: table 't' renames a column to 'b'" "$DB"
 run_test "cherry_pick_rename_onto_drop_rev_row" \

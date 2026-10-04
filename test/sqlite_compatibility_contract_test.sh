@@ -75,12 +75,12 @@ run_test "text_pk_clustered_notnull" \
   "CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 SELECT name, \"notnull\", pk FROM pragma_table_info('t') WHERE name='k';" \
   "k|1|1" "$PKNN_DB"
-run_test_match "text_pk_clustered_null_insert" \
+run_test_error_match "text_pk_clustered_null_insert" \
   "INSERT INTO t VALUES(NULL, 1);" \
   "NOT NULL constraint failed: t.k" "$PKNN_DB"
 
 ROWID_DB="$TMP/pk-clustered-rowid-readonly.db"
-run_test_match "text_pk_clustered_rowid_insert" \
+run_test_error_match "text_pk_clustered_rowid_insert" \
   "CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 INSERT INTO t(rowid, k, v) VALUES(99, 'a', 1);" \
   "has no column named rowid" "$ROWID_DB"
@@ -91,7 +91,7 @@ SELECT last_insert_rowid() = rowid FROM t;" \
 
 MAIN_DB="$TMP/multifile-main.db"
 AUX_DB="$TMP/multifile-aux.db"
-run_test_match "multifile_temp_trigger_rejected" \
+run_test_error_match "multifile_temp_trigger_rejected" \
   "CREATE TABLE insert_log(db TEXT, a, b, c);
 ATTACH '$AUX_DB' AS aux;
 CREATE TABLE aux.t4(a INTEGER PRIMARY KEY, b, c);
@@ -110,7 +110,7 @@ run_test "multifile_trigger_rolls_back_attached" \
 
 DEL_MAIN="$TMP/multifile-del-main.db"
 DEL_AUX="$TMP/multifile-del-aux.db"
-run_test_match "multifile_temp_trigger_delete_rejected" \
+run_test_error_match "multifile_temp_trigger_delete_rejected" \
   "ATTACH '$DEL_AUX' AS aux;
 CREATE TABLE t2(c, d);
 CREATE TABLE aux.t1(e, f);

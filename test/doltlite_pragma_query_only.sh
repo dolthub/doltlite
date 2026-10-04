@@ -29,19 +29,19 @@ INSERT INTO t VALUES(3,'dirty');
 
 QO="PRAGMA query_only=1;"
 
-run_test_match "qo_insert_refused" "$QO INSERT INTO t VALUES(4,'x');" "$RO" "$DB"
-run_test_match "qo_dolt_add_refused" "$QO SELECT dolt_add('t');" "$RO" "$DB"
-run_test_match "qo_dolt_add_all_refused" "$QO SELECT dolt_add('-A');" "$RO" "$DB"
-run_test_match "qo_dolt_commit_refused" "$QO SELECT dolt_commit('-am','under query_only');" "$RO" "$DB"
-run_test_match "qo_dolt_commit_empty_refused" "$QO SELECT dolt_commit('--allow-empty','-m','empty');" "$RO" "$DB"
-run_test_match "qo_dolt_merge_refused" "$QO SELECT dolt_merge('b');" "$RO" "$DB"
-run_test_match "qo_dolt_tag_refused" "$QO SELECT dolt_tag('v1');" "$RO" "$DB"
-run_test_match "qo_dolt_branch_create_refused" "$QO SELECT dolt_branch('nb');" "$RO" "$DB"
-run_test_match "qo_dolt_branch_delete_refused" "$QO SELECT dolt_branch('-D','b');" "$RO" "$DB"
-run_test_match "qo_dolt_checkout_b_refused" "$QO SELECT dolt_checkout('-b','nb2');" "$RO" "$DB"
-run_test_match "qo_dolt_reset_hard_refused" "$QO SELECT dolt_reset('--hard');" "$RO" "$DB"
-run_test_match "qo_dolt_remote_add_refused" "$QO SELECT dolt_remote('add','o','file:///nonexistent');" "$RO" "$DB"
-run_test_match "qo_dolt_gc_refused" "$QO SELECT dolt_gc();" "$RO" "$DB"
+run_test_error_match "qo_insert_refused" "$QO INSERT INTO t VALUES(4,'x');" "$RO" "$DB"
+run_test_error_match "qo_dolt_add_refused" "$QO SELECT dolt_add('t');" "$RO" "$DB"
+run_test_error_match "qo_dolt_add_all_refused" "$QO SELECT dolt_add('-A');" "$RO" "$DB"
+run_test_error_match "qo_dolt_commit_refused" "$QO SELECT dolt_commit('-am','under query_only');" "$RO" "$DB"
+run_test_error_match "qo_dolt_commit_empty_refused" "$QO SELECT dolt_commit('--allow-empty','-m','empty');" "$RO" "$DB"
+run_test_error_match "qo_dolt_merge_refused" "$QO SELECT dolt_merge('b');" "$RO" "$DB"
+run_test_error_match "qo_dolt_tag_refused" "$QO SELECT dolt_tag('v1');" "$RO" "$DB"
+run_test_error_match "qo_dolt_branch_create_refused" "$QO SELECT dolt_branch('nb');" "$RO" "$DB"
+run_test_error_match "qo_dolt_branch_delete_refused" "$QO SELECT dolt_branch('-D','b');" "$RO" "$DB"
+run_test_error_match "qo_dolt_checkout_b_refused" "$QO SELECT dolt_checkout('-b','nb2');" "$RO" "$DB"
+run_test_error_match "qo_dolt_reset_hard_refused" "$QO SELECT dolt_reset('--hard');" "$RO" "$DB"
+run_test_error_match "qo_dolt_remote_add_refused" "$QO SELECT dolt_remote('add','o','file:///nonexistent');" "$RO" "$DB"
+run_test_error_match "qo_dolt_gc_refused" "$QO SELECT dolt_gc();" "$RO" "$DB"
 
 run_test "qo_reads_ok" "$QO
 SELECT count(*) FROM t;
@@ -78,9 +78,9 @@ SELECT count(*) FROM dolt_status;
 IMM="file:$DB?immutable=1"
 run_test "immutable_select_ok" "SELECT count(*) FROM t; SELECT count(*) FROM dolt_log;" "2
 3" "$IMM"
-run_test_match "immutable_insert_refused" "INSERT INTO t VALUES(9,'x');" "$RO" "$IMM"
-run_test_match "immutable_dolt_commit_refused" "SELECT dolt_commit('--allow-empty','-m','via immutable');" "$RO" "$IMM"
-run_test_match "immutable_dolt_branch_refused" "SELECT dolt_branch('imm');" "$RO" "$IMM"
+run_test_error_match "immutable_insert_refused" "INSERT INTO t VALUES(9,'x');" "$RO" "$IMM"
+run_test_error_match "immutable_dolt_commit_refused" "SELECT dolt_commit('--allow-empty','-m','via immutable');" "$RO" "$IMM"
+run_test_error_match "immutable_dolt_branch_refused" "SELECT dolt_branch('imm');" "$RO" "$IMM"
 run_test "immutable_state_unchanged" "SELECT count(*) FROM t; SELECT count(*) FROM dolt_log; SELECT group_concat(name) FROM dolt_branches;" "2
 3
 main,b" "$DB"

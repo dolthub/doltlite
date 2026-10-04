@@ -43,7 +43,7 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "cp_twice_first" "SELECT count(*) FROM t;" "2" "$DB"
 
-run_test_match "cp_twice_second" \
+run_test_error_match "cp_twice_second" \
   "SELECT dolt_cherry_pick('feat');" \
   "no changes were made, nothing to commit" "$DB"
 run_test "cp_twice_still2" "SELECT count(*) FROM t;" "2" "$DB"
@@ -213,7 +213,7 @@ SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "dt_update_count" "SELECT count(*) FROM dolt_diff_t;" "2" "$DB"
 run_test_match "dt_update_mod" \
-  "SELECT diff_type FROM dolt_diff_t WHERE rowid_val=1 AND diff_type='modified';" "modified" "$DB"
+  "SELECT diff_type FROM dolt_diff_t WHERE coalesce(to_id, from_id)=1 AND diff_type='modified';" "modified" "$DB"
 
 db_rm "$DB"
 

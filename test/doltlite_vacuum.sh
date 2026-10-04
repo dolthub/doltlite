@@ -1,9 +1,8 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 source "$(dirname "$0")/lib/doltlite_integrity_common.sh"
 DOLTLITE=${DOLTLITE:-./doltlite}
 PASS=0; FAIL=0; ERRORS=""
-run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); echo "  PASS: $n"; else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; echo "  FAIL: $n"; echo "    expected: $e"; echo "    got:      $r"; fi; }
-run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if echo "$r"|grep -qE "$p"; then PASS=$((PASS+1)); echo "  PASS: $n"; else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"; echo "  FAIL: $n"; echo "    pattern: $p"; echo "    got:     $r"; fi; }
 
 db_rm() { rm -f "$1" "${1}-wal" "${1}-journal"; }
 
@@ -68,10 +67,10 @@ run_test "vacuum_into_accepted" \
 run_test "vacuum_into_target_readable" \
   "SELECT x FROM t;" "1" "/tmp/test_vac_into_target_$$.db"
 rm -f "/tmp/test_vac_into_target_$$.db"
-run_test_match "vacuum_into_memory_refused" \
+run_test_error_match "vacuum_into_memory_refused" \
   "VACUUM INTO ':memory:';" \
   "cannot VACUUM a doltlite database INTO an in-memory target" "$DB"
-run_test_match "vacuum_into_memory_expr_refused" \
+run_test_error_match "vacuum_into_memory_expr_refused" \
   "CREATE TABLE t2(name TEXT); INSERT INTO t2 VALUES(':memory:');
 VACUUM main INTO (SELECT name FROM t2);" \
   "cannot VACUUM a doltlite database INTO an in-memory target" "$DB"
@@ -117,14 +116,14 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,1);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "vacuum_in_txn_errors" \
+run_test_error_match "vacuum_in_txn_errors" \
   "BEGIN;
 INSERT INTO t VALUES(2,2);
 VACUUM;
 COMMIT;
 SELECT group_concat(id) FROM t;" \
   "cannot VACUUM from within a transaction" "$DB"
-run_test_match "vacuum_in_txn_commit_survives_error" \
+run_test_error_match "vacuum_in_txn_commit_survives_error" \
   "BEGIN;
 INSERT INTO t VALUES(3,3);
 VACUUM;
@@ -132,7 +131,7 @@ COMMIT;" \
   "cannot VACUUM from within a transaction" "$DB"
 run_test "vacuum_in_txn_commit_survives_rows" \
   "SELECT count(*) FROM t;" "3" "$DB"
-run_test_match "vacuum_into_in_txn_errors" \
+run_test_error_match "vacuum_into_in_txn_errors" \
   "BEGIN;
 VACUUM INTO '/tmp/test_vac_txn_into_$$.db';" \
   "cannot VACUUM from within a transaction" "$DB"
@@ -159,7 +158,7 @@ run_test "vacuum_into_copy_independent" \
   "INSERT INTO t VALUES(9,'copy only'); SELECT count(*) FROM t;" "3" "$COPY"
 run_test "vacuum_into_source_untouched" \
   "SELECT count(*) FROM t;" "2" "$DB"
-run_test_match "vacuum_into_existing_target_errors" \
+run_test_error_match "vacuum_into_existing_target_errors" \
   "VACUUM INTO '$COPY';" "output file already exists" "$DB"
 db_rm "$COPY"
 
@@ -225,7 +224,4 @@ run_test "vacuum_replay_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 run_test "vacuum_replay_no_scratch_db" "SELECT count(*) FROM pragma_database_list WHERE name LIKE 'vacuum_%';" "0" "$DB"
 db_rm "$DB"
 
-echo ""
-echo "=== Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests ==="
-if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
-echo "__SUITE_COMPLETE__"
+dltest_finish

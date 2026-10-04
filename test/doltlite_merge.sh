@@ -39,10 +39,10 @@ echo "UPDATE t SET v='main'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE 
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB3/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB3" > /dev/null 2>&1
-run_test_match "conflict" "SELECT dolt_merge('feature');" "conflict" "$DB3"
+run_test_error_match "conflict" "SELECT dolt_merge('feature');" "conflict" "$DB3"
 run_test "conflict_ours_preserved" "SELECT v FROM t;" "main" "$DB3"
 
-run_test_match "no_branch" "SELECT dolt_merge('nope');" "not found" "$DB3"
+run_test_error_match "no_branch" "SELECT dolt_merge('nope');" "not found" "$DB3"
 
 DB4=/tmp/test_merge4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
@@ -98,7 +98,7 @@ echo "UPDATE t SET v='main-val' WHERE id=1; SELECT dolt_commit('-A','-m','main')
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "UPDATE t SET v='feat-val' WHERE id=1; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB7/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
-run_test_match "row_conflict_detected" "SELECT dolt_merge('feature');" "conflict" "$DB7"
+run_test_error_match "row_conflict_detected" "SELECT dolt_merge('feature');" "conflict" "$DB7"
 run_test "row_conflict_ours_kept" "SELECT v FROM t WHERE id=1;" "main-val" "$DB7"
 
 DB8=/tmp/test_merge8_$$.db; rm -f "$DB8"
@@ -108,7 +108,7 @@ echo "UPDATE t SET v='main1' WHERE id=1; INSERT INTO t VALUES(3,'main3'); SELECT
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "UPDATE t SET v='feat1' WHERE id=1; INSERT INTO t VALUES(4,'feat4'); SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB8/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
-run_test_match "mixed_merge" "SELECT dolt_merge('feature');" "conflict|rolled back" "$DB8"
+run_test_error_match "mixed_merge" "SELECT dolt_merge('feature');" "conflict|rolled back" "$DB8"
 run_test "mixed_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB8"
 run_test "mixed_row1_main" "SELECT v FROM t WHERE id=1;" "main1" "$DB8"
 run_test "mixed_row2_unchanged" "SELECT v FROM t WHERE id=2;" "b" "$DB8"
@@ -152,7 +152,7 @@ echo "BEGIN; SELECT dolt_merge('other'); SELECT dolt_merge('--abort'); COMMIT;" 
 run_test "abort_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB9"
 run_test "abort_data_restored" "SELECT v FROM t WHERE id=1;" "MAIN" "$DB9"
 
-run_test_match "abort_no_merge" "SELECT dolt_merge('--abort');" "no merge in progress" "$DB9"
+run_test_error_match "abort_no_merge" "SELECT dolt_merge('--abort');" "no merge in progress" "$DB9"
 
 DB10=/tmp/test_merge10_$$.db; rm -f "$DB10"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
@@ -167,7 +167,7 @@ DB11=/tmp/test_merge11_$$.db; rm -f "$DB11"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT); INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB11" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET u=9, v='feat2' WHERE id=2; SELECT dolt_commit('-A','-m','feat_unique');" | $DOLTLITE "$DB11" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main'); UPDATE t SET u=9, v='main1' WHERE id=1; SELECT dolt_commit('-A','-m','main_unique');" | $DOLTLITE "$DB11" > /dev/null 2>&1
-run_test_match "constraint_violation_merge_errors" "SELECT dolt_merge('feat');" "constraint violations|rolled back" "$DB11"
+run_test_error_match "constraint_violation_merge_errors" "SELECT dolt_merge('feat');" "constraint violations|rolled back" "$DB11"
 run_test "constraint_violation_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB11"
 run_test "constraint_violation_no_violations" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB11"
 run_test "constraint_violation_state_restored" "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id);" "1:9:main1,2:2:base2" "$DB11"
@@ -186,7 +186,7 @@ SELECT dolt_checkout('main');
 UPDATE t SET v='main', u=9 WHERE id=1;
 SELECT dolt_commit('-Am','main');
 EOF
-run_test_match "conflict_and_cv_autocommit_msg" \
+run_test_error_match "conflict_and_cv_autocommit_msg" \
   "SELECT dolt_merge('feat');" \
   "conflict.*constraint violations|constraint violations.*conflict|rolled back" \
   "$DB11B"
@@ -482,7 +482,7 @@ echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('AAAAA',1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB26" > /dev/null 2>&1
 echo "DROP TABLE t; CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(5,50); SELECT dolt_commit('-A','-m','feat recreate');" | $DOLTLITE "$DB26/feature" > /dev/null 2>&1
 echo "INSERT INTO t VALUES('BBBBB',2); SELECT dolt_commit('-A','-m','main rows');" | $DOLTLITE "$DB26" > /dev/null 2>&1
-run_test_match "pk_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB26"
+run_test_error_match "pk_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB26"
 run_test "pk_change_local_intact" "SELECT count(*) FROM t;" "2" "$DB26"
 
 DB27=/tmp/test_merge27_$$.db; rm -f "$DB27"
@@ -490,7 +490,7 @@ echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('AAAAA',1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB27" > /dev/null 2>&1
 echo "DROP TABLE t; CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(5,50); SELECT dolt_commit('-A','-m','feat recreate');" | $DOLTLITE "$DB27/feature" > /dev/null 2>&1
 echo "DROP TABLE t; CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT); CREATE INDEX tv ON t(v); INSERT INTO t VALUES(7,70); SELECT dolt_commit('-A','-m','main recreate');" | $DOLTLITE "$DB27" > /dev/null 2>&1
-run_test_match "pk_change_ancestor_refused" "SELECT dolt_merge('feature');" "different primary keys in its common ancestor" "$DB27"
+run_test_error_match "pk_change_ancestor_refused" "SELECT dolt_merge('feature');" "different primary keys in its common ancestor" "$DB27"
 
 DB28=/tmp/test_merge28_$$.db; rm -f "$DB28"
 echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('AAAAA',1); SELECT dolt_commit('-A','-m','base');" | $DOLTLITE "$DB28" > /dev/null 2>&1
@@ -508,7 +508,7 @@ echo "CREATE TABLE t(pk TEXT PRIMARY KEY, v INT); INSERT INTO t VALUES('a',1); S
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB29" > /dev/null 2>&1
 echo "DROP TABLE t; CREATE TABLE t(pk TEXT COLLATE NOCASE PRIMARY KEY, v INT); INSERT INTO t VALUES('a',1); SELECT dolt_commit('-A','-m','feat collate');" | $DOLTLITE "$DB29/feature" > /dev/null 2>&1
 echo "INSERT INTO t VALUES('A',3); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB29" > /dev/null 2>&1
-run_test_match "pk_collation_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB29"
+run_test_error_match "pk_collation_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB29"
 run_test "pk_collation_change_integrity" "PRAGMA integrity_check;" "ok" "$DB29"
 
 DB30=/tmp/test_merge30_$$.db; rm -f "$DB30"
@@ -516,7 +516,7 @@ echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID; INSE
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB30" > /dev/null 2>&1
 echo "DROP TABLE t; CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a DESC, b)) WITHOUT ROWID; INSERT INTO t VALUES(1,1,'x'),(2,1,'y'),(9,1,'f'); SELECT dolt_commit('-A','-m','feat desc');" | $DOLTLITE "$DB30/feature" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(5,1,'m'); SELECT dolt_commit('-A','-m','main row');" | $DOLTLITE "$DB30" > /dev/null 2>&1
-run_test_match "pk_sort_order_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB30"
+run_test_error_match "pk_sort_order_change_refused" "SELECT dolt_merge('feature');" "different primary keys" "$DB30"
 run_test "pk_sort_order_change_integrity" "PRAGMA integrity_check;" "ok" "$DB30"
 
 # Matching collations must still merge (signature names collation).
@@ -542,7 +542,7 @@ echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT RE
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB33" > /dev/null 2>&1
 echo "INSERT INTO child VALUES(1,'t1'); SELECT dolt_commit('-A','-m','child row');" | $DOLTLITE "$DB33/feature" > /dev/null 2>&1
 echo "DELETE FROM parent WHERE id=1; SELECT dolt_commit('-A','-m','drop parent');" | $DOLTLITE "$DB33" > /dev/null 2>&1
-run_test_match "pk_only_fk_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB33"
+run_test_error_match "pk_only_fk_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB33"
 TX33=$(echo "BEGIN;
 SELECT dolt_merge('feature');
 SELECT 'CV|' || (SELECT count(*) FROM dolt_constraint_violations);
@@ -559,7 +559,7 @@ echo "CREATE TABLE t(a INT, b INT, PRIMARY KEY(a,b), UNIQUE(b)); INSERT INTO t V
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB34" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,5); SELECT dolt_commit('-A','-m','feat dup');" | $DOLTLITE "$DB34/feature" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(3,5); SELECT dolt_commit('-A','-m','main dup');" | $DOLTLITE "$DB34" > /dev/null 2>&1
-run_test_match "pk_only_unique_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB34"
+run_test_error_match "pk_only_unique_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB34"
 
 # A non-key column still stores a value record; ordinary path must keep working.
 DB35=/tmp/test_merge35_$$.db; rm -f "$DB35"
@@ -567,7 +567,7 @@ echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INT RE
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB35" > /dev/null 2>&1
 echo "INSERT INTO child VALUES(1,'t1','n'); SELECT dolt_commit('-A','-m','child row');" | $DOLTLITE "$DB35/feature" > /dev/null 2>&1
 echo "DELETE FROM parent WHERE id=1; SELECT dolt_commit('-A','-m','drop parent');" | $DOLTLITE "$DB35" > /dev/null 2>&1
-run_test_match "valued_row_fk_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB35"
+run_test_error_match "valued_row_fk_violation_detected" "SELECT dolt_merge('feature');" "constraint violations" "$DB35"
 
 # Clean merge on a PK-only table must stay clean.
 DB36=/tmp/test_merge36_$$.db; rm -f "$DB36"
@@ -611,7 +611,7 @@ DB40=/tmp/test_merge40_$$.db; rm -f "$DB40"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB40" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(1,'not-json'); SELECT dolt_commit('-A','-m','invalid json');" | $DOLTLITE "$DB40/feature" > /dev/null 2>&1
 echo "CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT CHECK(json_extract(v,'$.ok'))); DROP TABLE t; ALTER TABLE t2 RENAME TO t; SELECT dolt_commit('-A','-m','add json check');" | $DOLTLITE "$DB40" > /dev/null 2>&1
-run_test_match "constraint_detector_sql_error_merge_errors" "SELECT dolt_merge('feature');" "malformed JSON" "$DB40"
+run_test_error_match "constraint_detector_sql_error_merge_errors" "SELECT dolt_merge('feature');" "malformed JSON" "$DB40"
 run_test "constraint_detector_sql_error_restores_rows" "SELECT count(*) FROM t;" "0" "$DB40"
 run_test "constraint_detector_sql_error_preserves_head" "SELECT message FROM dolt_log LIMIT 1;" "add json check" "$DB40"
 
@@ -696,7 +696,7 @@ DB46=/tmp/test_merge46_$$.db; rm -f "$DB46"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'one'),(2,'two'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB46" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN added TEXT DEFAULT 'dd'; UPDATE t SET v='edited' WHERE id=2; SELECT dolt_commit('-A','-m','add col and edit');" | $DOLTLITE "$DB46/feature" > /dev/null 2>&1
 echo "DELETE FROM t WHERE id=2; SELECT dolt_commit('-A','-m','delete row');" | $DOLTLITE "$DB46" > /dev/null 2>&1
-run_test_match "delete_vs_real_edit_with_add_column_conflicts" "SELECT dolt_merge('feature');" "conflict" "$DB46"
+run_test_error_match "delete_vs_real_edit_with_add_column_conflicts" "SELECT dolt_merge('feature');" "conflict" "$DB46"
 
 DB47=/tmp/test_merge47_$$.db; rm -f "$DB47"
 cat <<'EOF' | $DOLTLITE "$DB47" > /dev/null 2>&1
@@ -733,7 +733,7 @@ run_test "ff_squash_status" \
   "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
   "t|1|modified" "$DB48"
 run_test "ff_squash_merging" "SELECT is_merging FROM dolt_merge_status;" "0" "$DB48"
-run_test_match "ff_squash_abort_none" "SELECT dolt_merge('--abort');" "no merge in progress" "$DB48"
+run_test_error_match "ff_squash_abort_none" "SELECT dolt_merge('--abort');" "no merge in progress" "$DB48"
 
 DB49=/tmp/test_merge49_$$.db; rm -f "$DB49"
 cat <<'EOF' | $DOLTLITE "$DB49" > /dev/null 2>&1
@@ -755,7 +755,7 @@ run_test "threeway_nocommit_status" \
   "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
   "t|1|modified" "$DB49"
 run_test "threeway_nocommit_merging" "SELECT is_merging FROM dolt_merge_status;" "1" "$DB49"
-run_test_match "threeway_nocommit_blocks_second" \
+run_test_error_match "threeway_nocommit_blocks_second" \
   "SELECT dolt_merge('f');" "uncommitted" "$DB49"
 run_test_match "threeway_nocommit_finish" \
   "SELECT dolt_commit('-m','finished merge');" "^[0-9a-f]{40}$" "$DB49"
@@ -831,7 +831,7 @@ INSERT INTO t VALUES(2,'f');
 SELECT dolt_commit('-Am','f');
 SELECT dolt_checkout('main');
 EOF
-run_test_match "squash_noff_rejected" \
+run_test_error_match "squash_noff_rejected" \
   "SELECT dolt_merge('--squash','--no-ff','f');" \
   "cannot be used together" "$DB52"
 run_test "squash_noff_unchanged" "SELECT count(*) FROM t;" "1" "$DB52"
@@ -952,7 +952,7 @@ DB58=/tmp/test_merge58_$$.db; rm -f "$DB58"
 echo "CREATE TABLE t(a INT PRIMARY KEY, b INT); INSERT INTO t VALUES(1,1),(2,2); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feature');" | $DOLTLITE "$DB58" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'x'; DELETE FROM t WHERE a=2; SELECT dolt_commit('-Am','feature');" | $DOLTLITE "$DB58/feature" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN c INT DEFAULT 7; UPDATE t SET b=20 WHERE a=2; SELECT dolt_commit('-Am','main');" | $DOLTLITE "$DB58" > /dev/null 2>&1
-run_test_match "dual_defaults_delete_vs_base_edit_conflicts" \
+run_test_error_match "dual_defaults_delete_vs_base_edit_conflicts" \
   "SELECT dolt_merge('feature');" "conflict" "$DB58"
 run_test "dual_defaults_delete_vs_base_edit_rolls_back" \
   "SELECT a || ':' || b || ':' || c FROM t WHERE a=2;" "2:20:7" "$DB58"
@@ -1045,7 +1045,7 @@ INSERT INTO items VALUES (x'03','main',x'13',NULL);
 SELECT dolt_commit('-A','-m','main row');
 SQL
 run_test_match "merge_partial_index_no_violations_in_txn" \
-  "BEGIN; SELECT dolt_merge('feature'); SELECT 'CV=' || count(*) FROM dolt_constraint_violations; ROLLBACK;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'CV=' || count(*) FROM dolt_constraint_violations;" \
   "CV=0" "$DB64"
 
 DB62=/tmp/test_merge62_$$.db; rm -f "$DB62"
@@ -1072,9 +1072,9 @@ run_test "merge_partial_index_rows_move_in_and_out" \
 run_test "merge_partial_index_index_matches_scan" \
   "SELECT (SELECT coalesce(group_concat(id),'none') FROM (SELECT id FROM items WHERE parent IS NOT NULL ORDER BY id)) || ' / ' || (SELECT coalesce(group_concat(id),'none') FROM (SELECT id FROM items NOT INDEXED WHERE parent IS NOT NULL ORDER BY id));" \
   "1,11 / 1,11" "$DB62"
-run_test_match "merge_partial_index_unique_still_enforced_null_arm" \
+run_test_error_match "merge_partial_index_unique_still_enforced_null_arm" \
   "INSERT INTO items VALUES(30,2,'x',NULL);" "UNIQUE constraint failed" "$DB62"
-run_test_match "merge_partial_index_unique_still_enforced_nonnull_arm" \
+run_test_error_match "merge_partial_index_unique_still_enforced_nonnull_arm" \
   "INSERT INTO items VALUES(31,2,'y',10);" "UNIQUE constraint failed" "$DB62"
 
 DB63=/tmp/test_merge63_$$.db; rm -f "$DB63"
@@ -1115,12 +1115,12 @@ PRAGMA ignore_check_constraints=OFF;
 SQL
 run_test "verify_recorded_orphan_before_failed_check" \
   "SELECT count(*) FROM dolt_constraint_violations_child;" "1" "$DB66"
-run_test_match "verify_failed_check_keeps_recorded_orphan" \
+run_test_error_output_match "verify_failed_check_keeps_recorded_orphan" \
   "SELECT dolt_verify_constraints('--all');
-   SELECT count(*) FROM dolt_constraint_violations_child;" "^1\$" "$DB66"
-run_test_match "verify_failed_default_scope_keeps_recorded_orphan" \
+   SELECT count(*) FROM dolt_constraint_violations_child;" "^1\$" "$DB66" 'malformed\ JSON'
+run_test_error_output_match "verify_failed_default_scope_keeps_recorded_orphan" \
   "SELECT dolt_verify_constraints();
-   SELECT count(*) FROM dolt_constraint_violations_child;" "^1\$" "$DB66"
+   SELECT count(*) FROM dolt_constraint_violations_child;" "^1\$" "$DB66" 'malformed\ JSON'
 run_test "verify_recorded_orphan_survives_failed_checks" \
   "SELECT count(*) FROM dolt_constraint_violations_child;" "1" "$DB66"
 
@@ -1133,9 +1133,9 @@ PRAGMA ignore_check_constraints=ON;
 INSERT INTO t VALUES(1,'not-json');
 PRAGMA ignore_check_constraints=OFF;
 SQL
-run_test_match "verify_constraints_all_reports_detector_error" \
+run_test_error_match "verify_constraints_all_reports_detector_error" \
   "SELECT dolt_verify_constraints('--all');" "malformed JSON" "$DB65"
-run_test_match "verify_constraints_default_reports_detector_error" \
+run_test_error_match "verify_constraints_default_reports_detector_error" \
   "SELECT dolt_verify_constraints();" "malformed JSON" "$DB65"
 
 # --force must keep merge-recorded CVs, matching Dolt (not drop them on commit).
@@ -1335,7 +1335,7 @@ INSERT INTO t VALUES(3,5);
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_expr_unique_detected" \
+run_test_error_match "merge_expr_unique_detected" \
   "SELECT dolt_merge('feature');" "constraint violations" "$DB74"
 run_test "merge_expr_unique_no_duplicate" \
   "SELECT group_concat(id || ':' || a, ',') FROM (SELECT id, a FROM t ORDER BY id);" \
@@ -1368,7 +1368,7 @@ INSERT INTO t VALUES(3,'b');
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_expr_unique_function_detected" \
+run_test_error_match "merge_expr_unique_function_detected" \
   "SELECT dolt_merge('feature');" "constraint violations" "$DB75"
 run_test "merge_expr_unique_function_no_duplicate" \
   "SELECT group_concat(id || ':' || name, ',') FROM (SELECT id, name FROM t ORDER BY id);" \
@@ -1390,7 +1390,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 SQL
 run_test_match "merge_expr_unique_distinct_merges" \
-  "SELECT count(*) FROM dolt_log WHERE message LIKE 'Merge%';" "1" "$DB76"
+  "SELECT count(*) FROM dolt_log WHERE message LIKE 'Merge%';" "^1$" "$DB76"
 run_test "merge_expr_unique_distinct_rows" \
   "SELECT group_concat(id || ':' || coalesce(a,'N'), ',') FROM (SELECT id, a FROM t ORDER BY id);" \
   "1:0,2:4,3:N" "$DB76"
@@ -1411,7 +1411,7 @@ INSERT INTO t VALUES(3,5);
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_expr_unique_without_rowid_detected" \
+run_test_error_match "merge_expr_unique_without_rowid_detected" \
   "SELECT dolt_merge('feature');" "constraint violations" "$DB77"
 run_test "merge_expr_unique_without_rowid_no_duplicate" \
   "SELECT group_concat(id || ':' || a, ',') FROM (SELECT id, a FROM t ORDER BY id);" \
@@ -1473,7 +1473,7 @@ UPDATE t SET v=2 WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_untyped_one_and_two_conflicts" \
+run_test_error_match "merge_untyped_one_and_two_conflicts" \
   "SELECT dolt_merge('feature');" "conflict" "$DB80"
 run_test "merge_untyped_one_and_two_kept" \
   "SELECT v FROM t;" "1" "$DB80"
@@ -1491,7 +1491,7 @@ UPDATE t SET v='1' WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_untyped_one_and_text_conflicts" \
+run_test_error_match "merge_untyped_one_and_text_conflicts" \
   "SELECT dolt_merge('feature');" "conflict" "$DB81"
 run_test "merge_untyped_one_and_text_kept" \
   "SELECT typeof(v) FROM t;" "integer" "$DB81"
@@ -1543,7 +1543,7 @@ UPDATE t SET v=9007199254740993.0 WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_untyped_inexact_real_conflicts" \
+run_test_error_match "merge_untyped_inexact_real_conflicts" \
   "SELECT dolt_merge('feature');" "conflict" "$DB84"
 run_test "merge_untyped_inexact_real_kept" \
   "SELECT typeof(v) FROM t;" "integer" "$DB84"
@@ -1571,7 +1571,7 @@ run_test "merge_unique_one_and_one_real_conflicts" \
   "SELECT count(*) FROM dolt_conflicts;" "0" "$DB85"
 run_test "merge_unique_one_and_one_real_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB85"
-run_test_match "merge_unique_one_and_one_real_duplicate" \
+run_test_error_match "merge_unique_one_and_one_real_duplicate" \
   "INSERT INTO t VALUES(2, 1.0);" "UNIQUE constraint failed" "$DB85"
 
 DB86=/tmp/test_merge86_$$.db; rm -f "$DB86"
@@ -1607,7 +1607,7 @@ UPDATE t SET v=2 WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_unique_one_and_two_conflicts" \
+run_test_error_match "merge_unique_one_and_two_conflicts" \
   "SELECT dolt_merge('feature');" "conflict" "$DB87"
 run_test "merge_unique_one_and_two_kept" \
   "SELECT v FROM t;" "1" "$DB87"
@@ -1625,7 +1625,7 @@ UPDATE t SET v='1' WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_unique_one_and_text_conflicts" \
+run_test_error_match "merge_unique_one_and_text_conflicts" \
   "SELECT dolt_merge('feature');" "conflict" "$DB88"
 run_test "merge_unique_one_and_text_kept" \
   "SELECT typeof(v) FROM t;" "integer" "$DB88"
@@ -1643,7 +1643,7 @@ UPDATE t SET v=9007199254740993.0 WHERE id=1;
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "merge_unique_inexact_real_conflicts" \
+run_test_error_match "merge_unique_inexact_real_conflicts" \
   "SELECT dolt_merge('feature');" "conflict" "$DB89"
 run_test "merge_unique_inexact_real_kept" \
   "SELECT typeof(v) FROM t;" "integer" "$DB89"
@@ -1712,7 +1712,7 @@ INSERT INTO t(id, x) VALUES('c', 5);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "partial_virtual_where_autocommit" \
+run_test_error_match "partial_virtual_where_autocommit" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB92"
 run_test "partial_virtual_where_rows" \
   "SELECT group_concat(id || ':' || x, ',') FROM (SELECT id, x FROM t ORDER BY id);" \
@@ -1757,7 +1757,7 @@ INSERT INTO t(a, b) VALUES(3, 5);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "partial_after_virtual_autocommit" \
+run_test_error_match "partial_after_virtual_autocommit" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB93"
 run_test "partial_after_virtual_rows" \
   "SELECT group_concat(a || ':' || b, ',') FROM (SELECT a, b FROM t ORDER BY a);" \
@@ -1812,7 +1812,7 @@ INSERT INTO t(id, b) VALUES(3, 5);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "partial_after_stored_autocommit" \
+run_test_error_match "partial_after_stored_autocommit" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB95"
 run_test "partial_after_stored_rows" \
   "SELECT group_concat(id || ':' || b, ',') FROM (SELECT id, b FROM t ORDER BY id);" \
@@ -1866,7 +1866,7 @@ INSERT INTO t(id, n) VALUES(3, 10);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "worowid_virtual_unique_collision_rolls_back" \
+run_test_error_match "worowid_virtual_unique_collision_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB97"
 run_test "worowid_virtual_unique_collision_rows" \
   "SELECT group_concat(id || ':' || n || ':' || g, ',') FROM (SELECT id, n, g FROM t ORDER BY id);" \
@@ -1912,7 +1912,7 @@ INSERT INTO t(id, n) VALUES(3, 10);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "rowid_virtual_unique_collision_rolls_back" \
+run_test_error_match "rowid_virtual_unique_collision_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB98"
 run_test "rowid_virtual_unique_collision_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB98"
@@ -1935,7 +1935,7 @@ INSERT INTO t(id, n) VALUES(3, 10);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "worowid_stored_unique_collision_rolls_back" \
+run_test_error_match "worowid_stored_unique_collision_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB99"
 run_test "worowid_stored_unique_collision_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB99"
@@ -1994,7 +1994,7 @@ INSERT INTO t(id, n) VALUES(3, 10);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "worowid_virtual_expr_unique_rolls_back" \
+run_test_error_match "worowid_virtual_expr_unique_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB102"
 run_test "worowid_virtual_expr_unique_rows" \
   "SELECT group_concat(id || ':' || n || ':' || (g+0), ',') FROM (SELECT id, n, g FROM t ORDER BY id);" \
@@ -2026,7 +2026,7 @@ INSERT INTO t(id, n) VALUES(3, 10);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "worowid_virtual_expr_pk_later_rolls_back" \
+run_test_error_match "worowid_virtual_expr_pk_later_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB103"
 run_test "worowid_virtual_expr_pk_later_rows" \
   "SELECT group_concat(id || ':' || n, ',') FROM (SELECT id, n FROM t ORDER BY id);" \
@@ -2082,7 +2082,7 @@ INSERT INTO t(id, n) VALUES(3, 10);
 SELECT dolt_commit('-Am','right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "worowid_stored_expr_pk_later_rolls_back" \
+run_test_error_match "worowid_stored_expr_pk_later_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB105"
 run_test "worowid_stored_expr_pk_later_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB105"
@@ -2171,7 +2171,7 @@ INSERT INTO c(id, code) VALUES (1, 'a');
 SELECT dolt_commit('-Am', 'right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "fk_virtual_nocase_before_key_rolls_back" \
+run_test_error_match "fk_virtual_nocase_before_key_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB102"
 run_test "fk_virtual_nocase_before_key_parent" \
   "SELECT group_concat(id || ':' || code, ',') FROM (SELECT id, code FROM p ORDER BY id);" \
@@ -2203,7 +2203,7 @@ INSERT INTO c(id, code) VALUES (1, 'a');
 SELECT dolt_commit('-Am', 'right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "fk_stored_nocase_before_key_rolls_back" \
+run_test_error_match "fk_stored_nocase_before_key_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB103"
 run_test "fk_stored_nocase_before_key_parent" \
   "SELECT group_concat(id || ':' || code, ',') FROM (SELECT id, code FROM p ORDER BY id);" \
@@ -2234,7 +2234,7 @@ INSERT INTO c(id, code) VALUES (1, 'a');
 SELECT dolt_commit('-Am', 'right');
 SELECT dolt_checkout('main');
 SQL
-run_test_match "fk_virtual_nocase_after_key_rolls_back" \
+run_test_error_match "fk_virtual_nocase_after_key_rolls_back" \
   "SELECT dolt_merge('right');" "constraint violations|rolled back" "$DB104"
 run_test "fk_virtual_nocase_after_key_check" \
   "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB104"
@@ -2529,7 +2529,7 @@ ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
 UPDATE t SET b=9 WHERE id=1;
 SELECT dolt_commit('-Am','main');
 SQL
-run_test_match "merge_dual_add_null_vs_value" \
+run_test_error_match "merge_dual_add_null_vs_value" \
   "SELECT dolt_merge('feature');" "conflict" "$DB116"
 run_test "merge_dual_add_null_vs_value_kept" \
   "SELECT id || ':' || a || ':' || coalesce(b,'N') FROM t;" "1:1:9" "$DB116"
@@ -2570,7 +2570,7 @@ SELECT dolt_checkout('main');
 ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
 SELECT dolt_commit('-Am','main');
 SQL
-run_test_match "merge_dual_add_null_vs_default" \
+run_test_error_match "merge_dual_add_null_vs_default" \
   "SELECT dolt_merge('feature');" "conflict" "$DB117"
 run_test "merge_dual_add_null_vs_default_kept" \
   "SELECT coalesce(b,'N') FROM t;" "7" "$DB117"
@@ -2635,7 +2635,7 @@ ALTER TABLE t ADD COLUMN b INT;
 UPDATE t SET b=5 WHERE id=1;
 SELECT dolt_commit('-Am','main');
 SQL
-run_test_match "merge_dual_add_value_vs_omit" \
+run_test_error_match "merge_dual_add_value_vs_omit" \
   "SELECT dolt_merge('feature');" "conflict" "$DB120"
 run_test "merge_dual_add_value_vs_omit_kept" \
   "SELECT coalesce(b,'N') FROM t;" "5" "$DB120"
@@ -2675,7 +2675,7 @@ ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
 UPDATE t SET b=9 WHERE id=1;
 SELECT dolt_commit('-Am','main');
 SQL
-run_test_match "merge_dual_add_null_vs_value_without_rowid" \
+run_test_error_match "merge_dual_add_null_vs_value_without_rowid" \
   "SELECT dolt_merge('feature');" "conflict" "$DB122"
 run_test "merge_dual_add_null_vs_value_without_rowid_kept" \
   "SELECT coalesce(b,'N') FROM t;" "9" "$DB122"

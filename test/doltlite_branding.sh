@@ -6,7 +6,7 @@ echo ""
 
 run_test "engine_func" "SELECT doltlite_engine();" "prolly" ":memory:"
 
-run_test_match "engine_old_gone" "SELECT doltite_engine();" "no such function" ":memory:"
+run_test_error_match "engine_old_gone" "SELECT doltite_engine();" "no such function" ":memory:"
 
 VER=$($DOLTLITE -version 2>&1)
 if echo "$VER" | grep -q "DoltLite"; then dltest_pass; else dltest_fail "version_flag" "  expected: DoltLite\n  got:      $VER"; fi

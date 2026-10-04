@@ -36,7 +36,7 @@ SELECT count(DISTINCT rowid) FROM t;
 " "2" "$DB"
 
 rm -f "$DB"
-run_test_match "explicit_without_rowid_hides_rowid" "
+run_test_error_match "explicit_without_rowid_hides_rowid" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES('a','one');
 SELECT rowid FROM t;

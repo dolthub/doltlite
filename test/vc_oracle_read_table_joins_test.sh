@@ -31,16 +31,23 @@ run_pair() {
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
-  local dt_out
+  local dt_out dt_rc=0
   (
     cd "$dir/dt" || exit 1
-    vc_oracle_init_repo
+    vc_oracle_init_repo "$dir/dt.err" || exit $?
     {
       [ -n "$dt_prefix" ] && printf '%s\n' "$dt_prefix"
       printf '%s\n' "$dolt_setup"
       printf '%s\n' "$dt_query"
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
-  ) > "$dir/dt.raw"
+  ) > "$dir/dt.raw" || dt_rc=$?
+  if [ "$dt_rc" -ne 0 ]; then
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (dolt rc=$dt_rc)"
+    sed 's/^/    /' "$dir/dt.err"
+    return 1
+  fi
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
 
   local dt_fed

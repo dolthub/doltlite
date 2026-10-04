@@ -67,19 +67,19 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','feature edit');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "main_has_conflicts" \
+run_test_error_output_match "main_has_conflicts" \
   "BEGIN; SELECT dolt_merge('feature');
-SELECT 'CF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "CF\\|1" "$DB"
+SELECT 'CF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "CF\\|1" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "main_clean_after_abort" \
+run_test_error_output_match "main_clean_after_abort" \
   "BEGIN; SELECT dolt_merge('feature');
 SELECT dolt_merge('--abort');
-SELECT 'ST|' || count(*) FROM dolt_status; ROLLBACK;" "ST\\|0" "$DB"
+SELECT 'ST|' || count(*) FROM dolt_status; ROLLBACK;" "ST\\|0" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "main_val_after_abort" \
+run_test_error_output_match "main_val_after_abort" \
   "BEGIN; SELECT dolt_merge('feature');
 SELECT dolt_merge('--abort');
-SELECT 'VAL|' || val FROM t WHERE id=1; ROLLBACK;" "VAL\\|main_change" "$DB"
+SELECT 'VAL|' || val FROM t WHERE id=1; ROLLBACK;" "VAL\\|main_change" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 rm -f "$DB"
 
@@ -222,7 +222,7 @@ run_test "checkout_target_dirty_change_starts_unstaged" \
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DBS" > /dev/null 2>&1
 run_test "checkout_target_dirty_change_stays_unstaged" \
   "SELECT staged FROM dolt_status WHERE table_name='t';" "0" "$DBS/feature"
-run_test_match "checkout_target_dirty_change_not_committable" \
+run_test_error_match "checkout_target_dirty_change_not_committable" \
   "SELECT dolt_commit('-m','must not commit');" "nothing to commit" "$DBS/feature"
 run_test "checkout_target_head_stays_unchanged" \
   "SELECT count(*) FROM dolt_at_t('HEAD');" "1" "$DBS/feature"

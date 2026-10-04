@@ -23,7 +23,7 @@ SELECT dolt_commit('-Am', 'main');
 "
 
 if dltest_require "dual_add_setup" "$DB" "$SETUP"; then
-  run_test_match "dual_add_index_refuses" \
+  run_test_error_match "dual_add_index_refuses" \
     "SELECT dolt_merge('feat');" \
     "cannot merge: index 'ix' covers column 'xcol_a'" "$DB"
   run_test "dual_add_index_integrity" \
@@ -79,7 +79,7 @@ CREATE UNIQUE INDEX flex_pu_main ON t_flex(trail) WHERE trail IS NOT NULL;
 SELECT dolt_commit('-Am', 'main');
 "
 if dltest_require "rename_plus_idx_setup" "$DB3" "$SETUP3"; then
-  run_test_match "rename_plus_idx_conflict" \
+  run_test_error_match "rename_plus_idx_conflict" \
     "SELECT dolt_merge('--squash','side');" \
     "cannot merge: conflicts detected" "$DB3"
   run_test "rename_plus_idx_integrity" \
@@ -133,7 +133,7 @@ if dltest_require "empty_anc_diff_branches" "$DB5" \
     "CREATE TABLE t(id INTEGER PRIMARY KEY, b INTEGER);
      INSERT INTO t VALUES(1, 2);
      SELECT dolt_commit('-Am', 'right');"; then
-  run_test_match "empty_anc_diff_conflict" \
+  run_test_error_match "empty_anc_diff_conflict" \
     "SELECT dolt_merge('right');" \
     "cannot merge: conflicts detected" "$DB5/left"
   run_test "empty_anc_diff_integrity" "PRAGMA integrity_check;" "ok" "$DB5/left"
@@ -205,7 +205,7 @@ CREATE UNIQUE INDEX ix_extra ON t(r);
 SELECT dolt_commit('-Am', 'main');
 "
 if dltest_require "rename_post_idx_setup" "$DB7" "$SETUP7"; then
-  run_test_match "rename_post_idx_merge" \
+  run_test_error_match "rename_post_idx_merge" \
     "SELECT dolt_merge('side');" \
     "cannot merge: conflicts detected" "$DB7"
   run_test "rename_post_idx_integrity" "PRAGMA integrity_check;" "ok" "$DB7"

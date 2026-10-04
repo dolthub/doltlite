@@ -31,7 +31,7 @@ CREATE TABLE t(a);
 PRAGMA writable_schema=ON;
 INSERT INTO sqlite_master VALUES(NULL, NULL, NULL, NULL, NULL);
 SQL
-run_test_match "all_null_schema_row_malformed_on_reopen" \
+run_test_error_match "all_null_schema_row_malformed_on_reopen" \
   "SELECT name FROM sqlite_master;" \
   "malformed database schema" "$DB"
 rm -f "$DB"
@@ -57,7 +57,7 @@ PRAGMA writable_schema=0;
 PRAGMA schema_version=123;
 SQL
 
-run_test_match "rootpage_swap_fails_loudly" \
+run_test_error_match "rootpage_swap_fails_loudly" \
   "SELECT count(*) FROM t1 WHERE oid=10;" \
   "malformed database schema" "$DB"
 rm -f "$DB"

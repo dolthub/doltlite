@@ -112,12 +112,16 @@ SELECT dolt_commit('-A','-m','add age on main');" | $DOLTLITE "$DB5" > /dev/null
 
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "UPDATE t SET name='BOB' WHERE id=2;
-SELECT dolt_commit('-A','-m','update bob on feature');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','update bob on feature');" | $DOLTLITE "$DB5/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
 run_test_match "merge_after_alter_no_crash" \
   "SELECT dolt_merge('feature');" \
-  "." "$DB5"
+  "^[0-9a-f]{40}$" "$DB5"
+
+run_test "merge_after_alter_preserves_both_branches" \
+  "SELECT (SELECT age FROM t WHERE id=1) || '|' || (SELECT name FROM t WHERE id=2);" \
+  "30|BOB" "$DB5"
 
 run_test_match "diff_after_merge_works" \
   "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
@@ -238,7 +242,7 @@ run_test "added_null_blame_unchanged" \
    );" \
   "base,base" "$DB8"
 
-run_test_match "added_null_cannot_commit" \
+run_test_error_match "added_null_cannot_commit" \
   "SELECT dolt_commit('-A','-m','content-free');" \
   "nothing to commit" "$DB8"
 

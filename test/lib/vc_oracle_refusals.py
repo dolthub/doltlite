@@ -392,13 +392,22 @@ def _selftest():
 def main(argv):
     if len(argv) < 2:
         sys.stderr.write(
-            "usage: vc_oracle_refusals.py bits|rows|match|annotated|target-error|selftest\n"
+            "usage: vc_oracle_refusals.py bits|rows|match|annotated|expected-errors|target-error|selftest\n"
         )
         return 2
     cmd = argv[1]
     if cmd == "selftest":
         _selftest()
         return 0
+    if cmd == "expected-errors":
+        with open(argv[2], "r", encoding="utf-8", errors="replace") as fh:
+            error = fh.read()
+        stmts = statements(sys.stdin.read())
+        failed, uncovered = _failed_map(stmts, error)
+        if not failed or uncovered or not argv[3]:
+            return 1
+        return 0 if all(re.search(argv[3], line) for message in failed.values()
+                        for line in message.splitlines()) else 1
     if cmd == "target-error":
         with open(argv[2], "r", encoding="utf-8", errors="replace") as fh:
             error = fh.read()

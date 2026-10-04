@@ -181,23 +181,23 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'x');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "err_merge_noexist" "SELECT dolt_merge('nope');" "not found" "$DB"
+run_test_error_match "err_merge_noexist" "SELECT dolt_merge('nope');" "not found" "$DB"
 
-run_test_match "err_checkout_noexist" "SELECT dolt_checkout('nope');" "no such branch or table" "$DB"
+run_test_error_match "err_checkout_noexist" "SELECT dolt_checkout('nope');" "no such branch or table" "$DB"
 
 echo "SELECT dolt_branch('dup');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "err_branch_dup" "SELECT dolt_branch('dup');" "already exists" "$DB"
+run_test_error_match "err_branch_dup" "SELECT dolt_branch('dup');" "already exists" "$DB"
 
-run_test_match "err_delete_current" "SELECT dolt_branch('-d','main');" "cannot delete" "$DB"
+run_test_error_match "err_delete_current" "SELECT dolt_branch('-d','main');" "cannot delete" "$DB"
 
-run_test_match "err_commit_clean" "SELECT dolt_commit('-A','-m','empty');" "nothing to commit" "$DB"
+run_test_error_match "err_commit_clean" "SELECT dolt_commit('-A','-m','empty');" "nothing to commit" "$DB"
 
-run_test_match "err_commit_nomsg" "SELECT dolt_commit('-A');" "require" "$DB"
+run_test_error_match "err_commit_nomsg" "SELECT dolt_commit('-A');" "require" "$DB"
 
 echo "SELECT dolt_tag('v1');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "err_tag_dup" "SELECT dolt_tag('v1');" "already exists" "$DB"
+run_test_error_match "err_tag_dup" "SELECT dolt_tag('v1');" "already exists" "$DB"
 
-run_test_match "err_tag_del_noexist" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
+run_test_error_match "err_tag_del_noexist" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
 
 echo "INSERT INTO t VALUES(2,'dirty');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "checkout_dirty_allowed" "SELECT dolt_checkout('dup');" "0" "$DB"
@@ -235,7 +235,7 @@ echo "SELECT dolt_add('a');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "stg_partial_commit" "SELECT dolt_commit('-m','just a');" "^[0-9a-f]{40}$" "$DB"
 
 run_test "stg_b_still_dirty" "SELECT count(*) FROM dolt_status;" "1" "$DB"
-run_test_match "stg_b_in_status" "SELECT table_name FROM dolt_status;" "b" "$DB"
+run_test_match "stg_b_in_status" "SELECT table_name FROM dolt_status;" "^b$" "$DB"
 
 run_test_match "stg_commit_b" "SELECT dolt_commit('-A','-m','now b');" "^[0-9a-f]{40}$" "$DB"
 run_test "stg_all_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
@@ -398,29 +398,29 @@ echo "UPDATE users SET name='alice_v2' WHERE id=1;
 UPDATE orders SET item='hat_v2' WHERE id=1;
 SELECT dolt_commit('-A','-m','main: v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "multi_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
-run_test_match "multi_conflict_count" \
+run_test_error_match "multi_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
+run_test_error_output_match "multi_conflict_count" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT 'MC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
-  "^MC\\|2$" "$DB"
+  "^MC\\|2$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "multi_conflict_blocked" \
+run_test_error_match "multi_conflict_blocked" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT dolt_commit('-A','-m','fail');" \
   "cannot commit: unresolved merge conflicts|Use dolt_conflicts_resolve" "$DB"
 
-run_test_match "multi_conflict_users_ours" \
+run_test_error_output_match "multi_conflict_users_ours" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'U|' || name FROM users WHERE id=1; ROLLBACK;" \
-  "^U\\|alice_v2$" "$DB"
-run_test_match "multi_conflict_resolved" \
+  "^U\\|alice_v2$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
+run_test_error_output_match "multi_conflict_resolved" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'R|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
-  "^R\\|0$" "$DB"
-run_test_match "multi_conflict_orders_ours" \
+  "^R\\|0$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
+run_test_error_output_match "multi_conflict_orders_ours" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'O|' || item FROM orders WHERE id=1; ROLLBACK;" \
-  "^O\\|hat_v2$" "$DB"
+  "^O\\|hat_v2$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 rm -f "$DB"
 
@@ -439,28 +439,28 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='main_val' WHERE id=1;
 SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "ours_conflict_merge" "SELECT dolt_merge('hf');" "conflict" "$DB"
-run_test_match "ours_conflict_exists" \
+run_test_error_match "ours_conflict_merge" "SELECT dolt_merge('hf');" "conflict" "$DB"
+run_test_error_output_match "ours_conflict_exists" \
   "BEGIN; SELECT dolt_merge('hf');
 SELECT 'OC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
-  "^OC\\|1$" "$DB"
+  "^OC\\|1$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "ours_conflicts_cleared" \
+run_test_error_output_match "ours_conflicts_cleared" \
   "SELECT dolt_merge('hf');
 SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OCC|' || count(*) FROM dolt_conflicts;" \
-  "^OCC\\|0$" "$DB"
-run_test_match "ours_value_kept" \
+  "^OCC\\|0$" "$DB" 'cannot\ merge:\ conflicts\ detected,\ autocommit\ transaction\ rolled\ back\.\ Run\ the\ merge\ inside\ BEGIN/COMMIT\ to\ inspect\ dolt_conflicts\ and\ dolt_schema_conflicts,\ resolve\ with\ dolt_conflicts_resolve\(\),\ then\ commit\ with\ dolt_commit\(\)\.\ Conflicts\ are\ never\ committed\ as\ conflicts'
+run_test_error_output_match "ours_value_kept" \
   "SELECT dolt_merge('hf');
 SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OV|' || v FROM t WHERE id=1;" \
-  "^OV\\|main_val$" "$DB"
-run_test_match "ours_other_row_ok" \
+  "^OV\\|main_val$" "$DB" 'cannot\ merge:\ conflicts\ detected,\ autocommit\ transaction\ rolled\ back\.\ Run\ the\ merge\ inside\ BEGIN/COMMIT\ to\ inspect\ dolt_conflicts\ and\ dolt_schema_conflicts,\ resolve\ with\ dolt_conflicts_resolve\(\),\ then\ commit\ with\ dolt_commit\(\)\.\ Conflicts\ are\ never\ committed\ as\ conflicts'
+run_test_error_output_match "ours_other_row_ok" \
   "SELECT dolt_merge('hf');
 SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OR|' || v FROM t WHERE id=2;" \
-  "^OR\\|keep$" "$DB"
-run_test_match "ours_branch_ok" \
+  "^OR\\|keep$" "$DB" 'cannot\ merge:\ conflicts\ detected,\ autocommit\ transaction\ rolled\ back\.\ Run\ the\ merge\ inside\ BEGIN/COMMIT\ to\ inspect\ dolt_conflicts\ and\ dolt_schema_conflicts,\ resolve\ with\ dolt_conflicts_resolve\(\),\ then\ commit\ with\ dolt_commit\(\)\.\ Conflicts\ are\ never\ committed\ as\ conflicts'
+run_test_error_output_match "ours_branch_ok" \
   "SELECT dolt_merge('hf');
 SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OB|' || active_branch();" \
-  "^OB\\|main$" "$DB"
+  "^OB\\|main$" "$DB" 'cannot\ merge:\ conflicts\ detected,\ autocommit\ transaction\ rolled\ back\.\ Run\ the\ merge\ inside\ BEGIN/COMMIT\ to\ inspect\ dolt_conflicts\ and\ dolt_schema_conflicts,\ resolve\ with\ dolt_conflicts_resolve\(\),\ then\ commit\ with\ dolt_commit\(\)\.\ Conflicts\ are\ never\ committed\ as\ conflicts'
 
 rm -f "$DB"
 
@@ -530,7 +530,7 @@ SELECT dolt_commit('-A','-m','add 5');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "mergedel_merge" "SELECT dolt_merge('cleanup');" "^[0-9a-f]{40}$" "$DB"
 run_test "mergedel_count" "SELECT count(*) FROM t;" "3" "$DB"
-run_test_match "mergedel_has_1" "SELECT v FROM t WHERE id=1;" "a" "$DB"
+run_test_match "mergedel_has_1" "SELECT v FROM t WHERE id=1;" "^a$" "$DB"
 run_test "mergedel_no_2" "SELECT count(*) FROM t WHERE id=2;" "0" "$DB"
 
 rm -f "$DB"
