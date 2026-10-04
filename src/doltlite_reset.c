@@ -729,6 +729,7 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }
 
+  doltliteGetSessionHead(db, &sessionHeadBeforeLock);
   if( zRef ){
     DoltliteCommit commit;
 
@@ -762,21 +763,39 @@ static void doltliteResetFunc(
     }
   }
 
-  if( zRef ){
-    doltliteGetSessionHead(db, &sessionHeadBeforeLock);
-    rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
-    if( rc==SQLITE_BUSY ){
-      sqlite3_result_error(context,
-        "reset conflict: another connection moved this branch. "
-        "Please retry your transaction.", -1);
-      goto reset_cleanup;
-    }
+  /* Before the lock: its SQL ends a read transaction, which releases the
+  ** graph lock, and refreshes the session head the lock confirms. */
+  if( isHard && havePreResetHead ){
+    rc = doltlitePreserveUntrackedOnHardReset(
+      db, cs, &preResetStagedCatHash, &targetWorkingCatHash
+    );
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
     }
-    graphLocked = 1;
+  }
 
+  /* A peer commit since the target was read would otherwise be reset away
+  ** under its own tip. */
+  rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
+  if( rc==SQLITE_BUSY ){
+    if( zRef ){
+      sqlite3_result_error(context,
+        "reset conflict: another connection moved this branch. "
+        "Please retry your transaction.", -1);
+    }else{
+      doltliteCmdResultPeerBranchBusy(context, "reset");
+    }
+    sqlite3_result_error_code(context, SQLITE_BUSY);
+    goto reset_cleanup;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    goto reset_cleanup;
+  }
+  graphLocked = 1;
+
+  if( zRef ){
     /* Move the ref before the session head. The other order leaves the
     ** session reading a commit the branch never reached if the update fails.
     ** reset --hard is not atomic (nor in Dolt). */
@@ -822,16 +841,6 @@ static void doltliteResetFunc(
 
     ProllyHash origStagedAfterReset;
     memcpy(&origStagedAfterReset, &targetCatHash, sizeof(ProllyHash));
-
-    if( havePreResetHead ){
-      rc = doltlitePreserveUntrackedOnHardReset(
-        db, cs, &preResetStagedCatHash, &targetWorkingCatHash
-      );
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(context, rc);
-        goto reset_cleanup;
-      }
-    }
 
     rc = doltliteSaveWorkingSet(db);
     if( rc!=SQLITE_OK ){
