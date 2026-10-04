@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include "sqliteInt.h"
 #include "vdbeInt.h"
+#include "doltlite_internal.h"
+#include "pager_shim.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -148,7 +150,7 @@ static void oneShape(const char *zName, const char *zSchema, int nRow){
 ** relayout fix, and the shape a later ADD COLUMN misreads. integrity_check
 ** has to name it instead of answering "ok", so plant one directly: a
 ** three-field record in a two-column table. */
-static void wideRecord(void){
+static void wideRecord(int bShared){
   sqlite3 *db = 0;
   Btree *pBt;
   BtCursor *pCur;
@@ -168,6 +170,12 @@ static void wideRecord(void){
     nFail++;
     sqlite3_close(db);
     return;
+  }
+  if( bShared ){
+    check("shared: setup", execSql(db,
+        "DELETE FROM t;"
+        "CREATE TABLE u(a INTEGER PRIMARY KEY, b TEXT, c TEXT);"
+        "INSERT INTO u VALUES(2,NULL,NULL);")==SQLITE_OK);
   }
   if( sqlite3_prepare_v2(db,
           "SELECT rootpage FROM sqlite_master WHERE name='t'", -1, &pStmt, 0)
@@ -198,6 +206,29 @@ static void wideRecord(void){
   sqlite3BtreeCloseCursor(pCur);
   sqlite3_free(pCur);
   check("wide: commit", sqlite3BtreeCommit(pBt)==SQLITE_OK);
+
+  if( bShared ){
+    Pgno aRoot[2];
+    ProllyHash aHash[2];
+    char *zOut = 0;
+    int nErr = 0;
+    check("shared: good root", doltliteResolveTableName(
+        db, "u", &aRoot[0])==SQLITE_OK);
+    check("shared: bad root", doltliteResolveTableName(
+        db, "t", &aRoot[1])==SQLITE_OK);
+    check("shared: good hash", doltliteGetSessionTableRoot(
+        db, aRoot[0], &aHash[0], 0)==SQLITE_OK);
+    check("shared: bad hash", doltliteGetSessionTableRoot(
+        db, aRoot[1], &aHash[1], 0)==SQLITE_OK);
+    check("shared: same row chunk", prollyHashCompare(&aHash[0], &aHash[1])==0);
+    check("shared: read txn", sqlite3BtreeBeginTrans(pBt, 0, 0)==SQLITE_OK);
+    rc = sqlite3BtreeIntegrityCheck(db, pBt, aRoot, 0, 2, 100, &nErr, &zOut);
+    check("shared: check ran", rc==SQLITE_OK);
+    check("shared: each schema checked", nErr==1 && zOut
+          && strstr(zOut, "row of t stores 3 fields for 2 columns"));
+    sqlite3_free(zOut);
+    check("shared: end read", sqlite3BtreeCommit(pBt)==SQLITE_OK);
+  }
 
   if( sqlite3_prepare_v2(db, "PRAGMA integrity_check", -1, &pStmt, 0)
       ==SQLITE_OK ){
@@ -294,6 +325,46 @@ static void dropColumnInTxn(void){
   removeDb("icc_drop.db");
 }
 
+static void sharedGraphReads(void){
+  static const char *azPragma[] = {
+    "PRAGMA integrity_check", "PRAGMA quick_check"
+  };
+  sqlite3 *db = 0;
+  ProllyStats *pStats;
+  int i;
+
+  removeDb("icc_reads.db");
+  check("reads: open", sqlite3_open("icc_reads.db", &db)==SQLITE_OK);
+  if( !db ) return;
+  check("reads: setup", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, p BLOB);"
+      "WITH RECURSIVE s(x) AS (VALUES(1) UNION ALL"
+      " SELECT x+1 FROM s WHERE x<1000)"
+      "INSERT INTO t SELECT x,x%100,randomblob(1000) FROM s;"
+      "CREATE INDEX ta ON t(a);"
+      "SELECT dolt_commit('-Am','base');")==SQLITE_OK);
+  pStats = pagerShimStats(sqlite3BtreePager(db->aDb[0].pBt));
+  check("reads: stats available", pStats!=0);
+  if( pStats ){
+    for(i=0; i<2; i++){
+      u64 nBefore;
+      u64 nVerified;
+      check("reads: warm check", pragmaIsOk(db, azPragma[i]));
+      nBefore = pStats->nVerifyBytes;
+      check("reads: check ok", pragmaIsOk(db, azPragma[i]));
+      nVerified = pStats->nVerifyBytes-nBefore;
+      check("reads: payload still verified", nVerified>=1000000);
+      check("reads: no duplicate graph scan", nVerified<1500000);
+      if( nVerified>=1500000 ){
+        fprintf(stderr, "  %s verified %llu bytes\n", azPragma[i],
+                (unsigned long long)nVerified);
+      }
+    }
+  }
+  sqlite3_close(db);
+  removeDb("icc_reads.db");
+}
+
 int main(void){
   oneShape("rowid pk, one index",
       "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);"
@@ -312,7 +383,9 @@ int main(void){
       "CREATE TABLE t(a INT, b TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;"
       "CREATE INDEX ib ON t(b);", 300);
 
-  wideRecord();
+  wideRecord(0);
+  wideRecord(1);
+  sharedGraphReads();
   dropColumnInTxn();
 
   printf("integrity_check_counts_test: %d passed, %d failed\n", nPass, nFail);
