@@ -237,6 +237,25 @@ def refusal_bits(sql, stderr):
     return ",".join(token for token, _text in refusal_rows(sql, stderr))
 
 
+def target_error(sql, stderr, conflicted_setup=False, pattern=""):
+    stmts = statements(sql)
+    failed, uncovered = _failed_map(stmts, stderr)
+    if not stmts or uncovered or len(stmts) - 1 not in failed:
+        return "the final statement did not report an attributable error"
+    for idx, error in failed.items():
+        if idx == len(stmts) - 1:
+            continue
+        if (conflicted_setup
+                and re.search(r"\b(?:SELECT|CALL)\s+dolt_merge\s*\(",
+                              stmts[idx]["text"], re.I)
+                and re.search(r"Merge has [1-9]\d* conflict\(s\)", error)):
+            continue
+        return "setup statement %d failed: %s" % (idx + 1, error)
+    if pattern and not re.search(pattern, failed[len(stmts) - 1]):
+        return "the final statement did not match error pattern %s" % pattern
+    return ""
+
+
 def _split_bits(bits):
     if not bits:
         return []
@@ -352,18 +371,43 @@ def _selftest():
     leading = "-- error: next statement is refused\nSELECT 1;\nSELECT 2;\n"
     exp, act = annotated_bits(leading, "Error near line 2: refused\n")
     assert exp == act == "1,0", (exp, act)
+    target = "SELECT 'quoted;value';\nSELECT\n  missing\nFROM t;\n"
+    assert not target_error(target, "Parse error near line 2: no such column: missing")
+    assert not target_error(trigger, "Parse error near line 4: no such column: missing")
+    assert target_error(target, "Error near line 1: setup failed")
+    assert target_error(target, "Error near line 1: setup failed\nError near line 2: target failed")
+    assert target_error(target, "startup failure")
+    assert target_error(target, "Error near line 99: unlocated")
+    assert target_error(target, "")
+    assert target_error(target, "Error near line 2: wrong class", pattern="expected class")
+    conflicted = "BEGIN;\nSELECT dolt_merge('feature');\nSELECT dolt_commit('-m','c');\n"
+    errors = "Error near line 2: Merge has 1 conflict(s)\nError near line 3: unresolved merge conflicts"
+    assert target_error(conflicted, errors)
+    assert not target_error(conflicted, errors, True, "unresolved merge conflicts")
+    assert target_error(conflicted, errors.replace("Merge has 1 conflict(s)", "no such branch"), True)
+    assert target_error(conflicted.replace("dolt_merge", "dolt_branch"), errors, True)
     print("vc_oracle_refusals: selftest passed")
 
 
 def main(argv):
     if len(argv) < 2:
         sys.stderr.write(
-            "usage: vc_oracle_refusals.py bits|rows|match|annotated|selftest\n"
+            "usage: vc_oracle_refusals.py bits|rows|match|annotated|target-error|selftest\n"
         )
         return 2
     cmd = argv[1]
     if cmd == "selftest":
         _selftest()
+        return 0
+    if cmd == "target-error":
+        with open(argv[2], "r", encoding="utf-8", errors="replace") as fh:
+            error = fh.read()
+        conflicted = len(argv) > 3 and argv[3] == "--conflicted-setup"
+        pattern = argv[4] if len(argv) > 4 else ""
+        reason = target_error(sys.stdin.read(), error, conflicted, pattern)
+        if reason:
+            sys.stdout.write(reason + "\n")
+            return 1
         return 0
     if cmd == "match":
         left = argv[2] if len(argv) > 2 else ""

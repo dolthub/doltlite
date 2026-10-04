@@ -110,9 +110,10 @@ vc_oracle_run_dolt_script() {
   local err="$3"
   local sql="$4"
   shift 4
+  : > "$out"
   (
-    cd "$repo" || exit 1
-    vc_oracle_init_repo
+    cd "$repo" 2>"$err" || exit 1
+    vc_oracle_init_repo "$err" || exit $?
     printf '%s\n' "$sql" | "$DOLT" sql -c "$@" >"$out" 2>"$err"
   )
 }
@@ -123,37 +124,54 @@ vc_oracle_run_dolt_script_for_error() {
   local err="$3"
   local sql="$4"
   shift 4
+  : > "$out"
   (
-    cd "$repo" || exit 1
-    vc_oracle_init_repo
+    cd "$repo" 2>"$err" || exit 1
+    vc_oracle_init_repo "$err" || exit $?
     printf '%s\n' "$sql" | "$DOLT" sql "$@" >"$out" 2>"$err"
   )
 }
 
 vc_oracle_error() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" mode="${3:-}" pattern="${4:-}"
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" --expect-error
-  dl_rc=$?
-
-  local dolt_setup
+  local dl_rc=0 dt_rc=0 dolt_setup
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" \
+    "$setup" --expect-error || dl_rc=$?
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-  local dt_rc
-  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
-  dt_rc=$?
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
+    "$dolt_setup" -r csv || dt_rc=$?
 
-  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc"; then
+  local valid=1 checker
+  checker="$(dirname "${BASH_SOURCE[0]}")/vc_oracle_refusals.py"
+  printf '%s\n' "$setup" | python3 "$checker" target-error "$dir/dl.err" \
+    "$mode" "$pattern" > "$dir/dl.validation" || valid=0
+  printf '%s\n' "$dolt_setup" | python3 "$checker" target-error "$dir/dt.err" \
+    "$mode" "$pattern" > "$dir/dt.validation" || valid=0
+  if [ "$mode" = --conflicted-setup ]; then
+    if ! grep -qE '^VC_ORACLE_CONFLICTS\|[1-9][0-9]*$' "$dir/dl.out" \
+       || ! grep -qE '^VC_ORACLE_CONFLICTS,[1-9][0-9]*$' "$dir/dt.out"; then
+      printf '%s\n' 'setup did not prove active conflicts on both engines' \
+        >> "$dir/dl.validation"
+      valid=0
+    fi
+  elif [ -n "$mode" ]; then
+    valid=0
+  fi
+
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" \
+     && [ "$valid" -eq 1 ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (expected both to error)"
+    echo "  FAIL: $name (expected both to error at the final statement)"
     echo "    doltlite rc: $dl_rc"
     echo "    dolt rc:     $dt_rc"
-    sed 's/^/      /' "$dir/dl.err" "$dir/dt.err"
+    sed 's/^/      /' "$dir/dl.err" "$dir/dt.err" \
+      "$dir/dl.validation" "$dir/dt.validation"
   fi
 }
 
