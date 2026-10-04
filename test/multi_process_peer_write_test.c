@@ -152,6 +152,7 @@ struct Op {
   const char *zPre;
   const char *zSql;
   const char *zCheck;
+  int bCommitOnly;
 };
 
 static const Op aOp[] = {
@@ -180,6 +181,9 @@ static const Op aOp[] = {
   { "reset_soft", 0, "SELECT dolt_reset('--soft')",
     "peer_write_kept_reset_soft" },
   { "reset_table", 0, "SELECT dolt_reset('u')", "peer_write_kept_reset_table" },
+  /* Discarding a peer's uncommitted row is what --hard is for. */
+  { "reset_hard", 0, "SELECT dolt_reset('--hard')",
+    "peer_write_kept_reset_hard", 1 },
   { "checkout_branch", 0, "SELECT dolt_checkout('f')",
     "peer_write_kept_checkout_branch" },
   { "checkout_new", 0, "SELECT dolt_checkout('-b','f5')",
@@ -243,11 +247,14 @@ static int runOpSql(sqlite3 *db, const char *zSql, int *pBusy){
   return rc;
 }
 
-/* Acknowledged once the peer's INSERT autocommits; the commit is extra. */
-static int peerAct(sqlite3 *peer, int action){
+/* Acknowledged once the peer's INSERT autocommits; the commit is extra,
+** unless only a committed row is owed to the peer. */
+static int peerAct(sqlite3 *peer, int action, int bCommitOnly){
+  int rc;
   if( execSql(peer, "INSERT INTO t VALUES(900,'peer')")!=SQLITE_OK ) return 0;
-  if( action==PEER_COMMIT ) execSql(peer, "SELECT dolt_commit('-am','peer')");
-  return 1;
+  if( action!=PEER_COMMIT ) return 1;
+  rc = execSql(peer, "SELECT dolt_commit('-am','peer')");
+  return !bCommitOnly || rc==SQLITE_OK;
 }
 
 /* The peer's row is on main and the store is intact. */
@@ -289,7 +296,7 @@ static void runStale(const Op *p, int action, Tally *t){
   sqlite3_busy_timeout(peer, 5000);
   if( p->zPre ) execSql(db, p->zPre);
   queryText(db, "SELECT count(*) FROM t");
-  acked = peerAct(peer, action);
+  acked = peerAct(peer, action, p->bCommitOnly);
   opOk = runOpSql(db, zSql, 0)==SQLITE_OK;
   execSql(db, "INSERT INTO t VALUES(3,'mine')");
   sqlite3_close(peer);
@@ -304,6 +311,7 @@ typedef struct MidOp MidOp;
 struct MidOp {
   sqlite3 *peer;
   int action;
+  int bCommitOnly;
   int fireAt;
   int nCalls;
   int fired;
@@ -314,7 +322,7 @@ static int fireMidOp(void *arg){
   MidOp *m = (MidOp*)arg;
   if( ++m->nCalls==m->fireAt && !m->fired ){
     m->fired = 1;
-    m->acked = peerAct(m->peer, m->action);
+    m->acked = peerAct(m->peer, m->action, m->bCommitOnly);
   }
   return 0;
 }
@@ -334,6 +342,7 @@ static int runMidOp(const Op *p, int action, int k, Tally *t){
   sqlite3_busy_timeout(db, 5000);
   if( p->zPre ) execSql(db, p->zPre);
   m.action = action;
+  m.bCommitOnly = p->bCommitOnly;
   m.fireAt = k;
   sqlite3_progress_handler(db, 1, fireMidOp, &m);
   rc = runOpSql(db, zSql, &busy);
@@ -395,6 +404,7 @@ int main(void){
     char zName[96];
     memset(aT, 0, sizeof(aT));
     for(a=0; a<2; a++){
+      if( p->bCommitOnly && a==PEER_WRITE ) continue;
       runStale(p, a, &aT[MODE_STALE][a]);
       for(k=1; k<5000 && runMidOp(p, a, k, &aT[MODE_MIDOP][a]); k++){}
       if( k-1>nSteps ) nSteps = k-1;
