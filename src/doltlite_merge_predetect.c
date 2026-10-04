@@ -1137,16 +1137,19 @@ int mergePreNormalizeRenamedDependents(
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aOursSchema, int nOursSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema,
-  SchemaMergeAction **ppActions, int *pnActions
+  SchemaMergeAction **ppActions, int *pnActions,
+  int bTableRenames
 ){
   int t, i, rc = SQLITE_OK;
 
-  rc = mergePreNormalizeTableRename(aAnc, nAnc, aOurs, nOurs,
-                                    aTheirs, nTheirs,
-                                    aAncSchema, nAncSchema,
-                                    aOursSchema, nOursSchema,
-                                    aTheirsSchema, nTheirsSchema,
-                                    ppActions, pnActions);
+  if( bTableRenames ){
+    rc = mergePreNormalizeTableRename(aAnc, nAnc, aOurs, nOurs,
+                                      aTheirs, nTheirs,
+                                      aAncSchema, nAncSchema,
+                                      aOursSchema, nOursSchema,
+                                      aTheirsSchema, nTheirsSchema,
+                                      ppActions, pnActions);
+  }
   if( rc!=SQLITE_OK ) return rc;
 
   for(t=0; t<nAncSchema; t++){
