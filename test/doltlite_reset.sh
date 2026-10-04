@@ -114,7 +114,7 @@ run_test "path_reset_is_case_insensitive" \
 run_test "case_insensitive_reset_keeps_working_change" \
   "SELECT v FROM Camel WHERE id=1;" \
   "20" "$DB3D"
-run_test_match "case_insensitive_reset_clears_staged_indexes" \
+run_test_error_match "case_insensitive_reset_clears_staged_indexes" \
   "SELECT dolt_commit('-m','unexpected');" \
   "nothing to commit" "$DB3D"
 
@@ -175,21 +175,23 @@ echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a')
 C_INIT=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB6" 2>/dev/null)
 echo "SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='OTHER'; SELECT dolt_commit('-A','-m','other');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main'); UPDATE t SET v='MAIN'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB6" > /dev/null 2>&1
-run_test_match "merge_has_conflicts" \
+run_test "save_conflicting_head_for_reset" "SELECT dolt_branch('before-reset');" "0" "$DB6"
+run_test_error_output_match "merge_has_conflicts" \
   "BEGIN; SELECT dolt_merge('other');
 SELECT 'MC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
-  "^MC\\|1$" "$DB6"
+  "^MC\\|1$" "$DB6" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "reset_clears_conflicts" \
+run_test_error_output_match "reset_clears_conflicts" \
   "BEGIN; SELECT dolt_merge('other');
 SELECT dolt_reset('--hard','$C_INIT'); SELECT 'RC|' || count(*) FROM dolt_conflicts; SELECT 'RV|' || v FROM t; ROLLBACK;" \
-  "^RC\\|0$" "$DB6"
-run_test_match "reset_restores_init" \
+  "^RC\\|0$" "$DB6" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
+run_test "restore_conflicting_head_for_reset" "SELECT dolt_reset('--hard','before-reset');" "0" "$DB6"
+run_test_error_output_match "reset_restores_init" \
   "BEGIN; SELECT dolt_merge('other');
-SELECT dolt_reset('--hard','$C_INIT'); SELECT 'RV|' || v FROM t; ROLLBACK;" \
-  "^RV\\|a$" "$DB6"
+SELECT dolt_reset('--hard','$C_INIT'); SELECT 'RV|' || v FROM t;" \
+  "^RV\\|a$" "$DB6" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "reset_bad_ref" \
+run_test_error_match "reset_bad_ref" \
   "SELECT dolt_reset('--hard','not_a_real_ref');" \
   "not found" "$DB6"
 
@@ -197,53 +199,53 @@ DB7=/tmp/test_reset7_$$.db; rm -f "$DB7"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main'); UPDATE t SET v='main'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
-run_test_match "merge_conflicts_present_before_hard_reset" \
+run_test_error_output_match "merge_conflicts_present_before_hard_reset" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT 'HC|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
-  "^HC\\|1$" "$DB7"
+  "^HC\\|1$" "$DB7" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "hard_reset_clears_conflicts_without_ref" \
+run_test_error_output_match "hard_reset_clears_conflicts_without_ref" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT dolt_reset('--hard'); SELECT 'HR|' || count(*) FROM dolt_conflicts_t; SELECT 'HV|' || v FROM t; ROLLBACK;" \
-  "^HR\\|0$" "$DB7"
+  "^HR\\|0$" "$DB7" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "hard_reset_restores_head_row_after_conflict" \
+run_test_error_output_match "hard_reset_restores_head_row_after_conflict" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT dolt_reset('--hard'); SELECT 'HV|' || v FROM t; ROLLBACK;" \
-  "^HV\\|main$" "$DB7"
+  "^HV\\|main$" "$DB7" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 DB8=/tmp/test_reset8_$$.db; rm -f "$DB8"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main'); UPDATE t SET v='main'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
-run_test_match "merge_conflicts_present_before_reset_guard" \
+run_test_error_output_match "merge_conflicts_present_before_reset_guard" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT 'GC|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
-  "^GC\\|1$" "$DB8"
+  "^GC\\|1$" "$DB8" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "no_arg_reset_rejected_during_merge_conflict" \
+run_test_error_match "no_arg_reset_rejected_during_merge_conflict" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT dolt_reset();
 SELECT 'GC2|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
   "cannot merge: conflicts detected" "$DB8"
 
-run_test_match "soft_reset_rejected_during_merge_conflict" \
+run_test_error_match "soft_reset_rejected_during_merge_conflict" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT dolt_reset('--soft');
 SELECT 'GS|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
   "cannot merge: conflicts detected" "$DB8"
 
-run_test_match "reset_guard_preserves_conflicts" \
+run_test_error_output_match "reset_guard_preserves_conflicts" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT dolt_reset('--soft');
 SELECT 'GP|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
-  "^GP\\|1$" "$DB8"
+  "^GP\\|1$" "$DB8" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations|cannot merge: conflicts detected'
 
-run_test_match "reset_guard_preserves_working_row" \
+run_test_error_output_match "reset_guard_preserves_working_row" \
   "BEGIN; SELECT dolt_merge('feat');
 SELECT dolt_reset('--soft');
 SELECT 'GV|' || v FROM t; ROLLBACK;" \
-  "^GV\\|main$" "$DB8"
+  "^GV\\|main$" "$DB8" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations|cannot merge: conflicts detected'
 
 DB9=/tmp/test_reset9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); DROP TABLE a; SELECT dolt_reset('a');" | $DOLTLITE "$DB9" > /dev/null 2>&1
@@ -380,7 +382,7 @@ run_test "hard_reset_untracked_unique_autoindex_integrity" \
 run_test "hard_reset_untracked_unique_autoindex_status" \
   "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
   "untracked|0|new table" "$DB16"
-run_test_match "hard_reset_untracked_unique_still_enforced" \
+run_test_error_match "hard_reset_untracked_unique_still_enforced" \
   "INSERT INTO untracked VALUES(3,'label');" "UNIQUE constraint failed" "$DB16"
 
 DB17=/tmp/test_reset17_$$.db; rm -f "$DB17"

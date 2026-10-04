@@ -36,7 +36,7 @@ SELECT dolt_commit('-A','-m','Add comments table');" | $DOLTLITE "$DB/add-commen
 run_test "e2e_feature_comments" "SELECT count(*) FROM comments;" "2" "$DB/add-comments"
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "e2e_main_no_comments" "SELECT * FROM comments;" "no such table" "$DB"
+run_test_error_match "e2e_main_no_comments" "SELECT * FROM comments;" "no such table" "$DB"
 
 echo "INSERT INTO users VALUES(3,'Charlie','charlie@example.com');
 UPDATE users SET email='alice@newmail.com' WHERE id=1;
@@ -69,26 +69,26 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE users SET name='alice_updated' WHERE id=1;
 SELECT dolt_commit('-A','-m','Main: update Alice name');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "e2e_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
+run_test_error_match "e2e_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
 
-run_test_match "e2e_has_conflicts" \
+run_test_error_output_match "e2e_has_conflicts" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT 'EC|' || num_conflicts FROM dolt_conflicts WHERE \"table\"='users'; ROLLBACK;" \
-  "^EC\\|1$" "$DB"
+  "^EC\\|1$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "e2e_commit_blocked" \
+run_test_error_match "e2e_commit_blocked" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT dolt_commit('-A','-m','fail');" \
   "cannot commit: unresolved merge conflicts|Use dolt_conflicts_resolve" "$DB"
 
-run_test_match "e2e_conflicts_cleared" \
+run_test_error_output_match "e2e_conflicts_cleared" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'ER|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
-  "^ER\\|0$" "$DB"
-run_test_match "e2e_ours_kept" \
+  "^ER\\|0$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
+run_test_error_output_match "e2e_ours_kept" \
   "BEGIN; SELECT dolt_merge('hotfix');
 SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'EU|' || name FROM users WHERE id=1; ROLLBACK;" \
-  "^EU\\|alice_updated$" "$DB"
+  "^EU\\|alice_updated$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 echo "INSERT INTO users VALUES(99,'Temp','temp@test.com');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "e2e_before_reset" "SELECT count(*) FROM users;" "4" "$DB"
@@ -116,7 +116,7 @@ run_test "e2e_branch_count" "SELECT count(*) FROM dolt_branches;" "3" "$DB"
 
 echo "SELECT dolt_branch('-D','hotfix');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "e2e_deleted_branch" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
-run_test_match "e2e_delete_gone" "SELECT dolt_checkout('hotfix');" "no such branch or table" "$DB"
+run_test_error_match "e2e_delete_gone" "SELECT dolt_checkout('hotfix');" "no such branch or table" "$DB"
 
 run_test_match "e2e_log_count" "SELECT count(*) FROM dolt_log;" "^[5-9]" "$DB"
 

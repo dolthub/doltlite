@@ -30,7 +30,7 @@ chmod a-w "$DIR"
 
 run_test "ro_dir_select" "SELECT x, y FROM t1;" "1|2" "$DB"
 
-run_test_match "ro_dir_insert_message" \
+run_test_error_match "ro_dir_insert_message" \
   "INSERT INTO t1 VALUES(3, 4);" \
   "attempt to write a readonly database" "$DB"
 

@@ -339,7 +339,7 @@ INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','seed');" | $DOLTLITE "$DB" > /dev/null 2>&1
 printf '\xff' | dd of="$DB" bs=1 seek=168 conv=notrunc 2>/dev/null
 
-run_test_match "gc_mark_failure_names_missing_chunk" \
+run_test_error_match "gc_mark_failure_names_missing_chunk" \
   "SELECT dolt_gc();" \
   "missing chunk [0-9a-f]{40}.*source=.*rc=" \
   "$DB"

@@ -34,11 +34,11 @@ run_test "visible_in_sqlite_master" \
   "SELECT count(*) FROM sqlite_master WHERE name='dolt_ignore' AND type='table';" \
   "1" "$DB"
 
-run_test_match "dup_pk_rejected" \
+run_test_error_match "dup_pk_rejected" \
   "INSERT INTO dolt_ignore VALUES('tmp_*', 0);" \
   "UNIQUE constraint failed: dolt_ignore.pattern" "$DB"
 
-run_test_match "null_pattern_rejected" \
+run_test_error_match "null_pattern_rejected" \
   "INSERT INTO dolt_ignore VALUES(NULL, 1);" \
   "NOT NULL constraint failed: dolt_ignore.pattern" "$DB"
 
@@ -107,7 +107,7 @@ tmp_xy|1|new table" "$DB4"
 DB3=/tmp/test_ignore_specificity_$$.db
 rm -f "$DB3"
 
-run_test_match "incomparable_patterns_conflict" \
+run_test_error_match "incomparable_patterns_conflict" \
   "INSERT INTO dolt_ignore VALUES('a*bc', 1),('ab*', 0);
    CREATE TABLE abxbc(id INTEGER PRIMARY KEY);
    SELECT dolt_add('-A');" \
@@ -164,7 +164,7 @@ run_test "force_add_dot_stages_ignored" \
 dolt_ignore|1|new table
 tmp_secret|1|new table" "$DB7"
 
-run_test_match "force_requires_name" \
+run_test_error_match "force_requires_name" \
   "SELECT dolt_add('-f');" \
   "requires table name" "$DB7"
 

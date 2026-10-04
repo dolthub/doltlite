@@ -14,10 +14,10 @@ KID=$(ls "$DOLTLITE_CREDS_DIR" | head -1 | sed 's/\.jwk$//')
 run_test_match "creds_list_has_kid" "SELECT dolt_creds('list');" "$KID" "$DB"
 run_test_match "creds_export_public_jwk" "SELECT dolt_creds('export', '$KID');" '"kty"' "$DB"
 run_test "creds_export_no_private_key" "SELECT instr(dolt_creds('export', '$KID'), '\"d\"') = 0;" "1" "$DB"
-run_test_match "creds_export_to_dir" "SELECT dolt_creds('export', '$KID', '$DOLTLITE_CREDS_DIR/authorized');" "" "$DB"
+run_test "creds_export_to_dir" "SELECT dolt_creds('export', '$KID', '$DOLTLITE_CREDS_DIR/authorized');" "Exported public credential $KID to $DOLTLITE_CREDS_DIR/authorized" "$DB"
 if [ -n "$(ls "$DOLTLITE_CREDS_DIR/authorized" 2>/dev/null)" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: creds_export_dir_written"; fi
 run_test_match "creds_rm" "SELECT dolt_creds('rm', '$KID');" "Removed credential $KID" "$DB"
-run_test_match "creds_rm_unknown" "SELECT dolt_creds('rm', '$KID');" "no such credential" "$DB"
+run_test_error_match "creds_rm_unknown" "SELECT dolt_creds('rm', '$KID');" "no such credential" "$DB"
 
 rm -rf "$DOLTLITE_CREDS_DIR" "$DB" "$DB-lock"
 dltest_finish

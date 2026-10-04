@@ -23,13 +23,13 @@ run_test "main_one_row" "SELECT count(*) FROM t;" "1" "$DB"
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "feature_two_rows" "SELECT count(*) FROM t;" "2" "$DB/feature"
 
-run_test_match "dup_branch" "SELECT dolt_branch('feature');" "already exists" "$DB"
-run_test_match "del_current" "SELECT dolt_branch('-d','feature');" "cannot delete" "$DB/feature"
+run_test_error_match "dup_branch" "SELECT dolt_branch('feature');" "already exists" "$DB"
+run_test_error_match "del_current" "SELECT dolt_branch('-d','feature');" "cannot delete" "$DB/feature"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "delete_unmerged_branch" "SELECT dolt_branch('-d','feature');" "not fully merged" "$DB"
+run_test_error_match "delete_unmerged_branch" "SELECT dolt_branch('-d','feature');" "not fully merged" "$DB"
 run_test "force_delete_branch" "SELECT dolt_branch('-D','feature');" "0" "$DB"
 run_test "one_branch" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
-run_test_match "checkout_gone" "SELECT dolt_checkout('feature');" "no such branch or table" "$DB"
+run_test_error_match "checkout_gone" "SELECT dolt_checkout('feature');" "no such branch or table" "$DB"
 
 DB2=/tmp/test_branch2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); UPDATE t SET v='dirty' WHERE id=1; SELECT dolt_checkout('t');" | $DOLTLITE "$DB2" > /dev/null 2>&1
@@ -124,20 +124,20 @@ run_test "checkout_b_data" "SELECT count(*) FROM t;" "2" "$DB9/newbr"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "checkout_b_main_data" "SELECT count(*) FROM t;" "1" "$DB9"
 
-run_test_match "checkout_b_dup" "SELECT dolt_checkout('-b','main');" "already exists" "$DB9"
-run_test_match "create_empty_branch_name" "SELECT dolt_branch('');" "branch name required" "$DB9"
-run_test_match "copy_empty_source" "SELECT dolt_branch('-c','','copy');" "branch name required" "$DB9"
-run_test_match "copy_empty_dest" "SELECT dolt_branch('-c','main','');" "branch name required" "$DB9"
-run_test_match "move_empty_source" "SELECT dolt_branch('-m','','renamed');" "branch name required" "$DB9"
-run_test_match "move_empty_dest" "SELECT dolt_branch('-m','main','');" "branch name required" "$DB9"
-run_test_match "checkout_b_empty_name" "SELECT dolt_checkout('-b','');" "branch name required" "$DB9"
+run_test_error_match "checkout_b_dup" "SELECT dolt_checkout('-b','main');" "already exists" "$DB9"
+run_test_error_match "create_empty_branch_name" "SELECT dolt_branch('');" "branch name required" "$DB9"
+run_test_error_match "copy_empty_source" "SELECT dolt_branch('-c','','copy');" "branch name required" "$DB9"
+run_test_error_match "copy_empty_dest" "SELECT dolt_branch('-c','main','');" "branch name required" "$DB9"
+run_test_error_match "move_empty_source" "SELECT dolt_branch('-m','','renamed');" "branch name required" "$DB9"
+run_test_error_match "move_empty_dest" "SELECT dolt_branch('-m','main','');" "branch name required" "$DB9"
+run_test_error_match "checkout_b_empty_name" "SELECT dolt_checkout('-b','');" "branch name required" "$DB9"
 
 DB10=/tmp/test_branch10_$$.db; rm -f "$DB10"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 echo "SELECT dolt_checkout('-b','other');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 
-run_test_match "delete_default_rejected" "SELECT dolt_branch('-d','main');" "cannot delete the default branch" "$DB10/other"
-run_test_match "force_delete_default_rejected" "SELECT dolt_branch('-D','main');" "cannot delete the default branch" "$DB10/other"
+run_test_error_match "delete_default_rejected" "SELECT dolt_branch('-d','main');" "cannot delete the default branch" "$DB10/other"
+run_test_error_match "force_delete_default_rejected" "SELECT dolt_branch('-D','main');" "cannot delete the default branch" "$DB10/other"
 run_test "rename_default_allowed" "SELECT dolt_branch('-m','main','trunk');" "0" "$DB10/other"
 run_test "renamed_default_listed" "SELECT count(*) FROM dolt_branches WHERE name='trunk';" "1" "$DB10/other"
 run_test "default_pointer_followed" "SELECT dolt_default_branch();" "trunk" "$DB10/other"
@@ -163,8 +163,8 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'ba
 run_test "branch_from_first_parent_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_p1"
 run_test "branch_from_second_parent_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_p2"
 run_test "branch_from_second_parent_hash_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_hash"
-run_test_match "checkout_raw_hash_refuses_detached_head" "SELECT dolt_checkout(dolt_hashof('HEAD^2'));" "does not support a detached head state" "$DB13"
-run_test_match "checkout_raw_hash_suggests_branch" "SELECT dolt_checkout(dolt_hashof('HEAD^2'));" "To create a branch at this commit instead" "$DB13"
+run_test_error_match "checkout_raw_hash_refuses_detached_head" "SELECT dolt_checkout(dolt_hashof('HEAD^2'));" "does not support a detached head state" "$DB13"
+run_test_error_match "checkout_raw_hash_suggests_branch" "SELECT dolt_checkout(dolt_hashof('HEAD^2'));" "To create a branch at this commit instead" "$DB13"
 run_test "checkout_b_raw_hash_documented_order" "SELECT dolt_checkout(dolt_hashof('HEAD^2'),'-b','checkout_from_hash');" "0" "$DB13"
 run_test "checkout_b_raw_hash_documented_order_rows" "SELECT count(*) FROM t;" "2" "$DB13/checkout_from_hash"
 run_test "checkout_b_raw_hash_flag_first" "SELECT dolt_checkout('-b','checkout_from_hash_flag_first',dolt_hashof('HEAD^1'));" "0" "$DB13"
@@ -184,7 +184,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT do
 run_test "delete_multiple_branches" "SELECT dolt_branch('-d','one','two');" "0" "$DB15"
 run_test "delete_multiple_branches_removed" "SELECT count(*) FROM dolt_branches WHERE name IN ('one','two');" "0" "$DB15"
 echo "SELECT dolt_branch('one'); SELECT dolt_branch('two');" | $DOLTLITE "$DB15" > /dev/null 2>&1
-run_test_match "delete_multiple_missing_is_atomic" "SELECT dolt_branch('-d','one','missing','two');" "not found" "$DB15"
+run_test_error_match "delete_multiple_missing_is_atomic" "SELECT dolt_branch('-d','one','missing','two');" "not found" "$DB15"
 run_test "delete_multiple_missing_keeps_branches" "SELECT count(*) FROM dolt_branches WHERE name IN ('one','two');" "2" "$DB15"
 echo "SELECT dolt_checkout('one'); INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','one'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB15" > /dev/null 2>&1
 run_test "force_delete_multiple_branches" "SELECT dolt_branch('-D','one','two');" "0" "$DB15"
@@ -192,12 +192,12 @@ run_test "force_delete_multiple_branches_removed" "SELECT count(*) FROM dolt_bra
 
 DB16=/tmp/test_branch16_$$.db; rm -f "$DB16"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB16" > /dev/null 2>&1
-run_test_match "create_case_variant_refused" "SELECT dolt_branch('Feat');" "already exists" "$DB16"
-run_test_match "copy_to_case_variant_refused" "SELECT dolt_branch('-c','main','MAIN');" "already exists" "$DB16"
-run_test_match "force_create_case_variant_refused" "SELECT dolt_branch('-f','Main','main');" "already exists" "$DB16"
-run_test_match "checkout_b_case_variant_refused" "SELECT dolt_checkout('-b','MAIN');" "already exists" "$DB16"
-run_test_match "move_onto_case_variant_refused" "SELECT dolt_branch('-m','feat','MAIN');" "already exists" "$DB16"
-run_test_match "force_move_onto_case_variant_refused" "SELECT dolt_branch('-m','-f','feat','MAIN');" "already exists" "$DB16"
+run_test_error_match "create_case_variant_refused" "SELECT dolt_branch('Feat');" "already exists" "$DB16"
+run_test_error_match "copy_to_case_variant_refused" "SELECT dolt_branch('-c','main','MAIN');" "already exists" "$DB16"
+run_test_error_match "force_create_case_variant_refused" "SELECT dolt_branch('-f','Main','main');" "already exists" "$DB16"
+run_test_error_match "checkout_b_case_variant_refused" "SELECT dolt_checkout('-b','MAIN');" "already exists" "$DB16"
+run_test_error_match "move_onto_case_variant_refused" "SELECT dolt_branch('-m','feat','MAIN');" "already exists" "$DB16"
+run_test_error_match "force_move_onto_case_variant_refused" "SELECT dolt_branch('-m','-f','feat','MAIN');" "already exists" "$DB16"
 run_test "case_variant_attempts_created_nothing" \
   "SELECT group_concat(name,'|') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
   "feat|main" "$DB16"
@@ -216,7 +216,7 @@ run_test "recased_default_branch_listed_once" \
 
 DB18=/tmp/test_branch18_$$.db; rm -f "$DB18"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX t_v ON t(v); CREATE TABLE dst(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'v'),(2,'v'),(3,'v'),(4,'v'),(5,'v'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB18" > /dev/null 2>&1
-run_test_match "checkout_during_update_errors" \
+run_test_error_match "checkout_during_update_errors" \
   "UPDATE t SET v='upd' || CASE WHEN id=3 THEN dolt_checkout('feat') ELSE '' END;" \
   "cannot checkout while a write statement is active" "$DB18"
 run_test "checkout_during_update_keeps_branch" "SELECT active_branch();" "main" "$DB18"
@@ -224,13 +224,13 @@ run_test "checkout_during_update_rolls_back_main" \
   "SELECT count(*) FROM t WHERE v!='v';" "0" "$DB18"
 run_test "checkout_during_update_leaves_target_unchanged" \
   "SELECT count(*) FROM t WHERE v!='v';" "0" "$DB18/feat"
-run_test_match "checkout_during_insert_errors" \
+run_test_error_match "checkout_during_insert_errors" \
   "INSERT INTO dst SELECT id, CASE WHEN id=3 THEN dolt_checkout('feat') ELSE v END FROM t;" \
   "cannot checkout while a write statement is active" "$DB18"
 run_test "checkout_during_insert_rolls_back_main" "SELECT count(*) FROM dst;" "0" "$DB18"
 run_test "checkout_during_insert_leaves_target_unchanged" \
   "SELECT count(*) FROM dst;" "0" "$DB18/feat"
-run_test_match "checkout_during_delete_errors" \
+run_test_error_match "checkout_during_delete_errors" \
   "DELETE FROM t WHERE id!=3 OR dolt_checkout('feat')=0;" \
   "cannot checkout while a write statement is active" "$DB18"
 run_test "checkout_during_delete_rolls_back_main" "SELECT count(*) FROM t;" "5" "$DB18"

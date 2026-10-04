@@ -27,7 +27,7 @@ run_test "unknown_compile_option" \
   "ENABLE_UNKNOWN_SQL_FUNCTION" \
   "$DB"
 
-run_test_match "nosuchfn_still_errors" \
+run_test_error_match "nosuchfn_still_errors" \
   "SELECT nosuchfn(1);" \
   "no such function: nosuchfn" \
   "$DB"

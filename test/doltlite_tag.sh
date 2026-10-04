@@ -33,15 +33,15 @@ SELECT dolt_checkout('main');
 SELECT dolt_tag('feat-tag','feat');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test "tag_branch_ref" "SELECT count(*) FROM dolt_tags WHERE tag_name='feat-tag';" "1" "$DB2"
 
-run_test_match "dup_tag" "SELECT dolt_tag('v1.0');" "already exists" "$DB"
+run_test_error_match "dup_tag" "SELECT dolt_tag('v1.0');" "already exists" "$DB"
 
-run_test_match "tag_missing_commit" \
+run_test_error_match "tag_missing_commit" \
   "SELECT dolt_tag('badtag','0123456789abcdef0123456789abcdef01234567');" \
   "commit not found" "$DB"
 
-run_test_match "tag_empty_name" "SELECT dolt_tag('');" "invalid tag name" "$DB"
-run_test_match "tag_reserved_working" "SELECT dolt_tag('WORKING');" "invalid tag name" "$DB"
-run_test_match "tag_hash_name" \
+run_test_error_match "tag_empty_name" "SELECT dolt_tag('');" "invalid tag name" "$DB"
+run_test_error_match "tag_reserved_working" "SELECT dolt_tag('WORKING');" "invalid tag name" "$DB"
+run_test_error_match "tag_hash_name" \
   "SELECT dolt_tag('0123456789012345678901234567890123456789');" \
   "invalid tag name" "$DB"
 
@@ -49,13 +49,13 @@ run_test "delete_tag" "SELECT dolt_tag('-d','v0.9');" "0" "$DB"
 run_test "delete_and_recreate_same_name" "SELECT dolt_tag('-d','parenttilde'); SELECT dolt_tag('parenttilde');" "0
 0" "$DB"
 run_test "three_tags_left" "SELECT count(*) FROM dolt_tags;" "3" "$DB"
-run_test_match "delete_multiple_tags_with_missing" \
+run_test_error_match "delete_multiple_tags_with_missing" \
   "SELECT dolt_tag('-d','v1.0','extra');" \
   "not found" "$DB"
 run_test "delete_multiple_tags_with_missing_keeps_tag" \
   "SELECT count(*) FROM dolt_tags WHERE tag_name='v1.0';" "1" "$DB"
 
-run_test_match "delete_missing" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
+run_test_error_match "delete_missing" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
 
 run_test "tag_persists" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;" "parent
 parenttilde
@@ -66,7 +66,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
 SELECT dolt_commit('-Am','base');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 
-run_test_match "tag_malformed_author" \
+run_test_error_match "tag_malformed_author" \
   "SELECT dolt_tag('bad','--author','not-an-author');" \
   "Author not formatted correctly" "$DB3"
 run_test "tag_malformed_author_not_created" \
@@ -87,7 +87,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT do
 run_test "delete_multiple_tags" "SELECT dolt_tag('-d','one','two');" "0" "$DB4"
 run_test "delete_multiple_tags_removed" "SELECT count(*) FROM dolt_tags;" "0" "$DB4"
 echo "SELECT dolt_tag('one'); SELECT dolt_tag('two');" | $DOLTLITE "$DB4" > /dev/null 2>&1
-run_test_match "delete_multiple_tags_missing_is_atomic" "SELECT dolt_tag('-d','one','missing','two');" "not found" "$DB4"
+run_test_error_match "delete_multiple_tags_missing_is_atomic" "SELECT dolt_tag('-d','one','missing','two');" "not found" "$DB4"
 run_test "delete_multiple_tags_missing_keeps_tags" "SELECT count(*) FROM dolt_tags;" "2" "$DB4"
 
 DB5=/tmp/test_tag_collide_$$.db; rm -f "$DB5"
@@ -101,7 +101,7 @@ SELECT dolt_commit('-A','-m','later');
 SELECT dolt_checkout('main');
 SELECT dolt_tag('feat');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
-run_test_match "checkout_colliding_name_is_tag" \
+run_test_error_match "checkout_colliding_name_is_tag" \
   "SELECT dolt_checkout('feat');" \
   "does not support a detached head state" "$DB5"
 
@@ -134,14 +134,14 @@ INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m','c');
 SELECT dolt_branch('feat');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 
-run_test_lastline "checkout_colliding_name_stays_on_branch" \
+run_test_error_lastline "checkout_colliding_name_stays_on_branch" \
   "SELECT dolt_checkout('feat');
 SELECT dolt_tag('feat');
 SELECT dolt_checkout('feat');
 SELECT active_branch();" \
-  "feat" "$DB6"
+  "feat" "$DB6" 'dolt\ does\ not\ support\ a\ detached\ head\ state\.\ To\ create\ a\ branch\ at\ this\ commit\ instead,\ run\ SELECT\ dolt_checkout\(<start_point>,\ '"'"'\-b'"'"',\ <new_branch_name>\)'
 
-run_test_match "checkout_colliding_name_errors_while_on_branch" \
+run_test_error_match "checkout_colliding_name_errors_while_on_branch" \
   "SELECT dolt_checkout('feat');
 SELECT dolt_tag('feat');
 SELECT dolt_checkout('feat');" \

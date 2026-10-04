@@ -20,12 +20,12 @@ SELECT dolt_commit('-A','-m','feat edit');" | $DOLTLITE "$DB/feature" > /dev/nul
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "checkout_blocked_conflict" \
+run_test_error_match "checkout_blocked_conflict" \
   "BEGIN; SELECT dolt_merge('feature');
 SELECT dolt_checkout('feature'); ROLLBACK;" \
   "unresolved merge conflicts" "$DB"
 
-run_test_match "checkout_create_blocked_conflict" \
+run_test_error_match "checkout_create_blocked_conflict" \
   "BEGIN; SELECT dolt_merge('feature');
 SELECT dolt_checkout('-b','blocked_branch_tx'); ROLLBACK;" \
   "unresolved merge conflicts" "$DB"
@@ -241,9 +241,9 @@ UPDATE t SET z='b1_z';
 SELECT dolt_commit('-A','-m','add z on b1');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "schema_merge_same_col_same_def" \
+run_test_error_match "schema_merge_same_col_same_def" \
   "SELECT dolt_merge('b1');" \
-  "^[0-9a-f]|conflict" "$DB"
+  "cannot merge: conflicts detected" "$DB"
 
 rm -f "$DB"
 
@@ -261,7 +261,7 @@ echo "ALTER TABLE t ADD COLUMN w INTEGER;
 SELECT dolt_commit('-A','-m','add w INTEGER');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "schema_merge_same_col_diff_type" \
+run_test_error_match "schema_merge_same_col_diff_type" \
   "SELECT dolt_merge('b1');" \
   "cannot merge: conflicts detected.*dolt_schema_conflicts" "$DB"
 

@@ -479,7 +479,7 @@ run_test "schema_head_then_old" \
 SELECT id || '|' || a || '|' || b || '|' || coalesce(c,'NULL') FROM dolt_history_t('HEAD~1') WHERE id=1;" \
   "4
 1|10|20|NULL" "$DB"
-run_test_match "schema_old_then_head_hides_b" \
+run_test_error_match "schema_old_then_head_hides_b" \
   "SELECT b FROM dolt_history_t('HEAD~1') WHERE id=1;
 SELECT b FROM dolt_history_t('HEAD') WHERE id=1;" \
   "no such column: b" "$DB"

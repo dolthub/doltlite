@@ -576,7 +576,7 @@ SELECT dolt_commit('-A','-m','with unique');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "unique_count" "SELECT count(*) FROM t;" "2" "$DB"
 
-run_test_match "unique_violate" \
+run_test_error_match "unique_violate" \
   "INSERT INTO t VALUES(3,'alice@test.com','Fake');" "UNIQUE constraint" "$DB"
 
 echo "UPDATE t SET name='Alice Updated' WHERE id=1;
@@ -594,7 +594,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "notnull_count" "SELECT count(*) FROM t;" "2" "$DB"
 
-run_test_match "notnull_violate" \
+run_test_error_match "notnull_violate" \
   "INSERT INTO t VALUES(3,NULL,50);" "NOT NULL" "$DB"
 
 echo "INSERT INTO t(id,name) VALUES(4,'Charlie');

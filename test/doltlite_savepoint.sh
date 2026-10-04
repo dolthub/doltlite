@@ -1,47 +1,15 @@
 #!/bin/bash
+DLTEST_STRIP_CR=1
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
 run_sql() {
-  local out rc
-  out=$(echo "$1" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$2" 2>&1)
-  rc=$?
-  printf '%s' "$out" | tr -d '\r'
-  return $rc
+  dltest_run_sql "$1" "$2"
 }
 
-run_test() {
-  local name="$1" sql="$2" expected="$3" db="$4"
-  local result
-  result=$(run_sql "$sql" "$db")
-  local exit_code=$?
-  if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
-    result="CRASH (exit $exit_code)"
-  fi
-  if [ "$result" = "$expected" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  expected: $expected\n  got:      $result"
-  fi
-}
 
-run_test_match() {
-  local name="$1" sql="$2" pattern="$3" db="$4"
-  local result
-  result=$(run_sql "$sql" "$db")
-  local exit_code=$?
-  if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
-    result="CRASH (exit $exit_code)"
-  fi
-  if echo "$result" | grep -qE "$pattern"; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  pattern: $pattern\n  got:     $result"
-  fi
-}
 
 echo "=== Doltlite Savepoint & Transaction Interaction Tests ==="
 echo ""
@@ -148,13 +116,13 @@ run_test "hard_reset_in_txn_status_clean" \
 
 DB5b=/tmp/test_savepoint5b_$$.db; rm -f "$DB5b"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5b" > /dev/null 2>&1
-run_test_match "hard_reset_savepoint_invalidated" \
+run_test_error_match "hard_reset_savepoint_invalidated" \
   "SAVEPOINT sp1; SELECT dolt_reset('--hard','HEAD'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB5b"
 
 DB5c=/tmp/test_savepoint5c_$$.db; rm -f "$DB5c"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); UPDATE t SET v='dirty';" | $DOLTLITE "$DB5c" > /dev/null 2>&1
-run_test_match "bad_reset_savepoint_invalidated" \
+run_test_error_match "bad_reset_savepoint_invalidated" \
   "SAVEPOINT sp1; SELECT dolt_reset('--hard','bogus');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB5c"
@@ -164,10 +132,10 @@ run_test "bad_reset_savepoint_row_persists" \
 
 DB5d=/tmp/test_savepoint5d_$$.db; rm -f "$DB5d"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5d" > /dev/null 2>&1
-run_test_match "bad_reset_nested_savepoint_allows_rollback" \
+run_test_error_output_match "bad_reset_nested_savepoint_allows_rollback" \
   "BEGIN; SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_reset('--hard','bogus');
 ROLLBACK TO sp1; COMMIT; SELECT count(*) FROM t;" \
-  "^1$" "$DB5d"
+  "^1$" "$DB5d" 'commit\ not\ found'
 
 DB5e=/tmp/test_savepoint5e_$$.db; rm -f "$DB5e"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -249,7 +217,7 @@ run_test_match "branch_dirty_rollback_data" \
 
 DB6f=/tmp/test_savepoint6f_$$.db; rm -f "$DB6f"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6f" > /dev/null 2>&1
-run_test_match "tag_savepoint_rollback_to_errors" \
+run_test_error_match "tag_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_tag('v1'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6f"
 run_test_match "tag_savepoint_row_persists" \
@@ -261,7 +229,7 @@ run_test_match "tag_savepoint_tag_persists" \
 
 DB6g=/tmp/test_savepoint6g_$$.db; rm -f "$DB6g"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g" > /dev/null 2>&1
-run_test_match "remote_savepoint_rollback_to_errors" \
+run_test_error_match "remote_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_remote('add','origin','file:///tmp/savepoint-remote'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g"
 run_test_match "remote_savepoint_row_persists" \
@@ -273,7 +241,7 @@ run_test_match "remote_savepoint_remote_persists" \
 
 DB6g1=/tmp/test_savepoint6g1_$$.db; rm -f "$DB6g1"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1" > /dev/null 2>&1
-run_test_match "add_savepoint_rollback_to_errors" \
+run_test_error_match "add_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_add('.'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g1"
 run_test_match "add_savepoint_row_persists" \
@@ -282,7 +250,7 @@ run_test_match "add_savepoint_row_persists" \
 
 DB6g1b=/tmp/test_savepoint6g1b_$$.db; rm -f "$DB6g1b"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1b" > /dev/null 2>&1
-run_test_match "add_savepoint_bad_option_rollback_to_errors" \
+run_test_error_match "add_savepoint_bad_option_rollback_to_errors" \
   "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_add('--bogus');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g1b"
@@ -292,7 +260,7 @@ run_test_match "add_savepoint_bad_option_row_persists" \
 
 DB6g1c=/tmp/test_savepoint6g1c_$$.db; rm -f "$DB6g1c"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1c" > /dev/null 2>&1
-run_test_match "add_savepoint_missing_table_rollback_to_errors" \
+run_test_error_match "add_savepoint_missing_table_rollback_to_errors" \
   "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_add('nope');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g1c"
@@ -302,14 +270,14 @@ run_test_match "add_savepoint_missing_table_row_persists" \
 
 DB6g1d=/tmp/test_savepoint6g1d_$$.db; rm -f "$DB6g1d"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1d" > /dev/null 2>&1
-run_test_match "commit_nested_savepoint_bad_option_rollback_to_succeeds" \
+run_test_error_output_match "commit_nested_savepoint_bad_option_rollback_to_succeeds" \
   "BEGIN; SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_commit('--bogus');
 ROLLBACK TO sp1; SELECT count(*) FROM t; ROLLBACK;" \
-  "^1$" "$DB6g1d"
+  "^1$" "$DB6g1d" 'unknown\ option\ `\-\-bogus`'
 
 DB6g1e=/tmp/test_savepoint6g1e_$$.db; rm -f "$DB6g1e"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1e" > /dev/null 2>&1
-run_test_match "commit_begin_bad_option_reopen_row_rolled_back" \
+run_test_error_match "commit_begin_bad_option_reopen_row_rolled_back" \
   "BEGIN; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_commit('--bogus');" \
   "unknown option \`--bogus\`" "$DB6g1e"
 run_test_match "commit_begin_bad_option_count_after_reopen" \
@@ -318,7 +286,7 @@ run_test_match "commit_begin_bad_option_count_after_reopen" \
 
 DB6g1r=/tmp/test_savepoint6g1r_$$.db; rm -f "$DB6g1r"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1r" > /dev/null 2>&1
-run_test_match "rebase_missing_upstream_savepoint_rollback_to_errors" \
+run_test_error_match "rebase_missing_upstream_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_rebase('nope');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g1r"
@@ -328,7 +296,7 @@ run_test_match "rebase_missing_upstream_savepoint_row_persists" \
 
 DB6g1s=/tmp/test_savepoint6g1s_$$.db; rm -f "$DB6g1s"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1s" > /dev/null 2>&1
-run_test_match "rebase_bad_option_savepoint_rollback_to_errors" \
+run_test_error_match "rebase_bad_option_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_rebase('--bogus');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g1s"
@@ -364,7 +332,7 @@ run_test_match "rebase_continue_nested_savepoint_log_persists" \
 
 DB6g1v=/tmp/test_savepoint6g1v_$$.db; rm -f "$DB6g1v"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB6g1v" > /dev/null 2>&1
-run_test_match "rebase_start_preexisting_savepoint_rollback_to_errors" \
+run_test_error_match "rebase_start_preexisting_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_rebase('-i','main');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g1v/feat"
@@ -374,7 +342,7 @@ run_test_match "rebase_start_preexisting_savepoint_temp_branch_survives" \
 
 DB6g1w=/tmp/test_savepoint6g1w_$$.db; rm -f "$DB6g1w"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB6g1w" > /dev/null 2>&1
-run_test_match "rebase_continue_preexisting_savepoint_rollback_to_errors" \
+run_test_error_match "rebase_continue_preexisting_savepoint_rollback_to_errors" \
   "BEGIN; SAVEPOINT sp1; SELECT dolt_rebase('-i','main');
 SELECT dolt_rebase('--continue'); ROLLBACK TO sp1; COMMIT;" \
   "no such savepoint: sp1" "$DB6g1w/feat"
@@ -390,7 +358,7 @@ run_test_match "rebase_continue_preexisting_savepoint_log_persists" \
 
 DB6g1x=/tmp/test_savepoint6g1x_$$.db; rm -f "$DB6g1x"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); UPDATE t SET v=2 WHERE id=1; SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); UPDATE t SET v=3 WHERE id=1; SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB6g1x" > /dev/null 2>&1
-run_test_match "rebase_resolve_theirs_top_savepoint_rollback_to_errors" \
+run_test_error_match "rebase_resolve_theirs_top_savepoint_rollback_to_errors" \
   "SELECT dolt_rebase('-i','main');
 SAVEPOINT sp1; SELECT dolt_conflicts_resolve('--theirs','t'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g1x/feat"
@@ -406,7 +374,7 @@ run_test_match "rebase_resolve_theirs_top_savepoint_reopen_no_conflicts" \
 
 DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
-run_test_match "branch_delete_current_savepoint_rollback_to_errors" \
+run_test_error_match "branch_delete_current_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_branch('-d','main');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g2"
@@ -416,7 +384,7 @@ run_test_match "branch_delete_current_savepoint_branch_stays_main" \
 
 DB6g3=/tmp/test_savepoint6g3_$$.db; rm -f "$DB6g3"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g3" > /dev/null 2>&1
-run_test_match "branch_delete_missing_savepoint_rollback_to_errors" \
+run_test_error_match "branch_delete_missing_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_branch('-d','nope');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g3"
@@ -426,7 +394,7 @@ run_test_match "branch_delete_missing_savepoint_branch_stays_main" \
 
 DB6g4=/tmp/test_savepoint6g4_$$.db; rm -f "$DB6g4"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g4" > /dev/null 2>&1
-run_test_match "tag_delete_missing_savepoint_rollback_to_errors" \
+run_test_error_match "tag_delete_missing_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_tag('-d','missing');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g4"
@@ -436,7 +404,7 @@ run_test_match "tag_delete_missing_savepoint_branch_stays_main" \
 
 DB6g5=/tmp/test_savepoint6g5_$$.db; rm -f "$DB6g5"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g5" > /dev/null 2>&1
-run_test_match "remote_delete_missing_savepoint_rollback_to_errors" \
+run_test_error_match "remote_delete_missing_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_remote('remove','missing');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g5"
@@ -446,7 +414,7 @@ run_test_match "remote_delete_missing_savepoint_branch_stays_main" \
 
 DB6g6=/tmp/test_savepoint6g6_$$.db; rm -f "$DB6g6"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g6" > /dev/null 2>&1
-run_test_match "checkout_missing_savepoint_rollback_to_errors" \
+run_test_error_match "checkout_missing_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_checkout('missing');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g6"
@@ -456,7 +424,7 @@ run_test_match "checkout_missing_savepoint_branch_stays_main" \
 
 DB6g7=/tmp/test_savepoint6g7_$$.db; rm -f "$DB6g7"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g7" > /dev/null 2>&1
-run_test_match "push_missing_remote_savepoint_rollback_to_errors" \
+run_test_error_match "push_missing_remote_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_push('missing','main');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g7"
@@ -466,7 +434,7 @@ run_test_match "push_missing_remote_savepoint_branch_stays_main" \
 
 DB6g8=/tmp/test_savepoint6g8_$$.db; rm -f "$DB6g8"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g8" > /dev/null 2>&1
-run_test_match "fetch_missing_remote_savepoint_rollback_to_errors" \
+run_test_error_match "fetch_missing_remote_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_fetch('missing');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g8"
@@ -476,7 +444,7 @@ run_test_match "fetch_missing_remote_savepoint_branch_stays_main" \
 
 DB6g9=/tmp/test_savepoint6g9_$$.db; rm -f "$DB6g9"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g9" > /dev/null 2>&1
-run_test_match "pull_missing_remote_savepoint_rollback_to_errors" \
+run_test_error_match "pull_missing_remote_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_pull('missing','main');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g9"
@@ -484,7 +452,7 @@ run_test_match "pull_missing_remote_savepoint_branch_stays_main" \
   "SELECT active_branch();" \
   "^main$" "$DB6g9"
 DB6g10=/tmp/test_savepoint6g10_$$.db; rm -f "$DB6g10"
-run_test_match "clone_bad_url_savepoint_rollback_to_errors" \
+run_test_error_match "clone_bad_url_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_clone('bogus://remote');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g10"
@@ -527,7 +495,7 @@ DB6g11_OTHER="$DB6g11_DIR/other.db"
 DB6g11_REMOTE="file://$DB6g11_DIR/remote.db"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_remote('add','origin','$DB6g11_REMOTE'); SELECT dolt_push('origin','main');" | $DOLTLITE "$DB6g11" > /dev/null 2>&1
 echo "SELECT dolt_clone('$DB6g11_REMOTE'); INSERT INTO t VALUES(2,'other'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','other'); SELECT dolt_push('origin','main');" | $DOLTLITE "$DB6g11_OTHER" > /dev/null 2>&1
-run_test_match "pull_nested_savepoint_rollback_to_errors" \
+run_test_error_match "pull_nested_savepoint_rollback_to_errors" \
   "BEGIN; SAVEPOINT sp1; SELECT dolt_pull('origin','main'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6g11"
 run_test_match "pull_nested_savepoint_rows_persist" \
@@ -539,7 +507,7 @@ run_test_match "pull_nested_savepoint_log_persists" \
 
 DB6h=/tmp/test_savepoint6h_$$.db; rm -f "$DB6h"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6h" > /dev/null 2>&1
-run_test_match "checkout_savepoint_rollback_to_errors" \
+run_test_error_match "checkout_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6h"
 run_test_match "checkout_savepoint_branch_reopens_on_main" \
@@ -551,7 +519,7 @@ run_test_match "checkout_savepoint_row_reopens_dirty" \
 
 DB6i=/tmp/test_savepoint6i_$$.db; rm -f "$DB6i"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6i" > /dev/null 2>&1
-run_test_match "checkout_b_savepoint_rollback_to_errors" \
+run_test_error_match "checkout_b_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_checkout('-b','side'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6i"
 run_test_match "checkout_b_savepoint_branch_reopens_on_main" \
@@ -566,7 +534,7 @@ run_test_match "checkout_b_savepoint_branch_created" \
 
 DB6j=/tmp/test_savepoint6j_$$.db; rm -f "$DB6j"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6j" > /dev/null 2>&1
-run_test_match "cherry_pick_savepoint_rollback_to_errors" \
+run_test_error_match "cherry_pick_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_cherry_pick('feat'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6j"
 run_test_match "cherry_pick_savepoint_rows_persist" \
@@ -578,7 +546,7 @@ run_test_match "cherry_pick_savepoint_log_persists" \
 
 DB6k=/tmp/test_savepoint6k_$$.db; rm -f "$DB6k"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); UPDATE t SET v='c2' WHERE id=1; SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB6k" > /dev/null 2>&1
-run_test_match "revert_savepoint_rollback_to_errors" \
+run_test_error_match "revert_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_revert('HEAD'); ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB6k"
 run_test_match "revert_savepoint_rows_persist" \
@@ -612,7 +580,7 @@ run_test "merge_in_txn_log" \
 
 DB7b=/tmp/test_savepoint7b_$$.db; rm -f "$DB7b"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB7b" > /dev/null 2>&1
-run_test_match "merge_savepoint_success_rollback_to_errors" \
+run_test_error_match "merge_savepoint_success_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_merge('feat');
 ROLLBACK TO sp1;" \
   "no such savepoint: sp1" "$DB7b"
@@ -625,7 +593,7 @@ run_test "merge_savepoint_success_log_persists" \
 
 DB7c=/tmp/test_savepoint7c_$$.db; rm -f "$DB7c"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat' WHERE id=1; SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); UPDATE t SET v='main' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7c" > /dev/null 2>&1
-run_test_match "merge_abort_savepoint_rollback_to_errors" \
+run_test_error_match "merge_abort_savepoint_rollback_to_errors" \
   "BEGIN; SELECT dolt_merge('feat');
 SAVEPOINT sp1; SELECT dolt_merge('--abort');
 ROLLBACK TO sp1;" \
@@ -639,15 +607,15 @@ run_test "merge_abort_savepoint_restores_rows" \
 
 DB7d=/tmp/test_savepoint7d_$$.db; rm -f "$DB7d"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat' WHERE id=1; SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); UPDATE t SET v='main' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7d" > /dev/null 2>&1
-run_test_match "merge_conflict_nested_savepoint_allows_rollback" \
+run_test_error_output_match "merge_conflict_nested_savepoint_allows_rollback" \
   "BEGIN; SAVEPOINT sp1; SELECT dolt_merge('feat');
 ROLLBACK TO sp1; SELECT count(*) FROM dolt_conflicts; SELECT v FROM t WHERE id=1;" \
   "0
-main$" "$DB7d"
+main$" "$DB7d" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 DB7e=/tmp/test_savepoint7e_$$.db; rm -f "$DB7e"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); INSERT INTO t VALUES(3,3); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f2'); INSERT INTO t VALUES(4,4); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f3'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB7e" > /dev/null 2>&1
-run_test_match "rebase_abort_savepoint_rollback_to_errors" \
+run_test_error_match "rebase_abort_savepoint_rollback_to_errors" \
   "SAVEPOINT sp1; SELECT dolt_rebase('-i','main');
 SELECT dolt_rebase('--abort');
 ROLLBACK TO sp1;" \
@@ -795,10 +763,4 @@ rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" "$
   "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10" \
   "$DB6g1u" "$DB6g1v" "$DB6g1w" "$DB7d" "$DB7e" "$DB7f"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then
-  echo -e "$ERRORS"
-  exit 1
-fi
-echo "__SUITE_COMPLETE__"
+dltest_finish

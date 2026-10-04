@@ -23,12 +23,12 @@ run_test "clean_dry_run_keeps_table" "SELECT count(*) FROM sqlite_master WHERE t
 run_test "clean_named_dry_run" "SELECT dolt_clean('dry_run','--dry-run');" "0" "$DB"
 run_test "clean_named_dry_run_keeps_table" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dry_run';" "1" "$DB"
 
-run_test_match "clean_unknown" "SELECT dolt_clean('missing');" "table not found" "$DB"
-run_test_match "clean_unknown_is_atomic" "SELECT dolt_clean('dry_run','missing');" "table not found" "$DB"
+run_test_error_match "clean_unknown" "SELECT dolt_clean('missing');" "table not found" "$DB"
+run_test_error_match "clean_unknown_is_atomic" "SELECT dolt_clean('dry_run','missing');" "table not found" "$DB"
 run_test "clean_unknown_keeps_valid_target" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dry_run';" "1" "$DB"
-run_test_match "clean_null_rejected" "SELECT dolt_clean(NULL);" "table not found" "$DB"
+run_test_error_match "clean_null_rejected" "SELECT dolt_clean(NULL);" "table not found" "$DB"
 run_test "clean_null_keeps_untracked" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dry_run';" "1" "$DB"
-run_test_match "clean_unknown_option" "SELECT dolt_clean('--unknown');" "unknown option" "$DB"
+run_test_error_match "clean_unknown_option" "SELECT dolt_clean('--unknown');" "unknown option" "$DB"
 
 echo "CREATE TABLE staged_new(id INTEGER PRIMARY KEY); SELECT dolt_add('staged_new'); CREATE TABLE unstaged_new(id INTEGER PRIMARY KEY);" | $DOLTLITE "$DB" >/dev/null 2>&1
 run_test "clean_keeps_staged_new" "SELECT dolt_clean();" "0" "$DB"

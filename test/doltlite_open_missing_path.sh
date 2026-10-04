@@ -31,7 +31,7 @@ run_test "valid_path_create_and_query" \
 rm -f "$OK_DB"
 
 # ATTACH under a missing parent must fail, not error later on write.
-run_test_match "attach_missing_parent_fails" \
+run_test_error_match "attach_missing_parent_fails" \
   "ATTACH '$MISSING_PARENT' AS aux;" \
   "unable to open" ":memory:"
 

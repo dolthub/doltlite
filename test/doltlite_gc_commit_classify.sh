@@ -75,7 +75,7 @@ run_test_lastline "integrity_ok_with_102_byte_merge_commit" \
 db_rm "$DB"
 
 # DLC/DCV lead with 'D' like CATALOG_V3. Conflicts never persist; exercise via the still-committable DCV blob.
-run_test_match "gc_ok_with_unresolved_violation" \
+run_test_error_output_match "gc_ok_with_unresolved_violation" \
   "CREATE TABLE parent(id INTEGER PRIMARY KEY);
    CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT REFERENCES parent(id));
    INSERT INTO parent VALUES (1);
@@ -92,7 +92,7 @@ run_test_match "gc_ok_with_unresolved_violation" \
    COMMIT;
    SELECT dolt_gc();" \
   "chunks removed" \
-  "$DB"
+  "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 run_test_lastline "integrity_ok_with_unresolved_violation" \
   "PRAGMA integrity_check;" \

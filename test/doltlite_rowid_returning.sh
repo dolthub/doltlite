@@ -131,7 +131,7 @@ INSERT INTO t(v) VALUES('a') RETURNING rowid, id;
 " "1|1" "$DB"
 
 rm -f "$DB"
-run_test_match "explicit_without_rowid_returning_rejected" "
+run_test_error_match "explicit_without_rowid_returning_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES('a','one') RETURNING rowid;
 " "no such column: rowid" "$DB"

@@ -1,34 +1,14 @@
 #!/bin/bash
+DLTEST_STRIP_CR=1
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 DOLTLITE="${1:-./doltlite}"
 PASS=0; FAIL=0; ERRORS=""
 
 run_sql() {
-  echo "$1" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$2" 2>&1 | tr -d '\r'
+  dltest_run_sql "$1" "$2"
 }
 
-run_test() {
-  local n="$1" s="$2" e="$3" d="$4"
-  local r
-  r=$(run_sql "$s" "$d")
-  if [ "$r" = "$e" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"
-  fi
-}
 
-run_test_match() {
-  local n="$1" s="$2" p="$3" d="$4"
-  local r
-  r=$(run_sql "$s" "$d")
-  if echo "$r" | grep -qE "$p"; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"
-  fi
-}
 
 echo "=== Doltlite Rebase Tests ==="
 echo ""
@@ -52,7 +32,7 @@ SELECT dolt_checkout('feat');
 SQL
 
 # Invalid-plan --continue must leave the rebase in progress (one session).
-run_test_match "invalid_plan_continue_errors" \
+run_test_error_match "invalid_plan_continue_errors" \
   "SELECT dolt_rebase('-i', 'main');
    UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';
    SELECT dolt_rebase('--continue');" \
@@ -89,7 +69,7 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
 SELECT dolt_checkout('feat');
 SQL
 
-run_test_match "start_failure_errors" \
+run_test_error_match "start_failure_errors" \
   "SELECT dolt_rebase('-i', 'main');" \
   "didn't identify any commits!" \
   "$DB2"
@@ -122,7 +102,7 @@ SQL
 
 DB3=/tmp/test_rebase_dirty_$$.db
 seed_dirty_main "$DB3"
-run_test_match "amend_during_rebase_refused" \
+run_test_error_match "amend_during_rebase_refused" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');
    SELECT dolt_commit('--amend','-m','oops');
@@ -336,7 +316,7 @@ SQL
 }
 
 seed_verb_repo "$DB4"
-run_test_match "unknown_plan_action_names_the_action" \
+run_test_error_match "unknown_plan_action_names_the_action" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');
    UPDATE dolt_rebase SET action='oops';
@@ -345,7 +325,7 @@ run_test_match "unknown_plan_action_names_the_action" \
   "$DB4"
 
 seed_verb_repo "$DB4"
-run_test_match "unknown_plan_action_stays_resumable" \
+run_test_error_output_match "unknown_plan_action_stays_resumable" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');
    UPDATE dolt_rebase SET action='oops';
@@ -353,7 +333,7 @@ run_test_match "unknown_plan_action_stays_resumable" \
    UPDATE dolt_rebase SET action='pick';
    SELECT dolt_rebase('--continue');" \
   "Successfully rebased and updated refs/heads/feat" \
-  "$DB4"
+  "$DB4" 'unknown\ rebase\ action\ "oops":\ expected\ pick,\ reword,\ squash,\ fixup,\ drop\ or\ edit'
 
 BRANCH63=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 BRANCH64=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -474,7 +454,7 @@ $BRANCH63
 
 DB7=/tmp/test_rebase_name_reject_$$.db
 seed_rebase_name_repo "$DB7" "$BRANCH64"
-run_test_match "rebase_64_byte_branch_rejected" \
+run_test_error_match "rebase_64_byte_branch_rejected" \
   "SELECT dolt_rebase('-i','main');" \
   "current branch name exceeds the 63-byte persisted-state limit" \
   "$DB7/$BRANCH64"
@@ -515,7 +495,7 @@ feat" \
   "$DB8"
 
 seed_rebase_return_repo "$DB8" "$BRANCH64"
-run_test_match "rebase_64_byte_default_branch_rejected" \
+run_test_error_match "rebase_64_byte_default_branch_rejected" \
   "SELECT dolt_rebase('-i','$BRANCH64');" \
   "default branch name exceeds the 63-byte persisted-state limit" \
   "$DB8/feat"
@@ -546,7 +526,7 @@ SQL
 
 DB9=/tmp/test_rebase_fk_txn_$$.db
 seed_fk_conflict_repo "$DB9"
-run_test_match "continue_in_txn_detects_fk_violation" \
+run_test_error_match "continue_in_txn_detects_fk_violation" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');
    UPDATE dolt_rebase SET action='pick';
@@ -563,7 +543,7 @@ feat adds child" \
   "$DB9"
 
 seed_fk_conflict_repo "$DB9"
-run_test_match "continue_in_savepoint_detects_fk_violation" \
+run_test_error_match "continue_in_savepoint_detects_fk_violation" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');
    UPDATE dolt_rebase SET action='pick';
@@ -1167,7 +1147,7 @@ INSERT INTO t VALUES(2,'{"ok":2}');
 SELECT dolt_commit('-am','main moves');
 SELECT dolt_checkout('feat');
 SQL
-run_test_match "interactive_rebase_reports_detector_error" \
+run_test_error_match "interactive_rebase_reports_detector_error" \
   "SELECT dolt_rebase('-i','main');
    SELECT dolt_rebase('--continue');" \
   "rebase failed — malformed JSON — branch restored to pre-rebase state" \
@@ -1259,7 +1239,7 @@ run_test "rebase_plan_hidden_on_working_branch" \
 1
 1" \
   "$DBP/dolt_rebase_feat"
-run_test_match "rebase_plan_commit_all_is_clean" \
+run_test_error_match "rebase_plan_commit_all_is_clean" \
   "SELECT dolt_commit('-Am', 'should_not_commit_plan');" \
   "nothing to commit" \
   "$DBP/dolt_rebase_feat"
@@ -1269,7 +1249,7 @@ run_test "rebase_plan_main_has_no_plan" \
   "0
 0" \
   "$DBP"
-run_test_match "rebase_plan_main_commit_all_is_clean" \
+run_test_error_match "rebase_plan_main_commit_all_is_clean" \
   "SELECT dolt_commit('-Am', 'main_commits_plan_table');" \
   "nothing to commit" \
   "$DBP"
@@ -1385,7 +1365,7 @@ run_test "rebase_empty_drop_log" \
 Successfully rebased and updated refs/heads/feat
 f2,main2,base" \
   "$DBED"
-run_test_match "rebase_empty_bad_value" \
+run_test_error_match "rebase_empty_bad_value" \
   "SELECT dolt_rebase('--empty', 'sideways', 'main');" \
   "invalid value for --empty" \
   "$DBED"
@@ -2113,7 +2093,4 @@ else
 fi
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE" "$DBEDITST" "$DBEDITUS" "$DBEDITMAN" "$DBEDITAM" "$DBEDITRO" "$DBST" "$DBST3" "$DBSTD" "$DBSTC" "$DBCP"
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
-echo "__SUITE_COMPLETE__"
+dltest_finish

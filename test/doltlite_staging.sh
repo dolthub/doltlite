@@ -96,7 +96,7 @@ rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2);" | $DOLTLITE "$DB4" > /dev/null 2>&1
 
-run_test_match "commit_without_add_fails" \
+run_test_error_match "commit_without_add_fails" \
   "SELECT dolt_commit('-m','should fail');" \
   "nothing to commit" "$DB4"
 

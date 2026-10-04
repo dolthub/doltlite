@@ -1,50 +1,15 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 DOLTLITE="${1:-./doltlite}"
 PASS=0
 FAIL=0
 ERRORS=""
 
 run_sql() {
-  if [ "${DLTEST_STRIP_CR:-0}" = "1" ]; then
-    echo "$1" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$2" 2>&1 | tr -d '\r'
-  else
-    echo "$1" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$2" 2>&1
-  fi
+  dltest_run_sql "$1" "$2"
 }
 
-run_test() {
-  local name="$1"
-  local sql="$2"
-  local expected="$3"
-  local db="${4:-:memory:}"
-  local result
-  result=$(run_sql "$sql" "$db")
-  local exit_code=$?
-  if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
-    result="CRASH (exit $exit_code)"
-  fi
-  if [ "$result" = "$expected" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  expected: $expected\n  got:      $result"
-  fi
-}
 
-run_test_match() {
-  local name="$1"
-  local sql="$2"
-  local pattern="$3"
-  local db="${4:-:memory:}"
-  local result
-  result=$(run_sql "$sql" "$db")
-  if echo "$result" | grep -qE "$pattern"; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  pattern: $pattern\n  got:     $result"
-  fi
-}
 
 echo "=== Doltlite Commit & Log Tests ==="
 echo ""
@@ -454,7 +419,7 @@ ok" "$DB14"
 
 DB15=/tmp/test_dolt_author_$$.db; rm -f "$DB15"
 
-run_test_match "author_validation_setup"   "CREATE TABLE t(id INTEGER PRIMARY KEY);
+run_test_error_match "author_validation_setup"   "CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
 SELECT dolt_commit('-Am','base');
 INSERT INTO t VALUES(2);
@@ -464,11 +429,11 @@ SELECT dolt_commit('-Am','bad','--author','not-an-author');" \
 run_test "malformed_author_does_not_commit" \
   "SELECT count(*) FROM dolt_log WHERE message='bad';" "0" "$DB15"
 
-run_test_match "empty_author_rejected" \
+run_test_error_match "empty_author_rejected" \
   "SELECT dolt_commit('-m','bad','--author','');" \
   "Option 'author' requires a value" "$DB15"
 
-run_test_match "empty_author_email_rejected" \
+run_test_error_match "empty_author_email_rejected" \
   "SELECT dolt_commit('-Am','empty email','--author','Edge Case <>');" \
   "Aborting commit due to empty author email" "$DB15"
 
@@ -501,7 +466,7 @@ SELECT dolt_commit('-Am','base');
 INSERT INTO t VALUES(2);" \
   "^[0-9a-f]{40}$" "$DB16"
 
-run_test_match "nul_positional_rejected" \
+run_test_error_match "nul_positional_rejected" \
   "SELECT dolt_branch('visible' || char(0) || 'hidden');" \
   "command arguments may not contain NUL bytes" "$DB16"
 
@@ -509,7 +474,7 @@ run_test "nul_positional_does_not_create_prefix_branch" \
   "SELECT count(*) FROM dolt_branches WHERE name='visible';" \
   "0" "$DB16"
 
-run_test_match "nul_table_argument_rejected" \
+run_test_error_match "nul_table_argument_rejected" \
   "SELECT dolt_add('t' || char(0) || 'hidden');" \
   "command arguments may not contain NUL bytes" "$DB16"
 
@@ -517,11 +482,11 @@ run_test "nul_table_argument_does_not_stage_prefix" \
   "SELECT staged FROM dolt_status WHERE table_name='t';" \
   "0" "$DB16"
 
-run_test_match "nul_detached_option_value_rejected" \
+run_test_error_match "nul_detached_option_value_rejected" \
   "SELECT dolt_commit('-A','-m','visible' || char(0) || 'hidden');" \
   "command arguments may not contain NUL bytes" "$DB16"
 
-run_test_match "nul_attached_option_value_rejected" \
+run_test_error_match "nul_attached_option_value_rejected" \
   "SELECT dolt_commit('-A','-mvisible' || char(0) || 'hidden');" \
   "command arguments may not contain NUL bytes" "$DB16"
 
@@ -543,7 +508,7 @@ SELECT dolt_add('children');" \
 HEAD17=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB17")
 STAGED17=$(run_sql "SELECT dolt_hashof('STAGED');" "$DB17")
 
-run_test_match "missing_fk_empty_rejected" \
+run_test_error_match "missing_fk_empty_rejected" \
   "SELECT dolt_commit('-m','child only');" \
   "foreign key.*children.*parents" "$DB17"
 
@@ -575,7 +540,7 @@ INSERT INTO children VALUES(1,1);
 SELECT dolt_add('children');" \
   "0" "$DB18"
 
-run_test_match "missing_fk_populated_rejected" \
+run_test_error_match "missing_fk_populated_rejected" \
   "SELECT dolt_commit('-m','child only');" \
   "foreign key.*children.*parents" "$DB18"
 
@@ -616,7 +581,7 @@ CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER,
 SELECT dolt_commit('-Am','base');" \
   "^[0-9a-f]{40}$" "$DB21"
 
-run_test_match "missing_fk_dropped_parent_rejected" \
+run_test_error_match "missing_fk_dropped_parent_rejected" \
   "PRAGMA foreign_keys=OFF;
 DROP TABLE parents;
 SELECT dolt_add('-A');
@@ -645,7 +610,7 @@ HEAD22=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB22")
 STATUS22=$(run_sql "SELECT table_name || '|' || staged || '|' || status
   FROM dolt_status ORDER BY table_name, staged;" "$DB22")
 
-run_test_match "missing_fk_renamed_parent_rejected" \
+run_test_error_match "missing_fk_renamed_parent_rejected" \
   "SELECT dolt_commit('-m','rename parent only');" \
   "foreign key.*children.*parents" "$DB22"
 
@@ -669,7 +634,7 @@ SELECT dolt_add('children');" \
   "0
 0" "$DB23"
 
-run_test_match "missing_fk_multiple_checks_every_reference" \
+run_test_error_match "missing_fk_multiple_checks_every_reference" \
   "SELECT dolt_commit('-m','two parents');" \
   "foreign key.*children.*absent" "$DB23"
 
@@ -757,7 +722,7 @@ SELECT dolt_commit('-am','side');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('--no-commit','--no-ff','side');" | $DOLTLITE "$DB26" > /dev/null 2>&1
 
-run_test_match "amend_during_merge_refused" \
+run_test_error_match "amend_during_merge_refused" \
   "SELECT dolt_commit('--amend','-m','oops');" \
   "you are in the middle of a merge -- cannot amend" "$DB26"
 
@@ -779,10 +744,4 @@ run_test "amend_during_merge_then_finish_msg" \
 
 rm -f "$DB" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then
-  echo -e "$ERRORS"
-  exit 1
-fi
-echo "__SUITE_COMPLETE__"
+dltest_finish

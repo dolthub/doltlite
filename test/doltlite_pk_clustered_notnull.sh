@@ -16,7 +16,7 @@ SELECT name, \"notnull\", pk FROM pragma_table_info('t') ORDER BY cid;
 v|0|0" "$DB"
 
 rm -f "$DB"
-run_test_match "text_pk_null_insert" "
+run_test_error_match "text_pk_null_insert" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(NULL, 1);
 " "NOT NULL constraint failed: t.k" "$DB"
@@ -64,13 +64,13 @@ else
 fi
 
 rm -f "$DB"
-run_test_match "int_pk_null_rejected" "
+run_test_error_match "int_pk_null_rejected" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t(v) VALUES(1);
 " "NOT NULL constraint failed: t.id" "$DB"
 
 rm -f "$DB"
-run_test_match "integer_pk_desc_null_rejected" "
+run_test_error_match "integer_pk_desc_null_rejected" "
 CREATE TABLE t(id INTEGER PRIMARY KEY DESC, v INT);
 INSERT INTO t(v) VALUES(1);
 " "NOT NULL constraint failed: t.id" "$DB"
@@ -83,7 +83,7 @@ SELECT name, \"notnull\", pk FROM pragma_table_info('t') ORDER BY cid;
 b|1|2" "$DB"
 
 rm -f "$DB"
-run_test_match "composite_pk_null_rejected" "
+run_test_error_match "composite_pk_null_rejected" "
 CREATE TABLE t(a INT, b INT, PRIMARY KEY(a, b));
 INSERT INTO t VALUES(1, NULL);
 " "NOT NULL constraint failed: t.b" "$DB"
@@ -116,7 +116,7 @@ SELECT quote(id), typeof(id), v FROM t;
 1|integer|1" "$DB"
 
 rm -f "$DB"
-run_test_match "explicit_without_rowid_still_rejects" "
+run_test_error_match "explicit_without_rowid_still_rejects" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t VALUES(NULL, 1);
 " "NOT NULL constraint failed: t.k" "$DB"
@@ -137,12 +137,12 @@ SELECT name, \"notnull\" FROM pragma_table_info('t') WHERE name='k';
 run_test "text_pk_notnull_survives_reopen" "
 SELECT name, \"notnull\" FROM pragma_table_info('t') WHERE name='k';
 " "k|1" "$DB"
-run_test_match "text_pk_null_insert_after_reopen" "
+run_test_error_match "text_pk_null_insert_after_reopen" "
 INSERT INTO t VALUES(NULL, 1);
 " "NOT NULL constraint failed: t.k" "$DB"
 
 rm -f "$DB"
-run_test_match "text_pk_update_null_rejected" "
+run_test_error_match "text_pk_update_null_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 INSERT INTO t VALUES('a', 1);
 UPDATE t SET k = NULL;

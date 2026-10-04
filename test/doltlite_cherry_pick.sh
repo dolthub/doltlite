@@ -63,7 +63,7 @@ SELECT dolt_checkout('main');
 UPDATE t SET v='main_val' WHERE id=1;
 SELECT dolt_commit('-A','-m','main modifies row 1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "cp_conflict_msg" \
+run_test_error_match "cp_conflict_msg" \
   "SELECT dolt_cherry_pick('feat');" \
   "conflict|rolled back" "$DB"
 run_test "cp_conflict_resolved" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
@@ -124,11 +124,11 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "cp_err_noarg" "SELECT dolt_cherry_pick();" "usage" "$DB"
+run_test_error_match "cp_err_noarg" "SELECT dolt_cherry_pick();" "usage" "$DB"
 
-run_test_match "cp_err_badhash" "SELECT dolt_cherry_pick('not_a_hash');" "invalid" "$DB"
+run_test_error_match "cp_err_badhash" "SELECT dolt_cherry_pick('not_a_hash');" "invalid" "$DB"
 
-run_test_match "cp_err_initial" \
+run_test_error_match "cp_err_initial" \
   "SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
   "initial commit" "$DB"
 
@@ -150,16 +150,16 @@ SELECT dolt_branch('other');
 SELECT dolt_checkout('other');
 SELECT dolt_reset('--hard','HEAD~1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "cp_err_merge_commit" \
+run_test_error_match "cp_err_merge_commit" \
   "SELECT dolt_checkout('other');
 SELECT dolt_cherry_pick('main');" \
   "cherry-picking a merge commit is not supported" "$DB"
 
-run_test_lastline "cp_err_merge_commit_rows_unchanged" \
+run_test_error_lastline "cp_err_merge_commit_rows_unchanged" \
   "SELECT dolt_checkout('other');
 SELECT dolt_cherry_pick('main');
 SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);" \
-  "1,3" "$DB"
+  "1,3" "$DB" 'cherry\-picking\ a\ merge\ commit\ is\ not\ supported'
 
 rm -f "$DB"
 
@@ -193,7 +193,7 @@ SELECT dolt_commit('-A','-m','c1');
 INSERT INTO t VALUES(2,2);
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "cp_err_already_applied" \
+run_test_error_match "cp_err_already_applied" \
   "SELECT dolt_cherry_pick(dolt_hashof('HEAD~1'));" \
   "no changes were made, nothing to commit" "$DB"
 
@@ -294,7 +294,7 @@ SELECT dolt_commit('-A','-m','update to v2');
 UPDATE t SET v='v3' WHERE id=1;
 SELECT dolt_commit('-A','-m','update to v3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "rv_conf_msg" \
+run_test_error_match "rv_conf_msg" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1));" \
   "conflict|rolled back" "$DB"
 run_test "rv_conf_count" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
@@ -308,14 +308,14 @@ INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "rv_noarg_noop" "SELECT dolt_revert();" "0" "$DB"
-run_test_match "rv_err_badhash" "SELECT dolt_revert('bad');" "invalid" "$DB"
-run_test_match "rv_err_initial" \
+run_test_error_match "rv_err_badhash" "SELECT dolt_revert('bad');" "invalid" "$DB"
+run_test_error_match "rv_err_initial" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
   "initial commit" "$DB"
-run_test_match "rv_author_bad" \
+run_test_error_match "rv_author_bad" \
   "SELECT dolt_revert('HEAD','--author','not-an-author');" \
   "Author not formatted correctly" "$DB"
-run_test_match "rv_author_empty_email" \
+run_test_error_match "rv_author_empty_email" \
   "SELECT dolt_revert('HEAD','--author','Ann <>');" \
   "empty author email" "$DB"
 
@@ -517,7 +517,7 @@ SELECT dolt_checkout('main');
 UPDATE t SET u=9, v='main1' WHERE id=1;
 SELECT dolt_commit('-A','-m','main_unique');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "cp_violation_err" \
+run_test_error_match "cp_violation_err" \
   "SELECT dolt_cherry_pick('feat');" \
   "constraint violations|rolled back" "$DB"
 run_test "cp_violation_none" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB"
@@ -665,7 +665,7 @@ SELECT dolt_commit('-A','-m','c1_set_9');
 UPDATE t SET u=1, v='c2_take_1' WHERE id=2;
 SELECT dolt_commit('-A','-m','c2_take_1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "rv_violation_err" \
+run_test_error_match "rv_violation_err" \
   "SELECT dolt_revert('HEAD~1');" \
   "constraint violations|rolled back" "$DB"
 run_test "rv_violation_none" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB"
@@ -738,7 +738,7 @@ run_test "cp_conflict_not_a_merge" \
 Error near line 5: unresolved conflicts — resolve them or roll back first
 Error near line 6: no merge in progress" \
   "$DB"
-run_test_match "cp_amend_during_conflict_refused" \
+run_test_error_match "cp_amend_during_conflict_refused" \
   "BEGIN;
    SELECT dolt_cherry_pick('feat');
    SELECT dolt_commit('--amend','-m','oops');
@@ -770,10 +770,10 @@ run_test "cp_abort_conflict" \
 0
 M" \
   "$DB"
-run_test_match "cp_abort_without_active" \
+run_test_error_match "cp_abort_without_active" \
   "SELECT dolt_cherry_pick('--abort');" \
   "no cherry-pick in progress" "$DB"
-run_test_match "cp_abort_extra_args" \
+run_test_error_match "cp_abort_extra_args" \
   "SELECT dolt_cherry_pick('--abort', 'extra');" \
   "--abort does not take other arguments" "$DB"
 run_test "cp_abort_extra_preserves_conflict" \
@@ -899,7 +899,7 @@ ALTER TABLE t ADD COLUMN d TEXT;
 SELECT dolt_commit('-Am','add d');
 UPDATE t SET d='x' WHERE k=1;
 SELECT dolt_commit('-Am','set d');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "rv_drop_edited_column_refuses" \
+run_test_error_match "rv_drop_edited_column_refuses" \
   "SELECT dolt_revert('HEAD~1');" \
   "column 'd' of table 't' would be dropped, discarding a changed value" "$DB"
 run_test "rv_drop_edited_column_schema_kept" \
@@ -921,7 +921,7 @@ SELECT dolt_commit('-Am','drop d');
 SELECT dolt_checkout('main');
 UPDATE t SET d='x' WHERE k=1;
 SELECT dolt_commit('-Am','set d');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "cp_drop_edited_column_refuses" \
+run_test_error_match "cp_drop_edited_column_refuses" \
   "SELECT dolt_cherry_pick('dropper');" \
   "column 'd' of table 't' would be dropped, discarding a changed value" "$DB"
 run_test "cp_drop_edited_column_schema_kept" \
@@ -973,7 +973,7 @@ UPDATE t SET d='after' WHERE k=1;
 SELECT dolt_commit('-Am','edit d');
 ALTER TABLE t DROP COLUMN d;
 SELECT dolt_commit('-Am','drop d');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "rv_edit_of_already_dropped_column_refuses" \
+run_test_error_match "rv_edit_of_already_dropped_column_refuses" \
   "SELECT dolt_revert('HEAD~1');" \
   "cannot apply: column 'd'.*discarding a changed value" "$DB"
 run_test "rv_edit_of_already_dropped_column_schema" \

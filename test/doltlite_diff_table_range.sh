@@ -33,27 +33,27 @@ run_test "two_dot_snapshot_diff" \
         FROM dolt_diff_t('main..feature') ORDER BY id);" \
   "1:removed,2:added" "$DB"
 
-run_test_match "two_dot_missing_left_rejected" \
+run_test_error_match "two_dot_missing_left_rejected" \
   "SELECT count(*) FROM dolt_diff_t('..feature');" \
   "invalid revision range" "$DB"
 
-run_test_match "two_dot_missing_right_rejected" \
+run_test_error_match "two_dot_missing_right_rejected" \
   "SELECT count(*) FROM dolt_diff_t('feature..');" \
   "invalid revision range" "$DB"
 
-run_test_match "three_dot_missing_left_rejected" \
+run_test_error_match "three_dot_missing_left_rejected" \
   "SELECT count(*) FROM dolt_diff_t('...feature');" \
   "invalid revision range" "$DB"
 
-run_test_match "three_dot_missing_right_rejected" \
+run_test_error_match "three_dot_missing_right_rejected" \
   "SELECT count(*) FROM dolt_diff_t('feature...');" \
   "invalid revision range" "$DB"
 
-run_test_match "two_dot_unknown_ref_rejected" \
+run_test_error_match "two_dot_unknown_ref_rejected" \
   "SELECT count(*) FROM dolt_diff_t('nosuchref..feature');" \
   "invalid revision range" "$DB"
 
-run_test_match "three_dot_invalid_ancestor_rejected" \
+run_test_error_match "three_dot_invalid_ancestor_rejected" \
   "SELECT count(*) FROM dolt_diff_t('HEAD~99...feature');" \
   "invalid revision range" "$DB"
 
@@ -85,19 +85,19 @@ run_test "log_three_dot" \
      (SELECT message FROM dolt_log('main...feature') ORDER BY message);" \
   "feature change,main change" "$DB"
 
-run_test_match "log_two_dot_missing_left_rejected" \
+run_test_error_match "log_two_dot_missing_left_rejected" \
   "SELECT count(*) FROM dolt_log('..feature');" \
   "invalid dolt_log revision" "$DB"
 
-run_test_match "log_two_dot_missing_right_rejected" \
+run_test_error_match "log_two_dot_missing_right_rejected" \
   "SELECT count(*) FROM dolt_log('feature..');" \
   "invalid dolt_log revision" "$DB"
 
-run_test_match "log_three_dot_missing_left_rejected" \
+run_test_error_match "log_three_dot_missing_left_rejected" \
   "SELECT count(*) FROM dolt_log('...feature');" \
   "invalid dolt_log revision" "$DB"
 
-run_test_match "log_three_dot_missing_right_rejected" \
+run_test_error_match "log_three_dot_missing_right_rejected" \
   "SELECT count(*) FROM dolt_log('feature...');" \
   "invalid dolt_log revision" "$DB"
 

@@ -61,11 +61,11 @@ run_test "update_and_replace" \
   "LICENSE.md|MIT
 README.md|v2" "$DB"
 
-run_test_match "dup_pk_rejected" \
+run_test_error_match "dup_pk_rejected" \
   "INSERT INTO dolt_docs VALUES('README.md','again');" \
   "UNIQUE constraint failed: dolt_docs.doc_name" "$DB"
 
-run_test_match "null_doc_text_rejected" \
+run_test_error_match "null_doc_text_rejected" \
   "INSERT INTO dolt_docs VALUES('x', NULL);" \
   "NOT NULL constraint failed: dolt_docs.doc_text" "$DB"
 
@@ -111,7 +111,7 @@ run_test "txn_commit_keeps_docs" \
   "AGENT.md
 a" "$DB"
 
-run_test_match "mid_statement_failure_atomic" \
+run_test_error_match "mid_statement_failure_atomic" \
   "DELETE FROM dolt_docs;
    INSERT INTO dolt_docs VALUES('b','1'),('b','2');" \
   "UNIQUE constraint failed" "$DB"
@@ -124,11 +124,11 @@ rm -f "$DB"
 DB=/tmp/test_docs4_$$.db
 rm -f "$DB"
 
-run_test_match "drop_without_table_rejected" \
+run_test_error_match "drop_without_table_rejected" \
   "DROP TABLE dolt_docs;" \
   "may not be dropped" "$DB"
 
-run_test_match "drop_if_exists_without_table_rejected" \
+run_test_error_match "drop_if_exists_without_table_rejected" \
   "DROP TABLE IF EXISTS dolt_docs;" \
   "may not be dropped" "$DB"
 
@@ -169,7 +169,7 @@ rm -f "$DB"
 DB=/tmp/test_docs5_$$.db
 rm -f "$DB"
 
-run_test_match "agent_insert_over_seed_first_write_rejected" \
+run_test_error_match "agent_insert_over_seed_first_write_rejected" \
   "INSERT INTO dolt_docs VALUES('AGENT.md','mine');" \
   "UNIQUE constraint failed: dolt_docs.doc_name" "$DB"
 
@@ -182,7 +182,7 @@ run_test "agent_replace_over_seed_first_write" \
    SELECT doc_name, doc_text FROM dolt_docs;" \
   "AGENT.md|mine" "$DB"
 
-run_test_match "agent_second_insert_rejected" \
+run_test_error_match "agent_second_insert_rejected" \
   "INSERT INTO dolt_docs VALUES('AGENT.md','other');" \
   "UNIQUE constraint failed" "$DB"
 

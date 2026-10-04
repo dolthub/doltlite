@@ -1,14 +1,9 @@
 #!/bin/bash
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 DOLTLITE="${1:-./doltlite}"
 SQLITE3="${SQLITE3:-$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)}"
 PASS=0; FAIL=0; ERRORS=""
 
-run_test() {
-  local n="$1" s="$2" e="$3" d="$4"
-  local r=$(echo "$s" | perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1)
-  if [ "$r" = "$e" ]; then PASS=$((PASS+1))
-  else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi
-}
 
 echo "=== ATTACH SQLite Database Tests ==="
 echo ""
@@ -188,11 +183,4 @@ SELECT count(*) FROM s.t WHERE id BETWEEN 8 AND 10;" \
 
 rm -f "$SQLDB1" "$SQLDB2" "$DLDB" "$SQLDB_W" "$SQLDB_IC" "$DLDB_IC" "$SQLDB_CR" "$DLDB_CR"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed"
-if [ $FAIL -gt 0 ]; then
-  echo -e "$ERRORS"
-  exit 1
-fi
-echo "All tests passed!"
-echo "__SUITE_COMPLETE__"
+dltest_finish

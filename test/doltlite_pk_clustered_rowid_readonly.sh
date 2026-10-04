@@ -18,26 +18,26 @@ SELECT v FROM t WHERE rowid = last_insert_rowid();
 1" "$DB"
 
 rm -f "$DB"
-run_test_match "text_pk_insert_rowid_rejected" "
+run_test_error_match "text_pk_insert_rowid_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 INSERT INTO t(rowid, k, v) VALUES(99, 'a', 1);
 " "has no column named rowid" "$DB"
 
 rm -f "$DB"
-run_test_match "text_pk_update_rowid_rejected" "
+run_test_error_match "text_pk_update_rowid_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 INSERT INTO t VALUES('a', 1);
 UPDATE t SET rowid = 5;
 " "no such column: rowid" "$DB"
 
 rm -f "$DB"
-run_test_match "text_pk_insert_oid_rejected" "
+run_test_error_match "text_pk_insert_oid_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 INSERT INTO t(oid, k, v) VALUES(99, 'a', 1);
 " "has no column named oid" "$DB"
 
 rm -f "$DB"
-run_test_match "text_pk_insert_underscore_rowid_rejected" "
+run_test_error_match "text_pk_insert_underscore_rowid_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT);
 INSERT INTO t(_rowid_, k, v) VALUES(99, 'a', 1);
 " "has no column named _rowid_" "$DB"
@@ -79,13 +79,13 @@ else
 fi
 
 rm -f "$DB"
-run_test_match "int_pk_insert_rowid_rejected" "
+run_test_error_match "int_pk_insert_rowid_rejected" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t(rowid, v) VALUES(99, 1);
 " "has no column named rowid" "$DB"
 
 rm -f "$DB"
-run_test_match "composite_pk_insert_rowid_rejected" "
+run_test_error_match "composite_pk_insert_rowid_rejected" "
 CREATE TABLE t(a INT, b INT, PRIMARY KEY(a, b));
 INSERT INTO t(rowid, a, b) VALUES(99, 1, 2);
 " "has no column named rowid" "$DB"
@@ -120,7 +120,7 @@ SELECT rowid, v FROM t;
 " "7|1" "$DB"
 
 rm -f "$DB"
-run_test_match "explicit_without_rowid_insert_rejected" "
+run_test_error_match "explicit_without_rowid_insert_rejected" "
 CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;
 INSERT INTO t(rowid, k, v) VALUES(99, 'a', 1);
 " "has no column named rowid" "$DB"
@@ -134,7 +134,7 @@ SELECT typeof(rowid), v FROM t;
 run_test "text_pk_select_rowid_survives_reopen" "
 SELECT typeof(rowid), v FROM t;
 " "integer|1" "$DB"
-run_test_match "text_pk_insert_rowid_rejected_after_reopen" "
+run_test_error_match "text_pk_insert_rowid_rejected_after_reopen" "
 INSERT INTO t(rowid, k, v) VALUES(99, 'b', 2);
 " "has no column named rowid" "$DB"
 

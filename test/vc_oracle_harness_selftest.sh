@@ -357,6 +357,30 @@ for scenario in setup_both setup_candidate setup_reference setup_and_target \
   checks=$((checks+1))
 done
 
+cat > "$VC_HARNESS_DIR/join-candidate" <<'STUB'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'R|match\n'
+STUB
+cat > "$VC_HARNESS_DIR/join-reference" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  version) printf 'dolt version %s\n' "${VC_PINNED_VERSION#v}" ;;
+  init) exit 0 ;;
+  sql) cat >/dev/null; printf 'R|match\n'; echo 'reference failed after printing a row' >&2; exit 25 ;;
+esac
+STUB
+chmod +x "$VC_HARNESS_DIR/join-candidate" "$VC_HARNESS_DIR/join-reference"
+if bash "$SCRIPT_DIR/vc_oracle_read_table_joins_test.sh" \
+    "$VC_HARNESS_DIR/join-candidate" "$VC_HARNESS_DIR/join-reference" \
+    > "$VC_HARNESS_DIR/joins.log" 2>&1; then
+  echo 'FAIL: matching join rows hid the reference engine failure' >&2
+  exit 1
+fi
+check grep -q 'dolt rc=25' "$VC_HARNESS_DIR/joins.log"
+check grep -q 'reference failed after printing a row' "$VC_HARNESS_DIR/joins.log"
+check grep -qx '__SUITE_COMPLETE__' "$VC_HARNESS_DIR/joins.log"
+
 python3 "$SCRIPT_DIR/lib/vc_oracle_refusals.py" selftest
 
 printf 'VC oracle harness: %s checks passed\n' "$checks"

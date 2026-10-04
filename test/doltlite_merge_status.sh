@@ -17,17 +17,17 @@ echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='feat' WHERE id=1; SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 echo "UPDATE t SET v='main' WHERE id=1; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB" > /dev/null 2>&1
 FEATURE_HASH=$(echo "SELECT dolt_hashof('feature');" | $DOLTLITE "$DB" 2>/dev/null | tail -1)
-run_test_lastline "conflict_in_session" \
+run_test_error_lastline "conflict_in_session" \
   "BEGIN; SELECT dolt_merge('feature');
 $MS ROLLBACK;" \
-  "1|feature|$FEATURE_HASH|refs/heads/main|t" "$DB"
+  "1|feature|$FEATURE_HASH|refs/heads/main|t" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 run_test "row_count_merging" "SELECT count(*) FROM dolt_merge_status;" "1" "$DB"
 
 # Conflicted merges never persist past the producing transaction.
-run_test_lastline "conflict_commit_is_refused" \
+run_test_error_match "conflict_commit_is_refused" \
   "BEGIN; SELECT dolt_merge('feature');
 COMMIT;" \
-  "Error near line 2: constraint failed" "$DB"
+  "Error near line 2: constraint failed" "$DB" 'constraint\ failed|Merge\ has\ 1\ conflict\(s\)\.\ Resolve\ and\ then\ commit\ with\ dolt_commit\.'
 run_test "conflict_does_not_outlive_transaction" "$MS" "0|~|~|~|~" "$DB"
 
 echo "BEGIN; SELECT dolt_conflicts_resolve('--ours','t'); SELECT dolt_commit('-m','resolved');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -37,9 +37,9 @@ DB2=/tmp/test_ms_rb_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'b'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "UPDATE t SET v='t'; SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$DB2/src" > /dev/null 2>&1
 echo "UPDATE t SET v='o'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB2" > /dev/null 2>&1
-run_test_lastline "rollback_clears_state" \
+run_test_error_lastline "rollback_clears_state" \
   "BEGIN; SELECT dolt_merge('src');
-ROLLBACK; $MS" "0|~|~|~|~" "$DB2"
+ROLLBACK; $MS" "0|~|~|~|~" "$DB2" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 run_test "rollback_clears_state_next_connection" "$MS" "0|~|~|~|~" "$DB2"
 
 DB3=/tmp/test_ms_ff_$$.db; rm -f "$DB3"
@@ -61,48 +61,48 @@ DB5=/tmp/test_ms_multi_$$.db; rm -f "$DB5"
 echo "CREATE TABLE zeta(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE alpha(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO zeta VALUES(1,'b'); INSERT INTO alpha VALUES(1,'b'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "UPDATE zeta SET v='t'; UPDATE alpha SET v='t'; SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$DB5/src" > /dev/null 2>&1
 echo "UPDATE zeta SET v='o'; UPDATE alpha SET v='o'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB5" > /dev/null 2>&1
-run_test_lastline "unmerged_tables_sorted" \
+run_test_error_lastline "unmerged_tables_sorted" \
   "BEGIN; SELECT dolt_merge('src');
 SELECT unmerged_tables FROM dolt_merge_status; ROLLBACK;" \
-  "alpha, zeta" "$DB5"
+  "alpha, zeta" "$DB5" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 # Constraint violations count as unmerged even when the conflict is elsewhere.
 DB6=/tmp/test_ms_cv_$$.db; rm -f "$DB6"
 echo "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, pid INT REFERENCES parent(id)); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO parent VALUES(1); INSERT INTO t VALUES(1,'b'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 echo "INSERT INTO child VALUES(11,1); UPDATE t SET v='theirs'; SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$DB6/src" > /dev/null 2>&1
 echo "DELETE FROM parent WHERE id=1; UPDATE t SET v='ours'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB6" > /dev/null 2>&1
-run_test_lastline "unmerged_tables_includes_violations" \
+run_test_error_lastline "unmerged_tables_includes_violations" \
   "BEGIN; SELECT dolt_merge('src');
 SELECT unmerged_tables FROM dolt_merge_status; ROLLBACK;" \
-  "child, t" "$DB6"
+  "child, t" "$DB6" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 DB7=/tmp/test_ms_schema_$$.db; rm -f "$DB7"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'b'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN c1 INT DEFAULT 1; SELECT dolt_commit('-Am','their col');" | $DOLTLITE "$DB7/src" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN c1 TEXT DEFAULT 'x'; SELECT dolt_commit('-Am','our col');" | $DOLTLITE "$DB7" > /dev/null 2>&1
-run_test_lastline "unmerged_tables_includes_schema_conflict" \
+run_test_error_lastline "unmerged_tables_includes_schema_conflict" \
   "BEGIN; SELECT dolt_merge('src');
 SELECT unmerged_tables FROM dolt_merge_status; ROLLBACK;" \
-  "t" "$DB7"
+  "t" "$DB7" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 DB8=/tmp/test_ms_target_$$.db; rm -f "$DB8"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'b'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('dev'); SELECT dolt_branch('src');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "UPDATE t SET v='t'; SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$DB8/src" > /dev/null 2>&1
 echo "UPDATE t SET v='o'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB8/dev" > /dev/null 2>&1
-run_test_lastline "target_is_merged_into_branch" \
+run_test_error_lastline "target_is_merged_into_branch" \
   "BEGIN; SELECT dolt_merge('src');
 SELECT target FROM dolt_merge_status; ROLLBACK;" \
-  "refs/heads/dev" "$DB8/dev"
+  "refs/heads/dev" "$DB8/dev" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 DB9=/tmp/test_ms_hash_$$.db; rm -f "$DB9"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'b'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 echo "UPDATE t SET v='t'; SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$DB9/src" > /dev/null 2>&1
 echo "UPDATE t SET v='o'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 SRC_HASH=$(echo "SELECT dolt_hashof('src');" | $DOLTLITE "$DB9" 2>/dev/null | tail -1)
-run_test_lastline "source_is_hash_for_hash_spec" \
+run_test_error_lastline "source_is_hash_for_hash_spec" \
   "BEGIN; SELECT dolt_merge('$SRC_HASH');
 SELECT source || '|' || source_commit FROM dolt_merge_status; ROLLBACK;" \
-  "$SRC_HASH|$SRC_HASH" "$DB9"
+  "$SRC_HASH|$SRC_HASH" "$DB9" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
 # Recover source from the persisted merge commit after that session is gone.
 mk_cv_persisted() {  # $1=db  $2=extra src commits after capturing the hash
@@ -210,13 +210,13 @@ DB11=/tmp/test_ms_resolved_$$.db; rm -f "$DB11"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'b'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('src');" | $DOLTLITE "$DB11" > /dev/null 2>&1
 echo "UPDATE t SET v='t'; SELECT dolt_commit('-Am','theirs');" | $DOLTLITE "$DB11/src" > /dev/null 2>&1
 echo "UPDATE t SET v='o'; SELECT dolt_commit('-Am','ours');" | $DOLTLITE "$DB11" > /dev/null 2>&1
-run_test_lastline "resolved_but_uncommitted_empty_tables" \
+run_test_error_lastline "resolved_but_uncommitted_empty_tables" \
   "BEGIN; SELECT dolt_merge('src');
 SELECT dolt_conflicts_resolve('--ours','t');
    SELECT is_merging || '|' || unmerged_tables || '|' || length(unmerged_tables) FROM dolt_merge_status;" \
-  "1||0" "$DB11"
+  "1||0" "$DB11" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
-run_test_match "read_only" \
+run_test_error_match "read_only" \
   "INSERT INTO dolt_merge_status VALUES(1,'a','b','c','d');" \
   "may not be modified" "$DB"
 

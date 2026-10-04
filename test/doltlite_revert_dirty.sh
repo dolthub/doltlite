@@ -41,7 +41,7 @@ INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','add row');
 INSERT INTO t VALUES(99,'side');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "rv_dirty_same_refuses" \
+run_test_error_match "rv_dirty_same_refuses" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "Your local changes would be overwritten by revert" "$DB"
 run_test "rv_dirty_same_no_new_commit" \
@@ -63,7 +63,7 @@ DROP INDEX t_v;
 SELECT dolt_commit('-A','-m','drop index');
 INSERT INTO t VALUES(99,'unrelated dirty');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "rv_dirty_same_index_refuses" \
+run_test_error_match "rv_dirty_same_index_refuses" \
   "SELECT dolt_revert('HEAD');" \
   "Your local changes would be overwritten by revert" "$DB"
 run_test "rv_dirty_same_index_no_new_commit" \
@@ -122,7 +122,7 @@ SELECT dolt_commit('-Am','add row');
 INSERT INTO meta VALUES(1,'side');
 SELECT dolt_add('meta');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "rv_staged_unrelated_refuses" \
+run_test_error_match "rv_staged_unrelated_refuses" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "Your local changes would be overwritten by revert" "$DB"
 run_test "rv_staged_unrelated_no_new_commit" \
@@ -166,7 +166,7 @@ run_test_match "rv_dup_first" \
 run_test "rv_dup_index_restored" \
   "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='t_v';" \
   "1" "$DB"
-run_test_match "rv_dup_second_nothing" \
+run_test_error_match "rv_dup_second_nothing" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='drop index' LIMIT 1));" \
   "nothing to commit" "$DB"
 run_test "rv_dup_one_revert_commit" \
@@ -178,7 +178,7 @@ run_test "rv_dup_index_still_there" \
 
 echo "INSERT INTO t VALUES(2,2);
 SELECT dolt_commit('-Am','later');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "rv_dup_after_later_still_nothing" \
+run_test_error_match "rv_dup_after_later_still_nothing" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='drop index' LIMIT 1));" \
   "nothing to commit" "$DB"
 run_test_match "rv_dup_revert_the_revert" \
@@ -202,7 +202,7 @@ run_test_match "rv_dup_data_first" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "rv_dup_data_row_gone" "SELECT count(*) FROM t;" "1" "$DB"
-run_test_match "rv_dup_data_second" \
+run_test_error_match "rv_dup_data_second" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='add row' LIMIT 1));" \
   "nothing to commit" "$DB"
 run_test "rv_dup_data_still_one_row" "SELECT count(*) FROM t;" "1" "$DB"
@@ -212,7 +212,7 @@ run_test "rv_dup_data_one_revert" \
 
 echo "CREATE TABLE meta(id INTEGER PRIMARY KEY, note TEXT);
 INSERT INTO meta VALUES(1,'side');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "rv_dup_data_dirty_unrelated_second" \
+run_test_error_match "rv_dup_data_dirty_unrelated_second" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='add row' LIMIT 1));" \
   "nothing to commit" "$DB"
 run_test "rv_dup_data_dirty_kept" \
