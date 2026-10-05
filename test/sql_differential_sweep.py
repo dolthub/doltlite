@@ -8,6 +8,10 @@ before saving the script.
 
 Usage: sql_differential_sweep.py DOLTLITE SQLITE FIRST LAST [--include-<group>]... [--all]
        [--rotate] [--bulk N] [--bulk-every K]
+
+DOLTLITE_DIFF_SECONDS stops the sweep between seeds once that many seconds
+have passed, so a slow runner reports the seeds it covered instead of being
+killed by its job timeout with nothing to show.
 """
 
 import difflib
@@ -221,8 +225,10 @@ def reproduce_flags(groups, rotate, bulk, every):
     return flags
 
 
-def sweep(doltlite, sqlite3, first, last, groups, rotate=0, bulk=0, every=1):
+def sweep(doltlite, sqlite3, first, last, groups, rotate=0, bulk=0, every=1,
+          budget=0.0):
     total = last - first + 1
+    stopped_before = None
     work = tempfile.mkdtemp()
     dl_db = os.path.join(work, "dl.db")
     sq_db = os.path.join(work, "sq.db")
@@ -233,6 +239,9 @@ def sweep(doltlite, sqlite3, first, last, groups, rotate=0, bulk=0, every=1):
     t0 = time.monotonic()
     try:
         for i, seed in enumerate(range(first, last + 1), 1):
+            if budget > 0 and i > 1 and time.monotonic() - t0 >= budget:
+                stopped_before = seed
+                break
             try:
                 sql = fuzz.Gen(seed, groups, rotate,
                                fuzz.bulk_for(seed, bulk, every)).run()
@@ -279,6 +288,12 @@ def sweep(doltlite, sqlite3, first, last, groups, rotate=0, bulk=0, every=1):
         shutil.rmtree(work, ignore_errors=True)
 
     sys.stdout.write("\n")
+    if stopped_before is not None:
+        sys.stdout.write(
+            "Time budget of %ds reached: covered seeds %d..%d, %d of %d; "
+            "%d..%d not run\n" % (
+                budget, first, stopped_before - 1, stopped_before - first, total,
+                stopped_before, last))
     sys.stdout.write("Results: %d passed, %d failed out of %d seeds\n" % (
         pass_n, fail_n, pass_n + fail_n))
     if errored:
@@ -321,7 +336,13 @@ def main():
         if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
             sys.stderr.write("ERROR: not executable: %s\n" % binary)
             return 1
-    return sweep(doltlite, sqlite3, first, last, groups, rotate, bulk, every)
+    try:
+        budget = float(os.environ.get("DOLTLITE_DIFF_SECONDS", "0") or 0)
+    except ValueError:
+        sys.stderr.write("DOLTLITE_DIFF_SECONDS must be a number\n")
+        return 2
+    return sweep(doltlite, sqlite3, first, last, groups, rotate, bulk, every,
+                 budget)
 
 
 if __name__ == "__main__":
