@@ -987,6 +987,142 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
 }
 
 
+static int wsBindDiscardColumn(
+  sqlite3_stmt *pStmt, int iParam,
+  const DoltliteColInfo *pCols, int iCol,
+  const u8 *pRec, int nRec, const DoltliteRecordInfo *pInfo,
+  i64 intKey
+){
+  DoltliteSerialValue v;
+  int rc;
+  if( iCol==pCols->iPkCol ){
+    return sqlite3_bind_int64(pStmt, iParam, intKey);
+  }
+  rc = doltliteSerialValueFromField(pRec, nRec, pInfo,
+                                    pCols->aColToRec[iCol], &v);
+  if( rc!=SQLITE_OK ) return rc;
+  switch( v.eType ){
+    case SQLITE_NULL: return sqlite3_bind_null(pStmt, iParam);
+    case SQLITE_INTEGER: return sqlite3_bind_int64(pStmt, iParam, v.i);
+    case SQLITE_FLOAT: return sqlite3_bind_double(pStmt, iParam, v.r);
+    case SQLITE_TEXT:
+      return sqlite3_bind_text(pStmt, iParam, v.p, v.n, SQLITE_TRANSIENT);
+    default:
+      return sqlite3_bind_blob(pStmt, iParam, v.p, v.n, SQLITE_TRANSIENT);
+  }
+}
+
+static int wsDiscardRowWithFks(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
+  sqlite3 *db = p->db;
+  const DoltliteColInfo *pCols = &p->cols;
+  sqlite3_str *pSql;
+  sqlite3_stmt *pStmt = 0;
+  DoltliteRecordInfo info = {0};
+  DoltliteAuthShield shield;
+  const u8 *pRec;
+  const char *zRowid = 0;
+  char *zSql;
+  int nRec, i, nCol = 0, rc;
+  int bWasInternal = (db->mDbFlags & DBFLAG_InternalDml)!=0;
+  i64 nChange = db->nChange;
+  i64 nTotalChange = db->nTotalChange;
+  i64 lastRowid = db->lastRowid;
+
+  if( HasRowid(pTab) ){
+    zRowid = pTab->iPKey>=0 ? pTab->aCol[pTab->iPKey].zCnName
+                           : sqlite3RowidAlias(pTab);
+    if( !zRowid ){
+      sqlite3_free(p->base.zErrMsg);
+      p->base.zErrMsg = sqlite3_mprintf(
+          "dolt_workspace_%s: table shadows every rowid alias", p->zTableName);
+      return p->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+    }
+  }
+  pRec = r->diffType==PROLLY_DIFF_ADD ? r->pNewVal : r->pOldVal;
+  nRec = r->diffType==PROLLY_DIFF_ADD ? r->nNewVal : r->nOldVal;
+  rc = doltliteParseRecordStrict(pRec, nRec, &info);
+  if( rc!=SQLITE_OK ) return rc;
+  pSql = sqlite3_str_new(db);
+  if( r->diffType==PROLLY_DIFF_DELETE ){
+    sqlite3_str_appendf(pSql, "INSERT INTO main.\"%w\"(", p->zTableName);
+    if( zRowid && pTab->iPKey<0 ){
+      sqlite3_str_appendf(pSql, "\"%w\",", zRowid);
+    }
+    for(i=0; i<pCols->nCol; i++){
+      if( pCols->aGenerated[i]!=DOLTLITE_GEN_NONE ) continue;
+      sqlite3_str_appendf(pSql, "%s\"%w\"", nCol++ ? "," : "", pCols->azName[i]);
+    }
+    sqlite3_str_appendall(pSql, ") VALUES (");
+    if( zRowid && pTab->iPKey<0 ){
+      sqlite3_str_appendf(pSql, "?%d,", pCols->nCol+1);
+    }
+    nCol = 0;
+    for(i=0; i<pCols->nCol; i++){
+      if( pCols->aGenerated[i]!=DOLTLITE_GEN_NONE ) continue;
+      sqlite3_str_appendf(pSql, "%s?%d", nCol++ ? "," : "", i+1);
+    }
+    sqlite3_str_appendchar(pSql, 1, ')');
+  }else{
+    if( r->diffType==PROLLY_DIFF_ADD ){
+      sqlite3_str_appendf(pSql, "DELETE FROM main.\"%w\"", p->zTableName);
+    }else{
+      sqlite3_str_appendf(pSql, "UPDATE main.\"%w\" SET ", p->zTableName);
+      for(i=0; i<pCols->nCol; i++){
+        if( pCols->aGenerated[i]!=DOLTLITE_GEN_NONE ) continue;
+        sqlite3_str_appendf(pSql, "%s\"%w\"=?%d",
+            nCol++ ? "," : "", pCols->azName[i], i+1);
+      }
+    }
+    sqlite3_str_appendall(pSql, " WHERE ");
+    if( zRowid ){
+      sqlite3_str_appendf(pSql, "\"%w\"=?%d", zRowid, pCols->nCol+1);
+    }else{
+      Index *pPk = sqlite3PrimaryKeyIndex(pTab);
+      for(i=0; i<pPk->nKeyCol; i++){
+        int col = pPk->aiColumn[i];
+        sqlite3_str_appendf(pSql, "%s\"%w\" IS ?%d",
+            i ? " AND " : "", pCols->azName[col], col+1);
+      }
+    }
+  }
+  zSql = sqlite3_str_finish(pSql);
+  if( !zSql ){
+    doltliteRecordInfoClear(&info);
+    return SQLITE_NOMEM;
+  }
+
+  /* Discards must run FK actions without firing user triggers or row hooks. */
+  db->mDbFlags |= DBFLAG_InternalDml;
+  doltliteAuthShieldEnter(db, &shield);
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  for(i=0; i<pCols->nCol && rc==SQLITE_OK; i++){
+    if( pCols->aGenerated[i]!=DOLTLITE_GEN_NONE ) continue;
+    if( sqlite3_bind_parameter_name(pStmt, i+1)==0 ) continue;
+    rc = wsBindDiscardColumn(pStmt, i+1, pCols, i, pRec, nRec, &info, r->intKey);
+  }
+  if( rc==SQLITE_OK && zRowid
+   && (r->diffType!=PROLLY_DIFF_DELETE || pTab->iPKey<0) ){
+    rc = sqlite3_bind_int64(pStmt, pCols->nCol+1, r->intKey);
+  }
+  if( rc==SQLITE_OK ) rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ){
+    if( (rc&0xff)==SQLITE_CONSTRAINT ) rc = sqlite3_extended_errcode(db);
+    sqlite3_free(p->base.zErrMsg);
+    p->base.zErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(db));
+    if( !p->base.zErrMsg ) rc = SQLITE_NOMEM;
+  }
+  sqlite3_finalize(pStmt);
+  doltliteAuthShieldLeave(&shield);
+  if( !bWasInternal ) db->mDbFlags &= ~DBFLAG_InternalDml;
+  db->nChange = nChange;
+  db->nTotalChange = nTotalChange;
+  db->lastRowid = lastRowid;
+  sqlite3_free(zSql);
+  doltliteRecordInfoClear(&info);
+  return rc;
+}
+
 static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
                     sqlite3_int64 *pRowid){
   WorkspaceVtab *p = (WorkspaceVtab*)pBase;
@@ -1017,6 +1153,13 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
             "dolt_workspace_%s table is not modifiable due to schema change",
             p->zTableName);
         return SQLITE_ERROR;
+      }
+    }
+    if( p->db->flags & SQLITE_ForeignKeys ){
+      Table *pTab = sqlite3FindTable(p->db, p->zTableName, "main");
+      if( pTab && IsOrdinaryTable(pTab)
+       && (pTab->u.tab.pFKey || sqlite3FkReferences(pTab)) ){
+        return wsDiscardRowWithFks(p, r, pTab);
       }
     }
     /* Unstaged delete: restore staged/HEAD for this PK. */

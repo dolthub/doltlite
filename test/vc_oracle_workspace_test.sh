@@ -13,6 +13,7 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 translate_for_dolt() {
   sed -E '
+    s/PRAGMA foreign_keys=ON;/SET FOREIGN_KEY_CHECKS=1;/g
     s/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g
     s/"dolt_diff_([^"]+)"\(([^)]*)\)/dolt_diff(\2, "\1")/g
     s/`dolt_diff_([^`]+)`\(([^)]*)\)/dolt_diff(\2, '"'"'\1'"'"')/g
@@ -650,5 +651,96 @@ UPDATE t SET b='x' WHERE id=1;
 UPDATE t SET b='a' WHERE id=2;
 UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2;
 "
+
+oracle_error "workspace_fk_restore_insert_rejected" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER,FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES(1);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','base');
+DELETE FROM t;
+DELETE FROM p;
+DELETE FROM dolt_workspace_t;
+"
+
+oracle_error "workspace_fk_restore_update_rejected" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER,FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES(1),(2);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET pid=2;
+DELETE FROM p WHERE id=1;
+DELETE FROM dolt_workspace_t;
+"
+
+oracle_error "workspace_fk_discard_parent_insert_rejected" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER,FOREIGN KEY(pid) REFERENCES p(id));
+SELECT dolt_commit('-Am','base');
+INSERT INTO p VALUES(1);
+INSERT INTO t VALUES(1,1);
+DELETE FROM dolt_workspace_p;
+"
+
+oracle_error "workspace_fk_discard_parent_update_rejected" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY,code VARCHAR(20) UNIQUE);
+CREATE TABLE t(id INTEGER PRIMARY KEY,code VARCHAR(20),FOREIGN KEY(code) REFERENCES p(code));
+INSERT INTO p VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+UPDATE p SET code='b';
+INSERT INTO t VALUES(1,'b');
+DELETE FROM dolt_workspace_p;
+"
+
+oracle "workspace_fk_restore_parent_before_child" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER,FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES(1);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','base');
+DELETE FROM t;
+DELETE FROM p;
+DELETE FROM dolt_workspace_p;
+DELETE FROM dolt_workspace_t;
+" "SELECT CONCAT('R|',id,'|',pid) FROM t;"
+
+oracle "workspace_fk_cascade_discard_parent" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER,FOREIGN KEY(pid) REFERENCES p(id) ON DELETE CASCADE);
+SELECT dolt_commit('-Am','base');
+INSERT INTO p VALUES(1);
+INSERT INTO t VALUES(1,1);
+DELETE FROM dolt_workspace_p;
+" "SELECT CONCAT('R|p|',count(*)) FROM p;
+SELECT CONCAT('R|t|',count(*)) FROM t;"
+
+oracle "workspace_fk_cascade_restore_parent_update" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY,code VARCHAR(20) UNIQUE);
+CREATE TABLE t(id INTEGER PRIMARY KEY,code VARCHAR(20),FOREIGN KEY(code) REFERENCES p(code) ON UPDATE CASCADE);
+INSERT INTO p VALUES(1,'a');
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+UPDATE p SET code='b';
+DELETE FROM dolt_workspace_p;
+" "SELECT CONCAT('R|p|',code) FROM p;
+SELECT CONCAT('R|t|',code) FROM t;"
+
+oracle "workspace_fk_set_null_discard_parent" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER,FOREIGN KEY(pid) REFERENCES p(id) ON DELETE SET NULL);
+SELECT dolt_commit('-Am','base');
+INSERT INTO p VALUES(1);
+INSERT INTO t VALUES(1,1);
+DELETE FROM dolt_workspace_p;
+" "SELECT CONCAT('R|',id,'|',IFNULL(pid,'NULL')) FROM t;"
 
 vc_oracle_finish
