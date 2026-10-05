@@ -74,6 +74,14 @@ run_sql_file() {
   "$bin" "$db" < "$file" >/dev/null
 }
 
+# A fresh copy leaves the whole fixture dirty in the page cache, so the
+# first fsync a benchmark makes would write it all back and time the
+# runner's disk throughput instead of the operation.
+copy_synced() {
+  cp "$1" "$2"
+  python3 -c 'import os, sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' "$2"
+}
+
 remove_sample_db() {
   local db="$1"
   rm -f "$db" "$db-lock" "$db-wal" "$db-shm" "$db-journal"
@@ -286,13 +294,13 @@ bench_sql() {
 
   for ((r=1; r<=RUNS; r++)); do
     candidate_db="$TMPDIR/${name}_candidate_${r}.db"
-    cp "$candidate_seed" "$candidate_db"
+    copy_synced "$candidate_seed" "$candidate_db"
     out="$TMPDIR/${name}_candidate_${r}.out"
     err="$TMPDIR/${name}_candidate_${r}.err"
 
     if [ -n "$VC_PERF_BASELINE" ]; then
       baseline_db="$TMPDIR/${name}_baseline_${r}.db"
-      cp "$baseline_seed" "$baseline_db"
+      copy_synced "$baseline_seed" "$baseline_db"
       if [ $((r % 2)) -eq 1 ]; then
         if ! baseline_us=$(time_sql "$VC_PERF_BASELINE" "$baseline_db" \
             "$sql" "$TMPDIR/${name}_baseline_${r}.out" \
