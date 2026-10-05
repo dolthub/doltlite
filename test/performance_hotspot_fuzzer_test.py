@@ -142,6 +142,50 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(result["confirmed"], confirmed)
                 self.assertEqual(bool(result["pairs"]), confirmed or doltlite_ms >= 24)
 
+    def test_case_deadline_grows_to_fit_confirmation_and_is_capped(self):
+        class Deadline:
+            timeout = 60
+        runner = Deadline()
+        with patch.object(fuzzer.time, "monotonic", return_value=1000.0):
+            runner.case_deadline = 1060.0
+            fuzzer.extend_case_deadline(runner, 5, 1, 4.0, 26.0, 1900.0, 13000.0)
+            self.assertAlmostEqual(runner.case_deadline, 1000.0 + 1.5 * 6 * 30.0)
+            runner.case_deadline = 1060.0
+            fuzzer.extend_case_deadline(runner, 5, 1, 40.0, 60.0, 1900.0, 13000.0)
+            self.assertEqual(runner.case_deadline, 1000.0 + 10 * 60)
+            runner.case_deadline = 1060.0
+            fuzzer.extend_case_deadline(runner, 5, 157, 0.8, 0.3, 0.3, 1.2)
+            self.assertAlmostEqual(runner.case_deadline, 1060.0)
+            runner.case_deadline = None
+            fuzzer.extend_case_deadline(runner, 5, 1, 40.0, 60.0, 1.0, 1.0)
+            self.assertIsNone(runner.case_deadline)
+
+    def test_timeouts_carry_the_phase_and_timings_measured_so_far(self):
+        class TimingOut:
+            def __init__(self, fail_at):
+                self.fail_at = fail_at
+                self.calls = 0
+
+            def measure(self, binary, db, profile, case, repeats):
+                self.calls += 1
+                if self.calls == self.fail_at:
+                    raise fuzzer.CaseTimeout("command timed out")
+                return {"ms": 100.0 if binary == "sqlite" else 700.0, "result": "42"}
+
+        binaries = {"sqlite": "sqlite", "doltlite": "doltlite"}
+        case = fuzzer.cases_for(self.profile)[0]
+        expected = {2: {"timeout_phase": "pilot", "sqlite_ms": 100.0},
+                    7: {"timeout_phase": "confirmation", "sqlite_ms": 100.0,
+                        "doltlite_ms": 700.0, "pairs_completed": 1}}
+        for fail_at, evidence in expected.items():
+            with self.subTest(fail_at=fail_at), self.assertRaises(fuzzer.CaseTimeout) as caught:
+                fuzzer.measure_case(TimingOut(fail_at), binaries, binaries, self.profile, case, 5, 3, 20)
+            self.assertEqual(caught.exception.evidence, evidence)
+        line = fuzzer.timeout_evidence(dict(expected[7], timeout="x"))
+        self.assertEqual(line, "Ran out during confirmation; SQLite 100.0 ms, DoltLite 700.0 ms (7.0x), "
+                               "confirmation pairs done: 1. ")
+        self.assertEqual(fuzzer.timeout_evidence({"timeout": "x"}), "")
+
     def test_extreme_slowdowns_do_not_multiply_into_long_batches(self):
         runner = unittest.mock.Mock()
         runner.measure.side_effect = lambda binary, db, p, case, repeats: {
