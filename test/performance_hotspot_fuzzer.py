@@ -400,7 +400,7 @@ def save_report(output, report):
               "```"]
     if uncached:
         lines += ["", f"### Known: uncached reads (#{UNCACHED_READS_ISSUE})", "",
-                  "Confirmed at the profile's cache but not with a cache that holds the table, "
+                  "Confirmed at the profile's cache, but under the threshold with a cache that holds the table, "
                   "so the gap is re-reading and verifying chunks. Not filed.", ""]
         for case in uncached:
             lines.append(f"- `{case['id']}`: {case['ratio']:.2f}× at the profile cache, "
@@ -563,7 +563,10 @@ def main(argv=None):
                                                       args.runs, threshold, args.min_ms,
                                                       min_query_ms=min_query_ms, **options)
                                 record["cached_ratio"] = cached["ratio"]
-                                if not cached["confirmed"]:
+                                # Only a gap that closes is re-reading chunks. The cached run's
+                                # extra repeats raise its per-query floor, so failing to confirm
+                                # there does not mean the gap closed.
+                                if cached["ratio"] is not None and cached["ratio"] < threshold:
                                     record["confirmed"] = False
                                     record["uncached_reads"] = True
                             (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"], setup))
