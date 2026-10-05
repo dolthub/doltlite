@@ -46,6 +46,7 @@ struct BlameVtab {
   int   *aPkColIdx;
   int    nPkCols;
   int    intPkCid;
+  int    bHasRowid;
 };
 
 typedef struct BlameCursor BlameCursor;
@@ -76,7 +77,6 @@ struct BlamePkTmp {
   char *zName;
   char *zColl;
   int pkPos;
-  int isIntegerType;
 };
 
 static int blameGrowPkTmp(
@@ -126,7 +126,7 @@ static int blameLoadPkColumns(
   *pnCols = 0;
   *pIntPkCid = -1;
 
-  zSql = sqlite3_mprintf("PRAGMA main.table_info(\"%w\")", zTable);
+  zSql = sqlite3_mprintf("PRAGMA main.table_xinfo(\"%w\")", zTable);
   if( !zSql ) return SQLITE_NOMEM;
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
   sqlite3_free(zSql);
@@ -136,7 +136,6 @@ static int blameLoadPkColumns(
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     int cid = sqlite3_column_int(pStmt, 0);
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
-    const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
     int pkPos = sqlite3_column_int(pStmt, 5);
     if( pkPos <= 0 ) continue;
     if( nTmp>=nTmpAlloc ){
@@ -147,8 +146,6 @@ static int blameLoadPkColumns(
     aTmp[nTmp].zName = sqlite3_mprintf("%s", zName ? zName : "");
     aTmp[nTmp].zColl = 0;
     aTmp[nTmp].pkPos = pkPos;
-    aTmp[nTmp].isIntegerType =
-        zType && sqlite3_stricmp(zType, "INTEGER")==0;
     if( !aTmp[nTmp].zName ){ rc = SQLITE_NOMEM; break; }
     {
       const char *zColl = 0;
@@ -213,9 +210,9 @@ static int blameLoadPkColumns(
   }
 
   /* Only a rowid alias comes from the integer key. WITHOUT ROWID never sets intKey. */
-  if( nTmp == 1 && aTmp[0].isIntegerType ){
+  {
     Table *pTab = sqlite3FindTable(db, zTable, "main");
-    if( pTab && HasRowid(pTab) ) intPkCid = aTmp[0].cid;
+    if( pTab && HasRowid(pTab) ) intPkCid = pTab->iPKey;
   }
   sqlite3_free(aTmp);
 
@@ -857,6 +854,7 @@ static int blameWalk(
 static int bmConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   BlameVtab *v;
+  Table *pTab;
   int rc;
   const char *zMod;
   char *zSchema;
@@ -896,6 +894,8 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
     sqlite3_free(v);
     return rc;
   }
+  pTab = sqlite3FindTable(db, v->zTableName, "main");
+  v->bHasRowid = pTab && HasRowid(pTab);
   if( v->nPkCols == 0 ){
     if( pzErr ){
       *pzErr = sqlite3_mprintf(
@@ -951,7 +951,7 @@ static int bmBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   pInfo->estimatedCost = 100000.0;
   pInfo->estimatedRows = 1000;
   pInfo->idxNum = 0;
-  if( v->nPkCols<=0 ) return SQLITE_OK;
+  if( v->bHasRowid || v->nPkCols<=0 ) return SQLITE_OK;
   pTab = sqlite3FindTable(v->db, v->zTableName, "main");
   pPk = pTab ? sqlite3PrimaryKeyIndex(pTab) : 0;
   if( !pPk || pPk->nKeyCol!=v->nPkCols ) return SQLITE_OK;
@@ -1099,10 +1099,15 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
       sqlite3_result_int64(ctx, r->intKey);
     }else if( r->pCurVal && r->nCurVal>0 ){
       DoltliteRecordInfo ri = {0};
+      int iField = iCol;
+      if( v->bHasRowid ){
+        Table *pTab = sqlite3FindTable(v->db, v->zTableName, "main");
+        iField = pTab ? sqlite3TableColumnToStorage(pTab, cid) : cid;
+      }
       doltliteParseRecord(r->pCurVal, r->nCurVal, &ri);
-      if( iCol < ri.nField ){
+      if( iField>=0 && iField<ri.nField ){
         doltliteResultField(ctx, r->pCurVal, r->nCurVal,
-                            ri.aType[iCol], ri.aOffset[iCol]);
+                            ri.aType[iField], ri.aOffset[iField]);
       }else{
         sqlite3_result_null(ctx);
       }
