@@ -1,0 +1,257 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test workspace-fk-insert-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES p(id));
+  CREATE INDEX t_pid ON t(pid);
+  INSERT INTO p VALUES(1);
+  INSERT INTO t VALUES(1,1);
+  SELECT length(dolt_commit('-Am','base'));
+  DELETE FROM t;
+  DELETE FROM p;
+} {40}
+do_catchsql_test workspace-fk-insert-reject {
+  DELETE FROM dolt_workspace_t;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-insert-unchanged {
+  SELECT count(*) FROM t;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA foreign_key_check;
+  PRAGMA integrity_check;
+} {0 1 ok}
+do_execsql_test workspace-fk-insert-valid {
+  DELETE FROM dolt_workspace_p;
+  DELETE FROM dolt_workspace_t;
+  SELECT id,pid FROM t WHERE pid=1;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA foreign_key_check;
+  PRAGMA integrity_check;
+} {1 1 0 ok}
+
+reset_db
+do_execsql_test workspace-fk-update-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES p(id));
+  INSERT INTO p VALUES(1),(2);
+  INSERT INTO t VALUES(1,1);
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET pid=2;
+  DELETE FROM p WHERE id=1;
+} {40}
+do_catchsql_test workspace-fk-update-reject {
+  DELETE FROM dolt_workspace_t;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-update-unchanged {
+  SELECT id,pid FROM t;
+  SELECT to_pid,from_pid FROM dolt_workspace_t;
+  PRAGMA foreign_key_check;
+} {1 2 2 1}
+
+reset_db
+do_execsql_test workspace-fk-atomic-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES p(id));
+  INSERT INTO p VALUES(1),(2);
+  INSERT INTO t VALUES(1,1),(2,2);
+  SELECT length(dolt_commit('-Am','base'));
+  DELETE FROM t;
+  DELETE FROM p WHERE id=2;
+} {40}
+do_catchsql_test workspace-fk-statement-rollback {
+  DELETE FROM dolt_workspace_t;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-statement-state {
+  SELECT count(*) FROM t;
+  SELECT count(*) FROM dolt_workspace_t;
+} {0 2}
+do_execsql_test workspace-fk-transaction-setup {
+  BEGIN;
+  INSERT INTO p VALUES(9);
+} {}
+do_catchsql_test workspace-fk-transaction-reject {
+  DELETE FROM dolt_workspace_t;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-transaction-state {
+  SELECT count(*) FROM t;
+  SELECT id FROM p ORDER BY id;
+  COMMIT;
+  PRAGMA foreign_key_check;
+  PRAGMA integrity_check;
+} {0 1 9 ok}
+
+reset_db
+do_execsql_test workspace-fk-parent-delete-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES p(id));
+  SELECT length(dolt_commit('-Am','base'));
+  INSERT INTO p VALUES(1);
+  INSERT INTO t VALUES(1,1);
+} {40}
+do_catchsql_test workspace-fk-parent-delete-reject {
+  DELETE FROM dolt_workspace_p;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-parent-delete-state {
+  SELECT id FROM p;
+  SELECT id,pid FROM t;
+  PRAGMA foreign_key_check;
+} {1 1 1}
+
+reset_db
+do_execsql_test workspace-fk-parent-update-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY,code TEXT UNIQUE);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,code TEXT REFERENCES p(code));
+  INSERT INTO p VALUES(1,'a');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE p SET code='b';
+  INSERT INTO t VALUES(1,'b');
+} {40}
+do_catchsql_test workspace-fk-parent-update-reject {
+  DELETE FROM dolt_workspace_p;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-parent-update-state {
+  SELECT id,code FROM p;
+  SELECT id,code FROM t;
+  PRAGMA foreign_key_check;
+} {1 b 1 b}
+
+reset_db
+do_execsql_test workspace-fk-cascade-delete {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INT REFERENCES p(id) ON DELETE CASCADE);
+  SELECT length(dolt_commit('-Am','base'));
+  INSERT INTO p VALUES(1);
+  INSERT INTO t VALUES(1,1);
+  DELETE FROM dolt_workspace_p;
+  SELECT count(*) FROM p;
+  SELECT count(*) FROM t;
+  PRAGMA foreign_key_check;
+} {40 0 0}
+
+reset_db
+do_execsql_test workspace-fk-cascade-update {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY,code TEXT UNIQUE);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,code TEXT REFERENCES p(code) ON UPDATE CASCADE);
+  CREATE TABLE audit(n INT);
+  CREATE TRIGGER p_update AFTER UPDATE ON p BEGIN INSERT INTO audit VALUES(1); END;
+  CREATE TEMP TRIGGER t_update AFTER UPDATE ON main.t BEGIN INSERT INTO audit VALUES(2); END;
+  INSERT INTO p VALUES(1,'a');
+  INSERT INTO t VALUES(1,'a');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE p SET code='b';
+  DELETE FROM audit;
+  DELETE FROM dolt_workspace_p;
+  SELECT code FROM p;
+  SELECT code FROM t;
+  SELECT count(*) FROM dolt_workspace_t;
+  SELECT count(*) FROM audit;
+  PRAGMA foreign_key_check;
+  PRAGMA integrity_check;
+} {40 a a 0 0 ok}
+
+reset_db
+do_execsql_test workspace-fk-set-null {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INT REFERENCES p(id) ON DELETE SET NULL);
+  SELECT length(dolt_commit('-Am','base'));
+  INSERT INTO p VALUES(1);
+  INSERT INTO t VALUES(1,1);
+  DELETE FROM dolt_workspace_p;
+  SELECT id,pid FROM t;
+  PRAGMA foreign_key_check;
+} {40 1 {}}
+
+foreach {name schema parent rows} {
+  composite {id INTEGER PRIMARY KEY,a TEXT,b INT,FOREIGN KEY(a,b) REFERENCES p(a,b)}
+    {a TEXT,b INT,PRIMARY KEY(a,b)} {(1,'a',2)}
+  clustered {id TEXT PRIMARY KEY,pid TEXT REFERENCES p(id)}
+    {id TEXT PRIMARY KEY} {('x','a')}
+  pkonly {id TEXT PRIMARY KEY REFERENCES p(id)}
+    {id TEXT PRIMARY KEY} {('a')}
+  generated {id INTEGER PRIMARY KEY,v TEXT,pid TEXT AS (lower(v)) STORED REFERENCES p(id)}
+    {id TEXT PRIMARY KEY} {(1,'A')}
+  virtual {id INTEGER PRIMARY KEY,v TEXT,pid TEXT AS (lower(v)) VIRTUAL REFERENCES p(id)}
+    {id TEXT PRIMARY KEY} {(1,'A')}
+  anonymous {id TEXT,pid TEXT REFERENCES p(id)}
+    {id TEXT PRIMARY KEY} {('x','a')}
+} {
+  reset_db
+  execsql "PRAGMA foreign_keys=ON; CREATE TABLE p($parent); CREATE TABLE t($schema);"
+  if {$name=="composite"} {execsql {INSERT INTO p VALUES('a',2)}} else {execsql {INSERT INTO p VALUES('a')}}
+  execsql "INSERT INTO t VALUES $rows; SELECT dolt_commit('-Am','base'); DELETE FROM t; DELETE FROM p;"
+  do_catchsql_test workspace-fk-$name-reject {
+    DELETE FROM dolt_workspace_t;
+  } {1 {FOREIGN KEY constraint failed}}
+  do_execsql_test workspace-fk-$name-valid {
+    DELETE FROM dolt_workspace_p;
+    DELETE FROM dolt_workspace_t;
+    SELECT count(*) FROM t;
+    PRAGMA foreign_key_check;
+    PRAGMA integrity_check;
+  } {1 ok}
+}
+
+reset_db
+do_execsql_test workspace-fk-self-reference {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES t(id));
+  INSERT INTO t VALUES(1,1);
+  SELECT length(dolt_commit('-Am','base'));
+  DELETE FROM t;
+  DELETE FROM dolt_workspace_t;
+  SELECT id,pid FROM t;
+  PRAGMA foreign_key_check;
+} {40 1 1}
+
+reset_db
+do_execsql_test workspace-fk-disabled {
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES p(id));
+  INSERT INTO p VALUES(1);
+  INSERT INTO t VALUES(1,1);
+  SELECT length(dolt_commit('-Am','base'));
+  DELETE FROM t;
+  DELETE FROM p;
+  DELETE FROM dolt_workspace_t;
+  SELECT id,pid FROM t;
+} {40 1 1}
+
+reset_db
+do_execsql_test workspace-fk-deferred-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INT REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED);
+  INSERT INTO p VALUES(1);
+  INSERT INTO t VALUES(1,1);
+  SELECT length(dolt_commit('-Am','base'));
+  DELETE FROM t;
+  DELETE FROM p;
+} {40}
+do_catchsql_test workspace-fk-deferred-autocommit {
+  DELETE FROM dolt_workspace_t;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-deferred-transaction {
+  BEGIN;
+  DELETE FROM dolt_workspace_t;
+  SELECT id,pid FROM t;
+} {1 1}
+do_catchsql_test workspace-fk-deferred-commit-reject {
+  COMMIT;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-deferred-repair {
+  DELETE FROM dolt_workspace_p;
+  COMMIT;
+  SELECT id,pid FROM t;
+  PRAGMA foreign_key_check;
+  PRAGMA integrity_check;
+} {1 1 ok}
+
+finish_test
