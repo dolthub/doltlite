@@ -1089,7 +1089,6 @@ static int patchAppendUpdate(PatchCursor *pCur, const char *zTable,
   patchAppendIdent(pStr,zTable);
   sqlite3_str_appendall(pStr," SET ");
   for(i=0; i<pTo->col.nCol; i++){
-    if( pTo->aPk[i]>0 ) continue;
     j = patchColumnIndex(pFrom,pTo->col.azName[i]);
     patchGetValue(pTo,pNew,nNew,intKey,i,&newV);
     if( j>=0 ) patchGetValue(pFrom,pOld,nOld,intKey,j,&oldV);

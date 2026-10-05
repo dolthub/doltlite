@@ -1,0 +1,81 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {kind schema suffix change} {
+  nocase {k TEXT PRIMARY KEY COLLATE NOCASE,v TEXT} {} {k=lower(k)}
+  rtrim {k TEXT PRIMARY KEY COLLATE RTRIM,v TEXT} {} {k=k||' '}
+  descending {k TEXT PRIMARY KEY DESC COLLATE NOCASE,v TEXT} {} {k=lower(k)}
+  without_rowid {k TEXT PRIMARY KEY COLLATE NOCASE,v TEXT} {WITHOUT ROWID} {k=lower(k)}
+  index_collation {k TEXT,v TEXT,PRIMARY KEY(k COLLATE NOCASE)} {} {k=lower(k)}
+  composite {tenant TEXT COLLATE NOCASE,k TEXT COLLATE RTRIM,v TEXT,
+             PRIMARY KEY(k,tenant)} {} {tenant=lower(tenant),k=k||' '}
+  composite_desc {tenant TEXT COLLATE NOCASE,k TEXT COLLATE RTRIM,v TEXT,
+                  PRIMARY KEY(tenant DESC,k DESC)} {WITHOUT ROWID}
+                 {tenant=lower(tenant),k=k||' '}
+  generated {k TEXT PRIMARY KEY COLLATE NOCASE,v TEXT,
+             g TEXT AS(k) STORED,h TEXT AS(lower(k)) VIRTUAL} {} {k=lower(k)}
+  key_only {k TEXT PRIMARY KEY COLLATE NOCASE} {} {k=lower(k)}
+} {
+  foreach payload {unchanged changed} {
+    if {$kind eq "key_only" && $payload eq "changed"} continue
+    foreach refs {working committed} {
+      reset_db
+      execsql "CREATE TABLE t($schema) $suffix"
+      if {$kind eq "key_only"} {
+        execsql {INSERT INTO t(k) VALUES('A'),('B'),('keep')}
+      } elseif {[string match composite* $kind]} {
+        execsql {
+          INSERT INTO t(tenant,k,v)
+          VALUES('TENANT','A','first'),('TENANT','B','second'),('TENANT','keep','keep');
+        }
+      } else {
+        execsql {INSERT INTO t(k,v) VALUES('A','first'),('B','second'),('keep','keep')}
+      }
+      execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_tag('base')}
+      set query {SELECT * FROM t ORDER BY k COLLATE BINARY}
+      set base [execsql $query]
+      set update $change
+      if {$payload eq "changed"} {append update {,v=v||'!'}}
+      execsql "UPDATE t SET $update WHERE k<>'keep'"
+      set target [execsql $query]
+      set from HEAD
+      set to WORKING
+      if {$refs eq "committed"} {
+        execsql {SELECT dolt_commit('-Am','target')}
+        set from HEAD~1
+        set to HEAD
+      }
+      set name patch-pk-collation-$kind-$payload-$refs
+      do_execsql_test $name-count "
+        SELECT count(*) FROM dolt_patch('$from','$to');
+        SELECT count(*) FROM dolt_patch('$to','$from');
+      " {2 2}
+      set forward [execsql "
+        SELECT statement FROM dolt_patch('$from','$to') ORDER BY statement_order;
+      "]
+      set reverse [execsql "
+        SELECT statement FROM dolt_patch('$to','$from') ORDER BY statement_order;
+      "]
+      if {$refs eq "working"} {execsql {SELECT dolt_commit('-Am','target')}}
+      execsql {SELECT dolt_tag('target')}
+      foreach direction {forward reverse} start {base target} \
+          expected [list $target $base] {
+        execsql "SELECT dolt_reset('--hard','$start')"
+        do_test $name-$direction-apply {
+          execsql BEGIN
+          foreach statement [set $direction] {execsql $statement}
+          execsql COMMIT
+          execsql $query
+        } $expected
+        do_execsql_test $name-$direction-integrity {PRAGMA integrity_check} {ok}
+        do_test $name-$direction-reopen {
+          db close
+          sqlite3 db test.db
+          execsql $query
+        } $expected
+      }
+    }
+  }
+}
+
+finish_test
