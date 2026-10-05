@@ -276,6 +276,26 @@ class DiscoveryTests(unittest.TestCase):
             self.assertIn("Timed out (unconfirmed)", summary)
             self.assertIn("No confirmed hotspots in the completed cases", summary)
 
+    def test_large_unconfirmed_ratios_are_listed_for_review(self):
+        def case(name, ratio, **extra):
+            return dict({"id": f"p000/{name}", "ratio": ratio, "doltlite_ms": 8.5,
+                         "sqlite_ms": 8.5 / (ratio or 1), "reproducer": f"p000/{name}.json",
+                         "pairs": [], "confirmed": False}, **extra)
+        cases = [case("floor_105", 105.2), case("floor_24", 24.8), case("small", 9.9),
+                 case("cached", 40.0, uncached_reads=True, cached_ratio=1.2),
+                 case("slow", 50.0, timeout="t", timeout_phase="confirmation"),
+                 case("broken", 50.0, error="e"), case("none", None)]
+        with tempfile.TemporaryDirectory() as tmp:
+            fuzzer.save_report(Path(tmp), {"seed": 1, "runs": 5, "threshold": 3, "min_ms": 20,
+                                           "profiles_completed": 1, "status": "complete",
+                                           "cases": cases})
+            summary = (Path(tmp)/"summary.md").read_text()
+        section = summary.split("### Screened at 10× or more, not confirmed (not filed)\n", 1)[1]
+        listed = [line for line in section.splitlines() if line.startswith("- `")]
+        self.assertEqual(listed, [
+            "- `p000/floor_105`: 105.2×, DoltLite 8.500 ms, SQLite 0.081 ms. `p000/floor_105.json`",
+            "- `p000/floor_24`: 24.8×, DoltLite 8.500 ms, SQLite 0.343 ms. `p000/floor_24.json`"])
+
     def test_main_preserves_timeout_reproducer_without_confirming_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp)/"results"

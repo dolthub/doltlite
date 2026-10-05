@@ -25,6 +25,7 @@ TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
 CACHED_CHECK_KIB = 1048576
 UNCACHED_READS_ISSUE = 3408
 CASE_HEADROOM = 1.5
+REVIEW_RATIO = 10
 CASE_EXTENSION_CAP = 10
 
 
@@ -417,9 +418,24 @@ def save_report(output, report):
         lines += ["", "### Timed out (unconfirmed)", ""]
         for case in timeouts:
             lines.append(f"- `{case['id']}`: `{case['reproducer']}`. {timeout_evidence(case)}{case['timeout']}")
+    review = sorted((x for x in report["cases"] if needs_review(x)), key=lambda x: -x["ratio"])
+    if review:
+        lines += ["", f"### Screened at {REVIEW_RATIO}× or more, not confirmed (not filed)", "",
+                  "Usually SQLite is under the per-query floor, so DoltLite has to clear the floor "
+                  "rather than the ratio. Listed for review; times are per query.", ""]
+        for case in review:
+            lines.append(f"- `{case['id']}`: {case['ratio']:.1f}×, DoltLite {case['doltlite_ms']:.3f} ms, "
+                         f"SQLite {case['sqlite_ms']:.3f} ms. `{case['reproducer']}`")
     for case in errors:
         lines += ["", f"**Error: {case['id']}**", "```text", case["error"], "```"]
     (output/"summary.md").write_text("\n".join(lines) + "\n")
+
+
+def needs_review(case):
+    if (case.get("confirmed") or case.get("uncached_reads")
+            or "timeout" in case or "error" in case):
+        return False
+    return (case.get("ratio") or 0) >= REVIEW_RATIO
 
 
 def positive(value):
