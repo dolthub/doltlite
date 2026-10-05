@@ -238,7 +238,11 @@ jobs:
         # Every feature group on every seed. A pull request rotates one of
         # those groups per seed; this run is the full cross-product, and a
         # divergence here becomes an issue rather than a block.
+        # Runner speed varies several-fold night to night; a budget below the
+        # job timeout ends a slow night with the seeds it covered reported,
+        # where the timeout would cancel it with nothing.
         if DOLTLITE_DIFF_GROUPS=all \
+           DOLTLITE_DIFF_SECONDS=9000 \
            DOLTLITE_DIFF_SAVE_DIR="$GITHUB_WORKSPACE/diff-artifacts" \
            bash ../test/sql_differential_test.sh \
              ./doltlite ./sqlite3-stock "$FIRST" "$LAST" \
@@ -247,6 +251,8 @@ jobs:
         else
           echo "diverged=1" >> "$GITHUB_OUTPUT"
         fi
+        grep -E '^(Time budget|Results:)' "$GITHUB_WORKSPACE/diff-artifacts/sweep.log" \
+          >> "$GITHUB_STEP_SUMMARY" || true
 
     - name: Compose divergence report
       if: steps.sweep.outputs.diverged == '1'

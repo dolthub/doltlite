@@ -216,6 +216,36 @@ class SweepHarnessTest(unittest.TestCase):
             self.assertIn("... 1/3 (seed 1)", proc.stdout)
             self.assertIn("... 3/3 (seed 3)", proc.stdout)
 
+    def test_time_budget_stops_between_seeds_and_reports_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            stub = tmp / "engine"
+            write_stub(stub, "import sys, time\nsys.stdin.read()\ntime.sleep(0.2)\n"
+                             "sys.stdout.write('ok\\n')\n")
+            proc = self.run_sweep(10, 1000, stub, stub,
+                                  extra_env={"DOLTLITE_DIFF_SECONDS": "1"})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertRegex(proc.stdout, r"Time budget of 1s reached: covered seeds 10\.\.(\d+), "
+                                          r"\d+ of 991; \d+\.\.1000 not run")
+            covered = int(proc.stdout.split("covered seeds 10..")[1].split(",")[0])
+            self.assertLess(covered, 1000)
+            self.assertIn("Results: %d passed, 0 failed out of %d seeds" % (
+                covered - 9, covered - 9), proc.stdout)
+
+    def test_time_budget_still_fails_on_a_covered_divergence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            dl = tmp / "dl"
+            sq = tmp / "sq"
+            write_stub(dl, "import sys, time\nsys.stdin.read()\ntime.sleep(0.2)\n"
+                           "sys.stdout.write('dl\\n')\n")
+            write_stub(sq, "import sys\nsys.stdin.read()\nsys.stdout.write('sq\\n')\n")
+            proc = self.run_sweep(1, 1000, dl, sq,
+                                  extra_env={"DOLTLITE_DIFF_SECONDS": "1"})
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("Time budget of 1s reached", proc.stdout)
+            self.assertIn("FAIL: seed 1", proc.stdout)
+
     def test_divergence_saves_script(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
