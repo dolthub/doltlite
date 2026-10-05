@@ -1,6 +1,7 @@
 import hashlib
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 import random
 import re
@@ -42,14 +43,14 @@ def valid_recipe(recipe):
 
 
 def valid_profile(profile):
-    from performance_hotspot_fuzzer import Profile
+    from performance_hotspot_fuzzer import KEYS, Profile
     try:
         p = Profile(**profile)
     except (TypeError, KeyError):
         return False
     numbers = (p.rows, p.payload, p.groups, p.cache_kib, p.stride, p.lookups, p.target, p.start, p.width)
     return (all(type(n) is int for n in numbers) and type(p.skew) is bool and type(p.memory) is bool
-            and p.key in ('integer', 'text') and 1 <= p.rows <= 262144
+            and p.key in KEYS and 1 <= p.rows <= 262144
             and 1 <= p.payload <= 16384 and p.rows*p.payload <= 256*1024*1024
             and 1 <= p.groups <= 4096 and 1 <= p.cache_kib <= 65536
             and 1 <= p.stride <= 32 and 1 <= p.lookups <= 10000
@@ -88,7 +89,7 @@ def setup_sql(profile, recipe):
 
 
 def generated_case(profile, recipe, number=0):
-    from performance_hotspot_fuzzer import Case, key_sql
+    from performance_hotspot_fuzzer import Case, key_columns, key_sql
     if not valid_recipe(recipe):
         raise ValueError('invalid SQL recipe')
     p, r = profile, recipe
@@ -167,8 +168,9 @@ def generated_case(profile, recipe, number=0):
         sql = f'UPDATE t SET {updates[operator]} WHERE {predicates[r["predicate"]]};'
     elif operator in ('upsert_update', 'upsert_ignore', 'replace'):
         insert = 'INSERT OR REPLACE' if operator == 'replace' else 'INSERT'
-        conflict = {'replace': '', 'upsert_ignore': ' ON CONFLICT(id) DO NOTHING',
-                    'upsert_update': " ON CONFLICT(id) DO UPDATE SET v=excluded.v+1,tag=excluded.tag||'x'"}[operator]
+        target = key_columns(p)
+        conflict = {'replace': '', 'upsert_ignore': f' ON CONFLICT({target}) DO NOTHING',
+                    'upsert_update': f" ON CONFLICT({target}) DO UPDATE SET v=excluded.v+1,tag=excluded.tag||'x'"}[operator]
         sql = f'{insert} INTO t SELECT * FROM t WHERE {predicates[r["predicate"]]}{conflict};'
     elif operator == 'insert_select':
         sql = (f'INSERT INTO t SELECT {key_sql(p, f"seq+{p.rows}")},seq+{p.rows},grp,v,tag,payload '
@@ -291,7 +293,7 @@ class Search:
             temp.write_text(json.dumps(self.state, sort_keys=True)+'\n')
             temp.replace(self.history)
 
-    def specs(self, seed, nightly_seeds=False, operators=None):
+    def specs(self, seed, nightly_seeds=False, operators=None, key=None):
         from performance_hotspot_fuzzer import profile_for
         index = 0
         if nightly_seeds:
@@ -301,6 +303,8 @@ class Search:
                 index += 1
         while True:
             profile, recipe, origin = self.choose(profile_for(seed, index), operators)
+            if key:
+                profile = replace(profile, key=key)
             cases = [generated_case(profile, recipe)]
             for number in range(1, 4):
                 variant = fresh(self.rng)

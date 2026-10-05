@@ -23,7 +23,7 @@ class SearchTests(unittest.TestCase):
     def test_composed_sql_results_and_transaction_rollback(self):
         rng = random.Random(23)
         seen = {key: set() for key in search.CHOICES}
-        for key in ('integer', 'text'):
+        for key in fuzzer.KEYS:
             for operator in search.CHOICES['operator']:
                 for context in search.CHOICES['context']:
                     recipe = search.fresh(rng)
@@ -70,7 +70,7 @@ class SearchTests(unittest.TestCase):
         self.assertGreater(len(recipes), 50)
 
     def test_secondary_ranges_and_index_order_results(self):
-        for key in ('integer', 'text'):
+        for key in fuzzer.KEYS:
             for width in (1, 32, 64):
                 p = replace(self.profile, key=key, width=width, start=1)
                 recipe = dict(self.recipe, source='table', operator='index_order',
@@ -85,7 +85,7 @@ class SearchTests(unittest.TestCase):
                                      (len(selected), sum(row[0] for row in selected)))
 
     def test_group_limit_returns_selected_groups(self):
-        for key in ('integer', 'text'):
+        for key in fuzzer.KEYS:
             for skew in (False, True):
                 for stride in (1, 8):
                     for offset in (1, 15):
@@ -103,7 +103,7 @@ class SearchTests(unittest.TestCase):
                                                  (len(selected), sum(groups[g] for g in selected) if selected else None))
 
     def test_layouts_preserve_histograms_and_order_limit_results(self):
-        for key in ('integer', 'text'):
+        for key in fuzzer.KEYS:
             for skew in (False, True):
                 p = replace(self.profile, rows=67, key=key, skew=skew)
                 histograms = []
@@ -166,6 +166,30 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(seen, set(operators))
         self.assertIn('mutation', origins)
 
+    def test_key_shapes_are_opt_in_and_override_every_search_profile(self):
+        for seed in range(50):
+            for index in range(4):
+                self.assertIn(fuzzer.profile_for(seed, index).key, ('integer', 'text'))
+        for key in fuzzer.KEYS:
+            specs = search.Search(7).specs(7, key=key)
+            for _ in range(6):
+                _index, profile, cases, setup, _origin = next(specs)
+                self.assertEqual(profile.key, key)
+                self.assertTrue(search.valid_profile(asdict(profile)))
+                with sqlite3.connect(':memory:') as db:
+                    db.executescript(search.setup_sql(replace(profile, rows=64, start=1, width=16), cases[0].recipe))
+                    info = db.execute("SELECT sql FROM sqlite_schema WHERE name='t'").fetchone()[0]
+                    self.assertEqual('WITHOUT ROWID' in info, key == 'without_rowid')
+                    self.assertEqual('PRIMARY KEY(id, seq)' in info, key == 'composite')
+                    self.assertEqual(db.execute('SELECT typeof(id) FROM t LIMIT 1').fetchone()[0],
+                                     {'integer': 'integer', 'without_rowid': 'integer',
+                                      'blob': 'blob'}.get(key, 'text'))
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as error:
+                fuzzer.main(['--doltlite', 'unused', '--sqlite', 'unused',
+                             '--key', 'blob', '--output', tmp])
+            self.assertEqual(error.exception.code, 2)
+
     def test_operator_filter_requires_search(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit) as error:
@@ -177,7 +201,7 @@ class SearchTests(unittest.TestCase):
     def test_new_write_families_mutate_and_verify_the_target(self):
         operators = ('update_text', 'update_blob', 'update_pk', 'upsert_update',
                      'upsert_ignore', 'replace', 'insert_select')
-        for key in ('integer', 'text'):
+        for key in fuzzer.KEYS:
             p = replace(self.profile, key=key)
             for operator in operators:
                 recipe = dict(self.recipe, operator=operator, predicate='all', context='plain')
