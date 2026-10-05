@@ -1065,6 +1065,8 @@ int doltliteSortKeyFromPkValues(
     aMem[i].db = db;
     rc = sqlite3VdbeMemCopy(&aMem[i], (const Mem*)apVal[i]);
     if( rc!=SQLITE_OK ) goto sortkey_done;
+    sqlite3ValueApplyAffinity(&aMem[i],
+        pTab->aCol[pPk->aiColumn[i]].affinity, ENC(db));
   }
   rc = sortKeyFromMemPrefixCollBuffer(aMem, nVal, nVal, pKI,
                                       ppKey, &nAlloc, pnKey);

@@ -137,4 +137,99 @@ do_test doltlite_historical_affinity-owned-close {
 } {1}
 sqlite3 db test.db
 
+reset_db
+foreach {name definition value predicates} {
+  int {k INT PRIMARY KEY} {42} {
+    text {k='42'} real {k=42.0} exponent {k='4.2e1'}
+    invalid {k='42x'} blob {k=x'3432'} null {k=NULL}
+  }
+  text {k TEXT PRIMARY KEY} {'42'} {
+    integer {k=42} text {k='42'} real {k=42.0}
+    invalid {k='42x'} blob {k=x'3432'} null {k=NULL}
+  }
+  real {k REAL PRIMARY KEY} {42.5} {
+    text {k='42.5'} real {k=42.5} exponent {k='4.25e1'}
+    invalid {k='42.5x'} blob {k=x'34322e35'} null {k=NULL}
+  }
+  numeric {k NUMERIC PRIMARY KEY} {42.5} {
+    text {k='42.5'} real {k=42.5} exponent {k='4.25e1'}
+    invalid {k='42.5x'} blob {k=x'34322e35'} null {k=NULL}
+  }
+  blob {k BLOB PRIMARY KEY} {42} {
+    text {k='42'} integer {k=42} real {k=42.0}
+    invalid {k='42x'} blob {k=x'3432'} null {k=NULL}
+  }
+  composite {a INT, b TEXT, k REAL, PRIMARY KEY(b DESC,a,k)} {42,'7',1.5} {
+    mixed {a='42' AND b=7 AND k='1.5'}
+    exponent {a='4.2e1' AND b=7 AND k='15e-1'}
+    exact {a=42 AND b='7' AND k=1.5}
+    invalid {a='42x' AND b=7 AND k='1.5'}
+    blob {a=x'3432' AND b=7 AND k='1.5'}
+    null {a=NULL AND b=7 AND k='1.5'}
+  }
+} {
+  reset_db
+  do_execsql_test doltlite_historical_affinity-pk-$name-setup "
+    CREATE TABLE t($definition);
+    INSERT INTO t VALUES($value);
+    SELECT length(dolt_commit('-Am','pk affinity'));
+    SELECT dolt_tag('pk');
+  " {40 0}
+  foreach {predicate where} $predicates {
+    set expected($predicate) [db onecolumn "SELECT count(*) FROM t WHERE $where"]
+  }
+  foreach phase {live reopen dropped} {
+    if {$phase ne "live"} {
+      if {$phase eq "dropped"} {
+        db eval {DROP TABLE t; SELECT dolt_commit('-Am','drop pk table')}
+      }
+      db close
+      sqlite3 db test.db
+    }
+    foreach {surface source} {
+      snapshot dolt_at_t('pk')
+      history dolt_history_t('pk')
+    } {
+      foreach {predicate where} $predicates {
+        do_execsql_test doltlite_historical_affinity-pk-$name-$phase-$surface-$predicate "
+          SELECT count(*) FROM $source WHERE $where;
+          SELECT count(*) FROM (SELECT * FROM $source LIMIT -1) WHERE $where;
+        " [list $expected($predicate) $expected($predicate)]
+      }
+      if {$name eq "composite"} {
+        set sql "SELECT count(*),typeof(?1),typeof(?2),typeof(?3)
+                   FROM $source WHERE a=?1 AND b=?2 AND k=?3"
+        set types {text int text}
+        set values {42 7 1.5}
+        set result {1 text integer text}
+      } else {
+        set sql "SELECT count(*),typeof(?1) FROM $source WHERE k=?1"
+        set types [expr {$name eq "text" ? "int" : "text"}]
+        set values [expr {$name in {real numeric} ? "42.5" : "42"}]
+        set result [list [expr {$name eq "blob" ? 0 : 1}] \
+                        [expr {$name eq "text" ? "integer" : "text"}]]
+      }
+      do_test doltlite_historical_affinity-pk-$name-$phase-$surface-bound {
+        set stmt [sqlite3_prepare_v2 db $sql -1 tail]
+        set i 0
+        foreach type $types val $values {
+          incr i
+          if {$type eq "int"} {
+            sqlite3_bind_int $stmt $i $val
+          } else {
+            sqlite3_bind_text $stmt $i $val -1
+          }
+        }
+        set step [sqlite3_step $stmt]
+        set row {}
+        for {set i 0} {$i < [sqlite3_column_count $stmt]} {incr i} {
+          lappend row [sqlite3_column_text $stmt $i]
+        }
+        sqlite3_finalize $stmt
+        list $step $row
+      } [list SQLITE_ROW $result]
+    }
+  }
+}
+
 finish_test
