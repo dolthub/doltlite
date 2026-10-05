@@ -34,6 +34,19 @@ WIDE_CASES = (("scan_small", 4096, WIDE_CACHE_KIB),
               ("update_small", 16384, WIDE_CACHE_KIB),
               ("index_fetch_small", 16384, WIDE_CACHE_KIB),
               ("index_fetch_small", 16384, WIDE_THRASH_CACHE_KIB))
+# Repetitions timed per run, sized from the fastest CI baselines to about
+# 100 ms, so the gate's 10 ms floor is a tenth of the batch instead of most
+# of a single run. Workloads near 50 ms or more, and the uncached reads that
+# measure first touch, run once.
+MIN_BATCH_US = 50000
+BATCH = {"wide_p4096_scan_small": 200, "wide_p16384_index_fetch_small": 160,
+         "wide_p4096_point_small": 50, "key_fetch_integer": 20,
+         "pending_index_probes_deleted": 16, "key_fetch_text": 15,
+         "pending_index_probes_live": 14, "wide_thrash_p16384_index_fetch_small": 10,
+         "wide_p16384_update_small": 8, "wide_p4096_point_blob": 5,
+         "pending_update_memory": 4, "pending_update_file": 4,
+         "pending_update_payload_memory": 3, "wide_p16384_scan_blob": 3,
+         "wide_p16384_point_blob": 3}
 WIDE_PAYLOADS = tuple(sorted({payload for _op, payload, _cache in WIDE_CASES}))
 WIDE_LOOKUPS = 4096
 WIDE_NAME = re.compile(r"wide_(?:thrash_)?p([0-9]+)_([a-z_]+)")
@@ -379,16 +392,16 @@ def measure_warm_statement(binary, db, name, query, expected, cache_kib):
     the timing is the steady state of that access pattern alone. Writes run
     and roll back inside a transaction."""
     write = query.lstrip().upper().startswith("UPDATE")
+    batch = BATCH.get(name, 1)
+    timed = [*(["BEGIN;"] if write else []), ".timer on", query, ".timer off",
+             *(["SELECT changes();", "ROLLBACK;"] if write else [])]
     statements = [".headers off", ".mode list", ".output /dev/null",
                   "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{cache_kib};",
                   *(["BEGIN;", query, "ROLLBACK;"] if write else [query]),
                   ".output stdout", "SELECT name FROM sqlite_schema WHERE 0;",
-                  *(["BEGIN;"] if write else []),
-                  f".print BEGIN {name}", ".timer on", query, ".timer off",
-                  *(["SELECT changes();"] if write else []),
-                  f".print END {name}", *(["ROLLBACK;"] if write else [])]
+                  f".print BEGIN {name}", *timed * batch, f".print END {name}"]
     return parse_session(sql(binary, db, "\n".join(statements)),
-                         [(name, None, expected)])
+                         [(name, None, [expected] * batch)])
 
 
 def measure_wide(binary, db):
@@ -545,17 +558,18 @@ def measure_bucket(binary, databases):
     for name, storage, key, indexes, cache_kib, prepare, query, expected in bucket_workloads():
         write = query.lstrip().upper().startswith("UPDATE")
         memory = storage == "memory"
+        batch = BATCH.get(name, 1)
+        timed = ["BEGIN;", ".output /dev/null", prepare, ".output stdout",
+                 ".timer on", query, ".timer off",
+                 *(["SELECT changes();"] if write else []), "ROLLBACK;"]
         statements = [".headers off", ".mode list", ".output /dev/null",
                       "PRAGMA mmap_size=0;", f"PRAGMA cache_size=-{cache_kib};",
                       *([bucket_setup(key, indexes)] if memory else []),
-                      "BEGIN;", prepare, query, "ROLLBACK;",
-                      "BEGIN;", prepare, ".output stdout",
-                      f".print BEGIN {name}", ".timer on", query, ".timer off",
-                      *(["SELECT changes();"] if write else []),
-                      f".print END {name}", "ROLLBACK;"]
+                      "BEGIN;", prepare, query, "ROLLBACK;", ".output stdout",
+                      f".print BEGIN {name}", *timed * batch, f".print END {name}"]
         db = ":memory:" if memory else databases[(key, indexes)]
         measured.update(parse_session(sql(binary, db, "\n".join(statements)),
-                                      [(name, None, expected)]))
+                                      [(name, None, [expected] * batch)]))
     return measured
 
 
@@ -632,6 +646,15 @@ def write_results(samples, result_path, sample_path):
           "Stock ratios expose standing gaps and are reported separately.")
     if any(name.startswith("retained_") for name in names):
         print("\nRetained workloads report fixed batches; xN in a workload name is the number of repetitions.")
+    if any(BATCH.get(name, 1) > 1 for name in names):
+        print("\nA workload marked ×N times N repetitions as one batch, each after the same "
+              "untimed warm-up, so small workloads clear the 10 ms floor; its ms are the batch total.")
+    short = [name for name in names if section_of(name) != "uncached_reads"
+             and medians["baseline"][name] < MIN_BATCH_US]
+    if short:
+        print(f"\n**Batch too small:** {', '.join(f'`{name}`' for name in short)} took under "
+              f"{MIN_BATCH_US // 1000} ms on the PR base, so the 10 ms floor hides most of a "
+              "regression; raise its entry in `BATCH`.")
     for section, title in SECTIONS:
         section_names = [name for name in names if section_of(name) == section]
         if not section_names:
@@ -667,7 +690,7 @@ def write_results(samples, result_path, sample_path):
         for name in section_names:
             base, candidate = medians["baseline"][name], medians["candidate"][name]
             stock = medians["stock"][name]
-            label = name
+            label = f"{name} ×{BATCH[name]}" if BATCH.get(name, 1) > 1 else name
             if name.startswith('retained_'):
                 issue, description = name.split('_', 2)[1:]
                 category = section_of(name)

@@ -316,25 +316,58 @@ class HotspotTests(unittest.TestCase):
             name = statements.split(".print BEGIN ", 1)[1].split("\n", 1)[0]
             payload, op = hotspots.WIDE_NAME.fullmatch(name).groups()
             expected = dict((o, e) for o, _, e in hotspots.wide_workloads(int(payload)))[op]
-            return f"BEGIN {name}\n{expected}\nRun Time: real 0.002 user 0.002 sys 0.0\nEND {name}\n"
+            timer = "Run Time: real 0.002 user 0.002 sys 0.0\n"
+            one = timer + f"{expected}\n" if op.startswith("update") else f"{expected}\n" + timer
+            return f"BEGIN {name}\n" + one * hotspots.BATCH.get(name, 1) + f"END {name}\n"
 
         with patch.object(hotspots, "sql", side_effect=fake):
             measured = hotspots.measure_wide("engine", "db")
         self.assertEqual(sorted(measured), sorted(hotspots.wide_name(*case) for case in hotspots.WIDE_CASES))
         self.assertEqual(len(measured), 8)
         self.assertIn("wide_thrash_p16384_index_fetch_small", measured)
-        self.assertTrue(all(value == 2000 for value in measured.values()))
+        for name, value in measured.items():
+            self.assertEqual(value, 2000 * hotspots.BATCH.get(name, 1), name)
+        self.assertGreater(hotspots.BATCH["wide_p4096_scan_small"], 1)
         for script in scripts:
             query = script.split(".timer on\n", 1)[1].split("\n", 1)[0]
             self.assertLess(script.index(query), script.index(".timer on"))
             name = script.split(".print BEGIN ", 1)[1].split("\n", 1)[0]
+            batch = hotspots.BATCH.get(name, 1)
             cache = hotspots.WIDE_THRASH_CACHE_KIB if "_thrash_" in name else hotspots.WIDE_CACHE_KIB
             self.assertIn(f"PRAGMA cache_size=-{cache};", script)
+            self.assertEqual(script.count(".timer on"), batch)
+            self.assertEqual(script.count(query), batch + 1)
             if query.startswith("UPDATE"):
-                self.assertEqual(script.count("ROLLBACK;"), 2)
-                self.assertLess(script.index(".timer off"), script.index("SELECT changes();"))
+                self.assertEqual(script.count("ROLLBACK;"), batch + 1)
+                timed = script.split(f".print BEGIN {name}", 1)[1]
+                for rep in timed.split("BEGIN;")[1:]:
+                    self.assertLess(rep.index(".timer off"), rep.index("SELECT changes();"))
+                    self.assertLess(rep.index("SELECT changes();"), rep.index("ROLLBACK;"))
             else:
                 self.assertNotIn("BEGIN;", script)
+
+    def test_batches_name_real_workloads_and_leave_large_ones_single(self):
+        names = {hotspots.wide_name(*case) for case in hotspots.WIDE_CASES}
+        names |= {name for name, *_ in hotspots.bucket_workloads()}
+        self.assertLessEqual(set(hotspots.BATCH), names)
+        self.assertTrue(all(type(k) is int and k > 1 for k in hotspots.BATCH.values()))
+        uncached = {name for name, *_ in hotspots.uncached_workloads(64, 8)}
+        self.assertFalse(uncached & set(hotspots.BATCH))
+
+    def test_report_flags_batches_under_the_minimum(self):
+        names = ["wide_p4096_scan_small", "uncached_scan_small", "pk_rewrite_text_no_indexes"]
+        samples = {"baseline": [{names[0]: 20000, names[1]: 20000, names[2]: 90000}],
+                   "candidate": [{name: 20000 for name in names}],
+                   "stock": [{name: 20000 for name in names}]}
+        with tempfile.TemporaryDirectory() as directory:
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report):
+                hotspots.write_results(samples, Path(directory)/"r.tsv", Path(directory)/"s.tsv")
+        line = [l for l in report.getvalue().splitlines() if l.startswith("**Batch too small:**")]
+        self.assertEqual(len(line), 1)
+        self.assertIn("`wide_p4096_scan_small`", line[0])
+        self.assertNotIn("uncached", line[0])
+        self.assertNotIn("pk_rewrite", line[0])
 
     def test_wide_section_is_reported_and_gated(self):
         names = [hotspots.wide_name(*case) for case in hotspots.WIDE_CASES]
@@ -350,7 +383,8 @@ class HotspotTests(unittest.TestCase):
             section = text.split("### Wide Row Trade-offs\n", 1)[1]
             self.assertIn("https://github.com/dolthub/doltlite/issues/3325", section)
             self.assertEqual(section.count("| wide_"), 8)
-            self.assertIn("| wide_thrash_p16384_index_fetch_small | 100.000 | 200.000 | 2.00× | 50.000 | 4.00× |", section)
+            self.assertIn("| wide_thrash_p16384_index_fetch_small ×10 | 100.000 | 200.000 | 2.00× | 50.000 | 4.00× |", section)
+            self.assertIn("A workload marked ×N times N repetitions", text)
             parsed, _ = benchmark_compare.parse_input_artifact(f"hotspots={result}")
             analysis = benchmark_compare.analyze(parsed, 1.25, 1.15, 10000)
             self.assertIn(("hotspots", "wide_tradeoffs"), analysis["section_failures"])
@@ -496,14 +530,17 @@ class HotspotTests(unittest.TestCase):
 
     def test_bucket_measurement_warms_times_only_the_query_and_rolls_back(self):
         workloads = hotspots.bucket_workloads()
-        outputs = [f"BEGIN {name}\n{expected}\nRun Time: real 0.01 user 0.01 sys 0.0\nEND {name}\n"
-                   if not query.startswith("UPDATE") else
-                   f"BEGIN {name}\nRun Time: real 0.01 user 0.01 sys 0.0\n{expected}\nEND {name}\n"
+        timer = "Run Time: real 0.01 user 0.01 sys 0.0\n"
+        outputs = [f"BEGIN {name}\n"
+                   + ((timer + f"{expected}\n") if query.startswith("UPDATE")
+                      else (f"{expected}\n" + timer)) * hotspots.BATCH.get(name, 1)
+                   + f"END {name}\n"
                    for name, _s, _k, _i, _c, _p, query, expected in workloads]
         databases = {fixture: Path(f"{'-'.join(fixture)}.db") for fixture in hotspots.bucket_fixture_names()}
         with patch.object(hotspots, "sql", side_effect=outputs) as sql:
             measured = hotspots.measure_bucket("new", databases)
-        self.assertEqual(measured, {name: 10000 for name, *_ in workloads})
+        self.assertEqual(measured, {name: 10000 * hotspots.BATCH.get(name, 1)
+                                    for name, *_ in workloads})
         for call, (name, storage, key, indexes, cache_kib, prepare, query, _e) in zip(sql.call_args_list, workloads):
             db, script = call.args[1], call.args[2]
             setup = hotspots.bucket_setup(key, indexes)
@@ -514,16 +551,20 @@ class HotspotTests(unittest.TestCase):
                 self.assertEqual(db, databases[(key, indexes)])
                 self.assertNotIn(setup, script)
             self.assertIn(f"PRAGMA cache_size=-{cache_kib};", script)
+            batch = hotspots.BATCH.get(name, 1)
             timed = script.split(f".print BEGIN {name}", 1)[1]
-            self.assertEqual(script.count(query), 2)
-            self.assertLess(timed.index(".timer on"), timed.index(query))
-            self.assertLess(timed.index(query), timed.index(".timer off"))
-            self.assertTrue(script.rstrip().endswith("ROLLBACK;"))
+            self.assertEqual(script.count(query), batch + 1)
+            self.assertEqual(timed.count(".timer on"), batch)
             body = script.split(setup, 1)[1] if storage == "memory" else script
-            self.assertEqual(body.count("BEGIN;"), 2)
-            self.assertEqual(body.count("ROLLBACK;"), 2)
-            if prepare:
-                self.assertLess(script.rindex(prepare), script.index(".timer on"))
+            self.assertEqual(body.count("BEGIN;"), batch + 1)
+            self.assertEqual(body.count("ROLLBACK;"), batch + 1)
+            self.assertTrue(timed.rstrip().endswith(f"ROLLBACK;\n.print END {name}"))
+            for rep in timed.split("BEGIN;")[1:]:
+                if prepare:
+                    self.assertLess(rep.index(prepare), rep.index(".timer on"))
+                self.assertLess(rep.index(".timer on"), rep.index(query))
+                self.assertLess(rep.index(query), rep.index(".timer off"))
+                self.assertLess(rep.index(".timer off"), rep.index("ROLLBACK;"))
 
     def test_bucket_sections_are_reported_and_gated(self):
         names = [name for name, *_ in hotspots.bucket_workloads()]
@@ -541,7 +582,8 @@ class HotspotTests(unittest.TestCase):
                                       ("pending_edits", 3418, 5)):
             body = text.split(f"### {dict(hotspots.SECTIONS)[section]}\n", 1)[1].split("### ", 1)[0]
             self.assertIn(f"https://github.com/dolthub/doltlite/issues/{issue}", body)
-            self.assertEqual(sum(1 for name in names if f"| {name} |" in body), count)
+            self.assertEqual(sum(1 for name in names
+                                 if f"| {name} |" in body or f"| {name} ×" in body), count)
             self.assertIn(("hotspots", section), analysis["section_failures"])
 
     def test_transaction_mutations_preserve_storage_mode_and_timing(self):
