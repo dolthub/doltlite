@@ -24,6 +24,8 @@ TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
 # (#3408), which is known and not filed.
 CACHED_CHECK_KIB = 1048576
 UNCACHED_READS_ISSUE = 3408
+CASE_HEADROOM = 1.5
+CASE_EXTENSION_CAP = 10
 
 
 @dataclass(frozen=True)
@@ -179,7 +181,9 @@ class BudgetExpired(Exception):
 
 
 class CaseTimeout(RuntimeError):
-    pass
+    def __init__(self, message, evidence=None):
+        super().__init__(message)
+        self.evidence = evidence or {}
 
 
 class Runner:
@@ -228,16 +232,53 @@ def pair_order(index):
 def measure_case(runner, binaries, databases, p, case, runs, threshold, min_ms, setup=None,
                  min_query_ms=0):
     options = {'setup': setup} if p.memory else {}
-    reference = runner.measure(binaries["sqlite"], databases["sqlite"], p, case, 1, **options)
-    pilot = runner.measure(binaries["doltlite"], databases["doltlite"], p, case, 1, **options)
+    evidence = {"timeout_phase": "reference"}
+    try:
+        started = time.monotonic()
+        reference = runner.measure(binaries["sqlite"], databases["sqlite"], p, case, 1, **options)
+        reference_wall = time.monotonic() - started
+        evidence.update(timeout_phase="pilot", sqlite_ms=reference["ms"])
+        started = time.monotonic()
+        pilot = runner.measure(binaries["doltlite"], databases["doltlite"], p, case, 1, **options)
+        pilot_wall = time.monotonic() - started
+        evidence.update(timeout_phase="confirmation", doltlite_ms=pilot["ms"])
+    except CaseTimeout as exc:
+        raise CaseTimeout(str(exc), evidence) from exc
     if pilot["result"] != reference["result"]:
         raise ValueError(f"result mismatch: reference={reference}, pilot={pilot}")
     repeats = min(1024, max(1, math.ceil(min_ms*2.5 / max(reference["ms"], 0.01))),
                   max(1, int(1000/max(reference["ms"], pilot["ms"], 0.01))))
+    extend_case_deadline(runner, runs, repeats, reference_wall, pilot_wall,
+                         reference["ms"], pilot["ms"])
     # Sub-floor SQLite queries are too fast to compare, so a finding needs
     # DoltLite at the threshold times the floor for every single query.
     floor = max(min_ms, min_query_ms*repeats)
     pairs = []
+    try:
+        return confirm_case(runner, binaries, databases, p, case, runs, threshold, repeats,
+                            floor, reference, pairs, options)
+    except CaseTimeout as exc:
+        evidence["pairs_completed"] = len(pairs)
+        raise CaseTimeout(str(exc), evidence) from exc
+
+
+def extend_case_deadline(runner, runs, repeats, reference_wall, pilot_wall,
+                         reference_ms, pilot_ms):
+    """The fixed case budget covers the reference and pilot runs. Confirmation
+    then needs runs+1 pairs at the chosen repeats, which for a statement of
+    several seconds, or an in-memory fixture rebuilt per run, does not fit;
+    extend the deadline to the measured work instead of timing out."""
+    deadline = getattr(runner, "case_deadline", None)
+    if not isinstance(deadline, (int, float)):
+        return
+    pair = reference_wall + pilot_wall + (repeats - 1) * (reference_ms + pilot_ms) / 1000
+    needed = time.monotonic() + CASE_HEADROOM * (runs + 1) * pair
+    cap = time.monotonic() + CASE_EXTENSION_CAP * runner.timeout
+    runner.case_deadline = max(deadline, min(needed, cap))
+
+
+def confirm_case(runner, binaries, databases, p, case, runs, threshold, repeats, floor,
+                 reference, pairs, options):
     for i in range(runs+1):
         measurements = {}
         for arm in pair_order(i):
@@ -306,6 +347,22 @@ def binary_info(runner, path):
             "version": runner.run([str(path), ":memory:", "SELECT sqlite_version(),sqlite_source_id();"]).strip()}
 
 
+def timeout_evidence(case):
+    phase = case.get("timeout_phase")
+    if not phase:
+        return ""
+    text = f"Ran out during {phase}"
+    if "sqlite_ms" in case:
+        text += f"; SQLite {case['sqlite_ms']:.1f} ms"
+    if "doltlite_ms" in case:
+        text += f", DoltLite {case['doltlite_ms']:.1f} ms"
+        if case["sqlite_ms"] > 0:
+            text += f" ({case['doltlite_ms']/case['sqlite_ms']:.1f}x)"
+    if "pairs_completed" in case:
+        text += f", confirmation pairs done: {case['pairs_completed']}"
+    return text + ". "
+
+
 def save_report(output, report):
     (output/"results.json").write_text(json.dumps(report, indent=2) + "\n")
     good = sorted((x for x in report["cases"] if x.get("confirmed")), key=lambda x: -x["ratio"])
@@ -359,7 +416,7 @@ def save_report(output, report):
     if timeouts:
         lines += ["", "### Timed out (unconfirmed)", ""]
         for case in timeouts:
-            lines.append(f"- `{case['id']}`: `{case['reproducer']}`. {case['timeout']}")
+            lines.append(f"- `{case['id']}`: `{case['reproducer']}`. {timeout_evidence(case)}{case['timeout']}")
     for case in errors:
         lines += ["", f"**Error: {case['id']}**", "```text", case["error"], "```"]
     (output/"summary.md").write_text("\n".join(lines) + "\n")
@@ -518,6 +575,7 @@ def main(argv=None):
                             raise
                         except CaseTimeout as exc:
                             record["timeout"] = str(exc)
+                            record.update(exc.evidence)
                         except (RuntimeError, ValueError) as exc:
                             record["error"] = str(exc)
                         finally:
