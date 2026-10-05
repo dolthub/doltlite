@@ -612,11 +612,15 @@ def main(argv=None):
                             record["incomplete"] = "search budget exhausted during confirmation"
                             report["cases"].append(record)
                             raise
+                        # A classification re-measure can fail after the case confirmed;
+                        # an unclassified case must not be reported or filed as confirmed.
                         except CaseTimeout as exc:
                             record["timeout"] = str(exc)
                             record.update(exc.evidence)
+                            record["confirmed"] = False
                         except (RuntimeError, ValueError) as exc:
                             record["error"] = str(exc)
+                            record["confirmed"] = False
                         finally:
                             runner.case_deadline = None
                         search.observe(profile, case, record)

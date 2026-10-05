@@ -297,6 +297,38 @@ class DiscoveryTests(unittest.TestCase):
         self.assertNotIn("pending_edits", record)
         self.assertNotIn("Known: pending edit map", summary)
 
+    def test_a_failed_control_unconfirms_the_case(self):
+        for failure, field in ((ValueError("result mismatch: reference=1, pilot=2"), "error"),
+                               (fuzzer.CaseTimeout("command timed out"), "timeout")):
+            with self.subTest(field=field):
+                calls = []
+                def measure(*args, **kwargs):
+                    calls.append(1)
+                    if len(calls) > 1:
+                        raise failure
+                    pairs = [{"doltlite_ms": 600.0, "sqlite_ms": 100.0}] * 5
+                    return {"pairs": pairs, "result": "1", "repeats": 1, "doltlite_ms": 600.0,
+                            "sqlite_ms": 100.0, "ratio": 6.0, "confirmed": True}
+                profile = replace(self.profile, cache_kib=fuzzer.CACHED_CHECK_KIB)
+                case = fuzzer.Case("generated_0", "INSERT INTO t SELECT * FROM t WHERE 1;", "SELECT 1;",
+                                   "UPDATE t SET v=v+1;", {"context": "after_update"})
+                with tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp)/"results"
+                    with patch.object(fuzzer.shutil, "copyfile"), patch.object(fuzzer.Runner, "run", return_value="ok"), \
+                         patch.object(fuzzer, "binary_info", return_value={}), \
+                         patch.object(fuzzer, "probe_counter_scale", return_value=None), \
+                         patch.object(fuzzer.Search, "specs", return_value=iter([(0, profile, [case], "", "fresh")])), \
+                         patch.object(fuzzer, "measure_case", side_effect=measure):
+                        fuzzer.main(["--doltlite", "unused", "--sqlite", "unused", "--output", str(output), "--search"])
+                    record = json.loads((output/"results.json").read_text())["cases"][0]
+                    summary = (output/"summary.md").read_text()
+                self.assertEqual(len(calls), 2)
+                self.assertIn(field, record)
+                self.assertFalse(record["confirmed"])
+                self.assertNotIn("pending_edits", record)
+                self.assertIn("No confirmed hotspots in the completed cases", summary)
+                self.assertNotIn("| p000/generated_0 |", summary)
+
     def test_contexts_without_pending_edits_skip_the_control(self):
         record, calls, _summary = self.run_pending_check("plain", 0.3)
         self.assertEqual(calls, [""])
