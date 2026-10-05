@@ -740,8 +740,10 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     idxNum |= AT_IDX_REF;
     /* Historical roots may differ in key shape: never omit PK constraints. */
     if( iPkCol<0 ){
+      Table *pTab = sqlite3FindTable(v->db, v->zTableName, "main");
+      Index *pPk = pTab ? sqlite3PrimaryKeyIndex(pTab) : 0;
       pInfo->idxNum = idxNum;
-      if( doltliteBestIndexClusteredPkEq(pInfo, &v->cols, AT_IDX_PK_EQ,
+      if( doltliteBestIndexClusteredPkEq(pInfo, &v->cols, pPk, AT_IDX_PK_EQ,
                                          &argvIdx)!=SQLITE_OK ){
         return SQLITE_NOMEM;
       }

@@ -141,6 +141,7 @@ static SQLITE_INLINE int doltlitePkRangeMatchesCursorUpper(
 static SQLITE_INLINE int doltliteBestIndexClusteredPkEq(
   sqlite3_index_info *pInfo,
   const DoltliteColInfo *ci,
+  const Index *pPk,
   int idxEq,
   int *pnArg
 ){
@@ -150,6 +151,7 @@ static SQLITE_INLINE int doltliteBestIndexClusteredPkEq(
 
   if( !pInfo || !ci || !pnArg ) return SQLITE_OK;
   if( ci->bHasRowid || ci->nPk<=0 || !ci->aColToRec ) return SQLITE_OK;
+  if( !pPk || pPk->nKeyCol!=ci->nPk ) return SQLITE_OK;
 
   aDecl = sqlite3_malloc64((sqlite3_int64)ci->nPk * sizeof(int));
   aEq = sqlite3_malloc64((sqlite3_int64)ci->nPk * sizeof(int));
@@ -174,7 +176,8 @@ static SQLITE_INLINE int doltliteBestIndexClusteredPkEq(
       const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[j];
       if( !pC->usable ) continue;
       if( pC->iColumn!=aDecl[i] ) continue;
-      if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+      if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ
+       && doltliteVtabConstraintMatchesCollation(pInfo, j, pPk->azColl[i]) ){
         aEq[i] = j;
         break;
       }

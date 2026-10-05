@@ -276,8 +276,10 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
         100000.0, 100000, 100.0, 100, 1000.0, 1000);
   }else{
     int nPkArg = 1;
+    Table *pTab = sqlite3FindTable(vt->db, vt->zTableName, "main");
+    Index *pPk = pTab ? sqlite3PrimaryKeyIndex(pTab) : 0;
     p->idxNum = 0;
-    if( doltliteBestIndexClusteredPkEq(p, &vt->cols, HIST_IDX_PK_EQ,
+    if( doltliteBestIndexClusteredPkEq(p, &vt->cols, pPk, HIST_IDX_PK_EQ,
                                        &nPkArg)!=SQLITE_OK ){
       return SQLITE_NOMEM;
     }
