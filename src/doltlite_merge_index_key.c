@@ -780,7 +780,91 @@ int doltliteIndexMutMapRowDelta(
   return rc;
 }
 
-int doltliteIndexApplyRowDelta(
+static int indexCheckUniqueInsert(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *cache,
+  const ProllyHash *pRoot,
+  u8 flags,
+  Index *pIdx,
+  KeyInfo *pKeyInfo,
+  const ProllyMutMapEntry *pEntry
+){
+  ProllyCursor cur;
+  UnpackedRecord *pUnpacked = 0;
+  const u8 *pRecord = pEntry->pVal;
+  int nRecord = pEntry->nVal;
+  u8 *pDecoded = 0, *pPrefix = 0, *pRow = 0;
+  int nDecoded = 0, nPrefix = 0, nRowAlloc = 0;
+  int i, res, scan = 0, rc = SQLITE_OK;
+
+  if( nRecord==0 ){
+    rc = recordFromSortKeyBufferColl(pEntry->pKey, pEntry->nKey, pKeyInfo,
+                                     &pDecoded, &nDecoded, &nRecord);
+    if( rc!=SQLITE_OK ) goto done;
+    pRecord = pDecoded;
+  }
+  pUnpacked = sqlite3VdbeAllocUnpackedRecord(pKeyInfo);
+  if( !pUnpacked ){ rc = SQLITE_NOMEM; goto done; }
+  memset(pUnpacked->aMem, 0,
+         (pKeyInfo->nKeyField+1) * sizeof(Mem));
+  sqlite3VdbeRecordUnpack(nRecord, pRecord, pUnpacked);
+  if( pUnpacked->nField<pIdx->nKeyCol ){
+    rc = SQLITE_CORRUPT;
+    goto done;
+  }
+  pUnpacked->nField = pIdx->nKeyCol;
+  for(i=0; i<pIdx->nKeyCol; i++){
+    Mem *pMem = &pUnpacked->aMem[i];
+    CollSeq *pColl = pKeyInfo->aColl[i];
+    if( pMem->flags & MEM_Null ) goto done;
+    if( pColl && sqlite3_stricmp(pColl->zName,"NOCASE")==0
+     && (pMem->flags & MEM_Str) && pMem->n>0
+     && memchr(pMem->z,0,(size_t)pMem->n) ){
+      scan = 1;
+    }
+  }
+  rc = sortKeyFromRecordPrefixColl(pRecord, nRecord, pIdx->nKeyCol,
+                                   pKeyInfo, &pPrefix, &nPrefix);
+  if( rc!=SQLITE_OK ) goto done;
+  prollyCursorInit(&cur, cs, cache, pRoot, flags);
+  /* NOCASE equality ignores bytes after NUL that remain in the sort key. */
+  if( scan ) rc = prollyCursorFirst(&cur, &res);
+  else{
+    rc = prollyCursorSeekBlob(&cur, pPrefix, nPrefix, &res);
+    if( rc==SQLITE_OK && res<0 ) rc = prollyCursorNext(&cur);
+  }
+  while( rc==SQLITE_OK && prollyCursorIsValid(&cur) ){
+    const u8 *pKey, *pVal;
+    int nKey, nVal, cmp;
+    prollyCursorKey(&cur, &pKey, &nKey);
+    if( !scan && (nKey<nPrefix || memcmp(pKey,pPrefix,nPrefix)!=0) ) break;
+    if( nKey!=pEntry->nKey || memcmp(pKey,pEntry->pKey,nKey)!=0 ){
+      prollyCursorValue(&cur, &pVal, &nVal);
+      if( nVal==0 ){
+        rc = recordFromSortKeyBufferColl(pKey, nKey, pKeyInfo,
+                                         &pRow, &nRowAlloc, &nVal);
+        if( rc!=SQLITE_OK ) break;
+        pVal = pRow;
+      }
+      pUnpacked->errCode = 0;
+      cmp = sqlite3VdbeRecordCompare(nVal, pVal, pUnpacked);
+      rc = pUnpacked->errCode;
+      if( rc==SQLITE_OK && cmp==0 ) rc = SQLITE_CONSTRAINT_UNIQUE;
+      if( rc!=SQLITE_OK ) break;
+    }
+    rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+done:
+  sqlite3DbFree(db, pUnpacked);
+  sqlite3_free(pDecoded);
+  sqlite3_free(pPrefix);
+  sqlite3_free(pRow);
+  return rc;
+}
+
+int doltliteIndexApplyRowDeltaChecked(
   sqlite3 *db,
   ChunkStore *cs,
   ProllyCache *cache,
@@ -790,7 +874,8 @@ int doltliteIndexApplyRowDelta(
   int iPKey, i64 intKey,
   const u8 *pTreeKey, int nTreeKey,
   const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal
+  const u8 *pNewVal, int nNewVal,
+  int checkUnique
 ){
   KeyInfo *pKeyInfo = 0;
   ProllyMutMap mm;
@@ -821,12 +906,38 @@ int doltliteIndexApplyRowDelta(
     mut.pEdits = &mm;
     mut.flags = idxFlags ? idxFlags : (u8)PROLLY_NODE_BLOBKEY;
     rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK && checkUnique && IsUniqueIndex(pIdx) ){
+      int i;
+      for(i=0; i<mm.nEntries && rc==SQLITE_OK; i++){
+        if( mm.aEntries[i].op==PROLLY_EDIT_INSERT ){
+          rc = indexCheckUniqueInsert(db, cs, cache, &mut.newRoot,
+              mut.flags, pIdx, pKeyInfo, &mm.aEntries[i]);
+        }
+      }
+    }
     if( rc==SQLITE_OK ) *pIdxRoot = mut.newRoot;
   }
 
   prollyMutMapFree(&mm);
   sqlite3KeyInfoUnref(pKeyInfo);
   return rc;
+}
+
+int doltliteIndexApplyRowDelta(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *cache,
+  ProllyHash *pIdxRoot,
+  u8 idxFlags,
+  Index *pIdx,
+  int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+){
+  return doltliteIndexApplyRowDeltaChecked(db, cs, cache, pIdxRoot, idxFlags,
+      pIdx, iPKey, intKey, pTreeKey, nTreeKey,
+      pOldVal, nOldVal, pNewVal, nNewVal, 0);
 }
 
 #endif /* DOLTLITE_PROLLY */

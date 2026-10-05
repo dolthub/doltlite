@@ -608,9 +608,9 @@ static int wsApplyRowToIndex(
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pSrc, int nSrc, const u8 *pTgt, int nTgt
 ){
-  return doltliteIndexApplyRowDelta(
+  return doltliteIndexApplyRowDeltaChecked(
       db, cs, pCache, &idxEntry->root, idxEntry->flags, pIdx,
-      iPKey, intKey, pKey, nKey, pSrc, nSrc, pTgt, nTgt);
+      iPKey, intKey, pKey, nKey, pSrc, nSrc, pTgt, nTgt, 1);
 }
 
 static void wsEmptyEntryRoot(struct TableEntry *p){
@@ -944,6 +944,12 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
       rc = wsApplyRowToIndex(db, cs, pCache, idxEntry, pIdx, pTab->iPKey,
                              r->pKey, r->nKey, r->intKey,
                              pSrc, nSrc, pTgt, nTgt);
+      if( rc==SQLITE_CONSTRAINT_UNIQUE ){
+        sqlite3_free(p->base.zErrMsg);
+        p->base.zErrMsg = sqlite3_mprintf(
+            "UNIQUE constraint failed: index '%s'", pIdx->zName);
+        if( !p->base.zErrMsg ) rc = SQLITE_NOMEM;
+      }
     }
   }
   if( rc!=SQLITE_OK ){
