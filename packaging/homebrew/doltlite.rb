@@ -35,7 +35,12 @@ class Doltlite < Formula
       include.install "sqlite3.h" => "doltlite.h"
       include.install "#{buildpath}/src/doltlite_remotesrv.h"
       lib.install "libdoltlite.a"
-      lib.install OS.mac? ? "libdoltlite.dylib" : "libdoltlite.so"
+      if OS.mac?
+        lib.install "libdoltlite.dylib"
+      else
+        lib.install "libdoltlite.so" => "libdoltlite.so.0"
+        lib.install_symlink "libdoltlite.so.0" => "libdoltlite.so"
+      end
     end
   end
 
