@@ -331,6 +331,40 @@ class DiscoveryTests(unittest.TestCase):
         self.assertAlmostEqual(report["cases"][0]["threshold"], 3.6)
         self.assertNotIn("threshold", report["cases"][1])
 
+    def run_cached_check(self, cached_ratio):
+        calls = []
+        def measure(runner, binaries, databases, p, case, runs, threshold, min_ms, setup=None, min_query_ms=0):
+            calls.append(p.cache_kib)
+            cached = p.cache_kib == fuzzer.CACHED_CHECK_KIB
+            pairs = [{"doltlite_ms": 920.0, "sqlite_ms": 2.7}] * 5
+            return {"pairs": pairs, "result": "1", "repeats": 23, "doltlite_ms": 40.0, "sqlite_ms": 0.12,
+                    "ratio": cached_ratio if cached else 343.0, "confirmed": not cached}
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/"results"
+            with patch.object(fuzzer.shutil, "copyfile"), patch.object(fuzzer.Runner, "run", return_value="ok"), \
+                 patch.object(fuzzer, "binary_info", return_value={}), \
+                 patch.object(fuzzer, "probe_counter_scale", return_value=None), \
+                 patch.object(fuzzer, "profile_for", return_value=replace(self.profile, cache_kib=16384)), \
+                 patch.object(fuzzer, "measure_case", side_effect=measure):
+                rc = fuzzer.main(["--doltlite", "unused", "--sqlite", "unused", "--output", str(output),
+                                  "--profiles", "1", "--case", "scan_payload"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(calls, [16384, fuzzer.CACHED_CHECK_KIB])
+            return json.loads((output/"results.json").read_text())["cases"][0], (output/"summary.md").read_text()
+
+    def test_gap_that_persists_with_a_cached_table_stays_confirmed(self):
+        record, summary = self.run_cached_check(300.0)
+        self.assertTrue(record["confirmed"])
+        self.assertNotIn("uncached_reads", record)
+        self.assertEqual(record["cached_ratio"], 300.0)
+        self.assertNotIn("Known: uncached reads", summary)
+
+    def test_gap_that_closes_with_a_cached_table_is_uncached_reads(self):
+        record, summary = self.run_cached_check(1.4)
+        self.assertFalse(record["confirmed"])
+        self.assertTrue(record["uncached_reads"])
+        self.assertIn("Known: uncached reads", summary)
+
     def test_nightly_is_independent_and_preserves_reproducers(self):
         root = Path(__file__).resolve().parents[1]
         workflow = (root/".github/workflows/nightly-hotspots.yml").read_text()
