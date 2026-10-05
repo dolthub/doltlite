@@ -608,9 +608,9 @@ static int wsApplyRowToIndex(
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pSrc, int nSrc, const u8 *pTgt, int nTgt
 ){
-  return doltliteIndexApplyRowDelta(
+  return doltliteIndexApplyRowDeltaChecked(
       db, cs, pCache, &idxEntry->root, idxEntry->flags, pIdx,
-      iPKey, intKey, pKey, nKey, pSrc, nSrc, pTgt, nTgt);
+      iPKey, intKey, pKey, nKey, pSrc, nSrc, pTgt, nTgt, 1);
 }
 
 static void wsEmptyEntryRoot(struct TableEntry *p){
@@ -816,6 +816,26 @@ static int wsProjectRecord(
   return SQLITE_OK;
 }
 
+static int wsUniqueConstraintError(WorkspaceVtab *p, Index *pIdx){
+  sqlite3_str *pMsg = sqlite3_str_new(p->db);
+  int i, rc;
+  sqlite3_str_appendall(pMsg, "UNIQUE constraint failed: ");
+  if( pIdx->aColExpr ){
+    sqlite3_str_appendf(pMsg, "index '%q'", pIdx->zName);
+  }else{
+    for(i=0; i<pIdx->nKeyCol; i++){
+      int col = pIdx->aiColumn[i];
+      assert( col>=0 );
+      sqlite3_str_appendf(pMsg, "%s%s.%s", i ? ", " : "",
+          pIdx->pTable->zName, pIdx->pTable->aCol[col].zCnName);
+    }
+  }
+  rc = sqlite3_str_errcode(pMsg);
+  sqlite3_free(p->base.zErrMsg);
+  p->base.zErrMsg = sqlite3_str_finish(pMsg);
+  return rc==SQLITE_OK ? SQLITE_CONSTRAINT_UNIQUE : rc;
+}
+
 static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged){
   sqlite3 *db;
   ChunkStore *cs;
@@ -944,6 +964,9 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
       rc = wsApplyRowToIndex(db, cs, pCache, idxEntry, pIdx, pTab->iPKey,
                              r->pKey, r->nKey, r->intKey,
                              pSrc, nSrc, pTgt, nTgt);
+      if( rc==SQLITE_CONSTRAINT_UNIQUE ){
+        rc = wsUniqueConstraintError(p, pIdx);
+      }
     }
   }
   if( rc!=SQLITE_OK ){

@@ -103,3 +103,4 @@ doltlite_group_metadata
 doltlite_column_metadata
 doltlite_prefix_cache
 doltlite_batch_replacement
+doltlite_workspace_unique

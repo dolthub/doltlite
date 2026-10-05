@@ -622,4 +622,33 @@ UPDATE t SET extra = 9 WHERE id = 1;
 UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;
 "
 
+oracle_error "workspace_unique_stage_rejected" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-Am','base');
+UPDATE t SET v='c' WHERE id=1;
+UPDATE t SET v='a' WHERE id=2;
+UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2;
+"
+
+oracle_error "workspace_unique_unstage_rejected" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-Am','base');
+UPDATE t SET v='c' WHERE id=1;
+UPDATE t SET v='a' WHERE id=2;
+UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;
+UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2;
+UPDATE dolt_workspace_t SET staged=0 WHERE to_id=1;
+"
+
+oracle_error "workspace_composite_unique_stage_rejected" "
+CREATE TABLE t(id INTEGER PRIMARY KEY,a INT,b TEXT,UNIQUE(a,b DESC));
+INSERT INTO t VALUES(1,1,'a'),(2,1,'b');
+SELECT dolt_commit('-Am','base');
+UPDATE t SET b='x' WHERE id=1;
+UPDATE t SET b='a' WHERE id=2;
+UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2;
+"
+
 vc_oracle_finish

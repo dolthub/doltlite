@@ -1,0 +1,155 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test workspace-unique-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE);
+  INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'),(4,'d');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET v='x' WHERE id=1;
+  UPDATE t SET v='a' WHERE id=2;
+  UPDATE t SET v='y' WHERE id=3;
+} {40}
+
+do_catchsql_test workspace-unique-reject {
+  UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2;
+} {1 {UNIQUE constraint failed: t.v}}
+do_execsql_test workspace-unique-unchanged {
+  SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+  SELECT id,v FROM t ORDER BY id;
+  PRAGMA integrity_check;
+} {0 1 x 2 a 3 y 4 d ok}
+do_execsql_test workspace-unique-valid-stage {
+  UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;
+  UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2;
+  SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+} {2}
+do_catchsql_test workspace-unique-unstage-reject {
+  UPDATE dolt_workspace_t SET staged=0 WHERE to_id=1;
+} {1 {UNIQUE constraint failed: t.v}}
+do_execsql_test workspace-unique-unstage-unchanged {
+  SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+  SELECT length(dolt_commit('-m','partial'));
+  SELECT dolt_reset('--hard');
+  SELECT id,v FROM t ORDER BY id;
+  PRAGMA integrity_check;
+} {2 40 0 1 x 2 a 3 c 4 d ok}
+
+reset_db
+do_execsql_test workspace-unique-atomic-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT UNIQUE);
+  INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'),(4,'d');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET v='x' WHERE id=1;
+  UPDATE t SET v='y' WHERE id=3;
+  UPDATE t SET v='c' WHERE id=2;
+  UPDATE t SET v='z' WHERE id=4;
+} {40}
+do_test workspace-unique-statement-rollback {
+  lindex [catchsql {
+    UPDATE dolt_workspace_t SET staged=1 WHERE to_id IN (1,2);
+  }] 0
+} {1}
+do_execsql_test workspace-unique-rollback-state {
+  SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+} {0}
+do_execsql_test workspace-unique-txn-setup {
+  BEGIN;
+  UPDATE dolt_workspace_t SET staged=1 WHERE to_id=4;
+} {}
+do_test workspace-unique-txn-reject {
+  lindex [catchsql {
+    UPDATE dolt_workspace_t SET staged=1 WHERE to_id IN (1,2);
+  }] 0
+} {1}
+do_execsql_test workspace-unique-txn-unchanged {
+  SELECT to_id FROM dolt_workspace_t WHERE staged=1;
+  COMMIT;
+  SELECT length(dolt_commit('-m','previous statement'));
+  SELECT dolt_reset('--hard');
+  SELECT id,v FROM t ORDER BY id;
+  PRAGMA integrity_check;
+} {4 40 0 1 a 2 b 3 c 4 z ok}
+
+foreach {name schema rows changes columns} {
+  nocase {id INTEGER PRIMARY KEY,v TEXT COLLATE NOCASE UNIQUE}
+    {(1,'AbC'),(2,'b')} {UPDATE t SET v='x' WHERE id=1; UPDATE t SET v='abc' WHERE id=2;}
+    {t.v}
+  rtrim {id INTEGER PRIMARY KEY,v TEXT COLLATE RTRIM UNIQUE}
+    {(1,'a '),(2,'b')} {UPDATE t SET v='x' WHERE id=1; UPDATE t SET v='a' WHERE id=2;}
+    {t.v}
+  clustered {id TEXT PRIMARY KEY,v TEXT UNIQUE}
+    {('1','a'),('2','b')} {UPDATE t SET v='x' WHERE id='1'; UPDATE t SET v='a' WHERE id='2';}
+    {t.v}
+  composite {id INTEGER PRIMARY KEY,a INT,b TEXT,UNIQUE(a,b DESC)}
+    {(1,1,'a'),(2,1,'b')} {UPDATE t SET b='x' WHERE id=1; UPDATE t SET b='a' WHERE id=2;}
+    {t.a, t.b}
+  nocase-nul {id INTEGER PRIMARY KEY,v TEXT COLLATE NOCASE UNIQUE}
+    {(1,CAST(x'610078' AS TEXT)),(2,'b')} {UPDATE t SET v='x' WHERE id=1; UPDATE t SET v=CAST(x'410079' AS TEXT) WHERE id=2;}
+    {t.v}
+} {
+  reset_db
+  execsql "CREATE TABLE t($schema); INSERT INTO t VALUES $rows;"
+  execsql "SELECT dolt_commit('-Am','base'); $changes"
+  do_catchsql_test workspace-unique-$name-reject {
+    UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2 OR to_id='2';
+  } [list 1 "UNIQUE constraint failed: $columns"]
+  do_execsql_test workspace-unique-$name-unchanged {
+    SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+    PRAGMA integrity_check;
+  } {0 ok}
+}
+
+foreach {name index rows changes constraint} {
+  expression {CREATE UNIQUE INDEX uv ON t(lower(v))}
+    {(1,'A',1),(2,'b',1)} {UPDATE t SET v='x' WHERE id=1; UPDATE t SET v='a' WHERE id=2;}
+    {index 'uv'}
+  expression-quote {CREATE UNIQUE INDEX "u'v" ON t(lower(v))}
+    {(1,'A',1),(2,'b',1)} {UPDATE t SET v='x' WHERE id=1; UPDATE t SET v='a' WHERE id=2;}
+    {index 'u''v'}
+  partial {CREATE UNIQUE INDEX uv ON t(v) WHERE enabled=1}
+    {(1,'a',1),(2,'a',0)} {UPDATE t SET enabled=0 WHERE id=1; UPDATE t SET enabled=1 WHERE id=2;}
+    {t.v}
+  generated {CREATE UNIQUE INDEX uv ON t(folded)}
+    {(1,'A',1),(2,'b',1)} {UPDATE t SET v='x' WHERE id=1; UPDATE t SET v='a' WHERE id=2;}
+    {t.folded}
+} {
+  reset_db
+  execsql {CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT,enabled INT,folded TEXT AS (lower(v)) VIRTUAL)}
+  execsql "$index; INSERT INTO t(id,v,enabled) VALUES $rows;"
+  execsql "SELECT dolt_commit('-Am','base'); $changes"
+  do_catchsql_test workspace-unique-$name-reject {
+    UPDATE dolt_workspace_t SET staged=1 WHERE to_id=2;
+  } [list 1 "UNIQUE constraint failed: $constraint"]
+  do_execsql_test workspace-unique-$name-unchanged {
+    SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+    PRAGMA integrity_check;
+  } {0 ok}
+}
+
+reset_db
+do_execsql_test workspace-unique-null {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT UNIQUE);
+  INSERT INTO t VALUES(1,NULL),(2,'b');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET v=NULL WHERE id=2;
+  UPDATE dolt_workspace_t SET staged=1;
+  SELECT length(dolt_commit('-m','null'));
+  SELECT dolt_reset('--hard');
+  SELECT count(*) FROM t WHERE v IS NULL;
+  PRAGMA integrity_check;
+} {40 40 0 2 ok}
+
+reset_db
+do_execsql_test workspace-unique-same-key {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT UNIQUE,n INT);
+  INSERT INTO t VALUES(1,'a',0);
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET n=1;
+  UPDATE dolt_workspace_t SET staged=1;
+  SELECT length(dolt_commit('-m','non-key edit'));
+  SELECT dolt_reset('--hard');
+  SELECT v,n FROM t;
+  PRAGMA integrity_check;
+} {40 40 0 a 1 ok}
+
+finish_test
