@@ -254,4 +254,109 @@ do_execsql_test workspace-fk-deferred-repair {
   PRAGMA integrity_check;
 } {1 1 ok}
 
+foreach fk {0 1} {
+  foreach rows {1 2} {
+    reset_db
+    execsql "PRAGMA foreign_keys=$fk;"
+    execsql {
+      CREATE TABLE p(id INTEGER PRIMARY KEY);
+      CREATE TABLE t(id INTEGER PRIMARY KEY,pid INT REFERENCES p(id));
+      CREATE TABLE marker(id INTEGER PRIMARY KEY);
+      INSERT INTO p VALUES(1);
+      INSERT INTO t VALUES(1,1),(2,1);
+      SELECT dolt_commit('-Am','base');
+    }
+    execsql "DELETE FROM t WHERE id<=$rows;"
+    execsql {INSERT INTO marker VALUES(42),(43),(44)}
+    set total [db onecolumn {SELECT total_changes()}]
+    do_execsql_test workspace-fk-counters-$fk-$rows-restore {
+      DELETE FROM dolt_workspace_t;
+      SELECT changes(),total_changes()-$total,last_insert_rowid();
+      SELECT count(*) FROM t;
+      SELECT count(*) FROM dolt_workspace_t;
+    } [list $rows $rows 44 2 0]
+    set total [db onecolumn {SELECT total_changes()}]
+    do_execsql_test workspace-fk-counters-$fk-$rows-empty {
+      DELETE FROM dolt_workspace_t;
+      SELECT changes(),total_changes()-$total,last_insert_rowid();
+    } {0 0 44}
+  }
+}
+
+reset_db
+execsql {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY,code TEXT UNIQUE);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,code TEXT
+    REFERENCES p(code) ON UPDATE CASCADE ON DELETE CASCADE);
+  CREATE TABLE audit(id INTEGER);
+  CREATE TRIGGER restored AFTER INSERT ON t BEGIN
+    INSERT INTO audit VALUES(new.id);
+  END;
+  CREATE TRIGGER cascaded AFTER UPDATE ON t BEGIN
+    INSERT INTO audit VALUES(new.id);
+  END;
+  CREATE TABLE marker(id INTEGER PRIMARY KEY);
+  INSERT INTO p VALUES(1,'a');
+  INSERT INTO t VALUES(1,'a'),(2,'a');
+  SELECT dolt_commit('-Am','base');
+  UPDATE p SET code='b';
+  DELETE FROM audit;
+  INSERT INTO marker VALUES(42),(43),(44);
+}
+set total [db onecolumn {SELECT total_changes()}]
+do_execsql_test workspace-fk-counters-cascade-update {
+  DELETE FROM dolt_workspace_p;
+  SELECT changes(),total_changes()-$total,last_insert_rowid();
+  SELECT id,code FROM t ORDER BY id;
+  SELECT count(*) FROM audit;
+} {1 1 44 1 a 2 a 0}
+execsql {
+  INSERT INTO p VALUES(2,'b');
+  INSERT INTO t VALUES(3,'b'),(4,'b');
+  DELETE FROM audit;
+  INSERT INTO marker VALUES(45),(46),(47);
+}
+set total [db onecolumn {SELECT total_changes()}]
+do_execsql_test workspace-fk-counters-cascade-delete {
+  DELETE FROM dolt_workspace_p;
+  SELECT changes(),total_changes()-$total,last_insert_rowid();
+  SELECT id,code FROM t ORDER BY id;
+  SELECT count(*) FROM audit;
+} {1 1 47 1 a 2 a 0}
+execsql {
+  DELETE FROM t;
+  INSERT INTO marker VALUES(48),(49),(50);
+}
+set total [db onecolumn {SELECT total_changes()}]
+do_execsql_test workspace-fk-counters-trigger-suppressed {
+  DELETE FROM dolt_workspace_t;
+  SELECT changes(),total_changes()-$total,last_insert_rowid();
+  SELECT id,code FROM t ORDER BY id;
+  SELECT count(*) FROM audit;
+} {2 2 50 1 a 2 a 0}
+
+reset_db
+execsql {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  CREATE TABLE t(id INTEGER PRIMARY KEY,pid INT REFERENCES p(id));
+  CREATE TABLE marker(id INTEGER PRIMARY KEY);
+  INSERT INTO p VALUES(1),(2);
+  INSERT INTO t VALUES(1,1),(2,2);
+  SELECT dolt_commit('-Am','base');
+  DELETE FROM t;
+  DELETE FROM p WHERE id=2;
+  INSERT INTO marker VALUES(42),(43),(44);
+}
+set total [db onecolumn {SELECT total_changes()}]
+do_catchsql_test workspace-fk-counters-failure {
+  DELETE FROM dolt_workspace_t;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-fk-counters-failure-state {
+  SELECT changes(),total_changes()-$total,last_insert_rowid();
+  SELECT count(*) FROM t;
+  SELECT count(*) FROM dolt_workspace_t;
+} {0 0 44 0 2}
+
 finish_test
