@@ -68,17 +68,39 @@ def profile_for(seed, index):
     return replace(profile, memory=rng.randrange(4)==0)
 
 
+# Nightly profiles draw integer or text; the other shapes are opt-in with --key.
+KEYS = ("integer", "text", "blob", "composite", "without_rowid")
+
+
 def key_sql(p, value):
-    return str(value) if p.key == "integer" else f"printf('%016x', {value})"
+    if p.key in ("integer", "without_rowid"):
+        return str(value)
+    if p.key == "blob":
+        return f"CAST(printf('%016x', {value}) AS BLOB)"
+    return f"printf('%016x', {value})"
+
+
+def key_columns(p):
+    return "id,seq" if p.key == "composite" else "id"
+
+
+def table_sql(p):
+    key, suffix = {"integer": ("id INTEGER PRIMARY KEY", ""),
+                   "text": ("id TEXT PRIMARY KEY", ""),
+                   "blob": ("id BLOB PRIMARY KEY", ""),
+                   "composite": ("id TEXT NOT NULL", ""),
+                   "without_rowid": ("id INTEGER PRIMARY KEY", " WITHOUT ROWID")}[p.key]
+    pk = ", PRIMARY KEY(id, seq)" if p.key == "composite" else ""
+    return (f"CREATE TABLE t({key}, seq INTEGER NOT NULL, "
+            "grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, "
+            f"payload BLOB NOT NULL{pk}){suffix};")
 
 
 def fixture_sql(p):
     group = f"i%{p.groups}"
     if p.skew:
         group = f"CASE WHEN i%10<9 THEN 0 ELSE {group} END"
-    parts = [f"CREATE TABLE t(id {p.key.upper()} PRIMARY KEY, seq INTEGER NOT NULL, "
-             "grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, "
-             "payload BLOB NOT NULL);", "BEGIN;"]
+    parts = [table_sql(p), "BEGIN;"]
     for first in range(1, p.rows+1, 4096):
         last = min(p.rows, first+4095)
         parts.append(f"WITH RECURSIVE c(i) AS (VALUES({first}) UNION ALL "
@@ -455,6 +477,7 @@ def main(argv=None):
     parser.add_argument("--operator", action="append", choices=CHOICES['operator'],
                         help="restrict generated search to these operators; may be repeated")
     parser.add_argument("--nightly-seeds", action="store_true", help="revisit retired PR workloads before random search")
+    parser.add_argument("--key", choices=KEYS, help="give every generated search profile this primary-key shape")
     parser.add_argument("--history", type=Path)
     parser.add_argument("--issues", type=Path)
     parser.add_argument("--profiles", type=positive, default=12)
@@ -474,6 +497,8 @@ def main(argv=None):
         parser.error("--search cannot be combined with replay/profile/case filters")
     if args.nightly_seeds and not args.search:
         parser.error("--nightly-seeds requires --search")
+    if args.key and not args.search:
+        parser.error("--key requires --search")
     if args.operator and not args.search:
         parser.error("--operator requires --search")
     output = args.output.resolve()
@@ -503,7 +528,8 @@ def main(argv=None):
             specs = [(0, Profile(**replay["profile"]), [Case(**replay["case"])],
                       replay["setup_sql"] if "setup_sql" in replay else (args.replay.parent/"setup.sql").read_text(), "replay")]
         elif args.search:
-            specs = search.specs(args.seed, nightly_seeds=args.nightly_seeds, operators=args.operator)
+            specs = search.specs(args.seed, nightly_seeds=args.nightly_seeds, operators=args.operator,
+                                 key=args.key)
             if args.nightly_seeds:
                 from performance_hotspot_seeds import BASELINES
                 baselines = json.loads(BASELINES.read_text())
