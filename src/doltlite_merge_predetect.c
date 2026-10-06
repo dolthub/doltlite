@@ -644,6 +644,9 @@ static int mergePass1CheckIndexOverDivergentAdd(MergePass1Ctx *c){
 ** an index cannot name a column the adopted table does not have.
 ** Position-stable renames, including a swap: same count, each slot's
 ** definition matches. Adds, drops, and type changes are not. */
+static int mergeTextsEqualModuloRenames(
+  const char *zAnc, const char *zSide, char **azPairs, int nPairs
+);
 static int mergePureRenamePairs(
   const char *zAncSql,
   const char *zSideSql,
@@ -679,6 +682,9 @@ static int mergePureRenamePairs(
       n += 2;
     }
   }
+  /* A check or foreign key is not a column rename. Leave that CREATE
+  ** for the schema merge instead of rewriting every side to one text. */
+  if( !mergeTextsEqualModuloRenames(zAncSql, zSideSql, az, n) ) goto pure_done;
   *pbPure = 1;
   *pazPairs = az;
   *pnPairs = n;

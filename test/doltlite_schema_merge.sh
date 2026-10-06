@@ -3242,4 +3242,293 @@ run_test_error_match "overlapping_check_columns_conflict" \
   "SELECT dolt_merge('feat');" "conflict|Merge has" "$DB"
 rm -f "$DB"
 
+# The other side's CHECK, DEFAULT, and added column survive together.
+DB=/tmp/test_merge_check_default_add_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 1);
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 9,
+               extra INT DEFAULT 3, CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t(id, v, w) VALUES (1, 1, 1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 4, w INT DEFAULT 1);
+INSERT INTO t(id, v, w) VALUES (1, 1, 1);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "check_default_add_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "check_default_add_row" \
+  "SELECT id || '|' || v || '|' || w || '|' || extra FROM t WHERE id=1;" \
+  "1|1|1|3" "$DB"
+run_test "check_default_add_defaults" \
+  "SELECT (SELECT dflt_value FROM pragma_table_info('t') WHERE name='v') || '|' ||
+          (SELECT dflt_value FROM pragma_table_info('t') WHERE name='w') || '|' ||
+          (SELECT dflt_value FROM pragma_table_info('t') WHERE name='extra');" \
+  "4|9|3" "$DB"
+run_test "check_default_add_check" \
+  "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%';" \
+  "1" "$DB"
+run_test "check_default_add_insert_defaults" \
+  "INSERT INTO t(id) VALUES(2);
+   SELECT v || '|' || w || '|' || extra FROM t WHERE id=2;" \
+  "4|9|3" "$DB"
+run_test_error_match "check_default_add_rejects" \
+  "INSERT INTO t(id, v, w) VALUES(3, 1, -5);" "CHECK constraint failed" "$DB"
+rm -f "$DB"
+
+# A default change and a new check, with no column add, both survive.
+DB=/tmp/test_merge_default_check_only_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 1);
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 1,
+               CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 4, w INT DEFAULT 1);
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "default_check_only_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "default_check_only_kept" \
+  "SELECT (SELECT dflt_value FROM pragma_table_info('t') WHERE name='v') || '|' ||
+          (SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%');" \
+  "4|1" "$DB"
+run_test_error_match "default_check_only_rejects" \
+  "INSERT INTO t(id, w) VALUES(2, -5);" "CHECK constraint failed" "$DB"
+rm -f "$DB"
+
+# Their foreign key stays when we add a different column.
+DB=/tmp/test_merge_fk_plus_column_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+INSERT INTO p VALUES (1, 10);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, x INT);
+INSERT INTO c VALUES (1, 10, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, x INT, b INT DEFAULT 2,
+               CONSTRAINT fk_u FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO c(id, u, x) VALUES (1, 10, 1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE c ADD COLUMN a INT DEFAULT 1;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "fk_plus_column_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "fk_plus_column_shape" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('c') WHERE name='a') || '|' ||
+          (SELECT count(*) FROM pragma_table_info('c') WHERE name='b') || '|' ||
+          (SELECT dflt_value FROM pragma_table_info('c') WHERE name='a') || '|' ||
+          (SELECT dflt_value FROM pragma_table_info('c') WHERE name='b') || '|' ||
+          (SELECT count(*) FROM pragma_foreign_key_list('c'));" \
+  "1|1|1|2|1" "$DB"
+run_test "fk_plus_column_violation" \
+  "INSERT INTO c(id, u, x) VALUES(2, 99, 1);
+   SELECT count(*) FROM pragma_foreign_key_check;" \
+  "1" "$DB"
+rm -f "$DB"
+
+# Their foreign key names a column they added in the same merge.
+DB=/tmp/test_merge_fk_on_added_col_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+INSERT INTO p VALUES (1, 10);
+CREATE TABLE c(id INTEGER PRIMARY KEY, x INT);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+CREATE TABLE c(id INTEGER PRIMARY KEY, x INT, u INT,
+               CONSTRAINT fk_u FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO c(id, x, u) VALUES (1, 1, 10);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE c ADD COLUMN a INT DEFAULT 1;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "fk_on_added_col_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "fk_on_added_col_shape" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('c') WHERE name='a') || '|' ||
+          (SELECT count(*) FROM pragma_table_info('c') WHERE name='u') || '|' ||
+          (SELECT count(*) FROM pragma_foreign_key_list('c'));" \
+  "1|1|1" "$DB"
+run_test "fk_on_added_col_violation" \
+  "INSERT INTO c(id, x, u) VALUES(2, 1, 99);
+   SELECT count(*) FROM pragma_foreign_key_check;" \
+  "1" "$DB"
+rm -f "$DB"
+
+# Their check names a column our rename removes.
+DB=/tmp/test_merge_check_renamed_away_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN v TO val;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_error_lastline "check_renamed_away_description" \
+  "$(sc "SELECT description FROM dolt_schema_conflicts;")" \
+  "check 'ck_v' references a column that will be deleted after merge" \
+  "$DB" 'conflict|Merge has'
+run_test "check_renamed_away_not_committed" \
+  "SELECT sql FROM sqlite_master WHERE name='t';" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT)" "$DB"
+rm -f "$DB"
+
+# Dropping the checked column is the same conflict.
+DB=/tmp/test_merge_check_dropped_col_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN w;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_error_lastline "check_dropped_col_description" \
+  "$(sc "SELECT description FROM dolt_schema_conflicts;")" \
+  "check 'ck_w' references a column that will be deleted after merge" \
+  "$DB" 'conflict|Merge has'
+rm -f "$DB"
+
+# A check on a column the rename keeps is composed with the rename.
+DB=/tmp/test_merge_check_rename_other_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN v TO val;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "check_rename_other_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "check_rename_other_kept" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('t') WHERE name='val') || '|' ||
+          (SELECT count(*) FROM pragma_table_info('t') WHERE name='w') || '|' ||
+          (SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%');" \
+  "1|1|1" "$DB"
+run_test_error_match "check_rename_other_rejects" \
+  "INSERT INTO t(id, val, w) VALUES(2, 1, -1);" "CHECK constraint failed" "$DB"
+rm -f "$DB"
+
+# Their rename, our check on a column that still exists.
+DB=/tmp/test_merge_their_rename_our_check_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t RENAME COLUMN v TO val;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "their_rename_our_check_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "their_rename_our_check_kept" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('t') WHERE name='val') || '|' ||
+          (SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%');" \
+  "1|1" "$DB"
+rm -f "$DB"
+
+# Disjoint checks plus their added column.
+DB=/tmp/test_merge_disjoint_checks_add_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, extra INT DEFAULT 3,
+               CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t(id, v, w) VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "disjoint_checks_add_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "disjoint_checks_add_kept" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('t') WHERE name='extra') || '|' ||
+          (SELECT extra FROM t WHERE id=1) || '|' ||
+          (CASE WHEN sql LIKE '%ck_v%' THEN 1 ELSE 0 END) || '|' ||
+          (CASE WHEN sql LIKE '%ck_w%' THEN 1 ELSE 0 END)
+     FROM sqlite_master WHERE name='t';" \
+  "1|3|1|1" "$DB"
+rm -f "$DB"
+
+# One side tightens a check; the other adds a column.
+DB=/tmp/test_merge_modify_check_add_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, CONSTRAINT ck_v CHECK(v > 5));
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN extra INT DEFAULT 3;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "modify_check_add_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "modify_check_add_kept" \
+  "SELECT (SELECT extra FROM t WHERE id=1) || '|' ||
+          (SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%v > 5%');" \
+  "3|1" "$DB"
+run_test_error_match "modify_check_add_rejects" \
+  "INSERT INTO t(id, v) VALUES(2, 1);" "CHECK constraint failed" "$DB"
+rm -f "$DB"
+
 dltest_finish

@@ -403,6 +403,8 @@ int recordSchemaColumnChanges(
   aNew[*pnSchemaActions].nDropColumns = nDropCols;
   aNew[*pnSchemaActions].azRenameColumns = azRenameCols;
   aNew[*pnSchemaActions].nRenameColumns = nRenameCols;
+  aNew[*pnSchemaActions].azClauses = 0;
+  aNew[*pnSchemaActions].nClauses = 0;
   aNew[*pnSchemaActions].zRenameTable = 0;
   (*pnSchemaActions)++;
   return SQLITE_OK;

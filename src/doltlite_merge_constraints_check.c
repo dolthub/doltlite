@@ -271,7 +271,7 @@ static void dlChecksFree(DlCheck *a, int n){
   sqlite3_free(a);
 }
 
-static int dlColsContain(const char *zCols, const char *zName){
+int dlColsContain(const char *zCols, const char *zName){
   int n;
   const char *p;
   if( !zCols || !zName ) return 0;
@@ -629,6 +629,13 @@ done:
   return rc;
 }
 
+static int dlComposeRetained(
+  const char *zAnc, const char *zOurs, const char *zTheirs,
+  int schemaChoice, const char *zTable,
+  SchemaMergeAction *aAct, int nAct,
+  char **pzSql, char **pzErr, int *pbConflict, int *pbHandled
+);
+
 int schemaApplyDisjointCheckUnions(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
@@ -654,10 +661,577 @@ int schemaApplyDisjointCheckUnions(
     if( rc==SQLITE_OK && bUnion && zNew ){
       sqlite3_free(pOurs->zSql);
       pOurs->zSql = zNew;
-    }else{
-      sqlite3_free(zNew);
+      zNew = 0;
+    }
+    sqlite3_free(zNew);
+    if( rc!=SQLITE_OK ) break;
+    {
+      char *zKept = 0, *zErr = 0;
+      int bConflict = 0, bHandled = 0;
+      rc = dlComposeRetained(pAnc->zSql, pOurs->zSql, pTheirs->zSql,
+                             SCHEMA_MERGE_DEFAULT, pOurs->zName,
+                             0, 0, &zKept, &zErr, &bConflict, &bHandled);
+      sqlite3_free(zErr);
+      if( rc==SQLITE_OK && bHandled && !bConflict && zKept ){
+        sqlite3_free(pOurs->zSql);
+        pOurs->zSql = zKept;
+      }else{
+        sqlite3_free(zKept);
+      }
     }
   }
+  return rc;
+}
+
+/* ---- retained CHECK / FOREIGN KEY / DEFAULT composition ---- */
+
+
+static DlCheck *dlCheckByName(DlCheck *a, int n, const char *zName){
+  int i;
+  for(i=0; i<n; i++){
+    DlCheck *p = &a[i];
+    if( zName && p->zName && sqlite3_stricmp(p->zName, zName)==0 ) return p;
+  }
+  return 0;
+}
+
+static int dlCheckIsNew(const DlCheck *p, DlCheck *aAnc, int nAnc){
+  int i;
+  for(i=0; i<nAnc; i++){
+    if( dlChecksSame(p, &aAnc[i]) ) return 0;
+    if( p->zName && aAnc[i].zName
+     && sqlite3_stricmp(p->zName, aAnc[i].zName)==0 ) return 0;
+  }
+  return 1;
+}
+
+static int dlHalfGone(DlCheck *aAnc, int nAnc, DlCheck *aA, int nA,
+                      DlCheck *aB, int nB){
+  int i, j;
+  for(i=0; i<nAnc; i++){
+    int inA = 0, inB = 0;
+    for(j=0; j<nA; j++){
+      if( dlChecksSame(&aAnc[i], &aA[j])
+       || (aAnc[i].zName && aA[j].zName
+           && sqlite3_stricmp(aAnc[i].zName, aA[j].zName)==0) ) inA = 1;
+    }
+    for(j=0; j<nB; j++){
+      if( dlChecksSame(&aAnc[i], &aB[j])
+       || (aAnc[i].zName && aB[j].zName
+           && sqlite3_stricmp(aAnc[i].zName, aB[j].zName)==0) ) inB = 1;
+    }
+    if( inA!=inB ) return 1;
+  }
+  return 0;
+}
+
+#define DL_SKIP 0
+#define DL_KEEP 1
+#define DL_REPLACE 2
+#define DL_CONFLICT 3
+
+static int dlOtherFate(const DlCheck *p, DlCheck *aWin, int nWin,
+                       DlCheck *aAnc, int nAnc){
+  DlCheck *pWin, *pAnc;
+  int i, j;
+  for(i=0; i<nWin; i++){
+    if( dlChecksSame(p, &aWin[i]) ) return DL_SKIP;
+  }
+  for(i=0; i<nAnc; i++){
+    if( !dlChecksSame(p, &aAnc[i]) ) continue;
+    for(j=0; j<nWin; j++){
+      if( dlChecksSame(&aAnc[i], &aWin[j]) ) break;
+    }
+    if( j==nWin ) return DL_SKIP;
+  }
+  pWin = dlCheckByName(aWin, nWin, p->zName);
+  pAnc = dlCheckByName(aAnc, nAnc, p->zName);
+  if( pWin && pAnc && dlChecksSame(pAnc, pWin) && !dlChecksSame(pAnc, p) ){
+    return DL_REPLACE;
+  }
+  if( pWin && pAnc && !dlChecksSame(pAnc, pWin) && !dlChecksSame(pAnc, p)
+   && !dlChecksSame(pWin, p) ){
+    return DL_CONFLICT;
+  }
+  if( pWin && !dlChecksSame(p, pWin) ) return DL_CONFLICT;
+  if( dlCheckIsNew(p, aAnc, nAnc) ){
+    for(i=0; i<nWin; i++){
+      if( !dlCheckIsNew(&aWin[i], aAnc, nAnc) ) continue;
+      if( p->zName && aWin[i].zName
+       && sqlite3_stricmp(p->zName, aWin[i].zName)==0
+       && !dlChecksSame(p, &aWin[i]) ) return DL_CONFLICT;
+      if( dlChecksOverlap(p, &aWin[i]) ) return DL_CONFLICT;
+    }
+  }
+  return DL_KEEP;
+}
+
+
+/* Compose one-sided defaults and the checks/FKs Dolt keeps.
+** *pzSql is the winning CREATE, or NULL when nothing changes.
+** A kept check that names a column the merge drops sets *pbConflict
+** and *pzErr. An FK in that spot is omitted. *pbHandled is 1 when the
+** only differences are clauses this function can apply, so a master-row
+** conflict over them is not a schema conflict. */
+static int dlComposeRetained(
+  const char *zAnc, const char *zOurs, const char *zTheirs,
+  int schemaChoice, const char *zTable,
+  SchemaMergeAction *aAct, int nAct,
+  char **pzSql, char **pzErr, int *pbConflict, int *pbHandled
+){
+  const char *zWin, *zOth;
+  ParsedColumn *aAnc = 0, *aOurs = 0, *aTheirs = 0, *aUnion = 0;
+  ParsedColumn *aWin, *aOth;
+  DlCheck *aCkAnc = 0, *aCkWin = 0, *aCkOth = 0;
+  DlFk *aFkAnc = 0, *aFkWin = 0, *aFkOth = 0;
+  char **azMerged = 0, **azRepName = 0, **azRepDef = 0;
+  char **azCut = 0, **azSplice = 0, **azDefer = 0;
+  char *zWork = 0;
+  u8 *aReplaced = 0;
+  int nAnc = 0, nOurs = 0, nTheirs = 0, nUnion = 0;
+  int nWin, nOth, nCkAnc = 0, nCkWin = 0, nCkOth = 0;
+  int nFkAnc = 0, nFkWin = 0, nFkOth = 0, nMerged = 0;
+  int nRep = 0, nNameAlloc = 0, nDefAlloc = 0, nCut = 0, nCutAlloc = 0;
+  int nSplice = 0, nSpliceAlloc = 0, nDefer = 0, nDeferAlloc = 0;
+  int i, rc, bConflict = 0, bHandled = 0, changed = 0;
+  int bNeutral = 0, bCoreDiff = 0, bHalf = 0;
+
+  if( pzSql ) *pzSql = 0;
+  if( pbConflict ) *pbConflict = 0;
+  if( pbHandled ) *pbHandled = 0;
+  if( !zAnc || !zOurs || !zTheirs ) return SQLITE_OK;
+  zWin = schemaChoice==SCHEMA_MERGE_THEIRS ? zTheirs : zOurs;
+  zOth = schemaChoice==SCHEMA_MERGE_THEIRS ? zOurs : zTheirs;
+
+  rc = parseColumns(zAnc, &aAnc, &nAnc);
+  if( rc==SQLITE_OK ) rc = parseColumns(zOurs, &aOurs, &nOurs);
+  if( rc==SQLITE_OK ) rc = parseColumns(zTheirs, &aTheirs, &nTheirs);
+  if( rc!=SQLITE_OK ){
+    if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+    goto done;
+  }
+  aWin = schemaChoice==SCHEMA_MERGE_THEIRS ? aTheirs : aOurs;
+  aOth = schemaChoice==SCHEMA_MERGE_THEIRS ? aOurs : aTheirs;
+  nWin = schemaChoice==SCHEMA_MERGE_THEIRS ? nTheirs : nOurs;
+  nOth = schemaChoice==SCHEMA_MERGE_THEIRS ? nOurs : nTheirs;
+
+  rc = dlNeutralSame(zAnc, zOurs, &bNeutral);
+  if( rc==SQLITE_OK && bNeutral ) rc = dlNeutralSame(zAnc, zTheirs, &bNeutral);
+  if( rc!=SQLITE_OK ){
+    if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+    goto done;
+  }
+
+  for(i=0; i<nWin; i++){
+    int j = parsedColumnIndexByName(aOth, nOth, aWin[i].zName);
+    int k, cores;
+    if( j<0 ) continue;
+    if( schemaDefinitionsEquivalent(aWin[i].zDef, aOth[j].zDef) ) continue;
+    cores = dlCoresMatch(aWin[i].zDef, aOth[j].zDef);
+    if( cores<0 ){
+      rc = -cores==SQLITE_NOMEM ? SQLITE_NOMEM : SQLITE_OK;
+      goto done;
+    }
+    if( !cores ){ bCoreDiff = 1; continue; }
+    k = parsedColumnIndexByName(aAnc, nAnc, aWin[i].zName);
+    if( k<0 ) continue;
+    if( !schemaDefinitionsEquivalent(aAnc[k].zDef, aWin[i].zDef) ) continue;
+    if( schemaDefinitionsEquivalent(aAnc[k].zDef, aOth[j].zDef) ) continue;
+    rc = DOLTLITE_GROW_ARRAY(&azRepName, &nNameAlloc, nRep+1, 4);
+    if( rc==SQLITE_OK ){
+      rc = DOLTLITE_GROW_ARRAY(&azRepDef, &nDefAlloc, nRep+1, 4);
+    }
+    if( rc!=SQLITE_OK ) goto done;
+    azRepName[nRep] = aWin[i].zName;
+    azRepDef[nRep] = aOth[j].zDef;
+    nRep++;
+  }
+
+  rc = dlRewriteColumns(zWin, azRepName, azRepDef, nRep, &zWork, &changed);
+  if( rc!=SQLITE_OK ){
+    if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+    goto done;
+  }
+  rc = dlMergedNames(aAnc, nAnc, aWin, nWin, aOth, nOth, &azMerged, &nMerged);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = dlUnionCols(aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs, &aUnion, &nUnion);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = dlCollectChecks(zAnc, aUnion, nUnion, &aCkAnc, &nCkAnc);
+  if( rc==SQLITE_OK ){
+    rc = dlCollectChecks(zWork, aUnion, nUnion, &aCkWin, &nCkWin);
+  }
+  if( rc==SQLITE_OK ){
+    rc = dlCollectChecks(zOth, aUnion, nUnion, &aCkOth, &nCkOth);
+  }
+  if( rc!=SQLITE_OK ){
+    if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+    goto done;
+  }
+  if( dlHalfGone(aCkAnc, nCkAnc, aCkWin, nCkWin, aCkOth, nCkOth) ) bHalf = 1;
+  if( nCkWin ){
+    aReplaced = sqlite3_malloc(nCkWin);
+    if( !aReplaced ){ rc = SQLITE_NOMEM; goto done; }
+    memset(aReplaced, 0, (size_t)nCkWin);
+  }
+
+  for(i=0; i<nCkOth; i++){
+    int fate = dlOtherFate(&aCkOth[i], aCkWin, nCkWin, aCkAnc, nCkAnc);
+    int cls;
+    DlCheck *pOld;
+    if( fate==DL_SKIP ) continue;
+    if( fate==DL_CONFLICT ){
+      bConflict = 1;
+      if( pzErr && !*pzErr ){
+        *pzErr = sqlite3_mprintf("incompatible check constraints");
+        if( !*pzErr ){ rc = SQLITE_NOMEM; goto done; }
+      }
+      continue;
+    }
+    cls = dlRefClass(aCkOth[i].zCols, azMerged, nMerged, aWin, nWin);
+    if( cls<0 ){ rc = SQLITE_NOMEM; goto done; }
+    if( cls==2 ){
+      bConflict = 1;
+      if( pzErr && !*pzErr ){
+        *pzErr = sqlite3_mprintf(
+            "check '%s' references a column that will be deleted after merge",
+            aCkOth[i].zName ? aCkOth[i].zName : "");
+        if( !*pzErr ){ rc = SQLITE_NOMEM; goto done; }
+      }
+      continue;
+    }
+    if( fate==DL_REPLACE ){
+      pOld = dlCheckByName(aCkWin, nCkWin, aCkOth[i].zName);
+      if( pOld && pOld->zRaw ){
+        int idx = (int)(pOld - aCkWin);
+        if( idx>=0 && idx<nCkWin ) aReplaced[idx] = 1;
+        rc = dlPushRaw(&azCut, &nCut, &nCutAlloc, pOld->zRaw);
+        if( rc!=SQLITE_OK ) goto done;
+      }
+    }
+    if( cls==1 ){
+      rc = dlPushRaw(&azDefer, &nDefer, &nDeferAlloc, aCkOth[i].zRaw);
+    }else if( !aCkOth[i].zRaw || !strstr(zWork, aCkOth[i].zRaw) ){
+      rc = dlPushRaw(&azSplice, &nSplice, &nSpliceAlloc, aCkOth[i].zRaw);
+    }
+    if( rc!=SQLITE_OK ) goto done;
+  }
+
+  for(i=0; i<nCkWin && !bConflict; i++){
+    int cls;
+    if( aReplaced && aReplaced[i] ) continue;
+    cls = dlRefClass(aCkWin[i].zCols, azMerged, nMerged, aWin, nWin);
+    if( cls<0 ){ rc = SQLITE_NOMEM; goto done; }
+    if( cls==2 ){
+      bConflict = 1;
+      if( pzErr && !*pzErr ){
+        *pzErr = sqlite3_mprintf(
+            "check '%s' references a column that will be deleted after merge",
+            aCkWin[i].zName ? aCkWin[i].zName : "");
+        if( !*pzErr ){ rc = SQLITE_NOMEM; goto done; }
+      }
+    }
+  }
+
+  rc = dlCollectFks(zAnc, &aFkAnc, &nFkAnc);
+  if( rc==SQLITE_OK ) rc = dlCollectFks(zWork, &aFkWin, &nFkWin);
+  if( rc==SQLITE_OK ) rc = dlCollectFks(zOth, &aFkOth, &nFkOth);
+  if( rc!=SQLITE_OK ){
+    if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+    goto done;
+  }
+  for(i=0; i<nFkAnc; i++){
+    int inW = 0, inO = 0, j;
+    for(j=0; j<nFkWin; j++){
+      if( dlFkCorresponds(&aFkAnc[i], &aFkWin[j]) ) inW = 1;
+    }
+    for(j=0; j<nFkOth; j++){
+      if( dlFkCorresponds(&aFkAnc[i], &aFkOth[j]) ) inO = 1;
+    }
+    if( inW!=inO ) bHalf = 1;
+  }
+  for(i=0; i<nFkOth && !bConflict; i++){
+    int j, cls;
+    DlFk *pWin = 0, *pAnc = 0;
+    for(j=0; j<nFkWin; j++){
+      if( dlFkSame(&aFkOth[i], &aFkWin[j]) ) break;
+    }
+    if( j<nFkWin ) continue;
+    for(j=0; j<nFkAnc; j++){
+      if( dlFkCorresponds(&aFkAnc[j], &aFkOth[i]) ){ pAnc = &aFkAnc[j]; break; }
+    }
+    for(j=0; j<nFkWin; j++){
+      if( dlFkCorresponds(&aFkWin[j], &aFkOth[i]) ){ pWin = &aFkWin[j]; break; }
+    }
+    /* The winner already dropped this constraint, including a one-sided
+    ** edit of it. Leave the deletion in place. */
+    if( pAnc && !pWin ) continue;
+    if( pWin && !dlFkSame(pWin, &aFkOth[i]) ){
+      if( !(pAnc && dlFkSame(pAnc, pWin)) ){
+        bConflict = 1;
+        if( pzErr && !*pzErr ){
+          *pzErr = sqlite3_mprintf("incompatible foreign key constraints");
+          if( !*pzErr ){ rc = SQLITE_NOMEM; goto done; }
+        }
+        continue;
+      }
+      rc = dlPushRaw(&azCut, &nCut, &nCutAlloc, pWin->zRaw);
+      if( rc!=SQLITE_OK ) goto done;
+    }
+    cls = dlRefClass(aFkOth[i].zCols, azMerged, nMerged, aWin, nWin);
+    if( cls<0 ){ rc = SQLITE_NOMEM; goto done; }
+    if( cls==2 ) continue;
+    if( cls==1 ){
+      rc = dlPushRaw(&azDefer, &nDefer, &nDeferAlloc, aFkOth[i].zRaw);
+    }else if( !aFkOth[i].zRaw || !strstr(zWork, aFkOth[i].zRaw) ){
+      rc = dlPushRaw(&azSplice, &nSplice, &nSpliceAlloc, aFkOth[i].zRaw);
+    }
+    if( rc!=SQLITE_OK ) goto done;
+  }
+
+  /* A column already on the winning CREATE is not a schema action.
+  ** The other side may still contribute a check, foreign key, or default
+  ** as long as that is the only other difference. */
+  if( !bConflict && !bCoreDiff && !bHalf && !bNeutral ){
+    int bOthOk = 0, bTrimOk = 0, bOnly = 1;
+    char *zTrim = 0;
+    for(i=0; i<nOth; i++){
+      if( parsedColumnIndexByName(aWin, nWin, aOth[i].zName)<0 ) bOnly = 0;
+    }
+    for(i=0; i<nWin && bOnly; i++){
+      if( parsedColumnIndexByName(aOth, nOth, aWin[i].zName)>=0 ) continue;
+      if( parsedColumnIndexByName(aAnc, nAnc, aWin[i].zName)>=0 ) bOnly = 0;
+    }
+    if( bOnly ){
+      rc = dlNeutralSame(zAnc, zOth, &bOthOk);
+      if( rc!=SQLITE_OK ){
+        if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+        goto done;
+      }
+    }
+    if( bOthOk ){
+      zTrim = sqlite3_mprintf("%s", zWin);
+      if( !zTrim ){ rc = SQLITE_NOMEM; goto done; }
+      for(i=0; i<nWin && rc==SQLITE_OK; i++){
+        if( parsedColumnIndexByName(aOth, nOth, aWin[i].zName)>=0 ) continue;
+        if( parsedColumnIndexByName(aAnc, nAnc, aWin[i].zName)>=0 ) continue;
+        rc = dlCutRaw(&zTrim, aWin[i].zDef);
+      }
+      if( rc==SQLITE_OK ) rc = dlNeutralSame(zAnc, zTrim, &bTrimOk);
+      sqlite3_free(zTrim);
+      if( rc!=SQLITE_OK ){
+        if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+        goto done;
+      }
+    }
+    if( bTrimOk ) bNeutral = 1;
+  }
+  if( !bConflict && bNeutral && !bCoreDiff && !bHalf ) bHandled = 1;
+  if( bConflict || !pzSql ){
+    changed = 0;
+  }else{
+    for(i=0; i<nCut && rc==SQLITE_OK; i++) rc = dlCutRaw(&zWork, azCut[i]);
+    if( rc==SQLITE_OK && nSplice>0 ){
+      DlCheck *aAdd = sqlite3_malloc(sizeof(DlCheck)*(nSplice ? nSplice : 1));
+      char *zNew = 0;
+      if( !aAdd ) rc = SQLITE_NOMEM;
+      else{
+        memset(aAdd, 0, sizeof(DlCheck)*nSplice);
+        for(i=0; i<nSplice; i++) aAdd[i].zRaw = azSplice[i];
+        rc = dlSpliceChecks(zWork, aAdd, nSplice, &zNew);
+        sqlite3_free(aAdd);
+        if( rc==SQLITE_OK && zNew ){
+          sqlite3_free(zWork);
+          zWork = zNew;
+          changed = 1;
+        }else if( rc==SQLITE_CORRUPT ){
+          rc = SQLITE_OK;
+        }
+      }
+    }
+    if( rc==SQLITE_OK ){
+      for(i=0; i<nDefer; i++){
+        rc = dlDeferRaw(aAct, nAct, zTable, azDefer[i]);
+        if( rc!=SQLITE_OK ) break;
+      }
+    }
+    if( nCut>0 ) changed = 1;
+  }
+
+done:
+  if( rc==SQLITE_OK ){
+    if( pbConflict ) *pbConflict = bConflict;
+    if( pbHandled ) *pbHandled = bHandled;
+    if( pzSql && changed && zWork && rc==SQLITE_OK && !bConflict ){
+      *pzSql = zWork;
+      zWork = 0;
+    }
+  }
+  sqlite3_free(zWork);
+  dlFreeRaws(azCut, nCut);
+  dlFreeRaws(azSplice, nSplice);
+  dlFreeRaws(azDefer, nDefer);
+  sqlite3_free(azRepName);
+  sqlite3_free(azRepDef);
+  sqlite3_free(aReplaced);
+  dlFksFree(aFkAnc, nFkAnc);
+  dlFksFree(aFkWin, nFkWin);
+  dlFksFree(aFkOth, nFkOth);
+  dlChecksFree(aCkAnc, nCkAnc);
+  dlChecksFree(aCkWin, nCkWin);
+  dlChecksFree(aCkOth, nCkOth);
+  sqlite3_free(aUnion);
+  dlFreeNames(azMerged, nMerged);
+  freeColumns(aAnc, nAnc);
+  freeColumns(aOurs, nOurs);
+  freeColumns(aTheirs, nTheirs);
+  return rc;
+}
+
+static int dlRetainedUnified(const char *zAnc, const char *zOurs,
+                             const char *zTheirs, int *pbUnion){
+  int bConflict = 0, bHandled = 0, rc;
+  *pbUnion = 0;
+  rc = dlComposeRetained(zAnc, zOurs, zTheirs, SCHEMA_MERGE_DEFAULT,
+                         0, 0, 0, 0, 0, &bConflict, &bHandled);
+  if( rc==SQLITE_OK && bHandled && !bConflict ) *pbUnion = 1;
+  return rc;
+}
+
+int schemaRetainedClauseConflict(
+  const char *zAnc, const char *zOurs, const char *zTheirs,
+  int schemaChoice, char **pzErr
+){
+  int bConflict = 0, bHandled = 0, rc;
+  rc = dlComposeRetained(zAnc, zOurs, zTheirs, schemaChoice,
+                         0, 0, 0, 0, pzErr, &bConflict, &bHandled);
+  if( rc!=SQLITE_OK ) return rc;
+  return bConflict ? SQLITE_ERROR : SQLITE_OK;
+}
+
+int schemaAdoptMergedTableSql(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const char *zName, const char *zFallback, int iTable,
+  int schemaChoice, char **pzOursPrev,
+  SchemaMergeAction *aAct, int nAct
+){
+  SchemaEntry *pOurs, *pTheirs, *pAnc;
+  const char *zAncSql, *zOursSql, *zTheirsSql;
+  char *zNew = 0, *zErr = 0;
+  int bConflict = 0, bHandled = 0, rc = SQLITE_OK;
+
+  pOurs = zName ? findSchemaEntry(aOurs, nOurs, zName) : 0;
+  if( !pOurs && zFallback ) pOurs = findSchemaEntry(aOurs, nOurs, zFallback);
+  pTheirs = zName ? findSchemaEntry(aTheirs, nTheirs, zName) : 0;
+  if( !pTheirs && zFallback ){
+    pTheirs = findSchemaEntry(aTheirs, nTheirs, zFallback);
+  }
+  if( !pTheirs ) pTheirs = findSchemaEntryByRootpage(aTheirs, nTheirs, iTable);
+  pAnc = zName ? findSchemaEntry(aAnc, nAnc, zName) : 0;
+  if( !pAnc && zFallback ) pAnc = findSchemaEntry(aAnc, nAnc, zFallback);
+
+  zAncSql = pAnc && pAnc->zSql ? pAnc->zSql : 0;
+  zOursSql = pOurs && pOurs->zSql ? pOurs->zSql : 0;
+  zTheirsSql = pTheirs && pTheirs->zSql ? pTheirs->zSql : 0;
+
+  if( schemaChoice==SCHEMA_MERGE_THEIRS ){
+    char *zCopy = zTheirsSql ? sqlite3_mprintf("%s", zTheirsSql) : 0;
+    if( !pOurs || !zCopy ){
+      sqlite3_free(zCopy);
+      return pOurs ? SQLITE_NOMEM : SQLITE_CORRUPT;
+    }
+    if( pzOursPrev ) *pzOursPrev = pOurs->zSql;
+    pOurs->zSql = zCopy;
+  }
+
+  if( !pOurs || !pOurs->zType || strcmp(pOurs->zType, "table")!=0 ){
+    return SQLITE_OK;
+  }
+  if( !zAncSql || !zOursSql || !zTheirsSql ) return SQLITE_OK;
+  rc = dlComposeRetained(zAncSql, zOursSql, zTheirsSql, schemaChoice,
+                         zName ? zName : zFallback, aAct, nAct,
+                         &zNew, &zErr, &bConflict, &bHandled);
+  sqlite3_free(zErr);
+  if( rc!=SQLITE_OK || bConflict || !zNew ){
+    sqlite3_free(zNew);
+    return rc;
+  }
+  sqlite3_free(pOurs->zSql);
+  pOurs->zSql = zNew;
+  return SQLITE_OK;
+}
+
+int schemaInstallDeferredClauses(
+  sqlite3 *db, const char *zTable, char **azClauses, int nClauses
+){
+  sqlite3_stmt *pSel = 0, *pUp = 0;
+  DlCheck *aAdd = 0;
+  const char *zSql;
+  char *zNew = 0;
+  u64 savedFlags;
+  int i, nAdd = 0, rc;
+  if( nClauses<=0 || !zTable ) return SQLITE_OK;
+  rc = sqlite3_prepare_v2(db,
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+      -1, &pSel, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_bind_text(pSel, 1, zTable, -1, SQLITE_STATIC);
+  if( sqlite3_step(pSel)!=SQLITE_ROW ){
+    sqlite3_finalize(pSel);
+    return SQLITE_OK;
+  }
+  zSql = (const char*)sqlite3_column_text(pSel, 0);
+  if( !zSql ){
+    sqlite3_finalize(pSel);
+    return SQLITE_OK;
+  }
+  aAdd = sqlite3_malloc(sizeof(DlCheck) * nClauses);
+  if( !aAdd ){
+    sqlite3_finalize(pSel);
+    return SQLITE_NOMEM;
+  }
+  memset(aAdd, 0, sizeof(DlCheck) * nClauses);
+  for(i=0; i<nClauses; i++){
+    if( !azClauses[i] || !azClauses[i][0] ) continue;
+    if( strstr(zSql, azClauses[i]) ) continue;
+    aAdd[nAdd].zRaw = azClauses[i];
+    nAdd++;
+  }
+  if( nAdd==0 ){
+    sqlite3_free(aAdd);
+    sqlite3_finalize(pSel);
+    return SQLITE_OK;
+  }
+  rc = dlSpliceChecks(zSql, aAdd, nAdd, &zNew);
+  sqlite3_free(aAdd);
+  sqlite3_finalize(pSel);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zNew);
+    return rc;
+  }
+  /* Defensive mode ignores PRAGMA writable_schema=ON. The flag itself
+  ** is what lets this one schema-text update through. */
+  savedFlags = db->flags;
+  db->flags = (savedFlags & ~(u64)SQLITE_Defensive) | SQLITE_WriteSchema;
+  rc = sqlite3_prepare_v2(db,
+      "UPDATE sqlite_master SET sql=? WHERE type='table' AND name=?",
+      -1, &pUp, 0);
+  if( rc==SQLITE_OK ){
+    char *zKeep = 0;
+    sqlite3_bind_text(pUp, 1, zNew, -1, SQLITE_STATIC);
+    sqlite3_bind_text(pUp, 2, zTable, -1, SQLITE_STATIC);
+    rc = sqlite3_step(pUp);
+    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) zKeep = sqlite3_mprintf("%s", sqlite3_errmsg(db));
+    sqlite3_finalize(pUp);
+    if( zKeep ){
+      sqlite3ErrorWithMsg(db, rc, "%s", zKeep);
+      sqlite3_free(zKeep);
+    }
+  }
+  db->flags = savedFlags;
+  sqlite3_free(zNew);
   return rc;
 }
 
@@ -669,6 +1243,7 @@ int schemaTableChecksUnified(
   int *pbUnion
 ){
   SchemaEntry *pAnc, *pOurs, *pTheirs;
+  int rc;
   *pbUnion = 0;
   if( !zName ) return SQLITE_OK;
   pAnc = findSchemaEntry(aAnc, nAnc, zName);
@@ -678,8 +1253,10 @@ int schemaTableChecksUnified(
    || !pTheirs || !pTheirs->zSql ){
     return SQLITE_OK;
   }
-  return dlComposeDisjointChecks(pAnc->zSql, pOurs->zSql, pTheirs->zSql,
-                                 0, pbUnion);
+  rc = dlComposeDisjointChecks(pAnc->zSql, pOurs->zSql, pTheirs->zSql,
+                               0, pbUnion);
+  if( rc!=SQLITE_OK || *pbUnion ) return rc;
+  return dlRetainedUnified(pAnc->zSql, pOurs->zSql, pTheirs->zSql, pbUnion);
 }
 
 #endif

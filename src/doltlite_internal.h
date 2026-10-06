@@ -1878,6 +1878,9 @@ struct SchemaMergeAction {
   /* Flat old,new rename pairs the merged layout still needs. */
   char **azRenameColumns;
   int nRenameColumns;
+  /* Table constraints applied after ADD COLUMN, once those columns exist. */
+  char **azClauses;
+  int nClauses;
   /* Rename the whole table to this name, before any column action runs. */
   char *zRenameTable;
 };
