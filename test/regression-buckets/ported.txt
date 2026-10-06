@@ -114,3 +114,4 @@ doltlite_workspace_unique
 doltlite_workspace_index_mapping
 doltlite_workspace_discard_unique
 doltlite_workspace_fk
+doltlite_workspace_affinity

@@ -166,10 +166,6 @@ static int atOpenSchemaDb(sqlite3 *db, sqlite3 **ppTmp){
   return SQLITE_OK;
 }
 
-static int atLoadColumnDeclarations(
-  sqlite3 *db, const char *zTable, DoltliteColInfo *ci
-);
-
 /* Load columns as pCatHash declares them. Invalid-side fallback to declared
 ** layout is allowed only when the table is absent or the live schema is
 ** identical; otherwise fail rather than decode with the wrong layout. */
@@ -210,7 +206,7 @@ int doltliteSideColsLoad(
   if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTable, &pSide->ci);
   /* Affinity belongs to this commit. The live REAL affinity rounds an
   ** integer the commit stored exactly. */
-  if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(tmp, zTable, &pSide->ci);
+  if( rc==SQLITE_OK ) rc = doltliteLoadColumnDeclarations(tmp, zTable, &pSide->ci);
   if( tmp ) sqlite3_close(tmp);
   clearSchemaEntry(&entry);
   if( rc!=SQLITE_OK || pSide->ci.nCol<=0 ){
@@ -372,7 +368,7 @@ done:
   return rc;
 }
 
-static int atLoadColumnDeclarations(
+int doltliteLoadColumnDeclarations(
   sqlite3 *db, const char *zTable, DoltliteColInfo *ci
 ){
   Table *pTab;
@@ -431,7 +427,7 @@ static int atLoadSchemaColumns(
     rc = atOpenSchemaDb(db, &tmp);
     if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
     if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTableName, pCols);
-    if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(tmp, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = doltliteLoadColumnDeclarations(tmp, zTableName, pCols);
     if( rc==SQLITE_OK && pCols->nCol<=0 ){
       doltliteFreeColInfo(pCols);
       rc = SQLITE_NOTFOUND;
@@ -604,7 +600,7 @@ int doltliteLoadHistoricalTableColumns(
   }
   if( !skipLive && sqlite3FindTable(db, zTableName, "main") ){
     rc = doltliteGetReaderColumnNames(db, zTableName, pCols);
-    if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = doltliteLoadColumnDeclarations(db, zTableName, pCols);
     if( rc!=SQLITE_OK ) return rc;
     if( pCols->nCol>0 ) return SQLITE_OK;
     doltliteFreeColInfo(pCols);
@@ -670,7 +666,7 @@ int doltliteLoadHistoricalTableColumns(
   if( rc==SQLITE_OK && pCols->nCol<=0
    && sqlite3FindTable(db, zTableName, "main") ){
     rc = doltliteGetReaderColumnNames(db, zTableName, pCols);
-    if( rc==SQLITE_OK ) rc = atLoadColumnDeclarations(db, zTableName, pCols);
+    if( rc==SQLITE_OK ) rc = doltliteLoadColumnDeclarations(db, zTableName, pCols);
     if( rc==SQLITE_OK && pCols->nCol<=0 ) doltliteFreeColInfo(pCols);
   }
   if( rc==SQLITE_OK && pCols->nCol<=0 ) return SQLITE_NOTFOUND;

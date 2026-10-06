@@ -14,6 +14,7 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 translate_for_dolt() {
   sed -E '
     s/PRAGMA foreign_keys=ON;/SET FOREIGN_KEY_CHECKS=1;/g
+    s/COLLATE NOCASE/COLLATE utf8mb4_general_ci/g
     s/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g
     s/"dolt_diff_([^"]+)"\(([^)]*)\)/dolt_diff(\2, "\1")/g
     s/`dolt_diff_([^`]+)`\(([^)]*)\)/dolt_diff(\2, '"'"'\1'"'"')/g
@@ -806,5 +807,48 @@ DELETE FROM dolt_workspace_t WHERE from_id=1 OR from_id='1';
 " "SELECT CONCAT('R|',id,'|',v,'|',n) FROM t ORDER BY id;"
   done
 done
+
+echo "--- workspace predicates preserve affinity and collation ---"
+
+for key in rowid clustered; do
+  declaration='id INTEGER PRIMARY KEY'
+  if [ "$key" = clustered ]; then declaration='id INT PRIMARY KEY'; fi
+  for action in read stage unstage discard; do
+    apply=''
+    case "$action" in
+      stage)
+        apply="UPDATE dolt_workspace_t SET staged=TRUE
+          WHERE to_id='01' AND to_v='ALPHA' AND to_n='11.00';" ;;
+      unstage)
+        apply="SELECT dolt_add('t');
+          UPDATE dolt_workspace_t SET staged=FALSE
+          WHERE from_id='01' AND from_v='ALPHA' AND from_n='10.00';" ;;
+      discard)
+        apply="DELETE FROM dolt_workspace_t
+          WHERE to_id='01' AND to_v='ALPHA' AND to_n='11.00';" ;;
+    esac
+    oracle "workspace_typed_${key}_${action}" "
+CREATE TABLE t($declaration,v VARCHAR(20) COLLATE NOCASE,n DECIMAL(10,2));
+INSERT INTO t VALUES(1,'Alpha',10),(2,'Beta',20);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET n=11 WHERE id=1;
+$apply
+" "SELECT CONCAT('R|match|',count(*)) FROM dolt_workspace_t
+     WHERE to_id='01' AND to_v='ALPHA' AND to_n='11.00';
+SELECT CONCAT('R|row|',staged,'|',to_id,'|',CAST(to_n AS SIGNED INTEGER),'|',CAST(from_n AS SIGNED INTEGER))
+  FROM dolt_workspace_t;
+SELECT CONCAT('R|table|',id,'|',CAST(n AS SIGNED INTEGER)) FROM t ORDER BY id;"
+  done
+done
+
+oracle "workspace_collated_grouping" "
+CREATE TABLE t(id INT PRIMARY KEY,v VARCHAR(20) COLLATE NOCASE,n INT);
+INSERT INTO t VALUES(1,'alpha',10),(2,'Alpha',20),(3,'beta',30);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET n=n+1;
+" "SELECT CONCAT('R|to|',min(to_id),'|',count(*)) FROM dolt_workspace_t GROUP BY to_v;
+SELECT CONCAT('R|from|',min(from_id),'|',count(*)) FROM dolt_workspace_t GROUP BY from_v;
+SELECT CONCAT('R|distinct|',count(DISTINCT to_v),'|',count(DISTINCT from_v))
+  FROM dolt_workspace_t;"
 
 vc_oracle_finish
