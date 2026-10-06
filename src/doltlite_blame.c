@@ -235,20 +235,22 @@ static void blameFreePkColumns(
   sqlite3_free(aColIdx);
 }
 
-static char *blameBuildSchema(BlameVtab *v){
+static char *blameBuildSchema(BlameVtab *v, Table *pTab){
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   int i;
-  int iIntPk = -1;
   if( !pStr ) return 0;
-  for(i=0; i<v->nPkCols; i++){
-    if( v->aPkColIdx[i]==v->intPkCid ) iIntPk = i;
-  }
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
   for(i=0; i<v->nPkCols; i++){
+    const char *zType = "BLOB";
+    switch( pTab->aCol[v->aPkColIdx[i]].affinity ){
+      case SQLITE_AFF_TEXT: zType = "TEXT"; break;
+      case SQLITE_AFF_NUMERIC: zType = "NUMERIC"; break;
+      case SQLITE_AFF_INTEGER: zType = "INTEGER"; break;
+      case SQLITE_AFF_REAL: zType = "REAL"; break;
+    }
     if( i>0 ) sqlite3_str_appendall(pStr, ", ");
-    sqlite3_str_appendf(pStr, "\"%w\"%s", v->azPkNames[i],
-                        i==iIntPk ? " INTEGER" : "");
+    sqlite3_str_appendf(pStr, "\"%w\" %s", v->azPkNames[i], zType);
     if( v->azPkColl && v->azPkColl[i] ){
       sqlite3_str_appendf(pStr, " COLLATE \"%w\"", v->azPkColl[i]);
     }
@@ -896,17 +898,18 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
   }
   pTab = sqlite3FindTable(db, v->zTableName, "main");
   v->bHasRowid = pTab && HasRowid(pTab);
-  if( v->nPkCols == 0 ){
+  if( !pTab || v->nPkCols == 0 ){
     if( pzErr ){
       *pzErr = sqlite3_mprintf(
         "dolt_blame_%s: table has no primary key", v->zTableName);
     }
+    blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
     return SQLITE_ERROR;
   }
 
-  zSchema = blameBuildSchema(v);
+  zSchema = blameBuildSchema(v, pTab);
   if( !zSchema ){
     blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
@@ -1099,13 +1102,23 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
       sqlite3_result_int64(ctx, r->intKey);
     }else if( r->pCurVal && r->nCurVal>0 ){
       DoltliteRecordInfo ri = {0};
+      Table *pTab = sqlite3FindTable(v->db, v->zTableName, "main");
       int iField = iCol;
       if( v->bHasRowid ){
-        Table *pTab = sqlite3FindTable(v->db, v->zTableName, "main");
         iField = pTab ? sqlite3TableColumnToStorage(pTab, cid) : cid;
       }
       doltliteParseRecord(r->pCurVal, r->nCurVal, &ri);
       if( iField>=0 && iField<ri.nField ){
+        if( pTab && pTab->aCol[cid].affinity==SQLITE_AFF_REAL ){
+          DoltliteSerialValue f;
+          if( doltliteSerialValueFromPayload(r->pCurVal, r->nCurVal,
+                  ri.aType[iField], ri.aOffset[iField], &f)==SQLITE_OK
+           && f.eType==SQLITE_INTEGER ){
+            doltliteRecordInfoClear(&ri);
+            sqlite3_result_double(ctx, (double)f.i);
+            return SQLITE_OK;
+          }
+        }
         doltliteResultField(ctx, r->pCurVal, r->nCurVal,
                             ri.aType[iField], ri.aOffset[iField]);
       }else{

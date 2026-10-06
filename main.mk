@@ -331,6 +331,7 @@ lint:
 	@bash $(TOP)/test/sql_oracle_harness_test.sh
 	@bash $(TOP)/test/vc_oracle_harness_selftest.sh
 	@python3 $(TOP)/test/engine_integrity_guard_test.py
+	@python3 $(TOP)/test/dolt_table_pushdown_timing_test.py
 	@bash $(TOP)/test/run_lint_selftests.sh test/lint_layers_selftest.sh \
 	  test/stock_oracle_harness_test.sh
 

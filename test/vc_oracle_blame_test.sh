@@ -64,6 +64,34 @@ oracle "linear_basic" \
   "$LINEAR_BASIC" \
   "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t ORDER BY id;"
 
+echo "--- primary-key affinity in blame predicates ---"
+
+oracle "int_pk_numeric_text" "
+CREATE TABLE t(k INT PRIMARY KEY, v VARCHAR(20));
+INSERT INTO t VALUES (1, 'base'), (2, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'BASE');
+UPDATE t SET v = 'updated' WHERE k = 2;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'UPDATE');
+" "SELECT CONCAT('BL|', k, '|', message) FROM dolt_blame_t WHERE k IN ('01', '2.0');"
+
+oracle "text_pk_numeric_literal" "
+CREATE TABLE t(k VARCHAR(20) PRIMARY KEY, v VARCHAR(20));
+INSERT INTO t VALUES ('1', 'base'), ('2', 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'BASE');
+" "SELECT CONCAT('BL|', k, '|', message) FROM dolt_blame_t WHERE k = 1;"
+
+oracle "real_pk_numeric_text" "
+CREATE TABLE t(k REAL PRIMARY KEY, v VARCHAR(20));
+INSERT INTO t VALUES (1, 'base'), (2.5, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'BASE');
+" "SELECT CONCAT('BL|', count(*)) FROM dolt_blame_t WHERE k = '01';"
+
+oracle "composite_pk_mixed_affinity" "
+CREATE TABLE t(v VARCHAR(20), a INT, b VARCHAR(20), PRIMARY KEY(b, a));
+INSERT INTO t VALUES ('base', 1, '2');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'BASE');
+" "SELECT CONCAT('BL|', a, '|', b, '|', message) FROM dolt_blame_t WHERE a = '01' AND b = 2;"
+
 echo "--- revert to original value attributes to the revert commit ---"
 
 oracle "revert_to_original" "

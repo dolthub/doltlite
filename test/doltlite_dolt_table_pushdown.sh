@@ -1,17 +1,10 @@
 #!/bin/bash
 DLTEST_TIMEOUT=30
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
+. "$(dirname "$0")/lib/dolt_table_pushdown_timing.sh"
 
 echo "=== Doltlite dolt_* vtab constraint pushdown ==="
 echo ""
-
-time_ms() {
-  local start end
-  start=$(python3 -c 'import time; print(int(time.time()*1000))')
-  eval "$@" > /dev/null 2>&1
-  end=$(python3 -c 'import time; print(int(time.time()*1000))')
-  echo $((end - start))
-}
 
 DB=/tmp/test_pushdown_$$.db
 rm -f "$DB"
@@ -126,16 +119,12 @@ else
   ERRORS="$ERRORS\nFAIL: diff_total_ge_19 (got $DIFF_TOTAL)"
 fi
 
-T_CONSTRAINED=$(time_ms "for i in \$(seq 1 3); do echo 'SELECT count(*) FROM dolt_history_t WHERE id=${NROWS};' | $DOLTLITE '$DB'; done")
-T_UNCONSTRAINED=$(time_ms "for i in \$(seq 1 3); do echo 'SELECT count(*) FROM dolt_history_t;' | $DOLTLITE '$DB'; done")
-
-echo "  Wall time: 3x constrained=${T_CONSTRAINED}ms 3x unconstrained=${T_UNCONSTRAINED}ms"
-if [ "$T_CONSTRAINED" -le "$T_UNCONSTRAINED" ] || [ "$T_UNCONSTRAINED" -le 200 ]; then
+if history_pushdown_time dltest_checked_engine "$DB" "$NROWS"; then
   PASS=$((PASS+1))
   echo "  PASS: history_constrained_no_slower_than_full"
 else
   FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: history_constrained_no_slower_than_full (constrained=${T_CONSTRAINED}ms vs full=${T_UNCONSTRAINED}ms)"
+  ERRORS="$ERRORS\nFAIL: history_constrained_no_slower_than_full"
 fi
 
 rm -f "$DB"
