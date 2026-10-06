@@ -529,7 +529,8 @@ static int indexMovetoBuildSeekKey(
 
 static int indexMovetoExactMutMap(
   BtCursor *pCur,
-  UnpackedRecord *pIdxKey,
+  int nIdxField,
+  u8 *pEqSeen,
   const u8 *pSortKey,
   int nSortKey,
   int exactMutMapKey,
@@ -546,7 +547,7 @@ static int indexMovetoExactMutMap(
   *pDone = 0;
   *pDeleted = 0;
   if( !pCur->pKeyInfo
-   || !(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
+   || !(exactMutMapKey || nIdxField >= pCur->pKeyInfo->nAllField) ){
     return SQLITE_OK;
   }
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
@@ -562,7 +563,7 @@ static int indexMovetoExactMutMap(
           pCur, (int)(pEntry - pCur->pMutMap->aEntries));
       pCur->deferredTreeSeek = 1;
       *pRes = 0;
-      pIdxKey->eqSeen = 1;
+      *pEqSeen = 1;
       *pDone = 1;
       return SQLITE_OK;
     }
@@ -578,7 +579,7 @@ static int indexMovetoExactMutMap(
           pCur, (int)(pEntry - pPending->aEntries));
       pCur->deferredTreeSeek = 1;
       *pRes = 0;
-      pIdxKey->eqSeen = 1;
+      *pEqSeen = 1;
       *pDone = 1;
       return SQLITE_OK;
     }
@@ -867,7 +868,8 @@ static int indexMovetoScanTreeLeaf(
 
 static int indexMovetoExactTreeHit(
   BtCursor *pCur,
-  UnpackedRecord *pIdxKey,
+  int nIdxField,
+  u8 *pEqSeen,
   const u8 *pSortKey,
   int nSortKey,
   int exactMutMapKey,
@@ -884,10 +886,10 @@ static int indexMovetoExactTreeHit(
   if( seekRes==0
    && pCur->pCur.eState==PROLLY_CURSOR_VALID
    && pCur->pKeyInfo
-   && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
+   && (exactMutMapKey || nIdxField >= pCur->pKeyInfo->nAllField) ){
     if( !isDeleted ){
       *pRes = 0;
-      pIdxKey->eqSeen = 1;
+      *pEqSeen = 1;
       pCur->eState = CURSOR_VALID;
       cacheCurrentTreeStoredPayloadNonIntKey(pCur);
       *pDone = 1;
@@ -1045,6 +1047,18 @@ static int indexMovetoPrefixLast(
   return SQLITE_OK;
 }
 
+static int keyAboveLoadedRoot(BtCursor *pCur, const u8 *pKey, int nKey){
+  ProllyCacheEntry *pRoot = pCur->pCur.aLevel[0].pEntry;
+  const u8 *pLast;
+  int nLast;
+  if( !pRoot || pRoot->node.nItems==0
+   || prollyHashCompare(&pCur->pCur.root, &pRoot->hash)!=0 ){
+    return 0;
+  }
+  prollyNodeKey(&pRoot->node, pRoot->node.nItems-1, &pLast, &nLast);
+  return prollyCompareKeys(0, pKey, nKey, 0, pLast, nLast, 0)>0;
+}
+
 static int prollyIndexMoveto(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -1093,30 +1107,23 @@ static int prollyIndexMoveto(
     }
 
     rc = indexMovetoExactMutMap(
-        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey,
+        pCur, (int)pIdxKey->nField, &pIdxKey->eqSeen, pSortKey, nSortKey,
+        exactMutMapKey,
         pRes, &done, &isDeleted);
     if( rc!=SQLITE_OK || done ) return rc;
 
     exactOnly = exactOnly && pIdxKey->default_rc==0
         && (exactMutMapKey || (!pCur->isTableRoot && pCur->pKeyInfo
                               && pIdxKey->nField>=pCur->pKeyInfo->nAllField));
-    if( exactOnly ){
-      ProllyCacheEntry *pRoot = pCur->pCur.aLevel[0].pEntry;
-      if( pRoot && pRoot->node.nItems>0
-       && prollyHashCompare(&pCur->pCur.root, &pRoot->hash)==0 ){
-        const u8 *pLast;
-        int nLast;
-        prollyNodeKey(&pRoot->node, pRoot->node.nItems-1, &pLast, &nLast);
-        if( prollyCompareKeys(0, pSortKey, nSortKey, 0, pLast, nLast, 0)>0 ){
-          pCur->eState = CURSOR_INVALID;
-          *pRes = -1;
-          return SQLITE_OK;
-        }
-      }
+    if( exactOnly && keyAboveLoadedRoot(pCur, pSortKey, nSortKey) ){
+      pCur->eState = CURSOR_INVALID;
+      *pRes = -1;
+      return SQLITE_OK;
     }
 
     rc = indexMovetoExactTreeHit(
-        pCur, pIdxKey, pSortKey, nSortKey, exactMutMapKey,
+        pCur, (int)pIdxKey->nField, &pIdxKey->eqSeen, pSortKey, nSortKey,
+        exactMutMapKey,
         isDeleted, pRes, &done);
     if( rc!=SQLITE_OK || done ) return rc;
     if( exactOnly ){
@@ -1270,6 +1277,61 @@ static int prollyIndexMoveto(
   }
   return SQLITE_OK;
 }
+/* Exact full-primary-key seek on a table root from its stored key bytes:
+** the exact-match half of prollyIndexMoveto, without an unpacked record. */
+int prollyIndexMovetoExactSortKey(
+  BtCursor *pCur,
+  const u8 *pKey,
+  int nKey,
+  int *pRes
+){
+  int nAll = pCur->pKeyInfo->nAllField;
+  int nPk = pCur->pKeyInfo->nKeyField;
+  int done = 0;
+  int isDeleted = 0;
+  u8 eqSeen = 0;
+  int rc;
+
+  if( pCur->pBtree ) pCur->pBtree->nSeek++;
+  if( pCur->pBt ) prollyStatAdd(&pCur->pBt->stats, nSeek, 1);
+
+  clearMergeCursorState(pCur);
+  CLEAR_CACHED_PAYLOAD(pCur);
+  CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
+
+  refreshCursorRoot(pCur);
+
+  if( pCur->pSeekSortKey==pCur->aSeekSortKey ){
+    pCur->pSeekSortKey = 0;
+    pCur->nSeekSortKeyAlloc = 0;
+  }
+  if( pCur->nSeekSortKeyAlloc<nKey ){
+    u8 *pNew = sqlite3_realloc64(pCur->pSeekSortKey, (u64)nKey);
+    if( !pNew ) return SQLITE_NOMEM;
+    pCur->pSeekSortKey = pNew;
+    pCur->nSeekSortKeyAlloc = nKey;
+  }
+  memcpy(pCur->pSeekSortKey, pKey, nKey);
+  pCur->nSeekSortKey = nKey;
+  pCur->nSeekKeyField = nPk<nAll ? nPk : 0;
+
+  rc = indexMovetoExactMutMap(pCur, nAll, &eqSeen, pCur->pSeekSortKey, nKey,
+                              1, pRes, &done, &isDeleted);
+  if( rc!=SQLITE_OK || done ) return rc;
+  if( keyAboveLoadedRoot(pCur, pCur->pSeekSortKey, nKey) ){
+    pCur->eState = CURSOR_INVALID;
+    *pRes = -1;
+    return SQLITE_OK;
+  }
+  rc = indexMovetoExactTreeHit(pCur, nAll, &eqSeen, pCur->pSeekSortKey, nKey,
+                               1, isDeleted, pRes, &done);
+  if( rc!=SQLITE_OK || done ) return rc;
+  pCur->eState = CURSOR_INVALID;
+  *pRes = -1;
+  return SQLITE_OK;
+}
+
 int prollyBtCursorIndexMoveto(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,

@@ -239,6 +239,86 @@ static int cursorPayloadFault(
   return rc;
 }
 
+/* The full sort key under a valid cursor, from the pending map or the tree.
+** SQLITE_NOTFOUND when the cursor is in any other state. */
+int prollyBtCursorCurrentSortKey(BtCursor *pCur, const u8 **ppKey, int *pnKey){
+  if( pCur->eState!=CURSOR_VALID || pCur->curIntKey ) return SQLITE_NOTFOUND;
+  if( pCur->mmActive ){
+    ProllyMutMapEntry *e = 0;
+    int rc;
+    if( pCur->mergeSrc!=MERGE_SRC_MUT && pCur->mergeSrc!=MERGE_SRC_BOTH ){
+      return SQLITE_NOTFOUND;
+    }
+    rc = currentMutMapEntry(pCur, &e);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !e ) return SQLITE_NOTFOUND;
+    *ppKey = e->pKey;
+    *pnKey = e->nKey;
+    return SQLITE_OK;
+  }
+  if( pCur->deferredTreeSeek || !prollyCursorIsValid(&pCur->pCur) ){
+    return SQLITE_NOTFOUND;
+  }
+  if( cursorHasTreePrefix(pCur) ){
+    int rc = cursorLoadFullLeaf(pCur, ~(u32)0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  prollyCursorKey(&pCur->pCur, ppKey, pnKey);
+  return SQLITE_OK;
+}
+
+/* An index entry ends with the table's primary key. When those trailing
+** fields are the key in order, with the same sort order and binary
+** collation, their bytes are the table's stored key and the row can be
+** sought without decoding the entry and re-encoding the key. Numeric fields
+** encode differently before a DESC field, so the field after the key must
+** match too. SQLITE_NOTFOUND: the caller decodes and re-encodes. */
+int sqlite3BtreeProllyMovetoIndexPk(
+  BtCursor *pTab,
+  BtCursor *pIdx,
+  const u32 *aMap,
+  int *pRes
+){
+  const KeyInfo *pTk;
+  const KeyInfo *pIk;
+  const u8 *pKey;
+  int nKey;
+  int nPk;
+  int first;
+  int off;
+  int j;
+  int rc;
+
+  if( !pTab || !pIdx || pTab->pCurOps!=&prollyCursorOps
+   || pIdx->pCurOps!=&prollyCursorOps ){
+    return SQLITE_NOTFOUND;
+  }
+  pTk = pTab->pKeyInfo;
+  pIk = pIdx->pKeyInfo;
+  if( !pTk || !pIk || pTab->curIntKey || !pTab->isTableRoot ) return SQLITE_NOTFOUND;
+  nPk = (int)aMap[0];
+  if( nPk<1 || nPk!=pTk->nKeyField ) return SQLITE_NOTFOUND;
+  first = (int)aMap[1];
+  if( first+nPk!=pIk->nAllField ) return SQLITE_NOTFOUND;
+  for(j=0; j<nPk; j++){
+    u8 tFlags = pTk->aSortFlags ? pTk->aSortFlags[j] : 0;
+    u8 iFlags = pIk->aSortFlags ? pIk->aSortFlags[first+j] : 0;
+    if( (int)aMap[j+1]!=first+j || tFlags!=iFlags
+     || !sqlite3IsBinary(pTk->aColl[j]) || !sqlite3IsBinary(pIk->aColl[first+j]) ){
+      return SQLITE_NOTFOUND;
+    }
+  }
+  if( pTk->nAllField>nPk && pTk->aSortFlags
+   && (pTk->aSortFlags[nPk] & KEYINFO_ORDER_DESC)!=0 ){
+    return SQLITE_NOTFOUND;
+  }
+  rc = prollyBtCursorCurrentSortKey(pIdx, &pKey, &nKey);
+  if( rc!=SQLITE_OK ) return rc;
+  off = sortKeyFieldOffset(pKey, nKey, pIk, first);
+  if( off<0 ) return SQLITE_NOTFOUND;
+  return prollyIndexMovetoExactSortKey(pTab, pKey+off, nKey-off, pRes);
+}
+
 int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   *ppData = 0;
   *pnData = 0;

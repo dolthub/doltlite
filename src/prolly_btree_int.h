@@ -472,6 +472,9 @@ void invalidateSchema(Btree *pBtree);
 void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap);
 int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
+int prollyBtCursorCurrentSortKey(BtCursor *pCur, const u8 **ppKey, int *pnKey);
+int prollyIndexMovetoExactSortKey(BtCursor *pCur, const u8 *pKey, int nKey,
+                                  int *pRes);
 int flushIfNeeded(BtCursor *pCur);
 int flushPendingForTable(Btree *pBtree, BtShared *pBt,
                                 struct TableEntry *pTE, int clearInPlace);
