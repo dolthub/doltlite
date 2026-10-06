@@ -293,12 +293,20 @@ static SQLITE_INLINE struct TableEntry *doltliteFindTableByName(
   return 0;
 }
 
+static SQLITE_INLINE int doltliteVtabConstraintMatchesCollation(
+  sqlite3_index_info *pInfo,
+  int iConstraint,
+  const char *zExpected
+){
+  const char *zColl = sqlite3_vtab_collation(pInfo, iConstraint);
+  return zColl && zExpected && sqlite3_stricmp(zColl, zExpected)==0;
+}
+
 static SQLITE_INLINE int doltliteVtabConstraintIsBinary(
   sqlite3_index_info *pInfo,
   int iConstraint
 ){
-  const char *zColl = sqlite3_vtab_collation(pInfo, iConstraint);
-  return zColl && sqlite3_stricmp(zColl, "BINARY")==0;
+  return doltliteVtabConstraintMatchesCollation(pInfo, iConstraint, "BINARY");
 }
 
 static SQLITE_INLINE int doltliteBestIndexRefs(

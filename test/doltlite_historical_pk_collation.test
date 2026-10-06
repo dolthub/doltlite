@@ -1,0 +1,95 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc pk_fold {a b} { string compare -nocase $a $b }
+foreach {name schema values queries} {
+  binary {k TEXT PRIMARY KEY} {('A'),('a'),('A  ')} {
+    nocase_rhs {k='a' COLLATE NOCASE}
+    nocase_lhs {k COLLATE NOCASE='a'}
+    rtrim_rhs {k='A' COLLATE RTRIM}
+    rtrim_lhs {k COLLATE RTRIM='A'}
+    custom {k='a' COLLATE pk_fold}
+    bound {k=$needle COLLATE NOCASE}
+  }
+  nocase {k TEXT COLLATE NOCASE PRIMARY KEY} {('A'),('A  ')} {
+    declared {k='a'}
+    matching {k='a' COLLATE nocase}
+    binary {k='a' COLLATE BINARY}
+    rtrim {k='A' COLLATE RTRIM}
+  }
+  rtrim {k TEXT COLLATE RTRIM PRIMARY KEY} {('A  '),('a')} {
+    declared {k='A'}
+    matching {k='A' COLLATE rtrim}
+    binary {k='A' COLLATE BINARY}
+    nocase {k='A' COLLATE NOCASE}
+  }
+  index_binary {k TEXT COLLATE NOCASE,PRIMARY KEY(k COLLATE BINARY)}
+      {('A'),('a')} {
+    declared {k='a'}
+    matching {k='A' COLLATE BINARY}
+    nocase {k='a' COLLATE NOCASE}
+    rtrim {k='A ' COLLATE RTRIM}
+  }
+  index_nocase {k TEXT,PRIMARY KEY(k COLLATE NOCASE)} {('A'),('A  ')} {
+    declared {k='a'}
+    matching {k='a' COLLATE NOCASE}
+    rtrim {k='A' COLLATE RTRIM}
+    binary {k='A' COLLATE BINARY}
+  }
+  composite {b TEXT COLLATE RTRIM,k TEXT,PRIMARY KEY(k DESC,b)}
+      {('x','A'),('x ','a'),('y','A')} {
+    first {k='a' COLLATE NOCASE AND b='x'}
+    second {k='A' AND b='X' COLLATE NOCASE}
+    both {k='a' COLLATE NOCASE AND b='X' COLLATE NOCASE}
+    matching {k='A' COLLATE BINARY AND b='x' COLLATE RTRIM}
+    mixed {k='a' COLLATE NOCASE AND k='A' COLLATE BINARY AND b='x'}
+  }
+} {
+  reset_db
+  db collate pk_fold pk_fold
+  do_execsql_test historical-pk-collation-$name-setup "
+    CREATE TABLE t($schema);
+    INSERT INTO t VALUES $values;
+    SELECT length(dolt_commit('-Am','base'));
+  " {40}
+  set needle a
+  foreach {predicate where} $queries {
+    set expected($predicate) [db onecolumn "SELECT count(*) FROM t WHERE $where"]
+  }
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {
+      db close
+      sqlite3 db test.db
+      db collate pk_fold pk_fold
+    }
+    foreach {surface source eqBit} {
+      snapshot dolt_at_t('HEAD') 2
+      history dolt_history_t 1
+      blame dolt_blame_t 1
+    } {
+      foreach {predicate where} $queries {
+        do_execsql_test historical-pk-collation-$name-$phase-$surface-$predicate "
+          SELECT count(*) FROM $source WHERE $where;
+          SELECT count(*) FROM (SELECT * FROM $source LIMIT -1) WHERE $where;
+        " [list $expected($predicate) $expected($predicate)]
+      }
+      if {$name eq "binary"} {
+        foreach {predicate where seek} {
+          compatible {k='A'} 1
+          incompatible {k='a' COLLATE NOCASE} 0
+        } {
+          do_test historical-pk-collation-$name-$phase-$surface-plan-$predicate {
+            set plan [db eval "EXPLAIN QUERY PLAN
+                               SELECT count(*) FROM $source WHERE $where"]
+            if {![regexp {VIRTUAL TABLE INDEX ([0-9]+):} $plan all idxNum]} {
+              error "missing virtual-table plan: $plan"
+            }
+            expr {($idxNum & $eqBit)!=0}
+          } $seek
+        }
+      }
+    }
+  }
+}
+
+finish_test

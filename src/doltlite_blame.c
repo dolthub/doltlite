@@ -937,6 +937,8 @@ static int bmDisconnect(sqlite3_vtab *pVtab){
 
 static int bmBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   BlameVtab *v = (BlameVtab*)pVtab;
+  Table *pTab;
+  Index *pPk;
   int i, j, nArg = 0;
 
   if( blameIntPkEnabled(v) ){
@@ -950,13 +952,17 @@ static int bmBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   pInfo->estimatedRows = 1000;
   pInfo->idxNum = 0;
   if( v->nPkCols<=0 ) return SQLITE_OK;
+  pTab = sqlite3FindTable(v->db, v->zTableName, "main");
+  pPk = pTab ? sqlite3PrimaryKeyIndex(pTab) : 0;
+  if( !pPk || pPk->nKeyCol!=v->nPkCols ) return SQLITE_OK;
   for(i=0; i<v->nPkCols; i++){
     int iEq = -1;
     for(j=0; j<pInfo->nConstraint; j++){
       const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[j];
       if( !pC->usable ) continue;
       if( pC->iColumn!=i ) continue;
-      if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ ){
+      if( pC->op==SQLITE_INDEX_CONSTRAINT_EQ
+       && doltliteVtabConstraintMatchesCollation(pInfo, j, pPk->azColl[i]) ){
         iEq = j;
         break;
       }
