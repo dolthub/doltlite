@@ -5,6 +5,7 @@ import io
 import itertools
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 import subprocess
@@ -797,23 +798,53 @@ class HotspotTests(unittest.TestCase):
                            ("github.repository", "dolthub/doltlite"),
                            ("github.run_id", "123")):
             script = script.replace("${{ " + key + " }}", value)
-        for status, measured in (("success", True), ("failure", True), ("failure", False)):
-            with self.subTest(status=status, measured=measured), tempfile.TemporaryDirectory() as directory:
+        for status, measured, counters in (("success", True, "success"), ("failure", True, "success"),
+                                           ("failure", False, "success"), ("success", True, "failure")):
+            with self.subTest(status=status, measured=measured, counters=counters), \
+                    tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 results = root / "hotspot-results"
                 if measured:
                     results.mkdir()
                     (results / "hotspots.md").write_text("## Performance hotspots\n\nMeasured table\n")
+                if counters == "failure":
+                    results.mkdir(exist_ok=True)
+                    (results / "counters.txt").write_text(
+                        "w record_bytes: base=10 cand=0 ratio=0.000 diff\n"
+                        "w sortkey_parse: base=100 cand=120 ratio=1.200 REGRESS\n"
+                        "engine counters: 1 workloads, failures 1\n")
                 env = dict(os.environ, RUNNER_TEMP=str(root), GITHUB_STEP_SUMMARY=str(root / "summary"))
                 subprocess.run(["bash", "-e", "-o", "pipefail", "-c",
-                                script.replace("${{ steps.hotspots.outcome }}", status)],
+                                script.replace("${{ steps.hotspots.outcome }}", status)
+                                      .replace("${{ steps.counters.outcome }}", counters)],
                                env=env, check=True, capture_output=True)
                 body = (results / "summary.md").read_text()
+                self.assertIn(f"**Engine counters:** {counters}", body)
+                if counters == "failure":
+                    self.assertIn("w sortkey_parse: base=100 cand=120 ratio=1.200 REGRESS", body)
+                    self.assertNotIn("record_bytes", body)
+                    self.assertIn("Measured table", body)
                 self.assertEqual(body, (root / "summary").read_text())
                 self.assertIn("<!-- benchmark:hotspots -->", body)
                 self.assertIn(f"**Gate:** {status}", body)
                 self.assertIn("https://github.com/dolthub/doltlite/actions/runs/123", body)
                 self.assertIn("Measured table" if measured else "No complete hotspot measurements", body)
+
+    def test_counter_regressions_report_then_fail_the_job(self):
+        workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()
+        job = workflow.split("  hotspots:\n", 1)[1].split("\n  relative-report:", 1)[0]
+        steps = re.findall(r"^    - name: (.+)$", job, re.MULTILINE)
+        counters = job.split("    - name: Gate deterministic engine counters\n", 1)[1].split("\n    - name:", 1)[0]
+        self.assertIn("id: counters", counters)
+        self.assertIn("continue-on-error: true", counters)
+        self.assertIn("set -o pipefail", counters)
+        self.assertIn('tee "$RUNNER_TEMP/hotspot-results/counters.txt"', counters)
+        self.assertLess(steps.index("Gate deterministic engine counters"),
+                        steps.index("Measure and gate performance hotspots"))
+        self.assertEqual(steps[-1], "Fail on engine counter regressions")
+        last = job.split("    - name: Fail on engine counter regressions\n", 1)[1]
+        self.assertIn("if: ${{ steps.counters.outcome == 'failure' }}", last)
+        self.assertIn("exit 1", last)
 
     def test_hotspot_comment_creates_then_updates(self):
         workflow = (hotspots.TEST_DIR.parent / ".github/workflows/benchmark.yml").read_text()
