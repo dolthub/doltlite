@@ -32,11 +32,10 @@ same_as_scan() {
 fetch_record_bytes() {
   run_test "$1" \
     "CREATE TEMP TABLE s0 AS SELECT value FROM dolt_engine_stats WHERE name='record_bytes';
-.output /dev/null
 SELECT sum(length(v)) FROM t INDEXED BY t_g WHERE g=3;
-.output stdout
 SELECT ((SELECT value FROM dolt_engine_stats WHERE name='record_bytes') - (SELECT value FROM s0))$2;" \
-    "$3" "$DB"
+    "430
+$3" "$DB"
 }
 
 shape() {
