@@ -1,0 +1,102 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name oldDecl newDecl} {
+  nocase_binary {TEXT COLLATE NOCASE} TEXT
+  binary_nocase TEXT {TEXT COLLATE NOCASE}
+  rtrim_binary {TEXT COLLATE RTRIM} TEXT
+  binary_rtrim TEXT {TEXT COLLATE RTRIM}
+  text_numeric TEXT NUMERIC
+  numeric_text NUMERIC TEXT
+  text_blob TEXT BLOB
+  blob_text BLOB TEXT
+  integer_real INTEGER REAL
+  real_integer REAL INTEGER
+} {
+  reset_db
+  set queries {
+    numeric {SELECT id FROM @ WHERE k='01' OR v='zzz' ORDER BY id}
+    nocase {SELECT id FROM @ WHERE k='ABC' OR v='zzz' ORDER BY id}
+    rtrim {SELECT id FROM @ WHERE k='tail' OR v='zzz' ORDER BY id}
+    sort {SELECT id FROM @ ORDER BY k,id}
+    distinct {SELECT count(DISTINCT k) FROM @}
+    group {SELECT min(id),count(*) FROM @ GROUP BY k ORDER BY min(id)}
+    join {WITH rhs(k) AS (VALUES('01'),('ABC'),('tail'))
+          SELECT h.id FROM @ h JOIN rhs ON h.k=rhs.k ORDER BY h.id}
+    types {SELECT id,typeof(k),quote(k) FROM @ ORDER BY id}
+  }
+  foreach ref {old new} decl [list $oldDecl $newDecl] {
+    if {$ref eq "new"} {execsql {DROP TABLE t}}
+    execsql "CREATE TABLE t(id INTEGER PRIMARY KEY,k $decl,v TEXT);"
+    execsql {
+      INSERT INTO t VALUES
+        (1,'01','one'),(2,'1','two'),(3,'AbC','caps'),(4,'abc','lower'),
+        (5,'tail','bare'),(6,'tail ','padded'),(7,x'3432','blob'),(8,42,'number');
+    }
+    foreach {query sql} $queries {
+      set expected($ref,$query) [execsql [string map [list @ t] $sql]]
+    }
+    execsql "SELECT dolt_commit('-Am','$ref'); SELECT dolt_tag('$ref');"
+  }
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {
+      db close
+      sqlite3 db test.db
+    }
+    foreach {surface module} {
+      snapshot dolt_at_t
+      history dolt_history_t
+    } {
+      set turn 0
+      foreach ref {old new old new} {
+        incr turn
+        set source "${module}('$ref')"
+        if {$surface eq "history"} {
+          set source "(SELECT * FROM $source
+                       WHERE commit_hash=dolt_hashof('$ref'))"
+        }
+        foreach {query sql} $queries {
+          do_execsql_test historical-declaration-$name-$phase-$surface-$turn-$query \
+              [string map [list @ $source] $sql] $expected($ref,$query)
+        }
+      }
+    }
+  }
+}
+
+reset_db
+do_execsql_test historical-declaration-nocase-setup {
+  CREATE TABLE t(k TEXT COLLATE NOCASE PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES('A','old');
+  SELECT length(dolt_commit('-Am','base'));
+  DROP TABLE t;
+  CREATE TABLE t(k TEXT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES('B','new');
+  SELECT length(dolt_commit('-Am','new'));
+} {40 40}
+do_execsql_test historical-declaration-nocase-repro {
+  SELECT quote(k),v FROM dolt_at_t('HEAD~1');
+  SELECT k='b' FROM t;
+  SELECT count(*) FROM dolt_at_t('HEAD') WHERE k='b';
+  SELECT count(*) FROM dolt_at_t('HEAD') WHERE k='b' OR v='zzz';
+} {'A' old 0 0 0}
+
+reset_db
+do_execsql_test historical-declaration-numeric-setup {
+  CREATE TABLE t(k TEXT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES('01','old');
+  SELECT length(dolt_commit('-Am','text'));
+  DROP TABLE t;
+  CREATE TABLE t(k NUMERIC PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'new');
+  SELECT length(dolt_commit('-Am','num'));
+} {40 40}
+do_execsql_test historical-declaration-numeric-repro {
+  SELECT quote(k),typeof(k),v FROM dolt_at_t('HEAD~1');
+  SELECT k='01' FROM t;
+  SELECT quote(k),typeof(k),v FROM dolt_at_t('HEAD')
+    WHERE k='01' OR v='zzz';
+  SELECT quote(k),v FROM dolt_at_t('HEAD') WHERE k=1;
+} {'01' text old 1 1 integer new 1 new}
+
+finish_test
