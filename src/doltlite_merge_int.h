@@ -296,6 +296,30 @@ int trySchemaColumnMerge(
   char **pzErrDetail
 );
 
+int schemaDefinitionsEquivalent(const char *zLeft, const char *zRight);
+int schemaNonCheckTextMatches(const char *zA, const char *zB, int *pbMatch);
+int schemaApplyDisjointCheckUnions(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs
+);
+int schemaTableChecksUnified(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const char *zName,
+  int *pbUnion
+);
+int mergePromoteMasterSchemaConflicts(
+  struct TableEntry *aAnc, int nAnc,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  MergeConflictTable **ppConflictTables,
+  int *pnConflictTables,
+  int *pTotalConflicts
+);
+
 void freeConflictRows(DoltliteConflictRow *aRows, int nRows);
 void freeAddedColumns(char **azCols, int nCols);
 
