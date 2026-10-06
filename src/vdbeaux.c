@@ -3870,33 +3870,22 @@ void sqlite3VdbeDelete(Vdbe *p){
 #ifdef DOLTLITE_PROLLY
 /* Seek a primary-key table cursor to the row its pAltCursor index entry
 ** names, from the key columns aPkSeekMap locates in that entry. */
-static int vdbeFinishPkMoveto(VdbeCursor *p){
-  VdbeCursor *pIdx = p->pAltCursor;
+static int vdbeFinishPkMovetoDecoded(
+  VdbeCursor *p,
+  VdbeCursor *pIdx,
+  const u32 *aMap,
+  int *pRes
+){
   KeyInfo *pIdxInfo = pIdx->pKeyInfo;
-  const u32 *aMap = p->aPkSeekMap;
   sqlite3 *db = pIdxInfo->db;
   UnpackedRecord *pIdxRec;
   UnpackedRecord *pPk;
   u64 nIdx = ROUND8P(sizeof(UnpackedRecord)) + sizeof(Mem)*pIdxInfo->nAllField;
   u32 nPayload;
   Mem m;
-  int res = 0;
   int rc;
   u32 j;
-  int bMoved;
 
-  /* A write since OP_DeferredSeek may have moved the index cursor; the row
-  ** is the one its restored entry names, or none if that entry is gone. */
-  bMoved = sqlite3BtreeCursorHasMoved(pIdx->uc.pCursor)
-        || p->movetoTarget!=db->nTotalChange;
-  rc = sqlite3VdbeCursorRestore(pIdx);
-  if( rc ) return rc;
-  if( pIdx->nullRow ){
-    p->nullRow = 1;
-    p->deferredMoveto = 0;
-    p->cacheStatus = CACHE_STALE;
-    return SQLITE_OK;
-  }
   nPayload = sqlite3BtreePayloadSize(pIdx->uc.pCursor);
   sqlite3VdbeMemInit(&m, db, 0);
   rc = sqlite3VdbeMemFromBtreeZeroOffset(pIdx->uc.pCursor, nPayload, &m);
@@ -3925,10 +3914,39 @@ static int vdbeFinishPkMoveto(VdbeCursor *p){
     pPk->aMem[j] = pIdxRec->aMem[aMap[j+1]];
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3BtreeProllyIndexMovetoExact(p->uc.pCursor, pPk, &res);
+    rc = sqlite3BtreeProllyIndexMovetoExact(p->uc.pCursor, pPk, pRes);
   }
   sqlite3DbFreeNN(db, pIdxRec);
   sqlite3VdbeMemRelease(&m);
+  return rc;
+}
+
+static int vdbeFinishPkMoveto(VdbeCursor *p){
+  VdbeCursor *pIdx = p->pAltCursor;
+  KeyInfo *pIdxInfo = pIdx->pKeyInfo;
+  const u32 *aMap = p->aPkSeekMap;
+  sqlite3 *db = pIdxInfo->db;
+  int res = 0;
+  int rc;
+  int bMoved;
+
+  /* A write since OP_DeferredSeek may have moved the index cursor; the row
+  ** is the one its restored entry names, or none if that entry is gone. */
+  bMoved = sqlite3BtreeCursorHasMoved(pIdx->uc.pCursor)
+        || p->movetoTarget!=db->nTotalChange;
+  rc = sqlite3VdbeCursorRestore(pIdx);
+  if( rc ) return rc;
+  if( pIdx->nullRow ){
+    p->nullRow = 1;
+    p->deferredMoveto = 0;
+    p->cacheStatus = CACHE_STALE;
+    return SQLITE_OK;
+  }
+  rc = sqlite3BtreeProllyMovetoIndexPk(p->uc.pCursor, pIdx->uc.pCursor,
+                                       aMap, &res);
+  if( rc==SQLITE_NOTFOUND ){
+    rc = vdbeFinishPkMovetoDecoded(p, pIdx, aMap, &res);
+  }
   if( rc ) return rc;
   if( res!=0 ){
     /* A write since OP_DeferredSeek (movetoTarget holds the change count

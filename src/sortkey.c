@@ -964,6 +964,22 @@ int sortKeyFieldAt(
   return SQLITE_NOTFOUND;
 }
 
+int sortKeyFieldOffset(
+  const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo, int iField
+){
+  SortKeyField skipped;
+  int pos = 0;
+  int nField;
+
+  for(nField=0; nField<iField; nField++){
+    if( pos>=nSortKey ) return -1;
+    pos = sortKeyFieldParse(pSortKey, nSortKey, pos,
+                            descFromKeyInfo(pKeyInfo, nField), 0, &skipped, 0);
+    if( pos<0 ) return -1;
+  }
+  return pos<nSortKey ? pos : -1;
+}
+
 void sortKeyFieldCopy(const SortKeyField *pField, u8 *pOut){
   const u8 *p = pField->pEnc;
   const u8 *pEnd = p + pField->nEnc;

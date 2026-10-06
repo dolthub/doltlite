@@ -112,5 +112,8 @@ int sortKeyFieldAt(
   struct ProllyStats *pStats
 );
 void sortKeyFieldCopy(const SortKeyField *pField, u8 *pOut);
+int sortKeyFieldOffset(
+  const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo, int iField
+);
 
 #endif

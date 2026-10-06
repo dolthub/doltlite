@@ -142,6 +142,7 @@ doltlite_branch_edge.sh
 doltlite_diff_alter.sh
 doltlite_gc_scale.sh
 doltlite_index_prefix.sh
+doltlite_index_fetch_pk_bytes.sh
 doltlite_index_reverse_prefix_seek.sh
 doltlite_txn_seek_visibility.sh
 doltlite_txn_seek_prefix_contract.sh
@@ -236,6 +237,7 @@ doltlite_working_set.sh
 doltlite_history.sh
 doltlite_at.sh
 doltlite_clustered_pk_pushdown.sh
+doltlite_index_fetch_pk_bytes.sh
 doltlite_gc.sh
 doltlite_gc_session_state.sh
 doltlite_gc_history.sh
