@@ -3,7 +3,10 @@
 
 A baseline built before dolt_engine_stats existed is a determinism check of
 the candidate only. Once both binaries expose the table, a counter that grows
-by more than 5 percent and at least 8 fails the run.
+by more than 5 percent and at least 8 fails the run, unless the pull request's
+title or description carries a reviewed exception for it:
+
+    perf-counter-exception: <workload> <counter> <reason>
 """
 
 import argparse
@@ -22,6 +25,35 @@ CHUNK = re.compile(
 RATIO = 1.05
 ABS_FLOOR = 8
 ROWS = 256
+EXCEPTION = re.compile(
+    r"^[ \t>*-]*perf-counter-exception:[ \t]*([A-Za-z0-9_]+)[ \t]+([a-z_]+)[ \t]+(\S[^\r\n]*?)[ \t]*$",
+    re.M)
+
+
+def parse_exceptions(text):
+    return {(workload, counter): reason
+            for workload, counter, reason in EXCEPTION.findall(text or "")}
+
+
+def compare_counters(name, base, cand, exceptions, used):
+    """Print each changed counter and return the ones that fail the gate."""
+    worse = []
+    for key in sorted(set(base) | set(cand)):
+        b = base.get(key, 0)
+        c = cand.get(key, 0)
+        if b == c:
+            continue
+        flag = "diff"
+        if counter_regressed(b, c):
+            if (name, key) in exceptions:
+                used.add((name, key))
+                flag = f"ALLOWED (PR exception: {exceptions[(name, key)]})"
+            else:
+                flag = "REGRESS"
+                worse.append(key)
+        ratio = "inf" if b == 0 else f"{c / b:.3f}"
+        print(f"{name} {key}: base={b} cand={c} ratio={ratio} {flag}")
+    return worse
 
 
 def counter_regressed(base, cand):
@@ -227,7 +259,13 @@ def main(argv=None):
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--exceptions", type=Path,
+                        help="text of the pull request's title and description")
     args = parser.parse_args(argv)
+    exceptions = {}
+    if args.exceptions and args.exceptions.is_file():
+        exceptions = parse_exceptions(args.exceptions.read_text())
+    used = set()
     if not stats_available(args.candidate, args.timeout):
         print("candidate has no dolt_engine_stats", file=sys.stderr)
         return 1
@@ -248,20 +286,11 @@ def main(argv=None):
             print(f"{name}: deterministic")
             continue
         base = read_counters(args.baseline, work, args.timeout)
-        worse = []
-        names = sorted(set(base) | set(first))
-        for key in names:
-            b = base.get(key, 0)
-            c = first.get(key, 0)
-            if b == c:
-                continue
-            flag = "REGRESS" if counter_regressed(b, c) else "diff"
-            if flag == "REGRESS":
-                worse.append(key)
-            ratio = "inf" if b == 0 else f"{c / b:.3f}"
-            print(f"{name} {key}: base={b} cand={c} ratio={ratio} {flag}")
+        worse = compare_counters(name, base, first, exceptions, used)
         if worse:
             failures.append(f"{name}: {', '.join(worse)}")
+    for workload, counter in sorted(set(exceptions) - used):
+        print(f"unused exception: {workload} {counter} (no regression to allow)")
     print(f"engine counters: {count} workloads, failures {len(failures)}")
     if failures:
         for item in failures:
