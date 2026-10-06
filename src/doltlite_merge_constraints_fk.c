@@ -368,13 +368,19 @@ static int detectFkViolationsForSpec(
   char *zQuery = 0;
   sqlite3_stmt *pStmt = 0;
   int nKeyCol;
+  char *zRowid = 0;
   FkParentLookup parent = {0};
   char *zInfo = 0;
   int rc;
   int stepRc;
 
+  if( hasRowid ){
+    rc = loadMergeRowidSql(db, zChildTable, &zRowid);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   pSql = sqlite3_str_new(0);
-  sqlite3_str_appendf(pSql, "SELECT %s", hasRowid ? "rowid" : pChildPk->zPkCols);
+  sqlite3_str_appendf(pSql, "SELECT %s", hasRowid ? zRowid : pChildPk->zPkCols);
+  sqlite3_free(zRowid);
   for(int i=0; i<nCol; i++){
     sqlite3_str_appendf(pSql, ", c.\"%w\"", azFrom[i]);
   }

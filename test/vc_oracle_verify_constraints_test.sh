@@ -139,7 +139,6 @@ PRAGMA foreign_keys=ON;
 "'mixed'" \
 "$FOLLOW_AGG" 0
 
-
 # Verifying an unrelated table must not retract merge-recorded violations.
 MERGE_CV_SETUP="
 CREATE TABLE parent(pk INTEGER PRIMARY KEY);
@@ -343,5 +342,32 @@ UPDATE \`--all\` SET v = 20 WHERE pk = 1;
 " \
 "'--', '--all'" \
 "$FOLLOW_AGG_COUNT" 0
+
+for shadow in text wrong_row all_aliases; do
+  case "$shadow" in
+    text) columns="rowid TEXT DEFAULT 'label'" ;;
+    wrong_row) columns="rowid INT DEFAULT 2" ;;
+    all_aliases) columns="rowid TEXT DEFAULT 'label', _rowid_ TEXT DEFAULT 'hidden', oid TEXT DEFAULT 'hidden'" ;;
+  esac
+  for mode in all named output; do
+    case "$mode" in
+      all) args="'--all'" ;;
+      named) args="'--all','t'" ;;
+      output) args="'--all','--output-only'" ;;
+    esac
+    follow="SELECT CONCAT('R|row=',id,':',pid) FROM dolt_constraint_violations_t ORDER BY id;
+SELECT CONCAT('R|count=',count(*)) FROM dolt_constraint_violations_t;"
+    run_oracle "fk_rowid_${shadow}_$mode" \
+"CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY, $columns, pid INT REFERENCES p(id));
+INSERT INTO p VALUES(1);
+INSERT INTO t(id,pid) VALUES(2,1);
+SELECT dolt_commit('-Am','base');
+PRAGMA foreign_keys=OFF;
+INSERT INTO t(id,pid) VALUES(1,9);
+PRAGMA foreign_keys=ON;" \
+"$args" "$follow" 0
+  done
+done
 
 vc_oracle_finish

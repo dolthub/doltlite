@@ -295,4 +295,55 @@ SELECT CONCAT('R|AGG|', 't|', num_violations) FROM dolt_constraint_violations;" 
 "R|AGG|t|1
 R|ST|2|hello|text|cols=[v]"
 
+for shadow in text wrong_row all_aliases; do
+  case "$shadow" in
+    text) columns="rowid TEXT DEFAULT 'label'" ;;
+    wrong_row) columns="rowid INT DEFAULT 2" ;;
+    all_aliases) columns="rowid TEXT DEFAULT 'label', _rowid_ TEXT DEFAULT 'hidden', oid TEXT DEFAULT 'hidden'" ;;
+  esac
+  oracle "check_rowid_$shadow" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, $columns, a INT, b INT, CHECK(a<=b));
+INSERT INTO t(id,a,b) VALUES(1,1,5),(2,1,5);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+UPDATE t SET a=4 WHERE id=1;
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('main');
+UPDATE t SET b=2 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('side');" \
+"SELECT CONCAT('R|',id,'|',a,'|',b) FROM dolt_constraint_violations_t ORDER BY id;
+SELECT CONCAT('R|AGG|',num_violations) FROM dolt_constraint_violations;"
+
+  oracle "fk_rowid_$shadow" \
+"CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE t(id INTEGER PRIMARY KEY, $columns, pid INT REFERENCES p(id));
+INSERT INTO p VALUES(1),(2);
+INSERT INTO t(id,pid) VALUES(1,1),(2,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+INSERT INTO t(id,pid) VALUES(3,2);
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('main');
+DELETE FROM p WHERE id=2;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('side');" \
+"SELECT CONCAT('R|',id,'|',pid) FROM dolt_constraint_violations_t ORDER BY id;
+SELECT CONCAT('R|AGG|',num_violations) FROM dolt_constraint_violations;"
+
+  oracle "unique_rowid_$shadow" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, $columns, u INT UNIQUE);
+INSERT INTO t(id,u) VALUES(1,1),(2,2);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+UPDATE t SET u=9 WHERE id=2;
+SELECT dolt_commit('-Am','side');
+SELECT dolt_checkout('main');
+UPDATE t SET u=9 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('side');" \
+"SELECT CONCAT('R|',id,'|',u) FROM dolt_constraint_violations_t ORDER BY id;
+SELECT CONCAT('R|AGG|',num_violations) FROM dolt_constraint_violations;"
+done
+
 vc_oracle_finish

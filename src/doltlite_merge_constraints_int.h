@@ -64,6 +64,7 @@ int isRowPreExisting(
   const u8 *pAncVal, int nAncVal
 );
 int tableHasRowid(sqlite3 *db, const char *zTable, int *pHasRowid);
+int loadMergeRowidSql(sqlite3 *db, const char *zTable, char **pzSql);
 int fetchOrphanRow(
   sqlite3 *db, const char *zTable, i64 rowid,
   u8 **ppKey, int *pnKey, u8 **ppVal, int *pnVal

@@ -106,6 +106,7 @@ static int checkWalkTable(
   int offset = 0;
   int hasRowid = 1;
   MergePkInfo pkInfo;
+  char *zRowid = 0;
   int rc;
   (void)aCur; (void)nCur;
 
@@ -133,9 +134,15 @@ static int checkWalkTable(
     }
 
     if( hasRowid ){
+      if( !zRowid ) rc = loadMergeRowidSql(db, zTable, &zRowid);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zExpr);
+        sqlite3_free(zCkName);
+        break;
+      }
       zQuery = sqlite3_mprintf(
-          "SELECT rowid FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
-          zTable, zExpr);
+          "SELECT %s FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
+          zRowid, zTable, zExpr);
     }else{
       zQuery = sqlite3_mprintf(
           "SELECT %s FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
@@ -231,6 +238,7 @@ static int checkWalkTable(
   }
 
   freeMergePkInfo(&pkInfo);
+  sqlite3_free(zRowid);
   return rc;
 }
 

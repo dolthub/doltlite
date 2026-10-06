@@ -759,7 +759,10 @@ static int detectUniqueViolationsForIndex(
   int nEntry = 0;
   int nAlloc = 0;
   int rc;
+  char *zRowid = 0;
 
+  rc = loadMergeRowidSql(db, zTable, &zRowid);
+  if( rc!=SQLITE_OK ) goto unique_done;
   pKeyInfo = uniqueIndexKeyInfo(db, pIdx, &rc);
   if( !pKeyInfo ) goto unique_done;
   {
@@ -768,12 +771,12 @@ static int detectUniqueViolationsForIndex(
     if( rc!=SQLITE_OK ) goto unique_done;
     if( zWhere ){
       zQuery = sqlite3_mprintf(
-          "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED WHERE (%s)",
-          zSelect, zTable, zWhere);
+          "SELECT %s, %s FROM main.\"%w\" NOT INDEXED WHERE (%s)",
+          zRowid, zSelect, zTable, zWhere);
       sqlite3_free(zWhere);
     }else{
       zQuery = sqlite3_mprintf(
-          "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED", zSelect, zTable);
+          "SELECT %s, %s FROM main.\"%w\" NOT INDEXED", zRowid, zSelect, zTable);
     }
   }
   if( !zQuery ){ rc = SQLITE_NOMEM; goto unique_done; }
@@ -811,6 +814,7 @@ static int detectUniqueViolationsForIndex(
 
 unique_done:
   rc = finishConstraintStmt(pScan, rc);
+  sqlite3_free(zRowid);
   sqlite3_free(zQuery);
   uniqueIndexEntriesFree(db, aEntry, nEntry);
   sqlite3KeyInfoUnref(pKeyInfo);

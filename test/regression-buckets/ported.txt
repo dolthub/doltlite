@@ -53,6 +53,7 @@ doltlite_fk_parent_affinity
 doltlite_fk_lookup
 doltlite_check_tokenization
 doltlite_constraint_temp_shadow
+doltlite_constraint_rowid
 doltlite_clean_temp_shadow
 doltlite_merge_generated
 doltlite_merge_generated_notnull

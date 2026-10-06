@@ -554,6 +554,25 @@ int tableHasRowid(sqlite3 *db, const char *zTable, int *pHasRowid){
   return finishConstraintStmt(pStmt, rc);
 }
 
+int loadMergeRowidSql(sqlite3 *db, const char *zTable, char **pzSql){
+  Table *pTab = sqlite3FindTable(db, zTable, "main");
+  const char *zColumn;
+
+  *pzSql = 0;
+  if( !pTab ) return SQLITE_NOTFOUND;
+  if( !HasRowid(pTab) ) return SQLITE_ERROR;
+  zColumn = pTab->iPKey>=0 ? pTab->aCol[pTab->iPKey].zCnName
+                          : sqlite3RowidAlias(pTab);
+  if( !zColumn ){
+    sqlite3ErrorWithMsg(db, SQLITE_ERROR,
+        "cannot verify constraints on %s: table shadows every rowid alias",
+        zTable);
+    return SQLITE_ERROR;
+  }
+  *pzSql = sqlite3_mprintf("\"%w\"", zColumn);
+  return *pzSql ? SQLITE_OK : SQLITE_NOMEM;
+}
+
 int fetchOrphanRow(
   sqlite3 *db,
   const char *zTable,
@@ -630,6 +649,7 @@ int scanMergeColumnFlagViolations(
   int hasRowid;
   int nKeyCol;
   MergePkInfo pkInfo;
+  char *zRowid = 0;
   sqlite3_str *pStr;
   char *zQuery = 0;
   sqlite3_stmt *pQ = 0;
@@ -643,12 +663,16 @@ int scanMergeColumnFlagViolations(
   if( !hasRowid ){
     rc = loadMergePkInfo(db, zTable, &pkInfo);
     if( rc!=SQLITE_OK ) return rc;
+  }else{
+    rc = loadMergeRowidSql(db, zTable, &zRowid);
+    if( rc!=SQLITE_OK ) return rc;
   }
   nKeyCol = hasRowid ? 1 : pkInfo.nPk;
 
   pStr = sqlite3_str_new(db);
   sqlite3_str_appendf(pStr, "SELECT %s",
-                      hasRowid ? "rowid" : pkInfo.zPkCols);
+                      hasRowid ? zRowid : pkInfo.zPkCols);
+  sqlite3_free(zRowid);
   for(i=0; i<nCols; i++){
     if( azExtra ){
       sqlite3_str_appendf(pStr, ", typeof(\"%w\") NOT IN ('null','%s')",
