@@ -1,0 +1,149 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name oldKey newKey oldType newType} {
+  asc_desc {k ASC} {k DESC} TEXT TEXT
+  desc_asc {k DESC} {k ASC} TEXT TEXT
+  same_asc {k ASC} {k ASC} TEXT TEXT
+  same_desc {k DESC} {k DESC} TEXT TEXT
+  composite_first {k DESC,m ASC} {k ASC,m ASC} TEXT TEXT
+  composite_last {k ASC,m DESC} {k ASC,m ASC} TEXT TEXT
+  composite_both {k ASC,m DESC} {k DESC,m ASC} TEXT TEXT
+  composite_order {m ASC,k ASC} {k ASC,m ASC} TEXT TEXT
+  all_pk_asc_desc {k ASC,m ASC} {k DESC,m DESC} TEXT TEXT
+  all_pk_desc_asc {k DESC,m DESC} {k ASC,m ASC} TEXT TEXT
+  binary_nocase {k COLLATE BINARY} {k COLLATE NOCASE} TEXT TEXT
+  nocase_binary {k COLLATE NOCASE} {k COLLATE BINARY} TEXT TEXT
+  binary_rtrim {k COLLATE BINARY} {k COLLATE RTRIM} TEXT TEXT
+  rtrim_binary {k COLLATE RTRIM} {k COLLATE BINARY} TEXT TEXT
+  nocase_rtrim {k COLLATE NOCASE} {k COLLATE RTRIM} TEXT TEXT
+  rtrim_nocase {k COLLATE RTRIM} {k COLLATE NOCASE} TEXT TEXT
+  same_nocase {k COLLATE NOCASE} {k COLLATE nocase} TEXT TEXT
+  same_rtrim {k COLLATE RTRIM} {k COLLATE rtrim} TEXT TEXT
+  int_text {k ASC} {k ASC} INT TEXT
+  text_int {k ASC} {k ASC} TEXT INT
+} {
+  reset_db
+  set fields {k,m,v}
+  set extra {,v TEXT}
+  set oldRows {('A',1,'old-a'),('B ',2,'old-b'),('42',3,'old-42')}
+  set newRows {('A',1,'new-a'),('B ',2,'new-b'),('42',3,'new-42')}
+  set order {CAST(k AS TEXT) COLLATE BINARY,m,v COLLATE BINARY}
+  if {[string match all_pk* $name]} {
+    set fields {k,m}
+    set extra {}
+    set oldRows {('A',1),('B ',2),('42',3)}
+    set newRows $oldRows
+    set order {CAST(k AS TEXT) COLLATE BINARY,m}
+  }
+  execsql "
+    CREATE TABLE t(k $oldType,m INT$extra,PRIMARY KEY($oldKey));
+    INSERT INTO t($fields) VALUES $oldRows;
+    SELECT dolt_commit('-Am','old');
+    SELECT dolt_tag('old');
+    DROP TABLE t;
+    CREATE TABLE t(k $newType,m INT$extra,PRIMARY KEY($newKey));
+    INSERT INTO t($fields) VALUES $newRows;
+    SELECT dolt_commit('-Am','new');
+  "
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {
+      db close
+      sqlite3 db test.db
+    }
+    foreach {surface source} {
+      snapshot_old dolt_at_t('old')
+      snapshot_current dolt_at_t('HEAD')
+      history dolt_history_t
+      history_old dolt_history_t('old')
+      history_commit {dolt_history_t WHERE commit_hash=dolt_hashof('old')}
+    } {
+      set base "SELECT $fields FROM $source"
+      set joiner WHERE
+      if {$surface eq "history_commit"} {set joiner AND}
+      foreach {predicate where} {
+        first {k='A' AND m=1}
+        padded {k='B ' AND m=2}
+        trimmed {k='B' AND m=2}
+        text_number {k='42' AND m=3}
+        integer_number {k=42 AND m=3}
+        absent {k='missing' AND m=1}
+      } {
+        set expected [execsql "SELECT * FROM ($base LIMIT -1)
+          WHERE $where ORDER BY $order"]
+        do_execsql_test historical-pk-encoding-$name-$phase-$surface-$predicate \
+          "$base $joiner $where ORDER BY $order" $expected
+      }
+    }
+  }
+}
+
+reset_db
+do_execsql_test historical-pk-encoding-repro-setup {
+  CREATE TABLE t(k TEXT PRIMARY KEY DESC,v TEXT);
+  INSERT INTO t VALUES('A','old');
+  SELECT length(dolt_commit('-Am','base'));
+  DROP TABLE t;
+  CREATE TABLE t(k TEXT PRIMARY KEY ASC,v TEXT);
+  INSERT INTO t VALUES('A','new');
+  SELECT length(dolt_commit('-Am','new'));
+} {40 40}
+do_execsql_test historical-pk-encoding-repro {
+  SELECT count(*) FROM dolt_at_t('HEAD~1') WHERE k='A';
+  SELECT count(*) FROM dolt_at_t('HEAD~1') WHERE +k='A';
+  SELECT count(*) FROM dolt_history_t WHERE k='A';
+  SELECT count(*) FROM dolt_history_t WHERE +k='A';
+} {1 1 2 2}
+do_execsql_test historical-pk-encoding-dropped-setup {
+  DROP TABLE t;
+  SELECT length(dolt_commit('-Am','drop'));
+} {40}
+do_execsql_test historical-pk-encoding-dropped {
+  SELECT count(*) FROM dolt_at_t('HEAD~2') WHERE k='A';
+  SELECT count(*) FROM dolt_history_t WHERE k='A';
+} {1 2}
+
+testvfs historical_pk_reads
+historical_pk_reads filter xRead
+historical_pk_reads script historical_pk_read
+proc historical_pk_read {method filename args} {
+  incr ::historical_pk_reads
+  return SQLITE_OK
+}
+foreach {kind key predicate} {
+  descending {k DESC} {k='000005001'}
+  nocase {k COLLATE NOCASE} {k='000005001'}
+  composite {k DESC,m ASC} {k='000005001' AND m=5001}
+} {
+  reset_db
+  execsql "
+    CREATE TABLE t(k TEXT,m INT,v TEXT,PRIMARY KEY($key));
+    WITH RECURSIVE c(x) AS (
+      VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000
+    ) INSERT INTO t SELECT printf('%09d',x),x,printf('%080d',x) FROM c;
+    SELECT dolt_commit('-Am','base');
+    UPDATE t SET v='changed' WHERE k='000005001';
+    SELECT dolt_commit('-Am','update');
+  "
+  foreach {surface source expected} {
+    snapshot dolt_at_t('HEAD') {5001}
+    history dolt_history_t {5001 5001}
+  } {
+    db close
+    set ::historical_pk_reads 0
+    sqlite3 db test.db -vfs historical_pk_reads
+    do_test historical-pk-encoding-$kind-$surface-seek {
+      set ::historical_pk_reads 0
+      set result [execsql "SELECT m FROM $source WHERE $predicate"]
+      if {$::historical_pk_reads>128} {
+        error "point lookup made $::historical_pk_reads file reads"
+      }
+      set result
+    } $expected
+  }
+}
+db close
+historical_pk_reads delete
+sqlite3 db test.db
+
+finish_test

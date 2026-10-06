@@ -111,18 +111,35 @@ static SQLITE_INLINE int doltlitePkSlotToDeclCol(
 /* 1 if a clustered sort-key seek using the live PK is valid on this side. */
 static SQLITE_INLINE int doltliteSideColsMatchClusteredPk(
   const DoltliteSideCols *pSide,
-  const DoltliteColInfo *pDeclared
+  const DoltliteColInfo *pDeclared,
+  const Index *pPk
 ){
+  const DoltliteColInfo *pStored;
   int i;
   if( pDeclared->bHasRowid || pDeclared->nPk<=0 ) return 0;
-  if( !pSide || !pSide->valid ) return 1;
-  if( pSide->ci.bHasRowid || pSide->ci.nPk!=pDeclared->nPk ) return 0;
-  if( !pDeclared->azName || !pSide->ci.azName ) return 0;
+  if( !pPk || HasRowid(pPk->pTable) || pPk->nKeyCol!=pDeclared->nPk ){
+    return 0;
+  }
+  pStored = pSide && pSide->valid ? &pSide->ci : pDeclared;
+  if( pStored->bHasRowid || pStored->nPk!=pDeclared->nPk ) return 0;
+  if( !pDeclared->azName || !pStored->azName ) return 0;
+  if( !pStored->aPkSortFlags || !pStored->azPkColl || !pStored->aAffinity ){
+    return 0;
+  }
   for(i=0; i<pDeclared->nPk; i++){
     int iDecl = doltlitePkSlotToDeclCol(pDeclared, i);
-    int iSide = doltlitePkSlotToDeclCol(&pSide->ci, i);
+    int iSide = doltlitePkSlotToDeclCol(pStored, i);
+    int iKey = pPk->aiColumn[i];
     if( iDecl<0 || iSide<0 ) return 0;
-    if( sqlite3_stricmp(pDeclared->azName[iDecl], pSide->ci.azName[iSide])!=0 ){
+    if( iKey<0
+     || sqlite3_stricmp(pDeclared->azName[iDecl], pStored->azName[iSide])!=0
+     || sqlite3_stricmp(pDeclared->azName[iDecl],
+                        pPk->pTable->aCol[iKey].zCnName)!=0 ){
+      return 0;
+    }
+    if( pPk->aSortOrder[i]!=pStored->aPkSortFlags[i]
+     || sqlite3_stricmp(pPk->azColl[i], pStored->azPkColl[i])!=0
+     || pPk->pTable->aCol[iKey].affinity!=pStored->aAffinity[iSide] ){
       return 0;
     }
   }

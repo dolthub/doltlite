@@ -84,8 +84,11 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   DoltliteCommit commit;
   ProllyHash tableRoot; u8 flags = 0;
   ProllyHash schemaHash;
+  Table *pTab;
   int rc, res;
 
+  c->pkSeekable = 0;
+  c->pkBlobSeekable = 0;
   memset(&schemaHash, 0, sizeof(schemaHash));
   memset(&commit, 0, sizeof(commit));
   rc = doltliteLoadCommit(db, pCommitHash, &commit);
@@ -127,10 +130,12 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
 
   prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
   c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
+  pTab = sqlite3FindTable(db, zTableName, "main");
 
   if( !c->common.rootIntKey && c->pPkBlob
    && (c->idxNum & HIST_IDX_PK_EQ)
-   && doltliteSideColsMatchClusteredPk(&c->side, &v->cols) ){
+   && doltliteSideColsMatchClusteredPk(&c->side, &v->cols,
+                        pTab ? sqlite3PrimaryKeyIndex(pTab) : 0) ){
     rc = prollyCursorSeekBlob(&c->common.tblCur, c->pPkBlob, c->nPkBlob, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);
