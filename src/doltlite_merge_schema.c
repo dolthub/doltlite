@@ -892,7 +892,7 @@ static int columnPlainlyAdded(
 ** rather than dropped. The other side decides the ambiguous case: if the
 ** replacement's name is a plain addition over there, both sides added it
 ** and this side really did drop a column. */
-static int columnRenamedAt(
+int columnRenamedAt(
   ParsedColumn *aSide, int nSide,
   ParsedColumn *aAnc, int nAnc,
   int iAnc,
@@ -1227,6 +1227,11 @@ schema_merge_done:
       }
       nDrop++;
     }
+  }
+  if( rc==SQLITE_OK ){
+    rc = schemaRetainedClauseConflict(
+        zAncSql, zOursSql, zTheirsSql, *pSchemaChoice, pzErrDetail);
+    if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
   }
   *ppAddCols = azAdd;
   *pnAddCols = nAdd;

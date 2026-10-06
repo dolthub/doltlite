@@ -1,7 +1,9 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_merge_constraints_int.h"
+#include "doltlite_merge_int.h"
 #include "vdbeInt.h"
+#include <ctype.h>
 
 /* Unnamed azTo slots are the parent PK by position. */
 static int backfillParentPk(sqlite3 *db, const char *zParent,
@@ -628,4 +630,693 @@ int doltliteDetectMergeFkViolations(
 }
 
 
+
+/* Clause text shared with check-constraint merge. */
+static int dlNext(const char **pz, const char *zEnd, int *pType){
+  int n;
+  while( *pz<zEnd && **pz ){
+    n = sqlite3GetToken((const u8*)*pz, pType);
+    if( n<=0 || *pType==TK_ILLEGAL ) return -1;
+    if( *pz + n > zEnd ) return 0;
+    if( *pType!=TK_SPACE && *pType!=TK_COMMENT ) return n;
+    *pz += n;
+  }
+  return 0;
+}
+
+static int dlSkipParen(const char **pz, const char *zEnd){
+  int type, n, depth = 0;
+  const char *p;
+  n = dlNext(pz, zEnd, &type);
+  if( n<=0 || type!=TK_LP ) return SQLITE_CORRUPT;
+  p = *pz;
+  while( p<zEnd ){
+    int t, k = sqlite3GetToken((const u8*)p, &t);
+    if( k<=0 || p+k>zEnd ) return SQLITE_CORRUPT;
+    if( t==TK_LP ) depth++;
+    if( t==TK_RP ){
+      depth--;
+      p += k;
+      if( depth==0 ){ *pz = p; return SQLITE_OK; }
+      continue;
+    }
+    p += k;
+  }
+  return SQLITE_CORRUPT;
+}
+
+static int dlSkipDefault(const char **pz, const char *zEnd){
+  int type, n;
+  n = dlNext(pz, zEnd, &type);
+  if( n<=0 ) return n<0 ? SQLITE_CORRUPT : SQLITE_OK;
+  if( type==TK_LP ) return dlSkipParen(pz, zEnd);
+  if( type==TK_PLUS || type==TK_MINUS ){
+    *pz += n;
+    n = dlNext(pz, zEnd, &type);
+    if( n<=0 ) return n<0 ? SQLITE_CORRUPT : SQLITE_OK;
+  }
+  *pz += n;
+  return SQLITE_OK;
+}
+
+static int dlRefStop(const char *z, const char *zEnd, int type, int n){
+  if( type==TK_CONSTRAINT || type==TK_PRIMARY || type==TK_UNIQUE
+   || type==TK_CHECK || type==TK_DEFAULT || type==TK_COLLATE
+   || type==TK_FOREIGN || type==TK_AS ) return 1;
+  if( n==9 && sqlite3_strnicmp(z, "GENERATED", 9)==0 ) return 1;
+  if( type==TK_NOT ){
+    const char *q = z + n;
+    int t2, n2 = dlNext(&q, zEnd, &t2);
+    if( n2>0 && t2==TK_NULL ) return 1;
+  }
+  return 0;
+}
+
+static int dlSkipReferences(const char **pz, const char *zEnd){
+  int type, n, depth = 0;
+  while( (n = dlNext(pz, zEnd, &type))>0 ){
+    if( depth==0 && dlRefStop(*pz, zEnd, type, n) ) return SQLITE_OK;
+    if( type==TK_LP ) depth++;
+    else if( type==TK_RP && depth>0 ) depth--;
+    *pz += n;
+  }
+  return n<0 ? SQLITE_CORRUPT : SQLITE_OK;
+}
+
+/* Column text with DEFAULT, CHECK, and REFERENCES removed. NOT NULL stays. */
+static int dlStripColumn(const char *zDef, char **pzOut){
+  sqlite3_str *pStr;
+  const char *z = zDef ? zDef : "";
+  const char *zEnd = z + strlen(z);
+  int rc = SQLITE_OK, nOut = 0;
+  *pzOut = 0;
+  pStr = sqlite3_str_new(0);
+  if( !pStr ) return SQLITE_NOMEM;
+  while( rc==SQLITE_OK ){
+    int type, n;
+    const char *tok;
+    n = dlNext(&z, zEnd, &type);
+    if( n==0 ) break;
+    if( n<0 ){ rc = SQLITE_CORRUPT; break; }
+    tok = z;
+    if( type==TK_CONSTRAINT ){
+      const char *q = z + n;
+      int nt, nn, kt, kn;
+      nn = dlNext(&q, zEnd, &nt);
+      if( nn<=0 ){ rc = nn<0 ? SQLITE_CORRUPT : SQLITE_OK; break; }
+      q += nn;
+      kn = dlNext(&q, zEnd, &kt);
+      if( kn<=0 ){ rc = kn<0 ? SQLITE_CORRUPT : SQLITE_OK; break; }
+      if( kt==TK_CHECK || kt==TK_DEFAULT || kt==TK_REFERENCES || kt==TK_FOREIGN ){
+        z = q;
+        continue;
+      }
+    }
+    if( type==TK_CHECK ){
+      z += n;
+      rc = dlSkipParen(&z, zEnd);
+      continue;
+    }
+    if( type==TK_DEFAULT ){
+      z += n;
+      rc = dlSkipDefault(&z, zEnd);
+      continue;
+    }
+    if( type==TK_REFERENCES || type==TK_FOREIGN ){
+      z += n;
+      rc = dlSkipReferences(&z, zEnd);
+      continue;
+    }
+    if( nOut ) sqlite3_str_appendchar(pStr, 1, ' ');
+    sqlite3_str_append(pStr, tok, n);
+    nOut++;
+    z += n;
+  }
+  if( rc==SQLITE_OK && sqlite3_str_errcode(pStr) ) rc = SQLITE_NOMEM;
+  if( rc!=SQLITE_OK ){
+    sqlite3_str_finish(pStr);
+    return rc==SQLITE_NOMEM ? rc : SQLITE_CORRUPT;
+  }
+  *pzOut = sqlite3_str_finish(pStr);
+  if( !*pzOut ) *pzOut = sqlite3_mprintf("");
+  return *pzOut ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+int dlCoresMatch(const char *zA, const char *zB){
+  char *a = 0, *b = 0;
+  int rc, same = 0;
+  rc = dlStripColumn(zA ? zA : "", &a);
+  if( rc==SQLITE_OK ) rc = dlStripColumn(zB ? zB : "", &b);
+  if( rc==SQLITE_OK && a && b ) same = schemaDefinitionsEquivalent(a, b);
+  sqlite3_free(a);
+  sqlite3_free(b);
+  return rc==SQLITE_OK ? same : -rc;
+}
+
+typedef struct DlPiece DlPiece;
+struct DlPiece {
+  const char *z;
+  int n;
+  int kind; /* 0 column, 1 drop (check/fk), 2 other table constraint */
+};
+
+static int dlSegmentKind(const char *z, int n){
+  const char *p = z, *e = z + n;
+  int type, k, t2, n2;
+  k = dlNext(&p, e, &type);
+  if( k<=0 ) return 0;
+  if( type==TK_CHECK || type==TK_FOREIGN ) return 1;
+  if( type==TK_PRIMARY || type==TK_UNIQUE ) return 2;
+  if( type==TK_CONSTRAINT ){
+    p += k;
+    k = dlNext(&p, e, &type);
+    if( k<=0 ) return 2;
+    p += k;
+    n2 = dlNext(&p, e, &t2);
+    if( n2<=0 ) return 2;
+    if( t2==TK_CHECK || t2==TK_FOREIGN ) return 1;
+    return 2;
+  }
+  return 0;
+}
+
+static int dlPushPiece(DlPiece **pp, int *pn, int *pAlloc,
+                          const char *z, int n){
+  while( n>0 && isspace((unsigned char)*z) ){ z++; n--; }
+  while( n>0 && isspace((unsigned char)z[n-1]) ) n--;
+  if( n<=0 ) return SQLITE_OK;
+  if( DOLTLITE_GROW_ARRAY(pp, pAlloc, *pn+1, 8)!=SQLITE_OK ) return SQLITE_NOMEM;
+  (*pp)[*pn].z = z;
+  (*pp)[*pn].n = n;
+  (*pp)[*pn].kind = dlSegmentKind(z, n);
+  (*pn)++;
+  return SQLITE_OK;
+}
+
+static int dlParsePieces(
+  const char *zSql, const char **pzHead, int *pnHead,
+  DlPiece **pp, int *pn, const char **pzTail
+){
+  const char *q, *end, *seg;
+  int depth = 0, nAlloc = 0, rc = SQLITE_OK;
+  *pzHead = zSql;
+  *pnHead = 0;
+  *pp = 0;
+  *pn = 0;
+  *pzTail = 0;
+  if( !zSql ) return SQLITE_CORRUPT;
+  q = zSql;
+  end = zSql + strlen(zSql);
+  while( q<end ){
+    int type, n = sqlite3GetToken((const u8*)q, &type);
+    if( n<=0 || type==TK_ILLEGAL ) return SQLITE_CORRUPT;
+    if( type==TK_LP ){
+      *pnHead = (int)((q + n) - zSql);
+      q += n;
+      depth = 1;
+      break;
+    }
+    q += n;
+  }
+  if( depth==0 ) return SQLITE_CORRUPT;
+  seg = q;
+  while( q<end && depth ){
+    int type, n = sqlite3GetToken((const u8*)q, &type);
+    if( n<=0 || type==TK_ILLEGAL ){ rc = SQLITE_CORRUPT; break; }
+    if( type==TK_LP ){
+      depth++;
+    }else if( type==TK_RP ){
+      depth--;
+      if( depth==0 ){
+        rc = dlPushPiece(pp, pn, &nAlloc, seg, (int)(q - seg));
+        *pzTail = q;
+        break;
+      }
+    }else if( type==TK_COMMA && depth==1 ){
+      rc = dlPushPiece(pp, pn, &nAlloc, seg, (int)(q - seg));
+      if( rc!=SQLITE_OK ) break;
+      seg = q + n;
+    }
+    q += n;
+  }
+  if( rc==SQLITE_OK && depth!=0 ) rc = SQLITE_CORRUPT;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(*pp);
+    *pp = 0;
+    *pn = 0;
+  }
+  return rc;
+}
+
+static int dlNeutralSql(const char *zSql, char **pzOut){
+  DlPiece *a = 0;
+  const char *zHead = 0, *zTail = 0;
+  sqlite3_str *pStr;
+  int nHead = 0, n = 0, i, rc, nKept = 0;
+  *pzOut = 0;
+  rc = dlParsePieces(zSql, &zHead, &nHead, &a, &n, &zTail);
+  if( rc!=SQLITE_OK ) return rc;
+  pStr = sqlite3_str_new(0);
+  if( !pStr ){ sqlite3_free(a); return SQLITE_NOMEM; }
+  sqlite3_str_append(pStr, zHead, nHead);
+  for(i=0; i<n && rc==SQLITE_OK; i++){
+    char *zPiece = 0, *zCol = 0;
+    if( a[i].kind==1 ) continue;
+    if( nKept ) sqlite3_str_appendchar(pStr, 1, ',');
+    nKept++;
+    if( a[i].kind==2 ){
+      sqlite3_str_append(pStr, a[i].z, a[i].n);
+      continue;
+    }
+    zPiece = sqlite3_mprintf("%.*s", a[i].n, a[i].z);
+    if( !zPiece ){ rc = SQLITE_NOMEM; break; }
+    rc = dlStripColumn(zPiece, &zCol);
+    sqlite3_free(zPiece);
+    if( rc!=SQLITE_OK ) break;
+    sqlite3_str_appendall(pStr, zCol ? zCol : "");
+    sqlite3_free(zCol);
+  }
+  if( rc==SQLITE_OK && zTail ) sqlite3_str_appendall(pStr, zTail);
+  sqlite3_free(a);
+  if( rc==SQLITE_OK && sqlite3_str_errcode(pStr) ) rc = SQLITE_NOMEM;
+  if( rc!=SQLITE_OK ){
+    sqlite3_str_finish(pStr);
+    return rc==SQLITE_NOMEM ? rc : SQLITE_CORRUPT;
+  }
+  *pzOut = sqlite3_str_finish(pStr);
+  if( !*pzOut ) *pzOut = sqlite3_mprintf("");
+  return *pzOut ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+int dlNeutralSame(const char *zA, const char *zB, int *pb){
+  char *a = 0, *b = 0;
+  int rc;
+  *pb = 0;
+  rc = dlNeutralSql(zA, &a);
+  if( rc==SQLITE_OK ) rc = dlNeutralSql(zB, &b);
+  if( rc==SQLITE_OK && a && b ) *pb = schemaDefinitionsEquivalent(a, b);
+  sqlite3_free(a);
+  sqlite3_free(b);
+  return rc;
+}
+
+static char *dlTokName(const char *z, int n){
+  char *s = sqlite3_mprintf("%.*s", n, z);
+  int i;
+  if( !s ) return 0;
+  sqlite3Dequote(s);
+  for(i=0; s[i]; i++) s[i] = (char)tolower((unsigned char)s[i]);
+  return s;
+}
+
+static char *dlPieceName(const char *z, int n){
+  const char *p = z, *e = z + n;
+  int type, k = dlNext(&p, e, &type);
+  if( k<=0 ) return 0;
+  return dlTokName(p, k);
+}
+
+static int dlHasName(char **az, int n, const char *z){
+  int i;
+  if( !z ) return 0;
+  for(i=0; i<n; i++){
+    if( az[i] && sqlite3_stricmp(az[i], z)==0 ) return 1;
+  }
+  return 0;
+}
+
+static int dlAddName(char ***paz, int *pn, int *pAlloc, const char *z){
+  char *c;
+  int rc;
+  if( !z || !z[0] || dlHasName(*paz, *pn, z) ) return SQLITE_OK;
+  rc = DOLTLITE_GROW_ARRAY(paz, pAlloc, *pn+1, 4);
+  if( rc!=SQLITE_OK ) return rc;
+  c = sqlite3_mprintf("%s", z);
+  if( !c ) return SQLITE_NOMEM;
+  (*paz)[(*pn)++] = c;
+  return SQLITE_OK;
+}
+
+static void dlRemoveName(char **az, int *pn, const char *z){
+  int i;
+  for(i=0; i<*pn; i++){
+    if( az[i] && sqlite3_stricmp(az[i], z)==0 ){
+      sqlite3_free(az[i]);
+      memmove(az+i, az+i+1, (size_t)(*pn-i-1)*sizeof(char*));
+      (*pn)--;
+      return;
+    }
+  }
+}
+
+void dlFreeNames(char **az, int n){
+  int i;
+  for(i=0; i<n; i++) sqlite3_free(az[i]);
+  sqlite3_free(az);
+}
+
+int dlMergedNames(
+  ParsedColumn *aAnc, int nAnc,
+  ParsedColumn *aWin, int nWin,
+  ParsedColumn *aOth, int nOth,
+  char ***paz, int *pn
+){
+  int i, nAlloc = 0, rc = SQLITE_OK;
+  *paz = 0;
+  *pn = 0;
+  for(i=0; i<nWin && rc==SQLITE_OK; i++){
+    rc = dlAddName(paz, pn, &nAlloc, aWin[i].zName);
+  }
+  for(i=0; i<nOth && rc==SQLITE_OK; i++){
+    if( parsedColumnIndexByName(aAnc, nAnc, aOth[i].zName)>=0 ) continue;
+    if( parsedColumnIndexByName(aWin, nWin, aOth[i].zName)>=0 ) continue;
+    rc = dlAddName(paz, pn, &nAlloc, aOth[i].zName);
+  }
+  for(i=0; i<nAnc && rc==SQLITE_OK; i++){
+    if( parsedColumnIndexByName(aWin, nWin, aAnc[i].zName)<0 ) continue;
+    if( parsedColumnIndexByName(aOth, nOth, aAnc[i].zName)>=0 ) continue;
+    if( columnRenamedAt(aOth, nOth, aAnc, nAnc, i, aWin, nWin) ){
+      dlRemoveName(*paz, pn, aAnc[i].zName);
+      if( i<nOth ) rc = dlAddName(paz, pn, &nAlloc, aOth[i].zName);
+    }else{
+      dlRemoveName(*paz, pn, aAnc[i].zName);
+    }
+  }
+  return rc;
+}
+
+int dlUnionCols(
+  ParsedColumn *a, int na, ParsedColumn *b, int nb, ParsedColumn *c, int nc,
+  ParsedColumn **pp, int *pn
+){
+  int n = na + nb + nc, i, k = 0;
+  ParsedColumn *u;
+  *pp = 0;
+  *pn = 0;
+  if( n<=0 ) return SQLITE_OK;
+  u = sqlite3_malloc(sizeof(ParsedColumn) * n);
+  if( !u ) return SQLITE_NOMEM;
+  memset(u, 0, sizeof(ParsedColumn) * n);
+  for(i=0; i<na; i++) u[k++].zName = a[i].zName;
+  for(i=0; i<nb; i++) u[k++].zName = b[i].zName;
+  for(i=0; i<nc; i++) u[k++].zName = c[i].zName;
+  *pp = u;
+  *pn = k;
+  return SQLITE_OK;
+}
+
+/* 0 every noted column is already in the winning CREATE.
+** 1 every noted column survives, but one arrives via ADD COLUMN.
+** 2 a noted column is not in the merged set. */
+int dlRefClass(
+  const char *zCols, char **azMerged, int nMerged,
+  ParsedColumn *aWin, int nWin
+){
+  const char *p;
+  int pending = 0;
+  if( !zCols || !zCols[0] ) return 0;
+  for(p=zCols; *p; ){
+    const char *e = strchr(p, '\n');
+    int n = e ? (int)(e-p) : (int)strlen(p);
+    char *z = sqlite3_mprintf("%.*s", n, p);
+    int inWin;
+    if( !z ) return -SQLITE_NOMEM;
+    if( !dlHasName(azMerged, nMerged, z) ){
+      sqlite3_free(z);
+      return 2;
+    }
+    inWin = parsedColumnIndexByName(aWin, nWin, z)>=0;
+    sqlite3_free(z);
+    if( !inWin ) pending = 1;
+    if( !e ) break;
+    p = e + 1;
+  }
+  return pending ? 1 : 0;
+}
+int dlCutRaw(char **pzSql, const char *zRaw){
+  char *zSql, *hit, *start, *end, *zNew;
+  if( !pzSql || !*pzSql || !zRaw || !zRaw[0] ) return SQLITE_OK;
+  zSql = *pzSql;
+  hit = strstr(zSql, zRaw);
+  if( !hit ) return SQLITE_OK;
+  start = hit;
+  end = hit + strlen(zRaw);
+  while( start>zSql && isspace((unsigned char)start[-1]) ) start--;
+  if( start>zSql && start[-1]==',' ){
+    start--;
+  }else{
+    while( *end && isspace((unsigned char)*end) ) end++;
+    if( *end==',' ) end++;
+  }
+  zNew = sqlite3_mprintf("%.*s%s", (int)(start-zSql), zSql, end);
+  if( !zNew ) return SQLITE_NOMEM;
+  sqlite3_free(zSql);
+  *pzSql = zNew;
+  return SQLITE_OK;
+}
+
+int dlRewriteColumns(
+  const char *zSql, char **azName, char **azDef, int nRep,
+  char **pzOut, int *pChanged
+){
+  DlPiece *a = 0;
+  const char *zHead = 0, *zTail = 0;
+  sqlite3_str *pStr;
+  int nHead = 0, n = 0, i, rc, nKept = 0;
+  *pzOut = 0;
+  *pChanged = 0;
+  rc = dlParsePieces(zSql, &zHead, &nHead, &a, &n, &zTail);
+  if( rc!=SQLITE_OK ) return rc;
+  pStr = sqlite3_str_new(0);
+  if( !pStr ){ sqlite3_free(a); return SQLITE_NOMEM; }
+  sqlite3_str_append(pStr, zHead, nHead);
+  for(i=0; i<n && rc==SQLITE_OK; i++){
+    char *zName = 0;
+    const char *zEmit = a[i].z;
+    int nEmit = a[i].n;
+    int r;
+    if( a[i].kind==0 && nRep>0 ){
+      zName = dlPieceName(a[i].z, a[i].n);
+      if( !zName ){ rc = SQLITE_NOMEM; break; }
+      for(r=0; r<nRep; r++){
+        if( azName[r] && sqlite3_stricmp(azName[r], zName)==0 ){
+          zEmit = azDef[r];
+          nEmit = (int)strlen(azDef[r]);
+          *pChanged = 1;
+          break;
+        }
+      }
+    }
+    sqlite3_free(zName);
+    if( nKept ) sqlite3_str_appendchar(pStr, 1, ',');
+    nKept++;
+    sqlite3_str_append(pStr, zEmit, nEmit);
+  }
+  if( rc==SQLITE_OK && zTail ) sqlite3_str_appendall(pStr, zTail);
+  sqlite3_free(a);
+  if( rc==SQLITE_OK && sqlite3_str_errcode(pStr) ) rc = SQLITE_NOMEM;
+  if( rc!=SQLITE_OK ){
+    sqlite3_str_finish(pStr);
+    return rc==SQLITE_NOMEM ? rc : SQLITE_CORRUPT;
+  }
+  *pzOut = sqlite3_str_finish(pStr);
+  if( !*pzOut ) return SQLITE_NOMEM;
+  return SQLITE_OK;
+}
+
+int dlDeferRaw(SchemaMergeAction *a, int n, const char *zTable,
+                      const char *zRaw){
+  int i, hit = -1, nHave;
+  char **az;
+  char *zCopy;
+  if( !a || !zTable || !zRaw || !zRaw[0] ) return SQLITE_OK;
+  for(i=0; i<n; i++){
+    if( !a[i].zTableName || sqlite3_stricmp(a[i].zTableName, zTable)!=0 ){
+      continue;
+    }
+    if( !a[i].zRenameTable ){ hit = i; break; }
+    if( hit<0 ) hit = i;
+  }
+  if( hit<0 ) return SQLITE_OK;
+  for(i=0; i<a[hit].nClauses; i++){
+    if( a[hit].azClauses[i] && strcmp(a[hit].azClauses[i], zRaw)==0 ){
+      return SQLITE_OK;
+    }
+  }
+  nHave = a[hit].nClauses;
+  az = sqlite3_realloc(a[hit].azClauses, (nHave+1)*(int)sizeof(char*));
+  if( !az ) return SQLITE_NOMEM;
+  a[hit].azClauses = az;
+  zCopy = sqlite3_mprintf("%s", zRaw);
+  if( !zCopy ) return SQLITE_NOMEM;
+  az[nHave] = zCopy;
+  a[hit].nClauses = nHave + 1;
+  return SQLITE_OK;
+}
+
+void dlFksFree(DlFk *a, int n){
+  int i;
+  if( !a ) return;
+  for(i=0; i<n; i++){
+    sqlite3_free(a[i].zName);
+    sqlite3_free(a[i].zRaw);
+    sqlite3_free(a[i].zCols);
+  }
+  sqlite3_free(a);
+}
+
+static int dlFkAddCol(DlFk *p, const char *z, int n){
+  char *zName = dlTokName(z, n);
+  char *zNew;
+  if( !zName ) return SQLITE_NOMEM;
+  if( !zName[0] || dlColsContain(p->zCols, zName) ){
+    sqlite3_free(zName);
+    return SQLITE_OK;
+  }
+  zNew = sqlite3_mprintf("%s%s%s", p->zCols ? p->zCols : "",
+                         p->zCols ? "\n" : "", zName);
+  sqlite3_free(zName);
+  if( !zNew ) return SQLITE_NOMEM;
+  sqlite3_free(p->zCols);
+  p->zCols = zNew;
+  return SQLITE_OK;
+}
+
+static int dlFillFk(const char *z, int n, DlFk *p){
+  const char *q = z, *e = z + n, *zName = 0;
+  int type, k, nName = 0, depth, rc;
+  memset(p, 0, sizeof(*p));
+  p->zRaw = sqlite3_mprintf("%.*s", n, z);
+  if( !p->zRaw ) return SQLITE_NOMEM;
+  k = dlNext(&q, e, &type);
+  if( k>0 && type==TK_CONSTRAINT ){
+    q += k;
+    k = dlNext(&q, e, &type);
+    if( k<=0 ) return SQLITE_CORRUPT;
+    zName = q;
+    nName = k;
+    q += k;
+  }
+  if( zName ){
+    p->zName = dlTokName(zName, nName);
+    if( !p->zName ) return SQLITE_NOMEM;
+    if( !p->zName[0] ){ sqlite3_free(p->zName); p->zName = 0; }
+  }
+  while( (k = dlNext(&q, e, &type))>0 ){
+    if( type==TK_FOREIGN ) break;
+    q += k;
+  }
+  if( k<=0 ) return SQLITE_CORRUPT;
+  q += k;
+  k = dlNext(&q, e, &type);
+  if( k<=0 ) return SQLITE_CORRUPT;
+  q += k;
+  k = dlNext(&q, e, &type);
+  if( k<=0 || type!=TK_LP ) return SQLITE_CORRUPT;
+  q += k;
+  depth = 1;
+  while( depth>0 ){
+    const char *tok;
+    k = dlNext(&q, e, &type);
+    if( k<=0 ) return SQLITE_CORRUPT;
+    tok = q;
+    q += k;
+    if( type==TK_LP ) depth++;
+    else if( type==TK_RP ) depth--;
+    else if( depth==1 && type!=TK_COMMA ){
+      rc = dlFkAddCol(p, tok, k);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
+int dlCollectFks(const char *zSql, DlFk **pp, int *pn){
+  DlPiece *a = 0;
+  const char *zHead = 0, *zTail = 0;
+  int nHead = 0, n = 0, i, nAlloc = 0, rc;
+  *pp = 0;
+  *pn = 0;
+  rc = dlParsePieces(zSql, &zHead, &nHead, &a, &n, &zTail);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<n && rc==SQLITE_OK; i++){
+    DlFk fk;
+    if( a[i].kind!=1 || dlSegmentKind(a[i].z, a[i].n)!=1 ) continue;
+    if( dlSegmentKind(a[i].z, a[i].n)==1 ){
+      const char *p = a[i].z, *e = a[i].z + a[i].n;
+      int type, k, t2, n2, isFk = 0;
+      k = dlNext(&p, e, &type);
+      if( k>0 && type==TK_FOREIGN ) isFk = 1;
+      if( k>0 && type==TK_CONSTRAINT ){
+        p += k;
+        k = dlNext(&p, e, &type);
+        if( k>0 ){
+          p += k;
+          n2 = dlNext(&p, e, &t2);
+          if( n2>0 && t2==TK_FOREIGN ) isFk = 1;
+        }
+      }
+      if( !isFk ) continue;
+    }
+    rc = dlFillFk(a[i].z, a[i].n, &fk);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(fk.zName);
+      sqlite3_free(fk.zRaw);
+      sqlite3_free(fk.zCols);
+      if( rc==SQLITE_CORRUPT ) rc = SQLITE_OK;
+      break;
+    }
+    rc = DOLTLITE_GROW_ARRAY(pp, &nAlloc, *pn+1, 4);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(fk.zName);
+      sqlite3_free(fk.zRaw);
+      sqlite3_free(fk.zCols);
+      break;
+    }
+    (*pp)[(*pn)++] = fk;
+  }
+  sqlite3_free(a);
+  if( rc!=SQLITE_OK ){
+    dlFksFree(*pp, *pn);
+    *pp = 0;
+    *pn = 0;
+  }
+  return rc;
+}
+
+int dlFkSame(const DlFk *a, const DlFk *b){
+  if( !a->zRaw || !b->zRaw ) return 0;
+  return schemaDefinitionsEquivalent(a->zRaw, b->zRaw);
+}
+
+/* Same constraint: a shared name, or the same child columns. */
+int dlFkCorresponds(const DlFk *a, const DlFk *b){
+  if( !a || !b ) return 0;
+  if( a->zName && b->zName && sqlite3_stricmp(a->zName, b->zName)==0 ){
+    return 1;
+  }
+  if( a->zCols && b->zCols && strcmp(a->zCols, b->zCols)==0 ) return 1;
+  return 0;
+}
+
+int dlPushRaw(char ***paz, int *pn, int *pAlloc, const char *z){
+  char *c;
+  int rc, i;
+  if( !z ) return SQLITE_OK;
+  for(i=0; i<*pn; i++){
+    if( (*paz)[i] && strcmp((*paz)[i], z)==0 ) return SQLITE_OK;
+  }
+  rc = DOLTLITE_GROW_ARRAY(paz, pAlloc, *pn+1, 4);
+  if( rc!=SQLITE_OK ) return rc;
+  c = sqlite3_mprintf("%s", z);
+  if( !c ) return SQLITE_NOMEM;
+  (*paz)[(*pn)++] = c;
+  return SQLITE_OK;
+}
+
+void dlFreeRaws(char **az, int n){
+  int i;
+  for(i=0; i<n; i++) sqlite3_free(az[i]);
+  sqlite3_free(az);
+}
 #endif

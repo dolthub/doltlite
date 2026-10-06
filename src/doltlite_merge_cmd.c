@@ -13,6 +13,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_merge_int.h"
 #include "doltlite_ancestor.h"
 #include "record_codec.h"
 #include <stddef.h>
@@ -845,6 +846,14 @@ int doltliteApplyMergeSchemaActions(
       if( !zAlter ) return SQLITE_NOMEM;
       rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
       sqlite3_free(zAlter);
+    }
+    if( rc==SQLITE_OK && aSchemaActions[si].nClauses>0 ){
+      rc = schemaInstallDeferredClauses(
+          db, zTableName, aSchemaActions[si].azClauses,
+          aSchemaActions[si].nClauses);
+      if( rc!=SQLITE_OK && !zErr ){
+        zErr = sqlite3_mprintf("%s", sqlite3_errmsg(db));
+      }
     }
   }
 

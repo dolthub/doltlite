@@ -817,34 +817,17 @@ static int mergePass1BothSides(
     }else if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( !bSchemaConflict && schemaChoice==SCHEMA_MERGE_THEIRS ){
-      SchemaEntry *pOurSe;
-      SchemaEntry *pTheirSe;
-      char *zSql;
-      pOurSe = findSchemaEntry(
-          c->aOursSchema, c->nOursSchema, zSchemaMergeName);
-      pTheirSe = findSchemaEntry(
-          c->aTheirsSchema, c->nTheirsSchema, zSchemaMergeName);
-      if( !pOurSe && zName ){
-        pOurSe = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
-      }
-      if( !pTheirSe && ancEntry && ancEntry->zName ){
-        pTheirSe = findSchemaEntry(
-            c->aTheirsSchema, c->nTheirsSchema, ancEntry->zName);
-      }
-      if( !pTheirSe ){
-        pTheirSe = findSchemaEntryByRootpage(
-            c->aTheirsSchema, c->nTheirsSchema, c->aOurs[iOurs].iTable);
-      }
-      zSql = pTheirSe && pTheirSe->zSql
-                 ? sqlite3_mprintf("%s", pTheirSe->zSql) : 0;
-      if( !pOurSe || !zSql ){
-        sqlite3_free(zSql);
-        return pOurSe ? SQLITE_NOMEM : SQLITE_CORRUPT;
-      }
-      /* Ours still uses the old layout; keep it for the relayout below. */
-      zOursPrevSql = pOurSe->zSql;
-      pOurSe->zSql = zSql;
+    if( !bSchemaConflict ){
+      rc = schemaAdoptMergedTableSql(
+          c->aAncSchema, c->nAncSchema,
+          c->aOursSchema, c->nOursSchema,
+          c->aTheirsSchema, c->nTheirsSchema,
+          zSchemaMergeName,
+          zName ? zName : (ancEntry ? ancEntry->zName : 0),
+          c->aOurs[iOurs].iTable, schemaChoice, &zOursPrevSql,
+          c->ppSchemaActions ? *c->ppSchemaActions : 0,
+          c->pnSchemaActions ? *c->pnSchemaActions : 0);
+      if( rc!=SQLITE_OK ) return rc;
     }
     if( !bSchemaConflict && skipRowMerge && zName ){
       SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);

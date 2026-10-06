@@ -283,6 +283,12 @@ int parsedColumnDefinitionsMatch(
 );
 int parsedColumnIsVirtual(const ParsedColumn *pCol);
 int parsedColumnAddsAsNull(const ParsedColumn *pCol);
+int columnRenamedAt(
+  ParsedColumn *aSide, int nSide,
+  ParsedColumn *aAnc, int nAnc,
+  int iAnc,
+  ParsedColumn *aOther, int nOther
+);
 
 int trySchemaColumnMerge(
   const char *zAncSql,
@@ -310,6 +316,62 @@ int schemaTableChecksUnified(
   const char *zName,
   int *pbUnion
 );
+int schemaRetainedClauseConflict(
+  const char *zAnc, const char *zOurs, const char *zTheirs,
+  int schemaChoice, char **pzErr
+);
+int schemaAdoptMergedTableSql(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const char *zName, const char *zFallback, int iTable,
+  int schemaChoice, char **pzOursPrev,
+  SchemaMergeAction *aAct, int nAct
+);
+int schemaInstallDeferredClauses(
+  sqlite3 *db, const char *zTable, char **azClauses, int nClauses
+);
+
+/* Table-level FOREIGN KEY text collected while composing a merge. */
+typedef struct DlFk DlFk;
+struct DlFk {
+  char *zName;
+  char *zRaw;
+  char *zCols;
+};
+
+int dlColsContain(const char *zCols, const char *zName);
+int dlCoresMatch(const char *zA, const char *zB);
+int dlNeutralSame(const char *zA, const char *zB, int *pb);
+int dlMergedNames(
+  ParsedColumn *aAnc, int nAnc,
+  ParsedColumn *aWin, int nWin,
+  ParsedColumn *aOth, int nOth,
+  char ***paz, int *pn
+);
+int dlUnionCols(
+  ParsedColumn *a, int na, ParsedColumn *b, int nb, ParsedColumn *c, int nc,
+  ParsedColumn **pp, int *pn
+);
+int dlRefClass(
+  const char *zCols, char **azMerged, int nMerged,
+  ParsedColumn *aWin, int nWin
+);
+int dlCutRaw(char **pzSql, const char *zRaw);
+int dlRewriteColumns(
+  const char *zSql, char **azName, char **azDef, int nRep,
+  char **pzOut, int *pChanged
+);
+int dlDeferRaw(
+  SchemaMergeAction *a, int n, const char *zTable, const char *zRaw
+);
+void dlFksFree(DlFk *a, int n);
+int dlCollectFks(const char *zSql, DlFk **pp, int *pn);
+int dlFkSame(const DlFk *a, const DlFk *b);
+int dlFkCorresponds(const DlFk *a, const DlFk *b);
+void dlFreeNames(char **az, int n);
+int dlPushRaw(char ***paz, int *pn, int *pAlloc, const char *z);
+void dlFreeRaws(char **az, int n);
 int mergePromoteMasterSchemaConflicts(
   struct TableEntry *aAnc, int nAnc,
   SchemaEntry *aAncSchema, int nAncSchema,

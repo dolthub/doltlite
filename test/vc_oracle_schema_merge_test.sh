@@ -2076,4 +2076,142 @@ SQL
   done
 done
 
+echo ""
+echo "--- Retained checks, defaults, and foreign keys ---"
+
+DB="$TMPROOT/ck_def_add.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck_def_add"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 1);
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 9,
+               extra INT DEFAULT 3, CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t(id, v, w) VALUES (1, 1, 1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 4, w INT DEFAULT 1);
+INSERT INTO t(id, v, w) VALUES (1, 1, 1);
+SELECT dolt_commit('-Am','ours');
+SQL
+expect_merge_ok "check_default_and_column" "$DB"
+expect_dual_value "check_default_and_column_row" "$DB" "1|1|1|3" \
+  "SELECT id || '|' || v || '|' || w || '|' || extra FROM t WHERE id=1;" \
+  "SELECT CONCAT(id,'|',v,'|',w,'|',extra) FROM t WHERE id=1;"
+expect_dual_value "check_default_and_column_check" "$DB" "1" \
+  "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%';" \
+  "SELECT COUNT(*) FROM information_schema.check_constraints WHERE constraint_name='ck_w';"
+run_dual_command_outcome "check_default_and_column_reject" "$DB" \
+  "INSERT INTO t(id, v, w) VALUES (3, 1, -5);" \
+  "INSERT INTO t(id, v, w) VALUES (3, 1, -5);" error
+
+DB="$TMPROOT/ck_def_only.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck_def_only"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 1);
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1, w INT DEFAULT 1,
+               CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 4, w INT DEFAULT 1);
+INSERT INTO t(id) VALUES (1);
+SELECT dolt_commit('-Am','ours');
+SQL
+expect_merge_ok "check_and_default_only" "$DB"
+expect_dual_value "check_and_default_only_check" "$DB" "1" \
+  "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%';" \
+  "SELECT COUNT(*) FROM information_schema.check_constraints WHERE constraint_name='ck_w';"
+
+DB="$TMPROOT/fk_add.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "fk_add"
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+INSERT INTO p VALUES (1, 10);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, x INT);
+INSERT INTO c VALUES (1, 10, 1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, x INT, b INT DEFAULT 2,
+               CONSTRAINT fk_u FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO c(id, u, x) VALUES (1, 10, 1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE c ADD COLUMN a INT DEFAULT 1;
+SELECT dolt_commit('-Am','ours');
+SQL
+expect_merge_ok "fk_and_added_column" "$DB"
+expect_dual_value "fk_and_added_column_shape" "$DB" "1|1|1" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('c') WHERE name='a') || '|' || (SELECT count(*) FROM pragma_table_info('c') WHERE name='b') || '|' || (SELECT count(*) FROM pragma_foreign_key_list('c'));" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.columns WHERE table_name='c' AND column_name='a'), '|', (SELECT COUNT(*) FROM information_schema.columns WHERE table_name='c' AND column_name='b'), '|', (SELECT COUNT(*) FROM information_schema.key_column_usage WHERE table_schema=database() AND table_name='c' AND referenced_table_name IS NOT NULL));"
+
+DB="$TMPROOT/fk_newcol.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "fk_newcol"
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+INSERT INTO p VALUES (1, 10);
+CREATE TABLE c(id INTEGER PRIMARY KEY, x INT);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+CREATE TABLE c(id INTEGER PRIMARY KEY, x INT, u INT,
+               CONSTRAINT fk_u FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO c(id, x, u) VALUES (1, 1, 10);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE c ADD COLUMN a INT DEFAULT 1;
+SELECT dolt_commit('-Am','ours');
+SQL
+expect_merge_ok "fk_on_added_column" "$DB"
+expect_dual_value "fk_on_added_column_shape" "$DB" "1|1|1" \
+  "SELECT (SELECT count(*) FROM pragma_table_info('c') WHERE name='a') || '|' || (SELECT count(*) FROM pragma_table_info('c') WHERE name='u') || '|' || (SELECT count(*) FROM pragma_foreign_key_list('c'));" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.columns WHERE table_name='c' AND column_name='a'), '|', (SELECT COUNT(*) FROM information_schema.columns WHERE table_name='c' AND column_name='u'), '|', (SELECT COUNT(*) FROM information_schema.key_column_usage WHERE table_schema=database() AND table_name='c' AND referenced_table_name IS NOT NULL));"
+
+DB="$TMPROOT/ck_renamed.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck_renamed"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN v TO val;
+SELECT dolt_commit('-Am','ours');
+SQL
+expect_merge_conflict "check_on_renamed_column" "$DB"
+
+DB="$TMPROOT/ck_other_rename.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck_other_rename"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t VALUES (1, 10, 20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN v TO val;
+SELECT dolt_commit('-Am','ours');
+SQL
+expect_merge_ok "check_with_unrelated_rename" "$DB"
+expect_dual_value "check_with_unrelated_rename_kept" "$DB" "1" \
+  "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%';" \
+  "SELECT COUNT(*) FROM information_schema.check_constraints WHERE constraint_name='ck_w';"
+
 vc_oracle_finish
