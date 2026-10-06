@@ -1,0 +1,96 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name schema key} {
+  inline_desc {rowid INTEGER PRIMARY KEY DESC,v TEXT,n INT} rowid
+  reordered_desc {v TEXT,rowid INTEGER PRIMARY KEY DESC,n INT} rowid
+  virtual_desc {v TEXT,g INT AS (length(v)) VIRTUAL,
+                rowid INTEGER PRIMARY KEY DESC,n INT} rowid
+  stored_desc {v TEXT,g INT AS (length(v)) STORED,
+               rowid INTEGER PRIMARY KEY DESC,n INT} rowid
+  generated_desc {v TEXT,g INT AS (length(v)) STORED,
+                  h INT AS (length(v)+1) VIRTUAL,
+                  rowid INTEGER PRIMARY KEY DESC,n INT} rowid
+  mixed_case_desc {v TEXT,"RowID" INTEGER PRIMARY KEY DESC,n INT} RowID
+  int_nonalias {v TEXT,rowid INT PRIMARY KEY,n INT} rowid
+  inline_alias {rowid INTEGER PRIMARY KEY,v TEXT,n INT} rowid
+  asc_alias {rowid INTEGER PRIMARY KEY ASC,v TEXT,n INT} rowid
+  table_desc_alias {v TEXT,rowid INTEGER,n INT,PRIMARY KEY(rowid DESC)} rowid
+  virtual_alias {v TEXT,g INT AS (length(v)) VIRTUAL,
+                 rowid INTEGER PRIMARY KEY,n INT} rowid
+  stored_alias {v TEXT,g INT AS (length(v)) STORED,
+                rowid INTEGER PRIMARY KEY,n INT} rowid
+  without_rowid {v TEXT,rowid INTEGER PRIMARY KEY DESC,n INT} rowid
+  clustered_desc {v TEXT,k INTEGER PRIMARY KEY DESC,n INT} k
+} {
+  reset_db
+  set suffix {}
+  if {$name eq "without_rowid"} {set suffix { WITHOUT ROWID}}
+  do_execsql_test historical-rowid-desc-$name-setup "
+    CREATE TABLE t($schema)$suffix;
+    INSERT INTO t($key,v,n) VALUES(100,'value',10),(200,'second',20);
+    SELECT length(dolt_commit('-Am','base'));
+    SELECT dolt_tag('base');
+  " {40 0}
+  set expected [db eval "SELECT $key,v,n FROM t ORDER BY n"]
+  set expectedKeys [db eval "SELECT $key FROM t ORDER BY $key"]
+  foreach phase {live reopen dropped} {
+    if {$phase ne "live"} {
+      if {$phase eq "dropped"} {
+        db eval {DROP TABLE t; SELECT dolt_commit('-Am','drop')}
+      }
+      db close
+      sqlite3 db test.db
+    }
+    foreach {surface source} {
+      snapshot dolt_at_t('base')
+      history dolt_history_t('base')
+    } {
+      do_execsql_test historical-rowid-desc-$name-$phase-$surface-rows \
+          "SELECT $key,v,n FROM $source ORDER BY n" $expected
+      foreach {predicate where count} {
+        eq {=100} 1
+        storage_key {=1} 0
+        ge {>=100} 2
+        gt {>100} 1
+        lt {<200} 1
+      } {
+        do_execsql_test historical-rowid-desc-$name-$phase-$surface-$predicate "
+          SELECT count(*) FROM $source WHERE $key $where;
+          SELECT count(*) FROM (SELECT * FROM $source LIMIT -1) WHERE $key $where;
+        " [list $count $count]
+      }
+      if {[string match *virtual* $name] || [string match *stored* $name]
+          || $name eq "generated_desc"} {
+        do_execsql_test historical-rowid-desc-$name-$phase-$surface-generated \
+            "SELECT g FROM $source ORDER BY n" {5 6}
+      }
+    }
+    if {$phase ne "dropped"} {
+      do_execsql_test historical-rowid-desc-$name-$phase-blame-rows \
+          "SELECT $key FROM dolt_blame_t ORDER BY $key" $expectedKeys
+      do_execsql_test historical-rowid-desc-$name-$phase-blame-eq \
+          "SELECT $key,message FROM dolt_blame_t WHERE $key=100" {100 base}
+      do_execsql_test historical-rowid-desc-$name-$phase-blame-storage-key \
+          "SELECT count(*) FROM dolt_blame_t WHERE $key=1" {0}
+    }
+  }
+}
+
+reset_db
+do_execsql_test historical-rowid-desc-null-setup {
+  CREATE TABLE t(v TEXT,rowid INTEGER PRIMARY KEY DESC);
+  INSERT INTO t VALUES('null',NULL),('value',100);
+  SELECT length(dolt_commit('-Am','base'));
+} {40}
+foreach source {t dolt_at_t('HEAD') dolt_history_t} {
+  do_execsql_test historical-rowid-desc-null-$source "
+    SELECT rowid,v,typeof(rowid) FROM $source ORDER BY v;
+    SELECT v FROM $source WHERE rowid IS NULL;
+  " {{} null null 100 value integer null}
+}
+do_execsql_test historical-rowid-desc-null-blame {
+  SELECT rowid,message FROM dolt_blame_t WHERE rowid IS NULL;
+} {{} base}
+
+finish_test

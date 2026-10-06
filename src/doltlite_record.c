@@ -282,7 +282,6 @@ static int columnNamesLoad(
   sqlite3_stmt *pStmt = 0;
   int rc, nCol;
   int nPkCols = 0;
-  int iCandidateAlias = -1;
   int *aPk = 0;
   int *aRecPos = 0;
   int *aStoredPk = 0;
@@ -344,7 +343,6 @@ static int columnNamesLoad(
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
     int pk = sqlite3_column_int(pStmt, 5);
-    const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
     int hidden = sqlite3_column_int(pStmt, 6);
 
     if( hidden==2 && !includeGen ){
@@ -362,9 +360,6 @@ static int columnNamesLoad(
 
     if( hidden!=2 ){
       if( pk>0 ) nPkCols++;
-      if( pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0 ){
-        iCandidateAlias = ci->nCol;
-      }
       aPk[ci->nCol] = pk;
       aRecPos[ci->nCol] = nRecPos++;
       aStoredPk[nStored] = pk;
@@ -410,8 +405,14 @@ static int columnNamesLoad(
     Table *pTab = sqlite3FindTable(db, zTable, "main");
     if( pTab ){
       ci->bHasRowid = HasRowid(pTab);
-      if( nPkCols==1 && iCandidateAlias>=0 && ci->bHasRowid ){
-        ci->iPkCol = iCandidateAlias;
+      if( ci->bHasRowid && pTab->iPKey>=0 ){
+        for(i=0; i<ci->nCol; i++){
+          if( sqlite3_stricmp(ci->azName[i],
+                pTab->aCol[pTab->iPKey].zCnName)==0 ){
+            ci->iPkCol = i;
+            break;
+          }
+        }
       }
       if( !ci->bHasRowid ){
         Index *pPk = sqlite3PrimaryKeyIndex(pTab);
@@ -445,7 +446,7 @@ static int columnNamesLoad(
       return SQLITE_NOMEM;
     }
     for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = -1;
-    if( ci->iPkCol>=0 || nPkCols==0 ){
+    if( ci->bHasRowid ){
       /* Declared order over record slots: a stored generated column consumes one.
       ** A virtual column keeps -1. */
       for(i=0; i<ci->nCol; i++){
