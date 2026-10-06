@@ -45,6 +45,11 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'fixture SQL'):
                 runner.measure('engine', 'unused.db', p, case, 1)
 
+    def test_generated_row_counts_are_not_powers_of_two(self):
+        rows = {fuzzer.profile_for(seed, index).rows for seed in range(40) for index in range(4)}
+        self.assertEqual(rows, {15000, 60000, 240000})
+        self.assertFalse(any(n & (n - 1) == 0 for n in rows))
+
     def test_generated_profiles_are_never_wide(self):
         for seed in range(10):
             for index in range(16):

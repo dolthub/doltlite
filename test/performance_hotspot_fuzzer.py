@@ -60,7 +60,9 @@ class Case:
 
 def profile_for(seed, index):
     rng = random.Random(f"hotspots-v1:{seed}:{index}")
-    rows = rng.choice([16384, 65536, 262144])
+    # Not powers of two: a pending map grows by doubling, and a statement that
+    # leaves it exactly full charges the next write a whole reallocation.
+    rows = rng.choice([15000, 60000, 240000])
     groups = rng.choice([16, 256, 4096])
     width = max(1, rows // rng.choice([4, 16, 128]))
     profile = Profile(rows, rng.choice([32, 256, 1024]),
