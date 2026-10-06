@@ -357,7 +357,7 @@ static int schemaTokensEquivalent(
   }
 }
 
-static int schemaDefinitionsEquivalent(const char *zLeft, const char *zRight){
+int schemaDefinitionsEquivalent(const char *zLeft, const char *zRight){
   return schemaTokensEquivalent(
       zLeft, zLeft + strlen(zLeft), zRight, zRight + strlen(zRight));
 }
@@ -1254,6 +1254,138 @@ schema_merge_cleanup:
     { int j; for(j=0;j<nAdd;j++) sqlite3_free(azAdd[j]); }
     sqlite3_free(azAdd);
   }
+  return rc;
+}
+
+/* 1 when p starts [CONSTRAINT name] CHECK(...). *pzAfter is past the clause. */
+static int schemaSkipCheckClause(
+  const char *p,
+  const char *e,
+  const char **pzAfter
+){
+  const char *tok;
+  int type, n;
+  if( schemaNextSignificantToken(p, e, &tok, &type, &n)!=SQLITE_OK ) return 0;
+  if( type==TK_CONSTRAINT ){
+    if( schemaNextSignificantToken(tok+n, e, &tok, &type, &n)!=SQLITE_OK ) return 0;
+    if( schemaNextSignificantToken(tok+n, e, &tok, &type, &n)!=SQLITE_OK ) return 0;
+    if( type!=TK_CHECK ) return 0;
+  }else if( type!=TK_CHECK ){
+    return 0;
+  }
+  tok = schemaSkipTrivia(tok+n, e);
+  if( tok>=e || schemaGetToken(tok, e, &type, &n)!=SQLITE_OK || type!=TK_LP ){
+    return 0;
+  }
+  return schemaSkipParenthesized(tok, e, pzAfter)==SQLITE_OK;
+}
+
+static int schemaAppendSansChecks(sqlite3_str *pOut, const char *s, const char *e){
+  const char *p = s;
+  while( p<e ){
+    int type, n;
+    const char *after = 0;
+    if( schemaGetToken(p, e, &type, &n)!=SQLITE_OK ) return SQLITE_CORRUPT;
+    if( (type==TK_CHECK || type==TK_CONSTRAINT)
+     && schemaSkipCheckClause(p, e, &after) ){
+      p = after;
+      continue;
+    }
+    sqlite3_str_append(pOut, p, n);
+    p += n;
+  }
+  return SQLITE_OK;
+}
+
+static int schemaEmitKeptSegment(
+  sqlite3_str *pOut,
+  const char *s,
+  const char *e,
+  int *pnKept
+){
+  const char *ts = s, *te = e;
+  int isConstraint = 0, rc;
+  while( ts<te && isspace((unsigned char)*ts) ) ts++;
+  while( te>ts && isspace((unsigned char)te[-1]) ) te--;
+  if( ts==te ) return SQLITE_OK;
+  rc = schemaSegmentIsTableConstraint(ts, te, &isConstraint);
+  if( rc!=SQLITE_OK ) return rc;
+  if( isConstraint && schemaConstraintKind(ts, (int)(te-ts))==SCHEMA_IR_CHECK ){
+    const char *after = 0;
+    if( !schemaSkipCheckClause(ts, te, &after) ) return SQLITE_CORRUPT;
+    return SQLITE_OK;
+  }
+  if( *pnKept ) sqlite3_str_appendall(pOut, ",");
+  (*pnKept)++;
+  if( !isConstraint ) return schemaAppendSansChecks(pOut, ts, te);
+  sqlite3_str_append(pOut, ts, (int)(te-ts));
+  return SQLITE_OK;
+}
+
+static int schemaSqlWithoutChecks(const char *zSql, char **pzOut){
+  sqlite3_str *pOut;
+  const char *p, *zEnd, *seg, *zLp = 0;
+  int depth = 0, nKept = 0, rc = SQLITE_OK;
+  *pzOut = 0;
+  if( !zSql ) return SQLITE_OK;
+  p = zSql;
+  zEnd = zSql + strlen(zSql);
+  while( p<zEnd ){
+    int type, n;
+    rc = schemaGetToken(p, zEnd, &type, &n);
+    if( rc!=SQLITE_OK ) return SQLITE_OK;
+    if( type==TK_LP ){ zLp = p; p += n; depth = 1; break; }
+    p += n;
+  }
+  if( !zLp ) return SQLITE_OK;
+  pOut = sqlite3_str_new(0);
+  if( !pOut ) return SQLITE_NOMEM;
+  sqlite3_str_append(pOut, zSql, (int)((zLp+1)-zSql));
+  seg = p;
+  while( p<zEnd && depth>0 ){
+    int type, n;
+    rc = schemaGetToken(p, zEnd, &type, &n);
+    if( rc!=SQLITE_OK ) break;
+    if( type==TK_LP ){
+      depth++;
+    }else if( type==TK_RP ){
+      depth--;
+      if( depth==0 ){
+        rc = schemaEmitKeptSegment(pOut, seg, p, &nKept);
+        if( rc==SQLITE_OK ) sqlite3_str_append(pOut, p, (int)(zEnd-p));
+        break;
+      }
+    }else if( type==TK_COMMA && depth==1 ){
+      rc = schemaEmitKeptSegment(pOut, seg, p, &nKept);
+      if( rc!=SQLITE_OK ) break;
+      seg = p + n;
+    }
+    p += n;
+  }
+  if( rc==SQLITE_OK && depth!=0 ) rc = SQLITE_CORRUPT;
+  {
+    int strRc = sqlite3_str_errcode(pOut);
+    if( rc!=SQLITE_OK || strRc ){
+      sqlite3_str_finish(pOut);
+      return (rc==SQLITE_NOMEM || strRc) ? SQLITE_NOMEM : SQLITE_OK;
+    }
+  }
+  *pzOut = sqlite3_str_finish(pOut);
+  if( !*pzOut ) *pzOut = sqlite3_mprintf("");
+  return *pzOut ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+int schemaNonCheckTextMatches(const char *zA, const char *zB, int *pbMatch){
+  char *zLeft = 0, *zRight = 0;
+  int rc;
+  *pbMatch = 0;
+  rc = schemaSqlWithoutChecks(zA, &zLeft);
+  if( rc==SQLITE_OK ) rc = schemaSqlWithoutChecks(zB, &zRight);
+  if( rc==SQLITE_OK && zLeft && zRight ){
+    *pbMatch = schemaDefinitionsEquivalent(zLeft, zRight);
+  }
+  sqlite3_free(zLeft);
+  sqlite3_free(zRight);
   return rc;
 }
 

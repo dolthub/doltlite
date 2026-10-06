@@ -997,6 +997,30 @@ SELECT dolt_commit('-Am','main_check_ge0');
 SQL
 expect_merge_conflict "check_both_modify_differently" "$DB"
 
+DB="$TMPROOT/ck_disjoint.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "ck_disjoint"
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT,
+               CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','feat_ck_w');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT,
+               CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','main_ck_v');
+SQL
+expect_merge_ok "check_disjoint_columns" "$DB"
+expect_dual_value "check_disjoint_columns_both" "$DB" "2" \
+  "SELECT (CASE WHEN sql LIKE '%ck_v%' THEN 1 ELSE 0 END) + (CASE WHEN sql LIKE '%ck_w%' THEN 1 ELSE 0 END) FROM sqlite_master WHERE name='t';" \
+  "SELECT COUNT(*) FROM information_schema.check_constraints WHERE constraint_name IN ('ck_v','ck_w');"
+
 DB="$TMPROOT/ck7.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck7"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));

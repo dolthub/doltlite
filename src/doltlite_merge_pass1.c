@@ -1363,26 +1363,12 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
       if( rc!=SQLITE_OK ) return rc;
       if( nConflicts>0
        && !hasAnySchemaConflict(*c->ppConflictTables, *c->pnConflictTables) ){
-        int i;
-        rc = SQLITE_OK;
-        for(i=0; i<c->nAnc && rc==SQLITE_OK; i++){
-          const char *zName = c->aAnc[i].zName;
-          if( !zName || c->aAnc[i].iTable<=1 ) continue;
-          if( !schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
-                                        c->aOursSchema, c->nOursSchema, zName) ){
-            continue;
-          }
-          if( !schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
-                                        c->aTheirsSchema, c->nTheirsSchema,
-                                        zName) ){
-            continue;
-          }
-          if( hasSchemaConflictObject(*c->ppConflictTables,
-                                      *c->pnConflictTables, zName) ){
-            continue;
-          }
-          rc = mergePass1NoteSchemaConflict(c, zName, zName);
-        }
+        rc = mergePromoteMasterSchemaConflicts(
+            c->aAnc, c->nAnc,
+            c->aAncSchema, c->nAncSchema,
+            c->aOursSchema, c->nOursSchema,
+            c->aTheirsSchema, c->nTheirsSchema,
+            c->ppConflictTables, c->pnConflictTables, c->pTotalConflicts);
       }
     }else if( theirsChanged ){
       struct TableEntry merged = c->aOurs[iTable1Idx];

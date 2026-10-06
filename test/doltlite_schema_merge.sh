@@ -3087,4 +3087,159 @@ run_test "merge_drop_readd_null_rows" \
   "a:z:NULL:NULL,b:2:NULL:NULL" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_merge_disjoint_checks_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, UNIQUE(v));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, UNIQUE(v),
+               CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, UNIQUE(v),
+               CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "disjoint_checks_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "disjoint_checks_both_present" \
+  "SELECT (CASE WHEN sql LIKE '%ck_v%' THEN 1 ELSE 0 END)
+        + (CASE WHEN sql LIKE '%ck_w%' THEN 1 ELSE 0 END)
+        + (CASE WHEN sql LIKE '%UNIQUE%' THEN 1 ELSE 0 END)
+     FROM sqlite_master WHERE name='t';" "3" "$DB"
+run_test "disjoint_checks_row" "SELECT v||':'||w FROM t WHERE id=1;" "10:20" "$DB"
+run_test "disjoint_checks_ok_row" "INSERT INTO t VALUES(2,11,21);" "" "$DB"
+run_test_error_match "disjoint_checks_reject_v" \
+  "INSERT INTO t VALUES(3,-1,21);" "CHECK constraint failed: ck_v" "$DB"
+run_test_error_match "disjoint_checks_reject_w" \
+  "INSERT INTO t VALUES(4,11,-1);" "CHECK constraint failed: ck_w" "$DB"
+run_test "disjoint_checks_integrity" "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_disjoint_col_checks_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT CHECK(w > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0), w INT);
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "disjoint_col_checks_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test_error_match "disjoint_col_checks_reject_w" \
+  "INSERT INTO t VALUES(2,11,-1);" "CHECK constraint failed" "$DB"
+run_test "disjoint_col_checks_kept" \
+  "SELECT (CASE WHEN sql LIKE '%CHECK(v > 0)%' THEN 1 ELSE 0 END)
+        + (CASE WHEN sql LIKE '%CHECK(w > 0)%' THEN 1 ELSE 0 END)
+     FROM sqlite_master WHERE name='t';" "2" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_keep_anc_checks_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, x INT,
+               CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES(1,10,20,30);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, x INT,
+               CONSTRAINT ck_v CHECK(v > 0), CONSTRAINT ck_w CHECK(w > 0));
+INSERT INTO t VALUES(1,10,20,30);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, x INT,
+               CONSTRAINT ck_v CHECK(v > 0), CONSTRAINT ck_x CHECK(x > 0));
+INSERT INTO t VALUES(1,10,20,30);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "ancestor_check_plus_disjoint_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "ancestor_check_plus_disjoint_all" \
+  "SELECT (CASE WHEN sql LIKE '%ck_v%' THEN 1 ELSE 0 END)
+        + (CASE WHEN sql LIKE '%ck_w%' THEN 1 ELSE 0 END)
+        + (CASE WHEN sql LIKE '%ck_x%' THEN 1 ELSE 0 END)
+     FROM sqlite_master WHERE name='t';" "3" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_same_col_checks_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 5));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v >= 0));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_error_match "same_column_checks_conflict" \
+  "SELECT dolt_merge('feat');" "conflict|Merge has" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_check_name_clash_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck CHECK(w > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck CHECK(v > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_error_match "check_name_clash_conflict" \
+  "SELECT dolt_merge('feat');" "conflict|Merge has" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_check_overlap_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CONSTRAINT ck_v CHECK(v > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT,
+               CONSTRAINT ck_sum CHECK(v + w > 0));
+INSERT INTO t VALUES(1,10,20);
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_error_match "overlapping_check_columns_conflict" \
+  "SELECT dolt_merge('feat');" "conflict|Merge has" "$DB"
+rm -f "$DB"
+
 dltest_finish

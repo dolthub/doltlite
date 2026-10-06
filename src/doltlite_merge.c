@@ -156,6 +156,41 @@ int hasAnySchemaConflict(
   return 0;
 }
 
+int mergePromoteMasterSchemaConflicts(
+  struct TableEntry *aAnc, int nAnc,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  MergeConflictTable **ppConflictTables,
+  int *pnConflictTables,
+  int *pTotalConflicts
+){
+  int i, rc = SQLITE_OK;
+  for(i=0; i<nAnc && rc==SQLITE_OK; i++){
+    const char *zName = aAnc[i].zName;
+    int bUnion = 0;
+    int added = 0;
+    if( !zName || aAnc[i].iTable<=1 ) continue;
+    if( !schemaEntryChangedByName(aAncSchema, nAncSchema,
+                                  aOursSchema, nOursSchema, zName)
+     || !schemaEntryChangedByName(aAncSchema, nAncSchema,
+                                  aTheirsSchema, nTheirsSchema, zName) ){
+      continue;
+    }
+    if( hasSchemaConflictObject(*ppConflictTables, *pnConflictTables, zName) ){
+      continue;
+    }
+    rc = schemaTableChecksUnified(
+        aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+        aTheirsSchema, nTheirsSchema, zName, &bUnion);
+    if( rc!=SQLITE_OK || bUnion ) continue;
+    rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
+                              zName, zName, &added);
+    if( rc==SQLITE_OK && added ) (*pTotalConflicts)++;
+  }
+  return rc;
+}
+
 
 
 static int mergeIndexColListSame(const char *zA, const char *zB){
@@ -1094,6 +1129,11 @@ int doltliteMergeCatalogs(
       aAncSchema, nAncSchema, aOursSchema, nOursSchema,
       aTheirsSchema, nTheirsSchema,
       &aConflictTables, &nConflictTables, &totalConflicts);
+  if( rc!=SQLITE_OK ) goto merge_cleanup;
+
+  rc = schemaApplyDisjointCheckUnions(
+      aAncSchema, nAncSchema, aOursSchema, nOursSchema,
+      aTheirsSchema, nTheirsSchema);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   rc = mergeCatalogPass1(db, aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
