@@ -166,10 +166,10 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(seen, set(operators))
         self.assertIn('mutation', origins)
 
-    def test_key_shapes_are_opt_in_and_override_every_search_profile(self):
-        for seed in range(50):
-            for index in range(4):
-                self.assertIn(fuzzer.profile_for(seed, index).key, ('integer', 'text'))
+    def test_every_key_shape_is_drawn_and_can_be_forced(self):
+        drawn = [fuzzer.profile_for(seed, index).key for seed in range(50) for index in range(4)]
+        self.assertEqual(set(drawn), set(fuzzer.KEYS))
+        self.assertGreater(sum(key in ('integer', 'text') for key in drawn), len(drawn) // 3)
         for key in fuzzer.KEYS:
             specs = search.Search(7).specs(7, key=key)
             for _ in range(6):
