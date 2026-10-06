@@ -1854,7 +1854,7 @@ default_cleanup:
 }
 
 /* Forward-declared: doltlite_internal.h redefines TableEntry incompatibly. */
-extern int doltliteIndexApplyRowDelta(
+extern int doltliteIndexApplyRowDeltaChecked(
   sqlite3 *db,
   ChunkStore *cs,
   ProllyCache *cache,
@@ -1864,7 +1864,8 @@ extern int doltliteIndexApplyRowDelta(
   int iPKey, i64 intKey,
   const u8 *pTreeKey, int nTreeKey,
   const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal
+  const u8 *pNewVal, int nNewVal,
+  int checkUnique
 );
 
 /* Allocated copy of the tree value at pKey/intKey, or NULL if absent. */
@@ -1907,7 +1908,8 @@ int doltliteApplyRawRowMutation(
   sqlite3 *db,
   const char *zTable,
   const u8 *pKey, int nKey, i64 intKey,
-  const u8 *pVal, int nVal
+  const u8 *pVal, int nVal,
+  int checkUnique, Index **ppUniqueViolation
 ){
   Btree *pBtree;
   BtShared *pBt;
@@ -1922,6 +1924,7 @@ int doltliteApplyRawRowMutation(
   int rc;
   u8 isIntKey;
 
+  if( ppUniqueViolation ) *ppUniqueViolation = 0;
   if( !db || !zTable ) return SQLITE_MISUSE;
   if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
@@ -2012,10 +2015,13 @@ int doltliteApplyRawRowMutation(
       if( !pIdxTE ) continue;
       rc = flushPendingForTable(pBtree, pBt, pIdxTE, 0);
       if( rc!=SQLITE_OK ) break;
-      rc = doltliteIndexApplyRowDelta(
+      rc = doltliteIndexApplyRowDeltaChecked(
           db, &pBt->store, &pBt->cache, &pIdxTE->root, pIdxTE->flags,
           pIdx, iPKey, intKey, pKey, nKey,
-          pOldVal, nOldVal, pIndexNew, nIndexNew);
+          pOldVal, nOldVal, pIndexNew, nIndexNew, checkUnique);
+      if( rc==SQLITE_CONSTRAINT_UNIQUE && ppUniqueViolation ){
+        *ppUniqueViolation = pIdx;
+      }
     }
   }
 

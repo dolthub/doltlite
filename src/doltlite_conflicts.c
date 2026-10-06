@@ -1158,7 +1158,7 @@ static void conflictsResolveParsedFunc(
           DoltliteConflictRow *cr = &table.aRows[j];
           rc = doltliteApplyRawRowMutation(db, azTables[i],
                                            cr->pKey, cr->nKey, cr->intKey,
-                                           cr->pTheirVal, cr->nTheirVal);
+                                           cr->pTheirVal, cr->nTheirVal, 0, 0);
           if( rc!=SQLITE_OK ){
             freeConflictTable(&table);
             if( bBegan ) sqlite3_exec(db, "ROLLBACK", 0, 0, 0);

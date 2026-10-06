@@ -1012,7 +1012,7 @@ static int wsBindDiscardColumn(
   }
 }
 
-static int wsDiscardRowWithFks(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
+static int wsDiscardRow(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
   sqlite3 *db = p->db;
   const DoltliteColInfo *pCols = &p->cols;
   sqlite3_str *pSql;
@@ -1044,7 +1044,7 @@ static int wsDiscardRowWithFks(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
   if( rc!=SQLITE_OK ) return rc;
   pSql = sqlite3_str_new(db);
   if( r->diffType==PROLLY_DIFF_DELETE ){
-    sqlite3_str_appendf(pSql, "INSERT INTO main.\"%w\"(", p->zTableName);
+    sqlite3_str_appendf(pSql, "INSERT OR ABORT INTO main.\"%w\"(", p->zTableName);
     if( zRowid && pTab->iPKey<0 ){
       sqlite3_str_appendf(pSql, "\"%w\",", zRowid);
     }
@@ -1066,7 +1066,7 @@ static int wsDiscardRowWithFks(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
     if( r->diffType==PROLLY_DIFF_ADD ){
       sqlite3_str_appendf(pSql, "DELETE FROM main.\"%w\"", p->zTableName);
     }else{
-      sqlite3_str_appendf(pSql, "UPDATE main.\"%w\" SET ", p->zTableName);
+      sqlite3_str_appendf(pSql, "UPDATE OR ABORT main.\"%w\" SET ", p->zTableName);
       for(i=0; i<pCols->nCol; i++){
         if( pCols->aGenerated[i]!=DOLTLITE_GEN_NONE ) continue;
         sqlite3_str_appendf(pSql, "%s\"%w\"=?%d",
@@ -1091,7 +1091,7 @@ static int wsDiscardRowWithFks(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
     return SQLITE_NOMEM;
   }
 
-  /* Discards must run FK actions without firing user triggers or row hooks. */
+  /* Discards must enforce constraints without firing user triggers or row hooks. */
   db->mDbFlags |= DBFLAG_InternalDml;
   doltliteAuthShieldEnter(db, &shield);
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
@@ -1134,6 +1134,8 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   if( argc==1 ){
     const u8 *pVal;
     int nVal;
+    int rc;
+    Index *pUniqueViolation = 0;
     int schemaChanged = 0;
     r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]));
     if( !r ){
@@ -1155,11 +1157,21 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
         return SQLITE_ERROR;
       }
     }
-    if( p->db->flags & SQLITE_ForeignKeys ){
+    {
       Table *pTab = sqlite3FindTable(p->db, p->zTableName, "main");
-      if( pTab && IsOrdinaryTable(pTab)
-       && (pTab->u.tab.pFKey || sqlite3FkReferences(pTab)) ){
-        return wsDiscardRowWithFks(p, r, pTab);
+      if( pTab && IsOrdinaryTable(pTab) ){
+        Index *pIdx;
+        if( (p->db->flags & SQLITE_ForeignKeys)
+         && (pTab->u.tab.pFKey || sqlite3FkReferences(pTab)) ){
+          return wsDiscardRow(p, r, pTab);
+        }
+        for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+          if( IsUniqueIndex(pIdx)
+           && (HasRowid(pTab) || !IsPrimaryKeyIndex(pIdx))
+           && (!HasRowid(pTab) || pTab->iPKey>=0 || sqlite3RowidAlias(pTab)) ){
+            return wsDiscardRow(p, r, pTab);
+          }
+        }
       }
     }
     /* Unstaged delete: restore staged/HEAD for this PK. */
@@ -1174,9 +1186,13 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
       pVal = r->pOldVal;
       nVal = r->nOldVal;
     }
-    return doltliteApplyRawRowMutation(p->db, p->zTableName,
-                                       r->pKey, r->nKey, r->intKey,
-                                       pVal, nVal);
+    rc = doltliteApplyRawRowMutation(p->db, p->zTableName,
+                                     r->pKey, r->nKey, r->intKey,
+                                     pVal, nVal, 1, &pUniqueViolation);
+    if( rc==SQLITE_CONSTRAINT_UNIQUE && pUniqueViolation ){
+      rc = wsUniqueConstraintError(p, pUniqueViolation);
+    }
+    return rc;
   }
   if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
     pBase->zErrMsg = sqlite3_mprintf(

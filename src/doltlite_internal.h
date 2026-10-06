@@ -1662,7 +1662,8 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 int doltliteApplyRawRowMutation(sqlite3 *db, const char *zTable,
                                 const u8 *pKey, int nKey, i64 intKey,
-                                const u8 *pVal, int nVal);
+                                const u8 *pVal, int nVal,
+                                int checkUnique, Index **ppUniqueViolation);
 
 typedef struct DoltliteConflictRow DoltliteConflictRow;
 struct DoltliteConflictRow {
@@ -1706,18 +1707,6 @@ int doltliteSchemasRowDiff(
   const ProllyHash *pNewRoot, u8 newFlags,
   int *pOldCount, int *pNewCount,
   int *pAdded, int *pDeleted, int *pModified
-);
-int doltliteIndexApplyRowDelta(
-  sqlite3 *db,
-  ChunkStore *cs,
-  ProllyCache *cache,
-  ProllyHash *pIdxRoot,
-  u8 idxFlags,
-  Index *pIdx,
-  int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal
 );
 int doltliteIndexApplyRowDeltaChecked(
   sqlite3 *db,

@@ -1,0 +1,203 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {kind schema index oldValue takenValue constraint} {
+  nullable {id INTEGER PRIMARY KEY,v TEXT UNIQUE,n INT} {} {'a'} {'a'} {t.v}
+  notnull {id INTEGER PRIMARY KEY,v TEXT NOT NULL UNIQUE,n INT} {} {'a'} {'a'} {t.v}
+  replace {id INTEGER PRIMARY KEY,v TEXT UNIQUE ON CONFLICT REPLACE,n INT} {} {'a'} {'a'} {t.v}
+  ignore {id INTEGER PRIMARY KEY,v TEXT UNIQUE ON CONFLICT IGNORE,n INT} {} {'a'} {'a'} {t.v}
+  clustered {id TEXT PRIMARY KEY,v TEXT UNIQUE,n INT} {} {'a'} {'a'} {t.v}
+  reordered {v TEXT UNIQUE,n INT,id TEXT PRIMARY KEY} {} {'a'} {'a'} {t.v}
+  composite {id INTEGER PRIMARY KEY,v TEXT,n INT,UNIQUE(v,n DESC)} {} {'a'} {'a'} {t.v, t.n}
+  nocase {id INTEGER PRIMARY KEY,v TEXT COLLATE NOCASE UNIQUE,n INT} {} {'AbC'} {'abc'} {t.v}
+  rtrim {id INTEGER PRIMARY KEY,v TEXT COLLATE RTRIM UNIQUE,n INT} {} {'a '} {'a'} {t.v}
+  nul {id INTEGER PRIMARY KEY,v TEXT COLLATE NOCASE UNIQUE,n INT} {}
+    {CAST(x'610078' AS TEXT)} {CAST(x'410079' AS TEXT)} {t.v}
+  expression {id INTEGER PRIMARY KEY,v TEXT,n INT}
+    {CREATE UNIQUE INDEX uv ON t(lower(v))} {'A'} {'a'} {index 'uv'}
+  partial {id INTEGER PRIMARY KEY,v TEXT,n INT}
+    {CREATE UNIQUE INDEX uv ON t(v) WHERE n=1} {'a'} {'a'} {t.v}
+  virtual {id INTEGER PRIMARY KEY,v TEXT,n INT,g TEXT AS (lower(v)) VIRTUAL UNIQUE} {} {'A'} {'a'} {t.g}
+  stored {id INTEGER PRIMARY KEY,v TEXT,n INT,g TEXT AS (lower(v)) STORED UNIQUE} {} {'A'} {'a'} {t.g}
+} {
+  foreach foreignKeys {OFF ON} {
+    foreach mutation {update delete} {
+      foreach outcome {commit retry} {
+        reset_db
+        execsql "PRAGMA foreign_keys=$foreignKeys; CREATE TABLE t($schema); $index"
+        execsql "INSERT INTO t(id,v,n) VALUES(1,$oldValue,1),(2,'b',1)"
+        execsql {SELECT dolt_commit('-Am','base')}
+        set base [execsql {SELECT id,quote(v),n FROM t ORDER BY id}]
+        if {$mutation eq "delete"} {
+          execsql {DELETE FROM t WHERE id=1 OR id='1'}
+        } else {
+          execsql {UPDATE t SET v='c' WHERE id=1 OR id='1'}
+        }
+        execsql "UPDATE t SET v=$takenValue WHERE id=2 OR id='2'"
+        set before [execsql {SELECT id,quote(v),n FROM t ORDER BY id}]
+        set name workspace-discard-$kind-$foreignKeys-$mutation-$outcome
+        do_catchsql_test $name-reject {
+          DELETE FROM dolt_workspace_t WHERE from_id=1 OR from_id='1';
+        } [list 1 "UNIQUE constraint failed: $constraint"]
+        do_execsql_test $name-unchanged {
+          SELECT id,quote(v),n FROM t ORDER BY id;
+          SELECT count(*) FROM dolt_workspace_t;
+          PRAGMA integrity_check;
+        } [concat $before {2 ok}]
+        if {$outcome eq "commit"} {
+          do_execsql_test $name-commit {
+            SELECT length(dolt_commit('-Am','valid working rows'));
+            SELECT dolt_reset('--hard');
+          } {40 0}
+          set expected $before
+        } else {
+          do_execsql_test $name-retry {
+            UPDATE t SET v='b' WHERE id=2 OR id='2';
+            DELETE FROM dolt_workspace_t WHERE from_id=1 OR from_id='1';
+            SELECT count(*) FROM dolt_workspace_t;
+          } {0}
+          set expected $base
+        }
+        db close
+        sqlite3 db [file normalize test.db]
+        do_execsql_test $name-reopen {
+          SELECT id,quote(v),n FROM t ORDER BY id;
+          PRAGMA integrity_check;
+        } [concat $expected {ok}]
+      }
+    }
+  }
+}
+
+foreach {path key schema} {
+  sql id {id INTEGER PRIMARY KEY,v TEXT UNIQUE}
+  raw rowid {rowid INT,oid INT,_rowid_ INT,v TEXT UNIQUE}
+} {
+  foreach transaction {autocommit explicit savepoint} {
+    reset_db
+    execsql "CREATE TABLE t($schema); INSERT INTO t($key,v) VALUES(1,'d'),(2,'b'),(3,'a')"
+    execsql {
+      CREATE TABLE anchor(id INTEGER PRIMARY KEY);
+      SELECT dolt_commit('-Am','base');
+    }
+    execsql "UPDATE t SET v='e' WHERE $key=1;
+             UPDATE t SET v='c' WHERE $key=3;
+             UPDATE t SET v='a' WHERE $key=2;"
+    if {$transaction eq "explicit"} {execsql {BEGIN}}
+    if {$transaction eq "savepoint"} {execsql {SAVEPOINT outer_savepoint}}
+    execsql {INSERT INTO anchor VALUES(9)}
+    do_catchsql_test workspace-discard-atomic-$path-$transaction-reject "
+      DELETE FROM dolt_workspace_t WHERE from_$key IN (1,3);
+    " {1 {UNIQUE constraint failed: t.v}}
+    do_execsql_test workspace-discard-atomic-$path-$transaction-state "
+      SELECT $key,v FROM t ORDER BY $key;
+      SELECT count(*) FROM dolt_workspace_t;
+      SELECT id FROM anchor;
+      PRAGMA integrity_check;
+    " {1 e 2 a 3 c 3 9 ok}
+    if {$transaction eq "explicit"} {execsql {COMMIT}}
+    if {$transaction eq "savepoint"} {execsql {RELEASE outer_savepoint}}
+    do_execsql_test workspace-discard-atomic-$path-$transaction-persist "
+      SELECT length(dolt_commit('-Am','valid working rows'));
+      SELECT dolt_reset('--hard');
+      SELECT $key,v FROM t ORDER BY $key;
+      SELECT id FROM anchor;
+      PRAGMA integrity_check;
+    " {40 0 1 e 2 a 3 c 9 ok}
+  }
+}
+
+reset_db
+do_execsql_test workspace-discard-null {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT UNIQUE);
+  INSERT INTO t VALUES(1,NULL),(2,'b');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET v='c' WHERE id=1;
+  UPDATE t SET v=NULL WHERE id=2;
+  DELETE FROM dolt_workspace_t WHERE to_id=1;
+  SELECT id,v FROM t WHERE v IS NULL ORDER BY id;
+  PRAGMA integrity_check;
+} {40 1 {} 2 {} ok}
+
+reset_db
+do_execsql_test workspace-discard-partial-excluded {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT,n INT);
+  CREATE UNIQUE INDEX uv ON t(v) WHERE n=1;
+  INSERT INTO t VALUES(1,'a',0),(2,'b',1);
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET v='c' WHERE id=1;
+  UPDATE t SET v='a' WHERE id=2;
+  DELETE FROM dolt_workspace_t WHERE to_id=1;
+  SELECT id,v,n FROM t ORDER BY id;
+  PRAGMA integrity_check;
+} {40 1 a 0 2 a 1 ok}
+
+foreach mutation {update delete} {
+  reset_db
+  execsql {
+    CREATE TABLE t(rowid TEXT,oid TEXT,_rowid_ TEXT,v TEXT UNIQUE);
+    INSERT INTO t VALUES('r1','o1','u1','a'),('r2','o2','u2','b');
+    SELECT dolt_commit('-Am','base');
+  }
+  if {$mutation eq "delete"} {
+    execsql {DELETE FROM t WHERE rowid='r1'}
+  } else {
+    execsql {UPDATE t SET v='c' WHERE rowid='r1'}
+  }
+  execsql {UPDATE t SET v='a' WHERE rowid='r2'}
+  set before [execsql {SELECT * FROM t ORDER BY rowid}]
+  do_catchsql_test workspace-discard-shadowed-$mutation-reject {
+    DELETE FROM dolt_workspace_t WHERE from_rowid='r1';
+  } {1 {UNIQUE constraint failed: t.v}}
+  do_execsql_test workspace-discard-shadowed-$mutation-unchanged {
+    SELECT * FROM t ORDER BY rowid;
+    PRAGMA integrity_check;
+  } [concat $before {ok}]
+  do_execsql_test workspace-discard-shadowed-$mutation-retry {
+    UPDATE t SET v='b' WHERE rowid='r2';
+    DELETE FROM dolt_workspace_t WHERE from_rowid='r1';
+    SELECT * FROM t ORDER BY rowid;
+    SELECT count(*) FROM dolt_workspace_t;
+    PRAGMA integrity_check;
+  } {r1 o1 u1 a r2 o2 u2 b 0 ok}
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT UNIQUE);
+  CREATE TABLE audit(n INT);
+  CREATE TABLE marker(id INTEGER PRIMARY KEY);
+  CREATE TRIGGER tu AFTER UPDATE ON t BEGIN INSERT INTO audit VALUES(1); END;
+  CREATE TEMP TRIGGER ti AFTER INSERT ON main.t BEGIN INSERT INTO audit VALUES(2); END;
+  CREATE TRIGGER td AFTER DELETE ON t BEGIN INSERT INTO audit VALUES(3); END;
+  INSERT INTO t VALUES(1,'a'),(2,'b');
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET v='c' WHERE id=1;
+  DELETE FROM audit;
+  INSERT INTO marker VALUES(42);
+}
+set total [db onecolumn {SELECT total_changes()}]
+set hooks {}
+db update_hook {lappend hooks}
+do_execsql_test workspace-discard-counters-update {
+  DELETE FROM dolt_workspace_t WHERE to_id=1;
+  SELECT changes(),total_changes()-$total,last_insert_rowid();
+  SELECT count(*) FROM audit;
+  SELECT id,v FROM t ORDER BY id;
+} {1 1 42 0 1 a 2 b}
+do_test workspace-discard-hooks-update {set hooks} {}
+db update_hook {}
+execsql {DELETE FROM t WHERE id=1; DELETE FROM audit}
+set total [db onecolumn {SELECT total_changes()}]
+set hooks {}
+db update_hook {lappend hooks}
+do_execsql_test workspace-discard-counters-insert {
+  DELETE FROM dolt_workspace_t WHERE from_id=1;
+  SELECT changes(),total_changes()-$total,last_insert_rowid();
+  SELECT count(*) FROM audit;
+  SELECT id,v FROM t ORDER BY id;
+} {1 1 42 0 1 a 2 b}
+do_test workspace-discard-hooks-insert {set hooks} {}
+db update_hook {}
+
+finish_test

@@ -874,21 +874,5 @@ int doltliteIndexApplyRowDeltaChecked(
   return rc;
 }
 
-int doltliteIndexApplyRowDelta(
-  sqlite3 *db,
-  ChunkStore *cs,
-  ProllyCache *cache,
-  ProllyHash *pIdxRoot,
-  u8 idxFlags,
-  Index *pIdx,
-  int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal
-){
-  return doltliteIndexApplyRowDeltaChecked(db, cs, cache, pIdxRoot, idxFlags,
-      pIdx, iPKey, intKey, pTreeKey, nTreeKey,
-      pOldVal, nOldVal, pNewVal, nNewVal, 0);
-}
 
 #endif /* DOLTLITE_PROLLY */
