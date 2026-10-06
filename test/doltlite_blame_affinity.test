@@ -1,0 +1,159 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set queries {
+  numeric_text {SELECT quote(k),message FROM @ WHERE k='01' ORDER BY k}
+  integer {SELECT quote(k),message FROM @ WHERE k=1 ORDER BY k}
+  real {SELECT quote(k),message FROM @ WHERE k=1.0 ORDER BY k}
+  decimal_text {SELECT quote(k),message FROM @ WHERE k='2.0' ORDER BY k}
+  blob {SELECT quote(k),message FROM @ WHERE k=x'3031' ORDER BY k}
+  text {SELECT quote(k),message FROM @ WHERE k='abc' ORDER BY k}
+  null {SELECT quote(k),message FROM @ WHERE k=NULL ORDER BY k}
+  scan {SELECT quote(k),message FROM @ WHERE (k||'')='1' ORDER BY k}
+  range {SELECT quote(k),message FROM @ WHERE k>='1' AND k<'3' ORDER BY k}
+  between {SELECT quote(k),message FROM @ WHERE k BETWEEN '1' AND '2' ORDER BY k}
+  in {SELECT quote(k),message FROM @ WHERE k IN ('01','2.0',x'3031') ORDER BY k}
+  join {WITH rhs(x) AS (VALUES('01'),('2.0'))
+        SELECT quote(k),message FROM @ JOIN rhs ON k=rhs.x ORDER BY k}
+  types {SELECT quote(k),typeof(k),message FROM @ ORDER BY k}
+}
+
+foreach {kind declaration affinity values suffix} {
+  int INT INTEGER {1 2 '010' 'abc' x'3031'} {}
+  integer INTEGER INTEGER {1 2 '010' 'abc' x'3031'} {}
+  numeric NUMERIC NUMERIC {1 2 '010' 'abc' x'3031'} {}
+  decimal {DECIMAL(10,2)} NUMERIC {1 2 '010' 'abc' x'3031'} {}
+  real REAL REAL {1 2 '010' 'abc' x'3031'} {}
+  floating {FLOATING POINT} INTEGER {1 2 '010' 'abc' x'3031'} {}
+  string STRING NUMERIC {1 2 '010' 'abc' x'3031'} {}
+  text TEXT TEXT {1 2 '010' 'abc' x'3031'} {}
+  varchar {VARCHAR(20)} TEXT {1 2 '010' 'abc' x'3031'} {}
+  blob BLOB BLOB {1 2 '010' 'abc' x'3031'} {}
+  untyped {} BLOB {1 2 '010' 'abc' x'3031'} {}
+  strict_int INT INTEGER {1 2 10} STRICT
+  strict_real REAL REAL {1 2 10} STRICT
+  strict_text TEXT TEXT {1 2 '010'} STRICT
+  strict_blob BLOB BLOB {x'31' x'32' x'3031'} STRICT
+  strict_any ANY BLOB {1 2 '010' 'abc' x'3031'} STRICT
+} {
+  foreach layout {leading trailing without_rowid key_only} {
+    reset_db
+    set key "k $declaration PRIMARY KEY"
+    if {$declaration eq "INTEGER" && $layout eq "key_only"} {
+      append key " DESC"
+    }
+    set extra [expr {$layout eq "without_rowid" ? "WITHOUT ROWID" : ""}]
+    if {$suffix ne ""} {append extra [expr {$extra eq "" ? "STRICT" : ",STRICT"}]}
+    if {$layout eq "key_only"} {
+      set schema $key
+    } elseif {$layout eq "trailing"} {
+      set schema "v TEXT, $key"
+    } else {
+      set schema "$key, v TEXT"
+    }
+    execsql "CREATE TABLE t($schema) $extra"
+    foreach value $values {
+      if {$declaration eq "INTEGER" && $layout in {leading trailing}
+          && $value in {'abc' x'3031'}} continue
+      if {$layout eq "key_only"} {
+        execsql "INSERT INTO t(k) VALUES($value)"
+      } else {
+        execsql "INSERT INTO t(k,v) VALUES($value,'base')"
+      }
+    }
+    execsql {SELECT dolt_commit('-Am','base')}
+    set name blame-affinity-$kind-$layout
+    if {$layout ne "key_only"} {
+      execsql {UPDATE t SET v='updated' WHERE k=2}
+      if {[execsql {SELECT changes()}]} {
+        execsql {SELECT dolt_commit('-am','updated')}
+      }
+    }
+    foreach {query sql} $queries {
+      set live [string map [list @ {(SELECT k,CASE WHEN k=2 THEN 'updated' ELSE 'base' END AS message FROM t)}] $sql]
+      if {$layout eq "key_only"} {
+        set live [string map [list @ {(SELECT k,'base' AS message FROM t)}] $sql]
+      }
+      set expected($query) [execsql $live]
+    }
+    foreach phase {live reopen} {
+      if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+      do_execsql_test $name-$phase-declaration {
+        SELECT type FROM pragma_table_xinfo('dolt_blame_t') WHERE name='k';
+      } $affinity
+      foreach {query sql} $queries {
+        do_execsql_test $name-$phase-$query \
+            [string map [list @ dolt_blame_t] $sql] $expected($query)
+      }
+    }
+  }
+}
+
+unset expected
+foreach {kind definition values predicate} {
+  mixed {payload TEXT, n INT, r REAL, s TEXT COLLATE NOCASE, b BLOB,
+         PRIMARY KEY(b,n DESC,s,r)}
+        {'a',1,1,'One',x'01'} {n='01' AND r='1.0' AND s='ONE' AND b=x'01'}
+  numeric {a TEXT, b DECIMAL(10,2), PRIMARY KEY(b,a)}
+          {1,2} {a=1 AND b='2.0'}
+  rtrim {a TEXT COLLATE RTRIM,b INT,PRIMARY KEY(b DESC,a)}
+        {'tail ',2} {a='tail' AND b='02'}
+  quoted {"n""key" INT,"t key" TEXT,PRIMARY KEY("t key","n""key")}
+         {1,2} {"t key"=2 AND "n""key"='01'}
+} {
+  foreach suffix {{} {WITHOUT ROWID}} {
+    reset_db
+    execsql "CREATE TABLE t($definition) $suffix"
+    execsql "INSERT INTO t VALUES($values)"
+    execsql {SELECT dolt_commit('-Am','base')}
+    set expected [execsql "SELECT count(*) FROM t WHERE $predicate"]
+    set name blame-affinity-composite-$kind-[expr {$suffix eq "" ? "implicit" : "explicit"}]
+    foreach phase {live reopen} {
+      if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+      do_execsql_test $name-$phase \
+          "SELECT count(*) FROM dolt_blame_t WHERE $predicate" $expected
+      do_execsql_test $name-$phase-scan \
+          "SELECT count(*) FROM dolt_blame_t WHERE ($predicate) OR message='absent'" $expected
+    }
+  }
+}
+
+foreach {collation stored probe} {
+  NOCASE {'AbC'} {'abc'}
+  RTRIM {'abc  '} {'abc'}
+} {
+  reset_db
+  execsql "CREATE TABLE t(k TEXT COLLATE $collation PRIMARY KEY)"
+  execsql "INSERT INTO t VALUES($stored)"
+  execsql {SELECT dolt_commit('-Am','base')}
+  do_execsql_test blame-affinity-collation-$collation "
+    SELECT count(*) FROM dolt_blame_t WHERE k=$probe;
+    SELECT count(*) FROM dolt_blame_t WHERE k COLLATE BINARY=$probe;
+  " {1 0}
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(k INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'base');
+  SELECT dolt_commit('-Am','numeric');
+  SELECT count(*) FROM dolt_blame_t;
+  SELECT dolt_checkout('-b','text');
+  DROP TABLE t;
+  CREATE TABLE t(k TEXT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES('01','base');
+  SELECT dolt_commit('-Am','text');
+}
+set checkout 0
+foreach branch {main text main text} {
+  incr checkout
+  execsql "SELECT dolt_checkout('$branch')"
+  set expected [execsql {SELECT count(*) FROM t WHERE k='01';
+                        SELECT count(*) FROM t WHERE k=1}]
+  do_execsql_test blame-affinity-checkout-$checkout-$branch {
+    SELECT count(*) FROM dolt_blame_t WHERE k='01';
+    SELECT count(*) FROM dolt_blame_t WHERE k=1;
+  } $expected
+}
+
+finish_test
