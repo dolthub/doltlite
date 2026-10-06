@@ -24,6 +24,9 @@ TIMER = re.compile(r"Run Time: real ([0-9.]+) user [0-9.]+ sys [0-9.]+")
 # (#3408), which is known and not filed.
 CACHED_CHECK_KIB = 1048576
 UNCACHED_READS_ISSUE = 3408
+PENDING_EDITS_ISSUE = 3418
+# Contexts whose untimed prepare leaves uncommitted edits in the pending map.
+PENDING_CONTEXTS = ("after_update", "after_delete")
 CASE_HEADROOM = 1.5
 REVIEW_RATIO = 10
 CASE_EXTENSION_CAP = 10
@@ -392,6 +395,7 @@ def save_report(output, report):
     errors = [x for x in report["cases"] if "error" in x]
     timeouts = [x for x in report["cases"] if "timeout" in x]
     uncached = [x for x in report["cases"] if x.get("uncached_reads")]
+    pending = [x for x in report["cases"] if x.get("pending_edits")]
     lines = ["## Performance hotspot discovery", "",
              f"Seed: `{report['seed']}`. Profiles completed: {report['profiles_completed']}. "
              f"Cases measured: {sum('pairs' in x for x in report['cases'])}/{len(report['cases'])} attempted. "
@@ -428,6 +432,13 @@ def save_report(output, report):
         for case in uncached:
             lines.append(f"- `{case['id']}`: {case['ratio']:.2f}× at the profile cache, "
                          f"{case.get('cached_ratio') or 0:.2f}× cached. `{case['reproducer']}`")
+    if pending:
+        lines += ["", f"### Known: pending edit map (#{PENDING_EDITS_ISSUE})", "",
+                  "Confirmed after an update or delete in the same transaction, but under the "
+                  "threshold without one, so the gap is reading through uncommitted edits. Not filed.", ""]
+        for case in pending:
+            lines.append(f"- `{case['id']}`: {case['ratio']:.2f}× after the write, "
+                         f"{case.get('plain_ratio') or 0:.2f}× without it. `{case['reproducer']}`")
     scaled = [x for x in report["cases"] if x.get("counter_superlinear")]
     if scaled:
         lines += ["", "### Counter scaling", "",
@@ -454,7 +465,7 @@ def save_report(output, report):
 
 
 def needs_review(case):
-    if (case.get("confirmed") or case.get("uncached_reads")
+    if (case.get("confirmed") or case.get("uncached_reads") or case.get("pending_edits")
             or "timeout" in case or "error" in case):
         return False
     return (case.get("ratio") or 0) >= REVIEW_RATIO
@@ -611,6 +622,15 @@ def main(argv=None):
                                 if cached["ratio"] is not None and cached["ratio"] < threshold:
                                     record["confirmed"] = False
                                     record["uncached_reads"] = True
+                            if record["confirmed"] and case.recipe.get("context") in PENDING_CONTEXTS:
+                                runner.case_deadline = time.monotonic() + args.timeout
+                                plain = measure_case(runner, binaries, case_databases, profile,
+                                                     replace(case, prepare=""), args.runs, threshold,
+                                                     args.min_ms, min_query_ms=min_query_ms, **options)
+                                record["plain_ratio"] = plain["ratio"]
+                                if plain["ratio"] is not None and plain["ratio"] < threshold:
+                                    record["confirmed"] = False
+                                    record["pending_edits"] = True
                             (directory/(case.name+".sql")).write_text(session_sql(profile, case, record["repeats"], setup))
                             repro.update(expected=record["result"], repeats=record["repeats"], fingerprint=record["fingerprint"], family=record["family"], statement=record["statement"])
                             (directory/(case.name+".json")).write_text(json.dumps(repro, indent=2)+"\n")
@@ -618,11 +638,15 @@ def main(argv=None):
                             record["incomplete"] = "search budget exhausted during confirmation"
                             report["cases"].append(record)
                             raise
+                        # A classification re-measure can fail after the case confirmed;
+                        # an unclassified case must not be reported or filed as confirmed.
                         except CaseTimeout as exc:
                             record["timeout"] = str(exc)
                             record.update(exc.evidence)
+                            record["confirmed"] = False
                         except (RuntimeError, ValueError) as exc:
                             record["error"] = str(exc)
+                            record["confirmed"] = False
                         finally:
                             runner.case_deadline = None
                         search.observe(profile, case, record)

@@ -255,6 +255,86 @@ class DiscoveryTests(unittest.TestCase):
                     self.assertIn(message, result.stdout)
                     self.assertEqual(result.stderr, "")
 
+    def run_pending_check(self, context, plain_ratio):
+        calls = []
+        def measure(runner, binaries, databases, p, case, runs, threshold, min_ms, setup=None, min_query_ms=0):
+            calls.append(case.prepare)
+            control = len(calls) > 1
+            pairs = [{"doltlite_ms": 600.0, "sqlite_ms": 100.0}] * 5
+            return {"pairs": pairs, "result": "1", "repeats": 1, "doltlite_ms": 600.0, "sqlite_ms": 100.0,
+                    "ratio": plain_ratio if control else 6.0, "confirmed": not control}
+        profile = replace(self.profile, cache_kib=fuzzer.CACHED_CHECK_KIB)
+        case = fuzzer.Case("generated_0", "INSERT INTO t SELECT * FROM t WHERE 1;", "SELECT 1;",
+                           "UPDATE t SET v=v+1;" if context != "plain" else "",
+                           {"context": context, "operator": "upsert_update"})
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/"results"
+            with patch.object(fuzzer.shutil, "copyfile"), patch.object(fuzzer.Runner, "run", return_value="ok"), \
+                 patch.object(fuzzer, "binary_info", return_value={}), \
+                 patch.object(fuzzer, "probe_counter_scale", return_value=None), \
+                 patch.object(fuzzer.Search, "specs", return_value=iter([(0, profile, [case], "", "fresh")])), \
+                 patch.object(fuzzer, "measure_case", side_effect=measure):
+                rc = fuzzer.main(["--doltlite", "unused", "--sqlite", "unused", "--output", str(output),
+                                  "--search"])
+            self.assertEqual(rc, 0)
+            record = json.loads((output/"results.json").read_text())["cases"][0]
+            return record, calls, (output/"summary.md").read_text()
+
+    def test_gap_that_closes_without_the_prior_write_is_the_pending_edit_map(self):
+        record, calls, summary = self.run_pending_check("after_update", 0.3)
+        self.assertEqual(calls, ["UPDATE t SET v=v+1;", ""])
+        self.assertFalse(record["confirmed"])
+        self.assertTrue(record["pending_edits"])
+        self.assertEqual(record["plain_ratio"], 0.3)
+        self.assertIn("### Known: pending edit map (#3418)", summary)
+        self.assertIn("6.00× after the write, 0.30× without it", summary)
+        self.assertNotIn("Screened at", summary)
+
+    def test_gap_that_persists_without_the_prior_write_stays_confirmed(self):
+        record, calls, summary = self.run_pending_check("after_delete", 5.0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(record["confirmed"])
+        self.assertNotIn("pending_edits", record)
+        self.assertNotIn("Known: pending edit map", summary)
+
+    def test_a_failed_control_unconfirms_the_case(self):
+        for failure, field in ((ValueError("result mismatch: reference=1, pilot=2"), "error"),
+                               (fuzzer.CaseTimeout("command timed out"), "timeout")):
+            with self.subTest(field=field):
+                calls = []
+                def measure(*args, **kwargs):
+                    calls.append(1)
+                    if len(calls) > 1:
+                        raise failure
+                    pairs = [{"doltlite_ms": 600.0, "sqlite_ms": 100.0}] * 5
+                    return {"pairs": pairs, "result": "1", "repeats": 1, "doltlite_ms": 600.0,
+                            "sqlite_ms": 100.0, "ratio": 6.0, "confirmed": True}
+                profile = replace(self.profile, cache_kib=fuzzer.CACHED_CHECK_KIB)
+                case = fuzzer.Case("generated_0", "INSERT INTO t SELECT * FROM t WHERE 1;", "SELECT 1;",
+                                   "UPDATE t SET v=v+1;", {"context": "after_update"})
+                with tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp)/"results"
+                    with patch.object(fuzzer.shutil, "copyfile"), patch.object(fuzzer.Runner, "run", return_value="ok"), \
+                         patch.object(fuzzer, "binary_info", return_value={}), \
+                         patch.object(fuzzer, "probe_counter_scale", return_value=None), \
+                         patch.object(fuzzer.Search, "specs", return_value=iter([(0, profile, [case], "", "fresh")])), \
+                         patch.object(fuzzer, "measure_case", side_effect=measure):
+                        fuzzer.main(["--doltlite", "unused", "--sqlite", "unused", "--output", str(output), "--search"])
+                    record = json.loads((output/"results.json").read_text())["cases"][0]
+                    summary = (output/"summary.md").read_text()
+                self.assertEqual(len(calls), 2)
+                self.assertIn(field, record)
+                self.assertFalse(record["confirmed"])
+                self.assertNotIn("pending_edits", record)
+                self.assertIn("No confirmed hotspots in the completed cases", summary)
+                self.assertNotIn("| p000/generated_0 |", summary)
+
+    def test_contexts_without_pending_edits_skip_the_control(self):
+        record, calls, _summary = self.run_pending_check("plain", 0.3)
+        self.assertEqual(calls, [""])
+        self.assertTrue(record["confirmed"])
+        self.assertNotIn("plain_ratio", record)
+
     def test_counter_scale_flags_quadratic_single_scan(self):
         plan = "QUERY PLAN\n`--SCAN t\n"
         self.assertFalse(fuzzer.counter_scale_superlinear(99, 2000, plan))
