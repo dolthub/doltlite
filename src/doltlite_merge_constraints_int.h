@@ -19,6 +19,12 @@ struct MergePkInfo {
   char *zPkCols;
 };
 
+typedef struct MergeConstraintWalk MergeConstraintWalk;
+struct MergeConstraintWalk {
+  char **pzErrMsg;
+  int *pnFound;
+};
+
 void freeMergePkInfo(MergePkInfo *pPk);
 int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk);
 int finishConstraintStmt(sqlite3_stmt *pStmt, int rc);
@@ -64,7 +70,8 @@ int isRowPreExisting(
   const u8 *pAncVal, int nAncVal
 );
 int tableHasRowid(sqlite3 *db, const char *zTable, int *pHasRowid);
-int loadMergeRowidSql(sqlite3 *db, const char *zTable, char **pzSql);
+int loadMergeRowidSql(sqlite3 *db, const char *zTable,
+    char **pzSql, char **pzErrMsg);
 int fetchOrphanRow(
   sqlite3 *db, const char *zTable, i64 rowid,
   u8 **ppKey, int *pnKey, u8 **ppVal, int *pnVal
@@ -78,7 +85,7 @@ int scanMergeColumnFlagViolations(
   sqlite3 *db, const char *zTable,
   struct TableEntry *aAnc, int nAnc,
   char **azCols, char **azExtra, int nCols,
-  u8 cvType, int *pnFound
+  u8 cvType, int *pnFound, char **pzErrMsg
 );
 
 #endif /* DOLTLITE_MERGE_CONSTRAINTS_INT_H */

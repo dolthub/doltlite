@@ -554,7 +554,9 @@ int tableHasRowid(sqlite3 *db, const char *zTable, int *pHasRowid){
   return finishConstraintStmt(pStmt, rc);
 }
 
-int loadMergeRowidSql(sqlite3 *db, const char *zTable, char **pzSql){
+int loadMergeRowidSql(
+  sqlite3 *db, const char *zTable, char **pzSql, char **pzErrMsg
+){
   Table *pTab = sqlite3FindTable(db, zTable, "main");
   const char *zColumn;
 
@@ -564,9 +566,12 @@ int loadMergeRowidSql(sqlite3 *db, const char *zTable, char **pzSql){
   zColumn = pTab->iPKey>=0 ? pTab->aCol[pTab->iPKey].zCnName
                           : sqlite3RowidAlias(pTab);
   if( !zColumn ){
-    sqlite3ErrorWithMsg(db, SQLITE_ERROR,
-        "cannot verify constraints on %s: table shadows every rowid alias",
-        zTable);
+    if( pzErrMsg && !*pzErrMsg ){
+      *pzErrMsg = sqlite3_mprintf(
+          "cannot verify constraints on %s: table shadows every rowid alias "
+          "(rowid, _rowid_, oid)", zTable);
+      if( !*pzErrMsg ) return SQLITE_NOMEM;
+    }
     return SQLITE_ERROR;
   }
   *pzSql = sqlite3_mprintf("\"%w\"", zColumn);
@@ -644,7 +649,8 @@ int scanMergeColumnFlagViolations(
   struct TableEntry *aAnc, int nAnc,
   char **azCols, char **azExtra, int nCols,
   u8 cvType,
-  int *pnFound
+  int *pnFound,
+  char **pzErrMsg
 ){
   int hasRowid;
   int nKeyCol;
@@ -664,7 +670,7 @@ int scanMergeColumnFlagViolations(
     rc = loadMergePkInfo(db, zTable, &pkInfo);
     if( rc!=SQLITE_OK ) return rc;
   }else{
-    rc = loadMergeRowidSql(db, zTable, &zRowid);
+    rc = loadMergeRowidSql(db, zTable, &zRowid, pzErrMsg);
     if( rc!=SQLITE_OK ) return rc;
   }
   nKeyCol = hasRowid ? 1 : pkInfo.nPk;

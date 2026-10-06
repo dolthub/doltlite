@@ -63,6 +63,7 @@ static int notNullWalkTable(
   struct TableEntry *aCur, int nCur,
   void *pCtx
 ){
+  MergeConstraintWalk *pWalk = (MergeConstraintWalk*)pCtx;
   char **azCols = 0;
   int nCols = 0;
   int rc;
@@ -72,7 +73,7 @@ static int notNullWalkTable(
   if( nCols==0 ) return SQLITE_OK;
   rc = scanMergeColumnFlagViolations(
       db, zTable, aAnc, nAnc, azCols, 0, nCols,
-      DOLTLITE_CV_NOT_NULL, (int*)pCtx);
+      DOLTLITE_CV_NOT_NULL, pWalk->pnFound, pWalk->pzErrMsg);
   doltliteFreeNameList(azCols, nCols);
   return rc;
 }
@@ -85,9 +86,12 @@ int doltliteDetectMergeNotNullViolations(
   const char **azTables,
   int nTables
 ){
+  MergeConstraintWalk walk;
   if( pnFound ) *pnFound = 0;
+  walk.pnFound = pnFound;
+  walk.pzErrMsg = pzErrMsg;
   return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
-                             1, 0, notNullWalkTable, pnFound);
+                             1, 0, notNullWalkTable, &walk);
 }
 
 #endif

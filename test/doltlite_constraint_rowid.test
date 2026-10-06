@@ -143,18 +143,40 @@ do_execsql_test constraint-rowid-user-column-repair {
   SELECT count(*) FROM dolt_constraint_violations;
 } {0 0}
 
-foreach kind {check fk unique notnull strict} {
-  constraint_rowid_setup {id INT,rowid TEXT DEFAULT 'label',
-      _rowid_ TEXT DEFAULT 'hidden',oid TEXT DEFAULT 'hidden'} id $kind
-  set before [execsql {SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')}]
-  do_test constraint-rowid-keyless-hidden-$kind-refused {
-    lindex [catchsql {SELECT dolt_merge('side')}] 0
-  } 1
-  do_test constraint-rowid-keyless-hidden-$kind-preserved {
-    list [expr {$before eq [execsql {
-      SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
-    }]}] [execsql {SELECT count(*) FROM dolt_constraint_violations}]
-  } {1 0}
+set identityError {cannot verify constraints on t: table shadows every rowid alias (rowid, _rowid_, oid)}
+foreach kind {check fk unique partial expression notnull strict} {
+  foreach txn {autocommit explicit} {
+    constraint_rowid_setup {id INT,rowid TEXT DEFAULT 'label',
+        _rowid_ TEXT DEFAULT 'hidden',oid TEXT DEFAULT 'hidden'} id $kind
+    set before [execsql {SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')}]
+    set rows [execsql {SELECT * FROM t ORDER BY id}]
+    set name constraint-rowid-keyless-hidden-$kind-$txn
+    if {$txn eq "explicit"} {execsql BEGIN}
+    do_catchsql_test $name-refused {SELECT dolt_merge('side')} \
+        [list 1 $identityError]
+    do_test $name-preserved {
+      list [expr {$before eq [execsql {
+        SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+      }]}] [expr {$rows eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+           [execsql {SELECT count(*) FROM dolt_constraint_violations}]
+    } {1 1 0}
+    foreach mode {output all named} {
+      set args [dict get {output {'--all','--output-only'}
+                        all {'--all'} named {'--all','t'}} $mode]
+      do_catchsql_test $name-verify-$mode \
+          "SELECT dolt_verify_constraints($args)" [list 1 $identityError]
+    }
+    if {$txn eq "explicit"} {execsql ROLLBACK}
+    db close
+    sqlite3 db test.db
+    do_test $name-reopen {
+      list [expr {$before eq [execsql {
+        SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+      }]}] [expr {$rows eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+           [execsql {SELECT count(*) FROM dolt_constraint_violations;
+                    PRAGMA integrity_check}]
+    } {1 1 {0 ok}}
+  }
 }
 
 reset_db

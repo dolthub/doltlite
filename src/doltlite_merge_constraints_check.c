@@ -88,12 +88,6 @@ static void appendCheckJsonString(sqlite3_str *pJson, const char *z){
   sqlite3_str_appendchar(pJson, 1, '"');
 }
 
-typedef struct CheckWalk CheckWalk;
-struct CheckWalk {
-  char **pzErrMsg;
-  int *pnFound;
-};
-
 static int checkWalkTable(
   sqlite3 *db,
   const char *zTable,
@@ -102,7 +96,7 @@ static int checkWalkTable(
   struct TableEntry *aCur, int nCur,
   void *pCtx
 ){
-  CheckWalk *pWalk = (CheckWalk*)pCtx;
+  MergeConstraintWalk *pWalk = (MergeConstraintWalk*)pCtx;
   int offset = 0;
   int hasRowid = 1;
   MergePkInfo pkInfo;
@@ -134,7 +128,9 @@ static int checkWalkTable(
     }
 
     if( hasRowid ){
-      if( !zRowid ) rc = loadMergeRowidSql(db, zTable, &zRowid);
+      if( !zRowid ){
+        rc = loadMergeRowidSql(db, zTable, &zRowid, pWalk->pzErrMsg);
+      }
       if( rc!=SQLITE_OK ){
         sqlite3_free(zExpr);
         sqlite3_free(zCkName);
@@ -250,7 +246,7 @@ int doltliteDetectMergeCheckViolations(
   const char **azTables,
   int nTables
 ){
-  CheckWalk walk;
+  MergeConstraintWalk walk;
   if( pnFound ) *pnFound = 0;
   walk.pzErrMsg = pzErrMsg;
   walk.pnFound = pnFound;
