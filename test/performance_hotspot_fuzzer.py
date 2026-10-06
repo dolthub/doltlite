@@ -68,10 +68,13 @@ def profile_for(seed, index):
                    rng.choice([False, True]), rng.choice([4096, 16384, 65536]),
                    rng.choice([2, 8, 32]), rng.choice([1000, 10000]),
                    rng.randrange(groups), rng.randint(1, rows-width), width)
-    return replace(profile, memory=rng.randrange(4)==0)
+    profile = replace(profile, memory=rng.randrange(4)==0)
+    # Drawn last so every other field of a seed's profile is unchanged.
+    if rng.randrange(2):
+        profile = replace(profile, key=rng.choice(KEYS[2:]))
+    return profile
 
 
-# Nightly profiles draw integer or text; the other shapes are opt-in with --key.
 KEYS = ("integer", "text", "blob", "composite", "without_rowid")
 
 
