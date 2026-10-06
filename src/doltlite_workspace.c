@@ -6,6 +6,7 @@
 #include "prolly_mutate.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
+#include "vdbeInt.h"
 
 #include <string.h>
 
@@ -36,6 +37,7 @@ struct WorkspaceRows {
   int n;
   int nAlloc;
   WorkspaceRows *pNext;
+  DoltliteSideCols headSide, stagedSide, workingSide;
 };
 
 typedef struct WorkspaceVtab WorkspaceVtab;
@@ -60,8 +62,6 @@ struct WorkspaceCursor {
   ProllyDiffIter iter;
   ProllyHash headRoot, stagedRoot, workingRoot;
   u8 headFlags, stagedFlags, workingFlags;
-  /* Invalid side renders with the vtab's declared layout. */
-  DoltliteSideCols headSide, stagedSide, workingSide;
   int stagedOnly;
   int nextId;
   WorkspaceRows *pRows;
@@ -108,6 +108,9 @@ static void wsRowsRelease(WorkspaceRows *p){
   if( !p ) return;
   if( --p->nRef > 0 ) return;
   wsFreeRows(p->a, p->n);
+  doltliteSideColsClear(&p->headSide);
+  doltliteSideColsClear(&p->stagedSide);
+  doltliteSideColsClear(&p->workingSide);
   sqlite3_free(p);
 }
 
@@ -197,8 +200,10 @@ static int wsAppendRow(
   /* PK-only clustered rows store an empty value; rebuild from the key. */
   if( (row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD)
    || (row.nNewVal==0 && pChange->type!=PROLLY_DIFF_DELETE) ){
-    const DoltliteSideCols *pFromSide = staged ? &c->headSide : &c->stagedSide;
-    const DoltliteSideCols *pToSide = staged ? &c->stagedSide : &c->workingSide;
+    const DoltliteSideCols *pFromSide = staged
+        ? &pRows->headSide : &pRows->stagedSide;
+    const DoltliteSideCols *pToSide = staged
+        ? &pRows->stagedSide : &pRows->workingSide;
     if( row.nOldVal==0 && pChange->type!=PROLLY_DIFF_ADD ){
       u8 *pRec = 0; int nRec = 0;
       int rc2 = pFromSide->valid
@@ -327,18 +332,18 @@ static int wsInitCursorRoots(WorkspaceCursor *c, WorkspaceVtab *pVtab){
 
   rc = doltliteSideColsLoad(db, &headCat, &headSchema, pVtab->zTableName,
                             &pVtab->cols,
-                            !prollyHashIsEmpty(&c->headRoot), &c->headSide);
+                            !prollyHashIsEmpty(&c->headRoot), &c->pRows->headSide);
   if( rc==SQLITE_OK ){
     rc = doltliteSideColsLoad(db, &stagedCat, &stagedSchema,
                               pVtab->zTableName, &pVtab->cols,
                               !prollyHashIsEmpty(&c->stagedRoot),
-                              &c->stagedSide);
+                              &c->pRows->stagedSide);
   }
   if( rc==SQLITE_OK && c->stagedOnly!=1 ){
     rc = doltliteSideColsLoad(db, &workingCat, &workingSchema,
                               pVtab->zTableName, &pVtab->cols,
                               !prollyHashIsEmpty(&c->workingRoot),
-                              &c->workingSide);
+                              &c->pRows->workingSide);
   }
   if( rc!=SQLITE_OK ) return rc;
 
@@ -480,16 +485,9 @@ static int wsOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
   return doltliteVtabOpenCursor(pp, sizeof(WorkspaceCursor));
 }
 
-static void wsClearSides(WorkspaceCursor *c){
-  doltliteSideColsClear(&c->headSide);
-  doltliteSideColsClear(&c->stagedSide);
-  doltliteSideColsClear(&c->workingSide);
-}
-
 static int wsClose(sqlite3_vtab_cursor *cur){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   wsCloseIter(c);
-  wsClearSides(c);
   wsRowsRelease(c->pRows);
   sqlite3_free(cur);
   return SQLITE_OK;
@@ -504,7 +502,6 @@ static int wsFilter(sqlite3_vtab_cursor *cur,
   i64 stagedArg;
   (void)idxStr;
   wsCloseIter(c);
-  wsClearSides(c);
   wsRowsRelease(c->pRows);
   wsRowsPrune(p);
   c->pRows = wsRowsNew();
@@ -543,16 +540,9 @@ static int wsEof(sqlite3_vtab_cursor *cur){
   return c->eof && (!c->pRows || c->iRow >= c->pRows->n);
 }
 
-static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
-  WorkspaceCursor *c = (WorkspaceCursor*)cur;
-  WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
-  WorkspaceRow *r;
+static int wsResultColumn(WorkspaceVtab *p, WorkspaceRows *pRows,
+                          WorkspaceRow *r, sqlite3_context *ctx, int col){
   int nCols = p->cols.nCol;
-  if( !c->pRows || c->iRow<0 || c->iRow>=c->pRows->n ){
-    sqlite3_result_null(ctx);
-    return SQLITE_OK;
-  }
-  r = &c->pRows->a[c->iRow];
   if( col==0 ){
     sqlite3_result_int64(ctx, r->id);
   }else if( col==1 ){
@@ -562,13 +552,15 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     if( zType ) sqlite3_result_text(ctx, zType, -1, SQLITE_STATIC);
     else sqlite3_result_null(ctx);
   }else if( col>=3 && col<3+nCols ){
-    const DoltliteSideCols *pSide = r->staged ? &c->stagedSide : &c->workingSide;
+    const DoltliteSideCols *pSide = r->staged
+        ? &pRows->stagedSide : &pRows->workingSide;
     doltliteResultSideCol(ctx, pSide,
                           &p->cols, r->pNewVal, r->nNewVal,
                           r->intKey, r->keyIsIntKey, col-3,
                           doltliteHistoricalColAffinity(pSide, &p->cols, col-3));
   }else if( col>=3+nCols && col<3+2*nCols ){
-    const DoltliteSideCols *pSide = r->staged ? &c->headSide : &c->stagedSide;
+    const DoltliteSideCols *pSide = r->staged
+        ? &pRows->headSide : &pRows->stagedSide;
     doltliteResultSideCol(ctx, pSide,
                           &p->cols, r->pOldVal, r->nOldVal,
                           r->intKey, r->keyIsIntKey, col-3-nCols,
@@ -580,6 +572,17 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   return SQLITE_OK;
 }
 
+static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
+  WorkspaceCursor *c = (WorkspaceCursor*)cur;
+  WorkspaceVtab *p = (WorkspaceVtab*)cur->pVtab;
+  if( col!=1 && sqlite3_vtab_nochange(ctx) ) return SQLITE_OK;
+  if( !c->pRows || c->iRow<0 || c->iRow>=c->pRows->n ){
+    sqlite3_result_null(ctx);
+    return SQLITE_OK;
+  }
+  return wsResultColumn(p, c->pRows, &c->pRows->a[c->iRow], ctx, col);
+}
+
 static int wsRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *pRowid){
   WorkspaceCursor *c = (WorkspaceCursor*)cur;
   if( !c->pRows || c->iRow<0 || c->iRow>=c->pRows->n ) return SQLITE_ERROR;
@@ -587,7 +590,8 @@ static int wsRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *pRowid){
   return SQLITE_OK;
 }
 
-static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
+static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid,
+                                     WorkspaceRows **ppRows){
   WorkspaceRows *pRows;
   for(pRows=p->pRows; pRows; pRows=pRows->pNext){
     int lo = 0;
@@ -599,6 +603,7 @@ static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid){
       }else if( pRows->a[mid].xRowid>rowid ){
         hi = mid - 1;
       }else{
+        if( ppRows ) *ppRows = pRows;
         return &pRows->a[mid];
       }
     }
@@ -1128,11 +1133,49 @@ static int wsDiscardRow(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
   return rc;
 }
 
+static int wsValidateUpdate(WorkspaceVtab *p, WorkspaceRows *pRows,
+                            WorkspaceRow *r, sqlite3_value **argv){
+  sqlite3_context ctx;
+  sqlite3_value *pOld;
+  int i, rc = SQLITE_OK;
+  if( sqlite3_value_type(argv[1])!=SQLITE_INTEGER
+   || sqlite3_value_int64(argv[1])!=r->xRowid ) goto invalid;
+  pOld = sqlite3ValueNew(p->db);
+  if( !pOld ) return SQLITE_NOMEM;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.pOut = pOld;
+  for(i=0; i<3+p->cols.nCol*2; i++){
+    if( i==1 || sqlite3_value_nochange(argv[i+2]) ) continue;
+    sqlite3VdbeMemSetNull(pOld);
+    wsResultColumn(p, pRows, r, &ctx, i);
+    if( ctx.isError ){
+      rc = ctx.isError;
+      break;
+    }
+    if( sqlite3_value_type(pOld)==SQLITE_TEXT
+     && sqlite3_value_type(argv[i+2])==SQLITE_TEXT ){
+      rc = sqlite3VdbeChangeEncoding(pOld, argv[i+2]->enc);
+      if( rc!=SQLITE_OK ) break;
+    }
+    if( sqlite3_value_type(pOld)!=sqlite3_value_type(argv[i+2])
+     || sqlite3MemCompare(pOld, argv[i+2], 0)!=0 ){
+      rc = SQLITE_ERROR;
+      break;
+    }
+  }
+  sqlite3_value_free(pOld);
+  if( rc!=SQLITE_ERROR ) return rc;
+invalid:
+  p->base.zErrMsg = sqlite3_mprintf("only update of column 'staged' is allowed");
+  return p->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+}
+
 static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
                     sqlite3_int64 *pRowid){
   WorkspaceVtab *p = (WorkspaceVtab*)pBase;
   WorkspaceRow *r;
-  int newStaged;
+  WorkspaceRows *pRows;
+  int newStaged, rc;
   assert( pBase!=0 && argv!=0 );
   assert( p->db!=0 && p->zTableName!=0 );
   (void)pRowid;
@@ -1142,7 +1185,7 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
     int rc;
     Index *pUniqueViolation = 0;
     int schemaChanged = 0;
-    r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]));
+    r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]), 0);
     if( !r ){
       pBase->zErrMsg = sqlite3_mprintf("workspace row is no longer available");
       return SQLITE_ABORT;
@@ -1205,11 +1248,13 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
     return SQLITE_CONSTRAINT;
   }
   if( argc < 2 + 3 + p->cols.nCol*2 ) return SQLITE_MISUSE;
-  r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]));
+  r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]), &pRows);
   if( !r ){
     pBase->zErrMsg = sqlite3_mprintf("workspace row is no longer available");
     return SQLITE_ABORT;
   }
+  rc = wsValidateUpdate(p, pRows, r, argv);
+  if( rc!=SQLITE_OK ) return rc;
   newStaged = sqlite3_value_int(argv[2 + 1]) ? 1 : 0;
   if( newStaged==r->staged ) return SQLITE_OK;
   {

@@ -1,0 +1,181 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc workspace_update_state {} {
+  concat [execsql {SELECT * FROM dolt_workspace_t ORDER BY staged,id}] \
+    [execsql {SELECT * FROM t ORDER BY id}] \
+    [execsql {SELECT id,n,txt,hex(b),r,z,g FROM dolt_at_t('STAGED') ORDER BY id}]
+}
+
+foreach {layout key constraint suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {}
+  clustered {id INT PRIMARY KEY} {} {}
+  text {id TEXT PRIMARY KEY} {} {}
+  composite {id INT} {,PRIMARY KEY(tenant,id)} {}
+  without_rowid {id INT PRIMARY KEY} {} {WITHOUT ROWID}
+  keyless {id INT} {} {}
+} {
+  foreach mutation {update insert delete} {
+    foreach initial {0 1} {
+      reset_db
+      execsql "CREATE TABLE t($key,tenant TEXT DEFAULT 'x',n INT,
+        txt TEXT COLLATE NOCASE,b BLOB,r REAL,z TEXT,
+        g INT AS(n*2) STORED,h INT AS(n*3) VIRTUAL$constraint) $suffix"
+      execsql {
+        INSERT INTO t(id,n,txt,b,r) VALUES
+          (1,10,'Alpha',x'0001',1.5),(2,20,'Beta',x'0002',2.5),(3,30,'Keep',x'0003',3.5);
+        SELECT dolt_commit('-Am','base');
+      }
+      switch $mutation {
+        update {execsql {UPDATE t SET n=11 WHERE id=1}}
+        insert {execsql {INSERT INTO t(id,n,txt,b,r) VALUES(4,40,'Alpha',x'0001',1.5)}}
+        delete {execsql {DELETE FROM t WHERE id=1}}
+      }
+      set name workspace-update-columns-$layout-$mutation-$initial
+      foreach staged {0 1} {
+        foreach {column value} {
+          id {id+1}
+          rowid {rowid+1000}
+          diff_type {'other'}
+          to_id {coalesce(to_id,999)+10}
+          from_id {coalesce(from_id,999)+10}
+          to_n {coalesce(to_n,999)+1}
+          from_n {coalesce(from_n,999)+1}
+          to_txt {coalesce(to_txt,'')||'!'}
+          from_txt {coalesce(from_txt,'')||'!'}
+          to_b {x'ff'}
+          from_b {x'ff'}
+          to_r {coalesce(to_r,99)+1}
+          from_r {coalesce(from_r,99)+1}
+          to_z {'new'}
+          from_z {'new'}
+          to_g {coalesce(to_g,0)+1}
+          from_g {coalesce(from_g,0)+1}
+          to_h {1}
+          from_h {1}
+        } {
+          execsql "UPDATE dolt_workspace_t SET staged=$initial"
+          set before [workspace_update_state]
+          do_catchsql_test $name-$staged-$column-reject "
+            UPDATE dolt_workspace_t SET $column=$value,staged=$staged;
+          " {1 {only update of column 'staged' is allowed}}
+          do_test $name-$staged-$column-unchanged {
+            workspace_update_state
+          } $before
+        }
+      }
+      set unchanged {id=id,rowid=rowid,diff_type=diff_type}
+      foreach side {to from} {
+        foreach column {id tenant n txt b r z g h} {
+          append unchanged ",${side}_${column}=${side}_${column}"
+        }
+      }
+      foreach from {{} {FROM (SELECT 1 AS gate) AS q WHERE q.gate=1}} {
+        set form [expr {$from eq "" ? "plain" : "from"}]
+        foreach staged {0 1} {
+          execsql "UPDATE dolt_workspace_t SET staged=[expr {1-$staged}]"
+          do_execsql_test $name-$form-$staged-only "
+            UPDATE dolt_workspace_t SET staged=$staged $from;
+            SELECT staged FROM dolt_workspace_t;
+          " $staged
+          do_execsql_test $name-$form-$staged-noops "
+            UPDATE dolt_workspace_t SET $unchanged,staged=[expr {1-$staged}] $from;
+            SELECT staged FROM dolt_workspace_t;
+          " [expr {1-$staged}]
+        }
+        set before [workspace_update_state]
+        do_catchsql_test $name-$form-forbidden "
+          UPDATE dolt_workspace_t SET to_z='forbidden',staged=1 $from;
+        " {1 {only update of column 'staged' is allowed}}
+        do_test $name-$form-forbidden-unchanged {workspace_update_state} $before
+      }
+      do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+      set expected [workspace_update_state]
+      do_test $name-reopen {
+        db close
+        sqlite3 db test.db
+        workspace_update_state
+      } $expected
+    }
+  }
+}
+
+foreach transaction {autocommit explicit} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,n INT,txt TEXT,b BLOB,r REAL,z TEXT,
+      g INT AS(n*2) STORED);
+    INSERT INTO t(id,n) VALUES(1,10),(2,20),(3,30);
+    SELECT dolt_commit('-Am','base');
+    UPDATE t SET n=n+1;
+  }
+  if {$transaction eq "explicit"} {execsql BEGIN}
+  execsql {UPDATE dolt_workspace_t SET staged=1 WHERE to_id=3}
+  set before [workspace_update_state]
+  foreach conflict {{} {OR IGNORE} {OR REPLACE}} {
+    do_catchsql_test workspace-update-columns-$transaction-$conflict-reject "
+      UPDATE $conflict dolt_workspace_t SET staged=1,
+        to_n=CASE WHEN to_id=2 THEN to_n+1 ELSE to_n END WHERE staged=0;
+    " {1 {only update of column 'staged' is allowed}}
+    do_test workspace-update-columns-$transaction-$conflict-atomic {
+      workspace_update_state
+    } $before
+  }
+  if {$transaction eq "explicit"} {execsql COMMIT}
+  do_execsql_test workspace-update-columns-$transaction-commit {
+    SELECT length(dolt_commit('-m','only previous statement'));
+    SELECT id,n FROM dolt_at_t('HEAD') ORDER BY id;
+    PRAGMA integrity_check;
+  } {40 1 10 2 20 3 31 ok}
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,n INT,txt TEXT COLLATE NOCASE,b BLOB,r REAL,
+    z TEXT,g INT AS(n*2) STORED);
+  INSERT INTO t(id,n,txt,b) VALUES(1,10,'Alpha',x'416c706861');
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET n=11;
+}
+foreach {name assignment} {
+  case {to_txt='alpha'}
+  type {to_txt=to_b}
+  null {to_n=NULL}
+  nul_suffix {to_txt='Alpha'||char(0)||'suffix'}
+} {
+  do_catchsql_test workspace-update-columns-$name "
+    UPDATE dolt_workspace_t SET $assignment,staged=1;
+  " {1 {only update of column 'staged' is allowed}}
+  do_execsql_test workspace-update-columns-$name-unstaged {
+    SELECT staged,to_n,from_n FROM dolt_workspace_t;
+  } {0 11 10}
+}
+
+foreach encoding {UTF-8 UTF-16le UTF-16be} {
+  reset_db
+  execsql "PRAGMA encoding='$encoding'"
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,n INT,txt TEXT,b BLOB,r REAL,z TEXT,
+      g INT AS(n*2) STORED);
+    INSERT INTO t(id,n,txt,b,r) VALUES(1,10,'a'||char(0)||'é',x'0000',1.5);
+    SELECT dolt_commit('-Am','base');
+    UPDATE t SET n=11;
+  }
+  do_execsql_test workspace-update-columns-$encoding-noops {
+    UPDATE dolt_workspace_t SET to_txt=to_txt,from_txt=from_txt,
+      to_b=zeroblob(2),from_b=from_b,staged=1;
+    SELECT staged FROM dolt_workspace_t;
+  } {1}
+  do_catchsql_test workspace-update-columns-$encoding-text-reject {
+    UPDATE dolt_workspace_t SET to_txt='a'||char(0)||'ê',staged=0;
+  } {1 {only update of column 'staged' is allowed}}
+  do_execsql_test workspace-update-columns-$encoding-unchanged {
+    SELECT staged,hex(to_txt)=hex(from_txt),hex(to_b) FROM dolt_workspace_t;
+  } {1 1 0000}
+  do_execsql_test workspace-update-columns-$encoding-from {
+    UPDATE dolt_workspace_t SET staged=0 FROM (SELECT 1 AS gate) AS q WHERE q.gate=1;
+    SELECT staged FROM dolt_workspace_t;
+  } {0}
+}
+
+finish_test
