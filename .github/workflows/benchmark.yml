@@ -135,15 +135,28 @@ jobs:
 
     # A counter regression must not stop the timing measurements: the report
     # carries both, and the last step fails the job on the counter result.
+    # Reviewed exceptions live in the pull request's title or description;
+    # fetch them now, because a re-run reuses the original event payload.
     - name: Gate deterministic engine counters
       id: counters
       continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         set -o pipefail
         mkdir -p "$RUNNER_TEMP/hotspot-results"
+        pr_text="$RUNNER_TEMP/pr-text.txt"
+        : > "$pr_text"
+        if [ -n "$PR_NUMBER" ]; then
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+            --jq '.title + "\n" + (.body // "")' > "$pr_text" \
+            || { echo 'Could not read the pull request; no counter exceptions apply.' >&2; : > "$pr_text"; }
+        fi
         python3 test/performance_counters.py \
           --baseline "$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
           --candidate "$GITHUB_WORKSPACE/build/doltlite" \
+          --exceptions "$pr_text" \
           2>&1 | tee "$RUNNER_TEMP/hotspot-results/counters.txt"
 
     - name: Build verified stock SQLite reference
