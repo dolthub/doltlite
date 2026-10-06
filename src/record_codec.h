@@ -34,6 +34,7 @@ struct DoltliteColInfo {
   int bHasRowid;
   int nPk;
   u8 *aPkSortFlags;
+  char **azPkColl;
 };
 
 /* One side of a diff-style read: the table's columns as the schema at the

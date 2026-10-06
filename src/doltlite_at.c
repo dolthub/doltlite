@@ -685,6 +685,7 @@ static void atCursorReset(AtCursor *c){
   sqlite3_free(c->pPkBlob);
   c->pPkBlob = 0;
   c->nPkBlob = 0;
+  c->pkSeekable = 0;
   c->pkBlobSeekable = 0;
 }
 
@@ -797,6 +798,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   ProllyHash catHash;
   ProllyHash tableRoot; u8 flags=0;
   ProllyHash schemaHash;
+  Table *pTab;
   int rc, res;
   (void)idxStr;
 
@@ -871,10 +873,12 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 
   prollyCursorInit(&c->common.tblCur, cs, pCache, &tableRoot, flags);
   c->common.rootIntKey = (flags & PROLLY_NODE_INTKEY) != 0;
+  pTab = sqlite3FindTable(db, v->zTableName, "main");
 
   if( !c->common.rootIntKey && c->pPkBlob
    && (idxNum & AT_IDX_PK_EQ)
-   && doltliteSideColsMatchClusteredPk(&c->side, &v->cols) ){
+   && doltliteSideColsMatchClusteredPk(&c->side, &v->cols,
+                        pTab ? sqlite3PrimaryKeyIndex(pTab) : 0) ){
     rc = prollyCursorSeekBlob(&c->common.tblCur, c->pPkBlob, c->nPkBlob, &res);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&c->common.tblCur);

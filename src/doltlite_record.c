@@ -233,6 +233,10 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
   sqlite3_free(ci->aColToRec);
   sqlite3_free(ci->aGenerated);
   sqlite3_free(ci->aPkSortFlags);
+  if( ci->azPkColl ){
+    for(i=0; i<ci->nPk; i++) sqlite3_free(ci->azPkColl[i]);
+    sqlite3_free(ci->azPkColl);
+  }
   sqlite3_free(ci->zCreateSql);
   sqlite3_free(ci->zTable);
   ci->azName = 0;
@@ -241,6 +245,7 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
   ci->aColToRec = 0;
   ci->aGenerated = 0;
   ci->aPkSortFlags = 0;
+  ci->azPkColl = 0;
   ci->zCreateSql = 0;
   ci->zTable = 0;
   ci->pGenEval = 0;
@@ -417,18 +422,33 @@ static int columnNamesLoad(
       if( !ci->bHasRowid ){
         Index *pPk = sqlite3PrimaryKeyIndex(pTab);
         if( pPk && pPk->nKeyCol>0 ){
+          ci->nPk = pPk->nKeyCol;
           ci->aPkSortFlags = sqlite3_malloc(pPk->nKeyCol);
-          if( !ci->aPkSortFlags ){
+          ci->azPkColl = sqlite3MallocZero(
+              (sqlite3_uint64)pPk->nKeyCol * sizeof(char*));
+          rc = SQLITE_OK;
+          if( !ci->aPkSortFlags || !ci->azPkColl ){
+            rc = SQLITE_NOMEM;
+          }else{
+            for(i=0; i<pPk->nKeyCol; i++){
+              ci->aPkSortFlags[i] = pPk->aSortOrder[i];
+              ci->azPkColl[i] = sqlite3_mprintf("%s", pPk->azColl[i]);
+              if( !ci->azPkColl[i] ){
+                rc = SQLITE_NOMEM;
+                break;
+              }
+            }
+          }
+          if( rc!=SQLITE_OK ){
             sqlite3_free(aPk);
+            sqlite3_free(aRecPos);
+            sqlite3_free(aStoredPk);
+            sqlite3_free(aStoredDecl);
             sqlite3_free(aGen);
             doltliteFreeColInfo(ci);
             sqlite3_finalize(pStmt);
-            return SQLITE_NOMEM;
+            return rc;
           }
-          for(i=0; i<pPk->nKeyCol; i++){
-            ci->aPkSortFlags[i] = pPk->aSortOrder[i];
-          }
-          ci->nPk = pPk->nKeyCol;
         }
       }
     }else{
