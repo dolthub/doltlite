@@ -88,6 +88,7 @@ doltlite_rebase_messages
 doltlite_vacuum_into_race
 doltlite_blame_seek
 doltlite_blame_affinity
+doltlite_blame_columns
 doltlite_merge_transactions
 doltlite_reset_schema
 doltlite_cache_budget

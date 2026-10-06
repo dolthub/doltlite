@@ -1,0 +1,139 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach reserved {commit commit_date committer email message} {
+  foreach casing {lower upper mixed} {
+    set column $reserved
+    if {$casing eq "upper"} {set column [string toupper $reserved]}
+    if {$casing eq "mixed"} {
+      set column [dict get {commit CoMmIt commit_date CoMmIt_DaTe
+          committer CoMmItTeR email EmAiL message MeSsAgE} $reserved]
+    }
+    foreach {kind declaration affinity first second probe suffix} {
+      integer {INTEGER PRIMARY KEY} INTEGER 1 2 '01' {}
+      numeric {INT PRIMARY KEY} INTEGER 1 2 '01' {}
+      text {TEXT COLLATE NOCASE PRIMARY KEY} TEXT 'Key' 'Other' 'KEY' {}
+      real {REAL PRIMARY KEY} REAL 1 2.5 '01' {}
+      blob {BLOB PRIMARY KEY} BLOB x'01' x'02' x'01' {}
+      any {ANY PRIMARY KEY} BLOB '01' 1 '01' STRICT
+      without_rowid {INT PRIMARY KEY} INTEGER 1 2 '01' {WITHOUT ROWID}
+    } {
+      reset_db
+      execsql "
+        CREATE TABLE t(\"$column\" $declaration,v TEXT,\"${column}_1\" TEXT) $suffix;
+        INSERT INTO t VALUES($first,'base','nonkey'),($second,'base','nonkey');
+        SELECT dolt_commit('-Am','base');
+        UPDATE t SET v='updated' WHERE \"$column\"=$second;
+        SELECT dolt_commit('-am','updated');
+      "
+      set alias ${column}_1
+      set expected [execsql "SELECT quote(\"$column\"),typeof(\"$column\"),v
+                             FROM t ORDER BY \"$column\""]
+      set names [join [list $alias commit commit_date committer email message] |]
+      set name blame-columns-$reserved-$casing-$kind
+      foreach phase {live reopen} {
+        if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+        do_execsql_test $name-$phase-schema {
+          SELECT group_concat(name,'|') FROM (
+            SELECT name FROM pragma_table_xinfo('dolt_blame_t') ORDER BY cid
+          );
+        } [list $names]
+        do_execsql_test $name-$phase-affinity "
+          SELECT type FROM pragma_table_xinfo('dolt_blame_t') WHERE name='$alias';
+        " $affinity
+        do_execsql_test $name-$phase-rows "
+          SELECT quote(\"$alias\"),typeof(\"$alias\"),message
+          FROM dolt_blame_t ORDER BY \"$alias\";
+        " $expected
+        do_execsql_test $name-$phase-point "
+          SELECT count(*) FROM dolt_blame_t WHERE \"$alias\"=$probe AND message='base';
+        " 1
+        do_execsql_test $name-$phase-scan "
+          SELECT count(*) FROM dolt_blame_t WHERE \"$alias\"=$probe OR message='absent';
+        " 1
+        do_execsql_test $name-$phase-metadata {
+          SELECT count(*) FROM dolt_blame_t b JOIN dolt_log l
+            ON b."commit"=l.commit_hash
+           WHERE b.commit_date=l.date AND b.committer=l.committer
+             AND b.email=l.email AND b.message=l.message;
+        } 2
+        if {$kind eq "text"} {
+          do_execsql_test $name-$phase-binary "
+            SELECT count(*) FROM dolt_blame_t WHERE \"$alias\" COLLATE BINARY=$probe;
+          " 0
+        }
+      }
+    }
+  }
+}
+
+foreach suffix {{} {WITHOUT ROWID}} {
+  reset_db
+  execsql "
+    CREATE TABLE t(
+      message INT,MESSAGE_1 TEXT,message_2 TEXT,message_01 TEXT,
+      \"commit\" REAL,COMMIT_1 TEXT,
+      committer TEXT COLLATE NOCASE,ComMitter_1 TEXT,
+      email TEXT COLLATE RTRIM,EMAIL_1 TEXT,
+      commit_date BLOB,commit_date_1 INT,v TEXT,
+      PRIMARY KEY(email,EMAIL_1,commit_date,commit_date_1,
+                  \"commit\",COMMIT_1,message,MESSAGE_1,message_2,message_01,
+                  committer,ComMitter_1)
+    ) $suffix;
+    INSERT INTO t VALUES
+      (1,'m1','m2','m01',1,'c1','Name','u1','mail ','e1',x'01',9,'base'),
+      (2,'m1','m2','m01',1,'c1','Name','u1','mail ','e1',x'01',9,'base');
+    SELECT dolt_commit('-Am','base');
+    UPDATE t SET v='updated' WHERE message=2;
+    SELECT dolt_commit('-am','updated');
+  "
+  set expected [execsql {
+    SELECT t.email,t.EMAIL_1,t.commit_date,t.commit_date_1,
+           t."commit",t.COMMIT_1,t.message,t.MESSAGE_1,t.message_2,t.message_01,
+           t.committer,t.ComMitter_1,
+           l.commit_hash,l.date,l.committer,l.email,l.message
+      FROM t JOIN dolt_log l ON t.v=l.message ORDER BY t.message;
+  }]
+  set names {email_2|EMAIL_1|commit_date_2|commit_date_1|commit_2|COMMIT_1|message_3|MESSAGE_1|message_2|message_01|committer_2|ComMitter_1|commit|commit_date|committer|email|message}
+  set predicate {email_2='mail' AND EMAIL_1='e1'
+      AND commit_date_2=x'01' AND commit_date_1='09'
+      AND commit_2='01' AND COMMIT_1='c1'
+      AND message_3='01' AND MESSAGE_1='m1' AND message_2='m2' AND message_01='m01'
+      AND committer_2='NAME' AND ComMitter_1='u1'}
+  set name blame-columns-composite-[expr {$suffix eq "" ? "implicit" : "explicit"}]
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    do_execsql_test $name-$phase-schema {
+      SELECT group_concat(name,'|') FROM (
+        SELECT name FROM pragma_table_xinfo('dolt_blame_t') ORDER BY cid
+      );
+    } [list $names]
+    do_execsql_test $name-$phase-rows {
+      SELECT * FROM dolt_blame_t ORDER BY message_3;
+    } $expected
+    do_execsql_test $name-$phase-point \
+        "SELECT message FROM dolt_blame_t WHERE $predicate" base
+    do_execsql_test $name-$phase-scan \
+        "SELECT message FROM dolt_blame_t WHERE ($predicate) OR message='absent'" base
+  }
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(message INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'payload');
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','renamed');
+  ALTER TABLE t RENAME COLUMN message TO email;
+  SELECT dolt_commit('-am','renamed');
+}
+set checkout 0
+foreach {branch alias} {main message_1 renamed email_1 main message_1 renamed email_1} {
+  incr checkout
+  execsql "SELECT dolt_checkout('$branch')"
+  do_execsql_test blame-columns-checkout-$checkout "
+    SELECT \"$alias\",message FROM dolt_blame_t WHERE \"$alias\"='01';
+  " {1 base}
+}
+
+finish_test

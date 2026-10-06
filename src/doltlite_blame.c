@@ -236,10 +236,19 @@ static void blameFreePkColumns(
 }
 
 static char *blameBuildSchema(BlameVtab *v, Table *pTab){
+  static const char *const azReserved[] = {
+    "commit", "commit_date", "committer", "email", "message"
+  };
   sqlite3_str *pStr = sqlite3_str_new(0);
-  char *z;
-  int i;
+  char **azDecl;
+  int i, rc;
   if( !pStr ) return 0;
+  azDecl = sqlite3_malloc64(v->nPkCols * sizeof(char*));
+  if( !azDecl ){
+    sqlite3_free(sqlite3_str_finish(pStr));
+    return 0;
+  }
+  memset(azDecl, 0, v->nPkCols * sizeof(char*));
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
   for(i=0; i<v->nPkCols; i++){
     const char *zType = "BLOB";
@@ -249,21 +258,28 @@ static char *blameBuildSchema(BlameVtab *v, Table *pTab){
       case SQLITE_AFF_INTEGER: zType = "INTEGER"; break;
       case SQLITE_AFF_REAL: zType = "REAL"; break;
     }
-    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
-    sqlite3_str_appendf(pStr, "\"%w\" %s", v->azPkNames[i], zType);
     if( v->azPkColl && v->azPkColl[i] ){
-      sqlite3_str_appendf(pStr, " COLLATE \"%w\"", v->azPkColl[i]);
+      azDecl[i] = sqlite3_mprintf(" %s COLLATE \"%w\"", zType, v->azPkColl[i]);
+    }else{
+      azDecl[i] = sqlite3_mprintf(" %s", zType);
+    }
+    if( !azDecl[i] ){
+      doltliteFreeStringArray(azDecl, v->nPkCols);
+      sqlite3_free(sqlite3_str_finish(pStr));
+      return 0;
     }
   }
-  if( sqlite3_str_errcode(pStr) ){
-    sqlite3_str_reset(pStr);
+  rc = doltliteAppendDisambiguatedColumnList(pStr, v->azPkNames,
+         v->nPkCols, "", ", ", azReserved, ArraySize(azReserved), -1, azDecl);
+  doltliteFreeStringArray(azDecl, v->nPkCols);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(sqlite3_str_finish(pStr));
     return 0;
   }
   if( v->nPkCols>0 ) sqlite3_str_appendall(pStr, ", ");
   sqlite3_str_appendall(pStr,
     "\"commit\" TEXT, commit_date TEXT, committer TEXT, email TEXT, message TEXT)");
-  z = sqlite3_str_finish(pStr);
-  return z;
+  return sqlite3_str_finish(pStr);
 }
 
 static void blameFreeRow(BlameRow *r){

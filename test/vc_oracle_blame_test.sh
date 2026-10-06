@@ -483,4 +483,29 @@ SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t;
   fi
 }
 
+echo "--- primary-key names colliding with blame metadata ---"
+
+case_id=0
+for column in committer email message COMMITTER EMAIL MESSAGE; do
+  case_id=$((case_id+1))
+  oracle "metadata_collision_$case_id" "
+CREATE TABLE t(\`$column\` INT PRIMARY KEY, v VARCHAR(20));
+INSERT INTO t VALUES (1, 'base'), (2, 'base');
+SELECT dolt_commit('-Am', 'base');
+UPDATE t SET v='updated' WHERE \`$column\`=2;
+SELECT dolt_commit('-am', 'updated');
+" "SELECT CONCAT('BL|', count(*)) FROM dolt_blame_t;"
+done
+
+oracle "metadata_collision_composite" "
+CREATE TABLE t(message INT, MESSAGE_1 INT, message_2 INT,
+  committer INT, ComMitter_1 INT, email INT, EMAIL_1 INT,
+  v VARCHAR(20), PRIMARY KEY(email, EMAIL_1, message, MESSAGE_1, message_2,
+    committer, ComMitter_1));
+INSERT INTO t VALUES (1,1,1,1,1,1,1,'base'), (2,1,1,1,1,1,1,'base');
+SELECT dolt_commit('-Am', 'base');
+UPDATE t SET v='updated' WHERE message=2;
+SELECT dolt_commit('-am', 'updated');
+" "SELECT CONCAT('BL|', count(*)) FROM dolt_blame_t;"
+
 vc_oracle_finish
