@@ -1,0 +1,198 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc constraint_rowid_setup {identity id kind} {
+  reset_db
+  set extra {}
+  if {$kind eq "check"} {set extra {, CHECK(v<=w)}}
+  if {$kind eq "fk"} {
+    execsql {PRAGMA foreign_keys=ON; CREATE TABLE p(id INTEGER PRIMARY KEY);
+             INSERT INTO p VALUES(1),(2)}
+    set extra {, FOREIGN KEY(v) REFERENCES p(id)}
+  }
+  execsql "CREATE TABLE t($identity,v INT,w INT $extra)"
+  set second [expr {$kind eq "fk" ? 1 : 2}]
+  execsql "INSERT INTO t($id,v,w) VALUES(1,1,5),(2,$second,5)"
+  if {$kind in {unique partial expression}} {
+    set expression [expr {$kind eq "expression" ? "abs(v)" : "v"}]
+    set where [expr {$kind eq "partial" ? "WHERE w=5" : ""}]
+    execsql "CREATE UNIQUE INDEX iu ON t($expression) $where"
+  }
+  execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_checkout('-b','side')}
+  switch $kind {
+    check {execsql "UPDATE t SET v=4 WHERE $id=1"}
+    fk {execsql "INSERT INTO t($id,v,w) VALUES(3,2,5)"}
+    unique - partial - expression {execsql "UPDATE t SET v=9 WHERE $id=2"}
+    notnull {execsql "INSERT INTO t($id,v,w) VALUES(3,NULL,5)"}
+    strict {execsql "INSERT INTO t($id,v,w) VALUES(3,'bad',5)"}
+  }
+  execsql {SELECT dolt_commit('-Am','side'); SELECT dolt_checkout('main')}
+  switch $kind {
+    check {execsql "UPDATE t SET w=2 WHERE $id=1"}
+    fk {execsql {DELETE FROM p WHERE id=2}}
+    unique - partial - expression {execsql "UPDATE t SET v=9 WHERE $id=1"}
+    notnull - strict {
+      set constraint [expr {$kind eq "notnull" ? "NOT NULL" : ""}]
+      set strict [expr {$kind eq "strict" ? "STRICT" : ""}]
+      execsql "CREATE TABLE t2($identity,v INT $constraint,w INT) $strict"
+      execsql {INSERT INTO t2 SELECT * FROM t; DROP TABLE t;
+               ALTER TABLE t2 RENAME TO t}
+    }
+  }
+  execsql {SELECT dolt_commit('-Am','main')}
+}
+
+foreach {schema identity id} {
+  plain {id INTEGER PRIMARY KEY} id
+  text {id INTEGER PRIMARY KEY,rowid TEXT DEFAULT 'label'} id
+  wrong_row {id INTEGER PRIMARY KEY,rowid INT DEFAULT 2} id
+  uppercase {id INTEGER PRIMARY KEY,ROWID TEXT DEFAULT 'label'} id
+  all_aliases {id INTEGER PRIMARY KEY,rowid TEXT DEFAULT 'label',
+               _rowid_ TEXT DEFAULT 'hidden',oid TEXT DEFAULT 'hidden'} id
+  quoted {"key""id" INTEGER PRIMARY KEY,rowid TEXT DEFAULT 'label'} {"key""id"}
+  pk_rowid {rowid INTEGER PRIMARY KEY,_rowid_ TEXT DEFAULT 'label',
+            oid TEXT DEFAULT 'hidden'} rowid
+  clustered {id INT PRIMARY KEY,rowid TEXT DEFAULT 'label'} id
+  keyless {id INT,rowid TEXT DEFAULT 'label',_rowid_ TEXT DEFAULT 'hidden'} id
+} {
+  foreach kind {check fk unique partial expression notnull strict} {
+    foreach txn {autocommit explicit} {
+      constraint_rowid_setup $identity $id $kind
+      set name constraint-rowid-$schema-$kind-$txn
+      set before [execsql {SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')}]
+      set expectedIds [expr {$kind eq "check" ? {1} :
+          $kind in {unique partial expression} ? {1 2} : {3}}]
+      set expectedType [dict get {check {check constraint} fk {foreign key}
+          unique {unique index} partial {unique index} expression {unique index}
+          notnull {not null} strict {strict type}} $kind]
+      if {$txn eq "explicit"} {execsql BEGIN}
+      do_test $name-merge {
+        set result [catchsql {SELECT dolt_merge('side')}]
+        list [lindex $result 0] \
+            [string match {*constraint violations*} [lindex $result 1]]
+      } {1 1}
+      if {$txn eq "explicit"} {
+        do_test $name-recorded {
+          list [execsql "SELECT $id FROM dolt_constraint_violations_t ORDER BY $id"] \
+               [execsql {SELECT DISTINCT violation_type FROM dolt_constraint_violations_t}]
+        } [list $expectedIds [list $expectedType]]
+        do_test $name-commit-blocked {
+          set result [catchsql {SELECT dolt_commit('-Am','invalid')}]
+          list [lindex $result 0] \
+              [string match {*dolt_constraint_violations*} [lindex $result 1]]
+        } {1 1}
+        foreach mode {output all named} {
+          execsql {DELETE FROM dolt_constraint_violations_t}
+          set args [dict get {output {'--all','--output-only'}
+                            all {'--all'} named {'--all','t'}} $mode]
+          do_test $name-verify-$mode {
+            list [execsql "SELECT dolt_verify_constraints($args)"] \
+                 [execsql "SELECT $id FROM dolt_constraint_violations_t ORDER BY $id"]
+          } [list 1 [expr {$mode eq "output" ? {} : $expectedIds}]]
+        }
+        do_test $name-repair {
+          execsql "UPDATE t SET v=1,w=5 WHERE $id=[lindex $expectedIds end]"
+          execsql {SELECT dolt_verify_constraints('--all');
+                   SELECT count(*) FROM dolt_constraint_violations;
+                   SELECT length(dolt_commit('-Am','resolved'));
+                   PRAGMA integrity_check}
+        } {0 0 40 ok}
+        db close
+        sqlite3 db test.db
+        do_execsql_test $name-reopen-resolved {
+          SELECT dolt_verify_constraints('--all');
+          SELECT count(*) FROM dolt_constraint_violations;
+          PRAGMA integrity_check;
+        } {0 0 ok}
+      } else {
+        do_test $name-restored {
+          list [expr {$before eq [execsql {
+            SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+          }]}] [execsql {SELECT count(*) FROM dolt_constraint_violations}]
+        } {1 0}
+        db close
+        sqlite3 db test.db
+        do_test $name-reopen {
+          list [expr {$before eq [execsql {
+            SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+          }]}] [execsql {SELECT dolt_verify_constraints('--all');
+                       SELECT count(*) FROM dolt_constraint_violations;
+                       PRAGMA integrity_check}]
+        } {1 {0 0 ok}}
+      }
+    }
+  }
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,rowid TEXT CHECK(rowid='valid'));
+  INSERT INTO t VALUES(1,'valid'),(2,'valid');
+  SELECT dolt_commit('-Am','base');
+  PRAGMA ignore_check_constraints=ON;
+  UPDATE t SET rowid='invalid' WHERE id=1;
+  PRAGMA ignore_check_constraints=OFF;
+}
+do_execsql_test constraint-rowid-user-column-expression {
+  SELECT dolt_verify_constraints('--all');
+  SELECT id,rowid FROM dolt_constraint_violations_t;
+} {1 1 invalid}
+do_execsql_test constraint-rowid-user-column-repair {
+  UPDATE t SET rowid='valid' WHERE id=1;
+  SELECT dolt_verify_constraints('--all');
+  SELECT count(*) FROM dolt_constraint_violations;
+} {0 0}
+
+set identityError {cannot verify constraints on t: table shadows every rowid alias (rowid, _rowid_, oid)}
+foreach kind {check fk unique partial expression notnull strict} {
+  foreach txn {autocommit explicit} {
+    constraint_rowid_setup {id INT,rowid TEXT DEFAULT 'label',
+        _rowid_ TEXT DEFAULT 'hidden',oid TEXT DEFAULT 'hidden'} id $kind
+    set before [execsql {SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')}]
+    set rows [execsql {SELECT * FROM t ORDER BY id}]
+    set name constraint-rowid-keyless-hidden-$kind-$txn
+    if {$txn eq "explicit"} {execsql BEGIN}
+    do_catchsql_test $name-refused {SELECT dolt_merge('side')} \
+        [list 1 $identityError]
+    do_test $name-preserved {
+      list [expr {$before eq [execsql {
+        SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+      }]}] [expr {$rows eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+           [execsql {SELECT count(*) FROM dolt_constraint_violations}]
+    } {1 1 0}
+    foreach mode {output all named} {
+      set args [dict get {output {'--all','--output-only'}
+                        all {'--all'} named {'--all','t'}} $mode]
+      do_catchsql_test $name-verify-$mode \
+          "SELECT dolt_verify_constraints($args)" [list 1 $identityError]
+    }
+    if {$txn eq "explicit"} {execsql ROLLBACK}
+    db close
+    sqlite3 db test.db
+    do_test $name-reopen {
+      list [expr {$before eq [execsql {
+        SELECT dolt_hashof('HEAD'); SELECT dolt_hashof_table('t')
+      }]}] [expr {$rows eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+           [execsql {SELECT count(*) FROM dolt_constraint_violations;
+                    PRAGMA integrity_check}]
+    } {1 1 {0 ok}}
+  }
+}
+
+reset_db
+do_execsql_test constraint-rowid-keyless-hidden-no-constraints {
+  CREATE TABLE t(rowid TEXT,_rowid_ TEXT,oid TEXT);
+  INSERT INTO t VALUES('r','r','r');
+  SELECT length(dolt_commit('-Am','base'));
+  SELECT dolt_checkout('-b','side');
+  INSERT INTO t VALUES('s','s','s');
+  SELECT length(dolt_commit('-Am','side'));
+  SELECT dolt_checkout('main');
+  INSERT INTO t VALUES('m','m','m');
+  SELECT length(dolt_commit('-Am','main'));
+  SELECT length(dolt_merge('side'));
+  SELECT dolt_verify_constraints('--all');
+  SELECT count(*) FROM t;
+} {40 0 40 0 40 40 0 3}
+
+finish_test

@@ -115,6 +115,7 @@ static int strictWalkTable(
   struct TableEntry *aCur, int nCur,
   void *pCtx
 ){
+  MergeConstraintWalk *pWalk = (MergeConstraintWalk*)pCtx;
   char **azCols = 0;
   char **azAllowed = 0;
   int nCols = 0;
@@ -129,7 +130,7 @@ static int strictWalkTable(
   if( nCols==0 ) return SQLITE_OK;
   rc = scanMergeColumnFlagViolations(
       db, zTable, aAnc, nAnc, azCols, azAllowed, nCols,
-      DOLTLITE_CV_STRICT_TYPE, (int*)pCtx);
+      DOLTLITE_CV_STRICT_TYPE, pWalk->pnFound, pWalk->pzErrMsg);
   doltliteFreeNameList(azCols, nCols);
   doltliteFreeNameList(azAllowed, nCols);
   return rc;
@@ -143,9 +144,12 @@ int doltliteDetectMergeStrictViolations(
   const char **azTables,
   int nTables
 ){
+  MergeConstraintWalk walk;
   if( pnFound ) *pnFound = 0;
+  walk.pnFound = pnFound;
+  walk.pzErrMsg = pzErrMsg;
   return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
-                             1, 0, strictWalkTable, pnFound);
+                             1, 0, strictWalkTable, &walk);
 }
 
 #endif

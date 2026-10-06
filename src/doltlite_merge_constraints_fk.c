@@ -362,19 +362,26 @@ static int detectFkViolationsForSpec(
   char **azFrom,
   char **azTo,
   int nCol,
-  int *pnFound
+  int *pnFound,
+  char **pzErrMsg
 ){
   sqlite3_str *pSql = 0;
   char *zQuery = 0;
   sqlite3_stmt *pStmt = 0;
   int nKeyCol;
+  char *zRowid = 0;
   FkParentLookup parent = {0};
   char *zInfo = 0;
   int rc;
   int stepRc;
 
+  if( hasRowid ){
+    rc = loadMergeRowidSql(db, zChildTable, &zRowid, pzErrMsg);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   pSql = sqlite3_str_new(0);
-  sqlite3_str_appendf(pSql, "SELECT %s", hasRowid ? "rowid" : pChildPk->zPkCols);
+  sqlite3_str_appendf(pSql, "SELECT %s", hasRowid ? zRowid : pChildPk->zPkCols);
+  sqlite3_free(zRowid);
   for(int i=0; i<nCol; i++){
     sqlite3_str_appendf(pSql, ", c.\"%w\"", azFrom[i]);
   }
@@ -481,12 +488,6 @@ static int detectFkViolationsForSpec(
   return rc;
 }
 
-typedef struct FkWalk FkWalk;
-struct FkWalk {
-  int *pnFound;
-  char **pzErrMsg;
-};
-
 static int fkWalkTable(
   sqlite3 *db,
   const char *zTable,
@@ -508,7 +509,7 @@ static int fkWalkTable(
   int childChanged;
   int fkStepRc;
   int rc;
-  FkWalk *pWalk = (FkWalk*)pCtx;
+  MergeConstraintWalk *pWalk = (MergeConstraintWalk*)pCtx;
   (void)zSql;
 
   childChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zTable);
@@ -547,7 +548,7 @@ static int fkWalkTable(
         if( rc != SQLITE_OK ) break;
         rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
             zTable, hasRowid, &childPk, zParent, curId,
-            azFrom, azTo, nCol, pWalk->pnFound);
+            azFrom, azTo, nCol, pWalk->pnFound, pWalk->pzErrMsg);
       }
       doltliteFreeStringArray(azFrom, nCol);
       doltliteFreeStringArray(azTo, nCol);
@@ -599,7 +600,7 @@ static int fkWalkTable(
       if( rc==SQLITE_OK ){
         rc = detectFkViolationsForSpec(db, aCur, nCur, aCheckAnc, nCheckAnc,
             zTable, hasRowid, &childPk, zParent, curId,
-            azFrom, azTo, nCol, pWalk->pnFound);
+            azFrom, azTo, nCol, pWalk->pnFound, pWalk->pzErrMsg);
       }
     }
   }
@@ -621,7 +622,7 @@ int doltliteDetectMergeFkViolations(
   const char **azTables,
   int nTables
 ){
-  FkWalk walk;
+  MergeConstraintWalk walk;
   walk.pnFound = pnFound;
   walk.pzErrMsg = pzErrMsg;
   if( pnFound ) *pnFound = 0;

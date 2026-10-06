@@ -750,7 +750,8 @@ static int detectUniqueViolationsForIndex(
   Index *pIdx,
   const char *zSelect,
   const char *zJson,
-  int *pnFound
+  int *pnFound,
+  char **pzErrMsg
 ){
   sqlite3_stmt *pScan = 0;
   KeyInfo *pKeyInfo = 0;
@@ -759,7 +760,10 @@ static int detectUniqueViolationsForIndex(
   int nEntry = 0;
   int nAlloc = 0;
   int rc;
+  char *zRowid = 0;
 
+  rc = loadMergeRowidSql(db, zTable, &zRowid, pzErrMsg);
+  if( rc!=SQLITE_OK ) goto unique_done;
   pKeyInfo = uniqueIndexKeyInfo(db, pIdx, &rc);
   if( !pKeyInfo ) goto unique_done;
   {
@@ -768,12 +772,12 @@ static int detectUniqueViolationsForIndex(
     if( rc!=SQLITE_OK ) goto unique_done;
     if( zWhere ){
       zQuery = sqlite3_mprintf(
-          "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED WHERE (%s)",
-          zSelect, zTable, zWhere);
+          "SELECT %s, %s FROM main.\"%w\" NOT INDEXED WHERE (%s)",
+          zRowid, zSelect, zTable, zWhere);
       sqlite3_free(zWhere);
     }else{
       zQuery = sqlite3_mprintf(
-          "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED", zSelect, zTable);
+          "SELECT %s, %s FROM main.\"%w\" NOT INDEXED", zRowid, zSelect, zTable);
     }
   }
   if( !zQuery ){ rc = SQLITE_NOMEM; goto unique_done; }
@@ -811,6 +815,7 @@ static int detectUniqueViolationsForIndex(
 
 unique_done:
   rc = finishConstraintStmt(pScan, rc);
+  sqlite3_free(zRowid);
   sqlite3_free(zQuery);
   uniqueIndexEntriesFree(db, aEntry, nEntry);
   sqlite3KeyInfoUnref(pKeyInfo);
@@ -1262,13 +1267,14 @@ static int uniqueWalkTable(
   struct TableEntry *aCur, int nCur,
   void *pCtx
 ){
+  MergeConstraintWalk *pWalk = (MergeConstraintWalk*)pCtx;
   sqlite3_stmt *pIdxList = 0;
   char *zIdxQ;
   int hasRowid = 1;
   MergePkInfo pkInfo;
   int indexStepRc;
   int rc;
-  int *pnFound = (int*)pCtx;
+  int *pnFound = pWalk->pnFound;
   (void)zSql; (void)aAnc; (void)nAnc;
 
   memset(&pkInfo, 0, sizeof(pkInfo));
@@ -1360,7 +1366,7 @@ static int uniqueWalkTable(
       if( rc==SQLITE_OK && supported && zSelect && *zSelect ){
         if( hasRowid ){
           rc = detectUniqueViolationsForIndex(
-              db, zTable, pIdx, zSelect, zJson, pnFound);
+              db, zTable, pIdx, zSelect, zJson, pnFound, pWalk->pzErrMsg);
         }else if( hasExpr ){
           rc = detectUniqueExprViolationsWithoutRowid(
               db, zTable, pIdx, zSelect, zJson, &pkInfo, pnFound);
@@ -1392,9 +1398,12 @@ int doltliteDetectMergeUniqueViolations(
   const char **azTables,
   int nTables
 ){
+  MergeConstraintWalk walk;
   if( pnFound ) *pnFound = 0;
+  walk.pnFound = pnFound;
+  walk.pzErrMsg = pzErrMsg;
   return walkMergeUserTables(db, pAncCatHash, pzErrMsg, azTables, nTables,
-                             1, 0, uniqueWalkTable, pnFound);
+                             1, 0, uniqueWalkTable, &walk);
 }
 
 
