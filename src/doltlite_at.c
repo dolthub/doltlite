@@ -1075,7 +1075,7 @@ Module *doltliteHistoricalModuleRegister(sqlite3 *db, const char *zName){
 
 /* The eponymous table keeps the columns from its first xConnect.
 ** Compare those with the columns this statement's literal ref would
-** declare. Callers rebuild only when the lists differ. */
+** declare. Callers rebuild only when the declarations differ. */
 int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
   Table *pTab;
   VTable *pVt;
@@ -1120,7 +1120,15 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
   for(i=0; !differ && i<want.nCol; i++){
     const char *zHave = v->cols.azName ? v->cols.azName[i] : 0;
     const char *zNeed = want.azName ? want.azName[i] : 0;
+    const char *zHaveDecl = v->cols.azDecl ? v->cols.azDecl[i] : 0;
+    const char *zNeedDecl = want.azDecl ? want.azDecl[i] : 0;
+    u8 haveAffinity = v->cols.aAffinity
+        ? v->cols.aAffinity[i] : SQLITE_AFF_BLOB;
+    u8 needAffinity = want.aAffinity ? want.aAffinity[i] : SQLITE_AFF_BLOB;
     if( !zHave || !zNeed || sqlite3_stricmp(zHave, zNeed)!=0 ) differ = 1;
+    if( haveAffinity!=needAffinity
+     || sqlite3_stricmp(zHaveDecl ? zHaveDecl : "",
+                        zNeedDecl ? zNeedDecl : "")!=0 ) differ = 1;
   }
   doltliteFreeColInfo(&want);
   return differ;
