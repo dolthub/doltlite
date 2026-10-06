@@ -698,6 +698,46 @@ SELECT group_concat(pk||':'||a||':'||b,',') FROM (SELECT * FROM t ORDER BY pk);
 SELECT group_concat(name||':'||sql,';') FROM (SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='t' ORDER BY name);
 "
 
+for index_change in delete update replace rename_column add_column partial; do
+  index_setup=""
+  index_column="n"
+  index_predicate=""
+  case "$index_change" in
+    delete) index_dml="DELETE FROM t WHERE pk=2;" ;;
+    update) index_dml="UPDATE t SET n=20 WHERE pk=2;" ;;
+    replace)
+      index_setup="CREATE INDEX un ON t(n);"
+      index_dml="DROP INDEX un; DELETE FROM t WHERE pk=2;"
+      ;;
+    rename_column)
+      index_dml="ALTER TABLE t RENAME COLUMN n TO m; DELETE FROM t WHERE pk=2;"
+      index_column="m"
+      ;;
+    add_column)
+      index_dml="ALTER TABLE t ADD COLUMN tag TEXT; DELETE FROM t WHERE pk=2;"
+      ;;
+    partial)
+      index_dml="UPDATE t SET active=0 WHERE pk=2;"
+      index_predicate="WHERE active=1"
+      ;;
+  esac
+  apply_bidirectional "unique_index_after_$index_change" "
+CREATE TABLE t(pk INTEGER PRIMARY KEY,n INT,active INT);
+INSERT INTO t VALUES(1,10,1),(2,10,1),(3,30,0);
+$index_setup
+SELECT dolt_commit('-Am','base');
+SELECT dolt_tag('base');
+$index_dml
+CREATE UNIQUE INDEX un ON t($index_column) $index_predicate;
+SELECT dolt_commit('-Am','target');
+SELECT dolt_tag('target');
+" "
+SELECT dolt_hashof_table('t');
+SELECT type,name,sql FROM sqlite_master WHERE tbl_name='t' ORDER BY type,name;
+PRAGMA integrity_check;
+"
+done
+
 apply_bidirectional trigger_side_effects "
 CREATE TABLE audit(msg TEXT);
 CREATE TABLE t(pk INTEGER PRIMARY KEY,v INTEGER);
