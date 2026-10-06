@@ -137,17 +137,17 @@ static char *wsBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str_appendall(pStr, "CREATE TABLE x(id INTEGER, staged INTEGER, diff_type TEXT");
   if( ci->nCol>0 ){
     sqlite3_str_appendall(pStr, ", ");
-    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol,
-                                       "to_", ", ")!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+    if( doltliteAppendDisambiguatedColumnList(pStr, ci->azName, ci->nCol,
+               "to_", ", ", 0, 0, -1, ci->azDecl)!=SQLITE_OK ){
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
   }
   if( ci->nCol>0 ){
     sqlite3_str_appendall(pStr, ", ");
-    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol,
-                                       "from_", ", ")!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+    if( doltliteAppendDisambiguatedColumnList(pStr, ci->azName, ci->nCol,
+               "from_", ", ", 0, 0, -1, ci->azDecl)!=SQLITE_OK ){
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
   }
@@ -562,13 +562,18 @@ static int wsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     if( zType ) sqlite3_result_text(ctx, zType, -1, SQLITE_STATIC);
     else sqlite3_result_null(ctx);
   }else if( col>=3 && col<3+nCols ){
-    doltliteResultSideCol(ctx, r->staged ? &c->stagedSide : &c->workingSide,
+    const DoltliteSideCols *pSide = r->staged ? &c->stagedSide : &c->workingSide;
+    doltliteResultSideCol(ctx, pSide,
                           &p->cols, r->pNewVal, r->nNewVal,
-                          r->intKey, r->keyIsIntKey, col-3, SQLITE_AFF_BLOB);
+                          r->intKey, r->keyIsIntKey, col-3,
+                          doltliteHistoricalColAffinity(pSide, &p->cols, col-3));
   }else if( col>=3+nCols && col<3+2*nCols ){
-    doltliteResultSideCol(ctx, r->staged ? &c->headSide : &c->stagedSide,
+    const DoltliteSideCols *pSide = r->staged ? &c->headSide : &c->stagedSide;
+    doltliteResultSideCol(ctx, pSide,
                           &p->cols, r->pOldVal, r->nOldVal,
-                          r->intKey, r->keyIsIntKey, col-3-nCols, SQLITE_AFF_BLOB);
+                          r->intKey, r->keyIsIntKey, col-3-nCols,
+                          doltliteHistoricalColAffinity(pSide, &p->cols,
+                                                        col-3-nCols));
   }else{
     sqlite3_result_null(ctx);
   }

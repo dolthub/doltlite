@@ -1,0 +1,181 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set queries {
+  key {SELECT @id FROM % WHERE @id=1 ORDER BY @id}
+  integer {SELECT @id FROM % WHERE @n='42' ORDER BY @id}
+  integer-new {SELECT @id FROM % WHERE @n='43' ORDER BY @id}
+  real {SELECT @id FROM % WHERE @r='2.0' ORDER BY @id}
+  numeric {SELECT @id FROM % WHERE @q='7.25' ORDER BY @id}
+  text {SELECT @id FROM % WHERE @s=42 ORDER BY @id}
+  nocase {SELECT @id FROM % WHERE @v='ABC' ORDER BY @id}
+  rtrim {SELECT @id FROM % WHERE @padded='tail' ORDER BY @id}
+  blob {SELECT @id FROM % WHERE @raw='42' ORDER BY @id}
+  untyped {SELECT @id FROM % WHERE @untyped=42 ORDER BY @id}
+  types {SELECT typeof(@n),typeof(@r),typeof(@q),typeof(@s),typeof(@raw)
+           FROM % ORDER BY @id}
+  range {SELECT @id FROM % WHERE @n BETWEEN '40' AND '50' ORDER BY @id}
+  in {SELECT @id FROM % WHERE @n IN ('42','7') ORDER BY @id}
+  join {WITH rhs(a,b) AS (VALUES('42','ABC'))
+        SELECT h.@id FROM % h JOIN rhs ON h.@n=rhs.a AND h.@v=rhs.b
+         ORDER BY h.@id}
+  sort {SELECT @id FROM % ORDER BY @v,@id}
+  group {SELECT min(@id),count(*) FROM % GROUP BY @v ORDER BY min(@id)}
+  distinct {SELECT count(DISTINCT @v),count(DISTINCT @padded) FROM %}
+  explicit-collation {SELECT @id FROM % WHERE @v COLLATE BINARY='ABC'}
+}
+
+foreach {layout key extra constraint suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {} {}
+  clustered {id INT PRIMARY KEY} {} {} {}
+  text {id TEXT PRIMARY KEY} {} {} {}
+  composite {id INT} {tenant TEXT COLLATE NOCASE DEFAULT 'Tenant',}
+    {,PRIMARY KEY(tenant DESC,id)} {}
+  explicit {id INT PRIMARY KEY} {} {} {WITHOUT ROWID}
+  keyless {id INT} {} {} {}
+} {
+  reset_db
+  execsql "CREATE TABLE t($key,$extra
+    n INT,r REAL,q NUMERIC,s TEXT,v TEXT COLLATE NOCASE,
+    padded TEXT COLLATE RTRIM,raw BLOB,untyped,marker TEXT $constraint
+  ) $suffix"
+  execsql {
+    INSERT INTO t(id,n,r,q,s,v,padded,raw,untyped,marker) VALUES
+      (1,42,1,7.25,42,'abc','tail  ',42,42,'base'),
+      (2,7,2,5,7,'B','tail','42','42','base'),
+      (3,42,3,7.25,42,'ABC','other',x'3432',x'3432','base');
+    SELECT dolt_commit('-Am','base');
+  }
+  foreach {name sql} $queries {
+    set before($name) [execsql [string map {@ {} % t} $sql]]
+  }
+  execsql {UPDATE t SET n=n+1,r=r+1,marker='working'}
+  foreach {name sql} $queries {
+    set after($name) [execsql [string map {@ {} % t} $sql]]
+  }
+  foreach phase {unstaged staged reopen unstaged-again} {
+    if {$phase eq "staged"} {execsql {SELECT dolt_add('t')}}
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    if {$phase eq "unstaged-again"} {execsql {SELECT dolt_reset('t')}}
+    foreach prefix {to_ from_} {
+      foreach {name sql} $queries {
+        set expected $before($name)
+        if {$prefix eq "to_"} {set expected $after($name)}
+        do_execsql_test workspace-affinity-$layout-$phase-$prefix$name \
+            [string map [list @ $prefix % dolt_workspace_t] $sql] $expected
+      }
+    }
+  }
+}
+
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  text {id TEXT PRIMARY KEY} {}
+  explicit {id INT PRIMARY KEY} {WITHOUT ROWID}
+  keyless {id INT} {}
+} {
+  foreach action {stage unstage discard} {
+    foreach mutation {update insert delete} {
+      reset_db
+      execsql "CREATE TABLE t($key,n REAL,k TEXT COLLATE NOCASE) $suffix"
+      execsql {
+        CREATE INDEX ix ON t(n);
+        CREATE TABLE anchor(id INTEGER PRIMARY KEY);
+        INSERT INTO anchor VALUES(1);
+        INSERT INTO t VALUES(1,10,'Alpha'),(2,20,'Beta');
+        SELECT dolt_commit('-Am','base');
+      }
+      switch $mutation {
+        update {execsql {UPDATE t SET n=11 WHERE id=1}}
+        insert {execsql {INSERT INTO t VALUES(3,30,'Gamma')}}
+        delete {execsql {DELETE FROM t WHERE id=1}}
+      }
+      set prefix to_
+      set id 01
+      set k alpha
+      if {$mutation eq "insert"} {set id 03; set k gamma}
+      if {$mutation eq "delete"} {set prefix from_}
+      set idProbe "'$id'"
+      if {$layout eq "text"} {
+        set idProbe [expr {$mutation eq "insert" ? 3 : 1}]
+      }
+      set predicate "${prefix}id=$idProbe AND ${prefix}k='$k'"
+      set name workspace-affinity-$layout-$action-$mutation
+      if {$action eq "unstage"} {execsql {SELECT dolt_add('t')}}
+      do_test $name-apply {
+        switch $action {
+          stage {execsql "UPDATE dolt_workspace_t SET staged=1 WHERE $predicate"}
+          unstage {execsql "UPDATE dolt_workspace_t SET staged=0 WHERE $predicate"}
+          discard {execsql "DELETE FROM dolt_workspace_t WHERE $predicate"}
+        }
+        execsql {SELECT count(*) FROM dolt_workspace_t WHERE staged=1}
+      } [expr {$action eq "stage" ? 1 : 0}]
+      set expected {1 10.0 Alpha 2 20.0 Beta}
+      if {$action eq "stage"} {
+        set expected [execsql {SELECT id,n,k FROM t ORDER BY id}]
+      }
+      if {$action ne "discard"} {
+        if {$action eq "unstage"} {
+          execsql {INSERT INTO anchor VALUES(2); SELECT dolt_add('anchor')}
+        }
+        do_test $name-commit {
+          execsql {SELECT length(dolt_commit('-m','selected')); SELECT dolt_reset('--hard')}
+        } {40 0}
+      }
+      foreach phase {live reopen} {
+        if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+        do_execsql_test $name-$phase-rows {SELECT id,n,k FROM t ORDER BY id} $expected
+        do_execsql_test $name-$phase-integrity {PRAGMA integrity_check} ok
+      }
+    }
+  }
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,a ANY) STRICT;
+  INSERT INTO t VALUES(1,'42'),(2,42);
+  SELECT dolt_commit('-Am','strict');
+  INSERT INTO t VALUES(3,'42'),(4,42);
+}
+do_execsql_test workspace-affinity-strict-any {
+  SELECT to_id,typeof(to_a) FROM dolt_workspace_t WHERE to_a='42';
+  SELECT to_id,typeof(to_a) FROM dolt_workspace_t WHERE to_a=42;
+  UPDATE dolt_workspace_t SET staged=1 WHERE to_a='42';
+  SELECT to_id FROM dolt_workspace_t WHERE staged=1;
+} {3 text 4 integer 3}
+
+foreach {beforeType afterType} {INT REAL REAL INT} {
+  reset_db
+  execsql "CREATE TABLE t(id INTEGER PRIMARY KEY,r $beforeType,marker TEXT);
+    INSERT INTO t VALUES(1,2,'base'); SELECT dolt_commit('-Am','base');
+    CREATE TABLE replacement(id INTEGER PRIMARY KEY,r $afterType,marker TEXT);
+    INSERT INTO replacement SELECT id,r,'working' FROM t;
+    DROP TABLE t; ALTER TABLE replacement RENAME TO t;"
+  set old [expr {$beforeType eq "REAL" ? "real" : "integer"}]
+  set new [expr {$afterType eq "REAL" ? "real" : "integer"}]
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    do_execsql_test workspace-affinity-schema-$beforeType-$afterType-$phase {
+      SELECT typeof(from_r),typeof(to_r) FROM dolt_workspace_t;
+    } [list $old $new]
+  }
+}
+
+reset_db
+proc workspace_nocase {a b} {string compare -nocase $a $b}
+db collate {fold"case} workspace_nocase
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT COLLATE "fold""case");
+  INSERT INTO t VALUES(1,'abc');
+  SELECT dolt_commit('-Am','custom');
+  UPDATE t SET v='AbC';
+}
+do_execsql_test workspace-affinity-custom {
+  SELECT to_id,from_id FROM dolt_workspace_t WHERE to_v='ABC' AND from_v='ABC';
+  UPDATE dolt_workspace_t SET staged=1 WHERE to_v='ABC';
+  SELECT to_id FROM dolt_workspace_t WHERE staged=1;
+} {1 1 1}
+
+finish_test

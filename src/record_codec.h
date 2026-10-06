@@ -60,6 +60,8 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
 ** STORED still occupies its record slot. VIRTUAL has aColToRec -1. */
 int doltliteGetReaderColumnNames(sqlite3 *db, const char *zTable,
                                  DoltliteColInfo *ci);
+int doltliteLoadColumnDeclarations(sqlite3 *db, const char *zTable,
+                                    DoltliteColInfo *ci);
 
 static inline int doltliteColIsVirtual(const DoltliteColInfo *ci, int i){
   return ci && ci->aGenerated && i>=0 && i<ci->nCol
@@ -82,7 +84,7 @@ static inline int doltliteLoadUserTableColumns(
     }
     return SQLITE_ERROR;
   }
-  return SQLITE_OK;
+  return doltliteLoadColumnDeclarations(db, zTable, pCols);
 }
 
 void doltliteFreeColInfo(DoltliteColInfo *ci);
