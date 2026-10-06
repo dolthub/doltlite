@@ -777,4 +777,34 @@ SELECT CONCAT('R|b|',id,'|',v) FROM t WHERE v='b';"
   done
 done
 
+for layout in rowid clustered composite generated; do
+  schema='id INTEGER PRIMARY KEY,v VARCHAR(20) UNIQUE,n INT'
+  if [ "$layout" = clustered ]; then
+    schema='v VARCHAR(20) UNIQUE,n INT,id VARCHAR(20) PRIMARY KEY'
+  elif [ "$layout" = composite ]; then
+    schema='id INTEGER PRIMARY KEY,v VARCHAR(20),n INT,UNIQUE(v,n DESC)'
+  elif [ "$layout" = generated ]; then
+    schema='id INTEGER PRIMARY KEY,v VARCHAR(20),n INT,g VARCHAR(20) AS (lower(v)) VIRTUAL UNIQUE'
+  fi
+  for mutation in update delete; do
+    change="UPDATE t SET v='c' WHERE id=1;"
+    if [ "$mutation" = delete ]; then change='DELETE FROM t WHERE id=1;'; fi
+    oracle_error "workspace_unique_discard_${layout}_${mutation}_rejected" "
+CREATE TABLE t($schema);
+INSERT INTO t(id,v,n) VALUES(1,'a',1),(2,'b',1);
+SELECT dolt_commit('-Am','base');
+$change
+UPDATE t SET v='a' WHERE id=2;
+DELETE FROM dolt_workspace_t WHERE from_id=1 OR from_id='1';
+"
+    oracle "workspace_unique_discard_${layout}_${mutation}_valid" "
+CREATE TABLE t($schema);
+INSERT INTO t(id,v,n) VALUES(1,'a',1),(2,'b',1);
+SELECT dolt_commit('-Am','base');
+$change
+DELETE FROM dolt_workspace_t WHERE from_id=1 OR from_id='1';
+" "SELECT CONCAT('R|',id,'|',v,'|',n) FROM t ORDER BY id;"
+  done
+done
+
 vc_oracle_finish
