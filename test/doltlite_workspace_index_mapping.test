@@ -1,0 +1,92 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout schema suffix} {
+  text {v TEXT UNIQUE,n INT,id TEXT PRIMARY KEY,p TEXT} {}
+  int {v TEXT UNIQUE,n INT,id INT PRIMARY KEY,p TEXT} {}
+  rowid {v TEXT UNIQUE,n INT,id INTEGER PRIMARY KEY,p TEXT} {}
+  leading {id TEXT PRIMARY KEY,v TEXT UNIQUE,n INT,p TEXT} {}
+  composite-asc {v TEXT UNIQUE,n INT,id TEXT,p TEXT,PRIMARY KEY(p,id)} {}
+  composite {v TEXT UNIQUE,n INT,id TEXT,p TEXT,PRIMARY KEY(p DESC,id)} {}
+  explicit {v TEXT UNIQUE,n INT,id TEXT PRIMARY KEY,p TEXT} {WITHOUT ROWID}
+  virtual {v TEXT UNIQUE,g TEXT AS (lower(v)) VIRTUAL,n INT,id TEXT PRIMARY KEY,p TEXT} {}
+  virtual-composite {v TEXT UNIQUE,g TEXT AS (lower(v)) VIRTUAL,n INT,id TEXT,p TEXT,PRIMARY KEY(p DESC,id)} {}
+  nonnull {v TEXT NOT NULL UNIQUE,n INT,id TEXT PRIMARY KEY,p TEXT} {}
+  stored {v TEXT UNIQUE,g TEXT AS (lower(v)) STORED,n INT,id TEXT PRIMARY KEY,p TEXT} {}
+  nocase {v TEXT COLLATE NOCASE UNIQUE,n INT,id TEXT PRIMARY KEY,p TEXT} {}
+  real {v TEXT UNIQUE,n REAL,id TEXT PRIMARY KEY,p TEXT} {}
+} {
+  foreach action {stage unstage discard} {
+    foreach mutation {update insert delete} {
+      reset_db
+      execsql "CREATE TABLE t($schema) $suffix"
+      execsql {
+        CREATE INDEX iv ON t(v);
+        CREATE INDEX imixed ON t(v DESC,n,p);
+        CREATE INDEX iexpr ON t(lower(v)||n);
+        CREATE INDEX ipartial ON t(v) WHERE n>0;
+        CREATE TABLE anchor(id INTEGER PRIMARY KEY);
+        INSERT INTO anchor VALUES(1);
+        INSERT INTO t(id,v,n,p) VALUES(1,'a',1,'part'),(2,'c',2,'part');
+        SELECT dolt_commit('-Am','base');
+      }
+      set indexes {sqlite_autoindex_t_1 iv imixed iexpr ipartial}
+      if {$layout in {virtual virtual-composite stored}} {
+        execsql {CREATE INDEX ig ON t(g)}
+        lappend indexes ig
+        execsql {SELECT dolt_commit('-Am','generated index')}
+      }
+      set base [execsql {SELECT id,v,n,p FROM t NOT INDEXED ORDER BY id}]
+      switch $mutation {
+        update {execsql {UPDATE t SET v='b' WHERE id=1}}
+        insert {execsql {INSERT INTO t(id,v,n,p) VALUES(3,'b',3,'part')}}
+        delete {execsql {DELETE FROM t WHERE id=1}}
+      }
+      set changed [execsql {SELECT id,v,n,p FROM t NOT INDEXED ORDER BY id}]
+      set name workspace-index-$layout-$action-$mutation
+      do_test $name-apply {
+        switch $action {
+          stage {execsql {UPDATE dolt_workspace_t SET staged=1}}
+          unstage {
+            execsql {
+              UPDATE dolt_workspace_t SET staged=1;
+              UPDATE dolt_workspace_t SET staged=0;
+              INSERT INTO anchor VALUES(2);
+              SELECT dolt_add('anchor');
+            }
+          }
+          discard {execsql {DELETE FROM dolt_workspace_t}}
+        }
+        if {$action ne "discard"} {
+          execsql {SELECT dolt_commit('-m','selected'); SELECT dolt_reset('--hard')}
+        }
+        execsql {SELECT count(*) FROM dolt_workspace_t}
+      } {0}
+      set expected $base
+      if {$action eq "stage"} {set expected $changed}
+      foreach connection {live reopen} {
+        if {$connection eq "reopen"} {
+          db close
+          sqlite3 db [file normalize test.db]
+        }
+        do_execsql_test $name-$connection-rows {
+          SELECT id,v,n,p FROM t NOT INDEXED ORDER BY id;
+        } $expected
+        do_execsql_test $name-$connection-integrity {PRAGMA integrity_check} {ok}
+        foreach index $indexes {
+          foreach value {a b c} {
+            set predicate "v='$value'"
+            if {$index eq "iexpr"} {set predicate "lower(v)||n='${value}1'"}
+            if {$index eq "ig"} {set predicate "g='$value'"}
+            if {$index eq "ipartial"} {append predicate " AND n>0"}
+            set scan "SELECT id,v,n,p FROM t NOT INDEXED WHERE $predicate ORDER BY id"
+            set lookup "SELECT id,v,n,p FROM t INDEXED BY $index WHERE $predicate ORDER BY id"
+            do_execsql_test $name-$connection-$index-$value $lookup [execsql $scan]
+          }
+        }
+      }
+    }
+  }
+}
+
+finish_test

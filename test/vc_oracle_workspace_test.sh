@@ -743,4 +743,38 @@ INSERT INTO t VALUES(1,1);
 DELETE FROM dolt_workspace_p;
 " "SELECT CONCAT('R|',id,'|',IFNULL(pid,'NULL')) FROM t;"
 
+for layout in plain virtual composite; do
+  schema='v VARCHAR(20) UNIQUE,id VARCHAR(20) PRIMARY KEY,p VARCHAR(20)'
+  if [ "$layout" = virtual ]; then
+    schema="$schema,g VARCHAR(20) GENERATED ALWAYS AS (lower(v)) VIRTUAL"
+  elif [ "$layout" = composite ]; then
+    schema='v VARCHAR(20) UNIQUE,id VARCHAR(20),p VARCHAR(20),PRIMARY KEY(p,id)'
+  fi
+  for action in stage unstage discard; do
+    apply="UPDATE dolt_workspace_t SET staged=TRUE;
+SELECT dolt_commit('-m','selected');
+SELECT dolt_reset('--hard');"
+    if [ "$action" = unstage ]; then
+      apply="UPDATE dolt_workspace_t SET staged=TRUE;
+UPDATE dolt_workspace_t SET staged=FALSE;
+INSERT INTO anchor VALUES(2);
+SELECT dolt_add('anchor');
+SELECT dolt_commit('-m','selected');
+SELECT dolt_reset('--hard');"
+    elif [ "$action" = discard ]; then
+      apply='DELETE FROM dolt_workspace_t;'
+    fi
+    oracle "workspace_reordered_index_${layout}_${action}" "
+CREATE TABLE t($schema);
+CREATE TABLE anchor(id INTEGER PRIMARY KEY);
+INSERT INTO anchor VALUES(1);
+INSERT INTO t(v,id,p) VALUES('a','k1','part');
+SELECT dolt_commit('-Am','base');
+UPDATE t SET v='b' WHERE id='k1';
+$apply
+" "SELECT CONCAT('R|a|',id,'|',v) FROM t WHERE v='a';
+SELECT CONCAT('R|b|',id,'|',v) FROM t WHERE v='b';"
+  done
+done
+
 vc_oracle_finish

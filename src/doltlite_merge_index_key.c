@@ -148,6 +148,12 @@ int doltlitePrepareIndexExpr(
   return SQLITE_OK;
 }
 
+static int indexRecordField(Table *pTab, int iCol){
+  if( !pTab ) return iCol;
+  if( HasRowid(pTab) ) return sqlite3TableColumnToStorage(pTab, iCol);
+  return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iCol);
+}
+
 static int bindIndexExprRow(
   sqlite3_stmt *pStmt,
   Table *pTab,
@@ -166,21 +172,7 @@ static int bindIndexExprRow(
       iParam++;
       continue;
     }
-    iField = i;
-#ifndef SQLITE_OMIT_GENERATED_COLUMNS
-    /* Table column numbers are not record field numbers. A rowid table
-    ** stores columns in sqlite3TableColumnToStorage order, with the
-    ** INTEGER PRIMARY KEY absent. A WITHOUT ROWID record is the primary
-    ** key index: declared key columns first, then the other stored
-    ** columns. Using storage order there reads the wrong cell once the
-    ** primary key is not the leading column. */
-    if( HasRowid(pTab) ){
-      iField = sqlite3TableColumnToStorage(pTab, i);
-    }else{
-      Index *pPkIdx = sqlite3PrimaryKeyIndex(pTab);
-      iField = pPkIdx ? sqlite3TableColumnToIndex(pPkIdx, i) : -1;
-    }
-#endif
+    iField = indexRecordField(pTab, i);
     if( iField>=0 && iField<info.nField ){
       rc = doltliteSerialValueFromField(pRec, nRec, &info, iField, &v);
       if( rc!=SQLITE_OK ) break;
@@ -306,7 +298,6 @@ static int doltliteBuildIndexEntryWithExpr(
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
   int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
   u8 **ppSortKey, int *pnSortKey,
   u8 **ppIdxRec, int *pnIdxRec,
   int *pStorePayload
@@ -317,7 +308,6 @@ static int doltliteBuildIndexEntryWithExpr(
   u8 *pIdxRec = 0;
   int nIdxRec = 0;
   int nOut = 0;
-  int nSort = 0;
   int nAlloc;
   int hasRowid;
   int storePayload = 0;
@@ -363,7 +353,7 @@ static int doltliteBuildIndexEntryWithExpr(
       nOut++;
 #endif
     }else if( pTab && col>=0 && col<pTab->nCol ){
-      int iStore = sqlite3TableColumnToStorage(pTab, col);
+      int iStore = indexRecordField(pTab, col);
       if( iPKey>=0 && col==iPKey ){
         aMem[nOut].eType = SQLITE_INTEGER;
         aMem[nOut].i = intKey;
@@ -389,18 +379,15 @@ static int doltliteBuildIndexEntryWithExpr(
     aMem[nOut].i = intKey;
     nOut++;
   }
-  nSort = nOut;
   /* Primary-key columns live in the value record. A payload that omits
   ** them makes a covering read return NULL for the key. */
-  if( !hasRowid && pIdx && !pIdx->uniqNotNull && pIdx->aiColumn ){
+  if( !hasRowid && pIdx && pIdx->aiColumn ){
     for(i=nIdxCol; i<pIdx->nColumn && nOut<nAlloc; i++){
       int col = pIdx->aiColumn[i];
       Table *pTab = pIdx->pTable;
       if( col<0 || !pTab || col>=pTab->nCol ) continue;
       {
-        int iStore = HasRowid(pTab)
-            ? sqlite3TableColumnToStorage(pTab, col)
-            : sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), col);
+        int iStore = indexRecordField(pTab, col);
         if( iStore>=0 && iStore<info.nField ){
           rc = doltliteSerialValueFromField(
               pRec, nRec, &info, iStore, &aMem[nOut]);
@@ -426,21 +413,7 @@ static int doltliteBuildIndexEntryWithExpr(
 
   storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);
   rc = sortKeyFromRecordPrefixColl(
-      pIdxRec, nIdxRec, nOut>nSort ? nSort : 0, pKeyInfo,
-      ppSortKey, pnSortKey);
-  if( rc==SQLITE_OK && !hasRowid && pTreeKey && nTreeKey>0 ){
-    u8 *pCombined = sqlite3_realloc(*ppSortKey, *pnSortKey + nTreeKey);
-    if( !pCombined ){
-      sqlite3_free(*ppSortKey);
-      *ppSortKey = 0;
-      *pnSortKey = 0;
-      sqlite3_free(pIdxRec);
-      return SQLITE_NOMEM;
-    }
-    memcpy(pCombined + *pnSortKey, pTreeKey, nTreeKey);
-    *ppSortKey = pCombined;
-    *pnSortKey += nTreeKey;
-  }
+      pIdxRec, nIdxRec, 0, pKeyInfo, ppSortKey, pnSortKey);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pIdxRec);
     doltliteRecordInfoClear(&info);
@@ -474,7 +447,6 @@ static int doltliteBuildIndexEntry(
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
   int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
   u8 **ppSortKey, int *pnSortKey,
   u8 **ppIdxRec, int *pnIdxRec,
   int *pStorePayload
@@ -486,7 +458,6 @@ static int doltliteBuildIndexEntry(
   u32 ipkLen = 0;
   int useIpk = 0;
   int storePayload = 0;
-  int nSortField = 0;
   int nOutField = 0;
   int rc;
 
@@ -500,8 +471,7 @@ static int doltliteBuildIndexEntry(
    || (iPKey<0 && pIdx && pIdx->pTable && HasRowid(pIdx->pTable)) ){
     return doltliteBuildIndexEntryWithExpr(
         db, pIdx, pRec, nRec, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
-        pTreeKey, nTreeKey, ppSortKey, pnSortKey, ppIdxRec, pnIdxRec,
-        pStorePayload);
+        ppSortKey, pnSortKey, ppIdxRec, pnIdxRec, pStorePayload);
   }
 
   /* A record may stop short of the table's last columns; the missing
@@ -537,21 +507,19 @@ static int doltliteBuildIndexEntry(
       for(i=0; i<nIdxCol; i++){
         int col = aiColumn[i];
         if( col>=0 ){
-          aFieldOrder[out++] = col;
+          aFieldOrder[out++] = indexRecordField(pIdx ? pIdx->pTable : 0, col);
         }
       }
       if( iPKey>=0 ){
         aFieldOrder[out++] = iPKey;
       }
-      /* Key columns, then the primary-key suffix. A REAL or NOCASE value
-      ** stores this record as the index payload; readers take the primary
-      ** key from it. The sort key stays the key prefix plus the table key. */
-      nSortField = out;
-      if( pIdx && !pIdx->uniqNotNull && pIdx->pTable
+      if( pIdx && pIdx->pTable
        && !HasRowid(pIdx->pTable) ){
         for(i=nIdxCol; i<pIdx->nColumn; i++){
           int col = pIdx->aiColumn[i];
-          if( col>=0 ) aFieldOrder[out++] = col;
+          if( col>=0 ){
+            aFieldOrder[out++] = indexRecordField(pIdx->pTable, col);
+          }
         }
       }
       nOutField = out;
@@ -621,26 +589,7 @@ static int doltliteBuildIndexEntry(
 
   storePayload = indexKeyInfoNeedsPayload(pKeyInfo, pIdxRec, nIdxRec);
   rc = sortKeyFromRecordPrefixColl(
-      pIdxRec, nIdxRec, nOutField>nSortField ? nSortField : 0, pKeyInfo,
-      ppSortKey, pnSortKey);
-  /* WITHOUT ROWID secondary indexes suffix the table-tree key. The
-  ** payload record also carries those primary-key columns; the suffix
-  ** stays on the sort key so it matches entries written before the
-  ** payload was required. */
-  if( rc==SQLITE_OK && pIdx && pIdx->pTable
-   && !HasRowid(pIdx->pTable) && pTreeKey && nTreeKey>0 ){
-    u8 *pCombined = sqlite3_realloc(*ppSortKey, *pnSortKey + nTreeKey);
-    if( !pCombined ){
-      sqlite3_free(*ppSortKey);
-      *ppSortKey = 0;
-      *pnSortKey = 0;
-      sqlite3_free(pIdxRec);
-      return SQLITE_NOMEM;
-    }
-    memcpy(pCombined + *pnSortKey, pTreeKey, nTreeKey);
-    *ppSortKey = pCombined;
-    *pnSortKey += nTreeKey;
-  }
+      pIdxRec, nIdxRec, 0, pKeyInfo, ppSortKey, pnSortKey);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pIdxRec);
     return rc;
@@ -720,6 +669,8 @@ int doltliteIndexMutMapRowDelta(
   int oldIn = 1, newIn = 1;
   int rc = SQLITE_OK;
 
+  UNUSED_PARAMETER(pTreeKey);
+  UNUSED_PARAMETER(nTreeKey);
   if( !pMap ) return SQLITE_MISUSE;
 
   if( pIdx && pIdx->pPartIdxWhere ){
@@ -748,7 +699,7 @@ int doltliteIndexMutMapRowDelta(
     int nSK = 0;
     rc = doltliteBuildIndexEntry(
         db, pIdx, pOldVal, nOldVal, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
-        pTreeKey, nTreeKey, &pSK, &nSK, 0, 0, 0);
+        &pSK, &nSK, 0, 0, 0);
     if( rc==SQLITE_OK ){
       rc = prollyMutMapDelete(pMap, pSK, nSK, 0);
     }
@@ -765,7 +716,7 @@ int doltliteIndexMutMapRowDelta(
     int nSK = 0, nRec = 0, store = 0;
     rc = doltliteBuildIndexEntry(
         db, pIdx, pNewVal, nNewVal, aiColumn, nIdxCol, pKeyInfo, iPKey, intKey,
-        pTreeKey, nTreeKey, &pSK, &nSK, &pRec, &nRec, &store);
+        &pSK, &nSK, &pRec, &nRec, &store);
     if( rc==SQLITE_OK ){
       if( store ){
         rc = prollyMutMapInsert(pMap, pSK, nSK, 0, pRec, nRec);
