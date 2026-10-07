@@ -836,8 +836,19 @@ static int dlComposeRetained(
       rc = -cores==SQLITE_NOMEM ? SQLITE_NOMEM : SQLITE_OK;
       goto done;
     }
-    if( !cores ){ bCoreDiff = 1; continue; }
     k = parsedColumnIndexByName(aAnc, nAnc, aWin[i].zName);
+    if( !cores ){
+      bCoreDiff = 1;
+      if( k>=0 ){
+        bConflict = 1;
+        if( pzErr && !*pzErr ){
+          *pzErr = sqlite3_mprintf("incompatible definitions for column '%s'",
+                                   aWin[i].zName);
+          if( !*pzErr ){ rc = SQLITE_NOMEM; goto done; }
+        }
+      }
+      continue;
+    }
     if( k<0 ) continue;
     if( !schemaDefinitionsEquivalent(aAnc[k].zDef, aWin[i].zDef) ) continue;
     if( schemaDefinitionsEquivalent(aAnc[k].zDef, aOth[j].zDef) ) continue;
@@ -992,42 +1003,33 @@ static int dlComposeRetained(
     if( rc!=SQLITE_OK ) goto done;
   }
 
-  /* A column already on the winning CREATE is not a schema action.
-  ** The other side may still contribute a check, foreign key, or default
-  ** as long as that is the only other difference. */
   if( !bConflict && !bCoreDiff && !bHalf && !bNeutral ){
-    int bOthOk = 0, bTrimOk = 0, bOnly = 1;
-    char *zTrim = 0;
-    for(i=0; i<nOth; i++){
-      if( parsedColumnIndexByName(aWin, nWin, aOth[i].zName)<0 ) bOnly = 0;
-    }
-    for(i=0; i<nWin && bOnly; i++){
-      if( parsedColumnIndexByName(aOth, nOth, aWin[i].zName)>=0 ) continue;
-      if( parsedColumnIndexByName(aAnc, nAnc, aWin[i].zName)>=0 ) bOnly = 0;
-    }
-    if( bOnly ){
-      rc = dlNeutralSame(zAnc, zOth, &bOthOk);
-      if( rc!=SQLITE_OK ){
-        if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
-        goto done;
+    const char *azSql[3] = {zAnc, zOurs, zTheirs};
+    ParsedColumn *aCols[3] = {aAnc, aOurs, aTheirs};
+    int anCols[3] = {nAnc, nOurs, nTheirs};
+    char *azTrim[3] = {0, 0, 0};
+    int j;
+    for(i=0; i<3 && rc==SQLITE_OK; i++){
+      char **azDrop = sqlite3_malloc64((u64)(anCols[i]+1)*sizeof(char*));
+      int nDrop = 0, bChanged = 0;
+      if( !azDrop ){ rc = SQLITE_NOMEM; break; }
+      for(j=0; j<anCols[i]; j++){
+        const char *zName = aCols[i][j].zName;
+        if( parsedColumnIndexByName(aAnc,nAnc,zName)>=0
+         && parsedColumnIndexByName(aOurs,nOurs,zName)>=0
+         && parsedColumnIndexByName(aTheirs,nTheirs,zName)>=0 ) continue;
+        azDrop[nDrop++] = aCols[i][j].zName;
       }
+      rc = dlRewriteColumns(azSql[i], azDrop, 0, nDrop,
+                             &azTrim[i], &bChanged);
+      sqlite3_free(azDrop);
     }
-    if( bOthOk ){
-      zTrim = sqlite3_mprintf("%s", zWin);
-      if( !zTrim ){ rc = SQLITE_NOMEM; goto done; }
-      for(i=0; i<nWin && rc==SQLITE_OK; i++){
-        if( parsedColumnIndexByName(aOth, nOth, aWin[i].zName)>=0 ) continue;
-        if( parsedColumnIndexByName(aAnc, nAnc, aWin[i].zName)>=0 ) continue;
-        rc = dlCutRaw(&zTrim, aWin[i].zDef);
-      }
-      if( rc==SQLITE_OK ) rc = dlNeutralSame(zAnc, zTrim, &bTrimOk);
-      sqlite3_free(zTrim);
-      if( rc!=SQLITE_OK ){
-        if( rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
-        goto done;
-      }
+    if( rc==SQLITE_OK ) rc = dlNeutralSame(azTrim[0],azTrim[1],&bNeutral);
+    if( rc==SQLITE_OK && bNeutral ){
+      rc = dlNeutralSame(azTrim[0],azTrim[2],&bNeutral);
     }
-    if( bTrimOk ) bNeutral = 1;
+    for(i=0; i<3; i++) sqlite3_free(azTrim[i]);
+    if( rc!=SQLITE_OK ) goto done;
   }
   if( !bConflict && bNeutral && !bCoreDiff && !bHalf ) bHandled = 1;
   if( bConflict || !pzSql ){

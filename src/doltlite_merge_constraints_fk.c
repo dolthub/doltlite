@@ -704,7 +704,6 @@ static int dlSkipReferences(const char **pz, const char *zEnd){
   return n<0 ? SQLITE_CORRUPT : SQLITE_OK;
 }
 
-/* Column text with DEFAULT, CHECK, and REFERENCES removed. NOT NULL stays. */
 static int dlStripColumn(const char *zDef, char **pzOut){
   sqlite3_str *pStr;
   const char *z = zDef ? zDef : "";
@@ -728,8 +727,35 @@ static int dlStripColumn(const char *zDef, char **pzOut){
       q += nn;
       kn = dlNext(&q, zEnd, &kt);
       if( kn<=0 ){ rc = kn<0 ? SQLITE_CORRUPT : SQLITE_OK; break; }
-      if( kt==TK_CHECK || kt==TK_DEFAULT || kt==TK_REFERENCES || kt==TK_FOREIGN ){
+      if( kt==TK_CHECK || kt==TK_DEFAULT || kt==TK_REFERENCES
+       || kt==TK_FOREIGN || kt==TK_COLLATE || kt==TK_NOT ){
         z = q;
+        continue;
+      }
+    }
+    if( type==TK_COLLATE ){
+      z += n;
+      n = dlNext(&z, zEnd, &type);
+      if( n<=0 ){ rc = SQLITE_CORRUPT; break; }
+      z += n;
+      continue;
+    }
+    if( type==TK_NOT ){
+      const char *q = z + n;
+      int t, k = dlNext(&q, zEnd, &t);
+      if( k>0 && t==TK_NULL ){
+        z = q + k;
+        q = z;
+        k = dlNext(&q, zEnd, &t);
+        if( k>0 && t==TK_ON ){
+          q += k;
+          k = dlNext(&q, zEnd, &t);
+          if( k<=0 || t!=TK_CONFLICT ){ rc = SQLITE_CORRUPT; break; }
+          q += k;
+          k = dlNext(&q, zEnd, &t);
+          if( k<=0 ){ rc = SQLITE_CORRUPT; break; }
+          z = q + k;
+        }
         continue;
       }
     }
@@ -1101,14 +1127,15 @@ int dlRewriteColumns(
       if( !zName ){ rc = SQLITE_NOMEM; break; }
       for(r=0; r<nRep; r++){
         if( azName[r] && sqlite3_stricmp(azName[r], zName)==0 ){
-          zEmit = azDef[r];
-          nEmit = (int)strlen(azDef[r]);
+          zEmit = azDef ? azDef[r] : 0;
+          nEmit = zEmit ? (int)strlen(zEmit) : 0;
           *pChanged = 1;
           break;
         }
       }
     }
     sqlite3_free(zName);
+    if( !zEmit ) continue;
     if( nKept ) sqlite3_str_appendchar(pStr, 1, ',');
     nKept++;
     sqlite3_str_append(pStr, zEmit, nEmit);

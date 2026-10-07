@@ -1,0 +1,177 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout key constraint suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {}
+  clustered {id INT PRIMARY KEY} {} {}
+  text {id TEXT PRIMARY KEY} {} {}
+  composite {id INT} {,PRIMARY KEY(id,z)} {}
+  without_rowid {id INT PRIMARY KEY} {} {WITHOUT ROWID}
+  keyless {id INT} {} {}
+} {
+  foreach {kind before after value} {
+    notnull {INT} {INT NOT NULL} 20
+    nullable {INT NOT NULL} {INT} 20
+    named_notnull {INT} {INT CONSTRAINT nn NOT NULL ON CONFLICT FAIL} 20
+    default {INT} {INT DEFAULT 7} 20
+    no_default {INT DEFAULT 7} {INT} 20
+    check {INT} {INT CHECK(w>0)} 20
+    no_check {INT CHECK(w>0)} {INT} 20
+    collate {TEXT} {TEXT COLLATE NOCASE} 'Ab'
+    binary {TEXT COLLATE NOCASE} {TEXT COLLATE BINARY} 'Ab'
+    type {INT} {TEXT} 20
+  } {
+    foreach shape {rename add drop rename_modify} {
+      foreach direction {forward reverse} {
+        foreach operation {merge cherry_pick} {
+          foreach txn {autocommit explicit} {
+            reset_db
+            set create "CREATE TABLE t($key,v INT,w $before,z INT$constraint) $suffix"
+            execsql $create
+            execsql "INSERT INTO t(id,v,w,z) VALUES(1,10,$value,30),(2,11,$value,31)"
+            execsql {
+              CREATE INDEX iw ON t(w);
+              SELECT dolt_commit('-Am','ancestor');
+              SELECT dolt_branch('feat');
+              SELECT dolt_checkout('feat');
+              DROP TABLE t;
+            }
+            execsql "CREATE TABLE t($key,v INT,w $after,z INT$constraint) $suffix"
+            execsql "INSERT INTO t(id,v,w,z) VALUES(1,10,$value,30),(2,11,$value,31)"
+            execsql {
+              CREATE INDEX iw ON t(w);
+              SELECT dolt_commit('-Am','attributes');
+              SELECT dolt_checkout('main');
+            }
+            switch $shape {
+              rename {execsql {ALTER TABLE t RENAME COLUMN v TO vv}}
+              add {execsql {ALTER TABLE t ADD COLUMN x INT DEFAULT 5}}
+              drop {execsql {ALTER TABLE t DROP COLUMN v}}
+              rename_modify {
+                execsql {DROP TABLE t}
+                execsql "CREATE TABLE t($key,v INT,w $before,z INT DEFAULT 9$constraint) $suffix"
+                execsql "INSERT INTO t(id,v,w,z) VALUES(1,10,$value,30),(2,11,$value,31)"
+                execsql {CREATE INDEX iw ON t(w); ALTER TABLE t RENAME COLUMN v TO vv}
+              }
+            }
+            execsql {SELECT dolt_commit('-Am','shape')}
+            set target feat
+            set branch main
+            if {$direction eq "reverse"} {
+              execsql {SELECT dolt_checkout('feat')}
+              set target main
+              set branch feat
+            }
+            set original [execsql {
+              SELECT dolt_hashof('HEAD'); SELECT sql FROM sqlite_schema WHERE name='t';
+              SELECT * FROM t ORDER BY id;
+            }]
+            if {$txn eq "explicit"} {execsql BEGIN}
+            set name merge-attributes-$layout-$kind-$shape-$direction-$operation-$txn
+            do_test $name-outcome {
+              set mergeFailed [catch {execsql "SELECT dolt_${operation}('$target')"}]
+            } [expr {$kind eq "type"}]
+            if {$mergeFailed && $kind ne "type"} {
+              if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+              continue
+            }
+            if {$kind eq "type"} {
+              if {$txn eq "explicit" && $operation eq "merge"} {
+                do_execsql_test $name-conflict {
+                  SELECT count(*) FROM dolt_schema_conflicts;
+                } {1}
+              }
+              if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+              do_test $name-restored {
+                execsql {
+                  SELECT dolt_hashof('HEAD'); SELECT sql FROM sqlite_schema WHERE name='t';
+                  SELECT * FROM t ORDER BY id;
+                }
+              } $original
+            } else {
+              if {![sqlite3_get_autocommit db]} {execsql COMMIT}
+              set columns {id w z}
+              if {$shape in {rename rename_modify}} {lappend columns vv}
+              if {$shape eq "add"} {lappend columns v x}
+              do_test $name-rows {
+                execsql "SELECT [join $columns ,] FROM t ORDER BY id"
+              } [concat [list 1 [string trim $value '] 30] \
+                  [expr {$shape eq "add" ? [list 10 5] : $shape eq "drop" ? {} : [list 10]}] \
+                  [list 2 [string trim $value '] 31] \
+                  [expr {$shape eq "add" ? [list 11 5] : $shape eq "drop" ? {} : [list 11]}]]
+              set notnull [expr {$kind in {notnull named_notnull}}]
+              set default [expr {$kind eq "default" ? 7 : {}}]
+              do_execsql_test $name-definition {
+                SELECT "notnull",dflt_value FROM pragma_table_info('t') WHERE name='w';
+              } [list $notnull $default]
+              if {$shape eq "rename_modify"} {
+                do_execsql_test $name-independent-default {
+                  SELECT dflt_value FROM pragma_table_info('t') WHERE name='z';
+                } {9}
+              }
+              do_test $name-constraint {
+                if {$kind in {notnull nullable named_notnull}} {
+                  catch {execsql {INSERT INTO t(id,w,z) VALUES(9,NULL,39)}}
+                } elseif {$kind in {check no_check}} {
+                  catch {execsql {INSERT INTO t(id,w,z) VALUES(9,-1,39)}}
+                } elseif {$kind in {collate binary}} {
+                  execsql {SELECT count(*) FROM t INDEXED BY iw WHERE w='ab'}
+                } else {
+                  execsql {INSERT INTO t(id,z) VALUES(9,39); SELECT w FROM t WHERE id=9}
+                }
+              } [expr {$kind in {notnull named_notnull check} ? 1 :
+                  $kind eq "collate" ? 2 : $kind eq "default" ? 7 :
+                  $kind in {nullable no_check binary} ? 0 : [list {}]}]
+            }
+            do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+            set snapshot [execsql {SELECT sql FROM sqlite_schema WHERE name='t'; SELECT * FROM t ORDER BY id}]
+            do_test $name-reopen {
+              db close
+              sqlite3 db test.db/$branch
+              execsql {SELECT sql FROM sqlite_schema WHERE name='t'; SELECT * FROM t ORDER BY id}
+            } $snapshot
+          }
+        }
+      }
+    }
+  }
+}
+
+foreach shape {rename drop} {
+  foreach direction {forward reverse} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,w TEXT DEFAULT 'v INT',v INT);
+      INSERT INTO t VALUES(1,'Ab',10);
+      SELECT dolt_commit('-Am','ancestor');
+      SELECT dolt_branch('feat');
+      SELECT dolt_checkout('feat');
+      DROP TABLE t;
+      CREATE TABLE t(id INTEGER PRIMARY KEY,w TEXT DEFAULT 'v INT' NOT NULL,v INT);
+      INSERT INTO t VALUES(1,'Ab',10);
+      SELECT dolt_commit('-Am','attributes');
+      SELECT dolt_checkout('main');
+    }
+    if {$shape eq "rename"} {
+      execsql {ALTER TABLE t RENAME COLUMN v TO vv}
+    } else {
+      execsql {ALTER TABLE t DROP COLUMN v}
+    }
+    execsql {SELECT dolt_commit('-Am','shape')}
+    set target feat
+    if {$direction eq "reverse"} {
+      execsql {SELECT dolt_checkout('feat')}
+      set target main
+    }
+    do_test merge-attributes-literal-$shape-$direction-outcome {
+      catch {execsql "SELECT dolt_merge('$target')"}
+    } 0
+    do_execsql_test merge-attributes-literal-$shape-$direction-definition {
+      SELECT "notnull",dflt_value FROM pragma_table_info('t') WHERE name='w';
+      SELECT id,w FROM t;
+      PRAGMA integrity_check;
+    } {1 {'v INT'} 1 Ab ok}
+  }
+}
+
+finish_test
