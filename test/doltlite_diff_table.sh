@@ -105,13 +105,13 @@ run_test "merge_to_commit_eq_matches_plus" \
   "SELECT (SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1)) = (SELECT count(*) FROM dolt_diff_t WHERE +to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "1" "$DB"
 run_test "merge_to_commit_head_count" \
-  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='HEAD';" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
   "2" "$DB"
 run_test "merge_to_commit_distinct_parents" \
-  "SELECT count(DISTINCT from_commit) FROM dolt_diff_t WHERE to_commit='HEAD';" \
+  "SELECT count(DISTINCT from_commit) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
   "2" "$DB"
 run_test "merge_to_commit_head_ids" \
-  "SELECT group_concat(coalesce(to_id, from_id), ',') FROM (SELECT to_id, from_id FROM dolt_diff_t WHERE to_commit='HEAD' ORDER BY coalesce(to_id, from_id));" \
+  "SELECT group_concat(coalesce(to_id, from_id), ',') FROM (SELECT to_id, from_id FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1) ORDER BY coalesce(to_id, from_id));" \
   "2,3" "$DB"
 
 rm -f "$DB"
@@ -135,7 +135,7 @@ run_test "merge_to_commit_both_rows" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
   "2" "$DBMTC"
 run_test "merge_to_commit_both_keys" \
-  "SELECT group_concat(coalesce(to_k, from_k), ',') FROM (SELECT to_k, from_k FROM dolt_diff_t WHERE to_commit='HEAD' ORDER BY coalesce(to_k, from_k));" \
+  "SELECT group_concat(coalesce(to_k, from_k), ',') FROM (SELECT to_k, from_k FROM dolt_diff_t WHERE to_commit=dolt_hashof('HEAD') ORDER BY coalesce(to_k, from_k));" \
   "100,200" "$DBMTC"
 run_test "merge_to_commit_plus_agrees" \
   "SELECT (SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1)) = (SELECT count(*) FROM dolt_diff_t WHERE +to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1));" \
@@ -581,8 +581,6 @@ run_test "gencol_chain_at" \
 
 rm -f "$DBGS" "$DBGW" "$DBGV" "$DBGWV" "$DBGE" "$DBGVE" "$DBGC"
 
-# Revision specs in from_commit/to_commit constraints resolve like the
-# function form; both-ends-named is the arbitrary-pair diff.
 DBRS=/tmp/test_dt_revspec_$$.db; rm -f "$DBRS"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a'),(2,'b');
@@ -594,37 +592,43 @@ SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DBRS" > /dev/null 2>&1
 
 run_test "revspec_from_to_adjacent" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~1' AND to_commit='HEAD';" \
-  "1" "$DBRS"
+  "0" "$DBRS"
 run_test "revspec_from_to_nonadjacent_slice" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~2' AND to_commit='HEAD';" \
-  "2" "$DBRS"
+  "0" "$DBRS"
 run_test "revspec_to_only" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit='HEAD';" \
-  "1" "$DBRS"
+  "0" "$DBRS"
 run_test "revspec_from_only" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~1';" \
-  "1" "$DBRS"
+  "0" "$DBRS"
 run_test "revspec_from_only_row" \
   "SELECT diff_type || ':' || to_v FROM dolt_diff_t WHERE from_commit='HEAD~1';" \
-  "modified:B" "$DBRS"
+  "" "$DBRS"
 run_test "revspec_hash_pair_still_works" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2') AND to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c3');" \
   "1" "$DBRS"
-run_test_error_match "revspec_garbage_from_rejected" \
+run_test "revspec_tvf_nonadjacent_slice" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~2','HEAD');" \
+  "2" "$DBRS"
+run_test "revspec_from_hash_only_row" \
+  "SELECT diff_type || ':' || to_v FROM dolt_diff_t WHERE from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2');" \
+  "modified:B" "$DBRS"
+run_test "revspec_garbage_from_literal_empty" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='nosuchref' AND to_commit='HEAD';" \
-  "dolt_diff_t: ref not found: nosuchref" "$DBRS"
-run_test_error_match "revspec_garbage_to_rejected" \
+  "0" "$DBRS"
+run_test "revspec_garbage_to_literal_empty" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit='garbage';" \
-  "dolt_diff_t: ref not found: garbage" "$DBRS"
-run_test_error_match "revspec_garbage_from_only_rejected" \
+  "0" "$DBRS"
+run_test "revspec_garbage_from_only_literal_empty" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='nosuchref';" \
-  "dolt_diff_t: ref not found: nosuchref" "$DBRS"
-run_test_error_match "revspec_invalid_ancestor_from_only_rejected" \
+  "0" "$DBRS"
+run_test "revspec_invalid_ancestor_from_only_literal_empty" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD~99';" \
-  "dolt_diff_t: invalid ref: HEAD~99" "$DBRS"
-run_test_error_match "revspec_invalid_ancestor_to_only_rejected" \
+  "0" "$DBRS"
+run_test "revspec_invalid_ancestor_to_only_literal_empty" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit='HEAD~99';" \
-  "dolt_diff_t: invalid ref: HEAD~99" "$DBRS"
+  "0" "$DBRS"
 run_test_error_match "revspec_tvf_garbage_from_rejected" \
   "SELECT count(*) FROM dolt_diff_t('nosuchref','HEAD');" \
   "dolt_diff_t: ref not found: nosuchref" "$DBRS"
@@ -649,15 +653,18 @@ run_test "revspec_to_working" \
   "1" "$DBRS"
 run_test "revspec_from_head_to_working" \
   "SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD' AND to_commit='WORKING';" \
-  "1" "$DBRS"
+  "0" "$DBRS"
 run_test "revspec_to_staged" \
   "SELECT dolt_add('t');
    SELECT count(*) FROM dolt_diff_t WHERE to_commit='STAGED';" \
   "0
-1" "$DBRS"
+0" "$DBRS"
 run_test "revspec_unconstrained_unchanged" \
   "SELECT count(*) FROM dolt_diff_t;" \
   "5" "$DBRS"
+run_test "commit_filters_staged_eq_matches_unary" \
+  "SELECT (SELECT count(*) FROM dolt_diff_t WHERE to_commit='STAGED') = (SELECT count(*) FROM dolt_diff_t WHERE +to_commit='STAGED');" \
+  "1" "$DBRS"
 
 rm -f "$DBRS"
 

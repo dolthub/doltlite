@@ -129,6 +129,7 @@ struct DiffTblCursor {
   ProllyHash walkCurr;
   int walkCurrInited;
   char zFromFilter[PROLLY_HASH_SIZE*2+1];
+  char zToFilter[PROLLY_HASH_SIZE*2+1];
 
   ProllyDiffIter diffIter;
   int diffIterOpen;
@@ -175,7 +176,6 @@ static int dtLoadTableRootOrEmpty(
 #define DT_IDX_TO_COMMIT_EQ   0x01
 #define DT_IDX_SLICE          0x02
 #define DT_IDX_RANGE_SPEC     0x04
-#define DT_IDX_FROM_TO_COMMIT 0x08
 #define DT_IDX_FROM_COMMIT_EQ 0x10
 
 static int dtRefError(DiffTblVtab *pVtab, const char *zRef, int rc){
@@ -330,6 +330,10 @@ static int pairsAppend(DiffTblCursor *pCur,
                        u8 toFlags, i64 toDate){
   DiffPair *aNew, *r;
   int nNew;
+  if( (pCur->zFromFilter[0] && strcmp(pCur->zFromFilter,zFromHex)!=0)
+   || (pCur->zToFilter[0] && strcmp(pCur->zToFilter,zToHex)!=0) ){
+    return SQLITE_OK;
+  }
   if( pCur->nPairs>=pCur->nPairsAlloc ){
     nNew = pCur->nPairsAlloc ? pCur->nPairsAlloc*2 : 16;
     aNew = sqlite3_realloc(pCur->aPairs,
@@ -479,19 +483,15 @@ static void clearHistoryWalk(DiffTblCursor *pCur){
   }
   pCur->walkActive = 0;
   pCur->walkCurrInited = 0;
-  pCur->zFromFilter[0] = 0;
 }
 
 static int startHistoryWalk(DiffTblCursor *pCur, sqlite3 *db,
                             const char *zTableName){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;
-  char zKeepFilter[PROLLY_HASH_SIZE*2+1];
   int rc = SQLITE_OK;
 
-  memcpy(zKeepFilter, pCur->zFromFilter, sizeof(zKeepFilter));
   clearHistoryWalk(pCur);
-  memcpy(pCur->zFromFilter, zKeepFilter, sizeof(pCur->zFromFilter));
   if( !cs ) return SQLITE_OK;
 
   doltliteGetSessionHead(db, &headHash);
@@ -552,7 +552,7 @@ static int walkNextDiffPair(DiffTblCursor *pCur, sqlite3 *db,
 
     doltliteHashToHex(&pCur->walkCurr, curHex);
     filterHit = pCur->zFromFilter[0]
-             && sqlite3_stricmp(curHex, pCur->zFromFilter)==0;
+             && strcmp(curHex, pCur->zFromFilter)==0;
     if( !pCur->zFromFilter[0] || filterHit ){
       rc = appendCurrentDiffPair(pCur, &pCur->walkCurr, &commit, &curTblRoot,
                                  &curSchemaHash, curFlags, &pCur->walkMap);
@@ -567,7 +567,8 @@ static int walkNextDiffPair(DiffTblCursor *pCur, sqlite3 *db,
     doltliteCommitClear(&commit);
     if( rc!=SQLITE_OK ) break;
 
-    if( pCur->nWalkStack==0 || filterHit ){
+    if( pCur->nWalkStack==0 || filterHit
+     || strcmp(pCur->zToFilter,"WORKING")==0 ){
       pCur->walkCurrInited = 0;
     }else{
       pCur->walkCurr = pCur->aWalkStack[pCur->nWalkStack-1];
@@ -578,201 +579,6 @@ static int walkNextDiffPair(DiffTblCursor *pCur, sqlite3 *db,
 
   pCur->walkCurrInited = 0;
   return rc;
-}
-
-static int buildWorkingDiffPair(
-  DiffTblCursor *pCur,
-  sqlite3 *db,
-  const char *zTableName
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash headHash;
-  ProllyHash workingCat, workingTblRoot, workingSchemaHash;
-  ProllyHash headTblRoot, headSchemaHash;
-  DoltliteCommit headCommit;
-  u8 workingFlags = 0;
-  u8 headFlags = 0;
-  u8 fromFlags;
-  int rc;
-  char zWorking[PROLLY_HASH_SIZE*2+1];
-  char zHeadHex[PROLLY_HASH_SIZE*2+1];
-
-  if( !cs ) return SQLITE_OK;
-
-  doltliteGetSessionHead(db, &headHash);
-  if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
-
-  memset(&workingCat, 0, sizeof(workingCat));
-  memset(&workingTblRoot, 0, sizeof(workingTblRoot));
-  memset(&workingSchemaHash, 0, sizeof(workingSchemaHash));
-  memset(&headTblRoot, 0, sizeof(headTblRoot));
-  memset(&headSchemaHash, 0, sizeof(headSchemaHash));
-  memset(&headCommit, 0, sizeof(headCommit));
-  memset(zWorking, 0, sizeof(zWorking));
-  memcpy(zWorking, "WORKING", 7);
-
-  rc = doltliteGetWorkingTableState(db, zTableName,
-                                    &workingTblRoot, &workingFlags,
-                                    &workingSchemaHash);
-  if( rc==SQLITE_NOTFOUND ){
-    rc = dtMapChunkSourceError(pCur, db, rc, SQLITE_OK);
-  }
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteLoadCommit(db, &headHash, &headCommit);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = dtLoadTableRootOrEmpty(pCur, db, &headCommit.catalogHash,
-                              zTableName, &headTblRoot,
-                              &headFlags, &headSchemaHash);
-  if( rc==SQLITE_OK ){
-    int rootsDiffer = prollyHashCompare(&headTblRoot, &workingTblRoot)!=0;
-    int schemasDiffer = prollyHashCompare(&headSchemaHash, &workingSchemaHash)!=0;
-    if( rootsDiffer || schemasDiffer ){
-      if( schemasDiffer ){
-        rc = doltliteFlushCatalogToHash(db, &workingCat);
-        if( rc!=SQLITE_OK ){
-          doltliteCommitClear(&headCommit);
-          return rc;
-        }
-      }else{
-        memset(&workingCat, 0, sizeof(workingCat));
-      }
-      doltliteHashToHex(&headHash, zHeadHex);
-      fromFlags = headFlags ? headFlags : workingFlags;
-      rc = pairsAppend(pCur, zHeadHex, &headTblRoot, &headCommit.catalogHash,
-                       &headSchemaHash, fromFlags, headCommit.timestamp,
-                       zWorking, &workingTblRoot, &workingCat, &workingSchemaHash,
-                       workingFlags, 0);
-    }
-  }
-  doltliteCommitClear(&headCommit);
-  return rc;
-}
-
-static int buildCommitDiffPair(
-  DiffTblCursor *pCur,
-  sqlite3 *db,
-  const char *zTableName,
-  const char *zToCommit,
-  int *pbRefError
-){
-  ProllyHash toHash;
-  ProllyHash fromHash;
-  ProllyHash fromTblRoot, toTblRoot;
-  ProllyHash fromCatHash, toCatHash;
-  ProllyHash fromSchemaHash, toSchemaHash;
-  DoltliteCommit toCommit;
-  u8 fromFlags = 0;
-  u8 toFlags = 0;
-  i64 fromDate = 0;
-  char zFromLabel[PROLLY_HASH_SIZE*2+1];
-  char zToLabel[PROLLY_HASH_SIZE*2+1];
-  const ProllyHash *pParent;
-  int nParents;
-  int nIter;
-  int i;
-  int rc;
-
-  *pbRefError = 0;
-  if( !zToCommit ) return SQLITE_OK;
-
-  memset(&toHash, 0, sizeof(toHash));
-  memset(&fromHash, 0, sizeof(fromHash));
-  memset(&fromTblRoot, 0, sizeof(fromTblRoot));
-  memset(&toTblRoot, 0, sizeof(toTblRoot));
-  memset(&fromCatHash, 0, sizeof(fromCatHash));
-  memset(&toCatHash, 0, sizeof(toCatHash));
-  memset(&fromSchemaHash, 0, sizeof(fromSchemaHash));
-  memset(&toSchemaHash, 0, sizeof(toSchemaHash));
-  memset(&toCommit, 0, sizeof(toCommit));
-  memset(zToLabel, 0, sizeof(zToLabel));
-
-  rc = doltliteResolveRef(db, zToCommit, &toHash);
-  if( rc!=SQLITE_OK ){
-    *pbRefError = 1;
-    return rc;
-  }
-
-  /* to_commit filter only walks the session head's ancestry; unreachable commits yield no rows. */
-  {
-    ProllyHash head, base;
-    memset(&head, 0, sizeof(head));
-    doltliteGetSessionHead(db, &head);
-    if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
-    rc = doltliteFindAncestor(db, &head, &toHash, &base);
-    if( rc==SQLITE_NOTFOUND ){
-      return dtMapChunkSourceError(pCur, db, rc, SQLITE_OK);
-    }
-    if( rc==SQLITE_OK && prollyHashCompare(&base, &toHash)!=0 ){
-      return SQLITE_OK;
-    }
-    if( rc!=SQLITE_OK ) return rc;
-  }
-
-  rc = doltliteLoadCommit(db, &toHash, &toCommit);
-  if( rc!=SQLITE_OK ) return rc;
-  memcpy(&toCatHash, &toCommit.catalogHash, sizeof(ProllyHash));
-  rc = dtLoadTableRootOrEmpty(pCur, db, &toCatHash, zTableName,
-                              &toTblRoot, &toFlags, &toSchemaHash);
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&toCommit);
-    return rc;
-  }
-
-  nParents = doltliteCommitParentCount(&toCommit);
-  nIter = nParents>0 ? nParents : 1;
-  doltliteHashToHex(&toHash, zToLabel);
-  for(i=0; i<nIter; i++){
-    u8 pairFromFlags;
-    u8 pairToFlags;
-
-    memset(&fromHash, 0, sizeof(fromHash));
-    memset(&fromTblRoot, 0, sizeof(fromTblRoot));
-    memset(&fromCatHash, 0, sizeof(fromCatHash));
-    memset(&fromSchemaHash, 0, sizeof(fromSchemaHash));
-    fromFlags = 0;
-    fromDate = 0;
-
-    if( nParents>0 ){
-      DoltliteCommit fromCommit;
-      pParent = doltliteCommitParentHash(&toCommit, i);
-      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      memset(&fromCommit, 0, sizeof(fromCommit));
-      fromHash = *pParent;
-      rc = doltliteLoadCommit(db, &fromHash, &fromCommit);
-      if( rc==SQLITE_OK ){
-        memcpy(&fromCatHash, &fromCommit.catalogHash, sizeof(ProllyHash));
-        fromDate = fromCommit.timestamp;
-        rc = dtLoadTableRootOrEmpty(pCur, db, &fromCatHash, zTableName,
-                                    &fromTblRoot, &fromFlags,
-                                    &fromSchemaHash);
-      }
-      doltliteCommitClear(&fromCommit);
-      if( rc!=SQLITE_OK ){
-        doltliteCommitClear(&toCommit);
-        return rc;
-      }
-    }
-
-    if( prollyHashCompare(&fromTblRoot, &toTblRoot)==0
-     && prollyHashCompare(&fromSchemaHash, &toSchemaHash)==0 ){
-      continue;
-    }
-
-    pairFromFlags = fromFlags ? fromFlags : toFlags;
-    pairToFlags = toFlags ? toFlags : fromFlags;
-    doltliteHashToHex(&fromHash, zFromLabel);
-    rc = pairsAppend(pCur, zFromLabel, &fromTblRoot, &fromCatHash,
-                     &fromSchemaHash, pairFromFlags, fromDate,
-                     zToLabel, &toTblRoot, &toCatHash, &toSchemaHash,
-                     pairToFlags, toCommit.timestamp);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&toCommit);
-      return rc;
-    }
-  }
-  doltliteCommitClear(&toCommit);
-  return SQLITE_OK;
 }
 
 typedef struct DtSliceEnd DtSliceEnd;
@@ -1165,6 +971,11 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   for(i=0; i<pInfo->nConstraint; i++){
     if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( (pInfo->aConstraint[i].iColumn==toCommitCol
+      || pInfo->aConstraint[i].iColumn==fromCommitCol)
+     && sqlite3_stricmp(sqlite3_vtab_collation(pInfo,i),"BINARY")!=0 ){
+      continue;
+    }
     if( pInfo->aConstraint[i].iColumn==toCommitCol ){
       iToCommitEq = i;
     }else if( pInfo->aConstraint[i].iColumn==fromCommitCol ){
@@ -1189,24 +1000,17 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iFromRefEq].omit = 1;
     pInfo->estimatedCost = 10.0;
   }else if( iFromCommitEq>=0 && iToCommitEq>=0 ){
-    /* Both ends named: the arbitrary-pair diff, same as the function
-    ** form. Constraints are consumed after ref resolution, so revision
-    ** specs never face a text recheck against the rendered hash. */
-    pInfo->idxNum = DT_IDX_FROM_TO_COMMIT;
+    pInfo->idxNum = DT_IDX_FROM_COMMIT_EQ | DT_IDX_TO_COMMIT_EQ;
     pInfo->aConstraintUsage[iFromCommitEq].argvIndex = 1;
-    pInfo->aConstraintUsage[iFromCommitEq].omit = 1;
     pInfo->aConstraintUsage[iToCommitEq].argvIndex = 2;
-    pInfo->aConstraintUsage[iToCommitEq].omit = 1;
     pInfo->estimatedCost = 10.0;
   }else if( iToCommitEq>=0 ){
     pInfo->idxNum = DT_IDX_TO_COMMIT_EQ;
     pInfo->aConstraintUsage[iToCommitEq].argvIndex = 1;
-    pInfo->aConstraintUsage[iToCommitEq].omit = 1;
     pInfo->estimatedCost = 100.0;
   }else if( iFromCommitEq>=0 ){
     pInfo->idxNum = DT_IDX_FROM_COMMIT_EQ;
     pInfo->aConstraintUsage[iFromCommitEq].argvIndex = 1;
-    pInfo->aConstraintUsage[iFromCommitEq].omit = 1;
     pInfo->estimatedCost = 500.0;
   }else{
     pInfo->idxNum = 0;
@@ -1231,6 +1035,20 @@ static int dtClose(sqlite3_vtab_cursor *cur){
   return SQLITE_OK;
 }
 
+static int dtCopyCommitFilter(sqlite3_value *pValue, char *zFilter){
+  const char *z;
+  int n;
+  if( sqlite3_value_type(pValue)==SQLITE_NULL
+   || sqlite3_value_type(pValue)==SQLITE_BLOB ) return SQLITE_DONE;
+  z = (const char*)sqlite3_value_text(pValue);
+  if( !z ) return SQLITE_NOMEM;
+  n = sqlite3_value_bytes(pValue);
+  if( n<=0 || n>PROLLY_HASH_SIZE*2 || memchr(z,0,n) ) return SQLITE_DONE;
+  memcpy(zFilter, z, n);
+  zFilter[n] = 0;
+  return SQLITE_OK;
+}
+
 static int dtFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   DiffTblCursor *c = (DiffTblCursor*)cur;
@@ -1251,6 +1069,8 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   c->pairsDone = 0;
   c->hasRow = 0;
   c->sourceError = 0;
+  c->zFromFilter[0] = 0;
+  c->zToFilter[0] = 0;
 
   {
     ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1288,52 +1108,20 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
           pVtab->zTableName, zSpec ? zSpec : "");
       rc = pVtab->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
     }
-  }else if( (idxNum & DT_IDX_FROM_TO_COMMIT)!=0 && argc>=2 ){
-    const char *zFrom = (const char*)sqlite3_value_text(argv[0]);
-    const char *zTo = (const char*)sqlite3_value_text(argv[1]);
-    const char *zBadRef = 0;
-    rc = buildSliceDiffPair(
-        c, db, pVtab->zTableName, zFrom, zTo, &zBadRef);
-    if( zBadRef ) rc = dtRefError(pVtab, zBadRef, rc);
-  }else if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
-    const char *zToCommit = (const char*)sqlite3_value_text(argv[0]);
-    if( zToCommit && sqlite3_stricmp(zToCommit, "WORKING")==0 ){
-      rc = buildWorkingDiffPair(c, db, pVtab->zTableName);
-    }else if( zToCommit && sqlite3_stricmp(zToCommit, "STAGED")==0 ){
-      const char *zBadRef = 0;
-      rc = buildSliceDiffPair(
-          c, db, pVtab->zTableName, "HEAD", "STAGED", &zBadRef);
-      if( zBadRef ) rc = dtRefError(pVtab, zBadRef, rc);
-    }else{
-      int bRefError = 0;
-      rc = buildCommitDiffPair(
-          c, db, pVtab->zTableName, zToCommit, &bRefError);
-      if( bRefError ) rc = dtRefError(pVtab, zToCommit, rc);
-    }
-  }else if( (idxNum & DT_IDX_FROM_COMMIT_EQ)!=0 && argc>=1 ){
-    /* Resolve the ref once, then keep only history pairs departing it. */
-    const char *zFrom = (const char*)sqlite3_value_text(argv[0]);
-    char zLabel[PROLLY_HASH_SIZE*2+1];
-    rc = SQLITE_OK;
-    zLabel[0] = 0;
-    if( zFrom && (sqlite3_stricmp(zFrom, "WORKING")==0
-               || sqlite3_stricmp(zFrom, "STAGED")==0) ){
-      sqlite3_snprintf(sizeof(zLabel), zLabel, "%s", zFrom);
-    }else if( zFrom ){
-      ProllyHash fromHash;
-      rc = doltliteResolveRef(db, zFrom, &fromHash);
-      if( rc==SQLITE_OK ){
-        doltliteHashToHex(&fromHash, zLabel);
-      }else{
-        rc = dtRefError(pVtab, zFrom, rc);
-      }
-    }
-    if( zLabel[0] ){
-      sqlite3_snprintf(sizeof(c->zFromFilter), c->zFromFilter, "%s", zLabel);
-      rc = startHistoryWalk(c, db, pVtab->zTableName);
-    }
   }else{
-    rc = startHistoryWalk(c, db, pVtab->zTableName);
+    int iArg = 0;
+    rc = SQLITE_OK;
+    if( (idxNum & DT_IDX_FROM_COMMIT_EQ)!=0 ){
+      rc = dtCopyCommitFilter(argv[iArg++], c->zFromFilter);
+    }
+    if( rc==SQLITE_OK && (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 ){
+      rc = dtCopyCommitFilter(argv[iArg++], c->zToFilter);
+    }
+    if( rc==SQLITE_DONE ){
+      c->pairsDone = 1;
+      return SQLITE_OK;
+    }
+    if( rc==SQLITE_OK ) rc = startHistoryWalk(c, db, pVtab->zTableName);
   }
   if( rc!=SQLITE_OK ) return rc;
   if( c->nPairs==0 && !c->walkActive ){
