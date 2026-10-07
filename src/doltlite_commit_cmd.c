@@ -1045,6 +1045,9 @@ static void doltliteCommitFunc(
           "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
         return;
       }
+    }else if( skipEmpty ){
+      sqlite3_result_int(context, 0);
+      return;
     }else{
       sqlite3_result_error(context,
         "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
