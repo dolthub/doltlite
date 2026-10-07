@@ -1,0 +1,112 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc patch_index_fingerprint {table} {
+  concat [execsql "SELECT * FROM $table ORDER BY id"] [execsql {
+    SELECT type,name,tbl_name,sql FROM sqlite_schema
+    WHERE tbl_name IN ('t','u') ORDER BY type,name;
+  }]
+}
+
+proc patch_index_replay {statements table} {
+  execsql BEGIN
+  set rc [catch {
+    foreach statement $statements {execsql $statement}
+    execsql COMMIT
+  } result]
+  if {$rc} {
+    catch {execsql ROLLBACK}
+    error $result
+  }
+  patch_index_fingerprint $table
+}
+
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  text {id TEXT PRIMARY KEY} {}
+  composite {id INT,PRIMARY KEY(id,label)} {}
+  descending {id INT,PRIMARY KEY(id DESC,label)} {WITHOUT ROWID}
+  keyless {id INT} {}
+} {
+  foreach {kind setup change index table ncol hasflag} {
+    delete {} {DELETE FROM t WHERE id=2} {n} t n 1
+    update {} {UPDATE t SET n=20,label='b' WHERE id=2} {n} t n 1
+    replace_nonunique {CREATE INDEX un ON t(n)}
+      {DROP INDEX un; DELETE FROM t WHERE id=2} {n} t n 1
+    replace_unique {CREATE UNIQUE INDEX un ON t(id)}
+      {DROP INDEX un; DELETE FROM t WHERE id=2} {n} t n 1
+    add_column {} {ALTER TABLE t ADD COLUMN tag TEXT; DELETE FROM t WHERE id=2}
+      {n} t n 1
+    rename_column {} {ALTER TABLE t RENAME COLUMN n TO m; DELETE FROM t WHERE id=2}
+      {m} t m 1
+    drop_column {} {ALTER TABLE t DROP COLUMN flag; DELETE FROM t WHERE id=2}
+      {n} t n 0
+    rename_table {} {ALTER TABLE t RENAME TO u; DELETE FROM u WHERE id=2}
+      {n} u n 1
+    partial {} {UPDATE t SET flag=0 WHERE id=2} {n} t n 1
+    expression {} {DELETE FROM t WHERE id=2} {lower(label)} t n 1
+    nocase {} {DELETE FROM t WHERE id=2} {label COLLATE NOCASE} t n 1
+  } {
+    foreach refs {working committed} {
+      reset_db
+      execsql "CREATE TABLE t(n INT,label TEXT,flag INT,$key) $suffix"
+      execsql {
+        INSERT INTO t(id,n,label,flag) VALUES(1,10,'A',1),(2,10,'a',1),(3,30,'keep',0);
+      }
+      execsql $setup
+      execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_tag('base')}
+      set base [patch_index_fingerprint t]
+      execsql $change
+      set indexsql "CREATE UNIQUE INDEX un ON ${table}($index)"
+      if {$kind eq "partial"} {
+        set indexsql "CREATE UNIQUE INDEX un ON ${table}(n) WHERE flag=1"
+      }
+      execsql $indexsql
+      set target [patch_index_fingerprint $table]
+      set from base
+      set to WORKING
+      if {$refs eq "committed"} {
+        execsql {SELECT dolt_commit('-Am','target'); SELECT dolt_tag('target')}
+        set to target
+      }
+      set forward [execsql "
+        SELECT statement FROM dolt_patch('$from','$to') ORDER BY statement_order;
+      "]
+      set reverse [execsql "
+        SELECT statement FROM dolt_patch('$to','$from') ORDER BY statement_order;
+      "]
+      if {$refs eq "working"} {
+        execsql {SELECT dolt_commit('-Am','target'); SELECT dolt_tag('target')}
+      }
+      set name patch-index-order-$layout-$kind-$refs
+      foreach direction {forward reverse} start {base target} \
+          replaytable [list $table t] expected [list $target $base] {
+        execsql "SELECT dolt_reset('--hard','$start')"
+        do_test $name-$direction-apply {
+          patch_index_replay [set $direction] $replaytable
+        } $expected
+        do_execsql_test $name-$direction-integrity {PRAGMA integrity_check} {ok}
+        do_test $name-$direction-reopen {
+          db close
+          sqlite3 db test.db
+          patch_index_fingerprint $replaytable
+        } $expected
+        if {$direction eq "forward"} {
+          set columns "id,$ncol,label"
+          set values "id+100,$ncol,label"
+          if {$hasflag} {append columns ,flag; append values ,flag}
+          do_test $name-unique {
+            lindex [catchsql "INSERT INTO ${table}($columns)
+              SELECT $values FROM $table WHERE id=1"] 0
+          } 1
+          do_test $name-unchanged {
+            patch_index_fingerprint $table
+          } $target
+        }
+      }
+    }
+  }
+}
+
+finish_test

@@ -536,18 +536,6 @@ static int patchAppendIndexCreates(
   return SQLITE_OK;
 }
 
-static int patchAppendObjectDiffs(
-  PatchCursor *pCur, const char *zTable,
-  SchemaEntry *aFrom, int nFrom,
-  SchemaEntry *aTo, int nTo
-){
-  int rc = patchAppendObjectDrops(pCur,zTable,aFrom,nFrom,aTo,nTo);
-  if( rc==SQLITE_OK ){
-    rc = patchAppendIndexCreates(pCur,zTable,aFrom,nFrom,aTo,nTo);
-  }
-  return rc;
-}
-
 /* Views are not in the table walk. Drop views first (name reuse); create last
 ** (they may reference tables/triggers). */
 static int patchAppendViewDrops(
@@ -1245,22 +1233,22 @@ static int patchGenerateTable(
       if( rc==SQLITE_OK ){
         rc = patchAppendRow(pCur,pTable->zToName,"schema",zNativeAlter);
       }
-      if( rc==SQLITE_OK ){
-        rc = patchAppendIndexCreates(pCur,pTable->zToName,
-                aFromSchema,nFromSchema,aToSchema,nToSchema);
-      }
     }else if( rc==SQLITE_OK ){
       bRebuild = 1;
       rc = patchAppendRebuild(pCur,pTable,aFromSchema,nFromSchema,
                               aToSchema,nToSchema,iTemp);
     }
   }else{
-    rc = patchAppendObjectDiffs(pCur,pTable->zToName,
+    rc = patchAppendObjectDrops(pCur,pTable->zToName,
            aFromSchema,nFromSchema,aToSchema,nToSchema);
   }
   if( rc==SQLITE_OK ){
     if( bRebuild ) rc=patchAppendAllData(pCur,db,pTable,&to);
     else rc=patchAppendData(pCur,db,pTable,&from,&to);
+  }
+  if( rc==SQLITE_OK && !bRebuild ){
+    rc = patchAppendIndexCreates(pCur,pTable->zToName,
+            aFromSchema,nFromSchema,aToSchema,nToSchema);
   }
 done:
   sqlite3_free(zNativeAlter);
