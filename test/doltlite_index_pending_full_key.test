@@ -1,0 +1,51 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-index-pending-full-key
+
+# A seek on every field of an index entry the open transaction deleted must
+# not land on the next entry as an equality match.
+foreach {kind type old new} {
+  text TEXT 'a' 'b'
+  nocase {TEXT COLLATE NOCASE} 'a' 'b'
+  rtrim {TEXT COLLATE RTRIM} 'a' 'b'
+  real REAL 1.5 2.5
+  blob BLOB x'01' x'02'
+} {
+  foreach wr {{} {WITHOUT ROWID}} {
+    set tag $kind-[expr {$wr eq {} ? {rowid} : {wr}}]
+    reset_db
+    forcedelete pending-full-key-oracle.db
+    sqlite3 oracle {file:pending-full-key-oracle.db?doltlite_engine=sqlite} -uri 1
+    foreach conn {db oracle} {
+      $conn eval "
+        CREATE TABLE t(k0 $type PRIMARY KEY, c0) $wr;
+        CREATE INDEX i1 ON t(k0);
+        INSERT INTO t VALUES($old,1);
+        BEGIN;
+        DELETE FROM t WHERE k0=$old;
+        INSERT INTO t VALUES($new,2);
+      "
+    }
+    foreach k [list $old $new] {
+      set query "SELECT quote(k0) FROM t INDEXED BY i1 WHERE k0=$k"
+      do_test $tag-[string map {' {}} $k] \
+          [list db eval $query] [oracle eval $query]
+    }
+    foreach conn {db oracle} { $conn eval COMMIT }
+    oracle close
+  }
+}
+
+reset_db
+do_execsql_test update-indexed-column {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, c, v);
+  CREATE INDEX t_c ON t(c);
+  INSERT INTO t VALUES(1,'a','one');
+  BEGIN;
+  UPDATE t SET c='b' WHERE id=1;
+  SELECT * FROM t INDEXED BY t_c WHERE c='a' AND id=1;
+  SELECT * FROM t INDEXED BY t_c WHERE c='b' AND id=1;
+  COMMIT;
+} {1 b one}
+
+finish_test
