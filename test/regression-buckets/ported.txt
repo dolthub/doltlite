@@ -104,6 +104,7 @@ doltlite_replay_dropped_column
 doltlite_reset_initial
 doltlite_busy_handler
 doltlite_push_delete
+doltlite_remote_open
 doltlite_status_conflicts
 doltlite_at_missing_table
 doltlite_clean_schemas
