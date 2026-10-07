@@ -27,7 +27,7 @@ expect_constraint_failed() {
   local name="$1" sql="$2" db="$3" out rc
   out=$(dltest_run_sql "$sql" "$db" 2>&1)
   rc=$?
-  if [ "$rc" -ne 0 ] && echo "$out" | grep -q "constraint failed"; then
+  if [ "$rc" -ne 0 ] && echo "$out" | grep -qE ": constraint failed$"; then
     dltest_pass
   else
     dltest_fail "$name" \
