@@ -1,0 +1,165 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach layout {table column multiple duplicate several} {
+  foreach predicate {{v > 5} {v > -5}} {
+    foreach direction {forward reverse} {
+      foreach txn {autocommit explicit} {
+        reset_db
+        switch $layout {
+          table {
+            set ancestor {id INTEGER PRIMARY KEY, v INT, CHECK(v > 0)}
+            set edited "id INTEGER PRIMARY KEY, v INT, CHECK($predicate)"
+          }
+          column {
+            set ancestor {id INTEGER PRIMARY KEY, v INT CHECK(v > 0)}
+            set edited "id INTEGER PRIMARY KEY, v INT CHECK($predicate)"
+          }
+          multiple {
+            set ancestor {id INTEGER PRIMARY KEY, v INT, CHECK(v > 0),
+                          CHECK(id > 0), CONSTRAINT kept CHECK(id < 100)}
+            set edited "id INTEGER PRIMARY KEY, v INT, CHECK(id > 0),
+                        CHECK($predicate), CONSTRAINT kept CHECK(id < 100)"
+          }
+          duplicate {
+            set ancestor {id INTEGER PRIMARY KEY, v INT,
+                          CONSTRAINT kept CHECK(v > 0), CHECK(v > 0)}
+            set edited "id INTEGER PRIMARY KEY, v INT,
+                        CONSTRAINT kept CHECK(v > 0), CHECK($predicate)"
+          }
+          several {
+            set ancestor {id INTEGER PRIMARY KEY, v INT,
+                          CHECK(v > 0), CHECK(id > 0),
+                          CONSTRAINT kept CHECK(id < 100)}
+            set edited "id INTEGER PRIMARY KEY, v INT,
+                        CHECK($predicate), CHECK(id >= 0),
+                        CONSTRAINT kept CHECK(id < 100)"
+          }
+        }
+        execsql "CREATE TABLE t($ancestor)"
+        execsql {
+          INSERT INTO t VALUES(1,10);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+          SELECT dolt_checkout('side');
+          DROP TABLE t;
+        }
+        execsql "CREATE TABLE t($edited)"
+        execsql {
+          INSERT INTO t VALUES(1,11);
+          SELECT dolt_commit('-Am','edit check');
+          SELECT dolt_checkout('main');
+          ALTER TABLE t ADD COLUMN extra INT DEFAULT 3;
+          SELECT dolt_commit('-Am','add column');
+        }
+        if {$direction eq "forward"} {
+          set target side
+          set connection test.db
+        } else {
+          execsql {SELECT dolt_checkout('side')}
+          set target main
+          set connection test.db/side
+        }
+        if {$predicate eq "v > 5"} {
+          set change tighten
+        } else {
+          set change loosen
+        }
+        set name unnamed-check-$layout-$change-$direction-$txn
+        if {$txn eq "explicit"} {execsql {BEGIN}}
+        do_test $name-merge {
+          set result [catchsql "SELECT dolt_merge('$target')"]
+          if {[lindex $result 0] == 0} {set result {0 merged}}
+          set result
+        } {0 merged}
+        do_execsql_test $name-conflicts {
+          SELECT count(*) FROM dolt_schema_conflicts;
+          SELECT count(*) FROM dolt_conflicts;
+        } {0 0}
+        do_execsql_test $name-rows {
+          SELECT id,v,extra FROM t;
+        } {1 11 3}
+        if {$layout eq "duplicate"} {
+          do_execsql_test $name-named {
+            SELECT count(*) FROM sqlite_master
+             WHERE name='t' AND sql LIKE '%CONSTRAINT kept CHECK(v > 0)%';
+          } {1}
+        } else {
+          do_execsql_test $name-old {
+            SELECT count(*) FROM sqlite_master
+             WHERE name='t' AND sql LIKE '%v > 0%';
+          } {0}
+        }
+        do_test $name-edited {
+          execsql "SELECT count(*) FROM sqlite_master
+                    WHERE name='t' AND sql LIKE '%$predicate%'"
+        } {1}
+        if {$layout eq "multiple"} {
+          do_execsql_test $name-retained {
+            SELECT count(*) FROM sqlite_master
+             WHERE name='t' AND sql LIKE '%CHECK(id > 0)%'
+               AND sql LIKE '%kept CHECK(id < 100)%';
+          } {1}
+        }
+        if {$layout eq "several"} {
+          do_execsql_test $name-retained {
+            SELECT count(*) FROM sqlite_master
+             WHERE name='t' AND sql LIKE '%CHECK(id >= 0)%'
+               AND sql LIKE '%kept CHECK(id < 100)%';
+          } {1}
+        }
+        if {$predicate eq "v > 5"} {
+          set valid 6
+          set invalid 5
+        } else {
+          set valid -1
+          set invalid -6
+          if {$layout eq "duplicate"} {
+            set valid 1
+            set invalid -1
+          }
+        }
+        do_test $name-enforcement {
+          set result [catchsql "INSERT INTO t(id,v) VALUES(2,$invalid)"]
+          list [lindex $result 0] \
+               [string match {*CHECK constraint failed*} [lindex $result 1]]
+        } {1 1}
+        do_execsql_test $name-valid "INSERT INTO t(id,v) VALUES(2,$valid)" {}
+        execsql {SELECT dolt_commit('-Am','merged rows')}
+        db close
+        sqlite3 db $connection
+        if {$direction eq "forward"} {
+          set branch main
+        } else {
+          set branch side
+        }
+        do_execsql_test $name-reopen-branch {SELECT active_branch()} $branch
+        do_test $name-reopen-schema {
+          execsql "SELECT count(*) FROM sqlite_master
+                    WHERE name='t' AND sql LIKE '%$predicate%'"
+        } {1}
+        do_test $name-reopen-enforcement {
+          set result [catchsql "INSERT INTO t(id,v) VALUES(3,$invalid)"]
+          list [lindex $result 0] \
+               [string match {*CHECK constraint failed*} [lindex $result 1]]
+        } {1 1}
+        do_execsql_test $name-reopen "SELECT v,extra FROM t WHERE id=2" [list $valid 3]
+        execsql "SELECT dolt_checkout('$target')"
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+        } else {
+          execsql {SELECT dolt_checkout('side')}
+        }
+        do_execsql_test $name-checkout "SELECT v,extra FROM t WHERE id=2" [list $valid 3]
+        do_test $name-checkout-enforcement {
+          set result [catchsql "INSERT INTO t(id,v) VALUES(3,$invalid)"]
+          list [lindex $result 0] \
+               [string match {*CHECK constraint failed*} [lindex $result 1]]
+        } {1 1}
+        do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+      }
+    }
+  }
+}
+
+finish_test
