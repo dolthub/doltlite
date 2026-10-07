@@ -317,6 +317,8 @@ struct Btree {
   u8 bDeferredOpen;
   u8 bDeferredRegister;
   u8 bBeginTransBranchMissing;
+  u8 bPreserveDeferFks;
+  ProllyHash preserveDeferFkCatalog;
   Pgno mxPageCount;
 
   int nSavepoint;

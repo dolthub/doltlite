@@ -5517,6 +5517,8 @@ void sqlite3SystemError(sqlite3*,int);
 #ifdef DOLTLITE_PROLLY
 char *doltliteTakeChunkSourceError(sqlite3*,int*);
 int doltliteChunkSourceActive(sqlite3*);
+int doltliteOwnSchemaReload(sqlite3*);
+void doltliteFinishOwnSchemaReload(sqlite3*);
 int sqlite3BtreeIsDeferred(Btree*);
 const char *doltliteBtreeMissingWriteBranch(Btree*);
 int doltliteBtreeRunDeferredWork(sqlite3*);

@@ -950,6 +950,98 @@ SELECT pk,pv FROM child ORDER BY pk;
 SELECT pk FROM parent ORDER BY pk;
 "
 
+run_parity_status() {
+  local name="$1"
+  local sql="$2"
+  local out_dl out_sq rc_dl=0 rc_sq=0
+
+  out_dl=$(echo "$sql" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" :memory: 2>&1) || rc_dl=$?
+  out_sq=$(echo "$sql" | perl -e 'alarm(10);exec @ARGV' "$SQLITE3" :memory: 2>&1) || rc_sq=$?
+
+  if [ "$rc_dl" -eq "$rc_sq" ] && [ "$out_dl" = "$out_sq" ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: $name\n  doltlite rc: $rc_dl\n  --- doltlite ---\n$out_dl\n  sqlite3 rc: $rc_sq\n  --- sqlite3 ---\n$out_sq\n"
+  fi
+}
+
+run_parity "defer_fk_after_own_ddl" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(pid INT REFERENCES p(id) ON DELETE RESTRICT);
+INSERT INTO p VALUES(5);
+INSERT INTO c VALUES(5);
+CREATE TABLE z(x);
+PRAGMA defer_foreign_keys=1;
+REPLACE INTO p VALUES(5);
+SELECT id FROM p;
+"
+
+run_parity "defer_fk_read_between" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(pid INT REFERENCES p(id) ON DELETE RESTRICT);
+INSERT INTO p VALUES(5);
+INSERT INTO c VALUES(5);
+CREATE TABLE z(x);
+PRAGMA defer_foreign_keys=1;
+SELECT 1;
+REPLACE INTO p VALUES(5);
+SELECT id FROM p;
+"
+
+run_parity "defer_fk_without_extra_ddl" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(pid INT REFERENCES p(id) ON DELETE RESTRICT);
+INSERT INTO p VALUES(5);
+INSERT INTO c VALUES(5);
+PRAGMA defer_foreign_keys=1;
+REPLACE INTO p VALUES(5);
+SELECT id FROM p;
+"
+
+run_parity "defer_fk_inside_txn_after_ddl" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(pid INT REFERENCES p(id) ON DELETE RESTRICT);
+INSERT INTO p VALUES(5);
+INSERT INTO c VALUES(5);
+CREATE TABLE z(x);
+BEGIN;
+PRAGMA defer_foreign_keys=1;
+REPLACE INTO p VALUES(5);
+DELETE FROM p;
+SELECT count(*) FROM p;
+ROLLBACK;
+SELECT id FROM p;
+"
+
+run_parity_status "defer_fk_commit_checks_deferred" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(pid INT REFERENCES p(id));
+CREATE TABLE z(x);
+BEGIN;
+PRAGMA defer_foreign_keys=1;
+INSERT INTO c VALUES(9);
+SELECT count(*) FROM c;
+COMMIT;
+"
+
+run_parity_status "defer_fk_cleared_by_statement" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+CREATE TABLE c(pid INT REFERENCES p(id) ON DELETE RESTRICT);
+INSERT INTO p VALUES(5);
+INSERT INTO c VALUES(5);
+CREATE TABLE z(x);
+PRAGMA defer_foreign_keys=1;
+REPLACE INTO p VALUES(5);
+DELETE FROM p;
+"
+
 run_parity "fk_action_set_default" "
 PRAGMA foreign_keys=ON;
 CREATE TABLE parent(pk INTEGER PRIMARY KEY);

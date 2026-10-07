@@ -15430,6 +15430,78 @@ static void run_nocase_nul_record_parse(void){
   check("nocase_nul_truncated_field_corrupt", rc==SQLITE_CORRUPT);
 }
 
+static int stepCode(sqlite3 *db, const char *zSql){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  int stepRc;
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  stepRc = sqlite3_step(pStmt);
+  sqlite3_finalize(pStmt);
+  return stepRc;
+}
+
+static void run_defer_fk_after_own_ddl(void){
+  sqlite3 *db = 0;
+  sqlite3 *peer = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Defer Foreign Keys After Own DDL ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_defer_fk_after_own_ddl");
+  removeDbFiles(dbpath);
+  check("defer_fk_open", sqlite3_open(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("defer_fk_setup", execSql(db,
+      "PRAGMA foreign_keys=ON;"
+      "CREATE TABLE p(id INTEGER PRIMARY KEY);"
+      "CREATE TABLE c(pid INT REFERENCES p(id) ON DELETE RESTRICT);"
+      "INSERT INTO p VALUES(5);"
+      "INSERT INTO c VALUES(5);"
+      "CREATE TABLE z(x);")==SQLITE_OK);
+  check("defer_fk_pragma", execSql(db, "PRAGMA defer_foreign_keys=1;")==SQLITE_OK);
+  check("defer_fk_survives_read",
+      queryInt64(db, "PRAGMA defer_foreign_keys;")==1);
+  check("defer_fk_replace", execSql(db, "REPLACE INTO p VALUES(5);")==SQLITE_OK);
+  check("defer_fk_parent_kept", queryInt64(db, "SELECT id FROM p;")==5);
+  check("defer_fk_cleared_after_write",
+      queryInt64(db, "PRAGMA defer_foreign_keys;")==0);
+  check("defer_fk_later_delete_is_immediate",
+      execSqlSilent(db, "DELETE FROM p;")==SQLITE_CONSTRAINT);
+  check("defer_fk_returning_constraint",
+      stepCode(db, "INSERT INTO c VALUES(9) RETURNING pid;")==SQLITE_CONSTRAINT);
+
+  check("defer_fk_begin", execSql(db, "BEGIN;")==SQLITE_OK);
+  check("defer_fk_pragma_in_txn",
+      execSql(db, "PRAGMA defer_foreign_keys=1;")==SQLITE_OK);
+  check("defer_fk_replace_in_txn",
+      execSql(db, "REPLACE INTO p VALUES(5);")==SQLITE_OK);
+  check("defer_fk_delete_deferred", execSql(db, "DELETE FROM p;")==SQLITE_OK);
+  check("defer_fk_commit_rejects", execSqlSilent(db, "COMMIT;")==SQLITE_CONSTRAINT);
+  execSqlSilent(db, "ROLLBACK;");
+  check("defer_fk_parent_restored", queryInt64(db, "SELECT count(*) FROM p;")==1);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("defer_fk_peer_reopen", sqlite3_open(dbpath, &db)==SQLITE_OK);
+  check("defer_fk_peer_open", sqlite3_open(dbpath, &peer)==SQLITE_OK);
+  if( db && peer ){
+    check("defer_fk_peer_load",
+        execSql(db, "PRAGMA foreign_keys=ON; SELECT id FROM p;")==SQLITE_OK);
+    check("defer_fk_peer_pragma",
+        execSql(db, "PRAGMA defer_foreign_keys=1;")==SQLITE_OK);
+    check("defer_fk_peer_ddl",
+        execSql(peer, "CREATE TABLE peer_extra(y);")==SQLITE_OK);
+    rc = execSqlSilent(db, "REPLACE INTO p VALUES(5);");
+    check("defer_fk_peer_ddl_drops_pragma", rc==SQLITE_CONSTRAINT);
+  }
+  sqlite3_close(peer);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -15655,7 +15727,8 @@ static const RegressionCase aCases[] = {
   { "reset_database_current_branch", "Reset Database Current Branch Test", run_reset_database_current_branch },
   { "clustered_pk_update_hook", "Clustered PK Update Hook Test", run_clustered_pk_update_hook },
   { "clustered_pk_rowid_metadata", "Clustered PK Rowid Metadata Test", run_clustered_pk_rowid_metadata },
-  { "nocase_nul_record_parse", "NOCASE NUL Record Parse Test", run_nocase_nul_record_parse }
+  { "nocase_nul_record_parse", "NOCASE NUL Record Parse Test", run_nocase_nul_record_parse },
+  { "defer_fk_after_own_ddl", "Defer Foreign Keys After Own DDL", run_defer_fk_after_own_ddl }
 };
 
 static int run_case_by_name(const char *zName){
