@@ -79,7 +79,9 @@ foreach {layout key suffix} {
       do_execsql_test $name-$state-join {
         SELECT a.id,b.id FROM t a JOIN t b ON a.v=b.v ORDER BY a.id,b.id;
         SELECT id FROM t WHERE v=30 ORDER BY id DESC LIMIT 2;
-      } {1 1 1 2 2 1 2 2 2 1}
+        SELECT a.id FROM t a LEFT JOIN t b ON a.v=b.v AND a.z=b.z
+          ORDER BY a.id;
+      } {1 1 1 2 2 1 2 2 2 1 1 1 2 2}
       do_catchsql_test $name-$state-enforce {
         INSERT INTO t VALUES(4,30,1);
       } [list 1 [expr {$kind eq "expression" ? "UNIQUE constraint failed: index 'u'" : ($kind eq "compound" ? "UNIQUE constraint failed: t.v, t.z" : "UNIQUE constraint failed: t.v")}]]
