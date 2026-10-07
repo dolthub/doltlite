@@ -303,6 +303,10 @@ int trySchemaColumnMerge(
 );
 
 int schemaDefinitionsEquivalent(const char *zLeft, const char *zRight);
+int schemaColumnWithoutChecks(const char *zDef, char **pzOut);
+int schemaColumnNonCheckTextMatches(
+  const char *zA, const char *zB, int *pbMatch
+);
 int schemaNonCheckTextMatches(const char *zA, const char *zB, int *pbMatch);
 int schemaApplyDisjointCheckUnions(
   SchemaEntry *aAnc, int nAnc,
