@@ -393,7 +393,7 @@ ENDSQL
 "$DB" "$TMPDIR/anc_remote_client.db" <<ENDSQL
 SELECT dolt_clone('$R/anc_remote.db');
 SELECT dolt_checkout('main');
-SELECT dolt_merge('side');
+SELECT dolt_merge('origin/side');
 SELECT dolt_branch('--force','side','main');
 SELECT dolt_push('origin','side');
 .quit
@@ -603,8 +603,9 @@ echo "=== 20. Clone preserves multiple branches ==="
 result=$("$DB" "$TMPDIR/multi_clone.db" "SELECT dolt_clone('$R/remote.db');")
 check "multi-branch clone returns 0" "0" "$result"
 
-result=$("$DB" "$TMPDIR/multi_clone.db" "SELECT count(*) FROM dolt_branches;")
-check "clone has 2 branches" "2" "$result"
+result=$("$DB" "$TMPDIR/multi_clone.db" "SELECT count(*) FROM dolt_branches; SELECT count(*) FROM dolt_remote_branches;")
+check "clone has the checked-out branch and tracks 2" "1
+2" "$result"
 
 echo "=== 21. Deep history push/clone (20 commits) ==="
 "$DB" "$TMPDIR/deep_src.db" <<ENDSQL
@@ -659,8 +660,9 @@ ENDSQL
 result=$("$DB" "$TMPDIR/div_clone.db" "SELECT dolt_clone('$R/div_remote.db');")
 check "diverged clone returns 0" "0" "$result"
 
-result=$("$DB" "$TMPDIR/div_clone.db" "SELECT count(*) FROM dolt_branches;")
-check "div clone has 3 branches" "3" "$result"
+result=$("$DB" "$TMPDIR/div_clone.db" "SELECT count(*) FROM dolt_branches; SELECT count(*) FROM dolt_remote_branches;")
+check "div clone has the checked-out branch and tracks 3" "1
+3" "$result"
 
 result=$("$DB" "$TMPDIR/div_clone.db" "SELECT dolt_checkout('branchA'); SELECT count(*) FROM items;")
 check "div clone branchA has 11 items" "0
@@ -859,9 +861,11 @@ SELECT dolt_checkout('main');
 ENDSQL
 
 result=$("$DB" "$TMPDIR/direct_ws_clone.db" \
-  "SELECT dolt_clone('$R/direct_ws_src.db'); SELECT active_branch(); SELECT name,dirty FROM dolt_branches ORDER BY name;" 2>&1)
-check "direct clone lists clean non-current branch" "0
+  "SELECT dolt_clone('$R/direct_ws_src.db'); SELECT active_branch(); SELECT name,dirty FROM dolt_branches ORDER BY name; SELECT dolt_checkout('feature'); SELECT name,dirty FROM dolt_branches ORDER BY name;" 2>&1)
+check "direct clone checks out a clean non-current branch" "0
 main
+main|0
+0
 feature|0
 main|0" "$result"
 
@@ -888,9 +892,10 @@ ENDSQL
 result=$("$DB" "$TMPDIR/ws_clone.db" "SELECT dolt_clone('$R/ws_remote.db');" 2>&1)
 check_match "multi-branch clone succeeds" "^0$" "$result"
 
-result=$("$DB" "$TMPDIR/ws_clone.db" "SELECT name, dirty FROM dolt_branches ORDER BY name;" 2>&1)
-check "cloned branches are listable and clean" "feature|0
-main|0" "$result"
+result=$("$DB" "$TMPDIR/ws_clone.db" "SELECT name, dirty FROM dolt_branches ORDER BY name; SELECT name FROM dolt_remote_branches ORDER BY name;" 2>&1)
+check "clone lists the clean checked-out branch and tracks the rest" "main|0
+remotes/origin/feature
+remotes/origin/main" "$result"
 
 result=$("$DB" "$TMPDIR/ws_clone.db" "SELECT dolt_checkout('feature'); SELECT count(*) FROM t; SELECT count(*) FROM dolt_status;" 2>&1)
 check "cloned branch checks out clean at its head" "0
@@ -1070,7 +1075,6 @@ check_match "clone revision requires lazy mode" "revision requires --lazy" "$res
 lazy_parity_sql="
 SELECT count(*) || '|' || sum(id) || '|' || sum(length(payload)) FROM lazy_rows;
 SELECT count(*) || '|' || max(message='lazy update') FROM dolt_log;
-SELECT group_concat(name || ':' || dirty, ',') FROM (SELECT name, dirty FROM dolt_branches ORDER BY name);
 SELECT rows_added || '|' || rows_deleted || '|' || rows_modified || '|' || old_row_count || '|' || new_row_count FROM dolt_diff_stat('HEAD~1','HEAD','lazy_rows');
 SELECT count(*) || '|' || sum(id) FROM dolt_at_lazy_rows('HEAD~1');
 SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM lazy_rows WHERE id IN (1,400,801) ORDER BY id);
@@ -1148,7 +1152,10 @@ result=$("$DB" "$lazy_gc_uri" \
 check "lazy data remains intact after gc" "801|321201" "$result"
 
 lazy_actual=$("$DB" "$lazy_clone_uri" "$lazy_parity_sql")
-check "lazy clone matches rows, log, branches, diff stat, historical rows, and full scan" "$lazy_expected" "$lazy_actual"
+check "lazy clone matches rows, log, diff stat, historical rows, and full scan" "$lazy_expected" "$lazy_actual"
+lazy_expected=$("$DB" "$TMPDIR/lazy_origin.db" "SELECT group_concat('remotes/origin/' || name, ',') FROM (SELECT name FROM dolt_branches ORDER BY name);")
+lazy_actual=$("$DB" "$lazy_clone_uri" "SELECT group_concat(name, ',') FROM (SELECT name FROM dolt_remote_branches ORDER BY name);")
+check "lazy clone tracks every origin branch" "$lazy_expected" "$lazy_actual"
 
 lazy_size_after_rows=$(file_size "$TMPDIR/lazy_clone.db")
 if [ "$lazy_size_after_rows" -gt "$lazy_size_before" ]; then

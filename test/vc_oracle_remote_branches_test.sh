@@ -124,6 +124,21 @@ remote_flow "multi_branch_clone_tracking_names" "$MULTI_SEED" "" "" \
   "SELECT 'R|'||name FROM dolt_remote_branches ORDER BY name;" \
   "SELECT CONCAT('R|',name) FROM dolt_remote_branches ORDER BY name;"
 
+echo "--- clone makes only the checked-out branch local ---"
+remote_flow "multi_branch_clone_local_branches" "$MULTI_SEED" "" "" \
+  "SELECT 'R|'||name FROM dolt_branches ORDER BY name;" \
+  "SELECT CONCAT('R|',name) FROM dolt_branches ORDER BY name;"
+DEV_ADVANCE="
+SELECT dolt_checkout('dev');
+INSERT INTO t VALUES (3,'three');
+SELECT dolt_commit('-A','-m','c3');
+SELECT dolt_push('origin','dev');
+"
+remote_flow "checkout_after_fetch_sees_fetched_commits" "$MULTI_SEED" "$DEV_ADVANCE" \
+  "SELECT dolt_fetch('origin'); SELECT dolt_checkout('dev');" \
+  "SELECT 'R|'||count(*) FROM dolt_at_t('dev');" \
+  "SELECT CONCAT('R|',count(*)) FROM t AS OF 'dev';"
+
 echo "--- tracking ref name resolves as a ref ---"
 remote_flow "tracking_name_resolves" "$SEED" "$ADVANCE" "$FETCH" \
   "SELECT 'R|'||count(*) FROM dolt_at_t('remotes/origin/feature');" \
