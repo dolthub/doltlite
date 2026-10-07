@@ -562,6 +562,7 @@ static void doltliteResetFunc(
   ProllyHash preResetHeadCatHash;
   ProllyHash preResetStagedCatHash;
   ProllyHash sessionHeadBeforeLock;
+  ProllyHash wsBasis;
   int havePreResetHead = 0;
   int isHard = 0;
   int isSoft = 0;
@@ -730,6 +731,7 @@ static void doltliteResetFunc(
   }
 
   doltliteGetSessionHead(db, &sessionHeadBeforeLock);
+  doltliteGetSessionWorkingSetBasis(db, &wsBasis);
   if( zRef ){
     DoltliteCommit commit;
 
@@ -778,6 +780,13 @@ static void doltliteResetFunc(
   /* A peer commit since the target was read would otherwise be reset away
   ** under its own tip. */
   rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
+  if( rc==SQLITE_OK ){
+    graphLocked = 1;
+    /* The lock makes the persist below skip its refresh, so a peer's
+    ** working-set write since entry would be overwritten. --hard discards
+    ** it by design. */
+    if( !isHard ) rc = doltliteConfirmWorkingSet(db, cs, &wsBasis);
+  }
   if( rc==SQLITE_BUSY ){
     if( zRef ){
       sqlite3_result_error(context,
@@ -793,7 +802,6 @@ static void doltliteResetFunc(
     sqlite3_result_error_code(context, rc);
     goto reset_cleanup;
   }
-  graphLocked = 1;
 
   if( zRef ){
     /* Move the ref before the session head. The other order leaves the
