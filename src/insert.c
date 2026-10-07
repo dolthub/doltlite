@@ -1174,7 +1174,14 @@ void sqlite3Insert(
         }
 #endif
       }else{
+#ifdef DOLTLITE_PROLLY
+        if( (sqlite3IsRowid(pColumn->a[i].zName)
+             || (db->pInternalRowidTable==pTab && db->zInternalRowid
+                 && sqlite3_stricmp(db->zInternalRowid,
+                                   pColumn->a[i].zName)==0)) && !withoutRowid ){
+#else
         if( sqlite3IsRowid(pColumn->a[i].zName) && !withoutRowid ){
+#endif
           ipkColumn = i;
           bIdListInOrder = 0;
         }else{

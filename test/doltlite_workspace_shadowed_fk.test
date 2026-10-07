@@ -1,0 +1,183 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach layout {plain collision} {
+  foreach role {parent child} {
+    foreach mutation {update delete add} {
+      foreach transaction {autocommit explicit savepoint} {
+        reset_db
+        set alias dolt_workspace_rowid_0
+        set columns {rowid INT, oid INT, _rowid_ INT, v TEXT UNIQUE}
+        if {$layout eq "collision"} {
+          set alias dolt_workspace_rowid_2
+          set columns {Rowid TEXT, OID TEXT, _ROWID_ TEXT, v TEXT UNIQUE,
+                       dolt_workspace_rowid_0 INT DEFAULT 7,
+                       dolt_workspace_rowid_1 INT DEFAULT 8}
+        }
+        execsql {PRAGMA foreign_keys=ON}
+        if {$role eq "child"} {
+          execsql {CREATE TABLE p(v TEXT PRIMARY KEY); INSERT INTO p VALUES('a'),('b'),('c')}
+          set columns [string map {{v TEXT UNIQUE} {v TEXT UNIQUE REFERENCES p(v)}} $columns]
+        }
+        execsql "CREATE TABLE t($columns)"
+        if {$role eq "parent"} {
+          execsql {CREATE TABLE c(id INTEGER PRIMARY KEY,v TEXT REFERENCES t(v))}
+        }
+        execsql {
+          CREATE TABLE marker(id INTEGER PRIMARY KEY);
+          INSERT INTO t(rowid,oid,_rowid_,v) VALUES(1,1,1,'a'),(2,2,2,'b');
+          SELECT dolt_commit('-Am','base');
+        }
+        set base [execsql {SELECT * FROM t ORDER BY rowid}]
+        switch $mutation {
+          update {execsql {UPDATE t SET v='c' WHERE rowid=1}}
+          delete {execsql {DELETE FROM t WHERE rowid=1}}
+          add {execsql {INSERT INTO t(rowid,oid,_rowid_,v) VALUES(3,3,3,'c')}}
+        }
+        set reject 0
+        if {$role eq "parent" && $mutation ne "delete"} {
+          execsql {INSERT INTO c VALUES(1,'c')}
+          set reject 1
+        }
+        if {$role eq "child" && $mutation ne "add"} {
+          execsql {DELETE FROM p WHERE v='a'}
+          set reject 1
+        }
+        if {$transaction eq "explicit"} {execsql {BEGIN}}
+        if {$transaction eq "savepoint"} {execsql {SAVEPOINT outer_savepoint}}
+        execsql {INSERT INTO marker VALUES(42)}
+        set total [db onecolumn {SELECT total_changes()}]
+        set name workspace-shadowed-fk-$layout-$role-$mutation-$transaction
+        if {$reject} {
+          set before [execsql {SELECT * FROM t ORDER BY rowid}]
+          do_catchsql_test $name-reject {
+            DELETE FROM dolt_workspace_t;
+          } {1 {FOREIGN KEY constraint failed}}
+          do_execsql_test $name-unchanged {
+            SELECT * FROM t ORDER BY rowid;
+            SELECT total_changes()-$total,last_insert_rowid();
+            PRAGMA foreign_key_check;
+            PRAGMA integrity_check;
+          } [concat $before {0 42 ok}]
+          do_catchsql_test $name-reject-alias-scoped "SELECT $alias FROM t" \
+            [list 1 "no such column: $alias"]
+          if {$role eq "parent"} {execsql {DELETE FROM c}} else {
+            execsql {DELETE FROM dolt_workspace_p}
+          }
+        }
+        set total [db onecolumn {SELECT total_changes()}]
+        do_execsql_test $name-restore {
+          DELETE FROM dolt_workspace_t;
+          SELECT changes(),total_changes()-$total,last_insert_rowid();
+          SELECT * FROM t ORDER BY rowid;
+          SELECT count(*) FROM dolt_workspace_t;
+          SELECT id FROM marker;
+          PRAGMA foreign_key_check;
+          PRAGMA integrity_check;
+        } [concat {1 1 42} $base {0 42 ok}]
+        do_catchsql_test $name-alias-scoped "SELECT $alias FROM t" \
+          [list 1 "no such column: $alias"]
+        if {$transaction eq "explicit"} {execsql {COMMIT}}
+        if {$transaction eq "savepoint"} {execsql {RELEASE outer_savepoint}}
+        do_execsql_test $name-commit {
+          SELECT length(dolt_commit('-Am','restored'));
+        } {40}
+        db close
+        sqlite3 db test.db
+        do_execsql_test $name-reopen {
+          SELECT * FROM t ORDER BY rowid;
+          SELECT count(*) FROM dolt_workspace_t;
+          PRAGMA integrity_check;
+        } [concat $base {0 ok}]
+      }
+    }
+  }
+}
+
+foreach action {update delete null} {
+  reset_db
+  execsql {
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE t(rowid INT,oid INT,_rowid_ INT,v TEXT UNIQUE);
+    INSERT INTO t VALUES(1,1,1,'a'),(2,2,2,'b');
+  }
+  set clause {ON DELETE CASCADE ON UPDATE CASCADE}
+  if {$action eq "null"} {set clause {ON DELETE SET NULL}}
+  execsql "CREATE TABLE c(id INTEGER PRIMARY KEY,v TEXT REFERENCES t(v) $clause)"
+  execsql {INSERT INTO c VALUES(1,'a'); SELECT dolt_commit('-Am','base')}
+  if {$action eq "update"} {
+    execsql {UPDATE t SET v='c' WHERE rowid=1}
+    set expected {1 a}
+  } else {
+    execsql {INSERT INTO t VALUES(3,3,3,'c'); INSERT INTO c VALUES(2,'c')}
+    set expected {1 a}
+    if {$action eq "null"} {set expected {1 a 2 {}}}
+  }
+  do_execsql_test workspace-shadowed-fk-$action-cascade {
+    DELETE FROM dolt_workspace_t;
+    SELECT rowid,v FROM t ORDER BY rowid;
+    SELECT id,v FROM c ORDER BY id;
+    SELECT count(*) FROM dolt_workspace_t;
+    PRAGMA foreign_key_check;
+    PRAGMA integrity_check;
+  } [concat {1 a 2 b} $expected {0 ok}]
+}
+
+reset_db
+do_execsql_test workspace-shadowed-fk-duplicate-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE p(v TEXT PRIMARY KEY);
+  CREATE TABLE t(rowid INT,oid INT,_rowid_ INT,v TEXT REFERENCES p(v));
+  INSERT INTO p VALUES('a');
+  INSERT INTO t VALUES(1,1,1,'a'),(1,1,1,'a');
+  SELECT length(dolt_commit('-Am','base'));
+  DELETE FROM t;
+} {40}
+do_execsql_test workspace-shadowed-fk-duplicate-one {
+  DELETE FROM dolt_workspace_t WHERE id=(SELECT min(id) FROM dolt_workspace_t);
+  SELECT count(*) FROM t;
+  SELECT count(*) FROM dolt_workspace_t;
+} {1 1}
+do_execsql_test workspace-shadowed-fk-duplicate-rest {
+  DELETE FROM dolt_workspace_t;
+  SELECT count(*) FROM t;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA foreign_key_check;
+  PRAGMA integrity_check;
+} {2 0 ok}
+
+reset_db
+execsql {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE t(rowid INT,oid INT,_rowid_ INT,v TEXT UNIQUE);
+  CREATE TABLE c(id INTEGER PRIMARY KEY,v TEXT REFERENCES t(v));
+  CREATE TABLE marker(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1,1,1,'a'),(2,2,2,'b');
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET v='c' WHERE rowid=1;
+  UPDATE t SET v='d' WHERE rowid=2;
+  INSERT INTO c VALUES(1,'d');
+  BEGIN;
+  INSERT INTO marker VALUES(42);
+}
+do_catchsql_test workspace-shadowed-fk-atomic-reject {
+  DELETE FROM dolt_workspace_t;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test workspace-shadowed-fk-atomic-state {
+  SELECT rowid,v FROM t ORDER BY rowid;
+  SELECT count(*) FROM dolt_workspace_t;
+  SELECT id FROM marker;
+  PRAGMA foreign_key_check;
+  PRAGMA integrity_check;
+} {1 c 2 d 2 42 ok}
+do_execsql_test workspace-shadowed-fk-atomic-retry {
+  DELETE FROM c;
+  DELETE FROM dolt_workspace_t;
+  COMMIT;
+  SELECT rowid,v FROM t ORDER BY rowid;
+  SELECT count(*) FROM dolt_workspace_t;
+  SELECT id FROM marker;
+  PRAGMA integrity_check;
+} {1 a 2 b 0 42 ok}
+
+finish_test

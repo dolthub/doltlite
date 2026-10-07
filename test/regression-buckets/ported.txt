@@ -123,5 +123,6 @@ doltlite_workspace_update_columns
 doltlite_workspace_index_mapping
 doltlite_workspace_discard_unique
 doltlite_workspace_fk
+doltlite_workspace_shadowed_fk
 doltlite_workspace_affinity
 doltlite_conflicts_unique
