@@ -684,6 +684,8 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   int i;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
+  /* A NULL branch has always meant fetch everything. */
+  while( argc>1 && sqlite3_value_type(argv[argc-1])==SQLITE_NULL ) argc--;
   rc = doltliteCmdParseArgs(ctx, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ){
