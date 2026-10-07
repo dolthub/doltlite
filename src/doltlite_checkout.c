@@ -825,14 +825,16 @@ static int checkoutAdoptVtabShadows(
   return SQLITE_OK;
 }
 
-static int doltliteCheckoutTables(
+int doltliteCheckoutTables(
   sqlite3 *db,
   sqlite3_context *context,
   const char *zSourceRef,
   sqlite3_value **argv,
   int iFirstName,
   int nNames,
-  const char **pzMissing
+  const char **pzMissing,
+  int bSourceHead,
+  int bDropIfAbsent
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash workingHash, headCatHash, stagedHash, cleanWs;
@@ -848,6 +850,12 @@ static int doltliteCheckoutTables(
 
   if( !cs ) return SQLITE_ERROR;
   if( nNames<=0 ) return SQLITE_NOTFOUND;
+  if( nNames==1 ){
+    const char *zOnly = (const char*)sqlite3_value_text(argv[iFirstName]);
+    if( zOnly && strcmp(zOnly, ".")==0 ){
+      return doltliteCheckoutDot(db, context, zSourceRef, pzMissing);
+    }
+  }
   doltliteGetSessionWorkingSetBasis(db, &cleanWs);
 
   if( zSourceRef ){
@@ -856,6 +864,11 @@ static int doltliteCheckoutTables(
     if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
     rc = doltliteCommitCatalogHash(db, &sourceCommit, &sourceCatHash);
     if( rc!=SQLITE_OK ) return rc;
+  }else if( bSourceHead ){
+    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+    if( rc!=SQLITE_OK ) return rc;
+    if( prollyHashIsEmpty(&headCatHash) ) return SQLITE_NOTFOUND;
+    memcpy(&sourceCatHash, &headCatHash, sizeof(ProllyHash));
   }else{
     doltliteGetSessionStaged(db, &stagedHash);
     if( !prollyHashIsEmpty(&stagedHash) ){
@@ -900,7 +913,8 @@ static int doltliteCheckoutTables(
           doltliteFreeCatalog(aSource, nSource);
           return rc;
         }
-        if( !hasVtab ){
+        /* A ref checkout of "." drops a table the commit does not have. */
+        if( !hasVtab && !bDropIfAbsent ){
           if( pzMissing ) *pzMissing = zName;
           doltliteFreeCatalog(aSource, nSource);
           return SQLITE_NOTFOUND;
@@ -933,7 +947,8 @@ static int doltliteCheckoutTables(
     }
     /* Reject an unknown name before the schema pass starts dropping and
     ** recreating the objects of the names ahead of it. */
-    if( rc==SQLITE_OK && !aSchema[i].hasCurrent && !aSchema[i].hasSource ){
+    if( rc==SQLITE_OK && !bDropIfAbsent
+     && !aSchema[i].hasCurrent && !aSchema[i].hasSource ){
       if( pzMissing ) *pzMissing = zName;
       rc = SQLITE_NOTFOUND;
     }
@@ -1032,7 +1047,7 @@ static int doltliteCheckoutTables(
     }
 
     if( srcIdx<0 && workIdx<0 ){
-      if( aSchema[i].rebuilt && !aSchema[i].hasSource ){
+      if( (aSchema[i].rebuilt || bDropIfAbsent) && !aSchema[i].hasSource ){
         continue;
       }
       /* Vtab has no catalog entry; schema pass handled the row, content
@@ -1117,7 +1132,7 @@ static int doltliteCheckoutTables(
     /* Checking a table out of a ref stages only that table. */
     if( rc==SQLITE_OK && zSourceRef ){
       rc = doltliteStageNamedTables(db, context, cs, &newWorkingHash,
-                                    nNames, argv+iFirstName, 0);
+                                    nNames, argv+iFirstName, 0, bDropIfAbsent);
     }
     if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSetConfirmed(db, &cleanWs);
   }
@@ -1322,9 +1337,9 @@ static void doltCheckoutParsedFunc(
     if( iEndOptions!=0
      && doltliteResolveRef(db, zBranch, &sourceRef)==SQLITE_OK ){
       rc = doltliteCheckoutTables(db, ctx, zBranch, argv, 1, argc-1,
-                                  &zMissing);
+                                  &zMissing, 0, 0);
     }else{
-      rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing);
+      rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     }
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
     return;
@@ -1401,7 +1416,7 @@ static void doltCheckoutParsedFunc(
       return;
     }
 
-    rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing);
+    rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
     return;
   }

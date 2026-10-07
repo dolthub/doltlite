@@ -763,7 +763,8 @@ int doltliteStageNamedTables(
   const ProllyHash *pWorkingHash,
   int argc,
   sqlite3_value **argv,
-  int bForce
+  int bForce,
+  int bStageDrop
 ){
   struct TableEntry *aWorking = 0;
   struct TableEntry *aStaged = 0;
@@ -944,7 +945,9 @@ int doltliteStageNamedTables(
           sqlite3_result_error_code(context, rc);
           return rc;
         }
-        if( pRenameMate ) continue;
+        /* Checkout of "." from a ref deletes the name. An untracked
+        ** table with the same shape is not that delete. */
+        if( pRenameMate && !bStageDrop ) continue;
       }
       if( !found && findSchemaEntry(aStagedSchema, nStagedSchema, zTable) ){
         /* Dropped vtab: staged schema row but no entry; master adoption stages removal. */
@@ -1179,7 +1182,7 @@ static int doltliteStageArgsAndPersist(
     rc = addStageAllTables(db, context, cs, &workingHash, bForce);
   }else{
     rc = doltliteStageNamedTables(db, context, cs, &workingHash, argc, argv,
-                                  bForce);
+                                  bForce, 0);
   }
   if( rc!=SQLITE_OK ) return rc;
 

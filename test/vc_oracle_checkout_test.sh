@@ -1345,4 +1345,145 @@ SELECT dolt_branch('side');
 SELECT dolt_checkout('main', 'side', '--', 't');
 "
 
+echo "--- checkout . restores tracked tables ---"
+
+oracle "checkout_dot_restores_tracked" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+INSERT INTO u VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v = 9;
+UPDATE u SET v = 9;
+CREATE TABLE extra(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO extra VALUES (1, 7);
+SELECT dolt_checkout('.');
+"
+
+oracle "checkout_dot_keeps_staged_value" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v = 5;
+SELECT dolt_add('t');
+UPDATE t SET v = 8;
+SELECT dolt_checkout('.');
+"
+
+oracle "checkout_dot_partial_stage" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+INSERT INTO u VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v = 5;
+SELECT dolt_add('t');
+UPDATE t SET v = 8;
+UPDATE u SET v = 8;
+SELECT dolt_checkout('.');
+"
+
+oracle "checkout_dot_unstaged_drop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE t;
+SELECT dolt_checkout('.');
+"
+
+oracle "checkout_dot_staged_drop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_checkout('.');
+"
+
+oracle "checkout_dot_from_head" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v = 5;
+SELECT dolt_add('t');
+UPDATE t SET v = 8;
+CREATE TABLE extra(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO extra VALUES (1, 3);
+SELECT dolt_checkout('HEAD', '.');
+"
+
+oracle "checkout_dot_from_older_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO u VALUES (1, 2);
+SELECT dolt_commit('-Am', 'c2');
+CREATE TABLE extra(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO extra VALUES (1, 7);
+SELECT dolt_checkout('HEAD~1', '.');
+"
+
+oracle "checkout_dot_from_older_commit_dropped" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO u VALUES (1, 2);
+SELECT dolt_commit('-Am', 'c2');
+DROP TABLE u;
+SELECT dolt_checkout('HEAD~1', '.');
+"
+
+oracle "checkout_dash_dash_dot" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v = 9;
+CREATE TABLE extra(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO extra VALUES (1, 4);
+SELECT dolt_checkout('--', '.');
+"
+
+oracle "checkout_dot_reverts_schema" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t ADD COLUMN w INT;
+UPDATE t SET v = 4;
+SELECT dolt_checkout('.');
+"
+
+oracle "checkout_dot_reverts_committed_view" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+CREATE VIEW vv AS SELECT v AS v FROM t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP VIEW vv;
+CREATE VIEW vv AS SELECT v+5 AS v FROM t;
+UPDATE t SET v = 9;
+SELECT dolt_checkout('.');
+"
+
+oracle "checkout_dot_keeps_untracked_view" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+CREATE VIEW vv AS SELECT v AS v FROM t;
+UPDATE t SET v = 9;
+SELECT dolt_checkout('.');
+"
+
 vc_oracle_finish

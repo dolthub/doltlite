@@ -1534,7 +1534,16 @@ int addAppendIndexEntriesOfTable(
 int doltliteStageNamedTables(
   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
   const ProllyHash *pWorkingHash, int argc, sqlite3_value **argv,
-  int bForce
+  int bForce, int bStageDrop
+);
+int doltliteCheckoutTables(
+  sqlite3 *db, sqlite3_context *context, const char *zSourceRef,
+  sqlite3_value **argv, int iFirstName, int nNames,
+  const char **pzMissing, int bSourceHead, int bDropIfAbsent
+);
+int doltliteCheckoutDot(
+  sqlite3 *db, sqlite3_context *context, const char *zSourceRef,
+  const char **pzMissing
 );
 int doltliteCatalogRenameMate(
   sqlite3 *db,
