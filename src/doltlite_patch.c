@@ -639,50 +639,21 @@ static int patchObjectsDiffer(
 static int patchAppendRebuild(
   PatchCursor *pCur,
   const PatchTable *pTable,
-  SchemaEntry *aFromSchema,
-  int nFromSchema,
   SchemaEntry *aToSchema,
-  int nToSchema,
-  int iTemp
+  int nToSchema
 ){
-  const char *zBody = patchSchemaBody(pTable->pToSchema->zSql);
-  sqlite3_str *pStr;
   char *zSql;
-  char *zTemp = 0;
-  int rc = SQLITE_OK;
-  if( !zBody ) return SQLITE_CORRUPT;
-  do{
-    sqlite3_free(zTemp);
-    zTemp = sqlite3_mprintf("__doltlite_patch_%d", iTemp++);
-    if( !zTemp ) return SQLITE_NOMEM;
-  }while( findSchemaEntry(aFromSchema,nFromSchema,zTemp)
-       || findSchemaEntry(aToSchema,nToSchema,zTemp) );
-
-  pStr = sqlite3_str_new(0);
-  sqlite3_str_appendall(pStr, "CREATE TABLE ");
-  patchAppendIdent(pStr, zTemp);
-  sqlite3_str_appendall(pStr, zBody);
-  zSql = sqlite3_str_finish(pStr);
-  if( !zSql ){ rc = SQLITE_NOMEM; goto done; }
-  rc = patchAppendRow(pCur, pTable->zToName, "schema", zSql);
-  sqlite3_free(zSql);
-  if( rc!=SQLITE_OK ) goto done;
-
-  zSql = sqlite3_mprintf("DROP TABLE \"%w\"", pTable->zFromName);
-  if( !zSql ){ rc = SQLITE_NOMEM; goto done; }
-  rc = patchAppendRow(pCur,pTable->zToName,"schema",zSql);
-  sqlite3_free(zSql);
-  if( rc!=SQLITE_OK ) goto done;
-  zSql = sqlite3_mprintf("ALTER TABLE \"%w\" RENAME TO \"%w\"",
-                         zTemp, pTable->zToName);
-  if( !zSql ){ rc = SQLITE_NOMEM; goto done; }
+  int rc;
+  zSql = sqlite3_mprintf("DROP TABLE \"%w\"",pTable->zFromName);
+  if( !zSql ) return SQLITE_NOMEM;
   rc = patchAppendRow(pCur,pTable->zToName,"schema",zSql);
   sqlite3_free(zSql);
   if( rc==SQLITE_OK ){
+    rc = patchAppendRow(pCur,pTable->zToName,"schema",pTable->pToSchema->zSql);
+  }
+  if( rc==SQLITE_OK ){
     rc = patchAppendAssociated(pCur,pTable->zToName,aToSchema,nToSchema);
   }
-done:
-  sqlite3_free(zTemp);
   return rc;
 }
 
@@ -1187,8 +1158,7 @@ static int patchGenerateTable(
   sqlite3 *db,
   const PatchTable *pTable,
   SchemaEntry *aFromSchema, int nFromSchema,
-  SchemaEntry *aToSchema, int nToSchema,
-  int iTemp
+  SchemaEntry *aToSchema, int nToSchema
 ){
   PatchSchema from, to;
   char *zNativeAlter = 0;
@@ -1235,8 +1205,7 @@ static int patchGenerateTable(
       }
     }else if( rc==SQLITE_OK ){
       bRebuild = 1;
-      rc = patchAppendRebuild(pCur,pTable,aFromSchema,nFromSchema,
-                              aToSchema,nToSchema,iTemp);
+      rc = patchAppendRebuild(pCur,pTable,aToSchema,nToSchema);
     }
   }else{
     rc = patchAppendObjectDrops(pCur,pTable->zToName,
@@ -1414,7 +1383,7 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     }
     found=1;
     rc=patchGenerateTable(pCur,pVtab->db,&aTable[i],aFromSchema,nFromSchema,
-                          aToSchema,nToSchema,i+1);
+                          aToSchema,nToSchema);
   }
   /* Recreate triggers after all table data, or replayed DML would fire them. */
   for(i=0; rc==SQLITE_OK && i<nTable; i++){

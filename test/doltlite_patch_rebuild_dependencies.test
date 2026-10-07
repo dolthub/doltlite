@@ -1,0 +1,163 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc patch_rebuild_fingerprint {} {
+  set result [execsql {
+    SELECT * FROM t ORDER BY id;
+    SELECT * FROM audit ORDER BY msg;
+    SELECT * FROM events ORDER BY id;
+    SELECT type,name,tbl_name,sql FROM sqlite_schema
+      WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name;
+  }]
+  if {[execsql {SELECT count(*) FROM sqlite_schema WHERE name='v'}]} {
+    lappend result [execsql {SELECT * FROM v ORDER BY id}]
+    lappend result [execsql {SELECT * FROM nested_v ORDER BY id}]
+  }
+  return $result
+}
+
+proc patch_rebuild_replay {statements mode} {
+  if {$mode eq "transaction"} {execsql BEGIN}
+  set rc [catch {
+    foreach statement $statements {execsql $statement}
+    if {$mode eq "transaction"} {execsql COMMIT}
+  } result]
+  if {$rc} {
+    if {$mode eq "transaction"} {catch {execsql ROLLBACK}}
+    error $result
+  }
+  patch_rebuild_fingerprint
+}
+
+foreach {layout key constraint suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {}
+  clustered {id INT PRIMARY KEY} {} {}
+  text {id TEXT PRIMARY KEY} {} {}
+  composite {id INT} {,PRIMARY KEY(id,a)} {}
+  without_rowid {id INT PRIMARY KEY} {} {WITHOUT ROWID}
+  keyless {id INT} {} {}
+} {
+  foreach kind {drop_add type check generated} {
+    foreach dependency {view trigger both} {
+      foreach refs {working staged committed} {
+        reset_db
+        set create "CREATE TABLE t($key,a INT,e INT$constraint) $suffix"
+        execsql $create
+        execsql {
+          INSERT INTO t(id,a,e) VALUES(1,10,100),(2,20,200);
+          CREATE INDEX ia ON t(a);
+          CREATE TABLE audit(msg TEXT);
+          CREATE TABLE events(id INT PRIMARY KEY);
+          CREATE TRIGGER local_insert AFTER INSERT ON t BEGIN
+            INSERT INTO audit VALUES('local:'||new.id);
+          END;
+        }
+        if {$dependency in {view both}} {
+          execsql {
+            CREATE VIEW v AS SELECT * FROM t;
+            CREATE VIEW nested_v AS SELECT * FROM v;
+          }
+        }
+        if {$dependency in {trigger both}} {
+          execsql {
+            CREATE TRIGGER external_insert AFTER INSERT ON events BEGIN
+              INSERT INTO audit SELECT 'external:'||id||':'||a FROM t
+                WHERE id=new.id;
+            END;
+          }
+        }
+        execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_tag('base')}
+        set base [patch_rebuild_fingerprint]
+        db close
+        file copy -force test.db patch-rebuild-base.db
+        sqlite3 db test.db
+        if {$kind eq "drop_add"} {
+          execsql {ALTER TABLE t DROP COLUMN e;
+                   ALTER TABLE t ADD COLUMN f INT DEFAULT 3;}
+        } else {
+          set targetCreate $create
+          if {$kind eq "type"} {
+            set targetCreate [string map {{a INT} {a TEXT}} $create]
+          } elseif {$kind eq "check"} {
+            set targetCreate [string map {{a INT} {a INT CHECK(a>=0)}} $create]
+          } else {
+            set targetCreate "CREATE TABLE t($key,a INT,e INT,
+              g INT GENERATED ALWAYS AS (a+e) STORED$constraint) $suffix"
+          }
+          set trigger [lindex [execsql {
+            SELECT sql FROM sqlite_schema WHERE name='local_insert'
+          }] 0]
+          execsql {DROP TABLE t}
+          execsql $targetCreate
+          execsql {INSERT INTO t(id,a,e) VALUES(1,10,100),(2,20,200);
+                   CREATE INDEX ia ON t(a);}
+          execsql $trigger
+        }
+        execsql {UPDATE t SET a=11 WHERE id=1}
+        set target [patch_rebuild_fingerprint]
+        set to WORKING
+        if {$refs eq "staged"} {
+          execsql {SELECT dolt_add('.')}
+          set to STAGED
+        } elseif {$refs eq "committed"} {
+          execsql {SELECT dolt_commit('-Am','target'); SELECT dolt_tag('target')}
+          set to target
+        }
+        foreach filter {all table} {
+          set arg {}
+          if {$filter eq "table"} {set arg {,'t'}}
+          set forward($filter) [execsql "SELECT statement FROM
+            dolt_patch('base','$to'$arg) ORDER BY statement_order"]
+          set reverse($filter) [execsql "SELECT statement FROM
+            dolt_patch('$to','base'$arg) ORDER BY statement_order"]
+        }
+        if {$refs ne "committed"} {
+          execsql {SELECT dolt_commit('-Am','target'); SELECT dolt_tag('target')}
+        }
+        db close
+        file copy -force test.db patch-rebuild-target.db
+        sqlite3 db test.db
+        foreach filter {all table} {
+          foreach direction {forward reverse} start {base target} \
+              expected [list $target $base] {
+            foreach mode {autocommit transaction} {
+              db close
+              forcedelete test.db
+              file copy patch-rebuild-$start.db test.db
+              sqlite3 db test.db
+              set name patch-rebuild-$layout-$kind-$dependency-$refs-$filter-$direction-$mode
+              do_test $name-apply {
+                patch_rebuild_replay [set ${direction}($filter)] $mode
+              } $expected
+              do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+              do_test $name-reopen {
+                db close
+                sqlite3 db test.db
+                patch_rebuild_fingerprint
+              } $expected
+              set messages [list local:9]
+              if {$dependency in {trigger both}} {
+                set a [expr {$direction eq "forward" ? 11 : 10}]
+                set messages [list external:1:$a local:9]
+              }
+              do_test $name-triggers {
+                set columns id,a,e
+                if {$kind eq "drop_add" && $direction eq "forward"} {
+                  set columns id,a,f
+                }
+                execsql "INSERT INTO t($columns) VALUES(9,90,900)"
+                if {$dependency in {trigger both}} {
+                  execsql {INSERT INTO events VALUES(1)}
+                }
+                execsql {SELECT msg FROM audit ORDER BY msg}
+              } $messages
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+forcedelete patch-rebuild-base.db patch-rebuild-target.db
+finish_test

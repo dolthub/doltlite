@@ -893,4 +893,42 @@ SELECT group_concat(name,',') FROM pragma_table_info('we (them)');
 SELECT replace(sql,' ','') FROM sqlite_master WHERE name='we (them)';
 "
 
+for rebuild_dependency in view trigger both; do
+  rebuild_view=""
+  rebuild_trigger=""
+  if [ "$rebuild_dependency" != trigger ]; then
+    rebuild_view="CREATE VIEW v AS SELECT * FROM t;
+CREATE VIEW nested_v AS SELECT * FROM v;"
+  fi
+  if [ "$rebuild_dependency" != view ]; then
+    rebuild_trigger="CREATE TRIGGER external_insert AFTER INSERT ON events BEGIN
+  INSERT INTO audit SELECT a FROM t WHERE id=new.id;
+END;"
+  fi
+  apply_bidirectional "rebuild_with_${rebuild_dependency}" "
+CREATE TABLE t(id INT PRIMARY KEY,a INT,e INT);
+CREATE TABLE events(id INT PRIMARY KEY);
+CREATE TABLE audit(value INT);
+INSERT INTO t VALUES(1,10,100),(2,20,200);
+CREATE INDEX ia ON t(a);
+CREATE TRIGGER local_insert AFTER INSERT ON t BEGIN
+  INSERT INTO audit VALUES(new.a);
+END;
+$rebuild_view
+$rebuild_trigger
+SELECT dolt_commit('-Am','base');
+SELECT dolt_tag('base');
+ALTER TABLE t DROP COLUMN e;
+ALTER TABLE t ADD COLUMN f INT DEFAULT 3;
+UPDATE t SET a=11 WHERE id=1;
+SELECT dolt_commit('-Am','target');
+SELECT dolt_tag('target');
+" "
+SELECT * FROM t ORDER BY id;
+SELECT * FROM audit ORDER BY value;
+SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name;
+PRAGMA integrity_check;
+"
+done
+
 vc_oracle_finish
