@@ -270,6 +270,99 @@ SELECT dolt_checkout('C');
 
 oracle_in_set "deep_criss_cross_c_d" "$DEEP_CRISS_CROSS" "'C'" "'D'" "a1 b1"
 
+echo "--- unequal-height criss-cross ---"
+
+# x3 is taller than y1. The merge base is x3, so P's later edit of row 1 survives.
+UNEQUAL_CRISS="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0), (2, 0);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('Y');
+SELECT dolt_checkout('-b', 'X');
+UPDATE t SET v = 1 WHERE id = 1;
+SELECT dolt_commit('-am', 'x1');
+SELECT dolt_commit('--allow-empty', '-m', 'x2');
+SELECT dolt_commit('--allow-empty', '-m', 'x3');
+SELECT dolt_checkout('Y');
+UPDATE t SET v = 7 WHERE id = 2;
+SELECT dolt_commit('-am', 'y1');
+SELECT dolt_checkout('-b', 'P');
+SELECT dolt_merge('X', '--no-ff', '-m', 'P merge');
+UPDATE t SET v = 0 WHERE id = 1;
+SELECT dolt_commit('-am', 'p2');
+SELECT dolt_checkout('X');
+SELECT dolt_checkout('-b', 'Q');
+SELECT dolt_commit('--allow-empty', '-m', 'q1');
+SELECT dolt_merge('Y', '--no-ff', '-m', 'Q merge');
+"
+
+oracle "unequal_height_criss_cross" "$UNEQUAL_CRISS" "'P'" "'Q'"
+oracle "unequal_height_criss_cross_rev" "$UNEQUAL_CRISS" "'Q'" "'P'"
+
+oracle_rows() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_rows"
+  mkdir -p "$dir/dl" "$dir/dt"
+  local q="SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' \
+           | grep '^R|' )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      echo "$dolt_setup"
+      echo "$q"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|')
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+oracle_rows "unequal_height_criss_cross_merge" "
+$UNEQUAL_CRISS
+SELECT dolt_checkout('P');
+SELECT dolt_merge('Q', '-m', 'final');
+"
+
+UNEQUAL_CRISS_EDIT="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0), (2, 0);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('Y');
+SELECT dolt_checkout('-b', 'X');
+UPDATE t SET v = 1 WHERE id = 1;
+SELECT dolt_commit('-am', 'x1');
+SELECT dolt_commit('--allow-empty', '-m', 'x2');
+SELECT dolt_commit('--allow-empty', '-m', 'x3');
+SELECT dolt_checkout('Y');
+UPDATE t SET v = 7 WHERE id = 2;
+SELECT dolt_commit('-am', 'y1');
+SELECT dolt_checkout('-b', 'P');
+SELECT dolt_merge('X', '--no-ff', '-m', 'P merge');
+UPDATE t SET v = 2 WHERE id = 1;
+SELECT dolt_commit('-am', 'p2');
+SELECT dolt_checkout('X');
+SELECT dolt_checkout('-b', 'Q');
+SELECT dolt_commit('--allow-empty', '-m', 'q1');
+SELECT dolt_merge('Y', '--no-ff', '-m', 'Q merge');
+SELECT dolt_checkout('P');
+SELECT dolt_merge('Q', '-m', 'final');
+"
+
+oracle_rows "unequal_height_criss_cross_keeps_edit" "$UNEQUAL_CRISS_EDIT"
+
 echo "--- multi-merge fan-in ---"
 
 FANIN="
