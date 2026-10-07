@@ -1,0 +1,130 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set remoteDir [file normalize remote-open]
+foreach kind {missing-file missing-directory empty-file} {
+  foreach operation {fetch-branch fetch-all fetch-null pull clone lazy-clone} {
+    foreach boundary {autocommit begin savepoint} {
+      reset_db
+      forcedelete $remoteDir
+      file mkdir $remoteDir
+      set remote [file join $remoteDir remote.db]
+      if {$kind eq "missing-directory"} {
+        set remote [file join $remoteDir missing remote.db]
+      }
+      if {$kind eq "empty-file"} {
+        close [open $remote w]
+      }
+      set files [lsort [glob -nocomplain -tails -directory $remoteDir * .*-lock]]
+      if {$operation ni {clone lazy-clone}} {
+        execsql {
+          CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+          INSERT INTO t VALUES(1,'base');
+          SELECT dolt_commit('-Am','base');
+          UPDATE t SET v='local';
+        }
+        execsql "SELECT dolt_remote('add','origin','file://$remote')"
+      }
+      switch $operation {
+        fetch-branch {set sql {SELECT dolt_fetch('origin','main')}}
+        fetch-all {set sql {SELECT dolt_fetch('origin')}}
+        fetch-null {set sql {SELECT dolt_fetch('origin',NULL)}}
+        pull {set sql {SELECT dolt_pull('origin','main')}}
+        clone {set sql "SELECT dolt_clone('file://$remote')"}
+        lazy-clone {set sql "SELECT dolt_clone('--lazy','file://$remote')"}
+      }
+      set stateSql {
+        SELECT dolt_hashof('HEAD');
+        SELECT * FROM dolt_status ORDER BY table_name,staged;
+        SELECT name FROM sqlite_schema ORDER BY name;
+        SELECT name,url FROM dolt_remotes ORDER BY name;
+        SELECT name FROM dolt_remote_branches ORDER BY name;
+      }
+      set before [execsql $stateSql]
+      if {$operation ni {clone lazy-clone}} {
+        append stateSql {SELECT id,v FROM t ORDER BY id;}
+        set before [execsql $stateSql]
+      }
+      if {$boundary eq "begin"} {execsql BEGIN}
+      if {$boundary eq "savepoint"} {execsql {SAVEPOINT outer_sp}}
+      set name remote-open-$kind-$operation-$boundary
+      do_test $name-error {
+        set rc [catch {execsql $sql} msg]
+        list $rc [db errorcode] $msg
+      } {1 14 {failed to open remote}}
+      do_test $name-files {
+        lsort [glob -nocomplain -tails -directory $remoteDir * .*-lock]
+      } $files
+      do_test $name-state {execsql $stateSql} $before
+      catch {execsql ROLLBACK}
+      db close
+      sqlite3 db test.db
+      do_test $name-reopen {execsql $stateSql} $before
+    }
+  }
+}
+
+foreach operation {fetch-branch fetch-all pull} {
+  reset_db
+  execsql {SELECT dolt_remote('add','bad','bogus://remote')}
+  switch $operation {
+    fetch-branch {set sql {SELECT dolt_fetch('bad','main')}}
+    fetch-all {set sql {SELECT dolt_fetch('bad')}}
+    pull {set sql {SELECT dolt_pull('bad','main')}}
+  }
+  do_test remote-open-bad-scheme-$operation {
+    set rc [catch {execsql $sql} msg]
+    list $rc [db errorcode] $msg
+  } {1 1 {failed to open remote (URL must start with file:// or http://)}}
+  set sql [string map {bad missing} $sql]
+  do_test remote-open-unregistered-$operation {
+    set rc [catch {execsql $sql} msg]
+    list $rc [db errorcode] $msg
+  } {1 1 {remote not found}}
+}
+
+reset_db
+forcedelete $remoteDir
+file mkdir $remoteDir
+set remote [file join $remoteDir remote.db]
+execsql {
+  CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'base');
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('feature');
+}
+execsql "SELECT dolt_remote('add','origin','file://$remote')"
+do_execsql_test remote-open-push-creates {
+  SELECT dolt_push('origin','main');
+  SELECT dolt_push('origin','feature');
+} {0 0}
+set fd [open $remote rb]
+set contents [read $fd]
+close $fd
+foreach operation {clone lazy-clone fetch-branch fetch-all pull} {
+  reset_db
+  switch $operation {
+    lazy-clone {set sql "SELECT dolt_clone('--lazy','file://$remote')"}
+    default {set sql "SELECT dolt_clone('file://$remote')"}
+  }
+  do_test remote-open-existing-$operation {
+    execsql $sql
+    switch $operation {
+      fetch-branch {execsql {SELECT dolt_fetch('origin','feature')}}
+      fetch-all {execsql {SELECT dolt_fetch('origin')}}
+      pull {execsql {SELECT dolt_pull('origin','main')}}
+    }
+    execsql {SELECT id,v FROM t; PRAGMA integrity_check}
+  } {1 base ok}
+  do_test remote-open-existing-$operation-source {
+    set fd [open $remote rb]
+    set unchanged [expr {[read $fd] eq $contents}]
+    close $fd
+    set unchanged
+  } 1
+}
+
+db close
+forcedelete $remoteDir
+sqlite3 db test.db
+finish_test
