@@ -1,0 +1,215 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {mode oldDefault newDefault value} {
+  literal {DEFAULT 1} {DEFAULT 4} 4
+  expression {DEFAULT 1} {DEFAULT (2+2)} 4
+  negative {DEFAULT 1} {DEFAULT (-4)} -4
+  remove {DEFAULT 1} {} {}
+  add {} {DEFAULT 4} 4
+  named {CONSTRAINT d DEFAULT 1} {CONSTRAINT d DEFAULT 4} 4
+  string {DEFAULT 'old CHECK(v > 0)'}
+         {DEFAULT 'new CONSTRAINT ck CHECK(v > 0)'}
+         {new CONSTRAINT ck CHECK(v > 0)}
+} {
+  foreach layout {column named multiple table} {
+    foreach direction {forward reverse} {
+      foreach transaction {autocommit explicit} {
+        reset_db
+        set type INT
+        set predicate {v > 0}
+        set invalid 0
+        if {$mode eq "negative"} {set predicate {v != 0}}
+        if {$mode eq "string"} {
+          set type TEXT
+          set predicate {v <> 'bad'}
+          set invalid {'bad'}
+        }
+        set base "id INTEGER PRIMARY KEY, v $type $oldDefault"
+        set edited "id INTEGER PRIMARY KEY, v $type $newDefault"
+        set check "CHECK($predicate)"
+        if {$layout eq "multiple"} {
+          append base { CONSTRAINT kept CHECK(id < 100)}
+          append edited { CONSTRAINT kept CHECK(id < 100)}
+        }
+        if {$layout eq "named"} {set check "CONSTRAINT ck $check"}
+        if {$layout eq "table"} {set checked "$base, $check"} else {
+          set checked "$base $check"
+        }
+        execsql "CREATE TABLE t($base)"
+        execsql {
+          INSERT INTO t VALUES(1,10);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_checkout('-b','side');
+          DROP TABLE t;
+        }
+        execsql "CREATE TABLE t($checked)"
+        execsql {
+          INSERT INTO t VALUES(1,10);
+          SELECT dolt_commit('-Am','check');
+          SELECT dolt_checkout('main');
+          DROP TABLE t;
+        }
+        execsql "CREATE TABLE t($edited)"
+        execsql {INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','default')}
+        set target side
+        set branch main
+        if {$direction eq "reverse"} {
+          execsql {SELECT dolt_checkout('side')}
+          set target main
+          set branch side
+        }
+        if {$transaction eq "explicit"} {execsql {BEGIN}}
+        set name default-check-$mode-$layout-$direction-$transaction
+        do_test $name-merge {
+          set result [catchsql "SELECT dolt_merge('$target')"]
+          if {[lindex $result 0]==0} {set result {0 merged}}
+          set result
+        } {0 merged}
+        do_execsql_test $name-conflicts {
+          SELECT count(*) FROM dolt_schema_conflicts;
+          SELECT count(*) FROM dolt_conflicts;
+          SELECT id,v FROM t;
+        } {0 0 1 10}
+        do_execsql_test $name-default {
+          INSERT INTO t(id) VALUES(2);
+          SELECT v FROM t WHERE id=2;
+        } [list $value]
+        do_test $name-enforcement {
+          set result [catchsql "INSERT INTO t VALUES(3,$invalid)"]
+          list [lindex $result 0] \
+            [string match {*CHECK constraint failed*} [lindex $result 1]]
+        } {1 1}
+        if {$layout eq "multiple"} {
+          do_catchsql_test $name-kept {
+            INSERT INTO t(id) VALUES(101);
+          } {1 {CHECK constraint failed: kept}}
+        }
+        do_execsql_test $name-commit {SELECT length(dolt_commit('-Am','merged'))} {40}
+        db close
+        sqlite3 db test.db/$branch
+        do_execsql_test $name-reopen "SELECT active_branch(),v FROM t WHERE id=2" \
+          [list $branch $value]
+        do_execsql_test $name-reopen-default {
+          INSERT INTO t(id) VALUES(4);
+          SELECT v FROM t WHERE id=4;
+        } [list $value]
+        do_test $name-reopen-enforcement {
+          set result [catchsql "INSERT INTO t VALUES(5,$invalid)"]
+          list [lindex $result 0] \
+            [string match {*CHECK constraint failed*} [lindex $result 1]]
+        } {1 1}
+        do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+      }
+    }
+  }
+}
+
+foreach direction {forward reverse} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT DEFAULT 1,w INT DEFAULT 2);
+    INSERT INTO t VALUES(1,10,10);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','side');
+    DROP TABLE t;
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT DEFAULT 1 CHECK(v>0),w INT DEFAULT 6);
+    INSERT INTO t VALUES(1,10,10);
+    SELECT dolt_commit('-Am','v check w default');
+    SELECT dolt_checkout('main');
+    DROP TABLE t;
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT DEFAULT 4,w INT DEFAULT 2 CHECK(w>0));
+    INSERT INTO t VALUES(1,10,10);
+    SELECT dolt_commit('-Am','w check v default');
+  }
+  set target side
+  if {$direction eq "reverse"} {execsql {SELECT dolt_checkout('side')}; set target main}
+  do_test default-check-cross-$direction-merge {
+    set result [catchsql "SELECT dolt_merge('$target')"]
+    lindex $result 0
+  } {0}
+  do_execsql_test default-check-cross-$direction-defaults {
+    INSERT INTO t(id) VALUES(2);
+    SELECT v,w FROM t WHERE id=2;
+    PRAGMA integrity_check;
+  } {4 6 ok}
+  foreach column {v w} {
+    do_test default-check-cross-$direction-$column-enforcement {
+      set result [catchsql "INSERT INTO t(id,$column) VALUES(3,0)"]
+      list [lindex $result 0] \
+        [string match {*CHECK constraint failed*} [lindex $result 1]]
+    } {1 1}
+  }
+}
+
+foreach direction {forward reverse} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT DEFAULT 1);
+    INSERT INTO t(id) VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','side');
+    DROP TABLE t;
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT DEFAULT 1 CHECK(v>0));
+    INSERT INTO t(id) VALUES(1);
+    SELECT dolt_commit('-Am','check');
+    SELECT dolt_checkout('main');
+    DROP TABLE t;
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT DEFAULT 4);
+    INSERT INTO t(id) VALUES(1);
+    SELECT dolt_commit('-Am','default');
+  }
+  set target side
+  if {$direction eq "reverse"} {execsql {SELECT dolt_checkout('side')}; set target main}
+  do_execsql_test default-check-reproduction-$direction-merge "
+    SELECT length(dolt_merge('$target'));
+    INSERT INTO t(id) VALUES(2);
+    SELECT id,v FROM t ORDER BY id;
+  " {40 1 4 2 4}
+  do_test default-check-reproduction-$direction-enforcement {
+    set result [catchsql {INSERT INTO t VALUES(3,0)}]
+    list [lindex $result 0] \
+      [string match {*CHECK constraint failed*} [lindex $result 1]]
+  } {1 1}
+}
+
+foreach kind {default check} {
+  foreach direction {forward reverse} {
+    reset_db
+    set ancestor {id INTEGER PRIMARY KEY,v INT DEFAULT 1}
+    set ours {id INTEGER PRIMARY KEY,v INT DEFAULT 4}
+    set theirs {id INTEGER PRIMARY KEY,v INT DEFAULT 5 CHECK(v>0)}
+    if {$kind eq "check"} {
+      append ancestor { CONSTRAINT ck CHECK(v>2)}
+      append ours { CONSTRAINT ck CHECK(v>1)}
+      set theirs {id INTEGER PRIMARY KEY,v INT DEFAULT 1 CONSTRAINT ck CHECK(v>0)}
+    }
+    execsql "CREATE TABLE t($ancestor)"
+    execsql {
+      INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','base');
+      SELECT dolt_checkout('-b','side'); DROP TABLE t;
+    }
+    execsql "CREATE TABLE t($theirs)"
+    execsql {
+      INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','theirs');
+      SELECT dolt_checkout('main'); DROP TABLE t;
+    }
+    execsql "CREATE TABLE t($ours)"
+    execsql {INSERT INTO t VALUES(1,10); SELECT dolt_commit('-Am','ours')}
+    set target side
+    if {$direction eq "reverse"} {execsql {SELECT dolt_checkout('side')}; set target main}
+    execsql {BEGIN}
+    do_test default-check-$kind-$direction-conflict {
+      set result [catchsql "SELECT dolt_merge('$target')"]
+      list [lindex $result 0] [execsql {SELECT count(*) FROM dolt_schema_conflicts}]
+    } {1 1}
+    do_execsql_test default-check-$kind-$direction-rollback {
+      ROLLBACK;
+      SELECT count(*) FROM dolt_schema_conflicts;
+      SELECT id,v FROM t;
+      PRAGMA integrity_check;
+    } {0 1 10 ok}
+  }
+}
+
+finish_test

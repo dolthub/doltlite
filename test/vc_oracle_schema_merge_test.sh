@@ -2433,4 +2433,60 @@ SQL
   done
 done
 
+for layout in column named multiple table; do
+  for change in set remove add; do
+    old='DEFAULT 1'; new='DEFAULT 4'; want=4
+    if [ "$change" = remove ]; then new=''; want=NULL; fi
+    if [ "$change" = add ]; then old=''; fi
+    base="id INTEGER PRIMARY KEY,v INT $old"
+    edited="id INTEGER PRIMARY KEY,v INT $new"
+    check='CHECK(v > 0)'
+    if [ "$layout" = named ]; then check="CONSTRAINT ck $check"; fi
+    kept=''
+    if [ "$layout" = multiple ]; then kept=', CONSTRAINT kept CHECK(id < 100)'; fi
+    if [ "$layout" = table ]; then checked="$base, $check"; else checked="$base $check"; fi
+    checked="$checked$kept"
+    base="$base$kept"
+    edited="$edited$kept"
+    for direction in forward reverse; do
+      tag="default_check_${layout}_${change}_${direction}"
+      DB="$TMPROOT/$tag.db"
+      check_branch=feat; default_branch=main
+      if [ "$direction" = reverse ]; then check_branch=main; default_branch=feat; fi
+      cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t($base);
+INSERT INTO t(id) VALUES(1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('$check_branch');
+DROP TABLE t;
+CREATE TABLE t($checked);
+INSERT INTO t(id) VALUES(1);
+SELECT dolt_commit('-Am','check');
+SELECT dolt_checkout('$default_branch');
+DROP TABLE t;
+CREATE TABLE t($edited);
+INSERT INTO t(id) VALUES(1);
+SELECT dolt_commit('-Am','default');
+SELECT dolt_checkout('main');
+SQL
+      expect_merge_ok "${tag}_merge" "$DB"
+      expect_dual_value "${tag}_merged_row" "$DB" "$want" \
+        "SELECT COALESCE(CAST(v AS TEXT),'NULL') FROM t WHERE id=1;" \
+        "SELECT COALESCE(CAST(v AS CHAR),'NULL') FROM t WHERE id=1;"
+      run_dual_command_outcome "${tag}_insert_default" "$DB" \
+        'INSERT INTO t(id) VALUES(2);' 'INSERT INTO t(id) VALUES(2);' ok
+      expect_dual_value "${tag}_default" "$DB" "$want" \
+        "SELECT COALESCE(CAST(v AS TEXT),'NULL') FROM t WHERE id=2;" \
+        "SELECT COALESCE(CAST(v AS CHAR),'NULL') FROM t WHERE id=2;"
+      run_dual_command_outcome "${tag}_invalid" "$DB" \
+        'INSERT INTO t VALUES(3,0);' 'INSERT INTO t VALUES(3,0);' error
+      if [ "$layout" = multiple ]; then
+        run_dual_command_outcome "${tag}_kept" "$DB" \
+          'INSERT INTO t(id) VALUES(101);' 'INSERT INTO t(id) VALUES(101);' error
+      fi
+    done
+  done
+done
+
 vc_oracle_finish

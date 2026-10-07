@@ -562,41 +562,6 @@ static int schemaConstraintKind(const char *s, int len){
   return SCHEMA_IR_OTHER;
 }
 
-static char *schemaColumnWithoutChecks(const char *zDef){
-  int n = (int)strlen(zDef);
-  char *zOut = sqlite3_malloc(n + 1);
-  const char *z = zDef;
-  const char *zEnd = zDef + n;
-  char *zWrite = zOut;
-  if( !zOut ) return 0;
-  while( z<zEnd ){
-    const char *zKw = schemaFindToken(z, zEnd, "CHECK", 5);
-    if( !zKw ){
-      memcpy(zWrite, z, (size_t)(zEnd - z));
-      zWrite += (zEnd - z);
-      break;
-    }
-    if( zKw>z ){
-      memcpy(zWrite, z, (size_t)(zKw - z));
-      zWrite += (zKw - z);
-    }
-    z = zKw + 5;
-    z = schemaSkipTrivia(z, zEnd);
-    if( z<zEnd ){
-      int type, nToken;
-      const char *zAfter;
-      if( schemaGetToken(z, zEnd, &type, &nToken)==SQLITE_OK
-       && type==TK_LP
-       && schemaSkipParenthesized(z, zEnd, &zAfter)==SQLITE_OK ){
-        z = zAfter;
-      }
-    }
-  }
-  while( zWrite>zOut && isspace((unsigned char)zWrite[-1]) ) zWrite--;
-  *zWrite = 0;
-  return zOut;
-}
-
 static void schemaIrClear(SchemaIr *pIr){
   assert( pIr!=0 );
   freeColumns(pIr->aCols, pIr->nCols);
@@ -783,16 +748,11 @@ static int schemaIrAncestorColumnsSame(
       break;
     }
     if( ignoreChecks ){
-      char *zAncestor = schemaColumnWithoutChecks(pAncestor->aCols[i].zDef);
-      char *zSide = schemaColumnWithoutChecks(pSideCol->zDef);
-      if( !zAncestor || !zSide ){
-        sqlite3_free(zAncestor);
-        sqlite3_free(zSide);
-        return SQLITE_NOMEM;
-      }
-      if( !schemaDefinitionsEquivalent(zAncestor, zSide) ) *pSame = 0;
-      sqlite3_free(zAncestor);
-      sqlite3_free(zSide);
+      int same = 0;
+      int rc = schemaColumnNonCheckTextMatches(
+          pAncestor->aCols[i].zDef, pSideCol->zDef, &same);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !same ) *pSame = 0;
     }else if( !schemaDefinitionsEquivalent(
                  pAncestor->aCols[i].zDef, pSideCol->zDef) ){
       *pSame = 0;
@@ -976,6 +936,26 @@ int columnRenamedAt(
   return 1;
 }
 
+static int schemaColumnChangesConflict(
+  const char *zAnc, const char *zOurs, const char *zTheirs, int *pConflict
+){
+  char *a = 0, *o = 0, *t = 0;
+  int rc;
+  *pConflict = 0;
+  rc = schemaColumnWithoutChecks(zAnc, &a);
+  if( rc==SQLITE_OK ) rc = schemaColumnWithoutChecks(zOurs, &o);
+  if( rc==SQLITE_OK ) rc = schemaColumnWithoutChecks(zTheirs, &t);
+  if( rc==SQLITE_OK ){
+    *pConflict = !schemaDefinitionsEquivalent(a, o)
+             && !schemaDefinitionsEquivalent(a, t)
+             && !schemaDefinitionsEquivalent(o, t);
+  }
+  sqlite3_free(a);
+  sqlite3_free(o);
+  sqlite3_free(t);
+  return rc;
+}
+
 int trySchemaColumnMerge(
   const char *zAncSql,
   const char *zOursSql,
@@ -1109,8 +1089,11 @@ int trySchemaColumnMerge(
         int ancToOurs = strcmp(ancCol->zDef, ourCol->zDef)!=0;
         if( ancToTheirs && ancToOurs ){
 
-          if( strcmp(ourCol->zDef, aTheirs[i].zDef)!=0 ){
-
+          int conflict = 0;
+          rc = schemaColumnChangesConflict(ancCol->zDef, ourCol->zDef,
+                                           aTheirs[i].zDef, &conflict);
+          if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
+          if( conflict ){
             if( pzErrDetail ){
               *pzErrDetail = sqlite3_mprintf(
                 "both branches modified column '%s' differently",
@@ -1378,6 +1361,35 @@ static int schemaAppendSansChecks(sqlite3_str *pOut, const char *s, const char *
     p += n;
   }
   return SQLITE_OK;
+}
+
+int schemaColumnWithoutChecks(const char *zDef, char **pzOut){
+  sqlite3_str *pStr = sqlite3_str_new(0);
+  int rc;
+  *pzOut = 0;
+  if( !pStr ) return SQLITE_NOMEM;
+  rc = schemaAppendSansChecks(pStr, zDef, zDef + strlen(zDef));
+  if( rc==SQLITE_OK ) rc = sqlite3_str_errcode(pStr);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(sqlite3_str_finish(pStr));
+    return rc;
+  }
+  *pzOut = sqlite3_str_finish(pStr);
+  return *pzOut ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+int schemaColumnNonCheckTextMatches(
+  const char *zA, const char *zB, int *pbMatch
+){
+  char *a = 0, *b = 0;
+  int rc;
+  *pbMatch = 0;
+  rc = schemaColumnWithoutChecks(zA, &a);
+  if( rc==SQLITE_OK ) rc = schemaColumnWithoutChecks(zB, &b);
+  if( rc==SQLITE_OK ) *pbMatch = schemaDefinitionsEquivalent(a, b);
+  sqlite3_free(a);
+  sqlite3_free(b);
+  return rc;
 }
 
 static int schemaEmitKeptSegment(

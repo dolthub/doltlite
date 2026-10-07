@@ -663,6 +663,41 @@ done:
   return rc;
 }
 
+static int dlMergeColumnChecks(
+  const char *zWin, const char *zOther, ParsedColumn *aCols, int nCols,
+  char **pzOut
+){
+  DlCheck *aChecks = 0;
+  char *zCore = 0;
+  sqlite3_str *pStr = 0;
+  int nChecks = 0, i, rc;
+  *pzOut = 0;
+  rc = schemaColumnWithoutChecks(zOther, &zCore);
+  if( rc==SQLITE_OK ){
+    rc = dlCollectChecks(zWin, aCols, nCols, &aChecks, &nChecks);
+  }
+  if( rc==SQLITE_OK ){
+    pStr = sqlite3_str_new(0);
+    if( !pStr ) rc = SQLITE_NOMEM;
+  }
+  if( rc==SQLITE_OK ){
+    sqlite3_str_appendall(pStr, zCore);
+    for(i=0; i<nChecks; i++){
+      sqlite3_str_appendf(pStr, " %s", aChecks[i].zRaw);
+    }
+    rc = sqlite3_str_errcode(pStr);
+  }
+  if( rc==SQLITE_OK ){
+    *pzOut = sqlite3_str_finish(pStr);
+    if( !*pzOut ) rc = SQLITE_NOMEM;
+  }else{
+    sqlite3_free(sqlite3_str_finish(pStr));
+  }
+  sqlite3_free(zCore);
+  dlChecksFree(aChecks, nChecks);
+  return rc;
+}
+
 static int dlComposeRetained(
   const char *zAnc, const char *zOurs, const char *zTheirs,
   int schemaChoice, const char *zTable,
@@ -883,7 +918,7 @@ static int dlComposeRetained(
 
   for(i=0; i<nWin; i++){
     int j = parsedColumnIndexByName(aOth, nOth, aWin[i].zName);
-    int k, cores;
+    int k, cores, same;
     if( j<0 ) continue;
     if( schemaDefinitionsEquivalent(aWin[i].zDef, aOth[j].zDef) ) continue;
     cores = dlCoresMatch(aWin[i].zDef, aOth[j].zDef,
@@ -906,15 +941,21 @@ static int dlComposeRetained(
       continue;
     }
     if( k<0 ) continue;
-    if( !schemaDefinitionsEquivalent(aAnc[k].zDef, aWin[i].zDef) ) continue;
-    if( schemaDefinitionsEquivalent(aAnc[k].zDef, aOth[j].zDef) ) continue;
+    rc = schemaColumnNonCheckTextMatches(aAnc[k].zDef, aWin[i].zDef, &same);
+    if( rc!=SQLITE_OK ) goto done;
+    if( !same ) continue;
+    rc = schemaColumnNonCheckTextMatches(aWin[i].zDef, aOth[j].zDef, &same);
+    if( rc!=SQLITE_OK ) goto done;
+    if( same ) continue;
     rc = DOLTLITE_GROW_ARRAY(&azRepName, &nNameAlloc, nRep+1, 4);
     if( rc==SQLITE_OK ){
       rc = DOLTLITE_GROW_ARRAY(&azRepDef, &nDefAlloc, nRep+1, 4);
     }
     if( rc!=SQLITE_OK ) goto done;
     azRepName[nRep] = aWin[i].zName;
-    azRepDef[nRep] = aOth[j].zDef;
+    rc = dlMergeColumnChecks(aWin[i].zDef, aOth[j].zDef,
+                             aWin, nWin, &azRepDef[nRep]);
+    if( rc!=SQLITE_OK ) goto done;
     nRep++;
   }
 
@@ -1153,6 +1194,7 @@ done:
   dlFreeRaws(azSplice, nSplice);
   dlFreeRaws(azDefer, nDefer);
   sqlite3_free(azRepName);
+  for(i=0; i<nRep; i++) sqlite3_free(azRepDef[i]);
   sqlite3_free(azRepDef);
   sqlite3_free(aReplaced);
   dlFksFree(aFkAnc, nFkAnc);
