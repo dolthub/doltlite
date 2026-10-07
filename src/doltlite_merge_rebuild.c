@@ -970,6 +970,35 @@ static void relayoutFieldValue(
   }
 }
 
+static int mergeRecordLayoutLoad(
+  const char *zSql, const char *zTable, int nCol,
+  int *aRecord, int *pnRecord, DoltliteColInfo *pCi
+){
+  sqlite3 *tmp = 0;
+  Table *pTab;
+  int i, rc;
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(tmp);
+  if( rc==SQLITE_OK ){
+    pTab = sqlite3FindTable(tmp, zTable, "main");
+    if( !pTab || pTab->nCol!=nCol ){
+      rc = SQLITE_CORRUPT;
+    }else{
+      Index *pPk = HasRowid(pTab) ? 0 : sqlite3PrimaryKeyIndex(pTab);
+      *pnRecord = pTab->nNVCol;
+      for(i=0; i<nCol; i++){
+        aRecord[i] = (pTab->aCol[i].colFlags & COLFLAG_VIRTUAL) ? -1
+            : pPk ? sqlite3TableColumnToIndex(pPk, i)
+            : sqlite3TableColumnToStorage(pTab, i);
+      }
+      if( pCi ) rc = doltliteGetColumnNames(tmp, zTable, pCi);
+    }
+  }
+  if( tmp ) sqlite3_close(tmp);
+  return rc;
+}
+
 int normalizeSideToMergedLayout(
   sqlite3 *db,
   const char *zTable,
@@ -1081,10 +1110,22 @@ int normalizeSideToMergedLayout(
         ? -1 : nMergedRecord++;
   }
   for(j=0; j<nTheirs; j++){
-    int found = -1;
-    int bInAnc = 0;
     aTheirsRecord[j] = parsedColumnIsVirtual(&aTheirs[j])
         ? -1 : nTheirsRecord++;
+  }
+  if( !isIntKey ){
+    rc = mergeRecordLayoutLoad(zOursSql, zTable, nOurs,
+        aMergedRecord, &nMergedRecord, 0);
+    if( rc==SQLITE_OK ){
+      rc = mergeRecordLayoutLoad(zTheirsSql, zTable, nTheirs,
+          aTheirsRecord, &nTheirsRecord, &sideCi);
+    }
+    sideCiInit = 1;
+    if( rc!=SQLITE_OK ) goto done;
+  }
+  for(j=0; j<nTheirs; j++){
+    int found = -1;
+    int bInAnc = 0;
     if( bReuse ){
       int ai = parsedColumnIndexByName(aAnc, nAnc, aTheirs[j].zName);
       if( ai>=0 ){
@@ -1173,7 +1214,10 @@ mapped:
    && !(bSameKey && sideAffinityDiffers(aOurs, nOurs, aTheirs, nTheirs, aMap)) ){
     int bSamePositions = 1;
     for(j=0; j<nTheirs; j++){
-      if( aMap[j]!=j ){ bSamePositions = 0; break; }
+      if( aMap[j]!=j || aTheirsRecord[j]!=aMergedRecord[aMap[j]] ){
+        bSamePositions = 0;
+        break;
+      }
     }
     if( bSamePositions ){
       memcpy(pOutRoot, pTheirsRoot, sizeof(*pOutRoot));
@@ -1203,16 +1247,6 @@ mapped:
       }
     }
     freeColumns(aShared, nShared);
-  }
-
-  if( !isIntKey ){
-    sqlite3 *tmp = 0;
-    rc = sqlite3_open(":memory:", &tmp);
-    if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, zTheirsSql, 0, 0, 0);
-    if( rc==SQLITE_OK ) rc = doltliteGetColumnNames(tmp, zTable, &sideCi);
-    if( tmp ) sqlite3_close(tmp);
-    if( rc!=SQLITE_OK ) goto done;
-    sideCiInit = 1;
   }
 
   rc = prollyMutMapInit(&mm, (u8)isIntKey);

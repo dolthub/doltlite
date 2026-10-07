@@ -52,7 +52,7 @@ schema_sql_for_dolt() {
   local sql
   sql=$(cat)
   vc_oracle_translate_for_dolt "$sql" \
-    | sed -E 's/DROP INDEX ([a-zA-Z0-9_]+);/DROP INDEX \1 ON t;/g'
+    | sed -E 's/DROP INDEX ([a-zA-Z0-9_]+);/DROP INDEX \1 ON t;/g; s/COLLATE NOCASE/COLLATE utf8mb4_general_ci/g; s/COLLATE BINARY/COLLATE utf8mb4_bin/g'
 }
 
 output_is_error() {
@@ -2213,5 +2213,79 @@ expect_merge_ok "check_with_unrelated_rename" "$DB"
 expect_dual_value "check_with_unrelated_rename_kept" "$DB" "1" \
   "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%ck_w%';" \
   "SELECT COUNT(*) FROM information_schema.check_constraints WHERE constraint_name='ck_w';"
+
+for attribute in notnull nullable default check type collate binary; do
+  before='INT'; value=20; want=ok; index_sql='CREATE INDEX iw ON t(w);'
+  case "$attribute" in
+    notnull) after='INT NOT NULL' ;;
+    nullable) before='INT NOT NULL'; after='INT' ;;
+    default) after='INT DEFAULT 7' ;;
+    check) after='INT CHECK(w>0)' ;;
+    type) after='TEXT'; want=conflict; index_sql='' ;;
+    collate) before='VARCHAR(50) COLLATE BINARY'; after='VARCHAR(50) COLLATE NOCASE'; value="'Ab'" ;;
+    binary) before='VARCHAR(50) COLLATE NOCASE'; after='VARCHAR(50) COLLATE BINARY'; value="'Ab'" ;;
+  esac
+  for shape in rename add drop; do
+    case "$shape" in
+      rename) alter='ALTER TABLE t RENAME COLUMN v TO vv;' ;;
+      add) alter='ALTER TABLE t ADD COLUMN x INT DEFAULT 5;' ;;
+      drop) alter='ALTER TABLE t DROP COLUMN v;' ;;
+    esac
+    for direction in forward reverse; do
+      tag="attribute_${attribute}_${shape}_${direction}"
+      DB="$TMPROOT/$tag.db"
+      attr_branch=feat; shape_branch=main
+      if [ "$direction" = reverse ]; then
+        attr_branch=main; shape_branch=feat
+      fi
+      dl_setup "$DB" "$tag" <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY,v INT,w $before);
+INSERT INTO t VALUES(1,10,$value);
+$index_sql
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('$attr_branch');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY,v INT,w $after);
+INSERT INTO t VALUES(1,10,$value);
+$index_sql
+SELECT dolt_commit('-Am','attributes');
+SELECT dolt_checkout('$shape_branch');
+$alter
+SELECT dolt_commit('-Am','shape');
+SELECT dolt_checkout('main');
+SQL
+      expect_merge_outcome "$tag" "$DB" "$want"
+      if [ "$want" = conflict ]; then continue; fi
+      expect_dual_value "${tag}_row" "$DB" "1|$(printf '%s' "$value" | tr -d "'")" \
+        "SELECT id || '|' || w FROM t;" "SELECT CONCAT(id,'|',w) FROM t;"
+      case "$attribute" in
+        notnull|nullable)
+          nullable=error
+          if [ "$attribute" = nullable ]; then nullable=ok; fi
+          run_dual_command_outcome "${tag}_null" "$DB" \
+            'INSERT INTO t(id,w) VALUES(2,NULL);' 'INSERT INTO t(id,w) VALUES(2,NULL);' "$nullable"
+          ;;
+        default)
+          run_dual_command_outcome "${tag}_insert" "$DB" \
+            'INSERT INTO t(id) VALUES(2);' 'INSERT INTO t(id) VALUES(2);' ok
+          expect_dual_value "${tag}_default" "$DB" 7 \
+            'SELECT w FROM t WHERE id=2;' 'SELECT w FROM t WHERE id=2;'
+          ;;
+        check)
+          run_dual_command_outcome "${tag}_check" "$DB" \
+            'INSERT INTO t(id,w) VALUES(2,-1);' 'INSERT INTO t(id,w) VALUES(2,-1);' error
+          ;;
+        collate|binary)
+          count=0
+          if [ "$attribute" = collate ]; then count=1; fi
+          expect_dual_value "${tag}_collation" "$DB" "$count" \
+            "SELECT count(*) FROM t INDEXED BY iw WHERE w='ab';" \
+            "SELECT count(*) FROM t WHERE w='ab';"
+          ;;
+      esac
+    done
+  done
+done
 
 vc_oracle_finish
