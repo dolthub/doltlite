@@ -504,6 +504,13 @@ check "rejected HTTP push preserves server-side changes" "1,99
 7
 2" "$result"
 
+echo "--- 12b. unreachable HTTP remote reports the connect failure ---"
+"$DB" "$TMP/unreach.db" "CREATE TABLE t(id INTEGER PRIMARY KEY); SELECT dolt_commit('-Am','c'); SELECT dolt_remote('add','gone','http://127.0.0.1:1/db');" >/dev/null 2>&1
+for op in "dolt_pull('gone','main')" "dolt_fetch('gone')" "dolt_fetch('gone','main')"; do
+  result=$("$DB" "$TMP/unreach.db" "SELECT $op;" 2>&1)
+  check_match "unreachable remote: $op names the failure" "could not connect to remote" "$result"
+done
+
 echo "--- 13. protocol conformance across the whole run ---"
 if [ -s "$TMP/violations.log" ]; then
   echo "  FAIL: HTTP protocol violations recorded:"

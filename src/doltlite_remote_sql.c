@@ -605,8 +605,14 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
     rc = parseRemoteBranchNames(pRemote, &azNames, &nNames);
     if( rc!=SQLITE_OK ){
+      const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+      char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
       pRemote->xClose(pRemote);
-      doltliteVcResultError(ctx, db, "failed to read remote refs");
+      (void)doltliteVcSealSavepointError(db);
+      remoteSqlResultError(ctx, rc, zOwned ? zOwned
+          : (rc==SQLITE_CORRUPT || rc==SQLITE_NOTFOUND
+             ? "failed to read remote refs" : 0));
+      sqlite3_free(zOwned);
       return;
     }
 
@@ -709,12 +715,18 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( remoteSqlReportOpenError(ctx, db, rc, &savedState) ) return;
 
   rc = doltliteFetch(cs, pRemote, zRemoteName, zRemoteBranch);
-  pRemote->xClose(pRemote);
   if( rc!=SQLITE_OK ){
+    /* The message lives in the remote; copy it before closing. */
+    const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+    char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+    pRemote->xClose(pRemote);
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
-      rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0);
+      zOwned ? zOwned
+      : (rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0));
+    sqlite3_free(zOwned);
     return;
   }
+  pRemote->xClose(pRemote);
 
   rc = chunkStoreFindTracking(
       cs, zRemoteName, zRemoteBranch, &trackingCommit);
