@@ -426,6 +426,7 @@ int doltliteCmdParseArgs(
   int endOptions = 0;
   int i;
   memset(pArgs, 0, sizeof(*pArgs));
+  pArgs->iEndOptions = -1;
   for(i=0; i<nOption; i++){
     if( aOption[i].pSeen ) *aOption[i].pSeen = 0;
     if( aOption[i].pzValue ) *aOption[i].pzValue = 0;
@@ -457,6 +458,7 @@ int doltliteCmdParseArgs(
     }
     if( !endOptions && strcmp(zArg, "--")==0 ){
       endOptions = 1;
+      pArgs->iEndOptions = pArgs->nPositional;
       continue;
     }
     if( !endOptions && zArg[0]=='-' && zArg[1]=='-' && zArg[2] ){

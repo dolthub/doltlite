@@ -1298,6 +1298,9 @@ struct DoltliteCmdArgs {
   sqlite3_value **apPositional;
   const char **azPositional;
   int nPositional;
+  /* Count of positional arguments before `--`, or -1 when `--` is absent.
+  ** Zero means `--` preceded every name. */
+  int iEndOptions;
 };
 
 int doltliteCmdParseArgs(
