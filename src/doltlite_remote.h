@@ -71,7 +71,7 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zUrl);
 
 int doltliteCloneLazy(ChunkStore *pLocal, DoltliteRemote *pRemote,
-                      const char *zUrl);
+                      const char *zUrl, const char *zKeepBranch);
 
 DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath);
 void doltliteRemoteSetBusyHandler(DoltliteRemote *p, int (*xBusy)(void*),

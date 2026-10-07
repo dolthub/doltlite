@@ -961,7 +961,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
   }
-  rc = bLazy ? doltliteCloneLazy(cs, pRemote, zUrl)
+  rc = bLazy ? doltliteCloneLazy(cs, pRemote, zUrl, zRevision)
              : doltliteClone(cs, pRemote, zUrl);
   if( rc!=SQLITE_OK ){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);

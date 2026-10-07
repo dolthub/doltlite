@@ -1858,7 +1858,11 @@ int doltliteFetch(
   return rc;
 }
 
-static int remotePrepareCloneRefs(ChunkStore *pStore, const char *zUrl){
+static int remotePrepareCloneRefs(
+  ChunkStore *pStore,
+  const char *zUrl,
+  const char *zKeep
+){
   const BranchRef *aBranch;
   int nBranch;
   int rc;
@@ -1872,13 +1876,27 @@ static int remotePrepareCloneRefs(ChunkStore *pStore, const char *zUrl){
     rc = chunkStoreUpdateTracking(
         pStore, "origin", aBranch[i].zName, &aBranch[i].commitHash);
   }
+  /* Only the default branch and zKeep are local, as in Dolt; the rest stay
+  ** remote-tracking so a later checkout starts from what was fetched. */
+  i = 0;
+  while( rc==SQLITE_OK && chunkStoreGetDefaultBranch(pStore) ){
+    const char *zDefault = chunkStoreGetDefaultBranch(pStore);
+    refsTableGetBranches(&pStore->refs, &nBranch, &aBranch);
+    while( i<nBranch && (strcmp(aBranch[i].zName, zDefault)==0
+                         || (zKeep && strcmp(aBranch[i].zName, zKeep)==0)) ){
+      i++;
+    }
+    if( i>=nBranch ) break;
+    rc = chunkStoreDeleteBranch(pStore, aBranch[i].zName);
+  }
   return rc;
 }
 
 int doltliteCloneLazy(
   ChunkStore *pLocal,
   DoltliteRemote *pRemote,
-  const char *zUrl
+  const char *zUrl,
+  const char *zKeepBranch
 ){
   ChunkStore refsView;
   ChunkStoreRefsSnapshot snapshot;
@@ -1922,7 +1940,9 @@ int doltliteCloneLazy(
     rc = chunkStoreSetBranchWorkingSet(
         &refsView, aBranch[i].zName, &emptyWs);
   }
-  if( rc==SQLITE_OK ) rc = remotePrepareCloneRefs(&refsView, zUrl);
+  if( rc==SQLITE_OK ){
+    rc = remotePrepareCloneRefs(&refsView, zUrl, zKeepBranch);
+  }
   if( rc==SQLITE_OK ){
     rc = chunkStoreSerializeRefsToBlob(
         &refsView, &pLocalRefs, &nLocalRefs);
@@ -2054,7 +2074,7 @@ int doltliteClone(
         rc = chunkStoreSetBranchWorkingSet(pLocal, aBr[i].zName, &emptyWs);
       }
     }
-    if( rc==SQLITE_OK ) rc = remotePrepareCloneRefs(pLocal, zUrl);
+    if( rc==SQLITE_OK ) rc = remotePrepareCloneRefs(pLocal, zUrl, 0);
     if( rc==SQLITE_OK ){
       rc = chunkStoreSerializeRefs(pLocal);
     }
