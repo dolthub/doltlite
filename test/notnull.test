@@ -592,10 +592,13 @@ do_execsql_test notnull-6.0 {
   CREATE TABLE t10(a UNIQUE PRIMARY KEY NOT NULL);
 }
 
+set unique_index_next 0
+ifcapable doltlite {set unique_index_next 1}
+
 do_uses_op_next_test notnull-6.1 "SELECT * FROM t1 WHERE a IS ?" 1
-do_uses_op_next_test notnull-6.2 "SELECT * FROM t2 WHERE a IS ?" 0
-do_uses_op_next_test notnull-6.3 "SELECT * FROM t3 WHERE a IS ?" 0
-do_uses_op_next_test notnull-6.4 "SELECT * FROM t4 WHERE a IS ?" 0
+do_uses_op_next_test notnull-6.2 "SELECT * FROM t2 WHERE a IS ?" $unique_index_next
+do_uses_op_next_test notnull-6.3 "SELECT * FROM t3 WHERE a IS ?" $unique_index_next
+do_uses_op_next_test notnull-6.4 "SELECT * FROM t4 WHERE a IS ?" $unique_index_next
 
 do_uses_op_next_test notnull-6.5 "SELECT * FROM t5 WHERE a IS ?" 1
 do_uses_op_next_test notnull-6.6 "SELECT * FROM t6 WHERE a IS ?" 0
