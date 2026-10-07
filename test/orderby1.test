@@ -18,6 +18,9 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 set ::testprefix orderby1
 
+set unique_orderby_plan {~/ORDER BY/}
+ifcapable doltlite {set unique_orderby_plan {/ORDER BY/}}
+
 # Generate test data for a join.  Verify that the join gets the
 # correct answer.
 #
@@ -60,7 +63,7 @@ do_test 1.1b {
     EXPLAIN QUERY PLAN
     SELECT name FROM album CROSS JOIN track USING (aid) ORDER BY title, tn
   }
-} {~/ORDER BY/}  ;# ORDER BY optimized out
+} $unique_orderby_plan
 
 # The same query with ORDER BY clause optimization disabled via + operators
 # should give exactly the same answer.
@@ -115,7 +118,7 @@ do_test 1.4c {
     EXPLAIN QUERY PLAN
     SELECT name FROM album JOIN track USING (aid) ORDER BY title DESC, tn
   }
-} {~/ORDER BY/}  ;# ORDER BY suppressed due to uniqueness constraints
+} $unique_orderby_plan
 
 do_test 1.5a {
   db eval {
@@ -132,7 +135,7 @@ do_test 1.5c {
     EXPLAIN QUERY PLAN
     SELECT name FROM album JOIN track USING (aid) ORDER BY title, tn DESC
   }
-} {~/ORDER BY/}  ;# ORDER BY suppressed due to uniqueness constraints
+} $unique_orderby_plan
 
 do_test 1.6a {
   db eval {
@@ -152,7 +155,7 @@ do_test 1.6c {
     SELECT name FROM album CROSS JOIN track USING (aid)
      ORDER BY title DESC, tn DESC
   }
-} {~/ORDER BY/}  ;# ORDER BY 
+} $unique_orderby_plan
 
 
 # Reconstruct the test data to use indices rather than integer primary keys.
@@ -346,7 +349,7 @@ do_test 3.1b {
     EXPLAIN QUERY PLAN
     SELECT name FROM album CROSS JOIN track USING (aid) ORDER BY title, tn DESC
   }
-} {~/ORDER BY/}  ;# ORDER BY optimized out
+} $unique_orderby_plan
 
 # The same query with ORDER BY clause optimization disabled via + operators
 # should give exactly the same answer.
@@ -401,7 +404,7 @@ do_test 3.4c {
     EXPLAIN QUERY PLAN
     SELECT name FROM album JOIN track USING (aid) ORDER BY title, tn
   }
-} {~/ORDER BY/}  ;# ORDER BY suppressed by uniqueness constraints
+} $unique_orderby_plan
 
 do_test 3.5a {
   db eval {
@@ -418,7 +421,7 @@ do_test 3.5c {
     EXPLAIN QUERY PLAN
     SELECT name FROM album JOIN track USING (aid) ORDER BY title DESC, tn DESC
   }
-} {~/ORDER BY/}  ;# ORDER BY suppressed by uniqueness constraints
+} $unique_orderby_plan
 
 
 do_test 3.6a {
@@ -437,7 +440,7 @@ do_test 3.6c {
     EXPLAIN QUERY PLAN
     SELECT name FROM album CROSS JOIN track USING (aid) ORDER BY title DESC, tn
   }
-} {~/ORDER BY/}  ;# inverted ASC/DESC is optimized out
+} $unique_orderby_plan
 
 # Ticket 5ed1772895bf3deeab78c5e3519b1da9165c541b (2013-06-04)
 # Incorrect ORDER BY on an indexed JOIN

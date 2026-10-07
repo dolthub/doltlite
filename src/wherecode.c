@@ -2395,9 +2395,16 @@ Bitmask sqlite3WhereCodeOneLoopStart(
     }
 
     /* Record the instruction used to terminate the loop. */
+#ifdef DOLTLITE_PROLLY
+    if( (pLoop->wsFlags & WHERE_ONEROW)
+     || (pLevel->u.in.nIn && regBignull==0 && whereLoopIsOneRow(pLoop)
+         && sqlite3IndexIsUniqueForQuery(db, pIdx))
+    ){
+#else
     if( (pLoop->wsFlags & WHERE_ONEROW)
      || (pLevel->u.in.nIn && regBignull==0 && whereLoopIsOneRow(pLoop))
     ){
+#endif
       pLevel->op = OP_Noop;
     }else if( bRev ){
       pLevel->op = OP_Prev;

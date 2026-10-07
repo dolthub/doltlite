@@ -641,4 +641,39 @@ SELECT dolt_merge('feature');
   "SELECT dolt_conflicts_resolve('--theirs', 't');
 SELECT CONCAT('R|', id, '|', IFNULL(v,'NULL'), '|', IFNULL(note,'NULL')) FROM t ORDER BY id;"
 
+echo "--- resolution onto occupied UNIQUE keys ---"
+
+for key in 'INTEGER PRIMARY KEY' 'INT PRIMARY KEY'; do
+  for kind in nullable notnull compound; do
+    column='v INT'
+    terms='v'
+    if [ "$kind" != nullable ]; then column='v INT NOT NULL'; fi
+    if [ "$kind" = compound ]; then terms='v,z'; fi
+    oracle "resolve_theirs_unique_${key%% *}_$kind" "
+CREATE TABLE t(id $key, $column, z INT NOT NULL);
+CREATE UNIQUE INDEX u ON t($terms);
+INSERT INTO t VALUES(1,10,1),(2,20,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+UPDATE t SET v=30 WHERE id=1;
+SELECT dolt_commit('-am','theirs');
+SELECT dolt_checkout('main');
+UPDATE t SET v=40 WHERE id=1;
+UPDATE t SET v=30 WHERE id=2;
+SELECT dolt_commit('-am','ours');
+SELECT dolt_merge('side');
+" "
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT CONCAT('R|lookup|',id) FROM t WHERE v=30 AND z=1 ORDER BY id;
+SELECT CONCAT('R|in|',id) FROM t WHERE v IN (30,40) ORDER BY id;
+SELECT CONCAT('R|count|',count(*)) FROM t WHERE v=30;
+SELECT CONCAT('R|distinct|',v,z) FROM (SELECT DISTINCT v,z FROM t) d;
+SELECT dolt_commit('-Am','resolved');
+SELECT CONCAT('R|committed|',id) FROM t WHERE v=30 AND z=1 ORDER BY id;
+DELETE FROM t WHERE id=2;
+SELECT CONCAT('R|retained|',id) FROM t WHERE v=30 AND z=1;
+"
+  done
+done
+
 vc_oracle_finish

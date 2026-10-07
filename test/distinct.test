@@ -133,6 +133,9 @@ foreach {tn noop sql} {
   26.1  0   "SELECT DISTINCT rowid/2, b FROM t1 WHERE c = ?"
   26.2  1   "SELECT DISTINCT rowid/2, b FROM t4 WHERE c = ?"
 } {
+  ifcapable doltlite {
+    if {$tn in {1.2 2.2 8.2 14.2 16.2 26.2}} {set noop 0}
+  }
   if {$noop} {
     do_distinct_noop_test 1.$tn $sql
   } else {

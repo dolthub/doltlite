@@ -2912,6 +2912,10 @@ struct Index {
 /* Return true if index X is a UNIQUE index */
 #define IsUniqueIndex(X)      ((X)->onError!=OE_None)
 
+#ifdef DOLTLITE_PROLLY
+int sqlite3IndexIsUniqueForQuery(sqlite3*, Index*);
+#endif
+
 /* The Index.aiColumn[] values are normally positive integer.  But
 ** there are some negative values that have special meaning:
 */
