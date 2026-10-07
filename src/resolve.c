@@ -624,7 +624,13 @@ static int lookupName(
      && cntTab>=1
      && pMatch
      && (pNC->ncFlags & (NC_IdxExpr|NC_GenCol))==0
+#ifdef DOLTLITE_PROLLY
+     && (sqlite3IsRowid(zCol)
+         || (db->pInternalRowidTable==pMatch->pSTab && db->zInternalRowid
+             && sqlite3_stricmp(db->zInternalRowid, zCol)==0))
+#else
      && sqlite3IsRowid(zCol)
+#endif
      && ALWAYS(VisibleRowid(pMatch->pSTab) || pMatch->fg.isNestedFrom)
     ){
       cnt = cntTab;

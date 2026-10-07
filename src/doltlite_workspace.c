@@ -1124,6 +1124,9 @@ static int wsDiscardRow(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
   DoltliteAuthShield shield;
   const u8 *pRec;
   const char *zRowid = 0;
+  const char *zSavedRowid = db->zInternalRowid;
+  Table *pSavedRowidTable = db->pInternalRowidTable;
+  char *zHiddenRowid = 0;
   char *zSql;
   int nRec, i, nCol = 0, rc;
   int bWasInternal = (db->mDbFlags & DBFLAG_InternalDml)!=0;
@@ -1135,16 +1138,22 @@ static int wsDiscardRow(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
     zRowid = pTab->iPKey>=0 ? pTab->aCol[pTab->iPKey].zCnName
                            : sqlite3RowidAlias(pTab);
     if( !zRowid ){
-      sqlite3_free(p->base.zErrMsg);
-      p->base.zErrMsg = sqlite3_mprintf(
-          "dolt_workspace_%s: table shadows every rowid alias", p->zTableName);
-      return p->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+      i = 0;
+      do {
+        sqlite3_free(zHiddenRowid);
+        zHiddenRowid = sqlite3_mprintf("dolt_workspace_rowid_%d", i++);
+        if( !zHiddenRowid ) return SQLITE_NOMEM;
+      } while( sqlite3ColumnIndex(pTab, zHiddenRowid)>=0 );
+      zRowid = zHiddenRowid;
     }
   }
   pRec = r->diffType==PROLLY_DIFF_ADD ? r->pNewVal : r->pOldVal;
   nRec = r->diffType==PROLLY_DIFF_ADD ? r->nNewVal : r->nOldVal;
   rc = doltliteParseRecordStrict(pRec, nRec, &info);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zHiddenRowid);
+    return rc;
+  }
   pSql = sqlite3_str_new(db);
   if( r->diffType==PROLLY_DIFF_DELETE ){
     sqlite3_str_appendf(pSql, "INSERT OR ABORT INTO main.\"%w\"(", p->zTableName);
@@ -1191,11 +1200,14 @@ static int wsDiscardRow(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
   zSql = sqlite3_str_finish(pSql);
   if( !zSql ){
     doltliteRecordInfoClear(&info);
+    sqlite3_free(zHiddenRowid);
     return SQLITE_NOMEM;
   }
 
   /* Discards must enforce constraints without firing user triggers or row hooks. */
   db->mDbFlags |= DBFLAG_InternalDml;
+  db->pInternalRowidTable = pTab;
+  db->zInternalRowid = zHiddenRowid;
   doltliteAuthShieldEnter(db, &shield);
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
   for(i=0; i<pCols->nCol && rc==SQLITE_OK; i++){
@@ -1217,6 +1229,9 @@ static int wsDiscardRow(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
   }
   sqlite3_finalize(pStmt);
   doltliteAuthShieldLeave(&shield);
+  db->pInternalRowidTable = pSavedRowidTable;
+  db->zInternalRowid = zSavedRowid;
+  sqlite3_free(zHiddenRowid);
   if( !bWasInternal ) db->mDbFlags &= ~DBFLAG_InternalDml;
   db->nChange = nChange;
   db->nTotalChange = nTotalChange;

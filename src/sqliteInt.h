@@ -1856,6 +1856,8 @@ struct sqlite3 {
 #endif
 #ifdef DOLTLITE_PROLLY
   struct Vdbe *pWorkspaceStatement;
+  Table *pInternalRowidTable;
+  const char *zInternalRowid;
 #endif
 };
 
