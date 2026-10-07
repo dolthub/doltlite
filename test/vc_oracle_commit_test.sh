@@ -399,6 +399,10 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_commit('--skip-empty', '-m', 'second');
 "
 
+oracle "commit_skip_empty_fresh_repo" "
+SELECT dolt_commit('--skip-empty', '-m', 'nothing yet');
+"
+
 oracle "commit_skip_empty_with_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
