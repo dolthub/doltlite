@@ -1854,6 +1854,9 @@ struct sqlite3 {
   void (*xUnlockNotify)(void **, int);  /* Unlock notify callback */
   sqlite3 *pNextBlocked;        /* Next in list of all blocked connections */
 #endif
+#ifdef DOLTLITE_PROLLY
+  struct Vdbe *pWorkspaceStatement;
+#endif
 };
 
 /*
@@ -5844,6 +5847,7 @@ void sqlite3VtabMakeWritable(Parse*,Table*);
 #ifdef DOLTLITE_PROLLY
 void sqlite3BtreeMarkMasterRootChanged(Btree*);
 int doltliteBtreeCaptureStatement(void*);
+void doltliteWorkspaceFinishStatement(Vdbe*);
 void *doltliteBtreeOrigPtr(void*);
 #endif
 void sqlite3VtabBeginParse(Parse*, Token*, Token*, Token*, int);

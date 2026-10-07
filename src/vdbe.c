@@ -9661,6 +9661,9 @@ case OP_VUpdate: {
   assert( pOp->p4type==P4_VTAB );
   if( ALWAYS(pModule->xUpdate) ){
     u8 vtabOnConflict = db->vtabOnConflict;
+#ifdef DOLTLITE_PROLLY
+    Vdbe *pWorkspaceStatement = db->pWorkspaceStatement;
+#endif
     apArg = p->apArg;
     pX = &aMem[pOp->p3];
     assert( nArg<=p->napArg );
@@ -9671,7 +9674,13 @@ case OP_VUpdate: {
       pX++;
     }
     db->vtabOnConflict = pOp->p5;
+#ifdef DOLTLITE_PROLLY
+    db->pWorkspaceStatement = p;
+#endif
     rc = pModule->xUpdate(pVtab, nArg, apArg, &rowid);
+#ifdef DOLTLITE_PROLLY
+    db->pWorkspaceStatement = pWorkspaceStatement;
+#endif
     db->vtabOnConflict = vtabOnConflict;
     sqlite3VtabImportErrmsg(p, pVtab);
     if( rc==SQLITE_OK && pOp->p1 ){
