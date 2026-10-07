@@ -1440,6 +1440,18 @@ int doltlitePush(
   const char *zRef,
   int bForce
 ){
+  return doltlitePushAs(pLocal, pRemote, 0, zRef, bForce);
+}
+
+/* zRef names the remote branch (":name" deletes it); zLocal, when set, is
+** the local branch pushed to it. */
+int doltlitePushAs(
+  ChunkStore *pLocal,
+  DoltliteRemote *pRemote,
+  const char *zLocal,
+  const char *zRef,
+  int bForce
+){
   const int bDelete = zRef[0]==':';
   const char *zBranch = zRef + bDelete;
   ProllyHash localCommit = {{0}};
@@ -1450,7 +1462,7 @@ int doltlitePush(
 
   if( !zBranch[0] ) return SQLITE_MISUSE;
   if( !bDelete ){
-    rc = chunkStoreFindBranch(pLocal, zBranch, &localCommit);
+    rc = chunkStoreFindBranch(pLocal, zLocal ? zLocal : zBranch, &localCommit);
     if( rc!=SQLITE_OK ) return SQLITE_ERROR;
   }
 
@@ -1809,6 +1821,17 @@ int doltliteFetch(
   const char *zRemoteName,
   const char *zBranch
 ){
+  return doltliteFetchInto(pLocal, pRemote, zRemoteName, zBranch, zBranch);
+}
+
+/* Fetch remote branch zBranch into the tracking ref zRemoteName/zTrack. */
+int doltliteFetchInto(
+  ChunkStore *pLocal,
+  DoltliteRemote *pRemote,
+  const char *zRemoteName,
+  const char *zBranch,
+  const char *zTrack
+){
   u8 *refsData = 0;
   int nRefsData = 0;
   ProllyHash remoteCommit;
@@ -1842,7 +1865,7 @@ int doltliteFetch(
     return SQLITE_NOTFOUND;
   }
 
-  rc = chunkStoreFindTracking(pLocal, zRemoteName, zBranch, &trackingCommit);
+  rc = chunkStoreFindTracking(pLocal, zRemoteName, zTrack, &trackingCommit);
   if( rc==SQLITE_OK ){
     if( prollyHashCompare(&trackingCommit, &remoteCommit)==0 ){
       int seqWouldAdvance = 0;
@@ -1884,7 +1907,7 @@ int doltliteFetch(
   if( rc==SQLITE_OK ){
     doltliteTestRunBeforeRefInstallHook();
     rc = installFetchedRefs(
-        pLocal, &remoteRefs, zRemoteName, zBranch, &remoteCommit,
+        pLocal, &remoteRefs, zRemoteName, zTrack, &remoteCommit,
         bLazyOrigin);
   }
 
@@ -2017,7 +2040,8 @@ lazy_clone_done:
 int doltliteClone(
   ChunkStore *pLocal,
   DoltliteRemote *pRemote,
-  const char *zUrl
+  const char *zUrl,
+  const char *zKeepBranch
 ){
   u8 *refsData = 0;
   int nRefsData = 0;
@@ -2108,7 +2132,9 @@ int doltliteClone(
         rc = chunkStoreSetBranchWorkingSet(pLocal, aBr[i].zName, &emptyWs);
       }
     }
-    if( rc==SQLITE_OK ) rc = remotePrepareCloneRefs(pLocal, zUrl, 0);
+    if( rc==SQLITE_OK ){
+      rc = remotePrepareCloneRefs(pLocal, zUrl, zKeepBranch);
+    }
     if( rc==SQLITE_OK ){
       rc = chunkStoreSerializeRefs(pLocal);
     }
