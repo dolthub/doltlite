@@ -1287,4 +1287,62 @@ SELECT dolt_checkout('HEAD', '--', '-b');
 UPDATE t SET v = (SELECT v FROM \`-b\` WHERE id = 1) WHERE id = 1;
 "
 
+echo "--- -- forces table names when a branch shares one ---"
+
+oracle "checkout_dash_dash_table_not_branch" "
+$SEED
+SELECT dolt_branch('t');
+INSERT INTO t VALUES (2, 'wip');
+SELECT dolt_checkout('--', 't');
+"
+
+oracle "checkout_name_without_dash_dash_switches" "
+$SEED
+SELECT dolt_branch('t');
+INSERT INTO t VALUES (2, 'wip');
+SELECT dolt_checkout('t');
+"
+
+oracle "checkout_dash_dash_restores_every_named_table" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO u VALUES (1, 'u1');
+SELECT dolt_commit('-Am', 'u');
+SELECT dolt_branch('t');
+UPDATE t SET v = 'dirty';
+UPDATE u SET v = 'dirty';
+SELECT dolt_checkout('--', 't', 'u');
+"
+
+oracle "checkout_dash_dash_current_branch_keeps_work" "
+$SEED
+SELECT dolt_branch('t');
+SELECT dolt_checkout('t');
+UPDATE t SET v = 'dirty';
+SELECT dolt_checkout('--', 't');
+"
+
+oracle "checkout_ref_then_dash_dash_table" "
+$SEED
+SELECT dolt_branch('side');
+SELECT dolt_checkout('side');
+UPDATE t SET v = 'side';
+SELECT dolt_commit('-am', 'side');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'dirty';
+SELECT dolt_checkout('side', '--', 't');
+"
+
+vc_oracle_error "checkout_dash_dash_branch_without_table" "
+$SEED
+SELECT dolt_branch('onlybranch');
+SELECT dolt_checkout('--', 'onlybranch');
+"
+
+vc_oracle_error "checkout_two_refs_before_dash_dash" "
+$SEED
+SELECT dolt_branch('side');
+SELECT dolt_checkout('main', 'side', '--', 't');
+"
+
 vc_oracle_finish
