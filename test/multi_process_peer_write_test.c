@@ -180,6 +180,11 @@ static const Op aOp[] = {
     "peer_write_kept_remote_remove" },
   { "reset_soft", 0, "SELECT dolt_reset('--soft')",
     "peer_write_kept_reset_soft" },
+  { "reset_soft_ref", 0, "SELECT dolt_reset('--soft','HEAD')",
+    "peer_write_kept_reset_soft_ref" },
+  { "reset_mixed", 0, "SELECT dolt_reset()", "peer_write_kept_reset_mixed" },
+  { "reset_mixed_ref", 0, "SELECT dolt_reset('HEAD')",
+    "peer_write_kept_reset_mixed_ref" },
   { "reset_table", 0, "SELECT dolt_reset('u')", "peer_write_kept_reset_table" },
   /* Discarding a peer's uncommitted row is what --hard is for. */
   { "reset_hard", 0, "SELECT dolt_reset('--hard')",
