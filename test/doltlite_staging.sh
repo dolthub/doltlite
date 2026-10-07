@@ -182,6 +182,30 @@ run_test "status_clean_composite_pk_schema" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB9"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8" "$DB9"
+DB10=/tmp/test_staging10_$$.db
+rm -f "$DB10"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); CREATE TABLE u(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); INSERT INTO u VALUES(1);" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+run_test "add_dot_mixed_with_table" \
+  "SELECT dolt_add('t', '.');" \
+  "Error near line 1: error: the table(s) . do not exist" "$DB10"
+
+run_test "add_dot_mixed_stages_nothing" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" \
+  "0" "$DB10"
+
+run_test "add_dot_twice" \
+  "SELECT dolt_add('.', '.');" \
+  "Error near line 1: error: the table(s) ., . do not exist" "$DB10"
+
+DB11=/tmp/test_staging11_$$.db
+rm -f "$DB11"
+echo "CREATE TABLE t(x); INSERT INTO t VALUES(1);" | $DOLTLITE "$DB11" > /dev/null 2>&1
+echo "SELECT dolt_add('-A', '.');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+run_test "add_all_flag_with_dot_stages" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" \
+  "1" "$DB11"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 
 dltest_finish

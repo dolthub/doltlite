@@ -124,7 +124,7 @@ static int doltliteCommitParseOptions(
 ){
   DoltliteCmdArgs args;
   DoltliteCmdOption aOption[] = {
-    { 0, 'A', DOLTLITE_CMD_OPTION_FLAG, &opts->addAll, 0 },
+    { "ALL", 'A', DOLTLITE_CMD_OPTION_FLAG, &opts->addAll, 0 },
     { "all", 'a', DOLTLITE_CMD_OPTION_FLAG, &opts->addModifiedOnly, 0 },
     { "force", 'f', DOLTLITE_CMD_OPTION_FLAG, &opts->force, 0 },
     { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zMessage },

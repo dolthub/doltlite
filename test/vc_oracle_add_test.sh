@@ -209,6 +209,50 @@ INSERT INTO b VALUES (1);
 SELECT dolt_add('.');
 "
 
+oracle_error_poststate "dot_mixed_with_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+INSERT INTO u VALUES (1);
+" "SELECT dolt_add('t', '.');" "
+SELECT 'Q|' || table_name || '|' || staged || '|' || status
+  FROM dolt_status
+ ORDER BY table_name, staged, status;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+INSERT INTO u VALUES (1);
+" "SELECT dolt_add('t', '.');" "
+SELECT concat('Q|', table_name, '|', staged, '|', status)
+  FROM dolt_status
+ ORDER BY table_name, staged, status;"
+
+oracle_error_poststate "dot_twice" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+INSERT INTO u VALUES (1);
+" "SELECT dolt_add('.', '.');" "
+SELECT 'Q|' || table_name || '|' || staged || '|' || status
+  FROM dolt_status
+ ORDER BY table_name, staged, status;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+INSERT INTO u VALUES (1);
+" "SELECT dolt_add('.', '.');" "
+SELECT concat('Q|', table_name, '|', staged, '|', status)
+  FROM dolt_status
+ ORDER BY table_name, staged, status;"
+
+oracle "all_flag_with_dot" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+INSERT INTO u VALUES (1);
+SELECT dolt_add('-A', '.');
+"
+
 echo "--- idempotency and additivity ---"
 
 oracle "idempotent_repeat" "

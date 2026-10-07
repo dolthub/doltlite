@@ -1231,12 +1231,43 @@ static void doltliteAddFunc(
   rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) goto add_cleanup;
-  for(i=0; i<args.nPositional; i++){
-    if( strcmp(args.azPositional[i], ".")==0 ){
+  /* '.' means every table only when it is the sole table argument. Mixed
+  ** with names, each '.' is a table that does not exist. -A still stages
+  ** everything and ignores table arguments. */
+  if( !stageAll ){
+    int nDot = 0;
+    for(i=0; i<args.nPositional; i++){
+      if( strcmp(args.azPositional[i], ".")==0 ) nDot++;
+    }
+    if( nDot==1 && args.nPositional==1 ){
       stageAll = 1;
+    }else if( nDot>0 ){
+      sqlite3_str *pList = sqlite3_str_new(db);
+      char *zList;
+      char *zErr;
+      int first = 1;
+      for(i=0; i<args.nPositional; i++){
+        if( strcmp(args.azPositional[i], ".")!=0 ) continue;
+        if( !first ) sqlite3_str_appendall(pList, ", ");
+        sqlite3_str_appendall(pList, ".");
+        first = 0;
+      }
+      zList = sqlite3_str_finish(pList);
+      if( !zList ){
+        sqlite3_result_error_nomem(context);
+        goto add_cleanup;
+      }
+      zErr = sqlite3_mprintf("error: the table(s) %s do not exist", zList);
+      sqlite3_free(zList);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      goto add_cleanup;
     }else{
-      args.apPositional[nTables] = args.apPositional[i];
-      args.azPositional[nTables++] = args.azPositional[i];
+      nTables = args.nPositional;
     }
   }
   if( !stageAll && nTables==0 ){
