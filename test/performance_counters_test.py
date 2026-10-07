@@ -23,6 +23,35 @@ class ExceptionTests(unittest.TestCase):
         })
         self.assertEqual(counters.parse_exceptions(None), {})
 
+    def test_shown_markers_are_not_approvals(self):
+        text = ("```\n"
+                "perf-counter-exception: w seek example of the marker, not an approval\n"
+                "```\n"
+                "<!--\n"
+                "perf-counter-exception: w record_bytes commented out while we investigate\n"
+                "-->\n"
+                "~~~~\n"
+                "perf-counter-exception: w compare tilde fence\n"
+                "~~~\n"
+                "perf-counter-exception: w compare still inside the longer fence\n"
+                "~~~~\n"
+                "    perf-counter-exception: w sortkey_parse indented code\n"
+                "> ```\n"
+                "> perf-counter-exception: w node_load quoted fence\n"
+                "> ```\n"
+                "perf-counter-exception: w cache_miss approved after the examples\n"
+                "<!-- unterminated\n"
+                "perf-counter-exception: w row_fetch hidden by an open comment\n")
+        self.assertEqual(counters.parse_exceptions(text), {
+            ("w", "cache_miss"): "approved after the examples",
+        })
+        worse = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            worse = counters.compare_counters(
+                "w", {"seek": 100, "record_bytes": 100}, {"seek": 200, "record_bytes": 200},
+                counters.parse_exceptions(text), set())
+        self.assertEqual(worse, ["record_bytes", "seek"])
+
     def test_only_the_named_regression_is_allowed(self):
         exceptions = {("w", "sortkey_parse"): "reviewed"}
         used = set()

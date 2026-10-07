@@ -28,11 +28,33 @@ ROWS = 256
 EXCEPTION = re.compile(
     r"^[ \t>*-]*perf-counter-exception:[ \t]*([A-Za-z0-9_]+)[ \t]+([a-z_]+)[ \t]+(\S[^\r\n]*?)[ \t]*$",
     re.M)
+HTML_COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
+FENCE = re.compile(r"^[ \t>]*(`{3,}|~{3,})")
+INDENTED_CODE = re.compile(r"^(?: {4,}|\t)perf-counter-exception:")
+
+
+def approval_text(text):
+    """The text a reader sees as prose: no HTML comments, fenced blocks, or
+    indented code lines, where the marker is only shown, not given."""
+    lines = []
+    fence = None
+    for line in HTML_COMMENT.sub("", text or "").splitlines():
+        m = FENCE.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            continue
+        if m:
+            fence = m.group(1)
+            continue
+        if not INDENTED_CODE.match(line):
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def parse_exceptions(text):
     return {(workload, counter): reason
-            for workload, counter, reason in EXCEPTION.findall(text or "")}
+            for workload, counter, reason in EXCEPTION.findall(approval_text(text))}
 
 
 def compare_counters(name, base, cand, exceptions, used):
