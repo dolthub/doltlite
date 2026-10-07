@@ -3405,7 +3405,12 @@ int sqlite3FindInIndex(
           if( pIdx->nColumn>=BMS-1 ) continue;
           if( mustBeUnique ){
             if( pIdx->nKeyCol>nExpr
+#ifdef DOLTLITE_PROLLY
+             ||(pIdx->nColumn>nExpr
+                && !sqlite3IndexIsUniqueForQuery(db, pIdx))
+#else
              ||(pIdx->nColumn>nExpr && !IsUniqueIndex(pIdx))
+#endif
             ){
               continue;  /* This index is not unique over the IN RHS columns */
             }

@@ -227,13 +227,22 @@ do_eqp_test 4.2.5 {
   |--SEARCH c2 USING INDEX sqlite_autoindex_c2_1 (k=?) LEFT-JOIN
   `--SEARCH c3 USING INDEX sqlite_autoindex_c3_1 (k=?) LEFT-JOIN
 }
-do_eqp_test 4.2.6 {
-  SELECT v1, v3 FROM c1 LEFT JOIN c2 ON (c2.k=v1) LEFT JOIN c3 ON (c3.k=v1+1);
-} {
+set unused_left_join_plan {
   QUERY PLAN
   |--SCAN c1
   `--SEARCH c3 USING INDEX sqlite_autoindex_c3_1 (k=?) LEFT-JOIN
 }
+ifcapable doltlite {
+  set unused_left_join_plan {
+    QUERY PLAN
+    |--SCAN c1
+    |--SEARCH c2 USING COVERING INDEX sqlite_autoindex_c2_1 (k=?) LEFT-JOIN
+    `--SEARCH c3 USING INDEX sqlite_autoindex_c3_1 (k=?) LEFT-JOIN
+  }
+}
+do_eqp_test 4.2.6 {
+  SELECT v1, v3 FROM c1 LEFT JOIN c2 ON (c2.k=v1) LEFT JOIN c3 ON (c3.k=v1+1);
+} $unused_left_join_plan
 
 # 2017-11-23 (Thanksgiving day)
 # OSSFuzz found an assertion fault in the new LEFT JOIN eliminator code.

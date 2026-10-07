@@ -14,6 +14,9 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 set testprefix in5
 
+set unique_in_ephemeral 0
+ifcapable doltlite {set unique_in_ephemeral 1}
+
 do_test in5-1.1 {
   execsql {
     CREATE TABLE t1x(x INTEGER PRIMARY KEY);
@@ -59,7 +62,7 @@ do_test in5-2.3 {
   regexp {OpenEphemeral} [db eval {
     EXPLAIN SELECT d FROM t2 WHERE a IN t1x AND b IN t1y AND c IN t1z
   }]
-} {0}
+} $unique_in_ephemeral
 do_test in5-2.4 {
   execsql {
     SELECT d FROM t2 WHERE a IN t3x AND b IN t3y AND c IN t3z ORDER BY d;
@@ -97,7 +100,7 @@ do_test in5-3.3 {
   regexp {OpenEphemeral} [db eval {
     EXPLAIN SELECT d FROM t2 WHERE a IN t1x AND b IN t1y AND c IN t1z
   }]
-} {0}
+} $unique_in_ephemeral
 
 do_test in5-4.1 {
   execsql {
@@ -115,7 +118,7 @@ do_test in5-4.3 {
   regexp {OpenEphemeral} [db eval {
     EXPLAIN SELECT d FROM t2 WHERE a IN t1x AND b IN t1y AND c IN t1z
   }]
-} {0}
+} $unique_in_ephemeral
 
 
 do_test in5-5.1 {
@@ -134,7 +137,7 @@ do_test in5-5.3 {
   regexp {OpenEphemeral} [db eval {
     EXPLAIN SELECT d FROM t2 WHERE a IN t1x AND b IN t1y AND c IN t1z
   }]
-} {0}
+} $unique_in_ephemeral
 
 #-------------------------------------------------------------------------
 # At one point SQLite was removing the DISTINCT keyword from expressions

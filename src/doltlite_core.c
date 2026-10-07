@@ -20,6 +20,16 @@
 #include <ctype.h>
 #include <time.h>
 
+int sqlite3IndexIsUniqueForQuery(sqlite3 *db, Index *pIdx){
+  int iDb;
+  if( !IsUniqueIndex(pIdx) ) return 0;
+  if( IsPrimaryKeyIndex(pIdx) || pIdx->idxType==SQLITE_IDXTYPE_IPK ) return 1;
+  iDb = sqlite3SchemaToIndex(db, pIdx->pSchema);
+  /* Conflict resolution can retain duplicate secondary keys. */
+  return iDb<0 || !db->aDb[iDb].pBt
+      || sqlite3BtreeUsesOrig(db->aDb[iDb].pBt);
+}
+
 void doltliteTestCrashFinalize(const char *zOperation){
 #ifdef SQLITE_TEST
   const char *zCrash = getenv("DOLTLITE_CRASH_FINALIZE");

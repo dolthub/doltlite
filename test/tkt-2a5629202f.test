@@ -61,9 +61,11 @@ do_execsql_test 2.1 {
   CREATE UNIQUE INDEX t2ba ON t2(b, a);
 }
 
+set unique_lookup_sort nosort
+ifcapable doltlite {set unique_lookup_sort sort}
 do_test 2.2 {
   cksort { SELECT * FROM t2 WHERE a = 10 ORDER BY a, b, c }
-} {nosort}
+} $unique_lookup_sort
 
 do_test 2.3 {
   cksort { SELECT * FROM t2 WHERE b = 10 ORDER BY a, b, c }

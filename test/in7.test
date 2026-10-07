@@ -93,6 +93,9 @@ foreach {tn nNext idx sql} {
     SELECT * FROM t1 WHERE a = ? AND b IN (SELECT z FROM t2)
   } 
 } {
+  ifcapable doltlite {
+    if {$tn in {2 3 4 10 12}} {set nNext 1}
+  }
   do_test 1.1.$tn {
     execsql BEGIN
     execsql $idx

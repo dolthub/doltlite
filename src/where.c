@@ -676,7 +676,11 @@ static int isDistinctRedundant(
   **      contain a "col=X" term are subject to a NOT NULL constraint.
   */
   for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+#ifdef DOLTLITE_PROLLY
+    if( !sqlite3IndexIsUniqueForQuery(pParse->db, pIdx) ) continue;
+#else
     if( !IsUniqueIndex(pIdx) ) continue;
+#endif
     if( pIdx->pPartIdxWhere ) continue;
     for(i=0; i<pIdx->nKeyCol; i++){
       if( 0==sqlite3WhereFindTerm(pWC, iBase, i, ~(Bitmask)0, WO_EQ, pIdx) ){
@@ -3463,7 +3467,12 @@ static int whereLoopAddBtreeIndex(
     ){
       continue;
     }
+#ifdef DOLTLITE_PROLLY
+    if( sqlite3IndexIsUniqueForQuery(db, pProbe)
+     && saved_nEq==pProbe->nKeyCol-1 ){
+#else
     if( IsUniqueIndex(pProbe) && saved_nEq==pProbe->nKeyCol-1 ){
+#endif
       pBuilder->bldFlags1 |= SQLITE_BLDF1_UNIQUE;
     }else{
       pBuilder->bldFlags1 |= SQLITE_BLDF1_INDEXED;
@@ -3570,9 +3579,16 @@ static int whereLoopAddBtreeIndex(
       int iCol = pProbe->aiColumn[saved_nEq];
       pNew->wsFlags |= WHERE_COLUMN_EQ;
       assert( saved_nEq==pNew->u.btree.nEq );
+#ifdef DOLTLITE_PROLLY
+      if( iCol==XN_ROWID
+       || (iCol>=0 && nInMul==0 && saved_nEq==pProbe->nKeyCol-1
+           && sqlite3IndexIsUniqueForQuery(db, pProbe))
+      ){
+#else
       if( iCol==XN_ROWID
        || (iCol>=0 && nInMul==0 && saved_nEq==pProbe->nKeyCol-1)
       ){
+#endif
         if( iCol==XN_ROWID || pProbe->uniqNotNull
          || (pProbe->nKeyCol==1 && pProbe->onError && (eOp & WO_EQ))
         ){
@@ -5563,8 +5579,13 @@ static i8 wherePathSatisfiesOrderBy(
         ** for isOrderDistinct to be true.  So the isOrderDistinct value
         ** computed here might be a false positive.  Corrections will be
         ** made at tag-20210426-1 below */
+#ifdef DOLTLITE_PROLLY
+        isOrderDistinct = sqlite3IndexIsUniqueForQuery(db, pIndex)
+                          && (pLoop->wsFlags & WHERE_SKIPSCAN)==0;
+#else
         isOrderDistinct = IsUniqueIndex(pIndex)
                           && (pLoop->wsFlags & WHERE_SKIPSCAN)==0;
+#endif
       }
 
       /* Loop through all columns of the index and deal with the ones
@@ -6661,7 +6682,11 @@ static int whereShortCut(WhereLoopBuilder *pBuilder){
     for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
       int opMask;
       assert( pLoop->aLTermSpace==pLoop->aLTerm );
+#ifdef DOLTLITE_PROLLY
+      if( !sqlite3IndexIsUniqueForQuery(pWInfo->pParse->db, pIdx)
+#else
       if( !IsUniqueIndex(pIdx)
+#endif
        || pIdx->pPartIdxWhere!=0
        || pIdx->nKeyCol>ArraySize(pLoop->aLTermSpace)
       ) continue;

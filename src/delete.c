@@ -992,7 +992,13 @@ void sqlite3GenerateRowIndexDelete(
     }
     sqlite3VdbeAddOp3(v, OP_IdxDelete, iIdxCur+i, r1, p3);
     sqlite3VdbeChangeP4(v, -1, (const char*)pIdx, P4_INDEX);
+#ifdef DOLTLITE_PROLLY
+    sqlite3VdbeChangeP5(v,
+        pIdx->uniqNotNull && sqlite3IndexIsUniqueForQuery(pParse->db, pIdx)
+        ? pIdx->nKeyCol : pIdx->nColumn);
+#else
     sqlite3VdbeChangeP5(v, pIdx->uniqNotNull ? pIdx->nKeyCol : pIdx->nColumn);
+#endif
     sqlite3ResolvePartIdxLabel(pParse, iPartIdxLabel);
     pPrior = pIdx;
   }
@@ -1057,7 +1063,13 @@ int sqlite3GenerateIndexKey(
       *piPartIdxLabel = 0;
     }
   }
+#ifdef DOLTLITE_PROLLY
+  nCol = prefixOnly && pIdx->uniqNotNull
+      && sqlite3IndexIsUniqueForQuery(pParse->db, pIdx)
+      ? pIdx->nKeyCol : pIdx->nColumn;
+#else
   nCol = (prefixOnly && pIdx->uniqNotNull) ? pIdx->nKeyCol : pIdx->nColumn;
+#endif
   regBase = sqlite3GetTempRange(pParse, nCol);
   if( pPrior && (regBase!=regPrior || pPrior->pPartIdxWhere) ) pPrior = 0;
   for(j=0; j<nCol; j++){

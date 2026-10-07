@@ -259,10 +259,12 @@ do_test in3-4.4 {
   # A temp table must be used because t3_i.b is not guaranteed to be unique.
   exec_neph { SELECT b FROM t3 WHERE b IN (SELECT b FROM t3) }
 } {1 none numeric real text}
+set unique_in_ephemeral 0
+ifcapable doltlite {set unique_in_ephemeral 1}
 do_test in3-4.5 {
   execsql { CREATE UNIQUE INDEX t3_i2 ON t3(b) }
   exec_neph { SELECT b FROM t3 WHERE b IN (SELECT b FROM t3) }
-} {0 none numeric real text}
+} [concat $unique_in_ephemeral {none numeric real text}]
 do_test in3-4.6 {
   execsql { DROP INDEX t3_i2 }
 } {}

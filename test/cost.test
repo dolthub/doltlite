@@ -21,13 +21,22 @@ do_execsql_test 1.1 {
   CREATE UNIQUE INDEX i3 ON t3(b);
   CREATE UNIQUE INDEX i4 ON t4(c, d);
 }
-do_eqp_test 1.2 {
-  SELECT e FROM t3, t4 WHERE b=c ORDER BY b, d;
-} {
+set unique_join_plan {
   QUERY PLAN
   |--SCAN t3 USING COVERING INDEX i3
   `--SEARCH t4 USING INDEX i4 (c=?)
 }
+ifcapable doltlite {
+  set unique_join_plan {
+    QUERY PLAN
+    |--SCAN t4 USING INDEX i4
+    |--SEARCH t3 USING COVERING INDEX i3 (b=?)
+    `--USE TEMP B-TREE FOR ORDER BY
+  }
+}
+do_eqp_test 1.2 {
+  SELECT e FROM t3, t4 WHERE b=c ORDER BY b, d;
+} $unique_join_plan
 
 
 do_execsql_test 2.1 {

@@ -1,0 +1,106 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  text {id TEXT PRIMARY KEY} {}
+  composite {id INT, PRIMARY KEY(id,z)} {}
+  without_rowid {id INT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach {kind column terms predicate} {
+    nullable {v INT} {v} {v=30}
+    notnull {v INT NOT NULL} {v} {v=30}
+    compound {v INT NOT NULL} {v,z} {v=30 AND z=1}
+    expression {v INT} {v+0} {v+0=30}
+    partial {v INT} {v} {v=30 AND z=1}
+    collated {v TEXT NOT NULL} {v COLLATE NOCASE} {v='30' COLLATE NOCASE}
+  } {
+    reset_db
+    set pk {}
+    if {$layout eq "composite"} {
+      set key {id INT}
+      set pk {,PRIMARY KEY(id,z)}
+    }
+    execsql "CREATE TABLE t($key,$column,z INT NOT NULL$pk) $suffix"
+    set where {}
+    if {$kind eq "partial"} {set where {WHERE z=1}}
+    execsql "CREATE UNIQUE INDEX u ON t($terms) $where"
+    execsql {
+      INSERT INTO t VALUES(1,10,1),(2,20,1);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_checkout('-b','side');
+      UPDATE t SET v=30 WHERE id=1;
+      SELECT dolt_commit('-am','theirs');
+      SELECT dolt_checkout('main');
+      UPDATE t SET v=40 WHERE id=1;
+      UPDATE t SET v=30 WHERE id=2;
+      SELECT dolt_commit('-am','ours');
+      SELECT id FROM t WHERE v=30 ORDER BY id;
+      BEGIN;
+    }
+    set name conflicts-unique-$layout-$kind
+    do_catchsql_test $name-merge {
+      SELECT dolt_merge('side');
+    } {1 {Merge has 1 conflict(s). Resolve and then commit with dolt_commit.}}
+    do_execsql_test $name-resolve {
+      SELECT dolt_conflicts_resolve('--theirs','t');
+      SELECT count(*) FROM dolt_conflicts;
+    } {0 0}
+    foreach state {transaction committed reopened checkout} {
+      switch $state {
+        committed {execsql {SELECT dolt_commit('-Am','resolved')}}
+        reopened {
+          db close
+          sqlite3 db test.db
+        }
+        checkout {
+          execsql {SELECT dolt_checkout('side'); SELECT dolt_checkout('main')}
+        }
+      }
+      do_execsql_test $name-$state-lookup {
+        SELECT id FROM t WHERE v=30 ORDER BY id;
+      } {1 2}
+      do_test $name-$state-forced {
+        execsql "SELECT id FROM t INDEXED BY u WHERE $predicate ORDER BY id"
+      } {1 2}
+      do_execsql_test $name-$state-scan {
+        SELECT id FROM t NOT INDEXED WHERE v=30 ORDER BY id;
+      } {1 2}
+      do_execsql_test $name-$state-count {
+        SELECT count(*) FROM t WHERE v=30;
+        SELECT count(*) FROM t WHERE v IN (30,40);
+        SELECT count(*) FROM t WHERE v IN (SELECT v FROM t);
+      } {2 2 2}
+      do_execsql_test $name-$state-distinct {
+        SELECT DISTINCT v FROM t WHERE v=30;
+        SELECT DISTINCT v,z FROM t;
+      } {30 30 1}
+      do_execsql_test $name-$state-join {
+        SELECT a.id,b.id FROM t a JOIN t b ON a.v=b.v ORDER BY a.id,b.id;
+        SELECT id FROM t WHERE v=30 ORDER BY id DESC LIMIT 2;
+        SELECT a.id FROM t a LEFT JOIN t b ON a.v=b.v AND a.z=b.z
+          ORDER BY a.id;
+      } {1 1 1 2 2 1 2 2 2 1 1 1 2 2}
+      do_catchsql_test $name-$state-enforce {
+        INSERT INTO t VALUES(4,30,1);
+      } [list 1 [expr {$kind eq "expression" ? "UNIQUE constraint failed: index 'u'" : ($kind eq "compound" ? "UNIQUE constraint failed: t.v, t.z" : "UNIQUE constraint failed: t.v")}]]
+    }
+    do_execsql_test $name-delete {
+      SAVEPOINT before_delete;
+      DELETE FROM t WHERE id=2;
+      SELECT id FROM t WHERE v=30;
+      PRAGMA integrity_check;
+      ROLLBACK TO before_delete;
+      RELEASE before_delete;
+    } {1 ok}
+    do_execsql_test $name-update {
+      UPDATE t SET v=50 WHERE id=2;
+      SELECT id FROM t WHERE v=30;
+      SELECT id FROM t WHERE v=50;
+      PRAGMA integrity_check;
+    } {1 2 ok}
+  }
+}
+
+finish_test
