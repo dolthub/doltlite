@@ -363,6 +363,47 @@ SELECT dolt_merge('Q', '-m', 'final');
 
 oracle_rows "unequal_height_criss_cross_keeps_edit" "$UNEQUAL_CRISS_EDIT"
 
+# The merge is stored on P. A later connection has to open that branch;
+# the new column and both edited rows must still be there.
+oracle_reopen_branch_rows() {
+  local name="$1" setup="$2" branch="$3"
+  local dir="$TMPROOT/${name}"
+  mkdir -p "$dir/dl" "$dir/dt"
+  local q="SELECT 'R|' || id || '|' || v || '|' || note FROM t ORDER BY id;"
+  local qdt="SELECT CONCAT('R|', id, '|', v, '|', note) FROM t ORDER BY id;"
+
+  printf "%s\n" "$setup" | vc_oracle_run_doltlite "$dir/dl/db" >/dev/null 2>"$dir/dl.err"
+  local dl_out
+  dl_out=$(printf ".headers off\n.mode list\n%s\n" "$q" \
+           | vc_oracle_run_doltlite "$dir/dl/db/$branch" 2>>"$dir/dl.err" \
+           | tr -d '\r' \
+           | grep '^R|' )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    printf '%s\n' "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
+    # SQL checkout stays in that session. The next process follows the repo branch.
+    "$DOLT" checkout "$branch" >>"$dir/dt.err" 2>&1
+    "$DOLT" sql -r csv -q "$qdt" 2>>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  local dt_out
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|')
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+oracle_reopen_branch_rows "unequal_height_note_reopen" "
+$UNEQUAL_CRISS
+SELECT dolt_checkout('P');
+ALTER TABLE t ADD COLUMN note TEXT DEFAULT 'n';
+UPDATE t SET v = 2 WHERE id = 1;
+SELECT dolt_commit('-am', 'p note');
+SELECT dolt_merge('Q', '-m', 'final');
+" "P"
+
 echo "--- multi-merge fan-in ---"
 
 FANIN="
