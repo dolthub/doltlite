@@ -376,6 +376,94 @@ SELECT dolt_commit('--amend', '-m', 'amended merge');
    WHERE commit_hash=hashof('HEAD')
  UNION ALL SELECT CONCAT('R|log|', count(*)) FROM dolt_log;"
 
+oracle "commit_amend_root_message_only" "
+SELECT dolt_commit('--amend', '-m', 'x');
+"
+
+oracle "commit_amend_root_staged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('--amend', '-m', 'x');
+"
+
+oracle "commit_amend_root_unstaged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_commit('--amend', '-m', 'x');
+"
+
+oracle "commit_amend_root_keeps_message" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('--amend');
+"
+
+oracle "commit_amend_root_keeps_working_edit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_add('-A');
+UPDATE t SET v = 9;
+SELECT dolt_commit('--amend', '-m', 'x');
+"
+
+oracle "commit_amend_root_dash_a" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_commit('-a', '--amend', '-m', 'x');
+"
+
+oracle_query "commit_amend_root_includes_row" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('--amend', '-m', 'x');
+" \
+"SELECT 'R|v|' || v FROM t
+ UNION ALL SELECT 'R|n|' || count(*) FROM dolt_log
+ UNION ALL SELECT 'R|m|' || message FROM dolt_log
+ UNION ALL SELECT 'R|par|' || count(*) FROM dolt_commit_ancestors
+   WHERE commit_hash=(SELECT dolt_hashof('HEAD'));" \
+"SELECT CONCAT('R|v|', v) FROM t
+ UNION ALL SELECT CONCAT('R|n|', count(*)) FROM dolt_log
+ UNION ALL SELECT CONCAT('R|m|', message) FROM dolt_log
+ UNION ALL SELECT CONCAT('R|par|', count(*)) FROM dolt_commit_ancestors
+   WHERE commit_hash=hashof('HEAD');"
+
+oracle_query "commit_amend_root_committed_not_working" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_add('-A');
+UPDATE t SET v = 9;
+SELECT dolt_commit('--amend', '-m', 'x');
+SELECT dolt_checkout('t');
+" \
+"SELECT 'R|v|' || v FROM t;" \
+"SELECT CONCAT('R|v|', v) FROM t;"
+
+oracle_query "commit_amend_root_child_parents" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('--amend', '-m', 'x');
+INSERT INTO t VALUES (2, 8);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" \
+"SELECT 'R|head|' || count(*) FROM dolt_commit_ancestors
+   WHERE commit_hash=(SELECT dolt_hashof('HEAD'))
+ UNION ALL SELECT 'R|root|' || count(*) FROM dolt_commit_ancestors
+   WHERE commit_hash=(SELECT dolt_hashof('HEAD~1'))
+ UNION ALL SELECT 'R|log|' || count(*) FROM dolt_log
+ UNION ALL SELECT 'R|v|' || v FROM t WHERE id=1;" \
+"SELECT CONCAT('R|head|', count(*)) FROM dolt_commit_ancestors
+   WHERE commit_hash=hashof('HEAD')
+ UNION ALL SELECT CONCAT('R|root|', count(*)) FROM dolt_commit_ancestors
+   WHERE commit_hash=hashof('HEAD~1')
+ UNION ALL SELECT CONCAT('R|log|', count(*)) FROM dolt_log
+ UNION ALL SELECT CONCAT('R|v|', v) FROM t WHERE id=1;"
+
 echo "--- skip / allow empty ---"
 
 oracle "commit_allow_empty_no_changes" "
