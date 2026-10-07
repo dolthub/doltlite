@@ -116,6 +116,44 @@ SQL
   )
 }
 
+# Pushes each named branch, in order, into an empty remote, then clones it.
+consume_pushes() {
+  local key="$1"; shift
+  local base="$TMPROOT/$key"
+  mkdir -p "$base/dsrc" "$base/drem"
+  local dl_remote="$base/tgt.db"
+  CONSUME_DL="$base/clone.db"
+  CONSUME_DT="$base/clone"
+
+  local setup="CREATE TABLE example(id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO example VALUES (1, 'base');
+SELECT dolt_commit('-A','-m','c1 base');" b
+  for b in "$@"; do
+    [ "$b" = main ] || setup="$setup
+SELECT dolt_branch('$b');"
+  done
+  local dl_push="$setup
+SELECT dolt_remote('add','origin','file://$dl_remote');"
+  for b in "$@"; do dl_push="$dl_push
+SELECT dolt_push('origin','$b');"; done
+  printf '%s\n' "$dl_push" | vc_oracle_run_doltlite "$base/src.db" >/dev/null 2>"$base/dl_push.err"
+  printf 'SELECT dolt_clone('"'"'file://%s'"'"');\n' "$dl_remote" \
+    | vc_oracle_run_doltlite "$CONSUME_DL" >/dev/null 2>"$base/dl_clone.err"
+
+  (
+    cd "$base/dsrc" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    printf '%s\n' "$(vc_oracle_translate_for_dolt "$setup")" \
+      | "$DOLT" sql -c >/dev/null 2>"$base/dt_setup.err"
+    "$DOLT" remote add origin "file://$base/drem" >/dev/null 2>&1
+    for b in "$@"; do
+      "$DOLT" push origin "$b" >/dev/null 2>>"$base/dt_push.err"
+    done
+    cd "$base" || exit 1
+    "$DOLT" clone "file://$base/drem" clone >/dev/null 2>"$base/dt_clone.err"
+  )
+}
+
 # $mut (optional) is applied to a fresh copy of each consumer first.
 compare() {
   local name="$1" mut="$2" dl_query="$3" dt_query="$4"
@@ -259,5 +297,15 @@ SELECT dolt_branch('-D','topic_foo');
 compare "two_branch_delete_first_branch" "$MUT_DELETE_FIRST" \
   "SELECT 'R|deleted|' || count(*) FROM dolt_branches WHERE name='topic_foo';" \
   "SELECT CONCAT('R|deleted|', count(*)) FROM dolt_branches WHERE name='topic_foo';"
+
+echo "--- clone checks out main, then master, over the first-pushed branch ---"
+for order in "zzz main" "zzz master" "zzz master main"; do
+  key="clone_branch_$(echo "$order" | tr ' ' '_')"
+  # shellcheck disable=SC2086
+  consume_pushes "$key" $order
+  compare "$key" "" \
+    "SELECT 'R|' || active_branch();" \
+    "SELECT CONCAT('R|', active_branch());"
+done
 
 vc_oracle_finish
