@@ -1,0 +1,142 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach key {INTEGER INT} {
+  foreach {name column expression invalid} {
+    end end {CASE WHEN v>0 THEN w ELSE 0 END>0} -1
+    case case {CASE WHEN v>0 THEN w ELSE 0 END>0} -1
+    when when {CASE WHEN v>0 THEN w ELSE 0 END>0} -1
+    then then {CASE WHEN v>0 THEN w ELSE 0 END>0} -1
+    else else {CASE WHEN v>0 THEN w ELSE 0 END>0} -1
+    not not {v IS NOT NULL} NULL
+    is is {v IS NOT NULL} NULL
+    null null {v IS NOT NULL} NULL
+    and and {v>0 AND w>0} -1
+    or or {v>0 OR w>0} -1
+    between between {v BETWEEN 1 AND 3} -1
+    like like {v LIKE '1%'} -1
+    cast cast {CAST(v AS INT)>0} -1
+    type int {CAST(v AS INT)>0} -1
+    collation nocase {v COLLATE NOCASE>0} -1
+    function abs {abs(v)>0} 0
+    qualifier t {t.v>0} -1
+    literal end {v>0 AND length('END NOT')>0} -1
+  } {
+    foreach direction {forward reverse} {
+      reset_db
+      execsql "CREATE TABLE t(id $key PRIMARY KEY,v INT,w INT,\"$column\" INT)"
+      execsql {
+        INSERT INTO t VALUES(1,1,1,1);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('side');
+        SELECT dolt_checkout('side');
+        DROP TABLE t;
+      }
+      execsql "CREATE TABLE t(id $key PRIMARY KEY,v INT,w INT,\"$column\" INT,
+                  CONSTRAINT ck CHECK($expression))"
+      execsql {
+        INSERT INTO t VALUES(1,1,1,1);
+        SELECT dolt_commit('-Am','check');
+        SELECT dolt_checkout('main');
+      }
+      execsql "ALTER TABLE t DROP COLUMN \"$column\""
+      execsql {SELECT dolt_commit('-Am','drop')}
+      if {$direction eq "forward"} {
+        set target side
+        set connection test.db
+      } else {
+        execsql {SELECT dolt_checkout('side')}
+        set target main
+        set connection test.db/side
+      }
+      set tag check-columns-$key-$name-$direction
+      do_execsql_test $tag-merge "SELECT length(dolt_merge('$target'))" {40}
+      do_execsql_test $tag-schema {
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+        SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%CHECK(%';
+        SELECT count(*) FROM dolt_schema_conflicts;
+      } {id v w 1 0}
+      do_execsql_test $tag-valid {INSERT INTO t(id,v,w) VALUES(2,1,1)} {}
+      do_test $tag-invalid {
+        set result [catchsql "INSERT INTO t(id,v,w) VALUES(3,$invalid,-1)"]
+        list [lindex $result 0] \
+             [string match {*CHECK constraint failed*} [lindex $result 1]]
+      } {1 1}
+      execsql {SELECT dolt_commit('-Am','merged rows')}
+      db close
+      sqlite3 db $connection
+      do_execsql_test $tag-reopen {
+        SELECT * FROM t ORDER BY id;
+        PRAGMA integrity_check;
+      } {1 1 1 2 1 1 ok}
+    }
+  }
+
+  foreach {name column expression} {
+    quoted_end end {"end">0}
+    unquoted_end end {end>0}
+    fallback_key key {key>0}
+    quoted_not not {"not">0}
+    quoted_type int {"int">0}
+    mixed_case END {"EnD">0}
+    escaped_quote {a"b} {"a""b">0}
+    qualifier v {t.v>0}
+  } {
+    foreach direction {forward reverse} {
+      reset_db
+      set quoted [string map [list {"} {""}] $column]
+      if {$column eq "v"} {
+        execsql "CREATE TABLE t(id $key PRIMARY KEY,v INT,w INT)"
+        set values {1,1,1}
+      } else {
+        execsql "CREATE TABLE t(id $key PRIMARY KEY,v INT,w INT,\"$quoted\" INT)"
+        set values {1,1,1,1}
+      }
+      execsql "INSERT INTO t VALUES($values)"
+      execsql {
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('side');
+        SELECT dolt_checkout('side');
+        DROP TABLE t;
+      }
+      if {$column eq "v"} {
+        execsql "CREATE TABLE t(id $key PRIMARY KEY,v INT,w INT,
+                    CONSTRAINT ck CHECK($expression))"
+      } else {
+        execsql "CREATE TABLE t(id $key PRIMARY KEY,v INT,w INT,\"$quoted\" INT,
+                    CONSTRAINT ck CHECK($expression))"
+      }
+      execsql "INSERT INTO t VALUES($values)"
+      execsql {
+        SELECT dolt_commit('-Am','check');
+        SELECT dolt_checkout('main');
+      }
+      execsql "ALTER TABLE t DROP COLUMN \"$quoted\""
+      execsql {SELECT dolt_commit('-Am','drop')}
+      if {$direction eq "forward"} {
+        set target side
+      } else {
+        execsql {SELECT dolt_checkout('side')}
+        set target main
+      }
+      execsql {BEGIN}
+      set tag check-columns-$key-$name-$direction
+      do_test $tag-conflict {
+        set result [catchsql "SELECT dolt_merge('$target')"]
+        list [lindex $result 0] \
+             [execsql {SELECT count(*) FROM dolt_schema_conflicts}]
+      } {1 1}
+      do_execsql_test $tag-description {
+        SELECT count(*) FROM dolt_schema_conflicts
+         WHERE description LIKE '%references a column that will be deleted%';
+      } {1}
+      do_execsql_test $tag-rollback {
+        ROLLBACK;
+        SELECT count(*) FROM dolt_schema_conflicts;
+        PRAGMA integrity_check;
+      } {0 ok}
+    }
+  }
+}
+
+finish_test
