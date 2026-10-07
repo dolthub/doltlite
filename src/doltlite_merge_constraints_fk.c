@@ -704,7 +704,7 @@ static int dlSkipReferences(const char **pz, const char *zEnd){
   return n<0 ? SQLITE_CORRUPT : SQLITE_OK;
 }
 
-static int dlStripColumn(const char *zDef, char **pzOut){
+static int dlStripColumn(const char *zDef, int bStripUnique, char **pzOut){
   sqlite3_str *pStr;
   const char *z = zDef ? zDef : "";
   const char *zEnd = z + strlen(z);
@@ -728,7 +728,8 @@ static int dlStripColumn(const char *zDef, char **pzOut){
       kn = dlNext(&q, zEnd, &kt);
       if( kn<=0 ){ rc = kn<0 ? SQLITE_CORRUPT : SQLITE_OK; break; }
       if( kt==TK_CHECK || kt==TK_DEFAULT || kt==TK_REFERENCES
-       || kt==TK_FOREIGN || kt==TK_COLLATE || kt==TK_NOT ){
+       || kt==TK_FOREIGN || kt==TK_COLLATE || kt==TK_NOT
+       || (bStripUnique && kt==TK_UNIQUE) ){
         z = q;
         continue;
       }
@@ -740,11 +741,11 @@ static int dlStripColumn(const char *zDef, char **pzOut){
       z += n;
       continue;
     }
-    if( type==TK_NOT ){
+    if( type==TK_NOT || (bStripUnique && type==TK_UNIQUE) ){
       const char *q = z + n;
       int t, k = dlNext(&q, zEnd, &t);
-      if( k>0 && t==TK_NULL ){
-        z = q + k;
+      if( type==TK_UNIQUE || (k>0 && t==TK_NULL) ){
+        z = type==TK_UNIQUE ? z+n : q+k;
         q = z;
         k = dlNext(&q, zEnd, &t);
         if( k>0 && t==TK_ON ){
@@ -789,11 +790,11 @@ static int dlStripColumn(const char *zDef, char **pzOut){
   return *pzOut ? SQLITE_OK : SQLITE_NOMEM;
 }
 
-int dlCoresMatch(const char *zA, const char *zB){
+int dlCoresMatch(const char *zA, const char *zB, int bStripUnique){
   char *a = 0, *b = 0;
   int rc, same = 0;
-  rc = dlStripColumn(zA ? zA : "", &a);
-  if( rc==SQLITE_OK ) rc = dlStripColumn(zB ? zB : "", &b);
+  rc = dlStripColumn(zA ? zA : "", bStripUnique, &a);
+  if( rc==SQLITE_OK ) rc = dlStripColumn(zB ? zB : "", bStripUnique, &b);
   if( rc==SQLITE_OK && a && b ) same = schemaDefinitionsEquivalent(a, b);
   sqlite3_free(a);
   sqlite3_free(b);
@@ -917,7 +918,7 @@ static int dlNeutralSql(const char *zSql, char **pzOut){
     }
     zPiece = sqlite3_mprintf("%.*s", a[i].n, a[i].z);
     if( !zPiece ){ rc = SQLITE_NOMEM; break; }
-    rc = dlStripColumn(zPiece, &zCol);
+    rc = dlStripColumn(zPiece, 0, &zCol);
     sqlite3_free(zPiece);
     if( rc!=SQLITE_OK ) break;
     sqlite3_str_appendall(pStr, zCol ? zCol : "");

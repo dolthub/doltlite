@@ -97,6 +97,7 @@ doltlite_reset_schema
 doltlite_cache_budget
 doltlite_merge_schema_relayout
 doltlite_merge_column_attributes
+doltlite_merge_unique_columns
 doltlite_merge_index_encoding
 doltlite_replay_dropped_column
 doltlite_reset_initial

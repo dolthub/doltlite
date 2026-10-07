@@ -2288,4 +2288,71 @@ SQL
   done
 done
 
+
+for key in INTEGER INT; do
+  for kind in inline compound retained; do
+    constraint='w INT UNIQUE,z INT'
+    ancestor_constraint=''
+    count=1
+    duplicate_z=81
+    if [ "$kind" = compound ]; then
+      constraint='w INT,z INT,UNIQUE(w,z)'
+      duplicate_z=80
+    elif [ "$kind" = retained ]; then
+      constraint='w INT UNIQUE,z INT,UNIQUE(id,w,z)'
+      ancestor_constraint=',UNIQUE(id,w,z)'
+      count=2
+    fi
+    for shape in add drop rename; do
+      case "$shape" in
+        add) alter='ADD COLUMN x INT DEFAULT 5'; columns=5 ;;
+        drop) alter='DROP COLUMN v'; columns=3 ;;
+        rename) alter='RENAME COLUMN v TO vv'; columns=4 ;;
+      esac
+      for direction in forward reverse; do
+        unique_branch=feat
+        shape_branch=main
+        if [ "$direction" = reverse ]; then
+          unique_branch=main
+          shape_branch=feat
+        fi
+        tag="unique_${key}_${kind}_${shape}_${direction}"
+        DB="$TMPROOT/$tag.db"
+        cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t(id $key PRIMARY KEY,v INT,w INT,z INT$ancestor_constraint);
+INSERT INTO t VALUES(1,10,20,30),(2,11,21,31);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('$unique_branch');
+DROP TABLE t;
+CREATE TABLE t(id $key PRIMARY KEY,v INT,$constraint);
+INSERT INTO t VALUES(1,10,20,30),(2,11,21,31);
+SELECT dolt_commit('-Am','unique');
+SELECT dolt_checkout('$shape_branch');
+ALTER TABLE t $alter;
+SELECT dolt_commit('-Am','shape');
+SELECT dolt_checkout('main');
+SQL
+        expect_merge_ok "$tag" "$DB"
+        expect_dual_value "${tag}_rows" "$DB" '1|20|30
+2|21|31' \
+          "SELECT id||'|'||w||'|'||z FROM t ORDER BY id;" \
+          "SELECT CONCAT(id,'|',w,'|',z) FROM t ORDER BY id;"
+        expect_dual_value "${tag}_columns" "$DB" "$columns" \
+          "SELECT count(*) FROM pragma_table_info('t');" \
+          "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='t';"
+        expect_dual_value "${tag}_indexes" "$DB" "$count" \
+          "SELECT count(*) FROM pragma_index_list('t') WHERE origin='u';" \
+          "SELECT COUNT(DISTINCT index_name) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='t' AND non_unique=0 AND index_name<>'PRIMARY';"
+        run_dual_command_outcome "${tag}_insert" "$DB" \
+          "INSERT INTO t(id,w,z) VALUES(8,40,80);" \
+          "INSERT INTO t(id,w,z) VALUES(8,40,80);" ok
+        run_dual_command_outcome "${tag}_enforcement" "$DB" \
+          "INSERT INTO t(id,w,z) VALUES(9,40,$duplicate_z);" \
+          "INSERT INTO t(id,w,z) VALUES(9,40,$duplicate_z);" error
+      done
+    done
+  done
+done
+
 vc_oracle_finish

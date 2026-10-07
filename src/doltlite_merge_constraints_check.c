@@ -799,6 +799,7 @@ static int dlComposeRetained(
   int nSplice = 0, nSpliceAlloc = 0, nDefer = 0, nDeferAlloc = 0;
   int i, rc, bConflict = 0, bHandled = 0, changed = 0;
   int bNeutral = 0, bCoreDiff = 0, bHalf = 0;
+  int uniqueChoice = SCHEMA_MERGE_DEFAULT;
 
   if( pzSql ) *pzSql = 0;
   if( pbConflict ) *pbConflict = 0;
@@ -826,12 +827,18 @@ static int dlComposeRetained(
     goto done;
   }
 
+  if( schemaChoice!=SCHEMA_MERGE_DEFAULT ){
+    rc = schemaUniqueSideChoice(zAnc, zOurs, zTheirs, &uniqueChoice);
+    if( rc!=SQLITE_OK ) goto done;
+  }
+
   for(i=0; i<nWin; i++){
     int j = parsedColumnIndexByName(aOth, nOth, aWin[i].zName);
     int k, cores;
     if( j<0 ) continue;
     if( schemaDefinitionsEquivalent(aWin[i].zDef, aOth[j].zDef) ) continue;
-    cores = dlCoresMatch(aWin[i].zDef, aOth[j].zDef);
+    cores = dlCoresMatch(aWin[i].zDef, aOth[j].zDef,
+        uniqueChoice!=SCHEMA_MERGE_DEFAULT && uniqueChoice==schemaChoice);
     if( cores<0 ){
       rc = -cores==SQLITE_NOMEM ? SQLITE_NOMEM : SQLITE_OK;
       goto done;

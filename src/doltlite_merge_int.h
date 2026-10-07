@@ -341,7 +341,10 @@ struct DlFk {
 };
 
 int dlColsContain(const char *zCols, const char *zName);
-int dlCoresMatch(const char *zA, const char *zB);
+int dlCoresMatch(const char *zA, const char *zB, int bStripUnique);
+int schemaUniqueSideChoice(
+  const char *zAnc, const char *zOurs, const char *zTheirs, int *pChoice
+);
 int dlNeutralSame(const char *zA, const char *zB, int *pb);
 int dlMergedNames(
   ParsedColumn *aAnc, int nAnc,
