@@ -115,6 +115,8 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
                                &p->sessionConflictsCatalog);
   doltliteGetSessionConstraintViolationsCatalog(
       db, &p->sessionConstraintViolationsCatalog);
+  chunkStorePeekWorkingSetBasis(cs, p->zSessionBranch, &p->wsBasis);
+  p->nWsForeignAdopt = cs->nWsForeignAdopt;
 
   rc = doltliteFlushCatalogToHash(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ){
@@ -938,6 +940,49 @@ int doltlitePersistWorkingSetConfirmed(
   return rc;
 }
 
+/* Take the graph lock to write back a restored pre-command working set.
+** *pbPeerWrote is set, and the lock not held, when a peer published a working
+** set since the state was saved: that write is on disk and the restore would
+** erase it, so the session reloads it instead. *pbLocked says whether the
+** caller must unlock. */
+int doltliteLockForRestore(
+  sqlite3 *db,
+  const ProllyHash *pHead,
+  const ProllyHash *pWsBasis,
+  u32 nWsForeignAdopt,
+  int *pbLocked,
+  int *pbPeerWrote
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc;
+  *pbLocked = 0;
+  *pbPeerWrote = 0;
+  if( !cs || !db->autoCommit || !chunkStoreHasPeers(cs) ) return SQLITE_OK;
+  rc = doltliteRefreshAndConfirmHead(db, cs, pHead);
+  if( rc==SQLITE_BUSY ){
+    *pbPeerWrote = 1;
+    return SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteBranchWorkingSetUnmoved(
+      cs, doltliteGetSessionBranch(db), pWsBasis);
+  if( rc==SQLITE_OK && cs->nWsForeignAdopt!=nWsForeignAdopt ){
+    rc = SQLITE_BUSY;
+  }
+  if( rc==SQLITE_BUSY ){
+    chunkStoreUnlock(cs);
+    doltliteInvalidateSessionWorkingState(db);
+    *pbPeerWrote = 1;
+    return SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    return rc;
+  }
+  *pbLocked = 1;
+  return SQLITE_OK;
+}
+
 static int doltliteCompareAndAdvanceBranchImpl(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
@@ -1075,6 +1120,34 @@ int doltlitePersistOrSaveWorkingSet(sqlite3 *db){
     return doltlitePersistWorkingSet(db);
   }
   return doltliteSaveWorkingSet(db);
+}
+
+int doltliteDetectConstraintViolationsInTxn(
+  sqlite3 *db,
+  const ProllyHash *pAncCat,
+  int *pnViolations,
+  char **pzErr
+){
+  int vrc;
+  int erc;
+  int bOwnTxn = 0;
+
+  *pnViolations = 0;
+  *pzErr = 0;
+  /* Detectors write while scanning. In autocommit that inner write
+  ** commits and the next cursor has no txn; hold one across the pass. */
+  if( db->autoCommit ){
+    vrc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+    if( vrc!=SQLITE_OK ) return vrc;
+    bOwnTxn = 1;
+  }
+  vrc = doltliteDetectConstraintViolationsFiltered(
+      db, pAncCat, 0, 0, 1, pnViolations, pzErr);
+  if( bOwnTxn ){
+    erc = sqlite3_exec(db, vrc==SQLITE_OK ? "COMMIT" : "ROLLBACK", 0, 0, 0);
+    if( vrc==SQLITE_OK ) vrc = erc;
+  }
+  return vrc;
 }
 
 int doltliteDetectConstraintViolationsFiltered(

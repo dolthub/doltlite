@@ -1026,34 +1026,6 @@ static int mergeRefInstallMergedCatalog(
   return rc;
 }
 
-static int mergeRefDetectConstraintViolations(
-  sqlite3 *db,
-  const ProllyHash *pAncCat,
-  int *pnViolations,
-  char **pzErr
-){
-  int vrc;
-  int erc;
-  int bOwnTxn = 0;
-
-  *pnViolations = 0;
-  *pzErr = 0;
-  /* Detectors write while scanning. In autocommit that inner write
-  ** commits and the next cursor has no txn; hold one across the pass. */
-  if( db->autoCommit ){
-    vrc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
-    if( vrc!=SQLITE_OK ) return vrc;
-    bOwnTxn = 1;
-  }
-  vrc = doltliteDetectConstraintViolationsFiltered(
-      db, pAncCat, 0, 0, 1, pnViolations, pzErr);
-  if( bOwnTxn ){
-    erc = sqlite3_exec(db, vrc==SQLITE_OK ? "COMMIT" : "ROLLBACK", 0, 0, 0);
-    if( vrc==SQLITE_OK ) vrc = erc;
-  }
-  return vrc;
-}
-
 static int mergeRefCreateMergeCommit(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1401,7 +1373,7 @@ int doltliteMergeRef(
     goto merge_fail;
   }
 
-  rc = mergeRefDetectConstraintViolations(
+  rc = doltliteDetectConstraintViolationsInTxn(
       db, &ancCatHash, &nViolations, &zOwnedErr);
   if( rc!=SQLITE_OK ){
     bRestoreOnFail = 1;

@@ -99,6 +99,8 @@ static int cherryPickRestoreAndPersist(
 ){
   ProllyHash restoredCat = pSaved->sessionCatalogHash;
   ProllyHash savedHead = pSaved->sessionHead;
+  ProllyHash wsBasis = pSaved->wsBasis;
+  u32 nWsForeignAdopt = pSaved->nWsForeignAdopt;
   ProllyHash diskHead;
   ProllyHash sessionHead;
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -127,7 +129,13 @@ static int cherryPickRestoreAndPersist(
   ** write, and persisting the pre-op catalog over it would erase it. */
   if( restoreRc==opRc && opRc!=SQLITE_BUSY
    && !prollyHashIsEmpty(&restoredCat) ){
-    persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
+    int bLocked, bPeerWrote;
+    persistRc = doltliteLockForRestore(db, &savedHead, &wsBasis,
+                                       nWsForeignAdopt, &bLocked, &bPeerWrote);
+    if( persistRc==SQLITE_OK && !bPeerWrote ){
+      persistRc = doltlitePersistWorkingSetWithHash(db, &restoredCat);
+    }
+    if( bLocked ) chunkStoreUnlock(cs);
     if( persistRc!=SQLITE_OK && persistRc!=SQLITE_NOMEM ) restoreRc = persistRc;
   }
   return restoreRc;
@@ -417,8 +425,8 @@ int applyMergedCatalogAndCommit(
     int nViolations = 0;
     char *zDetectErrMsg = 0;
 
-    rc = doltliteDetectConstraintViolationsFiltered(
-        db, ancCatHash, 0, 0, 1, &nViolations, &zDetectErrMsg);
+    rc = doltliteDetectConstraintViolationsInTxn(
+        db, ancCatHash, &nViolations, &zDetectErrMsg);
     if( rc!=SQLITE_OK ){
       if( zDetectErrMsg ){
         sqlite3_result_error(context, zDetectErrMsg, -1);

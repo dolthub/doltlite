@@ -350,6 +350,8 @@ void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs);
 int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch);
 void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
                                   ProllyHash *pHash);
+void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
+                                   ProllyHash *pHash);
 void chunkStoreNoteSelfPublishedWorkingSet(ChunkStore *cs);
 int chunkStoreHasPeers(ChunkStore *cs);
 int chunkStoreWorkingSetSelfPublished(

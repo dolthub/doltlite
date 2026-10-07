@@ -88,14 +88,15 @@ static int copyFile(const char *zFrom, const char *zTo){
   return ok;
 }
 
-/* main has t and u, an extra commit c2 tagged c2 (so f diverges), branch f with a
-** commit on u, branch ff one commit ahead of main, branch f2, tag v0,
-** remote o0, and remote origin, a file remote that holds main plus one
-** newer commit on u. */
+/* main has t, u and an FK pair pc/cc, an extra commit c2 tagged c2 (so f
+** diverges), branch f with a commit on u, branch ff one commit ahead of main,
+** branch f2, branch fc whose row 2 conflicts with main's, branch fk that
+** deletes the parent main's child references, tag v0, remote o0, and remote
+** origin, a file remote that holds main plus one newer commit on u. */
 static void buildTemplate(void){
   sqlite3 *db = 0;
   sqlite3 *client = 0;
-  char sql[1024];
+  char sql[2048];
   char zClient[300];
   snprintf(zTemplate, sizeof(zTemplate), "%s/template.db", zDir);
   snprintf(zTemplateRemote, sizeof(zTemplateRemote), "%s/template_remote.db", zDir);
@@ -105,10 +106,25 @@ static void buildTemplate(void){
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'base');"
     "CREATE TABLE u(x INTEGER PRIMARY KEY);"
+    "CREATE TABLE pc(id INTEGER PRIMARY KEY);"
+    "CREATE TABLE cc(id INTEGER PRIMARY KEY, pid INT REFERENCES pc(id));"
+    "INSERT INTO pc VALUES(1),(2);"
     "SELECT dolt_commit('-Am','init');"
     "SELECT dolt_tag('v0');"
     "SELECT dolt_branch('f2');"
     "SELECT dolt_remote('add','o0','file:///nonexistent-peer-write');"
+    "SELECT dolt_branch('fc');"
+    "SELECT dolt_checkout('fc');"
+    "INSERT INTO t VALUES(2,'theirs');"
+    "SELECT dolt_commit('-am','fc1');"
+    "SELECT dolt_checkout('main');"
+    "SELECT dolt_branch('fk');"
+    "SELECT dolt_checkout('fk');"
+    "DELETE FROM pc WHERE id=2;"
+    "SELECT dolt_commit('-am','fk1');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO cc VALUES(1,2);"
+    "SELECT dolt_commit('-am','child');"
     "SELECT dolt_branch('f');"
     "SELECT dolt_checkout('f');"
     "INSERT INTO u VALUES(9);"
@@ -153,6 +169,7 @@ struct Op {
   const char *zSql;
   const char *zCheck;
   int bCommitOnly;
+  const char *zFails;
 };
 
 static const Op aOp[] = {
@@ -202,6 +219,18 @@ static const Op aOp[] = {
   { "cherry_pick", 0, "SELECT dolt_cherry_pick('f')",
     "peer_write_kept_cherry_pick" },
   { "revert", 0, "SELECT dolt_revert('c2')", "peer_write_kept_revert" },
+  /* These fail by design; the rollback must not erase the peer's write. */
+  { "merge_conflict", 0, "SELECT dolt_merge('fc')",
+    "peer_write_kept_merge_conflict", 0, "conflicts detected" },
+  { "cherry_pick_conflict", 0, "SELECT dolt_cherry_pick('fc')",
+    "peer_write_kept_cherry_pick_conflict", 0, "conflict" },
+  { "merge_violation", "PRAGMA foreign_keys=ON", "SELECT dolt_merge('fk')",
+    "peer_write_kept_merge_violation", 0, "constraint violations" },
+  { "cherry_pick_violation", "PRAGMA foreign_keys=ON",
+    "SELECT dolt_cherry_pick('fk')",
+    "peer_write_kept_cherry_pick_violation", 0, "constraint violations" },
+  { "cherry_pick_empty", 0, "SELECT dolt_cherry_pick('HEAD')",
+    "peer_write_kept_cherry_pick_empty", 0, "no changes" },
   { "rebase_interactive", 0, "SELECT dolt_rebase('-i','f')",
     "peer_write_kept_rebase_interactive" },
   { "rebase", 0, "SELECT dolt_rebase('f')", "peer_write_kept_rebase" },
@@ -233,6 +262,12 @@ struct Tally {
   int nLost;
 };
 
+/* An operation that fails by design ran when it failed as designed. */
+static int opRan(const Op *p, int rc, const char *zErr){
+  if( p->zFails ) return rc!=SQLITE_OK && zErr && strstr(zErr, p->zFails)!=0;
+  return rc==SQLITE_OK;
+}
+
 static void opSql(const Op *p, char *zOut, int nOut){
   if( strstr(p->zSql, "%s") ){
     snprintf(zOut, nOut, p->zSql, zInto);
@@ -241,15 +276,17 @@ static void opSql(const Op *p, char *zOut, int nOut){
   }
 }
 
-static int runOpSql(sqlite3 *db, const char *zSql, int *pBusy){
+/* Returns whether the operation ran (see opRan). */
+static int runOpSql(const Op *p, sqlite3 *db, const char *zSql, int *pBusy){
   char *zErr = 0;
   int rc = sqlite3_exec(db, zSql, 0, 0, &zErr);
+  int ran = opRan(p, rc, zErr);
   if( pBusy ){
     *pBusy = rc!=SQLITE_OK
           && ((rc&0xff)==SQLITE_BUSY || (zErr && isBusy(zErr)));
   }
   sqlite3_free(zErr);
-  return rc;
+  return ran;
 }
 
 /* Acknowledged once the peer's INSERT autocommits; the commit is extra,
@@ -302,7 +339,7 @@ static void runStale(const Op *p, int action, Tally *t){
   if( p->zPre ) execSql(db, p->zPre);
   queryText(db, "SELECT count(*) FROM t");
   acked = peerAct(peer, action, p->bCommitOnly);
-  opOk = runOpSql(db, zSql, 0)==SQLITE_OK;
+  opOk = runOpSql(p, db, zSql, 0);
   execSql(db, "INSERT INTO t VALUES(3,'mine')");
   sqlite3_close(peer);
   sqlite3_close(db);
@@ -338,7 +375,7 @@ static int runMidOp(const Op *p, int action, int k, Tally *t){
   sqlite3 *db = 0;
   MidOp m;
   char zSql[512];
-  int rc, busy = 0;
+  int ran, busy = 0;
   if( !freshCopy() ){ t->nLost++; return 0; }
   opSql(p, zSql, sizeof(zSql));
   memset(&m, 0, sizeof(m));
@@ -350,14 +387,14 @@ static int runMidOp(const Op *p, int action, int k, Tally *t){
   m.bCommitOnly = p->bCommitOnly;
   m.fireAt = k;
   sqlite3_progress_handler(db, 1, fireMidOp, &m);
-  rc = runOpSql(db, zSql, &busy);
+  ran = runOpSql(p, db, zSql, &busy);
   sqlite3_progress_handler(db, 0, 0, 0);
-  if( m.fired && busy ) rc = runOpSql(db, zSql, 0);
+  if( m.fired && busy ) ran = runOpSql(p, db, zSql, 0);
   execSql(db, "INSERT INTO t VALUES(3,'mine')");
   sqlite3_close(m.peer);
   sqlite3_close(db);
   if( !m.fired ) return 0;
-  tallyRun(t, m.acked, rc==SQLITE_OK,
+  tallyRun(t, m.acked, ran,
            m.acked ? peerRowKept(p->zName, "midop", action, k) : 1);
   return 1;
 }
@@ -376,7 +413,7 @@ static void runTxn(const Op *p, Tally *t){
   sqlite3_busy_timeout(peer, 5000);
   if( p->zPre ) execSql(db, p->zPre);
   execSql(peer, "BEGIN; INSERT INTO t VALUES(900,'peer')");
-  opOk = runOpSql(db, zSql, 0)==SQLITE_OK;
+  opOk = runOpSql(p, db, zSql, 0);
   committed = execSql(peer, "COMMIT")==SQLITE_OK;
   if( !committed ) execSql(peer, "ROLLBACK");
   execSql(db, "INSERT INTO t VALUES(3,'mine')");

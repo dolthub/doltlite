@@ -269,6 +269,8 @@ struct DoltliteTxnState {
   ProllyHash sessionConflictsCatalog;
   ProllyHash sessionConstraintViolationsCatalog;
   ProllyHash sessionCatalogHash;
+  ProllyHash wsBasis;
+  u32 nWsForeignAdopt;
   u8 sessionIsMerging;
 };
 
@@ -1271,6 +1273,14 @@ int doltlitePersistWorkingSetConfirmed(
   sqlite3 *db,
   const ProllyHash *pExpected
 );
+int doltliteLockForRestore(
+  sqlite3 *db,
+  const ProllyHash *pHead,
+  const ProllyHash *pWsBasis,
+  u32 nWsForeignAdopt,
+  int *pbLocked,
+  int *pbPeerWrote
+);
 int doltliteCompareAndAdvanceBranchCurrentCatalog(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
@@ -1279,6 +1289,12 @@ int doltliteCompareAndAdvanceBranchCurrentCatalog(
   const ProllyHash *pWorkingCatHash
 );
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
+int doltliteDetectConstraintViolationsInTxn(
+  sqlite3 *db,
+  const ProllyHash *pAncCat,
+  int *pnViolations,
+  char **pzErr
+);
 #define DOLTLITE_CMD_OPTION_FLAG 0
 #define DOLTLITE_CMD_OPTION_VALUE 1
 #define DOLTLITE_CMD_PARSE_SHORT_GROUPS 0x01
