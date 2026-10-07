@@ -470,6 +470,132 @@ SELECT dolt_merge('--squash', '--no-commit', 'feature');
 SELECT dolt_commit('-m', 'squashed');
 "
 
+# Two empty commits share a tree. A squash has nothing of its own to record.
+SQUASH_EMPTY="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+SELECT dolt_commit('--allow-empty', '-m', 'f empty');
+SELECT dolt_checkout('main');
+SELECT dolt_commit('--allow-empty', '-m', 'main empty');
+"
+
+vc_oracle_error "squash_empty_nothing_to_commit" "
+$SQUASH_EMPTY
+SELECT dolt_merge('f', '--squash');
+"
+if ! grep -q "nothing to commit" \
+    "$TMPROOT/squash_empty_nothing_to_commit_err/dl.err" \
+ || ! grep -q "nothing to commit" \
+    "$TMPROOT/squash_empty_nothing_to_commit_err/dt.err"; then
+  fail=$((fail+1))
+  FAILED_NAMES="$FAILED_NAMES squash_empty_message"
+  echo "  FAIL: squash_empty_message"
+  sed 's/^/      /' "$TMPROOT/squash_empty_nothing_to_commit_err/dl.err" \
+    "$TMPROOT/squash_empty_nothing_to_commit_err/dt.err"
+fi
+
+oracle_error_poststate "squash_empty_keeps_head" "
+$SQUASH_EMPTY
+SELECT dolt_merge('f', '--squash');
+" "SELECT message || '|' || (SELECT count(*) FROM dolt_status) || '|' || (SELECT is_merging FROM dolt_merge_status) || '|' || (SELECT id || ',' || v FROM t) FROM dolt_log LIMIT 1;" \
+"SELECT concat(message, '|', (SELECT count(*) FROM dolt_status), '|', (SELECT is_merging FROM dolt_merge_status), '|', (SELECT concat(id, ',', v) FROM t)) FROM dolt_log ORDER BY commit_order DESC LIMIT 1;"
+
+oracle "empty_merge_still_commits" "
+$SQUASH_EMPTY
+SELECT dolt_merge('f');
+"
+
+oracle "squash_empty_nocommit_keeps_log" "
+$SQUASH_EMPTY
+SELECT dolt_merge('f', '--squash', '--no-commit');
+"
+
+vc_oracle_error "squash_identical_edit_nothing_to_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+UPDATE t SET v = 5 WHERE id = 1;
+SELECT dolt_commit('-am', 'f edit');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 5 WHERE id = 1;
+SELECT dolt_commit('-am', 'main edit');
+SELECT dolt_merge('f', '--squash');
+"
+
+vc_oracle_error "squash_reverted_feature_nothing_to_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+UPDATE t SET v = 5 WHERE id = 1;
+SELECT dolt_commit('-am', 'f edit');
+UPDATE t SET v = 0 WHERE id = 1;
+SELECT dolt_commit('-am', 'f revert');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 9);
+SELECT dolt_commit('-am', 'main row');
+SELECT dolt_merge('f', '--squash');
+"
+
+oracle "squash_after_our_empty_commit_keeps_their_edit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+UPDATE t SET v = 5 WHERE id = 1;
+SELECT dolt_commit('-am', 'f edit');
+SELECT dolt_checkout('main');
+SELECT dolt_commit('--allow-empty', '-m', 'main empty');
+SELECT dolt_merge('f', '--squash');
+"
+
+oracle_reopen_state "squash_after_our_empty_commit_row" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('f');
+SELECT dolt_checkout('f');
+UPDATE t SET v = 5 WHERE id = 1;
+SELECT dolt_commit('-am', 'f edit');
+SELECT dolt_checkout('main');
+SELECT dolt_commit('--allow-empty', '-m', 'main empty');
+SELECT dolt_merge('f', '--squash');
+" "SELECT CONCAT('Q', CHAR(9), v) FROM t;" \
+"SELECT concat('Q', char(9), v) FROM t;"
+
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "squash_empty_txn_rollback" "
+$SQUASH_EMPTY
+BEGIN;
+SELECT dolt_merge('f', '--squash');
+INSERT INTO t VALUES (3, 3);
+ROLLBACK;
+" "SELECT CONCAT('Q', CHAR(9), id, ',', v) FROM t ORDER BY id;
+SELECT CONCAT('Q', CHAR(9), message) FROM dolt_log LIMIT 1;
+SELECT CONCAT('Q', CHAR(9), count(*)) FROM dolt_status;" \
+"SELECT concat('Q', char(9), id, ',', v) FROM t ORDER BY id;
+SELECT concat('Q', char(9), message) FROM dolt_log ORDER BY commit_order DESC LIMIT 1;
+SELECT concat('Q', char(9), count(*)) FROM dolt_status;"
+
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "squash_empty_txn_commit" "
+$SQUASH_EMPTY
+BEGIN;
+SELECT dolt_merge('f', '--squash');
+INSERT INTO t VALUES (3, 3);
+COMMIT;
+" "SELECT CONCAT('Q', CHAR(9), id, ',', v) FROM t ORDER BY id;
+SELECT CONCAT('Q', CHAR(9), message) FROM dolt_log LIMIT 1;
+SELECT CONCAT('Q', CHAR(9), count(*)) FROM dolt_status;" \
+"SELECT concat('Q', char(9), id, ',', v) FROM t ORDER BY id;
+SELECT concat('Q', char(9), message) FROM dolt_log ORDER BY commit_order DESC LIMIT 1;
+SELECT concat('Q', char(9), count(*)) FROM dolt_status;"
+
 vc_oracle_error "squash_and_no_ff_rejected" "
 $SEED
 SELECT dolt_checkout('feature');

@@ -1337,6 +1337,17 @@ int doltliteMergeRef(
                             &ourCatHash, &theirCatHash, &ancCatHash, &zFail);
   if( rc!=SQLITE_OK ) goto merge_fail;
 
+  /* A squash commit stores only the merged catalog. That catalog is HEAD
+  ** when the two branches already have the same tree, and when their tree
+  ** is still the merge base. Refuse before sealing the caller's BEGIN. */
+  if( squash && !noCommit
+   && (prollyHashCompare(&ourCatHash, &theirCatHash)==0
+    || prollyHashCompare(&theirCatHash, &ancCatHash)==0) ){
+    zFail = "nothing to commit";
+    rc = SQLITE_ERROR;
+    goto merge_fail;
+  }
+
   rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ) goto merge_fail;
   bHaveSaved = 1;
