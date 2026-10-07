@@ -863,6 +863,35 @@ static const char *scopedDefaultBranch(const RefsTable *rt){
   return rt->zDefaultBranch ? rt->zDefaultBranch : "main";
 }
 
+static int remoteRefsHaveBranch(const RefsTable *rt, const char *zName){
+  int n = 0, i;
+  const BranchRef *a = 0;
+  refsTableGetBranches(rt, &n, &a);
+  for(i=0; i<n; i++){
+    if( strcmp(a[i].zName, zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+/* The default a push leaves on the remote. An empty remote adopts the pushed
+** branch; a newly created main, or master while there is no main, takes over
+** as Dolt's clone would choose it. */
+static const char *remotePushedDefault(
+  const RefsTable *pCur,
+  const char *zBranch,
+  int bCreate
+){
+  const char *zDefault = scopedDefaultBranch(pCur);
+  if( !bCreate ) return zDefault;
+  if( refsTableBranchCount(pCur)==0 ) return zBranch;
+  if( strcmp(zBranch, "main")==0 ) return zBranch;
+  if( strcmp(zBranch, "master")==0 && strcmp(zDefault, "main")!=0
+   && !remoteRefsHaveBranch(pCur, "main") ){
+    return zBranch;
+  }
+  return zDefault;
+}
+
 /* Refs lookups use the first matching slot, so a duplicate is a shadow
 ** entry still carried by reserialization. Every named section must be a set. */
 static int scopedNamesAreUnique(const void *aBase, int n, int stride){
@@ -1281,10 +1310,11 @@ int doltliteValidateScopedRefsUpdate(
     goto done;
   }
 
-  /* Push may not repoint the default branch (clone checkout / GET /root).
-  ** An empty target may adopt the pushed branch. */
+  /* Push may repoint the default branch (clone checkout / GET /root) only
+  ** as remotePushedDefault allows. */
   if( !scopedSameText(scopedDefaultBranch(&inc.refs),
-                      !bDelete && nCur==0 ? zRef : scopedDefaultBranch(&pStore->refs)) ){
+                      remotePushedDefault(&pStore->refs, zRef,
+                          !bDelete && !remoteRefsHaveBranch(&pStore->refs, zRef))) ){
     rc = SQLITE_CONSTRAINT;
     goto done;
   }
@@ -1494,8 +1524,12 @@ int doltlitePush(
       rc = doltliteSyncChunks(pLocalSrc, pRemote, &localCommit, 1);
       pLocalSrc->xClose(pLocalSrc);
       if( rc!=SQLITE_OK ) goto push_done;
-      if( refsTableBranchCount(&refs.refs)==0 ){
-        rc = chunkStoreSetDefaultBranch(&refs, zBranch);
+      {
+        const char *zNewDefault =
+            remotePushedDefault(&refs.refs, zBranch, !exists);
+        if( !scopedSameText(zNewDefault, scopedDefaultBranch(&refs.refs)) ){
+          rc = chunkStoreSetDefaultBranch(&refs, zNewDefault);
+        }
       }
       if( rc==SQLITE_OK ){
         rc = exists ? chunkStoreUpdateBranch(&refs, zBranch, &localCommit)
