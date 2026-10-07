@@ -180,7 +180,11 @@ static int doltliteCommitValidateAuthor(
 
 /* Rebuild the staged catalog for dolt_commit -a: overlay working-tree
 ** changes for tables that already exist in HEAD. */
-static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context){
+static int doltliteCommitStageModifiedOnly(
+  sqlite3 *db,
+  sqlite3_context *context,
+  int amend
+){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash workingHash, headCatHash, stagedHash;
   struct TableEntry *aWorking = 0, *aHead = 0, *aStaged = 0;
@@ -503,6 +507,12 @@ static int doltliteCommitStageModifiedOnly(sqlite3 *db, sqlite3_context *context
   }
 
   if( nStaged==0 ){
+    /* --amend of the initial commit still rewrites that commit when -a
+    ** finds no tracked table. */
+    if( amend ){
+      FREE_ADD_MODIFIED_CATALOGS();
+      return SQLITE_OK;
+    }
     sqlite3_result_error(context,
       "nothing to commit, working tree clean (use dolt_add to stage changes)", -1);
     FREE_ADD_MODIFIED_CATALOGS();
@@ -573,13 +583,9 @@ static int doltliteCommitCreateObject(
       return rc;
     }
     if( doltliteCommitParentCount(&headCommit)==0 ){
-      doltliteCommitClear(&headCommit);
-      sqlite3_result_error(context,
-        "cannot --amend: HEAD has no parent (initial commit)", -1);
-      return SQLITE_ERROR;
-    }
-
-    {
+      /* Rewrite the initial commit in place. It stays parentless. */
+      memset(&parentHash, 0, sizeof(parentHash));
+    }else{
       const ProllyHash *pParent = doltliteCommitParentHash(&headCommit, 0);
       if( !pParent || prollyHashIsEmpty(pParent) ){
         doltliteCommitClear(&headCommit);
@@ -1001,7 +1007,7 @@ static void doltliteCommitFunc(
       }
     }
   }else if( addModifiedOnly ){
-    rc = doltliteCommitStageModifiedOnly(db, context);
+    rc = doltliteCommitStageModifiedOnly(db, context, amend);
     if( rc!=SQLITE_OK ) return;
   }
 
@@ -1035,7 +1041,8 @@ static void doltliteCommitFunc(
 
   doltliteGetSessionStaged(db, &catalogHash);
   if( prollyHashIsEmpty(&catalogHash) ){
-    if( allowEmpty ){
+    /* Nothing staged: --amend reuses HEAD's tree, as --allow-empty does. */
+    if( allowEmpty || amend ){
       ProllyHash headCatHash;
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);
       if( rc==SQLITE_OK ){
