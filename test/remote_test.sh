@@ -241,6 +241,11 @@ check "fetch returns 0" "0" "$result"
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_fetch('origin','main','extra');" 2>&1)
 check_match "fetch extra arg errors" "too many arguments|ERROR" "$result"
 
+printf 'not a database' > "$TMPDIR/garbage_remote.db"
+"$DB" "$TMPDIR/garbage_client.db" "SELECT dolt_remote('add','junk','$R/garbage_remote.db');" >/dev/null 2>&1
+result=$("$DB" "$TMPDIR/garbage_client.db" "SELECT dolt_fetch('junk');" 2>&1)
+check_match "fetch-all from a non-database remote names the failure" "file is not a database" "$result"
+
 result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM users;")
 check "data unchanged before pull" "3" "$result"
 
