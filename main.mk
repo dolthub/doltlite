@@ -1578,6 +1578,9 @@ doltlite_branches.o:	$(TOP)/src/doltlite_branches.c $(TOP)/src/doltlite_branch_i
 doltlite_checkout.o:	$(TOP)/src/doltlite_checkout.c $(TOP)/src/doltlite_branch_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_checkout.c
 
+doltlite_checkout_dot.o:	$(TOP)/src/doltlite_checkout_dot.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_checkout_dot.c
+
 doltlite_tag.o:	$(TOP)/src/doltlite_tag.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_tag.c
 
