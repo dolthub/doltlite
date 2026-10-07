@@ -593,6 +593,9 @@ int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
     if( p->pBtree==pBtree
      && p!=pExcept
      && (iRoot==0 || p->pgnoRoot==iRoot) ){
+      /* A pinned cursor may have no saveable position after its own
+      ** delete, so its state cannot gate the refusal as it does in stock. */
+      if( p->isPinned && iRoot!=0 ) return SQLITE_CONSTRAINT_PINNED;
       if( p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT ){
         int rc = saveCursorPosition(p);
         if( rc!=SQLITE_OK ) return rc;
