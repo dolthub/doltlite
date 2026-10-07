@@ -106,9 +106,6 @@ int prollyBtCursorTableMoveto(
       pCur->mmMissIntKey = intKey;
     }
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
-      if( pCur->isPinned ){
-        return SQLITE_CONSTRAINT_PINNED;
-      }
       *pRes = 0;
       setCursorToMutMapEntryPhys(pCur, (int)(pEntry - pCur->pMutMap->aEntries));
       pCur->deferredTreeSeek = 1;
@@ -558,7 +555,6 @@ static int indexMovetoExactMutMap(
     cursorMapMiss = pEntry==0;
     *pDeleted = pEntry && pEntry->op==PROLLY_EDIT_DELETE;
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
-      if( pCur->isPinned ) return SQLITE_CONSTRAINT_PINNED;
       setCursorToMutMapEntryPhys(
           pCur, (int)(pEntry - pCur->pMutMap->aEntries));
       pCur->deferredTreeSeek = 1;
@@ -573,7 +569,6 @@ static int indexMovetoExactMutMap(
     rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
-      if( pCur->isPinned ) return SQLITE_CONSTRAINT_PINNED;
       pCur->pMutMap = pPending;
       setCursorToMutMapEntryPhys(
           pCur, (int)(pEntry - pPending->aEntries));
