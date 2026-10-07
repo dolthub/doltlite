@@ -932,7 +932,7 @@ static int dlComposeRetained(
     }
     if( cls==1 ){
       rc = dlPushRaw(&azDefer, &nDefer, &nDeferAlloc, aCkOth[i].zRaw);
-    }else if( !aCkOth[i].zRaw || !strstr(zWork, aCkOth[i].zRaw) ){
+    }else if( !aCkOth[i].zRaw || !dlFindClause(zWork, aCkOth[i].zRaw) ){
       rc = dlPushRaw(&azSplice, &nSplice, &nSpliceAlloc, aCkOth[i].zRaw);
     }
     if( rc!=SQLITE_OK ) goto done;
@@ -1004,7 +1004,7 @@ static int dlComposeRetained(
     if( cls==2 ) continue;
     if( cls==1 ){
       rc = dlPushRaw(&azDefer, &nDefer, &nDeferAlloc, aFkOth[i].zRaw);
-    }else if( !aFkOth[i].zRaw || !strstr(zWork, aFkOth[i].zRaw) ){
+    }else if( !aFkOth[i].zRaw || !dlFindClause(zWork, aFkOth[i].zRaw) ){
       rc = dlPushRaw(&azSplice, &nSplice, &nSpliceAlloc, aFkOth[i].zRaw);
     }
     if( rc!=SQLITE_OK ) goto done;
@@ -1207,7 +1207,7 @@ int schemaInstallDeferredClauses(
   memset(aAdd, 0, sizeof(DlCheck) * nClauses);
   for(i=0; i<nClauses; i++){
     if( !azClauses[i] || !azClauses[i][0] ) continue;
-    if( strstr(zSql, azClauses[i]) ) continue;
+    if( dlFindClause(zSql, azClauses[i]) ) continue;
     aAdd[nAdd].zRaw = azClauses[i];
     nAdd++;
   }

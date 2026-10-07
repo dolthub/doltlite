@@ -3531,4 +3531,93 @@ run_test_error_match "modify_check_add_rejects" \
   "INSERT INTO t(id, v) VALUES(2, 1);" "CHECK constraint failed" "$DB"
 rm -f "$DB"
 
+# The old clause's text also appears inside a string default; only the
+# real clause may be replaced.
+DB=/tmp/test_merge_check_in_literal_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1,
+  note TEXT DEFAULT 'keep CONSTRAINT ck CHECK(v > 0) please',
+  CONSTRAINT ck CHECK(v > 0));
+INSERT INTO t(id, v) VALUES (1, 2);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT DEFAULT 1,
+  note TEXT DEFAULT 'keep CONSTRAINT ck CHECK(v > 0) please',
+  CONSTRAINT ck CHECK(v > 1));
+INSERT INTO t(id, v) VALUES (1, 2);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN extra INT DEFAULT 4;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "check_in_literal_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "check_in_literal_default_kept" \
+  "INSERT INTO t(id, v) VALUES (2, 3); SELECT note || '|' || extra FROM t WHERE id=2;" \
+  "keep CONSTRAINT ck CHECK(v > 0) please|4" "$DB"
+run_test "check_in_literal_one_clause" \
+  "SELECT (length(x) - length(replace(x, 'CONSTRAINT ck CHECK', ''))) / 19 FROM (SELECT replace(sql, '''keep CONSTRAINT ck CHECK(v > 0) please''', '') AS x FROM sqlite_master WHERE name='t');" \
+  "1" "$DB"
+run_test_error_match "check_in_literal_new_check_enforced" \
+  "INSERT INTO t(id) VALUES (5);" "CHECK constraint failed" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_merge_fk_in_literal_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+INSERT INTO p VALUES (1);
+CREATE TABLE c(id INTEGER PRIMARY KEY, a INT,
+  note TEXT DEFAULT 'see CONSTRAINT fk FOREIGN KEY(a) REFERENCES p(id)',
+  CONSTRAINT fk FOREIGN KEY(a) REFERENCES p(id));
+INSERT INTO c(id, a) VALUES (1, 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+CREATE TABLE c(id INTEGER PRIMARY KEY, a INT,
+  note TEXT DEFAULT 'see CONSTRAINT fk FOREIGN KEY(a) REFERENCES p(id)',
+  CONSTRAINT fk FOREIGN KEY(a) REFERENCES p(id) ON DELETE CASCADE);
+INSERT INTO c(id, a) VALUES (1, 1);
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE c ADD COLUMN extra INT DEFAULT 9;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "fk_in_literal_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "fk_in_literal_default_kept" \
+  "INSERT INTO c(id, a) VALUES (2, 1); SELECT note || '|' || extra FROM c WHERE id=2;" \
+  "see CONSTRAINT fk FOREIGN KEY(a) REFERENCES p(id)|9" "$DB"
+run_test "fk_in_literal_one_fk" "SELECT count(*) FROM pragma_foreign_key_list('c');" \
+  "1" "$DB"
+rm -f "$DB"
+
+# A check the other side adds is not already present just because its text
+# sits inside a string default.
+DB=/tmp/test_merge_added_check_in_literal_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT,
+  note TEXT DEFAULT 'CONSTRAINT ck CHECK(v > 1)');
+INSERT INTO t VALUES (1, 2, 'x');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT,
+  note TEXT DEFAULT 'CONSTRAINT ck CHECK(v > 1)',
+  CONSTRAINT ck CHECK(v > 1));
+INSERT INTO t VALUES (1, 2, 'x');
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN extra INT DEFAULT 4;
+SELECT dolt_commit('-Am','ours');
+EOF
+run_test_match "added_check_in_literal_merge" "SELECT dolt_merge('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test_error_match "added_check_in_literal_enforced" \
+  "INSERT INTO t(id, v) VALUES (2, 0);" "CHECK constraint failed" "$DB"
+rm -f "$DB"
+
 dltest_finish
