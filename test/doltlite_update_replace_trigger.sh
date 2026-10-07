@@ -114,4 +114,37 @@ PRAGMA integrity_check;
 6|e|4
 ok" "$DB4"
 
+DB5=/tmp/test_doltlite_update_replace_trigger_pending_$$.db
+DB6=/tmp/test_doltlite_update_replace_trigger_collide_$$.db
+rm -f "$DB5" "$DB6"
+trap 'rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6"' EXIT
+
+dltest_run_sql "
+CREATE TABLE t(id INT PRIMARY KEY, k TEXT UNIQUE);
+CREATE TRIGGER d BEFORE DELETE ON t BEGIN SELECT 1; END;
+INSERT INTO t VALUES(1,'a'),(2,'b');
+" "$DB5" >/dev/null
+
+run_test "replace_pending_insert_with_delete_trigger" "
+PRAGMA recursive_triggers = true;
+BEGIN;
+INSERT INTO t VALUES(3,'c');
+UPDATE OR REPLACE t SET k='c' WHERE id=1;
+COMMIT;
+SELECT id,k FROM t ORDER BY id;
+" "1|c
+2|b" "$DB5"
+
+dltest_run_sql "
+CREATE TABLE t0(id INT, k TEXT UNIQUE);
+CREATE TRIGGER d BEFORE DELETE ON t0 BEGIN SELECT 1; END;
+INSERT INTO t0 VALUES(0,'d'),(3,'e');
+" "$DB6" >/dev/null
+
+run_test "replace_rows_collide_with_delete_trigger" "
+PRAGMA recursive_triggers = true;
+UPDATE OR REPLACE t0 SET k='z';
+SELECT id,k FROM t0 ORDER BY id;
+" "3|z" "$DB6"
+
 dltest_finish
