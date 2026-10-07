@@ -22,7 +22,8 @@ struct AncestorNode {
   int aParent[DOLTLITE_MAX_PARENTS];
   int nParent;
   int aDistance[2];
-  int aOrder[2];
+  /* 1 + max(parent heights). Matches Dolt's commit height. */
+  i64 height;
   u8 redundant;
 };
 
@@ -140,8 +141,6 @@ static int ancestorGraphAdd(
   pGraph->aNode[iNode].hash = *pHash;
   pGraph->aNode[iNode].aDistance[0] = -1;
   pGraph->aNode[iNode].aDistance[1] = -1;
-  pGraph->aNode[iNode].aOrder[0] = -1;
-  pGraph->aNode[iNode].aOrder[1] = -1;
   ancestorGraphInsertSlot(pGraph, pGraph->aSlot, pGraph->nSlot, iNode);
   pGraph->nUsed++;
   *pIndex = iNode;
@@ -191,7 +190,6 @@ static int ancestorGraphBfs(
   int *aQueue;
   int iHead = 0;
   int iTail = 0;
-  int iOrder = 0;
 
   aQueue = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode * sizeof(int));
   if( !aQueue ) return SQLITE_NOMEM;
@@ -200,7 +198,6 @@ static int ancestorGraphBfs(
   while( iHead<iTail ){
     AncestorNode *pNode = &pGraph->aNode[aQueue[iHead++]];
     int i;
-    pNode->aOrder[iSide] = iOrder++;
     for(i=0; i<pNode->nParent; i++){
       AncestorNode *pParent = &pGraph->aNode[pNode->aParent[i]];
       if( pParent->aDistance[iSide]<0 ){
@@ -259,26 +256,41 @@ static int ancestorGraphMarkRedundant(AncestorGraph *pGraph){
   return SQLITE_OK;
 }
 
+/* Negative when pLeft is the better ancestor: greater height, then the
+** smaller hash. */
 static int ancestorGraphCompareCandidate(
   const AncestorNode *pLeft,
   const AncestorNode *pRight
 ){
-  i64 leftSum = (i64)pLeft->aDistance[0] + pLeft->aDistance[1];
-  i64 rightSum = (i64)pRight->aDistance[0] + pRight->aDistance[1];
-  if( leftSum!=rightSum ) return leftSum<rightSum ? -1 : 1;
-  if( pLeft->aDistance[0]!=pRight->aDistance[0] ){
-    return pLeft->aDistance[0]<pRight->aDistance[0] ? -1 : 1;
-  }
-  if( pLeft->aDistance[1]!=pRight->aDistance[1] ){
-    return pLeft->aDistance[1]<pRight->aDistance[1] ? -1 : 1;
-  }
-  if( pLeft->aOrder[0]!=pRight->aOrder[0] ){
-    return pLeft->aOrder[0]<pRight->aOrder[0] ? -1 : 1;
-  }
-  if( pLeft->aOrder[1]!=pRight->aOrder[1] ){
-    return pLeft->aOrder[1]<pRight->aOrder[1] ? -1 : 1;
+  if( pLeft->height!=pRight->height ){
+    return pLeft->height>pRight->height ? -1 : 1;
   }
   return prollyHashCompare(&pLeft->hash, &pRight->hash);
+}
+
+static int ancestorGraphHeights(AncestorGraph *pGraph){
+  int nKnown = 0;
+  while( nKnown<pGraph->nNode ){
+    int nBefore = nKnown;
+    int i;
+    for(i=0; i<pGraph->nNode; i++){
+      AncestorNode *pNode = &pGraph->aNode[i];
+      i64 best = 0;
+      int j;
+      int ready = 1;
+      if( pNode->height>0 ) continue;
+      for(j=0; j<pNode->nParent; j++){
+        i64 h = pGraph->aNode[pNode->aParent[j]].height;
+        if( h<=0 ){ ready = 0; break; }
+        if( h>best ) best = h;
+      }
+      if( !ready ) continue;
+      pNode->height = best + 1;
+      nKnown++;
+    }
+    if( nKnown==nBefore ) return SQLITE_CORRUPT;
+  }
+  return SQLITE_OK;
 }
 
 int doltliteFindAncestor(
@@ -309,6 +321,8 @@ int doltliteFindAncestor(
   if( rc!=SQLITE_OK ) return rc;
   rc = ancestorGraphBuild(db, &graph, commitHash1, commitHash2,
                           &iLeft, &iRight);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = ancestorGraphHeights(&graph);
   if( rc!=SQLITE_OK ) goto done;
   rc = ancestorGraphBfs(&graph, iLeft, 0);
   if( rc!=SQLITE_OK ) goto done;

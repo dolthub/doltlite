@@ -202,7 +202,11 @@ SELECT dolt_commit('-m', 'add u');" \
   "(SELECT count(*) FROM dolt_schema_diff('head~1', 'head')) = 1"
 
 echo ""
-echo "--- F4: LCA must be deterministic on criss-cross merge ---"
+echo "--- F4: one database keeps the same criss-cross LCA ---"
+
+# The init commit's wall clock is inside later commit hashes. Equal height
+# then picks the smaller hash, so two new databases can name different
+# ancestors. Reopening one database must not.
 
 CRISS_CROSS_FWD="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -272,15 +276,19 @@ run_lca_doltlite() {
 
 assert_deterministic_lca() {
   local name="$1" setup="$2"
-  local dl_runs=3
+  local db="$TMPROOT/${name}_dl.db"
   local prev=""
   local i
-  for ((i=1; i<=dl_runs; i++)); do
-    local db="$TMPROOT/${name}_dl_${i}.db"
+  rm -f "$db"
+  for ((i=1; i<=3; i++)); do
     local out="$TMPROOT/${name}_dl_${i}.out"
     local err="$TMPROOT/${name}_dl_${i}.err"
-    rm -f "$db"
-    run_lca_doltlite "$setup" "$db" "$out" "$err"
+    if [ "$i" -eq 1 ]; then
+      run_lca_doltlite "$setup" "$db" "$out" "$err"
+    else
+      printf ".headers off\n.mode list\n%s\n" "$lca_query_dl" \
+        | vc_oracle_run_doltlite --success "$db" >"$out" 2>"$err"
+    fi
     local cur
     cur=$(grep '^LCA|' "$out" | head -n 1 | sed 's/^LCA|//')
     if [ -z "$cur" ]; then
