@@ -365,6 +365,11 @@ void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs){
 void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
                                   ProllyHash *pHash){
   cs->nWsForeignAdoptAtCapture = cs->nWsForeignAdopt;
+  chunkStorePeekWorkingSetBasis(cs, zBranch, pHash);
+}
+
+void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
+                                   ProllyHash *pHash){
   if( zBranch && cs->bWsBasis && strcmp(cs->zWsBasisBranch, zBranch)==0 ){
     memcpy(pHash, &cs->wsBasis, sizeof(ProllyHash));
     return;

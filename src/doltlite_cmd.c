@@ -713,6 +713,20 @@ static int cmdFinishPlainAfterReport(
   return SQLITE_OK;
 }
 
+static int cmdPersistRestored(
+  sqlite3 *db,
+  const ProllyHash *pHead,
+  const ProllyHash *pWsBasis,
+  u32 nWsForeignAdopt
+){
+  int bLocked, bPeerWrote;
+  int rc = doltliteLockForRestore(db, pHead, pWsBasis, nWsForeignAdopt,
+                                  &bLocked, &bPeerWrote);
+  if( rc==SQLITE_OK && !bPeerWrote ) rc = doltlitePersistWorkingSet(db);
+  if( bLocked ) chunkStoreUnlock(doltliteGetChunkStore(db));
+  return rc;
+}
+
 static int cmdRollbackAutocommitConflict(
   sqlite3 *db,
   sqlite3_context *ctx,
@@ -720,6 +734,8 @@ static int cmdRollbackAutocommitConflict(
 ){
   int rc;
   int hadTopLevelSavepoint = db->pSavepoint!=0 && db->nSavepoint==0;
+  ProllyHash wsBasis = pSaved->wsBasis;
+  u32 nWsForeignAdopt = pSaved->nWsForeignAdopt;
   sqlite3RollbackAll(db, SQLITE_OK);
   rc = doltliteRestoreTxnState(db, pSaved);
   /* Restore merge markers even if the catalog restore failed; pSaved is
@@ -735,7 +751,8 @@ static int cmdRollbackAutocommitConflict(
     if( rc==SQLITE_OK ) rc = rc2;
   }
   if( rc==SQLITE_OK ){
-    rc = doltlitePersistWorkingSet(db);
+    rc = cmdPersistRestored(db, &pSaved->sessionHead, &wsBasis,
+                            nWsForeignAdopt);
   }
   doltliteTxnStateClear(pSaved);
   if( rc==SQLITE_OK && hadTopLevelSavepoint ){
@@ -756,7 +773,22 @@ static int cmdRollbackAutocommitToSaved(
   sqlite3 *db,
   DoltliteTxnState *pSaved
 ){
-  int rc = doltliteHardReset(db, &pSaved->sessionCatalogHash);
+  int bLocked = 0, bPeerWrote = 0;
+  int rc = doltliteLockForRestore(db, &pSaved->sessionHead, &pSaved->wsBasis,
+                                  pSaved->nWsForeignAdopt,
+                                  &bLocked, &bPeerWrote);
+  /* doltliteHardReset writes the working set itself, so a peer's write is
+  ** kept by restoring in memory only; the saved refs also drop the local
+  ** working-set ref a later refresh would otherwise keep over the peer's. */
+  if( rc==SQLITE_OK && bPeerWrote ){
+    rc = doltliteRestoreTxnState(db, pSaved);
+    doltliteInvalidateSessionWorkingState(db);
+    doltliteTxnStateClear(pSaved);
+    return rc;
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteHardReset(db, &pSaved->sessionCatalogHash);
+  }
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionBranch(db, pSaved->zSessionBranch);
   }
@@ -777,6 +809,7 @@ static int cmdRollbackAutocommitToSaved(
   if( rc==SQLITE_OK ){
     rc = doltlitePersistWorkingSet(db);
   }
+  if( bLocked ) chunkStoreUnlock(doltliteGetChunkStore(db));
   doltliteTxnStateClear(pSaved);
   return rc;
 }
