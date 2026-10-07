@@ -716,6 +716,24 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
+# A table filter names one side of a rename; it must still pair with the other.
+RENAME_BESIDE_EDIT="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+CREATE TABLE u(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO t2;
+INSERT INTO t2 VALUES(2, 2);
+INSERT INTO u VALUES(5, 5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+"
+oracle_stat_args "rename_filtered_old_name" "$RENAME_BESIDE_EDIT" "'HEAD~1','HEAD','t'"
+oracle_stat_args "rename_filtered_new_name" "$RENAME_BESIDE_EDIT" "'HEAD~1','HEAD','t2'"
+oracle_summary_args "rename_filtered_old_name" "$RENAME_BESIDE_EDIT" "'HEAD~1','HEAD','t'"
+oracle_summary_args "rename_filtered_new_name" "$RENAME_BESIDE_EDIT" "'HEAD~1','HEAD','t2'"
+
 oracle_both "rename_composite_pk" "
 CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a,b));
 INSERT INTO t VALUES(1, 1, 10), (1, 2, 20);

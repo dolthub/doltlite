@@ -1047,6 +1047,24 @@ static struct TableEntry *dsRenamePartner(
   return pBack==pRef ? pMate : 0;
 }
 
+/* A filter names one side of a rename; pair it with the other, as the
+** unfiltered walk does from the old name. */
+static int dsFilterPairRename(
+  sqlite3 *db,
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
+  struct TableEntry **ppFrom,
+  struct TableEntry **ppTo
+){
+  int rc = SQLITE_OK;
+  if( *ppFrom && !*ppTo ){
+    *ppTo = dsRenamePartner(db, aFrom, nFrom, aTo, nTo, *ppFrom, 1, &rc);
+  }else if( !*ppFrom && *ppTo ){
+    *ppFrom = dsRenamePartner(db, aFrom, nFrom, aTo, nTo, *ppTo, 0, &rc);
+  }
+  return rc;
+}
+
 static int dstFillSchemasStat(DstCursor *c, sqlite3 *db){
   const ProllyHash *pOldRoot;
   const ProllyHash *pNewRoot;
@@ -1105,6 +1123,9 @@ static int dstAdvance(DstCursor *c, sqlite3 *db){
     if( pCtx->zTblFilter ){
       pFromEntry = dsFindTableByNameNoCase(c->aFromCat, c->nFromCat, zName);
       pToEntry = dsFindTableByNameNoCase(c->aToCat, c->nToCat, zName);
+      rc = dsFilterPairRename(db, c->aFromCat, c->nFromCat,
+                              c->aToCat, c->nToCat, &pFromEntry, &pToEntry);
+      if( rc!=SQLITE_OK ) return rc;
       if( pFromEntry ) zFromName = pFromEntry->zName;
       if( pToEntry ) zToName = pToEntry->zName;
     }else{
@@ -1542,6 +1563,16 @@ static int dssAdvance(DssCursor *c, sqlite3 *db){
     if( pCtx->zTblFilter ){
       pFromEntry = dsFindTableByNameNoCase(c->aFromCat, c->nFromCat, zName);
       pToEntry = dsFindTableByNameNoCase(c->aToCat, c->nToCat, zName);
+      rc = dsFilterPairRename(db, c->aFromCat, c->nFromCat,
+                              c->aToCat, c->nToCat, &pFromEntry, &pToEntry);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pFromEntry && pToEntry
+       && sqlite3_stricmp(pFromEntry->zName, pToEntry->zName)!=0 ){
+        int dataChange =
+            prollyHashCompare(&pFromEntry->root, &pToEntry->root)!=0;
+        return dssSetRow(c, pFromEntry->zName, pToEntry->zName, "renamed",
+                         dataChange, 1);
+      }
     }else{
       pFromEntry = addNameIndexFind(&c->fromIdx, zName);
       pToEntry = addNameIndexFind(&c->toIdx, zName);
