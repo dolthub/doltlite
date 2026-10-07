@@ -1081,11 +1081,35 @@ int dlRefClass(
   }
   return pending ? 1 : 0;
 }
+/* First occurrence of zRaw starting and ending on token boundaries, so a
+** copy inside a string literal or identifier never matches. */
+const char *dlFindClause(const char *zSql, const char *zRaw){
+  const char *p;
+  int nRaw;
+  if( !zSql || !zRaw || !zRaw[0] ) return 0;
+  nRaw = (int)strlen(zRaw);
+  for(p=zSql; *p; ){
+    int type, n = sqlite3GetToken((const u8*)p, &type);
+    if( n<=0 ) return 0;
+    if( type!=TK_SPACE && strncmp(p, zRaw, nRaw)==0 ){
+      const char *q = p;
+      while( q<p+nRaw ){
+        int t2, m = sqlite3GetToken((const u8*)q, &t2);
+        if( m<=0 ) break;
+        q += m;
+      }
+      if( q==p+nRaw ) return p;
+    }
+    p += n;
+  }
+  return 0;
+}
+
 int dlCutRaw(char **pzSql, const char *zRaw){
   char *zSql, *hit, *start, *end, *zNew;
   if( !pzSql || !*pzSql || !zRaw || !zRaw[0] ) return SQLITE_OK;
   zSql = *pzSql;
-  hit = strstr(zSql, zRaw);
+  hit = (char*)dlFindClause(zSql, zRaw);
   if( !hit ) return SQLITE_OK;
   start = hit;
   end = hit + strlen(zRaw);

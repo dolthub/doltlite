@@ -361,6 +361,7 @@ int dlRefClass(
   ParsedColumn *aWin, int nWin
 );
 int dlCutRaw(char **pzSql, const char *zRaw);
+const char *dlFindClause(const char *zSql, const char *zRaw);
 int dlRewriteColumns(
   const char *zSql, char **azName, char **azDef, int nRep,
   char **pzOut, int *pChanged
