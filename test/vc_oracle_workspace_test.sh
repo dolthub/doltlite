@@ -851,4 +851,23 @@ SELECT CONCAT('R|from|',min(from_id),'|',count(*)) FROM dolt_workspace_t GROUP B
 SELECT CONCAT('R|distinct|',count(DISTINCT to_v),'|',count(DISTINCT from_v))
   FROM dolt_workspace_t;"
 
+for assignment in "id=id+1" "diff_type='other'" "to_v=30" "from_v=30" \
+    "to_id=9" "from_id=9" "to_v=NULL"; do
+  for staged in 0 1; do
+    oracle_error "workspace_forbidden_${assignment}_$staged" "$BASE
+UPDATE t SET v=v+100 WHERE id=1;
+UPDATE dolt_workspace_t SET $assignment,staged=$staged;
+"
+  done
+done
+
+for staged in FALSE TRUE; do
+  oracle "workspace_unchanged_assignments_$staged" "$BASE
+UPDATE t SET v=v+100 WHERE id=1;
+UPDATE dolt_workspace_t SET staged=TRUE;
+UPDATE dolt_workspace_t SET diff_type=diff_type,
+  to_id=to_id,from_id=from_id,to_v=to_v,from_v=from_v,staged=$staged;
+" "SELECT CONCAT('R|',staged,'|',to_v,'|',from_v) FROM dolt_workspace_t;"
+done
+
 vc_oracle_finish
