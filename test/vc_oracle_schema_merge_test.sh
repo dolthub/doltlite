@@ -2355,4 +2355,82 @@ SQL
   done
 done
 
+for layout in table column multiple duplicate several; do
+  for change in tighten loosen; do
+    if [ "$change" = tighten ]; then
+      predicate='v > 5'; valid=6; invalid=2
+    else
+      predicate='v > -5'; valid=-1; invalid=-6
+    fi
+    case "$layout" in
+      table)
+        ancestor='id INTEGER PRIMARY KEY, v INT, CHECK(v > 0)'
+        edited="id INTEGER PRIMARY KEY, v INT, CHECK($predicate)"
+        checks=1 ;;
+      column)
+        ancestor='id INTEGER PRIMARY KEY, v INT CHECK(v > 0)'
+        edited="id INTEGER PRIMARY KEY, v INT CHECK($predicate)"
+        checks=1 ;;
+      multiple)
+        ancestor='id INTEGER PRIMARY KEY, v INT, CHECK(v > 0), CHECK(id > 0), CONSTRAINT kept CHECK(id < 100)'
+        edited="id INTEGER PRIMARY KEY, v INT, CHECK(id > 0), CHECK($predicate), CONSTRAINT kept CHECK(id < 100)"
+        checks=3 ;;
+      duplicate)
+        ancestor='id INTEGER PRIMARY KEY, v INT, CONSTRAINT kept CHECK(v > 0), CHECK(v > 0)'
+        edited="id INTEGER PRIMARY KEY, v INT, CONSTRAINT kept CHECK(v > 0), CHECK($predicate)"
+        checks=2
+        if [ "$change" = loosen ]; then valid=1; invalid=-1; fi ;;
+      several)
+        ancestor='id INTEGER PRIMARY KEY, v INT, CHECK(v > 0), CHECK(id > 0), CONSTRAINT kept CHECK(id < 100)'
+        edited="id INTEGER PRIMARY KEY, v INT, CHECK($predicate), CHECK(id >= 0), CONSTRAINT kept CHECK(id < 100)"
+        checks=3 ;;
+    esac
+    for direction in forward reverse; do
+      tag="unnamed_check_${layout}_${change}_${direction}"
+      DB="$TMPROOT/$tag.db"
+      check_branch=feat; add_branch=main
+      if [ "$direction" = reverse ]; then
+        check_branch=main; add_branch=feat
+      fi
+      cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t($ancestor);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('$check_branch');
+DROP TABLE t;
+CREATE TABLE t($edited);
+INSERT INTO t VALUES(1,11);
+SELECT dolt_commit('-Am','edit check');
+SELECT dolt_checkout('$add_branch');
+ALTER TABLE t ADD COLUMN extra INT DEFAULT 3;
+SELECT dolt_commit('-Am','add column');
+SELECT dolt_checkout('main');
+SQL
+      expect_merge_ok "${tag}_merge" "$DB"
+      expect_dual_value "${tag}_rows" "$DB" '1|11|3' \
+        "SELECT id||'|'||v||'|'||extra FROM t;" \
+        "SELECT CONCAT(id,'|',v,'|',extra) FROM t;"
+      if [ "$layout" = duplicate ]; then
+        expect_dual_value "${tag}_named_kept" "$DB" 1 \
+          "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%CONSTRAINT kept CHECK(v > 0)%';" \
+          "SELECT count(*) FROM information_schema.check_constraints WHERE constraint_name='kept';"
+      else
+        expect_dual_value "${tag}_old_removed" "$DB" 0 \
+          "SELECT count(*) FROM sqlite_master WHERE name='t' AND sql LIKE '%v > 0%';" \
+          "SELECT count(*) FROM information_schema.check_constraints WHERE check_clause LIKE '%> 0%' AND check_clause LIKE '%v%';"
+      fi
+      expect_dual_value "${tag}_checks" "$DB" "$checks" \
+        "SELECT (length(sql)-length(replace(sql,'CHECK(','')))/6 FROM sqlite_master WHERE name='t';" \
+        "SELECT count(*) FROM information_schema.check_constraints;"
+      run_dual_command_outcome "${tag}_valid" "$DB" \
+        "INSERT INTO t(id,v) VALUES(2,$valid);" \
+        "INSERT INTO t(id,v) VALUES(2,$valid);" ok
+      run_dual_command_outcome "${tag}_invalid" "$DB" \
+        "INSERT INTO t(id,v) VALUES(3,$invalid);" \
+        "INSERT INTO t(id,v) VALUES(3,$invalid);" error
+    done
+  done
+done
+
 vc_oracle_finish

@@ -261,6 +261,7 @@ struct DlCheck {
   char *zExpr;
   char *zRaw;
   char *zCols;
+  int iOffset;
 };
 
 static void dlChecksFree(DlCheck *a, int n){
@@ -430,6 +431,7 @@ static int nextDlCheck(
       }
       pChk->zExpr = sqlite3_mprintf("%.*s", (int)(zExprEnd-zExpr), zExpr);
       pChk->zRaw = sqlite3_mprintf("%.*s", (int)(p-zStart), zStart);
+      pChk->iOffset = (int)(zStart-zSql);
       if( !pChk->zExpr || !pChk->zRaw ) return -SQLITE_NOMEM;
       if( zNameTok ){
         int i;
@@ -709,11 +711,30 @@ static int dlCheckIsNew(const DlCheck *p, DlCheck *aAnc, int nAnc){
   return 1;
 }
 
+static int dlCutCheck(char **pzSql, const DlCheck *p){
+  char *zSql = *pzSql;
+  char *start = zSql + p->iOffset;
+  char *end = start + strlen(p->zRaw);
+  char *zNew;
+  while( start>zSql && sqlite3Isspace(start[-1]) ) start--;
+  if( start>zSql && start[-1]==',' ){
+    start--;
+  }else{
+    start = zSql + p->iOffset;
+  }
+  zNew = sqlite3_mprintf("%.*s%s", (int)(start-zSql), zSql, end);
+  if( !zNew ) return SQLITE_NOMEM;
+  sqlite3_free(zSql);
+  *pzSql = zNew;
+  return SQLITE_OK;
+}
+
 static int dlHalfGone(DlCheck *aAnc, int nAnc, DlCheck *aA, int nA,
                       DlCheck *aB, int nB){
   int i, j;
   for(i=0; i<nAnc; i++){
     int inA = 0, inB = 0;
+    if( !aAnc[i].zName ) continue;
     for(j=0; j<nA; j++){
       if( dlChecksSame(&aAnc[i], &aA[j])
        || (aAnc[i].zName && aA[j].zName
@@ -939,8 +960,22 @@ static int dlComposeRetained(
   }
 
   for(i=0; i<nCkWin && !bConflict; i++){
-    int cls;
+    int cls, j;
     if( aReplaced && aReplaced[i] ) continue;
+    if( !aCkWin[i].zName ){
+      for(j=0; j<nCkAnc; j++){
+        if( dlChecksSame(&aCkWin[i], &aCkAnc[j]) ) break;
+      }
+      if( j<nCkAnc ){
+        for(j=0; j<nCkOth; j++){
+          if( dlChecksSame(&aCkWin[i], &aCkOth[j]) ) break;
+        }
+        if( j==nCkOth ){
+          aReplaced[i] = 2;
+          continue;
+        }
+      }
+    }
     cls = dlRefClass(aCkWin[i].zCols, azMerged, nMerged, aWin, nWin);
     if( cls<0 ){ rc = SQLITE_NOMEM; goto done; }
     if( cls==2 ){
@@ -1042,6 +1077,12 @@ static int dlComposeRetained(
   if( bConflict || !pzSql ){
     changed = 0;
   }else{
+    /* Remove clauses from right to left to preserve their recorded offsets. */
+    for(i=nCkWin-1; i>=0 && rc==SQLITE_OK; i--){
+      if( aReplaced[i]!=2 ) continue;
+      rc = dlCutCheck(&zWork, &aCkWin[i]);
+      changed = 1;
+    }
     for(i=0; i<nCut && rc==SQLITE_OK; i++) rc = dlCutRaw(&zWork, azCut[i]);
     if( rc==SQLITE_OK && nSplice>0 ){
       DlCheck *aAdd = sqlite3_malloc(sizeof(DlCheck)*(nSplice ? nSplice : 1));
