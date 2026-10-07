@@ -338,4 +338,36 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('side');
 " "SELECT CONCAT('R|', IFNULL(to_k,''), '|', IFNULL(from_v,''), '|', IFNULL(to_v,''), '|', diff_type, '|', IFNULL(log_from.message, from_commit)) FROM dolt_diff_t dt LEFT JOIN dolt_log log_from ON log_from.commit_hash = dt.from_commit WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);"
 
+for state in staged working mixed; do
+  commit_filter_setup="
+CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','c1');
+UPDATE t SET v=11 WHERE id=1;
+SELECT dolt_commit('-Am','c2');
+INSERT INTO t VALUES(2,2);
+"
+  if [ "$state" != working ]; then
+    commit_filter_setup="$commit_filter_setup SELECT dolt_add('t');"
+  fi
+  if [ "$state" = mixed ]; then
+    commit_filter_setup="$commit_filter_setup INSERT INTO t VALUES(3,3);"
+  fi
+  filter_case=0
+  for predicate in \
+      "to_commit='STAGED'" "from_commit='HEAD'" "to_commit='HEAD'" \
+      "from_commit='HEAD' AND to_commit='STAGED'" \
+      "from_commit='HEAD' AND to_commit='WORKING'" \
+      "to_commit='WORKING'" "to_commit='main'" "from_commit='HEAD~1'" \
+      "to_commit='nosuchref'" "from_commit='nosuchref'" \
+      "to_commit IN ('HEAD','STAGED','WORKING')" \
+      "from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c1')" \
+      "to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2')" \
+      "from_commit=(SELECT commit_hash FROM dolt_log WHERE message='c1') AND to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2')"; do
+    filter_case=$((filter_case+1))
+    oracle "commit_filter_${state}_$filter_case" "$commit_filter_setup" \
+      "SELECT CONCAT('R|',count(*)) FROM dolt_diff_t WHERE $predicate;"
+  done
+done
+
 vc_oracle_finish

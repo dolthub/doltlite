@@ -1,0 +1,125 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc diff_filter_rows {source predicate} {
+  execsql "SELECT to_id,to_v,from_id,from_v,from_commit,to_commit,diff_type
+    FROM $source WHERE $predicate
+    ORDER BY from_commit,to_commit,to_id,from_id,diff_type"
+}
+
+foreach {layout key constraint suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {}
+  clustered {id INT PRIMARY KEY} {} {}
+  text {id TEXT PRIMARY KEY} {} {}
+  composite {id INT} {,PRIMARY KEY(tenant,id)} {}
+  without_rowid {id INT PRIMARY KEY} {} {WITHOUT ROWID}
+  keyless {id INT} {} {}
+} {
+  foreach graph {linear merge} {
+    reset_db
+    execsql "CREATE TABLE t($key,v INT,tenant TEXT DEFAULT 'x'$constraint) $suffix"
+    execsql {
+      INSERT INTO t(id,v) VALUES(1,1),(2,2);
+      SELECT dolt_commit('-Am','c1');
+      SELECT dolt_branch('feature');
+    }
+    set first [execsql {SELECT dolt_hashof('HEAD')}]
+    execsql {
+      SELECT dolt_checkout('feature');
+      INSERT INTO t(id,v) VALUES(5,5);
+      SELECT dolt_commit('-Am','side');
+      SELECT dolt_tag('side-tag');
+    }
+    set side [execsql {SELECT dolt_hashof('HEAD')}]
+    execsql {
+      SELECT dolt_checkout('main');
+      UPDATE t SET v=10 WHERE id=1;
+      SELECT dolt_commit('-Am','c2');
+    }
+    set middle [execsql {SELECT dolt_hashof('HEAD')}]
+    execsql {
+      UPDATE t SET v=20 WHERE id=2;
+      SELECT dolt_commit('-Am','c3');
+    }
+    if {$graph eq "merge"} {execsql {SELECT dolt_merge('feature')}}
+    execsql {
+      SELECT dolt_tag('latest');
+      INSERT INTO t(id,v) VALUES(3,3);
+      SELECT dolt_add('t');
+      UPDATE t SET v=12 WHERE id=1;
+      INSERT INTO t(id,v) VALUES(4,4);
+    }
+    set head [execsql {SELECT dolt_hashof('HEAD')}]
+    set labels [list {'HEAD'} {'HEAD~1'} {'STAGED'} {'WORKING'} {'working'} \
+      {'main'} {'feature'} {'latest'} {'side-tag'} {'nosuchref'} {'HEAD~99'} \
+      {''} {NULL} {0} {x'574f524b494e47'} \
+      {'WORKING'||char(0)||'suffix'} {'WORKING '} \
+      "'$first'" "'$middle'" "'$head'" "'$side'" \
+      "'[string toupper $head]'" "'[string range $head 0 7]'" \
+      "'$head'||char(0)||'suffix'" "'[string repeat a 100]'" ]
+    set name diff-commit-filters-$layout-$graph
+    foreach phase {live reopen} {
+      if {$phase eq "reopen"} {
+        db close
+        sqlite3 db test.db
+      }
+      execsql {DROP TABLE IF EXISTS temp.full_diff;
+        CREATE TEMP TABLE full_diff AS SELECT * FROM dolt_diff_t;}
+      set i 0
+      foreach column {from_commit to_commit} {
+        foreach label $labels {
+          foreach collation {BINARY NOCASE RTRIM} {
+            set predicate "$column COLLATE $collation=$label"
+            set expected [diff_filter_rows full_diff $predicate]
+            do_test $name-$phase-[incr i]-equal {
+              diff_filter_rows dolt_diff_t $predicate
+            } $expected
+            do_test $name-$phase-$i-unary {
+              diff_filter_rows dolt_diff_t "+$predicate"
+            } $expected
+          }
+        }
+      }
+      foreach from [list {'HEAD'} {'STAGED'} {'WORKING'} "'$first'" \
+          "'$middle'" "'$head'" "'$side'"] {
+        foreach to [list {'HEAD'} {'STAGED'} {'WORKING'} "'$first'" \
+            "'$middle'" "'$head'" "'$side'"] {
+          set predicate "from_commit=$from AND to_commit=$to"
+          set expected [diff_filter_rows full_diff $predicate]
+          do_test $name-$phase-[incr i]-pair {
+            diff_filter_rows dolt_diff_t $predicate
+          } $expected
+        }
+      }
+      foreach predicate [list \
+          "to_commit='WORKING' AND to_commit='STAGED'" \
+          "from_commit='$first' AND from_commit='$head'" \
+          "to_commit IN ('STAGED','WORKING','HEAD','$head','$side')" \
+          "from_commit IN ('HEAD','$first','$middle')" \
+          "to_commit='WORKING' OR from_commit='$first'" \
+          "to_commit LIKE 'STAGED'" "to_commit LIKE 'WORKING'" \
+          "to_commit='$head' AND from_commit='$first' AND to_id=1"] {
+        set expected [diff_filter_rows full_diff $predicate]
+        do_test $name-$phase-[incr i]-compound {
+          diff_filter_rows dolt_diff_t $predicate
+        } $expected
+      }
+      do_execsql_test $name-$phase-tvfs {
+        SELECT count(*) FROM dolt_diff_t('HEAD','STAGED') WHERE to_commit='STAGED';
+        SELECT count(*) FROM dolt_diff_t('STAGED','WORKING') WHERE to_commit='WORKING';
+        SELECT count(*) FROM dolt_diff_t('HEAD','WORKING') WHERE from_commit='HEAD';
+      } {1 2 0}
+      do_test $name-$phase-tvfs-hash {
+        execsql "SELECT count(*) FROM dolt_diff_t('HEAD','STAGED')
+          WHERE from_commit='$head' AND to_commit='STAGED'"
+      } {1}
+      do_execsql_test $name-$phase-literals {
+        SELECT count(*) FROM dolt_diff_t WHERE to_commit='STAGED';
+        SELECT count(*) FROM dolt_diff_t WHERE from_commit='HEAD' AND to_commit='WORKING';
+        SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';
+      } {0 0 3}
+    }
+  }
+}
+
+finish_test
