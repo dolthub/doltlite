@@ -69,6 +69,7 @@ doltlite_merge_trigger_reference
 doltlite_merge_table_name_conflict
 doltlite_merge_seed
 doltlite_merge_shared_columns
+doltlite_merge_local_changes
 doltlite_merge_added_unique
 doltlite_merge_ignored
 doltlite_rebase_plan_hash

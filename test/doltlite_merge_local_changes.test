@@ -1,0 +1,276 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout key} {
+  integer {INTEGER PRIMARY KEY}
+  clustered {INT PRIMARY KEY}
+  auto {INTEGER PRIMARY KEY AUTOINCREMENT}
+} {
+  foreach {kind divergent options noCommit} {
+    ff 0 {} 0
+    noff 0 {'--no-ff',} 0
+    threeway 1 {} 0
+    nocommit 1 {'--no-commit',} 1
+    squash 1 {'--squash',} 0
+  } {
+    foreach change {
+      insert update delete add_column drop_column rename_column
+      drop_table new_table add_index drop_index trigger rename_table
+    } {
+      foreach staged {0 1} {
+        reset_db
+        execsql "CREATE TABLE t(id $key,v INT); CREATE TABLE z(id $key,v INT)"
+        execsql {
+          CREATE INDEX iz ON z(v);
+          INSERT INTO t VALUES(1,10); INSERT INTO z VALUES(1,10);
+          SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+          SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,20);
+          SELECT dolt_commit('-am','feat'); SELECT dolt_checkout('main');
+        }
+        set cleanRows [execsql {
+          SELECT * FROM z ORDER BY id;
+          SELECT type,name,tbl_name,sql FROM sqlite_schema
+            WHERE tbl_name<>'t' ORDER BY name;
+        }]
+        set tRows {1 10 2 20}
+        if {$divergent} {
+          execsql {INSERT INTO t VALUES(3,30); SELECT dolt_commit('-am','main')}
+          set tRows {1 10 2 20 3 30}
+        }
+        set owner z
+        switch $change {
+          insert {execsql {INSERT INTO z VALUES(9,90)}}
+          update {execsql {UPDATE z SET v=90 WHERE id=1}}
+          delete {execsql {DELETE FROM z}}
+          add_column {execsql {ALTER TABLE z ADD COLUMN x INT DEFAULT 7}}
+          drop_column {execsql {DROP INDEX iz; ALTER TABLE z DROP COLUMN v}}
+          rename_column {execsql {ALTER TABLE z RENAME COLUMN v TO vv}}
+          drop_table {execsql {DROP TABLE z}}
+          new_table {
+            execsql {CREATE TABLE u(id INT PRIMARY KEY,v INT); INSERT INTO u VALUES(9,90)}
+            set owner u
+          }
+          add_index {execsql {CREATE INDEX iz2 ON z(id,v)}}
+          drop_index {execsql {DROP INDEX iz}}
+          trigger {execsql {CREATE TRIGGER tr AFTER INSERT ON z BEGIN UPDATE z SET v=v+1 WHERE id=new.id; END}}
+          rename_table {execsql {ALTER TABLE z RENAME TO zz}; set owner zz}
+        }
+        set localStatusCount [execsql {SELECT count(*) FROM dolt_status WHERE staged=0}]
+        if {$staged} {
+          if {$change eq "rename_table"} {
+            execsql {SELECT dolt_add('z','zz')}
+          } else {
+            execsql "SELECT dolt_add('$owner')"
+          }
+        }
+        set before [execsql {
+          SELECT type,name,tbl_name,sql FROM sqlite_schema
+            WHERE tbl_name<>'t' ORDER BY name;
+        }]
+        set query "SELECT * FROM $owner ORDER BY id"
+        if {$change eq "drop_table"} {set query {SELECT count(*) FROM sqlite_schema WHERE name='z'}}
+        set localRows [execsql $query]
+        set name merge-local-$layout-$kind-$change-$staged
+        do_test $name-outcome {
+          set failed [catch {execsql "SELECT dolt_merge(${options}'feat')"}]
+        } 0
+        if {$failed} {continue}
+        do_execsql_test $name-t {SELECT * FROM t ORDER BY id} $tRows
+        do_test $name-local {execsql $query} $localRows
+        do_execsql_test $name-schema {
+          SELECT type,name,tbl_name,sql FROM sqlite_schema
+            WHERE tbl_name<>'t' ORDER BY name;
+        } $before
+        do_execsql_test $name-unstaged {
+          SELECT count(*) FROM dolt_status WHERE staged=0;
+        } $localStatusCount
+        do_execsql_test $name-staged {
+          SELECT count(*) FROM dolt_status WHERE staged=1;
+        } $noCommit
+        do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+        execsql {SELECT dolt_branch('committed','HEAD')}
+        sqlite3 clean test.db/committed
+        do_test $name-committed {
+          clean eval {
+            SELECT * FROM z ORDER BY id;
+            SELECT type,name,tbl_name,sql FROM sqlite_schema
+              WHERE tbl_name<>'t' ORDER BY name;
+          }
+        } $cleanRows
+        clean close
+        do_test $name-reopen {
+          db close
+          sqlite3 db test.db
+          execsql $query
+        } $localRows
+        if {$noCommit} {
+          do_execsql_test $name-abort {SELECT dolt_merge('--abort')} {0}
+          do_test $name-abort-local {execsql $query} $localRows
+          do_execsql_test $name-abort-status {
+            SELECT count(*) FROM dolt_status WHERE staged=0;
+            SELECT count(*) FROM dolt_status WHERE staged=1;
+          } [list $localStatusCount 0]
+        }
+      }
+    }
+  }
+}
+
+foreach change {insert schema index drop new same} {
+  foreach divergent {0 1} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+      INSERT INTO t VALUES(1,10);
+      SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+      SELECT dolt_checkout('feat');
+    }
+    if {$change eq "new"} {
+      execsql {CREATE TABLE u(id INT PRIMARY KEY); INSERT INTO u VALUES(1)}
+    } else {
+      execsql {INSERT INTO t VALUES(2,20)}
+    }
+    execsql {SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main')}
+    if {$divergent} {
+      execsql {CREATE TABLE z(id INT PRIMARY KEY); SELECT dolt_commit('-Am','main')}
+    }
+    switch $change {
+      insert {execsql {INSERT INTO t VALUES(9,90)}}
+      schema {execsql {ALTER TABLE t ADD COLUMN x INT}}
+      index {execsql {CREATE INDEX it ON t(v)}}
+      drop {execsql {DROP TABLE t}}
+      new {execsql {CREATE TABLE u(id INT PRIMARY KEY); INSERT INTO u VALUES(9)}}
+      same {execsql {INSERT INTO t VALUES(2,20)}}
+    }
+    set before [execsql {
+      SELECT dolt_hashof('HEAD');
+      SELECT type,name,rootpage,sql FROM sqlite_schema ORDER BY name;
+      SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged;
+    }]
+    do_test merge-local-stomp-$change-$divergent {
+      set failed [catch {execsql {SELECT dolt_merge('feat')}} err]
+      list $failed [string match {*uncommitted*stomp*} $err]
+    } {1 1}
+    do_execsql_test merge-local-stomp-$change-$divergent-unchanged {
+      SELECT dolt_hashof('HEAD');
+      SELECT type,name,rootpage,sql FROM sqlite_schema ORDER BY name;
+      SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged;
+    } $before
+  }
+}
+
+foreach boundary {autocommit begin savepoint} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+    CREATE TABLE z(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1,10);
+    SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+    SELECT dolt_checkout('feat'); UPDATE t SET v=20;
+    SELECT dolt_commit('-am','feat'); SELECT dolt_checkout('main');
+    UPDATE t SET v=30; SELECT dolt_commit('-am','main');
+    INSERT INTO z VALUES(9);
+  }
+  set head [execsql {SELECT dolt_hashof('HEAD')}]
+  if {$boundary eq "begin"} {execsql BEGIN}
+  if {$boundary eq "savepoint"} {execsql {SAVEPOINT s}}
+  do_test merge-local-conflict-$boundary {
+    set failed [catch {execsql {SELECT dolt_merge('feat')}} err]
+    list $failed [string match {*conflict*} $err] \
+      [execsql {SELECT * FROM z; SELECT dolt_hashof('HEAD')}]
+  } [list 1 1 [list 9 $head]]
+  if {$boundary eq "begin"} {
+    do_execsql_test merge-local-conflict-$boundary-rollback {ROLLBACK} {}
+  } else {
+    do_test merge-local-conflict-$boundary-autocommit {
+      sqlite3_get_autocommit db
+    } 1
+  }
+  do_execsql_test merge-local-conflict-$boundary-restored {
+    SELECT * FROM t; SELECT * FROM z;
+    SELECT count(*) FROM dolt_conflicts;
+  } {1 30 9 0}
+}
+
+foreach staged {0 1} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+    CREATE TABLE z(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1,10);
+    SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+    SELECT dolt_checkout('feat'); UPDATE t SET v=20;
+    INSERT INTO t VALUES(2,20); CREATE TABLE u(id INTEGER PRIMARY KEY);
+    INSERT INTO u VALUES(2);
+    SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main');
+    UPDATE t SET v=30; SELECT dolt_commit('-am','main');
+    INSERT INTO z VALUES(9);
+  }
+  if {$staged} {execsql {SELECT dolt_add('z')}}
+  execsql BEGIN
+  do_test merge-local-conflict-abort-$staged-merge {
+    set failed [catch {execsql {SELECT dolt_merge('feat')}} err]
+    list $failed [string match {*conflict*} $err]
+  } {1 1}
+  do_execsql_test merge-local-conflict-abort-$staged-restore {
+    SELECT dolt_merge('--abort');
+    SELECT * FROM t ORDER BY id; SELECT * FROM z;
+    SELECT count(*) FROM sqlite_schema WHERE name='u';
+    SELECT count(*) FROM dolt_conflicts;
+    SELECT count(*) FROM dolt_status WHERE staged=1;
+    SELECT is_merging FROM dolt_merge_status;
+  } {0 1 30 9 0 0 0 0}
+  do_test merge-local-conflict-abort-$staged-repeat {
+    set failed [catch {execsql {SELECT dolt_merge('feat')}} err]
+    list $failed [string match {*conflict*} $err]
+  } {1 1}
+  do_test merge-local-conflict-abort-$staged-commit {
+    execsql {SELECT dolt_conflicts_resolve('--theirs','t')}
+    set failed [catch {execsql {SELECT dolt_commit('-m','resolved')}}]
+  } 0
+  do_execsql_test merge-local-conflict-abort-$staged-rows {
+    SELECT * FROM t ORDER BY id; SELECT * FROM z; SELECT * FROM u;
+    PRAGMA integrity_check;
+  } {1 20 2 20 9 2 ok}
+}
+
+foreach pragma {user_version application_id} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY); CREATE TABLE z(id INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+    SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2);
+    SELECT dolt_commit('-am','feat'); SELECT dolt_checkout('main');
+    INSERT INTO z VALUES(9);
+  }
+  execsql "PRAGMA $pragma=17"
+  do_test merge-local-metadata-$pragma {
+    set failed [catch {execsql {SELECT dolt_merge('feat')}} err]
+    list $failed [string match {*uncommitted changes*} $err] \
+      [execsql "PRAGMA $pragma; SELECT * FROM z; SELECT count(*) FROM t"]
+  } {1 1 {17 9 0}}
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY); CREATE TABLE z(id INTEGER PRIMARY KEY);
+  SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+  SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2);
+  SELECT dolt_commit('-am','feat'); SELECT dolt_checkout('main');
+  INSERT INTO t VALUES(3); SELECT dolt_commit('-am','main');
+  INSERT INTO z VALUES(9); BEGIN;
+}
+do_test merge-local-nocommit-begin {
+  set failed [catch {execsql {SELECT dolt_merge('--no-commit','feat')}}]
+} 0
+if {!$failed} {
+  do_execsql_test merge-local-nocommit-rollback {
+    ROLLBACK; SELECT * FROM t; SELECT * FROM z;
+    SELECT count(*) FROM dolt_status WHERE staged=1;
+    SELECT is_merging FROM dolt_merge_status;
+  } {3 9 0 0}
+} else {
+  catch {execsql ROLLBACK}
+}
+
+finish_test

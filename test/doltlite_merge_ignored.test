@@ -91,12 +91,12 @@ foreach indexed {0 1} {
   }
 }
 
-foreach {name change} {
-  tracked {UPDATE items SET label='dirty' WHERE id=2;}
-  index {CREATE INDEX local_index ON items(id,label);}
-  untracked {CREATE TABLE local_table(id INTEGER PRIMARY KEY);}
-  staged {SELECT dolt_add('-f','runtime_jobs');}
-  metadata {PRAGMA user_version=17;}
+foreach {name change expected} {
+  tracked {UPDATE items SET label='dirty' WHERE id=2;} {1 1 keep base}
+  index {CREATE INDEX local_index ON items(id,label);} {1 1 keep base}
+  untracked {CREATE TABLE local_table(id INTEGER PRIMARY KEY);} {0 0 keep feature}
+  staged {SELECT dolt_add('-f','runtime_jobs');} {0 0 keep feature}
+  metadata {PRAGMA user_version=17;} {1 1 keep base}
 } {
   do_test dirty.$name {
     ignored_merge_setup 1 0
@@ -105,7 +105,7 @@ foreach {name change} {
     list $failed [string match {*uncommitted changes*} $message] \
         [db one {SELECT kind FROM runtime_jobs WHERE id=1}] \
         [db one {SELECT label FROM items WHERE id=1}]
-  } {1 1 keep base}
+  } $expected
 }
 
 do_test tracked-ignore {

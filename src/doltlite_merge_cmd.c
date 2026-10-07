@@ -625,8 +625,210 @@ working_done:
   return rc;
 }
 
+static const char *mergeSchemaOwner(const SchemaEntry *p){
+  if( !p->zType ) return 0;
+  return strcmp(p->zType,"index")==0 || strcmp(p->zType,"trigger")==0
+      ? p->zTblName : p->zName;
+}
+
+static int mergeOwnerSame(
+  struct TableEntry *aA, int nA, SchemaEntry *aAs, int nAs,
+  struct TableEntry *aB, int nB, SchemaEntry *aBs, int nBs,
+  const char *zOwner
+){
+  int side, i;
+  for(side=0; side<2; side++){
+    SchemaEntry *aFrom = side ? aBs : aAs;
+    SchemaEntry *aTo = side ? aAs : aBs;
+    int nFrom = side ? nBs : nAs;
+    int nTo = side ? nAs : nBs;
+    for(i=0; i<nFrom; i++){
+      const char *z = mergeSchemaOwner(&aFrom[i]);
+      SchemaEntry *pOther;
+      struct TableEntry *pA, *pB;
+      if( !z || sqlite3_stricmp(z,zOwner)!=0 ) continue;
+      if( schemaEntryChangedByName(aFrom,nFrom,aTo,nTo,aFrom[i].zName) ){
+        return 0;
+      }
+      pOther = findSchemaEntry(aTo,nTo,aFrom[i].zName);
+      if( aFrom[i].iRootpage<=1 || !pOther ) continue;
+      pA = doltliteFindTableByNumber(side ? aB : aA,
+          side ? nB : nA,aFrom[i].iRootpage);
+      pB = doltliteFindTableByNumber(side ? aA : aB,
+          side ? nA : nB,pOther->iRootpage);
+      if( (pA==0)!=(pB==0) ) return 0;
+      if( pA && (pA->flags!=pB->flags
+       || prollyHashCompare(&pA->root,&pB->root)!=0
+       || prollyHashCompare(&pA->schemaHash,&pB->schemaHash)!=0) ) return 0;
+    }
+  }
+  return 1;
+}
+
+static int mergeFindLocalTables(
+  sqlite3 *db, const ProllyHash *pHead, const ProllyHash *pWorking,
+  const ProllyHash *pTheirHead, struct TableEntry **paLocal, int *pnLocal,
+  int bRefuse, char **pzErr
+){
+  const ProllyHash *apHash[3] = {pHead,pWorking,pTheirHead};
+  struct TableEntry *aCat[3] = {0,0,0};
+  SchemaEntry *aSchema[3] = {0,0,0};
+  int anCat[3] = {0,0,0}, anSchema[3] = {0,0,0};
+  int side, i, rc = SQLITE_OK;
+  for(i=0; i<3 && rc==SQLITE_OK; i++){
+    rc = doltliteLoadCatalog(db,apHash[i],&aCat[i],&anCat[i],0);
+    if( rc==SQLITE_OK ){
+      rc = loadSchemaFromCatalogUnfiltered(db,doltliteGetChunkStore(db),
+          doltliteGetCache(db),apHash[i],&aSchema[i],&anSchema[i]);
+    }
+  }
+  for(side=0; side<2 && rc==SQLITE_OK; side++){
+    for(i=0; i<anSchema[side] && rc==SQLITE_OK; i++){
+      const char *z = mergeSchemaOwner(&aSchema[side][i]);
+      struct TableEntry *aNew;
+      int ignored;
+      if( !z || strcmp(z,"sqlite_sequence")==0
+       || doltliteFindTableByName(*paLocal,*pnLocal,z) ) continue;
+      if( mergeOwnerSame(aCat[0],anCat[0],aSchema[0],anSchema[0],
+                         aCat[1],anCat[1],aSchema[1],anSchema[1],z) ) continue;
+      rc = mergeOwnerIgnored(db,aCat[0],anCat[0],aSchema[0],anSchema[0],
+          0,mergeVirtualOwner(db,aSchema[side],anSchema[side],z),
+          &ignored,pzErr);
+      if( rc!=SQLITE_OK || ignored ) continue;
+      if( !mergeOwnerSame(aCat[0],anCat[0],aSchema[0],anSchema[0],
+                          aCat[2],anCat[2],aSchema[2],anSchema[2],z) ){
+        if( !bRefuse ) continue;
+        *pzErr = sqlite3_mprintf(
+            "uncommitted changes would be stomped by merge: %s",z);
+        rc = *pzErr ? SQLITE_ERROR : SQLITE_NOMEM;
+        break;
+      }
+      aNew = sqlite3_realloc64(*paLocal,
+          ((sqlite3_uint64)*pnLocal+1)*sizeof(*aNew));
+      if( !aNew ){ rc = SQLITE_NOMEM; break; }
+      *paLocal = aNew;
+      memset(&aNew[*pnLocal],0,sizeof(*aNew));
+      aNew[*pnLocal].zName = sqlite3_mprintf("%s",z);
+      if( !aNew[*pnLocal].zName ){ rc = SQLITE_NOMEM; break; }
+      (*pnLocal)++;
+    }
+  }
+  for(i=0; i<3; i++){
+    doltliteFreeCatalog(aCat[i],anCat[i]);
+    freeSchemaEntries(aSchema[i],anSchema[i]);
+  }
+  return rc;
+}
+
+static int mergeCopyLocalTables(
+  sqlite3 *db, const ProllyHash *pSource, const ProllyHash *pTarget,
+  struct TableEntry *aLocal, int nLocal, ProllyHash *pOut, char **pzErr
+){
+  const ProllyHash *apHash[2] = {pTarget,pSource};
+  struct TableEntry *aCat[2] = {0,0}, *aFinal = 0;
+  SchemaEntry *aSchema[2] = {0,0};
+  int anCat[2] = {0,0}, anSchema[2] = {0,0};
+  struct TableEntry sequence, *pMaster, *pSequence[2] = {0,0};
+  SchemaEntry *pSequenceSchema[2] = {0,0};
+  ProllyHash root;
+  Pgno offset;
+  i64 rowid = 1;
+  int side, i, j, nFinal = 0, rc = SQLITE_OK;
+  *pOut = *pTarget;
+  if( nLocal==0 ) return SQLITE_OK;
+  for(i=0; i<2 && rc==SQLITE_OK; i++){
+    rc = doltliteLoadCatalog(db,apHash[i],&aCat[i],&anCat[i],0);
+    if( rc==SQLITE_OK ){
+      rc = loadSchemaFromCatalogUnfiltered(db,doltliteGetChunkStore(db),
+          doltliteGetCache(db),apHash[i],&aSchema[i],&anSchema[i]);
+    }
+  }
+  if( rc!=SQLITE_OK ) goto copy_done;
+  rc = doltliteDisjoinCatalogEntries(db,aCat[1],anCat[1],
+                                     aCat[0],anCat[0],&offset);
+  if( rc!=SQLITE_OK ) goto copy_done;
+  for(i=0; i<anSchema[0]; i++){
+    if( aSchema[0][i].iRootpage>1 ) aSchema[0][i].iRootpage += offset;
+  }
+  aFinal = sqlite3_malloc64(((sqlite3_uint64)anCat[0]+anCat[1]+1)
+                            * sizeof(*aFinal));
+  if( !aFinal ){ rc = SQLITE_NOMEM; goto copy_done; }
+  pMaster = doltliteFindTableByNumber(aCat[0],anCat[0],1);
+  if( !pMaster ){ rc = SQLITE_CORRUPT; goto copy_done; }
+  aFinal[nFinal++] = *pMaster;
+  memset(&root,0,sizeof(root));
+  for(side=0; side<2; side++){
+    for(i=0; i<anCat[side]; i++){
+      struct TableEntry *p = &aCat[side][i];
+      const char *z = p->zName;
+      if( p->iTable<=1 ) continue;
+      if( z && strcmp(z,"sqlite_sequence")==0 ){
+        pSequence[side] = p;
+        pSequenceSchema[side] = findSchemaEntry(aSchema[side],anSchema[side],z);
+        continue;
+      }
+      if( !z ){
+        for(j=0; j<anSchema[side]; j++){
+          if( aSchema[side][j].iRootpage==p->iTable ){
+            z = mergeSchemaOwner(&aSchema[side][j]);
+            break;
+          }
+        }
+      }
+      if( (doltliteFindTableByName(aLocal,nLocal,z)!=0)==side ){
+        aFinal[nFinal++] = *p;
+      }
+    }
+    for(i=0; i<anSchema[side] && rc==SQLITE_OK; i++){
+      SchemaEntry *p = &aSchema[side][i];
+      const char *z = mergeSchemaOwner(p);
+      if( z && strcmp(z,"sqlite_sequence")==0 ) continue;
+      if( (doltliteFindTableByName(aLocal,nLocal,z)!=0)==side ){
+        rc = mergeAppendSchemaEntry(db,&root,pMaster->flags,rowid++,p);
+      }
+    }
+  }
+  if( rc==SQLITE_OK && (pSequence[0] || pSequence[1]) ){
+    struct TableEntry parts[2];
+    int nDiscard, nKeep;
+    ProllyHash discard;
+    memset(parts,0,sizeof(parts));
+    for(side=0; side<2 && rc==SQLITE_OK; side++){
+      if( !pSequence[side] ) continue;
+      parts[side] = *pSequence[side];
+      rc = mergeSplitSequenceRoot(db,pSequence[side],aLocal,nLocal,0,0,1,
+          side ? &discard : &parts[side].root,&nDiscard,
+          side ? &parts[side].root : &discard,&nKeep,pzErr);
+    }
+    side = pSequence[0] ? 0 : 1;
+    sequence = *pSequence[side];
+    parts[0].flags = parts[1].flags = sequence.flags;
+    if( rc==SQLITE_OK ){
+      rc = mergeSequenceRoots(db,&parts[0],&parts[1],&sequence.root);
+    }
+    if( rc==SQLITE_OK ){
+      aFinal[nFinal++] = sequence;
+      rc = mergeAppendSchemaEntry(db,&root,pMaster->flags,rowid++,
+                                  pSequenceSchema[side]);
+    }
+  }
+  aFinal[0].root = root;
+  if( rc==SQLITE_OK ) rc = mergeStoreCatalog(db,aFinal,nFinal,0,0,pOut);
+copy_done:
+  sqlite3_free(aFinal);
+  for(i=0; i<2; i++){
+    doltliteFreeCatalog(aCat[i],anCat[i]);
+    freeSchemaEntries(aSchema[i],anSchema[i]);
+  }
+  return rc;
+}
+
 int mergeAbortInPlace(sqlite3 *db){
   ProllyHash headCatHash, stagedHash, trackedHash, ignoredHash, workingHash;
+  ProllyHash localHash, mergeHead;
+  DoltliteCommit theirCommit;
+  struct TableEntry *aLocal = 0;
+  int nLocal = 0;
   DoltliteTxnState saved;
   char *zErr = 0;
   int rc = doltliteGetHeadCatalogHash(db, &headCatHash);
@@ -635,15 +837,34 @@ int mergeAbortInPlace(sqlite3 *db){
   if( rc!=SQLITE_OK ) return rc;
   doltliteGetSessionStaged(db, &stagedHash);
   if( prollyHashIsEmpty(&stagedHash) ) stagedHash = headCatHash;
-  rc = mergeSplitWorkingCatalog(db, &stagedHash, &stagedHash, 0, &trackedHash,
+  doltliteGetSessionMergeState(db, 0, &mergeHead, 0);
+  memset(&theirCommit, 0, sizeof(theirCommit));
+  rc = doltliteFlushCatalogToHash(db, &localHash);
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(&mergeHead) ){
+    rc = doltliteLoadCommit(db, &mergeHead, &theirCommit);
+    if( rc==SQLITE_OK ){
+      rc = mergeFindLocalTables(db, &headCatHash, &localHash,
+          &theirCommit.catalogHash, &aLocal, &nLocal, 0, &zErr);
+    }
+  }
+  doltliteCommitClear(&theirCommit);
+  if( rc==SQLITE_OK ){
+    rc = mergeSplitWorkingCatalog(db, &stagedHash, &stagedHash, 0, &trackedHash,
                                  &ignoredHash, &zErr);
+  }
   if( rc==SQLITE_OK ) rc = doltliteHardReset(db, &headCatHash);
+  workingHash = headCatHash;
   if( rc==SQLITE_OK && !prollyHashIsEmpty(&ignoredHash) ){
     rc = mergeWorkingCatalog(db, &ignoredHash, &headCatHash,
                               &workingHash, &zErr);
     if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingHash);
   }
   if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &headCatHash);
+  if( rc==SQLITE_OK && nLocal>0 ){
+    rc = mergeCopyLocalTables(db, &localHash, &workingHash,
+                              aLocal, nLocal, &workingHash, &zErr);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingHash);
+  }
   if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
   if( rc==SQLITE_OK ) rc = doltliteSetSessionPendingReplayCommit(db, 0);
   if( rc==SQLITE_OK ){
@@ -654,6 +875,7 @@ int mergeAbortInPlace(sqlite3 *db){
   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
   if( rc==SQLITE_OK ) rc = doltliteVcSealActiveSavepoints(db);
   sqlite3_free(zErr);
+  doltliteFreeCatalog(aLocal, nLocal);
   if( rc!=SQLITE_OK ) return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
   doltliteTxnStateClear(&saved);
   return SQLITE_OK;
@@ -666,6 +888,8 @@ static int mergeFastForward(
   const ProllyHash *pOurHead,
   const ProllyHash *pTheirHead,
   const ProllyHash *pIgnored,
+  const ProllyHash *pLocalCatalog,
+  struct TableEntry *aLocal, int nLocal,
   int squash
 ){
   DoltliteCommit theirCommit;
@@ -697,6 +921,11 @@ static int mergeFastForward(
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pIgnored) ){
     rc = mergeWorkingCatalog(db, pIgnored, &theirCommit.catalogHash,
                               &workingCatHash, &zErr);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
+  }
+  if( rc==SQLITE_OK && nLocal>0 ){
+    rc = mergeCopyLocalTables(db, pLocalCatalog, &workingCatHash,
+                              aLocal, nLocal, &workingCatHash, &zErr);
     if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
   }
   /* Past this point the branch ref moves and the result is durable. Honour a
@@ -936,6 +1165,7 @@ static int mergeRefInstallMergedCatalog(
   ProllyHash *pMergedCat,
   const ProllyHash *pIgnored,
   ProllyHash *pWorkingCat,
+  struct TableEntry *aLocal, int nLocal,
   int nMergeConflicts,
   SchemaMergeAction **paSchemaActions,
   int *pnSchemaActions,
@@ -1016,6 +1246,10 @@ static int mergeRefInstallMergedCatalog(
                                      &ignoredHash, &zErr);
       sqlite3_free(zErr);
     }
+  }
+  if( rc==SQLITE_OK && nLocal>0 ){
+    rc = mergeCopyLocalTables(db, &trackedBaseHash, pMergedCat,
+                              aLocal, nLocal, pMergedCat, pzErr);
   }
   if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pWorkingCat);
   if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
@@ -1199,7 +1433,10 @@ int doltliteMergeRef(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash ourHead, theirHead, ancestorHash;
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
-  ProllyHash ignoredCatHash, workingCatHash;
+  ProllyHash ignoredCatHash, workingCatHash, localCatHash;
+  struct TableEntry *aLocal = 0;
+  int nLocal = 0;
+  u8 activeMerge = 0;
   DoltliteTxnState savedState;
   int nMergeConflicts = 0;
   DoltliteCommit ourCommit, theirCommit;
@@ -1260,48 +1497,64 @@ int doltliteMergeRef(
   }
 
   doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
+  doltliteGetSessionMergeState(db, &activeMerge, 0, 0);
   rc = doltliteHasUncommittedChanges(db, &dirty);
-  if( rc!=SQLITE_OK ){
-    return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
+  if( rc!=SQLITE_OK ) return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
+  if( dirty && activeMerge ){
+    return mergeRefAbortAfterWriteTxn(db, context,
+      "uncommitted changes \xe2\x80\x94 commit or reset before merging", rc);
   }
   if( dirty ){
-    ProllyHash headCatHash, stagedHash, trackedHash;
+    ProllyHash headCatHash, trackedHash;
+    DoltliteCommit source;
+    memset(&source, 0, sizeof(source));
     rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-    doltliteGetSessionStaged(db, &stagedHash);
-    if( rc==SQLITE_OK && (prollyHashIsEmpty(&stagedHash)
-     || prollyHashCompare(&stagedHash, &headCatHash)==0) ){
-      rc = mergeSplitWorkingCatalog(db, &headCatHash, &headCatHash, 0,
-                                     &trackedHash,
-                                     &ignoredCatHash, &zOwnedErr);
-      if( rc==SQLITE_OK ){
-        dirty = prollyHashCompare(&trackedHash, &headCatHash)!=0;
-      }
+    if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, &localCatHash);
+    if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &theirHead, &source);
+    if( rc==SQLITE_OK ){
+      rc = mergeFindLocalTables(db, &headCatHash, &localCatHash,
+          &source.catalogHash, &aLocal, &nLocal, 1, &zOwnedErr);
     }
+    if( rc==SQLITE_OK ){
+      rc = mergeSplitWorkingCatalog(db, &headCatHash, &headCatHash, 0,
+                                     &trackedHash, &ignoredCatHash, &zOwnedErr);
+    }
+    if( rc==SQLITE_OK ){
+      rc = mergeCopyLocalTables(db, &headCatHash, &trackedHash,
+                                aLocal, nLocal, &trackedHash, &zOwnedErr);
+    }
+    if( rc==SQLITE_OK && prollyHashCompare(&trackedHash,&headCatHash)!=0 ){
+      zOwnedErr = sqlite3_mprintf(
+          "uncommitted changes \xe2\x80\x94 commit or reset before merging");
+      rc = zOwnedErr ? SQLITE_ERROR : SQLITE_NOMEM;
+    }
+    doltliteCommitClear(&source);
     if( rc!=SQLITE_OK ){
       rc = mergeRefAbortAfterWriteTxn(db, context, zOwnedErr, rc);
+      doltliteFreeCatalog(aLocal, nLocal);
       sqlite3_free(zOwnedErr);
       return rc;
     }
   }
-  if( dirty ){
-    return mergeRefAbortAfterWriteTxn(db, context,
-      "uncommitted changes \xe2\x80\x94 commit or reset before merging", rc);
-  }
 
   rc = doltliteFindAncestor(db, &ourHead, &theirHead, &ancestorHash);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&ancestorHash) ){
+    doltliteFreeCatalog(aLocal, nLocal);
     return mergeRefAbortAfterWriteTxn(db, context,
         "no common ancestor found", rc);
   }
 
   if( prollyHashCompare(&ancestorHash, &theirHead)==0 ){
+    doltliteFreeCatalog(aLocal, nLocal);
     sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
     return SQLITE_OK;
   }
 
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
-    return mergeFastForward(db, context, cs, &ourHead, &theirHead,
-                             &ignoredCatHash, squash);
+    rc = mergeFastForward(db, context, cs, &ourHead, &theirHead,
+        &ignoredCatHash, &localCatHash, aLocal, nLocal, squash);
+    doltliteFreeCatalog(aLocal, nLocal);
+    return rc;
   }
 
   rc = mergeRefLoadCatalogs(db, &ourHead, &theirHead, &ancestorHash,
@@ -1368,6 +1621,11 @@ int doltliteMergeRef(
                               &workingCatHash, &zOwnedErr);
     if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
   }
+  if( rc==SQLITE_OK && nLocal>0 ){
+    rc = mergeCopyLocalTables(db, &localCatHash, &workingCatHash,
+                              aLocal, nLocal, &workingCatHash, &zOwnedErr);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
+  }
   if( rc!=SQLITE_OK ){
     bRestoreOnFail = 1;
     goto merge_fail;
@@ -1375,7 +1633,7 @@ int doltliteMergeRef(
 
   rc = mergeRefInstallMergedCatalog(db, &ancCatHash, &theirCatHash,
                                     &mergedCatHash, &ignoredCatHash,
-                                    &workingCatHash, nMergeConflicts,
+                                    &workingCatHash, aLocal, nLocal, nMergeConflicts,
                                     &aSchemaActions, &nSchemaActions,
                                     &azReindex, &nReindex,
                                     &azRebuildVtabs, &nRebuildVtabs, &zOwnedErr);
@@ -1416,6 +1674,7 @@ int doltliteMergeRef(
           "violations are preserved instead of rolled back.");
     }
     bHaveSaved = 0;
+    doltliteFreeCatalog(aLocal, nLocal);
     return SQLITE_ERROR;
   }
 
@@ -1423,6 +1682,7 @@ int doltliteMergeRef(
     (void)doltliteCmdFinishWithConflicts(
         db, context, &savedState, nMergeConflicts, "Merge", 0);
     bHaveSaved = 0;
+    doltliteFreeCatalog(aLocal, nLocal);
     return SQLITE_ERROR;
   }
 
@@ -1449,6 +1709,10 @@ int doltliteMergeRef(
       }
     }
     sqlite3_free(zSplitErr);
+    if( rc==SQLITE_OK && nLocal>0 ){
+      rc = mergeCopyLocalTables(db, &trackedBase, &mergedCatHash,
+                                aLocal, nLocal, &mergedCatHash, &zOwnedErr);
+    }
     if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
     if( rc!=SQLITE_OK ){
       bRestoreOnFail = 1;
@@ -1461,6 +1725,9 @@ int doltliteMergeRef(
     bRestoreOnFail = 1;
     goto merge_fail;
   }
+  doltliteFreeCatalog(aLocal, nLocal);
+  aLocal = 0;
+  nLocal = 0;
   if( noCommit ){
     return mergeRefLeaveUncommitted(
         db, context, &savedState, &ourHead, &theirHead, &workingCatHash,
@@ -1472,6 +1739,7 @@ int doltliteMergeRef(
       zBranch, zMessage, squash ? 0 : 1);
 
 merge_fail:
+  doltliteFreeCatalog(aLocal, nLocal);
   freeSchemaMergeActions(aSchemaActions, nSchemaActions);
   doltliteFreeNameList(azReindex, nReindex);
   doltliteFreeNameList(azRebuildVtabs, nRebuildVtabs);

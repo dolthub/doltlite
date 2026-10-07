@@ -10,6 +10,7 @@ vc_oracle_fk_merge_test.sh
 vc_oracle_ignored_merge_test.sh
 vc_oracle_merge_base_test.sh
 vc_oracle_merge_generated_test.sh
+vc_oracle_merge_local_test.sh
 vc_oracle_merge_status_test.sh
 vc_oracle_merge_test.sh
 vc_oracle_pk_shapes_conflicts_test.sh
