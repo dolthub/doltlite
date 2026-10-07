@@ -52,6 +52,8 @@ int doltliteSyncChunks(
 
 int doltlitePush(ChunkStore *pLocal, DoltliteRemote *pRemote,
                  const char *zBranch, int bForce);
+int doltlitePushAs(ChunkStore *pLocal, DoltliteRemote *pRemote,
+                   const char *zLocal, const char *zRef, int bForce);
 
 int doltlitePushTag(ChunkStore *pLocal, DoltliteRemote *pRemote,
                     const char *zTag);
@@ -66,9 +68,12 @@ int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
 
 int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zRemoteName, const char *zBranch);
+int doltliteFetchInto(ChunkStore *pLocal, DoltliteRemote *pRemote,
+                      const char *zRemoteName, const char *zBranch,
+                      const char *zTrack);
 
 int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote,
-                  const char *zUrl);
+                  const char *zUrl, const char *zKeepBranch);
 
 int doltliteCloneLazy(ChunkStore *pLocal, DoltliteRemote *pRemote,
                       const char *zUrl, const char *zKeepBranch);

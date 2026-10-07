@@ -139,6 +139,55 @@ remote_flow "checkout_after_fetch_sees_fetched_commits" "$MULTI_SEED" "$DEV_ADVA
   "SELECT 'R|'||count(*) FROM dolt_at_t('dev');" \
   "SELECT CONCAT('R|',count(*)) FROM t AS OF 'dev';"
 
+echo "--- refspec forms ---"
+PUSH_FORMS="
+SELECT dolt_branch('b1');
+SELECT dolt_branch('b2');
+SELECT dolt_push('origin','main:renamed');
+SELECT dolt_push('origin','refs/heads/b1');
+SELECT dolt_push('origin','b2','main');
+"
+remote_flow "push_refspec_forms" "$SEED" "$PUSH_FORMS" "SELECT dolt_fetch('origin');" \
+  "SELECT 'R|'||name FROM dolt_remote_branches ORDER BY name;" \
+  "SELECT CONCAT('R|',name) FROM dolt_remote_branches ORDER BY name;"
+remote_flow "fetch_defaults_to_origin" "$SEED" "$ADVANCE" "SELECT dolt_fetch();" \
+  "SELECT 'R|'||name FROM dolt_remote_branches ORDER BY name;" \
+  "SELECT CONCAT('R|',name) FROM dolt_remote_branches ORDER BY name;"
+remote_flow "fetch_refspec_names_tracking_ref" "$SEED" "$ADVANCE" \
+  "SELECT dolt_fetch('origin','feature:refs/remotes/origin/renamed');" \
+  "SELECT 'R|'||name FROM dolt_remote_branches ORDER BY name;" \
+  "SELECT CONCAT('R|',name) FROM dolt_remote_branches ORDER BY name;"
+PRUNE_ADVANCE="$ADVANCE
+SELECT dolt_checkout('main');
+SELECT dolt_push('origin',':feature');
+"
+remote_flow "fetch_prune_drops_deleted_branch" "$SEED" "$ADVANCE" \
+  "SELECT dolt_fetch('origin');" \
+  "SELECT 'R|'||name FROM dolt_remote_branches ORDER BY name;" \
+  "SELECT CONCAT('R|',name) FROM dolt_remote_branches ORDER BY name;"
+remote_flow "fetch_prune_after_remote_delete" "$SEED" "$PRUNE_ADVANCE" \
+  "SELECT dolt_fetch('--prune','origin');" \
+  "SELECT 'R|'||name FROM dolt_remote_branches ORDER BY name;" \
+  "SELECT CONCAT('R|',name) FROM dolt_remote_branches ORDER BY name;"
+
+echo "--- pull defaults and modes ---"
+remote_flow "pull_defaults_to_origin_and_branch" "$SEED" "$MAIN_ADVANCE" \
+  "SELECT dolt_pull();" \
+  "SELECT 'R|'||count(*) FROM t;" \
+  "SELECT CONCAT('R|',count(*)) FROM t;"
+remote_flow "pull_remote_only" "$SEED" "$MAIN_ADVANCE" \
+  "SELECT dolt_pull('origin');" \
+  "SELECT 'R|'||count(*) FROM t;" \
+  "SELECT CONCAT('R|',count(*)) FROM t;"
+remote_flow "pull_no_ff_makes_merge_commit" "$SEED" "$MAIN_ADVANCE" \
+  "SELECT dolt_pull('--no-ff','origin','main');" \
+  "SELECT 'R|'||count(*) FROM dolt_log; SELECT 'R|rows|'||count(*) FROM t;" \
+  "SELECT CONCAT('R|',count(*)) FROM dolt_log; SELECT CONCAT('R|rows|',count(*)) FROM t;"
+remote_flow "pull_squash_stages_without_commit" "$SEED" "$MAIN_ADVANCE" \
+  "SELECT dolt_pull('--squash','origin','main');" \
+  "SELECT 'R|'||count(*) FROM dolt_log; SELECT 'R|'||table_name||'|'||staged||'|'||status FROM dolt_status; SELECT 'R|rows|'||count(*) FROM t;" \
+  "SELECT CONCAT('R|',count(*)) FROM dolt_log; SELECT CONCAT('R|',table_name,'|',staged,'|',status) FROM dolt_status; SELECT CONCAT('R|rows|',count(*)) FROM t;"
+
 echo "--- tracking ref name resolves as a ref ---"
 remote_flow "tracking_name_resolves" "$SEED" "$ADVANCE" "$FETCH" \
   "SELECT 'R|'||count(*) FROM dolt_at_t('remotes/origin/feature');" \

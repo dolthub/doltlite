@@ -97,7 +97,7 @@ result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','main','--bogus');" 2
 check_match "push unknown option errors" "unknown option|ERROR" "$result"
 
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','main','--force','extra');" 2>&1)
-check_match "push extra arg errors" "too many arguments|ERROR" "$result"
+check_match "push of a missing extra refspec errors" "not found" "$result"
 
 src_head=$("$DB" "$TMPDIR/src.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
 result=$("$DB" "$TMPDIR/remote.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
@@ -239,7 +239,7 @@ result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_fetch('origin','main');")
 check "fetch returns 0" "0" "$result"
 
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_fetch('origin','main','extra');" 2>&1)
-check_match "fetch extra arg errors" "too many arguments|ERROR" "$result"
+check_match "fetch of a missing extra refspec errors" "not found" "$result"
 
 printf 'not a database' > "$TMPDIR/garbage_remote.db"
 "$DB" "$TMPDIR/garbage_client.db" "SELECT dolt_remote('add','junk','$R/garbage_remote.db');" >/dev/null 2>&1
@@ -611,6 +611,20 @@ check "multi-branch clone returns 0" "0" "$result"
 result=$("$DB" "$TMPDIR/multi_clone.db" "SELECT count(*) FROM dolt_branches; SELECT count(*) FROM dolt_remote_branches;")
 check "clone has the checked-out branch and tracks 2" "1
 2" "$result"
+
+result=$("$DB" "$TMPDIR/branch_opt_clone.db" "SELECT dolt_clone('-b','feature','$R/remote.db'); SELECT active_branch(); SELECT group_concat(name) FROM dolt_branches;")
+check "clone -b checks out only that branch" "0
+feature
+feature" "$result"
+result=$("$DB" "$TMPDIR/branch_opt_clone.db" "SELECT active_branch();")
+check "clone -b reopens on that branch" "feature" "$result"
+result=$("$DB" "$TMPDIR/branch_opt_missing.db" "SELECT dolt_clone('--branch','nope','$R/remote.db');" 2>&1)
+check_match "clone -b of a missing branch errors" "branch not found on remote" "$result"
+result=$("$DB" "$TMPDIR/branch_opt_missing.db" "SELECT count(*) FROM dolt_remotes; SELECT count(*) FROM sqlite_master WHERE type='table';")
+check "clone -b of a missing branch installs nothing" "0
+0" "$result"
+result=$("$DB" "$TMPDIR/branch_opt_missing.db" "SELECT dolt_clone('$R/remote.db');")
+check "clone after a refused clone -b succeeds" "0" "$result"
 
 echo "=== 21. Deep history push/clone (20 commits) ==="
 "$DB" "$TMPDIR/deep_src.db" <<ENDSQL
