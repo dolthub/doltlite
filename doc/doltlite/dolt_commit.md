@@ -23,7 +23,8 @@ SELECT * FROM dolt_status;
 | Argument | Meaning |
 |---|---|
 | `table`, ... | Stage the named tables. Unknown name: `table not found: <name>` |
-| `-A`, `--all` | Stage every changed table not matched by `dolt_ignore` |
+| `.` | Stage every changed table, but only when it is the only table argument. Together with a name, each `.` is a missing table: `error: the table(s) . do not exist` |
+| `-A`, `--all` | Stage every changed table not matched by `dolt_ignore`. Table arguments, including `.`, are ignored |
 | `-f`, `--force` | Stage a table even though `dolt_ignore` matches it |
 
 Returns `0`. No arguments: `dolt_add requires table name or '-A'`.
@@ -34,7 +35,7 @@ Returns `0`. No arguments: `dolt_add requires table name or '-A'`.
 |---|---|
 | `-m`, `--message` | Commit message. Required unless `--amend`. |
 | `-a`, `--all` | Stage every modified or deleted tracked table first. Does not add new tables. |
-| `-A` | Stage everything, new tables included |
+| `-A`, `--ALL` | Stage everything, new tables included |
 | `--author 'Name <email>'` | Override the committer for this commit |
 | `--date` | Commit timestamp, ISO 8601 (`2020-01-02T03:04:05Z`) |
 | `--amend` | Replace the HEAD commit with staged changes and, if given, a new message. The initial commit can be amended and stays parentless |
@@ -56,6 +57,7 @@ the SQL transaction; see [transactions.md](transactions.md).
 | `you are in the middle of a cherry-pick -- cannot amend` | `--amend` while a cherry-pick or revert is in progress |
 | `you are in the middle of a rebase -- cannot amend` | `--amend` while a rebase is in progress, other than an `edit` pause |
 | `unknown option`, `no value for option` | option parsing; the message names the option |
+| `error: multiple values provided for` an option | the same option was given more than once, including `-m` / `--message` |
 
 ## dolt_status
 

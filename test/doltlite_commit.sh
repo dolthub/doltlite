@@ -25,6 +25,18 @@ run_test "commit_requires_message" \
   "SELECT dolt_commit();" \
   "Error near line 1: dolt_commit requires a message: SELECT dolt_commit('-m', 'msg')" "$DB"
 
+DB_DUP=/tmp/test_dolt_commit_dup_$$.db
+rm -f "$DB_DUP"
+run_test "commit_repeated_message" \
+  "SELECT dolt_commit('-m', 'a', '-m', 'b');" \
+  "Error near line 1: error: multiple values provided for \`message'" "$DB_DUP"
+run_test "commit_repeated_uppercase_a" \
+  "SELECT dolt_commit('-A', '-A', '-m', 'x');" \
+  "Error near line 1: error: multiple values provided for \`ALL'" "$DB_DUP"
+run_test "commit_repeated_message_not_recorded" \
+  "SELECT count(*) FROM dolt_log;" \
+  "1" "$DB_DUP"
+
 run_test_match "log_shows_commit" \
   "SELECT message FROM dolt_log;" \
   "init" "$DB"
@@ -742,6 +754,6 @@ run_test "amend_during_merge_then_finish_msg" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "merged" "$DB26"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26"
+rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26"
 
 dltest_finish

@@ -104,6 +104,49 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
+# Both engines must reject the call, and the database left behind must match.
+oracle_error_poststate() {
+  local name="$1" dl_setup="$2" dl_call="$3" dl_query="$4" dolt_setup="${5:-$2}" dolt_call="${6:-$3}" dolt_query="${7:-$4}"
+  local dir="$TMPROOT/${name}_posterr"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup
+$dl_call" --expect-error
+  dl_rc=$?
+  local dl_out
+  dl_out=$(
+    printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_query" \
+      | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.post.err" \
+      | tr -d '\r' \
+      | grep '^Q|'
+  )
+
+  local dt_rc
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$(vc_oracle_translate_for_dolt "$dolt_setup
+$dolt_call")"
+  dt_rc=$?
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    printf "%s\n" "$dolt_query" | "$DOLT" sql -c -r csv 2>"$dir/dt.post.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"\r' | grep '^Q|')
+
+  if vc_oracle_is_clean_error "$dl_rc" && vc_oracle_is_clean_error "$dt_rc" && [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    echo "    doltlite stderr:"; tail -5 "$dir/dl.err" | sed 's/^/      /'
+    echo "    dolt stderr:"; tail -5 "$dir/dt.err" | sed 's/^/      /'
+  fi
+}
 
 oracle_query() {
   local name="$1" setup="$2" dl_query="$3" dt_query="$4"
@@ -176,6 +219,76 @@ INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('--message=first commit');
 "
+
+oracle_error_poststate "commit_repeated_short_message" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+" "SELECT dolt_commit('-m', 'a', '-m', 'b');" "
+SELECT 'Q|' || message FROM dolt_log;
+SELECT 'Q|' || table_name || '|' || staged || '|' || status
+  FROM dolt_status
+ ORDER BY table_name, staged, status;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+" "SELECT dolt_commit('-m', 'a', '-m', 'b');" "
+SELECT concat('Q|', message) FROM dolt_log ORDER BY commit_order DESC;
+SELECT concat('Q|', table_name, '|', staged, '|', status)
+  FROM dolt_status
+ ORDER BY table_name, staged, status;"
+
+oracle_error_poststate "commit_repeated_long_message" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+" "SELECT dolt_commit('--message', 'a', '--message', 'b');" "
+SELECT 'Q|' || message FROM dolt_log;
+SELECT 'Q|' || table_name || '|' || staged || '|' || status
+  FROM dolt_status
+ ORDER BY table_name, staged, status;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+" "SELECT dolt_commit('--message', 'a', '--message', 'b');" "
+SELECT concat('Q|', message) FROM dolt_log ORDER BY commit_order DESC;
+SELECT concat('Q|', table_name, '|', staged, '|', status)
+  FROM dolt_status
+ ORDER BY table_name, staged, status;"
+
+oracle_error_poststate "commit_repeated_mixed_message" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+" "SELECT dolt_commit('-m', 'a', '--message', 'b');" "
+SELECT 'Q|' || message FROM dolt_log;
+SELECT 'Q|' || table_name || '|' || staged || '|' || status
+  FROM dolt_status
+ ORDER BY table_name, staged, status;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+" "SELECT dolt_commit('-m', 'a', '--message', 'b');" "
+SELECT concat('Q|', message) FROM dolt_log ORDER BY commit_order DESC;
+SELECT concat('Q|', table_name, '|', staged, '|', status)
+  FROM dolt_status
+ ORDER BY table_name, staged, status;"
+
+oracle_error_poststate "commit_repeated_uppercase_a" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+" "SELECT dolt_commit('-A', '-A', '-m', 'x');" "
+SELECT 'Q|' || message FROM dolt_log;
+SELECT 'Q|' || table_name || '|' || staged || '|' || status
+  FROM dolt_status
+ ORDER BY table_name, staged, status;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+" "SELECT dolt_commit('-A', '-A', '-m', 'x');" "
+SELECT concat('Q|', message) FROM dolt_log ORDER BY commit_order DESC;
+SELECT concat('Q|', table_name, '|', staged, '|', status)
+  FROM dolt_status
+ ORDER BY table_name, staged, status;"
 
 echo "--- combo / stage-all flags ---"
 

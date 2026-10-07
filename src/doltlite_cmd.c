@@ -316,6 +316,9 @@ static void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOp
 static void doltliteCmdResultMissingOptionValue(
   sqlite3_context *ctx, const char *zOptName
 );
+static void doltliteCmdResultDuplicateOption(
+  sqlite3_context *ctx, const char *zOptName
+);
 
 static DoltliteCmdOption *cmdFindLongOption(
   DoltliteCmdOption *aOption,
@@ -374,6 +377,12 @@ static int cmdValueText(
   return SQLITE_OK;
 }
 
+static int cmdOptionAlreadyProvided(DoltliteCmdOption *pOption){
+  if( pOption->pzValue && *pOption->pzValue ) return 1;
+  if( pOption->pSeen && *pOption->pSeen ) return 1;
+  return 0;
+}
+
 static int cmdSetOption(
   sqlite3_context *ctx,
   DoltliteCmdOption *pOption,
@@ -385,6 +394,10 @@ static int cmdSetOption(
 ){
   const char *zValue;
   int rc;
+  if( cmdOptionAlreadyProvided(pOption) ){
+    doltliteCmdResultDuplicateOption(ctx, zOpt);
+    return SQLITE_ERROR;
+  }
   if( pOption->eType==DOLTLITE_CMD_OPTION_FLAG ){
     if( pOption->pSeen ) *pOption->pSeen = 1;
     return SQLITE_OK;
@@ -533,6 +546,20 @@ int doltliteCmdRejectReadOnly(sqlite3_context *ctx){
 
 static void doltliteCmdResultUnknownOption(sqlite3_context *ctx, const char *zOpt){
   char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
+  if( zErr ){
+    sqlite3_result_error(ctx, zErr, -1);
+    sqlite3_free(zErr);
+  }else{
+    sqlite3_result_error_nomem(ctx);
+  }
+}
+
+static void doltliteCmdResultDuplicateOption(
+  sqlite3_context *ctx,
+  const char *zOptName
+){
+  char *zErr = sqlite3_mprintf("error: multiple values provided for `%s'",
+                               zOptName ? zOptName : "");
   if( zErr ){
     sqlite3_result_error(ctx, zErr, -1);
     sqlite3_free(zErr);
