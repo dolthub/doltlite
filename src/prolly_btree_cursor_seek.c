@@ -808,6 +808,9 @@ static int indexMovetoScanTreeLeaf(
           rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
           if( rc!=SQLITE_OK ) break;
           if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+            /* Not a match: a stale eqSeen lets an equality seek accept the
+            ** next row. */
+            pIdxKey->eqSeen = 0;
             continue;
           }
         }
