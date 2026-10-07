@@ -110,7 +110,7 @@ foreach layout {table column multiple duplicate several} {
         }
         if {$predicate eq "v > 5"} {
           set valid 6
-          set invalid 2
+          set invalid 5
         } else {
           set valid -1
           set invalid -6
@@ -128,6 +128,21 @@ foreach layout {table column multiple duplicate several} {
         execsql {SELECT dolt_commit('-Am','merged rows')}
         db close
         sqlite3 db $connection
+        if {$direction eq "forward"} {
+          set branch main
+        } else {
+          set branch side
+        }
+        do_execsql_test $name-reopen-branch {SELECT active_branch()} $branch
+        do_test $name-reopen-schema {
+          execsql "SELECT count(*) FROM sqlite_master
+                    WHERE name='t' AND sql LIKE '%$predicate%'"
+        } {1}
+        do_test $name-reopen-enforcement {
+          set result [catchsql "INSERT INTO t(id,v) VALUES(3,$invalid)"]
+          list [lindex $result 0] \
+               [string match {*CHECK constraint failed*} [lindex $result 1]]
+        } {1 1}
         do_execsql_test $name-reopen "SELECT v,extra FROM t WHERE id=2" [list $valid 3]
         execsql "SELECT dolt_checkout('$target')"
         if {$direction eq "forward"} {
@@ -136,6 +151,11 @@ foreach layout {table column multiple duplicate several} {
           execsql {SELECT dolt_checkout('side')}
         }
         do_execsql_test $name-checkout "SELECT v,extra FROM t WHERE id=2" [list $valid 3]
+        do_test $name-checkout-enforcement {
+          set result [catchsql "INSERT INTO t(id,v) VALUES(3,$invalid)"]
+          list [lindex $result 0] \
+               [string match {*CHECK constraint failed*} [lindex $result 1]]
+        } {1 1}
         do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
       }
     }
