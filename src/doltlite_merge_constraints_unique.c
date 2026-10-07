@@ -1313,7 +1313,9 @@ static int uniqueWalkTable(
     if( !zIdxRaw ) continue;
 
     zOrigin = (const char*)sqlite3_column_text(pIdxList, 3);
-    if( zOrigin && strcmp(zOrigin, "pk")==0 ) continue;
+    /* A clustered key is the table tree; a rowid table's key (one named
+    ** rowid cannot be clustered) is a separate index that can collide. */
+    if( zOrigin && strcmp(zOrigin, "pk")==0 && !hasRowid ) continue;
 
     zIdx = sqlite3_mprintf("%s", zIdxRaw);
     if( !zIdx ){
