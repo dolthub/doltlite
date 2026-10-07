@@ -315,15 +315,13 @@ static int dlCheckAddCol(
   DlCheck *p,
   ParsedColumn *aCols,
   int nCols,
-  const char *z,
-  int n
+  const char *z
 ){
   char *zName;
   char *zNew;
   int i;
-  zName = sqlite3_mprintf("%.*s", n, z);
+  zName = sqlite3_mprintf("%s", z);
   if( !zName ) return SQLITE_NOMEM;
-  sqlite3Dequote(zName);
   for(i=0; zName[i]; i++) zName[i] = (char)tolower((unsigned char)zName[i]);
   if( parsedColumnIndexByName(aCols, nCols, zName)<0 || dlColsContain(p->zCols, zName) ){
     sqlite3_free(zName);
@@ -337,30 +335,60 @@ static int dlCheckAddCol(
   return SQLITE_OK;
 }
 
-static int dlCheckNoteCols(DlCheck *p, ParsedColumn *aCols, int nCols){
-  const char *z = p->zExpr ? p->zExpr : "";
-  const char *zEnd = z + strlen(z);
-  while( z<zEnd ){
-    int type = 0, n, qt = 0, qn;
-    const char *q;
-    n = sqlite3GetToken((const u8*)z, &type);
-    if( n<=0 || type==TK_ILLEGAL ) return SQLITE_CORRUPT;
-    q = z + n;
-    if( type!=TK_SPACE && type!=TK_COMMENT && type!=TK_STRING
-     && type!=TK_BLOB && type!=TK_INTEGER && type!=TK_FLOAT ){
-      while( q<zEnd ){
-        qn = sqlite3GetToken((const u8*)q, &qt);
-        if( qn<=0 || (qt!=TK_SPACE && qt!=TK_COMMENT) ) break;
-        q += qn;
-      }
-      if( !(q<zEnd && qt==TK_LP) ){
-        int rc = dlCheckAddCol(p, aCols, nCols, z, n);
-        if( rc!=SQLITE_OK ) return rc;
-      }
-    }
-    z += n;
+typedef struct DlCheckCols DlCheckCols;
+struct DlCheckCols {
+  Walker walker;
+  DlCheck *pCheck;
+  ParsedColumn *aCols;
+  int nCols;
+  int rc;
+};
+
+static int dlCheckColumnExpr(Walker *pWalker, Expr *pExpr){
+  DlCheckCols *p = (DlCheckCols*)pWalker;
+  int result = WRC_Continue;
+  if( pExpr->op==TK_DOT ){
+    pExpr = pExpr->pRight;
+    result = WRC_Prune;
   }
-  return SQLITE_OK;
+  if( pExpr->op==TK_ID ){
+    p->rc = dlCheckAddCol(p->pCheck, p->aCols, p->nCols, pExpr->u.zToken);
+    if( p->rc!=SQLITE_OK ) return WRC_Abort;
+  }
+  return result;
+}
+
+static int dlCheckNoteCols(DlCheck *p, ParsedColumn *aCols, int nCols){
+  sqlite3 *tmp = 0;
+  char *zSql;
+  int rc;
+  /* A view retains the unresolved expression without evaluating functions. */
+  zSql = sqlite3_mprintf("CREATE TEMP VIEW dl_check AS SELECT (%s\n)",
+                        p->zExpr ? p->zExpr : "");
+  if( !zSql ) return SQLITE_NOMEM;
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ){
+    Table *pTab;
+    DlCheckCols walk;
+    memset(&walk, 0, sizeof(walk));
+    walk.walker.xExprCallback = dlCheckColumnExpr;
+    walk.pCheck = p;
+    walk.aCols = aCols;
+    walk.nCols = nCols;
+    sqlite3_mutex_enter(tmp->mutex);
+    pTab = sqlite3FindTable(tmp, "dl_check", "temp");
+    if( !pTab || !IsView(pTab) || !pTab->u.view.pSelect ){
+      rc = SQLITE_CORRUPT;
+    }else{
+      sqlite3WalkExprList(&walk.walker, pTab->u.view.pSelect->pEList);
+      rc = walk.rc;
+    }
+    sqlite3_mutex_leave(tmp->mutex);
+  }
+  if( tmp ) sqlite3_close(tmp);
+  sqlite3_free(zSql);
+  return rc;
 }
 
 static int dlChecksSame(const DlCheck *pA, const DlCheck *pB){
