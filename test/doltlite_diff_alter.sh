@@ -127,6 +127,35 @@ run_test_match "diff_after_merge_works" \
   "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[0-9]+$" "$DB5"
 
+DB12=/tmp/test_diff_alter12_$$.db; rm -f "$DB12"
+
+# The first read caches the diff table. A later ALTER on that connection
+# must still expose the new column and the edited value.
+run_test_lastline "diff_columns_follow_add_column" "
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','base');
+SELECT to_id, to_v, diff_type FROM dolt_diff_t;
+SELECT rows_modified FROM dolt_diff_stat('HEAD','WORKING','t');
+ALTER TABLE t ADD COLUMN extra TEXT;
+UPDATE t SET extra='q' WHERE id=1;
+SELECT rows_modified FROM dolt_diff_stat('HEAD','WORKING','t');
+SELECT to_id || '|' || to_v || '|' || to_extra || '|' || diff_type
+  FROM dolt_diff_t WHERE to_commit='WORKING';
+" "1|a|q|modified" "$DB12"
+
+DB13=/tmp/test_diff_alter13_$$.db; rm -f "$DB13"
+
+run_test_lastline "diff_columns_follow_drop_column" "
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT, extra TEXT);
+INSERT INTO t VALUES(1,'a','q');
+SELECT dolt_commit('-Am','base');
+SELECT to_extra FROM dolt_diff_t;
+ALTER TABLE t DROP COLUMN extra;
+UPDATE t SET v='b' WHERE id=1;
+SELECT group_concat(name, ',') FROM pragma_table_info('dolt_diff_t');
+" "to_id,to_v,to_commit,to_commit_date,from_id,from_v,from_commit,from_commit_date,diff_type" "$DB13"
+
 DB6=/tmp/test_diff_alter6_$$.db; rm -f "$DB6"
 
 echo "CREATE TABLE t(a TEXT, b INT, PRIMARY KEY(a,b));
@@ -293,6 +322,6 @@ run_test "dropcol_then_addcol_default_rowid_table" \
   "SELECT quote(y) FROM t;" \
   "'dflt'" "$DB11"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
 
 dltest_finish
