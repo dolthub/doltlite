@@ -195,4 +195,36 @@ do_execsql_test constraint-rowid-keyless-hidden-no-constraints {
   SELECT count(*) FROM t;
 } {40 0 40 0 40 40 0 3}
 
+# A primary key named rowid cannot be clustered, so it is a separate unique
+# index that a merge can collide in.
+foreach {name decl} {
+  rowid {rowid TEXT PRIMARY KEY}
+  rowid_notnull {rowid TEXT PRIMARY KEY}
+} {
+  set vdecl [expr {$name eq "rowid_notnull" ? "v INT NOT NULL" : "v INT"}]
+  set k [lindex $decl 0]
+  reset_db
+  execsql "CREATE TABLE t($decl, $vdecl);
+           INSERT INTO t($k,v) VALUES('a',1),('b',2);
+           SELECT dolt_commit('-Am','base');
+           SELECT dolt_checkout('-b','side');
+           UPDATE t SET $k='c' WHERE $k='b';
+           SELECT dolt_commit('-Am','side');
+           SELECT dolt_checkout('main');
+           UPDATE t SET $k='c' WHERE $k='a';
+           SELECT dolt_commit('-Am','main');"
+  do_test pk-named-$name-autocommit-refused {
+    catchsql {SELECT dolt_merge('side')}
+  } {1 {Committing this transaction resulted in a working set with constraint violations, transaction rolled back.}}
+  do_execsql_test pk-named-$name-unchanged "
+    SELECT $k, v FROM t ORDER BY v; PRAGMA integrity_check;
+  " {c 1 b 2 ok}
+  execsql BEGIN
+  catchsql {SELECT dolt_merge('side')}
+  do_execsql_test pk-named-$name-violations "
+    SELECT violation_type, $k, v FROM dolt_constraint_violations_t ORDER BY v;
+  " {{unique index} c 1 {unique index} c 2}
+  execsql ROLLBACK
+}
+
 finish_test

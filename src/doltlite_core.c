@@ -1160,6 +1160,21 @@ int doltliteDetectConstraintViolationsInTxn(
   return vrc;
 }
 
+/* A user table that keeps a rowid but declares a primary key holds that
+** key in a separate unique index. */
+static int schemaHasRowidPrimaryKey(sqlite3 *db){
+  HashElem *e;
+  if( !db || db->nDb<1 || !db->aDb[0].pSchema ) return 0;
+  for(e=sqliteHashFirst(&db->aDb[0].pSchema->tblHash); e; e=sqliteHashNext(e)){
+    Table *p = (Table*)sqliteHashData(e);
+    if( !IsOrdinaryTable(p) || !HasRowid(p) ) continue;
+    if( sqlite3_strnicmp(p->zName, "sqlite_", 7)==0
+     || sqlite3_strnicmp(p->zName, "dolt_", 5)==0 ) continue;
+    if( sqlite3PrimaryKeyIndex(p) ) return 1;
+  }
+  return 0;
+}
+
 int doltliteDetectConstraintViolationsFiltered(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -1212,6 +1227,7 @@ int doltliteDetectConstraintViolationsFiltered(
     if( rc==SQLITE_OK ) rc = finalizeRc;
   }
   if( rc!=SQLITE_OK ) return rc;
+  if( !needsDetection ) needsDetection = schemaHasRowidPrimaryKey(db);
   if( !needsDetection ){
     if( pnViolations ) *pnViolations = 0;
     return SQLITE_OK;
