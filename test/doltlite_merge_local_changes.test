@@ -192,6 +192,48 @@ foreach boundary {autocommit begin savepoint} {
   } {1 30 9 0}
 }
 
+foreach staged {0 1} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+    CREATE TABLE z(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1,10);
+    SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat');
+    SELECT dolt_checkout('feat'); UPDATE t SET v=20;
+    INSERT INTO t VALUES(2,20); CREATE TABLE u(id INTEGER PRIMARY KEY);
+    INSERT INTO u VALUES(2);
+    SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main');
+    UPDATE t SET v=30; SELECT dolt_commit('-am','main');
+    INSERT INTO z VALUES(9);
+  }
+  if {$staged} {execsql {SELECT dolt_add('z')}}
+  execsql BEGIN
+  do_test merge-local-conflict-abort-$staged-merge {
+    set failed [catch {execsql {SELECT dolt_merge('feat')}} err]
+    list $failed [string match {*conflict*} $err]
+  } {1 1}
+  do_execsql_test merge-local-conflict-abort-$staged-restore {
+    SELECT dolt_merge('--abort');
+    SELECT * FROM t ORDER BY id; SELECT * FROM z;
+    SELECT count(*) FROM sqlite_schema WHERE name='u';
+    SELECT count(*) FROM dolt_conflicts;
+    SELECT count(*) FROM dolt_status WHERE staged=1;
+    SELECT is_merging FROM dolt_merge_status;
+  } {0 1 30 9 0 0 0 0}
+  do_test merge-local-conflict-abort-$staged-repeat {
+    set failed [catch {execsql {SELECT dolt_merge('feat')}} err]
+    list $failed [string match {*conflict*} $err]
+  } {1 1}
+  do_test merge-local-conflict-abort-$staged-commit {
+    execsql {SELECT dolt_conflicts_resolve('--theirs','t')}
+    set failed [catch {execsql {SELECT dolt_commit('-m','resolved')}}]
+  } 0
+  do_execsql_test merge-local-conflict-abort-$staged-rows {
+    SELECT * FROM t ORDER BY id; SELECT * FROM z; SELECT * FROM u;
+    PRAGMA integrity_check;
+  } {1 20 2 20 9 2 ok}
+}
+
 foreach pragma {user_version application_id} {
   reset_db
   execsql {

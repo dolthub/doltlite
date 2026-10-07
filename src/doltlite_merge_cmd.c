@@ -825,7 +825,8 @@ copy_done:
 
 int mergeAbortInPlace(sqlite3 *db){
   ProllyHash headCatHash, stagedHash, trackedHash, ignoredHash, workingHash;
-  ProllyHash localHash;
+  ProllyHash localHash, mergeHead;
+  DoltliteCommit theirCommit;
   struct TableEntry *aLocal = 0;
   int nLocal = 0;
   DoltliteTxnState saved;
@@ -836,11 +837,17 @@ int mergeAbortInPlace(sqlite3 *db){
   if( rc!=SQLITE_OK ) return rc;
   doltliteGetSessionStaged(db, &stagedHash);
   if( prollyHashIsEmpty(&stagedHash) ) stagedHash = headCatHash;
+  doltliteGetSessionMergeState(db, 0, &mergeHead, 0);
+  memset(&theirCommit, 0, sizeof(theirCommit));
   rc = doltliteFlushCatalogToHash(db, &localHash);
-  if( rc==SQLITE_OK ){
-    rc = mergeFindLocalTables(db, &stagedHash, &localHash, &headCatHash,
-                              &aLocal, &nLocal, 0, &zErr);
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(&mergeHead) ){
+    rc = doltliteLoadCommit(db, &mergeHead, &theirCommit);
+    if( rc==SQLITE_OK ){
+      rc = mergeFindLocalTables(db, &headCatHash, &localHash,
+          &theirCommit.catalogHash, &aLocal, &nLocal, 0, &zErr);
+    }
   }
+  doltliteCommitClear(&theirCommit);
   if( rc==SQLITE_OK ){
     rc = mergeSplitWorkingCatalog(db, &stagedHash, &stagedHash, 0, &trackedHash,
                                  &ignoredHash, &zErr);
