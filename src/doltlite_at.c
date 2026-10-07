@@ -1070,8 +1070,8 @@ Module *doltliteHistoricalModuleRegister(sqlite3 *db, const char *zName){
 }
 
 /* The eponymous table keeps the columns from its first xConnect.
-** Compare those with the columns this statement's literal ref would
-** declare. Callers rebuild only when the declarations differ. */
+** Compare those with the columns a new connect would declare.
+** Callers rebuild only when the declarations differ. */
 int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
   Table *pTab;
   VTable *pVt;
@@ -1088,6 +1088,11 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
     if( zName[8]==0 ) return 0;
   }else if( sqlite3_strnicmp(zName, "dolt_history_", 13)==0 ){
     if( zName[13]==0 ) return 0;
+  }else if( sqlite3_strnicmp(zName, "dolt_diff_", 10)==0 ){
+    /* stat and summary share the prefix and are not per-table diffs. */
+    if( zName[10]==0
+     || sqlite3_stricmp(zName, "dolt_diff_stat")==0
+     || sqlite3_stricmp(zName, "dolt_diff_summary")==0 ) return 0;
   }else{
     return 0;
   }

@@ -44,6 +44,8 @@ Revision spellings and which surfaces take ranges: [refs.md](refs.md).
 
 - `dolt_diff_<table>` with no arguments walks the current branch's history.
   `to_commit = 'WORKING'` rows cover staged and working edits together.
+- Its columns follow the table. `ALTER TABLE` on the same connection is
+  visible on the next read, including a column added after the first read.
 - The two-argument form is a snapshot comparison and works even if the table
   exists at only one endpoint. A single revision is an error:
   `dolt_diff_<table> requires a '..' or '...' revision range`.
