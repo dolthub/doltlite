@@ -870,4 +870,60 @@ UPDATE dolt_workspace_t SET diff_type=diff_type,
 " "SELECT CONCAT('R|',staged,'|',to_v,'|',from_v) FROM dolt_workspace_t;"
 done
 
+for key in rowid clustered; do
+  declaration='id INTEGER PRIMARY KEY'
+  if [ "$key" = clustered ]; then declaration='id INT PRIMARY KEY'; fi
+  for kind in simple nocase compound; do
+    columns='v VARCHAR(20) UNIQUE,w INT'
+    case "$kind" in
+      nocase) columns='v VARCHAR(20) COLLATE NOCASE UNIQUE,w INT' ;;
+      compound) columns='v VARCHAR(20),w INT,UNIQUE(v,w)' ;;
+    esac
+    for direction in stage unstage; do
+      for boundary in autocommit begin savepoint; do
+        for n in 2 3; do
+          setup="CREATE TABLE t($declaration,$columns);
+CREATE TABLE marker(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1,'a',1),(2,'b',1),(3,'c',1);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET v='tmp' WHERE id=1; UPDATE t SET v='a' WHERE id=2;"
+          if [ "$n" -eq 3 ]; then
+            setup="$setup UPDATE t SET v='b' WHERE id=3; UPDATE t SET v='c' WHERE id=1;"
+          else
+            setup="$setup UPDATE t SET v='b' WHERE id=1;"
+          fi
+          staged=TRUE
+          if [ "$direction" = unstage ]; then
+            setup="$setup SELECT dolt_add('t');"
+            staged=FALSE
+          fi
+          if [ "$boundary" = autocommit ] && [ "$n" -eq 2 ]; then
+            oracle_error "workspace_swap_partial_${key}_${kind}_${direction}" \
+              "$setup UPDATE dolt_workspace_t SET staged=$staged WHERE to_id=1;"
+          fi
+          case "$boundary" in
+            begin) setup="$setup BEGIN;" ;;
+            savepoint) setup="$setup SAVEPOINT outer_sp;" ;;
+          esac
+          setup="$setup INSERT INTO marker VALUES(9);
+UPDATE dolt_workspace_t SET staged=$staged WHERE to_id<=$n;
+SELECT CONCAT('R|staged|',count(*)) FROM dolt_workspace_t WHERE staged=TRUE;
+SELECT CONCAT('R|unstaged|',count(*)) FROM dolt_workspace_t WHERE staged=FALSE;"
+          case "$boundary" in
+            begin) setup="$setup COMMIT;" ;;
+            savepoint) setup="$setup RELEASE SAVEPOINT outer_sp;" ;;
+          esac
+          if [ "$direction" = unstage ]; then setup="$setup SELECT dolt_add('marker');"; fi
+          setup="$setup SELECT dolt_commit('-m','selected rows');"
+          oracle "workspace_swap_${key}_${kind}_${direction}_${boundary}_$n" \
+            "$setup" \
+            "SELECT CONCAT('R|table|',id,'|',v,'|',w) FROM t;
+SELECT CONCAT('R|committed|',to_id,'|',to_v,'|',from_v) FROM dolt_diff_t('HEAD~1','HEAD');
+SELECT CONCAT('R|working|',to_id,'|',to_v,'|',from_v) FROM dolt_diff_t('HEAD','WORKING');"
+        done
+      done
+    done
+  done
+done
+
 vc_oracle_finish

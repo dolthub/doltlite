@@ -3377,6 +3377,9 @@ int sqlite3VdbeHalt(Vdbe *p){
   if( db->mallocFailed ){
     p->rc = SQLITE_NOMEM_BKPT;
   }
+#ifdef DOLTLITE_PROLLY
+  if( p->pWorkspaceChanges ) doltliteWorkspaceFinishStatement(p);
+#endif
   checkActiveVdbeCnt(db);
 
   /* No commit or rollback needed if the program never started or if the

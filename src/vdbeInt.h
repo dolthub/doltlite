@@ -537,6 +537,9 @@ struct Vdbe {
   int nScan;              /* Entries in aScan[] */
   ScanStatus *aScan;      /* Scan definitions for sqlite3_stmt_scanstatus() */
 #endif
+#ifdef DOLTLITE_PROLLY
+  void *pWorkspaceChanges;
+#endif
 };
 
 /*

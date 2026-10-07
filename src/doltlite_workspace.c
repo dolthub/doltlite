@@ -50,6 +50,21 @@ struct WorkspaceVtab {
   i64 nextRowid;
 };
 
+typedef struct WorkspaceChange WorkspaceChange;
+struct WorkspaceChange {
+  WorkspaceVtab *pVtab;
+  WorkspaceRows *pRows;
+  int iRow;
+  int staged;
+};
+
+typedef struct WorkspaceChanges WorkspaceChanges;
+struct WorkspaceChanges {
+  WorkspaceChange *a;
+  int n;
+  int nAlloc;
+};
+
 typedef struct WorkspaceCursor WorkspaceCursor;
 struct WorkspaceCursor {
   sqlite3_vtab_cursor base;
@@ -846,7 +861,9 @@ static int wsUniqueConstraintError(WorkspaceVtab *p, Index *pIdx){
   return rc==SQLITE_OK ? SQLITE_CONSTRAINT_UNIQUE : rc;
 }
 
-static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged){
+static int wsApplyRowToStaged(
+  WorkspaceVtab *p, WorkspaceRow *r, int makeStaged, int pass
+){
   sqlite3 *db;
   ChunkStore *cs;
   ProllyCache *pCache;
@@ -936,7 +953,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
     }
   }
 
-  if( pTgt ){
+  if( pass!=0 && pTgt ){
     const u8 *pIns = pTgt;
     int nIns = nTgt;
     int storeEmpty = (pProj==0) && (
@@ -950,7 +967,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
     }
     rc = prollyMutateInsert(cs, pCache, &pData->root, pData->flags,
                             r->pKey, r->nKey, r->intKey, pIns, nIns, &newRoot);
-  }else{
+  }else if( pass!=0 ){
     rc = prollyMutateDelete(cs, pCache, &pData->root, pData->flags,
                             r->pKey, r->nKey, r->intKey, &newRoot);
   }
@@ -960,7 +977,7 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
     doltliteFreeCatalog(aTables, nTables);
     return rc;
   }
-  pData->root = newRoot;
+  if( pass!=0 ) pData->root = newRoot;
 
   pTab = sqlite3FindTable(db, p->zTableName, "main");
   if( pTab ){
@@ -973,7 +990,8 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
       if( !idxEntry ) continue;
       rc = wsApplyRowToIndex(db, cs, pCache, idxEntry, pIdx, pTab->iPKey,
                              r->pKey, r->nKey, r->intKey,
-                             pSrc, nSrc, pTgt, nTgt);
+                             pass==1 ? 0 : pSrc, pass==1 ? 0 : nSrc,
+                             pass==0 ? 0 : pTgt, pass==0 ? 0 : nTgt);
       if( rc==SQLITE_CONSTRAINT_UNIQUE ){
         rc = wsUniqueConstraintError(p, pIdx);
       }
@@ -994,6 +1012,81 @@ static int wsApplyRowToStaged(WorkspaceVtab *p, WorkspaceRow *r, int makeStaged)
   sqlite3_free(pProj);
   if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &newCat);
   return rc;
+}
+
+static int wsQueueChange(
+  WorkspaceVtab *p, WorkspaceRows *pRows, WorkspaceRow *r, int staged
+){
+  Vdbe *pStmt = p->db->pWorkspaceStatement;
+  WorkspaceChanges *pChanges;
+  WorkspaceChange *pChange;
+  int i;
+  assert( pStmt );
+  pChanges = pStmt->pWorkspaceChanges;
+  if( !pChanges ){
+    pChanges = sqlite3_malloc(sizeof(*pChanges));
+    if( !pChanges ) return SQLITE_NOMEM;
+    memset(pChanges, 0, sizeof(*pChanges));
+    pStmt->pWorkspaceChanges = pChanges;
+  }
+  for(i=0; i<pChanges->n; i++){
+    WorkspaceRow *pOld;
+    pChange = &pChanges->a[i];
+    if( sqlite3_stricmp(pChange->pVtab->zTableName,p->zTableName)!=0 ) continue;
+    pOld = &pChange->pRows->a[pChange->iRow];
+    if( r->keyIsIntKey!=pOld->keyIsIntKey ) continue;
+    if( r->keyIsIntKey ? r->intKey!=pOld->intKey
+        : r->nKey!=pOld->nKey || memcmp(r->pKey,pOld->pKey,r->nKey)!=0 ){
+      continue;
+    }
+    break;
+  }
+  if( i==pChanges->n ){
+    if( pChanges->n==pChanges->nAlloc ){
+      int nAlloc = pChanges->nAlloc ? pChanges->nAlloc*2 : 8;
+      WorkspaceChange *a = sqlite3_realloc64(pChanges->a,
+          (sqlite3_uint64)nAlloc*sizeof(*a));
+      if( !a ) return SQLITE_NOMEM;
+      pChanges->a = a;
+      pChanges->nAlloc = nAlloc;
+    }
+    pChanges->n++;
+  }else{
+    wsRowsRelease(pChanges->a[i].pRows);
+  }
+  pChange = &pChanges->a[i];
+  pChange->pVtab = p;
+  pChange->pRows = pRows;
+  pChange->iRow = (int)(r-pRows->a);
+  pChange->staged = staged;
+  pRows->nRef++;
+  return SQLITE_OK;
+}
+
+void doltliteWorkspaceFinishStatement(Vdbe *pStmt){
+  WorkspaceChanges *pChanges = pStmt->pWorkspaceChanges;
+  ProllyHash stagedHash;
+  int pass, i, rc = SQLITE_OK;
+  if( pStmt->rc==SQLITE_OK ){
+    doltliteGetSessionStaged(pStmt->db, &stagedHash);
+    for(pass=0; pass<2 && rc==SQLITE_OK; pass++){
+      for(i=0; i<pChanges->n && rc==SQLITE_OK; i++){
+        WorkspaceChange *p = &pChanges->a[i];
+        rc = wsApplyRowToStaged(p->pVtab, &p->pRows->a[p->iRow],
+                                p->staged, pass);
+        if( rc!=SQLITE_OK ) sqlite3VtabImportErrmsg(pStmt, &p->pVtab->base);
+      }
+    }
+    if( rc!=SQLITE_OK ){
+      doltliteSetSessionStaged(pStmt->db, &stagedHash);
+      pStmt->rc = rc;
+      pStmt->errorAction = OE_Abort;
+    }
+  }
+  for(i=0; i<pChanges->n; i++) wsRowsRelease(pChanges->a[i].pRows);
+  sqlite3_free(pChanges->a);
+  sqlite3_free(pChanges);
+  pStmt->pWorkspaceChanges = 0;
 }
 
 
@@ -1268,7 +1361,17 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
       return SQLITE_ERROR;
     }
   }
-  return wsApplyRowToStaged(p, r, newStaged);
+  {
+    Table *pTab = sqlite3FindTable(p->db, p->zTableName, "main");
+    Index *pIdx;
+    for(pIdx=pTab ? pTab->pIndex : 0; pIdx; pIdx=pIdx->pNext){
+      if( IsUniqueIndex(pIdx)
+       && (HasRowid(pTab) || !IsPrimaryKeyIndex(pIdx)) ){
+        return wsQueueChange(p, pRows, r, newStaged);
+      }
+    }
+  }
+  return wsApplyRowToStaged(p, r, newStaged, 2);
 }
 
 static sqlite3_module workspaceModule = {

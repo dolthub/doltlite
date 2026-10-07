@@ -152,4 +152,140 @@ do_execsql_test workspace-unique-same-key {
   PRAGMA integrity_check;
 } {40 40 0 a 1 ok}
 
+foreach {layout key suffix} {
+  integer {INTEGER PRIMARY KEY} {}
+  clustered {INT PRIMARY KEY} {}
+  descending {INT PRIMARY KEY DESC} {}
+  without-rowid {INT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach {kind columns index} {
+    simple {v TEXT UNIQUE,w INT} {}
+    nocase {v TEXT COLLATE NOCASE UNIQUE,w INT} {}
+    rtrim {v TEXT COLLATE RTRIM UNIQUE,w INT} {}
+    compound {v TEXT,w INT,UNIQUE(v,w DESC)} {}
+    multiple {v TEXT UNIQUE,w INT,UNIQUE(v,w)} {}
+    expression {v TEXT,w INT} {CREATE UNIQUE INDEX uv ON t(lower(v) DESC)}
+    partial {v TEXT,w INT} {CREATE UNIQUE INDEX uv ON t(v) WHERE w=1}
+    virtual {v TEXT,w INT,g TEXT AS (lower(v)) VIRTUAL UNIQUE} {}
+    stored {v TEXT,w INT,g TEXT AS (lower(v)) STORED UNIQUE} {}
+  } {
+    foreach direction {stage unstage} {
+      foreach transaction {autocommit begin savepoint} {
+        foreach n {2 3} {
+          reset_db
+          execsql "CREATE TABLE t(id $key,$columns) $suffix; $index"
+          execsql {
+            CREATE TABLE marker(id INTEGER PRIMARY KEY);
+            INSERT INTO t(id,v,w) VALUES(1,'a',1),(2,'b',1),(3,'c',1),(4,'d',0);
+            SELECT dolt_commit('-Am','base');
+          }
+          set base [execsql {SELECT id,v,w FROM t ORDER BY id}]
+          execsql {UPDATE t SET v='tmp' WHERE id=1; UPDATE t SET v='a' WHERE id=2}
+          if {$n==3} {
+            execsql {UPDATE t SET v='b' WHERE id=3; UPDATE t SET v='c' WHERE id=1}
+          } else {
+            execsql {UPDATE t SET v='b' WHERE id=1}
+          }
+          set working [execsql {SELECT id,v,w FROM t ORDER BY id}]
+          set staged 1
+          set initial 0
+          set committed $working
+          if {$direction eq "unstage"} {
+            execsql {SELECT dolt_add('t')}
+            set staged 0
+            set initial $n
+            set committed $base
+          }
+          if {$transaction eq "begin"} {execsql BEGIN}
+          if {$transaction eq "savepoint"} {execsql {SAVEPOINT outer}}
+          execsql {INSERT INTO marker VALUES(9)}
+          set name workspace-swap-$layout-$kind-$direction-$transaction-$n
+          do_test $name-partial {
+            set failed [catch {execsql "UPDATE dolt_workspace_t SET staged=$staged WHERE to_id=1"} err]
+            list $failed [string match {*UNIQUE constraint failed:*} $err]
+          } {1 1}
+          do_execsql_test $name-partial-unchanged {
+            SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+            SELECT id FROM marker;
+          } [list $initial 9]
+          do_test $name-batch {
+            set failed [catch {execsql "UPDATE dolt_workspace_t SET staged=$staged WHERE to_id<=$n"}]
+          } 0
+          if {$failed} {
+            catch {execsql ROLLBACK}
+            continue
+          }
+          do_execsql_test $name-status {
+            SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+            SELECT count(*) FROM dolt_workspace_t WHERE staged=0;
+            SELECT id FROM marker;
+          } [list [expr {$staged ? $n : 0}] [expr {$staged ? 0 : $n}] 9]
+          if {$transaction eq "begin"} {execsql COMMIT}
+          if {$transaction eq "savepoint"} {execsql {RELEASE outer}}
+          if {$direction eq "unstage"} {execsql {SELECT dolt_add('marker')}}
+          do_test $name-commit {
+            execsql {SELECT length(dolt_commit('-m','selected rows'))}
+          } 40
+          do_execsql_test $name-committed {
+            SELECT id,v,w FROM dolt_at_t('HEAD') ORDER BY id;
+          } $committed
+          do_execsql_test $name-working {
+            SELECT id,v,w FROM t ORDER BY id;
+            PRAGMA integrity_check;
+          } [concat $working ok]
+          db close
+          sqlite3 db test.db
+          do_execsql_test $name-reopen {
+            SELECT id,v,w FROM t ORDER BY id;
+            SELECT id,v,w FROM dolt_at_t('HEAD') ORDER BY id;
+            PRAGMA integrity_check;
+          } [concat $working $committed ok]
+        }
+      }
+    }
+  }
+}
+
+foreach boundary {rollback rollback_to close} {
+  foreach initial {0 1} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INT PRIMARY KEY,v TEXT UNIQUE);
+      CREATE TABLE marker(id INTEGER PRIMARY KEY);
+      INSERT INTO t VALUES(1,'a'),(2,'b');
+      SELECT dolt_commit('-Am','base');
+      UPDATE t SET v='tmp' WHERE id=1;
+      UPDATE t SET v='a' WHERE id=2;
+      UPDATE t SET v='b' WHERE id=1;
+    }
+    if {$initial} {execsql {SELECT dolt_add('t')}}
+    execsql {BEGIN; INSERT INTO marker VALUES(9)}
+    if {$boundary eq "rollback_to"} {execsql {SAVEPOINT inner_sp}}
+    set name workspace-swap-$boundary-$initial
+    do_test $name-batch {
+      set failed [catch {execsql "UPDATE dolt_workspace_t SET staged=[expr {!$initial}]"}]
+    } 0
+    if {$failed} {catch {execsql ROLLBACK}; continue}
+    set markerRows 0
+    switch $boundary {
+      rollback {execsql ROLLBACK}
+      rollback_to {
+        execsql {ROLLBACK TO inner_sp; RELEASE inner_sp; COMMIT}
+        set markerRows 1
+      }
+      close {db close; sqlite3 db test.db}
+    }
+    do_execsql_test $name-state {
+      SELECT count(*) FROM dolt_workspace_t WHERE staged=1;
+      SELECT count(*) FROM marker;
+      SELECT id,v FROM t ORDER BY id;
+      PRAGMA integrity_check;
+    } [list [expr {$initial*2}] $markerRows 1 b 2 a ok]
+    do_test $name-retry {
+      execsql "UPDATE dolt_workspace_t SET staged=[expr {!$initial}]"
+      execsql {SELECT count(*) FROM dolt_workspace_t WHERE staged=1}
+    } [expr {!$initial*2}]
+  }
+}
+
 finish_test
