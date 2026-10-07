@@ -870,6 +870,77 @@ static int schemaConstraintModifyDeleteChoice(
   return rc;
 }
 
+static int schemaUniqueIndexesSame(Table *pA, Table *pB){
+  Index *pLeft, *pRight;
+  int nA = 0, nB = 0;
+  for(pRight=pB->pIndex; pRight; pRight=pRight->pNext){
+    if( pRight->idxType==SQLITE_IDXTYPE_UNIQUE ) nB++;
+  }
+  for(pLeft=pA->pIndex; pLeft; pLeft=pLeft->pNext){
+    int i;
+    if( pLeft->idxType!=SQLITE_IDXTYPE_UNIQUE ) continue;
+    nA++;
+    for(pRight=pB->pIndex; pRight; pRight=pRight->pNext){
+      if( pRight->idxType!=SQLITE_IDXTYPE_UNIQUE
+       || pLeft->nKeyCol!=pRight->nKeyCol
+       || pLeft->onError!=pRight->onError ) continue;
+      for(i=0; i<pLeft->nKeyCol; i++){
+        if( sqlite3_stricmp(pA->aCol[pLeft->aiColumn[i]].zCnName,
+                           pB->aCol[pRight->aiColumn[i]].zCnName)!=0
+         || sqlite3_stricmp(pLeft->azColl[i],pRight->azColl[i])!=0
+         || pLeft->aSortOrder[i]!=pRight->aSortOrder[i] ) break;
+      }
+      if( i==pLeft->nKeyCol ) break;
+    }
+    if( !pRight ) return 0;
+  }
+  return nA==nB;
+}
+
+int schemaUniqueSideChoice(
+  const char *zAnc, const char *zOurs, const char *zTheirs, int *pChoice
+){
+  const char *azSql[3] = {zAnc, zOurs, zTheirs};
+  sqlite3 *aDb[3] = {0, 0, 0};
+  Table *aTab[3] = {0, 0, 0};
+  int i, rc = SQLITE_OK, sameOurs, sameTheirs;
+  *pChoice = SCHEMA_MERGE_DEFAULT;
+  for(i=0; i<3; i++){
+    if( schemaFindToken(azSql[i],azSql[i]+strlen(azSql[i]),"UNIQUE",6) ) break;
+  }
+  if( i==3 ) return SQLITE_OK;
+  for(i=0; i<3 && rc==SQLITE_OK; i++){
+    sqlite3_stmt *pStmt = 0;
+    rc = sqlite3_open(":memory:", &aDb[i]);
+    if( rc==SQLITE_OK ) rc = sqlite3_exec(aDb[i], azSql[i], 0, 0, 0);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_prepare_v2(aDb[i],
+          "SELECT name FROM sqlite_schema WHERE type='table'"
+          " AND name<>'sqlite_sequence' LIMIT 1", -1, &pStmt, 0);
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_step(pStmt);
+      if( rc==SQLITE_ROW ){
+        aTab[i] = sqlite3FindTable(aDb[i],
+            (const char*)sqlite3_column_text(pStmt, 0), "main");
+        rc = aTab[i] ? SQLITE_OK : SQLITE_CORRUPT;
+      }else if( rc==SQLITE_DONE ){
+        rc = SQLITE_CORRUPT;
+      }
+    }
+    sqlite3_finalize(pStmt);
+  }
+  if( rc==SQLITE_OK ){
+    sameOurs = schemaUniqueIndexesSame(aTab[0], aTab[1]);
+    sameTheirs = schemaUniqueIndexesSame(aTab[0], aTab[2]);
+    if( sameOurs!=sameTheirs ){
+      *pChoice = sameOurs ? SCHEMA_MERGE_THEIRS : SCHEMA_MERGE_OURS;
+    }
+  }
+  for(i=0; i<3; i++) sqlite3_close(aDb[i]);
+  return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
+}
+
 /* True when zName sits on this side as a plain addition: absent from the
 ** ancestor, and not standing in an ancestor column's slot with its type,
 ** which is what a rename leaves behind. */
@@ -1118,6 +1189,13 @@ int trySchemaColumnMerge(
       }
     }
 
+  }
+
+  {
+    int uniqueChoice = SCHEMA_MERGE_DEFAULT;
+    rc = schemaUniqueSideChoice(zAncSql, zOursSql, zTheirsSql, &uniqueChoice);
+    if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
+    if( uniqueChoice!=SCHEMA_MERGE_DEFAULT ) *pSchemaChoice = uniqueChoice;
   }
 
   if( *pSchemaChoice==SCHEMA_MERGE_THEIRS ){

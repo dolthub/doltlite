@@ -19,10 +19,10 @@ static Pgno remapSchemaRootpage(
   return iRootpage;
 }
 
-static int tableSqlNeedsClusteredPkAutoindex(
+static int tableSqlClusteredPkAutoindex(
   const char *zSql,
   const char *zName,
-  int *pNeeds
+  char **pzName
 ){
   sqlite3 *tmp = 0;
   InitData initData;
@@ -31,7 +31,7 @@ static int tableSqlNeedsClusteredPkAutoindex(
   Table *pTab;
   int rc;
 
-  *pNeeds = 0;
+  *pzName = 0;
   rc = sqlite3_open_v2(":memory:", &tmp, SQLITE_OPEN_READONLY, 0);
   if( rc==SQLITE_OK ){
     sqlite3_mutex_enter(tmp->mutex);
@@ -52,8 +52,11 @@ static int tableSqlNeedsClusteredPkAutoindex(
       pTab = sqlite3FindTable(tmp, zName, "main");
       if( !pTab && rc==SQLITE_OK ) rc = SQLITE_CORRUPT;
       if( rc==SQLITE_OK ){
-        *pNeeds = IsDoltClusteredPk(pTab) && pTab->iPKey<0
-            && sqlite3PrimaryKeyIndex(pTab)!=0;
+        Index *pPk = sqlite3PrimaryKeyIndex(pTab);
+        if( IsDoltClusteredPk(pTab) && pTab->iPKey<0 && pPk ){
+          *pzName = sqlite3_mprintf("%s", pPk->zName);
+          if( !*pzName ) rc = SQLITE_NOMEM;
+        }
       }
     }
     sqlite3DbFree(tmp, zErr);
@@ -61,38 +64,6 @@ static int tableSqlNeedsClusteredPkAutoindex(
   }
   sqlite3_close(tmp);
   return rc;
-}
-
-static int schemaHasName(SchemaEntry *a, int n, const char *zName){
-  int i;
-  if( !zName ) return 0;
-  for(i=0; i<n; i++){
-    if( a[i].zName && strcmp(a[i].zName, zName)==0 ) return 1;
-  }
-  return 0;
-}
-
-/* UNIQUE sqlite_autoindex_<table>_1 is a physical btree. Clustered PK
-** autoindexes are catalog-only and must not reuse that name. */
-static char *mergedClusteredPkAutoindexName(
-  const char *zTable,
-  SchemaEntry *aAnc, int nAnc,
-  SchemaEntry *aOurs, int nOurs,
-  SchemaEntry *aTheirs, int nTheirs
-){
-  int n = 1;
-  for(;;){
-    char *z = sqlite3_mprintf("sqlite_autoindex_%s_%d", zTable, n);
-    if( !z ) return 0;
-    if( !schemaHasName(aAnc, nAnc, z)
-     && !schemaHasName(aOurs, nOurs, z)
-     && !schemaHasName(aTheirs, nTheirs, z) ){
-      return z;
-    }
-    sqlite3_free(z);
-    n++;
-    if( n>1000 ) return 0;
-  }
 }
 
 static u8 *mergeBuildSchemaCatalogRecord(
@@ -338,6 +309,7 @@ static int appendMergedHiddenIndexRow(
 ){
   SchemaEntry *pSe;
   Pgno iRootpage;
+  struct TableEntry *pTable;
 
   if( !zName ) return SQLITE_OK;
   pSe = mergedSchemaChoice(aAncSchema, nAncSchema,
@@ -357,6 +329,8 @@ static int appendMergedHiddenIndexRow(
   if( pSe>=aTheirsSchema && pSe<aTheirsSchema+nTheirsSchema ){
     iRootpage = remapSchemaRootpage(aRemap, nRemap, iRootpage);
   }
+  pTable = doltliteFindTableByName(aMerged, nMerged, pSe->zTblName);
+  if( iRootpage==pTable->iTable ) return SQLITE_OK;
   return appendMergedSchemaCatalogRecord(db, pRoot, flags, (*piNextRowid)++, pSe, iRootpage);
 }
 
@@ -435,7 +409,7 @@ int rebuildDisjointSchemaRows(
   for(i=0; i<nMerged; i++){
     const char *zName = aMerged[i].zName;
     SchemaEntry *pSe = 0;
-    int needsAutoindex = 0;
+    char *zAuto = 0;
 
     if( aMerged[i].iTable<=1 || !zName ) continue;
     pSe = mergedSchemaChoice(aAncSchema, nAncSchema,
@@ -448,15 +422,11 @@ int rebuildDisjointSchemaRows(
     if( rc!=SQLITE_OK ) return rc;
     if( pSe && pSe->zType && strcmp(pSe->zType, "table")==0
      && pSe->zSql ){
-      rc = tableSqlNeedsClusteredPkAutoindex(pSe->zSql, zName, &needsAutoindex);
+      rc = tableSqlClusteredPkAutoindex(pSe->zSql, zName, &zAuto);
       if( rc!=SQLITE_OK ) return rc;
     }
-    if( needsAutoindex ){
+    if( zAuto ){
       SchemaEntry autoIdx;
-      char *zAuto = mergedClusteredPkAutoindexName(
-          zName, aAncSchema, nAncSchema, aOursSchema, nOursSchema,
-          aTheirsSchema, nTheirsSchema);
-      if( !zAuto ) return SQLITE_NOMEM;
       memset(&autoIdx, 0, sizeof(autoIdx));
       autoIdx.zType = "index";
       autoIdx.zName = zAuto;
@@ -529,7 +499,7 @@ int rebuildDisjointSchemaRows(
   for(i=0; i<nTheirsSchema; i++){
     SchemaEntry *pSe = &aTheirsSchema[i];
     Pgno iRootpage;
-    if( !pSe->zName || !pSe->zType ) continue;
+    if( !pSe->zName || !pSe->zType || !pSe->zSql ) continue;
     if( strcmp(pSe->zType, "index")!=0 ) continue;
     if( !pSe->zTblName
      || !doltliteFindTableByName(aMerged, nMerged, pSe->zTblName) ){

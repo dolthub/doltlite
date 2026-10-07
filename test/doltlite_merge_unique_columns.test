@@ -1,0 +1,131 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  text {id TEXT PRIMARY KEY} {}
+  composite {id INT,PRIMARY KEY(id,z)} {}
+  without_rowid {id INT PRIMARY KEY} {WITHOUT ROWID}
+  keyless {id INT} {}
+} {
+  foreach {kind w constraint} {
+    inline {w INT UNIQUE} {}
+    named_inline {w INT CONSTRAINT uw UNIQUE ON CONFLICT ABORT} {}
+    table {w INT} {,UNIQUE(w)}
+    named {w INT} {,CONSTRAINT uw UNIQUE(w)}
+    compound {w INT} {,UNIQUE(w,z)}
+    collated {w INT} {,UNIQUE(w COLLATE NOCASE)}
+    multiple {w INT UNIQUE} {,UNIQUE(z)}
+    retained {w INT UNIQUE} {,UNIQUE(id,w,z)}
+  } {
+    foreach shape {add drop rename} {
+      foreach direction {forward reverse} {
+        foreach operation {merge cherry_pick} {
+          foreach rows {empty filled} {
+            reset_db
+            set pk {}
+            set id $key
+            if {$layout eq "composite"} {
+              set id {id INT}
+              set pk {,PRIMARY KEY(id,z)}
+            }
+            set retained {}
+            if {$kind eq "retained"} {set retained {,UNIQUE(id,w,z)}}
+            execsql "CREATE TABLE t($id,v INT,w INT,z INT$pk$retained) $suffix"
+            if {$rows eq "filled"} {
+              execsql {INSERT INTO t VALUES(1,10,20,30),(2,11,21,31)}
+            }
+            execsql {
+              SELECT dolt_commit('-Am','ancestor'); SELECT dolt_branch('feat');
+              SELECT dolt_checkout('feat'); DROP TABLE t;
+            }
+            execsql "CREATE TABLE t($id,v INT,$w,z INT$pk$constraint) $suffix"
+            if {$rows eq "filled"} {
+              execsql {INSERT INTO t VALUES(1,10,20,30),(2,11,21,31)}
+            }
+            execsql {
+              SELECT dolt_commit('-Am','unique'); SELECT dolt_checkout('main');
+            }
+            switch $shape {
+              add {execsql {ALTER TABLE t ADD COLUMN x INT DEFAULT 5}}
+              drop {execsql {ALTER TABLE t DROP COLUMN v}}
+              rename {execsql {ALTER TABLE t RENAME COLUMN v TO vv}}
+            }
+            execsql {SELECT dolt_commit('-Am','shape')}
+            set target feat
+            set branch main
+            if {$direction eq "reverse"} {
+              execsql {SELECT dolt_checkout('feat')}
+              set target main
+              set branch feat
+            }
+            set name merge-unique-$layout-$kind-$shape-$direction-$operation-$rows
+            do_test $name-outcome {
+              set mergeFailed [catch {execsql "SELECT dolt_${operation}('$target')"}]
+            } 0
+            if {$mergeFailed} {continue}
+            set columns {id v w z}
+            set want {}
+            if {$rows eq "filled"} {set want {1 10 20 30 2 11 21 31}}
+            switch $shape {
+              add {
+                lappend columns x
+                if {$rows eq "filled"} {set want {1 10 20 30 5 2 11 21 31 5}}
+              }
+              drop {
+                set columns {id w z}
+                if {$rows eq "filled"} {set want {1 20 30 2 21 31}}
+              }
+              rename {set columns {id vv w z}}
+            }
+            do_execsql_test $name-rows {
+              SELECT * FROM t ORDER BY id;
+            } $want
+            do_execsql_test $name-columns {
+              SELECT name FROM pragma_table_info('t') ORDER BY cid;
+            } $columns
+            set nUnique [expr {$kind in {multiple retained} ? 2 : 1}]
+            do_execsql_test $name-indexes {
+              SELECT count(*) FROM pragma_index_list('t') WHERE origin='u';
+            } $nUnique
+            if {$rows eq "filled"} {
+              do_test $name-existing-enforcement {
+                catch {execsql {INSERT INTO t(id,w,z) VALUES(9,20,30)}}
+              } 1
+            }
+            set value 40
+            set duplicate 40
+            if {$kind eq "collated"} {
+              set value {'Ab'}
+              set duplicate {'aB'}
+            }
+            execsql "INSERT INTO t(id,w,z) VALUES(8,$value,80)"
+            set zValue [expr {$kind eq "compound" ? 80 : 81}]
+            do_test $name-enforcement {
+              catch {execsql "INSERT INTO t(id,w,z) VALUES(9,$duplicate,$zValue)"}
+            } 1
+            do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+            set snapshot [execsql {
+              SELECT * FROM t ORDER BY id;
+              SELECT type,name,rootpage,sql FROM sqlite_schema ORDER BY name;
+            }]
+            do_test $name-reopen {
+              db close
+              sqlite3 db test.db/$branch
+              execsql {
+                SELECT * FROM t ORDER BY id;
+                SELECT type,name,rootpage,sql FROM sqlite_schema ORDER BY name;
+              }
+            } $snapshot
+            do_test $name-enforcement-reopen {
+              catch {execsql "INSERT INTO t(id,w,z) VALUES(9,$duplicate,$zValue)"}
+            } 1
+          }
+        }
+      }
+    }
+  }
+}
+
+finish_test
