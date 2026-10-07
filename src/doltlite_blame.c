@@ -11,6 +11,7 @@
 #include "doltlite_record.h"
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
+#include "doltlite_vtab_util.h"
 #include <string.h>
 #include <time.h>
 
@@ -1008,6 +1009,38 @@ static int bmClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
+/* Whether a sort-key probe built from the live table's primary key can seek
+** HEAD's tree of zTable. */
+static int blameHeadKeyMatches(
+  sqlite3 *db,
+  const char *zTable,
+  const ProllyHash *pHeadCat,
+  const ProllyHash *pSchemaHash,
+  int bHasData,
+  int *pbMatches
+){
+  DoltliteColInfo cols;
+  DoltliteSideCols side;
+  Table *pTab;
+  int rc;
+  memset(&cols, 0, sizeof(cols));
+  memset(&side, 0, sizeof(side));
+  *pbMatches = 0;
+  rc = doltliteGetColumnNames(db, zTable, &cols);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSideColsLoad(db, pHeadCat, pSchemaHash, zTable, &cols,
+                              bHasData, &side);
+  }
+  if( rc==SQLITE_OK ){
+    pTab = sqlite3FindTable(db, zTable, "main");
+    *pbMatches = doltliteSideColsMatchClusteredPk(&side, &cols,
+                     pTab ? sqlite3PrimaryKeyIndex(pTab) : 0);
+  }
+  doltliteSideColsClear(&side);
+  doltliteFreeColInfo(&cols);
+  return rc;
+}
+
 static int bmFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   BlameCursor *c = (BlameCursor*)pCursor;
@@ -1018,11 +1051,14 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   ProllyHash headHash;
   ProllyHash headCatHash;
   ProllyHash tableRoot;
+  ProllyHash schemaHash;
   u8 tableFlags = 0;
+  int bKeyMatches = 1;
   int rc;
   DoltlitePkRange pkRange;
   (void)idxStr;
 
+  memset(&schemaHash, 0, sizeof(schemaHash));
   blameFreeRows(c);
   c->iRow = 0;
   memset(&pkRange, 0, sizeof(pkRange));
@@ -1065,9 +1101,20 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
     }
 
     rc = doltliteLoadTableRootByName(db, &headCatHash, v->zTableName,
-                                     &tableRoot, &tableFlags, 0);
+                                     &tableRoot, &tableFlags, &schemaHash);
     if( rc==SQLITE_NOTFOUND ){
       rc = doltliteVtabMapChunkSourceError(c->base.pVtab, db, rc, SQLITE_OK);
+    }
+    if( rc==SQLITE_OK && pPkBlob ){
+      rc = blameHeadKeyMatches(db, v->zTableName, &headCatHash, &schemaHash,
+                               !prollyHashIsEmpty(&tableRoot), &bKeyMatches);
+      /* The probe is the live key; HEAD stores another encoding. Scan, and
+      ** let SQLite recheck the equality. */
+      if( rc==SQLITE_OK && !bKeyMatches ){
+        sqlite3_free(pPkBlob);
+        pPkBlob = 0;
+        nPkBlob = 0;
+      }
     }
     if( rc!=SQLITE_OK ){
       sqlite3_free(pPkBlob);

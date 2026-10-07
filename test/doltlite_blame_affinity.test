@@ -156,4 +156,21 @@ foreach branch {main text main text} {
   } $expected
 }
 
+# An uncommitted key-type change: the probe is the live TEXT key while HEAD
+# still stores INT keys, so equality must match what a scan returns.
+reset_db
+execsql {
+  CREATE TABLE b(k INT PRIMARY KEY, v TEXT);
+  INSERT INTO b VALUES(1,'base'),(2,'two');
+  SELECT dolt_commit('-Am','bint');
+  DROP TABLE b;
+  CREATE TABLE b(k TEXT PRIMARY KEY, v TEXT);
+  INSERT INTO b VALUES('1','one');
+}
+do_execsql_test blame-affinity-uncommitted-key-type {
+  SELECT quote(k), typeof(k) FROM dolt_blame_b WHERE k='1';
+  SELECT quote(k), typeof(k) FROM dolt_blame_b WHERE k='1' OR message='nope';
+  SELECT count(*) FROM dolt_blame_b WHERE k='2';
+} {1 integer 1 integer 1}
+
 finish_test
