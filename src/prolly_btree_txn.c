@@ -1023,7 +1023,14 @@ static void commitPhaseTwoAdoptReloadedCatalog(
     *pbHaveReload = 0;
   }
   invalidateSchema(p);
-  if( p->db ) sqlite3ResetAllSchemasOfConnection(p->db);
+  if( p->db ){
+    sqlite3ResetAllSchemasOfConnection(p->db);
+    /* Next load is this commit's schema refresh, not a peer schema change. */
+    if( p->db->nSchemaLock==0 ){
+      p->bPreserveDeferFks = 1;
+      p->preserveDeferFkCatalog = p->committedCatalogHash;
+    }
+  }
 }
 
 static void commitPhaseTwoEndWriteTxn(Btree *p){

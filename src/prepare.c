@@ -504,6 +504,9 @@ int sqlite3Init(sqlite3 *db, char **pzErrMsg){
   if( commit_internal ){
     sqlite3CommitInternalChanges(db);
   }
+#ifdef DOLTLITE_PROLLY
+  doltliteFinishOwnSchemaReload(db);
+#endif
   return SQLITE_OK;
 }
 

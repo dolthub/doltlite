@@ -91,6 +91,40 @@ void resetConnectionSchema(Btree *pBtree){
   }
 }
 
+int doltliteOwnSchemaReload(sqlite3 *db){
+  int i;
+  if( !db || !db->init.busy ) return 0;
+  for(i=0; i<db->nDb; i++){
+    Btree *pBt = db->aDb[i].pBt;
+    if( pBt && pBt->pOps==&prollyBtreeOps && pBt->bPreserveDeferFks ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+void doltliteFinishOwnSchemaReload(sqlite3 *db){
+  int i;
+  if( !db ) return;
+  for(i=0; i<db->nDb; i++){
+    Btree *pBt = db->aDb[i].pBt;
+    Schema *pSchema;
+    if( !pBt || pBt->pOps!=&prollyBtreeOps || !pBt->bPreserveDeferFks ){
+      continue;
+    }
+    pSchema = db->aDb[i].pSchema;
+    if( !DbHasProperty(db, i, DB_SchemaLoaded) || !pSchema ) continue;
+    /* A peer commit replaces the catalog. Same-catalog reload keeps the pragma. */
+    if( prollyHashCompare(&pBt->committedCatalogHash,
+                          &pBt->preserveDeferFkCatalog)!=0 ){
+      db->nDeferredCons = 0;
+      db->nDeferredImmCons = 0;
+      db->flags &= ~(u64)SQLITE_DeferFKs;
+    }
+    pBt->bPreserveDeferFks = 0;
+  }
+}
+
 static int hasActiveSchemaProgram(Btree *pBtree){
   Vdbe *pVdbe;
   if( !pBtree->db ) return 0;

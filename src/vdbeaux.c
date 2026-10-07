@@ -3473,9 +3473,15 @@ int sqlite3VdbeHalt(Vdbe *p){
           sqlite3RollbackAll(db, SQLITE_OK);
           p->nChange = 0;
         }else{
+#ifdef DOLTLITE_PROLLY
+          if( !doltliteOwnSchemaReload(db) ){
+#endif
           db->nDeferredCons = 0;
           db->nDeferredImmCons = 0;
           db->flags &= ~(u64)SQLITE_DeferFKs;
+#ifdef DOLTLITE_PROLLY
+          }
+#endif
           sqlite3CommitInternalChanges(db);
         }
       }else if( p->rc==SQLITE_SCHEMA && db->nVdbeActive>1 ){
