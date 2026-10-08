@@ -404,9 +404,25 @@ static int doltPushParsedFunc(
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return SQLITE_ERROR; }
 
   if( zColon && zColon>zRefSpec ){
+    const char *zDst = zColon + 1;
     zSrc = sqlite3_mprintf("%.*s", (int)(zColon - zRefSpec), zRefSpec);
     if( !zSrc ){ sqlite3_result_error_nomem(ctx); return SQLITE_NOMEM; }
-    zRef = remoteSqlStripPrefix(zColon + 1, REMOTE_HEADS_PREFIX);
+    /* src:refs/tags/... is not a tag push. A bare refs/tags/ name is. */
+    if( strncmp(zDst, REMOTE_TAGS_PREFIX, strlen(REMOTE_TAGS_PREFIX))==0 ){
+      char *zMsg = sqlite3_mprintf("unsupported mapping: '%s'", zRefSpec);
+      sqlite3_free(zSrc);
+      if( !zMsg ){ sqlite3_result_error_nomem(ctx); return SQLITE_NOMEM; }
+      doltliteVcResultError(ctx, db, zMsg);
+      sqlite3_free(zMsg);
+      return SQLITE_ERROR;
+    }
+    zRef = remoteSqlStripPrefix(zDst, REMOTE_HEADS_PREFIX);
+    /* Destination uses the same rules as dolt_branch. */
+    if( !doltliteUserRefNameIsValid(zRef) ){
+      sqlite3_free(zSrc);
+      doltliteVcResultError(ctx, db, "invalid branch name");
+      return SQLITE_ERROR;
+    }
     if( chunkStoreFindBranch(cs,
             remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX), 0)!=SQLITE_OK ){
       sqlite3_free(zSrc);

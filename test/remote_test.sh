@@ -1520,6 +1520,73 @@ result=$("$DB" "$DP/sq.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM
 check "dirty --squash pull creates no commit" "s7
 4" "$result"
 
+echo "=== Push refspec destination must be a valid branch name ==="
+REF="$TMPDIR/refspec"
+mkdir -p "$REF"
+"$DB" "$REF/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$REF/remote.db');
+SELECT dolt_push('origin','main');
+ENDSQL
+
+result=$("$DB" "$REF/a.db" "SELECT dolt_branch('a..b');" 2>&1)
+check_match "local branch rejects a..b" "invalid branch name" "$result"
+
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:a..b');" 2>&1)
+check_match "push main:a..b rejects the destination" "invalid branch name" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:HEAD');" 2>&1)
+check_match "push main:HEAD rejects the destination" "invalid branch name" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:x y');" 2>&1)
+check_match "push main:x y rejects the destination" "invalid branch name" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:x/');" 2>&1)
+check_match "push main:x/ rejects the destination" "invalid branch name" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:');" 2>&1)
+check_match "push main: rejects an empty destination" "invalid branch name" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:refs/heads/a..b');" 2>&1)
+check_match "push strips refs/heads/ before the name check" "invalid branch name" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:refs/tags/x');" 2>&1)
+check_match "push main:refs/tags/x is an unsupported mapping" \
+  "unsupported mapping: 'main:refs/tags/x'" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','no-such:elsewhere');" 2>&1)
+check_match "missing source still reports not found" "branch or tag not found" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','no-such:a..b');" 2>&1)
+check_match "invalid destination is reported before a missing source" \
+  "invalid branch name" "$result"
+
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:-x');")
+check "push main:-x returns 0" "0" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:refs/heads/ok');")
+check "push main:refs/heads/ok returns 0" "0" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:feature/x');")
+check "push main:feature/x returns 0" "0" "$result"
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','main:renamed');")
+check "push main:renamed returns 0" "0" "$result"
+"$DB" "$REF/a.db" "SELECT dolt_tag('kept','-m','kept');" >/dev/null
+result=$("$DB" "$REF/a.db" "SELECT dolt_push('origin','refs/tags/kept');")
+check "bare refs/tags argument still pushes a tag" "0" "$result"
+
+result=$("$DB" "$REF/b.db" "SELECT dolt_clone('file://$REF/remote.db');")
+check "clone after refspec pushes returns 0" "0" "$result"
+result=$("$DB" "$REF/b.db" "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "clone lists only the valid pushed branches" "remotes/origin/-x
+remotes/origin/feature/x
+remotes/origin/main
+remotes/origin/ok
+remotes/origin/renamed" "$result"
+result=$("$DB" "$REF/b.db" \
+  "SELECT count(*) FROM dolt_remote_branches WHERE name IN (
+     'remotes/origin/a..b',
+     'remotes/origin/HEAD',
+     'remotes/origin/x y',
+     'remotes/origin/x/',
+     'remotes/origin/refs/tags/x',
+     'remotes/origin/refs/heads/a..b');")
+check "refused destinations were not created" "0" "$result"
+result=$("$DB" "$REF/b.db" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;")
+check "clone has the pushed tag and not the refused mapping" "kept" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
