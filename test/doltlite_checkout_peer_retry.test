@@ -1,0 +1,74 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach maintenance {none gc vacuum} {
+  foreach advance {0 1} {
+    foreach staged {0 1} {
+      foreach txn {begin savepoint} {
+        set prefix checkout-peer-retry-$maintenance.$advance.$staged.$txn
+        reset_db
+        db eval {
+          CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+          CREATE INDEX tv ON t(v);
+          INSERT INTO t VALUES(1,'base');
+          SELECT dolt_commit('-Am','init');
+          SELECT dolt_checkout('-b','b1');
+          INSERT INTO t VALUES(10,'branch');
+          SELECT dolt_checkout('main');
+          INSERT INTO t VALUES(2,'working');
+        }
+        sqlite3 peer test.db
+        if {$txn eq "begin"} { db eval {BEGIN} } else { db eval {SAVEPOINT s} }
+        db eval {SELECT count(*) FROM t}
+        peer eval {INSERT INTO t VALUES(3,'peer')}
+        if {$advance} { peer eval {SELECT dolt_commit('-am','peer commit')} }
+        if {$staged} { peer eval {SELECT dolt_add('.')} }
+        set peerHead [peer one {SELECT dolt_hashof('HEAD')}]
+        set peerStatus [peer eval {SELECT staged,status FROM dolt_status ORDER BY staged}]
+        if {$maintenance eq "gc"} { peer eval {SELECT dolt_gc()} }
+        if {$maintenance eq "vacuum"} { peer eval {VACUUM} }
+        do_test $prefix.refused {
+          list [catch {db eval {SELECT dolt_checkout('b1')}} msg] \
+               [sqlite3_errcode db]
+        } {1 SQLITE_BUSY}
+        catch {db eval {ROLLBACK}}
+        do_test $prefix.reloaded {
+          list [db one {SELECT active_branch()}] \
+               [db eval {SELECT id FROM t ORDER BY id}] \
+               [db eval {SELECT staged,status FROM dolt_status ORDER BY staged}] \
+               [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $peerHead}]
+        } [list main {1 2 3} $peerStatus 1]
+        do_test $prefix.retry {
+          db eval {
+            SELECT dolt_checkout('b1');
+            SELECT dolt_checkout('b1');
+            SELECT active_branch();
+            SELECT id FROM t ORDER BY id;
+          }
+        } {0 0 b1 1 10}
+        do_test $prefix.target-write {
+          db eval {INSERT INTO t VALUES(11,'after checkout')}
+          list [db eval {SELECT id FROM t ORDER BY id}] \
+               [peer eval {SELECT id FROM t ORDER BY id}] \
+               [peer one {PRAGMA integrity_check}]
+        } {{1 10 11} {1 2 3} ok}
+        do_test $prefix.peer-kept {
+          db eval {SELECT dolt_checkout('main')}
+          list [db eval {SELECT id FROM t ORDER BY id}] \
+               [db eval {SELECT staged,status FROM dolt_status ORDER BY staged}] \
+               [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $peerHead}] \
+               [db one {PRAGMA integrity_check}]
+        } [list {1 2 3} $peerStatus 1 ok]
+        peer close
+        db close
+        sqlite3 db test.db
+        do_test $prefix.reopen {
+          list [db eval {SELECT id FROM t ORDER BY id}] \
+               [db one {PRAGMA integrity_check}]
+        } {{1 2 3} ok}
+      }
+    }
+  }
+}
+
+finish_test
