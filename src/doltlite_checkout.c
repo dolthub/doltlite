@@ -1164,7 +1164,6 @@ int doltliteCheckoutTables(
     if( rc==SQLITE_OK ){
       rc = doltliteSwitchCatalog(db, &newWorkingHash);
     }
-    /* Checking a table out of a ref stages only that table. */
     if( rc==SQLITE_OK && zSourceRef ){
       rc = doltliteStageNamedTables(db, context, cs, &newWorkingHash,
                                     nNames, argv+iFirstName, 0, bDropIfAbsent);

@@ -126,4 +126,66 @@ SQL
   done
 done
 
+for peer in conn proc; do
+  for op in "dolt_branch('x')" "dolt_branch('-d','b1')" \
+            "dolt_reset('--soft')" "1" "dolt_tag('v1')" \
+            "dolt_remote('add','o','file:///nonexistent')"; do
+    DB="$ROOT/ref_boundary.db"
+    rm -f "$DB"
+    "$DOLTLITE" "$DB" "
+CREATE TABLE acct(id INTEGER PRIMARY KEY, bal INT);
+INSERT INTO acct VALUES(1,100);
+SELECT dolt_commit('-Am','seed');
+SELECT dolt_branch('b1');
+" >/dev/null 2>&1
+    if [ "$peer" = conn ]; then
+      peer_write=".connection 1
+.open $DB
+UPDATE acct SET bal=600;
+.connection 0"
+    else
+      peer_write=".shell $SHELL_DOLTLITE \"$DB\" \"UPDATE acct SET bal=600;\""
+    fi
+    out=$("$DOLTLITE" "$DB" 2>"$ROOT/ref_boundary.err" <<SQL
+BEGIN;
+SELECT 'initial', bal FROM acct;
+$peer_write
+SELECT $op;
+SELECT 'after', bal FROM acct;
+UPDATE acct SET bal=bal+1;
+COMMIT;
+SELECT 'final', bal FROM acct;
+SQL
+)
+    case "$op" in
+      dolt_branch*|dolt_reset*)
+        expected=$'initial|100\nafter|600\nfinal|601'
+        balance=601
+        if [ ! -s "$ROOT/ref_boundary.err" ]; then
+          dltest_pass "ref boundary write $peer $op"
+        else
+          dltest_fail "ref boundary write $peer $op" "$(cat "$ROOT/ref_boundary.err")"
+        fi
+        ;;
+      *)
+        expected=$'initial|100\nafter|100\nfinal|600'
+        balance=600
+        if [[ $(cat "$ROOT/ref_boundary.err") == *"database is locked"* ]]; then
+          dltest_pass "ref pinned write refused $peer $op"
+        else
+          dltest_fail "ref pinned write refused $peer $op" "$(cat "$ROOT/ref_boundary.err")"
+        fi
+        ;;
+    esac
+    result=$(printf '%s\n' "$out" | tr -d '\r' | awk '/^(initial|after|final)\|/')
+    if [ "$result" = "$expected" ]; then
+      dltest_pass "ref boundary reads $peer $op"
+    else
+      dltest_fail "ref boundary reads $peer $op" "  expected: $expected\n  got: $out"
+    fi
+    run_test "ref boundary durable $peer $op" \
+      "SELECT bal FROM acct; PRAGMA integrity_check;" "$balance"$'\nok' "$DB"
+  done
+done
+
 dltest_finish

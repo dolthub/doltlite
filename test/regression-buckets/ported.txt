@@ -131,3 +131,4 @@ doltlite_workspace_shadowed_fk
 doltlite_workspace_affinity
 doltlite_conflicts_unique
 doltlite_merge_unnamed_checks
+doltlite_ref_snapshot_boundary

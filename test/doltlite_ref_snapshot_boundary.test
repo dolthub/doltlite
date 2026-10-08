@@ -1,0 +1,97 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach txn {begin savepoint nested} {
+  foreach committed {0 1} {
+    foreach staged {0 1} {
+      foreach {name op} {
+        create {SELECT dolt_branch('x')}
+        create-ref {SELECT dolt_branch('x','HEAD')}
+        delete {SELECT dolt_branch('-d','b1')}
+        copy {SELECT dolt_branch('-c','b1','x')}
+        rename {SELECT dolt_branch('-m','b1','x')}
+        rename-current {SELECT dolt_branch('-m','main','x')}
+        soft-reset {SELECT dolt_reset('--soft')}
+      } {
+        set prefix ref-snapshot-$txn.$committed.$staged.$name
+        reset_db
+        db eval {
+          CREATE TABLE acct(id INTEGER PRIMARY KEY, bal INT);
+          CREATE INDEX acct_bal ON acct(bal);
+          INSERT INTO acct VALUES(1,100);
+          SELECT dolt_commit('-Am','seed');
+          SELECT dolt_branch('b1');
+        }
+        sqlite3 peer test.db
+        switch $txn {
+          begin { db eval {BEGIN} }
+          savepoint { db eval {SAVEPOINT s} }
+          nested { db eval {BEGIN; SAVEPOINT s} }
+        }
+        do_test $prefix.initial {db one {SELECT bal FROM acct}} {100}
+        peer eval {UPDATE acct SET bal=600}
+        if {$committed} {peer eval {SELECT dolt_commit('-am','peer')}}
+        if {$staged} {peer eval {SELECT dolt_add('.')}}
+        set peerHead [peer one {SELECT dolt_hashof('HEAD')}]
+        set peerStatus [peer eval {SELECT staged,status FROM dolt_status ORDER BY staged}]
+        do_test $prefix.operation {db eval $op} {0}
+        do_test $prefix.boundary {
+          list [sqlite3_txn_state db main] [sqlite3_get_autocommit db]
+        } [list 0 [expr {$txn eq "savepoint"}]]
+        do_test $prefix.new-read {db one {SELECT bal FROM acct}} {600}
+        do_test $prefix.session {
+          list [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $peerHead}] \
+               [db eval {SELECT staged,status FROM dolt_status ORDER BY staged}]
+        } [list 1 $peerStatus]
+        do_test $prefix.new-write {
+          db eval {UPDATE acct SET bal=bal+1}
+          db one {SELECT bal FROM acct}
+        } {601}
+        catch {db eval {COMMIT}}
+        peer close
+        db close
+        sqlite3 db test.db
+        if {$op eq "SELECT dolt_branch('-m','main','x')"} {
+          db eval {SELECT dolt_checkout('x')}
+        }
+        do_test $prefix.reopen {
+          list [db one {SELECT bal FROM acct INDEXED BY acct_bal WHERE bal=601}] \
+               [db one {PRAGMA integrity_check}]
+        } {601 ok}
+      }
+    }
+  }
+}
+
+foreach {name op} {
+  control {SELECT 1}
+  tag {SELECT dolt_tag('v1')}
+  remote {SELECT dolt_remote('add','o','file:///nonexistent')}
+  failed-checkout {SELECT dolt_checkout('-b','b1')}
+} {
+  set prefix ref-snapshot-pinned-$name
+  reset_db
+  db eval {
+    CREATE TABLE acct(id INTEGER PRIMARY KEY, bal INT);
+    INSERT INTO acct VALUES(1,100);
+    SELECT dolt_commit('-Am','seed');
+    SELECT dolt_branch('b1');
+    BEGIN;
+    SELECT bal FROM acct;
+  }
+  sqlite3 peer test.db
+  peer eval {UPDATE acct SET bal=600}
+  catch {db eval $op}
+  do_test $prefix.read {db one {SELECT bal FROM acct}} {100}
+  do_test $prefix.refused {
+    list [catch {db eval {UPDATE acct SET bal=101}} msg] \
+         [sqlite3_extended_errcode db]
+  } {1 SQLITE_BUSY_SNAPSHOT}
+  catch {db eval {ROLLBACK}}
+  do_test $prefix.peer-kept {
+    list [peer one {SELECT bal FROM acct}] [peer one {PRAGMA integrity_check}]
+  } {600 ok}
+  peer close
+}
+
+finish_test
