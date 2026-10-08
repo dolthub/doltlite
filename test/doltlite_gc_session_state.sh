@@ -139,11 +139,11 @@ db_rm "$DB"
 
 TASK_TMP=$(mktemp -d ./.doltlite-reset-peer.XXXXXX)
 trap 'rm -rf "$TASK_TMP"' EXIT
-SHELL_DOLTLITE="$DOLTLITE"
+SHELL_DOLTLITE="${DOLTLITE_SYSTEM:-$DOLTLITE}"
 ALLOW_MAINTENANCE_REFUSAL=0
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
-    SHELL_DOLTLITE=$(cygpath -am "$DOLTLITE")
+    SHELL_DOLTLITE=$(cygpath -am "$SHELL_DOLTLITE")
     ALLOW_MAINTENANCE_REFUSAL=1
     ;;
 esac
