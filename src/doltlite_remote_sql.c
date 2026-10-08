@@ -882,6 +882,19 @@ static void doltPullParsed(
           "materialize the store first");
         return;
       }
+      /* A fast-forward already refuses a dirty working set below. Merge
+      ** would keep unconflicted local edits and commit them, so refuse
+      ** here too, including --no-ff and --squash. */
+      rc = doltliteHasUncommittedChanges(db, &dirty);
+      if( rc!=SQLITE_OK ){
+        remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
+        return;
+      }
+      if( dirty ){
+        remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                                  "cannot pull with uncommitted changes");
+        return;
+      }
       /* Merge owns txn save/restore; drop pull's snapshot first. */
       doltliteTxnStateClear(&savedState);
       /* Fetch already stored this commit on the tracking ref. Merging the
