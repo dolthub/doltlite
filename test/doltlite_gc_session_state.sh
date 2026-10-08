@@ -140,11 +140,11 @@ db_rm "$DB"
 TASK_TMP=$(mktemp -d ./.doltlite-reset-peer.XXXXXX)
 trap 'rm -rf "$TASK_TMP"' EXIT
 SHELL_DOLTLITE="$DOLTLITE"
-ALLOW_GC_REFUSAL=0
+ALLOW_MAINTENANCE_REFUSAL=0
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     SHELL_DOLTLITE=$(cygpath -am "$DOLTLITE")
-    ALLOW_GC_REFUSAL=1
+    ALLOW_MAINTENANCE_REFUSAL=1
     ;;
 esac
 for maintenance in vacuum gc; do
@@ -172,7 +172,7 @@ $stmt"
         else
           compact=".shell $SHELL_DOLTLITE \"$DB\" \"$stmt\""
         fi
-        out=$(dltest_run_sql "
+        sql="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','init');
@@ -199,11 +199,21 @@ PRAGMA integrity_check;
 SELECT 'staged',count(*) FROM dolt_status WHERE staged=1;
 SELECT 'add',dolt_add('.');
 PRAGMA integrity_check;
-" "$DB" "" "$TASK_TMP/errors")
+"
+        out=$(dltest_run_sql "$sql" "$DB" "" "$TASK_TMP/errors")
         errors=$(tr -d '\r' < "$TASK_TMP/errors")
-        if [ "$ALLOW_GC_REFUSAL" = 1 ] && [ "$maintenance" = gc ]; then
-          errors=$(printf '%s\n' "$errors" | sed -E \
-            '/^Error (near line [0-9]+|in 2nd command line argument): gc sweep phase failed$/d; /^System command returns 1$/d; /^$/d')
+        if [ "$ALLOW_MAINTENANCE_REFUSAL" = 1 ]; then
+          case "$maintenance" in
+            gc)
+              errors=$(printf '%s\n' "$errors" | sed -E \
+                '/^Error (near line [0-9]+|in 2nd command line argument): gc sweep phase failed$/d; /^System command returns 1$/d; /^$/d')
+              ;;
+            vacuum)
+              maintenance_line=$(printf '%s\n' "$sql" | awk '$0=="VACUUM;" {print NR}')
+              errors=$(printf '%s\n' "$errors" | sed -E \
+                "/^Error near line ${maintenance_line:-0}: disk I\/O error$/d; /^Error in 2nd command line argument: disk I\/O error$/d; /^System command returns 1$/d; /^$/d")
+              ;;
+          esac
         fi
         case "$out"$'\n'"$errors" in
           *Error*|*"integrity check failed"*)
