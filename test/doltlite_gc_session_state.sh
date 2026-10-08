@@ -1,6 +1,7 @@
 #!/bin/bash
 
 DLTEST_TIMEOUT=15
+DLTEST_STRIP_CR=1
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 db_rm() { rm -f "$1" "${1}-wal"; }
@@ -139,8 +140,12 @@ db_rm "$DB"
 TASK_TMP=$(mktemp -d ./.doltlite-reset-peer.XXXXXX)
 trap 'rm -rf "$TASK_TMP"' EXIT
 SHELL_DOLTLITE="$DOLTLITE"
+ALLOW_GC_REFUSAL=0
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) SHELL_DOLTLITE=$(cygpath -am "$DOLTLITE") ;;
+  MINGW*|MSYS*|CYGWIN*)
+    SHELL_DOLTLITE=$(cygpath -am "$DOLTLITE")
+    ALLOW_GC_REFUSAL=1
+    ;;
 esac
 for maintenance in vacuum gc; do
   case "$maintenance" in
@@ -194,12 +199,17 @@ PRAGMA integrity_check;
 SELECT 'staged',count(*) FROM dolt_status WHERE staged=1;
 SELECT 'add',dolt_add('.');
 PRAGMA integrity_check;
-" "$DB")
-        case "$out" in
+" "$DB" "" "$TASK_TMP/errors")
+        errors=$(tr -d '\r' < "$TASK_TMP/errors")
+        if [ "$ALLOW_GC_REFUSAL" = 1 ] && [ "$maintenance" = gc ]; then
+          errors=$(printf '%s\n' "$errors" | sed -E \
+            '/^Error (near line [0-9]+|in 2nd command line argument): gc sweep phase failed$/d; /^System command returns 1$/d; /^$/d')
+        fi
+        case "$out"$'\n'"$errors" in
           *Error*|*"integrity check failed"*)
-            dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out" ;;
-          *$'fresh|1,3\nok\nstaged|0\nadd|0\nok') dltest_pass ;;
-          *) dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out" ;;
+            dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out\n  errors: $errors" ;;
+          *$'fresh|1,3\nok\nstaged|0\nadd|0\nok\n') dltest_pass ;;
+          *) dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out\n  errors: $errors" ;;
         esac
         run_test "stale_reset_${maintenance}_${peer}_${target}_${txn}_reopen" \
           "PRAGMA integrity_check; SELECT id,v FROM t ORDER BY id;
