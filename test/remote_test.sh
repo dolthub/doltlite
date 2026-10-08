@@ -1267,6 +1267,94 @@ result=$("$DB" "$FF/x.db/b" "SELECT group_concat(id) FROM dolt_at_kv('STAGED'); 
 check "pulled branch stays clean after another session checks it out" "1,2
 0" "$result"
 
+echo "=== Pull merges the fetched tracking commit, not a same-named local branch ==="
+# A local branch named origin/main must not shadow refs/remotes/origin/main.
+shadow_pull() {
+  local dir="$1" mode="$2"
+  mkdir -p "$dir"
+  "$DB" "$dir/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$dir/remote.db');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+  "$DB" "$dir/b.db" "SELECT dolt_clone('file://$dir/remote.db');" >/dev/null
+  "$DB" "$dir/b.db" <<'ENDSQL' >/dev/null
+SELECT dolt_checkout('-b','origin/main');
+INSERT INTO t VALUES(99,99);
+SELECT dolt_commit('-am','unrelated local work');
+SELECT dolt_checkout('main');
+.quit
+ENDSQL
+  if [ "$mode" = "diverge" ]; then
+    "$DB" "$dir/b.db" <<'ENDSQL' >/dev/null
+INSERT INTO t VALUES(5,5);
+SELECT dolt_commit('-am','b5');
+.quit
+ENDSQL
+  fi
+  "$DB" "$dir/a.db" <<'ENDSQL' >/dev/null
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-am','remote change');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+}
+
+shadow_pull "$TMPDIR/shadow_merge" diverge
+result=$("$DB" "$TMPDIR/shadow_merge/b.db" "SELECT dolt_pull('origin','main');")
+check "divergent pull past a local origin/main returns 0" "0" "$result"
+result=$("$DB" "$TMPDIR/shadow_merge/b.db" "SELECT id || ',' || v FROM t ORDER BY id;")
+check "divergent pull keeps the remote row" "1,1
+2,2
+5,5" "$result"
+result=$("$DB" "$TMPDIR/shadow_merge/b.db" "SELECT message FROM dolt_log LIMIT 1;")
+check "divergent pull message names the remote branch" \
+  "Merge branch 'origin/main' into main" "$result"
+result=$("$DB" "$TMPDIR/shadow_merge/b.db" \
+  "SELECT a.parent_index || '|' || l.message
+   FROM dolt_commit_ancestors a
+   JOIN dolt_log l ON l.commit_hash = a.parent_hash
+   WHERE a.commit_hash = (SELECT commit_hash FROM dolt_log LIMIT 1)
+   ORDER BY a.parent_index;")
+check "divergent pull parents are the local tip and the remote commit" "0|b5
+1|remote change" "$result"
+
+shadow_pull "$TMPDIR/shadow_noff" ff
+result=$("$DB" "$TMPDIR/shadow_noff/b.db" \
+  "SELECT dolt_pull('--no-ff','origin','main');")
+check "no-ff pull past a local origin/main returns 0" "0" "$result"
+result=$("$DB" "$TMPDIR/shadow_noff/b.db" "SELECT id || ',' || v FROM t ORDER BY id;")
+check "no-ff pull keeps the remote row" "1,1
+2,2" "$result"
+result=$("$DB" "$TMPDIR/shadow_noff/b.db" \
+  "SELECT a.parent_index || '|' || l.message
+   FROM dolt_commit_ancestors a
+   JOIN dolt_log l ON l.commit_hash = a.parent_hash
+   WHERE a.commit_hash = (SELECT commit_hash FROM dolt_log LIMIT 1)
+   ORDER BY a.parent_index;")
+check "no-ff pull parents are the old tip and the remote commit" "0|c1
+1|remote change" "$result"
+
+shadow_pull "$TMPDIR/shadow_squash" diverge
+result=$("$DB" "$TMPDIR/shadow_squash/b.db" \
+  "SELECT dolt_pull('--squash','origin','main');")
+check "squash pull past a local origin/main returns 0" "0" "$result"
+result=$("$DB" "$TMPDIR/shadow_squash/b.db" "SELECT id || ',' || v FROM t ORDER BY id;")
+check "squash pull keeps the remote row" "1,1
+2,2
+5,5" "$result"
+result=$("$DB" "$TMPDIR/shadow_squash/b.db" \
+  "SELECT count(*) FROM dolt_log WHERE message='unrelated local work';")
+check "squash pull does not record the local branch" "0" "$result"
+result=$("$DB" "$TMPDIR/shadow_squash/b.db" \
+  "SELECT count(*) FROM dolt_commit_ancestors
+   WHERE commit_hash = (SELECT commit_hash FROM dolt_log LIMIT 1)
+     AND parent_index = 1;")
+check "squash pull has no second parent" "0" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

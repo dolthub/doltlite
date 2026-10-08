@@ -62,6 +62,9 @@ when it cannot fast-forward, conflicts included.
   refused until the store is fully materialized.
 - Fetch and pull install remote tags whose commits were fetched, replacing a
   same-named local tag when the remote value differs.
+- A pull that cannot fast-forward merges the commit just fetched onto the
+  tracking ref, including `--no-ff` and `--squash`. A local branch named
+  `<remote>/<branch>` does not take that commit's place.
 - Pushes to an HTTP remote are validated under the server's lock, so a stale
   push is rejected rather than overwriting a peer's ref.
 
