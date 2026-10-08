@@ -44,6 +44,7 @@ int origBtreeIncrVacuum(void *p){ return orig_sqlite3BtreeIncrVacuum(B(p)); }
 const char *origBtreeGetFilename(void *p){ return orig_sqlite3BtreeGetFilename(B(p)); }
 const char *origBtreeGetJournalname(void *p){ return orig_sqlite3BtreeGetJournalname(B(p)); }
 int origBtreeIsReadonly(void *p){ return orig_sqlite3BtreeIsReadonly(B(p)); }
+int origBtreeSetVersion(void *p, int v){ return orig_sqlite3BtreeSetVersion(B(p),v); }
 int origBtreeBeginTrans(void *p, int wr, int *pSV){ return orig_sqlite3BtreeBeginTrans(B(p),wr,pSV); }
 int origBtreeCommitPhaseOne(void *p, const char *z){ return orig_sqlite3BtreeCommitPhaseOne(B(p),z); }
 int origBtreeCommitPhaseTwo(void *p, int c){ return orig_sqlite3BtreeCommitPhaseTwo(B(p),c); }

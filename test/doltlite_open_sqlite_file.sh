@@ -285,6 +285,26 @@ want_eq "T4_savepoint_rollback_to" \
   "$(dl_last "BEGIN; SAVEPOINT s; INSERT INTO t VALUES(2,'b'); ROLLBACK TO s; COMMIT; SELECT count(*) FROM t;" "$DB")" "1"
 
 echo ""
+echo "--- journal modes ---"
+
+DB=$TMP/j1.db
+want_eq "J1_uri_enters_wal" \
+  "$(dl_all "PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES(1);" "file:$DB?doltlite_engine=sqlite")" "wal"
+want_eq "J2_stock_reads_wal_mode" "$(sq_last "PRAGMA journal_mode;" "$DB")" "wal"
+want_eq "J3_stock_reads_wal_rows" "$(sq_last "SELECT x FROM t;" "$DB")" "1"
+want_eq "J4_auto_detect_reads_wal_mode" "$(dl_last "PRAGMA journal_mode;" "$DB")" "wal"
+want_eq "J5_leaves_wal" "$(dl_last "PRAGMA journal_mode=DELETE;" "$DB")" "delete"
+want_eq "J6_stock_reads_delete_mode" "$(sq_last "PRAGMA journal_mode;" "$DB")" "delete"
+
+DB=$TMP/j2.db
+seed_stock "$DB" "PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES(2);" >/dev/null
+want_eq "J7_stock_wal_readable" "$(dl_last "SELECT x FROM t;" "$DB")" "2"
+want_eq "J8_stock_wal_mode" "$(dl_last "PRAGMA journal_mode;" "$DB")" "wal"
+want_eq "J9_stock_wal_to_delete" "$(dl_last "PRAGMA journal_mode=DELETE;" "$DB")" "delete"
+want_eq "J10_stock_wal_transition_persists" "$(sq_last "PRAGMA journal_mode;" "$DB")" "delete"
+want_eq "J11_stock_wal_integrity" "$(sq_last "PRAGMA integrity_check;" "$DB")" "ok"
+
+echo ""
 echo "--- VC features on non-doltlite file ---"
 
 DB=$TMP/v1.db
