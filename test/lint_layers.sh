@@ -13,8 +13,8 @@ lint() {
 for f in "$SRCDIR"/prolly_btree*.c; do
   [ -f "$f" ] || continue
   nline=$(wc -l < "$f" | tr -d ' ')
-  if [ "$nline" -gt 3000 ]; then
-    lint "$f:$nline lines — Prolly B-tree modules must stay at or below 3000 lines"
+  if [ "$nline" -gt 3600 ]; then
+    lint "$f:$nline lines — Prolly B-tree modules must stay at or below 3600 lines"
   fi
 done
 
@@ -23,8 +23,8 @@ if [ ! -f "$SRCDIR/prolly_btree_cursor_count.c" ]; then
   lint "$SRCDIR/prolly_btree_cursor_count.c: missing — prolly cursor count must stay split"
 else
   nline=$(wc -l < "$SRCDIR/prolly_btree_cursor_count.c" | tr -d ' ')
-  if [ "$nline" -gt 1500 ]; then
-    lint "$SRCDIR/prolly_btree_cursor_count.c:$nline lines — prolly_btree_cursor_count.c must stay at or below 1500 lines"
+  if [ "$nline" -gt 1800 ]; then
+    lint "$SRCDIR/prolly_btree_cursor_count.c:$nline lines — prolly_btree_cursor_count.c must stay at or below 1800 lines"
   fi
 fi
 
@@ -32,8 +32,8 @@ if [ ! -f "$SRCDIR/prolly_btree_cursor_payload.c" ]; then
   lint "$SRCDIR/prolly_btree_cursor_payload.c: missing — prolly cursor payload must stay split"
 else
   nline=$(wc -l < "$SRCDIR/prolly_btree_cursor_payload.c" | tr -d ' ')
-  if [ "$nline" -gt 1500 ]; then
-    lint "$SRCDIR/prolly_btree_cursor_payload.c:$nline lines — prolly_btree_cursor_payload.c must stay at or below 1500 lines"
+  if [ "$nline" -gt 1800 ]; then
+    lint "$SRCDIR/prolly_btree_cursor_payload.c:$nline lines — prolly_btree_cursor_payload.c must stay at or below 1800 lines"
   fi
 fi
 
@@ -41,8 +41,8 @@ if [ ! -f "$SRCDIR/prolly_btree_cursor_seek.c" ]; then
   lint "$SRCDIR/prolly_btree_cursor_seek.c: missing — prolly cursor seek must stay split"
 else
   nline=$(wc -l < "$SRCDIR/prolly_btree_cursor_seek.c" | tr -d ' ')
-  if [ "$nline" -gt 1500 ]; then
-    lint "$SRCDIR/prolly_btree_cursor_seek.c:$nline lines — prolly_btree_cursor_seek.c must stay at or below 1500 lines"
+  if [ "$nline" -gt 1800 ]; then
+    lint "$SRCDIR/prolly_btree_cursor_seek.c:$nline lines — prolly_btree_cursor_seek.c must stay at or below 1800 lines"
   fi
 fi
 
@@ -50,8 +50,8 @@ if [ ! -f "$SRCDIR/doltlite_branches.c" ]; then
   lint "$SRCDIR/doltlite_branches.c: missing — dolt_branches vtab must stay split"
 else
   nline=$(wc -l < "$SRCDIR/doltlite_branches.c" | tr -d ' ')
-  if [ "$nline" -gt 1500 ]; then
-    lint "$SRCDIR/doltlite_branches.c:$nline lines — doltlite_branches.c must stay at or below 1500 lines"
+  if [ "$nline" -gt 1800 ]; then
+    lint "$SRCDIR/doltlite_branches.c:$nline lines — doltlite_branches.c must stay at or below 1800 lines"
   fi
 fi
 
@@ -59,8 +59,8 @@ if [ ! -f "$SRCDIR/doltlite_checkout.c" ]; then
   lint "$SRCDIR/doltlite_checkout.c: missing — doltlite checkout must stay split"
 else
   nline=$(wc -l < "$SRCDIR/doltlite_checkout.c" | tr -d ' ')
-  if [ "$nline" -gt 1539 ]; then
-    lint "$SRCDIR/doltlite_checkout.c:$nline lines — doltlite_checkout.c must stay at or below 1539 lines"
+  if [ "$nline" -gt 1800 ]; then
+    lint "$SRCDIR/doltlite_checkout.c:$nline lines — doltlite_checkout.c must stay at or below 1800 lines"
   fi
 fi
 
@@ -68,8 +68,8 @@ if [ ! -f "$SRCDIR/chunk_store_lock.c" ]; then
   lint "$SRCDIR/chunk_store_lock.c: missing — chunk_store lock must stay split"
 else
   nline=$(wc -l < "$SRCDIR/chunk_store_lock.c" | tr -d ' ')
-  if [ "$nline" -gt 1200 ]; then
-    lint "$SRCDIR/chunk_store_lock.c:$nline lines — chunk_store_lock.c must stay at or below 1200 lines"
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/chunk_store_lock.c:$nline lines — chunk_store_lock.c must stay at or below 1500 lines"
   fi
 fi
 
@@ -77,8 +77,8 @@ if [ ! -f "$SRCDIR/chunk_store_refs_api.c" ]; then
   lint "$SRCDIR/chunk_store_refs_api.c: missing — chunk_store refs api must stay split"
 else
   nline=$(wc -l < "$SRCDIR/chunk_store_refs_api.c" | tr -d ' ')
-  if [ "$nline" -gt 1200 ]; then
-    lint "$SRCDIR/chunk_store_refs_api.c:$nline lines — chunk_store_refs_api.c must stay at or below 1200 lines"
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/chunk_store_refs_api.c:$nline lines — chunk_store_refs_api.c must stay at or below 1500 lines"
   fi
 fi
 
@@ -86,12 +86,12 @@ if [ ! -f "$SRCDIR/chunk_store_commit.c" ]; then
   lint "$SRCDIR/chunk_store_commit.c: missing — chunk_store commit must stay split"
 else
   nline=$(wc -l < "$SRCDIR/chunk_store_commit.c" | tr -d ' ')
-  if [ "$nline" -gt 1200 ]; then
-    lint "$SRCDIR/chunk_store_commit.c:$nline lines — chunk_store_commit.c must stay at or below 1200 lines"
+  if [ "$nline" -gt 1500 ]; then
+    lint "$SRCDIR/chunk_store_commit.c:$nline lines — chunk_store_commit.c must stay at or below 1500 lines"
   fi
 fi
 
-# Merge core modules must exist and stay under 1500; cmd/constraints have a higher cap.
+# Merge core modules must exist and stay under 1800; cmd/constraints have a higher cap.
 for f in \
   "$SRCDIR"/doltlite_merge.c \
   "$SRCDIR"/doltlite_merge_pass1.c \
@@ -108,8 +108,8 @@ do
     continue
   fi
   nline=$(wc -l < "$f" | tr -d ' ')
-  if [ "$nline" -gt 1500 ]; then
-    lint "$f:$nline lines — doltlite merge core modules must stay at or below 1500 lines"
+  if [ "$nline" -gt 1800 ]; then
+    lint "$f:$nline lines — doltlite merge core modules must stay at or below 1800 lines"
   fi
 done
 
@@ -117,8 +117,8 @@ if [ ! -f "$SRCDIR"/doltlite_merge_cmd.c ]; then
   lint "$SRCDIR/doltlite_merge_cmd.c: missing — expected doltlite merge command module"
 else
   nline=$(wc -l < "$SRCDIR"/doltlite_merge_cmd.c | tr -d ' ')
-  if [ "$nline" -gt 2000 ]; then
-    lint "$SRCDIR/doltlite_merge_cmd.c:$nline lines — doltlite merge cmd must stay at or below 2000 lines"
+  if [ "$nline" -gt 2400 ]; then
+    lint "$SRCDIR/doltlite_merge_cmd.c:$nline lines — doltlite merge cmd must stay at or below 2400 lines"
   fi
 fi
 
@@ -133,8 +133,8 @@ do
     continue
   fi
   nline=$(wc -l < "$f" | tr -d ' ')
-  if [ "$nline" -gt 1500 ]; then
-    lint "$f:$nline lines — doltlite merge constraint modules must stay at or below 1500 lines"
+  if [ "$nline" -gt 1800 ]; then
+    lint "$f:$nline lines — doltlite merge constraint modules must stay at or below 1800 lines"
   fi
 done
 

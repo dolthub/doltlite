@@ -1237,10 +1237,7 @@ static void doltCheckoutParsedFunc(
   if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, doltliteVcUnavailableMessage(db)); return; }
   rc = doltliteRefreshAutocommitWorkingState(db);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(ctx, rc);
-    return;
-  }
+  if( rc!=SQLITE_OK ){ sqlite3_result_error_code(ctx, rc); return; }
   if( argc<1 ){ doltliteVcResultError(ctx, db, "branch name required"); return; }
   zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ doltliteVcResultError(ctx, db, "branch name required"); return; }
