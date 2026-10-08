@@ -420,4 +420,50 @@ run_test "vacuum_into_name_outlives_handle" \
 run_test "gc_vacuum_into_copy_readable" "SELECT count(*) FROM t;" "2" "$COPY"
 db_rm "$DB"; db_rm "$COPY"
 
+# A connection that first sees a peer's file replacement while a third
+# connection holds the graph lock must still adopt it (proof by branch tip)
+# or report BUSY when proof needs the lock, never go stale and read-only.
+DB="$VACUUM_TMP/moved_busy.db"
+for maint in "VACUUM" "SELECT dolt_gc()" "SELECT dolt_commit('-a','--amend','-m','one'); SELECT dolt_gc()"; do
+  db_rm "$DB"
+  out=$($DOLTLITE "$DB" 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','one');
+.connection 1
+.open $DB
+SELECT count(*) FROM t;
+.connection 0
+INSERT INTO t VALUES(2,2);
+SELECT dolt_commit('-Am','two');
+$maint;
+BEGIN IMMEDIATE;
+.connection 1
+SELECT 'during', count(*) FROM t;
+SELECT dolt_commit('--allow-empty','-m','b');
+.connection 0
+COMMIT;
+.connection 1
+SELECT 'after', count(*) FROM t;
+SQL
+)
+  label=$(echo "$maint" | tr -cd '[:alnum:]_' | cut -c1-40)
+  case "$out" in
+    *readonly*) dltest_fail "gc_moved_while_locked_not_readonly_$label" "  got: $out" ;;
+    *) dltest_pass "gc_moved_while_locked_not_readonly_$label" ;;
+  esac
+  case "$out" in
+    *"after|2"*) dltest_pass "gc_moved_while_locked_adopts_after_$label" ;;
+    *) dltest_fail "gc_moved_while_locked_adopts_after_$label" "  got: $out" ;;
+  esac
+  case "$maint" in
+    *amend*) ;;
+    *) case "$out" in
+         *"during|2"*) dltest_pass "gc_moved_while_locked_reads_fresh_$label" ;;
+         *) dltest_fail "gc_moved_while_locked_reads_fresh_$label" "  got: $out" ;;
+       esac ;;
+  esac
+done
+db_rm "$DB"
+
 dltest_finish
