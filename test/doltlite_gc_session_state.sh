@@ -136,8 +136,12 @@ run_test "detached_head_branch_intact_after_gc" "SELECT count(*) FROM t;" "1" "$
 
 db_rm "$DB"
 
-TASK_TMP=$(mktemp -d)
+TASK_TMP=$(mktemp -d ./.doltlite-reset-peer.XXXXXX)
 trap 'rm -rf "$TASK_TMP"' EXIT
+SHELL_DOLTLITE="$DOLTLITE"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) SHELL_DOLTLITE=$(cygpath -am "$DOLTLITE") ;;
+esac
 for maintenance in vacuum gc; do
   case "$maintenance" in
     vacuum) stmt="VACUUM;" ;;
@@ -161,16 +165,16 @@ for maintenance in vacuum gc; do
           compact=".connection 0
 $stmt"
         else
-          compact=".shell $DOLTLITE $DB \"$stmt\""
+          compact=".shell $SHELL_DOLTLITE \"$DB\" \"$stmt\""
         fi
         out=$(dltest_run_sql "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','init');
 .connection 1
-.open $DB
+.open '$DB'
 .connection 2
-.open $DB
+.open '$DB'
 .connection 1
 INSERT INTO t VALUES(2,'b');
 .connection 2
@@ -184,7 +188,7 @@ $reset
 INSERT INTO t VALUES(3,'c');
 $finish
 .connection 3
-.open $DB
+.open '$DB'
 SELECT 'fresh',group_concat(id,',') FROM t;
 PRAGMA integrity_check;
 SELECT 'staged',count(*) FROM dolt_status WHERE staged=1;
