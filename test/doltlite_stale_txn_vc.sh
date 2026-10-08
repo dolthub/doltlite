@@ -1,6 +1,7 @@
 #!/bin/bash
 # A VC command inside a transaction that has only read must not overwrite a
 # peer write committed after the snapshot.
+DLTEST_STRIP_CR=1
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== VC commands in a stale read transaction keep peer writes ==="
