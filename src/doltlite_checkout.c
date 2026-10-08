@@ -197,6 +197,7 @@ struct CheckoutMutationCtx {
   u8 requireActiveRebase;
   u8 targetRebaseInactive;
   u8 oldBranchExists;
+  u8 oldWorkingSetMoved;
   int haveOldState;
   /* Top-level branch-connection checkout must persist despite a savepoint
   ** frame; nested savepoint checkout remains rollbackable. */
@@ -232,7 +233,6 @@ static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
   }
 }
 
-/* Capture session head/staged/merge/rebase so a failed checkout can roll back. */
 static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
   p->savedWasDetached = doltliteIsDetached(db);
   doltliteGetSessionHead(db, &p->savedSessionHead);
@@ -293,6 +293,21 @@ static int checkoutRestoreDurableState(
   return SQLITE_OK;
 }
 
+static int checkoutRestoreOnFailure(sqlite3 *db, CheckoutMutationCtx *p, int rc){
+  int restoreRc;
+  if( p->oldWorkingSetMoved ){
+    doltliteInvalidateSessionWorkingState(db);
+    return rc;
+  }
+  restoreRc = checkoutRestoreSession(db, p);
+  if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+  if( !p->savedWasDetached && !p->targetRebaseInactive ){
+    restoreRc = doltliteMutateRefs(db, checkoutRestoreDurableState, p);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+  }
+  return rc;
+}
+
 static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
   int bSavepoint = db->pSavepoint!=0;
@@ -306,7 +321,10 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   }
   rc = doltliteBranchWorkingSetUnmoved(cs, p->zCurrentBranch,
       p->oldBranchExists ? &p->oldWorkingSet : 0);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    if( rc==SQLITE_BUSY ) p->oldWorkingSetMoved = 1;
+    return rc;
+  }
 
   rc = checkoutLoadAndApply(db, cs, p->zTargetBranch,
                             &p->targetCommit, &p->targetCatHash);
@@ -540,14 +558,7 @@ static int checkoutBranchForRebase(
   checkoutSaveSession(db, &m);
 
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
-  if( rc!=SQLITE_OK ){
-    int restoreRc = checkoutRestoreSession(db, &m);
-    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
-    if( !m.savedWasDetached && !m.targetRebaseInactive ){
-      int durableRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
-      if( durableRc!=SQLITE_OK ) rc = durableRc;
-    }
-  }
+  if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
   sqlite3_free(zCurrentBranch);
   return rc;
 }
@@ -1226,6 +1237,11 @@ static void doltCheckoutParsedFunc(
 
   if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, doltliteVcUnavailableMessage(db)); return; }
+  rc = doltliteRefreshAutocommitWorkingState(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
   if( argc<1 ){ doltliteVcResultError(ctx, db, "branch name required"); return; }
   zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ doltliteVcResultError(ctx, db, "branch name required"); return; }
@@ -1323,7 +1339,6 @@ static void doltCheckoutParsedFunc(
       }
     }
     branchCreate.zName = zBranch;
-    /* -B creates the branch or resets an existing one, then switches. */
     branchCreate.force = forceBranch;
     rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
     if( rc!=SQLITE_OK ){
@@ -1389,14 +1404,7 @@ static void doltCheckoutParsedFunc(
   m.zCurrentBranch = zCurrentBranch;
   doltliteSetSessionDetached(db, 0);
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
-  if( rc!=SQLITE_OK ){
-    int restoreRc = checkoutRestoreSession(db, &m);
-    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
-    if( !m.savedWasDetached ){
-      int durableRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
-      if( durableRc!=SQLITE_OK ) rc = durableRc;
-    }
-  }
+  if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
   sqlite3_free(zCurrentBranch);
   zCurrentBranch = 0;
   if( rc==SQLITE_NOTFOUND ){
@@ -1422,14 +1430,7 @@ static void doltCheckoutParsedFunc(
       m.zCurrentBranch = zCurrentBranch;
       doltliteSetSessionDetached(db, 0);
       rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
-      if( rc!=SQLITE_OK ){
-        int restoreRc = checkoutRestoreSession(db, &m);
-        if( restoreRc!=SQLITE_OK ) rc = restoreRc;
-        if( !m.savedWasDetached ){
-          int durableRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
-          if( durableRc!=SQLITE_OK ) rc = durableRc;
-        }
-      }
+      if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
       sqlite3_free(zCurrentBranch);
       zCurrentBranch = 0;
       goto checkout_done;
