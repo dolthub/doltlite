@@ -872,7 +872,8 @@ static void doltPullParsed(
       return;
     }
     if( prollyHashCompare(&ancestor, &localCommit)!=0 || bNoFf || bSquash ){
-      char *zTrackingRef;
+      char zTrackingHash[PROLLY_HASH_SIZE*2+1];
+      char *zMergeMsg;
       if( strcmp(zRemoteName, "origin")==0
        && chunkStoreOriginSourceEnabled(cs) ){
         remoteSqlRestoreAndReport(
@@ -883,14 +884,19 @@ static void doltPullParsed(
       }
       /* Merge owns txn save/restore; drop pull's snapshot first. */
       doltliteTxnStateClear(&savedState);
-      zTrackingRef = sqlite3_mprintf(
-          "%s/%s", zRemoteName, zRemoteBranch);
-      if( !zTrackingRef ){
+      /* Fetch already stored this commit on the tracking ref. Merging the
+      ** "<remote>/<branch>" name would prefer a local branch of that name
+      ** and leave the fetched commit out. */
+      doltliteHashToHex(&trackingCommit, zTrackingHash);
+      zMergeMsg = sqlite3_mprintf("Merge branch '%s/%s' into %s",
+                                  zRemoteName, zRemoteBranch, zLocalBranch);
+      if( !zMergeMsg ){
         sqlite3_result_error_nomem(ctx);
         return;
       }
-      rc = doltliteMergeRef(db, ctx, zTrackingRef, 0, bNoFf, 0, bSquash);
-      sqlite3_free(zTrackingRef);
+      rc = doltliteMergeRef(db, ctx, zTrackingHash, zMergeMsg,
+                            bNoFf, 0, bSquash);
+      sqlite3_free(zMergeMsg);
       if( rc!=SQLITE_OK ){
         return;
       }
