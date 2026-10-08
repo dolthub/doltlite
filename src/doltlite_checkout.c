@@ -233,7 +233,6 @@ static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
   }
 }
 
-/* Capture session head/staged/merge/rebase so a failed checkout can roll back. */
 static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
   p->savedWasDetached = doltliteIsDetached(db);
   doltliteGetSessionHead(db, &p->savedSessionHead);
@@ -1218,6 +1217,11 @@ static void doltCheckoutParsedFunc(
 
   if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){ doltliteVcResultError(ctx, db, doltliteVcUnavailableMessage(db)); return; }
+  rc = doltliteRefreshAutocommitWorkingState(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
   if( argc<1 ){ doltliteVcResultError(ctx, db, "branch name required"); return; }
   zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ doltliteVcResultError(ctx, db, "branch name required"); return; }
@@ -1315,7 +1319,6 @@ static void doltCheckoutParsedFunc(
       }
     }
     branchCreate.zName = zBranch;
-    /* -B creates the branch or resets an existing one, then switches. */
     branchCreate.force = forceBranch;
     rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
     if( rc!=SQLITE_OK ){

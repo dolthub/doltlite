@@ -32,6 +32,16 @@ foreach maintenance {none gc vacuum} {
                [sqlite3_errcode db]
         } {1 SQLITE_BUSY}
         catch {db eval {ROLLBACK}}
+        if {!$staged} {
+          do_test $prefix.direct-retry {
+            db eval {
+              SELECT dolt_checkout('b1');
+              SELECT active_branch();
+              SELECT id FROM t ORDER BY id;
+              SELECT dolt_checkout('main');
+            }
+          } {0 b1 1 10 0}
+        }
         do_test $prefix.reloaded {
           list [db one {SELECT active_branch()}] \
                [db eval {SELECT id FROM t ORDER BY id}] \
