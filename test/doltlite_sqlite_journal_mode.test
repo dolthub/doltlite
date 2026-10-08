@@ -1,0 +1,132 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-sqlite-journal-mode
+
+proc journal_header {file} {
+  set fd [open $file rb]
+  seek $fd 18
+  binary scan [read $fd 2] c* result
+  close $fd
+  return $result
+}
+
+foreach layout {main attached} {
+  foreach creation {fresh existing} {
+    db close
+    forcedelete journal-stock.db journal-stock.db-wal journal-stock.db-shm
+    forcedelete journal-stock.db-journal journal-native.db
+    if {$creation eq "existing"} {
+      sqlite3 seed {file:journal-stock.db?doltlite_engine=sqlite} -uri 1
+      seed eval {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1)}
+      seed close
+      set file journal-stock.db
+    } else {
+      set file {file:journal-stock.db?doltlite_engine=sqlite}
+    }
+    set schema main
+    if {$layout eq "main"} {
+      sqlite3 db $file -uri 1
+    } else {
+      sqlite3 db journal-native.db -uri 1
+      db eval {CREATE TABLE native(id INT PRIMARY KEY); INSERT INTO native VALUES(7)}
+      db eval "ATTACH '$file' AS stock"
+      set schema stock
+    }
+    set name $layout-$creation
+    do_execsql_test $name-wal "
+      PRAGMA $schema.journal_mode=WAL;
+      PRAGMA $schema.journal_mode;
+    " {wal wal}
+    if {$creation eq "fresh"} {
+      db eval "CREATE TABLE $schema.t(id INTEGER PRIMARY KEY);
+               INSERT INTO $schema.t VALUES(1)"
+    }
+    db eval {PRAGMA wal_autocheckpoint=0}
+    do_test $name-header {journal_header journal-stock.db} {2 2}
+    sqlite3 peer journal-stock.db
+    do_test $name-peer-wal {peer eval {PRAGMA journal_mode}} wal
+    do_test $name-reader {peer eval {BEGIN; SELECT id FROM t}} 1
+    db eval "BEGIN IMMEDIATE; INSERT INTO $schema.t VALUES(2)"
+    do_test $name-sidecars {
+      list [file exists journal-stock.db-wal] \
+           [file exists journal-stock.db-shm] \
+           [file exists journal-stock.db-journal]
+    } {1 1 0}
+    do_test $name-reader-uncommitted {peer eval {SELECT id FROM t}} 1
+    do_test $name-commit-with-reader {
+      set rc [catch {db eval COMMIT}]
+      if {$rc} {db eval ROLLBACK}
+      set rc
+    } 0
+    do_test $name-reader-snapshot {peer eval {SELECT id FROM t}} 1
+    do_test $name-reader-after-commit {
+      peer eval {COMMIT; SELECT id FROM t ORDER BY id}
+    } {1 2}
+    peer close
+    do_execsql_test $name-checkpoint "PRAGMA $schema.wal_checkpoint(TRUNCATE)" {0 0 0}
+    if {$layout eq "attached"} {
+      do_execsql_test $name-native {
+        PRAGMA main.journal_mode=DELETE;
+        SELECT id FROM native;
+      } {wal 7}
+    }
+    db close
+    sqlite3 db journal-stock.db
+    do_execsql_test $name-reopen {
+      PRAGMA journal_mode;
+      SELECT id FROM t ORDER BY id;
+      PRAGMA integrity_check;
+    } {wal 1 2 ok}
+    do_test $name-reopen-header {journal_header journal-stock.db} {2 2}
+    do_execsql_test $name-transaction-reject {
+      BEGIN;
+      PRAGMA journal_mode;
+    } wal
+    do_catchsql_test $name-transaction-wal-to-delete {
+      PRAGMA journal_mode=DELETE;
+    } {1 {cannot change out of wal mode from within a transaction}}
+    db eval ROLLBACK
+    do_execsql_test $name-delete {PRAGMA journal_mode=DELETE} delete
+    do_test $name-delete-header {journal_header journal-stock.db} {1 1}
+    do_test $name-delete-sidecars {
+      list [file exists journal-stock.db-wal] [file exists journal-stock.db-shm]
+    } {0 0}
+    foreach mode {truncate persist memory off delete} {
+      do_execsql_test $name-$mode "PRAGMA journal_mode=$mode;
+        PRAGMA journal_mode; INSERT INTO t VALUES(3); DELETE FROM t WHERE id=3;
+        PRAGMA integrity_check;" [list $mode $mode ok]
+      do_execsql_test $name-$mode-to-wal {PRAGMA journal_mode=WAL} wal
+      do_test $name-$mode-header {journal_header journal-stock.db} {2 2}
+      do_execsql_test $name-$mode-from-wal "PRAGMA journal_mode=$mode" $mode
+      do_test $name-$mode-rollback-header {journal_header journal-stock.db} {1 1}
+    }
+    do_execsql_test $name-final-delete {PRAGMA journal_mode=DELETE} delete
+    db close
+    sqlite3 db journal-stock.db
+    do_execsql_test $name-final-reopen {
+      PRAGMA journal_mode;
+      SELECT id FROM t ORDER BY id;
+      PRAGMA integrity_check;
+    } {delete 1 2 ok}
+  }
+}
+
+db close
+forcedelete journal-stock.db journal-stock.db-journal journal-native.db
+sqlite3 db test.db
+do_execsql_test native-modes {
+  CREATE TABLE native(id INT PRIMARY KEY);
+  PRAGMA journal_mode=DELETE;
+  PRAGMA journal_mode=WAL;
+  PRAGMA journal_mode;
+  SELECT doltlite_engine();
+} {wal wal wal prolly}
+
+sqlite3 memory {file::memory:?doltlite_engine=sqlite} -uri 1
+do_test sqlite-memory-wal {
+  memory eval {PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES(1);
+               PRAGMA journal_mode; SELECT x FROM t}
+} {memory memory 1}
+memory close
+
+finish_test

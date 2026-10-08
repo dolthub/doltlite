@@ -25,6 +25,7 @@ int origBtreeIncrVacuum(void *p);
 const char *origBtreeGetFilename(void *p);
 const char *origBtreeGetJournalname(void *p);
 int origBtreeIsReadonly(void *p);
+int origBtreeSetVersion(void *p, int iVersion);
 int origBtreeBeginTrans(void *p, int wrFlag, int *pSchemaVersion);
 int origBtreeCommitPhaseOne(void *p, const char *zSuperJrnl);
 int origBtreeCommitPhaseTwo(void *p, int bCleanup);

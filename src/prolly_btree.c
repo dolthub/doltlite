@@ -2386,6 +2386,9 @@ static int integrityCheckRepoGraph(Btree *p, IntegrityCheckCtx *pCtx){
 }
 
 int sqlite3BtreeSetVersion(Btree *p, int iVersion){
+  if( p->pOrigBtree ){
+    return origBtreeSetVersion(p->pOrigBtree, iVersion);
+  }
   if( p->inTrans!=TRANS_WRITE ){
     int rc = sqlite3BtreeBeginTrans(p, 2, 0);
     if( rc!=SQLITE_OK ) return rc;
