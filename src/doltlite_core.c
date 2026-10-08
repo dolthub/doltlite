@@ -477,7 +477,8 @@ int doltliteMutateRefsExpected(
     doltliteGetSessionHead(db, &head);
     if( chunkStoreReadDiskBranchTip(cs, doltliteGetSessionBranch(db),
                                     &tip, &found)!=SQLITE_OK
-     || (found && prollyHashCompare(&tip, &head)!=0) ){
+     || (found && prollyHashCompare(&tip, &head)!=0)
+     || chunkStoreWorkingSetMovedFromBasis(cs, doltliteGetSessionBranch(db)) ){
       doltliteInvalidateSessionWorkingState(db);
     }
   }
