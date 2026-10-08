@@ -237,5 +237,30 @@ run_test "checkout_during_delete_rolls_back_main" "SELECT count(*) FROM t;" "5" 
 run_test "checkout_during_delete_leaves_target_unchanged" \
   "SELECT count(*) FROM t;" "5" "$DB18/feat"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
+DB19=/tmp/test_branch19_$$.db
+for op in "dolt_branch('-f','b1','main')" "dolt_branch('-c','-f','main','b1')"; do
+  for maint in "SELECT 1" "VACUUM" "SELECT dolt_gc()"; do
+    rm -f "$DB19"
+    $DOLTLITE "$DB19" > /dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+WITH RECURSIVE x(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM x WHERE n<300) INSERT INTO t SELECT n, n FROM x;
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('b1');
+INSERT INTO t VALUES(999,999);
+.connection 1
+.open $DB19
+DELETE FROM t WHERE id=299;
+$maint;
+.connection 0
+SELECT $op;
+INSERT INTO t VALUES(-1,-1);
+SQL
+    run_test "force_other_branch_keeps_peer_write: $op after $maint" \
+      "PRAGMA integrity_check; SELECT count(*), sum(id=299) FROM t;" \
+      "ok
+301|0" "$DB19"
+  done
+done
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19"
 dltest_finish
