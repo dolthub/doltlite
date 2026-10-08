@@ -13,6 +13,7 @@ SELECT dolt_remote('add', 'backup', 'file:///data/remote.db');
 SELECT dolt_remote('remove', 'backup');
 SELECT dolt_push('origin', 'main');
 SELECT dolt_push('origin', 'main', '--force');
+SELECT dolt_push('origin', 'main:feature/x');    -- local main, remote branch feature/x
 SELECT dolt_push('origin', 'v1.0');              -- one tag
 SELECT dolt_push('origin', '--tags');
 SELECT dolt_fetch('origin');                     -- all branches
@@ -31,7 +32,7 @@ SELECT dolt_clone('--lazy', '--revision', 'v1.0', 'file:///data/src.db');
 | Function | Arguments | Notes |
 |---|---|---|
 | `dolt_remote` | `'add', name, url` or `'remove', name` | `file://` or `http(s)://...` URL naming the database file |
-| `dolt_push` | `remote, branch [, '--force']` or `remote, tag` or `remote, '--tags'` | Non-fast-forward is refused without `--force` |
+| `dolt_push` | `remote, branch [, '--force']` or `remote, 'src:dst'` or `remote, tag` or `remote, '--tags'` | Non-fast-forward is refused without `--force`. `src:dst` pushes local branch `src` as remote branch `dst` |
 | `dolt_fetch` | `remote [, branch]` | Updates `remotes/<remote>/<branch>` tracking refs and tags |
 | `dolt_pull` | `remote, branch` | Fetch, then fast-forward or three-way merge into the current branch |
 | `dolt_clone` | `['--lazy'] ['--revision', rev] url` | Only into an empty database; records `origin` |
@@ -44,14 +45,23 @@ when it cannot fast-forward, conflicts included.
 | `usage: dolt_remote(action, name [, url])`, `url required for add`, `remote already exists`, `unknown action: use 'add' or 'remove'` | `dolt_remote` arguments |
 | `remote not found` | unknown remote name |
 | `push failed: branch or tag not found` | local ref does not exist |
+| `invalid branch name` | `src:dst` destination fails the branch name rules |
+| `unsupported mapping: '<refspec>'` | `src:dst` destination is under `refs/tags/` |
 | `not a fast-forward of the remote branch (use force to overwrite)` | remote moved; add `--force` |
 | `fetch failed: branch not found on remote` | `dolt_fetch`/`dolt_pull` of a missing branch |
+| `cannot pull with uncommitted changes` | working or staged changes, on a fast-forward or a merge |
 | `database is not empty — clone into a fresh database` | `dolt_clone` into a database with tables or commits |
 | `clone failed` | source unreachable or not a DoltLite database |
 | `DoltLite remotes are disabled in this build` | built with `DOLTLITE_ENABLE_REMOTES=0` |
 
 ## Behaviour
 
+- `dolt_push(remote, 'src:dst')` pushes local branch `src` to remote branch
+  `dst`. A `refs/heads/` prefix on either side is that branch's name. `dst`
+  follows the same rules as [dolt_branch](dolt_branch.md) and is refused with
+  `invalid branch name` before the remote is opened. `src:refs/tags/...` is
+  refused with `unsupported mapping: '<refspec>'`. An argument with no colon
+  that starts with `refs/tags/` still pushes that tag.
 - Remotes carry commits, tags, and branch refs. Working sets never travel:
   cloned branches start clean, and a push is refused while the **target**
   database's branch has uncommitted changes.
@@ -64,7 +74,8 @@ when it cannot fast-forward, conflicts included.
   same-named local tag when the remote value differs.
 - A pull that cannot fast-forward merges the commit just fetched onto the
   tracking ref, including `--no-ff` and `--squash`. A local branch named
-  `<remote>/<branch>` does not take that commit's place.
+  `<remote>/<branch>` does not take that commit's place. Uncommitted changes
+  refuse that merge the same way they refuse a fast-forward.
 - Pushes to an HTTP remote are validated under the server's lock, so a stale
   push is rejected rather than overwriting a peer's ref.
 
