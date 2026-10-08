@@ -41,6 +41,7 @@ autoindex3
 autoindex4
 autoindex5
 capi2
+doltlite_open_stmt_snapshot
 capi3
 capi3d
 capi3e
