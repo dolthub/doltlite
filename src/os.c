@@ -520,4 +520,9 @@ int sqlite3OsDoltliteFileState(
   UNUSED_PARAMETER(pState);
   return SQLITE_NOTFOUND;
 }
+
+int sqlite3OsDoltliteHasMultipleLinks(sqlite3_file *id){
+  UNUSED_PARAMETER(id);
+  return 0;
+}
 #endif

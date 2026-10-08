@@ -332,6 +332,9 @@ static pid_t randomnessPid = 0;
 #define UNIXFILE_DELETE      0x20     /* Delete on close */
 #define UNIXFILE_URI         0x40     /* Filename might have query parameters */
 #define UNIXFILE_NOLOCK      0x80     /* Do no file locking */
+#ifdef DOLTLITE_PROLLY
+# define UNIXFILE_MULTILINK  0x100
+#endif
 
 /*
 ** Include code that is common to all os_*.c files
@@ -1658,6 +1661,9 @@ static void verifyDbFile(unixFile *pFile){
     return;
   }
   if( buf.st_nlink>1 ){
+#ifdef DOLTLITE_PROLLY
+    pFile->ctrlFlags |= UNIXFILE_MULTILINK;
+#endif
     sqlite3_log(SQLITE_WARNING, "multiple links to file: %s", pFile->zPath);
     return;
   }
@@ -4366,6 +4372,17 @@ int sqlite3OsDoltliteFileState(
   pState->iFileSize = rc==0 ? (sqlite3_int64)buf.st_size : -1;
   return SQLITE_OK;
 #endif
+}
+#endif
+
+#ifdef DOLTLITE_PROLLY
+int sqlite3OsDoltliteHasMultipleLinks(sqlite3_file *id){
+  if( id==0 || id->pMethods==0
+   || id->pMethods->xFileControl!=unixFileControl
+  ){
+    return 0;
+  }
+  return (((unixFile*)id)->ctrlFlags & UNIXFILE_MULTILINK)!=0;
 }
 #endif
 
