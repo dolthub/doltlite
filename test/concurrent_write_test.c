@@ -363,6 +363,53 @@ static const char *exec1_busy(sqlite3 *db, const char *sql, int maxRetries){
   return result_buf;
 }
 
+static void test_open_statement_snapshot(void){
+  sqlite3 *a = 0, *b = 0;
+  sqlite3_stmt *cur = 0;
+  const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_open_stmt_snapshot.db";
+  int rc;
+
+  printf("--- Test 13: An open statement pins the connection's snapshot ---\n");
+
+  remove(dbpath);
+  sqlite3_open(dbpath, &a);
+  sqlite3_open(dbpath, &b);
+  rc = execSql(a, "CREATE TABLE acct(id INTEGER PRIMARY KEY, bal INT);"
+                  "INSERT INTO acct VALUES(1,100),(2,100); CREATE TABLE log(x);");
+  check("os_setup", rc==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(a, "SELECT bal FROM acct ORDER BY id", -1, &cur, 0);
+  check("os_prepare", rc==SQLITE_OK);
+  rc = sqlite3_step(cur);
+  check("os_cursor_row", rc==SQLITE_ROW && sqlite3_column_int(cur, 0)==100);
+
+  rc = execSql(b, "UPDATE acct SET bal=bal+500 WHERE id=1");
+  check("os_peer_update", rc==SQLITE_OK);
+
+  check("os_unrelated_read",
+    strcmp(queryScalarText(a, "SELECT count(*) FROM log"), "0")==0);
+  check("os_second_read_same_snapshot",
+    strcmp(queryScalarText(a, "SELECT bal FROM acct WHERE id=1"), "100")==0);
+  rc = sqlite3_exec(a, "UPDATE acct SET bal=101 WHERE id=1", 0, 0, 0);
+  check("os_stale_write_refused",
+    sqlite3_extended_errcode(a)==SQLITE_BUSY_SNAPSHOT);
+  check("os_cursor_continues", sqlite3_step(cur)==SQLITE_ROW);
+  sqlite3_finalize(cur);
+
+  check("os_peer_write_kept",
+    strcmp(queryScalarText(b, "SELECT bal FROM acct WHERE id=1"), "600")==0);
+  check("os_refreshes_after_finalize",
+    strcmp(queryScalarText(a, "SELECT bal FROM acct WHERE id=1"), "600")==0);
+  rc = execSql(a, "UPDATE acct SET bal=bal+1 WHERE id=1");
+  check("os_write_after_finalize", rc==SQLITE_OK);
+  check("os_final_balance",
+    strcmp(queryScalarText(b, "SELECT bal FROM acct WHERE id=1"), "601")==0);
+
+  sqlite3_close(a);
+  sqlite3_close(b);
+  remove(dbpath);
+}
+
 int main(){
   sqlite3 *db1 = 0, *db2 = 0, *db3 = 0, *db4 = 0;
   const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_concurrent_write.db";
@@ -527,6 +574,7 @@ int main(){
 
   test_multi_writer_dml();
   test_cross_thread_transaction();
+  test_open_statement_snapshot();
 
   printf("\nResults: %d passed, %d failed out of %d tests\n", nPass, nFail, nPass+nFail);
   return nFail > 0 ? 1 : 0;

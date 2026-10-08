@@ -655,6 +655,11 @@ attach attach-2.10 class=intentional issue=1852  # canonical adoption: sqlite_ma
 attach attach-2.15 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 attach attach-2.16 class=intentional issue=1852  # canonical adoption: sqlite_master row order after schema commit
 capi2 capi2-6.5 class=intentional  # 2nd-connection write expects "database is locked"; doltlite has no pager write-lock
+capi2 capi2-6.17 class=intentional  # cascade of capi2-6.5: the peer write lands, so the open VM1 snapshot is stale and the write is refused with SQLITE_BUSY_SNAPSHOT, as stock WAL does
+capi2 capi2-6.19 class=intentional  # cascade of capi2-6.5: the peer write lands, so the open VM1 snapshot is stale and the write is refused with SQLITE_BUSY_SNAPSHOT, as stock WAL does
+capi2 capi2-6.25 class=intentional  # cascade of capi2-6.5: the peer write lands, so the open VM1 snapshot is stale and the write is refused with SQLITE_BUSY_SNAPSHOT, as stock WAL does
+capi2 capi2-6.27 class=intentional  # cascade of capi2-6.5: the peer write lands, so the open VM1 snapshot is stale and the write is refused with SQLITE_BUSY_SNAPSHOT, as stock WAL does
+capi2 capi2-7.1 class=intentional  # cascade of capi2-6.5: the peer write lands, so the open VM1 snapshot is stale and the write is refused with SQLITE_BUSY_SNAPSHOT, as stock WAL does
 
 # lock4: only 1.1 remains ungated (the cross-process journal-poll block is
 # ifcapable-gated); it asserts raw page-file sizes.

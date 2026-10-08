@@ -692,7 +692,11 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   }
 
   if( p->inTrans==TRANS_READ && !wrFlag ){
-    if( p->db && p->db->autoCommit && !p->db->pSavepoint ){
+    /* Another statement still reading keeps this snapshot, as in stock WAL:
+    ** a refresh under it would let a write computed from its rows pass the
+    ** stale-snapshot check. */
+    if( p->db && p->db->autoCommit && !p->db->pSavepoint
+     && p->db->nVdbeRead<=1 ){
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
       pBt->store.snapshotPinned = 0;
@@ -750,6 +754,10 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
        || chunkStoreWorkingSetMovedFromBasis(&pBt->store,
                                              p->zBranch ? p->zBranch : "main") ){
         chunkStoreUnlock(&pBt->store);
+        /* The lock's refresh consumed the store-changed signal; without
+        ** this the next read after the snapshot ends never reloads. */
+        p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+        p->bForceCatalogReload = 1;
         return SQLITE_BUSY_SNAPSHOT;
       }
     }
