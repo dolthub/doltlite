@@ -223,8 +223,13 @@ do_test doltlite_recover_corruption-2.13 {
   fconfigure $f -translation binary
   puts -nonewline $f "GARBAGEGARBAGE"
   close $f
-  openCorrupt rcor.db
-} {database disk image is malformed}
+  sqlite3 dbc rcor.db
+  set res [list [dbc eval {SELECT count(*) FROM t1}] \
+                [dbc eval {SELECT count(*) FROM dolt_log}] \
+                [dbc eval {PRAGMA integrity_check}]]
+  dbc close
+  set res
+} {24 2 ok}
 
 do_test doltlite_recover_corruption-2.14 {
   forcedelete rcor.db
@@ -440,6 +445,72 @@ do_test doltlite_recover_corruption-6.5 {
   wrBytes rcor.db 84 [binary format w [expr {[file size rcor.db] + 4096}]]
   openCorrupt rcor.db
 } {database disk image is malformed}
+
+foreach maintenance {gc vacuum} {
+  forcedelete compact-base.db compact-tail.db
+  sqlite3 dbt compact-base.db
+  dbt eval {
+    CREATE TABLE t(k INTEGER PRIMARY KEY, v TEXT);
+    CREATE INDEX tv ON t(v);
+    INSERT INTO t VALUES(1,'x'),(2,'y');
+    SELECT dolt_commit('-Am','before compaction');
+    SELECT dolt_branch('saved');
+    SELECT dolt_tag('saved-tag');
+  }
+  set compactHead [dbt one {SELECT dolt_hashof('HEAD')}]
+  if {$maintenance eq "gc"} {
+    dbt eval {SELECT dolt_gc()}
+  } else {
+    dbt eval {VACUUM}
+  }
+  dbt close
+  do_test doltlite_recover_corruption-7.$maintenance.setup {
+    list [expr {[rdI64 compact-base.db 84] == [file size compact-base.db]}] \
+         [expr {[rdU32 compact-base.db 28] > 0}]
+  } {1 1}
+  foreach tag {0 1 2 55 255} {
+    foreach length {1 4001} {
+      foreach readonly {0 1} {
+        set expected {{1 x 2 y} 1 2 2 1 ok}
+        if {!$readonly} { lappend expected 3 2 }
+        lappend expected 1
+        do_test doltlite_recover_corruption-7.$maintenance.$tag.$length.$readonly {
+          forcedelete compact-tail.db
+          file copy compact-base.db compact-tail.db
+          wrBytes compact-tail.db [file size compact-tail.db] \
+            "[binary format c $tag][string repeat Z [expr {$length-1}]]"
+          set size [file size compact-tail.db]
+          set rc [catch {
+            sqlite3 dbt compact-tail.db -readonly $readonly
+            set result [list [dbt eval {SELECT * FROM t ORDER BY k}] \
+              [expr {[dbt one {SELECT dolt_hashof('HEAD')}] eq $compactHead}] \
+              [dbt one {SELECT count(*) FROM dolt_log}] \
+              [dbt one {SELECT count(*) FROM dolt_branches}] \
+              [dbt one {SELECT count(*) FROM dolt_tags}] \
+              [dbt one {PRAGMA integrity_check}]]
+            if {!$readonly} {
+              dbt eval {
+                INSERT INTO t VALUES(3,'z');
+                SELECT dolt_commit('-Am','after recovery');
+              }
+              dbt close
+              sqlite3 dbt compact-tail.db
+              lappend result [dbt one {SELECT count(*) FROM t}]
+              dbt eval {SELECT dolt_checkout('saved')}
+              lappend result [dbt one {SELECT count(*) FROM t}]
+            }
+            dbt close
+            lappend result [expr {!$readonly || [file size compact-tail.db] == $size}]
+            set result
+          } result]
+          catch {dbt close}
+          list $rc $result
+        } [list 0 $expected]
+      }
+    }
+  }
+}
+forcedelete compact-base.db compact-tail.db
 
 forcedelete rch1.db rch2.db rcor.db header.db checkpoint.db checkpoint-crash.db \
             checkpoint-torn.db checkpoint-bad.db checkpoint-gc.db

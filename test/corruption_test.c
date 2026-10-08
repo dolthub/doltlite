@@ -1987,6 +1987,144 @@ static void test_unsealed_wal_root_keeps_prior_commit(void){
   removeDb(dbpath);
 }
 
+static void test_compacted_torn_tail(void){
+  const char *base = DOLTLITE_TEST_TMPDIR "/test_corr_compact_tail_base.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_corr_compact_tail.db";
+  const char *aMaintenance[] = { "SELECT dolt_gc()", "VACUUM" };
+  unsigned char tail[4001];
+  int mode, tag;
+
+  for(mode=0; mode<2; mode++){
+    sqlite3 *db = 0;
+    char head[64];
+    int rc;
+    off_t compactSize;
+    check("compact_tail_create", create_good_db(base)==0);
+    rc = sqlite3_open(base, &db);
+    check("compact_tail_setup_open", rc==SQLITE_OK);
+    if( rc!=SQLITE_OK ){ sqlite3_close(db); continue; }
+    check("compact_tail_refs", execSql(db,
+      "SELECT dolt_branch('saved'); SELECT dolt_tag('saved-tag')")==SQLITE_OK);
+    snprintf(head, sizeof(head), "%s", queryScalarText(db,
+      "SELECT dolt_hashof('HEAD')"));
+    check("compact_tail_maintenance", execSql(db, aMaintenance[mode])==SQLITE_OK);
+    sqlite3_close(db);
+    compactSize = file_size(base);
+    check("compact_tail_empty_wal", read_i64_le_at(base, 84)==compactSize);
+    check("compact_tail_indexed", read_u32_le_at(base, 28)>0);
+
+    for(tag=0; tag<256; tag++){
+      char name[128];
+      off_t damagedSize;
+      memset(tail, 0x5a, sizeof(tail));
+      tail[0] = (unsigned char)tag;
+      check("compact_tail_copy", copy_file(base, path)==0);
+      check("compact_tail_append", corrupt_bytes(path, compactSize,
+        tail, sizeof(tail))==0);
+      damagedSize = file_size(path);
+      rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, 0);
+      snprintf(name, sizeof(name), "compact_tail_%d_%02x_readonly", mode, tag);
+      check(name, rc==SQLITE_OK);
+      if( rc==SQLITE_OK ){
+        check("compact_tail_readonly_rows",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM t1"), "5")==0);
+        check("compact_tail_readonly_head",
+          strcmp(queryScalarText(db, "SELECT dolt_hashof('HEAD')"), head)==0);
+        check("compact_tail_readonly_integrity",
+          strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+      }
+      sqlite3_close(db);
+      db = 0;
+      check("compact_tail_readonly_unchanged", file_size(path)==damagedSize);
+      rc = sqlite3_open(path, &db);
+      snprintf(name, sizeof(name), "compact_tail_%d_%02x_writable", mode, tag);
+      check(name, rc==SQLITE_OK);
+      if( rc==SQLITE_OK ){
+        check("compact_tail_rows",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM t1"), "5")==0);
+        check("compact_tail_head",
+          strcmp(queryScalarText(db, "SELECT dolt_hashof('HEAD')"), head)==0);
+        check("compact_tail_log",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "3")==0);
+        check("compact_tail_branches",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        check("compact_tail_tags",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_tags"), "1")==0);
+        if( tag<=2 || tag==0x37 || tag==0xff ){
+          check("compact_tail_insert", execSql(db,
+            "INSERT INTO t1 VALUES(6,'zeta')")==SQLITE_OK);
+          check("compact_tail_commit", execSql(db,
+            "SELECT dolt_commit('-Am','after recovery')")==SQLITE_OK);
+          sqlite3_close(db);
+          db = 0;
+          rc = sqlite3_open(path, &db);
+          check("compact_tail_reopen", rc==SQLITE_OK);
+          if( rc==SQLITE_OK ){
+            check("compact_tail_reopen_rows",
+              strcmp(queryScalarText(db, "SELECT count(*) FROM t1"), "6")==0);
+            check("compact_tail_reopen_integrity",
+              strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+            check("compact_tail_saved_checkout", execSql(db,
+              "SELECT dolt_checkout('saved')")==SQLITE_OK);
+            check("compact_tail_saved_rows",
+              strcmp(queryScalarText(db, "SELECT count(*) FROM t1"), "5")==0);
+          }
+        }
+      }
+      sqlite3_close(db);
+      db = 0;
+    }
+    check("compact_committed_copy", copy_file(base, path)==0);
+    rc = sqlite3_open(path, &db);
+    check("compact_committed_open", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("compact_committed_write", execSql(db,
+        "INSERT INTO t1 VALUES(6,'zeta');"
+        "SELECT dolt_commit('-Am','committed after compaction')")==SQLITE_OK);
+    }
+    sqlite3_close(db);
+    db = 0;
+    tail[0] = 0x37;
+    check("compact_committed_damage", corrupt_bytes(path, compactSize,
+      tail, 1)==0);
+    {
+      ChunkStore cs;
+      off_t damagedSize = file_size(path);
+      rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+      check("compact_committed_reopen", rc==SQLITE_OK);
+      if( rc==SQLITE_OK ){
+        check("compact_committed_poisoned", cs.corruptMidStream);
+        chunkStoreClose(&cs);
+      }
+      check("compact_committed_unchanged", file_size(path)==damagedSize);
+    }
+  }
+  removeDb(base);
+  removeDb(path);
+}
+
+static void test_unindexed_damaged_wal_start(void){
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_corr_unindexed_start.db";
+  unsigned char tail[4001];
+  ChunkStore cs;
+  off_t walOffset;
+  int rc;
+  check("unindexed_start_create", create_good_db(path)==0);
+  walOffset = (off_t)read_i64_le_at(path, 84);
+  check("unindexed_start_has_wal", walOffset>=CHUNK_MANIFEST_SIZE);
+  check("unindexed_start_has_no_index", read_i64_le_at(path, 40)==0);
+  check("unindexed_start_truncate", truncate_file(path, walOffset)==0);
+  memset(tail, 0x37, sizeof(tail));
+  check("unindexed_start_append", corrupt_bytes(path, walOffset,
+    tail, sizeof(tail))==0);
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+    SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("unindexed_start_rejected", rc==SQLITE_CORRUPT);
+  if( rc==SQLITE_OK ) chunkStoreClose(&cs);
+  removeDb(path);
+}
+
 int main(void){
   printf("=== DoltLite Corruption Detection Tests ===\n\n");
 
@@ -2024,6 +2162,8 @@ int main(void){
   test_index_end_overflow_bounds_wal_offset();
   test_sealed_wal_root_manifest_validation();
   test_unsealed_wal_root_keeps_prior_commit();
+  test_compacted_torn_tail();
+  test_unindexed_damaged_wal_start();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);

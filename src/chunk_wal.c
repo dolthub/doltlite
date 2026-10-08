@@ -967,8 +967,9 @@ static int csReplayWalFrom(
       if( rc != SQLITE_OK ) goto replay_error;
       sawDamage = 1;
       if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
-      /* Bytes at WAL start are corruption; later junk is a crash tail. */
-      if( damageAction==CS_DAMAGE_TORN && recPos == 0 && tag != 0 ){
+      /* Without an indexed base, damaged WAL start is not an empty store. */
+      if( damageAction==CS_DAMAGE_TORN && recPos == 0 && tag != 0
+       && chunkIndexCount(&cs->index)==0 ){
         rc = SQLITE_CORRUPT;
         goto replay_error;
       }
