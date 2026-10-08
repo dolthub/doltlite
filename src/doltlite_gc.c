@@ -841,7 +841,8 @@ static int gcWriteCompactedTo(
     }
     if( rc==SQLITE_OK ){
       GC_CRASH_CHECK();
-      rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
+      rc = sqlite3OsSync(pTmpFile,
+          cs->fullFsync ? SQLITE_SYNC_FULL : SQLITE_SYNC_NORMAL);
     }
     if( rc!=SQLITE_OK ){
       sqlite3_free(w.aBuf);

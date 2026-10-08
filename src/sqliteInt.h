@@ -225,6 +225,7 @@ struct DoltliteFileState {
 };
 int sqlite3OsDoltliteFileState(sqlite3_file*, DoltliteFileState*);
 int sqlite3OsDoltliteHasMultipleLinks(sqlite3_file*);
+void sqlite3OsDoltliteRequestDirSync(sqlite3_file*);
 #endif
 
 /* Disable nuisance warnings on Borland compilers */
