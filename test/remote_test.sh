@@ -1355,6 +1355,108 @@ result=$("$DB" "$TMPDIR/shadow_squash/b.db" \
      AND parent_index = 1;")
 check "squash pull has no second parent" "0" "$result"
 
+echo "=== Checkout a fetched branch whose name contains a slash ==="
+SL="$TMPDIR/slashbr"
+mkdir -p "$SL"
+"$DB" "$SL/a.db" <<ENDSQL
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('feature/x');
+SELECT dolt_checkout('feature/x');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-Am','on feature/x');
+SELECT dolt_checkout('main');
+SELECT dolt_branch('plain');
+SELECT dolt_checkout('plain');
+INSERT INTO t VALUES(3);
+SELECT dolt_commit('-Am','on plain');
+SELECT dolt_checkout('main');
+SELECT dolt_remote('add','origin','file://$SL/remote.db');
+SELECT dolt_push('origin','main');
+SELECT dolt_push('origin','feature/x');
+SELECT dolt_push('origin','plain');
+.quit
+ENDSQL
+
+result=$("$DB" "$SL/b.db" "SELECT dolt_clone('file://$SL/remote.db');")
+check "clone of a slash branch returns 0" "0" "$result"
+
+result=$("$DB" "$SL/b.db" "SELECT dolt_checkout('plain'); SELECT active_branch(); SELECT group_concat(id) FROM t ORDER BY id;")
+check "checkout of a fetched branch without a slash" "0
+plain
+1,3" "$result"
+
+result=$("$DB" "$SL/b.db" "SELECT dolt_checkout('feature/x'); SELECT active_branch(); SELECT group_concat(id) FROM t ORDER BY id;")
+check "checkout of a fetched branch whose name contains a slash" "0
+feature/x
+1,2" "$result"
+
+result=$("$DB" "$SL/b.db" "SELECT group_concat(id) FROM dolt_at_t('feature/x'); SELECT count(*) FROM dolt_branches WHERE name='feature/x';")
+check "fetched slash branch stays at its commit" "1,2
+1" "$result"
+
+result=$("$DB" "$SL/b.db" "SELECT dolt_checkout('origin/feature/x');" 2>&1)
+check_match "checkout of the tracking ref does not create that branch" "detached head" "$result"
+result=$("$DB" "$SL/b.db" "SELECT count(*) FROM dolt_branches WHERE name='origin/feature/x'; SELECT count(*) FROM dolt_branches WHERE name='feature/x';")
+check "tracking-ref checkout does not create that local branch" "0
+1" "$result"
+
+"$DB" "$SL/a.db" <<ENDSQL
+SELECT dolt_branch('feature/y');
+SELECT dolt_checkout('feature/y');
+INSERT INTO t VALUES(4);
+SELECT dolt_commit('-Am','on feature/y');
+SELECT dolt_checkout('main');
+SELECT dolt_push('origin','feature/y');
+SELECT dolt_remote('add','backup','file://$SL/backup_y.db');
+SELECT dolt_push('backup','feature/y');
+.quit
+ENDSQL
+
+result=$("$DB" "$SL/amb.db" "SELECT dolt_clone('file://$SL/remote.db');")
+check "clone before an ambiguous slash checkout returns 0" "0" "$result"
+"$DB" "$SL/amb.db" "SELECT dolt_remote('add','backup','file://$SL/backup_y.db'); SELECT dolt_fetch('backup','feature/y');" >/dev/null
+result=$("$DB" "$SL/amb.db" "SELECT name FROM dolt_remote_branches WHERE name LIKE '%feature/y' ORDER BY name;")
+check "both remotes track feature/y" "remotes/backup/feature/y
+remotes/origin/feature/y" "$result"
+result=$("$DB" "$SL/amb.db" "SELECT dolt_checkout('feature/y');" 2>&1)
+check_match "two remotes tracking one slash branch stay ambiguous" "no such branch or table: feature/y" "$result"
+result=$("$DB" "$SL/amb.db" "SELECT active_branch(); SELECT count(*) FROM dolt_branches WHERE name='feature/y';")
+check "ambiguous slash checkout creates no local branch" "main
+0" "$result"
+
+"$DB" "$SL/named.db" <<ENDSQL
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(9);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('origin/main');
+SELECT dolt_checkout('origin/main');
+INSERT INTO t VALUES(8);
+SELECT dolt_commit('-Am','branch named origin/main');
+SELECT dolt_checkout('main');
+SELECT dolt_remote('add','backup','file://$SL/backup_named.db');
+SELECT dolt_push('backup','origin/main');
+.quit
+ENDSQL
+"$DB" "$SL/client.db" <<ENDSQL
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','local');
+SELECT dolt_remote('add','backup','file://$SL/backup_named.db');
+SELECT dolt_fetch('backup','origin/main');
+.quit
+ENDSQL
+result=$("$DB" "$SL/client.db" "SELECT dolt_checkout('origin/main'); SELECT active_branch(); SELECT group_concat(id) FROM t ORDER BY id;")
+check "checkout creates a branch spelled like another remote's ref" "0
+origin/main
+8,9" "$result"
+result=$("$DB" "$SL/client.db" "SELECT dolt_checkout('backup/origin/main');" 2>&1)
+check_match "full tracking ref name is not a new local branch" "detached head" "$result"
+result=$("$DB" "$SL/client.db" "SELECT group_concat(id) FROM dolt_at_t('origin/main'); SELECT count(*) FROM dolt_branches WHERE name='backup/origin/main';")
+check "created branch keeps its commit and the tracking ref stays remote" "8,9
+0" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
