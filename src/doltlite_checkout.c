@@ -375,6 +375,21 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   return rc;
 }
 
+/* Checkout must not create a local branch whose name is a tracking ref.
+** origin/feature/x is that ref; feature/x is the remote's branch name. */
+static int trackingRefNameEquals(
+  const char *zRemote,
+  const char *zBranchName,
+  const char *zName
+){
+  int nRemote;
+  if( !zRemote || !zBranchName || !zName ) return 0;
+  nRemote = (int)strlen(zRemote);
+  if( strncmp(zName, zRemote, (size_t)nRemote)!=0 ) return 0;
+  if( zName[nRemote]!='/' ) return 0;
+  return strcmp(zName + nRemote + 1, zBranchName)==0;
+}
+
 static int checkoutCreateFromRemoteTracking(
   sqlite3 *db,
   const char *zBranch
@@ -386,8 +401,13 @@ static int checkoutCreateFromRemoteTracking(
   int iMatch = -1;
   BranchMutationCtx m;
 
-  if( !cs || strchr(zBranch, '/')!=0 ) return SQLITE_NOTFOUND;
+  if( !cs ) return SQLITE_NOTFOUND;
   refsTableGetTracking(&cs->refs, &nTk, &aTk);
+  for(i=0; i<nTk; i++){
+    if( trackingRefNameEquals(aTk[i].zRemote, aTk[i].zBranch, zBranch) ){
+      return SQLITE_NOTFOUND;
+    }
+  }
   for(i=0; i<nTk; i++){
     if( aTk[i].zBranch && strcmp(aTk[i].zBranch, zBranch)==0 ){
       if( iMatch>=0 ) return SQLITE_NOTFOUND;

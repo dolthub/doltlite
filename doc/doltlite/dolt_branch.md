@@ -47,12 +47,14 @@ Returns `0`. Branch and tag changes are durable immediately, even inside
 
 | Form | Effect |
 |---|---|
-| `branch` | Switch this connection to `branch` and load its working set. A name that exists only as `remotes/origin/<name>` creates the local branch. |
+| `branch` | Switch this connection to `branch` and load its working set. A name that exists only as one remote-tracking branch creates the local branch, including when that name contains `/`. |
 | `-b name [, rev]` | Create and switch. `rev` may come first or last. |
 | `table` | Discard working changes to one table, back to `HEAD` |
 
 Every branch has its own working set, so switching never carries or refuses
-uncommitted work. Checking out a tag or commit is refused:
+uncommitted work. The tracking ref itself (`origin/feature/x`) is not a
+local branch, and two remotes that both track one branch name do not create
+one. Checking out a tag or commit is refused:
 `dolt does not support a detached head state ...`; open the database by
 path instead (`db/v1.0`). Other errors: `branch name required`,
 `no such branch or table: <x>`, `start point not found`.
