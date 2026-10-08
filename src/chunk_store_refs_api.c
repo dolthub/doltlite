@@ -326,7 +326,11 @@ int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const Pro
   if( i<0 ) return SQLITE_NOTFOUND;
   bChanged = prollyHashCompare(&cs->refs.aBranches[i].workingSetHash, pHash)!=0;
   memcpy(&cs->refs.aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
-  csNoteWorkingSetBasis(cs, zBranch, pHash);
+  /* The basis tracks the session's branch; writing another branch's working
+  ** set must not retarget it, or a peer's write to ours goes unnoticed. */
+  if( !cs->bWsBasis || strcmp(cs->zWsBasisBranch, zBranch)==0 ){
+    csNoteWorkingSetBasis(cs, zBranch, pHash);
+  }
   /* Rewriting the hash already there, as a statement over a reloaded peer
   ** working set does, is not a write of ours. */
   if( !bChanged ) return SQLITE_OK;
