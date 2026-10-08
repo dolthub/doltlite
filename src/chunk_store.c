@@ -521,6 +521,11 @@ int chunkStoreOpen(
     }else if( wantReadOnly || (outFlags & SQLITE_OPEN_READONLY) ){
       /* Caller asked, or the VFS silently opened read-only. */
       cs->readOnly = 1;
+    }else if( sqlite3OsDoltliteHasMultipleLinks(cs->file.pFile) ){
+      /* The graph lock is keyed by path and gc replaces the file by rename,
+      ** so writers through another hard link are neither serialized nor
+      ** kept on the same file. */
+      cs->readOnly = 1;
     }
 
     rc = csReadManifest(cs);
@@ -1198,6 +1203,11 @@ static int csDrainPendingToWal(ChunkStore *cs){
                     openFlags, 0);
     if( rc != SQLITE_OK ){
       return (rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM) ? rc : SQLITE_CANTOPEN;
+    }
+    if( sqlite3OsDoltliteHasMultipleLinks(cs->file.pFile) ){
+      sqlite3OsCloseFree(cs->file.pFile);
+      cs->file.pFile = 0;
+      return SQLITE_READONLY;
     }
   }
 

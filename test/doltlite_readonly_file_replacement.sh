@@ -103,4 +103,22 @@ run_test_match "readonly_checkpoint_stays_quiet" "PRAGMA wal_checkpoint;" \
   "^[0-9]+\|" "file:$DB?mode=ro"
 chmod u+w "$DB"; rm -f "$DB"
 
+# The graph lock is keyed by path, so writers through two hard links would not
+# serialize; a multiply-linked file opens read-only.
+mkdir -p "$ROOT/ha" "$ROOT/hb"
+DB="$ROOT/ha/db"
+seed_db "$DB"
+ln "$DB" "$ROOT/hb/db"
+run_test_error_match "hardlinked_refuses_write" \
+  "INSERT INTO t VALUES(2,'a');" "readonly" "$DB"
+run_test_error_match "hardlinked_other_name_refuses_write" \
+  "INSERT INTO t VALUES(3,'b');" "readonly" "$ROOT/hb/db"
+run_test_error_match "hardlinked_refuses_vc_write" \
+  "SELECT dolt_branch('x');" "readonly" "$ROOT/hb/db"
+run_test "hardlinked_still_reads" "SELECT group_concat(b) FROM t;" "kept" "$ROOT/hb/db"
+rm -f "$ROOT/hb/db"
+run_test "unlinked_writes_again" \
+  "INSERT INTO t VALUES(4,'c'); SELECT count(*) FROM t;" "2" "$DB"
+rm -rf "$ROOT/ha" "$ROOT/hb"
+
 dltest_finish
