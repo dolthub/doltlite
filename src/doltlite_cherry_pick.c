@@ -61,6 +61,8 @@ struct ApplyAbortRefsCtx {
   const char *zBranch;
   const ProllyHash *pExpectedHead;
   const ProllyHash *pCatalog;
+  const ProllyHash *pWsBasis;
+  int bPeerWrote;
 };
 
 static int applyAbortRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
@@ -70,6 +72,14 @@ static int applyAbortRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   rc = chunkStoreFindBranch(cs, p->zBranch, &head);
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashCompare(&head, p->pExpectedHead)!=0 ) return SQLITE_OK;
+  /* A peer published the working set since this op began; it is on disk and
+  ** restoring ours over it would erase it. */
+  rc = doltliteBranchWorkingSetUnmoved(cs, p->zBranch, p->pWsBasis);
+  if( rc==SQLITE_BUSY ){
+    p->bPeerWrote = 1;
+    return SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) return rc;
   return doltliteUpdateBranchWorkingState(
       db, p->zBranch, p->pCatalog, p->pExpectedHead);
 }
@@ -79,6 +89,7 @@ static int applyRestoreOriginalBranch(
   const char *zBranch,
   const ProllyHash *pHead,
   const ProllyHash *pCatalog,
+  const ProllyHash *pWsBasis,
   int opRc
 ){
   ApplyAbortRefsCtx ctx;
@@ -87,8 +98,13 @@ static int applyRestoreOriginalBranch(
   ctx.zBranch = zBranch;
   ctx.pExpectedHead = pHead;
   ctx.pCatalog = pCatalog;
+  ctx.pWsBasis = pWsBasis;
   rc = doltliteMutateRefs(db, applyAbortRefs, &ctx);
-  if( db->autoCommit ) doltliteAdoptRollbackBaseline(db, pCatalog);
+  if( ctx.bPeerWrote ){
+    doltliteInvalidateSessionWorkingState(db);
+  }else if( db->autoCommit ){
+    doltliteAdoptRollbackBaseline(db, pCatalog);
+  }
   return rc==SQLITE_OK ? opRc : rc;
 }
 
@@ -296,6 +312,7 @@ int applyMergedCatalogAndCommit(
   int commitSplit = 0;
   ProllyHash commitHash;
   ProllyHash cleanWorkingSet;
+  ProllyHash wsBasis;
   char *zMergeErr = 0;
   int graphLocked = 0;
   const char *zOpLabel;
@@ -315,17 +332,19 @@ int applyMergedCatalogAndCommit(
   if( !doltliteGetSessionRebaseFlags(db) ){
     doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
   }
+  memset(&wsBasis, 0, sizeof(wsBasis));
+  if( cs ) chunkStorePeekWorkingSetBasis(cs, zBranch, &wsBasis);
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ){
     return applyRestoreOriginalBranch(
-        db, zBranch, ourHead, ourCatHash, rc);
+        db, zBranch, ourHead, ourCatHash, &wsBasis, rc);
   }
 
   rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ){
     return applyRestoreOriginalBranch(
-        db, zBranch, ourHead, ourCatHash, rc);
+        db, zBranch, ourHead, ourCatHash, &wsBasis, rc);
   }
 
   {

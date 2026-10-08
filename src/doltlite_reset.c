@@ -701,6 +701,15 @@ static void doltliteResetFunc(
       azPaths = 0;
       goto reset_cleanup;
     }
+    if( !db->autoCommit ){
+      rc = doltliteEnsureWriteTxnAndSavepoints(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(azPaths);
+        azPaths = 0;
+        sqlite3_result_error_code(context, rc);
+        goto reset_cleanup;
+      }
+    }
     rc = resetStageNamedPaths(db, cs, azPaths, nPaths);
     sqlite3_free(azPaths);
     azPaths = 0;

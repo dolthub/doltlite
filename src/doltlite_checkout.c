@@ -856,6 +856,10 @@ int doltliteCheckoutTables(
       return doltliteCheckoutDot(db, context, zSourceRef, pzMissing);
     }
   }
+  rc = db->autoCommit ? SQLITE_OK : doltliteEnsureWriteTxnAndSavepoints(db);
+  /* The dispatcher's refresh consumed the store-changed signal. */
+  if( rc==SQLITE_BUSY_SNAPSHOT ) doltliteInvalidateSessionWorkingState(db);
+  if( rc!=SQLITE_OK ) return rc;
   doltliteGetSessionWorkingSetBasis(db, &cleanWs);
 
   if( zSourceRef ){
