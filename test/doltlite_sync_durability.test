@@ -1,0 +1,54 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_sync_durability
+
+if {$::tcl_platform(platform) ne "unix"} {
+  finish_test
+  return
+}
+
+proc first_write_syncs {fresh} {
+  db close
+  forcedelete test.db
+  if {!$fresh} {
+    sqlite3 db test.db
+    db eval {CREATE TABLE u(x)}
+    db close
+  }
+  set ::sqlite_sync_count 0
+  sqlite3 db test.db
+  db eval {CREATE TABLE t(x)}
+  set ::sqlite_sync_count
+}
+
+# Creating the file costs its seeding commit's sync plus one directory sync:
+# a new database has no journal sidecar to sync its directory entry.
+do_test 1.0 {
+  expr {[first_write_syncs 1] - [first_write_syncs 0]}
+} {2}
+
+proc gc_fullsyncs {fullfsync} {
+  reset_db
+  db eval "PRAGMA fullfsync=$fullfsync"
+  db eval {
+    CREATE TABLE t(x);
+    INSERT INTO t VALUES(randomblob(2000));
+    SELECT dolt_commit('-Am','c1');
+    DELETE FROM t;
+    SELECT dolt_commit('-Am','c2');
+  }
+  set ::sqlite_fullsync_count 0
+  db eval {SELECT dolt_gc()}
+  set ::sqlite_fullsync_count
+}
+
+# The compacted file replaces the database by rename; with fullfsync on, its
+# contents must reach stable storage with a full sync before that rename.
+do_test 2.0 {
+  expr {[gc_fullsyncs 1] > 0}
+} {1}
+do_test 2.1 {
+  gc_fullsyncs 0
+} {0}
+
+finish_test

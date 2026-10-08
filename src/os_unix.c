@@ -4384,6 +4384,15 @@ int sqlite3OsDoltliteHasMultipleLinks(sqlite3_file *id){
   }
   return (((unixFile*)id)->ctrlFlags & UNIXFILE_MULTILINK)!=0;
 }
+
+void sqlite3OsDoltliteRequestDirSync(sqlite3_file *id){
+  if( id==0 || id->pMethods==0
+   || id->pMethods->xFileControl!=unixFileControl
+  ){
+    return;
+  }
+  ((unixFile*)id)->ctrlFlags |= UNIXFILE_DIRSYNC;
+}
 #endif
 
 /*

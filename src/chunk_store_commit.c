@@ -146,6 +146,9 @@ static int csCommitResolveAppendPoint(
     if( rc != SQLITE_OK ){
       return (rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM) ? rc : SQLITE_CANTOPEN;
     }
+    /* No journal sidecar syncs this directory for us; without it a new
+    ** database can vanish after power loss despite acknowledged commits. */
+    sqlite3OsDoltliteRequestDirSync(cs->file.pFile);
   }
 
   if( !lockHeld ){

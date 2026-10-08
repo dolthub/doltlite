@@ -1387,7 +1387,8 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
       rc = sqlite3OsTruncate(pTmp, fileSize);
     }
     if( rc == SQLITE_OK ){
-      rc = sqlite3OsSync(pTmp, SQLITE_SYNC_NORMAL);
+      rc = sqlite3OsSync(pTmp,
+          destCs->fullFsync ? SQLITE_SYNC_FULL : SQLITE_SYNC_NORMAL);
     }
     if( pTmp ){
       sqlite3OsClose(pTmp);

@@ -525,4 +525,8 @@ int sqlite3OsDoltliteHasMultipleLinks(sqlite3_file *id){
   UNUSED_PARAMETER(id);
   return 0;
 }
+
+void sqlite3OsDoltliteRequestDirSync(sqlite3_file *id){
+  UNUSED_PARAMETER(id);
+}
 #endif

@@ -1209,6 +1209,7 @@ static int csDrainPendingToWal(ChunkStore *cs){
       cs->file.pFile = 0;
       return SQLITE_READONLY;
     }
+    sqlite3OsDoltliteRequestDirSync(cs->file.pFile);
   }
 
   if( cs->staging.nRecentUncommitted==0 ){
