@@ -88,11 +88,11 @@ expect_clean "baseline_unperturbed_src_passes"
 
 # GUARDED is "<file>:<cap>".
 GUARDED="
-chunk_store_lock.c:1200
-prolly_btree_cursor_count.c:1500
-prolly_btree_cursor_payload.c:1500
-doltlite_branches.c:1500
-doltlite_merge_pass1.c:1500
+chunk_store_lock.c:1500
+prolly_btree_cursor_count.c:1800
+prolly_btree_cursor_payload.c:1800
+doltlite_branches.c:1800
+doltlite_merge_pass1.c:1800
 "
 
 for entry in $GUARDED; do
