@@ -136,4 +136,74 @@ run_test "detached_head_branch_intact_after_gc" "SELECT count(*) FROM t;" "1" "$
 
 db_rm "$DB"
 
+TASK_TMP=$(mktemp -d)
+trap 'rm -rf "$TASK_TMP"' EXIT
+for maintenance in vacuum gc; do
+  case "$maintenance" in
+    vacuum) stmt="VACUUM;" ;;
+    gc) stmt="SELECT dolt_gc();" ;;
+  esac
+  for peer in conn proc; do
+    for target in default head; do
+      for txn in autocommit begin savepoint; do
+        case "$txn" in
+          autocommit) begin=""; finish="" ;;
+          begin) begin="BEGIN;"; finish="COMMIT;" ;;
+          savepoint) begin="SAVEPOINT s;"; finish="" ;;
+        esac
+        DB="$TASK_TMP/${maintenance}_${peer}_${target}_${txn}.db"
+        if [ "$target" = head ]; then
+          reset="SELECT dolt_reset('--hard','HEAD');"
+        else
+          reset="SELECT dolt_reset('--hard');"
+        fi
+        if [ "$peer" = conn ]; then
+          compact=".connection 0
+$stmt"
+        else
+          compact=".shell $DOLTLITE $DB \"$stmt\""
+        fi
+        out=$(dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','init');
+.connection 1
+.open $DB
+.connection 2
+.open $DB
+.connection 1
+INSERT INTO t VALUES(2,'b');
+.connection 2
+SELECT dolt_add('.');
+.connection 1
+SELECT dolt_reset('--hard');
+$compact
+.connection 2
+$begin
+$reset
+INSERT INTO t VALUES(3,'c');
+$finish
+.connection 3
+.open $DB
+SELECT 'fresh',group_concat(id,',') FROM t;
+PRAGMA integrity_check;
+SELECT 'staged',count(*) FROM dolt_status WHERE staged=1;
+SELECT 'add',dolt_add('.');
+PRAGMA integrity_check;
+" "$DB")
+        case "$out" in
+          *Error*|*"integrity check failed"*)
+            dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out" ;;
+          *$'fresh|1,3\nok\nstaged|0\nadd|0\nok') dltest_pass ;;
+          *) dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out" ;;
+        esac
+        run_test "stale_reset_${maintenance}_${peer}_${target}_${txn}_reopen" \
+          "PRAGMA integrity_check; SELECT id,v FROM t ORDER BY id;
+           SELECT count(*) FROM dolt_status WHERE staged=1;" \
+          $'ok\n1|a\n3|c\n1' "$DB"
+      done
+    done
+  done
+done
+
 dltest_finish

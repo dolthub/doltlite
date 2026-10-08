@@ -2752,6 +2752,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     return rc;
   }
 
+  pBtree->bMasterRootChangedTxn = 1;
   pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
   btreeBumpLocalDataVersion(pBtree);
 
