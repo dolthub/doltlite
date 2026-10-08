@@ -744,7 +744,11 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         chunkStoreUnlock(&pBt->store);
         return rc;
       }
-      if( bChanged ){
+      /* A VC command's refresh consumes the external-change signal; a
+      ** peer-moved working set still means the snapshot is stale. */
+      if( bChanged
+       || chunkStoreWorkingSetMovedFromBasis(&pBt->store,
+                                             p->zBranch ? p->zBranch : "main") ){
         chunkStoreUnlock(&pBt->store);
         return SQLITE_BUSY_SNAPSHOT;
       }

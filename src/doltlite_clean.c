@@ -292,6 +292,12 @@ static void doltliteCleanFunc(
   }
 
   if( !dryRun ){
+    /* A transaction that has only read holds a snapshot, not the graph
+    ** lock; persisting from it would overwrite a later peer commit. */
+    if( !db->autoCommit ){
+      rc = doltliteEnsureWriteTxnAndSavepoints(db);
+      if( rc!=SQLITE_OK ) goto clean_error;
+    }
     rc = cleanDropTables(db, &untracked);
     if( rc!=SQLITE_OK ) goto clean_error;
     rc = doltlitePersistWorkingSet(db);
