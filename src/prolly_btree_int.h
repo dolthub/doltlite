@@ -775,7 +775,8 @@ int mergeLast(BtCursor *pCur, int *pRes);
 int mergeScan(BtCursor *pCur, int dir, int *pRes);
 static SQLITE_INLINE int prollyCursorCheckInterrupt(BtCursor *pCur){
   sqlite3 *db = pCur && pCur->pBtree ? pCur->pBtree->db : 0;
-  if( db && AtomicLoad(&db->u1.isInterrupted) ){
+  if( db && AtomicLoad(&db->u1.isInterrupted)
+   && !doltliteVcInterruptDeferred(db, 0) ){
     return SQLITE_INTERRUPT;
   }
   return SQLITE_OK;
@@ -785,6 +786,7 @@ int orderedMutMapEntryAt(ProllyMutMap*, int, ProllyMutMapEntry**);
 int unpackedRecordCanUseIntSortKey(BtCursor*, UnpackedRecord*, int);
 int sortKeyFromUnpackedIntRecordBuffer(UnpackedRecord*, int, const KeyInfo*, u8**, int*, int*);
 int prollyInvokeBusyHandler(void*);
+void doltliteVcCommandInstalled(sqlite3*);
 ChunkStore *doltliteGetChunkStore(sqlite3*);
 ChunkStore *doltliteBtreeChunkStore(Btree*);
 void doltliteBtreeBackupStart(Btree*);

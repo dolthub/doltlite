@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
+#include "vdbeInt.h"
 #include "prolly_hash.h"
 #include "prolly_hashset.h"
 #include "chunk_store.h"
@@ -838,10 +839,12 @@ static int commitCatalogIsPristine(
   return rc;
 }
 
-static void doltliteCommitFunc(
+static void doltliteCommitFuncImpl(
   sqlite3_context *context,
   int argc,
-  sqlite3_value **argv
+  sqlite3_value **argv,
+  ProllyHash *pSavedStaged,
+  int *pDidStage
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -986,6 +989,11 @@ static void doltliteCommitFunc(
       sqlite3_result_error_code(context, rc);
       return;
     }
+  }
+
+  if( addAll || addModifiedOnly ){
+    doltliteGetSessionStaged(db, pSavedStaged);
+    *pDidStage = 1;
   }
 
   if( addAll ){
@@ -1196,6 +1204,23 @@ static void doltliteCommitFunc(
   sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
 }
 
+
+static void doltliteCommitFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ProllyHash savedStaged;
+  int didStage = 0;
+  doltliteCommitFuncImpl(context, argc, argv, &savedStaged, &didStage);
+  if( didStage && !doltliteVcInterruptDeferred(db, 0)
+   && (context->isError==SQLITE_INTERRUPT
+       || AtomicLoad(&db->u1.isInterrupted)) ){
+    int rc = doltliteSetSessionStaged(db, &savedStaged);
+    sqlite3_result_error_code(context, rc==SQLITE_OK ? SQLITE_INTERRUPT : rc);
+  }
+}
 
 int doltliteCommitCmdRegister(sqlite3 *db){
   return doltliteCreateCommandFunc(db, "dolt_commit", -1,

@@ -1,0 +1,83 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc vc_interrupt_snapshot {handle} {
+  $handle eval {
+    SELECT dolt_hashof('HEAD');
+    SELECT active_branch();
+    SELECT name,hash FROM dolt_branches ORDER BY name;
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged;
+    SELECT id,v FROM t ORDER BY id;
+  }
+}
+
+foreach op {commit checkout} {
+  set interrupted 0
+  for {set tick 1} {$tick<=1000} {incr tick} {
+    reset_db
+    db eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,v);
+      INSERT INTO t VALUES(1,1);
+      SELECT dolt_commit('-Am','init');
+      SELECT dolt_branch('f');
+      INSERT INTO t VALUES(2,2);
+    }
+    set before [vc_interrupt_snapshot db]
+    set ::vc_interrupt_ticks 0
+    db progress 1 {expr {[incr ::vc_interrupt_ticks]==$tick}}
+    if {$op eq "commit"} {
+      set failed [catch {db eval {SELECT dolt_commit('-Am','c2')}}]
+    } else {
+      set failed [catch {db eval {SELECT dolt_checkout('f')}}]
+    }
+    set code [sqlite3_errcode db]
+    db progress 0 {}
+    set prefix vc-interrupt-$op-$tick
+    if {$failed} {
+      incr interrupted
+      do_test $prefix.code {set code} SQLITE_INTERRUPT
+      do_test $prefix.live {vc_interrupt_snapshot db} $before
+      sqlite3 observer test.db
+      do_test $prefix.durable {vc_interrupt_snapshot observer} $before
+      observer close
+      db eval {INSERT INTO t VALUES(3,3)}
+      do_test $prefix.no-staging {
+        db one {SELECT count(*) FROM dolt_status WHERE staged}
+      } 0
+    } else {
+      do_test $prefix.success {
+        list [db one {SELECT active_branch()}] \
+             [db one {SELECT count(*) FROM t}] \
+             [db one {SELECT count(*) FROM dolt_status}]
+      } [expr {$op eq "commit" ? [list main 2 0] : [list f 1 0]}]
+    }
+    if {$::vc_interrupt_ticks<$tick} break
+  }
+  do_test vc-interrupt-$op.cancellable {expr {$interrupted>0}} 1
+  do_test vc-interrupt-$op.terminates {expr {$tick<=1000}} 1
+}
+
+reset_db
+db eval {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1)}
+set stmt [sqlite3_prepare_v2 db {SELECT dolt_add('-A')} -1 tail]
+do_test vc-interrupt.reuse-first {sqlite3_step $stmt} SQLITE_ROW
+do_test vc-interrupt.reuse-finish {sqlite3_step $stmt} SQLITE_DONE
+sqlite3_reset $stmt
+set ::vc_interrupt_ticks 0
+db progress 1 {expr {[incr ::vc_interrupt_ticks]==1}}
+do_test vc-interrupt.reuse-cancel {sqlite3_step $stmt} SQLITE_INTERRUPT
+db progress 0 {}
+sqlite3_finalize $stmt
+
+set stmt [sqlite3_prepare_v2 db {
+  WITH RECURSIVE r(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM r WHERE x<100)
+  SELECT dolt_add('-A') FROM r
+} -1 tail]
+do_test vc-interrupt.rows-first {sqlite3_step $stmt} SQLITE_ROW
+set ::vc_interrupt_ticks 0
+db progress 1 {expr {[incr ::vc_interrupt_ticks]==1}}
+do_test vc-interrupt.rows-cancel {sqlite3_step $stmt} SQLITE_INTERRUPT
+db progress 0 {}
+sqlite3_finalize $stmt
+
+finish_test

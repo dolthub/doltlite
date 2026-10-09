@@ -2631,6 +2631,9 @@ void sqlite3VdbeRewind(Vdbe *p){
   p->cacheCtr = 1;
   p->minWriteFileFormat = 255;
   p->iStatement = 0;
+#ifdef DOLTLITE_PROLLY
+  p->vcInstalled = 0;
+#endif
   p->nFkConstraint = 0;
 #ifdef VDBE_PROFILE
   for(i=0; i<p->nOp; i++){

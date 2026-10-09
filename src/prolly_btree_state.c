@@ -1439,7 +1439,11 @@ int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCat
   if( p && !prollyHashIsEmpty(&p->vc.conflictsCatalogHash) ) return SQLITE_OK;
   rc = chunkStoreSerializeRefs(cs);
   if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreCommitWithBusyHandler(cs, prollyInvokeBusyHandler, p->pBt);
+  if( AtomicLoad(&db->u1.isInterrupted)
+   && !doltliteVcInterruptDeferred(db, 0) ) return SQLITE_INTERRUPT;
+  rc = chunkStoreCommitWithBusyHandler(cs, prollyInvokeBusyHandler, p->pBt);
+  if( rc==SQLITE_OK ) doltliteVcCommandInstalled(db);
+  return rc;
 }
 
 int doltlitePersistWorkingSet(sqlite3 *db){

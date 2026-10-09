@@ -217,6 +217,9 @@ void sqlite3ErrorWithMsg(sqlite3 *db, int err_code, const char *zFormat, ...){
 */
 void sqlite3ProgressCheck(Parse *p){
   sqlite3 *db = p->db;
+#ifdef DOLTLITE_PROLLY
+  if( doltliteVcInterruptDeferred(db, 0) ) return;
+#endif
   if( AtomicLoad(&db->u1.isInterrupted) ){
     p->nErr++;
     p->rc = SQLITE_INTERRUPT;
@@ -227,6 +230,9 @@ void sqlite3ProgressCheck(Parse *p){
       p->nProgressSteps = 0;
     }else if( (++p->nProgressSteps)>=db->nProgressOps ){
       if( db->xProgress(db->pProgressArg) ){
+#ifdef DOLTLITE_PROLLY
+        if( db->pVcCommand ) AtomicStore(&db->u1.isInterrupted, 1);
+#endif
         p->nErr++;
         p->rc = SQLITE_INTERRUPT;
       }
