@@ -90,6 +90,7 @@ doltlite_open_head
 doltlite_commit_peer_refresh
 doltlite_checkout_peer_retry
 doltlite_commit_ioerr
+doltlite_failed_commit_rollback
 doltlite_reload_uncommitted_recent
 doltlite_recover_cacheflush_oom
 doltlite_rebase_messages
