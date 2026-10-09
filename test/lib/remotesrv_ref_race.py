@@ -42,7 +42,8 @@ def main():
                 data = response.read()
                 if self.command == "GET" and self.path.endswith("/refs") and state["sql"]:
                     state["reads"] += 1
-                    sql(server_db, state["sql"].replace("@READ@", str(state["reads"])))
+                    peer_sql = state["sql"].replace("@READ@", str(state["reads"]))
+                    sql(server_db, "PRAGMA busy_timeout=5000; " + peer_sql)
                     if state["once"]:
                         state["sql"] = None
                 self.send_response(response.status)
