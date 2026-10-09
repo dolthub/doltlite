@@ -94,4 +94,64 @@ foreach {name op} {
   peer close
 }
 
+foreach {name op} {
+  tag {SELECT dolt_tag('v1')}
+  create {SELECT dolt_branch('x')}
+  delete {SELECT dolt_branch('-d','b1')}
+} {
+  foreach {mutation sql expected} {
+    delete {DELETE FROM t WHERE id=2} {1 a 3 c}
+    update {UPDATE t SET v='peer' WHERE id=2} {1 a 2 peer 3 c}
+    insert {INSERT INTO t VALUES(4,'peer')} {1 a 2 b 3 c 4 peer}
+  } {
+    foreach staged {0 1} {
+      set prefix ref-snapshot-autocommit-$name.$mutation.$staged
+      reset_db
+      db eval {
+        CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+        CREATE INDEX t_v ON t(v);
+        INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+        SELECT dolt_commit('-Am','seed');
+        SELECT dolt_branch('b1');
+      }
+      set head [db one {SELECT dolt_hashof('HEAD')}]
+      sqlite3 peer test.db
+      peer eval $sql
+      if {$staged} {peer eval {SELECT dolt_add('t')}}
+      do_test $prefix.operation {db eval $op} {0}
+      do_execsql_test $prefix.first-read {
+        SELECT id,v FROM t ORDER BY id;
+      } $expected
+      do_execsql_test $prefix.second-read {
+        SELECT id,v FROM t INDEXED BY t_v ORDER BY id;
+      } $expected
+      do_execsql_test $prefix.status {
+        SELECT staged,status FROM dolt_status;
+      } [list $staged modified]
+      do_test $prefix.commit {
+        set result [catchsql {SELECT dolt_commit('-Am','peer change')}]
+        expr {[lindex $result 0]==0
+           && [regexp {^[0-9a-f]{40}$} [lindex $result 1]]}
+      } 1
+      do_test $prefix.parent {
+        expr {[db one {SELECT dolt_hashof('HEAD~1')}] eq $head}
+      } 1
+      do_test $prefix.peer {
+        peer eval {SELECT id,v FROM t ORDER BY id; SELECT count(*) FROM dolt_status}
+      } [concat $expected 0]
+      sqlite3 observer test.db
+      do_test $prefix.observer {
+        observer eval {
+          SELECT id,v FROM t ORDER BY id;
+          SELECT message FROM dolt_log LIMIT 1;
+          SELECT count(*) FROM dolt_status;
+          PRAGMA integrity_check;
+        }
+      } [concat $expected [list {peer change} 0 ok]]
+      observer close
+      peer close
+    }
+  }
+}
+
 finish_test
