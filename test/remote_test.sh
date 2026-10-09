@@ -1814,6 +1814,76 @@ result=$("$DB" "$PF/b.db" \
   "SELECT latest_commit_message FROM dolt_remote_branches WHERE name='remotes/origin/f';")
 check "later bare pull keeps the other tracking branch" "f3" "$result"
 
+echo "=== Clone without main or master checks out the first branch by name ==="
+CB="$TMPDIR/clone_alpha"
+mkdir -p "$CB"
+"$DB" "$CB/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('zeta');
+SELECT dolt_branch('alpha');
+SELECT dolt_remote('add','origin','file://$CB/remote.db');
+SELECT dolt_push('origin','zeta');
+SELECT dolt_push('origin','alpha');
+ENDSQL
+"$DB" "$CB/b.db" "SELECT dolt_clone('file://$CB/remote.db');" >/dev/null
+result=$("$DB" "$CB/b.db" "SELECT active_branch(); SELECT dolt_default_branch();")
+check "clone checks out the branch that sorts first" "alpha
+alpha" "$result"
+result=$("$DB" "$CB/remote.db" "SELECT active_branch(); SELECT dolt_default_branch();")
+check "remote opens on the branch that sorts first" "alpha
+alpha" "$result"
+result=$("$DB" "$CB/b.db" "SELECT name FROM dolt_branches ORDER BY name;")
+check "clone keeps only that branch locally" "alpha" "$result"
+result=$("$DB" "$CB/b.db" "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "clone still tracks every pushed branch" "remotes/origin/alpha
+remotes/origin/zeta" "$result"
+
+"$DB" "$CB/a.db" <<ENDSQL >/dev/null
+SELECT dolt_branch('gamma');
+SELECT dolt_push('origin','gamma');
+ENDSQL
+result=$("$DB" "$CB/remote.db" "SELECT dolt_default_branch();")
+check "a later name does not replace the first" "alpha" "$result"
+
+"$DB" "$CB/d.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('zeta');
+SELECT dolt_branch('alpha');
+SELECT dolt_remote('add','origin','file://$CB/remote2.db');
+SELECT dolt_push('origin','zeta');
+SELECT dolt_push('origin','alpha');
+ENDSQL
+"$DB" "$CB/remote2.db" "SELECT dolt_default_branch('zeta');" >/dev/null
+"$DB" "$CB/d.db" "SELECT dolt_branch('mmm'); SELECT dolt_push('origin','mmm');" >/dev/null
+result=$("$DB" "$CB/e.db" "SELECT dolt_clone('file://$CB/remote2.db'); SELECT active_branch();")
+check "an explicit default survives a later push" "0
+zeta" "$result"
+
+"$DB" "$CB/f.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('zeta');
+SELECT dolt_remote('add','origin','file://$CB/remote3.db');
+SELECT dolt_push('origin','zeta');
+ENDSQL
+"$DB" "$CB/remote3.db" "SELECT dolt_default_branch('zeta');" >/dev/null
+"$DB" "$CB/f.db" "SELECT dolt_branch('mmm'); SELECT dolt_push('origin','mmm');" >/dev/null
+result=$("$DB" "$CB/g.db" "SELECT dolt_clone('file://$CB/remote3.db'); SELECT active_branch(); SELECT dolt_default_branch();")
+check "explicit default on the only branch survives an earlier name" "0
+zeta
+zeta" "$result"
+result=$("$DB" "$CB/remote3.db" "SELECT active_branch(); SELECT dolt_default_branch();")
+check "source remote keeps an explicit default" "zeta
+zeta" "$result"
+"$DB" "$CB/f.db" "SELECT dolt_push('origin','main');" >/dev/null
+result=$("$DB" "$CB/remote3.db" "SELECT dolt_default_branch();")
+check "creating main still replaces an explicit default" "main" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

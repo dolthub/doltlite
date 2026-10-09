@@ -322,6 +322,7 @@ void csFreeRefsState(ChunkStore *cs){
   csFreeSequences(cs);
   sqlite3_free(cs->refs.zDefaultBranch);
   cs->refs.zDefaultBranch = 0;
+  cs->refs.bDefaultExplicit = 0;
 }
 
 int csEnsureDefaultBranch(ChunkStore *cs){
@@ -454,6 +455,12 @@ int csDecodeRefsV7(
       pRefs ? &pRefs->zDefaultBranch : 0,
       &pDefaultBranch, &nDefaultBranch);
   if( rc!=SQLITE_OK ) return rc;
+  /* A trailing 0 marks an explicit dolt_default_branch. The branch entry
+  ** carries the same byte, so the name match below still holds. */
+  if( pRefs ){
+    pRefs->bDefaultExplicit = nDefaultBranch>0
+        && pDefaultBranch[nDefaultBranch-1]==0;
+  }
 
   rc = refsReadCount(&reader, 4 + 2*PROLLY_HASH_SIZE, &nBranches);
   if( rc!=SQLITE_OK ) return rc;
@@ -885,9 +892,13 @@ int csMergeSavedRefsOntoDisk(
     const char *zL = pLocal->zDefaultBranch;
     const char *zB = pBase->zDefaultBranch;
     const char *zD = cs->refs.zDefaultBranch;
-    if( !refsMergeStrEqual(zL, zB)
-     && !refsMergeStrEqual(zD, zB)
-     && !refsMergeStrEqual(zD, zL) ){
+    int localMoved = !refsMergeStrEqual(zL, zB)
+                  || pLocal->bDefaultExplicit!=pBase->bDefaultExplicit;
+    int diskMoved = !refsMergeStrEqual(zD, zB)
+                 || cs->refs.bDefaultExplicit!=pBase->bDefaultExplicit;
+    if( localMoved && diskMoved
+     && (!refsMergeStrEqual(zD, zL)
+         || cs->refs.bDefaultExplicit!=pLocal->bDefaultExplicit) ){
       return SQLITE_BUSY_SNAPSHOT;
     }
   }
@@ -905,6 +916,9 @@ int csMergeSavedRefsOntoDisk(
     if( !zDup ) return SQLITE_NOMEM;
     sqlite3_free(cs->refs.zDefaultBranch);
     cs->refs.zDefaultBranch = zDup;
+  }
+  if( pLocal->bDefaultExplicit!=pBase->bDefaultExplicit ){
+    cs->refs.bDefaultExplicit = pLocal->bDefaultExplicit;
   }
 
   /* Isolated category merges can still pair a new default with a deleted

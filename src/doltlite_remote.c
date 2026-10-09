@@ -873,9 +873,21 @@ static int remoteRefsHaveBranch(const RefsTable *rt, const char *zName){
   return 0;
 }
 
+/* True when no existing branch name sorts before zDefault. */
+static int remoteDefaultIsFirstName(const RefsTable *rt, const char *zDefault){
+  int n = 0, i;
+  const BranchRef *a = 0;
+  refsTableGetBranches(rt, &n, &a);
+  for(i=0; i<n; i++){
+    if( strcmp(a[i].zName, zDefault)<0 ) return 0;
+  }
+  return 1;
+}
+
 /* The default a push leaves on the remote. An empty remote adopts the pushed
-** branch; a newly created main, or master while there is no main, takes over
-** as Dolt's clone would choose it. */
+** branch. A newly created main, or master while there is no main, takes over.
+** With neither, a new branch that sorts first takes over when the current
+** default is already the first name and dolt_default_branch did not choose it. */
 static const char *remotePushedDefault(
   const RefsTable *pCur,
   const char *zBranch,
@@ -887,6 +899,14 @@ static const char *remotePushedDefault(
   if( strcmp(zBranch, "main")==0 ) return zBranch;
   if( strcmp(zBranch, "master")==0 && strcmp(zDefault, "main")!=0
    && !remoteRefsHaveBranch(pCur, "main") ){
+    return zBranch;
+  }
+  if( strcmp(zDefault, "main")!=0 && strcmp(zDefault, "master")!=0
+   && !remoteRefsHaveBranch(pCur, "main")
+   && !remoteRefsHaveBranch(pCur, "master")
+   && !pCur->bDefaultExplicit
+   && remoteDefaultIsFirstName(pCur, zDefault)
+   && strcmp(zBranch, zDefault)<0 ){
     return zBranch;
   }
   return zDefault;
@@ -1311,12 +1331,20 @@ int doltliteValidateScopedRefsUpdate(
   }
 
   /* Push may repoint the default branch (clone checkout / GET /root) only
-  ** as remotePushedDefault allows. */
-  if( !scopedSameText(scopedDefaultBranch(&inc.refs),
-                      remotePushedDefault(&pStore->refs, zRef,
-                          !bDelete && !remoteRefsHaveBranch(&pStore->refs, zRef))) ){
-    rc = SQLITE_CONSTRAINT;
-    goto done;
+  ** as remotePushedDefault allows. An explicit choice stays until that rule
+  ** changes the name. */
+  {
+    const char *zAllowed = remotePushedDefault(&pStore->refs, zRef,
+        !bDelete && !remoteRefsHaveBranch(&pStore->refs, zRef));
+    int bExplicit = pStore->refs.bDefaultExplicit;
+    if( !scopedSameText(zAllowed, scopedDefaultBranch(&pStore->refs)) ){
+      bExplicit = 0;
+    }
+    if( !scopedSameText(scopedDefaultBranch(&inc.refs), zAllowed)
+     || inc.refs.bDefaultExplicit!=bExplicit ){
+      rc = SQLITE_CONSTRAINT;
+      goto done;
+    }
   }
 
   /* Declared branch may be created; an existing one must fast-forward unless forced. */
@@ -1537,10 +1565,12 @@ int doltlitePushAs(
       pLocalSrc->xClose(pLocalSrc);
       if( rc!=SQLITE_OK ) goto push_done;
       {
+        const char *zCur = scopedDefaultBranch(&refs.refs);
         const char *zNewDefault =
             remotePushedDefault(&refs.refs, zBranch, !exists);
-        if( !scopedSameText(zNewDefault, scopedDefaultBranch(&refs.refs)) ){
+        if( !scopedSameText(zNewDefault, zCur) ){
           rc = chunkStoreSetDefaultBranch(&refs, zNewDefault);
+          if( rc==SQLITE_OK ) refs.refs.bDefaultExplicit = 0;
         }
       }
       if( rc==SQLITE_OK ){
