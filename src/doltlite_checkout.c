@@ -1397,7 +1397,8 @@ static void doltCheckoutParsedFunc(
   rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zCurrentBranch);
-    doltliteVcResultError(ctx, db, "failed to snapshot current branch state");
+    doltliteVcResultErrorCode(ctx, db,
+        "failed to snapshot current branch state", rc);
     return;
   }
   m.haveOldState = 1;
@@ -1430,7 +1431,8 @@ static void doltCheckoutParsedFunc(
       rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zCurrentBranch);
-        doltliteVcResultError(ctx, db, "failed to snapshot current branch state");
+        doltliteVcResultErrorCode(ctx, db,
+            "failed to snapshot current branch state", rc);
         return;
       }
       m.haveOldState = 1;

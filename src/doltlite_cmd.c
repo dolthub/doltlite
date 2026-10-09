@@ -32,6 +32,17 @@ static void doltliteCommandFuncShield(
   doltliteAuthShieldEnter(sqlite3_context_db_handle(ctx), &shield);
   xFunc(ctx, argc, argv);
   doltliteAuthShieldLeave(&shield);
+  /* SQLITE_NOTFOUND is the store's internal "no such chunk"; one that escapes
+  ** a command is a chunk the database should hold. A host chunk source may
+  ** report NOTFOUND by contract. */
+  if( ctx->isError==SQLITE_NOTFOUND
+   && !doltliteChunkSourceActive(sqlite3_context_db_handle(ctx)) ){
+    const char *zMsg = (const char*)sqlite3_value_text(ctx->pOut);
+    if( !zMsg || strcmp(zMsg, sqlite3ErrStr(SQLITE_NOTFOUND))==0 ){
+      sqlite3_result_error(ctx, sqlite3ErrStr(SQLITE_CORRUPT), -1);
+    }
+    sqlite3_result_error_code(ctx, SQLITE_CORRUPT);
+  }
 }
 
 int doltliteCreateShieldedFunc(
