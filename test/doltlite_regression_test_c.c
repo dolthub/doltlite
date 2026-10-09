@@ -1568,12 +1568,15 @@ typedef struct FailFile FailFile;
 struct FailFile {
   sqlite3_file base;
   sqlite3_file *pReal;
+  int isMainDb;
 };
 
 static sqlite3_vfs gFailVfs;
 static sqlite3_vfs *gBaseVfs = 0;
 static int gFailWriteOnce = 0;
 static int gFailSyncOnce = 0;
+static int gFailWriteNth = 0;
+static int gFailSyncNth = 0;
 static int gFailAccessOnce = 0;
 static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
@@ -1613,8 +1616,9 @@ static int failRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite3_int64 iOf
 
 static int failWrite(sqlite3_file *pFile, const void *zBuf, int iAmt, sqlite3_int64 iOfst){
   FailFile *p = (FailFile*)pFile;
-  if( gFailWriteOnce>0 ){
-    gFailWriteOnce--;
+  if( gFailWriteOnce>0
+   || (p->isMainDb && gFailWriteNth>0 && --gFailWriteNth==0) ){
+    if( gFailWriteOnce>0 ) gFailWriteOnce--;
     gFailHits++;
     return SQLITE_IOERR_WRITE;
   }
@@ -1628,8 +1632,9 @@ static int failTruncate(sqlite3_file *pFile, sqlite3_int64 size){
 
 static int failSync(sqlite3_file *pFile, int flags){
   FailFile *p = (FailFile*)pFile;
-  if( gFailSyncOnce>0 ){
-    gFailSyncOnce--;
+  if( gFailSyncOnce>0
+   || (p->isMainDb && gFailSyncNth>0 && --gFailSyncNth==0) ){
+    if( gFailSyncOnce>0 ) gFailSyncOnce--;
     gFailHits++;
     return SQLITE_IOERR;
   }
@@ -1762,6 +1767,7 @@ static int failOpen(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *pFile,
   if( rc!=SQLITE_OK ) return rc;
 
   p->pReal = pReal;
+  p->isMainDb = (flags & SQLITE_OPEN_MAIN_DB)!=0;
   p->base.pMethods = &gFailIoMethods;
   return SQLITE_OK;
 }
@@ -9323,6 +9329,96 @@ static void run_hard_reset_command_failure_preserves_durable_state(void){
   removeDbFiles(dbpath);
 }
 
+static void run_vc_late_io_failure(void){
+  const char *azOps[] = {
+    "SELECT dolt_reset('--hard')",
+    "SELECT dolt_checkout('-b','cb')",
+    "SELECT dolt_checkout('-B','cb')"
+  };
+  char dbpath[512];
+  int op, sync, nth;
+
+  check("vc_late_io_register", registerFailVfs()==SQLITE_OK);
+  make_dbpath(dbpath, sizeof(dbpath), "vc_late_io");
+  for(op=0; op<3; op++){
+    for(sync=0; sync<2; sync++){
+      for(nth=1; nth<=8; nth++){
+        sqlite3 *db = 0, *fresh = 0;
+        char zHead[128], zOldTip[128];
+        int rc, failed;
+        const char *zRows;
+        printf("--- op=%d sync=%d nth=%d ---\n", op, sync, nth);
+        removeDbFiles(dbpath);
+        check("vc_late_io_open", open_fail_db(dbpath, &db)==SQLITE_OK);
+        if( !db ) continue;
+        check("vc_late_io_seed", execSql(db,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+          "INSERT INTO t VALUES(1);"
+          "SELECT dolt_commit('-Am','init');")==SQLITE_OK);
+        if( op==2 ){
+          check("vc_late_io_old_branch",
+                execSql(db, "SELECT dolt_branch('cb')")==SQLITE_OK);
+          sqlite3_snprintf(sizeof(zOldTip), zOldTip, "%s",
+              queryScalarText(db, "SELECT hash FROM dolt_branches WHERE name='cb'"));
+        }
+        check("vc_late_io_working", execSql(db,
+          "INSERT INTO t VALUES(2);"
+          "SELECT dolt_commit('-Am','second');"
+          "INSERT INTO t VALUES(10),(11);")==SQLITE_OK);
+        sqlite3_snprintf(sizeof(zHead), zHead, "%s",
+                         queryScalarText(db, "SELECT dolt_hashof('HEAD')"));
+        gFailHits = 0;
+        if( sync ) gFailSyncNth = nth; else gFailWriteNth = nth;
+        rc = execSqlSilent(db, azOps[op]);
+        failed = rc!=SQLITE_OK;
+        gFailWriteNth = gFailSyncNth = 0;
+        check("vc_late_io_reported", gFailHits==0 || failed);
+        zRows = failed ? "1,2,10,11" : "1,2";
+        check("vc_late_io_live_rows",
+              strcmp(queryScalarText(db, "SELECT group_concat(id) FROM t"), zRows)==0);
+        check("vc_late_io_live_branch",
+              strcmp(queryScalarText(db, "SELECT active_branch()"),
+                     !failed && op ? "cb" : "main")==0);
+        check("vc_late_io_live_head",
+              strcmp(queryScalarText(db, "SELECT dolt_hashof('HEAD')"), zHead)==0);
+        check("vc_late_io_fresh_open", open_db(dbpath, &fresh)==SQLITE_OK);
+        if( fresh ){
+          check("vc_late_io_durable_rows",
+                strcmp(queryScalarText(fresh, "SELECT group_concat(id) FROM t"),
+                       !failed && op ? "1,2,10,11" : zRows)==0);
+          if( op==1 ){
+            check("vc_late_io_branch_atomic",
+                  strcmp(queryScalarText(fresh,
+                    "SELECT count(*) FROM dolt_branches WHERE name='cb'"),
+                         failed ? "0" : "1")==0);
+          }else if( op==2 ){
+            check("vc_late_io_force_atomic",
+                  strcmp(queryScalarText(fresh,
+                    "SELECT hash FROM dolt_branches WHERE name='cb'"),
+                         failed ? zOldTip : zHead)==0);
+          }
+          check("vc_late_io_durable_integrity",
+                strcmp(queryScalarText(fresh, "PRAGMA integrity_check"), "ok")==0);
+          sqlite3_close(fresh);
+        }
+        if( failed && op==1 ){
+          check("vc_late_io_retry",
+                execSql(db, "SELECT dolt_checkout('-b','cb')")==SQLITE_OK);
+        }
+        sqlite3_close(db);
+        check("vc_late_io_reopen", open_db(dbpath, &db)==SQLITE_OK);
+        if( db ){
+          check("vc_late_io_reopened_rows",
+                strcmp(queryScalarText(db, "SELECT group_concat(id) FROM t"),
+                       op ? "1,2,10,11" : zRows)==0);
+          sqlite3_close(db);
+        }
+      }
+    }
+  }
+  removeDbFiles(dbpath);
+}
+
 static void run_amend_persist_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -15738,6 +15834,7 @@ static const RegressionCase aCases[] = {
   { "savepoint_nested_trigger_inner_rollback_reopen", "Savepoint Nested Trigger Inner Rollback Reopen Test", run_savepoint_nested_trigger_inner_rollback_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
+  { "vc_late_io_failure", "VC Late IO Failure Test", run_vc_late_io_failure },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
   { "delete_missing_branch_preserves_durable_state", "Delete Missing Branch Preserves Durable State Test", run_delete_missing_branch_preserves_durable_state },

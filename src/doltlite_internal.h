@@ -1754,6 +1754,7 @@ int doltliteMaterializeDefaultColumn(sqlite3*, const char*, const char*,
                                        const char*);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
+int doltliteApplyHardReset(sqlite3 *db, const ProllyHash *catHash);
 int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg);
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
                                      const ProllyHash *pCatHash,
@@ -1822,6 +1823,7 @@ int doltliteSeedSessionHashes(sqlite3 *db, ChunkStore *cs,
 int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
                                  ProllyHash *pRoot, u8 *pFlags);
 int doltliteSaveWorkingSet(sqlite3 *db);
+int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 int doltlitePersistWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 int doltliteCommitWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
