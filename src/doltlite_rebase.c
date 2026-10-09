@@ -254,7 +254,6 @@ static int rebaseOrderReplayCommits(
     RebaseWalkCommit *p;
     int nParents;
     if( prollyHashIsEmpty(&cur) ) continue;
-    if( prollyHashSetContains(pUpstream, &cur) ) continue;
     if( prollyHashSetContains(&seen, &cur) ) continue;
     rc = prollyHashSetAdd(&seen, &cur);
     if( rc!=SQLITE_OK ) goto done;
@@ -285,14 +284,13 @@ static int rebaseOrderReplayCommits(
     nParents = doltliteCommitParentCount(&c);
     if( nParents>DOLTLITE_MAX_PARENTS ) nParents = DOLTLITE_MAX_PARENTS;
     p->nParents = nParents;
-    p->replay = nParents<=1;
+    p->replay = nParents<=1 && !prollyHashSetContains(pUpstream, &cur);
     for(i=0; i<nParents; i++){
       const ProllyHash *pp = doltliteCommitParentHash(&c, i);
       if( pp ) p->aParents[i] = *pp;
     }
     for(i=0; i<nParents; i++){
       if( prollyHashIsEmpty(&p->aParents[i]) ) continue;
-      if( prollyHashSetContains(pUpstream, &p->aParents[i]) ) continue;
       if( prollyHashSetContains(&seen, &p->aParents[i]) ) continue;
       if( qTail>=qAlloc ){
         int nNew = qAlloc*2;
@@ -325,7 +323,6 @@ static int rebaseOrderReplayCommits(
       for(pidx=0; pidx<aAll[i].nParents; pidx++){
         int pi;
         if( prollyHashIsEmpty(&aAll[i].aParents[pidx]) ) continue;
-        if( prollyHashSetContains(pUpstream, &aAll[i].aParents[pidx]) ) continue;
         pi = rebaseWalkFind(aAll, nAll, &aAll[i].aParents[pidx]);
         if( pi<0 || aAll[pi].height<0 ){
           ready = 0;

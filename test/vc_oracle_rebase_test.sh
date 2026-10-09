@@ -1070,6 +1070,46 @@ oracle "merge_dissolve_log" "$MERGE_DISSOLVE_SETUP" \
 oracle "merge_dissolve_table" "$MERGE_DISSOLVE_SETUP" \
   "SELECT CONCAT('LOG|', id, '=', v) FROM t ORDER BY id;"
 
+for dates in side-newer delete-newer; do
+  if [ "$dates" = side-newer ]; then
+    delete_date=2026-01-01T00:00:00Z
+    insert_date=2026-01-02T00:00:00Z
+  else
+    delete_date=2026-01-02T00:00:00Z
+    insert_date=2026-01-01T00:00:00Z
+  fi
+  for mode in direct interactive; do
+    if [ "$mode" = interactive ]; then
+      rebase_sql="SELECT dolt_rebase('-i','main');
+SELECT CONCAT('LOG|PLAN|',commit_message) FROM dolt_rebase ORDER BY rebase_order;
+SELECT dolt_rebase('--continue');"
+    else
+      rebase_sql="SELECT dolt_rebase('main');"
+    fi
+    oracle "rebase_full_height_${dates}_${mode}" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('side');
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','upstream insert');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM t WHERE id=1;
+SELECT dolt_commit('-Am','feature delete','--date','$delete_date');
+SELECT dolt_checkout('main');
+DELETE FROM t WHERE id=1;
+SELECT dolt_commit('-Am','upstream delete');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','side insert','--date','$insert_date');
+SELECT dolt_checkout('feat');
+SELECT dolt_merge('side');
+$rebase_sql
+" "SELECT CONCAT('LOG|ROW|',id) FROM t ORDER BY id;
+SELECT CONCAT('LOG|STATUS|',count(*)) FROM dolt_status;"
+  done
+done
+
 echo "--- a replay that violates a constraint aborts the whole rebase ---"
 
 CV_REBASE_SETUP="
