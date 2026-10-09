@@ -397,6 +397,32 @@ static int seedWorkingChildInfo(
   memset(zWorking, 0, sizeof(zWorking));
   memcpy(zWorking, "WORKING", 7);
 
+  /* Flushing serializes and hashes every table's schema, a cost a diff of
+  ** one table should not pay. Outside a write transaction the live roots
+  ** and schema hashes are already current; the catalog itself is needed only
+  ** to decode a working schema that differs from HEAD's. */
+  if( sqlite3_txn_state(db, "main")!=SQLITE_TXN_WRITE ){
+    DoltliteCommit head;
+    ProllyHash headTblRoot, headSchemaHash;
+    u8 headFlags = 0;
+    rc = doltliteGetWorkingTableState(db, zTableName, &workingTblRoot,
+                                      &workingFlags, &workingSchemaHash);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) return rc;
+    memset(&head, 0, sizeof(head));
+    rc = doltliteLoadCommit(db, pHeadHash, &head);
+    if( rc==SQLITE_OK ){
+      rc = dtLoadTableRootOrEmpty(pCur, db, &head.catalogHash, zTableName,
+                                  &headTblRoot, &headFlags, &headSchemaHash);
+    }
+    doltliteCommitClear(&head);
+    if( rc!=SQLITE_OK ) return rc;
+    if( prollyHashCompare(&headSchemaHash, &workingSchemaHash)==0 ){
+      return cmMapPut(pMap, pHeadHash, &workingTblRoot, &workingCat,
+                      &workingSchemaHash, workingFlags, zWorking, 0);
+    }
+  }
+
   rc = doltliteFlushCatalogToHash(db, &workingCat);
   if( rc!=SQLITE_OK ) return rc;
   rc = dtLoadTableRootOrEmpty(pCur, db, &workingCat, zTableName,
