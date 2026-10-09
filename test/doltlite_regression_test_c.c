@@ -958,6 +958,101 @@ backup_safety_done:
   removeDbFiles(zMemFile);
 }
 
+static void run_backup_dest_peer_write(void){
+  int memory, attached, initFirst;
+  char zSrc[512], zDest[512], zHost[512];
+
+  make_dbpath(zSrc, sizeof(zSrc), "backup_peer_src");
+  make_dbpath(zDest, sizeof(zDest), "backup_peer_dest");
+  make_dbpath(zHost, sizeof(zHost), "backup_peer_host");
+  for(memory=0; memory<2; memory++){
+    for(attached=0; attached<2; attached++){
+      for(initFirst=0; initFirst<2; initFirst++){
+        sqlite3 *src = 0, *dest = 0, *peer = 0;
+        sqlite3_backup *backup = 0;
+        const char *zSchema = attached ? "aux" : "main";
+        char *sql = 0;
+
+        removeDbFiles(zSrc);
+        removeDbFiles(zDest);
+        removeDbFiles(zHost);
+        printf("--- memory=%d attached=%d initFirst=%d ---\n",
+               memory, attached, initFirst);
+        check("backup_peer_src_open",
+              open_db(memory ? ":memory:" : zSrc, &src)==SQLITE_OK);
+        check("backup_peer_dest_open",
+              open_db(attached ? zHost : zDest, &dest)==SQLITE_OK);
+        check("backup_peer_open", open_db(zDest, &peer)==SQLITE_OK);
+        if( !src || !dest || !peer ) goto backup_peer_done;
+        check("backup_peer_src_seed", execSql(src,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "INSERT INTO t VALUES(1,'source'),(2,'backup');")==SQLITE_OK);
+        check("backup_peer_dest_seed", execSql(peer,
+          "CREATE TABLE old(id INTEGER PRIMARY KEY);")==SQLITE_OK);
+        if( attached ){
+          sql = sqlite3_mprintf(
+              "CREATE TABLE sentinel(v TEXT);"
+              "INSERT INTO sentinel VALUES('main');"
+              "ATTACH %Q AS aux", zDest);
+          check("backup_peer_attach", sql && execSql(dest, sql)==SQLITE_OK);
+          sqlite3_free(sql);
+          sql = 0;
+        }
+        sql = sqlite3_mprintf("SELECT count(*) FROM %s.old", zSchema);
+        check("backup_peer_dest_read",
+              sql && strcmp(queryScalarText(dest, sql), "0")==0);
+        sqlite3_free(sql);
+        sql = 0;
+        if( initFirst ){
+          backup = sqlite3_backup_init(dest, zSchema, src, "main");
+        }
+        check("backup_peer_write",
+              execSql(peer, "INSERT INTO old VALUES(9)")==SQLITE_OK);
+        check("backup_peer_close", sqlite3_close(peer)==SQLITE_OK);
+        peer = 0;
+        if( !initFirst ){
+          backup = sqlite3_backup_init(dest, zSchema, src, "main");
+        }
+        check("backup_peer_init", backup!=0);
+        if( !backup ) goto backup_peer_done;
+        check("backup_peer_step", sqlite3_backup_step(backup, -1)==SQLITE_DONE);
+        check("backup_peer_finish", sqlite3_backup_finish(backup)==SQLITE_OK);
+        backup = 0;
+        sql = sqlite3_mprintf("SELECT group_concat(v) FROM %s.t", zSchema);
+        check("backup_peer_rows",
+              sql && strcmp(queryScalarText(dest, sql), "source,backup")==0);
+        sqlite3_free(sql);
+        sql = 0;
+        if( attached ){
+          check("backup_peer_main_untouched",
+                strcmp(queryScalarText(dest, "SELECT v FROM sentinel"),
+                       "main")==0);
+        }
+        check("backup_peer_dest_close", sqlite3_close(dest)==SQLITE_OK);
+        dest = 0;
+        check("backup_peer_reopen", open_db(zDest, &dest)==SQLITE_OK);
+        if( dest ){
+          check("backup_peer_reopen_rows",
+                strcmp(queryScalarText(dest, "SELECT group_concat(v) FROM t"),
+                       "source,backup")==0);
+          check("backup_peer_integrity",
+                strcmp(queryScalarText(dest, "PRAGMA integrity_check"),
+                       "ok")==0);
+        }
+backup_peer_done:
+        sqlite3_free(sql);
+        if( backup ) sqlite3_backup_finish(backup);
+        if( peer ) sqlite3_close(peer);
+        if( dest ) sqlite3_close(dest);
+        if( src ) sqlite3_close(src);
+      }
+    }
+  }
+  removeDbFiles(zSrc);
+  removeDbFiles(zDest);
+  removeDbFiles(zHost);
+}
+
 static void run_backup_source_write_busy(void){
   sqlite3 *src = 0;
   sqlite3 *dest = 0;
@@ -15513,6 +15608,7 @@ static const RegressionCase aCases[] = {
   { "alter_default_session_changeset", "ALTER Default Session Changeset Test", run_alter_default_session_changeset },
 #endif
   { "backup_safety", "Backup Safety Test", run_backup_safety },
+  { "backup_dest_peer_write", "Backup Dest Peer Write Test", run_backup_dest_peer_write },
   { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
   { "backup_dest_missing_branch", "Backup Dest Missing Branch Test", run_backup_dest_missing_branch },
   { "peer_commit_keeps_statements", "Peer Commit Keeps Statements Test", run_peer_commit_keeps_statements },
