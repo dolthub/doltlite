@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
+#include "vdbeInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_internal.h"
@@ -44,14 +45,43 @@ int doltliteCreateShieldedFunc(
                                  (void*)xFunc, doltliteCommandFuncShield, 0, 0);
 }
 
+int doltliteVcInterruptDeferred(sqlite3 *db, Vdbe *p){
+  return db->nVcInterruptMask
+      || (db->pVcCommand && db->pVcCommand->vcInstalled)
+      || (p && p->vcInstalled);
+}
+
+void doltliteVcCommandInstalled(sqlite3 *db){
+  if( db->pVcCommand && !db->nVcInterruptMask ){
+    db->pVcCommand->vcInstalled = 1;
+  }
+}
+
+static void doltliteCommandFunc(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  Vdbe *pOuter = db->pVcCommand;
+  db->pVcCommand = ctx->pVdbe;
+  doltliteCommandFuncShield(ctx, argc, argv);
+  if( !ctx->isError ){
+    doltliteVcCommandInstalled(db);
+  }else if( !ctx->pVdbe->vcInstalled && AtomicLoad(&db->u1.isInterrupted) ){
+    sqlite3_result_error_code(ctx, SQLITE_INTERRUPT);
+  }
+  db->pVcCommand = pOuter;
+}
+
 int doltliteCreateCommandFunc(
   sqlite3 *db,
   const char *zName,
   int nArg,
   void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
 ){
-  return doltliteCreateShieldedFunc(db, zName, nArg,
-                                    DOLTLITE_COMMAND_FUNC_FLAGS, xFunc);
+  return sqlite3_create_function(db, zName, nArg,
+      DOLTLITE_COMMAND_FUNC_FLAGS, (void*)xFunc, doltliteCommandFunc, 0, 0);
 }
 
 /* Every method of a version-control virtual table runs internal SQL on the

@@ -662,7 +662,12 @@ int sqlite3RunParser(Parse *pParse, const char *zSql){
            || tokenType==TK_QNUMBER || tokenType==TK_COMMENT
       );
 #endif /* SQLITE_OMIT_WINDOWFUNC */
+#ifdef DOLTLITE_PROLLY
+      if( AtomicLoad(&db->u1.isInterrupted)
+       && !doltliteVcInterruptDeferred(db, 0) ){
+#else
       if( AtomicLoad(&db->u1.isInterrupted) ){
+#endif
         pParse->rc = SQLITE_INTERRUPT;
         pParse->nErr++;
         break;

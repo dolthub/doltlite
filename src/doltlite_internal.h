@@ -41,6 +41,7 @@ struct DoltliteAuthShield {
 };
 void doltliteAuthShieldEnter(sqlite3 *db, DoltliteAuthShield *p);
 void doltliteAuthShieldLeave(DoltliteAuthShield *p);
+void doltliteVcCommandInstalled(sqlite3*);
 int doltliteCreateCommandFunc(
   sqlite3 *db,
   const char *zName,

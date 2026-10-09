@@ -996,6 +996,14 @@ int sqlite3VdbeExec(
   p->iCurrentTime = 0;
   assert( p->explain==0 );
   db->busyHandler.nBusy = 0;
+#ifdef DOLTLITE_PROLLY
+  if( p->vcInstalled && !db->pVcCommand && aOp[p->pc].opcode!=OP_Halt ){
+    p->vcInstalled = 0;
+  }
+#endif
+#ifdef DOLTLITE_PROLLY
+  if( !doltliteVcInterruptDeferred(db, p) )
+#endif
   if( AtomicLoad(&db->u1.isInterrupted) ) goto abort_due_to_interrupt;
   sqlite3VdbeIOTraceSql(p);
 #ifdef SQLITE_DEBUG
@@ -1186,6 +1194,9 @@ jump_to_p2_and_check_for_interrupt:
   ** checks on every opcode.  This helps sqlite3_step() to run about 1.5%
   ** faster according to "valgrind --tool=cachegrind" */
 check_for_interrupt:
+#ifdef DOLTLITE_PROLLY
+  if( !doltliteVcInterruptDeferred(db, p) )
+#endif
   if( AtomicLoad(&db->u1.isInterrupted) ) goto abort_due_to_interrupt;
 #ifndef SQLITE_OMIT_PROGRESS_CALLBACK
   /* Call the progress callback if it is configured and the required number
@@ -1194,10 +1205,18 @@ check_for_interrupt:
   ** If the progress callback returns non-zero, exit the virtual machine with
   ** a return code SQLITE_ABORT.
   */
+#ifdef DOLTLITE_PROLLY
+  while( nVmStep>=nProgressLimit && db->xProgress!=0
+      && !doltliteVcInterruptDeferred(db, p) ){
+#else
   while( nVmStep>=nProgressLimit && db->xProgress!=0 ){
+#endif
     assert( db->nProgressOps!=0 );
     nProgressLimit += db->nProgressOps;
     if( db->xProgress(db->pProgressArg) ){
+#ifdef DOLTLITE_PROLLY
+      if( db->pVcCommand ) AtomicStore(&db->u1.isInterrupted, 1);
+#endif
       nProgressLimit = LARGEST_UINT64;
       rc = SQLITE_INTERRUPT;
       goto abort_due_to_error;
@@ -10316,9 +10335,17 @@ vdbe_return:
 #endif
 
 #ifndef SQLITE_OMIT_PROGRESS_CALLBACK
+#ifdef DOLTLITE_PROLLY
+  while( nVmStep>=nProgressLimit && db->xProgress!=0
+      && !doltliteVcInterruptDeferred(db, p) ){
+#else
   while( nVmStep>=nProgressLimit && db->xProgress!=0 ){
+#endif
     nProgressLimit += db->nProgressOps;
     if( db->xProgress(db->pProgressArg) ){
+#ifdef DOLTLITE_PROLLY
+      if( db->pVcCommand ) AtomicStore(&db->u1.isInterrupted, 1);
+#endif
       nProgressLimit = LARGEST_UINT64;
       rc = SQLITE_INTERRUPT;
       goto abort_due_to_error;

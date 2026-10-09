@@ -186,7 +186,10 @@ int doltliteRestoreTxnStateOnFailure(
   DoltliteTxnState *pSaved,
   int opRc
 ){
-  int rc = doltliteRestoreTxnState(db, pSaved);
+  int rc;
+  db->nVcInterruptMask++;
+  rc = doltliteRestoreTxnState(db, pSaved);
+  db->nVcInterruptMask--;
   doltliteTxnStateClear(pSaved);
   return rc==SQLITE_OK ? opRc : rc;
 }
@@ -522,7 +525,12 @@ int doltliteMutateRefsExpected(
   }
   if( rc==SQLITE_OK ){
     rc = chunkStoreSerializeRefs(cs);
-    if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+    if( rc==SQLITE_OK && AtomicLoad(&db->u1.isInterrupted)
+     && !doltliteVcInterruptDeferred(db, 0) ) rc = SQLITE_INTERRUPT;
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreCommit(cs);
+      if( rc==SQLITE_OK ) doltliteVcCommandInstalled(db);
+    }
   }
   if( haveSnapshot ){
     if( rc==SQLITE_OK ){

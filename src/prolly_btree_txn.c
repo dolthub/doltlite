@@ -1167,6 +1167,7 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
         p, pBt, rc, &catData, &reloadBtree, &bHaveReloadCatalog);
   }
 
+  doltliteVcCommandInstalled(p->db);
   p->committedCatalogHash = catHash;
   p->committedVc = p->vc;
   memcpy(p->committedAMeta, p->aMeta, sizeof(p->committedAMeta));

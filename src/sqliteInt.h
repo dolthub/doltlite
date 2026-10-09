@@ -1757,6 +1757,10 @@ struct sqlite3 {
   int nVdbeActive;              /* Number of VDBEs currently running */
   int nVdbeRead;                /* Number of active VDBEs that read or write */
   int nVdbeWrite;               /* Number of active VDBEs that read and write */
+#ifdef DOLTLITE_PROLLY
+  Vdbe *pVcCommand;
+  int nVcInterruptMask;
+#endif
   int nVdbeExec;                /* Number of nested calls to VdbeExec() */
   int nVDestroy;                /* Number of active OP_VDestroy operations */
   int nExtension;               /* Number of loaded extensions */
@@ -5061,6 +5065,9 @@ char *sqlite3VMPrintf(sqlite3*,const char*, va_list);
 #endif
 
 void sqlite3SetString(char **, sqlite3*, const char*);
+#ifdef DOLTLITE_PROLLY
+int doltliteVcInterruptDeferred(sqlite3*, Vdbe*);
+#endif
 void sqlite3ProgressCheck(Parse*);
 void sqlite3ErrorMsg(Parse*, const char*, ...);
 int sqlite3ErrorToParser(sqlite3*,int);

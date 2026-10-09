@@ -9329,6 +9329,141 @@ static void run_hard_reset_command_failure_preserves_durable_state(void){
   removeDbFiles(dbpath);
 }
 
+typedef struct VcInterrupt VcInterrupt;
+struct VcInterrupt {
+  sqlite3 *db;
+  int tick;
+  int target;
+  int api;
+};
+
+static int vcInterruptProgress(void *pArg){
+  VcInterrupt *p = (VcInterrupt*)pArg;
+  if( ++p->tick!=p->target ) return 0;
+  if( !p->api ) return 1;
+  sqlite3_interrupt(p->db);
+  return 0;
+}
+
+static void vcInterruptState(sqlite3 *db, char *zState, int nState){
+  sqlite3_snprintf(nState, zState, "%s", queryScalarText(db,
+    "SELECT dolt_hashof('HEAD')||'|'||active_branch()||'|'||"
+    "(SELECT group_concat(name||':'||hash,';') FROM "
+      "(SELECT name,hash FROM dolt_branches ORDER BY name))||'|'||"
+    "(SELECT coalesce(group_concat(table_name||':'||staged||':'||status,';'),'') "
+      "FROM (SELECT * FROM dolt_status ORDER BY table_name,staged))||'|'||"
+    "(SELECT group_concat(id||':'||v,';') FROM (SELECT * FROM t ORDER BY id))"));
+}
+
+static void run_vc_interrupt(void){
+  const char *azOps[] = {
+    "SELECT dolt_merge('f')",
+    "SELECT dolt_commit('-Am','c3')",
+    "SELECT dolt_commit('-am','c3')",
+    "SELECT dolt_checkout('f')",
+    "SELECT dolt_branch('-D','f')",
+    "SELECT dolt_reset('--hard','HEAD~1')",
+    "SELECT dolt_cherry_pick('f')",
+    "SELECT dolt_revert('HEAD')",
+    "SELECT dolt_add('-A')",
+    "SELECT dolt_add('t')"
+  };
+  char dbpath[512];
+  int op, api, target;
+  make_dbpath(dbpath, sizeof(dbpath), "vc_interrupt");
+  for(op=0; op<ArraySize(azOps); op++){
+    for(api=0; api<2; api++){
+      int nInterrupted = 0;
+      for(target=1; target<=1000; target++){
+        sqlite3 *db = 0, *fresh = 0;
+        VcInterrupt progress;
+        char zBefore[2048], zDiskBefore[2048], zAfter[2048];
+        int rc, nStaged;
+        removeDbFiles(dbpath);
+        check("vc_interrupt_open", open_db(dbpath, &db)==SQLITE_OK);
+        if( !db ) break;
+        check("vc_interrupt_seed", execSql(db,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY,v);"
+          "INSERT INTO t VALUES(1,1),(2,2);"
+          "SELECT dolt_commit('-Am','init'); SELECT dolt_branch('f');"
+          "UPDATE t SET v=10 WHERE id=1; SELECT dolt_commit('-Am','main2');"
+          "SELECT dolt_checkout('f'); UPDATE t SET v=20 WHERE id=2;"
+          "SELECT dolt_commit('-Am','f2'); SELECT dolt_checkout('main');"
+          "INSERT INTO t VALUES(3,3);")==SQLITE_OK);
+        if( op==0 || op==6 || op==7 ){
+          check("vc_interrupt_clean", execSql(db,
+              "SELECT dolt_commit('-Am','m3')")==SQLITE_OK);
+        }
+        if( op==1 || op==2 ){
+          check("vc_interrupt_pre_stage", execSql(db,
+            "CREATE TABLE u(id INTEGER PRIMARY KEY); INSERT INTO u VALUES(9);"
+            "SELECT dolt_add('u');")==SQLITE_OK);
+        }
+        nStaged = (int)queryInt64(db,"SELECT count(*) FROM dolt_status WHERE staged");
+        vcInterruptState(db, zBefore, sizeof(zBefore));
+        check("vc_interrupt_before_valid", strncmp(zBefore,"ERROR:",6)!=0);
+        check("vc_interrupt_fresh_before", open_db(dbpath,&fresh)==SQLITE_OK);
+        vcInterruptState(fresh,zDiskBefore,sizeof(zDiskBefore));
+        sqlite3_close(fresh);
+        fresh = 0;
+        progress.db = db;
+        progress.tick = 0;
+        progress.target = target;
+        progress.api = api;
+        sqlite3_progress_handler(db, 1, vcInterruptProgress, &progress);
+        rc = execSqlSilent(db, azOps[op]);
+        sqlite3_progress_handler(db, 0, 0, 0);
+        check("vc_interrupt_result", rc==SQLITE_OK || rc==SQLITE_INTERRUPT);
+        if( rc==SQLITE_INTERRUPT ){
+          nInterrupted++;
+          vcInterruptState(db,zAfter,sizeof(zAfter));
+          if( strcmp(zBefore,zAfter)!=0 ){
+            fprintf(stderr,"op=%d api=%d tick=%d live: %s -> %s\n",
+                    op,api,target,zBefore,zAfter);
+          }
+          check("vc_interrupt_live_unchanged", strcmp(zBefore,zAfter)==0);
+          check("vc_interrupt_fresh_after", open_db(dbpath,&fresh)==SQLITE_OK);
+          vcInterruptState(fresh,zAfter,sizeof(zAfter));
+          check("vc_interrupt_durable_unchanged", strcmp(zDiskBefore,zAfter)==0);
+          sqlite3_close(fresh);
+          fresh = 0;
+          if( op==1 || op==2 ){
+            check("vc_interrupt_later_write", execSql(db,
+                "INSERT INTO t VALUES(4,4)")==SQLITE_OK);
+            check("vc_interrupt_no_leaked_stage",
+                queryInt64(db,"SELECT count(*) FROM dolt_status WHERE staged")==nStaged);
+            check("vc_interrupt_later_fresh", open_db(dbpath,&fresh)==SQLITE_OK);
+            check("vc_interrupt_no_durable_leaked_stage",
+                queryInt64(fresh,"SELECT count(*) FROM dolt_status WHERE staged")==nStaged);
+            sqlite3_close(fresh);
+          }
+        }else if( rc==SQLITE_OK ){
+          const char *zRows = op==0 || op==6 ? "1:10;2:20;3:3"
+              : op==3 ? "1:1;2:20" : op==5 ? "1:1;2:2"
+              : op==7 ? "1:10;2:2" : "1:10;2:2;3:3";
+          vcInterruptState(db,zAfter,sizeof(zAfter));
+          check("vc_interrupt_success_changes_state", strcmp(zBefore,zAfter)!=0);
+          check("vc_interrupt_success_rows", strcmp(queryScalarText(db,
+            "SELECT group_concat(id||':'||v,';') FROM (SELECT * FROM t ORDER BY id)"),
+              zRows)==0);
+          check("vc_interrupt_success_branch", strcmp(queryScalarText(db,
+            "SELECT active_branch()"), op==3 ? "f" : "main")==0);
+          check("vc_interrupt_success_branch_count", queryInt64(db,
+            "SELECT count(*) FROM dolt_branches")== (op==4 ? 1 : 2));
+          check("vc_interrupt_success_staged", queryInt64(db,
+            "SELECT count(*) FROM dolt_status WHERE staged")== (op>=8 ? 1 : 0));
+        }
+        sqlite3_close(db);
+        if( progress.tick<target ) break;
+      }
+      printf("op=%d api=%d ticks=%d interrupted=%d\n",op,api,target-1,nInterrupted);
+      check("vc_interrupt_terminates", target<=1000);
+      check("vc_interrupt_cancellable", nInterrupted>0);
+    }
+  }
+  removeDbFiles(dbpath);
+}
+
 static void run_vc_late_io_failure(void){
   const char *azOps[] = {
     "SELECT dolt_reset('--hard')",
@@ -15834,6 +15969,7 @@ static const RegressionCase aCases[] = {
   { "savepoint_nested_trigger_inner_rollback_reopen", "Savepoint Nested Trigger Inner Rollback Reopen Test", run_savepoint_nested_trigger_inner_rollback_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
+  { "vc_interrupt", "VC Interrupt Test", run_vc_interrupt },
   { "vc_late_io_failure", "VC Late IO Failure Test", run_vc_late_io_failure },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
