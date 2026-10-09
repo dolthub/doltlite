@@ -350,12 +350,83 @@ static void test_push_waits_for_busy_timeout(void){
   rm(zSrc);
 }
 
+/* The same holds for the local store: fetch and pull install refs under
+** this database's lock, which a peer connection may be holding. */
+static void test_fetch_pull_wait_for_local_busy_timeout(void){
+  char zRemote[256], zSrc[256], zUrl[512];
+  const char *aOp[2] = {"SELECT dolt_fetch('origin');",
+                        "SELECT dolt_pull('origin');"};
+  sqlite3 *dbRemote = 0, *dbSrc = 0, *dbPeer = 0;
+  int i;
+
+  snprintf(zRemote, sizeof(zRemote), DOLTLITE_TEST_TMPDIR "/fetch_wait_remote_%d.db", (int)getpid());
+  snprintf(zSrc, sizeof(zSrc), DOLTLITE_TEST_TMPDIR "/fetch_wait_src_%d.db", (int)getpid());
+  rm(zRemote);
+  rm(zSrc);
+
+  check("local wait: open remote", sqlite3_open(zRemote, &dbRemote)==SQLITE_OK);
+  check("local wait: seed remote",
+        exec(dbRemote,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "INSERT INTO t VALUES(1,'base');"
+          "SELECT dolt_commit('-Am','base');")==SQLITE_OK);
+  check("local wait: open src", sqlite3_open(zSrc, &dbSrc)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zUrl), zUrl,
+    "SELECT dolt_clone('file://%s');", zRemote);
+  check("local wait: clone", exec(dbSrc, zUrl)==SQLITE_OK);
+  check("local wait: open peer", sqlite3_open(zSrc, &dbPeer)==SQLITE_OK);
+  sqlite3_busy_timeout(dbSrc, 20000);
+
+  for(i=0; i<2; i++){
+    struct LockHolder holder;
+    pthread_t tid;
+    char zName[64];
+    char *zErr = 0;
+    int rc;
+    sqlite3_snprintf(sizeof(zUrl), zUrl,
+      "INSERT INTO t VALUES(%d,'remote'); SELECT dolt_commit('-am','r%d');",
+      10+i, i);
+    check("local wait: remote commit", exec(dbRemote, zUrl)==SQLITE_OK);
+    holder.cs = doltliteGetChunkStore(dbPeer);
+    holder.holdMs = 1500;
+    check("local wait: acquire local graph lock",
+          chunkStoreLockAndRefresh(holder.cs)==SQLITE_OK);
+    check("local wait: start holder",
+          pthread_create(&tid, 0, holdGraphLock, &holder)==0);
+    rc = execErr(dbSrc, aOp[i], &zErr);
+    sqlite3_snprintf(sizeof(zName), zName, "local wait: %s waits out the peer",
+                     i ? "pull" : "fetch");
+    check(zName, rc==SQLITE_OK);
+    if( rc!=SQLITE_OK && zErr ) printf("  got: %s\n", zErr);
+    sqlite3_free(zErr);
+    pthread_join(tid, 0);
+  }
+  {
+    sqlite3_stmt *pStmt = 0;
+    int n = -1;
+    if( sqlite3_prepare_v2(dbSrc, "SELECT count(*) FROM t WHERE id IN (10,11)",
+                           -1, &pStmt, 0)==SQLITE_OK
+     && sqlite3_step(pStmt)==SQLITE_ROW ){
+      n = sqlite3_column_int(pStmt, 0);
+    }
+    sqlite3_finalize(pStmt);
+    check("local wait: pull landed both remote commits", n==2);
+  }
+
+  sqlite3_close(dbPeer);
+  sqlite3_close(dbSrc);
+  sqlite3_close(dbRemote);
+  rm(zRemote);
+  rm(zSrc);
+}
+
 int main(void){
   sqlite3_initialize();
   check("empty_delete_target_is_misuse",
         doltlitePush(0, 0, ":", 0)==SQLITE_MISUSE);
   test_lock_busy_not_refs_changed();
   test_push_waits_for_busy_timeout();
+  test_fetch_pull_wait_for_local_busy_timeout();
   test_diverged_is_not_lock();
   test_push_ref_race(1, 0, 0, 0, 1, 0);
   test_push_ref_race(2, 0, 0, 0, 2, 0);
