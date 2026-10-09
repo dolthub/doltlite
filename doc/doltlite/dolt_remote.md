@@ -77,9 +77,12 @@ when it cannot fast-forward, conflicts included.
   `<remote>/<branch>` does not take that commit's place. Uncommitted changes
   refuse that merge the same way they refuse a fast-forward. An untracked
   table matched by [dolt_ignore](dolt_ignore.md) is not one of those changes,
-  and the pull leaves it in the working set. An edit of a tracked table still
-  refuses, including one whose name matches `dolt_ignore`, and so does an
-  uncommitted edit of `dolt_ignore` itself.
+  and the pull leaves it in the working set. The branch tip moves only once
+  that working catalog is ready to commit with it. If the pulled commit
+  already contains the ignored table's name, the pull refuses and the branch
+  stays put. An edit of a tracked table still refuses, including one whose
+  name matches `dolt_ignore`, and so does an uncommitted edit of `dolt_ignore`
+  itself.
 - Pushes to an HTTP remote are validated under the server's lock, so a stale
   push is rejected rather than overwriting a peer's ref.
 

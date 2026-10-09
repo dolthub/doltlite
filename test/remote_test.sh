@@ -1705,6 +1705,27 @@ result=$("$DB" "$KP/b.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM 
 check "refused pull keeps the exempted table" "keep
 1" "$result"
 
+CL="$TMPDIR/ignore_collision"
+mkdir -p "$CL"
+"$DB" "$CL/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+INSERT INTO dolt_ignore VALUES('tmp_%',1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$CL/remote.db');
+SELECT dolt_push('origin','main');
+ENDSQL
+"$DB" "$CL/b.db" "SELECT dolt_clone('file://$CL/remote.db');" >/dev/null
+"$DB" "$CL/b.db" "CREATE TABLE tmp_x(id INT PRIMARY KEY); INSERT INTO tmp_x VALUES(1);" >/dev/null
+"$DB" "$CL/a.db" "CREATE TABLE tmp_x(id INT PRIMARY KEY); INSERT INTO tmp_x VALUES(8); SELECT dolt_add('-f','tmp_x'); SELECT dolt_commit('-am','a2'); SELECT dolt_push('origin','main');" >/dev/null
+result=$("$DB" "$CL/b.db" "SELECT dolt_pull('origin','main');" 2>&1)
+check_match "pull refuses when the pulled commit already has the ignored name" \
+  "merge would overwrite ignored object: tmp_x" "$result"
+result=$("$DB" "$CL/b.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM t ORDER BY id; SELECT id FROM tmp_x ORDER BY id;")
+check "refused name collision leaves the branch and the ignored table" "c1
+1
+1" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
