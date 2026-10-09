@@ -1587,6 +1587,113 @@ check "refused destinations were not created" "0" "$result"
 result=$("$DB" "$REF/b.db" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;")
 check "clone has the pushed tag and not the refused mapping" "kept" "$result"
 
+echo "=== Push HEAD and fetch refspecs ==="
+RS="$TMPDIR/refspec_forms"
+mkdir -p "$RS"
+"$DB" "$RS/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('other');
+SELECT dolt_checkout('other');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-am','c2');
+SELECT dolt_checkout('main');
+SELECT dolt_remote('add','origin','file://$RS/remote.db');
+SELECT dolt_push('origin','main');
+SELECT dolt_push('origin','other');
+ENDSQL
+
+result=$("$DB" "$RS/a.db" "SELECT dolt_push('origin','HEAD:hh');")
+check "push HEAD:hh returns 0" "0" "$result"
+result=$("$DB" "$RS/a.db" "SELECT dolt_push('origin','refs/heads/HEAD:href');")
+check "push refs/heads/HEAD:href returns 0" "0" "$result"
+result=$("$DB" "$RS/a.db" \
+  "SELECT dolt_checkout('other'); SELECT dolt_push('origin','HEAD:fromother');")
+check "checked-out branch is what HEAD pushes" "0
+0" "$result"
+result=$("$DB" "$RS/a.db" "SELECT dolt_push('origin','HEAD:HEAD');" 2>&1)
+check_match "push HEAD:HEAD still rejects the destination" \
+  "invalid branch name" "$result"
+
+result=$("$DB" "$RS/b.db" "SELECT dolt_clone('file://$RS/remote.db');")
+check "clone after HEAD pushes returns 0" "0" "$result"
+result=$("$DB" "$RS/b.db" \
+  "SELECT name || '|' || latest_commit_message FROM dolt_remote_branches ORDER BY name;")
+check "HEAD pushes the checked-out commit under the destination name" "remotes/origin/fromother|c2
+remotes/origin/hh|c1
+remotes/origin/href|c1
+remotes/origin/main|c1
+remotes/origin/other|c2" "$result"
+
+"$DB" "$RS/f.db" "SELECT dolt_remote('add','origin','file://$RS/remote.db');" >/dev/null
+result=$("$DB" "$RS/f.db" \
+  "SELECT dolt_fetch('origin','refs/heads/*:refs/remotes/origin/*');")
+check "glob fetch returns 0" "0" "$result"
+result=$("$DB" "$RS/f.db" \
+  "SELECT name || '|' || latest_commit_message FROM dolt_remote_branches ORDER BY name;")
+check "glob fetch tracks every remote branch" "remotes/origin/fromother|c2
+remotes/origin/hh|c1
+remotes/origin/href|c1
+remotes/origin/main|c1
+remotes/origin/other|c2" "$result"
+
+"$DB" "$RS/g.db" "SELECT dolt_remote('add','origin','file://$RS/remote.db');" >/dev/null
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/main:refs/remotes/origin/mm');")
+check "full fetch spec may rename the tracking ref" "0" "$result"
+result=$("$DB" "$RS/g.db" "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "renamed fetch spec tracks only the destination" "remotes/origin/mm" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/main:remotes/origin/mm2');")
+check "remotes/ prefix is enough on a fetch destination" "0" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/o*:refs/remotes/origin/o*');")
+check "a one-star prefix fetches the branches it matches" "0" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/o*r:refs/remotes/backup/x*');")
+check "a glob may name a different tracking remote" "0" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT name || '|' || latest_commit_message FROM dolt_remote_branches ORDER BY name;")
+check "prefix and renamed globs land on the mapped tracking refs" "remotes/backup/xthe|c2
+remotes/origin/mm|c1
+remotes/origin/mm2|c1
+remotes/origin/other|c2" "$result"
+
+result=$("$DB" "$RS/g.db" "SELECT dolt_fetch('origin','main');")
+check "a bare branch fetch still returns 0" "0" "$result"
+result=$("$DB" "$RS/g.db" "SELECT dolt_fetch('origin','refs/heads/hh');")
+check "a refs/heads fetch argument is still that branch" "0" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT count(*) FROM dolt_remote_branches WHERE name IN ('remotes/origin/main','remotes/origin/hh');")
+check "bare and refs/heads fetches track the branch itself" "2" "$result"
+
+result=$("$DB" "$RS/g.db" "SELECT dolt_fetch('origin','main:mm');" 2>&1)
+check_match "fetch main:mm is not a tracking ref" \
+  "invalid fetch spec: 'main:mm'" "$result"
+result=$("$DB" "$RS/g.db" "SELECT dolt_fetch('origin','main:');" 2>&1)
+check_match "fetch main: is not a tracking ref" \
+  "invalid fetch spec: 'main:'" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/*:refs/remotes/origin/main');" 2>&1)
+check_match "a star on only the fetch source is refused" \
+  "invalid fetch spec: 'refs/heads/\\*:refs/remotes/origin/main'" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/main:refs/remotes/origin/*');" 2>&1)
+check_match "a star on only the fetch destination is refused" \
+  "invalid fetch spec: 'refs/heads/main:refs/remotes/origin/\\*'" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/zz*:refs/remotes/origin/zz*');" 2>&1)
+check_match "a glob that matches nothing is refused" \
+  "invalid fetch spec: 'refs/heads/zz\\*:refs/remotes/origin/zz\\*'" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT dolt_fetch('origin','refs/heads/nope:refs/remotes/origin/nope');" 2>&1)
+check_match "a missing branch in a full fetch spec is not found" \
+  "branch not found on remote" "$result"
+result=$("$DB" "$RS/g.db" \
+  "SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/mm';")
+check "refused fetch specs did not add a tracking ref" "1" "$result"
+
 echo "=== Pull keeps a table matched by dolt_ignore ==="
 IG="$TMPDIR/ignore_pull"
 mkdir -p "$IG"
