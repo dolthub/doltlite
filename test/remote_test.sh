@@ -1587,6 +1587,145 @@ check "refused destinations were not created" "0" "$result"
 result=$("$DB" "$REF/b.db" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;")
 check "clone has the pushed tag and not the refused mapping" "kept" "$result"
 
+echo "=== Pull keeps a table matched by dolt_ignore ==="
+IG="$TMPDIR/ignore_pull"
+mkdir -p "$IG"
+"$DB" "$IG/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+INSERT INTO dolt_ignore VALUES('tmp_%',1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$IG/remote.db');
+SELECT dolt_push('origin','main');
+ENDSQL
+"$DB" "$IG/b.db" "SELECT dolt_clone('file://$IG/remote.db');" >/dev/null
+"$DB" "$IG/a.db" "INSERT INTO t VALUES(2); SELECT dolt_commit('-am','a2'); SELECT dolt_push('origin','main');" >/dev/null
+"$DB" "$IG/b.db" "CREATE TABLE tmp_x(id INT PRIMARY KEY); INSERT INTO tmp_x VALUES(1);" >/dev/null
+result=$("$DB" "$IG/b.db" "SELECT count(*) FROM dolt_status;")
+check "ignored table is absent from dolt_status" "0" "$result"
+result=$("$DB" "$IG/b.db" "SELECT dolt_pull('origin','main');")
+check "fast-forward pull with only an ignored table returns 0" "0" "$result"
+result=$("$DB" "$IG/b.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM t ORDER BY id; SELECT id FROM tmp_x; SELECT count(*) FROM dolt_status;")
+check "fast-forward pull keeps the ignored table" "a2
+1
+2
+1
+0" "$result"
+
+"$DB" "$IG/a.db" "INSERT INTO t VALUES(3); SELECT dolt_commit('-am','a3'); SELECT dolt_push('origin','main');" >/dev/null
+"$DB" "$IG/b.db" "INSERT INTO t VALUES(9); INSERT INTO tmp_x VALUES(2);" >/dev/null
+result=$("$DB" "$IG/b.db" "SELECT dolt_pull('origin','main');" 2>&1)
+check_match "tracked edit still refuses a pull beside an ignored table" \
+  "cannot pull with uncommitted changes" "$result"
+result=$("$DB" "$IG/b.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM t ORDER BY id; SELECT id FROM tmp_x ORDER BY id;")
+check "refused pull keeps the tracked edit and the ignored table" "a2
+1
+2
+9
+1
+2" "$result"
+
+DV="$TMPDIR/ignore_diverge"
+mkdir -p "$DV"
+"$DB" "$DV/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+INSERT INTO dolt_ignore VALUES('tmp_%',1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$DV/remote.db');
+SELECT dolt_push('origin','main');
+ENDSQL
+"$DB" "$DV/b.db" "SELECT dolt_clone('file://$DV/remote.db');" >/dev/null
+"$DB" "$DV/b.db" "INSERT INTO t VALUES(5); SELECT dolt_commit('-am','b5');" >/dev/null
+"$DB" "$DV/b.db" "CREATE TABLE tmp_y(id INT PRIMARY KEY); INSERT INTO tmp_y VALUES(4);" >/dev/null
+"$DB" "$DV/a.db" "INSERT INTO t VALUES(2); SELECT dolt_commit('-am','a2'); SELECT dolt_push('origin','main');" >/dev/null
+result=$("$DB" "$DV/b.db" "SELECT count(*) FROM dolt_status;")
+check "ignored table on a diverged branch is absent from dolt_status" "0" "$result"
+result=$("$DB" "$DV/b.db" "SELECT dolt_pull('origin','main'); SELECT message FROM dolt_log LIMIT 1; SELECT id FROM t ORDER BY id; SELECT id FROM tmp_y;")
+check "divergent pull keeps the ignored table" "0
+Merge branch 'origin/main' into main
+1
+2
+5
+4" "$result"
+
+TR="$TMPDIR/ignore_tracked"
+mkdir -p "$TR"
+"$DB" "$TR/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+INSERT INTO dolt_ignore VALUES('tmp_%',1);
+CREATE TABLE tmp_t(id INT PRIMARY KEY);
+INSERT INTO tmp_t VALUES(1);
+SELECT dolt_add('-f','tmp_t');
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$TR/remote.db');
+SELECT dolt_push('origin','main');
+ENDSQL
+"$DB" "$TR/b.db" "SELECT dolt_clone('file://$TR/remote.db');" >/dev/null
+"$DB" "$TR/a.db" "INSERT INTO t VALUES(2); SELECT dolt_commit('-am','a2'); SELECT dolt_push('origin','main');" >/dev/null
+"$DB" "$TR/b.db" "INSERT INTO tmp_t VALUES(7);" >/dev/null
+result=$("$DB" "$TR/b.db" "SELECT dolt_pull('origin','main');" 2>&1)
+check_match "editing a tracked table that matches dolt_ignore still refuses" \
+  "cannot pull with uncommitted changes" "$result"
+result=$("$DB" "$TR/b.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM tmp_t ORDER BY id;")
+check "refused pull keeps the edit to the tracked ignored-name table" "c1
+1
+7" "$result"
+
+"$DB" "$TR/c.db" "SELECT dolt_clone('file://$TR/remote.db');" >/dev/null
+"$DB" "$TR/a.db" "INSERT INTO t VALUES(3); SELECT dolt_commit('-am','a3'); SELECT dolt_push('origin','main');" >/dev/null
+"$DB" "$TR/c.db" "INSERT INTO dolt_ignore VALUES('other_%',1);" >/dev/null
+result=$("$DB" "$TR/c.db" "SELECT dolt_pull('origin','main');" 2>&1)
+check_match "an uncommitted dolt_ignore edit refuses a pull" \
+  "cannot pull with uncommitted changes" "$result"
+result=$("$DB" "$TR/c.db" "SELECT message FROM dolt_log LIMIT 1; SELECT pattern FROM dolt_ignore ORDER BY pattern;")
+check "refused pull keeps the dolt_ignore edit" "a2
+other_%
+tmp_%" "$result"
+
+KP="$TMPDIR/ignore_exception"
+mkdir -p "$KP"
+"$DB" "$KP/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+INSERT INTO dolt_ignore VALUES('tmp_%',1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$KP/remote.db');
+SELECT dolt_push('origin','main');
+ENDSQL
+"$DB" "$KP/b.db" "SELECT dolt_clone('file://$KP/remote.db');" >/dev/null
+"$DB" "$KP/b.db" "INSERT INTO dolt_ignore VALUES('tmp_keep',0); SELECT dolt_commit('-am','keep');" >/dev/null
+"$DB" "$KP/a.db" "INSERT INTO t VALUES(2); SELECT dolt_commit('-am','a2'); SELECT dolt_push('origin','main');" >/dev/null
+"$DB" "$KP/b.db" "CREATE TABLE tmp_keep(id INT PRIMARY KEY); INSERT INTO tmp_keep VALUES(1);" >/dev/null
+result=$("$DB" "$KP/b.db" "SELECT dolt_pull('origin','main');" 2>&1)
+check_match "a table exempted from dolt_ignore refuses a pull" \
+  "cannot pull with uncommitted changes" "$result"
+result=$("$DB" "$KP/b.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM tmp_keep;")
+check "refused pull keeps the exempted table" "keep
+1" "$result"
+
+CL="$TMPDIR/ignore_collision"
+mkdir -p "$CL"
+"$DB" "$CL/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+INSERT INTO dolt_ignore VALUES('tmp_%',1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$CL/remote.db');
+SELECT dolt_push('origin','main');
+ENDSQL
+"$DB" "$CL/b.db" "SELECT dolt_clone('file://$CL/remote.db');" >/dev/null
+"$DB" "$CL/b.db" "CREATE TABLE tmp_x(id INT PRIMARY KEY); INSERT INTO tmp_x VALUES(1);" >/dev/null
+"$DB" "$CL/a.db" "CREATE TABLE tmp_x(id INT PRIMARY KEY); INSERT INTO tmp_x VALUES(8); SELECT dolt_add('-f','tmp_x'); SELECT dolt_commit('-am','a2'); SELECT dolt_push('origin','main');" >/dev/null
+result=$("$DB" "$CL/b.db" "SELECT dolt_pull('origin','main');" 2>&1)
+check_match "pull refuses when the pulled commit already has the ignored name" \
+  "merge would overwrite ignored object: tmp_x" "$result"
+result=$("$DB" "$CL/b.db" "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM t ORDER BY id; SELECT id FROM tmp_x ORDER BY id;")
+check "refused name collision leaves the branch and the ignored table" "c1
+1
+1" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

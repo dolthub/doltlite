@@ -1566,6 +1566,22 @@ int doltliteMergeRef(
   int squash
 );
 
+/* *pDirty is set when a pull must refuse. Tables matched by dolt_ignore are
+** omitted; *pIgnored is their catalog so a fast-forward can put them back. */
+int doltliteSeparateIgnoredChanges(
+  sqlite3 *db,
+  int *pDirty,
+  ProllyHash *pIgnored,
+  char **pzErr
+);
+int doltliteAttachIgnoredCatalog(
+  sqlite3 *db,
+  const ProllyHash *pTarget,
+  const ProllyHash *pIgnored,
+  ProllyHash *pWorking,
+  char **pzErr
+);
+
 int doltliteAddRegister(sqlite3 *db);
 int doltliteAddStageAll(sqlite3 *db, sqlite3_context *context, int bForce);
 int doltliteCleanRegister(sqlite3 *db);

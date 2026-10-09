@@ -823,6 +823,61 @@ copy_done:
   return rc;
 }
 
+int doltliteSeparateIgnoredChanges(
+  sqlite3 *db,
+  int *pDirty,
+  ProllyHash *pIgnored,
+  char **pzErr
+){
+  ProllyHash headCatHash, stagedHash, trackedHash;
+  char *zErr = 0;
+  int rc;
+
+  if( pzErr ) *pzErr = 0;
+  *pDirty = 0;
+  memset(pIgnored, 0, sizeof(*pIgnored));
+  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&headCatHash) ){
+    return doltliteHasUncommittedChanges(db, pDirty);
+  }
+  /* A staged edit is a real change. An ignored table is not staged. */
+  doltliteGetSessionStaged(db, &stagedHash);
+  if( !prollyHashIsEmpty(&stagedHash)
+   && prollyHashCompare(&headCatHash, &stagedHash)!=0 ){
+    *pDirty = 1;
+    return SQLITE_OK;
+  }
+  /* Peel untracked ignored tables into *pIgnored. A tracked edit, including
+  ** one whose name matches dolt_ignore, stays in the tracked catalog.
+  ** Copying that catalog back from head would hide the edit. */
+  rc = mergeSplitWorkingCatalog(db, &headCatHash, &headCatHash, 0,
+                                &trackedHash, pIgnored, &zErr);
+  if( rc==SQLITE_OK && prollyHashCompare(&trackedHash, &headCatHash)!=0 ){
+    *pDirty = 1;
+  }
+  if( pzErr ) *pzErr = zErr;
+  else sqlite3_free(zErr);
+  return rc;
+}
+
+int doltliteAttachIgnoredCatalog(
+  sqlite3 *db,
+  const ProllyHash *pTarget,
+  const ProllyHash *pIgnored,
+  ProllyHash *pWorking,
+  char **pzErr
+){
+  char *zErr = 0;
+  int rc;
+
+  if( pzErr ) *pzErr = 0;
+  rc = mergeWorkingCatalog(db, pIgnored, pTarget, pWorking, &zErr);
+  if( pzErr ) *pzErr = zErr;
+  else sqlite3_free(zErr);
+  return rc;
+}
+
 int mergeAbortInPlace(sqlite3 *db){
   ProllyHash headCatHash, stagedHash, trackedHash, ignoredHash, workingHash;
   ProllyHash localHash, mergeHead;

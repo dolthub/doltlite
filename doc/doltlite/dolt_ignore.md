@@ -23,7 +23,10 @@ from then on it commits, diffs, branches, and merges like any other table.
 
 - `*` or `%` match any run of characters, `?` exactly one.
 - A matching table is skipped by `dolt_add('-A')`, hidden from `dolt_status`,
-  and left in the working set untouched.
+  and left in the working set untouched. `dolt_pull` does not treat an
+  untracked matching table as an uncommitted change, and a fast-forward or
+  merge keeps it. Editing a table that is already tracked still blocks the
+  pull, including one committed with `dolt_add('-f', table)`.
 - The most specific matching pattern wins, so `tmp_keep` with `ignored = 0`
   overrides `tmp_*`. Two patterns of equal specificity that disagree error
   with `the table <t> matches conflicting patterns in dolt_ignore`.
