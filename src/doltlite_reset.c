@@ -829,8 +829,7 @@ static void doltliteResetFunc(
 
   if( zRef ){
     /* Move the ref before the session head. The other order leaves the
-    ** session reading a commit the branch never reached if the update fails.
-    ** reset --hard is not atomic (nor in Dolt). */
+    ** session reading a commit the branch never reached if the update fails. */
     rc = chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
@@ -879,7 +878,7 @@ static void doltliteResetFunc(
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
     }
-    rc = doltliteHardReset(db, &targetWorkingCatHash);
+    rc = doltliteApplyHardReset(db, &targetWorkingCatHash);
     if( rc!=SQLITE_OK ){
       /* A specific code carries its own message; only a generic failure
       ** needs one supplied. */

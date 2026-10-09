@@ -176,6 +176,8 @@ static int refreshBranchScopedTables(sqlite3 *db){
 
 typedef struct CheckoutMutationCtx CheckoutMutationCtx;
 struct CheckoutMutationCtx {
+  BranchMutationCtx *pCreate;
+  int createRc;
   const char *zTargetBranch;
   const char *zCurrentBranch;
   ProllyHash savedSessionHead;
@@ -313,6 +315,10 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   int bSavepoint = db->pSavepoint!=0;
   int rc;
 
+  if( p->pCreate ){
+    p->createRc = mutateBranchRef(db, cs, p->pCreate);
+    if( p->createRc!=SQLITE_OK ) return p->createRc;
+  }
   rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
   if( rc!=SQLITE_OK ) return rc;
   if( !p->savedWasDetached ){
@@ -365,11 +371,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( rc!=SQLITE_OK ) return rc;
 
   if( !bSavepoint || p->bPersistUnderSavepoint ){
-    rc = doltlitePersistWorkingSetWithHash(db, &p->targetCatHash);
+    rc = doltliteSaveWorkingSetWithHash(db, &p->targetCatHash);
     if( rc!=SQLITE_OK ) return rc;
-    /* Target is durable now, so rollback returns here. Keeping the old
-    ** branch as baseline would reinstate its catalog under this branch. */
-    doltliteAdoptRollbackBaseline(db, &p->targetCatHash);
   }
 
   if( p->haveOldState && !p->savedWasDetached && p->oldBranchExists ){
@@ -389,6 +392,14 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
       int restoreRc = checkoutRestoreSession(db, p);
       if( restoreRc!=SQLITE_OK ) rc = restoreRc;
     }
+  }
+  return rc;
+}
+
+static int checkoutApplyRefs(sqlite3 *db, CheckoutMutationCtx *p){
+  int rc = doltliteMutateRefs(db, checkoutMutateRefs, p);
+  if( rc==SQLITE_OK && (!db->pSavepoint || p->bPersistUnderSavepoint) ){
+    doltliteAdoptRollbackBaseline(db, &p->targetCatHash);
   }
   return rc;
 }
@@ -557,7 +568,7 @@ static int checkoutBranchForRebase(
   m.requireActiveRebase = requireActiveRebase;
   checkoutSaveSession(db, &m);
 
-  rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
+  rc = checkoutApplyRefs(db, &m);
   if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
   sqlite3_free(zCurrentBranch);
   return rc;
@@ -1336,13 +1347,7 @@ static void doltCheckoutParsedFunc(
     }
     branchCreate.zName = zBranch;
     branchCreate.force = forceBranch;
-    rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
-    if( rc!=SQLITE_OK ){
-      (void)doltliteVcSealSavepointError(db);
-      doltliteRefResultError(ctx, rc, "start point not found",
-                             "branch already exists");
-      return;
-    }
+    m.pCreate = &branchCreate;
     isCreateAndSwitch = 1;
   }
 
@@ -1360,7 +1365,7 @@ static void doltCheckoutParsedFunc(
     }
   }
 
-  if( !doltliteIsDetached(db)
+  if( !createBranch && !doltliteIsDetached(db)
    && strcmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
     sqlite3_result_int(ctx, 0);
     return;
@@ -1399,10 +1404,16 @@ static void doltCheckoutParsedFunc(
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
   doltliteSetSessionDetached(db, 0);
-  rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
+  rc = checkoutApplyRefs(db, &m);
   if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
   sqlite3_free(zCurrentBranch);
   zCurrentBranch = 0;
+  if( m.createRc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
+    doltliteRefResultError(ctx, m.createRc, "start point not found",
+                           "branch already exists");
+    return;
+  }
   if( rc==SQLITE_NOTFOUND ){
     rc = checkoutCreateFromRemoteTracking(db, zBranch);
     if( rc==SQLITE_OK ){
@@ -1425,7 +1436,7 @@ static void doltCheckoutParsedFunc(
       m.zTargetBranch = zBranch;
       m.zCurrentBranch = zCurrentBranch;
       doltliteSetSessionDetached(db, 0);
-      rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
+      rc = checkoutApplyRefs(db, &m);
       if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
       sqlite3_free(zCurrentBranch);
       zCurrentBranch = 0;

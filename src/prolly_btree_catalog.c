@@ -2701,7 +2701,7 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   return SQLITE_OK;
 }
 
-int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
+static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   BtShared *pBt = doltliteGetBtShared(db);
   Btree *pBtree;
   ChunkStore *cs;
@@ -2765,6 +2765,11 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
 
   memcpy(&pBtree->vc.stagedCatalog, catHash, sizeof(ProllyHash));
 
+  if( !persist ){
+    sqlite3_free(oldCatData);
+    return SQLITE_OK;
+  }
+
   {
     const char *zBr = pBtree->zBranch ? pBtree->zBranch : "main";
     rc = btreeWriteWorkingState(cs, zBr, catHash, NULL);
@@ -2804,6 +2809,14 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
 
   sqlite3_free(oldCatData);
   return SQLITE_OK;
+}
+
+int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
+  return hardReset(db, catHash, 1);
+}
+
+int doltliteApplyHardReset(sqlite3 *db, const ProllyHash *catHash){
+  return hardReset(db, catHash, 0);
 }
 
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
