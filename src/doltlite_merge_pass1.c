@@ -1258,10 +1258,13 @@ static int mergePass1MergeMaster(MergePass1Ctx *c, int iTable1Idx){
   int bPreferOurMasterHere;
   int rc = SQLITE_OK;
 
-  if( iTable1Idx < 0 ) return SQLITE_OK;
-
   ancEntry = doltliteFindTableByNumber(c->aAnc, c->nAnc, 1);
   theirsEntry = doltliteFindTableByNumber(c->aTheirs, c->nTheirs, 1);
+  if( iTable1Idx < 0 ){
+    /* Ours never had a table, so its only master entry is theirs. */
+    if( theirsEntry ) c->aMerged[(*c->pnMerged)++] = *theirsEntry;
+    return SQLITE_OK;
+  }
   bPreferOurMasterHere = hasAnySchemaConflict(
       *c->ppConflictTables, *c->pnConflictTables)
       || (c->bPreferOurMaster
