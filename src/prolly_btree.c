@@ -915,7 +915,11 @@ int sqlite3BtreeOpen(
     zOpenFilename = zFilename;
   }
 
-  rc = chunkStoreOpen(&pBt->store, pVfs, zOpenFilename, vfsFlags);
+  if( zBranchFromPath ){
+    rc = chunkStoreOpen(&pBt->store, pVfs, zOpenFilename, vfsFlags);
+  }else{
+    rc = chunkStoreOpenDeferred(&pBt->store, pVfs, zOpenFilename, vfsFlags);
+  }
   if( rc!=SQLITE_OK ){
     sqlite3_free(zStoreFilename);
     sqlite3_free(pBt);
@@ -1036,7 +1040,10 @@ int sqlite3BtreeOpen(
       return openRc;
     }
     if( zResolvedBranch ) zDef = zBranchFromPath = zResolvedBranch;
-    if( zBranchFromPath && !zResolvedBranch ){
+    if( pBt->store.openPending ){
+      memset(&state, 0, sizeof(state));
+      bDeferredOpen = 1;
+    }else if( zBranchFromPath && !zResolvedBranch ){
       memset(&state, 0, sizeof(state));
       state.catalog = revisionCatalog;
       state.stagedCatalog = revisionCatalog;
@@ -1124,6 +1131,7 @@ int sqlite3BtreeOpen(
       p->vc.constraintViolationsHash = state.constraintViolations;
     }
     p->bDeferredOpen = bDeferredOpen;
+    p->bDeferredDefaultBranch = pBt->store.openPending;
   }
 
   p->cat.iNextTable = 2;
@@ -1169,6 +1177,7 @@ int sqlite3BtreeOpen(
   pBt->store.corruptMidStream = poisonAfterOpen;
   if( hasMainBtree
    && !p->isDetached
+   && !pBt->store.openPending
    && !pBt->store.notADatabase
    && !pBt->store.corruptMidStream ){
     ProllyHash seedHash;

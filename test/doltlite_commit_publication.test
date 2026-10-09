@@ -14,8 +14,7 @@ proc publication_sync {method file args} {
     set ::during [publication_snapshot peer]
     set ::openError [catch {sqlite3 observer test.db} ::openMessage]
     if {!$::openError} {
-      set ::freshDuring [publication_snapshot observer]
-      observer close
+      set ::readError [catch {publication_snapshot observer} ::freshDuring]
     }
     if {$::fail} {return SQLITE_IOERR}
   }
@@ -26,52 +25,68 @@ testvfs tvfs
 tvfs filter xSync
 tvfs script publication_sync
 set ::armed 0
-foreach kind {sql vc} {
-  foreach ::fail {0 1} {
-    catch {db close}
-    forcedelete test.db
-    sqlite3 db test.db -vfs tvfs
-    db eval {
-      CREATE TABLE t(k INTEGER PRIMARY KEY,v);
-      INSERT INTO t VALUES(1,'a');
-      SELECT dolt_commit('-Am','c1');
-      INSERT INTO t VALUES(2,'working');
+foreach branch {main dev} {
+  foreach kind {sql vc} {
+    foreach ::fail {0 1} {
+      catch {db close}
+      forcedelete test.db
+      sqlite3 db test.db -vfs tvfs
+      db eval {
+        CREATE TABLE t(k INTEGER PRIMARY KEY,v);
+        INSERT INTO t VALUES(1,'a');
+        SELECT dolt_commit('-Am','c1');
+      }
+      if {$branch eq "dev"} {
+        db eval {
+          SELECT dolt_branch('dev');
+          SELECT dolt_checkout('dev');
+          SELECT dolt_default_branch('dev');
+        }
+      }
+      db eval {
+        INSERT INTO t VALUES(2,'working');
+      }
+      sqlite3 peer test.db
+      set before [publication_snapshot peer]
+      set ::during {}
+      set ::freshDuring {}
+      set ::openError 0
+      set ::readError 0
+      set ::armed 1
+      if {$kind eq "vc"} {
+        set failed [catch {db eval {SELECT dolt_commit('-Am','c2')}}]
+      } else {
+        set failed [catch {db eval {INSERT INTO t VALUES(3,randomblob(50000))}}]
+      }
+      set ::armed 0
+      set prefix commit-publication-$branch-$kind-$::fail
+      do_test $prefix.result {set failed} $::fail
+      do_test $prefix.during-live {set ::during} $before
+      do_test $prefix.during-open {set ::openError} 0
+      do_test $prefix.during-fresh {
+        expr {($::readError && [string match *locked* $::freshDuring])
+            || (!$::readError && $::freshDuring eq $before)}
+      } 1
+      set expected $before
+      if {!$::fail} {
+        set index [expr {$kind eq "vc" ? 0 : 1}]
+        lset expected $index [expr {[lindex $expected $index]+1}]
+      }
+      do_test $prefix.after-live {publication_snapshot peer} $expected
+      do_test $prefix.after-observer {publication_snapshot observer} $expected
+      do_test $prefix.observer-branch {observer one {SELECT active_branch()}} $branch
+      observer close
+      do_test $prefix.peer-write {
+        peer eval {INSERT INTO t VALUES(4,'peer'); SELECT group_concat(k) FROM t}
+      } [expr {$kind eq "sql" && !$::fail ? "1,2,3,4" : "1,2,4"}]
+      peer close
+      db close
+      sqlite3 db test.db
+      do_test $prefix.reopen {
+        list [db one {SELECT count(*) FROM dolt_log}] \
+             [db one {SELECT count(*) FROM t}] [db one {PRAGMA integrity_check}]
+      } [list [lindex $expected 0] [expr {[lindex $expected 1]+1}] ok]
     }
-    sqlite3 peer test.db
-    set before [publication_snapshot peer]
-    set ::during {}
-    set ::freshDuring {}
-    set ::openError 0
-    set ::armed 1
-    if {$kind eq "vc"} {
-      set failed [catch {db eval {SELECT dolt_commit('-Am','c2')}}]
-    } else {
-      set failed [catch {db eval {INSERT INTO t VALUES(3,randomblob(50000))}}]
-    }
-    set ::armed 0
-    set prefix commit-publication-$kind-$::fail
-    do_test $prefix.result {set failed} $::fail
-    do_test $prefix.during-live {set ::during} $before
-    do_test $prefix.during-fresh {
-      expr {($::openError && [string match *locked* $::openMessage])
-          || (!$::openError && $::freshDuring eq $before)}
-    } 1
-    set expected $before
-    if {!$::fail} {
-      set index [expr {$kind eq "vc" ? 0 : 1}]
-      lset expected $index [expr {[lindex $expected $index]+1}]
-    }
-    do_test $prefix.after-live {publication_snapshot peer} $expected
-    do_test $prefix.peer-write {
-      peer eval {INSERT INTO t VALUES(4,'peer'); SELECT group_concat(k) FROM t}
-    } [expr {$kind eq "sql" && !$::fail ? "1,2,3,4" : "1,2,4"}]
-    peer close
-    db close
-    sqlite3 db test.db
-    do_test $prefix.reopen {
-      list [db one {SELECT count(*) FROM dolt_log}] \
-           [db one {SELECT count(*) FROM t}] [db one {PRAGMA integrity_check}]
-    } [list [lindex $expected 0] [expr {[lindex $expected 1]+1}] ok]
   }
 }
 

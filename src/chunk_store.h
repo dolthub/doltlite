@@ -231,6 +231,8 @@ struct ChunkStore {
   /* A refs merge failed and reinstated refs that never reached disk; the
   ** next refresh must reload so the session does not write over the peer. */
   u8 bReloadAfterRefsConflict;
+  u8 openPending;
+  u8 noReadLock;
   /* Working-set ref this connection last adopted or wrote for one branch.
   ** Refreshes leave it alone, so it differs from refs once a peer writes. */
   u8 bWsBasis;
@@ -311,6 +313,9 @@ int csManifestHashState(const u8 *aBuf, i64 iOffset);
 
 int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
                    const char *zFilename, int flags);
+
+int chunkStoreOpenDeferred(ChunkStore *cs, sqlite3_vfs *pVfs,
+                           const char *zFilename, int flags);
 
 int chunkStoreClose(ChunkStore *cs);
 

@@ -17,6 +17,18 @@ source $testdir/tester.tcl
 source $testdir/malloc_common.tcl
 ifcapable !wal {finish_test ; return }
 
+# WAL recovery requires the SQLite file format.
+db close
+forcedelete test.db
+sqlite3 db file:test.db?doltlite_engine=sqlite -uri 1
+proc wal4_restore_and_reopen {} {
+  catch {db close}
+  db_restore
+  sqlite3 db file:test.db?doltlite_engine=sqlite -uri 1
+  sqlite3_extended_result_codes db 1
+  sqlite3_db_config_lookaside db 0 0 0
+}
+
 do_test wal4-1.1 {
   execsql {
     PRAGMA journal_mode=WAL;
@@ -35,12 +47,12 @@ do_test wal4-1.2 {
 } {}
 
 do_test wal4-1.3 {
-  faultsim_restore_and_reopen
+  wal4_restore_and_reopen
   catchsql { SELECT * FROM t1 }
 } {1 {no such table: t1}}
 
 do_faultsim_test wal4-2 -prep {
-  faultsim_restore_and_reopen
+  wal4_restore_and_reopen
 } -body {
   execsql { SELECT name FROM sqlite_master }
 } -test {

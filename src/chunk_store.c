@@ -418,7 +418,9 @@ static int csOpen(
   ChunkStore *cs,
   sqlite3_vfs *pVfs,
   const char *zFilename,
-  int flags
+  int flags,
+  int deferBusy,
+  CsReadLock *pReadLock
 ){
   int rc;
   int exists = 0;
@@ -440,6 +442,9 @@ static int csOpen(
     return SQLITE_NOMEM;
   }
   cs->lockDepth = 0;
+  cs->noReadLock = (flags & SQLITE_OPEN_URI)!=0
+               && (flags & SQLITE_OPEN_READONLY)!=0
+               && sqlite3_uri_boolean(zFilename, "nolock", 0);
 
   if( zFilename==0 || zFilename[0]=='\0'
    || strcmp(zFilename, ":memory:")==0
@@ -528,13 +533,18 @@ static int csOpen(
       cs->readOnly = 1;
     }
 
-    if( !cs->isBuffer ){
+    if( !cs->isBuffer && !cs->noReadLock ){
       int retry = 0;
       do {
-        rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+        rc = csReadLock(cs, pReadLock);
         if( rc!=SQLITE_BUSY || retry++>=100 ) break;
+        csReadUnlock(cs, pReadLock);
         sqlite3_sleep(1);
       }while( rc==SQLITE_BUSY );
+      if( rc==SQLITE_BUSY && deferBusy ){
+        cs->openPending = 1;
+        return SQLITE_OK;
+      }
       if( rc!=SQLITE_OK ){
         chunkStoreClose(cs);
         return rc;
@@ -704,18 +714,31 @@ static int csOpen(
   return SQLITE_OK;
 }
 
-int chunkStoreOpen(
+static int csOpenUnlocked(
   ChunkStore *cs,
   sqlite3_vfs *pVfs,
   const char *zFilename,
-  int flags
+  int flags,
+  int deferBusy
 ){
-  int rc = csOpen(cs, pVfs, zFilename, flags);
-  if( rc==SQLITE_OK && cs->file.pFile && !cs->isBuffer ){
-    rc = sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
-    if( rc!=SQLITE_OK ) chunkStoreClose(cs);
+  CsReadLock readLock = {0, 0};
+  int rc = csOpen(cs, pVfs, zFilename, flags, deferBusy, &readLock);
+  int rc2 = csReadUnlock(cs, &readLock);
+  if( rc==SQLITE_OK && rc2!=SQLITE_OK ){
+    rc = rc2;
+    chunkStoreClose(cs);
   }
   return rc;
+}
+
+int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
+                   const char *zFilename, int flags){
+  return csOpenUnlocked(cs, pVfs, zFilename, flags, 0);
+}
+
+int chunkStoreOpenDeferred(ChunkStore *cs, sqlite3_vfs *pVfs,
+                           const char *zFilename, int flags){
+  return csOpenUnlocked(cs, pVfs, zFilename, flags, 1);
 }
 
 static void csWriteCleanCloseMarker(ChunkStore *cs){

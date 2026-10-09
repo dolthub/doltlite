@@ -9343,6 +9343,7 @@ struct PublicationProbe {
   int openRc;
   int nLogs;
   int nFreshLogs;
+  int readRc;
 };
 
 static void publicationSyncHook(void *pArg){
@@ -9353,7 +9354,14 @@ static void publicationSyncHook(void *pArg){
   p->openRc = sqlite3_open_v2(p->zPath, &fresh,
                             SQLITE_OPEN_READONLY, 0);
   if( p->openRc==SQLITE_OK ){
-    p->nFreshLogs = (int)queryInt64(fresh, "SELECT count(*) FROM dolt_log");
+    sqlite3_stmt *stmt = 0;
+    p->readRc = sqlite3_prepare_v2(fresh,
+        "SELECT count(*) FROM dolt_log", -1, &stmt, 0);
+    if( p->readRc==SQLITE_OK ){
+      p->readRc = sqlite3_step(stmt);
+      if( p->readRc==SQLITE_ROW ) p->nFreshLogs = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
   }
   sqlite3_close(fresh);
 }
@@ -9406,8 +9414,15 @@ static void run_publication_process(int fail){
     if( write(responses[1],"y",1)!=1 || read(requests[0],&command,1)!=1 ) _exit(1);
     valid = queryInt64(peer,"SELECT count(*) FROM dolt_log")==nLogs;
     rc = sqlite3_open_v2(dbpath,&fresh,SQLITE_OPEN_READONLY,0);
-    valid = valid && (rc==SQLITE_BUSY || (rc==SQLITE_OK
-        && queryInt64(fresh,"SELECT count(*) FROM dolt_log")==nLogs));
+    valid = valid && rc==SQLITE_OK;
+    if( rc==SQLITE_OK ){
+      sqlite3_stmt *stmt = 0;
+      rc = sqlite3_prepare_v2(fresh,"SELECT count(*) FROM dolt_log",-1,&stmt,0);
+      if( rc==SQLITE_OK ) rc = sqlite3_step(stmt);
+      valid = valid && (rc==SQLITE_BUSY
+          || (rc==SQLITE_ROW && sqlite3_column_int(stmt,0)==nLogs));
+      sqlite3_finalize(stmt);
+    }
     sqlite3_close(fresh);
     if( write(responses[1],valid ? "y" : "n",1)!=1
      || read(requests[0],&command,1)!=1 ) _exit(1);
@@ -9475,8 +9490,9 @@ static void run_commit_publication(void){
     gFailSyncNth = 0;
     check("publication_hook",probe.nHooks>0);
     check("publication_during_live",probe.nLogs==nLogs);
-    check("publication_during_fresh",probe.openRc==SQLITE_BUSY
-          || (probe.openRc==SQLITE_OK && probe.nFreshLogs==nLogs));
+    check("publication_during_open",probe.openRc==SQLITE_OK);
+    check("publication_during_fresh",probe.readRc==SQLITE_BUSY
+          || (probe.readRc==SQLITE_ROW && probe.nFreshLogs==nLogs));
     check("publication_result",fail ? rc!=SQLITE_OK : rc==SQLITE_OK);
     check("publication_after_live",queryInt64(peer,
           "SELECT count(*) FROM dolt_log")==nLogs+!fail);
