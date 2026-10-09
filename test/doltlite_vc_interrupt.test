@@ -61,6 +61,7 @@ reset_db
 db eval {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1)}
 set stmt [sqlite3_prepare_v2 db {SELECT dolt_add('-A')} -1 tail]
 do_test vc-interrupt.reuse-first {sqlite3_step $stmt} SQLITE_ROW
+db interrupt
 do_test vc-interrupt.reuse-finish {sqlite3_step $stmt} SQLITE_DONE
 sqlite3_reset $stmt
 set ::vc_interrupt_ticks 0
