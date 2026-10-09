@@ -199,6 +199,13 @@ static int httpMapError(
     if( !p->zLastError ){
       httpSetLastError(p, "database is locked by another connection");
     }
+  }else if( zCode && strcmp(zCode, "missing_chunks")==0 ){
+    rc = SQLITE_BUSY_SNAPSHOT;
+    p->base.bForceResumeScan = 1;
+    if( !p->zLastError ){
+      httpSetLastError(p,
+        "remote is missing chunks of the pushed history; retry the push");
+    }
   }else if( (zCode && strcmp(zCode, "refs_changed")==0)
          || (hasSqlite && sqliteRc==SQLITE_BUSY_SNAPSHOT)
          || status==409 ){

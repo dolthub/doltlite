@@ -757,12 +757,14 @@ static int remoteSrvPersistRefs(ChunkStore *pStore){
 }
 
 static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
-                                    int bForce, const u8 *pBody, int nBody){
+                                    int bForce, const u8 *pBody, int nBody,
+                                    int *pbMissing){
   ProllyHash refsHash;
   int rc;
 
   if( nBody<=0 ) return SQLITE_ERROR;
-  rc = doltliteValidateScopedRefsUpdate(pStore, pBody, nBody, zBranch, bForce);
+  rc = doltliteValidateScopedRefsUpdateEx(pStore, pBody, nBody, zBranch,
+                                          bForce, pbMissing);
   if( rc==SQLITE_OK ){
     prollyHashCompute(pBody, nBody, &refsHash);
     if( prollyHashCompare(refsTableGetHash(&pStore->refs), &refsHash)==0 ){
@@ -770,7 +772,9 @@ static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
     }
   }
   if( rc==SQLITE_OK ){
-    rc = doltliteValidateRefsTargetGraph(pStore, pBody, nBody, zBranch);
+    rc = doltliteValidateRefsTargetGraphEx(pStore, pBody, nBody, zBranch,
+                                           pbMissing);
+    if( rc==SQLITE_CORRUPT && *pbMissing ) rc = SQLITE_BUSY_SNAPSHOT;
   }
   if( rc!=SQLITE_OK ){
     chunkStoreRollback(pStore);
@@ -799,12 +803,14 @@ static int remoteSrvLockAndForceRefresh(ChunkStore *pStore){
 }
 
 static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
-                              int bForce, const u8 *pBody, int nBody){
+                              int bForce, const u8 *pBody, int nBody,
+                              int *pbMissing){
   int rc;
   if( nBody<=0 ) return SQLITE_ERROR;
   rc = remoteSrvLockAndForceRefresh(pStore);
   if( rc!=SQLITE_OK ) return rc;
-  rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody);
+  rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody,
+                                pbMissing);
   chunkStoreUnlock(pStore);
   return rc;
 }
@@ -815,7 +821,8 @@ static int remoteSrvApplyRefsIf(
   const char *zBranch,
   int bForce,
   const u8 *pBody,
-  int nBody
+  int nBody,
+  int *pbMissing
 ){
   int rc;
   if( nBody<=0 ) return SQLITE_ERROR;
@@ -825,7 +832,8 @@ static int remoteSrvApplyRefsIf(
     chunkStoreUnlock(pStore);
     return SQLITE_BUSY_SNAPSHOT;
   }
-  rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody);
+  rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody,
+                                pbMissing);
   chunkStoreUnlock(pStore);
   return rc;
 }
@@ -848,8 +856,21 @@ static int remoteSrvParseRefsPrefix(
   return SQLITE_OK;
 }
 
+/* 409 + BUSY_SNAPSHOT keeps older clients retrying; the code tells newer
+** ones to rescan below chunks this server already holds. */
+static void remoteSrvSendRefsError(DoltliteConn *fd, int rc, int bMissing){
+  if( rc==SQLITE_BUSY_SNAPSHOT && bMissing ){
+    sendStructuredError(fd, 409, "Conflict", "missing_chunks", rc,
+                        "remote is missing chunks of the pushed history; "
+                        "retry the push");
+    return;
+  }
+  sendSqliteError(fd, rc);
+}
+
 static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
                           const u8 *pBody, int nBody){
+  int bMissing = 0;
   char *zBranch = 0;
   int bForce = 0;
   const u8 *pRest = 0;
@@ -864,10 +885,10 @@ static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
     return;
   }
 
-  rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pRest, nRest);
+  rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pRest, nRest, &bMissing);
   sqlite3_free(zBranch);
   if( rc!=SQLITE_OK ){
-    sendSqliteError(fd, rc);
+    remoteSrvSendRefsError(fd, rc, bMissing);
     return;
   }
 
@@ -876,6 +897,7 @@ static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
 
 static void handlePutRefsIf(ChunkStore *pStore, DoltliteConn *fd,
                             const u8 *pBody, int nBody){
+  int bMissing = 0;
   ProllyHash expectedRefsHash;
   char *zBranch = 0;
   int bForce = 0;
@@ -894,10 +916,10 @@ static void handlePutRefsIf(ChunkStore *pStore, DoltliteConn *fd,
 
   rc = remoteSrvApplyRefsIf(pStore, &expectedRefsHash, zBranch, bForce,
                             pRest + PROLLY_HASH_SIZE,
-                            nRest - PROLLY_HASH_SIZE);
+                            nRest - PROLLY_HASH_SIZE, &bMissing);
   sqlite3_free(zBranch);
   if( rc!=SQLITE_OK ){
-    sendSqliteError(fd, rc);
+    remoteSrvSendRefsError(fd, rc, bMissing);
     return;
   }
 
@@ -921,7 +943,8 @@ int doltliteRemoteSrvApplyScopedRefsForTest(
   const u8 *pBody,
   int nBody
 ){
-  return remoteSrvApplyRefs(pStore, zBranch, bForce, pBody, nBody);
+  int bMissing = 0;
+  return remoteSrvApplyRefs(pStore, zBranch, bForce, pBody, nBody, &bMissing);
 }
 
 int doltliteRemoteSrvApplyRefsForTest(

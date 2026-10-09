@@ -2839,6 +2839,7 @@ DOLTLITE_C_TESTS = \
 	prolly_mutmap_order_test$(T.exe) \
 	scoped_refs_push_test$(T.exe) \
 	remote_chunk_integrity_test$(T.exe) \
+	remote_partial_push_test$(T.exe) \
 	chunk_source_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
@@ -3057,6 +3058,11 @@ scoped_refs_push_test$(T.exe): $(TOP)/test/scoped_refs_push_test.c libdoltlite$(
 remote_chunk_integrity_test$(T.exe): $(TOP)/test/remote_chunk_integrity_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/remote_chunk_integrity_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+remote_partial_push_test$(T.exe): $(TOP)/test/remote_partial_push_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -I$(TOP)/test -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/remote_partial_push_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 chunk_source_test$(T.exe): $(TOP)/test/chunk_source_test.c libdoltlite$(T.lib)
