@@ -64,6 +64,12 @@ when it cannot fast-forward, conflicts included.
   `invalid branch name` before the remote is opened. `src:refs/tags/...` is
   refused with `unsupported mapping: '<refspec>'`. An argument with no colon
   that starts with `refs/tags/` still pushes that tag.
+- `dolt_clone` checks out the remote's default branch. That is `main` when
+  the remote has it, otherwise `master`, otherwise the branch name that sorts
+  first. The first push into an empty remote records its branch. A later push
+  moves the default to `main`, to `master` while `main` is absent, or to a
+  new branch whose name sorts first. `dolt_default_branch` on the remote keeps
+  a default that names some other branch.
 - Remotes carry commits, tags, and branch refs. Working sets never travel:
   cloned branches start clean, and a push is refused while the **target**
   database's branch has uncommitted changes.

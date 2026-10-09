@@ -873,9 +873,23 @@ static int remoteRefsHaveBranch(const RefsTable *rt, const char *zName){
   return 0;
 }
 
+/* True when no existing branch name sorts before zDefault. The first push
+** leaves exactly that, so a later earlier name can take over. A default set
+** to some other branch does not. */
+static int remoteDefaultIsFirstName(const RefsTable *rt, const char *zDefault){
+  int n = 0, i;
+  const BranchRef *a = 0;
+  refsTableGetBranches(rt, &n, &a);
+  for(i=0; i<n; i++){
+    if( strcmp(a[i].zName, zDefault)<0 ) return 0;
+  }
+  return 1;
+}
+
 /* The default a push leaves on the remote. An empty remote adopts the pushed
-** branch; a newly created main, or master while there is no main, takes over
-** as Dolt's clone would choose it. */
+** branch. A newly created main, or master while there is no main, takes over.
+** With neither, a new branch that sorts first takes over when the current
+** default is already the first name. */
 static const char *remotePushedDefault(
   const RefsTable *pCur,
   const char *zBranch,
@@ -887,6 +901,13 @@ static const char *remotePushedDefault(
   if( strcmp(zBranch, "main")==0 ) return zBranch;
   if( strcmp(zBranch, "master")==0 && strcmp(zDefault, "main")!=0
    && !remoteRefsHaveBranch(pCur, "main") ){
+    return zBranch;
+  }
+  if( strcmp(zDefault, "main")!=0 && strcmp(zDefault, "master")!=0
+   && !remoteRefsHaveBranch(pCur, "main")
+   && !remoteRefsHaveBranch(pCur, "master")
+   && remoteDefaultIsFirstName(pCur, zDefault)
+   && strcmp(zBranch, zDefault)<0 ){
     return zBranch;
   }
   return zDefault;

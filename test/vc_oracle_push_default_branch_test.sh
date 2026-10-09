@@ -299,7 +299,8 @@ compare "two_branch_delete_first_branch" "$MUT_DELETE_FIRST" \
   "SELECT CONCAT('R|deleted|', count(*)) FROM dolt_branches WHERE name='topic_foo';"
 
 echo "--- clone checks out main, then master, over the first-pushed branch ---"
-for order in "zzz main" "zzz master" "zzz master main"; do
+for order in "zzz main" "zzz master" "zzz master main" \
+            "zeta alpha" "alpha zeta" "gamma beta alpha"; do
   key="clone_branch_$(echo "$order" | tr ' ' '_')"
   # shellcheck disable=SC2086
   consume_pushes "$key" $order
