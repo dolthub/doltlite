@@ -772,7 +772,7 @@ static int prollyBtreeQueryOnlyWriteGate(void *pArg){
   return p->db!=0 && (p->db->flags & SQLITE_QueryOnly)!=0;
 }
 
-int sqlite3BtreeOpen(
+static int prollyBtreeOpenImpl(
   sqlite3_vfs *pVfs,
   const char *zFilename,
   sqlite3 *db,
@@ -1207,6 +1207,20 @@ int sqlite3BtreeOpen(
 
   sqlite3_free(zStoreFilename);
   return SQLITE_OK;
+}
+
+/* A chunk the store's own refs point to is gone: report corruption, not the
+** store's internal "no such chunk" sentinel. */
+int sqlite3BtreeOpen(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  sqlite3 *db,
+  Btree **ppBtree,
+  int flags,
+  int vfsFlags
+){
+  int rc = prollyBtreeOpenImpl(pVfs, zFilename, db, ppBtree, flags, vfsFlags);
+  return rc==SQLITE_NOTFOUND ? SQLITE_CORRUPT : rc;
 }
 
 int sqlite3BtreeUsesOrig(Btree *p){

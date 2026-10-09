@@ -360,8 +360,10 @@ static int csSourceSetModeError(
     memset(p, 0, sizeof(*p));
     cs->pChunkSource = p;
   }
-  csSourceSetHashError(p, SQLITE_NOTFOUND,
-      "origin chunk source is not enabled; reopen with lazy_origin=1 for",
+  /* Callers probing for absence still see NOTFOUND; a statement that fails
+  ** on it reports the missing chunk as corruption. */
+  csSourceSetHashError(p, SQLITE_CORRUPT,
+      "chunk is missing (a lazy clone needs lazy_origin=1):",
       pHash);
   return SQLITE_NOTFOUND;
 }
@@ -1060,10 +1062,13 @@ int chunkStoreSourceGet(ChunkStore *cs, const ProllyHash *pHash,
         cs, pHash, "DoltLite chunk source support is disabled for",
         SQLITE_IOERR_CHUNK_SOURCE);
   }
-  return csDisabledSetHashError(
-      cs, pHash,
-      "origin chunk source is not enabled; reopen with lazy_origin=1 for",
-      SQLITE_NOTFOUND);
+  {
+    int rc = csDisabledSetHashError(
+        cs, pHash,
+        "chunk is missing (a lazy clone needs lazy_origin=1):",
+        SQLITE_CORRUPT);
+    return rc==SQLITE_CORRUPT ? SQLITE_NOTFOUND : rc;
+  }
 }
 
 int chunkStoreSourcePrefetchMany(ChunkStore *cs, const ProllyHash *aHash,

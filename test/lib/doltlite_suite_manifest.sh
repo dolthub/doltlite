@@ -31,6 +31,7 @@ doltlite_reserved.sh
 doltlite_diff.sh
 doltlite_reset.sh
 doltlite_readonly_vc.sh
+doltlite_missing_chunk_errors.sh
 doltlite_stale_txn_vc.sh
 doltlite_branch.sh
 doltlite_default_branch.sh
