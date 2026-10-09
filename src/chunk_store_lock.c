@@ -604,7 +604,7 @@ static int csDetectExternalChanges(
       rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
       if( rc!=SQLITE_OK ) return rc;
     }
-    if( fileSize > cs->file.iFileSize ){
+    if( fileSize > cs->file.iFileSize && fileSize!=cs->iFailedTailEnd ){
       int adopted = 0;
       rc = csAdoptMatchingCloseMarker(cs, fileSize, &adopted);
       if( rc!=SQLITE_OK ) return rc;
@@ -628,6 +628,9 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
   i64 rootOff;
   int hashState;
   int rc;
+
+  rc = csScrubFailedRoot(cs);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( cs->staging.nPending>0 || cs->staging.nRecentUncommitted>0
    || cs->bRefsStale || cs->movedReadOnly || cs->corruptMidStream
@@ -776,6 +779,8 @@ static int csReloadFromDisk(ChunkStore *cs){
   ChunkStoreReloadState saved;
   char *zOldFilename;
   int rc;
+  rc = csScrubFailedRoot(cs);
+  if( rc!=SQLITE_OK ) return rc;
   if( cs->staging.nRecentUncommitted > 0 ){
     return SQLITE_BUSY_SNAPSHOT;
   }

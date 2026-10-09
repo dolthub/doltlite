@@ -286,6 +286,10 @@ struct ChunkStore {
   u32 reloadGen;
   u8 corruptMidStream;    /* Mid-stream WAL damage: reads/commits CORRUPT;
                           ** open still succeeds (stock surfaces on first use) */
+  i64 iFailedRootOff;     /* Root of a failed commit the rollback could not
+                          ** truncate; zeroed before the tail is read again */
+  i64 iFailedTailEnd;     /* Physical end of that failed append: growth to
+                          ** exactly here is ours, not a peer's */
   u8 corruptHeader;       /* Header failed its seal or bounds: nothing was
                           ** served, so a reload must not adopt it as empty */
   u8 notADatabase;        /* Wrong/missing magic. Open succeeds; first use

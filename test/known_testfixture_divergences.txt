@@ -5784,5 +5784,5 @@ fts4langid fts4langid-5.4.4.4 class=intentional  # FTS content rowids continue a
 fts4langid fts4langid-5.4.1073741824.2 class=intentional  # FTS content rowids continue after DELETE
 fts4langid fts4langid-5.4.1073741824.4 class=intentional  # FTS content rowids continue after DELETE
 incrvacuum incrvacuum-3.3 class=intentional  # shared sequence metadata changes chunk-store file size after DROP and DELETE
-incrvacuum_ioerr incrvacuum-ioerr-4.3.2 class=intentional  # page_count measures chunk-store bytes, not freelist shrinkage
-incrvacuum_ioerr incrvacuum-ioerr-4.3.3 class=intentional  # page_count measures chunk-store bytes, not freelist shrinkage
+incrvacuum_ioerr incrvacuum-ioerr-4.5.2 class=intentional  # page_count measures chunk-store bytes, not freelist shrinkage
+incrvacuum_ioerr incrvacuum-ioerr-4.5.3 class=intentional  # page_count measures chunk-store bytes, not freelist shrinkage

@@ -1,0 +1,86 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_failed_commit_rollback
+
+# A commit whose fsync fails must not become visible when the rollback
+# truncate fails too.
+proc tvfs_cb {method file args} {
+  if {![string match *test.db $file]} { return SQLITE_OK }
+  switch -- $::mode {
+    off { return SQLITE_OK }
+    sync_trunc {
+      if {$method eq "xSync" || $method eq "xTruncate"} { return SQLITE_IOERR }
+    }
+    all_after_sync {
+      if {$method eq "xSync"} { set ::stuck 1; return SQLITE_IOERR }
+      if {$::stuck} { return SQLITE_IOERR }
+    }
+  }
+  return SQLITE_OK
+}
+
+proc setup {} {
+  catch {db close}
+  forcedelete test.db
+  set ::mode off
+  set ::stuck 0
+  sqlite3 db test.db -vfs tvfs
+  db eval {
+    CREATE TABLE t(k INTEGER PRIMARY KEY, v);
+    INSERT INTO t VALUES(1,'a');
+  }
+}
+
+testvfs tvfs
+tvfs filter {xSync xTruncate xWrite}
+tvfs script tvfs_cb
+
+setup
+do_test 1.1 {
+  set ::mode sync_trunc
+  set r [catchsql {INSERT INTO t VALUES(2, randomblob(50000))}]
+  set ::mode off
+  lindex $r 0
+} {1}
+do_execsql_test 1.2 {SELECT group_concat(k) FROM t} {1}
+do_execsql_test 1.3 {
+  INSERT INTO t VALUES(3,'c');
+  SELECT group_concat(k) FROM t;
+} {1,3}
+do_test 1.4 {
+  db close
+  sqlite3 db test.db
+  db eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}
+} {1,3 ok}
+
+# The zeroing write fails too: the handle keeps serving its pre-commit state
+# and refuses writes until the root can be zeroed, then carries on without it.
+setup
+do_test 2.1 {
+  set ::mode all_after_sync
+  set r [catchsql {INSERT INTO t VALUES(2, randomblob(50000))}]
+  lindex $r 0
+} {1}
+do_test 2.2 {
+  catchsql {SELECT group_concat(k) FROM t}
+} {0 1}
+do_test 2.3 {
+  catchsql {INSERT INTO t VALUES(3,'c')}
+} {1 {disk I/O error}}
+do_test 2.4 {
+  set ::mode off
+  db eval {SELECT group_concat(k) FROM t}
+} {1}
+do_execsql_test 2.5 {
+  INSERT INTO t VALUES(3,'c');
+  SELECT group_concat(k) FROM t;
+} {1,3}
+do_test 2.6 {
+  db close
+  sqlite3 db test.db
+  db eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}
+} {1,3 ok}
+
+catch {db close}
+tvfs delete
+finish_test

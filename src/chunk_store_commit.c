@@ -67,6 +67,46 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
 }
 
+/* Caller holds the commit lock. Past the failed append's end a peer may
+** have adopted the root, and zeroing it would damage that peer's commit. */
+static int csScrubFailedRootLocked(ChunkStore *cs){
+  u8 aZero[1 + CHUNK_MANIFEST_SIZE];
+  i64 sz = -1;
+  int rc = sqlite3OsFileSize(cs->file.pFile, &sz);
+  if( rc!=SQLITE_OK ) return rc;
+  if( sz!=cs->iFailedTailEnd ){
+    cs->iFailedRootOff = 0;
+    cs->iFailedTailEnd = 0;
+    return SQLITE_OK;
+  }
+  memset(aZero, 0, sizeof(aZero));
+  rc = sqlite3OsWrite(cs->file.pFile, aZero, sizeof(aZero), cs->iFailedRootOff);
+  if( rc!=SQLITE_OK ) return rc;
+  (void)csSyncFile(cs);
+  cs->iFailedRootOff = 0;
+  return SQLITE_OK;
+}
+
+/* Only on the handle that wrote it: a reopen by path may be another file. */
+int csScrubFailedRoot(ChunkStore *cs){
+  sqlite3_file *pLock = 0;
+  char *zLock = 0;
+  int rc;
+  if( !cs->iFailedRootOff ) return SQLITE_OK;
+  if( !cs->file.pFile ){
+    cs->iFailedRootOff = 0;
+    cs->iFailedTailEnd = 0;
+    return SQLITE_OK;
+  }
+  if( cs->lockDepth<=0 ){
+    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &pLock, &zLock);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = csScrubFailedRootLocked(cs);
+  if( pLock ) csFileUnlock(pLock, &zLock);
+  return rc;
+}
+
 static int csRestoreCommittedRefsStateInner(ChunkStore *cs){
   csRestoreCommittedRefsHash(cs);
   if( prollyHashIsEmpty(&cs->refs.committedRefsHash) ){
@@ -175,7 +215,8 @@ static int csCommitResolveAppendPoint(
     }
   }
 
-  if( fileSize > cs->file.iFileSize && hadFile ){
+  if( fileSize > cs->file.iFileSize && hadFile
+   && fileSize!=cs->iFailedTailEnd ){
     rc = csReloadFromDiskPreservingLocalRefs(cs);
     if( rc != SQLITE_OK ) return rc;
     fileSize = cs->file.iFileSize;
@@ -195,8 +236,9 @@ static int csCommitResolveAppendPoint(
   if( hadFile && cs->file.iFileSize > fileSize ){
     fileSize = cs->file.iFileSize;
   }
-  if( physFileSize > fileSize ){
-    (void)sqlite3OsTruncate(cs->file.pFile, fileSize);
+  if( physFileSize > fileSize
+   && sqlite3OsTruncate(cs->file.pFile, fileSize)==SQLITE_OK ){
+    cs->iFailedTailEnd = 0;
   }
 
   /* Without powersafe overwrite, start each batch on a fresh sector. */
@@ -353,6 +395,7 @@ static int csCommitToFile(ChunkStore *cs){
   int i;
   i64 fileSize = 0;
   i64 origFileSize = 0;
+  i64 rootOff = -1;
   i64 writeOff = 0;
   i64 durableTo = 0;
   i64 batchStart = 0;
@@ -502,6 +545,7 @@ static int csCommitToFile(ChunkStore *cs){
     CS_WRITE_I64(rootRec + 1 + CS_MANIFEST_BATCH_START_OFF, batchStart);
     csManifestSeal(rootRec + 1, writeOff);
     CRASH_CHECK_WRITE();
+    rootOff = writeOff;
     rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), writeOff);
     if( rc != SQLITE_OK ) goto commit_done;
     contentEnd = rootEnd;
@@ -544,11 +588,25 @@ static int csCommitToFile(ChunkStore *cs){
   return SQLITE_OK;
 
 commit_done:
-  csFileUnlock(lockFd, &lockName);
-
+  /* Still under the commit lock, so no peer has appended past the failed
+  ** root. Zero it first so it is never adopted if the truncate fails;
+  ** until it is zeroed, retry before the tail is read again. */
   if( cs->file.pFile && writeOff > origFileSize ){
-    (void)csRollbackFailedAppend(cs, origFileSize);
+    int zeroRc = SQLITE_OK;
+    if( rootOff>0 ){
+      u8 aZero[1 + CHUNK_MANIFEST_SIZE];
+      memset(aZero, 0, sizeof(aZero));
+      zeroRc = sqlite3OsWrite(cs->file.pFile, aZero, sizeof(aZero), rootOff);
+    }
+    if( csRollbackFailedAppend(cs, origFileSize)!=SQLITE_OK && rootOff>0 ){
+      cs->iFailedTailEnd = rootOff + 1 + CHUNK_MANIFEST_SIZE;
+      if( zeroRc!=SQLITE_OK ){
+        cs->iFailedRootOff = rootOff;
+        if( cs->file.pFile ) (void)csScrubFailedRootLocked(cs);
+      }
+    }
   }
+  csFileUnlock(lockFd, &lockName);
   (void)csRestoreCommittedRefsState(cs);
   if( aCommittedPending!=aSmallCommittedPending ){
     sqlite3_free(aCommittedPending);
@@ -576,6 +634,10 @@ int chunkStoreCommitWithBusyHandler(
 
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( cs->notADatabase ) return SQLITE_NOTADB;
+  if( cs->iFailedRootOff ){
+    rc = csScrubFailedRoot(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
   if( chunkStoreWriteRefused(cs) ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);

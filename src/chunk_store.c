@@ -789,6 +789,7 @@ int chunkStoreClose(ChunkStore *cs){
   chunkStoreSourceClose(cs);
   /* Clean-close marker is optional; failures are silent, so malloc is benign. */
   sqlite3BeginBenignMalloc();
+  (void)csScrubFailedRoot(cs);
   csWriteCleanCloseMarker(cs);
   sqlite3EndBenignMalloc();
   chunkStoreUnlock(cs);
@@ -903,6 +904,10 @@ int chunkStoreGet(
   *pnData = 0;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
+  if( cs->iFailedRootOff ){
+    rc = csScrubFailedRoot(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
 
   rc = csSearchPending(cs, hash, &idx);
@@ -1043,6 +1048,10 @@ int chunkStoreReadAhead(
   int rc;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
+  if( cs->iFailedRootOff ){
+    rc = csScrubFailedRoot(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( cs->corruptMidStream ) return SQLITE_CORRUPT;
   if( !cs->file.pFile ) return SQLITE_OK;
   for(i=0; i<nHash && i<CHUNK_READ_AHEAD_MAX; i++){

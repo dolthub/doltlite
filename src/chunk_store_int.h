@@ -32,6 +32,7 @@ int csDiskStateMatchesMemory(ChunkStore *cs);
 int csOpenFile(sqlite3_vfs *pVfs, const char *zPath, sqlite3_file **ppFile,
                int flags, int *pOutFlags);
 int csSyncFile(ChunkStore *cs);
+int csScrubFailedRoot(ChunkStore *cs);
 void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 int csManifestHashStateOffsetless(const u8 *aBuf);
