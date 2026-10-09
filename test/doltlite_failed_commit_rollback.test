@@ -81,6 +81,55 @@ do_test 2.6 {
   db eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}
 } {1,3 ok}
 
+
+# A merge whose branch advance and restore both hit I/O errors must not take
+# effect later: reported failure means the session's next write, and a
+# reopen, still see the pre-merge state. Sweep where the persistent fault
+# starts so the check does not depend on the engine's I/O count.
+proc tvfs_count_cb {method file args} {
+  if {![string match *test.db $file]} { return SQLITE_OK }
+  if {!$::armed} { return SQLITE_OK }
+  incr ::nIo
+  if {$::nIo >= $::failAt} { return SQLITE_IOERR }
+  return SQLITE_OK
+}
+tvfs script tvfs_count_cb
+for {set failAt 1} {$failAt <= 20} {incr failAt} {
+  catch {db close}
+  forcedelete test.db
+  set ::armed 0
+  set ::nIo 0
+  set ::failAt $failAt
+  sqlite3 db test.db -vfs tvfs
+  db eval {
+    CREATE TABLE t(k INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','c1');
+    SELECT dolt_branch('b');
+    SELECT dolt_checkout('b');
+    INSERT INTO t VALUES(2);
+    SELECT dolt_commit('-am','b1');
+    SELECT dolt_checkout('main');
+    CREATE TABLE u(x);
+    SELECT dolt_commit('-Am','m1');
+  }
+  set ::armed 1
+  set failed [catch {db eval {SELECT dolt_merge('b')}}]
+  set ::armed 0
+  set want [expr {$failed ? "1" : "1,2"}]
+  do_test 3.$failAt.session {
+    db eval {SELECT group_concat(k) FROM t}
+  } $want
+  do_test 3.$failAt.after-write {
+    db eval {INSERT INTO u VALUES(1); SELECT group_concat(k) FROM t}
+  } $want
+  do_test 3.$failAt.reopen {
+    db close
+    sqlite3 db test.db
+    db eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}
+  } [list $want ok]
+}
+
 catch {db close}
 tvfs delete
 finish_test

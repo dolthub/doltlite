@@ -138,6 +138,7 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
 int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   ChunkStore *cs;
   int rc;
+  int rcFirst;
   assert( db!=0 && p!=0 );
   assert( p->zSessionBranch!=0 );
   if( failNextRestore ){
@@ -154,21 +155,27 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   }else{
     csRestoreCommittedRefsHash(cs);
   }
+  /* A step that cannot read the store (an I/O error, a failed commit's root
+  ** still awaiting its scrub) must not leave the rest of the operation's
+  ** state live: restore what memory allows and reload the rest from disk,
+  ** or the session's next write publishes what the operation reported as
+  ** failed. */
+  rcFirst = SQLITE_OK;
   if( prollyHashIsEmpty(&cs->refs.refsHash) ){
     chunkStoreClearRefs(cs);
   }else{
-    rc = chunkStoreReloadRefs(cs);
-    if( rc!=SQLITE_OK ) return rc;
+    rcFirst = chunkStoreReloadRefs(cs);
   }
   chunkStoreReadoptWorkingSetBasis(cs);
 
   rc = doltliteSwitchCatalog(db, &p->sessionCatalogHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rcFirst==SQLITE_OK ) rcFirst = rc;
 
   rc = doltliteSetSessionBranch(db, p->zSessionBranch);
-  if( rc!=SQLITE_OK ) return rc;
-  doltliteSetSessionHead(db, &p->sessionHead);
-  rc = doltliteSetSessionStaged(db, &p->sessionStaged);
+  if( rc==SQLITE_OK ){
+    doltliteSetSessionHead(db, &p->sessionHead);
+    rc = doltliteSetSessionStaged(db, &p->sessionStaged);
+  }
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionMergeState(db, p->sessionIsMerging,
                                       &p->sessionMergeCommit,
@@ -178,7 +185,9 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
     rc = doltliteSetSessionConstraintViolationsCatalog(
         db, &p->sessionConstraintViolationsCatalog);
   }
-  return rc;
+  if( rcFirst==SQLITE_OK ) rcFirst = rc;
+  if( rcFirst!=SQLITE_OK ) doltliteInvalidateSessionWorkingState(db);
+  return rcFirst;
 }
 
 int doltliteRestoreTxnStateOnFailure(
