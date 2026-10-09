@@ -94,6 +94,7 @@ doltlite_failed_commit_rollback
 doltlite_reload_uncommitted_recent
 doltlite_recover_cacheflush_oom
 doltlite_rebase_messages
+doltlite_rebase_order
 doltlite_vacuum_into_race
 doltlite_blame_seek
 doltlite_blame_affinity

@@ -1,0 +1,58 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach depth {0 3} {
+  foreach {dates delete_date insert_date} {
+    side-newer 2026-01-01T00:00:00Z 2026-01-02T00:00:00Z
+    delete-newer 2026-01-02T00:00:00Z 2026-01-01T00:00:00Z
+  } {
+    foreach mode {direct interactive} {
+      reset_db
+      execsql {
+        CREATE TABLE t(id INTEGER PRIMARY KEY);
+        INSERT INTO t VALUES(0);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('side');
+      }
+      for {set i 0} {$i<$depth} {incr i} {
+        execsql {SELECT dolt_commit('--allow-empty','-m','upstream empty')}
+      }
+      execsql {
+        INSERT INTO t VALUES(1);
+        SELECT dolt_commit('-Am','upstream insert');
+        SELECT dolt_checkout('-b','feat');
+        DELETE FROM t WHERE id=1;
+        SELECT dolt_commit('-Am','feature delete','--date',$delete_date);
+        SELECT dolt_checkout('main');
+        DELETE FROM t WHERE id=1;
+        SELECT dolt_commit('-Am','upstream delete');
+        SELECT dolt_checkout('side');
+        INSERT INTO t VALUES(1);
+        SELECT dolt_commit('-Am','side insert','--date',$insert_date);
+        SELECT dolt_checkout('feat');
+        SELECT dolt_merge('side');
+      }
+      set prefix rebase-order-$depth-$dates-$mode
+      if {$mode eq "interactive"} {
+        execsql {SELECT dolt_rebase('-i','main')}
+        do_execsql_test $prefix.plan {
+          SELECT commit_message FROM dolt_rebase ORDER BY rebase_order;
+        } {{side insert} {feature delete}}
+        execsql {SELECT dolt_rebase('--continue')}
+      } else {
+        execsql {SELECT dolt_rebase('main')}
+      }
+      do_execsql_test $prefix.rows {SELECT id FROM t ORDER BY id} {0}
+      do_execsql_test $prefix.clean {SELECT count(*) FROM dolt_status} {0}
+      do_execsql_test $prefix.log {
+        SELECT message FROM dolt_log LIMIT 2;
+      } {{feature delete} {side insert}}
+      do_execsql_test $prefix.side {
+        SELECT id FROM dolt_at_t('side') ORDER BY id;
+      } {0 1}
+      do_execsql_test $prefix.integrity {PRAGMA integrity_check} {ok}
+    }
+  }
+}
+
+finish_test
