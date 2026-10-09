@@ -423,6 +423,20 @@ static int doltPushParsedFunc(
       doltliteVcResultError(ctx, db, "invalid branch name");
       return SQLITE_ERROR;
     }
+    /* HEAD is the checked-out branch, not a branch of that name. */
+    if( strcmp(remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX), "HEAD")==0 ){
+      const char *zHead = doltliteGetSessionBranch(db);
+      char *zCopy;
+      if( doltliteIsDetached(db) || !zHead || !zHead[0] ){
+        sqlite3_free(zSrc);
+        doltliteVcResultError(ctx, db, "push failed: branch or tag not found");
+        return SQLITE_NOTFOUND;
+      }
+      zCopy = sqlite3_mprintf("%s", zHead);
+      sqlite3_free(zSrc);
+      if( !zCopy ){ sqlite3_result_error_nomem(ctx); return SQLITE_NOMEM; }
+      zSrc = zCopy;
+    }
     if( chunkStoreFindBranch(cs,
             remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX), 0)!=SQLITE_OK ){
       sqlite3_free(zSrc);
@@ -707,6 +721,150 @@ static int remoteSqlFetchOne(
   return rc;
 }
 
+static int fetchSpecStars(const char *z){
+  int n = 0;
+  if( !z ) return 0;
+  for(; *z; z++) if( *z=='*' ) n++;
+  return n;
+}
+
+/* zPat is an exact name or prefix*suffix. On a match, pzCap and pnCap are
+** the span the star consumed. */
+static int fetchPatMatch(
+  const char *zPat,
+  const char *zName,
+  const char **pzCap,
+  int *pnCap
+){
+  const char *zStar = strchr(zPat, '*');
+  int nPre, nSuf, nName;
+  if( !zStar ){
+    if( strcmp(zPat, zName)!=0 ) return 0;
+    *pzCap = zName;
+    *pnCap = 0;
+    return 1;
+  }
+  nPre = (int)(zStar - zPat);
+  nSuf = (int)strlen(zStar + 1);
+  nName = (int)strlen(zName);
+  if( nName < nPre + nSuf ) return 0;
+  if( nPre && memcmp(zName, zPat, (size_t)nPre)!=0 ) return 0;
+  if( nSuf && memcmp(zName + nName - nSuf, zStar + 1, (size_t)nSuf)!=0 ){
+    return 0;
+  }
+  *pzCap = zName + nPre;
+  *pnCap = nName - nPre - nSuf;
+  return 1;
+}
+
+static char *fetchPatApply(const char *zPat, const char *zCap, int nCap){
+  const char *zStar = strchr(zPat, '*');
+  if( !zStar ) return sqlite3_mprintf("%s", zPat);
+  return sqlite3_mprintf("%.*s%.*s%s",
+      (int)(zStar - zPat), zPat, nCap, zCap, zStar + 1);
+}
+
+/* A colon fetch spec maps a branch pattern onto a remote-tracking pattern.
+** refs/heads/ on the source and refs/remotes/ or remotes/ on the destination
+** are optional. One star on each side is a glob. main:mm is not a mapping.
+** On SQLITE_OK the three outputs are new strings the caller frees. */
+static int fetchSpecParseColon(
+  const char *zSpec,
+  int *pbGlob,
+  char **pzRemote,
+  char **pzSrcPat,
+  char **pzDstPat
+){
+  const char *zColon;
+  const char *zDst;
+  const char *zPat;
+  const char *zRemoteStart;
+  const char *zBranch;
+  char *zSrc = 0;
+  int nRemote;
+  int nSrcStar, nDstStar;
+
+  *pbGlob = 0;
+  *pzRemote = 0;
+  *pzSrcPat = 0;
+  *pzDstPat = 0;
+  zColon = strchr(zSpec, ':');
+  if( !zColon || strchr(zColon + 1, ':') ) return SQLITE_ERROR;
+  if( zColon==zSpec || zColon[1]==0 ) return SQLITE_ERROR;
+  zSrc = sqlite3_mprintf("%.*s", (int)(zColon - zSpec), zSpec);
+  if( !zSrc ) return SQLITE_NOMEM;
+  zDst = zColon + 1;
+
+  if( strncmp(zSrc, "refs/", 5)==0 ){
+    if( strncmp(zSrc, REMOTE_HEADS_PREFIX, strlen(REMOTE_HEADS_PREFIX))!=0 ){
+      sqlite3_free(zSrc);
+      return SQLITE_ERROR;
+    }
+    zPat = zSrc + strlen(REMOTE_HEADS_PREFIX);
+  }else{
+    zPat = zSrc;
+  }
+  if( zPat[0]==0 ){
+    sqlite3_free(zSrc);
+    return SQLITE_ERROR;
+  }
+
+  if( strncmp(zDst, "refs/remotes/", 13)==0 ){
+    zRemoteStart = zDst + 13;
+  }else if( strncmp(zDst, "remotes/", 8)==0 ){
+    zRemoteStart = zDst + 8;
+  }else{
+    sqlite3_free(zSrc);
+    return SQLITE_ERROR;
+  }
+  zBranch = strchr(zRemoteStart, '/');
+  if( !zBranch || zBranch==zRemoteStart || zBranch[1]==0
+   || memchr(zRemoteStart, '*', (size_t)(zBranch - zRemoteStart)) ){
+    sqlite3_free(zSrc);
+    return SQLITE_ERROR;
+  }
+  nRemote = (int)(zBranch - zRemoteStart);
+  zBranch++;
+  nSrcStar = fetchSpecStars(zPat);
+  nDstStar = fetchSpecStars(zBranch);
+  if( nSrcStar!=nDstStar || nSrcStar>1 ){
+    sqlite3_free(zSrc);
+    return SQLITE_ERROR;
+  }
+
+  *pzRemote = sqlite3_mprintf("%.*s", nRemote, zRemoteStart);
+  *pzSrcPat = sqlite3_mprintf("%s", zPat);
+  *pzDstPat = sqlite3_mprintf("%s", zBranch);
+  sqlite3_free(zSrc);
+  if( !*pzRemote || !*pzSrcPat || !*pzDstPat ){
+    sqlite3_free(*pzRemote);
+    sqlite3_free(*pzSrcPat);
+    sqlite3_free(*pzDstPat);
+    *pzRemote = 0;
+    *pzSrcPat = 0;
+    *pzDstPat = 0;
+    return SQLITE_NOMEM;
+  }
+  *pbGlob = nSrcStar==1;
+  return SQLITE_OK;
+}
+
+static int fetchSpecResultInvalid(
+  sqlite3_context *ctx,
+  sqlite3 *db,
+  const char *zSpec
+){
+  char *zMsg = sqlite3_mprintf("invalid fetch spec: '%s'", zSpec);
+  if( !zMsg ){
+    sqlite3_result_error_nomem(ctx);
+    return SQLITE_NOMEM;
+  }
+  (void)doltliteVcSealSavepointError(db);
+  doltliteVcResultError(ctx, db, zMsg);
+  sqlite3_free(zMsg);
+  return SQLITE_ERROR;
+}
+
 static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -723,6 +881,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   int nNames = 0;
   int rc;
   int i;
+  int bNeedNames;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
   /* A NULL branch has always meant fetch everything. */
@@ -740,7 +899,13 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     doltliteCmdArgsClear(&args);
     return;
   }
-  if( args.nPositional<=1 || bPrune ){
+  bNeedNames = args.nPositional<=1 || bPrune;
+  if( !bNeedNames ){
+    for(i=1; i<args.nPositional; i++){
+      if( strchr(args.azPositional[i], '*') ){ bNeedNames = 1; break; }
+    }
+  }
+  if( bNeedNames ){
     rc = parseRemoteBranchNames(pRemote, &azNames, &nNames);
   }
   if( rc!=SQLITE_OK ){
@@ -766,34 +931,87 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   if( args.nPositional>1 ){
-    char *zTrackPrefix = sqlite3_mprintf("refs/remotes/%s/", zRemoteName);
-    if( !zTrackPrefix ){
-      rc = SQLITE_NOMEM;
-      sqlite3_result_error_nomem(ctx);
-      goto fetch_done;
+    for(i=1; i<args.nPositional && rc==SQLITE_OK; i++){
+      const char *zSpec = args.azPositional[i];
+      int bGlob = 0;
+      char *zTrackRemote = 0;
+      char *zSrcPat = 0;
+      char *zDstPat = 0;
+      int prc;
+      int k;
+      if( !strchr(zSpec, ':') ) continue;
+      prc = fetchSpecParseColon(zSpec, &bGlob, &zTrackRemote, &zSrcPat, &zDstPat);
+      if( prc==SQLITE_NOMEM ){
+        rc = SQLITE_NOMEM;
+        sqlite3_result_error_nomem(ctx);
+      }else if( prc!=SQLITE_OK ){
+        rc = fetchSpecResultInvalid(ctx, db, zSpec);
+      }else if( bGlob ){
+        int bSeen = 0;
+        for(k=0; k<nNames; k++){
+          const char *zCap = 0;
+          int nCap = 0;
+          if( fetchPatMatch(zSrcPat, azNames[k], &zCap, &nCap) ) bSeen = 1;
+        }
+        if( !bSeen ) rc = fetchSpecResultInvalid(ctx, db, zSpec);
+      }
+      sqlite3_free(zTrackRemote);
+      sqlite3_free(zSrcPat);
+      sqlite3_free(zDstPat);
     }
     for(i=1; i<args.nPositional && rc==SQLITE_OK; i++){
       const char *zSpec = args.azPositional[i];
       const char *zColon = strchr(zSpec, ':');
-      char *zSrc = zColon ? sqlite3_mprintf("%.*s", (int)(zColon - zSpec), zSpec)
-                          : sqlite3_mprintf("%s", zSpec);
-      const char *zBranch, *zTrack;
-      if( !zSrc ){
-        rc = SQLITE_NOMEM;
-        sqlite3_result_error_nomem(ctx);
-        break;
+      char *zSrc = 0;
+      int bGlob = 0;
+      char *zTrackRemote = 0;
+      char *zSrcPat = 0;
+      char *zDstPat = 0;
+      int prc;
+      if( !zColon ){
+        const char *zBranch;
+        zSrc = sqlite3_mprintf("%s", zSpec);
+        if( !zSrc ){
+          rc = SQLITE_NOMEM;
+          sqlite3_result_error_nomem(ctx);
+          break;
+        }
+        zBranch = remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX);
+        rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zRemoteName,
+                               zBranch, zBranch);
+        sqlite3_free(zSrc);
+        continue;
       }
-      zBranch = remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX);
-      zTrack = zBranch;
-      if( zColon && zColon[1] ){
-        zTrack = remoteSqlStripPrefix(
-            remoteSqlStripPrefix(zColon + 1, zTrackPrefix), REMOTE_HEADS_PREFIX);
+      prc = fetchSpecParseColon(zSpec, &bGlob, &zTrackRemote, &zSrcPat, &zDstPat);
+      if( prc!=SQLITE_OK ){
+        rc = prc==SQLITE_NOMEM ? SQLITE_NOMEM : SQLITE_ERROR;
+        if( prc==SQLITE_NOMEM ) sqlite3_result_error_nomem(ctx);
+        else rc = fetchSpecResultInvalid(ctx, db, zSpec);
+      }else if( bGlob ){
+        int k;
+        for(k=0; k<nNames && rc==SQLITE_OK; k++){
+          const char *zCap = 0;
+          int nCap = 0;
+          char *zTrack;
+          if( !fetchPatMatch(zSrcPat, azNames[k], &zCap, &nCap) ) continue;
+          zTrack = fetchPatApply(zDstPat, zCap, nCap);
+          if( !zTrack ){
+            rc = SQLITE_NOMEM;
+            sqlite3_result_error_nomem(ctx);
+            break;
+          }
+          rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zTrackRemote,
+                                 azNames[k], zTrack);
+          sqlite3_free(zTrack);
+        }
+      }else{
+        rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zTrackRemote,
+                               zSrcPat, zDstPat);
       }
-      rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zRemoteName,
-                             zBranch, zTrack);
-      sqlite3_free(zSrc);
+      sqlite3_free(zTrackRemote);
+      sqlite3_free(zSrcPat);
+      sqlite3_free(zDstPat);
     }
-    sqlite3_free(zTrackPrefix);
   }else{
     for(i=0; i<nNames && rc==SQLITE_OK; i++){
       rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zRemoteName,
