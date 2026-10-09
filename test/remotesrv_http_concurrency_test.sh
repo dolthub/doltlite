@@ -245,6 +245,14 @@ check "HTTP delete preserves other branches" "main,branch_b" "$(
     SELECT group_concat(substr(name,16),',') FROM
       (SELECT name FROM dolt_remote_branches ORDER BY name DESC);" | tail -1)"
 
+echo "=== conditional installs with peer writes ==="
+if python3 "$(dirname "$0")/lib/remotesrv_ref_race.py" "$DOLTLITE" \
+    "http://127.0.0.1:$PORT/race.db" "$TMP/srv/race.db" "$TMP"; then
+  check "conditional installs preserve peer writes without global retries" 0 0
+else
+  check "conditional installs preserve peer writes without global retries" 0 1
+fi
+
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) ;;
   *)

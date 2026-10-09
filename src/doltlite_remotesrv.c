@@ -824,16 +824,25 @@ static int remoteSrvApplyRefsIf(
   int nBody,
   int *pbMissing
 ){
+  u8 *pMerged = 0;
+  int nMerged = 0;
   int rc;
   if( nBody<=0 ) return SQLITE_ERROR;
   rc = remoteSrvLockAndForceRefresh(pStore);
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashCompare(refsTableGetHash(&pStore->refs), pExpectedRefsHash)!=0 ){
-    chunkStoreUnlock(pStore);
-    return SQLITE_BUSY_SNAPSHOT;
+    rc = doltliteMergeScopedRefsUpdate(pStore, pExpectedRefsHash, pBody, nBody,
+                                      zBranch, bForce, &pMerged, &nMerged,
+                                      pbMissing);
+    if( rc==SQLITE_OK ){
+      rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pMerged, nMerged,
+                                    pbMissing);
+    }
+  }else{
+    rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody,
+                                  pbMissing);
   }
-  rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody,
-                                pbMissing);
+  sqlite3_free(pMerged);
   chunkStoreUnlock(pStore);
   return rc;
 }

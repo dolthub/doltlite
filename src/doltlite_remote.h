@@ -72,6 +72,11 @@ int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
                                     int nBlob, const char *zRef,
                                     int *pbMissing);
 
+int doltliteMergeScopedRefsUpdate(
+  ChunkStore *pStore, const ProllyHash *pExpectedRefsHash,
+  const u8 *pBlob, int nBlob, const char *zRef, int bForce,
+  u8 **ppMerged, int *pnMerged, int *pbMissing);
+
 int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zRemoteName, const char *zBranch);
 int doltliteFetchInto(ChunkStore *pLocal, DoltliteRemote *pRemote,

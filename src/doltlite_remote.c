@@ -1236,8 +1236,9 @@ done:
   return rc;
 }
 
-int doltliteValidateScopedRefsUpdate(
+static int remoteValidateScopedRefsUpdate(
   ChunkStore *pStore,
+  const RefsTable *pBasis,
   const u8 *pBlob,
   int nBlob,
   const char *zRef,
@@ -1260,7 +1261,7 @@ int doltliteValidateScopedRefsUpdate(
   int i, j;
 
   if( bDelete ) zRef++;
-  if( bDelete && scopedSameText(zRef, scopedDefaultBranch(&pStore->refs)) ){
+  if( bDelete && scopedSameText(zRef, scopedDefaultBranch(pBasis)) ){
     return SQLITE_CONSTRAINT;
   }
   if( !zRef || !zRef[0] ) return SQLITE_MISUSE;
@@ -1271,15 +1272,15 @@ int doltliteValidateScopedRefsUpdate(
     return rc;
   }
 
-  refsTableGetBranches(&pStore->refs, &nCur, &aCur);
+  refsTableGetBranches(pBasis, &nCur, &aCur);
   refsTableGetBranches(&inc.refs, &nInc, &aInc);
-  refsTableGetTags(&pStore->refs, &nCurTag, &aCurTag);
+  refsTableGetTags(pBasis, &nCurTag, &aCurTag);
   refsTableGetTags(&inc.refs, &nIncTag, &aIncTag);
-  refsTableGetRemotes(&pStore->refs, &nCurRem, &aCurRem);
+  refsTableGetRemotes(pBasis, &nCurRem, &aCurRem);
   refsTableGetRemotes(&inc.refs, &nIncRem, &aIncRem);
-  refsTableGetTracking(&pStore->refs, &nCurTrk, &aCurTrk);
+  refsTableGetTracking(pBasis, &nCurTrk, &aCurTrk);
   refsTableGetTracking(&inc.refs, &nIncTrk, &aIncTrk);
-  refsTableGetSequences(&pStore->refs, &nCurSeq, &aCurSeq);
+  refsTableGetSequences(pBasis, &nCurSeq, &aCurSeq);
   refsTableGetSequences(&inc.refs, &nIncSeq, &aIncSeq);
 
   if( !scopedNamesAreUnique(aInc, nInc, (int)sizeof(BranchRef))
@@ -1297,7 +1298,7 @@ int doltliteValidateScopedRefsUpdate(
      || !scopedRemotesMatch(aCurRem, nCurRem, aIncRem, nIncRem)
      || !scopedTrackingMatch(aCurTrk, nCurTrk, aIncTrk, nIncTrk)
      || !scopedSequencesMatch(aCurSeq, nCurSeq, aIncSeq, nIncSeq)
-     || !scopedSameText(scopedDefaultBranch(&pStore->refs),
+     || !scopedSameText(scopedDefaultBranch(pBasis),
                         scopedDefaultBranch(&inc.refs)) ){
       rc = SQLITE_CONSTRAINT;
       goto done;
@@ -1369,10 +1370,10 @@ int doltliteValidateScopedRefsUpdate(
   ** as remotePushedDefault allows. An explicit choice stays until that rule
   ** changes the name. */
   {
-    const char *zAllowed = remotePushedDefault(&pStore->refs, zRef,
-        !bDelete && !remoteRefsHaveBranch(&pStore->refs, zRef));
-    int bExplicit = pStore->refs.bDefaultExplicit;
-    if( !scopedSameText(zAllowed, scopedDefaultBranch(&pStore->refs)) ){
+    const char *zAllowed = remotePushedDefault(pBasis, zRef,
+        !bDelete && !remoteRefsHaveBranch(pBasis, zRef));
+    int bExplicit = pBasis->bDefaultExplicit;
+    if( !scopedSameText(zAllowed, scopedDefaultBranch(pBasis)) ){
       bExplicit = 0;
     }
     if( !scopedSameText(scopedDefaultBranch(&inc.refs), zAllowed)
@@ -1423,6 +1424,103 @@ int doltliteValidateScopedRefsUpdate(
 
 done:
   csFreeRefsState(&inc);
+  return rc;
+}
+
+int doltliteValidateScopedRefsUpdate(
+  ChunkStore *pStore, const u8 *pBlob, int nBlob,
+  const char *zRef, int bForce, int *pbMissing
+){
+  return remoteValidateScopedRefsUpdate(pStore, &pStore->refs, pBlob, nBlob,
+                                       zRef, bForce, pbMissing);
+}
+
+int doltliteMergeScopedRefsUpdate(
+  ChunkStore *pStore, const ProllyHash *pExpectedRefsHash,
+  const u8 *pBlob, int nBlob, const char *zRef, int bForce,
+  u8 **ppMerged, int *pnMerged, int *pbMissing
+){
+  ChunkStore base, incoming, merged;
+  SavedRefsState local;
+  u8 *pBaseBlob = 0;
+  u8 *pCurrentBlob = 0;
+  int nBaseBlob = 0;
+  int nCurrentBlob = 0;
+  int rc;
+  const char *zTag = remoteScopedTagName(zRef);
+
+  PROLLY_ASSERT_STORE_GRAPH_LOCKED(pStore);
+  *ppMerged = 0;
+  *pnMerged = 0;
+  memset(&base, 0, sizeof(base));
+  memset(&incoming, 0, sizeof(incoming));
+  memset(&merged, 0, sizeof(merged));
+  if( !prollyHashIsEmpty(pExpectedRefsHash) ){
+    rc = chunkStoreGet(pStore, pExpectedRefsHash, &pBaseBlob, &nBaseBlob);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_BUSY_SNAPSHOT;
+    if( rc!=SQLITE_OK ) goto done;
+    rc = chunkStoreLoadRefsFromBlob(&base, pBaseBlob, nBaseBlob);
+    if( rc!=SQLITE_OK ) goto done;
+  }
+  rc = remoteValidateScopedRefsUpdate(pStore, &base.refs, pBlob, nBlob,
+                                     zRef, bForce, pbMissing);
+  if( rc!=SQLITE_OK ) goto done;
+  if( zTag ){
+    const TagRef *pBaseTag = 0, *pCurrentTag = 0;
+    int i;
+    for(i=0; i<base.refs.nTags; i++){
+      if( strcmp(base.refs.aTags[i].zName, zTag)==0 ){
+        pBaseTag = &base.refs.aTags[i];
+        break;
+      }
+    }
+    for(i=0; i<pStore->refs.nTags; i++){
+      if( strcmp(pStore->refs.aTags[i].zName, zTag)==0 ){
+        pCurrentTag = &pStore->refs.aTags[i];
+        break;
+      }
+    }
+    if( !scopedTagsMatch(pBaseTag, pBaseTag!=0,
+                         pCurrentTag, pCurrentTag!=0) ){
+      rc = SQLITE_BUSY_SNAPSHOT;
+      goto done;
+    }
+  }else{
+    const char *zBranch = zRef + (zRef[0]==':');
+    ProllyHash baseCommit = {{0}}, currentCommit = {{0}};
+    ProllyHash baseWs = {{0}}, currentWs = {{0}};
+    int baseExists = chunkStoreFindBranch(&base, zBranch, &baseCommit)==SQLITE_OK;
+    int currentExists = chunkStoreFindBranch(pStore, zBranch, &currentCommit)==SQLITE_OK;
+    chunkStoreGetBranchWorkingSet(&base, zBranch, &baseWs);
+    chunkStoreGetBranchWorkingSet(pStore, zBranch, &currentWs);
+    if( baseExists!=currentExists
+     || prollyHashCompare(&baseCommit, &currentCommit)!=0
+     || prollyHashCompare(&baseWs, &currentWs)!=0 ){
+      rc = SQLITE_BUSY_SNAPSHOT;
+      goto done;
+    }
+  }
+  rc = chunkStoreLoadRefsFromBlob(&incoming, pBlob, nBlob);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreSerializeRefsToBlob(pStore, &pCurrentBlob, &nCurrentBlob);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreLoadRefsFromBlob(&merged, pCurrentBlob, nCurrentBlob);
+  }
+  if( rc==SQLITE_OK ){
+    csCaptureSavedRefsState(&incoming, &local);
+    rc = csMergeSavedRefsOntoDisk(&merged, &local, &base.refs);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreSerializeRefsToBlob(&merged, ppMerged, pnMerged);
+  }
+
+done:
+  sqlite3_free(pBaseBlob);
+  sqlite3_free(pCurrentBlob);
+  chunkStoreClose(&base);
+  chunkStoreClose(&incoming);
+  chunkStoreClose(&merged);
   return rc;
 }
 
@@ -1722,6 +1820,10 @@ int doltlitePushTag(
     char *zScope = 0;
     int nNewRefs = 0;
 
+    memset(&expectedRefsHash, 0, sizeof(expectedRefsHash));
+    if( refsData && nRefsData>0 ){
+      prollyHashCompute(refsData, nRefsData, &expectedRefsHash);
+    }
     memset(&nextRefs, 0, sizeof(nextRefs));
     if( refsData && nRefsData>0 ){
       rc = chunkStoreLoadRefsFromBlob(&nextRefs, refsData, nRefsData);
