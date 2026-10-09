@@ -35,9 +35,12 @@ static int csReloadInjectionActive(void){
   return zEnv && atoi(zEnv)>0;
 }
 #endif
-static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
+static int csRollbackFailedAppend(
+  ChunkStore *cs, i64 origFileSize, sqlite3_file **ppRetired
+){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
+  sqlite3_file *pReopened = 0;
 
   if( !cs->file.pFile ) return SQLITE_IOERR;
 
@@ -50,11 +53,11 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
     return SQLITE_OK;
   }
 
-  csCloseFile(cs->file.pFile);
-  cs->file.pFile = 0;
-  rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile,
+  rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &pReopened,
                   SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB, 0);
   if( rc!=SQLITE_OK ) return rc;
+  *ppRetired = cs->file.pFile;
+  cs->file.pFile = pReopened;
 
   rc = sqlite3OsTruncate(cs->file.pFile, origFileSize);
   if( rc==SQLITE_OK ){
@@ -390,7 +393,7 @@ static void csCommitPublishStaging(
   csMarkRefsCommitted(cs);
 }
 
-static int csCommitToFile(ChunkStore *cs){
+static int csCommitToFile(ChunkStore *cs, int (*xBusy)(void*), void *pBusyArg){
   int rc;
   int i;
   i64 fileSize = 0;
@@ -412,6 +415,10 @@ static int csCommitToFile(ChunkStore *cs){
   int nMerged = 0;
   int useRecent = 0;
   int crashWriteActive = csCrashWriteInjectionActive();
+  int publicationLocked = 0;
+  sqlite3_file *pPublicationFile = 0;
+  sqlite3_file *pRetiredFile = 0;
+  int publicationRetries = 0;
 
   rc = csCommitResolveAppendPoint(
       cs, hadFile, lockHeld, &lockFd, &lockName,
@@ -428,6 +435,30 @@ static int csCommitToFile(ChunkStore *cs){
       (int)(sizeof(aSmallCommittedPending)/sizeof(aSmallCommittedPending[0])),
       &aCommittedPending, &aMergePending, &aMerged, &nMerged, &useRecent);
   if( rc!=SQLITE_OK ) goto commit_done;
+
+  if( !cs->isBuffer ){
+    rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED);
+    }
+    if( rc==SQLITE_OK ){
+      do {
+        rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE);
+        if( rc!=SQLITE_BUSY ) break;
+        if( publicationRetries++<100 ){
+          sqlite3_sleep(1);
+        }else if( !xBusy || !xBusy(pBusyArg) ){
+          break;
+        }
+      }while( rc==SQLITE_BUSY );
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+      goto commit_done;
+    }
+    publicationLocked = 1;
+    pPublicationFile = cs->file.pFile;
+  }
 
 #ifdef SQLITE_TEST
   {
@@ -584,6 +615,7 @@ static int csCommitToFile(ChunkStore *cs){
         checkpointRc);
     }
   }
+  if( publicationLocked ) sqlite3OsUnlock(pPublicationFile, SQLITE_LOCK_NONE);
   csFileUnlock(lockFd, &lockName);
   return SQLITE_OK;
 
@@ -598,7 +630,8 @@ commit_done:
       memset(aZero, 0, sizeof(aZero));
       zeroRc = sqlite3OsWrite(cs->file.pFile, aZero, sizeof(aZero), rootOff);
     }
-    if( csRollbackFailedAppend(cs, origFileSize)!=SQLITE_OK && rootOff>0 ){
+    if( csRollbackFailedAppend(cs, origFileSize, &pRetiredFile)!=SQLITE_OK
+     && rootOff>0 ){
       cs->iFailedTailEnd = rootOff + 1 + CHUNK_MANIFEST_SIZE;
       if( zeroRc!=SQLITE_OK ){
         cs->iFailedRootOff = rootOff;
@@ -606,6 +639,8 @@ commit_done:
       }
     }
   }
+  if( publicationLocked ) sqlite3OsUnlock(pPublicationFile, SQLITE_LOCK_NONE);
+  csCloseFile(pRetiredFile);
   csFileUnlock(lockFd, &lockName);
   (void)csRestoreCommittedRefsState(cs);
   if( aCommittedPending!=aSmallCommittedPending ){
@@ -676,7 +711,7 @@ int chunkStoreCommitWithBusyHandler(
     if( acquiredLock ) chunkStoreUnlock(cs);
     return SQLITE_READONLY;
   }
-  rc = csCommitToFile(cs);
+  rc = csCommitToFile(cs, xBusy, pBusyArg);
   if( acquiredLock ) chunkStoreUnlock(cs);
   return rc;
 }

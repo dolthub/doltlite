@@ -14,6 +14,36 @@ static int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;
 }
 
+int csReadLock(ChunkStore *cs, CsReadLock *pLock){
+  int rc;
+  if( cs->isBuffer || cs->noReadLock || !cs->file.pFile ) return SQLITE_OK;
+  if( strcmp(cs->file.pVfs->zName, "unix-excl")==0 ){
+    rc = chunkStoreDupFilenameDoubleNul(cs->file.zFilename, &pLock->zName);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = csOpenFile(cs->file.pVfs, pLock->zName, &pLock->pFile,
+                   SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }else{
+    pLock->pFile = cs->file.pFile;
+  }
+  return sqlite3OsLock(pLock->pFile, SQLITE_LOCK_SHARED);
+}
+
+int csReadUnlock(ChunkStore *cs, CsReadLock *pLock){
+  int rc = SQLITE_OK;
+  if( pLock->zName ){
+    if( pLock->pFile ){
+      rc = sqlite3OsUnlock(pLock->pFile, SQLITE_LOCK_NONE);
+      sqlite3OsCloseFree(pLock->pFile);
+    }
+    sqlite3_free(pLock->zName);
+  }else if( pLock->pFile && cs->file.pFile ){
+    rc = sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+  }
+  memset(pLock, 0, sizeof(*pLock));
+  return rc;
+}
+
 int csFileLockPromote(sqlite3_file *pFile){
   return sqlite3OsLock(pFile, SQLITE_LOCK_RESERVED);
 }
@@ -220,6 +250,11 @@ static int csLockForReplacementProof(ChunkStore *cs, int *pAcquired){
 
 int chunkStoreEnsureRefsFresh(ChunkStore *cs){
   int rc;
+  if( cs->openPending ){
+    int changed;
+    rc = chunkStoreRefreshIfChanged(cs, &changed);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( !cs->bRefsStale ) return SQLITE_OK;
   rc = chunkStoreReloadRefs(cs);
   if( rc==SQLITE_OK ) cs->bRefsStale = 0;
@@ -614,8 +649,45 @@ static int csDetectExternalChanges(
   return SQLITE_OK;
 }
 
+static int csFileSnapshotUnchanged(ChunkStore *cs){
+  DoltliteFileState state;
+  int rc;
+  if( cs->openPending || cs->bReloadAfterRefsConflict
+   || cs->adoptReplacement ) return 0;
+  state.iFileSize = -1;
+  state.bMoved = 0;
+  rc = sqlite3OsDoltliteFileState(cs->file.pFile, &state);
+  if( rc!=SQLITE_OK || state.bMoved || state.iFileSize<0
+   || state.iFileSize>cs->file.iFileSize ) return 0;
+  cs->movedReadOnly = 0;
+  return 1;
+}
+
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
-  return csDetectExternalChanges(cs, pChanged, 0);
+  int rc, rc2;
+  CsReadLock readLock = {0, 0};
+  int locked = cs->file.pFile && !cs->isBuffer
+            && !cs->noReadLock && cs->lockDepth==0;
+  *pChanged = 0;
+  if( locked && csFileSnapshotUnchanged(cs) ) return SQLITE_OK;
+  if( locked ){
+    rc = csReadLock(cs, &readLock);
+    if( rc!=SQLITE_OK ){
+      csReadUnlock(cs, &readLock);
+      return rc==SQLITE_BUSY && !cs->openPending ? SQLITE_OK : rc;
+    }
+  }
+  if( cs->openPending ){
+    *pChanged = 1;
+    rc = SQLITE_OK;
+  }else{
+    rc = csDetectExternalChanges(cs, pChanged, 0);
+  }
+  if( locked ){
+    rc2 = csReadUnlock(cs, &readLock);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  return rc;
 }
 
 /* The store is append-only between compactions: when the file only grew
@@ -703,7 +775,7 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
+static int csRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int rc;
   int bChanged = 0;
   int bMovedAdopt = 0;
@@ -723,9 +795,10 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
   if( cs->snapshotPinned ) return SQLITE_OK;
-  if( cs->bReloadAfterRefsConflict ){
+  if( cs->openPending || cs->bReloadAfterRefsConflict ){
     rc = csReloadFromDisk(cs);
     if( rc!=SQLITE_OK ) return rc;
+    cs->openPending = 0;
     cs->bReloadAfterRefsConflict = 0;
     *pChanged = 1;
     return SQLITE_OK;
@@ -750,6 +823,28 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   if( rc!=SQLITE_OK ) return rc;
   *pChanged = 1;
   return SQLITE_OK;
+}
+
+int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
+  int rc, rc2;
+  CsReadLock readLock = {0, 0};
+  int locked = cs->file.pFile && !cs->isBuffer
+            && !cs->noReadLock && cs->lockDepth==0;
+  *pChanged = 0;
+  if( locked && csFileSnapshotUnchanged(cs) ) return SQLITE_OK;
+  if( locked ){
+    rc = csReadLock(cs, &readLock);
+    if( rc!=SQLITE_OK ){
+      csReadUnlock(cs, &readLock);
+      return rc==SQLITE_BUSY && !cs->openPending ? SQLITE_OK : rc;
+    }
+  }
+  rc = csRefreshIfChanged(cs, pChanged);
+  if( locked ){
+    rc2 = csReadUnlock(cs, &readLock);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  return rc;
 }
 
 int chunkStoreForceRefresh(ChunkStore *cs){

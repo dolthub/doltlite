@@ -136,3 +136,4 @@ doltlite_ref_snapshot_boundary
 doltlite_reset_peer_gc
 doltlite_backup_peer_write
 doltlite_vc_interrupt
+doltlite_commit_publication

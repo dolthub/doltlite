@@ -414,11 +414,13 @@ scan_done:
 }
 
 
-int chunkStoreOpen(
+static int csOpen(
   ChunkStore *cs,
   sqlite3_vfs *pVfs,
   const char *zFilename,
-  int flags
+  int flags,
+  int deferBusy,
+  CsReadLock *pReadLock
 ){
   int rc;
   int exists = 0;
@@ -440,6 +442,9 @@ int chunkStoreOpen(
     return SQLITE_NOMEM;
   }
   cs->lockDepth = 0;
+  cs->noReadLock = (flags & SQLITE_OPEN_URI)!=0
+               && (flags & SQLITE_OPEN_READONLY)!=0
+               && sqlite3_uri_boolean(zFilename, "nolock", 0);
 
   if( zFilename==0 || zFilename[0]=='\0'
    || strcmp(zFilename, ":memory:")==0
@@ -528,6 +533,23 @@ int chunkStoreOpen(
       cs->readOnly = 1;
     }
 
+    if( !cs->isBuffer && !cs->noReadLock ){
+      int retry = 0;
+      do {
+        rc = csReadLock(cs, pReadLock);
+        if( rc!=SQLITE_BUSY || retry++>=100 ) break;
+        csReadUnlock(cs, pReadLock);
+        sqlite3_sleep(1);
+      }while( rc==SQLITE_BUSY );
+      if( rc==SQLITE_BUSY && deferBusy ){
+        cs->openPending = 1;
+        return SQLITE_OK;
+      }
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(cs);
+        return rc;
+      }
+    }
     rc = csReadManifest(cs);
     /* Truncate-to-empty only for NOTADB, not for a damaged-but-identified header. */
     if( rc==SQLITE_NOTADB
@@ -690,6 +712,33 @@ int chunkStoreOpen(
 
   csMarkRefsCommitted(cs);
   return SQLITE_OK;
+}
+
+static int csOpenUnlocked(
+  ChunkStore *cs,
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  int flags,
+  int deferBusy
+){
+  CsReadLock readLock = {0, 0};
+  int rc = csOpen(cs, pVfs, zFilename, flags, deferBusy, &readLock);
+  int rc2 = csReadUnlock(cs, &readLock);
+  if( rc==SQLITE_OK && rc2!=SQLITE_OK ){
+    rc = rc2;
+    chunkStoreClose(cs);
+  }
+  return rc;
+}
+
+int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
+                   const char *zFilename, int flags){
+  return csOpenUnlocked(cs, pVfs, zFilename, flags, 0);
+}
+
+int chunkStoreOpenDeferred(ChunkStore *cs, sqlite3_vfs *pVfs,
+                           const char *zFilename, int flags){
+  return csOpenUnlocked(cs, pVfs, zFilename, flags, 1);
 }
 
 static void csWriteCleanCloseMarker(ChunkStore *cs){

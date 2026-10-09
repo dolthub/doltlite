@@ -661,9 +661,18 @@ int doltliteBtreeHydrateDeferred(Btree *p){
   }
 
   cs = &p->pBt->store;
-  rc = chunkStoreEnsureRefsFresh(cs);
+  do {
+    rc = chunkStoreEnsureRefsFresh(cs);
+  }while( rc==SQLITE_BUSY && cs->openPending
+       && prollyInvokeBusyHandler(p->pBt) );
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteBtreePrepareBackupBranch(p, cs, &zPrepared, 0);
+  if( p->bDeferredDefaultBranch ){
+    const char *zDef = chunkStoreGetDefaultBranch(cs);
+    zPrepared = sqlite3_mprintf("%s", zDef ? zDef : "main");
+    rc = zPrepared ? SQLITE_OK : SQLITE_NOMEM;
+  }else{
+    rc = doltliteBtreePrepareBackupBranch(p, cs, &zPrepared, 0);
+  }
   if( rc!=SQLITE_OK ) return rc;
   if( zPrepared ){
     zOldBranch = p->zBranch;
@@ -683,6 +692,7 @@ int doltliteBtreeHydrateDeferred(Btree *p){
   btreeStoreCommittedFromCurrent(p, &loadedCatHash);
   p->bCatalogDropped = 0;
   p->bDeferredOpen = 0;
+  p->bDeferredDefaultBranch = 0;
   if( p->db && p->db->nDb>0 && p->db->aDb[0].pBt==p ){
     p->bDeferredRegister = 1;
   }

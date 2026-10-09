@@ -11,6 +11,11 @@
 #include <limits.h>
 
 typedef sqlite3_file *CsFileLock;
+typedef struct CsReadLock CsReadLock;
+struct CsReadLock {
+  sqlite3_file *pFile;
+  char *zName;
+};
 # define CS_FILE_LOCK_INIT 0
 # define CS_GRAPH_LOCK(cs) ((cs)->pGraphLockFile)
 
@@ -21,6 +26,8 @@ typedef sqlite3_file *CsFileLock;
 
 int csFileLock(sqlite3_vfs *pVfs, const char *path,
                sqlite3_file **ppFile, char **pzName);
+int csReadLock(ChunkStore *cs, CsReadLock *pLock);
+int csReadUnlock(ChunkStore *cs, CsReadLock *pLock);
 int csFileLockPromote(sqlite3_file *pFile);
 void csFileUnlock(sqlite3_file *pFile, char **pzName);
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
