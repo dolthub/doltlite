@@ -41,6 +41,7 @@ COVERAGE_TESTS=(
   prolly_mutmap_order_test
   scoped_refs_push_test
   remote_chunk_integrity_test
+  remote_partial_push_test
   chunk_source_test
   cross_branch_test
   corruption_test

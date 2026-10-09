@@ -122,9 +122,9 @@ int main(void){
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
 
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0, 0);
     check("reject rewriting main while pushing foo", rc==SQLITE_CONSTRAINT);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1, 0);
     check("force does not authorize rewriting main", rc==SQLITE_CONSTRAINT);
 
     /* Pre-fix behavior: installing the blob wholesale (what the server used to
@@ -155,7 +155,7 @@ int main(void){
     chunkStoreAddBranch(&tmp, "foo", &Hb);
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1, 0);
     check("reject deleting main via omission", rc==SQLITE_CONSTRAINT);
     sqlite3_free(blob);
   }
@@ -170,15 +170,15 @@ int main(void){
     chunkStoreUpdateBranch(&tmp, "foo", &Hd);
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0, 0);
     check("reject non-fast-forward foo without force", rc==SQLITE_CONSTRAINT);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1, 0);
     check("allow forced move of foo (scoped)", rc==SQLITE_OK);
     sqlite3_free(blob);
   }
 
   /* Legitimate: an unchanged blob is always in scope. */
-  rc = doltliteValidateScopedRefsUpdate(&cs, curBlob, nCur, "foo", 0);
+  rc = doltliteValidateScopedRefsUpdate(&cs, curBlob, nCur, "foo", 0, 0);
   check("allow no-op refs update", rc==SQLITE_OK);
 
   /* Attack: delete the branch being pushed by omitting it. The fast-forward
@@ -192,18 +192,18 @@ int main(void){
     chunkStoreAddBranch(&tmp, "main", &Ha);
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0, 0);
     check("reject deleting the declared branch by omission", rc==SQLITE_CONSTRAINT);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1, 0);
     check("force does not authorize deleting the declared branch",
           rc==SQLITE_CONSTRAINT);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":foo", 0, 0);
     check("explicit delete authorizes only the named branch", rc==SQLITE_OK);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":main", 1);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":main", 1, 0);
     check("explicit delete cannot omit another branch", rc==SQLITE_CONSTRAINT);
-    rc = doltliteValidateScopedRefsUpdate(&cs, curBlob, nCur, ":foo", 1);
+    rc = doltliteValidateScopedRefsUpdate(&cs, curBlob, nCur, ":foo", 1, 0);
     check("delete scope cannot install a branch", rc==SQLITE_CONSTRAINT);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":", 1);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, ":", 1, 0);
     check("delete scope requires a branch name", rc==SQLITE_MISUSE);
     sqlite3_free(blob);
   }
@@ -228,9 +228,9 @@ int main(void){
             refsTableBranchCount(&probe.refs)==3);
       chunkStoreClose(&probe);
 
-      rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0);
+      rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0, 0);
       check("reject duplicate branch entry for main", rc==SQLITE_CONSTRAINT);
-      rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1);
+      rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 1, 0);
       check("force does not authorize a duplicate branch entry",
             rc==SQLITE_CONSTRAINT);
       sqlite3_free(blob);
@@ -247,7 +247,7 @@ int main(void){
     chunkStoreSetDefaultBranch(&tmp, "foo");
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0, 0);
     check("reject repointing the default branch", rc==SQLITE_CONSTRAINT);
     sqlite3_free(blob);
   }
@@ -261,7 +261,7 @@ int main(void){
     chunkStoreAddRemote(&tmp, "origin", "http://attacker.example/evil");
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&cs, blob, n, "foo", 0, 0);
     check("reject injecting a remote", rc==SQLITE_CONSTRAINT);
     sqlite3_free(blob);
   }
@@ -290,11 +290,11 @@ int main(void){
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
 
-    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "foo", 0, 0);
     check("reject rewriting a tag message", rc==SQLITE_CONSTRAINT);
-    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 0);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 0, 0);
     check("allow rewriting only the declared tag", rc==SQLITE_OK);
-    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v2", 1);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v2", 1, 0);
     check("reject rewriting an undeclared tag", rc==SQLITE_CONSTRAINT);
 
     memset(&tmp, 0, sizeof(tmp));
@@ -304,7 +304,7 @@ int main(void){
     chunkStoreAddTagFull(&tmp, "v2", &Hb, "t", "t@e", 2, "other");
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 1);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 1, 0);
     check("reject adding a second tag in the same update",
           rc==SQLITE_CONSTRAINT);
 
@@ -317,11 +317,11 @@ int main(void){
     blob = 0;
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 1);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, blob, n, "tag:v1", 1, 0);
     check("tag update cannot rewrite a branch", rc==SQLITE_CONSTRAINT);
 
     /* And the same tag, untouched, stays in scope. */
-    rc = doltliteValidateScopedRefsUpdate(&tagged, tagBlob, nTag, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&tagged, tagBlob, nTag, "foo", 0, 0);
     check("allow push that leaves the tag alone", rc==SQLITE_OK);
 
     sqlite3_free(blob);
@@ -354,7 +354,7 @@ int main(void){
       chunkStoreBumpSequence(&tmp, "other", 7);
       chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
       chunkStoreClose(&tmp);
-      rc = doltliteValidateScopedRefsUpdate(&seqStore, blob, n, "foo", 0);
+      rc = doltliteValidateScopedRefsUpdate(&seqStore, blob, n, "foo", 0, 0);
       check("allow sequences to advance and appear", rc==SQLITE_OK);
       sqlite3_free(blob);
     }
@@ -367,7 +367,7 @@ int main(void){
       chunkStoreBumpSequence(&tmp, "t", 5);
       chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
       chunkStoreClose(&tmp);
-      rc = doltliteValidateScopedRefsUpdate(&seqStore, blob, n, "foo", 0);
+      rc = doltliteValidateScopedRefsUpdate(&seqStore, blob, n, "foo", 0, 0);
       check("reject rewinding a sequence", rc==SQLITE_CONSTRAINT);
       sqlite3_free(blob);
     }
@@ -379,7 +379,7 @@ int main(void){
       chunkStoreAddBranch(&tmp, "foo", &Hb);
       chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
       chunkStoreClose(&tmp);
-      rc = doltliteValidateScopedRefsUpdate(&seqStore, blob, n, "foo", 0);
+      rc = doltliteValidateScopedRefsUpdate(&seqStore, blob, n, "foo", 0, 0);
       check("reject dropping a sequence", rc==SQLITE_CONSTRAINT);
       sqlite3_free(blob);
     }
@@ -402,7 +402,7 @@ int main(void){
     chunkStoreAddBranch(&tmp, "foo", &Hb);
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&fresh, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&fresh, blob, n, "foo", 0, 0);
     check("allow fresh target to adopt the pushed branch as default",
           rc==SQLITE_OK);
     sqlite3_free(blob);
@@ -453,9 +453,9 @@ int main(void){
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
 
-    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 0);
+    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 0, 0);
     check("reject push over dirty target working set", rc==SQLITE_LOCKED);
-    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 1);
+    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 1, 0);
     check("force cannot overwrite dirty target working set", rc==SQLITE_LOCKED);
     sqlite3_free(blob);
 
@@ -471,7 +471,7 @@ int main(void){
     chunkStoreSetBranchWorkingSet(&tmp, "foo", &empty);
     chunkStoreSerializeRefsToBlob(&tmp, &blob, &n);
     chunkStoreClose(&tmp);
-    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 1);
+    rc = doltliteValidateScopedRefsUpdate(&working, blob, n, "foo", 1, 0);
     check("allow push over clean target working set", rc==SQLITE_OK);
     sqlite3_free(blob);
     chunkStoreClose(&working);

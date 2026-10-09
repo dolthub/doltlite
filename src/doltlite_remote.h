@@ -29,6 +29,9 @@ struct DoltliteRemote {
   /* Last remote error, or NULL. Valid until the next op or xClose. */
   const char *(*xErrMsg)(DoltliteRemote*);
   int bResumePartialPuts;
+  /* The remote rejected a refs update for missing chunks; the next sync
+  ** rescans below chunks it already has. */
+  int bForceResumeScan;
   int bCacheForChunkSource;
   /* Lock waits on a file-backed remote consult the opening connection's busy
   ** handler. Without one, a contended remote gives up on a fixed schedule
@@ -59,12 +62,15 @@ int doltlitePushTag(ChunkStore *pLocal, DoltliteRemote *pRemote,
                     const char *zTag);
 
 /* Allow only the declared branch or tag update; every other ref must match. */
+/* Optional *pbMissing: set when the update failed because the store lacks
+** chunks of the pushed history rather than holding unreadable ones. */
 int doltliteValidateScopedRefsUpdate(ChunkStore *pStore, const u8 *pBlob,
                                      int nBlob, const char *zRef,
-                                     int bForce);
+                                     int bForce, int *pbMissing);
 
 int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
-                                    int nBlob, const char *zRef);
+                                    int nBlob, const char *zRef,
+                                    int *pbMissing);
 
 int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zRemoteName, const char *zBranch);
