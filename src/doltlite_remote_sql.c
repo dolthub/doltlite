@@ -72,8 +72,9 @@ static DoltliteRemote *openRemoteByUrl(
     return pRemote;
   }
   if( strncmp(zUrl, "http://", 7)==0 || strncmp(zUrl, "https://", 8)==0 ){
-
-    return doltliteHttpRemoteOpen(zUrl);
+    pRemote = doltliteHttpRemoteOpen(zUrl);
+    doltliteRemoteSetBusyHandler(pRemote, remoteSqlBusyHandler, db);
+    return pRemote;
   }
 
   return 0;

@@ -476,6 +476,15 @@ static int fsBusyRetry(DoltliteRemote *pRemote, int nBusy){
   return 1;
 }
 
+static int localLockWithBusy(DoltliteRemote *pRemote, ChunkStore *cs){
+  int nBusy = 0;
+  int rc;
+  do {
+    rc = chunkStoreLockAndRefresh(cs);
+  }while( rc==SQLITE_BUSY && fsBusyRetry(pRemote, nBusy++) );
+  return rc;
+}
+
 static int fsLockAndForceRefresh(DoltliteRemote *pRemote, ChunkStore *cs){
   int nBusy = 0;
   int rc;
@@ -786,10 +795,17 @@ static void localClose(DoltliteRemote *pRemote){
   sqlite3_free(p);
 }
 
-static DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal){
+/* The local store waits on its lock under the same busy handler as the
+** remote it is syncing with: both belong to the calling connection. */
+static DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal,
+                                             DoltliteRemote *pPeer){
   LocalAsRemote *p = sqlite3_malloc(sizeof(LocalAsRemote));
   if( !p ) return 0;
   memset(p, 0, sizeof(LocalAsRemote));
+  if( pPeer ){
+    p->base.xBusy = pPeer->xBusy;
+    p->base.pBusyArg = pPeer->pBusyArg;
+  }
 
   p->base.xGetChunk = remoteGetChunk;
   p->base.xPutChunk = localPutChunk;
@@ -1693,7 +1709,7 @@ int doltlitePushAs(
       rc = chunkStoreDeleteBranch(&refs, zBranch);
       if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
     }else{
-      DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal);
+      DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal, pRemote);
       const SequenceRef *aSeq = 0;
       ProllyHash emptyWs = {{0}};
       int nSeq = 0;
@@ -1798,7 +1814,7 @@ int doltlitePushTag(
   if( rc!=SQLITE_OK ) return rc;
 
   {
-    DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal);
+    DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal, pRemote);
     ProllyHash tagCommit;
     if( !pLocalSrc ) return SQLITE_NOMEM;
     memcpy(&tagCommit, &pLocalTag->commitHash, sizeof(tagCommit));
@@ -1866,6 +1882,7 @@ int doltlitePushTag(
 
 static int installFetchedRefs(
   ChunkStore *pLocal,
+  DoltliteRemote *pRemote,
   ChunkStore *pRemoteRefs,
   const char *zRemoteName,
   const char *zBranch,
@@ -1892,7 +1909,7 @@ static int installFetchedRefs(
   memset(&nextRefs, 0, sizeof(nextRefs));
   memset(&savedRefs, 0, sizeof(savedRefs));
 
-  rc = chunkStoreLockAndRefresh(pLocal);
+  rc = localLockWithBusy(pRemote, pLocal);
   if( rc==SQLITE_OK ){
     locked = 1;
     rc = chunkStoreForceRefresh(pLocal);
@@ -2066,7 +2083,7 @@ int doltliteFetchInto(
   }
 
   if( !bLazyOrigin ){
-    pLocalDst = doltliteLocalAsRemote(pLocal);
+    pLocalDst = doltliteLocalAsRemote(pLocal, pRemote);
     if( !pLocalDst ){
       chunkStoreClose(&remoteRefs);
       return SQLITE_NOMEM;
@@ -2082,8 +2099,8 @@ int doltliteFetchInto(
   if( rc==SQLITE_OK ){
     doltliteTestRunBeforeRefInstallHook();
     rc = installFetchedRefs(
-        pLocal, &remoteRefs, zRemoteName, zTrack, &remoteCommit,
-        bLazyOrigin);
+        pLocal, pRemote, &remoteRefs, zRemoteName, zTrack,
+        &remoteCommit, bLazyOrigin);
   }
 
   chunkStoreClose(&remoteRefs);
@@ -2181,7 +2198,7 @@ int doltliteCloneLazy(
   }
   if( rc!=SQLITE_OK ) goto lazy_clone_done;
 
-  rc = chunkStoreLockAndRefresh(pLocal);
+  rc = localLockWithBusy(pRemote, pLocal);
   if( rc==SQLITE_OK ){
     locked = 1;
     rc = chunkStoreForceRefresh(pLocal);
@@ -2248,7 +2265,7 @@ int doltliteClone(
   }
 
   if( nRoots>0 ){
-    pLocalDst = doltliteLocalAsRemote(pLocal);
+    pLocalDst = doltliteLocalAsRemote(pLocal, pRemote);
     if( !pLocalDst ){
       sqlite3_free(aRoots);
       sqlite3_free(refsData);
@@ -2271,7 +2288,7 @@ int doltliteClone(
 
   /* Hold the store lock across validate+install+commit. Re-walk roots under
   ** the gc lock; BUSY_SNAPSHOT so a retry re-syncs. */
-  rc = chunkStoreLockAndRefresh(pLocal);
+  rc = localLockWithBusy(pRemote, pLocal);
   if( rc==SQLITE_OK ){
     locked = 1;
     rc = chunkStoreForceRefresh(pLocal);
