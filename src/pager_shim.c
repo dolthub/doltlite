@@ -1252,7 +1252,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     rc = SQLITE_ERROR;
     goto backup_step_done;
   }
-  zDestFile = destCs->isMemory ? 0 : chunkFileGetFilename(&destCs->file);
+  zDestFile = p->zDestFile;
   pDestVfs = chunkFileGetVfs(&destCs->file);
   if( srcCs==destCs ){
     sqlite3ErrorWithMsg(p->pDestDb, SQLITE_ERROR,

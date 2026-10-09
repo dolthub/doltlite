@@ -1,0 +1,65 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach source {file memory} {
+  foreach dest {main aux} {
+    foreach initFirst {0 1} {
+      set prefix doltlite_backup_peer_write-$source.$dest.$initFirst
+      reset_db
+      forcedelete backup-source.db backup-dest.db
+      if {$source eq "file"} {
+        sqlite3 src backup-source.db
+      } else {
+        sqlite3 src :memory:
+      }
+      src eval {
+        CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+        CREATE INDEX tv ON t(v);
+        INSERT INTO t VALUES(1,'source'),(2,'backup');
+        SELECT dolt_commit('-Am','source');
+      }
+      if {$dest eq "aux"} {
+        db eval {
+          CREATE TABLE sentinel(v TEXT);
+          INSERT INTO sentinel VALUES('main');
+          ATTACH 'backup-dest.db' AS aux;
+        }
+        set destFile backup-dest.db
+      } else {
+        set destFile test.db
+      }
+      db eval "CREATE TABLE $dest.old(id INTEGER PRIMARY KEY)"
+      db eval "SELECT * FROM $dest.old"
+      if {$initFirst} { sqlite3_backup B db $dest src main }
+      do_test $prefix.peer {
+        sqlite3 peer $destFile
+        peer eval {INSERT INTO old VALUES(9)}
+        set result [peer eval {SELECT id FROM old}]
+        peer close
+        set result
+      } 9
+      if {!$initFirst} { sqlite3_backup B db $dest src main }
+      do_test $prefix.step { B step -1 } SQLITE_DONE
+      do_test $prefix.finish { B finish } SQLITE_OK
+      do_test $prefix.rows {
+        list [db eval "SELECT id,v FROM $dest.t ORDER BY id"] \
+             [db one "PRAGMA $dest.integrity_check"] \
+             [db one "SELECT count(*) FROM $dest.sqlite_master WHERE name='old'"]
+      } {{1 source 2 backup} ok 0}
+      if {$dest eq "aux"} {
+        do_test $prefix.main { db eval {SELECT v FROM sentinel} } main
+      }
+      src close
+      db close
+      sqlite3 db $destFile
+      do_test $prefix.reopen {
+        list [db eval {SELECT id,v FROM t INDEXED BY tv ORDER BY id}] \
+             [db one {PRAGMA integrity_check}]
+      } {{1 source 2 backup} ok}
+      do_test $prefix.no-temp { glob -nocomplain *-backup-* } {}
+      foreach f [glob -nocomplain *-backup-*] { forcedelete $f }
+    }
+  }
+}
+
+finish_test
