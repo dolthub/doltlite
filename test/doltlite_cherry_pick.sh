@@ -1035,4 +1035,24 @@ else
 fi
 rm -f "$DB"
 
+# A branch with no tables has no sqlite_master entry; the three-way apply
+# must adopt the source's, not fail as corrupt.
+DB=/tmp/test_cp_empty_base_$$.db
+for op in "SELECT dolt_cherry_pick('b1')" "SELECT dolt_merge('--no-ff','b1')" \
+          "SELECT dolt_commit('--allow-empty','-m','x'); SELECT dolt_merge('b1')"; do
+  rm -f "$DB"
+  $DOLTLITE "$DB" "SELECT dolt_branch('b1'); SELECT dolt_checkout('b1');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','add t'); SELECT dolt_checkout('main');" > /dev/null 2>&1
+  if $DOLTLITE "$DB" "$op;" > /dev/null 2>&1; then
+    dltest_pass
+  else
+    dltest_fail "empty_base_applies: $op" "  $($DOLTLITE "$DB" "$op;" 2>&1)"
+  fi
+  run_test "empty_base_result: $op" \
+    "SELECT (SELECT count(*) FROM t) || '|' || (SELECT * FROM pragma_integrity_check) || '|' || (SELECT count(*) FROM dolt_status);" \
+    "1|ok|0" "$DB"
+done
+rm -f "$DB"
+
 dltest_finish
