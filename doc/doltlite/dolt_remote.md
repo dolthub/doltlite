@@ -18,7 +18,9 @@ SELECT dolt_push('origin', 'v1.0');              -- one tag
 SELECT dolt_push('origin', '--tags');
 SELECT dolt_fetch('origin');                     -- all branches
 SELECT dolt_fetch('origin', 'main');
-SELECT dolt_pull('origin', 'main');
+SELECT dolt_pull();                              -- every branch and tag, then merge upstream
+SELECT dolt_pull('origin');
+SELECT dolt_pull('origin', 'main');              -- fetch only main
 SELECT * FROM dolt_remotes;
 SELECT * FROM dolt_remote_branches;
 ```
@@ -34,7 +36,7 @@ SELECT dolt_clone('--lazy', '--revision', 'v1.0', 'file:///data/src.db');
 | `dolt_remote` | `'add', name, url` or `'remove', name` | `file://` or `http(s)://...` URL naming the database file |
 | `dolt_push` | `remote, branch [, '--force']` or `remote, 'src:dst'` or `remote, tag` or `remote, '--tags'` | Non-fast-forward is refused without `--force`. `src:dst` pushes local branch `src` as remote branch `dst` |
 | `dolt_fetch` | `remote [, branch]` | Updates `remotes/<remote>/<branch>` tracking refs and tags |
-| `dolt_pull` | `remote, branch` | Fetch, then fast-forward or three-way merge into the current branch |
+| `dolt_pull` | `[remote [, branch]]` | With no branch, fetches every remote branch and tag, then fast-forwards or merges the current branch. With a branch, fetches only that branch |
 | `dolt_clone` | `['--lazy'] ['--revision', rev] url` | Only into an empty database; records `origin` |
 
 All return `0` on success. `dolt_pull` behaves like [dolt_merge](dolt_merge.md)
@@ -72,6 +74,12 @@ when it cannot fast-forward, conflicts included.
   refused until the store is fully materialized.
 - Fetch and pull install remote tags whose commits were fetched, replacing a
   same-named local tag when the remote value differs.
+- `dolt_pull()` and `dolt_pull(remote)` fetch every branch on that remote,
+  and the tags those fetches install, then fast-forward or merge the current
+  branch from the same remote. `dolt_pull(remote, branch)` fetches only that
+  branch, so other tracking refs stay put and a tag whose commit was not
+  fetched stays absent. A branch that exists only on the remote becomes a
+  tracking ref and is not created locally.
 - A pull that cannot fast-forward merges the commit just fetched onto the
   tracking ref, including `--no-ff` and `--squash`. A local branch named
   `<remote>/<branch>` does not take that commit's place. Uncommitted changes

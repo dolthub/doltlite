@@ -46,12 +46,14 @@ The optional `--revision` value resolves a branch, tag, commit hash, or
 ancestor expression once during the lazy clone. A branch selects its working
 set; every other revision opens a read-only detached snapshot at that commit.
 
-`dolt_pull` fetches the named remote branch, then integrates it into the
-current local branch. It fast-forwards when the current tip is an ancestor of
-the remote tip and otherwise three-way merges like `dolt_merge`. The branch
-name selects the remote ref; a same-named non-current local branch is neither
-created nor moved. Fetch and pull also install remote tags whose commits have
-been fetched, replacing same-named local tags when the remote value differs.
+`dolt_pull()` and `dolt_pull(remote)` fetch every branch on that remote, then
+integrate the current branch's upstream into the current local branch.
+`dolt_pull(remote, branch)` fetches only that named branch. Either form
+fast-forwards when the current tip is an ancestor of the remote tip and
+otherwise three-way merges like `dolt_merge`. The branch name selects the
+remote ref; a same-named non-current local branch is neither created nor
+moved. Fetch and pull also install remote tags whose commits have been
+fetched, replacing same-named local tags when the remote value differs.
 
 ## HTTP Remotes
 

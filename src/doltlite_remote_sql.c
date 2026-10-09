@@ -648,7 +648,42 @@ static int mutatePruneTracking(sqlite3 *db, ChunkStore *cs, void *pArg){
 }
 
 /* One fetch of zBranch into zRemoteName/zTrack over a fresh connection to
-** zUrl. On failure the error is already the result. */
+** zUrl. On failure *pzErr is a message the caller frees, or NULL when the
+** caller should use its own generic text. Does not set the SQL result. */
+static int remoteSqlFetchBranch(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zUrl,
+  const char *zRemoteName,
+  const char *zBranch,
+  const char *zTrack,
+  char **pzErr
+){
+  DoltliteRemote *pRemote =
+      openRemoteByUrl(db, chunkFileGetVfs(&cs->file), zUrl, 0);
+  int rc;
+  if( pzErr ) *pzErr = 0;
+  if( !pRemote ){
+    if( pzErr ) *pzErr = sqlite3_mprintf("failed to open remote");
+    return SQLITE_CANTOPEN;
+  }
+  rc = doltliteFetchInto(cs, pRemote, zRemoteName, zBranch, zTrack);
+  if( rc!=SQLITE_OK && pzErr ){
+    const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+    if( zMsg ){
+      *pzErr = sqlite3_mprintf("%s", zMsg);
+    }else if( rc==SQLITE_NOTFOUND ){
+      *pzErr = sqlite3_mprintf("fetch failed: branch not found on remote");
+    }else{
+      *pzErr = sqlite3_mprintf("fetch failed");
+    }
+  }
+  pRemote->xClose(pRemote);
+  return rc;
+}
+
+/* One fetch of zBranch into zRemoteName/zTrack. On failure the error is
+** already the result. */
 static int remoteSqlFetchOne(
   sqlite3_context *ctx,
   sqlite3 *db,
@@ -658,28 +693,18 @@ static int remoteSqlFetchOne(
   const char *zBranch,
   const char *zTrack
 ){
-  DoltliteRemote *pRemote =
-      openRemoteByUrl(db, chunkFileGetVfs(&cs->file), zUrl, 0);
-  int rc;
-  if( !pRemote ){
-    remoteSqlReportOpenError(ctx, db, SQLITE_CANTOPEN, 0);
-    return SQLITE_CANTOPEN;
-  }
-  rc = doltliteFetchInto(cs, pRemote, zRemoteName, zBranch, zTrack);
+  char *zErr = 0;
+  int rc = remoteSqlFetchBranch(db, cs, zUrl, zRemoteName, zBranch, zTrack,
+                                &zErr);
   if( rc!=SQLITE_OK ){
-    const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
-    char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
-    pRemote->xClose(pRemote);
     (void)doltliteVcSealSavepointError(db);
-    remoteSqlResultError(ctx, rc,
-      zOwned ? zOwned
-      : (rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote"
-                             : "fetch failed"));
-    sqlite3_free(zOwned);
-    return rc;
+    remoteSqlResultError(ctx, rc, zErr ? zErr
+        : (rc==SQLITE_CANTOPEN ? "failed to open remote"
+         : rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote"
+                               : "fetch failed"));
+    sqlite3_free(zErr);
   }
-  pRemote->xClose(pRemote);
-  return SQLITE_OK;
+  return rc;
 }
 
 static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -798,7 +823,8 @@ static void doltPullParsed(
   const char *zRemoteBranch,
   int bFfOnly,
   int bNoFf,
-  int bSquash
+  int bSquash,
+  int bFetchAll
 ){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -824,19 +850,68 @@ static void doltPullParsed(
   rc = remoteSqlOpenNamedRemote(db, cs, zRemoteName, 0, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, &savedState) ) return;
 
-  rc = doltliteFetch(cs, pRemote, zRemoteName, zRemoteBranch);
-  if( rc!=SQLITE_OK ){
-    /* The message lives in the remote; copy it before closing. */
-    const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
-    char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+  /* No branch argument fetches every remote branch, as dolt_fetch does,
+  ** then merges this branch's upstream. An explicit branch fetches only
+  ** that one. Tags ride along with the commits those fetches install. */
+  if( bFetchAll ){
+    char **azNames = 0;
+    char *zUrlOwned = 0;
+    int nNames = 0;
+    int i;
+    rc = parseRemoteBranchNames(pRemote, &azNames, &nNames);
+    if( rc!=SQLITE_OK ){
+      const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+      char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+      pRemote->xClose(pRemote);
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+          zOwned ? zOwned
+          : (rc==SQLITE_CORRUPT || rc==SQLITE_NOTFOUND
+             ? "failed to read remote refs" : 0));
+      sqlite3_free(zOwned);
+      return;
+    }
+    /* zUrl points into cs->refs.aRemotes, which a fetch may reallocate. */
+    zUrlOwned = sqlite3_mprintf("%s", zUrl);
+    if( !zUrlOwned ){
+      pRemote->xClose(pRemote);
+      doltliteFreeStringArray(azNames, nNames);
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_NOMEM, 0);
+      return;
+    }
     pRemote->xClose(pRemote);
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
-      zOwned ? zOwned
-      : (rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0));
-    sqlite3_free(zOwned);
-    return;
+    pRemote = 0;
+    for(i=0; i<nNames && rc==SQLITE_OK; i++){
+      char *zFetchErr = 0;
+      rc = remoteSqlFetchBranch(db, cs, zUrlOwned, zRemoteName,
+                                azNames[i], azNames[i], &zFetchErr);
+      if( rc!=SQLITE_OK ){
+        remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+            zFetchErr ? zFetchErr
+            : (rc==SQLITE_NOTFOUND
+               ? "fetch failed: branch not found on remote" : "fetch failed"));
+        sqlite3_free(zFetchErr);
+        sqlite3_free(zUrlOwned);
+        doltliteFreeStringArray(azNames, nNames);
+        return;
+      }
+    }
+    sqlite3_free(zUrlOwned);
+    doltliteFreeStringArray(azNames, nNames);
+  }else{
+    rc = doltliteFetch(cs, pRemote, zRemoteName, zRemoteBranch);
+    if( rc!=SQLITE_OK ){
+      /* The message lives in the remote; copy it before closing. */
+      const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
+      char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
+      pRemote->xClose(pRemote);
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
+        zOwned ? zOwned
+        : (rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0));
+      sqlite3_free(zOwned);
+      return;
+    }
+    pRemote->xClose(pRemote);
   }
-  pRemote->xClose(pRemote);
 
   rc = chunkStoreFindTracking(
       cs, zRemoteName, zRemoteBranch, &trackingCommit);
@@ -1039,7 +1114,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
   /* No upstream tracking config: a pull defaults to origin and the
-  ** same-named branch, which is what a cloned branch tracks. */
+  ** same-named branch, which is what a cloned branch tracks. With no
+  ** branch argument every remote branch is fetched first. */
   zBranch = args.nPositional>1 ? args.azPositional[1]
                                : doltliteGetSessionBranch(db);
   if( !zBranch ){
@@ -1048,7 +1124,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
   doltPullParsed(ctx, args.nPositional>0 ? args.azPositional[0] : "origin",
-                 zBranch, bFfOnly, bNoFf, bSquash);
+                 zBranch, bFfOnly, bNoFf, bSquash, args.nPositional<=1);
   doltliteCmdArgsClear(&args);
 }
 
