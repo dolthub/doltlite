@@ -529,7 +529,12 @@ static int csOpen(
     }
 
     if( !cs->isBuffer ){
-      rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+      int retry = 0;
+      do {
+        rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+        if( rc!=SQLITE_BUSY || retry++>=100 ) break;
+        sqlite3_sleep(1);
+      }while( rc==SQLITE_BUSY );
       if( rc!=SQLITE_OK ){
         chunkStoreClose(cs);
         return rc;

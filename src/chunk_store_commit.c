@@ -413,6 +413,7 @@ static int csCommitToFile(ChunkStore *cs, int (*xBusy)(void*), void *pBusyArg){
   int useRecent = 0;
   int crashWriteActive = csCrashWriteInjectionActive();
   int publicationLocked = 0;
+  int publicationRetries = 0;
 
   rc = csCommitResolveAppendPoint(
       cs, hadFile, lockHeld, &lockFd, &lockName,
@@ -435,7 +436,13 @@ static int csCommitToFile(ChunkStore *cs, int (*xBusy)(void*), void *pBusyArg){
     if( rc==SQLITE_OK ){
       do {
         rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE);
-      }while( rc==SQLITE_BUSY && xBusy && xBusy(pBusyArg) );
+        if( rc!=SQLITE_BUSY ) break;
+        if( publicationRetries++<100 ){
+          sqlite3_sleep(1);
+        }else if( !xBusy || !xBusy(pBusyArg) ){
+          break;
+        }
+      }while( rc==SQLITE_BUSY );
     }
     if( rc!=SQLITE_OK ){
       sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
