@@ -594,16 +594,10 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }
 
-  rc = doltliteGetHeadCatalogHash(db, &preResetHeadCatHash);
-  if( rc!=SQLITE_OK && doltliteCmdSourceResultError(context, cs, &rc) ){
+  rc = doltliteRefreshAutocommitWorkingState(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
     goto reset_cleanup;
-  }else if( rc==SQLITE_OK ){
-    havePreResetHead = 1;
-    doltliteGetSessionStaged(db, &preResetStagedCatHash);
-    if( prollyHashIsEmpty(&preResetStagedCatHash) ){
-      memcpy(&preResetStagedCatHash, &preResetHeadCatHash,
-             sizeof(ProllyHash));
-    }
   }
 
   for(i=0; i<argc; i++){
@@ -685,6 +679,27 @@ static void doltliteResetFunc(
   /* After catalog/ref disambiguation so a sourced catalog miss still
   ** surfaces on a read-only connection; refuse before session mutation. */
   if( doltliteCmdRejectReadOnly(context) ) goto reset_cleanup;
+
+  if( isHard && !db->autoCommit ){
+    rc = doltliteEnsureWriteTxnAndSavepoints(db);
+    if( rc!=SQLITE_OK ){
+      if( rc==SQLITE_BUSY_SNAPSHOT ) doltliteInvalidateSessionWorkingState(db);
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
+  }
+
+  rc = doltliteGetHeadCatalogHash(db, &preResetHeadCatHash);
+  if( rc!=SQLITE_OK && doltliteCmdSourceResultError(context, cs, &rc) ){
+    goto reset_cleanup;
+  }else if( rc==SQLITE_OK ){
+    havePreResetHead = 1;
+    doltliteGetSessionStaged(db, &preResetStagedCatHash);
+    if( prollyHashIsEmpty(&preResetStagedCatHash) ){
+      memcpy(&preResetStagedCatHash, &preResetHeadCatHash,
+             sizeof(ProllyHash));
+    }
+  }
 
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ){

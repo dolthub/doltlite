@@ -1,0 +1,133 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach maintenance {gc vacuum} {
+  foreach change {rows schema untracked} {
+    foreach target {default head} {
+      foreach txn {autocommit begin savepoint} {
+        set prefix doltlite_reset_peer_gc-$maintenance.$change.$target.$txn
+        reset_db
+        do_test $prefix.setup {
+          db eval {
+            CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+            CREATE INDEX tv ON t(v);
+            INSERT INTO t VALUES(1,'a');
+            SELECT dolt_commit('-Am','init');
+          }
+          set head [db one {SELECT dolt_hashof('HEAD')}]
+          sqlite3 db1 test.db
+          sqlite3 db2 test.db
+          db1 eval {INSERT INTO t VALUES(2,'b')}
+          if {$change eq "schema"} {
+            db1 eval {ALTER TABLE t RENAME COLUMN v TO value}
+          }
+          db2 eval {SELECT dolt_add('.')}
+          if {$change eq "untracked"} {
+            db1 eval {
+              CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+              CREATE INDEX uv ON u(v);
+              INSERT INTO u VALUES(10,'untracked');
+            }
+          }
+          db1 eval {SELECT dolt_reset('--hard')}
+          if {$maintenance eq "gc"} {
+            db eval {SELECT dolt_gc()}
+          } else {
+            db eval {VACUUM}
+          }
+          set result [db one {PRAGMA integrity_check}]
+          set result
+        } ok
+        do_test $prefix.reset {
+          if {$txn eq "begin"} { db2 eval {BEGIN} }
+          if {$txn eq "savepoint"} { db2 eval {SAVEPOINT s} }
+          if {$target eq "head"} {
+            set sql {SELECT dolt_reset('--hard','HEAD')}
+          } else {
+            set sql {SELECT dolt_reset('--hard')}
+          }
+          list [catch {db2 eval $sql} msg] $msg
+        } {0 0}
+        do_test $prefix.write {
+          db2 eval {INSERT INTO t VALUES(3,'c')}
+          if {$txn eq "begin"} { db2 eval {COMMIT} }
+          list [db2 eval {SELECT id,v FROM t ORDER BY id}] \
+               [db2 one {PRAGMA integrity_check}]
+        } {{1 a 3 c} ok}
+        sqlite3 db3 test.db
+        do_test $prefix.fresh {
+          list [db3 one {PRAGMA integrity_check}] \
+               [db3 eval {SELECT id,v FROM t ORDER BY id}] \
+               [db3 one {SELECT count(*) FROM dolt_status WHERE staged=1}] \
+               [expr {[db3 one {SELECT dolt_hashof('HEAD')}] eq $head}]
+        } {ok {1 a 3 c} 0 1}
+        if {$change eq "untracked"} {
+          do_test $prefix.untracked {
+            list [db2 eval {SELECT id,v FROM u}] \
+                 [db3 eval {SELECT id,v FROM u INDEXED BY uv WHERE v='untracked'}]
+          } {{10 untracked} {10 untracked}}
+        }
+        do_test $prefix.stage {
+          list [db3 eval {SELECT dolt_add('.')}] \
+               [db3 one {PRAGMA integrity_check}] \
+               [db3 one {SELECT count(*) FROM dolt_status WHERE staged=1}]
+        } [list 0 ok [expr {$change eq "untracked" ? 2 : 1}]]
+        db1 close
+        db2 close
+        db3 close
+        db close
+        sqlite3 db test.db
+        do_test $prefix.reopen {
+          list [db one {PRAGMA integrity_check}] \
+               [db eval {SELECT id,v FROM t ORDER BY id}]
+        } {ok {1 a 3 c}}
+      }
+    }
+  }
+}
+
+foreach maintenance {gc vacuum} {
+  foreach txn {begin savepoint} {
+    set prefix doltlite_reset_peer_gc-pinned.$maintenance.$txn
+    reset_db
+    db eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY);
+      INSERT INTO t VALUES(1);
+      SELECT dolt_commit('-Am','init');
+    }
+    sqlite3 peer test.db
+    if {$txn eq "begin"} { db eval {BEGIN} } else { db eval {SAVEPOINT s} }
+    db eval {SELECT * FROM t}
+    peer eval {
+      INSERT INTO t VALUES(2);
+      SELECT dolt_commit('-Am','peer');
+    }
+    if {$maintenance eq "gc"} {
+      peer eval {SELECT dolt_gc()}
+    } else {
+      peer eval {VACUUM}
+    }
+    set peerHead [peer one {SELECT dolt_hashof('HEAD')}]
+    do_test $prefix.refused {
+      set rc [catch {db eval {SELECT dolt_reset('--hard')}} msg]
+      list $rc [sqlite3_extended_errcode db]
+    } {1 SQLITE_BUSY_SNAPSHOT}
+    if {$txn eq "begin"} { db eval {COMMIT} }
+    do_test $prefix.peer-kept {
+      db eval {INSERT INTO t VALUES(3)}
+      list [db eval {SELECT id FROM t ORDER BY id}] \
+           [db one {PRAGMA integrity_check}] \
+           [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $peerHead}]
+    } {{1 2 3} ok 1}
+    peer close
+    db close
+    sqlite3 db test.db
+    do_test $prefix.reopen {
+      list [db eval {SELECT id FROM t ORDER BY id}] \
+           [db one {PRAGMA integrity_check}] \
+           [db one {SELECT count(*) FROM dolt_status WHERE staged=1}]
+    } {{1 2 3} ok 0}
+  }
+}
+
+finish_test

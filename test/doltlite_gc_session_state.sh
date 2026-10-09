@@ -1,6 +1,7 @@
 #!/bin/bash
 
 DLTEST_TIMEOUT=15
+DLTEST_STRIP_CR=1
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 db_rm() { rm -f "$1" "${1}-wal"; }
@@ -135,5 +136,98 @@ run_rev_test "detached_head_log_survives" "SELECT count(*) FROM dolt_log;" "3" "
 run_test "detached_head_branch_intact_after_gc" "SELECT count(*) FROM t;" "1" "$DB"
 
 db_rm "$DB"
+
+TASK_TMP=$(mktemp -d ./.doltlite-reset-peer.XXXXXX)
+trap 'rm -rf "$TASK_TMP"' EXIT
+SHELL_DOLTLITE="${DOLTLITE_SYSTEM:-$DOLTLITE}"
+ALLOW_MAINTENANCE_REFUSAL=0
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    SHELL_DOLTLITE=$(cygpath -am "$SHELL_DOLTLITE")
+    ALLOW_MAINTENANCE_REFUSAL=1
+    ;;
+esac
+for maintenance in vacuum gc; do
+  case "$maintenance" in
+    vacuum) stmt="VACUUM;" ;;
+    gc) stmt="SELECT dolt_gc();" ;;
+  esac
+  for peer in conn proc; do
+    for target in default head; do
+      for txn in autocommit begin savepoint; do
+        case "$txn" in
+          autocommit) begin=""; finish="" ;;
+          begin) begin="BEGIN;"; finish="COMMIT;" ;;
+          savepoint) begin="SAVEPOINT s;"; finish="" ;;
+        esac
+        DB="$TASK_TMP/${maintenance}_${peer}_${target}_${txn}.db"
+        if [ "$target" = head ]; then
+          reset="SELECT dolt_reset('--hard','HEAD');"
+        else
+          reset="SELECT dolt_reset('--hard');"
+        fi
+        if [ "$peer" = conn ]; then
+          compact=".connection 0
+$stmt"
+        else
+          compact=".shell $SHELL_DOLTLITE \"$DB\" \"$stmt\""
+        fi
+        sql="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','init');
+.connection 1
+.open '$DB'
+.connection 2
+.open '$DB'
+.connection 1
+INSERT INTO t VALUES(2,'b');
+.connection 2
+SELECT dolt_add('.');
+.connection 1
+SELECT dolt_reset('--hard');
+$compact
+.connection 2
+$begin
+$reset
+INSERT INTO t VALUES(3,'c');
+$finish
+.connection 3
+.open '$DB'
+SELECT 'fresh',group_concat(id,',') FROM t;
+PRAGMA integrity_check;
+SELECT 'staged',count(*) FROM dolt_status WHERE staged=1;
+SELECT 'add',dolt_add('.');
+PRAGMA integrity_check;
+"
+        out=$(dltest_run_sql "$sql" "$DB" "" "$TASK_TMP/errors")
+        errors=$(tr -d '\r' < "$TASK_TMP/errors")
+        if [ "$ALLOW_MAINTENANCE_REFUSAL" = 1 ]; then
+          case "$maintenance" in
+            gc)
+              errors=$(printf '%s\n' "$errors" | sed -E \
+                '/^Error (near line [0-9]+|in 2nd command line argument): gc sweep phase failed$/d; /^System command returns 1$/d; /^$/d')
+              ;;
+            vacuum)
+              maintenance_line=$(printf '%s\n' "$sql" | awk '$0=="VACUUM;" {print NR}')
+              errors=$(printf '%s\n' "$errors" | sed -E \
+                "/^Error near line ${maintenance_line:-0}: disk I\/O error$/d; /^Error in 2nd command line argument: disk I\/O error$/d; /^System command returns 1$/d; /^$/d")
+              ;;
+          esac
+        fi
+        case "$out"$'\n'"$errors" in
+          *Error*|*"integrity check failed"*)
+            dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out\n  errors: $errors" ;;
+          *$'fresh|1,3\nok\nstaged|0\nadd|0\nok\n') dltest_pass ;;
+          *) dltest_fail "stale_reset_${maintenance}_${peer}_${target}_${txn}" "  got: $out\n  errors: $errors" ;;
+        esac
+        run_test "stale_reset_${maintenance}_${peer}_${target}_${txn}_reopen" \
+          "PRAGMA integrity_check; SELECT id,v FROM t ORDER BY id;
+           SELECT count(*) FROM dolt_status WHERE staged=1;" \
+          $'ok\n1|a\n3|c\n1' "$DB"
+      done
+    done
+  done
+done
 
 dltest_finish
