@@ -38,7 +38,9 @@ struct DoltliteWorkerArg {
   int index;
 };
 
-/* Open ChunkStore cache keyed by db path. Workers serialize on h->mu. */
+/* Open ChunkStore cache keyed by db path. Workers serialize store access
+** on h->mu. The HTTP write runs after that lock is dropped, so a client
+** that does not read stalls only its own worker. */
 struct RemoteDbHandle {
   char *zPath;
   ChunkStore store;
@@ -78,6 +80,56 @@ struct DoltliteServer {
   int nDbCache;
 };
 
+/* One assembled HTTP response for the worker that is inside handleRequest.
+** Filled while h->mu is held; flushed after remoteDbRelease. */
+typedef struct RemoteSrvPending RemoteSrvPending;
+struct RemoteSrvPending {
+  u8 *pMsg;
+  int nMsg;
+  int bFail;
+};
+
+#if defined(_MSC_VER)
+#define REMOTESRV_TLS __declspec(thread)
+#else
+#define REMOTESRV_TLS __thread
+#endif
+static REMOTESRV_TLS RemoteSrvPending *remotesrvPending;
+
+/* Copy one slice of the response. Header and body are separate calls.
+** A failed copy drops the partial message; the caller sends 500 after
+** the database lock is released. */
+static int remotesrvPendingAdd(const void *p, int n){
+  RemoteSrvPending *pend = remotesrvPending;
+  u8 *pNew;
+  i64 nNew;
+
+  if( !pend || pend->bFail ) return 1;
+  if( n<=0 ) return 0;
+  /* Callers cap the body. This only rejects a header+body that cannot fit
+  ** in the int length passed to the socket write. */
+  if( pend->nMsg > 0x7fffffff - n ){
+    sqlite3_free(pend->pMsg);
+    pend->pMsg = 0;
+    pend->nMsg = 0;
+    pend->bFail = 1;
+    return 1;
+  }
+  nNew = (i64)pend->nMsg + (i64)n;
+  pNew = (u8*)sqlite3_realloc64(pend->pMsg, (sqlite3_uint64)nNew);
+  if( !pNew ){
+    sqlite3_free(pend->pMsg);
+    pend->pMsg = 0;
+    pend->nMsg = 0;
+    pend->bFail = 1;
+    return 1;
+  }
+  memcpy(pNew + pend->nMsg, p, (size_t)n);
+  pend->pMsg = pNew;
+  pend->nMsg = (int)nNew;
+  return 0;
+}
+
 static void sendResponseEx(
   DoltliteConn *fd,
   int status,
@@ -105,6 +157,14 @@ static void sendResponseEx(
       status, zStatus, nBody);
   }
   nHeader = (int)strlen(zHeader);
+  /* Database handle is still locked. Keep the bytes and let handleRequest
+  ** write them after remoteDbRelease. */
+  if( remotesrvPending ){
+    if( remotesrvPendingAdd(zHeader, nHeader)==0 && pBody && nBody>0 ){
+      remotesrvPendingAdd(pBody, nBody);
+    }
+    return;
+  }
   if( doltliteConnWriteAll(fd, zHeader, nHeader)!=0 ) return;
   if( pBody && nBody>0 ){
     doltliteConnWriteAll(fd, pBody, nBody);
@@ -1183,6 +1243,7 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
   int isGetChunksEndpoint = 0;
   int exists = 0;
   sqlite3_vfs *pVfs;
+  RemoteSrvPending pending;
 
   rc = parseRequest(fd, zMethod, sizeof(zMethod),
                     zPath, sizeof(zPath),
@@ -1251,6 +1312,9 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
   }
   pStore = &pHandle->store;
 
+  memset(&pending, 0, sizeof(pending));
+  remotesrvPending = &pending;
+
   if( strcmp(zMethod, "GET")==0 ){
     if( strcmp(zEndpoint, "root")==0 ){
       handleGetRoot(pStore, fd);
@@ -1285,8 +1349,16 @@ static void handleRequest(DoltliteServer *pSrv, DoltliteConn *fd){
     sendBadRequest(fd);
   }
 
+  remotesrvPending = 0;
   remoteDbRelease(pSrv, pHandle);
   sqlite3_free(pBody);
+  if( pending.bFail ){
+    sqlite3_free(pending.pMsg);
+    sendSqliteError(fd, SQLITE_NOMEM);
+  }else if( pending.pMsg && pending.nMsg>0 ){
+    doltliteConnWriteAll(fd, pending.pMsg, pending.nMsg);
+    sqlite3_free(pending.pMsg);
+  }
 }
 
 static void serverCleanup(DoltliteServer *pSrv);
