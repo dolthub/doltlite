@@ -1863,6 +1863,27 @@ result=$("$DB" "$CB/e.db" "SELECT dolt_clone('file://$CB/remote2.db'); SELECT ac
 check "an explicit default survives a later push" "0
 zeta" "$result"
 
+"$DB" "$CB/f.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('zeta');
+SELECT dolt_remote('add','origin','file://$CB/remote3.db');
+SELECT dolt_push('origin','zeta');
+ENDSQL
+"$DB" "$CB/remote3.db" "SELECT dolt_default_branch('zeta');" >/dev/null
+"$DB" "$CB/f.db" "SELECT dolt_branch('mmm'); SELECT dolt_push('origin','mmm');" >/dev/null
+result=$("$DB" "$CB/g.db" "SELECT dolt_clone('file://$CB/remote3.db'); SELECT active_branch(); SELECT dolt_default_branch();")
+check "explicit default on the only branch survives an earlier name" "0
+zeta
+zeta" "$result"
+result=$("$DB" "$CB/remote3.db" "SELECT active_branch(); SELECT dolt_default_branch();")
+check "source remote keeps an explicit default" "zeta
+zeta" "$result"
+"$DB" "$CB/f.db" "SELECT dolt_push('origin','main');" >/dev/null
+result=$("$DB" "$CB/remote3.db" "SELECT dolt_default_branch();")
+check "creating main still replaces an explicit default" "main" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

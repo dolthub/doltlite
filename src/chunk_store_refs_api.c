@@ -533,10 +533,20 @@ int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
   return SQLITE_OK;
 }
 
+/* dolt_default_branch records itself as a trailing 0 on the default name
+** and on that branch's name. A v7 reader still matches the two strings and
+** stops at the first 0. */
+static int refsExplicitNamePad(const ChunkStore *cs, const char *zName){
+  const char *zDef = cs->refs.zDefaultBranch ? cs->refs.zDefaultBranch : "main";
+  if( !cs->refs.bDefaultExplicit || !zName ) return 0;
+  return strcmp(zName, zDef)==0;
+}
+
 static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   const char *def = cs->refs.zDefaultBranch ? cs->refs.zDefaultBranch : "main";
   int defLen = (int)strlen(def);
-  int sz = 1 + 4 + defLen + 4 + 4 + 4 + 4;
+  int defPad = cs->refs.bDefaultExplicit ? 1 : 0;
+  int sz = 1 + 4 + defLen + defPad + 4 + 4 + 4 + 4;
   int i;
   u8 *buf, *bufCur;
 
@@ -544,7 +554,9 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   *pnOut = 0;
 
   for(i=0; i<cs->refs.nBranches; i++){
-    int inc = 4 + (int)strlen(cs->refs.aBranches[i].zName) + PROLLY_HASH_SIZE*2;
+    int inc = 4 + (int)strlen(cs->refs.aBranches[i].zName)
+            + refsExplicitNamePad(cs, cs->refs.aBranches[i].zName)
+            + PROLLY_HASH_SIZE*2;
     if( sz > INT_MAX - inc ){
       return SQLITE_TOOBIG;
     }
@@ -592,13 +604,16 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   if( !buf ) return SQLITE_NOMEM;
   bufCur = buf;
   *bufCur++ = 7;
-  CS_WRITE_U32(bufCur,defLen); bufCur+=4;
+  CS_WRITE_U32(bufCur,defLen+defPad); bufCur+=4;
   memcpy(bufCur, def, defLen); bufCur+=defLen;
+  if( defPad ) *bufCur++ = 0;
   CS_WRITE_U32(bufCur,cs->refs.nBranches); bufCur+=4;
   for(i=0; i<cs->refs.nBranches; i++){
     int nameLen = (int)strlen(cs->refs.aBranches[i].zName);
-    CS_WRITE_U32(bufCur,nameLen); bufCur+=4;
+    int namePad = refsExplicitNamePad(cs, cs->refs.aBranches[i].zName);
+    CS_WRITE_U32(bufCur,nameLen+namePad); bufCur+=4;
     memcpy(bufCur, cs->refs.aBranches[i].zName, nameLen); bufCur+=nameLen;
+    if( namePad ) *bufCur++ = 0;
     memcpy(bufCur, cs->refs.aBranches[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
     memcpy(bufCur, cs->refs.aBranches[i].workingSetHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
   }
@@ -652,6 +667,7 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
     }
     CS_WRITE_I64(bufCur, cs->refs.aSequences[i].iSeq); bufCur+=8;
   }
+  assert( bufCur==buf+sz );
   *ppOut = buf;
   *pnOut = sz;
   return SQLITE_OK;
@@ -668,6 +684,7 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
    && cs->refs.nRemotes==0
    && cs->refs.nTracking==0
    && cs->refs.nSequences==0
+   && !cs->refs.bDefaultExplicit
    && (!cs->refs.zDefaultBranch || strcmp(cs->refs.zDefaultBranch, "main")==0)
    && strcmp(cs->refs.aBranches[0].zName, "main")==0 ){
     u8 aBuf[77];

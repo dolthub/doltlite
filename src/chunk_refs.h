@@ -51,6 +51,9 @@ struct RefsTable {
   BranchRef *aBranches;
   int nBranches;
   char *zDefaultBranch;
+  /* Set when dolt_default_branch chose zDefaultBranch. A push leaves this
+  ** alone until it adopts a different default. Not a separate allocation. */
+  int bDefaultExplicit;
   TagRef *aTags;
   int nTags;
   RemoteRef *aRemotes;
@@ -82,6 +85,7 @@ void refsTableSetHash(RefsTable *rt, const ProllyHash *h);
 typedef struct SavedRefsState SavedRefsState;
 struct SavedRefsState {
   char *zDefaultBranch;
+  int bDefaultExplicit;
   BranchRef *aBranches;
   int nBranches;
   TagRef *aTags;
@@ -94,22 +98,24 @@ struct SavedRefsState {
   int nSequences;
 };
 
-#define REFS_OWNED_COPY(D, S) do {           \
-  (D).zDefaultBranch = (S).zDefaultBranch;   \
-  (D).aBranches      = (S).aBranches;        \
-  (D).nBranches      = (S).nBranches;        \
-  (D).aTags          = (S).aTags;            \
-  (D).nTags          = (S).nTags;            \
-  (D).aRemotes       = (S).aRemotes;         \
-  (D).nRemotes       = (S).nRemotes;         \
-  (D).aTracking      = (S).aTracking;        \
-  (D).nTracking      = (S).nTracking;        \
-  (D).aSequences     = (S).aSequences;       \
-  (D).nSequences     = (S).nSequences;       \
+#define REFS_OWNED_COPY(D, S) do {             \
+  (D).zDefaultBranch   = (S).zDefaultBranch;   \
+  (D).bDefaultExplicit = (S).bDefaultExplicit; \
+  (D).aBranches        = (S).aBranches;        \
+  (D).nBranches        = (S).nBranches;        \
+  (D).aTags            = (S).aTags;            \
+  (D).nTags            = (S).nTags;            \
+  (D).aRemotes         = (S).aRemotes;         \
+  (D).nRemotes         = (S).nRemotes;         \
+  (D).aTracking        = (S).aTracking;        \
+  (D).nTracking        = (S).nTracking;        \
+  (D).aSequences       = (S).aSequences;       \
+  (D).nSequences       = (S).nSequences;       \
 } while(0)
 
 #define REFS_OWNED_CLEAR(D) do {             \
   (D).zDefaultBranch = 0;                    \
+  (D).bDefaultExplicit = 0;                  \
   (D).aBranches      = 0;                    \
   (D).nBranches      = 0;                    \
   (D).aTags          = 0;                    \

@@ -84,7 +84,9 @@ static int mutateDefaultBranch(sqlite3 *db, ChunkStore *cs, void *pArg){
   (void)db;
   rc = chunkStoreFindBranch(cs, zName, &unused);
   if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreSetDefaultBranch(cs, zName);
+  rc = chunkStoreSetDefaultBranch(cs, zName);
+  if( rc==SQLITE_OK ) cs->refs.bDefaultExplicit = 1;
+  return rc;
 }
 
 static void doltliteDefaultBranchFunc(
