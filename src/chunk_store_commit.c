@@ -439,6 +439,9 @@ static int csCommitToFile(ChunkStore *cs, int (*xBusy)(void*), void *pBusyArg){
   if( !cs->isBuffer ){
     rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
     if( rc==SQLITE_OK ){
+      rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED);
+    }
+    if( rc==SQLITE_OK ){
       do {
         rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE);
         if( rc!=SQLITE_BUSY ) break;

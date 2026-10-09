@@ -649,12 +649,27 @@ static int csDetectExternalChanges(
   return SQLITE_OK;
 }
 
+static int csFileSnapshotUnchanged(ChunkStore *cs){
+  DoltliteFileState state;
+  int rc;
+  if( cs->openPending || cs->bReloadAfterRefsConflict
+   || cs->adoptReplacement ) return 0;
+  state.iFileSize = -1;
+  state.bMoved = 0;
+  rc = sqlite3OsDoltliteFileState(cs->file.pFile, &state);
+  if( rc!=SQLITE_OK || state.bMoved || state.iFileSize<0
+   || state.iFileSize>cs->file.iFileSize ) return 0;
+  cs->movedReadOnly = 0;
+  return 1;
+}
+
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
   int rc, rc2;
   CsReadLock readLock = {0, 0};
   int locked = cs->file.pFile && !cs->isBuffer
             && !cs->noReadLock && cs->lockDepth==0;
   *pChanged = 0;
+  if( locked && csFileSnapshotUnchanged(cs) ) return SQLITE_OK;
   if( locked ){
     rc = csReadLock(cs, &readLock);
     if( rc!=SQLITE_OK ){
@@ -816,6 +831,7 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int locked = cs->file.pFile && !cs->isBuffer
             && !cs->noReadLock && cs->lockDepth==0;
   *pChanged = 0;
+  if( locked && csFileSnapshotUnchanged(cs) ) return SQLITE_OK;
   if( locked ){
     rc = csReadLock(cs, &readLock);
     if( rc!=SQLITE_OK ){
