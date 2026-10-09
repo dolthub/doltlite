@@ -9372,6 +9372,8 @@ struct PublicationProcess {
   int request;
   int response;
   int valid;
+  int wait;
+  int nBusy;
 };
 
 static void publicationProcessHook(void *pArg){
@@ -9380,9 +9382,22 @@ static void publicationProcessHook(void *pArg){
   gSyncHook = 0;
   p->valid = write(p->request,"r",1)==1
       && read(p->response,&result,1)==1 && result=='y';
+  if( p->wait ){
+    p->valid = p->valid
+        && read(p->response,&result,1)==1 && result=='b';
+  }
 }
 
-static void run_publication_process(int fail){
+static int publicationBusyHandler(void *pArg, int n){
+  PublicationProcess *p = (PublicationProcess*)pArg;
+  char command;
+  p->nBusy++;
+  if( n>0 || write(p->response,"b",1)!=1
+   || read(p->request,&command,1)!=1 ) return 0;
+  return 1;
+}
+
+static void run_publication_process(int fail, int wait){
   sqlite3 *db = 0;
   char dbpath[512];
   int requests[2], responses[2];
@@ -9405,6 +9420,7 @@ static void run_publication_process(int fail){
   if( child==0 ){
     sqlite3 *peer = 0, *fresh = 0;
     int nLogs, valid;
+    PublicationProcess busy = {requests[0],responses[1],0,0,0};
     char command;
     alarm(30);
     close(requests[1]);
@@ -9413,7 +9429,7 @@ static void run_publication_process(int fail){
     nLogs = (int)queryInt64(peer,"SELECT count(*) FROM dolt_log");
     if( write(responses[1],"y",1)!=1 || read(requests[0],&command,1)!=1 ) _exit(1);
     valid = queryInt64(peer,"SELECT count(*) FROM dolt_log")==nLogs;
-    rc = sqlite3_open_v2(dbpath,&fresh,SQLITE_OPEN_READONLY,0);
+    rc = sqlite3_open_v2(dbpath,&fresh,SQLITE_OPEN_READWRITE,0);
     valid = valid && rc==SQLITE_OK;
     if( rc==SQLITE_OK ){
       sqlite3_stmt *stmt = 0;
@@ -9423,10 +9439,21 @@ static void run_publication_process(int fail){
           || (rc==SQLITE_ROW && sqlite3_column_int(stmt,0)==nLogs));
       sqlite3_finalize(stmt);
     }
+    if( write(responses[1],valid ? "y" : "n",1)!=1 ) _exit(1);
+    if( wait ){
+      sqlite3_busy_handler(fresh,publicationBusyHandler,&busy);
+      valid = valid && queryInt64(fresh,"SELECT count(*) FROM dolt_log")==nLogs+!fail;
+      if( busy.nBusy==0 ){
+        if( write(responses[1],"b",1)!=1
+         || read(requests[0],&command,1)!=1 ) _exit(1);
+      }
+      valid = valid && busy.nBusy==1;
+    }else{
+      if( read(requests[0],&command,1)!=1 ) _exit(1);
+    }
+    valid = valid && queryInt64(peer,"SELECT count(*) FROM dolt_log")==nLogs+!fail;
+    valid = valid && queryInt64(fresh,"SELECT count(*) FROM dolt_log")==nLogs+!fail;
     sqlite3_close(fresh);
-    if( write(responses[1],valid ? "y" : "n",1)!=1
-     || read(requests[0],&command,1)!=1 ) _exit(1);
-    valid = queryInt64(peer,"SELECT count(*) FROM dolt_log")==nLogs+!fail;
     valid = valid && execSql(peer,"INSERT INTO t VALUES(3,'peer')")==SQLITE_OK;
     valid = valid && strcmp(queryScalarText(peer,"SELECT group_concat(k) FROM t"),"1,2,3")==0;
     valid = valid && strcmp(queryScalarText(peer,"PRAGMA integrity_check"),"ok")==0;
@@ -9442,6 +9469,7 @@ static void run_publication_process(int fail){
     probe.request = requests[1];
     probe.response = responses[0];
     probe.valid = 0;
+    probe.wait = wait;
     gSyncHook = publicationProcessHook;
     gSyncHookArg = &probe;
     if( fail ) gFailSyncNth = 1;
@@ -9510,8 +9538,9 @@ static void run_commit_publication(void){
   }
   removeDbFiles(dbpath);
 #if !SQLITE_OS_WIN
-  run_publication_process(0);
-  run_publication_process(1);
+  run_publication_process(0,0);
+  run_publication_process(1,0);
+  run_publication_process(0,1);
 #endif
 }
 

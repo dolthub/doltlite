@@ -8,12 +8,18 @@ proc publication_snapshot {handle} {
   }
 }
 
+proc publication_decline {n} {
+  incr ::busyCalls
+  return 1
+}
+
 proc publication_sync {method file args} {
   if {$::armed && [string match *test.db $file]} {
     set ::armed 0
     set ::during [publication_snapshot peer]
     set ::openError [catch {sqlite3 observer test.db} ::openMessage]
     if {!$::openError} {
+      observer busy publication_decline
       set ::readError [catch {publication_snapshot observer} ::freshDuring]
     }
     if {$::fail} {return SQLITE_IOERR}
@@ -52,6 +58,7 @@ foreach branch {main dev} {
       set ::freshDuring {}
       set ::openError 0
       set ::readError 0
+      set ::busyCalls 0
       set ::armed 1
       if {$kind eq "vc"} {
         set failed [catch {db eval {SELECT dolt_commit('-Am','c2')}}]
@@ -67,6 +74,7 @@ foreach branch {main dev} {
         expr {($::readError && [string match *locked* $::freshDuring])
             || (!$::readError && $::freshDuring eq $before)}
       } 1
+      do_test $prefix.during-busy-handler {set ::busyCalls} 1
       set expected $before
       if {!$::fail} {
         set index [expr {$kind eq "vc" ? 0 : 1}]

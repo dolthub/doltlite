@@ -110,7 +110,7 @@ foreach vfs {unix unix-excl} {
     set errs [list]
     foreach e $errlist { lappend errs [list 1 $e] }
     ifcapable doltlite {
-      if {$vfs eq "unix-excl"} {lappend errs {1 {database is locked}}}
+      lappend errs {1 {database is locked}}
     }
   
     set body [string map [list %VFS% $vfs] {

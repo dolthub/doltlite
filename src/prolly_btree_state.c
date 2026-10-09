@@ -661,7 +661,10 @@ int doltliteBtreeHydrateDeferred(Btree *p){
   }
 
   cs = &p->pBt->store;
-  rc = chunkStoreEnsureRefsFresh(cs);
+  do {
+    rc = chunkStoreEnsureRefsFresh(cs);
+  }while( rc==SQLITE_BUSY && cs->openPending
+       && prollyInvokeBusyHandler(p->pBt) );
   if( rc!=SQLITE_OK ) return rc;
   if( p->bDeferredDefaultBranch ){
     const char *zDef = chunkStoreGetDefaultBranch(cs);
