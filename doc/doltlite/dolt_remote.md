@@ -49,7 +49,7 @@ when it cannot fast-forward, conflicts included.
 | `unsupported mapping: '<refspec>'` | `src:dst` destination is under `refs/tags/` |
 | `not a fast-forward of the remote branch (use force to overwrite)` | remote moved; add `--force` |
 | `fetch failed: branch not found on remote` | `dolt_fetch`/`dolt_pull` of a missing branch |
-| `cannot pull with uncommitted changes` | working or staged changes, on a fast-forward or a merge |
+| `cannot pull with uncommitted changes` | working or staged changes, other than an untracked table matched by `dolt_ignore`, on a fast-forward or a merge |
 | `database is not empty — clone into a fresh database` | `dolt_clone` into a database with tables or commits |
 | `clone failed` | source unreachable or not a DoltLite database |
 | `DoltLite remotes are disabled in this build` | built with `DOLTLITE_ENABLE_REMOTES=0` |
@@ -75,7 +75,11 @@ when it cannot fast-forward, conflicts included.
 - A pull that cannot fast-forward merges the commit just fetched onto the
   tracking ref, including `--no-ff` and `--squash`. A local branch named
   `<remote>/<branch>` does not take that commit's place. Uncommitted changes
-  refuse that merge the same way they refuse a fast-forward.
+  refuse that merge the same way they refuse a fast-forward. An untracked
+  table matched by [dolt_ignore](dolt_ignore.md) is not one of those changes,
+  and the pull leaves it in the working set. An edit of a tracked table still
+  refuses, including one whose name matches `dolt_ignore`, and so does an
+  uncommitted edit of `dolt_ignore` itself.
 - Pushes to an HTTP remote are validated under the server's lock, so a stale
   push is rejected rather than overwriting a peer's ref.
 

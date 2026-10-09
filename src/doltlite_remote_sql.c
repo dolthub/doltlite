@@ -818,12 +818,13 @@ static void doltPullParsed(
   const char *zUrl = 0;
   const char *zLocalBranch;
   ProllyHash trackingCommit, localCommit;
-  ProllyHash cleanWorkingSet;
+  ProllyHash cleanWorkingSet, ignoredCat;
   DoltliteTxnState savedState;
   int dirty = 0;
   int rc;
 
   memset(&savedState, 0, sizeof(savedState));
+  memset(&ignoredCat, 0, sizeof(ignoredCat));
 
   rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ){
@@ -900,11 +901,17 @@ static void doltPullParsed(
       }
       /* A fast-forward already refuses a dirty working set below. Merge
       ** would keep unconflicted local edits and commit them, so refuse
-      ** here too, including --no-ff and --squash. */
-      rc = doltliteHasUncommittedChanges(db, &dirty);
-      if( rc!=SQLITE_OK ){
-        remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
-        return;
+      ** here too, including --no-ff and --squash. An ignored table is
+      ** not one of those edits; merge puts it back. */
+      {
+        char *zErr = 0;
+        rc = doltliteSeparateIgnoredChanges(db, &dirty, &ignoredCat, &zErr);
+        if( rc!=SQLITE_OK ){
+          remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, zErr);
+          sqlite3_free(zErr);
+          return;
+        }
+        sqlite3_free(zErr);
       }
       if( dirty ){
         remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
@@ -936,10 +943,15 @@ static void doltPullParsed(
   }
 
   doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
-  rc = doltliteHasUncommittedChanges(db, &dirty);
-  if( rc!=SQLITE_OK ){
-    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
-    return;
+  {
+    char *zErr = 0;
+    rc = doltliteSeparateIgnoredChanges(db, &dirty, &ignoredCat, &zErr);
+    if( rc!=SQLITE_OK ){
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, zErr);
+      sqlite3_free(zErr);
+      return;
+    }
+    sqlite3_free(zErr);
   }
   if( dirty ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
@@ -989,7 +1001,31 @@ static void doltPullParsed(
     return;
   }
 
-  rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
+  /* Stage the pulled commit. Ignored tables stay in the working set and
+  ** out of that staged catalog. */
+  {
+    ProllyHash commitCat, workingCat;
+    char *zErr = 0;
+    memset(&commitCat, 0, sizeof(commitCat));
+    memset(&workingCat, 0, sizeof(workingCat));
+    rc = doltliteCommitCatalogHash(db, &trackingCommit, &commitCat);
+    if( rc==SQLITE_OK ){
+      rc = doltliteAttachIgnoredCatalog(db, &commitCat, &ignoredCat,
+                                        &workingCat, &zErr);
+    }
+    if( rc==SQLITE_OK ) rc = doltliteHardReset(db, &workingCat);
+    if( rc==SQLITE_OK ){
+      doltliteSetSessionHead(db, &trackingCommit);
+      rc = doltliteSetSessionStaged(db, &commitCat);
+    }
+    if( rc!=SQLITE_OK && zErr ){
+      chunkStoreUnlock(cs);
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, zErr);
+      sqlite3_free(zErr);
+      return;
+    }
+    sqlite3_free(zErr);
+  }
   /* The hard reset kept the branch's old staged catalog; record the pulled
   ** head's, or the next load of this working set stages a revert of it. */
   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
