@@ -22,6 +22,9 @@
 #include "prolly_node.h"
 #include "prolly_mutmap.h"
 #include "vdbeInt.h"
+#if !SQLITE_OS_WIN
+#include <sys/wait.h>
+#endif
 #include "sortkey.h"
 #include "doltlite_remote.h"
 #include "lib/test_tmpdir.h"
@@ -1582,6 +1585,8 @@ static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
 static int gFailOpenMainOnce = 0;
 static int gFailHits = 0;
+static void (*gSyncHook)(void*);
+static void *gSyncHookArg;
 static int gFailFullPathnameHits = 0;
 static const char *gFullPathnameSuffix = 0;
 static char gRewrittenFullPath[512];
@@ -1632,6 +1637,7 @@ static int failTruncate(sqlite3_file *pFile, sqlite3_int64 size){
 
 static int failSync(sqlite3_file *pFile, int flags){
   FailFile *p = (FailFile*)pFile;
+  if( p->isMainDb && gSyncHook ) gSyncHook(gSyncHookArg);
   if( gFailSyncOnce>0
    || (p->isMainDb && gFailSyncNth>0 && --gFailSyncNth==0) ){
     if( gFailSyncOnce>0 ) gFailSyncOnce--;
@@ -9329,6 +9335,170 @@ static void run_hard_reset_command_failure_preserves_durable_state(void){
   removeDbFiles(dbpath);
 }
 
+typedef struct PublicationProbe PublicationProbe;
+struct PublicationProbe {
+  sqlite3 *peer;
+  const char *zPath;
+  int nHooks;
+  int openRc;
+  int nLogs;
+  int nFreshLogs;
+};
+
+static void publicationSyncHook(void *pArg){
+  PublicationProbe *p = (PublicationProbe*)pArg;
+  sqlite3 *fresh = 0;
+  p->nHooks++;
+  p->nLogs = (int)queryInt64(p->peer, "SELECT count(*) FROM dolt_log");
+  p->openRc = sqlite3_open_v2(p->zPath, &fresh,
+                            SQLITE_OPEN_READONLY, 0);
+  if( p->openRc==SQLITE_OK ){
+    p->nFreshLogs = (int)queryInt64(fresh, "SELECT count(*) FROM dolt_log");
+  }
+  sqlite3_close(fresh);
+}
+
+#if !SQLITE_OS_WIN
+typedef struct PublicationProcess PublicationProcess;
+struct PublicationProcess {
+  int request;
+  int response;
+  int valid;
+};
+
+static void publicationProcessHook(void *pArg){
+  PublicationProcess *p = (PublicationProcess*)pArg;
+  char result = 0;
+  gSyncHook = 0;
+  p->valid = write(p->request,"r",1)==1
+      && read(p->response,&result,1)==1 && result=='y';
+}
+
+static void run_publication_process(int fail){
+  sqlite3 *db = 0;
+  char dbpath[512];
+  int requests[2], responses[2];
+  int rc, status;
+  pid_t child;
+  PublicationProcess probe;
+  char result = 0;
+  make_dbpath(dbpath,sizeof(dbpath),"publication_process");
+  removeDbFiles(dbpath);
+  check("publication_process_seed_open",open_db(dbpath,&db)==SQLITE_OK);
+  check("publication_process_seed",execSql(db,
+    "CREATE TABLE t(k INTEGER PRIMARY KEY,v); INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-Am','c1'); INSERT INTO t VALUES(2,randomblob(50000));"
+  )==SQLITE_OK);
+  sqlite3_close(db);
+  check("publication_process_request_pipe",pipe(requests)==0);
+  check("publication_process_response_pipe",pipe(responses)==0);
+  child = fork();
+  check("publication_process_fork",child>=0);
+  if( child==0 ){
+    sqlite3 *peer = 0, *fresh = 0;
+    int nLogs, valid;
+    char command;
+    alarm(30);
+    close(requests[1]);
+    close(responses[0]);
+    if( open_db(dbpath,&peer)!=SQLITE_OK ) _exit(1);
+    nLogs = (int)queryInt64(peer,"SELECT count(*) FROM dolt_log");
+    if( write(responses[1],"y",1)!=1 || read(requests[0],&command,1)!=1 ) _exit(1);
+    valid = queryInt64(peer,"SELECT count(*) FROM dolt_log")==nLogs;
+    rc = sqlite3_open_v2(dbpath,&fresh,SQLITE_OPEN_READONLY,0);
+    valid = valid && (rc==SQLITE_BUSY || (rc==SQLITE_OK
+        && queryInt64(fresh,"SELECT count(*) FROM dolt_log")==nLogs));
+    sqlite3_close(fresh);
+    if( write(responses[1],valid ? "y" : "n",1)!=1
+     || read(requests[0],&command,1)!=1 ) _exit(1);
+    valid = queryInt64(peer,"SELECT count(*) FROM dolt_log")==nLogs+!fail;
+    valid = valid && execSql(peer,"INSERT INTO t VALUES(3,'peer')")==SQLITE_OK;
+    valid = valid && strcmp(queryScalarText(peer,"SELECT group_concat(k) FROM t"),"1,2,3")==0;
+    valid = valid && strcmp(queryScalarText(peer,"PRAGMA integrity_check"),"ok")==0;
+    sqlite3_close(peer);
+    if( write(responses[1],valid ? "y" : "n",1)!=1 ) _exit(1);
+    _exit(0);
+  }
+  if( child>0 ){
+    close(requests[0]);
+    close(responses[1]);
+    check("publication_process_ready",read(responses[0],&result,1)==1 && result=='y');
+    check("publication_process_writer_open",open_fail_db(dbpath,&db)==SQLITE_OK);
+    probe.request = requests[1];
+    probe.response = responses[0];
+    probe.valid = 0;
+    gSyncHook = publicationProcessHook;
+    gSyncHookArg = &probe;
+    if( fail ) gFailSyncNth = 1;
+    rc = execSqlSilent(db,"SELECT dolt_commit('-Am','c2')");
+    gSyncHook = 0;
+    gFailSyncNth = 0;
+    check("publication_process_during_sync",probe.valid);
+    check("publication_process_result",fail ? rc!=SQLITE_OK : rc==SQLITE_OK);
+    check("publication_process_finish_request",write(requests[1],"d",1)==1);
+    check("publication_process_after_sync",read(responses[0],&result,1)==1 && result=='y');
+    close(requests[1]);
+    close(responses[0]);
+    check("publication_process_wait",waitpid(child,&status,0)==child);
+    check("publication_process_exit",WIFEXITED(status) && WEXITSTATUS(status)==0);
+    sqlite3_close(db);
+  }
+  removeDbFiles(dbpath);
+}
+#endif
+
+static void run_commit_publication(void){
+  char dbpath[512];
+  int fail;
+  check("publication_register", registerFailVfs()==SQLITE_OK);
+  make_dbpath(dbpath,sizeof(dbpath),"commit_publication");
+  for(fail=0; fail<2; fail++){
+    sqlite3 *db = 0, *peer = 0, *fresh = 0;
+    PublicationProbe probe;
+    int rc, nLogs;
+    removeDbFiles(dbpath);
+    check("publication_open", open_fail_db(dbpath,&db)==SQLITE_OK);
+    check("publication_seed", execSql(db,
+      "CREATE TABLE t(k INTEGER PRIMARY KEY,v); INSERT INTO t VALUES(1,'a');"
+      "SELECT dolt_commit('-Am','c1'); INSERT INTO t VALUES(2,randomblob(50000));"
+      )==SQLITE_OK);
+    check("publication_peer_open",open_db(dbpath,&peer)==SQLITE_OK);
+    nLogs = (int)queryInt64(peer,"SELECT count(*) FROM dolt_log");
+    memset(&probe,0,sizeof(probe));
+    probe.peer = peer;
+    probe.zPath = dbpath;
+    gSyncHookArg = &probe;
+    gSyncHook = publicationSyncHook;
+    if( fail ) gFailSyncNth = 1;
+    rc = execSqlSilent(db,"SELECT dolt_commit('-Am','c2')");
+    gSyncHook = 0;
+    gFailSyncNth = 0;
+    check("publication_hook",probe.nHooks>0);
+    check("publication_during_live",probe.nLogs==nLogs);
+    check("publication_during_fresh",probe.openRc==SQLITE_BUSY
+          || (probe.openRc==SQLITE_OK && probe.nFreshLogs==nLogs));
+    check("publication_result",fail ? rc!=SQLITE_OK : rc==SQLITE_OK);
+    check("publication_after_live",queryInt64(peer,
+          "SELECT count(*) FROM dolt_log")==nLogs+!fail);
+    check("publication_peer_write",execSql(peer,"INSERT INTO t VALUES(3,'peer')")==SQLITE_OK);
+    check("publication_fresh_open",open_db(dbpath,&fresh)==SQLITE_OK);
+    check("publication_after_fresh",queryInt64(fresh,
+          "SELECT count(*) FROM dolt_log")==nLogs+!fail);
+    check("publication_after_rows",strcmp(queryScalarText(fresh,
+          "SELECT group_concat(k) FROM t"),"1,2,3")==0);
+    check("publication_integrity",strcmp(queryScalarText(fresh,
+          "PRAGMA integrity_check"),"ok")==0);
+    sqlite3_close(fresh);
+    sqlite3_close(peer);
+    sqlite3_close(db);
+  }
+  removeDbFiles(dbpath);
+#if !SQLITE_OS_WIN
+  run_publication_process(0);
+  run_publication_process(1);
+#endif
+}
+
 typedef struct VcInterrupt VcInterrupt;
 struct VcInterrupt {
   sqlite3 *db;
@@ -15969,6 +16139,7 @@ static const RegressionCase aCases[] = {
   { "savepoint_nested_trigger_inner_rollback_reopen", "Savepoint Nested Trigger Inner Rollback Reopen Test", run_savepoint_nested_trigger_inner_rollback_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
+  { "commit_publication", "Commit Publication Test", run_commit_publication },
   { "vc_interrupt", "VC Interrupt Test", run_vc_interrupt },
   { "vc_late_io_failure", "VC Late IO Failure Test", run_vc_late_io_failure },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },

@@ -414,7 +414,7 @@ scan_done:
 }
 
 
-int chunkStoreOpen(
+static int csOpen(
   ChunkStore *cs,
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -528,6 +528,13 @@ int chunkStoreOpen(
       cs->readOnly = 1;
     }
 
+    if( !cs->isBuffer ){
+      rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(cs);
+        return rc;
+      }
+    }
     rc = csReadManifest(cs);
     /* Truncate-to-empty only for NOTADB, not for a damaged-but-identified header. */
     if( rc==SQLITE_NOTADB
@@ -690,6 +697,20 @@ int chunkStoreOpen(
 
   csMarkRefsCommitted(cs);
   return SQLITE_OK;
+}
+
+int chunkStoreOpen(
+  ChunkStore *cs,
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  int flags
+){
+  int rc = csOpen(cs, pVfs, zFilename, flags);
+  if( rc==SQLITE_OK && cs->file.pFile && !cs->isBuffer ){
+    rc = sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+    if( rc!=SQLITE_OK ) chunkStoreClose(cs);
+  }
+  return rc;
 }
 
 static void csWriteCleanCloseMarker(ChunkStore *cs){

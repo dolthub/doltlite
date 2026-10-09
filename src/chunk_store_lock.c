@@ -615,7 +615,20 @@ static int csDetectExternalChanges(
 }
 
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
-  return csDetectExternalChanges(cs, pChanged, 0);
+  int rc, rc2;
+  int locked = cs->file.pFile && !cs->isBuffer && cs->lockDepth==0;
+  *pChanged = 0;
+  if( locked ){
+    rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+    if( rc==SQLITE_BUSY ) return SQLITE_OK;
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = csDetectExternalChanges(cs, pChanged, 0);
+  if( locked && cs->file.pFile ){
+    rc2 = sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  return rc;
 }
 
 /* The store is append-only between compactions: when the file only grew
@@ -703,7 +716,7 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
+static int csRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int rc;
   int bChanged = 0;
   int bMovedAdopt = 0;
@@ -750,6 +763,23 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   if( rc!=SQLITE_OK ) return rc;
   *pChanged = 1;
   return SQLITE_OK;
+}
+
+int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
+  int rc, rc2;
+  int locked = cs->file.pFile && !cs->isBuffer && cs->lockDepth==0;
+  *pChanged = 0;
+  if( locked ){
+    rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+    if( rc==SQLITE_BUSY ) return SQLITE_OK;
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = csRefreshIfChanged(cs, pChanged);
+  if( locked && cs->file.pFile ){
+    rc2 = sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  return rc;
 }
 
 int chunkStoreForceRefresh(ChunkStore *cs){

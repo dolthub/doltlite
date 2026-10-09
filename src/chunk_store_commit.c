@@ -390,7 +390,7 @@ static void csCommitPublishStaging(
   csMarkRefsCommitted(cs);
 }
 
-static int csCommitToFile(ChunkStore *cs){
+static int csCommitToFile(ChunkStore *cs, int (*xBusy)(void*), void *pBusyArg){
   int rc;
   int i;
   i64 fileSize = 0;
@@ -412,6 +412,7 @@ static int csCommitToFile(ChunkStore *cs){
   int nMerged = 0;
   int useRecent = 0;
   int crashWriteActive = csCrashWriteInjectionActive();
+  int publicationLocked = 0;
 
   rc = csCommitResolveAppendPoint(
       cs, hadFile, lockHeld, &lockFd, &lockName,
@@ -428,6 +429,20 @@ static int csCommitToFile(ChunkStore *cs){
       (int)(sizeof(aSmallCommittedPending)/sizeof(aSmallCommittedPending[0])),
       &aCommittedPending, &aMergePending, &aMerged, &nMerged, &useRecent);
   if( rc!=SQLITE_OK ) goto commit_done;
+
+  if( !cs->isBuffer ){
+    rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+    if( rc==SQLITE_OK ){
+      do {
+        rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE);
+      }while( rc==SQLITE_BUSY && xBusy && xBusy(pBusyArg) );
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+      goto commit_done;
+    }
+    publicationLocked = 1;
+  }
 
 #ifdef SQLITE_TEST
   {
@@ -584,6 +599,7 @@ static int csCommitToFile(ChunkStore *cs){
         checkpointRc);
     }
   }
+  if( publicationLocked ) sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
   csFileUnlock(lockFd, &lockName);
   return SQLITE_OK;
 
@@ -606,6 +622,7 @@ commit_done:
       }
     }
   }
+  if( publicationLocked ) sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
   csFileUnlock(lockFd, &lockName);
   (void)csRestoreCommittedRefsState(cs);
   if( aCommittedPending!=aSmallCommittedPending ){
@@ -676,7 +693,7 @@ int chunkStoreCommitWithBusyHandler(
     if( acquiredLock ) chunkStoreUnlock(cs);
     return SQLITE_READONLY;
   }
-  rc = csCommitToFile(cs);
+  rc = csCommitToFile(cs, xBusy, pBusyArg);
   if( acquiredLock ) chunkStoreUnlock(cs);
   return rc;
 }
