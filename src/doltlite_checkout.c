@@ -328,8 +328,10 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   rc = doltliteBranchWorkingSetUnmoved(cs, p->zCurrentBranch,
       p->oldBranchExists ? &p->oldWorkingSet : 0);
   if( rc!=SQLITE_OK ){
-    if( rc==SQLITE_BUSY ) p->oldWorkingSetMoved = 1;
-    return rc;
+    if( rc!=SQLITE_BUSY ) return rc;
+    p->oldWorkingSetMoved = 1;
+    /* Retrying inside the transaction re-reads the same stale snapshot. */
+    return db->autoCommit ? SQLITE_BUSY : SQLITE_BUSY_SNAPSHOT;
   }
 
   rc = checkoutLoadAndApply(db, cs, p->zTargetBranch,
@@ -1455,6 +1457,13 @@ static void doltCheckoutParsedFunc(
 checkout_done:
   if( rc==SQLITE_EMPTY ){
     doltliteVcResultError(ctx, db, "target branch has no commits");
+    return;
+  }
+  if( rc==SQLITE_BUSY_SNAPSHOT ){
+    (void)doltliteVcSealSavepointError(db);
+    sqlite3_result_error(ctx, "cannot checkout: another connection changed "
+        "this branch after the transaction began; roll back and retry", -1);
+    sqlite3_result_error_code(ctx, SQLITE_BUSY_SNAPSHOT);
     return;
   }
   if( rc==SQLITE_BUSY ){

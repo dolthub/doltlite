@@ -188,4 +188,39 @@ SQL
   done
 done
 
+# A stale transaction cannot switch branches by retrying; the refusal must
+# say so instead of blaming a lock nobody holds, and a fresh retry works.
+for op in "dolt_checkout('-b','nb')" "dolt_checkout('other')"; do
+  DB="$ROOT/db"
+  rm -f "$DB"
+  "$DOLTLITE" "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('other');" >/dev/null 2>&1
+  out=$("$DOLTLITE" "$DB" 2>&1 <<SQL
+BEGIN;
+SELECT count(*) FROM t;
+.shell $DOLTLITE $DB 'INSERT INTO t VALUES(2);'
+SELECT $op;
+SELECT 'branch', active_branch();
+ROLLBACK;
+SELECT $op;
+SELECT 'retried', active_branch();
+SQL
+)
+  case "$out" in
+    *"another connection changed this branch after the transaction began"*)
+      dltest_pass "stale_checkout_message $op" ;;
+    *) dltest_fail "stale_checkout_message $op" "  got: $out" ;;
+  esac
+  case "$out" in
+    *"locked by another connection"*)
+      dltest_fail "stale_checkout_not_lock $op" "  got: $out" ;;
+    *) dltest_pass "stale_checkout_not_lock $op" ;;
+  esac
+  case "$out" in
+    *"branch|main"*"retried|"[no]*) dltest_pass "stale_checkout_retry $op" ;;
+    *) dltest_fail "stale_checkout_retry $op" "  got: $out" ;;
+  esac
+done
+
 dltest_finish
