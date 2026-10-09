@@ -1726,6 +1726,94 @@ check "refused name collision leaves the branch and the ignored table" "c1
 1
 1" "$result"
 
+echo "=== Pull with no branch fetches every remote branch and tag ==="
+PF="$TMPDIR/pull_all"
+mkdir -p "$PF"
+"$DB" "$PF/a.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('f');
+SELECT dolt_remote('add','origin','file://$PF/remote.db');
+SELECT dolt_push('origin','main');
+SELECT dolt_push('origin','f');
+ENDSQL
+"$DB" "$PF/b.db" "SELECT dolt_clone('file://$PF/remote.db');" >/dev/null
+"$DB" "$PF/c.db" "SELECT dolt_clone('file://$PF/remote.db');" >/dev/null
+"$DB" "$PF/d.db" "SELECT dolt_clone('file://$PF/remote.db');" >/dev/null
+"$DB" "$PF/e.db" "SELECT dolt_clone('file://$PF/remote.db');" >/dev/null
+"$DB" "$PF/a.db" <<ENDSQL >/dev/null
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(3);
+SELECT dolt_commit('-am','f3');
+SELECT dolt_tag('vf');
+SELECT dolt_push('origin','f');
+SELECT dolt_push('origin','vf');
+SELECT dolt_branch('newb');
+SELECT dolt_push('origin','newb');
+ENDSQL
+
+result=$("$DB" "$PF/b.db" "SELECT dolt_pull();")
+check "bare pull returns 0" "0" "$result"
+result=$("$DB" "$PF/b.db" \
+  "SELECT name || '|' || latest_commit_message FROM dolt_remote_branches ORDER BY name;")
+check "bare pull updates every tracking branch" "remotes/origin/f|f3
+remotes/origin/main|c1
+remotes/origin/newb|f3" "$result"
+result=$("$DB" "$PF/b.db" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;")
+check "bare pull installs the remote tag" "vf" "$result"
+result=$("$DB" "$PF/b.db" \
+  "SELECT message FROM dolt_log LIMIT 1; SELECT id FROM t ORDER BY id;")
+check "bare pull leaves the current branch when its upstream did not move" "c1
+1" "$result"
+
+result=$("$DB" "$PF/c.db" "SELECT dolt_pull('origin');")
+check "remote-only pull returns 0" "0" "$result"
+result=$("$DB" "$PF/c.db" \
+  "SELECT name || '|' || latest_commit_message FROM dolt_remote_branches ORDER BY name; SELECT tag_name FROM dolt_tags;")
+check "remote-only pull fetches every branch and tag" "remotes/origin/f|f3
+remotes/origin/main|c1
+remotes/origin/newb|f3
+vf" "$result"
+
+result=$("$DB" "$PF/d.db" "SELECT dolt_pull('origin','main');")
+check "explicit branch pull returns 0" "0" "$result"
+result=$("$DB" "$PF/d.db" \
+  "SELECT name || '|' || latest_commit_message FROM dolt_remote_branches ORDER BY name;")
+check "explicit branch pull leaves other tracking refs" "remotes/origin/f|c1
+remotes/origin/main|c1" "$result"
+result=$("$DB" "$PF/d.db" "SELECT count(*) FROM dolt_tags;")
+check "explicit branch pull does not install the other tag" "0" "$result"
+
+"$DB" "$PF/a.db" <<ENDSQL >/dev/null
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-am','m2');
+SELECT dolt_push('origin','main');
+ENDSQL
+"$DB" "$PF/e.db" "INSERT INTO t VALUES(9);" >/dev/null
+result=$("$DB" "$PF/e.db" "SELECT dolt_pull();" 2>&1)
+check_match "dirty bare pull still refuses" \
+  "cannot pull with uncommitted changes" "$result"
+result=$("$DB" "$PF/e.db" \
+  "SELECT name || '|' || latest_commit_message FROM dolt_remote_branches ORDER BY name; SELECT tag_name FROM dolt_tags; SELECT message FROM dolt_log LIMIT 1; SELECT id FROM t ORDER BY id;")
+check "dirty bare pull still fetched the other refs" "remotes/origin/f|f3
+remotes/origin/main|m2
+remotes/origin/newb|f3
+vf
+c1
+1
+9" "$result"
+result=$("$DB" "$PF/b.db" \
+  "SELECT dolt_pull(); SELECT id FROM t ORDER BY id; SELECT message FROM dolt_log LIMIT 1;")
+check "bare pull still fast-forwards the current branch" "0
+1
+2
+m2" "$result"
+result=$("$DB" "$PF/b.db" \
+  "SELECT latest_commit_message FROM dolt_remote_branches WHERE name='remotes/origin/f';")
+check "later bare pull keeps the other tracking branch" "f3" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
