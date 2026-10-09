@@ -714,7 +714,11 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   prollyBtreeRefreshIndexBudget(p);
 
   if( !wrFlag ){
-    rc = btreeRefreshFromDisk(p);
+    /* BUSY: a peer replaced the file and holds the lock the replacement
+    ** proof needs. */
+    do {
+      rc = btreeRefreshFromDisk(p);
+    }while( rc==SQLITE_BUSY && prollyInvokeBusyHandler(pBt) );
     if( rc!=SQLITE_OK ) return rc;
     if( p->inTrans==TRANS_NONE ){
       rc = btreeRefreshSharedWorkingState(p);

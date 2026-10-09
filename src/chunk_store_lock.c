@@ -472,6 +472,7 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   ProllyHash from;
   ProllyHash to;
   int acquired = 0;
+  int lockBusy = 0;
   int valid = 0;
   int rc;
 
@@ -484,13 +485,21 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   }
 
   rc = csLockForReplacementProof(cs, &acquired);
+  /* A peer holding the lock only blocks the replacement-proof record; the
+  ** branch-tip check reads the candidate as any fresh open does. */
+  if( rc==SQLITE_BUSY ){
+    lockBusy = 1;
+    rc = SQLITE_OK;
+  }
   if( rc==SQLITE_OK ){
     rc = chunkStoreOpen(&cand, cs->file.pVfs, cs->file.zFilename,
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
   }
   if( rc==SQLITE_OK ){
     rc = csStoreHasAnyBranchTip(&cand, &cs->refs, pIsOurs);
-    if( rc==SQLITE_OK && !*pIsOurs ){
+    if( rc==SQLITE_OK && !*pIsOurs && lockBusy ){
+      rc = SQLITE_BUSY;
+    }else if( rc==SQLITE_OK && !*pIsOurs ){
       rc = csReadReplacementProof(cs, &from, &to, &valid);
       if( rc==SQLITE_OK && valid
        && prollyHashCompare(&cs->refs.committedRefsHash, &from)==0 ){
@@ -501,9 +510,12 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   }
   if( acquired ) chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
-    /* Only OOM is inconclusive; other read failures are a failed proof. */
+    /* OOM and a peer holding the lock are inconclusive; other read failures
+    ** are a failed proof. */
     *pIsOurs = 0;
-    if( rc!=SQLITE_NOMEM && rc!=SQLITE_IOERR_NOMEM ) rc = SQLITE_OK;
+    if( rc!=SQLITE_NOMEM && rc!=SQLITE_IOERR_NOMEM && rc!=SQLITE_BUSY ){
+      rc = SQLITE_OK;
+    }
   }
   return rc;
 }
