@@ -763,8 +763,8 @@ static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
   int rc;
 
   if( nBody<=0 ) return SQLITE_ERROR;
-  rc = doltliteValidateScopedRefsUpdateEx(pStore, pBody, nBody, zBranch,
-                                          bForce, pbMissing);
+  rc = doltliteValidateScopedRefsUpdate(pStore, pBody, nBody, zBranch,
+                                        bForce, pbMissing);
   if( rc==SQLITE_OK ){
     prollyHashCompute(pBody, nBody, &refsHash);
     if( prollyHashCompare(refsTableGetHash(&pStore->refs), &refsHash)==0 ){
@@ -772,8 +772,8 @@ static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
     }
   }
   if( rc==SQLITE_OK ){
-    rc = doltliteValidateRefsTargetGraphEx(pStore, pBody, nBody, zBranch,
-                                           pbMissing);
+    rc = doltliteValidateRefsTargetGraph(pStore, pBody, nBody, zBranch,
+                                         pbMissing);
     if( rc==SQLITE_CORRUPT && *pbMissing ) rc = SQLITE_BUSY_SNAPSHOT;
   }
   if( rc!=SQLITE_OK ){

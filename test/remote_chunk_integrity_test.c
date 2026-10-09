@@ -199,13 +199,13 @@ int main(void){
   pRefs = makeRefsBlob(&wrong, &nRefs);
   check("serialize refs", pRefs!=0);
   if( pRefs ){
-    rc = doltliteValidateRefsTargetGraph(&store, pRefs, nRefs, "main");
+    rc = doltliteValidateRefsTargetGraph(&store, pRefs, nRefs, "main", 0);
     check("refs reject missing reachable graph", rc==SQLITE_CORRUPT);
     sqlite3_free(pRefs);
     pRefs = makeRefsBlob(&actual, &nRefs);
     check("serialize valid refs", pRefs!=0);
     if( pRefs ){
-      rc = doltliteValidateRefsTargetGraph(&store, pRefs, nRefs, "main");
+      rc = doltliteValidateRefsTargetGraph(&store, pRefs, nRefs, "main", 0);
       check("refs accept complete reachable graph", rc==SQLITE_OK);
     }
   }

@@ -207,18 +207,9 @@ static int remoteValidateGraph(
   return remoteValidateGraphEx(pStore, aRoots, nRoots, 0);
 }
 
-int doltliteValidateRefsTargetGraph(
-  ChunkStore *pStore,
-  const u8 *pBlob,
-  int nBlob,
-  const char *zRef
-){
-  return doltliteValidateRefsTargetGraphEx(pStore, pBlob, nBlob, zRef, 0);
-}
-
 /* *pbMissing: the graph is incomplete rather than unreadable, as when a
 ** push was interrupted or a gc swept chunks not yet referenced. */
-int doltliteValidateRefsTargetGraphEx(
+int doltliteValidateRefsTargetGraph(
   ChunkStore *pStore,
   const u8 *pBlob,
   int nBlob,
@@ -533,11 +524,11 @@ static int fsSetRefs(DoltliteRemote *pRemote, const char *zBranch, int bForce,
                      const u8 *pData, int nData){
   FsRemote *p = (FsRemote*)pRemote;
   int bMissing = 0;
-  int rc = doltliteValidateScopedRefsUpdateEx(&p->store, pData, nData,
-                                              zBranch, bForce, &bMissing);
+  int rc = doltliteValidateScopedRefsUpdate(&p->store, pData, nData,
+                                            zBranch, bForce, &bMissing);
   if( rc==SQLITE_OK ){
-    rc = doltliteValidateRefsTargetGraphEx(&p->store, pData, nData, zBranch,
-                                           &bMissing);
+    rc = doltliteValidateRefsTargetGraph(&p->store, pData, nData, zBranch,
+                                         &bMissing);
     if( rc==SQLITE_CORRUPT && bMissing ) rc = SQLITE_BUSY_SNAPSHOT;
   }
   if( bMissing ) p->base.bForceResumeScan = 1;
@@ -595,8 +586,8 @@ static int fsCheckRefsIf(
   }
   if( rc==SQLITE_OK ){
     int bMissing = 0;
-    rc = doltliteValidateScopedRefsUpdateEx(&p->store, pData, nData,
-                                            zBranch, bForce, &bMissing);
+    rc = doltliteValidateScopedRefsUpdate(&p->store, pData, nData,
+                                          zBranch, bForce, &bMissing);
     if( bMissing ) p->base.bForceResumeScan = 1;
   }
   chunkStoreUnlock(&p->store);
@@ -716,11 +707,11 @@ static int localSetRefs(DoltliteRemote *pRemote, const char *zBranch,
                         int bForce, const u8 *pData, int nData){
   LocalAsRemote *p = (LocalAsRemote*)pRemote;
   int bMissing = 0;
-  int rc = doltliteValidateScopedRefsUpdateEx(p->pStore, pData, nData,
-                                              zBranch, bForce, &bMissing);
+  int rc = doltliteValidateScopedRefsUpdate(p->pStore, pData, nData,
+                                            zBranch, bForce, &bMissing);
   if( rc==SQLITE_OK ){
-    rc = doltliteValidateRefsTargetGraphEx(p->pStore, pData, nData, zBranch,
-                                           &bMissing);
+    rc = doltliteValidateRefsTargetGraph(p->pStore, pData, nData, zBranch,
+                                         &bMissing);
     if( rc==SQLITE_CORRUPT && bMissing ) rc = SQLITE_BUSY_SNAPSHOT;
   }
   if( bMissing ) p->base.bForceResumeScan = 1;
@@ -766,8 +757,8 @@ static int localCheckRefsIf(
   }
   if( rc==SQLITE_OK ){
     int bMissing = 0;
-    rc = doltliteValidateScopedRefsUpdateEx(p->pStore, pData, nData,
-                                            zBranch, bForce, &bMissing);
+    rc = doltliteValidateScopedRefsUpdate(p->pStore, pData, nData,
+                                          zBranch, bForce, &bMissing);
     if( bMissing ) p->base.bForceResumeScan = 1;
   }
   chunkStoreUnlock(p->pStore);
@@ -1246,17 +1237,6 @@ done:
 }
 
 int doltliteValidateScopedRefsUpdate(
-  ChunkStore *pStore,
-  const u8 *pBlob,
-  int nBlob,
-  const char *zRef,
-  int bForce
-){
-  return doltliteValidateScopedRefsUpdateEx(pStore, pBlob, nBlob, zRef,
-                                            bForce, 0);
-}
-
-int doltliteValidateScopedRefsUpdateEx(
   ChunkStore *pStore,
   const u8 *pBlob,
   int nBlob,

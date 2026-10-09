@@ -62,16 +62,13 @@ int doltlitePushTag(ChunkStore *pLocal, DoltliteRemote *pRemote,
                     const char *zTag);
 
 /* Allow only the declared branch or tag update; every other ref must match. */
+/* Optional *pbMissing: set when the update failed because the store lacks
+** chunks of the pushed history rather than holding unreadable ones. */
 int doltliteValidateScopedRefsUpdate(ChunkStore *pStore, const u8 *pBlob,
-                                     int nBlob, const char *zRef,
-                                     int bForce);
-int doltliteValidateScopedRefsUpdateEx(ChunkStore *pStore, const u8 *pBlob,
                                      int nBlob, const char *zRef,
                                      int bForce, int *pbMissing);
 
 int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
-                                    int nBlob, const char *zRef);
-int doltliteValidateRefsTargetGraphEx(ChunkStore *pStore, const u8 *pBlob,
                                     int nBlob, const char *zRef,
                                     int *pbMissing);
 
