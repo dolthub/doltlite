@@ -873,6 +873,7 @@ int chunkStoreClose(ChunkStore *cs){
   csFreeTracking(cs);
   csFreeSequences(cs);
   csDropTxnSequences(cs);
+  chunkStoreFreeWsBranches(cs);
   sqlite3_mutex_free(cs->pLockMutex);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;

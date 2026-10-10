@@ -262,5 +262,33 @@ SQL
   done
 done
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19"
+DB20=/tmp/test_branch20_$$.db
+LONGBR=$(printf 'g%.0s' $(seq 70))
+for br in g "$LONGBR"; do
+for peercommit in "" "SELECT dolt_commit('-am','peer');"; do
+  for op in "dolt_tag('v9')" "dolt_branch('n')" "dolt_branch('-d','nosuch')" "dolt_gc()"; do
+    rm -f "$DB20"
+    $DOLTLITE "$DB20" > /dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('$br');
+SELECT dolt_checkout('$br');
+SELECT count(*) FROM t;
+.connection 1
+.open $DB20/$br
+INSERT INTO t VALUES(900);
+$peercommit
+.connection 0
+SELECT $op;
+INSERT INTO t VALUES(3);
+SQL
+    run_test "checked_out_branch_keeps_peer_write: ${#br}-char branch, $op ${peercommit:+after peer commit}" \
+      "PRAGMA integrity_check; SELECT group_concat(id) FROM t;" \
+      "ok
+3,900" "$DB20/$br"
+  done
+done
+done
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 dltest_finish
