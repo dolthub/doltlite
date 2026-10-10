@@ -71,7 +71,7 @@ run_case() {
     cd "$TMP_DIR/build"
     DIVERGENCE_FILE="$TMP_DIR/divergences" \
       TERMINATION_FILE="$TMP_DIR/terminations" \
-      bash "$RUNNER" self-test "$timeout" "$1"
+      "$BASH" "$RUNNER" self-test "$timeout" "$1"
   ) >"$TMP_DIR/run.out" 2>&1
 }
 

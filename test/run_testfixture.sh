@@ -278,7 +278,7 @@ TESTFIXTURE_BIN="$PWD/testfixture"
   echo "ERROR: testfixture not found in $PWD"
   exit 1
 }
-fixture_args=()
+fixture_args=(./testfixture)
 if [ -n "${TESTFIXTURE_PRELUDE:-}" ]; then
   fixture_args+=("$TESTFIXTURE_PRELUDE")
 fi
@@ -289,14 +289,14 @@ for test in "$@"; do
   if [ -n "$termination_contracts" ]; then
     test_workdir=$(mktemp -d "${TMPDIR:-/tmp}/doltlite-testfixture.XXXXXX")
     ln -s "$TESTFIXTURE_BIN" "$test_workdir/testfixture"
-    if out=$(cd "$test_workdir" && run_with_timeout "$TIMEOUT" ./testfixture "${fixture_args[@]}" "$SCRIPT_DIR/${test}.test" 2>&1); then
+    if out=$(cd "$test_workdir" && run_with_timeout "$TIMEOUT" "${fixture_args[@]}" "$SCRIPT_DIR/${test}.test" 2>&1); then
       process_status=0
     else
       process_status=$?
     fi
     rm -rf "$test_workdir"
   else
-    if out=$(run_with_timeout "$TIMEOUT" ./testfixture "${fixture_args[@]}" "$SCRIPT_DIR/${test}.test" 2>&1); then
+    if out=$(run_with_timeout "$TIMEOUT" "${fixture_args[@]}" "$SCRIPT_DIR/${test}.test" 2>&1); then
       process_status=0
     else
       process_status=$?
