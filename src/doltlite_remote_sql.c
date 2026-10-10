@@ -382,7 +382,8 @@ static const char *remoteSqlStripPrefix(const char *z, const char *zPrefix){
 }
 
 /* Returns SQLITE_OK on success; on failure the error is already the result.
-** zRef is a branch, tag, ":branch", or "src:dst" refspec. */
+** zRef is a branch, tag, ":branch", or "src:dst" refspec. src may be any
+** revision, not only a branch name. */
 static int doltPushParsedFunc(
   sqlite3_context *ctx,
   const char *zRemoteName,
@@ -397,12 +398,14 @@ static int doltPushParsedFunc(
   const char *zRef = zRefSpec;
   const char *zColon = zRefSpec ? strchr(zRefSpec, ':') : 0;
   char *zSrc = 0;
+  ProllyHash srcCommit;
   PushTrackingMutation mutation;
   int bBranch = 0;
   int bTagRef = 0;
   int rc;
 
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return SQLITE_ERROR; }
+  memset(&srcCommit, 0, sizeof(srcCommit));
 
   if( zColon && zColon>zRefSpec ){
     const char *zDst = zColon + 1;
@@ -424,25 +427,35 @@ static int doltPushParsedFunc(
       doltliteVcResultError(ctx, db, "invalid branch name");
       return SQLITE_ERROR;
     }
-    /* HEAD is the checked-out branch, not a branch of that name. */
-    if( strcmp(remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX), "HEAD")==0 ){
-      const char *zHead = doltliteGetSessionBranch(db);
-      char *zCopy;
-      if( doltliteIsDetached(db) || !zHead || !zHead[0] ){
+    /* HEAD is the checked-out branch's tip. Any other source is a revision:
+    ** a branch, tag, hash, or parent walk such as HEAD~1. */
+    {
+      const char *zSrcName = remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX);
+      int rrc;
+      memset(&srcCommit, 0, sizeof(srcCommit));
+      if( strcmp(zSrcName, "HEAD")==0 ){
+        const char *zHead = doltliteGetSessionBranch(db);
+        if( doltliteIsDetached(db) || !zHead || !zHead[0]
+         || chunkStoreFindBranch(cs, zHead, &srcCommit)!=SQLITE_OK
+         || prollyHashIsEmpty(&srcCommit) ){
+          sqlite3_free(zSrc);
+          doltliteVcResultError(ctx, db, "push failed: branch or tag not found");
+          return SQLITE_NOTFOUND;
+        }
+        rrc = SQLITE_OK;
+      }else{
+        rrc = doltliteResolveRef(db, zSrcName, &srcCommit);
+      }
+      if( rrc==SQLITE_NOMEM ){
+        sqlite3_free(zSrc);
+        sqlite3_result_error_nomem(ctx);
+        return SQLITE_NOMEM;
+      }
+      if( rrc!=SQLITE_OK || prollyHashIsEmpty(&srcCommit) ){
         sqlite3_free(zSrc);
         doltliteVcResultError(ctx, db, "push failed: branch or tag not found");
         return SQLITE_NOTFOUND;
       }
-      zCopy = sqlite3_mprintf("%s", zHead);
-      sqlite3_free(zSrc);
-      if( !zCopy ){ sqlite3_result_error_nomem(ctx); return SQLITE_NOMEM; }
-      zSrc = zCopy;
-    }
-    if( chunkStoreFindBranch(cs,
-            remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX), 0)!=SQLITE_OK ){
-      sqlite3_free(zSrc);
-      doltliteVcResultError(ctx, db, "push failed: branch or tag not found");
-      return SQLITE_NOTFOUND;
     }
   }else if( zRef ){
     if( strncmp(zRef, REMOTE_TAGS_PREFIX, strlen(REMOTE_TAGS_PREFIX))==0 ){
@@ -469,13 +482,12 @@ static int doltPushParsedFunc(
       rc = doltlitePushTag(cs, pRemote, aTag[i].zName);
     }
   }else if( zSrc ){
-    const char *zLocal = remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX);
     mutation.zRemote = zRemoteName;
     mutation.bDelete = 0;
     mutation.zBranch = zRef;
     bBranch = 1;
-    chunkStoreFindBranch(cs, zLocal, &mutation.commit);
-    rc = doltlitePushAs(cs, pRemote, zLocal, zRef, bForce);
+    memcpy(&mutation.commit, &srcCommit, sizeof(mutation.commit));
+    rc = doltlitePushAs(cs, pRemote, 0, zRef, bForce, &srcCommit);
   }else if( !bTagRef
          && (zRef[0]==':' || chunkStoreFindBranch(cs, zRef, 0)==SQLITE_OK) ){
     mutation.zRemote = zRemoteName;
@@ -894,6 +906,12 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
   zRemoteName = args.nPositional>0 ? args.azPositional[0] : "origin";
+  if( bPrune && args.nPositional>1 ){
+    doltliteCmdArgsClear(&args);
+    doltliteVcResultError(ctx, db,
+        "--prune option cannot be provided with a ref spec");
+    return;
+  }
 
   rc = remoteSqlOpenNamedRemote(db, cs, zRemoteName, 0, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, 0) ){

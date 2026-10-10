@@ -1991,6 +1991,76 @@ zeta" "$result"
 result=$("$DB" "$CB/remote3.db" "SELECT dolt_default_branch();")
 check "creating main still replaces an explicit default" "main" "$result"
 
+echo "=== Fetch prune, checkout ambiguity, push revision ==="
+DIV="$TMPDIR/remote_diverge"
+mkdir -p "$DIV"
+"$DB" "$DIV/src.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_remote('add','origin','file://$DIV/remote.db');
+SELECT dolt_push('origin','main');
+SELECT dolt_push('origin','main:t');
+SELECT dolt_push('origin','main:feat');
+ENDSQL
+"$DB" "$DIV/c.db" "SELECT dolt_clone('file://$DIV/remote.db');" >/dev/null
+"$DB" "$DIV/p.db" "SELECT dolt_clone('file://$DIV/remote.db');" >/dev/null
+
+result=$("$DB" "$DIV/c.db" "SELECT dolt_checkout('feat'); SELECT active_branch();")
+check "checkout of a tracking branch that is not a table creates it" "0
+feat" "$result"
+result=$("$DB" "$DIV/c.db" "SELECT dolt_checkout('main'); SELECT dolt_checkout('t');" 2>&1)
+check_match "checkout of a table that is also a tracking branch is refused" \
+  "could be both a local table and a tracking branch" "$result"
+result=$("$DB" "$DIV/c.db" "SELECT active_branch(); SELECT name FROM dolt_branches ORDER BY name;")
+check "ambiguous checkout stays on main and creates no local t" "main
+feat
+main" "$result"
+result=$("$DB" "$DIV/c.db" "SELECT dolt_checkout('--','t'); SELECT active_branch(); SELECT id FROM t;")
+check "dash-dash before the name checks out the table" "0
+main
+1" "$result"
+result=$("$DB" "$DIV/c.db" "SELECT dolt_checkout('t','--'); SELECT active_branch();")
+check "name then dash-dash creates the tracking branch" "0
+t" "$result"
+
+"$DB" "$DIV/src.db" "SELECT dolt_push('origin',':feat');" >/dev/null
+result=$("$DB" "$DIV/p.db" "SELECT dolt_fetch('--prune','origin','main');" 2>&1)
+check_match "fetch --prune with a refspec is refused" \
+  "prune option cannot be provided with a ref spec" "$result"
+result=$("$DB" "$DIV/p.db" "SELECT dolt_fetch('-p','origin','main');" 2>&1)
+check_match "fetch -p with a refspec is refused" \
+  "prune option cannot be provided with a ref spec" "$result"
+result=$("$DB" "$DIV/p.db" "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "refused prune leaves the deleted remote's tracking ref" "remotes/origin/feat
+remotes/origin/main
+remotes/origin/t" "$result"
+result=$("$DB" "$DIV/p.db" "SELECT dolt_fetch('--prune','origin');")
+check "fetch --prune without a refspec returns 0" "0" "$result"
+result=$("$DB" "$DIV/p.db" "SELECT name FROM dolt_remote_branches ORDER BY name;")
+check "prune without a refspec drops the deleted tracking ref" "remotes/origin/main
+remotes/origin/t" "$result"
+
+"$DB" "$DIV/src.db" "INSERT INTO t VALUES(2); SELECT dolt_commit('-Am','c2'); SELECT dolt_tag('v1','HEAD~1');" >/dev/null
+result=$("$DB" "$DIV/src.db" "SELECT dolt_push('origin','HEAD~1:old');")
+check "push of HEAD~1 creates the remote branch" "0" "$result"
+result=$("$DB" "$DIV/src.db" "SELECT latest_commit_message FROM dolt_remote_branches WHERE name='remotes/origin/old';")
+check "HEAD~1 push lands on the parent commit" "c1" "$result"
+result=$("$DB" "$DIV/src.db" "SELECT dolt_push('origin','v1:fromtag');")
+check "push of a tag revision creates the remote branch" "0" "$result"
+result=$("$DB" "$DIV/src.db" "SELECT latest_commit_message FROM dolt_remote_branches WHERE name='remotes/origin/fromtag';")
+check "tag revision push lands on the tagged commit" "c1" "$result"
+HASH=$("$DB" "$DIV/src.db" "SELECT dolt_hashof('HEAD');")
+result=$("$DB" "$DIV/src.db" "SELECT dolt_push('origin','${HASH}:byhash');")
+check "push of a commit hash creates the remote branch" "0" "$result"
+result=$("$DB" "$DIV/src.db" "SELECT latest_commit_message FROM dolt_remote_branches WHERE name='remotes/origin/byhash';")
+check "hash push lands on that commit" "c2" "$result"
+result=$("$DB" "$DIV/src.db" "SELECT dolt_push('origin','HEAD~99:nowhere');" 2>&1)
+check_match "a revision that does not resolve is not found" \
+  "branch or tag not found" "$result"
+result=$("$DB" "$DIV/src.db" "SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/nowhere';")
+check "an unresolved push source creates no remote branch" "0" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

@@ -1625,17 +1625,18 @@ int doltlitePush(
   const char *zRef,
   int bForce
 ){
-  return doltlitePushAs(pLocal, pRemote, 0, zRef, bForce);
+  return doltlitePushAs(pLocal, pRemote, 0, zRef, bForce, 0);
 }
 
-/* zRef names the remote branch (":name" deletes it); zLocal, when set, is
-** the local branch pushed to it. */
+/* zRef names the remote branch (":name" deletes it). pSrcCommit, when set,
+** is that commit. Otherwise zLocal, or zRef, is the local branch pushed. */
 int doltlitePushAs(
   ChunkStore *pLocal,
   DoltliteRemote *pRemote,
   const char *zLocal,
   const char *zRef,
-  int bForce
+  int bForce,
+  const ProllyHash *pSrcCommit
 ){
   const int bDelete = zRef[0]==':';
   const char *zBranch = zRef + bDelete;
@@ -1647,8 +1648,12 @@ int doltlitePushAs(
 
   if( !zBranch[0] ) return SQLITE_MISUSE;
   if( !bDelete ){
-    rc = chunkStoreFindBranch(pLocal, zLocal ? zLocal : zBranch, &localCommit);
-    if( rc!=SQLITE_OK ) return SQLITE_ERROR;
+    if( pSrcCommit ){
+      memcpy(&localCommit, pSrcCommit, sizeof(localCommit));
+    }else{
+      rc = chunkStoreFindBranch(pLocal, zLocal ? zLocal : zBranch, &localCommit);
+      if( rc!=SQLITE_OK ) return SQLITE_ERROR;
+    }
   }
 
   for(attempt=0; attempt<64; attempt++){

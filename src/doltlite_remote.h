@@ -55,8 +55,11 @@ int doltliteSyncChunks(
 
 int doltlitePush(ChunkStore *pLocal, DoltliteRemote *pRemote,
                  const char *zBranch, int bForce);
+/* pSrcCommit, when set, is the commit pushed to zRef. Otherwise zLocal,
+** or zRef, names the local branch whose tip is pushed. */
 int doltlitePushAs(ChunkStore *pLocal, DoltliteRemote *pRemote,
-                   const char *zLocal, const char *zRef, int bForce);
+                   const char *zLocal, const char *zRef, int bForce,
+                   const ProllyHash *pSrcCommit);
 
 int doltlitePushTag(ChunkStore *pLocal, DoltliteRemote *pRemote,
                     const char *zTag);

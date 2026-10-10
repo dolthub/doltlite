@@ -36,8 +36,8 @@ SELECT dolt_clone('--lazy', '--revision', 'v1.0', 'file:///data/src.db');
 | Function | Arguments | Notes |
 |---|---|---|
 | `dolt_remote` | `'add', name, url` or `'remove', name` | `file://` or `http(s)://...` URL naming the database file |
-| `dolt_push` | `remote, branch [, '--force']` or `remote, 'src:dst'` or `remote, tag` or `remote, '--tags'` | Non-fast-forward is refused without `--force`. `src:dst` pushes local branch `src` as remote branch `dst`. `HEAD` as `src` is the checked-out branch |
-| `dolt_fetch` | `remote [, branch or refspec]` | Updates `remotes/<remote>/<branch>` tracking refs and tags. A refspec maps `refs/heads/<pat>` onto `refs/remotes/<name>/<pat>` |
+| `dolt_push` | `remote, branch [, '--force']` or `remote, 'src:dst'` or `remote, tag` or `remote, '--tags'` | Non-fast-forward is refused without `--force`. `src:dst` pushes revision `src` as remote branch `dst`. `HEAD` as `src` is the checked-out branch's tip; any other `src` is a revision |
+| `dolt_fetch` | `remote [, branch or refspec] [, '--prune']` | Updates `remotes/<remote>/<branch>` tracking refs and tags. A refspec maps `refs/heads/<pat>` onto `refs/remotes/<name>/<pat>`. `--prune` drops tracking refs the remote no longer has, and is refused together with a refspec |
 | `dolt_pull` | `[remote [, branch]]` | With no branch, fetches every remote branch and tag, then fast-forwards or merges the current branch. With a branch, fetches only that branch |
 | `dolt_clone` | `['--lazy'] ['--revision', rev] url` | Only into an empty database; records `origin` |
 
@@ -48,7 +48,8 @@ when it cannot fast-forward, conflicts included.
 |---|---|
 | `usage: dolt_remote(action, name [, url])`, `url required for add`, `remote already exists`, `unknown action: use 'add' or 'remove'` | `dolt_remote` arguments |
 | `remote not found` | unknown remote name |
-| `push failed: branch or tag not found` | local ref does not exist |
+| `push failed: branch or tag not found` | push source does not resolve |
+| `--prune option cannot be provided with a ref spec` | `dolt_fetch --prune` was given a branch or refspec |
 | `invalid branch name` | `src:dst` destination fails the branch name rules |
 | `unsupported mapping: '<refspec>'` | `src:dst` destination is under `refs/tags/` |
 | `invalid fetch spec: '<spec>'` | fetch refspec is not a branch mapped onto a remote-tracking branch, or a glob matches nothing |
@@ -61,9 +62,11 @@ when it cannot fast-forward, conflicts included.
 
 ## Behaviour
 
-- `dolt_push(remote, 'src:dst')` pushes local branch `src` to remote branch
+- `dolt_push(remote, 'src:dst')` pushes revision `src` to remote branch
   `dst`. A `refs/heads/` prefix on either side is that branch's name. `HEAD`
-  (or `refs/heads/HEAD`) as `src` is the checked-out branch. `dst` follows
+  (or `refs/heads/HEAD`) as `src` is the checked-out branch's tip. Any other
+  `src` is a revision: a branch, a tag, a commit hash, or a parent walk such
+  as `HEAD~1`. `dst` follows
   the same rules as [dolt_branch](dolt_branch.md) and is refused with
   `invalid branch name` before the remote is opened, including a destination
   of `HEAD`. `src:refs/tags/...` is refused with
