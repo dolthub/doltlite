@@ -33,6 +33,9 @@ struct RebaseCreateRefsCtx {
   const char *zWorkingBranch;
   const ProllyHash *pHead;
   const ProllyHash *pCatalog;
+  const char *zOrigBranch;
+  const ProllyHash *pOrigHead;
+  const ProllyHash *pOrigCatalog;
 };
 
 typedef struct RebaseAbortRefsCtx RebaseAbortRefsCtx;
@@ -74,8 +77,12 @@ static int rebaseCreateWorkingBranchRefs(
   if( rc!=SQLITE_NOTFOUND ) return rc;
   rc = chunkStoreAddBranch(cs, p->zWorkingBranch, p->pHead);
   if( rc!=SQLITE_OK ) return rc;
-  return doltliteWriteBranchCleanWorkingState(
+  rc = doltliteWriteBranchCleanWorkingState(
       db, p->zWorkingBranch, p->pCatalog, p->pHead);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteWriteBranchRebaseMetadata(
+      db, p->zWorkingBranch, WS_REBASE_FLAG_ACTIVE,
+      p->pOrigCatalog, p->pOrigHead, p->zOrigBranch, p->zOrigBranch);
 }
 
 static int rebaseAbortLinearRefs(
@@ -536,6 +543,7 @@ static int rebaseSwitchToWorkingBranch(sqlite3 *db, const char *zBranch){
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
   }
+  if( rc==SQLITE_OK ) rc = doltliteLoadWorkingSet(db, zBranch);
   doltliteCommitClear(&c);
   return rc;
 }
@@ -565,6 +573,10 @@ static int doltliteRebaseLinearReplay(
   char *zOrig = 0;
   char *zWorking = 0;
   int workingCreated = 0;
+  int workingExists = 0;
+  int finalized = 0;
+  int recoveryRc = SQLITE_OK;
+  int restoreRc;
   int graphLocked = 0;
   int rc;
   int i;
@@ -610,6 +622,15 @@ static int doltliteRebaseLinearReplay(
     sqlite3_result_error_code(context, SQLITE_NOMEM);
     if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
     return SQLITE_NOMEM;
+  }
+  if( strlen(zOrig)>=WS_REBASE_BRANCH_LEN ){
+    sqlite3_result_error(context,
+      "cannot start rebase: current branch name exceeds "
+      "the 63-byte persisted-state limit", -1);
+    sqlite3_free(zOrig);
+    sqlite3_free(zWorking);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
+    return SQLITE_ERROR;
   }
 
   rc = doltliteResolveRef(db, zUpstream, &upstreamHash);
@@ -674,6 +695,19 @@ static int doltliteRebaseLinearReplay(
   createCtx.zWorkingBranch = zWorking;
   createCtx.pHead = &upstreamHash;
   createCtx.pCatalog = &upstreamCommit.catalogHash;
+  createCtx.zOrigBranch = zOrig;
+  createCtx.pOrigHead = &headHash;
+  createCtx.pOrigCatalog = &origCat;
+  {
+    ProllyHash probe;
+    rc = chunkStoreFindBranch(cs, zWorking, &probe);
+    if( rc==SQLITE_OK ){
+      workingExists = 1;
+      rc = SQLITE_BUSY;
+      goto rollback;
+    }
+    if( rc!=SQLITE_NOTFOUND ) goto rollback;
+  }
   {
     DoltliteBranchExpectation expected;
     expected.zBranch = zWorking;
@@ -807,6 +841,7 @@ static int doltliteRebaseLinearReplay(
   }
   if( rc!=SQLITE_OK ) goto rollback;
   workingCreated = 0;
+  finalized = 1;
 
   rc = rebaseRestoreBranchState(db, zOrig);
   if( rc!=SQLITE_OK ) goto rollback;
@@ -838,15 +873,30 @@ rollback:
     memset(&abortCtx, 0, sizeof(abortCtx));
     abortCtx.zOrigBranch = zOrig;
     abortCtx.zWorkingBranch = zWorking;
-    (void)doltliteMutateRefs(db, rebaseAbortLinearRefs, &abortCtx);
+    recoveryRc = doltliteMutateRefs(db, rebaseAbortLinearRefs, &abortCtx);
   }
   doltliteCommitClear(&origCommit);
-  (void)rebaseRestoreBranchState(db, zOrig);
+  restoreRc = rebaseRestoreBranchState(db, zOrig);
   if( graphLocked ) chunkStoreUnlock(cs);
   sqlite3_free(aReplay);
   {
     char *zErr;
-    if( zApplyErr ){
+    if( recoveryRc!=SQLITE_OK ){
+      zErr = sqlite3_mprintf(
+          "rebase cleanup failed; resolve the error and retry dolt_rebase('--abort')");
+      rc = recoveryRc;
+    }else if( restoreRc!=SQLITE_OK ){
+      zErr = sqlite3_mprintf(finalized ?
+          "rebase completed but restoring the session failed" :
+          "rebase recovery failed; pre-rebase state may not have been fully restored");
+      rc = restoreRc;
+    }else if( workingExists ){
+      zErr = sqlite3_mprintf("rebase working branch already exists: %s", zWorking);
+    }else if( finalized ){
+      zErr = sqlite3_mprintf("rebase completed; session restoration encountered an error");
+    }else if( !workingCreated ){
+      zErr = sqlite3_mprintf("could not start rebase");
+    }else if( zApplyErr ){
       zErr = zApplyErr;
       zApplyErr = 0;
     }else if( bConflict && zFailedMsg && zFailedMsg[0] ){

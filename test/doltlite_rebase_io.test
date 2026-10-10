@@ -1,0 +1,177 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-rebase-io
+
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+  WITH RECURSIVE c(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300)
+    INSERT INTO t SELECT x,printf('v%05d-%s',x,hex(zeroblob(40))) FROM c;
+  CREATE TABLE u(k TEXT PRIMARY KEY,n INT);
+  INSERT INTO u VALUES('a',1),('b',2);
+  SELECT dolt_commit('-Am','init');
+  SELECT dolt_checkout('-b','feat');
+  INSERT INTO t VALUES(1001,'f1');
+  UPDATE u SET n=20 WHERE k='b';
+  SELECT dolt_commit('-am','feat1');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v='m' WHERE id=5;
+  SELECT dolt_commit('-am','main2');
+  SELECT dolt_checkout('feat');
+  INSERT INTO t VALUES(1003,'f3');
+  SELECT dolt_commit('-am','feat2');
+  SELECT dolt_checkout('main');
+}
+db close
+file copy -force test.db rebase-io-base.db
+
+proc rebase_io {method filename args} {
+  if {$::armed && $method eq "xWrite"} {
+    incr ::written [lindex $args 2]
+    if {$::written>$::limit} {
+      if {$::persistent} {
+        rebaseio full 1 1
+      } else {
+        set ::armed 0
+        return SQLITE_IOERR
+      }
+    }
+  }
+  return SQLITE_OK
+}
+testvfs rebaseio
+rebaseio filter xWrite
+rebaseio script rebase_io
+set armed 0
+
+foreach {reopen limit} {0 2048 1 2048 0 4096 1 4096} {
+  forcedelete test.db
+  file copy -force rebase-io-base.db test.db
+  sqlite3 db test.db -vfs rebaseio
+  execsql {SELECT dolt_checkout('feat')}
+  set head [db one {SELECT dolt_hashof('HEAD')}]
+  set written 0
+  set persistent 1
+  set armed 1
+  do_test full.$limit.$reopen.error {
+    set caught [catch {db eval {SELECT dolt_rebase('main')}} message]
+    list $caught [sqlite3_errcode db] \
+         [string match {*cleanup failed*dolt_rebase('--abort')*} $message] \
+         [string match {*branch restored*} $message]
+  } {1 SQLITE_FULL 1 0}
+  set armed 0
+  rebaseio full
+  if {$reopen} {
+    db close
+    sqlite3 db test.db -vfs rebaseio
+    execsql {SELECT dolt_checkout('feat')}
+  }
+  do_test full.$limit.$reopen.unchanged {
+    list [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $head}] \
+         [db eval {SELECT id,v FROM t WHERE id>300 ORDER BY id}] \
+         [db one {SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'}]
+  } {1 {1001 f1 1003 f3} 1}
+  if {$limit==4096} {
+    do_execsql_test full.$limit.$reopen.partial {
+      SELECT message FROM dolt_log('dolt_rebase_feat') LIMIT 1;
+    } feat1
+  }
+  do_test full.$limit.$reopen.refuse {
+    set caught [catch {db eval {SELECT dolt_rebase('main')}} message]
+    list $caught [string match {*working branch already exists*} $message] \
+         [string match {*branch restored*} $message]
+  } {1 1 0}
+  do_execsql_test full.$limit.$reopen.abort {
+    SELECT dolt_rebase('--abort');
+    SELECT active_branch();
+    SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';
+  } {{Interactive rebase aborted} feat 0}
+  do_test full.$limit.$reopen.retry {
+    db eval {SELECT dolt_rebase('main')}
+    db eval {
+      SELECT v FROM t WHERE id=5;
+      SELECT n FROM u WHERE k='b';
+      SELECT count(*) FROM dolt_status;
+      SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';
+      PRAGMA integrity_check;
+    }
+  } {m 20 0 0 ok}
+  db close
+}
+
+foreach reopen {0 1} {
+  set limit 2048
+  forcedelete test.db
+  file copy -force rebase-io-base.db test.db
+  sqlite3 db test.db -vfs rebaseio
+  execsql {SELECT dolt_checkout('feat')}
+  set head [db one {SELECT dolt_hashof('HEAD')}]
+  set written 0
+  set persistent 0
+  set armed 1
+  do_test ioerr.$reopen.error {
+    set caught [catch {db eval {SELECT dolt_rebase('main')}} message]
+    list $caught [sqlite3_errcode db] [string match {*branch restored*} $message]
+  } {1 SQLITE_IOERR 1}
+  set armed 0
+  if {$reopen} {
+    db close
+    sqlite3 db test.db -vfs rebaseio
+    execsql {SELECT dolt_checkout('feat')}
+  }
+  do_test ioerr.$reopen.cleaned {
+    list [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $head}] \
+         [db one {SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'}] \
+         [db one {SELECT active_branch()}] \
+         [db one {SELECT count(*) FROM dolt_status}]
+  } {1 0 feat 0}
+  do_test ioerr.$reopen.retry {
+    db eval {SELECT dolt_rebase('main')}
+    db eval {SELECT v FROM t WHERE id=5; PRAGMA integrity_check}
+  } {m ok}
+  db close
+}
+
+forcedelete test.db
+file copy -force rebase-io-base.db test.db
+sqlite3 db test.db -vfs rebaseio
+execsql {SELECT dolt_checkout('feat'); SELECT dolt_branch('dolt_rebase_feat')}
+set branches [db eval {SELECT name,hash FROM dolt_branches ORDER BY name}]
+do_test existing.refuse {
+  set caught [catch {db eval {SELECT dolt_rebase('main')}} message]
+  list $caught [sqlite3_errcode db] \
+       [string match {*working branch already exists*} $message] \
+       [string match {*branch restored*} $message] \
+       [expr {[db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] eq $branches}]
+} {1 SQLITE_BUSY 1 0 1}
+do_catchsql_test existing.abort {SELECT dolt_rebase('--abort')} {1 {no rebase in progress}}
+do_test existing.kept {
+  expr {[db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] eq $branches}
+} 1
+db close
+
+foreach length {63 64} {
+  forcedelete test.db
+  file copy -force rebase-io-base.db test.db
+  sqlite3 db test.db -vfs rebaseio
+  set branch [string repeat f $length]
+  execsql {SELECT dolt_branch('-m','feat',$branch); SELECT dolt_checkout($branch)}
+  if {$length==63} {
+    do_test name.$length.rebase {
+      db eval {SELECT dolt_rebase('main')}
+      db one {SELECT v FROM t WHERE id=5}
+    } m
+  } else {
+    do_catchsql_test name.$length.refuse {
+      SELECT dolt_rebase('main');
+    } {1 {cannot start rebase: current branch name exceeds the 63-byte persisted-state limit}}
+    do_execsql_test name.$length.atomic {
+      SELECT count(*) FROM dolt_branches;
+      SELECT v FROM t WHERE id=1003;
+      SELECT count(*) FROM dolt_status;
+    } {2 f3 0}
+  }
+  db close
+}
+rebaseio delete
+forcedelete rebase-io-base.db
+finish_test
