@@ -2306,7 +2306,8 @@ void sqlite3Pragma(
           if( 0==sqlite3StrICmp(zRight, pEnc->zName) ){
             u8 enc = pEnc->enc ? pEnc->enc : SQLITE_UTF16NATIVE;
 #ifdef DOLTLITE_PROLLY
-            if( enc!=SQLITE_UTF8 ){
+            if( enc!=SQLITE_UTF8
+             && sqlite3BtreeIsDoltliteFormat(db->aDb[0].pBt) ){
               /* Doltlite-format databases store SQL text as UTF-8. */
               break;
             }

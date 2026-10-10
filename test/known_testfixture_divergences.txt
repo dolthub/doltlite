@@ -2651,21 +2651,6 @@ e_walckpt e_walckpt-6.4 class=unsupported issue=1836
 # reserved-name error is skipped (stock has the same gap on a cold cache).
 # 16.24/16.25 are cascade: 16.23's CREATE leaves y1_segments behind.
 
-# PRAGMA encoding=UTF16be is a no-op (doltlite stores UTF-8 only), so the
-# expected UTF-8->UTF-16 conversion artifacts (00xx widening, FFFD
-# replacement of invalid sequences) never happen; hex() shows raw bytes
-badutf badutf-1.10 class=unsupported issue=1838
-badutf badutf-1.11 class=unsupported issue=1838
-badutf badutf-1.12 class=unsupported issue=1838
-badutf badutf-1.13 class=unsupported issue=1838
-badutf badutf-1.14 class=unsupported issue=1838
-badutf badutf-1.15 class=unsupported issue=1838
-badutf badutf-1.16 class=unsupported issue=1838
-badutf badutf-1.17 class=unsupported issue=1838
-badutf badutf-1.18 class=unsupported issue=1838
-badutf badutf-1.19 class=unsupported issue=1838
-badutf badutf-1.20 class=unsupported issue=1838
-
 # group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly
 # chunks, not legacy pager pages, so pager_cache_size expectations never match
 cache cache-1.2 class=intentional  # group (a): btree_pager_stats reports 0 pages — doltlite rows live in prolly chunks, not legacy pager pages, so pager_cache_size expectations never match

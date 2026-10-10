@@ -12,6 +12,10 @@ touch "$TMP_DIR/terminations"
 
 cat > "$TMP_DIR/build/testfixture" <<'EOF'
 #!/usr/bin/env bash
+if [ -n "${TESTFIXTURE_PRELUDE:-}" ]; then
+  [ "$1" = "$TESTFIXTURE_PRELUDE" ] || exit 2
+  shift
+fi
 case "$1" in
   *two.test)
     names="two-1.transient.41 two-1.transient.99"
@@ -67,7 +71,7 @@ run_case() {
     cd "$TMP_DIR/build"
     DIVERGENCE_FILE="$TMP_DIR/divergences" \
       TERMINATION_FILE="$TMP_DIR/terminations" \
-      bash "$RUNNER" self-test "$timeout" "$1"
+      "$BASH" "$RUNNER" self-test "$timeout" "$1"
   ) >"$TMP_DIR/run.out" 2>&1
 }
 
@@ -103,6 +107,12 @@ expect_failure one "a counted pattern with a resolved failure"
 
 printf '%s\n' 'extra extra-1.transient.*{2}' > "$TMP_DIR/divergences"
 expect_failure extra "an unrelated failure beside a satisfied pattern"
+
+export TESTFIXTURE_PRELUDE="$TMP_DIR/prelude.tcl"
+printf '%s\n' 'two two-1.transient.*{2}' > "$TMP_DIR/divergences"
+expect_pass two "a prelude followed by the requested suite"
+expect_failure three "an added failure with a prelude"
+unset TESTFIXTURE_PRELUDE
 
 printf '%s\n' \
   'two two-1.transient.*{2}' \
