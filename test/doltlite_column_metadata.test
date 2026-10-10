@@ -6,8 +6,12 @@ foreach encoding {UTF-8 UTF-16le UTF-16be} {
   reset_db
   forcedelete column-metadata-oracle.db
   sqlite3 oracle {file:column-metadata-oracle.db?doltlite_engine=sqlite} -uri 1
+  db eval "PRAGMA encoding='$encoding'"
+  oracle eval "PRAGMA encoding='[db onecolumn {PRAGMA encoding}]'"
+  do_test $encoding-encoding {
+    list [db onecolumn {PRAGMA encoding}] [oracle onecolumn {PRAGMA encoding}]
+  } {UTF-8 UTF-8}
   foreach conn {db oracle} {
-    $conn eval "PRAGMA encoding='$encoding'"
     $conn eval {
       CREATE TABLE t(id INTEGER PRIMARY KEY, v);
       INSERT INTO t VALUES
