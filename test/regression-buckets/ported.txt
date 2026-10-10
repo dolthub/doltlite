@@ -138,3 +138,4 @@ doltlite_reset_peer_gc
 doltlite_backup_peer_write
 doltlite_vc_interrupt
 doltlite_commit_publication
+doltlite_sqlite_encoding

@@ -8797,6 +8797,35 @@ static int SQLITE_TCLAPI test_sqlite3_txn_state(
   return TCL_OK;
 }
 
+#ifdef DOLTLITE_PROLLY
+static int SQLITE_TCLAPI test_doltlite_engine(
+  void *clientData,
+  Tcl_Interp *interp,
+  int objc,
+  Tcl_Obj *CONST objv[]
+){
+  sqlite3 *db = 0;
+  int iDb;
+  const char *zSchema;
+  if( objc!=2 && objc!=3 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "DB ?SCHEMA?");
+    return TCL_ERROR;
+  }
+  if( getDbPointer(interp, Tcl_GetString(objv[1]), &db) || !db ){
+    return TCL_ERROR;
+  }
+  zSchema = objc==3 ? Tcl_GetString(objv[2]) : "main";
+  iDb = sqlite3FindDbName(db, zSchema);
+  if( iDb<0 || !db->aDb[iDb].pBt ){
+    Tcl_AppendResult(interp, "no such database: ", zSchema, (char*)0);
+    return TCL_ERROR;
+  }
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(
+      sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt) ? "prolly" : "orig", -1));
+  return TCL_OK;
+}
+#endif
+
 /*
 ** Change the name of the main database schema from "main" to "icecube".
 */
@@ -9278,6 +9307,9 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
      { "sqlite3_extended_result_codes", test_extended_result_codes, 0},
      { "sqlite3_limit",                 test_limit,                 0},
      { "dbconfig_maindbname_icecube",   test_dbconfig_maindbname_icecube },
+#ifdef DOLTLITE_PROLLY
+     { "doltlite_test_engine",         test_doltlite_engine, 0 },
+#endif
 
      { "save_prng_state",               save_prng_state,    0 },
      { "restore_prng_state",            restore_prng_state, 0 },

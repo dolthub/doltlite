@@ -1,0 +1,53 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_sqlite_encoding
+
+foreach enc {UTF-16le UTF-16be UTF-8} {
+  set filename encoding-$enc.db
+  forcedelete $filename
+  sqlite3 stock "file:$filename?doltlite_engine=sqlite" -uri 1
+  do_test $enc.create {
+    stock eval "PRAGMA encoding='$enc'"
+    stock eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+      INSERT INTO t VALUES(1, 'café'), (2, '東京');
+      PRAGMA encoding;
+    }
+  } $enc
+  stock close
+  sqlite3 stock $filename
+  do_test $enc.reopen {
+    stock eval {PRAGMA encoding; SELECT v FROM t ORDER BY id}
+  } [list $enc café 東京]
+  stock close
+}
+
+sqlite3 stock encoding-UTF-16le.db
+do_test mismatch {
+  catchsql {ATTACH 'encoding-UTF-8.db' AS aux} stock
+} {1 {attached databases must use the same text encoding as main database}}
+stock close
+
+sqlite3 stock encoding-UTF-8.db
+do_execsql_test -db stock attach {
+  ATTACH 'encoding-UTF-8.db' AS aux;
+  SELECT v FROM aux.t ORDER BY id;
+  UPDATE aux.t SET v='attached' WHERE id=1;
+  SELECT v FROM main.t WHERE id=1;
+  PRAGMA aux.integrity_check;
+} {café 東京 attached ok}
+stock close
+
+do_execsql_test prolly {
+  PRAGMA encoding='UTF-16le';
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  PRAGMA encoding;
+} {UTF-8}
+do_catchsql_test prolly.mismatch {
+  ATTACH 'encoding-UTF-16le.db' AS aux;
+} {1 {attached databases must use the same text encoding as main database}}
+
+foreach enc {UTF-16le UTF-16be UTF-8} {
+  forcedelete encoding-$enc.db
+}
+finish_test
