@@ -1453,21 +1453,26 @@ static int mergeRefLeaveUncommitted(
   return SQLITE_OK;
 }
 
+/* Halt will not end a write started from this read-only SELECT.
+** RollbackAll restores the txn snapshot and persists it, which wipes
+** earlier autocommit merges still sitting in the same write. These
+** paths have not mutated; commit the write so txn_state is NONE and
+** the graph lock drops. An explicit BEGIN keeps the caller's txn. */
+static void mergeRefFinishAutocommitWrite(sqlite3 *db){
+  if( db->autoCommit && db->nDb>0 && db->aDb[0].pBt
+   && sqlite3BtreeTxnState(db->aDb[0].pBt)==SQLITE_TXN_WRITE ){
+    sqlite3BtreeCommit(db->aDb[0].pBt);
+    sqlite3CloseSavepoints(db);
+  }
+}
+
 static int mergeRefAbortAfterWriteTxn(
   sqlite3 *db,
   sqlite3_context *context,
   const char *zMsg,
   int rc
 ){
-  /* Halt will not end a write started from this read-only SELECT.
-  ** RollbackAll restores the txn snapshot and persists it, which wipes
-  ** earlier autocommit merges still sitting in the same write. These
-  ** refusals have not mutated; commit the write so txn_state is NONE. */
-  if( db->autoCommit && db->nDb>0 && db->aDb[0].pBt
-   && sqlite3BtreeTxnState(db->aDb[0].pBt)==SQLITE_TXN_WRITE ){
-    sqlite3BtreeCommit(db->aDb[0].pBt);
-    sqlite3CloseSavepoints(db);
-  }
+  mergeRefFinishAutocommitWrite(db);
   if( zMsg ){
     doltliteVcResultErrorCode(context, db, zMsg, rc);
   }else{
@@ -1547,6 +1552,7 @@ int doltliteMergeRef(
   }
 
   if( prollyHashCompare(&ourHead, &theirHead)==0 ){
+    mergeRefFinishAutocommitWrite(db);
     sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
     return SQLITE_OK;
   }
@@ -1601,6 +1607,7 @@ int doltliteMergeRef(
 
   if( prollyHashCompare(&ancestorHash, &theirHead)==0 ){
     doltliteFreeCatalog(aLocal, nLocal);
+    mergeRefFinishAutocommitWrite(db);
     sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
     return SQLITE_OK;
   }

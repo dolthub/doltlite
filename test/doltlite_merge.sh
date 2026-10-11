@@ -2680,5 +2680,100 @@ run_test_error_match "merge_dual_add_null_vs_value_without_rowid" \
 run_test "merge_dual_add_null_vs_value_without_rowid_kept" \
   "SELECT coalesce(b,'N') FROM t;" "9" "$DB122"
 
+# An idle "Already up to date" merge must drop the graph lock before it
+# returns. A peer write is the proof: the merging session stays open and
+# does not run another statement.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *)
+    UPTODATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/merge-uptodate-lock.XXXXXX")
+    DBU="$UPTODATE_DIR/db.db"
+    UPTODATE_PID=""
+    uptodate_stop() {
+      if [ -n "$UPTODATE_PID" ]; then
+        printf '%s\n' '.quit' >&3 2>/dev/null || true
+        exec 3>&- 2>/dev/null || true
+        wait "$UPTODATE_PID" 2>/dev/null || true
+        UPTODATE_PID=""
+      fi
+    }
+    uptodate_wait() {
+      local marker="$1"
+      local i
+      for i in $(seq 1 50); do
+        if grep -q "$marker" "$UPTODATE_DIR/a.out" 2>/dev/null; then
+          return 0
+        fi
+        sleep 0.1
+      done
+      dltest_fail "uptodate_wait_$marker" "  output:\n$(cat "$UPTODATE_DIR/a.out" 2>/dev/null)"
+      return 1
+    }
+    uptodate_start() {
+      rm -f "$UPTODATE_DIR/a.fifo" "$UPTODATE_DIR/a.out"
+      mkfifo "$UPTODATE_DIR/a.fifo"
+      "$DOLTLITE" "$DBU" <"$UPTODATE_DIR/a.fifo" >"$UPTODATE_DIR/a.out" 2>&1 &
+      UPTODATE_PID=$!
+      exec 3>"$UPTODATE_DIR/a.fifo"
+    }
+    uptodate_peer() {
+      local name="$1"
+      local id="$2"
+      local out
+      out=$("$DOLTLITE" "$DBU" ".timeout 2000" \
+        "INSERT INTO t VALUES($id); SELECT 'peer $id ok';" 2>&1 || true)
+      if printf '%s\n' "$out" | grep -q "peer $id ok" \
+         && ! printf '%s\n' "$out" | grep -q "locked"; then
+        dltest_pass
+      else
+        dltest_fail "$name" "  got: $out"
+      fi
+    }
+
+    "$DOLTLITE" "$DBU" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(0);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('b');
+SQL
+    uptodate_start
+    printf '%s\n' "SELECT dolt_merge('b');" ".shell echo merge_b_done" >&3
+    if uptodate_wait merge_b_done; then
+      dltest_assert_match "uptodate_same_commit_result" \
+        "$(cat "$UPTODATE_DIR/a.out")" "Already up to date"
+      uptodate_peer "uptodate_same_commit_peer" 1
+    fi
+    printf '%s\n' "SELECT dolt_merge('HEAD');" ".shell echo merge_head_done" >&3
+    if uptodate_wait merge_head_done; then
+      uptodate_peer "uptodate_head_peer" 2
+    fi
+    uptodate_stop
+
+    "$DOLTLITE" "$DBU" "SELECT dolt_commit('-Am','peers');" >/dev/null 2>&1
+    uptodate_start
+    printf '%s\n' "SELECT dolt_merge('b');" ".shell echo merge_ancestor_done" >&3
+    if uptodate_wait merge_ancestor_done; then
+      dltest_assert_match "uptodate_ancestor_result" \
+        "$(cat "$UPTODATE_DIR/a.out")" "Already up to date"
+      uptodate_peer "uptodate_ancestor_peer" 3
+    fi
+    uptodate_stop
+
+    uptodate_start
+    printf '%s\n' "BEGIN;" "SELECT dolt_merge('HEAD');" ".shell echo begin_merge_done" >&3
+    if uptodate_wait begin_merge_done; then
+      held=$("$DOLTLITE" "$DBU" ".timeout 2000" \
+        "INSERT INTO t VALUES(4); SELECT 'peer 4 ok';" 2>&1 || true)
+      dltest_assert_match "uptodate_open_txn_keeps_lock" "$held" "locked"
+    fi
+    printf '%s\n' "ROLLBACK;" ".shell echo rollback_done" >&3
+    if uptodate_wait rollback_done; then
+      uptodate_peer "uptodate_after_rollback_peer" 5
+    fi
+    uptodate_stop
+    rm -rf "$UPTODATE_DIR"
+    ;;
+esac
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish
