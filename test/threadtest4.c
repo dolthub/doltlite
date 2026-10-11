@@ -195,8 +195,8 @@ static void worker_open_connection(WorkerInfo *p, int iCnt){
     exit(1);
   }
   sqlite3_free(zFile);
-  run_sql(p, "PRAGMA read_uncommitted=ON;");
   sqlite3_busy_timeout(p->db, 10000);
+  run_sql(p, "PRAGMA read_uncommitted=ON;");
   run_sql(p, "PRAGMA synchronous=OFF;");
   run_sql(p, "ATTACH 'tt4-test%d.db' AS aux1", aOrder[x][1]);
   run_sql(p, "ATTACH 'tt4-test%d.db' AS aux2", aOrder[x][2]);
