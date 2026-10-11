@@ -229,6 +229,7 @@ static void doltliteCleanFunc(
   };
   int i;
   int rc;
+  int bBegan = 0;
 
   memset(&args, 0, sizeof(args));
   memset(&staged, 0, sizeof(staged));
@@ -297,15 +298,30 @@ static void doltliteCleanFunc(
     if( !db->autoCommit ){
       rc = doltliteEnsureWriteTxnAndSavepoints(db);
       if( rc!=SQLITE_OK ) goto clean_error;
+    }else if( untracked.n>0 ){
+      /* Each nested DROP commits on its own in autocommit. One transaction
+      ** keeps an earlier drop off disk when a later write fails. */
+      rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+      if( rc!=SQLITE_OK ) goto clean_error;
+      bBegan = 1;
     }
     rc = cleanDropTables(db, &untracked);
-    if( rc!=SQLITE_OK ) goto clean_error;
-    rc = doltlitePersistWorkingSet(db);
-    if( rc!=SQLITE_OK ) goto clean_error;
+    if( rc!=SQLITE_OK ) goto clean_rollback;
+    if( bBegan ){
+      rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+      if( rc!=SQLITE_OK ) goto clean_rollback;
+    }else{
+      rc = doltlitePersistWorkingSet(db);
+      if( rc!=SQLITE_OK ) goto clean_error;
+    }
   }
   sqlite3_result_int(context, 0);
   goto clean_done;
 
+clean_rollback:
+  if( bBegan && !db->autoCommit ){
+    sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
+  }
 clean_error:
   /* A sub-call that fails without touching the connection leaves errmsg
   ** reading "not an error". */
