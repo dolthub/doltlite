@@ -229,7 +229,14 @@ static int doltliteCommitStageModifiedOnly(
     return rc;
   }
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash) ){
+  if( rc!=SQLITE_OK ){
+    /* The staged load below overwrites rc. Losing this error makes -a
+    ** stage nothing, and --amend then reports success. */
+    sqlite3_result_error_code(context, rc);
+    FREE_ADD_MODIFIED_CATALOGS();
+    return rc;
+  }
+  if( !prollyHashIsEmpty(&headCatHash) ){
     rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to load HEAD catalog", -1);
