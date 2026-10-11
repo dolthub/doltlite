@@ -218,6 +218,15 @@ typedef struct DoltliteChunkSourceState DoltliteChunkSourceState;
 #  define CHUNK_STORE_LE_PACKING 0
 #endif
 
+/* Names up to 63 bytes stay inline so tracking a branch never allocates;
+** longer ones spill to the heap. */
+typedef struct CsWsBranch CsWsBranch;
+struct CsWsBranch {
+  char a[64];
+  char *zLong;
+  u8 bOom;
+};
+
 struct ChunkStore {
   ChunkFile file;
   RefsTable refs;
@@ -236,15 +245,15 @@ struct ChunkStore {
   /* Working-set ref this connection last adopted or wrote for one branch.
   ** Refreshes leave it alone, so it differs from refs once a peer writes. */
   u8 bWsBasis;
-  char zWsBasisBranch[64];
+  CsWsBranch wsBasisBranch;
   ProllyHash wsBasis;
   /* The working set this connection last wrote, and the same once a commit
   ** made it durable, so a command can tell its own write from a peer's.
   ** Adopting a peer's working set never sets these. */
   u8 bWsSelfWritten;
   u8 bWsSelfPublished;
-  char zWsSelfBranch[64];
-  char zWsSelfPublishedBranch[64];
+  CsWsBranch wsSelfBranch;
+  CsWsBranch wsSelfPublishedBranch;
   ProllyHash wsSelfWritten;
   ProllyHash wsSelfPublished;
   /* Bumped when this connection adopts a working set other than the last
@@ -252,7 +261,7 @@ struct ChunkStore {
   ** saw it bump picked up a peer's write mid-flight. Comparing against the
   ** basis instead would count a rolled-back local write as foreign. */
   u8 bWsKnown;
-  char zWsKnownBranch[64];
+  CsWsBranch wsKnownBranch;
   ProllyHash wsKnown;
   u32 nWsForeignAdopt;
   u32 nWsForeignAdoptAtCapture;
@@ -355,6 +364,8 @@ int chunkStoreSerializeRefs(ChunkStore *cs);
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash);
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash);
 void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch);
+void chunkStoreFollowWorkingSetBasis(ChunkStore *cs, const char *zBranch);
+void chunkStoreFreeWsBranches(ChunkStore *cs);
 void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs);
 int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch);
 void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,

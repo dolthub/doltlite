@@ -868,6 +868,7 @@ void doltliteInstallPreparedSessionBranch(
   p = db->aDb[0].pBt;
   sqlite3_free(p->zBranch);
   p->zBranch = zPrepared;
+  chunkStoreFollowWorkingSetBasis(&p->pBt->store, zPrepared);
 }
 
 int doltliteSetSessionBranch(sqlite3 *db, const char *zBranch){
