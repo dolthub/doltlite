@@ -921,7 +921,7 @@ int doltliteBranchWorkingSetUnmoved(
   ProllyHash wsNow;
   int haveNow = 0;
   int rc;
-  if( !pExpected || prollyHashIsEmpty(pExpected) || !chunkStoreHasPeers(cs) ){
+  if( !pExpected || !chunkStoreHasPeers(cs) ){
     return SQLITE_OK;
   }
   rc = chunkStoreReadPublishedBranchWorkingSet(cs, zBranch, &wsNow, &haveNow);

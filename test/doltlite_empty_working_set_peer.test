@@ -1,0 +1,61 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach materialized {0 1} {
+  foreach op {reset checkout checkout-new} {
+    foreach txn {begin savepoint} {
+      foreach peerWrite {0 1} {
+        set prefix empty-ws-peer-$materialized.$op.$txn.$peerWrite
+        reset_db
+        db eval {
+          CREATE TABLE t(id INTEGER PRIMARY KEY);
+          SELECT dolt_commit('-Am','init');
+          SELECT dolt_branch('g');
+          SELECT dolt_branch('f');
+        }
+        db close
+        sqlite3 db test.db/g
+        if {$materialized} {
+          db eval {INSERT INTO t VALUES(1); DELETE FROM t}
+        }
+        sqlite3 peer test.db/g
+        db eval {BEGIN}
+        if {$txn eq "savepoint"} { db eval {SAVEPOINT s} }
+        do_execsql_test $prefix.snapshot {SELECT count(*) FROM t} 0
+        if {$peerWrite} { peer eval {INSERT INTO t VALUES(900)} }
+        switch $op {
+          reset { set sql {SELECT dolt_reset()} }
+          checkout { set sql {SELECT dolt_checkout('f')} }
+          checkout-new { set sql {SELECT dolt_checkout('-b','n')} }
+        }
+        do_test $prefix.operation {
+          set failed [catch {db eval $sql} msg]
+          list $failed [sqlite3_errcode db]
+        } [expr {$peerWrite ? {1 SQLITE_BUSY} : {0 SQLITE_OK}}]
+        do_test $prefix.commit { catch {db eval {COMMIT}} } 0
+        do_test $prefix.branch {
+          db one {SELECT active_branch()}
+        } [expr {$peerWrite || $op eq "reset" ? "g" : ($op eq "checkout" ? "f" : "n")}]
+        do_test $prefix.peer-kept {
+          list [peer one {SELECT count(*) FROM t WHERE id=900}] \
+               [peer one {PRAGMA integrity_check}]
+        } [list $peerWrite ok]
+        peer close
+        db close
+        sqlite3 db test.db/g
+        do_test $prefix.reopen {
+          list [db one {SELECT count(*) FROM t WHERE id=900}] \
+               [db one {PRAGMA integrity_check}]
+        } [list $peerWrite ok]
+        if {$peerWrite} {
+          do_test $prefix.retry {
+            db eval $sql
+            db one {SELECT active_branch()}
+          } [expr {$op eq "reset" ? "g" : ($op eq "checkout" ? "f" : "n")}]
+        }
+      }
+    }
+  }
+}
+
+finish_test
