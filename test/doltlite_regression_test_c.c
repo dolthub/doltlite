@@ -1580,6 +1580,7 @@ static int gFailWriteOnce = 0;
 static int gFailSyncOnce = 0;
 static int gFailWriteNth = 0;
 static int gFailSyncNth = 0;
+static int gFailReadNth = 0;
 static int gFailAccessOnce = 0;
 static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
@@ -1616,6 +1617,10 @@ static int failClose(sqlite3_file *pFile){
 
 static int failRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite3_int64 iOfst){
   FailFile *p = (FailFile*)pFile;
+  if( p->isMainDb && gFailReadNth>0 && --gFailReadNth==0 ){
+    gFailHits++;
+    return SQLITE_IOERR_READ;
+  }
   return p->pReal->pMethods->xRead(p->pReal, zBuf, iAmt, iOfst);
 }
 
@@ -1715,7 +1720,7 @@ static int failShmUnmap(sqlite3_file *pFile, int deleteFlag){
 
 static int failFetch(sqlite3_file *pFile, sqlite3_int64 iOfst, int iAmt, void **pp){
   FailFile *p = (FailFile*)pFile;
-  if( p->pReal->pMethods->iVersion<3 || p->pReal->pMethods->xFetch==0 ){
+  if( gFailReadNth>0 || p->pReal->pMethods->iVersion<3 || p->pReal->pMethods->xFetch==0 ){
     *pp = 0;
     return SQLITE_OK;
   }
@@ -9679,6 +9684,93 @@ static void run_vc_interrupt(void){
   removeDbFiles(dbpath);
 }
 
+static void run_vc_durable_advance_read_failure(void){
+  const char *azShow =
+    "SELECT (SELECT group_concat(message) FROM dolt_log),"
+    " (SELECT group_concat(table_name||':'||status) FROM dolt_status),"
+    " (SELECT group_concat(id) FROM t WHERE id>=1000)";
+  char dbpath[512], remotePath[512], sql[700];
+  int mode, nth;
+
+  check("durable_advance_read_register", registerFailVfs()==SQLITE_OK);
+  make_dbpath(dbpath, sizeof(dbpath), "durable_advance_read");
+  make_dbpath(remotePath, sizeof(remotePath), "durable_advance_read_remote");
+  for(mode=0; mode<3; mode++){
+    for(nth=1; nth<400; nth++){
+      sqlite3 *db = 0, *fresh = 0;
+      char zLive[1024];
+      int rc, hits;
+      removeDbFiles(dbpath);
+      removeDbFiles(remotePath);
+      if( mode<2 ){
+        check("durable_advance_read_open", open_db(dbpath, &db)==SQLITE_OK);
+        if( !db ) break;
+        execSql(db,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300)"
+          " INSERT INTO t SELECT x, hex(zeroblob(40)) FROM c;"
+          "SELECT dolt_commit('-Am','init');"
+          "SELECT dolt_checkout('-b','feat');"
+          "INSERT INTO t VALUES(1001,'f1'); SELECT dolt_commit('-am','feat1');"
+          "SELECT dolt_checkout('main');");
+        if( mode==0 ){
+          execSql(db, "UPDATE t SET v='m' WHERE id=5;"
+                      "SELECT dolt_commit('-am','main2');");
+        }
+      }else{
+        check("durable_advance_read_open", open_db(remotePath, &db)==SQLITE_OK);
+        if( !db ) break;
+        execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+                    "INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-Am','init');");
+        sqlite3_close(db);
+        check("durable_advance_read_open", open_db(dbpath, &db)==SQLITE_OK);
+        if( !db ) break;
+        snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+        execSql(db, sql);
+        execSql(db, "CREATE TABLE loc(x); SELECT dolt_commit('-Am','local');");
+        sqlite3_close(db);
+        check("durable_advance_read_open", open_db(remotePath, &db)==SQLITE_OK);
+        if( !db ) break;
+        execSql(db, "INSERT INTO t VALUES(7000,'r'); SELECT dolt_commit('-am','remote1');");
+      }
+      sqlite3_close(db);
+      db = 0;
+      check("durable_advance_read_open", open_fail_db(dbpath, &db)==SQLITE_OK);
+      if( !db ) break;
+      queryScalarText(db, "SELECT count(*) FROM dolt_status");
+      queryScalarText(db, "SELECT count(*) FROM t");
+      gFailHits = 0;
+      gFailReadNth = nth;
+      rc = execSqlSilent(db, mode<2 ? "SELECT dolt_merge('feat')"
+                                    : "SELECT dolt_pull('origin','main')");
+      gFailReadNth = 0;
+      hits = gFailHits;
+      sqlite3_snprintf(sizeof(zLive), zLive, "%s", queryScalarText(db, azShow));
+      check("durable_advance_read_open_fresh", open_db(dbpath, &fresh)==SQLITE_OK);
+      if( fresh ){
+        int same = strcmp(zLive, queryScalarText(fresh, azShow))==0;
+        if( !same ) printf("mode=%d nth=%d rc=%d live=%s fresh=%s\n",
+                           mode, nth, rc, zLive, queryScalarText(fresh, azShow));
+        check("durable_advance_read_session_matches_disk", same);
+        sqlite3_close(fresh);
+      }
+      check("durable_advance_read_write",
+            execSql(db, "INSERT INTO t VALUES(424242,'mine')")==SQLITE_OK);
+      sqlite3_close(db);
+      check("durable_advance_read_reopen", open_db(dbpath, &fresh)==SQLITE_OK);
+      if( fresh ){
+        check("durable_advance_read_write_kept",
+              strcmp(queryScalarText(fresh,
+                "SELECT count(*) FROM t WHERE id=424242"), "1")==0);
+        sqlite3_close(fresh);
+      }
+      if( hits==0 ) break;
+    }
+  }
+  removeDbFiles(dbpath);
+  removeDbFiles(remotePath);
+}
+
 static void run_vc_late_io_failure(void){
   const char *azOps[] = {
     "SELECT dolt_reset('--hard')",
@@ -16187,6 +16279,8 @@ static const RegressionCase aCases[] = {
   { "commit_publication", "Commit Publication Test", run_commit_publication },
   { "vc_interrupt", "VC Interrupt Test", run_vc_interrupt },
   { "vc_late_io_failure", "VC Late IO Failure Test", run_vc_late_io_failure },
+  { "vc_durable_advance_read_failure", "VC Durable Advance Read Failure Test",
+    run_vc_durable_advance_read_failure },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
   { "delete_missing_branch_preserves_durable_state", "Delete Missing Branch Preserves Durable State Test", run_delete_missing_branch_preserves_durable_state },
