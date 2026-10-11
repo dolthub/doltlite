@@ -535,6 +535,51 @@ run_test "hard_reset_still_drops_index_when_staged_hash_empty" \
 clean" "$HARD_DB/side"
 rm -f "$EMPTY_DB" "$DIRTY_DB" "$HARD_DB"
 
+# A branch that has never been written stores an empty staged hash, which
+# means the index is HEAD. Naming a committed table unstages nothing.
+echo "--- named reset on a never-written branch ---"
+NW_DB=/tmp/test_reset_never_written_$$.db; rm -f "$NW_DB"
+echo "CREATE TABLE u(x INTEGER PRIMARY KEY, v TEXT); CREATE INDEX u_v ON u(v); INSERT INTO u VALUES(1,'a'); SELECT dolt_commit('-Am','i'); SELECT dolt_branch('g');" | $DOLTLITE "$NW_DB" > /dev/null 2>&1
+run_test "named_reset_on_unwritten_branch" \
+  "SELECT dolt_reset('u');" \
+  "0" "$NW_DB/g"
+run_test "named_reset_on_unwritten_branch_is_noop" \
+  "SELECT x||v FROM u; SELECT count(*) FROM sqlite_master WHERE name='u_v'; SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM dolt_status; PRAGMA integrity_check;" \
+  "1a
+1
+clean
+ok" "$NW_DB/g"
+run_test "named_reset_on_unwritten_branch_retry" \
+  "SELECT dolt_reset('u');" \
+  "0" "$NW_DB/g"
+run_test_error_match "named_reset_missing_on_unwritten_branch" \
+  "SELECT dolt_reset('nope');" \
+  "table not found" "$NW_DB/g"
+
+NW_WORK=/tmp/test_reset_never_written_work_$$.db; rm -f "$NW_WORK"
+echo "CREATE TABLE u(x INTEGER PRIMARY KEY); INSERT INTO u VALUES(1); SELECT dolt_commit('-Am','i'); SELECT dolt_branch('g');" | $DOLTLITE "$NW_WORK" > /dev/null 2>&1
+echo "INSERT INTO u VALUES(2);" | $DOLTLITE "$NW_WORK/g" > /dev/null 2>&1
+run_test "named_reset_keeps_unstaged_on_unwritten_branch" \
+  "SELECT dolt_reset('u'); SELECT x FROM u ORDER BY x; SELECT staged||'|'||status FROM dolt_status WHERE table_name='u';" \
+  "0
+1
+2
+0|modified" "$NW_WORK/g"
+
+NW_STAGE=/tmp/test_reset_never_written_stage_$$.db; rm -f "$NW_STAGE"
+echo "CREATE TABLE u(x INTEGER PRIMARY KEY); INSERT INTO u VALUES(1); SELECT dolt_commit('-Am','i'); SELECT dolt_branch('g');" | $DOLTLITE "$NW_STAGE" > /dev/null 2>&1
+echo "INSERT INTO u VALUES(2); SELECT dolt_add('u');" | $DOLTLITE "$NW_STAGE/g" > /dev/null 2>&1
+run_test "named_reset_unstages_real_change_on_unwritten_branch" \
+  "SELECT dolt_reset('u'); SELECT x FROM u ORDER BY x; SELECT staged||'|'||status FROM dolt_status WHERE table_name='u';" \
+  "0
+1
+2
+0|modified" "$NW_STAGE/g"
+run_test_error_match "commit_after_named_reset_sees_nothing_staged" \
+  "SELECT dolt_commit('-m','should not');" \
+  "nothing to commit" "$NW_STAGE/g"
+rm -f "$NW_DB" "$NW_WORK" "$NW_STAGE"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 
 dltest_finish
