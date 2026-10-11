@@ -9769,6 +9769,114 @@ static void run_vc_late_io_failure(void){
   removeDbFiles(dbpath);
 }
 
+/* A write error during dolt_clean must not leave some untracked tables
+** dropped. Success removes every untracked table. */
+static void run_clean_write_failure_is_atomic(void){
+  sqlite3 *db = 0;
+  sqlite3 *fresh = 0;
+  char dbpath[256];
+  char zErr[256];
+  char zTables[128];
+  char zCheck[96];
+  const char *zGot;
+  int n, failed, sawFault;
+
+  printf("=== Clean Write Failure Is Atomic Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_clean_write_failure_is_atomic");
+  removeDbFiles(dbpath);
+  gFailWriteNth = 0;
+  gFailWriteOnce = 0;
+  gFailHits = 0;
+  sawFault = 0;
+  check("register_fail_vfs_for_clean", registerFailVfs()==SQLITE_OK);
+
+  if( open_fail_db(dbpath, &db)!=SQLITE_OK || !db ){
+    check("clean_atomic_open_ok", 0);
+    goto clean_atomic_done;
+  }
+  if( execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+      "INSERT INTO t VALUES(1);"
+      "SELECT dolt_commit('-Am','init');"
+      "CREATE TABLE n1(a INTEGER PRIMARY KEY); INSERT INTO n1 VALUES(1);"
+      "CREATE TABLE n2(a INTEGER PRIMARY KEY); INSERT INTO n2 VALUES(2);"
+      "SELECT dolt_clean();")!=SQLITE_OK ){
+    check("clean_atomic_success_setup", 0);
+    goto clean_atomic_done;
+  }
+  zGot = queryScalarText(db,
+      "SELECT group_concat(name, ',') FROM ("
+      " SELECT name FROM sqlite_master WHERE type='table'"
+      " AND name NOT LIKE 'sqlite_%' ORDER BY name)");
+  check("clean_atomic_success_tables", strcmp(zGot, "t")==0);
+  sqlite3_close(db);
+  db = 0;
+
+  for(n=1; n<80; n++){
+    removeDbFiles(dbpath);
+    gFailWriteNth = 0;
+    gFailHits = 0;
+    db = 0;
+    if( open_fail_db(dbpath, &db)!=SQLITE_OK || !db ){
+      check("clean_atomic_open", 0);
+      goto clean_atomic_done;
+    }
+    if( execSql(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+        "INSERT INTO t VALUES(1);"
+        "SELECT dolt_commit('-Am','init');"
+        "CREATE TABLE n1(a INTEGER PRIMARY KEY); INSERT INTO n1 VALUES(1);"
+        "CREATE TABLE n2(a INTEGER PRIMARY KEY); INSERT INTO n2 VALUES(2);")
+        !=SQLITE_OK ){
+      check("clean_atomic_setup", 0);
+      sqlite3_close(db);
+      goto clean_atomic_done;
+    }
+    sqlite3_close(db);
+    db = 0;
+    if( open_fail_db(dbpath, &db)!=SQLITE_OK || !db ){
+      check("clean_atomic_reopen_setup", 0);
+      goto clean_atomic_done;
+    }
+    gFailHits = 0;
+    gFailWriteNth = n;
+    zGot = queryScalarText(db, "SELECT dolt_clean()");
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s", zGot);
+    gFailWriteNth = 0;
+    if( gFailHits==0 ){
+      sqlite3_close(db);
+      db = 0;
+      break;
+    }
+    sawFault = 1;
+    failed = strncmp(zErr, "ERROR:", 6)==0;
+    sqlite3_close(db);
+    db = 0;
+
+    fresh = 0;
+    if( open_db(dbpath, &fresh)!=SQLITE_OK || !fresh ){
+      check("clean_atomic_reopen", 0);
+      goto clean_atomic_done;
+    }
+    zGot = queryScalarText(fresh,
+        "SELECT group_concat(name, ',') FROM ("
+        " SELECT name FROM sqlite_master WHERE type='table'"
+        " AND name NOT LIKE 'sqlite_%' ORDER BY name)");
+    sqlite3_snprintf(sizeof(zTables), zTables, "%s", zGot);
+    sqlite3_close(fresh);
+    fresh = 0;
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "clean_atomic_%d", n);
+    check(zCheck, strcmp(zTables, failed ? "n1,n2,t" : "t")==0);
+  }
+
+clean_atomic_done:
+  gFailWriteNth = 0;
+  if( db ) sqlite3_close(db);
+  if( fresh ) sqlite3_close(fresh);
+  check("clean_atomic_fault_injected", sawFault);
+  removeDbFiles(dbpath);
+}
+
 static void run_amend_persist_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -16187,6 +16295,7 @@ static const RegressionCase aCases[] = {
   { "commit_publication", "Commit Publication Test", run_commit_publication },
   { "vc_interrupt", "VC Interrupt Test", run_vc_interrupt },
   { "vc_late_io_failure", "VC Late IO Failure Test", run_vc_late_io_failure },
+  { "clean_write_failure_is_atomic", "Clean Write Failure Is Atomic Test", run_clean_write_failure_is_atomic },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
   { "delete_missing_branch_preserves_durable_state", "Delete Missing Branch Preserves Durable State Test", run_delete_missing_branch_preserves_durable_state },
