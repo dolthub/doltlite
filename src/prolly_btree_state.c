@@ -1208,6 +1208,21 @@ int doltliteClearBranchRebaseMetadata(sqlite3 *db, const char *zBranch){
   return btreeClearRebaseMetadataOnBranch(cs, zBranch);
 }
 
+int doltliteWriteBranchRebaseMetadata(
+  sqlite3 *db,
+  const char *zBranch,
+  u8 flags,
+  const ProllyHash *pPreRebaseCat,
+  const ProllyHash *pOrigHead,
+  const char *zOrig,
+  const char *zReturn
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  if( !cs ) return SQLITE_ERROR;
+  return btreePutRebaseMetadataOnBranch(cs, zBranch, flags,
+                                       pPreRebaseCat, pOrigHead, zOrig, zReturn);
+}
+
 int doltliteConfirmBranchWorkingCatalog(
   sqlite3 *db,
   const char *zBranch,
