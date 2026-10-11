@@ -51,4 +51,43 @@ do_test 2.1 {
   gc_fullsyncs 0
 } {0}
 
+reset_db
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'one'),(2,'two');
+  SELECT dolt_commit('-Am','seed');
+}
+db close
+sqlite3 db test.db
+file mkdir vacuum-sync-dir
+
+foreach fullfsync {0 1} {
+  db eval "PRAGMA fullfsync=$fullfsync"
+  foreach kind {relative absolute empty} {
+    set target vacuum-sync-dir/copy-$fullfsync-$kind.db
+    forcedelete $target
+    if {$kind eq "absolute"} {set target [file normalize $target]}
+    if {$kind eq "empty"} {close [open $target w]}
+    do_test 3.$fullfsync.$kind.sync {
+      set ::sqlite_sync_count 0
+      set ::sqlite_fullsync_count 0
+      db eval {VACUUM INTO $target}
+      list $::sqlite_sync_count $::sqlite_fullsync_count
+    } [list 2 $fullfsync]
+    do_test 3.$fullfsync.$kind.copy {
+      sqlite3 copy $target
+      set result [copy eval {
+        SELECT * FROM t ORDER BY id;
+        SELECT message FROM dolt_log WHERE message='seed';
+        PRAGMA integrity_check;
+      }]
+      copy close
+      set result
+    } {1 one 2 two seed ok}
+    forcedelete $target
+    forcedelete [file join [file dirname $target] .[file tail $target]-lock]
+  }
+}
+file delete vacuum-sync-dir
+
 finish_test

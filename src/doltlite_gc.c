@@ -782,6 +782,7 @@ static int gcWriteCompactedTo(
         sqlite3_free(aNewIndex);
         return rc;
       }
+      sqlite3OsDoltliteRequestDirSync(pTmpFile);
     }
 
     w.pFile = pTmpFile;
