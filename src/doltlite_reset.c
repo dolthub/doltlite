@@ -115,6 +115,10 @@ static int resetStageNamedPaths(
   }
 
   doltliteGetSessionStaged(db, &stagedHash);
+  /* An empty staged hash means the index is HEAD, not a catalog with no
+  ** tables. A branch that has never been written stores that empty hash;
+  ** reading it as empty treats every committed table as a staged drop. */
+  if( prollyHashIsEmpty(&stagedHash) ) stagedHash = headCatHash;
   if( !prollyHashIsEmpty(&stagedHash) ){
     rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
     if( rc!=SQLITE_OK ) goto done;
