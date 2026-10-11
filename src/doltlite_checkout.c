@@ -406,6 +406,19 @@ static int checkoutApplyRefs(sqlite3 *db, CheckoutMutationCtx *p){
   return rc;
 }
 
+/* True when some remote tracks a branch of this name. */
+static int checkoutTrackingNameExists(ChunkStore *cs, const char *zBranch){
+  const TrackingBranch *aTk = 0;
+  int nTk = 0;
+  int i;
+  if( !cs || !zBranch ) return 0;
+  refsTableGetTracking(&cs->refs, &nTk, &aTk);
+  for(i=0; i<nTk; i++){
+    if( aTk[i].zBranch && strcmp(aTk[i].zBranch, zBranch)==0 ) return 1;
+  }
+  return 0;
+}
+
 /* Checkout must not create a local branch whose name is a tracking ref.
 ** origin/feature/x is that ref; feature/x is the remote's branch name. */
 static int trackingRefNameEquals(
@@ -1385,6 +1398,32 @@ static void doltCheckoutParsedFunc(
     }
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
     return;
+  }
+
+  /* A table and a tracking branch of the same name is ambiguous.
+  ** `name --` chooses the branch; `-- name` already checked out the table. */
+  if( !createBranch && argc==1 && iEndOptions<0 ){
+    ProllyHash probe;
+    if( chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK ){
+      int hasTable = 0;
+      char *zLiveSql = 0;
+      int trc = doltliteLoadLiveTableSql(db, zBranch, &hasTable, &zLiveSql);
+      sqlite3_free(zLiveSql);
+      if( trc!=SQLITE_OK ){
+        (void)doltliteVcSealSavepointError(db);
+        sqlite3_result_error_code(ctx, trc);
+        return;
+      }
+      if( hasTable && checkoutTrackingNameExists(cs, zBranch) ){
+        char *zErr = sqlite3_mprintf(
+            "'%s' could be both a local table and a tracking branch.\n"
+            "Please use -- to disambiguate.", zBranch);
+        doltliteVcResultError(ctx, db, zErr ? zErr
+            : "could be both a local table and a tracking branch");
+        sqlite3_free(zErr);
+        return;
+      }
+    }
   }
 
   doltliteGetSessionHead(db, &m.oldCommitHash);
