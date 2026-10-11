@@ -224,6 +224,7 @@ typedef struct CsWsBranch CsWsBranch;
 struct CsWsBranch {
   char a[64];
   char *zLong;
+  u8 bOom;
 };
 
 struct ChunkStore {

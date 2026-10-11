@@ -179,16 +179,17 @@ static const char *csWsBranch(const CsWsBranch *p){
 
 static int csSetWsBranch(CsWsBranch *p, const char *zBranch){
   size_t n = strlen(zBranch);
-  if( strcmp(csWsBranch(p), zBranch)==0 ) return 1;
-  sqlite3_free(p->zLong);
-  p->zLong = 0;
-  if( n<sizeof(p->a) ){
-    memcpy(p->a, zBranch, n+1);
-    return 1;
+  char *zLong = 0;
+  if( !p->bOom && strcmp(csWsBranch(p), zBranch)==0 ) return 1;
+  if( n>=sizeof(p->a) ){
+    zLong = sqlite3_mprintf("%s", zBranch);
   }
+  sqlite3_free(p->zLong);
+  p->zLong = zLong;
   p->a[0] = 0;
-  p->zLong = sqlite3_mprintf("%s", zBranch);
-  return p->zLong!=0;
+  p->bOom = n>=sizeof(p->a) && zLong==0;
+  if( n<sizeof(p->a) ) memcpy(p->a, zBranch, n+1);
+  return !p->bOom;
 }
 
 void chunkStoreFreeWsBranches(ChunkStore *cs){
@@ -355,6 +356,7 @@ void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch){
   int i = findBranchIdx(cs, zBranch);
   if( i<0 ){
     cs->bWsBasis = 0;
+    cs->wsBasisBranch.bOom = 0;
     return;
   }
   csNoteKnownWorkingSet(cs, zBranch, &cs->refs.aBranches[i].workingSetHash);
@@ -398,6 +400,8 @@ void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
 
 int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch){
   int i;
+  /* A basis we could not record must not read as unmoved. */
+  if( zBranch && !cs->bWsBasis && cs->wsBasisBranch.bOom ) return 1;
   if( !zBranch || !cs->bWsBasis || strcmp(csWsBranch(&cs->wsBasisBranch), zBranch)!=0 ){
     return 0;
   }
