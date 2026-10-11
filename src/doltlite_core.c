@@ -1104,11 +1104,13 @@ static int doltliteCompareAndAdvanceBranchImpl(
     const ProllyHash *pAdoptCat =
         pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash)
             ? pWorkingCatHash : pCatalogHash;
-    /* Adopt the catalog after the durable tip is on disk. Failure leaves HEAD
-    ** advanced with a recoverable working-set mismatch on reopen. */
-    rc = doltliteSwitchCatalog(db, pAdoptCat);
-    if( rc==SQLITE_OK ){
+    /* The tip and working set are durable, so a failed adopt is not a failed
+    ** advance: reporting it would make the caller restore the pre-op session
+    ** over the durable result. Reload from disk on next access instead. */
+    if( doltliteSwitchCatalog(db, pAdoptCat)==SQLITE_OK ){
       doltliteAdoptRollbackBaseline(db, pAdoptCat);
+    }else{
+      doltliteInvalidateSessionWorkingState(db);
     }
   }
   return rc;
