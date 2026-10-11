@@ -312,6 +312,7 @@ int applyMergedCatalogAndCommit(
   int commitSplit = 0;
   ProllyHash commitHash;
   ProllyHash cleanWorkingSet;
+  const ProllyHash *pCleanWorkingSet = 0;
   ProllyHash wsBasis;
   char *zMergeErr = 0;
   int graphLocked = 0;
@@ -328,9 +329,9 @@ int applyMergedCatalogAndCommit(
   if( hexBuf ) hexBuf[0] = '\0';
   zOpLabel = bPreferOurMaster ? "Revert" : "Cherry-pick";
   zBranch = doltliteGetSessionBranch(db);
-  memset(&cleanWorkingSet, 0, sizeof(cleanWorkingSet));
   if( !doltliteGetSessionRebaseFlags(db) ){
     doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
+    pCleanWorkingSet = &cleanWorkingSet;
   }
   memset(&wsBasis, 0, sizeof(wsBasis));
   if( cs ) chunkStorePeekWorkingSetBasis(cs, zBranch, &wsBasis);
@@ -529,7 +530,7 @@ int applyMergedCatalogAndCommit(
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteCompareAndAdvanceBranch(
-      db, ourHead, &cleanWorkingSet, &commitHash, &commitCatHash,
+      db, ourHead, pCleanWorkingSet, &commitHash, &commitCatHash,
       commitSplit ? &liveMergedCatHash : 0);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 

@@ -58,4 +58,33 @@ foreach materialized {0 1} {
   }
 }
 
+foreach rebase {linear interactive} {
+  reset_db
+  do_test empty-ws-peer.rebase-$rebase {
+    db eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY);
+      INSERT INTO t VALUES(1);
+      SELECT dolt_commit('-Am','init');
+      SELECT dolt_checkout('-b','f');
+      INSERT INTO t VALUES(2);
+      SELECT dolt_commit('-am','f1');
+      INSERT INTO t VALUES(3);
+      SELECT dolt_commit('-am','f2');
+      SELECT dolt_checkout('main');
+      INSERT INTO t VALUES(4);
+      SELECT dolt_commit('-am','m');
+      SELECT dolt_checkout('f');
+    }
+    if {$rebase eq "linear"} {
+      db eval {SELECT dolt_rebase('main')}
+    } else {
+      db eval {SELECT dolt_rebase('-i','main'); SELECT dolt_rebase('--continue')}
+    }
+    list [db one {SELECT active_branch()}] \
+         [db eval {SELECT id FROM t ORDER BY id}] \
+         [db one {SELECT count(*) FROM dolt_log WHERE message IN ('m','f1','f2')}] \
+         [db one {PRAGMA integrity_check}]
+  } {f {1 2 3 4} 3 ok}
+}
+
 finish_test

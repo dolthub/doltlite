@@ -555,6 +555,7 @@ static int checkoutBranchForRebase(
 
   if( pKnownOldCatHash ){
     memcpy(&m.oldCatHash, pKnownOldCatHash, sizeof(ProllyHash));
+    doltliteGetSessionWorkingSetBasis(db, &m.oldWorkingSet);
   }else{
     rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet);
     if( rc!=SQLITE_OK ){
