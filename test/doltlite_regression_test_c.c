@@ -1580,6 +1580,7 @@ static int gFailWriteOnce = 0;
 static int gFailSyncOnce = 0;
 static int gFailWriteNth = 0;
 static int gFailSyncNth = 0;
+static int gFailReadNth = 0;
 static int gFailAccessOnce = 0;
 static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
@@ -1616,6 +1617,10 @@ static int failClose(sqlite3_file *pFile){
 
 static int failRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite3_int64 iOfst){
   FailFile *p = (FailFile*)pFile;
+  if( p->isMainDb && gFailReadNth>0 && --gFailReadNth==0 ){
+    gFailHits++;
+    return SQLITE_IOERR_READ;
+  }
   return p->pReal->pMethods->xRead(p->pReal, zBuf, iAmt, iOfst);
 }
 
@@ -9769,6 +9774,143 @@ static void run_vc_late_io_failure(void){
   removeDbFiles(dbpath);
 }
 
+/* -a must not report success, or "nothing to commit", when a read fails
+** while loading HEAD. --amend would otherwise publish the old tree. */
+static void run_amend_all_read_failure_keeps_changes(void){
+  sqlite3 *db = 0;
+  sqlite3 *fresh = 0;
+  char dbpath[256];
+  char zMsg[128];
+  char zHeadU[64];
+  char zErr[256];
+  char zCheck[96];
+  const char *zGot;
+  const char *zSql;
+  int iSql, n, failed, sawFault;
+  static const char *azSql[2] = {
+    "SELECT dolt_commit('--amend','-am','amended')",
+    "SELECT dolt_commit('-am','plain')"
+  };
+  static const char *azLabel[2] = { "amend", "plain" };
+
+  printf("=== Amend -a Read Failure Keeps Working Changes Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_amend_all_read_failure_keeps_changes");
+  removeDbFiles(dbpath);
+  gFailReadNth = 0;
+  gFailHits = 0;
+  sawFault = 0;
+  check("register_fail_vfs_for_amend_read", registerFailVfs()==SQLITE_OK);
+
+  for(iSql=0; iSql<2; iSql++){
+    zSql = azSql[iSql];
+    for(n=1; n<160; n++){
+      removeDbFiles(dbpath);
+      gFailReadNth = 0;
+      gFailHits = 0;
+      db = 0;
+      if( open_fail_db(dbpath, &db)!=SQLITE_OK || !db ){
+        check("amend_read_open", 0);
+        goto amend_read_done;
+      }
+      if( execSql(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+        "WITH RECURSIVE c(x) AS ("
+        "  SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<80)"
+        "INSERT INTO t SELECT x, printf('v%05d', x) FROM c;"
+        "CREATE TABLE u(k TEXT PRIMARY KEY, n INT);"
+        "INSERT INTO u VALUES('a',1),('b',2);"
+        "SELECT dolt_commit('-Am','init');"
+        "UPDATE u SET n=10 WHERE k='a';")!=SQLITE_OK ){
+        check("amend_read_setup", 0);
+        sqlite3_close(db);
+        goto amend_read_done;
+      }
+      sqlite3_close(db);
+      db = 0;
+      if( open_fail_db(dbpath, &db)!=SQLITE_OK || !db ){
+        check("amend_read_reopen_setup", 0);
+        goto amend_read_done;
+      }
+      queryScalarText(db, "SELECT count(*) FROM t");
+      queryScalarText(db, "SELECT * FROM dolt_status");
+      queryScalarText(db, "SELECT n FROM u WHERE k='a'");
+      sqlite3_snprintf(sizeof(zMsg), zMsg, "%s",
+                       queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1"));
+      sqlite3_snprintf(sizeof(zHeadU), zHeadU, "%s",
+                       queryScalarText(db,
+                         "SELECT n FROM dolt_at_u('HEAD') WHERE k='a'"));
+
+      gFailHits = 0;
+      gFailReadNth = n;
+      zGot = queryScalarText(db, zSql);
+      sqlite3_snprintf(sizeof(zErr), zErr, "%s", zGot);
+      gFailReadNth = 0;
+      if( gFailHits==0 ){
+        sqlite3_close(db);
+        db = 0;
+        break;
+      }
+      sawFault = 1;
+      failed = strncmp(zErr, "ERROR:", 6)==0;
+      sqlite3_snprintf(sizeof(zCheck), zCheck,
+                       "amend_read_%s_%d_not_nothing", azLabel[iSql], n);
+      check(zCheck, !failed || strstr(zErr, "nothing to commit")==0);
+
+      if( !failed ){
+        zGot = queryScalarText(db, "SELECT n FROM dolt_at_u('HEAD') WHERE k='a'");
+        sqlite3_snprintf(sizeof(zCheck), zCheck,
+                         "amend_read_%s_%d_commits_row", azLabel[iSql], n);
+        check(zCheck, strcmp(zGot, "10")==0);
+        zGot = queryScalarText(db, "SELECT count(*) FROM dolt_status");
+        sqlite3_snprintf(sizeof(zCheck), zCheck,
+                         "amend_read_%s_%d_clean", azLabel[iSql], n);
+        check(zCheck, strcmp(zGot, "0")==0);
+      }
+      sqlite3_close(db);
+      db = 0;
+
+      fresh = 0;
+      if( open_db(dbpath, &fresh)!=SQLITE_OK || !fresh ){
+        check("amend_read_reopen", 0);
+        goto amend_read_done;
+      }
+      if( !failed ){
+        zGot = queryScalarText(fresh, "SELECT n FROM u WHERE k='a'");
+        sqlite3_snprintf(sizeof(zCheck), zCheck,
+                         "amend_read_%s_%d_reopen_row", azLabel[iSql], n);
+        check(zCheck, strcmp(zGot, "10")==0);
+        zGot = queryScalarText(fresh, "SELECT count(*) FROM dolt_status");
+        sqlite3_snprintf(sizeof(zCheck), zCheck,
+                         "amend_read_%s_%d_reopen_clean", azLabel[iSql], n);
+        check(zCheck, strcmp(zGot, "0")==0);
+      }else{
+        zGot = queryScalarText(fresh, "SELECT message FROM dolt_log LIMIT 1");
+        sqlite3_snprintf(sizeof(zCheck), zCheck,
+                         "amend_read_%s_%d_keeps_message", azLabel[iSql], n);
+        check(zCheck, strcmp(zGot, zMsg)==0);
+        zGot = queryScalarText(fresh,
+                               "SELECT n FROM dolt_at_u('HEAD') WHERE k='a'");
+        sqlite3_snprintf(sizeof(zCheck), zCheck,
+                         "amend_read_%s_%d_keeps_head", azLabel[iSql], n);
+        check(zCheck, strcmp(zGot, zHeadU)==0);
+        zGot = queryScalarText(fresh, "SELECT n FROM u WHERE k='a'");
+        sqlite3_snprintf(sizeof(zCheck), zCheck,
+                         "amend_read_%s_%d_keeps_working", azLabel[iSql], n);
+        check(zCheck, strcmp(zGot, "10")==0);
+      }
+      sqlite3_close(fresh);
+      fresh = 0;
+    }
+  }
+
+amend_read_done:
+  gFailReadNth = 0;
+  if( db ) sqlite3_close(db);
+  if( fresh ) sqlite3_close(fresh);
+  check("amend_read_fault_injected", sawFault);
+  removeDbFiles(dbpath);
+}
+
 static void run_amend_persist_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -16187,6 +16329,7 @@ static const RegressionCase aCases[] = {
   { "commit_publication", "Commit Publication Test", run_commit_publication },
   { "vc_interrupt", "VC Interrupt Test", run_vc_interrupt },
   { "vc_late_io_failure", "VC Late IO Failure Test", run_vc_late_io_failure },
+  { "amend_all_read_failure_keeps_changes", "Amend -a Read Failure Keeps Working Changes Test", run_amend_all_read_failure_keeps_changes },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
   { "delete_missing_branch_preserves_durable_state", "Delete Missing Branch Preserves Durable State Test", run_delete_missing_branch_preserves_durable_state },
