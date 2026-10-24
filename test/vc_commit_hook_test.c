@@ -143,6 +143,20 @@ int main(void){
   }
   sqlite3_commit_hook(db, onCommit, 0);
   expectHooks(db, "add retry after rejected commit", "SELECT dolt_add('t')", 1);
+  expectHooks(db, "commit staged rows", "SELECT dolt_commit('-m','staged')", 0);
+  expectHooks(db, "empty commit inside BEGIN",
+      "BEGIN; SELECT dolt_commit('--allow-empty','-m','empty');", 0);
+
+  sqlite3_commit_hook(db, rejectCommit, 0);
+  nCommit = nRollback = 0;
+  check("commit veto inside BEGIN",
+      (exec(db, "BEGIN; INSERT INTO t VALUES(70,'veto');"
+                "SELECT dolt_commit('-am','vetoed');")&255)==SQLITE_CONSTRAINT);
+  check("commit veto inside BEGIN hooks", nCommit==1 && nRollback==1);
+  check("commit veto inside BEGIN discards rows", scalarInt(db,
+      "SELECT count(*) FROM t WHERE a=70")==0);
+  check("commit veto inside BEGIN keeps HEAD", scalarInt(db,
+      "SELECT count(*) FROM dolt_log WHERE message='vetoed'")==0);
 
   sqlite3_commit_hook(db, 0, 0);
   sqlite3_rollback_hook(db, 0, 0);

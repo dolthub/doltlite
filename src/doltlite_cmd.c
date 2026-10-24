@@ -5,6 +5,7 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_internal.h"
+#include "prolly_btree_int.h"
 
 #include <string.h>
 
@@ -90,9 +91,211 @@ void doltliteVcCommandInstalled(sqlite3 *db){
   }
 }
 
+typedef struct AtomicJoinedCommand AtomicJoinedCommand;
+struct AtomicJoinedCommand {
+  DoltliteTxnState state;
+  ProllyHash committedCatalogHash;
+  ProllyHash committedCatalogShape;
+  DoltVcState committedVc;
+  u32 committedAMeta[16];
+  u8 bUserSavepoint;
+  u8 bReleaseSavepoints;
+  u8 bSqlWrite;
+  u8 bSealOnError;
+};
+
+static int cmdBeginAtomicJoined(Btree *p){
+  AtomicJoinedCommand *s;
+  sqlite3 *db = p->db;
+  ChunkStore *cs = &p->pBt->store;
+  ProllyHash tip;
+  int found = 0;
+  int rc;
+  if( !cs->isMemory && !cs->isBuffer ){
+    rc = chunkStoreReadDiskBranchTip(cs, doltliteGetSessionBranch(db),
+                                    &tip, &found);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !found && cs->refs.nBranches>0 ) return SQLITE_DONE;
+  }
+  rc = sqlite3BtreeBeginTrans(p, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  s = sqlite3_malloc64(sizeof(*s));
+  if( !s ) return SQLITE_NOMEM;
+  memset(s, 0, sizeof(*s));
+  s->bUserSavepoint = db->pSavepoint!=0;
+  s->bSqlWrite = p->inTrans==TRANS_WRITE;
+  rc = doltliteSaveTxnState(db, &s->state);
+  if( rc==SQLITE_OK ){
+    if( !s->bSqlWrite ){
+      btreeStoreCommittedFromCurrent(p, &s->state.sessionCatalogHash);
+    }
+    s->committedCatalogHash = p->committedCatalogHash;
+    s->committedCatalogShape = p->committedCatalogShape;
+    s->committedVc = p->committedVc;
+    memcpy(s->committedAMeta, p->committedAMeta, sizeof(s->committedAMeta));
+    rc = sqlite3_exec(db, "SAVEPOINT doltlite_command", 0, 0, 0);
+  }
+  if( rc!=SQLITE_OK ){
+    doltliteTxnStateClear(&s->state);
+    sqlite3_free(s);
+    return rc;
+  }
+  p->pAtomicCommand = s;
+  p->bAtomicCommandSeal = 0;
+  p->bCommandTxn = 1;
+  p->bCommandWritesRows = 0;
+  p->bCommandKeep = 0;
+  p->nCommandBranchInstall = p->nBranchInstall;
+  p->pBt->store.bDeferPublish = 1;
+  p->pBt->store.bPublishDeferred = 0;
+  return SQLITE_OK;
+}
+
+int doltliteDeferJoinedCommandSeal(sqlite3 *db){
+  Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
+  if( !p || !p->pAtomicCommand ) return 0;
+  p->bAtomicCommandSeal = 1;
+  return 1;
+}
+
+int doltlitePrepareJoinedCommit(sqlite3 *db){
+  Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
+  int rc = SQLITE_OK;
+  if( !p || !p->pAtomicCommand ) return SQLITE_DONE;
+  if( p->inTrans==TRANS_READ ){
+    rc = sqlite3BtreeCommit(p);
+    if( rc==SQLITE_OK ) rc = doltliteReloadSessionWorkingState(db);
+    if( rc==SQLITE_OK ) rc = sqlite3BtreeBeginTrans(p, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
+    p->bAtomicCommandSeal = 1;
+    ((AtomicJoinedCommand*)p->pAtomicCommand)->bSealOnError = 1;
+  }
+  return rc;
+}
+
+int doltliteCommandHasUserSavepoint(sqlite3 *db){
+  Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
+  if( p && p->pAtomicCommand ){
+    return ((AtomicJoinedCommand*)p->pAtomicCommand)->bUserSavepoint;
+  }
+  return db->pSavepoint!=0;
+}
+
+int doltliteDeferJoinedSavepointRelease(sqlite3 *db){
+  Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
+  if( !p || !p->pAtomicCommand ) return 0;
+  ((AtomicJoinedCommand*)p->pAtomicCommand)->bReleaseSavepoints = 1;
+  return 1;
+}
+
+static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
+  AtomicJoinedCommand *s = p->pAtomicCommand;
+  BtShared *pBt = p->pBt;
+  ChunkStore *cs = &pBt->store;
+  sqlite3 *db = p->db;
+  sqlite3_stmt *commit = 0;
+  void *preparedCatalog = 0;
+  ProllyHash catalog;
+  int installed = 0;
+  int vetoed = 0;
+  int nFileWrite = 0;
+  int hasDoltliteWrite = 0;
+  int i;
+  int rc = SQLITE_OK;
+  int restoreRc;
+  int sealError = s && s->bSealOnError && ctx->isError==SQLITE_ERROR;
+  if( !s ) return SQLITE_OK;
+  if( (!ctx->isError || sealError) && p->bAtomicCommandSeal ){
+    rc = sqlite3VtabSync(db, ctx->pVdbe);
+    if( rc==SQLITE_OK && sqlite3VdbeCheckFkDeferred(ctx->pVdbe)!=SQLITE_OK ){
+      rc = ctx->pVdbe->rc;
+      sqlite3_result_error(ctx, ctx->pVdbe->zErrMsg, -1);
+      sqlite3_result_error_code(ctx, rc);
+    }
+    if( rc==SQLITE_OK && db->nVdbeWrite>0 ) rc = SQLITE_BUSY;
+    for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
+      Btree *pWrite = db->aDb[i].pBt;
+      if( i!=1 && pWrite && sqlite3BtreeTxnState(pWrite)==SQLITE_TXN_WRITE
+       && !sqlite3PagerIsMemdb(sqlite3BtreePager(pWrite))
+       && sqlite3BtreeGetFilename(pWrite)[0]
+       && sqlite3BtreeHasPendingChanges(pWrite) ){
+        nFileWrite++;
+        hasDoltliteWrite |= sqlite3BtreeIsDoltliteFormat(pWrite);
+      }
+    }
+    if( nFileWrite>1 && hasDoltliteWrite ){
+      sqlite3_result_error(ctx,
+          "atomic commit across multiple file-backed databases is not supported", -1);
+      rc = SQLITE_ERROR;
+    }
+    if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, &catalog);
+    if( rc==SQLITE_OK ) rc = doltliteSaveWorkingSetWithHash(db, &catalog);
+    if( rc==SQLITE_OK ) rc = chunkStoreSerializeRefs(cs);
+    if( rc==SQLITE_OK ){
+      rc = doltliteBtreePrepareJoinedCatalog(p, &catalog, &preparedCatalog);
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_prepare_v2(db, "COMMIT", -1, &commit, 0);
+    }
+    if( rc==SQLITE_OK && (s->bSqlWrite || p->bCommandWritesRows)
+     && db->xCommitCallback
+     && db->xCommitCallback(db->pCommitArg) ){
+      rc = SQLITE_CONSTRAINT_COMMITHOOK;
+      vetoed = 1;
+    }
+    if( rc==SQLITE_OK ){
+      cs->bDeferPublish = 0;
+      rc = chunkStoreCommitWithBusyHandler(cs, prollyInvokeBusyHandler, pBt);
+      cs->bDeferPublish = 1;
+      installed = rc==SQLITE_OK;
+    }
+    if( installed ){
+      /* A published root cannot become a failed command during SQL cleanup. */
+      (void)sqlite3_step(commit);
+      sqlite3CloseSavepoints(db);
+      db->autoCommit = 1;
+      doltliteVcCommandInstalled(db);
+    }
+  }
+  sqlite3_finalize(commit);
+  if( !installed && ((ctx->isError && !p->bCommandKeep) || rc!=SQLITE_OK) ){
+    restoreRc = sqlite3_exec(db, "ROLLBACK TO doltlite_command", 0, 0, 0);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+    restoreRc = doltliteRestoreTxnState(db, &s->state);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+    p->committedCatalogHash = s->committedCatalogHash;
+    p->committedCatalogShape = s->committedCatalogShape;
+    p->committedVc = s->committedVc;
+    memcpy(p->committedAMeta, s->committedAMeta, sizeof(p->committedAMeta));
+  }
+  if( !installed ){
+    restoreRc = sqlite3_exec(db, "RELEASE doltlite_command", 0, 0, 0);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+  }
+  doltliteNestedTxnDrop(db);
+  p->bCommandTxn = 0;
+  p->pAtomicCommand = 0;
+  cs->bDeferPublish = 0;
+  cs->bPublishDeferred = 0;
+  if( s->bReleaseSavepoints && !ctx->isError && rc==SQLITE_OK ){
+    rc = doltliteVcSealActiveSavepoints(db);
+  }
+  if( vetoed ) (void)sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
+  doltliteTxnStateClear(&s->state);
+  sqlite3_free(s);
+  doltliteBtreeFinishJoinedCommand(p, installed ? &catalog : 0, preparedCatalog);
+  if( sealError && rc!=SQLITE_OK ){
+    sqlite3_result_error(ctx, sqlite3ErrStr(rc), -1);
+    sqlite3_result_error_code(ctx, rc);
+  }
+  return rc;
+}
+
 #define DOLTLITE_CMD_UNSCOPED 0
 #define DOLTLITE_CMD_SCOPED   1
 #define DOLTLITE_CMD_NOWAIT   2
+#define DOLTLITE_CMD_ATOMIC   3
 
 /* A missing branch, a command that needs no transaction, and a read-only
 ** database are reported by the command itself. A lock busy is not. */
@@ -121,7 +324,7 @@ static int cmdScopeBegin(
     return SQLITE_OK;
   }
   if( db->autoCommit && !db->pSavepoint ){
-    rc = doltliteBtreeBeginCommandTxn(pMain, eScope==DOLTLITE_CMD_SCOPED);
+    rc = doltliteBtreeBeginCommandTxn(pMain, eScope!=DOLTLITE_CMD_NOWAIT);
     pScope->bScope = rc==SQLITE_OK;
     /* A no-wait command finds out whether it changes anything without the
     ** lock; one that does starts over in a transaction that waits. */
@@ -146,6 +349,16 @@ static int cmdScopeBegin(
   }
   pScope->bJoined = rc==SQLITE_OK;
   pScope->bInBegin = pScope->bJoined && !doltliteSavepointIsTopLevelTxn(db);
+  if( pScope->bInBegin && eScope==DOLTLITE_CMD_ATOMIC ){
+    rc = cmdBeginAtomicJoined(pMain);
+    pScope->bAtomic = rc==SQLITE_OK;
+    if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
+      doltliteBtreeEndJoinedCommand(pMain);
+      cs->nOuterLockHold = 0;
+      chunkStoreUnlock(cs);
+      pScope->bJoined = 0;
+    }
+  }
   if( rc==SQLITE_DONE || (rc&0xff)==SQLITE_READONLY ) return SQLITE_OK;
   return rc;
 }
@@ -161,6 +374,13 @@ static void cmdScopeEnd(sqlite3_context *ctx, DoltliteCmdScope *pScope){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   Btree *pMain = db->nDb>0 ? db->aDb[0].pBt : 0;
   ChunkStore *cs = doltliteGetChunkStore(db);
+  if( pScope->bAtomic ){
+    int rc = cmdEndAtomicJoined(pMain, ctx);
+    if( rc!=SQLITE_OK && !ctx->isError ){
+      sqlite3_result_error(ctx, sqlite3ErrStr(rc), -1);
+      sqlite3_result_error_code(ctx, rc);
+    }
+  }
   if( pScope->bScope ){
     int rc = doltliteBtreeEndCommandTxn(pMain, ctx->isError!=0,
                                         ctx->pVdbe->vcInstalled);
@@ -282,6 +502,22 @@ static void doltliteNoWaitCommandFunc(
   doltliteRunCommand(ctx, argc, argv, DOLTLITE_CMD_NOWAIT);
 }
 
+static void doltliteAtomicCommandFunc(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv
+){
+  int eScope = DOLTLITE_CMD_ATOMIC;
+  if( sqlite3_context_db_handle(ctx)->nVdbeWrite>0 ){
+    eScope = DOLTLITE_CMD_SCOPED;
+  }
+  if( argc==1 && sqlite3_value_type(argv[0])==SQLITE_TEXT ){
+    const char *z = (const char*)sqlite3_value_text(argv[0]);
+    if( z && strcmp(z, "--abort")==0 ) eScope = DOLTLITE_CMD_SCOPED;
+  }
+  doltliteRunCommand(ctx, argc, argv, eScope);
+}
+
 static void doltliteUnscopedCommandFunc(
   sqlite3_context *ctx,
   int argc,
@@ -314,6 +550,11 @@ static int doltliteCommandScope(const char *zName){
   if( doltliteNameIn(zName, azNoWait, ArraySize(azNoWait)) ){
     return DOLTLITE_CMD_NOWAIT;
   }
+  if( sqlite3_stricmp(zName, "dolt_commit")==0
+   || sqlite3_stricmp(zName, "dolt_checkout")==0
+   || sqlite3_stricmp(zName, "dolt_merge")==0 ){
+    return DOLTLITE_CMD_ATOMIC;
+  }
   return DOLTLITE_CMD_SCOPED;
 }
 
@@ -328,6 +569,7 @@ int doltliteCreateCommandFunc(
       DOLTLITE_COMMAND_FUNC_FLAGS, (void*)xFunc,
       eScope==DOLTLITE_CMD_UNSCOPED ? doltliteUnscopedCommandFunc
       : eScope==DOLTLITE_CMD_NOWAIT ? doltliteNoWaitCommandFunc
+      : eScope==DOLTLITE_CMD_ATOMIC ? doltliteAtomicCommandFunc
       : doltliteCommandFunc, 0, 0);
 }
 
@@ -1082,6 +1324,7 @@ static int cmdFinishPlainAfterReport(
     }
   }
   doltliteTxnStateClear(pSaved);
+  doltliteCommandKeepEffects(db);
   return SQLITE_OK;
 }
 

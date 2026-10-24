@@ -387,7 +387,7 @@ static int checkoutRestoreOnFailure(sqlite3 *db, CheckoutMutationCtx *p, int rc)
 
 static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
-  int bSavepoint = db->pSavepoint!=0;
+  int bSavepoint = doltliteCommandHasUserSavepoint(db);
   int rc;
 
   if( p->oldBranchMissing
@@ -480,7 +480,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
 
 static int checkoutApplyRefs(sqlite3 *db, CheckoutMutationCtx *p){
   int rc = doltliteMutateRefs(db, checkoutMutateRefs, p);
-  if( rc==SQLITE_OK && (!db->pSavepoint || p->bPersistUnderSavepoint) ){
+  if( rc==SQLITE_OK
+   && (!doltliteCommandHasUserSavepoint(db) || p->bPersistUnderSavepoint) ){
     doltliteAdoptRollbackBaseline(db, &p->targetCatHash);
   }
   return rc;

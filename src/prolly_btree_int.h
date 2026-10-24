@@ -331,6 +331,8 @@ struct Btree {
   u8 bCommandKeep;
   /* A command inside the caller's SQL transaction holds the graph lock. */
   u8 bCommandJoined;
+  void *pAtomicCommand;
+  u8 bAtomicCommandSeal;
   u32 nBranchInstall;
   u32 nCommandBranchInstall;
   /* The branch a command started on, kept when it first switches so a

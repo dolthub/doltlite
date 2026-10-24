@@ -12,6 +12,7 @@ src/doltlite_core.c:doltliteAdvanceBranchWithState
 src/doltlite_core.c:doltliteSeedStoreIfNeeded
 
 # Working-set persistence at commit, rollback, and hard reset.
+src/doltlite_cmd.c:cmdEndAtomicJoined
 src/prolly_btree_state.c:btreeStoreWorkingSetBlob
 src/prolly_btree_state.c:doltlitePersistWorkingSetWithHash
 src/prolly_btree_txn.c:commitPhaseTwoStageCatalog

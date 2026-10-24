@@ -1383,6 +1383,62 @@ void doltliteBtreeEndJoinedCommand(Btree *p){
   if( p ) p->bCommandJoined = 0;
 }
 
+typedef struct JoinedCatalog JoinedCatalog;
+struct JoinedCatalog {
+  Btree reload;
+  u32 nativeSchemaCookie;
+};
+
+int doltliteBtreePrepareJoinedCatalog(
+  Btree *p, const ProllyHash *pCatalog, void **ppPrepared
+){
+  JoinedCatalog *s;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+  *ppPrepared = 0;
+  if( !p->bSchemaChangedTxn ) return SQLITE_OK;
+  s = sqlite3_malloc64(sizeof(*s));
+  if( !s ) return SQLITE_NOMEM;
+  memset(s, 0, sizeof(*s));
+  rc = chunkStoreGet(&p->pBt->store, pCatalog, &data, &nData);
+  if( rc==SQLITE_OK ){
+    rc = commitPhaseTwoPrepSchemaReload(
+        p, p->pBt, data, nData, &s->reload, &s->nativeSchemaCookie);
+  }
+  sqlite3_free(data);
+  if( rc!=SQLITE_OK ){
+    catFree(&s->reload.cat);
+    sqlite3_free(s);
+  }else{
+    *ppPrepared = s;
+  }
+  return rc;
+}
+
+void doltliteBtreeFinishJoinedCommand(
+  Btree *p, const ProllyHash *pCatalog, void *pPrepared
+){
+  JoinedCatalog *s = pPrepared;
+  if( pCatalog ){
+    btreeStoreCommittedFromCurrent(p, pCatalog);
+    btreeMarkWorkingStateChanged(p, 1);
+    if( s ){
+      int haveReload = 1;
+      commitPhaseTwoAdoptReloadedCatalog(
+          p, &s->reload, &haveReload, s->nativeSchemaCookie);
+    }
+    csDropTxnSequences(&p->pBt->store);
+    commitPhaseTwoEndWriteTxn(p);
+    commitPhaseTwoReleaseGraph(p->pBt);
+  }
+  if( s ){
+    catFree(&s->reload.cat);
+    sqlite3_free(s);
+  }
+  commandForgetBranch(p);
+}
+
 static int commandPublishStaged(BtShared *pBt){
   int rc = chunkStoreCommitWithBusyHandler(
       &pBt->store, prollyInvokeBusyHandler, pBt);

@@ -33,7 +33,7 @@ proc vc_txn_error {method filename args} {
   return SQLITE_OK
 }
 testvfs vctxnio
-vctxnio filter {xWrite xSync}
+vctxnio filter {xRead xWrite xSync}
 vctxnio script vc_txn_error
 
 set state {
@@ -47,14 +47,18 @@ set state {
   PRAGMA integrity_check;
 }
 set failed 0
-foreach op {merge reset cherry-pick revert} {
+foreach op {checkout commit merge reset cherry-pick revert} {
+  set target main
   switch $op {
+    checkout {set sql {SELECT dolt_checkout('feat')}; set target feat}
+    commit {set sql {SELECT dolt_commit('-am','attempt')}}
     merge {set sql {SELECT dolt_merge('feat')}}
     reset {set sql {SELECT dolt_reset('--hard','HEAD~1')}}
     cherry-pick {set sql {SELECT dolt_cherry_pick('feat')}}
     revert {set sql {SELECT dolt_revert('HEAD')}}
   }
   set dirtyCases {0 1}
+  if {$op eq "commit"} {set dirtyCases {1}}
   if {$op eq "cherry-pick"} {set dirtyCases {0}}
   foreach boundary {begin nested} {
     foreach dirty $dirtyCases {
@@ -70,10 +74,12 @@ foreach op {merge reset cherry-pick revert} {
       db eval $sql
       if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
       db close
-      sqlite3 db test.db
+      sqlite3 db test.db/$target
       set success [db eval $state]
       db close
-      foreach kind {xWrite xSync} {
+      set kinds {xWrite xSync}
+      if {$op in {checkout commit merge}} {set kinds [linsert $kinds 0 xRead]}
+      foreach kind $kinds {
         for {set fault 1} {$fault<=100} {incr fault} {
           forcedelete test.db
           file copy -force vc-txn-base.db test.db
@@ -86,7 +92,8 @@ foreach op {merge reset cherry-pick revert} {
           set result [catchsql $sql]
           set armed 0
           set prefix vc-txn-$op-$boundary-$dirty-$kind-$fault
-          sqlite3 observer test.db -readonly 1
+          set observed [expr {[lindex $result 0] ? "main" : $target}]
+          sqlite3 observer test.db/$observed -readonly 1
           if {[lindex $result 0]} {
             incr failed
             do_test $prefix.txn {sqlite3_get_autocommit db} 0
@@ -96,15 +103,22 @@ foreach op {merge reset cherry-pick revert} {
             do_test $prefix.session {catchsql $state} [list 0 $sessionBefore]
             do_test $prefix.disk {observer eval $state} $before
             observer close
+            if {$boundary eq "nested"} {
+              do_test $prefix.savepoint {catchsql {ROLLBACK TO before_vc}} {0 {}}
+            } else {
+              do_test $prefix.rollback {catchsql ROLLBACK} {0 {}}
+              do_test $prefix.rolled-back {db eval $state} $before
+              do_test $prefix.restart {catchsql $start} {0 {}}
+            }
             do_test $prefix.retry {lindex [catchsql $sql] 0} 0
-            sqlite3 observer test.db -readonly 1
+            sqlite3 observer test.db/$target -readonly 1
           }
           do_test $prefix.live-success {catchsql $state} [list 0 $success]
           do_test $prefix.durable-success {observer eval $state} $success
           observer close
           if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
           db close
-          sqlite3 db test.db
+          sqlite3 db test.db/$target
           do_test $prefix.reopen {db eval $state} $success
           db close
           if {$hits==0} break
@@ -117,6 +131,55 @@ foreach op {merge reset cherry-pick revert} {
   }
 }
 do_test vc-txn-errors-exercised {expr {$failed>0}} 1
+
+set semantic 0
+set ioerrors 0
+foreach kind {xRead xWrite xSync} {
+  for {set fault 1} {$fault<=100} {incr fault} {
+    forcedelete test.db
+    file copy -force vc-txn-base.db test.db
+    sqlite3 db test.db -vfs vctxnio
+    db eval {
+      BEGIN;
+      INSERT INTO local VALUES(99);
+      SAVEPOINT caller;
+    }
+    set calls 0
+    set hits 0
+    set armed 1
+    set result [catchsql {SELECT dolt_commit('-m','unstaged')}]
+    set code [expr {[db errorcode]&255}]
+    set armed 0
+    set prefix vc-txn-unstaged-$kind-$fault
+    do_test $prefix.error {lindex $result 0} 1
+    do_test $prefix.code {expr {$code in {1 10}}} 1
+    sqlite3 observer test.db -readonly 1
+    set expected 1
+    if {$code==10} {
+      incr ioerrors
+      set expected 0
+      do_test $prefix.txn {sqlite3_get_autocommit db} 0
+      do_test $prefix.savepoint {catchsql {ROLLBACK TO caller}} {0 {}}
+    } else {
+      incr semantic
+      do_test $prefix.message {
+        string match {nothing to commit*} [lindex $result 1]
+      } 1
+      do_test $prefix.sealed {lindex [catchsql {ROLLBACK TO caller}] 0} 1
+    }
+    do_test $prefix.disk {observer eval {SELECT count(*) FROM local}} $expected
+    do_test $prefix.staging {
+      db eval {SELECT count(*) FROM dolt_status WHERE staged=1}
+    } 0
+    observer close
+    if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+    do_test $prefix.rollback {db eval {SELECT count(*) FROM local}} $expected
+    db close
+    if {$hits==0} break
+  }
+  do_test vc-txn-unstaged-$kind-exhausted {expr {$fault<=100}} 1
+}
+do_test vc-txn-unstaged-outcomes {expr {$semantic>0 && $ioerrors>0}} 1
 vctxnio delete
 forcedelete vc-txn-base.db
 sqlite3 db test.db

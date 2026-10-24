@@ -522,6 +522,7 @@ struct RestorePeer {
   int readRc;
   int nPeer;
   int refsMoved;
+  int committedRefsMoved;
 };
 
 static void refreshPeerDuringInstall(void *pArg){
@@ -627,9 +628,12 @@ static void test_failed_merge_restore_after_peer_refresh(void){
 static void moveRefsDuringExplicitMerge(void *pArg){
   RestorePeer *p = (RestorePeer*)pArg;
   ChunkStore *cs = doltliteGetChunkStore(p->db);
-  ProllyHash before = cs->refs.committedRefsHash;
+  ProllyHash before = cs->refs.refsHash;
+  ProllyHash committed = cs->refs.committedRefsHash;
   p->peerRc = exec(p->db, "SELECT dolt_tag('during')");
-  p->refsMoved = prollyHashCompare(&before, &cs->refs.committedRefsHash)!=0;
+  p->refsMoved = prollyHashCompare(&before, &cs->refs.refsHash)!=0;
+  p->committedRefsMoved =
+      prollyHashCompare(&committed, &cs->refs.committedRefsHash)!=0;
   doltliteTestFailNextHeadConfirm();
 }
 
@@ -667,10 +671,13 @@ static void test_restore_moved_refs_keeps_explicit_work(void){
     doltliteTestSetMergeInstallHook(0, 0);
     doltliteTestClearFaults();
     check("restore explicit: refs moved", probe.peerRc==SQLITE_OK && probe.refsMoved);
+    check("restore explicit: refs stayed pending", !probe.committedRefsMoved);
     check("restore explicit: busy keeps transaction", rc==SQLITE_BUSY
           && !sqlite3_get_autocommit(db));
     check("restore explicit: local work kept", queryInt(db,
         "SELECT count(*) FROM u WHERE id=99", &n)==SQLITE_OK && n==1);
+    check("restore explicit: nested tag discarded", queryInt(db,
+        "SELECT count(*) FROM dolt_tags WHERE tag_name='during'", &n)==SQLITE_OK && n==0);
     check("restore explicit: next write", exec(db, "INSERT INTO u VALUES(100)")==SQLITE_OK);
     check("restore explicit: finish", exec(db, commit ? "COMMIT" : "ROLLBACK")==SQLITE_OK);
     sqlite3_close(db);
@@ -678,6 +685,8 @@ static void test_restore_moved_refs_keeps_explicit_work(void){
     check("restore explicit: reopen", sqlite3_open(zPath, &db)==SQLITE_OK);
     check("restore explicit: local rows durable", queryInt(db,
         "SELECT count(*) FROM u", &n)==SQLITE_OK && n==(commit ? 2 : 0));
+    check("restore explicit: nested tag not durable", queryInt(db,
+        "SELECT count(*) FROM dolt_tags WHERE tag_name='during'", &n)==SQLITE_OK && n==0);
     zRows = queryText(db, "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)");
     check("restore explicit: merge not applied", zRows && strcmp(zRows, "1,3")==0);
     sqlite3_free(zRows);

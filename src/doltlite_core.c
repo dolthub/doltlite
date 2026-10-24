@@ -1415,7 +1415,7 @@ DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db){
   if( db->autoCommit || doltliteSavepointIsTopLevelTxn(db) ){
     return DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE;
   }
-  if( db->pSavepoint ){
+  if( doltliteCommandHasUserSavepoint(db) ){
     return DOLTLITE_VC_TXN_NESTED_SAVEPOINT;
   }
   return DOLTLITE_VC_TXN_PLAIN;
@@ -1427,6 +1427,7 @@ int doltliteVcSealActiveSavepoints(sqlite3 *db){
     failNextVcSeal = 0;
     return SQLITE_ERROR;
   }
+  if( doltliteDeferJoinedSavepointRelease(db) ) return SQLITE_OK;
   while( rc==SQLITE_OK && db->pSavepoint ){
     char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
     if( !zSql ) return SQLITE_NOMEM;
@@ -1443,6 +1444,7 @@ int doltliteVcSealEnclosingTxn(sqlite3 *db){
     failNextVcSeal = 0;
     return SQLITE_ERROR;
   }
+  if( doltliteDeferJoinedCommandSeal(db) ) return SQLITE_OK;
   if( db->autoCommit && !db->pSavepoint && doltliteInCommandTxn(db) ){
     return SQLITE_OK;
   }
@@ -1498,6 +1500,7 @@ void doltliteVcResultErrorCode(
 
 int doltliteVcSealBranchStyleTxn(sqlite3 *db){
   int rc;
+  if( doltliteDeferJoinedCommandSeal(db) ) return SQLITE_OK;
   if( db->autoCommit ) return SQLITE_OK;
   if( db->pSavepoint ){
     rc = doltliteVcSealActiveSavepoints(db);
