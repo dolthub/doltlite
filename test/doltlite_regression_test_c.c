@@ -2455,8 +2455,74 @@ static void rollbackPersistFaultCase(int iFault, const char *zLabel){
 
 static void run_rollback_persist_failure_ends_txn(void){
   printf("=== Rollback Persist Failure Ends Write Txn Test ===\n\n");
-  /* Only serialize failure is reachable: ordinary rollback already matches disk. */
-  rollbackPersistFaultCase(957, "rollback_serialize_fault");
+  rollbackPersistFaultCase(957, "rollback_working_set_fault");
+}
+
+static void run_failed_statement_catalog_work(void){
+  static const char *const azSql[] = {
+    "INSERT INTO t VALUES(1,20)",
+    "INSERT INTO t VALUES(2,20),(1,30)",
+    "UPDATE t SET v=NULL WHERE id=1"
+  };
+  sqlite3 *db = 0;
+  char dbpath[256];
+  int file, txn, op, i;
+
+  printf("=== Failed Statement Catalog Work Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_failed_statement_catalog_work");
+  for(file=0; file<2; file++){
+    u8 *pCatalog = 0;
+    int nCatalog = 0;
+    removeDbFiles(dbpath);
+    check("failed_catalog_open",
+        sqlite3_open(file ? dbpath : ":memory:", &db)==SQLITE_OK);
+    check("failed_catalog_setup", execSql(db,
+        "BEGIN; CREATE TABLE t(id INTEGER PRIMARY KEY,v NOT NULL);"
+        "INSERT INTO t VALUES(1,10)")==SQLITE_OK);
+    for(i=0; i<1024; i++){
+      char zSql[128];
+      snprintf(zSql, sizeof(zSql),
+          "CREATE TABLE padding%04d(id INTEGER PRIMARY KEY,v)", i);
+      check("failed_catalog_padding", execSql(db, zSql)==SQLITE_OK);
+    }
+    check("failed_catalog_commit", execSql(db, "COMMIT")==SQLITE_OK);
+    check("failed_catalog_snapshot", doltliteFlushAndSerializeCatalog(
+        db, &pCatalog, &nCatalog)==SQLITE_OK);
+    sqlite3_free(pCatalog);
+    for(txn=0; txn<2; txn++) for(op=0; op<3; op++){
+      sqlite3_stmt *pStmt = 0;
+      sqlite3_int64 nCurrent, nMax;
+      if( txn ){
+        check("failed_catalog_begin", execSql(db, "BEGIN")==SQLITE_OK);
+      }
+      check("failed_catalog_prepare",
+          sqlite3_prepare_v2(db, azSql[op], -1, &pStmt, 0)==SQLITE_OK);
+      sqlite3_status64(SQLITE_STATUS_MALLOC_SIZE, &nCurrent, &nMax, 1);
+      check("failed_catalog_constraint", sqlite3_step(pStmt)==SQLITE_CONSTRAINT);
+      sqlite3_status64(SQLITE_STATUS_MALLOC_SIZE, &nCurrent, &nMax, 0);
+      check("failed_catalog_no_catalog_allocation", nMax<nCatalog);
+      check("failed_catalog_finalize", sqlite3_finalize(pStmt)==SQLITE_CONSTRAINT);
+      check("failed_catalog_keeps_rows", strcmp(queryScalarText(db,
+          "SELECT group_concat(id||':'||v) FROM t"), "1:10")==0);
+      if( txn ){
+        check("failed_catalog_transaction_open", !sqlite3_get_autocommit(db));
+        check("failed_catalog_rollback", execSql(db, "ROLLBACK")==SQLITE_OK);
+      }
+      check("failed_catalog_autocommit", sqlite3_get_autocommit(db));
+    }
+    check("failed_catalog_retry", execSql(db,
+        "INSERT INTO t VALUES(2,20)")==SQLITE_OK);
+    check("failed_catalog_close", sqlite3_close(db)==SQLITE_OK);
+    if( file ){
+      check("failed_catalog_reopen", sqlite3_open(dbpath, &db)==SQLITE_OK);
+      check("failed_catalog_durable_rows", strcmp(queryScalarText(db,
+          "SELECT group_concat(id||':'||v) FROM t"), "1:10,2:20")==0);
+      check("failed_catalog_integrity", strcmp(queryScalarText(db,
+          "PRAGMA integrity_check"), "ok")==0);
+      check("failed_catalog_reclose", sqlite3_close(db)==SQLITE_OK);
+    }
+    removeDbFiles(dbpath);
+  }
 }
 
 static void run_session_string_setter_oom(void){
@@ -19238,6 +19304,7 @@ static const RegressionCase aCases[] = {
   { "clustered_pk_blob_open", "Clustered PK Blob Open Test", run_clustered_pk_blob_open },
   { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
+  { "failed_statement_catalog_work", "Failed Statement Catalog Work Test", run_failed_statement_catalog_work },
   { "blob_restore_mutmap_keeps_scan", "Blob Restore MutMap Keeps Scan Test", run_blob_restore_mutmap_keeps_scan },
   { "scan_update_current_row", "Scan Update Current Row Test", run_scan_update_current_row },
   { "rollback_to_txn_savepoint_keeps_readers", "Rollback To Txn Savepoint Keeps Readers Test", run_rollback_to_txn_savepoint_keeps_readers },

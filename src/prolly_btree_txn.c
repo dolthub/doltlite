@@ -1862,23 +1862,26 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
      && !pBt->store.bRefsStale ){
       u8 *catData = 0;
       int nCatData = 0;
-      ProllyHash catHash;
+      ProllyHash catHash = p->committedCatalogHash;
       ProllyHash wsHashWouldBe;
       ProllyHash wsHashOnDisk;
       u8 wsBuf[WS_TOTAL_SIZE];
       int bMatchesDisk = 0;
       const char *zBr = p->zBranch ? p->zBranch : "main";
 
-      pBt->inCatalogSerialize = 1;
-      rc = sqlite3FaultSim(957) ? SQLITE_NOMEM
-                                : serializeCatalog(p, &catData, &nCatData);
-      pBt->inCatalogSerialize = 0;
+      rc = sqlite3FaultSim(957) ? SQLITE_NOMEM : SQLITE_OK;
+      if( rc==SQLITE_OK && prollyHashIsEmpty(&catHash) ){
+        pBt->inCatalogSerialize = 1;
+        rc = serializeCatalog(p, &catData, &nCatData);
+        pBt->inCatalogSerialize = 0;
+        if( rc==SQLITE_OK ){
+          prollyHashCompute(catData, nCatData, &catHash);
+        }
+      }
       if( rc!=SQLITE_OK ){
         rollbackAbandonWriteTxn(p, pBt);
         return rc;
       }
-      prollyHashCompute(catData, nCatData, &catHash);
-
       rc = btreeFillWorkingSetBlob(wsBuf, &catHash, &p->headCommit,
                                    &p->vc.stagedCatalog, p->vc.isMerging,
                                    &p->vc.mergeCommitHash,
@@ -1903,7 +1906,9 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       }
 
       if( !bMatchesDisk ){
-        rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
+        if( catData ){
+          rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
+        }
         if( rc==SQLITE_OK ){
           rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
                                         &p->headCommit, &p->vc.stagedCatalog,
