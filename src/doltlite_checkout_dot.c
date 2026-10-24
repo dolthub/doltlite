@@ -14,6 +14,14 @@
 #define DOT_PRIMARY 1
 #define DOT_OTHER   2
 
+typedef struct KeptDependents KeptDependents;
+struct KeptDependents {
+  char **azTrigger;
+  int nTrigger;
+  int hasSeq;
+  sqlite3_int64 seq;
+};
+
 typedef struct DotName DotName;
 struct DotName {
   char *z;
@@ -243,6 +251,148 @@ int doltliteCheckoutDot(
   sqlite3_free(azPrimary);
   sqlite3_free(azFallback);
   dotFreeNames(aName, nName);
+  return rc;
+}
+
+static void keptClear(KeptDependents *p){
+  int i;
+  for(i=0; i<p->nTrigger; i++) sqlite3_free(p->azTrigger[i]);
+  sqlite3_free(p->azTrigger);
+  memset(p, 0, sizeof(*p));
+}
+
+static int keepTableDependents(
+  sqlite3 *db,
+  const char *zName,
+  KeptDependents *p
+){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  memset(p, 0, sizeof(*p));
+  rc = sqlite3_prepare_v2(db,
+      "SELECT sql FROM main.sqlite_schema"
+      " WHERE type='trigger' AND tbl_name=?1 COLLATE NOCASE AND sql IS NOT NULL",
+      -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_bind_text(pStmt, 1, zName, -1, SQLITE_STATIC);
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    char **azNew;
+    char *zSql = sqlite3_mprintf("%s", (const char*)sqlite3_column_text(pStmt, 0));
+    if( !zSql ){ rc = SQLITE_NOMEM; break; }
+    azNew = sqlite3_realloc64(p->azTrigger,
+                              (sqlite3_uint64)(p->nTrigger+1)*sizeof(char*));
+    if( !azNew ){ sqlite3_free(zSql); rc = SQLITE_NOMEM; break; }
+    p->azTrigger = azNew;
+    p->azTrigger[p->nTrigger++] = zSql;
+  }
+  sqlite3_finalize(pStmt);
+  pStmt = 0;
+  if( rc!=SQLITE_DONE ){
+    keptClear(p);
+    return rc;
+  }
+  if( sqlite3FindTable(db, "sqlite_sequence", "main")==0 ) return SQLITE_OK;
+  rc = sqlite3_prepare_v2(db,
+      "SELECT seq FROM main.sqlite_sequence WHERE name=?1", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    keptClear(p);
+    return rc;
+  }
+  sqlite3_bind_text(pStmt, 1, zName, -1, SQLITE_STATIC);
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    p->hasSeq = 1;
+    p->seq = sqlite3_column_int64(pStmt, 0);
+    rc = SQLITE_DONE;
+  }
+  sqlite3_finalize(pStmt);
+  if( rc!=SQLITE_DONE ){
+    keptClear(p);
+    return rc;
+  }
+  return SQLITE_OK;
+}
+
+static int restoreTableDependents(
+  sqlite3 *db,
+  const char *zName,
+  const KeptDependents *p
+){
+  Table *pTab;
+  int i;
+  int rc = SQLITE_OK;
+  for(i=0; rc==SQLITE_OK && i<p->nTrigger; i++){
+    rc = sqlite3_exec(db, p->azTrigger[i], 0, 0, 0);
+  }
+  if( rc!=SQLITE_OK || !p->hasSeq ) return rc;
+  pTab = sqlite3FindTable(db, zName, "main");
+  if( !pTab || (pTab->tabFlags & TF_Autoincrement)==0 ) return SQLITE_OK;
+  {
+    sqlite3_stmt *pStmt = 0;
+    rc = sqlite3_prepare_v2(db,
+        "INSERT INTO main.sqlite_sequence(name, seq) VALUES(?1, ?2)",
+        -1, &pStmt, 0);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_text(pStmt, 1, zName, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(pStmt, 2, p->seq);
+    rc = sqlite3_step(pStmt);
+    sqlite3_finalize(pStmt);
+    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  }
+  return rc;
+}
+
+/* DROP TABLE runs its implicit DELETE through the foreign keys, cascading
+** into tables a checkout does not name. */
+int doltliteSuspendForeignKeys(sqlite3 *db, int *pWasOn){
+  int ignored = 0;
+  int rc = sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_FKEY, -1, pWasOn);
+  if( rc==SQLITE_OK && *pWasOn ){
+    rc = sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_FKEY, 0, &ignored);
+  }
+  return rc;
+}
+
+int doltliteResumeForeignKeys(sqlite3 *db, int wasOn, int rc){
+  int ignored = 0;
+  if( wasOn ){
+    int rc2 = sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_FKEY, 1, &ignored);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  return rc;
+}
+
+/* Replace table zName with zSourceSql (or drop it when zSourceSql is 0),
+** keeping the working triggers and sqlite_sequence row a recreated table
+** would otherwise lose. */
+int doltliteCheckoutRebuildTable(
+  sqlite3 *db,
+  const char *zName,
+  int hasCurrent,
+  const char *zSourceSql
+){
+  KeptDependents kept;
+  int rc = SQLITE_OK;
+  memset(&kept, 0, sizeof(kept));
+  if( hasCurrent ){
+    char *zDrop;
+    if( zSourceSql ){
+      rc = keepTableDependents(db, zName, &kept);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    zDrop = sqlite3_mprintf("DROP TABLE \"%w\"", zName);
+    if( !zDrop ){
+      keptClear(&kept);
+      return SQLITE_NOMEM;
+    }
+    rc = sqlite3_exec(db, zDrop, 0, 0, 0);
+    sqlite3_free(zDrop);
+  }
+  if( rc==SQLITE_OK && zSourceSql ){
+    rc = sqlite3_exec(db, zSourceSql, 0, 0, 0);
+    if( rc==SQLITE_OK ) rc = restoreTableDependents(db, zName, &kept);
+  }
+  keptClear(&kept);
   return rc;
 }
 

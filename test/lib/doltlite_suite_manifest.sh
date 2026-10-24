@@ -22,6 +22,7 @@ doltlite_hashof_refs.sh
 doltlite_creds.sh
 doltlite_staging.sh
 doltlite_clean.sh
+doltlite_checkout_table_rebuild.sh
 doltlite_workspace.sh
 doltlite_docs.sh
 doltlite_engine_stats.sh
@@ -209,6 +210,7 @@ doltlite_commit_date.sh
 doltlite_hashof_refs.sh
 doltlite_staging.sh
 doltlite_clean.sh
+doltlite_checkout_table_rebuild.sh
 doltlite_workspace.sh
 doltlite_docs.sh
 doltlite_engine_stats.sh

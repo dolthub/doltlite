@@ -1056,6 +1056,7 @@ static int checkoutTablesInTxn(
   SchemaEntry *aSourceSchema = 0, *aWorkSchema = 0;
   int nWorking = 0, nSource = 0;
   int nSourceSchema = 0, nWorkSchema = 0;
+  int fkeys = 0;
   int i, j;
   int rc;
 
@@ -1181,10 +1182,10 @@ static int checkoutTablesInTxn(
     return rc;
   }
 
-  for(i=0; i<nNames; i++){
+  rc = doltliteSuspendForeignKeys(db, &fkeys);
+  for(i=0; rc==SQLITE_OK && i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int bSchemaChanged;
-    char *zDrop;
     if( !zName ) continue;
     if( aSchema[i].isSchemas ){
       rc = doltliteRevertViewsAndTriggers(db, aSourceSchema, nSourceSchema);
@@ -1197,20 +1198,9 @@ static int checkoutTablesInTxn(
           && strcmp(aSchema[i].zCurrentSql ? aSchema[i].zCurrentSql : "",
                     aSchema[i].zSourceSql ? aSchema[i].zSourceSql : "")!=0);
     if( bSchemaChanged ){
-      if( aSchema[i].hasCurrent ){
-        zDrop = sqlite3_mprintf("DROP TABLE \"%w\"", zName);
-        if( !zDrop ){
-          rc = SQLITE_NOMEM;
-          break;
-        }
-        rc = sqlite3_exec(db, zDrop, 0, 0, 0);
-        sqlite3_free(zDrop);
-        if( rc!=SQLITE_OK ) break;
-      }
-      if( aSchema[i].hasSource ){
-        rc = sqlite3_exec(db, aSchema[i].zSourceSql, 0, 0, 0);
-        if( rc!=SQLITE_OK ) break;
-      }
+      rc = doltliteCheckoutRebuildTable(db, zName, aSchema[i].hasCurrent,
+               aSchema[i].hasSource ? aSchema[i].zSourceSql : 0);
+      if( rc!=SQLITE_OK ) break;
       aSchema[i].rebuilt = 1;
     }
     if( aSchema[i].hasSource ){
@@ -1221,6 +1211,7 @@ static int checkoutTablesInTxn(
       if( rc!=SQLITE_OK ) break;
     }
   }
+  rc = doltliteResumeForeignKeys(db, fkeys, rc);
   if( rc!=SQLITE_OK ){
     freeSchemaEntries(aSourceSchema, nSourceSchema);
     checkoutSchemaInfoClear(aSchema, nNames);

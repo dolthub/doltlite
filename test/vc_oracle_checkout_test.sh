@@ -1055,6 +1055,34 @@ INSERT INTO t VALUES (5);
 " "SELECT 'Q|' || count(*) FROM audit;" \
 "SELECT concat('Q|', count(*)) FROM audit;"
 
+oracle_dual_poststate "checkout_table_rebuild_keeps_dependents" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v INT);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT REFERENCES t(id) ON DELETE CASCADE);
+CREATE TABLE audit(a INT PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO audit VALUES (NEW.id); END;
+INSERT INTO t(v) VALUES (1), (2), (3);
+DELETE FROM t WHERE id = 3;
+INSERT INTO c VALUES (10, 1), (20, 2);
+SELECT dolt_commit('-Am', 'c1');
+ALTER TABLE t ADD COLUMN w INT;
+SELECT dolt_checkout('t');
+INSERT INTO t(v) VALUES (9);
+" "
+CREATE TABLE t(id INT PRIMARY KEY AUTO_INCREMENT, v INT);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT, FOREIGN KEY (pid) REFERENCES t(id) ON DELETE CASCADE);
+CREATE TABLE audit(a INT PRIMARY KEY);
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW INSERT INTO audit VALUES (NEW.id);
+INSERT INTO t(v) VALUES (1), (2), (3);
+DELETE FROM t WHERE id = 3;
+INSERT INTO c VALUES (10, 1), (20, 2);
+SELECT dolt_commit('-Am', 'c1');
+ALTER TABLE t ADD COLUMN w INT;
+SELECT dolt_checkout('t');
+INSERT INTO t(v) VALUES (9);
+" "SELECT 'Q|' || (SELECT count(*) FROM c) || '|' || (SELECT count(*) FROM audit) || '|' || (SELECT max(id) FROM t);" \
+"SELECT concat('Q|', (SELECT count(*) FROM c), '|', (SELECT count(*) FROM audit), '|', (SELECT max(id) FROM t));"
+
 oracle_dual_poststate "checkout_unstaged_index_stays_behind" "
 CREATE TABLE t(a INTEGER PRIMARY KEY, b INT);
 SELECT dolt_commit('-Am', 'base');
