@@ -4372,6 +4372,92 @@ static void run_clone_origin_window_gc_names_clone(void){
   removeDbFiles(clonePath);
 }
 
+/* A bare pull must not fast-forward onto a tracking ref whose branch
+** the remote has deleted. The named pull already refuses that. */
+static void run_pull_deleted_remote_branch(void){
+  sqlite3 *src = 0;
+  sqlite3 *clone = 0;
+  char srcPath[256];
+  char clonePath[256];
+  char sql[512];
+  const char *res;
+
+  printf("=== Pull Deleted Remote Branch Test ===\n\n");
+  make_dbpath(srcPath, sizeof(srcPath), "test_pull_deleted_src");
+  make_dbpath(clonePath, sizeof(clonePath), "test_pull_deleted_clone");
+  removeDbFiles(srcPath);
+  removeDbFiles(clonePath);
+
+  check("pull_deleted_open_src", open_db(srcPath, &src)==SQLITE_OK);
+  check("pull_deleted_seed", execSql(src,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+      "INSERT INTO t VALUES(1);"
+      "SELECT dolt_commit('-Am','init');"
+      "SELECT dolt_branch('feat');")==SQLITE_OK);
+  check("pull_deleted_open_clone", open_db(clonePath, &clone)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", srcPath);
+  check("pull_deleted_clone", execSql(clone, sql)==SQLITE_OK);
+  check("pull_deleted_checkout_feat",
+      execSql(clone, "SELECT dolt_checkout('-b','feat','origin/feat');")
+      ==SQLITE_OK);
+  check("pull_deleted_remote_commit", execSql(src,
+      "SELECT dolt_checkout('feat');"
+      "INSERT INTO t VALUES(2);"
+      "SELECT dolt_commit('-am','abandoned work');")==SQLITE_OK);
+  check("pull_deleted_fetch",
+      execSql(clone, "SELECT dolt_checkout('feat'); SELECT dolt_fetch();")
+      ==SQLITE_OK);
+  check("pull_deleted_drop_remote", execSql(src,
+      "SELECT dolt_checkout('main'); SELECT dolt_branch('-D','feat');")
+      ==SQLITE_OK);
+  check("pull_deleted_back_to_feat",
+      execSql(clone, "SELECT dolt_checkout('feat');")==SQLITE_OK);
+
+  res = queryScalarText(clone, "SELECT dolt_pull('origin','feat')");
+  check("pull_deleted_named_errors",
+      res && strstr(res, "fetch failed: branch not found on remote")!=0);
+  check("pull_deleted_named_keeps_head",
+      strcmp(queryScalarText(clone, "SELECT message FROM dolt_log LIMIT 1"),
+        "init")==0);
+  res = queryScalarText(clone, "SELECT dolt_pull()");
+  check("pull_deleted_bare_errors",
+      res && strstr(res, "fetch failed: branch not found on remote")!=0);
+  check("pull_deleted_bare_keeps_head",
+      strcmp(queryScalarText(clone, "SELECT message FROM dolt_log LIMIT 1"),
+        "init")==0);
+  check("pull_deleted_bare_keeps_rows",
+      strcmp(queryScalarText(clone, "SELECT count(*) FROM t WHERE id=2"),
+        "0")==0);
+  res = queryScalarText(clone, "SELECT dolt_pull('origin')");
+  check("pull_deleted_origin_errors",
+      res && strstr(res, "fetch failed: branch not found on remote")!=0);
+  check("pull_deleted_origin_keeps_head",
+      strcmp(queryScalarText(clone, "SELECT message FROM dolt_log LIMIT 1"),
+        "init")==0);
+  check("pull_deleted_tracking_remains",
+      strcmp(queryScalarText(clone,
+          "SELECT latest_commit_message FROM dolt_remote_branches "
+          "WHERE name='remotes/origin/feat'"),
+        "abandoned work")==0);
+
+  res = queryScalarText(clone, "SELECT dolt_pull('--prune')");
+  check("pull_deleted_prune_errors",
+      res && strstr(res, "fetch failed: branch not found on remote")!=0);
+  check("pull_deleted_prune_keeps_head",
+      strcmp(queryScalarText(clone, "SELECT message FROM dolt_log LIMIT 1"),
+        "init")==0);
+  check("pull_deleted_prune_drops_tracking",
+      strcmp(queryScalarText(clone,
+          "SELECT count(*) FROM dolt_remote_branches "
+          "WHERE name='remotes/origin/feat'"),
+        "0")==0);
+
+  sqlite3_close(clone);
+  sqlite3_close(src);
+  removeDbFiles(srcPath);
+  removeDbFiles(clonePath);
+}
+
 /* Deletes feat after clone's existence check and before its refs read. */
 static const char *gDropCloneBranchPath = 0;
 
@@ -19292,6 +19378,7 @@ static const RegressionCase aCases[] = {
   { "clone_ref_install_survives_window_gc", "Clone Ref Install Survives Window GC Test", run_clone_ref_install_survives_window_gc },
   { "clone_origin_window_gc_names_clone", "Clone Origin Window GC Names Clone Test", run_clone_origin_window_gc_names_clone },
   { "clone_deleted_branch_installs_nothing", "Clone Deleted Branch Installs Nothing Test", run_clone_deleted_branch_installs_nothing },
+  { "pull_deleted_remote_branch", "Pull Deleted Remote Branch Test", run_pull_deleted_remote_branch },
   { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
   { "file_remote_url_absolute", "File Remote URL Absolute Test", run_file_remote_url_absolute },
   { "fetch_gc_sees_peer_commit", "Fetch GC Sees Peer Commit Test", run_fetch_gc_sees_peer_commit },

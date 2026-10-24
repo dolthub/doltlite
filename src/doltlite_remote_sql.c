@@ -1875,6 +1875,25 @@ static void doltPullParsed(
       return;
     }
   }
+  /* Fetch-all only visits branches the remote still lists. The branch
+  ** this pull would merge can be gone, and its old tracking ref must
+  ** not be fast-forwarded into the session. */
+  if( rc==SQLITE_OK && bFetchAll ){
+    int i;
+    int foundUpstream = 0;
+    for(i=0; i<nKeep; i++){
+      if( azKeep[i] && strcmp(azKeep[i], zRemoteBranch)==0 ){
+        foundUpstream = 1;
+        break;
+      }
+    }
+    if( !foundUpstream ){
+      doltliteFreeStringArray(azKeep, nKeep);
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_NOTFOUND,
+          "fetch failed: branch not found on remote");
+      return;
+    }
+  }
   doltliteFreeStringArray(azKeep, nKeep);
   azKeep = 0;
 
