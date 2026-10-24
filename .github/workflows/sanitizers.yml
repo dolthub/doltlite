@@ -19,6 +19,8 @@ jobs:
             bucket: refs-workspace diff-history-data
           - suite: oracles-merge
             bucket: merge-replay-schema
+          - suite: oracles-features
+            bucket: feature-interaction
           # Every DoltLite shell suite (sanitizer manifest set) plus the
           # correctness tests and the C corpus.
           - suite: native
@@ -69,9 +71,9 @@ jobs:
         test "$failed" -eq 0
       timeout-minutes: 15
 
-    # One job per bucket, matching oracle-tests. The manifest check is what
-    # makes that safe to rely on: it proves every vc_oracle_*_test.sh is in
-    # exactly one bucket, so nothing runs twice and nothing goes unrun.
+    # One job per bucket group. check_oracle_buckets.sh proves every
+    # vc_oracle_*_test.sh is in exactly one bucket, and
+    # lint_orphaned_suites.sh proves every bucket is in this matrix.
     - name: Check oracle bucket manifests
       if: startsWith(matrix.suite, 'oracles')
       run: bash test/check_oracle_buckets.sh
