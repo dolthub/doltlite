@@ -515,6 +515,71 @@ static void *trySerializeConnectionMutex(void *pArg){
   return 0;
 }
 
+/* Querying an eponymous table caches its schema. Deserialize then
+** replaces that schema, so the same query has to prepare again. */
+static void run_deserialize_eponymous_vtab(void){
+  char path[256];
+  sqlite3 *src = 0;
+  sqlite3 *dest = 0;
+  unsigned char *pData = 0;
+  sqlite3_int64 nData = 0;
+  int rc;
+
+  make_dbpath(path, sizeof(path), "deserialize_eponymous");
+  removeDbFiles(path);
+  check("epo_src_open", open_db(path, &src)==SQLITE_OK);
+  if( !src ) return;
+  check("epo_src_setup", execSql(src,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+      "INSERT INTO t VALUES(1);"
+      "SELECT dolt_commit('-A','-m','epo');")==SQLITE_OK);
+  pData = sqlite3_serialize(src, "main", &nData, 0);
+  check("epo_image", pData!=0 && nData>0);
+  check("epo_dest_open", open_db(":memory:", &dest)==SQLITE_OK);
+  if( dest && pData ){
+    check("epo_before_branches",
+        strncmp(queryScalarText(dest, "SELECT count(*) FROM dolt_branches"),
+          "ERROR:", 6)!=0);
+    check("epo_before_log",
+        strncmp(queryScalarText(dest, "SELECT count(*) FROM dolt_log"),
+          "ERROR:", 6)!=0);
+    check("epo_before_tags",
+        strncmp(queryScalarText(dest, "SELECT count(*) FROM dolt_tags"),
+          "ERROR:", 6)!=0);
+    check("epo_before_status",
+        strncmp(queryScalarText(dest, "SELECT count(*) FROM dolt_status"),
+          "ERROR:", 6)!=0);
+    check("epo_before_remotes",
+        strncmp(queryScalarText(dest, "SELECT count(*) FROM dolt_remotes"),
+          "ERROR:", 6)!=0);
+    rc = sqlite3_deserialize(dest, "main", pData, nData, nData,
+        SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE);
+    pData = 0;
+    check("epo_deserialize", rc==SQLITE_OK);
+    check("epo_after_rows",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM t"), "1")==0);
+    check("epo_after_branches",
+        strcmp(queryScalarText(dest,
+          "SELECT count(*) FROM dolt_branches WHERE name='main'"), "1")==0);
+    check("epo_after_log",
+        strcmp(queryScalarText(dest,
+          "SELECT count(*) FROM dolt_log WHERE message='epo'"), "1")==0);
+    check("epo_after_tags",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM dolt_tags"),
+          "0")==0);
+    check("epo_after_status",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM dolt_status"),
+          "0")==0);
+    check("epo_after_remotes",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM dolt_remotes"),
+          "0")==0);
+  }
+  sqlite3_free(pData);
+  if( dest ) sqlite3_close(dest);
+  sqlite3_close(src);
+  removeDbFiles(path);
+}
+
 static void run_serialize_deserialize(void){
   char path[256];
   char auxPath[256];
@@ -19200,6 +19265,7 @@ static const RegressionCase aCases[] = {
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "custom_collation_unindexed", "Custom Collation Unindexed Test", run_custom_collation_unindexed },
   { "serialize_deserialize", "Serialize Deserialize Test", run_serialize_deserialize },
+  { "deserialize_eponymous_vtab", "Deserialize Eponymous Vtab Test", run_deserialize_eponymous_vtab },
   { "memory_readonly_open", "Memory Read-Only Open Test", run_memory_readonly_open },
   { "rowid_in_integer_literals_uses_rowset", "Rowid IN Integer Literals RowSet Test", run_rowid_in_integer_literals_uses_rowset },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
