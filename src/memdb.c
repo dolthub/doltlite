@@ -997,6 +997,9 @@ int sqlite3_deserialize(
       rc = SQLITE_NOMEM;
       goto end_deserialize;
     }
+#ifndef SQLITE_OMIT_VIRTUALTABLE
+    sqlite3VtabEponymousSchemaClear(db, db->aDb[iDb].pSchema);
+#endif
     sqlite3BtreeClose(db->aDb[iDb].pBt);
     db->aDb[iDb].pBt = pNewBt;
     db->aDb[iDb].pSchema = pNewSchema;

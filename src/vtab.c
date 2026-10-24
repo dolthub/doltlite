@@ -1334,6 +1334,28 @@ void sqlite3VtabEponymousTableClear(sqlite3 *db, Module *pMod){
   }
 }
 
+#ifdef DOLTLITE_PROLLY
+/*
+** Deserialize is about to free pSchema. An eponymous table caches that
+** pointer, and the next prepare searches aDb[] for it. Drop those tables
+** first so the next reference builds one on the replacement schema.
+*/
+void sqlite3VtabEponymousSchemaClear(sqlite3 *db, Schema *pSchema){
+  HashElem *p;
+  HashElem *pNext;
+
+  assert( sqlite3_mutex_held(db->mutex) );
+  if( pSchema==0 ) return;
+  for(p=sqliteHashFirst(&db->aModule); p; p=pNext){
+    Module *pMod = (Module*)sqliteHashData(p);
+    pNext = sqliteHashNext(p);
+    if( pMod->pEpoTab && pMod->pEpoTab->pSchema==pSchema ){
+      sqlite3VtabEponymousTableClear(db, pMod);
+    }
+  }
+}
+#endif
+
 /*
 ** Return the ON CONFLICT resolution mode in effect for the virtual
 ** table update operation currently in progress.

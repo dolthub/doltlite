@@ -5871,6 +5871,9 @@ int sqlite3VtabEponymousTableInit(Parse*,Module*);
 void sqlite3VtabEponymousTableClear(sqlite3*,Module*);
 void sqlite3VtabMakeWritable(Parse*,Table*);
 #ifdef DOLTLITE_PROLLY
+#ifndef SQLITE_OMIT_VIRTUALTABLE
+void sqlite3VtabEponymousSchemaClear(sqlite3*, Schema*);
+#endif
 void sqlite3BtreeMarkMasterRootChanged(Btree*);
 int doltliteBtreeCaptureStatement(void*);
 void doltliteWorkspaceFinishStatement(Vdbe*);
