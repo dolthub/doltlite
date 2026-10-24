@@ -9,3 +9,5 @@ malloc3     tcl-error -                                e3cf49e6aa1ac767f8e72982f
 multiplex2  tcl-error multiplex-1.1.3                  8a7cdb7757d56e9e16210f4d8692beb5e9f000e14c41119126bc03adb8e118cf # attempt to write a readonly database
 pagerfault  signal-11 pagerfault-15-full.1             - @darwin # SIGSEGV
 vtab1       tcl-error vtab1-5-7                        f01a2140ca0800424bb4b513a5f538188b15513efa9b0e8df18788880a783edd # vtable constructor failed: et1
+expert1     tcl-error expert1-8.1                      b804d04ae3af9f2c6b474c637b387f73796e20aef421823249480a4aa14c31f0 # invalid command name "sqlite3expert64"
+intck2      tcl-error intck2-3.7.b                     61aed854923a5d0e93469a19ca7848342e6283c53ddbd86554945b787a1e1fbc # database disk image is malformed: imposter edit of a clustered-PK table

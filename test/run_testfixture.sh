@@ -11,6 +11,7 @@ ulimit -Sn 1024 2>/dev/null || true
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 TERMINATION_FILE="${TERMINATION_FILE:-$SCRIPT_DIR/known_testfixture_terminations.txt}"
+VACUOUS_FILE="${VACUOUS_FILE:-$SCRIPT_DIR/known_testfixture_vacuous.txt}"
 # Only used to point at the ratchet when an entry goes stale.
 RATCHET_FILE="${RATCHET_FILE:-$SCRIPT_DIR/known_testfixture_exception_ratchet.txt}"
 HOST_OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
@@ -269,6 +270,7 @@ total_fail_unexpected=0
 total_unused=0
 total_unexpected_crashes=0
 total_unexpected_clean=0
+total_vacuous=0
 unexpected_failure_lines=""
 unused_lines=""
 
@@ -286,15 +288,17 @@ fi
 for test in "$@"; do
   expected_specs="$(expected_for "$test")"
   termination_contracts="$(termination_contracts_for "$test")"
-  # FTS5 and vec1 suites sit next to their *_common.tcl. A copy under
-  # test/ would source that helper from the wrong directory.
+  # Extension suites run from their own directory so they source their
+  # *_common.tcl helper; lint_orphaned_suites.sh keeps basenames unique.
   suite_file="$SCRIPT_DIR/${test}.test"
-  for ext_dir in fts5 vec1; do
-    [ -f "$suite_file" ] && break
-    if [ -f "$SCRIPT_DIR/../ext/$ext_dir/test/${test}.test" ]; then
-      suite_file="$SCRIPT_DIR/../ext/$ext_dir/test/${test}.test"
-    fi
-  done
+  if [ ! -f "$suite_file" ]; then
+    for candidate in "$SCRIPT_DIR"/../ext/*/test/"${test}.test" "$SCRIPT_DIR"/../ext/*/"${test}.test"; do
+      if [ -f "$candidate" ]; then
+        suite_file="$candidate"
+        break
+      fi
+    done
+  fi
   if [ -n "$termination_contracts" ]; then
     test_workdir=$(mktemp -d "${TMPDIR:-/tmp}/doltlite-testfixture.XXXXXX")
     ln -s "$TESTFIXTURE_BIN" "$test_workdir/testfixture"
@@ -461,6 +465,17 @@ for test in "$@"; do
   n_fixed=$(count_lines "$fixed")
 
   total_run=$(echo "$done_line" | awk '{print $5}')
+  # tester.tcl counts its own leak check, so a file that skipped itself
+  # reports one test.
+  if [ "${total_run:-0}" -le 1 ]; then
+    if [ -f "$VACUOUS_FILE" ] && sed 's/#.*//' "$VACUOUS_FILE" | awk '{print $1}' | grep -Fxq "$test"; then
+      :
+    else
+      echo "VACUOUS: $test ran ${total_run:-0} test(s); it skipped itself. Make it run, or list it with a reason in $VACUOUS_FILE"
+      total_vacuous=$((total_vacuous + 1))
+      unexpected_failure_lines="$unexpected_failure_lines"$'\n'"  $test: ran no tests"
+    fi
+  fi
   total_pass=$((total_pass + total_run - n_actual_total))
   total_fail_known=$((total_fail_known + n_actual_total - n_unexpected))
   total_fail_unexpected=$((total_fail_unexpected + n_unexpected))
@@ -499,11 +514,12 @@ echo
 echo "=== $LABEL ==="
 echo "  passing tests:                     $total_pass"
 echo "  known divergences (still failing): $total_fail_known"
-if [ "$total_fail_unexpected" -gt 0 ] || [ "$total_unexpected_crashes" -gt 0 ]; then
+if [ "$total_fail_unexpected" -gt 0 ] || [ "$total_unexpected_crashes" -gt 0 ] || [ "$total_vacuous" -gt 0 ]; then
   echo "  unexpected failures:               $total_fail_unexpected"
   echo "  unexpected terminations:           $total_unexpected_crashes"
+  echo "  files that ran no tests:           $total_vacuous"
   echo "  unexpected failure list:$unexpected_failure_lines"
-  echo "::error::$LABEL: $((total_fail_unexpected + total_unexpected_crashes)) unexpected failure(s)"
+  echo "::error::$LABEL: $((total_fail_unexpected + total_unexpected_crashes + total_vacuous)) unexpected failure(s)"
   exit 1
 fi
 if [ "$total_unused" -gt 0 ] || [ "$total_unexpected_clean" -gt 0 ]; then

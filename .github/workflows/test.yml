@@ -389,6 +389,7 @@ jobs:
           - fts5
           - fts5-fault
           - ported
+          - rtree
           - shell
           - slow-plain
           - vec1
@@ -437,15 +438,11 @@ jobs:
     # entries lost. The "shell" bucket runs the upstream shell*.test files
     # and doltlite's own CLI tests against the doltlite CLI (aliased below);
     # shell1 stays in core-sql until issue 2709's stale read is fixed.
-    # Every file belongs to: core-sql, ddl-schema, storage, fault-fuzz,
-    # fts3, fts4-core, fts4-merge, fts5, fts5-fault, ported, shell,
-    # slow-plain, vec1, vec1-fault. A file must appear in exactly one
-    # bucket; the guard below enforces it. Nondeterministic-class files (thread*, walcrash*,
-    # writecrash, wal*fault) stay excluded, same rationale as the crash.test
-    # exclusion. fts3.test is also excluded: it is the permutations
-    # suite-runner that re-sources the fts3 family inline (pure double
-    # coverage of files already in the FTS buckets), and its inlined OOM
-    # sections fail load-sensitively.
+    # A file appears in exactly one bucket; the guard below enforces it.
+    # lint_orphaned_suites.sh requires every upstream *.test to be in a
+    # bucket, in known_testfixture_crashes.txt, or in
+    # known_testfixture_unrun.txt with a reason, and every bucket to appear
+    # in this matrix.
     - name: Check regression coverage manifests
       run: |
         dups=$(cat test/regression-buckets/*.txt | sort | uniq -d)

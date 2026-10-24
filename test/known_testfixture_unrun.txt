@@ -1,0 +1,53 @@
+# Upstream testfixture files that no regression bucket runs, each with the
+# reason. lint_orphaned_suites.sh requires every *.test under test/, ext/,
+# mptest/ and tool/ to be in a bucket, in known_testfixture_crashes.txt, or
+# here. A line names a repo-relative path or a glob; every line must match a
+# file that is not also bucketed.
+# Format: <path-or-glob> class=<intentional|unsupported|harness> [issue=N]  # reason
+
+test/all.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/extraquick.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/full.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/memleak.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/permutations.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/quick.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/soak.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/veryquick.test class=harness  # permutation driver; re-sources files the buckets run directly
+test/rtree.test class=harness  # permutation driver for ext/rtree, which the rtree bucket runs directly
+test/fts3.test class=harness  # permutation driver for the fts3 family; its inlined OOM sections fail load-sensitively
+test/crash.test class=harness  # crash simulation; outcome is nondeterministic
+test/crash9.test class=harness  # crash simulation; ran past 15 minutes locally on a plain build
+test/walcrash.test class=harness  # crash simulation; outcome is nondeterministic
+test/walcrash2.test class=harness  # crash simulation; outcome is nondeterministic
+test/walcrash3.test class=harness  # crash simulation; outcome is nondeterministic
+test/walcrash4.test class=harness  # crash simulation; outcome is nondeterministic
+test/writecrash.test class=harness  # crash simulation; outcome is nondeterministic
+test/thread001.test class=harness  # multi-threaded timing; nondeterministic
+test/thread002.test class=harness  # multi-threaded timing; nondeterministic
+test/thread003.test class=harness  # multi-threaded timing; nondeterministic
+test/thread004.test class=harness  # multi-threaded timing; nondeterministic
+test/thread005.test class=harness  # multi-threaded timing; nondeterministic
+test/thread1.test class=harness  # multi-threaded timing; nondeterministic
+test/thread2.test class=harness  # multi-threaded timing; nondeterministic
+test/thread3.test class=harness  # multi-threaded timing; nondeterministic
+test/fuzz3.test class=intentional  # flips bytes of the file and expects page-level corruption errors; a damaged chunk-store WAL record reads as a torn write, so the store opens at its prior state
+test/speed3.test class=unsupported issue=2490  # benchmark that commits across an ATTACHed second file; multi-file write transactions are rejected
+test/waliter.test class=unsupported issue=1836  # reads test.db-shm; there are no WAL sidecars
+ext/session/*.test class=unsupported  # the session extension is not compiled into DoltLite builds (no SQLITE_ENABLE_SESSION); every file skips
+ext/rbu/*.test class=unsupported  # RBU is not compiled into DoltLite builds and writes SQLite page and WAL files; every file skips
+ext/recover/recover1.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverbuild.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverclobber.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recovercorrupt.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recovercorrupt2.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recovercorrupt3.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recovercorrupt4.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverfault.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverfault2.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverold.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverpgsz.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverrowid.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/recover/recoverslowidx.test class=unsupported issue=947  # the recovery extension reads raw pages through sqlite_dbpage; the chunk store has no page layout
+ext/jni/src/tests/*.test class=harness  # SQLTester scripts for the JNI binding, which DoltLite does not ship
+mptest/*.test class=harness  # scripts for the mptest multi-process driver, not testfixture
+tool/genfkey.test class=harness  # test for upstream's retired genfkey tool

@@ -26,3 +26,5 @@ pagerfault class=harness  # unstable OOM fault-point set; unbucketed
 pagerfault2 class=harness  # unstable OOM fault-point set; unbucketed
 savepoint4 class=harness issue=2072  # commit is durable at a main-file sync, so a torn crash may recover the committed state; which assertion fails moves with layout; unbucketed
 vtab1 class=intentional  # echo-vtab cleanup after schema reset
+expert1 class=harness  # the testfixture has no sqlite3expert64 command
+intck2 class=intentional  # imposter edit of a clustered-PK table reads as malformed

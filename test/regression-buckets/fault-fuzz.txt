@@ -95,3 +95,4 @@ doltlite_recover_mutmap_order_oom
 doltlite_recover_deferred_seek_oom
 doltlite_recover_synthetic_rowid_oom
 doltlite_recover_merge_state
+mallocH

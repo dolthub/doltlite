@@ -8,7 +8,7 @@ TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 mkdir "$TMP_DIR/build"
-touch "$TMP_DIR/terminations"
+touch "$TMP_DIR/terminations" "$TMP_DIR/vacuous"
 
 cat > "$TMP_DIR/build/testfixture" <<'EOF'
 #!/usr/bin/env bash
@@ -58,6 +58,10 @@ case "$1" in
     echo '0 errors out of 1 tests'
     exit 2
     ;;
+  *skipped.test)
+    echo '0 errors out of 1 tests'
+    exit 0
+    ;;
 esac
 count=$(wc -w <<< "$names" | tr -d ' ')
 echo "$count errors out of 10 tests"
@@ -71,6 +75,7 @@ run_case() {
     cd "$TMP_DIR/build"
     DIVERGENCE_FILE="$TMP_DIR/divergences" \
       TERMINATION_FILE="$TMP_DIR/terminations" \
+      VACUOUS_FILE="$TMP_DIR/vacuous" \
       "$BASH" "$RUNNER" self-test "$timeout" "$1"
   ) >"$TMP_DIR/run.out" 2>&1
 }
@@ -193,5 +198,11 @@ expect_failure summary_exit "a nonstandard exit after the summary"
 
 printf '%s\n' 'timeout timeout timeout-1.0 -' > "$TMP_DIR/terminations"
 expect_failure timeout "a contract that permits timeouts"
+
+: > "$TMP_DIR/terminations"
+expect_failure skipped "a file that skipped itself"
+
+printf '%s\n' 'skipped class=unsupported  # needs a feature' > "$TMP_DIR/vacuous"
+expect_pass skipped "a listed file that skipped itself"
 
 echo "OK: testfixture runner self-test"
