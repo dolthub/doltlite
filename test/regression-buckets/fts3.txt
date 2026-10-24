@@ -69,3 +69,4 @@ fts3sort
 fts3tok_err
 fts3tok1
 fts3varint
+fts3rnd

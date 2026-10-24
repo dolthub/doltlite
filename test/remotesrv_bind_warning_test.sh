@@ -9,6 +9,7 @@ set -uo pipefail
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
+. "$(dirname "$0")/lib/openssl_test_cert.sh"
 
 if [ ! -x "$DOLTLITE" ] || [ ! -x "$REMOTESRV" ]; then
   echo "SKIP: doltlite/doltlite-remotesrv binaries not found ($DOLTLITE, $REMOTESRV)"
@@ -34,10 +35,12 @@ mkdir -p "$TMP/srv" "$TMP/keys" "$TMP/cc"
 
 HAVE_TLS=0
 if command -v openssl >/dev/null 2>&1 \
-   && openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-        -keyout "$TMP/key.pem" -out "$TMP/cert.pem" -subj "/CN=localhost" \
+   && openssl_test_cert "$TMP/key.pem" "$TMP/cert.pem" "/CN=localhost" \
         >/dev/null 2>&1; then
   HAVE_TLS=1
+elif [ "${DOLTLITE_REQUIRE_TLS:-0}" = 1 ]; then
+  echo "FAIL: openssl unavailable, cannot build a certificate (DOLTLITE_REQUIRE_TLS=1)"
+  exit 1
 fi
 
 HAVE_KEYS=0

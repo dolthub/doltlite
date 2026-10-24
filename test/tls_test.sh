@@ -3,6 +3,7 @@ set -u
 set -o pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+. "$(dirname "$0")/lib/openssl_test_cert.sh"
 CC="${CC:-cc}"
 DOLTLITE_EXTRA_LIBS=""
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) DOLTLITE_EXTRA_LIBS="-lws2_32 -lbcrypt -lcrypt32";; esac
@@ -11,9 +12,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 FAKE=""
 if command -v openssl >/dev/null 2>&1; then
-  if openssl req -x509 -newkey rsa:2048 -keyout /dev/null \
-       -out "$TMP/fake_ca.pem" -days 1 -nodes \
-       -subj "/CN=doltlite-fake-ca" >/dev/null 2>&1; then
+  if openssl_test_cert /dev/null "$TMP/fake_ca.pem" "/CN=doltlite-fake-ca" \
+       >/dev/null 2>&1; then
     FAKE="$TMP/fake_ca.pem"
   fi
 fi

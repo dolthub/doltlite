@@ -8,6 +8,9 @@
 # are gated elsewhere) and test/*_test.c plus test/doltlite_*.c
 # (run_c_tests.sh / workflow / manifest — not merely built by main.mk).
 # Fuzzer GROUPS must be selected by a job. EXCLUDE skips harnesses/libs/perf.
+# Upstream *.test under test/, ext/, mptest/ and tool/ must be bucketed,
+# crash-listed, or in known_testfixture_unrun.txt; every regression and
+# oracle bucket must be selected by each workflow matrix that reads buckets.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -144,6 +147,86 @@ if [ -f test/sql_differential_fuzzer.py ]; then
   fi
 fi
 
+# Every upstream testfixture file is bucketed, crash-listed, or listed as
+# unrun with a reason. run_testfixture.sh resolves a bucket entry by
+# basename across test/ and ext/, so a basename must name one file.
+crash_list=test/known_testfixture_crashes.txt
+unrun_list=test/known_testfixture_unrun.txt
+vacuous_list=test/known_testfixture_vacuous.txt
+fixture_orphans=()
+fixture_dups=()
+unrun_stale=()
+entries() {  # entries <file>: first field of each non-comment line
+  [ -f "$1" ] || return 0
+  sed 's/#.*//' "$1" | awk 'NF {print $1}'
+}
+unrun_patterns=()
+while IFS= read -r pat; do unrun_patterns+=("$pat"); done < <(entries "$unrun_list")
+unrun_listed() {  # unrun_listed <repo-relative path>
+  local pat
+  for pat in ${unrun_patterns[@]+"${unrun_patterns[@]}"}; do
+    # shellcheck disable=SC2053
+    [[ "$1" == $pat ]] && return 0
+  done
+  return 1
+}
+fixture_files=()
+while IFS= read -r f; do fixture_files+=("$f"); done < <(
+  find test ext mptest tool -name '*.test' -type f 2>/dev/null | LC_ALL=C sort)
+fixture_names=$(for f in ${fixture_files[@]+"${fixture_files[@]}"}; do basename "$f" .test; done)
+while IFS= read -r d; do
+  [ -n "$d" ] && fixture_dups+=("$d")
+done < <(printf '%s\n' "$fixture_names" | LC_ALL=C sort | uniq -d)
+for f in ${fixture_files[@]+"${fixture_files[@]}"}; do
+  name=$(basename "$f" .test)
+  case "$name" in doltlite_*) continue ;; esac
+  if in_bucket "$name"; then
+    unrun_listed "$f" && unrun_stale+=("$f (bucketed and listed in $(basename "$unrun_list"))")
+    continue
+  fi
+  entries "$crash_list" | grep -Fxq "$name" && continue
+  unrun_listed "$f" && continue
+  fixture_orphans+=("$f")
+done
+for pat in ${unrun_patterns[@]+"${unrun_patterns[@]}"}; do
+  matched=0
+  for f in ${fixture_files[@]+"${fixture_files[@]}"}; do
+    # shellcheck disable=SC2053
+    [[ "$f" == $pat ]] && { matched=1; break; }
+  done
+  [ "$matched" -eq 1 ] || unrun_stale+=("$pat (listed in $(basename "$unrun_list"), matches no file)")
+done
+while IFS= read -r name; do
+  [ -z "$name" ] && continue
+  in_bucket "$name" || unrun_stale+=("$name (listed in $(basename "$vacuous_list"), not bucketed)")
+done < <(entries "$vacuous_list")
+
+# A bucket no workflow matrix selects runs nowhere, however carefully its
+# files are listed. A matrix row is either "- name" or "bucket: a b".
+matrix_orphans=()
+bucket_selected() {  # bucket_selected <dir-name> <bucket>
+  local wf found=0
+  for wf in .github/workflows/*.yml; do
+    grep -qF "$1/" "$wf" || continue
+    grep -qF '${{ matrix.bucket }}' "$wf" || continue
+    if grep -qE "^[[:space:]]*-[[:space:]]+$2[[:space:]]*$|^[[:space:]]*bucket:.*[[:space:]]$2([[:space:]]|$)" "$wf"; then
+      found=1
+    else
+      echo "$wf"
+    fi
+  done
+  [ "$found" -eq 1 ] || echo "(no workflow)"
+}
+for dir in regression-buckets oracle-buckets; do
+  for b in test/$dir/*.txt; do
+    [ -e "$b" ] || continue
+    name=$(basename "$b" .txt)
+    while IFS= read -r wf; do
+      [ -n "$wf" ] && matrix_orphans+=("$dir/$name.txt (not selected by $wf)")
+    done < <(bucket_selected "$dir" "$name")
+  done
+done
+
 # Stale if the suite is gone or a quarantined suite is now also wired in.
 stale=()
 for f in "$allowlist" "$quarantine"; do
@@ -171,6 +254,27 @@ if [ "${#group_orphans[@]}" -ne 0 ]; then
   echo "ERROR: differential-fuzzer groups no job selects (dead coverage):"
   printf '  - %s\n' "${group_orphans[@]}"
   echo "       Point a job at them (DOLTLITE_DIFF_GROUPS), or drop the group."
+  rc=1
+fi
+if [ "${#fixture_orphans[@]}" -ne 0 ]; then
+  echo "ERROR: upstream testfixture files run nowhere (add to a bucket, or list"
+  echo "       in test/known_testfixture_unrun.txt with a reason):"
+  printf '  - %s\n' "${fixture_orphans[@]}"
+  rc=1
+fi
+if [ "${#fixture_dups[@]}" -ne 0 ]; then
+  echo "ERROR: testfixture basenames that name more than one file:"
+  printf '  - %s\n' "${fixture_dups[@]}"
+  rc=1
+fi
+if [ "${#matrix_orphans[@]}" -ne 0 ]; then
+  echo "ERROR: buckets no workflow matrix runs:"
+  printf '  - %s\n' "${matrix_orphans[@]}"
+  rc=1
+fi
+if [ "${#unrun_stale[@]}" -ne 0 ]; then
+  echo "ERROR: stale testfixture inventory entries:"
+  printf '  - %s\n' "${unrun_stale[@]}"
   rc=1
 fi
 if [ "${#stale[@]}" -ne 0 ]; then

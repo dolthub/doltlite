@@ -447,3 +447,7 @@ without_rowid7
 zeroblob
 zipfile
 zipfile2
+expert1
+bestindexG
+conflict4
+nulls2

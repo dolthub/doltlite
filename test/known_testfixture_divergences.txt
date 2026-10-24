@@ -5355,3 +5355,60 @@ fts5origintext4 fts5origintext4-1.2.1 class=intentional  # CACHE_USED stays 0; t
 fts5restart fts5restart-1.4.2 class=intentional  # second connection expects "database is locked"; there is no pager write-lock
 fts5simple fts5simple-5.4 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
 fts5simple fts5simple-5.5 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+
+# ── vec1 ──
+# vec1 shadow tables allocate rowids from the shared counter, so ids keep
+# climbing after DELETE and rebuild instead of restarting at 1; later steps
+# that address rowid 2 or 3/7 then hit nothing. Shadow-index CREATE text is
+# canonicalized.
+vec1alter vec1alter-1.14 class=intentional  # shadow-index CREATE text is stored with canonical identifier quoting
+vec1flat vec1flat-1.1.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.1.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.2.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.2.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.2.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.3.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.3.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.3.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.4.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.4.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.4.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.1 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.2 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.4 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.5 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.6.1 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.5.1 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.5.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.5.4 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.6.2 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.6.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1intck vec1intck-3.9 class=intentional issue=1840  # rowids continue after rebuild, so the corrupt %_idx entry is not id=1
+
+# ── rtree, intck, expert, recover and unbucketed upstream files ──
+rtree8 rtree8-1.3.1 class=intentional issue=1840  # %_node ids keep counting after DELETE, so max(nodeno) is higher
+rtree8 rtree8-2.1.1 class=intentional issue=1840  # %_node ids keep counting after DELETE, so max(nodeno) is higher
+rtreeA rtreeA-1.2.1 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
+rtreeA rtreeA-1.2.2 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
+rtreeA rtreeA-1.2.3 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
+rtreeA rtreeA-1.2.4 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
+rtreeA rtreeA-7.110 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
+rtreeC rtreeC-5.2 class=intentional issue=1176  # plan shape: t1(x INT PRIMARY KEY) is clustered, so the planner seeks t1 inside rt
+rtreeC rtreeC-5.6 class=intentional issue=1176  # plan shape: t1(x INT PRIMARY KEY) is clustered, so the planner seeks t1 inside rt
+rtreeC rtreeC-5.8 class=intentional issue=1176  # plan shape: t1(x INT PRIMARY KEY) is clustered, so the planner seeks t1 inside rt
+rtreeD rtreeD-1.1.4 class=intentional  # second connection expects "database is locked"; there is no pager write-lock
+rtreeD rtreeD-1.2.4 class=intentional  # second connection expects "database is locked"; there is no pager write-lock
+rtreedoc rtreedoc-1-5.2 class=intentional issue=1840  # rowids continue after DELETE; an earlier max-int64 id leaves only random allocation
+rtreedoc rtreedoc-1-5.5 class=intentional issue=1840  # rowids continue after DELETE; an earlier max-int64 id leaves only random allocation
+rtreedoc rtreedoc-2-2.1 class=intentional  # shadow-table CREATE text is canonicalized and sqlite_master order follows the catalog
+rtreedoc rtreedoc-11-1.1.2 class=intentional  # shadow-table CREATE text is canonicalized
+rtreedoc rtreedoc-11-1.2.2 class=intentional  # shadow-table CREATE text is canonicalized
+rtreedoc rtreedoc-11-1.3.2 class=intentional  # shadow-table CREATE text is canonicalized
+rtreedoc rtreedoc-11-3.0 class=intentional  # shadow-table CREATE text is canonicalized
+intckbusy intckbusy-1.2 class=intentional  # expects SQLITE_BUSY from a peer's write lock; there is no pager write-lock
+intckbusy intckbusy-1.3 class=intentional  # expects SQLITE_BUSY from a peer's write lock; there is no pager write-lock
+intckbusy intckbusy-1.4 class=intentional  # expects SQLITE_BUSY from a peer's write lock; there is no pager write-lock
+intckcorrupt intckcorrupt-3.2.a class=intentional  # hexio_write at a rootpage offset; the chunk store has no page layout
+intckcorrupt intckcorrupt-3.2.b class=intentional  # hexio_write at a rootpage offset; the chunk store has no page layout
+altercons3 altercons3-5.2 class=intentional  # CREATE TABLE text is canonicalized (trailing space dropped)

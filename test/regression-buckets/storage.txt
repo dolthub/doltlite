@@ -219,3 +219,9 @@ doltlite_index_full_range
 doltlite_exact_index_probe
 doltlite_pending_text_update
 doltlite_pager_walstat
+intck1
+intck2
+intckbusy
+intckcorrupt
+intckfault
+recoversql
