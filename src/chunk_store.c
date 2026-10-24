@@ -1573,11 +1573,12 @@ void chunkStoreClearStoredHits(ChunkStore *cs){
   cs->storedHitLost = 0;
 }
 
-int chunkStorePut(
+static int csPutChunk(
   ChunkStore *cs,
   const u8 *pData,
   int nData,
-  ProllyHash *pHash
+  ProllyHash *pHash,
+  const ProllyHash *pExpected
 ){
   int rc;
   ProllyHash h;
@@ -1586,6 +1587,7 @@ int chunkStorePut(
   if( nData<0 ) return SQLITE_TOOBIG;
   prollyHashCompute(pData, nData, &h);
   prollyStatAdd(cs->pStats, nHashBytes, (u64)nData);
+  if( pExpected && prollyHashCompare(&h, pExpected)!=0 ) return SQLITE_CORRUPT;
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
   {
@@ -1641,6 +1643,25 @@ int chunkStorePut(
 
   prollyStatAdd(cs->pStats, nChunkWrite, 1);
   return SQLITE_OK;
+}
+
+int chunkStorePut(
+  ChunkStore *cs,
+  const u8 *pData,
+  int nData,
+  ProllyHash *pHash
+){
+  return csPutChunk(cs, pData, nData, pHash, 0);
+}
+
+int chunkStorePutChecked(
+  ChunkStore *cs,
+  const ProllyHash *pExpected,
+  const u8 *pData,
+  int nData
+){
+  if( !pExpected ) return SQLITE_MISUSE;
+  return csPutChunk(cs, pData, nData, 0, pExpected);
 }
 
 int chunkStorePutSparse(
