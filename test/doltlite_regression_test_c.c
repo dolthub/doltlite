@@ -2244,12 +2244,62 @@ static void test_concurrent_refs_hashof_sees_peer_commit(void){
   removeDbFiles(dbpath);
 }
 
+/* A gc run by a session whose branch a peer deleted leaves a reload owed.
+** After checking out a live branch, the next command must still publish:
+** dolt_add's staging was discarded behind a success, so the commit after it
+** dropped rows a peer had acked. */
+static void test_concurrent_refs_gc_on_deleted_branch_keeps_add(void){
+  sqlite3 *peer = 0, *stranded = 0, *fresh = 0;
+  char dbpath[256], b2path[300], b3path[300];
+
+  printf("--- Test 5: add after gc on a deleted branch publishes ---\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_concurrent_refs_gc_deleted");
+  removeDbFiles(dbpath);
+  snprintf(b2path, sizeof(b2path), "%s/b2", dbpath);
+  snprintf(b3path, sizeof(b3path), "%s/b3", dbpath);
+
+  check("gcdel_open_peer", open_db(dbpath, &peer)==SQLITE_OK);
+  check("gcdel_setup", execSql(peer,
+    "CREATE TABLE w(id INT PRIMARY KEY, v TEXT);"
+    "INSERT INTO w VALUES(1,'base');"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_branch('b2'); SELECT dolt_branch('b3');"
+    "SELECT dolt_checkout('b2');"
+    "INSERT INTO w VALUES(87,'staged'); SELECT dolt_add('.');")==SQLITE_OK);
+  check("gcdel_open_stranded", open_db(b3path, &stranded)==SQLITE_OK);
+  queryScalarText(stranded, "SELECT count(*) FROM w");
+  check("gcdel_delete_b3",
+    execSql(peer, "SELECT dolt_branch('-D','b3')")==SQLITE_OK);
+  check("gcdel_peer_insert",
+    execSql(peer, "INSERT INTO w VALUES(92,'acked')")==SQLITE_OK);
+  /* Windows cannot sweep a file another connection holds open. */
+  sqlite3_close(peer);
+  peer = 0;
+  check("gcdel_gc", execSql(stranded, "SELECT dolt_gc()")==SQLITE_OK);
+  check("gcdel_checkout",
+    execSql(stranded, "SELECT dolt_checkout('b2')")==SQLITE_OK);
+  check("gcdel_add", execSql(stranded, "SELECT dolt_add('w')")==SQLITE_OK);
+  check("gcdel_commit",
+    execSql(stranded, "SELECT dolt_commit('-m','after gc')")==SQLITE_OK);
+  sqlite3_close(stranded);
+
+  check("gcdel_open_fresh", open_db(b2path, &fresh)==SQLITE_OK);
+  check("gcdel_commit_has_acked_row", strcmp(queryScalarText(fresh,
+    "SELECT group_concat(id) FROM (SELECT id FROM dolt_at_w('HEAD') ORDER BY id)"),
+    "1,87,92")==0);
+  check("gcdel_branch_clean", strcmp(queryScalarText(fresh,
+    "SELECT count(*) FROM dolt_status"), "0")==0);
+  sqlite3_close(fresh);
+  removeDbFiles(dbpath);
+}
+
 static void run_concurrent_refs(void){
   printf("=== Concurrent Refs Test ===\n\n");
   test_concurrent_refs_stale_reset_is_rejected();
   test_concurrent_refs_informed_reset_moves_branch();
   test_concurrent_refs_checkout_refreshes_branch();
   test_concurrent_refs_hashof_sees_peer_commit();
+  test_concurrent_refs_gc_on_deleted_branch_keeps_add();
 }
 
 static void run_checkout_persist_failure(void){

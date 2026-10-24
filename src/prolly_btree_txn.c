@@ -828,10 +828,13 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         bStaleHead = 1;
       }
       if( bStaleHead ) p->bForceCatalogReload = 1;
+      /* A reload still owed from before this transaction (gc, a refused
+      ** command) is paid here; left pending, the command's own end would
+      ** discard everything it wrote. */
       if( p->inTrans==TRANS_READ
        || bStoreChanged
        || bPeerWrite
-       || bStaleHead
+       || p->bForceCatalogReload
        || (prollyHashIsEmpty(&p->committedCatalogHash) && p->cat.n>1) ){
         memset(&loadedCatHash, 0, sizeof(loadedCatHash));
         rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
