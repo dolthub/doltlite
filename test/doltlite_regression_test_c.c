@@ -2742,6 +2742,131 @@ static void run_alter_default_authorizer(void){
   removeDbFiles(auxpath);
 }
 
+typedef struct NestedUpdateHook NestedUpdateHook;
+struct NestedUpdateHook {
+  sqlite3 *db;
+  int op;
+  int calls;
+  int badResult;
+  int innerHooks;
+  int outerHooks;
+  int outerRows;
+  int badHook;
+};
+
+static void nestedUpdateHookFail(sqlite3_context *ctx, int argc,
+                                  sqlite3_value **argv){
+  NestedUpdateHook *p = sqlite3_user_data(ctx);
+  int rc = sqlite3_exec(p->db, "INSERT INTO u VALUES(2),(1)", 0, 0, 0);
+  (void)argc;
+  (void)argv;
+  p->calls++;
+  if( (rc&0xff)!=SQLITE_CONSTRAINT ) p->badResult++;
+  sqlite3_result_int(ctx, rc&0xff);
+}
+
+static void nestedUpdateHookLog(void *arg, int op, const char *zDb,
+                                const char *zTable, sqlite3_int64 rowid){
+  NestedUpdateHook *p = arg;
+  if( !zDb || strcmp(zDb, "main")!=0 || !zTable ){
+    p->badHook++;
+  }else if( strcmp(zTable, "u")==0 ){
+    p->innerHooks++;
+    if( op!=SQLITE_INSERT || rowid!=2 ) p->badHook++;
+  }else if( strcmp(zTable, "t")==0 ){
+    p->outerHooks++;
+    if( op!=p->op || rowid<1 || rowid>2 ){
+      p->badHook++;
+    }else{
+      p->outerRows |= 1 << (int)rowid;
+    }
+  }else{
+    p->badHook++;
+  }
+}
+
+static void run_nested_update_hook(void){
+  static const char *const azSql[] = {
+    "INSERT INTO t(v) VALUES(boom()),(boom())",
+    "UPDATE t SET v=boom()",
+    "DELETE FROM t WHERE boom()>0"
+  };
+  static const int aOp[] = { SQLITE_INSERT, SQLITE_UPDATE, SQLITE_DELETE };
+  char dbpath[256];
+  int file, txn, op, hook;
+
+  printf("=== Nested Statement Rollback Update Hook Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_nested_update_hook");
+  for(file=0; file<2; file++) for(txn=0; txn<3; txn++){
+    for(op=0; op<3; op++) for(hook=0; hook<2; hook++){
+      NestedUpdateHook state;
+      sqlite3 *db = 0;
+      sqlite3_stmt *stmt = 0;
+      int expected = op==2 ? 0 : 2;
+      int rc;
+      memset(&state, 0, sizeof(state));
+      if( file ) removeDbFiles(dbpath);
+      rc = sqlite3_open(file ? dbpath : ":memory:", &db);
+      check("nested_hook_open", rc==SQLITE_OK);
+      if( rc!=SQLITE_OK ){
+        sqlite3_close(db);
+        continue;
+      }
+      state.db = db;
+      state.op = aOp[op];
+      check("nested_hook_setup", execSql(db,
+          "CREATE TABLE u(x INTEGER PRIMARY KEY); INSERT INTO u VALUES(1);"
+          "CREATE TABLE t(id INTEGER PRIMARY KEY,v);")==SQLITE_OK);
+      if( op ){
+        check("nested_hook_seed", execSql(db,
+            "INSERT INTO t VALUES(1,10),(2,20)")==SQLITE_OK);
+      }
+      check("nested_hook_function", sqlite3_create_function(db, "boom", 0,
+          SQLITE_UTF8, &state, nestedUpdateHookFail, 0, 0)==SQLITE_OK);
+      if( txn ) check("nested_hook_begin", execSql(db, "BEGIN")==SQLITE_OK);
+      sqlite3_update_hook(db, hook ? nestedUpdateHookLog : 0, &state);
+      rc = sqlite3_prepare_v2(db, azSql[op], -1, &stmt, 0);
+      check("nested_hook_prepare", rc==SQLITE_OK);
+      if( rc==SQLITE_OK ){
+        check("nested_hook_step", sqlite3_step(stmt)==SQLITE_DONE);
+      }
+      check("nested_hook_finalize", sqlite3_finalize(stmt)==SQLITE_OK);
+      check("nested_hook_inner_failures", state.calls==2 && state.badResult==0);
+      check("nested_hook_names_and_rowids", state.badHook==0);
+      check("nested_hook_inner_events", state.innerHooks==(hook ? 2 : 0));
+      check("nested_hook_outer_events", state.outerHooks==(hook ? 2 : 0));
+      check("nested_hook_outer_rowids", state.outerRows==(hook ? 6 : 0));
+      sqlite3_update_hook(db, 0, 0);
+      check("nested_hook_inner_rolled_back", strcmp(queryScalarText(db,
+          "SELECT group_concat(x) FROM u"), "1")==0);
+      check("nested_hook_outer_rows", strcmp(queryScalarText(db,
+          "SELECT count(*) FROM t"), expected ? "2" : "0")==0);
+      check("nested_hook_outer_values", strcmp(queryScalarText(db,
+          "SELECT count(*) FROM t WHERE v=19"), expected ? "2" : "0")==0);
+      if( txn ){
+        check("nested_hook_finish", execSql(db,
+            txn==1 ? "COMMIT" : "ROLLBACK")==SQLITE_OK);
+      }
+      if( txn==2 ) expected = op ? 2 : 0;
+      check("nested_hook_finished_rows", strcmp(queryScalarText(db,
+          "SELECT count(*) FROM t"), expected ? "2" : "0")==0);
+      check("nested_hook_autocommit", sqlite3_get_autocommit(db));
+      sqlite3_close(db);
+      if( file ){
+        check("nested_hook_reopen", sqlite3_open(dbpath, &db)==SQLITE_OK);
+        check("nested_hook_durable_rows", strcmp(queryScalarText(db,
+            "SELECT count(*) FROM t"), expected ? "2" : "0")==0);
+        check("nested_hook_durable_inner", strcmp(queryScalarText(db,
+            "SELECT group_concat(x) FROM u"), "1")==0);
+        check("nested_hook_integrity", strcmp(queryScalarText(db,
+            "PRAGMA integrity_check"), "ok")==0);
+        sqlite3_close(db);
+        removeDbFiles(dbpath);
+      }
+    }
+  }
+}
+
 static int nAlterDefaultUpdateHook;
 
 static void countAlterDefaultUpdateHook(
@@ -19061,6 +19186,7 @@ static const RegressionCase aCases[] = {
   { "refs_deserialize_overflow_guard", "Refs Deserialize Overflow Guard Test", run_refs_deserialize_overflow_guard },
   { "alter_default_authorizer", "ALTER Default Authorizer Test", run_alter_default_authorizer },
   { "alter_default_update_hook", "ALTER Default Update Hook Test", run_alter_default_update_hook },
+  { "nested_update_hook", "Nested Statement Rollback Update Hook Test", run_nested_update_hook },
 #if defined(SQLITE_ENABLE_SESSION) && defined(SQLITE_ENABLE_PREUPDATE_HOOK)
   { "alter_default_session_changeset", "ALTER Default Session Changeset Test", run_alter_default_session_changeset },
 #endif
