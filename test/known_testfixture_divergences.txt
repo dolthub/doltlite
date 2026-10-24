@@ -5355,3 +5355,35 @@ fts5origintext4 fts5origintext4-1.2.1 class=intentional  # CACHE_USED stays 0; t
 fts5restart fts5restart-1.4.2 class=intentional  # second connection expects "database is locked"; there is no pager write-lock
 fts5simple fts5simple-5.4 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
 fts5simple fts5simple-5.5 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+
+# ── vec1 ──
+# vec1 shadow tables allocate rowids from the shared counter, so ids keep
+# climbing after DELETE and rebuild instead of restarting at 1; later steps
+# that address rowid 2 or 3/7 then hit nothing. Shadow-index CREATE text is
+# canonicalized. vec1fault9 reloads vec1 under OOM by dlopen of a vec1
+# loadable library; vec1 is built in here and no such library exists.
+vec1alter vec1alter-1.14 class=intentional  # shadow-index CREATE text is stored with canonical identifier quoting
+vec1flat vec1flat-1.1.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.1.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.2.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.2.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.2.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.3.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.3.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.3.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.4.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.4.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.4.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.1 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.2 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.4 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.5.5 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-1.6.1 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.5.1 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.5.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.5.4 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.6.2 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1flat vec1flat-4.6.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
+vec1intck vec1intck-3.9 class=intentional issue=1840  # rowids continue after rebuild, so the corrupt %_idx entry is not id=1
+vec1fault9 vec1fault9-2-oom-transient.*{165} class=harness  # OOM in the vec1_info() probe falls back to load_extension of a vec1 library that is not built
