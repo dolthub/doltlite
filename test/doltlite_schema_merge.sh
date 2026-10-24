@@ -3790,4 +3790,37 @@ EOF
   rm -f "$DB"
 done
 
+# One side adds a unique index on a column the other side drops, while both
+# add the same new table and theirs adds tables sorting after it, which
+# shift catalog numbers: the index goes with the column
+# (as in Dolt) instead of leaving a schema row the merged table cannot load.
+for dir in ours theirs; do
+  IDX="CREATE UNIQUE INDEX ix ON t(x);"; DROP="ALTER TABLE t DROP COLUMN x;"
+  if [ "$dir" = ours ]; then MAIN="$IDX"; FEAT="$DROP"; else MAIN="$DROP"; FEAT="$IDX"; fi
+  DB=/tmp/test_merge_idx_on_dropped_col_${dir}_$$.db; rm -f "$DB"
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER NOT NULL, a TEXT, x INTEGER NOT NULL DEFAULT 0, y INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id DESC)) WITHOUT ROWID;
+CREATE TABLE p(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$MAIN
+CREATE TABLE both_new(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES p(id));
+SELECT dolt_commit('-Am','main side');
+SELECT dolt_checkout('feat');
+$FEAT
+CREATE TABLE both_new(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES p(id));
+CREATE TABLE u_a(id INTEGER PRIMARY KEY);
+CREATE TABLE u_b(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "merge_index_on_dropped_column_${dir}" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "merge_index_on_dropped_column_${dir}_schema" \
+    "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE tbl_name='t' ORDER BY name); PRAGMA integrity_check;" \
+    "t
+ok" "$DB"
+  rm -f "$DB"
+done
+
 dltest_finish
