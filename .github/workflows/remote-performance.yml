@@ -1,0 +1,65 @@
+name: Remote performance
+
+on:
+  pull_request:
+    paths:
+      - test/remote_perf.py
+      - test/remote_perf_test.py
+      - .github/workflows/remote-performance.yml
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Repetitions per file remote operation
+        type: number
+        default: 5
+      size_mb:
+        description: Logical payload size in decimal MB
+        type: number
+        default: 100
+
+permissions:
+  contents: read
+
+jobs:
+  file-remote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: bash .github/scripts/install-apt-deps.sh build-essential tcl-dev zlib1g-dev
+
+    - name: Build optimized benchmark binary
+      run: bash .github/scripts/build-optimized-benchmark.sh "$GITHUB_WORKSPACE"
+
+    - name: Validate benchmark harness
+      run: |
+        python3 test/remote_perf_test.py
+        python3 test/remote_perf.py --candidate build/doltlite \
+          --size-mb 1 --runs 1 --output-dir "$RUNNER_TEMP/remote-perf-smoke"
+
+    - name: Measure file remote operations
+      env:
+        SIZE_MB: ${{ github.event.inputs.size_mb || '100' }}
+        RUNS: ${{ github.event.inputs.runs || '5' }}
+      run: |
+        python3 test/remote_perf.py --candidate build/doltlite \
+          --size-mb "$SIZE_MB" --runs "$RUNS" \
+          --output-dir "$RUNNER_TEMP/remote-performance"
+
+    - name: Summarize results
+      if: always()
+      run: |
+        report="$RUNNER_TEMP/remote-performance/report.md"
+        if [ -f "$report" ]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+
+    - name: Upload measurements
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: remote-performance
+        path: |
+          ${{ runner.temp }}/remote-performance
+          ${{ runner.temp }}/remote-perf-smoke
+        retention-days: 30
