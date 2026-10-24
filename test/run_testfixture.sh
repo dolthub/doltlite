@@ -286,12 +286,15 @@ fi
 for test in "$@"; do
   expected_specs="$(expected_for "$test")"
   termination_contracts="$(termination_contracts_for "$test")"
-  # FTS5 suites sit next to fts5_common.tcl. A copy under test/ would
-  # source that helper from the wrong directory.
+  # FTS5 and vec1 suites sit next to their *_common.tcl. A copy under
+  # test/ would source that helper from the wrong directory.
   suite_file="$SCRIPT_DIR/${test}.test"
-  if [ ! -f "$suite_file" ] && [ -f "$SCRIPT_DIR/../ext/fts5/test/${test}.test" ]; then
-    suite_file="$SCRIPT_DIR/../ext/fts5/test/${test}.test"
-  fi
+  for ext_dir in fts5 vec1; do
+    [ -f "$suite_file" ] && break
+    if [ -f "$SCRIPT_DIR/../ext/$ext_dir/test/${test}.test" ]; then
+      suite_file="$SCRIPT_DIR/../ext/$ext_dir/test/${test}.test"
+    fi
+  done
   if [ -n "$termination_contracts" ]; then
     test_workdir=$(mktemp -d "${TMPDIR:-/tmp}/doltlite-testfixture.XXXXXX")
     ln -s "$TESTFIXTURE_BIN" "$test_workdir/testfixture"
