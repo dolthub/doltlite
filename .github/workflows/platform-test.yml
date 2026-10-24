@@ -20,6 +20,7 @@ jobs:
       DOLTLITE_CREDS_KAT_BIN: ${{ github.workspace }}/build/creds_kat${{ matrix.exe }}
       DOLTLITE_CREDS_VERIFY_BIN: ${{ github.workspace }}/build/creds_verify_kat${{ matrix.exe }}
       DOLTLITE_TLS_TEST_BIN: ${{ github.workspace }}/build/tls_test${{ matrix.exe }}
+      DOLTLITE_REQUIRE_TLS: "1"
     strategy:
       fail-fast: false
       matrix:

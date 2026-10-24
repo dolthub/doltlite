@@ -4,6 +4,7 @@ set -u
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+. "$(dirname "$0")/lib/openssl_test_cert.sh"
 CC="${CC:-cc}"
 TMP=$(mktemp -d)
 SRV_PID=""
@@ -37,18 +38,16 @@ check_ne() {
 }
 
 if ! command -v openssl >/dev/null 2>&1; then
-  echo "SKIP: openssl not available"; exit 0
+  tls_unavailable "openssl not available"
 fi
 if [ ! -x "$DOLTLITE" ] || [ ! -x "$REMOTESRV" ]; then
   echo "SKIP: doltlite/doltlite-remotesrv binaries not found ($DOLTLITE, $REMOTESRV)"; exit 0
 fi
 
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-  -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
-  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
-  >/dev/null 2>&1 || { echo "SKIP: openssl cert generation failed"; exit 0; }
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-  -keyout /dev/null -out "$TMP/other_ca.pem" -subj "/CN=other" >/dev/null 2>&1
+openssl_test_cert "$TMP/key.pem" "$TMP/cert.pem" "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+  >/dev/null 2>&1 || tls_unavailable "openssl cert generation failed"
+openssl_test_cert /dev/null "$TMP/other_ca.pem" "/CN=other" >/dev/null 2>&1
 
 mkdir -p "$TMP/cc" "$TMP/cc_unauth" "$TMP/empty" "$TMP/authkeys" \
   "$TMP/private_authkeys" "$TMP/srv" "$TMP/srv2"

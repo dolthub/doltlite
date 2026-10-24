@@ -3,6 +3,7 @@ set -euo pipefail
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
+. "$(dirname "$0")/lib/openssl_test_cert.sh"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "SKIP: python3 not available"
@@ -618,13 +619,11 @@ check_stalled_bodies "$TMP/body-clone.db"
 stop_server_with_stalled_clients "$PORT" body
 
 if ! command -v openssl >/dev/null 2>&1; then
-  echo "SKIP: openssl not available; TLS stall checks skipped"
-  exit 0
+  tls_unavailable "openssl not available; TLS stall checks skipped"
 fi
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-  -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
-  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
-  >/dev/null 2>&1 || { echo "SKIP: openssl cert generation failed"; exit 0; }
+openssl_test_cert "$TMP/key.pem" "$TMP/cert.pem" "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+  >/dev/null 2>&1 || tls_unavailable "openssl cert generation failed"
 
 echo "=== TLS stalled client ==="
 rm -rf "$TMP/srv"

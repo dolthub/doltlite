@@ -579,6 +579,8 @@ jobs:
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
 
     - name: Credential, TLS, and HTTP remote tests
+      env:
+        DOLTLITE_REQUIRE_TLS: "1"
       run: |
         cd build-coverage
         bash ../test/creds_path_test.sh ./doltlite
