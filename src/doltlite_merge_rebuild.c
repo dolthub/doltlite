@@ -485,6 +485,19 @@ int rebuildDisjointSchemaRows(
       /* Theirs dropped it. */
       continue;
     }
+    /* Pass 1 dropped the catalog entry of an index we added over a column
+    ** they dropped; its row would name a column the merged table lacks. */
+    if( !findSchemaEntry(aAncSchema, nAncSchema, pSe->zName) ){
+      SchemaEntry *pAncTbl = findSchemaEntry(aAncSchema, nAncSchema,
+                                             pSe->zTblName);
+      SchemaEntry *pTheirTbl = findSchemaEntry(aTheirsSchema, nTheirsSchema,
+                                               pSe->zTblName);
+      if( pAncTbl && pTheirTbl
+       && mergeIndexColumnGoneFrom(pSe->zSql, pAncTbl->zSql,
+                                   pTheirTbl->zSql, 0) ){
+        continue;
+      }
+    }
     if( !hasSchemaConflictTable(aConflictTables, nConflictTables, pSe->zTblName)
      && !schemaEntryChangedByName(aAncSchema, nAncSchema,
                                   aOursSchema, nOursSchema,
