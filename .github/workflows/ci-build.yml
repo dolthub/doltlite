@@ -116,7 +116,7 @@ jobs:
         set -o pipefail
         {
           make -j2 DOLTLITE_PROLLY_CHECK=1 \
-            doltlite doltlite-remotesrv doltlite-lib testfixture \
+            doltlite doltlite-remotesrv doltlite-lib testfixture vec1.so \
             doltlite-c-tests-build doltlite-regression-test-c-build
           blake_objects=(blake3.o blake3_portable.o blake3_dispatch.o)
           for object in blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o blake3_neon.o; do
@@ -143,6 +143,7 @@ jobs:
           build-coverage/doltlite-remotesrv \
           build-coverage/doltlite_regression_test_c \
           build-coverage/testfixture \
+          build-coverage/vec1.so \
           build-coverage/libdoltlite.a \
           build-coverage/sqlite3.h \
           build-coverage/prolly_hash.o \
