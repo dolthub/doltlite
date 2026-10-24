@@ -160,13 +160,18 @@ static int ex(Conn *c, const char *zOp, const char *zSql){
 }
 
 static void curBranch(Conn *c, char *z, int n){
-  sqlite3_stmt *s = 0;
+  int tries;
   z[0] = 0;
-  if( sqlite3_prepare_v2(c->db, "SELECT active_branch()", -1, &s, 0)==SQLITE_OK ){
-    if( sqlite3_step(s)==SQLITE_ROW && sqlite3_column_text(s,0) )
-      snprintf(z, n, "%s", (const char*)sqlite3_column_text(s,0));
+  /* A peer's dolt_gc holds the lock long enough to fail active_branch(). */
+  for(tries=0; tries<50 && !z[0]; tries++){
+    sqlite3_stmt *s = 0;
+    if( tries ) sqlite3_sleep(20);
+    if( sqlite3_prepare_v2(c->db, "SELECT active_branch()", -1, &s, 0)==SQLITE_OK ){
+      if( sqlite3_step(s)==SQLITE_ROW && sqlite3_column_text(s,0) )
+        snprintf(z, n, "%s", (const char*)sqlite3_column_text(s,0));
+    }
+    sqlite3_finalize(s);
   }
-  sqlite3_finalize(s);
   if( !z[0] ) snprintf(z, n, "?");
 }
 
@@ -337,6 +342,10 @@ static void opSavepoint(Conn *c){
 #define FM 4
 #define FG 8
 #define FR 16
+/* An excuse on an unknown branch must still cover the branch the op hit. */
+static int excuseFlags(int flags, const char *zBr){
+  return strcmp(zBr, "?") ? flags : (flags | FG);
+}
 static char gVictim[128];
 /* Run zSql; when it rewrites history and no txn is open, half the time
 ** capture the HEAD it replaces under BEGIN IMMEDIATE so the model knows
@@ -403,7 +412,7 @@ static int vc(Conn *c, const char *zOp, const char *zSql, int flags, const char 
     }
     if( rc==SQLITE_OK ){
       logf_("OK\t%s\t%s\t%lld\t%lld", zOp, br, S, E);
-      if( flags ) logf_("X\t%d\t%s\t%lld\t%lld\t%s\t%s", flags, zTarget ? zTarget : br, (flags&FM) ? gVictimS : S, E, zOp, gVictim);
+      if( flags ) logf_("X\t%d\t%s\t%lld\t%lld\t%s\t%s", excuseFlags(flags, zTarget ? zTarget : br), zTarget ? zTarget : br, (flags&FM) ? gVictimS : S, E, zOp, gVictim);
       return rc;
     }
     staleProbe(c, zOp);
@@ -455,7 +464,7 @@ static void opCommit(Conn *c){
     }
     if( rc==SQLITE_OK ){
       logf_("OK\tcommit_vc\t%s\t%lld\t%lld", br, S, E);
-      if( kind==3 ) logf_("X\t%d\t%s\t%lld\t%lld\tamend\t%s\t%s", FM, br, gVictimS, E, gVictim, msg);
+      if( kind==3 ) logf_("X\t%d\t%s\t%lld\t%lld\tamend\t%s\t%s", excuseFlags(FM, br), br, gVictimS, E, gVictim, msg);
       logf_("C\t%s\t%s\t%lld\t%lld\t%d", msg, br, S, E, !wasTxn ? 1 : 0);
       return;
     }

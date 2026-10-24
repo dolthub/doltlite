@@ -134,6 +134,24 @@ for soft_branch in main b1; do
   fi
 done
 
+# A soft reset on main whose connection could not read its branch while a
+# peer's gc held the lock logs the excuse on "?". Without FG it covers no
+# branch and the rewound commit reads as lost.
+for flags in 6 14; do
+  d=$(newdir "soft_reset_unknown_branch_${flags}")
+  "$DOLTLITE" "$d/db.db" "INSERT INTO w VALUES(100000012,'acked'); SELECT dolt_commit('-Am','m_victim');
+SELECT dolt_reset('--soft','HEAD~1');" >/dev/null
+  printf '%s\n' \
+    $'I\t100000012\tmain\t1000\t1100' \
+    $'C\tm_victim\tmain\t2000\t2100\t1' > "$d/log.0"
+  printf 'X\t%s\t?\t3000\t3500\treset_soft_1\tm_victim\n' "$flags" > "$d/log.1"
+  if [ "$flags" = 14 ]; then
+    check soft_reset_unknown_branch_global_excused 0 "$d" 2
+  else
+    check soft_reset_unknown_branch_lost 2 "$d" 2 "LOST acked commit 'm_victim'"
+  fi
+done
+
 d=$(newdir commit_during_lock_wait)
 "$DOLTLITE" "$d/db.db" "SELECT dolt_commit('--allow-empty','-m','m_protected');" >/dev/null
 printf '%s\n' \
