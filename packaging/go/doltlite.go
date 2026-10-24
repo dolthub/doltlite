@@ -68,12 +68,14 @@ static unsigned char *dl_source_bytes(const void *p, int n) {
 import "C"
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"fmt"
 	"io"
 	"runtime/cgo"
+	"strings"
 	"sync"
 	"unsafe"
 )
@@ -334,34 +336,135 @@ func (c *conn) Close() error {
 	return nil
 }
 
+var (
+	errNoStatement = errors.New("doltlite: query contains no statement")
+	errArgCount    = errors.New("doltlite: argument count does not match the query's parameters")
+)
+
 func (c *conn) Prepare(query string) (driver.Stmt, error) {
+	s, _, err := c.prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, errNoStatement
+	}
+	return s, nil
+}
+
+// prepare compiles the first statement in query and returns the SQL after it.
+// The statement is nil when query holds no statement.
+func (c *conn) prepare(query string) (*stmt, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, driver.ErrBadConn
+		return nil, "", driver.ErrBadConn
 	}
 	var st *C.sqlite3_stmt
 	var rc C.int
 	var nInput int
+	var rest string
 	if err := c.run(func() {
 		cq := C.CString(query)
 		defer C.free(unsafe.Pointer(cq))
-		rc = C.sqlite3_prepare_v2(c.db, cq, -1, &st, nil)
+		var tail *C.char
+		rc = C.sqlite3_prepare_v2(c.db, cq, -1, &st, &tail)
 		if rc == C.SQLITE_OK && st != nil {
 			nInput = int(C.sqlite3_bind_parameter_count(st))
+			rest = query[uintptr(unsafe.Pointer(tail))-uintptr(unsafe.Pointer(cq)):]
 		}
 	}); err != nil {
-		return nil, driver.ErrBadConn
+		return nil, "", driver.ErrBadConn
 	}
 	if rc != C.SQLITE_OK {
-		return nil, c.err(rc)
+		return nil, "", c.err(rc)
 	}
 	if st == nil {
-		return nil, errors.New("doltlite: query contains no statement")
+		return nil, "", nil
 	}
 	s := &stmt{c: c, st: st, nInput: nInput}
 	c.stmts[s] = struct{}{}
-	return s, nil
+	return s, rest, nil
+}
+
+// tailHasNoStatement reports whether rest, the uncompiled tail after a
+// prepared statement, holds only semicolons, whitespace, and comments.
+// sqlite3_prepare_v2 stops at the first statement, so those leftovers are
+// still in rest and are not another statement. The parameter count has to
+// be decided before this statement runs.
+func tailHasNoStatement(rest string) bool {
+	for i := 0; i < len(rest); {
+		switch rest[i] {
+		case ' ', '\t', '\n', '\r', '\f', '\v', ';':
+			i++
+		case '-':
+			if i+1 >= len(rest) || rest[i+1] != '-' {
+				return false
+			}
+			i += 2
+			for i < len(rest) && rest[i] != '\n' {
+				i++
+			}
+		case '/':
+			if i+1 >= len(rest) || rest[i+1] != '*' {
+				return false
+			}
+			i += 2
+			end := strings.Index(rest[i:], "*/")
+			if end < 0 {
+				return true
+			}
+			i += end + 2
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ExecContext runs every statement in query in order, as other SQLite drivers
+// for database/sql do, and binds args to their parameters in sequence. The
+// result is the last statement's.
+func (c *conn) ExecContext(ctx context.Context, query string, named []driver.NamedValue) (driver.Result, error) {
+	args := make([]driver.Value, len(named))
+	for i, nv := range named {
+		if nv.Name != "" {
+			return nil, errors.New("doltlite: named arguments are not supported")
+		}
+		args[i] = nv.Value
+	}
+	var res driver.Result
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s, rest, err := c.prepare(query)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			break
+		}
+		last := tailHasNoStatement(rest)
+		if s.nInput > len(args) || (last && s.nInput != len(args)) {
+			s.Close()
+			return nil, errArgCount
+		}
+		res, err = s.Exec(args[:s.nInput])
+		s.Close()
+		if err != nil {
+			return nil, err
+		}
+		args = args[s.nInput:]
+		query = rest
+	}
+	if res == nil {
+		return nil, errNoStatement
+	}
+	if len(args) > 0 {
+		return nil, errArgCount
+	}
+	return res, nil
 }
 
 // Begin starts a write transaction. IMMEDIATE, not the default DEFERRED: a
