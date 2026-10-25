@@ -5361,6 +5361,12 @@ fts5simple fts5simple-5.5 class=intentional issue=1840  # rowids continue after 
 # climbing after DELETE and rebuild instead of restarting at 1; later steps
 # that address rowid 2 or 3/7 then hit nothing. Shadow-index CREATE text is
 # canonicalized.
+vec1ab vec1ab-1.5.3 unstable class=harness issue=4260  # random vectors put a row in a different bucket than integrity_check recomputes in ~3% of runs, stock SQLite too
+vec1ab vec1ab-1.5.4 unstable class=harness issue=4260  # random vectors put a row in a different bucket than integrity_check recomputes in ~3% of runs, stock SQLite too
+vec1ab vec1ab-1.6.3 unstable class=harness issue=4260  # random vectors put a row in a different bucket than integrity_check recomputes in ~3% of runs, stock SQLite too
+vec1ab vec1ab-1.6.4 unstable class=harness issue=4260  # random vectors put a row in a different bucket than integrity_check recomputes in ~3% of runs, stock SQLite too
+vec1ab vec1ab-1.7.3 unstable class=harness issue=4260  # random vectors put a row in a different bucket than integrity_check recomputes in ~3% of runs, stock SQLite too
+vec1ab vec1ab-1.7.4 unstable class=harness issue=4260  # random vectors put a row in a different bucket than integrity_check recomputes in ~3% of runs, stock SQLite too
 vec1alter vec1alter-1.14 class=intentional  # shadow-index CREATE text is stored with canonical identifier quoting
 vec1flat vec1flat-1.1.6 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
 vec1flat vec1flat-1.1.8 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
