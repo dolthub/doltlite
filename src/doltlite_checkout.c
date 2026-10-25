@@ -1192,7 +1192,13 @@ static int checkoutTablesInTxn(
     if( !zName ) continue;
     if( aSchema[i].isSchemas ){
       rc = doltliteRevertViewsAndTriggers(db, aSourceSchema, nSourceSchema);
-      if( rc!=SQLITE_OK ) break;
+      if( rc!=SQLITE_OK ){
+        const char *zMsg = sqlite3_errmsg(db);
+        /* Seal below runs more SQL and would replace this string. The
+        ** result keeps it; error_code leaves a message already set. */
+        if( zMsg && zMsg[0] ) sqlite3_result_error(context, zMsg, -1);
+        break;
+      }
       continue;
     }
     bSchemaChanged =

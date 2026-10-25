@@ -5555,6 +5555,7 @@ void doltliteBtreeRegistrationDone(sqlite3*);
 Module *doltliteHistoricalModuleRegister(sqlite3*,const char*);
 int doltliteHistoricalModuleStale(sqlite3*,Module*);
 void doltliteHistoricalModulesReset(sqlite3*);
+void doltliteDiffShadowPrepare(sqlite3*,Module*);
 #endif
 #if !defined(SQLITE_OMIT_BLOB_LITERAL)
 void *sqlite3HexToBlob(sqlite3*, const char *z, int n);
@@ -5873,6 +5874,7 @@ void sqlite3VtabMakeWritable(Parse*,Table*);
 #ifdef DOLTLITE_PROLLY
 #ifndef SQLITE_OMIT_VIRTUALTABLE
 void sqlite3VtabEponymousSchemaClear(sqlite3*, Schema*);
+int sqlite3VtabConstructing(sqlite3*, Table*);
 #endif
 void sqlite3BtreeMarkMasterRootChanged(Btree*);
 int doltliteBtreeCaptureStatement(void*);

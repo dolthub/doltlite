@@ -1099,10 +1099,14 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
   }else if( sqlite3_strnicmp(zName, "dolt_history_", 13)==0 ){
     if( zName[13]==0 ) return 0;
   }else if( sqlite3_strnicmp(zName, "dolt_diff_", 10)==0 ){
-    /* stat and summary share the prefix and are not per-table diffs. */
-    if( zName[10]==0
-     || sqlite3_stricmp(zName, "dolt_diff_stat")==0
-     || sqlite3_stricmp(zName, "dolt_diff_summary")==0 ) return 0;
+    if( zName[10]==0 ) return 0;
+    /* The count functions keep a fixed schema. A user table of the same
+    ** suffix uses the per-table diff module, whose columns follow the table. */
+    if( (sqlite3_stricmp(zName, "dolt_diff_stat")==0
+      || sqlite3_stricmp(zName, "dolt_diff_summary")==0)
+     && doltliteShieldInner(pMod)!=doltliteDiffTableModule() ){
+      return 0;
+    }
   }else{
     return 0;
   }

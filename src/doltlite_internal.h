@@ -1671,6 +1671,8 @@ int doltliteRegisterWorkspaceTables(sqlite3 *db);
 int doltliteRegisterBlameTables(sqlite3 *db);
 const sqlite3_module *doltliteBlameTableModule(void);
 const sqlite3_module *doltliteDiffTableModule(void);
+const sqlite3_module *doltliteShieldInner(Module*);
+void doltliteShieldSetInner(Module*, const sqlite3_module*);
 const sqlite3_module *doltliteHistoryTableModule(void);
 const sqlite3_module *doltliteWorkspaceTableModule(void);
 int doltliteRefreshConstraintViolationTables(sqlite3 *db);

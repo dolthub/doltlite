@@ -290,9 +290,24 @@ int doltliteRevertViewsAndTriggers(
 
   for(i=0; rc==SQLITE_OK && i<nSourceSchema; i++){
     const char *zType = aSourceSchema[i].zType;
+    char *zDetail = 0;
+    char *zMsg = 0;
     if( !zType || !aSourceSchema[i].zSql ) continue;
     if( strcmp(zType, "view")!=0 && strcmp(zType, "trigger")!=0 ) continue;
     rc = sqlite3_exec(db, aSourceSchema[i].zSql, 0, 0, 0);
+    if( rc==SQLITE_OK || rc==SQLITE_NOMEM ) continue;
+    /* Copy first: ErrorWithMsg replaces the connection string this reads. */
+    zDetail = sqlite3_mprintf("%s", sqlite3_errmsg(db));
+    if( !zDetail ){ rc = SQLITE_NOMEM; break; }
+    zMsg = sqlite3_mprintf("cannot restore %s %s: %s",
+        strcmp(zType, "view")==0 ? "view" : "trigger",
+        aSourceSchema[i].zName ? aSourceSchema[i].zName : "",
+        zDetail);
+    sqlite3_free(zDetail);
+    if( !zMsg ){ rc = SQLITE_NOMEM; break; }
+    sqlite3ErrorWithMsg(db, rc, "%s", zMsg);
+    sqlite3_free(zMsg);
+    break;
   }
   return rc;
 }

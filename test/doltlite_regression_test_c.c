@@ -19823,6 +19823,138 @@ vacuri_done:
   rmdir(zDir);
 }
 
+/* rm is an alias of remove. A user table named stat or summary is read
+** through dolt_diff_<table> when the name has no arguments; the count
+** function keeps the parenthesized form. Checking out dolt_schemas names
+** the view or trigger that could not be recreated. */
+static void run_vc_error_parity(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zErr[512];
+
+  printf("=== VC Error Parity Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_vc_error_parity");
+  removeDbFiles(dbpath);
+  check("open_vc_parity", open_db(dbpath, &db)==SQLITE_OK);
+
+  check("remote_add", execSql(db,
+      "SELECT dolt_remote('add','origin','file:///nonexistent/origin.db');"
+      )==SQLITE_OK);
+  check("remote_rm", execSql(db,
+      "SELECT dolt_remote('rm','origin');")==SQLITE_OK);
+  check("remote_rm_gone",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "0")==0);
+  check("remote_add_again", execSql(db,
+      "SELECT dolt_remote('add','origin','file:///nonexistent/origin.db');"
+      )==SQLITE_OK);
+  check("remote_remove", execSql(db,
+      "SELECT dolt_remote('remove','origin');")==SQLITE_OK);
+  check("remote_remove_gone",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "0")==0);
+  check("remote_rm_missing", execErrorHas(db,
+      "SELECT dolt_remote('rm','missing')", "remote not found", 0));
+  check("remote_unknown", execErrorHas(db,
+      "SELECT dolt_remote('nope','origin')",
+      "unknown action: use 'add' or 'remove'", 0));
+  check("remote_RM_unknown", execErrorHas(db,
+      "SELECT dolt_remote('RM','origin')",
+      "unknown action: use 'add' or 'remove'", 0));
+  check("remote_rm_extra", execErrorHas(db,
+      "SELECT dolt_remote('rm','origin','extra')",
+      "too many arguments", 0));
+
+  check("seed_history", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES (1,'a');"
+      "SELECT dolt_commit('-Am','c1');"
+      "INSERT INTO t VALUES (2,'b');"
+      "SELECT dolt_commit('-Am','c2');")==SQLITE_OK);
+  check("stat_fn_without_table",
+      strcmp(queryScalarText(db,
+          "SELECT rows_added FROM dolt_diff_stat('HEAD~1','HEAD')"
+          " WHERE table_name='t'"), "1")==0);
+  check("stat_plain_needs_refs", execErrorHas(db,
+      "SELECT table_name FROM dolt_diff_stat",
+      "dolt_diff_stat requires from_ref and to_ref", 0));
+  check("summary_plain_needs_refs", execErrorHas(db,
+      "SELECT to_table_name FROM dolt_diff_summary",
+      "dolt_diff_summary requires from_ref and to_ref", 0));
+
+  check("create_stat", execSql(db,
+      "CREATE TABLE stat(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO stat VALUES (1,'a');"
+      "SELECT dolt_commit('-Am','c3');"
+      "UPDATE stat SET v='b' WHERE id=1;"
+      "SELECT dolt_commit('-Am','c4');")==SQLITE_OK);
+  check("stat_row_diff",
+      strcmp(queryScalarText(db,
+          "SELECT diff_type FROM dolt_diff_stat WHERE to_v='b'"),
+          "modified")==0);
+  check("stat_row_diff_case",
+      strcmp(queryScalarText(db,
+          "SELECT diff_type FROM dolt_diff_Stat WHERE to_v='b'"),
+          "modified")==0);
+  check("stat_fn_still_counts",
+      strcmp(queryScalarText(db,
+          "SELECT rows_modified FROM dolt_diff_stat('HEAD~1','HEAD')"
+          " WHERE table_name='stat'"), "1")==0);
+  check("stat_alter_visible", execSql(db,
+      "ALTER TABLE stat ADD COLUMN c TEXT;"
+      "SELECT to_c FROM dolt_diff_stat;")==SQLITE_OK);
+
+  check("create_summary", execSql(db,
+      "CREATE TABLE summary(id INTEGER PRIMARY KEY);"
+      "INSERT INTO summary VALUES (9);"
+      "SELECT dolt_commit('-Am','c5');")==SQLITE_OK);
+  check("summary_row_diff",
+      strcmp(queryScalarText(db,
+          "SELECT diff_type FROM dolt_diff_summary WHERE to_id=9"),
+          "added")==0);
+  check("summary_fn_still_counts",
+      strcmp(queryScalarText(db,
+          "SELECT diff_type FROM dolt_diff_summary('HEAD~1','HEAD')"
+          " WHERE to_table_name='summary'"), "added")==0);
+
+  check("drop_stat", execSql(db, "DROP TABLE stat;")==SQLITE_OK);
+  check("stat_plain_after_drop", execErrorHas(db,
+      "SELECT table_name FROM dolt_diff_stat",
+      "dolt_diff_stat requires from_ref and to_ref", 0));
+
+  check("commit_trigger", execSql(db,
+      "CREATE TABLE parent(id INTEGER PRIMARY KEY);"
+      "CREATE TRIGGER tr AFTER INSERT ON parent"
+      " BEGIN INSERT INTO parent(id) VALUES (NEW.id+100); END;"
+      "SELECT dolt_commit('-Am','trig');"
+      "DROP TABLE parent;")==SQLITE_OK);
+  zErr[0] = 0;
+  check("schemas_checkout_fails", execErr(db,
+      "SELECT dolt_checkout('dolt_schemas')", zErr, sizeof(zErr))!=SQLITE_OK);
+  check("schemas_checkout_names_trigger",
+      strstr(zErr, "cannot restore trigger tr:")!=0);
+  check("schemas_checkout_names_table", strstr(zErr, "parent")!=0);
+  if( strstr(zErr, "cannot restore trigger tr:")==0 ){
+    fprintf(stderr, "  schemas checkout err: %s\n", zErr);
+  }
+  check("schemas_checkout_keeps_parent_dropped",
+      strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master WHERE name='parent'"), "0")==0);
+  check("schemas_checkout_keeps_trigger_dropped",
+      strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='trigger'"
+          " AND name='tr'"), "0")==0);
+  check("reset_restores_trigger", execSql(db,
+      "SELECT dolt_reset('--hard');")==SQLITE_OK);
+  check("reset_parent_back",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM parent"), "0")==0);
+  check("reset_trigger_back",
+      strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='trigger'"
+          " AND name='tr'"), "1")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -20039,6 +20171,7 @@ static const RegressionCase aCases[] = {
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
   { "remote_remove_missing_preserves_durable_state", "Remote Remove Missing Preserves Durable State Test", run_remote_remove_missing_preserves_durable_state },
   { "checkout_table_index_name_collision", "Checkout Table Index Name Collision Test", run_checkout_table_index_name_collision },
+  { "vc_error_parity", "VC Error Parity Test", run_vc_error_parity },
   { "checkout_table_drops_committed_index", "Checkout Table Drops Committed Index Test", run_checkout_table_drops_committed_index },
   { "checkout_nonexistent_preserves_durable_state", "Checkout Nonexistent Preserves Durable State Test", run_checkout_nonexistent_preserves_durable_state },
   { "checkout_dash_b_existing_branch_preserves_durable_state", "Checkout -b Existing Branch Preserves Durable State Test", run_checkout_dash_b_existing_branch_preserves_durable_state },
