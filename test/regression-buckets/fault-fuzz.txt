@@ -22,6 +22,7 @@ fuzz
 fuzz_malloc
 fuzz-oss1
 fuzz2
+fuzz3
 fuzz4
 fuzzer1
 fuzzer2

@@ -326,6 +326,12 @@ struct ChunkStore {
   const SavedRefsState *pDetachedRefs;
   u8 corruptMidStream;    /* Mid-stream WAL damage: reads/commits CORRUPT;
                           ** open still succeeds (stock surfaces on first use) */
+  /* Hash of the leading bytes when open recovered damage or rejected the
+  ** header. A same-size rewrite (a restored byte) is not an append, so the
+  ** size check would keep serving this recovery. */
+  u8 bDamageFinger;
+  int nDamageFingerBytes;
+  u8 aDamageFinger[16];
   i64 iFailedRootOff;     /* Root of a failed commit the rollback could not
                           ** truncate; zeroed before the tail is read again */
   i64 iFailedTailEnd;     /* Physical end of that failed append: growth to

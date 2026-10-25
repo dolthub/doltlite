@@ -870,6 +870,7 @@ static int csDetectExternalChanges(
       if( rc!=SQLITE_OK ) return rc;
       if( !adopted ) *pChanged = 1;
     }
+    if( !*pChanged && csDamageFingerDiffers(cs) ) *pChanged = 1;
   }
   return SQLITE_OK;
 }
@@ -884,6 +885,7 @@ static int csFileSnapshotUnchanged(ChunkStore *cs){
   rc = sqlite3OsDoltliteFileState(cs->file.pFile, &state);
   if( rc!=SQLITE_OK || state.bMoved || state.iFileSize<0
    || state.iFileSize>cs->file.iFileSize ) return 0;
+  if( csDamageFingerDiffers(cs) ) return 0;
   cs->movedReadOnly = 0;
   return 1;
 }

@@ -1,0 +1,83 @@
+# A connection opened while one byte of the chunk store is flipped must see
+# the original rows again after that byte is restored. The file size does
+# not change, so an append-only refresh would keep the torn recovery.
+#
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+database_may_be_corrupt
+test_set_config_pagecache 0 0
+
+expr srand(123)
+
+proc rstring {n} {
+  set str s
+  while {[string length $str] < $n} {
+    append str [expr rand()]
+  }
+  return [string range $str 0 $n]
+}
+proc rvalue {} {
+  switch -- [expr int(rand()*5)] {
+    0 { return NULL }
+    1 { return [expr int(rand()*1024)] }
+    2 { return [expr rand()] }
+    3 {
+      set n [expr int(rand()*2500)]
+      return "'[rstring $n]'"
+    }
+    4 {
+      set n [expr int(rand()*2500)]
+      return "CAST('[rstring $n]' AS BLOB)"
+    }
+  }
+}
+proc modify_database {iMod} {
+  set blob [binary format c [expr {$iMod&0xFF}]]
+  set offset [expr {$iMod>>8}]
+  set fd [open test.db r+]
+  fconfigure $fd -translation binary
+  seek $fd $offset
+  set old_blob [read $fd 1]
+  seek $fd $offset
+  puts -nonewline $fd $blob
+  close $fd
+  binary scan $old_blob c iOld
+  return [expr {($offset<<8) + ($iOld&0xFF)}]
+}
+
+do_test doltlite-fuzz3-restore-1.0 {
+  execsql {
+    BEGIN;
+    CREATE TABLE t1(a, b, c);
+    CREATE TABLE t2(d, e, f);
+    CREATE INDEX i1 ON t1(a, b, c);
+    CREATE INDEX i2 ON t2(d, e, f);
+  }
+  for {set i 0} {$i < 50} {incr i} {
+    execsql "INSERT INTO t1 VALUES([rvalue], [rvalue], [rvalue])"
+    execsql "INSERT INTO t2 VALUES([rvalue], [rvalue], [rvalue])"
+  }
+  execsql COMMIT
+  execsql {SELECT count(*) FROM t1}
+} {50}
+
+set cksum [execsql {SELECT md5sum(a, b, c) FROM t1}]
+append cksum [execsql {SELECT md5sum(d, e, f) FROM t2}]
+
+# Same draws as fuzz3's first iterations: offsets land in the first 5KB.
+for {set ii 0} {$ii < 8} {incr ii} {
+  set iNew [expr int(rand()*5*1024*256)]
+  set iOld [modify_database $iNew]
+  db close
+  sqlite3 db test.db
+  modify_database $iOld
+  do_test doltlite-fuzz3-restore-2.$ii {
+    set got [execsql {SELECT md5sum(a, b, c) FROM t1}]
+    append got [execsql {SELECT md5sum(d, e, f) FROM t2}]
+    set got
+  } $cksum
+}
+
+test_restore_config_pagecache
+finish_test

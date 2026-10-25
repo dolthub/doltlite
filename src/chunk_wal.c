@@ -576,6 +576,9 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->wal.recoveredMidStream = pSrc->wal.recoveredMidStream;
   pDst->wal.cleanCloseMarker = pSrc->wal.cleanCloseMarker;
   pDst->corruptMidStream = pSrc->corruptMidStream;
+  pDst->bDamageFinger = pSrc->bDamageFinger;
+  pDst->nDamageFingerBytes = pSrc->nDamageFingerBytes;
+  memcpy(pDst->aDamageFinger, pSrc->aDamageFinger, sizeof(pDst->aDamageFinger));
   pDst->notADatabase = pSrc->notADatabase;
   REFS_OWNED_COPY(pDst->refs, pSrc->refs);
 

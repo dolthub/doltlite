@@ -443,6 +443,7 @@ scan_done:
   return rc;
 }
 
+static void csCaptureDamageFinger(ChunkStore *cs);
 
 static int csOpen(
   ChunkStore *cs,
@@ -642,6 +643,7 @@ static int csOpen(
       cs->index.iIndexOffset = 0;
       cs->index.nIndexSize = 0;
       cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
+      csCaptureDamageFinger(cs);
       csMarkRefsCommitted(cs);
       return SQLITE_OK;
     }
@@ -653,6 +655,7 @@ static int csOpen(
       cs->index.iIndexOffset = 0;
       cs->index.nIndexSize = 0;
       cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
+      csCaptureDamageFinger(cs);
       csMarkRefsCommitted(cs);
       return SQLITE_OK;
     }
@@ -768,9 +771,73 @@ static int csOpen(
 
   /* Poison after this open's refs/branch reads. */
   if( cs->wal.recoveredMidStream ) cs->corruptMidStream = 1;
+  if( cs->corruptMidStream || cs->corruptHeader || cs->notADatabase ){
+    csCaptureDamageFinger(cs);
+  }
 
   csMarkRefsCommitted(cs);
   return SQLITE_OK;
+}
+
+/* Leading bytes covered by the damage fingerprint. A byte flipped inside
+** the first 5KB must change this sample; the window is wider than that. */
+#define CS_DAMAGE_FINGER_BYTES 8192
+
+static void csCaptureDamageFinger(ChunkStore *cs){
+  u8 *buf;
+  blake3_hasher hasher;
+  i64 sz;
+  int n;
+  int rc;
+
+  if( !cs ) return;
+  cs->bDamageFinger = 0;
+  cs->nDamageFingerBytes = 0;
+  if( cs->isMemory || cs->isBuffer || !cs->file.pFile ) return;
+  sz = 0;
+  rc = sqlite3OsFileSize(cs->file.pFile, &sz);
+  if( rc!=SQLITE_OK || sz<=0 ) return;
+  n = sz > CS_DAMAGE_FINGER_BYTES ? CS_DAMAGE_FINGER_BYTES : (int)sz;
+  buf = sqlite3_malloc(n);
+  if( !buf ) return;
+  rc = sqlite3OsRead(cs->file.pFile, buf, n, 0);
+  if( rc==SQLITE_OK ){
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, buf, (size_t)n);
+    blake3_hasher_finalize(&hasher, cs->aDamageFinger, 16);
+    cs->nDamageFingerBytes = n;
+    cs->bDamageFinger = 1;
+  }
+  sqlite3_free(buf);
+}
+
+int csDamageFingerDiffers(ChunkStore *cs){
+  u8 *buf;
+  u8 finger[16];
+  blake3_hasher hasher;
+  i64 sz;
+  int n;
+  int rc;
+  int same;
+
+  if( !cs || !cs->bDamageFinger || !cs->file.pFile ) return 0;
+  n = cs->nDamageFingerBytes;
+  if( n<=0 ) return 1;
+  sz = 0;
+  rc = sqlite3OsFileSize(cs->file.pFile, &sz);
+  if( rc!=SQLITE_OK || sz < (i64)n ) return 1;
+  buf = sqlite3_malloc(n);
+  if( !buf ) return 1;
+  same = 0;
+  rc = sqlite3OsRead(cs->file.pFile, buf, n, 0);
+  if( rc==SQLITE_OK ){
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, buf, (size_t)n);
+    blake3_hasher_finalize(&hasher, finger, 16);
+    same = memcmp(finger, cs->aDamageFinger, 16)==0;
+  }
+  sqlite3_free(buf);
+  return !same;
 }
 
 static int csOpenUnlocked(
