@@ -108,10 +108,13 @@ if cert:
 def connect():
     sock = socket.create_connection(("127.0.0.1", port), timeout=2)
     return context.wrap_socket(sock, server_hostname="localhost") if context else sock
+# The stall stays open for the 2s header budget plus 1s per 64KiB already
+# received. 192KiB makes that about 5s. Clone has to finish while the
+# stall is still open; macOS has taken about 1.5s for this clone.
 payload = (
     b"POST /repo.db/chunks HTTP/1.1\r\n"
-    b"Host: x\r\nContent-Length: 1000\r\n\r\n"
-    b"0123456789"
+    b"Host: x\r\nContent-Length: 400000\r\n\r\n"
+    + b"x" * (3 * 64 * 1024)
 )
 
 stalls = []
@@ -134,7 +137,7 @@ except subprocess.TimeoutExpired as exc:
     raise AssertionError("clone waited out the stalled bodies") from exc
 elapsed = time.monotonic() - start
 assert result.returncode == 0, result.stdout
-assert elapsed < 1.0, elapsed
+assert elapsed < 3.0, elapsed
 
 for stalled in stalls:
     stalled.settimeout(0.01)
