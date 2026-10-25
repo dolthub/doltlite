@@ -443,6 +443,7 @@ scan_done:
   return rc;
 }
 
+static void csCaptureDamageFinger(ChunkStore *cs);
 
 static int csOpen(
   ChunkStore *cs,
@@ -782,7 +783,7 @@ static int csOpen(
 ** the first 5KB must change this sample; the window is wider than that. */
 #define CS_DAMAGE_FINGER_BYTES 8192
 
-void csCaptureDamageFinger(ChunkStore *cs){
+static void csCaptureDamageFinger(ChunkStore *cs){
   u8 *buf;
   blake3_hasher hasher;
   i64 sz;

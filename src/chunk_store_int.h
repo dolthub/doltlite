@@ -60,7 +60,6 @@ int csManifestHashStateOffsetless(const u8 *aBuf);
 int csValidateWalRootManifest(const ChunkStore *cs, const u8 *aBuf,
                               i64 iRootOffset);
 int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut);
-void csCaptureDamageFinger(ChunkStore *cs);
 int csDamageFingerDiffers(ChunkStore *cs);
 
 #endif /* CHUNK_STORE_INT_H */
