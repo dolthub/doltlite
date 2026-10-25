@@ -199,7 +199,8 @@ int mergeRowEditsColumn(
   const ProllyHash *pOtherRoot,
   u8 ancFlags,
   u8 otherFlags,
-  int iField,
+  int iAncField,
+  int iOtherField,
   int bNonNullOnly,
   int *pbEdited
 );

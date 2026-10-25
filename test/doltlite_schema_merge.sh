@@ -1884,6 +1884,53 @@ EOF
   done
 done
 
+# Their side edits the column we dropped and drops another column, so their
+# rows no longer line up with the ancestor's by position.
+for other in n a; do
+  DB=/tmp/test_merge_drop_vs_edit_edit_side_drops_${other}_$$.db; rm -f "$DB"
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET b='edit' WHERE k=1;
+ALTER TABLE t DROP COLUMN $other;
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','main side');
+EOF
+  run_test_error_match "merge_drop_vs_edit_edit_side_drops_${other}_stopped" \
+    "SELECT dolt_merge('feat');" \
+    "column 'b' of table 't' was dropped on one branch and its value changed" "$DB"
+  run_test "merge_drop_vs_edit_edit_side_drops_${other}_head" \
+    "SELECT message FROM dolt_log LIMIT 1;" "main side" "$DB"
+  rm -f "$DB"
+done
+
+# Dropping a column and editing one the other side kept is no conflict.
+DB=/tmp/test_merge_edit_side_drops_unrelated_$$.db; rm -f "$DB"
+cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, b TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a1','b1',11),(2,'a2','b2',22);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET n=99 WHERE k=1;
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','feat side');
+SELECT dolt_checkout('main');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_commit('-Am','main side');
+EOF
+run_test "merge_edit_side_drops_unrelated_merges" \
+  "SELECT dolt_merge('feat') IS NOT NULL; SELECT k, n FROM t ORDER BY k;" \
+  "1
+1|99
+2|22" "$DB"
+rm -f "$DB"
+
 for theirs in "UPDATE t SET n=99 WHERE k=1;" "UPDATE t SET a='edit' WHERE k=1;" \
               "INSERT INTO t VALUES(9,'a9','b9',99);" "DELETE FROM t WHERE k=1;"; do
   DB=/tmp/test_merge_drop_vs_other_$$.db; rm -f "$DB"

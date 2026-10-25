@@ -149,8 +149,9 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
       struct TableEntry *pEditCatEnt;
       ParsedColumn *aAncCols = 0;
       ParsedColumn *aDropCols = 0;
+      ParsedColumn *aEditCols = 0;
       int *aHeld = 0;
-      int nAncCols = 0, nDropCols = 0;
+      int nAncCols = 0, nDropCols = 0, nEditCols = 0;
 
       if( !zTable || !c->aAncSchema[i].zType ) continue;
       if( strcmp(c->aAncSchema[i].zType, "table")!=0 ) continue;
@@ -172,24 +173,11 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
       }
       /* The schema merge turns our edits of a column theirs dropped into
       ** row conflicts, but relays their edits onto our layout, which no
-      ** longer has the column. Appending columns leaves every ancestor field
-      ** where it was, so their cells still compare by position. */
+      ** longer has the column. Their own schema change moves fields, so each
+      ** ancestor column is compared against its own field in their layout. */
       if( strcmp(pEditSe->zSql, c->aAncSchema[i].zSql)!=0 ){
-        ParsedColumn *aEditCols = 0;
-        int nEditCols = 0, bAppends;
         if( side
          || parseColumns(pEditSe->zSql, &aEditCols, &nEditCols)!=SQLITE_OK ){
-          freeColumns(aAncCols, nAncCols);
-          freeColumns(aDropCols, nDropCols);
-          continue;
-        }
-        bAppends = nEditCols>nAncCols;
-        for(j=0; bAppends && j<nAncCols; j++){
-          bAppends = sqlite3_stricmp(aEditCols[j].zName, aAncCols[j].zName)==0
-                  && parsedColumnDefinitionsMatch(&aEditCols[j], &aAncCols[j]);
-        }
-        freeColumns(aEditCols, nEditCols);
-        if( !bAppends ){
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
           continue;
@@ -204,6 +192,7 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
         if( !aHeld ){
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
+          freeColumns(aEditCols, nEditCols);
           return SQLITE_NOMEM;
         }
         mergeMapColumnsToAncestor(
@@ -225,13 +214,14 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
           sqlite3_free(aHeld);
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
+          freeColumns(aEditCols, nEditCols);
           return rcHold;
         }
         sqlite3_free(zReuse);
       }
       for(j=0; j<nAncCols; j++){
         int bEdited = 0;
-        int iField;
+        int iField, iEditField;
         int rc;
         if( parsedColumnIndexByName(aDropCols, nDropCols,
                                     aAncCols[j].zName)>=0 ){
@@ -251,13 +241,26 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
         }
         iField = mergeStoredFieldIndex(aAncCols, j);
         if( iField<0 ) continue;
+        iEditField = iField;
+        if( aEditCols ){
+          int k = parsedColumnIndexByName(aEditCols, nEditCols,
+                                          aAncCols[j].zName);
+          /* Gone or redeclared on their side: not the column we dropped. */
+          if( k<0 || !parsedColumnDefinitionsMatch(&aEditCols[k], &aAncCols[j]) ){
+            continue;
+          }
+          iEditField = mergeStoredFieldIndex(aEditCols, k);
+          if( iEditField<0 ) continue;
+        }
         rc = mergeRowEditsColumn(c->db, &pAncCat->root, &pEditCatEnt->root,
                                  pAncCat->flags, pEditCatEnt->flags,
-                                 iField, !c->bBranchMerge && side==1, &bEdited);
+                                 iField, iEditField,
+                                 !c->bBranchMerge && side==1, &bEdited);
         if( rc!=SQLITE_OK ){
           sqlite3_free(aHeld);
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
+          freeColumns(aEditCols, nEditCols);
           return rc;
         }
         if( bEdited ){
@@ -279,12 +282,14 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
           sqlite3_free(aHeld);
           freeColumns(aAncCols, nAncCols);
           freeColumns(aDropCols, nDropCols);
+          freeColumns(aEditCols, nEditCols);
           return SQLITE_ERROR;
         }
       }
       sqlite3_free(aHeld);
       freeColumns(aAncCols, nAncCols);
       freeColumns(aDropCols, nDropCols);
+      freeColumns(aEditCols, nEditCols);
     }
   }
   return SQLITE_OK;
