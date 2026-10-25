@@ -588,7 +588,7 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         rc==SQLITE_ERROR ? "remote already exists" : 0);
       return;
     }
-  }else if( strcmp(zAction, "remove")==0 ){
+  }else if( strcmp(zAction, "remove")==0 || strcmp(zAction, "rm")==0 ){
     const char *zNormalizedName;
     char *zOwnedName;
     if( argc>2 ){

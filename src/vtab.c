@@ -1278,6 +1278,9 @@ int sqlite3VtabEponymousTableInit(Parse *pParse, Module *pMod){
   int rc;
   sqlite3 *db = pParse->db;
 #ifdef DOLTLITE_PROLLY
+  /* dolt_diff_stat / dolt_diff_summary share a name with a user table.
+  ** Pick the row-diff module before the cached columns are reused. */
+  doltliteDiffShadowPrepare(db, pMod);
   /* The first xConnect caches this eponymous table's columns. A later
   ** literal ref can name a different snapshot schema. Rebuild only when
   ** nothing still references the cached table. */
@@ -1333,6 +1336,14 @@ void sqlite3VtabEponymousTableClear(sqlite3 *db, Module *pMod){
     pMod->pEpoTab = 0;
   }
 }
+
+#ifdef DOLTLITE_PROLLY
+/* True when pTab is the eponymous table whose xConnect is on the stack.
+** Swapping its module then would disconnect the constructor in progress. */
+int sqlite3VtabConstructing(sqlite3 *db, Table *pTab){
+  return db && pTab && db->pVtabCtx && db->pVtabCtx->pTab==pTab;
+}
+#endif
 
 #ifdef DOLTLITE_PROLLY
 /*

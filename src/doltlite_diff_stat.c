@@ -1808,4 +1808,53 @@ int doltliteDiffStatRegister(sqlite3 *db){
   return rc;
 }
 
+/* A bare dolt_diff_stat is the row diff of a user table named stat.
+** Parentheses keep the count function, matching Dolt: the call and the
+** table are different objects there, and here they share one module name.
+** The shielded slot is swapped only when nothing still holds the cached
+** table, then the eponymous columns are rebuilt for the chosen module. */
+void doltliteDiffShadowPrepare(sqlite3 *db, Module *pMod){
+  const char *zName;
+  const char *zTable;
+  const sqlite3_module *pBuiltin;
+  const sqlite3_module *pHave;
+  const sqlite3_module *pWant;
+  Table *pUser;
+
+  if( !db || !pMod || !pMod->zName ) return;
+  zName = pMod->zName;
+  if( sqlite3_stricmp(zName, "dolt_diff_stat")==0 ){
+    zTable = "stat";
+    pBuiltin = &diffStatModule;
+  }else if( sqlite3_stricmp(zName, "dolt_diff_summary")==0 ){
+    zTable = "summary";
+    pBuiltin = &diffSummaryModule;
+  }else{
+    return;
+  }
+  pHave = doltliteShieldInner(pMod);
+  if( !pHave ) return;
+  pWant = pBuiltin;
+  pUser = 0;
+  if( !(db->pDoltliteHistoricalArgs && db->pDoltliteHistoricalArgs->nExpr>0)
+   && db->nDb>0 && db->aDb[0].pBt
+   && sqlite3BtreeIsDoltliteFormat(db->aDb[0].pBt)
+   && db->aDb[0].pSchema ){
+    pUser = sqlite3FindTable(db, zTable, "main");
+    if( pUser && IsOrdinaryTable(pUser) ){
+      pWant = doltliteDiffTableModule();
+    }
+  }
+  if( pHave==pWant ) return;
+  if( pMod->pEpoTab && (pMod->pEpoTab->nTabRef!=1
+      || sqlite3VtabConstructing(db, pMod->pEpoTab)) ){
+    return;
+  }
+  sqlite3VtabEponymousTableClear(db, pMod);
+  /* xDisconnect reads pInner. Run it before the slot changes, while the
+  ** vtab that connected is still the one being freed. */
+  sqlite3VtabUnlockList(db);
+  doltliteShieldSetInner(pMod, pWant);
+}
+
 #endif

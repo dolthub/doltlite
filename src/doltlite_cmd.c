@@ -791,6 +791,22 @@ static int smIntegrity(sqlite3_vtab *pVtab, const char *zSchema,
   return rc;
 }
 
+const sqlite3_module *doltliteShieldInner(Module *pMod){
+  ShieldedModule *p;
+  if( !pMod || !pMod->pModule || !pMod->pAux ) return 0;
+  if( pMod->pModule->xConnect!=smConnect ) return 0;
+  p = (ShieldedModule*)pMod->pAux;
+  return p->pInner;
+}
+
+void doltliteShieldSetInner(Module *pMod, const sqlite3_module *pInner){
+  ShieldedModule *p;
+  if( !pInner || !pMod || !pMod->pModule || !pMod->pAux ) return;
+  if( pMod->pModule->xConnect!=smConnect ) return;
+  p = (ShieldedModule*)pMod->pAux;
+  p->pInner = pInner;
+}
+
 int doltliteCreateShieldedModule(
   sqlite3 *db,
   const char *zName,
