@@ -85,6 +85,7 @@ static void testFile(void){
   int i, nRead, nScalar, rc;
 
   remove(zPath);
+  remove(".test_chunk_store_read_batch.db-lock");
   rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), zPath,
                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
   check("file open", rc==SQLITE_OK);
@@ -240,6 +241,7 @@ static void testFile(void){
   chunkStoreClose(&cs);
   sqlite3_free(data);
   remove(zPath);
+  remove(".test_chunk_store_read_batch.db-lock");
 }
 
 static void testMemory(void){
