@@ -635,6 +635,7 @@ static int appendEntry(
   e = &mm->aEntries[phys];
   memset(e, 0, sizeof(*e));
   e->op = op;
+  if( op==PROLLY_EDIT_DELETE ) mm->bHasDelete = 1;
   e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
   rc = copyEntryData(mm, e, pKey, nKey, pVal, nVal);
   if( rc!=SQLITE_OK ) return rc;
@@ -877,6 +878,7 @@ int prollyMutMapDeleteGetEntry(
         if( rc!=SQLITE_OK ) return rc;
       }
       e->op = PROLLY_EDIT_DELETE;
+      mm->bHasDelete = 1;
       e->nVal = 0;
       e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     }
@@ -922,6 +924,7 @@ int prollyMutMapDeleteEntry(
     if( rc!=SQLITE_OK ) return rc;
   }
   e->op = PROLLY_EDIT_DELETE;
+  mm->bHasDelete = 1;
   e->nVal = 0;
   e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
   return SQLITE_OK;
@@ -967,6 +970,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     if( idx >= 0 && idx < mm->nEntries ){
       ProllyMutMapEntry *e = &mm->aEntries[idx];
       e->op = rec->prevOp;
+      if( e->op==PROLLY_EDIT_DELETE ) mm->bHasDelete = 1;
       e->bornAt = encodeLevel(mm, rec->prevBornAt);
       rc = replaceEntryValue(mm, e, rec->prevVal, rec->nPrevVal);
       if( rc!=SQLITE_OK ) return rc;
@@ -1214,6 +1218,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
     freeEntryData(&mm->aEntries[i]);
   }
   mm->nEntries = 0;
+  mm->bHasDelete = 0;
   mm->iOrderGap = 0;
   mm->orderDirty = 0;
   mm->preferSorted = 0;

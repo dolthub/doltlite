@@ -51,6 +51,8 @@ struct ProllyMutMap {
   u8 preferSorted;
   u8 posDirty;
   u8 appendSorted;
+  /* Set once any entry has been a delete; cleared only by a full clear. */
+  u8 bHasDelete;
   int nEntries;
   int nAlloc;
   int levelBase;

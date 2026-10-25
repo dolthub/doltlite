@@ -510,6 +510,11 @@ void invalidateSchema(Btree *pBtree);
 void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap);
 int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
+int prollyBaseBytesOverPendingDelete(BtCursor *pCur,
+                                     const u8 *pKey, int nKey, i64 intKey,
+                                     const u8 *pNew, int nNew,
+                                     int bOverwrite,
+                                     u8 **ppKeep, int *pnKeep);
 int prollyBtCursorCurrentSortKey(BtCursor *pCur, const u8 **ppKey, int *pnKey);
 int prollyIndexMovetoExactSortKey(BtCursor *pCur, const u8 *pKey, int nKey,
                                   int *pRes);
