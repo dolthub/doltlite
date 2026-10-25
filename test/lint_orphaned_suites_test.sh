@@ -145,6 +145,14 @@ expect_lint_error "bucketed and listed" "a suite both bucketed and listed as unr
 : > "$tmp/test/known_testfixture_unrun.txt"
 expect_lint_ok "a bucketed extension suite"
 
+touch "$tmp/test/misnamed.tes"
+expect_lint_error test/misnamed.tes "a misnamed .tes suite in no list"
+printf '%s\n' 'test/misnamed.tes class=harness  # misnamed' \
+  > "$tmp/test/known_testfixture_unrun.txt"
+expect_lint_ok "a misnamed .tes suite listed as unrun"
+rm "$tmp/test/misnamed.tes"
+: > "$tmp/test/known_testfixture_unrun.txt"
+
 printf '%s\n' 'ext/gone/*.test class=harness  # removed' \
   > "$tmp/test/known_testfixture_unrun.txt"
 expect_lint_error "matches no file" "an unrun entry that matches nothing"

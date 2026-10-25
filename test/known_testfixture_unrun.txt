@@ -31,6 +31,7 @@ test/thread1.test class=harness  # multi-threaded timing; nondeterministic
 test/thread2.test class=harness  # multi-threaded timing; nondeterministic
 test/thread3.test class=harness  # multi-threaded timing; nondeterministic
 test/speed3.test class=unsupported issue=2490  # benchmark that commits across an ATTACHed second file; multi-file write transactions are rejected
+test/temptrigfault.tes class=unsupported issue=2490  # upstream's .tes name kept every harness from running it; its triggers write across an ATTACHed second file in one transaction, which DoltLite rejects, so 46 of 1421 assertions fail
 test/waliter.test class=unsupported issue=1836  # reads test.db-shm; there are no WAL sidecars
 ext/session/*.test class=unsupported  # the session extension is not compiled into DoltLite builds (no SQLITE_ENABLE_SESSION); every file skips
 ext/rbu/*.test class=unsupported  # RBU is not compiled into DoltLite builds and writes SQLite page and WAL files; every file skips
