@@ -5395,11 +5395,6 @@ vec1intck vec1intck-3.9 class=intentional issue=1840  # rowids continue after re
 # ── rtree, intck, expert, recover and unbucketed upstream files ──
 rtree8 rtree8-1.3.1 class=intentional issue=1840  # %_node ids keep counting after DELETE, so max(nodeno) is higher
 rtree8 rtree8-2.1.1 class=intentional issue=1840  # %_node ids keep counting after DELETE, so max(nodeno) is higher
-rtreeA rtreeA-1.2.1 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
-rtreeA rtreeA-1.2.2 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
-rtreeA rtreeA-1.2.3 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
-rtreeA rtreeA-1.2.4 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
-rtreeA rtreeA-7.110 class=engine-gap issue=4239  # error text after a shadow table is dropped or truncated
 rtreeC rtreeC-5.2 class=intentional issue=1176  # plan shape: t1(x INT PRIMARY KEY) is clustered, so the planner seeks t1 inside rt
 rtreeC rtreeC-5.6 class=intentional issue=1176  # plan shape: t1(x INT PRIMARY KEY) is clustered, so the planner seeks t1 inside rt
 rtreeC rtreeC-5.8 class=intentional issue=1176  # plan shape: t1(x INT PRIMARY KEY) is clustered, so the planner seeks t1 inside rt
