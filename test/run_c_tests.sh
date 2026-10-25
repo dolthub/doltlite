@@ -59,6 +59,7 @@ COVERAGE_TESTS=(
   commit_deserialize_test
   serialize_pending_test
   chunk_store_put_bounds_test
+  chunk_store_read_batch_test
   crash_recovery_test
   concurrent_refs_merge_test
 )

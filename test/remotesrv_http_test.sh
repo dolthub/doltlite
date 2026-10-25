@@ -331,6 +331,45 @@ SQL
 result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
 check "initial push returns 0" "0" "$result"
 
+batch_root=$("$DB" "$A" "SELECT dolt_hashof('HEAD');")
+batch_parent=$("$DB" "$A" "SELECT dolt_hashof('HEAD~1');")
+result=$(python3 - "$PROXY_PORT" "$batch_root" "$batch_parent" <<'PY'
+import http.client
+import struct
+import sys
+
+port = int(sys.argv[1])
+root, parent = (bytes.fromhex(h) for h in sys.argv[2:])
+
+def request(method, path, body=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request(method, "/repo.db/" + path, body=body)
+    response = conn.getresponse()
+    assert response.status == 200, response.status
+    data = response.read()
+    conn.close()
+    return data
+
+expected = {h: request("GET", "chunk/" + h.hex()) for h in (root, parent)}
+missing = bytes(20)
+hashes = [root, parent] * 130 + [missing, root, parent]
+data = request("POST", "get-chunks", b"".join(hashes))
+offset = 0
+for h in hashes:
+    size, = struct.unpack_from(">I", data, offset)
+    offset += 4
+    if h == missing:
+        assert size == 0xffffffff
+    else:
+        assert size == len(expected[h])
+        assert data[offset:offset + size] == expected[h]
+        offset += size
+assert offset == len(data)
+print("ok")
+PY
+)
+check "batch replies preserve order, duplicates and missing slots" "ok" "$result"
+
 echo "--- 1b. lazy clone faults chunks over http after reopen ---"
 LAZY="$TMP/lazy.db"
 LAZY_URI="file:$LAZY?lazy_origin=1"

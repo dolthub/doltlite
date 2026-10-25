@@ -25,7 +25,6 @@ static int csHasOrigin(ChunkStore *cs){
 #define CS_SOURCE_CACHE_MAX_BYTES (16*1024*1024)
 #define CS_SOURCE_BUSY_RETRY_COUNT 200
 #define CS_SOURCE_BUSY_RETRY_US 5000
-#define CS_SOURCE_REMOTE_BATCH_SIZE 256
 
 typedef struct DoltliteChunkSourceEntry DoltliteChunkSourceEntry;
 struct DoltliteChunkSourceEntry {
@@ -116,11 +115,11 @@ static int SQLITE_CALLBACK csOriginGetMany(
     }
   }
 
-  for(offset=0; offset<nHash; offset += CS_SOURCE_REMOTE_BATCH_SIZE){
-    ProllyHash aBatch[CS_SOURCE_REMOTE_BATCH_SIZE];
+  for(offset=0; offset<nHash; offset += CHUNK_READ_BATCH_MAX){
+    ProllyHash aBatch[CHUNK_READ_BATCH_MAX];
     int nBatch = nHash - offset;
-    if( nBatch>CS_SOURCE_REMOTE_BATCH_SIZE ){
-      nBatch = CS_SOURCE_REMOTE_BATCH_SIZE;
+    if( nBatch>CHUNK_READ_BATCH_MAX ){
+      nBatch = CHUNK_READ_BATCH_MAX;
     }
     for(i=0; i<nBatch; i++){
       memcpy(aBatch[i].data,

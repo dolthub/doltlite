@@ -1003,6 +1003,35 @@ int chunkStoreVerifyChunk(
   return SQLITE_OK;
 }
 
+static int csReadChunk(
+  ChunkStore *cs,
+  const ChunkIndexEntry *e,
+  const ProllyHash *pHash,
+  u8 **ppData,
+  int *pnData
+){
+  u8 *pBuf;
+  int rc;
+  int sz = e->size;
+
+  if( sz > INT_MAX - 4 ) return SQLITE_TOOBIG;
+  pBuf = (u8*)sqlite3_malloc(sz + 4);
+  if( !pBuf ) return SQLITE_NOMEM;
+  rc = csReadSliced(cs, pBuf, (i64)sz + 4, e->offset);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBuf);
+    return rc;
+  }
+  if( CS_READ_U32(pBuf)!=(u32)sz ){
+    sqlite3_free(pBuf);
+    return SQLITE_CORRUPT;
+  }
+  memmove(pBuf, pBuf + 4, sz);
+  *ppData = pBuf;
+  *pnData = sz;
+  return chunkStoreVerifyChunk(pHash, ppData, pnData, cs->pStats);
+}
+
 int chunkStoreGet(
   ChunkStore *cs,
   const ProllyHash *hash,
@@ -1077,35 +1106,139 @@ int chunkStoreGet(
       return SQLITE_CORRUPT;
     }
 
-    {
-      i64 fileOff = e->offset;
-      int sz = e->size;
-      u8 *pBuf;
-      u32 storedLen;
+    return csReadChunk(cs, e, hash, ppData, pnData);
+  }
+}
 
-      if( sz > INT_MAX - 4 ) return SQLITE_TOOBIG;
-      pBuf = (u8 *)sqlite3_malloc(sz + 4);
-      if( pBuf == 0 ) return SQLITE_NOMEM;
+typedef struct CsBatchRead CsBatchRead;
+struct CsBatchRead {
+  ChunkIndexEntry entry;
+  int iOut;
+};
 
-      rc = csReadSliced(cs, pBuf, (i64)sz + 4, fileOff);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(pBuf);
-        return rc;
+static int csBatchReadCmp(const void *a, const void *b){
+  const CsBatchRead *p = (const CsBatchRead*)a;
+  const CsBatchRead *q = (const CsBatchRead*)b;
+  if( p->entry.offset<q->entry.offset ) return -1;
+  if( p->entry.offset>q->entry.offset ) return 1;
+  return p->iOut - q->iOut;
+}
+
+static int csReadBatchFits(i64 iStart, i64 iEnd, const ChunkIndexEntry *e){
+  return e->offset>=iEnd && e->offset-iEnd<=CS_WAL_CHUNK_HDR_SIZE
+      && e->offset-iStart<=CHUNK_READ_BATCH_BYTES-e->size-4;
+}
+
+int chunkStoreReadBatch(
+  ChunkStore *cs,
+  const ProllyHash *aHash,
+  int nHash,
+  u8 **apData,
+  int *anData,
+  int *pnRead
+){
+  CsBatchRead aRead[CHUNK_READ_BATCH_MAX];
+  u8 *pBuf = 0;
+  int nRead = 0;
+  int nMax = MIN(nHash, CHUNK_READ_BATCH_MAX);
+  int rc = SQLITE_OK;
+  int i;
+
+  *pnRead = 0;
+  if( nHash<0 || nHash>CHUNK_READ_BATCH_MAX ) return SQLITE_MISUSE;
+  if( nHash==0 ) return SQLITE_OK;
+  memset(apData, 0, nMax*sizeof(*apData));
+  memset(anData, 0, nMax*sizeof(*anData));
+  if( cs->notADatabase ) return SQLITE_NOTADB;
+  if( cs->iFailedRootOff ){
+    rc = csScrubFailedRoot(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  if( cs->corruptMidStream ) return SQLITE_CORRUPT;
+  for(i=0; cs->file.pFile && i<nMax; i++){
+    ChunkIndexEntry e;
+    int idx;
+    int found = 0;
+    rc = csSearchPending(cs, &aHash[i], &idx);
+    if( rc!=SQLITE_OK ) return rc;
+    if( idx>=0 ) break;
+    rc = csSearchRecent(cs, &aHash[i], &idx);
+    if( rc!=SQLITE_OK ) return rc;
+    if( idx>=0 ){
+      e = cs->staging.aRecent[idx];
+    }else{
+      rc = csIndexLookup(cs, &aHash[i], &e, &found);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !found ) break;
+    }
+    if( e.size<0 || e.size>CHUNK_READ_BATCH_BYTES-4
+     || e.offset<CHUNK_MANIFEST_SIZE
+     || e.offset>cs->file.iFileSize-e.size-4 ) break;
+    aRead[nRead].entry = e;
+    aRead[nRead++].iOut = i;
+  }
+  if( nRead==0 ){
+    rc = chunkStoreGet(cs, aHash, apData, anData);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc==SQLITE_OK ) *pnRead = 1;
+    return rc;
+  }
+  qsort(aRead, nRead, sizeof(*aRead), csBatchReadCmp);
+  for(i=0; i<nRead && rc==SQLITE_OK; ){
+    i64 iStart = aRead[i].entry.offset;
+    i64 iEnd = iStart+aRead[i].entry.size+4;
+    int j = i+1;
+    int k;
+    while( j<nRead && csReadBatchFits(iStart, iEnd, &aRead[j].entry) ){
+      iEnd = aRead[j].entry.offset+aRead[j].entry.size+4;
+      j++;
+    }
+    if( j==i+1 ){
+      int out = aRead[i].iOut;
+      rc = csReadChunk(cs, &aRead[i].entry, &aHash[out],
+                       &apData[out], &anData[out]);
+      i = j;
+      continue;
+    }
+    if( !pBuf ){
+      pBuf = sqlite3_malloc(CHUNK_READ_BATCH_BYTES);
+      if( !pBuf ){
+        rc = SQLITE_NOMEM;
+        break;
       }
-
-      storedLen = CS_READ_U32(pBuf);
-      if( (int)storedLen != sz ){
-        sqlite3_free(pBuf);
-        return SQLITE_CORRUPT;
+    }
+    rc = csReadSliced(cs, pBuf, iEnd-iStart, iStart);
+    for(k=i; k<j && rc==SQLITE_OK; k++){
+      ChunkIndexEntry *e = &aRead[k].entry;
+      const u8 *p = pBuf+(e->offset-iStart);
+      int out = aRead[k].iOut;
+      if( CS_READ_U32(p)!=(u32)e->size ){
+        rc = SQLITE_CORRUPT;
+        break;
       }
-
-      memmove(pBuf, pBuf + 4, sz);
-      *ppData = pBuf;
-      *pnData = sz;
+      apData[out] = sqlite3_malloc(e->size+4);
+      if( !apData[out] ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      memcpy(apData[out], p+4, e->size);
+      anData[out] = e->size;
+      rc = chunkStoreVerifyChunk(&aHash[out], &apData[out], &anData[out],
+                                 cs->pStats);
+    }
+    i = j;
+  }
+  sqlite3_free(pBuf);
+  if( rc==SQLITE_OK ){
+    *pnRead = nRead;
+  }else{
+    for(i=0; i<nMax; i++){
+      sqlite3_free(apData[i]);
+      apData[i] = 0;
+      anData[i] = 0;
     }
   }
-
-  return chunkStoreVerifyChunk(hash, ppData, pnData, cs->pStats);
+  return rc;
 }
 
 int chunkStoreBorrow(
@@ -1171,12 +1304,12 @@ int chunkStoreReadAhead(
     int found = 0;
     rc = csIndexLookup(cs, &aHash[i], &e, &found);
     if( rc!=SQLITE_OK ) return rc;
-    if( !found || e.size<=0 || e.size>CHUNK_READ_AHEAD_BYTES-4
+    if( !found || e.size<=0 || e.size>CHUNK_READ_BATCH_BYTES-4
      || e.offset<CHUNK_MANIFEST_SIZE
      || e.offset>cs->file.iFileSize-e.size-4 ) break;
-    if( nEntry && (e.offset<iEnd || e.offset-iEnd>CS_WAL_CHUNK_HDR_SIZE) ) break;
+    if( nEntry && !csReadBatchFits(iStart, iEnd, &e) ) break;
     if( nEntry==0 ) iStart = e.offset;
-    if( e.offset-iStart>CHUNK_READ_AHEAD_BYTES-e.size-4 ) break;
+    if( e.offset-iStart>CHUNK_READ_BATCH_BYTES-e.size-4 ) break;
     iEnd = e.offset+e.size+4;
     aEntry[nEntry++] = e;
   }

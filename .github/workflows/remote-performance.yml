@@ -6,6 +6,8 @@ on:
       - src/chunk_store.c
       - src/chunk_store.h
       - src/doltlite_remote.c
+      - src/doltlite_remotesrv.c
+      - test/chunk_store_read_batch_test.c
       - test/remote_perf.py
       - test/remote_perf_test.py
       - .github/workflows/remote-performance.yml
