@@ -37,3 +37,11 @@ cd "$CONSUMER"
 go mod edit -replace "github.com/dolthub/doltlite-driver=$STAGE/pkg"
 go mod tidy >/dev/null 2>&1 || true
 CGO_ENABLED=1 go run .
+
+# The driver's own tests, run against the staged module. Tests that need a
+# remote server skip when the build has no doltlite-remotesrv.
+cp "$PKG_DIR"/*_test.go "$STAGE/pkg/"
+if [ -x "$BUILD_DIR/doltlite-remotesrv" ]; then
+  export DOLTLITE_REMOTESRV="$BUILD_DIR/doltlite-remotesrv"
+fi
+(cd "$STAGE/pkg" && CGO_ENABLED=1 go test ./...)
