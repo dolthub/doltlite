@@ -1441,6 +1441,44 @@ static int gcVacuumIntoReadonly(
   return SQLITE_READONLY;
 }
 
+/* unixOpen requires a main-database name to be absolute. The parsed URI
+** name can still be relative, so resolve it on the target VFS first. */
+static int gcVacuumIntoAbsolute(sqlite3_vfs *pVfs, char **pzPath){
+  int nPath;
+  int rc;
+  char *zFull;
+  char *zAbs = 0;
+
+  if( !pVfs || !pzPath || !*pzPath ) return SQLITE_NOMEM;
+  nPath = pVfs->mxPathname + 1;
+  if( nPath<2 ) return SQLITE_CANTOPEN;
+  zFull = sqlite3_malloc(nPath);
+  if( !zFull ) return SQLITE_NOMEM;
+  rc = sqlite3OsFullPathname(pVfs, *pzPath, nPath, zFull);
+#if SQLITE_OS_WIN
+  if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
+    char *z = zFull;
+    if( !(zFull[0]=='\\' && zFull[1]=='\\'
+       && (zFull[2]=='?' || zFull[2]=='.') && zFull[3]=='\\') ){
+      while( *z ){
+        if( *z=='\\' ) *z = '/';
+        z++;
+      }
+    }
+  }
+#endif
+  if( rc==SQLITE_OK_SYMLINK ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK ) rc = chunkStoreDupFilenameDoubleNul(zFull, &zAbs);
+  sqlite3_free(zFull);
+  if( rc==SQLITE_OK && zAbs ){
+    sqlite3_free(*pzPath);
+    *pzPath = zAbs;
+    return SQLITE_OK;
+  }
+  sqlite3_free(zAbs);
+  return rc==SQLITE_OK ? SQLITE_NOMEM : rc;
+}
+
 /* VACUUM INTO for a doltlite-format database: write a compacted copy of
 ** the store — the same image gc would swap in, so same committed data and
 ** current working state, dead chunks dropped — to zOut. The source store
@@ -1525,6 +1563,19 @@ int doltliteGcVacuumInto(
       sqlite3ErrorWithMsg(db, SQLITE_ERROR, "no such vfs: memdb");
       *pzPhase = sqlite3_errmsg(db);
       return SQLITE_ERROR;
+    }
+  }
+  if( !bMem ){
+    rc = gcVacuumIntoAbsolute(pVfs, &zPath);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zPath);
+      if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+        *pzPhase = "out of memory";
+      }else{
+        sqlite3ErrorWithMsg(db, rc, "unable to open database: %s", zOut);
+        *pzPhase = sqlite3_errmsg(db);
+      }
+      return rc;
     }
   }
   if( !bMem
