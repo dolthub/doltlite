@@ -814,6 +814,7 @@ static int gcCopyChunk(
 static int gcWriteCompactedTo(
   ChunkStore *cs,
   GcMarks *marked,
+  sqlite3_vfs *pVfs,
   const char *zPath,
   int bDeleteExisting,
   int *pbTargetNonEmpty,
@@ -833,6 +834,7 @@ static int gcWriteCompactedTo(
   i64 iPos = CHUNK_MANIFEST_SIZE;
   u8 manifest[CHUNK_MANIFEST_SIZE];
   ChunkStore manifestCs;
+  sqlite3_vfs *pOutVfs;
   int rc = SQLITE_OK;
 
   *ppFileOut = 0;
@@ -840,6 +842,9 @@ static int gcWriteCompactedTo(
   *ppNewIndex = 0;
   *pnNewIndex = 0;
   *pnNewData = 0;
+  /* NULL keeps in-place GC on the source VFS. VACUUM INTO passes the
+  ** target VFS so a memdb (or other) destination is not opened on unix. */
+  pOutVfs = pVfs ? pVfs : chunkFileGetVfs(&cs->file);
 
   gcCrashResetForRun();
 
@@ -878,11 +883,11 @@ static int gcWriteCompactedTo(
     if( bDeleteExisting ){
       /* Best-effort stale-tmp removal; failure here must not fail GC. */
       sqlite3BeginBenignMalloc();
-      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zPath, 0);
+      sqlite3OsDelete(pOutVfs, zPath, 0);
       sqlite3EndBenignMalloc();
     }
 
-    rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zPath, &pTmpFile, tmpFlags, 0);
+    rc = sqlite3OsOpenMalloc(pOutVfs, zPath, &pTmpFile, tmpFlags, 0);
     if( rc==SQLITE_OK && bDeleteExisting ){
       rc = sqlite3OsDoltliteModeOf(pTmpFile, chunkFileGetFilename(&cs->file), 0);
     }
@@ -986,7 +991,7 @@ static int gcWriteCompactedTo(
       sqlite3OsCloseFree(pTmpFile);
 #endif
       sqlite3BeginBenignMalloc();
-      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zPath, 0);
+      sqlite3OsDelete(pOutVfs, zPath, 0);
       sqlite3EndBenignMalloc();
 #if SQLITE_OS_UNIX
       sqlite3OsCloseFree(pTmpFile);
@@ -1031,7 +1036,7 @@ static int gcRewriteFile(
   sqlite3_free(zRaw);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = gcWriteCompactedTo(cs, marked, zTmp, 1, 0, &pTmpFile, &finalSize,
+  rc = gcWriteCompactedTo(cs, marked, 0, zTmp, 1, 0, &pTmpFile, &finalSize,
                           ppNewIndex, pnNewIndex, pnNewData);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zTmp);
@@ -1376,11 +1381,110 @@ int doltliteGcCompactStore(sqlite3 *db, ChunkStore *cs){
   return doltliteGcCompactStoreWithPhase(db, cs, &zPhase, 0);
 }
 
+/* mode=ro and immutable=1 are not compacted writes. Stock's ATTACH of the
+** target decides the message: a missing mode=ro path cannot be opened, a
+** non-empty SQLite database already exists, and every other readonly open
+** refuses the write. immutable=1 still creates a zero-byte file. */
+static int gcVacuumIntoReadonly(
+  sqlite3 *db,
+  sqlite3_vfs *pVfs,
+  const char *zPath,
+  const char *zOriginal,
+  unsigned int flags,
+  int bImmutable,
+  const char **pzPhase
+){
+  sqlite3_file *pProbe = 0;
+  unsigned int probeFlags;
+  i64 sz = 0;
+  int nHdr = 0;
+  int rc;
+  char aHdr[16];
+
+  if( bImmutable && (flags & SQLITE_OPEN_READONLY)==0 ){
+    probeFlags = flags;
+    probeFlags &= ~(unsigned int)SQLITE_OPEN_READONLY;
+    probeFlags |= SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                | SQLITE_OPEN_MAIN_DB;
+  }else{
+    probeFlags = flags | SQLITE_OPEN_MAIN_DB;
+  }
+  /* zPath is a plain double-NUL name. Leaving URI set would make unixOpen
+  ** read option bytes that this copy does not have. */
+  probeFlags &= ~(unsigned int)SQLITE_OPEN_URI;
+
+  rc = sqlite3OsOpenMalloc(pVfs, zPath, &pProbe, (int)probeFlags, 0);
+  if( rc!=SQLITE_OK || !pProbe ){
+    if( pProbe ) sqlite3OsCloseFree(pProbe);
+    sqlite3ErrorWithMsg(db, rc==SQLITE_OK ? SQLITE_CANTOPEN : rc,
+                        "unable to open database: %s", zOriginal);
+    *pzPhase = sqlite3_errmsg(db);
+    return rc==SQLITE_OK ? SQLITE_CANTOPEN : rc;
+  }
+  rc = sqlite3OsFileSize(pProbe, &sz);
+  if( rc==SQLITE_OK && sz>=16 ){
+    rc = sqlite3OsRead(pProbe, aHdr, 16, 0);
+    if( rc==SQLITE_OK ) nHdr = 16;
+    else if( rc==SQLITE_IOERR_SHORT_READ ) rc = SQLITE_OK;
+  }
+  sqlite3OsCloseFree(pProbe);
+  if( rc!=SQLITE_OK ){
+    sqlite3ErrorWithMsg(db, rc, "unable to open database: %s", zOriginal);
+    *pzPhase = sqlite3_errmsg(db);
+    return rc;
+  }
+  if( sz>0 && nHdr==16 && memcmp(aHdr, "SQLite format 3", 16)==0 ){
+    *pzPhase = "output file already exists";
+    return SQLITE_ERROR;
+  }
+  *pzPhase = "attempt to write a readonly database";
+  return SQLITE_READONLY;
+}
+
+/* unixOpen requires a main-database name to be absolute. The parsed URI
+** name can still be relative, so resolve it on the target VFS first. */
+static int gcVacuumIntoAbsolute(sqlite3_vfs *pVfs, char **pzPath){
+  int nPath;
+  int rc;
+  char *zFull;
+  char *zAbs = 0;
+
+  if( !pVfs || !pzPath || !*pzPath ) return SQLITE_NOMEM;
+  nPath = pVfs->mxPathname + 1;
+  if( nPath<2 ) return SQLITE_CANTOPEN;
+  zFull = sqlite3_malloc(nPath);
+  if( !zFull ) return SQLITE_NOMEM;
+  rc = sqlite3OsFullPathname(pVfs, *pzPath, nPath, zFull);
+#if SQLITE_OS_WIN
+  if( rc==SQLITE_OK || rc==SQLITE_OK_SYMLINK ){
+    char *z = zFull;
+    if( !(zFull[0]=='\\' && zFull[1]=='\\'
+       && (zFull[2]=='?' || zFull[2]=='.') && zFull[3]=='\\') ){
+      while( *z ){
+        if( *z=='\\' ) *z = '/';
+        z++;
+      }
+    }
+  }
+#endif
+  if( rc==SQLITE_OK_SYMLINK ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK ) rc = chunkStoreDupFilenameDoubleNul(zFull, &zAbs);
+  sqlite3_free(zFull);
+  if( rc==SQLITE_OK && zAbs ){
+    sqlite3_free(*pzPath);
+    *pzPath = zAbs;
+    return SQLITE_OK;
+  }
+  sqlite3_free(zAbs);
+  return rc==SQLITE_OK ? SQLITE_NOMEM : rc;
+}
+
 /* VACUUM INTO for a doltlite-format database: write a compacted copy of
 ** the store — the same image gc would swap in, so same committed data and
 ** current working state, dead chunks dropped — to zOut. The source store
 ** is only read; nothing is swapped or adopted. Stock's contract for the
-** target is kept: it must not exist unless it is an empty file. */
+** target is kept: it must not exist unless it is an empty file. zOut is
+** parsed the same way ATTACH parses a filename. */
 int doltliteGcVacuumInto(
   sqlite3 *db,
   int iDb,
@@ -1398,6 +1502,12 @@ int doltliteGcVacuumInto(
   CsFileLock pDestLock = 0;
   char *zDestLockName = 0;
   char *zPath = 0;
+  char *zFile = 0;
+  char *zErr = 0;
+  sqlite3_vfs *pVfs = 0;
+  unsigned int openFlags;
+  int bMem = 0;
+  int bImmutable = 0;
   int bRefreshed = 0;
   int rc;
 
@@ -1413,26 +1523,87 @@ int doltliteGcVacuumInto(
     *pzPhase = "non-text filename";
     return SQLITE_ERROR;
   }
-  /* A memdb target has no chunk-store file to write; without this the VFS
-  ** would create a literal file named ":memory:". */
+  /* A literal :memory: target has no chunk-store file to write; without
+  ** this the VFS would create a file named ":memory:". A file: URI that
+  ** selects memdb is a different target and is written below. */
   if( strcmp(zOut, ":memory:")==0 ){
     *pzPhase = "cannot VACUUM a doltlite database INTO an in-memory target";
     return SQLITE_ERROR;
   }
 
+  /* Same flag adjustment stock VACUUM makes before ATTACH parses zOut. */
+  openFlags = (unsigned int)db->openFlags;
+  openFlags &= ~(unsigned int)SQLITE_OPEN_READONLY;
+  openFlags |= SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE;
+  rc = sqlite3ParseUri(db->pVfs ? db->pVfs->zName : 0, zOut, &openFlags,
+                       &pVfs, &zFile, &zErr);
+  if( rc!=SQLITE_OK ){
+    if( zErr ){
+      sqlite3ErrorWithMsg(db, rc, "%s", zErr);
+      *pzPhase = sqlite3_errmsg(db);
+      sqlite3_free(zErr);
+    }else{
+      *pzPhase = "out of memory";
+    }
+    return rc;
+  }
+  bMem = ((openFlags & SQLITE_OPEN_MEMORY)!=0) || sqlite3IsMemdb(pVfs);
+  bImmutable = sqlite3_uri_boolean(zFile, "immutable", 0);
+  rc = chunkStoreDupFilenameDoubleNul(zFile, &zPath);
+  sqlite3_free_filename(zFile);
+  zFile = 0;
+  if( rc!=SQLITE_OK ){
+    *pzPhase = "out of memory";
+    return rc;
+  }
+  if( bMem && !sqlite3IsMemdb(pVfs) ){
+    pVfs = sqlite3_vfs_find("memdb");
+    if( !pVfs ){
+      sqlite3_free(zPath);
+      sqlite3ErrorWithMsg(db, SQLITE_ERROR, "no such vfs: memdb");
+      *pzPhase = sqlite3_errmsg(db);
+      return SQLITE_ERROR;
+    }
+  }
+  if( !bMem ){
+    rc = gcVacuumIntoAbsolute(pVfs, &zPath);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zPath);
+      if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+        *pzPhase = "out of memory";
+      }else{
+        sqlite3ErrorWithMsg(db, rc, "unable to open database: %s", zOut);
+        *pzPhase = sqlite3_errmsg(db);
+      }
+      return rc;
+    }
+  }
+  if( !bMem
+   && ((openFlags & SQLITE_OPEN_READONLY) || bImmutable) ){
+    rc = gcVacuumIntoReadonly(db, pVfs, zPath, zOut, openFlags, bImmutable,
+                              pzPhase);
+    sqlite3_free(zPath);
+    return rc;
+  }
+
   /* Reserve the destination before anything is examined or written there.
   ** The source graph lock says nothing about another process committing a
   ** database at this path, and the emptiness check below would otherwise be
-  ** a guess that a peer can invalidate before the first byte goes out. */
-  rc = csFileLock(chunkFileGetVfs(&cs->file), zOut, SQLITE_OPEN_READONLY,
-                  &pDestLock, &zDestLockName);
-  if( rc!=SQLITE_OK ){
-    *pzPhase = "output file is in use by another connection";
-    return rc==SQLITE_BUSY ? SQLITE_BUSY : rc;
+  ** a guess that a peer can invalidate before the first byte goes out.
+  ** A memdb target has no disk sidecar to lock. */
+  if( !bMem ){
+    rc = csFileLock(pVfs, zPath, SQLITE_OPEN_READONLY,
+                    &pDestLock, &zDestLockName);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zPath);
+      *pzPhase = "output file is in use by another connection";
+      return rc==SQLITE_BUSY ? SQLITE_BUSY : rc;
+    }
   }
 
   rc = gcLockAndRefresh(db, cs, 1, &bRefreshed);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zPath);
     csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "failed to acquire lock for vacuum into";
     return rc;
@@ -1440,6 +1611,7 @@ int doltliteGcVacuumInto(
   if( bRefreshed ) doltliteInvalidateSessionWorkingState(db);
   rc = gcMarksInit(&marked, cs);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zPath);
     chunkStoreUnlock(cs);
     csFileUnlock(pDestLock, &zDestLockName);
     *pzPhase = "vacuum into mark phase failed";
@@ -1447,6 +1619,7 @@ int doltliteGcVacuumInto(
   }
   rc = gcMarkReachable(db, cs, &marked, &markTrace);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zPath);
     gcMarksFree(&marked);
     chunkStoreUnlock(cs);
     csFileUnlock(pDestLock, &zDestLockName);
@@ -1454,10 +1627,9 @@ int doltliteGcVacuumInto(
     return rc;
   }
 
-  rc = chunkStoreDupFilenameDoubleNul(zOut, &zPath);
   if( rc==SQLITE_OK ){
     int bTargetNonEmpty = 0;
-    rc = gcWriteCompactedTo(cs, &marked, zPath, 0, &bTargetNonEmpty,
+    rc = gcWriteCompactedTo(cs, &marked, pVfs, zPath, 0, &bTargetNonEmpty,
                             &pOutFile, &finalSize,
                             &aNewIndex, &nNewIndex, &nNewData);
     if( bTargetNonEmpty ){
