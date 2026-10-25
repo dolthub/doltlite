@@ -37,7 +37,54 @@ def save_gated_result(directory, result):
         "suite\tremote\nproducer_id\tfixture\nattempt\tstatus\tfailed_gates\n1\tpass\t[]\n")
 
 
+def resource_result(size_mb=100, runs=3):
+    result = saved_result(runs=runs)
+    result["configuration"].update(rows=size_mb*1000, metrics="vfs")
+    for sample in result["samples"]:
+        if sample["case"] != "copy_fsync":
+            sample.update(read_bytes=20000, write_bytes=10000, read_calls=20, write_calls=10,
+                          peak_rss_bytes=10485760)
+    return result
+
+
 class RemotePerfTest(unittest.TestCase):
+    def test_resource_metrics_are_scoped_outside_sql_timing(self):
+        output = ("METRICS RESET\nBEGIN push_initial\n0\n"
+                  "Run Time: real 0.012345 user 0.002 sys 0.001\nEND push_initial\n"
+                  "123|456|7|8|10485760\n")
+        extension = Path("metrics extension's.so")
+        with mock.patch.object(perf, "sql", return_value=output) as sql:
+            result = perf.timed_sql("engine", "database's file.db", "push_initial", "SELECT 0;",
+                                    65536, extension)
+        self.assertEqual(result, dict(wall_us=12345, cpu_us=3000, read_bytes=123, write_bytes=456,
+                                      read_calls=7, write_calls=8, peak_rss_bytes=10485760))
+        self.assertEqual(sql.call_args.args[1], ":memory:")
+        script = sql.call_args.args[2]
+        self.assertLess(script.index(".load"), script.index(".open"))
+        self.assertLess(script.index("remote_perf_reset"), script.index(".timer on"))
+        self.assertLess(script.index(".timer off"), script.index("remote_perf_metrics"))
+        for bad in (output.replace("123|456", "-1|456"), output.replace("|10485760", "|0"),
+                    output.replace("123|456|7|8|10485760\n", "")):
+            with self.subTest(output=bad), mock.patch.object(perf, "sql", return_value=bad):
+                with self.assertRaises(ValueError):
+                    perf.timed_sql("engine", "db", "push_initial", "SELECT 0;", 65536, extension)
+
+    def test_resource_metrics_are_required_for_every_verified_sql_sample(self):
+        result = resource_result(1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            perf.save_results(result, directory)
+            self.assertEqual(perf.read_results(directory / "results.json"), result)
+            self.assertIn("Memory and file I/O", (directory / "report.md").read_text())
+            self.assertIn("peak_rss_bytes", (directory / "samples.tsv").read_text())
+            for key in perf.METRICS:
+                for bad in (None, -1, "100", float("nan")):
+                    broken = copy.deepcopy(result)
+                    next(s for s in broken["samples"] if s["case"] == "push_initial")[key] = bad
+                    (directory / "results.json").write_text(json.dumps(broken))
+                    with self.subTest(key=key, value=bad), self.assertRaises(ValueError):
+                        perf.read_results(directory / "results.json")
+
     def test_saved_measurements_require_every_verified_sample(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "results.json"
@@ -163,7 +210,7 @@ class RemotePerfTest(unittest.TestCase):
                 perf.verify("engine", "database", expected, expected)
 
     def test_failed_verification_retains_sample_and_fails_run(self):
-        def fail_measure(*args):
+        def fail_measure(*args, **kwargs):
             args[-1].update(wall_us=100, cpu_us=50, logical_payload_bytes=1000,
                             destination_growth_bytes=1000)
             raise ValueError("database mismatch")
