@@ -219,4 +219,46 @@ foreach layout {single-text composite} {
   }
 }
 
+# A row brought in by a merge, cherry-pick or revert must be deletable by
+# its full primary key: that path computes the index key itself, so an index
+# entry built from the wrong column would survive the row.
+foreach {suffix} {{} {WITHOUT ROWID}} {
+  foreach {shape extra value} {
+    key-only {} {}
+    null-real {,w REAL} {,NULL}
+  } {
+    foreach operation {merge cherry_pick revert} {
+      set name pkdelete-[expr {$suffix eq "" ? "rowid" : "without-rowid"}]-$shape-$operation
+      reset_db
+      execsql "CREATE TABLE e(s TEXT NOT NULL,r TEXT NOT NULL$extra,PRIMARY KEY(s,r)) $suffix"
+      execsql {CREATE INDEX e_r ON e(r)}
+      db onecolumn {SELECT dolt_commit('-Am','init')}
+      if {$operation eq "revert"} {
+        execsql "INSERT INTO e VALUES('sk','r-main'$value)"
+        db onecolumn {SELECT dolt_commit('-Am','add')}
+        execsql "DELETE FROM e WHERE r='r-main'"
+        db onecolumn {SELECT dolt_commit('-Am','remove')}
+        execsql "INSERT INTO e VALUES('sk','r-b'$value)"
+        db onecolumn {SELECT dolt_commit('-Am','other')}
+        db onecolumn {SELECT dolt_revert('HEAD~1')}
+      } else {
+        db onecolumn {SELECT dolt_branch('b')}
+        execsql "INSERT INTO e VALUES('sk','r-main'$value)"
+        db onecolumn {SELECT dolt_commit('-Am','main')}
+        db onecolumn {SELECT dolt_checkout('b')}
+        execsql "INSERT INTO e VALUES('sk','r-b'$value)"
+        db onecolumn {SELECT dolt_commit('-Am','b')}
+        db onecolumn "SELECT dolt_$operation\('main')"
+      }
+      do_execsql_test $name-merged {SELECT r FROM e INDEXED BY e_r ORDER BY r} {r-b r-main}
+      do_execsql_test $name-delete {
+        DELETE FROM e WHERE s='sk' AND r='r-main';
+        SELECT changes();
+      } {1}
+      do_execsql_test $name-index {SELECT r FROM e INDEXED BY e_r ORDER BY r} {r-b}
+      do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+    }
+  }
+}
+
 finish_test
