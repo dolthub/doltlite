@@ -8,7 +8,8 @@
 # are gated elsewhere) and test/*_test.c plus test/doltlite_*.c
 # (run_c_tests.sh / workflow / manifest — not merely built by main.mk).
 # Fuzzer GROUPS must be selected by a job. EXCLUDE skips harnesses/libs/perf.
-# Upstream *.test under test/, ext/, mptest/ and tool/ must be bucketed,
+# Upstream *.test (and misnamed *.tes) under test/, ext/, mptest/ and tool/
+# must be bucketed,
 # crash-listed, or in known_testfixture_unrun.txt; every regression and
 # oracle bucket must be selected by each workflow matrix that reads buckets.
 
@@ -172,7 +173,8 @@ unrun_listed() {  # unrun_listed <repo-relative path>
 }
 fixture_files=()
 while IFS= read -r f; do fixture_files+=("$f"); done < <(
-  find test ext mptest tool -name '*.test' -type f 2>/dev/null | LC_ALL=C sort)
+  find test ext mptest tool \( -name '*.test' -o -name '*.tes' \) -type f \
+    2>/dev/null | LC_ALL=C sort)
 fixture_names=$(for f in ${fixture_files[@]+"${fixture_files[@]}"}; do basename "$f" .test; done)
 while IFS= read -r d; do
   [ -n "$d" ] && fixture_dups+=("$d")
