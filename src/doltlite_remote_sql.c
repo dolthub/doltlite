@@ -20,6 +20,7 @@ struct RemoteMutationCtx {
   const char *zName;
   const char *zUrl;
   int isDelete;
+  int originRequired;
 };
 
 static const char *remoteSqlNormalizeName(
@@ -47,7 +48,13 @@ static int remoteSqlNameIsValid(const char *zName){
 static int mutateRemoteRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   RemoteMutationCtx *p = (RemoteMutationCtx*)pArg;
   (void)db;
-  if( p->isDelete ) return chunkStoreDeleteRemote(cs, p->zName);
+  if( p->isDelete ){
+    if( strcmp(p->zName, "origin")==0 && chunkStoreOriginSourceEnabled(cs) ){
+      p->originRequired = 1;
+      return SQLITE_ERROR;
+    }
+    return chunkStoreDeleteRemote(cs, p->zName);
+  }
   return chunkStoreAddRemote(cs, p->zName, p->zUrl);
 }
 
@@ -604,7 +611,8 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     if( rc!=SQLITE_OK ){
       (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
-        rc==SQLITE_NOTFOUND ? "remote not found" : 0);
+        m.originRequired ? "cannot remove origin while lazy origin is enabled"
+        : rc==SQLITE_NOTFOUND ? "remote not found" : 0);
       return;
     }
   }else{

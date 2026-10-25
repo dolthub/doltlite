@@ -844,6 +844,179 @@ static void hashHex(const unsigned char *aHash, char zOut[41]){
   zOut[40] = 0;
 }
 
+static int countReadBusy(void *pArg, int nBusy){
+  int *pCount = (int*)pArg;
+  (void)nBusy;
+  (*pCount)++;
+  return 0;
+}
+
+static void testOriginPeerWriter(
+  const char *zPath,
+  const char *zSource,
+  sqlite3 *sourceDb,
+  SourceCtx *pCtx
+){
+  sqlite3 *db = 0;
+  sqlite3 *fresh = 0;
+  ProllyHash aMissing[3];
+  unsigned char *pData = 0;
+  char *zUri = 0;
+  sqlite3_int64 want = 0, got = 0;
+  int readyFd[2] = {-1, -1}, releaseFd[2] = {-1, -1};
+  int nData = 0, nBusy = 0, status = 0, childReady = 0;
+  pid_t pid = -1;
+  char c = 0;
+  int rc;
+
+  rc = queryInt64(sourceDb,
+      "SELECT sum(id+grp+length(payload)) FROM items", &want);
+  if( rc==SQLITE_OK ) rc = createOriginLazyFile(zPath, zSource);
+  zUri = sqlite3_mprintf("file:%s?lazy_origin=1", zPath);
+  if( rc==SQLITE_OK ){
+    rc = zUri ? openDb(zUri, SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &db)
+              : SQLITE_NOMEM;
+  }
+  check("open lazy reader before peer writer", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto peer_done;
+  rc = findUncachedHashes(db, pCtx, aMissing, 3);
+  check("find lazy reader scalar and batch misses", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto peer_done;
+  rc = pipe(readyFd);
+  if( rc==0 ) rc = pipe(releaseFd);
+  check("create lazy reader writer pipes", rc==0);
+  if( rc!=0 ) goto peer_done;
+  pid = fork();
+  check("fork lazy peer writer", pid>=0);
+  if( pid==0 ){
+    sqlite3 *peer = 0;
+    int childRc;
+    close(readyFd[0]);
+    close(releaseFd[1]);
+    childRc = openDb(zUri, SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &peer);
+    if( childRc==SQLITE_OK ){
+      childRc = execSql(peer,
+          "BEGIN; INSERT INTO meta VALUES('peer-writer','pending')");
+    }
+    c = childRc==SQLITE_OK ? '1' : '0';
+    if( write(readyFd[1], &c, 1)!=1 ) childRc = SQLITE_IOERR;
+    if( childRc==SQLITE_OK ){
+      if( read(releaseFd[0], &c, 1)!=1 ) childRc = SQLITE_IOERR;
+      else childRc = execSql(peer, "COMMIT");
+    }
+    if( peer ) sqlite3_close(peer);
+    close(readyFd[1]);
+    close(releaseFd[0]);
+    _exit(childRc==SQLITE_OK ? 0 : 1);
+  }
+  if( pid<0 ) goto peer_done;
+  close(readyFd[1]);
+  readyFd[1] = -1;
+  close(releaseFd[0]);
+  releaseFd[0] = -1;
+  rc = read(readyFd[0], &c, 1)==1 && c=='1' ? SQLITE_OK : SQLITE_ERROR;
+  check("lazy peer holds an uncommitted write", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto peer_done;
+  childReady = 1;
+
+  rc = openDb(zUri, SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &fresh);
+  check("open lazy reader during peer write", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    sqlite3_busy_handler(fresh, countReadBusy, &nBusy);
+    rc = queryInt64(fresh,
+        "SELECT sum(id+grp+length(payload)) FROM items", &got);
+    check("lazy_peer_read_committed", rc==SQLITE_OK && got==want);
+    rc = queryInt64(fresh,
+        "SELECT count(*) FROM meta WHERE k='peer-writer'", &got);
+    check("lazy reader excludes peer uncommitted row", rc==SQLITE_OK && got==0);
+  }
+  sqlite3_busy_handler(db, countReadBusy, &nBusy);
+  rc = getDbChunk(db, &aMissing[0], &pData, &nData);
+  check("lazy scalar miss bypasses peer writer", rc==SQLITE_OK && pData && nData>0);
+  sqlite3_free(pData);
+  pData = 0;
+  sqlite3_mutex_enter(db->mutex);
+  sqlite3BtreeEnter(db->aDb[0].pBt);
+  rc = chunkStoreSourcePrefetchMany(doltliteGetChunkStore(db), &aMissing[1], 2);
+  sqlite3BtreeLeave(db->aDb[0].pBt);
+  sqlite3_mutex_leave(db->mutex);
+  check("lazy batch misses bypass peer writer", rc==SQLITE_OK);
+  rc = getDbChunk(db, &aMissing[1], &pData, &nData);
+  check("lazy batch miss remains readable from memory", rc==SQLITE_OK && pData && nData>0);
+  check("lazy cache persistence never invokes read busy handler", nBusy==0);
+
+peer_done:
+  if( releaseFd[1]>=0 ){
+    if( childReady ){
+      c = 'x';
+      check("release lazy peer writer", write(releaseFd[1], &c, 1)==1);
+    }
+    close(releaseFd[1]);
+  }
+  if( pid>0 ){
+    waitpid(pid, &status, 0);
+    check("lazy peer writer finishes cleanly", WIFEXITED(status) && WEXITSTATUS(status)==0);
+    if( db && WIFEXITED(status) && WEXITSTATUS(status)==0 ){
+      rc = queryInt64(db,
+          "SELECT count(*) FROM meta WHERE k='peer-writer'", &got);
+      check("lazy reader observes peer commit", rc==SQLITE_OK && got==1);
+    }
+  }
+  if( readyFd[0]>=0 ) close(readyFd[0]);
+  if( readyFd[1]>=0 ) close(readyFd[1]);
+  if( releaseFd[0]>=0 ) close(releaseFd[0]);
+  if( fresh ) sqlite3_close(fresh);
+  if( db ) sqlite3_close(db);
+  db = 0;
+  if( childReady && WIFEXITED(status) && WEXITSTATUS(status)==0 ){
+    rc = openDb(zUri, SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &db);
+    if( rc==SQLITE_OK ){
+      rc = queryInt64(db,
+          "SELECT count(*) FROM meta WHERE k='peer-writer'", &got);
+    }
+    check("lazy cache writer close preserves peer commit", rc==SQLITE_OK && got==1);
+    if( db ) sqlite3_close(db);
+  }
+  sqlite3_free(pData);
+  sqlite3_free(zUri);
+}
+
+static void testOriginRemoval(const char *zPath, const char *zSource){
+  const char *azAction[] = {"remove", "rm"};
+  int i;
+  for(i=0; i<2; i++){
+    sqlite3 *db = 0;
+    sqlite3_int64 n = 0;
+    char *zErr = 0;
+    char *zSql;
+    int rc = createOriginLazyFile(zPath, zSource);
+    zSql = sqlite3_mprintf("file:%s?lazy_origin=1", zPath);
+    if( rc==SQLITE_OK ){
+      rc = zSql ? openDb(zSql, SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &db)
+                : SQLITE_NOMEM;
+    }
+    sqlite3_free(zSql);
+    check("open lazy clone for origin removal", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      zSql = sqlite3_mprintf("SELECT dolt_remote('%s',' origin ')", azAction[i]);
+      rc = zSql ? runToError(db, zSql, &zErr) : SQLITE_NOMEM;
+      sqlite3_free(zSql);
+      check("lazy origin removal is refused with a useful error",
+            rc==SQLITE_ERROR && zErr && strstr(zErr, "lazy")!=0);
+      rc = queryInt64(db, "SELECT count(*) FROM dolt_remotes WHERE name='origin'", &n);
+      check("failed lazy origin removal preserves configuration", rc==SQLITE_OK && n==1);
+      rc = queryInt64(db, "SELECT count(*) FROM items", &n);
+      check("uncached data remains readable after refused origin removal", rc==SQLITE_OK && n>0);
+      rc = execSql(db,
+          "SELECT dolt_remote('add','backup','file:///unused');"
+          "SELECT dolt_remote('remove','backup')");
+      check("lazy clone can remove another remote", rc==SQLITE_OK);
+    }
+    sqlite3_free(zErr);
+    if( db ) sqlite3_close(db);
+  }
+}
+
 static void testOriginPrecedenceAndReuse(
   const char *zPath,
   const char *zSource,
@@ -1468,7 +1641,7 @@ graph_lock_done:
   pCtx->mode = SOURCE_NORMAL;
 }
 
-static void testSourcePersistenceBusyRetry(
+static void testSourcePersistenceBusyFallback(
   const char *zPath,
   sqlite3 *sourceDb,
   SourceCtx *pCtx,
@@ -1566,13 +1739,26 @@ static void testSourcePersistenceBusyRetry(
   }
   close(releaseFd[1]);
   releaseFd[1] = -1;
-  check("busy-retry scan waits for cache writer", rc==SQLITE_OK);
+  check("busy cache scan succeeds without a cache writer", rc==SQLITE_OK);
   check("busy-retry scan matches source", rc==SQLITE_OK && got==want);
   check("busy-retry scan fetched uncached chunks", pCtx->nRequest>0);
   waitpid(pid, &status, 0);
   waited = 1;
   check("busy-retry lock holder exits cleanly",
         WIFEXITED(status) && WEXITSTATUS(status)==0);
+  if( rc!=SQLITE_OK ) goto retry_done;
+
+  rc = doltlite_set_chunk_source(db, "main", 0);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_close(db);
+    db = 0;
+  }
+  if( rc==SQLITE_OK ) rc = openDb(zPath, SQLITE_OPEN_READWRITE, &db);
+  if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", pApi);
+  check("reopen after peer releases cache writer", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ) rc = queryInt64(db, zScan, &got);
+  check("uncontended scan persists after busy cache fallback",
+        rc==SQLITE_OK && got==want);
   if( rc!=SQLITE_OK ) goto retry_done;
 
   rc = doltlite_set_chunk_source(db, "main", 0);
@@ -2845,6 +3031,8 @@ int main(void){
 
   testOriginPrecedenceAndReuse(
       zOriginLazy, zSource, zOriginAway, &source, &api);
+  testOriginPeerWriter(zOriginLazy, zSource, sourceDb, &source);
+  testOriginRemoval(zOriginLazy, zSource);
 
   sourceResetCounters(&source);
   source.mode = SOURCE_NORMAL;
@@ -2860,7 +3048,7 @@ int main(void){
       zOtherWorkingSetMiss, &source, &api, pNewRefs, nNewRefs);
   testGraphLockFetch(
       zGraphLock, zGraphAux, &source, &api, pNewRefs, nNewRefs);
-  testSourcePersistenceBusyRetry(
+  testSourcePersistenceBusyFallback(
       zBusyRetry, sourceDb, &source, &api, pNewRefs, nNewRefs);
   testBatchPartialIoerr(
       zBatchIoerr, &source, &api, pNewRefs, nNewRefs);
