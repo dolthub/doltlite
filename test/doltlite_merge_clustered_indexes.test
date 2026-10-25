@@ -1,0 +1,222 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc clustered_index_check {name rows {integrity {PRAGMA integrity_check}}} {
+  do_execsql_test $name-table {SELECT r FROM t NOT INDEXED ORDER BY r} $rows
+  foreach {index where} {
+    ir {1}
+    iu {1}
+    ix {upper(r)>=''}
+    ip {r<>'keep'}
+  } {
+    set want $rows
+    if {$index eq "ip"} {set want [lsearch -all -inline -not -exact $rows keep]}
+    do_execsql_test $name-$index \
+        "SELECT r FROM t INDEXED BY $index WHERE $where ORDER BY r" $want
+  }
+  do_execsql_test $name-integrity $integrity {ok}
+}
+
+foreach {layout key suffix} {
+  integer {s INTEGER PRIMARY KEY,r TEXT NOT NULL} {}
+  clustered {s INT PRIMARY KEY,r TEXT NOT NULL} {}
+  text {s TEXT PRIMARY KEY,r TEXT NOT NULL} {}
+  composite {s TEXT NOT NULL,r TEXT NOT NULL,PRIMARY KEY(s,r)} {}
+  reordered {s TEXT NOT NULL,r TEXT NOT NULL,PRIMARY KEY(r DESC,s)} {}
+  without-rowid {s TEXT NOT NULL,r TEXT NOT NULL,PRIMARY KEY(s,r)} {WITHOUT ROWID}
+} {
+  foreach {shape extra value} {
+    key-only {} {}
+    null-real {,w REAL} {,NULL}
+    real {,w REAL} {,1.5}
+    payload {,w TEXT} {,'value'}
+  } {
+    foreach operation {fast-forward no-ff merge cherry_pick revert} {
+      foreach storage {memory file} {
+        reset_db
+        if {$storage eq "memory"} {
+          db close
+          sqlite3 db :memory:
+        }
+        set ddl $key
+        set pk [string first ",PRIMARY KEY" $ddl]
+        if {$pk>=0} {
+          set ddl "[string range $ddl 0 $pk-1]$extra[string range $ddl $pk end]"
+        } else {
+          append ddl $extra
+        }
+        execsql "CREATE TABLE t($ddl) $suffix"
+        execsql {
+          CREATE INDEX ir ON t(r);
+          CREATE UNIQUE INDEX iu ON t(r COLLATE NOCASE);
+          CREATE INDEX ix ON t(upper(r));
+          CREATE INDEX ip ON t(r DESC) WHERE r<>'keep';
+        }
+        set initial {removed changed}
+        if {$operation eq "revert"} {set initial {imported updated}}
+        execsql "INSERT INTO t VALUES(1,'keep'$value),(2,'[lindex $initial 0]'$value),(3,'[lindex $initial 1]'$value)"
+        db onecolumn {SELECT dolt_commit('-Am','base')}
+        if {$operation ne "revert"} {
+          db onecolumn {SELECT dolt_branch('side')}
+          db onecolumn {SELECT dolt_checkout('side')}
+        }
+        execsql {DELETE FROM t WHERE s=2}
+        set inserted imported
+        set updated updated
+        if {$operation eq "revert"} {
+          set inserted removed
+          set updated changed
+        }
+        execsql "INSERT INTO t VALUES(4,'$inserted'$value)"
+        execsql "UPDATE t SET r='$updated' WHERE s=3"
+        set target [db onecolumn {SELECT dolt_commit('-am','changes')}]
+        if {$operation ne "revert"} {db onecolumn {SELECT dolt_checkout('main')}}
+        set rows {imported keep updated}
+        if {$operation in {merge cherry_pick revert}} {
+          execsql "INSERT INTO t VALUES(5,'ours'$value)"
+          db onecolumn {SELECT dolt_commit('-am','ours')}
+          set rows {imported keep ours updated}
+        }
+        set name clustered-index-$layout-$shape-$operation-$storage
+        do_test $name-apply {
+          switch $operation {
+            fast-forward {db onecolumn {SELECT dolt_merge('side')}}
+            no-ff {db onecolumn {SELECT dolt_merge('--no-ff','side','-m','merge')}}
+            default {db onecolumn "SELECT dolt_${operation}('$target')"}
+          }
+          execsql {SELECT count(*) FROM dolt_conflicts}
+        } {0}
+        clustered_index_check $name-live $rows
+        set phases {live}
+        if {$storage eq "file"} {lappend phases reopened}
+        foreach phase $phases {
+          if {$phase eq "reopened"} {
+            db close
+            sqlite3 db test.db
+            clustered_index_check $name-reopened $rows
+          }
+          execsql {BEGIN}
+          do_execsql_test $name-$phase-update {
+            UPDATE t INDEXED BY ir SET r='mutated' WHERE r='imported';
+            SELECT changes();
+          } {1}
+          set changed [lsort [lreplace $rows 0 0 mutated]]
+          clustered_index_check $name-$phase-updated $changed
+          do_execsql_test $name-$phase-delete {
+            DELETE FROM t INDEXED BY ir WHERE r='mutated';
+            SELECT changes();
+          } {1}
+          clustered_index_check $name-$phase-deleted [lrange $rows 1 end]
+          do_test $name-$phase-reinsert {
+            execsql "INSERT INTO t VALUES(2,'imported'$value)"
+          } {}
+          clustered_index_check $name-$phase-reinserted $rows
+          do_test $name-$phase-reindex {
+            set before [execsql {SELECT r FROM t INDEXED BY ir ORDER BY r}]
+            execsql {REINDEX}
+            expr {$before eq [execsql {SELECT r FROM t INDEXED BY ir ORDER BY r}]}
+          } {1}
+          execsql {ROLLBACK}
+          clustered_index_check $name-$phase-rollback $rows
+        }
+        do_execsql_test $name-autocommit-delete {
+          DELETE FROM t INDEXED BY ir WHERE r='imported';
+          SELECT changes();
+        } {1}
+        do_test $name-commit-delete {
+          string length [db onecolumn {SELECT dolt_commit('-am','delete imported')}]
+        } {40}
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+        }
+        clustered_index_check $name-committed-delete [lrange $rows 1 end]
+      }
+    }
+  }
+}
+
+foreach layout {single-text composite} {
+  foreach {shape extra value} {
+    key-only {} {}
+    null-real {,w REAL} {,NULL}
+    real {,w REAL} {,1.5}
+  } {
+    foreach operation {merge cherry_pick revert} {
+      foreach violation {0 1} {
+        foreach storage {memory file} {
+          reset_db
+          if {$storage eq "memory"} {
+            db close
+            sqlite3 db :memory:
+          }
+          set prefix {}
+          if {$layout eq "composite"} {
+            execsql "CREATE TABLE t(s TEXT NOT NULL,r TEXT NOT NULL$extra,PRIMARY KEY(s,r))"
+            set prefix {'sk',}
+          } else {
+            execsql "CREATE TABLE t(r TEXT PRIMARY KEY$extra)"
+          }
+          execsql {
+            CREATE INDEX ir ON t(r);
+            CREATE UNIQUE INDEX iu ON t(r COLLATE NOCASE);
+            CREATE INDEX ix ON t(upper(r));
+            CREATE INDEX ip ON t(r DESC) WHERE r<>'keep';
+            CREATE TABLE u(id INTEGER PRIMARY KEY,v INT UNIQUE);
+          }
+          if {$operation eq "revert"} {
+            execsql "INSERT INTO t VALUES(${prefix}'imported'$value)"
+            if {$violation} {execsql {INSERT INTO u VALUES(2,1)}}
+          }
+          db onecolumn {SELECT dolt_commit('-Am','base')}
+          if {$operation eq "revert"} {
+            execsql {DELETE FROM t; DELETE FROM u}
+          } else {
+            db onecolumn {SELECT dolt_checkout('-b','side')}
+            execsql "INSERT INTO t VALUES(${prefix}'imported'$value)"
+            if {$violation} {execsql {INSERT INTO u VALUES(2,1)}}
+          }
+          set target [db onecolumn {SELECT dolt_commit('-am','changes')}]
+          if {$operation ne "revert"} {db onecolumn {SELECT dolt_checkout('main')}}
+          execsql "INSERT INTO t VALUES(${prefix}'ours'$value)"
+          if {$violation} {execsql {INSERT INTO u VALUES(1,1)}}
+          db onecolumn {SELECT dolt_commit('-am','ours')}
+          execsql {BEGIN}
+          set name clustered-index-stopped-$layout-$shape-$operation-$violation-$storage
+          do_test $name-apply {
+            set result [catch {db onecolumn "SELECT dolt_${operation}('$target')"} message]
+            list $result [string match {*constraint violations*} $message]
+          } [list $violation $violation]
+          do_execsql_test $name-violations {
+            SELECT count(*)>0 FROM dolt_constraint_violations;
+          } $violation
+          clustered_index_check $name-imported {imported ours} {PRAGMA integrity_check(t)}
+          do_execsql_test $name-delete {
+            DELETE FROM t INDEXED BY ir WHERE r='imported';
+            SELECT changes();
+          } {1}
+          clustered_index_check $name-deleted {ours} {PRAGMA integrity_check(t)}
+          if {$violation} {
+            execsql {DELETE FROM u WHERE id=2}
+            do_execsql_test $name-repaired {
+              SELECT dolt_verify_constraints('--all');
+              SELECT count(*) FROM dolt_constraint_violations;
+            } {0 0}
+          }
+          do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+          do_test $name-commit-delete {
+            string length [db onecolumn {SELECT dolt_commit('-am','delete imported')}]
+          } {40}
+          execsql {COMMIT}
+          if {$storage eq "file"} {
+            db close
+            sqlite3 db test.db
+          }
+          clustered_index_check $name-committed {ours}
+        }
+      }
+    }
+  }
+}
+
+finish_test

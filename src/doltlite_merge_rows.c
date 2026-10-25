@@ -498,6 +498,43 @@ static int copyConflictRecord(
   return *ppOut ? SQLITE_OK : SQLITE_NOMEM;
 }
 
+static int mergeIndexRowDelta(
+  RowMergeCtx *ctx,
+  const ThreeWayChange *pChange,
+  int bOld, const u8 *pOld, int nOld,
+  int bNew, const u8 *pNew, int nNew
+){
+  u8 *pDecoded = 0;
+  int nDecoded = 0;
+  int ix, rc = SQLITE_OK;
+
+  if( ctx->nIndexes==0 ) return SQLITE_OK;
+  /* Diff values are NULL for both absent rows and key-only clustered rows. */
+  if( (bOld && nOld==0) || (bNew && nNew==0) ){
+    rc = doltliteRecordFromClusteredKey(ctx->db,
+        ctx->aIndexes[0].pIdx->pTable->zName, pChange->pKey, pChange->nKey,
+        &pDecoded, &nDecoded);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bOld && nOld==0 ){
+      pOld = pDecoded;
+      nOld = nDecoded;
+    }
+    if( bNew && nNew==0 ){
+      pNew = pDecoded;
+      nNew = nDecoded;
+    }
+  }
+  for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
+    MergeIndexInfo *mi = &ctx->aIndexes[ix];
+    rc = doltliteIndexMutMapRowDelta(
+        ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
+        mi->pKeyInfo, mi->iPKey, pChange->intKey,
+        pChange->pKey, pChange->nKey, pOld, nOld, pNew, nNew, &mi->part);
+  }
+  sqlite3_free(pDecoded);
+  return rc;
+}
+
 static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
   int rc = SQLITE_OK;
@@ -508,7 +545,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       const u8 *pOurs = pChange->pOurVal;
       int nOurs = pChange->nOurVal;
       u8 *pOwned;
-      int ix;
 
       if( !ctx->pGeneratedTable ) break;
       rc = mergeGeneratedSideRow(ctx->db, ctx->pGeneratedTable,
@@ -518,13 +554,9 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
        || memcmp(pOurs, pChange->pOurVal, nOurs)!=0 ){
         rc = prollyMutMapInsert(ctx->pEdits,
             pChange->pKey, pChange->nKey, pChange->intKey, pOurs, nOurs);
-        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-          MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = doltliteIndexMutMapRowDelta(
-              ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
-              mi->pKeyInfo, mi->iPKey, pChange->intKey,
-              pChange->pKey, pChange->nKey,
-              pChange->pOurVal, pChange->nOurVal, pOurs, nOurs, &mi->part);
+        if( rc==SQLITE_OK ){
+          rc = mergeIndexRowDelta(ctx, pChange,
+              1, pChange->pOurVal, pChange->nOurVal, 1, pOurs, nOurs);
         }
       }
       sqlite3_free(pOwned);
@@ -547,17 +579,8 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pTheirs, nTheirs);
-      if( rc==SQLITE_OK && ctx->nIndexes>0
-       && pTheirs && nTheirs>0 ){
-        int ix;
-        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-          MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = doltliteIndexMutMapRowDelta(
-              ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
-              mi->pKeyInfo, mi->iPKey, pChange->intKey,
-              pChange->pKey, pChange->nKey,
-              0, 0, pTheirs, nTheirs, &mi->part);
-        }
+      if( rc==SQLITE_OK ){
+        rc = mergeIndexRowDelta(ctx, pChange, 0, 0, 0, 1, pTheirs, nTheirs);
       }
       sqlite3_free(pOwned);
       break;
@@ -576,17 +599,9 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pTheirs, nTheirs);
-      if( rc==SQLITE_OK && ctx->nIndexes>0 ){
-        int ix;
-        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-          MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = doltliteIndexMutMapRowDelta(
-              ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
-              mi->pKeyInfo, mi->iPKey, pChange->intKey,
-              pChange->pKey, pChange->nKey,
-              pChange->pBaseVal, pChange->nBaseVal,
-              pTheirs, nTheirs, &mi->part);
-        }
+      if( rc==SQLITE_OK ){
+        rc = mergeIndexRowDelta(ctx, pChange,
+            1, pChange->pBaseVal, pChange->nBaseVal, 1, pTheirs, nTheirs);
       }
       sqlite3_free(pOwned);
       break;
@@ -595,17 +610,9 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     case THREE_WAY_RIGHT_DELETE:
       rc = prollyMutMapDelete(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey);
-      if( rc==SQLITE_OK && ctx->nIndexes>0
-       && pChange->pBaseVal && pChange->nBaseVal>0 ){
-        int ix;
-        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-          MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = doltliteIndexMutMapRowDelta(
-              ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
-              mi->pKeyInfo, mi->iPKey, pChange->intKey,
-              pChange->pKey, pChange->nKey,
-              pChange->pBaseVal, pChange->nBaseVal, 0, 0, &mi->part);
-        }
+      if( rc==SQLITE_OK ){
+        rc = mergeIndexRowDelta(ctx, pChange,
+            1, pChange->pBaseVal, pChange->nBaseVal, 0, 0, 0);
       }
       break;
 
@@ -660,16 +667,9 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         rc = prollyMutMapInsert(ctx->pEdits,
             pChange->pKey, pChange->nKey, pChange->intKey,
             pMerged, nMerged);
-        if( rc==SQLITE_OK && ctx->nIndexes>0 ){
-          int ix;
-          for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-            MergeIndexInfo *mi = &ctx->aIndexes[ix];
-            rc = doltliteIndexMutMapRowDelta(
-                ctx->db, mi->pIdx, mi->pEdits, mi->aiColumn, mi->nColumn,
-                mi->pKeyInfo, mi->iPKey, pChange->intKey,
-                pChange->pKey, pChange->nKey,
-                pChange->pOurVal, pChange->nOurVal, pMerged, nMerged, &mi->part);
-          }
+        if( rc==SQLITE_OK ){
+          rc = mergeIndexRowDelta(ctx, pChange,
+              1, pChange->pOurVal, pChange->nOurVal, 1, pMerged, nMerged);
         }
         sqlite3_free(pMerged);
         break;
@@ -702,16 +702,9 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           if( pChange->pOurVal && !pChange->pTheirVal ){
             rc = prollyMutMapDelete(ctx->pEdits,
                 pChange->pKey, pChange->nKey, pChange->intKey);
-            if( rc==SQLITE_OK && ctx->nIndexes>0 ){
-              int ix;
-              for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
-                MergeIndexInfo *mi = &ctx->aIndexes[ix];
-                rc = doltliteIndexMutMapRowDelta(
-                    ctx->db, mi->pIdx, mi->pEdits,
-                    mi->aiColumn, mi->nColumn, mi->pKeyInfo, mi->iPKey,
-                    pChange->intKey, pChange->pKey, pChange->nKey,
-                    pChange->pOurVal, pChange->nOurVal, 0, 0, &mi->part);
-              }
+            if( rc==SQLITE_OK ){
+              rc = mergeIndexRowDelta(ctx, pChange,
+                  1, pChange->pOurVal, pChange->nOurVal, 0, 0, 0);
             }
           }
           break;
