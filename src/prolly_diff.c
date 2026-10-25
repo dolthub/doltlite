@@ -166,10 +166,14 @@ diff_eq_done:
 ** changes nothing can keep the old bytes and leave the table hash alone.
 ** Semantic equality is not enough: a record that drops trailing fields compares
 ** equal to the longer one it replaces, and keeping those bytes would leave the
-** dropped column in storage for the next ADD COLUMN to read back. */
+** dropped column in storage for the next ADD COLUMN to read back.
+** nSchemaField is the current record width (0 if unknown). A stored row no
+** wider than that still belongs to this schema, so its explicit trailing
+** NULLs may stand in for a shorter write of the same values. */
 int prollyValuesInterchangeable(
   const u8 *pOld, int nOld,
   const u8 *pNew, int nNew,
+  int nSchemaField,
   int *pOk
 ){
   int equal = 0;
@@ -181,7 +185,11 @@ int prollyValuesInterchangeable(
   rc = diffRecordsEqualFieldwise(pOld, nOld, pNew, nNew, &equal,
                                  &nFieldOld, &nFieldNew);
   if( rc!=SQLITE_OK ) return rc;
-  *pOk = equal && nFieldOld<=nFieldNew;
+  if( !equal ) return SQLITE_OK;
+  if( nFieldOld<=nFieldNew
+   || (nSchemaField>0 && nFieldOld<=nSchemaField) ){
+    *pOk = 1;
+  }
   return SQLITE_OK;
 }
 

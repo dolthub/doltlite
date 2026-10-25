@@ -782,12 +782,156 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 }
 
 
+/* The table whose row record this cursor writes, or NULL for an index. */
+static Table *cursorRowTable(BtCursor *pCur){
+  sqlite3 *db;
+  int i;
+
+  if( !pCur || !pCur->pBtree || pCur->pgnoRoot<=1 ) return 0;
+  db = pCur->pBtree->db;
+  if( !db ) return 0;
+  for(i=0; i<db->nDb; i++){
+    Schema *pSchema;
+    HashElem *k;
+    if( db->aDb[i].pBt!=pCur->pBtree ) continue;
+    pSchema = db->aDb[i].pSchema;
+    if( !pSchema ) return 0;
+    for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+      Table *pTab = (Table*)sqliteHashData(k);
+      if( pTab && IsOrdinaryTable(pTab) && pTab->tnum==pCur->pgnoRoot ){
+        return pTab;
+      }
+    }
+    return 0;
+  }
+  return 0;
+}
+
+/* Absent record fields read as NULL when the column has no other default. */
+static int columnAbsentIsNull(Table *pTab, Column *pCol){
+  Expr *pExpr;
+  if( pCol->colFlags & (COLFLAG_PRIMKEY|COLFLAG_GENERATED) ) return 0;
+  if( pCol->iDflt==0 ) return 1;
+  pExpr = sqlite3ColumnExpr(pTab, pCol);
+  if( !pExpr || pExpr->op!=TK_NULL ) return 0;
+  return 1;
+}
+
+static int recordFieldColumn(
+  Table *pTab,
+  int bIntKey,
+  int iField,
+  Column **ppCol
+){
+  Index *pPk;
+  int iCol;
+
+  *ppCol = 0;
+  if( bIntKey ){
+    if( iField<0 || iField>=pTab->nNVCol ) return 0;
+    iCol = sqlite3StorageColumnToTable(pTab, (i16)iField);
+  }else{
+    pPk = sqlite3PrimaryKeyIndex(pTab);
+    if( !pPk || iField<0 || iField>=pPk->nColumn ) return 0;
+    iCol = pPk->aiColumn[iField];
+  }
+  if( iCol<0 || iCol>=pTab->nCol ) return 0;
+  *ppCol = &pTab->aCol[iCol];
+  return 1;
+}
+
+/* Drop trailing NULLs that an absent field would already read as NULL.
+** *ppOut is a new buffer when the record shrinks, otherwise left alone.
+** The caller frees it. A record that does not parse is returned unchanged. */
+static int trimTrailingAbsentNulls(
+  Table *pTab,
+  int bIntKey,
+  const u8 *pIn,
+  int nIn,
+  u8 **ppOut,
+  int *pnOut
+){
+  DoltliteRecordInfo ri;
+  u64 hdrSize;
+  int nKeep, drop, hdrBytes, nType, nNewType, nNewHdr, nBody, nOut, i;
+  u8 *pOut;
+
+  *pnOut = 0;
+  if( !pTab || !pIn || nIn<=0 || !ppOut ) return SQLITE_OK;
+  doltliteRecordInfoInit(&ri);
+  if( doltliteParseRecordStrict(pIn, nIn, &ri)!=SQLITE_OK ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_OK;
+  }
+  nKeep = ri.nField;
+  while( nKeep>1 ){
+    Column *pCol = 0;
+    if( !recordFieldColumn(pTab, bIntKey, nKeep-1, &pCol) ) break;
+    if( !columnAbsentIsNull(pTab, pCol) ) break;
+    if( ri.aType[nKeep-1]!=0 ) break;
+    nKeep--;
+  }
+  if( nKeep==ri.nField ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_OK;
+  }
+  drop = ri.nField - nKeep;
+  hdrBytes = dlReadVarint(pIn, pIn+nIn, &hdrSize);
+  if( hdrBytes<=0 || hdrSize<(u64)hdrBytes || hdrSize>(u64)nIn ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_OK;
+  }
+  nType = (int)hdrSize - hdrBytes;
+  if( drop>nType ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_OK;
+  }
+  for(i=0; i<drop; i++){
+    if( pIn[(int)hdrSize-1-i]!=0 ){
+      doltliteRecordInfoClear(&ri);
+      return SQLITE_OK;
+    }
+  }
+  nNewType = nType - drop;
+  nNewHdr = nNewType;
+  if( nNewHdr<=126 ){
+    nNewHdr += 1;
+  }else{
+    int nVarint = sqlite3VarintLen(nNewHdr);
+    nNewHdr += nVarint;
+    if( nVarint<sqlite3VarintLen(nNewHdr) ) nNewHdr++;
+  }
+  nBody = ri.aOffset[nKeep] - (int)hdrSize;
+  if( nBody<0 || (int)hdrSize+nBody>nIn ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_OK;
+  }
+  nOut = nNewHdr + nBody;
+  pOut = sqlite3_malloc(nOut);
+  if( !pOut ){
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_NOMEM;
+  }
+  if( sqlite3PutVarint(pOut, (u64)nNewHdr)!=nNewHdr-nNewType ){
+    sqlite3_free(pOut);
+    doltliteRecordInfoClear(&ri);
+    return SQLITE_OK;
+  }
+  memcpy(pOut + (nNewHdr-nNewType), pIn+hdrBytes, (size_t)nNewType);
+  if( nBody>0 ) memcpy(pOut+nNewHdr, pIn+(int)hdrSize, (size_t)nBody);
+  *ppOut = pOut;
+  *pnOut = nOut;
+  doltliteRecordInfoClear(&ri);
+  return SQLITE_OK;
+}
+
 static int btCursorInsertImpl(
   BtCursor *pCur,
   const BtreePayload *pPayload,
   int flags,
   int seekResult,
-  u8 **ppKeep
+  u8 **ppKeep,
+  u8 **ppCanon
 ){
   int rc;
   const u8 *pInsertedPayload = 0;
@@ -796,6 +940,7 @@ static int btCursorInsertImpl(
   u8 aLocalSortKey[128];
   const u8 *pSortKey = 0;
   int nSortKey = 0;
+  int nSchemaField = 0;
   pCur->deferredMergedSeek = 0;
 
   if( flags & BTREE_PREFORMAT ){
@@ -833,6 +978,20 @@ static int btCursorInsertImpl(
       return SQLITE_TOOBIG;
     }
     if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
+     && pPayload->nZero==0 ){
+      Table *pTab = cursorRowTable(pCur);
+      int nCanon = 0;
+      if( pTab ){
+        nSchemaField = pTab->nNVCol;
+        rc = trimTrailingAbsentNulls(pTab, 1, pData, nData, ppCanon, &nCanon);
+        if( rc!=SQLITE_OK ) return rc;
+        if( *ppCanon ){
+          pData = *ppCanon;
+          nData = nCanon;
+        }
+      }
+    }
+    if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
      && pPayload->nZero==0 && pCur->eState==CURSOR_VALID
      && !pCur->deferredMergedSeek ){
       const u8 *pOld;
@@ -854,7 +1013,8 @@ static int btCursorInsertImpl(
       if( sameKey ){
         rc = getCursorPayload(pCur, &pOld, &nOld);
         if( rc!=SQLITE_OK ) return rc;
-        rc = prollyValuesInterchangeable(pOld, nOld, pData, nData, &equal);
+        rc = prollyValuesInterchangeable(pOld, nOld, pData, nData,
+                                        nSchemaField, &equal);
         if( rc!=SQLITE_OK ) return rc;
         if( equal ){
           pData = pOld;
@@ -863,10 +1023,13 @@ static int btCursorInsertImpl(
       }
     }
     if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
-     && pPayload->nZero==0 && pData==(const u8*)pPayload->pData ){
+     && pPayload->nZero==0
+     && (pData==(const u8*)pPayload->pData
+         || (ppCanon && *ppCanon && pData==*ppCanon)) ){
       int nKeep = 0;
       rc = prollyBaseBytesOverPendingDelete(pCur, 0, 0, pPayload->nKey,
-                                            pData, nData, 0, ppKeep, &nKeep);
+                                            pData, nData, nSchemaField,
+                                            0, ppKeep, &nKeep);
       if( rc!=SQLITE_OK ) return rc;
       if( *ppKeep ){
         pData = *ppKeep;
@@ -972,6 +1135,22 @@ static int btCursorInsertImpl(
           prollyCursorKey(&pCur->pCur, &pCurrentKey, &nCurrentKey);
         }
       }
+      if( rc==SQLITE_OK && storePayload && !isIndex
+       && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0 ){
+        Table *pTab = cursorRowTable(pCur);
+        Index *pPk;
+        int nCanon = 0;
+        if( pTab && (pPk = sqlite3PrimaryKeyIndex(pTab))!=0 ){
+          nSchemaField = pPk->nColumn;
+          rc = trimTrailingAbsentNulls(pTab, 0, pStoredPayload, nStoredPayload,
+                                      ppCanon, &nCanon);
+          if( rc!=SQLITE_OK ) return rc;
+          if( *ppCanon ){
+            pStoredPayload = *ppCanon;
+            nStoredPayload = nCanon;
+          }
+        }
+      }
       if( rc==SQLITE_OK
        && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
        && storePayload && pCurrentKey
@@ -983,7 +1162,8 @@ static int btCursorInsertImpl(
         rc = getCursorPayload(pCur, &pOld, &nOld);
         if( rc==SQLITE_OK ){
           rc = prollyValuesInterchangeable(
-              pOld, nOld, pStoredPayload, nStoredPayload, &equal);
+              pOld, nOld, pStoredPayload, nStoredPayload,
+              nSchemaField, &equal);
         }
         if( rc==SQLITE_OK && equal ){
           pStoredPayload = pOld;
@@ -992,13 +1172,14 @@ static int btCursorInsertImpl(
       }
       if( rc==SQLITE_OK && storePayload
        && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
-       && pStoredPayload==(const u8*)pPayload->pKey ){
+       && (pStoredPayload==(const u8*)pPayload->pKey
+           || (ppCanon && *ppCanon && pStoredPayload==*ppCanon)) ){
         int nKeep = 0;
         /* A REPLACE over a clustered key overwrites without deleting; the
         ** seek that found the conflict leaves seekResult 0. */
         rc = prollyBaseBytesOverPendingDelete(pCur, pSortKey, nSortKey, 0,
-                 pStoredPayload, nStoredPayload, seekResult==0,
-                 ppKeep, &nKeep);
+                 pStoredPayload, nStoredPayload, nSchemaField,
+                 seekResult==0, ppKeep, &nKeep);
         if( rc==SQLITE_OK && *ppKeep ){
           pStoredPayload = *ppKeep;
           nStoredPayload = nKeep;
@@ -1258,8 +1439,11 @@ int prollyBtCursorInsert(
   int seekResult
 ){
   u8 *pKeep = 0;
-  int rc = btCursorInsertImpl(pCur, pPayload, flags, seekResult, &pKeep);
+  u8 *pCanon = 0;
+  int rc = btCursorInsertImpl(pCur, pPayload, flags, seekResult,
+                              &pKeep, &pCanon);
   sqlite3_free(pKeep);
+  sqlite3_free(pCanon);
   return rc;
 }
 
