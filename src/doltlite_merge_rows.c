@@ -908,6 +908,90 @@ static int mergeSideKeptAncestorRow(
   return rc;
 }
 
+/* Columns that kept their name but changed slot read two ways: by name (a
+** drop and re-add moved them) or by slot (a rename reused the name). A row
+** decides only when its moved cells match one reading and not the other; an
+** edited row matches neither. Reused when a row shows the slot reading, or
+** when a row does not fit a drop and re-add (layoutFitsRow) and none shows
+** the name reading. Returns -1 when no column moved. */
+static int mergeMovedColumnsReuseSlots(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags,
+  u8 sideFlags,
+  const MergeLayout *pL,
+  int bOtherUnchanged,
+  int *pbReuses
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyCursor ancCur, sideCur;
+  u8 *aTailOk = 0;
+  int nMoved = 0, bNameSeen = 0, bSlotSeen = 0, bUnfit = 0;
+  int p, res = 0, rc;
+
+  for(p=0; p<pL->nCol && p<pL->nAnc; p++){
+    if( pL->aCol[p].iSrcSlot>=0 && pL->aCol[p].iSrcSlot!=p ) nMoved++;
+  }
+  if( nMoved==0 ) return -1;
+  *pbReuses = 0;
+  if( !cs || !pCache || prollyHashIsEmpty(pAncRoot)
+   || prollyHashIsEmpty(pSideRoot) ){
+    return SQLITE_OK;
+  }
+  aTailOk = sqlite3_malloc64((u64)pL->nCol + 1);
+  if( !aTailOk ) return SQLITE_NOMEM;
+  prollyCursorInit(&ancCur, cs, pCache, pAncRoot, ancFlags);
+  prollyCursorInit(&sideCur, cs, pCache, pSideRoot, sideFlags);
+  rc = prollyCursorFirst(&ancCur, &res);
+  while( rc==SQLITE_OK && !res && prollyCursorIsValid(&ancCur) && !bSlotSeen ){
+    const u8 *pAncVal = 0, *pSideVal = 0, *pKey = 0;
+    int nAncVal = 0, nSideVal = 0, nKey = 0, sideRes = 0;
+    if( ancFlags & PROLLY_NODE_INTKEY ){
+      rc = prollyCursorSeekInt(&sideCur, prollyCursorIntKey(&ancCur), &sideRes);
+    }else{
+      prollyCursorKey(&ancCur, &pKey, &nKey);
+      rc = prollyCursorSeekBlob(&sideCur, pKey, nKey, &sideRes);
+    }
+    if( rc!=SQLITE_OK ) break;
+    if( sideRes==0 && prollyCursorIsValid(&sideCur) ){
+      prollyCursorValue(&ancCur, &pAncVal, &nAncVal);
+      prollyCursorValue(&sideCur, &pSideVal, &nSideVal);
+      if( bOtherUnchanged
+       || (nSideVal==nAncVal && memcmp(pSideVal, pAncVal, nAncVal)==0) ){
+        RecField *aF = 0, *aA = 0;
+        int nF = 0, nA = 0, bByName = 1, bBySlot = 1;
+        if( parseRecordFields(pSideVal, nSideVal, &aF, &nF)>=0
+         && parseRecordFields(pAncVal, nAncVal, &aA, &nA)>=0 ){
+          for(p=0; p<pL->nCol && p<pL->nAnc; p++){
+            const MergeLayoutCol *pC = &pL->aCol[p];
+            if( pC->iSrcSlot<0 || pC->iSrcSlot==p ) continue;
+            bByName = bByName && layoutCellsMatch(pSideVal, nSideVal, aF, nF,
+                pC->iField, pAncVal, nAncVal, aA, nA, pL->aAncField[pC->iSrcSlot]);
+            bBySlot = bBySlot && layoutCellsMatch(pSideVal, nSideVal, aF, nF,
+                pC->iField, pAncVal, nAncVal, aA, nA, pL->aAncField[p]);
+          }
+          if( bByName && !bBySlot ) bNameSeen = 1;
+          if( bBySlot && !bByName ) bSlotSeen = 1;
+          if( !layoutFitsRow(pSideVal, nSideVal, pAncVal, nAncVal,
+                             pL, aTailOk) ){
+            bUnfit = 1;
+          }
+        }
+        sqlite3_free(aF);
+        sqlite3_free(aA);
+      }
+    }
+    rc = prollyCursorNext(&ancCur);
+  }
+  prollyCursorClose(&ancCur);
+  prollyCursorClose(&sideCur);
+  sqlite3_free(aTailOk);
+  if( rc==SQLITE_OK ) *pbReuses = bSlotSeen || (bUnfit && !bNameSeen);
+  return rc;
+}
+
 int mergeSchemaReusesColumnSlots(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
@@ -946,8 +1030,12 @@ int mergeSchemaReusesColumnSlots(
   layout.nCol = nSide;
   layout.aAncField = aAncField;
   layout.nAnc = nAnc;
-  rc = mergeSideKeptAncestorRow(db, pAncRoot, pSideRoot, ancFlags, sideFlags,
-                                &layout, bOtherUnchanged, pbReuses);
+  rc = mergeMovedColumnsReuseSlots(db, pAncRoot, pSideRoot, ancFlags, sideFlags,
+                                   &layout, bOtherUnchanged, pbReuses);
+  if( rc<0 ){
+    rc = mergeSideKeptAncestorRow(db, pAncRoot, pSideRoot, ancFlags, sideFlags,
+                                  &layout, bOtherUnchanged, pbReuses);
+  }
 done:
   doltliteFreeColInfo(&ancCi);
   doltliteFreeColInfo(&sideCi);
