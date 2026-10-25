@@ -2587,6 +2587,14 @@ void sqlite3GenerateConstraintChecks(
     }
     sqlite3VdbeAddOp3(v, OP_MakeRecord, regIdx, pIdx->nColumn, aRegIdx[ix]);
     VdbeComment((v, "for %s", pIdx->zName));
+#ifdef DOLTLITE_PROLLY
+    /* Store an integral REAL as CREATE INDEX does (an integer), not as the
+    ** float OP_Affinity left in the register. */
+    if( (pTab->tabFlags & TF_Strict)==0 ){
+      sqlite3VdbeChangeP4(v, -1, sqlite3IndexAffinityStr(db, pIdx),
+                          P4_TRANSIENT);
+    }
+#endif
 #ifdef SQLITE_ENABLE_NULL_TRIM
     if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ){
       sqlite3SetMakeRecordP5(v, pIdx->pTable);
@@ -2856,6 +2864,14 @@ void sqlite3GenerateConstraintChecks(
     if( !bAffinityDone ){
       sqlite3TableAffinity(v, pTab, 0);
     }
+#ifdef DOLTLITE_PROLLY
+    /* OP_Affinity casts an integral REAL to a float, while a record built
+    ** with REAL affinity stores it as an integer. Rows are content-addressed,
+    ** so the table record always takes its affinity here. */
+    else if( (pTab->tabFlags & TF_Strict)==0 ){
+      sqlite3TableAffinity(v, pTab, 0);
+    }
+#endif
   }
 
   *pbMayReplace = seenReplace;
