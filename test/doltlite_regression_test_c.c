@@ -19749,7 +19749,13 @@ static void run_vacuum_into_uri(void){
     rc = db ? execErr(db, "VACUUM INTO 'file:literal.db';", zErr, sizeof(zErr))
             : SQLITE_ERROR;
     checkRc("vacuri_off_ok", rc, SQLITE_OK, zErr);
+#ifdef _WIN32
+    /* Win32 GetFullPathName treats "file:literal.db" as a stream on the
+    ** file "file", so that string is not a directory entry. */
+    check("vacuri_off_literal", file_size_or_negative("file")>=0);
+#else
     check("vacuri_off_literal", file_size_or_negative("file:literal.db")>0);
+#endif
     check("vacuri_off_decoded", file_size_or_negative("literal.db")<0);
   }
 
@@ -19807,6 +19813,8 @@ vacuri_done:
   snprintf(zPath, sizeof(zPath), "%s/bad.db", zDir);
   removeUriTarget(zPath);
   snprintf(zPath, sizeof(zPath), "%s/file:literal.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/file", zDir);
   removeUriTarget(zPath);
   snprintf(zPath, sizeof(zPath), "%s/literal.db", zDir);
   removeUriTarget(zPath);
