@@ -211,13 +211,14 @@ def coverage_archives():
             executable(payload / name, f'#!/bin/sh\necho {name}\n')
         (payload / 'blake3.o').write_bytes(b'object')
         (payload / 'vec1.so').write_bytes(b'shared object')
+        (payload / 'vec1testscalar.so').write_bytes(b'scalar shared object')
         (payload / 'libdoltlite.a').write_bytes(b'archive')
         (payload / 'sqlite3.h').write_bytes(b'header')
         command = ['bash', str(scripts / 'package-coverage-build.sh'), str(payload.parent), str(root)]
         result = run(command)
         assert result.returncode == 0, result
         checks += 1
-        for archive, expected in [('build', names + ['blake3.o', 'libdoltlite.a', 'sqlite3.h', 'vec1.so']), ('cli', names[:3]), ('fixture', names[:4] + ['vec1.so'])]:
+        for archive, expected in [('build', names + ['blake3.o', 'libdoltlite.a', 'sqlite3.h', 'vec1.so', 'vec1testscalar.so']), ('cli', names[:3]), ('fixture', names[:4] + ['vec1.so', 'vec1testscalar.so'])]:
             dest = root / archive
             with tarfile.open(root / f'coverage-{archive}.tar.gz') as tar:
                 files = [m for m in tar if m.isfile()]
@@ -228,11 +229,11 @@ def coverage_archives():
                     assert m.mode == original.stat().st_mode & 0o777
                 tar.extractall(dest, filter='data')
             for name in expected:
-                if name in ('blake3.o', 'libdoltlite.a', 'sqlite3.h', 'vec1.so'):
+                if name in ('blake3.o', 'libdoltlite.a', 'sqlite3.h', 'vec1.so', 'vec1testscalar.so'):
                     continue
                 assert run([str(dest / 'build-coverage' / name)]).stdout.strip() == name
             checks += 1
-        for name in ('libdoltlite.a', 'sqlite3.h', 'vec1.so'):
+        for name in ('libdoltlite.a', 'sqlite3.h', 'vec1.so', 'vec1testscalar.so'):
             original = (payload / name).read_bytes()
             (payload / name).unlink()
             assert run(command).returncode != 0, name

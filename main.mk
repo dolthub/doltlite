@@ -2338,6 +2338,14 @@ vec1$(T.dll): $(TOP)/ext/vec1/vec1.c sqlite3.h
 	    $(LDFLAGS.math) $(LDFLAGS.pthread) || exit $$?; \
 	fi
 
+#
+# vec1 built with only its scalar kernels, which ext/vec1/test/vec1scalar.test
+# loads beside the testfixture to compare against the SIMD paths.
+#
+vec1testscalar$(T.dll): $(TOP)/ext/vec1/vec1.c sqlite3.h
+	$(T.cc.vec1) -DVEC1_TEST_SCALAR $(LDFLAGS.shlib) -o $@ \
+	  $(TOP)/ext/vec1/vec1.c $(LDFLAGS.math) $(LDFLAGS.pthread)
+
 sqlite3rbu.o:	$(TOP)/ext/rbu/sqlite3rbu.c $(DEPS_OBJ_COMMON) $(EXTHDR)
 	$(T.cc.extension) -c $(TOP)/ext/rbu/sqlite3rbu.c
 
