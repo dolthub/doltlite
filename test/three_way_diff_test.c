@@ -1046,24 +1046,29 @@ static void test_record_equality(void){
     u8 b[16];
     int nA;
     int nB;
+    int nSchema;
     int equal;
     int interchangeable;
     int rc;
   } cases[] = {
-    {{1}, {1}, 1, 1, 1, 1, SQLITE_OK},
-    {{3, 1, 15, 42, 'a'}, {3, 1, 15, 42, 'a'}, 5, 5, 1, 1, SQLITE_OK},
-    {{3, 1, 15, 42, 'a'}, {3, 1, 15, 42, 'b'}, 5, 5, 0, 0, SQLITE_OK},
-    {{3, 1, 15, 42, 'a'}, {3, 1, 15, 43, 'a'}, 5, 5, 0, 0, SQLITE_OK},
-    {{3, 1, 2, 42, 0, 43}, {3, 2, 1, 0, 42, 43}, 6, 6, 1, 1, SQLITE_OK},
-    {{2, 1, 42}, {3, 1, 0, 42}, 3, 4, 1, 1, SQLITE_OK},
-    {{3, 1, 0, 42}, {2, 1, 42}, 4, 3, 1, 0, SQLITE_OK},
+    {{1}, {1}, 1, 1, 0, 1, 1, SQLITE_OK},
+    {{3, 1, 15, 42, 'a'}, {3, 1, 15, 42, 'a'}, 5, 5, 0, 1, 1, SQLITE_OK},
+    {{3, 1, 15, 42, 'a'}, {3, 1, 15, 42, 'b'}, 5, 5, 0, 0, 0, SQLITE_OK},
+    {{3, 1, 15, 42, 'a'}, {3, 1, 15, 43, 'a'}, 5, 5, 0, 0, 0, SQLITE_OK},
+    {{3, 1, 2, 42, 0, 43}, {3, 2, 1, 0, 42, 43}, 6, 6, 0, 1, 1, SQLITE_OK},
+    {{2, 1, 42}, {3, 1, 0, 42}, 3, 4, 0, 1, 1, SQLITE_OK},
+    {{3, 1, 0, 42}, {2, 1, 42}, 4, 3, 0, 1, 0, SQLITE_OK},
+    /* Same trailing NULL, counted as a current column. */
+    {{3, 1, 0, 42}, {2, 1, 42}, 4, 3, 2, 1, 1, SQLITE_OK},
+    /* Wider than the current schema: do not keep the extra field. */
+    {{3, 1, 0, 42}, {2, 1, 42}, 4, 3, 1, 1, 0, SQLITE_OK},
     {{2, 7, 0, 0, 0, 0, 0, 0, 0, 0},
-     {2, 7, 128, 0, 0, 0, 0, 0, 0, 0}, 10, 10, 0, 0, SQLITE_OK},
-    {{2, 15, 'a'}, {2, 14, 'a'}, 3, 3, 0, 0, SQLITE_OK},
-    {{2, 10}, {2, 10}, 2, 2, 0, 0, SQLITE_CORRUPT},
-    {{2, 15}, {2, 15}, 2, 2, 0, 0, SQLITE_CORRUPT},
-    {{2, 15, 'a'}, {2, 17, 'a'}, 3, 3, 0, 0, SQLITE_CORRUPT},
-    {{2, 15, 'a', 'b'}, {2, 15, 'a', 'b'}, 4, 4, 0, 0, SQLITE_CORRUPT}
+     {2, 7, 128, 0, 0, 0, 0, 0, 0, 0}, 10, 10, 0, 0, 0, SQLITE_OK},
+    {{2, 15, 'a'}, {2, 14, 'a'}, 3, 3, 0, 0, 0, SQLITE_OK},
+    {{2, 10}, {2, 10}, 2, 2, 0, 0, 0, SQLITE_CORRUPT},
+    {{2, 15}, {2, 15}, 2, 2, 0, 0, 0, SQLITE_CORRUPT},
+    {{2, 15, 'a'}, {2, 17, 'a'}, 3, 3, 0, 0, 0, SQLITE_CORRUPT},
+    {{2, 15, 'a', 'b'}, {2, 15, 'a', 'b'}, 4, 4, 0, 0, 0, SQLITE_CORRUPT}
   };
   int i;
   for(i=0; i<(int)(sizeof(cases)/sizeof(cases[0])); i++){
@@ -1073,7 +1078,8 @@ static void test_record_equality(void){
     check("record equality preserves validation", rc==cases[i].rc);
     if( rc==SQLITE_OK ) check("record equality", equal==cases[i].equal);
     rc = prollyValuesInterchangeable(cases[i].a, cases[i].nA,
-                                     cases[i].b, cases[i].nB, &equal);
+                                     cases[i].b, cases[i].nB,
+                                     cases[i].nSchema, &equal);
     check("record replacement preserves validation", rc==cases[i].rc);
     if( rc==SQLITE_OK ){
       check("record replacement retains field count", equal==cases[i].interchangeable);
