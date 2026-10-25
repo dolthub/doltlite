@@ -2942,6 +2942,54 @@ run_test "merge_rename_onto_dropped_key_cell_rows" \
   "SELECT group_concat(id||':'||a||':'||c, ' ') FROM t;" "1:1:100 2:2:200" "$DB"
 rm -f "$DB"
 
+# Dropping a column and adding another moves a later column by one slot. An
+# edited row fits neither reading; an untouched row still shows the column
+# kept its own values, so this is a drop and an add, not a rename.
+for tag in varchar int; do
+  ctype="VARCHAR(20)"; [ "$tag" = int ] && ctype=INT
+  DB=/tmp/test_merge_drop_add_not_rename_${tag}_$$.db; rm -f "$DB"
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, a INT, b $ctype, c INT);
+INSERT INTO t VALUES(1,1,100,10),(2,2,200,20);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE t ADD COLUMN d INT;
+UPDATE t SET c=21 WHERE pk=2;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('f');
+INSERT INTO t VALUES(3,3,300,30);
+SELECT dolt_commit('-Am','f');
+SELECT dolt_checkout('main');
+EOF
+  run_test "merge_drop_add_not_rename_${tag}" \
+    "SELECT dolt_merge('f') IS NOT NULL;
+     SELECT group_concat(pk||':'||a||':'||c||':'||coalesce(d,'~'), ' ') FROM t;" \
+    "1
+1:1:10:~ 2:2:21:~ 3:3:30:~" "$DB"
+  rm -f "$DB"
+done
+
+# Reverting a mid-table DROP COLUMN restores the column; the later edit of
+# another column is no evidence of a rename.
+DB=/tmp/test_revert_mid_drop_column_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(pk INT PRIMARY KEY, a INT, b VARCHAR(20), c INT);
+INSERT INTO t VALUES(1,1,'x',10),(2,2,'y',20);
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','drop a');
+SELECT dolt_branch('x');
+UPDATE t SET b='q' WHERE pk=2;
+SELECT dolt_commit('-Am','edit b');
+EOF
+run_test "revert_mid_drop_column_restores" \
+  "SELECT dolt_revert('x') IS NOT NULL;
+   SELECT group_concat(pk||':'||a||':'||b||':'||c, ' ') FROM t;" \
+  "1
+1:1:x:10 2:2:q:20" "$DB"
+rm -f "$DB"
+
 DB=/tmp/test_merge_rename_swap_edited_$$.db; rm -f "$DB"
 rename_reuse_base "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
