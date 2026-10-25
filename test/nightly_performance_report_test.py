@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 import pathlib
 import tempfile
 import unittest
 
+from remote_perf_test import saved_result
 
 MODULE_PATH = pathlib.Path(__file__).with_name(
     "nightly_performance_report.py"
@@ -17,6 +19,77 @@ SPEC.loader.exec_module(nightly_report)
 
 
 class NightlyPerformanceReportTest(unittest.TestCase):
+    def render_with_remote(self, directory, remote, status=0):
+        self.write_all_suites(directory)
+        remote_dir = directory / "remote"
+        remote_dir.mkdir()
+        (remote_dir / "results.json").write_text(json.dumps(remote))
+        (directory / "remote.status").write_text(str(status))
+        output = directory / "report.md"
+        result_output = directory / "report.result"
+        arguments = ["--results-dir", str(directory),
+                     "--remote-results-dir", str(remote_dir),
+                     "--commit", "abc123", "--run-url", "https://example.test/run",
+                     "--generated-at", "now", "--output", str(output),
+                     "--result-output", str(result_output)]
+        return arguments, output, result_output
+
+    def test_remote_timings_appear_without_new_speed_thresholds(self):
+        remote = saved_result()
+        for sample in remote["samples"]:
+            sample["wall_us"] = 10_000_000_000
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            arguments, output, result = self.render_with_remote(directory, remote)
+            self.assertEqual(nightly_report.main(arguments), 0)
+            report = output.read_text()
+            self.assertIn("## File remote performance", report)
+            self.assertIn("100,000,000 logical payload bytes", report)
+            self.assertIn("pull_fast_forward", report)
+            self.assertIn("No speed thresholds are enforced", report)
+            self.assertIn("Nightly result: **PASS**", report)
+            self.assertEqual(result.read_text(), "PASS\n")
+
+    def test_remote_verification_failure_marks_nightly_failed(self):
+        remote = saved_result()
+        remote.update(status="failed", error="database mismatch", samples=[])
+        with tempfile.TemporaryDirectory() as temporary:
+            arguments, output, result = self.render_with_remote(
+                pathlib.Path(temporary), remote, status=1)
+            self.assertEqual(nightly_report.main(arguments), 0)
+            self.assertIn("Nightly result: **FAIL**", output.read_text())
+            self.assertIn("database mismatch", output.read_text())
+            self.assertEqual(result.read_text(), "FAIL\n")
+
+    def test_remote_process_failure_cannot_be_hidden_by_saved_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            arguments, output, result = self.render_with_remote(
+                pathlib.Path(temporary), saved_result(), status=2)
+            self.assertEqual(nightly_report.main(arguments), 0)
+            self.assertIn("Nightly result: **FAIL**", output.read_text())
+            self.assertIn("benchmark exited with status 2", output.read_text())
+            self.assertEqual(result.read_text(), "FAIL\n")
+
+    def test_incomplete_remote_artifacts_remove_stale_report(self):
+        for bad in ("status", "results", "invalid", "unverified"):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as temporary:
+                directory = pathlib.Path(temporary)
+                remote = saved_result()
+                if bad == "unverified":
+                    remote["samples"][0]["verified"] = False
+                arguments, output, result = self.render_with_remote(directory, remote)
+                if bad == "status":
+                    (directory / "remote.status").unlink()
+                if bad == "results":
+                    (directory / "remote/results.json").unlink()
+                if bad == "invalid":
+                    (directory / "remote/results.json").write_text("{")
+                output.write_text("stale PASS")
+                result.write_text("PASS\n")
+                self.assertEqual(nightly_report.main(arguments), 1)
+                self.assertFalse(output.exists())
+                self.assertFalse(result.exists())
+
     def write_suite(self, directory, name, status=0):
         if name == "vc":
             results = "vc\tstatus_clean\t200000\t100000\n"

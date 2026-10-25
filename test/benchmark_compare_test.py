@@ -9,6 +9,7 @@ import re
 import tempfile
 import unittest
 
+from remote_perf_test import saved_result
 
 MODULE_PATH = pathlib.Path(__file__).with_name("benchmark_compare.py")
 SPEC = importlib.util.spec_from_file_location("benchmark_compare", MODULE_PATH)
@@ -70,6 +71,59 @@ def result_metadata(suite="int", producer_id=PRODUCER_ID):
 
 
 class BenchmarkCompareTest(unittest.TestCase):
+    def test_remote_rows_follow_the_existing_vc_details_pattern(self):
+        results = [benchmark_compare.Result("vc", "vc", "status", 1000, 1000)]
+        analysis = self.analyze(results)
+        remote = saved_result(("baseline", "candidate"))
+        for sample in remote["samples"]:
+            if sample["arm"] == "candidate":
+                sample["wall_us"] = 2000
+        report = benchmark_compare.render(results, analysis, "base", "new", 1.25, 1.15, 5000,
+                                          remote=remote)
+        before, details = report.split("<summary>vc details</summary>")
+        details, after = details.split("</details>", 1)
+        self.assertIn("| file_remote | `push_initial` | 1.00ms | 2.00ms | +1.00ms | 2.000x | MEASURED |",
+                      details)
+        self.assertIn("100 MB, 2 paired runs", details)
+        self.assertNotIn("push_initial", before + after)
+        self.assertNotIn("File remote performance", report)
+        self.assertIn("**Gate result:** **PASS**", report)
+        self.assertEqual(details.count("| file_remote |"), 8)
+
+    def remote_arguments(self, directory, remote):
+        timings = directory / "vc.tsv"
+        timings.write_text("vc\tstatus\t1000\t1000\n")
+        path = directory / "remote.json"
+        if remote is not None:
+            path.write_text(json.dumps(remote))
+        return ["--input", f"vc={timings}", "--remote-results", str(path),
+                "--baseline-ref", "base", "--expected-baseline-ref", "base",
+                "--candidate-ref", "candidate", "--expected-candidate-ref", "candidate",
+                "--output", str(directory / "report.md")]
+
+    def test_remote_failure_fails_the_normal_report(self):
+        remote = saved_result(("baseline", "candidate"))
+        remote.update(status="failed", samples=[], error="database mismatch")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            arguments = self.remote_arguments(directory, remote)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(benchmark_compare.main(arguments), 1)
+            report = (directory / "report.md").read_text()
+        self.assertIn("**Gate result:** **FAIL**", report)
+        self.assertIn("file-remote verification failed", report)
+        self.assertNotIn("All relative performance gates passed", report)
+
+    def test_remote_comparison_requires_complete_paired_measurements(self):
+        unverified = saved_result(("baseline", "candidate"))
+        unverified["samples"][0]["verified"] = False
+        for remote in (None, unverified, saved_result()):
+            with self.subTest(remote=remote), tempfile.TemporaryDirectory() as temporary:
+                arguments = self.remote_arguments(pathlib.Path(temporary), remote)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                    benchmark_compare.main(arguments)
+                self.assertEqual(raised.exception.code, 2)
+
     def analyze(self, results):
         return benchmark_compare.analyze(results, 1.25, 1.15, 5000)
 
