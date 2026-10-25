@@ -676,6 +676,16 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
 
+  /* A restored byte does not change the file size. Reload before the
+  ** not-a-database refusal so the repaired image is the one we judge. */
+  if( pBt->store.bDamageFinger && p->inTrans==TRANS_NONE ){
+    rc = btreeRefreshFromDisk(p);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pSchemaVersion ){
+      *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
+    }
+  }
+
   /* Open succeeds on garbage (stock timing); first use is SQLITE_NOTADB. */
   if( pBt->store.notADatabase ) return SQLITE_NOTADB;
 

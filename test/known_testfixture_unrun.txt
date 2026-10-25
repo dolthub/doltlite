@@ -30,7 +30,6 @@ test/thread005.test class=harness  # multi-threaded timing; nondeterministic
 test/thread1.test class=harness  # multi-threaded timing; nondeterministic
 test/thread2.test class=harness  # multi-threaded timing; nondeterministic
 test/thread3.test class=harness  # multi-threaded timing; nondeterministic
-test/fuzz3.test class=intentional  # flips bytes of the file and expects page-level corruption errors; a damaged chunk-store WAL record reads as a torn write, so the store opens at its prior state
 test/speed3.test class=unsupported issue=2490  # benchmark that commits across an ATTACHed second file; multi-file write transactions are rejected
 test/waliter.test class=unsupported issue=1836  # reads test.db-shm; there are no WAL sidecars
 ext/session/*.test class=unsupported  # the session extension is not compiled into DoltLite builds (no SQLITE_ENABLE_SESSION); every file skips

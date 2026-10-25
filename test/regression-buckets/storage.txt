@@ -40,6 +40,7 @@ corruptL
 corruptM
 corruptN
 doltlite_recover_crash_commit
+doltlite_fuzz3_restore
 doltlite_sync_durability
 crash3
 crash4
