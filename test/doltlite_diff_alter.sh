@@ -345,6 +345,60 @@ run_test_error_match "pk_widen_diff_summary_names_table" \
   "SELECT * FROM dolt_diff_summary('HEAD~1','HEAD','t');" \
   "failed to compute diff summary for table t: primary key set changed" "$DB14"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
+# Rewriting an unchanged row after ADD COLUMN by REPLACE, or by DELETE and
+# INSERT in one transaction, must keep the stored short record the same way an
+# UPDATE does.
+DB15=/tmp/test_diff_alter15_$$.db; rm -f "$DB15"
+echo "CREATE TABLE rowid_t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE text_pk_t(id TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE clustered_t(a TEXT, b INT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO rowid_t VALUES(1,'a'),(2,'b');
+INSERT INTO text_pk_t VALUES('a','a'),('b','b');
+INSERT INTO clustered_t VALUES('a',1,'a'),('b',2,'b');
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE rowid_t ADD COLUMN added INT;
+ALTER TABLE text_pk_t ADD COLUMN added INT;
+ALTER TABLE clustered_t ADD COLUMN added INT;
+SELECT dolt_commit('-A','-m','add columns');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+
+run_test "replace_unchanged_rowid_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('rowid_t') AS v;
+   REPLACE INTO rowid_t VALUES(2,'b',NULL);
+   SELECT v=dolt_hashof_table('rowid_t') FROM h;" \
+  "1" "$DB15"
+
+run_test "delete_insert_unchanged_rowid_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('rowid_t') AS v;
+   BEGIN;
+   DELETE FROM rowid_t WHERE id=1;
+   INSERT INTO rowid_t VALUES(1,'a',NULL);
+   COMMIT;
+   SELECT v=dolt_hashof_table('rowid_t') FROM h;" \
+  "1" "$DB15"
+
+run_test "replace_unchanged_text_pk_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('text_pk_t') AS v;
+   REPLACE INTO text_pk_t VALUES('b','b',NULL);
+   SELECT v=dolt_hashof_table('text_pk_t') FROM h;" \
+  "1" "$DB15"
+
+run_test "delete_insert_unchanged_clustered_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('clustered_t') AS v;
+   BEGIN;
+   DELETE FROM clustered_t WHERE a='b' AND b=2;
+   INSERT INTO clustered_t VALUES('b',2,'b',NULL);
+   COMMIT;
+   SELECT v=dolt_hashof_table('clustered_t') FROM h;" \
+  "1" "$DB15"
+
+run_test "replace_unchanged_status_clean" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB15"
+
+run_test_error_match "replace_unchanged_nothing_to_commit" \
+  "SELECT dolt_commit('-am','phantom');" \
+  "nothing to commit" "$DB15"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
 
 dltest_finish

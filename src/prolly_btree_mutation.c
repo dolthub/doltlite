@@ -782,11 +782,12 @@ int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 }
 
 
-int prollyBtCursorInsert(
+static int btCursorInsertImpl(
   BtCursor *pCur,
   const BtreePayload *pPayload,
   int flags,
-  int seekResult
+  int seekResult,
+  u8 **ppKeep
 ){
   int rc;
   const u8 *pInsertedPayload = 0;
@@ -795,7 +796,6 @@ int prollyBtCursorInsert(
   u8 aLocalSortKey[128];
   const u8 *pSortKey = 0;
   int nSortKey = 0;
-  (void)seekResult;
   pCur->deferredMergedSeek = 0;
 
   if( flags & BTREE_PREFORMAT ){
@@ -860,6 +860,17 @@ int prollyBtCursorInsert(
           pData = pOld;
           nData = nOld;
         }
+      }
+    }
+    if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
+     && pPayload->nZero==0 && pData==(const u8*)pPayload->pData ){
+      int nKeep = 0;
+      rc = prollyBaseBytesOverPendingDelete(pCur, 0, 0, pPayload->nKey,
+                                            pData, nData, 0, ppKeep, &nKeep);
+      if( rc!=SQLITE_OK ) return rc;
+      if( *ppKeep ){
+        pData = *ppKeep;
+        nData = nKeep;
       }
     }
     pInsertedPayload = pData;
@@ -977,6 +988,20 @@ int prollyBtCursorInsert(
         if( rc==SQLITE_OK && equal ){
           pStoredPayload = pOld;
           nStoredPayload = nOld;
+        }
+      }
+      if( rc==SQLITE_OK && storePayload
+       && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
+       && pStoredPayload==(const u8*)pPayload->pKey ){
+        int nKeep = 0;
+        /* A REPLACE over a clustered key overwrites without deleting; the
+        ** seek that found the conflict leaves seekResult 0. */
+        rc = prollyBaseBytesOverPendingDelete(pCur, pSortKey, nSortKey, 0,
+                 pStoredPayload, nStoredPayload, seekResult==0,
+                 ppKeep, &nKeep);
+        if( rc==SQLITE_OK && *ppKeep ){
+          pStoredPayload = *ppKeep;
+          nStoredPayload = nKeep;
         }
       }
     }
@@ -1226,6 +1251,18 @@ static int btreeDeleteImmediate(BtCursor *pCur){
   pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
   return rc;
 }
+int prollyBtCursorInsert(
+  BtCursor *pCur,
+  const BtreePayload *pPayload,
+  int flags,
+  int seekResult
+){
+  u8 *pKeep = 0;
+  int rc = btCursorInsertImpl(pCur, pPayload, flags, seekResult, &pKeep);
+  sqlite3_free(pKeep);
+  return rc;
+}
+
 int sqlite3BtreeInsert(
   BtCursor *pCur,
   const BtreePayload *pPayload,

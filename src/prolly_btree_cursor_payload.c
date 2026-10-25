@@ -1,6 +1,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_btree_int.h"
+#include "prolly_diff.h"
 
 int doltliteSyntheticRowidFromSortKey(const u8*, int, const KeyInfo*, i64*);
 static SQLITE_NOINLINE i64 prollyBtCursorSyntheticRowid(BtCursor *pCur);
@@ -701,6 +702,71 @@ i64 prollyBtCursorOffset(BtCursor *pCur){
 }
 i64 sqlite3BtreeOffset(BtCursor *pCur){
   return pCur->pCurOps->xOffset(pCur);
+}
+
+/* True when the record's last field is NULL: only then can a shorter stored
+** record, read with absent trailing fields as NULL, be the same row. */
+static int recordEndsInNull(const u8 *p, int n){
+  u64 nHdr, st = 1;
+  int i, off;
+  if( n<=0 ) return 0;
+  off = sqlite3GetVarint(p, &nHdr);
+  if( nHdr>(u64)n ) return 0;
+  for(i=off; i<(int)nHdr; ){
+    i += sqlite3GetVarint(p+i, &st);
+  }
+  return i>off && st==0;
+}
+
+/* An insert over a key whose stored row it replaces (DELETE then INSERT in one
+** transaction, or REPLACE) should keep the stored bytes when they already say
+** the same thing, as an in-place overwrite does, so the table hash does not
+** move. bOverwrite admits a key with no pending edit. *ppKeep is a copy the
+** caller frees. */
+int prollyBaseBytesOverPendingDelete(
+  BtCursor *pCur,
+  const u8 *pKey, int nKey, i64 intKey,
+  const u8 *pNew, int nNew,
+  int bOverwrite,
+  u8 **ppKeep, int *pnKeep
+){
+  ProllyMutMapEntry *pEntry = 0;
+  ProllyCursor base;
+  const u8 *pOld = 0;
+  int nOld = 0;
+  int res = 0;
+  int equal = 0;
+  int rc;
+
+  *ppKeep = 0;
+  *pnKeep = 0;
+  if( !pCur->pMutMap || prollyHashIsEmpty(&pCur->pCur.root)
+   || !recordEndsInNull(pNew, nNew) ){
+    return SQLITE_OK;
+  }
+  if( !bOverwrite && !pCur->pMutMap->bHasDelete ) return SQLITE_OK;
+  rc = prollyMutMapFindRc(pCur->pMutMap, pKey, nKey, intKey, &pEntry);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pEntry ? pEntry->op!=PROLLY_EDIT_DELETE : !bOverwrite ) return SQLITE_OK;
+  prollyCursorInit(&base, &pCur->pBt->store, &pCur->pBt->cache,
+                   &pCur->pCur.root, pCur->pCur.flags);
+  rc = pKey ? prollyCursorSeekBlob(&base, pKey, nKey, &res)
+            : prollyCursorSeekInt(&base, intKey, &res);
+  if( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&base) ){
+    prollyCursorValue(&base, &pOld, &nOld);
+    rc = prollyValuesInterchangeable(pOld, nOld, pNew, nNew, &equal);
+    if( rc==SQLITE_OK && equal && nOld>0 ){
+      *ppKeep = sqlite3_malloc(nOld);
+      if( *ppKeep ){
+        memcpy(*ppKeep, pOld, nOld);
+        *pnKeep = nOld;
+      }else{
+        rc = SQLITE_NOMEM;
+      }
+    }
+  }
+  prollyCursorClose(&base);
+  return rc;
 }
 
 #endif
