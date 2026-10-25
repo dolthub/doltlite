@@ -99,7 +99,7 @@ static void readAheadLeaves(ProllyCursor *cur){
   ProllyHash aHash[CHUNK_READ_AHEAD_MAX];
   int i;
 
-  if( nHash<2 || cur->pCache->nMaxByte<2*CHUNK_READ_AHEAD_BYTES ) return;
+  if( nHash<2 || cur->pCache->nMaxByte<2*CHUNK_READ_BATCH_BYTES ) return;
   for(i=0; i<nHash; i++) prollyNodeChildHash(pParent, first+i, &aHash[i]);
   prollyStatAdd(cur->pCache->pStats, nReadAhead, nHash);
   sqlite3BeginBenignMalloc();

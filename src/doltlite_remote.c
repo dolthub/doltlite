@@ -583,6 +583,25 @@ static int remoteGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
   return chunkStoreGet(((RemoteStoreHdr*)pRemote)->pStore, pHash, ppData, pnData);
 }
 
+static int remoteGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
+                           int nHash, u8 **apData, int *anData){
+  ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
+  int i = 0;
+  int rc = SQLITE_OK;
+  if( nHash<0 ) return SQLITE_MISUSE;
+  if( nHash==0 ) return SQLITE_OK;
+  memset(apData, 0, nHash*sizeof(*apData));
+  memset(anData, 0, nHash*sizeof(*anData));
+  while( i<nHash && rc==SQLITE_OK ){
+    int nRead;
+    rc = chunkStoreReadBatch(pStore, &aHash[i],
+                             MIN(nHash-i, CHUNK_READ_BATCH_MAX),
+                             &apData[i], &anData[i], &nRead);
+    i += nRead;
+  }
+  return rc;
+}
+
 static int remotePutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
                           const u8 *pData, int nData){
   ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
@@ -795,6 +814,7 @@ static DoltliteRemote *fsRemoteOpen(
   memset(p, 0, sizeof(FsRemote));
 
   p->base.xGetChunk = remoteGetChunk;
+  p->base.xGetChunks = remoteGetChunks;
   p->base.xPutChunk = fsPutChunk;
   p->base.xHasChunks = remoteHasChunks;
   p->base.xGetRefs = fsGetRefs;
@@ -1092,6 +1112,7 @@ static DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal,
   }
 
   p->base.xGetChunk = remoteGetChunk;
+  p->base.xGetChunks = remoteGetChunks;
   p->base.xPutChunk = localPutChunk;
   p->base.xHasChunks = remoteHasChunks;
   p->base.xGetRefs = remoteGetRefs;

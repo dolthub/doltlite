@@ -462,6 +462,11 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas);
 
 int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
                   u8 **ppData, int *pnData);
+/* Accepts at most CHUNK_READ_BATCH_MAX hashes and returns a bounded prefix.
+** Missing chunks are NULL; callers free all non-NULL outputs. On error,
+** all outputs and *pnRead are cleared. */
+int chunkStoreReadBatch(ChunkStore *cs, const ProllyHash *aHash, int nHash,
+                        u8 **apData, int *anData, int *pnRead);
 /* A committed chunk of an in-memory store, without a copy. *ppData stays
 ** valid, followed by CHUNK_STORE_BORROW_PAD zero bytes, until *ppSeg is
 ** passed to chunkStoreBorrowRelease(). SQLITE_NOTFOUND when the chunk is not
@@ -470,8 +475,9 @@ int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
 int chunkStoreBorrow(ChunkStore *cs, const ProllyHash *hash,
                      const u8 **ppData, int *pnData, void **ppSeg);
 void chunkStoreBorrowRelease(void *pSeg);
+#define CHUNK_READ_BATCH_MAX 256
+#define CHUNK_READ_BATCH_BYTES (64*1024)
 #define CHUNK_READ_AHEAD_MAX 16
-#define CHUNK_READ_AHEAD_BYTES (64*1024)
 int chunkStoreReadAhead(ChunkStore *cs, const ProllyHash *aHash, int nHash,
     int (*xCached)(void*, const ProllyHash*),
     int (*xRead)(void*, const ProllyHash*, const u8*, int), void *pCtx);

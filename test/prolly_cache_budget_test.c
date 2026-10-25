@@ -359,7 +359,7 @@ static void testCachedReadAhead(sqlite3 *db){
        || aEntry[i].offset>aEntry[i-1].offset+aEntry[i-1].size+4
                                   +CS_WAL_CHUNK_HDR_SIZE) ) break;
       if( aEntry[i].offset+aEntry[i].size+4-aEntry[0].offset
-          >CHUNK_READ_AHEAD_BYTES ) break;
+          >CHUNK_READ_BATCH_BYTES ) break;
     }
     if( i==4 ){ nHash = 4; break; }
   }
