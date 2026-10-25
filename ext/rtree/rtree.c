@@ -166,6 +166,7 @@ struct Rtree {
   u8 eCoordType;              /* RTREE_COORD_REAL32 or RTREE_COORD_INT32 */
   u8 nBytesPerCell;           /* Bytes consumed per cell */
   u8 inWrTrans;               /* True if inside write transaction */
+  u8 bUndersize;              /* Root blob is shorter than one node */
   u16 nAux;                   /* # of auxiliary columns in %_rowid */
 #ifdef SQLITE_ENABLE_GEOPOLY
   u8 nAuxNotNull;             /* Number of initial not-null aux columns */
@@ -728,6 +729,14 @@ static void nodeBlobReset(Rtree *pRtree){
   sqlite3_blob_close(pBlob);
 }
 
+/* The root blob was short when this rtree was connected. */
+static int rtreeUndersizeError(Rtree *pRtree){
+  sqlite3_free(pRtree->base.zErrMsg);
+  pRtree->base.zErrMsg = sqlite3_mprintf(
+      "undersize RTree blobs in \"%q_node\"", pRtree->zName);
+  return pRtree->base.zErrMsg ? SQLITE_CORRUPT_VTAB : SQLITE_NOMEM;
+}
+
 /*
 ** Obtain a reference to an r-tree node.
 */
@@ -773,8 +782,8 @@ static int nodeAcquire(
     /* If unable to open an sqlite3_blob on the desired row, that can only
     ** be because the shadow tables hold erroneous data. */
     if( rc==SQLITE_ERROR ){
-      rc = SQLITE_CORRUPT_VTAB;
       RTREE_IS_CORRUPT(pRtree);
+      rc = pRtree->bUndersize ? rtreeUndersizeError(pRtree) : SQLITE_CORRUPT_VTAB;
     }
   }else if( iNode<=0 ){
     RTREE_IS_CORRUPT(pRtree);
@@ -826,8 +835,8 @@ static int nodeAcquire(
       nodeReference(pParent);
       nodeHashInsert(pRtree, pNode);
     }else{
-      rc = SQLITE_CORRUPT_VTAB;
       RTREE_IS_CORRUPT(pRtree);
+      rc = pRtree->bUndersize ? rtreeUndersizeError(pRtree) : SQLITE_CORRUPT_VTAB;
     }
     *ppNode = pNode;
   }else{
@@ -3622,6 +3631,7 @@ static int getNodeSize(
 ){
   int rc;
   char *zSql;
+  const char *zDetail;
   if( isCreate ){
     int iPageSize = 0;
     zSql = sqlite3_mprintf("PRAGMA %Q.page_size", pRtree->zDb);
@@ -3641,10 +3651,21 @@ static int getNodeSize(
     );
     rc = getIntFromStmt(db, zSql, &pRtree->iNodeSize);
     if( rc!=SQLITE_OK ){
-      *pzErr = sqlite3_mprintf("%s", sqlite3_errmsg(db));
+      zDetail = sqlite3_errmsg(db);
+      /* A dropped %_node table is corruption of this rtree. Reads and
+      ** writes report the disk-image error a live cursor would. */
+      if( rc==SQLITE_ERROR && zDetail
+       && sqlite3_strnicmp(zDetail, "no such table", 13)==0 ){
+        *pzErr = sqlite3_mprintf("database disk image is malformed");
+        rc = *pzErr ? SQLITE_CORRUPT_VTAB : SQLITE_NOMEM;
+      }else{
+        *pzErr = sqlite3_mprintf("%s", zDetail);
+      }
     }else if( pRtree->iNodeSize<(512-64) ){
       RTREE_IS_CORRUPT(pRtree);
-      /* Allow xConnect to succeed so xDestroy can drop corrupt shadow tables. */
+      /* xConnect still succeeds so DROP TABLE can call xDestroy.
+      ** The next node read names the short blob. */
+      pRtree->bUndersize = 1;
       pRtree->iNodeSize = 512-64;
     }
   }
