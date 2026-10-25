@@ -133,7 +133,9 @@ static int cmdBeginAtomicJoined(Btree *p){
     s->committedCatalogShape = p->committedCatalogShape;
     s->committedVc = p->committedVc;
     memcpy(s->committedAMeta, p->committedAMeta, sizeof(s->committedAMeta));
+    db->nVcInterruptMask++;
     rc = sqlite3_exec(db, "SAVEPOINT doltlite_command", 0, 0, 0);
+    db->nVcInterruptMask--;
   }
   if( rc!=SQLITE_OK ){
     doltliteTxnStateClear(&s->state);
@@ -259,6 +261,9 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
     }
   }
   sqlite3_finalize(commit);
+  /* A pending interrupt must not fail the command's own savepoint
+  ** bookkeeping, or the savepoint outlives the command. */
+  db->nVcInterruptMask++;
   if( !installed && ((ctx->isError && !p->bCommandKeep) || rc!=SQLITE_OK) ){
     restoreRc = sqlite3_exec(db, "ROLLBACK TO doltlite_command", 0, 0, 0);
     if( restoreRc!=SQLITE_OK ) rc = restoreRc;
@@ -273,6 +278,7 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
     restoreRc = sqlite3_exec(db, "RELEASE doltlite_command", 0, 0, 0);
     if( restoreRc!=SQLITE_OK ) rc = restoreRc;
   }
+  db->nVcInterruptMask--;
   doltliteNestedTxnDrop(db);
   p->bCommandTxn = 0;
   p->pAtomicCommand = 0;
