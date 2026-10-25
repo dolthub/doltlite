@@ -19633,7 +19633,7 @@ static void run_vacuum_into_uri(void){
   snprintf(zDir, sizeof(zDir),
            DOLTLITE_TEST_TMPDIR "/vacuri_%ld", (long)getpid());
   snprintf(zSrc, sizeof(zSrc), "%s/src.db", zDir);
-  mkdir(zDir, 0700);
+  check("vacuri_mkdir", testMakeDir(zDir));
   removeUriTarget(zSrc);
 
   /* The shell calls sqlite3_config(SQLITE_CONFIG_URI, 1) before it opens a
@@ -19775,7 +19775,9 @@ static void run_vacuum_into_uri(void){
   out = 0;
 
 vacuri_done:
-  if( bDir && zSaved[0] ) chdir(zSaved);
+  if( bDir && zSaved[0] ){
+    check("vacuri_restore_cwd", chdir(zSaved)==0);
+  }
   sqlite3_close(out);
   sqlite3_close(db);
   vacuriSetGlobalUri(0);
