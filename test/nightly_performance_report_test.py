@@ -6,7 +6,8 @@ import pathlib
 import tempfile
 import unittest
 
-from remote_perf_test import saved_result
+from remote_perf_test import saved_result, save_gated_result
+import benchmark_retry
 
 MODULE_PATH = pathlib.Path(__file__).with_name(
     "nightly_performance_report.py"
@@ -19,6 +20,30 @@ SPEC.loader.exec_module(nightly_report)
 
 
 class NightlyPerformanceReportTest(unittest.TestCase):
+    def test_confirmed_remote_ceiling_failure_reaches_published_report(self):
+        remote = saved_result()
+        for sample in remote["samples"]:
+            if sample["case"] == "clone_initial":
+                sample["wall_us"] = 3_000_001
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            arguments, output, result = self.render_with_remote(directory, remote, status=1)
+            save_gated_result(directory / "remote", remote)
+            failure = frozenset({("individual", "remote", "file_remote", "clone_initial")})
+            benchmark_retry.write_history(directory / "remote/remote-attempts.tsv", "remote", "fixture",
+                                          [("regression", failure)]*3)
+            self.assertEqual(nightly_report.main(arguments + ["--remote-gates"]), 0)
+            self.assertIn("Nightly result: **FAIL**", output.read_text())
+            self.assertIn("Timing gate: FAIL after 3 attempt(s)", output.read_text())
+            self.assertEqual(result.read_text(), "FAIL\n")
+
+    def test_new_nightly_runs_cannot_use_ungated_measurements(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            arguments, output, result = self.render_with_remote(pathlib.Path(temporary), saved_result())
+            self.assertEqual(nightly_report.main(arguments + ["--remote-gates"]), 1)
+            self.assertFalse(output.exists())
+            self.assertFalse(result.exists())
+
     def render_with_remote(self, directory, remote, status=0):
         self.write_all_suites(directory)
         remote_dir = directory / "remote"

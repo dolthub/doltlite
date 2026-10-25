@@ -113,11 +113,15 @@ jobs:
       if: ${{ !cancelled() }}
       run: |
         python3 test/remote_perf_test.py
-        python3 test/remote_perf.py \
+        python3 test/benchmark_retry.py \
+          --suite remote --results-dir "$RUNNER_TEMP/benchmark-results/remote" \
+          --max-attempts 3 --individual-ratio 1.25 --aggregate-ratio 1.15 \
+          --min-delta-us 5000 --individual-min-delta-us 5000 --fail-confirmed \
+          --extra-artifact results.json --extra-artifact samples.tsv --extra-artifact report.md \
+          -- python3 test/remote_perf.py \
           --candidate "$GITHUB_WORKSPACE/build/doltlite" \
           --baseline "$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
-          --size-mb 100 --runs 5 \
-          --output-dir "$RUNNER_TEMP/benchmark-results/remote"
+          --size-mb 100 --runs 5 --benchmark-output
         cat "$RUNNER_TEMP/benchmark-results/remote/report.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload paired measurements
@@ -339,7 +343,7 @@ jobs:
             --input "blobpk=benchmark-results/blobpk.tsv" \
             --input "compositepk=benchmark-results/compositepk.tsv" \
             --input "vc=benchmark-results/vc.tsv" \
-            --remote-results benchmark-results/remote/results.json \
+            --remote-results benchmark-results/remote/results.json --remote-gates \
             --attempt-history "int=benchmark-results/int-attempts.tsv" \
             --attempt-history "textpk=benchmark-results/textpk-attempts.tsv" \
             --attempt-history "blobpk=benchmark-results/blobpk-attempts.tsv" \

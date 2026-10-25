@@ -22,6 +22,13 @@ from performance_hotspots import sql
 PAYLOAD_BYTES = 1000
 CASES = ("copy_fsync", "push_initial", "clone_initial", "push_noop",
          "fetch_noop", "push_incremental", "fetch_incremental", "pull_fast_forward")
+RELATIVE_RATIO = 1.25
+AGGREGATE_RATIO = 1.15
+MIN_DELTA_US = 5000
+CEILINGS_US = {"push_initial": 2_000_000, "clone_initial": 3_000_000,
+               "push_noop": 10_000, "fetch_noop": 10_000,
+               "push_incremental": 750_000, "fetch_incremental": 300_000,
+               "pull_fast_forward": 300_000}
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user ([0-9.]+) sys ([0-9.]+)")
 
 
@@ -229,10 +236,86 @@ def binary_info(binary):
             "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
 
 
+def gate_rows(result):
+    rows = []
+    for case, ceiling in CEILINGS_US.items():
+        times = {arm: round(statistics.median(s["wall_us"] for s in result["samples"]
+                                             if s["case"] == case and s["arm"] == arm))
+                 for arm in result["binaries"]}
+        rows.append((case, times.get("baseline", ceiling), times["candidate"]))
+    return rows
+
+
+def write_benchmark_results(result):
+    rows = gate_rows(result)
+    Path(os.environ["BENCH_RESULTS_OUTPUT"]).write_text("".join(
+        f"file_remote\t{case}\t{reference}\t{candidate}\n"
+        for case, reference, candidate in rows))
+    by_case = {(s["case"], s["arm"], s["trial"]): s["wall_us"] for s in result["samples"]}
+    with Path(os.environ["BENCH_SAMPLES_OUTPUT"]).open("w") as stream:
+        stream.write("section\ttest\trun\tbaseline_us\tcandidate_us\n")
+        for case in CEILINGS_US:
+            for trial in range(1, result["configuration"]["runs"]+1):
+                baseline = by_case.get((case, "baseline", trial), 0)
+                candidate = by_case[case, "candidate", trial]
+                stream.write(f"file_remote\t{case}\t{trial}\t{baseline}\t{candidate}\n")
+
+
+def read_gated_results(path, mode=None):
+    import benchmark_compare as compare
+    result = read_results(path)
+    recorded_mode = result["configuration"].get("gate_mode")
+    if recorded_mode not in ("relative", "absolute") or (mode and recorded_mode != mode):
+        raise ValueError("missing or mismatched file-remote gate mode")
+    if result["configuration"]["rows"] * PAYLOAD_BYTES != 100_000_000:
+        raise ValueError("file-remote gates require the 100 MB fixture")
+    if result["status"] != "passed":
+        raise ValueError("unverified file-remote measurements cannot be gated")
+    expected_arms = {"baseline", "candidate"} if recorded_mode == "relative" else {"candidate"}
+    if set(result["binaries"]) != expected_arms:
+        raise ValueError("file-remote gate binaries do not match the gate mode")
+    directory = Path(path).parent
+    results, metadata = compare.parse_input_artifact(f"remote={directory / 'remote.tsv'}")
+    actual = {(r.section, r.test, r.baseline_us, r.candidate_us) for r in results}
+    if actual != {("file_remote", *row) for row in gate_rows(result)} or len(results) != len(CEILINGS_US):
+        raise ValueError("file-remote gate results do not match raw measurements")
+    _, history = compare.parse_attempt_history(f"remote={directory / 'remote-attempts.tsv'}")
+    relative = recorded_mode == "relative"
+    analysis = compare.analyze(results, RELATIVE_RATIO if relative else 1.0,
+                               AGGREGATE_RATIO if relative else 1000,
+                               MIN_DELTA_US if relative else 0)
+    analysis = compare.apply_retry_confirmation(results, analysis, {"remote": history},
+                                                {"remote": metadata})
+    result["gates"] = {
+        "failed": analysis["failed"], "attempts": len(history.failures),
+        "confirmed": [list(gate) for gate in sorted(history.confirmed_failures)],
+        "failures": sorted(key[2] for key in analysis["individual_failures"]),
+        "transient": sorted(key[2] for key in analysis["observed_individual_failures"]
+                            - analysis["individual_failures"]),
+    }
+    return result
+
+
+def gates_pass(result):
+    return result["status"] == "passed" and not result.get("gates", {}).get("failed", False)
+
+
+def gate_status(result, case):
+    if "gates" not in result:
+        return "MEASURED"
+    if case == "copy_fsync":
+        return "CONTROL"
+    if case in result["gates"]["failures"]:
+        return "FAIL"
+    if case in result["gates"]["transient"]:
+        return "TRANSIENT"
+    return "PASS"
+
+
 def report(result):
     config = result["configuration"]
     lines = ["# File remote performance", "",
-             f"Status: {result['status']}. Transport: local file-backed remote.", "",
+             f"Status: {'passed' if gates_pass(result) else 'failed'}. Transport: local file-backed remote.", "",
              f"{config['rows'] * PAYLOAD_BYTES:,} logical payload bytes; "
              f"{config['rows']:,} rows; {config['delta_rows']:,} changed rows; "
              f"{config['runs']} repetitions per operation and binary.", "",
@@ -241,7 +324,22 @@ def report(result):
              f"SQL client cache: {config['cache_kib']:,} KiB. "
              "copy_fsync times shutil.copyfile plus fsync.", "",
              "Throughput uses logical payload bytes; destination growth is file-size change, "
-             "not transferred bytes. No speed thresholds are enforced.", ""]
+             "not transferred bytes.", ""]
+    mode = config.get("gate_mode")
+    if mode == "relative":
+        lines += ["Timing gates: >25% and >5 ms per operation, or >15% aggregate; "
+                  "the same gate must fail three attempts. copy_fsync is a control.", ""]
+    elif mode == "absolute":
+        lines += ["Nightly median ceilings require three-attempt confirmation; copy_fsync is a control.", "",
+                  "| Operation | Ceiling ms | Result |", "|---|---:|---|"]
+        lines += [f"| {case} | {ceiling / 1000:g} | {gate_status(result, case)} |"
+                  for case, ceiling in CEILINGS_US.items()]
+        lines.append("")
+    else:
+        lines += ["No speed thresholds are enforced.", ""]
+    if "gates" in result:
+        lines += [f"Timing gate: {'PASS' if gates_pass(result) else 'FAIL'} "
+                  f"after {result['gates']['attempts']} attempt(s).", ""]
     for arm, info in result["binaries"].items():
         lines += [f"{arm}: {info['version']}."]
     if len(result["binaries"]) > 1:
@@ -328,8 +426,16 @@ def main(argv=None):
     parser.add_argument("--delta-rows", type=int, help="default: one percent of rows")
     parser.add_argument("--cache-kib", type=int, default=65536)
     parser.add_argument("--work-dir", type=Path, help="parent for temporary fixtures and sample databases")
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--benchmark-output", action="store_true")
     args = parser.parse_args(argv)
+    if args.benchmark_output:
+        if args.size_mb != 100 or not all(os.environ.get(key) for key in (
+                "BENCH_RESULTS_OUTPUT", "BENCH_SAMPLES_OUTPUT")):
+            parser.error("--benchmark-output requires the 100 MB fixture and benchmark_retry outputs")
+        args.output_dir = Path(os.environ["BENCH_RESULTS_OUTPUT"]).parent
+    elif args.output_dir is None:
+        parser.error("--output-dir is required")
     if args.work_dir:
         args.work_dir = args.work_dir.resolve()
     rows = args.size_mb * 1_000_000 // PAYLOAD_BYTES
@@ -344,6 +450,8 @@ def main(argv=None):
                                 "delta_rows": delta_rows, "seed": args.seed, "runs": args.runs,
                                 "cache_kib": args.cache_kib, "platform": platform.platform(),
                                 "work_dir": str(args.work_dir.resolve()) if args.work_dir else tempfile.gettempdir()}}
+    if args.benchmark_output:
+        result["configuration"]["gate_mode"] = "relative" if args.baseline else "absolute"
     try:
         result["binaries"] = {arm: binary_info(binary) for arm, binary in binaries.items()}
         with tempfile.TemporaryDirectory(prefix="doltlite-remote-perf-", dir=args.work_dir) as work:
@@ -368,6 +476,8 @@ def main(argv=None):
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         result["error"] = str(exc)
     save_results(result, args.output_dir)
+    if args.benchmark_output and result["status"] == "passed":
+        write_benchmark_results(result)
     print(report(result), end="")
     return 0 if result["status"] == "passed" else 1
 

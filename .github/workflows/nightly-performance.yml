@@ -222,10 +222,15 @@ jobs:
         mkdir -p "$results/remote"
         echo 1 > "$results/remote.status"
         set +e
-        python3 test/remote_perf.py \
+        python3 test/benchmark_retry.py \
+          --suite remote --results-dir "$results/remote" \
+          --max-attempts 3 --individual-ratio 1.0 --aggregate-ratio 1000 \
+          --min-delta-us 0 --individual-min-delta-us 0 --fail-confirmed \
+          --extra-artifact results.json --extra-artifact samples.tsv --extra-artifact report.md \
+          -- python3 test/remote_perf.py \
           --candidate "$GITHUB_WORKSPACE/build-nightly/doltlite" \
-          --size-mb 100 --runs "$REMOTE_PERF_RUNS" \
-          --output-dir "$results/remote" > "$results/remote.log" 2> "$results/remote.stderr"
+          --size-mb 100 --runs "$REMOTE_PERF_RUNS" --benchmark-output \
+          > "$results/remote.log" 2> "$results/remote.stderr"
         bench_rc=$?
         set -e
         echo "$bench_rc" > "$results/remote.status"
@@ -327,6 +332,7 @@ jobs:
         } > "$issue_body"
 
         remote_args=(--remote-results-dir nightly-results/remote)
+        if [ -z "$SOURCE_RUN_ID" ]; then remote_args+=(--remote-gates); fi
         if [ -n "$SOURCE_RUN_ID" ] && [ ! -d nightly-results/remote ]; then
           remote_args=()
         else

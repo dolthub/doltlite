@@ -136,7 +136,9 @@ class BenchmarkCompareTest(unittest.TestCase):
                                        ("hotspots", 1.25, 10000),
                                        ("relative-report", 1.25, 10000)):
             with self.subTest(job=job):
-                args = dict(re.findall(r"--([a-z-]+) ([0-9.]+)", jobs[job]))
+                step = next(step for step in re.split(r"^    - ", jobs[job], flags=re.MULTILINE)
+                            if "--individual-ratio" in step)
+                args = dict(re.findall(r"--([a-z-]+) ([0-9.]+)", step))
                 self.assertEqual(float(args["individual-ratio"]), individual)
                 self.assertEqual(float(args["aggregate-ratio"]), 1.15)
                 self.assertEqual(int(args["min-delta-us"]), 10000)
