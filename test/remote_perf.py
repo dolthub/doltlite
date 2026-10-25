@@ -29,6 +29,7 @@ CEILINGS_US = {"push_initial": 2_000_000, "clone_initial": 3_000_000,
                "push_noop": 10_000, "fetch_noop": 10_000,
                "push_incremental": 750_000, "fetch_incremental": 300_000,
                "pull_fast_forward": 300_000}
+METRICS = ("read_bytes", "write_bytes", "read_calls", "write_calls", "peak_rss_bytes")
 TIMER = re.compile(r"Run Time: real ([0-9.]+) user ([0-9.]+) sys ([0-9.]+)")
 
 
@@ -159,23 +160,43 @@ def parse_timing(output, name):
             "cpu_us": round((user + system) * 1_000_000)}
 
 
-def timed_sql(binary, db, name, statement, cache_kib):
-    script = f""".headers off
+def timed_sql(binary, db, name, statement, cache_kib, metrics_extension=None):
+    prefix = ""
+    if metrics_extension:
+        prefix = (f".load {json.dumps(str(metrics_extension), ensure_ascii=False)} sqlite3_remoteperfmetrics_init\n"
+                  f".open {json.dumps(str(db), ensure_ascii=False)}\n")
+    script = prefix + f""".headers off
 .mode list
 PRAGMA cache_size=-{cache_kib};
+{"SELECT remote_perf_reset();" if metrics_extension else ""}
 .print BEGIN {name}
 .timer on
 {statement}
 .timer off
 .print END {name}"""
-    return parse_timing(sql(binary, db, script), name)
+    if metrics_extension:
+        script += "\nSELECT remote_perf_metrics();"
+    output = sql(binary, ":memory:" if metrics_extension else db, script)
+    if not metrics_extension:
+        return parse_timing(output, name)
+    lines = output.splitlines()
+    if len(lines) != 6 or lines[0] != "METRICS RESET":
+        raise ValueError(f"missing file-remote metrics: {output}")
+    values = lines[-1].split("|")
+    if len(values) != len(METRICS) or any(not value.isdigit() for value in values):
+        raise ValueError(f"invalid file-remote metrics: {lines[-1]}")
+    metrics = dict(zip(METRICS, map(int, values)))
+    if metrics["peak_rss_bytes"] <= 0:
+        raise ValueError("missing file-remote peak memory")
+    return {**parse_timing("\n".join(lines[1:-1]), name), **metrics}
 
 
 def file_size(path):
     return path.stat().st_size if path.exists() else 0
 
 
-def measure(binary, fixtures, manifest, root, name, rows, delta_rows, cache_kib, sample):
+def measure(binary, fixtures, manifest, root, name, rows, delta_rows, cache_kib, sample,
+            metrics_extension=None):
     local, remote = root / "local.db", root / "remote.db"
     base, delta = manifest["base"], manifest["delta"]
     local_state = delta if name == "push_incremental" else base
@@ -209,7 +230,7 @@ def measure(binary, fixtures, manifest, root, name, rows, delta_rows, cache_kib,
                      else "SELECT dolt_pull('origin','main');" if name == "pull_fast_forward"
                      else "SELECT dolt_fetch('origin','main');")
         sample.update(timed_sql(binary, destination if name == "clone_initial" else local,
-                                name, operation, cache_kib))
+                                name, operation, cache_kib, metrics_extension))
     sample["destination_growth_bytes"] = file_size(destination) - before
     sample["logical_payload_bytes"] = (0 if name.endswith("noop") else
                                        delta_rows * PAYLOAD_BYTES if name in
@@ -364,6 +385,25 @@ def report(result):
                          f"{min(times) / 1000:.3f}–{max(times) / 1000:.3f} | "
                          f"{statistics.median(s['cpu_us'] for s in samples) / 1000:.3f} | {rate} | "
                          f"{statistics.median(s['destination_growth_bytes'] for s in samples):.0f} |")
+    if config.get("metrics"):
+        lines += ["", "<details>", "<summary>Memory and file I/O</summary>", "",
+                  "Successful VFS bytes and VFS requests cover local and remote files during the operation; "
+                  "they include OS-cache hits and are not physical disk traffic. "
+                  "Peak RSS covers the fresh SQL process, including database open. "
+                  "The Python copy control is not instrumented.", "",
+                  "| Operation | Binary | Peak RSS MiB | Read MB | Written MB | Read requests | Write requests |",
+                  "|---|---|---:|---:|---:|---:|---:|"]
+        for name in CASES[1:]:
+            for arm in result["binaries"]:
+                samples = [s for s in result["samples"]
+                           if s["case"] == name and s["arm"] == arm and s["verified"]]
+                if not samples:
+                    continue
+                values = {key: statistics.median(s[key] for s in samples) for key in METRICS}
+                lines.append(f"| {name} | {arm} | {values['peak_rss_bytes'] / 1048576:.2f} | "
+                             f"{values['read_bytes'] / 1e6:.3f} | {values['write_bytes'] / 1e6:.3f} | "
+                             f"{values['read_calls']:g} | {values['write_calls']:g} |")
+        lines += ["", "</details>", ""]
     if result.get("error"):
         lines += ["", f"Error: {result['error']}"]
     return "\n".join(lines) + "\n"
@@ -376,6 +416,8 @@ def save_results(result, output):
     with (output / "samples.tsv").open("w", newline="") as stream:
         fields = ("case", "arm", "trial", "wall_us", "cpu_us", "logical_payload_bytes",
                   "destination_growth_bytes", "verified")
+        if result["configuration"].get("metrics"):
+            fields += METRICS
         writer = csv.DictWriter(stream, fields, delimiter="\t")
         writer.writeheader()
         writer.writerows(result["samples"])
@@ -410,6 +452,11 @@ def read_results(path):
                     raise ValueError(f"invalid {field}")
             if sample["wall_us"] <= 0 or sample["cpu_us"] < 0:
                 raise ValueError("invalid sample timing")
+            if result["configuration"].get("metrics") and sample["case"] != "copy_fsync":
+                if any(type(sample[key]) is not int or sample[key] < 0 for key in METRICS):
+                    raise ValueError("invalid file-remote resource metrics")
+                if sample["peak_rss_bytes"] == 0:
+                    raise ValueError("missing file-remote peak memory")
         report(result)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ValueError(f"invalid file-remote results: {path}: {exc}") from exc
@@ -425,6 +472,7 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=20261024)
     parser.add_argument("--delta-rows", type=int, help="default: one percent of rows")
     parser.add_argument("--cache-kib", type=int, default=65536)
+    parser.add_argument("--metrics-extension", type=Path)
     parser.add_argument("--work-dir", type=Path, help="parent for temporary fixtures and sample databases")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--benchmark-output", action="store_true")
@@ -436,6 +484,10 @@ def main(argv=None):
         args.output_dir = Path(os.environ["BENCH_RESULTS_OUTPUT"]).parent
     elif args.output_dir is None:
         parser.error("--output-dir is required")
+    if args.metrics_extension:
+        args.metrics_extension = args.metrics_extension.resolve()
+        if not args.metrics_extension.is_file():
+            parser.error("--metrics-extension must name a built metrics extension")
     if args.work_dir:
         args.work_dir = args.work_dir.resolve()
     rows = args.size_mb * 1_000_000 // PAYLOAD_BYTES
@@ -452,6 +504,8 @@ def main(argv=None):
                                 "work_dir": str(args.work_dir.resolve()) if args.work_dir else tempfile.gettempdir()}}
     if args.benchmark_output:
         result["configuration"]["gate_mode"] = "relative" if args.baseline else "absolute"
+    if args.metrics_extension:
+        result["configuration"]["metrics"] = "vfs"
     try:
         result["binaries"] = {arm: binary_info(binary) for arm, binary in binaries.items()}
         with tempfile.TemporaryDirectory(prefix="doltlite-remote-perf-", dir=args.work_dir) as work:
@@ -469,7 +523,8 @@ def main(argv=None):
                         result["samples"].append(sample)
                         with tempfile.TemporaryDirectory(prefix=f"{name}-{arm}-", dir=root) as sample_dir:
                             measure(binaries[arm], fixtures, result["fixture"], Path(sample_dir),
-                                    name, rows, delta_rows, args.cache_kib, sample)
+                                    name, rows, delta_rows, args.cache_kib, sample,
+                                    metrics_extension=args.metrics_extension)
                         print(f"{name} {arm} {trial}/{args.runs}: {sample['wall_us'] / 1000:.3f} ms (verified)",
                               file=sys.stderr)
             result["status"] = "passed"

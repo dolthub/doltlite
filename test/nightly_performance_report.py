@@ -321,8 +321,9 @@ def section_passes(suites, section):
     return True
 
 
-def report_passes(suites, remote=None):
-    if remote is not None and not remote_perf.gates_pass(remote):
+def report_passes(suites, remote=None, remote_scale=None):
+    if any(result is not None and not remote_perf.gates_pass(result)
+           for result in (remote, remote_scale)):
         return False
     if any(suite.status != 0 for suite in suites):
         return False
@@ -466,8 +467,8 @@ def render_vc(suite):
     return lines
 
 
-def render_report(suites, commit, run_url, generated_at, runner, remote=None):
-    overall = "PASS" if report_passes(suites, remote) else "FAIL"
+def render_report(suites, commit, run_url, generated_at, runner, remote=None, remote_scale=None):
+    overall = "PASS" if report_passes(suites, remote, remote_scale) else "FAIL"
     by_name = {suite.name: suite for suite in suites}
     lines = [
         "# DoltLite Performance Report",
@@ -513,6 +514,14 @@ def render_report(suites, commit, run_url, generated_at, runner, remote=None):
             "# File remote performance", "## File remote performance", 1
         ).splitlines())
         lines.append("")
+    if remote_scale is not None:
+        lines.extend(["<details>", "<summary>1 GB file remotes (observational)</summary>", "",
+                      "Both database sizes use a fixed 1 MB scattered update and a warm OS cache. "
+                      "1 GB timings have no ceiling while a baseline is collected.", ""])
+        lines.extend(remote_perf.report(remote_scale).replace(
+            "# File remote performance", "### 1 GB file remote performance", 1
+        ).splitlines())
+        lines.extend(["", "</details>", ""])
     lines.extend(
         [
             "## Reproducing",
@@ -532,6 +541,7 @@ def parse_args(argv):
     parser.add_argument("--results-dir", type=pathlib.Path, required=True)
     parser.add_argument("--remote-results-dir", type=pathlib.Path)
     parser.add_argument("--remote-gates", action="store_true")
+    parser.add_argument("--remote-scale-results-dir", type=pathlib.Path)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--generated-at", required=True)
@@ -576,6 +586,18 @@ def main(argv=None):
             if status != 0 and not remote.get("gates", {}).get("failed", False):
                 remote["status"] = "failed"
                 remote["error"] = remote.get("error", f"benchmark exited with status {status}")
+        remote_scale = None
+        if args.remote_scale_results_dir is not None:
+            directory = args.remote_scale_results_dir
+            status = read_integer(directory.with_name(directory.name + ".status"), "1 GB file-remote status")
+            remote_scale = remote_perf.read_results(directory / "results.json")
+            config = remote_scale["configuration"]
+            if (config["rows"] != 1_000_000 or config["delta_rows"] != 1000
+                    or config.get("metrics") != "vfs"):
+                raise ValueError("1 GB file remotes require a 1 GB fixture, 1 MB delta and resource metrics")
+            if status != 0:
+                remote_scale["status"] = "failed"
+                remote_scale["error"] = remote_scale.get("error", f"benchmark exited with status {status}")
         report = render_report(
             suites,
             args.commit,
@@ -583,10 +605,11 @@ def main(argv=None):
             args.generated_at,
             args.runner,
             remote,
+            remote_scale,
         )
         args.output.write_text(report, encoding="utf-8")
         if args.result_output is not None:
-            result = "PASS" if report_passes(suites, remote) else "FAIL"
+            result = "PASS" if report_passes(suites, remote, remote_scale) else "FAIL"
             args.result_output.write_text(f"{result}\n", encoding="utf-8")
     except (OSError, ValueError) as exc:
         for path in outputs:

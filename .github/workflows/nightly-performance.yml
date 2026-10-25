@@ -17,6 +17,10 @@ on:
         description: Repetitions for each 100 MB file-remote benchmark
         required: false
         default: "5"
+      remote-scale-runs:
+        description: Repetitions for each observational 1 GB file-remote benchmark
+        required: false
+        default: "3"
       source_run_id:
         description: Existing nightly run ID to republish without benchmarking
         required: false
@@ -77,6 +81,11 @@ jobs:
           echo "::error::compiler warnings in nightly benchmark build"
           exit 1
         fi
+
+    - name: Build file-remote metrics extension
+      run: |
+        cc -O2 -Werror -fPIC -shared -Ibuild-nightly -Isrc \
+          test/remote_perf_metrics.c -o build-nightly/remote_perf_metrics.so
 
     - name: Package
       run: tar -czf nightly-benchmark-build.tar.gz build-nightly
@@ -185,8 +194,9 @@ jobs:
         VC_PERF_RUNS: ${{ github.event.inputs.vc-runs || '101' }}
       run: |
         results="$RUNNER_TEMP/nightly-results"
-        mkdir -p "$results/remote"
+        mkdir -p "$results/remote" "$results/remote-1gb"
         echo 1 > "$results/remote.status"
+        echo 1 > "$results/remote-1gb.status"
         started_at=$(date +%s)
         set +e
         (
@@ -229,7 +239,8 @@ jobs:
           --extra-artifact results.json --extra-artifact samples.tsv --extra-artifact report.md \
           -- python3 test/remote_perf.py \
           --candidate "$GITHUB_WORKSPACE/build-nightly/doltlite" \
-          --size-mb 100 --runs "$REMOTE_PERF_RUNS" --benchmark-output \
+          --size-mb 100 --delta-rows 1000 --runs "$REMOTE_PERF_RUNS" --benchmark-output \
+          --metrics-extension "$GITHUB_WORKSPACE/build-nightly/remote_perf_metrics.so" \
           > "$results/remote.log" 2> "$results/remote.stderr"
         bench_rc=$?
         set -e
@@ -237,6 +248,32 @@ jobs:
         cat "$results/remote.log"
         cat "$results/remote.stderr" >&2
         if [ -s "$results/remote/report.md" ]; then cat "$results/remote/report.md" >> "$GITHUB_STEP_SUMMARY"; fi
+        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
+
+    - name: Run 1 GB file-remote benchmark
+      id: remote-scale
+      if: ${{ !cancelled() }}
+      env:
+        REMOTE_SCALE_RUNS: ${{ github.event.inputs.remote-scale-runs || '3' }}
+      run: |
+        results="$RUNNER_TEMP/nightly-results"
+        mkdir -p "$results/remote-1gb"
+        echo 1 > "$results/remote-1gb.status"
+        started_at=$(date +%s)
+        set +e
+        python3 test/remote_perf.py \
+          --candidate "$GITHUB_WORKSPACE/build-nightly/doltlite" \
+          --size-mb 1000 --delta-rows 1000 --runs "$REMOTE_SCALE_RUNS" \
+          --metrics-extension "$GITHUB_WORKSPACE/build-nightly/remote_perf_metrics.so" \
+          --output-dir "$results/remote-1gb" > "$results/remote-1gb.log" 2> "$results/remote-1gb.stderr"
+        bench_rc=$?
+        set -e
+        echo "$bench_rc" > "$results/remote-1gb.status"
+        finished_at=$(date +%s)
+        echo "$((finished_at - started_at))" > "$results/remote-1gb.duration"
+        cat "$results/remote-1gb.log"
+        cat "$results/remote-1gb.stderr" >&2
+        if [ -s "$results/remote-1gb/report.md" ]; then cat "$results/remote-1gb/report.md" >> "$GITHUB_STEP_SUMMARY"; fi
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
     - name: Upload nightly measurements
@@ -252,8 +289,10 @@ jobs:
       run: |
         rc="${{ steps.benchmark.outputs.bench_rc }}"
         remote_rc="${{ steps.remote.outputs.bench_rc }}"
+        scale_rc="${{ steps.remote-scale.outputs.bench_rc }}"
         if [ -z "$rc" ]; then rc=1; fi
         if [ "$remote_rc" != 0 ]; then rc=1; fi
+        if [ "$scale_rc" != 0 ]; then rc=1; fi
         exit "$rc"
 
   report:
@@ -328,6 +367,7 @@ jobs:
           echo ""
           echo "Ceilings compare this run with SQLite or a fixed latency limit."
           echo "They do not establish a slowdown from a previous DoltLite revision."
+          echo "1 GB remote timings are observational; verification, metrics and command failures block."
           echo ""
         } > "$issue_body"
 
@@ -337,6 +377,11 @@ jobs:
           remote_args=()
         else
           suites="$suites remote"
+        fi
+        if [ -z "$SOURCE_RUN_ID" ] || [ -d nightly-results/remote-1gb ] ||
+           [ -e nightly-results/remote-1gb.status ]; then
+          remote_args+=(--remote-scale-results-dir nightly-results/remote-1gb)
+          suites="$suites remote-1gb"
         fi
 
         for suite in $suites; do

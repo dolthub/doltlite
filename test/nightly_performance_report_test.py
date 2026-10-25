@@ -6,7 +6,7 @@ import pathlib
 import tempfile
 import unittest
 
-from remote_perf_test import saved_result, save_gated_result
+from remote_perf_test import saved_result, save_gated_result, resource_result
 import benchmark_retry
 
 MODULE_PATH = pathlib.Path(__file__).with_name(
@@ -25,17 +25,21 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         for sample in remote["samples"]:
             if sample["case"] == "clone_initial":
                 sample["wall_us"] = 3_000_001
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = pathlib.Path(temporary)
-            arguments, output, result = self.render_with_remote(directory, remote, status=1)
-            save_gated_result(directory / "remote", remote)
-            failure = frozenset({("individual", "remote", "file_remote", "clone_initial")})
-            benchmark_retry.write_history(directory / "remote/remote-attempts.tsv", "remote", "fixture",
-                                          [("regression", failure)]*3)
-            self.assertEqual(nightly_report.main(arguments + ["--remote-gates"]), 0)
-            self.assertIn("Nightly result: **FAIL**", output.read_text())
-            self.assertIn("Timing gate: FAIL after 3 attempt(s)", output.read_text())
-            self.assertEqual(result.read_text(), "FAIL\n")
+        for scale in (False, True):
+            with self.subTest(scale=scale), tempfile.TemporaryDirectory() as temporary:
+                directory = pathlib.Path(temporary)
+                if scale:
+                    arguments, output, result = self.render_with_scale(directory, resource_result(1000))
+                else:
+                    arguments, output, result = self.render_with_remote(directory, remote, status=1)
+                save_gated_result(directory / "remote", remote)
+                failure = frozenset({("individual", "remote", "file_remote", "clone_initial")})
+                benchmark_retry.write_history(directory / "remote/remote-attempts.tsv", "remote", "fixture",
+                                              [("regression", failure)]*3)
+                self.assertEqual(nightly_report.main(arguments + ["--remote-gates"]), 0)
+                self.assertIn("Nightly result: **FAIL**", output.read_text())
+                self.assertIn("Timing gate: FAIL after 3 attempt(s)", output.read_text())
+                self.assertEqual(result.read_text(), "FAIL\n")
 
     def test_new_nightly_runs_cannot_use_ungated_measurements(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -43,6 +47,63 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             self.assertEqual(nightly_report.main(arguments + ["--remote-gates"]), 1)
             self.assertFalse(output.exists())
             self.assertFalse(result.exists())
+
+    def render_with_scale(self, directory, scale, status=0):
+        remote = resource_result()
+        arguments, output, result = self.render_with_remote(directory, remote)
+        save_gated_result(directory / "remote", remote)
+        scale_dir = directory / "remote-1gb"
+        scale_dir.mkdir()
+        (scale_dir / "results.json").write_text(json.dumps(scale))
+        (directory / "remote-1gb.status").write_text(str(status))
+        return arguments + ["--remote-scale-results-dir", str(scale_dir)], output, result
+
+    def test_large_remote_timings_are_observational_with_resource_metrics(self):
+        scale = resource_result(1000)
+        for sample in scale["samples"]:
+            sample["wall_us"] = 10_000_000_000
+        with tempfile.TemporaryDirectory() as temporary:
+            args, output, result = self.render_with_scale(pathlib.Path(temporary), scale)
+            self.assertEqual(nightly_report.main(args), 0)
+            text = output.read_text()
+            self.assertIn("<summary>1 GB file remotes (observational)</summary>", text)
+            self.assertIn("1,000,000,000 logical payload bytes", text)
+            self.assertIn("Peak RSS MiB", text)
+            self.assertIn("Read requests", text)
+            self.assertEqual(result.read_text(), "PASS\n")
+
+    def test_large_verification_or_process_failure_marks_nightly_failed(self):
+        for status, failed in ((0, True), (42, False)):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                scale = resource_result(1000)
+                if failed:
+                    scale.update(status="failed", error="database mismatch", samples=[])
+                args, output, result = self.render_with_scale(pathlib.Path(temporary), scale, status)
+                self.assertEqual(nightly_report.main(args), 0)
+                self.assertIn("Nightly result: **FAIL**", output.read_text())
+                self.assertEqual(result.read_text(), "FAIL\n")
+
+    def test_large_measurements_require_expected_fixture_and_metrics(self):
+        for bad in ("size", "delta", "metrics", "sample", "missing"):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as temporary:
+                directory = pathlib.Path(temporary)
+                scale = resource_result(1000)
+                if bad == "size":
+                    scale["configuration"]["rows"] = 100000
+                if bad == "delta":
+                    scale["configuration"]["delta_rows"] = 10000
+                if bad == "metrics":
+                    del scale["configuration"]["metrics"]
+                if bad == "sample":
+                    del next(s for s in scale["samples"] if s["case"] == "push_initial")["read_calls"]
+                args, output, result = self.render_with_scale(directory, scale)
+                if bad == "missing":
+                    (directory / "remote-1gb/results.json").unlink()
+                output.write_text("stale PASS")
+                result.write_text("PASS\n")
+                self.assertEqual(nightly_report.main(args), 1)
+                self.assertFalse(output.exists())
+                self.assertFalse(result.exists())
 
     def render_with_remote(self, directory, remote, status=0):
         self.write_all_suites(directory)
