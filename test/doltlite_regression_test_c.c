@@ -137,6 +137,25 @@ static int open_db(const char *path, sqlite3 **ppDb){
   return rc;
 }
 
+static int open_db_uri(const char *path, sqlite3 **ppDb){
+  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI;
+  int rc = sqlite3_open_v2(path, ppDb, flags, 0);
+  if( rc==SQLITE_OK ){
+    sqlite3_busy_timeout(*ppDb, 5000);
+  }
+  return rc;
+}
+
+static int execErr(sqlite3 *db, const char *sql, char *zErr, size_t nErr){
+  char *err = 0;
+  int rc = sqlite3_exec(db, sql, 0, 0, &err);
+  if( zErr && nErr>0 ){
+    snprintf(zErr, nErr, "%s", err ? err : "");
+  }
+  sqlite3_free(err);
+  return rc;
+}
+
 static sqlite3_int64 file_size_or_negative(const char *path){
   struct stat st;
   if( stat(path, &st)!=0 ) return -1;
@@ -19549,6 +19568,251 @@ static void run_file_remote_url_absolute(void){
   rmdir(zRoot);
 }
 
+/* SQLITE_CONFIG_URI is accepted only before sqlite3_initialize. The shell
+** sets it at startup. Shut down first so this case can do the same after
+** earlier cases in this process have already initialized SQLite. */
+static int vacuriSetGlobalUri(int on){
+  sqlite3_shutdown();
+  return sqlite3_config(SQLITE_CONFIG_URI, on);
+}
+
+static void checkRc(const char *name, int rc, int want, const char *zErr){
+  if( rc==want ){
+    nPass++;
+  }else{
+    nFail++;
+    fprintf(stderr, "FAIL: %s rc=%d want=%d err=[%s]\n",
+            name, rc, want, zErr ? zErr : "");
+  }
+}
+
+static void checkStr(const char *name, const char *got, const char *want){
+  if( got && want && strcmp(got, want)==0 ){
+    nPass++;
+  }else{
+    nFail++;
+    fprintf(stderr, "FAIL: %s got=[%s] want=[%s]\n",
+            name, got ? got : "", want ? want : "");
+  }
+}
+
+static void removeUriTarget(const char *zPath){
+  char zLock[768];
+  const char *zBase;
+  int nDir;
+
+  removeDbFiles(zPath);
+  zBase = strrchr(zPath, '/');
+  if( zBase ){
+    nDir = (int)(zBase - zPath) + 1;
+    zBase++;
+  }else{
+    nDir = 0;
+    zBase = zPath;
+  }
+  snprintf(zLock, sizeof(zLock), "%.*s.%s-lock", nDir, zPath, zBase);
+  remove(zLock);
+}
+
+static void run_vacuum_into_uri(void){
+  char zDir[256];
+  char zSrc[320];
+  char zSaved[1024];
+  char zSql[768];
+  char zErr[512];
+  char zExpect[512];
+  char zPath[320];
+  sqlite3 *db = 0;
+  sqlite3 *out = 0;
+  int rc;
+  int rcCfg;
+  int bDir = 0;
+  FILE *f;
+
+  zSaved[0] = 0;
+  snprintf(zDir, sizeof(zDir),
+           DOLTLITE_TEST_TMPDIR "/vacuri_%ld", (long)getpid());
+  snprintf(zSrc, sizeof(zSrc), "%s/src.db", zDir);
+  mkdir(zDir, 0700);
+  removeUriTarget(zSrc);
+
+  /* The shell calls sqlite3_config(SQLITE_CONFIG_URI, 1) before it opens a
+  ** database, and its open flags do not include SQLITE_OPEN_URI. */
+  rcCfg = vacuriSetGlobalUri(1);
+  check("vacuri_uri_on", rcCfg==SQLITE_OK);
+  if( rcCfg!=SQLITE_OK ) goto vacuri_done;
+  check("vacuri_open", open_db(zSrc, &db)==SQLITE_OK);
+  check("vacuri_seed", db && execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(7);"
+      )==SQLITE_OK);
+  if( !db ) goto vacuri_done;
+
+  if( getcwd(zSaved, sizeof(zSaved)) && chdir(zDir)==0 ) bDir = 1;
+  check("vacuri_chdir", bDir);
+  if( bDir ){
+    rc = execErr(db, "VACUUM INTO 'file:out.db';", zErr, sizeof(zErr));
+    checkRc("vacuri_rel_ok", rc, SQLITE_OK, zErr);
+    check("vacuri_rel_decoded", file_size_or_negative("out.db")>0);
+    check("vacuri_rel_literal", file_size_or_negative("file:out.db")<0);
+    check("vacuri_rel_open", open_db("out.db", &out)==SQLITE_OK);
+    check("vacuri_rel_row",
+          out && strcmp(queryScalarText(out, "SELECT id FROM t"), "7")==0);
+    sqlite3_close(out);
+    out = 0;
+  }
+
+  snprintf(zSql, sizeof(zSql),
+           "VACUUM INTO 'file:%s/miss.db?mode=ro';", zDir);
+  snprintf(zExpect, sizeof(zExpect),
+           "unable to open database: file:%s/miss.db?mode=ro", zDir);
+  rc = execErr(db, zSql, zErr, sizeof(zErr));
+  checkRc("vacuri_ro_miss_rc", rc & 0xff, SQLITE_CANTOPEN, zErr);
+  checkStr("vacuri_ro_miss_msg", zErr, zExpect);
+  snprintf(zPath, sizeof(zPath), "%s/miss.db", zDir);
+  check("vacuri_ro_miss_absent", file_size_or_negative(zPath)<0);
+
+  snprintf(zPath, sizeof(zPath), "%s/empty-ro.db", zDir);
+  f = fopen(zPath, "wb");
+  check("vacuri_ro_empty_file", f!=0);
+  if( f ) fclose(f);
+  snprintf(zSql, sizeof(zSql),
+           "VACUUM INTO 'file:%s/empty-ro.db?mode=ro';", zDir);
+  rc = execErr(db, zSql, zErr, sizeof(zErr));
+  checkRc("vacuri_ro_empty_rc", rc & 0xff, SQLITE_READONLY, zErr);
+  checkStr("vacuri_ro_empty_msg", zErr, "attempt to write a readonly database");
+  check("vacuri_ro_empty_size", file_size_or_negative(zPath)==0);
+
+  snprintf(zPath, sizeof(zPath), "%s/junk-ro.db", zDir);
+  f = fopen(zPath, "wb");
+  if( f ){
+    fwrite("xxxx", 1, 4, f);
+    fclose(f);
+  }
+  snprintf(zSql, sizeof(zSql),
+           "VACUUM INTO 'file:%s/junk-ro.db?mode=ro';", zDir);
+  rc = execErr(db, zSql, zErr, sizeof(zErr));
+  checkRc("vacuri_ro_junk_rc", rc & 0xff, SQLITE_READONLY, zErr);
+  checkStr("vacuri_ro_junk_msg", zErr, "attempt to write a readonly database");
+
+  snprintf(zPath, sizeof(zPath), "%s/hdr-ro.db", zDir);
+  f = fopen(zPath, "wb");
+  if( f ){
+    fwrite("SQLite format 3", 1, 16, f);
+    fwrite("xxxx", 1, 4, f);
+    fclose(f);
+  }
+  snprintf(zSql, sizeof(zSql),
+           "VACUUM INTO 'file:%s/hdr-ro.db?mode=ro';", zDir);
+  rc = execErr(db, zSql, zErr, sizeof(zErr));
+  checkRc("vacuri_ro_hdr_rc", rc, SQLITE_ERROR, zErr);
+  checkStr("vacuri_ro_hdr_msg", zErr, "output file already exists");
+
+  snprintf(zPath, sizeof(zPath), "%s/imm.db", zDir);
+  remove(zPath);
+  snprintf(zSql, sizeof(zSql),
+           "VACUUM INTO 'file:%s/imm.db?immutable=1';", zDir);
+  rc = execErr(db, zSql, zErr, sizeof(zErr));
+  checkRc("vacuri_imm_rc", rc & 0xff, SQLITE_READONLY, zErr);
+  checkStr("vacuri_imm_msg", zErr, "attempt to write a readonly database");
+  check("vacuri_imm_size", file_size_or_negative(zPath)==0);
+
+  if( bDir ){
+    rc = execErr(db, "VACUUM INTO 'file:mem4236.db?vfs=memdb';",
+                 zErr, sizeof(zErr));
+    checkRc("vacuri_memdb_ok", rc, SQLITE_OK, zErr);
+    check("vacuri_memdb_nodisk", file_size_or_negative("mem4236.db")<0);
+    check("vacuri_memdb_noliteral", file_size_or_negative("file:mem4236.db")<0);
+    check("vacuri_memdb_noquery",
+          file_size_or_negative("file:mem4236.db?vfs=memdb")<0);
+    check("vacuri_memdb_nolock", file_size_or_negative(".mem4236.db-lock")<0);
+
+    snprintf(zSql, sizeof(zSql),
+             "VACUUM INTO 'file:%s/mm.db?mode=memory';", zDir);
+    rc = execErr(db, zSql, zErr, sizeof(zErr));
+    checkRc("vacuri_modemem_ok", rc, SQLITE_OK, zErr);
+    snprintf(zPath, sizeof(zPath), "%s/mm.db", zDir);
+    check("vacuri_modemem_nodisk", file_size_or_negative(zPath)<0);
+
+    rc = execErr(db, "VACUUM INTO 'file:bad.db?vfs=nope';", zErr, sizeof(zErr));
+    checkRc("vacuri_novfs_rc", rc, SQLITE_ERROR, zErr);
+    checkStr("vacuri_novfs_msg", zErr, "no such vfs: nope");
+
+    /* The global switch is start-time only. Close, shut down, and turn it
+    ** off, then a plain open must keep "file:literal.db" as a filename. */
+    sqlite3_close(db);
+    db = 0;
+    rcCfg = vacuriSetGlobalUri(0);
+    check("vacuri_uri_off", rcCfg==SQLITE_OK);
+    if( rcCfg==SQLITE_OK ){
+      check("vacuri_off_open", open_db(zSrc, &db)==SQLITE_OK);
+    }
+    rc = db ? execErr(db, "VACUUM INTO 'file:literal.db';", zErr, sizeof(zErr))
+            : SQLITE_ERROR;
+    checkRc("vacuri_off_ok", rc, SQLITE_OK, zErr);
+    check("vacuri_off_literal", file_size_or_negative("file:literal.db")>0);
+    check("vacuri_off_decoded", file_size_or_negative("literal.db")<0);
+  }
+
+  if( bDir && zSaved[0] ){
+    check("vacuri_restore_cwd", chdir(zSaved)==0);
+    bDir = 0;
+  }
+  sqlite3_close(db);
+  db = 0;
+
+  /* Global URI stays off. Opening with SQLITE_OPEN_URI still parses. */
+  check("vacuri_flag_open", open_db_uri(zSrc, &db)==SQLITE_OK);
+  snprintf(zSql, sizeof(zSql),
+           "VACUUM INTO 'file:%s/o2.db?cache=private';", zDir);
+  rc = db ? execErr(db, zSql, zErr, sizeof(zErr)) : SQLITE_ERROR;
+  checkRc("vacuri_cache_ok", rc, SQLITE_OK, zErr);
+  snprintf(zPath, sizeof(zPath), "%s/o2.db", zDir);
+  check("vacuri_cache_decoded", file_size_or_negative(zPath)>0);
+  check("vacuri_cache_open", open_db(zPath, &out)==SQLITE_OK);
+  check("vacuri_cache_row",
+        out && strcmp(queryScalarText(out, "SELECT id FROM t"), "7")==0);
+  sqlite3_close(out);
+  out = 0;
+
+vacuri_done:
+  if( bDir && zSaved[0] ) chdir(zSaved);
+  sqlite3_close(out);
+  sqlite3_close(db);
+  vacuriSetGlobalUri(0);
+  removeUriTarget(zSrc);
+  snprintf(zPath, sizeof(zPath), "%s/out.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/file:out.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/miss.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/empty-ro.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/junk-ro.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/hdr-ro.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/imm.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/mem4236.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/file:mem4236.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/file:mem4236.db?vfs=memdb", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/mm.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/bad.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/file:literal.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/literal.db", zDir);
+  removeUriTarget(zPath);
+  snprintf(zPath, sizeof(zPath), "%s/o2.db", zDir);
+  removeUriTarget(zPath);
+  rmdir(zDir);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -19562,6 +19826,7 @@ static const RegressionCase aCases[] = {
 #endif
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "file_modes", "File Mode Preservation Test", run_file_modes },
+  { "vacuum_into_uri", "VACUUM INTO URI Filename Test", run_vacuum_into_uri },
   { "backup_dest_peer_write", "Backup Dest Peer Write Test", run_backup_dest_peer_write },
   { "backup_source_write_busy", "Backup Source Write Busy Test", run_backup_source_write_busy },
   { "backup_dest_missing_branch", "Backup Dest Missing Branch Test", run_backup_dest_missing_branch },
