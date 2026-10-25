@@ -23,8 +23,6 @@ static int csHasOrigin(ChunkStore *cs){
 #define CS_SOURCE_CACHE_BUCKETS 256
 #define CS_SOURCE_CACHE_MAX_ENTRIES 2048
 #define CS_SOURCE_CACHE_MAX_BYTES (16*1024*1024)
-#define CS_SOURCE_BUSY_RETRY_COUNT 200
-#define CS_SOURCE_BUSY_RETRY_US 5000
 
 typedef struct DoltliteChunkSourceEntry DoltliteChunkSourceEntry;
 struct DoltliteChunkSourceEntry {
@@ -383,39 +381,11 @@ static int csSourceGraphLockHeld(
   return p->writerOpen && p->writer.lockDepth>0;
 }
 
-static int csSourceBusyRetry(
-  DoltliteChunkSourceState *p,
-  int nBusy
-){
-  if( p->db && p->db->busyHandler.xBusyHandler ){
-    return sqlite3InvokeBusyHandler(&p->db->busyHandler);
-  }
-  if( !p->db || nBusy>=CS_SOURCE_BUSY_RETRY_COUNT ) return 0;
-  sqlite3OsSleep(p->db->pVfs, CS_SOURCE_BUSY_RETRY_US);
-  return 1;
-}
-
-static int csSourceLockAndRefresh(
-  ChunkStore *cs,
-  DoltliteChunkSourceState *p,
-  int *pChanged
-){
-  int nBusy = 0;
-  int rc;
-  do {
-    rc = chunkStoreLockAndRefreshChanged(cs, pChanged);
-  }while( (rc&0xff)==SQLITE_BUSY && csSourceBusyRetry(p, nBusy++) );
-  return rc;
-}
-
 static int csSourceOpenWriter(
   ChunkStore *cs,
-  DoltliteChunkSourceState *p,
-  int *pChanged
+  DoltliteChunkSourceState *p
 ){
-  int changed = 0;
   int rc;
-  if( pChanged ) *pChanged = 0;
   if( p->writerOpen || p->memoryOnly ) return SQLITE_OK;
   if( cs->readOnly || cs->isMemory || cs->isBuffer || cs->movedReadOnly ){
     p->memoryOnly = 1;
@@ -423,7 +393,7 @@ static int csSourceOpenWriter(
   }
   if( cs->file.pFile==0 ) return SQLITE_OK;
   if( cs->lockDepth>0 ) return SQLITE_BUSY;
-  rc = csSourceLockAndRefresh(cs, p, &changed);
+  rc = chunkStoreLockAndRefresh(cs);
   if( rc==SQLITE_READONLY && cs->movedReadOnly ){
     p->memoryOnly = 1;
     return SQLITE_OK;
@@ -443,7 +413,6 @@ static int csSourceOpenWriter(
     }
   }
   chunkStoreUnlock(cs);
-  if( pChanged ) *pChanged = changed;
   return rc;
 }
 
@@ -462,9 +431,10 @@ static int csSourcePersistMany(
   if( p->memoryOnly ) return SQLITE_OK;
   for(i=0; i<nHash && !apData[i]; i++){}
   if( i==nHash ) return SQLITE_OK;
-  rc = csSourceOpenWriter(cs, p, 0);
+  rc = csSourceOpenWriter(cs, p);
+  if( (rc&0xff)==SQLITE_BUSY ) return SQLITE_OK;
   if( rc!=SQLITE_OK || !p->writerOpen ) return rc;
-  rc = csSourceLockAndRefresh(&p->writer, p, 0);
+  rc = chunkStoreLockAndRefresh(&p->writer);
   if( (rc==SQLITE_OK || rc==SQLITE_READONLY) && p->writer.movedReadOnly ){
     p->memoryOnly = 1;
     rc = SQLITE_OK;
@@ -494,7 +464,7 @@ static int csSourcePersistMany(
   }
   if( rc!=SQLITE_OK ) chunkStoreRollback(&p->writer);
   chunkStoreUnlock(&p->writer);
-  return rc;
+  return (rc&0xff)==SQLITE_BUSY ? SQLITE_OK : rc;
 }
 
 int chunkStoreSourceHas(
@@ -723,9 +693,8 @@ static int csSourceCreate(
   if( !p ) return SQLITE_NOMEM;
   memset(p, 0, sizeof(*p));
   p->db = db;
-  rc = csSourceOpenWriter(cs, p, pChanged);
+  rc = chunkStoreRefreshIfChanged(cs, pChanged);
   if( rc!=SQLITE_OK ){
-    if( p->writerOpen ) chunkStoreClose(&p->writer);
     sqlite3_free(p);
     return rc;
   }
@@ -741,20 +710,16 @@ int chunkStoreSourceSet(
   int *pChanged
 ){
   DoltliteChunkSourceState *p = cs->pChunkSource;
-  int openChanged = 0;
-  int refreshChanged = 0;
+  int changed = 0;
   int rc = SQLITE_OK;
-  if( pChanged ) *pChanged = 0;
+  if( !pChanged ) pChanged = &changed;
+  *pChanged = 0;
   if( pSource ){
     if( !p ){
       rc = csSourceCreate(cs, db, &p, pChanged);
       if( rc!=SQLITE_OK ) return rc;
     }else{
-      rc = csSourceOpenWriter(cs, p, &openChanged);
-      if( rc==SQLITE_OK ){
-        rc = chunkStoreRefreshIfChanged(cs, &refreshChanged);
-      }
-      if( pChanged ) *pChanged = openChanged || refreshChanged;
+      rc = chunkStoreRefreshIfChanged(cs, pChanged);
       if( rc!=SQLITE_OK ) return rc;
       p->db = db;
     }
@@ -777,13 +742,15 @@ int doltliteOriginSourceEnable(
   int *pChanged
 ){
   DoltliteChunkSourceState *p = cs->pChunkSource;
+  int changed = 0;
   int rc;
-  if( pChanged ) *pChanged = 0;
+  if( !pChanged ) pChanged = &changed;
+  *pChanged = 0;
   if( !p ){
     rc = csSourceCreate(cs, db, &p, pChanged);
     if( rc!=SQLITE_OK ) return rc;
   }else{
-    rc = csSourceOpenWriter(cs, p, pChanged);
+    rc = chunkStoreRefreshIfChanged(cs, pChanged);
     if( rc!=SQLITE_OK ) return rc;
   }
   p->db = db;

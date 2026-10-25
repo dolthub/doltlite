@@ -124,6 +124,32 @@ foreach operation {clone lazy-clone fetch-branch fetch-all pull} {
   } 1
 }
 
+foreach action {remove rm} {
+  foreach boundary {autocommit begin savepoint} {
+    reset_db
+    execsql "SELECT dolt_clone('--lazy','file://$remote')"
+    if {$boundary eq "begin"} {execsql BEGIN}
+    if {$boundary eq "savepoint"} {execsql {BEGIN; SAVEPOINT outer_sp}}
+    if {$boundary ne "autocommit"} {
+      execsql {INSERT INTO t VALUES(2,'pending')}
+    }
+    do_test remote-open-lazy-origin-$action-$boundary-refused {
+      set rc [catch {execsql "SELECT dolt_remote('$action',' origin ')"} msg]
+      list $rc [db errorcode] $msg
+    } {1 1 {cannot remove origin while lazy origin is enabled}}
+    do_execsql_test remote-open-lazy-origin-$action-$boundary-kept {
+      SELECT count(*) FROM dolt_remotes WHERE name='origin';
+      SELECT id,v FROM t WHERE id=1;
+    } {1 1 base}
+    if {$boundary ne "autocommit"} {
+      do_execsql_test remote-open-lazy-origin-$action-$boundary-pending {
+        SELECT id,v FROM t WHERE id=2;
+      } {2 pending}
+      execsql COMMIT
+    }
+  }
+}
+
 db close
 forcedelete $remoteDir
 sqlite3 db test.db
