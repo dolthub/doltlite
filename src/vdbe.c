@@ -5052,6 +5052,12 @@ case OP_OpenWrite:
     assert( OPFLAG_FORDELETE==BTREE_FORDELETE );
     wrFlag = BTREE_WRCSR | (pOp->p5 & OPFLAG_FORDELETE);
     assert( sqlite3SchemaMutexHeld(db, iDb, 0) );
+#ifdef DOLTLITE_PROLLY
+    /* Rows are content-addressed, so they must encode as every other write
+    ** does. An uninitialized schema (the TEMP database a DROP COLUMN
+    ** touches) reads format 0 and has no file format to stay readable by. */
+    if( pDb->pSchema->file_format!=0 )
+#endif
     if( pDb->pSchema->file_format < p->minWriteFileFormat ){
       p->minWriteFileFormat = pDb->pSchema->file_format;
     }
