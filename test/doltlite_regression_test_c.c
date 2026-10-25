@@ -14272,6 +14272,225 @@ static void run_revert_bad_ref_failure_preserves_durable_state(void){
   removeDbFiles(dbpath);
 }
 
+/* Checking out one table must not treat another table's index name as
+** the index already being present. CREATE INDEX reports that collision. */
+static void run_checkout_table_index_name_collision(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zCreate[256];
+  char zCheckout[256];
+  const char *res;
+
+  printf("=== Checkout Table Index Name Collision Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_checkout_table_index_name_collision");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_checkout_index_collision", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_checkout_index_collision", execSql(db,
+    "CREATE TABLE t(id INT PRIMARY KEY, v INT);"
+    "CREATE TABLE o(id INT PRIMARY KEY, w INT);"
+    "INSERT INTO t VALUES(1,10);"
+    "INSERT INTO o VALUES(1,20);"
+    "SELECT dolt_add('.');"
+    "SELECT dolt_commit('-m','base');"
+    "SELECT dolt_checkout('-b','b1');"
+    "INSERT INTO t VALUES(2,20);"
+    "CREATE INDEX ix ON t(v);"
+    "SELECT dolt_commit('-am','ix');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES(3,30);"
+    "CREATE INDEX oldix ON t(v);"
+    "CREATE INDEX ix ON o(w);")==SQLITE_OK);
+
+  res = queryScalarText(db, "CREATE INDEX ix ON t(v)");
+  snprintf(zCreate, sizeof(zCreate), "%s", res);
+  check("create_index_reports_collision",
+        strstr(zCreate, "index ix already exists")!=0);
+
+  check("begin_checkout_index_collision", execSql(db, "BEGIN")==SQLITE_OK);
+  res = queryScalarText(db, "SELECT dolt_checkout('b1','t')");
+  snprintf(zCheckout, sizeof(zCheckout), "%s", res);
+  check("txn_checkout_matches_create_index", strcmp(zCheckout, zCreate)==0);
+  check("txn_checkout_keeps_branch",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
+  check("txn_checkout_keeps_oldix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix' AND tbl_name='t'"), "1")==0);
+  check("txn_checkout_keeps_other_index",
+        strcmp(queryScalarText(db,
+          "SELECT tbl_name FROM sqlite_schema WHERE type='index' AND name='ix'"),
+          "o")==0);
+  check("txn_checkout_keeps_main_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("txn_checkout_skips_branch_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
+  check("rollback_checkout_index_collision", execSql(db, "ROLLBACK")==SQLITE_OK);
+
+  res = queryScalarText(db, "SELECT dolt_checkout('b1','t')");
+  snprintf(zCheckout, sizeof(zCheckout), "%s", res);
+  check("checkout_matches_create_index", strcmp(zCheckout, zCreate)==0);
+  check("checkout_keeps_branch",
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
+  check("checkout_keeps_oldix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix' AND tbl_name='t'"), "1")==0);
+  check("checkout_keeps_other_index",
+        strcmp(queryScalarText(db,
+          "SELECT tbl_name FROM sqlite_schema WHERE type='index' AND name='ix'"),
+          "o")==0);
+  check("checkout_keeps_main_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("checkout_skips_branch_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("reopen_after_checkout_index_collision", open_db(dbpath, &db)==SQLITE_OK);
+  check("checkout_persists_oldix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix' AND tbl_name='t'"), "1")==0);
+  check("checkout_persists_other_index",
+        strcmp(queryScalarText(db,
+          "SELECT tbl_name FROM sqlite_schema WHERE type='index' AND name='ix'"),
+          "o")==0);
+  check("checkout_persists_main_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+
+  check("drop_colliding_index", execSql(db, "DROP INDEX ix")==SQLITE_OK);
+  check("checkout_unique_index_name",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('b1','t')"), "0")==0);
+  check("checkout_installs_source_index",
+        strcmp(queryScalarText(db,
+          "SELECT tbl_name FROM sqlite_schema WHERE type='index' AND name='ix'"),
+          "t")==0);
+  check("checkout_drops_working_only_index",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='oldix'"),
+          "0")==0);
+  check("checkout_installs_branch_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "1")==0);
+  check("checkout_replaces_main_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+  check("second_checkout_keeps_index",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('b1','t')"), "0")==0);
+  check("second_checkout_keeps_source_index",
+        strcmp(queryScalarText(db,
+          "SELECT tbl_name FROM sqlite_schema WHERE type='index' AND name='ix'"),
+          "t")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("reopen_after_successful_checkout", open_db(dbpath, &db)==SQLITE_OK);
+  check("reopen_drops_working_only_index",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='oldix'"),
+          "0")==0);
+  check("reopen_keeps_source_index",
+        strcmp(queryScalarText(db,
+          "SELECT tbl_name FROM sqlite_schema WHERE type='index' AND name='ix'"),
+          "t")==0);
+  check("reopen_keeps_branch_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "1")==0);
+  check("reopen_second_checkout",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('b1','t')"), "0")==0);
+  check("reopen_second_checkout_drops_oldix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='oldix'"),
+          "0")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+/* An index committed before the branch is part of the source table and
+** stays. An index the source commit dropped is removed, including after
+** reopen. */
+static void run_checkout_table_drops_committed_index(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Checkout Table Drops Committed Index Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_checkout_table_drops_committed_index");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_checkout_committed_index", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_checkout_committed_index", execSql(db,
+    "CREATE TABLE t(id INT PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES(1,10);"
+    "CREATE INDEX oldix ON t(v);"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_branch('b1');"
+    "SELECT dolt_checkout('b1');"
+    "DELETE FROM t;"
+    "INSERT INTO t VALUES(2,20);"
+    "CREATE INDEX ix ON t(v);"
+    "SELECT dolt_commit('-am','source');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  check("branch_inherited_oldix", execSql(db,
+    "SELECT dolt_checkout('b1');")==SQLITE_OK);
+  check("branch_still_has_oldix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix' AND tbl_name='t'"), "1")==0);
+  check("back_to_main_for_inherited_index", execSql(db,
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("checkout_keeps_inherited_index",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('b1','t')"), "0")==0);
+  check("checkout_inherited_has_ix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='ix' AND tbl_name='t'"), "1")==0);
+  check("checkout_inherited_keeps_oldix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix' AND tbl_name='t'"), "1")==0);
+
+  check("drop_oldix_on_branch", execSql(db,
+    "SELECT dolt_checkout('b1');"
+    "DROP INDEX oldix;"
+    "SELECT dolt_commit('-am','drop oldix');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("checkout_source_without_oldix",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('b1','t')"), "0")==0);
+  check("checkout_source_without_oldix_has_ix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='ix' AND tbl_name='t'"), "1")==0);
+  check("checkout_source_without_oldix_drops_it",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix'"), "0")==0);
+  check("checkout_source_without_oldix_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "1")==0);
+  check("checkout_source_without_oldix_again",
+        strcmp(queryScalarText(db, "SELECT dolt_checkout('b1','t')"), "0")==0);
+  check("checkout_source_without_oldix_stays_dropped",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix'"), "0")==0);
+
+  sqlite3_close(db);
+  db = 0;
+  check("reopen_checkout_committed_index", open_db(dbpath, &db)==SQLITE_OK);
+  check("reopen_source_without_oldix",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM sqlite_schema WHERE type='index'"
+          " AND name='oldix'"), "0")==0);
+  check("reopen_committed_index_keeps_ix",
+        strcmp(queryScalarText(db,
+          "SELECT tbl_name FROM sqlite_schema WHERE type='index' AND name='ix'"),
+          "t")==0);
+  check("reopen_committed_index_row",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "1")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_checkout_nonexistent_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -19544,6 +19763,8 @@ static const RegressionCase aCases[] = {
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
   { "remote_remove_missing_preserves_durable_state", "Remote Remove Missing Preserves Durable State Test", run_remote_remove_missing_preserves_durable_state },
+  { "checkout_table_index_name_collision", "Checkout Table Index Name Collision Test", run_checkout_table_index_name_collision },
+  { "checkout_table_drops_committed_index", "Checkout Table Drops Committed Index Test", run_checkout_table_drops_committed_index },
   { "checkout_nonexistent_preserves_durable_state", "Checkout Nonexistent Preserves Durable State Test", run_checkout_nonexistent_preserves_durable_state },
   { "checkout_dash_b_existing_branch_preserves_durable_state", "Checkout -b Existing Branch Preserves Durable State Test", run_checkout_dash_b_existing_branch_preserves_durable_state },
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
