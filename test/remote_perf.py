@@ -283,6 +283,41 @@ def save_results(result, output):
         writer.writerows(result["samples"])
 
 
+def read_results(path):
+    try:
+        result = json.loads(Path(path).read_text())
+        if result["format_version"] != 1 or result["status"] not in ("passed", "failed"):
+            raise ValueError("invalid format or status")
+        if result["status"] == "passed":
+            runs = result["configuration"]["runs"]
+            arms = set(result["binaries"])
+            if type(runs) is not int or runs < 1 or arms not in (
+                    {"candidate"}, {"baseline", "candidate"}):
+                raise ValueError("invalid runs or binaries")
+            expected = {(case, arm, trial) for case in CASES for arm in arms
+                        for trial in range(1, runs + 1)}
+            samples = result["samples"]
+            actual = {(s["case"], s["arm"], s["trial"]) for s in samples}
+            if actual != expected or len(samples) != len(expected):
+                raise ValueError("incomplete or duplicate samples")
+            if any(s["verified"] is not True for s in samples) or result.get("error"):
+                raise ValueError("unverified samples or benchmark error")
+        for sample in result["samples"]:
+            if not sample["verified"]:
+                continue
+            for field in ("wall_us", "cpu_us", "logical_payload_bytes",
+                          "destination_growth_bytes"):
+                value = sample[field]
+                if not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError(f"invalid {field}")
+            if sample["wall_us"] <= 0 or sample["cpu_us"] < 0:
+                raise ValueError("invalid sample timing")
+        report(result)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"invalid file-remote results: {path}: {exc}") from exc
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Measure verified file-backed DoltLite remote operations.")
     parser.add_argument("--candidate", type=Path, required=True)

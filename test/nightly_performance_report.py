@@ -7,6 +7,7 @@ import statistics
 import sys
 from dataclasses import dataclass
 
+import remote_perf
 
 SYSBENCH_SUITES = ("int", "textpk", "blobpk", "compositepk")
 ALL_SUITES = SYSBENCH_SUITES + ("vc",)
@@ -320,7 +321,9 @@ def section_passes(suites, section):
     return True
 
 
-def report_passes(suites):
+def report_passes(suites, remote=None):
+    if remote is not None and remote["status"] != "passed":
+        return False
     if any(suite.status != 0 for suite in suites):
         return False
     by_name = {suite.name: suite for suite in suites}
@@ -463,8 +466,8 @@ def render_vc(suite):
     return lines
 
 
-def render_report(suites, commit, run_url, generated_at, runner):
-    overall = "PASS" if report_passes(suites) else "FAIL"
+def render_report(suites, commit, run_url, generated_at, runner, remote=None):
+    overall = "PASS" if report_passes(suites, remote) else "FAIL"
     by_name = {suite.name: suite for suite in suites}
     lines = [
         "# DoltLite Performance Report",
@@ -480,9 +483,9 @@ def render_report(suites, commit, run_url, generated_at, runner):
         ">",
         f"> [GitHub Actions run]({run_url})",
         "",
-        "This report compares optimized DoltLite against stock SQLite on the "
-        "same GitHub-hosted runner. Baseline and candidate execution order "
-        "alternates on each repetition. Reported timings are medians. "
+        "The SQL workloads compare optimized DoltLite against stock SQLite on the "
+        "same GitHub-hosted runner, alternating execution order on each repetition. "
+        "Version-control sections measure DoltLite latency. Reported timings are medians. "
         "Paired-ratio noise is the median absolute deviation of the paired "
         "DoltLite/SQLite ratios, expressed as a percentage.",
         "",
@@ -505,12 +508,17 @@ def render_report(suites, commit, run_url, generated_at, runner):
     )
     lines.extend(render_key_shape_breakdown(sysbench_suites))
     lines.extend(render_vc(by_name["vc"]))
+    if remote is not None:
+        lines.extend(remote_perf.report(remote).replace(
+            "# File remote performance", "## File remote performance", 1
+        ).splitlines())
+        lines.append("")
     lines.extend(
         [
             "## Reproducing",
             "",
-            "The workload definitions live in `test/sysbench_compare*.sh` "
-            "and `test/vc_perf_ceiling.sh`. The nightly workflow retains "
+            "The workload definitions live in `test/sysbench_compare*.sh`, "
+            "`test/vc_perf_ceiling.sh`, and `test/remote_perf.py`. The nightly workflow retains "
             "the complete raw samples and generated reports as Actions "
             "artifacts for 30 days.",
             "",
@@ -522,6 +530,7 @@ def render_report(suites, commit, run_url, generated_at, runner):
 def parse_args(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", type=pathlib.Path, required=True)
+    parser.add_argument("--remote-results-dir", type=pathlib.Path)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--generated-at", required=True)
@@ -553,16 +562,25 @@ def main(argv=None):
         suites = [
             load_suite(args.results_dir, name) for name in ALL_SUITES
         ]
+        remote = None
+        if args.remote_results_dir is not None:
+            status = read_integer(args.remote_results_dir.with_name(
+                args.remote_results_dir.name + ".status"), "file-remote status")
+            remote = remote_perf.read_results(args.remote_results_dir / "results.json")
+            if status != 0:
+                remote["status"] = "failed"
+                remote["error"] = remote.get("error", f"benchmark exited with status {status}")
         report = render_report(
             suites,
             args.commit,
             args.run_url,
             args.generated_at,
             args.runner,
+            remote,
         )
         args.output.write_text(report, encoding="utf-8")
         if args.result_output is not None:
-            result = "PASS" if report_passes(suites) else "FAIL"
+            result = "PASS" if report_passes(suites, remote) else "FAIL"
             args.result_output.write_text(f"{result}\n", encoding="utf-8")
     except (OSError, ValueError) as exc:
         for path in outputs:

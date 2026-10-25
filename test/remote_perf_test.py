@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import io
 import json
 from pathlib import Path
@@ -10,7 +11,63 @@ from unittest import mock
 import remote_perf as perf
 
 
+def saved_result(arms=("candidate",), runs=2):
+    return {"format_version": 1, "status": "passed",
+            "configuration": {"rows": 100000, "delta_rows": 1000, "runs": runs,
+                              "cache_kib": 65536},
+            "binaries": {arm: {"version": arm} for arm in arms},
+            "samples": [{"case": case, "arm": arm, "trial": trial, "verified": True,
+                         "wall_us": 1000, "cpu_us": 900, "logical_payload_bytes": 100000000,
+                         "destination_growth_bytes": 107000000}
+                        for case in perf.CASES for arm in arms for trial in range(1, runs+1)]}
+
+
 class RemotePerfTest(unittest.TestCase):
+    def test_saved_measurements_require_every_verified_sample(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.json"
+            for arms in (("candidate",), ("baseline", "candidate")):
+                valid = saved_result(arms)
+                path.write_text(json.dumps(valid))
+                self.assertEqual(perf.read_results(path), valid)
+                bad_results = []
+                bad = copy.deepcopy(valid)
+                bad["samples"].pop()
+                bad_results.append(bad)
+                bad = copy.deepcopy(valid)
+                bad["samples"].append(bad["samples"][0])
+                bad_results.append(bad)
+                bad = copy.deepcopy(valid)
+                bad["samples"][0]["verified"] = False
+                bad_results.append(bad)
+                bad = copy.deepcopy(valid)
+                bad["samples"][0]["wall_us"] = float("nan")
+                bad_results.append(bad)
+                for bad in bad_results:
+                    path.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):
+                        perf.read_results(path)
+
+    def test_saved_failed_results_remain_reportable(self):
+        result = saved_result()
+        result.update(status="failed", error="database mismatch", samples=[])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.json"
+            path.write_text(json.dumps(result))
+            loaded = perf.read_results(path)
+        self.assertIn("Status: failed", perf.report(loaded))
+        self.assertIn("database mismatch", perf.report(loaded))
+
+    def test_saved_results_reject_missing_or_malformed_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing.json"
+            with self.assertRaises(ValueError):
+                perf.read_results(path)
+            for data in ("{", "[]", "{}", '{"format_version":2,"status":"passed"}'):
+                path.write_text(data)
+                with self.assertRaises(ValueError):
+                    perf.read_results(path)
+
     def test_file_urls_preserve_filesystem_names(self):
         path = Path.cwd().resolve() / "remote perf's 100%.db"
         self.assertEqual(perf.file_url(path), "file://" + str(path))

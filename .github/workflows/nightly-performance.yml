@@ -13,6 +13,10 @@ on:
         description: Repetitions for each version-control benchmark
         required: false
         default: "101"
+      remote-runs:
+        description: Repetitions for each 100 MB file-remote benchmark
+        required: false
+        default: "5"
       source_run_id:
         description: Existing nightly run ID to republish without benchmarking
         required: false
@@ -181,7 +185,8 @@ jobs:
         VC_PERF_RUNS: ${{ github.event.inputs.vc-runs || '101' }}
       run: |
         results="$RUNNER_TEMP/nightly-results"
-        mkdir -p "$results"
+        mkdir -p "$results/remote"
+        echo 1 > "$results/remote.status"
         started_at=$(date +%s)
         set +e
         (
@@ -207,6 +212,28 @@ jobs:
         cat "$results/vc.stderr" >&2
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
+    - name: Run 100 MB file-remote benchmark
+      id: remote
+      if: ${{ !cancelled() }}
+      env:
+        REMOTE_PERF_RUNS: ${{ github.event.inputs.remote-runs || '5' }}
+      run: |
+        results="$RUNNER_TEMP/nightly-results"
+        mkdir -p "$results/remote"
+        echo 1 > "$results/remote.status"
+        set +e
+        python3 test/remote_perf.py \
+          --candidate "$GITHUB_WORKSPACE/build-nightly/doltlite" \
+          --size-mb 100 --runs "$REMOTE_PERF_RUNS" \
+          --output-dir "$results/remote" > "$results/remote.log" 2> "$results/remote.stderr"
+        bench_rc=$?
+        set -e
+        echo "$bench_rc" > "$results/remote.status"
+        cat "$results/remote.log"
+        cat "$results/remote.stderr" >&2
+        if [ -s "$results/remote/report.md" ]; then cat "$results/remote/report.md" >> "$GITHUB_STEP_SUMMARY"; fi
+        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
+
     - name: Upload nightly measurements
       if: always()
       uses: actions/upload-artifact@v4
@@ -215,11 +242,13 @@ jobs:
         path: ${{ runner.temp }}/nightly-results
         retention-days: 30
 
-    - name: Enforce absolute ceiling
+    - name: Enforce version-control results
       if: always()
       run: |
         rc="${{ steps.benchmark.outputs.bench_rc }}"
+        remote_rc="${{ steps.remote.outputs.bench_rc }}"
         if [ -z "$rc" ]; then rc=1; fi
+        if [ "$remote_rc" != 0 ]; then rc=1; fi
         exit "$rc"
 
   report:
@@ -297,6 +326,13 @@ jobs:
           echo ""
         } > "$issue_body"
 
+        remote_args=(--remote-results-dir nightly-results/remote)
+        if [ -n "$SOURCE_RUN_ID" ] && [ ! -d nightly-results/remote ]; then
+          remote_args=()
+        else
+          suites="$suites remote"
+        fi
+
         for suite in $suites; do
           status_file="nightly-results/$suite.status"
           stderr_file="nightly-results/$suite.stderr"
@@ -323,6 +359,7 @@ jobs:
 
         set +e
         python3 test/nightly_performance_report.py \
+          "${remote_args[@]}" \
           --results-dir nightly-results \
           --commit "$report_commit" \
           --run-url "$run_url" \
@@ -359,9 +396,9 @@ jobs:
         elif [ "$report_result_value" = "FAIL" ]; then
           failed=1
           {
-            echo "### Performance ceiling"
+            echo "### Performance checks"
             echo ""
-            echo "One or more performance ceilings were exceeded."
+            echo "One or more performance ceilings or file-remote verification checks failed."
             echo ""
           } >> "$issue_body"
         elif [ "$report_result_value" != "PASS" ]; then

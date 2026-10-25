@@ -77,7 +77,7 @@ jobs:
   vc-relative:
     name: version-control
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v4
@@ -108,6 +108,17 @@ jobs:
             --individual-min-delta-us 50000 \
             -- bash test/vc_perf_ceiling.sh "$GITHUB_WORKSPACE/build/doltlite"
         cat "$results/vc.md"
+
+    - name: Measure 100 MB file remotes against PR base
+      if: ${{ !cancelled() }}
+      run: |
+        python3 test/remote_perf_test.py
+        python3 test/remote_perf.py \
+          --candidate "$GITHUB_WORKSPACE/build/doltlite" \
+          --baseline "$GITHUB_WORKSPACE/benchmark-baseline/doltlite" \
+          --size-mb 100 --runs 5 \
+          --output-dir "$RUNNER_TEMP/benchmark-results/remote"
+        cat "$RUNNER_TEMP/benchmark-results/remote/report.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload paired measurements
       if: always()
@@ -360,6 +371,21 @@ jobs:
         fi
         if [ "${{ needs.hotspots.result }}" != success ]; then
           printf '\n**FAILED:** performance hotspots; see the separate performance-hotspots job report.\n' >> "$report"
+          report_rc=1
+        fi
+        set +e
+        python3 - benchmark-results/remote/results.json >> "$report" <<'PY'
+        import sys
+        sys.path.insert(0, "test")
+        import remote_perf
+        result = remote_perf.read_results(sys.argv[1])
+        print("\n" + remote_perf.report(result).replace("# File remote", "## File remote", 1))
+        raise SystemExit(0 if result["status"] == "passed" else 1)
+        PY
+        remote_rc=$?
+        set -e
+        if [ "$remote_rc" -ne 0 ] || [ "${{ needs.vc-relative.result }}" != success ]; then
+          printf '\n**FAILED:** version-control or file-remote measurements failed or were incomplete.\n' >> "$report"
           report_rc=1
         fi
         cat "$report"
