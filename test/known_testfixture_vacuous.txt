@@ -82,7 +82,6 @@ superlock class=intentional  # skips itself under ifcapable doltlite: pager, WAL
 symlink2 class=intentional  # Windows only
 tkt-cbd054fa6b class=unsupported  # ifcapable !stat4: SQLITE_ENABLE_STAT4 is not compiled in
 uri2 class=unsupported  # needs SQLITE_ENABLE_URI_00_ERROR
-vec1scalar class=harness  # needs the vec1testscalar loadable library
 wal class=intentional  # skips itself under ifcapable doltlite: pager, WAL or page-image internals
 wal2 class=intentional  # skips itself under ifcapable doltlite: pager, WAL or page-image internals
 wal3 class=intentional  # skips itself under ifcapable doltlite: pager, WAL or page-image internals

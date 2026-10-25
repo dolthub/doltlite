@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory() as tmp:
     payload = root / 'build-coverage'
     payload.mkdir()
     for name in ('doltlite', 'doltlite-remotesrv', 'doltlite_regression_test_c',
-                 'testfixture', 'vec1.so', 'prolly_hash.o', 'blake3.o',
+                 'testfixture', 'vec1.so', 'vec1testscalar.so', 'prolly_hash.o', 'blake3.o',
                  'sample_test', 'libdoltlite.a', 'sqlite3.h'):
         (payload / name).write_bytes(name.encode())
         if name in ('doltlite', 'doltlite-remotesrv', 'testfixture'):
@@ -150,7 +150,8 @@ with tempfile.TemporaryDirectory() as tmp:
             check('build-coverage/libdoltlite.a' not in archive.getnames(),
                   f'{artifact} runtime needlessly carries the library')
     with tarfile.open(root / 'coverage-fixture.tar.gz') as archive:
-        check('build-coverage/vec1.so' in archive.getnames(),
-              'regression fixture lost vec1.so')
+        for lib in ('vec1.so', 'vec1testscalar.so'):
+            check(f'build-coverage/{lib}' in archive.getnames(),
+                  f'regression fixture lost {lib}')
 
 print(f'Harness housekeeping: {checks} checks passed')
