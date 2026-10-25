@@ -35,11 +35,13 @@ def promote_attempt(
     producer_id,
     copy_function=shutil.copy2,
     replace_function=os.replace,
+    extra_artifacts=(),
 ):
     sources = [
         attempt_dir / f"{suite}{suffix}"
         for suffix in (".tsv", "-samples.tsv", ".md")
     ]
+    sources.extend(attempt_dir / name for name in extra_artifacts)
     missing = [
         str(path)
         for path in sources
@@ -121,8 +123,13 @@ def run_with_retries(
     command_runner=subprocess.run,
     producer_id=None,
     fail_confirmed=False,
+    extra_artifacts=(),
 ):
     results_dir = pathlib.Path(results_dir)
+    reserved = {f"{suite}{suffix}" for suffix in (".tsv", "-samples.tsv", ".md")}
+    if (len(set(extra_artifacts)) != len(extra_artifacts)
+        or any(pathlib.Path(name).name != name or name in reserved for name in extra_artifacts)):
+        raise ValueError("extra artifacts must be distinct filenames outside the standard outputs")
     attempts_dir = results_dir / "attempts"
     history_path = results_dir / f"{suite}-attempts.tsv"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -263,6 +270,7 @@ def run_with_retries(
                     results_dir,
                     suite,
                     producer_id,
+                    extra_artifacts=extra_artifacts,
                 )
             except OSError as exc:
                 print(
@@ -304,6 +312,7 @@ def run_with_retries(
                 results_dir,
                 suite,
                 producer_id,
+                extra_artifacts=extra_artifacts,
             )
         except OSError as exc:
             print(
@@ -337,6 +346,7 @@ def main(argv=None):
     parser.add_argument("--min-delta-us", type=int, default=5000)
     parser.add_argument("--individual-min-delta-us", type=int, default=5000)
     parser.add_argument("--fail-confirmed", action="store_true")
+    parser.add_argument("--extra-artifact", action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
 
@@ -358,6 +368,7 @@ def main(argv=None):
         args.min_delta_us,
         args.individual_min_delta_us,
         fail_confirmed=args.fail_confirmed,
+        extra_artifacts=args.extra_artifact,
     )
 
 

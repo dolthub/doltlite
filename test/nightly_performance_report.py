@@ -322,7 +322,7 @@ def section_passes(suites, section):
 
 
 def report_passes(suites, remote=None):
-    if remote is not None and remote["status"] != "passed":
+    if remote is not None and not remote_perf.gates_pass(remote):
         return False
     if any(suite.status != 0 for suite in suites):
         return False
@@ -531,6 +531,7 @@ def parse_args(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", type=pathlib.Path, required=True)
     parser.add_argument("--remote-results-dir", type=pathlib.Path)
+    parser.add_argument("--remote-gates", action="store_true")
     parser.add_argument("--commit", required=True)
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--generated-at", required=True)
@@ -539,7 +540,10 @@ def parse_args(argv):
     )
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--result-output", type=pathlib.Path)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.remote_gates and args.remote_results_dir is None:
+        parser.error("--remote-gates requires --remote-results-dir")
+    return args
 
 
 def remove_output(path):
@@ -567,7 +571,9 @@ def main(argv=None):
             status = read_integer(args.remote_results_dir.with_name(
                 args.remote_results_dir.name + ".status"), "file-remote status")
             remote = remote_perf.read_results(args.remote_results_dir / "results.json")
-            if status != 0:
+            if args.remote_gates or remote["configuration"].get("gate_mode"):
+                remote = remote_perf.read_gated_results(args.remote_results_dir / "results.json", "absolute")
+            if status != 0 and not remote.get("gates", {}).get("failed", False):
                 remote["status"] = "failed"
                 remote["error"] = remote.get("error", f"benchmark exited with status {status}")
         report = render_report(

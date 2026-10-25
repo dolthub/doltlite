@@ -8,7 +8,7 @@ import tempfile
 import textwrap
 import unittest
 
-from remote_perf_test import saved_result
+from remote_perf_test import saved_result, save_gated_result
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,14 +65,21 @@ with open(os.environ["COMMAND_LOG"], "a") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\\n")
 if sys.argv[1].endswith("remote_perf_test.py"):
     raise SystemExit(0)
+if sys.argv[1].endswith("benchmark_retry.py"):
+    import remote_perf
+    os.execv(sys.executable, [sys.executable,
+        str(Path(remote_perf.__file__).with_name("benchmark_retry.py")), *sys.argv[2:]])
 if os.environ["REMOTE_MODE"] == "crash":
     raise SystemExit(42)
 import remote_perf
 result = json.loads(Path(os.environ["FAKE_RESULT"]).read_text())
 if os.environ["REMOTE_MODE"] == "failure":
     result.update(status="failed", error="database mismatch", samples=[])
-output = Path(sys.argv[sys.argv.index("--output-dir") + 1])
+output = Path(os.environ["BENCH_RESULTS_OUTPUT"]).parent
+result["configuration"]["gate_mode"] = "relative" if "baseline" in result["binaries"] else "absolute"
 remote_perf.save_results(result, output)
+if result["status"] == "passed":
+    remote_perf.write_benchmark_results(result)
 print(remote_perf.report(result))
 raise SystemExit(0 if result["status"] == "passed" else 1)
 ''')
@@ -87,7 +94,16 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
                    COMMAND_LOG=str(root / "commands"), FAKE_RESULT=str(fixture), REMOTE_MODE=mode)
         result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step(job, title)],
                                 cwd=root, env=env, capture_output=True, text=True, timeout=20)
-        command = json.loads((root / "commands").read_text().splitlines()[-1])
+        commands = [json.loads(line) for line in (root / "commands").read_text().splitlines()]
+        command = commands[-1]
+        retry = next(c for c in commands if c[0].endswith("benchmark_retry.py"))
+        for flag, value in (("--max-attempts", "3"),
+                            ("--individual-ratio", "1.0" if nightly else "1.25"),
+                            ("--aggregate-ratio", "1000" if nightly else "1.15"),
+                            ("--min-delta-us", "0" if nightly else "5000"),
+                            ("--individual-min-delta-us", "0" if nightly else "5000")):
+            self.assertEqual(retry[retry.index(flag)+1], value)
+        self.assertIn("--fail-confirmed", retry)
         self.assertEqual(command[command.index("--size-mb")+1], "100")
         self.assertEqual(command[command.index("--runs")+1], "5")
         self.assertEqual("--baseline" in command, not nightly)
@@ -106,8 +122,9 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
                 self.assertEqual(result.returncode, {"success": 0, "failure": 1, "crash": 42}[mode], result)
                 output = root / "runner/benchmark-results/remote"
                 if mode != "crash":
-                    self.assertTrue((output / "samples.tsv").exists())
-                    self.assertTrue((output / "results.json").exists())
+                    saved = output if mode == "success" else output / "attempts/attempt-1"
+                    self.assertTrue((saved / "samples.tsv").exists())
+                    self.assertTrue((saved / "results.json").exists())
                 if mode == "success":
                     self.assertIn("File remote performance", (root / "summary").read_text())
 
@@ -157,7 +174,11 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
                 if mode == "unverified":
                     result["samples"][0]["verified"] = False
                 if mode != "missing":
-                    (directory / "results.json").write_text(json.dumps(result))
+                    if mode == "unverified":
+                        save_gated_result(directory, saved_result(("baseline", "candidate")))
+                        (directory / "results.json").write_text(json.dumps(result))
+                    else:
+                        save_gated_result(directory, result)
                 env = dict(os.environ, RUNNER_TEMP=str(root),
                            GITHUB_STEP_SUMMARY=str(root / "summary"), GITHUB_OUTPUT=str(root / "output"))
                 completed = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", code],

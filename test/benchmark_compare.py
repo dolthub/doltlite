@@ -488,12 +488,14 @@ def render(
     for result in results:
         suites[result.suite].append(result)
 
-    remote_failed = remote is not None and remote["status"] != "passed"
+    remote_failed = remote is not None and not remote_perf.gates_pass(remote)
     gate_status = "FAIL" if analysis["failed"] or remote_failed else "PASS"
-    failed_gates = analysis.get(
+    failed_gates = set(analysis.get(
         "confirmed_failure_ids",
         frozenset(failure_ids(analysis)),
-    )
+    ))
+    if remote is not None:
+        failed_gates.update(tuple(gate) for gate in remote.get("gates", {}).get("confirmed", []))
     lines = [
         "<!-- benchmark:relative -->",
         "## DoltLite performance vs PR base",
@@ -539,6 +541,10 @@ def render(
                 f"{suite} cleared after {attempt_count} attempts; "
                 "no gate failed every time"
             )
+    if remote is not None and remote.get("gates", {}).get("attempts", 1) > 1:
+        gate = remote["gates"]
+        retried.append(f"remote {'confirmed' if gate['failed'] else 'cleared after'} "
+                       f"{gate['attempts']} attempts")
     lines.append(
         "- **Automatic retries:** "
         + ("; ".join(retried) if retried else "none")
@@ -622,17 +628,20 @@ def render(
                 lines.append(
                     f"| file_remote | `{case}` | {format_time(baseline)} | "
                     f"{format_time(candidate)} | {format_delta(candidate-baseline)} | "
-                    f"{format_ratio(candidate/baseline)} | MEASURED |"
+                    f"{format_ratio(candidate/baseline)} | {remote_perf.gate_status(remote, case)} |"
                 )
             lines.extend([
                 "",
                 f"File remotes: {remote['configuration']['rows'] * remote_perf.PAYLOAD_BYTES / 1_000_000:g} MB, "
-                f"{remote['configuration']['runs']} paired runs; timings are observational.",
+                f"{remote['configuration']['runs']} paired runs; "
+                + ("25% + 5ms individual / 15% aggregate gates, three-attempt confirmation."
+                   if "gates" in remote else "timings are observational."),
             ])
         lines.extend(["", "</details>"])
 
     if remote_failed:
-        lines.extend(["", "**FAILED:** file-remote verification failed; see the VC artifact."])
+        reason = "verification failed" if remote["status"] != "passed" else "confirmed performance gates failed"
+        lines.extend(["", f"**FAILED:** file-remote {reason}; see the VC artifact."])
     elif analysis["failed"]:
         lines.extend(
             [
@@ -703,7 +712,10 @@ def main(argv=None):
     )
     parser.add_argument("--output", required=True)
     parser.add_argument("--remote-results", type=pathlib.Path)
+    parser.add_argument("--remote-gates", action="store_true")
     args = parser.parse_args(argv)
+    if args.remote_gates and args.remote_results is None:
+        parser.error("--remote-gates requires --remote-results")
 
     if (
         args.baseline_ref != args.expected_baseline_ref
@@ -737,7 +749,8 @@ def main(argv=None):
             attempt_histories[suite] = statuses
         remote = None
         if args.remote_results is not None:
-            remote = remote_perf.read_results(args.remote_results)
+            remote = (remote_perf.read_gated_results(args.remote_results, "relative")
+                      if args.remote_gates else remote_perf.read_results(args.remote_results))
             if remote["status"] == "passed" and set(remote["binaries"]) != {"baseline", "candidate"}:
                 raise ValueError("file-remote comparison requires baseline and candidate")
     except (OSError, ValueError) as exc:
@@ -785,7 +798,7 @@ def main(argv=None):
     )
     pathlib.Path(args.output).write_text(report, encoding="utf-8")
     print(report, end="")
-    return 1 if analysis["failed"] or (remote is not None and remote["status"] != "passed") else 0
+    return 1 if analysis["failed"] or (remote is not None and not remote_perf.gates_pass(remote)) else 0
 
 
 if __name__ == "__main__":

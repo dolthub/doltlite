@@ -274,11 +274,13 @@ class BenchmarkRetryTest(unittest.TestCase):
                     "reads\tpoint\t1\t100\t101\n"
                 ),
                 "int.md": "new benchmark report\n",
+                "results.json": "new raw measurements\n",
             }
             old_contents = {
                 "int.tsv": "old result\n",
                 "int-samples.tsv": "old samples\n",
                 "int.md": "old benchmark report\n",
+                "results.json": "old raw measurements\n",
             }
             for name, contents in new_contents.items():
                 (attempt / name).write_text(contents, encoding="utf-8")
@@ -294,7 +296,7 @@ class BenchmarkRetryTest(unittest.TestCase):
                 if (
                     not failed
                     and source.name.endswith(".staged")
-                    and destination.name == "int-samples.tsv"
+                    and destination.name == "results.json"
                 ):
                     failed = True
                     raise OSError("injected replacement failure")
@@ -310,6 +312,7 @@ class BenchmarkRetryTest(unittest.TestCase):
                     "int",
                     PRODUCER_ID,
                     replace_function=fail_once_during_exposure,
+                    extra_artifacts=("results.json",),
                 )
 
             self.assertTrue(failed)

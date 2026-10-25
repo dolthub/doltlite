@@ -22,6 +22,21 @@ def saved_result(arms=("candidate",), runs=2):
                         for case in perf.CASES for arm in arms for trial in range(1, runs+1)]}
 
 
+def save_gated_result(directory, result):
+    result["configuration"]["gate_mode"] = "relative" if "baseline" in result["binaries"] else "absolute"
+    directory.mkdir(exist_ok=True, parents=True)
+    perf.save_results(result, directory)
+    if result["status"] != "passed":
+        return
+    path = directory / "remote.tsv"
+    with mock.patch.dict(perf.os.environ, BENCH_RESULTS_OUTPUT=str(path),
+                         BENCH_SAMPLES_OUTPUT=str(directory / "remote-samples.tsv")):
+        perf.write_benchmark_results(result)
+    path.write_text("# suite\tremote\n# producer_id\tfixture\n" + path.read_text())
+    (directory / "remote-attempts.tsv").write_text(
+        "suite\tremote\nproducer_id\tfixture\nattempt\tstatus\tfailed_gates\n1\tpass\t[]\n")
+
+
 class RemotePerfTest(unittest.TestCase):
     def test_saved_measurements_require_every_verified_sample(self):
         with tempfile.TemporaryDirectory() as directory:
