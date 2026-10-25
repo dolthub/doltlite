@@ -178,6 +178,58 @@ static void testMemoryCopies(void){
   chunkStoreClose(&cs);
 }
 
+static void testCheckedPut(void){
+  ChunkStore cs;
+  ProllyHash hash, wrong, other;
+  u8 data[4096];
+  u8 *pRead = 0;
+  int nRead = 0;
+  int has = 0;
+  int rc;
+
+  rc = chunkStoreOpen(&cs, 0, ":memory:", SQLITE_OPEN_CREATE);
+  check("checked_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  memset(data, 0x5a, sizeof(data));
+  prollyHashCompute(data, sizeof(data), &hash);
+  wrong = hash;
+  wrong.data[0] ^= 1;
+  rc = chunkStorePutChecked(&cs, &wrong, data, sizeof(data));
+  check("checked_mismatch", rc==SQLITE_CORRUPT);
+  check("checked_mismatch_not_staged", cs.staging.nPending==0
+        && cs.staging.nWriteBuf==0);
+  check("checked_mismatch_not_present",
+        chunkStoreHas(&cs, &hash, &has)==SQLITE_OK && !has);
+  rc = chunkStorePutChecked(&cs, &hash, data, sizeof(data));
+  check("checked_put", rc==SQLITE_OK);
+  rc = chunkStorePutChecked(&cs, &hash, data, sizeof(data));
+  check("checked_duplicate", rc==SQLITE_OK && cs.staging.nPending==1);
+  data[0] ^= 1;
+  rc = chunkStorePutChecked(&cs, &hash, data, sizeof(data));
+  check("checked_existing_hash_still_verified", rc==SQLITE_CORRUPT
+        && cs.staging.nPending==1);
+  data[0] ^= 1;
+  rc = chunkStoreGet(&cs, &hash, &pRead, &nRead);
+  check("checked_original_preserved", rc==SQLITE_OK && nRead==sizeof(data)
+        && memcmp(pRead, data, sizeof(data))==0);
+  sqlite3_free(pRead);
+  rc = chunkStorePutChecked(&cs, &hash, 0, -1);
+  check("checked_negative_size", rc==SQLITE_TOOBIG);
+  rc = chunkStorePutChecked(&cs, 0, data, sizeof(data));
+  check("checked_missing_hash", rc==SQLITE_MISUSE);
+  check("checked_commit", chunkStoreCommit(&cs)==SQLITE_OK);
+  data[0] ^= 1;
+  prollyHashCompute(data, sizeof(data), &other);
+  check("checked_second_put",
+        chunkStorePutChecked(&cs, &other, data, sizeof(data))==SQLITE_OK);
+  chunkStoreRollback(&cs);
+  check("checked_rollback_pending",
+        chunkStoreHas(&cs, &other, &has)==SQLITE_OK && !has);
+  check("checked_rollback_committed",
+        chunkStoreHas(&cs, &hash, &has)==SQLITE_OK && has);
+  chunkStoreClose(&cs);
+}
+
 int main(void){
   int rc;
 
@@ -201,6 +253,7 @@ int main(void){
   testNegativePut();
   testPendingHtNomemKeepsHits();
   testMemoryCopies();
+  testCheckedPut();
 
   printf("%d passed, %d failed\n", nPass, nFail);
   sqlite3_shutdown();

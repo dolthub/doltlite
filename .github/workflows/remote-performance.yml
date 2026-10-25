@@ -3,6 +3,9 @@ name: Remote performance
 on:
   pull_request:
     paths:
+      - src/chunk_store.c
+      - src/chunk_store.h
+      - src/doltlite_remote.c
       - test/remote_perf.py
       - test/remote_perf_test.py
       - .github/workflows/remote-performance.yml

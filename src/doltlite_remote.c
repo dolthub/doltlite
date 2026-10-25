@@ -586,9 +586,8 @@ static int remoteGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
 static int remotePutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
                           const u8 *pData, int nData){
   ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
-  int rc = syncVerifyFetchedChunk(pHash, pData, nData);
-  if( rc!=SQLITE_OK ) return rc;
-  return chunkStorePut(pStore, pData, nData, 0);
+  if( !pData || nData<0 ) return SQLITE_CORRUPT;
+  return chunkStorePutChecked(pStore, pHash, pData, nData);
 }
 
 static int remoteHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
