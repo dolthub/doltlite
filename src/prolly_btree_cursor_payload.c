@@ -722,11 +722,16 @@ static int recordEndsInNull(const u8 *p, int n){
 ** transaction, or REPLACE) should keep the stored bytes when they already say
 ** the same thing, as an in-place overwrite does, so the table hash does not
 ** move. bOverwrite admits a key with no pending edit. *ppKeep is a copy the
-** caller frees. */
+** caller frees. nSchemaField is the current record width, or 0. bTrimmed means
+** this write already dropped trailing NULLs, so a longer stored row can still
+** be the same values even though the new record does not end in NULL. A write
+** that did neither skips the base lookup. */
 int prollyBaseBytesOverPendingDelete(
   BtCursor *pCur,
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pNew, int nNew,
+  int nSchemaField,
+  int bTrimmed,
   int bOverwrite,
   u8 **ppKeep, int *pnKeep
 ){
@@ -740,10 +745,10 @@ int prollyBaseBytesOverPendingDelete(
 
   *ppKeep = 0;
   *pnKeep = 0;
-  if( !pCur->pMutMap || prollyHashIsEmpty(&pCur->pCur.root)
-   || !recordEndsInNull(pNew, nNew) ){
+  if( !pCur->pMutMap || prollyHashIsEmpty(&pCur->pCur.root) ){
     return SQLITE_OK;
   }
+  if( !bTrimmed && !recordEndsInNull(pNew, nNew) ) return SQLITE_OK;
   if( !bOverwrite && !pCur->pMutMap->bHasDelete ) return SQLITE_OK;
   rc = prollyMutMapFindRc(pCur->pMutMap, pKey, nKey, intKey, &pEntry);
   if( rc!=SQLITE_OK ) return rc;
@@ -754,7 +759,8 @@ int prollyBaseBytesOverPendingDelete(
             : prollyCursorSeekInt(&base, intKey, &res);
   if( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&base) ){
     prollyCursorValue(&base, &pOld, &nOld);
-    rc = prollyValuesInterchangeable(pOld, nOld, pNew, nNew, &equal);
+    rc = prollyValuesInterchangeable(pOld, nOld, pNew, nNew,
+                                    nSchemaField, &equal);
     if( rc==SQLITE_OK && equal && nOld>0 ){
       *ppKeep = sqlite3_malloc(nOld);
       if( *ppKeep ){

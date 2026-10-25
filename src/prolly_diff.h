@@ -36,7 +36,7 @@ struct ProllyDiffChange {
   int nNewVal;
 };
 
-int prollyValuesInterchangeable(const u8*, int, const u8*, int, int*);
+int prollyValuesInterchangeable(const u8*, int, const u8*, int, int, int*);
 
 int prollyValuesEqual(
   const u8 *pA, int nA,

@@ -399,6 +399,105 @@ run_test_error_match "replace_unchanged_nothing_to_commit" \
   "SELECT dolt_commit('-am','phantom');" \
   "nothing to commit" "$DB15"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15"
+# Across statements the stored short record is gone. Writing the added column
+# back as NULL must still hash as the pre-write row: an absent field reads
+# as NULL, so the value is stored by leaving it out.
+DB16=/tmp/test_diff_alter16_$$.db; rm -f "$DB16"
+echo "CREATE TABLE rowid_t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE text_pk_t(id TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE clustered_t(a TEXT, b INT, v TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO rowid_t VALUES(1,'a'),(2,'b');
+INSERT INTO text_pk_t VALUES('a','a'),('b','b');
+INSERT INTO clustered_t VALUES('a',1,'a'),('b',2,'b');
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE rowid_t ADD COLUMN added INT;
+ALTER TABLE text_pk_t ADD COLUMN added INT;
+ALTER TABLE clustered_t ADD COLUMN added INT;
+SELECT dolt_commit('-A','-m','add columns');" | $DOLTLITE "$DB16" > /dev/null 2>&1
+
+run_test "delete_insert_across_stmt_rowid_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('rowid_t') AS v;
+   DELETE FROM rowid_t WHERE id=2;
+   INSERT INTO rowid_t VALUES(2,'b',NULL);
+   SELECT v=dolt_hashof_table('rowid_t') FROM h;" \
+  "1" "$DB16"
+
+run_test "delete_insert_across_stmt_rowid_reads_null" \
+  "SELECT added IS NULL FROM rowid_t WHERE id=2;" \
+  "1" "$DB16"
+
+run_test "update_away_and_back_rowid_hash_stable" \
+  "CREATE TEMP TABLE h2 AS SELECT dolt_hashof_table('rowid_t') AS v;
+   UPDATE rowid_t SET v='x' WHERE id=2;
+   UPDATE rowid_t SET v='b' WHERE id=2;
+   SELECT v=dolt_hashof_table('rowid_t') FROM h2;" \
+  "1" "$DB16"
+
+run_test "delete_insert_across_stmt_text_pk_hash_stable" \
+  "CREATE TEMP TABLE h3 AS SELECT dolt_hashof_table('text_pk_t') AS v;
+   DELETE FROM text_pk_t WHERE id='b';
+   INSERT INTO text_pk_t VALUES('b','b',NULL);
+   SELECT v=dolt_hashof_table('text_pk_t') FROM h3;" \
+  "1" "$DB16"
+
+run_test "delete_insert_across_stmt_clustered_hash_stable" \
+  "CREATE TEMP TABLE h4 AS SELECT dolt_hashof_table('clustered_t') AS v;
+   DELETE FROM clustered_t WHERE a='b' AND b=2;
+   INSERT INTO clustered_t VALUES('b',2,'b',NULL);
+   SELECT v=dolt_hashof_table('clustered_t') FROM h4;" \
+  "1" "$DB16"
+
+run_test "rewrite_added_null_status_clean" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB16"
+
+run_test_error_match "rewrite_added_null_nothing_to_commit" \
+  "SELECT dolt_commit('-am','phantom');" \
+  "nothing to commit" "$DB16"
+
+run_test "added_column_real_value_is_modified" \
+  "UPDATE rowid_t SET added=7 WHERE id=2;
+   SELECT added FROM rowid_t WHERE id=2;
+   SELECT count(*) FROM dolt_status;" \
+  "7
+1" "$DB16"
+
+DB17=/tmp/test_diff_alter17_$$.db; rm -f "$DB17"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t ADD COLUMN w INT DEFAULT 5;
+SELECT dolt_commit('-A','-m','add default');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+
+run_test "materialized_default_survives_roundtrip" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('t') AS v;
+   UPDATE t SET v='x' WHERE id=2;
+   UPDATE t SET v='b' WHERE id=2;
+   SELECT w FROM t WHERE id=2;
+   SELECT v=dolt_hashof_table('t') FROM h;" \
+  "5
+1" "$DB17"
+
+# DEFAULT NULL is stored as a span around TK_NULL. Setting that column and
+# clearing it must hash as the short row from after the alter.
+DB18=/tmp/test_diff_alter18_$$.db; rm -f "$DB18"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t ADD COLUMN w INT DEFAULT NULL;
+SELECT dolt_commit('-A','-m','add null default');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+
+run_test "null_default_set_and_clear_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('t') AS v;
+   UPDATE t SET w=7 WHERE id=2;
+   UPDATE t SET w=NULL WHERE id=2;
+   SELECT w IS NULL FROM t WHERE id=2;
+   SELECT v=dolt_hashof_table('t') FROM h;
+   SELECT count(*) FROM dolt_status;" \
+  "1
+1
+0" "$DB18"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 
 dltest_finish
