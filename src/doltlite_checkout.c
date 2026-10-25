@@ -769,11 +769,14 @@ static int checkoutReconcileTableIndexes(
     if( !aSourceSchema[j].zTblName
      || sqlite3_stricmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
     if( !aSourceSchema[j].zName || !aSourceSchema[j].zSql ) continue;
+    /* Another table's index of this name is not the one being restored. */
     rc = sqlite3_prepare_v2(db,
-        "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+        "SELECT 1 FROM sqlite_master WHERE type='index'"
+        " AND name=?1 COLLATE NOCASE AND tbl_name=?2 COLLATE NOCASE",
         -1, &pChk, 0);
     if( rc!=SQLITE_OK ) return rc;
     sqlite3_bind_text(pChk, 1, aSourceSchema[j].zName, -1, SQLITE_STATIC);
+    sqlite3_bind_text(pChk, 2, zTable, -1, SQLITE_STATIC);
     exists = sqlite3_step(pChk)==SQLITE_ROW;
     sqlite3_finalize(pChk);
     if( !exists ){
@@ -1205,10 +1208,16 @@ static int checkoutTablesInTxn(
     }
     if( aSchema[i].hasSource ){
       rc = checkoutReconcileTableIndexes(db, aSourceSchema, nSourceSchema, zName);
-      if( rc!=SQLITE_OK ) break;
-      rc = checkoutReconcileVtabShadowIndexes(db, aSourceSchema, nSourceSchema,
-                                              zName);
-      if( rc!=SQLITE_OK ) break;
+      if( rc==SQLITE_OK ){
+        rc = checkoutReconcileVtabShadowIndexes(db, aSourceSchema,
+                                                nSourceSchema, zName);
+      }
+      if( rc!=SQLITE_OK ){
+        if( rc==SQLITE_ERROR ){
+          sqlite3_result_error(context, sqlite3_errmsg(db), -1);
+        }
+        break;
+      }
     }
   }
   rc = doltliteResumeForeignKeys(db, fkeys, rc);
