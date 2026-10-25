@@ -911,6 +911,41 @@ run_test "rv_drop_edited_column_no_commit" \
 run_test "rv_drop_edited_column_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_cp_drop_vs_edit_with_drop_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT, b VARCHAR(20), c INT);
+INSERT INTO t VALUES(1,1,'x',10),(2,2,'y',20);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('f');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','drop a');
+SELECT dolt_checkout('f');
+UPDATE t SET a=99 WHERE pk=1;
+ALTER TABLE t DROP COLUMN c;
+SELECT dolt_commit('-Am','edit a, drop c');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_error_match "cp_drop_vs_edit_with_drop_refuses" \
+  "SELECT dolt_cherry_pick('f');" \
+  "column 'a' of table 't' would be dropped, discarding a changed value" "$DB"
+run_test "cp_drop_vs_edit_with_drop_no_commit" \
+  "SELECT message FROM dolt_log LIMIT 1;" "drop a" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_rv_drop_vs_edit_with_drop_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(pk INT PRIMARY KEY, a INT, b TEXT, c INT);
+INSERT INTO t VALUES(1,1,'x',10),(2,2,'y',20);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET a=99 WHERE pk=1;
+ALTER TABLE t DROP COLUMN c;
+SELECT dolt_commit('-Am','edit a, drop c');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_commit('-Am','drop a');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_error_match "rv_drop_vs_edit_with_drop_refuses" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "column 'a' of table 't' would be dropped, discarding a changed value" "$DB"
+run_test "rv_drop_vs_edit_with_drop_no_commit" \
+  "SELECT message FROM dolt_log LIMIT 1;" "drop a" "$DB"
+rm -f "$DB"
+
 DB=/tmp/test_cp_drop_edited_column_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(k INTEGER PRIMARY KEY, a TEXT, d TEXT);
 INSERT INTO t VALUES(1,'a1',NULL),(2,'a2',NULL);

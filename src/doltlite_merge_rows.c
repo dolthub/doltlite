@@ -1282,7 +1282,8 @@ int mergeRowEditsColumn(
   const ProllyHash *pOtherRoot,
   u8 ancFlags,
   u8 otherFlags,
-  int iField,
+  int iAncField,
+  int iOtherField,
   int bNonNullOnly,
   int *pbEdited
 ){
@@ -1293,7 +1294,7 @@ int mergeRowEditsColumn(
   int rc;
 
   *pbEdited = 0;
-  if( !cs || !pCache || iField<0 ) return SQLITE_OK;
+  if( !cs || !pCache || iAncField<0 || iOtherField<0 ) return SQLITE_OK;
   if( prollyHashIsEmpty(pAncRoot) || prollyHashIsEmpty(pOtherRoot) ){
     return SQLITE_OK;
   }
@@ -1316,12 +1317,14 @@ int mergeRowEditsColumn(
       sqlite3_free(aOld);
       continue;
     }
-    if( (!bNonNullOnly || (iField<nNew && aNew[iField].st!=0))
-     && fieldEquals(pChange->pOldVal,
-                    iField<nOld ? &aOld[iField] : (RecField*)&kNullField,
-                    pChange->pNewVal,
-                    iField<nNew ? &aNew[iField] : (RecField*)&kNullField)!=0 ){
-      *pbEdited = 1;
+    if( !bNonNullOnly || (iOtherField<nNew && aNew[iOtherField].st!=0) ){
+      const RecField *fOld = iAncField<nOld ? &aOld[iAncField] : &kNullField;
+      const RecField *fNew = iOtherField<nNew ? &aNew[iOtherField] : &kNullField;
+      /* A DROP COLUMN rewrite re-encodes the untouched cells it keeps. */
+      if( fieldEquals(pChange->pOldVal, fOld, pChange->pNewVal, fNew)!=0
+       && !fieldNumbersEqual(pChange->pOldVal, fOld, pChange->pNewVal, fNew) ){
+        *pbEdited = 1;
+      }
     }
     sqlite3_free(aOld);
     sqlite3_free(aNew);
