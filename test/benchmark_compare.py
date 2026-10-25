@@ -4,9 +4,11 @@ import argparse
 import dataclasses
 import json
 import pathlib
+import statistics
 import sys
 from collections import defaultdict
 
+import remote_perf
 
 @dataclasses.dataclass(frozen=True)
 class Result:
@@ -480,12 +482,14 @@ def render(
     min_delta_us,
     individual_overrides=None,
     attempt_histories=None,
+    remote=None,
 ):
     suites = defaultdict(list)
     for result in results:
         suites[result.suite].append(result)
 
-    gate_status = "PASS" if not analysis["failed"] else "FAIL"
+    remote_failed = remote is not None and remote["status"] != "passed"
+    gate_status = "FAIL" if analysis["failed"] or remote_failed else "PASS"
     failed_gates = analysis.get(
         "confirmed_failure_ids",
         frozenset(failure_ids(analysis)),
@@ -604,9 +608,32 @@ def render(
                 f"{format_time(result.candidate_us)} | {delta} | "
                 f"{format_ratio(result.ratio)} | {row_status} |"
             )
+        if suite == "vc" and remote is not None:
+            for case in remote_perf.CASES:
+                samples = {
+                    arm: [s["wall_us"] for s in remote["samples"]
+                          if s["case"] == case and s["arm"] == arm and s["verified"]]
+                    for arm in ("baseline", "candidate")
+                }
+                if not all(samples.values()):
+                    continue
+                baseline = statistics.median(samples["baseline"])
+                candidate = statistics.median(samples["candidate"])
+                lines.append(
+                    f"| file_remote | `{case}` | {format_time(baseline)} | "
+                    f"{format_time(candidate)} | {format_delta(candidate-baseline)} | "
+                    f"{format_ratio(candidate/baseline)} | MEASURED |"
+                )
+            lines.extend([
+                "",
+                f"File remotes: {remote['configuration']['rows'] * remote_perf.PAYLOAD_BYTES / 1_000_000:g} MB, "
+                f"{remote['configuration']['runs']} paired runs; timings are observational.",
+            ])
         lines.extend(["", "</details>"])
 
-    if analysis["failed"]:
+    if remote_failed:
+        lines.extend(["", "**FAILED:** file-remote verification failed; see the VC artifact."])
+    elif analysis["failed"]:
         lines.extend(
             [
                 "",
@@ -675,6 +702,7 @@ def main(argv=None):
         help="Validated retry history for one suite; may be repeated",
     )
     parser.add_argument("--output", required=True)
+    parser.add_argument("--remote-results", type=pathlib.Path)
     args = parser.parse_args(argv)
 
     if (
@@ -707,6 +735,11 @@ def main(argv=None):
             if suite in attempt_histories:
                 raise ValueError(f"duplicate attempt history for {suite}")
             attempt_histories[suite] = statuses
+        remote = None
+        if args.remote_results is not None:
+            remote = remote_perf.read_results(args.remote_results)
+            if remote["status"] == "passed" and set(remote["binaries"]) != {"baseline", "candidate"}:
+                raise ValueError("file-remote comparison requires baseline and candidate")
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
@@ -748,10 +781,11 @@ def main(argv=None):
         args.min_delta_us,
         individual_overrides,
         attempt_histories,
+        remote,
     )
     pathlib.Path(args.output).write_text(report, encoding="utf-8")
     print(report, end="")
-    return 1 if analysis["failed"] else 0
+    return 1 if analysis["failed"] or (remote is not None and remote["status"] != "passed") else 0
 
 
 if __name__ == "__main__":

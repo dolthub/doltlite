@@ -43,7 +43,7 @@ class RemotePerfWorkflowTest(unittest.TestCase):
         self.assertIn("name: benchmark-result-vc", pr["vc-relative"])
         self.assertIn("name: nightly-performance-vc", nightly["version-control"])
         self.assertIn("remote/report.md", pr["vc-relative"])
-        self.assertIn("remote_perf.read_results", pr["relative-report"])
+        self.assertIn("--remote-results benchmark-results/remote/results.json", pr["relative-report"])
         self.assertIn("--remote-results-dir", nightly["report"])
         initialize = step(nightly["version-control"], "Run absolute version-control benchmark")
         self.assertLess(initialize.index('mkdir -p "$results/remote"'),
@@ -133,12 +133,24 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
 
     def test_pr_report_cannot_hide_incomplete_remote_measurements(self):
         code = step(jobs("benchmark.yml")["relative-report"], "Generate relative performance report")
-        code = code[code.index("set +e\npython3 - benchmark-results/remote"):code.index('cat "$report"')]
+        code = code.replace("${{ github.event.pull_request.base.sha }}", "base")
+        code = code.replace("git rev-parse HEAD", "printf candidate")
+        code = code.replace("${{ steps.measurements.outcome }}", "success")
+        code = code.replace("${{ needs.hotspots.result }}", "success")
         for mode in ("success", "failure", "missing", "unverified", "job_failure"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
+                (root / "test").symlink_to(ROOT / "test", target_is_directory=True)
                 directory = root / "benchmark-results/remote"
                 directory.mkdir(parents=True)
+                for suite in ("int", "textpk", "blobpk", "compositepk", "vc"):
+                    (directory.parent / f"{suite}.tsv").write_text(
+                        f"# suite\t{suite}\n# producer_id\tworkflow\nreads\tpoint\t1000\t1000\n")
+                    status = "command_error" if mode == "job_failure" and suite == "vc" else "pass"
+                    (directory.parent / f"{suite}-attempts.tsv").write_text(
+                        f"suite\t{suite}\nproducer_id\tworkflow\nattempt\tstatus\tfailed_gates\n1\t{status}\t[]\n")
+                for arm, value in (("baseline", "base"), ("candidate", "candidate")):
+                    (root / f"benchmark-{arm}-sha").write_text(value)
                 result = saved_result(("baseline", "candidate"))
                 if mode == "failure":
                     result.update(status="failed", error="database mismatch", samples=[])
@@ -146,17 +158,20 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
                     result["samples"][0]["verified"] = False
                 if mode != "missing":
                     (directory / "results.json").write_text(json.dumps(result))
-                script = 'report="$REPORT"\nreport_rc=0\n' + code.replace(
-                    "${{ needs.vc-relative.result }}", "failure" if mode == "job_failure" else "success")
-                script += '\nexit "$report_rc"\n'
-                env = dict(os.environ, PYTHONPATH=str(ROOT / "test"), REPORT=str(root / "summary"))
-                completed = subprocess.run(["bash", "-e", "-c", script], cwd=root,
-                                           env=env, capture_output=True, text=True)
-                self.assertEqual(completed.returncode == 0, mode == "success", completed)
+                env = dict(os.environ, RUNNER_TEMP=str(root),
+                           GITHUB_STEP_SUMMARY=str(root / "summary"), GITHUB_OUTPUT=str(root / "output"))
+                completed = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", code],
+                                           cwd=root, env=env, capture_output=True, text=True)
+                self.assertEqual(completed.returncode, 0, completed)
+                self.assertEqual((root / "output").read_text().splitlines()[-1],
+                                 f"report_rc={0 if mode == 'success' else 1}")
+                report = (directory.parent / "summary.md").read_text()
                 if mode == "success":
-                    self.assertIn("baseline", (root / "summary").read_text())
+                    details = report.split("<summary>vc details</summary>", 1)[1].split("</details>", 1)[0]
+                    self.assertIn("| file_remote | `push_initial` |", details)
+                    self.assertNotIn("## File remote performance", report)
                 else:
-                    self.assertIn("**FAILED:**", (root / "summary").read_text())
+                    self.assertIn("**FAILED:**", report)
 
     def test_republish_old_artifacts_does_not_require_remote_results(self):
         code = step(jobs("nightly-performance.yml")["report"], "Compose nightly report")
