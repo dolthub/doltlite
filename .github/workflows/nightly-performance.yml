@@ -5,10 +5,6 @@ on:
     - cron: '30 9 * * *'
   workflow_dispatch:
     inputs:
-      runs:
-        description: Paired repetitions for each sysbench-style workload
-        required: false
-        default: "55"
       vc-runs:
         description: Repetitions for each version-control benchmark
         required: false
@@ -129,8 +125,8 @@ jobs:
     - name: Run absolute benchmark
       id: benchmark
       env:
-        BENCH_RUNS: ${{ github.event.inputs.runs || '55' }}
-        BENCH_AC_WRITE_RUNS: ${{ github.event.inputs.runs || '55' }}
+        BENCH_RUNS: "55"
+        BENCH_AC_WRITE_RUNS: "55"
         BENCH_MAX_MULTIPLIER: 2.3
         BENCH_AVG_MAX_MULTIPLIER: 1.9
         BENCH_AC_WRITE_MAX_MULTIPLIER: 5.5
@@ -194,9 +190,9 @@ jobs:
         VC_PERF_RUNS: ${{ github.event.inputs.vc-runs || '101' }}
       run: |
         results="$RUNNER_TEMP/nightly-results"
-        mkdir -p "$results/remote" "$results/remote-1gb"
+        mkdir -p "$results/remote"
         echo 1 > "$results/remote.status"
-        echo 1 > "$results/remote-1gb.status"
+        touch "$results/remote-1gb.expected"
         started_at=$(date +%s)
         set +e
         (
@@ -250,6 +246,45 @@ jobs:
         if [ -s "$results/remote/report.md" ]; then cat "$results/remote/report.md" >> "$GITHUB_STEP_SUMMARY"; fi
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
+    - name: Upload nightly measurements
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-performance-vc
+        path: ${{ runner.temp }}/nightly-results
+        retention-days: 30
+
+    - name: Enforce version-control results
+      if: always()
+      run: |
+        rc="${{ steps.benchmark.outputs.bench_rc }}"
+        remote_rc="${{ steps.remote.outputs.bench_rc }}"
+        if [ -z "$rc" ]; then rc=1; fi
+        if [ "$remote_rc" != 0 ]; then rc=1; fi
+        exit "$rc"
+
+  remote-scale:
+    needs: [build, sysbench, version-control]
+    if: ${{ always() && !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Initialize 1 GB result status
+      run: |
+        mkdir -p "$RUNNER_TEMP/nightly-results"
+        echo 1 > "$RUNNER_TEMP/nightly-results/remote-1gb.status"
+
+    - uses: actions/checkout@v4
+
+    - name: Download nightly benchmark build
+      uses: actions/download-artifact@v4
+      with:
+        name: nightly-benchmark-build
+
+    - name: Extract nightly benchmark build
+      run: tar -xzf nightly-benchmark-build.tar.gz
+
     - name: Run 1 GB file-remote benchmark
       id: remote-scale
       if: ${{ !cancelled() }}
@@ -276,23 +311,19 @@ jobs:
         if [ -s "$results/remote-1gb/report.md" ]; then cat "$results/remote-1gb/report.md" >> "$GITHUB_STEP_SUMMARY"; fi
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
-    - name: Upload nightly measurements
+    - name: Upload 1 GB measurements
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: nightly-performance-vc
+        name: nightly-performance-remote-scale
         path: ${{ runner.temp }}/nightly-results
         retention-days: 30
 
-    - name: Enforce version-control results
+    - name: Enforce 1 GB results
       if: always()
       run: |
-        rc="${{ steps.benchmark.outputs.bench_rc }}"
-        remote_rc="${{ steps.remote.outputs.bench_rc }}"
-        scale_rc="${{ steps.remote-scale.outputs.bench_rc }}"
+        rc="${{ steps.remote-scale.outputs.bench_rc }}"
         if [ -z "$rc" ]; then rc=1; fi
-        if [ "$remote_rc" != 0 ]; then rc=1; fi
-        if [ "$scale_rc" != 0 ]; then rc=1; fi
         exit "$rc"
 
   report:
@@ -300,6 +331,7 @@ jobs:
     needs:
       - sysbench
       - version-control
+      - remote-scale
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -379,7 +411,8 @@ jobs:
           suites="$suites remote"
         fi
         if [ -z "$SOURCE_RUN_ID" ] || [ -d nightly-results/remote-1gb ] ||
-           [ -e nightly-results/remote-1gb.status ]; then
+           [ -e nightly-results/remote-1gb.status ] ||
+           [ -e nightly-results/remote-1gb.expected ]; then
           remote_args+=(--remote-scale-results-dir nightly-results/remote-1gb)
           suites="$suites remote-1gb"
         fi
@@ -529,7 +562,7 @@ jobs:
   # the run survives. A whole-run cancellation kills this job too, which is
   # what the weekly nightly-heartbeat exists to catch.
   watchdog:
-    needs: [build, sysbench, version-control, report]
+    needs: [build, sysbench, version-control, remote-scale, report]
     if: failure() || cancelled()
     runs-on: ubuntu-latest
     steps:

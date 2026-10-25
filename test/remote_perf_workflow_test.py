@@ -32,6 +32,46 @@ def step(job, name):
 
 
 class RemotePerfWorkflowTest(unittest.TestCase):
+    def test_nightly_sysbench_always_uses_55_samples(self):
+        workflow = (ROOT / ".github/workflows/nightly-performance.yml").read_text()
+        self.assertNotRegex(workflow.split("jobs:\n", 1)[0], r"(?m)^      runs:")
+        sysbench = jobs("nightly-performance.yml")["sysbench"]
+        self.assertIn('BENCH_RUNS: "55"', sysbench)
+        self.assertIn('BENCH_AC_WRITE_RUNS: "55"', sysbench)
+        for script in ("sysbench_compare.sh", "sysbench_compare_textpk.sh",
+                       "sysbench_compare_blobpk.sh", "sysbench_compare_compositepk.sh"):
+            self.assertIn(f"script: {script}", sysbench)
+
+    def test_large_measurement_runs_after_all_standard_benchmarks(self):
+        nightly = jobs("nightly-performance.yml")
+        scale = nightly["remote-scale"]
+        self.assertIn("needs: [build, sysbench, version-control]", scale)
+        self.assertIn("always() && !cancelled() && needs.build.result == 'success'", scale)
+        timeout = int(re.search(r"timeout-minutes: (\d+)", scale)[1])
+        self.assertGreaterEqual(timeout, 60)
+        for job in ("sysbench", "version-control"):
+            self.assertIn("timeout-minutes: 150", nightly[job])
+            self.assertNotIn("--size-mb 1000", nightly[job])
+        self.assertIn("      - remote-scale\n", nightly["report"])
+        self.assertIn("version-control, remote-scale, report]", nightly["watchdog"])
+
+    def test_large_setup_failure_has_a_status_without_artifact_collisions(self):
+        nightly = jobs("nightly-performance.yml")
+        initialize = step(nightly["version-control"], "Run absolute version-control benchmark")
+        initialize = initialize[:initialize.index("started_at=")]
+        scale = step(nightly["remote-scale"], "Initialize 1 GB result status")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for job, code in (("vc", initialize), ("scale", scale)):
+                subprocess.run(["bash", "-e", "-c", code], check=True,
+                               env=dict(os.environ, RUNNER_TEMP=str(root / job)))
+            vc_files = {p.name for p in (root / "vc/nightly-results").rglob("*") if p.is_file()}
+            scale_files = {p.name for p in (root / "scale/nightly-results").rglob("*") if p.is_file()}
+            self.assertIn("remote-1gb.expected", vc_files)
+            self.assertIn("remote-1gb.status", scale_files)
+            self.assertTrue(vc_files.isdisjoint(scale_files))
+            self.assertEqual((root / "scale/nightly-results/remote-1gb.status").read_text(), "1\n")
+
     def test_remote_measurements_belong_to_both_vc_jobs(self):
         pr = jobs("benchmark.yml")
         nightly = jobs("nightly-performance.yml")
@@ -40,12 +80,13 @@ class RemotePerfWorkflowTest(unittest.TestCase):
         self.assertIn("REMOTE_PERF_RUNS: ${{ github.event.inputs.remote-runs || '5' }}",
                       nightly["version-control"])
         self.assertIn("REMOTE_SCALE_RUNS: ${{ github.event.inputs.remote-scale-runs || '3' }}",
-                      nightly["version-control"])
+                      nightly["remote-scale"])
         self.assertNotIn("--size-mb 1000", pr["vc-relative"])
         self.assertNotIn("test/remote_perf.py", pr["sysbench-relative"])
         self.assertNotIn("test/remote_perf.py", nightly["sysbench"])
         self.assertIn("name: benchmark-result-vc", pr["vc-relative"])
         self.assertIn("name: nightly-performance-vc", nightly["version-control"])
+        self.assertIn("name: nightly-performance-remote-scale", nightly["remote-scale"])
         self.assertIn("remote/report.md", pr["vc-relative"])
         self.assertIn("--remote-results benchmark-results/remote/results.json", pr["relative-report"])
         self.assertIn("--remote-results-dir", nightly["report"])
@@ -61,6 +102,7 @@ class RemotePerfWorkflowTest(unittest.TestCase):
         job = jobs(name)["version-control" if nightly else "vc-relative"]
         title = "Run 100 MB file-remote benchmark" if nightly else "Measure 100 MB file remotes against PR base"
         if scale:
+            job = jobs(name)["remote-scale"]
             title = "Run 1 GB file-remote benchmark"
         binary_dir = root / "bin"
         binary_dir.mkdir()
@@ -156,14 +198,16 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
     def test_nightly_enforces_remote_and_vc_failures(self):
         code = step(jobs("nightly-performance.yml")["version-control"],
                     "Enforce version-control results")
-        for vc, remote, scale in (("0", "0", "0"), ("1", "0", "0"), ("0", "2", "0"),
-                                  ("", "0", "0"), ("0", "", "0"), ("0", "0", "1"),
-                                  ("0", "0", "")):
+        for vc, remote in (("0", "0"), ("1", "0"), ("0", "2"), ("", "0"), ("0", "")):
             script = code.replace("${{ steps.benchmark.outputs.bench_rc }}", vc)
             script = script.replace("${{ steps.remote.outputs.bench_rc }}", remote)
-            script = script.replace("${{ steps.remote-scale.outputs.bench_rc }}", scale)
             result = subprocess.run(["bash", "-e", "-c", script], capture_output=True)
-            self.assertEqual(result.returncode == 0, vc == remote == scale == "0")
+            self.assertEqual(result.returncode == 0, vc == remote == "0")
+        code = step(jobs("nightly-performance.yml")["remote-scale"], "Enforce 1 GB results")
+        for scale in ("0", "1", "42", ""):
+            script = code.replace("${{ steps.remote-scale.outputs.bench_rc }}", scale)
+            result = subprocess.run(["bash", "-e", "-c", script], capture_output=True)
+            self.assertEqual(result.returncode == 0, scale == "0")
 
     def test_large_measurement_saves_status_and_retains_failures(self):
         for mode in ("success", "failure", "crash"):
@@ -182,7 +226,7 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
         code = step(report_job, "Compose nightly report")
         self.assertIn("steps.report.outputs.failed == '1'", report_job)
         self.assertIn("uses: ./.github/actions/report-failure-issue", report_job)
-        for mode in ("success", "verification", "crash", "metrics"):
+        for mode in ("success", "verification", "crash", "metrics", "missing"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 directory = root / "nightly-results"
@@ -197,6 +241,11 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
                 fixture.render_with_scale(directory, scale, status=int(mode not in ("success", "metrics")))
                 if mode == "crash":
                     (directory / "remote-1gb/results.json").unlink()
+                if mode == "missing":
+                    (directory / "remote-1gb/results.json").unlink()
+                    (directory / "remote-1gb").rmdir()
+                    (directory / "remote-1gb.status").unlink()
+                    (directory / "remote-1gb.expected").touch()
                 (directory / "remote-1gb.stderr").write_text("1 GB diagnostic output\n")
                 env = dict(os.environ, SOURCE_RUN_ID="", RUNNER_TEMP=str(root),
                            GITHUB_SHA="revision", GITHUB_SERVER_URL="https://github.com",
@@ -207,8 +256,8 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
                 self.assertEqual(result.returncode, 0, result)
                 outputs = (root / "outputs").read_text()
                 self.assertIn(f"failed={int(mode != 'success')}\n", outputs)
-                self.assertIn(f"valid={int(mode not in ('crash', 'metrics'))}\n", outputs)
-                if mode in ("verification", "crash"):
+                self.assertIn(f"valid={int(mode not in ('crash', 'metrics', 'missing'))}\n", outputs)
+                if mode in ("verification", "crash", "missing"):
                     self.assertIn("### remote-1gb", (directory / "failure.md").read_text())
                     self.assertIn("1 GB diagnostic output", (directory / "failure.md").read_text())
 
@@ -263,7 +312,7 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
         code = code[code.index("remote_args=("):code.index("for suite in $suites;")]
         cases = (("", False, "", True, True), ("123", False, "", False, False),
                  ("123", True, "", True, False), ("123", True, "directory", True, True),
-                 ("123", True, "status", True, True))
+                 ("123", True, "status", True, True), ("123", True, "expected", True, True))
         for source, present, scale, expect_remote, expect_scale in cases:
             with self.subTest(source=source, present=present, scale=scale), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -273,6 +322,8 @@ raise SystemExit(0 if result["status"] == "passed" else 1)
                     (root / "nightly-results/remote-1gb").mkdir(parents=True)
                 if scale == "status":
                     (root / "nightly-results/remote-1gb.status").write_text("1\n")
+                if scale == "expected":
+                    (root / "nightly-results/remote-1gb.expected").touch()
                 script = 'suites=vc\n' + code + 'printf "%s\\n" "${remote_args[*]}" "$suites"\n'
                 completed = subprocess.run(["bash", "-e", "-c", script], cwd=root,
                                            env=dict(os.environ, SOURCE_RUN_ID=source),
