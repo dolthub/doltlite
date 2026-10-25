@@ -41,6 +41,7 @@ src/doltlite_remote.c:installFetchedRefs
 src/doltlite_remote.c:doltliteInstallPushedRefsBlob
 src/doltlite_remote.c:doltlitePushAs
 src/doltlite_remote.c:doltlitePushTag
+src/doltlite_remote.c:doltliteDeleteRemoteTag
 src/doltlite_remotesrv.c:remoteSrvPersistRefs
 src/doltlite_remotesrv.c:doltliteRemoteSrvApplyRefsForTest
 

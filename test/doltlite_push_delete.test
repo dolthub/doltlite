@@ -69,6 +69,46 @@ do_execsql_test push-delete-after-clean {
   SELECT dolt_push('origin',':feature');
   SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/origin/feature';
 } {0 0}
+
+# ":refs/tags/<tag>" deletes a remote tag, as in git. Dolt refuses it.
+execsql {
+  SELECT dolt_tag('v1','main','-m','first');
+  SELECT dolt_tag('v2','main','-m','second');
+  SELECT dolt_push('origin','v1');
+  SELECT dolt_push('origin','v2');
+}
+do_execsql_test push-delete-tag-1 {
+  SELECT dolt_push('origin',':refs/tags/v1');
+} {0}
+do_test push-delete-tag-remote {
+  peer eval {SELECT tag_name FROM dolt_tags ORDER BY tag_name}
+} {v2}
+do_test push-delete-tag-remote-branches-intact {
+  peer eval {SELECT name FROM dolt_branches ORDER BY name}
+} {main other}
+do_execsql_test push-delete-tag-keeps-local {
+  SELECT tag_name FROM dolt_tags ORDER BY tag_name;
+} {v1 v2}
+do_test push-delete-tag-missing {
+  set rc [catch {execsql {SELECT dolt_push('origin',':refs/tags/v1')}} msg]
+  list $rc $msg
+} {1 {failed to delete remote; 'refs/tags/v1' from remote 'origin'; tag not found}}
+do_test push-delete-tag-empty {
+  set rc [catch {execsql {SELECT dolt_push('origin',':refs/tags/')}} msg]
+  list $rc [db errorcode] $msg
+} {1 21 {push failed: tag name required after ':refs/tags/'}}
+do_test push-delete-tag-mapping-refused {
+  set rc [catch {execsql {SELECT dolt_push('origin','v2:refs/tags/v3')}} msg]
+  list $rc $msg
+} {1 {unsupported mapping: 'v2:refs/tags/v3'}}
+do_test push-delete-tag-bare-name-is-branch {
+  set rc [catch {execsql {SELECT dolt_push('origin',':v2')}} msg]
+  list $rc $msg
+} {1 {failed to delete remote; 'refs/heads/v2' from remote 'origin'; branch not found}}
+do_test push-delete-tag-repush {
+  execsql {SELECT dolt_push('origin','v1')}
+  peer eval {SELECT tag_name FROM dolt_tags ORDER BY tag_name}
+} {v1 v2}
 peer close
 db close
 sqlite3 db test.db

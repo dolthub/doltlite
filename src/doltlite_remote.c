@@ -1618,7 +1618,7 @@ static int remoteValidateScopedRefsUpdate(
   const RemoteRef *aCurRem = 0, *aIncRem = 0;
   const TrackingBranch *aCurTrk = 0, *aIncTrk = 0;
   const SequenceRef *aCurSeq = 0, *aIncSeq = 0;
-  const char *zTag = remoteScopedTagName(zRef);
+  const char *zTag;
   int nCur = 0, nInc = 0, nCurTag = 0, nIncTag = 0;
   int nCurRem = 0, nIncRem = 0, nCurTrk = 0, nIncTrk = 0;
   int nCurSeq = 0, nIncSeq = 0;
@@ -1628,7 +1628,9 @@ static int remoteValidateScopedRefsUpdate(
   int i, j;
 
   if( bDelete ) zRef++;
-  if( bDelete && scopedSameText(zRef, scopedDefaultBranch(pBasis)) ){
+  /* A ":tag:<name>" scope deletes the tag, as ":<branch>" deletes a branch. */
+  zTag = remoteScopedTagName(zRef);
+  if( bDelete && !zTag && scopedSameText(zRef, scopedDefaultBranch(pBasis)) ){
     return SQLITE_CONSTRAINT;
   }
   if( !zRef || !zRef[0] ) return SQLITE_MISUSE;
@@ -1662,6 +1664,7 @@ static int remoteValidateScopedRefsUpdate(
 
   if( zTag ){
     const TagRef *incTag = 0;
+    int curHasTag = 0;
     if( !scopedBranchesMatch(aCur, nCur, aInc, nInc)
      || !scopedRemotesMatch(aCurRem, nCurRem, aIncRem, nIncRem)
      || !scopedTrackingMatch(aCurTrk, nCurTrk, aIncTrk, nIncTrk)
@@ -1672,7 +1675,10 @@ static int remoteValidateScopedRefsUpdate(
       goto done;
     }
     for(i=0; i<nCurTag; i++){
-      if( strcmp(aCurTag[i].zName, zTag)==0 ) continue;
+      if( strcmp(aCurTag[i].zName, zTag)==0 ){
+        curHasTag = 1;
+        continue;
+      }
       for(j=0; j<nIncTag; j++){
         if( strcmp(aIncTag[j].zName, aCurTag[i].zName)==0 ) break;
       }
@@ -1695,7 +1701,11 @@ static int remoteValidateScopedRefsUpdate(
         goto done;
       }
     }
-    rc = incTag ? SQLITE_OK : SQLITE_CONSTRAINT;
+    if( bDelete ){
+      rc = !incTag && curHasTag ? SQLITE_OK : SQLITE_CONSTRAINT;
+    }else{
+      rc = incTag ? SQLITE_OK : SQLITE_CONSTRAINT;
+    }
     goto done;
   }
 
@@ -1968,7 +1978,7 @@ int doltliteMergeScopedRefsUpdate(
   int nBaseBlob = 0;
   int nCurrentBlob = 0;
   int rc;
-  const char *zTag = remoteScopedTagName(zRef);
+  const char *zTag = remoteScopedTagName(zRef + (zRef[0]==':'));
 
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(pStore);
   *ppMerged = 0;
@@ -2394,6 +2404,94 @@ tag_attempt_done:
   }
 
 tag_done:
+  chunkStoreClose(&originalRefs);
+  return rc;
+}
+
+/* Delete tag zTag from the remote. As in doltlitePushTag, the refs update is
+** a compare-and-swap scoped to the tag: it is retried when other refs change
+** and refused when the tag itself moves. SQLITE_NOTFOUND if the remote has no
+** such tag. */
+int doltliteDeleteRemoteTag(DoltliteRemote *pRemote, const char *zTag){
+  const TagRef *pOriginalTag;
+  ChunkStore originalRefs;
+  u8 *refsData = 0;
+  int nRefsData = 0;
+  int attempt;
+  int rc;
+
+  memset(&originalRefs, 0, sizeof(originalRefs));
+  rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
+  if( rc==SQLITE_OK && refsData ){
+    rc = chunkStoreLoadRefsFromBlob(&originalRefs, refsData, nRefsData);
+  }else if( rc==SQLITE_NOTFOUND ){
+    rc = SQLITE_OK;
+  }
+  sqlite3_free(refsData);
+  refsData = 0;
+  if( rc!=SQLITE_OK ) goto delete_tag_done;
+  pOriginalTag = remoteFindTag(&originalRefs, zTag);
+  if( !pOriginalTag ){
+    rc = SQLITE_NOTFOUND;
+    goto delete_tag_done;
+  }
+
+  for(attempt=0; attempt<64; attempt++){
+    ChunkStore nextRefs;
+    const TagRef *pCurrentTag;
+    ProllyHash expectedRefsHash = {{0}};
+    u8 *newRefs = 0;
+    char *zScope = 0;
+    int nNewRefs = 0;
+    int targetChanged = 0;
+
+    remotePushRetryDelay(attempt);
+    memset(&nextRefs, 0, sizeof(nextRefs));
+    nRefsData = 0;
+    rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc==SQLITE_OK && refsData && nRefsData>0 ){
+      prollyHashCompute(refsData, nRefsData, &expectedRefsHash);
+      rc = chunkStoreLoadRefsFromBlob(&nextRefs, refsData, nRefsData);
+    }
+    if( rc!=SQLITE_OK ) goto delete_tag_attempt_done;
+    pCurrentTag = remoteFindTag(&nextRefs, zTag);
+    if( !scopedTagsMatch(pOriginalTag, 1, pCurrentTag, pCurrentTag!=0) ){
+      targetChanged = 1;
+      rc = pCurrentTag ? SQLITE_BUSY_SNAPSHOT : SQLITE_NOTFOUND;
+      goto delete_tag_attempt_done;
+    }
+    rc = chunkStoreDeleteTag(&nextRefs, zTag);
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreSerializeRefsToBlob(&nextRefs, &newRefs, &nNewRefs);
+    }
+    if( rc==SQLITE_OK ){
+      zScope = sqlite3_mprintf(":%s%s", REMOTE_TAG_SCOPE_PREFIX, zTag);
+      if( !zScope ) rc = SQLITE_NOMEM;
+    }
+    if( rc==SQLITE_OK ){
+      if( pRemote->xSetRefsIf ){
+        rc = pRemote->xSetRefsIf(
+            pRemote, &expectedRefsHash, zScope, 1, newRefs, nNewRefs);
+      }else{
+        rc = pRemote->xSetRefs(pRemote, zScope, 1, newRefs, nNewRefs);
+      }
+    }
+    if( rc==SQLITE_OK ){
+      doltliteTestCrashFinalize("push");
+      rc = pRemote->xCommit(pRemote);
+    }
+
+delete_tag_attempt_done:
+    sqlite3_free(refsData);
+    refsData = 0;
+    sqlite3_free(zScope);
+    sqlite3_free(newRefs);
+    chunkStoreClose(&nextRefs);
+    if( rc!=SQLITE_BUSY_SNAPSHOT || targetChanged ) break;
+  }
+
+delete_tag_done:
   chunkStoreClose(&originalRefs);
   return rc;
 }

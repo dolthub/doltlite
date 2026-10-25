@@ -664,8 +664,8 @@ static const char *remoteSqlStripPrefix(const char *z, const char *zPrefix){
   return strncmp(z, zPrefix, n)==0 ? z + n : z;
 }
 
-/* zRef is a branch, tag, ":branch", or "src:dst" refspec. src may be any
-** revision, not only a branch name. */
+/* zRef is a branch, tag, ":branch", ":refs/tags/tag", or "src:dst" refspec.
+** src may be any revision, not only a branch name. */
 static int doltPushParsedFunc(
   sqlite3_context *ctx,
   const char *zRemoteName,
@@ -686,6 +686,7 @@ static int doltPushParsedFunc(
   PushTrackingMutation mutation;
   int bBranch = 0;
   int bTagRef = 0;
+  int bTagDelete = 0;
   int bLocalLock = 0;
   int bPrecondition = 0;
   int rc;
@@ -694,7 +695,19 @@ static int doltPushParsedFunc(
   if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return SQLITE_ERROR; }
   memset(&srcCommit, 0, sizeof(srcCommit));
 
-  if( zColon
+  /* ":refs/tags/<tag>" deletes a remote tag, as in git. Dolt refuses it as an
+  ** unsupported mapping; mapping a source onto a tag is still refused. */
+  if( zColon==zRefSpec && zColon
+   && strncmp(zColon+1, REMOTE_TAGS_PREFIX, strlen(REMOTE_TAGS_PREFIX))==0 ){
+    bTagDelete = 1;
+    zRef = zColon + 1 + strlen(REMOTE_TAGS_PREFIX);
+    if( !zRef[0] ){
+      (void)doltliteVcSealSavepointError(db);
+      remoteSqlResultError(ctx, SQLITE_MISUSE,
+                           "push failed: tag name required after ':refs/tags/'");
+      return SQLITE_MISUSE;
+    }
+  }else if( zColon
    && strncmp(zColon+1, REMOTE_TAGS_PREFIX, strlen(REMOTE_TAGS_PREFIX))==0 ){
     char *zMsg = sqlite3_mprintf("unsupported mapping: '%s'", zRefSpec);
     if( !zMsg ){ sqlite3_result_error_nomem(ctx); return SQLITE_NOMEM; }
@@ -743,7 +756,7 @@ static int doltPushParsedFunc(
         return SQLITE_NOTFOUND;
       }
     }
-  }else if( zRef ){
+  }else if( zRef && !bTagDelete ){
     if( zRef[0]==':' ){
       const char *zBranch = remoteSqlStripPrefix(zRef+1, REMOTE_HEADS_PREFIX);
       if( zBranch!=zRef+1 ){
@@ -766,7 +779,9 @@ static int doltPushParsedFunc(
     return rc ? rc : SQLITE_ERROR;
   }
 
-  if( bTags ){
+  if( bTagDelete ){
+    rc = doltliteDeleteRemoteTag(pRemote, zRef);
+  }else if( bTags ){
     const TagRef *aTag = 0;
     int nTag = 0;
     int i;
@@ -838,6 +853,11 @@ static int doltPushParsedFunc(
       zOwned = sqlite3_mprintf(
           "failed to delete remote; 'refs/heads/%s' from remote '%s'; "
           "branch not found", mutation.zBranch, zRemoteName);
+      if( !zOwned ) rc = SQLITE_NOMEM;
+    }else if( bTagDelete && rc==SQLITE_NOTFOUND ){
+      zOwned = sqlite3_mprintf(
+          "failed to delete remote; 'refs/tags/%s' from remote '%s'; "
+          "tag not found", zRef, zRemoteName);
       if( !zOwned ) rc = SQLITE_NOMEM;
     }else{
       zOwned = zMsg && !bRejected ? sqlite3_mprintf("%s", zMsg) : 0;
