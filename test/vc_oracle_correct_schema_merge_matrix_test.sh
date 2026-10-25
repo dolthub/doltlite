@@ -274,8 +274,8 @@ $(dt_op "$t")
 CALL dolt_add('-A'); CALL dolt_commit('-m','theirs');
 EOF
 )
-  dl_setup_err=$(printf '%s\n' "$dl_setup_out" | grep -iE '^error|error:' | head -1 | cut -c1-40)
-  dt_setup_err=$(printf '%s\n' "$dt_setup_out" | grep -iE '^error|error:' | head -1 | cut -c1-40)
+  dl_setup_err=$(printf '%s\n' "$dl_setup_out" | grep -iE '^error|error:' | head -1)
+  dt_setup_err=$(printf '%s\n' "$dt_setup_out" | grep -iE '^error|error:' | head -1)
 
   # Setup must produce the table on both sides.
   if ! vc_oracle_run_doltlite "$db" "SELECT 1 FROM sqlite_master WHERE name IN ('t','t2') LIMIT 1;" \
@@ -290,9 +290,18 @@ EOF
   dt_pre=$(cd "$repo" && "$DOLT" sql -r csv -q "SELECT group_concat(column_name ORDER BY ordinal_position)
        FROM information_schema.columns WHERE table_name IN ('t','t2');" 2>/dev/null \
        | tail -n +2 | tr -d '"')
+  # A setup error only DoltLite raises hides a DoltLite bug unless it is
+  # SQLite refusing DDL that would orphan a dependent, which stock SQLite
+  # raises the same way and MySQL accepts.
+  if [ -n "$dl_setup_err" ] && [ -z "$dt_setup_err" ] \
+     && ! printf '%s' "$dl_setup_err" \
+          | grep -qE 'error in (index|view|trigger) [^ ]+ after (drop column|rename)'; then
+    fail_name "$name (doltlite rejected a setup statement Dolt accepts: $dl_setup_err)"
+    return
+  fi
   if [ "$dl_pre" != "$dt_pre" ] || [ -n "$dl_setup_err" ] || [ -n "$dt_setup_err" ]; then
     skipped=$((skipped+1)); SKIP_NAMES="$SKIP_NAMES $name"
-    echo "  SKIP: $name -- one engine rejected a setup statement (ours=${dl_setup_err:-none} dolt=${dt_setup_err:-none} main-cols ours=$dl_pre dolt=$dt_pre)"
+    echo "  SKIP: $name -- one engine rejected a setup statement (ours=$(printf '%s' "${dl_setup_err:-none}" | cut -c1-80) dolt=$(printf '%s' "${dt_setup_err:-none}" | cut -c1-80) main-cols ours=$dl_pre dolt=$dt_pre)"
     return
   fi
 
@@ -382,9 +391,13 @@ EOF
   fi
 
   dl_st=$(dl_state "$db"); dt_st=$(dt_state "$repo")
-  if printf '%s%s' "$dl_st" "$dt_st" | grep -q 'dep=UNREADABLE'; then
+  if printf '%s' "$dl_st" | grep -q 'dep=UNREADABLE'; then
+    fail_name "$name (doltlite could not read its own views and triggers back after the merge)"
+    return
+  fi
+  if printf '%s' "$dt_st" | grep -q 'dep=UNREADABLE'; then
     skipped=$((skipped+1)); SKIP_NAMES="$SKIP_NAMES $name"
-    echo "  SKIP: $name -- an engine could not read its own dependent catalog back"
+    echo "  SKIP: $name -- Dolt could not read its own triggers back after the merge"
     return
   fi
   if [ "$dl_st" = "$dt_st" ]; then
@@ -441,9 +454,11 @@ if [ "$gaps" -ne 0 ]; then
   echo "gaps (we merge where Dolt refuses -- fix by refusing):$GAP_NAMES"
 fi
 echo "======================================="
-if [ "$skipped" -gt "${VC_SCHEMA_MERGE_SKIP_CEILING:-200}" ]; then
+# A ratchet at today's count (SQLite refusing DDL that orphans a dependent,
+# and Dolt failing to read a trigger after a table rename); lower it as skips go.
+if [ "$skipped" -gt "${VC_SCHEMA_MERGE_SKIP_CEILING:-44}" ]; then
   fail=$((fail+1))
   FAILED_NAMES="$FAILED_NAMES skip_ceiling"
-  echo "  FAIL: skipped=$skipped exceeds ceiling ${VC_SCHEMA_MERGE_SKIP_CEILING:-200}"
+  echo "  FAIL: skipped=$skipped exceeds ceiling ${VC_SCHEMA_MERGE_SKIP_CEILING:-44}"
 fi
 vc_oracle_finish
