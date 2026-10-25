@@ -357,4 +357,46 @@ foreach arg {. t -A} {
   }
 }
 
+
+# An interrupt anywhere in a command inside BEGIN must not leave the
+# command's own savepoint open; the session would then act as if the user
+# held a SAVEPOINT, and a later conflicting merge would drop its conflicts.
+foreach op {merge commit checkout} {
+  set interrupted 0
+  for {set tick 1} {$tick<=3000} {incr tick} {
+    reset_db
+    db eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+      INSERT INTO t VALUES(1,'a');
+      SELECT dolt_commit('-Am','init');
+      SELECT dolt_checkout('-b','b3');
+      UPDATE t SET v='b3';
+      SELECT dolt_commit('-am','b3');
+      SELECT dolt_checkout('main');
+      UPDATE t SET v='m';
+      SELECT dolt_commit('-am','m');
+      BEGIN;
+    }
+    if {$op eq "commit"} {db eval {INSERT INTO t VALUES(2,'x')}}
+    set sql [dict get {
+      merge {SELECT dolt_merge('b3')}
+      commit {SELECT dolt_commit('-Am','c2')}
+      checkout {SELECT dolt_checkout('b3')}
+    } $op]
+    set ::vc_interrupt_ticks 0
+    db progress 1 {expr {[incr ::vc_interrupt_ticks]==$tick}}
+    catch {db eval $sql}
+    set code [sqlite3_errcode db]
+    db progress 0 {}
+    if {$code eq "SQLITE_INTERRUPT"} {incr interrupted}
+    do_catchsql_test vc-interrupt-begin-$op-$tick.savepoint {
+      RELEASE doltlite_command
+    } {1 {no such savepoint: doltlite_command}}
+    catch {db eval ROLLBACK}
+    if {$::vc_interrupt_ticks<$tick} break
+  }
+  do_test vc-interrupt-begin-$op.cancellable {expr {$interrupted>0}} 1
+  do_test vc-interrupt-begin-$op.terminates {expr {$tick<=3000}} 1
+}
+
 finish_test
