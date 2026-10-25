@@ -807,14 +807,15 @@ static Table *cursorRowTable(BtCursor *pCur){
   return 0;
 }
 
-/* Absent record fields read as NULL when the column has no other default. */
+/* Absent record fields read as NULL when the column has no other default.
+** A DEFAULT NULL clause is stored as a span whose child is TK_NULL. */
 static int columnAbsentIsNull(Table *pTab, Column *pCol){
   Expr *pExpr;
   if( pCol->colFlags & (COLFLAG_PRIMKEY|COLFLAG_GENERATED) ) return 0;
   if( pCol->iDflt==0 ) return 1;
   pExpr = sqlite3ColumnExpr(pTab, pCol);
-  if( !pExpr || pExpr->op!=TK_NULL ) return 0;
-  return 1;
+  while( pExpr && pExpr->op==TK_SPAN ) pExpr = pExpr->pLeft;
+  return pExpr && pExpr->op==TK_NULL;
 }
 
 static int recordFieldColumn(
@@ -1029,7 +1030,8 @@ static int btCursorInsertImpl(
       int nKeep = 0;
       rc = prollyBaseBytesOverPendingDelete(pCur, 0, 0, pPayload->nKey,
                                             pData, nData, nSchemaField,
-                                            0, ppKeep, &nKeep);
+                                            ppCanon && *ppCanon, 0,
+                                            ppKeep, &nKeep);
       if( rc!=SQLITE_OK ) return rc;
       if( *ppKeep ){
         pData = *ppKeep;
@@ -1179,7 +1181,7 @@ static int btCursorInsertImpl(
         ** seek that found the conflict leaves seekResult 0. */
         rc = prollyBaseBytesOverPendingDelete(pCur, pSortKey, nSortKey, 0,
                  pStoredPayload, nStoredPayload, nSchemaField,
-                 seekResult==0, ppKeep, &nKeep);
+                 ppCanon && *ppCanon, seekResult==0, ppKeep, &nKeep);
         if( rc==SQLITE_OK && *ppKeep ){
           pStoredPayload = *ppKeep;
           nStoredPayload = nKeep;

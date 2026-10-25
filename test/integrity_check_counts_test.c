@@ -159,6 +159,7 @@ static void wideRecord(int bShared){
   /* three NULL fields: header length 4, then three serial types of 0 */
   static const unsigned char aRec[4] = { 0x04, 0x00, 0x00, 0x00 };
   Pgno root = 0;
+  Pgno uRoot = 0;
   int rc;
 
   removeDb("icc_wide.db");
@@ -172,10 +173,14 @@ static void wideRecord(int bShared){
     return;
   }
   if( bShared ){
+    /* Do not INSERT the all-NULL row. A trailing NULL is stored by leaving
+    ** the field out, so that write is one field and is not wide in t. Plant
+    ** the three-NULL record into both tables below. */
     check("shared: setup", execSql(db,
         "DELETE FROM t;"
-        "CREATE TABLE u(a INTEGER PRIMARY KEY, b TEXT, c TEXT);"
-        "INSERT INTO u VALUES(2,NULL,NULL);")==SQLITE_OK);
+        "CREATE TABLE u(a INTEGER PRIMARY KEY, b TEXT, c TEXT);")==SQLITE_OK);
+    check("shared: u root",
+          doltliteResolveTableName(db, "u", &uRoot)==SQLITE_OK && uRoot>0);
   }
   if( sqlite3_prepare_v2(db,
           "SELECT rootpage FROM sqlite_master WHERE name='t'", -1, &pStmt, 0)
@@ -205,6 +210,30 @@ static void wideRecord(int bShared){
   check("wide: planted the record", sqlite3BtreeInsert(pCur, &x, 0, 0)==SQLITE_OK);
   sqlite3BtreeCloseCursor(pCur);
   sqlite3_free(pCur);
+  if( bShared && uRoot>0 ){
+    BtCursor *pU;
+    int opened;
+    int wasInternal;
+    /* u maps every NULL onto a column, so a normal insert would omit them.
+    ** Internal DML keeps the bytes, which is what a legitimate three-column
+    ** row stored before trailing NULLs were left out. */
+    pU = sqlite3_malloc(sqlite3BtreeCursorSize());
+    check("shared: cursor alloc", pU!=0);
+    if( pU ){
+      memset(pU, 0, sqlite3BtreeCursorSize());
+      opened = sqlite3BtreeCursor(pBt, uRoot, BTREE_WRCSR, 0, pU)==SQLITE_OK;
+      check("shared: cursor", opened);
+      if( opened ){
+        wasInternal = (db->mDbFlags & DBFLAG_InternalDml)!=0;
+        db->mDbFlags |= DBFLAG_InternalDml;
+        check("shared: planted the record",
+              sqlite3BtreeInsert(pU, &x, 0, 0)==SQLITE_OK);
+        if( !wasInternal ) db->mDbFlags &= ~DBFLAG_InternalDml;
+        sqlite3BtreeCloseCursor(pU);
+      }
+      sqlite3_free(pU);
+    }
+  }
   check("wide: commit", sqlite3BtreeCommit(pBt)==SQLITE_OK);
 
   if( bShared ){

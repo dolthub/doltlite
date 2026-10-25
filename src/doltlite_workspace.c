@@ -1097,12 +1097,17 @@ static int wsBindDiscardColumn(
   i64 intKey
 ){
   DoltliteSerialValue v;
+  int iField;
   int rc;
   if( iCol==pCols->iPkCol ){
     return sqlite3_bind_int64(pStmt, iParam, intKey);
   }
-  rc = doltliteSerialValueFromField(pRec, nRec, pInfo,
-                                    pCols->aColToRec[iCol], &v);
+  /* A trailing NULL is stored by leaving the field out. */
+  iField = pCols->aColToRec ? pCols->aColToRec[iCol] : iCol;
+  if( iField<0 || !pInfo || iField>=pInfo->nField ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  rc = doltliteSerialValueFromField(pRec, nRec, pInfo, iField, &v);
   if( rc!=SQLITE_OK ) return rc;
   switch( v.eType ){
     case SQLITE_NULL: return sqlite3_bind_null(pStmt, iParam);

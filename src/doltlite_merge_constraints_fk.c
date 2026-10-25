@@ -193,8 +193,14 @@ static int fkParentLookupInit(
         aValue[i].eType = SQLITE_INTEGER;
         aValue[i].i = prollyCursorIntKey(&p->cur);
       }else{
-        rc = doltliteSerialValueFromField(pVal, nVal, &info,
-                                          p->cols.aColToRec[col], &aValue[i]);
+        int iField = p->cols.aColToRec[col];
+        /* A trailing NULL is stored by leaving the field out. */
+        if( iField<0 || iField>=info.nField ){
+          aValue[i].eType = SQLITE_NULL;
+        }else{
+          rc = doltliteSerialValueFromField(pVal, nVal, &info,
+                                            iField, &aValue[i]);
+        }
       }
     }
     if( rc==SQLITE_OK ){

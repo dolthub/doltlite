@@ -478,6 +478,26 @@ run_test "materialized_default_survives_roundtrip" \
   "5
 1" "$DB17"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
+# DEFAULT NULL is stored as a span around TK_NULL. Setting that column and
+# clearing it must hash as the short row from after the alter.
+DB18=/tmp/test_diff_alter18_$$.db; rm -f "$DB18"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-A','-m','base');
+ALTER TABLE t ADD COLUMN w INT DEFAULT NULL;
+SELECT dolt_commit('-A','-m','add null default');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+
+run_test "null_default_set_and_clear_hash_stable" \
+  "CREATE TEMP TABLE h AS SELECT dolt_hashof_table('t') AS v;
+   UPDATE t SET w=7 WHERE id=2;
+   UPDATE t SET w=NULL WHERE id=2;
+   SELECT w IS NULL FROM t WHERE id=2;
+   SELECT v=dolt_hashof_table('t') FROM h;
+   SELECT count(*) FROM dolt_status;" \
+  "1
+1
+0" "$DB18"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
 
 dltest_finish
