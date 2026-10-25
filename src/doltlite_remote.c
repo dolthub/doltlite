@@ -441,11 +441,43 @@ static int syncVerifyFetchedChunk(
   return SQLITE_OK;
 }
 
+/* A ref is published only after its whole graph is uploaded, so a root
+** the destination already names as a branch or tag target needs no
+** partial-put rescan. */
+static int syncRootIsPublished(const ChunkStore *pDstRefs,
+                               const ProllyHash *pRoot){
+  const BranchRef *aBranch;
+  const TagRef *aTag;
+  int nBranch;
+  int nTag;
+  int i;
+  if( !pDstRefs ) return 0;
+  refsTableGetBranches(&pDstRefs->refs, &nBranch, &aBranch);
+  for(i=0; i<nBranch; i++){
+    if( prollyHashCompare(&aBranch[i].commitHash, pRoot)==0 ) return 1;
+  }
+  refsTableGetTags(&pDstRefs->refs, &nTag, &aTag);
+  for(i=0; i<nTag; i++){
+    if( prollyHashCompare(&aTag[i].commitHash, pRoot)==0 ) return 1;
+  }
+  return 0;
+}
+
 int doltliteSyncChunks(
   DoltliteRemote *pSrc,
   DoltliteRemote *pDst,
   ProllyHash *aRoots,
   int nRoots
+){
+  return doltliteSyncChunksTo(pSrc, pDst, aRoots, nRoots, 0);
+}
+
+int doltliteSyncChunksTo(
+  DoltliteRemote *pSrc,
+  DoltliteRemote *pDst,
+  ProllyHash *aRoots,
+  int nRoots,
+  const ChunkStore *pDstRefs
 ){
   SyncQueue queue;
   ProllyHashSet seen;
@@ -492,13 +524,16 @@ int doltliteSyncChunks(
       bResumeScan = 1;
       pDst->bForceResumeScan = 0;
     }else if( bFirstBatch && pDst->bResumePartialPuts ){
+      int bUnpublished = 0;
       bResumeScan = 1;
       for(i=0; i<nBatch; i++){
         if( !pB->aPresent[i] ){
           bResumeScan = 0;
           break;
         }
+        if( !syncRootIsPublished(pDstRefs, &pB->aBatch[i]) ) bUnpublished = 1;
       }
+      if( !bUnpublished ) bResumeScan = 0;
     }
     bFirstBatch = 0;
 
@@ -587,6 +622,7 @@ static int remoteGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
                            int nHash, u8 **apData, int *anData){
   ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
   int i = 0;
+  int iPrefetched = 0;
   int rc = SQLITE_OK;
   if( nHash<0 ) return SQLITE_MISUSE;
   if( nHash==0 ) return SQLITE_OK;
@@ -594,6 +630,14 @@ static int remoteGetChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   memset(anData, 0, nHash*sizeof(*anData));
   while( i<nHash && rc==SQLITE_OK ){
     int nRead;
+    /* A lazy store faults each absent chunk with its own origin request;
+    ** fetch this batch's absent chunks in one batched request first. */
+    if( pStore->pChunkSource && i>=iPrefetched ){
+      int nPrefetch = MIN(nHash-i, CHUNK_READ_BATCH_MAX);
+      rc = chunkStoreSourcePrefetchMany(pStore, &aHash[i], nPrefetch);
+      if( rc!=SQLITE_OK ) break;
+      iPrefetched = i + nPrefetch;
+    }
     rc = chunkStoreReadBatch(pStore, &aHash[i],
                              MIN(nHash-i, CHUNK_READ_BATCH_MAX),
                              &apData[i], &anData[i], &nRead);
@@ -2189,7 +2233,7 @@ int doltlitePushAs(
         rc = SQLITE_NOMEM;
         goto push_done;
       }
-      rc = doltliteSyncChunks(pLocalSrc, pRemote, &localCommit, 1);
+      rc = doltliteSyncChunksTo(pLocalSrc, pRemote, &localCommit, 1, &refs);
       pLocalSrc->xClose(pLocalSrc);
       if( rc!=SQLITE_OK ) goto push_done;
       {
@@ -2291,7 +2335,8 @@ int doltlitePushTag(
       rc = SQLITE_NOMEM;
       break;
     }
-    rc = doltliteSyncChunks(pLocalSrc, pRemote, &tagCommit, 1);
+    rc = doltliteSyncChunksTo(pLocalSrc, pRemote, &tagCommit, 1,
+                              &originalRefs);
     pLocalSrc->xClose(pLocalSrc);
     if( rc!=SQLITE_OK ) goto tag_attempt_done;
 
