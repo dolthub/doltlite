@@ -23,6 +23,7 @@ doltlite_creds.sh
 doltlite_staging.sh
 doltlite_clean.sh
 doltlite_checkout_table_rebuild.sh
+doltlite_real_encoding.sh
 doltlite_drop_column_encoding.sh
 doltlite_workspace.sh
 doltlite_docs.sh
@@ -212,6 +213,7 @@ doltlite_hashof_refs.sh
 doltlite_staging.sh
 doltlite_clean.sh
 doltlite_checkout_table_rebuild.sh
+doltlite_real_encoding.sh
 doltlite_drop_column_encoding.sh
 doltlite_workspace.sh
 doltlite_docs.sh
