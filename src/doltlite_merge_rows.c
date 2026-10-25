@@ -1317,12 +1317,14 @@ int mergeRowEditsColumn(
       sqlite3_free(aOld);
       continue;
     }
-    if( (!bNonNullOnly || (iOtherField<nNew && aNew[iOtherField].st!=0))
-     && fieldEquals(pChange->pOldVal,
-                    iAncField<nOld ? &aOld[iAncField] : (RecField*)&kNullField,
-                    pChange->pNewVal,
-                    iOtherField<nNew ? &aNew[iOtherField] : (RecField*)&kNullField)!=0 ){
-      *pbEdited = 1;
+    if( !bNonNullOnly || (iOtherField<nNew && aNew[iOtherField].st!=0) ){
+      const RecField *fOld = iAncField<nOld ? &aOld[iAncField] : &kNullField;
+      const RecField *fNew = iOtherField<nNew ? &aNew[iOtherField] : &kNullField;
+      /* A DROP COLUMN rewrite re-encodes the untouched cells it keeps. */
+      if( fieldEquals(pChange->pOldVal, fOld, pChange->pNewVal, fNew)!=0
+       && !fieldNumbersEqual(pChange->pOldVal, fOld, pChange->pNewVal, fNew) ){
+        *pbEdited = 1;
+      }
     }
     sqlite3_free(aOld);
     sqlite3_free(aNew);
