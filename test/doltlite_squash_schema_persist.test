@@ -1,0 +1,88 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach kind {view trigger} {
+  foreach action {add drop replace} {
+    foreach direction {main side} {
+      foreach transaction {autocommit explicit rollback} {
+        reset_db
+        execsql {
+          CREATE TABLE t(id INTEGER PRIMARY KEY);
+          CREATE TABLE audit(v INT);
+        }
+        if {$kind eq "view"} {
+          set original {CREATE VIEW obj AS SELECT 1 AS v}
+          set changed {CREATE VIEW obj AS SELECT 2 AS v}
+        } else {
+          set original {CREATE TRIGGER obj AFTER INSERT ON t BEGIN INSERT INTO audit VALUES(1); END}
+          set changed {CREATE TRIGGER obj AFTER INSERT ON t BEGIN INSERT INTO audit VALUES(2); END}
+        }
+        if {$action ne "add"} {execsql $original}
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+        }
+        set source [expr {$direction eq "main" ? "side" : "main"}]
+        execsql "SELECT dolt_checkout('$source')"
+        if {$action ne "add"} {execsql "DROP $kind obj"}
+        if {$action ne "drop"} {execsql $changed}
+        execsql {SELECT dolt_commit('-Am','schema change')}
+        set expected [execsql {SELECT type,name,sql FROM sqlite_schema WHERE name='obj'}]
+        execsql "SELECT dolt_checkout('$direction')"
+        set before [execsql {SELECT type,name,sql FROM sqlite_schema WHERE name='obj'}]
+        set head [execsql {SELECT dolt_hashof('HEAD')}]
+        set name squash-schema-$kind-$action-$direction-$transaction
+        if {$transaction ne "autocommit"} {execsql BEGIN}
+        do_test $name-merge {
+          string length [execsql "SELECT dolt_merge('--squash','$source')"]
+        } {40}
+        do_execsql_test $name-live {
+          SELECT type,name,sql FROM sqlite_schema WHERE name='obj';
+          PRAGMA integrity_check;
+        } [concat $expected ok]
+        do_execsql_test $name-head {SELECT dolt_hashof('HEAD')} $head
+        if {$transaction eq "explicit"} {execsql COMMIT}
+        if {$transaction eq "rollback"} {
+          execsql ROLLBACK
+          set expected $before
+        }
+        db close
+        sqlite3 db [file normalize test.db]/$direction
+        do_execsql_test $name-reopen {
+          SELECT type,name,sql FROM sqlite_schema WHERE name='obj';
+          PRAGMA integrity_check;
+        } [concat $expected ok]
+        if {$transaction ne "rollback"} {
+          do_test $name-commit {
+            string length [execsql {SELECT dolt_commit('-m','commit squash')}]
+          } {40}
+          do_execsql_test $name-clean {SELECT count(*) FROM dolt_status} {0}
+          db close
+          sqlite3 db [file normalize test.db]/$direction
+          do_execsql_test $name-committed {
+            SELECT type,name,sql FROM sqlite_schema WHERE name='obj';
+            PRAGMA integrity_check;
+          } [concat $expected ok]
+        }
+        if {$expected ne {}} {
+          set value [expr {$transaction eq "rollback" ? 1 : 2}]
+          if {$kind eq "view"} {
+            do_execsql_test $name-read {SELECT v FROM obj} $value
+          } else {
+            do_execsql_test $name-fire {
+              INSERT INTO t VALUES(1);
+              SELECT v FROM audit;
+            } $value
+          }
+        } else {
+          do_execsql_test $name-absent {
+            INSERT INTO t VALUES(1);
+            SELECT count(*) FROM audit;
+          } {0}
+        }
+      }
+    }
+  }
+}
+
+finish_test
