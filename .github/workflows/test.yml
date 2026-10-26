@@ -59,10 +59,14 @@ jobs:
 
   prolly-txn-stress:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev
 
     - name: Download checked build
       uses: actions/download-artifact@v4
@@ -89,6 +93,31 @@ jobs:
         done
         echo "completed ${runs} prolly_txn_stress_test runs"
       timeout-minutes: 8
+
+    - name: Run threadtest4 serialized
+      if: ${{ !cancelled() }}
+      run: |
+        cd build
+        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
+        ./threadtest4 --serialized 6
+
+    - name: Run threadtest4 multithread
+      if: ${{ !cancelled() }}
+      run: |
+        cd build
+        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
+        ./threadtest4 --multithread 6
+
+    - name: Run threadtest5
+      if: ${{ !cancelled() }}
+      env:
+        # Match sanitizers.yml: multi-writer prolly runs on shared CI hosts
+        # can exceed a short busy timeout and leave p1/p2 inconsistent.
+        THREADTEST5_BUSY_MS: "60000"
+      run: |
+        cd build
+        rm -f /tmp/doltlite-threadtest5.db
+        ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
 
   vc-concurrency-stress:
     runs-on: ubuntu-latest
@@ -123,47 +152,6 @@ jobs:
         echo "completed ${runs} vc_concurrency_test runs"
         ./vc_ref_mutation_stress_test
       timeout-minutes: 9
-
-  thread-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh zlib1g-dev
-
-    - name: Download checked build
-      uses: actions/download-artifact@v4
-      with:
-        name: checked-build-ubuntu
-
-    - name: Extract checked build
-      run: tar -xzf checked-build-ubuntu.tar.gz
-
-    - name: Run threadtest4 serialized
-      run: |
-        cd build
-        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
-        ./threadtest4 --serialized 6
-
-    - name: Run threadtest4 multithread
-      run: |
-        cd build
-        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
-        ./threadtest4 --multithread 6
-
-    - name: Run threadtest5
-      env:
-        # Match sanitizers.yml: multi-writer prolly runs on shared CI hosts
-        # can exceed a short busy timeout and leave p1/p2 inconsistent.
-        THREADTEST5_BUSY_MS: "60000"
-      run: |
-        cd build
-        rm -f /tmp/doltlite-threadtest5.db
-        ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
 
   sqllogictest:
     runs-on: ubuntu-latest
@@ -332,38 +320,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: coverage-profile-sql-differential
-        path: ${{ runner.temp }}/coverage-profiles
-        if-no-files-found: warn
-        retention-days: 1
-
-  sqlite-file-regression:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh zlib1g-dev
-
-    - name: Download instrumented build
-      uses: actions/download-artifact@v4
-      with:
-        name: coverage-fixture
-
-    - name: Extract instrumented build
-      run: |
-        tar -xzf coverage-fixture.tar.gz
-        mkdir -p "$RUNNER_TEMP/coverage-profiles"
-        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
-
-    - name: SQLite files and mixed-engine attachments
-      run: bash test/run_sqlite_file_tests.sh build-coverage/testfixture
-
-    - name: Upload regression coverage profiles
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: coverage-profile-sqlite-files
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
@@ -566,11 +522,11 @@ jobs:
     - name: Download instrumented build
       uses: actions/download-artifact@v4
       with:
-        name: coverage-cli
+        name: coverage-fixture
 
     - name: Extract instrumented build
       run: |
-        tar -xzf coverage-cli.tar.gz
+        tar -xzf coverage-fixture.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
 
@@ -591,6 +547,10 @@ jobs:
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
 
+    - name: SQLite files and mixed-engine attachments
+      if: ${{ !cancelled() }}
+      run: bash test/run_sqlite_file_tests.sh build-coverage/testfixture
+
     - name: Upload remote coverage profiles
       if: always()
       uses: actions/upload-artifact@v4
@@ -605,7 +565,6 @@ jobs:
       - oracle-tests
       - sql-differential
       - sqlite-regression
-      - sqlite-file-regression
       - coverage-native
       - coverage-remotes
     runs-on: ubuntu-latest
