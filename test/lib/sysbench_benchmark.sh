@@ -81,7 +81,9 @@ bench_runs_for_test() {
 
 bench_runs_summary() {
   local base_runs="${BENCH_RUNS:-5}"
-  if [ "$BENCH_AC_WRITE_RUNS" = "$base_runs" ]; then
+  if [ "${BENCH_AC_WRITE_STAT:-median}" = "min" ]; then
+    echo "median of ${base_runs} paired invocations per test; autocommit writes use the fastest of ${BENCH_AC_WRITE_RUNS}"
+  elif [ "$BENCH_AC_WRITE_RUNS" = "$base_runs" ]; then
     echo "median of ${base_runs} paired invocations per test"
   else
     echo "median of ${base_runs} paired invocations per test; autocommit writes use ${BENCH_AC_WRITE_RUNS}"

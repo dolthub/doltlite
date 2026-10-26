@@ -1,3 +1,4 @@
+import os
 import sys
 from collections import defaultdict
 
@@ -5,6 +6,19 @@ from collections import defaultdict
 def median(values):
     valid = sorted(int(value) for value in values if int(value) >= 0)
     return valid[len(valid) // 2] if valid else -1
+
+
+# Autocommit writes wait on fsync, and a stalled disk only ever adds time, so
+# the fastest run is the stable estimate of what the engine itself costs.
+def fastest(values):
+    valid = [int(value) for value in values if int(value) >= 0]
+    return min(valid) if valid else -1
+
+
+def summary_for(test):
+    if test.endswith("_ac") and os.environ.get("BENCH_AC_WRITE_STAT") == "min":
+        return fastest
+    return median
 
 
 # Baseline and candidate medians are drawn independently, so runner I/O noise
@@ -46,7 +60,8 @@ def section_report(path, section, tests, results):
     ratio_count = 0
     with open(results, "a") as stream:
         for test in tests.split():
-            baseline, candidate = (median(values) for values in samples[test])
+            summarize = summary_for(test)
+            baseline, candidate = (summarize(values) for values in samples[test])
             baseline_display = f"{baseline:,}" if baseline >= 0 else "crash"
             candidate_display = f"{candidate:,}" if candidate >= 0 else "crash"
             ratio = "--"
