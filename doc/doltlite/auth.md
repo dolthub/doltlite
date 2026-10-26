@@ -1,8 +1,8 @@
 # DoltLite remote authentication
 
 DoltLite's HTTP sync supports authenticated HTTPS remotes, including hosted
-DoltHub and DoltLab. It is wire-compatible with `dolt login` credentials: the
-same Ed25519 key format, JWT contract, and DoltHub credentials page.
+DoltHub and DoltLab. It uses Dolt's Ed25519 identity and JWT contract, supports
+importing Dolt credentials, and uses the same DoltHub credentials page.
 
 ## Dolt authentication contract
 
@@ -65,22 +65,42 @@ SQLite library and shell, not a subcommand-oriented CLI:
 
 ```sql
 SELECT dolt_creds_new();
-SELECT dolt_creds();
-SELECT dolt_creds('list');
-SELECT dolt_creds('rm', '<kid>');
+SELECT kid, public_key, active, error FROM dolt_creds_ls() ORDER BY kid;
+SELECT dolt_creds_use('<kid>');
 ```
 
 `dolt_creds_new()` stores a key and returns its ID, public key, and DoltHub
-approval URL. After the user approves that key, `dolt_push`, `dolt_fetch`,
-`dolt_pull`, and `dolt_clone` authenticate automatically. HTTPS remotes load
-the selected credential and generate a new JWT for each request.
+registration URL. The first generated or imported key becomes the default
+when no selection is configured; creating another preserves that selection.
+Register the public key on the account, then select it with `dolt_creds_use`.
+`active` is a Boolean column (`1` / `0`) for the connection's selected key,
+without a remote URL binding.
+
+HTTPS operations (`dolt_push`, `dolt_fetch`, `dolt_pull`, `dolt_clone`, and lazy
+reads) use the connection override, environment override, remote URL binding,
+persisted default, or sole local key, in that order. They keep the selected
+identity for the operation and sign a new JWT for each request. Ambiguous or
+invalid selections fail locally. Public reads can use no credential; anonymous
+HTTPS writes require an explicit `'anonymous'` selection.
+
+Use `dolt_creds_use(key, 'session')` for a connection-specific identity and
+`dolt_creds_bind(remote_or_https_url, key)` for a repository on a different
+account. Defaults and bindings live in the credential directory's `config`
+file, outside database history. They are not cloned or pushed.
+
+The [credential command reference](dolt_creds.md) covers listing, selection,
+bindings, import, public export, removal, and compatibility commands.
+`dolt_creds_check('origin')` verifies a key through a server's read-only `/auth`
+endpoint. The bundled server supports this with client authentication enabled;
+older or auth-disabled servers report it as unsupported. DoltHub needs the
+corresponding service endpoint before hosted account/permission checks work.
 
 The following environment variables customize credential and TLS behavior:
 
 | Variable | Purpose |
 |---|---|
 | `DOLTLITE_CREDS_DIR` | Override the credential directory. |
-| `DOLTLITE_CREDS_KID` | Select a credential instead of the default key. |
+| `DOLTLITE_CREDS_KID` | Override URL bindings and the default key; a connection override takes precedence. |
 | `DOLTLITE_LOGIN_URL` | Override the URL returned by `dolt_creds_new()`. |
 | `DOLT_OVERRIDE_GRPC_JWT_AUDIENCE` | Override the JWT audience. |
 | `DOLTLITE_CA_FILE` | Use a specific CA bundle, including a private CA. |
@@ -101,7 +121,8 @@ verifies the server certificate and hostname.
 | Server-side bearer verification | `src/doltlite_remotesrv.c` |
 
 The credential API supports key generation, deterministic construction from a
-seed, save/load/list/remove operations, JWT creation, and bearer verification.
+seed, key import, save/load/list/remove operations, persistent selection and
+URL bindings, JWT creation, and bearer verification.
 Heap results use SQLite's allocator (`sqlite3_malloc`); free them with
 `sqlite3_free` (or `doltliteCredsFree` / `doltliteCredsFreeList`). Remote
 credential selection is internal to the HTTPS transport; embedders use the
@@ -121,8 +142,13 @@ dependency so JWT compatibility does not depend on TLS-library Ed25519 support.
   authorized-key lookup, and rejection paths.
 - `test/tls_test.sh` covers TLS connection and certificate validation against
   the system trust store and an untrusted CA.
+- `test/vc_oracle_creds_test.sh` compares credential lifecycle and selection
+  with Dolt's CLI.
+- `test/doltlite_creds.test` and `test/creds_connection_test.c` cover SQL
+  selection and connection isolation.
 - `test/remote_https_auth_test.sh` exercises authenticated HTTPS push and clone,
-  missing and unauthorized credentials, incorrect CAs, plaintext compatibility,
-  multi-chunk transfer, and Authorization-header parsing.
+  85-key selection, override precedence, concurrent URL bindings, credential
+  checks, anonymous access, lazy reads, incorrect CAs, multi-chunk transfer,
+  and Authorization-header parsing.
 - `test/creds_path_test.sh` covers the SQL credential lifecycle and configured
   credential directory.

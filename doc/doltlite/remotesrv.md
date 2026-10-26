@@ -25,11 +25,24 @@ copying its private seed by exporting its public JWK directly into the server's
 key directory:
 
 ```sql
-SELECT dolt_creds('export', '<credential-id>', '/path/to/authorized-keys');
+SELECT dolt_creds_export('<credential-id>', '/path/to/authorized-keys');
 ```
 
-With no directory argument, `dolt_creds('export', '<credential-id>')` returns
+With no directory argument, `dolt_creds_export('<credential-id>')` returns
 the public JWK. The server rejects private credential files in `--auth-keys`.
+Select the client key with `dolt_creds_use('<credential-id>')`, or use
+`dolt_creds_bind(remote_or_https_url, key)` to bind a key to this server's
+repository URL. See [credential management](dolt_creds.md) for the commands
+and selection precedence.
+
+With TLS and `--auth-keys` enabled, `dolt_creds_check('origin')` calls the
+repository URL's read-only `/auth` endpoint. It verifies the key without
+creating a database and returns its ID and read/write authorization. This
+server has no account directory, so the returned username and email are null.
+Without client authentication, credential checks report that verification is
+unsupported. For HTTPS writes to a server that permits anonymous access,
+select `'anonymous'` explicitly; public reads can proceed without a key.
+
 Default HTTP timeout is 30s (`DOLTLITE_HTTP_TIMEOUT_MS`). The server's
 `--timeout-ms` (default 30 seconds) bounds the TLS handshake and the request
 body. Request headers must arrive within 2 seconds, or within `--timeout-ms`
