@@ -90,8 +90,6 @@ file, outside database history. They are not cloned or pushed.
 
 The [credential command reference](dolt_creds.md) covers listing, selection,
 bindings, import, public export, removal, and compatibility commands.
-`dolt_creds_check` is deprecated. It returns an error and does not contact a
-server. DoltHub does not provide an HTTP credential check.
 
 The following environment variables customize credential and TLS behavior:
 
@@ -147,7 +145,6 @@ dependency so JWT compatibility does not depend on TLS-library Ed25519 support.
 - `test/remote_https_auth_test.sh` exercises authenticated HTTPS push and clone,
   85-key selection, override precedence, concurrent URL bindings, anonymous
   access, lazy reads, incorrect CAs, multi-chunk transfer, and
-  Authorization-header parsing. `dolt_creds_check` is asserted as a local
-  deprecation error.
+  Authorization-header parsing.
 - `test/creds_path_test.sh` covers the SQL credential lifecycle and configured
   credential directory.

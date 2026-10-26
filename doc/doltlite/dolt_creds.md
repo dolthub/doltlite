@@ -16,7 +16,6 @@ Creating or importing a key does not register it with a server.
 | `dolt_creds_import(filename)` | Import a private JWK file, accepting Dolt and DoltLite layouts; return `0`. |
 | `dolt_creds_export(key [, directory])` | Return a public JWK, or write it into an authorized-keys directory and return a confirmation. |
 | `dolt_creds_rm(key [, key ...])` | Delete local keys; return `0`. |
-| `dolt_creds_check(...)` | Deprecated. Returns an error and does not contact a server. See [Credential checks](#credential-checks). |
 
 `key` accepts either a credential ID (`kid`) or its base32 public key.
 `dolt_creds_use` and `dolt_creds_bind` also accept `'anonymous'`.
@@ -106,20 +105,6 @@ Removing a key does not select a replacement or clear references to it. Use
 `dolt_creds_use` and update affected bindings before the next operation that
 would select the removed key.
 
-## Credential checks
-
-`dolt_creds_check` and `dolt_creds('check')` are deprecated. Both return an
-error and do not open a connection:
-
-```sql
-SELECT dolt_creds_check(); -- error: deprecated
-SELECT dolt_creds('check'); -- error: deprecated
-```
-
-DoltHub does not provide an HTTP credential check. Register the public key on
-the account, select it with `dolt_creds_use` or `dolt_creds_bind`, then use
-`dolt_push` or `dolt_fetch`.
-
 ## Storage and compatibility
 
 Keys live in `~/.doltlite/creds/<kid>.jwk`; `DOLTLITE_CREDS_DIR` overrides that
@@ -130,8 +115,7 @@ pushed. See [auth.md](auth.md) for TLS and JWT settings.
 The existing `dolt_creds()` / `dolt_creds('list')` text listing remains
 available and marks the active key with `*`. Existing `'rm'` / `'remove'` and
 `'export'` actions remain supported; `'use'`, `'bind'`, and `'import'`
-dispatch to the corresponding named functions. `'check'` dispatches to
-`dolt_creds_check` and returns the deprecation error.
+dispatch to the corresponding named functions.
 
 ## See also
 

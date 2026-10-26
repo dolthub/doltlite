@@ -2413,15 +2413,6 @@ static int credsSqlSelectDefault(DoltliteCreds *cred){
   return rc;
 }
 
-/* The name stays registered so callers get this error instead of "no such function". */
-static void doltCredsCheckFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
-  (void)argc;
-  (void)argv;
-  sqlite3_result_error(ctx,
-      "dolt_creds_check is deprecated; DoltHub does not provide an HTTP credential check",
-      -1);
-}
-
 static void doltCredsUseFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   const char *name, *scope = 0;
@@ -2764,10 +2755,6 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     action = (const char*)sqlite3_value_text(argv[0]);
   }
 
-  if( strcmp(action, "check")==0 ){
-    doltCredsCheckFunc(ctx, argc-1, argv+1);
-    return;
-  }
   if( strcmp(action, "use")==0 ){
     doltCredsUseFunc(ctx, argc-1, argv+1);
     return;
@@ -2856,7 +2843,6 @@ int doltliteRemoteSqlRegister(sqlite3 *db){
                                  doltCredsNewFunc);
   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds", -1,
                                  doltCredsFunc);
-  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_check", -1, doltCredsCheckFunc);
   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_use", -1, doltCredsUseFunc);
   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_import", -1, doltCredsImportFunc);
   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_rm", -1, doltCredsRmFunc);

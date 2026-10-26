@@ -235,10 +235,6 @@ result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
   "SELECT count(*),sum(active),max(CASE WHEN active THEN kid END)='$kid' FROM dolt_creds_ls();")
 check "85 keys preserve the original active credential" "85|1|1" "$result"
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT dolt_creds_check('origin');" 2>&1)
-case "$result" in *"dolt_creds_check is deprecated"*) check "credential check is deprecated" yes yes;;
-  *) check "credential check is deprecated" "dolt_creds_check is deprecated" "$result";; esac
-result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
   "SELECT dolt_remote('add','multi','https://localhost:$PORT/multi.db'); SELECT dolt_push('multi','main');")
 check "push authenticates with 85 local keys" $'0\n0' "$result"
 other=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
@@ -333,10 +329,6 @@ check "explicit anonymous HTTPS push remains available" $'0\n0' "$result"
 result=$(DOLTLITE_CREDS_DIR="$TMP/reader" "$DOLTLITE" "$TMP/public_clone.db" \
   "SELECT dolt_clone('$PUBLIC_URL'); SELECT count(*) FROM users;")
 check "public HTTPS clone works without credentials" $'0\n3' "$result"
-result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
-  "SELECT dolt_creds_check('--endpoint','http://localhost:$PUBLIC_PORT/public.db');" 2>&1)
-case "$result" in *"dolt_creds_check is deprecated"*) check "deprecated credential check does not contact the server" yes yes;;
-  *) check "deprecated credential check does not contact the server" "dolt_creds_check is deprecated" "$result";; esac
 
 echo ""
 echo "======================================="
