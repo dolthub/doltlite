@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#define DOLTLITE_CREDS_SESSION "doltlite.creds"
+
 #define DOLTLITE_SEED_LEN   32
 #define DOLTLITE_PUBKEY_LEN 32
 #define DOLTLITE_SIG_LEN    64
@@ -57,6 +59,18 @@ int doltliteCredsList(const char *dir, char ***out, int *n);
 void doltliteCredsFreeList(char **list, int n);
 
 int doltliteCredsRemove(const char *dir, const char *kid);
+
+#define DOLTLITE_CREDS_ERROR     (-1)
+#define DOLTLITE_CREDS_NONE      0
+#define DOLTLITE_CREDS_SELECTED  1
+#define DOLTLITE_CREDS_ANONYMOUS 2
+
+int doltliteCredsConfigSet(const char*, const char*, const char*, int);
+char *doltliteCredsRemoteKey(const char*);
+int doltliteCredsLoadNamed(const char*, const char*, DoltliteCreds**);
+int doltliteCredsImport(const char*, DoltliteCreds**);
+int doltliteCredsResolve(const char*, const char*, const char*,
+                         DoltliteCreds**, char**, char**);
 
 int doltliteCredsLoadPubKey(const char *dir, const char *kid,
                             unsigned char pub[DOLTLITE_PUBKEY_LEN]);

@@ -1,0 +1,68 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_creds
+
+set saved_creds [array get ::env DOLTLITE_CREDS_DIR]
+set saved_kid [array get ::env DOLTLITE_CREDS_KID]
+set ::env(DOLTLITE_CREDS_DIR) [file normalize creds-test]
+unset -nocomplain ::env(DOLTLITE_CREDS_KID)
+file delete -force $::env(DOLTLITE_CREDS_DIR)
+
+do_execsql_test 1 {
+  SELECT count(*) FROM dolt_creds_ls();
+  SELECT dolt_creds_new() IS NOT NULL;
+  SELECT count(*), sum(active), typeof(active) FROM dolt_creds_ls();
+} {0 1 1 1 integer}
+set first [db one {SELECT kid FROM dolt_creds_ls() WHERE active=true}]
+do_execsql_test 2 {
+  SELECT dolt_creds_new() IS NOT NULL;
+  SELECT count(*), sum(active) FROM dolt_creds_ls();
+} {1 2 1}
+set second [db one {SELECT kid FROM dolt_creds_ls() WHERE active=false}]
+set pub [db one {SELECT public_key FROM dolt_creds_ls() WHERE active=false}]
+do_test 3 {
+  db eval {SELECT dolt_creds_use($pub)}
+  db one {SELECT kid FROM dolt_creds_ls() WHERE active=true}
+} $second
+
+do_test 4 {
+  sqlite3 other :memory:
+  db eval {SELECT dolt_creds_use($first,'session')}
+  list [db one {SELECT kid FROM dolt_creds_ls() WHERE active=true}] \
+       [other one {SELECT kid FROM dolt_creds_ls() WHERE active=true}]
+} [list $first $second]
+do_test 5 {
+  db close
+  sqlite3 db test.db
+  db one {SELECT kid FROM dolt_creds_ls() WHERE active=true}
+} $second
+
+do_catchsql_test 6 {SELECT dolt_creds_use('missing')} \
+    {1 {no such credential or invalid private key}}
+do_test 7 {
+  db one {SELECT kid FROM dolt_creds_ls() WHERE active=true}
+} $second
+
+do_test 8 {
+  set ::env(DOLTLITE_CREDS_KID) $first
+  set active [db one {SELECT kid FROM dolt_creds_ls() WHERE active=true}]
+  unset ::env(DOLTLITE_CREDS_KID)
+  set active
+} $first
+
+do_execsql_test 9 {
+  SELECT json_extract(dolt_creds_export($pub), '$.kty');
+  SELECT json_extract(dolt_creds_export($pub), '$.d') IS NULL;
+  SELECT dolt_creds_rm($pub);
+} {OKP 1 0}
+do_execsql_test 10 {SELECT sum(active) FROM dolt_creds_ls()} {0}
+do_test 11 {
+  set rc [catch {db eval {SELECT dolt_creds_check()}} message]
+  list $rc [string match {*selected credential is missing*} $message]
+} {1 1}
+other close
+file delete -force $::env(DOLTLITE_CREDS_DIR)
+unset -nocomplain ::env(DOLTLITE_CREDS_DIR) ::env(DOLTLITE_CREDS_KID)
+array set ::env $saved_creds
+array set ::env $saved_kid
+finish_test

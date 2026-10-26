@@ -1297,6 +1297,34 @@ static void handleRequest(
     return;
   }
 
+  if( strcmp(zMethod, "GET")==0 && strcmp(zEndpoint, "auth")==0 ){
+    char auth[1024];
+    char *kid = 0, *body;
+    if( !pSrv->authKeysDir ){
+      sendStructuredError(fd, 501, "Not Implemented", "unsupported", SQLITE_ERROR,
+                          "credential checks require server authentication");
+      return;
+    }
+    rc = parseRequestHeaders(zPrefix, nPrefix, nHeader,
+        zMethod, sizeof(zMethod), zPath, sizeof(zPath),
+        auth, sizeof(auth), &contentLength, &contentRc);
+    if( rc || doltliteCredsVerifyBearer(auth, pSrv->audience, pSrv->authKeysDir,
+                                       (long)time(NULL), &kid) ){
+      sqlite3_free(kid);
+      sendUnauthorized(fd);
+      return;
+    }
+    body = sqlite3_mprintf(
+        "{\"kid\":\"%s\",\"username\":null,\"email\":null,"
+        "\"can_read\":true,\"can_write\":true}", kid);
+    sqlite3_free(kid);
+    if( !body ){ sendSqliteError(fd, SQLITE_NOMEM); return; }
+    sendResponseEx(fd, 200, "OK", "application/json", (const u8*)body,
+                   (int)strlen(body));
+    sqlite3_free(body);
+    return;
+  }
+
   sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
   isHasChunksEndpoint = strcmp(zMethod, "POST")==0
                      && strcmp(zEndpoint, "has-chunks")==0;

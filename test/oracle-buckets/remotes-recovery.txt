@@ -1,3 +1,4 @@
+vc_oracle_creds_test.sh
 vc_oracle_error_recovery_test.sh
 vc_oracle_fetch_pull_convergence_test.sh
 vc_oracle_model_test.sh

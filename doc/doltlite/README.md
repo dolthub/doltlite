@@ -48,7 +48,7 @@ the forms each surface accepts are in [refs.md](refs.md).
 - [dolt_docs.md](dolt_docs.md) — `dolt_docs`
 - [dolt_tests.md](dolt_tests.md) — `dolt_tests`, `dolt_test_run`
 - [dolt_schemas.md](dolt_schemas.md) — `dolt_schemas` and the versioned catalog
-- [dolt_creds.md](dolt_creds.md) — `dolt_creds_new`, `dolt_creds`
+- [dolt_creds.md](dolt_creds.md) — `dolt_creds_new`, `dolt_creds_ls`, `dolt_creds_use`, `dolt_creds_bind`, `dolt_creds_import`, `dolt_creds_export`, `dolt_creds_rm`, `dolt_creds_check`, `dolt_creds`
 - [dolt_version.md](dolt_version.md) — `dolt_version`, `doltlite_engine`
 
 ## Cross-cutting

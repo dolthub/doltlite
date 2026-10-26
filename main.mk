@@ -2869,6 +2869,7 @@ DOLTLITE_C_TESTS = \
 	remote_push_lock_busy_test$(T.exe) \
 	fetch_tracking_order_test$(T.exe) \
 	http_conn_lost_test$(T.exe) \
+	creds_connection_test$(T.exe) \
 	file_remote_read_lock_test$(T.exe) \
 	fetch_download_lock_test$(T.exe) \
 	push_tracking_precondition_test$(T.exe) \
@@ -2921,6 +2922,10 @@ remote_push_lock_busy_test$(T.exe): $(TOP)/test/remote_push_lock_busy_test.c lib
 
 fetch_tracking_order_test$(T.exe): $(TOP)/test/fetch_tracking_order_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/fetch_tracking_order_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+creds_connection_test$(T.exe): $(TOP)/test/creds_connection_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/creds_connection_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 http_conn_lost_test$(T.exe): $(TOP)/test/http_conn_lost_test.c libdoltlite$(T.lib)

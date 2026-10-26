@@ -226,6 +226,45 @@ int main(int argc, char **argv) {
   }
 
   {
+    unsigned char privateKey[64];
+    char json[512];
+    char *x, *d, *kid;
+    DoltliteCreds *imported = NULL;
+    memcpy(privateKey, jwkSeed, 32);
+    memcpy(privateKey+32, pub, 32);
+    x = doltliteBase64UrlEncode(privateKey, 64);
+    d = doltliteBase64UrlEncode(pub, 32);
+    check_bool("allocate Dolt JWK", x && d);
+    if (x && d) {
+      snprintf(json, sizeof(json),
+          "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"%s\",\"x\":\"%s\"}", d, x);
+      check_bool("Dolt private JWK imports", doltliteCredsFromJwk(json, &imported)==0);
+      kid = imported ? doltliteCredsKid(imported) : NULL;
+      check_str("Dolt import preserves credential identity", kid, KID);
+      sqlite3_free(kid);
+      doltliteCredsFree(imported);
+      imported = NULL;
+    }
+    sqlite3_free(x);
+    privateKey[63] ^= 1;
+    x = doltliteBase64UrlEncode(privateKey, 64);
+    if (x && d) {
+      snprintf(json, sizeof(json),
+          "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"%s\",\"x\":\"%s\"}", d, x);
+      check_bool("Dolt mismatched private key rejected",
+                 doltliteCredsFromJwk(json, &imported)!=0);
+      doltliteCredsFree(imported);
+      imported = NULL;
+    }
+    snprintf(json, sizeof(json),
+        "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"%s\",\"x\":\"%s\"}", JWK_D, JWK_D);
+    check_bool("mismatched standard JWK rejected", doltliteCredsFromJwk(json, &imported)!=0);
+    doltliteCredsFree(imported);
+    sqlite3_free(x);
+    sqlite3_free(d);
+  }
+
+  {
     char *json = doltliteCredsToPublicJwk(c);
     check_str("public JWK omits private seed", json,
               "{\"kty\":\"OKP\",\"crv\":\"Ed25519\","

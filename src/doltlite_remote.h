@@ -111,6 +111,8 @@ DoltliteRemote *doltliteRemoteOpenReadOnly(sqlite3_vfs *pVfs,
                                            const char *zUrl);
 
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl);
+void doltliteHttpRemoteSetConnection(DoltliteRemote*, sqlite3*);
+int doltliteHttpRemoteCheckCreds(sqlite3*, const char*, const char*, char**, char**);
 
 int doltliteHttpParseResponseForTest(const u8 *pRaw, int nRaw, int nHash);
 

@@ -20,6 +20,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/file.h> /* amalgamator: keep */
 #include <unistd.h>
 #endif
 
@@ -530,21 +531,35 @@ static char *decodeSegZ(const char *seg, size_t seglen) {
 
 int doltliteCredsFromJwk(const char *json, DoltliteCreds **out) {
   char *dstr = jsonFindString(json, "d");
-  unsigned char *seed = NULL;
-  size_t seedlen = 0;
+  char *xstr = jsonFindString(json, "x");
+  char *kty = jsonFindString(json, "kty");
+  char *crv = jsonFindString(json, "crv");
+  unsigned char *d = NULL, *x = NULL;
+  size_t nd = 0, nx = 0;
+  DoltliteCreds *c = NULL;
   int rc = 1;
 
-  if (!dstr) goto done;
-  if (doltliteBase64UrlDecode(dstr, &seed, &seedlen)) goto done;
-  if (seedlen != DOLTLITE_SEED_LEN) goto done;
-  rc = doltliteCredsFromSeed(seed, out);
+  *out = NULL;
+  if (!dstr || !xstr || !kty || !crv || strcmp(kty, "OKP") ||
+      strcmp(crv, "Ed25519")) goto done;
+  if (doltliteBase64UrlDecode(dstr, &d, &nd) ||
+      doltliteBase64UrlDecode(xstr, &x, &nx)) goto done;
+  if (nd != 32 || (nx != 32 && nx != 64)) goto done;
+  if (doltliteCredsFromSeed(nx == 64 ? x : d, &c)) goto done;
+  if (memcmp(c->pub, nx == 64 ? d : x, 32) ||
+      (nx == 64 && memcmp(c->pub, x + 32, 32))) goto done;
+  *out = c;
+  c = NULL;
+  rc = 0;
 
 done:
-  if (seed) {
-    memset(seed, 0, seedlen);
-    sqlite3_free(seed);
-  }
+  doltliteCredsFree(c);
+  if (d) { memset(d, 0, nd); sqlite3_free(d); }
+  if (x) { memset(x, 0, nx); sqlite3_free(x); }
   sqlite3_free(dstr);
+  sqlite3_free(xstr);
+  sqlite3_free(kty);
+  sqlite3_free(crv);
   return rc;
 }
 
@@ -602,6 +617,8 @@ static int mkdirp(const char *path) {
   sqlite3_free(tmp);
   return 0;
 }
+
+static char *credsResolveKid(const char*);
 
 static int credsKidValid(const char *kid) {
   const size_t nKid = (DOLTLITE_KID_RAW_LEN * 8 + 4) / 5;
@@ -713,6 +730,7 @@ int doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out) {
   long sz;
   int rc = 1;
 
+  *out = NULL;
   if (!dir) {
     owned = doltliteCredsDir();
     dir = owned;
@@ -733,6 +751,15 @@ int doltliteCredsLoad(const char *dir, const char *kid, DoltliteCreds **out) {
   json[sz] = '\0';
 
   rc = doltliteCredsFromJwk(json, out);
+  if (!rc) {
+    char *actual = doltliteCredsKid(*out);
+    if (!actual || strcmp(actual, kid)) {
+      doltliteCredsFree(*out);
+      *out = NULL;
+      rc = 1;
+    }
+    sqlite3_free(actual);
+  }
 
 done:
   if (f) fclose(f);
@@ -763,7 +790,12 @@ static int dirOpen(DirIter *it, const char *dir) {
   snprintf(pat, n, "%s\\*", dir);
   it->h = FindFirstFileA(pat, &it->fd);
   sqlite3_free(pat);
-  if (it->h == INVALID_HANDLE_VALUE) return 1;
+  if (it->h == INVALID_HANDLE_VALUE) {
+    DWORD err = GetLastError();
+    errno = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND
+          ? ENOENT : EACCES;
+    return 1;
+  }
   it->first = 1;
   return 0;
 #else
@@ -794,48 +826,10 @@ static void dirClose(DirIter *it) {
 }
 
 int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out) {
-  char *owned = NULL;
-  DirIter it;
-  const char *name;
-  char *kid = NULL;
-  int count = 0, rc = 1;
-
-  if (!dir) {
-    owned = doltliteCredsDir();
-    dir = owned;
-  }
-  if (!dir) return 1;
-  if (dirOpen(&it, dir)) {
-    sqlite3_free(owned);
-    return 1;
-  }
-  while ((name = dirNext(&it)) != NULL) {
-    size_t n = strlen(name);
-    if (n > 4 && strcmp(name + n - 4, ".jwk") == 0) {
-      char *candidate = (char *)sqlite3_malloc(n - 4 + 1);
-      if (!candidate) continue;
-      memcpy(candidate, name, n - 4);
-      candidate[n - 4] = '\0';
-      if (!credsKidValid(candidate)) {
-        sqlite3_free(candidate);
-        continue;
-      }
-      count++;
-      if (count == 1) {
-        kid = candidate;
-      } else {
-        sqlite3_free(candidate);
-      }
-    }
-  }
-  dirClose(&it);
-
-  if (count == 1 && kid) {
-    rc = doltliteCredsLoad(dir, kid, out);
-  }
-  sqlite3_free(kid);
-  sqlite3_free(owned);
-  return rc;
+  char *error = NULL;
+  int rc = doltliteCredsResolve(dir, NULL, NULL, out, NULL, &error);
+  sqlite3_free(error);
+  return rc == DOLTLITE_CREDS_SELECTED ? 0 : 1;
 }
 
 int doltliteCredsList(const char *dir, char ***out, int *n) {
@@ -854,8 +848,9 @@ int doltliteCredsList(const char *dir, char ***out, int *n) {
   if (!dir) return 1;
 
   if (dirOpen(&it, dir)) {
+    int rc = errno == ENOENT ? 0 : 1;
     sqlite3_free(owned);
-    return 0;
+    return rc;
   }
   while ((name = dirNext(&it)) != NULL) {
     size_t ln = strlen(name);
@@ -903,14 +898,15 @@ void doltliteCredsFreeList(char **list, int n) {
 
 int doltliteCredsRemove(const char *dir, const char *kid) {
   char *owned = NULL;
-  char *path;
+  char *path, *canonical = credsResolveKid(kid);
   int rc;
   if (!dir) {
     owned = doltliteCredsDir();
     dir = owned;
   }
-  if (!dir) return 1;
-  path = credsFilePath(dir, kid);
+  if (!dir) { sqlite3_free(canonical); return 1; }
+  path = canonical ? credsFilePath(dir, canonical) : NULL;
+  sqlite3_free(canonical);
   if (!path) {
     sqlite3_free(owned);
     return 1;
@@ -1158,5 +1154,342 @@ done:
   sqlite3_free(expectSub);
   sqlite3_free(sigStr);
   sqlite3_free(sig);
+  return rc;
+}
+
+typedef struct CredsSetting CredsSetting;
+struct CredsSetting {
+  char *key;
+  char *value;
+  CredsSetting *next;
+};
+
+static void credsSettingsFree(CredsSetting *p) {
+  while (p) {
+    CredsSetting *next = p->next;
+    sqlite3_free(p->key);
+    sqlite3_free(p->value);
+    sqlite3_free(p);
+    p = next;
+  }
+}
+
+static int credsSettingsRead(const char *path, CredsSetting **out) {
+  FILE *f = fopen(path, "rb");
+  char line[160];
+  CredsSetting **tail = out;
+  *out = NULL;
+  if (!f) return errno == ENOENT ? 0 : 1;
+  while (fgets(line, sizeof(line), f)) {
+    char *eq = strchr(line, '=');
+    size_t n = strlen(line);
+    CredsSetting *p, *prev;
+    if (!n || line[n-1] != '\n' || !eq) goto bad;
+    line[n-1] = 0;
+    *eq++ = 0;
+    if (strcmp(line, "user.creds") &&
+        (strncmp(line, "remote.", 7) || !credsKidValid(line + 7))) goto bad;
+    if (strcmp(eq, "anonymous") && !credsKidValid(eq)) goto bad;
+    for (prev = *out; prev; prev = prev->next) {
+      if (!strcmp(prev->key, line)) goto bad;
+    }
+    p = sqlite3_malloc(sizeof(*p));
+    if (!p) goto bad;
+    memset(p, 0, sizeof(*p));
+    *tail = p;
+    tail = &p->next;
+    p->key = dlStrDup(line);
+    p->value = dlStrDup(eq);
+    if (!p->key || !p->value) goto bad;
+  }
+  if (ferror(f)) goto bad;
+  fclose(f);
+  return 0;
+bad:
+  fclose(f);
+  credsSettingsFree(*out);
+  *out = NULL;
+  return 1;
+}
+
+static char *credsConfigPath(const char *dir, const char *suffix) {
+  size_t n = strlen(dir) + strlen(suffix) + 9;
+  char *path = sqlite3_malloc(n);
+  if (path) snprintf(path, n, "%s/config%s", dir, suffix);
+  return path;
+}
+
+int doltliteCredsConfigSet(
+  const char *dir, const char *key, const char *value, int onlyIfMissing
+) {
+  char *owned = NULL, *path = NULL, *lockPath = NULL, *tmp = NULL;
+  CredsSetting *settings = NULL, *p;
+  FILE *f = NULL;
+  int rc = 1;
+#ifdef _WIN32
+  HANDLE lock = INVALID_HANDLE_VALUE;
+  OVERLAPPED ov = {0};
+#else
+  int lock = -1;
+#endif
+  if (strcmp(key, "user.creds") &&
+      (strncmp(key, "remote.", 7) || !credsKidValid(key+7))) return 1;
+  if (value && strcmp(value, "anonymous") && !credsKidValid(value)) return 1;
+  if (!dir) dir = owned = doltliteCredsDir();
+  if (!dir || mkdirp(dir)) goto done;
+  path = credsConfigPath(dir, "");
+  tmp = credsConfigPath(dir, ".tmp");
+  lockPath = credsConfigPath(dir, ".lock");
+  if (!path || !tmp || !lockPath) goto done;
+#ifdef _WIN32
+  lock = CreateFileA(lockPath, GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+  if (lock == INVALID_HANDLE_VALUE ||
+      !LockFileEx(lock, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &ov)) goto done;
+#else
+  lock = open(lockPath, O_RDWR | O_CREAT, 0600);
+  if (lock < 0) goto done;
+  while (flock(lock, LOCK_EX)) {
+    if (errno != EINTR) goto done;
+  }
+#endif
+  if (credsSettingsRead(path, &settings)) goto done;
+  for (p = settings; p; p = p->next) {
+    if (!strcmp(p->key, key)) break;
+  }
+  if (p && onlyIfMissing) { rc = 0; goto done; }
+  if (!p) {
+    p = sqlite3_malloc(sizeof(*p));
+    if (!p) goto done;
+    memset(p, 0, sizeof(*p));
+    p->next = settings;
+    settings = p;
+    p->key = dlStrDup(key);
+    if (!p->key) goto done;
+  }
+  sqlite3_free(p->value);
+  p->value = value ? dlStrDup(value) : NULL;
+  if (value && !p->value) goto done;
+#ifdef _WIN32
+  f = fopen(tmp, "wb");
+#else
+  {
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) goto done;
+    fchmod(fd, 0600);
+    f = fdopen(fd, "wb");
+    if (!f) close(fd);
+  }
+#endif
+  if (!f) goto done;
+  for (p = settings; p; p = p->next) {
+    if (p->value && fprintf(f, "%s=%s\n", p->key, p->value) < 0) goto done;
+  }
+  if (fflush(f)) goto done;
+#ifndef _WIN32
+  if (fsync(fileno(f))) goto done;
+#endif
+  if (fclose(f)) { f = NULL; goto done; }
+  f = NULL;
+#ifdef _WIN32
+  if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    goto done;
+#else
+  if (rename(tmp, path)) goto done;
+#endif
+  rc = 0;
+done:
+  if (f) fclose(f);
+#ifdef _WIN32
+  if (lock != INVALID_HANDLE_VALUE) {
+    UnlockFileEx(lock, 0, 1, 0, &ov);
+    CloseHandle(lock);
+  }
+#else
+  if (lock >= 0) close(lock);
+#endif
+  credsSettingsFree(settings);
+  sqlite3_free(owned);
+  sqlite3_free(path);
+  sqlite3_free(tmp);
+  sqlite3_free(lockPath);
+  return rc;
+}
+
+char *doltliteCredsRemoteKey(const char *url) {
+  char *canonical = dlStrDup(url);
+  char *end, *p, *key, *hash;
+  unsigned char digest[DOLTLITE_KID_RAW_LEN];
+  if (!canonical) return NULL;
+  end = strstr(canonical, "://");
+  if (!end) { sqlite3_free(canonical); return NULL; }
+  end = strchr(end + 3, '/');
+  if (!end) end = canonical + strlen(canonical);
+  for (p = canonical; p < end; p++) {
+    if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
+  }
+  if (end-canonical >= 4 && !strncmp(canonical, "https://", 8) &&
+      !memcmp(end-4, ":443", 4)) memmove(end-4, end, strlen(end)+1);
+  p = canonical + strlen(canonical);
+  while (p > canonical && p[-1] == '/') *--p = 0;
+  doltliteSha512_224((const unsigned char*)canonical, strlen(canonical), digest);
+  sqlite3_free(canonical);
+  hash = doltliteBase32Encode(digest, sizeof(digest));
+  if (!hash) return NULL;
+  key = sqlite3_malloc(strlen(hash)+8);
+  if (key) sprintf(key, "remote.%s", hash);
+  sqlite3_free(hash);
+  return key;
+}
+
+static char *credsResolveKid(const char *name) {
+  unsigned char pub[32], digest[DOLTLITE_KID_RAW_LEN];
+  uint32_t bits = 0;
+  int nbit = 0, n = 0;
+  size_t i;
+  if (!name) return NULL;
+  if (credsKidValid(name)) return dlStrDup(name);
+  if (strlen(name) != 52) return NULL;
+  for (i = 0; i < 52; i++) {
+    const char *p = strchr(B32_ALPHABET, name[i]);
+    if (!p) return NULL;
+    bits = (bits << 5) | (uint32_t)(p - B32_ALPHABET);
+    nbit += 5;
+    if (nbit >= 8) {
+      nbit -= 8;
+      if (n >= 32) return NULL;
+      pub[n++] = (unsigned char)(bits >> nbit);
+    }
+  }
+  if (n != 32 || (bits & 15)) return NULL;
+  doltliteSha512_224(pub, sizeof(pub), digest);
+  return doltliteBase32Encode(digest, sizeof(digest));
+}
+
+int doltliteCredsLoadNamed(const char *dir, const char *name, DoltliteCreds **out) {
+  char *kid = credsResolveKid(name);
+  int rc;
+  *out = NULL;
+  rc = kid ? doltliteCredsLoad(dir, kid, out) : 1;
+  sqlite3_free(kid);
+  return rc;
+}
+
+int doltliteCredsImport(const char *path, DoltliteCreds **out) {
+  char json[4097];
+  FILE *f = fopen(path, "rb");
+  size_t n;
+  int rc;
+  *out = NULL;
+  if (!f) return 1;
+  n = fread(json, 1, sizeof(json)-1, f);
+  rc = ferror(f) || !feof(f) || memchr(json, 0, n) != NULL;
+  fclose(f);
+  if (rc) return 1;
+  json[n] = 0;
+  rc = doltliteCredsFromJwk(json, out);
+  memset(json, 0, sizeof(json));
+  return rc;
+}
+
+int doltliteCredsResolve(
+  const char *dir, const char *override, const char *url,
+  DoltliteCreds **out, char **source, char **error
+) {
+  char *selected = NULL, *key = NULL;
+  CredsSetting *settings = NULL, *setting;
+  char **kids = NULL;
+  const char *why = NULL;
+  int n = 0, rc = DOLTLITE_CREDS_ERROR;
+  *out = NULL;
+  *error = NULL;
+  if (source) *source = NULL;
+  if (override && *override) {
+    selected = dlStrDup(override);
+    why = "connection";
+    if (!selected) goto oom;
+  } else {
+    const char *env = getenv("DOLTLITE_CREDS_KID");
+    if (env && *env) {
+      selected = dlStrDup(env);
+      why = "DOLTLITE_CREDS_KID";
+      if (!selected) goto oom;
+    }
+  }
+  if (!selected) {
+    char *ownedDir = dir ? NULL : doltliteCredsDir();
+    char *path = dir || ownedDir ? credsConfigPath(dir ? dir : ownedDir, "") : NULL;
+    int bad;
+    if (!path) { sqlite3_free(ownedDir); goto oom; }
+    bad = credsSettingsRead(path, &settings);
+    sqlite3_free(path);
+    sqlite3_free(ownedDir);
+    if (bad) goto badconfig;
+    if (url) {
+      key = doltliteCredsRemoteKey(url);
+      if (!key) goto oom;
+      for (setting = settings; setting; setting = setting->next) {
+        if (!strcmp(setting->key, key)) {
+          selected = dlStrDup(setting->value);
+          if (!selected) goto oom;
+          why = "remote";
+          break;
+        }
+      }
+    }
+    if (!selected) {
+      for (setting = settings; setting; setting = setting->next) {
+        if (!strcmp(setting->key, "user.creds")) {
+          selected = dlStrDup(setting->value);
+          if (!selected) goto oom;
+          why = "default";
+          break;
+        }
+      }
+    }
+  }
+  if (!selected) {
+    if (doltliteCredsList(dir, &kids, &n)) {
+      *error = dlStrDup("cannot read credential directory");
+      goto done;
+    }
+    if (n > 1) {
+      *error = dlStrDup("multiple credentials found; select one with dolt_creds_use()");
+      goto done;
+    }
+    if (!n) { rc = DOLTLITE_CREDS_NONE; goto done; }
+    selected = dlStrDup(kids[0]);
+    why = "single key";
+    if (!selected) goto oom;
+  }
+  if (!strcmp(selected, "anonymous")) {
+    rc = DOLTLITE_CREDS_ANONYMOUS;
+  } else if (doltliteCredsLoadNamed(dir, selected, out)) {
+    char message[256];
+    snprintf(message, sizeof(message),
+        "%s selected credential is missing, unreadable or invalid: %.52s; use dolt_creds_ls() and dolt_creds_use()",
+        why, selected);
+    *error = dlStrDup(message);
+  } else {
+    rc = DOLTLITE_CREDS_SELECTED;
+  }
+  if (source) {
+    *source = dlStrDup(why);
+    if (!*source) goto oom;
+  }
+  goto done;
+badconfig:
+  *error = dlStrDup("cannot read credential configuration");
+  goto done;
+oom:
+  sqlite3_free(*error);
+  *error = dlStrDup("out of memory resolving credentials");
+  rc = DOLTLITE_CREDS_ERROR;
+done:
+  credsSettingsFree(settings);
+  sqlite3_free(selected);
+  sqlite3_free(key);
+  doltliteCredsFreeList(kids, n);
   return rc;
 }
