@@ -608,7 +608,7 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 	if s.closed {
 		return nil, driver.ErrBadConn
 	}
-	var cols []string
+	var cols, types []string
 	var bindErr error
 	if err := s.c.run(func() {
 		if bindErr = s.bind(args); bindErr != nil {
@@ -616,8 +616,10 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 		}
 		n := int(C.sqlite3_column_count(s.st))
 		cols = make([]string, n)
+		types = make([]string, n)
 		for i := 0; i < n; i++ {
 			cols[i] = C.GoString(C.sqlite3_column_name(s.st, C.int(i)))
+			types[i] = strings.ToUpper(C.GoString(C.sqlite3_column_decltype(s.st, C.int(i))))
 		}
 	}); err != nil {
 		return nil, driver.ErrBadConn
@@ -625,7 +627,64 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 	if bindErr != nil {
 		return nil, bindErr
 	}
-	return &rows{s: s, cols: cols}, nil
+	return &rows{s: s, cols: cols, types: types}, nil
+}
+
+// ColumnMetadata describes one result column of a query. Database, Table and
+// Column name the table column whose values the result column returns, and
+// DeclType is that column's declared type as written in CREATE TABLE. All four
+// are empty for a column computed from an expression.
+type ColumnMetadata struct {
+	Name     string
+	DeclType string
+	Database string
+	Table    string
+	Column   string
+}
+
+// ColumnDescriber is implemented by this driver's connections. Reach it with
+// sql.Conn.Raw:
+//
+//	cols, err := raw.(doltlite.ColumnDescriber).DescribeColumns(query)
+type ColumnDescriber interface {
+	DescribeColumns(query string) ([]ColumnMetadata, error)
+}
+
+// DescribeColumns compiles the first statement in query, without running it,
+// and describes its result columns. A statement that returns no rows has none.
+func (c *conn) DescribeColumns(query string) ([]ColumnMetadata, error) {
+	s, _, err := c.prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, errNoStatement
+	}
+	defer s.Close()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if s.closed {
+		return nil, driver.ErrBadConn
+	}
+	var cols []ColumnMetadata
+	if err := c.run(func() {
+		n := int(C.sqlite3_column_count(s.st))
+		cols = make([]ColumnMetadata, n)
+		for i := 0; i < n; i++ {
+			idx := C.int(i)
+			cols[i] = ColumnMetadata{
+				Name:     C.GoString(C.sqlite3_column_name(s.st, idx)),
+				DeclType: C.GoString(C.sqlite3_column_decltype(s.st, idx)),
+				Database: C.GoString(C.sqlite3_column_database_name(s.st, idx)),
+				Table:    C.GoString(C.sqlite3_column_table_name(s.st, idx)),
+				Column:   C.GoString(C.sqlite3_column_origin_name(s.st, idx)),
+			}
+		}
+	}); err != nil {
+		return nil, driver.ErrBadConn
+	}
+	return cols, nil
 }
 
 type result struct {
@@ -639,10 +698,15 @@ func (r result) RowsAffected() (int64, error) { return r.changes, nil }
 type rows struct {
 	s      *stmt
 	cols   []string
+	types  []string
 	closed bool
 }
 
 func (r *rows) Columns() []string { return r.cols }
+
+// ColumnTypeDatabaseTypeName returns the column's declared type, upper-cased,
+// or "" for a column computed from an expression.
+func (r *rows) ColumnTypeDatabaseTypeName(i int) string { return r.types[i] }
 
 func (r *rows) Close() error {
 	if r.closed {

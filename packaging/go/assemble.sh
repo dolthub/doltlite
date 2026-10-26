@@ -37,7 +37,10 @@ done
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-cp "$PKG_DIR/doltlite.go" "$OUT_DIR/doltlite.go"
+for f in "$PKG_DIR"/*.go; do
+  case "$f" in *_test.go) continue ;; esac
+  cp "$f" "$OUT_DIR/$(basename "$f")"
+done
 sed "s/@DOLTLITE_VERSION@/$VERSION/g" \
   "$PKG_DIR/doltlite_build.go.in" > "$OUT_DIR/doltlite_build.go"
 cp "$PKG_DIR/go.mod"      "$OUT_DIR/go.mod"

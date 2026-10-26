@@ -206,6 +206,7 @@ func main() {
 	// even concurrent.
 	concurrentTx(dbPath)
 	closedConnCleanup(dbPath)
+	columnMetadata(db)
 
 	if failures == 0 {
 		fmt.Println("smoke-test: all checks passed")
@@ -365,4 +366,65 @@ func closedConnCleanup(dbPath string) {
 		failures++
 	}
 	rws.Close()
+}
+
+func columnMetadata(db *sql.DB) {
+	_, err := db.Exec(`CREATE TABLE meta_a(id INTEGER PRIMARY KEY, name varchar(20), data);
+		CREATE TABLE meta_b(code TEXT PRIMARY KEY, a_id INTEGER)`)
+	must(err)
+
+	const query = `SELECT a.id, a.name AS label, a.data, b.code, a.id + 1, count(*) OVER ()
+		FROM meta_a AS a JOIN meta_b b ON b.a_id = a.id`
+
+	rows, err := db.Query(query)
+	must(err)
+	types, err := rows.ColumnTypes()
+	must(err)
+	names := make([]string, len(types))
+	for i, t := range types {
+		names[i] = t.DatabaseTypeName()
+	}
+	rows.Close()
+	check("column database type names", fmt.Sprintf("%q", names),
+		`["INTEGER" "VARCHAR(20)" "" "TEXT" "" ""]`)
+
+	conn, err := db.Conn(context.Background())
+	must(err)
+	defer conn.Close()
+	var cols []doltlite.ColumnMetadata
+	must(conn.Raw(func(raw any) error {
+		var err error
+		cols, err = raw.(doltlite.ColumnDescriber).DescribeColumns(query)
+		return err
+	}))
+	check("described column count", len(cols), 6)
+	check("plain column metadata", fmt.Sprintf("%+v", cols[0]),
+		"{Name:id DeclType:INTEGER Database:main Table:meta_a Column:id}")
+	check("aliased column metadata", fmt.Sprintf("%+v", cols[1]),
+		"{Name:label DeclType:varchar(20) Database:main Table:meta_a Column:name}")
+	check("untyped column metadata", fmt.Sprintf("%+v", cols[2]),
+		"{Name:data DeclType: Database:main Table:meta_a Column:data}")
+	check("joined column metadata", fmt.Sprintf("%+v", cols[3]),
+		"{Name:code DeclType:TEXT Database:main Table:meta_b Column:code}")
+	check("expression column metadata", fmt.Sprintf("%+v", cols[4]),
+		"{Name:a.id + 1 DeclType: Database: Table: Column:}")
+
+	must(conn.Raw(func(raw any) error {
+		var err error
+		cols, err = raw.(doltlite.ColumnDescriber).DescribeColumns(
+			`SELECT * FROM (SELECT code AS c FROM meta_b); SELECT 1, 2`)
+		return err
+	}))
+	check("describes only the first statement, through a subquery",
+		fmt.Sprintf("%+v", cols), "[{Name:c DeclType:TEXT Database:main Table:meta_b Column:code}]")
+
+	err = conn.Raw(func(raw any) error {
+		_, err := raw.(doltlite.ColumnDescriber).DescribeColumns(`SELECT * FROM meta_missing`)
+		return err
+	})
+	check("describing bad SQL errors", err != nil, true)
+
+	var n int
+	must(conn.QueryRowContext(context.Background(), `SELECT count(*) FROM meta_a`).Scan(&n))
+	check("describing leaves the connection usable", n, 0)
 }
