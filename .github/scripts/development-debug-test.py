@@ -87,8 +87,8 @@ pathlib.Path(args[args.index('-o') + 1]).write_text('output')
     check('injected linker failure' in result.stderr, 'linker failure diagnostic lost')
     check(not (root / 'testfixture').exists(), 'failed link created a binary')
 
-workflow = (repo / '.github/workflows/ci-build.yml').read_text()
-job = workflow.split('  development-builds:\n', 1)[1].split('  assert-build:\n', 1)[0]
+workflow = (repo / '.github/workflows/compile-checks.yml').read_text()
+job = workflow.split('  development-builds:\n', 1)[1]
 check("if: matrix.configuration == 'All-Debug'" in job, 'All-Debug must use the cached build')
 check(job.count("if: matrix.configuration != 'All-Debug'") == 3,
       'All-O0 must retain its install, configure and compile steps')

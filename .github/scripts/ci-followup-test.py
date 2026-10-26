@@ -203,7 +203,7 @@ def header_archive():
             assert run(['bash', '-e', '-c', command], cwd=root).returncode != 0
             (root / 'build' / header).write_text(header)
             checks += 1
-        workflow = (repo / '.github/workflows/ci-build.yml').read_text().split('  no-dead-code:')[1]
+        workflow = (repo / '.github/workflows/ubuntu-test.yml').read_text().split('  no-dead-code:')[1]
         assert 'name: checked-headers\n' in workflow and 'tar -xzf checked-headers.tar.gz' in workflow
         checks += 1
 

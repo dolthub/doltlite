@@ -18,3 +18,44 @@ jobs:
 
   benchmark:
     uses: ./.github/workflows/benchmark.yml
+
+  no-dead-code:
+    name: no-dead-code
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: No orphaned test suites
+      run: bash test/lint_orphaned_suites.sh
+
+    - name: Orphaned-suite guard self-test
+      run: bash test/lint_orphaned_suites_test.sh
+
+    - name: Suite completion guard self-test
+      run: bash test/run_guarded_suite_test.sh
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
+
+    - name: Download generated headers
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-headers
+
+    - name: Extract generated headers
+      run: tar -xzf checked-headers.tar.gz
+
+    - name: Dead-code gate
+      run: bash test/dead_code_check.sh
+
+    - name: Dead-code gate self-test
+      run: bash test/dead_code_check_selftest.sh
+
+    - name: Conflict cancellation tests
+      run: node --test .github/scripts/cancel-conflicted-pr-runs.test.js
+
+    - name: OMIT_INCRBLOB orig adapter link
+      run: bash test/omit_incrblob_orig_adapter_test.sh

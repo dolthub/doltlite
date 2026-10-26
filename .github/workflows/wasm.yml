@@ -1,0 +1,145 @@
+name: Wasm
+
+on:
+  workflow_call:
+
+jobs:
+  wasm-build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EMSDK_VERSION: 3.1.74
+      EMCC_CFLAGS: -Wno-limited-postlink-optimizations
+      WABT_VERSION: 1.0.36
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache Emscripten SDK
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/emsdk
+        key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+
+    - name: Install Emscripten SDK
+      run: |
+        EMSDK_DIR="${RUNNER_TOOL_CACHE}/emsdk"
+        if [ ! -d "$EMSDK_DIR/.git" ]; then
+          rm -rf "$EMSDK_DIR"
+          git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
+        fi
+        cd "$EMSDK_DIR"
+        git fetch --tags --quiet
+        ./emsdk install "$EMSDK_VERSION"
+        ./emsdk activate "$EMSDK_VERSION"
+        echo "EMSDK=$EMSDK_DIR" >> "$GITHUB_ENV"
+
+    - name: Cache WABT
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/wabt-${{ env.WABT_VERSION }}
+        key: wabt-${{ runner.os }}-${{ env.WABT_VERSION }}
+
+    - name: Install WABT
+      run: |
+        WABT_DIR="${RUNNER_TOOL_CACHE}/wabt-${WABT_VERSION}"
+        if [ ! -x "$WABT_DIR/bin/wasm-strip" ]; then
+          rm -rf "$WABT_DIR"
+          mkdir -p "$WABT_DIR"
+          curl -fsSL "https://github.com/WebAssembly/wabt/releases/download/${WABT_VERSION}/wabt-${WABT_VERSION}-ubuntu-20.04.tar.gz" \
+            | tar -xz --strip-components=1 -C "$WABT_DIR"
+        fi
+        echo "$WABT_DIR/bin" >> "$GITHUB_PATH"
+
+    - name: Build
+      run: |
+        source "$EMSDK/emsdk_env.sh"
+        set -o pipefail
+        {
+          ./configure
+          make sqlite3.c sqlite3.h sqlite3ext.h
+          bash test/amalgamation_wasm_compile_test.sh sqlite3.c
+          mkdir -p build
+          cd build
+          ../configure
+          make doltlite doltlite-remotesrv
+          cd ..
+          make -C ext/wasm fiddle npm
+          bash test/wasm_incremental_build_test.sh
+          mkdir -p ci-wasm-runtime
+          cp -a ext/wasm/jswasm/. ci-wasm-runtime/
+          make -C ext/wasm dist
+          rm -rf ext/wasm/jswasm
+          mv ci-wasm-runtime ext/wasm/jswasm
+        } 2>&1 | tee wasm-build.log
+        if grep -E "warning:" wasm-build.log; then
+          echo "::error::compiler warnings in wasm build"
+          exit 1
+        fi
+
+    - name: Package
+      run: |
+        bash .github/scripts/package-ci-build.sh ci-wasm-build.tar.gz \
+          build/doltlite \
+          build/doltlite-remotesrv \
+          ext/wasm/jswasm \
+          ext/wasm/sqlite-wasm-*.zip
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-wasm-build
+        path: ci-wasm-build.tar.gz
+        compression-level: 0
+        retention-days: 1
+
+  wasm-test:
+    name: test
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download wasm build
+      uses: actions/download-artifact@v4
+      with:
+        name: ci-wasm-build
+
+    - name: Extract wasm build
+      run: tar -xzf ci-wasm-build.tar.gz
+
+    - name: Smoke test DoltLite wasm runtime
+      run: |
+        node ext/wasm/test-doltlite-smoke.mjs
+
+    - name: End-to-end test DoltLite wasm writes
+      run: |
+        node ext/wasm/test-doltlite-write-e2e.mjs
+
+    - name: Roundtrip exported wasm DB into native DoltLite
+      run: |
+        node ext/wasm/test-doltlite-export-roundtrip.mjs
+
+    - name: Test DoltLite wasm file:// remotes
+      run: |
+        node ext/wasm/test-doltlite-remote.mjs
+
+    - name: Test DoltLite wasm http:// remotes
+      run: |
+        node ext/wasm/test-doltlite-http-remote.mjs
+
+    - name: Smoke test the @dolthub/doltlite-wasm npm package
+      run: |
+        chmod +x packaging/npm/assemble.sh packaging/npm/test-package.sh
+        bash packaging/npm/test-package.sh
+
+    - name: Upload wasm artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: wasm-build
+        path: |
+          ext/wasm/jswasm/*
+          ext/wasm/sqlite-wasm-*.zip

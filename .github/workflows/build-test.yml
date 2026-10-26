@@ -4,54 +4,6 @@ on:
   workflow_call:
 
 jobs:
-  wasm:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Download wasm build
-      uses: actions/download-artifact@v4
-      with:
-        name: ci-wasm-build
-
-    - name: Extract wasm build
-      run: tar -xzf ci-wasm-build.tar.gz
-
-    - name: Smoke test DoltLite wasm runtime
-      run: |
-        node ext/wasm/test-doltlite-smoke.mjs
-
-    - name: End-to-end test DoltLite wasm writes
-      run: |
-        node ext/wasm/test-doltlite-write-e2e.mjs
-
-    - name: Roundtrip exported wasm DB into native DoltLite
-      run: |
-        node ext/wasm/test-doltlite-export-roundtrip.mjs
-
-    - name: Test DoltLite wasm file:// remotes
-      run: |
-        node ext/wasm/test-doltlite-remote.mjs
-
-    - name: Test DoltLite wasm http:// remotes
-      run: |
-        node ext/wasm/test-doltlite-http-remote.mjs
-
-    - name: Smoke test the @dolthub/doltlite-wasm npm package
-      run: |
-        chmod +x packaging/npm/assemble.sh packaging/npm/test-package.sh
-        bash packaging/npm/test-package.sh
-
-    - name: Upload wasm artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: wasm-build
-        path: |
-          ext/wasm/jswasm/*
-          ext/wasm/sqlite-wasm-*.zip
-
   development-builds:
     runs-on: ubuntu-latest
     timeout-minutes: 5
