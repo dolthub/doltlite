@@ -1,0 +1,40 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_http_timeout
+
+set saved_timeout [array get ::env DOLTLITE_HTTP_TIMEOUT_MS]
+set ::env(DOLTLITE_HTTP_TIMEOUT_MS) 400
+set script {
+import socket
+import time
+s = socket.socket()
+s.bind(('127.0.0.1', 0))
+s.listen(1)
+s.settimeout(5)
+print(s.getsockname()[1], flush=True)
+c, _ = s.accept()
+c.settimeout(5)
+c.recv(65536)
+time.sleep(1.2)
+c.close()
+s.close()
+}
+set server [open [list | python3 -u -c $script] r]
+set port [gets $server]
+
+do_execsql_test setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+  SELECT length(dolt_commit('-Am','base'));
+} 40
+set url http://127.0.0.1:$port/repo.db
+db eval {SELECT dolt_remote('add','origin',$url)}
+do_test stalled {
+  set rc [catch {db eval {SELECT dolt_push('origin','main')}} message]
+  list $rc [string match {*remote response timed out*} $message] \
+       [string match {*connection to remote lost*} $message]
+} {1 1 0}
+close $server
+unset ::env(DOLTLITE_HTTP_TIMEOUT_MS)
+array set ::env $saved_timeout
+finish_test

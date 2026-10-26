@@ -36,6 +36,7 @@ COVERAGE_TESTS=(
   fetch_tracking_order_test
   http_conn_lost_test
   creds_connection_test
+  http_transfer_test
   file_remote_read_lock_test
   fetch_download_lock_test
   push_tracking_precondition_test

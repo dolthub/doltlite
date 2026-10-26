@@ -78,6 +78,15 @@ static inline int doltliteNetInit(void) { return 0; }
 
 #endif
 
+static inline int doltliteSocketTimedOut(void) {
+#ifdef _WIN32
+  int err = WSAGetLastError();
+  return err == WSAETIMEDOUT || err == WSAEWOULDBLOCK;
+#else
+  return errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT;
+#endif
+}
+
 static inline int doltliteSocketSetBlocking(int fd, int blocking) {
 #ifdef _WIN32
   u_long mode = blocking ? 0 : 1;

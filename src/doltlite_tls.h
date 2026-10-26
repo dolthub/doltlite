@@ -41,6 +41,8 @@ int doltliteConnWriteAll(DoltliteConn *conn, const void *buf, int nbuf);
 int doltliteConnRead(DoltliteConn *conn, void *buf, int nbuf);
 
 int doltliteConnSetTimeout(DoltliteConn *conn, int timeoutMs);
+int doltliteConnSetIdleTimeout(DoltliteConn*, int idleMs, int initialMs);
+int doltliteConnTimeoutRemaining(DoltliteConn*);
 
 void doltliteConnClose(DoltliteConn *conn);
 
