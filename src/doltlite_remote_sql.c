@@ -486,7 +486,7 @@ static int remoteSqlSelectLazyRevision(
   memset(&commitHash, 0, sizeof(commitHash));
   memset(&catalogHash, 0, sizeof(catalogHash));
   rc = doltliteResolveOpenRevision(
-      cs, zRevision, &commitHash, &catalogHash, &zBranch);
+      cs, zRevision, &commitHash, &catalogHash, &zBranch, 0);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zBranch);
     return rc;

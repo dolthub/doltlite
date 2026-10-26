@@ -131,6 +131,12 @@ check_eq "branch_ancestor_open_is_detached" $'NULL\n1:main' "$res"
 res=$("$DOLTLITE" "$DB/v1~0" "SELECT IFNULL(active_branch(),'NULL'); SELECT group_concat(id || ':' || v, ',') FROM t;" | normalize_output)
 check_eq "tag_ancestor_open_is_detached" $'NULL\n1:main' "$res"
 
+res=$("$DOLTLITE" "file:$DB@v1?mode=ro" "SELECT IFNULL(active_branch(),'NULL'); SELECT group_concat(id || ':' || v, ',') FROM t;" 2>&1 | normalize_output)
+check_eq "uri_revision_with_query_is_detached" $'NULL\n1:main' "$res"
+
+res=$("$DOLTLITE" "file:$DB@$INIT_HASH?nolock=0" "SELECT IFNULL(active_branch(),'NULL'); SELECT count(*) FROM t;" 2>&1 | normalize_output)
+check_eq "uri_hash_with_query_is_detached" $'NULL\n1' "$res"
+
 res=$("$DOLTLITE" "$DB/v1" "INSERT INTO t VALUES(3,'blocked');" 2>&1 | normalize_output || true)
 check_match "detached_insert_is_readonly" "read-only|readonly" "$res"
 

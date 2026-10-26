@@ -46,8 +46,11 @@ int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
                               const char *zDb,
                               const char *zName, const char *zTblName,
                               char **pzSql);
+#define OPEN_REVISION_MISSING_NONE  0
+#define OPEN_REVISION_MISSING_HASH  1   /* bare commit hash absent locally */
+#define OPEN_REVISION_MISSING_CHUNK 2   /* a ref reaches an absent commit */
 int doltliteResolveOpenRevision(
-  ChunkStore*, const char*, ProllyHash*, ProllyHash*, char**
+  ChunkStore*, const char*, ProllyHash*, ProllyHash*, char**, int*
 );
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);

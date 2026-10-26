@@ -33,7 +33,7 @@ src/doltlite_remote.c:doltliteCloneLazy
 src/doltlite_remote.c:remotePrepareCloneRefs
 src/doltlite_remote_sql.c:doltCloneFunc
 src/doltlite_remote_sql.c:remoteSqlUndoInstalledClone
-src/doltlite_chunk_source.c:doltlite_init_lazy
+src/doltlite_chunk_source.c:csInstallRefsKeepingRemotes
 
 # Fetch, push, and the remote server write refs through the scoped
 # validator or into the remote's own store.

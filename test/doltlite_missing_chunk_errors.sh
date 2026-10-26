@@ -24,7 +24,8 @@ expect_corrupt() {
   out=$($DOLTLITE "$ROOT/ws.db" "$sql" 2>&1)
   case "$out" in
     *"unknown operation"*) dltest_fail "$name" "  leaked NOTFOUND: $out" ;;
-    *malformed*|*"chunk is missing"*|*"failed to load staged catalog"*)
+    *malformed*|*"chunk is missing"*|*"failed to load staged catalog"*|\
+    *"no chunk source is available for missing chunk"*)
       dltest_pass "$name" ;;
     *) dltest_fail "$name" "  got: $out" ;;
   esac

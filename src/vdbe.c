@@ -10360,6 +10360,14 @@ abort_due_to_error:
    && !doltliteChunkSourceActive(db) ){
     rc = SQLITE_CORRUPT_BKPT;
   }
+  if( db->pParse==0 ){
+    char *zMiss = doltliteTakeMissingChunkError(
+        db, p->zErrMsg==0 ? rc : SQLITE_OK);
+    if( zMiss ){
+      sqlite3VdbeError(p, "%s", zMiss);
+      sqlite3_free(zMiss);
+    }
+  }
 #endif
   assert( rc );
 #ifdef SQLITE_DEBUG

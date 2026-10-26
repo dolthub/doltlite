@@ -349,6 +349,10 @@ struct ChunkStore {
   int checkpointActive;
   sqlite3_vfs *pOwnedVfs;
   DoltliteChunkSourceState *pChunkSource;
+  /* Last chunk a read found absent with no source to fetch it from. Probes
+  ** expect the miss, so it only explains an otherwise generic failure. */
+  u8 bMissingChunk;
+  ProllyHash missingChunk;
 
 };
 
@@ -501,6 +505,7 @@ int chunkStoreSourceSet(ChunkStore *cs, sqlite3 *db,
 void chunkStoreSourceCloseWriter(ChunkStore *cs);
 void chunkStoreSourceClose(ChunkStore *cs);
 char *chunkStoreSourceTakeError(ChunkStore *cs, int *pRc);
+char *chunkStoreTakeMissingChunkError(ChunkStore *cs);
 int chunkStoreOriginSourceEnabled(ChunkStore *cs);
 int chunkStoreSourceEnabled(ChunkStore *cs);
 
