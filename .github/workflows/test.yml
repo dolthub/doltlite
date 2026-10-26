@@ -280,21 +280,8 @@ jobs:
         retention-days: 1
 
   sql-differential:
-    name: sql-differential-${{ matrix.first }}-${{ matrix.last }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - first: 1
-            last: 2500
-          - first: 2501
-            last: 5000
-          - first: 5001
-            last: 7500
-          - first: 7501
-            last: 10000
+    timeout-minutes: 25
 
     steps:
     - uses: actions/checkout@v4
@@ -316,23 +303,31 @@ jobs:
         # 15-minute timeout tail. A later step folds the raw dumps to one file.
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%p.profraw" >> "$GITHUB_ENV"
 
+    # Folding the raw dumps after each range keeps the runner's disk at one
+    # range's worth of profiles.
     - name: Randomized SQL differential sweep (vs stock SQLite)
       run: |
         cd build-coverage
-        bash ../test/sql_differential_test.sh \
-          ./doltlite ./sqlite3-stock \
-          ${{ matrix.first }} ${{ matrix.last }}
-      timeout-minutes: 15
+        failed=0
+        for first in 1 2501 5001 7501; do
+          last=$((first + 2499))
+          bash ../test/sql_differential_test.sh \
+            ./doltlite ./sqlite3-stock "$first" "$last" || failed=1
+          bash ../.github/scripts/merge-coverage-profiles.sh \
+            "$RUNNER_TEMP/coverage-profiles" "sql-differential-$first"
+        done
+        test "$failed" -eq 0
+      timeout-minutes: 20
 
     - name: Merge per-process coverage profiles
       if: always()
-      run: bash .github/scripts/merge-coverage-profiles.sh "$RUNNER_TEMP/coverage-profiles" sql-differential
+      run: bash .github/scripts/merge-coverage-profiles.sh "$RUNNER_TEMP/coverage-profiles" sql-differential-rest
 
     - name: Upload SQL differential coverage profiles
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-profile-sql-differential-${{ matrix.first }}-${{ matrix.last }}
+        name: coverage-profile-sql-differential
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
