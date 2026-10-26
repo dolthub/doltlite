@@ -2,25 +2,44 @@ name: Ubuntu Tests
 
 on:
   workflow_call:
+    inputs:
+      suites:
+        type: boolean
+        default: true
+      platforms:
+        type: boolean
+        default: true
+      benchmarks:
+        type: boolean
+        default: true
 
 jobs:
   build-test:
+    if: inputs.suites || inputs.platforms
     uses: ./.github/workflows/build-test.yml
+    with:
+      suites: ${{ inputs.suites }}
+      platforms: ${{ inputs.platforms }}
 
   test-suite:
+    if: inputs.suites
     uses: ./.github/workflows/test.yml
 
   sanitizers:
+    if: inputs.suites
     uses: ./.github/workflows/sanitizers.yml
 
   smoke:
+    if: inputs.suites
     uses: ./.github/workflows/smoke.yml
 
   benchmark:
+    if: inputs.benchmarks
     uses: ./.github/workflows/benchmark.yml
 
   no-dead-code:
     name: no-dead-code
+    if: inputs.suites || inputs.platforms
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

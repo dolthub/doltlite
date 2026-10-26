@@ -2,9 +2,17 @@ name: Build-Test
 
 on:
   workflow_call:
+    inputs:
+      suites:
+        type: boolean
+        default: true
+      platforms:
+        type: boolean
+        default: true
 
 jobs:
   development-builds:
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -60,6 +68,7 @@ jobs:
         fi
 
   build-and-test:
+    if: inputs.platforms
     uses: ./.github/workflows/platform-test.yml
     with:
       platform: ubuntu

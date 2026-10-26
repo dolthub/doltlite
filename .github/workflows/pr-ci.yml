@@ -17,37 +17,20 @@ jobs:
     outputs:
       docs_changed: ${{ steps.files.outputs.docs_changed }}
       light: ${{ steps.files.outputs.light }}
+      suites: ${{ steps.files.outputs.suites }}
+      platforms: ${{ steps.files.outputs.platforms }}
+      benchmarks: ${{ steps.files.outputs.benchmarks }}
+      compile: ${{ steps.files.outputs.compile }}
+      wasm: ${{ steps.files.outputs.wasm }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
       - id: files
         uses: actions/github-script@v7
         with:
           script: |
-            const pull = context.payload.pull_request;
-            if (!pull) {
-              core.setOutput('docs_changed', 'true');
-              core.setOutput('light', 'false');
-              return;
-            }
-            const files = await github.paginate(
-              github.rest.pulls.listFiles,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: pull.number,
-                per_page: 100,
-              }
-            );
-            core.setOutput(
-              'docs_changed',
-              String(files.some(file => file.filename.endsWith('.md')))
-            );
-            // The repo README and the rolling performance report are not
-            // engine or doc-reference surfaces: they only need the link check.
-            const light = new Set(['README.md', 'performance-report.md']);
-            core.setOutput(
-              'light',
-              String(files.length > 0 && files.every(file => light.has(file.filename)))
-            );
+            await require('./.github/scripts/classify-changes.js').run({github, context, core});
 
   doc_links:
     name: Docs validation
@@ -73,47 +56,59 @@ jobs:
         run: bash test/doc_examples_selftest.sh build/doltlite
       - if: needs.classify.outputs.light != 'true'
         run: bash test/oracle_doc_agent_guide_test.sh build/doltlite
+      - if: needs.classify.outputs.light != 'true'
+        run: |
+          bash test/sqlite_compatibility_contract_test.sh build/doltlite
+          bash test/concurrency_contract_test.sh build/doltlite
+          bash test/storage_format_contract_test.sh build/doltlite
 
   build_ubuntu:
     name: build-ubuntu
     needs: classify
     if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/ci-build.yml
+    with:
+      suites: ${{ needs.classify.outputs.suites == 'true' }}
+      benchmarks: ${{ needs.classify.outputs.benchmarks == 'true' }}
 
   test_ubuntu:
     name: test-ubuntu
     needs: [classify, build_ubuntu]
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.suites == 'true' || needs.classify.outputs.platforms == 'true' || needs.classify.outputs.benchmarks == 'true'
     uses: ./.github/workflows/ubuntu-test.yml
+    with:
+      suites: ${{ needs.classify.outputs.suites == 'true' }}
+      platforms: ${{ needs.classify.outputs.platforms == 'true' }}
+      benchmarks: ${{ needs.classify.outputs.benchmarks == 'true' }}
 
   compile_checks:
     name: compile-checks
     needs: classify
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.compile == 'true'
     uses: ./.github/workflows/compile-checks.yml
 
   wasm:
     name: wasm
     needs: classify
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.wasm == 'true'
     uses: ./.github/workflows/wasm.yml
 
   build_macos:
     name: build-macos
     needs: classify
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.platforms == 'true'
     uses: ./.github/workflows/macos-build.yml
 
   test_macos:
     name: test-macos
     needs: [classify, build_macos]
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.platforms == 'true'
     uses: ./.github/workflows/macos-test.yml
 
   build_windows:
     name: build-windows
     needs: classify
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.platforms == 'true'
     uses: ./.github/workflows/checked-build.yml
     with:
       platform: windows
@@ -121,7 +116,7 @@ jobs:
   test_windows:
     name: test-windows
     needs: [classify, build_windows]
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.platforms == 'true'
     uses: ./.github/workflows/platform-test.yml
     with:
       platform: windows
@@ -129,18 +124,28 @@ jobs:
   windows_suites:
     name: windows-suites
     needs: [classify, build_windows]
-    if: needs.classify.outputs.light != 'true'
+    if: needs.classify.outputs.platforms == 'true'
     uses: ./.github/workflows/windows-suites.yml
 
+  # A job the classifier left out must have been skipped; one it asked for
+  # must have succeeded. Skipping is only ever accepted by this rule.
   gate:
     name: CI Gate
     needs: [classify, doc_links, build_ubuntu, test_ubuntu, compile_checks, wasm, build_macos, test_macos, build_windows, test_windows, windows_suites]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
       - env:
           CLASSIFY: ${{ needs.classify.result }}
           LIGHT: ${{ needs.classify.outputs.light }}
+          SUITES: ${{ needs.classify.outputs.suites }}
+          PLATFORMS: ${{ needs.classify.outputs.platforms }}
+          BENCHMARKS: ${{ needs.classify.outputs.benchmarks }}
+          COMPILE: ${{ needs.classify.outputs.compile }}
+          WASM_WANTED: ${{ needs.classify.outputs.wasm }}
           DOC_LINKS: ${{ needs.doc_links.result }}
           BUILD_UBUNTU: ${{ needs.build_ubuntu.result }}
           TEST_UBUNTU: ${{ needs.test_ubuntu.result }}
@@ -151,12 +156,4 @@ jobs:
           BUILD_WINDOWS: ${{ needs.build_windows.result }}
           TEST_WINDOWS: ${{ needs.test_windows.result }}
           WINDOWS_SUITES: ${{ needs.windows_suites.result }}
-        run: |
-          test "$CLASSIFY" = success
-          case "$DOC_LINKS" in success|skipped) ;; *) exit 1 ;; esac
-          if [ "$LIGHT" = true ]; then
-            exit 0
-          fi
-          for result in "$BUILD_UBUNTU" "$TEST_UBUNTU" "$COMPILE_CHECKS" "$WASM" "$BUILD_MACOS" "$TEST_MACOS" "$BUILD_WINDOWS" "$TEST_WINDOWS" "$WINDOWS_SUITES"; do
-            test "$result" = success
-          done
+        run: bash .github/scripts/ci-gate.sh

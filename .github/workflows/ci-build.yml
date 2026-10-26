@@ -2,6 +2,13 @@ name: CI Build
 
 on:
   workflow_call:
+    inputs:
+      suites:
+        type: boolean
+        default: true
+      benchmarks:
+        type: boolean
+        default: true
 
 jobs:
   checked:
@@ -31,6 +38,7 @@ jobs:
 
   sqllogictest-build:
     name: sqllogictest
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -84,6 +92,7 @@ jobs:
 
   coverage-build:
     name: coverage
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -191,6 +200,7 @@ jobs:
 
   benchmark-build:
     name: optimized-benchmark
+    if: inputs.suites || inputs.benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -272,6 +282,7 @@ jobs:
 
   asan-ubsan-build:
     name: asan-ubsan-${{ matrix.platform }}
+    if: inputs.suites
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 20
     strategy:
@@ -293,6 +304,7 @@ jobs:
 
   tsan-build:
     name: tsan
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -354,6 +366,7 @@ jobs:
 
   crash-build:
     name: crash
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -404,6 +417,7 @@ jobs:
 
   fuzz-build:
     name: libfuzzer
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -464,6 +478,7 @@ jobs:
 
   compat-build:
     name: compatibility-references
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -492,6 +507,7 @@ jobs:
 
   assert-build:
     name: assert-enabled
+    if: inputs.suites
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
