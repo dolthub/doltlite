@@ -16,7 +16,7 @@ Creating or importing a key does not register it with a server.
 | `dolt_creds_import(filename)` | Import a private JWK file, accepting Dolt and DoltLite layouts; return `0`. |
 | `dolt_creds_export(key [, directory])` | Return a public JWK, or write it into an authorized-keys directory and return a confirmation. |
 | `dolt_creds_rm(key [, key ...])` | Delete local keys; return `0`. |
-| `dolt_creds_check(...)` | Verify a selected key against an HTTPS server; return JSON. See [Credential checks](#credential-checks). |
+| `dolt_creds_check(...)` | Deprecated. Returns an error and does not contact a server. See [Credential checks](#credential-checks). |
 
 `key` accepts either a credential ID (`kid`) or its base32 public key.
 `dolt_creds_use` and `dolt_creds_bind` also accept `'anonymous'`.
@@ -44,9 +44,8 @@ SELECT dolt_creds_use('<credential-id>', 'session');
 | `active` | Boolean (`1` / `0`) identifying the current connection's selected key, without applying a remote URL binding. |
 | `error` | `NULL` for a valid key, or a credential-loading error. |
 
-Listing reads local state. Use `dolt_creds_check` to verify server acceptance.
-An anonymous selection or an unavailable selected key leaves every row's
-`active` value false.
+Listing reads local state. An anonymous selection or an unavailable selected
+key leaves every row's `active` value false.
 
 ## Selection and remote bindings
 
@@ -109,27 +108,17 @@ would select the removed key.
 
 ## Credential checks
 
-For an existing HTTPS remote, run `SELECT dolt_creds_check('origin');`.
-Alternatively, `SELECT dolt_creds_check('--endpoint',
-'https://db.example.com/repo.db');` checks a URL, and adding
-`'--creds', '<credential-id>'` selects a key for that check without changing
-the current selection. `--endpoint` also accepts `host:port`. With no
-arguments, the function uses the DoltHub HTTP service endpoint.
+`dolt_creds_check` and `dolt_creds('check')` are deprecated. Both return an
+error and do not open a connection:
 
-The server must support `GET <repository-url>/auth`. A check requires HTTPS,
-verifies the selected key, and does not create a repository. The bundled
-server returns JSON in this form:
-
-```json
-{"kid":"<credential-id>","username":null,"email":null,"can_read":true,"can_write":true}
+```sql
+SELECT dolt_creds_check(); -- error: deprecated
+SELECT dolt_creds('check'); -- error: deprecated
 ```
 
-The bundled server authorizes keys rather than accounts, so `username` and
-`email` are `NULL`; its authorized keys can read and write. Older servers and
-servers without client authentication report that credential checks are
-unsupported. DoltHub currently needs the corresponding service endpoint before
-hosted account/permission checks work. Normal authenticated remote operations
-remain available. A public read alone does not verify a credential.
+DoltHub does not provide an HTTP credential check. Register the public key on
+the account, select it with `dolt_creds_use` or `dolt_creds_bind`, then use
+`dolt_push` or `dolt_fetch`.
 
 ## Storage and compatibility
 
@@ -140,8 +129,9 @@ pushed. See [auth.md](auth.md) for TLS and JWT settings.
 
 The existing `dolt_creds()` / `dolt_creds('list')` text listing remains
 available and marks the active key with `*`. Existing `'rm'` / `'remove'` and
-`'export'` actions remain supported; `'use'`, `'bind'`, `'import'`, and
-`'check'` dispatch to the corresponding named functions.
+`'export'` actions remain supported; `'use'`, `'bind'`, and `'import'`
+dispatch to the corresponding named functions. `'check'` dispatches to
+`dolt_creds_check` and returns the deprecation error.
 
 ## See also
 

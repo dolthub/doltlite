@@ -103,8 +103,14 @@ with tempfile.TemporaryDirectory(prefix='vc-oracle-creds-') as tmp:
     result('remove active key', dtcmd('rm', kids[0]),
            sql(f"SELECT dolt_creds_rm('{kids[0]}');"), True)
     compare('removed active key is not listed')
-    result('check missing active key fails locally', dtcmd('check'),
-           sql('SELECT dolt_creds_check();'), False)
+    check = sql('SELECT dolt_creds_check();')
+    text = (check.stderr or '') + (check.stdout or '')
+    if check.returncode and 'dolt_creds_check is deprecated' in text:
+        passed += 1
+        print('  PASS: dolt_creds_check is deprecated')
+    else:
+        failed += 1
+        print('  FAIL: dolt_creds_check is deprecated', check.returncode, text.strip())
     for e, binary, args in [(dt, dolt, ['creds', 'new']),
                              (dl, lite, [':memory:', 'SELECT dolt_creds_new();'])]:
         require(run(binary, args, e))

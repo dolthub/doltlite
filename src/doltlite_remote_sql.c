@@ -2413,49 +2413,13 @@ static int credsSqlSelectDefault(DoltliteCreds *cred){
   return rc;
 }
 
-static const char *credsSqlRemoteUrl(sqlite3*, const char*);
-
+/* The name stays registered so callers get this error instead of "no such function". */
 static void doltCredsCheckFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
-  sqlite3 *db = sqlite3_context_db_handle(ctx);
-  const char *endpoint = "https://doltliteremoteapi.dolthub.com/_";
-  const char *key = 0;
-  char *result = 0, *error = 0, *ownedEndpoint = 0;
-  int i, rc;
-  for(i=0; i<argc; i++){
-    const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( !arg ) goto usage;
-    if( strcmp(arg, "--endpoint")==0 || strcmp(arg, "--creds")==0 ){
-      const char *value;
-      if( ++i>=argc || !(value = (const char*)sqlite3_value_text(argv[i])) ) goto usage;
-      if( strcmp(arg, "--creds")==0 ) key = value;
-      else endpoint = value;
-    }else if( argc==1 ){
-      const char *url = credsSqlRemoteUrl(db, arg);
-      if( !url ) goto usage;
-      endpoint = url;
-    }else goto usage;
-  }
-  if( !strstr(endpoint, "://") ){
-    ownedEndpoint = sqlite3_mprintf("https://%s/_", endpoint);
-    if( !ownedEndpoint ){ sqlite3_result_error_nomem(ctx); return; }
-    endpoint = ownedEndpoint;
-  }else if( !strchr(strstr(endpoint, "://")+3, '/') ){
-    ownedEndpoint = sqlite3_mprintf("%s/_", endpoint);
-    if( !ownedEndpoint ){ sqlite3_result_error_nomem(ctx); return; }
-    endpoint = ownedEndpoint;
-  }
-  rc = doltliteHttpRemoteCheckCreds(db, endpoint, key, &result, &error);
-  if( rc==SQLITE_OK ) sqlite3_result_text(ctx, result, -1, SQLITE_TRANSIENT);
-  else{
-    sqlite3_result_error(ctx, error ? error : sqlite3_errstr(rc), -1);
-    sqlite3_result_error_code(ctx, rc);
-  }
-  sqlite3_free(result);
-  sqlite3_free(error);
-  sqlite3_free(ownedEndpoint);
-  return;
-usage:
-  sqlite3_result_error(ctx, "usage: dolt_creds_check([remote] | ['--endpoint', endpoint,] ['--creds', key])", -1);
+  (void)argc;
+  (void)argv;
+  sqlite3_result_error(ctx,
+      "dolt_creds_check is deprecated; DoltHub does not provide an HTTP credential check",
+      -1);
 }
 
 static void doltCredsUseFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){

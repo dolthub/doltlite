@@ -35,13 +35,10 @@ Select the client key with `dolt_creds_use('<credential-id>')`, or use
 repository URL. See [credential management](dolt_creds.md) for the commands
 and selection precedence.
 
-With TLS and `--auth-keys` enabled, `dolt_creds_check('origin')` calls the
-repository URL's read-only `/auth` endpoint. It verifies the key without
-creating a database and returns its ID and read/write authorization. This
-server has no account directory, so the returned username and email are null.
-Without client authentication, credential checks report that verification is
-unsupported. For HTTPS writes to a server that permits anonymous access,
-select `'anonymous'` explicitly; public reads can proceed without a key.
+With TLS and `--auth-keys` enabled, each request carries the key selected by
+`dolt_creds_use` or `dolt_creds_bind`. For HTTPS writes to a server that
+permits anonymous access, select `'anonymous'` explicitly; public reads can
+proceed without a key.
 
 Default HTTP timeout is 30s (`DOLTLITE_HTTP_TIMEOUT_MS`). The server's
 `--timeout-ms` (default 30 seconds) bounds the TLS handshake and the request

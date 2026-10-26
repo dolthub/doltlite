@@ -58,7 +58,7 @@ do_execsql_test 9 {
 do_execsql_test 10 {SELECT sum(active) FROM dolt_creds_ls()} {0}
 do_test 11 {
   set rc [catch {db eval {SELECT dolt_creds_check()}} message]
-  list $rc [string match {*selected credential is missing*} $message]
+  list $rc [string match {*dolt_creds_check is deprecated*} $message]
 } {1 1}
 other close
 file delete -force $::env(DOLTLITE_CREDS_DIR)
