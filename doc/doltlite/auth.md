@@ -90,10 +90,6 @@ file, outside database history. They are not cloned or pushed.
 
 The [credential command reference](dolt_creds.md) covers listing, selection,
 bindings, import, public export, removal, and compatibility commands.
-`dolt_creds_check('origin')` verifies a key through a server's read-only `/auth`
-endpoint. The bundled server supports this with client authentication enabled;
-older or auth-disabled servers report it as unsupported. DoltHub needs the
-corresponding service endpoint before hosted account/permission checks work.
 
 The following environment variables customize credential and TLS behavior:
 
@@ -147,8 +143,8 @@ dependency so JWT compatibility does not depend on TLS-library Ed25519 support.
 - `test/doltlite_creds.test` and `test/creds_connection_test.c` cover SQL
   selection and connection isolation.
 - `test/remote_https_auth_test.sh` exercises authenticated HTTPS push and clone,
-  85-key selection, override precedence, concurrent URL bindings, credential
-  checks, anonymous access, lazy reads, incorrect CAs, multi-chunk transfer,
-  and Authorization-header parsing.
+  85-key selection, override precedence, concurrent URL bindings, anonymous
+  access, lazy reads, incorrect CAs, multi-chunk transfer, and
+  Authorization-header parsing.
 - `test/creds_path_test.sh` covers the SQL credential lifecycle and configured
   credential directory.

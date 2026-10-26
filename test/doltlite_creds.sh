@@ -47,6 +47,5 @@ run_test_match "creds_rm" "SELECT dolt_creds('rm', '$KID');" "Removed credential
 run_test_error_match "creds_rm_unknown" "SELECT dolt_creds('rm', '$KID');" "no such credential" "$DB"
 
 run_test "creds_no_active_after_removal" "SELECT count(*) FROM dolt_creds_ls() WHERE active=true;" "0" "$DB"
-run_test_error_match "creds_check_missing_local" "SELECT dolt_creds_check();" "selected credential is missing" "$DB"
 rm -rf "$DOLTLITE_CREDS_DIR" "$DB" "$DB-lock"
 dltest_finish

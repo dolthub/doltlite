@@ -103,8 +103,6 @@ with tempfile.TemporaryDirectory(prefix='vc-oracle-creds-') as tmp:
     result('remove active key', dtcmd('rm', kids[0]),
            sql(f"SELECT dolt_creds_rm('{kids[0]}');"), True)
     compare('removed active key is not listed')
-    result('check missing active key fails locally', dtcmd('check'),
-           sql('SELECT dolt_creds_check();'), False)
     for e, binary, args in [(dt, dolt, ['creds', 'new']),
                              (dl, lite, [':memory:', 'SELECT dolt_creds_new();'])]:
         require(run(binary, args, e))

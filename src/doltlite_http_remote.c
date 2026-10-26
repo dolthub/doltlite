@@ -42,7 +42,6 @@ struct HttpRemote {
   DoltliteCreds *cred;
   char *zAudience;      /* JWT audience */
   sqlite3 *db;
-  char *zCredOverride;
   int authState;
   int authResolved;
 #endif
@@ -1524,7 +1523,6 @@ static void httpClose(DoltliteRemote *pRemote){
 #ifdef DOLTLITE_HAVE_AUTH
   doltliteCredsFree(p->cred);
   sqlite3_free(p->zAudience);
-  sqlite3_free(p->zCredOverride);
 #endif
   sqlite3_free(p->zHost);
   sqlite3_free(p->zBasePath);
@@ -1537,7 +1535,7 @@ static void httpClose(DoltliteRemote *pRemote){
 
 static int httpPrepareAuth(HttpRemote *p, const char *method, const char *path){
 #ifdef DOLTLITE_HAVE_AUTH
-  const char *selected = p->zCredOverride;
+  const char *selected = 0;
   const char *aud;
   char *url, *error = 0;
   int nPath = (int)strlen(path);
@@ -1546,7 +1544,7 @@ static int httpPrepareAuth(HttpRemote *p, const char *method, const char *path){
       || (nPath>=11 && strcmp(path+nPath-11, "/has-chunks")==0);
   if( !p->useTls ) return SQLITE_OK;
   if( !p->authResolved ){
-    if( !selected && p->db ) selected = sqlite3_get_clientdata(p->db, DOLTLITE_CREDS_SESSION);
+    if( p->db ) selected = sqlite3_get_clientdata(p->db, DOLTLITE_CREDS_SESSION);
     doltliteCredsFree(p->cred);
     p->cred = 0;
     sqlite3_free(p->zAudience);
@@ -1718,76 +1716,6 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->base.bCacheForChunkSource = 1;
 
   return &p->base;
-}
-
-int doltliteHttpRemoteCheckCreds(
-  sqlite3 *db, const char *url, const char *key, char **result, char **error
-){
-#ifdef DOLTLITE_HAVE_AUTH
-  DoltliteRemote *remote = doltliteHttpRemoteOpen(url);
-  HttpRemote *p = (HttpRemote*)remote;
-  char *path = 0, *kid = 0, *reportedKid = 0;
-  u8 *body = 0;
-  int n = 0, status = 0, rc;
-  *result = *error = 0;
-  if( !p ){
-    *error = sqlite3_mprintf("invalid credential check endpoint");
-    return SQLITE_ERROR;
-  }
-  p->db = db;
-  p->zCredOverride = key ? sqlite3_mprintf("%s", key) : 0;
-  if( key && !p->zCredOverride ){ rc = SQLITE_NOMEM; goto done; }
-  if( !p->useTls ){
-    *error = sqlite3_mprintf("credential checks require HTTPS");
-    rc = SQLITE_AUTH;
-    goto done;
-  }
-  path = buildPath(p, "/auth");
-  if( !path ){ rc = SQLITE_NOMEM; goto done; }
-  rc = httpPrepareAuth(p, "GET", path);
-  if( rc!=SQLITE_OK ) goto done;
-  if( !p->cred ){
-    *error = sqlite3_mprintf("no user credentials selected; use dolt_creds_use()");
-    rc = SQLITE_AUTH;
-    goto done;
-  }
-  kid = doltliteCredsKid(p->cred);
-  if( !kid ){ rc = SQLITE_NOMEM; goto done; }
-  rc = httpRequest(p, "GET", path, 0, 0, &status, &body, &n);
-  if( rc!=SQLITE_OK ) goto done;
-  if( status==404 || status==405 || status==501 ){
-    *error = sqlite3_mprintf("endpoint does not support credential checks; authentication was not verified");
-    rc = SQLITE_ERROR;
-    goto done;
-  }
-  if( status!=200 ){
-    rc = httpMapError(p, status, body, n);
-    goto done;
-  }
-  reportedKid = httpJsonStringField(body, n, "kid");
-  if( !reportedKid || strcmp(kid, reportedKid)!=0 ){
-    *error = sqlite3_mprintf("invalid credential check response");
-    rc = SQLITE_ERROR;
-    goto done;
-  }
-  *result = sqlite3_mprintf("%.*s", n, body);
-  if( !*result ) rc = SQLITE_NOMEM;
-done:
-  if( rc!=SQLITE_OK && !*error ){
-    *error = sqlite3_mprintf("%s", p->zLastError ? p->zLastError : sqlite3_errstr(rc));
-  }
-  sqlite3_free(path);
-  sqlite3_free(kid);
-  sqlite3_free(reportedKid);
-  sqlite3_free(body);
-  remote->xClose(remote);
-  return rc;
-#else
-  (void)db; (void)url; (void)key;
-  *result = 0;
-  *error = sqlite3_mprintf("credential checks are disabled in this build");
-  return SQLITE_ERROR;
-#endif
 }
 
 #endif

@@ -56,10 +56,6 @@ do_execsql_test 9 {
   SELECT dolt_creds_rm($pub);
 } {OKP 1 0}
 do_execsql_test 10 {SELECT sum(active) FROM dolt_creds_ls()} {0}
-do_test 11 {
-  set rc [catch {db eval {SELECT dolt_creds_check()}} message]
-  list $rc [string match {*selected credential is missing*} $message]
-} {1 1}
 other close
 file delete -force $::env(DOLTLITE_CREDS_DIR)
 unset -nocomplain ::env(DOLTLITE_CREDS_DIR) ::env(DOLTLITE_CREDS_KID)

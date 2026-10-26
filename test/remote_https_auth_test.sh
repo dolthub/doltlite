@@ -227,7 +227,7 @@ check "mixed-case Authorization is accepted" "200" "$result"
 result=$(tls_request "X-Authorization" | sed -n '1s/.* \([0-9][0-9][0-9]\) .*/\1/p')
 check "X-Authorization is not treated as Authorization" "401" "$result"
 
-echo "=== 8. Multi-key selection and credential checks ==="
+echo "=== 8. Multi-key selection and push authentication ==="
 for _ in $(seq 1 84); do
   printf 'SELECT dolt_creds_new();\n'
 done | DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: >/dev/null || exit 1
@@ -235,45 +235,32 @@ result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
   "SELECT count(*),sum(active),max(CASE WHEN active THEN kid END)='$kid' FROM dolt_creds_ls();")
 check "85 keys preserve the original active credential" "85|1|1" "$result"
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT json_extract(dolt_creds_check('origin'),'$.kid')='$kid';")
-check "credential check verifies the selected key" "1" "$result"
-check "credential check does not create a database" "no" \
-  "$(test -e "$TMP/srv/check.db" && echo yes || echo no)"
-result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
-  "SELECT json_extract(dolt_creds_check('--endpoint','https://localhost:$PORT/check.db'),'$.can_write');")
-check "credential check works before first push" "1" "$result"
-check "credential check leaves nonexistent repository absent" "no" \
-  "$(test -e "$TMP/srv/check.db" && echo yes || echo no)"
-result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
   "SELECT dolt_remote('add','multi','https://localhost:$PORT/multi.db'); SELECT dolt_push('multi','main');")
 check "push authenticates with 85 local keys" $'0\n0' "$result"
 other=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
   "SELECT kid FROM dolt_creds_ls() WHERE NOT active ORDER BY kid LIMIT 1;")
 other=${other//$'\r'/}
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT dolt_creds_use('$other'); SELECT dolt_creds_check('origin');" 2>&1)
+  "SELECT dolt_creds_use('$other'); SELECT dolt_push('origin','main');" 2>&1)
 check_ne "unregistered selected key fails authentication" "0" "$result"
 DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
   "SELECT dolt_creds_bind('origin','$kid');" >/dev/null || exit 1
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT json_extract(dolt_creds_check('origin'),'$.kid')='$kid';")
-check "remote binding overrides global default" "1" "$result"
+  "SELECT dolt_push('origin','main');")
+check "remote binding overrides global default" "0" "$result"
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" DOLTLITE_CREDS_KID=missing \
-  "$DOLTLITE" "$TMP/src.db" "SELECT dolt_creds_check('origin');" 2>&1)
+  "$DOLTLITE" "$TMP/src.db" "SELECT dolt_push('origin','main');" 2>&1)
 case "$result" in *"selected credential is missing"*) check "invalid env selection fails locally" yes yes;;
   *) check "invalid env selection fails locally" "selected credential error" "$result";; esac
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" DOLTLITE_CREDS_KID="$other" \
-  "$DOLTLITE" "$TMP/src.db" "SELECT dolt_creds_check('origin');" 2>&1)
+  "$DOLTLITE" "$TMP/src.db" "SELECT dolt_push('origin','main');" 2>&1)
 check_ne "env override takes precedence over binding" "0" "$result"
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" DOLTLITE_CREDS_KID=missing \
   "$DOLTLITE" "$TMP/src.db" \
-  "SELECT dolt_creds_use('$kid','session'); SELECT json_extract(dolt_creds_check('origin'),'$.kid')='$kid';")
-check "session selection overrides invalid env selection" $'0\n1' "$result"
+  "SELECT dolt_creds_use('$kid','session'); SELECT dolt_push('origin','main');")
+check "session selection overrides invalid env selection" $'0\n0' "$result"
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT dolt_creds_check('--endpoint','$URL','--creds','$other');" 2>&1)
-check_ne "explicit check key overrides remote binding" "0" "$result"
-result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT dolt_creds_use('$other','session'); SELECT dolt_creds_check('origin');" 2>&1)
+  "SELECT dolt_creds_use('$other','session'); SELECT dolt_push('origin','main');" 2>&1)
 check_ne "session selection overrides remote binding" $'0\n0' "$result"
 DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: "SELECT dolt_creds_use('$kid');" >/dev/null || exit 1
 
@@ -306,15 +293,15 @@ bind_rc=0
 for pid in $pids; do wait "$pid" || bind_rc=1; done
 check "concurrent binding updates succeed" "0" "$bind_rc"
 for i in $(seq 1 8); do
-  result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
-    "SELECT json_extract(dolt_creds_check('--endpoint','https://localhost:$PORT/concurrent$i.db'),'$.kid')='$kid';")
-  check "concurrent binding $i survives" "1" "$result"
+  result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
+    "SELECT dolt_remote('add','c$i','https://localhost:$PORT/concurrent$i.db'); SELECT dolt_push('c$i','main');")
+  check "concurrent binding $i survives" $'0\n0' "$result"
 done
 DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
   "SELECT dolt_creds_bind('https://LOCALHOST:$PORT/repo.db/','$kid');" >/dev/null || exit 1
 result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT json_extract(dolt_creds_check('origin'),'$.kid')='$kid';")
-check "binding URL normalization preserves host and path identity" "1" "$result"
+  "SELECT dolt_push('origin','main');")
+check "binding URL normalization preserves host and path identity" "0" "$result"
 DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: "SELECT dolt_creds_use('$kid');" >/dev/null || exit 1
 
 mkdir -p "$TMP/public_srv" "$TMP/anon" "$TMP/reader"
@@ -342,14 +329,6 @@ check "explicit anonymous HTTPS push remains available" $'0\n0' "$result"
 result=$(DOLTLITE_CREDS_DIR="$TMP/reader" "$DOLTLITE" "$TMP/public_clone.db" \
   "SELECT dolt_clone('$PUBLIC_URL'); SELECT count(*) FROM users;")
 check "public HTTPS clone works without credentials" $'0\n3' "$result"
-result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" "$TMP/src.db" \
-  "SELECT dolt_creds_check('public');" 2>&1)
-case "$result" in *"does not support credential checks"*) check "auth-disabled server does not claim verification" yes yes;;
-  *) check "auth-disabled server does not claim verification" "unsupported credential checks" "$result";; esac
-result=$(DOLTLITE_CREDS_DIR="$TMP/cc" "$DOLTLITE" :memory: \
-  "SELECT dolt_creds_check('--endpoint','http://localhost:$PUBLIC_PORT/public.db');" 2>&1)
-case "$result" in *"require HTTPS"*) check "credential check refuses plaintext" yes yes;;
-  *) check "credential check refuses plaintext" "HTTPS required" "$result";; esac
 
 echo ""
 echo "======================================="
