@@ -44,6 +44,7 @@ jobs:
       env:
         BENCH_RUNS: 5
         BENCH_AC_WRITE_RUNS: 9
+        BENCH_AC_WRITE_STAT: min
         BENCH_BASELINE_LABEL: PR base
         BENCH_CANDIDATE_LABEL: PR candidate
         BENCH_BASELINE_KIND: doltlite

@@ -97,8 +97,26 @@ def main():
         assert len(samples) == 19 and samples[0] == "section\ttest\trun\tbaseline_us\tcandidate_us"
         assert samples[1:5] == [f"mem\teven\t{i}\t{b}\t{c}" for i, b, c in
                                  ((1, 1000, 8000), (2, 4000, 2000), (3, 3000, 4000), (4, 2000, 6000))]
-    print("Sysbench harness: medians, reports, samples, pairing, ceiling "
-          "and paired-ratio confirmation checks passed")
+        report = helper.parent / "sysbench_report.py"
+        section = root / "section.tsv"
+        section.write_text("".join(
+            f"ac\t{test}\t{i}\t{b}\t{c}\n" for test, rows in (
+                ("noisy_ac", ((100, 900), (400, 120), (90, 800))),
+                ("reads", ((100, 900), (400, 120), (90, 800))))
+            for i, (b, c) in enumerate(rows, 1)))
+        for stat, expected in ((None, "ac\tnoisy_ac\t100\t800\nac\treads\t100\t800\n"),
+                               ("min", "ac\tnoisy_ac\t90\t120\nac\treads\t100\t800\n")):
+            results = root / f"results-{stat}.tsv"
+            env = dict(os.environ)
+            env.pop("BENCH_AC_WRITE_STAT", None)
+            if stat:
+                env["BENCH_AC_WRITE_STAT"] = stat
+            subprocess.run(["python3", str(report), "section", str(section), "ac",
+                            "noisy_ac reads", str(results)],
+                           check=True, capture_output=True, env=env, timeout=30)
+            assert results.read_text() == expected, (stat, results.read_text())
+    print("Sysbench harness: medians, fastest autocommit runs, reports, samples, "
+          "pairing, ceiling and paired-ratio confirmation checks passed")
 
 
 if __name__ == "__main__":
