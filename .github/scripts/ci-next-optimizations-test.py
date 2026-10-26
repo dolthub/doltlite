@@ -206,7 +206,7 @@ def coverage_archives():
         root = Path(tmp)
         payload = root / 'payload/build-coverage'
         payload.mkdir(parents=True)
-        names = ['doltlite', 'doltlite-remotesrv', 'sqlite3-stock', 'testfixture', 'unit_test']
+        names = ['doltlite', 'doltlite-remotesrv', 'sqlite3-stock', 'testfixture', 'http_transfer_test', 'unit_test']
         for name in names:
             executable(payload / name, f'#!/bin/sh\necho {name}\n')
         (payload / 'blake3.o').write_bytes(b'object')
@@ -218,7 +218,7 @@ def coverage_archives():
         result = run(command)
         assert result.returncode == 0, result
         checks += 1
-        for archive, expected in [('build', names + ['blake3.o', 'libdoltlite.a', 'sqlite3.h', 'vec1.so', 'vec1testscalar.so']), ('cli', names[:3]), ('fixture', names[:4] + ['vec1.so', 'vec1testscalar.so'])]:
+        for archive, expected in [('build', names + ['blake3.o', 'libdoltlite.a', 'sqlite3.h', 'vec1.so', 'vec1testscalar.so']), ('cli', names[:3]), ('fixture', names[:5] + ['vec1.so', 'vec1testscalar.so'])]:
             dest = root / archive
             with tarfile.open(root / f'coverage-{archive}.tar.gz') as tar:
                 files = [m for m in tar if m.isfile()]
@@ -239,7 +239,7 @@ def coverage_archives():
             assert run(command).returncode != 0, name
             (payload / name).write_bytes(original)
             checks += 1
-        for name in names[:4]:
+        for name in names[:5]:
             original = (payload / name).read_bytes()
             (payload / name).unlink()
             assert run(command).returncode != 0, name
