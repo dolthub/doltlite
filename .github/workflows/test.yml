@@ -546,6 +546,7 @@ jobs:
         bash ../test/remotesrv_auth_body_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/remotesrv_http_push_request_count_test.sh ./doltlite ./doltlite-remotesrv
 
     - name: SQLite files and mixed-engine attachments
       if: ${{ !cancelled() }}
