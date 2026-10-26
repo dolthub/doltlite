@@ -236,7 +236,8 @@ check_le "older tag rescan batches lazy fetches" 40 "$M_GET"
 
 echo "=== new commit on a branch ==="
 fresh_lazy
-measure "push new commit" "SELECT dolt_branch('feat2'); SELECT dolt_checkout('feat2'); INSERT INTO t VALUES(900001,'new'); SELECT dolt_commit('-a','-m','feat change'); SELECT dolt_push('origin','feat2');"
+"$DB" "$LURI" "SELECT dolt_branch('feat2'); SELECT dolt_checkout('feat2'); INSERT INTO t VALUES(900001,'new'); SELECT dolt_commit('-a','-m','feat change');" >/dev/null
+measure "push new commit" "SELECT dolt_checkout('feat2'); SELECT dolt_push('origin','feat2');"
 check_ge "new commit push uploads chunks" 1 "$M_PUT"
 check_le "new commit push fetches few chunks" 20 "$M_GET"
 result=$("$DB" "$TMP/verify.db" "SELECT dolt_clone('--branch','feat2','$URL'); SELECT v FROM t WHERE id=900001; SELECT count(*) FROM t;" 2>&1)
