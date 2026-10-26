@@ -2733,6 +2733,7 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   sqlite3_free(data);
   if( rc!=SQLITE_OK ) return rc;
 
+  pBtree->bMasterRootChangedTxn = 1;
   pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
   btreeBumpLocalDataVersion(pBtree);
 
