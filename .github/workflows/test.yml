@@ -370,30 +370,28 @@ jobs:
         retention-days: 1
 
   sqlite-regression:
-    name: sqlite-regression-${{ matrix.bucket }}
+    name: sqlite-regression-${{ matrix.group }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       TESTFIXTURE_VARIANT: coverage
     strategy:
       fail-fast: false
       matrix:
-        bucket:
-          - core-sql
-          - ddl-schema
-          - storage
-          - fault-fuzz
-          - fts3
-          - fts4-core
-          - fts4-merge
-          - fts5
-          - fts5-fault
-          - ported
-          - rtree
-          - shell
-          - slow-plain
-          - vec1
-          - vec1-fault
+        include:
+          # Buckets are grouped so each job runs about ten minutes.
+          - group: fault-fuzz
+            bucket: fault-fuzz core-sql shell ddl-schema
+          - group: fts5
+            bucket: fts5
+          - group: storage
+            bucket: storage fts4-core rtree
+          - group: fts5-fault
+            bucket: fts5-fault ported vec1
+          - group: fts-misc
+            bucket: fts4-merge fts3 vec1-fault
+          - group: slow-plain
+            bucket: slow-plain
     steps:
     - uses: actions/checkout@v4
 
@@ -402,13 +400,13 @@ jobs:
         bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
 
     - name: Download instrumented build
-      if: matrix.bucket != 'slow-plain'
+      if: matrix.group != 'slow-plain'
       uses: actions/download-artifact@v4
       with:
         name: coverage-fixture
 
     - name: Extract instrumented build
-      if: matrix.bucket != 'slow-plain'
+      if: matrix.group != 'slow-plain'
       run: |
         tar -xzf coverage-fixture.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
@@ -420,7 +418,7 @@ jobs:
     # (issue 2397: bigsort). A plain build keeps them fast and the budget
     # meaningful; their line coverage is exercised by the other buckets.
     - name: Build plain testfixture
-      if: matrix.bucket == 'slow-plain'
+      if: matrix.group == 'slow-plain'
       run: |
         bash .github/scripts/install-apt-deps.sh tcl-dev
         mkdir build-plain && cd build-plain
@@ -459,21 +457,23 @@ jobs:
     # The shell bucket drives the doltlite CLI through tester.tcl's catchcmd,
     # which looks for a `sqlite3` next to the testfixture. No other bucket
     # gets the alias, so their shell*.test files keep skipping as before.
-    - name: Alias the doltlite CLI for the shell bucket
-      if: matrix.bucket == 'shell'
-      run: ln -sf doltlite "$FIXTURE_DIR/sqlite3"
-
-    - name: SQLite regression tests - ${{ matrix.bucket }}
+    - name: SQLite regression tests - ${{ matrix.group }}
       run: |
         cd "$FIXTURE_DIR"
-        bash ../test/run_testfixture.sh "SQLite regression ${{ matrix.bucket }}" 600 \
-          $(tr '\n' ' ' < ../test/regression-buckets/${{ matrix.bucket }}.txt)
+        failed=0
+        for bucket in ${{ matrix.bucket }}; do
+          [ "$bucket" = shell ] && ln -sf doltlite sqlite3
+          bash ../test/run_testfixture.sh "SQLite regression $bucket" 600 \
+            $(tr '\n' ' ' < "../test/regression-buckets/$bucket.txt") || failed=1
+          [ "$bucket" = shell ] && rm -f sqlite3
+        done
+        test "$failed" -eq 0
 
     - name: Upload regression coverage profiles
-      if: always() && matrix.bucket != 'slow-plain'
+      if: always() && matrix.group != 'slow-plain'
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-profile-regression-${{ matrix.bucket }}
+        name: coverage-profile-regression-${{ matrix.group }}
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
