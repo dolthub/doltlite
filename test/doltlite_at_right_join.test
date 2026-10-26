@@ -1,0 +1,68 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A RIGHT or FULL JOIN records which right-hand rows matched by rowid, or by
+# primary key for WITHOUT ROWID. dolt_at_<table>() must identify its rows the
+# same way whether xFilter scans or seeks the primary key, or matched rows are
+# emitted again as unmatched. Each case compares the join against the same join
+# on a plain copy of the snapshot.
+
+proc at_join_case {name table cols pkdecl c1 c2 tcol {fcol ""}} {
+  if {$fcol eq ""} {set fcol $tcol}
+  execsql "DROP TABLE IF EXISTS $table; DROP TABLE IF EXISTS snap"
+  execsql "CREATE TABLE ${table}($cols, $pkdecl)"
+  execsql $c1
+  set h [execsql "SELECT dolt_commit('-Am','$name c1')"]
+  execsql $c2
+  execsql "SELECT dolt_commit('-Am','$name c2')"
+  execsql "CREATE TEMP TABLE snap AS SELECT * FROM dolt_at_${table}('$h')"
+  foreach kind {FULL RIGHT} {
+    set got [execsql "
+      SELECT t.$tcol, f.$fcol FROM $table t
+        $kind JOIN dolt_at_${table}('$h') f ON t.$tcol=f.$fcol
+       ORDER BY 1, 2"]
+    set want [execsql "
+      SELECT t.$tcol, f.$fcol FROM $table t
+        $kind JOIN snap f ON t.$tcol=f.$fcol
+       ORDER BY 1, 2"]
+    do_test at-right-join-$name-$kind [list set got $got] $want
+  }
+  execsql "DROP TABLE temp.snap"
+}
+
+at_join_case intpk t1 {id INTEGER, v TEXT} {PRIMARY KEY(id)} {
+  INSERT INTO t1 VALUES(1,'a'),(2,'b'),(3,'c');
+} {
+  UPDATE t1 SET v='B' WHERE id=2; DELETE FROM t1 WHERE id=3;
+  INSERT INTO t1 VALUES(4,'d');
+} id
+
+at_join_case textpk t2 {k TEXT, v TEXT} {PRIMARY KEY(k)} {
+  INSERT INTO t2 VALUES('a','1'),('b','2'),('c','3');
+} {
+  UPDATE t2 SET v='X' WHERE k='b'; DELETE FROM t2 WHERE k='c';
+  INSERT INTO t2 VALUES('d','4');
+} k
+
+at_join_case compositepk t3 {a INTEGER, b TEXT, v TEXT} {PRIMARY KEY(b, a)} {
+  INSERT INTO t3 VALUES(1,'x','1'),(2,'x','2'),(1,'y','3');
+} {
+  UPDATE t3 SET v='Z' WHERE a=2; DELETE FROM t3 WHERE b='y';
+  INSERT INTO t3 VALUES(3,'z','4');
+} a
+
+# A key column named like the hidden commit_ref column is renamed in the
+# declared schema; the primary key must name it the same way.
+at_join_case reservedpk t4 {commit_ref TEXT, v TEXT} {PRIMARY KEY(commit_ref)} {
+  INSERT INTO t4 VALUES('a','1'),('b','2'),('c','3');
+} {
+  DELETE FROM t4 WHERE commit_ref='c'; INSERT INTO t4 VALUES('d','4');
+} commit_ref commit_ref_1
+
+at_join_case keyless t5 {id INTEGER, v TEXT} {UNIQUE(id)} {
+  INSERT INTO t5 VALUES(1,'a'),(2,'b'),(3,'c');
+} {
+  DELETE FROM t5 WHERE id=3; INSERT INTO t5 VALUES(4,'d');
+} id
+
+finish_test
