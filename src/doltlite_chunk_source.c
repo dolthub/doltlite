@@ -113,6 +113,8 @@ static int SQLITE_CALLBACK csOriginGetMany(
     }
   }
 
+  doltliteHttpRemoteSetConnection(pRemote, p->db);
+
   for(offset=0; offset<nHash; offset += CHUNK_READ_BATCH_MAX){
     ProllyHash aBatch[CHUNK_READ_BATCH_MAX];
     int nBatch = nHash - offset;

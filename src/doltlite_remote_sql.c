@@ -80,6 +80,7 @@ static DoltliteRemote *openRemoteByUrl(
   }
   if( strncmp(zUrl, "http://", 7)==0 || strncmp(zUrl, "https://", 8)==0 ){
     pRemote = doltliteHttpRemoteOpen(zUrl);
+    doltliteHttpRemoteSetConnection(pRemote, db);
     doltliteRemoteSetBusyHandler(pRemote, remoteSqlBusyHandler, db);
     return pRemote;
   }
@@ -2392,13 +2393,305 @@ static sqlite3_module remotesModule = {
 #define DOLTLITE_DEFAULT_LOGIN_URL "https://dolthub.com/settings/credentials"
 
 #ifdef DOLTLITE_HAVE_AUTH
+static int credsSqlSelectDefault(DoltliteCreds *cred){
+  char *kid = doltliteCredsKid(cred);
+  int rc = kid ? doltliteCredsConfigSet(0, "user.creds", kid, 1) : 1;
+  sqlite3_free(kid);
+  return rc;
+}
+
+static const char *credsSqlRemoteUrl(sqlite3*, const char*);
+
+static void doltCredsCheckFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  const char *endpoint = "https://doltliteremoteapi.dolthub.com/_";
+  const char *key = 0;
+  char *result = 0, *error = 0, *ownedEndpoint = 0;
+  int i, rc;
+  for(i=0; i<argc; i++){
+    const char *arg = (const char*)sqlite3_value_text(argv[i]);
+    if( !arg ) goto usage;
+    if( strcmp(arg, "--endpoint")==0 || strcmp(arg, "--creds")==0 ){
+      const char *value;
+      if( ++i>=argc || !(value = (const char*)sqlite3_value_text(argv[i])) ) goto usage;
+      if( strcmp(arg, "--creds")==0 ) key = value;
+      else endpoint = value;
+    }else if( argc==1 ){
+      const char *url = credsSqlRemoteUrl(db, arg);
+      if( !url ) goto usage;
+      endpoint = url;
+    }else goto usage;
+  }
+  if( !strstr(endpoint, "://") ){
+    ownedEndpoint = sqlite3_mprintf("https://%s/_", endpoint);
+    if( !ownedEndpoint ){ sqlite3_result_error_nomem(ctx); return; }
+    endpoint = ownedEndpoint;
+  }else if( !strchr(strstr(endpoint, "://")+3, '/') ){
+    ownedEndpoint = sqlite3_mprintf("%s/_", endpoint);
+    if( !ownedEndpoint ){ sqlite3_result_error_nomem(ctx); return; }
+    endpoint = ownedEndpoint;
+  }
+  rc = doltliteHttpRemoteCheckCreds(db, endpoint, key, &result, &error);
+  if( rc==SQLITE_OK ) sqlite3_result_text(ctx, result, -1, SQLITE_TRANSIENT);
+  else{
+    sqlite3_result_error(ctx, error ? error : sqlite3_errstr(rc), -1);
+    sqlite3_result_error_code(ctx, rc);
+  }
+  sqlite3_free(result);
+  sqlite3_free(error);
+  sqlite3_free(ownedEndpoint);
+  return;
+usage:
+  sqlite3_result_error(ctx, "usage: dolt_creds_check([remote] | ['--endpoint', endpoint,] ['--creds', key])", -1);
+}
+
+static void doltCredsUseFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  const char *name, *scope = 0;
+  DoltliteCreds *cred = 0;
+  char *kid;
+  int rc;
+  if( argc<1 || argc>2 || sqlite3_value_type(argv[0])!=SQLITE_TEXT
+   || (argc==2 && sqlite3_value_type(argv[1])!=SQLITE_TEXT) ){
+    sqlite3_result_error(ctx, "usage: dolt_creds_use(key [, 'session'])", -1);
+    return;
+  }
+  name = (const char*)sqlite3_value_text(argv[0]);
+  if( argc==2 ) scope = (const char*)sqlite3_value_text(argv[1]);
+  if( scope && strcmp(scope, "session") ){
+    sqlite3_result_error(ctx, "credential scope must be 'session'", -1);
+    return;
+  }
+  if( !name ){ sqlite3_result_error_nomem(ctx); return; }
+  if( strcmp(name, "anonymous")==0 ) kid = sqlite3_mprintf("anonymous");
+  else{
+    if( doltliteCredsLoadNamed(0, name, &cred) ){
+      sqlite3_result_error(ctx, "no such credential or invalid private key", -1);
+      return;
+    }
+    kid = doltliteCredsKid(cred);
+    doltliteCredsFree(cred);
+  }
+  if( !kid ){ sqlite3_result_error_nomem(ctx); return; }
+  if( scope ){
+    rc = sqlite3_set_clientdata(db, DOLTLITE_CREDS_SESSION, kid, sqlite3_free);
+    if( rc!=SQLITE_OK ) sqlite3_result_error_code(ctx, rc);
+    else sqlite3_result_int(ctx, 0);
+  }else{
+    rc = doltliteCredsConfigSet(0, "user.creds", kid, 0);
+    sqlite3_free(kid);
+    if( rc ) sqlite3_result_error(ctx, "failed to save credential selection", -1);
+    else sqlite3_result_int(ctx, 0);
+  }
+}
+
+static void doltCredsImportFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  const char *path;
+  DoltliteCreds *cred = 0;
+  if( argc==2 && sqlite3_value_type(argv[0])==SQLITE_TEXT
+   && sqlite3_stricmp((const char*)sqlite3_value_text(argv[0]), "--no-profile")==0 ){
+    argc--;
+    argv++;
+  }
+  if( argc!=1 || sqlite3_value_type(argv[0])!=SQLITE_TEXT ){
+    sqlite3_result_error(ctx, "usage: dolt_creds_import(['--no-profile',] jwk_filename)", -1);
+    return;
+  }
+  path = (const char*)sqlite3_value_text(argv[0]);
+  if( !path ){ sqlite3_result_error_nomem(ctx); return; }
+  if( doltliteCredsImport(path, &cred) ){
+    sqlite3_result_error(ctx, "could not read a valid private JWK credential", -1);
+  }else if( doltliteCredsSave(cred, 0) || credsSqlSelectDefault(cred) ){
+    sqlite3_result_error(ctx, "failed to save imported credential or selection", -1);
+  }else{
+    sqlite3_result_int(ctx, 0);
+  }
+  doltliteCredsFree(cred);
+}
+
+static void doltCredsRmFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  int i;
+  if( argc<1 ){
+    sqlite3_result_error(ctx, "usage: dolt_creds_rm(key [, key ...])", -1);
+    return;
+  }
+  for(i=0; i<argc; i++){
+    const char *name = (const char*)sqlite3_value_text(argv[i]);
+    if( !name || doltliteCredsRemove(0, name) ){
+      sqlite3_result_error(ctx, "no such credential or failed to remove credential", -1);
+      return;
+    }
+  }
+  sqlite3_result_int(ctx, 0);
+}
+
+static const char *credsSqlRemoteUrl(sqlite3 *db, const char *name){
+  const char *url = 0;
+  ChunkStore *cs;
+  if( !name ) return 0;
+  if( strncmp(name, "https://", 8)==0 ) return name;
+  cs = doltliteGetChunkStore(db);
+  if( cs && chunkStoreFindRemote(cs, name, &url)==SQLITE_OK
+   && url && strncmp(url, "https://", 8)==0 ) return url;
+  return 0;
+}
+
+static void doltCredsBindFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  const char *url, *name;
+  char *key, *kid = 0;
+  DoltliteCreds *cred = 0;
+  int rc;
+  if( argc!=2 || sqlite3_value_type(argv[0])!=SQLITE_TEXT
+   || sqlite3_value_type(argv[1])!=SQLITE_TEXT ){
+    sqlite3_result_error(ctx, "usage: dolt_creds_bind(remote_or_https_url, key)", -1);
+    return;
+  }
+  url = credsSqlRemoteUrl(db, (const char*)sqlite3_value_text(argv[0]));
+  if( !url ){
+    sqlite3_result_error(ctx, "unknown remote or HTTPS URL required", -1);
+    return;
+  }
+  name = (const char*)sqlite3_value_text(argv[1]);
+  if( !name ){ sqlite3_result_error_nomem(ctx); return; }
+  if( strcmp(name, "anonymous")==0 ) kid = sqlite3_mprintf("anonymous");
+  else if( !doltliteCredsLoadNamed(0, name, &cred) ) kid = doltliteCredsKid(cred);
+  else{
+    sqlite3_result_error(ctx, "no such credential or invalid private key", -1);
+    return;
+  }
+  doltliteCredsFree(cred);
+  key = doltliteCredsRemoteKey(url);
+  rc = key && kid ? doltliteCredsConfigSet(0, key, kid, 0) : 1;
+  sqlite3_free(key);
+  sqlite3_free(kid);
+  if( rc ) sqlite3_result_error(ctx, "failed to save remote credential binding", -1);
+  else sqlite3_result_int(ctx, 0);
+}
+
+typedef struct CredsRow CredsRow;
+struct CredsRow {
+  char *kid;
+  char *pub;
+  int active;
+};
+typedef struct CredsVtab CredsVtab;
+struct CredsVtab { sqlite3_vtab base; sqlite3 *db; };
+typedef struct CredsCur CredsCur;
+struct CredsCur {
+  sqlite3_vtab_cursor base;
+  CredsRow *rows;
+  int n;
+  int i;
+};
+
+static void credsRowsClear(CredsCur *c){
+  int i;
+  for(i=0; i<c->n; i++){
+    sqlite3_free(c->rows[i].kid);
+    sqlite3_free(c->rows[i].pub);
+  }
+  sqlite3_free(c->rows);
+  c->rows = 0;
+  c->n = c->i = 0;
+}
+static int credsConnect(sqlite3 *db, void *aux, int n, const char *const*a,
+                        sqlite3_vtab **out, char **err){
+  int rc;
+  (void)aux; (void)n; (void)a; (void)err;
+  rc = doltliteVtabConnectSimple(db,
+      "CREATE TABLE x(kid TEXT, public_key TEXT, active BOOLEAN, error TEXT)",
+      sizeof(CredsVtab), out);
+  if( rc==SQLITE_OK ){
+    ((CredsVtab*)*out)->db = db;
+    sqlite3_vtab_config(db, SQLITE_VTAB_DIRECTONLY);
+  }
+  return rc;
+}
+static int credsBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
+  (void)v;
+  p->estimatedCost = 10;
+  p->estimatedRows = 10;
+  return SQLITE_OK;
+}
+static int credsOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **out){
+  (void)v;
+  return doltliteVtabOpenCursor(out, sizeof(CredsCur));
+}
+static int credsClose(sqlite3_vtab_cursor *cur){
+  credsRowsClear((CredsCur*)cur);
+  sqlite3_free(cur);
+  return SQLITE_OK;
+}
+static int credsFilter(sqlite3_vtab_cursor *cur, int idx, const char *str,
+                       int argc, sqlite3_value **argv){
+  CredsCur *c = (CredsCur*)cur;
+  sqlite3 *db = ((CredsVtab*)cur->pVtab)->db;
+  DoltliteCreds *active = 0;
+  char *activeKid = 0, *error = 0;
+  char **kids = 0;
+  int n = 0, i, rc = SQLITE_OK;
+  (void)idx; (void)str; (void)argc; (void)argv;
+  credsRowsClear(c);
+  if( doltliteCredsList(0, &kids, &n) ) return SQLITE_IOERR;
+  doltliteCredsResolve(0, sqlite3_get_clientdata(db, DOLTLITE_CREDS_SESSION),
+                       0, &active, 0, &error);
+  if( active ) activeKid = doltliteCredsKid(active);
+  doltliteCredsFree(active);
+  sqlite3_free(error);
+  if( n ){
+    c->rows = sqlite3_malloc64(n * sizeof(CredsRow));
+    if( !c->rows ){ rc = SQLITE_NOMEM; goto done; }
+    memset(c->rows, 0, n * sizeof(CredsRow));
+    c->n = n;
+  }
+  for(i=0; i<n; i++){
+    DoltliteCreds *cred = 0;
+    c->rows[i].kid = kids[i];
+    kids[i] = 0;
+    if( !doltliteCredsLoad(0, c->rows[i].kid, &cred) ){
+      c->rows[i].pub = doltliteCredsPubKeyB32(cred);
+      doltliteCredsFree(cred);
+      if( !c->rows[i].pub ){ rc = SQLITE_NOMEM; break; }
+      c->rows[i].active = activeKid && strcmp(activeKid, c->rows[i].kid)==0;
+    }
+  }
+done:
+  sqlite3_free(activeKid);
+  doltliteCredsFreeList(kids, n);
+  return rc;
+}
+static int credsNext(sqlite3_vtab_cursor *c){ ((CredsCur*)c)->i++; return SQLITE_OK; }
+static int credsEof(sqlite3_vtab_cursor *c){ return ((CredsCur*)c)->i>=((CredsCur*)c)->n; }
+static int credsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
+  CredsCur *c = (CredsCur*)cur;
+  CredsRow *r = &c->rows[c->i];
+  if( col==0 ) sqlite3_result_text(ctx, r->kid, -1, SQLITE_TRANSIENT);
+  else if( col==1 ) sqlite3_result_text(ctx, r->pub, -1, SQLITE_TRANSIENT);
+  else if( col==2 ) sqlite3_result_int(ctx, r->active);
+  else if( !r->pub ) sqlite3_result_text(ctx, "unreadable or invalid credential", -1, SQLITE_STATIC);
+  return SQLITE_OK;
+}
+static int credsRowid(sqlite3_vtab_cursor *c, sqlite3_int64 *rowid){
+  *rowid = ((CredsCur*)c)->i;
+  return SQLITE_OK;
+}
+static sqlite3_module credsModule = {
+  0,0,credsConnect,credsBestIndex,doltliteVtabDisconnect,0,
+  credsOpen,credsClose,credsFilter,credsNext,credsEof,credsColumn,credsRowid,
+  0,0,0,0,0,0,0,0,0,0,0,0
+};
+
 static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   DoltliteCreds *cred = 0;
   char *kid = 0, *pub = 0, *msg = 0;
   const char *loginUrl;
-  (void)argc;
   (void)argv;
+  if( argc!=0 ){
+    sqlite3_result_error(ctx, "dolt_creds_new() takes no arguments", -1);
+    return;
+  }
 
   if( doltliteCredsGenerate(&cred)!=0 ){
     doltliteVcResultError(ctx, db, "failed to generate credential");
@@ -2411,6 +2704,11 @@ static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
 
+  if( credsSqlSelectDefault(cred) ){
+    doltliteCredsFree(cred);
+    sqlite3_result_error(ctx, "failed to save credential selection", -1);
+    return;
+  }
   kid = doltliteCredsKid(cred);
   pub = doltliteCredsPubKeyB32(cred);
   loginUrl = getenv("DOLTLITE_LOGIN_URL");
@@ -2436,6 +2734,47 @@ static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   doltliteCredsFree(cred);
 }
 
+static void doltCredsExportFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  const char *kid;
+  DoltliteCreds *cred = 0;
+  if( argc<1 || argc>2 || !sqlite3_value_text(argv[0]) ||
+      (argc==2 && !sqlite3_value_text(argv[1])) ){
+    doltliteVcResultError(ctx, db,
+        "usage: dolt_creds('export', <kid> [, <authorized-keys-dir>])");
+    return;
+  }
+  kid = (const char*)sqlite3_value_text(argv[0]);
+  if( doltliteCredsLoadNamed(0, kid, &cred)!=0 ){
+    doltliteVcResultError(ctx, db, "no such credential");
+    return;
+  }
+  if( argc==1 ){
+    char *json = doltliteCredsToPublicJwk(cred);
+    if( json ){
+      sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
+      sqlite3_free(json);
+    }else{
+      doltliteVcResultError(ctx, db, "out of memory");
+    }
+  }else{
+    const char *dir = (const char*)sqlite3_value_text(argv[1]);
+    if( doltliteCredsSavePublic(cred, dir)!=0 ){
+      doltliteVcResultError(ctx, db, "failed to export public credential");
+    }else{
+      char *msg = sqlite3_mprintf(
+          "Exported public credential %s to %s", kid, dir);
+      if( msg ){
+        sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
+        sqlite3_free(msg);
+      }else{
+        doltliteVcResultError(ctx, db, "out of memory");
+      }
+    }
+  }
+  doltliteCredsFree(cred);
+}
+
 static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   const char *action = "list";
@@ -2444,10 +2783,25 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     action = (const char*)sqlite3_value_text(argv[0]);
   }
 
-  if( strcmp(action, "list")==0 ){
+  if( strcmp(action, "check")==0 ){
+    doltCredsCheckFunc(ctx, argc-1, argv+1);
+    return;
+  }
+  if( strcmp(action, "use")==0 ){
+    doltCredsUseFunc(ctx, argc-1, argv+1);
+    return;
+  }else if( strcmp(action, "import")==0 ){
+    doltCredsImportFunc(ctx, argc-1, argv+1);
+    return;
+  }else if( strcmp(action, "bind")==0 ){
+    doltCredsBindFunc(ctx, argc-1, argv+1);
+    return;
+  }
+  if( strcmp(action, "list")==0 || strcmp(action, "ls")==0 ){
     char **kids = 0;
     int n = 0, i;
-    char *msg;
+    char *msg, *activeKid = 0, *error = 0;
+    DoltliteCreds *active = 0;
     if( doltliteCredsList(0, &kids, &n)!=0 ){
       doltliteVcResultError(ctx, db, "failed to read ~/.doltlite/creds");
       return;
@@ -2458,9 +2812,15 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       doltliteCredsFreeList(kids, n);
       return;
     }
+    doltliteCredsResolve(0, sqlite3_get_clientdata(db, DOLTLITE_CREDS_SESSION),
+                         0, &active, 0, &error);
+    if( active ) activeKid = doltliteCredsKid(active);
+    doltliteCredsFree(active);
+    sqlite3_free(error);
     msg = sqlite3_mprintf("%d credential(s):", n);
     for(i=0; i<n && msg; i++){
-      char *nx = sqlite3_mprintf("%s\n  %s", msg, kids[i]);
+      char *nx = sqlite3_mprintf("%s\n%s %s", msg,
+          activeKid && strcmp(activeKid, kids[i])==0 ? "*" : " ", kids[i]);
       sqlite3_free(msg);
       msg = nx;
     }
@@ -2470,6 +2830,7 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }else{
       doltliteVcResultError(ctx, db, "out of memory");
     }
+    sqlite3_free(activeKid);
     doltliteCredsFreeList(kids, n);
   }else if( strcmp(action, "rm")==0 || strcmp(action, "remove")==0 ){
     const char *kid;
@@ -2490,43 +2851,7 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       }
     }
   }else if( strcmp(action, "export")==0 ){
-    const char *kid;
-    DoltliteCreds *cred = 0;
-    if( argc<2 || argc>3 || !sqlite3_value_text(argv[1]) ||
-        (argc==3 && !sqlite3_value_text(argv[2])) ){
-      doltliteVcResultError(ctx, db,
-          "usage: dolt_creds('export', <kid> [, <authorized-keys-dir>])");
-      return;
-    }
-    kid = (const char*)sqlite3_value_text(argv[1]);
-    if( doltliteCredsLoad(0, kid, &cred)!=0 ){
-      doltliteVcResultError(ctx, db, "no such credential");
-      return;
-    }
-    if( argc==2 ){
-      char *json = doltliteCredsToPublicJwk(cred);
-      if( json ){
-        sqlite3_result_text(ctx, json, -1, SQLITE_TRANSIENT);
-        sqlite3_free(json);
-      }else{
-        doltliteVcResultError(ctx, db, "out of memory");
-      }
-    }else{
-      const char *dir = (const char*)sqlite3_value_text(argv[2]);
-      if( doltliteCredsSavePublic(cred, dir)!=0 ){
-        doltliteVcResultError(ctx, db, "failed to export public credential");
-      }else{
-        char *msg = sqlite3_mprintf(
-            "Exported public credential %s to %s", kid, dir);
-        if( msg ){
-          sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
-          sqlite3_free(msg);
-        }else{
-          doltliteVcResultError(ctx, db, "out of memory");
-        }
-      }
-    }
-    doltliteCredsFree(cred);
+    doltCredsExportFunc(ctx, argc-1, argv+1);
   }else{
     doltliteVcResultError(ctx, db,
         "usage: dolt_creds(['list'] | 'rm', <kid> | 'export', <kid> "
@@ -2552,6 +2877,13 @@ int doltliteRemoteSqlRegister(sqlite3 *db){
                                  doltCredsNewFunc);
   if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds", -1,
                                  doltCredsFunc);
+  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_check", -1, doltCredsCheckFunc);
+  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_use", -1, doltCredsUseFunc);
+  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_import", -1, doltCredsImportFunc);
+  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_rm", -1, doltCredsRmFunc);
+  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_export", -1, doltCredsExportFunc);
+  if( rc==SQLITE_OK ) rc = doltliteCreateCommandFunc(db, "dolt_creds_bind", -1, doltCredsBindFunc);
+  if( rc==SQLITE_OK ) rc = doltliteCreateShieldedModule(db, "dolt_creds_ls", &credsModule, 0);
 #endif
   if( rc==SQLITE_OK ) rc = doltliteCreateShieldedModule(db, "dolt_remotes", &remotesModule, 0);
   return rc;

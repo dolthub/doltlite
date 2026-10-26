@@ -94,7 +94,7 @@ prelude() {  # prelude <page>: extra statements before the page's blocks
 substitute() {  # substitute <db>: rewrite doc placeholders into fixture values
   local db="$1" hash cred
   hash=$(vc_oracle_run_doltlite "$db" "SELECT dolt_hashof('topic');" 2>/dev/null)
-  cred=$(ls "$DOLTLITE_CREDS_DIR" 2>/dev/null | head -1 | sed 's/\.jwk$//')
+  cred=$(find "$DOLTLITE_CREDS_DIR" -maxdepth 1 -name '*.jwk' -exec basename {} \; 2>/dev/null | head -1 | sed 's/\.jwk$//')
   sed -e "s|0123abcd\.\.\.|$hash|g" \
       -e "s|<credential-id>|$cred|g" -e "s|<kid>|$cred|g" \
       -e "s|/srv/authorized-keys|$TMPDIR/authorized-keys|g" \
