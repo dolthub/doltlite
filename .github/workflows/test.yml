@@ -191,19 +191,22 @@ jobs:
           build/sqllogictest/test
 
   oracle-tests:
-    name: oracle-tests-${{ matrix.bucket }}
+    name: oracle-tests-${{ matrix.group }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        bucket:
-          - refs-workspace
-          - diff-history-data
-          - merge-replay-schema
-          - feature-interaction
-          - remotes-recovery
-          - sql
+        include:
+          # Grouped so each job runs under about ten minutes; the stock
+          # SQLite oracles ride with the shortest Dolt buckets.
+          - group: merge
+            bucket: merge-replay-schema
+          - group: refs-diff
+            bucket: refs-workspace diff-history-data
+          - group: features-sql
+            bucket: feature-interaction remotes-recovery
+            sql: true
 
     steps:
     - uses: actions/checkout@v4
@@ -230,15 +233,16 @@ jobs:
       run: bash test/check_oracle_buckets.sh
 
     - name: Version control oracle tests (vs Dolt)
-      if: matrix.bucket != 'sql'
       run: |
         cd build-coverage
         failed=0
-        while IFS= read -r oracle; do
-          [ -z "$oracle" ] && continue
-          echo "--- $oracle ---"
-          bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || failed=1
-        done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
+        for bucket in ${{ matrix.bucket }}; do
+          while IFS= read -r oracle; do
+            [ -z "$oracle" ] && continue
+            echo "--- $oracle ---"
+            bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || failed=1
+          done < "../test/oracle-buckets/$bucket.txt"
+        done
         test "$failed" -eq 0
       timeout-minutes: 18
 
@@ -246,13 +250,13 @@ jobs:
     # comparison against this binary, and if it shares doltlite's storage they
     # all pass without testing anything.
     - name: Assert the stock reference does not share doltlite's storage
-      if: matrix.bucket == 'sql'
+      if: matrix.sql
       run: |
         bash test/assert_stock_reference.sh \
           build-coverage/sqlite3-stock build-coverage/doltlite
 
     - name: SQL oracle tests (vs stock SQLite)
-      if: matrix.bucket == 'sql'
+      if: matrix.sql
       run: |
         cd build-coverage
         failed=0
@@ -274,7 +278,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-profile-oracles-${{ matrix.bucket }}
+        name: coverage-profile-oracles-${{ matrix.group }}
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
