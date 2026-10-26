@@ -44,6 +44,14 @@ check "Windows separator traversal rejected" reject_remove '..\victim'
 check "Windows drive-relative KID rejected" reject_remove 'C:victim'
 check "absolute KID rejected" reject_remove '/tmp/victim'
 
+failed_save=$(DOLTLITE_CREDS_DIR="$TMP/victim.jwk/creds" "$DOLTLITE" :memory: \
+  "SELECT dolt_creds_new();" 2>&1)
+case "$failed_save" in
+  *"failed to save credential under "*"/victim.jwk/creds"*|*"failed to save credential under "*"\\victim.jwk\\creds"*)
+    check "failed save reports the configured directory" true ;;
+  *) check "failed save reports the configured directory" false ;;
+esac
+
 created=$(DOLTLITE_CREDS_DIR="$TMP/creds" "$DOLTLITE" :memory: \
   "SELECT dolt_creds_new();" 2>/dev/null)
 created=${created//$'\r'/}

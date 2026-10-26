@@ -144,5 +144,6 @@ with tempfile.TemporaryDirectory(prefix='vc-oracle-creds-') as tmp:
             print('  FAIL:', name, ex)
 
 print(f'Results: {passed} passed, {failed} failed')
+print('__SUITE_COMPLETE__')
 sys.exit(bool(failed))
 PY

@@ -2393,6 +2393,19 @@ static sqlite3_module remotesModule = {
 #define DOLTLITE_DEFAULT_LOGIN_URL "https://dolthub.com/settings/credentials"
 
 #ifdef DOLTLITE_HAVE_AUTH
+static DoltliteCreds *credsSqlCurrent(sqlite3 *db){
+  const char *session = sqlite3_get_clientdata(db, DOLTLITE_CREDS_SESSION);
+  DoltliteCreds *cred = 0;
+  if( session ){
+    char *error = 0;
+    doltliteCredsResolve(0, session, 0, &cred, 0, &error);
+    sqlite3_free(error);
+  }else{
+    doltliteCredsLoadDefault(0, &cred);
+  }
+  return cred;
+}
+
 static int credsSqlSelectDefault(DoltliteCreds *cred){
   char *kid = doltliteCredsKid(cred);
   int rc = kid ? doltliteCredsConfigSet(0, "user.creds", kid, 1) : 1;
@@ -2628,17 +2641,15 @@ static int credsFilter(sqlite3_vtab_cursor *cur, int idx, const char *str,
   CredsCur *c = (CredsCur*)cur;
   sqlite3 *db = ((CredsVtab*)cur->pVtab)->db;
   DoltliteCreds *active = 0;
-  char *activeKid = 0, *error = 0;
+  char *activeKid = 0;
   char **kids = 0;
   int n = 0, i, rc = SQLITE_OK;
   (void)idx; (void)str; (void)argc; (void)argv;
   credsRowsClear(c);
   if( doltliteCredsList(0, &kids, &n) ) return SQLITE_IOERR;
-  doltliteCredsResolve(0, sqlite3_get_clientdata(db, DOLTLITE_CREDS_SESSION),
-                       0, &active, 0, &error);
+  active = credsSqlCurrent(db);
   if( active ) activeKid = doltliteCredsKid(active);
   doltliteCredsFree(active);
-  sqlite3_free(error);
   if( n ){
     c->rows = sqlite3_malloc64(n * sizeof(CredsRow));
     if( !c->rows ){ rc = SQLITE_NOMEM; goto done; }
@@ -2685,7 +2696,7 @@ static sqlite3_module credsModule = {
 static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   DoltliteCreds *cred = 0;
-  char *kid = 0, *pub = 0, *msg = 0;
+  char *kid = 0, *pub = 0, *msg = 0, *dir = 0;
   const char *loginUrl;
   (void)argv;
   if( argc!=0 ){
@@ -2697,12 +2708,18 @@ static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     doltliteVcResultError(ctx, db, "failed to generate credential");
     return;
   }
-  if( doltliteCredsSave(cred, 0)!=0 ){
+  dir = doltliteCredsDir();
+  if( !dir || doltliteCredsSave(cred, dir)!=0 ){
     doltliteCredsFree(cred);
-    doltliteVcResultError(ctx, db,
-        "failed to save credential under ~/.doltlite/creds (is $HOME set?)");
+    msg = sqlite3_mprintf("failed to save credential under %s",
+        dir ? dir : "DOLTLITE_CREDS_DIR or HOME (not set)");
+    if( msg ) doltliteVcResultError(ctx, db, msg);
+    else sqlite3_result_error_nomem(ctx);
+    sqlite3_free(msg);
+    sqlite3_free(dir);
     return;
   }
+  sqlite3_free(dir);
 
   if( credsSqlSelectDefault(cred) ){
     doltliteCredsFree(cred);
@@ -2800,7 +2817,7 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( strcmp(action, "list")==0 || strcmp(action, "ls")==0 ){
     char **kids = 0;
     int n = 0, i;
-    char *msg, *activeKid = 0, *error = 0;
+    char *msg, *activeKid = 0;
     DoltliteCreds *active = 0;
     if( doltliteCredsList(0, &kids, &n)!=0 ){
       doltliteVcResultError(ctx, db, "failed to read ~/.doltlite/creds");
@@ -2812,11 +2829,9 @@ static void doltCredsFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       doltliteCredsFreeList(kids, n);
       return;
     }
-    doltliteCredsResolve(0, sqlite3_get_clientdata(db, DOLTLITE_CREDS_SESSION),
-                         0, &active, 0, &error);
+    active = credsSqlCurrent(db);
     if( active ) activeKid = doltliteCredsKid(active);
     doltliteCredsFree(active);
-    sqlite3_free(error);
     msg = sqlite3_mprintf("%d credential(s):", n);
     for(i=0; i<n && msg; i++){
       char *nx = sqlite3_mprintf("%s\n%s %s", msg,

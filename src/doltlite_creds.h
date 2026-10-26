@@ -65,7 +65,6 @@ int doltliteCredsRemove(const char *dir, const char *kid);
 #define DOLTLITE_CREDS_SELECTED  1
 #define DOLTLITE_CREDS_ANONYMOUS 2
 
-int doltliteCredsConfigGet(const char*, const char*, char**);
 int doltliteCredsConfigSet(const char*, const char*, const char*, int);
 char *doltliteCredsRemoteKey(const char*);
 int doltliteCredsLoadNamed(const char*, const char*, DoltliteCreds**);

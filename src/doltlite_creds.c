@@ -1219,30 +1219,6 @@ static char *credsConfigPath(const char *dir, const char *suffix) {
   return path;
 }
 
-int doltliteCredsConfigGet(const char *dir, const char *key, char **out) {
-  char *owned = NULL, *path;
-  CredsSetting *settings = NULL, *p;
-  int rc;
-  *out = NULL;
-  if (!dir) dir = owned = doltliteCredsDir();
-  if (!dir) return 1;
-  path = credsConfigPath(dir, "");
-  rc = path ? credsSettingsRead(path, &settings) : 1;
-  if (!rc) {
-    for (p = settings; p; p = p->next) {
-      if (!strcmp(key, p->key)) {
-        *out = dlStrDup(p->value);
-        if (!*out) rc = 1;
-        break;
-      }
-    }
-  }
-  credsSettingsFree(settings);
-  sqlite3_free(path);
-  sqlite3_free(owned);
-  return rc;
-}
-
 int doltliteCredsConfigSet(
   const char *dir, const char *key, const char *value, int onlyIfMissing
 ) {
