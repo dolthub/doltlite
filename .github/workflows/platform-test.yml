@@ -302,28 +302,6 @@ jobs:
       run: cd build && bash ../test/tls_test.sh
       timeout-minutes: 2
 
-    - name: Windows Doltlite feature tests
-      if: matrix.platform == 'windows'
-      shell: msys2 {0}
-      run: |
-        cd build
-        export DLTEST_STRIP_CR=1
-        rm -rf /d/tmp
-        powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
-        cat > ./doltlite-no-msys-conv <<'SH'
-        #!/usr/bin/env bash
-        export MSYS2_ARG_CONV_EXCL='*'
-        exec ./doltlite "$@"
-        SH
-        chmod +x ./doltlite-no-msys-conv
-        export DOLTLITE=./doltlite-no-msys-conv
-        export DOLTLITE_SYSTEM="$(cygpath -w "$PWD/doltlite.exe")"
-        export DOLTLITE_SYSTEM_NULL=NUL
-        export DOLTLITE_REGRESSION_PREBUILT=1
-        DOLTLITE_BUILD_DIR="$PWD" DOLTLITE_SUITE_SET=windows \
-          bash ../test/run_doltlite_tests.sh
-      timeout-minutes: 35
-
     - name: Windows correctness regression tests
       if: matrix.platform == 'windows'
       shell: msys2 {0}
@@ -488,3 +466,63 @@ jobs:
     - name: Go integration test
       if: matrix.platform == 'ubuntu'
       run: build/go_quickstart
+
+  # The Windows suite set runs about 20 minutes serially; three shards keep
+  # it off the critical path. Shard k runs every third suite from k.
+  windows-suites:
+    name: windows-suites-${{ matrix.shard }}
+    if: inputs.platform == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CFLAGS: -O2 -g -Werror
+      DOLTLITE_AMALG_HTTP_PROBE: ${{ github.workspace }}/build/amalgamation_http_probe.exe
+      DOLTLITE_BLAKE3_KAT_BIN: ${{ github.workspace }}/build/blake3_kat.exe
+      DOLTLITE_CREDS_KAT_BIN: ${{ github.workspace }}/build/creds_kat.exe
+      DOLTLITE_CREDS_VERIFY_BIN: ${{ github.workspace }}/build/creds_verify_kat.exe
+      DOLTLITE_TLS_TEST_BIN: ${{ github.workspace }}/build/tls_test.exe
+      DOLTLITE_REQUIRE_TLS: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Windows dependencies
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl openssl
+
+    - name: Download checked build
+      uses: actions/download-artifact@v4
+      with:
+        name: checked-build-windows
+
+    - name: Extract checked Windows build
+      shell: msys2 {0}
+      run: tar -xzf checked-build-windows.tar.gz
+
+    - name: Windows Doltlite feature tests
+      shell: msys2 {0}
+      run: |
+        cd build
+        export DLTEST_STRIP_CR=1
+        rm -rf /d/tmp
+        powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
+        cat > ./doltlite-no-msys-conv <<'SH'
+        #!/usr/bin/env bash
+        export MSYS2_ARG_CONV_EXCL='*'
+        exec ./doltlite "$@"
+        SH
+        chmod +x ./doltlite-no-msys-conv
+        export DOLTLITE=./doltlite-no-msys-conv
+        export DOLTLITE_SYSTEM="$(cygpath -w "$PWD/doltlite.exe")"
+        export DOLTLITE_SYSTEM_NULL=NUL
+        export DOLTLITE_REGRESSION_PREBUILT=1
+        DOLTLITE_BUILD_DIR="$PWD" DOLTLITE_SUITE_SET=windows \
+          DOLTLITE_SUITE_SHARD=${{ matrix.shard }}/3 \
+          bash ../test/run_doltlite_tests.sh
+      timeout-minutes: 35
