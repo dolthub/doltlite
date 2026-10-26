@@ -302,6 +302,15 @@ jobs:
       run: cd build && bash ../test/tls_test.sh
       timeout-minutes: 2
 
+    # Native binaries resolve a /tmp path that reaches them inside SQL as
+    # D:\tmp; the junction points that at the MSYS /tmp the tests create.
+    - name: Map /tmp for native Windows binaries
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        rm -rf /d/tmp
+        powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
+
     - name: Windows correctness regression tests
       if: matrix.platform == 'windows'
       shell: msys2 {0}
