@@ -52,15 +52,6 @@ int doltliteSyncChunks(
   ProllyHash *aRoots,
   int nRoots
 );
-/* pDstRefs, when set, holds the destination's refs: roots that are
-** already published ref targets skip the partial-put resume scan. */
-int doltliteSyncChunksTo(
-  DoltliteRemote *pSrc,
-  DoltliteRemote *pDst,
-  ProllyHash *aRoots,
-  int nRoots,
-  const ChunkStore *pDstRefs
-);
 
 int doltlitePush(ChunkStore *pLocal, DoltliteRemote *pRemote,
                  const char *zBranch, int bForce);

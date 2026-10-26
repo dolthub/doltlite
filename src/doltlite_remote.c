@@ -463,16 +463,9 @@ static int syncRootIsPublished(const ChunkStore *pDstRefs,
   return 0;
 }
 
-int doltliteSyncChunks(
-  DoltliteRemote *pSrc,
-  DoltliteRemote *pDst,
-  ProllyHash *aRoots,
-  int nRoots
-){
-  return doltliteSyncChunksTo(pSrc, pDst, aRoots, nRoots, 0);
-}
-
-int doltliteSyncChunksTo(
+/* pDstRefs, when set, holds the destination's refs: roots that are
+** already published ref targets skip the partial-put resume scan. */
+static int syncChunks(
   DoltliteRemote *pSrc,
   DoltliteRemote *pDst,
   ProllyHash *aRoots,
@@ -595,6 +588,15 @@ int doltliteSyncChunksTo(
   syncQueueFree(&queue);
   sqlite3_free(pB);
   return rc;
+}
+
+int doltliteSyncChunks(
+  DoltliteRemote *pSrc,
+  DoltliteRemote *pDst,
+  ProllyHash *aRoots,
+  int nRoots
+){
+  return syncChunks(pSrc, pDst, aRoots, nRoots, 0);
 }
 
 /* FsRemote and LocalAsRemote both start with the vtable then ChunkStore*,
@@ -2233,7 +2235,7 @@ int doltlitePushAs(
         rc = SQLITE_NOMEM;
         goto push_done;
       }
-      rc = doltliteSyncChunksTo(pLocalSrc, pRemote, &localCommit, 1, &refs);
+      rc = syncChunks(pLocalSrc, pRemote, &localCommit, 1, &refs);
       pLocalSrc->xClose(pLocalSrc);
       if( rc!=SQLITE_OK ) goto push_done;
       {
@@ -2335,7 +2337,7 @@ int doltlitePushTag(
       rc = SQLITE_NOMEM;
       break;
     }
-    rc = doltliteSyncChunksTo(pLocalSrc, pRemote, &tagCommit, 1,
+    rc = syncChunks(pLocalSrc, pRemote, &tagCommit, 1,
                               &originalRefs);
     pLocalSrc->xClose(pLocalSrc);
     if( rc!=SQLITE_OK ) goto tag_attempt_done;
