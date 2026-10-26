@@ -252,7 +252,7 @@ def wiring():
     import re
     workflow = (repo / '.github/workflows/test.yml').read_text()
     for job, artifact in [('oracle-tests', 'coverage-cli'), ('sql-differential', 'coverage-cli'),
-                          ('coverage-remotes', 'coverage-cli'), ('sqlite-regression', 'coverage-fixture'),
+                          ('coverage-remotes', 'coverage-fixture'), ('sqlite-regression', 'coverage-fixture'),
                           ('coverage-native', 'coverage-build'), ('source-coverage', 'coverage-build')]:
         text = re.search(r'^  ' + job + r':\n(.*?)(?=^  [\w-]+:|\Z)', workflow, re.M | re.S)[1]
         assert f'name: {artifact}\n' in text and f'tar -xzf {artifact}.tar.gz' in text

@@ -86,6 +86,18 @@ jobs:
     if: needs.classify.outputs.light != 'true'
     uses: ./.github/workflows/ubuntu-test.yml
 
+  compile_checks:
+    name: compile-checks
+    needs: classify
+    if: needs.classify.outputs.light != 'true'
+    uses: ./.github/workflows/compile-checks.yml
+
+  wasm:
+    name: wasm
+    needs: classify
+    if: needs.classify.outputs.light != 'true'
+    uses: ./.github/workflows/wasm.yml
+
   build_macos:
     name: build-macos
     needs: classify
@@ -114,9 +126,15 @@ jobs:
     with:
       platform: windows
 
+  windows_suites:
+    name: windows-suites
+    needs: [classify, build_windows]
+    if: needs.classify.outputs.light != 'true'
+    uses: ./.github/workflows/windows-suites.yml
+
   gate:
     name: CI Gate
-    needs: [classify, doc_links, build_ubuntu, test_ubuntu, build_macos, test_macos, build_windows, test_windows]
+    needs: [classify, doc_links, build_ubuntu, test_ubuntu, compile_checks, wasm, build_macos, test_macos, build_windows, test_windows, windows_suites]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -126,16 +144,19 @@ jobs:
           DOC_LINKS: ${{ needs.doc_links.result }}
           BUILD_UBUNTU: ${{ needs.build_ubuntu.result }}
           TEST_UBUNTU: ${{ needs.test_ubuntu.result }}
+          COMPILE_CHECKS: ${{ needs.compile_checks.result }}
+          WASM: ${{ needs.wasm.result }}
           BUILD_MACOS: ${{ needs.build_macos.result }}
           TEST_MACOS: ${{ needs.test_macos.result }}
           BUILD_WINDOWS: ${{ needs.build_windows.result }}
           TEST_WINDOWS: ${{ needs.test_windows.result }}
+          WINDOWS_SUITES: ${{ needs.windows_suites.result }}
         run: |
           test "$CLASSIFY" = success
           case "$DOC_LINKS" in success|skipped) ;; *) exit 1 ;; esac
           if [ "$LIGHT" = true ]; then
             exit 0
           fi
-          for result in "$BUILD_UBUNTU" "$TEST_UBUNTU" "$BUILD_MACOS" "$TEST_MACOS" "$BUILD_WINDOWS" "$TEST_WINDOWS"; do
+          for result in "$BUILD_UBUNTU" "$TEST_UBUNTU" "$COMPILE_CHECKS" "$WASM" "$BUILD_MACOS" "$TEST_MACOS" "$BUILD_WINDOWS" "$TEST_WINDOWS" "$WINDOWS_SUITES"; do
             test "$result" = success
           done

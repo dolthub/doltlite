@@ -1,0 +1,52 @@
+name: Compile Checks
+
+# Compile-only gates. Nothing downstream consumes their output, so they run
+# beside the build and test stages and feed only the CI Gate.
+on:
+  workflow_call:
+
+jobs:
+  development-builds:
+    name: development-${{ matrix.configuration }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - All-Debug
+          - All-O0
+    env:
+      CFLAGS: -O2 -g -Werror
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: ./.github/actions/development-debug-build
+      if: matrix.configuration == 'All-Debug'
+
+    - name: Install dependencies
+      if: matrix.configuration != 'All-Debug'
+      run: |
+        bash .github/scripts/install-apt-deps.sh \
+          build-essential tcl-dev libsqlite3-tcl zlib1g-dev
+
+    - name: Configure
+      if: matrix.configuration != 'All-Debug'
+      run: |
+        mkdir -p build
+        cd build
+        TCL_CONFIG=$(find /usr/lib -name tclConfig.sh -print -quit 2>/dev/null)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Compile development configurations
+      if: matrix.configuration != 'All-Debug'
+      run: |
+        cd build
+        tclsh ../test/testrunner.tcl \
+          --buildonly --jobs 4 \
+          --config ${{ matrix.configuration }} mdevtest

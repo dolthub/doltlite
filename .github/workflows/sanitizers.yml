@@ -21,9 +21,13 @@ jobs:
             bucket: merge-replay-schema
           - suite: oracles-features
             bucket: feature-interaction
-          # Every DoltLite shell suite (sanitizer manifest set) plus the
-          # correctness tests and the C corpus.
-          - suite: native
+          # Every DoltLite shell suite (sanitizer manifest set), in two
+          # shards, and the correctness tests, gated C tests and C corpus.
+          - suite: native-shell-1
+            shard: 1/2
+          - suite: native-shell-2
+            shard: 2/2
+          - suite: native-c
 
     steps:
     - uses: actions/checkout@v4
@@ -94,22 +98,23 @@ jobs:
       timeout-minutes: 25
 
     - name: Correctness regression tests
-      if: matrix.suite == 'native'
+      if: matrix.suite == 'native-c'
       run: cd build && bash ../test/correctness_test.sh ./doltlite
 
     # Every DoltLite shell suite the coverage job runs, under ASan/UBSan,
     # minus the ones that need artifacts this tarball lacks. The set is the
     # manifest's sanitizer set, so a new suite is covered here by default.
-    # If it outgrows the budget, split with DOLTLITE_SUITE_SHARD=k/n.
+    # matrix.shard splits it with DOLTLITE_SUITE_SHARD=k/n.
     - name: DoltLite shell suites (ASan/UBSan)
-      if: matrix.suite == 'native'
+      if: startsWith(matrix.suite, 'native-shell')
       run: |
         DOLTLITE_BUILD_DIR="$PWD/build" DOLTLITE_SUITE_SET=sanitizer \
+          DOLTLITE_SUITE_SHARD=${{ matrix.shard }} \
           bash test/run_doltlite_tests.sh
       timeout-minutes: 20
 
     - name: Gated C tests (ASan/UBSan)
-      if: matrix.suite == 'native'
+      if: matrix.suite == 'native-c'
       run: |
         cd build
         bash ../test/run_c_tests.sh . coverage
@@ -119,7 +124,7 @@ jobs:
     # The C regression corpus (~310k checks) under ASan/UBSan with leak
     # detection — where the #1325/#1328 use-after-frees and leaks lived.
     - name: C regression corpus (ASan/UBSan)
-      if: matrix.suite == 'native'
+      if: matrix.suite == 'native-c'
       run: cd build && ./doltlite_regression_test_c all
 
   tsan:

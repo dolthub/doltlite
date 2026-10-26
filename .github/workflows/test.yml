@@ -59,10 +59,14 @@ jobs:
 
   prolly-txn-stress:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        bash .github/scripts/install-apt-deps.sh zlib1g-dev
 
     - name: Download checked build
       uses: actions/download-artifact@v4
@@ -89,6 +93,31 @@ jobs:
         done
         echo "completed ${runs} prolly_txn_stress_test runs"
       timeout-minutes: 8
+
+    - name: Run threadtest4 serialized
+      if: ${{ !cancelled() }}
+      run: |
+        cd build
+        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
+        ./threadtest4 --serialized 6
+
+    - name: Run threadtest4 multithread
+      if: ${{ !cancelled() }}
+      run: |
+        cd build
+        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
+        ./threadtest4 --multithread 6
+
+    - name: Run threadtest5
+      if: ${{ !cancelled() }}
+      env:
+        # Match sanitizers.yml: multi-writer prolly runs on shared CI hosts
+        # can exceed a short busy timeout and leave p1/p2 inconsistent.
+        THREADTEST5_BUSY_MS: "60000"
+      run: |
+        cd build
+        rm -f /tmp/doltlite-threadtest5.db
+        ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
 
   vc-concurrency-stress:
     runs-on: ubuntu-latest
@@ -124,47 +153,6 @@ jobs:
         ./vc_ref_mutation_stress_test
       timeout-minutes: 9
 
-  thread-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        bash .github/scripts/install-apt-deps.sh zlib1g-dev
-
-    - name: Download checked build
-      uses: actions/download-artifact@v4
-      with:
-        name: checked-build-ubuntu
-
-    - name: Extract checked build
-      run: tar -xzf checked-build-ubuntu.tar.gz
-
-    - name: Run threadtest4 serialized
-      run: |
-        cd build
-        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
-        ./threadtest4 --serialized 6
-
-    - name: Run threadtest4 multithread
-      run: |
-        cd build
-        rm -f tt4-test1.db tt4-test2.db tt4-test3.db
-        ./threadtest4 --multithread 6
-
-    - name: Run threadtest5
-      env:
-        # Match sanitizers.yml: multi-writer prolly runs on shared CI hosts
-        # can exceed a short busy timeout and leave p1/p2 inconsistent.
-        THREADTEST5_BUSY_MS: "60000"
-      run: |
-        cd build
-        rm -f /tmp/doltlite-threadtest5.db
-        ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
-
   sqllogictest:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -191,19 +179,22 @@ jobs:
           build/sqllogictest/test
 
   oracle-tests:
-    name: oracle-tests-${{ matrix.bucket }}
+    name: oracle-tests-${{ matrix.group }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        bucket:
-          - refs-workspace
-          - diff-history-data
-          - merge-replay-schema
-          - feature-interaction
-          - remotes-recovery
-          - sql
+        include:
+          # Grouped so each job runs under about ten minutes; the stock
+          # SQLite oracles ride with the shortest Dolt buckets.
+          - group: merge
+            bucket: merge-replay-schema
+          - group: refs-diff
+            bucket: refs-workspace diff-history-data
+          - group: features-sql
+            bucket: feature-interaction remotes-recovery
+            sql: true
 
     steps:
     - uses: actions/checkout@v4
@@ -230,15 +221,16 @@ jobs:
       run: bash test/check_oracle_buckets.sh
 
     - name: Version control oracle tests (vs Dolt)
-      if: matrix.bucket != 'sql'
       run: |
         cd build-coverage
         failed=0
-        while IFS= read -r oracle; do
-          [ -z "$oracle" ] && continue
-          echo "--- $oracle ---"
-          bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || failed=1
-        done < "../test/oracle-buckets/${{ matrix.bucket }}.txt"
+        for bucket in ${{ matrix.bucket }}; do
+          while IFS= read -r oracle; do
+            [ -z "$oracle" ] && continue
+            echo "--- $oracle ---"
+            bash ../test/run_guarded_suite.sh "../test/$oracle" ./doltlite dolt || failed=1
+          done < "../test/oracle-buckets/$bucket.txt"
+        done
         test "$failed" -eq 0
       timeout-minutes: 18
 
@@ -246,13 +238,13 @@ jobs:
     # comparison against this binary, and if it shares doltlite's storage they
     # all pass without testing anything.
     - name: Assert the stock reference does not share doltlite's storage
-      if: matrix.bucket == 'sql'
+      if: matrix.sql
       run: |
         bash test/assert_stock_reference.sh \
           build-coverage/sqlite3-stock build-coverage/doltlite
 
     - name: SQL oracle tests (vs stock SQLite)
-      if: matrix.bucket == 'sql'
+      if: matrix.sql
       run: |
         cd build-coverage
         failed=0
@@ -274,27 +266,14 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-profile-oracles-${{ matrix.bucket }}
+        name: coverage-profile-oracles-${{ matrix.group }}
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
 
   sql-differential:
-    name: sql-differential-${{ matrix.first }}-${{ matrix.last }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - first: 1
-            last: 2500
-          - first: 2501
-            last: 5000
-          - first: 5001
-            last: 7500
-          - first: 7501
-            last: 10000
+    timeout-minutes: 25
 
     steps:
     - uses: actions/checkout@v4
@@ -316,84 +295,58 @@ jobs:
         # 15-minute timeout tail. A later step folds the raw dumps to one file.
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%p.profraw" >> "$GITHUB_ENV"
 
+    # Folding the raw dumps after each range keeps the runner's disk at one
+    # range's worth of profiles.
     - name: Randomized SQL differential sweep (vs stock SQLite)
       run: |
         cd build-coverage
-        bash ../test/sql_differential_test.sh \
-          ./doltlite ./sqlite3-stock \
-          ${{ matrix.first }} ${{ matrix.last }}
-      timeout-minutes: 15
+        failed=0
+        for first in 1 2501 5001 7501; do
+          last=$((first + 2499))
+          bash ../test/sql_differential_test.sh \
+            ./doltlite ./sqlite3-stock "$first" "$last" || failed=1
+          bash ../.github/scripts/merge-coverage-profiles.sh \
+            "$RUNNER_TEMP/coverage-profiles" "sql-differential-$first"
+        done
+        test "$failed" -eq 0
+      timeout-minutes: 20
 
     - name: Merge per-process coverage profiles
       if: always()
-      run: bash .github/scripts/merge-coverage-profiles.sh "$RUNNER_TEMP/coverage-profiles" sql-differential
+      run: bash .github/scripts/merge-coverage-profiles.sh "$RUNNER_TEMP/coverage-profiles" sql-differential-rest
 
     - name: Upload SQL differential coverage profiles
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-profile-sql-differential-${{ matrix.first }}-${{ matrix.last }}
-        path: ${{ runner.temp }}/coverage-profiles
-        if-no-files-found: warn
-        retention-days: 1
-
-  sqlite-file-regression:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh zlib1g-dev
-
-    - name: Download instrumented build
-      uses: actions/download-artifact@v4
-      with:
-        name: coverage-fixture
-
-    - name: Extract instrumented build
-      run: |
-        tar -xzf coverage-fixture.tar.gz
-        mkdir -p "$RUNNER_TEMP/coverage-profiles"
-        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
-
-    - name: SQLite files and mixed-engine attachments
-      run: bash test/run_sqlite_file_tests.sh build-coverage/testfixture
-
-    - name: Upload regression coverage profiles
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: coverage-profile-sqlite-files
+        name: coverage-profile-sql-differential
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
 
   sqlite-regression:
-    name: sqlite-regression-${{ matrix.bucket }}
+    name: sqlite-regression-${{ matrix.group }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       TESTFIXTURE_VARIANT: coverage
     strategy:
       fail-fast: false
       matrix:
-        bucket:
-          - core-sql
-          - ddl-schema
-          - storage
-          - fault-fuzz
-          - fts3
-          - fts4-core
-          - fts4-merge
-          - fts5
-          - fts5-fault
-          - ported
-          - rtree
-          - shell
-          - slow-plain
-          - vec1
-          - vec1-fault
+        include:
+          # Buckets are grouped so each job runs about ten minutes.
+          - group: fault-fuzz
+            bucket: fault-fuzz core-sql shell ddl-schema
+          - group: fts5
+            bucket: fts5
+          - group: storage
+            bucket: storage fts4-core rtree
+          - group: fts5-fault
+            bucket: fts5-fault ported vec1
+          - group: fts-misc
+            bucket: fts4-merge fts3 vec1-fault
+          - group: slow-plain
+            bucket: slow-plain
     steps:
     - uses: actions/checkout@v4
 
@@ -402,13 +355,13 @@ jobs:
         bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
 
     - name: Download instrumented build
-      if: matrix.bucket != 'slow-plain'
+      if: matrix.group != 'slow-plain'
       uses: actions/download-artifact@v4
       with:
         name: coverage-fixture
 
     - name: Extract instrumented build
-      if: matrix.bucket != 'slow-plain'
+      if: matrix.group != 'slow-plain'
       run: |
         tar -xzf coverage-fixture.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
@@ -420,7 +373,7 @@ jobs:
     # (issue 2397: bigsort). A plain build keeps them fast and the budget
     # meaningful; their line coverage is exercised by the other buckets.
     - name: Build plain testfixture
-      if: matrix.bucket == 'slow-plain'
+      if: matrix.group == 'slow-plain'
       run: |
         bash .github/scripts/install-apt-deps.sh tcl-dev
         mkdir build-plain && cd build-plain
@@ -459,21 +412,23 @@ jobs:
     # The shell bucket drives the doltlite CLI through tester.tcl's catchcmd,
     # which looks for a `sqlite3` next to the testfixture. No other bucket
     # gets the alias, so their shell*.test files keep skipping as before.
-    - name: Alias the doltlite CLI for the shell bucket
-      if: matrix.bucket == 'shell'
-      run: ln -sf doltlite "$FIXTURE_DIR/sqlite3"
-
-    - name: SQLite regression tests - ${{ matrix.bucket }}
+    - name: SQLite regression tests - ${{ matrix.group }}
       run: |
         cd "$FIXTURE_DIR"
-        bash ../test/run_testfixture.sh "SQLite regression ${{ matrix.bucket }}" 600 \
-          $(tr '\n' ' ' < ../test/regression-buckets/${{ matrix.bucket }}.txt)
+        failed=0
+        for bucket in ${{ matrix.bucket }}; do
+          [ "$bucket" = shell ] && ln -sf doltlite sqlite3
+          bash ../test/run_testfixture.sh "SQLite regression $bucket" 600 \
+            $(tr '\n' ' ' < "../test/regression-buckets/$bucket.txt") || failed=1
+          [ "$bucket" = shell ] && rm -f sqlite3
+        done
+        test "$failed" -eq 0
 
     - name: Upload regression coverage profiles
-      if: always() && matrix.bucket != 'slow-plain'
+      if: always() && matrix.group != 'slow-plain'
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-profile-regression-${{ matrix.bucket }}
+        name: coverage-profile-regression-${{ matrix.group }}
         path: ${{ runner.temp }}/coverage-profiles
         if-no-files-found: warn
         retention-days: 1
@@ -567,11 +522,11 @@ jobs:
     - name: Download instrumented build
       uses: actions/download-artifact@v4
       with:
-        name: coverage-cli
+        name: coverage-fixture
 
     - name: Extract instrumented build
       run: |
-        tar -xzf coverage-cli.tar.gz
+        tar -xzf coverage-fixture.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
         echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
 
@@ -592,6 +547,10 @@ jobs:
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
 
+    - name: SQLite files and mixed-engine attachments
+      if: ${{ !cancelled() }}
+      run: bash test/run_sqlite_file_tests.sh build-coverage/testfixture
+
     - name: Upload remote coverage profiles
       if: always()
       uses: actions/upload-artifact@v4
@@ -606,7 +565,6 @@ jobs:
       - oracle-tests
       - sql-differential
       - sqlite-regression
-      - sqlite-file-regression
       - coverage-native
       - coverage-remotes
     runs-on: ubuntu-latest

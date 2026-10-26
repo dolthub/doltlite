@@ -302,27 +302,14 @@ jobs:
       run: cd build && bash ../test/tls_test.sh
       timeout-minutes: 2
 
-    - name: Windows Doltlite feature tests
+    # Native binaries resolve a /tmp path that reaches them inside SQL as
+    # D:\tmp; the junction points that at the MSYS /tmp the tests create.
+    - name: Map /tmp for native Windows binaries
       if: matrix.platform == 'windows'
       shell: msys2 {0}
       run: |
-        cd build
-        export DLTEST_STRIP_CR=1
         rm -rf /d/tmp
         powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path 'D:\\tmp' -Target '$(cygpath -w /tmp)' | Out-Null"
-        cat > ./doltlite-no-msys-conv <<'SH'
-        #!/usr/bin/env bash
-        export MSYS2_ARG_CONV_EXCL='*'
-        exec ./doltlite "$@"
-        SH
-        chmod +x ./doltlite-no-msys-conv
-        export DOLTLITE=./doltlite-no-msys-conv
-        export DOLTLITE_SYSTEM="$(cygpath -w "$PWD/doltlite.exe")"
-        export DOLTLITE_SYSTEM_NULL=NUL
-        export DOLTLITE_REGRESSION_PREBUILT=1
-        DOLTLITE_BUILD_DIR="$PWD" DOLTLITE_SUITE_SET=windows \
-          bash ../test/run_doltlite_tests.sh
-      timeout-minutes: 35
 
     - name: Windows correctness regression tests
       if: matrix.platform == 'windows'
