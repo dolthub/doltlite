@@ -18,6 +18,12 @@ static int csHasOrigin(ChunkStore *cs){
       && zUrl && zUrl[0];
 }
 
+static int csNoteMissingChunk(ChunkStore *cs, const ProllyHash *pHash){
+  cs->bMissingChunk = 1;
+  memcpy(&cs->missingChunk, pHash, sizeof(*pHash));
+  return SQLITE_NOTFOUND;
+}
+
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
 
 #define CS_SOURCE_CACHE_BUCKETS 256
@@ -501,7 +507,7 @@ int chunkStoreSourceGet(
   int rc;
   if( !p ){
     if( csHasOrigin(cs) ) return csSourceSetModeError(cs, pHash);
-    return SQLITE_NOTFOUND;
+    return csNoteMissingChunk(cs, pHash);
   }
   csSourceClearError(p);
   rc = csSourceCacheGet(p, pHash, ppData, pnData);
@@ -524,7 +530,7 @@ int chunkStoreSourceGet(
     if( csHasOrigin(cs) && !p->originEnabled ){
       return csSourceSetModeError(cs, pHash);
     }
-    return SQLITE_NOTFOUND;
+    return csNoteMissingChunk(cs, pHash);
   }
   sourceRc = pSource->xGet(pSource->pCtx, pHash->data, &pData, &nData);
   if( sourceRc==DOLTLITE_SOURCE_NOTFOUND ){
@@ -894,6 +900,40 @@ SQLITE_API int SQLITE_APICALL doltlite_set_chunk_source(
   return rc;
 }
 
+/* Remotes are local configuration: the installed refs replace the graph's
+** refs but keep any remote the blob does not name. */
+static int csInstallRefsKeepingRemotes(
+  ChunkStore *cs,
+  const u8 *pRefs,
+  int nRefs
+){
+  char **azKeep = 0;
+  int nKeep = cs->refs.nRemotes;
+  int bAdded = 0;
+  int rc = SQLITE_OK;
+  int i;
+  if( nKeep>0 ){
+    azKeep = (char**)sqlite3_malloc64(sizeof(char*) * 2 * (u64)nKeep);
+    if( !azKeep ) return SQLITE_NOMEM;
+    memset(azKeep, 0, sizeof(char*) * 2 * (size_t)nKeep);
+    for(i=0; rc==SQLITE_OK && i<nKeep; i++){
+      azKeep[i*2] = sqlite3_mprintf("%s", cs->refs.aRemotes[i].zName);
+      azKeep[i*2+1] = sqlite3_mprintf("%s", cs->refs.aRemotes[i].zUrl);
+      if( !azKeep[i*2] || !azKeep[i*2+1] ) rc = SQLITE_NOMEM;
+    }
+  }
+  if( rc==SQLITE_OK ) rc = chunkStoreInstallRefsBlob(cs, pRefs, nRefs);
+  for(i=0; rc==SQLITE_OK && i<nKeep; i++){
+    if( chunkStoreFindRemote(cs, azKeep[i*2], 0)==SQLITE_OK ) continue;
+    rc = chunkStoreAddRemote(cs, azKeep[i*2], azKeep[i*2+1]);
+    bAdded = 1;
+  }
+  if( rc==SQLITE_OK && bAdded ) rc = chunkStoreSerializeRefs(cs);
+  for(i=0; i<nKeep*2 && azKeep; i++) sqlite3_free(azKeep[i]);
+  sqlite3_free(azKeep);
+  return rc;
+}
+
 SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
   sqlite3 *db,
   const void *pRefs,
@@ -936,7 +976,7 @@ SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
       rc = chunkStoreForceRefresh(cs);
     }
     if( rc==SQLITE_OK ){
-      rc = chunkStoreInstallRefsBlob(cs, (const u8*)pRefs, nRefs);
+      rc = csInstallRefsKeepingRemotes(cs, (const u8*)pRefs, nRefs);
     }
     if( rc==SQLITE_OK ){
       rc = chunkStoreCommit(cs);
@@ -1027,7 +1067,7 @@ int chunkStoreSourceGet(ChunkStore *cs, const ProllyHash *pHash,
                         u8 **ppData, int *pnData){
   *ppData = 0;
   *pnData = 0;
-  if( !csHasOrigin(cs) ) return SQLITE_NOTFOUND;
+  if( !csHasOrigin(cs) ) return csNoteMissingChunk(cs, pHash);
   if( chunkStoreOriginSourceEnabled(cs) ){
     return csDisabledSetHashError(
         cs, pHash, "DoltLite chunk source support is disabled for",
@@ -1171,6 +1211,31 @@ SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
 }
 
 #endif
+
+char *chunkStoreTakeMissingChunkError(ChunkStore *cs){
+  char zHex[PROLLY_HASH_SIZE*2 + 1];
+  if( !cs->bMissingChunk ) return 0;
+  cs->bMissingChunk = 0;
+  doltliteHashToHex(&cs->missingChunk, zHex);
+  return sqlite3_mprintf(
+      "no chunk source is available for missing chunk %s", zHex);
+}
+
+/* A miss explains only a failure that is otherwise a bare corruption or
+** not-found code; every call forgets the recorded misses. */
+char *doltliteTakeMissingChunkError(sqlite3 *db, int rc){
+  char *zErr = 0;
+  int i;
+  for(i=0; i<db->nDb; i++){
+    ChunkStore *cs = doltliteBtreeChunkStore(db->aDb[i].pBt);
+    if( !cs || !cs->bMissingChunk ) continue;
+    if( !zErr && ((rc & 0xff)==SQLITE_CORRUPT || rc==SQLITE_NOTFOUND) ){
+      zErr = chunkStoreTakeMissingChunkError(cs);
+    }
+    cs->bMissingChunk = 0;
+  }
+  return zErr;
+}
 
 int doltliteChunkSourceActive(sqlite3 *db){
   int i;

@@ -334,6 +334,33 @@ static int btreeApplyChunkSourceError(
 }
 
 
+/* A revision reached a chunk the store lacks. CANTOPEN is the one open
+** failure whose message sqlite3_open keeps. */
+static int btreeOpenRevisionMissingError(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zRev,
+  int eMissing
+){
+  char *zDetail;
+  zDetail = chunkStoreSourceTakeError(cs, 0);
+  if( !zDetail ) zDetail = chunkStoreTakeMissingChunkError(cs);
+  cs->bMissingChunk = 0;
+  if( eMissing==OPEN_REVISION_MISSING_HASH && zDetail
+   && !chunkStoreSourceEnabled(cs) ){
+    sqlite3ErrorWithMsg(db, SQLITE_CANTOPEN,
+                        "branch or revision \"%s\" not found: %s",
+                        zRev, zDetail);
+  }else if( eMissing==OPEN_REVISION_MISSING_CHUNK && zDetail ){
+    sqlite3ErrorWithMsg(db, SQLITE_CANTOPEN, "%s", zDetail);
+  }else{
+    sqlite3ErrorWithMsg(db, SQLITE_CANTOPEN,
+                        "branch or revision \"%s\" not found", zRev);
+  }
+  sqlite3_free(zDetail);
+  return SQLITE_CANTOPEN;
+}
+
 /* Pending edits drain into the tree once they hold this much memory, not
 ** after a fixed number of rows: every drain builds and hashes the edited
 ** chunks, which a rolled-back statement throws away and a later drain or
@@ -1096,6 +1123,7 @@ static int prollyBtreeOpenImpl(
     ProllyHash branchCommit;
     ProllyHash revisionCatalog;
     u8 bDeferredOpen = 0;
+    int eMissing = OPEN_REVISION_MISSING_NONE;
     const char *zDef = zBranchFromPath ? zBranchFromPath :
       chunkStoreGetDefaultBranch(&pBt->store);
     if( !zDef ) zDef = "main";
@@ -1103,7 +1131,8 @@ static int prollyBtreeOpenImpl(
     memset(&revisionCatalog, 0, sizeof(revisionCatalog));
     if( zBranchFromPath && !pBt->store.openPending ){
       rc = doltliteResolveOpenRevision(&pBt->store, zDef, &branchCommit,
-                                       &revisionCatalog, &zResolvedBranch);
+                                       &revisionCatalog, &zResolvedBranch,
+                                       &eMissing);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
       if( rc==SQLITE_NOTFOUND && zResolvedBranch
        && !chunkStoreOriginSourceEnabled(&pBt->store) ){
@@ -1114,8 +1143,14 @@ static int prollyBtreeOpenImpl(
     }
     if( zBranchFromPath && rc!=SQLITE_OK ){
       int openRc;
-      rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
-      if( rc==SQLITE_NOTFOUND ){
+      if( rc==SQLITE_NOTFOUND && eMissing!=OPEN_REVISION_MISSING_NONE ){
+        rc = btreeOpenRevisionMissingError(db, &pBt->store, zDef, eMissing);
+      }else{
+        rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
+      }
+      if( rc==SQLITE_CANTOPEN ){
+        openRc = rc;
+      }else if( rc==SQLITE_NOTFOUND ){
         openRc = SQLITE_CANTOPEN;
         sqlite3ErrorWithMsg(db, openRc,
                             "branch or revision \"%s\" not found", zDef);
@@ -1196,8 +1231,13 @@ static int prollyBtreeOpenImpl(
           rc = SQLITE_OK;
         }
 #endif
-        if( rc!=SQLITE_OK ){
+        if( rc==SQLITE_NOTFOUND && p->isDetached ){
+          rc = btreeOpenRevisionMissingError(db, &pBt->store, zDef,
+                                             OPEN_REVISION_MISSING_CHUNK);
+        }else if( rc!=SQLITE_OK ){
           rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
+        }
+        if( rc!=SQLITE_OK ){
           btreeClearBranchState(&state);
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
@@ -2958,6 +2998,10 @@ int doltliteBtreeRunDeferredWork(sqlite3 *db){
   if( rc!=SQLITE_OK ){
     char *zErr = doltliteTakeChunkSourceError(db, 0);
     if( zErr ){
+      sqlite3ErrorWithMsg(db, rc, "%s", zErr);
+      sqlite3_free(zErr);
+      sqlite3_free(doltliteTakeMissingChunkError(db, SQLITE_OK));
+    }else if( (zErr = doltliteTakeMissingChunkError(db, rc))!=0 ){
       sqlite3ErrorWithMsg(db, rc, "%s", zErr);
       sqlite3_free(zErr);
     }else{

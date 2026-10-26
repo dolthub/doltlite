@@ -702,7 +702,7 @@ int doltliteBtreeHydrateDeferred(Btree *p){
     ProllyHash commit;
     memset(&commit, 0, sizeof(commit));
     rc = doltliteResolveOpenRevision(cs, p->zBranch, &commit,
-                                     &loadedCatHash, &zPrepared);
+                                     &loadedCatHash, &zPrepared, 0);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zPrepared);
       return rc==SQLITE_NOTFOUND ? SQLITE_CANTOPEN : rc;

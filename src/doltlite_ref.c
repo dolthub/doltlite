@@ -7,6 +7,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include "doltlite_parse.h"
+#include "prolly_btree_int.h"
 
 static int doltliteRefComponentEndsLock(const char *zStart, const char *zEnd){
   return zEnd-zStart>=5 && memcmp(zEnd-5, ".lock", 5)==0;
@@ -15,11 +16,14 @@ static int doltliteRefComponentEndsLock(const char *zStart, const char *zEnd){
 static int doltliteLoadCommitFromStore(
   ChunkStore *cs,
   const ProllyHash *pHash,
-  DoltliteCommit *pCommit
+  DoltliteCommit *pCommit,
+  int *pMissing,
+  int eMissing
 ){
   u8 *data = 0;
   int nData = 0;
   int rc = chunkStoreGet(cs, pHash, &data, &nData);
+  if( rc==SQLITE_NOTFOUND && pMissing ) *pMissing = eMissing;
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteCommitDeserialize(data, nData, pCommit);
   sqlite3_free(data);
@@ -30,10 +34,12 @@ static int doltliteOpenRevisionBase(
   ChunkStore *cs,
   const char *zRef,
   ProllyHash *pCommit,
-  char **pzBranch
+  char **pzBranch,
+  int *pMissing
 ){
   DoltliteCommit commit;
   const char *zBranch = zRef;
+  int eMissing = OPEN_REVISION_MISSING_CHUNK;
   int rc;
 
   *pzBranch = 0;
@@ -49,11 +55,12 @@ static int doltliteOpenRevisionBase(
     rc = chunkStoreFindTag(cs, zRef, pCommit);
     if( rc!=SQLITE_OK && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
       rc = doltliteHexToHash(zRef, pCommit);
+      eMissing = OPEN_REVISION_MISSING_HASH;
     }
   }
   if( rc!=SQLITE_OK || prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
   memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit);
+  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit, pMissing, eMissing);
   if( rc==SQLITE_OK ) doltliteCommitClear(&commit);
   return rc;
 }
@@ -61,14 +68,16 @@ static int doltliteOpenRevisionBase(
 static int doltliteOpenRevisionParent(
   ChunkStore *cs,
   ProllyHash *pCommit,
-  int iParent
+  int iParent,
+  int *pMissing
 ){
   DoltliteCommit commit;
   const ProllyHash *pParent;
   int rc;
 
   memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit);
+  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit, pMissing,
+                                   OPEN_REVISION_MISSING_CHUNK);
   if( rc!=SQLITE_OK ) return rc;
   pParent = doltliteCommitParentHash(&commit, iParent);
   if( !pParent ){
@@ -85,7 +94,8 @@ int doltliteResolveOpenRevision(
   const char *zRef,
   ProllyHash *pCommit,
   ProllyHash *pCatalog,
-  char **pzBranch
+  char **pzBranch,
+  int *pMissing
 ){
   DoltliteCommit commit;
   char *zBase = 0;
@@ -95,6 +105,7 @@ int doltliteResolveOpenRevision(
     return SQLITE_MISUSE;
   }
   *pzBranch = 0;
+  if( pMissing ) *pMissing = OPEN_REVISION_MISSING_NONE;
   nRef = (int)strlen(zRef);
   nBase = nRef;
   for(;;){
@@ -108,11 +119,11 @@ int doltliteResolveOpenRevision(
   }
   if( nBase==0 ) return SQLITE_NOTFOUND;
   if( nBase==nRef ){
-    rc = doltliteOpenRevisionBase(cs, zRef, pCommit, pzBranch);
+    rc = doltliteOpenRevisionBase(cs, zRef, pCommit, pzBranch, pMissing);
   }else{
     zBase = sqlite3_mprintf("%.*s", nBase, zRef);
     if( !zBase ) return SQLITE_NOMEM;
-    rc = doltliteOpenRevisionBase(cs, zBase, pCommit, pzBranch);
+    rc = doltliteOpenRevisionBase(cs, zBase, pCommit, pzBranch, pMissing);
     sqlite3_free(*pzBranch);
     *pzBranch = 0;
     sqlite3_free(zBase);
@@ -135,16 +146,17 @@ int doltliteResolveOpenRevision(
     }
     if( op=='~' ){
       for(j=0; j<n && rc==SQLITE_OK; j++){
-        rc = doltliteOpenRevisionParent(cs, pCommit, 0);
+        rc = doltliteOpenRevisionParent(cs, pCommit, 0, pMissing);
       }
     }else{
-      rc = doltliteOpenRevisionParent(cs, pCommit, n-1);
+      rc = doltliteOpenRevisionParent(cs, pCommit, n-1, pMissing);
     }
     if( rc!=SQLITE_OK ) return rc;
   }
 
   memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit);
+  rc = doltliteLoadCommitFromStore(cs, pCommit, &commit, pMissing,
+                                   OPEN_REVISION_MISSING_CHUNK);
   if( rc==SQLITE_OK ) memcpy(pCatalog, &commit.catalogHash, sizeof(*pCatalog));
   doltliteCommitClear(&commit);
   return rc;

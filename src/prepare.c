@@ -910,6 +910,7 @@ static int sqlite3LockAndPrepare(
   if( bTopLevel ){
     char *zOldSourceErr = doltliteTakeChunkSourceError(db, 0);
     sqlite3_free(zOldSourceErr);
+    sqlite3_free(doltliteTakeMissingChunkError(db, SQLITE_OK));
   }
   rc = doltliteBtreeRunDeferredWork(db);
   if( rc!=SQLITE_OK ) goto lock_and_prepare_out;
@@ -941,6 +942,12 @@ lock_and_prepare_out:
                          "%s", zSourceErr);
     }else if( sourceRc!=SQLITE_OK && !db->mallocFailed ){
       sqlite3Error(db, sourceRc);
+    }else if( rc!=SQLITE_OK && !db->mallocFailed ){
+      char *zMiss = doltliteTakeMissingChunkError(db, rc);
+      if( zMiss ){
+        sqlite3ErrorWithMsg(db, rc, "%s", zMiss);
+        sqlite3_free(zMiss);
+      }
     }
     sqlite3_free(zSourceErr);
   }

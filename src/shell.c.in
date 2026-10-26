@@ -5229,6 +5229,11 @@ static void parseDoltiteDbBranch(
   if( !zInput ){
     return;
   }
+  /* sqlite3_open resolves a URI's @revision and keeps its query params. */
+  if( sqlite3_strnicmp(zInput, "file:", 5)==0 ){
+    *pzFilename = sqlite3_mprintf("%s", zInput);
+    return;
+  }
 
   zSep = findLastPathSep(zInput);
   {

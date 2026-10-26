@@ -393,6 +393,16 @@ else
   fail=$((fail+1))
 fi
 
+LAZY_REV="$TMP/lazy_rev.db"
+result=$("$DB" "$LAZY_REV" "SELECT dolt_clone('--lazy','$URL');" 2>&1)
+check "revision lazy clone returns 0" "0" "$result"
+result=$("$DB" "file:$LAZY_REV@$batch_root?lazy_origin=1" "SELECT IFNULL(active_branch(),'NULL'); SELECT count(*) FROM users;" 2>&1)
+check "lazy clone opens an unfetched hash over http" "NULL
+3" "$result"
+result=$("$DB" "file:$LAZY_REV@main~1?lazy_origin=1" "SELECT IFNULL(active_branch(),'NULL'); SELECT count(*) FROM sqlite_master;" 2>&1)
+check "lazy clone opens an ancestor over http" "NULL
+0" "$result"
+
 echo "--- 2. clone over http, full parity ---"
 result=$("$DB" "$B" "SELECT dolt_clone('$URL');" 2>&1)
 check "clone returns 0" "0" "$result"

@@ -5539,6 +5539,7 @@ void sqlite3ErrorClear(sqlite3*);
 void sqlite3SystemError(sqlite3*,int);
 #ifdef DOLTLITE_PROLLY
 char *doltliteTakeChunkSourceError(sqlite3*,int*);
+char *doltliteTakeMissingChunkError(sqlite3*,int);
 int doltliteChunkSourceActive(sqlite3*);
 int doltliteOwnSchemaReload(sqlite3*);
 int doltliteInCommandTxn(sqlite3*);
