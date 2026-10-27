@@ -571,6 +571,45 @@ for op in "dolt_pull('gone','main')" "dolt_fetch('gone')" "dolt_fetch('gone','ma
   check_match "unreachable remote: $op names the failure" "could not connect to remote" "$result"
 done
 
+echo "--- 12c. missing remote chunks name their hashes ---"
+missing_hash=$("$DB" "$TMP/missing-source.db" "CREATE TABLE remote_t(id INTEGER PRIMARY KEY); INSERT INTO remote_t VALUES(1); SELECT dolt_commit('-Am','remote');")
+"$DB" "$TMP/srv/missing-lazy.db" "SELECT dolt_clone('--lazy','file://$TMP/missing-source.db');" >/dev/null
+missing_url="http://127.0.0.1:$PROXY_PORT/missing-lazy.db"
+for operation in fetch-all fetch-branch fetch-glob pull-all pull-branch clone clone-branch; do
+  target="$TMP/missing-$operation.db"
+  case "$operation" in
+    clone*) ;;
+    *)
+      "$DB" "$target" "CREATE TABLE local_t(id INTEGER PRIMARY KEY); INSERT INTO local_t VALUES(42); SELECT dolt_commit('-Am','local'); SELECT dolt_remote('add','lz','$missing_url');" >/dev/null
+      ;;
+  esac
+  case "$operation" in
+    fetch-all) sql="SELECT dolt_fetch('lz');" ;;
+    fetch-branch) sql="SELECT dolt_fetch('lz','main');" ;;
+    fetch-glob) sql="SELECT dolt_fetch('lz','refs/heads/*:refs/remotes/lz/*');" ;;
+    pull-all) sql="SELECT dolt_pull('lz');" ;;
+    pull-branch) sql="SELECT dolt_pull('lz','main');" ;;
+    clone) sql="SELECT dolt_clone('$missing_url');" ;;
+    clone-branch) sql="SELECT dolt_clone('--branch','main','$missing_url');" ;;
+  esac
+  result=$("$DB" "$target" "$sql" 2>&1)
+  check "$operation missing chunk returns an error" "1" "$?"
+  check_match "$operation names the missing remote chunk" "remote is missing chunk $missing_hash" "$result"
+  result=$("$DB" "$target" "SELECT count(*) FROM dolt_remote_branches; SELECT count(*) FROM sqlite_master WHERE name='remote_t';")
+  check "$operation missing chunk installs no tracking ref or table" "0
+0" "$result"
+  case "$operation" in
+    clone*) ;;
+    *)
+      result=$("$DB" "$target" "SELECT id FROM local_t; SELECT count(*) FROM dolt_remotes WHERE name='lz';")
+      check "$operation missing chunk preserves local data and remote" "42
+1" "$result"
+      result=$("$DB" "$target" "SELECT dolt_pull('lz','absent');" 2>&1)
+      check_match "$operation still distinguishes a missing branch" "fetch failed: branch not found on remote" "$result"
+      ;;
+  esac
+done
+
 echo "--- 13. protocol conformance across the whole run ---"
 if [ -s "$TMP/violations.log" ]; then
   echo "  FAIL: HTTP protocol violations recorded:"

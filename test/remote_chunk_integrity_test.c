@@ -11,6 +11,9 @@ struct FakeRemote {
   const u8 *pData;
   int nData;
   int nPut;
+  int failRc;
+  int missing;
+  ProllyHash missingHash;
 };
 
 static int failures;
@@ -33,7 +36,12 @@ static int fakeGetChunk(
   int *pnData
 ){
   FakeRemote *p = (FakeRemote*)pRemote;
-  (void)pHash;
+  *ppData = 0;
+  *pnData = 0;
+  if( p->failRc ) return p->failRc;
+  if( p->missing && prollyHashCompare(pHash, &p->missingHash)==0 ){
+    return SQLITE_NOTFOUND;
+  }
   *ppData = sqlite3_malloc(p->nData);
   if( !*ppData ) return SQLITE_NOMEM;
   memcpy(*ppData, p->pData, p->nData);
@@ -51,6 +59,7 @@ static int fakeGetChunks(
   int i;
   for(i=0; i<nHash; i++){
     int rc = fakeGetChunk(pRemote, &aHash[i], &apData[i], &anData[i]);
+    if( rc==SQLITE_NOTFOUND ) continue;
     if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
@@ -123,6 +132,53 @@ static u8 *makeRefsBlob(const ProllyHash *pCommit, int *pnBlob){
   return pBlob;
 }
 
+static void testMissingChunks(
+  const u8 *pData,
+  int nData,
+  const ProllyHash *pHash
+){
+  int batch;
+  for(batch=0; batch<2; batch++){
+    FakeRemote src;
+    FakeRemote dst;
+    ProllyHash roots[2];
+    char zHash[PROLLY_HASH_SIZE*2+1];
+    char zExpected[96];
+    int rc;
+    memset(&src, 0, sizeof(src));
+    memset(&dst, 0, sizeof(dst));
+    roots[0] = *pHash;
+    roots[1] = *pHash;
+    roots[1].data[0] ^= 0xff;
+    src.pData = pData;
+    src.nData = nData;
+    src.missing = 1;
+    src.missingHash = roots[1];
+    src.base.xGetChunk = fakeGetChunk;
+    if( batch ) src.base.xGetChunks = fakeGetChunks;
+    dst.base.xHasChunks = fakeHasChunks;
+    dst.base.xPutChunk = fakePutChunk;
+    rc = doltliteSyncChunks(&src.base, &dst.base, roots, 2);
+    check("missing chunk keeps NOTFOUND", rc==SQLITE_NOTFOUND);
+    doltliteHashToHex(&roots[1], zHash);
+    snprintf(zExpected, sizeof(zExpected), "remote is missing chunk %s", zHash);
+    check("missing chunk names the absent hash after a present slot",
+          strcmp(src.base.zMissingChunkError, zExpected)==0);
+    check("present slot before missing chunk is transferred", dst.nPut==1);
+    src.missing = 0;
+    rc = doltliteSyncChunks(&src.base, &dst.base, roots, 1);
+    check("a later successful transfer clears the missing-chunk error",
+          rc==SQLITE_OK && src.base.zMissingChunkError[0]==0);
+    src.missing = 1;
+    rc = doltliteSyncChunks(&src.base, &dst.base, roots+1, 1);
+    check("another missing chunk is reported", rc==SQLITE_NOTFOUND);
+    src.failRc = SQLITE_IOERR;
+    rc = doltliteSyncChunks(&src.base, &dst.base, roots, 1);
+    check("I/O errors do not reuse the missing-chunk error",
+          rc==SQLITE_IOERR && src.base.zMissingChunkError[0]==0);
+  }
+}
+
 static void putLength(u8 *p, int n){
   p[0] = (u8)(n & 0xff);
   p[1] = (u8)((n >> 8) & 0xff);
@@ -155,6 +211,7 @@ int main(void){
   check("serialize commit", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) return 1;
   prollyHashCompute(pCommit, nCommit, &actual);
+  testMissingChunks(pCommit, nCommit, &actual);
   wrong = actual;
   wrong.data[0] ^= 0xff;
 
