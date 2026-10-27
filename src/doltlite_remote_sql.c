@@ -2073,6 +2073,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       doltliteVcResultError(ctx, db, "remote name invalid");
       return;
     }
+    if( bLazy && strcmp(zRemoteName, "origin")!=0 ){
+      sqlite3_free(zRemoteOwned);
+      doltliteCmdArgsClear(&args);
+      doltliteVcResultError(ctx, db, "--lazy requires the remote to be named origin");
+      return;
+    }
   }
   zUrl = args.azPositional[0];
   doltliteCmdArgsClear(&args);
