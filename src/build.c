@@ -424,19 +424,6 @@ Table *sqlite3LocateTable(
   }
 
   p = sqlite3FindTable(db, zName, zDbase);
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_OMIT_VIRTUALTABLE)
-  if( p!=0
-   && p->pSchema==db->aDb[0].pSchema
-   && sqlite3StrICmp(zName, "dolt_docs")==0
-   && (pParse->prepFlags & SQLITE_PREPARE_NO_VTAB)==0
-   && db->init.busy==0 ){
-    Module *pMod = (Module*)sqlite3HashFind(&db->aModule, zName);
-    if( pMod && sqlite3VtabEponymousTableInit(pParse, pMod) ){
-      testcase( pMod->pEpoTab==0 );
-      return pMod->pEpoTab;
-    }
-  }
-#endif
   if( p==0 ){
 #ifndef SQLITE_OMIT_VIRTUALTABLE
     /* If zName is the not the name of a table in the schema created using

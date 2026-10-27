@@ -234,6 +234,15 @@ INSERT INTO dolt_tests VALUES
   "SELECT 'R|' || test_name || '|' || status FROM dolt_test_run('attach');" \
   "SELECT concat('R|', test_name, '|', status) FROM dolt_test_run('attach');"
 
+oracle_results "whitespace_values" "
+INSERT INTO dolt_tests VALUES
+ ('lead_int','ws','SELECT 1','expected_single_value','==',' 1'),
+ ('lead_rows','ws','SELECT 1','expected_rows','==',' 1'),
+ ('plain','ws','SELECT 1','expected_single_value','==','1'),
+ ('plus','ws','SELECT 1','expected_single_value','==','+1'),
+ ('trail_int','ws','SELECT 1','expected_single_value','==','1 ');
+" "'ws'"
+
 oracle_results "non_integer_counts" "
 INSERT INTO dolt_tests VALUES
  ('bad_cols','bad_int','SELECT 1','expected_columns','==','0.5'),

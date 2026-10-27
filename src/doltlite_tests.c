@@ -287,7 +287,7 @@ static char *testCompareMessage(const char *zAssertion,
 static int testParseInteger(const char *z, sqlite3_int64 *pValue){
   char *zEnd = 0;
   long long v;
-  if( !z || !z[0] ) return 0;
+  if( !z || !z[0] || sqlite3Isspace(z[0]) ) return 0;
   errno = 0;
   v = strtoll(z, &zEnd, 10);
   if( errno==ERANGE || zEnd==z || *zEnd!=0 ) return 0;
@@ -298,7 +298,7 @@ static int testParseInteger(const char *z, sqlite3_int64 *pValue){
 static int testParseReal(const char *z, double *pValue){
   char *zEnd = 0;
   double v;
-  if( !z || !z[0] ) return 0;
+  if( !z || !z[0] || sqlite3Isspace(z[0]) ) return 0;
   errno = 0;
   v = strtod(z, &zEnd);
   if( errno==ERANGE || zEnd==z || *zEnd!=0 ) return 0;
