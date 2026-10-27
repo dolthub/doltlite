@@ -173,6 +173,7 @@ doltlite_backup_busy
 doltlite_vc_interrupt
 doltlite_commit_publication
 doltlite_commit_active_write
+doltlite_ref_active_write
 doltlite_sqlite_encoding
 doltlite_merge_reordered_drop
 doltlite_merge_schema_conflict_indexes

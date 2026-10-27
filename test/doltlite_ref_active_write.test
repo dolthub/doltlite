@@ -1,0 +1,149 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc ref_write_state {} {
+  db eval {
+    SELECT name,hash FROM dolt_branches ORDER BY name;
+    SELECT tag_name,tag_hash FROM dolt_tags ORDER BY tag_name;
+    SELECT dolt_hashof_db('STAGED');
+    SELECT count(*) FROM dolt_log;
+    SELECT id,v FROM t ORDER BY id;
+    SELECT id FROM u ORDER BY id;
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged;
+    PRAGMA integrity_check;
+  }
+}
+
+foreach txn {autocommit begin savepoint nested} {
+  foreach operation {insert update delete returning before after trigger-update trigger-delete view temp} {
+    foreach {mode call verb} {
+      create {dolt_branch('new_branch')} branch
+      force {dolt_branch('-f','victim','HEAD')} branch
+      copy {dolt_branch('-c','victim','copied')} branch
+      force-copy {dolt_branch('-c','-f','main','victim')} branch
+      move {dolt_branch('-m','victim','renamed')} branch
+      force-move {dolt_branch('-m','-f','victim','other')} branch
+      delete {dolt_branch('-d','victim','other')} branch
+      force-delete {dolt_branch('-D','victim','other')} branch
+      tag {dolt_tag('new_tag')} tag
+      delete-tag {dolt_tag('-d','v1','v2')} tag
+    } {
+      set prefix ref-active-write-$txn.$operation.$mode
+      reset_db
+      db eval {
+        CREATE TABLE t(id INTEGER PRIMARY KEY CHECK(id<10),v INT UNIQUE);
+        INSERT INTO t VALUES(1,1),(2,2),(3,3);
+        CREATE TABLE u(id INTEGER PRIMARY KEY);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('victim');
+        SELECT dolt_branch('other');
+        SELECT dolt_tag('v1');
+        SELECT dolt_tag('v2');
+        INSERT INTO t VALUES(4,4);
+        SELECT dolt_commit('-am','second');
+        INSERT INTO u VALUES(99);
+      }
+      switch $operation {
+        insert {
+          set sql "INSERT INTO t VALUES(5,5),(6,$call),(20,20)"
+        }
+        update {
+          set sql "UPDATE t SET v=CASE WHEN id=2 THEN 100+$call ELSE v+100 END"
+        }
+        delete {
+          set sql "DELETE FROM t WHERE id!=2 OR $call=0"
+        }
+        returning {set sql "INSERT INTO t VALUES(5,5) RETURNING $call"}
+        before - after {
+          db eval "CREATE TEMP TRIGGER tr $operation INSERT ON t
+                   WHEN new.id=5 BEGIN SELECT $call; END"
+          set sql {INSERT INTO t VALUES(5,5),(20,20)}
+        }
+        trigger-update {
+          db eval "CREATE TEMP TRIGGER tr AFTER UPDATE ON t
+                   WHEN new.id=2 BEGIN SELECT $call; END"
+          set sql {UPDATE t SET v=v+100}
+        }
+        trigger-delete {
+          db eval "CREATE TEMP TRIGGER tr AFTER DELETE ON t
+                   WHEN old.id=2 BEGIN SELECT $call; END"
+          set sql {DELETE FROM t}
+        }
+        view {
+          db eval {CREATE TEMP VIEW tv AS SELECT * FROM t}
+          db eval "CREATE TEMP TRIGGER tr INSTEAD OF INSERT ON tv
+                   BEGIN SELECT $call; END"
+          set sql {INSERT INTO tv VALUES(5,5)}
+        }
+        temp {
+          db eval {CREATE TEMP TABLE tt(id INTEGER PRIMARY KEY)}
+          db eval "CREATE TEMP TRIGGER tr AFTER INSERT ON tt
+                   BEGIN SELECT $call; END"
+          set sql {INSERT INTO tt VALUES(5)}
+        }
+      }
+      set durable [ref_write_state]
+      switch $txn {
+        begin {db eval {BEGIN; INSERT INTO u VALUES(100)}}
+        savepoint {db eval {SAVEPOINT s; INSERT INTO u VALUES(100)}}
+        nested {
+          db eval {BEGIN; INSERT INTO u VALUES(100); SAVEPOINT s;
+                   INSERT INTO u VALUES(101)}
+        }
+      }
+      set before [ref_write_state]
+      do_test $prefix.refused {
+        list [catch {db eval $sql} message] $message
+      } [list 1 "cannot $verb while a write statement is active"]
+      do_test $prefix.unchanged {ref_write_state} $before
+      if {$operation eq "temp"} {
+        do_test $prefix.temp-rolled-back {db one {SELECT count(*) FROM tt}} 0
+      }
+      if {$txn in {savepoint nested}} {
+        do_test $prefix.savepoint-retained {
+          db eval {ROLLBACK TO s; RELEASE s}
+          db eval {SELECT id FROM u ORDER BY id}
+        } [expr {$txn eq "nested" ? [list 99 100] : [list 99]}]
+      }
+      if {$txn in {begin nested}} {db eval {ROLLBACK}}
+      do_test $prefix.rollback {ref_write_state} $durable
+      do_test $prefix.reopen {
+        db close
+        sqlite3 db test.db
+        ref_write_state
+      } $durable
+      do_test $prefix.standalone {db eval "SELECT $call"} 0
+    }
+  }
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+  SELECT dolt_commit('-Am','base');
+}
+foreach {call verb} {dolt_branch('paused') branch dolt_tag('paused') tag} {
+  do_test ref-active-write-paused-$verb.refused {
+    db eval {INSERT INTO t SELECT max(id)+1 FROM t RETURNING id} {
+      set refused [catch {db eval "SELECT $call"} message]
+    }
+    list $refused $message
+  } [list 1 "cannot $verb while a write statement is active"]
+}
+do_execsql_test ref-active-write-paused.rows {SELECT id FROM t ORDER BY id} {1 2 3}
+do_execsql_test ref-active-write-paused.refs {
+  SELECT count(*) FROM dolt_branches WHERE name='paused';
+  SELECT count(*) FROM dolt_tags WHERE tag_name='paused';
+} {0 0}
+do_test ref-active-write-paused-read {
+  db eval {SELECT id FROM t ORDER BY id} {
+    if {$id==1} {db eval {SELECT dolt_branch('read'); SELECT dolt_tag('read')}}
+  }
+  db eval {
+    SELECT count(*) FROM dolt_branches WHERE name='read';
+    SELECT count(*) FROM dolt_tags WHERE tag_name='read';
+  }
+} {1 1}
+
+finish_test
