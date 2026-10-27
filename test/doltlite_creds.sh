@@ -17,6 +17,7 @@ run_test_match "creds_export_public_jwk" "SELECT dolt_creds('export', '$KID');" 
 run_test "creds_export_no_private_key" "SELECT instr(dolt_creds('export', '$KID'), '\"d\"') = 0;" "1" "$DB"
 run_test "creds_export_to_dir" "SELECT dolt_creds('export', '$KID', '$DOLTLITE_CREDS_DIR/authorized');" "Exported public credential $KID to $DOLTLITE_CREDS_DIR/authorized" "$DB"
 if [ -n "$(ls "$DOLTLITE_CREDS_DIR/authorized" 2>/dev/null)" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: creds_export_dir_written"; fi
+run_test_error_match "creds_export_dir_refuses_overwrite" "SELECT dolt_creds_export('$KID', '$DOLTLITE_CREDS_DIR/authorized');" "failed to export public credential" "$DB"
 run_test "creds_ls_structured" "SELECT length(kid), length(public_key), active, error IS NULL FROM dolt_creds_ls();" "45|52|1|1" "$DB"
 run_test "creds_second_new_preserves_active" "SELECT dolt_creds_new() IS NOT NULL; SELECT count(*), sum(active), max(CASE WHEN active THEN kid END) = '$KID' FROM dolt_creds_ls();" "1
 2|1|1" "$DB"
@@ -42,6 +43,39 @@ run_test_error_match "creds_use_missing" "SELECT dolt_creds_use('missing');" "no
 run_test_error_match "creds_use_null" "SELECT dolt_creds_use(NULL);" "usage:" "$DB"
 run_test_error_match "creds_new_args" "SELECT dolt_creds_new('extra');" "takes no arguments" "$DB"
 run_test_error_match "creds_import_public_only" "SELECT dolt_creds_import('$DOLTLITE_CREDS_DIR/authorized/$KID.jwk');" "valid private JWK" "$DB"
+SRC=$(mktemp)
+cp "$DOLTLITE_CREDS_DIR/$KID.jwk" "$SRC"
+run_test "creds_reimport_private" "SELECT dolt_creds_import('$SRC');" "0" "$DB"
+cp "$DOLTLITE_CREDS_DIR/$KID.jwk" "$SRC.kept"
+# A zero file-size limit makes the replacement write fail. SIGXFSZ is ignored
+# so write() returns EFBIG and the save can remove its temporary file.
+IMPORT_RC=0
+IMPORT_OUT=$(python3 -c '
+import resource, signal, subprocess, sys
+def pre():
+    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+r = subprocess.run([sys.argv[1], sys.argv[2], sys.argv[3]],
+                   capture_output=True, text=True, preexec_fn=pre)
+sys.stdout.write(r.stdout)
+sys.stderr.write(r.stderr)
+raise SystemExit(r.returncode)
+' "$DOLTLITE" "$DB" "SELECT dolt_creds_import('$SRC');" 2>&1) || IMPORT_RC=$?
+if [ "$IMPORT_RC" -ne 0 ] && printf '%s\n' "$IMPORT_OUT" | grep -F "failed to save imported credential" >/dev/null; then
+  dltest_pass
+else
+  dltest_fail "creds_import_full_disk" "  rc=$IMPORT_RC\n  got: $IMPORT_OUT"
+fi
+if cmp -s "$SRC.kept" "$DOLTLITE_CREDS_DIR/$KID.jwk"; then
+  dltest_pass
+else
+  dltest_fail "creds_import_full_disk_preserves_bytes" "  key file changed"
+fi
+rm -f "$SRC.kept"
+run_test "creds_import_full_disk_still_readable" "SELECT error IS NULL AND public_key IS NOT NULL FROM dolt_creds_ls() WHERE kid='$KID';" "1" "$DB"
+LEFT=$(find "$DOLTLITE_CREDS_DIR" \( -name '*.jwk.*' -o -name '*.tmp' \) -print | wc -l | tr -d '[:space:]')
+dltest_assert_equal "creds_import_full_disk_no_temp" "$LEFT" "0"
+rm -f "$SRC"
 run_test "creds_remove_by_public_key" "SELECT dolt_creds_rm('$PUB');" "0" "$DB"
 run_test_match "creds_rm" "SELECT dolt_creds('rm', '$KID');" "Removed credential $KID" "$DB"
 run_test_error_match "creds_rm_unknown" "SELECT dolt_creds('rm', '$KID');" "no such credential" "$DB"

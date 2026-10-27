@@ -88,7 +88,10 @@ Replace `<credential-file>` with the path to a private JWK file. Import
 preserves its key identity and validates agreement between its public and
 private halves. The optional Dolt-compatible form is
 `dolt_creds_import('--no-profile', filename)`; imports only change the local
-credential store and selection, without updating the commit author.
+credential store and selection, without updating the commit author. Replacing
+an existing private key writes a temporary file in the credential directory
+and renames it into place. A failed import leaves the previous key file
+unchanged.
 
 ```sql
 SELECT dolt_creds_import('<credential-file>');

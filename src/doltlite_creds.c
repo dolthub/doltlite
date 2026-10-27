@@ -645,6 +645,129 @@ static char *credsFilePath(const char *dir, const char *kid) {
   return path;
 }
 
+#ifndef _WIN32
+static int credsFsyncDir(const char *dir) {
+  int fd;
+  int rc;
+  fd = open(dir, O_RDONLY | O_DIRECTORY);
+  if (fd < 0) return 1;
+  do {
+    rc = fsync(fd);
+  } while (rc < 0 && errno == EINTR);
+  close(fd);
+  return rc < 0;
+}
+#endif
+
+/* Write a temporary file in the same directory, fsync it, and rename it
+   over path. A short write removes the temporary file and leaves path
+   unchanged. exclusive leaves an existing path untouched. */
+static int credsReplaceDurable(const char *dir, const char *path,
+                               const char *data, size_t len, int exclusive) {
+  char *tmp = NULL;
+  int created = 0;
+  int committed = 0;
+  int rc = 1;
+#ifdef _WIN32
+  FILE *out = NULL;
+  size_t ntmp;
+  static volatile LONG seq = 0;
+#else
+  int fd = -1;
+  int existing;
+  size_t ntmp;
+  size_t off = 0;
+  ssize_t wrote;
+  int synced;
+#endif
+
+  if (exclusive) {
+#ifdef _WIN32
+    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) return 1;
+#else
+    existing = open(path, O_RDONLY);
+    if (existing >= 0) {
+      close(existing);
+      return 1;
+    }
+    if (errno != ENOENT) return 1;
+#endif
+  }
+
+#ifdef _WIN32
+  (void)dir;
+  ntmp = strlen(path) + 48;
+  if (ntmp > (size_t)0x7fffffff) return 1;
+  tmp = (char *)sqlite3_malloc((int)ntmp);
+  if (!tmp) return 1;
+  snprintf(tmp, ntmp, "%s.tmp.%lu.%ld", path,
+           (unsigned long)GetCurrentProcessId(),
+           (long)InterlockedIncrement(&seq));
+  out = fopen(tmp, "wb");
+  if (!out) goto done;
+  created = 1;
+  if (fwrite(data, 1, len, out) != len) goto done;
+  if (fflush(out)) goto done;
+  if (fclose(out) != 0) {
+    out = NULL;
+    goto done;
+  }
+  out = NULL;
+  if (exclusive) {
+    if (!MoveFileExA(tmp, path, MOVEFILE_WRITE_THROUGH)) goto done;
+  } else if (!MoveFileExA(tmp, path,
+                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    goto done;
+  }
+  committed = 1;
+#else
+  ntmp = strlen(path) + 8;
+  if (ntmp > (size_t)0x7fffffff) return 1;
+  tmp = (char *)sqlite3_malloc((int)ntmp);
+  if (!tmp) return 1;
+  snprintf(tmp, ntmp, "%s.XXXXXX", path);
+  fd = mkstemp(tmp);
+  if (fd < 0) goto done;
+  created = 1;
+  (void)fchmod(fd, 0600);
+  while (off < len) {
+    wrote = write(fd, data + off, len - off);
+    if (wrote < 0 && errno == EINTR) continue;
+    if (wrote <= 0) goto done;
+    off += (size_t)wrote;
+  }
+  do {
+    synced = fsync(fd);
+    if (synced == 0) break;
+    if (errno != EINTR) goto done;
+  } while (1);
+  if (close(fd) != 0) {
+    fd = -1;
+    goto done;
+  }
+  fd = -1;
+  if (exclusive) {
+    if (link(tmp, path) != 0) goto done;
+    if (unlink(tmp) != 0) goto done;
+  } else if (rename(tmp, path) != 0) {
+    goto done;
+  }
+  committed = 1;
+  if (credsFsyncDir(dir)) goto done;
+#endif
+  rc = 0;
+
+done:
+#ifdef _WIN32
+  if (out) fclose(out);
+#else
+  if (fd >= 0) close(fd);
+#endif
+  if (created && !committed) remove(tmp);
+  sqlite3_free(tmp);
+  return rc;
+}
+
 static int credsSaveJwk(const DoltliteCreds *c, const char *dir,
                         int publicOnly) {
   char *owned = NULL;
@@ -666,44 +789,7 @@ static int credsSaveJwk(const DoltliteCreds *c, const char *dir,
   if (!path) goto done;
   json = publicOnly ? doltliteCredsToPublicJwk(c) : doltliteCredsToJwk(c);
   if (!json) goto done;
-
-  {
-    size_t len = strlen(json);
-#ifdef _WIN32
-    FILE *existing = NULL;
-    FILE *f;
-    if (publicOnly) {
-      existing = fopen(path, "rb");
-      if (existing) {
-        fclose(existing);
-        goto done;
-      }
-    }
-    f = fopen(path, "wb");
-    if (!f) goto done;
-    if (fwrite(json, 1, len, f) != len) {
-      fclose(f);
-      goto done;
-    }
-    if (fclose(f) != 0) goto done;
-#else
-    size_t off = 0;
-    int flags = O_WRONLY | O_CREAT | (publicOnly ? O_EXCL : O_TRUNC);
-    int fd = open(path, flags, 0600);
-    if (fd < 0) goto done;
-    (void)fchmod(fd, 0600);
-    while (off < len) {
-      ssize_t w = write(fd, json + off, len - off);
-      if (w <= 0) {
-        if (w < 0 && errno == EINTR) continue;
-        close(fd);
-        goto done;
-      }
-      off += (size_t)w;
-    }
-    close(fd);
-#endif
-  }
+  if (credsReplaceDurable(dir, path, json, strlen(json), publicOnly)) goto done;
   rc = 0;
 
 done:
