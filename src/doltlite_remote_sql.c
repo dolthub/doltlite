@@ -2760,6 +2760,9 @@ static void doltCredsNewFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3_free(dir);
 
   if( credsSqlSelectDefault(cred) ){
+    kid = doltliteCredsKid(cred);
+    if( kid ) (void)doltliteCredsRemove(0, kid);
+    sqlite3_free(kid);
     doltliteCredsFree(cred);
     sqlite3_result_error(ctx, "failed to save credential selection", -1);
     return;
