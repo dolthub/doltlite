@@ -1,0 +1,108 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {reader query count} {
+  log {SELECT message FROM dolt_log('x')} 4
+  history {SELECT id,length(v) FROM dolt_history_t('x')} 46
+  at {SELECT id,length(v) FROM dolt_at_t('x')} 22
+  table {SELECT id FROM t} 2
+  constant {SELECT 1 UNION ALL SELECT 2} 2
+} {
+  foreach finish {exhaust reset finalize} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY,v);
+      INSERT INTO t VALUES(1,1),(2,2);
+      SELECT dolt_commit('-Am','c1');
+      SELECT dolt_checkout('-b','x');
+      WITH RECURSIVE n(x) AS (VALUES(11) UNION ALL SELECT x+1 FROM n WHERE x<30)
+      INSERT INTO t SELECT x,randomblob(3000) FROM n;
+      SELECT dolt_commit('-am','x1');
+      UPDATE t SET v=randomblob(3000) WHERE id>10;
+      SELECT dolt_commit('-am','x2');
+      SELECT dolt_checkout('main');
+    }
+    set stmt [sqlite3_prepare_v2 db $query -1 tail]
+    set prefix gc-active-$reader-$finish
+    do_test $prefix-prepared-allows-gc {
+      regexp {chunks removed} [db one {SELECT dolt_gc()}]
+    } 1
+    do_test $prefix-start {sqlite3_step $stmt} SQLITE_ROW
+    execsql {SELECT dolt_branch('-D','x')}
+    do_test $prefix-busy {
+      set rc [catch {db eval {SELECT dolt_gc()}} msg]
+      list $rc [db errorcode] $msg
+    } {1 5 {gc requires exclusive access: SQL statements in progress}}
+    do_test $prefix-cursor-continues {sqlite3_step $stmt} SQLITE_ROW
+    if {$finish eq "exhaust"} {
+      do_test $prefix-cursor-completes {
+        set rows 2
+        while {[set rc [sqlite3_step $stmt]] eq "SQLITE_ROW"} {incr rows}
+        list $rc $rows
+      } [list SQLITE_DONE $count]
+    } elseif {$finish eq "reset"} {
+      do_test $prefix-reset {sqlite3_reset $stmt} SQLITE_OK
+    } else {
+      do_test $prefix-finalize {sqlite3_finalize $stmt} SQLITE_OK
+    }
+    do_test $prefix-retry {
+      regexp {chunks removed} [db one {SELECT dolt_gc()}]
+    } 1
+    if {$finish ne "finalize"} {sqlite3_finalize $stmt}
+    do_execsql_test $prefix-integrity {
+      SELECT id FROM t ORDER BY id;
+      PRAGMA integrity_check;
+    } {1 2 ok}
+  }
+}
+
+proc gc_from_callback {} {
+  set rc [catch {db eval {SELECT dolt_gc()}} msg]
+  return [list $rc [db errorcode] $msg]
+}
+db function gc_from_callback gc_from_callback
+do_execsql_test gc-active-reentrant-function {
+  SELECT gc_from_callback();
+} {{1 5 {gc requires exclusive access: SQL statements in progress}}}
+db function gc_from_callback {}
+
+set stmt [sqlite3_prepare_v2 db {SELECT id FROM t} -1 tail]
+do_test gc-active-peer-start {sqlite3_step $stmt} SQLITE_ROW
+sqlite3 peer test.db
+do_test gc-active-other-connection-allowed {
+  regexp {chunks removed} [peer one {SELECT dolt_gc()}]
+} 1
+peer close
+do_test gc-active-peer-reader-continues {sqlite3_step $stmt} SQLITE_ROW
+do_test gc-active-peer-reader-completes {sqlite3_step $stmt} SQLITE_DONE
+sqlite3_finalize $stmt
+
+set first [sqlite3_prepare_v2 db {SELECT 1} -1 tail]
+set second [sqlite3_prepare_v2 db {SELECT 2} -1 tail]
+do_test gc-active-overlap-first {sqlite3_step $first} SQLITE_ROW
+do_test gc-active-overlap-second {sqlite3_step $second} SQLITE_ROW
+do_test gc-active-overlap-both {
+  set rc [catch {db eval {SELECT dolt_gc()}} msg]
+  list $rc [db errorcode] $msg
+} {1 5 {gc requires exclusive access: SQL statements in progress}}
+sqlite3_finalize $first
+do_test gc-active-overlap-one {
+  set rc [catch {db eval {SELECT dolt_gc()}} msg]
+  list $rc [db errorcode] $msg
+} {1 5 {gc requires exclusive access: SQL statements in progress}}
+sqlite3_finalize $second
+do_test gc-active-overlap-released {
+  regexp {chunks removed} [db one {SELECT dolt_gc()}]
+} 1
+
+sqlite3 memory :memory:
+set stmt [sqlite3_prepare_v2 memory {SELECT 1 UNION ALL SELECT 2} -1 tail]
+do_test gc-active-memory-start {sqlite3_step $stmt} SQLITE_ROW
+do_test gc-active-memory-noop {
+  memory one {SELECT dolt_gc()}
+} {0 chunks removed, 0 chunks kept (in-memory)}
+do_test gc-active-memory-continues {sqlite3_step $stmt} SQLITE_ROW
+sqlite3_finalize $stmt
+memory close
+
+finish_test

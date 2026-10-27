@@ -565,6 +565,84 @@ static void test_index_over_2gib(void){
   sqlite3_hard_heap_limit64(oldLimit);
 }
 
+static void test_gc_active_statements(void){
+  static const char *readers[] = {
+    "SELECT message FROM dolt_log('x')",
+    "SELECT id, length(v) FROM dolt_history_t('x')",
+    "SELECT id, length(v) FROM dolt_at_t('x')",
+    "SELECT id FROM t",
+    "SELECT 1 UNION ALL SELECT 2"
+  };
+  static const int expectedRows[] = {4, 46, 22, 2, 2};
+  int reader, finish;
+  for(reader=0; reader<5; reader++){
+    for(finish=0; finish<3; finish++){
+      sqlite3 *db = 0;
+      sqlite3_stmt *stmt = 0;
+      sqlite3_stmt *gc = 0;
+      ProllyHash tip;
+      char path[80];
+      int has = 0;
+      int count = 1;
+      int rc;
+      snprintf(path, sizeof(path), "test_gc_active_%d_%d.db", reader, finish);
+      removeDbFiles(path);
+      check("active_gc_open", sqlite3_open(path, &db)==SQLITE_OK);
+      check("active_gc_seed", execSql(db,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v);"
+          "INSERT INTO t VALUES(1,1),(2,2);"
+          "SELECT dolt_commit('-Am','c1');"
+          "SELECT dolt_checkout('-b','x');"
+          "WITH RECURSIVE n(x) AS (VALUES(11) UNION ALL "
+          "SELECT x+1 FROM n WHERE x<30)"
+          "INSERT INTO t SELECT x,randomblob(3000) FROM n;"
+          "SELECT dolt_commit('-am','x1');"
+          "UPDATE t SET v=randomblob(3000) WHERE id>10;"
+          "SELECT dolt_commit('-am','x2');"
+          "SELECT dolt_checkout('main');")==SQLITE_OK);
+      check("active_gc_capture_tip", captureTip(db, "x", &tip)==SQLITE_OK);
+      check("active_gc_prepare",
+            sqlite3_prepare_v2(db, readers[reader], -1, &stmt, 0)==SQLITE_OK);
+      check("active_gc_unstepped_allows_gc",
+            execSql(db, "SELECT dolt_gc()")==SQLITE_OK);
+      check("active_gc_first_row", sqlite3_step(stmt)==SQLITE_ROW);
+      check("active_gc_delete_branch",
+            execSql(db, "SELECT dolt_branch('-D','x')")==SQLITE_OK);
+      check("active_gc_prepare_gc", sqlite3_prepare_v2(
+          db, "SELECT dolt_gc()", -1, &gc, 0)==SQLITE_OK);
+      rc = sqlite3_step(gc);
+      check("active_gc_refuses_busy", rc==SQLITE_BUSY);
+      check("active_gc_names_active_statements",
+            strstr(sqlite3_errmsg(db), "SQL statements in progress")!=0);
+      sqlite3_finalize(gc);
+      check("active_gc_does_not_sweep",
+            storeHasChunk(path, &tip, &has)==SQLITE_OK && has);
+      rc = sqlite3_step(stmt);
+      check("active_gc_reader_resumes", rc==SQLITE_ROW);
+      if( rc==SQLITE_ROW ) count++;
+      if( finish==0 ){
+        while( (rc=sqlite3_step(stmt))==SQLITE_ROW ) count++;
+        check("active_gc_reader_completes", rc==SQLITE_DONE);
+        check("active_gc_reader_rows", count==expectedRows[reader]);
+      }else if( finish==1 ){
+        check("active_gc_reader_reset", sqlite3_reset(stmt)==SQLITE_OK);
+      }else{
+        sqlite3_finalize(stmt);
+        stmt = 0;
+      }
+      check("active_gc_retry_after_reader",
+            execSql(db, "SELECT dolt_gc()")==SQLITE_OK);
+      check("active_gc_retry_collects_deleted_tip",
+            storeHasChunk(path, &tip, &has)==SQLITE_OK && !has);
+      sqlite3_finalize(stmt);
+      check("active_gc_integrity",
+            strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+      check("active_gc_close", sqlite3_close(db)==SQLITE_OK);
+      removeDbFiles(path);
+    }
+  }
+}
+
 int main(void){
   printf("=== GC Tip Survival Contract Tests ===\n\n");
 
@@ -572,6 +650,7 @@ int main(void){
   test_stale_tip_survives_peer_advance_and_gc();
   test_tip_survives_vacuum();
   test_branch_tips_across_gc();
+  test_gc_active_statements();
   test_gc_allocation_budget();
   test_gc_live_allocation_budget();
   test_index_spool();
