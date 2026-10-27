@@ -63,6 +63,8 @@ int doltlitePushAs(ChunkStore *pLocal, DoltliteRemote *pRemote,
 
 int doltlitePushTag(ChunkStore *pLocal, DoltliteRemote *pRemote,
                     const char *zTag);
+/* Delete tag zTag from the remote; SQLITE_NOTFOUND if it has none. */
+int doltliteDeleteRemoteTag(DoltliteRemote *pRemote, const char *zTag);
 
 /* Allow only the declared branch or tag update; every other ref must match. */
 /* Optional *pbMissing: set when the update failed because the store lacks

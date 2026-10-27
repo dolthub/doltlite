@@ -315,7 +315,10 @@ SELECT CONCAT('R|row|',id,'|',v) FROM t;
 for mode in normal force; do
   flag=""
   [ "$mode" != force ] || flag=",'--force'"
-  for target in nosuch refs/heads/nosuch refs/tags/v1 refs/tags/nosuch; do
+  # DoltLite deletes a remote tag with ':refs/tags/<tag>' and Dolt refuses
+  # it, so an existing tag is not compared here; doltlite_push_delete.test
+  # covers it. Both refuse a tag the remote does not have.
+  for target in nosuch refs/heads/nosuch refs/tags/nosuch; do
     remote_tag_error_flow "push_delete_${mode}_${target//\//_}" "src" "$DELETE_SEED" \
       "SELECT dolt_push('origin',':$target'$flag);" \
       "SELECT dolt_fetch('origin');" \

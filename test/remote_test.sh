@@ -575,10 +575,10 @@ remote_before=$("$DB" "$PD/remote.db" "$delete_remote_state")
 for mode in normal force; do
   flag=""
   [ "$mode" != force ] || flag=",'--force'"
-  for target in nosuch refs/heads/nosuch refs/tags/v1 refs/tags/nosuch; do
+  for target in nosuch refs/heads/nosuch refs/tags/nosuch; do
     result=$("$DB" "$PD/src.db" "SELECT dolt_push('origin',':$target'$flag);" 2>&1)
     case "$target" in
-      refs/tags/*) pattern="unsupported mapping: ':$target'" ;;
+      refs/tags/*) pattern="failed to delete remote; '$target' from remote 'origin'; tag not found" ;;
       *) pattern="failed to delete remote; 'refs/heads/nosuch' from remote 'origin'; branch not found" ;;
     esac
     check_match "$mode deletion of $target reports the target error" "$pattern" "$result"
@@ -588,13 +588,12 @@ for mode in normal force; do
     check "$mode deletion of $target preserves remote refs, tags and rows" "$remote_before" "$result"
   done
 done
-for target in topic refs/heads/keep; do
+for target in topic refs/heads/keep refs/tags/v1; do
   result=$("$DB" "$PD/src.db" "SELECT dolt_push('origin',':$target');" 2>&1)
   check "deletion of $target succeeds" "0" "$result"
 done
 result=$("$DB" "$PD/remote.db" "SELECT name FROM dolt_branches; SELECT tag_name FROM dolt_tags; SELECT id,v FROM t;")
-check "valid deletions preserve the remote main branch and tag" "main
-v1
+check "valid deletions preserve the remote main branch and rows" "main
 1|base" "$result"
 result=$("$DB" "$PD/src.db" "SELECT name FROM dolt_remote_branches; SELECT v FROM t; SELECT v FROM dolt_at_t('STAGED');")
 check "valid deletions remove only the target tracking refs and preserve edits" "remotes/origin/main

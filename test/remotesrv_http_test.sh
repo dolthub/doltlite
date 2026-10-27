@@ -420,6 +420,17 @@ result=$("$DB" "$B" \
   "SELECT dolt_fetch('origin','main'); SELECT tag_name || '|' || message FROM dolt_tags WHERE tag_name='http-v1';" 2>&1)
 check "fetch over http installs the remote tag" $'0\nhttp-v1|http release' "$result"
 
+echo "--- 2c. tag delete over http ---"
+result=$("$DB" "$A" \
+  "SELECT dolt_tag('http-v2','-m','to delete'); SELECT dolt_push('origin','http-v2'); SELECT dolt_push('origin',':refs/tags/http-v2');" 2>&1 | tail -1)
+check "tag delete over http returns 0" "0" "$result"
+"$DB" "$TMP/tag_delete_clone.db" "SELECT dolt_clone('$URL');" >/dev/null 2>&1
+result=$("$DB" "$TMP/tag_delete_clone.db" \
+  "SELECT (SELECT count(*) FROM dolt_tags WHERE tag_name='http-v2') || '|' || (SELECT count(*) FROM dolt_tags WHERE tag_name='http-v1');" 2>&1)
+check "tag delete over http removes only that tag" "0|1" "$result"
+result=$("$DB" "$A" "SELECT dolt_push('origin',':refs/tags/http-v2');" 2>&1)
+check_match "deleting a missing tag over http fails" "tag not found" "$result"
+
 echo "--- 3. malformed has-chunks responses stop push before refs update ---"
 "$DB" "$A" "INSERT INTO users VALUES(99,'protocol',99); SELECT dolt_commit('-am','protocol response');" >/dev/null
 for mode in short long invalid; do
