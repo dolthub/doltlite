@@ -2600,6 +2600,39 @@ check "push --force --all returns 0" "0" "$result"
 result=$("$DB" "$PA/remote.db" "SELECT message FROM dolt_log LIMIT 1;")
 check "push --force --all updates the rejected branch" "src-main" "$result"
 
+echo "=== Bare pull and fetch use the sole non-origin remote ==="
+SR="$TMPDIR/sole_remote"
+mkdir -p "$SR"
+"$DB" "$SR/o.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','c1');
+ENDSQL
+"$DB" "$SR/c.db" "SELECT dolt_clone('--remote','upstream','file://$SR/o.db');" >/dev/null
+"$DB" "$SR/f.db" "SELECT dolt_clone('--remote','upstream','file://$SR/o.db');" >/dev/null
+"$DB" "$SR/o.db" "INSERT INTO t VALUES(2); SELECT dolt_commit('-am','c2');" >/dev/null
+result=$("$DB" "$SR/c.db" "SELECT dolt_pull();")
+check "bare pull after clone --remote returns 0" "0" "$result"
+result=$("$DB" "$SR/c.db" "SELECT id FROM t ORDER BY id; SELECT name FROM dolt_remotes;")
+check "bare pull fast-forwards the named clone remote" "1
+2
+upstream" "$result"
+result=$("$DB" "$SR/f.db" "SELECT dolt_fetch(); SELECT latest_commit_message FROM dolt_remote_branches WHERE name='remotes/upstream/main'; SELECT message FROM dolt_log LIMIT 1;")
+check "bare fetch uses the sole non-origin remote" "0
+c2
+c1" "$result"
+"$DB" "$SR/c.db" "SELECT dolt_remote('add','backup','file://$SR/o.db');" >/dev/null
+result=$("$DB" "$SR/c.db" "SELECT dolt_pull();" 2>&1)
+check_match "bare pull with two non-origin remotes still needs a name" \
+  "remote not found" "$result"
+"$DB" "$SR/both.db" "SELECT dolt_clone('file://$SR/o.db'); SELECT dolt_remote('add','backup','file://$SR/missing.db');" >/dev/null
+"$DB" "$SR/o.db" "INSERT INTO t VALUES(3); SELECT dolt_commit('-am','c3');" >/dev/null
+result=$("$DB" "$SR/both.db" "SELECT dolt_pull(); SELECT id FROM t ORDER BY id;")
+check "bare pull still prefers origin when another remote exists" "0
+1
+2
+3" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

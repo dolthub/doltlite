@@ -1376,6 +1376,27 @@ static int fetchSpecResultInvalid(
   return SQLITE_ERROR;
 }
 
+/* No upstream is stored. origin wins when it is configured. Otherwise the
+** only configured remote is the one clone recorded under another name. */
+static int remoteSqlCopyDefaultName(ChunkStore *cs, char **pzName){
+  const RemoteRef *aRm = 0;
+  int nRm = 0;
+  int i;
+  const char *z = 0;
+  *pzName = 0;
+  refsTableGetRemotes(&cs->refs, &nRm, &aRm);
+  for(i=0; i<nRm; i++){
+    if( aRm[i].zName && strcmp(aRm[i].zName, "origin")==0 ){
+      z = "origin";
+      break;
+    }
+  }
+  if( !z && nRm==1 && aRm[0].zName && aRm[0].zName[0] ) z = aRm[0].zName;
+  if( !z ) z = "origin";
+  *pzName = sqlite3_mprintf("%s", z);
+  return *pzName ? SQLITE_OK : SQLITE_NOMEM;
+}
+
 static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1386,7 +1407,8 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     { "prune", 'p', DOLTLITE_CMD_OPTION_FLAG, &bPrune, 0 }
   };
   const char *zUrl = 0;
-  const char *zRemoteName;
+  const char *zRemoteName = 0;
+  char *zRemoteOwned = 0;
   char *zUrlOwned = 0;
   char **azNames = 0;
   int nNames = 0;
@@ -1402,8 +1424,19 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     (void)doltliteVcSealSavepointError(db);
     return;
   }
-  zRemoteName = args.nPositional>0 ? args.azPositional[0] : "origin";
+  if( args.nPositional>0 ){
+    zRemoteName = args.azPositional[0];
+  }else{
+    rc = remoteSqlCopyDefaultName(cs, &zRemoteOwned);
+    if( rc!=SQLITE_OK ){
+      doltliteCmdArgsClear(&args);
+      sqlite3_result_error_nomem(ctx);
+      return;
+    }
+    zRemoteName = zRemoteOwned;
+  }
   if( bPrune && args.nPositional>1 ){
+    sqlite3_free(zRemoteOwned);
     doltliteCmdArgsClear(&args);
     doltliteVcResultError(ctx, db,
         "--prune option cannot be provided with a ref spec");
@@ -1412,6 +1445,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   rc = remoteSqlOpenNamedRemote(db, cs, zRemoteName, 0, &zUrl, &pRemote);
   if( remoteSqlReportOpenError(ctx, db, rc, 0) ){
+    sqlite3_free(zRemoteOwned);
     doltliteCmdArgsClear(&args);
     return;
   }
@@ -1421,6 +1455,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     const char *zMsg = remoteSqlRemoteMsg(pRemote, rc);
     char *zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
     pRemote->xClose(pRemote);
+    sqlite3_free(zRemoteOwned);
     doltliteCmdArgsClear(&args);
     (void)doltliteVcSealSavepointError(db);
     remoteSqlResultError(ctx, rc, zOwned ? zOwned
@@ -1566,6 +1601,7 @@ fetch_done:
   ** this branch is in that reload, and the change signal is gone. */
   doltliteNoteSessionMissedDiskTip(db);
   doltliteFreeStringArray(azNames, nNames);
+  sqlite3_free(zRemoteOwned);
   sqlite3_free(zUrlOwned);
   doltliteCmdArgsClear(&args);
 }
@@ -1950,6 +1986,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     { "prune", 'p', DOLTLITE_CMD_OPTION_FLAG, &bPrune, 0 }
   };
   const char *zBranch;
+  const char *zRemote;
+  char *zRemoteOwned = 0;
   int rc;
 
   if( doltliteCmdRejectInWriteStatement(ctx, "pull") ) return;
@@ -1976,8 +2014,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         "--ff-only cannot be combined with --no-ff or --squash");
     return;
   }
-  /* No upstream tracking config: a pull defaults to origin and the
-  ** same-named branch, which is what a cloned branch tracks. With no
+  /* No upstream is stored. Prefer origin; otherwise use the only configured
+  ** remote, which is what dolt_clone('--remote', name) recorded. With no
   ** branch argument every remote branch is fetched first. */
   zBranch = args.nPositional>1 ? args.azPositional[1]
                                : doltliteGetSessionBranch(db);
@@ -1986,9 +2024,20 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     doltliteVcResultError(ctx, db, "cannot pull in detached head");
     return;
   }
-  doltPullParsed(ctx, args.nPositional>0 ? args.azPositional[0] : "origin",
-                 zBranch, bFfOnly, bNoFf, bSquash, args.nPositional<=1,
-                 bPrune);
+  if( args.nPositional>0 ){
+    zRemote = args.azPositional[0];
+  }else{
+    rc = remoteSqlCopyDefaultName(doltliteGetChunkStore(db), &zRemoteOwned);
+    if( rc!=SQLITE_OK ){
+      doltliteCmdArgsClear(&args);
+      sqlite3_result_error_nomem(ctx);
+      return;
+    }
+    zRemote = zRemoteOwned;
+  }
+  doltPullParsed(ctx, zRemote, zBranch, bFfOnly, bNoFf, bSquash,
+                 args.nPositional<=1, bPrune);
+  sqlite3_free(zRemoteOwned);
   doltliteCmdArgsClear(&args);
 }
 

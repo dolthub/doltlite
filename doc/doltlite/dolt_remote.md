@@ -161,6 +161,9 @@ when it cannot fast-forward, conflicts included.
 - `dolt_fetch --prune` (or `-p`) with no refspec drops tracking refs whose
   branch the remote no longer has. The same flag with a branch or refspec is
   refused and drops nothing.
+- `dolt_pull()` and `dolt_fetch()` with no remote name use `origin` when that
+  remote exists. When it does not, and exactly one remote is configured, they
+  use that remote. That is the name `dolt_clone('--remote', name, url)` stored.
 - `dolt_pull()` and `dolt_pull(remote)` fetch every branch on that remote,
   and the tags those fetches install, then fast-forward or merge the current
   branch from the same remote. `dolt_pull(remote, branch)` fetches only that
