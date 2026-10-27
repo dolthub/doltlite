@@ -121,10 +121,10 @@ with tempfile.TemporaryDirectory() as tmp:
     payload = root / 'build-coverage'
     payload.mkdir()
     for name in ('doltlite', 'doltlite-remotesrv', 'doltlite_regression_test_c',
-                 'testfixture', 'vec1.so', 'vec1testscalar.so', 'prolly_hash.o', 'blake3.o',
-                 'sample_test', 'libdoltlite.a', 'sqlite3.h'):
+                 'testfixture', 'http_transfer_test', 'vec1.so', 'vec1testscalar.so',
+                 'prolly_hash.o', 'blake3.o', 'sample_test', 'libdoltlite.a', 'sqlite3.h'):
         (payload / name).write_bytes(name.encode())
-        if name in ('doltlite', 'doltlite-remotesrv', 'testfixture'):
+        if name in ('doltlite', 'doltlite-remotesrv', 'testfixture', 'http_transfer_test'):
             (payload / name).chmod(0o755)
     (root / 'build-stockref').mkdir()
     (root / 'build-stockref/sqlite3').write_bytes(b'stock')
@@ -150,6 +150,10 @@ with tempfile.TemporaryDirectory() as tmp:
             check('build-coverage/libdoltlite.a' not in archive.getnames(),
                   f'{artifact} runtime needlessly carries the library')
     with tarfile.open(root / 'coverage-fixture.tar.gz') as archive:
+        helper = archive.getmember('build-coverage/http_transfer_test')
+        check(archive.extractfile(helper).read() == b'http_transfer_test',
+              'remote fixture lost the HTTP transfer test')
+        check(helper.mode & 0o111, 'HTTP transfer test is not executable')
         for lib in ('vec1.so', 'vec1testscalar.so'):
             check(f'build-coverage/{lib}' in archive.getnames(),
                   f'regression fixture lost {lib}')

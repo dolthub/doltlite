@@ -33,6 +33,7 @@ struct HttpRemote {
   int port;
   int useTls;
   int timeoutMs;
+  i64 retryDeadlineMs;
   char *zBasePath;
 #if !defined(__EMSCRIPTEN__)
   HttpConn *pConn;
@@ -273,17 +274,20 @@ static int httpHeaderNameEquals(
 #define httpConnOpen(H,P,T,M) doltliteConnOpenTimeout((H),(P),(T),(M))
 #define httpConnWriteAll(C,B,N) doltliteConnWriteAll((C),(B),(N))
 #define httpConnRead(C,B,N) doltliteConnRead((C),(B),(N))
-#define httpConnSetTimeout(C,M) doltliteConnSetTimeout((C),(M))
+#define httpConnSetTimeout(C,M,I) doltliteConnSetIdleTimeout((C),(M),(I))
+#define httpConnTimeoutRemaining(C) doltliteConnTimeoutRemaining((C))
 #define httpConnClose(C) doltliteConnClose((C))
 #else
 struct HttpConn {
   int fd;
   i64 deadlineMs;
+  int timeoutMs;
+  int timedOut;
 };
 
 static int httpConnApplyDeadline(HttpConn *pConn){
   i64 remaining = pConn->deadlineMs - doltliteMonotonicMs();
-  if( remaining<=0 ) return 1;
+  if( remaining<=0 ){ pConn->timedOut = 1; return 1; }
   if( remaining>0x7fffffff ) remaining = 0x7fffffff;
   return doltliteSocketSetTimeout(pConn->fd, (int)remaining);
 }
@@ -315,6 +319,7 @@ static HttpConn *httpConnOpen(
     doltliteCloseSocket(fd);
     return 0;
   }
+  memset(pConn, 0, sizeof(*pConn));
   pConn->fd = fd;
   pConn->deadlineMs = deadlineMs;
   if( httpConnApplyDeadline(pConn)!=0 ){
@@ -325,9 +330,11 @@ static HttpConn *httpConnOpen(
   return pConn;
 }
 
-static int httpConnSetTimeout(HttpConn *pConn, int timeoutMs){
-  pConn->deadlineMs = timeoutMs>0 ? doltliteMonotonicMs() + timeoutMs : 0;
-  if( timeoutMs<=0 ) return doltliteSocketSetTimeout(pConn->fd, 0);
+static int httpConnSetTimeout(HttpConn *pConn, int timeoutMs, int initialMs){
+  pConn->timeoutMs = timeoutMs;
+  pConn->timedOut = 0;
+  pConn->deadlineMs = initialMs>0 ? doltliteMonotonicMs() + initialMs : 0;
+  if( initialMs<=0 ) return doltliteSocketSetTimeout(pConn->fd, 0);
   return httpConnApplyDeadline(pConn);
 }
 
@@ -342,15 +349,29 @@ static int httpConnWriteAll(HttpConn *pConn, const void *pBuf, int nBuf){
     int n;
     if( httpConnApplyDeadline(pConn)!=0 ) return 1;
     n = send(pConn->fd, z+nSent, nBuf-nSent, flags);
-    if( n<=0 ) return 1;
+    if( n<=0 ){
+      pConn->timedOut = n<0 && doltliteSocketTimedOut();
+      return 1;
+    }
+    if( pConn->timeoutMs ) pConn->deadlineMs = doltliteMonotonicMs() + pConn->timeoutMs;
     nSent += n;
   }
   return 0;
 }
 
 static int httpConnRead(HttpConn *pConn, void *pBuf, int nBuf){
+  int n;
   if( httpConnApplyDeadline(pConn)!=0 ) return -1;
-  return recv(pConn->fd, (char*)pBuf, nBuf, 0);
+  n = recv(pConn->fd, (char*)pBuf, nBuf, 0);
+  if( n>0 && pConn->timeoutMs ) pConn->deadlineMs = doltliteMonotonicMs() + pConn->timeoutMs;
+  else if( n<0 ) pConn->timedOut = doltliteSocketTimedOut();
+  return n;
+}
+
+static int httpConnTimeoutRemaining(HttpConn *pConn){
+  i64 remaining = pConn->deadlineMs - doltliteMonotonicMs();
+  if( pConn->timedOut || remaining<=0 ) return 0;
+  return remaining>0x7fffffff ? 0x7fffffff : (int)remaining;
 }
 
 static void httpConnClose(HttpConn *pConn){
@@ -859,20 +880,28 @@ static void httpDisconnect(HttpRemote *p){
   p->pConn = 0;
 }
 
-static int httpRemainingTimeout(i64 deadlineMs){
-  i64 remaining = deadlineMs - doltliteMonotonicMs();
-  if( remaining<=0 ) return 0;
-  if( remaining>0x7fffffff ) remaining = 0x7fffffff;
-  return (int)remaining;
+static int httpTimeout(HttpRemote *p, const char *phase){
+  char *message = sqlite3_mprintf("remote %s timed out after %d ms without progress",
+                                 phase, p->timeoutMs);
+  httpSetLastError(p, message);
+  sqlite3_free(message);
+  return SQLITE_ERROR;
 }
 
-/* The peer hung up, or a socket read or write failed. That is a network
-** failure: keep a message, and a result code, that name the network. */
-static int httpConnectionLost(HttpRemote *p, int *pTransportError){
-  *pTransportError = 1;
+static int httpConnectionLost(HttpRemote *p, int *pTransportError, const char *phase){
+  int remaining = p->pConn ? httpConnTimeoutRemaining(p->pConn) : 0;
+  *pTransportError = remaining>0;
+  p->retryDeadlineMs = doltliteMonotonicMs() + remaining;
   httpDisconnect(p);
+  if( !remaining ) return httpTimeout(p, phase);
   httpSetLastError(p, "connection to remote lost");
   return SQLITE_ERROR;
+}
+
+static int httpRetryTimeout(HttpRemote *p, i64 deadlineMs){
+  i64 remaining = deadlineMs ? deadlineMs-doltliteMonotonicMs() : p->timeoutMs;
+  if( remaining<=0 ) return 0;
+  return remaining>p->timeoutMs ? p->timeoutMs : (int)remaining;
 }
 
 static int httpRequestMayRetry(const char *zMethod, const char *zPath){
@@ -880,7 +909,8 @@ static int httpRequestMayRetry(const char *zMethod, const char *zPath){
   if( sqlite3_stricmp(zMethod, "GET")==0 ) return 1;
   if( sqlite3_stricmp(zMethod, "POST")!=0 ) return 0;
   return (nPath>=11 && strcmp(zPath+nPath-11, "/get-chunks")==0)
-      || (nPath>=11 && strcmp(zPath+nPath-11, "/has-chunks")==0);
+      || (nPath>=11 && strcmp(zPath+nPath-11, "/has-chunks")==0)
+      || (nPath>=7 && strcmp(zPath+nPath-7, "/chunks")==0);
 }
 
 static int httpRequestOnce(
@@ -890,8 +920,7 @@ static int httpRequestOnce(
   const u8 *pBody, i64 nBody,
   int *pStatus,
   u8 **ppResp, int *pnResp,
-  i64 deadlineMs,
-  int *pWasReused,
+  i64 retryDeadlineMs,
   int *pTransportError
 ){
   char *zAuth = 0;
@@ -899,33 +928,35 @@ static int httpRequestOnce(
   u8 *pRaw = 0;
   int nRaw = 0;
   int closeConnection = 0;
-  int timeoutMs;
+  i64 connectStart;
+  int timeoutMs = httpRetryTimeout(p, retryDeadlineMs);
   int rc = SQLITE_ERROR;
 
   *pStatus = 0;
   *ppResp = 0;
   *pnResp = 0;
-  *pWasReused = p->pConn!=0;
   *pTransportError = 0;
+  if( !timeoutMs ){
+    httpDisconnect(p);
+    return httpTimeout(p, "request");
+  }
 
-  timeoutMs = httpRemainingTimeout(deadlineMs);
-  if( timeoutMs<=0 ){
-    *pTransportError = 1;
-    httpDisconnect(p);
-    return SQLITE_IOERR;
-  }
   if( !p->pConn ){
+    connectStart = doltliteMonotonicMs();
     p->pConn = httpConnOpen(p->zHost, p->port, p->useTls, timeoutMs);
+    if( !p->pConn ){
+      httpSetLastError(p, doltliteMonotonicMs()-connectStart>=timeoutMs
+          ? "connection to remote timed out" : "could not connect to remote");
+      return SQLITE_ERROR;
+    }
   }
-  if( !p->pConn ){
-    httpSetLastError(p, "could not connect to remote");
-    return SQLITE_ERROR;
-  }
-  timeoutMs = httpRemainingTimeout(deadlineMs);
-  if( timeoutMs<=0 || httpConnSetTimeout(p->pConn, timeoutMs)!=0 ){
-    *pTransportError = 1;
+  timeoutMs = httpRetryTimeout(p, retryDeadlineMs);
+  if( !timeoutMs ){
     httpDisconnect(p);
-    return SQLITE_IOERR;
+    return httpTimeout(p, "request");
+  }
+  if( httpConnSetTimeout(p->pConn, retryDeadlineMs ? 0 : p->timeoutMs, timeoutMs)!=0 ){
+    return httpConnectionLost(p, pTransportError, "request");
   }
 
 #ifdef DOLTLITE_HAVE_AUTH
@@ -967,7 +998,7 @@ static int httpRequestOnce(
      ? SQLITE_IOERR : SQLITE_OK;
   sqlite3_free(zHdr);
   if( rc != SQLITE_OK ){
-    return httpConnectionLost(p, pTransportError);
+    return httpConnectionLost(p, pTransportError, "upload");
   }
   if( pBody && nBody > 0 ){
     i64 off = 0;
@@ -975,17 +1006,27 @@ static int httpRequestOnce(
       i64 nRemain = nBody - off;
       int nWrite = nRemain>0x7fffffff ? 0x7fffffff : (int)nRemain;
       if( httpConnWriteAll(p->pConn, pBody+off, nWrite) ){
-        return httpConnectionLost(p, pTransportError);
+        return httpConnectionLost(p, pTransportError, "upload");
       }
       off += nWrite;
     }
   }
 
+  if( retryDeadlineMs ){
+    timeoutMs = httpRetryTimeout(p, retryDeadlineMs);
+    if( !timeoutMs ){
+      httpDisconnect(p);
+      return httpTimeout(p, "request");
+    }
+    if( httpConnSetTimeout(p->pConn, p->timeoutMs, timeoutMs)!=0 ){
+      return httpConnectionLost(p, pTransportError, "response");
+    }
+  }
   rc = readHttpResponse(p->pConn, &pRaw, &nRaw, &closeConnection,
                         pTransportError);
   if( rc != SQLITE_OK ){
     if( *pTransportError && (rc==SQLITE_IOERR || rc==SQLITE_PROTOCOL) ){
-      return httpConnectionLost(p, pTransportError);
+      return httpConnectionLost(p, pTransportError, "response");
     }
     httpDisconnect(p);
     return rc;
@@ -1005,9 +1046,7 @@ static int httpRequest(
   int *pStatus,
   u8 **ppResp, int *pnResp
 ){
-  int wasReused = 0;
   int transportError = 0;
-  i64 deadlineMs = doltliteMonotonicMs() + p->timeoutMs;
   int rc;
 
   httpClearLastError(p);
@@ -1017,16 +1056,17 @@ static int httpRequest(
   rc = httpPrepareAuth(p, zMethod, zPath);
   if( rc!=SQLITE_OK ) return rc;
   rc = httpRequestOnce(p, zMethod, zPath, pBody, nBody,
-                       pStatus, ppResp, pnResp,
-                       deadlineMs,
-                       &wasReused, &transportError);
-  if( rc!=SQLITE_OK && wasReused && transportError
+                       pStatus, ppResp, pnResp, 0,
+                       &transportError);
+  if( rc!=SQLITE_OK && transportError
    && httpRequestMayRetry(zMethod, zPath) ){
+    int nPath = (int)strlen(zPath);
+    i64 deadline = sqlite3_stricmp(zMethod, "POST")==0
+        && nPath>=7 && strcmp(zPath+nPath-7, "/chunks")==0 ? 0 : p->retryDeadlineMs;
     httpClearLastError(p);
     rc = httpRequestOnce(p, zMethod, zPath, pBody, nBody,
-                         pStatus, ppResp, pnResp,
-                         deadlineMs,
-                         &wasReused, &transportError);
+                         pStatus, ppResp, pnResp, deadline,
+                         &transportError);
   }
   return rc;
 }

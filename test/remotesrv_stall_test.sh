@@ -180,7 +180,7 @@ PY
 
 }
 
-echo "=== stalled remote server ==="
+echo "=== remote client progress and stalls ==="
 python3 - "$TMP/blackhole.port" <<'PY' &
 import socket
 import sys
@@ -189,26 +189,35 @@ import time
 server = socket.socket()
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(("127.0.0.1", 0))
-server.listen(1)
+server.listen(2)
+server.settimeout(5)
 with open(sys.argv[1], "w") as f:
     f.write(str(server.getsockname()[1]))
 
-conn, _ = server.accept()
-request = b""
-while b"\r\n\r\n" not in request:
-    data = conn.recv(4096)
-    if not data:
-        break
-    request += data
-
-response = b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n" + b"x" * 20
-for byte in response:
-    try:
-        conn.sendall(bytes([byte]))
-    except OSError:
-        break
-    time.sleep(0.2)
-conn.close()
+for progressing in (True, False):
+    conn, _ = server.accept()
+    with conn:
+        request = b""
+        while b"\r\n\r\n" not in request:
+            data = conn.recv(4096)
+            if not data:
+                break
+            request += data
+        body = b"repository not found"
+        status = b"404 Not Found" if progressing else b"200 OK"
+        header = (b"HTTP/1.1 " + status + b"\r\nContent-Length: "
+                  + str(len(body)).encode() + b"\r\n\r\n")
+        if progressing:
+            response = header + body
+            for offset in range(0, len(response), 8):
+                time.sleep(0.2)
+                try:
+                    conn.sendall(response[offset:offset + 8])
+                except OSError:
+                    break
+        else:
+            conn.sendall(header + body[:4])
+            time.sleep(2)
 server.close()
 PY
 BLACKHOLE_PID=$!
@@ -224,7 +233,7 @@ if [ -z "$BLACKHOLE_PORT" ]; then
   exit 1
 fi
 
-python3 - "$DOLTLITE" "$TMP/client.db" "$BLACKHOLE_PORT" <<'PY'
+python3 - "$DOLTLITE" "$TMP/client" "$BLACKHOLE_PORT" <<'PY'
 import os
 import subprocess
 import sys
@@ -233,21 +242,29 @@ import time
 env = os.environ.copy()
 env["DOLTLITE_HTTP_TIMEOUT_MS"] = "750"
 url = "http://127.0.0.1:{}/repo.db".format(sys.argv[3])
-start = time.monotonic()
-try:
-    result = subprocess.run(
-        [sys.argv[1], sys.argv[2], "SELECT dolt_clone('{}');".format(url)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=4,
-    )
-except subprocess.TimeoutExpired as exc:
-    raise AssertionError("HTTP remote client ignored its deadline") from exc
-elapsed = time.monotonic() - start
-assert result.returncode != 0, result.stdout
-assert 0.3 < elapsed < 3.0, elapsed
-print("  PASS: HTTP remote client cuts a dribbling response at its deadline")
+for mode in ("progress", "stall"):
+    start = time.monotonic()
+    try:
+        result = subprocess.run(
+            [sys.argv[1], sys.argv[2] + "-" + mode + ".db",
+             "SELECT dolt_clone('{}');".format(url)],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=4,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("HTTP remote client ignored its inactivity deadline") from exc
+    elapsed = time.monotonic() - start
+    assert result.returncode == 1, result.stdout
+    if mode == "progress":
+        assert b"repository not found" in result.stdout, result.stdout
+        assert elapsed >= 0.9, elapsed
+        print("  PASS: HTTP remote client receives a progressing response beyond its idle budget")
+    else:
+        assert b"remote response timed out" in result.stdout, result.stdout
+        assert 0.3 < elapsed < 3.0, elapsed
+        print("  PASS: HTTP remote client cuts a response that stops progressing")
 PY
 kill "$BLACKHOLE_PID" 2>/dev/null || true
 wait "$BLACKHOLE_PID" 2>/dev/null || true
