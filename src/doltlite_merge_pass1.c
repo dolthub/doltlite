@@ -221,6 +221,13 @@ static int mergePass1MergeTableData(
     c->aMerged[(*c->pnMerged)++] = merged;
   }
 
+  /* An index tree is rebuilt from its merged table, so key collisions that
+  ** compare equal but differ in bytes (1 vs 1.0, NOCASE) are not conflicts. */
+  if( !zName && nConflicts>0 ){
+    freeConflictRows(aConflictRows, nConflicts);
+    return SQLITE_OK;
+  }
+
   if( nConflicts>0 ){
     *c->pTotalConflicts += nConflicts;
     rc = appendConflictTable(c->ppConflictTables, c->pnConflictTables,
