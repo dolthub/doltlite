@@ -418,6 +418,26 @@ run_test "vacuum_into_name_outlives_handle" \
   "VACUUM INTO '$COPY'; SELECT count(*) FROM t;" \
   "2" "$DB"
 run_test "gc_vacuum_into_copy_readable" "SELECT count(*) FROM t;" "2" "$COPY"
+run_test_error_match "vacuum_into_missing_parent" \
+  "VACUUM INTO '$VACUUM_TMP/no-such-dir/x.db';" \
+  "unable to open database: $VACUUM_TMP/no-such-dir/x.db" "$DB"
+mkdir -p "$VACUUM_TMP/adir"
+run_test_error_match "vacuum_into_directory" \
+  "VACUUM INTO '$VACUUM_TMP/adir';" \
+  "unable to open database: $VACUUM_TMP/adir" "$DB"
+PARENT="$VACUUM_TMP/ro"
+mkdir -p "$PARENT"
+chmod a-w "$PARENT" 2>/dev/null || true
+if [ ! -w "$PARENT" ]; then
+  run_test_error_match "vacuum_into_unwritable" \
+    "VACUUM INTO '$PARENT/x.db';" \
+    "unable to open database: $PARENT/x.db" "$DB"
+fi
+chmod u+w "$PARENT" 2>/dev/null || true
+run_test "vacuum_into_empty" "VACUUM INTO ''; SELECT count(*) FROM t;" "2" "$DB"
+run_test "vacuum_into_empty_keeps_copy" "SELECT count(*) FROM t;" "2" "$COPY"
+LEFT=$(find "$VACUUM_TMP" \( -name 'source.db-vacuum-*' -o -name '.source.db-vacuum-*-lock' \) -print | wc -l | tr -d '[:space:]')
+dltest_assert_equal "vacuum_into_empty_no_temp" "$LEFT" "0"
 db_rm "$DB"; db_rm "$COPY"
 
 # A connection that first sees a peer's file replacement while a third
