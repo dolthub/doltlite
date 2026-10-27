@@ -30,7 +30,9 @@ For a DoltLite-format main database, the compatibility contract is:
   memory across shared history and spills large queues to temporary disk storage.
   File-backed `VACUUM INTO`
   writes a compacted DoltLite-format copy; `:memory:` as the destination is
-  refused. `SQLITE_DBCONFIG_RESET_DATABASE` plus `VACUUM` empties the
+  refused. An empty filename writes that copy to a temporary file and removes
+  it. A destination that cannot be opened reports
+  `unable to open database: <path>`. `SQLITE_DBCONFIG_RESET_DATABASE` plus `VACUUM` empties the
   current branch working catalog (`sqlite_master` has no user objects)
   and zeros `user_version` and `application_id`; other branches and
   commit history remain, so `dolt_reset('--hard')` restores this branch
