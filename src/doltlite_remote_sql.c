@@ -49,9 +49,21 @@ static int mutateRemoteRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   RemoteMutationCtx *p = (RemoteMutationCtx*)pArg;
   (void)db;
   if( p->isDelete ){
-    if( strcmp(p->zName, "origin")==0 && chunkStoreOriginSourceEnabled(cs) ){
-      p->originRequired = 1;
-      return SQLITE_ERROR;
+    const char *zUrl = 0;
+    if( strcmp(p->zName, "origin")==0
+     && chunkStoreFindRemote(cs, "origin", &zUrl)==SQLITE_OK ){
+      int bMissing = 0;
+      int rc;
+      if( chunkStoreOriginSourceEnabled(cs) ){
+        p->originRequired = 1;
+        return SQLITE_ERROR;
+      }
+      rc = doltliteStoreGraphIncomplete(cs, &bMissing);
+      if( rc!=SQLITE_OK ) return rc;
+      if( bMissing ){
+        p->originRequired = 2;
+        return SQLITE_ERROR;
+      }
     }
     return chunkStoreDeleteRemote(cs, p->zName);
   }
@@ -612,7 +624,8 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     if( rc!=SQLITE_OK ){
       (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
-        m.originRequired ? "cannot remove origin while lazy origin is enabled"
+        m.originRequired==1 ? "cannot remove origin while lazy origin is enabled"
+        : m.originRequired ? "cannot remove origin: this lazy clone still reads missing chunks from it"
         : rc==SQLITE_NOTFOUND ? "remote not found" : 0);
       return;
     }

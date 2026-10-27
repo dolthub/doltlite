@@ -1228,6 +1228,18 @@ else
 fi
 check "lazy clone is refs-sized before use" "1" "$lazy_refs_sized"
 
+"$DB" "file:$TMPDIR/lazy_keep_origin.db?lazy_origin=1" "SELECT dolt_clone('--lazy','$R/lazy_origin.db'); SELECT count(*) FROM sqlite_master;" >/dev/null
+result=$("$DB" "$TMPDIR/lazy_keep_origin.db" "SELECT dolt_remote('remove','origin');" 2>&1)
+check_match "plain connection cannot remove a lazy clone's origin" "still reads missing chunks" "$result"
+result=$("$DB" "file:$TMPDIR/lazy_keep_origin.db?lazy_origin=1" "SELECT name FROM dolt_remotes; SELECT count(*) FROM lazy_rows;" 2>&1)
+check "lazy clone still reads after a refused origin removal" "origin
+801" "$result"
+"$DB" "$TMPDIR/full_drop_origin.db" "SELECT dolt_clone('$R/lazy_origin.db');" >/dev/null
+result=$("$DB" "$TMPDIR/full_drop_origin.db" "SELECT dolt_remote('remove','origin'); SELECT count(*) FROM dolt_remotes; SELECT count(*) FROM lazy_rows;" 2>&1)
+check "a complete clone can remove origin" "0
+0
+801" "$result"
+
 lazy_write_uri="file:$TMPDIR/lazy_write.db?lazy_origin=1"
 "$DB" "$lazy_write_uri" \
   "SELECT dolt_clone('--lazy','$R/lazy_origin.db');" > /dev/null
