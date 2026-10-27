@@ -1174,24 +1174,45 @@ static void credsSettingsFree(CredsSetting *p) {
   }
 }
 
-static int credsSettingsRead(const char *path, CredsSetting **out) {
+/* Keys this build does not know are kept and written back, so an older
+** build neither rejects nor drops a newer build's settings. With repair set,
+** malformed lines are dropped instead of failing the read. */
+static int credsSettingsRead(const char *path, CredsSetting **out, int repair) {
   FILE *f = fopen(path, "rb");
-  char line[160];
+  char line[1024];
   CredsSetting **tail = out;
   *out = NULL;
   if (!f) return errno == ENOENT ? 0 : 1;
   while (fgets(line, sizeof(line), f)) {
-    char *eq = strchr(line, '=');
     size_t n = strlen(line);
+    char *eq = NULL;
+    int bad = 0;
     CredsSetting *p, *prev;
-    if (!n || line[n-1] != '\n' || !eq) goto bad;
-    line[n-1] = 0;
-    *eq++ = 0;
-    if (strcmp(line, "user.creds") &&
-        (strncmp(line, "remote.", 7) || !credsKidValid(line + 7))) goto bad;
-    if (strcmp(eq, "anonymous") && !credsKidValid(eq)) goto bad;
-    for (prev = *out; prev; prev = prev->next) {
-      if (!strcmp(prev->key, line)) goto bad;
+    if (n && line[n-1] == '\n') {
+      line[--n] = 0;
+    } else if (!feof(f)) {
+      int c;
+      while ((c = fgetc(f)) != EOF && c != '\n') {}
+      bad = 1;
+    }
+    if (n && line[n-1] == '\r') line[--n] = 0;
+    if (!bad && !n) continue;
+    if (!bad) eq = strchr(line, '=');
+    if (!eq || eq == line) {
+      bad = 1;
+    } else {
+      *eq++ = 0;
+      if (!strcmp(line, "user.creds") || !strncmp(line, "remote.", 7)) {
+        if (strcmp(line, "user.creds") && !credsKidValid(line + 7)) bad = 1;
+        if (strcmp(eq, "anonymous") && !credsKidValid(eq)) bad = 1;
+        for (prev = *out; prev && !bad; prev = prev->next) {
+          if (!strcmp(prev->key, line)) bad = 1;
+        }
+      }
+    }
+    if (bad) {
+      if (repair) continue;
+      goto bad;
     }
     p = sqlite3_malloc(sizeof(*p));
     if (!p) goto bad;
@@ -1254,7 +1275,7 @@ int doltliteCredsConfigSet(
     if (errno != EINTR) goto done;
   }
 #endif
-  if (credsSettingsRead(path, &settings)) goto done;
+  if (credsSettingsRead(path, &settings, 1)) goto done;
   for (p = settings; p; p = p->next) {
     if (!strcmp(p->key, key)) break;
   }
@@ -1420,12 +1441,20 @@ int doltliteCredsResolve(
   if (!selected) {
     char *ownedDir = dir ? NULL : doltliteCredsDir();
     char *path = dir || ownedDir ? credsConfigPath(dir ? dir : ownedDir, "") : NULL;
-    int bad;
     if (!path) { sqlite3_free(ownedDir); goto oom; }
-    bad = credsSettingsRead(path, &settings);
+    if (credsSettingsRead(path, &settings, 0)) {
+      char message[1200];
+      snprintf(message, sizeof(message),
+          "cannot read credential configuration %s; dolt_creds_use() rewrites it",
+          path);
+      *error = dlStrDup(message);
+      sqlite3_free(path);
+      sqlite3_free(ownedDir);
+      if (!*error) goto oom;
+      goto done;
+    }
     sqlite3_free(path);
     sqlite3_free(ownedDir);
-    if (bad) goto badconfig;
     if (url) {
       key = doltliteCredsRemoteKey(url);
       if (!key) goto oom;
@@ -1478,9 +1507,6 @@ int doltliteCredsResolve(
     *source = dlStrDup(why);
     if (!*source) goto oom;
   }
-  goto done;
-badconfig:
-  *error = dlStrDup("cannot read credential configuration");
   goto done;
 oom:
   sqlite3_free(*error);

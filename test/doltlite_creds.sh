@@ -30,6 +30,23 @@ run_test "creds_use_survives_reopen" "SELECT kid='$OTHER' FROM dolt_creds_ls() W
 run_test "creds_session_override" "SELECT dolt_creds_use('$KID','session'); SELECT kid='$KID' FROM dolt_creds_ls() WHERE active=true;" "0
 1" "$DB"
 run_test "creds_session_does_not_change_default" "SELECT kid='$OTHER' FROM dolt_creds_ls() WHERE active=true;" "1" "$DB"
+CONFIG="$DOLTLITE_CREDS_DIR/config"
+printf 'user.creds=%s\r\nfuture.setting=a=b' "$OTHER" > "$CONFIG"
+run_test "creds_config_crlf_and_unknown_key" "SELECT kid='$OTHER' FROM dolt_creds_ls() WHERE active=true;" "1" "$DB"
+run_test "creds_use_keeps_unknown_key" "SELECT dolt_creds_use('$KID');" "0" "$DB"
+if grep -qx 'future.setting=a=b' "$CONFIG" && grep -qx "user.creds=$KID" "$CONFIG"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: creds_config_rewrite_preserves_unknown_key"; fi
+printf 'garbage\nuser.creds=%s\n' "$OTHER" > "$CONFIG"
+"$DOLTLITE" "$DB" "SELECT dolt_remote('add','cfg','https://127.0.0.1:1/x.db');" >/dev/null 2>&1
+run_test_error_match "creds_bad_config_names_path" "SELECT dolt_fetch('cfg');" "cannot read credential configuration .*config; dolt_creds_use" "$DB"
+run_test "creds_use_repairs_bad_config" "SELECT dolt_creds_use('$OTHER'); SELECT kid='$OTHER' FROM dolt_creds_ls() WHERE active=true;" "0
+1" "$DB"
+if ! grep -q garbage "$CONFIG"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: creds_use_drops_bad_line"; fi
+"$DOLTLITE" "$DB" "SELECT dolt_remote('rm','cfg');" >/dev/null 2>&1
+mv "$CONFIG" "$CONFIG.saved"; mkdir "$CONFIG"
+NKEYS=$(ls "$DOLTLITE_CREDS_DIR"/*.jwk | wc -l)
+run_test_error_match "creds_new_unsaved_selection" "SELECT dolt_creds_new();" "failed to save credential selection" "$DB"
+if [ "$(ls "$DOLTLITE_CREDS_DIR"/*.jwk | wc -l)" = "$NKEYS" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: creds_new_unsaved_selection_leaves_no_key"; fi
+rmdir "$CONFIG"; mv "$CONFIG.saved" "$CONFIG"
 export DOLTLITE_CREDS_KID="$KID"
 run_test "creds_env_overrides_default" "SELECT kid='$KID' FROM dolt_creds_ls() WHERE active=true;" "1" "$DB"
 run_test "creds_session_overrides_env" "SELECT dolt_creds_use('$OTHER','session'); SELECT kid='$OTHER' FROM dolt_creds_ls() WHERE active=true;" "0
