@@ -8723,16 +8723,30 @@ static void run_deleted_branch_messages_and_reset_scan(void){
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'one');"
     "SELECT dolt_commit('-A','-m','base');")==SQLITE_OK);
-  check("dbm_reset_scan",
-        execSql(dbA, "INSERT INTO t VALUES(2,'dirty');"
-                     "SELECT dolt_reset('--hard') FROM t;")==SQLITE_OK);
+  check("dbm_reset_scan_dirty",
+        execSql(dbA, "INSERT INTO t VALUES(2,'dirty');")==SQLITE_OK);
+  check("dbm_reset_scan_refused", execErrorHas(dbA,
+        "SELECT dolt_reset('--hard') FROM t;",
+        "while the same statement is reading a table", 0));
+  check("dbm_reset_scan_unchanged",
+        strcmp(queryScalarText(dbA, "SELECT count(*) FROM t"), "2")==0);
+  check("dbm_reset_scan_plain", execSql(dbA,
+        "SELECT dolt_reset('--hard');")==SQLITE_OK);
   check("dbm_reset_scan_restored",
         strcmp(queryScalarText(dbA, "SELECT count(*) FROM t"), "1")==0);
+  check("dbm_reset_scan_clean_finishes", strcmp(queryScalarText(dbA,
+        "SELECT count(*) FROM (SELECT id, dolt_reset('--hard') FROM t)"),
+        "1")==0);
   check("dbm_reset_scan_in_txn", execSql(dbA,
     "BEGIN;"
-    "INSERT INTO t VALUES(2,'dirty');"
-    "SELECT id, dolt_reset('--hard') FROM t;"
-    "COMMIT;")==SQLITE_OK);
+    "INSERT INTO t VALUES(2,'dirty');")==SQLITE_OK);
+  check("dbm_reset_scan_in_txn_refused", execErrorHas(dbA,
+        "SELECT id, dolt_reset('--hard') FROM t;",
+        "while the same statement is reading a table", 0));
+  check("dbm_reset_scan_in_txn_keeps_txn", !sqlite3_get_autocommit(dbA)
+        && strcmp(queryScalarText(dbA, "SELECT count(*) FROM t"), "2")==0);
+  check("dbm_reset_scan_in_txn_rollback",
+        execSql(dbA, "ROLLBACK;")==SQLITE_OK);
   check("dbm_reset_scan_in_txn_restored",
         strcmp(queryScalarText(dbA, "SELECT count(*) FROM t"), "1")==0);
 

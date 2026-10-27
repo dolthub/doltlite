@@ -477,6 +477,16 @@ static void doltliteRunCommand(
   }
   if( !bProbe ) doltliteInvokeShieldedFunc(ctx, argc, argv, pOuter==0);
   cmdScopeEnd(ctx, &scope);
+  if( !pOuter && pMain && pMain->bVcScanRefused ){
+    pMain->bVcScanRefused = 0;
+    if( ctx->isError ){
+      char *zMsg = sqlite3_mprintf("cannot run %s while the same statement "
+          "is reading a table it would replace", ctx->pFunc->zName);
+      sqlite3_result_error(ctx, zMsg ? zMsg : sqlite3ErrStr(SQLITE_LOCKED), -1);
+      sqlite3_result_error_code(ctx, SQLITE_LOCKED);
+      sqlite3_free(zMsg);
+    }
+  }
   if( !ctx->isError ){
     doltliteVcCommandInstalled(db);
   }else if( !ctx->pVdbe->vcInstalled && AtomicLoad(&db->u1.isInterrupted) ){

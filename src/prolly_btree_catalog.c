@@ -171,9 +171,42 @@ void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
   }
 }
 
-/* Fault every cursor, then let the statement that performed the swap
-** end its own scan. Another statement's cursor stays faulted: stepping
-** it must not keep reading the catalog that was just replaced. */
+/* A command called from a row of a table scan cannot replace the catalog
+** that scan reads: the next row would come from freed tables. A swap to
+** the live catalog (a no-op op, or a restore after a refusal) is skipped
+** instead; any other swap is refused before it changes anything. */
+int doltliteVcScanSwapCheck(sqlite3 *db, const ProllyHash *catHash){
+  Vdbe *pVdbe = db ? db->pVcCommand : 0;
+  Btree *pBtree;
+  ProllyHash live;
+  u8 *catData = 0;
+  int nCatData = 0;
+  int i;
+  int rc;
+  if( !pVdbe || db->nDb<=0 || !(pBtree = db->aDb[0].pBt) ) return SQLITE_OK;
+  for(i=0; i<pVdbe->nCursor; i++){
+    VdbeCursor *pC = pVdbe->apCsr[i];
+    BtCursor *pCur;
+    if( !pC || pC->eCurType!=CURTYPE_BTREE ) continue;
+    pCur = pC->uc.pCursor;
+    if( pCur && pCur->pBt==pBtree->pBt
+     && pCur->eState!=CURSOR_INVALID && pCur->eState!=CURSOR_FAULT ) break;
+  }
+  if( i>=pVdbe->nCursor ) return SQLITE_OK;
+  rc = doltliteFlushAndSerializeBtreeCatalog(pBtree, &catData, &nCatData);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(&pBtree->pBt->store, catData, nCatData, &live);
+  }
+  sqlite3_free(catData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashCompare(&live, catHash)==0 ) return SQLITE_DONE;
+  pBtree->bVcScanRefused = 1;
+  return SQLITE_LOCKED;
+}
+
+/* Fault every cursor; the swapping statement's finished cursors end
+** cleanly. Another statement's cursor stays faulted: stepping it must not
+** keep reading the catalog that was just replaced. */
 static void invalidateCursorsFinished(sqlite3 *db, BtShared *pBt){
   Vdbe *pVdbe;
   int i;
@@ -2724,10 +2757,14 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
 
   if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
 
+  rc = doltliteVcScanSwapCheck(db, catHash);
+  if( rc==SQLITE_DONE ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+
   rc = chunkStoreGet(cs, catHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
 
-  invalidateCursors(pBt, 0, SQLITE_ABORT);
+  invalidateCursorsFinished(db, pBt);
 
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
@@ -2759,6 +2796,7 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   ProllyHash oldConflictsCatalogHash;
   u8 *data = 0;
   int nData = 0;
+  int bKeepCatalog = 0;
   int rc;
 
   if( !pBt ) return SQLITE_ERROR;
@@ -2767,6 +2805,12 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   cs = &pBt->store;
 
   if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
+  rc = doltliteVcScanSwapCheck(db, catHash);
+  if( rc==SQLITE_DONE ){
+    bKeepCatalog = 1;
+  }else if( rc!=SQLITE_OK ){
+    return rc;
+  }
 
   rc = serializeCatalog(pBtree, &oldCatData, &nOldCatData);
   if( rc!=SQLITE_OK ) return rc;
@@ -2781,10 +2825,14 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   oldMergeCommitHash = pBtree->vc.mergeCommitHash;
   oldConflictsCatalogHash = pBtree->vc.conflictsCatalogHash;
 
-  invalidateCursorsFinished(db, pBt);
-
-  rc = deserializeCatalog(pBtree, data, nData);
-  sqlite3_free(data);
+  if( bKeepCatalog ){
+    sqlite3_free(data);
+    rc = SQLITE_OK;
+  }else{
+    invalidateCursorsFinished(db, pBt);
+    rc = deserializeCatalog(pBtree, data, nData);
+    sqlite3_free(data);
+  }
   if( rc!=SQLITE_OK ){
     btreeFreeCatalogTables(pBtree);
     if( oldCatData ){
@@ -2798,15 +2846,17 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
     return rc;
   }
 
-  pBtree->bMasterRootChangedTxn = 1;
-  pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
-  btreeBumpLocalDataVersion(pBtree);
+  if( !bKeepCatalog ){
+    pBtree->bMasterRootChangedTxn = 1;
+    pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
+    btreeBumpLocalDataVersion(pBtree);
 
-  if( pBtree->db ){
-    sqlite3ExpirePreparedStatements(pBtree->db, 0);
-    sqlite3ResetAllSchemasOfConnection(pBtree->db);
-  }else{
-    invalidateSchema(pBtree);
+    if( pBtree->db ){
+      sqlite3ExpirePreparedStatements(pBtree->db, 0);
+      sqlite3ResetAllSchemasOfConnection(pBtree->db);
+    }else{
+      invalidateSchema(pBtree);
+    }
   }
 
   memcpy(&pBtree->vc.stagedCatalog, catHash, sizeof(ProllyHash));
@@ -2825,6 +2875,15 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   }
   if( rc==SQLITE_OK ){
     rc = chunkStoreCommitWithBusyHandler(cs, prollyInvokeBusyHandler, pBt);
+  }
+  if( rc!=SQLITE_OK && bKeepCatalog ){
+    pBtree->vc.stagedCatalog = oldStagedCatalog;
+    pBtree->vc.isMerging = oldIsMerging;
+    pBtree->vc.mergeCommitHash = oldMergeCommitHash;
+    pBtree->vc.conflictsCatalogHash = oldConflictsCatalogHash;
+    chunkStoreRollback(cs);
+    sqlite3_free(oldCatData);
+    return rc;
   }
   if( rc!=SQLITE_OK ){
     btreeFreeCatalogTables(pBtree);
