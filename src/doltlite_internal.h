@@ -1391,6 +1391,7 @@ int doltliteCmdParseAuthor(
   char **pzName, char **pzEmail
 );
 void doltliteCmdResultPeerBranchBusy(sqlite3_context *ctx, const char *zOp);
+int doltliteSessionBranchGone(sqlite3 *db);
 void doltliteCmdResultWriteTxnError(sqlite3_context *ctx, sqlite3 *db, int rc);
 void doltliteCmdResultBranchBusyOrGone(
   sqlite3_context *ctx, sqlite3 *db, const char *zOp
