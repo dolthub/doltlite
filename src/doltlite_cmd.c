@@ -160,7 +160,7 @@ int doltliteDeferJoinedCommandSeal(sqlite3 *db){
   return 1;
 }
 
-int doltlitePrepareJoinedCommit(sqlite3 *db){
+int doltliteRefreshJoinedReadTxn(sqlite3 *db){
   Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
   int rc = SQLITE_OK;
   if( !p || !p->pAtomicCommand ) return SQLITE_DONE;
@@ -169,6 +169,12 @@ int doltlitePrepareJoinedCommit(sqlite3 *db){
     if( rc==SQLITE_OK ) rc = doltliteReloadSessionWorkingState(db);
     if( rc==SQLITE_OK ) rc = sqlite3BtreeBeginTrans(p, 0, 0);
   }
+  return rc;
+}
+
+int doltlitePrepareJoinedCommit(sqlite3 *db){
+  Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
+  int rc = doltliteRefreshJoinedReadTxn(db);
   if( rc==SQLITE_OK ){
     p->bAtomicCommandSeal = 1;
     ((AtomicJoinedCommand*)p->pAtomicCommand)->bSealOnError = 1;
@@ -355,7 +361,8 @@ static int cmdScopeBegin(
   }
   pScope->bJoined = rc==SQLITE_OK;
   pScope->bInBegin = pScope->bJoined && !doltliteSavepointIsTopLevelTxn(db);
-  if( pScope->bInBegin && eScope==DOLTLITE_CMD_ATOMIC ){
+  if( pScope->bInBegin
+   && (eScope==DOLTLITE_CMD_ATOMIC || eScope==DOLTLITE_CMD_NOWAIT) ){
     rc = cmdBeginAtomicJoined(pMain);
     pScope->bAtomic = rc==SQLITE_OK;
     if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
@@ -568,7 +575,10 @@ static int doltliteCommandScope(const char *zName){
   }
   if( sqlite3_stricmp(zName, "dolt_commit")==0
    || sqlite3_stricmp(zName, "dolt_checkout")==0
-   || sqlite3_stricmp(zName, "dolt_merge")==0 ){
+   || sqlite3_stricmp(zName, "dolt_merge")==0
+   || sqlite3_stricmp(zName, "dolt_cherry_pick")==0
+   || sqlite3_stricmp(zName, "dolt_revert")==0
+   || sqlite3_stricmp(zName, "dolt_branch")==0 ){
     return DOLTLITE_CMD_ATOMIC;
   }
   return DOLTLITE_CMD_SCOPED;

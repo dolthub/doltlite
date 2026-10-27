@@ -276,6 +276,14 @@ static void doltBranchParsedFunc(
 
   if( !cs ){ branchError(ctx, hadSavepoint, doltliteVcUnavailableMessage(db)); return; }
 
+  /* The seal publishes this session's working set, so a read-only
+  ** transaction must first see peers' commits, as COMMIT; BEGIN would. */
+  rc = doltliteRefreshJoinedReadTxn(db);
+  if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
+    branchErrorCode(ctx, hadSavepoint, rc);
+    return;
+  }
+
   switch( mode ){
     case MODE_DELETE: {
       BranchDeleteCtx m;

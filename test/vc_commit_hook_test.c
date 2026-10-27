@@ -158,6 +158,34 @@ int main(void){
   check("commit veto inside BEGIN keeps HEAD", scalarInt(db,
       "SELECT count(*) FROM dolt_log WHERE message='vetoed'")==0);
 
+  {
+    static const char *const azOp[] = {
+      "SELECT dolt_cherry_pick('side')",
+      "SELECT dolt_revert('HEAD~1')",
+      "SELECT dolt_reset('--hard','HEAD~1')",
+    };
+    int i;
+    for(i=0; i<3; i++){
+      char zName[96];
+      int nLog, nRows;
+      sqlite3_commit_hook(db, 0, 0);
+      exec(db, "ROLLBACK");
+      nLog = scalarInt(db, "SELECT count(*) FROM dolt_log");
+      nRows = scalarInt(db, "SELECT count(*) FROM t");
+      sqlite3_commit_hook(db, rejectCommit, 0);
+      snprintf(zName, sizeof(zName), "veto inside BEGIN refuses: %s", azOp[i]);
+      exec(db, "BEGIN");
+      check(zName, (exec(db, azOp[i])&255)==SQLITE_CONSTRAINT);
+      sqlite3_commit_hook(db, 0, 0);
+      exec(db, "ROLLBACK");
+      snprintf(zName, sizeof(zName), "veto inside BEGIN keeps HEAD: %s", azOp[i]);
+      check(zName, scalarInt(db, "SELECT count(*) FROM dolt_log")==nLog);
+      snprintf(zName, sizeof(zName), "veto inside BEGIN keeps rows: %s", azOp[i]);
+      check(zName, scalarInt(db, "SELECT count(*) FROM t")==nRows
+          && scalarInt(db, "SELECT count(*) FROM dolt_status")==0);
+    }
+  }
+
   sqlite3_commit_hook(db, 0, 0);
   sqlite3_rollback_hook(db, 0, 0);
   sqlite3_close(db);
