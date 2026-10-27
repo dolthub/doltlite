@@ -1,0 +1,140 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {key schema oldRows newRow} {
+  integer {id INTEGER PRIMARY KEY, name TEXT, data BLOB}
+    {(1,'alice',x'610062'),(2,'bob',NULL)} {(1,'widget',x'610063')}
+  text {id TEXT PRIMARY KEY, name TEXT, data BLOB}
+    {('a','alice',x'610062'),('b','bob',NULL)} {('a','widget',x'610063')}
+  composite {id TEXT, seq INTEGER, name TEXT, data BLOB, PRIMARY KEY(id,seq)}
+    {('a',1,'alice',x'610062'),('a',2,'bob',NULL)}
+    {('a',1,'widget',x'610063')}
+} {
+  foreach layout {plain indexed order-shift} {
+    foreach reopen {0 1} {
+      reset_db
+      set prefix unrelated-table-$key-$layout-$reopen
+      execsql "CREATE TABLE t($schema); INSERT INTO t VALUES $oldRows;"
+      if {$layout eq "indexed"} {
+        execsql {CREATE INDEX t_name ON t(name)}
+      }
+      if {$layout eq "order-shift"} {
+        execsql {CREATE TABLE z(id INTEGER PRIMARY KEY)}
+      }
+      execsql {SELECT dolt_commit('-Am','base'); DROP TABLE t;}
+      execsql "CREATE TABLE u($schema); INSERT INTO u VALUES $newRow;"
+      if {$layout eq "indexed"} {
+        execsql {CREATE INDEX u_name ON u(name)}
+      }
+      if {$reopen} {
+        db close
+        sqlite3 db test.db
+      }
+
+      do_execsql_test $prefix-status {
+        SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+      } {t 0 deleted u 0 {new table}}
+      do_execsql_test $prefix-filtered-status {
+        SELECT table_name,staged,status FROM dolt_status WHERE table_name='u';
+      } {u 0 {new table}}
+      do_execsql_test $prefix-diff-summary {
+        SELECT coalesce(from_table_name,''),coalesce(to_table_name,''),diff_type
+        FROM dolt_diff_summary('HEAD','WORKING')
+        ORDER BY nullif(from_table_name,''),to_table_name;
+      } {{} u added t {} dropped}
+      do_execsql_test $prefix-diff-stat {
+        SELECT table_name,rows_added,rows_deleted,rows_modified
+        FROM dolt_diff_stat('HEAD','WORKING') ORDER BY table_name;
+      } {t 0 2 0 u 1 0 0}
+      do_execsql_test $prefix-schema-diff {
+        SELECT coalesce(from_table_name,''),coalesce(to_table_name,'')
+        FROM dolt_schema_diff('HEAD','WORKING')
+        WHERE from_table_name IN ('t','u') OR to_table_name IN ('t','u')
+        ORDER BY nullif(from_table_name,''),to_table_name;
+      } {{} u t {}}
+      do_execsql_test $prefix-diff {
+        SELECT table_name FROM dolt_diff WHERE commit_hash='WORKING'
+        ORDER BY table_name;
+      } {t u}
+      do_execsql_test $prefix-stage-drop {
+        SELECT dolt_add('t');
+        SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+        SELECT dolt_reset('t');
+      } {0 t 1 deleted u 0 {new table} 0}
+      do_execsql_test $prefix-stage-new {
+        SELECT dolt_add('U');
+        SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+      } {0 t 0 deleted u 1 {new table}}
+      do_execsql_test $prefix-staged-data {
+        SELECT count(*) FROM dolt_at_t('STAGED');
+        SELECT count(*) FROM dolt_at_u('STAGED');
+      } {2 1}
+      db close
+      sqlite3 db test.db
+      do_execsql_test $prefix-reset-new {
+        SELECT dolt_reset('u');
+        SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+      } {0 t 0 deleted u 0 {new table}}
+      do_execsql_test $prefix-commit {
+        SELECT dolt_add('u');
+        SELECT length(dolt_commit('-m','add u only'));
+        SELECT count(*) FROM dolt_at_t('HEAD');
+        SELECT count(*) FROM dolt_at_u('HEAD');
+        SELECT table_name,staged,status FROM dolt_status;
+      } {0 40 2 1 t 0 deleted}
+      db close
+      sqlite3 db test.db
+      do_execsql_test $prefix-committed-data {
+        SELECT count(*) FROM dolt_at_t('HEAD');
+        SELECT count(*) FROM dolt_at_u('HEAD');
+        SELECT table_name,staged,status FROM dolt_status;
+      } {2 1 t 0 deleted}
+    }
+  }
+}
+
+foreach churn {different-keys blob-change} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, data BLOB);
+    INSERT INTO t VALUES(1,'alice',x'610062'),(2,'bob',NULL);
+    SELECT dolt_commit('-Am','base');
+    DROP TABLE t;
+    CREATE TABLE u(id INTEGER PRIMARY KEY, name TEXT, data BLOB);
+  }
+  if {$churn eq "different-keys"} {
+    execsql {INSERT INTO u VALUES(1,'widget',x'610063'),(3,'other',NULL)}
+  } else {
+    execsql {INSERT INTO u VALUES(1,'alice',x'610063')}
+  }
+  do_execsql_test unrelated-table-$churn {
+    SELECT dolt_add('u');
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+    SELECT count(*) FROM dolt_at_t('STAGED');
+  } {0 t 0 deleted u 1 {new table} 2}
+}
+
+foreach edit {insert update-first delete-first update-all} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+    INSERT INTO t VALUES(1,'alice'),(2,'bob');
+    SELECT dolt_commit('-Am','base');
+    ALTER TABLE t RENAME TO u;
+  }
+  switch $edit {
+    insert {execsql {INSERT INTO u VALUES(3,'carol')}}
+    update-first {execsql {UPDATE u SET name='changed' WHERE id=1}}
+    delete-first {execsql {DELETE FROM u WHERE id=1}}
+    update-all {execsql {UPDATE u SET name='changed'}}
+  }
+  db close
+  sqlite3 db test.db
+  do_execsql_test unrelated-table-real-rename-$edit {
+    SELECT table_name,staged,status FROM dolt_status;
+    SELECT dolt_add('u');
+    SELECT table_name,staged,status FROM dolt_status;
+  } {{t -> u} 0 renamed 0 {t -> u} 1 renamed}
+}
+
+finish_test
