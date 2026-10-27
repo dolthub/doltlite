@@ -8809,6 +8809,35 @@ static void run_deleted_branch_messages_and_reset_scan(void){
   dbA = dbB = 0;
   removeDbFiles(dbpath);
 
+  check("dbm_swept_open", open_db(dbpath, &dbA)==SQLITE_OK);
+  check("dbm_swept_seed", execSql(dbA,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'one');"
+    "SELECT dolt_commit('-A','-m','base');"
+    "SELECT dolt_branch('feat');"
+    "SELECT dolt_checkout('feat');"
+    "INSERT INTO t VALUES(2,'feat');"
+    "SELECT dolt_commit('-A','-m','feat only');")==SQLITE_OK);
+  check("dbm_swept_open_B", open_db(dbpath, &dbB)==SQLITE_OK);
+  check("dbm_swept_delete",
+        execSql(dbB, "SELECT dolt_branch('-D','feat');")==SQLITE_OK);
+#ifdef _WIN32
+  gcRc = execSqlSilent(dbB, "SELECT dolt_gc();");
+  check("dbm_swept_gc", gcRc==SQLITE_OK || (gcRc&0xff)==SQLITE_IOERR);
+#else
+  gcRc = execSql(dbB, "SELECT dolt_gc();");
+  check("dbm_swept_gc", gcRc==SQLITE_OK);
+#endif
+  if( gcRc==SQLITE_OK ){
+    check("dbm_swept_checkout_b_gone", execErrorHas(dbA,
+      "SELECT dolt_checkout('-b','x');",
+      "branch 'feat' no longer exists", "database is locked"));
+  }
+  sqlite3_close(dbA);
+  sqlite3_close(dbB);
+  dbA = dbB = 0;
+  removeDbFiles(dbpath);
+
   check("dbm_peer_open", open_db(dbpath, &dbA)==SQLITE_OK);
   check("dbm_peer_seed", execSql(dbA,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"

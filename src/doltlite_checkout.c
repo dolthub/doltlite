@@ -1707,6 +1707,12 @@ checkout_done:
   if( rc==SQLITE_BUSY ){
     /* Keep SQLITE_BUSY so clients/busy_timeout treat peer lock as retryable. */
     (void)doltliteVcSealSavepointError(db);
+    if( !doltliteIsDetached(db) && doltliteGetSessionBranch(db)
+     && chunkStoreFindBranch(doltliteGetChunkStore(db),
+                             doltliteGetSessionBranch(db), 0)==SQLITE_NOTFOUND ){
+      doltliteCmdResultWriteTxnError(ctx, db, SQLITE_BUSY);
+      return;
+    }
     sqlite3_result_error(ctx, "database is locked by another connection", -1);
     sqlite3_result_error_code(ctx, SQLITE_BUSY);
     return;
