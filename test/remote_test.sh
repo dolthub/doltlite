@@ -2535,6 +2535,15 @@ check_match "clone rejects an invalid remote name" "remote name invalid" "$resul
 result=$("$DB" "$CF/bad.db" "SELECT count(*) FROM dolt_remotes; SELECT count(*) FROM sqlite_master WHERE name='t';")
 check "invalid remote name installs nothing" "0
 0" "$result"
+result=$("$DB" "$CF/lazyup.db" "SELECT dolt_clone('--lazy','--remote','up','file://$CF/remote.db');" 2>&1)
+check_match "lazy clone rejects a remote not named origin" "lazy requires the remote to be named origin" "$result"
+result=$("$DB" "$CF/lazyup.db" "SELECT count(*) FROM dolt_remotes; SELECT count(*) FROM sqlite_master WHERE name='t';")
+check "rejected lazy named clone installs nothing" "0
+0" "$result"
+"$DB" "$CF/lazyorigin.db" "SELECT dolt_clone('--lazy','--remote','origin','file://$CF/remote.db');" >/dev/null
+result=$("$DB" "file:$CF/lazyorigin.db?lazy_origin=1" "SELECT name FROM dolt_remotes; SELECT count(*) FROM t;")
+check "lazy clone accepts --remote origin" "origin
+1" "$result"
 
 echo "=== Push --all ==="
 PA="$TMPDIR/push_all"
