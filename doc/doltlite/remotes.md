@@ -68,8 +68,11 @@ and is allowed together with a branch.
 `origin`. `dolt_clone('--single-branch', url)` tracks and checks out only the
 default branch, or the `--branch` name when that branch exists.
 
-`dolt_pull()` and `dolt_pull(remote)` fetch every branch on that remote, then
-integrate the current branch's upstream into the current local branch.
+`dolt_pull()` and `dolt_fetch()` with no remote name use `origin` when that
+remote exists. When it does not, and exactly one remote is configured, they
+use that remote. `dolt_pull()` and `dolt_pull(remote)` fetch every branch on
+that remote, then integrate the current branch's upstream into the current
+local branch.
 `dolt_pull(remote, branch)` fetches only that named branch. Either form
 fast-forwards when the current tip is an ancestor of the remote tip and
 otherwise three-way merges like `dolt_merge`. A merge commit is recorded as
