@@ -1227,6 +1227,10 @@ static int gcRun(
   *pnKept = 0;
   *pnRemoved = 0;
 
+  if( bRequireExclusive && db->nVdbeActive>1 ){
+    *pzPhase = "gc requires exclusive access: SQL statements in progress";
+    return SQLITE_BUSY;
+  }
   if( bRequireExclusive && (!sqlite3_get_autocommit(db) || cs->lockDepth>0) ){
     *pzPhase = "gc requires exclusive access";
     return SQLITE_BUSY;

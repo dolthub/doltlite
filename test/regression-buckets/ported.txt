@@ -94,6 +94,7 @@ doltlite_conflict_rollback_baseline
 doltlite_replay_conflict_indexes
 doltlite_recover_changes
 doltlite_gc_stop_world
+doltlite_gc_active_statements
 doltlite_gc_queue
 doltlite_integrity_deep_history
 doltlite_readonly_status
