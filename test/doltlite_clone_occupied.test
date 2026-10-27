@@ -1,0 +1,95 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set remote [file normalize clone-occupied-source.db]
+forcedelete $remote
+sqlite3 source_db $remote
+source_db eval {
+  CREATE TABLE remote_rows(id INTEGER PRIMARY KEY,v TEXT);
+  INSERT INTO remote_rows VALUES(1,'remote');
+  SELECT dolt_commit('-Am','remote');
+}
+source_db close
+
+set refsSql {
+  SELECT name,hash FROM dolt_branches ORDER BY name;
+  SELECT tag_name,tag_hash,message FROM dolt_tags ORDER BY tag_name;
+  SELECT name,url FROM dolt_remotes ORDER BY name;
+}
+set stateSql {
+  SELECT dolt_hashof('HEAD');
+  SELECT name,hash FROM dolt_branches ORDER BY name;
+  SELECT tag_name,tag_hash,message FROM dolt_tags ORDER BY tag_name;
+  SELECT name,url FROM dolt_remotes ORDER BY name;
+  SELECT name,hash FROM dolt_remote_branches ORDER BY name;
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+  SELECT name FROM sqlite_schema ORDER BY name;
+}
+
+foreach mode {full lazy} {
+  set cloneSql "SELECT dolt_clone('file://$remote')"
+  if {$mode eq "lazy"} {
+    set cloneSql "SELECT dolt_clone('--lazy','file://$remote')"
+  }
+  foreach boundary {autocommit begin savepoint nested} {
+    foreach reopen {0 1} {
+      foreach kind {tag remote origin both} {
+        reset_db
+        if {$kind in {tag both}} {
+          execsql {SELECT dolt_tag('keep','main','-m','mine')}
+        }
+        if {$kind in {remote origin both}} {
+          set remoteName up
+          if {$kind eq "origin"} {set remoteName origin}
+          execsql "SELECT dolt_remote('add','$remoteName','file:///keep.db')"
+        }
+        set before [execsql $stateSql]
+        set refsBefore [execsql $refsSql]
+        if {$reopen} {
+          db close
+          sqlite3 db test.db
+        }
+        if {$boundary eq "begin"} {execsql BEGIN}
+        if {$boundary eq "savepoint"} {execsql {SAVEPOINT outer_sp}}
+        if {$boundary eq "nested"} {execsql {BEGIN; SAVEPOINT outer_sp}}
+        set prefix clone-occupied-$mode-$boundary-$reopen-$kind
+        do_test $prefix-error {
+          set rc [catch {execsql $cloneSql} msg]
+          list $rc [db errorcode] [string match {database is not empty*} $msg]
+        } {1 1 1}
+        do_test $prefix-preserved {execsql $stateSql} $before
+        do_test $prefix-transaction {sqlite3_get_autocommit db} \
+          [expr {$boundary ni {begin nested}}]
+        if {$boundary in {begin nested}} {
+          do_test $prefix-commit {catch {execsql COMMIT}} 0
+        }
+        db close
+        sqlite3 db test.db
+        do_test $prefix-reopen {execsql $stateSql} $before
+        do_execsql_test $prefix-write {
+          CREATE TABLE later_write(id INTEGER PRIMARY KEY);
+          INSERT INTO later_write VALUES(42);
+          SELECT id FROM later_write;
+          SELECT count(*) FROM sqlite_schema WHERE name='remote_rows';
+        } {42 0}
+        do_test $prefix-refs-after-write {execsql $refsSql} $refsBefore
+      }
+    }
+  }
+  reset_db
+  do_test clone-occupied-$mode-empty {
+    execsql $cloneSql
+    execsql {SELECT id,v FROM remote_rows}
+  } {1 remote}
+  db close
+  sqlite3 db file:test.db?lazy_origin=1 -uri 1
+  do_execsql_test clone-occupied-$mode-empty-reopen {
+    SELECT id,v FROM remote_rows;
+    PRAGMA integrity_check;
+  } {1 remote ok}
+}
+
+db close
+forcedelete $remote
+sqlite3 db test.db
+finish_test

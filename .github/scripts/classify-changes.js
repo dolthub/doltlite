@@ -29,13 +29,35 @@ const BENCHMARK_HARNESS = [
   /^test\/benchmark/,
   /^test\/performance_/,
   /^test\/vc_perf/,
+  /^test\/lib\/vc_perf/,
+  /^test\/release_performance/,
   /^test\/remote_perf/,
 ];
+
+const ALSO_RUN_BY = [
+  [/^test\/(build|assert)_stock_reference\.sh$/, ['benchmarks']],
+  [/^test\/savepoint_rollback_perf\.py$/, ['benchmarks']],
+  [/^test\/lib\/assert_doltlite_engine\.sh$/, ['benchmarks']],
+  [/^test\/[^/]*wasm[^/]*$/, ['wasm']],
+  [/^test\/testrunner[^/]*\.tcl$/, ['compile']],
+];
+
+// Off-PR workflows still feed PR checks: the orphaned-suite guard (suites)
+// reads every workflow, and these are read by benchmark-job tests.
+const BENCHMARK_READ_WORKFLOWS = new Set([
+  'nightly-heartbeat.yml',
+  'nightly-hotspots.yml',
+  'nightly-performance.yml',
+]);
+
+const DOCS_READ_BY_SUITES = new Set(['doc/doltlite/pragmas.md']);
 
 function jobsFor(path) {
   if (path === '.github/workflows/benchmark.yml') return new Set(['benchmarks']);
   if (path.startsWith('.github/workflows/')) {
-    return OFF_PR_WORKFLOWS.has(path.slice('.github/workflows/'.length)) ? new Set() : ALL;
+    const file = path.slice('.github/workflows/'.length);
+    if (!OFF_PR_WORKFLOWS.has(file)) return ALL;
+    return new Set(BENCHMARK_READ_WORKFLOWS.has(file) ? ['suites', 'benchmarks'] : ['suites']);
   }
   if (path.startsWith('test/')) {
     const jobs = new Set();
@@ -46,10 +68,15 @@ function jobsFor(path) {
     } else if (!bench) {
       ['suites', 'platforms'].forEach(job => jobs.add(job));
     }
+    for (const [pattern, extra] of ALSO_RUN_BY) {
+      if (pattern.test(path)) extra.forEach(job => jobs.add(job));
+    }
     return jobs;
   }
   if (path.startsWith('packaging/')) return new Set(['platforms', 'wasm']);
   if (path === '.dolt-oracle-version') return new Set(['suites']);
+  if (DOCS_READ_BY_SUITES.has(path)) return new Set(['suites']);
+  if (path === 'LICENSE.md') return new Set(['platforms', 'wasm']);
   if (path.startsWith('doc/') || path.endsWith('.md')) return new Set();
   if (['.gitignore', '.clangd', 'APACHE_LICENSE'].includes(path)) return new Set();
   return ALL;
