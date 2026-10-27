@@ -3065,8 +3065,111 @@ static void checkLazyOriginRevisions(
   }
 }
 
+static void checkFirstUseFails(
+  const char *zName,
+  const char *zOpen,
+  int flags,
+  const char *zWant1,
+  const char *zWant2
+){
+  sqlite3 *db = 0;
+  int rc = openDb(zOpen, flags, &db);
+  char zLabel[256];
+  snprintf(zLabel, sizeof(zLabel), "%s: open defers", zName);
+  check(zLabel, rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){
+    fprintf(stderr, "  %s: rc=%d err=%s\n", zName, rc,
+            db ? sqlite3_errmsg(db) : "");
+  }else{
+    checkErrContains(zName, db, "SELECT count(*) FROM rev_t", zWant1, zWant2);
+  }
+  if( db ) sqlite3_close(db);
+}
+
+static int setRevisionSource(
+  sqlite3 *db,
+  SourceCtx *pSource,
+  doltlite_chunk_source *pApi
+){
+  initSourceApi(pSource, pApi);
+  return doltlite_set_chunk_source(db, 0, pApi);
+}
+
+static void checkSourcedRevision(
+  const char *zName,
+  const char *zOpen,
+  int flags,
+  SourceCtx *pSource,
+  const char *zHead1
+){
+  sqlite3 *db = 0;
+  doltlite_chunk_source api;
+  char zLabel[256];
+  int rc = openDb(zOpen, flags, &db);
+  snprintf(zLabel, sizeof(zLabel), "%s open", zName);
+  check(zLabel, rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = setRevisionSource(db, pSource, &api);
+    snprintf(zLabel, sizeof(zLabel), "%s registers", zName);
+    check(zLabel, rc==SQLITE_OK);
+  }
+  if( rc==SQLITE_OK ){
+    checkDetachedRevision(zName, db, 1, zHead1);
+  }else if( db ){
+    fprintf(stderr, "  %s: %s\n", zName, sqlite3_errmsg(db));
+  }
+  if( db ) sqlite3_close(db);
+}
+
+static void checkSourcedBranch(
+  const char *zName,
+  const char *zOpen,
+  int flags,
+  SourceCtx *pSource
+){
+  sqlite3 *db = 0;
+  doltlite_chunk_source api;
+  sqlite3_int64 nRow = -1;
+  char *zBranch = 0;
+  int rc = openDb(zOpen, flags, &db);
+  if( rc==SQLITE_OK ) rc = setRevisionSource(db, pSource, &api);
+  if( rc==SQLITE_OK ) rc = queryInt64(db, "SELECT count(*) FROM rev_t", &nRow);
+  if( rc==SQLITE_OK ) rc = queryText(db, "SELECT active_branch()", &zBranch);
+  check(zName, rc==SQLITE_OK && nRow==2 && zBranch
+        && strcmp(zBranch, "main")==0);
+  if( rc!=SQLITE_OK && db ){
+    fprintf(stderr, "  %s: %s\n", zName, sqlite3_errmsg(db));
+  }
+  sqlite3_free(zBranch);
+  if( db ) sqlite3_close(db);
+}
+
+static void checkSourcedUnknown(
+  const char *zName,
+  const char *zOpen,
+  int flags,
+  SourceCtx *pSource
+){
+  sqlite3 *db = 0;
+  doltlite_chunk_source api;
+  char *zErr = 0;
+  int rc = openDb(zOpen, flags, &db);
+  int rcSet = rc==SQLITE_OK ? setRevisionSource(db, pSource, &api) : rc;
+  if( rc==SQLITE_OK ){
+    rc = runToError(db, "SELECT count(*) FROM rev_t", &zErr);
+  }
+  check(zName, rcSet!=SQLITE_OK && rc!=SQLITE_OK);
+  if( rcSet==SQLITE_OK || rc==SQLITE_OK ){
+    fprintf(stderr, "  %s: set=%d rc=%d err=%s\n", zName, rcSet, rc,
+            zErr ? zErr : "");
+  }
+  sqlite3_free(zErr);
+  if( db ) sqlite3_close(db);
+}
+
 static void testLazyRevisionOpens(const char *zPrefix){
   sqlite3 *sourceDb = 0;
+  sqlite3 *memDb = 0;
   sqlite3 *db = 0;
   SourceCtx source;
   unsigned char *pRefs = 0;
@@ -3078,9 +3181,12 @@ static void testLazyRevisionOpens(const char *zPrefix){
   char zOrigin[192];
   char zOpen[512];
   char zWant[128];
+  char zMem[256];
+  char zName[128];
   const char *azRev[3];
   const char *azName[3] = { "ancestor", "hash", "tag" };
   int rc;
+  int i;
 
   memset(&source, 0, sizeof(source));
   snprintf(zSource, sizeof(zSource), "%s_rev_source.db", zPrefix);
@@ -3115,12 +3221,17 @@ static void testLazyRevisionOpens(const char *zPrefix){
 
   snprintf(zWant, sizeof(zWant), "missing chunk %s", zHead1);
   snprintf(zOpen, sizeof(zOpen), "%s@v1", zLazy);
-  checkOpenFails("sourceless tag open names the missing chunk", zOpen,
-                 SQLITE_OPEN_READWRITE, "no chunk source is available",
-                 zWant);
+  checkFirstUseFails("sourceless tag read names the missing chunk", zOpen,
+                     SQLITE_OPEN_READWRITE, "no chunk source is available",
+                     zWant);
   snprintf(zOpen, sizeof(zOpen), "%s@%s", zLazy, zHead1);
-  checkOpenFails("sourceless hash open says why it is not found", zOpen,
-                 SQLITE_OPEN_READWRITE, "not found: no chunk source", zWant);
+  checkFirstUseFails("sourceless hash read names the missing chunk", zOpen,
+                     SQLITE_OPEN_READWRITE, "no chunk source is available",
+                     zWant);
+  snprintf(zOpen, sizeof(zOpen), "%s@main~1", zLazy);
+  checkFirstUseFails("sourceless ancestor read names the missing chunk",
+                     zOpen, SQLITE_OPEN_READWRITE,
+                     "no chunk source is available", 0);
   snprintf(zOpen, sizeof(zOpen), "%s@nope", zLazy);
   checkOpenFails("unknown revision name still fails the open", zOpen,
                  SQLITE_OPEN_READWRITE,
@@ -3133,6 +3244,49 @@ static void testLazyRevisionOpens(const char *zPrefix){
     sqlite3_close(db);
     db = 0;
   }
+
+  for(i=0; i<3; i++){
+    snprintf(zOpen, sizeof(zOpen), "%s@%s", zLazy, azRev[i]);
+    snprintf(zName, sizeof(zName), "host source %s", azName[i]);
+    checkSourcedRevision(zName, zOpen, SQLITE_OPEN_READWRITE, &source,
+                         zHead1);
+  }
+  snprintf(zOpen, sizeof(zOpen), "%s@main", zLazy);
+  checkSourcedBranch("host source branch", zOpen, SQLITE_OPEN_READWRITE,
+                     &source);
+  snprintf(zOpen, sizeof(zOpen), "%s@%s", zLazy,
+           "0123456789abcdef0123456789abcdef01234567");
+  checkSourcedUnknown("host source unknown hash", zOpen,
+                      SQLITE_OPEN_READWRITE, &source);
+
+  snprintf(zMem, sizeof(zMem), "file:/%s_rev_mem?vfs=memdb",
+           strrchr(zPrefix, '/') + 1);
+  rc = openDb(zMem, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                    | SQLITE_OPEN_URI, &memDb);
+  if( rc==SQLITE_OK ) rc = doltlite_init_lazy(memDb, pRefs, nRefs);
+  check("create refs-only shared memory store", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    for(i=0; i<3; i++){
+      snprintf(zOpen, sizeof(zOpen), "file:/%s_rev_mem@%s?vfs=memdb",
+               strrchr(zPrefix, '/') + 1, azRev[i]);
+      snprintf(zName, sizeof(zName), "shared memory host source %s",
+               azName[i]);
+      checkSourcedRevision(zName, zOpen,
+                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI,
+                           &source, zHead1);
+    }
+    snprintf(zOpen, sizeof(zOpen), "file:/%s_rev_mem@main?vfs=memdb",
+             strrchr(zPrefix, '/') + 1);
+    checkSourcedBranch("shared memory host source branch", zOpen,
+                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &source);
+    snprintf(zOpen, sizeof(zOpen), "file:/%s_rev_mem@%s?vfs=memdb",
+             strrchr(zPrefix, '/') + 1,
+             "0123456789abcdef0123456789abcdef01234567");
+    checkSourcedUnknown("shared memory host source unknown hash", zOpen,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, &source);
+  }
+  if( memDb ) sqlite3_close(memDb);
+  memDb = 0;
 
   rc = createLazyFileWithOrigin(zLazy, pRefs, nRefs, zSource);
   check("lazy refs install keeps a configured origin", rc==SQLITE_OK);
@@ -3156,12 +3310,14 @@ static void testLazyRevisionOpens(const char *zPrefix){
   check("create lazy clone revision store", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) goto rev_done;
   snprintf(zOpen, sizeof(zOpen), "%s@main~1", zOrigin);
-  checkOpenFails("lazy clone revision without lazy_origin explains itself",
-                 zOpen, SQLITE_OPEN_READWRITE, "lazy_origin=1", 0);
+  checkFirstUseFails(
+      "lazy clone revision without lazy_origin explains itself",
+      zOpen, SQLITE_OPEN_READWRITE, "lazy_origin=1", 0);
   checkLazyOriginRevisions("lazy clone", zOrigin, azRev, azName, zHead1);
 
 rev_done:
   if( db ) sqlite3_close(db);
+  if( memDb ) sqlite3_close(memDb);
   sourceClose(&source);
   if( sourceDb ) sqlite3_close(sourceDb);
   sqlite3_free(zHead1);

@@ -700,12 +700,20 @@ int doltliteBtreeHydrateDeferred(Btree *p){
   memset(&loadedCatHash, 0, sizeof(loadedCatHash));
   if( p->bDeferredRevision ){
     ProllyHash commit;
+    int eMissing = OPEN_REVISION_MISSING_NONE;
     memset(&commit, 0, sizeof(commit));
     rc = doltliteResolveOpenRevision(cs, p->zBranch, &commit,
-                                     &loadedCatHash, &zPrepared, 0);
+                                     &loadedCatHash, &zPrepared, &eMissing);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zPrepared);
-      return rc==SQLITE_NOTFOUND ? SQLITE_CANTOPEN : rc;
+      if( rc!=SQLITE_NOTFOUND ) return rc;
+      if( eMissing==OPEN_REVISION_MISSING_CHUNK
+       || (eMissing==OPEN_REVISION_MISSING_HASH
+           && !chunkStoreSourceEnabled(cs)
+           && doltliteStoreLacksRefCommit(cs)) ){
+        return SQLITE_CORRUPT;
+      }
+      return SQLITE_CANTOPEN;
     }
     if( !zPrepared ){
       u8 *data = 0;

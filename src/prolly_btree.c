@@ -724,8 +724,13 @@ static int doltlitePathIsDirectory(sqlite3_vfs *pVfs, const char *zPath,
   *pIsDir = 0;
   return SQLITE_OK;
 #else
-  char *zDir = sqlite3_mprintf("%s/", zPath);
+  char *zDir;
   int rc;
+  if( sqlite3IsDoltliteSharedMemVfs(pVfs) ){
+    *pIsDir = 0;
+    return SQLITE_OK;
+  }
+  zDir = sqlite3_mprintf("%s/", zPath);
   if( !zDir ) return SQLITE_NOMEM;
   rc = doltliteFileExists(pVfs, zDir, pIsDir);
   sqlite3_free(zDir);
@@ -835,6 +840,26 @@ static int doltliteResolveOpenBranchPath(
     return SQLITE_OK;
   }
   return SQLITE_OK;
+}
+
+int doltliteStoreLacksRefCommit(ChunkStore *cs){
+  const BranchRef *aBr;
+  const TagRef *aTag;
+  int n, i, has;
+  refsTableGetBranches(&cs->refs, &n, &aBr);
+  for(i=0; i<n; i++){
+    if( prollyHashIsEmpty(&aBr[i].commitHash) ) continue;
+    if( chunkStoreHas(cs, &aBr[i].commitHash, &has)==SQLITE_OK && !has ){
+      return 1;
+    }
+  }
+  refsTableGetTags(&cs->refs, &n, &aTag);
+  for(i=0; i<n; i++){
+    if( chunkStoreHas(cs, &aTag[i].commitHash, &has)==SQLITE_OK && !has ){
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /* Non-empty file: keep doltlite_engine from reinterpreting an existing db. */
@@ -962,9 +987,31 @@ static int prollyBtreeOpenImpl(
     memcpy(z + (bSlash ? 0 : 1), zFilename, n);
     z[n + (bSlash ? 0 : 1)] = 0;
     z[n + (bSlash ? 0 : 1) + 1] = 0;
+    pVfs = sqlite3DoltliteSharedMemVfs();
+    rc = doltliteResolveOpenBranchPath(pVfs, z, &zStoreFilename,
+                                       &zBranchFromPath);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(z);
+      return rc;
+    }
+    if( zStoreFilename ){
+      int nStore = sqlite3Strlen30(zStoreFilename);
+      int nBranch = sqlite3Strlen30(zBranchFromPath);
+      char *zStore = sqlite3_malloc(nStore + nBranch + 3);
+      if( zStore ){
+        memcpy(zStore, zStoreFilename, nStore);
+        zStore[nStore] = 0;
+        zStore[nStore + 1] = 0;
+        memcpy(zStore + nStore + 2, zBranchFromPath, nBranch + 1);
+        zBranchFromPath = zStore + nStore + 2;
+      }
+      sqlite3_free(zStoreFilename);
+      sqlite3_free(z);
+      if( !zStore ) return SQLITE_NOMEM;
+      z = zStore;
+    }
     zStoreFilename = z;
     zOpenFilename = z;
-    pVfs = sqlite3DoltliteSharedMemVfs();
     /* mode=memory replaces the access mode; the store still needs to create. */
     vfsFlags &= ~SQLITE_OPEN_MEMORY;
     if( (vfsFlags & SQLITE_OPEN_READONLY)==0 ){
@@ -1123,6 +1170,7 @@ static int prollyBtreeOpenImpl(
     ProllyHash branchCommit;
     ProllyHash revisionCatalog;
     u8 bDeferredOpen = 0;
+    u8 bDeferredRevision = 0;
     int eMissing = OPEN_REVISION_MISSING_NONE;
     const char *zDef = zBranchFromPath ? zBranchFromPath :
       chunkStoreGetDefaultBranch(&pBt->store);
@@ -1137,6 +1185,15 @@ static int prollyBtreeOpenImpl(
       if( rc==SQLITE_NOTFOUND && zResolvedBranch
        && !chunkStoreOriginSourceEnabled(&pBt->store) ){
         bDeferredOpen = 1;
+        rc = SQLITE_OK;
+      }else if( rc==SQLITE_NOTFOUND
+       && !chunkStoreOriginSourceEnabled(&pBt->store)
+       && (eMissing==OPEN_REVISION_MISSING_CHUNK
+           || (eMissing==OPEN_REVISION_MISSING_HASH
+               && doltliteStoreLacksRefCommit(&pBt->store))) ){
+        sqlite3_free(chunkStoreSourceTakeError(&pBt->store, 0));
+        sqlite3_free(chunkStoreTakeMissingChunkError(&pBt->store));
+        bDeferredRevision = 1;
         rc = SQLITE_OK;
       }
 #endif
@@ -1172,7 +1229,7 @@ static int prollyBtreeOpenImpl(
       return openRc;
     }
     if( zResolvedBranch ) zDef = zBranchFromPath = zResolvedBranch;
-    if( pBt->store.openPending ){
+    if( pBt->store.openPending || bDeferredRevision ){
       memset(&state, 0, sizeof(state));
       bDeferredOpen = 1;
     }else if( zBranchFromPath && !zResolvedBranch ){
@@ -1269,7 +1326,8 @@ static int prollyBtreeOpenImpl(
     }
     p->bDeferredOpen = bDeferredOpen;
     p->bDeferredDefaultBranch = pBt->store.openPending && !zBranchFromPath;
-    p->bDeferredRevision = pBt->store.openPending && zBranchFromPath;
+    p->bDeferredRevision = (pBt->store.openPending || bDeferredRevision)
+                        && zBranchFromPath;
   }
 
   if( p->cat.iNextTable<2 ) p->cat.iNextTable = 2;
