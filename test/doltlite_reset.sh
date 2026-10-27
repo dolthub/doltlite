@@ -247,6 +247,17 @@ SELECT dolt_reset('--soft');
 SELECT 'GV|' || v FROM t; ROLLBACK;" \
   "^GV\\|main$" "$DB8" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations|cannot merge: conflicts detected'
 
+run_test_error_match "table_reset_guard_keeps_transaction_open" \
+  "BEGIN; SELECT dolt_merge('feat');
+SELECT dolt_reset('t'); ROLLBACK;" \
+  "conflicts detected; the transaction is still open" "$DB8"
+
+run_test_error_output_match "table_reset_guard_preserves_conflicts" \
+  "BEGIN; SELECT dolt_merge('feat');
+SELECT dolt_reset('t');
+SELECT 'GT|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
+  "^GT\\|1$" "$DB8" 'Merge has [1-9][0-9]* conflict\(s\)|cannot merge: conflicts detected'
+
 DB9=/tmp/test_reset9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); DROP TABLE a; SELECT dolt_reset('a');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "path_reset_dropped_table_stays_dropped" \
