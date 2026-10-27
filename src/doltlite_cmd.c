@@ -1192,15 +1192,18 @@ int doltliteCmdParseAuthor(
   return SQLITE_ERROR;
 }
 
+int doltliteSessionBranchGone(sqlite3 *db){
+  ChunkStore *cs;
+  if( doltliteIsDetached(db) ) return 0;
+  cs = doltliteGetChunkStore(db);
+  return cs && cs->refs.nBranches>0
+      && chunkStoreFindBranch(cs, doltliteGetSessionBranch(db), 0)==SQLITE_NOTFOUND;
+}
+
 void doltliteCmdResultWriteTxnError(sqlite3_context *ctx, sqlite3 *db, int rc){
   const char *zBranch = doltliteBtreeMissingWriteBranch(db->aDb[0].pBt);
-  if( !zBranch && (rc&0xff)==SQLITE_BUSY && !doltliteIsDetached(db) ){
-    ChunkStore *cs = doltliteGetChunkStore(db);
-    const char *zCurrent = doltliteGetSessionBranch(db);
-    if( cs && cs->refs.nBranches>0
-     && chunkStoreFindBranch(cs, zCurrent, 0)==SQLITE_NOTFOUND ){
-      zBranch = zCurrent;
-    }
+  if( !zBranch && (rc&0xff)==SQLITE_BUSY && doltliteSessionBranchGone(db) ){
+    zBranch = doltliteGetSessionBranch(db);
   }
   if( zBranch ){
     char *zErr = sqlite3_mprintf(
@@ -1220,22 +1223,9 @@ void doltliteCmdResultWriteTxnError(sqlite3_context *ctx, sqlite3 *db, int rc){
 void doltliteCmdResultBranchBusyOrGone(
   sqlite3_context *ctx, sqlite3 *db, const char *zOp
 ){
-  ChunkStore *cs;
-  const char *zCurrent;
-  int gone = 0;
   if( db && db->nDb>0
-   && doltliteBtreeMissingWriteBranch(db->aDb[0].pBt) ){
-    gone = 1;
-  }
-  if( !gone && db && !doltliteIsDetached(db) ){
-    cs = doltliteGetChunkStore(db);
-    zCurrent = doltliteGetSessionBranch(db);
-    if( cs && cs->refs.nBranches>0
-     && chunkStoreFindBranch(cs, zCurrent, 0)==SQLITE_NOTFOUND ){
-      gone = 1;
-    }
-  }
-  if( gone ){
+   && (doltliteBtreeMissingWriteBranch(db->aDb[0].pBt)
+       || doltliteSessionBranchGone(db)) ){
     doltliteCmdResultWriteTxnError(ctx, db, SQLITE_BUSY);
   }else{
     doltliteCmdResultPeerBranchBusy(ctx, zOp);
