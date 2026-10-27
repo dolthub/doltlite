@@ -486,6 +486,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   };
   int rc;
 
+  if( doltliteCmdRejectInWriteStatement(ctx, "branch") ) return;
   if( doltliteCmdRejectDetached(ctx) ) return;
   if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( argc<1 ){
