@@ -627,6 +627,81 @@ CREATE INDEX t_r ON t(s)
 2
 ok" "$out"
 
+# Index keys that sort equal but differ in bytes are not conflicts.
+for variant in real nocase nocase_pk; do
+  DB="$TMPROOT/sortequal_$variant.db"
+  case $variant in
+    real)
+      SETUP="CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT, m);
+CREATE INDEX im ON t(m, s);
+INSERT INTO t VALUES(1,'abc',1);"
+      OURS="UPDATE t SET s='xyz' WHERE id=1;"
+      THEIRS="UPDATE t SET m=1.0 WHERE id=1;"
+      WANT="1|xyz|real" ;;
+    nocase)
+      SETUP="CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE, m INT);
+CREATE INDEX im ON t(m, s);
+INSERT INTO t VALUES(1,'abc',1);"
+      OURS="UPDATE t SET m=2 WHERE id=1;"
+      THEIRS="UPDATE t SET s='ABC' WHERE id=1;"
+      WANT="1|ABC|integer" ;;
+    nocase_pk)
+      SETUP="CREATE TABLE t(s TEXT COLLATE NOCASE PRIMARY KEY, m INT, id INT);
+CREATE INDEX im ON t(m);
+INSERT INTO t VALUES('abc',1,1);"
+      OURS="UPDATE t SET m=2 WHERE id=1;"
+      THEIRS="UPDATE t SET s='ABC' WHERE id=1;"
+      WANT="1|ABC|integer" ;;
+  esac
+  "$DOLTLITE" "$DB" <<EOF >/dev/null 2>&1
+$SETUP
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+$THEIRS
+SELECT dolt_commit('-am','feat');
+SELECT dolt_checkout('main');
+$OURS
+SELECT dolt_commit('-am','main');
+EOF
+  out=$("$DOLTLITE" "$DB" "SELECT length(dolt_merge('feat'))=40;" 2>&1)
+  check "sortequal_${variant}_merges" "1" "$out"
+  out=$("$DOLTLITE" "$DB" "SELECT id, s, typeof(m) FROM t;
+SELECT count(*) FROM dolt_conflicts;
+SELECT count(*) FROM t INDEXED BY im WHERE m=2 OR m=1.0;
+SELECT * FROM pragma_integrity_check;" 2>&1)
+  check "sortequal_${variant}_result" "$WANT
+0
+1
+ok" "$out"
+done
+
+DB="$TMPROOT/sortequal_unique.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE UNIQUE, m);
+INSERT INTO t VALUES(1,'abc',1);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET s='Abc', m=2 WHERE id=1;
+SELECT dolt_commit('-am','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET s='ABC' WHERE id=1;
+SELECT dolt_commit('-am','main');
+EOF
+out=$("$DOLTLITE" "$DB" 2>/dev/null <<'EOF'
+BEGIN;
+SELECT dolt_merge('feat');
+SELECT "table" || ':' || num_conflicts FROM dolt_conflicts;
+SELECT dolt_conflicts_resolve('--theirs','t');
+COMMIT;
+SELECT id || ':' || s || ':' || m FROM t INDEXED BY sqlite_autoindex_t_1 WHERE s='abc';
+SELECT * FROM pragma_integrity_check;
+EOF
+)
+check "sortequal_unique_only_table_conflict" "t:1
+0
+1:Abc:2
+ok" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
