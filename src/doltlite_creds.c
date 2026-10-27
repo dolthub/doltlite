@@ -982,21 +982,44 @@ void doltliteCredsFreeList(char **list, int n) {
   sqlite3_free(list);
 }
 
-int doltliteCredsRemove(const char *dir, const char *kid) {
-  char *owned = NULL;
-  char *path, *canonical = credsResolveKid(kid);
-  int rc;
+static char *credsExistingPath(const char *dir, const char *kid, char **pOwned) {
+  char *canonical;
+  char *path;
+  *pOwned = NULL;
+  if (!kid) return NULL;
   if (!dir) {
-    owned = doltliteCredsDir();
-    dir = owned;
+    *pOwned = doltliteCredsDir();
+    dir = *pOwned;
   }
-  if (!dir) { sqlite3_free(canonical); return 1; }
+  if (!dir) return NULL;
+  canonical = credsResolveKid(kid);
   path = canonical ? credsFilePath(dir, canonical) : NULL;
   sqlite3_free(canonical);
   if (!path) {
-    sqlite3_free(owned);
-    return 1;
+    sqlite3_free(*pOwned);
+    *pOwned = NULL;
   }
+  return path;
+}
+
+int doltliteCredsExists(const char *dir, const char *kid) {
+  char *owned = NULL;
+  char *path = credsExistingPath(dir, kid, &owned);
+  FILE *f;
+  if (!path) return 1;
+  f = fopen(path, "rb");
+  sqlite3_free(path);
+  sqlite3_free(owned);
+  if (!f) return 1;
+  fclose(f);
+  return 0;
+}
+
+int doltliteCredsRemove(const char *dir, const char *kid) {
+  char *owned = NULL;
+  char *path = credsExistingPath(dir, kid, &owned);
+  int rc;
+  if (!path) return 1;
   rc = (remove(path) == 0) ? 0 : 1;
   sqlite3_free(path);
   sqlite3_free(owned);

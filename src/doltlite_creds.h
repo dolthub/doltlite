@@ -58,6 +58,7 @@ int doltliteCredsLoadDefault(const char *dir, DoltliteCreds **out);
 int doltliteCredsList(const char *dir, char ***out, int *n);
 void doltliteCredsFreeList(char **list, int n);
 
+int doltliteCredsExists(const char *dir, const char *kid);
 int doltliteCredsRemove(const char *dir, const char *kid);
 
 #define DOLTLITE_CREDS_ERROR     (-1)

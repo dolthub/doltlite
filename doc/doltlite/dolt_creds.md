@@ -106,7 +106,9 @@ existing file. The server rejects private JWK files in that directory.
 
 Removing a key does not select a replacement or clear references to it. Use
 `dolt_creds_use` and update affected bindings before the next operation that
-would select the removed key.
+would select the removed key. `dolt_creds_rm` checks every name before it
+deletes any key. An unknown name returns an error and leaves every named key
+in place. A repeated name in one call is removed once.
 
 ## Storage and compatibility
 

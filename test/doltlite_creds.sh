@@ -76,6 +76,20 @@ run_test "creds_import_full_disk_still_readable" "SELECT error IS NULL AND publi
 LEFT=$(find "$DOLTLITE_CREDS_DIR" \( -name '*.jwk.*' -o -name '*.tmp' \) -print | wc -l | tr -d '[:space:]')
 dltest_assert_equal "creds_import_full_disk_no_temp" "$LEFT" "0"
 rm -f "$SRC"
+"$DOLTLITE" "$DB" "SELECT dolt_creds_new(); SELECT dolt_creds_new();" >/dev/null
+EXTRA=$("$DOLTLITE" "$DB" "SELECT kid FROM dolt_creds_ls() WHERE kid NOT IN ('$KID','$OTHER') ORDER BY kid;")
+EXTRA=${EXTRA//$'\r'/}
+A=${EXTRA%%$'\n'*}
+C=${EXTRA#*$'\n'}
+run_test_error_match "creds_rm_unknown_deletes_nothing" "SELECT dolt_creds_rm('$A','nosuchkey','$C');" "no such credential" "$DB"
+run_test "creds_rm_unknown_keeps_both" "SELECT count(*) FROM dolt_creds_ls() WHERE kid IN ('$A','$C');" "2" "$DB"
+run_test "creds_rm_several" "SELECT dolt_creds_rm('$A','$C'); SELECT count(*) FROM dolt_creds_ls() WHERE kid IN ('$A','$C');" "0
+0" "$DB"
+"$DOLTLITE" "$DB" "SELECT dolt_creds_new();" >/dev/null
+DUP=$("$DOLTLITE" "$DB" "SELECT kid FROM dolt_creds_ls() WHERE kid NOT IN ('$KID','$OTHER');")
+DUP=${DUP//$'\r'/}
+run_test "creds_rm_duplicate_name" "SELECT dolt_creds_rm('$DUP','$DUP'); SELECT count(*) FROM dolt_creds_ls() WHERE kid='$DUP';" "0
+0" "$DB"
 run_test "creds_remove_by_public_key" "SELECT dolt_creds_rm('$PUB');" "0" "$DB"
 run_test_match "creds_rm" "SELECT dolt_creds('rm', '$KID');" "Removed credential $KID" "$DB"
 run_test_error_match "creds_rm_unknown" "SELECT dolt_creds('rm', '$KID');" "no such credential" "$DB"

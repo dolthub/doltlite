@@ -363,6 +363,34 @@ static int remoteValidateFetchedGraph(
   return rc;
 }
 
+int doltliteStoreGraphIncomplete(ChunkStore *pStore, int *pbMissing){
+  const BranchRef *aBranch;
+  const TagRef *aTag;
+  ProllyHash *aRoots;
+  int nBranch;
+  int nTag;
+  int nRoots = 0;
+  int rc;
+  int i;
+
+  *pbMissing = 0;
+  refsTableGetBranches(&pStore->refs, &nBranch, &aBranch);
+  refsTableGetTags(&pStore->refs, &nTag, &aTag);
+  aRoots = sqlite3_malloc64(
+      ((sqlite3_uint64)nBranch*2 + nTag + 1)*sizeof(*aRoots));
+  if( !aRoots ) return SQLITE_NOMEM;
+  for(i=0; i<nBranch; i++){
+    aRoots[nRoots++] = aBranch[i].commitHash;
+    aRoots[nRoots++] = aBranch[i].workingSetHash;
+  }
+  for(i=0; i<nTag; i++) aRoots[nRoots++] = aTag[i].commitHash;
+  rc = remoteValidateGraphEx(pStore, aRoots, nRoots, 0, pbMissing);
+  sqlite3_free(aRoots);
+  sqlite3_free(chunkStoreSourceTakeError(pStore, 0));
+  sqlite3_free(chunkStoreTakeMissingChunkError(pStore));
+  return *pbMissing ? SQLITE_OK : rc;
+}
+
 /* *pbMissing: the graph is incomplete rather than unreadable, as when a
 ** push was interrupted or a gc swept chunks not yet referenced. */
 int doltliteValidateRefsTargetGraph(
