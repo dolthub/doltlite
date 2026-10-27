@@ -2546,7 +2546,6 @@ static void doltCredsRmFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv
     sqlite3_result_error(ctx, "usage: dolt_creds_rm(key [, key ...])", -1);
     return;
   }
-  /* An unknown name must fail before any key is deleted. */
   for(i=0; i<argc; i++){
     const char *name = (const char*)sqlite3_value_text(argv[i]);
     if( !name || doltliteCredsExists(0, name) ){
