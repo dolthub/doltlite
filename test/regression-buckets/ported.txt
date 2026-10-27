@@ -135,6 +135,7 @@ doltlite_remote_open
 doltlite_remote_missing_chunks
 doltlite_clone_occupied
 doltlite_status_conflicts
+doltlite_status_metadata
 doltlite_at_missing_table
 doltlite_at_right_join
 doltlite_clean_schemas

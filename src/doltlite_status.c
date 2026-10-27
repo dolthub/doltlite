@@ -333,7 +333,47 @@ static int addRow(DoltliteStatusCursor *pCur, const char *zName,
   return SQLITE_OK;
 }
 
+static int statusCatalogMetadata(
+  sqlite3 *db,
+  const ProllyHash *pCatalog,
+  u8 *aMeta
+){
+  u8 *pData = 0;
+  const u8 *pEntries = 0;
+  int nData = 0, nTables = 0, version = 0;
+  int rc;
+  memset(aMeta, 0, CAT_HEADER_META_SIZE_V5);
+  if( prollyHashIsEmpty(pCatalog) ) return SQLITE_OK;
+  rc = chunkStoreGet(doltliteGetChunkStore(db), pCatalog, &pData, &nData);
+  if( rc==SQLITE_OK ){
+    if( !catalogParseHeaderEx(pData, nData, &version, &nTables, &pEntries) ){
+      rc = SQLITE_CORRUPT;
+    }else if( version==CATALOG_FORMAT_V5 ){
+      memcpy(aMeta, pData+CAT_HEADER_SIZE_V3, CAT_HEADER_META_SIZE_V5);
+    }
+  }
+  sqlite3_free(pData);
+  return rc;
+}
 
+static int statusCompareDatabaseMetadata(
+  DoltliteStatusCursor *pCur,
+  sqlite3 *db,
+  const ProllyHash *pFrom,
+  const ProllyHash *pTo,
+  int staged,
+  const char *zFilter
+){
+  u8 aFrom[CAT_HEADER_META_SIZE_V5], aTo[CAT_HEADER_META_SIZE_V5];
+  int rc;
+  if( zFilter && strcmp(zFilter, "dolt_database")!=0 ) return SQLITE_OK;
+  rc = statusCatalogMetadata(db, pFrom, aFrom);
+  if( rc==SQLITE_OK ) rc = statusCatalogMetadata(db, pTo, aTo);
+  if( rc==SQLITE_OK && memcmp(aFrom, aTo, sizeof(aFrom))!=0 ){
+    rc = addRow(pCur, "dolt_database", staged, "modified");
+  }
+  return rc;
+}
 
 static int statusSchemaHasViewOrTrigger(sqlite3 *db,
                                         const ProllyHash *pRoot,
@@ -1307,6 +1347,12 @@ static int compareCatalogsFiltered(
   useRename = (nFrom <= DOLT_STATUS_RENAME_CAP && nTo <= DOLT_STATUS_RENAME_CAP);
 
   if( statusHideRebasePlan(db, zFilter) ) return SQLITE_OK;
+
+  rc = statusCompareDatabaseMetadata(pCur, db, pFromCat, pToCat,
+                                     staged, zFilter);
+  if( rc!=SQLITE_OK || (zFilter && strcmp(zFilter, "dolt_database")==0) ){
+    return rc;
+  }
 
   if( !zFilter ){
     return compareCatalogs(pCur, db, pFromCat, pToCat,
