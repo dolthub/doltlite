@@ -38,6 +38,7 @@ struct DoltliteRemote {
   ** instead of honouring busy_timeout. */
   int (*xBusy)(void*);
   void *pBusyArg;
+  char zMissingChunkError[96];
 };
 
 static inline int doltliteRemotePersistRefs(ChunkStore *cs){
@@ -87,8 +88,6 @@ int doltliteMergeScopedRefsUpdate(
   const u8 *pBlob, int nBlob, const char *zRef, int bForce,
   u8 **ppMerged, int *pnMerged, int *pbMissing);
 
-int doltliteFetch(ChunkStore *pLocal, DoltliteRemote *pRemote,
-                  const char *zRemoteName, const char *zBranch);
 int doltliteFetchInto(ChunkStore *pLocal, DoltliteRemote *pRemote,
                       const char *zRemoteName, const char *zBranch,
                       const char *zTrack, int *pbMissingBranch);

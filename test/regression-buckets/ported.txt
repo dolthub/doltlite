@@ -132,6 +132,7 @@ doltlite_reset_initial
 doltlite_busy_handler
 doltlite_push_delete
 doltlite_remote_open
+doltlite_remote_missing_chunks
 doltlite_clone_occupied
 doltlite_status_conflicts
 doltlite_at_missing_table

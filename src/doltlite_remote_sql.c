@@ -282,6 +282,9 @@ static void remoteSqlResultError(
 
 static const char *remoteSqlRemoteMsg(DoltliteRemote *pRemote, int rc){
   const char *z;
+  if( pRemote && pRemote->zMissingChunkError[0] ){
+    return pRemote->zMissingChunkError;
+  }
   if( pRemote && pRemote->xErrMsg ){
     z = pRemote->xErrMsg(pRemote);
     if( z && z[0] ) return z;
@@ -1186,6 +1189,7 @@ static int remoteSqlFetchBranch(
   DoltliteRemote *pRemote =
       openRemoteByUrl(db, chunkFileGetVfs(&cs->file), zUrl, 0);
   int rc;
+  int missingBranch = 0;
   if( pbMissingBranch ) *pbMissingBranch = 0;
   if( pzErr ) *pzErr = 0;
   if( !pRemote ){
@@ -1193,13 +1197,14 @@ static int remoteSqlFetchBranch(
     return SQLITE_CANTOPEN;
   }
   rc = doltliteFetchInto(cs, pRemote, zRemoteName, zBranch, zTrack,
-                         pbMissingBranch);
+                         &missingBranch);
+  if( pbMissingBranch ) *pbMissingBranch = missingBranch;
   if( rc!=SQLITE_OK && pzErr ){
     const char *zMsg = remoteSqlFetchMsg(pRemote, rc);
-    if( zMsg ){
-      *pzErr = sqlite3_mprintf("%s", zMsg);
-    }else if( rc==SQLITE_NOTFOUND ){
+    if( missingBranch ){
       *pzErr = sqlite3_mprintf("fetch failed: branch not found on remote");
+    }else if( zMsg ){
+      *pzErr = sqlite3_mprintf("%s", zMsg);
     }else{
       *pzErr = sqlite3_mprintf("fetch failed");
     }
@@ -1227,7 +1232,6 @@ static int remoteSqlFetchOne(
     (void)doltliteVcSealSavepointError(db);
     remoteSqlResultError(ctx, rc, zErr ? zErr
         : (rc==SQLITE_CANTOPEN ? "failed to open remote"
-         : rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote"
                                : "fetch failed"));
   }
   sqlite3_free(zErr);
@@ -1915,9 +1919,7 @@ static void doltPullParsed(
       }
       if( rc!=SQLITE_OK ){
         remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
-            zFetchErr ? zFetchErr
-            : (rc==SQLITE_NOTFOUND
-               ? "fetch failed: branch not found on remote" : "fetch failed"));
+            zFetchErr ? zFetchErr : "fetch failed");
         sqlite3_free(zFetchErr);
         sqlite3_free(zUrlOwned);
         doltliteFreeStringArray(azKeep, nKeep);
@@ -1926,7 +1928,9 @@ static void doltPullParsed(
     }
     sqlite3_free(zUrlOwned);
   }else{
-    rc = doltliteFetch(cs, pRemote, zRemoteName, zRemoteBranch);
+    int missingBranch = 0;
+    rc = doltliteFetchInto(cs, pRemote, zRemoteName, zRemoteBranch,
+                            zRemoteBranch, &missingBranch);
     if( rc!=SQLITE_OK ){
       /* The message lives in the remote; copy it before closing. */
       const char *zMsg = remoteSqlFetchMsg(pRemote, rc);
@@ -1934,8 +1938,8 @@ static void doltPullParsed(
       pRemote->xClose(pRemote);
       doltliteFreeStringArray(azKeep, nKeep);
       remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc,
-        zOwned ? zOwned
-        : (rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0));
+        missingBranch ? "fetch failed: branch not found on remote"
+                      : zOwned ? zOwned : "fetch failed");
       sqlite3_free(zOwned);
       return;
     }

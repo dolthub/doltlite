@@ -491,6 +491,14 @@ static int syncRootIsPublished(const ChunkStore *pDstRefs,
   return 0;
 }
 
+static int syncMissingChunk(DoltliteRemote *pRemote, const ProllyHash *pHash){
+  char zHex[PROLLY_HASH_SIZE*2+1];
+  doltliteHashToHex(pHash, zHex);
+  sqlite3_snprintf(sizeof(pRemote->zMissingChunkError),
+      pRemote->zMissingChunkError, "remote is missing chunk %s", zHex);
+  return SQLITE_NOTFOUND;
+}
+
 /* pDstRefs, when set, holds the destination's refs: roots that are
 ** already published ref targets skip the partial-put resume scan. */
 static int syncChunks(
@@ -507,6 +515,7 @@ static int syncChunks(
   int bResumeScan = 0;
   int rc, i;
 
+  pSrc->zMissingChunkError[0] = 0;
   pB = sqlite3_malloc64(sizeof(*pB));
   if( !pB ) return SQLITE_NOMEM;
 
@@ -576,7 +585,10 @@ static int syncChunks(
         memset(pB->apData, 0, sizeof(pB->apData[0]) * nFetch);
         rc = pSrc->xGetChunks(pSrc, pB->aFetch, nFetch, pB->apData, pB->anData);
         for(i=0; i<nFetch && rc==SQLITE_OK; i++){
-          if( !pB->apData[i] ){ rc = SQLITE_NOTFOUND; break; }
+          if( !pB->apData[i] ){
+            rc = syncMissingChunk(pSrc, &pB->aFetch[i]);
+            break;
+          }
           rc = syncVerifyFetchedChunk(&pB->aFetch[i], pB->apData[i], pB->anData[i]);
           if( rc!=SQLITE_OK ) break;
           if( pB->aPut[i] ){
@@ -594,6 +606,9 @@ static int syncChunks(
           u8 *data = 0;
           int nData = 0;
           rc = pSrc->xGetChunk(pSrc, &pB->aFetch[i], &data, &nData);
+          if( rc==SQLITE_NOTFOUND ){
+            rc = syncMissingChunk(pSrc, &pB->aFetch[i]);
+          }
           if( rc!=SQLITE_OK ) break;
           rc = syncVerifyFetchedChunk(&pB->aFetch[i], data, nData);
           if( rc!=SQLITE_OK ){
@@ -2710,15 +2725,6 @@ static int installFetchedRefs(
   return rc;
 }
 
-int doltliteFetch(
-  ChunkStore *pLocal,
-  DoltliteRemote *pRemote,
-  const char *zRemoteName,
-  const char *zBranch
-){
-  return doltliteFetchInto(pLocal, pRemote, zRemoteName, zBranch, zBranch, 0);
-}
-
 /* Fetch remote branch zBranch into the tracking ref zRemoteName/zTrack.
 ** A tracking ref that diverged during the download is re-read. A commit
 ** the ref has already moved past is left in place. */
@@ -2733,6 +2739,7 @@ int doltliteFetchInto(
   int attempt;
   int rc;
 
+  pRemote->zMissingChunkError[0] = 0;
   if( pbMissingBranch ) *pbMissingBranch = 0;
   rc = SQLITE_OK;
   for(attempt=0; attempt<8; attempt++){
@@ -3012,6 +3019,7 @@ int doltliteCloneLazy(
   memset(&snapshot, 0, sizeof(snapshot));
   memset(&defaultCommit, 0, sizeof(defaultCommit));
   memset(&emptyWs, 0, sizeof(emptyWs));
+  pRemote->zMissingChunkError[0] = 0;
   if( pbOccupied ) *pbOccupied = 0;
   if( !zUrl ) return SQLITE_MISUSE;
 
@@ -3145,6 +3153,7 @@ int doltliteClone(
          sizeof(ProllyHash));
   memset(&savedRefs, 0, sizeof(savedRefs));
   oldRefsStale = pLocal->bRefsStale;
+  pRemote->zMissingChunkError[0] = 0;
   if( pbMissingBranch ) *pbMissingBranch = 0;
   if( pbOccupied ) *pbOccupied = 0;
   if( !zUrl ) return SQLITE_MISUSE;

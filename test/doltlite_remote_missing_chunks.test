@@ -1,0 +1,96 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set source [file normalize missing-chunk-source.db]
+set remote [file normalize missing-chunk-remote.db]
+forcedelete $source $remote
+sqlite3 source_db $source
+source_db eval {
+  CREATE TABLE remote_t(id INTEGER PRIMARY KEY,v TEXT);
+  INSERT INTO remote_t VALUES(1,'remote');
+  SELECT dolt_commit('-Am','remote');
+}
+set missing [source_db one {SELECT dolt_hashof('HEAD')}]
+source_db close
+
+foreach operation {fetch-all fetch-prune fetch-branch fetch-mapped fetch-glob
+                   pull-all pull-branch clone clone-branch} {
+  foreach boundary {autocommit begin savepoint nested} {
+    reset_db
+    forcedelete $remote
+    sqlite3 lazy_db $remote
+    lazy_db eval "SELECT dolt_clone('--lazy','file://$source')"
+    lazy_db close
+    set isClone [string match clone* $operation]
+    set stateSql {
+      SELECT dolt_hashof('HEAD');
+      SELECT name,hash FROM dolt_branches ORDER BY name;
+      SELECT name,url FROM dolt_remotes ORDER BY name;
+      SELECT name,hash FROM dolt_remote_branches ORDER BY name;
+      SELECT * FROM dolt_status ORDER BY table_name,staged;
+      SELECT name FROM sqlite_schema ORDER BY name;
+    }
+    if {!$isClone} {
+      execsql {
+        CREATE TABLE local_t(id INTEGER PRIMARY KEY,v TEXT);
+        INSERT INTO local_t VALUES(42,'keep');
+        SELECT dolt_commit('-Am','local');
+      }
+      execsql "SELECT dolt_remote('add','lz','file://$remote')"
+      append stateSql {SELECT id,v FROM local_t;}
+    }
+    switch $operation {
+      fetch-all {set sql {SELECT dolt_fetch('lz')}}
+      fetch-prune {set sql {SELECT dolt_fetch('--prune','lz')}}
+      fetch-branch {set sql {SELECT dolt_fetch('lz','main')}}
+      fetch-mapped {
+        set sql {SELECT dolt_fetch('lz','main:refs/remotes/lz/mapped')}
+      }
+      fetch-glob {
+        set sql {SELECT dolt_fetch('lz','refs/heads/*:refs/remotes/lz/*')}
+      }
+      pull-all {set sql {SELECT dolt_pull('lz')}}
+      pull-branch {set sql {SELECT dolt_pull('lz','main')}}
+      clone {set sql "SELECT dolt_clone('file://$remote')"}
+      clone-branch {set sql "SELECT dolt_clone('--branch','main','file://$remote')"}
+    }
+    set before [execsql $stateSql]
+    if {$boundary eq "begin"} {execsql BEGIN}
+    if {$boundary eq "savepoint"} {execsql {SAVEPOINT outer_sp}}
+    if {$boundary eq "nested"} {execsql {BEGIN; SAVEPOINT outer_sp}}
+    set prefix remote-missing-chunk-$operation-$boundary
+    do_test $prefix-error {
+      set rc [catch {execsql $sql} msg]
+      list $rc [db errorcode] $msg
+    } [list 1 1 "remote is missing chunk $missing"]
+    do_test $prefix-preserved {execsql $stateSql} $before
+    if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+    db close
+    sqlite3 db test.db
+    do_test $prefix-reopen {execsql $stateSql} $before
+    if {!$isClone} {
+      do_test $prefix-missing-branch {
+        set rc [catch {execsql {SELECT dolt_pull('lz','absent')}} msg]
+        list $rc [db errorcode] $msg
+      } {1 1 {fetch failed: branch not found on remote}}
+    }
+    file copy -force $source $remote
+    if {$isClone} {
+      do_test $prefix-retry {
+        execsql $sql
+        execsql {SELECT id,v FROM remote_t}
+      } {1 remote}
+    } else {
+      do_execsql_test $prefix-retry {
+        SELECT dolt_fetch('lz','main');
+        SELECT count(*) FROM dolt_remote_branches WHERE name='remotes/lz/main';
+        SELECT id,v FROM local_t;
+      } {0 1 42 keep}
+    }
+  }
+}
+
+db close
+forcedelete $source $remote
+sqlite3 db test.db
+finish_test
