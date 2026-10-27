@@ -1,0 +1,176 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach pragma {user_version application_id} {
+  foreach value {5 -7 2147483647} {
+    foreach boundary {autocommit begin savepoint top-savepoint} {
+      reset_db
+      execsql {
+        CREATE TABLE t(id INTEGER PRIMARY KEY);
+        INSERT INTO t VALUES(0);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('b');
+        INSERT INTO t VALUES(1);
+        SELECT dolt_commit('-am','main change');
+        SELECT dolt_checkout('b');
+      }
+      set head [db one {SELECT dolt_hashof('HEAD')}]
+      if {$boundary eq "begin"} {execsql BEGIN}
+      if {$boundary eq "savepoint"} {execsql {BEGIN; SAVEPOINT meta_sp}}
+      if {$boundary eq "top-savepoint"} {execsql {SAVEPOINT meta_sp}}
+      execsql "PRAGMA $pragma=$value"
+      set prefix status-metadata-$pragma-$value-$boundary
+      do_execsql_test $prefix-unstaged {
+        SELECT * FROM dolt_status;
+      } {dolt_database 0 modified}
+      do_execsql_test $prefix-filter {
+        SELECT * FROM dolt_status WHERE table_name='dolt_database' AND staged=0;
+        SELECT * FROM dolt_status WHERE table_name='dolt_database' AND staged=1;
+        SELECT * FROM dolt_status WHERE table_name='t';
+        SELECT * FROM dolt_status WHERE table_name='DOLT_DATABASE';
+      } {dolt_database 0 modified}
+      do_execsql_test $prefix-nocase {
+        SELECT * FROM dolt_status WHERE table_name='DOLT_DATABASE' COLLATE NOCASE;
+        SELECT count(*) FROM dolt_status a JOIN dolt_status b ON a.rowid=b.rowid;
+      } {dolt_database 0 modified 1}
+      do_test $prefix-merge-refused {
+        set rc [catch {execsql {SELECT dolt_merge('main')}} msg]
+        list $rc [string match {uncommitted changes*} $msg] \
+          [db one {SELECT dolt_hashof('HEAD')}] [execsql "PRAGMA $pragma"]
+      } [list 1 1 $head $value]
+      do_execsql_test $prefix-refusal-keeps-status {
+        SELECT * FROM dolt_status;
+        SELECT id FROM t;
+      } {dolt_database 0 modified 0}
+      do_execsql_test $prefix-stage {
+        SELECT dolt_add('.');
+        SELECT * FROM dolt_status;
+        SELECT * FROM dolt_status WHERE table_name='dolt_database' AND staged=1;
+        SELECT * FROM dolt_status WHERE table_name='dolt_database' AND staged=0;
+      } {0 dolt_database 1 modified dolt_database 1 modified}
+      do_execsql_test $prefix-unstage {
+        SELECT dolt_reset();
+        SELECT * FROM dolt_status;
+      } {0 dolt_database 0 modified}
+      execsql {SELECT dolt_add('.')}
+      execsql "PRAGMA $pragma=17"
+      do_execsql_test $prefix-staged-and-unstaged {
+        SELECT * FROM dolt_status ORDER BY table_name,staged;
+        SELECT count(DISTINCT rowid) FROM dolt_status;
+      } {dolt_database 0 modified dolt_database 1 modified 2}
+      do_test $prefix-commit-staged {
+        execsql {SELECT dolt_commit('-m','metadata')}
+        list [execsql "PRAGMA $pragma"] [execsql {SELECT * FROM dolt_status}]
+      } {17 {dolt_database 0 modified}}
+      do_test $prefix-reset-and-merge {
+        execsql {SELECT dolt_reset('--hard')}
+        set clean [execsql {SELECT count(*) FROM dolt_status}]
+        set saved [execsql "PRAGMA $pragma"]
+        execsql {SELECT dolt_merge('main')}
+        list $clean $saved [execsql "PRAGMA $pragma"] \
+          [execsql {SELECT id FROM t ORDER BY id}] \
+          [execsql {SELECT count(*) FROM dolt_status}]
+      } [list 0 $value $value {0 1} 0]
+      do_test $prefix-checkout {
+        execsql {SELECT dolt_checkout('main')}
+        set mainValue [execsql "PRAGMA $pragma"]
+        execsql {SELECT dolt_checkout('b')}
+        list $mainValue [execsql "PRAGMA $pragma"] \
+          [execsql {SELECT count(*) FROM dolt_status}]
+      } [list 0 $value 0]
+      db close
+      sqlite3 db test.db/b
+      do_test $prefix-reopen {
+        list [execsql "PRAGMA $pragma"] \
+          [execsql {SELECT count(*) FROM dolt_status}]
+      } [list $value 0]
+    }
+  }
+}
+
+reset_db
+do_execsql_test status-metadata-empty {
+  PRAGMA user_version=9;
+  SELECT * FROM dolt_status;
+  SELECT dolt_add('.');
+  SELECT * FROM dolt_status;
+  SELECT dolt_commit('-m','metadata only') IS NOT NULL;
+  SELECT count(*) FROM dolt_status;
+} {dolt_database 0 modified 0 dolt_database 1 modified 1 0}
+
+reset_db
+do_execsql_test status-metadata-combined {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+  SELECT dolt_commit('-Am','base') IS NOT NULL;
+  PRAGMA user_version=1;
+  PRAGMA application_id=2;
+  UPDATE t SET id=2;
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+  SELECT dolt_add('.');
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+} {1 dolt_database 0 modified t 0 modified 0 dolt_database 1 modified t 1 modified}
+do_execsql_test status-metadata-revert-to-head {
+  SELECT dolt_reset();
+  UPDATE t SET id=1;
+  PRAGMA user_version=0;
+  PRAGMA application_id=0;
+  SELECT count(*) FROM dolt_status;
+} {0 0}
+do_execsql_test status-metadata-rollback {
+  BEGIN;
+  PRAGMA user_version=11;
+  SELECT * FROM dolt_status;
+  SAVEPOINT sp;
+  PRAGMA application_id=22;
+  SELECT * FROM dolt_status;
+  ROLLBACK TO sp;
+  SELECT * FROM dolt_status;
+  ROLLBACK;
+  SELECT count(*) FROM dolt_status;
+} {dolt_database 0 modified dolt_database 0 modified dolt_database 0 modified 0}
+
+execsql {PRAGMA user_version=11}
+sqlite3 ro test.db -readonly 1
+do_test status-metadata-readonly {
+  ro eval {SELECT * FROM dolt_status WHERE table_name='dolt_database'}
+} {dolt_database 0 modified}
+ro eval {BEGIN; SELECT * FROM dolt_status}
+execsql {PRAGMA user_version=0}
+do_test status-metadata-pinned-reader {
+  list [ro eval {PRAGMA user_version}] [ro eval {SELECT * FROM dolt_status}]
+} {11 {dolt_database 0 modified}}
+ro eval COMMIT
+do_test status-metadata-reader-follows {
+  list [ro eval {PRAGMA user_version}] [ro eval {SELECT count(*) FROM dolt_status}]
+} {0 0}
+execsql {BEGIN IMMEDIATE; PRAGMA user_version=17}
+do_test status-metadata-peer-uncommitted {
+  list [ro eval {PRAGMA user_version}] [ro eval {SELECT count(*) FROM dolt_status}]
+} {0 0}
+execsql COMMIT
+do_test status-metadata-peer-committed {
+  list [ro eval {PRAGMA user_version}] [ro eval {SELECT * FROM dolt_status}]
+} {17 {dolt_database 0 modified}}
+ro close
+do_execsql_test status-metadata-main-only {
+  PRAGMA user_version=0;
+  PRAGMA temp.user_version=91;
+  ATTACH ':memory:' AS aux;
+  PRAGMA aux.user_version=92;
+  PRAGMA aux.application_id=93;
+  SELECT count(*) FROM dolt_status;
+  DETACH aux;
+} 0
+
+do_execsql_test status-metadata-commit-am {
+  PRAGMA user_version=23;
+  PRAGMA application_id=24;
+  SELECT * FROM dolt_status;
+  SELECT dolt_commit('-am','automatic metadata staging') IS NOT NULL;
+  SELECT count(*) FROM dolt_status;
+  PRAGMA user_version;
+  PRAGMA application_id;
+} {dolt_database 0 modified 1 0 23 24}
+
+finish_test
