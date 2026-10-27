@@ -187,6 +187,27 @@ int main(void){
   }
 
   sqlite3_commit_hook(db, 0, 0);
+  exec(db, "ROLLBACK");
+  sqlite3_commit_hook(db, rejectCommit, 0);
+  nCommit = 0;
+  exec(db, "BEGIN; INSERT INTO t VALUES(80,'branch veto');");
+  check("branch veto inside BEGIN refuses",
+      (exec(db, "SELECT dolt_branch('vetoed_branch')")&255)==SQLITE_CONSTRAINT);
+  sqlite3_commit_hook(db, 0, 0);
+  exec(db, "ROLLBACK");
+  check("branch veto inside BEGIN asks once", nCommit==1);
+  check("branch veto inside BEGIN keeps refs", scalarInt(db,
+      "SELECT count(*) FROM dolt_branches WHERE name='vetoed_branch'")==0);
+  check("branch veto inside BEGIN discards rows", scalarInt(db,
+      "SELECT count(*) FROM t WHERE a=80")==0);
+  sqlite3_commit_hook(db, onCommit, 0);
+  expectHooks(db, "branch beside rows inside BEGIN",
+      "BEGIN; INSERT INTO t VALUES(81,'branch'); SELECT dolt_branch('kept_branch'); COMMIT;", 1);
+  check("branch beside rows keeps both", scalarInt(db,
+      "SELECT count(*) FROM dolt_branches WHERE name='kept_branch'")==1
+      && scalarInt(db, "SELECT count(*) FROM t WHERE a=81")==1);
+
+  sqlite3_commit_hook(db, 0, 0);
   sqlite3_rollback_hook(db, 0, 0);
   sqlite3_close(db);
   remove(zPath);
