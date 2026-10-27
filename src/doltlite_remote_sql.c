@@ -2561,7 +2561,14 @@ static void doltCredsRmFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv
   }
   for(i=0; i<argc; i++){
     const char *name = (const char*)sqlite3_value_text(argv[i]);
-    if( !name || doltliteCredsRemove(0, name) ){
+    if( !name || doltliteCredsExists(0, name) ){
+      sqlite3_result_error(ctx, "no such credential or failed to remove credential", -1);
+      return;
+    }
+  }
+  for(i=0; i<argc; i++){
+    const char *name = (const char*)sqlite3_value_text(argv[i]);
+    if( doltliteCredsRemove(0, name) && doltliteCredsExists(0, name)==0 ){
       sqlite3_result_error(ctx, "no such credential or failed to remove credential", -1);
       return;
     }
