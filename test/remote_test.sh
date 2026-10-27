@@ -2283,8 +2283,8 @@ check "retried clone has the row and the tag" "1
 echo "=== Clone refuses a peer that landed while it waited ==="
 PR="$TMPDIR/clone_peer"
 mkdir -p "$PR"
+clone_refs_sql="SELECT dolt_hashof('HEAD'); SELECT name,hash FROM dolt_branches ORDER BY name; SELECT tag_name,tag_hash,message FROM dolt_tags ORDER BY tag_name; SELECT name,url FROM dolt_remotes ORDER BY name;"
 
-# kind is clean, peer, or dirty. flags is empty or '--lazy'.
 clone_during_pause() {
   local name="$1"
   local kind="$2"
@@ -2319,6 +2319,14 @@ clone_during_pause() {
     "$DB" "$dir/t.db" "PRAGMA busy_timeout=5000; CREATE TABLE peer2(x); INSERT INTO peer2 VALUES(7);" >/dev/null
   elif [ "$kind" = "dirty" ]; then
     "$DB" "$dir/t.db" "PRAGMA busy_timeout=5000; CREATE TABLE peer2(x); INSERT INTO peer2 VALUES(7);" >/dev/null
+  elif [ "$kind" = "tag" ] || [ "$kind" = "both" ]; then
+    "$DB" "$dir/t.db" "SELECT dolt_tag('keep','main','-m','peer');" >/dev/null
+  fi
+  if [ "$kind" = "remote" ] || [ "$kind" = "both" ]; then
+    "$DB" "$dir/t.db" "SELECT dolt_remote('add','up','file:///keep.db');" >/dev/null
+  fi
+  if [ "$kind" = "tag" ] || [ "$kind" = "remote" ] || [ "$kind" = "both" ]; then
+    "$DB" "$dir/t.db" "$clone_refs_sql" > "$dir/refs.before"
   fi
   rm -f "$pause"
   wait "$cpid" || true
@@ -2363,6 +2371,26 @@ check "lazy refusal keeps the peer commit and both rows" "$(cat "$PR/lazy/peer.h
 7" "$result"
 result=$("$DB" "$PR/lazy/t.db" "SELECT count(*) FROM sqlite_master WHERE name='r';")
 check "lazy refusal does not install the remote table" "0" "$result"
+
+for mode in full lazy; do
+  flags=""
+  if [ "$mode" = "lazy" ]; then flags="'--lazy',"; fi
+  for kind in tag remote both; do
+    name="${mode}_peer_${kind}"
+    clone_during_pause "$name" "$kind" "$flags"
+    result=$(cat "$PR/$name/clone.out")
+    check_match "$name clone refuses peer refs" "database is not empty" "$result"
+    result=$("$DB" "$PR/$name/t.db" "$clone_refs_sql")
+    check "$name clone peer refs survive refusal" "$(cat "$PR/$name/refs.before")" "$result"
+    result=$("$DB" "$PR/$name/t.db" "SELECT count(*) FROM sqlite_master WHERE name='r'; SELECT count(*) FROM dolt_status;")
+    check "$name refused clone leaves the target empty and clean" "0
+0" "$result"
+    result=$("$DB" "$PR/$name/t.db" "CREATE TABLE later_write(x); INSERT INTO later_write VALUES(42); SELECT x FROM later_write;")
+    check "$name refused clone permits a later write" "42" "$result"
+    result=$("$DB" "$PR/$name/t.db" "$clone_refs_sql")
+    check "$name later write preserves peer refs" "$(cat "$PR/$name/refs.before")" "$result"
+  done
+done
 
 echo "=== A fetch checks every refspec before updating tracking refs ==="
 FV="$TMPDIR/fetch_validate"

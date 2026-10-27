@@ -2914,21 +2914,24 @@ static void clonePauseBeforeRefs(void){
   }
 }
 
-/* 0: still an empty store, or one root commit whose working set matches it.
+/* 0: an empty store, or one clean root commit with no other refs.
 ** 1: anything else, including a commit that can no longer be read.
 ** 2: that root commit has uncommitted changes. A stored working set that
 ** still matches the root is the clean session, not a peer write. */
-static int cloneTargetOccupied(ChunkStore *pLocal){
+int doltliteCloneTargetOccupied(ChunkStore *pLocal){
   const BranchRef *aBr;
   DoltliteCommit commit;
   u8 *pData;
   int nData;
   int nBr;
   int dirty;
+  int extraRefs;
   int one;
   int rc;
 
-  if( chunkStoreIsEmpty(pLocal) ) return 0;
+  extraRefs = pLocal->refs.nTags || pLocal->refs.nRemotes
+           || pLocal->refs.nTracking || pLocal->refs.nSequences;
+  if( chunkStoreIsEmpty(pLocal) ) return extraRefs;
   nBr = 0;
   aBr = 0;
   refsTableGetBranches(&pLocal->refs, &nBr, &aBr);
@@ -2950,7 +2953,7 @@ static int cloneTargetOccupied(ChunkStore *pLocal){
   rc = scopedWorkingSetIsDirty(pLocal, &aBr[0], &one);
   if( rc!=SQLITE_OK ) return 1;
   dirty = one;
-  return dirty ? 2 : 0;
+  return dirty ? 2 : extraRefs;
 }
 
 int doltliteCloneLazy(
@@ -3026,7 +3029,7 @@ int doltliteCloneLazy(
   ** or write in that gap. Refuse before the snapshot, so failure leaves the
   ** refreshed refs in place. */
   if( rc==SQLITE_OK ){
-    int occupied = cloneTargetOccupied(pLocal);
+    int occupied = doltliteCloneTargetOccupied(pLocal);
     if( occupied ){
       if( pbOccupied ) *pbOccupied = occupied;
       rc = SQLITE_ERROR;
@@ -3161,7 +3164,7 @@ int doltliteClone(
   /* Restoring the pre-refresh hash would put the cleared refs back over a
   ** peer commit. Leave the refreshed tables and skip the install. */
   if( rc==SQLITE_OK ){
-    int occupied = cloneTargetOccupied(pLocal);
+    int occupied = doltliteCloneTargetOccupied(pLocal);
     if( occupied ){
       if( pbOccupied ) *pbOccupied = occupied;
       sqlite3_free(aRoots);

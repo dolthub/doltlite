@@ -91,9 +91,11 @@ int doltliteFetchInto(ChunkStore *pLocal, DoltliteRemote *pRemote,
                       const char *zRemoteName, const char *zBranch,
                       const char *zTrack, int *pbMissingBranch);
 
+int doltliteCloneTargetOccupied(ChunkStore *pLocal);
+
 /* *pbMissingBranch is set when the refs that would be installed have no
-** checkout branch. *pbOccupied is 1 when the target is no longer a single
-** root commit, and 2 when that root has a working set. Nothing is committed
+** checkout branch. *pbOccupied is 1 when the target is not empty,
+** and 2 when its root has a dirty working set. Nothing is committed
 ** in either case. */
 int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote,
                   const char *zUrl, const char *zKeepBranch,

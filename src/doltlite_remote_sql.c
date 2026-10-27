@@ -2146,25 +2146,13 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  if( !chunkStoreIsEmpty(cs) ){
-    int virgin = 0;
-    int nBr;
-    const BranchRef *aBr;
-    refsTableGetBranches(&cs->refs, &nBr, &aBr);
-    if( nBr==1 ){
-      DoltliteCommit c;
-      memset(&c, 0, sizeof(c));
-      if( doltliteLoadCommit(db, &aBr[0].commitHash, &c)==SQLITE_OK
-       && doltliteCommitParentCount(&c)==0 ){
-        virgin = 1;
-      }
-      doltliteCommitClear(&c);
-    }
-    if( !virgin ){
-      sqlite3_free(zRemoteOwned);
-      doltliteVcResultError(ctx, db, "database is not empty — clone into a fresh database");
-      return;
-    }
+  occupied = doltliteCloneTargetOccupied(cs);
+  if( occupied ){
+    sqlite3_free(zRemoteOwned);
+    doltliteVcResultError(ctx, db, occupied==2
+      ? "database has uncommitted changes — clone into a fresh database"
+      : "database is not empty — clone into a fresh database");
+    return;
   }
 
   rc = doltliteSaveTxnState(db, &savedState);

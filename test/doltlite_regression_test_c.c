@@ -4319,9 +4319,7 @@ static void run_clone_ref_install_survives_window_gc(void){
   removeDbFiles(clonePath);
 }
 
-/* An origin row makes a missing chunk record lazy-clone corruption text.
-** The clone refusal must stay a retryable clone error. */
-static void run_clone_origin_window_gc_names_clone(void){
+static void run_clone_origin_refuses_before_window_gc(void){
   sqlite3 *remoteDb = 0;
   sqlite3 *cloneDb = 0;
   sqlite3 *afterDb = 0;
@@ -4332,7 +4330,7 @@ static void run_clone_origin_window_gc_names_clone(void){
   int rc;
 
   zErr = 0;
-  printf("=== Clone Origin Window GC Names Clone Test ===\n\n");
+  printf("=== Clone Origin Refuses Before Window GC Test ===\n\n");
   make_dbpath(remotePath, sizeof(remotePath), "test_clone_origin_window_remote");
   make_dbpath(clonePath, sizeof(clonePath), "test_clone_origin_window_clone");
   removeDbFiles(remotePath);
@@ -4349,22 +4347,14 @@ static void run_clone_origin_window_gc_names_clone(void){
   check("clone_origin_add_origin", execSql(cloneDb, sql)==SQLITE_OK);
 
   gGcWindowPath = clonePath;
+  gGcWindowCollected = 0;
   doltliteTestSetBeforeRefInstallHook(gcInFetchWindow, 0);
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
   rc = sqlite3_exec(cloneDb, sql, 0, 0, &zErr);
-  if( gGcWindowCollected ){
-    check("clone_origin_reports_failure", rc!=SQLITE_OK);
-    check("clone_origin_busy_snapshot",
-          sqlite3_extended_errcode(cloneDb)==SQLITE_BUSY_SNAPSHOT);
-    check("clone_origin_names_clone",
-          zErr!=0 && strstr(zErr, "graph changed during install")!=0
-          && strstr(zErr, "push")==0
-          && strstr(zErr, "lazy clone")==0);
-  }else{
-    printf("  SKIP: clone_origin_reports_failure (in-window gc unavailable)\n");
-    printf("  SKIP: clone_origin_busy_snapshot (in-window gc unavailable)\n");
-    printf("  SKIP: clone_origin_names_clone (in-window gc unavailable)\n");
-  }
+  check("clone_origin_reports_failure", rc==SQLITE_ERROR);
+  check("clone_origin_not_empty",
+        zErr!=0 && strstr(zErr, "database is not empty")!=0);
+  check("clone_origin_skips_gc_window", gGcWindowCollected==0);
   sqlite3_free(zErr);
   doltliteTestSetBeforeRefInstallHook(0, 0);
   gGcWindowPath = 0;
@@ -4376,13 +4366,16 @@ static void run_clone_origin_window_gc_names_clone(void){
   check("clone_origin_reopen", open_db(clonePath, &afterDb)==SQLITE_OK);
   check("clone_origin_still_readable",
         execSqlSilent(afterDb, "SELECT dolt_hashof('HEAD')")==SQLITE_OK);
-  if( gGcWindowCollected ){
-    snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
-    check("clone_origin_retry_succeeds",
-          execSqlSilent(afterDb, sql)==SQLITE_OK);
-  }else{
-    printf("  SKIP: clone_origin_retry_succeeds (in-window gc unavailable)\n");
-  }
+  snprintf(sql, sizeof(sql),
+           "SELECT count(*) FROM dolt_remotes "
+           "WHERE name='origin' AND url='file://%s'", remotePath);
+  check("clone_origin_preserved",
+        strcmp(queryScalarText(afterDb, sql), "1")==0);
+  check("clone_origin_remove",
+        execSql(afterDb, "SELECT dolt_remote('remove','origin')")==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_origin_retry_succeeds",
+        execSqlSilent(afterDb, sql)==SQLITE_OK);
   check("clone_origin_rows",
         strcmp(queryScalarText(afterDb, "SELECT count(*) FROM t"), "1")==0);
 
@@ -20002,7 +19995,7 @@ static const RegressionCase aCases[] = {
   { "fetch_validation_reads_new_chunks", "Fetch Validation Reads New Chunks Test", run_fetch_validation_reads_new_chunks },
   { "fetch_window_gc_named_remote", "Fetch Window GC Named Remote Test", run_fetch_window_gc_named_remote },
   { "clone_ref_install_survives_window_gc", "Clone Ref Install Survives Window GC Test", run_clone_ref_install_survives_window_gc },
-  { "clone_origin_window_gc_names_clone", "Clone Origin Window GC Names Clone Test", run_clone_origin_window_gc_names_clone },
+  { "clone_origin_refuses_before_window_gc", "Clone Origin Refuses Before Window GC Test", run_clone_origin_refuses_before_window_gc },
   { "clone_deleted_branch_installs_nothing", "Clone Deleted Branch Installs Nothing Test", run_clone_deleted_branch_installs_nothing },
   { "pull_deleted_remote_branch", "Pull Deleted Remote Branch Test", run_pull_deleted_remote_branch },
   { "fetch_preserves_concurrent_local_refs", "Fetch Preserves Concurrent Local Refs Test", run_fetch_preserves_concurrent_local_refs },
