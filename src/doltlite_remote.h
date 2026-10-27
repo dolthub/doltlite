@@ -76,6 +76,8 @@ int doltliteValidateScopedRefsUpdate(ChunkStore *pStore, const u8 *pBlob,
 int doltliteInstallPushedRefsBlob(ChunkStore *pStore, const u8 *pBlob,
                                   int nBlob, const char *zRef);
 
+int doltliteStoreGraphIncomplete(ChunkStore *pStore, int *pbMissing);
+
 int doltliteValidateRefsTargetGraph(ChunkStore *pStore, const u8 *pBlob,
                                     int nBlob, const char *zRef,
                                     int *pbMissing);
