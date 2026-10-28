@@ -423,6 +423,15 @@ Table *sqlite3LocateTable(
     return 0;
   }
 
+#ifdef DOLTLITE_PROLLY
+  if( zDbase==0
+   && (sqlite3StrICmp(zName, "dolt_ignore")==0
+    || sqlite3StrICmp(zName, "dolt_docs")==0
+    || sqlite3StrICmp(zName, "dolt_tests")==0)
+  ){
+    zDbase = "main";
+  }
+#endif
   p = sqlite3FindTable(db, zName, zDbase);
   if( p==0 ){
 #ifndef SQLITE_OMIT_VIRTUALTABLE
@@ -2926,7 +2935,6 @@ void sqlite3EndTable(
   ** during schema replay (db->init.busy). */
   if( !db->init.busy
    && !db->init.imposterTable
-   && iDb!=1
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
    && IsOrdinaryTable(p)
    && sqlite3StrICmp(p->zName, "dolt_ignore")==0 ){
@@ -2966,7 +2974,6 @@ void sqlite3EndTable(
   ** TABLE must match so both paths produce the same schema Dolt uses. */
   if( !db->init.busy
    && !db->init.imposterTable
-   && iDb!=1
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
    && IsOrdinaryTable(p)
    && sqlite3StrICmp(p->zName, "dolt_docs")==0 ){
@@ -3002,7 +3009,6 @@ void sqlite3EndTable(
 
   if( !db->init.busy
    && !db->init.imposterTable
-   && iDb!=1
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
    && IsOrdinaryTable(p)
    && sqlite3StrICmp(p->zName, "dolt_tests")==0 ){
