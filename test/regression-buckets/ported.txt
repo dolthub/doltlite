@@ -151,6 +151,7 @@ doltlite_txn_state_cursor
 doltlite_add_rename_source
 doltlite_unrelated_table_staging
 doltlite_add_ignore_rename
+doltlite_ignore_values
 doltlite_pending_scan
 doltlite_dml_scan_cost
 doltlite_index_cost_tie

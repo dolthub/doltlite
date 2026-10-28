@@ -1,0 +1,69 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {kind value ignored} {
+  false 0 0
+  true 1 1
+  two 2 0
+  negative -1 0
+  tinyint-min -128 0
+  tinyint-max 127 0
+  int32-max 2147483647 0
+  int32-wrap 4294967297 0
+  int32-wrap-negative -4294967295 0
+  int64-max 9223372036854775807 0
+  int64-min -9223372036854775808 0
+  real-one 1.0 1
+  real-fraction 1.5 0
+  real-near-one 1.0000000001 0
+  real-small 0.0000000001 0
+  real-negative -1.5 0
+  sql-true TRUE 1
+  sql-false FALSE 0
+  text-one '1' 1
+  text-two '2' 0
+  text-prefix '1x' 0
+  text-other 'true' 0
+  blob-one X'31' 0
+} {
+  foreach operation {status dot all named commit force} {
+    reset_db
+    execsql {
+      CREATE TABLE base(id INTEGER PRIMARY KEY);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_tag('base');
+    }
+    execsql "INSERT INTO dolt_ignore VALUES('f_one',$value)"
+    set stored [execsql {SELECT typeof(ignored),hex(ignored) FROM dolt_ignore}]
+    execsql {CREATE TABLE f_one(id INTEGER PRIMARY KEY); INSERT INTO f_one VALUES(7)}
+    set name ignore-values-$kind-$operation
+    do_execsql_test $name-status {
+      SELECT count(*) FROM dolt_status WHERE table_name='f_one';
+    } [expr {!$ignored}]
+    do_execsql_test $name-working-diff {
+      SELECT count(*) FROM dolt_diff_summary('HEAD','WORKING') WHERE to_table_name='f_one';
+    } [expr {!$ignored}]
+    set ref STAGED
+    set staged [expr {!$ignored}]
+    switch $operation {
+      status {set staged 0}
+      dot {execsql {SELECT dolt_add('.')}}
+      all {execsql {SELECT dolt_add('-A')}}
+      named {execsql {SELECT dolt_add('f_one')}}
+      commit {execsql {SELECT dolt_commit('-Am','values')}; set ref HEAD}
+      force {execsql {SELECT dolt_add('-A','-f')}; set staged 1}
+    }
+    foreach phase {live reopen} {
+      if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+      do_execsql_test $name-$phase-staged "
+        SELECT count(*) FROM dolt_schema_diff('base','$ref') WHERE to_table_name='f_one';
+      " $staged
+      do_execsql_test $name-$phase-value {
+        SELECT typeof(ignored),hex(ignored) FROM dolt_ignore;
+      } $stored
+      do_execsql_test $name-$phase-integrity {PRAGMA integrity_check} ok
+    }
+  }
+}
+
+finish_test
