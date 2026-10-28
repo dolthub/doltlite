@@ -838,7 +838,7 @@ static char *cfrBuildSchema(const DoltliteColInfo *ci){
     sqlite3_str_appendall(pStr, ", ");
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"base_",", ",azReserved,
-            ArraySize(azReserved),-1,0)!=SQLITE_OK ){
+            ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
       sqlite3_str_reset(pStr);
       return 0;
     }
@@ -846,7 +846,7 @@ static char *cfrBuildSchema(const DoltliteColInfo *ci){
     sqlite3_str_appendall(pStr, ", ");
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"our_",", ",azReserved,
-            ArraySize(azReserved),-1,0)!=SQLITE_OK ){
+            ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
       sqlite3_str_reset(pStr);
       return 0;
     }
@@ -857,7 +857,7 @@ static char *cfrBuildSchema(const DoltliteColInfo *ci){
     sqlite3_str_appendall(pStr, ", ");
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"their_",", ",azReserved,
-            ArraySize(azReserved),-1,0)!=SQLITE_OK ){
+            ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
       sqlite3_str_reset(pStr);
       return 0;
     }
@@ -923,7 +923,8 @@ static void cfrEmitRecordCol(
   const DoltliteColInfo *pCols,
   i64 intKey
 ){
-  doltliteResultUserCol(ctx, pCols, pRec, nRec, intKey, 1, iUserCol);
+  doltliteResultSideCol(ctx, 0, pCols, pRec, nRec, intKey, 1, iUserCol,
+      pCols->aAffinity ? pCols->aAffinity[iUserCol] : SQLITE_AFF_BLOB);
 }
 
 static const char *cfrDiffType(const u8 *pBase, int nBase,
