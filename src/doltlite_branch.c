@@ -272,6 +272,7 @@ static void doltBranchParsedFunc(
   ChunkStore *cs = doltliteGetChunkStore(db);
   int hadExplicitTxn = !db->autoCommit;
   int hadSavepoint = db->pSavepoint!=0;
+  int bHookApproved = 0;
   int rc;
 
   if( !cs ){ branchError(ctx, hadSavepoint, doltliteVcUnavailableMessage(db)); return; }
@@ -296,6 +297,10 @@ static void doltBranchParsedFunc(
       m.nName = nPositional;
       m.azName = aPositional;
       m.force = force;
+      if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+        branchSealSavepointsOnError(ctx, hadSavepoint);
+        return;
+      }
       rc = doltliteMutateRefs(db, mutateBranchDelete, &m);
       if( rc==SQLITE_CONSTRAINT ){
         if( doltliteSessionHasUnresolvedConflicts(db) ){
@@ -354,6 +359,10 @@ static void doltBranchParsedFunc(
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
       m.force = force;
+      if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+        branchSealSavepointsOnError(ctx, hadSavepoint);
+        return;
+      }
       rc = doltliteMutateRefs(db, mutateBranchCopy, &m);
       if( rc!=SQLITE_OK ){
         branchNamedResultError(ctx, hadSavepoint, rc,
@@ -402,6 +411,10 @@ static void doltBranchParsedFunc(
           return;
         }
       }
+      if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+        branchSealSavepointsOnError(ctx, hadSavepoint);
+        return;
+      }
       rc = doltliteMutateRefs(db, mutateBranchMove, &m);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zPreparedBranch);
@@ -445,6 +458,10 @@ static void doltBranchParsedFunc(
           "cannot force-update the current branch");
         return;
       }
+      if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+        branchSealSavepointsOnError(ctx, hadSavepoint);
+        return;
+      }
       rc = doltliteMutateRefs(db, mutateBranchCreate, &m);
       if( rc!=SQLITE_OK ){
         if( m.resolveRc!=SQLITE_OK ){
@@ -461,7 +478,10 @@ static void doltBranchParsedFunc(
   }
 
   if( hadExplicitTxn ){
+    int (*xHook)(void*) = db->xCommitCallback;
+    if( bHookApproved ) db->xCommitCallback = 0;
     rc = doltliteVcSealBranchStyleTxn(db);
+    db->xCommitCallback = xHook;
     if( rc!=SQLITE_OK ){
       doltliteVcResultSealError(ctx, db, rc);
       branchSealSavepointsOnError(ctx, hadSavepoint);

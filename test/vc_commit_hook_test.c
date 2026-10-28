@@ -158,6 +158,55 @@ int main(void){
   check("commit veto inside BEGIN keeps HEAD", scalarInt(db,
       "SELECT count(*) FROM dolt_log WHERE message='vetoed'")==0);
 
+  {
+    static const char *const azOp[] = {
+      "SELECT dolt_cherry_pick('side')",
+      "SELECT dolt_revert('HEAD~1')",
+      "SELECT dolt_reset('--hard','HEAD~1')",
+    };
+    int i;
+    for(i=0; i<3; i++){
+      char zName[96];
+      int nLog, nRows;
+      sqlite3_commit_hook(db, 0, 0);
+      exec(db, "ROLLBACK");
+      nLog = scalarInt(db, "SELECT count(*) FROM dolt_log");
+      nRows = scalarInt(db, "SELECT count(*) FROM t");
+      sqlite3_commit_hook(db, rejectCommit, 0);
+      snprintf(zName, sizeof(zName), "veto inside BEGIN refuses: %s", azOp[i]);
+      exec(db, "BEGIN");
+      check(zName, (exec(db, azOp[i])&255)==SQLITE_CONSTRAINT);
+      sqlite3_commit_hook(db, 0, 0);
+      exec(db, "ROLLBACK");
+      snprintf(zName, sizeof(zName), "veto inside BEGIN keeps HEAD: %s", azOp[i]);
+      check(zName, scalarInt(db, "SELECT count(*) FROM dolt_log")==nLog);
+      snprintf(zName, sizeof(zName), "veto inside BEGIN keeps rows: %s", azOp[i]);
+      check(zName, scalarInt(db, "SELECT count(*) FROM t")==nRows
+          && scalarInt(db, "SELECT count(*) FROM dolt_status")==0);
+    }
+  }
+
+  sqlite3_commit_hook(db, 0, 0);
+  exec(db, "ROLLBACK");
+  sqlite3_commit_hook(db, rejectCommit, 0);
+  nCommit = 0;
+  exec(db, "BEGIN; INSERT INTO t VALUES(80,'branch veto');");
+  check("branch veto inside BEGIN refuses",
+      (exec(db, "SELECT dolt_branch('vetoed_branch')")&255)==SQLITE_CONSTRAINT);
+  sqlite3_commit_hook(db, 0, 0);
+  exec(db, "ROLLBACK");
+  check("branch veto inside BEGIN asks once", nCommit==1);
+  check("branch veto inside BEGIN keeps refs", scalarInt(db,
+      "SELECT count(*) FROM dolt_branches WHERE name='vetoed_branch'")==0);
+  check("branch veto inside BEGIN discards rows", scalarInt(db,
+      "SELECT count(*) FROM t WHERE a=80")==0);
+  sqlite3_commit_hook(db, onCommit, 0);
+  expectHooks(db, "branch beside rows inside BEGIN",
+      "BEGIN; INSERT INTO t VALUES(81,'branch'); SELECT dolt_branch('kept_branch'); COMMIT;", 1);
+  check("branch beside rows keeps both", scalarInt(db,
+      "SELECT count(*) FROM dolt_branches WHERE name='kept_branch'")==1
+      && scalarInt(db, "SELECT count(*) FROM t WHERE a=81")==1);
+
   sqlite3_commit_hook(db, 0, 0);
   sqlite3_rollback_hook(db, 0, 0);
   sqlite3_close(db);

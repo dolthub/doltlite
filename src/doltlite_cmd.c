@@ -191,6 +191,64 @@ int doltliteDeferJoinedSavepointRelease(sqlite3 *db){
   return 1;
 }
 
+/* What COMMIT would refuse besides the commit hook, checked before a
+** command makes anything durable. */
+static int cmdCommitRefusal(sqlite3_context *ctx){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  int nFileWrite = 0;
+  int hasDoltliteWrite = 0;
+  int i;
+  if( sqlite3VdbeCheckFkDeferred(ctx->pVdbe)!=SQLITE_OK ){
+    int rc = ctx->pVdbe->rc;
+    sqlite3_result_error(ctx, ctx->pVdbe->zErrMsg, -1);
+    sqlite3_result_error_code(ctx, rc);
+    return rc;
+  }
+  for(i=0; i<db->nDb; i++){
+    Btree *pWrite = db->aDb[i].pBt;
+    if( i!=1 && pWrite && sqlite3BtreeTxnState(pWrite)==SQLITE_TXN_WRITE
+     && !sqlite3PagerIsMemdb(sqlite3BtreePager(pWrite))
+     && sqlite3BtreeGetFilename(pWrite)[0]
+     && sqlite3BtreeHasPendingChanges(pWrite) ){
+      nFileWrite++;
+      hasDoltliteWrite |= sqlite3BtreeIsDoltliteFormat(pWrite);
+    }
+  }
+  if( nFileWrite>1 && hasDoltliteWrite ){
+    sqlite3_result_error(ctx,
+        "atomic commit across multiple file-backed databases is not supported", -1);
+    return SQLITE_ERROR;
+  }
+  return SQLITE_OK;
+}
+
+/* For a ref-only command that seals the caller's transaction with COMMIT
+** after its refs are durable: refuse first whatever that COMMIT would.
+** A hook that approves here is not asked again by the seal. */
+int doltliteVcSealPrecheck(sqlite3_context *ctx, int *pbHookApproved){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  int bWrite = 0;
+  int i;
+  int rc;
+  *pbHookApproved = 0;
+  if( db->autoCommit ) return SQLITE_OK;
+  rc = cmdCommitRefusal(ctx);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<db->nDb; i++){
+    Btree *pBt = db->aDb[i].pBt;
+    if( pBt && sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE ) bWrite = 1;
+  }
+  if( !bWrite || !db->xCommitCallback ) return SQLITE_OK;
+  if( db->xCommitCallback(db->pCommitArg) ){
+    (void)sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
+    sqlite3_result_error(ctx, sqlite3ErrStr(SQLITE_CONSTRAINT), -1);
+    sqlite3_result_error_code(ctx, SQLITE_CONSTRAINT_COMMITHOOK);
+    return SQLITE_CONSTRAINT_COMMITHOOK;
+  }
+  *pbHookApproved = 1;
+  return SQLITE_OK;
+}
+
 static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
   AtomicJoinedCommand *s = p->pAtomicCommand;
   BtShared *pBt = p->pBt;
@@ -201,36 +259,14 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
   ProllyHash catalog;
   int installed = 0;
   int vetoed = 0;
-  int nFileWrite = 0;
-  int hasDoltliteWrite = 0;
-  int i;
   int rc = SQLITE_OK;
   int restoreRc;
   int sealError = s && s->bSealOnError && ctx->isError==SQLITE_ERROR;
   if( !s ) return SQLITE_OK;
   if( (!ctx->isError || sealError) && p->bAtomicCommandSeal ){
     rc = sqlite3VtabSync(db, ctx->pVdbe);
-    if( rc==SQLITE_OK && sqlite3VdbeCheckFkDeferred(ctx->pVdbe)!=SQLITE_OK ){
-      rc = ctx->pVdbe->rc;
-      sqlite3_result_error(ctx, ctx->pVdbe->zErrMsg, -1);
-      sqlite3_result_error_code(ctx, rc);
-    }
+    if( rc==SQLITE_OK ) rc = cmdCommitRefusal(ctx);
     if( rc==SQLITE_OK && db->nVdbeWrite>0 ) rc = SQLITE_BUSY;
-    for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
-      Btree *pWrite = db->aDb[i].pBt;
-      if( i!=1 && pWrite && sqlite3BtreeTxnState(pWrite)==SQLITE_TXN_WRITE
-       && !sqlite3PagerIsMemdb(sqlite3BtreePager(pWrite))
-       && sqlite3BtreeGetFilename(pWrite)[0]
-       && sqlite3BtreeHasPendingChanges(pWrite) ){
-        nFileWrite++;
-        hasDoltliteWrite |= sqlite3BtreeIsDoltliteFormat(pWrite);
-      }
-    }
-    if( nFileWrite>1 && hasDoltliteWrite ){
-      sqlite3_result_error(ctx,
-          "atomic commit across multiple file-backed databases is not supported", -1);
-      rc = SQLITE_ERROR;
-    }
     if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, &catalog);
     if( rc==SQLITE_OK ) rc = doltliteSaveWorkingSetWithHash(db, &catalog);
     if( rc==SQLITE_OK ) rc = chunkStoreSerializeRefs(cs);
@@ -355,7 +391,8 @@ static int cmdScopeBegin(
   }
   pScope->bJoined = rc==SQLITE_OK;
   pScope->bInBegin = pScope->bJoined && !doltliteSavepointIsTopLevelTxn(db);
-  if( pScope->bInBegin && eScope==DOLTLITE_CMD_ATOMIC ){
+  if( pScope->bInBegin
+   && (eScope==DOLTLITE_CMD_ATOMIC || eScope==DOLTLITE_CMD_NOWAIT) ){
     rc = cmdBeginAtomicJoined(pMain);
     pScope->bAtomic = rc==SQLITE_OK;
     if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
@@ -568,7 +605,9 @@ static int doltliteCommandScope(const char *zName){
   }
   if( sqlite3_stricmp(zName, "dolt_commit")==0
    || sqlite3_stricmp(zName, "dolt_checkout")==0
-   || sqlite3_stricmp(zName, "dolt_merge")==0 ){
+   || sqlite3_stricmp(zName, "dolt_merge")==0
+   || sqlite3_stricmp(zName, "dolt_cherry_pick")==0
+   || sqlite3_stricmp(zName, "dolt_revert")==0 ){
     return DOLTLITE_CMD_ATOMIC;
   }
   return DOLTLITE_CMD_SCOPED;
