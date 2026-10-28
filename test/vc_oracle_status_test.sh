@@ -391,6 +391,43 @@ ALTER TABLE t2 RENAME TO t3;
 SELECT dolt_add('t3');
 "
 
+for key_type in integer text; do
+  key_sql=INTEGER
+  [ "$key_type" != text ] || key_sql='VARCHAR(20)'
+  replacement="
+CREATE TABLE t(id $key_sql PRIMARY KEY, name TEXT);
+INSERT INTO t VALUES (1,'alice'),(2,'bob');
+SELECT dolt_commit('-Am','base');
+DROP TABLE t;
+CREATE TABLE u(id $key_sql PRIMARY KEY, name TEXT);
+INSERT INTO u VALUES (1,'widget');"
+  oracle "unrelated_${key_type}_unstaged" "$replacement"
+  oracle "unrelated_${key_type}_stage_new" "$replacement
+SELECT dolt_add('u');"
+  oracle "unrelated_${key_type}_stage_drop" "$replacement
+SELECT dolt_add('t');"
+  oracle "unrelated_${key_type}_reset_new" "$replacement
+SELECT dolt_add('u');
+SELECT dolt_reset('u');"
+  oracle "unrelated_${key_type}_commit_new" "$replacement
+SELECT dolt_add('u');
+SELECT dolt_commit('-m','add u only');"
+done
+
+rename_case=0
+for rename_edit in "UPDATE u SET name='changed' WHERE id=1" \
+                   "DELETE FROM u WHERE id=1" \
+                   "UPDATE u SET name='changed'"; do
+  rename_case=$((rename_case+1))
+  oracle "rename_after_edit_$rename_case" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+INSERT INTO t VALUES (1,'alice'),(2,'bob');
+SELECT dolt_commit('-Am','base');
+ALTER TABLE t RENAME TO u;
+$rename_edit;
+SELECT dolt_add('u');"
+done
+
 echo "--- filtered scans ---"
 
 status_filter_pushdown "filtered_table_name_matches_unfiltered" "

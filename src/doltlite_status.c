@@ -830,7 +830,7 @@ static int statusSchemaHashMatchesRename(
   return 0;
 }
 
-static int statusRootsShareAnyKey(
+static int statusRootsMatchRename(
   sqlite3 *db,
   const struct TableEntry *pOld,
   const struct TableEntry *pNew,
@@ -839,7 +839,7 @@ static int statusRootsShareAnyKey(
   ChunkStore *cs;
   ProllyCache *cache;
   ProllyCursor curOld, curNew;
-  int rc, res;
+  int rc, res, keysEqual = 1;
 
   *pShared = 0;
   if( !pOld || !pNew ) return SQLITE_OK;
@@ -852,32 +852,35 @@ static int statusRootsShareAnyKey(
   if( !cs || !cache ) return SQLITE_ERROR;
 
   prollyCursorInit(&curOld, cs, cache, &pOld->root, pOld->flags);
-  rc = prollyCursorFirst(&curOld, &res);
-  if( rc!=SQLITE_OK || res!=0 || !prollyCursorIsValid(&curOld) ){
-    prollyCursorClose(&curOld);
-    return rc;
-  }
-
   prollyCursorInit(&curNew, cs, cache, &pNew->root, pNew->flags);
-  if( pOld->flags & BTREE_INTKEY ){
-    i64 iKey = prollyCursorIntKey(&curOld);
-    rc = prollyCursorSeekInt(&curNew, iKey, &res);
-  }else{
-    const u8 *pKey = 0;
-    int nKey = 0;
-    prollyCursorKey(&curOld, &pKey, &nKey);
-    rc = prollyCursorSeekBlob(&curNew, pKey, nKey, &res);
+  rc = prollyCursorFirst(&curOld, &res);
+  if( rc==SQLITE_OK ) rc = prollyCursorFirst(&curNew, &res);
+  while( rc==SQLITE_OK && prollyCursorIsValid(&curOld)
+                      && prollyCursorIsValid(&curNew) ){
+    const u8 *pOldKey, *pNewKey;
+    int nOldKey, nNewKey, cmp;
+    prollyCursorKey(&curOld, &pOldKey, &nOldKey);
+    prollyCursorKey(&curNew, &pNewKey, &nNewKey);
+    cmp = prollyKeyCmp(pOldKey, nOldKey, pNewKey, nNewKey);
+    if( cmp!=0 ) keysEqual = 0;
+    if( cmp==0 ){
+      const u8 *pOldVal, *pNewVal;
+      int nOldVal, nNewVal;
+      prollyCursorValue(&curOld, &pOldVal, &nOldVal);
+      prollyCursorValue(&curNew, &pNewVal, &nNewVal);
+      rc = prollyValuesEqual(pOldVal, nOldVal, pNewVal, nNewVal, pShared);
+      if( rc!=SQLITE_OK || *pShared ) break;
+    }
+    if( cmp<=0 ) rc = prollyCursorNext(&curOld);
+    if( rc==SQLITE_OK && cmp>=0 ) rc = prollyCursorNext(&curNew);
   }
-
+  if( rc==SQLITE_OK && keysEqual && !prollyCursorIsValid(&curOld)
+                                && !prollyCursorIsValid(&curNew) ){
+    *pShared = 1;
+  }
   prollyCursorClose(&curOld);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&curNew);
-    return rc;
-  }
-
-  *pShared = res==0 && prollyCursorIsValid(&curNew);
   prollyCursorClose(&curNew);
-  return SQLITE_OK;
+  return rc;
 }
 
 /* Like isRenamePair but without the same-number gate. EMPTY roots compare
@@ -932,7 +935,7 @@ static int isRenamePairContent(
      || (prollyHashIsEmpty(&pA->root) && prollyHashIsEmpty(&pB->root)) ){
       shared = 1;
     }else{
-      rc = statusRootsShareAnyKey(db, pA, pB, &shared);
+      rc = statusRootsMatchRename(db, pA, pB, &shared);
     }
     if( rc==SQLITE_OK && shared ) *pMatch = 1;
   }else if( rootsEqual ){
