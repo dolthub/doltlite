@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
         - platform: ubuntu
-          runs-on: ubuntu-latest
+          runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/checked-build
@@ -39,7 +39,7 @@ jobs:
   sqllogictest-build:
     name: sqllogictest
     if: inputs.suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -93,7 +93,7 @@ jobs:
   coverage-build:
     name: coverage
     if: inputs.suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       CC: clang
@@ -201,7 +201,7 @@ jobs:
   benchmark-build:
     name: optimized-benchmark
     if: inputs.suites || inputs.benchmarks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -290,7 +290,7 @@ jobs:
       matrix:
         include:
         - platform: ubuntu
-          runs-on: ubuntu-latest
+          runs-on: ubuntu-24.04
           warning-flags: ''
     env:
       ASAN_CFLAGS: -O1 -g -Werror ${{ matrix.warning-flags }} -fsanitize=address,undefined -fno-omit-frame-pointer
@@ -305,7 +305,7 @@ jobs:
   tsan-build:
     name: tsan
     if: inputs.suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       TSAN_CFLAGS: -O1 -g -Werror -Wno-comment -fsanitize=thread -fno-omit-frame-pointer
@@ -367,7 +367,7 @@ jobs:
   crash-build:
     name: crash
     if: inputs.suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -418,7 +418,7 @@ jobs:
   fuzz-build:
     name: libfuzzer
     if: inputs.suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       FUZZ_CFLAGS: -O1 -g -Werror -fsanitize=fuzzer-no-link,address -fno-omit-frame-pointer -fno-sanitize-recover=address
@@ -479,7 +479,7 @@ jobs:
   compat-build:
     name: compatibility-references
     if: inputs.suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -508,7 +508,7 @@ jobs:
   assert-build:
     name: assert-enabled
     if: inputs.suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:

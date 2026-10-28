@@ -34,7 +34,7 @@ concurrency:
 jobs:
   build:
     if: ${{ !inputs.source_run_id }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -96,7 +96,7 @@ jobs:
   sysbench:
     name: ${{ matrix.suite.name }}-keys
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -170,7 +170,7 @@ jobs:
 
   version-control:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
 
     steps:
@@ -266,7 +266,7 @@ jobs:
   remote-scale:
     needs: [build, sysbench, version-control]
     if: ${{ always() && !cancelled() && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
@@ -332,7 +332,7 @@ jobs:
       - sysbench
       - version-control
       - remote-scale
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -564,7 +564,7 @@ jobs:
   watchdog:
     needs: [build, sysbench, version-control, remote-scale, report]
     if: failure() || cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
     - name: Skip when a step-level reporter already covered this run

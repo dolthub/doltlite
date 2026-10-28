@@ -20,7 +20,7 @@ permissions:
 jobs:
   benchmark:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     concurrency:
       group: seed-benchmark-cache
@@ -69,7 +69,7 @@ jobs:
 
   compatibility:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     concurrency:
       group: seed-compatibility-cache
@@ -87,7 +87,7 @@ jobs:
 
   sqllogictest:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     concurrency:
       group: seed-sqllogictest-cache
@@ -106,7 +106,7 @@ jobs:
     if: >-
       github.event_name != 'push' &&
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     concurrency:
       group: seed-development-debug-cache
@@ -221,7 +221,7 @@ jobs:
   watchdog:
     needs: [benchmark, compatibility, sqllogictest, development-debug, macos-packages, macos-builds]
     if: failure() || cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

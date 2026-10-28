@@ -9,7 +9,7 @@ permissions:
 jobs:
   publish:
     if: github.repository == 'dolthub/doltlite'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     concurrency:
       group: doltlite-driver-publish

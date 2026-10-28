@@ -5,7 +5,7 @@ on:
 
 jobs:
   scaling:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
         python3 test/vc_head_history_scale.py build-plain/doltlite
 
   concurrency-stress:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -58,7 +58,7 @@ jobs:
       timeout-minutes: 9
 
   prolly-txn-stress:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -120,7 +120,7 @@ jobs:
         ./threadtest5 'file:/tmp/doltlite-threadtest5.db?mode=rwc' -num-workers 8
 
   vc-concurrency-stress:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -154,7 +154,7 @@ jobs:
       timeout-minutes: 9
 
   sqllogictest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -180,7 +180,7 @@ jobs:
 
   oracle-tests:
     name: oracle-tests-${{ matrix.group }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -272,7 +272,7 @@ jobs:
         retention-days: 1
 
   sql-differential:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
 
     steps:
@@ -326,7 +326,7 @@ jobs:
 
   sqlite-regression:
     name: sqlite-regression-${{ matrix.group }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       TESTFIXTURE_VARIANT: coverage
@@ -435,7 +435,7 @@ jobs:
 
   coverage-native:
     name: coverage-native-${{ matrix.suite }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CC: clang
@@ -508,7 +508,7 @@ jobs:
         retention-days: 1
 
   coverage-remotes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -569,7 +569,7 @@ jobs:
       - sqlite-regression
       - coverage-native
       - coverage-remotes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -679,7 +679,7 @@ jobs:
   # format signature is unchanged, and must be refused cleanly when it
   # differs. Format changes without a minor version bump fail the suite.
   compat:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4

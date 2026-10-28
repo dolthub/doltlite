@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Starts at 1h/target (the `duration` input); the timeout is left with
     # headroom so the run time can be raised later — up to GitHub's 6h job
     # ceiling — without touching this value.
@@ -191,7 +191,7 @@ jobs:
   # reproducer, so nothing is lost by not knowing in advance which seeds a
   # given night will draw.
   differential:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     steps:
@@ -321,7 +321,7 @@ jobs:
   watchdog:
     needs: [fuzz, differential]
     if: failure() || cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
     - name: Skip when a step-level reporter already covered this run

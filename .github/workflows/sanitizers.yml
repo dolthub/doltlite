@@ -6,7 +6,7 @@ on:
 jobs:
   asan-ubsan:
     name: asan-ubsan-${{ matrix.suite }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -128,7 +128,7 @@ jobs:
       run: cd build && ./doltlite_regression_test_c all
 
   tsan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     env:

@@ -40,7 +40,7 @@ jobs:
   no-dead-code:
     name: no-dead-code
     if: inputs.suites || inputs.platforms
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
