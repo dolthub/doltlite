@@ -163,4 +163,19 @@ run_test_error_output_match "compositepk_full_delete_clears" "BEGIN; SELECT dolt
 DELETE FROM dolt_conflicts_t; SELECT 'CF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^CF\\|0$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 rm -f "$DB"
 
+DB=/tmp/test_cfrow_decl_$$.db
+rm -f "$DB"
+echo "CREATE TABLE t(k TEXT COLLATE NOCASE PRIMARY KEY, r REAL);
+INSERT INTO t VALUES('a',1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('b');
+UPDATE t SET r=2; SELECT dolt_commit('-am','m');
+SELECT dolt_checkout('b'); UPDATE t SET r=3; SELECT dolt_commit('-am','b');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_error_output_match "decl_real_affinity" "BEGIN; SELECT dolt_merge('b');
+SELECT 'CD|' || quote(base_r) || '|' || quote(our_r) || '|' || quote(their_r) || '|' || (their_r/2) FROM dolt_conflicts_t; ROLLBACK;" "^CD\\|1\\.0\\|2\\.0\\|3\\.0\\|1\\.5$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)'
+run_test_error_output_match "decl_nocase_key" "BEGIN; SELECT dolt_merge('b');
+SELECT 'CN|' || count(*) FROM dolt_conflicts_t WHERE our_k='A'; ROLLBACK;" "^CN\\|1$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)'
+rm -f "$DB"
+
 dltest_finish

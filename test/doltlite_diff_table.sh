@@ -744,4 +744,21 @@ run_test "lazy_from_commit_limit" \
 
 rm -f "$DBLAZY"
 
+# Value columns carry the source column's affinity and collation.
+DBDECL=/tmp/test_diff_table_decl_$$.db
+rm -f "$DBDECL"
+dltest_run_sql "CREATE TABLE t(k TEXT COLLATE NOCASE PRIMARY KEY, r REAL);
+INSERT INTO t VALUES('a',1),('1',1);
+SELECT dolt_commit('-Am','init');
+UPDATE t SET r=3;" "$DBDECL" >/dev/null
+run_test "decl_real_affinity" \
+  "SELECT to_k||'|'||quote(to_r)||'|'||(to_r/2)||'|'||quote(from_r) FROM dolt_diff_t
+     WHERE to_commit='WORKING' ORDER BY to_k;" \
+  "1|3.0|1.5|1.0
+a|3.0|1.5|1.0" "$DBDECL"
+run_test "decl_nocase_and_text_affinity" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING' AND (to_k='A' OR to_k=1);" \
+  "2" "$DBDECL"
+rm -f "$DBDECL"
+
 dltest_finish
