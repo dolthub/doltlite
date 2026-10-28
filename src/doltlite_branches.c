@@ -271,7 +271,10 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   return SQLITE_OK;
 }
 static int brRowid(sqlite3_vtab_cursor *c, sqlite3_int64 *r){
-  *r=((BrCur*)c)->iRow; return SQLITE_OK;
+  BrCur *pCur = (BrCur*)c;
+  *r = doltliteFnv1aRowid(doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET,
+                                         pCur->aSnap[pCur->iRow].zName));
+  return SQLITE_OK;
 }
 static int brBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   (void)v;

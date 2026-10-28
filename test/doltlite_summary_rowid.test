@@ -1,0 +1,77 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc check_summary_rowids {prefix source key names} {
+  execsql "
+    DROP TABLE IF EXISTS temp.expected_summary;
+    CREATE TEMP TABLE expected_summary AS
+      SELECT rowid AS rid,\"$key\" AS name FROM $source;
+  "
+  do_execsql_test $prefix-names {
+    SELECT name FROM expected_summary ORDER BY name;
+  } $names
+  foreach name $names {
+    set rid [execsql "SELECT rid FROM expected_summary WHERE name='$name'"]
+    do_execsql_test $prefix-point-$name "
+      SELECT rowid FROM $source WHERE \"$key\"='$name';
+    " $rid
+    set unmatched [execsql "SELECT name FROM expected_summary
+                            WHERE name!='$name' ORDER BY name"]
+    do_execsql_test $prefix-right-join-$name "
+      SELECT v.\"$key\" FROM (SELECT '$name' AS name) q
+      RIGHT JOIN $source v ON v.\"$key\"=q.name
+      WHERE q.name IS NULL ORDER BY v.\"$key\";
+    " $unmatched
+  }
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+  INSERT INTO t VALUES(1,1);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('other');
+  SELECT dolt_tag('a');
+  SELECT dolt_tag('b');
+}
+foreach phase {live reopen} {
+  if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+  check_summary_rowids summary-rowid-branches-$phase dolt_branches name {main other}
+  check_summary_rowids summary-rowid-tags-$phase dolt_tags tag_name {a b}
+}
+
+foreach kind {conflict violation} {
+  reset_db
+  set constraint {}
+  if {$kind eq "violation"} {set constraint UNIQUE}
+  foreach table {a b} {
+    execsql "CREATE TABLE ${table}(id INTEGER PRIMARY KEY,v INT $constraint)"
+    if {$kind eq "conflict"} {execsql "INSERT INTO $table VALUES(1,1)"}
+  }
+  execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_checkout('-b','side')}
+  foreach table {a b} {
+    if {$kind eq "conflict"} {
+      execsql "UPDATE $table SET v=10"
+    } else {
+      execsql "INSERT INTO $table VALUES(1,10)"
+    }
+  }
+  execsql {SELECT dolt_commit('-Am','side'); SELECT dolt_checkout('main')}
+  foreach table {a b} {
+    if {$kind eq "conflict"} {
+      execsql "UPDATE $table SET v=11"
+    } else {
+      execsql "INSERT INTO $table VALUES(2,10)"
+    }
+  }
+  execsql {SELECT dolt_commit('-Am','main'); BEGIN}
+  do_test summary-rowid-$kind-merge {
+    lindex [catchsql {SELECT dolt_merge('side')}] 0
+  } 1
+  set source dolt_conflicts
+  if {$kind eq "violation"} {set source dolt_constraint_violations}
+  check_summary_rowids summary-rowid-$kind $source table {a b}
+  execsql ROLLBACK
+}
+
+finish_test
