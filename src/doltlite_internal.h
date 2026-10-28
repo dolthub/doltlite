@@ -2097,6 +2097,8 @@ int doltliteForEachConstraintViolationTable(sqlite3 *db,
   int (*xTable)(void*, const char*, int), void *pCtx);
 int doltliteForEachConflict(sqlite3 *db,
     int (*xConflict)(void*, const char*, int), void *pCtx);
+int doltliteForEachConflictAsDolt(sqlite3 *db,
+    int (*xConflict)(void*, const char*, int), void *pCtx);
 
 static SQLITE_INLINE const char *doltliteVcUnavailableMessage(sqlite3 *db){
   if( doltliteIsStockSqliteDb(db) ){

@@ -28,7 +28,8 @@ oracle() {
            | tr -d '\r' | sort)
 
   local dolt_all
-  dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$resolve_and_query")")
+  dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$resolve_and_query")" \
+             | sed -E 's/FOR EACH ROW BEGIN (.*); END;/FOR EACH ROW \1;/')
 
   local dt_out
   dt_out=$(
@@ -698,6 +699,42 @@ for side in ours theirs; do
   oracle "resolve_${side}_view_add_add" "$VIEW_CONFLICT_SETUP" \
     "SELECT dolt_conflicts_resolve('--$side', 'dolt_schemas');
 SELECT CONCAT('R|', x) FROM vv;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+done
+
+echo "--- trigger conflict resolved through dolt_schemas ---"
+
+TRIGGER_CONFLICT_SETUP="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+CREATE TABLE log(x INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+SELECT dolt_branch('b');
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW BEGIN INSERT INTO log VALUES(1); END;
+CREATE VIEW vv AS SELECT id AS x FROM t;
+UPDATE t SET v = 11;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_side');
+SELECT dolt_checkout('b');
+CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW BEGIN INSERT INTO log VALUES(2); END;
+CREATE VIEW vv AS SELECT v AS x FROM t;
+UPDATE t SET v = 12;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b_side');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b');"
+oracle "schema_object_conflicts_listed" "$TRIGGER_CONFLICT_SETUP" \
+  "SELECT CONCAT('R|', \`table\`, '|', num_conflicts) FROM dolt_conflicts;
+SELECT CONCAT('R|status|', table_name, '|', status) FROM dolt_status WHERE table_name = 'dolt_schemas';
+SELECT CONCAT('R|schema_conflicts|', count(*)) FROM dolt_schema_conflicts;"
+for side in ours theirs; do
+  oracle "resolve_${side}_trigger_and_view" "$TRIGGER_CONFLICT_SETUP" \
+    "SELECT dolt_conflicts_resolve('--$side', 'dolt_schemas');
+SELECT dolt_conflicts_resolve('--$side', 't');
+INSERT INTO t VALUES(2, 20);
+SELECT CONCAT('R|log|', x) FROM log;
+SELECT CONCAT('R|view|', x) FROM vv WHERE x IS NOT NULL;
 SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
 done
 

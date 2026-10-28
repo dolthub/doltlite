@@ -320,8 +320,22 @@ $want
   done
 done
 
-view_conflict_db "$DBV" "" "CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;" \
-  "CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 2; END;"
+# A trigger conflict is a dolt_schemas conflict, as in Dolt, not a schema
+# conflict on the trigger's table.
+TRIG_O="CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES(1); END;"
+TRIG_T="CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES(2); END;"
+for side in ours theirs; do
+  view_conflict_db "$DBV" "CREATE TABLE log(x);" "$TRIG_O" "$TRIG_T"
+  if [ $side = ours ]; then want=1; else want=2; fi
+  out=$(printf "BEGIN;\nSELECT dolt_merge('b');\nSELECT 'cf|' || \"table\" || '|' || num_conflicts FROM dolt_conflicts;\nSELECT 'sc|' || count(*) FROM dolt_schema_conflicts;\nSELECT 'st|' || table_name || '|' || status FROM dolt_status;\nSELECT dolt_conflicts_resolve('--%s','tr');\nCOMMIT;\nINSERT INTO t VALUES(2,20);\nSELECT 'log|' || group_concat(x) FROM log;\n" "$side" \
+        | $DOLTLITE "$DBV" 2>/dev/null | grep '|')
+  dltest_assert_equal "trigger_conflict_resolve_${side}" "$out" "cf|dolt_schemas|1
+sc|0
+st|dolt_schemas|conflict
+log|$want"
+done
+
+view_conflict_db "$DBV" "" "ALTER TABLE t ADD COLUMN c INT;" "ALTER TABLE t ADD COLUMN c TEXT;"
 run_test_error_match "table_schema_conflict_still_refused" \
   "BEGIN; SELECT dolt_merge('b');
 SELECT dolt_conflicts_resolve('--theirs','t');" \

@@ -1368,7 +1368,6 @@ static int mergePass1NoteAuxSchemaConflicts(MergePass1Ctx *c){
       SchemaEntry *pOurs;
       SchemaEntry *pTheirs;
       const char *zName = a[i].zName;
-      const char *zTable;
       int oursChanged;
       int theirsChanged;
       if( !mergePass1IsAuxSchemaType(a[i].zType) || !zName ) continue;
@@ -1388,9 +1387,7 @@ static int mergePass1NoteAuxSchemaConflicts(MergePass1Ctx *c){
           c->aAncSchema, c->nAncSchema, c->aTheirsSchema, c->nTheirsSchema,
           zName);
       if( !oursChanged || !theirsChanged ) continue;
-      zTable = pOurs && pOurs->zTblName ? pOurs->zTblName
-             : (pTheirs && pTheirs->zTblName ? pTheirs->zTblName : zName);
-      rc = mergePass1NoteSchemaConflict(c, zTable, zName);
+      rc = mergePass1NoteSchemaConflict(c, zName, zName);
       if( rc!=SQLITE_OK ) return rc;
     }
   }

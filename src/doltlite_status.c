@@ -1698,7 +1698,7 @@ status_done:
     rc = doltliteForEachConstraintViolationTable(
         db, statusAddConstraintViolation, &ctx);
     if( rc==SQLITE_OK ){
-      rc = doltliteForEachConflict(db, statusAddConflict, &ctx);
+      rc = doltliteForEachConflictAsDolt(db, statusAddConflict, &ctx);
     }
   }
   if( headLoaded ) doltliteFreeCatalog(aHead, nHead);
