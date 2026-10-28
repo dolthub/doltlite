@@ -11,6 +11,8 @@
 
 int sqlite3DoltliteVtabConstraintIsCorrelated(sqlite3_index_info *pIdxInfo,
                                               int iConstraint);
+int sqlite3DoltliteVtabConstraintIsParam(sqlite3_index_info *pIdxInfo,
+                                         int iConstraint);
 
 /* Shared (db, zTableName, cols) prefix; AtVtab and HistVtab start with this. */
 typedef struct DoltliteVtabCommon DoltliteVtabCommon;

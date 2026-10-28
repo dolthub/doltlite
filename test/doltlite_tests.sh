@@ -218,6 +218,36 @@ run_test_error_match "runner_nonliteral_argument" \
   "SELECT * FROM dolt_test_run(upper('errors'));" \
   "dolt_test_run requires literal arguments" "$DB"
 
+run_test_error_match "runner_unbound_parameter" \
+  "SELECT * FROM dolt_test_run(?);" \
+  "could not find tests for argument: NULL" "$DB"
+
+run_test_error_match "runner_parameter_with_expression" \
+  "SELECT * FROM dolt_test_run(?, upper('errors'));" \
+  "dolt_test_run requires literal arguments" "$DB"
+
+run_test "runner_bound_parameter" \
+"INSERT INTO dolt_tests VALUES
+('bound_one','bound_grp','SELECT 1','expected_rows','==','1'),
+('bound_two','bound_grp','SELECT 1','expected_rows','==','1');
+.parameter init
+.parameter set ?1 'bound_one'
+SELECT test_name, status FROM dolt_test_run(?);
+.parameter set \$name 'bound_grp'
+SELECT test_name, status FROM dolt_test_run(\$name) ORDER BY test_name;
+.parameter set ?1 'bound_two'
+.parameter set ?2 'bound_one'
+SELECT test_name, status FROM dolt_test_run(?, ?) ORDER BY test_name;
+.parameter set ?1 'bound_two'
+SELECT test_name, status FROM dolt_test_run('bound_one', ?) ORDER BY test_name;" \
+  "bound_one|PASS
+bound_one|PASS
+bound_two|PASS
+bound_one|PASS
+bound_two|PASS
+bound_one|PASS
+bound_two|PASS" "$DB"
+
 run_test "drop_materialized_table" \
   "DROP TABLE dolt_tests;
    SELECT count(*) FROM dolt_tests;

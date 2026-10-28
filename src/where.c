@@ -4910,6 +4910,29 @@ int sqlite3DoltliteVtabConstraintIsCorrelated(
                               pIdxInfo->aConstraint[iCons].iTermOffset);
   return pTerm->prereqRight!=0;
 }
+
+/*
+** True when constraint iCons compares against a SQL parameter.
+** A table-valued function argument is wrapped in unary plus.
+** The value is not known in xBestIndex. xFilter receives it.
+*/
+int sqlite3DoltliteVtabConstraintIsParam(
+  sqlite3_index_info *pIdxInfo,
+  int iCons
+){
+  HiddenIndexInfo *pH = (HiddenIndexInfo*)&pIdxInfo[1];
+  WhereTerm *pTerm;
+  Expr *pRight;
+  if( iCons<0 || iCons>=pIdxInfo->nConstraint ) return 0;
+  pTerm = termFromWhereClause(pH->pWC,
+                              pIdxInfo->aConstraint[iCons].iTermOffset);
+  if( pTerm==0 || pTerm->pExpr==0 ) return 0;
+  pRight = sqlite3ExprSkipCollate(pTerm->pExpr->pRight);
+  while( pRight && (pRight->op==TK_UPLUS || pRight->op==TK_SPAN) ){
+    pRight = pRight->pLeft;
+  }
+  return pRight!=0 && pRight->op==TK_VARIABLE;
+}
 #endif
 /*
 ** Return true if ORDER BY clause may be handled as DISTINCT.
