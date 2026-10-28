@@ -47,6 +47,7 @@ doltlite_patch_rowid_alias
 doltlite_patch_pk_collation
 doltlite_patch_index_order
 doltlite_diff_commit_filters
+doltlite_lateral_tvf
 doltlite_diff_dates
 doltlite_diff_merge_history
 doltlite_patch_column_rename

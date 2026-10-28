@@ -1271,6 +1271,9 @@ static int patchConnect(sqlite3 *db, void *pAux, int argc,
 static int patchBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int i, iFrom=-1, iTo=-1, iTable=-1, iType=-1, iArg=1;
   (void)pVtab;
+  if( !doltliteVtabArgUsable(pInfo, 6)
+   || !doltliteVtabArgUsable(pInfo, 7)
+   || !doltliteVtabArgUsable(pInfo, 8) ) return SQLITE_CONSTRAINT;
   for(i=0; i<pInfo->nConstraint; i++){
     if( !pInfo->aConstraint[i].usable
      || pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;

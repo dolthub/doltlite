@@ -1,0 +1,132 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+  CREATE TABLE s(id INTEGER PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'base');
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_tag('base');
+  INSERT INTO t VALUES(2,'next');
+  INSERT INTO s VALUES(1,'next');
+  SELECT dolt_commit('-Am','next');
+  SELECT dolt_tag('next');
+  ALTER TABLE t ADD COLUMN extra INT;
+  SELECT dolt_commit('-Am','schema');
+  SELECT dolt_tag('target');
+  CREATE TABLE inputs(label INTEGER PRIMARY KEY,f TEXT,r TEXT,n TEXT);
+  INSERT INTO inputs VALUES(1,'base','HEAD','t'),(2,'base','main','s'),
+                          (3,'next','target','t'),(4,'next','HEAD','s');
+  CREATE TABLE froms(f TEXT);
+  INSERT INTO froms VALUES('base'),('next');
+  CREATE TABLE tos(r TEXT);
+  INSERT INTO tos VALUES('HEAD'),('target');
+  CREATE TABLE names(n TEXT);
+  INSERT INTO names VALUES('t'),('s');
+}
+
+foreach phase {live reopen} {
+  if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+  foreach module {
+    dolt_diff_stat dolt_diff_summary dolt_schema_diff dolt_patch dolt_diff_t
+  } {
+    set columns {}
+    foreach column [execsql "SELECT name FROM pragma_table_xinfo('$module')
+                            WHERE hidden=0 ORDER BY cid"] {
+      lappend columns "x.\"$column\""
+    }
+    set projection "i.label,json_array([join $columns ,])"
+    set maxmask 7
+    if {$module eq "dolt_diff_t"} {set maxmask 3}
+    foreach form {pair range} {
+      for {set mask 1} {$mask<=$maxmask} {incr mask} {
+        set from 'base'
+        set to 'HEAD'
+        set table 't'
+        if {$mask&1} {set from i.f}
+        if {$mask&2} {set to i.r}
+        if {$mask&4} {set table i.n}
+        set args "$from,$to"
+        if {$form eq "range"} {set args "$from||'..'||$to"}
+        if {$module ne "dolt_diff_t"} {append args ",$table"}
+        set source "$module\($args) x"
+        set expected [execsql "SELECT $projection
+          FROM inputs i CROSS JOIN $source ORDER BY 1,2"]
+        set prefix lateral-$phase-$module-$form-$mask
+        do_test $prefix-control {expr {[llength $expected]>0}} 1
+        do_execsql_test $prefix-auto "SELECT $projection
+          FROM inputs i,$source ORDER BY 1,2" $expected
+        do_execsql_test $prefix-reordered "SELECT $projection
+          FROM $source,inputs i ORDER BY 1,2" $expected
+        set expectedCounts {}
+        foreach {label json} $expected {
+          dict incr expectedCounts $label
+        }
+        set counts {}
+        foreach label {1 2 3 4} {
+          set count 0
+          if {[dict exists $expectedCounts $label]} {
+            set count [dict get $expectedCounts $label]
+          }
+          lappend counts $label $count
+        }
+        do_execsql_test $prefix-correlated "SELECT i.label,
+          (SELECT count(*) FROM $source) FROM inputs i ORDER BY i.label" $counts
+      }
+      set args a.f,b.r
+      if {$form eq "range"} {set args "a.f||'..'||b.r"}
+      if {$module ne "dolt_diff_t"} {append args ,c.n}
+      set source "$module\($args) x"
+      set projection3 "a.f,b.r,c.n,json_array([join $columns ,])"
+      set expected [execsql "SELECT $projection3 FROM froms a CROSS JOIN tos b
+        CROSS JOIN names c CROSS JOIN $source ORDER BY 1,2,3,4"]
+      do_execsql_test lateral-$phase-$module-$form-three-sources "
+        SELECT $projection3 FROM froms a,tos b,names c,$source
+        ORDER BY 1,2,3,4
+      " $expected
+    }
+  }
+
+  foreach module {dolt_diff_stat dolt_diff_summary dolt_schema_diff dolt_patch} {
+    set projection {i.label,count(*)}
+    set expected [execsql "SELECT $projection FROM inputs i CROSS JOIN
+      $module\('base',i.r) x GROUP BY i.label ORDER BY i.label"]
+    do_execsql_test lateral-$phase-$module-two-args "
+      SELECT $projection FROM inputs i,$module\('base',i.r) x
+      GROUP BY i.label ORDER BY i.label
+    " $expected
+    set expected [execsql "SELECT $projection FROM inputs i CROSS JOIN
+      $module\(i.f||'..'||i.r) x GROUP BY i.label ORDER BY i.label"]
+    do_execsql_test lateral-$phase-$module-one-arg "
+      SELECT $projection FROM inputs i,$module\(i.f||'..'||i.r) x
+      GROUP BY i.label ORDER BY i.label
+    " $expected
+    do_execsql_test lateral-$phase-$module-empty "
+      SELECT count(*) FROM inputs i,$module\(i.f,i.r,i.n) x WHERE i.label<0;
+    " 0
+  }
+  foreach {module fromCol toCol} {
+    dolt_diff_stat from_ref to_ref
+    dolt_diff_summary from_ref to_ref
+    dolt_schema_diff from_ref to_ref
+    dolt_patch arg1 arg2
+    dolt_diff_t from_ref to_ref
+  } {
+    set missing [list 1 "$module requires from_ref and to_ref"]
+    if {$module eq "dolt_patch"} {set missing {1 {dolt_patch: invalid arguments}}}
+    if {$module eq "dolt_diff_t"} {set missing {0 0}}
+    do_catchsql_test lateral-$phase-$module-unavailable-order "
+      SELECT count(*) FROM $module\(i.f,i.r) x CROSS JOIN inputs i;
+    " $missing
+    do_execsql_test lateral-$phase-$module-duplicate-from "
+      SELECT count(*) FROM $module\('base','HEAD') x CROSS JOIN inputs i
+      WHERE x.$fromCol=i.f;
+    " 0
+    do_execsql_test lateral-$phase-$module-duplicate-to "
+      SELECT count(*) FROM $module\('base','HEAD') x CROSS JOIN inputs i
+      WHERE x.$toCol=i.r;
+    " 0
+  }
+}
+
+finish_test

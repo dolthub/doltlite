@@ -340,6 +340,20 @@ static SQLITE_INLINE int doltliteVtabConstraintIsBinary(
   return doltliteVtabConstraintMatchesCollation(pInfo, iConstraint, "BINARY");
 }
 
+static SQLITE_INLINE int doltliteVtabArgUsable(
+  sqlite3_index_info *pInfo,
+  int iColumn
+){
+  int i, found = 0;
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( pC->iColumn!=iColumn || pC->op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pC->usable ) return 1;
+    found = 1;
+  }
+  return !found;
+}
+
 static SQLITE_INLINE int doltliteBestIndexRefs(
   sqlite3_index_info *pInfo,
   int iFromCol,
@@ -351,6 +365,10 @@ static SQLITE_INLINE int doltliteBestIndexRefs(
   int iTo = -1;
   int iTbl = -1;
   int argvIdx = 1;
+
+  if( !doltliteVtabArgUsable(pInfo, iFromCol)
+   || !doltliteVtabArgUsable(pInfo, iToCol)
+   || !doltliteVtabArgUsable(pInfo, iTableCol) ) return SQLITE_CONSTRAINT;
 
   for(i=0; i<pInfo->nConstraint; i++){
     if( !pInfo->aConstraint[i].usable ) continue;
