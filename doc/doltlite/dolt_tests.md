@@ -34,7 +34,8 @@ Served empty before it exists; the first write creates the real table.
 
 Returns `test_name`, `test_group_name`, `query`, `status` (`PASS` or `FAIL`),
 `message`. With no argument or `'*'` it runs everything; otherwise the
-argument names a group or a single test.
+argument names a group or a single test. A bound parameter is accepted
+and read when the statement runs.
 
 Queries run read-only and one statement at a time: a write fails with
 `Cannot execute write queries`, a `PRAGMA` with `Cannot execute PRAGMA
@@ -43,7 +44,7 @@ queries`, and `expected_single_value` requires exactly one cell.
 | Error | Cause |
 |---|---|
 | `could not find tests for argument: <x>` | no group or test by that name |
-| `dolt_test_run requires literal arguments` | argument is not a literal |
+| `dolt_test_run requires literal arguments` | argument is neither a literal nor a bound parameter |
 
 ## Differences from Dolt
 

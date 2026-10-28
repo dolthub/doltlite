@@ -2,6 +2,7 @@
 
 #include "sqliteInt.h"
 #include "doltlite_internal.h"
+#include "doltlite_vtab_util.h"
 #include <errno.h> /* amalgamator: keep */
 #include <limits.h>
 #include <stdlib.h>
@@ -735,7 +736,11 @@ static int testRunBestIndex(sqlite3_vtab *pVtab,
       if( p->usable && p->iColumn==iCol
        && p->op==SQLITE_INDEX_CONSTRAINT_EQ ){
         sqlite3_value *pRhs = 0;
-        if( sqlite3_vtab_rhs_value(pInfo, iCons, &pRhs)!=SQLITE_OK || !pRhs ){
+        int rcRhs;
+        rcRhs = sqlite3_vtab_rhs_value(pInfo, iCons, &pRhs);
+        /* A bound parameter is not known yet. xFilter still receives it. */
+        if( (rcRhs!=SQLITE_OK || !pRhs)
+         && !sqlite3DoltliteVtabConstraintIsParam(pInfo, iCons) ){
           sqlite3_free(pVtab->zErrMsg);
           pVtab->zErrMsg = sqlite3_mprintf(
               "dolt_test_run requires literal arguments");
