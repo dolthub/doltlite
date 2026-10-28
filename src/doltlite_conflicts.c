@@ -257,7 +257,8 @@ static int loadConflictTable(
 static void freeConflictTable(ConflictTableInfo *pTable){
   int j;
   if( !pTable ) return;
-  for(j=0; j<pTable->nConflicts; j++){
+  /* The folded dolt_schemas entry counts objects and holds no rows. */
+  for(j=0; pTable->aRows && j<pTable->nConflicts; j++){
     freeConflictRow(&pTable->aRows[j]);
   }
   for(j=0; j<pTable->nSchemaObjects; j++){
