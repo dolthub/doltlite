@@ -1,0 +1,164 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set gitdir [file join [pwd] log-symmetric.git]
+
+proc symmetric_init {} {
+  global gitdir gitTree gitCommits doltliteCommits
+  reset_db
+  file delete -force $gitdir
+  exec git -c init.defaultBranch=main init --bare --quiet $gitdir
+  set gitTree [exec git --git-dir=$gitdir mktree << ""]
+  set gitCommits {}
+  set doltliteCommits {}
+  execsql {CREATE TABLE t(id INTEGER PRIMARY KEY)}
+  symmetric_record root {}
+  execsql {INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','base')}
+  symmetric_record base {root}
+}
+
+proc symmetric_record {name parents} {
+  global gitdir gitTree gitCommits doltliteCommits
+  set args [list git --git-dir=$gitdir -c user.name=oracle \
+      -c user.email=oracle@test -c commit.gpgSign=false commit-tree $gitTree]
+  set expectedParents {}
+  foreach parent $parents {
+    lappend args -p [dict get $gitCommits $parent]
+    lappend expectedParents [dict get $doltliteCommits $parent]
+  }
+  lappend args -m $name
+  dict set gitCommits $name [exec {*}$args]
+  set hash [execsql {SELECT dolt_hashof('HEAD')}]
+  dict set doltliteCommits $name $hash
+  execsql "SELECT dolt_tag('$name')"
+  do_execsql_test log-symmetric-parents-$name "
+    SELECT parent_hash FROM dolt_commit_ancestors
+    WHERE commit_hash='$hash' AND parent_hash IS NOT NULL ORDER BY parent_hash;
+  " [lsort $expectedParents]
+}
+
+proc symmetric_compare {prefix leftRef rightRef leftNode rightNode} {
+  global gitdir gitCommits
+  foreach range {.. ...} {
+    set gitRange "[dict get $gitCommits $leftNode]$range[dict get $gitCommits $rightNode]"
+    set expected [lsort [split [exec git --git-dir=$gitdir log --format=%s $gitRange] \n]]
+    do_execsql_test $prefix-$range "
+      SELECT message FROM dolt_log('$leftRef$range$rightRef') ORDER BY message;
+    " $expected
+  }
+  do_execsql_test $prefix-no-shared "
+    SELECT count(*) FROM dolt_log('$leftRef...$rightRef')
+    WHERE commit_hash IN (
+      SELECT commit_hash FROM dolt_log('$leftRef')
+      INTERSECT SELECT commit_hash FROM dolt_log('$rightRef')
+    );
+  " 0
+  do_execsql_test $prefix-no-duplicates "
+    SELECT count(*)=count(DISTINCT commit_hash) FROM dolt_log('$leftRef...$rightRef');
+  " 1
+}
+
+proc symmetric_check {prefix left right bases} {
+  global gitdir gitCommits doltliteCommits
+  set mergeBases [split [exec git --git-dir=$gitdir merge-base --all \
+      [dict get $gitCommits $left] [dict get $gitCommits $right]] \n]
+  do_test $prefix-bases [list llength $mergeBases] $bases
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db/right}
+    foreach {variant l r} [list tags $left $right branches left right \
+        hashes [dict get $doltliteCommits $left] [dict get $doltliteCommits $right]] {
+      symmetric_compare $prefix-$phase-$variant $l $r $left $right
+      symmetric_compare $prefix-$phase-$variant-reverse $r $l $right $left
+    }
+    symmetric_compare $prefix-$phase-head HEAD $left $right $left
+    symmetric_compare $prefix-$phase-self $left $left $left $left
+    symmetric_compare $prefix-$phase-ancestor base $left base $left
+    foreach limit {1 2 4 100} {
+      do_execsql_test $prefix-$phase-limit-$limit "
+        SELECT count(*) FROM (
+          SELECT commit_hash FROM dolt_log('$left...$right') LIMIT $limit
+        ) WHERE commit_hash IN (
+          SELECT commit_hash FROM dolt_log('$left')
+          INTERSECT SELECT commit_hash FROM dolt_log('$right')
+        );
+      " 0
+    }
+    set common [execsql "SELECT commit_hash FROM dolt_log('$left')
+      INTERSECT SELECT commit_hash FROM dolt_log('$right')"]
+    foreach hash $common {
+      do_execsql_test $prefix-$phase-filter-$hash "
+        SELECT count(*) FROM dolt_log('$left...$right') WHERE commit_hash='$hash';
+      " 0
+    }
+  }
+}
+
+symmetric_init
+execsql {SELECT dolt_branch('left'); SELECT dolt_branch('right');
+         SELECT dolt_checkout('left'); INSERT INTO t VALUES(2);
+         SELECT dolt_commit('-am','left-1')}
+symmetric_record left-1 {base}
+execsql {SELECT dolt_checkout('right'); INSERT INTO t VALUES(3);
+         SELECT dolt_commit('-am','right-1')}
+symmetric_record right-1 {base}
+symmetric_check log-symmetric-fork left-1 right-1 1
+set left left-1
+set right right-1
+for {set layer 1} {$layer<=3} {incr layer} {
+  execsql "SELECT dolt_checkout('left');
+    SELECT dolt_merge('$right','--no-ff','-m','left-merge-$layer')"
+  symmetric_record left-merge-$layer [list $left $right]
+  execsql "SELECT dolt_checkout('right');
+    SELECT dolt_merge('$left','--no-ff','-m','right-merge-$layer')"
+  symmetric_record right-merge-$layer [list $right $left]
+  set left left-[expr {$layer+1}]
+  set right right-[expr {$layer+1}]
+  execsql "SELECT dolt_checkout('left'); INSERT INTO t VALUES([expr {2*$layer+2}]);
+           SELECT dolt_commit('-am','$left')"
+  symmetric_record $left [list left-merge-$layer]
+  execsql "SELECT dolt_checkout('right'); INSERT INTO t VALUES([expr {2*$layer+3}]);
+           SELECT dolt_commit('-am','$right')"
+  symmetric_record $right [list right-merge-$layer]
+  symmetric_check log-symmetric-criss-cross-$layer $left $right 2
+}
+
+symmetric_init
+execsql {SELECT dolt_branch('left'); SELECT dolt_branch('right');
+         SELECT dolt_branch('third')}
+foreach {branch id} {left 2 right 3 third 4} {
+  execsql "SELECT dolt_checkout('$branch'); INSERT INTO t VALUES($id);
+           SELECT dolt_commit('-am','$branch-1')"
+  symmetric_record $branch-1 {base}
+}
+execsql {SELECT dolt_checkout('left');
+         SELECT dolt_merge('right-1','--no-ff','-m','left-b')}
+symmetric_record left-b {left-1 right-1}
+execsql {SELECT dolt_merge('third-1','--no-ff','-m','left-c')}
+symmetric_record left-c {left-b third-1}
+execsql {SELECT dolt_checkout('right');
+         SELECT dolt_merge('third-1','--no-ff','-m','right-c')}
+symmetric_record right-c {right-1 third-1}
+execsql {SELECT dolt_merge('left-1','--no-ff','-m','right-a')}
+symmetric_record right-a {right-c left-1}
+symmetric_check log-symmetric-three-bases left-c right-a 3
+
+file delete -force $gitdir
+
+source $testdir/malloc_common.tcl
+faultsim_save_and_close
+do_faultsim_test log-symmetric-oom -faults oom-* -prep {
+  faultsim_restore_and_reopen
+  db eval {SELECT count(*) FROM dolt_log('left-c');
+           SELECT count(*) FROM dolt_log('right-a')}
+} -body {
+  db eval {SELECT message FROM dolt_log('left-c...right-a') ORDER BY message}
+} -test {
+  faultsim_test_result {0 {left-b left-c right-a right-c}} \
+    {1 {out of memory}} \
+    {1 {invalid dolt_log revision: left-c...right-a}}
+  if {[db eval {SELECT message FROM dolt_log('left-c...right-a') ORDER BY message}]
+      ne {left-b left-c right-a right-c}} {
+    error "log changed after allocation failure"
+  }
+}
+finish_test

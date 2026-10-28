@@ -426,7 +426,8 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
 static int logAddReachable(
   sqlite3 *db,
   ProllyHashSet *pSet,
-  const ProllyHash *pHead
+  const ProllyHash *pHead,
+  ProllyHashSet *pFilter
 ){
   DoltliteCommitQueue queue;
   int rc;
@@ -439,8 +440,10 @@ static int logAddReachable(
     int hasHash = 0;
     rc = doltliteCommitQueueNext(&queue, &hash, &hasHash);
     if( rc!=SQLITE_OK || !hasHash ) break;
-    rc = prollyHashSetAdd(pSet, &hash);
-    if( rc!=SQLITE_OK ) break;
+    if( !pFilter || prollyHashSetContains(pFilter, &hash) ){
+      rc = prollyHashSetAdd(pSet, &hash);
+      if( rc!=SQLITE_OK ) break;
+    }
     memset(&commit, 0, sizeof(commit));
     rc = doltliteLoadCommit(db, &hash, &commit);
     if( rc==SQLITE_OK ){
@@ -558,15 +561,19 @@ static int doltliteLogFilter(
         if( rc==SQLITE_OK ) pCur->excludedInit = 1;
       }
       if( rc==SQLITE_OK && rangeType==DOLTLITE_RANGE_THREE_DOT ){
-        ProllyHash ancestor;
+        ProllyHashSet leftReachable;
         secondHead = leftHash;
         useSecondHead = 1;
-        rc = doltliteFindAncestor(pVtab->db, &leftHash, &head, &ancestor);
+        rc = prollyHashSetInit(&leftReachable, 64);
         if( rc==SQLITE_OK ){
-          rc = logAddReachable(pVtab->db, &pCur->excluded, &ancestor);
+          rc = logAddReachable(pVtab->db, &leftReachable, &leftHash, 0);
+          if( rc==SQLITE_OK ){
+            rc = logAddReachable(pVtab->db, &pCur->excluded, &head, &leftReachable);
+          }
+          prollyHashSetFree(&leftReachable);
         }
       }else if( rc==SQLITE_OK ){
-        rc = logAddReachable(pVtab->db, &pCur->excluded, &leftHash);
+        rc = logAddReachable(pVtab->db, &pCur->excluded, &leftHash, 0);
       }
     }
     sqlite3_free(zLeft);
