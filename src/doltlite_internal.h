@@ -2002,6 +2002,10 @@ int loadSchemaFromCatalogUnfiltered(sqlite3 *db, ChunkStore *cs,
 int loadSchemaEntryFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                                const ProllyHash *pCatHash, const char *zName,
                                SchemaEntry *pEntry, int *pFound);
+int loadSchemaEntryFromMaster(ChunkStore *cs, ProllyCache *pCache,
+                              const ProllyHash *pMasterRoot, u8 masterFlags,
+                              const char *zName, SchemaEntry *pEntry,
+                              int *pFound);
 SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
 void clearSchemaEntry(SchemaEntry *pEntry);
 void freeSchemaEntries(SchemaEntry *a, int n);

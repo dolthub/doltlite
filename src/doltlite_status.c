@@ -883,6 +883,34 @@ static int statusRootsMatchRename(
   return rc;
 }
 
+/* The to-side table's CREATE text as that catalog stores it, so a pair
+** between two commits does not depend on the live schema. */
+static int statusCatalogTableSql(
+  sqlite3 *db,
+  const StatusCatalogIndex *pIdx,
+  const char *zName,
+  int *pFound,
+  char **pzSql
+){
+  struct TableEntry *pMaster = statusCatalogFindNumber(pIdx, 1);
+  SchemaEntry e;
+  int found = 0;
+  int rc;
+  *pFound = 0;
+  *pzSql = 0;
+  if( !pMaster || prollyHashIsEmpty(&pMaster->root) ) return SQLITE_OK;
+  rc = loadSchemaEntryFromMaster(doltliteGetChunkStore(db), doltliteGetCache(db),
+      &pMaster->root, pMaster->flags, zName, &e, &found);
+  if( rc!=SQLITE_OK ) return rc;
+  if( found && e.zType && strcmp(e.zType, "table")==0 && e.zSql ){
+    *pFound = 1;
+    *pzSql = e.zSql;
+    e.zSql = 0;
+  }
+  clearSchemaEntry(&e);
+  return SQLITE_OK;
+}
+
 /* Like isRenamePair but without the same-number gate. EMPTY roots compare
 ** equal without being the same object, so emptiness uses schema comparison. */
 static int isRenamePairContent(
@@ -894,9 +922,9 @@ static int isRenamePairContent(
   int *pMatch
 ){
   int rc;
-  int foundLive = 0;
+  int foundSql = 0;
   int shared = 0;
-  char *zLiveSql = 0;
+  char *zSql = 0;
 
   int rootsEqual;
   int schemaAgrees = 0;
@@ -910,24 +938,35 @@ static int isRenamePairContent(
   rootsEqual = !prollyHashIsEmpty(&pA->root)
             && prollyHashCompare(&pA->root, &pB->root)==0;
 
+  rc = statusCatalogTableSql(db, pToIdx, pB->zName, &foundSql, &zSql);
+  if( rc!=SQLITE_OK ) goto content_done;
+  if( foundSql && zSql ){
+    schemaAgrees =
+        statusSchemaHashMatchesRename(&pA->schemaHash, zSql, pA->zName);
+    goto content_check;
+  }
+  sqlite3_free(zSql);
+  zSql = 0;
+
   /* Only one of the two names is live, and which one depends on the
   ** direction of the range, so try the new name and then the old. */
-  rc = statusLoadLiveTableSql(db, pB->zName, &foundLive, &zLiveSql);
+  rc = statusLoadLiveTableSql(db, pB->zName, &foundSql, &zSql);
   if( rc!=SQLITE_OK ) goto content_done;
-  if( foundLive && zLiveSql ){
+  if( foundSql && zSql ){
     schemaAgrees =
-        statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName);
+        statusSchemaHashMatchesRename(&pA->schemaHash, zSql, pA->zName);
   }else{
-    sqlite3_free(zLiveSql);
-    zLiveSql = 0;
-    rc = statusLoadLiveTableSql(db, pA->zName, &foundLive, &zLiveSql);
+    sqlite3_free(zSql);
+    zSql = 0;
+    rc = statusLoadLiveTableSql(db, pA->zName, &foundSql, &zSql);
     if( rc!=SQLITE_OK ) goto content_done;
-    if( foundLive && zLiveSql ){
+    if( foundSql && zSql ){
       schemaAgrees =
-          statusSchemaHashMatchesRename(&pB->schemaHash, zLiveSql, pB->zName);
+          statusSchemaHashMatchesRename(&pB->schemaHash, zSql, pB->zName);
     }
   }
-  if( foundLive && zLiveSql ){
+content_check:
+  if( foundSql && zSql ){
     /* Equal roots cannot tell a rename from an unrelated table that happens
     ** to hold the same rows; the schema is what separates them. */
     if( !schemaAgrees ) goto content_done;
@@ -944,7 +983,7 @@ static int isRenamePairContent(
   }
 
 content_done:
-  sqlite3_free(zLiveSql);
+  sqlite3_free(zSql);
   return rc;
 }
 
