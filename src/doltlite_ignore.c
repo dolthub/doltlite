@@ -276,7 +276,7 @@ int doltliteCheckIgnore(
     return SQLITE_CONSTRAINT;
   }
   rc = sqlite3_prepare_v2(db,
-      "SELECT pattern, ignored FROM main.dolt_ignore", -1, &pStmt, 0);
+      "SELECT pattern, ignored=1 FROM main.dolt_ignore", -1, &pStmt, 0);
   if( rc!=SQLITE_OK ){
     return rc;
   }

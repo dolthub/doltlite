@@ -678,4 +678,41 @@ CREATE TABLE tmp_secret(id INTEGER PRIMARY KEY);
 INSERT INTO tmp_secret VALUES(1);
 "
 
+for value in -128 -2 -1 0 1 2 127; do
+  setup="CREATE TABLE base(id INT PRIMARY KEY);
+    SELECT dolt_commit('-Am','base');
+    INSERT INTO dolt_ignore VALUES('f_one',$value);
+    CREATE TABLE f_one(id INT PRIMARY KEY);
+    CREATE TABLE keep(id INT PRIMARY KEY);"
+  for operation in status dot all named; do
+    sql=''
+    case "$operation" in
+      dot) sql="SELECT dolt_add('.');" ;;
+      all) sql="SELECT dolt_add('-A');" ;;
+      named) sql="SELECT dolt_add('f_one');" ;;
+    esac
+    oracle "ignored_value_${value}_$operation" "$setup $sql"
+  done
+  oracle_head_commit "ignored_value_${value}_commit" \
+    "$setup SELECT dolt_commit('-Am','values');"
+done
+
+oracle "non_boolean_exact_over_ignore" "
+INSERT INTO dolt_ignore VALUES('f_%',1),('f_keep',2);
+CREATE TABLE f_keep(id INT PRIMARY KEY);
+CREATE TABLE f_hidden(id INT PRIMARY KEY);
+"
+oracle "ignore_exact_over_non_boolean" "
+INSERT INTO dolt_ignore VALUES('f_%',-1),('f_hidden',1);
+CREATE TABLE f_keep(id INT PRIMARY KEY);
+CREATE TABLE f_hidden(id INT PRIMARY KEY);
+"
+for value in -1 2; do
+  vc_oracle_error "non_boolean_conflict_$value" "
+    INSERT INTO dolt_ignore VALUES('f_*',1),('f_%',$value);
+    CREATE TABLE f_one(id INT PRIMARY KEY);
+    SELECT table_name FROM dolt_status;
+  "
+done
+
 vc_oracle_finish
