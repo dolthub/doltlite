@@ -1,0 +1,54 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach refs {working committed} {
+  reset_db
+  execsql {
+    CREATE TABLE t(k TEXT PRIMARY KEY,w TEXT);
+    WITH RECURSIVE codes(c) AS (
+      VALUES(0) UNION ALL SELECT c+1 FROM codes WHERE c<31
+    ) INSERT INTO t SELECT 'key-'||c||char(c),'base-'||char(c) FROM codes;
+    INSERT INTO t VALUES('del'||char(127),'del'||char(127)),
+                        ('crlf'||char(13,10),'é''\u000d'||char(13,10));
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_tag('base');
+  }
+  set query {SELECT typeof(k),hex(k),typeof(w),hex(w) FROM t ORDER BY k}
+  set base [execsql $query]
+  execsql {
+    DELETE FROM t WHERE k='key-13'||char(13);
+    UPDATE t SET w='target-'||w;
+    INSERT INTO t VALUES('new'||char(13),'line'||char(13,10)||'end');
+  }
+  set target [execsql $query]
+  set from HEAD
+  set to WORKING
+  if {$refs eq "committed"} {
+    execsql {SELECT dolt_commit('-am','target')}
+    set from HEAD~1
+    set to HEAD
+  }
+  set forward [execsql "SELECT statement FROM dolt_patch('$from','$to') ORDER BY statement_order"]
+  set reverse [execsql "SELECT statement FROM dolt_patch('$to','$from') ORDER BY statement_order"]
+  do_test patch-control-text-$refs-literals {
+    set controls 0
+    foreach statement [concat $forward $reverse] {
+      incr controls [regexp {[\x00-\x1f\x7f]} $statement]
+    }
+    set controls
+  } 0
+  if {$refs eq "working"} {execsql {SELECT dolt_commit('-am','target')}}
+  execsql {SELECT dolt_tag('target')}
+  foreach direction {forward reverse} start {base target} expected [list $target $base] {
+    execsql "SELECT dolt_reset('--hard','$start')"
+    do_test patch-control-text-$refs-$direction {
+      foreach statement [set $direction] {execsql $statement}
+      execsql $query
+    } $expected
+    do_execsql_test patch-control-text-$refs-$direction-integrity {
+      PRAGMA integrity_check
+    } ok
+  }
+}
+
+finish_test

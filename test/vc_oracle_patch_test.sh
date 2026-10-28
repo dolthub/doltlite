@@ -446,6 +446,39 @@ else
 fi
 vc_oracle_assert_match apply_literal_round_trip "$actual_fingerprint" "$target_fingerprint"
 
+for key_mode in integer text composite without_rowid keyless; do
+  case "$key_mode" in
+    integer) definition='id INTEGER PRIMARY KEY,k TEXT,w TEXT' ; suffix='' ;;
+    text) definition='id INTEGER,k TEXT PRIMARY KEY,w TEXT' ; suffix='' ;;
+    composite) definition='id INTEGER,k TEXT,w TEXT,PRIMARY KEY(k,id)' ; suffix='' ;;
+    without_rowid) definition='id INTEGER,k TEXT,w TEXT,PRIMARY KEY(k,id)' ; suffix='WITHOUT ROWID' ;;
+    keyless) definition='id INTEGER,k TEXT,w TEXT' ; suffix='' ;;
+  esac
+  control_rows="WITH RECURSIVE codes(c) AS (
+    VALUES(0) UNION ALL SELECT c+1 FROM codes WHERE c<31
+  ), vals(c,v) AS (
+    SELECT c,char(c) FROM codes
+    UNION ALL SELECT 127,char(127)
+    UNION ALL SELECT 128,char(13,10)
+    UNION ALL SELECT 129,char(13,13)||'a'||char(13)
+    UNION ALL SELECT 130,'é''\\u000d'
+    UNION ALL SELECT 131,CAST(X'800DFF' AS TEXT)
+  )"
+  apply_bidirectional "control_text_$key_mode" "
+    CREATE TABLE t($definition) $suffix;
+    $control_rows
+    INSERT INTO t SELECT c,'key-'||c||v,'base-'||v FROM vals;
+    INSERT INTO t SELECT id+1000,k||'-delete',w FROM t;
+    SELECT dolt_commit('-Am','base'); SELECT dolt_tag('base');
+    DELETE FROM t WHERE id>=1000;
+    UPDATE t SET w='target-'||w,k=k||CASE WHEN id%2=0 THEN '-new' ELSE '' END;
+    $control_rows
+    INSERT INTO t SELECT c+2000,'insert-'||c||v,'target-'||v FROM vals;
+    SELECT dolt_commit('-am','target'); SELECT dolt_tag('target');
+  " "SELECT id,typeof(k),hex(k),typeof(w),hex(w) FROM t ORDER BY id;
+     PRAGMA integrity_check;"
+done
+
 # Table rename as executable ALTER, including quoted ids and the index.
 rename_dir="$TMPROOT/apply_rename"
 mkdir -p "$rename_dir"

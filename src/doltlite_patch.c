@@ -890,7 +890,7 @@ static void patchAppendHex(sqlite3_str *pStr, const u8 *p, int n){
 }
 
 static void patchAppendValue(sqlite3_str *pStr, const PatchValue *pVal){
-  int i, hasNul = 0;
+  int i, hasControl = 0;
   switch( pVal->eType ){
     case SQLITE_INTEGER:
       sqlite3_str_appendf(pStr, "%lld", pVal->i);
@@ -902,8 +902,13 @@ static void patchAppendValue(sqlite3_str *pStr, const PatchValue *pVal){
       else sqlite3_str_appendf(pStr, "%!.17g", pVal->r);
       break;
     case SQLITE_TEXT:
-      for(i=0; i<pVal->n; i++) if( pVal->p[i]==0 ){ hasNul=1; break; }
-      if( hasNul ){
+      for(i=0; i<pVal->n; i++){
+        if( pVal->p[i]<0x20 || pVal->p[i]==0x7f ){
+          hasControl = 1;
+          break;
+        }
+      }
+      if( hasControl ){
         sqlite3_str_appendall(pStr, "CAST(X'");
         patchAppendHex(pStr,pVal->p,pVal->n);
         sqlite3_str_appendall(pStr, "' AS TEXT)");

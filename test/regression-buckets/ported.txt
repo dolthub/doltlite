@@ -45,6 +45,7 @@ doltlite_default_materialization
 doltlite_identifier_case
 doltlite_patch_rowid_alias
 doltlite_patch_pk_collation
+doltlite_patch_control_text
 doltlite_patch_index_order
 doltlite_diff_commit_filters
 doltlite_lateral_tvf
