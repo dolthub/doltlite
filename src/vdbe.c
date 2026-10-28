@@ -5054,9 +5054,9 @@ case OP_OpenWrite:
     assert( sqlite3SchemaMutexHeld(db, iDb, 0) );
 #ifdef DOLTLITE_PROLLY
     /* Rows are content-addressed, so they must encode as every other write
-    ** does. An uninitialized schema (the TEMP database a DROP COLUMN
-    ** touches) reads format 0 and has no file format to stay readable by. */
-    if( pDb->pSchema->file_format!=0 )
+    ** does. The TEMP database a DROP COLUMN touches has no file format to
+    ** stay readable by, initialized (format 1) or not (format 0). */
+    if( iDb!=1 && pDb->pSchema->file_format!=0 )
 #endif
     if( pDb->pSchema->file_format < p->minWriteFileFormat ){
       p->minWriteFileFormat = pDb->pSchema->file_format;
