@@ -1034,13 +1034,11 @@ static int commitPhaseTwoPrepSchemaReload(
   BtShared *pBt,
   const u8 *catData,
   int nCatData,
-  Btree *pReload,
-  u32 *pNativeSchemaCookie
+  Btree *pReload
 ){
   BtCursor *pC;
   int rc;
 
-  *pNativeSchemaCookie = p->aMeta[BTREE_SCHEMA_VERSION];
   memcpy(pReload->aMeta, p->aMeta, sizeof(pReload->aMeta));
   rc = deserializeCatalog(pReload, catData, nCatData);
   if( rc!=SQLITE_OK ){
@@ -1121,8 +1119,7 @@ static void commitPhaseTwoRemapReaders(Btree *p, Btree *pReload){
 static void commitPhaseTwoAdoptReloadedCatalog(
   Btree *p,
   Btree *pReload,
-  int *pbHaveReload,
-  u32 nativeSchemaCookie
+  int *pbHaveReload
 ){
   if( p->db ) sqlite3ExpirePreparedStatements(p->db, 1);
   if( *pbHaveReload ){
@@ -1130,8 +1127,7 @@ static void commitPhaseTwoAdoptReloadedCatalog(
     btreeFreeCatalogTables(p);
     p->cat = pReload->cat;
     memcpy(p->aMeta, pReload->aMeta, sizeof(p->aMeta));
-    /* Keep sqlite's cookie, not the reload's hash-derived one. */
-    p->aMeta[BTREE_SCHEMA_VERSION] = nativeSchemaCookie;
+    p->committedAMeta[BTREE_SCHEMA_VERSION] = p->aMeta[BTREE_SCHEMA_VERSION];
     memset(&pReload->cat, 0, sizeof(pReload->cat));
     *pbHaveReload = 0;
   }
@@ -1234,7 +1230,6 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   Btree reloadBtree;
   int bReloadSchema = 0;
   int bHaveReloadCatalog = 0;
-  u32 nativeSchemaCookie = 0;
   memset(&reloadBtree, 0, sizeof(reloadBtree));
 
   PROLLY_ASSERT_GRAPH_LOCKED(pBt);
@@ -1263,7 +1258,7 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   bReloadSchema = p->bSchemaChangedTxn;
   if( bReloadSchema ){
     rc = commitPhaseTwoPrepSchemaReload(
-        p, pBt, catData, nCatData, &reloadBtree, &nativeSchemaCookie);
+        p, pBt, catData, nCatData, &reloadBtree);
     if( rc!=SQLITE_OK ){
       commitPhaseTwoAbort(pBt, &catData, 0, 0, rc);
       return rc;
@@ -1296,7 +1291,7 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   btreeMarkWorkingStateChanged(p, 1);
   if( bReloadSchema ){
     commitPhaseTwoAdoptReloadedCatalog(
-        p, &reloadBtree, &bHaveReloadCatalog, nativeSchemaCookie);
+        p, &reloadBtree, &bHaveReloadCatalog);
   }
   commitPhaseTwoEndWriteTxn(p);
 
@@ -1396,7 +1391,6 @@ void doltliteBtreeEndJoinedCommand(Btree *p){
 typedef struct JoinedCatalog JoinedCatalog;
 struct JoinedCatalog {
   Btree reload;
-  u32 nativeSchemaCookie;
 };
 
 int doltliteBtreePrepareJoinedCatalog(
@@ -1414,7 +1408,7 @@ int doltliteBtreePrepareJoinedCatalog(
   rc = chunkStoreGet(&p->pBt->store, pCatalog, &data, &nData);
   if( rc==SQLITE_OK ){
     rc = commitPhaseTwoPrepSchemaReload(
-        p, p->pBt, data, nData, &s->reload, &s->nativeSchemaCookie);
+        p, p->pBt, data, nData, &s->reload);
   }
   sqlite3_free(data);
   if( rc!=SQLITE_OK ){
@@ -1436,7 +1430,7 @@ void doltliteBtreeFinishJoinedCommand(
     if( s ){
       int haveReload = 1;
       commitPhaseTwoAdoptReloadedCatalog(
-          p, &s->reload, &haveReload, s->nativeSchemaCookie);
+          p, &s->reload, &haveReload);
     }
     csDropTxnSequences(&p->pBt->store);
     commitPhaseTwoEndWriteTxn(p);

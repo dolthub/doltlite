@@ -36,6 +36,7 @@ doltlite_reset.sh
 doltlite_readonly_vc.sh
 doltlite_missing_chunk_errors.sh
 doltlite_stale_txn_vc.sh
+doltlite_schema_version.sh
 doltlite_vc_scan_refusal.sh
 doltlite_vc_seal_refusal.sh
 doltlite_branch.sh

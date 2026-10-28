@@ -2771,7 +2771,6 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   if( rc!=SQLITE_OK ) return rc;
 
   pBtree->bMasterRootChangedTxn = 1;
-  pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
   btreeBumpLocalDataVersion(pBtree);
 
   if( pBtree->db ){
@@ -2848,7 +2847,6 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
 
   if( !bKeepCatalog ){
     pBtree->bMasterRootChangedTxn = 1;
-    pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
     btreeBumpLocalDataVersion(pBtree);
 
     if( pBtree->db ){
@@ -2905,7 +2903,6 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
     }else{
       invalidateSchema(pBtree);
     }
-    pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
     btreeBumpLocalDataVersion(pBtree);
     chunkStoreRollback(cs);
     sqlite3_free(oldCatData);
