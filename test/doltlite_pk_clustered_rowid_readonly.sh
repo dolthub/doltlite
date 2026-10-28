@@ -234,4 +234,20 @@ x|y|4
 ok" "$DB2"
 fi
 
+rm -f "$DB"
+run_test "text_pk_in_select_rowid" "
+CREATE TABLE k(a TEXT PRIMARY KEY, b);
+INSERT INTO k VALUES('x',1),('y',2),('z',3);
+CREATE TABLE o(r INTEGER); INSERT INTO o SELECT rowid FROM k; INSERT INTO o VALUES(12345);
+SELECT count(*) FROM o WHERE r IN (SELECT rowid FROM k);
+SELECT count(*) FROM o WHERE r NOT IN (SELECT rowid FROM k);
+UPDATE k SET b=b+10 WHERE rowid IN (SELECT rowid FROM k);
+SELECT changes();
+DELETE FROM k WHERE rowid IN (SELECT rowid FROM k WHERE a<>'y');
+SELECT group_concat(a) FROM k;
+" "3
+1
+3
+y" "$DB"
+
 dltest_finish
