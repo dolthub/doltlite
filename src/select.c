@@ -5709,6 +5709,13 @@ static Table *isSimpleRowidRangeCount(
   return pTab;
 }
 
+static int rangeCountBoundAffinityOk(Expr *pCol, Expr *pBound, char idxAff){
+  char aff = sqlite3CompareAffinity(pBound, sqlite3ExprAffinity(pCol));
+  if( aff<SQLITE_AFF_TEXT ) return 1;
+  if( aff==SQLITE_AFF_TEXT ) return idxAff==SQLITE_AFF_TEXT;
+  return sqlite3IsNumericAffinity(idxAff);
+}
+
 static Index *isSimpleIndexRangeCount(
   Select *p,
   AggInfo *pAggInfo,
@@ -5767,6 +5774,27 @@ static Index *isSimpleIndexRangeCount(
   if( sqlite3StrICmp(pColl->zName, pCollHigh->zName) ) return 0;
   pIdx = findSingleColumnIndex(pSrc, pTab, iColumn, pColl->zName);
   if( !pIdx ) return 0;
+  /* The index orders keys by its column's affinity; a comparison done in
+  ** another affinity counts a different range, so leave it to the planner. */
+  {
+    char idxAff = pTab->aCol[iColumn].affinity;
+    if( !rangeCountBoundAffinityOk(p->pWhere->pLeft, *ppLow, idxAff)
+     || !rangeCountBoundAffinityOk(p->pWhere->pLeft, *ppHigh, idxAff) ){
+      return 0;
+    }
+  }
+  /* A NOCASE key holding a NUL is out of order, as the planner finds. */
+  if( sqlite3StrICmp(pIdx->azColl[0], "NOCASE")==0 ){
+    int hasNocaseNul = pParse->pTriggerTab!=0;
+    if( !hasNocaseNul ){
+      int iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
+      if( sqlite3BtreeProllyIndexHasNocaseNul(pParse->db->aDb[iDb].pBt,
+              pIdx->tnum, 1, pIdx->azColl, &hasNocaseNul)!=SQLITE_OK ){
+        return 0;
+      }
+    }
+    if( hasNocaseNul ) return 0;
+  }
 
   pExpr = p->pEList->a[0].pExpr;
   assert( pExpr!=0 );
