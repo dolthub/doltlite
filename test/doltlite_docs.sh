@@ -252,5 +252,33 @@ run_test "agent_table_checkout_restores_historical_row" \
 1" "$DB"
 
 rm -f "$DB"
+DB=/tmp/test_docs_upsert_$$.db
+rm -f "$DB"
+
+run_test_error_match "upsert_before_materialize_rejected" \
+  "INSERT INTO dolt_docs VALUES('README.md','a')
+     ON CONFLICT(doc_name) DO UPDATE SET doc_text=excluded.doc_text;" \
+  'UPSERT not implemented for virtual table "dolt_docs"' "$DB"
+
+run_test "upsert_before_materialize_leaves_module" \
+  "SELECT count(*) FROM sqlite_master WHERE name='dolt_docs';
+   SELECT doc_name FROM dolt_docs;" \
+  "0
+AGENT.md" "$DB"
+
+run_test "upsert_after_materialize" \
+  "INSERT INTO dolt_docs VALUES('README.md','a');
+   INSERT INTO dolt_docs VALUES('README.md','b')
+     ON CONFLICT(doc_name) DO UPDATE SET doc_text=excluded.doc_text;
+   INSERT INTO dolt_docs VALUES('NOTES.md','n')
+     ON CONFLICT(doc_name) DO UPDATE SET doc_text=excluded.doc_text;
+   INSERT INTO dolt_docs VALUES('README.md','nope')
+     ON CONFLICT(doc_name) DO NOTHING;
+   SELECT doc_name, doc_text FROM dolt_docs
+    WHERE doc_name IN ('README.md','NOTES.md') ORDER BY doc_name;" \
+  "NOTES.md|n
+README.md|b" "$DB"
+
+rm -f "$DB"
 
 dltest_finish

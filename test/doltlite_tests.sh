@@ -110,6 +110,22 @@ run_test "all_comparators" \
    SELECT count(*) FROM dolt_test_run('cmp') WHERE status='PASS';" \
   "6" "$DB"
 
+run_test "whitespace_assertions" \
+  "INSERT INTO dolt_tests VALUES
+     ('lead_int','ws','SELECT 1','expected_single_value','==',' 1'),
+     ('trail_int','ws','SELECT 1','expected_single_value','==','1 '),
+     ('lead_rows','ws','SELECT 1','expected_rows','==',' 1'),
+     ('lead_real','ws','SELECT 1.5','expected_single_value','==',' 1.5'),
+     ('plus_int','ws','SELECT 1','expected_single_value','==','+1'),
+     ('plain_int','ws','SELECT 1','expected_single_value','==','1');
+   SELECT test_name, status, message FROM dolt_test_run('ws') ORDER BY test_name;" \
+  "lead_int|FAIL|Could not compare non integer value ' 1', with 1
+lead_real|FAIL|Could not compare non float value ' 1.5', with 1.500000
+lead_rows|FAIL|cannot run assertion on non integer value:  1
+plain_int|PASS|
+plus_int|PASS|
+trail_int|FAIL|Could not compare non integer value '1 ', with 1" "$DB"
+
 run_test "null_assertion" \
   "INSERT INTO dolt_tests(test_name,test_group,test_query,assertion_type,assertion_comparator)
    VALUES('null_pass','nulls','SELECT NULL','expected_single_value','=='),
