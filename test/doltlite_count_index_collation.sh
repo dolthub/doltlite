@@ -52,4 +52,36 @@ INSERT INTO t VALUES(1),(2),(3);
 EXPLAIN QUERY PLAN SELECT count(*) FROM t WHERE v BETWEEN 1 AND 3;
 " "SEARCH t USING COVERING INDEX t_v" "$DB"
 
+rm -f "$DB"
+run_test "numeric_bounds_on_text_or_untyped_index" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT, z);
+CREATE INDEX tx ON t(x); CREATE INDEX tz ON t(z);
+INSERT INTO t VALUES(1,'10','10'),(2,'9',9),(3,'5',5.0),(4,'20','20');
+CREATE TABLE k(a TEXT PRIMARY KEY); INSERT INTO k VALUES('-3'),('0'),('4'),('7');
+SELECT count(*) FROM t WHERE x BETWEEN CAST(5 AS INTEGER) AND CAST(20 AS INTEGER);
+SELECT count(*) FROM t WHERE z BETWEEN CAST(5 AS INTEGER) AND CAST(20 AS INTEGER);
+SELECT count(*) FROM k WHERE a BETWEEN CAST(-5 AS INTEGER) AND CAST(5 AS INTEGER);
+SELECT count(*) FROM t WHERE x BETWEEN '10' AND '5';
+" "4
+4
+3
+3" "$DB"
+
+rm -f "$DB"
+run_test "nocase_keys_with_nul" "
+CREATE TABLE u(id INTEGER PRIMARY KEY, n TEXT COLLATE NOCASE); CREATE INDEX un ON u(n);
+INSERT INTO u VALUES(1,'a'||char(0)||'z'),(2,'A'||char(0)||'b'),(3,'a'),(4,'b');
+SELECT count(*) FROM u WHERE n BETWEEN 'a'||char(0)||'a' AND 'a'||char(0)||'c';
+SELECT count(*) FROM u WHERE n BETWEEN 'A' AND 'b';
+" "2
+4" "$DB"
+
+rm -f "$DB"
+run_test_match "text_bounds_on_text_index_use_covering_index" "
+CREATE TABLE t(x TEXT);
+CREATE INDEX tx ON t(x);
+INSERT INTO t VALUES('a'),('b');
+EXPLAIN QUERY PLAN SELECT count(*) FROM t WHERE x BETWEEN 'a' AND 'b';
+" "SEARCH t USING COVERING INDEX tx" "$DB"
+
 dltest_finish
