@@ -403,6 +403,8 @@ int chunkStoreSerializeRefs(ChunkStore *cs);
 
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash);
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash);
+void chunkStoreSetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
+                                  const ProllyHash *pHash);
 void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch);
 void chunkStoreFollowWorkingSetBasis(ChunkStore *cs, const char *zBranch);
 void chunkStoreFreeWsBranches(ChunkStore *cs);
