@@ -3,12 +3,12 @@ source $testdir/tester.tcl
 
 foreach maintenance {none gc vacuum} {
   foreach advance {0 1} {
-    foreach staged {0 1} {
-      foreach txn {begin savepoint} {
-        set prefix checkout-peer-retry-$maintenance.$advance.$staged.$txn
+    foreach {staged keytype} {0 INTEGER 1 INTEGER 0 INT 1 INT} {
+      foreach txn {begin nested savepoint} {
+        set prefix checkout-peer-retry-$maintenance.$advance.$staged.$keytype.$txn
         reset_db
+        db eval "CREATE TABLE t(id $keytype PRIMARY KEY, v TEXT)"
         db eval {
-          CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
           CREATE INDEX tv ON t(v);
           INSERT INTO t VALUES(1,'base');
           SELECT dolt_commit('-Am','init');
@@ -18,7 +18,13 @@ foreach maintenance {none gc vacuum} {
           INSERT INTO t VALUES(2,'working');
         }
         sqlite3 peer test.db
-        if {$txn eq "begin"} { db eval {BEGIN} } else { db eval {SAVEPOINT s} }
+        if {$txn eq "begin"} {
+          db eval {BEGIN}
+        } elseif {$txn eq "nested"} {
+          db eval {BEGIN; SAVEPOINT s}
+        } else {
+          db eval {SAVEPOINT s}
+        }
         db eval {SELECT count(*) FROM t}
         peer eval {INSERT INTO t VALUES(3,'peer')}
         if {$advance} { peer eval {SELECT dolt_commit('-am','peer commit')} }
@@ -31,6 +37,25 @@ foreach maintenance {none gc vacuum} {
           list [catch {db eval {SELECT dolt_checkout('b1')}} msg] \
                [sqlite3_errcode db]
         } {1 SQLITE_BUSY}
+        if {$txn ne "savepoint"} {
+          foreach retry {1 2} {
+            do_test $prefix.refused-again.$retry {
+              list [catch {db eval {SELECT dolt_checkout('b1')}} msg] \
+                   [sqlite3_errcode db]
+            } {1 SQLITE_BUSY}
+            do_test $prefix.snapshot.$retry {
+              db eval {SELECT id FROM t ORDER BY id}
+            } {1 2}
+            do_test $prefix.peer-kept.$retry {
+              list [peer eval {SELECT id FROM t ORDER BY id}] \
+                   [expr {[peer one {SELECT dolt_hashof('HEAD')}] eq $peerHead}]
+            } {{1 2 3} 1}
+            do_test $prefix.reset-refused.$retry {
+              list [catch {db eval {SELECT dolt_reset('--soft','HEAD~1')}} msg] \
+                   [sqlite3_errcode db]
+            } {1 SQLITE_BUSY}
+          }
+        }
         catch {db eval {ROLLBACK}}
         if {!$staged} {
           do_test $prefix.direct-retry {

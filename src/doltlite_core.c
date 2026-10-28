@@ -186,7 +186,6 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   }else{
     rcFirst = chunkStoreReloadRefs(cs);
   }
-  chunkStoreReadoptWorkingSetBasis(cs);
 
   /* Unpublished work stays pending, so a saved catalog that is gone was
   ** stale garbage a peer's gc swept: reload the session from disk instead. */
@@ -204,6 +203,9 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
 
   rc = doltliteSetSessionBranch(db, p->zSessionBranch);
   if( rc==SQLITE_OK ){
+    /* The restored catalog belongs to its saved snapshot, even if the refs
+    ** reload picked up a peer's newer working set. */
+    chunkStoreSetWorkingSetBasis(cs, p->zSessionBranch, &p->wsBasis);
     doltliteSetSessionHead(db, &p->sessionHead);
     rc = doltliteSetSessionStaged(db, &p->sessionStaged);
   }

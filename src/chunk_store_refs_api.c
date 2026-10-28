@@ -346,7 +346,7 @@ int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHas
   return SQLITE_OK;
 }
 
-static void csNoteWorkingSetBasis(
+void chunkStoreSetWorkingSetBasis(
   ChunkStore *cs,
   const char *zBranch,
   const ProllyHash *pHash
@@ -370,7 +370,7 @@ int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const Pro
   /* The basis tracks the session's branch; writing another branch's working
   ** set must not retarget it, or a peer's write to ours goes unnoticed. */
   if( !cs->bWsBasis || strcmp(csWsBranch(&cs->wsBasisBranch), zBranch)==0 ){
-    csNoteWorkingSetBasis(cs, zBranch, pHash);
+    chunkStoreSetWorkingSetBasis(cs, zBranch, pHash);
   }
   /* Rewriting the hash already there, as a statement over a reloaded peer
   ** working set does, is not a write of ours. */
@@ -387,7 +387,7 @@ void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch){
     cs->wsBasisBranch.bOom = 0;
     return;
   }
-  csNoteWorkingSetBasis(cs, zBranch, &cs->refs.aBranches[i].workingSetHash);
+  chunkStoreSetWorkingSetBasis(cs, zBranch, &cs->refs.aBranches[i].workingSetHash);
 }
 
 void chunkStoreFollowWorkingSetBasis(ChunkStore *cs, const char *zBranch){
