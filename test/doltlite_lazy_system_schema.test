@@ -1,0 +1,158 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set lazy_tables {
+  dolt_ignore {
+    pattern TEXT NOT NULL,ignored TINYINT NOT NULL,PRIMARY KEY(pattern)
+  } pattern ignored {'shared',0} {'shared',1} {'new',1} {ignored=0}
+    {shared 0} {shared 1} {new 1} {shared 0}
+  dolt_docs {
+    doc_name TEXT NOT NULL,doc_text TEXT NOT NULL,PRIMARY KEY(doc_name)
+  } doc_name doc_text {'shared','main'} {'shared','aux'} {'new','inserted'}
+    {doc_text='changed'} {shared main} {shared aux} {new inserted} {shared changed}
+  dolt_tests {
+    test_name TEXT NOT NULL,test_group TEXT,test_query TEXT NOT NULL,
+    assertion_type TEXT NOT NULL,assertion_comparator TEXT NOT NULL,
+    assertion_value TEXT,PRIMARY KEY(test_name),
+    CONSTRAINT assertion_type_check CHECK(assertion_type IN
+      ('expected_rows','expected_columns','expected_single_value')),
+    CONSTRAINT assertion_comparator_check CHECK(assertion_comparator IN
+      ('==','!=','<','>','<=','>='))
+  } test_name test_group
+    {'shared','main','SELECT 1','expected_rows','==','1'}
+    {'shared','aux','SELECT 1','expected_rows','==','1'}
+    {'new','inserted','SELECT 1','expected_rows','==','1'}
+    {test_group='changed'} {shared main} {shared aux} {new inserted} {shared changed}
+}
+
+foreach kind {temp prolly sqlite memory} {
+  foreach materialized {0 1} {
+    foreach operation {select insert insert-select replace update delete} {
+      reset_db
+      forcedelete lazy-system-aux.db
+      set schema aux
+      switch $kind {
+        temp {set schema temp}
+        prolly {execsql {ATTACH 'lazy-system-aux.db' AS aux}}
+        sqlite {
+          sqlite3 aux {file:lazy-system-aux.db?doltlite_engine=sqlite} -uri 1
+          aux eval {CREATE TABLE marker(id PRIMARY KEY)}
+          aux close
+          execsql {ATTACH 'lazy-system-aux.db' AS aux}
+        }
+        memory {execsql {ATTACH ':memory:' AS aux}}
+      }
+      foreach {table definition key value main_values aux_values new_values
+               assignment main_row aux_row new_row changed_row} $lazy_tables {
+        execsql "CREATE TABLE $schema.\"$table\"($definition)"
+        execsql "INSERT INTO $schema.\"$table\" VALUES($aux_values)"
+        if {$materialized} {
+          execsql "INSERT INTO main.\"$table\" VALUES($main_values)"
+        }
+      }
+      foreach {table definition key value main_values aux_values new_values
+               assignment main_row aux_row new_row changed_row} $lazy_tables {
+        set name lazy-system-$kind-$materialized-$operation-$table
+        set target "\"[string toupper $table]\""
+        set query "SELECT $key,$value FROM $target WHERE $key<>'AGENT.md' ORDER BY $key"
+        set before {}
+        if {$materialized} {set before $main_row}
+        do_execsql_test $name-read-before $query $before
+        if {!$materialized} {
+          do_execsql_test $name-still-lazy "
+            SELECT count(*) FROM main.sqlite_schema WHERE name='$table'
+          " 0
+        }
+        set expected $before
+        switch $operation {
+          select {set sql $query}
+          insert {
+            set sql "INSERT INTO $target VALUES($new_values)"
+            set expected [concat $new_row $before]
+          }
+          insert-select {
+            set sql "INSERT INTO $target SELECT $new_values"
+            set expected [concat $new_row $before]
+          }
+          replace {
+            set sql "REPLACE INTO $target VALUES($aux_values)"
+            set expected $aux_row
+          }
+          update {
+            set sql "UPDATE $target SET $assignment WHERE $key='shared'"
+            if {$materialized} {set expected $changed_row}
+          }
+          delete {
+            set sql "DELETE FROM $target WHERE $key='shared'"
+            set expected {}
+          }
+        }
+        do_test $name-operation {
+          execsql $sql
+          execsql $query
+        } $expected
+        do_execsql_test $name-main "
+          SELECT $key,$value FROM main.\"$table\" WHERE $key<>'AGENT.md' ORDER BY $key
+        " $expected
+        do_execsql_test $name-aux "SELECT $key,$value FROM $schema.\"$table\"" $aux_row
+        do_execsql_test $name-qualified-insert "
+          INSERT INTO $schema.\"$table\" VALUES($new_values);
+          SELECT $key,$value FROM $schema.\"$table\" ORDER BY $key;
+        " [concat $new_row $aux_row]
+        do_execsql_test $name-qualified-main-preserved $query $expected
+      }
+      do_execsql_test lazy-system-$kind-$materialized-$operation-integrity \
+        "PRAGMA main.integrity_check; PRAGMA $schema.integrity_check" {ok ok}
+    }
+  }
+}
+
+foreach schema {main temp aux} {
+  reset_db
+  execsql {ATTACH ':memory:' AS aux}
+  foreach {table definition key value main_values aux_values new_values
+           assignment main_row aux_row new_row changed_row} $lazy_tables {
+    do_test lazy-system-$schema-$table-shape {
+      set rc [catch {execsql "CREATE TABLE $schema.\"$table\"(x)"} message]
+      list $rc [string match "$table must have exactly*" $message]
+    } {1 1}
+    if {[db one "SELECT count(*) FROM $schema.sqlite_schema WHERE name='$table'"]} {
+      execsql "DROP TABLE $schema.\"$table\""
+    }
+    do_execsql_test lazy-system-$schema-$table-canonical \
+      "CREATE TABLE $schema.\"$table\"($definition)" {}
+  }
+}
+
+reset_db
+execsql {
+  ATTACH ':memory:' AS aux;
+  CREATE TABLE aux.dolt_ignore(pattern TEXT NOT NULL,ignored TINYINT NOT NULL,PRIMARY KEY(pattern));
+  INSERT INTO aux.dolt_ignore VALUES('other_%',1);
+  INSERT INTO dolt_ignore VALUES('scratch_%',1);
+  CREATE TABLE scratch_x(id INTEGER PRIMARY KEY);
+}
+do_execsql_test lazy-system-ignore-status {
+  SELECT table_name FROM dolt_status WHERE table_name='scratch_x';
+  SELECT dolt_add('.');
+  SELECT table_name FROM dolt_status WHERE table_name='scratch_x';
+  SELECT * FROM main.dolt_ignore;
+  SELECT * FROM aux.dolt_ignore;
+} {0 scratch_% 1 other_% 1}
+do_execsql_test lazy-system-ordinary-resolution {
+  CREATE TABLE aux.ordinary(v);
+  INSERT INTO ordinary VALUES('aux');
+  SELECT v FROM ordinary;
+  CREATE TABLE main.ordinary(v);
+  INSERT INTO ordinary VALUES('main');
+  SELECT v FROM ordinary;
+  CREATE TEMP TABLE ordinary(v);
+  INSERT INTO ordinary VALUES('temp');
+  SELECT v FROM ordinary;
+  SELECT v FROM main.ordinary;
+  SELECT v FROM aux.ordinary;
+} {aux main temp main aux}
+
+db close
+forcedelete lazy-system-aux.db
+finish_test
