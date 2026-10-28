@@ -17570,20 +17570,20 @@ static void run_clustered_blob_lookup(void){
       first = queryInt64(db, "SELECT rowid FROM t LIMIT 1");
       expectedFirst = (int)queryInt64(db, "SELECT id FROM t LIMIT 1");
       pBt = db->aDb[0].pBt;
-      scanned = doltliteBtreeSqlRowidScanCount(pBt);
+      scanned = doltliteBtreeSqlRowidScanCountForTest(pBt);
       check("blob_lookup_cold_first_open",
           sqlite3_blob_open(db,"main","t","b",first,0,&pBlob)==SQLITE_OK);
       check("blob_lookup_cold_first_value", blobLookupValue(pBlob, expectedFirst));
-      check("blob_lookup_cold_first_work", doltliteBtreeSqlRowidScanCount(pBt)-scanned<=1);
+      check("blob_lookup_cold_first_work", doltliteBtreeSqlRowidScanCountForTest(pBt)-scanned<=1);
       for(i=0; i<514 && pBlob; i++){
         int j = (i*157)%257;
         check("blob_lookup_reopen", sqlite3_blob_reopen(pBlob,aRowid[j])==SQLITE_OK);
         check("blob_lookup_value", blobLookupValue(pBlob,j+1));
       }
-      check("blob_lookup_linear_work", doltliteBtreeSqlRowidScanCount(pBt)-scanned<=257);
+      check("blob_lookup_linear_work", doltliteBtreeSqlRowidScanCountForTest(pBt)-scanned<=257);
       check("blob_lookup_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
       pBlob = 0;
-      scanned = doltliteBtreeSqlRowidScanCount(pBt);
+      scanned = doltliteBtreeSqlRowidScanCountForTest(pBt);
       for(i=0; i<257; i++){
         check("blob_lookup_warm_open",
             sqlite3_blob_open(db,"main","t","b",aRowid[i],0,&pBlob)==SQLITE_OK);
@@ -17591,9 +17591,9 @@ static void run_clustered_blob_lookup(void){
         check("blob_lookup_warm_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
         pBlob = 0;
       }
-      check("blob_lookup_warm_open_work", doltliteBtreeSqlRowidScanCount(pBt)==scanned);
+      check("blob_lookup_warm_open_work", doltliteBtreeSqlRowidScanCountForTest(pBt)==scanned);
       check("blob_lookup_release", sqlite3_db_release_memory(db)==SQLITE_OK);
-      check("blob_lookup_release_drops_cache", doltliteBtreeSqlRowidCacheBytes(pBt)==0);
+      check("blob_lookup_release_drops_cache", doltliteBtreeSqlRowidCacheBytesForTest(pBt)==0);
       check("blob_lookup_tiny_cache", execSql(db, "PRAGMA cache_size=-1")==SQLITE_OK);
       {
         sqlite3_int64 used = sqlite3_memory_used();
@@ -17606,7 +17606,7 @@ static void run_clustered_blob_lookup(void){
           pBlob = 0;
         }
         check("blob_lookup_tiny_bounded", sqlite3_memory_used()-used<128*1024);
-        check("blob_lookup_tiny_cache_budget", doltliteBtreeSqlRowidCacheBytes(pBt)<2048);
+        check("blob_lookup_tiny_cache_budget", doltliteBtreeSqlRowidCacheBytesForTest(pBt)<2048);
       }
       check("blob_lookup_integrity", strcmp(queryScalarText(db,"PRAGMA integrity_check"),"ok")==0);
       if( pending ) check("blob_lookup_rollback", execSql(db,"ROLLBACK")==SQLITE_OK);

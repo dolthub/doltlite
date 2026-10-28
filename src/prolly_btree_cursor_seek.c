@@ -1456,11 +1456,11 @@ void sqlite3BtreeClearSqlRowidCache(Btree *p, Pgno iRoot){
   p->pSqlRowidCache = 0;
 }
 
-u64 doltliteBtreeSqlRowidScanCount(Btree *p){
+u64 doltliteBtreeSqlRowidScanCountForTest(Btree *p){
   return p && p->pOps==&prollyBtreeOps ? p->nSqlRowidScan : 0;
 }
 
-i64 doltliteBtreeSqlRowidCacheBytes(Btree *p){
+i64 doltliteBtreeSqlRowidCacheBytesForTest(Btree *p){
   ProllyRowidCache *c;
   if( !p || p->pOps!=&prollyBtreeOps || !(c=p->pSqlRowidCache) ) return 0;
   return sizeof(*c) + (i64)c->nSlot*sizeof(*c->aEntry) + c->nKeyAlloc;
