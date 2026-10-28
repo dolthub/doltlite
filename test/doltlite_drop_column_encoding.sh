@@ -44,6 +44,23 @@ SELECT count(*) FROM dolt_status;
 " "1
 0" "$ROOT/status.db"
 
+# RENAME COLUMN initializes the TEMP schema, which DROP COLUMN then writes.
+run_test "drop_column_after_rename_column_leaves_status_clean" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES(3,1),(4,0);
+SELECT dolt_commit('-Am','c1') IS NOT NULL;
+ALTER TABLE t RENAME COLUMN b TO bb;
+SELECT dolt_commit('-am','c2') IS NOT NULL;
+ALTER TABLE t ADD COLUMN c INT;
+UPDATE t SET c=7;
+ALTER TABLE t DROP COLUMN c;
+SELECT count(*) FROM dolt_status;
+SELECT dolt_hashof_table('t','HEAD')=dolt_hashof_table('t','WORKING');
+" "1
+1
+0
+1" "$ROOT/rename.db"
+
 DB="$ROOT/merge.db"
 "$DOLTLITE" "$DB" "
 CREATE TABLE t(pk INTEGER PRIMARY KEY, a INT, legacy TEXT, done INT);
