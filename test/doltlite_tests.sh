@@ -249,6 +249,66 @@ run_test "rollback_undoes_materialization" \
   "0
 0" "$DB"
 
+TXN_DB="$DB"
+DB=/tmp/test_dolt_tests_fail_begin_$$.db
+rm -f "$DB"
+
+run_test "failed_insert_inside_begin_leaves_nothing" \
+  "BEGIN;
+   INSERT INTO dolt_tests VALUES('t',NULL,'select 1','bogus','==','1');
+   COMMIT;
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_tests';
+   SELECT count(*) FROM dolt_status;
+   SELECT count(*) FROM dolt_tests;" \
+  "Error near line 2: CHECK constraint failed: assertion_type_check
+0
+0
+0" "$DB"
+
+run_test "failed_insert_inside_begin_reopen" \
+  "SELECT count(*) FROM sqlite_master WHERE name='dolt_tests';
+   SELECT count(*) FROM dolt_status;" \
+  "0
+0" "$DB"
+
+rm -f "$DB"
+run_test "failed_then_good_insert_inside_begin" \
+  "BEGIN;
+   INSERT INTO dolt_tests VALUES('bad',NULL,'select 1','bogus','==','1');
+   INSERT INTO dolt_tests VALUES('good',NULL,'SELECT 1','expected_rows','==','1');
+   COMMIT;
+   SELECT test_name FROM dolt_tests;
+   SELECT table_name, status FROM dolt_status;" \
+  "Error near line 2: CHECK constraint failed: assertion_type_check
+good
+dolt_tests|new table" "$DB"
+
+rm -f "$DB"
+run_test "good_then_failed_insert_inside_begin" \
+  "BEGIN;
+   INSERT INTO dolt_tests VALUES('kept',NULL,'SELECT 1','expected_rows','==','1');
+   INSERT INTO dolt_tests VALUES('bad',NULL,'select 1','bogus','==','1');
+   COMMIT;
+   SELECT test_name FROM dolt_tests;" \
+  "Error near line 3: CHECK constraint failed: assertion_type_check
+kept" "$DB"
+
+rm -f "$DB"
+run_test "multi_row_failure_inside_begin_leaves_nothing" \
+  "BEGIN;
+   INSERT INTO dolt_tests VALUES
+     ('good',NULL,'SELECT 1','expected_rows','==','1'),
+     ('bad',NULL,'select 1','bogus','==','1');
+   COMMIT;
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_tests';
+   SELECT count(*) FROM dolt_status;" \
+  "Error near line 2: CHECK constraint failed: assertion_type_check
+0
+0" "$DB"
+
+rm -f "$DB"
+DB="$TXN_DB"
+
 run_test_error_match "runner_without_tests_errors" \
   "SELECT * FROM dolt_test_run();" \
   "could not find tests for argument: *" "$DB"

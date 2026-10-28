@@ -111,6 +111,30 @@ run_test "txn_commit_keeps_docs" \
   "AGENT.md
 a" "$DB"
 
+rm -f "$DB"
+DB=/tmp/test_docs_fail_begin_$$.db
+rm -f "$DB"
+
+run_test "failed_insert_inside_begin_leaves_virtual" \
+  "BEGIN;
+   INSERT INTO dolt_docs VALUES('a',NULL);
+   COMMIT;
+   SELECT doc_name FROM dolt_docs;
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_docs';
+   SELECT count(*) FROM dolt_status;" \
+  "Error near line 2: NOT NULL constraint failed: dolt_docs.doc_text
+AGENT.md
+0
+0" "$DB"
+
+run_test "failed_insert_inside_begin_reopen" \
+  "SELECT doc_name FROM dolt_docs;
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_docs';
+   SELECT count(*) FROM dolt_status;" \
+  "AGENT.md
+0
+0" "$DB"
+
 run_test_error_match "mid_statement_failure_atomic" \
   "DELETE FROM dolt_docs;
    INSERT INTO dolt_docs VALUES('b','1'),('b','2');" \

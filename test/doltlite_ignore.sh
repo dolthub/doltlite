@@ -16,6 +16,32 @@ run_test "fresh_not_materialized" \
   "0
 0" "$DB"
 
+rm -f "$DB"
+DB=/tmp/test_ignore_fail_begin_$$.db
+rm -f "$DB"
+
+run_test "failed_insert_inside_begin_leaves_nothing" \
+  "BEGIN;
+   INSERT INTO dolt_ignore VALUES(NULL, 1);
+   COMMIT;
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_ignore';
+   SELECT count(*) FROM dolt_status;
+   SELECT count(*) FROM dolt_ignore;" \
+  "Error near line 2: NOT NULL constraint failed: dolt_ignore.pattern
+0
+0
+0" "$DB"
+
+run_test "failed_insert_inside_begin_reopen" \
+  "SELECT count(*) FROM sqlite_master WHERE name='dolt_ignore';
+   SELECT count(*) FROM dolt_status;" \
+  "0
+0" "$DB"
+
+rm -f "$DB"
+DB=/tmp/test_ignore_$$.db
+rm -f "$DB"
+
 run_test "fresh_schema" \
   "SELECT name, type, \"notnull\", pk FROM pragma_table_info('dolt_ignore');" \
   "pattern|TEXT|1|1
