@@ -3331,6 +3331,15 @@ int sqlite3FindInIndex(
   /* Check to see if an existing table or index can be used to
   ** satisfy the query.  This is preferable to generating a new
   ** ephemeral table.  */
+#ifdef DOLTLITE_PROLLY
+  /* A clustered-PK table is keyed by its primary key; its rowid is
+  ** synthetic, so a rowid probe into it never matches. */
+  if( pParse->nErr==0 && (p = isCandidateForInOpt(pX))!=0
+   && p->pEList->nExpr==1 && p->pEList->a[0].pExpr->iColumn<0
+   && IsDoltClusteredPk(p->pSrc->a[0].pSTab) ){
+    p = 0;
+  }else
+#endif
   if( pParse->nErr==0 && (p = isCandidateForInOpt(pX))!=0 ){
     sqlite3 *db = pParse->db;              /* Database connection */
     Table *pTab;                           /* Table <table>. */
