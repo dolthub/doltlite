@@ -87,4 +87,59 @@ do_test 5.1 {
 } {{0 chunks removed, 0 chunks kept (in-memory)}}
 db close
 
+do_test 6.0 {
+  sqlite3 db "file:/dlshm6?vfs=memdb" -uri 1
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','c1');
+    SELECT dolt_tag('v1');
+    INSERT INTO t VALUES(2);
+    SELECT dolt_commit('-Am','c2');
+    SELECT dolt_branch('f');
+  }
+  set ::h1 [db one {SELECT commit_hash FROM dolt_log WHERE message='c1'}]
+  string length $::h1
+} {40}
+foreach {tn rev} [list 6.1 main~1 6.2 v1 6.3 $::h1] {
+  do_test $tn {
+    sqlite3 db2 "file:/dlshm6@$rev?vfs=memdb" -uri 1
+    set r [list [db2 one {SELECT count(*) FROM t}] \
+                [catchsql {INSERT INTO t VALUES(10)} db2]]
+    db2 close
+    set r
+  } {1 {1 {attempt to write a readonly database}}}
+}
+do_test 6.4 {
+  sqlite3 db2 "file:/dlshm6@f?vfs=memdb" -uri 1
+  db2 eval { INSERT INTO t VALUES(3) }
+  sqlite3 db3 "file:/dlshm6@f?vfs=memdb" -uri 1
+  set r [list [db2 one {SELECT active_branch()}] \
+              [db3 one {SELECT count(*) FROM t}] \
+              [db one {SELECT count(*) FROM t}]]
+  db3 close
+  db2 close
+  set r
+} {f 3 2}
+do_test 6.5 {
+  set rc [catch {sqlite3 db2 "file:/dlshm6@nope?vfs=memdb" -uri 1} msg]
+  list $rc [regexp {branch or revision "nope" not found} $msg]
+} {1 1}
+do_test 6.6 {
+  sqlite3 db2 "file:dlshm6@main~1?mode=memory&cache=shared" -uri 1
+  set r [db2 one {SELECT count(*) FROM t}]
+  db2 close
+  set r
+} {1}
+db close
+
+do_test 7.1 {
+  sqlite3 db  "file:dlshm7?vfs=memdb" -uri 1
+  sqlite3 db2 "file:dlshm7@main?vfs=memdb" -uri 1
+  db eval { CREATE TABLE p(a INT PRIMARY KEY) }
+  catchsql { SELECT count(*) FROM p } db2
+} {1 {no such table: p}}
+db close
+db2 close
+
 finish_test

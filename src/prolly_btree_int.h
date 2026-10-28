@@ -52,6 +52,7 @@ int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
 int doltliteResolveOpenRevision(
   ChunkStore*, const char*, ProllyHash*, ProllyHash*, char**, int*
 );
+int doltliteStoreLacksRefCommit(ChunkStore*);
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 int doltliteSerializeCatalogEntriesWithFallbackSchema(
