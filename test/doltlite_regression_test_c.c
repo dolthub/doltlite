@@ -13428,6 +13428,7 @@ static void run_rebase_abort_retry_after_claim_commit_error(void){
 static void run_rebase_main_table_schema_guard(void){
   sqlite3 *db = 0;
   char dbpath[256];
+  char zErr[256];
   const char *res;
   u8 isRebasing = 0;
   const char *zOrigBranch = 0;
@@ -13448,9 +13449,19 @@ static void run_rebase_main_table_schema_guard(void){
     "INSERT INTO t VALUES (10, 10);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
     "SELECT dolt_checkout('feat');"
-    "SELECT dolt_rebase('-i', 'main');"
+    "SELECT dolt_rebase('-i', 'main');")==SQLITE_OK);
+  check("rebase_schema_guard_user_create_reserved",
+        execErr(db, "CREATE TABLE main.dolt_rebase(id INTEGER PRIMARY KEY);",
+                zErr, sizeof(zErr))!=SQLITE_OK
+        && strstr(zErr, "reserved for internal use")!=0);
+  check("rebase_schema_guard_plan_survives_reserved_create",
+        queryInt64(db, "SELECT count(*) FROM main.dolt_rebase")>0);
+  /* writable_schema still stores a bad plan. --continue has to reject it. */
+  check("rebase_schema_guard_install_bad_schema", execSql(db,
+    "PRAGMA writable_schema=ON;"
     "DROP TABLE main.dolt_rebase;"
-    "CREATE TABLE main.dolt_rebase(id INTEGER PRIMARY KEY);")==SQLITE_OK);
+    "CREATE TABLE main.dolt_rebase(id INTEGER PRIMARY KEY);"
+    "PRAGMA writable_schema=OFF;")==SQLITE_OK);
 
   res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
   check("rebase_schema_guard_returns_error",
@@ -13480,6 +13491,7 @@ static void run_rebase_main_table_schema_guard(void){
 static void run_rebase_temp_shadow_ignored(void){
   sqlite3 *db = 0;
   char dbpath[256];
+  char zErr[256];
   const char *res;
 
   printf("=== Rebase Temp Shadow Ignored Test ===\n\n");
@@ -13500,9 +13512,19 @@ static void run_rebase_temp_shadow_ignored(void){
     "INSERT INTO t VALUES (10, 10);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
     "SELECT dolt_checkout('feat');"
-    "SELECT dolt_rebase('-i', 'main');"
+    "SELECT dolt_rebase('-i', 'main');")==SQLITE_OK);
+  check("rebase_temp_shadow_user_create_reserved",
+        execErr(db,
+          "CREATE TEMP TABLE dolt_rebase(rebase_order REAL PRIMARY KEY,"
+          " action TEXT, commit_hash TEXT, commit_message TEXT);",
+          zErr, sizeof(zErr))!=SQLITE_OK
+        && strstr(zErr, "reserved for internal use")!=0);
+  /* writable_schema plants a temp shadow. --continue must read main. */
+  check("rebase_temp_shadow_install", execSql(db,
+    "PRAGMA writable_schema=ON;"
     "CREATE TEMP TABLE dolt_rebase(rebase_order REAL PRIMARY KEY, action TEXT, commit_hash TEXT, commit_message TEXT);"
-    "INSERT INTO temp.dolt_rebase VALUES(1, 'oops', 'badbadbadbadbadbadbadbadbadbadbadbadbadb', 'shadow');")==SQLITE_OK);
+    "INSERT INTO temp.dolt_rebase VALUES(1, 'oops', 'badbadbadbadbadbadbadbadbadbadbadbadbadb', 'shadow');"
+    "PRAGMA writable_schema=OFF;")==SQLITE_OK);
 
   res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
   check("rebase_temp_shadow_ignored_continue_succeeds",
