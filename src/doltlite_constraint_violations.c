@@ -576,7 +576,9 @@ static int cvsColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   return SQLITE_OK;
 }
 static int cvsRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
-  *r = ((CvSumCur*)cur)->iRow;
+  CvSumCur *c = (CvSumCur*)cur;
+  *r = doltliteFnv1aRowid(doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET,
+                                         c->aTables[c->iRow].zName));
   return SQLITE_OK;
 }
 static int cvsBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){

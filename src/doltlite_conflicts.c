@@ -461,7 +461,12 @@ static int cfColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }
   return SQLITE_OK;
 }
-static int cfRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){ *r=((ConflictsCur*)cur)->iRow; return SQLITE_OK; }
+static int cfRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
+  ConflictsCur *c = (ConflictsCur*)cur;
+  *r = doltliteFnv1aRowid(doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET,
+                                         c->aTables[c->iRow].zName));
+  return SQLITE_OK;
+}
 static int cfBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   (void)v;
   p->estimatedCost = 10;

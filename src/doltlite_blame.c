@@ -1223,7 +1223,14 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
 }
 
 static int bmRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((BlameCursor*)pCursor)->iRow;
+  BlameCursor *c = (BlameCursor*)pCursor;
+  BlameRow *r = &c->aRows[c->iRow];
+  if( r->pKey ){
+    u64 h = doltliteFnv1aBytes(DOLTLITE_FNV1A_OFFSET, r->pKey, r->nKey);
+    *pRowid = doltliteFnv1aRowid(h);
+  }else{
+    *pRowid = r->intKey;
+  }
   return SQLITE_OK;
 }
 

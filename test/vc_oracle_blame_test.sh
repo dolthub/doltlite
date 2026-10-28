@@ -64,6 +64,37 @@ oracle "linear_basic" \
   "$LINEAR_BASIC" \
   "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t ORDER BY id;"
 
+echo "--- OR predicates ---"
+
+OR_ROWS="
+CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+INSERT INTO t VALUES(1,1),(2,2),(11,11),(12,12);
+SELECT dolt_commit('-Am','base');
+UPDATE t SET v=100 WHERE id=11;
+SELECT dolt_commit('-am','updated');"
+case_id=0
+for predicate in 'id=1 OR id>10' 'id>10 OR id=1' \
+                 'id=11 OR id IN (1,2)' 'id=11 OR id>10' \
+                 'id>=1 OR id<=11'; do
+  case_id=$((case_id+1))
+  oracle "or_integer_$case_id" "$OR_ROWS" \
+    "SELECT CONCAT('BL|',id,'|',message) FROM dolt_blame_t WHERE $predicate;"
+done
+
+oracle "or_composite" "
+CREATE TABLE t(x INT,y VARCHAR(20),PRIMARY KEY(y,x));
+INSERT INTO t VALUES(1,'a'),(1,'b'),(2,'a'),(2,'b');
+SELECT dolt_commit('-Am','base');
+" "SELECT CONCAT('BL|',x,'|',y,'|',message) FROM dolt_blame_t
+   WHERE (x=1 AND y='a') OR (x=1 AND y='b');"
+
+oracle "or_composite_overlap" "
+CREATE TABLE t(x INT,y VARCHAR(20),PRIMARY KEY(y,x));
+INSERT INTO t VALUES(1,'a'),(1,'b'),(2,'a'),(2,'b');
+SELECT dolt_commit('-Am','base');
+" "SELECT CONCAT('BL|',x,'|',y,'|',message) FROM dolt_blame_t
+   WHERE (x=1 AND y='a') OR (x IN (1,2) AND y='a');"
+
 echo "--- primary-key affinity in blame predicates ---"
 
 oracle "int_pk_numeric_text" "

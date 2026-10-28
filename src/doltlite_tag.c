@@ -349,7 +349,9 @@ static int tagColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col
   return SQLITE_OK;
 }
 static int tagRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((TagCur*)pCursor)->iRow;
+  TagCur *c = (TagCur*)pCursor;
+  *pRowid = doltliteFnv1aRowid(doltliteFnv1aStr(DOLTLITE_FNV1A_OFFSET,
+                                              c->aSnap[c->iRow].zName));
   return SQLITE_OK;
 }
 static int tagBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){

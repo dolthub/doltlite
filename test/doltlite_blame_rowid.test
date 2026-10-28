@@ -1,0 +1,111 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {kind declaration keys predicates suffix} {
+  integer {INTEGER PRIMARY KEY}
+    {-9223372036854775808,-1,0,1,2,11,12,9223372036854775807}
+    {{k=1 OR k>10} {k>10 OR k=1} {k=11 OR k IN (1,2)}
+     {k=11 OR k>10} {k<0 OR k>10 OR k=1}
+     {k>=0 OR k<=2} {k=0 OR k<0}
+     {k=-9223372036854775808 OR k=9223372036854775807}}
+    {}
+  clustered {INT PRIMARY KEY} {0,1,2,11,12}
+    {{k=1 OR k=11} {k IN (1,2) OR k=11} {k=1 OR k>10}} {}
+  text {TEXT COLLATE NOCASE PRIMARY KEY} {'a','B','c','aa','bb'}
+    {{k='A' OR k='b'} {k='a' OR k>'b'} {k IN ('A','B') OR k='bb'}} {}
+  real {REAL PRIMARY KEY} {0,1,2.5,11,12}
+    {{k=1 OR k=11} {k IN (1,2.5) OR k=12} {k=1 OR k>10}} {}
+  blob {BLOB PRIMARY KEY} {x'610062',x'610063',x'6162',x'62'}
+    {{k=x'610062' OR k=x'610063'} {k=x'610062' OR k>x'6162'}} {}
+  any {ANY PRIMARY KEY} {1,'1',x'31',2,'2'}
+    {{k=1 OR k='1'} {k=1 OR k=x'31'} {k IN (1,'1') OR k=2}} STRICT
+  without-rowid {INTEGER PRIMARY KEY} {-1,0,1,2,11,12}
+    {{k=1 OR k=11} {k=11 OR k IN (1,2)} {k=1 OR k>10}} {WITHOUT ROWID}
+} {
+  reset_db
+  execsql "CREATE TABLE t(k $declaration,v TEXT) $suffix"
+  foreach value [split $keys ,] {
+    execsql "INSERT INTO t VALUES($value,'base')"
+  }
+  execsql {SELECT dolt_commit('-Am','base')}
+  set keyType [lindex $declaration 0]
+  set keyCollate {}
+  if {$kind eq "text"} {set keyCollate {COLLATE NOCASE}}
+  set expectedSuffix {}
+  if {$kind eq "any"} {set expectedSuffix STRICT}
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    execsql "
+      DROP TABLE IF EXISTS temp.expected;
+      CREATE TEMP TABLE expected(blame_rowid INTEGER,k $keyType $keyCollate,
+                                 message TEXT) $expectedSuffix;
+      INSERT INTO expected SELECT rowid,k,message FROM dolt_blame_t;
+    "
+    set prefix blame-rowid-$kind-$phase
+    do_execsql_test $prefix-unique {
+      SELECT count(*)=count(DISTINCT blame_rowid) FROM expected;
+    } 1
+    set n 0
+    foreach predicate $predicates {
+      incr n
+      set expected [execsql "
+        SELECT quote(k),typeof(k),message FROM expected WHERE $predicate
+        ORDER BY k;"]
+      do_execsql_test $prefix-or-$n "
+        SELECT quote(k),typeof(k),message FROM dolt_blame_t WHERE $predicate
+        ORDER BY k;
+      " $expected
+      set rowids [execsql "
+        SELECT quote(k),blame_rowid FROM expected WHERE $predicate ORDER BY k;"]
+      do_execsql_test $prefix-identity-$n "
+        SELECT quote(k),rowid FROM dolt_blame_t WHERE $predicate ORDER BY k;
+      " $rowids
+    }
+    do_execsql_test $prefix-correlated {
+      SELECT count(*) FROM expected e
+      WHERE e.blame_rowid=(SELECT rowid FROM dolt_blame_t b WHERE b.k=e.k);
+    } [llength [split $keys ,]]
+    do_execsql_test $prefix-self-join {
+      SELECT count(*) FROM dolt_blame_t a JOIN dolt_blame_t b
+      ON a.rowid=b.rowid AND a.k=b.k;
+    } [llength [split $keys ,]]
+    do_execsql_test $prefix-right-join {
+      SELECT count(*) FROM expected e RIGHT JOIN dolt_blame_t b
+      ON b.k=e.k AND b.rowid=e.blame_rowid WHERE e.k IS NULL;
+    } 0
+  }
+}
+
+foreach suffix {{} {WITHOUT ROWID}} {
+  reset_db
+  execsql "
+    CREATE TABLE m(x INT,y TEXT COLLATE NOCASE,PRIMARY KEY(y,x)) $suffix;
+    INSERT INTO m VALUES(1,'a'),(1,'b'),(2,'a'),(2,'b');
+    SELECT dolt_commit('-Am','base');
+  "
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    set prefix blame-rowid-composite-$suffix-$phase
+    do_test $prefix-multi-index-or {
+      set plan [execsql {
+        EXPLAIN QUERY PLAN SELECT x,y FROM dolt_blame_m
+        WHERE (x=1 AND y='A') OR (x=1 AND y='b');
+      }]
+      string match {*MULTI-INDEX OR*} $plan
+    } 1
+    do_execsql_test $prefix-disjoint {
+      SELECT x,y FROM dolt_blame_m
+      WHERE (x=1 AND y='A') OR (x=1 AND y='b') ORDER BY y,x;
+    } {1 a 1 b}
+    do_execsql_test $prefix-overlap {
+      SELECT x,y FROM dolt_blame_m
+      WHERE (x=1 AND y='A') OR (x IN (1,2) AND y='a') ORDER BY y,x;
+    } {1 a 2 a}
+    do_execsql_test $prefix-point-rowids {
+      SELECT a.rowid!=b.rowid FROM dolt_blame_m a,dolt_blame_m b
+      WHERE a.x=1 AND a.y='a' AND b.x=1 AND b.y='b';
+    } 1
+  }
+}
+
+finish_test
