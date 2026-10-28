@@ -121,15 +121,48 @@ run_test "lazy_ignore_materialize_still_works" \
    SELECT pattern FROM dolt_ignore;" \
   "x_*" "$DB"
 
-run_test "create_dolt_rebase_still_allowed" \
-  "CREATE TABLE dolt_rebase(id INTEGER PRIMARY KEY);
-   INSERT INTO dolt_rebase VALUES(1);
-   SELECT id FROM dolt_rebase;" \
-  "1" "$DB"
+run_test_error_match "create_dolt_rebase_reserved" \
+  "CREATE TABLE dolt_rebase(a INT PRIMARY KEY);" \
+  "table names beginning with dolt_ are reserved for internal use" "$DB"
 
-run_test_error_match "add_column_dolt_rebase_refused" \
-  "ALTER TABLE dolt_rebase ADD COLUMN extra INT;" \
-  "table dolt_rebase may not be altered" "$DB"
+run_test_error_match "create_dolt_rebase_plan_shape_reserved" \
+  "CREATE TABLE dolt_rebase(
+      rebase_order REAL PRIMARY KEY,
+      action TEXT,
+      commit_hash TEXT,
+      commit_message TEXT NOT NULL);" \
+  "table names beginning with dolt_ are reserved for internal use" "$DB"
+
+run_test_error_match "rename_to_dolt_rebase_reserved" \
+  "ALTER TABLE t RENAME TO dolt_rebase;" \
+  "table names beginning with dolt_ are reserved for internal use" "$DB"
+
+run_test "create_dolt_rebase_refused_leaves_no_table" \
+  "SELECT count(*) FROM sqlite_master WHERE lower(name)='dolt_rebase';
+   SELECT count(*) FROM dolt_status WHERE lower(table_name)='dolt_rebase';" \
+  "0
+0" "$DB"
+
+# The database above still has an uncommitted dolt_ignore row. The issue's
+# "nothing to commit" is what a rejected CREATE leaves on an otherwise empty
+# database.
+rm -f "$DB"
+DB=/tmp/test_reserved_rebase_$$.db
+rm -f "$DB"
+
+run_test_error_match "create_dolt_rebase_empty_db_reserved" \
+  "CREATE TABLE dolt_rebase(a INT PRIMARY KEY);" \
+  "table names beginning with dolt_ are reserved for internal use" "$DB"
+
+run_test "create_dolt_rebase_empty_db_absent" \
+  "SELECT count(*) FROM sqlite_master WHERE lower(name)='dolt_rebase';
+   SELECT count(*) FROM dolt_status WHERE lower(table_name)='dolt_rebase';" \
+  "0
+0" "$DB"
+
+run_test_error_match "create_dolt_rebase_refused_nothing_to_commit" \
+  "SELECT dolt_commit('-Am','x');" \
+  "nothing to commit" "$DB"
 
 rm -f "$DB"
 DB=/tmp/test_reserved_fts_$$.db

@@ -60,13 +60,6 @@ cat <<'SQL' | "$DOLTLITE" "$DB2" >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
-SELECT dolt_checkout('-b', 'feat');
-INSERT INTO t VALUES (2, 2);
-SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
-SELECT dolt_checkout('main');
-CREATE TABLE dolt_rebase(id INTEGER PRIMARY KEY);
-SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
-SELECT dolt_checkout('feat');
 SQL
 
 run_test_error_match "start_failure_errors" \
@@ -1193,19 +1186,18 @@ run_test_match "rebase_merge_parent_before_child_log" \
   "^D,(B,C|C,B),A,U,R$" \
   "$DB11"
 
-# Interactive rebase must not publish dolt_rebase on the default branch, and
-# -A on the plan branch must not commit that table.
+# The plan name is reserved. A user CREATE must not become a committable table.
 DBU=/tmp/test_rebase_user_plan_name_$$.db
 rm -f "$DBU"
-cat <<'SQL' | "$DOLTLITE" "$DBU" >/dev/null 2>&1
-CREATE TABLE dolt_rebase(id INTEGER PRIMARY KEY);
-INSERT INTO dolt_rebase VALUES (1);
-SELECT dolt_commit('-Am', 'user table');
-INSERT INTO dolt_rebase VALUES (2);
-SQL
-run_test "user_dolt_rebase_still_in_status" \
-  "SELECT table_name || '|' || status FROM dolt_status;" \
-  "dolt_rebase|modified" \
+run_test_error_match "user_dolt_rebase_name_reserved" \
+  "CREATE TABLE dolt_rebase(id INTEGER PRIMARY KEY);" \
+  "table names beginning with dolt_ are reserved for internal use" \
+  "$DBU"
+run_test "user_dolt_rebase_not_in_status" \
+  "SELECT count(*) FROM sqlite_master WHERE name='dolt_rebase';
+   SELECT count(*) FROM dolt_status;" \
+  "0
+0" \
   "$DBU"
 
 DBP=/tmp/test_rebase_plan_leak_$$.db
