@@ -41,7 +41,7 @@ reports the same synthetic rowid as `SELECT rowid`.
 | `table_list` | A table with a non-integer primary key reports `wr=1`; it is stored like a `WITHOUT ROWID` table. |
 | `index_xinfo` | The automatic index of a non-integer primary key lists every table column. Secondary indexes trail the PK columns as non-key entries instead of `rowid`. |
 | `writable_schema` | Accepted, but `sqlite_master` still refuses writes. The catalog is a projection, not a table. |
-| `schema_version` | Increments on every schema change. Assigning a value is ignored. |
+| `schema_version` | Derived from the schema itself: every connection that sees the same schema reads the same value, on any branch and however the schema was reached, and the value changes whenever the schema does. It does not count changes, so it is not monotonic and a schema change does not add 1. Assigning a value is ignored. |
 | `data_version` | Changes when another connection commits, as in SQLite. |
 
 ## Accepted and inert
