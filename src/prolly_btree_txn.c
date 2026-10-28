@@ -1792,6 +1792,8 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       && p->db->autoCommit
       && p->db->mallocFailed;
 
+  sqlite3BtreeClearSqlRowidCache(p, 0);
+
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
   if( p->bCommandTxn && p->inTrans==TRANS_WRITE ){
     return commandRollback(p, pBt, tripCode);
@@ -2167,6 +2169,7 @@ static int releaseSavepointsFrom(Btree *p, int iSavepoint){
 int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
   BtShared *pBt;
 
+  if( op==SAVEPOINT_ROLLBACK ) sqlite3BtreeClearSqlRowidCache(p, 0);
   pBt = p->pBt;
   if( pBt==0 || p->inTrans!=TRANS_WRITE ){
     return SQLITE_OK;

@@ -653,6 +653,8 @@ proc emit_doltlite_storage_block {} {
     sqlite3BtreeProllyIndexHasWideNumericDesc
     sqlite3BtreeProllyClearCompareKey
     sqlite3BtreeSqlRowid
+    sqlite3BtreeSqlRowidMoveto
+    sqlite3BtreeClearSqlRowidCache
   }
   foreach {h guard} {pager.h SQLITE_PAGER_H wal.h SQLITE_WAL_H btree.h SQLITE_BTREE_H} {
     puts $out "#undef $guard"

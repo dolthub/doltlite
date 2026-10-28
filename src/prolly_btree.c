@@ -662,6 +662,7 @@ int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
   BtCursor *p;
   assert( pBtree!=0 && pBt!=0 );
   assert( pBtree->pBt==pBt );
+  sqlite3BtreeClearSqlRowidCache(pBtree, iRoot);
   for(p=pBt->pCursor; p; p=p->pNext){
     if( p->pBtree==pBtree
      && p!=pExcept
@@ -1515,6 +1516,7 @@ int sqlite3BtreeDefaultCacheSize(Btree *p){
 int prollyBtreeSetCacheSize(Btree *p, int mxPage){
   i64 nByte;
   if( !p || !p->pBt ) return SQLITE_OK;
+  sqlite3BtreeClearSqlRowidCache(p, 0);
   if( mxPage>0 ){
     u32 pgsz = p->pBt->pageSize>0 ? p->pBt->pageSize : PROLLY_DEFAULT_PAGE_SIZE;
     nByte = (i64)mxPage * pgsz;
@@ -2804,6 +2806,7 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 #endif
 
   invalidateCursors(pTo->pBt, 0, SQLITE_ABORT);
+  sqlite3BtreeClearSqlRowidCache(pTo, 0);
 
   catFree(&pTo->cat);
 

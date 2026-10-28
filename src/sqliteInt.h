@@ -4186,6 +4186,9 @@ struct AuthContext {
 #define OPFLAG_AUXDELETE     0x04    /* OP_Delete: index in a DELETE op */
 #define OPFLAG_NOCHNG_MAGIC  0x6d    /* OP_MakeRecord: serialtype 10 is ok */
 #define OPFLAG_PREFORMAT     0x80    /* OP_Insert uses preformatted cell */
+#ifdef DOLTLITE_PROLLY
+#define OPFLAG_SQLROWID      0x01
+#endif
 
 /*
 ** Each trigger present in the database schema is stored as an instance of

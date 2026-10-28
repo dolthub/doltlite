@@ -298,6 +298,8 @@ typedef struct DoltVcState {
   ProllyHash constraintViolationsHash;
 } DoltVcState;
 
+typedef struct ProllyRowidCache ProllyRowidCache;
+
 struct Btree {
   sqlite3 *db;
   BtShared *pBt;
@@ -308,6 +310,8 @@ struct Btree {
   u64 nSeek;
   int nBackup;
   int nReadSnapshot;
+  ProllyRowidCache *pSqlRowidCache;
+  u64 nSqlRowidScan;
 
   Catalog cat;
 
@@ -498,6 +502,7 @@ static inline void removeTable(Btree *p, Pgno iTable){
 ** across a catalog swap would otherwise reach the freed entry. */
 static inline void btreeFreeCatalogTables(Btree *p){
   BtCursor *pC;
+  sqlite3BtreeClearSqlRowidCache(p, 0);
   for(pC = p->pBt ? p->pBt->pCursor : 0; pC; pC = pC->pNext){
     if( pC->pBtree!=p || pC->pMutMap==0 ) continue;
     pC->pMutMap = 0;

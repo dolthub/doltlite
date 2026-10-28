@@ -1,0 +1,165 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+ifcapable !incrblob {
+  finish_test
+  return
+}
+
+proc lookup_blob {rowid {schema main}} {
+  set h [db incrblob -readonly $schema t b $rowid]
+  fconfigure $h -translation binary
+  set value [read $h]
+  close $h
+  return $value
+}
+
+execsql {
+  CREATE TABLE t(k TEXT PRIMARY KEY,b BLOB);
+  INSERT INTO t VALUES('a',CAST('aaaaaaaa' AS BLOB)),('z',CAST('zzzzzzzz' AS BLOB));
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_tag('base');
+}
+set a [db one {SELECT rowid FROM t WHERE k='a'}]
+set z [db one {SELECT rowid FROM t WHERE k='z'}]
+do_test blob-lookup-prime {lookup_blob $z} zzzzzzzz
+
+foreach finish {ROLLBACK COMMIT} {
+  execsql {BEGIN; SAVEPOINT s; INSERT INTO t VALUES('m',CAST('mmmmmmmm' AS BLOB))}
+  set m [db one {SELECT rowid FROM t WHERE k='m'}]
+  do_test blob-lookup-$finish-insert {lookup_blob $m} mmmmmmmm
+  execsql {UPDATE t SET k='n',b=CAST('nnnnnnnn' AS BLOB) WHERE k='m'}
+  set n [db one {SELECT rowid FROM t WHERE k='n'}]
+  do_test blob-lookup-$finish-rename {lookup_blob $n} nnnnnnnn
+  do_test blob-lookup-$finish-old-key {
+    list [catch {lookup_blob $m} msg] [string match {no such rowid:*} $msg]
+  } {1 1}
+  execsql {ROLLBACK TO s}
+  do_test blob-lookup-$finish-rollback-key {
+    list [catch {lookup_blob $n} msg] [lookup_blob $z]
+  } {1 zzzzzzzz}
+  execsql {RELEASE s; INSERT INTO t VALUES('m',CAST('MMMMMMMM' AS BLOB))}
+  do_test blob-lookup-$finish-reinsert {lookup_blob $m} MMMMMMMM
+  execsql $finish
+  if {$finish eq "ROLLBACK"} {
+    do_test blob-lookup-$finish-absent {catch {lookup_blob $m}} 1
+  } else {
+    do_test blob-lookup-$finish-durable {lookup_blob $m} MMMMMMMM
+  }
+}
+
+set h [db incrblob t b $a]
+fconfigure $h -translation binary
+do_test blob-lookup-write {
+  puts -nonewline $h AAAAAAAA
+  flush $h
+  seek $h 0
+  read $h
+} AAAAAAAA
+do_test blob-lookup-write-reopen {
+  sqlite3_blob_reopen $h $z
+  seek $h 0
+  read $h
+} zzzzzzzz
+close $h
+execsql {DELETE FROM t WHERE k='m'}
+do_test blob-lookup-delete {catch {lookup_blob $m}} 1
+
+do_test blob-lookup-missing-aborts {
+  set h [db incrblob -readonly t b $a]
+  set x [catch {sqlite3_blob_reopen $h -1} msg]
+  set y [catch {sqlite3_blob_reopen $h $z} next]
+  catch {close $h}
+  list $x $msg $y $next
+} {1 SQLITE_ERROR 1 SQLITE_ABORT}
+
+execsql {UPDATE t SET b=42 WHERE k='z'}
+do_test blob-lookup-nonblob {
+  set h [db incrblob -readonly t b $a]
+  set rc [catch {sqlite3_blob_reopen $h $z} msg]
+  catch {close $h}
+  list $rc $msg
+} {1 SQLITE_ERROR}
+execsql {SELECT dolt_reset('--hard','base')}
+do_test blob-lookup-reset {list [lookup_blob $a] [lookup_blob $z]} {aaaaaaaa zzzzzzzz}
+execsql {SELECT dolt_checkout('-b','other'); UPDATE t SET b=CAST('BBBBBBBB' AS BLOB) WHERE k='a'}
+do_test blob-lookup-branch-other {lookup_blob $a} BBBBBBBB
+execsql {SELECT dolt_checkout('main')}
+do_test blob-lookup-branch-main {lookup_blob $a} aaaaaaaa
+
+do_test blob-lookup-peer-snapshot {
+  set h [db incrblob -readonly t b $a]
+  fconfigure $h -translation binary
+  sqlite3 peer test.db
+  peer eval {UPDATE t SET b=CAST('PPPPPPPP' AS BLOB) WHERE k='a'}
+  sqlite3_blob_reopen $h $z
+  sqlite3_blob_reopen $h $a
+  set old [read $h]
+  close $h
+  peer close
+  list $old [lookup_blob $a]
+} {aaaaaaaa PPPPPPPP}
+
+execsql {
+  ATTACH ':memory:' AS aux;
+  CREATE TABLE aux.t(k TEXT PRIMARY KEY,b BLOB);
+  INSERT INTO aux.t VALUES('a',CAST('attached' AS BLOB));
+}
+set aux [db one {SELECT rowid FROM aux.t}]
+do_test blob-lookup-attached {
+  list [lookup_blob $aux aux] [lookup_blob $a] [lookup_blob $aux aux]
+} {attached PPPPPPPP attached}
+
+reset_db
+execsql {CREATE TABLE t(k PRIMARY KEY,b BLOB); INSERT INTO t VALUES('text-key',CAST('texttext' AS BLOB))}
+set collision [db one {SELECT rowid FROM t}]
+execsql "INSERT INTO t VALUES($collision,CAST('integer!' AS BLOB))"
+execsql {
+  INSERT INTO t VALUES(0,CAST('zerozero' AS BLOB)),(-7,CAST('negative' AS BLOB)),
+                      (x'ffff',CAST('lastlast' AS BLOB));
+}
+set last [db one {SELECT rowid FROM t WHERE k=x'ffff'}]
+do_test blob-lookup-collision {
+  list [lookup_blob $collision] [lookup_blob $last] [lookup_blob $collision]
+} {integer! lastlast integer!}
+do_test blob-lookup-signed {list [lookup_blob 0] [lookup_blob -7]} {zerozero negative}
+do_execsql_test blob-lookup-collision-integrity {PRAGMA integrity_check} ok
+
+reset_db
+execsql {
+  CREATE TABLE t(k TEXT PRIMARY KEY,b BLOB);
+  WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<128)
+    INSERT INTO t SELECT printf('%064d',i),CAST(printf('%08d',i) AS BLOB) FROM n;
+}
+faultsim_save_and_close
+foreach mode {cold warm pending} {
+  do_faultsim_test blob-lookup-oom-$::mode -faults oom-* -prep {
+    faultsim_restore_and_reopen
+    unset -nocomplain ::blob
+    if {$::mode eq "pending"} {
+      execsql {BEGIN; INSERT INTO t VALUES('zz',CAST('00000129' AS BLOB))}
+    }
+    set ::last [db one {SELECT rowid FROM t ORDER BY k DESC LIMIT 1}]
+    if {$::mode eq "warm"} {set ::blob [db incrblob -readonly t b $::last]}
+  } -body {
+    if {![info exists ::blob]} {set ::blob [db incrblob -readonly t b $::last]}
+    sqlite3_blob_reopen $::blob $::last
+    seek $::blob 0
+    read $::blob
+  } -test {
+    catch {close $::blob}
+    if {$::mode eq "pending"} {
+      faultsim_test_result {0 00000129} {1 {out of memory}} {1 SQLITE_NOMEM}
+    } else {
+      faultsim_test_result {0 00000128} {1 {out of memory}} {1 SQLITE_NOMEM}
+    }
+    set count 128
+    if {$::mode eq "pending" && ![sqlite3_get_autocommit db]} {set count 129}
+    if {[db one {SELECT count(*) FROM t}]!=$count} {error "rows changed after allocation failure"}
+    set last [db one {SELECT rowid FROM t ORDER BY k DESC LIMIT 1}]
+    if {[lookup_blob $last] ne [format %08d $count]} {error "lookup changed after allocation failure"}
+  }
+}
+
+finish_test

@@ -1417,6 +1417,205 @@ int prollyBtCursorSeekMergedAtOrAfter(
   return SQLITE_OK;
 }
 
+typedef struct ProllyRowidEntry ProllyRowidEntry;
+struct ProllyRowidEntry {
+  i64 rowid;
+  int iKey;
+  int nKey;
+};
+
+/* Only a PK-ordered prefix is cached; a colliding rowid keeps its first key. */
+struct ProllyRowidCache {
+  Pgno pgnoRoot;
+  ProllyHash root;
+  ProllyHash schema;
+  ProllyMutMap *pPending;
+  u32 generation;
+  int nKeyField;
+  int nEntry;
+  int nSlot;
+  ProllyRowidEntry *aEntry;
+  u8 *aKey;
+  int nKey;
+  int nKeyAlloc;
+  int iLastKey;
+  int nLastKey;
+  i64 nLimit;
+  u8 complete;
+  u8 full;
+};
+
+void sqlite3BtreeClearSqlRowidCache(Btree *p, Pgno iRoot){
+  ProllyRowidCache *pCache;
+  if( !p || p->pOps!=&prollyBtreeOps ) return;
+  pCache = p->pSqlRowidCache;
+  if( !pCache || (iRoot && iRoot!=pCache->pgnoRoot) ) return;
+  sqlite3_free(pCache->aEntry);
+  sqlite3_free(pCache->aKey);
+  sqlite3_free(pCache);
+  p->pSqlRowidCache = 0;
+}
+
+u64 doltliteBtreeSqlRowidScanCount(Btree *p){
+  return p && p->pOps==&prollyBtreeOps ? p->nSqlRowidScan : 0;
+}
+
+i64 doltliteBtreeSqlRowidCacheBytes(Btree *p){
+  ProllyRowidCache *c;
+  if( !p || p->pOps!=&prollyBtreeOps || !(c=p->pSqlRowidCache) ) return 0;
+  return sizeof(*c) + (i64)c->nSlot*sizeof(*c->aEntry) + c->nKeyAlloc;
+}
+
+static int rowidCacheSlot(ProllyRowidEntry *a, int nSlot, i64 rowid){
+  u64 h = (u64)rowid * UINT64_C(0x9e3779b97f4a7c15);
+  int i = (int)((h ^ (h>>32)) & (u64)(nSlot-1));
+  while( a[i].nKey && a[i].rowid!=rowid ) i = (i+1)&(nSlot-1);
+  return i;
+}
+
+static int rowidCacheAppend(
+  ProllyRowidCache *p, i64 rowid, const u8 *pKey, int nKey
+){
+  int nSlot = p->nSlot ? p->nSlot : 16;
+  int nAlloc = p->nKeyAlloc ? p->nKeyAlloc : 256;
+  int i;
+  if( p->full ) return SQLITE_OK;
+  if( nKey<=0 ) return SQLITE_CORRUPT_BKPT;
+  if( p->nEntry>=nSlot/2 ) nSlot *= 2;
+  while( (i64)p->nKey+nKey>nAlloc && nAlloc<p->nLimit ) nAlloc *= 2;
+  if( (i64)nSlot*sizeof(ProllyRowidEntry)+nAlloc>p->nLimit ){
+    p->full = 1;
+    return SQLITE_OK;
+  }
+  if( nSlot!=p->nSlot ){
+    ProllyRowidEntry *a = sqlite3_malloc64((u64)nSlot*sizeof(*a));
+    if( !a ) return SQLITE_NOMEM;
+    memset(a, 0, (size_t)nSlot*sizeof(*a));
+    for(i=0; i<p->nSlot; i++){
+      if( p->aEntry[i].nKey ){
+        int j = rowidCacheSlot(a, nSlot, p->aEntry[i].rowid);
+        a[j] = p->aEntry[i];
+      }
+    }
+    sqlite3_free(p->aEntry);
+    p->aEntry = a;
+    p->nSlot = nSlot;
+  }
+  if( nAlloc!=p->nKeyAlloc ){
+    u8 *a = sqlite3_realloc64(p->aKey, nAlloc);
+    if( !a ) return SQLITE_NOMEM;
+    p->aKey = a;
+    p->nKeyAlloc = nAlloc;
+  }
+  i = rowidCacheSlot(p->aEntry, p->nSlot, rowid);
+  if( p->aEntry[i].nKey==0 ){
+    p->aEntry[i].rowid = rowid;
+    p->aEntry[i].iKey = p->nKey;
+    p->aEntry[i].nKey = nKey;
+    p->nEntry++;
+  }
+  memcpy(p->aKey+p->nKey, pKey, nKey);
+  p->iLastKey = p->nKey;
+  p->nLastKey = nKey;
+  p->nKey += nKey;
+  return SQLITE_OK;
+}
+
+static int sqlRowidMoveto(BtCursor *pCur, i64 rowid, int *pRes){
+  Btree *p = pCur->pBtree;
+  ProllyRowidCache *pCache = p->pSqlRowidCache;
+  TableEntry *pTE = findTable(p, pCur->pgnoRoot);
+  ProllyMutMap *pPending;
+  i64 nLimit = MIN((i64)8*1024*1024, p->pBt->cache.nMaxByte/4);
+  int rc = SQLITE_OK;
+  int res = 0;
+  if( !pTE ) return SQLITE_CORRUPT_BKPT;
+  pPending = pTE->pPending;
+  pCur->pMutMap = pPending;
+  refreshCursorRoot(pCur);
+  if( pCache
+   && (pCache->pgnoRoot!=pCur->pgnoRoot
+    || prollyHashCompare(&pCache->root, &pTE->root)!=0
+    || prollyHashCompare(&pCache->schema, &pTE->schemaHash)!=0
+    || pCache->pPending!=pPending
+    || pCache->generation!=(pPending ? pPending->generation : 0)
+    || pCache->nKeyField!=pCur->pKeyInfo->nKeyField
+    || pCache->nLimit!=nLimit) ){
+    sqlite3BtreeClearSqlRowidCache(p, 0);
+    pCache = 0;
+  }
+  if( !pCache ){
+    pCache = sqlite3_malloc64(sizeof(*pCache));
+    if( !pCache ) return SQLITE_NOMEM;
+    memset(pCache, 0, sizeof(*pCache));
+    pCache->pgnoRoot = pCur->pgnoRoot;
+    pCache->root = pTE->root;
+    pCache->schema = pTE->schemaHash;
+    pCache->pPending = pPending;
+    pCache->generation = pPending ? pPending->generation : 0;
+    pCache->nKeyField = pCur->pKeyInfo->nKeyField;
+    pCache->nLimit = nLimit;
+    p->pSqlRowidCache = pCache;
+  }
+  if( pCache->nSlot ){
+    int i = rowidCacheSlot(pCache->aEntry, pCache->nSlot, rowid);
+    ProllyRowidEntry *e = &pCache->aEntry[i];
+    if( e->nKey ){
+      return prollyIndexMovetoExactSortKey(pCur,
+          pCache->aKey+e->iKey, e->nKey, pRes);
+    }
+  }
+  if( pCache->complete ){
+    *pRes = 1;
+    pCur->eState = CURSOR_INVALID;
+    return SQLITE_OK;
+  }
+  if( pCache->nLastKey ){
+    int exact = 0;
+    rc = prollyBtCursorSeekMergedAtOrAfter(pCur,
+        pCache->aKey+pCache->iLastKey, pCache->nLastKey, &exact);
+    if( rc!=SQLITE_OK ) return rc;
+    assert( exact );
+    rc = prollyBtCursorNext(pCur, 0);
+    if( rc==SQLITE_DONE ) res = 1;
+    else if( rc!=SQLITE_OK ) return rc;
+  }else{
+    rc = prollyBtCursorFirst(pCur, &res);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  while( !res ){
+    const u8 *pKey = 0;
+    int nKey = 0;
+    i64 found;
+    p->nSqlRowidScan++;
+    found = sqlite3BtreeSqlRowid(pCur);
+    if( pCur->eState==CURSOR_FAULT ) return pCur->skipNext;
+    rc = currentMergedKey(pCur, &pKey, &nKey);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = rowidCacheAppend(pCache, found, pKey, nKey);
+    if( rc!=SQLITE_OK ) return rc;
+    if( found==rowid ) return SQLITE_OK;
+    rc = prollyBtCursorNext(pCur, 0);
+    if( rc==SQLITE_DONE ) res = 1;
+    else if( rc!=SQLITE_OK ) return rc;
+  }
+  if( !pCache->full ) pCache->complete = 1;
+  *pRes = 1;
+  return SQLITE_OK;
+}
+
+int sqlite3BtreeSqlRowidMoveto(BtCursor *pCur, i64 rowid, int *pRes){
+  int rc;
+  *pRes = 0;
+  assert( pCur->pCurOps==&prollyCursorOps && !pCur->curIntKey );
+  rc = sqlRowidMoveto(pCur, rowid, pRes);
+  if( rc!=SQLITE_OK ){
+    sqlite3BtreeClearSqlRowidCache(pCur->pBtree, 0);
+    *pRes = 0;
+  }
+  return btreeReadResult(pCur->pBtree, rc);
+}
+
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,

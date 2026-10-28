@@ -938,6 +938,9 @@ int sqlite3_db_release_memory(sqlite3 *db){
     Btree *pBt = db->aDb[i].pBt;
     if( pBt ){
       Pager *pPager = sqlite3BtreePager(pBt);
+#ifdef DOLTLITE_PROLLY
+      sqlite3BtreeClearSqlRowidCache(pBt, 0);
+#endif
       sqlite3PagerShrink(pPager);
     }
   }

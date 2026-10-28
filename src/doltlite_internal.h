@@ -15,6 +15,8 @@
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
+u64 doltliteBtreeSqlRowidScanCount(Btree*);
+i64 doltliteBtreeSqlRowidCacheBytes(Btree*);
 typedef struct ProllyMutMap ProllyMutMap;
 typedef struct DoltliteTxnState DoltliteTxnState;
 typedef struct DoltlitePkRange DoltlitePkRange;
