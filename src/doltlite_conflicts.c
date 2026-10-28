@@ -649,22 +649,58 @@ static char *schemaConflictDescription(
   return sqlite3_mprintf("incompatible schema changes for table '%s'", zTable);
 }
 
-static int schemaConflictsLoadRows(SchemaConflictsCur *pCur, sqlite3 *db){
-  ConflictTableInfo *aTables = 0;
-  int nTables = 0;
-  ProllyHash ourHead, theirHead, ancestorHash;
+/* The merge base, our head and their head's schemas, which is what a
+** schema conflict compares. */
+static int schemaConflictsLoadSides(
+  sqlite3 *db,
+  const ProllyHash *pTheirHead,
+  SchemaEntry **paBase, int *pnBase,
+  SchemaEntry **paOurs, int *pnOurs,
+  SchemaEntry **paTheirs, int *pnTheirs
+){
+  ProllyHash ourHead, ancestorHash;
   DoltliteCommit ourCommit, theirCommit, ancestorCommit;
-  SchemaEntry *aBase = 0, *aOurs = 0, *aTheirs = 0;
-  int nBase = 0, nOurs = 0, nTheirs = 0;
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
-  u8 isMerging = 0;
-  int i, nSchemaRows = 0;
   int rc;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&ancestorCommit, 0, sizeof(ancestorCommit));
+  doltliteGetSessionHead(db, &ourHead);
+  rc = doltliteFindAncestor(db, &ourHead, pTheirHead, &ancestorHash);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pTheirHead, &theirCommit);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestorHash, &ancestorCommit);
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, pCache, &ancestorCommit.catalogHash,
+                               paBase, pnBase);
+  }
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, pCache, &ourCommit.catalogHash,
+                               paOurs, pnOurs);
+  }
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, pCache, &theirCommit.catalogHash,
+                               paTheirs, pnTheirs);
+  }
+  doltliteCommitClear(&ourCommit);
+  doltliteCommitClear(&theirCommit);
+  doltliteCommitClear(&ancestorCommit);
+  return rc;
+}
+
+static int schemaConflictsLoadRows(SchemaConflictsCur *pCur, sqlite3 *db){
+  ConflictTableInfo *aTables = 0;
+  int nTables = 0;
+  ProllyHash theirHead;
+  SchemaEntry *aBase = 0, *aOurs = 0, *aTheirs = 0;
+  int nBase = 0, nOurs = 0, nTheirs = 0;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  u8 isMerging = 0;
+  int i, nSchemaRows = 0;
+  int rc;
+
   doltliteGetSessionMergeState(db, &isMerging, &theirHead, 0);
   if( !isMerging || prollyHashIsEmpty(&theirHead) ) return SQLITE_OK;
   rc = loadAllConflicts(db, cs, &aTables, &nTables);
@@ -674,25 +710,8 @@ static int schemaConflictsLoadRows(SchemaConflictsCur *pCur, sqlite3 *db){
   }
   if( nSchemaRows==0 ) goto done;
 
-  doltliteGetSessionHead(db, &ourHead);
-  rc = doltliteFindAncestor(db, &ourHead, &theirHead, &ancestorHash);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = doltliteLoadCommit(db, &ancestorHash, &ancestorCommit);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = loadSchemaFromCatalog(db, cs, pCache, &ancestorCommit.catalogHash,
-                             &aBase, &nBase);
-  if( rc==SQLITE_OK ){
-    rc = loadSchemaFromCatalog(db, cs, pCache, &ourCommit.catalogHash,
-                               &aOurs, &nOurs);
-  }
-  if( rc==SQLITE_OK ){
-    rc = loadSchemaFromCatalog(db, cs, pCache, &theirCommit.catalogHash,
-                               &aTheirs, &nTheirs);
-  }
+  rc = schemaConflictsLoadSides(db, &theirHead, &aBase, &nBase,
+                                &aOurs, &nOurs, &aTheirs, &nTheirs);
   if( rc!=SQLITE_OK ) goto done;
 
   pCur->aRows = sqlite3_malloc(nSchemaRows*(int)sizeof(SchemaConflictRow));
@@ -722,9 +741,6 @@ done:
   freeSchemaEntries(aBase, nBase);
   freeSchemaEntries(aOurs, nOurs);
   freeSchemaEntries(aTheirs, nTheirs);
-  doltliteCommitClear(&ourCommit);
-  doltliteCommitClear(&theirCommit);
-  doltliteCommitClear(&ancestorCommit);
   if( rc!=SQLITE_OK ) schemaConflictsFreeRows(pCur);
   return rc;
 }
@@ -1075,11 +1091,112 @@ static int conflictsResolveSealSuccessfulTopSavepoint(sqlite3 *db){
   return SQLITE_OK;
 }
 
+/* A schema conflict on a view holds no rows: resolving it installs one
+** side's definition. *pzSide is that side's CREATE VIEW, or 0 if the side
+** dropped it. Not a view on any side that has the name: *pIsView is 0. */
+static int conflictsViewConflict(
+  sqlite3 *db,
+  const char *zName,
+  int useOurs,
+  int *pIsView,
+  char **pzSide
+){
+  SchemaEntry *aBase = 0, *aOurs = 0, *aTheirs = 0;
+  int nBase = 0, nOurs = 0, nTheirs = 0;
+  ProllyHash theirHead;
+  u8 isMerging = 0;
+  int rc;
+
+  *pIsView = 0;
+  *pzSide = 0;
+  doltliteGetSessionMergeState(db, &isMerging, &theirHead, 0);
+  if( !isMerging || prollyHashIsEmpty(&theirHead) ) return SQLITE_OK;
+  rc = schemaConflictsLoadSides(db, &theirHead, &aBase, &nBase,
+                                &aOurs, &nOurs, &aTheirs, &nTheirs);
+  if( rc==SQLITE_OK ){
+    SchemaEntry *aSide[3];
+    int k, nSeen = 0, nView = 0;
+    aSide[0] = findSchemaEntry(aBase, nBase, zName);
+    aSide[1] = findSchemaEntry(aOurs, nOurs, zName);
+    aSide[2] = findSchemaEntry(aTheirs, nTheirs, zName);
+    for(k=0; k<3; k++){
+      if( !aSide[k] ) continue;
+      nSeen++;
+      if( aSide[k]->zType && strcmp(aSide[k]->zType, "view")==0 ) nView++;
+    }
+    *pIsView = nSeen>0 && nView==nSeen;
+    k = useOurs ? 1 : 2;
+    if( *pIsView && aSide[k] && aSide[k]->zSql ){
+      *pzSide = sqlite3_mprintf("%s", aSide[k]->zSql);
+      if( !*pzSide ) rc = SQLITE_NOMEM;
+    }
+  }
+  freeSchemaEntries(aBase, nBase);
+  freeSchemaEntries(aOurs, nOurs);
+  freeSchemaEntries(aTheirs, nTheirs);
+  return rc;
+}
+
+/* Dolt reports view conflicts under dolt_schemas, so that name stands for
+** every view conflict of the merge. */
+static int conflictsExpandSchemasName(
+  sqlite3 *db,
+  int nIn, const char **azIn,
+  int *pnOut, char ***pazOut
+){
+  ConflictTableInfo *aAll = 0;
+  int nAll = 0;
+  char **azOut = 0;
+  int nOut = 0;
+  int i, j, rc = SQLITE_OK;
+
+  *pnOut = 0;
+  *pazOut = 0;
+  for(i=0; i<nIn && sqlite3_stricmp(azIn[i], "dolt_schemas")!=0; i++){}
+  if( i<nIn ){
+    rc = loadAllConflicts(db, doltliteGetChunkStore(db), &aAll, &nAll);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  azOut = sqlite3_malloc64(sizeof(char*)*(sqlite3_uint64)(nIn+nAll+1));
+  if( !azOut ){
+    freeConflictTables(aAll, nAll);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; rc==SQLITE_OK && i<nIn; i++){
+    int nViews = 0;
+    if( sqlite3_stricmp(azIn[i], "dolt_schemas")==0 ){
+      for(j=0; rc==SQLITE_OK && j<nAll; j++){
+        int isView = 0;
+        char *zTheirs = 0;
+        if( aAll[j].nConflicts!=0 || !aAll[j].zName ) continue;
+        rc = conflictsViewConflict(db, aAll[j].zName, 0, &isView, &zTheirs);
+        sqlite3_free(zTheirs);
+        if( rc==SQLITE_OK && isView ){
+          azOut[nOut] = sqlite3_mprintf("%s", aAll[j].zName);
+          if( !azOut[nOut++] ) rc = SQLITE_NOMEM;
+          nViews++;
+        }
+      }
+      if( nViews>0 ) continue;
+    }
+    azOut[nOut] = sqlite3_mprintf("%s", azIn[i]);
+    if( !azOut[nOut++] ) rc = SQLITE_NOMEM;
+  }
+  freeConflictTables(aAll, nAll);
+  if( rc!=SQLITE_OK ){
+    doltliteFreeStringArray(azOut, nOut);
+    return rc;
+  }
+  *pnOut = nOut;
+  *pazOut = azOut;
+  return SQLITE_OK;
+}
+
 static void conflictsResolveParsedFunc(
   sqlite3_context *ctx,
   int useOurs,
-  int nTables,
-  const char **azTables
+  int nArg,
+  const char **azArg
 ){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1087,6 +1204,10 @@ static void conflictsResolveParsedFunc(
   int found = 0;
   int needsSeal = 0;
   int i, j, rc;
+  int nTables = 0;
+  char **azTables = 0;
+  u8 *aView = 0;
+  char **azSideView = 0;
 
   int bBegan = 0;
   int bSp = 0;
@@ -1094,30 +1215,56 @@ static void conflictsResolveParsedFunc(
 
   if(!cs){ sqlite3_result_error(ctx,"no database",-1); return; }
 
+  rc = conflictsExpandSchemasName(db, nArg, azArg, &nTables, &azTables);
+  if( rc==SQLITE_OK && nTables>0 ){
+    aView = sqlite3_malloc(nTables);
+    azSideView = sqlite3_malloc64(sizeof(char*)*(sqlite3_uint64)nTables);
+    if( !aView || !azSideView ) rc = SQLITE_NOMEM;
+    else{
+      memset(aView, 0, nTables);
+      memset(azSideView, 0, sizeof(char*)*nTables);
+    }
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    goto resolve_free;
+  }
+
   for(i=0; i<nTables; i++){
     int tableExists = 0;
     rc = loadConflictTable(db, cs, azTables[i], &table, &found);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
-      return;
+      goto resolve_free;
     }
     if( found && table.nConflicts==0 ){
+      int isView = 0;
       freeConflictTable(&table);
+      rc = conflictsViewConflict(db, azTables[i], useOurs, &isView,
+                                 &azSideView[i]);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        goto resolve_free;
+      }
+      if( isView ){
+        aView[i] = 1;
+        continue;
+      }
       sqlite3_result_error(ctx,
         "Unable to automatically resolve schema conflicts since data changes "
         "may not have been fully merged yet. Abort this merge, align the "
         "schemas on one side, then rerun the merge.", -1);
-      return;
+      goto resolve_free;
     }
     freeConflictTable(&table);
     rc = conflictsResolveTableExists(db, azTables[i], &tableExists);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
-      return;
+      goto resolve_free;
     }
     if( !tableExists ){
       sqlite3_result_error(ctx, "table not found", -1);
-      return;
+      goto resolve_free;
     }
   }
 
@@ -1133,10 +1280,27 @@ static void conflictsResolveParsedFunc(
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
     sqlite3_result_error_code(ctx, rc);
-    return;
+    goto resolve_free;
   }
 
   for(i=0; i<nTables; i++){
+    if( aView[i] ){
+      char *zDrop = sqlite3_mprintf("DROP VIEW IF EXISTS main.\"%w\"",
+                                    azTables[i]);
+      rc = zDrop ? sqlite3_exec(db, zDrop, 0, 0, 0) : SQLITE_NOMEM;
+      sqlite3_free(zDrop);
+      if( rc==SQLITE_OK && azSideView[i] ){
+        rc = sqlite3_exec(db, azSideView[i], 0, 0, 0);
+      }
+      if( rc!=SQLITE_OK ){
+        zError = "failed to apply the chosen view definition";
+        goto resolve_error;
+      }
+      rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
+      if( rc!=SQLITE_OK ) goto resolve_error;
+      if( !found ) needsSeal = 1;
+      continue;
+    }
     if( useOurs ){
       rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
       if( rc!=SQLITE_OK ) goto resolve_error;
@@ -1183,11 +1347,11 @@ static void conflictsResolveParsedFunc(
     db->nVcInterruptMask--;
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
-      return;
+      goto resolve_free;
     }
   }
   sqlite3_result_int(ctx, 0);
-  return;
+  goto resolve_free;
 
 resolve_error:
   db->nVcInterruptMask++;
@@ -1203,6 +1367,11 @@ resolve_error:
   db->nVcInterruptMask--;
   sqlite3_result_error(ctx, zError ? zError : sqlite3_errstr(rc), -1);
   sqlite3_result_error_code(ctx, rc);
+
+resolve_free:
+  if( azSideView ) doltliteFreeStringArray(azSideView, nTables);
+  sqlite3_free(aView);
+  doltliteFreeStringArray(azTables, nTables);
 }
 
 static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
