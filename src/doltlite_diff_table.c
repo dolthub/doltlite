@@ -877,6 +877,9 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int fromRefCol  = 2*nUser + 5;
   int toRefCol    = 2*nUser + 6;
 
+  if( !doltliteVtabArgUsable(pInfo, fromRefCol)
+   || !doltliteVtabArgUsable(pInfo, toRefCol) ) return SQLITE_CONSTRAINT;
+
   for(i=0; i<pInfo->nConstraint; i++){
     if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
