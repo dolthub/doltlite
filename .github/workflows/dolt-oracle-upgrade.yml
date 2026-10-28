@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   upgrade:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
@@ -46,7 +46,7 @@ jobs:
   watchdog:
     needs: upgrade
     if: failure() || cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

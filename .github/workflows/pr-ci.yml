@@ -13,7 +13,7 @@ permissions:
 jobs:
   classify:
     name: Classify changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       docs_changed: ${{ steps.files.outputs.docs_changed }}
       light: ${{ steps.files.outputs.light }}
@@ -36,7 +36,7 @@ jobs:
     name: Docs validation
     needs: classify
     if: needs.classify.outputs.docs_changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -133,7 +133,7 @@ jobs:
     name: CI Gate
     needs: [classify, doc_links, build_ubuntu, test_ubuntu, compile_checks, wasm, build_macos, test_macos, build_windows, test_windows, windows_suites]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:

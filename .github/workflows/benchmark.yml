@@ -12,7 +12,7 @@ permissions:
 jobs:
   sysbench-relative:
     name: ${{ matrix.suite.name }}-keys
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Passing suites still run once. The extra time is only available when a
     # valid regression result triggers up to two automatic remeasurements.
     timeout-minutes: 45
@@ -77,7 +77,7 @@ jobs:
 
   vc-relative:
     name: version-control
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -135,7 +135,7 @@ jobs:
 
   hotspots:
     name: performance-hotspots
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -281,7 +281,7 @@ jobs:
       - sysbench-relative
       - vc-relative
       - hotspots
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:

@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -95,7 +95,7 @@ jobs:
   stress:
     name: ${{ matrix.suite }}
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Default budgets are 2h; leave headroom under GitHub's 6h job ceiling
     # so workflow_dispatch can raise durations without editing this value.
     timeout-minutes: 240
@@ -411,7 +411,7 @@ jobs:
   watchdog:
     needs: [build, stress]
     if: failure() || cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
     - name: Skip when a step-level reporter already covered this run

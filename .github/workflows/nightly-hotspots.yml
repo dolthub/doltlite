@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     permissions:
       contents: read
@@ -116,7 +116,7 @@ jobs:
   watchdog:
     needs: discover
     if: failure() || cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

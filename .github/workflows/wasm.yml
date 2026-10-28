@@ -6,7 +6,7 @@ on:
 jobs:
   wasm-build:
     name: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       EMSDK_VERSION: 3.1.74
@@ -97,7 +97,7 @@ jobs:
   wasm-test:
     name: test
     needs: wasm-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:

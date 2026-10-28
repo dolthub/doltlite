@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -76,7 +76,7 @@ jobs:
   large-full:
     name: large-scale-full
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Full mode: 1M suite + 10M + 100M insert/commit/diff/clone.
     # 100M insert ceiling alone is 20m; clone/commit add more. Stay under
     # GitHub's 6h job limit with headroom for cold runners / disk pressure.
@@ -191,7 +191,7 @@ jobs:
   watchdog:
     needs: [build, large-full]
     if: failure() || cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
     - name: Skip when a step-level reporter already covered this run

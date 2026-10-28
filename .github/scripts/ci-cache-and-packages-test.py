@@ -236,6 +236,30 @@ def cache_producers():
     return 9 + len(seeding)
 
 
+def coverage_toolchains():
+    workflows = {}
+    for name in ('ci-build', 'test', 'compile-checks'):
+        text = (github / f'workflows/{name}.yml').read_text()
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):[ \t]*$', text.split('\njobs:\n')[1], flags=re.M)
+        workflows[name] = dict(zip(parts[1::2], parts[2::2]))
+    runner = re.search(r'^    runs-on: (.+)$',
+                       workflows['ci-build']['coverage-build'], re.M).group(1)
+    assert re.fullmatch(r'ubuntu-\d+\.\d+', runner), runner
+    checks = 1
+    for name, body in workflows['test'].items():
+        if 'merge-coverage-profiles.sh' in body or 'source_coverage_report.sh' in body:
+            actual = re.search(r'^    runs-on: (.+)$', body, re.M).group(1)
+            assert actual == runner, (name, actual, runner)
+            checks += 1
+    for workflow, name in (('ci-build', 'assert-build'),
+                           ('compile-checks', 'development-builds')):
+        actual = re.search(r'^    runs-on: (.+)$',
+                           workflows[workflow][name], re.M).group(1)
+        assert actual == runner, (name, actual, runner)
+        checks += 1
+    return checks
+
+
 if __name__ == '__main__':
-    checks = packages() + artifact() + checked_build() + macos_identity() + cache_producers()
+    checks = packages() + artifact() + checked_build() + macos_identity() + cache_producers() + coverage_toolchains()
     print(f'CI caches, package workers, checked builds and sanitizer artifacts: {checks} checks passed')

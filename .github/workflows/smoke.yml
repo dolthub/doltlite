@@ -5,7 +5,7 @@ on:
 
 jobs:
   vc-fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -30,7 +30,7 @@ jobs:
       timeout-minutes: 12
 
   vc-model-stress:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -78,7 +78,7 @@ jobs:
   # rather not fan out runners. Crash → history-independence → fuzz, each
   # with its own out-of-tree build dir so they don't trip over each other.
   crash-fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
