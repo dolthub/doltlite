@@ -367,6 +367,25 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 	return s, nil
 }
 
+// PrepareContext is Prepare, interrupting the compile when ctx ends.
+func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	stop := c.interruptOnDone(ctx)
+	s, err := c.Prepare(query)
+	stop()
+	if err != nil {
+		return nil, contextErr(ctx, err)
+	}
+	// SQLite checks for an interrupt only between some tokens, so a compile can finish after ctx ends.
+	if err := ctx.Err(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
 // prepare compiles the first statement in query and returns the SQL after it.
 // The statement is nil when query holds no statement.
 func (c *conn) prepare(query string) (*stmt, string, error) {
@@ -649,6 +668,9 @@ func (s *stmt) ExecContext(ctx context.Context, named []driver.NamedValue) (driv
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	stop := s.c.interruptOnDone(ctx)
 	defer stop()
 	res, err := s.Exec(args)
@@ -658,6 +680,9 @@ func (s *stmt) ExecContext(ctx context.Context, named []driver.NamedValue) (driv
 func (s *stmt) QueryContext(ctx context.Context, named []driver.NamedValue) (driver.Rows, error) {
 	args, err := positional(named)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	stop := s.c.interruptOnDone(ctx)
@@ -734,18 +759,22 @@ type ColumnMetadata struct {
 //	cols, err := raw.(doltlite.ColumnDescriber).DescribeColumns(query)
 type ColumnDescriber interface {
 	DescribeColumns(query string) ([]ColumnMetadata, error)
+	DescribeColumnsContext(ctx context.Context, query string) ([]ColumnMetadata, error)
 }
 
 // DescribeColumns compiles the first statement in query, without running it,
 // and describes its result columns. A statement that returns no rows has none.
 func (c *conn) DescribeColumns(query string) ([]ColumnMetadata, error) {
-	s, _, err := c.prepare(query)
+	return c.DescribeColumnsContext(context.Background(), query)
+}
+
+// DescribeColumnsContext is DescribeColumns, interrupting the compile when ctx ends.
+func (c *conn) DescribeColumnsContext(ctx context.Context, query string) ([]ColumnMetadata, error) {
+	st, err := c.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	if s == nil {
-		return nil, errNoStatement
-	}
+	s := st.(*stmt)
 	defer s.Close()
 
 	c.mu.Lock()

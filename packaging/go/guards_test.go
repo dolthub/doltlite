@@ -170,6 +170,36 @@ func TestContextInterruptsRowsInProgress(t *testing.T) {
 	rows.Close()
 }
 
+func TestContextInterruptsCompile(t *testing.T) {
+	conn := openGuardedConn(t)
+	slow := "WITH x(v) AS (VALUES " + strings.Repeat("(1), ", 1000000) + "(1)) SELECT count(*) FROM x"
+
+	for name, compile := range map[string]func(context.Context) error{
+		"query": func(ctx context.Context) error {
+			var n int
+			return conn.QueryRowContext(ctx, slow).Scan(&n)
+		},
+		"describe": func(ctx context.Context) error {
+			return conn.Raw(func(dc any) error {
+				_, err := dc.(doltlite.ColumnDescriber).DescribeColumnsContext(ctx, slow)
+				return err
+			})
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		start := time.Now()
+		err := compile(ctx)
+		elapsed := time.Since(start)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s: want context.DeadlineExceeded, got %v", name, err)
+		}
+		if elapsed > 500*time.Millisecond {
+			t.Errorf("%s: compiling ran %v past its deadline", name, elapsed)
+		}
+	}
+}
+
 func TestCloseDuringInterrupt(t *testing.T) {
 	db, err := sql.Open("doltlite", "file:"+filepath.Join(t.TempDir(), "close.db"))
 	if err != nil {
