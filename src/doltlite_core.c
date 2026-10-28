@@ -1158,6 +1158,16 @@ static int doltliteCompareAndAdvanceBranchImpl(
     doltliteTxnStateClear(&saved);
     return rc;
   }
+  if( bSwitchCatalog ){
+    rc = doltliteVcScanSwapCheck(db,
+        pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash)
+            ? pWorkingCatHash : pCatalogHash);
+    if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
+      chunkStoreUnlock(cs);
+      doltliteTxnStateClear(&saved);
+      return rc;
+    }
+  }
 
   /* Persist the tip under the confirm lock without SwitchCatalog; lock-cycling
   ** SQL between confirm and commit can let a peer land and then be clobbered. */

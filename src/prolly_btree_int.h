@@ -326,6 +326,7 @@ struct Btree {
   u8 bDeferredRevision;
   u8 bDeferredRegister;
   u8 bBeginTransBranchMissing;
+  u8 bVcScanRefused;
   /* A VC command opened this write transaction and ends it; nested
   ** statements inside the command must not commit or unlock it. */
   u8 bCommandTxn;
@@ -796,6 +797,7 @@ void freeSavepointTables(struct SavepointTableState*);
 int snapshotPendingForFlush(Btree*, Pgno, ProllyMutMap**, ProllyMutMap**, int*);
 int serializeCatalog(Btree*, u8**, int*);
 int doltliteFlushAndSerializeBtreeCatalog(Btree*, u8**, int*);
+int doltliteVcScanSwapCheck(sqlite3*, const ProllyHash*);
 int serializeCatalogForCommit(Btree*, u8**, int*);
 int deserializeCatalog(Btree*, const u8*, int);
 void initDefaultMeta(Btree*);
