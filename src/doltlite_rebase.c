@@ -1191,6 +1191,15 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
+static int rebaseExecPlanDdl(sqlite3 *db, const char *zSql){
+  int bWas = (db->mDbFlags & DBFLAG_RebasePlan)!=0;
+  int rc;
+  db->mDbFlags |= DBFLAG_RebasePlan;
+  rc = sqlite3_exec(db, zSql, 0, 0, 0);
+  if( !bWas ) db->mDbFlags &= ~DBFLAG_RebasePlan;
+  return rc;
+}
+
 static int rebaseWritePlanRows(
   sqlite3 *db,
   const RebasePlanRow *aPlan,
@@ -1199,14 +1208,14 @@ static int rebaseWritePlanRows(
   int rc;
   int i;
 
-  rc = sqlite3_exec(db,
+  rc = rebaseExecPlanDdl(db,
     "DROP TABLE IF EXISTS main.dolt_rebase;"
     "CREATE TABLE main.dolt_rebase("
     "  rebase_order REAL PRIMARY KEY,"
     "  action TEXT,"
     "  commit_hash TEXT,"
     "  commit_message TEXT NOT NULL"
-    ")", 0, 0, 0);
+    ")");
   if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nPlan; i++){
@@ -1268,13 +1277,13 @@ static int rebaseCreateAndPopulatePlanTable(
   int rc;
   int i;
 
-  rc = sqlite3_exec(db,
+  rc = rebaseExecPlanDdl(db,
     "CREATE TABLE main.dolt_rebase("
     "  rebase_order REAL PRIMARY KEY,"
     "  action TEXT,"
     "  commit_hash TEXT,"
     "  commit_message TEXT NOT NULL"
-    ")", 0, 0, 0);
+    ")");
   if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nReplay; i++){

@@ -85,28 +85,16 @@ do_test rebase-messages-null-continue {
 } {f3 f2 f1 main init}
 
 rebase_message_setup
-execsql {
-  CREATE TEMP TABLE saved_plan AS SELECT * FROM dolt_rebase;
-  DROP TABLE dolt_rebase;
+do_catchsql_test rebase-messages-recreate-reserved {
   CREATE TABLE dolt_rebase(rebase_order REAL PRIMARY KEY,
     action TEXT, commit_hash TEXT, commit_message TEXT);
-  INSERT INTO dolt_rebase SELECT * FROM saved_plan;
-  DROP TABLE saved_plan;
-  UPDATE dolt_rebase SET commit_message=NULL WHERE rebase_order=2;
-}
-do_catchsql_test rebase-messages-legacy-null {
-  SELECT dolt_rebase('--continue');
-} {1 {dolt_rebase.commit_message must not be NULL}}
-do_execsql_test rebase-messages-legacy-plan-retained {
+} {1 {table names beginning with dolt_ are reserved for internal use}}
+do_execsql_test rebase-messages-recreate-plan-kept {
   SELECT count(*) FROM dolt_rebase;
   SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';
 } {3 1}
-do_test rebase-messages-legacy-repair {
-  execsql {
-    UPDATE dolt_rebase SET commit_message='ignored' WHERE rebase_order=2;
-    SELECT dolt_rebase('--continue');
-  }
-  execsql {SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%'}
-} {f3 f2 f1 main init}
+do_catchsql_test rebase-messages-alter-plan-refused {
+  ALTER TABLE dolt_rebase ADD COLUMN extra INT;
+} {1 {table dolt_rebase may not be altered}}
 
 finish_test

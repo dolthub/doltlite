@@ -1961,6 +1961,7 @@ struct sqlite3 {
 #define DBFLAG_VacuumOrig     0x0080  /* Open the VACUUM target as orig-format */
 #define DBFLAG_InternalDml    0x0100  /* Running DML the user did not write */
 #define DBFLAG_MergeSchemaAdd 0x0200
+#define DBFLAG_RebasePlan     0x0400  /* Internal CREATE of the rebase plan */
 #endif
 
 /*

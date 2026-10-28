@@ -1147,12 +1147,14 @@ int sqlite3CheckObjectName(
     }
 #ifdef DOLTLITE_PROLLY
     if( pParse->nested==0 && sqlite3StrNICmp(zName, "dolt_", 5)==0 ){
+      int bPlanTable = (db->mDbFlags & DBFLAG_RebasePlan)!=0
+        && sqlite3StrICmp(zType, "table")==0
+        && sqlite3StrICmp(zName, "dolt_rebase")==0;
       int bUserTable = sqlite3StrICmp(zType, "table")==0
         && (sqlite3StrICmp(zName, "dolt_ignore")==0
          || sqlite3StrICmp(zName, "dolt_docs")==0
-         || sqlite3StrICmp(zName, "dolt_tests")==0
-         || sqlite3StrICmp(zName, "dolt_rebase")==0);
-      if( !bUserTable ){
+         || sqlite3StrICmp(zName, "dolt_tests")==0);
+      if( !bUserTable && !bPlanTable ){
         sqlite3ErrorMsg(pParse,
             "table names beginning with dolt_ are reserved for internal use");
         return SQLITE_ERROR;
