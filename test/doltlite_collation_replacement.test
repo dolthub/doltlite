@@ -1,0 +1,82 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc replacement_compare {a b} {string compare $b $a}
+
+foreach collation {BINARY NOCASE RTRIM} {
+  foreach kind {primary secondary unique composite} {
+    reset_db
+    switch $kind {
+      primary {
+        execsql "CREATE TABLE t(id INTEGER,x TEXT COLLATE $collation PRIMARY KEY)"
+      }
+      secondary {
+        execsql "CREATE TABLE t(id INTEGER PRIMARY KEY,x TEXT);
+                 CREATE INDEX idx ON t(x COLLATE $collation)"
+      }
+      unique {
+        execsql "CREATE TABLE t(id INTEGER PRIMARY KEY,x TEXT);
+                 CREATE UNIQUE INDEX idx ON t(x COLLATE $collation)"
+      }
+      composite {
+        execsql "CREATE TABLE t(id INTEGER,x TEXT,
+                 PRIMARY KEY(x COLLATE $collation,id)) WITHOUT ROWID"
+      }
+    }
+    execsql {INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c')}
+    foreach phase {fresh loaded reset attached} {
+      db close
+      sqlite3 db test.db
+      set schema main
+      if {$phase eq "loaded"} {execsql {SELECT * FROM t}}
+      if {$phase eq "reset"} {execsql {PRAGMA writable_schema=RESET}}
+      if {$phase eq "attached"} {
+        db close
+        sqlite3 db :memory:
+        execsql {ATTACH 'test.db' AS aux; PRAGMA writable_schema=RESET}
+        set schema aux
+      }
+      set name collation-replacement-$collation-$kind-$phase
+      do_test $name-refuse {
+        set rc [catch {db collate [string tolower $collation] replacement_compare} message]
+        list $rc [string match {doltlite cannot replace collation '*' used by index '*'} $message]
+      } {1 1}
+      do_execsql_test $name-read \
+        "SELECT x FROM $schema.t ORDER BY x COLLATE $collation" {a b c}
+      do_execsql_test $name-write "
+        BEGIN; INSERT INTO $schema.t VALUES(4,'d');
+        SELECT count(*) FROM $schema.t; ROLLBACK;
+      " 4
+      do_execsql_test $name-integrity "PRAGMA $schema.integrity_check" ok
+    }
+  }
+}
+
+reset_db
+execsql {CREATE TABLE t(x TEXT COLLATE NOCASE); INSERT INTO t VALUES('a'),('b')}
+db close
+sqlite3 db test.db
+do_test collation-replacement-unused {
+  db collate NOCASE replacement_compare
+  execsql {SELECT x FROM t ORDER BY x}
+} {b a}
+
+source $testdir/malloc_common.tcl
+reset_db
+execsql {
+  CREATE TABLE t(x TEXT COLLATE NOCASE PRIMARY KEY);
+  INSERT INTO t VALUES('a'),('b'),('c');
+}
+faultsim_save_and_close
+do_faultsim_test collation-replacement-oom -faults oom-* -prep {
+  faultsim_restore_and_reopen
+} -body {
+  catch {db collate NOCASE replacement_compare}
+} -test {
+  faultsim_test_result {0 1}
+  if {[db eval {SELECT x FROM t ORDER BY x COLLATE NOCASE}] ne {a b c}} {
+    error "collation changed after allocation failure"
+  }
+}
+
+finish_test

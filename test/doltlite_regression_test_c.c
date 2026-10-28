@@ -520,6 +520,150 @@ static void run_custom_collation_unindexed(void){
   removeDbFiles(dbpath);
 }
 
+static void collationReplacementCheck(
+  const char *zCase, const char *zCheck, int result
+){
+  char zName[256];
+  snprintf(zName, sizeof(zName), "%s_%s", zCase, zCheck);
+  check(zName, result);
+}
+
+static int replaceBuiltinCollation(
+  sqlite3 *db, const char *zName, int api, int enc, int remove, int *pDestroyed
+){
+  int (*xCmp)(void*,int,const void*,int,const void*) =
+      remove ? 0 : custom_collation_cmp;
+  if( api==0 ){
+    return sqlite3_create_collation(db, zName, enc, pDestroyed, xCmp);
+  }
+  if( api==1 ){
+    return sqlite3_create_collation_v2(db, zName, enc, pDestroyed,
+        xCmp, custom_collation_destroy);
+  }
+#ifndef SQLITE_OMIT_UTF16
+  {
+    unsigned short zName16[16];
+    int i;
+    for(i=0; zName[i]; i++) zName16[i] = (unsigned char)zName[i];
+    zName16[i] = 0;
+    return sqlite3_create_collation16(db, zName16, enc, pDestroyed, xCmp);
+  }
+#else
+  return SQLITE_MISUSE;
+#endif
+}
+
+static void run_collation_replacement(void){
+  static const char *azColl[] = {"BINARY", "NOCASE", "RTRIM"};
+  static const char *azLayout[] = {
+    "CREATE TABLE t(id INTEGER,x TEXT COLLATE %s PRIMARY KEY)",
+    "CREATE TABLE t(id INTEGER PRIMARY KEY,x TEXT);"
+      "CREATE INDEX idx ON t(x COLLATE %s)",
+    "CREATE TABLE t(id INTEGER PRIMARY KEY,x TEXT);"
+      "CREATE UNIQUE INDEX idx ON t(x COLLATE %s)",
+    "CREATE TABLE t(id INTEGER,x TEXT,PRIMARY KEY(x COLLATE %s,id)) WITHOUT ROWID"
+  };
+  char zPath[256];
+  int c, layout, api, enc, loaded, remove;
+  make_dbpath(zPath, sizeof(zPath), "collation_replacement");
+  for(c=0; c<3; c++){
+    for(layout=0; layout<4; layout++){
+      sqlite3 *db = 0;
+      char *zSql;
+      removeDbFiles(zPath);
+      check("collation_replacement_setup_open", open_db(zPath, &db)==SQLITE_OK);
+      if( !db ) continue;
+      zSql = sqlite3_mprintf(azLayout[layout], azColl[c]);
+      check("collation_replacement_setup_table", execSql(db, zSql)==SQLITE_OK);
+      sqlite3_free(zSql);
+      check("collation_replacement_setup_rows", execSql(db,
+          "INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c')")==SQLITE_OK);
+      sqlite3_close(db);
+      for(api=0; api<3; api++){
+#ifdef SQLITE_OMIT_UTF16
+        if( api==2 ) continue;
+#endif
+        for(enc=SQLITE_UTF8; enc<=SQLITE_UTF16BE; enc++){
+#ifdef SQLITE_OMIT_UTF16
+          if( enc!=SQLITE_UTF8 ) continue;
+#endif
+          for(loaded=0; loaded<2; loaded++){
+            for(remove=0; remove<2; remove++){
+              char zCase[128];
+              int rc;
+              int nDestroyed = 0;
+              snprintf(zCase, sizeof(zCase), "collation_%s_%d_%d_%d_%d_%d",
+                  azColl[c], layout, api, enc, loaded, remove);
+              db = 0;
+              collationReplacementCheck(zCase, "open",
+                  open_db(zPath, &db)==SQLITE_OK);
+              if( !db ) continue;
+              if( loaded ){
+                collationReplacementCheck(zCase, "load",
+                    execSql(db, "SELECT * FROM t")==SQLITE_OK);
+              }
+              rc = replaceBuiltinCollation(db, azColl[c], api, enc,
+                  remove, &nDestroyed);
+              collationReplacementCheck(zCase, "reject", rc==SQLITE_ERROR);
+              collationReplacementCheck(zCase, "error_code",
+                  sqlite3_errcode(db)==SQLITE_ERROR);
+              collationReplacementCheck(zCase, "message",
+                  strstr(sqlite3_errmsg(db), "doltlite cannot replace collation ")!=0
+                  && strstr(sqlite3_errmsg(db), "used by index ")!=0);
+              collationReplacementCheck(zCase, "ownership", nDestroyed==0);
+              zSql = sqlite3_mprintf("SELECT group_concat(x,',') FROM "
+                  "(SELECT x FROM t ORDER BY x COLLATE %s)", azColl[c]);
+              collationReplacementCheck(zCase, "read",
+                  strcmp(queryScalarText(db, zSql), "a,b,c")==0);
+              sqlite3_free(zSql);
+              collationReplacementCheck(zCase, "write", execSqlSilent(db,
+                  "BEGIN; INSERT INTO t VALUES(4,'d'); ROLLBACK")==SQLITE_OK);
+              collationReplacementCheck(zCase, "integrity",
+                  strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+              collationReplacementCheck(zCase, "close", sqlite3_close(db)==SQLITE_OK);
+              collationReplacementCheck(zCase, "ownership_after_close", nDestroyed==0);
+            }
+          }
+        }
+      }
+    }
+  }
+  removeDbFiles(zPath);
+  for(c=0; c<3; c++){
+    int stock;
+    for(stock=0; stock<2; stock++){
+      sqlite3 *db = 0;
+      char *zUri = sqlite3_mprintf("file:%s?doltlite_engine=%s", zPath,
+          stock ? "sqlite" : "prolly");
+      char *zSql;
+      int nDestroyed = 0;
+      check("collation_control_open", open_db_uri(zUri, &db)==SQLITE_OK);
+      zSql = sqlite3_mprintf("CREATE TABLE t(x TEXT COLLATE %s);"
+          "INSERT INTO t VALUES('a'),('b')", azColl[c]);
+      check("collation_control_setup", execSql(db, zSql)==SQLITE_OK);
+      sqlite3_free(zSql);
+      if( stock ){
+        check("collation_control_index",
+            execSql(db, "CREATE INDEX idx ON t(x)")==SQLITE_OK);
+      }
+      sqlite3_close(db);
+      db = 0;
+      check("collation_control_reopen", open_db_uri(zUri, &db)==SQLITE_OK);
+      check("collation_control_allowed", replaceBuiltinCollation(db,
+          azColl[c], 1, SQLITE_UTF8, 0, &nDestroyed)==SQLITE_OK);
+      zSql = sqlite3_mprintf("SELECT 'a'<'b' COLLATE %s", azColl[c]);
+      check("collation_control_callback",
+          strcmp(queryScalarText(db, zSql), "0")==0);
+      sqlite3_free(zSql);
+      check("collation_control_ownership", nDestroyed==0);
+      check("collation_control_close", sqlite3_close(db)==SQLITE_OK);
+      check("collation_control_destroy", nDestroyed==1);
+      sqlite3_free(zUri);
+      removeDbFiles(zPath);
+    }
+  }
+}
+
 typedef struct SerializeMutexProbe SerializeMutexProbe;
 struct SerializeMutexProbe {
   sqlite3 *db;
@@ -20034,6 +20178,7 @@ static const RegressionCase aCases[] = {
   { "peer_commit_keeps_statements", "Peer Commit Keeps Statements Test", run_peer_commit_keeps_statements },
   { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "custom_collation_unindexed", "Custom Collation Unindexed Test", run_custom_collation_unindexed },
+  { "collation_replacement", "Builtin Collation Replacement Test", run_collation_replacement },
   { "serialize_deserialize", "Serialize Deserialize Test", run_serialize_deserialize },
   { "deserialize_eponymous_vtab", "Deserialize Eponymous Vtab Test", run_deserialize_eponymous_vtab },
   { "memory_readonly_open", "Memory Read-Only Open Test", run_memory_readonly_open },

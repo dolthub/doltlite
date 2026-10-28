@@ -2958,10 +2958,25 @@ static int createCollation(
    || sqlite3StrICmp(zName, "NOCASE")==0
    || sqlite3StrICmp(zName, "RTRIM")==0 ){
     int iDb;
+    int bSchemaRead = 0;
+    sqlite3BtreeEnterAll(db);
     for(iDb=0; iDb<db->nDb; iDb++){
       HashElem *pElem;
       if( !db->aDb[iDb].pBt || sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
         continue;
+      }
+      if( !bSchemaRead && !db->init.busy ){
+        char *zErr = 0;
+        int rc = sqlite3Init(db, &zErr);
+        if( rc!=SQLITE_OK ){
+          sqlite3ErrorWithMsg(db, rc, zErr ? "%s" : 0, zErr);
+        }
+        sqlite3DbFree(db, zErr);
+        if( rc!=SQLITE_OK ){
+          sqlite3BtreeLeaveAll(db);
+          return rc;
+        }
+        bSchemaRead = 1;
       }
       for(pElem=sqliteHashFirst(&db->aDb[iDb].pSchema->tblHash);
           pElem; pElem=sqliteHashNext(pElem)){
@@ -2974,12 +2989,14 @@ static int createCollation(
               sqlite3ErrorWithMsg(db, SQLITE_ERROR,
                 "doltlite cannot replace collation '%s' used by index '%s'",
                 zName, pIdx->zName);
+              sqlite3BtreeLeaveAll(db);
               return SQLITE_ERROR;
             }
           }
         }
       }
     }
+    sqlite3BtreeLeaveAll(db);
   }
 #endif
 

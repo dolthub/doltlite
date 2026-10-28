@@ -1,4 +1,5 @@
 doltlite_recover_collation
+doltlite_collation_replacement
 doltlite_recover_corruption
 doltlite_recover_backup_fault
 doltlite_recover_fts3_optimize
