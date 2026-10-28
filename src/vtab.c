@@ -1231,6 +1231,20 @@ FuncDef *sqlite3VtabOverloadFunction(
   return pNew;
 }
 
+#ifdef DOLTLITE_PROLLY
+/*
+** dolt_tests, dolt_ignore, and dolt_docs CREATE their backing table from
+** xBegin. That CREATE runs after OP_Transaction and before the row write.
+** The statement journal has to be open already, so a failed write rolls
+** the CREATE back with the statement.
+*/
+static int vtabLazyMaterializedName(const char *zName){
+  return zName!=0
+      && (sqlite3StrICmp(zName, "dolt_tests")==0
+       || sqlite3StrICmp(zName, "dolt_ignore")==0
+       || sqlite3StrICmp(zName, "dolt_docs")==0);
+}
+#endif
 /*
 ** Make sure virtual table pTab is contained in the pParse->apVirtualLock[]
 ** array so that an OP_VBegin will get generated for it.  Add pTab to the
@@ -1243,6 +1257,12 @@ void sqlite3VtabMakeWritable(Parse *pParse, Table *pTab){
   Table **apVtabLock;
 
   assert( IsVirtual(pTab) );
+#ifdef DOLTLITE_PROLLY
+  if( vtabLazyMaterializedName(pTab->zName) ){
+    sqlite3MultiWrite(pParse);
+    sqlite3MayAbort(pParse);
+  }
+#endif
   for(i=0; i<pToplevel->nVtabLock; i++){
     if( pTab==pToplevel->apVtabLock[i] ) return;
   }
