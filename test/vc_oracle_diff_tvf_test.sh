@@ -412,4 +412,35 @@ INSERT INTO t VALUES(2,2);
   done
 done
 
+rename_setup="
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES(1,1),(2,2);
+SELECT dolt_commit('-Am','c1'); SELECT dolt_tag('v1');
+ALTER TABLE t RENAME TO u; SELECT dolt_commit('-Am','rename');
+UPDATE u SET b=b+10 WHERE a=2; INSERT INTO u VALUES(3,3); SELECT dolt_commit('-Am','c3');
+"
+rename_cols="SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type)"
+oracle "rename_followed_forward" "$rename_setup" \
+  "$rename_cols FROM dolt_diff_u('v1', 'HEAD');"
+oracle "rename_followed_reverse" "$rename_setup" \
+  "$rename_cols FROM dolt_diff_u('HEAD', 'v1');"
+oracle "rename_followed_all_rows_edited" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES(1,1),(2,2);
+SELECT dolt_commit('-Am','c1'); SELECT dolt_tag('v1');
+ALTER TABLE t RENAME TO u; SELECT dolt_commit('-Am','rename');
+UPDATE u SET b=b+10; SELECT dolt_commit('-am','c3');
+" "$rename_cols FROM dolt_diff_u('v1', 'HEAD');"
+oracle "rename_followed_to_working" "$rename_setup UPDATE u SET b=100 WHERE a=3;" \
+  "$rename_cols FROM dolt_diff_u('v1', 'WORKING');"
+oracle "unrelated_recreate_is_added" "
+CREATE TABLE t(a INT PRIMARY KEY, b INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','c1'); SELECT dolt_tag('v1');
+DROP TABLE t;
+CREATE TABLE u(a INT PRIMARY KEY, b INT, c TEXT);
+INSERT INTO u VALUES(7,7,'x');
+SELECT dolt_commit('-Am','c2');
+" "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(from_a,''), '|', diff_type) FROM dolt_diff_u('v1', 'HEAD');"
+
 vc_oracle_finish
