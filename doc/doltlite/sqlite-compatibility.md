@@ -57,12 +57,12 @@ For a DoltLite-format main database, the compatibility contract is:
 - Implicit rowids are allocated from a counter shared by every branch of a
   database, so an `INSERT` that omits the `INTEGER PRIMARY KEY` (or the
   rowid of a table without a primary key) never gets an id another branch
-  already used, and such inserts merge cleanly. This gives every rowid table
-  `AUTOINCREMENT` allocation: after the largest row is deleted the next id
-  continues rather than being reused, and once the counter reaches
-  9223372036854775807 an implicit insert fails with `SQLITE_FULL` instead of
-  falling back to SQLite's random-rowid search — SQLite behaves this way for
-  `AUTOINCREMENT` tables, DoltLite does so for every rowid table.
+  already used, and such inserts merge cleanly. After the largest row is
+  deleted the next id continues rather than being reused. Once the shared
+  counter is already 9223372036854775807, an implicit insert on a table that
+  was not declared `AUTOINCREMENT` picks an unused positive id and does not
+  rewind the counter, including after that maximum row is deleted. A table
+  declared `AUTOINCREMENT` still fails that insert with `SQLITE_FULL`.
   `DROP TABLE` resets the counter and
   `ALTER TABLE ... RENAME` carries it. Only tables declared `AUTOINCREMENT`
   also record the counter in `sqlite_sequence`, which remains the reset
