@@ -677,4 +677,28 @@ COMMIT;
   done
 done
 
+echo "--- view conflict resolved through dolt_schemas ---"
+
+VIEW_CONFLICT_SETUP="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+SELECT dolt_branch('b');
+CREATE VIEW vv AS SELECT id AS x FROM t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_view');
+SELECT dolt_checkout('b');
+CREATE VIEW vv AS SELECT v AS x FROM t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b_view');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b');"
+for side in ours theirs; do
+  oracle "resolve_${side}_view_add_add" "$VIEW_CONFLICT_SETUP" \
+    "SELECT dolt_conflicts_resolve('--$side', 'dolt_schemas');
+SELECT CONCAT('R|', x) FROM vv;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+done
+
 vc_oracle_finish

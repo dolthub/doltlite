@@ -281,5 +281,52 @@ run_test "tag_during_conflicts_no_tag" \
 run_test "tag_during_conflicts_not_persisted" \
   "SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;" "0" "$DB14"
 
+# A view conflict holds no rows; resolving it installs one side's definition.
+view_conflict_db() {  # view_conflict_db <db> <base ddl> <ours ddl> <theirs ddl>
+  rm -f "$1"
+  echo "CREATE TABLE t(id INT PRIMARY KEY, v INT); INSERT INTO t VALUES(1,10);
+$2
+SELECT dolt_commit('-Am','base'); SELECT dolt_branch('b');
+$3 SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('b'); $4 SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');" | $DOLTLITE "$1" > /dev/null 2>&1
+}
+VIEW_Q="SELECT coalesce((SELECT sql FROM sqlite_master WHERE name='vv'),'none');
+SELECT count(*) FROM dolt_conflicts;"
+DBV=/tmp/test_conf_view_$$.db
+for kind in moddrop dropmod modmod; do
+  case $kind in
+    moddrop) base="CREATE VIEW vv AS SELECT id FROM t;"; ours="DROP VIEW vv;"
+             theirs="DROP VIEW vv; CREATE VIEW vv AS SELECT v FROM t;"
+             want_ours="none"; want_theirs="CREATE VIEW vv AS SELECT v FROM t" ;;
+    dropmod) base="CREATE VIEW vv AS SELECT id FROM t;"
+             ours="DROP VIEW vv; CREATE VIEW vv AS SELECT v FROM t;"; theirs="DROP VIEW vv;"
+             want_ours="CREATE VIEW vv AS SELECT v FROM t"; want_theirs="none" ;;
+    modmod)  base="CREATE VIEW vv AS SELECT id FROM t;"
+             ours="DROP VIEW vv; CREATE VIEW vv AS SELECT 1 AS o FROM t;"
+             theirs="DROP VIEW vv; CREATE VIEW vv AS SELECT 2 AS th FROM t;"
+             want_ours="CREATE VIEW vv AS SELECT 1 AS o FROM t"
+             want_theirs="CREATE VIEW vv AS SELECT 2 AS th FROM t" ;;
+  esac
+  for side in ours theirs; do
+    if [ $side = ours ]; then want=$want_ours; else want=$want_theirs; fi
+    view_conflict_db "$DBV" "$base" "$ours" "$theirs"
+    out=$(printf "BEGIN;\nSELECT dolt_merge('b');\nSELECT dolt_conflicts_resolve('--%s','vv');\n%s\nCOMMIT;\nSELECT length(dolt_commit('-Am','merged'));\n" \
+          "$side" "$VIEW_Q" | $DOLTLITE "$DBV" 2>/dev/null | tail -4)
+    dltest_assert_equal "view_${kind}_resolve_${side}" "$out" "0
+$want
+0
+40"
+  done
+done
+
+view_conflict_db "$DBV" "" "CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;" \
+  "CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 2; END;"
+run_test_error_match "table_schema_conflict_still_refused" \
+  "BEGIN; SELECT dolt_merge('b');
+SELECT dolt_conflicts_resolve('--theirs','t');" \
+  "Unable to automatically resolve schema conflicts" "$DBV"
+rm -f "$DBV"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
 dltest_finish
