@@ -20,7 +20,8 @@ case "$mode" in
       perl "$root/test/patch_sqllogictest.pl" < src/sqllogictest.c > src/sqllogictest.c.patched
       mv src/sqllogictest.c.patched src/sqllogictest.c
       grep -q 'SQLINTEGER indicator' src/slt_odbc3.c
-      perl -pi -e 's/SQLINTEGER indicator/SQLLEN indicator/g' src/slt_odbc3.c
+      grep -q 'char \*pc2;' src/slt_odbc3.c
+      perl -pi -e 's/SQLINTEGER indicator/SQLLEN indicator/g; s/char \*pc2;/const char *pc2;/g' src/slt_odbc3.c
       cd src
       gcc -Werror -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
         -DSQLITE_OMIT_LOAD_EXTENSION -c md5.c
