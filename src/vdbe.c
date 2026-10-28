@@ -6273,11 +6273,21 @@ notExistsWithKey:
 #ifdef SQLITE_DEBUG
   if( pOp->opcode==OP_SeekRowid ) pC->seekOp = OP_SeekRowid;
 #endif
+#ifdef DOLTLITE_PROLLY
+  assert( pC->isTable || (pOp->p5 & OPFLAG_SQLROWID)!=0 );
+#else
   assert( pC->isTable );
+#endif
   assert( pC->eCurType==CURTYPE_BTREE );
   pCrsr = pC->uc.pCursor;
   assert( pCrsr!=0 );
   res = 0;
+#ifdef DOLTLITE_PROLLY
+  if( pOp->p5 & OPFLAG_SQLROWID ){
+    pC->idxRowidCacheValid = 0;
+    rc = sqlite3BtreeSqlRowidMoveto(pCrsr, iKey, &res);
+  }else
+#endif
   rc = sqlite3BtreeTableMoveto(pCrsr, iKey, 0, &res);
   assert( rc==SQLITE_OK || res==0 );
   pC->movetoTarget = iKey;  /* Used by OP_Delete */

@@ -17654,6 +17654,112 @@ static void run_rowid_named_pk_keeps_rowid_table(void){
 
 /* Clustered TEXT PK tables expose SQL rowid; sqlite3_blob_open must seek by that
 ** rowid. Explicit WITHOUT ROWID stays rejected. */
+static int blobLookupValue(sqlite3_blob *pBlob, int expected){
+  char a[9] = {0};
+  return pBlob && sqlite3_blob_bytes(pBlob)==8
+      && sqlite3_blob_read(pBlob, a, 8, 0)==SQLITE_OK
+      && atoi(a)==expected;
+}
+
+static void run_clustered_blob_lookup(void){
+  static const char *azSchema[] = {
+    "k TEXT,id INTEGER,b BLOB,PRIMARY KEY(k)",
+    "k BLOB,id INTEGER,b BLOB,PRIMARY KEY(k)",
+    "k TEXT,id INTEGER,b BLOB,PRIMARY KEY(k,id DESC)",
+    "k TEXT COLLATE NOCASE,id INTEGER,b BLOB,PRIMARY KEY(k)",
+    "k TEXT COLLATE RTRIM,id INTEGER,b BLOB,PRIMARY KEY(k)",
+    "k TEXT,id INTEGER,b BLOB,PRIMARY KEY(k DESC)",
+    "k INT,id INTEGER,b BLOB,PRIMARY KEY(k)",
+    "k INT,id INTEGER,b BLOB,PRIMARY KEY(k DESC)",
+    "k TEXT,id INTEGER,b BLOB,PRIMARY KEY(k)"
+  };
+  static const char *azKey[] = {
+    "printf('k%08d',i)", "CAST(printf('k%08d',i) AS BLOB)",
+    "printf('k%08d',i)", "printf('K%08d',i)", "printf('k%08d  ',i)",
+    "printf('k%08d',i)", "i-129", "9007199254740992+i", "printf('%0512d',i)"
+  };
+  char zPath[512];
+  int layout, pending;
+  make_dbpath(zPath, sizeof(zPath), "clustered_blob_lookup");
+  for(layout=0; layout<9; layout++){
+    for(pending=0; pending<2; pending++){
+      sqlite3 *db = 0;
+      sqlite3_stmt *pStmt = 0;
+      sqlite3_blob *pBlob = 0;
+      sqlite3_int64 aRowid[257];
+      sqlite3_int64 first;
+      Btree *pBt;
+      u64 scanned;
+      char *zSql;
+      int i, rc, expectedFirst;
+      removeDbFiles(zPath);
+      check("blob_lookup_open", open_db(zPath, &db)==SQLITE_OK);
+      if( !db ) continue;
+      zSql = sqlite3_mprintf("CREATE TABLE t(%s); BEGIN;"
+          "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<257)"
+          " INSERT INTO t SELECT %s,i,CAST(printf('%%08d',i) AS BLOB) FROM n;",
+          azSchema[layout], azKey[layout]);
+      check("blob_lookup_setup", execSql(db, zSql)==SQLITE_OK);
+      sqlite3_free(zSql);
+      if( !pending ) check("blob_lookup_commit", execSql(db, "COMMIT")==SQLITE_OK);
+      rc = sqlite3_prepare_v2(db, "SELECT rowid,id FROM t ORDER BY id", -1, &pStmt, 0);
+      check("blob_lookup_ids_prepare", rc==SQLITE_OK);
+      i = 0;
+      while( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW && i<257 ){
+        aRowid[i++] = sqlite3_column_int64(pStmt, 0);
+      }
+      check("blob_lookup_ids", i==257);
+      sqlite3_finalize(pStmt);
+      if( i!=257 ) {sqlite3_close(db); continue;}
+      first = queryInt64(db, "SELECT rowid FROM t LIMIT 1");
+      expectedFirst = (int)queryInt64(db, "SELECT id FROM t LIMIT 1");
+      pBt = db->aDb[0].pBt;
+      scanned = doltliteBtreeSqlRowidScanCountForTest(pBt);
+      check("blob_lookup_cold_first_open",
+          sqlite3_blob_open(db,"main","t","b",first,0,&pBlob)==SQLITE_OK);
+      check("blob_lookup_cold_first_value", blobLookupValue(pBlob, expectedFirst));
+      check("blob_lookup_cold_first_work", doltliteBtreeSqlRowidScanCountForTest(pBt)-scanned<=1);
+      for(i=0; i<514 && pBlob; i++){
+        int j = (i*157)%257;
+        check("blob_lookup_reopen", sqlite3_blob_reopen(pBlob,aRowid[j])==SQLITE_OK);
+        check("blob_lookup_value", blobLookupValue(pBlob,j+1));
+      }
+      check("blob_lookup_linear_work", doltliteBtreeSqlRowidScanCountForTest(pBt)-scanned<=257);
+      check("blob_lookup_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
+      pBlob = 0;
+      scanned = doltliteBtreeSqlRowidScanCountForTest(pBt);
+      for(i=0; i<257; i++){
+        check("blob_lookup_warm_open",
+            sqlite3_blob_open(db,"main","t","b",aRowid[i],0,&pBlob)==SQLITE_OK);
+        check("blob_lookup_warm_value", blobLookupValue(pBlob,i+1));
+        check("blob_lookup_warm_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
+        pBlob = 0;
+      }
+      check("blob_lookup_warm_open_work", doltliteBtreeSqlRowidScanCountForTest(pBt)==scanned);
+      check("blob_lookup_release", sqlite3_db_release_memory(db)==SQLITE_OK);
+      check("blob_lookup_release_drops_cache", doltliteBtreeSqlRowidCacheBytesForTest(pBt)==0);
+      check("blob_lookup_tiny_cache", execSql(db, "PRAGMA cache_size=-1")==SQLITE_OK);
+      {
+        sqlite3_int64 used = sqlite3_memory_used();
+        for(i=0; i<16; i++){
+          int j = (i*157)%257;
+          check("blob_lookup_tiny_open",
+              sqlite3_blob_open(db,"main","t","b",aRowid[j],0,&pBlob)==SQLITE_OK);
+          check("blob_lookup_tiny_value", blobLookupValue(pBlob,j+1));
+          check("blob_lookup_tiny_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
+          pBlob = 0;
+        }
+        check("blob_lookup_tiny_bounded", sqlite3_memory_used()-used<128*1024);
+        check("blob_lookup_tiny_cache_budget", doltliteBtreeSqlRowidCacheBytesForTest(pBt)<2048);
+      }
+      check("blob_lookup_integrity", strcmp(queryScalarText(db,"PRAGMA integrity_check"),"ok")==0);
+      if( pending ) check("blob_lookup_rollback", execSql(db,"ROLLBACK")==SQLITE_OK);
+      check("blob_lookup_db_close", sqlite3_close(db)==SQLITE_OK);
+    }
+  }
+  removeDbFiles(zPath);
+}
+
 static void run_clustered_pk_blob_open(void){
   char dbpath[512];
   sqlite3 *db = 0;
@@ -20413,6 +20519,7 @@ static const RegressionCase aCases[] = {
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
   { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
   { "clustered_pk_blob_open", "Clustered PK Blob Open Test", run_clustered_pk_blob_open },
+  { "clustered_blob_lookup", "Clustered Blob Lookup Cache Test", run_clustered_blob_lookup },
   { "diff_side_schema_custom_function", "Diff Side Schema Custom Function Test", run_diff_side_schema_custom_function },
   { "rollback_persist_failure_ends_txn", "Rollback Persist Failure Ends Write Txn Test", run_rollback_persist_failure_ends_txn },
   { "failed_statement_catalog_work", "Failed Statement Catalog Work Test", run_failed_statement_catalog_work },
