@@ -310,8 +310,7 @@ int loadSchemaEntryFromCatalog(
 ){
   ProllyHash masterRoot;
   u8 masterFlags = 0;
-  ProllyCursor cur;
-  int res, rc;
+  int rc;
 
   memset(pEntry, 0, sizeof(*pEntry));
   *pFound = 0;
@@ -327,9 +326,27 @@ int loadSchemaEntryFromCatalog(
     return nTables>0 ? SQLITE_CORRUPT : SQLITE_OK;
   }
   if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
+  return loadSchemaEntryFromMaster(cs, pCache, &masterRoot, masterFlags,
+                                   zName, pEntry, pFound);
+}
 
-  prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
+int loadSchemaEntryFromMaster(
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const ProllyHash *pMasterRoot,
+  u8 masterFlags,
+  const char *zName,
+  SchemaEntry *pEntry,
+  int *pFound
+){
+  ProllyCursor cur;
+  int res, rc;
+
+  memset(pEntry, 0, sizeof(*pEntry));
+  *pFound = 0;
+  if( !zName || prollyHashIsEmpty(pMasterRoot) ) return SQLITE_OK;
+
+  prollyCursorInit(&cur, cs, pCache, pMasterRoot, masterFlags);
   rc = prollyCursorFirst(&cur, &res);
   if( rc!=SQLITE_OK || res ){
     prollyCursorClose(&cur);

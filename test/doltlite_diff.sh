@@ -418,6 +418,30 @@ run_test "diff_summary_working_drop_index" \
   "t|t|modified|0|1" "$IDX_DB"
 rm -f "$IDX_DB"
 
+# A rename between two commits is a property of those commits, not of the
+# live schema or the checked-out branch.
+RN_DB=/tmp/test_diff_rename_fixed_$$.db
+rm -f "$RN_DB"
+dltest_run_sql "CREATE TABLE t(a INT PRIMARY KEY, b INT); INSERT INTO t VALUES (1,1),(2,2);
+SELECT dolt_commit('-Am','c1'); SELECT dolt_tag('tc1');
+ALTER TABLE t RENAME TO u; INSERT INTO u VALUES (3,3);
+SELECT dolt_commit('-Am','c2'); SELECT dolt_tag('tc2');
+ALTER TABLE u ADD COLUMN c INT; SELECT dolt_commit('-am','c3');" "$RN_DB" >/dev/null
+RN_Q="SELECT from_table_name||'|'||to_table_name||'|'||diff_type FROM dolt_diff_summary('tc1','tc2');
+SELECT from_table_name||'|'||to_table_name||'|'||diff_type FROM dolt_diff_summary('tc2','tc1');
+SELECT table_name||'|'||rows_added||'|'||rows_deleted||'|'||rows_unmodified FROM dolt_diff_stat('tc1','tc2');
+SELECT from_table_name||'|'||to_table_name FROM dolt_schema_diff('tc1','tc2');"
+RN_WANT="t|u|renamed
+u|t|renamed
+u|1|0|2
+t|u"
+run_test "rename_fixed_commits_after_later_alter" "$RN_Q" "$RN_WANT" "$RN_DB"
+dltest_run_sql "SELECT dolt_checkout('-b','old','tc1');" "$RN_DB" >/dev/null
+run_test "rename_fixed_commits_other_branch" \
+  "SELECT dolt_checkout('old'); $RN_Q" "0
+$RN_WANT" "$RN_DB"
+rm -f "$RN_DB"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 
 dltest_finish
