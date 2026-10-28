@@ -107,6 +107,8 @@ struct DiffTblCursor {
   DiffPair *aPairs;
   int nPairs;
   int nPairsAlloc;
+  char *zSliceFromTable;
+  char *zSliceToTable;
   int iPair;
   int pairsDone;
   int isHistory;
@@ -554,6 +556,48 @@ static int dtResolveSliceEnd(
   return SQLITE_OK;
 }
 
+/* The table under its other name at the end of the range where this name
+** is missing, paired as dolt_diff_stat pairs it: by content, mutually. */
+static int dtSliceRenameMate(
+  sqlite3 *db,
+  const ProllyHash *pFromCat,
+  const ProllyHash *pToCat,
+  const char *zName,
+  int bNameIsTo,
+  char **pzMate
+){
+  struct TableEntry *aFrom = 0, *aTo = 0;
+  struct TableEntry *pKnown = 0, *pMate = 0, *pBack = 0;
+  int nFrom = 0, nTo = 0;
+  int i;
+  int rc;
+  *pzMate = 0;
+  rc = doltliteLoadCatalog(db, pFromCat, &aFrom, &nFrom, 0);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCatalog(db, pToCat, &aTo, &nTo, 0);
+  if( rc!=SQLITE_OK ) goto mate_done;
+  for(i=0; i<(bNameIsTo ? nTo : nFrom); i++){
+    struct TableEntry *pE = bNameIsTo ? &aTo[i] : &aFrom[i];
+    if( pE->zName && sqlite3_stricmp(pE->zName, zName)==0 ){
+      pKnown = pE;
+      break;
+    }
+  }
+  if( !pKnown ) goto mate_done;
+  rc = doltliteCatalogRenameMate(db, aFrom, nFrom, aFrom, nFrom, aTo, nTo,
+                                 pKnown, !bNameIsTo, &pMate);
+  if( rc!=SQLITE_OK || !pMate ) goto mate_done;
+  rc = doltliteCatalogRenameMate(db, aFrom, nFrom, aFrom, nFrom, aTo, nTo,
+                                 pMate, bNameIsTo, &pBack);
+  if( rc==SQLITE_OK && pBack==pKnown && pMate->zName ){
+    *pzMate = sqlite3_mprintf("%s", pMate->zName);
+    if( !*pzMate ) rc = SQLITE_NOMEM;
+  }
+mate_done:
+  doltliteFreeCatalog(aFrom, nFrom);
+  doltliteFreeCatalog(aTo, nTo);
+  return rc;
+}
+
 static int buildSliceDiffPair(
   DiffTblCursor *pCur,
   sqlite3 *db,
@@ -577,6 +621,29 @@ static int buildSliceDiffPair(
       pCur, db, zToRef, zTableName, &to, &bRefError);
   if( bRefError ) *pzBadRef = zToRef;
   if( rc!=SQLITE_OK ) return rc;
+
+  if( prollyHashIsEmpty(&from.schemaHash)!=prollyHashIsEmpty(&to.schemaHash) ){
+    int bMissingFrom = prollyHashIsEmpty(&from.schemaHash);
+    char *zMate = 0;
+    rc = dtSliceRenameMate(db, &from.catHash, &to.catHash, zTableName,
+                           bMissingFrom, &zMate);
+    if( rc!=SQLITE_OK ) return rc;
+    if( zMate ){
+      rc = dtResolveSliceEnd(pCur, db, bMissingFrom ? zFromRef : zToRef,
+                             zMate, bMissingFrom ? &from : &to, &bRefError);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zMate);
+        return rc;
+      }
+      if( bMissingFrom ){
+        sqlite3_free(pCur->zSliceFromTable);
+        pCur->zSliceFromTable = zMate;
+      }else{
+        sqlite3_free(pCur->zSliceToTable);
+        pCur->zSliceToTable = zMate;
+      }
+    }
+  }
 
   if( prollyHashCompare(&from.tblRoot, &to.tblRoot)==0
    && prollyHashCompare(&from.schemaHash, &to.schemaHash)==0 ){
@@ -744,12 +811,16 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
     pCur->diffIterOpen = 1;
 
     rc = doltliteSideColsLoad(db, &p->fromCatHash, &p->fromSchemaHash,
-                              pVtab->zTableName, &pVtab->cols,
+                              pCur->zSliceFromTable ? pCur->zSliceFromTable
+                                                    : pVtab->zTableName,
+                              &pVtab->cols,
                               !prollyHashIsEmpty(&p->fromTblRoot),
                               &pCur->fromSide);
     if( rc==SQLITE_OK ){
       rc = doltliteSideColsLoad(db, &p->toCatHash, &p->toSchemaHash,
-                                pVtab->zTableName, &pVtab->cols,
+                                pCur->zSliceToTable ? pCur->zSliceToTable
+                                                    : pVtab->zTableName,
+                                &pVtab->cols,
                                 !prollyHashIsEmpty(&p->toTblRoot),
                                 &pCur->toSide);
     }
@@ -943,6 +1014,8 @@ static int dtClose(sqlite3_vtab_cursor *cur){
   freePairCols(c);
   clearHistoryWalk(c);
   sqlite3_free(c->aPairs);
+  sqlite3_free(c->zSliceFromTable);
+  sqlite3_free(c->zSliceToTable);
   sqlite3_free(c);
   return SQLITE_OK;
 }
@@ -976,6 +1049,10 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   sqlite3_free(c->aPairs);
   c->aPairs = 0;
   c->nPairs = 0;
+  sqlite3_free(c->zSliceFromTable);
+  sqlite3_free(c->zSliceToTable);
+  c->zSliceFromTable = 0;
+  c->zSliceToTable = 0;
   c->nPairsAlloc = 0;
   c->iPair = 0;
   c->pairsDone = 0;
