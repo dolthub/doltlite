@@ -36,7 +36,10 @@ extern int dl_go_get_chunks(uintptr_t h, int n, unsigned char *hashes,
 
 static int SQLITE_CALLBACK dl_xget(void *pCtx, const unsigned char aHash[20],
                                    unsigned char **ppBytes, int *pnBytes) {
-  return dl_go_get_chunks((uintptr_t)pCtx, 1, (unsigned char *)aHash, ppBytes, pnBytes);
+  int rc = dl_go_get_chunks((uintptr_t)pCtx, 1, (unsigned char *)aHash, ppBytes, pnBytes);
+  // Unlike xGetMany, xGet must report an absent chunk as NOTFOUND; OK with no bytes is an I/O error.
+  if (rc == DOLTLITE_SOURCE_OK && *ppBytes == NULL) return DOLTLITE_SOURCE_NOTFOUND;
+  return rc;
 }
 static int SQLITE_CALLBACK dl_xgetmany(void *pCtx, int nHash, const unsigned char *aHash,
                                        unsigned char **apBytes, int *anBytes) {
