@@ -1340,9 +1340,7 @@ int flushIfNeeded(BtCursor *pCur){
        && p->pgnoRoot==pCur->pgnoRoot ){
         if( !p->isPinned
          && (p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT) ){
-          p->isPinned = 1;
           rc = saveCursorPosition(p);
-          p->isPinned = 0;
           if( rc!=SQLITE_OK ) return rc;
         } else if( p->eState!=CURSOR_REQUIRESEEK
                 && p->eState!=CURSOR_INVALID ){
