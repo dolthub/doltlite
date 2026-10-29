@@ -1591,7 +1591,7 @@ doltlite_tag.o:	$(TOP)/src/doltlite_tag.c $(DEPS_OBJ_COMMON)
 doltlite_ancestor.o:	$(TOP)/src/doltlite_ancestor.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_ancestor.c
 
-doltlite_conflicts.o:	$(TOP)/src/doltlite_conflicts.c $(DEPS_OBJ_COMMON)
+doltlite_conflicts.o:	$(TOP)/src/doltlite_conflicts.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_conflicts.c
 
 doltlite_framed.o:	$(TOP)/src/doltlite_framed.c $(DEPS_OBJ_COMMON)

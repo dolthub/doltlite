@@ -1663,6 +1663,7 @@ static int prollyVcStateEqual(const DoltVcState *a, const DoltVcState *b){
       && a->pendingReplayCommit==b->pendingReplayCommit
       && prollyHashCompare(&a->mergeCommitHash, &b->mergeCommitHash)==0
       && prollyHashCompare(&a->conflictsCatalogHash, &b->conflictsCatalogHash)==0
+      && prollyHashCompare(&a->conflictsTheirCatalog, &b->conflictsTheirCatalog)==0
       && prollyHashCompare(&a->constraintViolationsHash,
                            &b->constraintViolationsHash)==0;
 }

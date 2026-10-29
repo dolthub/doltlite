@@ -702,6 +702,121 @@ SELECT CONCAT('R|', x) FROM vv;
 SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
 done
 
+echo "--- --theirs refusals: foreign keys and diverged columns ---"
+
+FK_CHILD_SETUP="
+CREATE TABLE p(id INT PRIMARY KEY);
+CREATE TABLE c(id INT PRIMARY KEY, v INT, pid INT, FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES(1);
+INSERT INTO p VALUES(2);
+INSERT INTO c VALUES(1, 0, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE c SET v=10 WHERE id=1;
+DELETE FROM p WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_side');
+SELECT dolt_checkout('feature');
+UPDATE c SET v=20, pid=2 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_side');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+oracle "resolve_theirs_orphans_child_keeps_state" "$FK_CHILD_SETUP" \
+  "SELECT dolt_conflicts_resolve('--theirs', 'c');
+SELECT CONCAT('R|c|', id, '|', v, '|', pid) FROM c;
+SELECT CONCAT('R|conflicts|', \`table\`, '|', num_conflicts) FROM dolt_conflicts;"
+
+FK_PARENT_SETUP="
+CREATE TABLE p(id INT PRIMARY KEY, v INT);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT, FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES(1, 0);
+INSERT INTO p VALUES(2, 0);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE p SET v=1 WHERE id=2;
+INSERT INTO c VALUES(1, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_side');
+SELECT dolt_checkout('feature');
+DELETE FROM p WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_side');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+oracle "resolve_theirs_deletes_referenced_parent_keeps_state" "$FK_PARENT_SETUP" \
+  "SELECT dolt_conflicts_resolve('--theirs', 'p');
+SELECT CONCAT('R|p|', id, '|', v) FROM p;
+SELECT CONCAT('R|conflicts|', \`table\`, '|', num_conflicts) FROM dolt_conflicts;"
+
+oracle "resolve_theirs_keeps_preexisting_orphan" \
+"CREATE TABLE p(id INT PRIMARY KEY);
+CREATE TABLE c(id INT PRIMARY KEY, v INT, pid INT, FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES(1);
+INSERT INTO p VALUES(2);
+INSERT INTO c VALUES(1, 0, 1);
+INSERT INTO c VALUES(2, 0, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE c SET v=10 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_side');
+SELECT dolt_checkout('feature');
+UPDATE c SET v=20 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_side');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+" \
+  "SELECT dolt_conflicts_resolve('--theirs', 'c');
+SELECT CONCAT('R|c|', id, '|', v, '|', pid) FROM c;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+
+column_setup() {
+  local main_ddl="$1" feature_ddl="$2"
+  printf '%s\n' "
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES(1, 1, 1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+$main_ddl
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_side');
+SELECT dolt_checkout('feature');
+$feature_ddl
+UPDATE t SET a=20 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_side');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+}
+ADD_D="ALTER TABLE t ADD COLUMN d INT DEFAULT 5;"
+DROP_C="ALTER TABLE t DROP COLUMN c;"
+
+oracle "resolve_theirs_ours_added_column_keeps_ours" "$(column_setup "$ADD_D" "")" \
+  "SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT CONCAT('R|', id, '|', a, '|', d) FROM t;"
+oracle "resolve_theirs_ours_dropped_column_keeps_ours" "$(column_setup "$DROP_C" "")" \
+  "SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT CONCAT('R|', id, '|', a, '|', b) FROM t;"
+oracle "resolve_theirs_their_added_column" "$(column_setup "" "$ADD_D")" \
+  "SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT CONCAT('R|', id, '|', a, '|', b, '|', c, '|', d) FROM t;"
+oracle "resolve_theirs_their_dropped_column" "$(column_setup "" "$DROP_C")" \
+  "SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT CONCAT('R|', id, '|', a, '|', b) FROM t;"
+oracle "resolve_ours_their_added_column" "$(column_setup "" "$ADD_D")" \
+  "SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT CONCAT('R|', id, '|', a, '|', b, '|', c, '|', d) FROM t;"
+
 echo "--- trigger conflict resolved through dolt_schemas ---"
 
 TRIGGER_CONFLICT_SETUP="
