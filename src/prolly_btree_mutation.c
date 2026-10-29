@@ -947,6 +947,11 @@ static int btCursorInsertImpl(
   if( flags & BTREE_PREFORMAT ){
     return SQLITE_OK;
   }
+  if( (flags & BTREE_SAVEPOSITION)
+   && pCur->eState==CURSOR_REQUIRESEEK ){
+    rc = restoreCursorPosition(pCur, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
@@ -1257,13 +1262,6 @@ static int btCursorInsertImpl(
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
         ProllyMutMapEntry *pEntry = pInsertedEntry;
         CLEAR_CACHED_PAYLOAD(pCur);
-        /* Advance the tree only if it sat on the written row; MUT-only
-        ** already parks on the next committed row. */
-        if( prollyCursorIsValid(&pCur->pCur)
-         && (!pCur->mmActive || pCur->mergeSrc!=MERGE_SRC_MUT) ){
-          int trc = prollyCursorNext(&pCur->pCur);
-          if( trc!=SQLITE_OK ) return trc;
-        }
         if( !pEntry ){
           rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
         }
@@ -1274,6 +1272,15 @@ static int btCursorInsertImpl(
           pCur->mmActive = 1;
           pCur->mmPhysActive = 1;
           pCur->mergeSrc = MERGE_SRC_MUT;
+          if( prollyCursorIsValid(&pCur->pCur) ){
+            const u8 *pTreeKey;
+            int nTreeKey;
+            prollyCursorKey(&pCur->pCur, &pTreeKey, &nTreeKey);
+            if( nTreeKey==pEntry->nKey
+             && memcmp(pTreeKey, pEntry->pKey, nTreeKey)==0 ){
+              pCur->mergeSrc = MERGE_SRC_BOTH;
+            }
+          }
           pCur->eState = CURSOR_VALID;
         }else{
           pCur->mmActive = 0;
