@@ -34,6 +34,7 @@ extern int orig_sqlite3PagerWrite(DbPage*);
 extern int orig_sqlite3PagerPageRefcount(DbPage*);
 extern int orig_sqlite3PagerSharedLock(Pager*);
 extern int orig_sqlite3PagerOpenWal(Pager*, int*);
+extern int orig_sqlite3PagerWalCallback(Pager*);
 extern int orig_sqlite3PagerIsMemdb(Pager*);
 extern void orig_sqlite3PagerSetBusyHandler(Pager*, int(*)(void*), void*);
 extern void orig_sqlite3PagerShrink(Pager*);
@@ -126,6 +127,7 @@ struct PagerOps {
   int (*xWalSupported)(Pager*);
   int (*xOpenWal)(Pager*, int*);
   int (*xCloseWal)(Pager*, sqlite3*);
+  int (*xWalCallback)(Pager*);
 #endif
 };
 
@@ -410,6 +412,9 @@ static int shimPagerOpenWal(Pager *p, int *pisOpen){
 static int shimPagerCloseWal(Pager *p, sqlite3 *db){
   (void)p; (void)db; return SQLITE_OK;
 }
+static int shimPagerWalCallback(Pager *p){
+  (void)p; return 0;
+}
 #endif
 
 static const PagerOps shimPagerOps = {
@@ -460,6 +465,7 @@ static const PagerOps shimPagerOps = {
   shimPagerWalSupported,
   shimPagerOpenWal,
   shimPagerCloseWal,
+  shimPagerWalCallback,
 #endif
 };
 
@@ -511,6 +517,7 @@ static const PagerOps origPagerOps = {
   orig_sqlite3PagerWalSupported,
   orig_sqlite3PagerOpenWal,
   orig_sqlite3PagerCloseWal,
+  orig_sqlite3PagerWalCallback,
 #endif
 };
 
@@ -864,8 +871,7 @@ int sqlite3PagerWalSupported(Pager *pPager){
   return getPagerOps(pPager)->xWalSupported(pPager);
 }
 int sqlite3PagerWalCallback(Pager *pPager){
-  (void)pPager;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xWalCallback(pPager);
 }
 int sqlite3PagerOpenWal(Pager *pPager, int *pisOpen){
   return getPagerOps(pPager)->xOpenWal(pPager, pisOpen);

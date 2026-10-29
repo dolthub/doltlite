@@ -304,6 +304,19 @@ want_eq "J9_stock_wal_to_delete" "$(dl_last "PRAGMA journal_mode=DELETE;" "$DB")
 want_eq "J10_stock_wal_transition_persists" "$(sq_last "PRAGMA journal_mode;" "$DB")" "delete"
 want_eq "J11_stock_wal_integrity" "$(sq_last "PRAGMA integrity_check;" "$DB")" "ok"
 
+# Commits run the WAL hook, so the default auto-checkpoint keeps the log at
+# about wal_autocheckpoint frames instead of growing until asked.
+rm -f "$DB" "$DB-wal" "$DB-shm"
+{ echo "PRAGMA journal_mode=WAL;"; echo "CREATE TABLE t(x);"
+  for i in $(seq 1 1500); do echo "INSERT INTO t VALUES(randomblob(4000));"; done
+  echo "PRAGMA wal_checkpoint(PASSIVE);"; } > "$TMP/wal_autockpt.sql"
+frames=$($DOLTLITE "file:$DB?doltlite_engine=sqlite" < "$TMP/wal_autockpt.sql" 2>&1 | tail -1 | cut -d'|' -f2)
+if [ -n "$frames" ] && [ "$frames" -lt 1000 ] 2>/dev/null; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1)); ERRORS="$ERRORS\n  FAIL: J12_wal_auto_checkpoints (frames left in the WAL: $frames)"
+fi
+
 echo ""
 echo "--- VC features on non-doltlite file ---"
 
