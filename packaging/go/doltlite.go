@@ -155,6 +155,14 @@ type conn struct {
 	chunkSource *C.doltlite_chunk_source
 	chunkHandle cgo.Handle
 	hasChunkSrc bool
+
+	authorizer    cgo.Handle
+	hasAuthorizer bool
+
+	// interruptMu lets a context interrupt a running statement without waiting
+	// on mu or runMu, which that statement holds, and keeps it off a closed handle.
+	interruptMu sync.Mutex
+	dbClosed    bool
 }
 
 // ChunkSource supplies content-addressed chunks the engine is missing from its
@@ -323,9 +331,16 @@ func (c *conn) Close() error {
 				C.sqlite3_finalize(s.st)
 			}
 		}
+		c.interruptMu.Lock()
+		c.dbClosed = true
+		c.interruptMu.Unlock()
 		C.sqlite3_close_v2(c.db)
 	})
 	c.stop()
+	if c.hasAuthorizer {
+		c.authorizer.Delete()
+		c.hasAuthorizer = false
+	}
 	// The registration dropped with the db; free the struct and handle.
 	if c.hasChunkSrc {
 		C.sqlite3_free(unsafe.Pointer(c.chunkSource))
@@ -348,6 +363,25 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 	}
 	if s == nil {
 		return nil, errNoStatement
+	}
+	return s, nil
+}
+
+// PrepareContext is Prepare, interrupting the compile when ctx ends.
+func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	stop := c.interruptOnDone(ctx)
+	s, err := c.Prepare(query)
+	stop()
+	if err != nil {
+		return nil, contextErr(ctx, err)
+	}
+	// SQLite checks for an interrupt only between some tokens, so a compile can finish after ctx ends.
+	if err := ctx.Err(); err != nil {
+		s.Close()
+		return nil, err
 	}
 	return s, nil
 }
@@ -426,13 +460,12 @@ func tailHasNoStatement(rest string) bool {
 // for database/sql do, and binds args to their parameters in sequence. The
 // result is the last statement's.
 func (c *conn) ExecContext(ctx context.Context, query string, named []driver.NamedValue) (driver.Result, error) {
-	args := make([]driver.Value, len(named))
-	for i, nv := range named {
-		if nv.Name != "" {
-			return nil, errors.New("doltlite: named arguments are not supported")
-		}
-		args[i] = nv.Value
+	args, err := positional(named)
+	if err != nil {
+		return nil, err
 	}
+	stop := c.interruptOnDone(ctx)
+	defer stop()
 	var res driver.Result
 	for {
 		if err := ctx.Err(); err != nil {
@@ -453,7 +486,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, named []driver.Nam
 		res, err = s.Exec(args[:s.nInput])
 		s.Close()
 		if err != nil {
-			return nil, err
+			return nil, contextErr(ctx, err)
 		}
 		args = args[s.nInput:]
 		query = rest
@@ -630,6 +663,84 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 	return &rows{s: s, cols: cols, types: types}, nil
 }
 
+func (s *stmt) ExecContext(ctx context.Context, named []driver.NamedValue) (driver.Result, error) {
+	args, err := positional(named)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	stop := s.c.interruptOnDone(ctx)
+	defer stop()
+	res, err := s.Exec(args)
+	return res, contextErr(ctx, err)
+}
+
+func (s *stmt) QueryContext(ctx context.Context, named []driver.NamedValue) (driver.Rows, error) {
+	args, err := positional(named)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	stop := s.c.interruptOnDone(ctx)
+	r, err := s.Query(args)
+	if err != nil {
+		stop()
+		return nil, contextErr(ctx, err)
+	}
+	rr := r.(*rows)
+	rr.ctx, rr.stop = ctx, stop
+	return rr, nil
+}
+
+func positional(named []driver.NamedValue) ([]driver.Value, error) {
+	args := make([]driver.Value, len(named))
+	for i, nv := range named {
+		if nv.Name != "" {
+			return nil, errors.New("doltlite: named arguments are not supported")
+		}
+		args[i] = nv.Value
+	}
+	return args, nil
+}
+
+// interruptOnDone interrupts the connection's running statement when ctx ends,
+// until the returned stop is called. sqlite3_step clears a late interrupt
+// before the next statement runs.
+func (c *conn) interruptOnDone(ctx context.Context) (stop func()) {
+	if ctx.Done() == nil {
+		return func() {}
+	}
+	done, exited := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(exited)
+		select {
+		case <-ctx.Done():
+			c.interruptMu.Lock()
+			if !c.dbClosed {
+				C.sqlite3_interrupt(c.db)
+			}
+			c.interruptMu.Unlock()
+		case <-done:
+		}
+	}()
+	return func() {
+		close(done)
+		<-exited
+	}
+}
+
+func contextErr(ctx context.Context, err error) error {
+	var e *Error
+	if err != nil && ctx.Err() != nil && errors.As(err, &e) && e.Code&0xff == int(C.SQLITE_INTERRUPT) {
+		return ctx.Err()
+	}
+	return err
+}
+
 // ColumnMetadata describes one result column of a query. Database, Table and
 // Column name the table column whose values the result column returns, and
 // DeclType is that column's declared type as written in CREATE TABLE. All four
@@ -648,18 +759,22 @@ type ColumnMetadata struct {
 //	cols, err := raw.(doltlite.ColumnDescriber).DescribeColumns(query)
 type ColumnDescriber interface {
 	DescribeColumns(query string) ([]ColumnMetadata, error)
+	DescribeColumnsContext(ctx context.Context, query string) ([]ColumnMetadata, error)
 }
 
 // DescribeColumns compiles the first statement in query, without running it,
 // and describes its result columns. A statement that returns no rows has none.
 func (c *conn) DescribeColumns(query string) ([]ColumnMetadata, error) {
-	s, _, err := c.prepare(query)
+	return c.DescribeColumnsContext(context.Background(), query)
+}
+
+// DescribeColumnsContext is DescribeColumns, interrupting the compile when ctx ends.
+func (c *conn) DescribeColumnsContext(ctx context.Context, query string) ([]ColumnMetadata, error) {
+	st, err := c.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	if s == nil {
-		return nil, errNoStatement
-	}
+	s := st.(*stmt)
 	defer s.Close()
 
 	c.mu.Lock()
@@ -700,6 +815,9 @@ type rows struct {
 	cols   []string
 	types  []string
 	closed bool
+
+	ctx  context.Context
+	stop func()
 }
 
 func (r *rows) Columns() []string { return r.cols }
@@ -713,6 +831,9 @@ func (r *rows) Close() error {
 		return nil
 	}
 	r.closed = true
+	if r.stop != nil {
+		defer r.stop()
+	}
 	r.s.c.mu.Lock()
 	defer r.s.c.mu.Unlock()
 	if r.s.closed {
@@ -739,6 +860,9 @@ func (r *rows) Next(dest []driver.Value) error {
 		return io.EOF
 	}
 	if rc != C.SQLITE_ROW {
+		if r.ctx != nil {
+			return contextErr(r.ctx, r.s.c.err(rc))
+		}
 		return r.s.c.err(rc)
 	}
 	if err := r.s.c.run(func() {
