@@ -482,6 +482,48 @@ run_test "table_reset_beside_staged_new_indexed_table_commit" \
 ok" "$DB18/probe18"
 run_test "table_reset_beside_staged_new_indexed_table_status" "$(reset18_status)" "child|0|modified" "$DB18"
 
+# Resetting one staged table must not publish another table's rows under its
+# name, including when the reset table has a secondary index.
+DBWIRE=/tmp/test_reset_wire_$$.db; rm -f "$DBWIRE"
+echo "CREATE TABLE t(id INT PRIMARY KEY, v INT); CREATE TABLE u(id INT PRIMARY KEY, w TEXT); INSERT INTO t VALUES(1,1),(2,2); INSERT INTO u VALUES(10,'x'); SELECT dolt_add('.'); SELECT dolt_commit('-m','base'); CREATE TABLE a(id INT PRIMARY KEY); INSERT INTO a VALUES(100); INSERT INTO u VALUES(11,'y'); SELECT dolt_add('.'); SELECT dolt_reset('u'); SELECT dolt_commit('-m','c2'); SELECT dolt_branch('wire');" | $DOLTLITE "$DBWIRE" > /dev/null 2>&1
+run_test "table_reset_beside_new_table_commits_head_rows" \
+  "SELECT id||w FROM u; SELECT id FROM a; PRAGMA integrity_check;" \
+  "10x
+100
+ok" "$DBWIRE/wire"
+run_test "table_reset_beside_new_table_keeps_unstaged_row" \
+  "SELECT id||w FROM u ORDER BY id; SELECT staged||'|'||status FROM dolt_status WHERE table_name='u';" \
+  "10x
+11y
+0|modified" "$DBWIRE"
+
+DBIDX=/tmp/test_reset_idx_$$.db; rm -f "$DBIDX"
+echo "CREATE TABLE t(id INT PRIMARY KEY, v INT); CREATE INDEX t_v ON t(v); CREATE TABLE u(id INT PRIMARY KEY, w TEXT); CREATE INDEX u_w ON u(w); INSERT INTO t VALUES(1,1); INSERT INTO u VALUES(10,'x'); SELECT dolt_add('.'); SELECT dolt_commit('-m','base'); CREATE TABLE a(id INT PRIMARY KEY); INSERT INTO a VALUES(100); INSERT INTO u VALUES(11,'y'); INSERT INTO t VALUES(2,2); SELECT dolt_add('.'); SELECT dolt_reset('u'); SELECT dolt_commit('-m','c2'); SELECT dolt_branch('wire');" | $DOLTLITE "$DBIDX" > /dev/null 2>&1
+run_test "table_reset_indexed_beside_new_table_commits_head_index" \
+  "SELECT id||w FROM u; SELECT count(*) FROM u INDEXED BY u_w; SELECT id||v FROM t ORDER BY id; SELECT count(*) FROM t INDEXED BY t_v; SELECT id FROM a; PRAGMA integrity_check;" \
+  "10x
+1
+11
+22
+2
+100
+ok" "$DBIDX/wire"
+
+DBDROP=/tmp/test_reset_drop_$$.db; rm -f "$DBDROP"
+echo "CREATE TABLE t(id INT PRIMARY KEY, v INT); CREATE INDEX t_v ON t(v); CREATE TABLE u(id INT PRIMARY KEY, w TEXT); INSERT INTO t VALUES(1,1),(2,2); INSERT INTO u VALUES(10,'x'); SELECT dolt_commit('-Am','base'); INSERT INTO u VALUES(11,'y'); DROP TABLE t; SELECT dolt_add('t'); SELECT dolt_reset('t');" | $DOLTLITE "$DBDROP" > /dev/null 2>&1
+run_test "table_reset_staged_drop_unstages" \
+  "SELECT coalesce(group_concat(table_name||'|'||staged||'|'||status,' '),'clean') FROM (SELECT * FROM dolt_status ORDER BY table_name, staged); SELECT id FROM dolt_at_t('HEAD') ORDER BY id; SELECT id||w FROM u ORDER BY id; PRAGMA integrity_check;" \
+  "t|0|deleted u|0|modified
+1
+2
+10x
+11y
+ok" "$DBDROP"
+run_test_error_match "table_reset_staged_drop_commit_is_empty" \
+  "SELECT dolt_commit('-m','x');" \
+  "nothing to commit" "$DBDROP"
+rm -f "$DBWIRE" "$DBIDX" "$DBDROP"
+
 TXN_DB=/tmp/test_reset_txn_seal_$$.db; rm -f "$TXN_DB"
 echo "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT); INSERT INTO t VALUES(1,'x'),(2,'y'),(3,'z'); SELECT dolt_commit('-Am','c1');" | $DOLTLITE "$TXN_DB" >/dev/null 2>&1
 run_test "soft_reset_in_txn_survives_rollback" \
