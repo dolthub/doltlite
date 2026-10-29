@@ -1362,10 +1362,16 @@ static int conflictsCountFkViolations(
     " GROUP BY 1";
   sqlite3_stmt *pStmt = 0;
   ConflictsFkCount *a = 0;
+  Table *pTab;
   int n = 0, rc;
 
   *paOut = 0;
   *pnOut = 0;
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( !pTab || !IsOrdinaryTable(pTab)
+   || (!pTab->u.tab.pFKey && !sqlite3FkReferences(pTab)) ){
+    return SQLITE_OK;
+  }
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_bind_text(pStmt, 1, zTable, -1, SQLITE_STATIC);

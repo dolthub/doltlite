@@ -104,6 +104,17 @@ foreach keymode {integer text without-rowid} {
       do_execsql_test schema-relayout-$keymode-$operation-conflict-values-$resolution {
         SELECT base_b, our_b, their_b FROM dolt_conflicts_t;
       } {100 111 222}
+      if {$resolution eq "theirs"} {
+        do_test schema-relayout-$keymode-$operation-resolve-theirs-refused {
+          set res [catchsql "SELECT dolt_conflicts_resolve('--theirs','t')"]
+          concat $res [execsql {
+            SELECT count(*) FROM dolt_conflicts;
+            SELECT id,b,d FROM t ORDER BY id;
+          }]
+        } {1 {the conflict schema's columns are not equal to the current schema's columns, please resolve manually} 1 1 111 9 2 200 9}
+        execsql {ROLLBACK}
+        continue
+      }
       do_test schema-relayout-$keymode-$operation-resolve-$resolution {
         execsql "SELECT dolt_conflicts_resolve('--$resolution','t')"
         execsql {SELECT dolt_commit('-am','resolved')}
@@ -113,7 +124,7 @@ foreach keymode {integer text without-rowid} {
           SELECT name FROM pragma_table_info('t') ORDER BY cid;
           SELECT id,b,c,d FROM t ORDER BY id;
         }
-      } [list id b c d 1 [expr {$resolution eq "ours" ? 111 : 222}] 1000 9 2 200 2000 9]
+      } [list id b c d 1 111 1000 9 2 200 2000 9]
     }
   }
 
