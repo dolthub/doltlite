@@ -842,6 +842,31 @@ M" \
   "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_cp_theirs_ours_added_col_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INT PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET a=20;
+SELECT dolt_commit('-A','-m','f');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN d INT DEFAULT 5;
+UPDATE t SET a=10, d=50;
+SELECT dolt_commit('-A','-m','m');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "cp_theirs_refused_when_ours_added_column" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT dolt_conflicts_resolve('--theirs','t');
+   SELECT count(*) FROM dolt_conflicts;
+   SELECT a, d FROM t;
+   ROLLBACK;" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+Error near line 3: the conflict schema's columns are not equal to the current schema's columns, please resolve manually
+1
+10|50" \
+  "$DB"
+rm -f "$DB"
+
 # --ours can leave the tree identical to HEAD; still create a single-parent commit.
 DB=/tmp/test_cp_conflict_ours_commit_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

@@ -1938,6 +1938,8 @@ int doltliteWriteBranchRebaseMetadata(sqlite3*, const char*, u8,
 int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 int doltliteSessionHasUnresolvedConflicts(sqlite3 *db);
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
+int doltliteSetSessionConflictsTheirCatalog(sqlite3 *db, const ProllyHash *pHash);
+void doltliteGetSessionConflictsTheirCatalog(sqlite3 *db, ProllyHash *pHash);
 void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash);
 int doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSessionHasConstraintViolations(sqlite3 *db);

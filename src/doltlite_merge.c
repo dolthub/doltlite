@@ -1035,7 +1035,8 @@ static int allocMergedCatalogEntries(
 static int recordMergeConflicts(
   sqlite3 *db,
   MergeConflictTable *aConflictTables,
-  int nConflictTables
+  int nConflictTables,
+  const ProllyHash *pTheirCatalog
 ){
   ProllyHash conflictsHash;
   int rc;
@@ -1044,6 +1045,7 @@ static int recordMergeConflicts(
       doltliteGetChunkStore(db),
       aConflictTables, nConflictTables,
       &conflictsHash);
+  if( rc==SQLITE_OK ) rc = doltliteSetSessionConflictsTheirCatalog(db, pTheirCatalog);
   if( rc!=SQLITE_OK ) return rc;
   return doltliteSetSessionConflictsCatalog(db, &conflictsHash);
 }
@@ -1285,7 +1287,7 @@ int doltliteMergeCatalogs(
   }
 
   if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
-    rc = recordMergeConflicts(db, aConflictTables, nConflictTables);
+    rc = recordMergeConflicts(db, aConflictTables, nConflictTables, theirs);
   }
   if( pnConflicts && rc==SQLITE_OK ) *pnConflicts = totalConflicts;
 

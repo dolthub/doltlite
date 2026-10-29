@@ -4,6 +4,7 @@
 #include "doltlite_vtab_util.h"
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
+#include "doltlite_merge_int.h"
 #include <string.h>
 
 typedef DoltliteConflictTable ConflictTableInfo;
@@ -1294,6 +1295,122 @@ static int conflictsExpandSchemasName(
   return SQLITE_OK;
 }
 
+static int conflictsTheirColumnsDiffer(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zTable,
+  int *pbDiffer
+){
+  ProllyHash theirCat;
+  SchemaEntry entry;
+  ParsedColumn *aCols = 0;
+  int nCols = 0, found = 0, i, rc;
+  Table *pTab;
+
+  *pbDiffer = 0;
+  doltliteGetSessionConflictsTheirCatalog(db, &theirCat);
+  if( prollyHashIsEmpty(&theirCat) ) return SQLITE_OK;
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( !pTab ) return SQLITE_OK;
+  memset(&entry, 0, sizeof(entry));
+  rc = loadSchemaEntryFromCatalog(db, cs, doltliteGetCache(db), &theirCat,
+                                  pTab->zName, &entry, &found);
+  if( rc==SQLITE_OK && found && entry.zSql ){
+    rc = parseColumns(entry.zSql, &aCols, &nCols);
+    if( rc==SQLITE_OK ){
+      if( nCols!=pTab->nCol ){
+        *pbDiffer = 1;
+      }else{
+        for(i=0; i<nCols; i++){
+          if( sqlite3StrICmp(aCols[i].zName, pTab->aCol[i].zCnName)!=0 ){
+            *pbDiffer = 1;
+            break;
+          }
+        }
+      }
+    }
+    freeColumns(aCols, nCols);
+  }
+  clearSchemaEntry(&entry);
+  return rc;
+}
+
+typedef struct ConflictsFkCount ConflictsFkCount;
+struct ConflictsFkCount {
+  char *zKey;
+  i64 n;
+};
+
+static void conflictsFreeFkCounts(ConflictsFkCount *a, int n){
+  int i;
+  for(i=0; i<n; i++) sqlite3_free(a[i].zKey);
+  sqlite3_free(a);
+}
+
+static int conflictsCountFkViolations(
+  sqlite3 *db,
+  const char *zTable,
+  ConflictsFkCount **paOut,
+  int *pnOut
+){
+  static const char *zSql =
+    "SELECT k.\"table\"||char(31)||k.parent||char(31)||k.fkid, count(*)"
+    " FROM main.sqlite_schema m, pragma_foreign_key_check(m.name,'main') k"
+    " WHERE m.type='table' AND (m.name=?1 COLLATE NOCASE OR EXISTS("
+    "   SELECT 1 FROM pragma_foreign_key_list(m.name,'main') f"
+    "   WHERE f.\"table\"=?1 COLLATE NOCASE))"
+    " GROUP BY 1";
+  sqlite3_stmt *pStmt = 0;
+  ConflictsFkCount *a = 0;
+  Table *pTab;
+  int n = 0, rc;
+
+  *paOut = 0;
+  *pnOut = 0;
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( !pTab || !IsOrdinaryTable(pTab)
+   || (!pTab->u.tab.pFKey && !sqlite3FkReferences(pTab)) ){
+    return SQLITE_OK;
+  }
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_bind_text(pStmt, 1, zTable, -1, SQLITE_STATIC);
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    ConflictsFkCount *aNew = sqlite3_realloc64(a, sizeof(*a)*(n+1));
+    if( !aNew ){ rc = SQLITE_NOMEM; break; }
+    a = aNew;
+    a[n].zKey = sqlite3_mprintf("%s", sqlite3_column_text(pStmt, 0));
+    a[n].n = sqlite3_column_int64(pStmt, 1);
+    if( !a[n++].zKey ){ rc = SQLITE_NOMEM; break; }
+  }
+  sqlite3_finalize(pStmt);
+  if( rc!=SQLITE_DONE ){
+    conflictsFreeFkCounts(a, n);
+    return rc==SQLITE_ROW ? SQLITE_ERROR : rc;
+  }
+  *paOut = a;
+  *pnOut = n;
+  return SQLITE_OK;
+}
+
+static int conflictsFkViolationsAdded(
+  ConflictsFkCount *aBefore, int nBefore,
+  ConflictsFkCount *aAfter, int nAfter
+){
+  int i, j;
+  for(i=0; i<nAfter; i++){
+    i64 nPrior = 0;
+    for(j=0; j<nBefore; j++){
+      if( strcmp(aAfter[i].zKey, aBefore[j].zKey)==0 ){
+        nPrior = aBefore[j].n;
+        break;
+      }
+    }
+    if( aAfter[i].n>nPrior ) return 1;
+  }
+  return 0;
+}
+
 static void conflictsResolveParsedFunc(
   sqlite3_context *ctx,
   int useOurs,
@@ -1310,6 +1427,7 @@ static void conflictsResolveParsedFunc(
   char **azTables = 0;
   u8 *aObject = 0;
   char **azSideView = 0;
+  char *zOwnedError = 0;
 
   int bBegan = 0;
   int bSp = 0;
@@ -1368,6 +1486,20 @@ static void conflictsResolveParsedFunc(
       sqlite3_result_error(ctx, "table not found", -1);
       goto resolve_free;
     }
+    if( found && !useOurs ){
+      int bDiffer = 0;
+      rc = conflictsTheirColumnsDiffer(db, cs, azTables[i], &bDiffer);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        goto resolve_free;
+      }
+      if( bDiffer ){
+        sqlite3_result_error(ctx,
+          "the conflict schema's columns are not equal to the current "
+          "schema's columns, please resolve manually", -1);
+        goto resolve_free;
+      }
+    }
   }
 
   db->nVcInterruptMask++;
@@ -1407,9 +1539,16 @@ static void conflictsResolveParsedFunc(
       rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
       if( rc!=SQLITE_OK ) goto resolve_error;
     }else{
+      ConflictsFkCount *aFkBefore = 0, *aFkAfter = 0;
+      int nFkBefore = 0, nFkAfter = 0, bFkAdded;
       rc = loadConflictTable(db, cs, azTables[i], &table, &found);
       if( rc!=SQLITE_OK ) goto resolve_error;
       if( found ){
+        rc = conflictsCountFkViolations(db, azTables[i], &aFkBefore, &nFkBefore);
+        if( rc!=SQLITE_OK ){
+          freeConflictTable(&table);
+          goto resolve_error;
+        }
         for(j=0; j<table.nConflicts; j++){
           DoltliteConflictRow *cr = &table.aRows[j];
           rc = doltliteApplyRawRowMutation(db, azTables[i],
@@ -1417,11 +1556,26 @@ static void conflictsResolveParsedFunc(
                                            cr->pTheirVal, cr->nTheirVal, 0, 0);
           if( rc!=SQLITE_OK ){
             freeConflictTable(&table);
+            conflictsFreeFkCounts(aFkBefore, nFkBefore);
             zError = "failed to apply theirs value";
             goto resolve_error;
           }
         }
         freeConflictTable(&table);
+        rc = conflictsCountFkViolations(db, azTables[i], &aFkAfter, &nFkAfter);
+        bFkAdded = rc==SQLITE_OK && conflictsFkViolationsAdded(
+            aFkBefore, nFkBefore, aFkAfter, nFkAfter);
+        conflictsFreeFkCounts(aFkBefore, nFkBefore);
+        conflictsFreeFkCounts(aFkAfter, nFkAfter);
+        if( rc!=SQLITE_OK ) goto resolve_error;
+        if( bFkAdded ){
+          zOwnedError = sqlite3_mprintf("resolving conflicts for table %s "
+                                        "created foreign key violations",
+                                        azTables[i]);
+          rc = zOwnedError ? SQLITE_CONSTRAINT_FOREIGNKEY : SQLITE_NOMEM;
+          zError = zOwnedError;
+          goto resolve_error;
+        }
         rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
         if( rc!=SQLITE_OK ) goto resolve_error;
       }else{
@@ -1471,6 +1625,7 @@ resolve_error:
   sqlite3_result_error_code(ctx, rc);
 
 resolve_free:
+  sqlite3_free(zOwnedError);
   if( azSideView ) doltliteFreeStringArray(azSideView, nTables);
   sqlite3_free(aObject);
   doltliteFreeStringArray(azTables, nTables);
