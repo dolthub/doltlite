@@ -26,6 +26,41 @@ foreach key {INTEGER INT} {
       SELECT count(*) FROM dolt_diff_t
         WHERE to_commit='WORKING' AND to_commit_date IS NOT NULL;
     } {4 1 1 1 0}
+    foreach clock {1199243045 1199329445} {
+      set sqlite_current_time $clock
+      set now [db one {SELECT datetime('now')}]
+      foreach {from to rows} {
+        HEAD WORKING 4 WORKING HEAD 4
+        HEAD STAGED 3 STAGED HEAD 3
+        STAGED WORKING 2 WORKING STAGED 2
+      } {
+        set fromDate {1970-01-01 00:00:00}
+        set toDate {1970-01-01 00:00:00}
+        if {$from ne "HEAD"} {set fromDate $now}
+        if {$to ne "HEAD"} {set toDate $now}
+        foreach form {tvf range hidden lower} {
+          set source "dolt_diff_t('$from','$to')"
+          set where ""
+          switch $form {
+            range {set source "dolt_diff_t('$from..$to')"}
+            hidden {
+              set source dolt_diff_t
+              set where "WHERE from_ref='$from' AND to_ref='$to'"
+            }
+            lower {
+              set source "dolt_diff_t('[string tolower $from]','[string tolower $to]')"
+            }
+          }
+          do_execsql_test $name-$clock-$from-$to-$form "
+            SELECT count(*),min(from_commit_date='$fromDate'),
+                   min(to_commit_date='$toDate'),
+                   count(DISTINCT from_commit_date),count(DISTINCT to_commit_date)
+              FROM $source $where;
+          " [list $rows 1 1 1 1]
+        }
+      }
+    }
+    set sqlite_current_time 0
   }
 
   execsql {

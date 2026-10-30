@@ -112,6 +112,7 @@ struct DiffTblCursor {
   int iPair;
   int pairsDone;
   int isHistory;
+  i64 sliceTime;
 
   int walkActive;
   CmTblInfo *aWalkStack;
@@ -515,6 +516,14 @@ static int dtResolveSliceEnd(
   if( rc!=SQLITE_OK ){
     *pbRefError = 1;
     return rc;
+  }
+
+  if( doltliteRefIsWorking(zRef) || doltliteRefIsStaged(zRef) ){
+    if( !pCur->sliceTime ){
+      rc = sqlite3OsCurrentTimeInt64(db->pVfs, &pCur->sliceTime);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    pEnd->date = pCur->sliceTime/1000 - 10000*(i64)21086676;
   }
 
   if( doltliteRefIsWorking(zRef) ){
@@ -1058,6 +1067,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   c->pairsDone = 0;
   c->hasRow = 0;
   c->sourceError = 0;
+  c->sliceTime = 0;
   c->zFromFilter[0] = 0;
   c->zToFilter[0] = 0;
   c->isHistory = (idxNum & (DT_IDX_SLICE|DT_IDX_RANGE_SPEC))==0;
