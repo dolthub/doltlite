@@ -334,6 +334,7 @@ struct Btree {
   u8 bDeferredRevision;
   u8 bDeferredRegister;
   u8 bBeginTransBranchMissing;
+  u8 bReadBranchMissing;
   u8 bVcScanRefused;
   /* A VC command opened this write transaction and ends it; nested
   ** statements inside the command must not commit or unlock it. */
