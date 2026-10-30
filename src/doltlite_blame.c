@@ -299,6 +299,7 @@ static void blameFreeRows(BlameCursor *c){
   c->aRows = 0;
   c->nRows = 0;
   c->nAlloc = 0;
+  c->rebuiltKeyVals = 0;
 }
 
 static int blameCollectLiveRows(
@@ -475,11 +476,15 @@ static int blameCursorCompareRowKey(
   }
 }
 
-static int blameAssign(
+static int blameResolveRow(
   BlameRow *pRow,
   const ProllyHash *pCommitHash,
   const DoltliteCommit *pCommit
 ){
+  if( !pCommit ){
+    pRow->blamed = 1;
+    return SQLITE_OK;
+  }
   if( pRow->zCommitter ) sqlite3_free(pRow->zCommitter);
   if( pRow->zEmail ) sqlite3_free(pRow->zEmail);
   if( pRow->zMessage ) sqlite3_free(pRow->zMessage);
@@ -517,9 +522,8 @@ static BlameRow *blameFindRow(
   return 0;
 }
 
-/* Walking newest first, a row is still unresolved only because its value has
-** not moved since HEAD, so its value at this commit is its value at HEAD and
-** "differs from the ref" is exactly "this key is in the diff". The diff skips
+/* Unresolved rows match the current root, so "differs from the ref" is
+** exactly "this key is in the diff". The diff skips
 ** subtrees the two roots share, so a commit that touched little costs little.
 **
 ** Stepping a change costs far more than skipping an already-blamed row, so
@@ -563,7 +567,7 @@ static int blameCompareByDiff(
     }
     r = blameFindRow(pCur, curFlags, pChange);
     if( !r || r->blamed ) continue;
-    rc = blameAssign(r, pCommitHash, pCommit);
+    rc = blameResolveRow(r, pCommitHash, pCommit);
     if( rc!=SQLITE_OK ) break;
     pCur->nUnresolved--;
   }
@@ -693,14 +697,17 @@ static int blameCompareAgainstRef(
       nRefEff = nR;
     }
 
-    rc = prollyValuesEqual(r->pCurVal, r->nCurVal,
-                           pRefEff, nRefEff, &equal);
+    equal = 0;
+    if( refFound ){
+      rc = prollyValuesEqual(r->pCurVal, r->nCurVal,
+                             pRefEff, nRefEff, &equal);
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_free(pRefRebuilt);
       goto blame_compare_done;
     }
     if( !equal ){
-      rc = blameAssign(r, pCommitHash, pCommit);
+      rc = blameResolveRow(r, pCommitHash, pCommit);
       if( rc!=SQLITE_OK ){ sqlite3_free(pRefRebuilt); goto blame_compare_done; }
       pCur->nUnresolved--;
     }
@@ -1011,38 +1018,6 @@ static int bmClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-/* Whether a sort-key probe built from the live table's primary key can seek
-** HEAD's tree of zTable. */
-static int blameHeadKeyMatches(
-  sqlite3 *db,
-  const char *zTable,
-  const ProllyHash *pHeadCat,
-  const ProllyHash *pSchemaHash,
-  int bHasData,
-  int *pbMatches
-){
-  DoltliteColInfo cols;
-  DoltliteSideCols side;
-  Table *pTab;
-  int rc;
-  memset(&cols, 0, sizeof(cols));
-  memset(&side, 0, sizeof(side));
-  *pbMatches = 0;
-  rc = doltliteGetColumnNames(db, zTable, &cols);
-  if( rc==SQLITE_OK ){
-    rc = doltliteSideColsLoad(db, pHeadCat, pSchemaHash, zTable, &cols,
-                              bHasData, &side);
-  }
-  if( rc==SQLITE_OK ){
-    pTab = sqlite3FindTable(db, zTable, "main");
-    *pbMatches = doltliteSideColsMatchClusteredPk(&side, &cols,
-                     pTab ? sqlite3PrimaryKeyIndex(pTab) : 0);
-  }
-  doltliteSideColsClear(&side);
-  doltliteFreeColInfo(&cols);
-  return rc;
-}
-
 static int bmFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   BlameCursor *c = (BlameCursor*)pCursor;
@@ -1052,15 +1027,13 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyHash headHash;
   ProllyHash headCatHash;
+  ProllyHash workingCatHash;
   ProllyHash tableRoot;
-  ProllyHash schemaHash;
   u8 tableFlags = 0;
-  int bKeyMatches = 1;
   int rc;
   DoltlitePkRange pkRange;
   (void)idxStr;
 
-  memset(&schemaHash, 0, sizeof(schemaHash));
   blameFreeRows(c);
   c->iRow = 0;
   memset(&pkRange, 0, sizeof(pkRange));
@@ -1102,21 +1075,10 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
       return rc;
     }
 
-    rc = doltliteLoadTableRootByName(db, &headCatHash, v->zTableName,
-                                     &tableRoot, &tableFlags, &schemaHash);
-    if( rc==SQLITE_NOTFOUND ){
-      rc = doltliteVtabMapChunkSourceError(c->base.pVtab, db, rc, SQLITE_OK);
-    }
-    if( rc==SQLITE_OK && pPkBlob ){
-      rc = blameHeadKeyMatches(db, v->zTableName, &headCatHash, &schemaHash,
-                               !prollyHashIsEmpty(&tableRoot), &bKeyMatches);
-      /* The probe is the live key; HEAD stores another encoding. Scan, and
-      ** let SQLite recheck the equality. */
-      if( rc==SQLITE_OK && !bKeyMatches ){
-        sqlite3_free(pPkBlob);
-        pPkBlob = 0;
-        nPkBlob = 0;
-      }
+    rc = doltliteResolveCatalogHashForRef(db, "WORKING", &workingCatHash);
+    if( rc==SQLITE_OK ){
+      rc = doltliteLoadTableRootByName(db, &workingCatHash, v->zTableName,
+                                       &tableRoot, &tableFlags, 0);
     }
     if( rc!=SQLITE_OK ){
       sqlite3_free(pPkBlob);
@@ -1134,6 +1096,24 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
     if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
   }
   c->nUnresolved = c->nRows;
+  rc = blameCompareAgainstRef(db, c, v->zTableName, &tableRoot, tableFlags,
+                               &headCatHash, 0, 0);
+  if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
+  {
+    int i, n = 0;
+    for(i=0; i<c->nRows; i++){
+      if( c->aRows[i].blamed ){
+        blameFreeRow(&c->aRows[i]);
+      }else{
+        if( n!=i ){
+          c->aRows[n] = c->aRows[i];
+          memset(&c->aRows[i], 0, sizeof(c->aRows[i]));
+        }
+        n++;
+      }
+    }
+    c->nRows = c->nUnresolved = n;
+  }
 
   rc = blameWalk(c, db, v->zTableName);
   if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }

@@ -1,0 +1,169 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout definition} {
+  integer {id INTEGER PRIMARY KEY,v TEXT}
+  clustered {id INT PRIMARY KEY,v TEXT}
+  text {id TEXT COLLATE NOCASE PRIMARY KEY,v TEXT}
+  composite {id INT,k TEXT DEFAULT 'key',v TEXT,PRIMARY KEY(k,id DESC)}
+  key_only {id INT PRIMARY KEY}
+  key_only_integer {id INTEGER PRIMARY KEY}
+} {
+  foreach storage {file memory} {
+    foreach boundary {auto begin savepoint} {
+      reset_db
+      if {$storage eq "memory"} {
+        db close
+        sqlite3 db :memory:
+      }
+      db eval "CREATE TABLE t($definition)"
+      db eval {INSERT INTO t(id) VALUES(1),(2),(3),(5)}
+      if {![string match key_only* $layout]} {db eval {UPDATE t SET v='base'}}
+      db eval {SELECT dolt_commit('-Am','base')}
+      switch $boundary {
+        begin {db eval BEGIN}
+        savepoint {db eval {SAVEPOINT caller}}
+      }
+      set prefix blame-working-$layout.$storage.$boundary
+      set keys id
+      if {$layout eq "composite"} {set keys k,id}
+      set clean {1 base 2 base 3 base 5 base}
+      if {$layout eq "composite"} {set clean {key 1 base key 2 base key 3 base key 5 base}}
+      do_execsql_test $prefix.clean           "SELECT $keys,message FROM dolt_blame_t ORDER BY id" $clean
+      db eval {DELETE FROM t WHERE id=2; INSERT INTO t(id) VALUES(4)}
+      if {[string match key_only* $layout]} {
+        db eval {UPDATE t SET id=30 WHERE id=3}
+      } else {
+        db eval {UPDATE t SET v='changed' WHERE id=3}
+      }
+      foreach phase {working staged reverted restaged} {
+        switch $phase {
+          staged {db eval {SELECT dolt_add('t')}}
+          reverted {
+            db eval {DELETE FROM t WHERE id IN (4,30); INSERT INTO t(id) VALUES(2)}
+            if {[string match key_only* $layout]} {
+              db eval {INSERT INTO t(id) VALUES(3)}
+            } else {
+              db eval {UPDATE t SET v='base' WHERE id IN (2,3)}
+            }
+          }
+          restaged {db eval {SELECT dolt_add('t')}}
+        }
+        set expected {1 base 5 base}
+        if {$layout eq "composite"} {set expected {key 1 base key 5 base}}
+        if {$phase in {reverted restaged}} {set expected $clean}
+        do_execsql_test $prefix.$phase.scan \
+            "SELECT $keys,message FROM dolt_blame_t ORDER BY id" $expected
+        foreach predicate {id=2 id=3 id=4 {id>=2 AND id<=4} {id=1 OR id>=2}
+                           {id IN (1,2,3,4,5)} {id=2 OR id=3} {id=5}} {
+          set filtered [db eval "SELECT $keys,'base' FROM t WHERE $predicate ORDER BY id"]
+          if {$phase ni {reverted restaged}} {
+            set filtered [db eval "SELECT $keys,'base' FROM t WHERE ($predicate)
+                                  AND id IN (1,5) ORDER BY id"]
+          }
+          do_execsql_test $prefix.$phase.$predicate \
+              "SELECT $keys,message FROM dolt_blame_t WHERE $predicate ORDER BY id" $filtered
+        }
+      }
+      if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+      if {$storage eq "file"} {
+        db close
+        sqlite3 db test.db
+        do_execsql_test $prefix.reopen \
+            "SELECT $keys,message FROM dolt_blame_t ORDER BY id" $clean
+      }
+    }
+  }
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'base'),(2,'base');
+  SELECT dolt_commit('-Am','base');
+  BEGIN;
+  DELETE FROM t WHERE id=1;
+  UPDATE t SET v='working' WHERE id=2;
+}
+do_execsql_test blame-working-rollback.dirty {SELECT count(*) FROM dolt_blame_t} 0
+db eval ROLLBACK
+do_execsql_test blame-working-rollback.restored {
+  SELECT id,message FROM dolt_blame_t ORDER BY id;
+} {1 base 2 base}
+db eval {
+  DROP TABLE t;
+  CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(99,'new');
+}
+do_execsql_test blame-working-replaced-table {
+  SELECT count(*) FROM dolt_blame_t;
+} 0
+
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'base'),(2,'base');
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','feature');
+  UPDATE t SET v='feature working' WHERE id=1;
+  SELECT dolt_checkout('main');
+  DELETE FROM t WHERE id=2;
+}
+set visit 0
+foreach branch {main feature main feature} {
+  incr visit
+  db eval {SELECT dolt_checkout($branch)}
+  set expected {1 base}
+  if {$branch eq "feature"} {set expected {2 base}}
+  do_execsql_test blame-working-branch.$visit {
+    SELECT id,message FROM dolt_blame_t ORDER BY id;
+  } $expected
+}
+
+
+foreach declaration {{INTEGER PRIMARY KEY} {INT PRIMARY KEY}} {
+  reset_db
+  db eval "CREATE TABLE t(id $declaration,v TEXT)"
+  db eval {
+    WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<1000)
+      INSERT INTO t SELECT x,'base' FROM c;
+    SELECT dolt_commit('-Am','base');
+    DELETE FROM t WHERE id%3=0;
+    UPDATE t SET v='dirty' WHERE id%3=1;
+    WITH RECURSIVE c(x) AS (VALUES(1001) UNION ALL SELECT x+1 FROM c WHERE x<1200)
+      INSERT INTO t SELECT x,'new' FROM c;
+  }
+  foreach phase {working staged} {
+    if {$phase eq "staged"} {db eval {SELECT dolt_add('t')}}
+    do_execsql_test blame-working-large.$declaration.$phase {
+      SELECT count(*),min(id),max(id) FROM dolt_blame_t;
+      SELECT id,message FROM dolt_blame_t WHERE id=998;
+      SELECT count(*) FROM dolt_blame_t WHERE id=999 OR id=1000 OR id=1001;
+    } {333 2 998 998 base 0}
+  }
+}
+
+
+foreach {before after} {{INTEGER PRIMARY KEY} {TEXT PRIMARY KEY}
+                        {TEXT PRIMARY KEY} {INTEGER PRIMARY KEY}} {
+  reset_db
+  db eval "CREATE TABLE t(id $before,v TEXT)"
+  db eval {
+    WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<300)
+      INSERT INTO t SELECT x,'base' FROM c;
+    SELECT dolt_commit('-Am','base');
+    DROP TABLE t;
+  }
+  db eval "CREATE TABLE t(id $after,v TEXT)"
+  db eval {
+    WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<300)
+      INSERT INTO t SELECT x,'base' FROM c;
+  }
+  do_execsql_test blame-working-key-shape.$before {
+    SELECT count(*) FROM dolt_blame_t;
+    SELECT count(*) FROM dolt_blame_t WHERE id='1';
+  } {0 0}
+}
+
+finish_test
