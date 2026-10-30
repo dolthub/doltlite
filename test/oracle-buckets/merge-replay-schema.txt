@@ -22,5 +22,6 @@ vc_oracle_revert_test.sh
 vc_oracle_scale_merge_test.sh
 vc_oracle_schema_merge_test.sh
 vc_oracle_schemas_test.sh
+vc_oracle_skip_verification_test.sh
 vc_oracle_triggers_test.sh
 vc_oracle_verify_constraints_test.sh
