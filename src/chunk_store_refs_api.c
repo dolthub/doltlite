@@ -230,21 +230,70 @@ static int csSetWsBranch(CsWsBranch *p, const char *zBranch){
   return !p->bOom;
 }
 
+static CsWsSession *csWs(ChunkStore *cs){
+  return cs->pWs ? cs->pWs : &cs->wsMain;
+}
+
+static int csWsTracks(const CsWsSession *w, const char *zBranch){
+  return w->bWsBasis && strcmp(csWsBranch(&w->wsBasisBranch), zBranch)==0;
+}
+
+static void csFreeWsSession(CsWsSession *w){
+  sqlite3_free(w->wsBasisBranch.zLong);
+  sqlite3_free(w->wsSelfBranch.zLong);
+  sqlite3_free(w->wsSelfPublishedBranch.zLong);
+  w->wsBasisBranch.zLong = 0;
+  w->wsSelfBranch.zLong = 0;
+  w->wsSelfPublishedBranch.zLong = 0;
+}
+
 void chunkStoreFreeWsBranches(ChunkStore *cs){
-  sqlite3_free(cs->wsBasisBranch.zLong);
-  sqlite3_free(cs->wsSelfBranch.zLong);
-  sqlite3_free(cs->wsSelfPublishedBranch.zLong);
+  CsWsSession *w;
+  for(w=&cs->wsMain; w; w=w->pNext) csFreeWsSession(w);
+}
+
+void chunkStoreAttachWsSession(ChunkStore *cs, CsWsSession *pSession){
+  memset(pSession, 0, sizeof(*pSession));
+  pSession->pNext = cs->wsMain.pNext;
+  cs->wsMain.pNext = pSession;
+}
+
+void chunkStoreDetachWsSession(ChunkStore *cs, CsWsSession *pSession){
+  CsWsSession *w;
+  for(w=&cs->wsMain; w; w=w->pNext){
+    if( w->pNext==pSession ){
+      w->pNext = pSession->pNext;
+      break;
+    }
+  }
+  if( cs->pWs==pSession ) cs->pWs = 0;
+  pSession->pNext = 0;
+  csFreeWsSession(pSession);
+}
+
+CsWsSession *chunkStoreUseWsSession(ChunkStore *cs, CsWsSession *pSession){
+  CsWsSession *pPrior = cs->pWs;
+  cs->pWs = pSession;
+  return pPrior;
+}
+
+void chunkStoreClearWorkingSetReplacing(ChunkStore *cs){
+  CsWsSession *w;
+  for(w=&cs->wsMain; w; w=w->pNext) w->bWsReplacing = 0;
 }
 
 void chunkStoreNoteSelfPublishedWorkingSet(ChunkStore *cs){
-  int i;
-  if( !cs->bWsSelfWritten ) return;
-  i = findBranchIdx(cs, csWsBranch(&cs->wsSelfBranch));
-  if( i>=0 && prollyHashCompare(&cs->refs.aBranches[i].workingSetHash,
-                                &cs->wsSelfWritten)==0 ){
-    cs->bWsSelfPublished = csSetWsBranch(&cs->wsSelfPublishedBranch,
-                                         csWsBranch(&cs->wsSelfBranch));
-    memcpy(&cs->wsSelfPublished, &cs->wsSelfWritten, sizeof(ProllyHash));
+  CsWsSession *w;
+  for(w=&cs->wsMain; w; w=w->pNext){
+    int i;
+    if( !w->bWsSelfWritten ) continue;
+    i = findBranchIdx(cs, csWsBranch(&w->wsSelfBranch));
+    if( i>=0 && prollyHashCompare(&cs->refs.aBranches[i].workingSetHash,
+                                  &w->wsSelfWritten)==0 ){
+      w->bWsSelfPublished = csSetWsBranch(&w->wsSelfPublishedBranch,
+                                          csWsBranch(&w->wsSelfBranch));
+      memcpy(&w->wsSelfPublished, &w->wsSelfWritten, sizeof(ProllyHash));
+    }
   }
 }
 
@@ -253,9 +302,16 @@ int chunkStoreWorkingSetSelfPublished(
   const char *zBranch,
   const ProllyHash *pHash
 ){
-  return zBranch && cs->bWsSelfPublished
-      && strcmp(csWsBranch(&cs->wsSelfPublishedBranch), zBranch)==0
-      && prollyHashCompare(&cs->wsSelfPublished, pHash)==0;
+  CsWsSession *w;
+  if( !zBranch ) return 0;
+  for(w=&cs->wsMain; w; w=w->pNext){
+    if( w->bWsSelfPublished
+     && strcmp(csWsBranch(&w->wsSelfPublishedBranch), zBranch)==0
+     && prollyHashCompare(&w->wsSelfPublished, pHash)==0 ){
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /* The published working set, ignoring refs this connection changed but has
@@ -346,65 +402,82 @@ int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHas
   return SQLITE_OK;
 }
 
+static void csSetWsBasis(
+  CsWsSession *w,
+  const char *zBranch,
+  const ProllyHash *pHash
+){
+  w->bWsBasis = csSetWsBranch(&w->wsBasisBranch, zBranch);
+  memcpy(&w->wsBasis, pHash, sizeof(ProllyHash));
+}
+
 void chunkStoreSetWorkingSetBasis(
   ChunkStore *cs,
   const char *zBranch,
   const ProllyHash *pHash
 ){
-  cs->bWsBasis = csSetWsBranch(&cs->wsBasisBranch, zBranch);
-  memcpy(&cs->wsBasis, pHash, sizeof(ProllyHash));
+  csSetWsBasis(csWs(cs), zBranch, pHash);
 }
 
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash){
+  CsWsSession *pActive = csWs(cs);
+  CsWsSession *w;
   int i = findBranchIdx(cs, zBranch);
   int bChanged;
   if( i<0 ) return SQLITE_NOTFOUND;
   bChanged = prollyHashCompare(&cs->refs.aBranches[i].workingSetHash, pHash)!=0;
-  if( bChanged && !cs->bWsReplacing && cs->bWsBasis
-   && strcmp(csWsBranch(&cs->wsBasisBranch), zBranch)==0 ){
-    cs->bWsReplacing = 1;
-    cs->wsReplaced = cs->refs.aBranches[i].workingSetHash;
-    cs->wsReplacedBasis = cs->wsBasis;
+  for(w=&cs->wsMain; bChanged && w; w=w->pNext){
+    if( !w->bWsReplacing && csWsTracks(w, zBranch) ){
+      w->bWsReplacing = 1;
+      w->wsReplaced = cs->refs.aBranches[i].workingSetHash;
+      w->wsReplacedBasis = w->wsBasis;
+    }
   }
   memcpy(&cs->refs.aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
-  /* The basis tracks the session's branch; writing another branch's working
-  ** set must not retarget it, or a peer's write to ours goes unnoticed. */
-  if( !cs->bWsBasis || strcmp(csWsBranch(&cs->wsBasisBranch), zBranch)==0 ){
-    chunkStoreSetWorkingSetBasis(cs, zBranch, pHash);
+  /* A basis tracks its session's branch; writing another branch's working
+  ** set must not retarget it, or a peer's write to that branch goes
+  ** unnoticed. */
+  if( !pActive->bWsBasis ) csSetWsBasis(pActive, zBranch, pHash);
+  for(w=&cs->wsMain; w; w=w->pNext){
+    if( csWsTracks(w, zBranch) ) csSetWsBasis(w, zBranch, pHash);
   }
   /* Rewriting the hash already there, as a statement over a reloaded peer
   ** working set does, is not a write of ours. */
   if( !bChanged ) return SQLITE_OK;
-  cs->bWsSelfWritten = csSetWsBranch(&cs->wsSelfBranch, zBranch);
-  memcpy(&cs->wsSelfWritten, pHash, sizeof(ProllyHash));
+  pActive->bWsSelfWritten = csSetWsBranch(&pActive->wsSelfBranch, zBranch);
+  memcpy(&pActive->wsSelfWritten, pHash, sizeof(ProllyHash));
   return SQLITE_OK;
 }
 
 void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch){
+  CsWsSession *w = csWs(cs);
   int i = findBranchIdx(cs, zBranch);
   if( i<0 ){
-    cs->bWsBasis = 0;
-    cs->wsBasisBranch.bOom = 0;
+    w->bWsBasis = 0;
+    w->wsBasisBranch.bOom = 0;
     return;
   }
-  chunkStoreSetWorkingSetBasis(cs, zBranch, &cs->refs.aBranches[i].workingSetHash);
+  csSetWsBasis(w, zBranch, &cs->refs.aBranches[i].workingSetHash);
 }
 
 void chunkStoreFollowWorkingSetBasis(ChunkStore *cs, const char *zBranch){
-  if( cs->bWsBasis && strcmp(csWsBranch(&cs->wsBasisBranch), zBranch)==0 ) return;
+  if( csWsTracks(csWs(cs), zBranch) ) return;
   chunkStoreAdoptWorkingSetBasis(cs, zBranch);
 }
 
 void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs){
-  int i;
-  if( !cs->bWsBasis ) return;
-  i = findBranchIdx(cs, csWsBranch(&cs->wsBasisBranch));
-  if( i<0 ){
-    cs->bWsBasis = 0;
-    return;
+  CsWsSession *w;
+  for(w=&cs->wsMain; w; w=w->pNext){
+    int i;
+    if( !w->bWsBasis ) continue;
+    i = findBranchIdx(cs, csWsBranch(&w->wsBasisBranch));
+    if( i<0 ){
+      w->bWsBasis = 0;
+      continue;
+    }
+    memcpy(&w->wsBasis, &cs->refs.aBranches[i].workingSetHash,
+           sizeof(ProllyHash));
   }
-  memcpy(&cs->wsBasis, &cs->refs.aBranches[i].workingSetHash,
-         sizeof(ProllyHash));
 }
 
 void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
@@ -414,8 +487,9 @@ void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
 
 void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pHash){
-  if( zBranch && cs->bWsBasis && strcmp(csWsBranch(&cs->wsBasisBranch), zBranch)==0 ){
-    memcpy(pHash, &cs->wsBasis, sizeof(ProllyHash));
+  CsWsSession *w = csWs(cs);
+  if( zBranch && csWsTracks(w, zBranch) ){
+    memcpy(pHash, &w->wsBasis, sizeof(ProllyHash));
     return;
   }
   if( !zBranch
@@ -425,29 +499,32 @@ void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
 }
 
 int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch){
+  CsWsSession *w = csWs(cs);
   int i;
   /* A basis we could not record must not read as unmoved. */
-  if( zBranch && !cs->bWsBasis && cs->wsBasisBranch.bOom ) return 1;
-  if( !zBranch || !cs->bWsBasis || strcmp(csWsBranch(&cs->wsBasisBranch), zBranch)!=0 ){
-    return 0;
-  }
+  if( zBranch && !w->bWsBasis && w->wsBasisBranch.bOom ) return 1;
+  if( !zBranch || !csWsTracks(w, zBranch) ) return 0;
   i = findBranchIdx(cs, zBranch);
   if( i<0 ) return 0;
   return prollyHashCompare(&cs->refs.aBranches[i].workingSetHash,
-                           &cs->wsBasis)!=0;
+                           &w->wsBasis)!=0;
 }
 
-/* Under the commit lock, before publishing. The batch may replace the
+/* Under the commit lock, before publishing. The batch may replace a
 ** session branch's working set only if what it replaces is the one the
-** session read, or the one it published itself. */
+** session read, or one this connection published itself. */
 int csCheckWorkingSetReplace(ChunkStore *cs){
-  if( !cs->bWsReplacing ) return SQLITE_OK;
-  if( prollyHashCompare(&cs->wsReplaced, &cs->wsReplacedBasis)==0 ) return SQLITE_OK;
-  if( chunkStoreWorkingSetSelfPublished(cs, csWsBranch(&cs->wsBasisBranch),
-                                        &cs->wsReplaced) ){
-    return SQLITE_OK;
+  CsWsSession *w;
+  for(w=&cs->wsMain; w; w=w->pNext){
+    if( !w->bWsReplacing ) continue;
+    if( prollyHashCompare(&w->wsReplaced, &w->wsReplacedBasis)==0 ) continue;
+    if( chunkStoreWorkingSetSelfPublished(cs, csWsBranch(&w->wsBasisBranch),
+                                          &w->wsReplaced) ){
+      continue;
+    }
+    return SQLITE_BUSY_SNAPSHOT;
   }
-  return SQLITE_BUSY_SNAPSHOT;
+  return SQLITE_OK;
 }
 
 int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
