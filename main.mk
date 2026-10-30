@@ -1645,6 +1645,9 @@ doltlite_ignore.o:	$(TOP)/src/doltlite_ignore.c $(DEPS_OBJ_COMMON)
 doltlite_docs.o:	$(TOP)/src/doltlite_docs.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_docs.c
 
+doltlite_nonlocal.o:	$(TOP)/src/doltlite_nonlocal.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_nonlocal.c
+
 doltlite_engine_stats.o:	$(TOP)/src/doltlite_engine_stats.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_engine_stats.c
 

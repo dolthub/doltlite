@@ -343,6 +343,7 @@ struct Btree {
   u8 bBeginTransBranchMissing;
   /* Commits with siblings on the same store as one publish: each stages
   ** its catalog, and the last to commit publishes and finishes them all. */
+  struct DoltliteNonlocal *pNonlocal;
   u8 bJoinedPublish;
   u8 bJoinedStaged;
   u8 *pJoinedCat;

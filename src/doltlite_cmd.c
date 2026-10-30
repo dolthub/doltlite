@@ -485,7 +485,7 @@ static void doltliteRunCommand(
   /* A failed command rolls back the shared store, which would discard the
   ** other branch's staged writes. */
   if( !pOuter ){
-    const char *zSibling = doltliteStoreSiblingBranch(db, 0);
+    const char *zSibling = doltliteStoreSiblingBranch(db, 0, 0);
     if( zSibling ){
       char *zMsg = sqlite3_mprintf("cannot run %s while branch '%s' of this "
           "database has a write transaction open; commit or roll back first",

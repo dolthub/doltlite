@@ -1,0 +1,156 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc nl_reset {} {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval {
+    CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
+    CREATE TABLE cfg(k TEXT PRIMARY KEY, v TEXT);
+    INSERT INTO users VALUES(1,'base');
+    INSERT INTO cfg VALUES('mode','v1');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_tag('v1');
+    SELECT dolt_checkout('-b','other');
+    CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT);
+    SELECT dolt_commit('-Am','notes');
+  }
+}
+
+proc nl_disk {branch sql} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set r [observer eval $sql]
+  observer close
+  return $r
+}
+
+nl_reset
+do_execsql_test nonlocal-lazy-empty {
+  SELECT count(*) FROM dolt_nonlocal_tables;
+} 0
+do_execsql_test nonlocal-redirect-write {
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  INSERT INTO users VALUES(2,'from-other');
+  SELECT id FROM users ORDER BY id;
+} {1 2}
+do_test nonlocal-redirect-lands-on-target {
+  nl_disk main {SELECT id FROM users ORDER BY id}
+} {1 2}
+do_test nonlocal-redirect-not-local {
+  nl_disk main {SELECT id FROM dolt_at_users('other') ORDER BY id}
+} {1}
+do_execsql_test nonlocal-rules-versioned {
+  SELECT table_name, staged, status FROM dolt_status;
+} {dolt_nonlocal_tables 0 {new table}}
+
+# The hidden schema is reachable only through a rule.
+do_catchsql_test nonlocal-no-leak {
+  INSERT INTO dolt_nonlocal_tables VALUES('settings','main','cfg','immediate');
+  SELECT k, v FROM settings;
+  SELECT count(*) FROM main.cfg;
+} {0 {mode v1 1}}
+do_execsql_test nonlocal-unrelated-name-stays-local {
+  UPDATE cfg SET v='local';
+  SELECT v FROM cfg;
+  SELECT v FROM settings;
+} {local v1}
+
+do_catchsql_test nonlocal-create-refused {
+  CREATE TABLE users(id INTEGER PRIMARY KEY);
+} {1 {Cannot create table name users because it matches a name present in dolt_nonlocal_tables.}}
+do_catchsql_test nonlocal-create-if-not-exists {
+  CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY);
+} {0 {}}
+
+do_execsql_test nonlocal-wildcard {
+  INSERT INTO dolt_nonlocal_tables VALUES('glob_*','main','','immediate');
+  SELECT count(*) FROM dolt_nonlocal_tables;
+} 3
+do_catchsql_test nonlocal-wildcard-create-refused {
+  CREATE TABLE glob_x(id INTEGER PRIMARY KEY);
+} {1 {Cannot create table name glob_x because it matches a name present in dolt_nonlocal_tables.}}
+
+do_execsql_test nonlocal-tag-read {
+  INSERT INTO dolt_nonlocal_tables VALUES('frozen','v1','cfg','immediate');
+  SELECT k, v FROM frozen;
+} {mode v1}
+do_catchsql_test nonlocal-tag-read-only {
+  UPDATE frozen SET v='x';
+} {1 {attempt to write a readonly database}}
+
+do_execsql_test nonlocal-alias-same-branch {
+  INSERT INTO dolt_nonlocal_tables VALUES('my_notes','','notes','immediate');
+  INSERT INTO my_notes VALUES(1,'via-alias');
+  SELECT body FROM notes;
+} {via-alias}
+
+do_catchsql_test nonlocal-bad-options {
+  INSERT INTO dolt_nonlocal_tables VALUES('manual_t','main','','manual');
+  SELECT * FROM manual_t;
+} {1 {Invalid nonlocal table options manual: only valid value is 'immediate'.}}
+do_execsql_test nonlocal-bad-options-cleared {
+  DELETE FROM dolt_nonlocal_tables WHERE table_name='manual_t';
+} {}
+
+# Nonlocal and local writes commit, or roll back, together.
+do_execsql_test nonlocal-txn-commit {
+  BEGIN;
+  INSERT INTO users VALUES(3,'txn');
+  INSERT INTO notes VALUES(2,'txn');
+  COMMIT;
+} {}
+do_test nonlocal-txn-commit-target {
+  nl_disk main {SELECT id FROM users ORDER BY id}
+} {1 2 3}
+do_test nonlocal-txn-commit-local {
+  nl_disk other {SELECT id FROM notes ORDER BY id}
+} {1 2}
+do_execsql_test nonlocal-txn-rollback {
+  BEGIN;
+  INSERT INTO users VALUES(4,'rb');
+  INSERT INTO notes VALUES(3,'rb');
+  ROLLBACK;
+  SELECT max(id) FROM users;
+  SELECT max(id) FROM notes;
+} {3 2}
+do_test nonlocal-txn-commit-refused {
+  db eval {BEGIN; INSERT INTO users VALUES(5,'x'); INSERT INTO notes VALUES(5,'x')}
+  set r [catchsql {SELECT dolt_commit('-am','both')}]
+  db eval ROLLBACK
+  set r
+} {1 {cannot run dolt_commit while branch 'main' of this database has a write transaction open; commit or roll back first}}
+
+# A rule that targets this branch may have its backing table created here;
+# dolt_clean keeps it untracked.
+do_execsql_test nonlocal-clean-keeps-matches {
+  INSERT INTO dolt_nonlocal_tables VALUES('keep_me','','','immediate');
+  SELECT dolt_commit('-Am','rules') IS NOT NULL;
+  CREATE TABLE keep_me(id INTEGER PRIMARY KEY);
+  CREATE TABLE scratch(id INTEGER PRIMARY KEY);
+  SELECT dolt_clean();
+  SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
+} {1 0 cfg dolt_nonlocal_tables keep_me notes users}
+
+do_test nonlocal-reopen {
+  db close
+  sqlite3 db [file normalize test.db]/other
+  db eval {SELECT id FROM users ORDER BY id}
+} {1 2 3}
+
+do_test nonlocal-checkout-target-detaches {
+  db eval {SELECT dolt_checkout('main')}
+  db eval {SELECT count(*) FROM users}
+  db eval {SELECT name FROM pragma_database_list ORDER BY seq}
+} {main}
+do_execsql_test nonlocal-checkout-back {
+  SELECT dolt_checkout('other');
+  SELECT count(*) FROM users;
+} {0 3}
+
+do_catchsql_test nonlocal-shape-guard {
+  SELECT dolt_checkout('-b','fresh','main');
+  CREATE TABLE dolt_nonlocal_tables(table_name TEXT PRIMARY KEY, target_ref TEXT);
+} {1 {dolt_nonlocal_tables must have exactly four columns; expected: CREATE TABLE dolt_nonlocal_tables(table_name TEXT NOT NULL, target_ref TEXT, ref_table TEXT, options TEXT, PRIMARY KEY(table_name))}}
+
+finish_test

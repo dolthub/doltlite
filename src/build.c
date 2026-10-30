@@ -380,6 +380,10 @@ Table *sqlite3FindTable(sqlite3 *db, const char *zName, const char *zDatabase){
     if( p ) return p;
     /* Attached databases are in order of attachment */
     for(i=2; i<db->nDb; i++){
+#ifdef DOLTLITE_PROLLY
+      /* Reached only through a dolt_nonlocal_tables rule. */
+      if( doltliteNonlocalIsSchema(db->aDb[i].zDbSName) ) continue;
+#endif
       assert( sqlite3SchemaMutexHeld(db, i, 0) );
       p = sqlite3HashFind(&db->aDb[i].pSchema->tblHash, zName);
       if( p ) break;
@@ -427,12 +431,23 @@ Table *sqlite3LocateTable(
   if( zDbase==0
    && (sqlite3StrICmp(zName, "dolt_ignore")==0
     || sqlite3StrICmp(zName, "dolt_docs")==0
-    || sqlite3StrICmp(zName, "dolt_tests")==0)
+    || sqlite3StrICmp(zName, "dolt_tests")==0
+    || sqlite3StrICmp(zName, "dolt_nonlocal_tables")==0)
   ){
     zDbase = "main";
   }
-#endif
+  p = 0;
+  if( !db->init.busy ){
+    const char *zNonlocal = zName;
+    const char *zNonlocalDb = zDbase;
+    int eNonlocal = doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb);
+    if( eNonlocal<0 ) return 0;
+    if( eNonlocal>0 ) p = sqlite3FindTable(db, zNonlocal, zNonlocalDb);
+  }
+  if( p==0 ) p = sqlite3FindTable(db, zName, zDbase);
+#else
   p = sqlite3FindTable(db, zName, zDbase);
+#endif
   if( p==0 ){
 #ifndef SQLITE_OMIT_VIRTUALTABLE
     /* If zName is the not the name of a table in the schema created using
@@ -571,6 +586,9 @@ Index *sqlite3FindIndex(sqlite3 *db, const char *zName, const char *zDb){
     Schema *pSchema = db->aDb[j].pSchema;
     assert( pSchema );
     if( zDb && sqlite3DbIsNamed(db, j, zDb)==0 ) continue;
+#ifdef DOLTLITE_PROLLY
+    if( !zDb && doltliteNonlocalIsSchema(db->aDb[j].zDbSName) ) continue;
+#endif
     assert( sqlite3SchemaMutexHeld(db, j, 0) );
     p = sqlite3HashFind(&pSchema->idxHash, zName);
     if( p ) break;
@@ -1162,7 +1180,8 @@ int sqlite3CheckObjectName(
       int bUserTable = sqlite3StrICmp(zType, "table")==0
         && (sqlite3StrICmp(zName, "dolt_ignore")==0
          || sqlite3StrICmp(zName, "dolt_docs")==0
-         || sqlite3StrICmp(zName, "dolt_tests")==0);
+         || sqlite3StrICmp(zName, "dolt_tests")==0
+         || sqlite3StrICmp(zName, "dolt_nonlocal_tables")==0);
       if( !bUserTable && !bPlanTable ){
         sqlite3ErrorMsg(pParse,
             "table names beginning with dolt_ are reserved for internal use");
@@ -1406,6 +1425,22 @@ void sqlite3StartTable(
     if( SQLITE_OK!=sqlite3ReadSchema(pParse) ){
       goto begin_table_error;
     }
+#ifdef DOLTLITE_PROLLY
+    if( iDb==0 && !isView && !isVirtual && pParse->nested==0
+     && !db->init.busy && doltliteNonlocalBlocksCreate(db, zName) ){
+      const char *zNonlocal = zName;
+      const char *zNonlocalDb = 0;
+      if( noErr && doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb)>0
+       && sqlite3FindTable(db, zNonlocal, zNonlocalDb) ){
+        sqlite3CodeVerifySchema(pParse, iDb);
+        sqlite3ForceNotReadOnly(pParse);
+      }else if( pParse->nErr==0 ){
+        sqlite3ErrorMsg(pParse, "Cannot create table name %s because it "
+            "matches a name present in dolt_nonlocal_tables.", zName);
+      }
+      goto begin_table_error;
+    }
+#endif
     pTable = sqlite3FindTable(db, zName, zDb);
     if( pTable ){
       if( !noErr ){
@@ -2964,6 +2999,37 @@ void sqlite3EndTable(
           "%s; expected: CREATE TABLE dolt_ignore("
           "pattern TEXT NOT NULL, ignored TINYINT NOT NULL, "
           "PRIMARY KEY(pattern))", zFail);
+      return;
+    }
+  }
+
+  if( !db->init.busy
+   && !db->init.imposterTable
+   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && IsOrdinaryTable(p)
+   && sqlite3StrICmp(p->zName, "dolt_nonlocal_tables")==0 ){
+    static const char *const azNonlocalCol[] = {
+      "table_name", "target_ref", "ref_table", "options"
+    };
+    const char *zFail = 0;
+    int iCol;
+    if( p->nCol!=4 ) zFail = "dolt_nonlocal_tables must have exactly four columns";
+    for(iCol=0; !zFail && iCol<4; iCol++){
+      if( sqlite3StrICmp(p->aCol[iCol].zCnName, azNonlocalCol[iCol])!=0
+       || (p->aCol[iCol].affinity!=SQLITE_AFF_TEXT
+           && p->aCol[iCol].affinity!=SQLITE_AFF_BLOB)
+       || ((p->aCol[iCol].colFlags & COLFLAG_PRIMKEY)!=0)!=(iCol==0) ){
+        zFail = "dolt_nonlocal_tables has an unexpected column";
+      }
+    }
+    if( !zFail && p->aCol[0].notNull==OE_None ){
+      zFail = "dolt_nonlocal_tables.table_name must be NOT NULL";
+    }
+    if( zFail ){
+      sqlite3ErrorMsg(pParse,
+          "%s; expected: CREATE TABLE dolt_nonlocal_tables("
+          "table_name TEXT NOT NULL, target_ref TEXT, ref_table TEXT, "
+          "options TEXT, PRIMARY KEY(table_name))", zFail);
       return;
     }
   }

@@ -133,3 +133,24 @@ PR CI runs them at shorter budgets via `test/run_c_tests.sh` and
 Each connection selects a branch independently and recovers that branch's
 working set when it checks it out. There is no `dolt_stash`: checkout does not
 shelve uncommitted work between branches.
+
+## Several branches in one transaction
+
+`ATTACH 'file.db/feature' AS f` on a connection that already has `file.db`
+open on another branch shares that file's store instead of opening it again.
+One transaction can then write both branches: `COMMIT` publishes both
+branches' working sets as one root, and `ROLLBACK`, or a failed `COMMIT`,
+undoes both. [dolt_nonlocal_tables](dolt_nonlocal_tables.md) uses the same
+mechanism.
+
+- Each branch's working set gets its own publish-time check. If a peer wrote
+  either branch after this transaction read it, the stale write is refused
+  with `database is locked` (`SQLITE_BUSY_SNAPSHOT`) and the peer's rows
+  survive.
+- Version-control commands are refused while another branch of the store has
+  uncommitted writes in the transaction; commit or roll back first.
+- `dolt_checkout`, and deleting, renaming, or force-updating a branch, are
+  refused for a branch attached in the connection.
+- Sharing applies to a different, existing branch of a writable file. Attaching
+  a branch the connection already has open, a tag or commit, or a read-only
+  connection still opens a separate store, which writes like a peer.

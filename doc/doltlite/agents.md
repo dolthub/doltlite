@@ -144,6 +144,8 @@ SELECT dolt_revert('HEAD');                -- new commit undoing HEAD
 - Beta storage format version 12 is not SQLite's page format; stock SQLite
   cannot open it, and no SQLite journal, `-wal`, or `-shm` sidecars exist.
 - ATTACH works, but one transaction may write only one file-backed database.
+  Branches of the same file (`ATTACH 'file.db/branch'`) count as one and
+  commit together.
 - Most SQLite SQL features remain available, including triggers, views,
   FTS5, and R-Tree. For storage-coupled API and PRAGMA differences, see
   https://github.com/dolthub/doltlite/blob/master/doc/doltlite/sqlite-compatibility.md

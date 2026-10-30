@@ -1581,6 +1581,7 @@ int prollyBtreeClose(Btree *p){
   sqlite3_free(p->zAuthorEmail);
   sqlite3_free(p->zRebaseOrigBranch);
   sqlite3_free(p->zRebaseReturnBranch);
+  doltliteNonlocalFree(p->pNonlocal);
   sqlite3_free(p->zMergeSourceSpec);
   sqlite3_free(p);
   return SQLITE_OK;

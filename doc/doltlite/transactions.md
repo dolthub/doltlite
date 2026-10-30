@@ -71,7 +71,9 @@ Readers never block on writers and never see uncommitted rows or staging.
 
 | Statement | Error |
 |---|---|
-| Writing two file-backed databases in one transaction | `atomic commit across multiple file-backed databases is not supported`; the transaction is rolled back |
+| Writing two different file-backed databases in one transaction | `atomic commit across multiple file-backed databases is not supported`; the transaction is rolled back. Two branches of one file attached in the connection are one database and commit together; see [concurrency.md](concurrency.md#several-branches-in-one-transaction). |
+| A `dolt_*` command while another attached branch of the database has uncommitted writes in the transaction | `cannot run <function> while branch '<branch>' of this database has a write transaction open; commit or roll back first` |
+| `dolt_checkout`, or deleting, renaming, or force-updating, a branch attached in the connection | `branch '<branch>' is attached in this connection` |
 | Any `dolt_*` write under `PRAGMA query_only=1` or `immutable=1` | `attempt to write a readonly database` |
 | A `dolt_*` command inside a view, trigger, generated column, or index | `unsafe use of <function>()` at parse time; command functions are direct-only |
 | `VACUUM` inside a transaction | `cannot VACUUM from within a transaction`, as in SQLite |
