@@ -1,0 +1,302 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc series_seed {} {
+  switch $::series_layout {
+    rowid {db eval {CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT)}}
+    clustered {db eval {CREATE TABLE t(id INT PRIMARY KEY,v TEXT)}}
+    without {db eval {CREATE TABLE t(id INT PRIMARY KEY,v TEXT) WITHOUT ROWID}}
+  }
+  db eval {
+    CREATE TABLE u(id INT PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'base'); INSERT INTO u VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    UPDATE t SET v='one'; SELECT dolt_commit('-am','c1'); SELECT dolt_tag('c1');
+    INSERT INTO t VALUES(2,'two'); SELECT dolt_commit('-am','c2'); SELECT dolt_tag('c2');
+    INSERT INTO t VALUES(3,'three'); SELECT dolt_commit('-am','c3'); SELECT dolt_tag('c3');
+  }
+}
+proc series_state {} {
+  list [db one {SELECT dolt_hashof('HEAD')}] \
+    [db eval {SELECT id,v FROM t ORDER BY id}] [db eval {SELECT id,v FROM u ORDER BY id}] \
+    [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+foreach series_layout {rowid clustered without} {
+  foreach storage {file memory} {
+    foreach boundary {auto begin savepoint} {
+      foreach refs {{'c3','c2'} {'HEAD','HEAD~1'} {'c2','c3'} {'c3','c2','c1'}} {
+        reset_db
+        if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+        series_seed
+        set head [db one {SELECT dolt_hashof('HEAD')}]
+        if {$boundary eq "begin"} {db eval BEGIN}
+        if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+        set prefix series-$series_layout.$storage.$boundary.$refs
+        do_test $prefix.result {lindex [catchsql "SELECT dolt_revert($refs)"] 0} 0
+        set n [expr {$refs eq {'c3','c2','c1'} ? 3 : 2}]
+        do_execsql_test $prefix.rows {SELECT id,v FROM t ORDER BY id} [expr {$n==3 ? {1 base} : {1 one}}]
+        do_execsql_test $prefix.commits {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} $n
+        do_test $prefix.parent {db one "SELECT dolt_hashof('HEAD~$n')"} $head
+        do_execsql_test $prefix.clean {SELECT count(*) FROM dolt_status} 0
+        do_test $prefix.idle {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 1
+        if {![sqlite3_get_autocommit db]} {catchsql ROLLBACK}
+        if {$storage eq "file"} {
+          db close; sqlite3 db test.db
+          do_execsql_test $prefix.reopen {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} $n
+        }
+      }
+    }
+  }
+}
+set series_layout clustered
+foreach storage {file memory} {
+  foreach boundary {auto begin nested} {
+    foreach refs {{'c3','absent'} {'c3','HEAD~2..HEAD'} {'HEAD~2...HEAD'} {'c3','WORKING'}} {
+      reset_db
+      if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+      series_seed
+      db eval {UPDATE u SET v='dirty'}
+      if {$boundary ne "auto"} {db eval BEGIN}
+      if {$boundary eq "nested"} {db eval {SAVEPOINT caller}}
+      set before [series_state]
+      set prefix series-invalid-$storage.$boundary.$refs
+      do_test $prefix.refused {lindex [catchsql "SELECT dolt_revert($refs)"] 0} 1
+      do_test $prefix.unchanged {series_state} $before
+      if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+    }
+    foreach fault {empty root} {
+      reset_db
+      if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+      series_seed
+      if {$boundary ne "auto"} {db eval BEGIN}
+      if {$boundary eq "nested"} {db eval {SAVEPOINT caller}}
+      set refs {'c3','c3','c2'}
+      if {$fault eq "root"} {set refs {'c3','HEAD~4','c2'}}
+      set prefix series-later-$storage.$boundary.$fault
+      do_test $prefix.refused {lindex [catchsql "SELECT dolt_revert($refs)"] 0} 1
+      do_execsql_test $prefix.prefix-kept {SELECT id,v FROM t ORDER BY id} {1 one 2 two}
+      do_execsql_test $prefix.prefix-commit {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 1
+      do_test $prefix.idle {lindex [catchsql {SELECT dolt_revert('--abort')}] 0} 1
+      if {![sqlite3_get_autocommit db]} {catchsql ROLLBACK}
+      do_execsql_test $prefix.rollback-keeps-prefix {SELECT id,v FROM t ORDER BY id} {1 one 2 two}
+      if {$storage eq "file"} {
+        db close; sqlite3 db test.db
+        do_execsql_test $prefix.reopen {SELECT id,v FROM t ORDER BY id} {1 one 2 two}
+      }
+    }
+  }
+}
+foreach series_layout {rowid clustered without} {
+  foreach storage {file memory} {
+    foreach boundary {begin nested} {
+      foreach finish {abort continue} {
+        foreach resolution {ours theirs manual} {
+          reset_db
+          if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+          series_seed
+          db eval {UPDATE t SET v='latest' WHERE id=1; SELECT dolt_commit('-am','latest')}
+          if {$finish eq "abort"} {db eval {UPDATE u SET v='dirty'}}
+          if {$storage eq "file"} {db close; sqlite3 db test.db}
+          set before [series_state]
+          set head [db one {SELECT dolt_hashof('HEAD')}]
+          db eval BEGIN
+          if {$boundary eq "nested"} {db eval {SAVEPOINT caller}}
+          set prefix series-pending-$series_layout.$storage.$boundary.$finish.$resolution
+          do_test $prefix.conflict {lindex [catchsql {SELECT dolt_revert('c3','c1','c2')}] 0} 1
+          do_execsql_test $prefix.prefix {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 1
+          do_execsql_test $prefix.conflicts {SELECT count(*) FROM dolt_conflicts} 1
+          do_test $prefix.unresolved {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 1
+          do_test $prefix.wrong-kind {lindex [catchsql {SELECT dolt_cherry_pick('--abort')}] 0} 1
+          if {$finish eq "abort"} {
+            do_test $prefix.abort {lindex [catchsql {SELECT dolt_revert('--abort')}] 0} 0
+            do_test $prefix.restored {series_state} $before
+          } else {
+            if {$resolution eq "manual"} {
+              do_test $prefix.resolve {lindex [catchsql {UPDATE t SET v='manual' WHERE id=1; DELETE FROM dolt_conflicts_t}] 0} 0
+            } else {do_test $prefix.resolve {lindex [catchsql "SELECT dolt_conflicts_resolve('--$resolution','t')"] 0} 0}
+            db eval {SELECT dolt_add('t')}
+            do_test $prefix.continue {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 0
+            set v [expr {$resolution eq "ours" ? "latest" : ($resolution eq "theirs" ? "base" : "manual")}]
+            do_execsql_test $prefix.rows {SELECT id,v FROM t ORDER BY id} [list 1 $v]
+            do_execsql_test $prefix.commits {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 3
+            do_execsql_test $prefix.parent {SELECT dolt_hashof('HEAD~3')} $head
+          }
+          do_execsql_test $prefix.cleared {SELECT count(*) FROM dolt_conflicts} 0
+          do_test $prefix.idle {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 1
+          if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+          if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+          set after [series_state]
+          if {$storage eq "file"} {
+            db close; sqlite3 db test.db
+            do_test $prefix.reopen {series_state} $after
+          }
+        }
+      }
+    }
+  }
+}
+foreach storage {file memory} {
+  foreach finish {abort continue} {
+    reset_db
+    if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+    db eval {
+      CREATE TABLE t(id INT PRIMARY KEY,k INT UNIQUE);
+      CREATE TABLE u(id INT PRIMARY KEY,v TEXT);
+      INSERT INTO t VALUES(1,1),(2,2); SELECT dolt_commit('-Am','base');
+      UPDATE t SET k=3 WHERE id=1; SELECT dolt_commit('-am','c1'); SELECT dolt_tag('c1');
+      INSERT INTO t VALUES(3,4); SELECT dolt_commit('-am','c2'); SELECT dolt_tag('c2');
+      INSERT INTO t VALUES(4,5); SELECT dolt_commit('-am','c3'); SELECT dolt_tag('c3');
+      INSERT INTO t VALUES(5,1); SELECT dolt_commit('-am','latest');
+    }
+    if {$storage eq "file"} {db close; sqlite3 db test.db}
+    set before [db eval {SELECT id,k FROM t ORDER BY id}]
+    set head [db one {SELECT dolt_hashof('HEAD')}]
+    db eval BEGIN
+    set prefix series-violations-$storage.$finish
+    do_test $prefix.pending {lindex [catchsql {SELECT dolt_revert('c3','c1','c2')}] 0} 1
+    do_execsql_test $prefix.prefix {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 1
+    do_execsql_test $prefix.violations {SELECT count(*) FROM dolt_constraint_violations} 1
+    do_execsql_test $prefix.commit {COMMIT} {}
+    if {$storage eq "file"} {do_test $prefix.gc {lindex [catchsql {SELECT dolt_gc()}] 0} 0}
+    if {$finish eq "abort"} {
+      do_test $prefix.abort {lindex [catchsql {SELECT dolt_revert('--abort')}] 0} 0
+      do_execsql_test $prefix.head {SELECT dolt_hashof('HEAD')} $head
+      do_execsql_test $prefix.restored {SELECT id,k FROM t ORDER BY id} $before
+    } else {
+      do_execsql_test $prefix.resolve {
+        DELETE FROM t WHERE id=5; DELETE FROM dolt_constraint_violations_t; SELECT dolt_add('t');
+      } 0
+      do_test $prefix.continue {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 0
+      do_execsql_test $prefix.rows {SELECT id,k FROM t ORDER BY id} {1 1 2 2}
+      do_execsql_test $prefix.commits {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 3
+    }
+    do_execsql_test $prefix.cleared {SELECT count(*) FROM dolt_constraint_violations} 0
+  }
+}
+foreach storage {file memory} {
+  foreach finish {abort continue} {
+    reset_db
+    if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+    db eval {
+      CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+      CREATE TABLE u(id INT PRIMARY KEY,v TEXT);
+      INSERT INTO t VALUES(1,'base'),(2,'base'); SELECT dolt_commit('-Am','base');
+      UPDATE t SET v='one' WHERE id=1; SELECT dolt_commit('-am','c1'); SELECT dolt_tag('c1');
+      UPDATE t SET v='two' WHERE id=2; SELECT dolt_commit('-am','c2'); SELECT dolt_tag('c2');
+      INSERT INTO t VALUES(3,'three'); SELECT dolt_commit('-am','c3'); SELECT dolt_tag('c3');
+      UPDATE t SET v='latest' WHERE id IN (1,2); SELECT dolt_commit('-am','latest');
+    }
+    set before [series_state]
+    db eval BEGIN
+    set prefix series-two-pauses-$storage.$finish
+    do_test $prefix.first {lindex [catchsql {SELECT dolt_revert('c3','c1','c2')}] 0} 1
+    do_execsql_test $prefix.resolve-first {SELECT dolt_conflicts_resolve('--theirs','t'); SELECT dolt_add('t')} {0 0}
+    do_test $prefix.second {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 1
+    do_execsql_test $prefix.second-prefix {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 2
+    do_execsql_test $prefix.second-conflict {SELECT count(*) FROM dolt_conflicts} 1
+    db eval {SAVEPOINT resolve; SELECT dolt_conflicts_resolve('--ours','t'); SELECT dolt_add('t'); ROLLBACK TO resolve}
+    do_execsql_test $prefix.rollback-conflicts {SELECT count(*) FROM dolt_conflicts} 1
+    if {$finish eq "abort"} {
+      do_test $prefix.abort {lindex [catchsql {SELECT dolt_revert('--abort')}] 0} 0
+      do_test $prefix.original {series_state} $before
+    } else {
+      do_execsql_test $prefix.resolve-second {SELECT dolt_conflicts_resolve('--theirs','t'); SELECT dolt_add('t')} {0 0}
+      do_test $prefix.continue {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 0
+      do_execsql_test $prefix.rows {SELECT id,v FROM t ORDER BY id} {1 base 2 base}
+      do_execsql_test $prefix.commits {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 3
+    }
+    if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+    if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+  }
+}
+foreach storage {file memory} {
+  reset_db
+  if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+  set series_layout clustered
+  series_seed
+  db eval {UPDATE u SET v='dirty'}
+  set prefix series-unrelated-$storage
+  do_test $prefix.commit {lindex [catchsql {SELECT dolt_revert('c3','c2')}] 0} 0
+  do_execsql_test $prefix.working {SELECT v FROM u} dirty
+  do_execsql_test $prefix.committed {SELECT v FROM dolt_at_u('HEAD')} base
+  do_execsql_test $prefix.unstaged {SELECT staged FROM dolt_status WHERE table_name='u'} 0
+  reset_db
+  if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+  series_seed
+  db eval {UPDATE u SET v='staged'; SELECT dolt_add('u')}
+  set before [series_state]
+  do_test $prefix.refused {lindex [catchsql {SELECT dolt_revert('c3','c2')}] 0} 1
+  do_test $prefix.staging-kept {series_state} $before
+  reset_db
+  if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+  series_seed
+  db eval {UPDATE t SET v='latest' WHERE id=1; SELECT dolt_commit('-am','latest')}
+  do_test $prefix.conflict {lindex [catchsql {SELECT dolt_revert('c3','c1','c2')}] 0} 1
+  do_execsql_test $prefix.no-conflicts {SELECT count(*) FROM dolt_conflicts} 0
+  do_execsql_test $prefix.prefix {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 1
+  do_execsql_test $prefix.rows {SELECT id,v FROM t ORDER BY id} {1 latest 2 two}
+  do_test $prefix.no-pending {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 1
+  if {$storage eq "file"} {
+    db close; sqlite3 db test.db
+    do_execsql_test $prefix.reopen {SELECT id,v FROM t ORDER BY id} {1 latest 2 two}
+  }
+}
+foreach storage {file memory} {
+  reset_db
+  if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+  db eval {CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','base')}
+  for {set i 2} {$i<=41} {incr i} {
+    db eval "INSERT INTO t VALUES($i); SELECT dolt_commit('-am','c$i')"
+  }
+  set head [db one {SELECT dolt_hashof('HEAD')}]
+  set refs {}
+  for {set i 0} {$i<40} {incr i} {lappend refs "'HEAD~$i'"}
+  set args [join $refs ,]
+  do_test series-long-$storage.commit {lindex [catchsql "SELECT dolt_revert($args)"] 0} 0
+  do_execsql_test series-long-$storage.rows {SELECT id FROM t} 1
+  do_execsql_test series-long-$storage.commits {SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%'} 40
+  do_execsql_test series-long-$storage.parent {SELECT dolt_hashof('HEAD~40')} $head
+  do_execsql_test series-long-$storage.clean {SELECT count(*) FROM dolt_status} 0
+}
+foreach series_layout {rowid clustered without} {
+  foreach storage {file memory} {
+    reset_db
+    if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+    series_seed
+    db eval {
+      ALTER TABLE t ADD COLUMN extra INT DEFAULT 9;
+      SELECT dolt_commit('-am','column'); SELECT dolt_tag('column');
+      CREATE INDEX ix ON t(extra);
+      SELECT dolt_commit('-am','index'); SELECT dolt_tag('index');
+      INSERT INTO t VALUES(4,'four',10);
+      SELECT dolt_commit('-am','row'); SELECT dolt_tag('row');
+    }
+    set prefix series-schema-$series_layout.$storage
+    do_test $prefix.commit {lindex [catchsql {SELECT dolt_revert('row','index','column')}] 0} 0
+    do_execsql_test $prefix.rows {SELECT id,v FROM t ORDER BY id} {1 one 2 two 3 three}
+    do_execsql_test $prefix.columns {SELECT count(*) FROM pragma_table_info('t')} 2
+    do_execsql_test $prefix.index {SELECT count(*) FROM sqlite_schema WHERE name='ix'} 0
+    do_execsql_test $prefix.clean {SELECT count(*) FROM dolt_status} 0
+    if {$storage eq "file"} {
+      db close; sqlite3 db test.db
+      do_execsql_test $prefix.reopen {SELECT count(*) FROM pragma_table_info('t')} 2
+    }
+  }
+}
+reset_db
+set series_layout clustered
+series_seed
+db eval {SELECT dolt_branch('other'); ATTACH 'test.db/other' AS f; BEGIN; SELECT * FROM f.t}
+do_test series-attached.commit {lindex [catchsql {SELECT dolt_revert('c3','c2')}] 0} 0
+do_execsql_test series-attached.main {SELECT id,v FROM t ORDER BY id} {1 one}
+do_execsql_test series-attached.other {SELECT id,v FROM f.t ORDER BY id} {1 one 2 two 3 three}
+if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+db eval {BEGIN; INSERT INTO f.t VALUES(4,'attached'); INSERT INTO t VALUES(5,'caller')}
+set before [series_state]
+do_test series-attached.refused {lindex [catchsql {SELECT dolt_revert('HEAD','HEAD~1')}] 0} 1
+do_test series-attached.caller-kept {series_state} $before
+do_execsql_test series-attached.other-kept {SELECT id FROM f.t ORDER BY id} {1 2 3 4}
+do_execsql_test series-attached.rollback {ROLLBACK; SELECT id FROM t ORDER BY id} 1
+do_execsql_test series-attached.other-rollback {SELECT id FROM f.t ORDER BY id} {1 2 3}
+db eval {DETACH f}
+finish_test

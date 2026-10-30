@@ -221,6 +221,8 @@ static const Op aOp[] = {
     "peer_write_kept_merge_squash" },
   { "cherry_pick", 0, "SELECT dolt_cherry_pick('f')",
     "peer_write_kept_cherry_pick" },
+  { "revert_series", 0, "SELECT dolt_revert('c2','c2~1')",
+    "peer_write_kept_revert_series" },
   { "revert", 0, "SELECT dolt_revert('c2')", "peer_write_kept_revert" },
   /* These fail by design; the rollback must not erase the peer's write. */
   { "merge_conflict", 0, "SELECT dolt_merge('fc')",

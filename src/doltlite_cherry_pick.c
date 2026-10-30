@@ -664,7 +664,8 @@ void doltliteReplayFinish(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  DoltliteCommit snapshot;
+  DoltliteCommit snapshot, original;
+  DoltliteReplaySeries series;
   DoltliteTxnState saved;
   ProllyHash snapshotHash, originalStaged, originalViolations;
   ProllyHash working, staged, headCatalog, newHead;
@@ -680,6 +681,8 @@ void doltliteReplayFinish(
   char hex[PROLLY_HASH_SIZE*2+1];
 
   memset(&snapshot, 0, sizeof(snapshot));
+  memset(&original, 0, sizeof(original));
+  doltliteGetSessionReplaySeries(db, &series);
   memset(&saved, 0, sizeof(saved));
   memset(&newHead, 0, sizeof(newHead));
   doltliteGetSessionReplayState(db, &pendingKind, &snapshotHash,
@@ -700,6 +703,22 @@ void doltliteReplayFinish(
   if( rc!=SQLITE_OK ) goto replay_done;
 
   if( isAbort ){
+    ProllyHash originalHeadCatalog;
+    const ProllyHash *pRestoreCatalog = &snapshot.catalogHash;
+    const ProllyHash *pOriginalHead = 0;
+    int isSeries = kind==DOLTLITE_REPLAY_REVERT
+                && !prollyHashIsEmpty(&series.snapshot);
+    if( isSeries ){
+      rc = doltliteLoadCommit(db, &series.snapshot, &original);
+      if( rc!=SQLITE_OK ) goto replay_done;
+      pOriginalHead = doltliteCommitParentHash(&original, 0);
+      if( !pOriginalHead ){ rc = SQLITE_CORRUPT; goto replay_done; }
+      rc = doltliteCommitCatalogHash(db, pOriginalHead, &originalHeadCatalog);
+      if( rc!=SQLITE_OK ) goto replay_done;
+      pRestoreCatalog = &original.catalogHash;
+      originalStaged = series.staged;
+      originalViolations = series.violations;
+    }
     rc = doltliteSaveTxnState(db, &saved);
     if( rc!=SQLITE_OK ) goto replay_done;
     haveSaved = 1;
@@ -707,17 +726,26 @@ void doltliteReplayFinish(
     if( rc!=SQLITE_OK ) goto replay_done;
     graphLocked = 1;
     rc = doltliteConfirmWorkingSet(db, cs, &cleanWorkingSet);
-    if( rc==SQLITE_OK ) rc = doltliteApplyHardReset(db, &snapshot.catalogHash);
+    if( rc==SQLITE_OK ) rc = doltliteApplyHardReset(db, pRestoreCatalog);
     if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
     if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &originalStaged);
     if( rc==SQLITE_OK ){
       rc = doltliteSetSessionConstraintViolationsCatalog(db, &originalViolations);
     }
     if( rc==SQLITE_OK ) rc = doltliteSetSessionPendingReplayCommit(db, 0);
+    if( rc==SQLITE_OK && isSeries ){
+      newHead = *pOriginalHead;
+      rc = doltliteCompareAndAdvanceBranch(db, pHead, &cleanWorkingSet,
+          pOriginalHead, &originalHeadCatalog, pRestoreCatalog);
+      if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &originalStaged);
+    }
     if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
     chunkStoreUnlock(cs);
     graphLocked = 0;
-    if( rc==SQLITE_OK ) rc = doltliteVcSealActiveSavepoints(db);
+    if( rc==SQLITE_OK ){
+      rc = isSeries ? doltliteVcSealEnclosingTxn(db)
+                    : doltliteVcSealActiveSavepoints(db);
+    }
     if( rc==SQLITE_OK ) sqlite3_result_int(context, 0);
     goto replay_done;
   }
@@ -798,6 +826,7 @@ replay_done:
   }
   sqlite3_finalize(pStmt);
   doltliteCommitClear(&snapshot);
+  doltliteCommitClear(&original);
   if( rc!=SQLITE_OK ){
     if( zError ){
       sqlite3_result_error(context, zError, -1);

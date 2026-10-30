@@ -145,6 +145,7 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   doltliteGetSessionReplayState(db, &p->sessionReplayKind,
       &p->sessionReplaySnapshot, &p->sessionReplayStaged,
       &p->sessionReplayViolations, &p->sessionReplayWorkingSetBasis);
+  doltliteGetSessionReplaySeries(db, &p->sessionReplaySeries);
   doltliteGetSessionConstraintViolationsCatalog(
       db, &p->sessionConstraintViolationsCatalog);
   chunkStorePeekWorkingSetBasis(cs, p->zSessionBranch, &p->wsBasis);
@@ -229,6 +230,9 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   }
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionPendingReplayCommit(db, p->sessionPendingReplay);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionReplaySeries(db, &p->sessionReplaySeries);
   }
   if( rcFirst==SQLITE_OK ) rcFirst = rc;
   if( rcFirst!=SQLITE_OK || bSwept || (bRefsMoved && db->autoCommit) ){

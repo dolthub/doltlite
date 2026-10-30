@@ -1764,6 +1764,8 @@ int sqlite3BtreeIsDoltliteFormat(Btree *p){
 static int prollyVcStateEqual(const DoltVcState *a, const DoltVcState *b){
   return prollyHashCompare(&a->stagedCatalog, &b->stagedCatalog)==0
       && a->isMerging==b->isMerging
+      && memcmp(&a->replaySeries, &b->replaySeries,
+                sizeof(a->replaySeries))==0
       && a->pendingReplayCommit==b->pendingReplayCommit
       && (!a->pendingReplayCommit
           || (a->replayKind==b->replayKind

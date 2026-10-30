@@ -1125,6 +1125,7 @@ int doltliteSetSessionPendingReplayCommit(sqlite3 *db, u8 pending){
       memset(&p->vc.replayViolations, 0, sizeof(ProllyHash));
       memset(&p->vc.replayWorkingSetBasis, 0, sizeof(ProllyHash));
     }
+    if( !pending ) memset(&p->vc.replaySeries, 0, sizeof(p->vc.replaySeries));
     p->vc.pendingReplayCommit = pending ? 1 : 0;
   }
   return SQLITE_OK;
@@ -1183,6 +1184,23 @@ int doltliteSetSessionReplayState(
     if( pViolations ) p->vc.replayViolations = *pViolations;
     if( pWorkingSetBasis ) p->vc.replayWorkingSetBasis = *pWorkingSetBasis;
   }
+  return SQLITE_OK;
+}
+
+void doltliteGetSessionReplaySeries(sqlite3 *db, DoltliteReplaySeries *pSeries){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  memset(pSeries, 0, sizeof(*pSeries));
+  if( p ) *pSeries = p->vc.replaySeries;
+}
+
+int doltliteSetSessionReplaySeries(sqlite3 *db, const DoltliteReplaySeries *pSeries){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  int rc;
+  if( !p ) return SQLITE_ERROR;
+  rc = sessionStateSyncSavepoints(p);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pSeries ) p->vc.replaySeries = *pSeries;
+  else memset(&p->vc.replaySeries, 0, sizeof(p->vc.replaySeries));
   return SQLITE_OK;
 }
 
@@ -1587,6 +1605,10 @@ int doltliteSeedSessionHashes(
       if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replayStaged);
       if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replayViolations);
     }
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replaySeries.snapshot);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replaySeries.staged);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replaySeries.violations);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replaySeries.remaining);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseOntoCommit);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.constraintViolationsHash);
