@@ -49,10 +49,15 @@ Returns `0`. Branch and tag changes are durable immediately, even inside
 |---|---|
 | `branch` | Switch this connection to `branch` and load its working set. A name that exists only as one remote-tracking branch creates the local branch, including when that name contains `/`. A name that is both a table and a tracking branch is refused. `name --` creates that branch; `-- name` restores the table. |
 | `-b name [, rev]` | Create and switch. `rev` may come first or last. |
-| `table` | Discard working changes to one table, back to `HEAD` |
+| `-B name [, rev]` | Create or reset the named branch, then switch |
+| `table` | Restore one table from the staged state; use `HEAD, table` to restore the committed version |
+| `-f`, `--force` | Accepted with branch-owned working sets; switching retains each branch's working and staged changes |
+| `--overwrite-ignore`, `--no-overwrite-ignore` | Accepted and mutually exclusive; branch switches keep ignored tables on their owning branch |
 
 Every branch has its own working set, so switching never carries or refuses
-uncommitted work. The tracking ref itself (`origin/feature/x`) is not a
+uncommitted work. A switch cannot overwrite another branch's ignored tables,
+so `--no-overwrite-ignore` adds no refusal. These options do not change explicit
+table restoration or the branch-reset behavior of `-B`. The tracking ref itself (`origin/feature/x`) is not a
 local branch, and two remotes that both track one branch name do not create
 one. When the name is both a table and a tracking branch, checkout refuses
 with `'<name>' could be both a local table and a tracking branch.` and

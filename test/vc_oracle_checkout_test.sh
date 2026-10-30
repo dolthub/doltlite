@@ -140,6 +140,40 @@ oracle_savepoint_poststate() {
   fi
 }
 
+POLICY_SEED="CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('source');"
+for flags in "'-f'" "'--force'" "'--overwrite-ignore'" "'--no-overwrite-ignore'"; do
+  policy_case=$(( ${policy_case:-0} + 1 ))
+  for target in source main; do
+    oracle "checkout_policy_${policy_case}_$target" "$POLICY_SEED
+SELECT dolt_checkout('source');
+UPDATE t SET v='source staged';
+SELECT dolt_add('t');
+UPDATE t SET v='source working';
+SELECT dolt_checkout('main');
+UPDATE t SET v='main working';
+SELECT dolt_checkout($flags,'source');
+SELECT dolt_checkout($flags,'$target');"
+  done
+  oracle "checkout_policy_table_$policy_case" "$POLICY_SEED
+UPDATE t SET v='staged';
+SELECT dolt_add('t');
+UPDATE t SET v='working';
+SELECT dolt_checkout($flags,'--','t');"
+  oracle "checkout_policy_create_$policy_case" "$POLICY_SEED
+SELECT dolt_checkout($flags,'-b','fresh');"
+  oracle "checkout_policy_reset_$policy_case" "$POLICY_SEED
+SELECT dolt_checkout($flags,'-B','source');"
+done
+vc_oracle_error "checkout_policy_conflicting_ignore" "$POLICY_SEED
+SELECT dolt_checkout('--overwrite-ignore','--no-overwrite-ignore','source');"
+vc_oracle_error "checkout_policy_force_missing" "$POLICY_SEED
+SELECT dolt_checkout('--force','missing');"
+vc_oracle_error "checkout_policy_force_existing_create" "$POLICY_SEED
+SELECT dolt_checkout('--force','-b','source');"
+
 echo "=== Version Control Oracle Tests: dolt_checkout ==="
 echo ""
 
