@@ -644,8 +644,10 @@ static void doltliteCherryPickFunc(
   DoltliteCommit pickCommit, parentCommit, ourCommit;
   DoltliteCmdArgs args;
   int isAbort = 0;
+  int allowEmpty = 0;
   DoltliteCmdOption aOption[] = {
-    { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 }
+    { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
+    { "allow-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &allowEmpty, 0 }
   };
   int nConflicts = 0;
   int dirty = 0;
@@ -670,7 +672,7 @@ static void doltliteCherryPickFunc(
                             0, &args);
   if( rc!=SQLITE_OK ) return;
   if( isAbort ){
-    if( args.nPositional>0 ){
+    if( args.nPositional>0 || allowEmpty ){
       doltliteCmdArgsClear(&args);
       sqlite3_result_error(context,
         "--abort does not take other arguments", -1);
@@ -740,6 +742,8 @@ static void doltliteCherryPickFunc(
   }
 
   {
+    int keepEmpty = allowEmpty && prollyHashCompare(
+        &pickCommit.catalogHash, &parentCommit.catalogHash)==0;
     const char *zMsg = pickCommit.zMessage;
     char fallback[256];
     if( !zMsg || !*zMsg ){
@@ -749,7 +753,8 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, 0, 1, &pickHash,
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, 0, !keepEmpty,
+        &pickHash,
         &nConflicts, 0,
         &zApplyErr, hexBuf);
   }

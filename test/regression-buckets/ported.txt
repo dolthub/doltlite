@@ -204,3 +204,4 @@ doltlite_bind_length
 doltlite_rowid_full
 doltlite_creds
 doltlite_http_timeout
+doltlite_cherry_pick_allow_empty
