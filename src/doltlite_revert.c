@@ -138,8 +138,12 @@ static void doltliteRevertFunc(
   const char *zAuthor = 0;
   char *zParsedName = 0, *zParsedEmail = 0;
   DoltliteCmdArgs args;
+  int isAbort = 0;
+  int isContinue = 0;
   DoltliteCmdOption aOption[] = {
-    { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &zAuthor }
+    { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &zAuthor },
+    { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
+    { "continue", 0, DOLTLITE_CMD_OPTION_FLAG, &isContinue, 0 }
   };
   ProllyHash revertHash, ourHead;
   ProllyHash liveOurCatalog;
@@ -161,7 +165,18 @@ static void doltliteRevertFunc(
   rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) return;
-  if( args.nPositional!=1 ){
+  if( isAbort && isContinue ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context, "--continue and --abort are mutually exclusive", -1);
+    return;
+  }
+  if( (isAbort || isContinue)
+   && (args.nPositional>0 || (isAbort && zAuthor)) ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context, "replay lifecycle does not take a revision", -1);
+    return;
+  }
+  if( !isAbort && !isContinue && args.nPositional!=1 ){
     int nPos = args.nPositional;
     doltliteCmdArgsClear(&args);
     sqlite3_result_error(context,
@@ -171,7 +186,7 @@ static void doltliteRevertFunc(
       -1);
     return;
   }
-  zRef = args.azPositional[0];
+  zRef = args.nPositional ? args.azPositional[0] : 0;
   if( zAuthor ){
     rc = doltliteCmdParseAuthor(context, zAuthor, &zParsedName, &zParsedEmail);
     if( rc!=SQLITE_OK ){
@@ -188,6 +203,21 @@ static void doltliteRevertFunc(
     }
   }
   doltliteCmdArgsClear(&args);
+
+  if( isAbort || isContinue ){
+    doltliteReplayFinish(context, DOLTLITE_REPLAY_REVERT, isAbort,
+                         zParsedName, zParsedEmail);
+    sqlite3_free(zParsedName);
+    sqlite3_free(zParsedEmail);
+    return;
+  }
+
+  if( doltliteSessionHasPendingReplayCommit(db) ){
+    sqlite3_free(zParsedName);
+    sqlite3_free(zParsedEmail);
+    sqlite3_result_error(context, "a replay is already in progress", -1);
+    return;
+  }
 
   rc = doltliteResolveRef(db,zRef, &revertHash);
   if( rc!=SQLITE_OK ){

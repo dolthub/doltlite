@@ -1290,7 +1290,8 @@ sqlite3ext.h: .target_source
 #     parse.o
 #     opcodes.o
 #
-DEPS_OBJ_COMMON = $(MAKE_SANITY_CHECK) $(HDR)
+DEPS_OBJ_COMMON = $(MAKE_SANITY_CHECK) $(HDR) \
+  $(TOP)/src/doltlite_internal.h $(TOP)/src/prolly_btree_int.h
 parse.o:	parse.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c parse.c
 
