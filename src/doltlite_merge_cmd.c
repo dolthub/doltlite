@@ -1562,6 +1562,7 @@ int doltliteMergeRef(
   const char *zAuthorName,
   const char *zAuthorEmail,
   int noFastForward,
+  int fastForwardOnly,
   int noCommit,
   int squash
 ){
@@ -1685,6 +1686,12 @@ int doltliteMergeRef(
     doltliteFinishAutocommitWrite(db);
     sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
     return SQLITE_OK;
+  }
+
+  if( fastForwardOnly && prollyHashCompare(&ancestorHash, &ourHead)!=0 ){
+    doltliteFreeCatalog(aLocal, nLocal);
+    return mergeRefAbortAfterWriteTxn(db, context,
+        "fatal: Not possible to fast-forward, aborting", SQLITE_ERROR);
   }
 
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
@@ -1909,11 +1916,13 @@ static void doltliteMergeFunc(
   DoltliteCmdArgs args;
   int isAbort = 0;
   int noFastForward = 0;
+  int fastForwardOnly = 0;
   int noCommit = 0;
   int squash = 0;
   DoltliteCmdOption aOption[] = {
     { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
     { "no-ff", 0, DOLTLITE_CMD_OPTION_FLAG, &noFastForward, 0 },
+    { "ff-only", 0, DOLTLITE_CMD_OPTION_FLAG, &fastForwardOnly, 0 },
     { "no-commit", 0, DOLTLITE_CMD_OPTION_FLAG, &noCommit, 0 },
     { "squash", 0, DOLTLITE_CMD_OPTION_FLAG, &squash, 0 },
     { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &zMessage },
@@ -1945,7 +1954,8 @@ static void doltliteMergeFunc(
   if( args.nPositional==1 ) zBranch = args.azPositional[0];
 
   if( isAbort ){
-    if( zBranch || zMessage || zAuthor || noFastForward || noCommit || squash ){
+    if( zBranch || zMessage || zAuthor || noFastForward || fastForwardOnly
+     || noCommit || squash ){
       sqlite3_result_error(context,
         "--abort does not take other arguments", -1);
       doltliteCmdArgsClear(&args);
@@ -1975,6 +1985,13 @@ static void doltliteMergeFunc(
     return;
   }
 
+  if( fastForwardOnly && (noFastForward || squash) ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context,
+      "--ff-only and --no-ff or --squash cannot be used together", -1);
+    return;
+  }
+
   if( zAuthor
    && doltliteCmdParseAuthor(context, zAuthor, &zAuthorName, &zAuthorEmail)
       !=SQLITE_OK ){
@@ -1982,7 +1999,7 @@ static void doltliteMergeFunc(
     return;
   }
   (void)doltliteMergeRef(db, context, zBranch, zMessage, zAuthorName,
-                         zAuthorEmail, noFastForward, noCommit, squash);
+                         zAuthorEmail, noFastForward, fastForwardOnly, noCommit, squash);
   sqlite3_free(zAuthorName);
   sqlite3_free(zAuthorEmail);
   doltliteCmdArgsClear(&args);

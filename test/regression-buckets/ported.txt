@@ -91,6 +91,7 @@ doltlite_merge_index_domains
 doltlite_merge_reused_index
 doltlite_merge_added_unique
 doltlite_merge_ignored
+doltlite_merge_ff_only
 doltlite_rebase_plan_hash
 doltlite_rebase_dirty
 doltlite_rebase_conflict
