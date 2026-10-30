@@ -334,6 +334,25 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
   return rc;
 }
 
+int doltliteCheckpointCommand(sqlite3_context *context){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  Btree *p = db->aDb[0].pBt;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc = doltliteLockAndRefreshBusy(db, cs);
+  if( rc!=SQLITE_OK ) return rc;
+  if( p->pAtomicCommand ){
+    rc = cmdEndAtomicJoined(p, context);
+    if( rc==SQLITE_OK && context->isError ) rc = context->isError;
+    if( rc==SQLITE_OK && db->autoCommit ) rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+    if( rc==SQLITE_OK ) rc = cmdBeginAtomicJoined(p);
+  }else if( p->bCommandTxn ){
+    rc = doltliteBtreeEndCommandTxn(p, 0, 0);
+    if( rc==SQLITE_OK ) rc = doltliteBtreeBeginCommandTxn(p, 1);
+  }
+  chunkStoreUnlock(cs);
+  return rc==SQLITE_DONE ? SQLITE_OK : rc;
+}
+
 #define DOLTLITE_CMD_UNSCOPED 0
 #define DOLTLITE_CMD_SCOPED   1
 #define DOLTLITE_CMD_NOWAIT   2

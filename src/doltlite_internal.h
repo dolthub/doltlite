@@ -316,6 +316,7 @@ struct DoltliteTxnState {
   ProllyHash sessionReplayStaged;
   ProllyHash sessionReplayViolations;
   ProllyHash sessionReplayWorkingSetBasis;
+  DoltliteReplaySeries sessionReplaySeries;
 };
 
 static SQLITE_INLINE struct TableEntry *doltliteFindTableByNumber(
@@ -1927,6 +1928,9 @@ int doltliteSessionHasPendingReplayCommit(sqlite3 *db);
 void doltliteGetSessionReplayState(
   sqlite3*, u8*, ProllyHash*, ProllyHash*, ProllyHash*, ProllyHash*
 );
+void doltliteGetSessionReplaySeries(sqlite3*, DoltliteReplaySeries*);
+int doltliteSetSessionReplaySeries(sqlite3*, const DoltliteReplaySeries*);
+int doltliteCheckpointCommand(sqlite3_context*);
 int doltliteSetSessionReplayState(
   sqlite3*, u8, const ProllyHash*, const ProllyHash*, const ProllyHash*,
   const ProllyHash*

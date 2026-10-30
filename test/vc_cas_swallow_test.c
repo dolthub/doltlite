@@ -989,13 +989,14 @@ static void test_apply_publish_failure_is_atomic(void){
 
 static void test_replay_finish_failure_is_atomic(void){
   int revert, aborting, fault;
-  for(revert=0; revert<2; revert++){
+  for(revert=0; revert<3; revert++){
     for(aborting=0; aborting<2; aborting++){
       for(fault=0; fault<(aborting ? 1 : 2); fault++){
         char path[512], sql[160];
         sqlite3 *db, *peer = 0;
         char *before, *after, *err = 0;
         ProllyHash staged, afterStaged;
+        DoltliteReplaySeries seriesBefore, seriesAfter;
         u8 kind = 0;
         int rc, n = -1;
         snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR
@@ -1021,11 +1022,18 @@ static void test_replay_finish_failure_is_atomic(void){
         check("replay confirm: main", exec(db,
             "UPDATE t SET v='main';"
             "SELECT dolt_commit('-am','main edit');")==SQLITE_OK);
+        if( revert==2 ){
+          check("series confirm: source tail", exec(db,
+              "INSERT INTO t VALUES(2,'two'); SELECT dolt_commit('-am','tail');"
+              "SELECT dolt_tag('tail'); INSERT INTO t VALUES(3,'three');"
+              "SELECT dolt_commit('-am','prefix'); SELECT dolt_tag('prefix');")==SQLITE_OK);
+        }
         sqlite3_close(db);
         db = 0;
         check("replay confirm: reopen", sqlite3_open(path, &db)==SQLITE_OK);
         check("replay confirm: begin", exec(db, "BEGIN")==SQLITE_OK);
-        rc = execQuiet(db, revert ? "SELECT dolt_revert('target')"
+        rc = execQuiet(db, revert==2 ? "SELECT dolt_revert('prefix','target','tail')"
+            : revert ? "SELECT dolt_revert('target')"
             : "SELECT dolt_cherry_pick('target')", &err);
         sqlite3_free(err);
         err = 0;
@@ -1038,6 +1046,7 @@ static void test_replay_finish_failure_is_atomic(void){
         }
         before = queryText(db, "SELECT dolt_hashof('HEAD')");
         doltliteGetSessionStaged(db, &staged);
+        doltliteGetSessionReplaySeries(db, &seriesBefore);
         check("replay confirm: peer open", sqlite3_open(path, &peer)==SQLITE_OK);
         sqlite3_busy_timeout(peer, 0);
         rc = sqlite3_exec(peer, "INSERT INTO t VALUES(900,'peer')", 0, 0, 0);
@@ -1058,10 +1067,19 @@ static void test_replay_finish_failure_is_atomic(void){
         doltliteGetSessionStaged(db, &afterStaged);
         check("replay confirm: staged unchanged",
             prollyHashCompare(&staged, &afterStaged)==0);
+        doltliteGetSessionReplaySeries(db, &seriesAfter);
+        check("series confirm: metadata retained",
+            memcmp(&seriesBefore, &seriesAfter, sizeof(seriesBefore))==0);
         doltliteGetSessionReplayState(db, &kind, 0, 0, 0, 0);
         check("replay confirm: pending retained", kind==(revert
             ? DOLTLITE_REPLAY_REVERT : DOLTLITE_REPLAY_CHERRY_PICK));
         check("replay confirm: retry", exec(db, sql)==SQLITE_OK);
+        if( revert==2 ){
+          check("series confirm: all remaining applied", queryInt(db,
+              "SELECT count(*) FROM t", &n)==SQLITE_OK && n==(aborting ? 3 : 1));
+          doltliteGetSessionReplaySeries(db, &seriesAfter);
+          check("series confirm: metadata cleared", prollyHashIsEmpty(&seriesAfter.snapshot));
+        }
         if( !sqlite3_get_autocommit(db) ){
           check("replay confirm: commit", exec(db, "COMMIT")==SQLITE_OK);
         }

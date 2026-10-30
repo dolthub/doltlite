@@ -4,6 +4,14 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 
+typedef struct DoltliteReplaySeries DoltliteReplaySeries;
+struct DoltliteReplaySeries {
+  ProllyHash snapshot;
+  ProllyHash staged;
+  ProllyHash violations;
+  ProllyHash remaining;
+};
+
 struct ProllyMutMap;
 typedef struct TableEntry TableEntry;
 typedef struct SchemaEntry SchemaEntry;
