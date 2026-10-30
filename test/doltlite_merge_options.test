@@ -1,0 +1,103 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc merge_options_state {} {
+  list [db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] \
+       [db eval {SELECT id FROM t ORDER BY id}] \
+       [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+
+foreach storage {file memory} {
+  foreach graph {ff diverged} {
+    foreach mode {default noff squash ffonly} {
+      foreach options {{'--commit'} {'--no-edit'} {'--commit','--no-edit'}} {
+        foreach message {default explicit} {
+          foreach boundary {auto begin savepoint} {
+            reset_db
+            if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+            db eval {
+              CREATE TABLE t(id INT PRIMARY KEY);
+              INSERT INTO t VALUES(1);
+              SELECT dolt_commit('-Am','base');
+              SELECT dolt_checkout('-b','source');
+              INSERT INTO t VALUES(2);
+              SELECT dolt_commit('-am','source');
+              SELECT dolt_checkout('main');
+            }
+            set rows {1 2}
+            if {$graph eq "diverged"} {
+              db eval {INSERT INTO t VALUES(3); SELECT dolt_commit('-am','main')}
+              set rows {1 2 3}
+            }
+            set head [db one {SELECT dolt_hashof('HEAD')}]
+            set target [db one {SELECT dolt_hashof('source')}]
+            set before [merge_options_state]
+            set arguments $options
+            if {$mode eq "ffonly"} {append arguments ",'--ff-only'"}
+            if {$mode eq "noff"} {append arguments ",'--no-ff'"}
+            if {$mode eq "squash"} {append arguments ",'--squash'"}
+            set expected_message {Merge branch 'source' into main}
+            if {$message eq "explicit"} {
+              append arguments ",'--message','chosen'"
+              set expected_message chosen
+            }
+            if {$boundary eq "begin"} {db eval BEGIN}
+            if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+            set prefix merge-options-$storage.$graph.$mode.$options.$message.$boundary
+            if {$graph eq "diverged" && $mode eq "ffonly"} {
+              do_test $prefix.result {lindex [catchsql "SELECT dolt_merge($arguments,'source')"] 0} 1
+              do_test $prefix.unchanged {merge_options_state} $before
+              if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+              continue
+            }
+            do_test $prefix.result {lindex [catchsql "SELECT dolt_merge($arguments,'source')"] 0} 0
+            do_execsql_test $prefix.rows {SELECT id FROM t ORDER BY id} $rows
+            if {$graph eq "ff" && $mode in {default ffonly}} {
+              do_test $prefix.head {db one {SELECT dolt_hashof('HEAD')}} $target
+            } elseif {$graph eq "ff" && $mode eq "squash"} {
+              do_test $prefix.head {db one {SELECT dolt_hashof('HEAD')}} $head
+              do_execsql_test $prefix.staged {
+                SELECT table_name,staged,status FROM dolt_status
+              } {t 1 modified}
+            } else {
+              do_execsql_test $prefix.message {SELECT message FROM dolt_log LIMIT 1} [list $expected_message]
+              set parents [expr {$mode eq "squash" ? 1 : 2}]
+              do_execsql_test $prefix.parents {
+                SELECT count(parent_hash) FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD')
+              } $parents
+            }
+            if {$graph ne "ff" || $mode ne "squash"} {
+              do_execsql_test $prefix.clean {SELECT count(*) FROM dolt_status} 0
+            }
+            if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+            set after [merge_options_state]
+            if {$storage eq "file"} {
+              db close
+              sqlite3 db test.db
+              do_test $prefix.reopen {merge_options_state} $after
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+foreach options {{'--commit','--no-commit','source'}
+                 {'--no-commit','--commit','source'}
+                 {'--abort','--commit'} {'--abort','--no-edit'}} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('source');
+    INSERT INTO t VALUES(2);
+  }
+  set before [merge_options_state]
+  do_test merge-options-invalid.$options {
+    list [lindex [catchsql "SELECT dolt_merge($options)"] 0] [merge_options_state]
+  } [list 1 $before]
+}
+
+finish_test
