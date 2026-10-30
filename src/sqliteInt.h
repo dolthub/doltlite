@@ -5561,6 +5561,7 @@ int doltliteNonlocalSync(sqlite3*);
 int doltliteNonlocalResolve(Parse*, const char**, const char**);
 int doltliteNonlocalBlocksCreate(sqlite3*, const char*);
 int doltliteNonlocalIsSchema(const char*);
+Table *doltliteFkParentTable(sqlite3*, const char*, const char*);
 void doltliteJoinStoreCommits(sqlite3*);
 void doltliteEndStoreCommits(sqlite3*);
 const char *doltliteBtreeMissingReadBranch(Btree*);

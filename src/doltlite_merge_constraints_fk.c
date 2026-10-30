@@ -105,10 +105,21 @@ static int fkParentLookupInit(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   DoltliteSerialValue *aValue = 0;
+  const char *zSchema = "main";
+  const char *zTable = zParentTable;
   Pgno root;
   int rc, res = 0;
 
-  p->pParent = doltliteFindTableByName(aCur, nCur, zParentTable);
+  /* A dolt_nonlocal_tables parent is the target ref's table, as this
+  ** connection sees it, not one in the catalog under check. */
+  if( doltliteNonlocalFkParent(db, zParentTable, &zSchema, &zTable) ){
+    int iDb = sqlite3FindDbName(db, zSchema);
+    pTab = iDb>=0 ? sqlite3FindTable(db, zTable, zSchema) : 0;
+    p->pParent = pTab
+        ? doltliteBtreeTableEntry(db->aDb[iDb].pBt, pTab->tnum) : 0;
+  }else{
+    p->pParent = doltliteFindTableByName(aCur, nCur, zParentTable);
+  }
   if( !p->pParent || prollyHashIsEmpty(&p->pParent->root) ){
     p->pParent = 0;
     p->ready = 1;
@@ -118,9 +129,9 @@ static int fkParentLookupInit(
   prollyCursorInit(&p->cur, cs, pCache, &p->pParent->root, p->pParent->flags);
   p->ready = 1;
   p->nCol = nCol;
-  rc = doltliteGetColumnNames(db, zParentTable, &p->cols);
+  rc = doltliteGetColumnNamesIn(db, zSchema, zTable, &p->cols);
   if( rc!=SQLITE_OK ) return rc;
-  pTab = sqlite3FindTable(db, zParentTable, "main");
+  pTab = sqlite3FindTable(db, zTable, zSchema);
   if( !pTab ) return SQLITE_ERROR;
   p->pTab = pTab;
   p->aiCol = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(int));

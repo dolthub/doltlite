@@ -333,6 +333,9 @@ static void fkLookupParent(
   int iCur = pParse->nTab - 1;              /* Cursor number to use */
   int iOk = sqlite3VdbeMakeLabel(pParse);   /* jump here if parent key found */
 
+#ifdef DOLTLITE_PROLLY
+  iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
+#endif
   sqlite3VdbeVerifyAbortable(v,
     (!pFKey->isDeferred
       && !(pParse->db->flags & SQLITE_DeferFKs)
@@ -934,7 +937,11 @@ void sqlite3FkCheck(
     ** schema items cannot be located, set an error in pParse and return 
     ** early.  */
     if( pParse->disableTriggers ){
+#ifdef DOLTLITE_PROLLY
+      pTo = doltliteFkParentTable(db, pFKey->zTo, zDb);
+#else
       pTo = sqlite3FindTable(db, pFKey->zTo, zDb);
+#endif
     }else{
       pTo = sqlite3LocateTable(pParse, 0, pFKey->zTo, zDb);
     }

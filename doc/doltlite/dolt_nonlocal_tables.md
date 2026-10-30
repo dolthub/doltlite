@@ -64,10 +64,6 @@ no-op, as in Dolt.
 
 - Nonlocal tables are not listed in `sqlite_master` or `.tables`; Dolt shows
   them in `SHOW TABLES`.
-- A foreign key that references a claimed name is checked against this
-  branch's own table of that name, if any, not the nonlocal table. Dolt checks
-  the nonlocal table. Views and triggers resolve claimed names like any other
-  statement.
 - `dolt_commit_all` and `@@dolt_multi_branch_commit` are not implemented, so
   commit each branch's working set from that branch.
 - A branch that a rule targets cannot be deleted or renamed while this

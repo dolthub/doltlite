@@ -935,6 +935,10 @@ const char *doltliteBtreeBranchName(Btree *p){
   return p->zBranch ? p->zBranch : "main";
 }
 
+struct TableEntry *doltliteBtreeTableEntry(Btree *p, Pgno iTable){
+  return btreeIsProlly(p) ? findTable(p, iTable) : 0;
+}
+
 int doltliteBtreeTableStamp(Btree *p, Pgno iTable, ProllyHash *pRoot,
                             int *pbPending){
   struct TableEntry *pTE;
