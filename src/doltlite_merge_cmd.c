@@ -1920,6 +1920,7 @@ static void doltliteMergeFunc(
   int noCommit = 0;
   int commit = 0;
   int noEdit = 0;
+  int skipVerification = 0;
   int squash = 0;
   DoltliteCmdOption aOption[] = {
     { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
@@ -1929,6 +1930,7 @@ static void doltliteMergeFunc(
     { "commit", 0, DOLTLITE_CMD_OPTION_FLAG, &commit, 0 },
     { "no-edit", 0, DOLTLITE_CMD_OPTION_FLAG, &noEdit, 0 },
     { "squash", 0, DOLTLITE_CMD_OPTION_FLAG, &squash, 0 },
+    { "skip-verification", 0, DOLTLITE_CMD_OPTION_FLAG, &skipVerification, 0 },
     { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &zMessage },
     { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &zAuthor }
   };
@@ -1959,7 +1961,7 @@ static void doltliteMergeFunc(
 
   if( isAbort ){
     if( zBranch || zMessage || zAuthor || noFastForward || fastForwardOnly
-     || noCommit || commit || noEdit || squash ){
+     || noCommit || commit || noEdit || squash || skipVerification ){
       sqlite3_result_error(context,
         "--abort does not take other arguments", -1);
       doltliteCmdArgsClear(&args);

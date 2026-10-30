@@ -113,6 +113,7 @@ typedef struct DoltliteCommitOptions {
   int amend;
   int allowEmpty;
   int skipEmpty;
+  int skipVerification;
   int force;
   i64 explicitTimestamp;
 } DoltliteCommitOptions;
@@ -133,7 +134,8 @@ static int doltliteCommitParseOptions(
     { "date", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zDate },
     { "amend", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->amend, 0 },
     { "allow-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->allowEmpty, 0 },
-    { "skip-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->skipEmpty, 0 }
+    { "skip-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->skipEmpty, 0 },
+    { "skip-verification", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->skipVerification, 0 }
   };
   int rc;
   memset(opts, 0, sizeof(*opts));

@@ -34,6 +34,11 @@ SELECT dolt_merge_base('main', 'feature');
 | `--no-commit` | Three-way: stage and leave `is_merging = 1`, or `0` with `--squash`. A possible fast-forward still advances `HEAD`. |
 | `-m`, `--message` | Message for the merge commit (default `Merge branch 'x' into y`) |
 | `--abort` | Drop an in-progress merge and restore the pre-merge working set |
+| `--skip-verification` | Accepted for Dolt compatibility; stored tests still run explicitly |
+
+DoltLite runs stored tests through [`dolt_test_run`](dolt_tests.md#dolt_test_run),
+not automatically on commits or merges. `--skip-verification` leaves explicit
+test runs, conflict checks, and constraint checks unchanged.
 
 Committed merges return the new tip hash. A fast-forward returns the merged
 branch's tip; an uncommitted three-way merge returns `0`.

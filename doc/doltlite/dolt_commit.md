@@ -42,6 +42,11 @@ Returns `0`. No arguments: `dolt_add requires table name or '-A'`.
 | `--allow-empty` | Create a commit even when nothing is staged |
 | `--skip-empty` | Return `0` instead of erroring when nothing is staged |
 | `-f`, `--force` | Commit despite rows in `dolt_constraint_violations` |
+| `--skip-verification` | Accepted for Dolt compatibility; stored tests still run explicitly |
+
+DoltLite runs stored tests through [`dolt_test_run`](dolt_tests.md#dolt_test_run),
+not automatically on commits or merges. `--skip-verification` leaves explicit
+test runs, conflict checks, and constraint checks unchanged.
 
 Returns the new commit hash. Inside `BEGIN`, a successful commit also
 commits the SQL transaction and begins a new one; see
