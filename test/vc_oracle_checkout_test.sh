@@ -317,6 +317,76 @@ $SEED
 SELECT dolt_checkout('-B', 'x', 'nosuchrev');
 "
 
+echo "--- branch option values and mutual exclusion ---"
+
+CHECKOUT_OPTIONS_SEED="
+$SEED
+SELECT dolt_branch('old');
+INSERT INTO t VALUES(2,'main_b');
+SELECT dolt_commit('-am','main_tip');
+SELECT dolt_branch('existing');
+"
+CHECKOUT_OPTIONS_POST="
+SELECT concat(kind,char(9),name,char(9),detail) FROM (
+  SELECT 'B' AS kind,name,latest_commit_message AS detail FROM dolt_branches
+  UNION ALL SELECT 'L',message,'' FROM dolt_log
+  UNION ALL SELECT 'R',cast(id AS CHAR),v FROM t
+  UNION ALL SELECT 'S',table_name,
+    concat(CASE WHEN staged THEN 'staged:' ELSE 'working:' END,status)
+    FROM dolt_status
+) AS state ORDER BY kind,name,detail;
+"
+for state in clean dirty staged; do
+  dirty=""
+  if [ "$state" != clean ]; then dirty="INSERT INTO t VALUES(99,'working');"; fi
+  if [ "$state" = staged ]; then dirty="$dirty SELECT dolt_add('t');"; fi
+  for target in main existing newbranch; do
+    oracle_error_poststate "checkout_lower_upper_${state}_${target}" "
+$CHECKOUT_OPTIONS_SEED
+$dirty
+SELECT dolt_checkout('-b','$target','-B','old');
+" "$CHECKOUT_OPTIONS_POST"
+    oracle_error_poststate "checkout_upper_lower_${state}_${target}" "
+$CHECKOUT_OPTIONS_SEED
+$dirty
+SELECT dolt_checkout('-B','$target','-b','old');
+" "$CHECKOUT_OPTIONS_POST"
+  done
+done
+
+oracle_error_poststate "checkout_lower_upper_after_start_point" "
+$CHECKOUT_OPTIONS_SEED
+INSERT INTO t VALUES(99,'working');
+SELECT dolt_checkout('old','-b','existing','-B','main');
+" "$CHECKOUT_OPTIONS_POST"
+
+oracle "checkout_lower_consumes_option_looking_name" "
+$CHECKOUT_OPTIONS_SEED
+INSERT INTO t VALUES(99,'working');
+SELECT dolt_checkout('-b','-B','old');
+"
+oracle "checkout_upper_consumes_option_looking_name" "
+$CHECKOUT_OPTIONS_SEED
+INSERT INTO t VALUES(99,'working');
+SELECT dolt_checkout('-B','-b','old');
+"
+oracle "checkout_lower_consumes_option_without_start" "
+$CHECKOUT_OPTIONS_SEED
+SELECT dolt_checkout('-b','-B');
+"
+oracle "checkout_upper_consumes_option_without_start" "
+$CHECKOUT_OPTIONS_SEED
+SELECT dolt_checkout('-B','-b');
+"
+oracle "checkout_lower_consumes_separator_name" "
+$CHECKOUT_OPTIONS_SEED
+SELECT dolt_checkout('-b','--','old');
+"
+oracle "checkout_start_before_option_looking_name" "
+$CHECKOUT_OPTIONS_SEED
+SELECT dolt_checkout('old','-b','-B');
+"
+
 echo "--- per-table checkout ---"
 
 oracle "revert_single_table_working" "

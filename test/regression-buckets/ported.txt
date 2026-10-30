@@ -111,6 +111,7 @@ doltlite_open_head
 doltlite_deferred_branch_open
 doltlite_commit_peer_refresh
 doltlite_checkout_peer_retry
+doltlite_checkout_options
 doltlite_checkout_ioerr
 doltlite_commit_ioerr
 doltlite_failed_commit_rollback
