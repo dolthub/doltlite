@@ -23,7 +23,9 @@ For a DoltLite-format main database, the compatibility contract is:
   with `atomic commit across multiple file-backed databases is not supported`
   and rolled back in full. This includes TEMP triggers that write `main` while
   changing an attached file. Single-file writes and transactions involving a
-  `:memory:` attachment are supported.
+  `:memory:` attachment are supported. Branches of one DoltLite file attached
+  in the same connection (`ATTACH 'file.db/branch'`) are one database and
+  commit together; see [concurrency.md](concurrency.md#several-branches-in-one-transaction).
 - `PRAGMA auto_vacuum` reports `0`; attempts to enable it and
   `PRAGMA incremental_vacuum` are no-ops. `VACUUM` runs DoltLite garbage
   collection instead of rebuilding SQLite pages. Collection reuses traversal

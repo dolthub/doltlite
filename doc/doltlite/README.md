@@ -45,6 +45,7 @@ the forms each surface accepts are in [refs.md](refs.md).
 - [dolt_constraint_violations.md](dolt_constraint_violations.md) — `dolt_constraint_violations`, `dolt_constraint_violations_<table>`, `dolt_verify_constraints`
 - [dolt_workspace.md](dolt_workspace.md) — `dolt_workspace_<table>`
 - [dolt_ignore.md](dolt_ignore.md) — `dolt_ignore`
+- [dolt_nonlocal_tables.md](dolt_nonlocal_tables.md) — `dolt_nonlocal_tables`: table names that resolve to another branch
 - [dolt_docs.md](dolt_docs.md) — `dolt_docs`
 - [dolt_tests.md](dolt_tests.md) — `dolt_tests`, `dolt_test_run`
 - [dolt_schemas.md](dolt_schemas.md) — `dolt_schemas` and the versioned catalog
