@@ -113,6 +113,99 @@ static int collectChangedTables(
   return SQLITE_OK;
 }
 
+static int listHasName(char **az, int n, const char *zName){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<n; i++){
+    if( az[i] && sqlite3_stricmp(az[i], zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+/* A parent edit can orphan rows in a child whose own root did not change.
+** Append those direct children. Tables added here are not parents, so a
+** grandchild is not pulled in just because its parent was added. */
+static int appendFkChildren(sqlite3 *db, char ***paz, int *pn){
+  int nParents;
+  int nAlloc;
+  sqlite3_stmt *pTbls = 0;
+  int rc;
+  int stepRc;
+
+  nParents = *pn;
+  nAlloc = *pn;
+  if( nParents<=0 ) return SQLITE_OK;
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT name FROM main.sqlite_master WHERE type='table' "
+      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+      -1, &pTbls, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  while( (stepRc = sqlite3_step(pTbls))==SQLITE_ROW ){
+    const char *zRaw;
+    char *zChild = 0;
+    char *zFkSql = 0;
+    sqlite3_stmt *pFk = 0;
+    int fkStep = SQLITE_DONE;
+    int hit = 0;
+
+    zRaw = (const char*)sqlite3_column_text(pTbls, 0);
+    if( !zRaw || listHasName(*paz, *pn, zRaw) ) continue;
+    zChild = sqlite3_mprintf("%s", zRaw);
+    if( !zChild ){ rc = SQLITE_NOMEM; break; }
+    zFkSql = sqlite3_mprintf("PRAGMA main.foreign_key_list(%Q)", zChild);
+    if( !zFkSql ){
+      sqlite3_free(zChild);
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    rc = sqlite3_prepare_v2(db, zFkSql, -1, &pFk, 0);
+    sqlite3_free(zFkSql);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zChild);
+      break;
+    }
+    while( (fkStep = sqlite3_step(pFk))==SQLITE_ROW ){
+      const char *zParent = (const char*)sqlite3_column_text(pFk, 2);
+      if( listHasName(*paz, nParents, zParent) ){
+        hit = 1;
+        break;
+      }
+    }
+    if( rc==SQLITE_OK && fkStep!=SQLITE_DONE && fkStep!=SQLITE_ROW ){
+      rc = fkStep;
+    }
+    sqlite3_finalize(pFk);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zChild);
+      break;
+    }
+    if( !hit ){
+      sqlite3_free(zChild);
+      continue;
+    }
+    if( *pn >= nAlloc ){
+      int nNew = nAlloc ? nAlloc*2 : 8;
+      char **azNew = sqlite3_realloc(*paz, nNew * (int)sizeof(char*));
+      if( !azNew ){
+        sqlite3_free(zChild);
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      *paz = azNew;
+      nAlloc = nNew;
+    }
+    (*paz)[*pn] = zChild;
+    (*pn)++;
+  }
+  if( rc==SQLITE_OK && stepRc!=SQLITE_DONE && stepRc!=SQLITE_ROW ){
+    rc = stepRc;
+  }
+  sqlite3_finalize(pTbls);
+  return rc;
+}
+
 static int hasRecordedViolations(
   sqlite3 *db,
   const char **azTables,
@@ -242,8 +335,9 @@ static void doltVerifyConstraintsFunc(
     doltliteCommitClear(&headCommit);
   }
 
-  /* Empty ancestor so every violating row is reported. Default mode only
-  ** restricts which tables are scanned (those differing from HEAD). */
+  /* Empty ancestor so every violating row on a scanned table is reported.
+  ** Default mode scans tables that differ from HEAD, plus direct foreign-key
+  ** children of those tables. */
   pDetectAnc = &emptyCat;
 
   if( bAll ){
@@ -251,6 +345,11 @@ static void doltVerifyConstraintsFunc(
     nScan = nArgTables;
   }else{
     rc = collectChangedTables(db, &headCat, &azChanged, &nChanged);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto cleanup;
+    }
+    rc = appendFkChildren(db, &azChanged, &nChanged);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto cleanup;

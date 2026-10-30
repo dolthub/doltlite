@@ -128,6 +128,86 @@ echo "--- FK: named table with no violations ---"
 run_oracle "fk_named_other" "$FK_SETUP" "'otherTable'" \
   "$FOLLOW_AGG_COUNT" 1
 
+# Child row is already in HEAD. The parent edit is the only working change.
+PARENT_INIT="
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pid INT REFERENCES parent(pk));
+CREATE TABLE otherTable(pk INTEGER PRIMARY KEY);
+INSERT INTO parent VALUES (1),(2);
+INSERT INTO child VALUES (10,1);
+INSERT INTO otherTable VALUES (1);
+SELECT dolt_commit('-Am', 'init');
+"
+PARENT_DELETE="${PARENT_INIT}
+PRAGMA foreign_keys=OFF;
+DELETE FROM parent WHERE pk=1;
+"
+PARENT_REKEY="${PARENT_INIT}
+PRAGMA foreign_keys=OFF;
+UPDATE parent SET pk=5 WHERE pk=1;
+"
+
+echo "--- FK: deleting a parent row orphans an unchanged child ---"
+run_oracle "fk_parent_delete" "$PARENT_DELETE" "" \
+  "$FOLLOW_AGG
+$FOLLOW_CHILD_ROWS" 0
+
+echo "--- FK: named unchanged child sees a deleted parent key ---"
+run_oracle "fk_parent_delete_named_child" "$PARENT_DELETE" "'child'" \
+  "$FOLLOW_AGG
+$FOLLOW_CHILD_ROWS" 0
+
+echo "--- FK: named parent does not report the child's orphan ---"
+run_oracle "fk_parent_delete_named_parent" "$PARENT_DELETE" "'parent'" \
+  "$FOLLOW_AGG_COUNT" 1
+
+echo "--- FK: named other table does not scan the orphaned child ---"
+run_oracle "fk_parent_delete_named_other" "$PARENT_DELETE" "'otherTable'" \
+  "$FOLLOW_AGG_COUNT" 1
+
+echo "--- FK: --output-only sees a deleted parent key ---"
+run_oracle "fk_parent_delete_output_only" "$PARENT_DELETE" "'--output-only'" \
+  "$FOLLOW_AGG_COUNT" 1
+
+echo "--- FK: --output-only named child sees a deleted parent key ---"
+run_oracle "fk_parent_delete_output_only_child" "$PARENT_DELETE" \
+  "'--output-only', 'child'" \
+  "$FOLLOW_AGG_COUNT" 1
+
+echo "--- FK: --output-only named parent stays clean ---"
+run_oracle "fk_parent_delete_output_only_parent" "$PARENT_DELETE" \
+  "'--output-only', 'parent'" \
+  "$FOLLOW_AGG_COUNT" 1
+
+echo "--- FK: re-keying a parent row orphans an unchanged child ---"
+run_oracle "fk_parent_rekey" "$PARENT_REKEY" "" \
+  "$FOLLOW_AGG
+$FOLLOW_CHILD_ROWS" 0
+
+echo "--- FK: named unchanged child sees a re-keyed parent ---"
+run_oracle "fk_parent_rekey_named_child" "$PARENT_REKEY" "'child'" \
+  "$FOLLOW_AGG
+$FOLLOW_CHILD_ROWS" 0
+
+echo "--- FK: named parent does not report a re-key orphan ---"
+run_oracle "fk_parent_rekey_named_parent" "$PARENT_REKEY" "'parent'" \
+  "$FOLLOW_AGG_COUNT" 1
+
+echo "--- FK: recorded orphan survives an unrelated parent-key edit ---"
+run_oracle "fk_recorded_orphan_survives_parent_edit" \
+"${PARENT_INIT}
+PRAGMA foreign_keys=OFF;
+INSERT INTO child VALUES (11,99);
+PRAGMA foreign_keys=ON;
+SELECT dolt_commit('-Am', 'commit orphan', '--force');
+SELECT dolt_verify_constraints('--all');
+PRAGMA foreign_keys=OFF;
+UPDATE parent SET pk=5 WHERE pk=2;
+" \
+"" \
+"$FOLLOW_AGG
+$FOLLOW_CHILD_ROWS" 0
+
 echo "--- FK: named table lookup is case insensitive ---"
 run_oracle "fk_named_table_case_insensitive" \
 "CREATE TABLE parent(pk INTEGER PRIMARY KEY);
