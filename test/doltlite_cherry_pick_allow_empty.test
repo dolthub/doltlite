@@ -1,0 +1,88 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc cp_empty_state {} {
+  list [db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] \
+       [db eval {SELECT id FROM t ORDER BY id}] \
+       [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+
+foreach storage {file memory} {
+  foreach kind {empty ordinary applied merge dirty} {
+    foreach allow {0 1} {
+      foreach boundary {auto begin savepoint} {
+        reset_db
+        if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+        db eval {
+          CREATE TABLE t(id INT PRIMARY KEY);
+          INSERT INTO t VALUES(1);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_checkout('-b','source');
+        }
+        if {$kind ne "empty"} {db eval {INSERT INTO t VALUES(2)}}
+        db eval {
+          SELECT dolt_commit('--allow-empty','-am','pick','--author','Source <source@test>');
+          SELECT dolt_checkout('main');
+        }
+        if {$kind eq "merge"} {
+          db eval {
+            INSERT INTO t VALUES(3);
+            SELECT dolt_commit('-am','main');
+            SELECT dolt_merge('--no-ff','source','-m','merge');
+            SELECT dolt_branch('-f','source','HEAD');
+          }
+        }
+        if {$kind eq "applied"} {db eval {INSERT INTO t VALUES(2); SELECT dolt_commit('-am','already')}}
+        if {$kind eq "dirty"} {db eval {INSERT INTO t VALUES(3)}}
+        set head [db one {SELECT dolt_hashof('HEAD')}]
+        set author [db eval {SELECT committer,email FROM dolt_log LIMIT 1}]
+        set before [cp_empty_state]
+        set call {SELECT dolt_cherry_pick('source')}
+        if {$allow} {set call {SELECT dolt_cherry_pick('--allow-empty','source')}}
+        if {$boundary eq "begin"} {db eval BEGIN}
+        if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+        set prefix cp-allow-empty-$storage.$kind.$allow.$boundary
+        set reject [expr {$kind in {applied merge dirty} || ($kind eq "empty" && !$allow)}]
+        do_test $prefix.result {lindex [catchsql $call] 0} $reject
+        if {$reject} {
+          do_test $prefix.unchanged {cp_empty_state} $before
+        } else {
+          set rows {1}
+          if {$kind eq "ordinary"} {set rows {1 2}}
+          do_execsql_test $prefix.rows {SELECT id FROM t ORDER BY id} $rows
+          do_execsql_test $prefix.message {SELECT message FROM dolt_log LIMIT 1} pick
+          do_test $prefix.author {db eval {SELECT committer,email FROM dolt_log LIMIT 1}} $author
+          do_execsql_test $prefix.parent {
+            SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD')
+          } $head
+          do_test $prefix.new-commit {expr {[db one {SELECT dolt_hashof('HEAD')}] ne $head}} 1
+          do_execsql_test $prefix.clean {SELECT count(*) FROM dolt_status} 0
+        }
+        if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+        set after [cp_empty_state]
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+          do_test $prefix.reopen {cp_empty_state} $after
+        }
+      }
+    }
+  }
+}
+
+foreach args {{'--allow-empty'} {'--allow-empty','--abort'}
+              {'--allow-empty','source','other'} {'--allow-empty','missing'}} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('source');
+  }
+  set before [cp_empty_state]
+  do_test cp-allow-empty-invalid.$args {
+    list [lindex [catchsql "SELECT dolt_cherry_pick($args)"] 0] [cp_empty_state]
+  } [list 1 $before]
+}
+
+finish_test

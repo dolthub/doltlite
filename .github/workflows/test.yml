@@ -372,6 +372,14 @@ jobs:
     # coverage-instrumentation multiplier inside the 600s per-file budget
     # (issue 2397: bigsort). A plain build keeps them fast and the budget
     # meaningful; their line coverage is exercised by the other buckets.
+    - name: Free disk for large sort regression
+      if: matrix.group == 'slow-plain'
+      run: |
+        df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+          /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+        df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+
     - name: Build plain testfixture
       if: matrix.group == 'slow-plain'
       run: |

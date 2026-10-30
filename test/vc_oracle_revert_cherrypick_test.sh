@@ -155,6 +155,36 @@ oracle_poststate() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+for empty_kind in empty ordinary applied; do
+  for allow in no yes; do
+    empty_setup="CREATE TABLE t(id INT PRIMARY KEY,v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','source');"
+    if [ "$empty_kind" != empty ]; then empty_setup="$empty_setup
+INSERT INTO t VALUES(2,20);"; fi
+    empty_setup="$empty_setup
+SELECT dolt_commit('--allow-empty','-am','pick','--author','Source <source@test>');
+SELECT dolt_checkout('main');"
+    if [ "$empty_kind" = applied ]; then empty_setup="$empty_setup
+INSERT INTO t VALUES(2,20); SELECT dolt_commit('-am','already');"; fi
+    empty_args="'source'"
+    if [ "$allow" = yes ]; then empty_args="'--allow-empty',$empty_args"; fi
+    empty_setup="$empty_setup
+SELECT dolt_cherry_pick($empty_args);"
+    if [ "$empty_kind" = applied ] || { [ "$empty_kind" = empty ] && [ "$allow" = no ]; }; then
+      vc_oracle_error "allow_empty_${empty_kind}_$allow" "$empty_setup"
+      oracle_error_poststate "allow_empty_${empty_kind}_${allow}_kept" "$empty_setup" \
+        "SELECT count(*) FROM dolt_log"
+    else
+      oracle "allow_empty_${empty_kind}_$allow" "$empty_setup"
+      oracle_poststate "allow_empty_${empty_kind}_${allow}_metadata" "$empty_setup" \
+        "SELECT message || '|' || (committer<>'Source') || '|' || (email<>'source@test') FROM dolt_log LIMIT 1" \
+        "SELECT concat(message,'|',committer<>'Source','|',email<>'source@test') FROM dolt_log LIMIT 1"
+    fi
+  done
+done
+
 echo "=== Version Control Oracle Tests: dolt_revert / dolt_cherry_pick ==="
 echo ""
 
