@@ -891,4 +891,75 @@ run_test "reversal_across_null_region_keeps_order" \
 
 db_rm "$DB"
 
+DB=/tmp/test_txn_two_cursor_flush_$$.db; db_rm "$DB"
+
+run_test "commit_with_two_open_cursors_over_pending_edits" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, a);
+   CREATE TABLE u(id INTEGER PRIMARY KEY);
+   INSERT INTO t VALUES(1,1),(2,2),(3,3),(4,4);
+   BEGIN;
+   INSERT INTO u VALUES(1);
+   INSERT INTO t VALUES(5,5);
+.scan-pause 1
+SELECT x.id, y.id FROM t x JOIN t y ON y.id > x.id ORDER BY x.id, y.id;
+   COMMIT;
+.scan-resume
+   SELECT count(*) FROM t;
+   SELECT count(*) FROM u;" \
+  "1|2
+1|3
+1|4
+1|5
+2|3
+2|4
+2|5
+3|4
+3|5
+4|5
+5
+1" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "release_with_two_open_cursors_over_pending_edits" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, a);
+   INSERT INTO t VALUES(1,1),(2,2),(3,3);
+   SAVEPOINT s;
+   DELETE FROM t WHERE id=2;
+.scan-pause 1
+SELECT x.id, y.id FROM t x JOIN t y ON y.id > x.id ORDER BY x.id, y.id;
+   RELEASE s;
+.scan-resume
+   SELECT group_concat(id) FROM t;" \
+  "1|3
+1,3" \
+  "$DB"
+
+db_rm "$DB"
+
+run_test "vc_reads_with_two_open_cursors_over_pending_edits" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, a);
+   INSERT INTO t VALUES(1,1),(2,2);
+   SELECT dolt_commit('-Am','init') IS NOT NULL;
+   BEGIN;
+   INSERT INTO t VALUES(3,3);
+.scan-pause 1
+SELECT x.id, y.id FROM t x JOIN t y ON y.id > x.id ORDER BY x.id, y.id;
+   SELECT table_name, staged, status FROM dolt_status;
+   SELECT dolt_add('t');
+.scan-resume
+   COMMIT;
+   SELECT table_name, staged, status FROM dolt_status;" \
+  "1
+1|2
+t|0|modified
+0
+1|3
+2|3
+t|1|modified" \
+  "$DB"
+
+db_rm "$DB"
+
 dltest_finish
