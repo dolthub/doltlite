@@ -1,0 +1,162 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc skip_verification_seed {} {
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    INSERT INTO dolt_tests VALUES('bad','checks','SELECT 0','expected_single_value','==','1');
+    SELECT dolt_commit('-Am','base');
+  }
+}
+
+foreach storage {file memory} {
+  foreach boundary {auto begin savepoint} {
+    foreach stage {explicit -a -A} {
+      foreach position {before after} {
+        reset_db
+        if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+        skip_verification_seed
+        set head [db one {SELECT dolt_hashof('HEAD')}]
+        db eval {INSERT INTO t VALUES(2)}
+        set args {'-m','next'}
+        if {$stage eq "explicit"} {db eval {SELECT dolt_add('t')}} else {append args ",'$stage'"}
+        if {$position eq "before"} {set args "'--skip-verification',$args"} else {append args ",'--skip-verification'"}
+        if {$boundary eq "begin"} {db eval BEGIN}
+        if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+        set prefix skip-verification-commit-$storage.$boundary.$stage.$position
+        do_test $prefix.result {lindex [catchsql "SELECT dolt_commit($args)"] 0} 0
+        do_execsql_test $prefix.message {SELECT message FROM dolt_log LIMIT 1} next
+        do_execsql_test $prefix.parent {
+          SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD')
+        } $head
+        do_execsql_test $prefix.manual {SELECT status FROM dolt_test_run('bad')} FAIL
+        do_execsql_test $prefix.clean {SELECT count(*) FROM dolt_status} 0
+        if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+          do_execsql_test $prefix.reopen {SELECT id FROM t ORDER BY id; SELECT status FROM dolt_test_run('bad')} {1 2 FAIL}
+        }
+      }
+    }
+    foreach graph {ff diverged} {
+      foreach mode {default noff nocommit squash commit noedit} {
+        foreach skip {0 1} {
+          reset_db
+          if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+          skip_verification_seed
+          db eval {
+            SELECT dolt_checkout('-b','source');
+            INSERT INTO t VALUES(2);
+            SELECT dolt_commit('-am','source');
+            SELECT dolt_checkout('main');
+          }
+          set rows {1 2}
+          if {$graph eq "diverged"} {db eval {INSERT INTO t VALUES(3); SELECT dolt_commit('-am','main')}; set rows {1 2 3}}
+          set head [db one {SELECT dolt_hashof('HEAD')}]
+          set args {'source','-m','merged'}
+          if {$skip} {append args ",'--skip-verification'"}
+          switch $mode {
+            commit {append args ",'--commit'"}
+            noedit {append args ",'--no-edit'"}
+            noff {append args ",'--no-ff'"}
+            nocommit {append args ",'--no-commit'"}
+            squash {append args ",'--squash'"}
+          }
+          if {$boundary eq "begin"} {db eval BEGIN}
+          if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+          set prefix skip-verification-merge-$storage.$boundary.$graph.$mode.$skip
+          do_test $prefix.result {lindex [catchsql "SELECT dolt_merge($args)"] 0} 0
+          do_execsql_test $prefix.rows {SELECT id FROM t ORDER BY id} $rows
+          do_execsql_test $prefix.manual {SELECT status FROM dolt_test_run('bad')} FAIL
+          set staged [expr {($graph eq "ff" && $mode eq "squash") || ($graph eq "diverged" && $mode eq "nocommit")}]
+          do_test $prefix.head {
+            expr {[db one {SELECT dolt_hashof('HEAD')}] eq $head}
+          } $staged
+          if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+          if {$storage eq "file"} {
+            set status [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+            db close
+            sqlite3 db test.db
+            do_execsql_test $prefix.reopen {SELECT id FROM t ORDER BY id} $rows
+            do_execsql_test $prefix.status {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged} $status
+          }
+        }
+      }
+    }
+  }
+}
+
+reset_db
+db eval {
+  PRAGMA foreign_keys=OFF;
+  CREATE TABLE p(id INT PRIMARY KEY);
+  CREATE TABLE c(id INT PRIMARY KEY,pid INT REFERENCES p(id));
+  SELECT dolt_commit('-Am','base');
+  DROP TABLE p;
+  SELECT dolt_add('-A');
+}
+set head [db one {SELECT dolt_hashof('HEAD')}]
+do_test skip-verification.fk {lindex [catchsql {SELECT dolt_commit('--skip-verification','-m','bad')}] 0} 1
+do_test skip-verification.fk-head {db one {SELECT dolt_hashof('HEAD')}} $head
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY,k INT UNIQUE);
+  INSERT INTO t VALUES(1,1),(2,2);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','source');
+  UPDATE t SET k=9 WHERE id=2;
+  SELECT dolt_commit('-am','source');
+  SELECT dolt_checkout('main');
+  UPDATE t SET k=9 WHERE id=1;
+  SELECT dolt_commit('-am','main');
+}
+set head [db one {SELECT dolt_hashof('HEAD')}]
+db eval BEGIN
+do_test skip-verification.violating-merge {lindex [catchsql {SELECT dolt_merge('--skip-verification','source')}] 0} 1
+do_execsql_test skip-verification.violations {SELECT count(*) FROM dolt_constraint_violations} 1
+do_test skip-verification.violating-commit {lindex [catchsql {SELECT dolt_commit('--skip-verification','-am','bad')}] 0} 1
+do_test skip-verification.violation-head {db one {SELECT dolt_hashof('HEAD')}} $head
+db eval ROLLBACK
+
+reset_db
+skip_verification_seed
+db eval {
+  SELECT dolt_checkout('-b','source');
+  INSERT INTO t VALUES(2);
+  SELECT dolt_commit('-am','source');
+  SELECT dolt_checkout('main');
+  INSERT INTO t VALUES(2);
+  SELECT dolt_commit('-am','main');
+}
+foreach args {{'--abort','--skip-verification'} {'--squash','--no-ff','--skip-verification','source'}} {
+  set head [db one {SELECT dolt_hashof('HEAD')}]
+  do_test skip-verification-invalid.$args {
+    list [lindex [catchsql "SELECT dolt_merge($args)"] 0] [db one {SELECT dolt_hashof('HEAD')}]
+  } [list 1 $head]
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'base');
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','source');
+  UPDATE t SET v='source';
+  SELECT dolt_commit('-am','source');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v='main';
+  SELECT dolt_commit('-am','main');
+}
+set head [db one {SELECT dolt_hashof('HEAD')}]
+db eval BEGIN
+do_test skip-verification.conflicting-merge {lindex [catchsql {SELECT dolt_merge('--skip-verification','source')}] 0} 1
+do_execsql_test skip-verification.conflicts {SELECT count(*) FROM dolt_conflicts} 1
+do_test skip-verification.conflicting-commit {lindex [catchsql {SELECT dolt_commit('--skip-verification','-am','bad')}] 0} 1
+do_test skip-verification.conflict-head {db one {SELECT dolt_hashof('HEAD')}} $head
+db eval ROLLBACK
+
+finish_test
+
