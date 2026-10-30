@@ -180,8 +180,12 @@ struct SavepointPendingSnapshot {
 
 struct BtShared {
   ChunkStore store;
-  /* &store, or the store of the BtShared in pStoreOwner. */
+  /* &store, or the store of pStoreOwner: a branch of the same file this
+  ** connection already opened. Such a sibling tracks its branch's working
+  ** set in wsSession and holds a reference on its owner. */
   ChunkStore *pStore;
+  BtShared *pStoreOwner;
+  CsWsSession wsSession;
   ProllyCache cache;
   PagerShim *pPagerShim;
   sqlite3 *db;
@@ -337,6 +341,13 @@ struct Btree {
   u8 bDeferredRevision;
   u8 bDeferredRegister;
   u8 bBeginTransBranchMissing;
+  /* Commits with siblings on the same store as one publish: each stages
+  ** its catalog, and the last to commit publishes and finishes them all. */
+  u8 bJoinedPublish;
+  u8 bJoinedStaged;
+  u8 *pJoinedCat;
+  int nJoinedCat;
+  ProllyHash joinedCatHash;
   u8 bReadBranchMissing;
   u8 bVcScanRefused;
   /* A VC command opened this write transaction and ends it; nested

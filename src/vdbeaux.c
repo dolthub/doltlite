@@ -2991,7 +2991,14 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
       if( i!=1 && sqlite3PagerIsMemdb(pPager)==0 ){
         const char *zFilename = sqlite3BtreeGetFilename(pBt);
         if( zFilename && zFilename[0] && sqlite3BtreeHasPendingChanges(pBt) ){
-          nFileWrite++;
+          int j;
+          for(j=0; j<i; j++){
+            if( doltliteBtreeSameStore(db->aDb[j].pBt, pBt)
+             && sqlite3BtreeHasPendingChanges(db->aDb[j].pBt) ){
+              break;
+            }
+          }
+          if( j==i ) nFileWrite++;
           if( sqlite3BtreeIsDoltliteFormat(pBt) ) hasDoltliteWrite = 1;
         }
       }
@@ -3042,6 +3049,9 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
   if( 0==sqlite3Strlen30(sqlite3BtreeGetFilename(db->aDb[0].pBt))
    || nTrans<=1
   ){
+#ifdef DOLTLITE_PROLLY
+    if( needXcommit ) doltliteJoinStoreCommits(db);
+#endif
     if( needXcommit ){
       for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
         Btree *pBt = db->aDb[i].pBt;
@@ -3064,6 +3074,9 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
         rc = sqlite3BtreeCommitPhaseTwo(pBt, 0);
       }
     }
+#ifdef DOLTLITE_PROLLY
+    if( needXcommit ) doltliteEndStoreCommits(db);
+#endif
     if( rc==SQLITE_OK ){
       sqlite3VtabCommit(db);
     }

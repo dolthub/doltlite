@@ -667,6 +667,9 @@ int pushSavepoint(Btree *pBtree, int bStatement){
 }
 
 
+static void btreeUnpinSnapshot(BtShared *pBt);
+static void commitJoinedForget(Btree *p);
+
 int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   BtShared *pBt = p->pBt;
   int rc;
@@ -714,7 +717,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
      && p->nReadSnapshot==0 ){
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
-      pBt->pStore->snapshotPinned = 0;
+      btreeUnpinSnapshot(pBt);
     }else{
       return SQLITE_OK;
     }
@@ -918,6 +921,67 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   return SQLITE_OK;
 }
 
+static int btreeIsProlly(Btree *p){
+  return p && p->pOps==&prollyBtreeOps && p->pBt;
+}
+
+int doltliteBtreeSameStore(Btree *a, Btree *b){
+  return btreeIsProlly(a) && btreeIsProlly(b) && a->pBt->pStore==b->pBt->pStore;
+}
+
+/* Commits through phase two's write path. A command's transaction ends
+** with the command, not here. */
+static int btreeCommitsHere(Btree *p){
+  return btreeIsProlly(p) && p->inTrans==TRANS_WRITE && !p->bCommandTxn;
+}
+
+/* Before a multi-database commit: branches of one store writing in this
+** transaction publish together. */
+void doltliteJoinStoreCommits(sqlite3 *db){
+  int i, j;
+  for(i=0; i<db->nDb; i++){
+    Btree *p = db->aDb[i].pBt;
+    if( !btreeCommitsHere(p) ) continue;
+    for(j=0; j<db->nDb; j++){
+      Btree *q = db->aDb[j].pBt;
+      if( q!=p && btreeCommitsHere(q) && doltliteBtreeSameStore(p, q) ){
+        p->bJoinedPublish = 1;
+        break;
+      }
+    }
+  }
+}
+
+void doltliteEndStoreCommits(sqlite3 *db){
+  int i;
+  for(i=0; i<db->nDb; i++){
+    Btree *p = db->aDb[i].pBt;
+    if( !btreeIsProlly(p) ) continue;
+    p->bJoinedPublish = 0;
+    commitJoinedForget(p);
+  }
+}
+
+/* Another branch of the main database's store open in this connection:
+** the one with uncommitted writes in the current transaction, else
+** (zBranch set) the one on that branch. */
+const char *doltliteStoreSiblingBranch(sqlite3 *db, const char *zBranch){
+  Btree *pMain = db->nDb>0 ? db->aDb[0].pBt : 0;
+  int i;
+  for(i=1; btreeIsProlly(pMain) && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    const char *zQ;
+    if( !doltliteBtreeSameStore(pMain, q) ) continue;
+    zQ = q->zBranch ? q->zBranch : "main";
+    if( zBranch ){
+      if( strcmp(zQ, zBranch)==0 ) return zQ;
+    }else if( q->inTrans==TRANS_WRITE && sqlite3BtreeHasPendingChanges(q) ){
+      return zQ;
+    }
+  }
+  return 0;
+}
+
 const char *doltliteBtreeMissingWriteBranch(Btree *p){
   if( !p || !p->bBeginTransBranchMissing ) return 0;
   return p->zBranch ? p->zBranch : "main";
@@ -969,6 +1033,24 @@ int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
   return p->pOps->xCommitPhaseOne(p, zSuperJrnl);
 }
 
+static int btreeStoreSiblingInTxn(BtShared *pBt){
+  sqlite3 *db = pBt->db;
+  int i;
+  for(i=0; db && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( q && q->pBt && q->pBt!=pBt && q->pBt->pStore==pBt->pStore
+     && q->inTrans!=TRANS_NONE ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* The pin is the store's; a sibling still in a transaction keeps it. */
+static void btreeUnpinSnapshot(BtShared *pBt){
+  if( !btreeStoreSiblingInTxn(pBt) ) pBt->pStore->snapshotPinned = 0;
+}
+
 static void btreeReleaseTxnGraphLock(BtShared *pBt){
   if( pBt->bOwnsGraphLock ){
     pBt->bOwnsGraphLock = 0;
@@ -978,7 +1060,7 @@ static void btreeReleaseTxnGraphLock(BtShared *pBt){
 
 static void commitPhaseTwoReleaseGraph(BtShared *pBt){
   btreeReleaseTxnGraphLock(pBt);
-  pBt->pStore->snapshotPinned = 0;
+  btreeUnpinSnapshot(pBt);
 }
 
 static void commitPhaseTwoAbort(
@@ -1228,6 +1310,112 @@ static int commitChunkStore(BtShared *pBt, int retryBusy){
   return rc;
 }
 
+static void commitJoinedForget(Btree *p){
+  sqlite3_free(p->pJoinedCat);
+  p->pJoinedCat = 0;
+  p->nJoinedCat = 0;
+  p->bJoinedStaged = 0;
+}
+
+/* A joined sibling of p that has not staged yet: it commits later and
+** publishes for both. */
+static int commitJoinedPending(Btree *p){
+  sqlite3 *db = p->db;
+  int i;
+  for(i=0; db && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( q && q!=p && q->pBt && q->pBt->pStore==p->pBt->pStore
+     && q->bJoinedPublish && !q->bJoinedStaged ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int commitJoinedStage(Btree *p, BtShared *pBt){
+  int rc;
+  commitJoinedForget(p);
+  PROLLY_ASSERT_GRAPH_LOCKED(pBt);
+  if( pBt->pStore->bRefsStale ){
+    rc = chunkStoreEnsureRefsFresh(pBt->pStore);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = flushAllPending(p, pBt, 0);
+  if( rc==SQLITE_OK ){
+    rc = commitPhaseTwoStageCatalog(p, pBt, &p->pJoinedCat, &p->nJoinedCat,
+                                    &p->joinedCatHash);
+  }
+  if( rc!=SQLITE_OK ){
+    commitJoinedForget(p);
+    return rc;
+  }
+  p->bJoinedStaged = 1;
+  return SQLITE_OK;
+}
+
+typedef struct JoinedReload JoinedReload;
+struct JoinedReload {
+  Btree *p;
+  Btree reload;
+  int bHave;
+};
+
+/* Every joined sibling has staged into the shared refs: publish them as
+** one root, then finish each as an ordinary commit would. A failed
+** publish restores all of them. */
+static int commitJoinedPublish(Btree *pLast){
+  sqlite3 *db = pLast->db;
+  JoinedReload *a;
+  int n = 0, i, rc = SQLITE_OK;
+
+  a = sqlite3_malloc64(sizeof(*a)*(sqlite3_uint64)db->nDb);
+  if( !a ) rc = SQLITE_NOMEM;
+  for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( !q || !q->pBt || q->pBt->pStore!=pLast->pBt->pStore
+     || !q->bJoinedStaged ){
+      continue;
+    }
+    memset(&a[n], 0, sizeof(a[n]));
+    a[n].p = q;
+    if( q->bSchemaChangedTxn ){
+      rc = commitPhaseTwoPrepSchemaReload(q, q->pBt, q->pJoinedCat,
+                                          q->nJoinedCat, &a[n].reload);
+      if( rc==SQLITE_OK ) a[n].bHave = 1;
+    }
+    n++;
+  }
+  if( rc==SQLITE_OK ) rc = commitChunkStore(pLast->pBt, 1);
+  if( rc!=SQLITE_OK ){
+    for(i=0; i<n; i++){
+      Btree *q = a[i].p;
+      (void)commitPhaseTwoFailRestore(q, q->pBt, rc, &q->pJoinedCat,
+                                      &a[i].reload, &a[i].bHave);
+      commitJoinedForget(q);
+    }
+    sqlite3_free(a);
+    return rc;
+  }
+  doltliteVcCommandInstalled(db);
+  for(i=0; i<n; i++){
+    Btree *q = a[i].p;
+    q->committedCatalogHash = q->joinedCatHash;
+    q->committedVc = q->vc;
+    memcpy(q->committedAMeta, q->aMeta, sizeof(q->committedAMeta));
+    btreeMarkWorkingStateChanged(q, 1);
+    if( q->bSchemaChangedTxn ){
+      commitPhaseTwoAdoptReloadedCatalog(q, &a[i].reload, &a[i].bHave);
+    }
+    commitPhaseTwoEndWriteTxn(q);
+    btreeTakeCatalogCache(q, &q->pJoinedCat, q->nJoinedCat, &q->joinedCatHash);
+    commitJoinedForget(q);
+    q->bJoinedPublish = 0;
+  }
+  for(i=0; i<n; i++) commitPhaseTwoReleaseGraph(a[i].p->pBt);
+  sqlite3_free(a);
+  return SQLITE_OK;
+}
+
 static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   int rc = SQLITE_OK;
   u8 *catData = 0;
@@ -1237,6 +1425,13 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   int bReloadSchema = 0;
   int bHaveReloadCatalog = 0;
   memset(&reloadBtree, 0, sizeof(reloadBtree));
+
+  if( p->bJoinedPublish ){
+    rc = commitJoinedStage(p, pBt);
+    if( rc!=SQLITE_OK ) return rc;
+    if( commitJoinedPending(p) ) return SQLITE_OK;
+    return commitJoinedPublish(p);
+  }
 
   PROLLY_ASSERT_GRAPH_LOCKED(pBt);
   /* A failed refs restore discarded the in-memory refs; publishing them
@@ -1475,7 +1670,7 @@ static void commandDiscard(Btree *p, BtShared *pBt){
     p->inTrans = TRANS_NONE;
     p->inTransaction = TRANS_NONE;
     btreeReleaseTxnGraphLock(pBt);
-    pBt->pStore->snapshotPinned = 0;
+    btreeUnpinSnapshot(pBt);
   }
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
   p->bForceCatalogReload = 1;
@@ -1720,7 +1915,7 @@ static void rollbackAbandonWriteTxn(Btree *p, BtShared *pBt){
   p->inTransaction = TRANS_NONE;
   btreeDiscardAllSavepoints(p);
   btreeReleaseTxnGraphLock(pBt);
-  pBt->pStore->snapshotPinned = 0;
+  btreeUnpinSnapshot(pBt);
 }
 
 static void rollbackResetSchema(Btree *p, int bImmediate){
@@ -1858,7 +2053,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       btreeDiscardAllSavepoints(p);
       chunkStoreRollback(pBt->pStore);
       btreeReleaseTxnGraphLock(pBt);
-      pBt->pStore->snapshotPinned = 0;
+      btreeUnpinSnapshot(pBt);
       return rc;
     }
     if( bSchemaChangedRollback ){
@@ -1906,7 +2101,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       if( rc!=SQLITE_OK ){
         sqlite3_free(catData);
         btreeReleaseTxnGraphLock(pBt);
-        pBt->pStore->snapshotPinned = 0;
+        btreeUnpinSnapshot(pBt);
         return rc;
       }
       prollyHashCompute(wsBuf, WS_TOTAL_SIZE, &wsHashWouldBe);
@@ -1951,7 +2146,11 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   commitPhaseTwoEndWriteTxn(p);
 
   btreeReleaseTxnGraphLock(pBt);
-  pBt->pStore->snapshotPinned = p->inTrans==TRANS_READ;
+  if( p->inTrans==TRANS_READ ){
+    pBt->pStore->snapshotPinned = 1;
+  }else{
+    btreeUnpinSnapshot(pBt);
+  }
 
   return rc==SQLITE_OK ? cursorRc : rc;
 }

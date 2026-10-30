@@ -482,6 +482,19 @@ static void doltliteRunCommand(
   DoltliteCmdScope scope;
   int bProbe = 0;
   int rcBegin;
+  /* A failed command rolls back the shared store, which would discard the
+  ** other branch's staged writes. */
+  if( !pOuter ){
+    const char *zSibling = doltliteStoreSiblingBranch(db, 0);
+    if( zSibling ){
+      char *zMsg = sqlite3_mprintf("cannot run %s while branch '%s' of this "
+          "database has a write transaction open; commit or roll back first",
+          ctx->pFunc->zName, zSibling);
+      sqlite3_result_error(ctx, zMsg ? zMsg : sqlite3ErrStr(SQLITE_ERROR), -1);
+      sqlite3_free(zMsg);
+      return;
+    }
+  }
   db->pVcCommand = ctx->pVdbe;
   db->bVcNestedCommand = pOuter!=0;
   rcBegin = cmdScopeBegin(db, pOuter ? DOLTLITE_CMD_UNSCOPED : eScope,

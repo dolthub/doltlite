@@ -1,0 +1,206 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc mb_reset {} {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE INDEX tv ON t(v);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_branch('feat');
+  }
+  db eval "ATTACH '[file normalize test.db]/feat' AS f"
+}
+
+proc mb_disk {branch} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set r [observer eval {
+    SELECT group_concat(id||':'||v, ',') FROM (SELECT * FROM t ORDER BY id);
+    PRAGMA integrity_check;
+  }]
+  observer close
+  return $r
+}
+
+mb_reset
+do_execsql_test multi-branch-commit {
+  BEGIN;
+  INSERT INTO main.t VALUES(2,'main');
+  INSERT INTO f.t VALUES(3,'feat');
+  COMMIT;
+  SELECT group_concat(id) FROM main.t;
+  SELECT group_concat(id) FROM f.t;
+} {1,2 1,3}
+do_test multi-branch-commit-durable-main {mb_disk main} {1:base,2:main ok}
+do_test multi-branch-commit-durable-feat {mb_disk feat} {1:base,3:feat ok}
+
+do_execsql_test multi-branch-rollback {
+  BEGIN;
+  INSERT INTO main.t VALUES(4,'main');
+  INSERT INTO f.t VALUES(5,'feat');
+  ROLLBACK;
+  SELECT group_concat(id) FROM main.t;
+  SELECT group_concat(id) FROM f.t;
+} {1,2 1,3}
+
+do_execsql_test multi-branch-savepoint {
+  BEGIN;
+  INSERT INTO main.t VALUES(6,'main');
+  SAVEPOINT s;
+  INSERT INTO main.t VALUES(7,'main');
+  INSERT INTO f.t VALUES(8,'feat');
+  ROLLBACK TO s;
+  INSERT INTO f.t VALUES(9,'feat');
+  RELEASE s;
+  COMMIT;
+  SELECT group_concat(id) FROM main.t;
+  SELECT group_concat(id) FROM f.t;
+} {1,2,6 1,3,9}
+
+do_execsql_test multi-branch-one-statement {
+  CREATE TEMP TRIGGER mirror AFTER INSERT ON main.t BEGIN
+    INSERT INTO f.t VALUES(new.id+100, 'mirror');
+  END;
+  INSERT INTO main.t VALUES(10,'main');
+  DROP TRIGGER mirror;
+  SELECT group_concat(id) FROM main.t;
+  SELECT group_concat(id) FROM f.t;
+} {1,2,6,10 1,3,9,110}
+do_test multi-branch-one-statement-durable {mb_disk feat} \
+  {1:base,3:feat,9:feat,110:mirror ok}
+
+# A peer moving the attached branch after this transaction read it: the
+# write to that branch is refused and the peer's row survives.
+mb_reset
+do_test multi-branch-stale-sibling {
+  db eval BEGIN
+  db eval {SELECT count(*) FROM main.t; SELECT count(*) FROM f.t}
+  sqlite3 peer [file normalize test.db]/feat
+  peer eval {INSERT INTO t VALUES(50,'peer')}
+  peer close
+  db eval {INSERT INTO main.t VALUES(2,'main')}
+  set r [catchsql {INSERT INTO f.t VALUES(3,'feat')}]
+  lappend r [expr {[sqlite3_extended_errcode db] eq "SQLITE_BUSY_SNAPSHOT"}]
+  db eval COMMIT
+  set r
+} {1 {database is locked} 1}
+do_test multi-branch-stale-sibling-main {mb_disk main} {1:base,2:main ok}
+do_test multi-branch-stale-sibling-peer-kept {mb_disk feat} {1:base,50:peer ok}
+
+# Version-control commands roll back the store when they fail, which
+# would discard the attached branch's staged writes.
+mb_reset
+do_test multi-branch-vc-refused {
+  db eval {BEGIN; INSERT INTO f.t VALUES(3,'feat')}
+  set r [catchsql {SELECT dolt_add('.')}]
+  db eval COMMIT
+  set r
+} {1 {cannot run dolt_add while branch 'feat' of this database has a write transaction open; commit or roll back first}}
+do_execsql_test multi-branch-vc-after-commit {
+  SELECT dolt_add('.');
+} 0
+
+foreach {name sql} {
+  checkout {SELECT dolt_checkout('feat')}
+  checkout-force {SELECT dolt_checkout('-B','feat')}
+  delete {SELECT dolt_branch('-D','feat')}
+  rename {SELECT dolt_branch('-m','feat','renamed')}
+  force-copy {SELECT dolt_branch('-f','-c','main','feat')}
+} {
+  do_catchsql_test multi-branch-attached-$name $sql \
+    {1 {branch 'feat' is attached in this connection}}
+}
+do_execsql_test multi-branch-detach-releases {
+  DETACH f;
+  SELECT dolt_branch('-D','feat');
+  SELECT count(*) FROM dolt_branches WHERE name='feat';
+} {0 0}
+
+mb_reset
+do_execsql_test multi-branch-read-across-commit {
+  BEGIN;
+  SELECT group_concat(id) FROM f.t;
+  INSERT INTO main.t VALUES(2,'main');
+  SELECT group_concat(id) FROM f.t;
+  COMMIT;
+  SELECT group_concat(id) FROM main.t;
+  INSERT INTO f.t VALUES(3,'feat');
+  SELECT group_concat(id) FROM f.t;
+} {1 1 1,2 1,3}
+
+mb_reset
+do_execsql_test multi-branch-gc-keeps-attached-working-set {
+  INSERT INTO f.t VALUES(3,'feat');
+  INSERT INTO main.t VALUES(2,'main');
+  SELECT dolt_gc() IS NOT NULL;
+  SELECT group_concat(id) FROM main.t;
+  SELECT group_concat(id) FROM f.t;
+} {1 1,2 1,3}
+do_test multi-branch-gc-durable-main {mb_disk main} {1:base,2:main ok}
+do_test multi-branch-gc-durable-feat {mb_disk feat} {1:base,3:feat ok}
+
+# A two-branch commit is one publish: under a write or sync fault it lands
+# on both branches or on neither.
+mb_reset
+db close
+file copy -force test.db multi-branch-base.db
+
+set armed 0
+proc mb_io_error {method filename args} {
+  if {$::armed && $method eq $::kind && [file tail $filename] eq "test.db"} {
+    incr ::calls
+    if {$::calls==$::fault} {
+      incr ::hits
+      return SQLITE_IOERR
+    }
+  }
+  return SQLITE_OK
+}
+testvfs mbio
+mbio filter {xWrite xSync}
+mbio script mb_io_error
+
+set before {{1:base ok} {1:base ok}}
+set after {{1:base,2:main ok} {1:base,3:feat ok}}
+set failed 0
+foreach kind {xWrite xSync} {
+  for {set fault 1} {$fault<=100} {incr fault} {
+    forcedelete test.db
+    file copy -force multi-branch-base.db test.db
+    sqlite3 db test.db -vfs mbio
+    db eval "ATTACH '[file normalize test.db]/feat' AS f"
+    db eval {
+      BEGIN;
+      INSERT INTO main.t VALUES(2,'main');
+      INSERT INTO f.t VALUES(3,'feat');
+    }
+    set calls 0
+    set hits 0
+    set armed 1
+    set result [catchsql COMMIT]
+    set armed 0
+    if {[lindex $result 0]} {
+      incr failed
+      if {![sqlite3_get_autocommit db]} {catchsql ROLLBACK}
+    }
+    db close
+    set prefix multi-branch-io-$kind-$fault
+    do_test $prefix.atomic {
+      set state [list [mb_disk main] [mb_disk feat]]
+      expr {$state eq $before || $state eq $after}
+    } 1
+    if {![lindex $result 0]} {
+      do_test $prefix.landed {list [mb_disk main] [mb_disk feat]} $after
+    }
+    if {$hits==0} break
+  }
+  do_test multi-branch-io-$kind-exhausted {expr {$fault<=100}} 1
+}
+do_test multi-branch-io-errors-exercised {expr {$failed>0}} 1
+mbio delete
+sqlite3 db test.db
+
+finish_test

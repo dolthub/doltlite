@@ -234,6 +234,18 @@ static CsWsSession *csWs(ChunkStore *cs){
   return cs->pWs ? cs->pWs : &cs->wsMain;
 }
 
+/* The session working on zBranch, else the active one. */
+static CsWsSession *csWsFor(ChunkStore *cs, const char *zBranch){
+  CsWsSession *w;
+  for(w=&cs->wsMain; zBranch && w; w=w->pNext){
+    if( !w->wsBasisBranch.bOom
+     && strcmp(csWsBranch(&w->wsBasisBranch), zBranch)==0 ){
+      return w;
+    }
+  }
+  return csWs(cs);
+}
+
 static int csWsTracks(const CsWsSession *w, const char *zBranch){
   return w->bWsBasis && strcmp(csWsBranch(&w->wsBasisBranch), zBranch)==0;
 }
@@ -416,11 +428,11 @@ void chunkStoreSetWorkingSetBasis(
   const char *zBranch,
   const ProllyHash *pHash
 ){
-  csSetWsBasis(csWs(cs), zBranch, pHash);
+  csSetWsBasis(csWsFor(cs, zBranch), zBranch, pHash);
 }
 
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash){
-  CsWsSession *pActive = csWs(cs);
+  CsWsSession *pActive = csWsFor(cs, zBranch);
   CsWsSession *w;
   int i = findBranchIdx(cs, zBranch);
   int bChanged;
@@ -450,7 +462,7 @@ int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const Pro
 }
 
 void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch){
-  CsWsSession *w = csWs(cs);
+  CsWsSession *w = csWsFor(cs, zBranch);
   int i = findBranchIdx(cs, zBranch);
   if( i<0 ){
     w->bWsBasis = 0;
@@ -461,7 +473,7 @@ void chunkStoreAdoptWorkingSetBasis(ChunkStore *cs, const char *zBranch){
 }
 
 void chunkStoreFollowWorkingSetBasis(ChunkStore *cs, const char *zBranch){
-  if( csWsTracks(csWs(cs), zBranch) ) return;
+  if( csWsTracks(csWsFor(cs, zBranch), zBranch) ) return;
   chunkStoreAdoptWorkingSetBasis(cs, zBranch);
 }
 
@@ -487,7 +499,7 @@ void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
 
 void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pHash){
-  CsWsSession *w = csWs(cs);
+  CsWsSession *w = csWsFor(cs, zBranch);
   if( zBranch && csWsTracks(w, zBranch) ){
     memcpy(pHash, &w->wsBasis, sizeof(ProllyHash));
     return;
@@ -499,7 +511,7 @@ void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
 }
 
 int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch){
-  CsWsSession *w = csWs(cs);
+  CsWsSession *w = csWsFor(cs, zBranch);
   int i;
   /* A basis we could not record must not read as unmoved. */
   if( zBranch && !w->bWsBasis && w->wsBasisBranch.bOom ) return 1;
