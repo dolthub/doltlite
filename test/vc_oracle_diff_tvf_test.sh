@@ -212,6 +212,33 @@ oracle_reopen "history_working_dates_reopen" "$DATE_SETUP" \
 oracle "committed_epoch_date" "$DATE_SETUP" \
   "$DATE_QUERY FROM dolt_diff_t WHERE to_commit=dolt_hashof('HEAD');"
 
+date_bounds=$(python3 - <<'PYTHON'
+import datetime
+now = datetime.datetime.now(datetime.timezone.utc)
+print("|".join((now + datetime.timedelta(minutes=offset)).strftime("%Y-%m-%d %H:%M:%S")
+               for offset in (-5, 5)))
+PYTHON
+)
+date_lower=${date_bounds%|*}
+date_upper=${date_bounds#*|}
+for refs in HEAD:WORKING WORKING:HEAD HEAD:STAGED STAGED:HEAD STAGED:WORKING WORKING:STAGED; do
+  date_from=${refs%:*}
+  date_to=${refs#*:}
+  for form in slice range; do
+    date_source="dolt_diff_t('$date_from','$date_to')"
+    if [ "$form" = range ]; then date_source="dolt_diff_t('$date_from..$date_to')"; fi
+    date_query="SELECT CONCAT('R|',count(*),'|',
+count(CASE WHEN from_commit_date IS NULL THEN 1 END),'|',
+count(CASE WHEN to_commit_date IS NULL THEN 1 END),'|',
+count(CASE WHEN from_commit_date='1970-01-01 00:00:00' THEN 1 END),'|',
+count(CASE WHEN to_commit_date='1970-01-01 00:00:00' THEN 1 END),'|',
+count(CASE WHEN from_commit_date BETWEEN '$date_lower' AND '$date_upper' THEN 1 END),'|',
+count(CASE WHEN to_commit_date BETWEEN '$date_lower' AND '$date_upper' THEN 1 END))"
+    oracle "pseudo_dates_${date_from}_${date_to}_${form}" "$DATE_SETUP" \
+      "$date_query FROM $date_source;"
+  done
+done
+
 DATE_COMMITTED="$DATE_SETUP
 SELECT dolt_commit('-am','next','--date','2001-02-03T04:05:06Z');"
 oracle "committed_nonzero_date" "$DATE_COMMITTED" \
