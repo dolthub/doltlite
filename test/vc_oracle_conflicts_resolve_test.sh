@@ -354,6 +354,37 @@ SELECT dolt_merge('feature');
 SELECT CONCAT('R|table|', id, '|', v) FROM t ORDER BY id;
 SELECT CONCAT('R|count|', count(*)) FROM dolt_conflicts;"
 
+echo "--- per-row DELETE by dolt_conflict_id read before any delete ---"
+
+for keytype in INT INTEGER; do
+  oracle "delete_by_saved_conflict_ids_$keytype" \
+"CREATE TABLE t(id $keytype PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+INSERT INTO t VALUES(2, 2);
+INSERT INTO t VALUES(3, 3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE t SET v=v+10;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_update');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=v+20;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_update');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+" \
+  "CREATE TABLE saved_ids(id INT PRIMARY KEY, cid TEXT);
+INSERT INTO saved_ids SELECT our_id, dolt_conflict_id FROM dolt_conflicts_t;
+DELETE FROM dolt_conflicts_t WHERE dolt_conflict_id=(SELECT cid FROM saved_ids WHERE id=1);
+DELETE FROM dolt_conflicts_t WHERE dolt_conflict_id=(SELECT cid FROM saved_ids WHERE id=2);
+SELECT CONCAT('R|left|', our_id) FROM dolt_conflicts_t;
+SELECT CONCAT('R|stable|', count(*)) FROM dolt_conflicts_t c JOIN saved_ids s ON s.cid=c.dolt_conflict_id AND s.id=c.our_id;
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
+done
+
 echo "--- composite primary key (two INT columns) ---"
 
 oracle "resolve_theirs_composite_int_pk" \

@@ -1103,7 +1103,8 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else if( col==colConflictId ){
 
     char buf[64];
-    sqlite3_snprintf(sizeof(buf), buf, "%lld:%d", cr->intKey, c->iRow);
+    sqlite3_snprintf(sizeof(buf), buf, "%016llx",
+                     (sqlite3_uint64)cfrConflictRowid(cr));
     sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
   }else{
     sqlite3_result_null(ctx);
