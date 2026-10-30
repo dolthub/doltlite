@@ -302,9 +302,13 @@ static int flushPendingForCount(BtCursor *pCur){
         if( p->pBtree==pCur->pBtree
          && p!=pCur
          && p->pgnoRoot==pCur->pgnoRoot
-         && (p->curFlags & BTCF_WriteFlag)==0
          && (p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT) ){
+          u8 isPinned = p->isPinned;
+          /* A flush changes representation, not rows, so it can save a
+          ** pinned cursor without changing the row that cursor locks. */
+          p->isPinned = 0;
           rc = saveCursorPosition(p);
+          p->isPinned = isPinned;
           if( rc!=SQLITE_OK ) return rc;
         }
       }

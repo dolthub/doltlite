@@ -1,0 +1,158 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach storage {file memory} {
+  foreach {layout ddl} {
+    rowid {CREATE TABLE t(id INTEGER PRIMARY KEY, k INT, n INT CHECK(n>=0))}
+    clustered {CREATE TABLE t(id INT PRIMARY KEY, k INT, n INT CHECK(n>=0))}
+    text {CREATE TABLE t(id TEXT PRIMARY KEY, k INT, n INT CHECK(n>=0))}
+    composite {CREATE TABLE t(id INT, k INT, n INT CHECK(n>=0), PRIMARY KEY(id,k))}
+    without-rowid {CREATE TABLE t(id INT, k INT, n INT CHECK(n>=0), PRIMARY KEY(id,k)) WITHOUT ROWID}
+  } {
+    foreach index {none static changing} {
+      foreach reverse {0 1} {
+        foreach base {tree pending} {
+          foreach count {full range indexed correlated constant} {
+            set prefix count-write-$storage.$layout.$index.$reverse.$base.$count
+            reset_db
+            if {$storage eq "memory"} {
+              db close
+              sqlite3 db :memory:
+            }
+            db eval $ddl
+            if {$index eq "static"} {
+              db eval {CREATE INDEX tc ON t(k,id DESC)}
+            }
+            if {$index eq "changing" || $count eq "indexed"} {
+              db eval {CREATE INDEX tn ON t(n,id)}
+            }
+            if {$base eq "pending"} {db eval BEGIN}
+            db eval {INSERT INTO t VALUES(1,1,0),(2,1,0),(3,1,0)}
+            if {$base eq "tree"} {db eval BEGIN}
+            db eval {
+              DELETE FROM t WHERE id=2;
+              INSERT INTO t VALUES(4,1,0);
+              UPDATE t SET n=7 WHERE id=1;
+              SAVEPOINT before_count;
+            }
+            db eval "PRAGMA reverse_unordered_selects=$reverse"
+            switch $count {
+              full {set query {SELECT count(*) FROM t NOT INDEXED}}
+              range {set query {SELECT count(*) FROM t NOT INDEXED WHERE id BETWEEN 0 AND 9}}
+              indexed {set query {SELECT count(*) FROM t INDEXED BY tn WHERE n BETWEEN 0 AND 100}}
+              correlated {set query {SELECT count(*) FROM t AS q NOT INDEXED WHERE q.id BETWEEN 0 AND t.id}}
+              constant {set query {SELECT 3}}
+            }
+            set update "UPDATE t SET n=($query)"
+            set expected {1 3 3 3 4 3}
+            if {$count eq "correlated"} {set expected {1 1 3 2 4 3}}
+            if {$count ne "constant" && $storage eq "file" && $layout eq "rowid"
+             && $index eq "none" && !$reverse && $base eq "tree"} {
+              set opcode [dict get {full Count range CountRange indexed CountIndexRange correlated AggStep} $count]
+              do_test $prefix.opcode {
+                set ops {}
+                db eval "EXPLAIN $update" row {lappend ops $row(opcode)}
+                expr {[lsearch -exact $ops $opcode]>=0}
+              } 1
+            }
+            do_test $prefix.update {catchsql $update} {0 {}}
+            do_execsql_test $prefix.rows {
+              SELECT id,n FROM t ORDER BY id;
+            } $expected
+            do_execsql_test $prefix.integrity {PRAGMA integrity_check} ok
+            do_execsql_test $prefix.rollback {
+              ROLLBACK TO before_count;
+              SELECT id,n FROM t ORDER BY id;
+            } {1 7 3 0 4 0}
+            do_test $prefix.constraint {
+              set result [catchsql "UPDATE t SET n=CASE WHEN id=3 THEN -1 ELSE ($query) END"]
+              list [lindex $result 0] [string match {CHECK constraint failed*} [lindex $result 1]]
+            } {1 1}
+            do_execsql_test $prefix.statement-rollback {
+              SELECT id,n FROM t ORDER BY id;
+              PRAGMA integrity_check;
+            } {1 7 3 0 4 0 ok}
+            do_test $prefix.commit {
+              db eval $update
+              db eval {RELEASE before_count; COMMIT}
+              db eval {SELECT id,n FROM t ORDER BY id; PRAGMA integrity_check}
+            } [concat $expected ok]
+            if {$storage eq "file"} {
+              db close
+              sqlite3 db test.db
+              do_execsql_test $prefix.reopen {
+                SELECT id,n FROM t ORDER BY id;
+                PRAGMA integrity_check;
+              } [concat $expected ok]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+foreach storage {file memory} {
+  foreach key {INTEGER INT TEXT} {
+    foreach timing {BEFORE AFTER} {
+      foreach base {tree pending} {
+        set prefix count-write-pinned-$storage.$key.$timing.$base
+        reset_db
+        if {$storage eq "memory"} {
+          db close
+          sqlite3 db :memory:
+        }
+        db eval "CREATE TABLE t5(a $key PRIMARY KEY,b UNIQUE)"
+        db eval {
+          PRAGMA recursive_triggers=ON;
+          CREATE TABLE log(seq INTEGER PRIMARY KEY,a,b,n);
+        }
+        db eval "CREATE TRIGGER tr $timing DELETE ON t5 BEGIN
+          INSERT INTO log(a,b,n) VALUES(old.a,old.b,(SELECT count(*) FROM t5));
+        END"
+        if {$base eq "pending"} {db eval BEGIN}
+        db eval {INSERT INTO t5 VALUES(1,'a'),(2,'b'),(3,'c')}
+        if {$base eq "tree"} {db eval BEGIN}
+        db eval {SAVEPOINT before_update}
+        do_execsql_test $prefix.replace {
+          UPDATE OR REPLACE t5 SET a=1,b='b' WHERE a=3;
+          SELECT a,b FROM t5 ORDER BY a;
+          PRAGMA integrity_check;
+        } {1 b ok}
+        set counts {1 a 2 b 3 2}
+        if {$timing eq "AFTER"} {set counts {1 a 2 b 2 1}}
+        do_execsql_test $prefix.counts {
+          SELECT a,b FROM log ORDER BY a;
+          SELECT n FROM log ORDER BY seq;
+        } $counts
+        db eval {
+          ROLLBACK TO before_update;
+          DROP TRIGGER tr;
+          CREATE TRIGGER tr BEFORE DELETE ON t5 BEGIN
+            SELECT count(*) FROM t5;
+            UPDATE t5 SET b='changed' WHERE a=3;
+          END;
+          UPDATE t5 SET b='c0' WHERE a=3;
+        }
+        do_test $prefix.logical-write-refused {
+          list [catch {db eval {UPDATE OR REPLACE t5 SET a=1,b='b' WHERE a=3}} msg] \
+               [sqlite3_errcode db]
+        } {1 SQLITE_CONSTRAINT}
+        do_execsql_test $prefix.rows-kept {
+          SELECT a,b FROM t5 ORDER BY a;
+          PRAGMA integrity_check;
+        } {1 a 2 b 3 c0 ok}
+        do_execsql_test $prefix.unlocked {
+          DROP TRIGGER tr;
+          UPDATE t5 SET b='after' WHERE a=3;
+          RELEASE before_update;
+          COMMIT;
+          SELECT a,b FROM t5 ORDER BY a;
+          PRAGMA integrity_check;
+        } {1 a 2 b 3 after ok}
+      }
+    }
+  }
+}
+
+finish_test
