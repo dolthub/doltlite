@@ -259,6 +259,8 @@ static char *buildFkViolationInfo(
   sqlite3 *db,
   const char *zChildTable,
   int fkid,
+  char **azTo,
+  int nCol,
   int *pRc
 ){
   sqlite3_stmt *pStmt = 0;
@@ -298,6 +300,14 @@ static char *buildFkViolationInfo(
         zParent = (const char*)sqlite3_column_text(pStmt, 2);
         zFrom   = (const char*)sqlite3_column_text(pStmt, 3);
         zTo     = (const char*)sqlite3_column_text(pStmt, 4);
+        if( !zTo ){
+          int seq = sqlite3_column_int(pStmt, 1);
+          if( seq<0 || seq>=nCol || !azTo[seq] ){
+            *pRc = SQLITE_CORRUPT;
+            break;
+          }
+          zTo = azTo[seq];
+        }
         zOnUp   = (const char*)sqlite3_column_text(pStmt, 5);
         zOnDel  = (const char*)sqlite3_column_text(pStmt, 6);
         if( nMatches>0 ){
@@ -469,7 +479,9 @@ static int detectFkViolationsForSpec(
       }
     }
 
-    if( !zInfo ) zInfo = buildFkViolationInfo(db, zChildTable, fkid, &rc);
+    if( !zInfo ){
+      zInfo = buildFkViolationInfo(db, zChildTable, fkid, azTo, nCol, &rc);
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_free(pKey);
       sqlite3_free(pVal);

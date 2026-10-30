@@ -67,6 +67,7 @@ doltlite_vtab_column_collision
 doltlite_merge_constraint_prune
 doltlite_fk_parent_affinity
 doltlite_fk_lookup
+doltlite_fk_metadata
 doltlite_check_tokenization
 doltlite_merge_check_columns
 doltlite_merge_default_check
