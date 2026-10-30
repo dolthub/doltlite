@@ -154,6 +154,7 @@ doltlite_status_metadata
 doltlite_at_missing_table
 doltlite_at_right_join
 doltlite_clean_schemas
+doltlite_clean_ignored
 doltlite_max_page_count
 doltlite_txn_state_cursor
 doltlite_add_rename_source
