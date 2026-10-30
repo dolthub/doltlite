@@ -27,7 +27,7 @@ int applyMutMapToTableRoot(
 
   assert( pBt!=0 && pTE!=0 && pMap!=0 );
   memset(&mut, 0, sizeof(mut));
-  mut.pStore = &pBt->store;
+  mut.pStore = pBt->pStore;
   mut.pCache = &pBt->cache;
   mut.oldRoot = pTE->root;
   mut.pEdits = pMap;
@@ -1303,7 +1303,7 @@ static int btCursorInsertImpl(
     struct TableEntry *pTE2 = findTable(pCur->pBtree, pCur->pgnoRoot);
     if( pTE2 ){
       prollyCursorClose(&pCur->pCur);
-      prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+      prollyCursorInit(&pCur->pCur, pCur->pBt->pStore, &pCur->pBt->cache,
                        &pTE2->root, pTE2->flags);
       prollyCursorAllowSparse(&pCur->pCur, 1);
       pCur->pCur.bAllowPrefix = 1;
@@ -1370,7 +1370,7 @@ int flushIfNeeded(BtCursor *pCur){
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( pTE ){
     prollyCursorClose(&pCur->pCur);
-    prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+    prollyCursorInit(&pCur->pCur, pCur->pBt->pStore, &pCur->pBt->cache,
                      &pTE->root, pTE->flags);
     prollyCursorAllowSparse(&pCur->pCur, 1);
     pCur->pCur.bAllowPrefix = 1;
@@ -1429,7 +1429,7 @@ static int btreeDeleteImmediate(BtCursor *pCur){
     struct TableEntry *pTE2 = findTable(pCur->pBtree, pCur->pgnoRoot);
     if( pTE2 ){
       prollyCursorClose(&pCur->pCur);
-      prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+      prollyCursorInit(&pCur->pCur, pCur->pBt->pStore, &pCur->pBt->cache,
                        &pTE2->root, pTE2->flags);
       prollyCursorAllowSparse(&pCur->pCur, 1);
       pCur->pCur.bAllowPrefix = 1;
@@ -1992,11 +1992,11 @@ int doltliteMaterializeDefaultColumn(
   if( rc==SQLITE_OK ) rc = saveAllCursors(pBtree, pBt, pTab->tnum, 0);
   if( rc==SQLITE_OK ) rc = flushPendingForTable(pBtree, pBt, pTE, 0);
   if( rc!=SQLITE_OK ) goto default_cleanup;
-  rc = prollyChunkerInitWithCache(&chunker, &pBt->store, &pBt->cache,
+  rc = prollyChunkerInitWithCache(&chunker, pBt->pStore, &pBt->cache,
                                   pTE->flags);
   if( rc!=SQLITE_OK ) goto default_cleanup;
   doltliteRecordInfoInit(&ri);
-  prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
+  prollyCursorInit(&cur, pBt->pStore, &pBt->cache, &pTE->root, pTE->flags);
   rc = prollyCursorFirst(&cur, &res);
   while( rc==SQLITE_OK && prollyCursorIsValid(&cur) ){
     const u8 *pVal, *pKey;
@@ -2091,7 +2091,7 @@ static int readRowValue(
   int res = 0;
   *ppOld = 0;
   *pnOld = 0;
-  prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
+  prollyCursorInit(&cur, pBt->pStore, &pBt->cache, &pTE->root, pTE->flags);
   if( pTE->flags & PROLLY_NODE_INTKEY ){
     rc = prollyCursorSeekInt(&cur, intKey, &res);
   }else{
@@ -2188,7 +2188,7 @@ int doltliteApplyRawRowMutation(
   }
 
   memset(&mut, 0, sizeof(mut));
-  mut.pStore = &pBt->store;
+  mut.pStore = pBt->pStore;
   mut.pCache = &pBt->cache;
   memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
   mut.pEdits = &mm;
@@ -2227,7 +2227,7 @@ int doltliteApplyRawRowMutation(
       rc = flushPendingForTable(pBtree, pBt, pIdxTE, 0);
       if( rc!=SQLITE_OK ) break;
       rc = doltliteIndexApplyRowDeltaChecked(
-          db, &pBt->store, &pBt->cache, &pIdxTE->root, pIdxTE->flags,
+          db, pBt->pStore, &pBt->cache, &pIdxTE->root, pIdxTE->flags,
           pIdx, iPKey, intKey, pKey, nKey,
           pOldVal, nOldVal, pIndexNew, nIndexNew, checkUnique);
       if( rc==SQLITE_CONSTRAINT_UNIQUE && ppUniqueViolation ){

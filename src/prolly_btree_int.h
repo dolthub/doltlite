@@ -115,7 +115,7 @@ u32 prollyBtreeGetU32LE(const u8 *p);
 
 #define PROLLY_ASSERT_GRAPH_LOCKED(pBt) do{ \
   assert( (pBt)!=0 ); \
-  PROLLY_ASSERT_STORE_GRAPH_LOCKED(&(pBt)->store); \
+  PROLLY_ASSERT_STORE_GRAPH_LOCKED((pBt)->pStore); \
 }while(0)
 
 #define PROLLY_ASSERT_CURSOR_OWNED(pCur) do{ \
@@ -180,6 +180,8 @@ struct SavepointPendingSnapshot {
 
 struct BtShared {
   ChunkStore store;
+  /* &store, or the store of the BtShared in pStoreOwner. */
+  ChunkStore *pStore;
   ProllyCache cache;
   PagerShim *pPagerShim;
   sqlite3 *db;

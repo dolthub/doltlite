@@ -753,7 +753,7 @@ int prollyBaseBytesOverPendingDelete(
   rc = prollyMutMapFindRc(pCur->pMutMap, pKey, nKey, intKey, &pEntry);
   if( rc!=SQLITE_OK ) return rc;
   if( pEntry ? pEntry->op!=PROLLY_EDIT_DELETE : !bOverwrite ) return SQLITE_OK;
-  prollyCursorInit(&base, &pCur->pBt->store, &pCur->pBt->cache,
+  prollyCursorInit(&base, pCur->pBt->pStore, &pCur->pBt->cache,
                    &pCur->pCur.root, pCur->pCur.flags);
   rc = pKey ? prollyCursorSeekBlob(&base, pKey, nKey, &res)
             : prollyCursorSeekInt(&base, intKey, &res);

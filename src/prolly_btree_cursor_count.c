@@ -15,7 +15,7 @@ int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
 
   {
     u64 cnt = 0;
-    rc = prollySubtreeCount(&pBt->store, &pBt->cache, &pTE->root, &cnt);
+    rc = prollySubtreeCount(pBt->pStore, &pBt->cache, &pTE->root, &cnt);
     *pCount = (i64)cnt;
   }
   return rc;
@@ -104,7 +104,7 @@ static int countIntKeysUpTo(
     return SQLITE_OK;
   }
 
-  prollyCursorInit(&cur, &pBt->store, &pBt->cache, pRoot, flags);
+  prollyCursorInit(&cur, pBt->pStore, &pBt->cache, pRoot, flags);
   rc = prollyCursorSeekInt(&cur, intKey, &res);
   if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
   if( cur.eState!=PROLLY_CURSOR_VALID ){
@@ -112,7 +112,7 @@ static int countIntKeysUpTo(
     *pCount = 0;
     return SQLITE_OK;
   }
-  rc = prollyCursorCurrentRank(&pBt->store, &pBt->cache, &cur, &nRank);
+  rc = prollyCursorCurrentRank(pBt->pStore, &pBt->cache, &cur, &nRank);
   if( rc==SQLITE_OK ){
     *pCount = nRank + (res<=0 ? 1 : 0);
   }
@@ -221,7 +221,7 @@ static int countBlobKeysBefore(
     return SQLITE_OK;
   }
 
-  prollyCursorInit(&cur, &pBt->store, &pBt->cache, pRoot, flags);
+  prollyCursorInit(&cur, pBt->pStore, &pBt->cache, pRoot, flags);
   rc = prollyCursorSeekBlob(&cur, pKey, nKey, &res);
   if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
   if( cur.eState!=PROLLY_CURSOR_VALID ){
@@ -229,7 +229,7 @@ static int countBlobKeysBefore(
     *pCount = 0;
     return SQLITE_OK;
   }
-  rc = prollyCursorCurrentRank(&pBt->store, &pBt->cache, &cur, &nRank);
+  rc = prollyCursorCurrentRank(pBt->pStore, &pBt->cache, &cur, &nRank);
   if( rc==SQLITE_OK ){
     *pCount = nRank + (res<0 ? 1 : 0);
   }

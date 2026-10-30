@@ -129,7 +129,7 @@ static int captureSavepointSessionState(
     }
   }
   {
-    int rc = csCopySequences(&pBtree->pBt->store, &pState->aSequences,
+    int rc = csCopySequences(pBtree->pBt->pStore, &pState->aSequences,
                              &pState->nSequences);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zOrigBranch);
@@ -155,7 +155,7 @@ static void restoreSavepointSessionState(
   struct SavepointTableState *pState
 ){
   if( pState->bSequences ){
-    csInstallSequences(&pBtree->pBt->store, pState->aSequences,
+    csInstallSequences(pBtree->pBt->pStore, pState->aSequences,
                        pState->nSequences);
     pState->aSequences = 0;
     pState->nSequences = 0;
@@ -679,7 +679,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
 
   /* A restored byte does not change the file size. Reload before the
   ** not-a-database refusal so the repaired image is the one we judge. */
-  if( pBt->store.bDamageFinger && p->inTrans==TRANS_NONE ){
+  if( pBt->pStore->bDamageFinger && p->inTrans==TRANS_NONE ){
     rc = btreeRefreshFromDisk(p);
     if( rc!=SQLITE_OK ) return rc;
     if( pSchemaVersion ){
@@ -688,7 +688,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   }
 
   /* Open succeeds on garbage (stock timing); first use is SQLITE_NOTADB. */
-  if( pBt->store.notADatabase ) return SQLITE_NOTADB;
+  if( pBt->pStore->notADatabase ) return SQLITE_NOTADB;
 
   if( p->bDeferredOpen ){
     rc = doltliteBtreeHydrateDeferred(p);
@@ -714,7 +714,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
      && p->nReadSnapshot==0 ){
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
-      pBt->store.snapshotPinned = 0;
+      pBt->pStore->snapshotPinned = 0;
     }else{
       return SQLITE_OK;
     }
@@ -756,41 +756,41 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
 
     do {
-      rc = chunkStoreLockAndRefreshChanged(&pBt->store, &bStoreChanged);
+      rc = chunkStoreLockAndRefreshChanged(pBt->pStore, &bStoreChanged);
     }while( rc==SQLITE_BUSY && prollyInvokeBusyHandler(pBt) );
     if( rc!=SQLITE_OK ) return rc;
 
     if( p->inTrans==TRANS_READ ){
       int bChanged = 0;
-      rc = chunkStoreHasExternalChanges(&pBt->store, &bChanged);
+      rc = chunkStoreHasExternalChanges(pBt->pStore, &bChanged);
       if( rc==SQLITE_OK && bChanged ){
         const char *zBranch = p->zBranch ? p->zBranch : "main";
         ProllyHash head, workingSet, basis;
         int foundHead = 0, foundWorkingSet = 0;
-        chunkStorePeekWorkingSetBasis(&pBt->store, zBranch, &basis);
+        chunkStorePeekWorkingSetBasis(pBt->pStore, zBranch, &basis);
         rc = chunkStoreReadDiskBranchTip(
-            &pBt->store, zBranch, &head, &foundHead);
+            pBt->pStore, zBranch, &head, &foundHead);
         if( rc==SQLITE_OK ){
           rc = chunkStoreReadDiskBranchWorkingSet(
-              &pBt->store, zBranch, &workingSet, &foundWorkingSet);
+              pBt->pStore, zBranch, &workingSet, &foundWorkingSet);
         }
         if( rc==SQLITE_OK && foundHead
          && prollyHashCompare(&head, &p->headCommit)==0
          && prollyHashCompare(&workingSet, &basis)==0 ){
-          rc = chunkStoreForceRefresh(&pBt->store);
+          rc = chunkStoreForceRefresh(pBt->pStore);
           if( rc==SQLITE_OK ) bChanged = 0;
         }
       }
       if( rc!=SQLITE_OK ){
-        chunkStoreUnlock(&pBt->store);
+        chunkStoreUnlock(pBt->pStore);
         return rc;
       }
       /* A VC command's refresh consumes the external-change signal; a
       ** peer-moved working set still means the snapshot is stale. */
       if( bChanged
-       || chunkStoreWorkingSetMovedFromBasis(&pBt->store,
+       || chunkStoreWorkingSetMovedFromBasis(pBt->pStore,
                                              p->zBranch ? p->zBranch : "main") ){
-        chunkStoreUnlock(&pBt->store);
+        chunkStoreUnlock(pBt->pStore);
         /* The lock's refresh consumed the store-changed signal; without
         ** this the next read after the snapshot ends never reloads. */
         p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
@@ -806,13 +806,13 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     ** commit that lands after this point still fails the confirm. */
     if( p->inTrans==TRANS_NONE && p->db && p->db->pVcCommand
      && p->db->autoCommit && !p->db->pSavepoint && !p->isDetached
-     && pBt->store.staging.nRecentUncommitted==0
-     && pBt->store.staging.nPending==0
-     && prollyHashCompare(&pBt->store.refs.refsHash,
-                          &pBt->store.refs.committedRefsHash)==0 ){
-      rc = chunkStoreForceRefresh(&pBt->store);
+     && pBt->pStore->staging.nRecentUncommitted==0
+     && pBt->pStore->staging.nPending==0
+     && prollyHashCompare(&pBt->pStore->refs.refsHash,
+                          &pBt->pStore->refs.committedRefsHash)==0 ){
+      rc = chunkStoreForceRefresh(pBt->pStore);
       if( rc!=SQLITE_OK ){
-        chunkStoreUnlock(&pBt->store);
+        chunkStoreUnlock(pBt->pStore);
         return rc;
       }
     }
@@ -829,12 +829,12 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       int bStaleHead;
       ProllyHash loadedCatHash;
       ProllyHash branchTip;
-      bPeerWrite = chunkStoreWorkingSetMovedFromBasis(&pBt->store, zBranch);
+      bPeerWrite = chunkStoreWorkingSetMovedFromBasis(pBt->pStore, zBranch);
       bStaleHead = 0;
       memset(&branchTip, 0, sizeof(branchTip));
       if( p->inTrans==TRANS_NONE && p->db && p->db->autoCommit
        && !p->db->pSavepoint && !p->isDetached
-       && chunkStoreFindBranch(&pBt->store, zBranch, &branchTip)==SQLITE_OK
+       && chunkStoreFindBranch(pBt->pStore, zBranch, &branchTip)==SQLITE_OK
        && prollyHashCompare(&branchTip, &p->headCommit)!=0 ){
         bStaleHead = 1;
       }
@@ -850,7 +850,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         memset(&loadedCatHash, 0, sizeof(loadedCatHash));
         rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
         if( rc!=SQLITE_OK ){
-          chunkStoreUnlock(&pBt->store);
+          chunkStoreUnlock(pBt->pStore);
           return rc;
         }
         btreeStoreCommittedFromCurrent(p, &loadedCatHash);
@@ -868,11 +868,11 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     ** Last safe refusal point before phase two. Empty refs/head are seeding. */
     if( !prollyHashIsEmpty(&p->headCommit)
      && !p->isDetached
-     && pBt->store.refs.nBranches>0 ){
+     && pBt->pStore->refs.nBranches>0 ){
       const char *zBranchName = p->zBranch ? p->zBranch : "main";
-      if( chunkStoreFindBranch(&pBt->store, zBranchName, 0)==SQLITE_NOTFOUND ){
+      if( chunkStoreFindBranch(pBt->pStore, zBranchName, 0)==SQLITE_NOTFOUND ){
         p->bBeginTransBranchMissing = 1;
-        chunkStoreUnlock(&pBt->store);
+        chunkStoreUnlock(pBt->pStore);
         return SQLITE_BUSY_SNAPSHOT;
       }
     }
@@ -893,7 +893,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
             }
             p->inTrans = inTransBefore;
             p->inTransaction = inTransactionBefore;
-            chunkStoreUnlock(&pBt->store);
+            chunkStoreUnlock(pBt->pStore);
             return rc2;
           }
         }
@@ -913,7 +913,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   if( pSchemaVersion ){
     *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
-  pBt->store.snapshotPinned = 1;
+  pBt->pStore->snapshotPinned = 1;
 
   return SQLITE_OK;
 }
@@ -972,13 +972,13 @@ int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
 static void btreeReleaseTxnGraphLock(BtShared *pBt){
   if( pBt->bOwnsGraphLock ){
     pBt->bOwnsGraphLock = 0;
-    chunkStoreUnlock(&pBt->store);
+    chunkStoreUnlock(pBt->pStore);
   }
 }
 
 static void commitPhaseTwoReleaseGraph(BtShared *pBt){
   btreeReleaseTxnGraphLock(pBt);
-  pBt->store.snapshotPinned = 0;
+  pBt->pStore->snapshotPinned = 0;
 }
 
 static void commitPhaseTwoAbort(
@@ -997,7 +997,7 @@ static void commitPhaseTwoAbort(
     *ppCatData = 0;
   }
   if( commitRc==SQLITE_BUSY ) return;
-  chunkStoreRollback(&pBt->store);
+  chunkStoreRollback(pBt->pStore);
   commitPhaseTwoReleaseGraph(pBt);
 }
 
@@ -1015,12 +1015,12 @@ static int commitPhaseTwoStageCatalog(
   rc = serializeCatalogForCommit(p, ppCatData, pnCatData);
   pBt->inCatalogSerialize = 0;
   if( rc==SQLITE_OK ){
-    rc = chunkStorePut(&pBt->store, *ppCatData, *pnCatData, pCatHash);
+    rc = chunkStorePut(pBt->pStore, *ppCatData, *pnCatData, pCatHash);
   }
   if( rc!=SQLITE_OK ) return rc;
 
   zBr = p->zBranch ? p->zBranch : "main";
-  rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, pCatHash,
+  rc = btreeStoreWorkingSetBlob(pBt->pStore, zBr, pCatHash,
                                 &p->headCommit,
                                 &p->vc.stagedCatalog, p->vc.isMerging,
                                 &p->vc.mergeCommitHash,
@@ -1032,7 +1032,7 @@ static int commitPhaseTwoStageCatalog(
                                 p->zRebaseReturnBranch,
                                 &p->vc.constraintViolationsHash);
   if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreSerializeRefs(&pBt->store);
+  return chunkStoreSerializeRefs(pBt->pStore);
 }
 
 static int commitPhaseTwoPrepSchemaReload(
@@ -1200,14 +1200,14 @@ static int commitPhaseTwoFailRestore(
     p->bCatalogDropped = 1;
     p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
     resetConnectionSchema(p);
-    chunkStoreRollback(&pBt->store);
+    chunkStoreRollback(pBt->pStore);
     commitPhaseTwoEndWriteTxn(p);
     commitPhaseTwoReleaseGraph(pBt);
     return commitRc;
   }
   invalidateCursors(pBt, 0, commitRc);
   resetConnectionSchema(p);
-  chunkStoreRollback(&pBt->store);
+  chunkStoreRollback(pBt->pStore);
   commitPhaseTwoEndWriteTxn(p);
   commitPhaseTwoReleaseGraph(pBt);
   return commitRc;
@@ -1219,12 +1219,12 @@ static int commitPhaseTwoFailRestore(
 static int commitChunkStore(BtShared *pBt, int retryBusy){
   int rc;
   if( retryBusy ){
-    rc = chunkStoreCommitRetryable(&pBt->store, prollyInvokeBusyHandler, pBt);
+    rc = chunkStoreCommitRetryable(pBt->pStore, prollyInvokeBusyHandler, pBt);
   }else{
     rc = chunkStoreCommitWithBusyHandler(
-        &pBt->store, prollyInvokeBusyHandler, pBt);
+        pBt->pStore, prollyInvokeBusyHandler, pBt);
   }
-  if( !retryBusy || rc!=SQLITE_BUSY ) csDropTxnSequences(&pBt->store);
+  if( !retryBusy || rc!=SQLITE_BUSY ) csDropTxnSequences(pBt->pStore);
   return rc;
 }
 
@@ -1241,8 +1241,8 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
   PROLLY_ASSERT_GRAPH_LOCKED(pBt);
   /* A failed refs restore discarded the in-memory refs; publishing them
   ** would write an empty ref list. Reload under the lock or refuse. */
-  if( pBt->store.bRefsStale ){
-    rc = chunkStoreEnsureRefsFresh(&pBt->store);
+  if( pBt->pStore->bRefsStale ){
+    rc = chunkStoreEnsureRefsFresh(pBt->pStore);
     if( rc!=SQLITE_OK ){
       commitPhaseTwoAbort(pBt, 0, 0, 0, rc);
       return rc;
@@ -1368,8 +1368,8 @@ int doltliteBtreeBeginCommandTxn(Btree *p, int bWait){
   p->bCommandKeep = 0;
   p->nCommandBranchInstall = p->nBranchInstall;
   commandForgetBranch(p);
-  p->pBt->store.bDeferPublish = 1;
-  p->pBt->store.bPublishDeferred = 0;
+  p->pBt->pStore->bDeferPublish = 1;
+  p->pBt->pStore->bPublishDeferred = 0;
   return SQLITE_OK;
 }
 
@@ -1411,7 +1411,7 @@ int doltliteBtreePrepareJoinedCatalog(
   s = sqlite3_malloc64(sizeof(*s));
   if( !s ) return SQLITE_NOMEM;
   memset(s, 0, sizeof(*s));
-  rc = chunkStoreGet(&p->pBt->store, pCatalog, &data, &nData);
+  rc = chunkStoreGet(p->pBt->pStore, pCatalog, &data, &nData);
   if( rc==SQLITE_OK ){
     rc = commitPhaseTwoPrepSchemaReload(
         p, p->pBt, data, nData, &s->reload);
@@ -1438,7 +1438,7 @@ void doltliteBtreeFinishJoinedCommand(
       commitPhaseTwoAdoptReloadedCatalog(
           p, &s->reload, &haveReload);
     }
-    csDropTxnSequences(&p->pBt->store);
+    csDropTxnSequences(p->pBt->pStore);
     commitPhaseTwoEndWriteTxn(p);
     commitPhaseTwoReleaseGraph(p->pBt);
   }
@@ -1451,8 +1451,8 @@ void doltliteBtreeFinishJoinedCommand(
 
 static int commandPublishStaged(BtShared *pBt){
   int rc = chunkStoreCommitWithBusyHandler(
-      &pBt->store, prollyInvokeBusyHandler, pBt);
-  if( rc==SQLITE_OK ) csDropTxnSequences(&pBt->store);
+      pBt->pStore, prollyInvokeBusyHandler, pBt);
+  if( rc==SQLITE_OK ) csDropTxnSequences(pBt->pStore);
   return rc;
 }
 
@@ -1460,14 +1460,14 @@ static int commandPublishStaged(BtShared *pBt){
 ** command began under the lock with the session equal to disk, so disk is
 ** the snapshot it started from. */
 static void commandDiscard(Btree *p, BtShared *pBt){
-  chunkStoreRollback(&pBt->store);
+  chunkStoreRollback(pBt->pStore);
   if( p->bCommandBranchSaved ){
     sqlite3_free(p->zBranch);
     p->zBranch = p->zCommandBranch;
     p->zCommandBranch = 0;
     p->bCommandBranchSaved = 0;
     p->nBranchInstall++;
-    chunkStoreFollowWorkingSetBasis(&pBt->store,
+    chunkStoreFollowWorkingSetBasis(pBt->pStore,
                                     p->zBranch ? p->zBranch : "main");
   }
   if( p->inTrans==TRANS_WRITE ){
@@ -1475,7 +1475,7 @@ static void commandDiscard(Btree *p, BtShared *pBt){
     p->inTrans = TRANS_NONE;
     p->inTransaction = TRANS_NONE;
     btreeReleaseTxnGraphLock(pBt);
-    pBt->store.snapshotPinned = 0;
+    pBt->pStore->snapshotPinned = 0;
   }
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
   p->bForceCatalogReload = 1;
@@ -1510,11 +1510,11 @@ static int commandEnd(Btree *p, int bFailed, int bPublished){
   if( !p || !p->bCommandTxn ) return SQLITE_OK;
   p->bCommandTxn = 0;
   pBt = p->pBt;
-  pBt->store.bDeferPublish = 0;
-  bStaged = pBt->store.bPublishDeferred;
+  pBt->pStore->bDeferPublish = 0;
+  bStaged = pBt->pStore->bPublishDeferred;
   /* Past this point reads of the published refs must see disk again; a
   ** staged view left set would outlive the chunks it names. */
-  pBt->store.bPublishDeferred = 0;
+  pBt->pStore->bPublishDeferred = 0;
   db = p->db;
   bHooks = p->bCommandWritesRows && db;
   if( bFailed && !p->bCommandKeep ){
@@ -1534,8 +1534,8 @@ static int commandEnd(Btree *p, int bFailed, int bPublished){
   bSwitched = p->nCommandBranchInstall!=p->nBranchInstall;
   if( p->bForceCatalogReload
    || (!prollyHashIsEmpty(&p->headCommit) && !p->isDetached
-       && pBt->store.refs.nBranches>0
-       && chunkStoreFindBranch(&pBt->store,
+       && pBt->pStore->refs.nBranches>0
+       && chunkStoreFindBranch(pBt->pStore,
                                p->zBranch ? p->zBranch : "main", 0)
           ==SQLITE_NOTFOUND) ){
     rc = bStaged ? commandPublishStaged(pBt) : SQLITE_OK;
@@ -1556,9 +1556,9 @@ static int commandEnd(Btree *p, int bFailed, int bPublished){
       commandDiscard(p, pBt);
       return rc;
     }
-    if( pBt->store.staging.nPending==0
-     && prollyHashCompare(&pBt->store.refs.refsHash,
-                          &pBt->store.refs.committedRefsHash)==0 ){
+    if( pBt->pStore->staging.nPending==0
+     && prollyHashCompare(&pBt->pStore->refs.refsHash,
+                          &pBt->pStore->refs.committedRefsHash)==0 ){
       btreeDiscardAllSavepoints(p);
       commitPhaseTwoEndWriteTxn(p);
       commitPhaseTwoReleaseGraph(pBt);
@@ -1701,7 +1701,7 @@ static int restoreFromCommitted(Btree *p){
       }
     }
     if( rc==SQLITE_NOTFOUND ){
-      rc = chunkStoreGet(&p->pBt->store, &p->committedCatalogHash,
+      rc = chunkStoreGet(p->pBt->pStore, &p->committedCatalogHash,
                          &catData, &nCatData);
       if( rc!=SQLITE_OK ) return rc;
       rc = deserializeCatalog(p, catData, nCatData);
@@ -1720,7 +1720,7 @@ static void rollbackAbandonWriteTxn(Btree *p, BtShared *pBt){
   p->inTransaction = TRANS_NONE;
   btreeDiscardAllSavepoints(p);
   btreeReleaseTxnGraphLock(pBt);
-  pBt->store.snapshotPinned = 0;
+  pBt->pStore->snapshotPinned = 0;
 }
 
 static void rollbackResetSchema(Btree *p, int bImmediate){
@@ -1761,8 +1761,8 @@ static int commandRollback(Btree *p, BtShared *pBt, int tripCode){
   rc = p->db ? doltliteNestedTxnRestore(p->db) : SQLITE_NOTFOUND;
   if( rc==SQLITE_NOTFOUND ){
     ProllyHash loadedCatHash;
-    chunkStoreRollback(&pBt->store);
-    pBt->store.bPublishDeferred = 0;
+    chunkStoreRollback(pBt->pStore);
+    pBt->pStore->bPublishDeferred = 0;
     if( p->bCommandBranchSaved ){
       sqlite3_free(p->zCommandParkedBranch);
       p->zCommandParkedBranch = p->zBranch;
@@ -1770,7 +1770,7 @@ static int commandRollback(Btree *p, BtShared *pBt, int tripCode){
       p->zCommandBranch = 0;
       p->bCommandBranchSaved = 0;
       p->nBranchInstall++;
-      chunkStoreFollowWorkingSetBasis(&pBt->store,
+      chunkStoreFollowWorkingSetBasis(pBt->pStore,
                                       p->zBranch ? p->zBranch : "main");
     }
     memset(&loadedCatHash, 0, sizeof(loadedCatHash));
@@ -1856,22 +1856,22 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
       btreeDiscardAllSavepoints(p);
-      chunkStoreRollback(&pBt->store);
+      chunkStoreRollback(pBt->pStore);
       btreeReleaseTxnGraphLock(pBt);
-      pBt->store.snapshotPinned = 0;
+      pBt->pStore->snapshotPinned = 0;
       return rc;
     }
     if( bSchemaChangedRollback ){
       rollbackResetSchema(p, p->db && p->db->init.busy==0
         && (p->db->mDbFlags & DBFLAG_SchemaChange)!=0);
     }
-    chunkStoreRollback(&pBt->store);
+    chunkStoreRollback(pBt->pStore);
     if( bAutocommitOomRollback ){
       p->bFilterSchemaPlaceholders = 1;
     }
     /* Autocommit OOM: do not persist a failed DDL as the new baseline. */
     if( !bAutocommitOomRollback && !p->bCatalogDropped
-     && !pBt->store.bRefsStale ){
+     && !pBt->pStore->bRefsStale ){
       u8 *catData = 0;
       int nCatData = 0;
       ProllyHash catHash = p->committedCatalogHash;
@@ -1906,12 +1906,12 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       if( rc!=SQLITE_OK ){
         sqlite3_free(catData);
         btreeReleaseTxnGraphLock(pBt);
-        pBt->store.snapshotPinned = 0;
+        pBt->pStore->snapshotPinned = 0;
         return rc;
       }
       prollyHashCompute(wsBuf, WS_TOTAL_SIZE, &wsHashWouldBe);
 
-      if( chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &wsHashOnDisk)
+      if( chunkStoreGetBranchWorkingSet(pBt->pStore, zBr, &wsHashOnDisk)
           ==SQLITE_OK
        && prollyHashCompare(&wsHashWouldBe, &wsHashOnDisk)==0 ){
         bMatchesDisk = 1;
@@ -1919,10 +1919,10 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
 
       if( !bMatchesDisk ){
         if( catData ){
-          rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
+          rc = chunkStorePut(pBt->pStore, catData, nCatData, &catHash);
         }
         if( rc==SQLITE_OK ){
-          rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
+          rc = btreeStoreWorkingSetBlob(pBt->pStore, zBr, &catHash,
                                         &p->headCommit, &p->vc.stagedCatalog,
                                         p->vc.isMerging, &p->vc.mergeCommitHash,
                                         &p->vc.conflictsCatalogHash,
@@ -1934,7 +1934,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
                                         &p->vc.constraintViolationsHash);
         }
         if( rc==SQLITE_OK ){
-          rc = chunkStoreSerializeRefs(&pBt->store);
+          rc = chunkStoreSerializeRefs(pBt->pStore);
         }
         if( rc==SQLITE_OK ){
           rc = commitChunkStore(pBt, 0);
@@ -1951,7 +1951,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   commitPhaseTwoEndWriteTxn(p);
 
   btreeReleaseTxnGraphLock(pBt);
-  pBt->store.snapshotPinned = p->inTrans==TRANS_READ;
+  pBt->pStore->snapshotPinned = p->inTrans==TRANS_READ;
 
   return rc==SQLITE_OK ? cursorRc : rc;
 }
@@ -2042,11 +2042,11 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
 
   rc = serializeCatalog(p, &catData, &nCatData);
   if( rc==SQLITE_OK ){
-    rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
+    rc = chunkStorePut(pBt->pStore, catData, nCatData, &catHash);
   }
   sqlite3_free(catData);
   if( rc!=SQLITE_OK ) return rc;
-  rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
+  rc = btreeStoreWorkingSetBlob(pBt->pStore, zBr, &catHash,
                                 &p->headCommit, &p->vc.stagedCatalog,
                                 p->vc.isMerging, &p->vc.mergeCommitHash,
                                 &p->vc.conflictsCatalogHash,
@@ -2057,7 +2057,7 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
                                 p->zRebaseReturnBranch,
                                 &p->vc.constraintViolationsHash);
   if( rc!=SQLITE_OK ) return rc;
-  rc = chunkStoreSerializeRefs(&pBt->store);
+  rc = chunkStoreSerializeRefs(pBt->pStore);
   if( rc!=SQLITE_OK ) return rc;
   return commitChunkStore(pBt, 0);
 }
@@ -2074,7 +2074,7 @@ static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
   int rc;
   /* The savepoint that opened the transaction pushed no btree level, so the
   ** store's copy is what puts the id counters back. */
-  csRestoreTxnSequences(&pBt->store);
+  csRestoreTxnSequences(pBt->pStore);
   btreeDiscardAllSavepoints(p);
   rc = rollbackCommittedState(p, pBt, 1);
   if( rc!=SQLITE_OK ) return rc;

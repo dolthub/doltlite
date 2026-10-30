@@ -195,7 +195,7 @@ int doltliteVcScanSwapCheck(sqlite3 *db, const ProllyHash *catHash){
   if( i>=pVdbe->nCursor ) return SQLITE_OK;
   rc = doltliteFlushAndSerializeBtreeCatalog(pBtree, &catData, &nCatData);
   if( rc==SQLITE_OK ){
-    rc = chunkStorePut(&pBtree->pBt->store, catData, nCatData, &live);
+    rc = chunkStorePut(pBtree->pBt->pStore, catData, nCatData, &live);
   }
   sqlite3_free(catData);
   if( rc!=SQLITE_OK ) return rc;
@@ -829,7 +829,7 @@ static int loadSchemaCatalogRows(
   ProllyHash *pMasterRoot,
   u8 *pMasterFlags
 ){
-  ChunkStore *cs = &pBtree->pBt->store;
+  ChunkStore *cs = pBtree->pBt->pStore;
   ProllyCache *pCache = &pBtree->pBt->cache;
   ProllyCursor cur;
   SchemaCatalogRow *aRows = 0;
@@ -2131,7 +2131,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
     memcpy(buf, pBtree->pCatalogCache, pBtree->nCatalogCache);
     nData = pBtree->nCatalogCache;
   }else{
-    rc = chunkStoreGet(&pBtree->pBt->store, &pBtree->committedCatalogHash,
+    rc = chunkStoreGet(pBtree->pBt->pStore, &pBtree->committedCatalogHash,
                        &buf, &nData);
     if( rc!=SQLITE_OK ){
       sqlite3_free(buf);
@@ -2942,7 +2942,7 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
-  cs = &pBt->store;
+  cs = pBt->pStore;
 
   if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
 
@@ -2990,7 +2990,7 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
-  cs = &pBt->store;
+  cs = pBt->pStore;
 
   if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
   rc = doltliteVcScanSwapCheck(db, catHash);

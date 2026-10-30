@@ -107,7 +107,7 @@ struct AtomicJoinedCommand {
 static int cmdBeginAtomicJoined(Btree *p){
   AtomicJoinedCommand *s;
   sqlite3 *db = p->db;
-  ChunkStore *cs = &p->pBt->store;
+  ChunkStore *cs = p->pBt->pStore;
   ProllyHash tip;
   int found = 0;
   int rc;
@@ -148,8 +148,8 @@ static int cmdBeginAtomicJoined(Btree *p){
   p->bCommandWritesRows = 0;
   p->bCommandKeep = 0;
   p->nCommandBranchInstall = p->nBranchInstall;
-  p->pBt->store.bDeferPublish = 1;
-  p->pBt->store.bPublishDeferred = 0;
+  p->pBt->pStore->bDeferPublish = 1;
+  p->pBt->pStore->bPublishDeferred = 0;
   return SQLITE_OK;
 }
 
@@ -252,7 +252,7 @@ int doltliteVcSealPrecheck(sqlite3_context *ctx, int *pbHookApproved){
 static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
   AtomicJoinedCommand *s = p->pAtomicCommand;
   BtShared *pBt = p->pBt;
-  ChunkStore *cs = &pBt->store;
+  ChunkStore *cs = pBt->pStore;
   sqlite3 *db = p->db;
   sqlite3_stmt *commit = 0;
   void *preparedCatalog = 0;
