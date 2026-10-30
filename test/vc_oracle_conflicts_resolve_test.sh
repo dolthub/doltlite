@@ -188,7 +188,28 @@ SELECT CONCAT('R|restored|', count(*)) FROM dolt_conflicts;
 SELECT CONCAT('R|t|', v) FROM t;
 SELECT CONCAT('R|u|', v) FROM u;
 "
+  oracle "resolve_${mode}_dot" "$MULTI_CONFLICT_SETUP" "
+SELECT dolt_conflicts_resolve('--$mode', '.');
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('R|t|', v) FROM t;
+SELECT CONCAT('R|u|', v) FROM u;
+SELECT CONCAT('R|clean|', count(*)) FROM clean;
+"
 done
+
+oracle_error "resolve_dot_with_another_table" "$MULTI_CONFLICT_SETUP
+SELECT dolt_conflicts_resolve('--ours', '.', 't');
+"
+
+oracle "resolve_dot_no_conflicts" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_commit('-Am', 'c1');
+" "
+SELECT dolt_conflicts_resolve('--theirs', '.');
+SELECT CONCAT('R|', id, '|', v) FROM t;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;
+"
 
 echo "--- resolve then commit ---"
 
@@ -731,6 +752,10 @@ for side in ours theirs; do
     "SELECT dolt_conflicts_resolve('--$side', 'dolt_schemas');
 SELECT CONCAT('R|', x) FROM vv;
 SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+  oracle "resolve_${side}_view_dot" "$VIEW_CONFLICT_SETUP" \
+    "SELECT dolt_conflicts_resolve('--$side', '.');
+SELECT CONCAT('R|', x) FROM vv;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
 done
 
 echo "--- --theirs refusals: foreign keys and diverged columns ---"
@@ -878,6 +903,12 @@ for side in ours theirs; do
   oracle "resolve_${side}_trigger_and_view" "$TRIGGER_CONFLICT_SETUP" \
     "SELECT dolt_conflicts_resolve('--$side', 'dolt_schemas');
 SELECT dolt_conflicts_resolve('--$side', 't');
+INSERT INTO t VALUES(2, 20);
+SELECT CONCAT('R|log|', x) FROM log;
+SELECT CONCAT('R|view|', x) FROM vv WHERE x IS NOT NULL;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+  oracle "resolve_${side}_dot_schema_and_data" "$TRIGGER_CONFLICT_SETUP" \
+    "SELECT dolt_conflicts_resolve('--$side', '.');
 INSERT INTO t VALUES(2, 20);
 SELECT CONCAT('R|log|', x) FROM log;
 SELECT CONCAT('R|view|', x) FROM vv WHERE x IS NOT NULL;

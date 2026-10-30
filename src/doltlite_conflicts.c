@@ -1240,8 +1240,49 @@ static int conflictsSchemaObjectConflict(
   return rc;
 }
 
+/* Every table that currently has a conflict, including a view or trigger.
+** "." means this list and nothing else. */
+static int conflictsNamesInConflict(
+  sqlite3 *db,
+  int *pnOut,
+  char ***pazOut
+){
+  ConflictTableInfo *aAll = 0;
+  int nAll = 0;
+  char **azOut = 0;
+  int nOut = 0;
+  int i, rc;
+
+  *pnOut = 0;
+  *pazOut = 0;
+  rc = loadAllConflicts(db, doltliteGetChunkStore(db), &aAll, &nAll);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nAll==0 ){
+    freeConflictTables(aAll, nAll);
+    return SQLITE_OK;
+  }
+  azOut = sqlite3_malloc64(sizeof(char*)*(sqlite3_uint64)nAll);
+  if( !azOut ){
+    freeConflictTables(aAll, nAll);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; rc==SQLITE_OK && i<nAll; i++){
+    if( !aAll[i].zName ) continue;
+    azOut[nOut] = sqlite3_mprintf("%s", aAll[i].zName);
+    if( !azOut[nOut++] ) rc = SQLITE_NOMEM;
+  }
+  freeConflictTables(aAll, nAll);
+  if( rc!=SQLITE_OK ){
+    doltliteFreeStringArray(azOut, nOut);
+    return rc;
+  }
+  *pnOut = nOut;
+  *pazOut = azOut;
+  return SQLITE_OK;
+}
+
 /* Dolt reports view and trigger conflicts under dolt_schemas, so that name
-** stands for every one of them in the merge. */
+** stands for every one of them in the merge. A lone "." is every conflict. */
 static int conflictsExpandSchemasName(
   sqlite3 *db,
   int nIn, const char **azIn,
@@ -1255,6 +1296,9 @@ static int conflictsExpandSchemasName(
 
   *pnOut = 0;
   *pazOut = 0;
+  if( nIn==1 && azIn[0] && strcmp(azIn[0], ".")==0 ){
+    return conflictsNamesInConflict(db, pnOut, pazOut);
+  }
   for(i=0; i<nIn && sqlite3_stricmp(azIn[i], "dolt_schemas")!=0; i++){}
   if( i<nIn ){
     rc = loadAllConflicts(db, doltliteGetChunkStore(db), &aAll, &nAll);
