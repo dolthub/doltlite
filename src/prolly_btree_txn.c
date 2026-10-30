@@ -925,6 +925,28 @@ static int btreeIsProlly(Btree *p){
   return p && p->pOps==&prollyBtreeOps && p->pBt;
 }
 
+struct DoltliteNonlocal **doltliteNonlocalSlot(sqlite3 *db){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  if( !btreeIsProlly(p) || p->isDetached ) return 0;
+  return &p->pNonlocal;
+}
+
+const char *doltliteBtreeBranchName(Btree *p){
+  return p->zBranch ? p->zBranch : "main";
+}
+
+int doltliteBtreeTableStamp(Btree *p, Pgno iTable, ProllyHash *pRoot,
+                            int *pbPending){
+  struct TableEntry *pTE;
+  if( !btreeIsProlly(p) ) return SQLITE_NOTFOUND;
+  pTE = findTable(p, iTable);
+  if( !pTE ) return SQLITE_NOTFOUND;
+  *pRoot = pTE->root;
+  *pbPending = pTE->pPending
+      && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending);
+  return SQLITE_OK;
+}
+
 int doltliteBtreeSameStore(Btree *a, Btree *b){
   return btreeIsProlly(a) && btreeIsProlly(b) && a->pBt->pStore==b->pBt->pStore;
 }
@@ -965,13 +987,23 @@ void doltliteEndStoreCommits(sqlite3 *db){
 /* Another branch of the main database's store open in this connection:
 ** the one with uncommitted writes in the current transaction, else
 ** (zBranch set) the one on that branch. */
-const char *doltliteStoreSiblingBranch(sqlite3 *db, const char *zBranch){
+const char *doltliteStoreSiblingBranch(
+  sqlite3 *db,
+  const char *zBranch,
+  int bSkipIdleNonlocal
+){
   Btree *pMain = db->nDb>0 ? db->aDb[0].pBt : 0;
   int i;
   for(i=1; btreeIsProlly(pMain) && i<db->nDb; i++){
     Btree *q = db->aDb[i].pBt;
     const char *zQ;
     if( !doltliteBtreeSameStore(pMain, q) ) continue;
+    /* A nonlocal attachment the session leaves for its own branch is
+    ** released before the next statement. */
+    if( bSkipIdleNonlocal && doltliteNonlocalIsSchema(db->aDb[i].zDbSName)
+     && q->inTrans==TRANS_NONE ){
+      continue;
+    }
     zQ = q->zBranch ? q->zBranch : "main";
     if( zBranch ){
       if( strcmp(zQ, zBranch)==0 ) return zQ;

@@ -289,6 +289,7 @@ static void doltliteCleanFunc(
   if( rc!=SQLITE_OK ) goto clean_error;
   for(i=0; i<selected.n; i++){
     if( !cleanNamesContains(&staged, selected.az[i]) ){
+      if( doltliteNonlocalMatches(db, selected.az[i]) ) continue;
       if( args.nPositional==0 && !includeIgnored ){
         int ignored = 0;
         rc = cleanCheckIgnore(db, context, selected.az[i], &ignored);

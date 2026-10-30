@@ -81,6 +81,13 @@ int doltliteCreateShieldedFunc(
 );
 /* Registers pInner behind a shield: every method runs with the user's
 ** authorizer detached, because each one issues internal SQL. */
+struct DoltliteNonlocal **doltliteNonlocalSlot(sqlite3 *db);
+int doltliteNonlocalRegister(sqlite3 *db);
+int doltliteNonlocalMatches(sqlite3 *db, const char *zName);
+int doltliteTablePatternMatch(const char *zPat, const char *zStr);
+const char *doltliteBtreeBranchName(Btree *p);
+int doltliteBtreeTableStamp(Btree *p, Pgno iTable, ProllyHash *pRoot,
+                            int *pbPending);
 int doltliteCreateShieldedModule(
   sqlite3 *db,
   const char *zName,

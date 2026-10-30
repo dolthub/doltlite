@@ -914,6 +914,7 @@ static int sqlite3LockAndPrepare(
   }
   rc = doltliteBtreeRunDeferredWork(db);
   if( rc!=SQLITE_OK ) goto lock_and_prepare_out;
+  if( bTopLevel ) (void)doltliteNonlocalSync(db);
 #endif
   do{
     /* Make multiple attempts to compile the SQL, until it either succeeds
@@ -926,6 +927,16 @@ static int sqlite3LockAndPrepare(
   }while( (rc==SQLITE_ERROR_RETRY && ALWAYS(cnt<=SQLITE_MAX_PREPARE_RETRY))
        || (rc==SQLITE_SCHEMA && (sqlite3ResetOneSchema(db,-1), cnt)==1) );
 #ifdef DOLTLITE_PROLLY
+  /* Compiling loaded a rules table the first sync could not see, or a
+  ** statement in the batch changed it: compile once more with the
+  ** redirects it implies. */
+  if( bTopLevel && !pOld && !db->mallocFailed && doltliteNonlocalSync(db) ){
+    if( *ppStmt ){
+      sqlite3VdbeFinalize((Vdbe*)*ppStmt);
+      *ppStmt = 0;
+    }
+    rc = sqlite3Prepare(db, zSql, nBytes, prepFlags, pOld, ppStmt, pzTail);
+  }
 lock_and_prepare_out:
   if( bTopLevel ){
     int sourceRc = SQLITE_OK;

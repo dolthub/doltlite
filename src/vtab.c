@@ -1242,7 +1242,8 @@ static int vtabLazyMaterializedName(const char *zName){
   return zName!=0
       && (sqlite3StrICmp(zName, "dolt_tests")==0
        || sqlite3StrICmp(zName, "dolt_ignore")==0
-       || sqlite3StrICmp(zName, "dolt_docs")==0);
+       || sqlite3StrICmp(zName, "dolt_docs")==0
+       || sqlite3StrICmp(zName, "dolt_nonlocal_tables")==0);
 }
 #endif
 /*

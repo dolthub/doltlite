@@ -38,6 +38,7 @@ static int isAlterableTable(Parse *pParse, Table *pTab){
 #endif
 #ifdef DOLTLITE_PROLLY
    || sqlite3StrICmp(pTab->zName, "dolt_ignore")==0
+   || sqlite3StrICmp(pTab->zName, "dolt_nonlocal_tables")==0
    || sqlite3StrICmp(pTab->zName, "dolt_docs")==0
    || sqlite3StrICmp(pTab->zName, "dolt_tests")==0
    || sqlite3StrICmp(pTab->zName, "dolt_rebase")==0

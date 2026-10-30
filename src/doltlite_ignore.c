@@ -56,6 +56,10 @@ static int ignorePatternMatch(const char *zPat, const char *zStr){
   return ignorePatternMatchMode(zPat, zStr, 0);
 }
 
+int doltliteTablePatternMatch(const char *zPat, const char *zStr){
+  return ignorePatternMatch(zPat, zStr);
+}
+
 static int ignorePatternCovers(const char *zLess, const char *zMore){
   return ignorePatternMatchMode(zLess, zMore, 1);
 }
