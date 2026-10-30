@@ -110,6 +110,7 @@ doltlite_lazy_system_schema
 doltlite_open_head
 doltlite_deferred_branch_open
 doltlite_commit_peer_refresh
+doltlite_commit_skip_empty
 doltlite_checkout_peer_retry
 doltlite_checkout_options
 doltlite_checkout_ioerr

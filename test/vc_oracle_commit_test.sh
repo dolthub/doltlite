@@ -614,6 +614,42 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('--skip-empty', '-m', 'second');
 "
 
+echo "--- --amend with --skip-empty ---"
+
+for stage in clean unstaged staged_same reverted staged_data staged_schema; do
+  stage_sql=""
+  case "$stage" in
+    unstaged) stage_sql="UPDATE t SET v=11 WHERE id=1;" ;;
+    staged_same) stage_sql="SELECT dolt_add('t');" ;;
+    reverted) stage_sql="UPDATE t SET v=11 WHERE id=1;
+SELECT dolt_add('t');
+UPDATE t SET v=10 WHERE id=1;
+SELECT dolt_add('t');" ;;
+    staged_data) stage_sql="UPDATE t SET v=11 WHERE id=1; SELECT dolt_add('t');" ;;
+    staged_schema) stage_sql="ALTER TABLE t ADD COLUMN extra INT; SELECT dolt_add('t');" ;;
+  esac
+  for flags in none modified all; do
+    flag_sql=""
+    case "$flags" in
+      modified) flag_sql="'-a'," ;;
+      all) flag_sql="'-A'," ;;
+    esac
+    oracle "commit_amend_skip_empty_${stage}_${flags}" "
+CREATE TABLE t(id INTEGER PRIMARY KEY,v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','init');
+INSERT INTO t VALUES(2,20);
+SELECT dolt_commit('-am','c1');
+$stage_sql
+SELECT dolt_commit($flag_sql '--amend','--skip-empty','-m','rewritten');
+"
+  done
+done
+
+oracle "commit_amend_skip_empty_root" "
+SELECT dolt_commit('--amend','--skip-empty','-m','rewritten');
+"
+
 echo "--- --date ---"
 
 oracle "commit_with_explicit_date" "
