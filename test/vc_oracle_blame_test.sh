@@ -64,6 +64,61 @@ oracle "linear_basic" \
   "$LINEAR_BASIC" \
   "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t ORDER BY id;"
 
+echo "--- dirty working rows ---"
+
+for layout in integer clustered text composite key_only; do
+  columns="id INTEGER PRIMARY KEY,v INT"
+  row_update="UPDATE t SET v=30 WHERE id=3;"
+  key_sql="id"
+  case "$layout" in
+    clustered) columns="id INT PRIMARY KEY,v INT" ;;
+    text) columns="id VARCHAR(20) PRIMARY KEY,v INT" ;;
+    composite) columns="id INT,k VARCHAR(20) DEFAULT 'key',v INT,PRIMARY KEY(k,id)"
+               key_sql="k,'|',id" ;;
+    key_only) columns="id INT PRIMARY KEY"; row_update="UPDATE t SET id=30 WHERE id=3;" ;;
+  esac
+  for state in working staged reverted; do
+    stage_sql=""
+    case "$state" in
+      staged) stage_sql="SELECT dolt_add('t');" ;;
+      reverted) stage_sql="SELECT dolt_add('t');
+DELETE FROM t WHERE id IN (4,30);
+INSERT INTO t(id) VALUES(2);"
+        if [ "$layout" = key_only ]; then
+          stage_sql="$stage_sql INSERT INTO t(id) VALUES(3);"
+        else
+          stage_sql="$stage_sql UPDATE t SET v=NULL WHERE id IN (2,3);"
+        fi ;;
+    esac
+    oracle "working_rows_${layout}_${state}" "
+CREATE TABLE t($columns);
+INSERT INTO t(id) VALUES(1),(2),(3),(5);
+SELECT dolt_commit('-Am','base');
+DELETE FROM t WHERE id=2;
+$row_update
+INSERT INTO t(id) VALUES(4);
+$stage_sql
+" "SELECT CONCAT('BL|',$key_sql,'|',message) FROM dolt_blame_t;"
+  done
+done
+
+oracle "working_replaced_key_type" "
+CREATE TABLE t(k INT PRIMARY KEY,v VARCHAR(20));
+INSERT INTO t VALUES(1,'base'),(2,'two');
+SELECT dolt_commit('-Am','base');
+DROP TABLE t;
+CREATE TABLE t(k VARCHAR(20) PRIMARY KEY,v VARCHAR(20));
+INSERT INTO t VALUES('1','one');
+" "SELECT CONCAT('BL|',k,'|',message) FROM dolt_blame_t;" EXPECT_EMPTY
+
+oracle "working_all_changed" "
+CREATE TABLE t(id INT PRIMARY KEY,v INT);
+INSERT INTO t VALUES(1,1),(2,2);
+SELECT dolt_commit('-Am','base');
+DELETE FROM t WHERE id=1;
+UPDATE t SET v=20 WHERE id=2;
+" "SELECT CONCAT('BL|',id,'|',message) FROM dolt_blame_t;" EXPECT_EMPTY
+
 echo "--- OR predicates ---"
 
 OR_ROWS="
