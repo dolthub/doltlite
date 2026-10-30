@@ -654,10 +654,19 @@ SELECT dolt_add('-A');
 SELECT dolt_cherry_pick('feature');
 "
 
-oracle "revert_no_args_is_noop" "
-$SEED
-SELECT dolt_revert();
-"
+for state in clean dirty staged; do
+  revert_setup="$SEED"
+  if [ "$state" != clean ]; then
+    revert_setup="$revert_setup INSERT INTO t VALUES(2,20);"
+  fi
+  if [ "$state" = staged ]; then
+    revert_setup="$revert_setup SELECT dolt_add('t');"
+  fi
+  vc_oracle_error "revert_no_args_${state}" "$revert_setup
+SELECT dolt_revert();" "" "nothing specified to revert"
+  oracle_error_poststate "revert_no_args_${state}_unchanged" "$revert_setup
+SELECT dolt_revert();" "SELECT CONCAT('R|',active_branch(),'|',(SELECT count(*) FROM dolt_log),'|',(SELECT sum(id) FROM t),'|',(SELECT count(*) FROM dolt_status),'|',(SELECT count(*) FROM dolt_status WHERE staged));"
+done
 
 vc_oracle_error "revert_nonexistent_ref" "
 $SEED

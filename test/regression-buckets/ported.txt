@@ -98,6 +98,7 @@ doltlite_rebase_io
 doltlite_conflicts_multi
 doltlite_conflict_rollback_baseline
 doltlite_replay_conflict_indexes
+doltlite_revert_arguments
 doltlite_recover_changes
 doltlite_gc_stop_world
 doltlite_gc_active_statements

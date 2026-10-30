@@ -307,7 +307,9 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "rv_noarg_noop" "SELECT dolt_revert();" "0" "$DB"
+run_test_error_match "rv_err_noarg" "SELECT dolt_revert();" "nothing specified to revert" "$DB"
+run_test "rv_err_noarg_row_kept" "SELECT id FROM t;" "1" "$DB"
+run_test "rv_err_noarg_head_kept" "SELECT message FROM dolt_log LIMIT 1;" "c1" "$DB"
 run_test_error_match "rv_err_badhash" "SELECT dolt_revert('bad');" "invalid" "$DB"
 run_test_error_match "rv_err_initial" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
