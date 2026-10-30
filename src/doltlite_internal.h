@@ -1779,6 +1779,7 @@ int applyMergedCatalogAndCommit(
   const char *zAuthorEmail,
   int bPreferOurMaster,
   int bRejectUnchanged,
+  const ProllyHash *pTheirCommit,
   int *pnConflicts,
   int *pnViolations,
   char **pzApplyErr,
@@ -1940,6 +1941,8 @@ int doltliteSessionHasUnresolvedConflicts(sqlite3 *db);
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSetSessionConflictsTheirCatalog(sqlite3 *db, const ProllyHash *pHash);
 void doltliteGetSessionConflictsTheirCatalog(sqlite3 *db, ProllyHash *pHash);
+int doltliteSetSessionConflictsSourceCommit(sqlite3 *db, const ProllyHash *pHash);
+void doltliteGetSessionConflictsSourceCommit(sqlite3 *db, ProllyHash *pHash);
 void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash);
 int doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSessionHasConstraintViolations(sqlite3 *db);

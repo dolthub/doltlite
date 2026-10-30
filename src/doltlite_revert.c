@@ -247,6 +247,7 @@ static void doltliteRevertFunc(
         &revertCommit.catalogHash, &liveOurCatalog,
         &parentCommit.catalogHash, &ourHead, pCommitOurs, msg,
         zParsedName, zParsedEmail, 1, 1,
+        doltliteCommitParentHash(&revertCommit, 0),
         &nConflicts, 0, &zApplyErr, hexBuf);
   }
 

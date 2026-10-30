@@ -1428,6 +1428,23 @@ int doltliteSetSessionConflictsTheirCatalog(sqlite3 *db, const ProllyHash *pHash
   return SQLITE_OK;
 }
 
+int doltliteSetSessionConflictsSourceCommit(sqlite3 *db, const ProllyHash *pHash){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    int rc = sessionStateSyncSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(&p->vc.conflictsSourceCommit, pHash, sizeof(ProllyHash));
+  }
+  return SQLITE_OK;
+}
+
+void doltliteGetSessionConflictsSourceCommit(sqlite3 *db, ProllyHash *pHash){
+  memset(pHash, 0, sizeof(*pHash));
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    memcpy(pHash, &db->aDb[0].pBt->vc.conflictsSourceCommit, sizeof(*pHash));
+  }
+}
+
 void doltliteGetSessionConflictsTheirCatalog(sqlite3 *db, ProllyHash *pHash){
   memset(pHash, 0, sizeof(*pHash));
   if( db && db->nDb>0 && db->aDb[0].pBt ){
@@ -1505,6 +1522,7 @@ int doltliteSeedSessionHashes(
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.conflictsCatalogHash);
     if( rc==SQLITE_OK && !prollyHashIsEmpty(&pBt->vc.conflictsCatalogHash) ){
       rc = xPush(pCtx, &pBt->vc.conflictsTheirCatalog);
+      if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.conflictsSourceCommit);
     }
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseOntoCommit);

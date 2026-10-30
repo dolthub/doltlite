@@ -311,6 +311,7 @@ static int applyMergedCatalogAndCommitInTxn(
   const char *zAuthorEmail,
   int bPreferOurMaster,
   int bRejectUnchanged,
+  const ProllyHash *pTheirCommit,
   int *pnConflicts,
   int *pnViolations,
   char **pzApplyErr,
@@ -403,6 +404,9 @@ static int applyMergedCatalogAndCommitInTxn(
     graphLocked = 1;
 
     rc = doltliteSwitchCatalog(db, &mergedCatHash);
+    if( rc==SQLITE_OK && *pnConflicts>0 && pTheirCommit ){
+      rc = doltliteSetSessionConflictsSourceCommit(db, pTheirCommit);
+    }
     if( rc==SQLITE_OK ){
       rc = doltlitePrimeSchemaCache(db);
     }
@@ -591,6 +595,7 @@ int applyMergedCatalogAndCommit(
   const char *zAuthorEmail,
   int bPreferOurMaster,
   int bRejectUnchanged,
+  const ProllyHash *pTheirCommit,
   int *pnConflicts,
   int *pnViolations,
   char **pzApplyErr,
@@ -610,7 +615,7 @@ int applyMergedCatalogAndCommit(
     rc = applyMergedCatalogAndCommitInTxn(db, context, ancCatHash,
         ourCatHash, theirCatHash, ourHead, pCommitOurCatHash, zMessage,
         zAuthorName, zAuthorEmail, bPreferOurMaster, bRejectUnchanged,
-        pnConflicts, pnViolations, pzApplyErr, hexBuf);
+        pTheirCommit, pnConflicts, pnViolations, pzApplyErr, hexBuf);
   }
   if( bOwnTxn && !db->autoCommit ){
     int erc;
@@ -744,7 +749,8 @@ static void doltliteCherryPickFunc(
 
     rc = applyMergedCatalogAndCommit(db, context,
         &parentCommit.catalogHash, &ourCommit.catalogHash,
-        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, 0, 1, &nConflicts, 0,
+        &pickCommit.catalogHash, &ourHead, 0, zMsg, 0, 0, 0, 1, &pickHash,
+        &nConflicts, 0,
         &zApplyErr, hexBuf);
   }
 

@@ -1081,8 +1081,15 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   colConflictId = 3 + 3*nUserCols;
 
   if( col==0 ){
-
-    sqlite3_result_null(ctx);
+    ProllyHash source;
+    doltliteGetSessionConflictsSourceCommit(v->db, &source);
+    if( !prollyHashIsEmpty(&source) ){
+      char hex[PROLLY_HASH_SIZE*2+1];
+      doltliteHashToHex(&source, hex);
+      sqlite3_result_text(ctx, hex, -1, SQLITE_TRANSIENT);
+    }else{
+      sqlite3_result_null(ctx);
+    }
   }else if( col>=colBaseStart && col<colOurStart ){
     cfrEmitRecordCol(ctx, cr->pBaseVal, cr->nBaseVal,
                      col - colBaseStart, &v->cols, cr->intKey);

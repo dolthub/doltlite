@@ -799,7 +799,7 @@ static int doltliteRebaseLinearReplay(
         &replayCommit.catalogHash,
         &curHead, 0,
         replayCommit.zMessage ? replayCommit.zMessage : "",
-        0, 0, 0, keepEmpty ? 0 : 1,
+        0, 0, 0, keepEmpty ? 0 : 1, &aReplay[i],
         &nConflicts, &nViolations, &zApplyErr, hexBuf);
 
     doltliteCommitClear(&replayCommit);
@@ -1524,7 +1524,8 @@ static int rebaseReplayStep(
   rc = applyMergedCatalogAndCommit(db, context,
       &parentC.catalogHash, &headC.catalogHash, &replayC.catalogHash,
       &curHead, 0, zMsg ? zMsg : "",
-      0, 0, 0, keepEmpty ? 0 : 1, pnConflicts, pnViolations, pzErr, hexBuf);
+      0, 0, 0, keepEmpty ? 0 : 1, &pRow->commitHash,
+      pnConflicts, pnViolations, pzErr, hexBuf);
   if( rc==SQLITE_DONE ){
     rc = SQLITE_OK;
     goto step_done;

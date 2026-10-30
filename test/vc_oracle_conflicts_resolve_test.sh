@@ -406,6 +406,39 @@ SELECT dolt_conflicts_resolve('--theirs', 't');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 done
 
+echo "--- from_root_ish names the commit the conflicting side came from ---"
+
+ROOT_ISH_SEED="
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feature');
+UPDATE t SET v=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main1');
+UPDATE t SET v=5;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=3;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');"
+ROOT_ISH_QUERY="SELECT CONCAT('R|', from_root_ish = dolt_hashof('feature'), '|', from_root_ish = dolt_hashof('HEAD~2')) FROM dolt_conflicts_t;"
+
+oracle "from_root_ish_merge" "$ROOT_ISH_SEED
+SELECT dolt_merge('feature');
+" "$ROOT_ISH_QUERY"
+oracle "from_root_ish_cherry_pick" "$ROOT_ISH_SEED
+BEGIN;
+SELECT dolt_cherry_pick('feature');
+" "$ROOT_ISH_QUERY"
+oracle "from_root_ish_revert" "$ROOT_ISH_SEED
+BEGIN;
+SELECT dolt_revert('HEAD~1');
+" "$ROOT_ISH_QUERY"
+
 echo "--- composite primary key (two INT columns) ---"
 
 oracle "resolve_theirs_composite_int_pk" \
