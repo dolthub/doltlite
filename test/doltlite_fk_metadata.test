@@ -1,0 +1,109 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {kind parent rows child columns targets refJson colJson bad} {
+  integer {id INTEGER PRIMARY KEY,v INT} {(1,1),(2,2)}
+          {pid INT} pid id {["id"]} {["pid"]} 2
+  clustered {id INT PRIMARY KEY,v INT} {(1,1),(2,2)}
+            {pid INT} pid id {["id"]} {["pid"]} 2
+  text {"parent key" TEXT PRIMARY KEY,v INT} {('one',1),('two',2)}
+       {pid TEXT} pid {"parent key"} {["parent key"]} {["pid"]} 'two'
+  composite {a INT,b INT,v INT,PRIMARY KEY(b,a)} {(1,10,1),(2,20,2)}
+            {x INT,y INT} {x,y} {b,a} {["b","a"]} {["x","y"]} {20,2}
+  descending {a INT,b INT,v INT,PRIMARY KEY(b DESC,a)} {(1,10,1),(2,20,2)}
+             {x INT,y INT} {x,y} {b,a} {["b","a"]} {["x","y"]} {20,2}
+} {
+  foreach refs {implicit explicit} {
+    foreach operation {merge cherry_pick verify} {
+      foreach storage {file memory} {
+        reset_db
+        if {$storage eq "memory"} {
+          db close
+          sqlite3 db :memory:
+        }
+        set reference ""
+        if {$refs eq "explicit"} {set reference "($targets)"}
+        db eval "CREATE TABLE p($parent)"
+        db eval "CREATE TABLE c(id INTEGER PRIMARY KEY,$child,
+                               FOREIGN KEY($columns) REFERENCES p$reference)"
+        db eval "INSERT INTO p VALUES$rows"
+        db eval {SELECT dolt_commit('-Am','base')}
+        set insert "INSERT INTO c VALUES(1,$bad),(2,$bad)"
+        if {$operation eq "verify"} {
+          db eval {DELETE FROM p WHERE v=2; PRAGMA foreign_keys=OFF}
+          db eval $insert
+          db eval {PRAGMA foreign_keys=ON}
+        } else {
+          db eval {SELECT dolt_checkout('-b','side')}
+          db eval $insert
+          db eval {
+            SELECT dolt_commit('-am','children');
+            SELECT dolt_checkout('main');
+            DELETE FROM p WHERE v=2;
+            SELECT dolt_commit('-am','parent');
+            BEGIN;
+          }
+        }
+        set prefix fk-metadata-$kind.$refs.$operation.$storage
+        set head [db one {SELECT dolt_hashof('HEAD')}]
+        if {$operation eq "verify"} {
+          do_execsql_test $prefix.detect {SELECT dolt_verify_constraints('--all')} 1
+        } else {
+          do_test $prefix.detect {
+            set result [catchsql "SELECT dolt_${operation}('side')"]
+            list [lindex $result 0] \
+                 [string match {*constraint violations*} [lindex $result 1]]
+          } {1 1}
+        }
+        set query "
+          SELECT count(*),min(json_valid(violation_info)),
+                 min(json_extract(violation_info,'$.ReferencedColumns')='$refJson'),
+                 min(json_extract(violation_info,'$.Columns')='$colJson'),
+                 min(json_extract(violation_info,'$.ReferencedTable')='p'),
+                 min(json_extract(violation_info,'$.OnUpdate')='NO ACTION'),
+                 min(json_extract(violation_info,'$.OnDelete')='NO ACTION')
+            FROM dolt_constraint_violations_c;
+        "
+        do_execsql_test $prefix.metadata $query {2 1 1 1 1 1 1}
+        do_test $prefix.head {
+          expr {$head eq [db one {SELECT dolt_hashof('HEAD')}]}
+        } 1
+        if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+          do_execsql_test $prefix.reopen $query {2 1 1 1 1 1 1}
+        }
+        do_execsql_test $prefix.repair {
+          DELETE FROM c;
+          SELECT dolt_verify_constraints('--all');
+          SELECT count(*) FROM dolt_constraint_violations;
+          PRAGMA foreign_key_check;
+        } {0 0}
+      }
+    }
+  }
+}
+
+reset_db
+db eval {
+  CREATE TABLE p(pid INT PRIMARY KEY,u INT UNIQUE);
+  CREATE TABLE q(qid INT PRIMARY KEY);
+  CREATE TABLE c(id INT PRIMARY KEY,a INT REFERENCES p,b INT REFERENCES q,
+                 u INT REFERENCES p(u));
+  INSERT INTO p VALUES(1,10),(2,20);
+  INSERT INTO q VALUES(1),(2);
+  SELECT dolt_commit('-Am','base');
+  PRAGMA foreign_keys=OFF;
+  INSERT INTO c VALUES(1,99,1,10),(2,1,99,10),(3,1,1,99),(4,98,1,10);
+  PRAGMA foreign_keys=ON;
+}
+do_execsql_test fk-metadata-multiple.detect {SELECT dolt_verify_constraints('--all')} 1
+do_execsql_test fk-metadata-multiple.rows {
+  SELECT id,json_extract(violation_info,'$.Columns'),
+         json_extract(violation_info,'$.ReferencedTable'),
+         json_extract(violation_info,'$.ReferencedColumns')
+    FROM dolt_constraint_violations_c ORDER BY id;
+} {1 {["a"]} p {["pid"]} 2 {["b"]} q {["qid"]} 3 {["u"]} p {["u"]} 4 {["a"]} p {["pid"]}}
+
+finish_test

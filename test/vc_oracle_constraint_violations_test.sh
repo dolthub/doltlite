@@ -19,7 +19,7 @@ normalize() {
 }
 
 oracle() {
-  local name="$1" setup="$2" query="$3"
+  local name="$1" setup="$2" query="$3" dolt_setup="${4:-$2}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -33,7 +33,7 @@ oracle() {
            | normalize)
 
   local dolt_all dt_out
-  dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$query")")
+  dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$dolt_setup" "$query")")
   dt_out=$(
     cd "$dir/dt" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
@@ -128,6 +128,46 @@ SELECT dolt_merge('feat');
 " \
 "SELECT CONCAT('R|', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' ELSE '?' END, '|', pk, '|', v, '|cols=', JSON_EXTRACT(violation_info,'\$.Columns'), '|reft=', JSON_EXTRACT(violation_info,'\$.ReferencedTable'), '|refc=', JSON_EXTRACT(violation_info,'\$.ReferencedColumns')) FROM dolt_constraint_violations_c ORDER BY pk;
 SELECT CONCAT('R|AGG|', \`table\`, '|', num_violations) FROM dolt_constraint_violations ORDER BY \`table\`;"
+
+echo "--- foreign key: omitted parent columns ---"
+for key_layout in integer composite; do
+  parent="id INT PRIMARY KEY,v INT"
+  parent_rows="(1,1),(2,2)"
+  child="pid INT"
+  columns="pid"
+  targets="id"
+  bad="2"
+  if [ "$key_layout" = composite ]; then
+    parent="a INT,b INT,v INT,PRIMARY KEY(b,a)"
+    parent_rows="(1,10,1),(2,20,2)"
+    child="x INT,y INT"
+    columns="x,y"
+    targets="b,a"
+    bad="20,2"
+  fi
+  for reference in implicit explicit; do
+    ref_columns=""
+    if [ "$reference" = explicit ]; then ref_columns="($targets)"; fi
+    setup_sql="
+CREATE TABLE p($parent);
+CREATE TABLE c(id INT PRIMARY KEY,$child,FOREIGN KEY($columns) REFERENCES p$ref_columns);
+INSERT INTO p VALUES$parent_rows;
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','side');
+INSERT INTO c VALUES(1,$bad),(2,$bad);
+SELECT dolt_commit('-am','children');
+SELECT dolt_checkout('main');
+DELETE FROM p WHERE v=2;
+SELECT dolt_commit('-am','parent');
+SELECT dolt_merge('side');
+"
+    dolt_setup_sql=${setup_sql/"REFERENCES p$ref_columns"/"REFERENCES p($targets)"}
+    oracle "fk_parent_columns_${key_layout}_${reference}" "$setup_sql" \
+"SELECT CONCAT('R|',id,'|',JSON_EXTRACT(violation_info,'\$.Columns'),'|',
+JSON_EXTRACT(violation_info,'\$.ReferencedTable'),'|',
+JSON_EXTRACT(violation_info,'\$.ReferencedColumns')) FROM dolt_constraint_violations_c;" "$dolt_setup_sql"
+  done
+done
 
 echo "--- foreign key: multiple orphans from one deleted parent ---"
 oracle "fk_orphan_multi" \
