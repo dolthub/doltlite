@@ -1,0 +1,68 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc revert_argument_state {} {
+  list [db one {SELECT active_branch()}] \
+       [db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] \
+       [db eval {SELECT commit_hash,message FROM dolt_log ORDER BY commit_hash}] \
+       [db eval {SELECT id,v FROM t ORDER BY id}] \
+       [db eval {SELECT id,v FROM dolt_at_t('STAGED') ORDER BY id}] \
+       [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+
+foreach storage {file memory} {
+  foreach state {clean dirty staged} {
+    foreach boundary {auto begin nested savepoint} {
+      reset_db
+      if {$storage eq "memory"} {
+        db close
+        sqlite3 db :memory:
+      }
+      db eval {
+        CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+        INSERT INTO t VALUES(1,'base');
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('other');
+      }
+      if {$state ne "clean"} {db eval {INSERT INTO t VALUES(2,'working')}}
+      if {$state eq "staged"} {db eval {SELECT dolt_add('t')}}
+      switch $boundary {
+        begin {db eval BEGIN}
+        nested {db eval {BEGIN; SAVEPOINT caller}}
+        savepoint {db eval {SAVEPOINT caller}}
+      }
+      if {$boundary ne "auto"} {db eval {INSERT INTO t VALUES(3,'transaction')}}
+      set before [revert_argument_state]
+      set auto [sqlite3_get_autocommit db]
+      set prefix revert-arguments-$storage.$state.$boundary
+      foreach {form sql} {
+        empty {SELECT dolt_revert()}
+        separator {SELECT dolt_revert('--')}
+        author {SELECT dolt_revert('--author','Ann <ann@example.com>')}
+      } {
+        do_test $prefix.$form.error {catchsql $sql} {1 {nothing specified to revert}}
+        do_test $prefix.$form.unchanged {revert_argument_state} $before
+        do_test $prefix.$form.transaction {sqlite3_get_autocommit db} $auto
+      }
+      if {$boundary in {nested savepoint}} {
+        do_test $prefix.savepoint {catchsql {RELEASE caller}} {0 {}}
+      }
+      if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+      if {$storage eq "file"} {
+        db close
+        sqlite3 db test.db
+        do_test $prefix.reopen {revert_argument_state} $before
+      }
+    }
+  }
+}
+
+reset_db
+set before [db eval {SELECT commit_hash,message FROM dolt_log}]
+do_catchsql_test revert-arguments-fresh.error {SELECT dolt_revert()} \
+    {1 {nothing specified to revert}}
+do_test revert-arguments-fresh.unchanged {
+  db eval {SELECT commit_hash,message FROM dolt_log}
+} $before
+
+finish_test

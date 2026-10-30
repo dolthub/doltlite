@@ -158,11 +158,6 @@ static void doltliteRevertFunc(
   if( doltliteCmdRejectReadOnly(context) ) return;
   if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
 
-  if( argc<1 ){
-    sqlite3_result_int(context, 0);
-    return;
-  }
-
   rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) return;
