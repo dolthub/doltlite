@@ -1,0 +1,100 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc clean_ignored_tables {} {
+  db eval {SELECT name FROM main.sqlite_master WHERE type='table' ORDER BY name}
+}
+
+foreach storage {file memory} {
+  foreach boundary {auto begin savepoint} {
+    foreach option {-x --x} {
+      reset_db
+      if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+      db eval {
+        CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+        CREATE TABLE ig_tracked(id INT PRIMARY KEY);
+        INSERT INTO t VALUES(1,'base');
+        INSERT INTO ig_tracked VALUES(1);
+        SELECT dolt_commit('-Am','base');
+        INSERT INTO dolt_ignore VALUES('ig_%',1);
+        SELECT dolt_commit('-Am','ignore');
+        CREATE TABLE staged(id INT PRIMARY KEY);
+        CREATE TABLE ig_staged(id INT PRIMARY KEY);
+        INSERT INTO staged VALUES(2);
+        INSERT INTO ig_staged VALUES(3);
+        SELECT dolt_add('-f','staged','ig_staged');
+        CREATE TABLE u(id INT PRIMARY KEY);
+        CREATE TABLE ig_u(id INT PRIMARY KEY);
+        INSERT INTO u VALUES(4);
+        INSERT INTO ig_u VALUES(5);
+        UPDATE t SET v='working';
+        CREATE TEMP TABLE ig_temp(id INT);
+        INSERT INTO ig_temp VALUES(6);
+      }
+      set prefix clean-ignored-$storage.$boundary.$option
+      do_execsql_test $prefix.default {
+        SELECT dolt_clean();
+        SELECT count(*) FROM main.sqlite_master WHERE name='u';
+        SELECT count(*) FROM ig_u;
+      } {0 0 1}
+      set head [db one {SELECT dolt_hashof('HEAD')}]
+      set before [clean_ignored_tables]
+      if {$boundary eq "begin"} {db eval BEGIN}
+      if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+      do_execsql_test $prefix.dry {SELECT dolt_clean($option,'--dry-run')} 0
+      do_test $prefix.dry-kept {clean_ignored_tables} $before
+      do_execsql_test $prefix.force {SELECT dolt_clean($option)} 0
+      do_test $prefix.tables {clean_ignored_tables} \
+          {dolt_ignore ig_staged ig_tracked staged t}
+      do_execsql_test $prefix.data {
+        SELECT id,v FROM t;
+        SELECT id FROM ig_tracked;
+        SELECT id FROM staged;
+        SELECT id FROM ig_staged;
+        SELECT id FROM temp.ig_temp;
+      } {1 working 1 2 3 6}
+      do_test $prefix.head {db one {SELECT dolt_hashof('HEAD')}} $head
+      if {$boundary ne "auto"} {
+        do_test $prefix.rollback {
+          db eval ROLLBACK
+          clean_ignored_tables
+        } $before
+        do_execsql_test $prefix.reapply {SELECT dolt_clean($option)} 0
+      }
+      if {$storage eq "file"} {
+        db close
+        sqlite3 db test.db
+        do_execsql_test $prefix.reopen {
+          SELECT count(*) FROM main.sqlite_master WHERE name IN ('u','ig_u');
+          SELECT id,v FROM t;
+          SELECT id FROM staged;
+          SELECT id FROM ig_staged;
+          PRAGMA integrity_check;
+        } {0 1 working 2 3 ok}
+      }
+    }
+  }
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY);
+  SELECT dolt_commit('-Am','base');
+  INSERT INTO dolt_ignore VALUES('ig_%',1);
+  CREATE TABLE ig_u(id INT PRIMARY KEY);
+  CREATE TABLE "-x"(id INT PRIMARY KEY);
+}
+set before [clean_ignored_tables]
+do_catchsql_test clean-ignored-missing {
+  SELECT dolt_clean('-x','ig_u','missing');
+} {1 {failed to clean; table not found: 'missing'}}
+do_test clean-ignored-missing-kept {clean_ignored_tables} $before
+do_execsql_test clean-ignored-named {
+  SELECT dolt_clean('-x','ig_u');
+  SELECT count(*) FROM main.sqlite_master WHERE name='ig_u';
+  SELECT count(*) FROM main.sqlite_master WHERE name='-x';
+  SELECT dolt_clean('--','-x');
+  SELECT count(*) FROM main.sqlite_master WHERE name='-x';
+} {0 0 1 0 0}
+
+finish_test

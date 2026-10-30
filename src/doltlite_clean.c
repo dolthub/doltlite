@@ -224,8 +224,10 @@ static void doltliteCleanFunc(
   CleanNames selected;
   CleanNames untracked;
   int dryRun = 0;
+  int includeIgnored = 0;
   DoltliteCmdOption aOption[] = {
-    { "dry-run", 0, DOLTLITE_CMD_OPTION_FLAG, &dryRun, 0 }
+    { "dry-run", 0, DOLTLITE_CMD_OPTION_FLAG, &dryRun, 0 },
+    { "x", 'x', DOLTLITE_CMD_OPTION_FLAG, &includeIgnored, 0 }
   };
   int i;
   int rc;
@@ -287,7 +289,7 @@ static void doltliteCleanFunc(
   if( rc!=SQLITE_OK ) goto clean_error;
   for(i=0; i<selected.n; i++){
     if( !cleanNamesContains(&staged, selected.az[i]) ){
-      if( args.nPositional==0 ){
+      if( args.nPositional==0 && !includeIgnored ){
         int ignored = 0;
         rc = cleanCheckIgnore(db, context, selected.az[i], &ignored);
         if( rc!=SQLITE_OK ) goto clean_done;

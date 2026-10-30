@@ -139,6 +139,23 @@ CREATE TABLE u(id INTEGER PRIMARY KEY);
 SELECT dolt_clean();
 " tables
 
+for clean_args in "'-x'" "'--x'" "'-x','--dry-run'" "'-x','ig_u'"; do
+  clean_case=$(( ${clean_case:-0} + 1 ))
+  oracle "clean_include_ignored_$clean_case" "
+$SEED
+CREATE TABLE ig_tracked(id INT PRIMARY KEY);
+SELECT dolt_commit('-Am','tracked');
+INSERT INTO dolt_ignore VALUES('ig_%',1);
+SELECT dolt_commit('-Am','ignore');
+CREATE TABLE staged(id INT PRIMARY KEY);
+CREATE TABLE ig_staged(id INT PRIMARY KEY);
+SELECT dolt_add('-f','staged','ig_staged');
+CREATE TABLE ig_u(id INT PRIMARY KEY);
+CREATE TABLE u(id INT PRIMARY KEY);
+SELECT dolt_clean($clean_args);
+" tables
+done
+
 oracle "clean_named_overrides_ignore" "
 $SEED
 INSERT INTO dolt_ignore VALUES ('ig_%', 1);
