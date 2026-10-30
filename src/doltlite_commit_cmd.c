@@ -1064,6 +1064,10 @@ static void doltliteCommitFuncImpl(
 
   doltliteGetSessionStaged(db, &catalogHash);
   if( prollyHashIsEmpty(&catalogHash) ){
+    if( skipEmpty ){
+      sqlite3_result_int(context, 0);
+      return;
+    }
     /* Nothing staged: --amend reuses HEAD's tree, as --allow-empty does. */
     if( allowEmpty || amend ){
       ProllyHash headCatHash;
@@ -1075,9 +1079,6 @@ static void doltliteCommitFuncImpl(
           "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
         return;
       }
-    }else if( skipEmpty ){
-      sqlite3_result_int(context, 0);
-      return;
     }else{
       sqlite3_result_error(context,
         "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
@@ -1088,7 +1089,8 @@ static void doltliteCommitFuncImpl(
   {
     u8 isMerging = 0;
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
-    if( !isMerging && !amend && !doltliteSessionHasPendingReplayCommit(db) ){
+    if( !isMerging && (!amend || skipEmpty)
+     && !doltliteSessionHasPendingReplayCommit(db) ){
       ProllyHash headCatHash;
       int bSame = 0;
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);

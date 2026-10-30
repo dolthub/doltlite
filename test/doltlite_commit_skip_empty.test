@@ -1,0 +1,108 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc commit_skip_empty_state {} {
+  list [db one {SELECT active_branch()}] \
+       [db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] \
+       [db eval {SELECT commit_hash,message,email,date FROM dolt_log ORDER BY commit_hash}] \
+       [db eval {SELECT id,v FROM t ORDER BY id}] \
+       [db eval {SELECT id,v FROM dolt_at_t('STAGED') ORDER BY id}] \
+       [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+
+foreach storage {file memory} {
+  foreach boundary {auto begin nested savepoint} {
+    foreach flags {none modified all} {
+      foreach state {clean unstaged staged-same reverted staged-data staged-schema} {
+        set prefix commit-skip-empty-$storage.$boundary.$flags.$state
+        reset_db
+        if {$storage eq "memory"} {
+          db close
+          sqlite3 db :memory:
+        }
+        db eval {
+          CREATE TABLE t(id INT PRIMARY KEY,v INT);
+          INSERT INTO t VALUES(1,10);
+          SELECT dolt_commit('-Am','init');
+          INSERT INTO t VALUES(2,20);
+          SELECT dolt_commit('-am','c1');
+          SELECT dolt_branch('peer');
+        }
+        switch $boundary {
+          begin {db eval BEGIN}
+          nested {db eval {BEGIN; SAVEPOINT caller}}
+          savepoint {db eval {SAVEPOINT caller}}
+        }
+        switch $state {
+          unstaged {db eval {UPDATE t SET v=11 WHERE id=1}}
+          staged-same {db eval {SELECT dolt_add('t')}}
+          reverted {
+            db eval {
+              UPDATE t SET v=11 WHERE id=1;
+              SELECT dolt_add('t');
+              UPDATE t SET v=10 WHERE id=1;
+              SELECT dolt_add('t');
+            }
+          }
+          staged-data {
+            db eval {UPDATE t SET v=11 WHERE id=1; SELECT dolt_add('t')}
+          }
+          staged-schema {
+            db eval {ALTER TABLE t ADD COLUMN extra INT; SELECT dolt_add('t')}
+          }
+        }
+        set before [commit_skip_empty_state]
+        set head [db one {SELECT dolt_hashof('HEAD')}]
+        set peer [db one {SELECT hash FROM dolt_branches WHERE name='peer'}]
+        set call {SELECT dolt_commit('--amend','--skip-empty','-m','rewritten')}
+        if {$flags eq "modified"} {
+          set call {SELECT dolt_commit('-a','--amend','--skip-empty','-m','rewritten')}
+        } elseif {$flags eq "all"} {
+          set call {SELECT dolt_commit('-A','--amend','--skip-empty','-m','rewritten')}
+        }
+        set skip [expr {$state in {clean staged-same reverted} ||
+                        ($state eq "unstaged" && $flags eq "none")}]
+        do_test $prefix.result {
+          set result [db one $call]
+          if {$skip} {expr {$result eq "0"}} else {regexp {^[0-9a-f]{40}$} $result}
+        } 1
+        if {$skip} {
+          do_test $prefix.unchanged {commit_skip_empty_state} $before
+        } else {
+          do_test $prefix.amended {
+            list [expr {[db one {SELECT dolt_hashof('HEAD')}] ne $head}] \
+                 [db one {SELECT message FROM dolt_log LIMIT 1}] \
+                 [db one {SELECT hash FROM dolt_branches WHERE name='peer'}] \
+                 [db eval {SELECT id,v FROM dolt_at_t('HEAD') ORDER BY id}] \
+                 [db eval {SELECT table_name,staged,status FROM dolt_status}]
+          } [list 1 rewritten $peer \
+                 [expr {$state eq "staged-schema" ? {1 10 2 20} : {1 11 2 20}}] {}]
+        }
+        if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+        set after [commit_skip_empty_state]
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+          do_test $prefix.reopen {commit_skip_empty_state} $after
+        }
+      }
+    }
+  }
+}
+
+foreach flags {none modified all} {
+  reset_db
+  set before [db eval {SELECT commit_hash,message FROM dolt_log}]
+  set call {SELECT dolt_commit('--amend','--skip-empty','-m','rewritten')}
+  if {$flags eq "modified"} {
+    set call {SELECT dolt_commit('-a','--amend','--skip-empty','-m','rewritten')}
+  } elseif {$flags eq "all"} {
+    set call {SELECT dolt_commit('-A','--amend','--skip-empty','-m','rewritten')}
+  }
+  do_test commit-skip-empty-root.$flags.result {db one $call} 0
+  do_test commit-skip-empty-root.$flags.unchanged {
+    db eval {SELECT commit_hash,message FROM dolt_log}
+  } $before
+}
+
+finish_test
