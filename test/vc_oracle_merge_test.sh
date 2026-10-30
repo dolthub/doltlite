@@ -212,6 +212,46 @@ $ff_call"
   done
 done
 
+for graph in ff diverged; do
+  for mode in default noff squash ffonly; do
+    for flags in "'--commit'" "'--no-edit'" "'--commit','--no-edit'"; do
+      for message in default explicit; do
+        options_setup="CREATE TABLE t(id INT PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','source');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-am','source');
+SELECT dolt_checkout('main');"
+        if [ "$graph" = diverged ]; then
+          options_setup="$options_setup
+INSERT INTO t VALUES(3); SELECT dolt_commit('-am','main');"
+        fi
+        options_args="$flags"
+        if [ "$mode" = ffonly ]; then options_args="$options_args,'--ff-only'"; fi
+        if [ "$mode" = noff ]; then options_args="$options_args,'--no-ff'"; fi
+        if [ "$mode" = squash ]; then options_args="$options_args,'--squash'"; fi
+        if [ "$message" = explicit ]; then options_args="$options_args,'-m','chosen'"; fi
+        options_case=$(( ${options_case:-0} + 1 ))
+        if [ "$mode" = ffonly ] && [ "$graph" = diverged ]; then
+          vc_oracle_error "merge_options_$options_case" "$options_setup
+SELECT dolt_merge($options_args,'source');"
+        else
+          oracle "merge_options_$options_case" "$options_setup
+SELECT dolt_merge($options_args,'source');"
+        fi
+      done
+    done
+  done
+done
+
+vc_oracle_error "commit_no_commit_rejected" "
+CREATE TABLE t(id INT PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('source');
+SELECT dolt_merge('--commit','--no-commit','source');
+"
+
 echo "=== Version Control Oracle Tests: dolt_merge ==="
 echo ""
 

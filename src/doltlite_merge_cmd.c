@@ -1918,12 +1918,16 @@ static void doltliteMergeFunc(
   int noFastForward = 0;
   int fastForwardOnly = 0;
   int noCommit = 0;
+  int commit = 0;
+  int noEdit = 0;
   int squash = 0;
   DoltliteCmdOption aOption[] = {
     { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
     { "no-ff", 0, DOLTLITE_CMD_OPTION_FLAG, &noFastForward, 0 },
     { "ff-only", 0, DOLTLITE_CMD_OPTION_FLAG, &fastForwardOnly, 0 },
     { "no-commit", 0, DOLTLITE_CMD_OPTION_FLAG, &noCommit, 0 },
+    { "commit", 0, DOLTLITE_CMD_OPTION_FLAG, &commit, 0 },
+    { "no-edit", 0, DOLTLITE_CMD_OPTION_FLAG, &noEdit, 0 },
     { "squash", 0, DOLTLITE_CMD_OPTION_FLAG, &squash, 0 },
     { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &zMessage },
     { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &zAuthor }
@@ -1955,7 +1959,7 @@ static void doltliteMergeFunc(
 
   if( isAbort ){
     if( zBranch || zMessage || zAuthor || noFastForward || fastForwardOnly
-     || noCommit || squash ){
+     || noCommit || commit || noEdit || squash ){
       sqlite3_result_error(context,
         "--abort does not take other arguments", -1);
       doltliteCmdArgsClear(&args);
@@ -1975,6 +1979,13 @@ static void doltliteMergeFunc(
     }
     sqlite3_result_int(context, 0);
     doltliteCmdArgsClear(&args);
+    return;
+  }
+
+  if( commit && noCommit ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context,
+      "cannot define both 'commit' and 'no-commit' flags at the same time", -1);
     return;
   }
 
