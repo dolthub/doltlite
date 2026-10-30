@@ -1754,7 +1754,7 @@ static void doltPullIntegrate(
         return;
       }
       rc = doltliteMergeRef(db, ctx, zTrackingHash, zMergeMsg, 0, 0,
-                            bNoFf, 0, bSquash);
+                            bNoFf, bFfOnly, 0, bSquash);
       sqlite3_free(zMergeMsg);
       if( rc!=SQLITE_OK ){
         return;

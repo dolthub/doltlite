@@ -1654,6 +1654,7 @@ int doltliteMergeRef(
   const char *zAuthorName,
   const char *zAuthorEmail,
   int noFastForward,
+  int fastForwardOnly,
   int noCommit,
   int squash
 );

@@ -214,6 +214,8 @@ static const Op aOp[] = {
   { "checkout_table", 0, "SELECT dolt_checkout('u')",
     "peer_write_kept_checkout_table" },
   { "merge_ff", 0, "SELECT dolt_merge('ff')", "peer_write_kept_merge_ff" },
+  { "merge_ff_only", 0, "SELECT dolt_merge('--ff-only','ff')",
+    "peer_write_kept_merge_ff_only" },
   { "merge", 0, "SELECT dolt_merge('f')", "peer_write_kept_merge" },
   { "merge_squash", 0, "SELECT dolt_merge('--squash','f')",
     "peer_write_kept_merge_squash" },

@@ -185,6 +185,33 @@ oracle_reopen_state() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+for graph in equal ahead ff diverged; do
+  for state in clean dirty staged; do
+    ff_setup="CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('source');"
+    if [ "$graph" = ff ] || [ "$graph" = diverged ]; then
+      ff_setup="$ff_setup
+SELECT dolt_checkout('source'); INSERT INTO t VALUES(2,'source');
+SELECT dolt_commit('-am','source'); SELECT dolt_checkout('main');"
+    fi
+    if [ "$graph" = ahead ] || [ "$graph" = diverged ]; then
+      ff_setup="$ff_setup INSERT INTO t VALUES(3,'main'); SELECT dolt_commit('-am','main');"
+    fi
+    if [ "$state" != clean ]; then ff_setup="$ff_setup UPDATE t SET v='dirty' WHERE id=1;"; fi
+    if [ "$state" = staged ]; then ff_setup="$ff_setup SELECT dolt_add('t');"; fi
+    ff_call="SELECT dolt_merge('--ff-only','source');"
+    if [ "$graph" = equal ] || { [ "$state" = clean ] && [ "$graph" != diverged ]; }; then
+      oracle "ff_only_${graph}_${state}" "$ff_setup
+$ff_call"
+    else
+      vc_oracle_error "ff_only_${graph}_${state}" "$ff_setup
+$ff_call"
+    fi
+  done
+done
+
 echo "=== Version Control Oracle Tests: dolt_merge ==="
 echo ""
 

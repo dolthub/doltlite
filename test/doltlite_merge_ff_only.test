@@ -1,0 +1,96 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc ff_only_state {} {
+  list [db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] \
+       [db eval {SELECT id,v FROM t ORDER BY id}] \
+       [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}] \
+       [db eval {SELECT name FROM sqlite_master WHERE type='table' ORDER BY name}]
+}
+
+foreach storage {file memory} {
+  foreach graph {equal ahead ff diverged same_tree} {
+    foreach state {clean dirty staged ignored untracked} {
+      foreach boundary {auto begin savepoint} {
+        reset_db
+        if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+        db eval {
+          CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+          INSERT INTO t VALUES(1,'base');
+          INSERT INTO dolt_ignore VALUES('ig_%',1);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('source');
+        }
+        if {$graph in {ff diverged same_tree}} {
+          db eval {SELECT dolt_checkout('source')}
+          if {$graph ne "same_tree"} {db eval {INSERT INTO t VALUES(2,'source')}}
+          db eval {SELECT dolt_commit('-am','source','--allow-empty');
+                   SELECT dolt_checkout('main')}
+        }
+        if {$graph in {ahead diverged same_tree}} {
+          if {$graph ne "same_tree"} {db eval {INSERT INTO t VALUES(3,'main')}}
+          db eval {SELECT dolt_commit('-am','main','--allow-empty')}
+        }
+        switch $state {
+          dirty {db eval {UPDATE t SET v='dirty' WHERE id=1}}
+          staged {db eval {UPDATE t SET v='staged' WHERE id=1; SELECT dolt_add('t')}}
+          ignored {db eval {CREATE TABLE ig_local(id INT PRIMARY KEY); INSERT INTO ig_local VALUES(99)}}
+          untracked {db eval {CREATE TABLE local_table(id INT PRIMARY KEY); INSERT INTO local_table VALUES(99)}}
+        }
+        if {$boundary eq "begin"} {db eval BEGIN}
+        if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+        set prefix ff-only-$storage.$graph.$state.$boundary
+        set before [ff_only_state]
+        set target [db one {SELECT dolt_hashof('source')}]
+        set call {SELECT dolt_merge('--ff-only','source')}
+        if {$boundary eq "begin"} {set call {SELECT dolt_merge('source','--ff-only')}}
+        if {$boundary eq "savepoint"} {set call {SELECT dolt_merge('--no-commit','--ff-only','source')}}
+        set reject [expr {$graph in {diverged same_tree} ||
+                         ($graph ne "equal" && $state in {dirty staged})}]
+        do_test $prefix.result {
+          set result [catchsql $call]
+          lindex $result 0
+        } $reject
+        if {$reject || $graph in {equal ahead}} {
+          do_test $prefix.unchanged {ff_only_state} $before
+        } else {
+          do_execsql_test $prefix.rows {SELECT id,v FROM t ORDER BY id} {1 base 2 source}
+          do_test $prefix.head {db one {SELECT dolt_hashof('HEAD')}} $target
+          if {$state in {ignored untracked}} {
+            set table [expr {$state eq "ignored" ? "ig_local" : "local_table"}]
+            do_execsql_test $prefix.local "SELECT id FROM $table" 99
+          }
+        }
+        if {$graph in {diverged same_tree} && $state eq "clean"} {
+          do_test $prefix.message {string match {*Not possible to fast-forward*} [lindex $result 1]} 1
+        }
+        if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+        set after [ff_only_state]
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+          do_test $prefix.reopen {ff_only_state} $after
+        }
+      }
+    }
+  }
+}
+
+foreach args {{'--ff-only','--no-ff','source'}
+              {'--ff-only','--squash','source'}
+              {'--abort','--ff-only'}} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('source');
+    INSERT INTO t VALUES(2,'dirty');
+  }
+  set before [ff_only_state]
+  do_test ff-only-invalid.$args {
+    list [lindex [catchsql "SELECT dolt_merge($args)"] 0] [ff_only_state]
+  } [list 1 $before]
+}
+
+finish_test
