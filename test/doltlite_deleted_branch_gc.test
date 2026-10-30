@@ -341,4 +341,34 @@ ok}
     }
   }
 }
+foreach boundary {autocommit begin} {
+  set prefix deleted-branch-read-message-$boundary
+  reset_db
+  db eval {
+    CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','feat');
+    WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM r WHERE i<20000)
+      INSERT INTO t SELECT i, hex(randomblob(40)) FROM r;
+    SELECT dolt_commit('-am','rows on feat');
+  }
+  db eval {SELECT b FROM t WHERE a=1}
+  exec $engine -bail [file normalize test.db] {
+    SELECT dolt_branch('-D','feat'); SELECT dolt_gc();
+  }
+  db eval {PRAGMA shrink_memory}
+  if {$boundary eq "begin"} {db eval BEGIN}
+  for {set i 1} {$i<=2} {incr i} {
+    do_test $prefix.scan.$i {
+      list [catch {db eval {SELECT count(*), max(length(b)) FROM t}} msg] \
+        $msg [expr {[db errorcode]&255}]
+    } {1 {cannot read: branch 'feat' no longer exists} 5}
+  }
+  if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+  do_execsql_test $prefix.checkout {
+    SELECT dolt_checkout('main');
+    SELECT count(*) FROM t;
+  } {0 0}
+}
+
 finish_test

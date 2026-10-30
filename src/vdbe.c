@@ -10351,6 +10351,13 @@ abort_due_to_error:
         sqlite3VdbeError(p, "cannot write: branch '%s' no longer exists",
                          zMissing);
       }
+    }else if( rc==SQLITE_BUSY_SNAPSHOT && db->nDb>0
+           && (zMissing = doltliteBtreeMissingReadBranch(db->aDb[0].pBt))!=0 ){
+      sqlite3_free(zChunkSourceErr);
+      if( p->zErrMsg==0 || (zBusy && sqlite3_stricmp(p->zErrMsg, zBusy)==0) ){
+        sqlite3VdbeError(p, "cannot read: branch '%s' no longer exists",
+                         zMissing);
+      }
     }else if( zChunkSourceErr ){
       sqlite3VdbeError(p, "%s", zChunkSourceErr);
       sqlite3_free(zChunkSourceErr);

@@ -640,8 +640,10 @@ int btreeReadResult(Btree *p, int rc){
   cs = &p->pBt->store;
   if( cs->corruptMidStream || cs->corruptHeader ) return rc;
   if( cs->lockDepth>0 ){
-    return chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0)
-        ==SQLITE_NOTFOUND ? SQLITE_BUSY_SNAPSHOT : rc;
+    found = chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0)
+        !=SQLITE_NOTFOUND;
+    if( !found ) p->bReadBranchMissing = 1;
+    return found ? rc : SQLITE_BUSY_SNAPSHOT;
   }
   readRc = chunkStoreLockAndRefreshChanged(cs, &changed);
   if( readRc!=SQLITE_OK ) return readRc;
@@ -654,6 +656,7 @@ int btreeReadResult(Btree *p, int rc){
   }
   chunkStoreUnlock(cs);
   if( readRc!=SQLITE_OK ) return readRc;
+  if( !found ) p->bReadBranchMissing = 1;
   return !found ? SQLITE_BUSY_SNAPSHOT : rc;
 }
 

@@ -672,6 +672,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   int rc;
 
   p->bBeginTransBranchMissing = 0;
+  p->bReadBranchMissing = 0;
   if( pSchemaVersion ){
     *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
@@ -919,6 +920,11 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
 
 const char *doltliteBtreeMissingWriteBranch(Btree *p){
   if( !p || !p->bBeginTransBranchMissing ) return 0;
+  return p->zBranch ? p->zBranch : "main";
+}
+
+const char *doltliteBtreeMissingReadBranch(Btree *p){
+  if( !p || !p->bReadBranchMissing ) return 0;
   return p->zBranch ? p->zBranch : "main";
 }
 
