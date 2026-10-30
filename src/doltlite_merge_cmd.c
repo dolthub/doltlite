@@ -1736,6 +1736,7 @@ int doltliteMergeRef(
     rc = doltliteGetSessionConflictsCatalog(db, &conflictsHash);
     if( rc!=SQLITE_OK ) goto merge_fail;
     rc = doltliteSetSessionMergeState(db, isMerging, &theirHead, &conflictsHash);
+    if( rc==SQLITE_OK ) rc = doltliteSetSessionConflictsSourceCommit(db, &theirHead);
     /* Spec cache only sharpens dolt_merge_status.source; ignore failure. */
     (void)doltliteSetSessionMergeSourceSpec(db, zBranch, &theirHead);
     if( rc!=SQLITE_OK ) goto merge_fail;
