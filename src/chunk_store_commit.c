@@ -141,7 +141,7 @@ static int csRestoreCommittedRefsStateInner(ChunkStore *cs){
 
 static int csRestoreCommittedRefsState(ChunkStore *cs){
   int rc;
-  cs->bWsReplacing = 0;
+  chunkStoreClearWorkingSetReplacing(cs);
   cs->bPublishDeferred = 0;
   rc = csRestoreCommittedRefsStateInner(cs);
   chunkStoreReadoptWorkingSetBasis(cs);
@@ -167,7 +167,7 @@ static int csCommitToMemory(ChunkStore *cs){
     sqlite3EndBenignMalloc();
   }
   csMarkRefsCommitted(cs);
-  cs->bWsReplacing = 0;
+  chunkStoreClearWorkingSetReplacing(cs);
   cs->bPublishDeferred = 0;
   return SQLITE_OK;
 }
@@ -651,7 +651,7 @@ static int csCommitToFile(
 
   csCommitPublishStaging(cs, useRecent, aCommittedPending, aMerged, nMerged);
   chunkStoreNoteSelfPublishedWorkingSet(cs);
-  cs->bWsReplacing = 0;
+  chunkStoreClearWorkingSetReplacing(cs);
   cs->bPublishDeferred = 0;
   if( aCommittedPending!=aSmallCommittedPending ){
     sqlite3_free(aCommittedPending);
@@ -714,7 +714,7 @@ static int csDeferCommit(ChunkStore *cs){
   int rc = csCheckWorkingSetReplace(cs);
   if( rc!=SQLITE_OK ) return rc;
   chunkStoreNoteSelfPublishedWorkingSet(cs);
-  cs->bWsReplacing = 0;
+  chunkStoreClearWorkingSetReplacing(cs);
   cs->bPublishDeferred = 1;
   cs->deferredRefsHash = cs->refs.refsHash;
   return SQLITE_OK;

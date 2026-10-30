@@ -227,6 +227,33 @@ struct CsWsBranch {
   u8 bOom;
 };
 
+/* Working-set tracking for one branch a connection works on. The commit
+** check covers every session linked to the store. */
+typedef struct CsWsSession CsWsSession;
+struct CsWsSession {
+  CsWsSession *pNext;
+  /* Working-set ref this session last adopted or wrote for its branch.
+  ** Refreshes leave it alone, so it differs from refs once a peer writes. */
+  u8 bWsBasis;
+  CsWsBranch wsBasisBranch;
+  ProllyHash wsBasis;
+  /* The working set this session last wrote, and the same once a commit
+  ** made it durable, so a command can tell its own write from a peer's.
+  ** Adopting a peer's working set never sets these. */
+  u8 bWsSelfWritten;
+  u8 bWsSelfPublished;
+  CsWsBranch wsSelfBranch;
+  CsWsBranch wsSelfPublishedBranch;
+  ProllyHash wsSelfWritten;
+  ProllyHash wsSelfPublished;
+  /* The branch's working set as it stood, and the basis it was computed
+  ** from, when this batch first replaced it. Publishing over a working set
+  ** the session never read would erase a peer's write. */
+  u8 bWsReplacing;
+  ProllyHash wsReplaced;
+  ProllyHash wsReplacedBasis;
+};
+
 struct ChunkStore {
   ChunkFile file;
   RefsTable refs;
@@ -242,26 +269,9 @@ struct ChunkStore {
   u8 bReloadAfterRefsConflict;
   u8 openPending;
   u8 noReadLock;
-  /* Working-set ref this connection last adopted or wrote for one branch.
-  ** Refreshes leave it alone, so it differs from refs once a peer writes. */
-  u8 bWsBasis;
-  CsWsBranch wsBasisBranch;
-  ProllyHash wsBasis;
-  /* The working set this connection last wrote, and the same once a commit
-  ** made it durable, so a command can tell its own write from a peer's.
-  ** Adopting a peer's working set never sets these. */
-  u8 bWsSelfWritten;
-  u8 bWsSelfPublished;
-  CsWsBranch wsSelfBranch;
-  CsWsBranch wsSelfPublishedBranch;
-  ProllyHash wsSelfWritten;
-  ProllyHash wsSelfPublished;
-  /* The session branch's working set as it stood, and the basis it was
-  ** computed from, when this batch first replaced it. Publishing over a
-  ** working set the session never read would erase a peer's write. */
-  u8 bWsReplacing;
-  ProllyHash wsReplaced;
-  ProllyHash wsReplacedBasis;
+  /* wsMain heads the session list; pWs, when set, is the active one. */
+  CsWsSession wsMain;
+  CsWsSession *pWs;
   /* A VC command's write transaction holds the lock. Its publishes stage
   ** until the command ends and writes them as one root; until then the
   ** staged refs are what a read of the published refs must see. */
@@ -416,6 +426,10 @@ void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
 void chunkStorePeekWorkingSetBasis(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pHash);
 void chunkStoreNoteSelfPublishedWorkingSet(ChunkStore *cs);
+void chunkStoreClearWorkingSetReplacing(ChunkStore *cs);
+void chunkStoreAttachWsSession(ChunkStore *cs, CsWsSession *pSession);
+void chunkStoreDetachWsSession(ChunkStore *cs, CsWsSession *pSession);
+CsWsSession *chunkStoreUseWsSession(ChunkStore *cs, CsWsSession *pSession);
 int chunkStoreHasPeers(ChunkStore *cs);
 int chunkStoreWorkingSetSelfPublished(
   ChunkStore *cs,

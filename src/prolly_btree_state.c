@@ -521,11 +521,11 @@ int btreeReloadBranchWorkingStateInto(
   pBt = p->pBt;
   zBr = p->zBranch ? p->zBranch : "main";
 
-  rc = chunkStoreEnsureRefsFresh(&pBt->store);
+  rc = chunkStoreEnsureRefsFresh(pBt->pStore);
   if( rc!=SQLITE_OK ) return rc;
-  rc = btreeLoadBranchState(&pBt->store, zBr, 0, &state);
+  rc = btreeLoadBranchState(pBt->pStore, zBr, 0, &state);
   if( rc!=SQLITE_OK ) return rc;
-  chunkStoreAdoptWorkingSetBasis(&pBt->store, zBr);
+  chunkStoreAdoptWorkingSetBasis(pBt->pStore, zBr);
 
   if( bLoadCatalog
    && !prollyHashIsEmpty(&state.catalog)
@@ -535,7 +535,7 @@ int btreeReloadBranchWorkingStateInto(
        || prollyHashCompare(&state.catalog, &p->committedCatalogHash)!=0) ){
     u8 *catData = 0;
     int nCatData = 0;
-    rc = chunkStoreGet(&pBt->store, &state.catalog, &catData, &nCatData);
+    rc = chunkStoreGet(pBt->pStore, &state.catalog, &catData, &nCatData);
     if( rc==SQLITE_OK && catData ){
       rc = deserializeCatalog(p, catData, nCatData);
       sqlite3_free(catData);
@@ -637,7 +637,7 @@ int btreeReadResult(Btree *p, int rc){
   if( rc!=SQLITE_NOTFOUND || !p || p->pOrigBtree || !p->pBt
    || p->isDetached || p->inTrans==TRANS_WRITE
    || prollyHashIsEmpty(&p->headCommit) ) return rc;
-  cs = &p->pBt->store;
+  cs = p->pBt->pStore;
   if( cs->corruptMidStream || cs->corruptHeader ) return rc;
   if( cs->lockDepth>0 ){
     found = chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0)
@@ -694,7 +694,7 @@ int doltliteBtreeHydrateDeferred(Btree *p){
     return SQLITE_BUSY;
   }
 
-  cs = &p->pBt->store;
+  cs = p->pBt->pStore;
   do {
     rc = chunkStoreEnsureRefsFresh(cs);
   }while( rc==SQLITE_BUSY && cs->openPending
@@ -783,27 +783,27 @@ int btreeRefreshFromDisk(Btree *p){
 
   assert( p!=0 && p->pBt!=0 );
   pBt = p->pBt;
-  snapshotPinned = pBt->store.snapshotPinned;
+  snapshotPinned = pBt->pStore->snapshotPinned;
   bAutocommitBoundary = p->inTrans==TRANS_NONE
     && p->db && p->db->autoCommit && !p->db->pSavepoint;
 
   memset(&oldTip, 0, sizeof(oldTip));
   memset(&oldWs, 0, sizeof(oldWs));
-  oldReloadGen = pBt->store.reloadGen;
+  oldReloadGen = pBt->pStore->reloadGen;
   if( !p->isDetached ){
     const char *zBr = p->zBranch ? p->zBranch : "main";
-    if( chunkStoreFindBranch(&pBt->store, zBr, &oldTip)==SQLITE_OK ){
+    if( chunkStoreFindBranch(pBt->pStore, zBr, &oldTip)==SQLITE_OK ){
       hadOldTip = 1;
-      (void)chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &oldWs);
+      (void)chunkStoreGetBranchWorkingSet(pBt->pStore, zBr, &oldWs);
     }
   }
 
   if( bAutocommitBoundary ){
-    pBt->store.snapshotPinned = 0;
+    pBt->pStore->snapshotPinned = 0;
   }
-  rc = chunkStoreRefreshIfChangedOrBusy(&pBt->store, &bChanged);
+  rc = chunkStoreRefreshIfChangedOrBusy(pBt->pStore, &bChanged);
   if( bAutocommitBoundary ){
-    pBt->store.snapshotPinned = snapshotPinned;
+    pBt->pStore->snapshotPinned = snapshotPinned;
   }
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
@@ -815,15 +815,15 @@ int btreeRefreshFromDisk(Btree *p){
   ** wholesale) and while the view really is loaded — a failed statement
   ** drops the catalog without moving the tip, and skipping then would
   ** latch the empty catalog. */
-  if( hadOldTip && pBt->store.reloadGen==oldReloadGen
+  if( hadOldTip && pBt->pStore->reloadGen==oldReloadGen
    && !p->bCatalogDropped ){
     const char *zBr = p->zBranch ? p->zBranch : "main";
     ProllyHash newTip, newWs;
     memset(&newTip, 0, sizeof(newTip));
     memset(&newWs, 0, sizeof(newWs));
-    if( chunkStoreFindBranch(&pBt->store, zBr, &newTip)==SQLITE_OK
+    if( chunkStoreFindBranch(pBt->pStore, zBr, &newTip)==SQLITE_OK
      && prollyHashCompare(&newTip, &oldTip)==0 ){
-      (void)chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &newWs);
+      (void)chunkStoreGetBranchWorkingSet(pBt->pStore, zBr, &newWs);
       if( prollyHashCompare(&newWs, &oldWs)==0 ){
         return SQLITE_OK;
       }
@@ -942,7 +942,7 @@ void doltliteInstallPreparedSessionBranch(
     sqlite3_free(p->zBranch);
   }
   p->zBranch = zPrepared;
-  chunkStoreFollowWorkingSetBasis(&p->pBt->store, zPrepared);
+  chunkStoreFollowWorkingSetBasis(p->pBt->pStore, zPrepared);
 }
 
 int doltliteSetSessionBranch(sqlite3 *db, const char *zBranch){
@@ -1391,14 +1391,14 @@ int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
     /* Idle: refresh so the in-memory read sees the durable working set.
     ** The graph lock is exclusive, so a read-only connection taking it here
     ** would stall writers to do a read it never needs to serialize. */
-    pStore = &p->pBt->store;
+    pStore = p->pBt->pStore;
     if( !pStore->readOnly && chunkStoreLockAndRefresh(pStore)==SQLITE_OK ){
       (void)chunkStoreForceRefresh(pStore);
       chunkStoreUnlock(pStore);
     }
   }
   zBr = p->zBranch ? p->zBranch : "main";
-  rc = btreeLoadWorkingSetBlob(&p->pBt->store, zBr,
+  rc = btreeLoadWorkingSetBlob(p->pBt->pStore, zBr,
                                0, 0, 0, &isMerging,
                                0, pHash, 0, 0, 0, 0, 0, 0);
   if( rc==SQLITE_EMPTY ) rc = SQLITE_OK;
@@ -1514,7 +1514,7 @@ int doltliteSeedSessionHashes(
   for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
     Btree *pBt = db->aDb[i].pBt;
     if( !pBt || pBt->pOps!=&prollyBtreeOps || !pBt->pBt ) continue;
-    if( &pBt->pBt->store!=cs ) continue;
+    if( pBt->pBt->pStore!=cs ) continue;
     /* Detached heads are not reachable from any ref. */
     rc = xPush(pCtx, &pBt->headCommit);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.stagedCatalog);

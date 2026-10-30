@@ -3230,7 +3230,7 @@ int doltliteClone(
     /* A clone replaces the empty target outright; the working sets it
     ** installs are the ones the session goes on to overwrite. */
     if( rc==SQLITE_OK ){
-      pLocal->bWsReplacing = 0;
+      chunkStoreClearWorkingSetReplacing(pLocal);
       chunkStoreReadoptWorkingSetBasis(pLocal);
     }
   }

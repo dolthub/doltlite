@@ -1617,6 +1617,13 @@ static void doltCheckoutParsedFunc(
     }
   }
 
+  if( doltliteStoreSiblingBranch(db, zBranch) ){
+    char *zErr = sqlite3_mprintf(
+        "branch '%s' is attached in this connection", zBranch);
+    doltliteVcResultError(ctx, db, zErr ? zErr : "branch is attached");
+    sqlite3_free(zErr);
+    return;
+  }
   doltliteGetSessionHead(db, &m.oldCommitHash);
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ){

@@ -822,14 +822,22 @@ static int wsIs(ChunkStore *cs, const char *name, const ProllyHash *want){
   return memcmp(got.data, want->data, PROLLY_HASH_SIZE)==0;
 }
 
-static int peerSetWorkingSet(const char *path, const ProllyHash *pWs){
+static int peerSetBranchWorkingSet(
+  const char *path,
+  const char *zBranch,
+  const ProllyHash *pWs
+){
   ChunkStore peer;
   int rc;
   if( openStore(&peer, path, 0)!=SQLITE_OK ) return 0;
-  rc = chunkStoreSetBranchWorkingSet(&peer, "main", pWs);
+  rc = chunkStoreSetBranchWorkingSet(&peer, zBranch, pWs);
   if( rc==SQLITE_OK ) rc = commitRefs(&peer);
   chunkStoreClose(&peer);
   return rc==SQLITE_OK;
+}
+
+static int peerSetWorkingSet(const char *path, const ProllyHash *pWs){
+  return peerSetBranchWorkingSet(path, "main", pWs);
 }
 
 /* A refresh adopts a peer's working set into the refs without the session
@@ -874,6 +882,79 @@ static void storeWorkingSetReplaceUnread(void){
   wipe(path);
 }
 
+/* A store can carry a working-set session for each branch one connection
+** works on. Every session's basis is checked at publish: replacing a
+** branch's working set that a peer moved after that session read it is
+** refused, whichever session is active, and lands once the session reads
+** the peer's working set. A branch no session tracks is not checked. */
+static void storeWorkingSetSecondSession(void){
+  char path[256];
+  ProllyHash tip, w0, wPeer, wPeer2, wNext, wMain;
+  ChunkStore local, fresh;
+  CsWsSession feat;
+  int changed = 0;
+  dbPath(path, (int)sizeof(path), "cswssecond");
+  hashOf(&tip, "feat-tip");
+  hashOf(&w0, "feat-base");
+  hashOf(&wPeer, "feat-peer");
+  hashOf(&wPeer2, "feat-peer-2");
+  hashOf(&wNext, "feat-next");
+  hashOf(&wMain, "main-next");
+  check("cs_ws_second_seed", seedBase(&local, path));
+  check("cs_ws_second_branch",
+        chunkStoreAddBranch(&local, "feat", &tip)==SQLITE_OK
+        && chunkStoreSetBranchWorkingSet(&local, "feat", &w0)==SQLITE_OK
+        && commitRefs(&local)==SQLITE_OK);
+  chunkStoreAdoptWorkingSetBasis(&local, "main");
+  chunkStoreAttachWsSession(&local, &feat);
+  chunkStoreUseWsSession(&local, &feat);
+  chunkStoreAdoptWorkingSetBasis(&local, "feat");
+  chunkStoreUseWsSession(&local, 0);
+
+  check("cs_ws_second_peer", peerSetBranchWorkingSet(path, "feat", &wPeer));
+  check("cs_ws_second_refresh",
+        chunkStoreRefreshIfChanged(&local, &changed)==SQLITE_OK && changed);
+  check("cs_ws_second_refused_from_main",
+        chunkStoreSetBranchWorkingSet(&local, "feat", &wNext)==SQLITE_OK
+        && commitRefs(&local)==SQLITE_BUSY_SNAPSHOT);
+  check("cs_ws_second_open", openStore(&fresh, path, 0)==SQLITE_OK);
+  check("cs_ws_second_peer_kept", wsIs(&fresh, "feat", &wPeer));
+  chunkStoreClose(&fresh);
+
+  check("cs_ws_second_peer_again", peerSetBranchWorkingSet(path, "feat", &wPeer2));
+  check("cs_ws_second_refresh_again",
+        chunkStoreRefreshIfChanged(&local, &changed)==SQLITE_OK && changed);
+  chunkStoreUseWsSession(&local, &feat);
+  check("cs_ws_second_refused_from_feat",
+        chunkStoreSetBranchWorkingSet(&local, "feat", &wNext)==SQLITE_OK
+        && commitRefs(&local)==SQLITE_BUSY_SNAPSHOT);
+  check("cs_ws_second_open_again", openStore(&fresh, path, 0)==SQLITE_OK);
+  check("cs_ws_second_peer_kept_again", wsIs(&fresh, "feat", &wPeer2));
+  chunkStoreClose(&fresh);
+
+  chunkStoreAdoptWorkingSetBasis(&local, "feat");
+  chunkStoreUseWsSession(&local, 0);
+  check("cs_ws_second_both_branches",
+        chunkStoreSetBranchWorkingSet(&local, "main", &wMain)==SQLITE_OK
+        && chunkStoreSetBranchWorkingSet(&local, "feat", &wNext)==SQLITE_OK
+        && commitRefs(&local)==SQLITE_OK);
+  chunkStoreDetachWsSession(&local, &feat);
+
+  check("cs_ws_second_untracked_peer",
+        peerSetBranchWorkingSet(path, "feat", &wPeer));
+  check("cs_ws_second_untracked_refresh",
+        chunkStoreRefreshIfChanged(&local, &changed)==SQLITE_OK && changed);
+  check("cs_ws_second_untracked_lands",
+        chunkStoreSetBranchWorkingSet(&local, "feat", &w0)==SQLITE_OK
+        && commitRefs(&local)==SQLITE_OK);
+  chunkStoreClose(&local);
+  check("cs_ws_second_reopen", openStore(&fresh, path, 0)==SQLITE_OK);
+  check("cs_ws_second_main_landed", wsIs(&fresh, "main", &wMain));
+  check("cs_ws_second_feat_landed", wsIs(&fresh, "feat", &w0));
+  chunkStoreClose(&fresh);
+  wipe(path);
+}
+
 int main(void){
   snprintf(gPid, sizeof(gPid), "%ld", (long)getpid());
   scenarioTagAdd();
@@ -896,6 +977,7 @@ int main(void){
   storeTrackingReplace();
   storeTrackingDelete();
   storeWorkingSetReplaceUnread();
+  storeWorkingSetSecondSession();
   printf("Results: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass + nFail);
   return nFail > 0 ? 1 : 0;

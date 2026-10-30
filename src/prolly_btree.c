@@ -185,7 +185,7 @@ int sqlite3BtreeProllyIndexHasWideNumericDesc(
     return SQLITE_OK;
   }
   prollyCursorInit(
-      &cur, &pBtree->pBt->store, &pBtree->pBt->cache, &pTE->root, pTE->flags);
+      &cur, pBtree->pBt->pStore, &pBtree->pBt->cache, &pTE->root, pTE->flags);
   rc = prollyCursorFirst(&cur, &res);
   while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur) ){
     const u8 *pKey;
@@ -251,7 +251,7 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
   }
 
   prollyCursorInit(
-      &cur, &pBtree->pBt->store, &pBtree->pBt->cache, &pTE->root, pTE->flags);
+      &cur, pBtree->pBt->pStore, &pBtree->pBt->cache, &pTE->root, pTE->flags);
   rc = prollyCursorFirst(&cur, &res);
   while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur) ){
     const u8 *pVal;
@@ -389,7 +389,7 @@ static i64 prollyBtreeSyntheticPageCount(Btree *p){
   ChunkStore *cs;
   i64 n;
   if( !p || !p->pBt ) return 0;
-  cs = &p->pBt->store;
+  cs = p->pBt->pStore;
   n = (i64)chunkIndexCount(&cs->index)
     + (i64)chunkStagingPendingCount(&cs->staging)
     + (i64)chunkStagingRecentCount(&cs->staging);
@@ -909,8 +909,89 @@ static int doltliteFileHasContent(
 /* Version-control writes never pass OP_Transaction, so the connection's
 ** query_only flag has to be re-checked where the store persists. */
 static int prollyBtreeQueryOnlyWriteGate(void *pArg){
-  Btree *p = (Btree*)pArg;
-  return p->db!=0 && (p->db->flags & SQLITE_QueryOnly)!=0;
+  BtShared *pBt = (BtShared*)pArg;
+  return pBt->db!=0 && (pBt->db->flags & SQLITE_QueryOnly)!=0;
+}
+
+static void btreeCloseStore(BtShared *pBt);
+
+static void btreeReleaseStoreOwner(BtShared *pOwner){
+  pOwner->nRef--;
+  if( pOwner->nRef<=0 ){
+    if( pOwner->pPagerShim ) pagerShimDestroy(pOwner->pPagerShim);
+    prollyCacheFree(&pOwner->cache);
+    btreeCloseStore(pOwner);
+    sqlite3_free(pOwner);
+  }
+}
+
+static void btreeCloseStore(BtShared *pBt){
+  if( pBt->pStoreOwner ){
+    BtShared *pOwner = pBt->pStoreOwner;
+    chunkStoreDetachWsSession(pBt->pStore, &pBt->wsSession);
+    pBt->pStoreOwner = 0;
+    pBt->pStore = &pBt->store;
+    btreeReleaseStoreOwner(pOwner);
+  }else{
+    chunkStoreClose(&pBt->store);
+  }
+}
+
+static int btreeSameFile(sqlite3_vfs *pVfs, const char *zA, const char *zB){
+  int n = pVfs->mxPathname + 1;
+  char *zFullA, *zFullB;
+  int same = 0;
+  if( !zA || !zB ) return 0;
+  zFullA = sqlite3_malloc(n*2);
+  if( !zFullA ) return 0;
+  zFullB = zFullA + n;
+  if( (pVfs->xFullPathname(pVfs, zA, n, zFullA)&0xff)==SQLITE_OK
+   && (pVfs->xFullPathname(pVfs, zB, n, zFullB)&0xff)==SQLITE_OK ){
+    same = strcmp(zFullA, zFullB)==0;
+  }
+  sqlite3_free(zFullA);
+  return same;
+}
+
+/* One store per file per connection lets a transaction write several
+** branches and publish them as one root. Only a different, existing
+** branch of a writable store already open here shares it. */
+static BtShared *btreeFindStoreOwner(
+  sqlite3 *db,
+  sqlite3_vfs *pVfs,
+  const char *zOpenFilename,
+  const char *zBranch,
+  int vfsFlags
+){
+  int i;
+  if( !db || !zBranch || !zBranch[0] ) return 0;
+  if( (vfsFlags & SQLITE_OPEN_READONLY)!=0 ) return 0;
+  for(i=0; i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    BtShared *pOwner;
+    int j;
+    if( !q || q->pOps!=&prollyBtreeOps || !q->pBt ) continue;
+    pOwner = q->pBt;
+    if( pOwner->pStoreOwner ) continue;
+    if( pOwner->pStore->readOnly || pOwner->pStore->openPending
+     || pOwner->pStore->isMemory || pOwner->pStore->isBuffer
+     || q->bDeferredOpen || q->isDetached
+     || pOwner->pStore->file.pVfs!=pVfs
+     || !btreeSameFile(pVfs, pOwner->pStore->file.zFilename, zOpenFilename) ){
+      continue;
+    }
+    if( chunkStoreFindBranch(pOwner->pStore, zBranch, 0)!=SQLITE_OK ) return 0;
+    for(j=0; j<db->nDb; j++){
+      Btree *r = db->aDb[j].pBt;
+      if( r && r->pOps==&prollyBtreeOps && r->pBt
+       && r->pBt->pStore==pOwner->pStore
+       && strcmp(r->zBranch ? r->zBranch : "main", zBranch)==0 ){
+        return 0;
+      }
+    }
+    return pOwner;
+  }
+  return 0;
 }
 
 static int prollyBtreeOpenImpl(
@@ -1083,13 +1164,24 @@ static int prollyBtreeOpenImpl(
     return SQLITE_NOMEM;
   }
   memset(pBt, 0, sizeof(*pBt));
+  pBt->pStore = &pBt->store;
 
   if( !zFilename || zFilename[0]=='\0' ){
     zFilename = ":memory:";
     zOpenFilename = zFilename;
   }
 
-  rc = chunkStoreOpenDeferred(&pBt->store, pVfs, zOpenFilename, vfsFlags);
+  if( !useOriginSource ){
+    pBt->pStoreOwner = btreeFindStoreOwner(db, pVfs, zOpenFilename,
+                                           zBranchFromPath, vfsFlags);
+  }
+  if( pBt->pStoreOwner ){
+    pBt->pStore = pBt->pStoreOwner->pStore;
+    pBt->pStoreOwner->nRef++;
+    chunkStoreAttachWsSession(pBt->pStore, &pBt->wsSession);
+  }else{
+    rc = chunkStoreOpenDeferred(pBt->pStore, pVfs, zOpenFilename, vfsFlags);
+  }
   if( rc!=SQLITE_OK ){
     releaseOpenStoreFilename(zStoreFilename, bStoreUri);
     sqlite3_free(pBt);
@@ -1097,9 +1189,9 @@ static int prollyBtreeOpenImpl(
     return rc;
   }
   if( useOriginSource ){
-    rc = doltliteOriginSourceEnable(&pBt->store, db, 0);
+    rc = doltliteOriginSourceEnable(pBt->pStore, db, 0);
     if( rc!=SQLITE_OK ){
-      chunkStoreClose(&pBt->store);
+      btreeCloseStore(pBt);
       releaseOpenStoreFilename(zStoreFilename, bStoreUri);
       sqlite3_free(pBt);
       sqlite3_free(p);
@@ -1107,43 +1199,48 @@ static int prollyBtreeOpenImpl(
     }
   }
   /* Serve the recovered prefix to open-time catalog reads, then re-arm. */
-  poisonAfterOpen = pBt->store.corruptMidStream;
-  pBt->store.corruptMidStream = 0;
-
-  rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_BYTES
-      - csIndexCacheSetBudget(&pBt->store,
-            csIndexCacheBudgetFor(&pBt->store, PROLLY_DEFAULT_CACHE_BYTES)));
+  if( pBt->pStoreOwner ){
+    rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_BYTES);
+  }else{
+    poisonAfterOpen = pBt->pStore->corruptMidStream;
+    pBt->pStore->corruptMidStream = 0;
+    rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_BYTES
+        - csIndexCacheSetBudget(pBt->pStore,
+              csIndexCacheBudgetFor(pBt->pStore, PROLLY_DEFAULT_CACHE_BYTES)));
+  }
   if( rc!=SQLITE_OK ){
-    chunkStoreClose(&pBt->store);
+    btreeCloseStore(pBt);
     releaseOpenStoreFilename(zStoreFilename, bStoreUri);
     sqlite3_free(pBt);
     sqlite3_free(p);
     return rc;
   }
 
-  pBt->pPagerShim = pagerShimCreate(pVfs, zOpenFilename, chunkFileGetHandle(&pBt->store.file));
+  pBt->pPagerShim = pagerShimCreate(pVfs, zOpenFilename, chunkFileGetHandle(&pBt->pStore->file));
   if( !pBt->pPagerShim ){
     prollyCacheFree(&pBt->cache);
-    chunkStoreClose(&pBt->store);
+    btreeCloseStore(pBt);
     releaseOpenStoreFilename(zStoreFilename, bStoreUri);
     sqlite3_free(pBt);
     sqlite3_free(p);
     return SQLITE_NOMEM;
   }
-  pagerShimSetStore(pBt->pPagerShim, &pBt->store, &pBt->cache);
+  pagerShimSetStore(pBt->pPagerShim, pBt->pStore, &pBt->cache);
   pBt->cache.pStats = &pBt->stats;
-  pBt->store.pStats = &pBt->stats;
   pBt->pPagerShim->pStats = &pBt->stats;
 
   pBt->db = db;
-  pBt->store.xWriteGate = prollyBtreeQueryOnlyWriteGate;
-  pBt->store.pWriteGateArg = p;
-  pBt->store.xDefaultBusy = prollyInvokeBusyHandler;
-  pBt->store.pDefaultBusyArg = pBt;
+  if( !pBt->pStoreOwner ){
+    pBt->pStore->pStats = &pBt->stats;
+    pBt->pStore->xWriteGate = prollyBtreeQueryOnlyWriteGate;
+    pBt->pStore->pWriteGateArg = pBt;
+    pBt->pStore->xDefaultBusy = prollyInvokeBusyHandler;
+    pBt->pStore->pDefaultBusyArg = pBt;
+  }
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
   pBt->cacheSize = DOLTLITE_DEFAULT_CACHE_SIZE;
-  pBt->indexBudgetActive = pBt->store.index.lazy.active;
-  pBt->nIndexBudgetEntries = pBt->store.index.lazy.nEntries;
+  pBt->indexBudgetActive = pBt->pStore->index.lazy.active;
+  pBt->nIndexBudgetEntries = pBt->pStore->index.lazy.nEntries;
   pBt->iWorkingStateVersion = 1;
   pBt->nRef = 1;
   p->inTransaction = TRANS_NONE;
@@ -1152,7 +1249,7 @@ static int prollyBtreeOpenImpl(
   p->bFilterSchemaPlaceholders = 0;
   p->mxPageCount = SQLITE_MAX_PAGE_COUNT;
 
-  if( pBt->store.readOnly ){
+  if( pBt->pStore->readOnly ){
     pBt->btsFlags |= BTS_READ_ONLY;
   }
 
@@ -1174,26 +1271,26 @@ static int prollyBtreeOpenImpl(
     u8 bDeferredRevision = 0;
     int eMissing = OPEN_REVISION_MISSING_NONE;
     const char *zDef = zBranchFromPath ? zBranchFromPath :
-      chunkStoreGetDefaultBranch(&pBt->store);
+      chunkStoreGetDefaultBranch(pBt->pStore);
     if( !zDef ) zDef = "main";
     memset(&branchCommit, 0, sizeof(branchCommit));
     memset(&revisionCatalog, 0, sizeof(revisionCatalog));
-    if( zBranchFromPath && !pBt->store.openPending ){
-      rc = doltliteResolveOpenRevision(&pBt->store, zDef, &branchCommit,
+    if( zBranchFromPath && !pBt->pStore->openPending ){
+      rc = doltliteResolveOpenRevision(pBt->pStore, zDef, &branchCommit,
                                        &revisionCatalog, &zResolvedBranch,
                                        &eMissing);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
       if( rc==SQLITE_NOTFOUND && zResolvedBranch
-       && !chunkStoreOriginSourceEnabled(&pBt->store) ){
+       && !chunkStoreOriginSourceEnabled(pBt->pStore) ){
         bDeferredOpen = 1;
         rc = SQLITE_OK;
       }else if( rc==SQLITE_NOTFOUND
-       && !chunkStoreOriginSourceEnabled(&pBt->store)
+       && !chunkStoreOriginSourceEnabled(pBt->pStore)
        && (eMissing==OPEN_REVISION_MISSING_CHUNK
            || (eMissing==OPEN_REVISION_MISSING_HASH
-               && doltliteStoreLacksRefCommit(&pBt->store))) ){
-        sqlite3_free(chunkStoreSourceTakeError(&pBt->store, 0));
-        sqlite3_free(chunkStoreTakeMissingChunkError(&pBt->store));
+               && doltliteStoreLacksRefCommit(pBt->pStore))) ){
+        sqlite3_free(chunkStoreSourceTakeError(pBt->pStore, 0));
+        sqlite3_free(chunkStoreTakeMissingChunkError(pBt->pStore));
         bDeferredRevision = 1;
         rc = SQLITE_OK;
       }
@@ -1202,9 +1299,9 @@ static int prollyBtreeOpenImpl(
     if( zBranchFromPath && rc!=SQLITE_OK ){
       int openRc;
       if( rc==SQLITE_NOTFOUND && eMissing!=OPEN_REVISION_MISSING_NONE ){
-        rc = btreeOpenRevisionMissingError(db, &pBt->store, zDef, eMissing);
+        rc = btreeOpenRevisionMissingError(db, pBt->pStore, zDef, eMissing);
       }else{
-        rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
+        rc = btreeApplyChunkSourceError(db, pBt->pStore, rc);
       }
       if( rc==SQLITE_CANTOPEN ){
         openRc = rc;
@@ -1222,7 +1319,7 @@ static int prollyBtreeOpenImpl(
       }
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);
-      chunkStoreClose(&pBt->store);
+      btreeCloseStore(pBt);
       releaseOpenStoreFilename(zStoreFilename, bStoreUri);
       sqlite3_free(zResolvedBranch);
       sqlite3_free(pBt);
@@ -1230,7 +1327,7 @@ static int prollyBtreeOpenImpl(
       return openRc;
     }
     if( zResolvedBranch ) zDef = zBranchFromPath = zResolvedBranch;
-    if( pBt->store.openPending || bDeferredRevision ){
+    if( pBt->pStore->openPending || bDeferredRevision ){
       memset(&state, 0, sizeof(state));
       bDeferredOpen = 1;
     }else if( zBranchFromPath && !zResolvedBranch ){
@@ -1241,21 +1338,26 @@ static int prollyBtreeOpenImpl(
       p->isDetached = 1;
       rc = SQLITE_OK;
     }else{
-      rc = btreeLoadBranchState(&pBt->store, zDef, 1, &state);
-      if( rc==SQLITE_OK ) chunkStoreAdoptWorkingSetBasis(&pBt->store, zDef);
+      rc = btreeLoadBranchState(pBt->pStore, zDef, 1, &state);
+      if( rc==SQLITE_OK ){
+        CsWsSession *pPrior = chunkStoreUseWsSession(pBt->pStore,
+            pBt->pStoreOwner ? &pBt->wsSession : 0);
+        chunkStoreAdoptWorkingSetBasis(pBt->pStore, zDef);
+        chunkStoreUseWsSession(pBt->pStore, pPrior);
+      }
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
       if( rc==SQLITE_NOTFOUND
-       && !chunkStoreOriginSourceEnabled(&pBt->store) ){
+       && !chunkStoreOriginSourceEnabled(pBt->pStore) ){
         bDeferredOpen = 1;
         rc = SQLITE_OK;
       }
 #endif
     }
     if( rc!=SQLITE_OK ){
-      rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
+      rc = btreeApplyChunkSourceError(db, pBt->pStore, rc);
       pagerShimDestroy(pBt->pPagerShim);
       prollyCacheFree(&pBt->cache);
-      chunkStoreClose(&pBt->store);
+      btreeCloseStore(pBt);
       releaseOpenStoreFilename(zStoreFilename, bStoreUri);
       sqlite3_free(zResolvedBranch);
       sqlite3_free(pBt);
@@ -1265,7 +1367,7 @@ static int prollyBtreeOpenImpl(
     if( !bDeferredOpen && !prollyHashIsEmpty(&state.catalog) ){
       u8 *catData = 0;
       int nCatData = 0;
-      rc = chunkStoreGet(&pBt->store, &state.catalog, &catData, &nCatData);
+      rc = chunkStoreGet(pBt->pStore, &state.catalog, &catData, &nCatData);
       if( rc==SQLITE_OK && catData ){
         rc = deserializeCatalog(p, catData, nCatData);
         sqlite3_free(catData);
@@ -1273,7 +1375,7 @@ static int prollyBtreeOpenImpl(
           btreeClearBranchState(&state);
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
-          chunkStoreClose(&pBt->store);
+          btreeCloseStore(pBt);
           releaseOpenStoreFilename(zStoreFilename, bStoreUri);
           sqlite3_free(zResolvedBranch);
           sqlite3_free(pBt);
@@ -1284,22 +1386,22 @@ static int prollyBtreeOpenImpl(
         sqlite3_free(catData);
 #if DOLTLITE_ENABLE_CHUNK_SOURCE
         if( rc==SQLITE_NOTFOUND && !p->isDetached
-         && !chunkStoreOriginSourceEnabled(&pBt->store) ){
+         && !chunkStoreOriginSourceEnabled(pBt->pStore) ){
           bDeferredOpen = 1;
           rc = SQLITE_OK;
         }
 #endif
         if( rc==SQLITE_NOTFOUND && p->isDetached ){
-          rc = btreeOpenRevisionMissingError(db, &pBt->store, zDef,
+          rc = btreeOpenRevisionMissingError(db, pBt->pStore, zDef,
                                              OPEN_REVISION_MISSING_CHUNK);
         }else if( rc!=SQLITE_OK ){
-          rc = btreeApplyChunkSourceError(db, &pBt->store, rc);
+          rc = btreeApplyChunkSourceError(db, pBt->pStore, rc);
         }
         if( rc!=SQLITE_OK ){
           btreeClearBranchState(&state);
           pagerShimDestroy(pBt->pPagerShim);
           prollyCacheFree(&pBt->cache);
-          chunkStoreClose(&pBt->store);
+          btreeCloseStore(pBt);
           releaseOpenStoreFilename(zStoreFilename, bStoreUri);
           sqlite3_free(zResolvedBranch);
           sqlite3_free(pBt);
@@ -1326,8 +1428,8 @@ static int prollyBtreeOpenImpl(
       p->vc.constraintViolationsHash = state.constraintViolations;
     }
     p->bDeferredOpen = bDeferredOpen;
-    p->bDeferredDefaultBranch = pBt->store.openPending && !zBranchFromPath;
-    p->bDeferredRevision = (pBt->store.openPending || bDeferredRevision)
+    p->bDeferredDefaultBranch = pBt->pStore->openPending && !zBranchFromPath;
+    p->bDeferredRevision = (pBt->pStore->openPending || bDeferredRevision)
                         && zBranchFromPath;
   }
 
@@ -1335,7 +1437,7 @@ static int prollyBtreeOpenImpl(
   if( !addTable(p, 1, BTREE_INTKEY) ){
     pagerShimDestroy(pBt->pPagerShim);
     prollyCacheFree(&pBt->cache);
-    chunkStoreClose(&pBt->store);
+    btreeCloseStore(pBt);
     releaseOpenStoreFilename(zStoreFilename, bStoreUri);
     sqlite3_free(zResolvedBranch);
     sqlite3_free(pBt);
@@ -1353,7 +1455,7 @@ static int prollyBtreeOpenImpl(
 
   {
     const char *defBranch = zBranchFromPath ? zBranchFromPath :
-      chunkStoreGetDefaultBranch(&pBt->store);
+      chunkStoreGetDefaultBranch(pBt->pStore);
     ProllyHash branchCommit;
     if( !defBranch ) defBranch = "main";
     p->zBranch = zResolvedBranch ? zResolvedBranch :
@@ -1366,20 +1468,21 @@ static int prollyBtreeOpenImpl(
     }
 
     if( prollyHashIsEmpty(&p->headCommit)
-     && chunkStoreFindBranch(&pBt->store, defBranch, &branchCommit)==SQLITE_OK ){
+     && chunkStoreFindBranch(pBt->pStore, defBranch, &branchCommit)==SQLITE_OK ){
       memcpy(&p->headCommit, &branchCommit, sizeof(ProllyHash));
     }
   }
 
-  pBt->store.corruptMidStream = poisonAfterOpen;
+  if( !pBt->pStoreOwner ) pBt->pStore->corruptMidStream = poisonAfterOpen;
   if( hasMainBtree
+   && !pBt->pStoreOwner
    && !p->isDetached
-   && !pBt->store.openPending
-   && !pBt->store.notADatabase
-   && !pBt->store.corruptMidStream ){
+   && !pBt->pStore->openPending
+   && !pBt->pStore->notADatabase
+   && !pBt->pStore->corruptMidStream ){
     ProllyHash seedHash;
     int seeded = 0;
-    rc = doltliteSeedStoreIfNeeded(db, &pBt->store, p->zBranch,
+    rc = doltliteSeedStoreIfNeeded(db, pBt->pStore, p->zBranch,
                                     &seedHash, &seeded);
     if( rc!=SQLITE_OK ){
       releaseOpenStoreFilename(zStoreFilename, bStoreUri);
@@ -1398,7 +1501,7 @@ static int prollyBtreeOpenImpl(
     sqlite3BtreeClose(p);
     return rc;
   }
-  if( rc!=SQLITE_OK && chunkStoreOriginSourceEnabled(&pBt->store) ){
+  if( rc!=SQLITE_OK && chunkStoreOriginSourceEnabled(pBt->pStore) ){
     p->bDeferredRegister = 1;
   }
 
@@ -1467,7 +1570,7 @@ int prollyBtreeClose(Btree *p){
       pBt->pPagerShim = 0;
     }
     prollyCacheFree(&pBt->cache);
-    chunkStoreClose(&pBt->store);
+    btreeCloseStore(pBt);
     sqlite3_free(pBt);
   }
 
@@ -1524,19 +1627,19 @@ int prollyBtreeSetCacheSize(Btree *p, int mxPage){
     nByte = -(i64)mxPage * 1024;
   }
   p->pBt->cacheSize = mxPage;
-  p->pBt->indexBudgetActive = p->pBt->store.index.lazy.active;
-  p->pBt->nIndexBudgetEntries = p->pBt->store.index.lazy.nEntries;
+  p->pBt->indexBudgetActive = p->pBt->pStore->index.lazy.active;
+  p->pBt->nIndexBudgetEntries = p->pBt->pStore->index.lazy.nEntries;
   nByte = MAX(nByte, 4096);
-  nByte -= csIndexCacheSetBudget(&p->pBt->store,
-                                 csIndexCacheBudgetFor(&p->pBt->store, nByte));
+  nByte -= csIndexCacheSetBudget(p->pBt->pStore,
+                                 csIndexCacheBudgetFor(p->pBt->pStore, nByte));
   prollyCacheSetBudget(&p->pBt->cache, nByte);
   return SQLITE_OK;
 }
 
 void prollyBtreeRefreshIndexBudget(Btree *p){
   BtShared *pBt = p->pBt;
-  if( pBt->indexBudgetActive!=pBt->store.index.lazy.active
-   || pBt->nIndexBudgetEntries!=pBt->store.index.lazy.nEntries ){
+  if( pBt->indexBudgetActive!=pBt->pStore->index.lazy.active
+   || pBt->nIndexBudgetEntries!=pBt->pStore->index.lazy.nEntries ){
     prollyBtreeSetCacheSize(p, pBt->cacheSize);
   }
 }
@@ -1566,8 +1669,8 @@ int sqlite3BtreeSetMmapLimit(Btree *p, sqlite3_int64 szMmap){
 
 int prollyBtreeSetPagerFlags(Btree *p, unsigned pgFlags){
   if( p && p->pBt ){
-    p->pBt->store.fullFsync = (pgFlags & PAGER_FULLFSYNC) ? 1 : 0;
-    p->pBt->store.noSync =
+    p->pBt->pStore->fullFsync = (pgFlags & PAGER_FULLFSYNC) ? 1 : 0;
+    p->pBt->pStore->noSync =
         (pgFlags & PAGER_SYNCHRONOUS_MASK)==PAGER_SYNCHRONOUS_OFF;
   }
   return SQLITE_OK;
@@ -1732,7 +1835,7 @@ static int prollyBtreeHasPendingChanges(Btree *p){
     if( pMap && !prollyMutMapIsEmpty(pMap) ) return 1;
   }
   if( p->pBt ){
-    ChunkStaging *st = &p->pBt->store.staging;
+    ChunkStaging *st = &p->pBt->pStore->staging;
     if( chunkStagingPendingCount(st)>0 || st->nRecentUncommitted>0 ) return 1;
   }
   if( btreeCatalogShapeChanged(p) ) return 1;
@@ -1779,7 +1882,7 @@ int sqlite3BtreeIncrVacuum(Btree *p){
 }
 
 const char *prollyBtreeGetFilename(Btree *p){
-  return chunkStoreFilename(&p->pBt->store);
+  return chunkStoreFilename(p->pBt->pStore);
 }
 const char *sqlite3BtreeGetFilename(Btree *p){
   if( !p ) return "";
@@ -2155,7 +2258,7 @@ int prollyBtreeCursor(
     }
   }
 
-  prollyCursorInit(&pCur->pCur, &pBt->store, &pBt->cache,
+  prollyCursorInit(&pCur->pCur, pBt->pStore, &pBt->cache,
                     &pTE->root, pTE->flags);
   prollyCursorAllowSparse(&pCur->pCur, 1);
   pCur->pCur.bAllowPrefix = 1;
@@ -2552,9 +2655,9 @@ static int integrityCheckChunkGraph(
     u8 *pData = 0;
     int nData = 0;
     if( pCtx->mxErr>0 && *pCtx->pnErr>=pCtx->mxErr ) break;
-    rc = chunkStoreGet(&pCtx->pBt->store, &hash, &pData, &nData);
+    rc = chunkStoreGet(pCtx->pBt->pStore, &hash, &pData, &nData);
     if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
-      char *zSourceErr = chunkStoreSourceTakeError(&pCtx->pBt->store, 0);
+      char *zSourceErr = chunkStoreSourceTakeError(pCtx->pBt->pStore, 0);
       sqlite3_free(zSourceErr);
       (*pCtx->pnErr)++;
       rc = SQLITE_OK;
@@ -2576,14 +2679,14 @@ static int integrityCheckRepoGraph(Btree *p, IntegrityCheckCtx *pCtx){
   BtShared *pBt = p->pBt;
   int i;
   int rc;
-  if( pBt->store.corruptMidStream ){
+  if( pBt->pStore->corruptMidStream ){
     (*pCtx->pnErr)++;
     return SQLITE_OK;
   }
-  rc = integrityCheckChunkGraph(pCtx, refsTableGetHash(&pBt->store.refs));
+  rc = integrityCheckChunkGraph(pCtx, refsTableGetHash(&pBt->pStore->refs));
   {
     int nBr; const BranchRef *aBr;
-    refsTableGetBranches(&pBt->store.refs, &nBr, &aBr);
+    refsTableGetBranches(&pBt->pStore->refs, &nBr, &aBr);
     for(i=0; rc==SQLITE_OK && i<nBr; i++){
       rc = integrityCheckChunkGraph(pCtx, &aBr[i].commitHash);
       if( rc==SQLITE_OK ){
@@ -2593,14 +2696,14 @@ static int integrityCheckRepoGraph(Btree *p, IntegrityCheckCtx *pCtx){
   }
   {
     int nTg; const TagRef *aTg;
-    refsTableGetTags(&pBt->store.refs, &nTg, &aTg);
+    refsTableGetTags(&pBt->pStore->refs, &nTg, &aTg);
     for(i=0; rc==SQLITE_OK && i<nTg; i++){
       rc = integrityCheckChunkGraph(pCtx, &aTg[i].commitHash);
     }
   }
   {
     int nTk; const TrackingBranch *aTk;
-    refsTableGetTracking(&pBt->store.refs, &nTk, &aTk);
+    refsTableGetTracking(&pBt->pStore->refs, &nTk, &aTk);
     for(i=0; rc==SQLITE_OK && i<nTk; i++){
       rc = integrityCheckChunkGraph(pCtx, &aTk[i].commitHash);
     }
@@ -2868,7 +2971,7 @@ static void doltiteEngineFunc(
 /* Store for this btree, not always db->aDb[0]. */
 ChunkStore *doltliteBtreeChunkStore(Btree *p){
   if( !p || !sqlite3BtreeIsDoltliteFormat(p) || !p->pBt ) return 0;
-  return &p->pBt->store;
+  return p->pBt->pStore;
 }
 
 int doltliteBtreeSerialize(
@@ -3009,7 +3112,7 @@ ChunkStore *doltliteGetChunkStore(sqlite3 *db){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *pBt = db->aDb[0].pBt;
     if( sqlite3BtreeUsesOrig(pBt) ) return 0;
-    return &pBt->pBt->store;
+    return pBt->pBt->pStore;
   }
   return 0;
 }

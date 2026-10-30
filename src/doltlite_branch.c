@@ -39,6 +39,21 @@ static void branchError(sqlite3_context *ctx, int bHadSavepoint, const char *zEr
   doltliteVcResultError(ctx, sqlite3_context_db_handle(ctx), zErr);
 }
 
+static int branchHeldBySibling(
+  sqlite3_context *ctx,
+  int bHadSavepoint,
+  const char *zName
+){
+  char *zMsg;
+  if( !doltliteStoreSiblingBranch(sqlite3_context_db_handle(ctx), zName) ){
+    return 0;
+  }
+  zMsg = sqlite3_mprintf("branch '%s' is attached in this connection", zName);
+  branchError(ctx, bHadSavepoint, zMsg ? zMsg : "branch is attached");
+  sqlite3_free(zMsg);
+  return 1;
+}
+
 static void branchErrorCode(sqlite3_context *ctx, int bHadSavepoint, int rc){
   branchSealSavepointsOnError(ctx, bHadSavepoint);
   sqlite3_result_error_code(ctx, rc);
@@ -292,6 +307,7 @@ static void doltBranchParsedFunc(
           branchError(ctx, hadSavepoint, "cannot delete the current branch");
           return;
         }
+        if( branchHeldBySibling(ctx, hadSavepoint, aPositional[i]) ) return;
       }
       memset(&m, 0, sizeof(m));
       m.nName = nPositional;
@@ -355,6 +371,9 @@ static void doltBranchParsedFunc(
           "cannot force-update the current branch");
         return;
       }
+      if( force && branchHeldBySibling(ctx, hadSavepoint, aPositional[1]) ){
+        return;
+      }
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
@@ -397,6 +416,10 @@ static void doltBranchParsedFunc(
        && strcmp(aPositional[1], doltliteGetSessionBranch(db))==0 ){
         branchError(ctx, hadSavepoint,
           "cannot force-update the current branch");
+        return;
+      }
+      if( branchHeldBySibling(ctx, hadSavepoint, aPositional[0])
+       || (force && branchHeldBySibling(ctx, hadSavepoint, aPositional[1])) ){
         return;
       }
       memset(&m, 0, sizeof(m));
@@ -458,6 +481,7 @@ static void doltBranchParsedFunc(
           "cannot force-update the current branch");
         return;
       }
+      if( force && branchHeldBySibling(ctx, hadSavepoint, zName) ) return;
       if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
         branchSealSavepointsOnError(ctx, hadSavepoint);
         return;
