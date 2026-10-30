@@ -4,6 +4,8 @@
 #include "sqliteInt.h"
 #include "doltlite_internal.h"
 #include "doltlite_ignore.h"
+#include "prolly_cursor.h"
+#include "doltlite_record.h"
 #include <string.h>
 
 typedef struct IgnoreMatch IgnoreMatch;
@@ -301,6 +303,57 @@ int doltliteCheckIgnore(
     return rc;
   }
   rc = ignoreResolveMatches(aMatch, nMatch, zTable, pIgnored, pzErr);
+  ignoreMatchesClear(aMatch, nMatch);
+  return rc;
+}
+
+int doltliteCheckIgnoreCatalog(
+  sqlite3 *db,
+  const ProllyHash *pCatalog,
+  const char *zTable,
+  int *pIgnored,
+  char **pzErr
+){
+  struct TableEntry *aTables = 0, *pTable;
+  ProllyCursor cur;
+  IgnoreMatch *aMatch = 0;
+  int nTables = 0, nMatch = 0, nAlloc = 0;
+  int res = 0, rc;
+  *pIgnored = 0;
+  if( pzErr ) *pzErr = 0;
+  rc = doltliteLoadCatalog(db, pCatalog, &aTables, &nTables, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  pTable = doltliteFindTableByName(aTables, nTables, "dolt_ignore");
+  if( !pTable ){
+    doltliteFreeCatalog(aTables, nTables);
+    return SQLITE_OK;
+  }
+  prollyCursorInit(&cur, doltliteGetChunkStore(db), doltliteGetCache(db),
+      &pTable->root, pTable->flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && !res && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    DoltliteRecordInfo info = {0};
+    char *zPattern = 0;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    rc = doltliteParseRecordStrict(pVal, nVal, &info);
+    if( rc==SQLITE_OK && info.nField!=2 ) rc = SQLITE_CORRUPT;
+    if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &info, 0, &zPattern);
+    if( rc==SQLITE_OK && !zPattern ) rc = SQLITE_CORRUPT;
+    if( rc==SQLITE_OK && ignorePatternMatch(zPattern, zTable) ){
+      rc = ignoreMatchAppend(&aMatch, &nMatch, &nAlloc, zPattern,
+          dlRecordIntField(pVal, nVal, &info, 1)==1);
+    }
+    sqlite3_free(zPattern);
+    doltliteRecordInfoClear(&info);
+    if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  doltliteFreeCatalog(aTables, nTables);
+  if( rc==SQLITE_OK ){
+    rc = ignoreResolveMatches(aMatch, nMatch, zTable, pIgnored, pzErr);
+  }
   ignoreMatchesClear(aMatch, nMatch);
   return rc;
 }

@@ -40,4 +40,19 @@ struct SchemaEntry {
   Pgno iRootpage;
 };
 
+typedef struct DoltliteBranchCommitState DoltliteBranchCommitState;
+struct DoltliteBranchCommitState {
+  ProllyHash head;
+  ProllyHash headCatalog;
+  ProllyHash working;
+  ProllyHash staged;
+  ProllyHash workingSet;
+  ProllyHash merge;
+  ProllyHash conflicts;
+  ProllyHash violations;
+  u8 merging;
+  u8 rebaseFlags;
+  u8 onRebasePlan;
+};
+
 #endif

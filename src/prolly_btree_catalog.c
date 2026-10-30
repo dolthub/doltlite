@@ -1625,6 +1625,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   SchemaEntry *aFallbackSchema,
   int nFallbackSchema,
   int bForeignDomain,
+  const ProllyHash *pMetaCatalog,
   u8 **ppOut,
   int *pnOut
 ){
@@ -1640,10 +1641,30 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   int nRows = 0, nMeta = 0;
   int i, j;
   int rc;
+  u32 userVersion, applicationId;
 
   if( !pBtree ) return SQLITE_MISUSE;
   db = pBtree->db;
-  rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
+  userVersion = pBtree->aMeta[BTREE_USER_VERSION];
+  applicationId = pBtree->aMeta[BTREE_APPLICATION_ID];
+  if( pMetaCatalog ){
+    u8 *pData = 0;
+    int nData = 0, format = 0, nEntries = 0;
+    const u8 *pEntries = 0;
+    rc = chunkStoreGet(pBtree->pBt->pStore, pMetaCatalog, &pData, &nData);
+    if( rc==SQLITE_OK && !catalogParseHeaderEx(pData, nData, &format,
+        &nEntries, &pEntries) ) rc = SQLITE_CORRUPT;
+    if( rc==SQLITE_OK ){
+      userVersion = applicationId = 0;
+      if( format==CATALOG_FORMAT_V4 || format==CATALOG_FORMAT_V5 ){
+        userVersion = prollyBtreeGetU32LE(pData + CAT_HEADER_SIZE_V3);
+        applicationId = prollyBtreeGetU32LE(pData + CAT_HEADER_SIZE_V3 + 4);
+      }
+    }
+    sqlite3_free(pData);
+  }else{
+    rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
+  }
   if( rc!=SQLITE_OK ) return rc;
   rc = loadSchemaCatalogRows(pBtree, aTables, nTables, &aRows, &nRows, &masterRoot, &masterFlags);
   if( rc!=SQLITE_OK ){
@@ -2039,9 +2060,9 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   q[0]=(u8)nTables; q[1]=(u8)(nTables>>8);
   q[2]=(u8)(nTables>>16); q[3]=(u8)(nTables>>24);
   q += 4;
-  putU32LE(q, pBtree->aMeta[BTREE_USER_VERSION]);
+  putU32LE(q, userVersion);
   q += 4;
-  putU32LE(q, pBtree->aMeta[BTREE_APPLICATION_ID]);
+  putU32LE(q, applicationId);
   q += 4;
 
   for(i=0; i<nTables; i++){
@@ -2088,7 +2109,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       db->aDb[0].pBt, aTables, nTables,
-      aFallbackSchema, nFallbackSchema, 0, ppOut, pnOut);
+      aFallbackSchema, nFallbackSchema, 0, 0, ppOut, pnOut);
 }
 
 int doltliteSerializeCatalogEntriesForeignDomain(
@@ -2104,7 +2125,19 @@ int doltliteSerializeCatalogEntriesForeignDomain(
   if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       db->aDb[0].pBt, aTables, nTables,
-      aFallbackSchema, nFallbackSchema, 1, ppOut, pnOut);
+      aFallbackSchema, nFallbackSchema, 1, 0, ppOut, pnOut);
+}
+
+int doltliteSerializeCatalogEntriesFromCatalog(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  const ProllyHash *pSource,
+  u8 **ppOut,
+  int *pnOut
+){
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
+      db->aDb[0].pBt, aTables, nTables, 0, 0, 1, pSource, ppOut, pnOut);
 }
 
 static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
@@ -2221,7 +2254,7 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
 int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   assert( pBtree!=0 && ppOut!=0 && pnOut!=0 );
   return doltliteSerializeCatalogEntriesForBtreeImpl(
-      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, 0, ppOut, pnOut);
+      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, 0, 0, ppOut, pnOut);
 }
 
 int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){

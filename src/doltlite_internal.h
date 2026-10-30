@@ -1304,6 +1304,8 @@ int doltliteIsStockSqliteDb(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);
 int doltliteSerializeCatalogEntries(sqlite3 *db, struct TableEntry *aTables,
                                     int nTables, u8 **ppOut, int *pnOut);
+int doltliteSerializeCatalogEntriesFromCatalog(sqlite3*, struct TableEntry*, int,
+    const ProllyHash*, u8**, int*);
 int doltliteSerializeCatalogEntriesWithFallbackSchema(
     sqlite3 *db, struct TableEntry *aTables, int nTables,
     SchemaEntry *aFallbackSchema, int nFallbackSchema,
@@ -1885,6 +1887,11 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
 int doltliteApplyHardReset(sqlite3 *db, const ProllyHash *catHash);
 int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg);
+int doltliteReadBranchCommitState(sqlite3*, const char*, DoltliteBranchCommitState*);
+int doltliteWriteBranchCommitState(sqlite3*, const char*,
+    const DoltliteBranchCommitState*, const ProllyHash*);
+int doltliteComposeStageAll(sqlite3*, sqlite3_context*, const ProllyHash*,
+    const ProllyHash*, const ProllyHash*, int, ProllyHash*);
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
                                      const ProllyHash *pCatHash,
                                      const ProllyHash *pCommitHash);

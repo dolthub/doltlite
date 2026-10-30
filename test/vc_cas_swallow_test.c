@@ -118,6 +118,64 @@ static int setupSchemaMerge(sqlite3 *db){
     "SELECT dolt_commit('-Am','main row');");
 }
 
+static void interruptNamedCommit(void *pDb){
+  sqlite3_interrupt((sqlite3*)pDb);
+}
+
+static void test_named_commit_failure(void){
+  int txn, seal;
+  for(txn=0; txn<2; txn++){
+    for(seal=0; seal<2; seal++){
+      char path[256];
+      sqlite3 *db;
+      char *before, *after, *callerBefore, *callerAfter, *err = 0;
+      int rc;
+      snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/named_commit_%d.db",
+          (int)getpid());
+      db = openDb(path);
+      check("named commit: open", db!=0);
+      if( !db ) continue;
+      check("named commit: seed", exec(db,
+          "CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1);"
+          "SELECT dolt_commit('-Am','base'); SELECT dolt_checkout('-b','target');"
+          "INSERT INTO t VALUES(2); SELECT dolt_add('t');"
+          "INSERT INTO t VALUES(3); SELECT dolt_checkout('main');"
+          "INSERT INTO t VALUES(4); SELECT dolt_add('t');"
+          "INSERT INTO t VALUES(5);")==SQLITE_OK);
+      if( txn ) check("named commit: begin write", exec(db,
+          "BEGIN; INSERT INTO t VALUES(6)")==SQLITE_OK);
+      before = queryText(db, "SELECT dolt_hashof('target')");
+      callerBefore = queryText(db,
+          "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)");
+      doltliteTestClearFaults();
+      if( seal ) doltliteTestSetBeforeRefInstallHook(interruptNamedCommit, db);
+      else doltliteTestFailNextCreateCommit();
+      rc = execQuiet(db, "SELECT dolt_commit('--branch','target','-am','target')", &err);
+      doltliteTestClearFaults();
+      doltliteTestSetBeforeRefInstallHook(0, 0);
+      check("named commit: publication failure reported", rc!=SQLITE_OK);
+      sqlite3_free(err);
+      after = queryText(db, "SELECT dolt_hashof('target')");
+      callerAfter = queryText(db,
+          "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)");
+      check("named commit: target head unchanged",
+          before && after && strcmp(before, after)==0);
+      check("named commit: caller rows unchanged",
+          callerBefore && callerAfter && strcmp(callerBefore, callerAfter)==0);
+      sqlite3_free(before); sqlite3_free(after);
+      sqlite3_free(callerBefore); sqlite3_free(callerAfter);
+      check("named commit: retry", exec(db,
+          "SELECT dolt_commit('--branch','target','-am','target')")==SQLITE_OK);
+      after = queryText(db,
+          "SELECT group_concat(id) FROM (SELECT id FROM dolt_at_t('target') ORDER BY id)");
+      check("named commit: target owns committed rows", after && strcmp(after,"1,2,3")==0);
+      sqlite3_free(after);
+      closeRm(db, path);
+    }
+  }
+}
+
+
 /* --force commit advances HEAD and keeps recorded CVs on the working set. */
 static void test_force_commit_keeps_cvs(void){
   char zPath[256];
@@ -1081,6 +1139,7 @@ static void test_replay_finish_failure_is_atomic(void){
 
 int main(void){
   sqlite3_initialize();
+  test_named_commit_failure();
   test_force_commit_keeps_cvs();
   test_merge_restore_not_voided();
   test_conflicts_resolve_savepoint();
