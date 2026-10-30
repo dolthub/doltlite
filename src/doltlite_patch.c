@@ -895,12 +895,22 @@ static void patchAppendValue(sqlite3_str *pStr, const PatchValue *pVal){
     case SQLITE_INTEGER:
       sqlite3_str_appendf(pStr, "%lld", pVal->i);
       break;
-    case SQLITE_FLOAT:
+    case SQLITE_FLOAT: {
+      sqlite3_uint64 bits = 0;
       if( sqlite3IsNaN(pVal->r) ) sqlite3_str_appendall(pStr, "NULL");
       else if( isinf(pVal->r) ) sqlite3_str_appendf(pStr,
           pVal->r<0 ? "-9.0e999" : "9.0e999");
-      else sqlite3_str_appendf(pStr, "%!.17g", pVal->r);
+      else{
+        memcpy(&bits, &pVal->r, sizeof(bits));
+        /* %!.17g prints -0.0 as 0.0, and replaying that stores +0.0. */
+        if( bits==((sqlite3_uint64)1)<<63 ){
+          sqlite3_str_appendall(pStr, "-0.0");
+        }else{
+          sqlite3_str_appendf(pStr, "%!.17g", pVal->r);
+        }
+      }
       break;
+    }
     case SQLITE_TEXT:
       for(i=0; i<pVal->n; i++){
         if( pVal->p[i]<0x20 || pVal->p[i]==0x7f ){
@@ -937,7 +947,7 @@ static int patchValuesEqual(const PatchValue *a, const PatchValue *b){
   switch( a->eType ){
     case SQLITE_NULL: return 1;
     case SQLITE_INTEGER: return a->i==b->i;
-    case SQLITE_FLOAT: return a->r==b->r;
+    case SQLITE_FLOAT: return memcmp(&a->r, &b->r, sizeof(a->r))==0;
     default: return a->n==b->n && memcmp(a->p,b->p,(size_t)a->n)==0;
   }
 }
