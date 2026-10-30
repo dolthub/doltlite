@@ -613,6 +613,27 @@ ROLLBACK TO sp1; SELECT count(*) FROM dolt_conflicts; SELECT v FROM t WHERE id=1
   "0
 main$" "$DB7d" 'Merge has [1-9][0-9]* conflict\(s\)|Merge resulted in constraint violations'
 
+for op in merge cherry_pick; do
+  DB7f=/tmp/test_savepoint7f_${op}_$$.db; rm -f "$DB7f"
+  echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat' WHERE id=1; INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); UPDATE t SET v='main' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7f" > /dev/null 2>&1
+  run_test_error_output_match "${op}_conflict_nested_savepoint_keeps_conflicts" \
+    "BEGIN; SAVEPOINT sp1; SELECT dolt_${op}('feat');
+SELECT count(*) FROM dolt_conflicts; SELECT group_concat(id) FROM t;
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_commit('-m','resolved') IS NOT NULL;
+COMMIT;
+SELECT group_concat(v) FROM t;" \
+    "1
+1,2
+0
+1
+feat,feat$" "$DB7f" '[A-Za-z-]+ has 1 conflict\(s\)'
+  run_test "${op}_conflict_nested_savepoint_commit_parents" \
+    "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD');" \
+    "$([ $op = merge ] && echo 2 || echo 1)" "$DB7f"
+  rm -f "$DB7f"
+done
+
 DB7e=/tmp/test_savepoint7e_$$.db; rm -f "$DB7e"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); INSERT INTO t VALUES(3,3); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f2'); INSERT INTO t VALUES(4,4); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f3'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB7e" > /dev/null 2>&1
 run_test_error_match "rebase_abort_savepoint_rollback_to_errors" \

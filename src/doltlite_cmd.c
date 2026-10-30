@@ -1507,16 +1507,8 @@ int doltliteCmdFinishWithConflicts(
     return cmdFinishPlainAfterReport(db, ctx, pSaved,
         cmdReportConflicts(db, ctx, nConflicts, zOp), bSealOnPlain);
   case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-    rc = cmdNestedRestoreOrError(db, ctx, pSaved);
-    if( rc!=SQLITE_OK ) return rc;
-    {
-      char msg[256];
-      sqlite3_snprintf(sizeof(msg), msg,
-        "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
-        zOp ? zOp : "Operation", nConflicts);
-      sqlite3_result_error(ctx, msg, -1);
-    }
-    return SQLITE_OK;
+    return cmdFinishPlainAfterReport(db, ctx, pSaved,
+        cmdReportConflicts(db, ctx, nConflicts, zOp), 0);
   }
   return SQLITE_OK;
 }
