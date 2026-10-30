@@ -1,0 +1,130 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc checkout_options_state {} {
+  list [db one {SELECT active_branch()}] \
+       [db eval {SELECT name,hash,latest_commit_message FROM dolt_branches ORDER BY name}] \
+       [db eval {SELECT id,v FROM t ORDER BY id}] \
+       [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}] \
+       [db eval {SELECT id,v FROM dolt_at_t('STAGED') ORDER BY id}]
+}
+
+foreach storage {file memory} {
+  foreach state {clean dirty staged} {
+    foreach boundary {auto begin nested savepoint} {
+      foreach {name sql} {
+        both-current {SELECT dolt_checkout('-b','main','-B','old')}
+        both-existing {SELECT dolt_checkout('-b','existing','-B','old')}
+        both-new {SELECT dolt_checkout('-b','newbranch','-B','old')}
+        both-reversed {SELECT dolt_checkout('-B','main','-b','old')}
+        both-start-first {SELECT dolt_checkout('old','-b','existing','-B','main')}
+        missing-b {SELECT dolt_checkout('-b')}
+        missing-B {SELECT dolt_checkout('-B')}
+        duplicate-b {SELECT dolt_checkout('-b','newbranch','-b','another')}
+        duplicate-B {SELECT dolt_checkout('-B','existing','-B','old')}
+      } {
+        set prefix checkout-options-$storage.$state.$boundary.$name
+        reset_db
+        if {$storage eq "memory"} {
+          db close
+          sqlite3 db :memory:
+        }
+        db eval {
+          CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+          INSERT INTO t VALUES(1,'base');
+          SELECT dolt_commit('-Am','init');
+          SELECT dolt_branch('old');
+          INSERT INTO t VALUES(2,'main');
+          SELECT dolt_commit('-am','main tip');
+          SELECT dolt_checkout('-b','existing');
+          INSERT INTO t VALUES(3,'existing');
+          SELECT dolt_commit('-am','existing tip');
+          INSERT INTO t VALUES(88,'existing work');
+          SELECT dolt_checkout('main');
+        }
+        if {$state ne "clean"} {db eval {INSERT INTO t VALUES(99,'working')}}
+        if {$state eq "staged"} {db eval {SELECT dolt_add('t')}}
+        switch $boundary {
+          begin {db eval BEGIN}
+          nested {db eval {BEGIN; SAVEPOINT caller}}
+          savepoint {db eval {SAVEPOINT caller}}
+        }
+        if {$boundary ne "auto"} {db eval {INSERT INTO t VALUES(100,'in transaction')}}
+        set before [checkout_options_state]
+        do_test $prefix.error {
+          set result [catchsql $sql]
+          list [lindex $result 0] [sqlite3_errcode db]
+        } {1 SQLITE_ERROR}
+        if {[string match both-* $name]} {
+          do_test $prefix.message {lindex $result 1} \
+              {Improper usage. Cannot use both -b and -B.}
+        }
+        do_test $prefix.unchanged {checkout_options_state} $before
+        if {![sqlite3_get_autocommit db]} {db eval COMMIT}
+        do_test $prefix.other-working {
+          db eval {SELECT dolt_checkout('existing')}
+          set other [db eval {SELECT id,v FROM t ORDER BY id}]
+          db eval {SELECT dolt_checkout('main')}
+          list $other [checkout_options_state]
+        } [list {1 base 2 main 3 existing 88 {existing work}} $before]
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+          do_test $prefix.reopen {checkout_options_state} $before
+        }
+      }
+    }
+  }
+}
+
+foreach storage {file memory} {
+  foreach option {-b -B} {
+    foreach value {-b -B --} {
+      foreach order {before after} {
+        set prefix checkout-options-value-$storage.$option.$value.$order
+        reset_db
+        if {$storage eq "memory"} {
+          db close
+          sqlite3 db :memory:
+        }
+        db eval {
+          CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+          INSERT INTO t VALUES(1,'base');
+          SELECT dolt_commit('-Am','init');
+          SELECT dolt_branch('old');
+          INSERT INTO t VALUES(2,'main');
+          SELECT dolt_commit('-am','main tip');
+          INSERT INTO t VALUES(99,'working');
+          SELECT dolt_add('t');
+        }
+        set before [checkout_options_state]
+        set call {SELECT dolt_checkout($option,$value,'old')}
+        if {$order eq "before"} {set call {SELECT dolt_checkout('old',$option,$value)}}
+        do_test $prefix.create {
+          db eval $call
+          list [db one {SELECT active_branch()}] \
+               [db eval {SELECT id,v FROM t ORDER BY id}]
+        } [list $value {1 base}]
+        do_test $prefix.main-kept {
+          db eval {SELECT dolt_checkout('main')}
+          set after [checkout_options_state]
+          set branches [lindex $after 1]
+          set at [lsearch -exact $branches $value]
+          set branches [lreplace $branches $at [expr {$at+2}]]
+          lset after 1 $branches
+          expr {$after eq $before}
+        } 1
+        if {$storage eq "file"} {
+          db close
+          sqlite3 db test.db
+          do_execsql_test $prefix.reopen {
+            SELECT id,v FROM t ORDER BY id;
+            SELECT table_name,staged,status FROM dolt_status;
+          } {1 base 2 main 99 working t 1 modified}
+        }
+      }
+    }
+  }
+}
+
+finish_test
