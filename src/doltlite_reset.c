@@ -647,6 +647,7 @@ static void doltliteResetFunc(
   int rc;
   int i;
   int nNullArgs = 0;
+  int bResetAllTables = 0;
   int graphLocked = 0;
   u8 isMerging = 0;
   int bSucceeded = 0;
@@ -697,7 +698,9 @@ static void doltliteResetFunc(
   azPaths = (const char**)sqlite3_malloc(
       sizeof(char*) * (args.nPositional>0 ? args.nPositional : 1));
   if( !azPaths ){ sqlite3_result_error_nomem(context); goto reset_cleanup; }
-  for(i=0; i<args.nPositional; i++){
+  bResetAllTables = !isHard && !isSoft && nNullArgs>0
+                 && args.nPositional+nNullArgs!=1;
+  for(i=0; !bResetAllTables && i<args.nPositional; i++){
     const char *arg = args.azPositional[i];
     int isTable = 0;
     if( !zRef ){
