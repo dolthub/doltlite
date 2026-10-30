@@ -1303,6 +1303,132 @@ int doltliteDisjoinCatalogEntries(
   return rc;
 }
 
+/* Touched objects come from the working master; everything else from staged. */
+static int stageMasterRowEmitted(
+  const SchemaCatalogRow *pRow,
+  int fromWorking,
+  const char **azTouched,
+  int nTouched,
+  int bEntrylessFromWorking
+){
+  int isEntryless;
+  int touched = 0;
+  int t;
+  const char *zParent;
+  if( !pRow->zType ) return 0;
+  isEntryless = strcmp(pRow->zType, "view")==0
+             || strcmp(pRow->zType, "trigger")==0;
+  /* Named add keeps views and triggers staged; -A and -a take them from working. */
+  if( isEntryless ) return fromWorking==(bEntrylessFromWorking!=0);
+  zParent = strcmp(pRow->zType, "index")==0 ? pRow->zTblName : pRow->zName;
+  for(t=0; t<nTouched; t++){
+    if( zParent && azTouched[t] && strcmp(zParent, azTouched[t])==0 ){
+      touched = 1;
+      break;
+    }
+  }
+  return fromWorking==touched;
+}
+
+static SchemaCatalogRow *stageMasterRowAt(
+  SchemaCatalogRow *aWork,
+  int nWork,
+  SchemaCatalogRow *aOld,
+  int i
+){
+  return i<nWork ? &aWork[i] : &aOld[i-nWork];
+}
+
+/* Table rootpages follow the final catalog entry. A touched row can come
+** from a master whose numbers are not the ones being written. */
+static Pgno stageMasterTablePg(
+  const SchemaCatalogRow *pRow,
+  int fromWorking,
+  SchemaCatalogRow *aWork,
+  int nWork,
+  struct TableEntry *aFinal,
+  int nFinal
+){
+  int t;
+  if( !pRow->zName ) return pRow->oldPg;
+  for(t=0; t<nFinal; t++){
+    if( aFinal[t].zName && strcmp(aFinal[t].zName, pRow->zName)==0 ){
+      return aFinal[t].iTable;
+    }
+  }
+  if( !fromWorking ){
+    for(t=0; t<nWork; t++){
+      if( aWork[t].zType && strcmp(aWork[t].zType, "table")==0
+       && aWork[t].zName && strcmp(aWork[t].zName, pRow->zName)==0 ){
+        return aWork[t].oldPg;
+      }
+    }
+  }
+  return pRow->oldPg;
+}
+
+static int stageMasterNamedInFinal(
+  struct TableEntry *aFinal,
+  int nFinal,
+  const char *zName
+){
+  int i;
+  if( !aFinal || !zName ) return 0;
+  for(i=0; i<nFinal; i++){
+    if( aFinal[i].zName && strcmp(aFinal[i].zName, zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+static int stageMasterPgTaken(
+  const Pgno *aPg,
+  const u8 *aKeep,
+  int n,
+  Pgno iPg
+){
+  int i;
+  if( iPg<=1 ) return 1;
+  for(i=0; i<n; i++){
+    if( aKeep[i] && aPg[i]==iPg ) return 1;
+  }
+  return 0;
+}
+
+static int stageMasterPgUsed(
+  const Pgno *aPg,
+  const u8 *aKeep,
+  int n,
+  struct TableEntry *aFinal,
+  int nFinal,
+  Pgno iPg
+){
+  int i;
+  if( stageMasterPgTaken(aPg, aKeep, n, iPg) ) return 1;
+  for(i=0; i<nFinal; i++){
+    if( aFinal[i].iTable==iPg ) return 1;
+  }
+  return 0;
+}
+
+/* The index entry is unnamed. Two domains can share one number; the copy
+** appended from the working side is the later entry. */
+static void stageMasterRetargetIndex(
+  struct TableEntry *aFinal,
+  int nFinal,
+  Pgno oldPg,
+  Pgno newPg,
+  int takeLast
+){
+  int i;
+  int hit = -1;
+  for(i=0; i<nFinal; i++){
+    if( aFinal[i].zName || aFinal[i].iTable!=oldPg ) continue;
+    hit = i;
+    if( !takeLast ) break;
+  }
+  if( hit>=0 ) aFinal[hit].iTable = newPg;
+}
+
 /* Named staging master: touched objects from working, the rest from staged. */
 int doltliteBuildNamedStageMasterRoot(
   sqlite3 *db,
@@ -1322,6 +1448,10 @@ int doltliteBuildNamedStageMasterRoot(
   ProllyMutMap mm;
   struct TableEntry masterEntry;
   i64 iRowid = 1;
+  int nAll;
+  u8 *aKeep = 0;
+  Pgno *aPg = 0;
+  Pgno iNextPg;
   int i, t, rc;
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
@@ -1353,58 +1483,115 @@ int doltliteBuildNamedStageMasterRoot(
     freeSchemaCatalogRows(aOld, nOld);
     return rc;
   }
-  for(i=0; i<nWork+nOld && rc==SQLITE_OK; i++){
-    SchemaCatalogRow *pRow = i<nWork ? &aWork[i] : &aOld[i-nWork];
+  nAll = nWork + nOld;
+  if( nAll>0 ){
+    aKeep = sqlite3_malloc(nAll);
+    aPg = sqlite3_malloc(nAll * (int)sizeof(Pgno));
+    if( !aKeep || !aPg ){
+      sqlite3_free(aKeep);
+      sqlite3_free(aPg);
+      prollyMutMapFree(&mm);
+      freeSchemaCatalogRows(aWork, nWork);
+      freeSchemaCatalogRows(aOld, nOld);
+      return SQLITE_NOMEM;
+    }
+    memset(aKeep, 0, (size_t)nAll);
+    memset(aPg, 0, (size_t)nAll * sizeof(Pgno));
+  }
+  for(i=0; i<nAll; i++){
+    SchemaCatalogRow *pRow = stageMasterRowAt(aWork, nWork, aOld, i);
     int fromWorking = i<nWork;
-    int isEntryless;
-    int touched = 0;
-    const char *zParent;
+    if( !stageMasterRowEmitted(pRow, fromWorking, azTouched, nTouched,
+                               bEntrylessFromWorking) ){
+      continue;
+    }
+    aKeep[i] = 1;
+    if( strcmp(pRow->zType, "table")==0 ){
+      aPg[i] = stageMasterTablePg(pRow, fromWorking, aWork, nWork,
+                                  aFinal, nFinal);
+    }else if( strcmp(pRow->zType, "index")!=0 ){
+      aPg[i] = pRow->oldPg;
+    }
+  }
+  /* A reset table adopts the staged number, which can be another object's
+  ** root in the HEAD master. Clustered autoindexes follow the table. A real
+  ** index keeps its root unless that number was taken, and then the catalog
+  ** entry moves with the schema row. */
+  iNextPg = 2;
+  for(t=0; t<nFinal; t++){
+    if( aFinal[t].iTable>=iNextPg ) iNextPg = aFinal[t].iTable + 1;
+  }
+  for(i=0; i<nAll; i++){
+    if( aKeep[i] && aPg[i]>=iNextPg ) iNextPg = aPg[i] + 1;
+  }
+  for(i=0; i<nAll; i++){
+    SchemaCatalogRow *pRow = stageMasterRowAt(aWork, nWork, aOld, i);
+    SchemaCatalogRow *pParent;
+    int fromWorking;
+    int iParent;
+    int clustered;
+    int taken;
+    int selfKept;
     Pgno iPg;
+    if( !aKeep[i] || strcmp(pRow->zType, "index")!=0 ) continue;
+    fromWorking = i<nWork;
+    iParent = -1;
+    for(t=0; t<nAll; t++){
+      if( !aKeep[t] ) continue;
+      pParent = stageMasterRowAt(aWork, nWork, aOld, t);
+      if( strcmp(pParent->zType, "table")!=0 || !pParent->zName ) continue;
+      if( pRow->zTblName && strcmp(pParent->zName, pRow->zTblName)==0 ){
+        iParent = t;
+        break;
+      }
+    }
+    clustered = iParent>=0
+             && schemaNameIsInternalAutoindex(pRow->zName)
+             && stageMasterRowAt(aWork, nWork, aOld, iParent)->oldPg
+                ==pRow->oldPg;
+    if( clustered ){
+      aPg[i] = aPg[iParent];
+      continue;
+    }
+    iPg = pRow->oldPg;
+    /* Move this index only when its table is in the catalog being written
+    ** and the rootpage is already a table root, or an index of another table
+    ** that is also being written. A schema row for a table that was just
+    ** removed (the old name of a rename) shares numbers and must not take
+    ** the surviving entry with it. */
+    selfKept = stageMasterNamedInFinal(aFinal, nFinal, pRow->zTblName);
+    taken = 0;
+    if( selfKept ){
+      for(t=0; t<nAll && !taken; t++){
+        SchemaCatalogRow *pOther;
+        if( !aKeep[t] || aPg[t]!=iPg ) continue;
+        pOther = stageMasterRowAt(aWork, nWork, aOld, t);
+        if( !pOther->zType ) continue;
+        if( strcmp(pOther->zType, "table")==0 ){
+          taken = 1;
+        }else if( strcmp(pOther->zType, "index")==0
+               && stageMasterNamedInFinal(aFinal, nFinal, pOther->zTblName) ){
+          taken = 1;
+        }
+      }
+    }
+    if( taken ){
+      while( stageMasterPgUsed(aPg, aKeep, nAll, aFinal, nFinal, iNextPg) ){
+        iNextPg++;
+      }
+      stageMasterRetargetIndex(aFinal, nFinal, pRow->oldPg, iNextPg,
+                               fromWorking);
+      iPg = iNextPg++;
+    }
+    aPg[i] = iPg;
+  }
+  for(i=0; i<nAll && rc==SQLITE_OK; i++){
+    SchemaCatalogRow *pRow = stageMasterRowAt(aWork, nWork, aOld, i);
     u8 *pRec;
     int nRec = 0;
-
-    if( !pRow->zType ) continue;
-    isEntryless = strcmp(pRow->zType, "view")==0
-               || strcmp(pRow->zType, "trigger")==0;
-    if( isEntryless ){
-      /* Named add keeps views/triggers staged; -A/-a takes them from working. */
-      if( fromWorking != (bEntrylessFromWorking!=0) ) continue;
-    }else{
-      zParent = strcmp(pRow->zType, "index")==0
-                  ? pRow->zTblName : pRow->zName;
-      for(t=0; t<nTouched; t++){
-        if( zParent && azTouched[t]
-         && strcmp(zParent, azTouched[t])==0 ){
-          touched = 1;
-          break;
-        }
-      }
-      if( fromWorking != touched ) continue;
-    }
-    /* Old-sourced table rows take the FINAL entry number; indexes keep old. */
-    iPg = pRow->oldPg;
-    if( !fromWorking && strcmp(pRow->zType, "table")==0 && pRow->zName ){
-      const struct TableEntry *pFinal = 0;
-      for(t=0; t<nFinal; t++){
-        if( aFinal[t].zName && strcmp(aFinal[t].zName, pRow->zName)==0 ){
-          pFinal = &aFinal[t];
-          break;
-        }
-      }
-      if( pFinal ){
-        iPg = pFinal->iTable;
-      }else{
-        for(t=0; t<nWork; t++){
-          if( aWork[t].zType && strcmp(aWork[t].zType, "table")==0
-           && aWork[t].zName && strcmp(aWork[t].zName, pRow->zName)==0 ){
-            iPg = aWork[t].oldPg;
-            break;
-          }
-        }
-      }
-    }
+    if( !aKeep[i] ) continue;
     pRec = buildSchemaCatalogRecord(pRow->zType, pRow->zName,
-                                    pRow->zTblName, iPg,
+                                    pRow->zTblName, aPg[i],
                                     pRow->zSql, &nRec);
     if( !pRec ){
       rc = SQLITE_NOMEM;
@@ -1413,6 +1600,8 @@ int doltliteBuildNamedStageMasterRoot(
     rc = prollyMutMapInsert(&mm, 0, 0, iRowid++, pRec, nRec);
     sqlite3_free(pRec);
   }
+  sqlite3_free(aKeep);
+  sqlite3_free(aPg);
   freeSchemaCatalogRows(aWork, nWork);
   freeSchemaCatalogRows(aOld, nOld);
   if( rc!=SQLITE_OK ){
