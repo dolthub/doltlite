@@ -298,6 +298,26 @@ stage_done:
   return rc;
 }
 
+static int applySaveReplayMetadata(
+  sqlite3 *db, const DoltliteTxnState *pSaved, int isRevert,
+  const char *zMessage, const char *zName, const char *zEmail
+){
+  ProllyHash snapshot;
+  u8 isRebasing = 0;
+  int rc;
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  if( isRebasing ) return SQLITE_OK;
+  rc = doltliteCreateAndStoreCommit(db, &pSaved->sessionHead,
+      &pSaved->sessionCatalogHash, zMessage, zName, zEmail, 0, 0, &snapshot);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionReplayState(db,
+        isRevert ? DOLTLITE_REPLAY_REVERT : DOLTLITE_REPLAY_CHERRY_PICK,
+        &snapshot, &pSaved->sessionStaged,
+        &pSaved->sessionConstraintViolationsCatalog, &pSaved->wsBasis);
+  }
+  return rc;
+}
+
 static int applyMergedCatalogAndCommitInTxn(
   sqlite3 *db,
   sqlite3_context *context,
@@ -488,6 +508,9 @@ static int applyMergedCatalogAndCommitInTxn(
     sqlite3_free(zDetectErrMsg);
 
     if( nViolations > 0 ){
+      rc = applySaveReplayMetadata(db, &savedState, bPreferOurMaster,
+                                   zMessage, zAuthorName, zAuthorEmail);
+      if( rc!=SQLITE_OK ) goto apply_rollback;
       if( pnViolations ){
         *pnViolations = nViolations;
       }
@@ -507,6 +530,9 @@ static int applyMergedCatalogAndCommitInTxn(
   }
 
   if( *pnConflicts > 0 ){
+    rc = applySaveReplayMetadata(db, &savedState, bPreferOurMaster,
+                                 zMessage, zAuthorName, zAuthorEmail);
+    if( rc!=SQLITE_OK ) goto apply_rollback;
     if( graphLocked ){
       chunkStoreUnlock(cs);
       graphLocked = 0;
@@ -632,6 +658,155 @@ int applyMergedCatalogAndCommit(
   return rc;
 }
 
+void doltliteReplayFinish(
+  sqlite3_context *context, int kind, int isAbort,
+  const char *zAuthorName, const char *zAuthorEmail
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteCommit snapshot;
+  DoltliteTxnState saved;
+  ProllyHash snapshotHash, originalStaged, originalViolations;
+  ProllyHash working, staged, headCatalog, newHead;
+  ProllyHash cleanWorkingSet;
+  const ProllyHash *pHead;
+  const char *zError = 0;
+  sqlite3_stmt *pStmt = 0;
+  u8 pendingKind = 0;
+  int graphLocked = 0;
+  int haveSaved = 0;
+  int hasSchemaConflicts = 0;
+  int rc;
+  char hex[PROLLY_HASH_SIZE*2+1];
+
+  memset(&snapshot, 0, sizeof(snapshot));
+  memset(&saved, 0, sizeof(saved));
+  memset(&newHead, 0, sizeof(newHead));
+  doltliteGetSessionReplayState(db, &pendingKind, &snapshotHash,
+                                &originalStaged, &originalViolations, &cleanWorkingSet);
+  if( pendingKind!=kind ){
+    sqlite3_result_error(context, kind==DOLTLITE_REPLAY_REVERT
+        ? "no revert in progress" : "no cherry-pick in progress", -1);
+    return;
+  }
+  rc = doltliteLoadCommit(db, &snapshotHash, &snapshot);
+  if( rc!=SQLITE_OK ) goto replay_done;
+  pHead = doltliteCommitParentHash(&snapshot, 0);
+  if( !pHead ){
+    rc = SQLITE_CORRUPT;
+    goto replay_done;
+  }
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ) goto replay_done;
+
+  if( isAbort ){
+    rc = doltliteSaveTxnState(db, &saved);
+    if( rc!=SQLITE_OK ) goto replay_done;
+    haveSaved = 1;
+    rc = doltliteRefreshAndConfirmHead(db, cs, pHead);
+    if( rc!=SQLITE_OK ) goto replay_done;
+    graphLocked = 1;
+    rc = doltliteConfirmWorkingSet(db, cs, &cleanWorkingSet);
+    if( rc==SQLITE_OK ) rc = doltliteApplyHardReset(db, &snapshot.catalogHash);
+    if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
+    if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &originalStaged);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSetSessionConstraintViolationsCatalog(db, &originalViolations);
+    }
+    if( rc==SQLITE_OK ) rc = doltliteSetSessionPendingReplayCommit(db, 0);
+    if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
+    chunkStoreUnlock(cs);
+    graphLocked = 0;
+    if( rc==SQLITE_OK ) rc = doltliteVcSealActiveSavepoints(db);
+    if( rc==SQLITE_OK ) sqlite3_result_int(context, 0);
+    goto replay_done;
+  }
+
+  rc = doltliteSessionHasSchemaConflicts(db, &hasSchemaConflicts);
+  if( rc!=SQLITE_OK ) goto replay_done;
+  rc = doltliteGetSessionConflictsCatalog(db, &working);
+  if( rc!=SQLITE_OK ) goto replay_done;
+  if( hasSchemaConflicts || !prollyHashIsEmpty(&working) ){
+    zError = "cannot continue: unresolved conflicts";
+    rc = SQLITE_ERROR;
+    goto replay_done;
+  }
+  if( doltliteSessionHasConstraintViolations(db) ){
+    zError = "cannot continue: unresolved constraint violations";
+    rc = SQLITE_ERROR;
+    goto replay_done;
+  }
+  rc = sqlite3VtabSync(db, context->pVdbe);
+  if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, &working);
+  if( rc!=SQLITE_OK ) goto replay_done;
+  doltliteGetSessionStaged(db, &staged);
+  rc = doltliteGetHeadCatalogHash(db, &headCatalog);
+  if( rc!=SQLITE_OK ) goto replay_done;
+  if( prollyHashIsEmpty(&staged) ) staged = headCatalog;
+  if( kind==DOLTLITE_REPLAY_CHERRY_PICK ){
+    if( prollyHashCompare(&working, &staged)!=0 ){
+      zError = "cannot continue cherry-pick with unstaged changes";
+      rc = SQLITE_ERROR;
+      goto replay_done;
+    }
+  }else{
+    rc = sqlite3_prepare_v2(db,
+        "SELECT 1 FROM dolt_status WHERE staged=0 LIMIT 1", -1, &pStmt, 0);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_step(pStmt);
+      if( rc==SQLITE_ROW ){
+        zError = "cannot continue revert with unstaged changes";
+        rc = SQLITE_ERROR;
+      }else if( rc==SQLITE_DONE ){
+        rc = SQLITE_OK;
+      }
+    }
+    sqlite3_finalize(pStmt);
+    pStmt = 0;
+    if( rc!=SQLITE_OK ) goto replay_done;
+  }
+  rc = doltliteCommitValidateForeignKeyParents(db, context, &staged);
+  if( rc!=SQLITE_OK ) goto replay_done;
+  rc = doltliteSaveTxnState(db, &saved);
+  if( rc!=SQLITE_OK ) goto replay_done;
+  haveSaved = 1;
+  rc = doltliteCreateAndStoreCommit(db, pHead, &staged,
+      snapshot.zMessage, zAuthorName ? zAuthorName : snapshot.zName,
+      zAuthorEmail ? zAuthorEmail : snapshot.zEmail, 0, 0, &newHead);
+  if( rc==SQLITE_OK ) rc = doltliteSetSessionPendingReplayCommit(db, 0);
+  if( rc==SQLITE_OK ){
+    rc = doltliteCompareAndAdvanceBranch(db, pHead, &cleanWorkingSet,
+        &newHead, &staged, &working);
+  }
+  if( rc==SQLITE_OK ){
+    doltliteAdoptRollbackBaseline(db, &working);
+    rc = doltliteVcSealEnclosingTxn(db);
+    if( rc==SQLITE_OK ){
+      doltliteHashToHex(&newHead, hex);
+      sqlite3_result_text(context, hex, -1, SQLITE_TRANSIENT);
+    }
+  }
+
+replay_done:
+  if( graphLocked ) chunkStoreUnlock(cs);
+  if( haveSaved ){
+    if( rc!=SQLITE_OK ){
+      rc = cherryPickRestoreAndPersist(db, &saved, &newHead, rc);
+    }else{
+      doltliteTxnStateClear(&saved);
+    }
+  }
+  sqlite3_finalize(pStmt);
+  doltliteCommitClear(&snapshot);
+  if( rc!=SQLITE_OK ){
+    if( zError ){
+      sqlite3_result_error(context, zError, -1);
+    }else if( context->isError==SQLITE_OK ){
+      doltliteCmdSourceResultErrorOrCode(context, cs, rc);
+    }
+  }
+}
+
 static void doltliteCherryPickFunc(
   sqlite3_context *context,
   int argc,
@@ -645,7 +820,9 @@ static void doltliteCherryPickFunc(
   DoltliteCmdArgs args;
   int isAbort = 0;
   int allowEmpty = 0;
+  int isContinue = 0;
   DoltliteCmdOption aOption[] = {
+    { "continue", 0, DOLTLITE_CMD_OPTION_FLAG, &isContinue, 0 },
     { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
     { "allow-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &allowEmpty, 0 }
   };
@@ -671,25 +848,21 @@ static void doltliteCherryPickFunc(
   rc = doltliteCmdParseArgs(context, argc, argv, aOption, ArraySize(aOption),
                             0, &args);
   if( rc!=SQLITE_OK ) return;
-  if( isAbort ){
+  if( isAbort && isContinue ){
+    doltliteCmdArgsClear(&args);
+    sqlite3_result_error(context, "--continue and --abort are mutually exclusive", -1);
+    return;
+  }
+  if( isAbort || isContinue ){
     if( args.nPositional>0 || allowEmpty ){
       doltliteCmdArgsClear(&args);
-      sqlite3_result_error(context,
-        "--abort does not take other arguments", -1);
+      sqlite3_result_error(context, isAbort
+          ? "--abort does not take other arguments"
+          : "--continue does not take other arguments", -1);
       return;
     }
-    if( !doltliteSessionHasPendingReplayCommit(db) ){
-      doltliteCmdArgsClear(&args);
-      sqlite3_result_error(context, "no cherry-pick in progress", -1);
-      return;
-    }
-    rc = mergeAbortInPlace(db);
     doltliteCmdArgsClear(&args);
-    if( rc!=SQLITE_OK ){
-      doltliteCmdSourceResultErrorOrCode(context, cs, rc);
-      return;
-    }
-    sqlite3_result_int(context, 0);
+    doltliteReplayFinish(context, DOLTLITE_REPLAY_CHERRY_PICK, isAbort, 0, 0);
     return;
   }
   if( args.nPositional>1 ){
@@ -706,6 +879,11 @@ static void doltliteCherryPickFunc(
     return;
   }
   doltliteCmdArgsClear(&args);
+
+  if( doltliteSessionHasPendingReplayCommit(db) ){
+    sqlite3_result_error(context, "a replay is already in progress", -1);
+    return;
+  }
 
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){

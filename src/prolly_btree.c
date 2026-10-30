@@ -1764,6 +1764,14 @@ static int prollyVcStateEqual(const DoltVcState *a, const DoltVcState *b){
   return prollyHashCompare(&a->stagedCatalog, &b->stagedCatalog)==0
       && a->isMerging==b->isMerging
       && a->pendingReplayCommit==b->pendingReplayCommit
+      && (!a->pendingReplayCommit
+          || (a->replayKind==b->replayKind
+              && prollyHashCompare(&a->replaySnapshot, &b->replaySnapshot)==0
+              && prollyHashCompare(&a->replayStaged, &b->replayStaged)==0
+              && prollyHashCompare(&a->replayViolations,
+                                   &b->replayViolations)==0
+              && prollyHashCompare(&a->replayWorkingSetBasis,
+                                   &b->replayWorkingSetBasis)==0))
       && prollyHashCompare(&a->mergeCommitHash, &b->mergeCommitHash)==0
       && prollyHashCompare(&a->conflictsCatalogHash, &b->conflictsCatalogHash)==0
       && prollyHashCompare(&a->conflictsTheirCatalog, &b->conflictsTheirCatalog)==0

@@ -303,6 +303,12 @@ struct DoltliteTxnState {
   ProllyHash sessionCatalogHash;
   ProllyHash wsBasis;
   u8 sessionIsMerging;
+  u8 sessionPendingReplay;
+  u8 sessionReplayKind;
+  ProllyHash sessionReplaySnapshot;
+  ProllyHash sessionReplayStaged;
+  ProllyHash sessionReplayViolations;
+  ProllyHash sessionReplayWorkingSetBasis;
 };
 
 static SQLITE_INLINE struct TableEntry *doltliteFindTableByNumber(
@@ -1645,7 +1651,6 @@ int doltliteCatalogRenameMate(
   struct TableEntry **ppMate
 );
 
-int mergeAbortInPlace(sqlite3 *db);
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1910,6 +1915,20 @@ int doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
 int doltliteClearSessionMergeState(sqlite3 *db);
 int doltliteSetSessionPendingReplayCommit(sqlite3 *db, u8 pending);
 int doltliteSessionHasPendingReplayCommit(sqlite3 *db);
+#define DOLTLITE_REPLAY_CHERRY_PICK 1
+#define DOLTLITE_REPLAY_REVERT 2
+void doltliteGetSessionReplayState(
+  sqlite3*, u8*, ProllyHash*, ProllyHash*, ProllyHash*, ProllyHash*
+);
+int doltliteSetSessionReplayState(
+  sqlite3*, u8, const ProllyHash*, const ProllyHash*, const ProllyHash*,
+  const ProllyHash*
+);
+void doltliteReplayFinish(sqlite3_context*, int, int, const char*, const char*);
+int doltliteCommitValidateForeignKeyParents(
+  sqlite3*, sqlite3_context*, const ProllyHash*
+);
+
 int doltliteSetSessionMergeSourceSpec(sqlite3 *db, const char *zSpec,
                                       const ProllyHash *pMergeCommit);
 const char *doltliteGetSessionMergeSourceSpec(sqlite3 *db,

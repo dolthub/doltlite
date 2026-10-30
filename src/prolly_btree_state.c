@@ -1118,6 +1118,13 @@ int doltliteSetSessionPendingReplayCommit(sqlite3 *db, u8 pending){
     Btree *p = db->aDb[0].pBt;
     int rc = sessionStateSyncSavepoints(p);
     if( rc!=SQLITE_OK ) return rc;
+    if( !pending || !p->vc.pendingReplayCommit ){
+      p->vc.replayKind = 0;
+      memset(&p->vc.replaySnapshot, 0, sizeof(ProllyHash));
+      memset(&p->vc.replayStaged, 0, sizeof(ProllyHash));
+      memset(&p->vc.replayViolations, 0, sizeof(ProllyHash));
+      memset(&p->vc.replayWorkingSetBasis, 0, sizeof(ProllyHash));
+    }
     p->vc.pendingReplayCommit = pending ? 1 : 0;
   }
   return SQLITE_OK;
@@ -1126,6 +1133,57 @@ int doltliteSetSessionPendingReplayCommit(sqlite3 *db, u8 pending){
 int doltliteSessionHasPendingReplayCommit(sqlite3 *db){
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
   return db->aDb[0].pBt->vc.pendingReplayCommit!=0;
+}
+
+void doltliteGetSessionReplayState(
+  sqlite3 *db, u8 *pKind, ProllyHash *pSnapshot,
+  ProllyHash *pStaged, ProllyHash *pViolations, ProllyHash *pWorkingSetBasis
+){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  if( pKind ) *pKind = p && p->vc.pendingReplayCommit ? p->vc.replayKind : 0;
+  if( pSnapshot ){
+    memset(pSnapshot, 0, sizeof(*pSnapshot));
+    if( p && p->vc.pendingReplayCommit ) *pSnapshot = p->vc.replaySnapshot;
+  }
+  if( pStaged ){
+    memset(pStaged, 0, sizeof(*pStaged));
+    if( p && p->vc.pendingReplayCommit ) *pStaged = p->vc.replayStaged;
+  }
+  if( pViolations ){
+    memset(pViolations, 0, sizeof(*pViolations));
+    if( p && p->vc.pendingReplayCommit ) *pViolations = p->vc.replayViolations;
+  }
+  if( pWorkingSetBasis ){
+    memset(pWorkingSetBasis, 0, sizeof(*pWorkingSetBasis));
+    if( p && p->vc.pendingReplayCommit ){
+      *pWorkingSetBasis = p->vc.replayWorkingSetBasis;
+    }
+  }
+}
+
+int doltliteSetSessionReplayState(
+  sqlite3 *db, u8 kind, const ProllyHash *pSnapshot,
+  const ProllyHash *pStaged, const ProllyHash *pViolations,
+  const ProllyHash *pWorkingSetBasis
+){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  int rc;
+  if( !p ) return SQLITE_ERROR;
+  rc = sessionStateSyncSavepoints(p);
+  if( rc!=SQLITE_OK ) return rc;
+  p->vc.pendingReplayCommit = kind!=0;
+  p->vc.replayKind = kind;
+  memset(&p->vc.replaySnapshot, 0, sizeof(ProllyHash));
+  memset(&p->vc.replayStaged, 0, sizeof(ProllyHash));
+  memset(&p->vc.replayViolations, 0, sizeof(ProllyHash));
+  memset(&p->vc.replayWorkingSetBasis, 0, sizeof(ProllyHash));
+  if( kind ){
+    if( pSnapshot ) p->vc.replaySnapshot = *pSnapshot;
+    if( pStaged ) p->vc.replayStaged = *pStaged;
+    if( pViolations ) p->vc.replayViolations = *pViolations;
+    if( pWorkingSetBasis ) p->vc.replayWorkingSetBasis = *pWorkingSetBasis;
+  }
+  return SQLITE_OK;
 }
 
 int doltliteSetSessionMergeSourceSpec(sqlite3 *db, const char *zSpec,
@@ -1523,6 +1581,11 @@ int doltliteSeedSessionHashes(
     if( rc==SQLITE_OK && !prollyHashIsEmpty(&pBt->vc.conflictsCatalogHash) ){
       rc = xPush(pCtx, &pBt->vc.conflictsTheirCatalog);
       if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.conflictsSourceCommit);
+    }
+    if( rc==SQLITE_OK && pBt->vc.pendingReplayCommit && pBt->vc.replayKind ){
+      rc = xPush(pCtx, &pBt->vc.replaySnapshot);
+      if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replayStaged);
+      if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->vc.replayViolations);
     }
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseOntoCommit);

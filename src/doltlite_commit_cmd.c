@@ -774,7 +774,7 @@ static int doltliteCommitFindMissingForeignKeyParent(
   return SQLITE_OK;
 }
 
-static int doltliteCommitValidateForeignKeyParents(
+int doltliteCommitValidateForeignKeyParents(
   sqlite3 *db,
   sqlite3_context *context,
   const ProllyHash *pCatalogHash

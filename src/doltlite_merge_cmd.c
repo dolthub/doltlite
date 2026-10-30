@@ -889,7 +889,7 @@ int doltliteAttachIgnoredCatalog(
   return rc;
 }
 
-int mergeAbortInPlace(sqlite3 *db){
+static int mergeAbortInPlace(sqlite3 *db){
   ProllyHash headCatHash, stagedHash, trackedHash, ignoredHash, workingHash;
   ProllyHash localHash, mergeHead;
   DoltliteCommit theirCommit;

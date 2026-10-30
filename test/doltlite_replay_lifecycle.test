@@ -1,0 +1,238 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc replay_state {} {
+  list [db eval {SELECT name,hash FROM dolt_branches ORDER BY name}] \
+       [db eval {SELECT id,v FROM t ORDER BY id}] \
+       [db eval {SELECT id,v FROM u ORDER BY id}] \
+       [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+
+proc replay_seed {kind} {
+  switch $::replay_layout {
+    rowid {db eval {CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT)}}
+    clustered {db eval {CREATE TABLE t(id INT PRIMARY KEY,v TEXT)}}
+    without {db eval {CREATE TABLE t(id INT PRIMARY KEY,v TEXT) WITHOUT ROWID}}
+  }
+  db eval {
+    CREATE TABLE u(id INT PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    INSERT INTO u VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+  }
+  if {$kind eq "cherry_pick"} {
+    db eval {
+      SELECT dolt_checkout('-b','target');
+      UPDATE t SET v='target';
+      SELECT dolt_commit('-am','target edit');
+      SELECT dolt_checkout('main');
+    }
+  } else {
+    db eval {
+      UPDATE t SET v='target';
+      SELECT dolt_commit('-am','target edit');
+      SELECT dolt_branch('target');
+    }
+  }
+  db eval {UPDATE t SET v='main'; SELECT dolt_commit('-am','main edit')}
+}
+
+set replay_layout clustered
+foreach replay_layout {rowid clustered without} {
+foreach storage {file memory} {
+  foreach kind {cherry_pick revert} {
+    foreach finish {abort continue} {
+      foreach resolution {ours theirs manual} {
+        foreach boundary {begin nested} {
+          reset_db
+          if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+          replay_seed $kind
+          if {$storage eq "file"} {db close; sqlite3 db test.db}
+          if {$kind eq "revert" && $finish eq "abort"} {
+            db eval {UPDATE u SET v='local'}
+          }
+          set before [replay_state]
+          set head [db one {SELECT dolt_hashof('HEAD')}]
+          db eval BEGIN
+          if {$boundary eq "nested"} {db eval {SAVEPOINT caller}}
+          set prefix replay-$replay_layout.$storage.$kind.$finish.$resolution.$boundary
+          do_test $prefix.conflict {
+            set result [catchsql "SELECT dolt_${kind}('target')"]
+            list [lindex $result 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+          } {1 1}
+          set pending [replay_state]
+          set other [expr {$kind eq "revert" ? "cherry_pick" : "revert"}]
+          foreach wrong {abort continue} {
+            do_test $prefix.wrong-$wrong {
+              list [lindex [catchsql "SELECT dolt_${other}('--$wrong')"] 0] [replay_state]
+            } [list 1 $pending]
+          }
+          foreach next {cherry_pick revert} {
+            do_test $prefix.already-$next {
+              list [lindex [catchsql "SELECT dolt_${next}('target')"] 0] [replay_state]
+            } [list 1 $pending]
+          }
+          do_test $prefix.unresolved {
+            list [lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0] [replay_state]
+          } [list 1 $pending]
+          if {$finish eq "abort"} {
+            do_test $prefix.abort {lindex [catchsql "SELECT dolt_${kind}('--abort')"] 0} 0
+            do_test $prefix.restored {replay_state} $before
+          } else {
+            if {$resolution eq "manual"} {
+              do_test $prefix.resolve {
+                lindex [catchsql {UPDATE t SET v='manual'; DELETE FROM dolt_conflicts_t}] 0
+              } 0
+            } else {
+              do_test $prefix.resolve {
+                lindex [catchsql "SELECT dolt_conflicts_resolve('--$resolution','t')"] 0
+              } 0
+            }
+            do_execsql_test $prefix.stage {SELECT dolt_add('t')} 0
+            if {$storage eq "file" && $resolution eq "theirs"} {
+              catchsql {SELECT dolt_gc()}
+            }
+            do_test $prefix.continue {
+              lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0
+            } 0
+            set value $resolution
+            if {$resolution eq "ours"} {set value main}
+            if {$resolution eq "theirs"} {set value [expr {$kind eq "revert" ? "base" : "target"}]}
+            do_execsql_test $prefix.rows {SELECT v FROM t} $value
+            set message {target edit}
+            if {$kind eq "revert"} {set message {Revert "target edit"}}
+            do_execsql_test $prefix.message {SELECT message FROM dolt_log LIMIT 1} [list $message]
+            do_execsql_test $prefix.parent {
+              SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD')
+            } $head
+            do_execsql_test $prefix.clean {SELECT count(*) FROM dolt_status} 0
+          }
+          do_execsql_test $prefix.conflicts-cleared {SELECT count(*) FROM dolt_conflicts} 0
+          do_test $prefix.idle {lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0} 1
+          if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+          if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+          set after [replay_state]
+          if {$storage eq "file"} {
+            db close
+            sqlite3 db test.db
+            do_test $prefix.reopen {replay_state} $after
+          }
+        }
+      }
+    }
+  }
+}
+
+}
+set replay_layout clustered
+
+foreach kind {cherry_pick revert} {
+  foreach args {{'--continue'} {'--abort'} {'--continue','--abort'}
+                {'--continue','target'} {'--abort','target'}
+                {'--continue','--allow-empty'} {'--abort','--allow-empty'}} {
+    reset_db
+    replay_seed $kind
+    set before [replay_state]
+    do_test replay-invalid-$kind.$args {
+      list [lindex [catchsql "SELECT dolt_${kind}($args)"] 0] [replay_state]
+    } [list 1 $before]
+  }
+  reset_db
+  replay_seed $kind
+  set before [replay_state]
+  db eval BEGIN
+  catchsql "SELECT dolt_${kind}('target')"
+  do_catchsql_test replay-rollback-$kind.refused {COMMIT} {1 {cannot merge: unresolved conflicts cannot be committed}}
+  if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+  do_test replay-rollback-$kind.restored {replay_state} $before
+  do_test replay-rollback-$kind.idle {lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0} 1
+}
+
+foreach kind {cherry_pick revert} {
+  foreach finish {abort continue} {
+    reset_db
+    db eval {
+      CREATE TABLE t(id INT PRIMARY KEY,k INT UNIQUE,v TEXT);
+      CREATE TABLE u(id INT PRIMARY KEY,v TEXT);
+      INSERT INTO t VALUES(1,1,'one'),(2,2,'two');
+      SELECT dolt_commit('-Am','base');
+    }
+    if {$kind eq "cherry_pick"} {
+      db eval {
+        SELECT dolt_checkout('-b','target');
+        UPDATE t SET k=9 WHERE id=2;
+        SELECT dolt_commit('-am','target');
+        SELECT dolt_checkout('main');
+        UPDATE t SET k=9 WHERE id=1;
+      }
+    } else {
+      db eval {
+        UPDATE t SET k=3 WHERE id=2;
+        SELECT dolt_commit('-am','target');
+        SELECT dolt_branch('target');
+        UPDATE t SET k=2 WHERE id=1;
+      }
+    }
+    db eval {SELECT dolt_commit('-am','main')}
+    set before [db eval {SELECT id,k FROM t ORDER BY id}]
+    set head [db one {SELECT dolt_hashof('HEAD')}]
+    db eval BEGIN
+    set prefix replay-violations-$kind.$finish
+    do_test $prefix.pending {
+      set result [catchsql "SELECT dolt_${kind}('target')"]
+      list [lindex $result 0] [db one {SELECT count(*) FROM dolt_constraint_violations}]
+    } {1 1}
+    do_test $prefix.unresolved {lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0} 1
+    do_execsql_test $prefix.commit {COMMIT} {}
+    do_test $prefix.gc {lindex [catchsql {SELECT dolt_gc()}] 0} 0
+    if {$finish eq "abort"} {
+      do_test $prefix.abort {lindex [catchsql "SELECT dolt_${kind}('--abort')"] 0} 0
+      do_execsql_test $prefix.restored {SELECT id,k FROM t ORDER BY id} $before
+      do_test $prefix.head {db one {SELECT dolt_hashof('HEAD')}} $head
+    } else {
+      do_execsql_test $prefix.resolve {
+        UPDATE t SET k=8 WHERE id=2;
+        DELETE FROM dolt_constraint_violations_t;
+        SELECT dolt_add('t');
+      } 0
+      do_test $prefix.continue {lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0} 0
+      do_execsql_test $prefix.value {SELECT k FROM t WHERE id=2} 8
+      do_execsql_test $prefix.parent {
+        SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD')
+      } $head
+    }
+    do_execsql_test $prefix.cleared {SELECT count(*) FROM dolt_constraint_violations} 0
+    if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+    if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+    do_execsql_test $prefix.integrity {PRAGMA integrity_check} ok
+  }
+  reset_db
+  replay_seed $kind
+  db eval BEGIN
+  catchsql "SELECT dolt_${kind}('target')"
+  set pending [replay_state]
+  db eval {SAVEPOINT resolve}
+  db eval {SELECT dolt_conflicts_resolve('--theirs','t'); SELECT dolt_add('t')}
+  db eval {ROLLBACK TO resolve}
+  do_test replay-savepoint-$kind.restored {replay_state} $pending
+  do_test replay-savepoint-$kind.unresolved {lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0} 1
+  do_test replay-savepoint-$kind.abort {lindex [catchsql "SELECT dolt_${kind}('--abort')"] 0} 0
+  if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+  if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+  reset_db
+  replay_seed $kind
+  do_test replay-autocommit-$kind.conflict {lindex [catchsql "SELECT dolt_${kind}('target')"] 0} 1
+  do_execsql_test replay-autocommit-$kind.cleared {SELECT count(*) FROM dolt_conflicts} 0
+  do_test replay-autocommit-$kind.idle {lindex [catchsql "SELECT dolt_${kind}('--continue')"] 0} 1
+}
+
+reset_db
+replay_seed revert
+db eval BEGIN
+catchsql {SELECT dolt_revert('target','--author','Ann <ann@test>')}
+db eval {SELECT dolt_conflicts_resolve('--theirs','t'); SELECT dolt_add('t')}
+do_test replay-author.continue {lindex [catchsql {SELECT dolt_revert('--continue')}] 0} 0
+do_execsql_test replay-author.metadata {SELECT committer,email FROM dolt_log LIMIT 1} {Ann ann@test}
+
+finish_test
+

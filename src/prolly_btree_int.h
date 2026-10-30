@@ -299,6 +299,11 @@ typedef struct DoltVcState {
   ProllyHash stagedCatalog;
   u8 isMerging;
   u8 pendingReplayCommit;
+  u8 replayKind;
+  ProllyHash replaySnapshot;
+  ProllyHash replayStaged;
+  ProllyHash replayViolations;
+  ProllyHash replayWorkingSetBasis;
   ProllyHash mergeCommitHash;
   ProllyHash conflictsCatalogHash;
   /* Their side's catalog for the recorded conflicts; meaningful only while

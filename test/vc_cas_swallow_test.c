@@ -987,6 +987,98 @@ static void test_apply_publish_failure_is_atomic(void){
   }
 }
 
+static void test_replay_finish_failure_is_atomic(void){
+  int revert, aborting, fault;
+  for(revert=0; revert<2; revert++){
+    for(aborting=0; aborting<2; aborting++){
+      for(fault=0; fault<(aborting ? 1 : 2); fault++){
+        char path[512], sql[160];
+        sqlite3 *db, *peer = 0;
+        char *before, *after, *err = 0;
+        ProllyHash staged, afterStaged;
+        u8 kind = 0;
+        int rc, n = -1;
+        snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR
+            "/cas_replay_finish_%d_%d_%d_%d.db", (int)getpid(),
+            revert, aborting, fault);
+        db = openDb(path);
+        check("replay confirm: open", db!=0);
+        if( !db ) continue;
+        check("replay confirm: base", exec(db,
+            "CREATE TABLE t(id INT PRIMARY KEY,v TEXT);"
+            "INSERT INTO t VALUES(1,'base');"
+            "SELECT dolt_commit('-Am','base');")==SQLITE_OK);
+        if( !revert ){
+          check("replay confirm: source", exec(db,
+              "SELECT dolt_checkout('-b','target')")==SQLITE_OK);
+        }
+        check("replay confirm: target", exec(db,
+            "UPDATE t SET v='target';"
+            "SELECT dolt_commit('-am','target edit');")==SQLITE_OK);
+        check("replay confirm: branch", exec(db, revert
+            ? "SELECT dolt_branch('target')"
+            : "SELECT dolt_checkout('main')")==SQLITE_OK);
+        check("replay confirm: main", exec(db,
+            "UPDATE t SET v='main';"
+            "SELECT dolt_commit('-am','main edit');")==SQLITE_OK);
+        sqlite3_close(db);
+        db = 0;
+        check("replay confirm: reopen", sqlite3_open(path, &db)==SQLITE_OK);
+        check("replay confirm: begin", exec(db, "BEGIN")==SQLITE_OK);
+        rc = execQuiet(db, revert ? "SELECT dolt_revert('target')"
+            : "SELECT dolt_cherry_pick('target')", &err);
+        sqlite3_free(err);
+        err = 0;
+        check("replay confirm: conflict", rc!=SQLITE_OK && queryInt(db,
+            "SELECT count(*) FROM dolt_conflicts", &n)==SQLITE_OK && n==1);
+        if( !aborting ){
+          check("replay confirm: resolve", exec(db,
+              "SELECT dolt_conflicts_resolve('--theirs','t');"
+              "SELECT dolt_add('t');")==SQLITE_OK);
+        }
+        before = queryText(db, "SELECT dolt_hashof('HEAD')");
+        doltliteGetSessionStaged(db, &staged);
+        check("replay confirm: peer open", sqlite3_open(path, &peer)==SQLITE_OK);
+        sqlite3_busy_timeout(peer, 0);
+        rc = sqlite3_exec(peer, "INSERT INTO t VALUES(900,'peer')", 0, 0, 0);
+        check("replay confirm: peer write blocked", (rc&0xff)==SQLITE_BUSY);
+        doltliteTestClearFaults();
+        if( fault ) doltliteTestFailNextCreateCommit();
+        else doltliteTestFailNextHeadConfirm();
+        snprintf(sql, sizeof(sql), "SELECT dolt_%s('--%s')",
+            revert ? "revert" : "cherry_pick", aborting ? "abort" : "continue");
+        rc = execQuiet(db, sql, &err);
+        doltliteTestClearFaults();
+        check("replay confirm: failed", rc!=SQLITE_OK);
+        if( !fault ) check("replay confirm: busy", rc==SQLITE_BUSY);
+        sqlite3_free(err);
+        after = queryText(db, "SELECT dolt_hashof('HEAD')");
+        check("replay confirm: head unchanged",
+            before && after && strcmp(before, after)==0);
+        doltliteGetSessionStaged(db, &afterStaged);
+        check("replay confirm: staged unchanged",
+            prollyHashCompare(&staged, &afterStaged)==0);
+        doltliteGetSessionReplayState(db, &kind, 0, 0, 0, 0);
+        check("replay confirm: pending retained", kind==(revert
+            ? DOLTLITE_REPLAY_REVERT : DOLTLITE_REPLAY_CHERRY_PICK));
+        check("replay confirm: retry", exec(db, sql)==SQLITE_OK);
+        if( !sqlite3_get_autocommit(db) ){
+          check("replay confirm: commit", exec(db, "COMMIT")==SQLITE_OK);
+        }
+        check("replay confirm: peer write after finish", exec(peer,
+            "INSERT INTO t VALUES(900,'peer');"
+            "SELECT dolt_commit('-am','peer');")==SQLITE_OK);
+        check("replay confirm: peer row kept", queryInt(db,
+            "SELECT count(*) FROM t WHERE id=900", &n)==SQLITE_OK && n==1);
+        sqlite3_free(before);
+        sqlite3_free(after);
+        sqlite3_close(peer);
+        closeRm(db, path);
+      }
+    }
+  }
+}
+
 int main(void){
   sqlite3_initialize();
   test_force_commit_keeps_cvs();
@@ -1008,6 +1100,7 @@ int main(void){
   test_cherry_pick_install_all_or_nothing();
   test_ff_interrupt_after_advance();
   test_apply_publish_failure_is_atomic();
+  test_replay_finish_failure_is_atomic();
   printf("vc_cas_swallow_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

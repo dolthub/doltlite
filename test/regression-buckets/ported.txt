@@ -209,3 +209,4 @@ doltlite_creds
 doltlite_http_timeout
 doltlite_cherry_pick_allow_empty
 doltlite_skip_verification
+doltlite_replay_lifecycle
