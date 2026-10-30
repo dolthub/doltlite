@@ -49,6 +49,40 @@ SELECT * FROM dolt_commit_ancestors WHERE commit_hash = dolt_hashof('HEAD');
 | `ref not found: <x>` | `dolt_history_<t>` / `dolt_at_<t>` given an unknown revision |
 | `no such table: <name>` | `dolt_at_<x>` where `x` is not a user table |
 
+## SQL equivalents for Dolt log filters
+
+`dolt_log` accepts one revision or range. Use SQL for Dolt's additional
+history filters:
+
+```sql
+-- Dolt: dolt_log('--merges'), or '--min-parents', '2'
+SELECT l.* FROM dolt_log l
+WHERE (SELECT count(parent_hash) FROM dolt_commit_ancestors a
+       WHERE a.commit_hash=l.commit_hash) >= 2;
+
+-- Dolt: dolt_log('feature', '--not', 'main')
+SELECT * FROM dolt_log('main..feature');
+
+-- Dolt: dolt_log('main', 'feature')
+SELECT * FROM dolt_log('main')
+UNION
+SELECT * FROM dolt_log('feature');
+```
+
+Change the parent-count threshold for `--min-parents`. Count `parent_hash`,
+not rows: a root has one ancestor row with a NULL parent. `UNION` removes
+shared ancestors; add an outer `ORDER BY` when combining histories.
+
+For Dolt's `--tables`, use [log_table_filter.sql](log_table_filter.sql), binding
+`:revision` to a revision or range and `:table_name` to one table name. It
+compares table hashes against the first two parents,
+including parents outside the selected range. It excludes parentless roots,
+as Dolt does. For a merge where only one parent contains the table, it compares
+against that parent; merely introducing the same table to the other ancestry
+does not count as a change. Row, schema and index changes are included. The query reads
+historical schemas even when the table has since been dropped or renamed.
+It scans history and diffs, so narrow the revision range for large histories.
+
 ## Differences from Dolt
 
 `dolt_log` walks selected ancestry; `dolt_commit_ancestors` exposes the graph
@@ -58,5 +92,5 @@ the DoltLite set above.
 ## See also
 
 [refs.md](refs.md), [dolt_diff.md](dolt_diff.md),
-`test/vc_oracle_log_test.sh`, `test/vc_oracle_history_test.sh`,
+`test/vc_oracle_log_test.sh`, `test/vc_oracle_log_equivalents_test.sh`, `test/vc_oracle_history_test.sh`,
 `test/vc_oracle_blame_test.sh`, `test/vc_oracle_at_test.sh`.

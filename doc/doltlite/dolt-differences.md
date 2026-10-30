@@ -15,6 +15,7 @@ bug; please file it.
 | `@@dolt_*` session variables | None. SQLite has no session variables; `dolt_config('user.name', ...)` sets the committer per connection. |
 | Stored procedures, `dolt_procedures` | None. SQLite has no stored procedures. |
 | One database per server, many databases | One file per database. There is no `dolt_undrop`, `dolt_purge_dropped_databases`, or `dolt_backup`; the file is the backup. |
+| Dolt log flags for merges, minimum parents, excluded revisions, multiple revisions and table filtering | [SQL equivalents](dolt_log.md#sql-equivalents-for-dolt-log-filters) use the revision-taking `dolt_log`, graph and diff tables. |
 | Column names on `dolt_log`, `dolt_diff`, and other system tables | May differ. Compare rows, not headers. |
 
 Only command functions are direct-only; `dolt_hashof` and `dolt_version` are not.
