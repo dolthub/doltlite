@@ -442,6 +442,66 @@ run_test "rename_fixed_commits_other_branch" \
 $RN_WANT" "$RN_DB"
 rm -f "$RN_DB"
 
+# -0.0 and 0.0 are different stored bytes. A numeric compare hides that
+# from dolt_diff_stat and dolt_patch, and %g prints the negative zero as 0.0.
+NEG=/tmp/test_diff_negzero_$$.db; rm -f "$NEG"
+dltest_require "negzero_setup" "$NEG" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB, w INT);
+INSERT INTO t VALUES(1,0.0,1);
+SELECT dolt_commit('-Am','c1');
+UPDATE t SET v=-0.0;
+SELECT dolt_commit('-am','c2');
+"
+run_test "negzero_diff_row" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~1','HEAD');" \
+  "1" "$NEG"
+run_test "negzero_stat_modified" \
+  "SELECT rows_modified||'|'||cells_modified FROM dolt_diff_stat('HEAD~1','HEAD');" \
+  "1|1" "$NEG"
+run_test "negzero_patch_count" \
+  "SELECT count(*) FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type='data';" \
+  "1" "$NEG"
+run_test_match "negzero_patch_keeps_sign" \
+  "SELECT statement FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type='data';" \
+  "\"v\"=-0\\.0" "$NEG"
+run_test_match "negzero_insert_patch_is_positive" \
+  "SELECT statement FROM dolt_patch('HEAD~2','HEAD~1') WHERE diff_type='data';" \
+  "1,0\\.0,1" "$NEG"
+
+PLAY=/tmp/test_diff_negzero_play_$$.db; rm -f "$PLAY"
+dltest_require "negzero_play_setup" "$PLAY" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB, w INT);
+INSERT INTO t VALUES(1,0.0,1);
+"
+negzero_stmt=$(dltest_run_sql \
+  "SELECT statement FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type='data';" \
+  "$NEG" bail)
+printf '%s\n' "$negzero_stmt" | "$DOLTLITE" -bail "$PLAY" >/dev/null
+run_test "negzero_replay_keeps_sign" \
+  "SELECT CASE WHEN atan2(v,-1)<0 THEN 1 ELSE 0 END FROM t;" \
+  "1" "$PLAY"
+
+INS=/tmp/test_diff_negzero_ins_$$.db; rm -f "$INS"
+dltest_require "negzero_insert_setup" "$INS" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);
+INSERT INTO t VALUES(1,-0.0);
+SELECT dolt_commit('-Am','c1');
+"
+run_test_match "negzero_insert_patch_keeps_sign" \
+  "SELECT statement FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type='data';" \
+  "1,-0\\.0" "$INS"
+REPLAY=/tmp/test_diff_negzero_replay_$$.db; rm -f "$REPLAY"
+dltest_require "negzero_replay_setup" "$REPLAY" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);"
+ins_stmt=$(dltest_run_sql \
+  "SELECT statement FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type='data';" \
+  "$INS" bail)
+printf '%s\n' "$ins_stmt" | "$DOLTLITE" -bail "$REPLAY" >/dev/null
+run_test "negzero_insert_replay_keeps_sign" \
+  "SELECT CASE WHEN atan2(v,-1)<0 THEN 1 ELSE 0 END FROM t;" \
+  "1" "$REPLAY"
+
+rm -f "$NEG" "$PLAY" "$INS" "$REPLAY"
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 
 dltest_finish
