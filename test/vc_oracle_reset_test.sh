@@ -468,6 +468,31 @@ SELECT dolt_add('-A');
 SELECT dolt_reset('nope', 'nope2');
 "
 
+echo "--- NULL arguments count toward the positional arity ---"
+
+NULL_RESET_SEED="
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO a VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+INSERT INTO a VALUES (3, 30);
+INSERT INTO b VALUES (3, 300);
+SELECT dolt_add('-A');
+"
+
+for null_args in "NULL, 'HEAD~1'" "'HEAD~1', NULL" "'a', NULL" "NULL, 'a'" "NULL, NULL"; do
+  case_name=$(printf '%s' "$null_args" | tr -c 'A-Za-z0-9' '_')
+  oracle "reset_null_args_unstage_all_$case_name" "
+$NULL_RESET_SEED
+SELECT dolt_reset($null_args);
+"
+done
+
 oracle_same_session "reset_path_dropped_table_stays_dropped" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
 INSERT INTO a VALUES (1, 10);
