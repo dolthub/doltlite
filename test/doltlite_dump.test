@@ -277,8 +277,9 @@ foreach format {sql sqlite} {
   } 1
   do_test dump-empty-existing-$format.kept {file size $path} 0
   set path "dump unicode # ? ' 🐬.$format"; forcedelete $path
+  set utf8 [encoding convertto utf-8 $path]
   do_test dump-path-$format.result {
-    db one {SELECT dolt_dump('--file-name',$path,'-r',$format)}
+    db one {SELECT dolt_dump('--file-name',CAST($utf8 AS TEXT),'-r',$format)}
   } 0
   do_test dump-path-$format.exists {file exists $path} 1
 }

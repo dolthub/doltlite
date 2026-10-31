@@ -1038,10 +1038,14 @@ static int prollyBtreeOpenImpl(
       vfsFlags |= SQLITE_OPEN_READONLY;
     }
     if( zEngine && sqlite3StrICmp(zEngine, "sqlite")==0 ){
-      int hasContent = 1;
-      rc = doltliteFileHasContent(pVfs, zFilename, &hasContent);
-      if( rc!=SQLITE_OK ) return rc;
-      if( !hasContent ) useOrig = 1;
+      if( (vfsFlags & SQLITE_OPEN_MEMORY)!=0 || strcmp(zFilename, ":memory:")==0 ){
+        useOrig = 1;
+      }else{
+        int hasContent = 1;
+        rc = doltliteFileHasContent(pVfs, zFilename, &hasContent);
+        if( rc!=SQLITE_OK ) return rc;
+        if( !hasContent ) useOrig = 1;
+      }
     }
   }
   /* Stock shares an in-memory database between connections that name it:

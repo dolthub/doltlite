@@ -134,6 +134,38 @@ static void values(void){
   }
 }
 
+static int memoryAccessCalls;
+static int memoryAccess(sqlite3_vfs *vfs, const char *path, int flags, int *exists){
+  memoryAccessCalls++;
+  return SQLITE_IOERR_ACCESS;
+}
+static void memoryDestinations(void){
+  sqlite3_vfs vfs = *sqlite3_vfs_find(0);
+  const char *uris[] = {"file::memory:?doltlite_engine=sqlite",
+                       "file:dump-memory?mode=memory&doltlite_engine=sqlite",
+                       "file:dump-memory?doltlite_engine=sqlite"};
+  int i;
+  vfs.zName = "dump-memory";
+  vfs.xAccess = memoryAccess;
+  check("memory VFS registered",sqlite3_vfs_register(&vfs,0)==SQLITE_OK);
+  for(i=0; i<3; i++){
+    sqlite3 *db=0;
+    int flags=SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_URI;
+    int rc;
+    if( i==2 ) flags |= SQLITE_OPEN_MEMORY;
+    memoryAccessCalls=0;
+    rc=sqlite3_open_v2(uris[i],&db,flags,vfs.zName);
+    check("SQLite memory destination opens",rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("SQLite memory destination engine",number(db,"SELECT doltlite_engine()='orig'")==1);
+      check("SQLite memory destination writes",sql(db,"CREATE TABLE t(id INT); INSERT INTO t VALUES(1)")==SQLITE_OK);
+    }
+    check("memory destination avoids filesystem",memoryAccessCalls==0);
+    sqlite3_close(db);
+  }
+  check("memory VFS unregistered",sqlite3_vfs_unregister(&vfs)==SQLITE_OK);
+}
+
 static void virtualTables(void){
   const char *ddl[] = {"CREATE VIRTUAL TABLE v USING fts5(body)",
                       "CREATE VIRTUAL TABLE v USING rtree(id,x1,x2,y1,y2)"};
@@ -323,7 +355,7 @@ static void legacyMeta(void){
 }
 
 int main(void){
-  values(); virtualTables(); failures(); snapshot(); legacyMeta();
+  memoryDestinations(); values(); virtualTables(); failures(); snapshot(); legacyMeta();
 #ifndef SQLITE_OMIT_AUTHORIZATION
   authorization();
 #endif

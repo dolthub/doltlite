@@ -11,13 +11,17 @@ int main(int argc, char **argv){
   sqlite3 *db = 0, *out = 0;
   sqlite3_stmt *q = 0;
   char *error = 0;
-  int bytes = 0;
+  int bytes = 0, rc;
   if( sqlite3_open(":memory:",&db)!=SQLITE_OK ) return 1;
   if( sqlite3_exec(db,"CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);"
       "INSERT INTO t VALUES(7,'export'); SELECT dolt_commit('-Am','seed');"
       "UPDATE t SET v='working'",0,0,0)!=SQLITE_OK ) return 2;
-  if( doltlite_dump_sql(db,0,discard,&bytes,&error)!=SQLITE_OK
-   || bytes==0 || error ) return 3;
+  rc = doltlite_dump_sql(db,0,discard,&bytes,&error);
+  if( rc!=SQLITE_OK || bytes==0 || error ){
+    fprintf(stderr,"SQL export (%d, %d bytes): %s\n",rc,bytes,
+        error ? error : sqlite3_errmsg(db));
+    return 3;
+  }
   if( sqlite3_open_v2("file::memory:?doltlite_engine=sqlite",&out,
       SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_URI,0)!=SQLITE_OK ) return 4;
   if( doltlite_export_sqlite(db,"HEAD",out,&error)!=SQLITE_OK || error ) return 5;
