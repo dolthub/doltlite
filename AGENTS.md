@@ -185,8 +185,10 @@ Several independent layers. A change under `src/` should run the relevant ones;
 - **`test/vc_oracle_*_test.sh`** — Dolt oracle suites: run identical SQL against
   DoltLite (`SELECT dolt_x`) and real Dolt (`CALL dolt_x`) and diff the
   normalized output. Invoke as `bash test/vc_oracle_X_test.sh build/doltlite dolt`.
-  CI auto-runs anything matching `vc_oracle_*_test.sh` / `oracle_*_test.sh`, so a
-  new suite with that name needs no wiring. Compare semantics, not vtable shape.
+  CI runs `vc_oracle_*_test.sh` suites by bucket: add a new one to exactly one
+  `test/oracle-buckets/*.txt`, or `test/check_oracle_buckets.sh` fails CI.
+  `oracle_*_test.sh` suites are picked up by name. Compare semantics, not
+  vtable shape.
 - **Regression buckets** — `test/regression-buckets/*.txt` list the inherited
   and ported upstream `*.test` files gated via `testfixture`. `testfixture` is
   built **with** `SQLITE_TEST` (the CLI is not), so don't `#ifdef SQLITE_TEST`-
