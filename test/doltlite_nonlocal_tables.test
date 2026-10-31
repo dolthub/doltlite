@@ -211,4 +211,49 @@ do_execsql_test nonlocal-table-list-named {
   SELECT count(*) FROM pragma_table_list('ghost');
 } {settings 0}
 
+# A target branch can be deleted or renamed while its attachment is idle;
+# names it served then fail as in Dolt, and come back with the branch.
+nl_reset
+do_execsql_test nonlocal-target-setup {
+  SELECT dolt_branch('shared', 'main');
+  SELECT dolt_branch('shared2', 'main');
+  INSERT INTO dolt_nonlocal_tables VALUES
+    ('team','shared','users','immediate'),
+    ('team2','shared2','users','immediate');
+  SELECT count(*) FROM team;
+  SELECT count(*) FROM team2;
+} {0 0 1 1}
+do_catchsql_test nonlocal-target-delete-in-txn {
+  BEGIN;
+  INSERT INTO team VALUES(7,'txn');
+  SELECT dolt_branch('-D','shared');
+} {1 {branch 'shared' is attached in this connection}}
+do_execsql_test nonlocal-target-delete-in-txn-rollback {
+  ROLLBACK;
+} {}
+do_catchsql_test nonlocal-target-delete {
+  SELECT dolt_branch('-D','shared');
+  SELECT count(*) FROM team;
+} {1 {branch not found: shared}}
+do_catchsql_test nonlocal-target-delete-write {
+  INSERT INTO team VALUES(8,'gone');
+} {1 {branch not found: shared}}
+do_catchsql_test nonlocal-target-rename {
+  SELECT dolt_branch('-m','shared2','renamed');
+  SELECT count(*) FROM team2;
+} {1 {branch not found: shared2}}
+do_test nonlocal-target-fresh-connection {
+  sqlite3 db2 [file normalize test.db]/other
+  set r [catchsql {SELECT count(*) FROM team2} db2]
+  db2 close
+  set r
+} {1 {branch not found: shared2}}
+do_execsql_test nonlocal-target-recreated {
+  SELECT dolt_branch('shared', 'main');
+  SELECT count(*) FROM team;
+} {0 1}
+do_execsql_test nonlocal-target-detached {
+  SELECT name FROM pragma_database_list ORDER BY seq;
+} {main dolt_nonlocal:shared}
+
 finish_test
