@@ -22,7 +22,7 @@ xcrun --sdk iphonesimulator clang -O1 -Werror -Wno-comment \
   -target "$arch-apple-ios15.0-simulator" -isysroot "$sdk" \
   -DDOLTLITE_ENABLE_REMOTES=0 -DSQLITE_THREADSAFE=1 -I"$build" \
   -c "$build/sqlite3.c" -o "$tmp/doltlite.o"
-xcrun --sdk iphonesimulator clang -O1 -Werror \
+xcrun --sdk iphonesimulator clang -O1 -Werror -fobjc-arc \
   -target "$arch-apple-ios15.0-simulator" -isysroot "$sdk" -I"$build" \
   "$root/test/ios_dump_probe.m" "$tmp/doltlite.o" -framework Foundation -framework UIKit -lz \
   -o "$app/ExportProbe"
@@ -32,6 +32,7 @@ cat > "$app/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.dolthub.doltlite.ExportProbe</string>
 <key>CFBundleName</key><string>ExportProbe</string>
+<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 <key>CFBundleExecutable</key><string>ExportProbe</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
@@ -41,6 +42,13 @@ cat > "$app/Info.plist" <<'PLIST'
 <key>UIDeviceFamily</key><array><integer>1</integer></array>
 <key>MinimumOSVersion</key><string>15.0</string>
 <key>UILaunchScreen</key><dict/>
+<key>UIApplicationSceneManifest</key><dict>
+<key>UIApplicationSupportsMultipleScenes</key><false/>
+<key>UISceneConfigurations</key><dict>
+<key>UIWindowSceneSessionRoleApplication</key><array><dict>
+<key>UISceneConfigurationName</key><string>ExportProbe</string>
+<key>UISceneDelegateClassName</key><string>ExportProbeSceneDelegate</string>
+</dict></array></dict></dict>
 </dict></plist>
 PLIST
 codesign --force --sign - "$app"

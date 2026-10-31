@@ -39,18 +39,34 @@ static int runExportProbe(NSString *directory){
 
 #if TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
-@interface ExportProbeDelegate : NSObject <UIApplicationDelegate>
+@interface ExportProbeSceneDelegate : NSObject <UIWindowSceneDelegate>
+@property(nonatomic,strong) UIWindow *window;
 @end
-@implementation ExportProbeDelegate
-- (BOOL)application:(UIApplication*)application
-    didFinishLaunchingWithOptions:(NSDictionary*)options {
+@implementation ExportProbeSceneDelegate
+- (void)scene:(UIScene*)scene willConnectToSession:(UISceneSession*)session
+    options:(UISceneConnectionOptions*)options {
+  self.window=[[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
+  self.window.rootViewController=[[UIViewController alloc] init];
+  [self.window makeKeyAndVisible];
   dispatch_async(dispatch_get_main_queue(), ^{
     NSString *directory=[NSTemporaryDirectory() stringByAppendingPathComponent:@"doltlite-export-probe"];
     exit(runExportProbe(directory));
   });
-  return YES;
 }
 @end
+@interface ExportProbeDelegate : NSObject <UIApplicationDelegate>
+@end
+@implementation ExportProbeDelegate
+- (UISceneConfiguration*)application:(UIApplication*)application
+    configurationForConnectingSceneSession:(UISceneSession*)session
+    options:(UISceneConnectionOptions*)options {
+  UISceneConfiguration *configuration=[[UISceneConfiguration alloc]
+      initWithName:@"ExportProbe" sessionRole:session.role];
+  configuration.delegateClass=[ExportProbeSceneDelegate class];
+  return configuration;
+}
+@end
+
 int main(int argc, char **argv){
   @autoreleasepool {
     return UIApplicationMain(argc,argv,nil,NSStringFromClass([ExportProbeDelegate class]));

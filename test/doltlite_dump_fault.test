@@ -2,6 +2,12 @@ set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 source $testdir/malloc_common.tcl
 
+proc dump_source_state {} {
+  db eval {
+    SELECT dolt_hashof('HEAD'),active_branch(),dolt_hashof_table('t'),dolt_hashof_table('t','STAGED');
+    SELECT * FROM dolt_status;
+  }
+}
 proc dump_fault_prepare {} {
   catch {db close}
   forcedelete dump-fault.sql dump-fault.sqlite
@@ -12,8 +18,10 @@ proc dump_fault_prepare {} {
     CREATE INDEX tv ON t(v);
     INSERT INTO t VALUES(1,zeroblob(32768)),(2,'two');
     SELECT dolt_commit('-Am','seed');
+    UPDATE t SET v='staged' WHERE id=2; SELECT dolt_add('.');
+    UPDATE t SET v='working' WHERE id=2;
   }
-  set ::dumpBefore [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  set ::dumpBefore [dump_source_state]
 }
 proc dump_fault_check {failed message injected} {
   set path dump-fault.$::dumpFormat
@@ -29,12 +37,14 @@ proc dump_fault_check {failed message injected} {
     } else {sqlite3 out file:dump-fault.sqlite?doltlite_engine=sqlite -uri 1}
     set rows [out eval {SELECT id,length(v) FROM main.t ORDER BY id; PRAGMA integrity_check}]
     out close
-    if {$rows ne {1 32768 2 3 ok}} {error "incorrect successful export: $rows"}
+    set expected {1 32768 2 3 ok}
+    if {$::dumpRef eq "WORKING"} {set expected {1 32768 2 7 ok}}
+    if {$rows ne $expected} {error "incorrect successful export: $rows"}
   }
   set temporary [glob -nocomplain dump-fault.*-dump-*]
   if {[llength $temporary] && !$injected} {error "temporary export leaked without a fault"}
   foreach f $temporary {forcedelete $f}
-  set after [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  set after [dump_source_state]
   if {$after ne $::dumpBefore || [db one {SELECT count(*) FROM t}]!=2} {
     error "source changed after export"
   }
@@ -50,6 +60,7 @@ foreach ::dumpFormat {sql sqlite} {
       dump_fault_check $testrc $testresult $testnfail
     }
   }
+  set ::dumpRef WORKING
   set finished 0
   for {set i 1} {!$finished} {incr i} {
     dump_fault_prepare
