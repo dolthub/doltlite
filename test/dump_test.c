@@ -67,15 +67,18 @@ struct Sink {
   int fail;
   sqlite3 *peer;
   int advanced;
+  const char *action;
+  int limit, errorCode;
 };
 static int writer(void *ctx, const void *data, int n){
   Sink *s = ctx;
   s->calls++;
   if( n>s->max ) s->max=n;
   if( s->fail && s->calls>=s->fail ) return SQLITE_FULL;
+  if( s->limit && s->n+n>s->limit ) return s->errorCode;
   if( s->peer && !s->advanced ){
     s->advanced=1;
-    check("peer advances during snapshot",sql(s->peer,
+    check("peer advances during snapshot",sql(s->peer,s->action ? s->action :
         "UPDATE t SET v='peer'; INSERT INTO other VALUES(2);"
         "SELECT dolt_commit('-am','peer');")==SQLITE_OK);
   }
@@ -167,24 +170,44 @@ static void memoryDestinations(void){
 }
 
 static void virtualTables(void){
-  const char *ddl[] = {"CREATE VIRTUAL TABLE v USING fts5(body)",
-                      "CREATE VIRTUAL TABLE v USING rtree(id,x1,x2,y1,y2)"};
-  const char *rows[] = {"INSERT INTO v VALUES('hello export')",
-                       "INSERT INTO v VALUES(1,0,1,0,1)"};
-  const char *query[] = {"SELECT count(*) FROM v WHERE v MATCH 'hello'",
-                        "SELECT count(*) FROM v WHERE x1<=0.5 AND x2>=0.5"};
+  const char *ddl[] = {
+    "CREATE VIRTUAL TABLE v USING fts3(body)",
+    "CREATE VIRTUAL TABLE v USING fts4(body)",
+    "CREATE VIRTUAL TABLE v USING fts5(body)",
+    "CREATE TABLE content(id INTEGER PRIMARY KEY,body TEXT);"
+    "CREATE VIRTUAL TABLE v USING fts5(body,content='content',content_rowid='id')",
+    "CREATE VIRTUAL TABLE v USING fts5(body,content='')",
+    "CREATE VIRTUAL TABLE v USING rtree(id,x1,x2,y1,y2)",
+    "CREATE VIRTUAL TABLE v USING rtree_i32(id,x1,x2,y1,y2)"
+  };
+  const char *options[] = {"ENABLE_FTS3","ENABLE_FTS4","ENABLE_FTS5",
+                          "ENABLE_FTS5","ENABLE_FTS5","ENABLE_RTREE","ENABLE_RTREE"};
   int module, historical, format;
-  for(module=0; module<2; module++){
+  for(module=0; module<(int)(sizeof(ddl)/sizeof(ddl[0])); module++){
     sqlite3 *db=0;
     sqlite3_open(":memory:",&db);
-    if( !number(db,module ? "SELECT sqlite_compileoption_used('ENABLE_RTREE')"
-                         : "SELECT sqlite_compileoption_used('ENABLE_FTS5')") ){
+    if( !sqlite3_compileoption_used(options[module]) ){
       sqlite3_close(db);
       continue;
     }
     check("virtual schema",sql(db,ddl[module])==SQLITE_OK);
-    check("virtual seed",sql(db,rows[module])==SQLITE_OK);
+    if( module>=5 ){
+      check("multi-level R-tree seed",sql(db,
+          "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1500)"
+          "INSERT INTO v SELECT i,i-1,i,0,1 FROM n")==SQLITE_OK);
+    }else{
+      if( module==3 ) check("external content seed",sql(db,
+          "INSERT INTO content VALUES(1,'hello export')")==SQLITE_OK);
+      check("virtual seed",sql(db,"INSERT INTO v(rowid,body) VALUES(1,'hello export')")==SQLITE_OK);
+    }
     check("virtual commit",sql(db,"SELECT dolt_commit('-Am','virtual')")==SQLITE_OK);
+    if( module>=5 ){
+      check("working R-tree seed",sql(db,"INSERT INTO v VALUES(2000,0,1,0,1)")==SQLITE_OK);
+    }else{
+      if( module==3 ) check("working external content seed",sql(db,
+          "INSERT INTO content VALUES(2,'hello working')")==SQLITE_OK);
+      check("working virtual seed",sql(db,"INSERT INTO v(rowid,body) VALUES(2,'hello working')")==SQLITE_OK);
+    }
     for(historical=0; historical<2; historical++) for(format=0; format<2; format++){
       sqlite3 *out=openStock();
       char *error=0;
@@ -200,11 +223,130 @@ static void virtualTables(void){
         rc=doltlite_export_sqlite(db,ref,out,&error);
         check("virtual direct",rc==SQLITE_OK);
       }
-      if( rc ) fprintf(stderr,"virtual export: %s\n",error ? error : "");
-      check("virtual immediate query",number(out,query[module])==1);
-      sqlite3_free(error); sqlite3_close(out);
+      if( rc ) fprintf(stderr,"virtual export module %d ref %s: %s\n",module,ref,error ? error : "");
+      check("virtual immediate query",number(out,module>=5
+          ? "SELECT count(*) FROM main.v WHERE x1<=0.5 AND x2>=0.5"
+          : "SELECT count(*) FROM main.v WHERE v MATCH 'hello'")==2-historical);
+      if( module>=5 ) check("R-tree integrity",number(out,"SELECT rtreecheck('v')='ok'")==1);
+      else if( module>=2 ) check("FTS5 integrity",sql(out,"INSERT INTO main.v(v) VALUES('integrity-check')")==SQLITE_OK);
+      sqlite3_free(error);sqlite3_close(out);
     }
     sqlite3_close(db);
+  }
+}
+
+static void destinationScope(void){
+  sqlite3 *source=0;
+  int format;
+  sqlite3_open(":memory:",&source);
+  sql(source,"CREATE TABLE audit(id INTEGER PRIMARY KEY);"
+      "CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT,v TEXT);"
+      "CREATE INDEX ix ON t(v); CREATE VIEW vv AS SELECT * FROM t;"
+      "CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO audit VALUES(new.id); END;"
+      "INSERT INTO t VALUES(1,'one'),(100,'deleted'); DELETE FROM t WHERE id=100;"
+      "CREATE TABLE pragma_table_xinfo(v TEXT); INSERT INTO pragma_table_xinfo VALUES('ordinary');"
+      "CREATE TABLE \"quote \"\" name\"(\"strange \"\" column\" TEXT);"
+      "INSERT INTO \"quote \"\" name\" VALUES('quoted');");
+  for(format=0; format<2; format++){
+    sqlite3 *out=openStock();
+    char *error=0;
+    int rc;
+    sql(out,"CREATE TEMP TABLE audit(id INTEGER PRIMARY KEY); INSERT INTO temp.audit VALUES(999);"
+        "CREATE TEMP TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT,v TEXT);"
+        "INSERT INTO temp.t VALUES(999,'sentinel');"
+        "CREATE INDEX temp.ix ON t(v); CREATE TEMP VIEW vv AS SELECT 'sentinel' AS v;"
+        "CREATE TEMP TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO audit VALUES(new.id); END;");
+    if( format ){
+      Sink sink={0};
+      rc=doltlite_dump_sql(source,0,writer,&sink,&error);
+      check("scoped SQL export",rc==SQLITE_OK && !error);
+      if( rc==SQLITE_OK ){
+        rc=sqlite3_exec(out,sink.data,0,0,&error);
+        check("scoped SQL replay",rc==SQLITE_OK && !error);
+      }
+      free(sink.data);
+    }else{
+      rc=doltlite_export_sqlite(source,0,out,&error);
+      check("scoped SQLite export",rc==SQLITE_OK && !error);
+    }
+    if( rc ) fprintf(stderr,"scoped export: %s\n",error ? error : "");
+    check("main rows exported",number(out,"SELECT count(*) FROM main.t WHERE id=1 AND v='one'")==1);
+    check("main audit preserved",number(out,"SELECT count(*) FROM main.audit")==2);
+    check("main index present",number(out,"SELECT count(*) FROM main.sqlite_schema WHERE name='ix'")==1);
+    check("main view resolves main",number(out,"SELECT count(*) FROM main.vv WHERE id=1")==1);
+    check("main sequence preserved",number(out,"SELECT seq FROM main.sqlite_sequence WHERE name='t'")==100);
+    check("TEMP rows unchanged",number(out,"SELECT count(*) FROM temp.t")==1
+        && number(out,"SELECT count(*) FROM temp.t WHERE id=999 AND v='sentinel'")==1);
+    check("TEMP sequence unchanged",number(out,"SELECT seq FROM temp.sqlite_sequence WHERE name='t'")==999);
+    check("TEMP audit unchanged",number(out,"SELECT count(*) FROM temp.audit")==1);
+    check("TEMP index unchanged",number(out,"SELECT count(*) FROM temp.sqlite_schema WHERE name='ix'")==1);
+    check("pragma-named table exported",number(out,"SELECT count(*) FROM main.pragma_table_xinfo WHERE v='ordinary'")==1);
+    check("quoted names exported",number(out,"SELECT count(*) FROM main.\"quote \"\" name\" WHERE \"strange \"\" column\"='quoted'")==1);
+    if( rc==SQLITE_OK ){
+      check("main trigger installed",sql(out,"INSERT INTO main.t(v) VALUES('next')")==SQLITE_OK
+          && number(out,"SELECT max(id) FROM main.audit")==101);
+      check("TEMP trigger preserved",sql(out,"INSERT INTO temp.t(v) VALUES('temp-next')")==SQLITE_OK
+          && number(out,"SELECT max(id) FROM temp.audit")==1000);
+    }
+    sqlite3_free(error);sqlite3_close(out);
+  }
+  sqlite3_close(source);
+}
+
+static void constraintStreams(void){
+  sqlite3 *source=0,*out;
+  Sink sink={0};
+  char *error=0;
+  int rc;
+  sqlite3_open(":memory:",&source);
+  sql(source,"CREATE TABLE bad(id INT PRIMARY KEY CHECK(id>0));"
+      "PRAGMA ignore_check_constraints=ON; INSERT INTO bad VALUES(-1);");
+  rc=doltlite_dump_sql(source,0,writer,&sink,&error);
+  check("invalid CHECK SQL export rejected",(rc&255)==SQLITE_CONSTRAINT
+      && error && strstr(error,"bad"));
+  check("invalid CHECK source unchanged",number(source,"SELECT count(*) FROM bad WHERE id=-1")==1);
+  free(sink.data);sqlite3_free(error);sqlite3_close(source);
+  sqlite3_open(":memory:",&source);
+  sql(source,"CREATE TABLE t(id INT PRIMARY KEY,v TEXT UNIQUE);"
+      "SELECT dolt_commit('-Am','base'); SELECT dolt_branch('peer');"
+      "INSERT INTO t VALUES(1,'duplicate'); SELECT dolt_commit('-am','main');"
+      "SELECT dolt_checkout('peer'); INSERT INTO t VALUES(2,'duplicate');"
+      "SELECT dolt_commit('-am','peer'); BEGIN;");
+  check("unique merge reports violations",sqlite3_exec(source,"SELECT dolt_merge('main')",0,0,0)==SQLITE_ERROR);
+  check("unique violation fixture retains both rows",number(source,"SELECT count(*) FROM t")==2);
+  memset(&sink,0,sizeof(sink));error=0;
+  rc=doltlite_dump_sql(source,0,writer,&sink,&error);
+  check("invalid UNIQUE SQL export rejected",(rc&255)==SQLITE_CONSTRAINT && error);
+  check("invalid UNIQUE source unchanged",number(source,"SELECT count(*) FROM t")==2);
+  free(sink.data);sqlite3_free(error);error=0;
+  out=openStock();
+  rc=doltlite_export_sqlite(source,0,out,&error);
+  check("invalid UNIQUE SQLite export rejected",(rc&255)==SQLITE_CONSTRAINT && error);
+  check("invalid UNIQUE destination rolled back",number(out,"SELECT count(*) FROM main.sqlite_schema")==0);
+  sqlite3_free(error);sqlite3_close(out);sqlite3_close(source);
+}
+
+static void lateCancellation(void){
+  int code;
+  for(code=0; code<2; code++){
+    sqlite3 *source=0,*out=openStock();
+    Sink sink={0};
+    char *error=0;
+    int rc;
+    sqlite3_open(":memory:",&source);
+    sql(source,"CREATE TABLE t(id INTEGER PRIMARY KEY,v BLOB);"
+        "INSERT INTO t VALUES(1,zeroblob(1048576)); SELECT dolt_commit('-Am','seed');"
+        "BEGIN; INSERT INTO t VALUES(2,'pending')");
+    sink.limit=65536;
+    sink.errorCode=code ? SQLITE_INTERRUPT : SQLITE_FULL;
+    rc=doltlite_dump_sql(source,0,writer,&sink,&error);
+    check("late callback failure propagated",rc==sink.errorCode && error && sink.n>32768);
+    check("late cancellation keeps source transaction",!sqlite3_get_autocommit(source)
+        && number(source,"SELECT count(*) FROM t")==2);
+    free(sink.data);sqlite3_free(error);error=0;
+    check("cancelled source can export again",doltlite_export_sqlite(source,0,out,&error)==SQLITE_OK);
+    check("retry includes pending source rows",number(out,"SELECT count(*) FROM main.t")==2);
+    sqlite3_free(error);sqlite3_close(out);sql(source,"ROLLBACK");sqlite3_close(source);
   }
 }
 
@@ -271,6 +413,66 @@ static void snapshot(void){
   if( err ) fprintf(stderr,"readonly: %s\n",err);
   check("readonly current rows",number(out,"SELECT v='peer' FROM t")==1);
   sqlite3_free(err); sqlite3_close(out); sqlite3_close(source); remove(path);
+}
+
+#ifndef SQLITE_OMIT_AUTHORIZATION
+static int snapshotAuthorizer(void *ctx, int op, const char *a, const char *b,
+                              const char *db, const char *trigger){
+  Sink *sink=ctx;
+  if( op==SQLITE_INSERT && a && !strcmp(a,"t") && !sink->advanced ){
+    sink->advanced=1;
+    check("peer GC during SQLite export",sql(sink->peer,sink->action)==SQLITE_OK);
+  }
+  return SQLITE_OK;
+}
+#endif
+static void movingSnapshots(void){
+  const char *refs[]={"WORKING","STAGED","HEAD","pinned","pinned_branch"};
+  const char *values[]={"working","staged","base","base","base"};
+  int ref, format, discard;
+  for(discard=0; discard<2; discard++) for(ref=0; ref<5; ref++) for(format=0; format<2; format++){
+    sqlite3 *source=0,*peer=0,*out=openStock();
+    Sink sink={0};
+    char path[1024], query[128], *error=0;
+    int rc;
+    sqlite3_snprintf(sizeof(path),path,"%s/dump-moving-%d-%d.db",DOLTLITE_TEST_TMPDIR,ref,format);
+    remove(path);
+    check("moving source opens",sqlite3_open(path,&source)==SQLITE_OK);
+    sql(source,"CREATE TABLE t(id INT PRIMARY KEY,v TEXT); INSERT INTO t VALUES(1,'base');"
+        "CREATE TABLE other(id INT PRIMARY KEY); INSERT INTO other VALUES(1);"
+        "SELECT dolt_commit('-Am','base'); SELECT dolt_tag('pinned'); SELECT dolt_branch('pinned_branch');"
+        "UPDATE t SET v='staged'; SELECT dolt_add('.'); UPDATE t SET v='working';");
+    check("moving peer opens",sqlite3_open(path,&peer)==SQLITE_OK);
+    sink.peer=peer;
+    sink.action=discard
+        ? "SELECT dolt_reset('--hard','HEAD~1');"
+          "SELECT dolt_tag('-d','pinned'); SELECT dolt_tag('pinned','HEAD');"
+          "SELECT dolt_branch('-f','pinned_branch','HEAD'); SELECT dolt_gc();"
+        : "UPDATE t SET v='peer'; INSERT INTO other VALUES(2); SELECT dolt_commit('-am','peer');"
+          "SELECT dolt_tag('-d','pinned'); SELECT dolt_tag('pinned','HEAD');"
+          "SELECT dolt_branch('-f','pinned_branch','HEAD'); SELECT dolt_gc();";
+    if( format ){
+#ifndef SQLITE_OMIT_AUTHORIZATION
+      sqlite3_set_authorizer(out,snapshotAuthorizer,&sink);
+#endif
+      rc=doltlite_export_sqlite(source,refs[ref],out,&error);
+      sqlite3_set_authorizer(out,0,0);
+    }else{
+      rc=doltlite_dump_sql(source,refs[ref],writer,&sink,&error);
+      if( rc==SQLITE_OK ) check("moving SQL replay",sql(out,sink.data)==SQLITE_OK);
+    }
+    if( rc ) fprintf(stderr,"moving snapshot %s/%d: %s\n",refs[ref],format,error ? error : "");
+    check("moving export succeeds",rc==SQLITE_OK && !error);
+    check("peer changed refs and ran GC",sink.advanced);
+    sqlite3_snprintf(sizeof(query),query,"SELECT v='%s' FROM main.t",values[ref]);
+    check("selected rows pinned",number(out,query)==1);
+    check("second table pinned",number(out,"SELECT count(*) FROM main.other")==1);
+    if( discard ) check("peer removed old tables",number(peer,
+        "SELECT count(*) FROM main.sqlite_schema WHERE name IN ('t','other')")==0);
+    else check("peer commit intact",number(peer,"SELECT count(*) FROM other")==2);
+    sqlite3_free(error);free(sink.data);
+    sqlite3_close(out);sqlite3_close(peer);sqlite3_close(source);remove(path);
+  }
 }
 
 #ifndef SQLITE_OMIT_AUTHORIZATION
@@ -355,7 +557,7 @@ static void legacyMeta(void){
 }
 
 int main(void){
-  memoryDestinations(); values(); virtualTables(); failures(); snapshot(); legacyMeta();
+  memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
 #ifndef SQLITE_OMIT_AUTHORIZATION
   authorization();
 #endif

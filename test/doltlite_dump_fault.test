@@ -1,0 +1,70 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+proc dump_fault_prepare {} {
+  catch {db close}
+  forcedelete dump-fault.sql dump-fault.sqlite
+  foreach f [glob -nocomplain dump-fault.*-dump-*] {forcedelete $f}
+  sqlite3 db :memory:
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v BLOB CHECK(length(v)>0));
+    CREATE INDEX tv ON t(v);
+    INSERT INTO t VALUES(1,zeroblob(32768)),(2,'two');
+    SELECT dolt_commit('-Am','seed');
+  }
+  set ::dumpBefore [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+}
+proc dump_fault_check {failed message injected} {
+  set path dump-fault.$::dumpFormat
+  if {$failed} {
+    if {!$injected} {error "unprovoked export failure: $message"}
+    if {[file exists $path]} {error "failed export published output"}
+  } else {
+    if {$message ne "0"} {error "unexpected result: $message"}
+    if {$::dumpFormat eq "sql"} {
+      set fd [open $path rb]; set text [read $fd]; close $fd
+      sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+      out eval $text
+    } else {sqlite3 out file:dump-fault.sqlite?doltlite_engine=sqlite -uri 1}
+    set rows [out eval {SELECT id,length(v) FROM main.t ORDER BY id; PRAGMA integrity_check}]
+    out close
+    if {$rows ne {1 32768 2 3 ok}} {error "incorrect successful export: $rows"}
+  }
+  set temporary [glob -nocomplain dump-fault.*-dump-*]
+  if {[llength $temporary] && !$injected} {error "temporary export leaked without a fault"}
+  foreach f $temporary {forcedelete $f}
+  set after [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  if {$after ne $::dumpBefore || [db one {SELECT count(*) FROM t}]!=2} {
+    error "source changed after export"
+  }
+}
+foreach ::dumpFormat {sql sqlite} {
+  foreach ::dumpRef {WORKING HEAD} {
+    do_faultsim_test dump-fault-$::dumpFormat-$::dumpRef -faults {oom-* ioerr-*} -prep {
+      dump_fault_prepare
+    } -body {
+      db one {SELECT dolt_dump('--file-name','dump-fault.'||$::dumpFormat,
+                               '-r',$::dumpFormat,'--ref',$::dumpRef)}
+    } -test {
+      dump_fault_check $testrc $testresult $testnfail
+    }
+  }
+  set finished 0
+  for {set i 1} {!$finished} {incr i} {
+    dump_fault_prepare
+    set ::sqlite_diskfull_pending $i
+    set ::sqlite_diskfull 0
+    set result [catch {db one {SELECT dolt_dump('--file-name','dump-fault.'||$::dumpFormat,
+                                                '-r',$::dumpFormat)}} message]
+    set injected $::sqlite_diskfull
+    set ::sqlite_diskfull_pending 0
+    set ::sqlite_diskfull 0
+    do_test dump-full-$::dumpFormat.$i {
+      dump_fault_check $result $message $injected
+    } {}
+    set finished [expr {!$injected}]
+  }
+}
+catch {db close}
+finish_test

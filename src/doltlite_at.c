@@ -55,7 +55,7 @@ static char *atBuildSchema(const DoltliteColInfo *ci){
   if( doltliteAppendDisambiguatedColumnList(
           pStr,ci->azName,ci->nCol,"",", ",azReserved,
           ArraySize(azReserved),ci->iPkCol,ci->azDecl)!=SQLITE_OK ){
-    sqlite3_str_reset(pStr);
+    sqlite3_free(sqlite3_str_finish(pStr));
     return 0;
   }
   sqlite3_str_appendall(pStr, ", commit_ref TEXT HIDDEN");
@@ -63,7 +63,7 @@ static char *atBuildSchema(const DoltliteColInfo *ci){
     sqlite3_uint64 nBefore = (sqlite3_uint64)sqlite3_str_length(pStr);
     if( atAppendPrimaryKey(pStr,ci,azReserved,ArraySize(azReserved))
           !=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
     bWithoutRowid = (sqlite3_uint64)sqlite3_str_length(pStr)>nBefore;

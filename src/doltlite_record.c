@@ -460,6 +460,9 @@ static int columnNamesLoad(
     ci->aColToRec = sqlite3_malloc(ci->nCol * (int)sizeof(int));
     if( !ci->aColToRec ){
       sqlite3_free(aPk);
+      sqlite3_free(aRecPos);
+      sqlite3_free(aStoredPk);
+      sqlite3_free(aStoredDecl);
       sqlite3_free(aGen);
       doltliteFreeColInfo(ci);
       sqlite3_finalize(pStmt);

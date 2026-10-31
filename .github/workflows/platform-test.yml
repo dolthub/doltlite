@@ -66,6 +66,26 @@ jobs:
       shell: msys2 {0}
       run: tar -xzf checked-build-windows.tar.gz
 
+    - name: iOS export integration
+      if: matrix.platform == 'macos'
+      run: bash test/ios_dump_test.sh build
+      timeout-minutes: 10
+
+    - name: 100 MiB export measurements
+      if: matrix.platform != 'windows'
+      run: |
+        set -o pipefail
+        bash test/dump_benchmark.sh build | tee build/export-benchmark.jsonl
+      timeout-minutes: 5
+
+    - name: Upload export measurements
+      if: matrix.platform != 'windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: export-benchmark-${{ matrix.platform }}
+        path: build/export-benchmark.jsonl
+        if-no-files-found: error
+
     - name: Compile release amalgamation with MSVC
       if: matrix.platform == 'windows'
       shell: pwsh

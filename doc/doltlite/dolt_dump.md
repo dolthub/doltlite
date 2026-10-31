@@ -35,7 +35,8 @@ concurrent writer cannot produce an export mixing different revisions.
 The destination must not already exist, including an empty file or a symlink.
 A temporary file beside the destination is completed and synced before it is
 published atomically without replacing an existing path. A failed export
-removes its temporary file; a process crash may leave a `-dump-<random>` file.
+attempts to remove its temporary file. A process crash, or an I/O or allocation
+failure that also prevents cleanup, may leave a `-dump-<random>` file.
 The SQL file-export interface requires a native Unix or Windows filesystem
 VFS; custom VFSes and WebAssembly should use the embedded APIs below.
 
@@ -95,8 +96,10 @@ before exporting.
 For SQL text, the callback receives UTF-8 bytes in chunks of at most 16 KiB.
 The bytes are valid only for that callback invocation and need not end at a
 statement or character boundary. Return `SQLITE_OK` to continue, or a SQLite
-error code to abort. The exporter does not buffer the entire dump or build
-a SQL string containing an entire row. For example, a file sink can use:
+error code to abort. The exporter validates rows and indexes in a temporary SQLite database before
+reporting success, so CHECK or UNIQUE violations fail just as they do in direct
+SQLite exports. This scratch database can spill to disk; it does not buffer the
+entire SQL dump or build a SQL string containing an entire row. For example, a file sink can use:
 
 ```c
 static int write_sql(void *context, const void *bytes, int count) {
