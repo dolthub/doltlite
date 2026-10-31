@@ -43,7 +43,7 @@ Use [`dolt_dump`](dolt_dump.md) for a logical export from DoltLite to ordinary
 SQLite:
 
 ```sql
-SELECT dolt_dump('--file-name', 'export.sqlite', '--result-format', 'sqlite');
+SELECT dolt_dump('--file-name', '/path/to/export.sqlite', '--result-format', 'sqlite');
 ```
 
 This exports schema and rows from `WORKING` by default. Add `'--ref', 'HEAD'`

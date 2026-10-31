@@ -132,7 +132,7 @@ esac
 
 dump_probe="$tmp/amalg_dump_probe"
 "$cc_bin" -Wno-comment -I. ../test/amalgamation_dump_probe.c \
-  ./sqlite3.c "${probe_libs[@]}" -o "$dump_probe" "$tmp/export"
+  ./sqlite3.c "${probe_libs[@]}" -o "$dump_probe"
 "$dump_probe" "$tmp/export"
 
 if nm "$offline_probe" | grep -Eq \
