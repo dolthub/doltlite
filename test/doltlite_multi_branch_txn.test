@@ -157,6 +157,75 @@ do_execsql_test multi-branch-gc-keeps-attached-working-set {
 do_test multi-branch-gc-durable-main {mb_disk main} {1:base,2:main ok}
 do_test multi-branch-gc-durable-feat {mb_disk feat} {1:base,3:feat ok}
 
+proc mb_head {branch} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set r [observer eval {SELECT message FROM dolt_log LIMIT 1}]
+  observer close
+  return $r
+}
+
+mb_reset
+do_execsql_test commit-all-both {
+  BEGIN;
+  INSERT INTO main.t VALUES(2,'main');
+  INSERT INTO f.t VALUES(3,'feat');
+  SELECT key, length(value) FROM json_each(dolt_commit_all('-am','all'));
+} {feat 40 main 40}
+do_test commit-all-both-heads {list [mb_head main] [mb_head feat]} {all all}
+do_test commit-all-both-durable {mb_disk feat} {1:base,3:feat ok}
+do_execsql_test commit-all-new-txn {
+  INSERT INTO f.t VALUES(4,'after');
+  ROLLBACK;
+  SELECT group_concat(id) FROM f.t;
+} {1,3}
+
+mb_reset
+do_test commit-all-prepare-fails {
+  db eval {BEGIN; INSERT INTO main.t VALUES(2,'main'); INSERT INTO f.t VALUES(3,'feat')}
+  set r [catchsql {SELECT dolt_commit_all('-m','nothing staged')}]
+  lappend r [db eval {SELECT group_concat(id) FROM f.t}]
+  db eval ROLLBACK
+  lappend r [mb_head main] [mb_head feat] [mb_disk feat]
+} {1 {nothing to commit on feat} 1,3 init init {1:base ok}}
+
+mb_reset
+do_execsql_test commit-all-clean {
+  SELECT dolt_commit_all('--skip-empty','-m','skip');
+  SELECT key FROM json_each(dolt_commit_all('--allow-empty','-m','empty'));
+} {{{}} main}
+do_test commit-all-clean-heads {list [mb_head main] [mb_head feat]} {empty init}
+do_catchsql_test commit-all-branch-option {
+  SELECT dolt_commit_all('--branch','feat','-am','x');
+} {1 {--branch is not supported by dolt_commit_all}}
+
+# Only the branch with something to commit gets a commit; the skipped
+# branch's working set still publishes with the transaction.
+mb_reset
+do_execsql_test commit-all-skip-empty {
+  BEGIN;
+  INSERT INTO main.t VALUES(2,'main');
+  INSERT INTO f.t VALUES(3,'feat');
+  SELECT key FROM json_each(dolt_commit_all('--skip-empty','-am','one'));
+} {feat main}
+mb_reset
+do_test commit-all-skip-empty-unstaged {
+  db eval {BEGIN; INSERT INTO main.t VALUES(2,'main'); SELECT dolt_add('.');
+           INSERT INTO f.t VALUES(3,'feat')}
+  set r [db eval {SELECT key FROM json_each(dolt_commit_all('--skip-empty','-m','one'))}]
+  catchsql ROLLBACK
+  lappend r [mb_head main] [mb_head feat] [mb_disk feat]
+} {main one init {1:base,3:feat ok}}
+
+mb_reset
+do_test commit-all-amend {
+  db eval {BEGIN; INSERT INTO main.t VALUES(2,'main'); INSERT INTO f.t VALUES(3,'feat')}
+  db eval {SELECT dolt_commit_all('--amend','-am','amended')}
+  sqlite3 observer [file normalize test.db]/feat -readonly 1
+  set n [observer eval {SELECT count(*) FROM dolt_log}]
+  observer close
+  list [mb_head main] [mb_head feat] [db eval {SELECT count(*) FROM dolt_log}] $n
+} {amended amended 2 2}
+
 # A two-branch commit is one publish: under a write or sync fault it lands
 # on both branches or on neither.
 mb_reset
@@ -248,6 +317,42 @@ foreach kind {xWrite xSync} {
   do_test multi-branch-vc-io-$kind-exhausted {expr {$fault<=100}} 1
 }
 do_test multi-branch-vc-io-errors-exercised {expr {$failed>0}} 1
+
+# dolt_commit_all under a write or sync fault: both heads move or neither.
+set failed 0
+foreach kind {xWrite xSync} {
+  for {set fault 1} {$fault<=100} {incr fault} {
+    forcedelete test.db
+    file copy -force multi-branch-base.db test.db
+    sqlite3 db test.db -vfs mbio
+    db eval "ATTACH '[file normalize test.db]/feat' AS f"
+    db eval {
+      BEGIN;
+      INSERT INTO main.t VALUES(2,'main');
+      INSERT INTO f.t VALUES(3,'feat');
+    }
+    set calls 0
+    set hits 0
+    set armed 1
+    set result [catchsql {SELECT dolt_commit_all('-am','all')}]
+    set armed 0
+    if {[lindex $result 0]} {incr failed}
+    if {![sqlite3_get_autocommit db]} {catchsql ROLLBACK}
+    db close
+    do_test commit-all-io-$kind-$fault.atomic {
+      set heads [list [mb_head main] [mb_head feat]]
+      expr {$heads eq {init init} || $heads eq {all all}}
+    } 1
+    if {![lindex $result 0]} {
+      do_test commit-all-io-$kind-$fault.landed {
+        list [mb_head main] [mb_head feat] [mb_disk main] [mb_disk feat]
+      } [list all all {1:base,2:main ok} {1:base,3:feat ok}]
+    }
+    if {$hits==0} break
+  }
+  do_test commit-all-io-$kind-exhausted {expr {$fault<=100}} 1
+}
+do_test commit-all-io-errors-exercised {expr {$failed>0}} 1
 mbio delete
 sqlite3 db test.db
 

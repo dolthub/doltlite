@@ -43,6 +43,8 @@ rule applies on the branch whose working set holds it.
   [concurrency.md](concurrency.md#several-branches-in-one-transaction)).
   Version-control commands run inside it, but `dolt_commit` is refused until
   it commits or rolls back, as in Dolt.
+  [`dolt_commit_all`](dolt_commit.md#dolt_commit_all) commits both branches
+  in one call.
 - `dolt_clean` never drops a table a rule claims.
 - The connection attaches each target branch as a hidden database named
   `dolt_nonlocal:<ref>` while a rule names it. It appears in
@@ -66,8 +68,7 @@ no-op, as in Dolt.
 
 - Nonlocal tables are listed in `.tables` and `PRAGMA table_list`, as Dolt
   lists them in `SHOW TABLES`, but not in `sqlite_master`.
-- `dolt_commit_all` and `@@dolt_multi_branch_commit` are not implemented, so
-  commit each branch's working set from that branch.
+- `@@dolt_multi_branch_commit` is not implemented; call `dolt_commit_all`.
 
 ## See also
 

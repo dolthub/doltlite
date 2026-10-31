@@ -1472,6 +1472,63 @@ static int commitJoinedPublish(Btree *pLast){
   return SQLITE_OK;
 }
 
+/* Another branch written in this transaction: its head, staged catalog,
+** and working catalog as the transaction has it. */
+int doltliteBtreeBranchSnapshot(
+  Btree *q,
+  ProllyHash *pHead,
+  ProllyHash *pStaged,
+  ProllyHash *pWorking
+){
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+  if( !btreeIsProlly(q) || q->inTrans!=TRANS_WRITE ) return SQLITE_MISUSE;
+  rc = flushAllPending(q, q->pBt, 0);
+  if( rc==SQLITE_OK ){
+    q->pBt->inCatalogSerialize = 1;
+    rc = serializeCatalogForCommit(q, &data, &nData);
+    q->pBt->inCatalogSerialize = 0;
+  }
+  if( rc==SQLITE_OK ) rc = chunkStorePut(q->pBt->pStore, data, nData, pWorking);
+  sqlite3_free(data);
+  *pHead = q->headCommit;
+  *pStaged = q->vc.stagedCatalog;
+  return rc;
+}
+
+/* The branch now has pCommit as its head; its working set records that when
+** the command's publish stages it. A command that does not publish puts
+** the old head back. */
+void doltliteBtreeBranchCommitted(Btree *q, const ProllyHash *pCommit){
+  if( !q->bCommitAllSaved ){
+    q->commitAllHead = q->headCommit;
+    q->commitAllStaged = q->vc.stagedCatalog;
+    q->commitAllMerge = q->vc.mergeCommitHash;
+    q->commitAllMerging = q->vc.isMerging;
+    q->bCommitAllSaved = 1;
+  }
+  q->headCommit = *pCommit;
+  memset(&q->vc.stagedCatalog, 0, sizeof(ProllyHash));
+  memset(&q->vc.mergeCommitHash, 0, sizeof(ProllyHash));
+  q->vc.isMerging = 0;
+}
+
+void doltliteEndBranchCommits(sqlite3 *db, int bPublished){
+  int i;
+  for(i=0; i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( !btreeIsProlly(q) || !q->bCommitAllSaved ) continue;
+    if( !bPublished ){
+      q->headCommit = q->commitAllHead;
+      q->vc.stagedCatalog = q->commitAllStaged;
+      q->vc.mergeCommitHash = q->commitAllMerge;
+      q->vc.isMerging = q->commitAllMerging;
+    }
+    q->bCommitAllSaved = 0;
+  }
+}
+
 typedef struct SiblingStage SiblingStage;
 struct SiblingStage {
   JoinedReload *a;
