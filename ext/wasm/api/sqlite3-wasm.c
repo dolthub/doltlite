@@ -242,17 +242,11 @@
 #define KVRECORD_KEY_SZ 128
 #endif
 
-#if 1
 /*
-** A hook for notification of pending finalization of various memory
-** types. We use this in JS to trigger cleanup of JS-side mappings to
-** data for that pointer.
-*/
-/*
-** A level of indirection for the disposal hook so that we can
-** redirect it from JS once the module is loaded. We cannot(?)
-** reassign a function from JS but we can reassign a function pointer
-** member of a struct.
+** A level of indirection for SQLITE_DISPOSAL_NOTIFIER (described
+** below) so that we can redirect it from JS once the module is
+** loaded. We cannot(?)  reassign a native function from JS but we can
+** reassign a native function pointer member of a native struct.
 */
 struct WasmDisposalNotifier {
   /* See SQLITE_DISPOSAL_NOTIFIER, below. */
@@ -273,22 +267,32 @@ SQLITE_WASM_EXPORT2(WasmDisposalNotifier *,
   return &sqlite3WasmDisposalNotifier;
 }
 /*
-** If SQLITE_DISPOSAL_NOTIFIER is defined, the core calls it as
-** SQLITE_DISPOSAL_NOTIFIER(T,P), where T is an integer literal type
-** and P is the ptr being disposed of.
+** If SQLITE_DISPOSAL_NOTIFIER is defined, the core invokes it as:
 **
-** T specifies the type of P: 1=sqlite3*, 2=sqlite3_stmt*,
-** 3=sqlite3_context* (TODO).
+**   SQLITE_DISPOSAL_NOTIFIER(T,P);
+**
+** where T is a literal integer and P is the ptr being disposed of.
+**
+** T specifies the type of P: 1==sqlite3*, 2==sqlite3_stmt*
+**
+** TODO is T 3==sqlite3_context*.
 **
 ** Because this happens during finalization, code must be careful
 ** about how it uses P. e.g. a finalizing database must not be
 ** close()d again or results are undefined. A finalizing statement
-** must not be step()d. etc.
+** must not be step()d or finalize()d. etc.
+**
+** The JS side of this implementation plugs in a hook which cleans up
+** any JS-side state mapped to that pointer. e.g. disconnecting a
+** pointer which a sqlite3.oo1.DB instance uses will not only unmap
+** that oo1.DB object, but also other oo1.DB instances which share
+** that same native pointer.  Before this capability, closing of
+** DB-class-hosted (sqlite3*) using sqlite3_close_v2() would leave the
+** DB instance pointing to a stale pointer. Ditto for oo1.DB.Stmt.
 */
 #define SQLITE_DISPOSAL_NOTIFIER(T,P) \
   if( (P) && sqlite3WasmDisposalNotifier.callback ) \
     sqlite3WasmDisposalNotifier.callback(T, P)
-#endif
 
 /*
 ** Which sqlite3.c we're using needs to be configurable to enable
@@ -443,7 +447,7 @@ SQLITE_WASM_EXPORT2(void,sqlite3__wasm_test_struct,(WasmTestStruct * s)){
 */
 SQLITE_WASM_EXPORT2(const char *,sqlite3__wasm_enum_json,(void)){
   static char aBuffer[1024 * 24] =
-    {0} /* where the JSON goes. 2025-09-19: output size=19295, but
+    {0} /* where the JSON goes. 2026-10-31: output size=20276, but
            that can vary slightly from build to build, so a little
            leeway is needed here. */;
   int n = 0, nChildren = 0, nStruct = 0

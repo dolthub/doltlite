@@ -953,7 +953,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       toss("Maintenance required: increase sqlite3__wasm_enum_json()'s",
            "static buffer size!");
     }
-    wasm.ctype = JSON.parse(wasm.cstrToJs(cJson));
+    const j = wasm.cstrToJs(cJson);
+    wasm.ctype = JSON.parse(j);
+    //sqlite3.config.error("cJson JSON length:",j.length);
     // Groups of SQLITE_xyz macros...
     const defineGroups = ['access', 'authorizer',
                           'blobFinalizers', 'changeset',
@@ -1024,10 +1026,10 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   }/*end C constant and struct imports*/
 
   if( capi.WasmDisposalNotifier ){
-    /* Redirect the SQLITE_DISPOSAL_NOTIFIER callback to JS by
-       creating a JS/C struct proxy which wraps the C-side singleton
-       instance of WasmDisposalNotifier and connecting our own
-       function to its $callback method. */
+    /* Redirect the SQLITE_DISPOSAL_NOTIFIER callback installed by
+       sqlite3-wasm.c to JS by (A) creating a JS/C struct proxy which
+       wraps the C-side singleton instance of WasmDisposalNotifier and
+       (B) connecting our own function to its $callback method. */
     //sqlite3.config.warn("WARNING: installing WasmDisposalNotifier");
     const ctor = capi.WasmDisposalNotifier;
     delete capi.WasmDisposalNotifier;
@@ -1036,11 +1038,13 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       /* ^^^ ptr to the singleton WasmDisposalNotifier instance */
     );
     util.disposers = Object.assign(Object.create(null),{
-      /* Lists of disposer callbacks which receive the C pointer of an
-         object which is currently being finalized from C. These are
-         triggered via the SQLITE_DISPOSAL_NOTIFIER callback which
-         sqlite3-wasm.c installs. The C side of this ensures that
-         these callbacks are never passed NULL. */
+      /* Lists of disposer callbacks which are passed the WASM pointer
+         of an object which is currently being finalized from
+         WASM. These are triggered via the SQLITE_DISPOSAL_NOTIFIER
+         callback which sqlite3-wasm.c installs. The C side of this
+         ensures that these callbacks are never passed NULL.
+         Downstream library bootstrapping code may append callbacks to
+         these (e.g. oo1 does so). */
       db: [], stmt: []
     });
     /* Map type IDs to names to simplify $callback() below. */
@@ -1059,15 +1063,18 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           }
         }
       });
-      /* The irony that we permanently leak a function which is itself
-         responsible for cleanup is not lost on us. */
     }finally{
       w.dispose(/*only needed for the $callback assignment*/);
+      /* The irony that we permanently leak a function which is itself
+         responsible for cleanup is not lost on us. */
     }
-    if( 0 ){
-      util.disposers.stmt.push((p)=>sqlite3.config.warn("disposing stmt",p));
-      util.disposers.db.push((p)=>sqlite3.config.warn("disposing db",p));
-    }
+//#if 0
+    // Just for testing...
+    util.disposers.stmt.push((p)=>sqlite3.config.warn("disposing stmt",p));
+    util.disposers.db.push((p)=>sqlite3.config.warn("disposing db",p));
+//#/if
+  }else{
+    toss("Expecting WasmDisposalNotifier to have been exported.");
   }
 
   /**
