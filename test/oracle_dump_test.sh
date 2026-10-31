@@ -5,6 +5,7 @@ SQLITE3="${2:-./sqlite3-stock}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "$SCRIPT_DIR/assert_stock_reference.sh" "$SQLITE3" "$DOLTLITE"
 TMP=$(mktemp -d)
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TMP=$(cygpath -m "$TMP") ;; esac
 trap 'rm -rf "$TMP"' EXIT
 pass=0
 fail=0
