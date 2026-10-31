@@ -41,6 +41,7 @@ the forms each surface accepts are in [refs.md](refs.md).
 - [dolt_cherry_pick.md](dolt_cherry_pick.md) — `dolt_cherry_pick`, `dolt_revert`
 - [dolt_tag.md](dolt_tag.md) — `dolt_tag`, `dolt_tags`
 - [dolt_hashof.md](dolt_hashof.md) — `dolt_hashof`, `dolt_hashof_table`, `dolt_hashof_index`, `dolt_hashof_db`, `dolt_hashof_catalog`
+- [dolt_dump.md](dolt_dump.md) — logical SQL and ordinary SQLite exports, including embedded C APIs
 - [dolt_gc.md](dolt_gc.md) — `dolt_gc`, `VACUUM`
 - [dolt_constraint_violations.md](dolt_constraint_violations.md) — `dolt_constraint_violations`, `dolt_constraint_violations_<table>`, `dolt_verify_constraints`
 - [dolt_workspace.md](dolt_workspace.md) — `dolt_workspace_<table>`

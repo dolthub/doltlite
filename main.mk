@@ -1625,6 +1625,9 @@ doltlite_schema_diff.o:	$(TOP)/src/doltlite_schema_diff.c $(DEPS_OBJ_COMMON)
 doltlite_merge_status.o:	$(TOP)/src/doltlite_merge_status.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_status.c
 
+doltlite_dump.o: $(TOP)/src/doltlite_dump.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_dump.c
+
 doltlite_patch.o:	$(TOP)/src/doltlite_patch.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_patch.c
 
@@ -2857,6 +2860,7 @@ DOLTLITE_C_TESTS = \
 	remote_chunk_integrity_test$(T.exe) \
 	remote_partial_push_test$(T.exe) \
 	chunk_source_test$(T.exe) \
+	dump_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
 	chunk_store_fork_lock_test$(T.exe) \
 	chunk_store_put_bounds_test$(T.exe) \
@@ -3124,6 +3128,11 @@ remote_chunk_integrity_test$(T.exe): $(TOP)/test/remote_chunk_integrity_test.c l
 remote_partial_push_test$(T.exe): $(TOP)/test/remote_partial_push_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -I$(TOP)/test -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/remote_partial_push_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+dump_test$(T.exe): $(TOP)/test/dump_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/dump_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 chunk_source_test$(T.exe): $(TOP)/test/chunk_source_test.c libdoltlite$(T.lib)

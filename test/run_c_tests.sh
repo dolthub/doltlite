@@ -50,6 +50,7 @@ COVERAGE_TESTS=(
   remote_chunk_integrity_test
   remote_partial_push_test
   chunk_source_test
+  dump_test
   cross_branch_test
   corruption_test
   gc_tip_survival_test

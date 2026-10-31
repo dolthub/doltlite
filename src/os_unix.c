@@ -8571,6 +8571,15 @@ static int proxyClose(sqlite3_file *id) {
 ** should not be used.
 */
 #ifdef DOLTLITE_PROLLY
+int sqlite3OsPublishFileNative(sqlite3_vfs *pVfs, const char *zTmp,
+                                const char *zDest){
+  if( pVfs->xOpen!=unixOpen ) return SQLITE_NOTFOUND;
+  if( link(zTmp,zDest)!=0 ){
+    return errno==EEXIST ? SQLITE_CANTOPEN : SQLITE_IOERR;
+  }
+  return SQLITE_OK;
+}
+
 int sqlite3OsReplaceFileNative(
   sqlite3_vfs *pVfs,
   const char *zTmp,

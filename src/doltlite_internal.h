@@ -1719,6 +1719,8 @@ int doltliteGcRegister(sqlite3 *db);
 int doltliteAncestorRegister(sqlite3 *db);
 int doltliteSchemaDiffRegister(sqlite3 *db);
 int doltlitePatchRegister(sqlite3 *db);
+int doltliteDumpRegister(sqlite3 *db);
+int doltliteCatalogReadMeta(sqlite3*, const ProllyHash*, u32*, u32*);
 int doltliteRemoteSqlRegister(sqlite3 *db);
 int doltliteHashofRegister(sqlite3 *db);
 int doltliteEngineStatsRegister(sqlite3 *db);

@@ -37,4 +37,15 @@ their output is a stock file too.
 `VACUUM` on a stock database rewrites pages as SQLite does; on a DoltLite
 database it garbage-collects unreachable chunks. `.backup`/`.restore` and
 `sqlite3_backup_*` work within either format, but not between them — there is no
-defined conversion, so a mixed pair is refused rather than half-copied.
+defined page-level conversion, so a mixed pair is refused.
+
+Use [`dolt_dump`](dolt_dump.md) for a logical export from DoltLite to ordinary
+SQLite:
+
+```sql
+SELECT dolt_dump('--file-name', 'export.sqlite', '--result-format', 'sqlite');
+```
+
+This exports schema and rows from `WORKING` by default. Add `'--ref', 'HEAD'`
+to export a committed revision. The output contains no version-control graph.
+Embedded applications can use `doltlite_export_sqlite()` directly.

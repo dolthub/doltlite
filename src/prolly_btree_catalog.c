@@ -296,6 +296,24 @@ void refreshCursorRoot(BtCursor *pCur){
   }
 }
 
+int doltliteCatalogReadMeta(sqlite3 *db, const ProllyHash *hash,
+                            u32 *userVersion, u32 *applicationId){
+  u8 *data = 0;
+  const u8 *entries;
+  int n, format, count, rc;
+  *userVersion = *applicationId = 0;
+  if( prollyHashIsEmpty(hash) ) return SQLITE_OK;
+  rc = chunkStoreGet(doltliteGetChunkStore(db),hash,&data,&n);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !catalogParseHeaderEx(data,n,&format,&count,&entries) ) rc = SQLITE_CORRUPT;
+  else if( format==CATALOG_FORMAT_V5 ){
+    *userVersion = prollyBtreeGetU32LE(data+CAT_HEADER_SIZE_V3);
+    *applicationId = prollyBtreeGetU32LE(data+CAT_HEADER_SIZE_V3+4);
+  }
+  sqlite3_free(data);
+  return rc;
+}
+
 typedef struct CatalogEntryMeta CatalogEntryMeta;
 struct CatalogEntryMeta {
   Pgno iTable;
@@ -1648,20 +1666,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   userVersion = pBtree->aMeta[BTREE_USER_VERSION];
   applicationId = pBtree->aMeta[BTREE_APPLICATION_ID];
   if( pMetaCatalog ){
-    u8 *pData = 0;
-    int nData = 0, format = 0, nEntries = 0;
-    const u8 *pEntries = 0;
-    rc = chunkStoreGet(pBtree->pBt->pStore, pMetaCatalog, &pData, &nData);
-    if( rc==SQLITE_OK && !catalogParseHeaderEx(pData, nData, &format,
-        &nEntries, &pEntries) ) rc = SQLITE_CORRUPT;
-    if( rc==SQLITE_OK ){
-      userVersion = applicationId = 0;
-      if( format==CATALOG_FORMAT_V4 || format==CATALOG_FORMAT_V5 ){
-        userVersion = prollyBtreeGetU32LE(pData + CAT_HEADER_SIZE_V3);
-        applicationId = prollyBtreeGetU32LE(pData + CAT_HEADER_SIZE_V3 + 4);
-      }
-    }
-    sqlite3_free(pData);
+    rc = doltliteCatalogReadMeta(db,pMetaCatalog,&userVersion,&applicationId);
   }else{
     rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
   }
