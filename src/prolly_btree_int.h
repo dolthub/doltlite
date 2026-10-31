@@ -352,6 +352,11 @@ struct Btree {
   struct DoltliteNonlocal *pNonlocal;
   u8 bJoinedPublish;
   u8 bJoinedStaged;
+  u8 bCommitAllSaved;
+  u8 commitAllMerging;
+  ProllyHash commitAllHead;
+  ProllyHash commitAllStaged;
+  ProllyHash commitAllMerge;
   u8 *pJoinedCat;
   int nJoinedCat;
   ProllyHash joinedCatHash;

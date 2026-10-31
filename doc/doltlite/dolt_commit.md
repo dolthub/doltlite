@@ -1,8 +1,9 @@
-# dolt_commit, dolt_add, dolt_status, dolt_config
+# dolt_commit, dolt_commit_all, dolt_add, dolt_status, dolt_config
 
 The commit loop: stage tables, commit them, see what is pending. Dolt
 equivalents: [dolt_add](https://docs.dolthub.com/sql-reference/version-control/dolt-sql-procedures#dolt_add),
 [dolt_commit](https://docs.dolthub.com/sql-reference/version-control/dolt-sql-procedures#dolt_commit),
+`dolt_commit_all`,
 [dolt_status](https://docs.dolthub.com/sql-reference/version-control/dolt-system-tables#dolt_status).
 
 ## Synopsis
@@ -64,6 +65,53 @@ commits the SQL transaction and begins a new one; see
 | `you are in the middle of a rebase -- cannot amend` | `--amend` while a rebase is in progress, other than an `edit` pause |
 | `unknown option`, `no value for option` | option parsing; the message names the option |
 | `error: multiple values provided for` an option | the same option was given more than once, including `-m` / `--message` |
+| `Cannot commit changes on more than one branch / database` | another branch of this database has writes in the transaction; use `dolt_commit_all` |
+
+## dolt_commit_all
+
+Commits every branch of this database the current transaction wrote, as
+one publish: each branch gets its own commit with the same message and
+options, and either every head moves or none does. Branches are written
+together through [nonlocal tables](dolt_nonlocal_tables.md) or by attaching
+another branch of the same file; see
+[concurrency.md](concurrency.md#several-branches-in-one-transaction).
+
+```sql
+SELECT dolt_checkout('feature');
+INSERT INTO dolt_nonlocal_tables VALUES ('orders', 'main', NULL, 'immediate');
+BEGIN;
+INSERT INTO orders VALUES (10, 1, 5.0);        -- main's working set
+UPDATE users SET active = 0 WHERE id = 3;      -- feature's
+SELECT key AS branch, value AS hash
+  FROM json_each(dolt_commit_all('-Am', 'both branches'));
+-- feature|<hash>
+-- main|<hash>
+SELECT dolt_checkout('main');
+```
+
+Takes `dolt_commit`'s options, except `--branch`. Each option applies to
+every branch: `-a` and `-A` stage on each branch, and `--amend` amends each
+branch's HEAD.
+
+- A branch the transaction wrote counts even if its rows ended up unchanged.
+  With no such branch, the session's branch is committed, so outside a
+  transaction it acts as `dolt_commit`.
+- Returns a JSON object of branch name to new commit hash, in branch order.
+  A branch skipped by `--skip-empty` is left out, and `{}` means nothing was
+  committed.
+- Like `dolt_commit`, it commits the SQL transaction and begins a new one.
+  Every branch's working set is published with it, including a branch that
+  `--skip-empty` skipped.
+- A branch whose head moved since this transaction read it fails the call
+  with `cannot commit: database is busy or branch HEAD changed. Please retry
+  your transaction.`
+
+| Error | Cause |
+|---|---|
+| `nothing to commit on <branch>` | that branch has nothing staged; no head moves and the transaction stays open |
+| `--branch is not supported by dolt_commit_all` | `--branch` given |
+
+Other errors are `dolt_commit`'s.
 
 ## dolt_status
 
@@ -88,7 +136,10 @@ committer `doltlite` with an empty email. Anything else:
 
 Functions instead of procedures; `-A` stages new tables where Dolt's `-A`
 does the same. `@@dolt_transaction_commit` has no counterpart: a commit is
-always durable when it returns.
+always durable when it returns. `dolt_commit_all` returns a JSON object
+where Dolt returns one `(branch, hash)` row per branch, and
+`@@dolt_multi_branch_commit`, which makes `dolt_commit` behave as
+`dolt_commit_all`, is not implemented.
 
 ## See also
 

@@ -29,7 +29,7 @@ Only command functions are direct-only; `dolt_hashof` and `dolt_version` are not
 | `dolt_statistics`, `dolt_stats_*` | Statistics are `ANALYZE` and `sqlite_stat1`, an ordinary versioned table: per branch, committed, diffed, and merged with everything else. |
 | `dolt_query_catalog` | DoltHub storage, not engine behaviour. |
 | `dolt_commits`, `dolt_help`, `dolt_column_diff`, `dolt_reflog`, `has_ancestor` | Not yet. `dolt_log` and `dolt_commit_ancestors` cover the commit graph. |
-| `dolt_commit_all`, `@@dolt_multi_branch_commit` | Not yet. A transaction can write several branches atomically ([concurrency.md](concurrency.md#several-branches-in-one-transaction)); commit each branch's working set from that branch. |
+| `@@dolt_multi_branch_commit` | Not yet. Call [`dolt_commit_all`](dolt_commit.md#dolt_commit_all) to commit every branch a transaction wrote. |
 | Replication, read replicas, `dolt_backup` remotes | Sync is `dolt_push` / `dolt_pull` against a filesystem or HTTP remote. |
 
 ## Behaviour that differs
@@ -62,8 +62,8 @@ Only command functions are direct-only; `dolt_hashof` and `dolt_version` are not
   configured destination when that name is omitted. DoltLite has no separate
   push destination, so the call is `dolt_push('--all', remote)`.
 - **Nonlocal tables are partial.** [dolt_nonlocal_tables](dolt_nonlocal_tables.md)
-  redirects and lists names as Dolt does, but `dolt_commit_all` and
-  `@@dolt_multi_branch_commit` are not implemented.
+  redirects and lists names as Dolt does, but `@@dolt_multi_branch_commit`
+  is not implemented; use `dolt_commit_all`.
 - **Deleting an absent remote branch succeeds.** `dolt_push(remote, ':branch')`
   returns 0 when that branch is already gone, including when this database
   has no tracking ref for it. Dolt reports an error and leaves the remote

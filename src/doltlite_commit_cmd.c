@@ -1381,9 +1381,277 @@ static void doltliteCommitFunc(
   }
 }
 
+typedef struct CommitAllBranch CommitAllBranch;
+struct CommitAllBranch {
+  const char *zBranch;
+  Btree *pBt;
+  DoltliteBranchCommitState state;
+  ProllyHash commit;
+  int bCommitted;
+};
+
+typedef struct CommitAll CommitAll;
+struct CommitAll {
+  CommitAllBranch *a;
+  int n;
+};
+
+static int commitAllRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
+  CommitAll *p = pArg;
+  int i, rc = SQLITE_OK;
+  (void)db;
+  for(i=0; rc==SQLITE_OK && i<p->n; i++){
+    if( p->a[i].bCommitted ){
+      rc = chunkStoreUpdateBranch(cs, p->a[i].zBranch, &p->a[i].commit);
+    }
+  }
+  return rc;
+}
+
+static int commitAllCompare(const void *a, const void *b){
+  return strcmp(((const CommitAllBranch*)a)->zBranch,
+                ((const CommitAllBranch*)b)->zBranch);
+}
+
+/* Another branch of this store written in the transaction: build its
+** commit from the transaction's working and staged catalogs. Nothing is
+** installed here. */
+static int commitAllPrepareBranch(
+  sqlite3_context *context,
+  DoltliteCommitOptions *opts,
+  CommitAllBranch *b
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  DoltliteBranchCommitState *st = &b->state;
+  ProllyHash head, staged, working, catalog;
+  int rc;
+  rc = doltliteReadBranchCommitState(db, b->zBranch, st);
+  if( rc==SQLITE_OK ) rc = doltliteBtreeBranchSnapshot(b->pBt, &head, &staged, &working);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return rc;
+  }
+  if( prollyHashCompare(&head, &st->head)!=0 ){
+    sqlite3_result_error(context, "cannot commit: database is busy or branch "
+        "HEAD changed. Please retry your transaction.", -1);
+    sqlite3_result_error_code(context, SQLITE_BUSY);
+    return SQLITE_BUSY;
+  }
+  st->working = working;
+  st->staged = staged;
+  if( !prollyHashIsEmpty(&st->conflicts) ){
+    sqlite3_result_error(context, "cannot commit: unresolved merge conflicts", -1);
+    return SQLITE_ERROR;
+  }
+  if( !opts->force && !prollyHashIsEmpty(&st->violations) ){
+    sqlite3_result_error(context,
+        "cannot commit: unresolved constraint violations", -1);
+    return SQLITE_ERROR;
+  }
+  if( opts->amend && (st->merging || st->rebaseFlags) ){
+    sqlite3_result_error(context, "cannot amend during a merge or rebase", -1);
+    return SQLITE_ERROR;
+  }
+  catalog = st->staged;
+  if( opts->addAll ){
+    rc = doltliteComposeStageAll(db, context, &st->working, &st->headCatalog,
+        &st->staged, st->onRebasePlan, &catalog);
+  }else if( opts->addModifiedOnly ){
+    rc = doltliteCommitStageModifiedOnly(db, context, opts->amend, st, &catalog);
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&catalog) ) catalog = st->headCatalog;
+  if( !st->merging && (!opts->amend || opts->skipEmpty)
+   && prollyHashCompare(&catalog, &st->headCatalog)==0 ){
+    if( opts->skipEmpty ) return SQLITE_OK;
+    if( !opts->allowEmpty ){
+      char *zErr = sqlite3_mprintf("nothing to commit on %s", b->zBranch);
+      sqlite3_result_error(context, zErr ? zErr : "nothing to commit", -1);
+      sqlite3_free(zErr);
+      return SQLITE_ERROR;
+    }
+  }
+  if( !opts->force
+   && doltliteCommitValidateForeignKeyParents(db, context, &catalog)!=SQLITE_OK ){
+    return SQLITE_ERROR;
+  }
+  rc = doltliteCommitCreateObject(db, context, opts, &catalog, &b->commit, st);
+  if( rc==SQLITE_OK ) b->bCommitted = 1;
+  return rc;
+}
+
+static void commitAllAppendJson(sqlite3_str *pStr, const char *zBranch,
+                                const char *zHash){
+  const char *z;
+  if( sqlite3_str_length(pStr)>1 ) sqlite3_str_appendchar(pStr, 1, ',');
+  sqlite3_str_appendchar(pStr, 1, '"');
+  for(z=zBranch; *z; z++){
+    if( *z=='"' || *z=='\\' ) sqlite3_str_appendchar(pStr, 1, '\\');
+    sqlite3_str_appendchar(pStr, 1, *z);
+  }
+  sqlite3_str_appendf(pStr, "\":\"%s\"", zHash);
+}
+
+/* Commits every branch of this database the transaction wrote, or the
+** session's branch when it wrote none, and publishes them together. The
+** result maps each branch committed to its new commit hash. */
+static void doltliteCommitAllFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteCommitOptions opts;
+  CommitAll all;
+  DoltliteBranchExpectation *aExpected = 0;
+  sqlite3_str *pStr = 0;
+  const char *zSession = doltliteGetSessionBranch(db);
+  char *zSessionHash = 0;
+  int bSessionDirty;
+  int nExpected = 0;
+  int i, rc;
+
+  memset(&all, 0, sizeof(all));
+  if( db->nVdbeWrite>0 ){
+    sqlite3_result_error(context,
+        "cannot commit while a write statement is active", -1);
+    return;
+  }
+  if( doltliteCmdRejectDetached(context) ) return;
+  if( doltliteCmdRejectReadOnly(context) ) return;
+  if( !cs ){
+    sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
+    return;
+  }
+  if( doltliteCommitParseOptions(context, argc, argv, &opts)!=SQLITE_OK ) return;
+  if( opts.zBranch ){
+    sqlite3_result_error(context,
+        "--branch is not supported by dolt_commit_all", -1);
+    return;
+  }
+
+  all.a = sqlite3_malloc64(sizeof(CommitAllBranch)*(sqlite3_uint64)db->nDb);
+  if( !all.a ){
+    sqlite3_result_error_nomem(context);
+    return;
+  }
+  for(i=2; i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( !doltliteBtreeSameStore(db->aDb[0].pBt, q)
+     || sqlite3BtreeTxnState(q)!=SQLITE_TXN_WRITE ) continue;
+    memset(&all.a[all.n], 0, sizeof(all.a[0]));
+    all.a[all.n].zBranch = doltliteBtreeBranchName(q);
+    all.a[all.n].pBt = q;
+    all.n++;
+  }
+  qsort(all.a, all.n, sizeof(all.a[0]), commitAllCompare);
+
+  bSessionDirty = !db->autoCommit
+               && sqlite3_txn_state(db, "main")==SQLITE_TXN_WRITE;
+  for(i=0; i<all.n; i++){
+    rc = commitAllPrepareBranch(context, &opts, &all.a[i]);
+    if( rc!=SQLITE_OK ) goto commit_all_done;
+  }
+
+  if( bSessionDirty || all.n==0 ){
+    ProllyHash savedStaged;
+    int didStage = 0;
+    doltliteCommitFuncImpl(context, argc, argv, &savedStaged, &didStage);
+    if( context->isError ){
+      const char *zErr = (const char*)sqlite3_value_text(context->pOut);
+      if( zErr && strncmp(zErr, "nothing to commit", 17)==0 ){
+        char *zMsg = sqlite3_mprintf("nothing to commit on %s", zSession);
+        sqlite3_result_error(context, zMsg ? zMsg : zErr, -1);
+        sqlite3_free(zMsg);
+      }
+      goto commit_all_done;
+    }
+    if( sqlite3_value_type(context->pOut)==SQLITE_TEXT ){
+      zSessionHash = sqlite3_mprintf("%s",
+          (const char*)sqlite3_value_text(context->pOut));
+      if( !zSessionHash ){
+        sqlite3_result_error_nomem(context);
+        goto commit_all_done;
+      }
+    }
+  }else if( !db->autoCommit || db->pSavepoint ){
+    rc = doltlitePrepareJoinedCommit(db);
+    if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
+      sqlite3_result_error_code(context, rc);
+      goto commit_all_done;
+    }
+  }
+
+  aExpected = sqlite3_malloc64(sizeof(*aExpected)*(sqlite3_uint64)(all.n+1));
+  if( !aExpected ){
+    sqlite3_result_error_nomem(context);
+    goto commit_all_done;
+  }
+  for(i=0; i<all.n; i++){
+    if( !all.a[i].bCommitted ) continue;
+    aExpected[nExpected].zBranch = all.a[i].zBranch;
+    aExpected[nExpected].pTip = &all.a[i].state.head;
+    nExpected++;
+  }
+  if( nExpected>0 ){
+    rc = doltliteMutateRefsExpected(db, aExpected, nExpected,
+                                    commitAllRefs, &all);
+    if( rc!=SQLITE_OK ){
+      if( rc==SQLITE_BUSY ){
+        sqlite3_result_error(context, "cannot commit: database is busy or "
+            "branch HEAD changed. Please retry your transaction.", -1);
+      }
+      sqlite3_result_error_code(context, rc);
+      goto commit_all_done;
+    }
+    for(i=0; i<all.n; i++){
+      if( all.a[i].bCommitted ){
+        doltliteBtreeBranchCommitted(all.a[i].pBt, &all.a[i].commit);
+      }
+    }
+  }
+
+  pStr = sqlite3_str_new(db);
+  sqlite3_str_appendchar(pStr, 1, '{');
+  for(i=0; i<=all.n; i++){
+    const char *zNext = i<all.n ? all.a[i].zBranch : 0;
+    if( zSessionHash && (!zNext || strcmp(zSession, zNext)<0) ){
+      commitAllAppendJson(pStr, zSession, zSessionHash);
+      sqlite3_free(zSessionHash);
+      zSessionHash = 0;
+    }
+    if( zNext && all.a[i].bCommitted ){
+      char hex[PROLLY_HASH_SIZE*2+1];
+      doltliteHashToHex(&all.a[i].commit, hex);
+      commitAllAppendJson(pStr, zNext, hex);
+    }
+  }
+  sqlite3_str_appendchar(pStr, 1, '}');
+  rc = sqlite3_str_errcode(pStr);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    sqlite3_str_reset(pStr);
+  }else{
+    sqlite3_result_text(context, sqlite3_str_value(pStr), -1, SQLITE_TRANSIENT);
+  }
+  doltliteHistoricalModulesReset(db);
+
+commit_all_done:
+  if( pStr ) sqlite3_free(sqlite3_str_finish(pStr));
+  sqlite3_free(aExpected);
+  sqlite3_free(zSessionHash);
+  sqlite3_free(all.a);
+}
+
 int doltliteCommitCmdRegister(sqlite3 *db){
-  return doltliteCreateCommandFunc(db, "dolt_commit", -1,
-                                 doltliteCommitFunc);
+  int rc = doltliteCreateCommandFunc(db, "dolt_commit", -1,
+                                     doltliteCommitFunc);
+  if( rc==SQLITE_OK ){
+    rc = doltliteCreateCommandFunc(db, "dolt_commit_all", -1,
+                                   doltliteCommitAllFunc);
+  }
+  return rc;
 }
 
 #endif

@@ -255,5 +255,19 @@ do_execsql_test nonlocal-target-recreated {
 do_execsql_test nonlocal-target-detached {
   SELECT name FROM pragma_database_list ORDER BY seq;
 } {main dolt_nonlocal:shared}
+# dolt_commit_all commits the target branch and this one together.
+nl_reset
+do_execsql_test nonlocal-commit-all {
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  SELECT dolt_commit('-Am','rules') IS NOT NULL;
+  BEGIN;
+  INSERT INTO users VALUES(2,'shared');
+  INSERT INTO notes VALUES(1,'local');
+  SELECT key FROM json_each(dolt_commit_all('-am','both'));
+  SELECT message FROM dolt_log LIMIT 1;
+} {1 main other both}
+do_test nonlocal-commit-all-target {
+  nl_disk main {SELECT message FROM dolt_log LIMIT 1; SELECT count(*) FROM dolt_status}
+} {both 0}
 
 finish_test

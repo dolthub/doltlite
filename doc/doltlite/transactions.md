@@ -12,7 +12,7 @@ statement, with two rules that are easy to miss.
 | `dolt_branch`, `dolt_tag`, `dolt_branch('-d')` | Kept. Refs are durable the moment the call returns. |
 | `dolt_checkout -b` | Kept. The SQL transaction is committed, then a new one begun. |
 | `dolt_checkout` of an existing branch | Kept. The connection stays on the new branch. |
-| `dolt_commit`, and any merge, cherry-pick, revert, or rebase that completes | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
+| `dolt_commit`, `dolt_commit_all`, and any merge, cherry-pick, revert, or rebase that completes | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
 | `dolt_pull` that completes | Kept, and the SQL transaction is already over |
 
 A Dolt commit is durable when it returns, so a successful `dolt_commit`
@@ -72,7 +72,7 @@ Readers never block on writers and never see uncommitted rows or staging.
 | Statement | Error |
 |---|---|
 | Writing two different file-backed databases in one transaction | `atomic commit across multiple file-backed databases is not supported`; the transaction is rolled back. Two branches of one file attached in the connection are one database and commit together; see [concurrency.md](concurrency.md#several-branches-in-one-transaction). |
-| `dolt_commit` while another attached branch of the database has uncommitted writes in the transaction | `Cannot commit changes on more than one branch / database`, as in Dolt |
+| `dolt_commit` while another attached branch of the database has uncommitted writes in the transaction | `Cannot commit changes on more than one branch / database`, as in Dolt; `dolt_commit_all` commits them all |
 | `dolt_checkout`, or deleting, renaming, or force-updating, a branch attached in the connection | `branch '<branch>' is attached in this connection` |
 | Any `dolt_*` write under `PRAGMA query_only=1` or `immutable=1` | `attempt to write a readonly database` |
 | A `dolt_*` command inside a view, trigger, generated column, or index | `unsafe use of <function>()` at parse time; command functions are direct-only |

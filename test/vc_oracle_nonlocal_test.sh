@@ -206,6 +206,46 @@ SELECT dolt_branch('shared');
 SELECT CONCAT('R|recreated|', count(*)) FROM users;
 "
 
+COMMIT_ALL_SETUP="
+CREATE TABLE users (id INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'other');
+CREATE TABLE notes (id INT PRIMARY KEY);
+INSERT INTO dolt_nonlocal_tables VALUES ('users', 'main', '', 'immediate');
+SELECT dolt_commit('-Am', 'rules');
+"
+COMMIT_ALL_STATE="
+SELECT CONCAT('R|other-log|', message) FROM dolt_log LIMIT 2;
+SELECT CONCAT('R|other-status|', table_name, '|', staged, '|', status) FROM dolt_status ORDER BY table_name;
+SELECT CONCAT('R|other-notes|', count(*)) FROM notes;
+SELECT dolt_checkout('main');
+SELECT CONCAT('R|main-log|', message) FROM dolt_log LIMIT 2;
+SELECT CONCAT('R|main-status|', table_name, '|', staged, '|', status) FROM dolt_status ORDER BY table_name;
+SELECT CONCAT('R|main-users|', count(*)) FROM users;
+"
+
+oracle "nonlocal_commit_all_both_branches" "$COMMIT_ALL_SETUP
+BEGIN;
+INSERT INTO users VALUES (1);
+INSERT INTO notes VALUES (1);
+SELECT dolt_commit_all('-am', 'both');
+INSERT INTO notes VALUES (2);
+ROLLBACK;
+$COMMIT_ALL_STATE"
+
+oracle "nonlocal_commit_all_nothing_staged" "$COMMIT_ALL_SETUP
+BEGIN;
+INSERT INTO users VALUES (1);
+INSERT INTO notes VALUES (1);
+SELECT dolt_add('notes');
+SELECT dolt_commit_all('-m', 'staged only');
+ROLLBACK;
+$COMMIT_ALL_STATE"
+
+oracle "nonlocal_commit_all_clean" "$COMMIT_ALL_SETUP
+SELECT dolt_commit_all('--allow-empty', '-m', 'empty');
+$COMMIT_ALL_STATE"
+
 tables_oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"

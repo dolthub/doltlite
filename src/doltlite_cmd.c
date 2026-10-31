@@ -330,6 +330,7 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
   if( vetoed ) (void)sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
   doltliteTxnStateClear(&s->state);
   sqlite3_free(s);
+  doltliteEndBranchCommits(db, installed);
   doltliteBtreeFinishJoinedCommand(p, installed ? &catalog : 0, preparedCatalog);
   if( sealError && rc!=SQLITE_OK ){
     sqlite3_result_error(ctx, sqlite3ErrStr(rc), -1);
@@ -633,6 +634,7 @@ static int doltliteCommandScope(const char *zName){
     return DOLTLITE_CMD_NOWAIT;
   }
   if( sqlite3_stricmp(zName, "dolt_commit")==0
+   || sqlite3_stricmp(zName, "dolt_commit_all")==0
    || sqlite3_stricmp(zName, "dolt_checkout")==0
    || sqlite3_stricmp(zName, "dolt_merge")==0
    || sqlite3_stricmp(zName, "dolt_cherry_pick")==0
