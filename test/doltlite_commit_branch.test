@@ -1,0 +1,286 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc branch_commit_seed {} {
+  switch $::branch_commit_layout {
+    rowid {db eval {CREATE TABLE t(id INTEGER PRIMARY KEY)}}
+    clustered {db eval {CREATE TABLE t(id INT PRIMARY KEY)}}
+    without {db eval {CREATE TABLE t(id INT PRIMARY KEY) WITHOUT ROWID}}
+  }
+  db eval {
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','target');
+    INSERT INTO t VALUES(2);
+    SELECT dolt_add('t');
+    INSERT INTO t VALUES(3);
+    CREATE TABLE added(id INT PRIMARY KEY);
+    INSERT INTO added VALUES(9);
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(4);
+    SELECT dolt_add('t');
+    INSERT INTO t VALUES(5);
+  }
+}
+proc branch_commit_caller {} {
+  list [db one {SELECT active_branch()}] [db eval {SELECT id FROM t ORDER BY id}] \
+    [db one {SELECT dolt_hashof('HEAD')}] \
+    [db eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+
+foreach branch_commit_layout {rowid clustered without} {
+foreach storage {file memory} {
+  foreach boundary {auto begin savepoint pinned write} {
+    foreach mode {staged modified all amend} {
+      reset_db
+      if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+      branch_commit_seed
+      set caller [branch_commit_caller]
+      set head [db one {SELECT dolt_hashof('target')}]
+      set parent [db one {SELECT dolt_hashof('target~1')}]
+      set args {'--branch','target','-m','target commit','--author','Writer <writer@test>','--date','2020-01-02T03:04:05Z'}
+      set expected {1 2}
+      if {$mode eq "modified"} {append args ",'--all'"; set expected {1 2 3}}
+      if {$mode eq "all"} {append args ",'--ALL'"; set expected {1 2 3}}
+      if {$mode eq "amend"} {append args ",'--amend'"}
+      if {$boundary ne "auto"} {
+        if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}} else {db eval BEGIN}
+        if {$boundary eq "pinned"} {db eval {SELECT * FROM t}}
+        if {$boundary eq "write"} {db eval {INSERT INTO t VALUES(6)}; set caller [branch_commit_caller]}
+      }
+      set prefix commit-branch-$branch_commit_layout.$storage.$boundary.$mode
+      do_test $prefix.commit {lindex [catchsql "SELECT dolt_commit($args)"] 0} 0
+      do_test $prefix.caller {branch_commit_caller} $caller
+      do_execsql_test $prefix.committed {SELECT id FROM dolt_at_t('target') ORDER BY id} $expected
+      do_execsql_test $prefix.message {SELECT message FROM dolt_log('target') LIMIT 1} {{target commit}}
+      do_execsql_test $prefix.author {SELECT committer,email,date FROM dolt_log('target') LIMIT 1} {Writer writer@test {2020-01-02 03:04:05}}
+      if {$mode eq "amend"} {
+        do_execsql_test $prefix.parents {SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('target')} $parent
+      } else {
+        do_execsql_test $prefix.parent {SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('target')} $head
+      }
+      if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+      if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+      db eval {SELECT dolt_checkout('target')}
+      do_execsql_test $prefix.working {SELECT id FROM t ORDER BY id} {1 2 3}
+      do_execsql_test $prefix.new-table {SELECT id FROM added} 9
+      do_execsql_test $prefix.new-staged {SELECT count(*) FROM dolt_schema_diff('HEAD','WORKING') WHERE to_table_name='added'} [expr {$mode eq "all" ? 0 : 1}]
+      if {$storage eq "file"} {
+        db close; sqlite3 db test.db
+        db eval {SELECT dolt_checkout('target')}
+        do_execsql_test $prefix.reopen {SELECT id FROM t ORDER BY id} {1 2 3}
+        do_execsql_test $prefix.reopen-head {SELECT id FROM dolt_at_t('HEAD') ORDER BY id} $expected
+      }
+    }
+  }
+}
+
+foreach storage {file memory} {
+  foreach mode {missing invalid-date invalid-author no-message clean allow skip} {
+    reset_db
+    if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+    branch_commit_seed
+    if {$mode in {clean allow skip}} {
+      db eval {SELECT dolt_checkout('target'); SELECT dolt_reset('--hard'); SELECT dolt_checkout('main')}
+    }
+    db eval {BEGIN; INSERT INTO t VALUES(6)}
+    set caller [branch_commit_caller]
+    set head [db one {SELECT dolt_hashof('target')}]
+    set args {'--branch','target','-m','target commit'}
+    switch $mode {
+      missing {set args {'--branch','missing','-am','no'}}
+      invalid-date {append args ",'--date','bad'"}
+      invalid-author {append args ",'--author','bad'"}
+      no-message {set args {'--branch','target'}}
+      allow {append args ",'--allow-empty'"}
+      skip {append args ",'--skip-empty'"}
+    }
+    set prefix commit-branch-error-$branch_commit_layout.$storage.$mode
+    do_test $prefix.result {lindex [catchsql "SELECT dolt_commit($args)"] 0} [expr {$mode in {allow skip} ? 0 : 1}]
+    do_test $prefix.caller {branch_commit_caller} $caller
+    if {$mode ne "allow"} {do_execsql_test $prefix.head {SELECT dolt_hashof('target')} $head}
+    if {$mode ni {allow skip}} {
+      do_execsql_test $prefix.rollback {ROLLBACK; SELECT id FROM t ORDER BY id} {1 4 5}
+    } elseif {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+  }
+}
+}
+
+foreach mode {modified all} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','target');
+    ALTER TABLE t ADD COLUMN extra INT;
+    CREATE INDEX ix ON t(extra);
+    UPDATE t SET extra=42;
+    PRAGMA user_version=17;
+    PRAGMA application_id=123;
+    INSERT INTO dolt_ignore VALUES('scratch%',1),('scratch_keep',0);
+    CREATE TABLE scratch_hidden(id INT PRIMARY KEY);
+    INSERT INTO scratch_hidden VALUES(8);
+    CREATE TABLE scratch_keep(id INT PRIMARY KEY);
+    INSERT INTO scratch_keep VALUES(9);
+    SELECT dolt_checkout('main');
+    CREATE INDEX ix ON t(v);
+    INSERT INTO t VALUES(4,'caller');
+    PRAGMA user_version=23;
+    PRAGMA application_id=456;
+  }
+  set before [branch_commit_caller]
+  if {$mode eq "all"} {set args {'--branch','target','-Am','target'}} else {set args {'--branch','target','-am','target'}}
+  do_test commit-branch-schema-$mode.commit {lindex [catchsql "SELECT dolt_commit($args)"] 0} 0
+  do_test commit-branch-schema-$mode.caller {branch_commit_caller} $before
+  do_execsql_test commit-branch-schema-$mode.caller-meta {PRAGMA user_version; PRAGMA application_id} {23 456}
+  do_execsql_test commit-branch-schema-$mode.target {SELECT extra FROM dolt_at_t('target')} 42
+  db eval {SELECT dolt_checkout('target')}
+  do_execsql_test commit-branch-schema-$mode.target-meta {PRAGMA user_version; PRAGMA application_id} {17 123}
+  do_execsql_test commit-branch-schema-$mode.ignored {SELECT id FROM scratch_hidden} 8
+  do_execsql_test commit-branch-schema-$mode.hidden-uncommitted {
+    SELECT count(*) FROM dolt_schema_diff('HEAD','WORKING') WHERE to_table_name='scratch_hidden'
+  } 1
+  do_execsql_test commit-branch-schema-$mode.kept {
+    SELECT count(*) FROM dolt_schema_diff('HEAD','WORKING') WHERE to_table_name='scratch_keep'
+  } [expr {$mode eq "all" ? 0 : 1}]
+  db eval {SELECT dolt_reset('--hard')}
+  do_execsql_test commit-branch-schema-$mode.committed-meta {PRAGMA user_version; PRAGMA application_id} {17 123}
+  do_execsql_test commit-branch-schema-$mode.index {
+    SELECT extra FROM t INDEXED BY ix WHERE extra=42
+  } 42
+}
+foreach mode {commit amend} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY);
+    INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','source'); INSERT INTO t VALUES(2);
+    SELECT dolt_commit('-am','source'); SELECT dolt_checkout('-b','target','main');
+    INSERT INTO t VALUES(3); SELECT dolt_commit('-am','target');
+    SELECT dolt_merge('--no-commit','source');
+  }
+  db close; sqlite3 db test.db
+  db eval {INSERT INTO t VALUES(4)}
+  set before [branch_commit_caller]
+  set head [db one {SELECT dolt_hashof('target')}]
+  set args {'--branch','target','-am','merged'}
+  if {$mode eq "amend"} {append args ",'--amend'"}
+  do_test commit-branch-merge-$mode.result {
+    lindex [catchsql "SELECT dolt_commit($args)"] 0
+  } [expr {$mode eq "amend" ? 1 : 0}]
+  do_test commit-branch-merge-$mode.caller {branch_commit_caller} $before
+  if {$mode eq "commit"} {
+    do_execsql_test commit-branch-merge-$mode.parents {
+      SELECT count(parent_hash) FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('target')
+    } 2
+    do_execsql_test commit-branch-merge-$mode.rows {
+      SELECT id FROM dolt_at_t('target') ORDER BY id
+    } {1 2 3}
+  } else {do_execsql_test commit-branch-merge-$mode.head {SELECT dolt_hashof('target')} $head}
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY,k INT UNIQUE);
+  INSERT INTO t VALUES(1,1); SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','source'); INSERT INTO t VALUES(2,2);
+  SELECT dolt_commit('-am','source'); SELECT dolt_checkout('-b','target','main');
+  INSERT INTO t VALUES(3,2); SELECT dolt_commit('-am','target'); BEGIN;
+}
+catchsql {SELECT dolt_merge('source')}
+db eval COMMIT
+db close; sqlite3 db test.db
+set before [branch_commit_caller]
+set head [db one {SELECT dolt_hashof('target')}]
+do_test commit-branch-cv.refused {lindex [catchsql {SELECT dolt_commit('--branch','target','-am','bad')}] 0} 1
+do_test commit-branch-cv.caller {branch_commit_caller} $before
+do_execsql_test commit-branch-cv.head {SELECT dolt_hashof('target')} $head
+do_test commit-branch-cv.force {lindex [catchsql {SELECT dolt_commit('--branch','target','-am','forced','--force')}] 0} 0
+do_test commit-branch-cv.force-caller {branch_commit_caller} $before
+db eval {SELECT dolt_checkout('target')}
+do_execsql_test commit-branch-cv.rows {SELECT id,k FROM t ORDER BY id} {1 1 2 2 3 2}
+do_execsql_test commit-branch-cv.retained {SELECT count(*) FROM dolt_constraint_violations} 1
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY); SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','target');
+  CREATE TABLE parent(id INT PRIMARY KEY);
+  CREATE TABLE child(id INT PRIMARY KEY,p INT REFERENCES parent(id));
+  SELECT dolt_add('child'); SELECT dolt_checkout('main');
+}
+set before [branch_commit_caller]
+do_test commit-branch-fk.refused {lindex [catchsql {SELECT dolt_commit('--branch','target','-m','missing parent')}] 0} 1
+do_test commit-branch-fk.caller {branch_commit_caller} $before
+do_test commit-branch-fk.force {lindex [catchsql {SELECT dolt_commit('--branch','target','-m','forced','--force')}] 0} 0
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY);
+  INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2);
+  SELECT dolt_commit('-am','feature'); SELECT dolt_checkout('main');
+  INSERT INTO t VALUES(3); SELECT dolt_commit('-am','main');
+  SELECT dolt_checkout('feat'); SELECT dolt_rebase('-i','main');
+}
+set planBranch [db one {SELECT active_branch()}]
+set planRows [db eval {SELECT rebase_order,action,commit_hash,commit_message FROM dolt_rebase}]
+db eval {INSERT INTO t VALUES(99)}
+db close; sqlite3 db test.db
+set before [branch_commit_caller]
+do_test commit-branch-plan.commit {
+  lindex [catchsql "SELECT dolt_commit('--branch','$planBranch','-Am','manual')"] 0
+} 0
+do_test commit-branch-plan.caller {branch_commit_caller} $before
+do_test commit-branch-plan.excluded {
+  db one "SELECT count(*) FROM dolt_schema_diff('HEAD','$planBranch') WHERE to_table_name='dolt_rebase'"
+} 0
+db close; sqlite3 db test.db@$planBranch
+do_execsql_test commit-branch-plan.retained {
+  SELECT rebase_order,action,commit_hash,commit_message FROM dolt_rebase
+} $planRows
+reset_db
+branch_commit_seed
+set targetHead [db one {SELECT dolt_hashof('target')}]
+sqlite3 peer test.db@target
+peer eval {SELECT dolt_default_branch('target'); SELECT dolt_branch('-D','main')}
+do_test commit-branch-deleted-caller.refused {
+  lindex [catchsql {SELECT dolt_commit('--branch','target','-am','no')}] 0
+} 1
+do_execsql_test commit-branch-deleted-caller.no-resurrection {
+  SELECT count(*) FROM dolt_branches WHERE name='main'
+} 0
+do_execsql_test commit-branch-deleted-caller.target-kept {SELECT dolt_hashof('target')} $targetHead
+peer close
+foreach boundary {auto begin pinned} {
+  reset_db
+  branch_commit_seed
+  db eval {ATTACH 'test.db@target' AS f}
+  if {$boundary ne "auto"} {db eval BEGIN}
+  if {$boundary eq "pinned"} {db eval {SELECT * FROM f.t}}
+  set before [branch_commit_caller]
+  do_test commit-branch-attached-$boundary.commit {
+    lindex [catchsql {SELECT dolt_commit('--branch','target','-am','target')}] 0
+  } 0
+  do_test commit-branch-attached-$boundary.caller {branch_commit_caller} $before
+  do_execsql_test commit-branch-attached-$boundary.working {SELECT id FROM f.t ORDER BY id} {1 2 3}
+  do_execsql_test commit-branch-attached-$boundary.committed {SELECT id FROM dolt_at_t('target') ORDER BY id} {1 2 3}
+  if {![sqlite3_get_autocommit db]} {catchsql ROLLBACK}
+  db eval {DETACH f}
+}
+reset_db
+branch_commit_seed
+db eval {ATTACH 'test.db@target' AS f; BEGIN; INSERT INTO f.t VALUES(7); INSERT INTO t VALUES(6)}
+set before [branch_commit_caller]
+set head [db one {SELECT dolt_hashof('target')}]
+do_test commit-branch-attached.refused {
+  lindex [catchsql {SELECT dolt_commit('--branch','target','-Am','target')}] 0
+} 1
+do_test commit-branch-attached.caller-kept {branch_commit_caller} $before
+do_execsql_test commit-branch-attached.target-kept {SELECT id FROM f.t ORDER BY id} {1 2 3 7}
+do_execsql_test commit-branch-attached.head-kept {SELECT dolt_hashof('target')} $head
+do_execsql_test commit-branch-attached.rollback {ROLLBACK; SELECT id FROM t ORDER BY id} {1 4 5}
+do_execsql_test commit-branch-attached.peer-rollback {SELECT id FROM f.t ORDER BY id} {1 2 3}
+db eval {DETACH f}
+finish_test

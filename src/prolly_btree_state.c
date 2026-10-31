@@ -455,6 +455,66 @@ int doltliteResolveBranchEffectiveCatalog(
   return SQLITE_OK;
 }
 
+int doltliteReadBranchCommitState(
+  sqlite3 *db,
+  const char *zBranch,
+  DoltliteBranchCommitState *pState
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash workingCommit;
+  char *zOrig = 0;
+  int rc;
+  memset(pState, 0, sizeof(*pState));
+  rc = btreeLoadBranchHeadCatalog(cs, zBranch,
+      &pState->headCatalog, &pState->head);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &pState->workingSet);
+  if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  rc = btreeLoadWorkingSetBlob(cs, zBranch, &pState->working, &workingCommit,
+      &pState->staged, &pState->merging, &pState->merge, &pState->conflicts,
+      &pState->rebaseFlags, 0, 0, &zOrig, 0, &pState->violations);
+  if( rc==SQLITE_OK && pState->rebaseFlags && zOrig ){
+    pState->onRebasePlan = sqlite3_strnicmp(zBranch, "dolt_rebase_", 12)==0
+      && sqlite3_stricmp(zBranch+12, zOrig)==0;
+  }
+  sqlite3_free(zOrig);
+  if( rc==SQLITE_EMPTY || (rc==SQLITE_OK
+   && prollyHashCompare(&workingCommit, &pState->head)!=0) ){
+    pState->working = pState->headCatalog;
+    memset(&pState->staged, 0, sizeof(ProllyHash));
+    memset(&pState->merge, 0, sizeof(ProllyHash));
+    memset(&pState->conflicts, 0, sizeof(ProllyHash));
+    memset(&pState->violations, 0, sizeof(ProllyHash));
+    pState->merging = pState->rebaseFlags = pState->onRebasePlan = 0;
+    rc = SQLITE_OK;
+  }
+  return rc;
+}
+
+int doltliteWriteBranchCommitState(
+  sqlite3 *db,
+  const char *zBranch,
+  const DoltliteBranchCommitState *pState,
+  const ProllyHash *pCommit
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash preRebase, onto;
+  char *zOrig = 0, *zReturn = 0;
+  int rc;
+  rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, 0, 0, 0, 0, 0,
+      &preRebase, &onto, &zOrig, &zReturn, 0);
+  if( rc==SQLITE_EMPTY ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK ){
+    rc = btreeStoreWorkingSetBlob(cs, zBranch, &pState->working, pCommit,
+        0, 0, 0, 0, pState->rebaseFlags, &preRebase, &onto,
+        zOrig, zReturn, &pState->violations);
+  }
+  sqlite3_free(zOrig);
+  sqlite3_free(zReturn);
+  return rc;
+}
+
 int btreeWriteWorkingState(
   ChunkStore *cs,
   const char *zBranch,

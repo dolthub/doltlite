@@ -6,6 +6,7 @@ vc_oracle_branches_test.sh
 vc_oracle_checkout_test.sh
 vc_oracle_clean_test.sh
 vc_oracle_commit_ancestors_test.sh
+vc_oracle_commit_branch_test.sh
 vc_oracle_commit_test.sh
 vc_oracle_connection_branch_test.sh
 vc_oracle_cross_connection_state_test.sh

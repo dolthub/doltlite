@@ -108,6 +108,7 @@ typedef struct DoltliteCommitOptions {
   const char *zMessage;
   const char *zAuthor;
   const char *zDate;
+  const char *zBranch;
   int addAll;
   int addModifiedOnly;
   int amend;
@@ -132,6 +133,7 @@ static int doltliteCommitParseOptions(
     { "message", 'm', DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zMessage },
     { "author", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zAuthor },
     { "date", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zDate },
+    { "branch", 0, DOLTLITE_CMD_OPTION_VALUE, 0, &opts->zBranch },
     { "amend", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->amend, 0 },
     { "allow-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->allowEmpty, 0 },
     { "skip-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &opts->skipEmpty, 0 },
@@ -186,7 +188,9 @@ static int doltliteCommitValidateAuthor(
 static int doltliteCommitStageModifiedOnly(
   sqlite3 *db,
   sqlite3_context *context,
-  int amend
+  int amend,
+  const DoltliteBranchCommitState *pBranch,
+  ProllyHash *pStagedOut
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash workingHash, headCatHash, stagedHash;
@@ -219,7 +223,12 @@ static int doltliteCommitStageModifiedOnly(
   } while(0)
 
 
-  rc = doltliteFlushCatalogToHash(db, &workingHash);
+  if( pBranch ){
+    workingHash = pBranch->working;
+    rc = SQLITE_OK;
+  }else{
+    rc = doltliteFlushCatalogToHash(db, &workingHash);
+  }
   if( rc!=SQLITE_OK ){
     doltliteVcResultErrorCode(context, sqlite3_context_db_handle(context),
         "failed to flush", rc);
@@ -231,7 +240,12 @@ static int doltliteCommitStageModifiedOnly(
     FREE_ADD_MODIFIED_CATALOGS();
     return rc;
   }
-  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( pBranch ){
+    headCatHash = pBranch->headCatalog;
+    rc = SQLITE_OK;
+  }else{
+    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  }
   if( rc!=SQLITE_OK ){
     /* The staged load below overwrites rc. Losing this error makes -a
     ** stage nothing, and --amend then reports success. */
@@ -248,7 +262,8 @@ static int doltliteCommitStageModifiedOnly(
     }
   }
 
-  doltliteGetSessionStaged(db, &stagedHash);
+  if( pBranch ) stagedHash = pBranch->staged;
+  else doltliteGetSessionStaged(db, &stagedHash);
   if( !prollyHashIsEmpty(&stagedHash) ){
     rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
   }else if( !prollyHashIsEmpty(&headCatHash) ){
@@ -534,13 +549,17 @@ static int doltliteCommitStageModifiedOnly(
     u8 *buf = 0;
     int nBuf = 0;
     ProllyHash newStagedHash;
-    rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+    rc = pBranch
+        ? doltliteSerializeCatalogEntriesFromCatalog(db, aStaged, nStaged,
+            &pBranch->working, &buf, &nBuf)
+        : doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
     if( rc==SQLITE_OK ){
       rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
     }
     sqlite3_free(buf);
     if( rc==SQLITE_OK ){
-      rc = doltliteSetSessionStaged(db, &newStagedHash);
+      if( pStagedOut ) *pStagedOut = newStagedHash;
+      else rc = doltliteSetSessionStaged(db, &newStagedHash);
     }
   }
 
@@ -560,7 +579,8 @@ static int doltliteCommitCreateObject(
   sqlite3_context *context,
   const DoltliteCommitOptions *opts,
   const ProllyHash *pCatalogHash,
-  ProllyHash *pCommitHashOut
+  ProllyHash *pCommitHashOut,
+  const DoltliteBranchCommitState *pBranch
 ){
   ProllyHash parentHash;
   ProllyHash aExtraParents[DOLTLITE_MAX_PARENTS];
@@ -575,13 +595,15 @@ static int doltliteCommitCreateObject(
   assert( pCatalogHash!=0 && pCommitHashOut!=0 );
   zMessage = opts->zMessage;
   zAuthor = opts->zAuthor;
-  doltliteGetSessionHead(db, &parentHash);
+  if( pBranch ) parentHash = pBranch->head;
+  else doltliteGetSessionHead(db, &parentHash);
 
   if( opts->amend ){
     DoltliteCommit headCommit;
     ProllyHash headHash;
     memset(&headCommit, 0, sizeof(headCommit));
-    doltliteGetSessionHead(db, &headHash);
+    if( pBranch ) headHash = pBranch->head;
+    else doltliteGetSessionHead(db, &headHash);
     if( prollyHashIsEmpty(&headHash) ){
       sqlite3_result_error(context,
         "cannot --amend: branch has no commits", -1);
@@ -636,7 +658,12 @@ static int doltliteCommitCreateObject(
   {
     u8 isMerging = 0;
     ProllyHash mergeCommit;
-    doltliteGetSessionMergeState(db, &isMerging, &mergeCommit, 0);
+    if( pBranch ){
+      isMerging = pBranch->merging;
+      mergeCommit = pBranch->merge;
+    }else{
+      doltliteGetSessionMergeState(db, &isMerging, &mergeCommit, 0);
+    }
     if( isMerging && !prollyHashIsEmpty(&mergeCommit)
      && prollyHashCompare(&mergeCommit, &parentHash)!=0
      && nExtraParents < DOLTLITE_MAX_PARENTS-1 ){
@@ -849,6 +876,129 @@ static int commitCatalogIsPristine(
   return rc;
 }
 
+typedef struct DoltliteNamedCommit DoltliteNamedCommit;
+struct DoltliteNamedCommit {
+  const char *zBranch;
+  DoltliteBranchCommitState state;
+  ProllyHash commit;
+};
+
+static int doltliteCommitNamedRef(sqlite3 *db, ChunkStore *cs, void *pArg){
+  DoltliteNamedCommit *p = pArg;
+  ProllyHash workingSet;
+  int rc = chunkStoreGetBranchWorkingSet(cs, p->zBranch, &workingSet);
+  if( rc==SQLITE_NOTFOUND ){
+    memset(&workingSet, 0, sizeof(workingSet));
+    rc = SQLITE_OK;
+  }
+  if( rc==SQLITE_OK
+   && prollyHashCompare(&workingSet, &p->state.workingSet)!=0 ) rc = SQLITE_BUSY;
+  if( rc==SQLITE_OK ) rc = chunkStoreUpdateBranch(cs, p->zBranch, &p->commit);
+  if( rc==SQLITE_OK ){
+    rc = doltliteWriteBranchCommitState(db, p->zBranch, &p->state, &p->commit);
+  }
+  return rc;
+}
+
+static void doltliteCommitNamedBranch(
+  sqlite3_context *context,
+  DoltliteCommitOptions *opts
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  DoltliteNamedCommit m;
+  DoltliteBranchExpectation expected;
+  ProllyHash catalog;
+  char hex[PROLLY_HASH_SIZE*2+1];
+  int rc;
+  memset(&m, 0, sizeof(m));
+  m.zBranch = opts->zBranch;
+  if( chunkStoreFindBranch(doltliteGetChunkStore(db),
+      doltliteGetSessionBranch(db), 0)==SQLITE_NOTFOUND ){
+    doltliteCmdResultWriteTxnError(context, db, SQLITE_BUSY);
+    return;
+  }
+  if( opts->zAuthor
+   && doltliteCommitValidateAuthor(context, opts->zAuthor)!=SQLITE_OK ) return;
+  if( opts->zDate
+   && doltliteParseCommitDate(opts->zDate, &opts->explicitTimestamp)!=SQLITE_OK ){
+    sqlite3_result_error(context, "could not parse --date", -1);
+    return;
+  }
+  if( (!opts->zMessage || !opts->zMessage[0]) && !opts->amend ){
+    sqlite3_result_error(context, "dolt_commit requires a message", -1);
+    return;
+  }
+  rc = doltliteReadBranchCommitState(db, m.zBranch, &m.state);
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_result_error(context, "commit target branch not found", -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  if( !prollyHashIsEmpty(&m.state.conflicts)
+   || doltliteSessionHasUnresolvedConflicts(db) ){
+    sqlite3_result_error(context, "cannot commit: unresolved merge conflicts", -1);
+    return;
+  }
+  if( !opts->force && !prollyHashIsEmpty(&m.state.violations) ){
+    sqlite3_result_error(context, "cannot commit: unresolved constraint violations", -1);
+    return;
+  }
+  if( opts->amend && (m.state.merging || (m.state.rebaseFlags
+   && (m.state.rebaseFlags & WS_REBASE_FLAG_EDIT)==0)) ){
+    sqlite3_result_error(context, "cannot amend during a merge or rebase", -1);
+    return;
+  }
+  catalog = m.state.staged;
+  if( opts->addAll ){
+    rc = doltliteComposeStageAll(db, context, &m.state.working,
+        &m.state.headCatalog, &m.state.staged, m.state.onRebasePlan, &catalog);
+  }else if( opts->addModifiedOnly ){
+    rc = doltliteCommitStageModifiedOnly(db, context, opts->amend,
+        &m.state, &catalog);
+  }
+  if( rc!=SQLITE_OK ) return;
+  if( prollyHashIsEmpty(&catalog) ) catalog = m.state.headCatalog;
+  if( !m.state.merging && (!opts->amend || opts->skipEmpty)
+   && prollyHashCompare(&catalog, &m.state.headCatalog)==0 ){
+    if( opts->skipEmpty ){
+      sqlite3_result_int(context, 0);
+      return;
+    }
+    if( !opts->allowEmpty ){
+      sqlite3_result_error(context, "nothing to commit, working tree clean", -1);
+      return;
+    }
+  }
+  if( !opts->force
+   && doltliteCommitValidateForeignKeyParents(db, context, &catalog)!=SQLITE_OK ){
+    return;
+  }
+  rc = doltliteCommitCreateObject(db, context, opts, &catalog, &m.commit, &m.state);
+  if( rc!=SQLITE_OK ) return;
+  if( !db->autoCommit || db->pSavepoint ){
+    rc = doltlitePrepareJoinedCommit(db);
+    if( rc==SQLITE_DONE ) rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+  }
+  expected.zBranch = m.zBranch;
+  expected.pTip = &m.state.head;
+  doltliteTestRunBeforeRefInstallHook();
+  rc = doltliteMutateRefsExpected(db, &expected, 1, doltliteCommitNamedRef, &m);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  doltliteHashToHex(&m.commit, hex);
+  doltliteHistoricalModulesReset(db);
+  sqlite3_result_text(context, hex, -1, SQLITE_TRANSIENT);
+}
+
 static void doltliteCommitFuncImpl(
   sqlite3_context *context,
   int argc,
@@ -870,6 +1020,7 @@ static void doltliteCommitFuncImpl(
   int pinnedRead = !db->autoCommit
                 && sqlite3_txn_state(db, "main")==SQLITE_TXN_READ;
   int rc;
+  int parseRc;
 
   memset(&mutationState, 0, sizeof(mutationState));
 
@@ -882,6 +1033,13 @@ static void doltliteCommitFuncImpl(
   if( doltliteCmdRejectReadOnly(context) ) return;
   if( !cs ){
     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
+    return;
+  }
+
+  parseRc = doltliteCommitParseOptions(context, argc, argv, &opts);
+  if( parseRc==SQLITE_OK && opts.zBranch
+   && strcmp(opts.zBranch, doltliteGetSessionBranch(db))!=0 ){
+    doltliteCommitNamedBranch(context, &opts);
     return;
   }
 
@@ -910,9 +1068,7 @@ static void doltliteCommitFuncImpl(
     }
   }
 
-  if( doltliteCommitParseOptions(context, argc, argv, &opts)!=SQLITE_OK ){
-    return;
-  }
+  if( parseRc!=SQLITE_OK ) return;
   if( opts.zAuthor
    && doltliteCommitValidateAuthor(context, opts.zAuthor)!=SQLITE_OK ){
     return;
@@ -1032,7 +1188,7 @@ static void doltliteCommitFuncImpl(
     rc = doltliteAddStageAll(db, context, 0);
     if( rc!=SQLITE_OK ) return;
   }else if( addModifiedOnly ){
-    rc = doltliteCommitStageModifiedOnly(db, context, amend);
+    rc = doltliteCommitStageModifiedOnly(db, context, amend, 0, 0);
     if( rc!=SQLITE_OK ) return;
   }
 
@@ -1129,7 +1285,7 @@ static void doltliteCommitFuncImpl(
     if( rc!=SQLITE_OK ) return;
   }
 
-  rc = doltliteCommitCreateObject(db, context, &opts, &catalogHash, &commitHash);
+  rc = doltliteCommitCreateObject(db, context, &opts, &catalogHash, &commitHash, 0);
   if( rc!=SQLITE_OK ) return;
 
   rc = doltliteForEachUserTableInCatalog(db, "dolt_workspace_",
