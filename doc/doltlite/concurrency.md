@@ -147,8 +147,10 @@ mechanism.
   either branch after this transaction read it, the stale write is refused
   with `database is locked` (`SQLITE_BUSY_SNAPSHOT`) and the peer's rows
   survive.
-- Version-control commands are refused while another branch of the store has
-  uncommitted writes in the transaction; commit or roll back first.
+- `dolt_commit` is refused while another branch of the store has uncommitted
+  writes in the transaction, as in Dolt. Other version-control commands run;
+  one that commits the caller's transaction publishes every branch's writes
+  in the same root.
 - `dolt_checkout`, and deleting, renaming, or force-updating a branch, are
   refused for a branch attached in the connection.
 - Sharing applies to a different, existing branch of a writable file. Attaching

@@ -41,8 +41,8 @@ rule applies on the branch whose working set holds it.
 - A transaction that writes a nonlocal table and a local one commits both as
   one root, and `ROLLBACK` undoes both (see
   [concurrency.md](concurrency.md#several-branches-in-one-transaction)).
-  Version-control commands are refused until that transaction commits or
-  rolls back.
+  Version-control commands run inside it, but `dolt_commit` is refused until
+  it commits or rolls back, as in Dolt.
 - `dolt_clean` never drops a table a rule claims.
 - The connection attaches each target branch as a hidden database named
   `dolt_nonlocal:<ref>` while a rule names it. It appears in

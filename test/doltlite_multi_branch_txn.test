@@ -90,18 +90,33 @@ do_test multi-branch-stale-sibling {
 do_test multi-branch-stale-sibling-main {mb_disk main} {1:base,2:main ok}
 do_test multi-branch-stale-sibling-peer-kept {mb_disk feat} {1:base,50:peer ok}
 
-# Version-control commands roll back the store when they fail, which
-# would discard the attached branch's staged writes.
+# As in Dolt, version-control commands run while another branch has
+# writes in the transaction; only dolt_commit refuses.
 mb_reset
-do_test multi-branch-vc-refused {
+do_test multi-branch-vc-add {
   db eval {BEGIN; INSERT INTO f.t VALUES(3,'feat')}
   set r [catchsql {SELECT dolt_add('.')}]
+  lappend r [catchsql {SELECT dolt_commit('-m','both')}]
   db eval COMMIT
   set r
-} {1 {cannot run dolt_add while branch 'feat' of this database has a write transaction open; commit or roll back first}}
-do_execsql_test multi-branch-vc-after-commit {
-  SELECT dolt_add('.');
-} 0
+} {0 0 {1 {Cannot commit changes on more than one branch / database}}}
+do_test multi-branch-vc-add-durable {mb_disk feat} {1:base,3:feat ok}
+
+# A command that commits the caller's transaction publishes the other
+# branch's writes in the same root.
+foreach {name sql} {
+  reset {SELECT dolt_reset()}
+  branch {SELECT dolt_branch('nb')}
+} {
+  mb_reset
+  do_test multi-branch-vc-seal-$name {
+    db eval {BEGIN; INSERT INTO main.t VALUES(2,'main'); INSERT INTO f.t VALUES(3,'feat')}
+    db eval $sql
+    set r [list [mb_disk main] [mb_disk feat]]
+    db eval ROLLBACK
+    set r
+  } {{1:base,2:main ok} {1:base,3:feat ok}}
+}
 
 foreach {name sql} {
   checkout {SELECT dolt_checkout('feat')}
@@ -200,6 +215,39 @@ foreach kind {xWrite xSync} {
   do_test multi-branch-io-$kind-exhausted {expr {$fault<=100}} 1
 }
 do_test multi-branch-io-errors-exercised {expr {$failed>0}} 1
+# A command's publish that fails leaves both branches' writes in the
+# caller's transaction, which still commits them.
+set failed 0
+foreach kind {xWrite xSync} {
+  for {set fault 1} {$fault<=100} {incr fault} {
+    forcedelete test.db
+    file copy -force multi-branch-base.db test.db
+    sqlite3 db test.db -vfs mbio
+    db eval "ATTACH '[file normalize test.db]/feat' AS f"
+    db eval {
+      BEGIN;
+      INSERT INTO main.t VALUES(2,'main');
+      INSERT INTO f.t VALUES(3,'feat');
+    }
+    set calls 0
+    set hits 0
+    set armed 1
+    set result [catchsql {SELECT dolt_reset()}]
+    set armed 0
+    if {[lindex $result 0]} {
+      incr failed
+      catchsql COMMIT
+    }
+    if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+    db close
+    do_test multi-branch-vc-io-$kind-$fault.kept {
+      list [mb_disk main] [mb_disk feat]
+    } $after
+    if {$hits==0} break
+  }
+  do_test multi-branch-vc-io-$kind-exhausted {expr {$fault<=100}} 1
+}
+do_test multi-branch-vc-io-errors-exercised {expr {$failed>0}} 1
 mbio delete
 sqlite3 db test.db
 

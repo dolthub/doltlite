@@ -119,7 +119,16 @@ do_test nonlocal-txn-commit-refused {
   set r [catchsql {SELECT dolt_commit('-am','both')}]
   db eval ROLLBACK
   set r
-} {1 {cannot run dolt_commit while branch 'main' of this database has a write transaction open; commit or roll back first}}
+} {1 {Cannot commit changes on more than one branch / database}}
+do_test nonlocal-txn-add {
+  db eval {BEGIN; INSERT INTO users VALUES(5,'x'); INSERT INTO notes VALUES(5,'x')}
+  set r [db eval {SELECT dolt_add('notes')}]
+  db eval COMMIT
+  lappend r [nl_disk main {SELECT max(id) FROM users}]
+  lappend r [db eval {SELECT staged FROM dolt_status WHERE table_name='notes'}]
+  db eval {DELETE FROM users WHERE id=5; DELETE FROM notes WHERE id=5}
+  set r
+} {0 5 1}
 
 # A rule that targets this branch may have its backing table created here;
 # dolt_clean keeps it untracked.

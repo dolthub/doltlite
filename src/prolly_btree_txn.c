@@ -1396,19 +1396,17 @@ struct JoinedReload {
   int bHave;
 };
 
-/* Every joined sibling has staged into the shared refs: publish them as
-** one root, then finish each as an ordinary commit would. A failed
-** publish restores all of them. */
-static int commitJoinedPublish(Btree *pLast){
-  sqlite3 *db = pLast->db;
+static int joinedPrepare(Btree *pAny, JoinedReload **pa, int *pn){
+  sqlite3 *db = pAny->db;
   JoinedReload *a;
   int n = 0, i, rc = SQLITE_OK;
-
+  *pa = 0;
+  *pn = 0;
   a = sqlite3_malloc64(sizeof(*a)*(sqlite3_uint64)db->nDb);
-  if( !a ) rc = SQLITE_NOMEM;
+  if( !a ) return SQLITE_NOMEM;
   for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
     Btree *q = db->aDb[i].pBt;
-    if( !q || !q->pBt || q->pBt->pStore!=pLast->pBt->pStore
+    if( !q || !q->pBt || q->pBt->pStore!=pAny->pBt->pStore
      || !q->bJoinedStaged ){
       continue;
     }
@@ -1421,18 +1419,24 @@ static int commitJoinedPublish(Btree *pLast){
     }
     n++;
   }
-  if( rc==SQLITE_OK ) rc = commitChunkStore(pLast->pBt, 1);
-  if( rc!=SQLITE_OK ){
-    for(i=0; i<n; i++){
-      Btree *q = a[i].p;
-      (void)commitPhaseTwoFailRestore(q, q->pBt, rc, &q->pJoinedCat,
-                                      &a[i].reload, &a[i].bHave);
-      commitJoinedForget(q);
-    }
-    sqlite3_free(a);
-    return rc;
+  *pa = a;
+  *pn = n;
+  return rc;
+}
+
+static void joinedFail(JoinedReload *a, int n, int rc){
+  int i;
+  for(i=0; i<n; i++){
+    Btree *q = a[i].p;
+    (void)commitPhaseTwoFailRestore(q, q->pBt, rc, &q->pJoinedCat,
+                                    &a[i].reload, &a[i].bHave);
+    commitJoinedForget(q);
   }
-  doltliteVcCommandInstalled(db);
+  sqlite3_free(a);
+}
+
+static void joinedFinish(JoinedReload *a, int n){
+  int i;
   for(i=0; i<n; i++){
     Btree *q = a[i].p;
     q->committedCatalogHash = q->joinedCatHash;
@@ -1449,7 +1453,90 @@ static int commitJoinedPublish(Btree *pLast){
   }
   for(i=0; i<n; i++) commitPhaseTwoReleaseGraph(a[i].p->pBt);
   sqlite3_free(a);
+}
+
+/* Every joined sibling has staged into the shared refs: publish them as
+** one root, then finish each as an ordinary commit would. A failed
+** publish restores all of them. */
+static int commitJoinedPublish(Btree *pLast){
+  JoinedReload *a;
+  int n, rc;
+  rc = joinedPrepare(pLast, &a, &n);
+  if( rc==SQLITE_OK ) rc = commitChunkStore(pLast->pBt, 1);
+  if( rc!=SQLITE_OK ){
+    joinedFail(a, n, rc);
+    return rc;
+  }
+  doltliteVcCommandInstalled(pLast->db);
+  joinedFinish(a, n);
   return SQLITE_OK;
+}
+
+typedef struct SiblingStage SiblingStage;
+struct SiblingStage {
+  JoinedReload *a;
+  int n;
+};
+
+/* A failed publish leaves the caller's transaction open: each sibling
+** keeps its flushed writes, whose chunks stay pending, and stages again
+** when that transaction commits. */
+static void siblingsUnstage(Btree *p, JoinedReload *a, int n){
+  sqlite3 *db = p->db;
+  int i;
+  for(i=0; i<n; i++){
+    if( a[i].bHave ) catFree(&a[i].reload.cat);
+  }
+  sqlite3_free(a);
+  for(i=0; i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( q && q!=p && btreeIsProlly(q) && q->bJoinedStaged ){
+      commitJoinedForget(q);
+    }
+  }
+}
+
+/* For a command that publishes the caller's transaction itself: the other
+** branches of this store written in that transaction stage into the same
+** refs, so the command's publish carries them. */
+int doltliteStageStoreSiblings(Btree *p, void **ppStage){
+  sqlite3 *db = p->db;
+  SiblingStage *s;
+  int i, rc = SQLITE_OK;
+  *ppStage = 0;
+  if( !btreeIsProlly(p) || !doltliteStoreSiblingBranch(db, 0, 0) ){
+    return SQLITE_OK;
+  }
+  s = sqlite3_malloc64(sizeof(*s));
+  if( !s ) return SQLITE_NOMEM;
+  memset(s, 0, sizeof(*s));
+  for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( q==p || !doltliteBtreeSameStore(p, q) || q->inTrans!=TRANS_WRITE
+     || !sqlite3BtreeHasPendingChanges(q) ){
+      continue;
+    }
+    rc = commitJoinedStage(q, q->pBt);
+  }
+  if( rc==SQLITE_OK ) rc = joinedPrepare(p, &s->a, &s->n);
+  if( rc!=SQLITE_OK ){
+    siblingsUnstage(p, s->a, s->n);
+    sqlite3_free(s);
+    return rc;
+  }
+  *ppStage = s;
+  return SQLITE_OK;
+}
+
+void doltliteFinishStoreSiblings(Btree *p, void *pStage, int bPublished){
+  SiblingStage *s = pStage;
+  if( !s ) return;
+  if( bPublished ){
+    joinedFinish(s->a, s->n);
+  }else{
+    siblingsUnstage(p, s->a, s->n);
+  }
+  sqlite3_free(s);
 }
 
 static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
