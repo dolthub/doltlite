@@ -426,4 +426,138 @@ do_execsql_test 4.6.2 {
   SELECT 'temp', a FROM temp.tt1;
 } {main 40 temp 4}
 
+#-------------------------------------------------------------------------
+# A TEMP trigger attached to a main (or attached) database table that
+# has the same name as a TEMP table. Renaming the TEMP table must not
+# relabel the trigger (sqlite_temp_schema.tbl_name), as the trigger is
+# not attached to the table being renamed.
+#
+reset_db
+do_execsql_test 5.0 {
+  CREATE TABLE t1(a);
+  CREATE TEMP TABLE t1(x);
+  CREATE TEMP TABLE log(v);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON main.t1 BEGIN
+    INSERT INTO log VALUES(new.a);
+  END;
+}
+do_execsql_test 5.1 {
+  ALTER TABLE temp.t1 RENAME TO tt;
+  SELECT type, name, tbl_name FROM sqlite_temp_schema ORDER BY name;
+} {table log log table tt tt trigger ttr t1}
+do_execsql_test 5.2 {
+  INSERT INTO main.t1 VALUES(1);
+  INSERT INTO temp.tt VALUES(2);
+  SELECT v FROM log;
+} {1}
+do_execsql_test 5.3 {
+  SELECT sql FROM sqlite_temp_schema WHERE name='ttr';
+} {{CREATE TRIGGER ttr AFTER INSERT ON main.t1 BEGIN
+    INSERT INTO log VALUES(new.a);
+  END}}
+
+# The trigger survives a schema reload and still fires on main.t1.
+db close
+sqlite3 db test.db
+do_execsql_test 5.4 {
+  CREATE TABLE t2(y);
+  CREATE TEMP TABLE t2(y);
+  CREATE TEMP TABLE log(v);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON main.t2 BEGIN
+    INSERT INTO log VALUES(new.y);
+  END;
+  ALTER TABLE temp.t2 RENAME TO tt2;
+  INSERT INTO main.t2 VALUES('x');
+  SELECT v FROM log;
+} {x}
+
+# Case differences between the ON clause and the table name.
+reset_db
+do_execsql_test 5.5 {
+  CREATE TABLE t1(a);
+  CREATE TEMP TABLE T1(x);
+  CREATE TEMP TABLE log(v);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON main.T1 BEGIN
+    INSERT INTO log VALUES(new.a);
+  END;
+  ALTER TABLE temp.t1 RENAME TO tt;
+  INSERT INTO main.t1 VALUES(5);
+  SELECT v FROM log;
+  SELECT name, tbl_name FROM sqlite_temp_schema WHERE type='trigger';
+} {5 ttr T1}
+
+# Two TEMP triggers - one on main.t1 and one on temp.t1. Only the
+# trigger on temp.t1 is relabelled.
+reset_db
+do_execsql_test 5.6.0 {
+  CREATE TABLE t1(a);
+  CREATE TEMP TABLE t1(x);
+  CREATE TEMP TABLE log(v);
+  CREATE TEMP TRIGGER tr_main AFTER INSERT ON main.t1 BEGIN
+    INSERT INTO log VALUES('main:' || new.a);
+  END;
+  CREATE TEMP TRIGGER tr_temp AFTER INSERT ON temp.t1 BEGIN
+    INSERT INTO log VALUES('temp:' || new.x);
+  END;
+}
+do_execsql_test 5.6.1 {
+  ALTER TABLE temp.t1 RENAME TO tt;
+  SELECT name, tbl_name FROM sqlite_temp_schema
+   WHERE type='trigger' ORDER BY name;
+} {tr_main t1 tr_temp tt}
+do_execsql_test 5.6.2 {
+  INSERT INTO main.t1 VALUES(1);
+  INSERT INTO temp.tt VALUES(2);
+  SELECT v FROM log ORDER BY v;
+} {main:1 temp:2}
+do_execsql_test 5.6.3 {
+  SELECT sql FROM sqlite_temp_schema WHERE name='tr_temp';
+} {{CREATE TRIGGER tr_temp AFTER INSERT ON temp."tt" BEGIN
+    INSERT INTO log VALUES('temp:' || new.x);
+  END}}
+
+# Same again, but with the trigger on a table in an attached database.
+reset_db
+forcedelete test.db2
+do_execsql_test 5.7.0 {
+  ATTACH 'test.db2' AS aux;
+  CREATE TABLE aux.t1(a);
+  CREATE TEMP TABLE t1(x);
+  CREATE TEMP TABLE log(v);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON aux.t1 BEGIN
+    INSERT INTO log VALUES(new.a);
+  END;
+}
+do_execsql_test 5.7.1 {
+  ALTER TABLE temp.t1 RENAME TO tt;
+  INSERT INTO aux.t1 VALUES('aux');
+  INSERT INTO temp.tt VALUES('temp');
+  SELECT v FROM log;
+  SELECT name, tbl_name FROM sqlite_temp_schema WHERE type='trigger';
+} {aux ttr t1}
+
+# Renaming the attached table itself does relabel the TEMP trigger.
+do_execsql_test 5.7.2 {
+  ALTER TABLE aux.t1 RENAME TO a1;
+  SELECT name, tbl_name FROM sqlite_temp_schema WHERE type='trigger';
+  INSERT INTO aux.a1 VALUES('aux2');
+  SELECT v FROM log;
+} {ttr a1 aux aux2}
+
+# Renaming main.t1 (rather than temp.t1) relabels a TEMP trigger on
+# main.t1, and leaves the TEMP table alone.
+reset_db
+do_execsql_test 5.8 {
+  CREATE TABLE t1(a);
+  CREATE TEMP TABLE t1(x);
+  CREATE TEMP TABLE log(v);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON main.t1 BEGIN
+    INSERT INTO log VALUES(new.a);
+  END;
+  ALTER TABLE main.t1 RENAME TO m1;
+  SELECT type, name, tbl_name FROM sqlite_temp_schema ORDER BY name;
+  INSERT INTO main.m1 VALUES(8);
+  SELECT v FROM log;
+} {table log log table t1 t1 trigger ttr m1 8}
+
 finish_test
