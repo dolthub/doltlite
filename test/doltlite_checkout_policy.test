@@ -1,0 +1,145 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc checkout_policy_state {{handle db}} {
+  list [$handle one {SELECT active_branch()}] \
+       [$handle one {SELECT dolt_hashof('HEAD')}] \
+       [$handle eval {SELECT to_v FROM dolt_diff_t('HEAD','STAGED') ORDER BY to_id}] \
+       [$handle eval {SELECT v FROM t}] \
+       [$handle eval {SELECT id FROM ig_local}] \
+       [$handle eval {SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged}]
+}
+
+foreach storage {file memory} {
+  foreach boundary {auto begin savepoint} {
+    foreach flags {{'-f'} {'--force'} {'--overwrite-ignore'} {'--no-overwrite-ignore'}
+                   {'-f','--no-overwrite-ignore'} {'--force','--overwrite-ignore'}} {
+      reset_db
+      if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+      db eval {
+        CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+        INSERT INTO t VALUES(1,'base');
+        INSERT INTO dolt_ignore VALUES('ig_%',1);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_checkout('-b','source');
+        UPDATE t SET v='source-staged';
+        SELECT dolt_add('t');
+        UPDATE t SET v='source-working';
+        CREATE TABLE ig_local(id INT PRIMARY KEY);
+        INSERT INTO ig_local VALUES(22);
+      }
+      set source [checkout_policy_state]
+      db eval {
+        SELECT dolt_checkout('main');
+        UPDATE t SET v='main-staged';
+        SELECT dolt_add('t');
+        UPDATE t SET v='main-working';
+        CREATE TABLE ig_local(id INT PRIMARY KEY);
+        INSERT INTO ig_local VALUES(11);
+      }
+      set main [checkout_policy_state]
+      set prefix checkout-policy-$storage.$boundary.$flags
+      if {$boundary eq "begin"} {db eval BEGIN}
+      if {$boundary eq "savepoint"} {db eval {SAVEPOINT caller}}
+      do_test $prefix.source {lindex [catchsql "SELECT dolt_checkout($flags,'source')"] 0} 0
+      do_test $prefix.source-kept {checkout_policy_state} $source
+      do_test $prefix.main {lindex [catchsql "SELECT dolt_checkout('main',$flags)"] 0} 0
+      do_test $prefix.main-kept {checkout_policy_state} $main
+      do_test $prefix.missing {
+        list [lindex [catchsql "SELECT dolt_checkout($flags,'missing')"] 0] [checkout_policy_state]
+      } [list 1 $main]
+      if {![sqlite3_get_autocommit db]} {catchsql COMMIT}
+      if {$storage eq "file"} {
+        db close
+        sqlite3 db test.db
+        do_test $prefix.reopen {checkout_policy_state} $main
+        sqlite3 other test.db@source
+        do_test $prefix.source-reopen {checkout_policy_state other} $source
+        other close
+      }
+    }
+  }
+}
+
+foreach flags {{'-f'} {'--force'} {'--overwrite-ignore'} {'--no-overwrite-ignore'}} {
+  foreach mode {table create reset} {
+    reset_db
+    db eval {
+      CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+      CREATE TABLE u(id INT PRIMARY KEY,v TEXT);
+      INSERT INTO t VALUES(1,'base');
+      INSERT INTO u VALUES(1,'base');
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('source');
+      UPDATE t SET v='working';
+      UPDATE u SET v='keep';
+      SELECT dolt_add('t');
+      UPDATE t SET v='unstaged';
+    }
+    set prefix checkout-policy-$mode.$flags
+    if {$mode eq "table"} {
+      do_test $prefix.result {lindex [catchsql "SELECT dolt_checkout($flags,'--','t')"] 0} 0
+      do_execsql_test $prefix.data {SELECT v FROM t; SELECT v FROM u} {working keep}
+      do_test $prefix.head-result {lindex [catchsql "SELECT dolt_checkout($flags,'HEAD','t')"] 0} 0
+      do_execsql_test $prefix.head-data {SELECT v FROM t; SELECT v FROM u} {base keep}
+    } else {
+      set option [expr {$mode eq "create" ? "-b" : "-B"}]
+      set target [expr {$mode eq "create" ? "new" : "source"}]
+      do_test $prefix.result {lindex [catchsql "SELECT dolt_checkout($flags,'$option','$target')"] 0} 0
+      do_execsql_test $prefix.data {SELECT v FROM t; SELECT v FROM u} {base base}
+      do_execsql_test $prefix.original {
+        SELECT dolt_checkout('main');
+        SELECT v FROM t;
+        SELECT v FROM u;
+      } {0 unstaged keep}
+    }
+  }
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+  CREATE TABLE "--force"(id INT PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'base');
+  INSERT INTO "--force" VALUES(1,'base');
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET v='keep';
+  UPDATE "--force" SET v='working';
+}
+set before [db eval {SELECT active_branch(),dolt_hashof('HEAD'); SELECT v FROM t}]
+foreach flags {{'--overwrite-ignore','--no-overwrite-ignore'}
+               {'-f','--overwrite-ignore','--no-overwrite-ignore'}} {
+  do_test checkout-policy-mutual.$flags {
+    list [lindex [catchsql "SELECT dolt_checkout($flags,'missing')"] 0] \
+         [db eval {SELECT active_branch(),dolt_hashof('HEAD'); SELECT v FROM t}]
+  } [list 1 $before]
+}
+do_execsql_test checkout-policy.literal {
+  SELECT dolt_checkout('-f','--','--force');
+  SELECT v FROM "--force";
+  SELECT v FROM t;
+} {0 base keep}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY);
+  INSERT INTO dolt_ignore VALUES('ig_%',1);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_checkout('-b','source');
+  CREATE TABLE ig_collision(id INT PRIMARY KEY);
+  INSERT INTO ig_collision VALUES(41);
+  SELECT dolt_add('-f','ig_collision');
+  SELECT dolt_commit('-m','tracked');
+  SELECT dolt_checkout('main');
+  CREATE TABLE ig_collision(id INT PRIMARY KEY);
+  INSERT INTO ig_collision VALUES(99);
+}
+do_test checkout-policy.ignored-collision {
+  lindex [catchsql {SELECT dolt_checkout('--no-overwrite-ignore','source')}] 0
+} 0
+do_execsql_test checkout-policy.ignored-target {SELECT id FROM ig_collision} 41
+do_execsql_test checkout-policy.ignored-source {
+  SELECT dolt_checkout('main'); SELECT id FROM ig_collision;
+} {0 99}
+
+finish_test

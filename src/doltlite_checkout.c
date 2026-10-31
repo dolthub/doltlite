@@ -1746,11 +1746,17 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   DoltliteCmdArgs args;
   int createBranch = 0;
   int forceBranch = 0;
+  int force = 0;
+  int overwriteIgnore = 0;
+  int noOverwriteIgnore = 0;
   const char *zCreateBranch = 0;
   const char *zForceBranch = 0;
   DoltliteCmdOption aOption[] = {
     { 0, 'b', DOLTLITE_CMD_OPTION_VALUE, &createBranch, &zCreateBranch },
-    { 0, 'B', DOLTLITE_CMD_OPTION_VALUE, &forceBranch, &zForceBranch }
+    { 0, 'B', DOLTLITE_CMD_OPTION_VALUE, &forceBranch, &zForceBranch },
+    { "force", 'f', DOLTLITE_CMD_OPTION_FLAG, &force, 0 },
+    { "overwrite-ignore", 0, DOLTLITE_CMD_OPTION_FLAG, &overwriteIgnore, 0 },
+    { "no-overwrite-ignore", 0, DOLTLITE_CMD_OPTION_FLAG, &noOverwriteIgnore, 0 }
   };
   int rc;
 
@@ -1765,7 +1771,10 @@ void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     (void)doltliteVcSealSavepointError(sqlite3_context_db_handle(ctx));
     return;
   }
-  if( createBranch && forceBranch ){
+  if( overwriteIgnore && noOverwriteIgnore ){
+    doltliteVcResultError(ctx, db,
+        "--overwrite-ignore and --no-overwrite-ignore are mutually exclusive");
+  }else if( createBranch && forceBranch ){
     doltliteVcResultError(ctx, db,
         "Improper usage. Cannot use both -b and -B.");
   }else{
