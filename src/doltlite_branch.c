@@ -166,11 +166,15 @@ static int mutateBranchCopy(sqlite3 *db, ChunkStore *cs, void *pArg){
   return chunkStoreAddBranch(cs, p->zDest, &srcCommit);
 }
 
+static const char zBranchInUse[] = "unsafe to delete or rename branches in use "
+    "in other sessions; use --force to force the change";
+
 typedef struct BranchMoveCtx BranchMoveCtx;
 struct BranchMoveCtx {
   const char *zSrc;
   const char *zDest;
   int force;
+  int inUse;
 };
 
 static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
@@ -184,6 +188,12 @@ static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( !doltliteUserRefNameIsValid(p->zDest) ) return SQLITE_CONSTRAINT;
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
+  if( !p->force ){
+    rc = doltliteBranchInUseElsewhere(db, p->zSrc, &p->inUse);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) return rc;
+    if( p->inUse ) return SQLITE_CONSTRAINT;
+  }
   if( branchNameTakenIgnoringCase(cs, p->zDest, p->zSrc) ) return SQLITE_ERROR;
   zDefault = chunkStoreGetDefaultBranch(cs);
   srcIsDefault = zDefault && strcmp(p->zSrc, zDefault)==0;
@@ -227,6 +237,7 @@ struct BranchDeleteCtx {
   int notMerged;
   int isDefault;
   int isDirty;
+  int inUse;
 };
 
 static int mutateBranchDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
@@ -247,17 +258,23 @@ static int mutateBranchDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
     if( rc!=SQLITE_OK ) return rc;
     if( !p->force ){
       /* Another connection may be working on it; deleting the branch
-      ** discards its uncommitted rows. */
-      int iRef = csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
-                                (int)sizeof(BranchRef), p->azName[i]);
-      int dirty = 0;
-      if( iRef>=0 ){
-        rc = doltliteBranchRefIsDirty(db, cs, &cs->refs.aBranches[iRef],
-                                      &dirty);
-        if( rc!=SQLITE_OK ) return rc;
-      }
-      if( dirty ){
-        p->isDirty = 1;
+      ** discards its uncommitted rows. Where the VFS cannot tell whether
+      ** a connection has it checked out, uncommitted changes stand in. */
+      int inUse = 0;
+      rc = doltliteBranchInUseElsewhere(db, p->azName[i], &inUse);
+      if( rc==SQLITE_NOTFOUND ){
+        int iRef = csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
+                                  (int)sizeof(BranchRef), p->azName[i]);
+        if( iRef>=0 ){
+          rc = doltliteBranchRefIsDirty(db, cs, &cs->refs.aBranches[iRef],
+                                        &p->isDirty);
+          if( rc!=SQLITE_OK ) return rc;
+        }
+        if( p->isDirty ) return SQLITE_CONSTRAINT;
+      }else if( rc!=SQLITE_OK ){
+        return rc;
+      }else if( inUse ){
+        p->inUse = 1;
         return SQLITE_CONSTRAINT;
       }
       rc = doltliteFindAncestor(db, &currentHead, &branchHead, &ancestor);
@@ -328,6 +345,8 @@ static void doltBranchParsedFunc(
             "call dolt_default_branch(<other>) first");
         }else if( m.notMerged ){
           branchError(ctx, hadSavepoint, "branch is not fully merged");
+        }else if( m.inUse ){
+          branchError(ctx, hadSavepoint, zBranchInUse);
         }else if( m.isDirty ){
           branchError(ctx, hadSavepoint,
             "branch has uncommitted changes; use --force to delete it");
@@ -439,6 +458,11 @@ static void doltBranchParsedFunc(
         return;
       }
       rc = doltliteMutateRefs(db, mutateBranchMove, &m);
+      if( rc!=SQLITE_OK && m.inUse ){
+        sqlite3_free(zPreparedBranch);
+        branchError(ctx, hadSavepoint, zBranchInUse);
+        return;
+      }
       if( rc!=SQLITE_OK ){
         sqlite3_free(zPreparedBranch);
         branchNamedResultError(ctx, hadSavepoint, rc,

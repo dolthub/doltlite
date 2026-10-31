@@ -352,6 +352,7 @@ struct Btree {
   struct DoltliteNonlocal *pNonlocal;
   u8 bJoinedPublish;
   u8 bJoinedStaged;
+  char *zPresenceBranch;
   u8 bCommitAllSaved;
   u8 commitAllMerging;
   ProllyHash commitAllHead;
@@ -846,6 +847,7 @@ void doltliteBtreeCarryNocaseNulMemo(struct TableEntry*, ProllyMutMap*,
                                      const ProllyHash*);
 int doltliteBtreeNocaseNulInsert(BtCursor*, const u8*, int);
 int flushAllPending(Btree*, BtShared*, Pgno);
+void doltliteBtreeReleasePresence(Btree *p);
 int flushDeferredEdits(Btree*, BtShared*);
 int saveAllCursors(Btree*, BtShared*, Pgno, BtCursor*);
 int saveCursorPosition(BtCursor*);

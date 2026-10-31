@@ -674,6 +674,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   BtShared *pBt = p->pBt;
   int rc;
 
+  doltliteBtreeSyncPresence(p);
   p->bBeginTransBranchMissing = 0;
   p->bReadBranchMissing = 0;
   if( pSchemaVersion ){
@@ -929,6 +930,77 @@ struct DoltliteNonlocal **doltliteNonlocalSlot(sqlite3 *db){
   Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
   if( !btreeIsProlly(p) || p->isDetached ) return 0;
   return &p->pNonlocal;
+}
+
+static sqlite3_int64 btreePresenceOffset(const char *zBranch){
+  u64 h = 1469598103934665603ULL;
+  for(; *zBranch; zBranch++){
+    h ^= (u8)*zBranch;
+    h *= 1099511628211ULL;
+  }
+  return 0x50000000 + (sqlite3_int64)(h % 0x1000000);
+}
+
+static int btreePresenceOp(
+  ChunkStore *cs,
+  int eOp,
+  const char *zBranch,
+  int *pbInUse
+){
+  DoltliteBranchPresence x;
+  int rc;
+  if( !cs || cs->isMemory || cs->isBuffer || !cs->file.pFile ){
+    return SQLITE_NOTFOUND;
+  }
+  x.eOp = eOp;
+  x.iOffset = btreePresenceOffset(zBranch);
+  x.bInUse = 0;
+  rc = sqlite3OsFileControl(cs->file.pFile,
+      SQLITE_FCNTL_DOLTLITE_BRANCH_PRESENCE, &x);
+  if( pbInUse ) *pbInUse = x.bInUse;
+  return rc;
+}
+
+void doltliteBtreeReleasePresence(Btree *p){
+  if( !p->zPresenceBranch ) return;
+  (void)btreePresenceOp(p->pBt->pStore, DOLTLITE_PRESENCE_RELEASE,
+                        p->zPresenceBranch, 0);
+  sqlite3_free(p->zPresenceBranch);
+  p->zPresenceBranch = 0;
+}
+
+/* The connection's own branch, as Dolt's "active in another session"
+** sees it: only the main database's checked-out branch counts. */
+void doltliteBtreeSyncPresence(Btree *p){
+  const char *zWant;
+  if( !btreeIsProlly(p) || !p->db || p->db->nDb<1 || p->db->aDb[0].pBt!=p ){
+    return;
+  }
+  zWant = p->isDetached ? 0 : (p->zBranch ? p->zBranch : "main");
+  if( zWant && p->zPresenceBranch && strcmp(zWant, p->zPresenceBranch)==0 ){
+    return;
+  }
+  if( !zWant && !p->zPresenceBranch ) return;
+  doltliteBtreeReleasePresence(p);
+  if( !zWant ) return;
+  p->zPresenceBranch = sqlite3_mprintf("%s", zWant);
+  if( p->zPresenceBranch
+   && btreePresenceOp(p->pBt->pStore, DOLTLITE_PRESENCE_HOLD,
+                      p->zPresenceBranch, 0)!=SQLITE_OK ){
+    sqlite3_free(p->zPresenceBranch);
+    p->zPresenceBranch = 0;
+  }
+}
+
+/* Whether another connection has zBranch checked out. SQLITE_NOTFOUND
+** when the VFS cannot tell. */
+int doltliteBranchInUseElsewhere(sqlite3 *db, const char *zBranch,
+                                 int *pbInUse){
+  Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
+  *pbInUse = 0;
+  if( !btreeIsProlly(p) ) return SQLITE_NOTFOUND;
+  return btreePresenceOp(p->pBt->pStore, DOLTLITE_PRESENCE_PROBE, zBranch,
+                         pbInUse);
 }
 
 const char *doltliteBtreeBranchName(Btree *p){

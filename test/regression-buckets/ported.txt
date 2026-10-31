@@ -133,6 +133,7 @@ doltlite_blame_columns
 doltlite_blame_rowid
 doltlite_summary_rowid
 doltlite_merge_transactions
+doltlite_branch_in_use
 doltlite_multi_branch_txn
 doltlite_nonlocal_tables
 doltlite_vc_reopened_txn

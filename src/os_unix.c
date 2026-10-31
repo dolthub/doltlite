@@ -303,6 +303,10 @@ struct unixFile {
 
 #endif
 
+#ifdef DOLTLITE_PROLLY
+  sqlite3_int64 *aPresence;           /* Branch presence offsets held */
+  int nPresence;
+#endif
 #ifdef SQLITE_TEST
   /* In test mode, increase the size of this structure a bit so that
   ** it is larger than the struct CrashFile defined in test6.c.
@@ -1333,6 +1337,8 @@ struct unixInodeInfo {
 #ifdef DOLTLITE_PROLLY
   unixFile *pGraphLock;
   int graphLockPid;
+  struct UnixPresence { sqlite3_int64 iOffset; int nHold; } *aPresence;
+  int nPresence;
 #endif
   UnixUnusedFd *pUnused;            /* Unused file descriptors to close */
   int nRef;                       /* Number of pointers to this structure */
@@ -1517,6 +1523,9 @@ static void releaseInodeInfo(unixFile *pFile){
         pInode->pNext->pPrev = pInode->pPrev;
       }
       sqlite3_mutex_free(pInode->pLockMutex);
+#ifdef DOLTLITE_PROLLY
+      sqlite3_free(pInode->aPresence);
+#endif
       sqlite3_free(pInode);
     }
   }
@@ -1844,6 +1853,107 @@ static int unixGraphLock(unixFile *pFile, int bLock){
   }
   sqlite3_mutex_leave(pInode->pLockMutex);
   return rc;
+}
+#endif
+
+#ifdef DOLTLITE_PROLLY
+/* A connection advertises the branch it has checked out with a shared
+** lock on one byte past SQLite's lock bytes. fcntl hides this process's
+** own locks from F_GETLK, so holders in this process are counted on the
+** inode; a probe excludes the asking file's own holds. */
+static int unixBranchPresence(unixFile *pFile, DoltliteBranchPresence *p){
+  unixInodeInfo *pInode = pFile->pInode;
+  struct flock lock;
+  int i, iEntry = -1, nSelf = 0, iSelf = -1;
+  int rc = SQLITE_OK;
+  if( !pInode ) return SQLITE_NOTFOUND;
+  sqlite3_mutex_enter(pInode->pLockMutex);
+  for(i=0; i<pInode->nPresence; i++){
+    if( pInode->aPresence[i].iOffset==p->iOffset ){ iEntry = i; break; }
+  }
+  for(i=0; i<pFile->nPresence; i++){
+    if( pFile->aPresence[i]==p->iOffset ){ nSelf++; iSelf = i; }
+  }
+  lock.l_whence = SEEK_SET;
+  lock.l_start = p->iOffset;
+  lock.l_len = 1;
+  switch( p->eOp ){
+    case DOLTLITE_PRESENCE_HOLD: {
+      sqlite3_int64 *aFile;
+      if( iEntry<0 ){
+        struct UnixPresence *a = sqlite3_realloc64(pInode->aPresence,
+            sizeof(*a)*(pInode->nPresence+1));
+        if( !a ){ rc = SQLITE_NOMEM; break; }
+        pInode->aPresence = a;
+        iEntry = pInode->nPresence++;
+        a[iEntry].iOffset = p->iOffset;
+        a[iEntry].nHold = 0;
+      }
+      aFile = sqlite3_realloc64(pFile->aPresence,
+          sizeof(*aFile)*(pFile->nPresence+1));
+      if( !aFile ){ rc = SQLITE_NOMEM; }
+      else{
+        pFile->aPresence = aFile;
+        if( pInode->aPresence[iEntry].nHold==0 ){
+          lock.l_type = F_RDLCK;
+          if( osFcntl(pFile->h, F_SETLK, &lock)!=0 ){
+            rc = sqliteErrorFromPosixError(errno, SQLITE_IOERR_LOCK);
+          }else{
+            pInode->nLock++;
+          }
+        }
+        if( rc==SQLITE_OK ){
+          pInode->aPresence[iEntry].nHold++;
+          aFile[pFile->nPresence++] = p->iOffset;
+        }
+      }
+      if( rc!=SQLITE_OK && pInode->aPresence[iEntry].nHold==0 ){
+        pInode->aPresence[iEntry] = pInode->aPresence[--pInode->nPresence];
+      }
+      break;
+    }
+    case DOLTLITE_PRESENCE_RELEASE: {
+      if( iSelf<0 || iEntry<0 ) break;
+      pFile->aPresence[iSelf] = pFile->aPresence[--pFile->nPresence];
+      if( --pInode->aPresence[iEntry].nHold==0 ){
+        pInode->aPresence[iEntry] = pInode->aPresence[--pInode->nPresence];
+        lock.l_type = F_UNLCK;
+        if( osFcntl(pFile->h, F_SETLK, &lock)!=0 ){
+          rc = sqliteErrorFromPosixError(errno, SQLITE_IOERR_UNLOCK);
+        }
+        pInode->nLock--;
+        if( pInode->nLock==0 ) closePendingFds(pFile);
+      }
+      break;
+    }
+    default: {
+      p->bInUse = iEntry>=0 && pInode->aPresence[iEntry].nHold>nSelf;
+      if( !p->bInUse ){
+        lock.l_type = F_WRLCK;
+        if( osFcntl(pFile->h, F_GETLK, &lock)!=0 ){
+          rc = sqliteErrorFromPosixError(errno, SQLITE_IOERR_CHECKRESERVEDLOCK);
+        }else{
+          p->bInUse = lock.l_type!=F_UNLCK;
+        }
+      }
+      break;
+    }
+  }
+  sqlite3_mutex_leave(pInode->pLockMutex);
+  return rc;
+}
+
+static void unixBranchPresenceReleaseAll(unixFile *pFile){
+  while( pFile->nPresence>0 ){
+    DoltliteBranchPresence x;
+    x.eOp = DOLTLITE_PRESENCE_RELEASE;
+    x.iOffset = pFile->aPresence[pFile->nPresence-1];
+    x.bInUse = 0;
+    if( unixBranchPresence(pFile, &x)!=SQLITE_OK ) break;
+  }
+  sqlite3_free(pFile->aPresence);
+  pFile->aPresence = 0;
+  pFile->nPresence = 0;
 }
 #endif
 
@@ -2296,7 +2406,7 @@ static int posixUnlock(sqlite3_file *id, int eFileLock, int handleNFSUnlock){
       lock.l_whence = SEEK_SET;
       lock.l_start = lock.l_len = 0L;
 #ifdef DOLTLITE_PROLLY
-      if( pInode->pGraphLock ){
+      if( pInode->pGraphLock || pInode->nPresence>0 ){
         lock.l_start = PENDING_BYTE;
         lock.l_len = SHARED_SIZE + 2;
       }
@@ -2400,6 +2510,7 @@ static int unixClose(sqlite3_file *id){
   assert( pInode!=0 );
   verifyDbFile(pFile);
 #ifdef DOLTLITE_PROLLY
+  unixBranchPresenceReleaseAll(pFile);
   unixGraphLock(pFile, 0);
 #endif
   unixUnlock(id, NO_LOCK);
@@ -4239,6 +4350,9 @@ static int unixFileControl(sqlite3_file *id, int op, void *pArg){
     }
     case SQLITE_FCNTL_DOLTLITE_GRAPH_LOCK: {
       return unixGraphLock(pFile, *(int*)pArg);
+    }
+    case SQLITE_FCNTL_DOLTLITE_BRANCH_PRESENCE: {
+      return unixBranchPresence(pFile, (DoltliteBranchPresence*)pArg);
     }
 #endif
     case SQLITE_FCNTL_LOCKSTATE: {

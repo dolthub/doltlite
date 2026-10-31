@@ -26,10 +26,10 @@ SELECT * FROM dolt_branches;
 | Option | Meaning |
 |---|---|
 | `name [, rev]` | Create `name` at a commit revision (default `HEAD`) |
-| `-m`, `--move old new` | Rename |
+| `-m`, `--move old new` | Rename. Refused while another connection has `old` checked out, unless `-f` |
 | `-c`, `--copy old new` | Copy |
-| `-d`, `--delete name` | Delete. Refused for the current branch, the default branch, or an unmerged branch. |
-| `-D name` | Delete even if unmerged; the current and default branches remain protected |
+| `-d`, `--delete name` | Delete. Refused for the current branch, the default branch, an unmerged branch, or a branch another connection has checked out. |
+| `-D name` | Delete even if unmerged or checked out elsewhere; the current and default branches remain protected |
 | `-f`, `--force` | With `name rev`: move an existing branch to `rev` |
 
 Returns `0`. Branch and tag changes are durable immediately, even inside
@@ -41,6 +41,7 @@ Returns `0`. Branch and tag changes are durable immediately, even inside
 | `cannot delete the current branch` | `-d` on the checked-out branch |
 | `cannot delete the default branch; call dolt_default_branch(<other>) first` | `-d` on the default branch |
 | `branch is not fully merged` | `-d` where `-D` is needed |
+| `unsafe to delete or rename branches in use in other sessions; use --force to force the change` | `-d` or `-m` on a branch another connection, in this process or another, has checked out |
 | `invalid branch name` | see the name rules |
 
 ## dolt_checkout
