@@ -1550,8 +1550,14 @@ T.g('sqlite3.oo1')
           T.assert( q.step(), "step()" )
             .assert( !q.step(), "!step()" );
         }finally{
-          if( pStmt ) capi.sqlite3_finalize(pStmt)
-          if( q ) q.finalize();
+          if( pStmt ){
+            capi.sqlite3_finalize(pStmt);
+          }
+          if( q?.pointer ){
+            if( 1 ) capi.sqlite3_finalize(q);
+            else q.finalize();
+            T.assert(!q.pointer, "Expecting !q.poiner after finalize");
+          }
         }
 
       }finally{
@@ -3101,8 +3107,10 @@ T.g('sqlite3.oo1')
     //wasm.sqlite3__wasm_db_reset(this.db); // will leak virtual tables!
     const strayStmt = this.db.prepare("select 1");
     T.assert( strayStmt.pointer );
-    this.db.close();
-    T.assert(!this.db.pointer)
+    if( 1 ) this.db.close();
+    else capi.sqlite3_close_v2(this.db)/*as of [disposal-notification] branch*/;
+    console.debug("this.db =",this.db);
+    T.assert(!this.db.pointer, "Expecting !db.pointer")
       .assert(!strayStmt.pointer, "Stmt should have been finalized");
   })
 ;/* end of oo1 checks */
