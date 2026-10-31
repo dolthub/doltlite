@@ -62,8 +62,8 @@ Only command functions are direct-only; `dolt_hashof` and `dolt_version` are not
   configured destination when that name is omitted. DoltLite has no separate
   push destination, so the call is `dolt_push('--all', remote)`.
 - **Nonlocal tables are partial.** [dolt_nonlocal_tables](dolt_nonlocal_tables.md)
-  redirects names as Dolt does, but nonlocal tables are not listed in
-  `.tables`.
+  redirects and lists names as Dolt does, but `dolt_commit_all` and
+  `@@dolt_multi_branch_commit` are not implemented.
 - **Deleting an absent remote branch succeeds.** `dolt_push(remote, ':branch')`
   returns 0 when that branch is already gone, including when this database
   has no tracking ref for it. Dolt reports an error and leaves the remote

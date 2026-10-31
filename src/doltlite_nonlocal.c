@@ -303,6 +303,66 @@ int doltliteNonlocalSync(sqlite3 *db){
   return !bPending || db->nDb!=nAttach;
 }
 
+static void nonlocalListName(
+  Parse *pParse,
+  DoltliteNonlocal *p,
+  const NonlocalRule *r,
+  const char *zName,
+  const char *zSchema,
+  const char *zRight
+){
+  sqlite3 *db = pParse->db;
+  Table *pTab;
+  const char *zType;
+  if( zRight && sqlite3StrICmp(zRight, zName)!=0 ) return;
+  if( nonlocalMatch(p, zName)!=r || sqlite3FindTable(db, zName, "main") ){
+    return;
+  }
+  pTab = sqlite3FindTable(db, r->zRefTable[0] ? r->zRefTable : zName, zSchema);
+  if( !pTab ) return;
+  if( IsView(pTab) ){
+    zType = "view";
+  }else if( IsVirtual(pTab) ){
+    zType = "virtual";
+  }else{
+    zType = "table";
+  }
+  sqlite3VdbeMultiLoad(sqlite3GetVdbe(pParse), 1, "sssiii", "main", zName,
+      zType, pTab->nCol, (pTab->tabFlags & TF_WithoutRowid)!=0,
+      (pTab->tabFlags & TF_Strict)!=0);
+}
+
+/* PRAGMA table_list rows for the names this branch's rules resolve, as
+** Dolt lists them in SHOW TABLES: a plain name when its target table
+** exists, and each target table a wildcard rule claims. */
+void doltliteNonlocalTableList(Parse *pParse, const char *zRight){
+  sqlite3 *db = pParse->db;
+  DoltliteNonlocal *p = nonlocalState(db, 0);
+  int i;
+  if( !p || !p->bLoaded ) return;
+  for(i=0; i<p->nRule; i++){
+    const NonlocalRule *r = &p->aRule[i];
+    const char *zRef = nonlocalRuleRef(p, r);
+    const char *zSchema;
+    int iDb;
+    HashElem *k;
+    if( sqlite3StrICmp(r->zOptions, "immediate")!=0 ) continue;
+    zSchema = strcmp(zRef, p->zBranch)==0 ? "main"
+            : nonlocalSchemaFor(db, p, zRef);
+    if( !zSchema || (iDb = sqlite3FindDbName(db, zSchema))<0 ) continue;
+    if( !strpbrk(r->zPattern, "*%?") ){
+      nonlocalListName(pParse, p, r, r->zPattern, zSchema, zRight);
+      continue;
+    }
+    if( r->zRefTable[0] ) continue;
+    for(k=sqliteHashFirst(&db->aDb[iDb].pSchema->tblHash); k;
+        k=sqliteHashNext(k)){
+      Table *pTab = sqliteHashData(k);
+      nonlocalListName(pParse, p, r, pTab->zName, zSchema, zRight);
+    }
+  }
+}
+
 /* Redirects a name a rule on the session branch claims: *pzDb and *pzName
 ** become the schema and table it resolves to. Returns 0 when no rule
 ** applies, 1 when redirected, -1 with an error left in pParse. */

@@ -183,4 +183,40 @@ SELECT CONCAT('R|main-status|', table_name, '|', staged, '|', status) FROM dolt_
 "
 done
 
+tables_oracle() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+  local dl_out dt_out
+  dl_out=$(printf "%s\n.tables\n" "$setup" \
+           | vc_oracle_run_doltlite --allow-error "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -s ' \t' '\n\n' | grep -E '^[A-Za-z_]+$' \
+           | grep -v '^dolt_' | sort | sed 's/^/R|t|/')
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    { vc_oracle_translate_for_dolt "$setup"; echo "SHOW TABLES;"; } \
+      | "$DOLT" sql --continue -r csv 2>"$dir/dt.err"
+  )
+  dt_out=$(echo "$dt_out" | tr -d '"\r' | sed -n '/^Tables_in_/,$p' | tail -n +2 \
+           | grep -v '^dolt_' | sort | sed 's/^/R|t|/')
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+tables_oracle "nonlocal_tables_listing" "
+CREATE TABLE users (id INT PRIMARY KEY);
+CREATE TABLE cfg (k VARCHAR(10) PRIMARY KEY);
+CREATE TABLE glob_a (id INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'other');
+CREATE TABLE notes (id INT PRIMARY KEY);
+DROP TABLE users;
+DROP TABLE glob_a;
+INSERT INTO dolt_nonlocal_tables VALUES
+  ('users', 'main', '', 'immediate'),
+  ('settings', 'main', 'cfg', 'immediate'),
+  ('glob_*', 'main', '', 'immediate'),
+  ('ghost', 'main', '', 'immediate');
+"
+
 vc_oracle_finish
