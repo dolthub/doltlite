@@ -294,4 +294,136 @@ do_whitespace_sql_test 3.7 {
   END
 }}
 
+#-------------------------------------------------------------------------
+# ALTER TABLE main.t1 RENAME TO ... must not modify references within a
+# TEMP trigger to a table "t1" that resolves to temp.t1, not main.t1. This
+# applies to the target of INSERT, UPDATE and DELETE statements in the
+# trigger body and to tables in the FROM clause of an UPDATE ... FROM.
+# Previously, these were rewritten based on the table name alone.
+#
+reset_db
+do_execsql_test 4.0 {
+  CREATE TABLE t1(a);
+  CREATE TEMP TABLE t1(a);
+  CREATE TABLE t2(x);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON main.t2 BEGIN
+    INSERT INTO t1 VALUES(new.x);
+  END;
+  CREATE TEMP VIEW tv AS SELECT a FROM t1;
+  INSERT INTO t2 VALUES(1);
+  SELECT 'main', a FROM main.t1;
+  SELECT 'temp', a FROM temp.t1;
+} {temp 1}
+
+do_execsql_test 4.1 {
+  ALTER TABLE main.t1 RENAME TO m1;
+}
+
+do_whitespace_sql_test 4.2 {
+  SELECT sql FROM sqlite_temp_schema WHERE name IN ('ttr','tv') ORDER BY name;
+} {{
+  CREATE TRIGGER ttr AFTER INSERT ON main.t2 BEGIN
+    INSERT INTO t1 VALUES(new.x);
+  END} {CREATE VIEW tv AS SELECT a FROM t1}
+}
+
+do_execsql_test 4.3 {
+  INSERT INTO t2 VALUES(2);
+  SELECT 'main', a FROM main.m1;
+  SELECT 'temp', a FROM temp.t1;
+} {temp 1 temp 2}
+
+# Same thing for UPDATE, DELETE and UPDATE ... FROM statements, and for
+# an INSERT that qualifies the table name as "temp.t1" (previously this
+# failed with "error in trigger ttr after rename: no such table: temp.m1").
+#
+foreach {tn stmt} {
+  1 { INSERT INTO t1 VALUES(new.x) }
+  2 { UPDATE t1 SET a=new.x }
+  3 { DELETE FROM t1 WHERE a=new.x }
+  4 { UPDATE t3 SET y=t1.a FROM t1 WHERE t1.a=new.x }
+  5 { UPDATE t3 SET y=1 FROM t3 AS z JOIN t1 ON (t1.a=z.y) }
+  6 { INSERT INTO temp.t1 VALUES(new.x) }
+  7 { UPDATE temp.t1 SET a=new.x }
+  8 { DELETE FROM temp.t1 WHERE a=new.x }
+  9 { UPDATE t3 SET y=t1.a FROM temp.t1 WHERE t1.a=new.x }
+} {
+  reset_db
+  set trig "CREATE TRIGGER ttr AFTER INSERT ON main.t2 BEGIN $stmt; END"
+  do_execsql_test 4.4.$tn.0 "
+    CREATE TABLE t1(a);
+    CREATE TEMP TABLE t1(a);
+    CREATE TABLE t2(x);
+    CREATE TABLE t3(y);
+    CREATE TEMP TRIGGER [string range $trig 15 end];
+  "
+  do_catchsql_test 4.4.$tn.1 {
+    ALTER TABLE main.t1 RENAME TO m1;
+  } {0 {}}
+  do_execsql_test 4.4.$tn.2 {
+    SELECT sql FROM sqlite_temp_schema WHERE name='ttr';
+  } [list $trig]
+  do_execsql_test 4.4.$tn.3 {
+    INSERT INTO t2 VALUES(5);
+    SELECT count(*) FROM main.m1;
+  } {0}
+}
+
+# Where there is no temp.t1, an unqualified "t1" in the TEMP trigger body
+# does refer to main.t1 and so is rewritten.
+#
+reset_db
+do_execsql_test 4.5.0 {
+  CREATE TABLE t1(a);
+  CREATE TABLE t2(x);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON main.t2 BEGIN
+    INSERT INTO t1 VALUES(new.x);
+  END;
+  ALTER TABLE main.t1 RENAME TO m1;
+}
+do_whitespace_sql_test 4.5.1 {
+  SELECT sql FROM sqlite_temp_schema WHERE name='ttr';
+} {{
+  CREATE TRIGGER ttr AFTER INSERT ON main.t2 BEGIN
+    INSERT INTO "m1" VALUES(new.x);
+  END}
+}
+do_execsql_test 4.5.2 {
+  INSERT INTO t2 VALUES(3);
+  SELECT a FROM m1;
+} {3}
+
+# Renaming temp.t1 does rewrite the references in the TEMP trigger, but
+# not those in a main-schema trigger, which always refer to main.t1.
+#
+reset_db
+do_execsql_test 4.6.0 {
+  CREATE TABLE t1(a);
+  CREATE TEMP TABLE t1(a);
+  CREATE TABLE t2(x);
+  CREATE TEMP TRIGGER ttr AFTER INSERT ON main.t2 BEGIN
+    INSERT INTO t1 VALUES(new.x);
+  END;
+  CREATE TRIGGER mtr AFTER INSERT ON t2 BEGIN
+    INSERT INTO t1 VALUES(new.x*10);
+  END;
+  ALTER TABLE temp.t1 RENAME TO tt1;
+}
+do_whitespace_sql_test 4.6.1 {
+  SELECT sql FROM sqlite_temp_schema WHERE name='ttr';
+  SELECT sql FROM sqlite_schema WHERE name='mtr';
+} {{
+  CREATE TRIGGER ttr AFTER INSERT ON main.t2 BEGIN
+    INSERT INTO "tt1" VALUES(new.x);
+  END} {
+  CREATE TRIGGER mtr AFTER INSERT ON t2 BEGIN
+    INSERT INTO t1 VALUES(new.x*10);
+  END}
+}
+do_execsql_test 4.6.2 {
+  INSERT INTO t2 VALUES(4);
+  SELECT 'main', a FROM main.t1;
+  SELECT 'temp', a FROM temp.tt1;
+} {main 40 temp 4}
+
 finish_test
