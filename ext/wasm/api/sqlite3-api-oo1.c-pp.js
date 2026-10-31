@@ -790,6 +790,24 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   DB.checkRc = (db,resultCode)=>checkSqlite3Rc(db,resultCode);
 
   /**
+     Internal helper for __oo1NativeDisposerDB and
+     __oo1NativeDisposerStmt.  Detaches any non-owning handles shared
+     via DB/Stmt.wrapHandle() which refer to the owning pointer ptr,
+     cleanly invalidating them so that they do not point to stale
+     pointers.
+  */
+  const __disposerUnowned = (lbl, ptr, disposer)=>{
+    const unowned = Array.from(__doesNotOwnHandle).filter(x=>ptr===x.pointer);
+    if( unowned.length ){
+      sqlite3.config.warn("Closing",lbl,"handle",
+                          ptr,"out from under shared holders.",
+                         unowned);
+      /* Two-pass to prevent further recursion. */
+      for(const u of unowned) __doesNotOwnHandle.delete(u);
+      for(const u of unowned) disposer(ptr, u);
+    }
+  };
+  /**
      Hook for SQLITE_DISPOSAL_NOTIFIER. Expects ptr to be an
      (sqlite3*), for which it unmaps any state to its partner DB
      object (if any). The o arg is intended to be `this` from
@@ -802,29 +820,15 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     if( o===__disposerMap.get(ptr) ){
       __disposerMap.delete(ptr);
     }
-    __doesNotOwnHandle.delete(
-      o /* Unowned handles are not yet integrated here (an initial
-           attempt failed badly for them) but we'll clean up just in
-           case. */
-    );
-    const unowned = Array.from(__doesNotOwnHandle).filter(x=>ptr===x.pointer);
-    if( unowned.length ){
-      sqlite3.config.warn("Closing DB handle out from under shared holders.", o);
-      /* Forcibly detach all shared-handle instances which point
-         to ptr. Two-pass to prevent further recursion. */
-      for(const u of unowned) __doesNotOwnHandle.delete(u);
-      for(const u of unowned) __oo1NativeDisposerDB(ptr, u);
-    }
-    ;
-    if( __stmtMap.has(o) ){
-      for(const s of Object.values(__stmtMap.get(o))){
-        if(s?.pointer){
-          try{s.finalize()}
-          catch(ex){/*ignore*/}
-        }
+    __disposerUnowned('DB', ptr, __oo1NativeDisposerDB);
+    for(const s of Object.values(__stmtMap.get(o)) || []){
+      if(s?.pointer){
+        try{s.finalize()}
+        catch(ex){/*ignore*/}
       }
-      __stmtMap.delete(o);
     }
+    __stmtMap.delete(o);
+    __doesNotOwnHandle.delete(o);
     __ptrMap.delete(o);
   };
 
@@ -835,20 +839,13 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     //sqlite3.config.warn("__oo1NativeDisposerStmt", ptr, o);
     if( !o ) return;
     __disposerMap.delete(ptr);
-    __doesNotOwnHandle.delete(o);
-    delete __stmtMap.get(o.db)?.[ptr];
+    delete  __stmtMap.get(o.db)?.[ptr];
     delete o.db;
-    __ptrMap.delete(o);
     __execLock.delete(o);
     __stmtMayGet.delete(o);
-    const unowned = Array.from(__doesNotOwnHandle).filter(x=>ptr===x.pointer);
-    if( unowned.length ){
-      sqlite3.config.warn("Closing Stmt out from under shared holders.", o);
-      /* Forcibly detach all shared-handle instances which point
-         to ptr. Two-pass to prevent further recursion. */
-      for(const u of unowned) __doesNotOwnHandle.delete(u);
-      for(const u of unowned) __oo1NativeDisposerStmt(ptr, u);
-    }
+    __disposerUnowned('Stmt', ptr, __oo1NativeDisposerStmt);
+    __doesNotOwnHandle.delete(o);
+    __ptrMap.delete(o);
   };
   util.disposers.db.push(__oo1NativeDisposerDB);
   util.disposers.stmt.push(__oo1NativeDisposerStmt);
