@@ -23,7 +23,33 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   const capi = sqlite3.capi, wasm = sqlite3.wasm, util = sqlite3.util;
   WhWasmUtilInstaller(wasm)/*injected via preprocessor*/;
 
+//#define sqlite3_set_auxdata:dtor 0
+//#if sqlite3_set_auxdata:dtor
+  /**
+     The problem [tag:sqlite3_set_auxdata:dtor] attempts to address is
+     the lifetime of WASM functions created via automatic conversion
+     from JSON functions, specifically those in the final argument to
+     sqlite3_set_auxdata().  We can, with only slight acrobatics,
+     scope them to the (sqlite3_context*) object. The problem is
+     auxdata may be finalized and recreated for every column of every
+     row in which the associated UDF is called, making conversion
+     extraordinarily expensive in that it keeps all of those alive
+     until the sqlite3_context is destroyed. Potentially tens of
+     thousands or more errant WASM function bindings.
+
+     Another alternative is to have such conversions uninstall
+     themselves when called (see branch [wasm-auxdata-dtor]). It's
+     still expensive, in that it creates and destroys just as many
+     function bindings as the aforementioned approach, but it has far
+     fewer bindings active at any given time: one per use in a given
+     query, as opposed to one per use per row.
+
+     Management summary: it's far too expensive and foot-gunny
+     (performance- and memory-wise) to allow automatic JS-to-WASM
+     function conversion here.
+  */
   let __contextScopedWasmFuncs/*Map((sqlite3_context*)=>Set(wasm func ptr)*/;
+//#/if
 //#if 0
   /**
      Please keep this block around as a maintenance reminder
@@ -273,7 +299,6 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       */
       ["sqlite3_set_auxdata", undefined, [
         "sqlite3_context*", "int", "*",
-//#define sqlite3_set_auxdata:dtor 0 /* experiment */
 //#if sqlite3_set_auxdata:dtor
         "sqlite3_set_auxdata:dtor"
 //#else
@@ -1027,9 +1052,10 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       util.disposers.stmt.push((p)=>sqlite3.config.warn("disposing stmt",p));
       util.disposers.db.push((p)=>sqlite3.config.warn("disposing db",p));
 //#/if
+//#if sqlite3_set_auxdata:dtor
       util.disposers.context.push((p)=>{
         const set = __contextScopedWasmFuncs?.get?.(p);
-        sqlite3.config.warn("disposing context",p, set);
+        //sqlite3.config.warn("disposing context",p, set);
         if( !set ) return;
         __contextScopedWasmFuncs.delete(p);
         //sqlite3.config.warn("Disposing of WASM function bindings",set);
@@ -1038,10 +1064,10 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           catch(e){/*ignore*/}
         }
       });
+//#/if
     }else{
       toss("Expecting WasmDisposalNotifier to have been exported.");
     }
-
 
     //sqlite3.config.error("cJson JSON length:",j.length);
     // Groups of SQLITE_xyz macros...

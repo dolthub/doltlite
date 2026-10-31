@@ -4677,7 +4677,7 @@ T.g('Bug Reports')
             return x;
           }
         });
-        console.error("Before 2x UDF w/ aux data for 4 rows");
+        //console.error("Before 2x UDF w/ aux data for 4 rows");
         db.exec([
           "create table t(a);",
           "insert into t(a) values(1),(2),(-1),(-2);",
@@ -4685,7 +4685,7 @@ T.g('Bug Reports')
         ]);
         T.assert( 2===cxSeen.size, "Else my understanding here is wrong:",
                   cxSeen.size );
-        console.error("After 2x UDF w/ aux data for 4 rows");
+        //console.error("After 2x UDF w/ aux data for 4 rows");
       }finally{
         db.close();
         wasm.pstack.restore(stack);
@@ -4695,13 +4695,17 @@ T.g('Bug Reports')
         .assert(pAuxDestructed===nAuxSet);
     }
   })
+//#define ? sqlite3_set_auxdata:dtor 0
+//#if sqlite3_set_auxdata:dtor
+/* Full details: search sqlite3-api-glue.c-pp.js for
+   [tag:sqlite3_set_auxdata:dtor]. */
   .t({
     /* https://github.com/sqlite/sqlite-wasm/issues/92 */
     name: 'sqlite3_set_auxdata() binding part two',
     predicate: ()=>{
       return wasm.xWrap.argAdapter('sqlite3_set_auxdata:dtor')
         ? true
-        : "Relies on sqlite3_set_auxdata:dtor experiment"
+        : "Requires sqlite3_set_auxdata:dtor conversion"
     },
     test: function(sqlite3){
       const db = new sqlite3.oo1.DB();
@@ -4709,7 +4713,7 @@ T.g('Bug Reports')
       let pAuxDestructed = 0;
       const cxSeen = new Set;
       const pAuxDtor = (ptr)=>{
-        log("freeing auxdata");
+        //log("freeing auxdata");
         ++pAuxDestructed;
       };
       let nAuxSet = 0 /* how many times we set aux data */;
@@ -4762,6 +4766,101 @@ T.g('Bug Reports')
         .assert(pAuxDestructed===nAuxSet);
     }
   })
+  .t({
+    name: 'sqlite3_set_auxdata() dtor conversion lifetime part 3',
+    predicate: ()=>{
+      return wasm.xWrap.argAdapter('sqlite3_set_auxdata:dtor')
+        ? true
+        : "Requires sqlite3_set_auxdata:dtor conversion"
+    },
+    test: function(sqlite3){
+      const db = new sqlite3.oo1.DB();
+      const pAux = db.pointer /* pointer to bind */;
+      let nAuxDestructed = 0 /* how many times auxDtor is called */;
+      let nAuxSet = 0 /* how many times we set aux data */;
+      let nAuxReused = 0 /* how many times we reused aux data */;
+      let nPeakAux = 0 /* highest number bound at once */;
+      const auxDtor = (ptr)=>{
+        //log("freeing auxdata");
+        T.assert( pAux === ptr );
+        ++nAuxDestructed;
+      };
+      try{
+        db.createFunction("auxtest",{
+          xFunc: function(pCx, x, y){
+            T.assert(wasm.isPtr(pCx));
+            const localAux = capi.sqlite3_get_auxdata(pCx, 0);
+            if( !localAux ){
+              //log("setting auxdata");
+              /**
+                 The full details of when an auxdata dtor might be
+                 called are in:
+                 https://sqlite.org/c3ref/get_auxdata.html
+
+                 The automated conversion of the 4th argument to
+                 sqlite3_set_auxdata() happens precisely as often as
+                 we get new pCx values. Each such conversion creates
+                 an entry in the WASM indirect function table. Each
+                 call of that converted function will (because of how
+                 its binding is uniquely configured) remove its own
+                 entry from the WASM function table before proxying
+                 the original function (auxDtor()).
+
+                 Ergo, if auxDtor() is called as often as we expect,
+                 we know that the WASM function table entries for
+                 these conversions are being removed.
+
+                 Even so: this can, because this function has little
+                 control over the lifetime of each piece of auxdata,
+                 lead to many JS/WASM proxy bindings being installed
+                 and uninstalled in rapid succession. The way around
+                 that is to follow the pattern used in the variant of
+                 his text function above this one. It demonstrates how
+                 to manually manage these safely and efficiently. We
+                 currently have no good way to automate that level of
+                 efficiency, however.
+              */
+              ++nAuxSet;
+              if( nAuxSet - nAuxDestructed>nPeakAux ){
+                nPeakAux = nAuxSet - nAuxDestructed;
+              }
+              capi.sqlite3_set_auxdata(pCx, 0, pAux, auxDtor);
+            }else{
+              //log("reusing auxdata",localAux);
+              T.assert(pAux===localAux);
+              ++nAuxReused;
+            }
+            return x;
+          }
+        });
+        db.exec([
+          "create table t(a);",
+          "insert into t(a) values(1),(2),(-1),(-2);",
+          "select auxtest(1,a) + auxtest(2,a), auxtest(3,a) ",
+          "from t order by a;"
+        ]);
+        /* The following numbers are very specific to the rules of
+           when auxdata dtors are called. */
+        T.assert(3===nAuxSet)
+          .assert(nAuxSet===nPeakAux)
+          .assert(9===nAuxReused)
+          .assert(nAuxDestructed===nAuxSet);
+        db.exec("select auxtest(1,a), auxtest(2,a) from t order by a;");
+        T.assert(5===nAuxSet)
+          .assert(3===nPeakAux)
+          .assert(15===nAuxReused)
+          .assert(nAuxDestructed===nAuxSet);
+        db.exec("select auxtest(1*a,a), auxtest(2+a,a) from t order by a;");
+        T.assert(13===nAuxSet/*twice per row*/)
+          .assert(3===nPeakAux)
+          .assert(15===nAuxReused/*unchanged!*/)
+          .assert(nAuxDestructed===nAuxSet);
+      }finally{
+        db.close();
+      }
+    }
+  })
+//#/if sqlite3_set_auxdata:dtor
 ;/*end of Bug Reports group*/;
 
 ////////////////////////////////////////////////////////////////////////

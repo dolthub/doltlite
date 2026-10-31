@@ -290,7 +290,7 @@ SQLITE_WASM_EXPORT2(WasmDisposalNotifier *,
 ** DB instance pointing to a stale pointer. Ditto for oo1.DB.Stmt.
 */
 #define SQLITE_DISPOSAL_NOTIFIER(T,P) \
-  if( (P) && sqlite3WasmDisposalNotifier.callback ) \
+  if( (P) && (T==1||T==2) && sqlite3WasmDisposalNotifier.callback ) \
     sqlite3WasmDisposalNotifier.callback(T, P)
 
 /*
