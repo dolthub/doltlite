@@ -134,6 +134,48 @@ static void values(void){
   }
 }
 
+static void virtualTables(void){
+  const char *ddl[] = {"CREATE VIRTUAL TABLE v USING fts5(body)",
+                      "CREATE VIRTUAL TABLE v USING rtree(id,x1,x2,y1,y2)"};
+  const char *rows[] = {"INSERT INTO v VALUES('hello export')",
+                       "INSERT INTO v VALUES(1,0,1,0,1)"};
+  const char *query[] = {"SELECT count(*) FROM v WHERE v MATCH 'hello'",
+                        "SELECT count(*) FROM v WHERE x1<=0.5 AND x2>=0.5"};
+  int module, historical, format;
+  for(module=0; module<2; module++){
+    sqlite3 *db=0;
+    sqlite3_open(":memory:",&db);
+    if( !number(db,module ? "SELECT sqlite_compileoption_used('ENABLE_RTREE')"
+                         : "SELECT sqlite_compileoption_used('ENABLE_FTS5')") ){
+      sqlite3_close(db);
+      continue;
+    }
+    check("virtual schema",sql(db,ddl[module])==SQLITE_OK);
+    check("virtual seed",sql(db,rows[module])==SQLITE_OK);
+    check("virtual commit",sql(db,"SELECT dolt_commit('-Am','virtual')")==SQLITE_OK);
+    for(historical=0; historical<2; historical++) for(format=0; format<2; format++){
+      sqlite3 *out=openStock();
+      char *error=0;
+      const char *ref=historical ? "HEAD" : "WORKING";
+      int rc;
+      if( format ){
+        Sink sink={0};
+        rc=doltlite_dump_sql(db,ref,writer,&sink,&error);
+        check("virtual stream",rc==SQLITE_OK);
+        if( rc==SQLITE_OK ) check("virtual replay",sql(out,sink.data)==SQLITE_OK);
+        free(sink.data);
+      }else{
+        rc=doltlite_export_sqlite(db,ref,out,&error);
+        check("virtual direct",rc==SQLITE_OK);
+      }
+      if( rc ) fprintf(stderr,"virtual export: %s\n",error ? error : "");
+      check("virtual immediate query",number(out,query[module])==1);
+      sqlite3_free(error); sqlite3_close(out);
+    }
+    sqlite3_close(db);
+  }
+}
+
 static void failures(void){
   sqlite3 *source=0, *out=openStock();
   char *err=0;
@@ -281,7 +323,7 @@ static void legacyMeta(void){
 }
 
 int main(void){
-  values(); failures(); snapshot(); legacyMeta();
+  values(); virtualTables(); failures(); snapshot(); legacyMeta();
 #ifndef SQLITE_OMIT_AUTHORIZATION
   authorization();
 #endif

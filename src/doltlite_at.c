@@ -623,6 +623,7 @@ int doltliteLoadHistoricalTableColumns(
   int nRef = 0;
   int scoped = 0;
   int skipLive = 0;
+  int staged = 0;
   int has;
   int i;
   int rc;
@@ -640,6 +641,7 @@ int doltliteLoadHistoricalTableColumns(
     if( zScoped
      && !doltliteRefIsWorking(zScoped) ){
       skipLive = 1;
+      staged = doltliteRefIsStaged(zScoped);
     }
   }
   if( !skipLive && sqlite3FindTable(db, zTableName, "main") ){
@@ -668,6 +670,14 @@ int doltliteLoadHistoricalTableColumns(
     if( skipLive ){
       rc = atMergeCommittedHeadColumns(
           db, cs, pCache, zTableName, pCols);
+      if( rc==SQLITE_OK && staged && sqlite3FindTable(db,zTableName,"main") ){
+        DoltliteColInfo live;
+        memset(&live,0,sizeof(live));
+        rc = doltliteGetReaderColumnNames(db,zTableName,&live);
+        if( rc==SQLITE_OK ) rc = doltliteLoadColumnDeclarations(db,zTableName,&live);
+        if( rc==SQLITE_OK ) rc = atAppendMissingColumns(pCols,&live);
+        doltliteFreeColInfo(&live);
+      }
     }
     return rc;
   }
