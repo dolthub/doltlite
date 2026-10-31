@@ -118,4 +118,40 @@ SELECT dolt_clean();
 SELECT CONCAT('R|status|', table_name, '|', status) FROM dolt_status ORDER BY table_name;
 "
 
+oracle "nonlocal_fk_child_insert" "
+CREATE TABLE aliased_table (pk VARCHAR(8) PRIMARY KEY);
+INSERT INTO aliased_table VALUES ('amzmapqt');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('other');
+SELECT dolt_checkout('other');
+PRAGMA foreign_keys = ON;
+INSERT INTO dolt_nonlocal_tables(table_name, target_ref, ref_table, options)
+  VALUES ('nonlocal_table', 'main', 'aliased_table', 'immediate');
+INSERT INTO nonlocal_table VALUES ('eesekkgo');
+CREATE TABLE local_table (pk VARCHAR(8) PRIMARY KEY, FOREIGN KEY (pk) REFERENCES nonlocal_table(pk));
+INSERT INTO local_table VALUES ('eesekkgo');
+INSERT INTO local_table VALUES ('fdnfjfjf');
+SELECT CONCAT('R|local|', pk) FROM local_table ORDER BY pk;
+SELECT dolt_verify_constraints('--all');
+SELECT CONCAT('R|cv-count|', count(*)) FROM dolt_constraint_violations;
+"
+
+oracle "nonlocal_fk_parent_removed" "
+CREATE TABLE aliased_table (pk VARCHAR(8) PRIMARY KEY);
+INSERT INTO aliased_table VALUES ('amzmapqt');
+INSERT INTO aliased_table VALUES ('eesekkgo');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('other');
+SELECT dolt_checkout('other');
+INSERT INTO dolt_nonlocal_tables(table_name, target_ref, ref_table, options)
+  VALUES ('nonlocal_table', 'main', 'aliased_table', 'immediate');
+INSERT INTO nonlocal_table VALUES ('remote');
+CREATE TABLE local_table (pk VARCHAR(8) PRIMARY KEY, FOREIGN KEY (pk) REFERENCES nonlocal_table(pk));
+INSERT INTO local_table VALUES ('remote');
+DELETE FROM nonlocal_table WHERE pk = 'remote';
+set @@dolt_force_transaction_commit = 1;
+SELECT dolt_verify_constraints('--all');
+SELECT CONCAT('R|cv|', \`table\`, '|', num_violations) FROM dolt_constraint_violations;
+"
+
 vc_oracle_finish

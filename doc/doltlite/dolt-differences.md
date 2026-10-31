@@ -62,8 +62,7 @@ Only command functions are direct-only; `dolt_hashof` and `dolt_version` are not
   push destination, so the call is `dolt_push('--all', remote)`.
 - **Nonlocal tables are partial.** [dolt_nonlocal_tables](dolt_nonlocal_tables.md)
   redirects names as Dolt does, but nonlocal tables are not listed in
-  `.tables`, and a foreign key that references one is checked against this
-  branch's table of that name.
+  `.tables`.
 - **Deleting an absent remote branch succeeds.** `dolt_push(remote, ':branch')`
   returns 0 when that branch is already gone, including when this database
   has no tracking ref for it. Dolt reports an error and leaves the remote

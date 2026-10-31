@@ -153,4 +153,30 @@ do_catchsql_test nonlocal-shape-guard {
   CREATE TABLE dolt_nonlocal_tables(table_name TEXT PRIMARY KEY, target_ref TEXT);
 } {1 {dolt_nonlocal_tables must have exactly four columns; expected: CREATE TABLE dolt_nonlocal_tables(table_name TEXT NOT NULL, target_ref TEXT, ref_table TEXT, options TEXT, PRIMARY KEY(table_name))}}
 
+# Foreign keys that reference a claimed name check the nonlocal table.
+nl_reset
+do_execsql_test nonlocal-fk-setup {
+  PRAGMA foreign_keys=ON;
+  INSERT INTO dolt_nonlocal_tables VALUES('shared_cfg','main','cfg','immediate');
+  CREATE TABLE uses_cfg(k TEXT PRIMARY KEY REFERENCES shared_cfg(k));
+  INSERT INTO shared_cfg VALUES('remote','x');
+  INSERT INTO uses_cfg VALUES('remote');
+  SELECT k FROM uses_cfg;
+} {remote}
+do_catchsql_test nonlocal-fk-child-refused {
+  INSERT INTO uses_cfg VALUES('absent');
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test nonlocal-fk-check-clean {
+  SELECT count(*) FROM pragma_foreign_key_check;
+} 0
+do_execsql_test nonlocal-fk-parent-removed {
+  PRAGMA foreign_keys=OFF;
+  DELETE FROM shared_cfg WHERE k='remote';
+  SELECT "table", parent FROM pragma_foreign_key_check;
+} {uses_cfg shared_cfg}
+do_execsql_test nonlocal-fk-verify {
+  SELECT dolt_verify_constraints('--all');
+  SELECT "table", num_violations FROM dolt_constraint_violations;
+} {1 uses_cfg 1}
+
 finish_test

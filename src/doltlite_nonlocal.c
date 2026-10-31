@@ -339,6 +339,53 @@ int doltliteNonlocalResolve(
   return 1;
 }
 
+static int nonlocalResolveName(
+  sqlite3 *db,
+  const char **pzName,
+  const char **pzDb
+){
+  DoltliteNonlocal *p = nonlocalState(db, 0);
+  const NonlocalRule *r;
+  const char *zRef;
+  const char *zSchema;
+  if( *pzDb && sqlite3StrICmp(*pzDb, "main")!=0 ) return 0;
+  if( !p || !p->bLoaded ) return 0;
+  r = nonlocalMatch(p, *pzName);
+  if( !r || sqlite3StrICmp(r->zOptions, "immediate")!=0 ) return 0;
+  zRef = nonlocalRuleRef(p, r);
+  if( strcmp(zRef, p->zBranch)==0 ){
+    zSchema = "main";
+  }else{
+    zSchema = nonlocalSchemaFor(db, p, zRef);
+    if( !zSchema ) return 0;
+  }
+  if( r->zRefTable[0] ) *pzName = r->zRefTable;
+  *pzDb = zSchema;
+  return 1;
+}
+
+Table *doltliteFkParentTable(sqlite3 *db, const char *zTo, const char *zDb){
+  const char *zName = zTo;
+  const char *zSchema = zDb;
+  if( nonlocalResolveName(db, &zName, &zSchema)>0 ){
+    Table *pTab = sqlite3FindTable(db, zName, zSchema);
+    if( pTab ) return pTab;
+  }
+  return sqlite3FindTable(db, zTo, zDb);
+}
+
+int doltliteNonlocalFkParent(
+  sqlite3 *db,
+  const char *zTo,
+  const char **pzSchema,
+  const char **pzTable
+){
+  *pzTable = zTo;
+  *pzSchema = "main";
+  return nonlocalResolveName(db, pzTable, pzSchema)>0
+      && sqlite3StrICmp(*pzSchema, "main")!=0;
+}
+
 /* CREATE TABLE of a name a rule claims is refused, except creating the
 ** rule's own backing table on its target branch. */
 int doltliteNonlocalBlocksCreate(sqlite3 *db, const char *zName){

@@ -56,6 +56,8 @@ struct DoltliteSideCols {
 #define DOLTLITE_GEN_VIRTUAL 2
 
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci);
+int doltliteGetColumnNamesIn(sqlite3 *db, const char *zSchema,
+                             const char *zTable, DoltliteColInfo *ci);
 /* Same map, but STORED and VIRTUAL generated columns keep their names.
 ** STORED still occupies its record slot. VIRTUAL has aColToRec -1. */
 int doltliteGetReaderColumnNames(sqlite3 *db, const char *zTable,

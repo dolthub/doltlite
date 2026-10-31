@@ -1597,18 +1597,34 @@ void sqlite3Pragma(
       sqlite3VdbeLoadString(v, regResult, pTab->zName);
       assert( IsOrdinaryTable(pTab) );
       for(i=1, pFK=pTab->u.tab.pFKey; pFK; i++, pFK=pFK->pNextFrom){
+#ifdef DOLTLITE_PROLLY
+        int iParentDb;
+        pParent = doltliteFkParentTable(db, pFK->zTo, zDb);
+        if( pParent==0 ) continue;
+        iParentDb = sqlite3SchemaToIndex(db, pParent->pSchema);
+#else
         pParent = sqlite3FindTable(db, pFK->zTo, zDb);
         if( pParent==0 ) continue;
+#endif
         pIdx = 0;
         sqlite3TableLock(pParse, iDb, pParent->tnum, 0, pParent->zName);
         x = sqlite3FkLocateIndex(pParse, pParent, pFK, &pIdx, 0);
         if( x==0 ){
+#ifdef DOLTLITE_PROLLY
+          if( pIdx==0 ){
+            sqlite3OpenTable(pParse, i, iParentDb, pParent, OP_OpenRead);
+          }else{
+            sqlite3VdbeAddOp3(v, OP_OpenRead, i, pIdx->tnum, iParentDb);
+            sqlite3VdbeSetP4KeyInfo(pParse, pIdx);
+          }
+#else
           if( pIdx==0 ){
             sqlite3OpenTable(pParse, i, iDb, pParent, OP_OpenRead);
           }else{
             sqlite3VdbeAddOp3(v, OP_OpenRead, i, pIdx->tnum, iDb);
             sqlite3VdbeSetP4KeyInfo(pParse, pIdx);
           }
+#endif
         }else{
           k = 0;
           break;
@@ -1620,7 +1636,11 @@ void sqlite3Pragma(
       addrTop = sqlite3VdbeAddOp1(v, OP_Rewind, 0); VdbeCoverage(v);
       assert( IsOrdinaryTable(pTab) );
       for(i=1, pFK=pTab->u.tab.pFKey; pFK; i++, pFK=pFK->pNextFrom){
+#ifdef DOLTLITE_PROLLY
+        pParent = doltliteFkParentTable(db, pFK->zTo, zDb);
+#else
         pParent = sqlite3FindTable(db, pFK->zTo, zDb);
+#endif
         pIdx = 0;
         aiCols = 0;
         if( pParent ){

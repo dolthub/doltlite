@@ -280,7 +280,8 @@ static int columnNamesLoadCreateSql(sqlite3 *db, DoltliteColInfo *ci){
 }
 
 static int columnNamesLoad(
-  sqlite3 *db, const char *zTable, DoltliteColInfo *ci, int includeGen
+  sqlite3 *db, const char *zSchema, const char *zTable, DoltliteColInfo *ci,
+  int includeGen
 ){
   char *zSql;
   sqlite3_stmt *pStmt = 0;
@@ -300,7 +301,7 @@ static int columnNamesLoad(
   /* table_xinfo lists generated columns. STORED occupies a record field so
   ** later columns sit one slot further; VIRTUAL occupies nothing.
   ** hidden: 0 ordinary, 2 virtual generated, 3 stored generated. */
-  zSql = sqlite3_mprintf("PRAGMA main.table_xinfo(\"%w\")", zTable);
+  zSql = sqlite3_mprintf("PRAGMA \"%w\".table_xinfo(\"%w\")", zSchema, zTable);
   if( !zSql ) return SQLITE_NOMEM;
 
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
@@ -406,7 +407,7 @@ static int columnNamesLoad(
   ** INTEGER pk as an alias yields raw key bytes and drops xBestIndex pk
   ** constraints. */
   {
-    Table *pTab = sqlite3FindTable(db, zTable, "main");
+    Table *pTab = sqlite3FindTable(db, zTable, zSchema);
     if( pTab ){
       ci->bHasRowid = HasRowid(pTab);
       if( ci->bHasRowid && pTab->iPKey>=0 ){
@@ -523,13 +524,19 @@ static int columnNamesLoad(
 }
 
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
-  return columnNamesLoad(db, zTable, ci, 0);
+  return columnNamesLoad(db, "main", zTable, ci, 0);
+}
+
+int doltliteGetColumnNamesIn(
+  sqlite3 *db, const char *zSchema, const char *zTable, DoltliteColInfo *ci
+){
+  return columnNamesLoad(db, zSchema, zTable, ci, 0);
 }
 
 int doltliteGetReaderColumnNames(
   sqlite3 *db, const char *zTable, DoltliteColInfo *ci
 ){
-  return columnNamesLoad(db, zTable, ci, 1);
+  return columnNamesLoad(db, "main", zTable, ci, 1);
 }
 
 int doltliteParseRecordStrict(
