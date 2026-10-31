@@ -270,4 +270,18 @@ do_test nonlocal-commit-all-target {
   nl_disk main {SELECT message FROM dolt_log LIMIT 1; SELECT count(*) FROM dolt_status}
 } {both 0}
 
+# A foreign key to a name a stored rule claims commits; one to a table
+# that exists nowhere is still refused.
+nl_reset
+do_execsql_test nonlocal-fk-commit {
+  INSERT INTO dolt_nonlocal_tables VALUES('shared_cfg','main','cfg','immediate');
+  CREATE TABLE uses_cfg(k TEXT PRIMARY KEY REFERENCES shared_cfg(k));
+  SELECT dolt_commit('-Am','child') IS NOT NULL;
+  SELECT message FROM dolt_log LIMIT 1;
+} {1 child}
+do_catchsql_test nonlocal-fk-commit-missing {
+  CREATE TABLE uses_missing(k TEXT PRIMARY KEY REFERENCES nowhere(k));
+  SELECT dolt_commit('-Am','missing');
+} {1 {foreign key on table `uses_missing` requires the referenced table `nowhere`}}
+
 finish_test
