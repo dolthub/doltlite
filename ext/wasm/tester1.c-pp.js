@@ -4656,16 +4656,15 @@ T.g('Bug Reports')
             if( !localAux ){
               //log("setting auxdata");
               /**
-                 We do not currently an automated way to clean up
-                 auxdata finalizer functions (the 4th argument to
+                 We do provide an automated way to clean up auxdata
+                 finalizer functions (the 4th argument to
                  sqlite3_set_auxdata()) which get automatically
-                 converted from JS to WASM. Because of that, enabling
-                 automated conversions here would lead to leaks more
-                 often than not. Instead, follow the pattern show in
-                 this function: use wasm.installFunction() to create
-                 the function, then pass the resulting function
-                 pointer this function, and cleanup (at some point)
-                 using wasm.uninstallFunction().
+                 converted from JS to WASM because it's prohibitively
+                 expensive. Instead, follow the pattern show in this
+                 function: use wasm.installFunction() to create the
+                 function, then pass the resulting function pointer
+                 this function, and cleanup (at some point) using
+                 wasm.uninstallFunction().
               */
               ++nAuxSet;
               capi.sqlite3_set_auxdata(pCx, 0, pAux, pAuxDtor);
@@ -4726,18 +4725,6 @@ T.g('Bug Reports')
             const localAux = capi.sqlite3_get_auxdata(pCx, 0);
             if( !localAux ){
               //log("setting auxdata");
-              /**
-                 We do not currently an automated way to clean up
-                 auxdata finalizer functions (the 4th argument to
-                 sqlite3_set_auxdata()) which get automatically
-                 converted from JS to WASM. Because of that, enabling
-                 automated conversions here would lead to leaks more
-                 often than not. Instead, follow the pattern show in
-                 this function: use wasm.installFunction() to create
-                 the function, then pass the resulting function
-                 pointer this function, and cleanup (at some point)
-                 using wasm.uninstallFunction().
-              */
               ++nAuxSet;
               capi.sqlite3_set_auxdata(pCx, 0, pAux, pAuxDtor);
             }else{
@@ -4795,30 +4782,26 @@ T.g('Bug Reports')
               /**
                  The full details of when an auxdata dtor might be
                  called are in:
+
                  https://sqlite.org/c3ref/get_auxdata.html
 
                  The automated conversion of the 4th argument to
                  sqlite3_set_auxdata() happens precisely as often as
-                 we get new pCx values. Each such conversion creates
-                 an entry in the WASM indirect function table. Each
-                 call of that converted function will (because of how
-                 its binding is uniquely configured) remove its own
-                 entry from the WASM function table before proxying
-                 the original function (auxDtor()).
+                 we need new auxdata values. Each such conversion creates
+                 an entry in the WASM indirect function table.
 
-                 Ergo, if auxDtor() is called as often as we expect,
-                 we know that the WASM function table entries for
-                 these conversions are being removed.
+                 Best case (depending on how we concretely handle the
+                 conversion), this can lead to many JS/WASM proxy
+                 bindings being installed and uninstalled in rapid
+                 succession. Worst case (depending on the conversion
+                 impl), all such bindings are live until pCx is
+                 finalized.
 
-                 Even so: this can, because this function has little
-                 control over the lifetime of each piece of auxdata,
-                 lead to many JS/WASM proxy bindings being installed
-                 and uninstalled in rapid succession. The way around
-                 that is to follow the pattern used in the variant of
-                 his text function above this one. It demonstrates how
-                 to manually manage these safely and efficiently. We
-                 currently have no good way to automate that level of
-                 efficiency, however.
+                 The way around that is to follow the pattern used in
+                 the variant of his test function two above this
+                 one. It demonstrates how to manually manage these
+                 safely and efficiently. We currently have no good way
+                 to automate that level of efficiency, however.
               */
               ++nAuxSet;
               if( nAuxSet - nAuxDestructed>nPeakAux ){
