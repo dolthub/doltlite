@@ -52,6 +52,23 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   */
   const __ptrMap = new WeakMap();
   /**
+     Map of (cPointer to X):
+
+     - (sqlite3*) to DB instances, but only to instances which own
+     their db handle pointer. It's possible to share a C handle across
+     multiple DB instances but integrating a clean disconnect from
+     those using this mechanism has proven tricky.
+
+     - (sqlite3_stmt*) to DB.Stmt
+
+     For use by the disposer hook, so that we can properly unplug
+     native handles from their JS objects if the native handle is
+     closed using sqlite3_close_v2() resp. sqlite3_finalize().
+
+     This cannot be a WeakMap because their keys must be objects.
+  */
+  const __disposerMap = new Map();
+  /**
      A Set of oo1.DB or oo1.Stmt objects which are proxies for
      (sqlite3*) resp. (sqlite3_stmt*) pointers which themselves are
      owned elsewhere. Objects in this Set do not own their underlying
@@ -297,6 +314,10 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     }
     __ptrMap.set(this, pDb);
     __stmtMap.set(this, Object.create(null));
+    if( !__disposerMap.has(pDb) ){
+      /* Only register the prime instance with the disposer. */
+      __disposerMap.set(pDb, this);
+    }
     if( !opt['sqlite3*'] ){
       try{
 //#if enable-see
@@ -531,6 +552,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     __ptrMap.set(this, arguments[1]);
     if( arguments.length>3 && !arguments[3] ){
       __doesNotOwnHandle.add(this);
+    }else{
+      /* Only the prime instances go into __disposerMap. */
+      __disposerMap.set(arguments[1], this);
     }
   };
 
@@ -765,6 +789,67 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   */
   DB.checkRc = (db,resultCode)=>checkSqlite3Rc(db,resultCode);
 
+  /**
+     Internal helper for __oo1NativeDisposerDB and
+     __oo1NativeDisposerStmt.  Detaches any non-owning handles shared
+     via DB/Stmt.wrapHandle() which refer to the owning pointer ptr,
+     cleanly invalidating them so that they do not point to stale
+     pointers.
+  */
+  const __disposerUnowned = (lbl, ptr, disposer)=>{
+    const unowned = Array.from(__doesNotOwnHandle).filter(x=>ptr===x.pointer);
+    if( unowned.length ){
+      sqlite3.config.warn("Closing",lbl,"handle",
+                          ptr,"out from under shared holders.",
+                         unowned);
+      /* Two-pass to prevent further recursion. */
+      for(const u of unowned) __doesNotOwnHandle.delete(u);
+      for(const u of unowned) disposer(ptr, u);
+    }
+  };
+  /**
+     Hook for SQLITE_DISPOSAL_NOTIFIER. Expects ptr to be an
+     (sqlite3*), for which it unmaps any state to its partner DB
+     object (if any). The o arg is intended to be `this` from
+     DB.close().
+  */
+  const __oo1NativeDisposerDB = (ptr, o)=>{
+    o ??= __disposerMap.get(ptr);
+    //sqlite3.config.warn("__oo1NativeDisposerDB", ptr, o);
+    if( !o ) return;
+    if( o===__disposerMap.get(ptr) ){
+      __disposerMap.delete(ptr);
+    }
+    __disposerUnowned('DB', ptr, __oo1NativeDisposerDB);
+    for(const s of Object.values(__stmtMap.get(o)) || []){
+      if(s?.pointer){
+        try{s.finalize()}
+        catch(ex){/*ignore*/}
+      }
+    }
+    __stmtMap.delete(o);
+    __doesNotOwnHandle.delete(o);
+    __ptrMap.delete(o);
+  };
+
+  /** DB.Stmt counterpart of __oo1NativeDisposerDB().  The o arg is
+      intended to be `this` from Stmt.finalize(). */
+  const __oo1NativeDisposerStmt = (ptr, o)=>{
+    o ??= __disposerMap.get(ptr);
+    //sqlite3.config.warn("__oo1NativeDisposerStmt", ptr, o);
+    if( !o ) return;
+    __disposerMap.delete(ptr);
+    delete  __stmtMap.get(o.db)?.[ptr];
+    delete o.db;
+    __execLock.delete(o);
+    __stmtMayGet.delete(o);
+    __disposerUnowned('Stmt', ptr, __oo1NativeDisposerStmt);
+    __doesNotOwnHandle.delete(o);
+    __ptrMap.delete(o);
+  };
+  util.disposers.db.push(__oo1NativeDisposerDB);
+  util.disposers.stmt.push(__oo1NativeDisposerStmt);
+
   DB.prototype = {
     /** Returns true if this db handle is open, else false. */
     isOpen: function(){
@@ -802,7 +887,20 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
        If this instance was created using DB.wrapHandle() and does not
        own this.pointer then it does not close the db handle but it
        does perform all other work, such as calling onclose callbacks
-       and disassociating this object from this.pointer.
+       (which are local to that instance) and disassociating this
+       object from its native this.pointer.
+
+       As of version 3.55, DB objects are disassociated from their
+       native counterpart if the native is passed to
+       sqlite3_close_v2().  A side-effect of that is that this
+       function becomes a no-op if a db handle is closed that way.
+       i.e. onclose handlers will not be called. Prior to that change,
+       passing such a pointer to sqlite3_close_v2() invoked undefined
+       behavior. Design note: we "could" do only a small amount of
+       acrobatics and call any onclose handlers even in that case, but
+       to do so we need to distinguish between a closed-here instance
+       and one which was closed externally, which would require some
+       flag state.
     */
     close: function(){
       const pDb = this.pointer;
@@ -811,17 +909,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           try{this.onclose.before(this)}
           catch(e){/*ignore*/}
         }
-        for(const s of Object.values(__stmtMap.get(this))){
-          if(s?.pointer){
-            try{s.finalize()}
-            catch(ex){/*ignore*/}
-          }
-        }
-        __ptrMap.delete(this);
-        __stmtMap.delete(this);
-        if( !__doesNotOwnHandle.delete(this) ){
-          capi.sqlite3_close_v2(pDb);
-        }
+        const owns = !__doesNotOwnHandle.delete(this);
+        __oo1NativeDisposerDB(pDb, this);
+        if( owns ) capi.sqlite3_close_v2(pDb);
         if(this.onclose?.after instanceof Function){
           try{this.onclose.after(this)}
           catch(e){/*ignore*/}
@@ -1924,16 +2014,13 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       const ptr = this.pointer;
       if(ptr){
         affirmNotLockedByExec(this,'finalize()');
-        const rc = (__doesNotOwnHandle.delete(this)
-                    ? 0
-                    : capi.sqlite3_finalize(ptr));
-        delete __stmtMap.get(this.db)[ptr];
-        __ptrMap.delete(this);
-        __execLock.delete(this);
-        __stmtMayGet.delete(this);
-        delete this.parameterCount;
-        delete this.db;
-        return rc;
+        if( __doesNotOwnHandle.delete(this) ){
+          __oo1NativeDisposerStmt(ptr, this);
+          return 0;
+        }
+        return capi.sqlite3_finalize(
+          ptr /* triggers __oo1NativeDisposerStmt */
+        );
       }
     },
     /**

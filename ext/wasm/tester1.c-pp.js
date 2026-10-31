@@ -1550,10 +1550,21 @@ T.g('sqlite3.oo1')
           T.assert( q.step(), "step()" )
             .assert( !q.step(), "!step()" );
         }finally{
-          if( pStmt ) capi.sqlite3_finalize(pStmt)
-          if( q ) q.finalize();
+          if( pStmt ){
+            capi.sqlite3_finalize(pStmt);
+            T.assert( !q?.pointer, "Expecting !q?.pointer" );
+          }else if( q ){
+            T.assert( q.pointer, "Expecting q.pointer" );
+            //console.warn("sqlite3_finalize(",q,")");
+            capi.sqlite3_finalize(
+              q
+              /* legal with sqlite3_finalize() as of the
+                 [disposal-notification] branch. Will properly
+                 clean up q. */
+            );
+            T.assert(!q.pointer, "Expecting !q.pointer after finalize");
+          }
         }
-
       }finally{
         wasm.pstack.restore(stack);
         if( pDb ){ capi.sqlite3_close_v2(pDb); }
@@ -3096,14 +3107,27 @@ T.g('sqlite3.oo1')
   })/*custom collation*/
 
 ////////////////////////////////////////////////////////////////////////
-  .t('Close db', function(){
+  .t('Close db', function(sqlite3){
     T.assert(this.db).assert(wasm.isPtr(this.db.pointer));
     //wasm.sqlite3__wasm_db_reset(this.db); // will leak virtual tables!
-    const strayStmt = this.db.prepare("select 1");
-    T.assert( strayStmt.pointer );
-    this.db.close();
-    T.assert(!this.db.pointer)
-      .assert(!strayStmt.pointer, "Stmt should have been finalized");
+    /* Leave some stray resources open... */
+    const stmtStray = this.db.prepare("select 1");
+    T.assert( stmtStray.pointer );
+    const stmtDupe = sqlite3.oo1.Stmt.wrapHandle(this.db, stmtStray.pointer);
+    T.assert( stmtStray.pointer === stmtDupe.pointer );
+    const dw = sqlite3.oo1.DB.wrapHandle(this.db.pointer);
+    T.assert( dw.pointer === this.db.pointer );
+    //console.debug("this.db =",this.db.pointer,this.db);
+
+    /* Close db... */
+    if( 0 ) this.db.close();
+    else capi.sqlite3_close_v2(this.db)/*as of [disposal-notification] branch*/;
+    /* Ensure the strays have been disconnected. */
+    //console.debug("this.db =",this.db.pointer,this.db);
+    T.assert(!this.db.pointer, "Expecting !db.pointer")
+      .assert(!stmtStray.pointer, "Stmt should have been finalized")
+      .assert(!stmtDupe.pointer, "Stmt should have been finalized")
+      .assert(!dw.pointer, "shared-handle wrapper should have been disconnected");
   })
 ;/* end of oo1 checks */
 

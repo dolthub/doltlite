@@ -114,10 +114,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       ]],
       ["sqlite3_busy_timeout","int", "sqlite3*", "int"],
       /* sqlite3_cancel_auto_extension() has a hand-written binding. */
-      /* sqlite3_close_v2() is implemented by hand to perform some
-         extra work. */
       ["sqlite3_changes", "int", "sqlite3*"],
       ["sqlite3_clear_bindings","int", "sqlite3_stmt*"],
+      ["sqlite3_close_v2", "int", "sqlite3*"],
       ["sqlite3_collation_needed", "int", "sqlite3*", "*", "*"/*=>v(ppis)*/],
       ["sqlite3_column_blob","*", "sqlite3_stmt*", "int"],
       ["sqlite3_column_bytes","int", "sqlite3_stmt*", "int"],
@@ -954,7 +953,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       toss("Maintenance required: increase sqlite3__wasm_enum_json()'s",
            "static buffer size!");
     }
-    wasm.ctype = JSON.parse(wasm.cstrToJs(cJson));
+    const j = wasm.cstrToJs(cJson);
+    wasm.ctype = JSON.parse(j);
+    //sqlite3.config.error("cJson JSON length:",j.length);
     // Groups of SQLITE_xyz macros...
     const defineGroups = ['access', 'authorizer',
                           'blobFinalizers', 'changeset',
@@ -1024,6 +1025,58 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     }/* end vtab-related setup */
   }/*end C constant and struct imports*/
 
+  if( capi.WasmDisposalNotifier ){
+    /* Redirect the SQLITE_DISPOSAL_NOTIFIER callback installed by
+       sqlite3-wasm.c to JS by (A) creating a JS/C struct proxy which
+       wraps the C-side singleton instance of WasmDisposalNotifier and
+       (B) connecting our own function to its $callback method. */
+    //sqlite3.config.warn("WARNING: installing WasmDisposalNotifier");
+    const ctor = capi.WasmDisposalNotifier;
+    delete capi.WasmDisposalNotifier;
+    const w = new ctor(
+      wasm.exports.sqlite3__wasm_disposal_notifier()
+      /* ^^^ ptr to the singleton WasmDisposalNotifier instance */
+    );
+    util.disposers = Object.assign(Object.create(null),{
+      /* Lists of disposer callbacks which are passed the WASM pointer
+         of an object which is currently being finalized from
+         WASM. These are triggered via the SQLITE_DISPOSAL_NOTIFIER
+         callback which sqlite3-wasm.c installs. The C side of this
+         ensures that these callbacks are never passed NULL.
+         Downstream library bootstrapping code may append callbacks to
+         these (e.g. oo1 does so). */
+      db: [], stmt: []
+    });
+    /* Map type IDs to names to simplify $callback() below. */
+    util.disposers[1] = util.disposers.db;
+    util.disposers[2] = util.disposers.stmt;
+    try {
+      w.$callback = wasm.installFunction("v(ip)", (tid,ptr)=>{
+        //sqlite3.config.debug("WasmDisposalNotifier:",tid,ptr);
+        const li = util.disposers[tid]
+              ?? toss("Internal bug: invalid disposal type ID",tid);
+        for(const d of li){
+          try{d(ptr)}
+          catch(e){
+            sqlite3.config.error("on-dispose handler type",
+                                 tid,"threw:",e);
+          }
+        }
+      });
+    }finally{
+      w.dispose(/*only needed for the $callback assignment*/);
+      /* The irony that we permanently leak a function which is itself
+         responsible for cleanup is not lost on us. */
+    }
+//#if 0
+    // Just for testing...
+    util.disposers.stmt.push((p)=>sqlite3.config.warn("disposing stmt",p));
+    util.disposers.db.push((p)=>sqlite3.config.warn("disposing db",p));
+//#/if
+  }else{
+    toss("Expecting WasmDisposalNotifier to have been exported.");
+  }
+
   /**
      Internal helper to assist in validating call argument counts in
      the hand-written sqlite3_xyz() wrappers. We do this only for
@@ -1050,7 +1103,7 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
      UDFs and collations so that sqlite3_close_v2() can clean up any
      automated JS-to-WASM function conversions installed by those.
   */
-  const __argPDb = (pDb)=>wasm.xWrap.argAdapter('sqlite3*')(pDb);
+  const __argPDb = wasm.xWrap.argAdapter('sqlite3*');
   const __argStr = (str)=>wasm.isPtr(str) ? wasm.cstrToJs(str) : str;
   const __dbCleanupMap = function(
     pDb, mode/*0=remove, >0=create if needed, <0=do not create if missing*/
@@ -1119,6 +1172,7 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   */
   __dbCleanupMap.cleanup = function(pDb){
     pDb = __argPDb(pDb);
+    //sqlite3.config.warn("disposing pDb",pDb);
     //wasm.xWrap.FuncPtrAdapter.debugFuncInstall = false;
     /**
        Installing NULL functions in the C API will remove those
@@ -1198,16 +1252,11 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     delete m.wudf;
   }/*__dbCleanupMap.cleanup()*/;
 
-  {/* Binding of sqlite3_close_v2() */
-    const __sqlite3CloseV2 = wasm.xWrap("sqlite3_close_v2", "int", "sqlite3*");
-    capi.sqlite3_close_v2 = function(pDb){
-      if(1!==arguments.length) return __dbArgcMismatch(pDb, 'sqlite3_close_v2', 1);
-      if(pDb){
-        try{__dbCleanupMap.cleanup(pDb)} catch(e){/*ignored*/}
-      }
-      return __sqlite3CloseV2(pDb);
-    };
-  }/*sqlite3_close_v2()*/
+  util.disposers.db.push(
+    /* When a db is disposed from C, this will clean up the
+       various state we've bound in __dbCleanupMap */
+    __dbCleanupMap.cleanup
+  );
 
   if(capi.sqlite3session_create){
     const __sqlite3SessionDelete = wasm.xWrap(
