@@ -12924,7 +12924,7 @@ static int do_meta_command(const char *zLine, ShellState *p){
           }
           if( nOff<12 ){
             cli_puts("+All", p->out);
-            for(ii=0, m=1; ii<32; ii++, m <<= 1){
+            for(ii=0, m=1; ii<64; ii++, m <<= 1){
               if( (newOpt & m)!=0 
                && (zName = sqlite3_optimization_name(m))!=0
               ){
