@@ -20,7 +20,7 @@ app="$tmp/ExportProbe.app"
 mkdir -p "$app"
 xcrun --sdk iphonesimulator clang -O1 -Werror -Wno-comment \
   -target "$arch-apple-ios15.0-simulator" -isysroot "$sdk" \
-  -DDOLTLITE_ENABLE_REMOTES=0 -DSQLITE_THREADSAFE=1 -I"$build" \
+  -DDOLTLITE_ENABLE_REMOTES=0 -DSQLITE_THREADSAFE=1 -DHAVE_GETHOSTUUID=0 -I"$build" \
   -c "$build/sqlite3.c" -o "$tmp/doltlite.o"
 xcrun --sdk iphonesimulator clang -O1 -Werror -fobjc-arc \
   -target "$arch-apple-ios15.0-simulator" -isysroot "$sdk" -I"$build" \
