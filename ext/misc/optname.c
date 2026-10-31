@@ -72,6 +72,7 @@ static const struct OptName {
     { OPT_MASK(30),          "StarQuery" },
     { OPT_MASK(31),          "ExistsToJoin" },
     { OPT_MASK(32),          "UnionLimit" },
+    { OPT_MASK(33),          "HavingToWhere" },
     /* Special names */
     { 0xffffffffffffffffULL, "All" },
     { 0x0000000000000000ULL, "None" },

@@ -12874,10 +12874,9 @@ static int do_meta_command(const char *zLine, ShellState *p){
         **      INTEGER      Mask of optimizations to disable
         */
         case SQLITE_TESTCTRL_OPTIMIZATIONS: {
-          unsigned int curOpt;       /* Current opt-disabled mask */
-          unsigned int newOpt;       /* New opt-disabled mask */
-          unsigned int m;            /* A working mask value */
-          sqlite3_uint64 mm;         /* 64-bit working mask value */
+          u64 curOpt;                /* Current opt-disabled mask */
+          u64 newOpt;                /* New opt-disabled mask */
+          u64 m;                     /* A working mask value */
           int ii, jj;                /* Loop counters */
           int nOff;                  /* Number of disabled optimizations */
           const char *zName;         /* Name of an optimization */
@@ -12898,7 +12897,7 @@ static int do_meta_command(const char *zLine, ShellState *p){
               newOpt = (unsigned int)strtol(z,0,0);
             }
             if( useLabel ){
-              if( sqlite3_optimization_mask(zLabel,&mm)==SQLITE_NOTFOUND ){
+              if( sqlite3_optimization_mask(zLabel,&m)==SQLITE_NOTFOUND ){
                 cli_printf(stderr,
                     "Error: no such optimization: \"%s\"\n", zLabel);
                 cli_puts("Should be one of: All", stderr);
@@ -12910,7 +12909,6 @@ static int do_meta_command(const char *zLine, ShellState *p){
                 rc = 1;
                 goto meta_command_exit;
               }
-              m = (u32)mm;
               if( useLabel=='+' ){
                 newOpt &= ~m;
               }else{
@@ -12921,7 +12919,7 @@ static int do_meta_command(const char *zLine, ShellState *p){
           if( curOpt!=newOpt ){
             sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS,p->db,newOpt);
           }
-          for(ii=nOff=0, m=1; ii<32; ii++, m <<= 1){
+          for(ii=nOff=0, m=1; ii<64; ii++, m <<= 1){
             if( m & newOpt ) nOff++;
           }
           if( nOff<12 ){
@@ -12935,7 +12933,7 @@ static int do_meta_command(const char *zLine, ShellState *p){
             }
           }else{
             cli_puts("-All", p->out);
-            for(ii=0, m=1; ii<32; ii++, m <<= 1){
+            for(ii=0, m=1; ii<64; ii++, m <<= 1){
               if( (newOpt & m)==0
                && (zName = sqlite3_optimization_name(m))!=0
               ){

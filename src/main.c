@@ -4537,7 +4537,7 @@ int sqlite3_test_control(int op, ...){
       break;
     }
 
-    /*  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, sqlite3 *db, int N)
+    /*  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, sqlite3 *db, u64 N)
     **
     ** Enable or disable various optimizations for testing purposes.  The
     ** argument N is a bitmask of optimizations to be disabled.  For normal
@@ -4548,18 +4548,18 @@ int sqlite3_test_control(int op, ...){
     */
     case SQLITE_TESTCTRL_OPTIMIZATIONS: {
       sqlite3 *db = va_arg(ap, sqlite3*);
-      db->dbOptFlags = va_arg(ap, u32);
+      db->dbOptFlags = va_arg(ap, u64);
       break;
     }
 
-    /*  sqlite3_test_control(SQLITE_TESTCTRL_GETOPT, sqlite3 *db, int *N)
+    /*  sqlite3_test_control(SQLITE_TESTCTRL_GETOPT, sqlite3 *db, u64 *N)
     **
     ** Write the current optimization settings into *N.  A zero bit means that
     ** the optimization is on, and a 1 bit means that the optimization is off.
     */
     case SQLITE_TESTCTRL_GETOPT: {
       sqlite3 *db = va_arg(ap, sqlite3*);
-      int *pN = va_arg(ap, int*);
+      u64 *pN = va_arg(ap, u64*);
       *pN = db->dbOptFlags;
       break;
     }

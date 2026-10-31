@@ -8632,7 +8632,7 @@ int sqlite3Select(
     sqlite3ExprAnalyzeAggList(&sNC, pEList);
     sqlite3ExprAnalyzeAggList(&sNC, sSort.pOrderBy);
     if( pHaving ){
-      if( pGroupBy ){
+      if( pGroupBy && OptimizationEnabled(db, SQLITE_HavingToWhere) ){
         assert( pWhere==p->pWhere );
         assert( pHaving==p->pHaving );
         assert( pGroupBy==p->pGroupBy );

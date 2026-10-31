@@ -8600,7 +8600,6 @@ static int SQLITE_TCLAPI optimization_control(
   const char *zOpt;
   int onoff;
   u64 m = 0, mask = 0;
-  int m32;
   char zBuf[50];
   extern int sqlite3_optimization_mask(const char*,sqlite3_uint64*);
   extern const char *sqlite3_optimization_name(sqlite3_uint64);
@@ -8639,9 +8638,8 @@ static int SQLITE_TCLAPI optimization_control(
     zOpt += i;
   }
   if( onoff ) mask = ~mask;
-  m32 = (int)(mask & 0xffffffff);
-  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS,db, m32);
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(m32));
+  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS,db, mask);
+  Tcl_SetObjResult(interp, Tcl_NewWideIntObj(mask));
   return TCL_OK;
 }
 

@@ -1732,7 +1732,7 @@ struct sqlite3 {
   int nextPagesize;             /* Pagesize after VACUUM if >0 */
   i64 nChange;                  /* Value returned by sqlite3_changes() */
   i64 nTotalChange;             /* Value returned by sqlite3_total_changes() */
-  u32 dbOptFlags;               /* Flags to enable/disable optimizations */
+  u64 dbOptFlags;               /* Flags to enable/disable optimizations */
   int aLimit[SQLITE_N_LIMIT];   /* Limits */
   int nMaxSorterMmap;           /* Maximum size of regions mapped by sorter */
   struct sqlite3InitInfo {      /* Information used during initialization */
@@ -1972,12 +1972,13 @@ struct sqlite3 {
 #define SQLITE_StarQuery      30 /* Heurists for star queries */
 #define SQLITE_ExistsToJoin   31 /* The EXISTS-to-JOIN optimization */
 #define SQLITE_UnionLimit     32 /* Optimizations for UNION + LIMIT */
+#define SQLITE_HavingToWhere  33 /* HAVING-to-WHERE optimization */
 
 /*
 ** Macros for testing whether or not optimizations are enabled or disabled.
 */
-#define OptimizationDisabled(D,M)  (((D)->dbOptFlags&(1ul<<((M)-1)))!=0)
-#define OptimizationEnabled(D,M)   (((D)->dbOptFlags&(1ul<<((M)-1)))==0)
+#define OptimizationDisabled(D,M)  (((D)->dbOptFlags&(1ull<<((M)-1)))!=0)
+#define OptimizationEnabled(D,M)   (((D)->dbOptFlags&(1ull<<((M)-1)))==0)
 
 /*
 ** Return true if it OK to factor constant expressions into the initialization
