@@ -847,7 +847,7 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       /* Forcibly detach all shared-handle instances which point
          to ptr. Two-pass to prevent further recursion. */
       for(const u of unowned) __doesNotOwnHandle.delete(u);
-      for(const u of unowned) __oo1NativeDisposerDB(ptr, u);
+      for(const u of unowned) __oo1NativeDisposerStmt(ptr, u);
     }
   };
   util.disposers.db.push(__oo1NativeDisposerDB);
