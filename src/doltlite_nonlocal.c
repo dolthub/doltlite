@@ -3,6 +3,8 @@
 #include "sqliteInt.h"
 #include "doltlite_internal.h"
 #include "doltlite_vtab_util.h"
+#include "prolly_cursor.h"
+#include "doltlite_record.h"
 #include <string.h>
 
 #define NONLOCAL_SCHEMA_PREFIX "dolt_nonlocal:"
@@ -392,6 +394,57 @@ static void nonlocalListName(
   sqlite3VdbeMultiLoad(sqlite3GetVdbe(pParse), 1, "sssiii", "main", zName,
       zType, pTab->nCol, (pTab->tabFlags & TF_WithoutRowid)!=0,
       (pTab->tabFlags & TF_Strict)!=0);
+}
+
+/* Whether a dolt_nonlocal_tables rule stored in pCatalog claims zName. */
+int doltliteNonlocalCatalogClaims(
+  sqlite3 *db,
+  const ProllyHash *pCatalog,
+  const char *zName,
+  int *pClaimed
+){
+  struct TableEntry *aTables = 0, *pTable;
+  ProllyCursor cur;
+  char *zLower;
+  int nTables = 0, res = 0, rc;
+  *pClaimed = 0;
+  if( nonlocalIsSystemName(zName) ) return SQLITE_OK;
+  rc = doltliteLoadCatalog(db, pCatalog, &aTables, &nTables, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  pTable = doltliteFindTableByName(aTables, nTables, "dolt_nonlocal_tables");
+  if( !pTable ){
+    doltliteFreeCatalog(aTables, nTables);
+    return SQLITE_OK;
+  }
+  zLower = sqlite3_mprintf("%s", zName);
+  if( !zLower ){
+    doltliteFreeCatalog(aTables, nTables);
+    return SQLITE_NOMEM;
+  }
+  nonlocalToLower(zLower);
+  prollyCursorInit(&cur, doltliteGetChunkStore(db), doltliteGetCache(db),
+      &pTable->root, pTable->flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && !res && !*pClaimed && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    DoltliteRecordInfo info = {0};
+    char *zPattern = 0;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    rc = doltliteParseRecordStrict(pVal, nVal, &info);
+    if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &info, 0, &zPattern);
+    if( rc==SQLITE_OK && zPattern ){
+      nonlocalToLower(zPattern);
+      *pClaimed = doltliteTablePatternMatch(zPattern, zLower);
+    }
+    sqlite3_free(zPattern);
+    doltliteRecordInfoClear(&info);
+    if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  sqlite3_free(zLower);
+  doltliteFreeCatalog(aTables, nTables);
+  return rc;
 }
 
 /* PRAGMA table_list rows for the names this branch's rules resolve, as

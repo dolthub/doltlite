@@ -246,6 +246,20 @@ oracle "nonlocal_commit_all_clean" "$COMMIT_ALL_SETUP
 SELECT dolt_commit_all('--allow-empty', '-m', 'empty');
 $COMMIT_ALL_STATE"
 
+oracle "nonlocal_fk_commit" "
+CREATE TABLE p (pk VARCHAR(8) PRIMARY KEY);
+INSERT INTO p VALUES ('a');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('shared');
+SELECT dolt_checkout('-b', 'other');
+INSERT INTO dolt_nonlocal_tables VALUES ('np', 'shared', 'p', 'immediate');
+CREATE TABLE c (pk VARCHAR(8) PRIMARY KEY, FOREIGN KEY (pk) REFERENCES np(pk));
+INSERT INTO c VALUES ('a');
+SELECT dolt_commit('-Am', 'child of nonlocal');
+SELECT CONCAT('R|log|', message) FROM dolt_log LIMIT 1;
+SELECT CONCAT('R|status|', count(*)) FROM dolt_status;
+"
+
 tables_oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"

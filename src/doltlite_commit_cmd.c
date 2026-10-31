@@ -755,6 +755,8 @@ static int doltliteCommitNextForeignKeyParent(
 }
 
 static int doltliteCommitFindMissingForeignKeyParent(
+  sqlite3 *db,
+  const ProllyHash *pCatalogHash,
   SchemaEntry *aSchema,
   int nSchema,
   char **pzChild,
@@ -782,6 +784,13 @@ static int doltliteCommitFindMissingForeignKeyParent(
          && sqlite3_stricmp(aSchema[j].zName, zParent)==0 ){
           found = 1;
           break;
+        }
+      }
+      if( !found ){
+        rc = doltliteNonlocalCatalogClaims(db, pCatalogHash, zParent, &found);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(zParent);
+          return rc;
         }
       }
       if( !found ){
@@ -817,7 +826,7 @@ int doltliteCommitValidateForeignKeyParents(
       doltliteGetCache(db), pCatalogHash, &aSchema, &nSchema);
   if( rc==SQLITE_OK ){
     rc = doltliteCommitFindMissingForeignKeyParent(
-        aSchema, nSchema, &zChild, &zParent);
+        db, pCatalogHash, aSchema, nSchema, &zChild, &zParent);
   }
   freeSchemaEntries(aSchema, nSchema);
   if( rc!=SQLITE_OK ){

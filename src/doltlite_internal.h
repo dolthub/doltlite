@@ -90,6 +90,8 @@ struct DoltliteNonlocal **doltliteNonlocalSlot(sqlite3 *db);
 int doltliteNonlocalRegister(sqlite3 *db);
 int doltliteNonlocalMatches(sqlite3 *db, const char *zName);
 struct TableEntry *doltliteBtreeTableEntry(Btree *p, Pgno iTable);
+int doltliteNonlocalCatalogClaims(sqlite3*, const ProllyHash*, const char*,
+                                  int*);
 int doltliteNonlocalFkParent(sqlite3 *db, const char *zTo,
                              const char **pzSchema, const char **pzTable);
 int doltliteTablePatternMatch(const char *zPat, const char *zStr);
