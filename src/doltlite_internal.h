@@ -55,6 +55,8 @@ int doltliteCommandHasUserSavepoint(sqlite3*);
 int doltliteDeferJoinedSavepointRelease(sqlite3*);
 int doltliteLockAndRefreshBusy(sqlite3*, ChunkStore*);
 void doltliteBtreeEndJoinedCommand(Btree*);
+int doltliteStageStoreSiblings(Btree*, void**);
+void doltliteFinishStoreSiblings(Btree*, void*, int bPublished);
 int doltliteBtreeEndCommandTxn(Btree*, int bFailed, int bPublished);
 typedef struct DoltliteCmdScope DoltliteCmdScope;
 struct DoltliteCmdScope {

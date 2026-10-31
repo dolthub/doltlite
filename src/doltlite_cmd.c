@@ -206,6 +206,7 @@ static int cmdCommitRefusal(sqlite3_context *ctx){
   }
   for(i=0; i<db->nDb; i++){
     Btree *pWrite = db->aDb[i].pBt;
+    if( i>1 && doltliteBtreeSameStore(db->aDb[0].pBt, pWrite) ) continue;
     if( i!=1 && pWrite && sqlite3BtreeTxnState(pWrite)==SQLITE_TXN_WRITE
      && !sqlite3PagerIsMemdb(sqlite3BtreePager(pWrite))
      && sqlite3BtreeGetFilename(pWrite)[0]
@@ -256,6 +257,7 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
   sqlite3 *db = p->db;
   sqlite3_stmt *commit = 0;
   void *preparedCatalog = 0;
+  void *pSiblings = 0;
   ProllyHash catalog;
   int installed = 0;
   int vetoed = 0;
@@ -269,6 +271,7 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
     if( rc==SQLITE_OK && db->nVdbeWrite>0 ) rc = SQLITE_BUSY;
     if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, &catalog);
     if( rc==SQLITE_OK ) rc = doltliteSaveWorkingSetWithHash(db, &catalog);
+    if( rc==SQLITE_OK ) rc = doltliteStageStoreSiblings(p, &pSiblings);
     if( rc==SQLITE_OK ) rc = chunkStoreSerializeRefs(cs);
     if( rc==SQLITE_OK ){
       rc = doltliteBtreePrepareJoinedCatalog(p, &catalog, &preparedCatalog);
@@ -288,6 +291,7 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
       cs->bDeferPublish = 1;
       installed = rc==SQLITE_OK;
     }
+    doltliteFinishStoreSiblings(p, pSiblings, installed);
     if( installed ){
       /* A published root cannot become a failed command during SQL cleanup. */
       (void)sqlite3_step(commit);
@@ -501,18 +505,11 @@ static void doltliteRunCommand(
   DoltliteCmdScope scope;
   int bProbe = 0;
   int rcBegin;
-  /* A failed command rolls back the shared store, which would discard the
-  ** other branch's staged writes. */
-  if( !pOuter ){
-    const char *zSibling = doltliteStoreSiblingBranch(db, 0, 0);
-    if( zSibling ){
-      char *zMsg = sqlite3_mprintf("cannot run %s while branch '%s' of this "
-          "database has a write transaction open; commit or roll back first",
-          ctx->pFunc->zName, zSibling);
-      sqlite3_result_error(ctx, zMsg ? zMsg : sqlite3ErrStr(SQLITE_ERROR), -1);
-      sqlite3_free(zMsg);
-      return;
-    }
+  if( !pOuter && sqlite3_stricmp(ctx->pFunc->zName, "dolt_commit")==0
+   && doltliteStoreSiblingBranch(db, 0, 0) ){
+    sqlite3_result_error(ctx,
+        "Cannot commit changes on more than one branch / database", -1);
+    return;
   }
   db->pVcCommand = ctx->pVdbe;
   db->bVcNestedCommand = pOuter!=0;

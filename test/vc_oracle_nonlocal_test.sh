@@ -154,4 +154,33 @@ SELECT dolt_verify_constraints('--all');
 SELECT CONCAT('R|cv|', \`table\`, '|', num_violations) FROM dolt_constraint_violations;
 "
 
+for cmd in "dolt_add('.')" "dolt_reset('--hard')" "dolt_branch('nb')" \
+           "dolt_commit('-Am', 'x')" "dolt_checkout('-b', 'nb2')" \
+           "dolt_checkout('notes')" "dolt_clean()" "dolt_merge('side')"; do
+  oracle "nonlocal_vc_in_txn_$(printf '%s' "$cmd" | tr -c 'a-z0-9' '_')" "
+CREATE TABLE users (id INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('side');
+SELECT dolt_checkout('-b', 'other');
+CREATE TABLE notes (id INT PRIMARY KEY);
+INSERT INTO dolt_nonlocal_tables VALUES ('users', 'main', '', 'immediate');
+SELECT dolt_commit('-Am', 'rules');
+BEGIN;
+INSERT INTO users VALUES (1);
+INSERT INTO notes VALUES (1);
+SELECT $cmd;
+SELECT CONCAT('R|in-txn-users|', count(*)) FROM users;
+SELECT CONCAT('R|in-txn-notes|', count(*)) FROM notes;
+COMMIT;
+SELECT CONCAT('R|branch|', active_branch());
+SELECT CONCAT('R|br|', name) FROM dolt_branches ORDER BY name;
+SELECT dolt_checkout('other');
+SELECT CONCAT('R|other-notes|', count(*)) FROM notes;
+SELECT CONCAT('R|other-status|', table_name, '|', staged, '|', status) FROM dolt_status ORDER BY table_name;
+SELECT dolt_checkout('main');
+SELECT CONCAT('R|main-users|', count(*)) FROM users;
+SELECT CONCAT('R|main-status|', table_name, '|', staged, '|', status) FROM dolt_status ORDER BY table_name;
+"
+done
+
 vc_oracle_finish
