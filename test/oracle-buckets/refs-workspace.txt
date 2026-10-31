@@ -16,6 +16,7 @@ vc_oracle_hashof_errors_test.sh
 vc_oracle_hashof_test.sh
 vc_oracle_ignore_test.sh
 vc_oracle_nonlocal_test.sh
+vc_oracle_log_equivalents_test.sh
 vc_oracle_log_test.sh
 vc_oracle_qualified_refs_test.sh
 vc_oracle_reset_test.sh
