@@ -188,4 +188,27 @@ do_execsql_test nonlocal-fk-verify {
   SELECT "table", num_violations FROM dolt_constraint_violations;
 } {1 uses_cfg 1}
 
+# PRAGMA table_list lists the names rules resolve, as Dolt's SHOW TABLES:
+# a plain name whose target exists, and target tables a wildcard claims.
+nl_reset
+do_test nonlocal-table-list {
+  sqlite3 peer [file normalize test.db]/main
+  peer eval {CREATE TABLE glob_a(id INTEGER PRIMARY KEY, v TEXT)}
+  peer close
+  db eval {
+    INSERT INTO dolt_nonlocal_tables VALUES
+      ('settings','main','cfg','immediate'),
+      ('glob_*','main','','immediate'),
+      ('ghost','main','','immediate');
+  }
+  db eval {
+    SELECT name, type, ncol FROM pragma_table_list
+    WHERE schema='main' AND name NOT LIKE 'sqlite%' ORDER BY name
+  }
+} {cfg table 2 dolt_nonlocal_tables table 4 glob_a table 2 notes table 2 settings table 2 users table 2}
+do_execsql_test nonlocal-table-list-named {
+  SELECT name FROM pragma_table_list('settings') WHERE schema='main';
+  SELECT count(*) FROM pragma_table_list('ghost');
+} {settings 0}
+
 finish_test

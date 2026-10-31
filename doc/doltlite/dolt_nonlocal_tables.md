@@ -46,8 +46,8 @@ rule applies on the branch whose working set holds it.
 - `dolt_clean` never drops a table a rule claims.
 - The connection attaches each target branch as a hidden database named
   `dolt_nonlocal:<ref>` while a rule names it. It appears in
-  `PRAGMA database_list`; an unqualified name never resolves into it except
-  through a rule.
+  `PRAGMA database_list` but not in `.tables`; an unqualified name never
+  resolves into it except through a rule.
 
 ## Errors
 
@@ -62,8 +62,8 @@ no-op, as in Dolt.
 
 ## Differences from Dolt
 
-- Nonlocal tables are not listed in `sqlite_master` or `.tables`; Dolt shows
-  them in `SHOW TABLES`.
+- Nonlocal tables are listed in `.tables` and `PRAGMA table_list`, as Dolt
+  lists them in `SHOW TABLES`, but not in `sqlite_master`.
 - `dolt_commit_all` and `@@dolt_multi_branch_commit` are not implemented, so
   commit each branch's working set from that branch.
 - A branch that a rule targets cannot be deleted or renamed while this

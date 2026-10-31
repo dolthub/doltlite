@@ -1353,6 +1353,9 @@ void sqlite3Pragma(
            (pTab->tabFlags & TF_Strict)!=0
         );
       }
+#ifdef DOLTLITE_PROLLY
+      if( ii==0 ) doltliteNonlocalTableList(pParse, zRight);
+#endif
     }
   }
   break;

@@ -12928,6 +12928,9 @@ static int do_meta_command(const char *zLine, ShellState *p){
     while( sqlite3_step(pStmt)==SQLITE_ROW ){
       const char *zDbName = (const char*)sqlite3_column_text(pStmt, 1);
       if( zDbName==0 ) continue;
+#ifdef DOLTLITE_PROLLY
+      if( sqlite3_strnicmp(zDbName, "dolt_nonlocal:", 14)==0 ) continue;
+#endif
       if( sqlite3_str_length(pSql) ){
         sqlite3_str_appendall(pSql, " UNION ALL ");
       }
@@ -12944,6 +12947,16 @@ static int do_meta_command(const char *zLine, ShellState *p){
       if( zPattern ){
         sqlite3_str_appendf(pSql," AND name LIKE %Q", zPattern);
       }
+#ifdef DOLTLITE_PROLLY
+      if( sqlite3_stricmp(zDbName, "main")==0 ){
+        sqlite3_str_appendall(pSql, " UNION SELECT name FROM pragma_table_list"
+            " WHERE schema='main' AND type IN ('table','view','virtual')"
+            "   AND name NOT LIKE 'sqlite__%' ESCAPE '_'");
+        if( zPattern ){
+          sqlite3_str_appendf(pSql," AND name LIKE %Q", zPattern);
+        }
+      }
+#endif
     }
     rc = sqlite3_finalize(pStmt);
     if( rc==SQLITE_OK ){
