@@ -314,7 +314,7 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     }
     __ptrMap.set(this, pDb);
     __stmtMap.set(this, Object.create(null));
-    if( !__disposerMap.has(this) ){
+    if( !__disposerMap.has(pDb) ){
       /* Only register the prime instance with the disposer. */
       __disposerMap.set(pDb, this);
     }
@@ -799,7 +799,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     o ??= __disposerMap.get(ptr);
     //sqlite3.config.warn("__oo1NativeDisposerDB", ptr, o);
     if( !o ) return;
-    __disposerMap.delete(ptr);
+    if( o===__disposerMap.get(ptr) ){
+      __disposerMap.delete(ptr);
+    }
     __doesNotOwnHandle.delete(
       o /* Unowned handles are not yet integrated here (an initial
            attempt failed badly for them) but we'll clean up just in
@@ -813,14 +815,17 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       for(const u of unowned) __doesNotOwnHandle.delete(u);
       for(const u of unowned) __oo1NativeDisposerDB(ptr, u);
     }
-    for(const s of Object.values(__stmtMap.get(o))){
-      if(s?.pointer){
-        try{s.finalize()}
-        catch(ex){/*ignore*/}
+    ;
+    if( __stmtMap.has(o) ){
+      for(const s of Object.values(__stmtMap.get(o))){
+        if(s?.pointer){
+          try{s.finalize()}
+          catch(ex){/*ignore*/}
+        }
       }
+      __stmtMap.delete(o);
     }
     __ptrMap.delete(o);
-    __stmtMap.delete(o);
   };
 
   /** DB.Stmt counterpart of __oo1NativeDisposerDB().  The o arg is
@@ -885,7 +890,20 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
        If this instance was created using DB.wrapHandle() and does not
        own this.pointer then it does not close the db handle but it
        does perform all other work, such as calling onclose callbacks
-       and disassociating this object from this.pointer.
+       (which are local to that instance) and disassociating this
+       object from its native this.pointer.
+
+       As of version 3.55, DB objects are disassociated from their
+       native counterpart if the native is passed to
+       sqlite3_close_v2().  A side-effect of that is that this
+       function becomes a no-op if a db handle is closed that way.
+       i.e. onclose handlers will not be called. Prior to that change,
+       passing such a pointer to sqlite3_close_v2() invoked undefined
+       behavior. Design note: we "could" do only a small amount of
+       acrobatics and call any onclose handlers even in that case, but
+       to do so we need to distinguish between a closed-here instance
+       and one which was closed externally, which would require some
+       flag state.
     */
     close: function(){
       const pDb = this.pointer;

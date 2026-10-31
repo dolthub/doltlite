@@ -1023,13 +1023,12 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     }/* end vtab-related setup */
   }/*end C constant and struct imports*/
 
-//#if 1 /* the [disposal-notification] branch */
   if( capi.WasmDisposalNotifier ){
     /* Redirect the SQLITE_DISPOSAL_NOTIFIER callback to JS by
        creating a JS/C struct proxy which wraps the C-side singleton
        instance of WasmDisposalNotifier and connecting our own
-       function to WasmDisposalNotifier::callback. */
-    sqlite3.config.warn("WARNING: installing WasmDisposalNotifier");
+       function to its $callback method. */
+    //sqlite3.config.warn("WARNING: installing WasmDisposalNotifier");
     const ctor = capi.WasmDisposalNotifier;
     delete capi.WasmDisposalNotifier;
     const w = new ctor(
@@ -1044,35 +1043,32 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
          these callbacks are never passed NULL. */
       db: [], stmt: []
     });
+    /* Map type IDs to names to simplify $callback() below. */
+    util.disposers[1] = util.disposers.db;
+    util.disposers[2] = util.disposers.stmt;
     try {
       w.$callback = wasm.installFunction("v(ip)", (tid,ptr)=>{
         //sqlite3.config.debug("WasmDisposalNotifier:",tid,ptr);
-        let li;
-        if( 2===tid /* (sqlite3_stmt*) */ ){
-          /* oo1.Stmt.finalize() has some cleanup which could be hooked
-             into here. */
-          li = util.disposers.stmt;
-        }else if( 1===tid /* (sqlite3_db*) */ ){
-          /* What is currently in __dbCleanupMap, and part of
-             oo1.DB.close(), could be done here. */
-          li = util.disposers.db;
-        }else{
-          toss("Internal bug: invalid disposal type ID",tid);
-        }
+        const li = util.disposers[tid]
+              ?? toss("Internal bug: invalid disposal type ID",tid);
         for(const d of li){
-          try{d(ptr)}catch(e){
-            sqlite3.config.error("on-dispose handler type",tid,"threw:",e);
+          try{d(ptr)}
+          catch(e){
+            sqlite3.config.error("on-dispose handler type",
+                                 tid,"threw:",e);
           }
         }
       });
+      /* The irony that we permanently leak a function which is itself
+         responsible for cleanup is not lost on us. */
     }finally{
       w.dispose(/*only needed for the $callback assignment*/);
     }
     if( 0 ){
       util.disposers.stmt.push((p)=>sqlite3.config.warn("disposing stmt",p));
+      util.disposers.db.push((p)=>sqlite3.config.warn("disposing db",p));
     }
   }
-//#/if
 
   /**
      Internal helper to assist in validating call argument counts in
