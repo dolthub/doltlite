@@ -1,5 +1,5 @@
-C Add\sa\sthe\sSQLITE_DISPOSAL_NOTIFIER\sinternal-use\shook\sto\salert\scallers\swhen\scertain\sobjects\sare\sfinalized.\sThis\sallows\sthe\sWASM\sbuilds\sto\sbetter\sclean\sup\sassociated\sJS-side\sstate.\se.g.\spassing\san\soo1.DB\sinstance\sto\ssqlite3_close_v2()\sis\snow\swell-behaved,\sdisconnecting\sany\soo1.DB\sinstances\swhich\sshare\sthat\spointer\sand\sany\sDB.Stmt\sobjects\sstill\sopened\sby\sthose.
-D 2026-10-31T20:26:35.217
+C Add\sSQLITE_DISPOSAL_NOTIFIER\scall\sfor\ssqlite3_context.\sExperimentally\suse\sthat\sto\sprovide\ssane\slifetime\smappings\sfor\ssqlite3_set_auxdata()\sdtor\sconversions.\sThat\sseems\sto\swork\sfine,\swith\spredictable\scost,\sbut\sis\scurrently\sdisabled\sbecause\sit\sneeds\smuch\smore\stesting.
+D 2026-10-31T21:57:59.807
 F .fossil-settings/binary-glob 61195414528fb3ea9693577e1980230d78a1f8b0a54c78cf1b9b24d0a409ed6a x
 F .fossil-settings/empty-dirs dbb81e8fc0401ac46a1491ab34a7f2c7c0452f2f06b54ebb845d024ca8283ef1
 F .fossil-settings/ignore-glob 35175cdfcf539b2318cb04a9901442804be81cd677d8b889fcc9149c21f239ea
@@ -668,7 +668,7 @@ F ext/wasm/api/opfs-common-shared.c-pp.js da5f7d4083ec20c28faa02d29228ed2a73a41d
 F ext/wasm/api/post-js-footer.js 066a29f612099413367bf9b098b747968e91abf66f033856b2dbdd943f383bb2
 F ext/wasm/api/post-js-header.js 7b8c9361cce83318a471295f58e7b10bd87291fa754de465085dd15ff77375a1
 F ext/wasm/api/pre-js.c-pp.js 10029d9f9ae3141a4f2193937bc0f7d4cec41ea1b2e7310380e8ca76fb61b01f
-F ext/wasm/api/sqlite3-api-glue.c-pp.js 4a037f7c686a3ef3df7f860ce7b917edf499870103bfc1ff6be83d7f2eee69bc
+F ext/wasm/api/sqlite3-api-glue.c-pp.js 8a93429519a41d12f4069c4429ca917067502123df8bc0ad9225ec0ea8884f03
 F ext/wasm/api/sqlite3-api-oo1.c-pp.js 636574d98a79ff01ac0def08bfe54c782304c3f9421985e4f96efaf8717d9720
 F ext/wasm/api/sqlite3-api-prologue.c-pp.js bbdf93805a34e78e23a4a3c192858f496e3baf19eef74e160970a3aedfc2c564
 F ext/wasm/api/sqlite3-api-worker1.c-pp.js f3e97f66b138331c1122bebba2102194453fc04dcafe113aac12edc1aa43edd6
@@ -680,13 +680,13 @@ F ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js 6653f3d73f6bf5cc3564d0b28f5b2c3a
 F ext/wasm/api/sqlite3-vfs-opfs-wl.c-pp.js e423549c0e0d3c1f4527487809cab2bc7a3c95ff9f42cb0e544e5744d582ead3
 F ext/wasm/api/sqlite3-vfs-opfs.c-pp.js c554f6ce5f79a362d4ea31ced5983f4f044141e8d4c64c55a17452c4a3d33379
 F ext/wasm/api/sqlite3-vtab-helper.c-pp.js 094a01171d1ddea9d408fc49aedbe6b42654536ff1cb7c2af856f4b364c00452
-F ext/wasm/api/sqlite3-wasm.c 0234737ede99ba5567a3168fb44a33c82ea77f3ef562ff5b7a61843b44fcc916
+F ext/wasm/api/sqlite3-wasm.c 873d42ea0dcc7d3e66643c3f6b5bc85b3e66ef8548a3b1d5afb672f8e516a072
 F ext/wasm/api/sqlite3-worker1-promiser.c-pp.js 46b02d5b10412f624d71b4573eccd5adfa5e7709eb9425242977fa8ceeba88d0
 F ext/wasm/api/sqlite3-worker1.c-pp.js d274d5eb7f43f4f3b35a4d1f9213a1e34aa5ae27df7af9e74df9f89a50ee7bda
 F ext/wasm/common/SqliteTestUtil.js dae753b95e72248c4395d8de8359e0d055cd9928488e8dd84aef89e46d23b32e
 F ext/wasm/common/emscripten.css 11bd104b6c0d597c67d40cc8ecc0a60dae2b965151e3b6a37fa5708bac3acd15
 F ext/wasm/common/testing.css e97549bab24126c24e0daabfe2de9bb478fb0a69fdb2ddd0a73a992c091aad6f
-F ext/wasm/common/whwasmutil.c-pp.js 99079be5108c83102063e4e036eaa18a6b1381d7109705b7d889f1bbed45b6c3
+F ext/wasm/common/whwasmutil.c-pp.js 25481fd7a700f22dcda173ac72294f37c691a771d2201d642d5d5939237e6f0a
 F ext/wasm/config.make.in c424ae1cc3c89274520ad312509d36c4daa34a3fce5d0c688e5f8f4365e1049a
 F ext/wasm/demo-123-worker.html a0b58d9caef098a626a1a1db567076fca4245e8d60ba94557ede8684350a81ed
 F ext/wasm/demo-123.html 8c70a412ce386bd3796534257935eb1e3ea5c581e5d5aea0490b8232e570a508
@@ -722,7 +722,7 @@ F ext/wasm/sql/001-sudoku.sql 35b7cb7239ba5d5f193bc05ec379bcf66891bce6f2a5b3879f
 F ext/wasm/test-opfs-vfs.html 1f2d672f3f3fce810dfd48a8d56914aba22e45c6834e262555e685bce3da8c3f
 F ext/wasm/tester1-worker.c-pp.html 915eab80d94682eef20851761bb845b60107a937b16eb2a74b98129a2d9e9499
 F ext/wasm/tester1.c-pp.html ef13dd266d4aa7dae0f27f4448978e571bddb0c7e058d108328438feef226ae9
-F ext/wasm/tester1.c-pp.js 32c4ef2a0b4d6bef8ec138c5d78cc2401bac4b3f355bda2be1dcc6ae6290517f
+F ext/wasm/tester1.c-pp.js bf8ba5b5784fedf9c39d638301c998104ea949771556492213226e3df250b656
 F ext/wasm/tests/opfs/concurrency/index.html 706eab6308343c04ac2360aba6001af4ffaf46d8f33a0ccd02c64d93e3216a43
 F ext/wasm/tests/opfs/concurrency/test.js 6919778fceaac1b7cc78caf41d796f545d2c4433b31188aa9689f05b5ad28828
 F ext/wasm/tests/opfs/concurrency/worker.js 704d82c5e287e47f612349e027765943a58ad967dcf178fb5a1c3a8eaafb09af
@@ -881,7 +881,7 @@ F src/vdbe.c 64a8f8022da412ad01c40123d0c0d095bc1f3611a96ce76eef03db77f7ab4047
 F src/vdbe.h b6ffb28da04363fd5d439b8204118fd3f2e751abe4f8e3edb089155fb90d4607
 F src/vdbeInt.h 581b112c6a763a5871ae1d2b948c5288e749d03c7e3829ebce2738402fe21074
 F src/vdbeapi.c 1602b12cae241e086779290985c67f0c843a534cc75bb9eceb4ffa6afd850516
-F src/vdbeaux.c cbad8dab232c7085220b75a80ec9073bb79797b683de991b0b4a3a8130d2409f
+F src/vdbeaux.c e19627f6f26a27eaf73b9ff218e11ec6ea8a5df37ea1113729e0f436d00584d5
 F src/vdbeblob.c b3f0640db9642fbdc88bd6ebcc83d6009514cafc98f062f675f2c8d505d82692
 F src/vdbemem.c 29f9bf1f900c85415182e7f97cfcee296742297b3f93113927f3767eeedd8df2
 F src/vdbesort.c a72ad2a629df2901fde4aa588e38590d0aa27b7d5bc3b2a416e5f295de839cc1
@@ -2304,9 +2304,8 @@ F tool/warnings-clang.sh bbf6a1e685e534c92ec2bfba5b1745f34fb6f0bc2a362850723a9ee
 F tool/warnings.sh a554d13f6e5cf3760f041b87939e3d616ec6961859c3245e8ef701d1eafc2ca2
 F tool/win/sqlite.vsix deb315d026cc8400325c5863eef847784a219a2f
 F tool/winmain.c 00c8fb88e365c9017db14c73d3c78af62194d9644feaf60e220ab0f411f3604c
-P f7a9970ec19bb82a7c28c5e5ea21662e9db3880e52c825bf7d33b1f9fd116213 cd96471ae064b9f7bf1e2ce315a46525c9159c0773abe86a0ed35ca718614340
-R aa87ccc8d4de6a9827ea8d22826d9473
-T +closed cd96471ae064b9f7bf1e2ce315a46525c9159c0773abe86a0ed35ca718614340 Closed\sby\sintegrate-merge.
+P 055fdd470984d4f0d2170e533522802f2a85ee1baf729b1b98c84c69cd37645b
+R 29a9ea9eb6e69da777356f388a1c64ab
 U stephan
-Z 7d3724a96d34305ca63ae1a67ffae237
+Z 25e13ed2df4adfc9241df663a9c6b30c
 # Remove this line to create a well-formed Fossil manifest.

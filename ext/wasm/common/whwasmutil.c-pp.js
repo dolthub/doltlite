@@ -2298,7 +2298,8 @@ function WhWasmUtilInstaller(target){
         */
         let i = 0;
         if( callee.debug ){
-          console.debug("xWrap() preparing: resultType ",resultType, 'xf',xf,"argTypes",argTypes,"args",args);
+          console.debug("xWrap() preparing: resultType ",resultType,
+                        'xf',xf,"argTypes",argTypes,"args",args);
         }
         for(; i < args.length; ++i) args[i] = cxw.convertArgNoCheck(
           argTypes[i], args[i], args, i

@@ -273,9 +273,8 @@ SQLITE_WASM_EXPORT2(WasmDisposalNotifier *,
 **
 ** where T is a literal integer and P is the ptr being disposed of.
 **
-** T specifies the type of P: 1==sqlite3*, 2==sqlite3_stmt*
-**
-** TODO is T 3==sqlite3_context*.
+** T specifies the type of P: 1==sqlite3*, 2==sqlite3_stmt*,
+** 3==sqlite3_context*
 **
 ** Because this happens during finalization, code must be careful
 ** about how it uses P. e.g. a finalizing database must not be
