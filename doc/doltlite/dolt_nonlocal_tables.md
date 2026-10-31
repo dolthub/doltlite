@@ -56,6 +56,8 @@ rule applies on the branch whose working set holds it.
 | `CREATE TABLE` of a claimed name, other than the rule's own backing table on its target branch | `Cannot create table name <name> because it matches a name present in dolt_nonlocal_tables.` |
 | Reading a table whose rule has another `options` value | `Invalid nonlocal table options <options>: only valid value is 'immediate'.` |
 | Writing a table whose target is a tag or commit | `attempt to write a readonly database` |
+| Reading or writing a table whose target ref does not exist, including one deleted or renamed since the rule was written | `branch not found: <ref>` |
+| Deleting or renaming a target branch this transaction has written | `branch '<branch>' is attached in this connection` |
 
 `CREATE TABLE IF NOT EXISTS` of a claimed name that already resolves is a
 no-op, as in Dolt.
@@ -66,8 +68,6 @@ no-op, as in Dolt.
   lists them in `SHOW TABLES`, but not in `sqlite_master`.
 - `dolt_commit_all` and `@@dolt_multi_branch_commit` are not implemented, so
   commit each branch's working set from that branch.
-- A branch that a rule targets cannot be deleted or renamed while this
-  connection has it attached.
 
 ## See also
 

@@ -30,6 +30,9 @@ struct DoltliteNonlocal {
   int bStale;
   NonlocalAttach *aAttach;
   int nAttach;
+  char **azMissing;
+  int nMissing;
+  ProllyHash refsSeen;
   u8 bSyncing;
 };
 
@@ -49,10 +52,27 @@ static void nonlocalRulesClear(DoltliteNonlocal *p){
   p->bLoaded = 0;
 }
 
+static void nonlocalMissingClear(DoltliteNonlocal *p){
+  int i;
+  for(i=0; i<p->nMissing; i++) sqlite3_free(p->azMissing[i]);
+  sqlite3_free(p->azMissing);
+  p->azMissing = 0;
+  p->nMissing = 0;
+}
+
+static int nonlocalIsMissing(DoltliteNonlocal *p, const char *zRef){
+  int i;
+  for(i=0; i<p->nMissing; i++){
+    if( strcmp(p->azMissing[i], zRef)==0 ) return 1;
+  }
+  return 0;
+}
+
 void doltliteNonlocalFree(DoltliteNonlocal *p){
   int i;
   if( !p ) return;
   nonlocalRulesClear(p);
+  nonlocalMissingClear(p);
   for(i=0; i<p->nAttach; i++){
     sqlite3_free(p->aAttach[i].zRef);
     sqlite3_free(p->aAttach[i].zSchema);
@@ -219,7 +239,8 @@ static void nonlocalDetachUnused(sqlite3 *db, DoltliteNonlocal *p){
     NonlocalAttach *a = &p->aAttach[i];
     int iDb = sqlite3FindDbName(db, a->zSchema);
     int bKeep = nonlocalNeedsRef(p, a->zRef)
-             && strcmp(a->zRef, p->zBranch)!=0;
+             && strcmp(a->zRef, p->zBranch)!=0
+             && !nonlocalIsMissing(p, a->zRef);
     if( iDb>=0 && !bKeep ){
       char *zSql;
       if( db->nVdbeActive>0
@@ -246,17 +267,44 @@ static void nonlocalDetachUnused(sqlite3 *db, DoltliteNonlocal *p){
   }
 }
 
+static int nonlocalCheckRefs(sqlite3 *db, DoltliteNonlocal *p){
+  int i;
+  nonlocalMissingClear(p);
+  for(i=0; i<p->nRule; i++){
+    const char *zRef = nonlocalRuleRef(p, &p->aRule[i]);
+    ProllyHash h;
+    char **az;
+    int rc;
+    if( strcmp(zRef, p->zBranch)==0 || nonlocalIsMissing(p, zRef) ) continue;
+    rc = doltliteResolveRef(db, zRef, &h);
+    if( rc==SQLITE_NOMEM ) return rc;
+    if( rc==SQLITE_OK ) continue;
+    az = sqlite3_realloc64(p->azMissing, sizeof(*az)*(p->nMissing+1));
+    if( !az ) return SQLITE_NOMEM;
+    p->azMissing = az;
+    az[p->nMissing] = sqlite3_mprintf("%s", zRef);
+    if( !az[p->nMissing] ) return SQLITE_NOMEM;
+    p->nMissing++;
+  }
+  return SQLITE_OK;
+}
+
 /* Around a top-level statement's compile: reload the rules when the
-** rules table changed, and attach each ref a rule targets. Returns
-** nonzero when the redirects changed, so a statement compiled before
-** should compile again. A failure here leaves names unredirected; the
-** statement reports what it cannot resolve. */
+** rules table changed, check the refs they target when the refs moved,
+** and attach each target that resolves. Returns nonzero when the
+** redirects changed, so a statement compiled before should compile
+** again. A failure here leaves names unredirected; the statement reports
+** what it cannot resolve. */
 int doltliteNonlocalSync(sqlite3 *db){
   DoltliteNonlocal *p;
   Table *pTab;
+  ChunkStore *cs;
   ProllyHash stamp;
+  const ProllyHash *pRefs;
   int bPending = 0;
+  int bReload;
   int nAttach;
+  int nMissing;
   int i;
 
   if( db->nVdbeExec>0 || db->nDb<1 || !doltliteNonlocalSlot(db) ) return 0;
@@ -268,6 +316,7 @@ int doltliteNonlocalSync(sqlite3 *db){
     if( p && (p->nRule>0 || p->nAttach>0) ){
       p->bSyncing = 1;
       nonlocalRulesClear(p);
+      nonlocalMissingClear(p);
       nonlocalDetachUnused(db, p);
       p->bSyncing = 0;
       return 1;
@@ -278,29 +327,42 @@ int doltliteNonlocalSync(sqlite3 *db){
       !=SQLITE_OK ){
     return 0;
   }
+  cs = doltliteGetChunkStore(db);
+  if( !cs ) return 0;
   if( !p ) p = nonlocalState(db, 1);
   if( !p ) return 0;
-  if( p->bLoaded && !p->bStale && !bPending
-   && prollyHashCompare(&p->stamp, &stamp)==0
-   && p->zBranch && strcmp(p->zBranch, doltliteGetSessionBranch(db))==0 ){
+  pRefs = refsTableGetHash(&cs->refs);
+  bReload = !p->bLoaded || p->bStale || bPending
+         || prollyHashCompare(&p->stamp, &stamp)!=0
+         || !p->zBranch || strcmp(p->zBranch, doltliteGetSessionBranch(db))!=0;
+  if( !bReload
+   && (p->nRule==0 || prollyHashCompare(&p->refsSeen, pRefs)==0) ){
     return 0;
   }
   p->bSyncing = 1;
   nAttach = db->nDb;
-  if( nonlocalLoadRules(db, p)==SQLITE_OK ){
-    p->stamp = stamp;
-    for(i=0; i<p->nRule; i++){
-      const char *zRef = nonlocalRuleRef(p, &p->aRule[i]);
-      if( strcmp(zRef, p->zBranch)==0 || nonlocalSchemaFor(db, p, zRef) ){
-        continue;
+  nMissing = p->nMissing;
+  if( !bReload || nonlocalLoadRules(db, p)==SQLITE_OK ){
+    if( bReload ){
+      p->stamp = stamp;
+      p->bStale = bPending;
+    }
+    p->refsSeen = *pRefs;
+    if( nonlocalCheckRefs(db, p)==SQLITE_OK ){
+      for(i=0; i<p->nRule; i++){
+        const char *zRef = nonlocalRuleRef(p, &p->aRule[i]);
+        if( strcmp(zRef, p->zBranch)==0 || nonlocalIsMissing(p, zRef)
+         || nonlocalSchemaFor(db, p, zRef) ){
+          continue;
+        }
+        (void)nonlocalAttach(db, p, zRef);
       }
-      (void)nonlocalAttach(db, p, zRef);
     }
     nonlocalDetachUnused(db, p);
-    p->bStale = bPending;
   }
   p->bSyncing = 0;
-  return !bPending || db->nDb!=nAttach;
+  if( bReload ) return !bPending || db->nDb!=nAttach;
+  return db->nDb!=nAttach || nMissing!=0 || p->nMissing!=0;
 }
 
 static void nonlocalListName(
@@ -388,6 +450,10 @@ int doltliteNonlocalResolve(
     return -1;
   }
   zRef = nonlocalRuleRef(p, r);
+  if( nonlocalIsMissing(p, zRef) ){
+    sqlite3ErrorMsg(pParse, "branch not found: %s", zRef);
+    return -1;
+  }
   if( strcmp(zRef, p->zBranch)==0 ){
     zSchema = "main";
   }else{

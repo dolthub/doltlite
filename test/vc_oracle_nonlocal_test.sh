@@ -183,6 +183,29 @@ SELECT CONCAT('R|main-status|', table_name, '|', staged, '|', status) FROM dolt_
 "
 done
 
+oracle "nonlocal_target_branch_deleted_renamed" "
+CREATE TABLE users (id INT PRIMARY KEY);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('shared');
+SELECT dolt_branch('shared2');
+SELECT dolt_checkout('-b', 'other');
+INSERT INTO dolt_nonlocal_tables VALUES
+  ('users', 'shared', '', 'immediate'),
+  ('u2', 'shared2', 'users', 'immediate');
+SELECT dolt_commit('-Am', 'rules');
+INSERT INTO users VALUES (1);
+SELECT CONCAT('R|users|', count(*)) FROM users;
+SELECT CONCAT('R|u2|', count(*)) FROM u2;
+SELECT dolt_branch('-D', 'shared');
+SELECT CONCAT('R|after-delete|', count(*)) FROM users;
+INSERT INTO users VALUES (2);
+SELECT dolt_branch('-m', 'shared2', 'renamed');
+SELECT CONCAT('R|after-rename|', count(*)) FROM u2;
+SELECT CONCAT('R|br|', name) FROM dolt_branches ORDER BY name;
+SELECT dolt_branch('shared');
+SELECT CONCAT('R|recreated|', count(*)) FROM users;
+"
+
 tables_oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"

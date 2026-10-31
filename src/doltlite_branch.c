@@ -45,7 +45,7 @@ static int branchHeldBySibling(
   const char *zName
 ){
   char *zMsg;
-  if( !doltliteStoreSiblingBranch(sqlite3_context_db_handle(ctx), zName, 0) ){
+  if( !doltliteStoreSiblingBranch(sqlite3_context_db_handle(ctx), zName, 1) ){
     return 0;
   }
   zMsg = sqlite3_mprintf("branch '%s' is attached in this connection", zName);
