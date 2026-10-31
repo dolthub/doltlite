@@ -450,4 +450,17 @@ PRAGMA foreign_keys=ON;" \
   done
 done
 
+echo "--- table not yet in HEAD exposes its per-table violations ---"
+run_oracle "uncommitted_table_per_table_vtab" \
+"CREATE TABLE p(pk INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','base');
+CREATE TABLE c(pk INTEGER PRIMARY KEY, pid INT REFERENCES p(pk));
+PRAGMA foreign_keys=OFF;
+INSERT INTO c VALUES(1,9);
+PRAGMA foreign_keys=ON;" \
+"'--all'" \
+"SELECT CONCAT('R|row=',pk,':',pid) FROM dolt_constraint_violations_c;
+DELETE FROM dolt_constraint_violations_c;
+SELECT CONCAT('R|after-delete=',count(*)) FROM dolt_constraint_violations;" 0
+
 vc_oracle_finish
