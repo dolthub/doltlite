@@ -64,6 +64,45 @@ static int dumpVirtual(const SchemaEntry *e){
   return e->zSql && sqlite3_strnicmp(e->zSql, "CREATE VIRTUAL TABLE", 20)==0;
 }
 
+static const char *dumpToken(const char *z, int *type, int *length){
+  do{
+    *length = sqlite3GetToken((const u8*)z,type);
+    if( *type!=TK_SPACE ) return z;
+    z += *length;
+  }while( *z );
+  *length = 0;
+  return z;
+}
+
+static char *dumpMainSql(const SchemaEntry *e){
+  const char *z = e->zSql, *name;
+  int type = 0, n = 0, kind;
+  if( !strcmp(e->zType,"table") ) kind = TK_TABLE;
+  else if( !strcmp(e->zType,"index") ) kind = TK_INDEX;
+  else if( !strcmp(e->zType,"view") ) kind = TK_VIEW;
+  else if( !strcmp(e->zType,"trigger") ) kind = TK_TRIGGER;
+  else return sqlite3_mprintf("%s",z);
+  do{
+    z = dumpToken(z,&type,&n);
+    z += n;
+  }while( n && type!=kind );
+  if( !n ) return 0;
+  name = dumpToken(z,&type,&n);
+  if( type==TK_IF ){
+    do{
+      z = dumpToken(name+n,&type,&n);
+      name = z;
+    }while( n && type!=TK_EXISTS );
+    name = dumpToken(name+n,&type,&n);
+  }
+  if( !n ) return 0;
+  dumpToken(name+n,&type,&kind);
+  if( type==TK_DOT ){
+    return sqlite3_mprintf("%.*smain%s",(int)(name-e->zSql),e->zSql,name+n);
+  }
+  return sqlite3_mprintf("%.*smain.%s",(int)(name-e->zSql),e->zSql,name);
+}
+
 static int dumpCreate(DlDump *p, SchemaEntry *e){
   Table *t;
   int rc = dumpExec(p, e->zName, e->zSql);
@@ -175,15 +214,17 @@ static int dumpTable(DlDump *p, const char *zName){
       }
     }
   }
-  if( rc==SQLITE_OK ) rc = sqlite3_prepare_v2(p->out,
-      "SELECT name FROM pragma_table_xinfo(?1) WHERE hidden=0 ORDER BY cid",
-      -1,&cols,0);
-  if( rc==SQLITE_OK ) rc = sqlite3_bind_text(cols,1,zName,-1,SQLITE_STATIC);
+  if( rc==SQLITE_OK ){
+    char *pragma = sqlite3_mprintf("PRAGMA main.table_xinfo(%Q)",zName);
+    rc = pragma ? sqlite3_prepare_v2(p->out,pragma,-1,&cols,0) : SQLITE_NOMEM;
+    sqlite3_free(pragma);
+  }
   while( rc==SQLITE_OK && sqlite3_step(cols)==SQLITE_ROW ){
+    if( sqlite3_column_int(cols,6)!=0 ) continue;
     sqlite3_str_appendf(names,"%s\"%w\"",nCol ? "," : "",
-        sqlite3_column_text(cols,0));
+        sqlite3_column_text(cols,1));
     sqlite3_str_appendf(readNames,"%ssrc.\"%w\"",nCol ? "," : "",
-        sqlite3_column_text(cols,0));
+        sqlite3_column_text(cols,1));
     sqlite3_str_appendf(params,"%s?",nCol ? "," : "");
     nCol++;
   }
@@ -196,7 +237,7 @@ static int dumpTable(DlDump *p, const char *zName){
   if( rc==SQLITE_OK ){
     if( p->working ) zRead = sqlite3_mprintf("SELECT %s FROM main.\"%w\" AS src",zReadNames,zName);
     else zRead = sqlite3_mprintf("SELECT %s FROM \"dolt_at_%w\"(%Q) AS src",zReadNames,zName,p->zRef);
-    zInsert = sqlite3_mprintf("INSERT INTO \"%w\"(%s) VALUES(%s)",zName,zNames,zParams);
+    zInsert = sqlite3_mprintf("INSERT INTO main.\"%w\"(%s) VALUES(%s)",zName,zNames,zParams);
     if( !zRead || !zInsert ) rc = SQLITE_NOMEM;
   }
   if( rc==SQLITE_OK ) rc = sqlite3_prepare_v2(p->db,zRead,-1,&read,0);
@@ -204,7 +245,7 @@ static int dumpTable(DlDump *p, const char *zName){
     dumpError(p,rc,zName,sqlite3_errmsg(p->db));
     goto table_done;
   }
-  if( !p->xWrite ) rc = sqlite3_prepare_v2(p->out,zInsert,-1,&insert,0);
+  rc = sqlite3_prepare_v2(p->out,zInsert,-1,&insert,0);
   while( rc==SQLITE_OK ){
     int step = sqlite3_step(read);
     if( step==SQLITE_DONE ) break;
@@ -212,8 +253,15 @@ static int dumpTable(DlDump *p, const char *zName){
       rc = dumpError(p,step,zName,sqlite3_errmsg(p->db));
       break;
     }
-    if( p->xWrite ){
-      char *prefix = sqlite3_mprintf("INSERT INTO \"%w\"(%s) VALUES(",zName,zNames);
+    for(i=0; i<nCol && rc==SQLITE_OK; i++){
+      rc = sqlite3_bind_value(insert,i+1,sqlite3_column_value(read,i));
+    }
+    if( rc==SQLITE_OK ) rc = sqlite3_step(insert);
+    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) dumpError(p,rc,zName,sqlite3_errmsg(p->out));
+    sqlite3_reset(insert);
+    if( rc==SQLITE_OK && p->xWrite ){
+      char *prefix = sqlite3_mprintf("INSERT INTO main.\"%w\"(%s) VALUES(",zName,zNames);
       rc = dumpWrite(p,prefix);
       sqlite3_free(prefix);
       for(i=0; i<nCol && rc==SQLITE_OK; i++){
@@ -221,14 +269,6 @@ static int dumpTable(DlDump *p, const char *zName){
         if( rc==SQLITE_OK ) rc = dumpValue(p,read,i);
       }
       if( rc==SQLITE_OK ) rc = dumpWrite(p,");\n");
-    }else{
-      for(i=0; i<nCol && rc==SQLITE_OK; i++){
-        rc = sqlite3_bind_value(insert,i+1,sqlite3_column_value(read,i));
-      }
-      if( rc==SQLITE_OK ) rc = sqlite3_step(insert);
-      if( rc==SQLITE_DONE ) rc = SQLITE_OK;
-      if( rc!=SQLITE_OK ) dumpError(p,rc,zName,sqlite3_errmsg(p->out));
-      sqlite3_reset(insert);
     }
   }
 table_done:
@@ -280,7 +320,7 @@ static int dumpValidate(DlDump *p){
     if( !table ) continue;
     if( IsView(table) ){
       sqlite3_stmt *q = 0;
-      char *sql = sqlite3_mprintf("SELECT * FROM \"%w\" LIMIT 0",e->zName);
+      char *sql = sqlite3_mprintf("SELECT * FROM main.\"%w\" LIMIT 0",e->zName);
       if( !sql ) return SQLITE_NOMEM;
       rc = sqlite3_prepare_v2(p->out,sql,-1,&q,0);
       sqlite3_free(sql);
@@ -291,12 +331,12 @@ static int dumpValidate(DlDump *p){
       sqlite3_stmt *q = 0;
       char *sql;
       if( trigger->op==TK_INSERT ){
-        sqlite3_str_appendf(text,"EXPLAIN INSERT INTO \"%w\" DEFAULT VALUES",e->zName);
+        sqlite3_str_appendf(text,"EXPLAIN INSERT INTO main.\"%w\" DEFAULT VALUES",e->zName);
       }else if( trigger->op==TK_DELETE ){
-        sqlite3_str_appendf(text,"EXPLAIN DELETE FROM \"%w\"",e->zName);
+        sqlite3_str_appendf(text,"EXPLAIN DELETE FROM main.\"%w\"",e->zName);
       }else{
         int j, n = 0;
-        sqlite3_str_appendf(text,"EXPLAIN UPDATE \"%w\" SET ",e->zName);
+        sqlite3_str_appendf(text,"EXPLAIN UPDATE main.\"%w\" SET ",e->zName);
         for(j=0; j<table->nCol; j++){
           if( table->aCol[j].colFlags & COLFLAG_GENERATED ) continue;
           sqlite3_str_appendf(text,"%s\"%w\"=\"%w\"",n++ ? "," : "",
@@ -386,14 +426,13 @@ static int dumpRun(DlDump *p){
   if( rc==SQLITE_OK ) rc = dumpCheckBindings(p);
   if( rc!=SQLITE_OK ) goto dump_done;
   if( !p->out ){
-    rc = sqlite3_open_v2("file::memory:?doltlite_engine=sqlite",&p->out,
-        SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_URI,0);
+    rc = sqlite3_open_v2("",&p->out,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE,0);
   }else if( !sqlite3BtreeUsesOrig(p->out->aDb[0].pBt) || !p->out->autoCommit ){
     rc = dumpError(p,SQLITE_MISUSE,0,
         "destination must be an ordinary SQLite connection outside a transaction");
   }else{
     sqlite3_stmt *q = 0;
-    rc = sqlite3_prepare_v2(p->out,"SELECT count(*) FROM sqlite_schema",-1,&q,0);
+    rc = sqlite3_prepare_v2(p->out,"SELECT count(*) FROM main.sqlite_schema",-1,&q,0);
     if( rc==SQLITE_OK ){
       int step = sqlite3_step(q);
       if( step!=SQLITE_ROW ) rc = step;
@@ -415,6 +454,17 @@ static int dumpRun(DlDump *p){
   rc = sqlite3_set_authorizer(p->out,dumpAuthorize,&auth);
   haveAuth = rc==SQLITE_OK;
 #endif
+  for(i=0; i<p->nSchema && rc==SQLITE_OK; i++){
+    SchemaEntry *e = &p->aSchema[i];
+    char *sql;
+    if( !e->zSql || !e->zSql[0] ) continue;
+    sql = dumpMainSql(e);
+    if( !sql ) rc = SQLITE_NOMEM;
+    else{
+      sqlite3_free(e->zSql);
+      e->zSql = sql;
+    }
+  }
   if( rc==SQLITE_OK ) rc = dumpSchema(p);
   if( rc!=SQLITE_OK ) goto dump_done;
   rc = dumpWrite(p,"PRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\n");
@@ -429,7 +479,7 @@ static int dumpRun(DlDump *p){
       t = sqlite3FindTable(p->out,e->zName,"main");
       if( !t ) { rc = SQLITE_CORRUPT; break; }
       if( (t->tabFlags & TF_Shadow)!=0 ){
-        z = sqlite3_mprintf("DELETE FROM \"%w\";\n",e->zName);
+        z = sqlite3_mprintf("DELETE FROM main.\"%w\";\n",e->zName);
         if( z ) rc = dumpExec(p,e->zName,z);
       }else z = sqlite3_mprintf("%s;\n",e->zSql);
       if( rc==SQLITE_OK ) rc = dumpWrite(p,z);
@@ -448,16 +498,16 @@ static int dumpRun(DlDump *p){
           name = sqlite3_mprintf("doltlite_export_sequence_%d",suffix++);
         }while( name && (sqlite3FindTable(p->out,name,"main")
                        || sqlite3FindIndex(p->out,name,"main")) );
-        sql = name ? sqlite3_mprintf("CREATE TABLE \"%w\"(id INTEGER PRIMARY KEY AUTOINCREMENT);\n"
-                                    "DROP TABLE \"%w\";\n",name,name) : 0;
+        sql = name ? sqlite3_mprintf("CREATE TABLE main.\"%w\"(id INTEGER PRIMARY KEY AUTOINCREMENT);\n"
+                                    "DROP TABLE main.\"%w\";\n",name,name) : 0;
         sqlite3_free(name);
         if( !sql ) rc = SQLITE_NOMEM;
         else rc = dumpExec(p,"sqlite_sequence",sql);
         if( rc==SQLITE_OK ) rc = dumpWrite(p,sql);
         sqlite3_free(sql);
       }
-      if( rc==SQLITE_OK ) rc = dumpExec(p,"sqlite_sequence","DELETE FROM sqlite_sequence");
-      if( rc==SQLITE_OK ) rc = dumpWrite(p,"DELETE FROM sqlite_sequence;\n");
+      if( rc==SQLITE_OK ) rc = dumpExec(p,"sqlite_sequence","DELETE FROM main.sqlite_sequence");
+      if( rc==SQLITE_OK ) rc = dumpWrite(p,"DELETE FROM main.sqlite_sequence;\n");
       if( rc==SQLITE_OK ) rc = dumpTable(p,"sqlite_sequence");
     }
   }
