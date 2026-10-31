@@ -130,6 +130,11 @@ esac
   "${probe_libs[@]}" -o "$chunk_source_off_probe"
 "$chunk_source_off_probe" "$tmp/lazy-off.db"
 
+dump_probe="$tmp/amalg_dump_probe"
+"$cc_bin" -Wno-comment -I. ../test/amalgamation_dump_probe.c \
+  ./sqlite3.c "${probe_libs[@]}" -o "$dump_probe"
+"$dump_probe" "$tmp/export"
+
 if nm "$offline_probe" | grep -Eq \
     'doltlite(HttpRemoteOpen|CredsGenerate|TlsClientNew)|mbedtls_ssl_tls13'; then
   echo "FAIL: networking implementation present in remotes-disabled amalgamation"

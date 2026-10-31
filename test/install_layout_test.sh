@@ -92,14 +92,27 @@ cat >"$TMP/probe.c" <<'EOF'
 #include <doltlite.h>
 #include <doltlite_remotesrv.h>
 #include <stdio.h>
+static int discard(void *ctx, const void *data, int n){
+  *(int*)ctx += n;
+  return SQLITE_OK;
+}
 int main(void){
-  sqlite3 *db = 0; sqlite3_stmt *st = 0;
+  sqlite3 *db = 0, *out = 0; sqlite3_stmt *st = 0;
+  int bytes = 0;
   doltlite_chunk_source source = {0};
   DoltliteServer *srv;
   if( sqlite3_open(":memory:", &db)!=SQLITE_OK ) return 1;
   if( doltlite_set_chunk_source(db, "main", 0)!=SQLITE_OK ) return 5;
   if( doltlite_init_lazy(db, 0, 0)!=SQLITE_MISUSE ) return 6;
   source.iVersion = 1;
+  if( sqlite3_exec(db,"CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(7)",0,0,0)!=SQLITE_OK ) return 7;
+  if( doltlite_dump_sql(db,0,discard,&bytes,0)!=SQLITE_OK || bytes==0 ) return 8;
+  if( sqlite3_open_v2("file::memory:?doltlite_engine=sqlite",&out,
+      SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_URI,0)!=SQLITE_OK ) return 9;
+  if( doltlite_export_sqlite(db,0,out,0)!=SQLITE_OK ) return 10;
+  if( sqlite3_prepare_v2(out,"SELECT id FROM t",-1,&st,0)!=SQLITE_OK ) return 11;
+  if( sqlite3_step(st)!=SQLITE_ROW || sqlite3_column_int(st,0)!=7 ) return 12;
+  sqlite3_finalize(st); sqlite3_close(out);
   if( sqlite3_prepare_v2(db, "SELECT doltlite_engine()", -1, &st, 0)!=SQLITE_OK ) return 2;
   if( sqlite3_step(st)!=SQLITE_ROW ) return 3;
   printf("%s\n", sqlite3_column_text(st, 0));

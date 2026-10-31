@@ -11289,6 +11289,28 @@ SQLITE_API int SQLITE_APICALL doltlite_init_lazy(
 );
 
 /*
+** CAPI3REF: Export a DoltLite snapshot
+**
+** NULL zRef selects WORKING, including changes visible to pSource. These
+** functions export the main database without changing its branch, staging,
+** SQL transaction or version-control state. Explicit refs select a snapshot.
+** SQL is delivered in UTF-8 chunks; xWrite returns SQLITE_OK or an error code.
+** On error the consumer must discard any SQL already delivered. Callbacks
+** must not re-enter pSource or pDestination. The destination connection must
+** be an empty ordinary SQLite main database outside a transaction and must
+** not be used concurrently. Failed SQLite exports roll back their changes.
+** pzError may be NULL; a returned error string is freed with sqlite3_free().
+*/
+SQLITE_API int SQLITE_APICALL doltlite_dump_sql(
+  sqlite3 *pSource, const char *zRef,
+  int (SQLITE_CALLBACK *xWrite)(void*, const void*, int),
+  void *pContext, char **pzError
+);
+SQLITE_API int SQLITE_APICALL doltlite_export_sqlite(
+  sqlite3 *pSource, const char *zRef, sqlite3 *pDestination, char **pzError
+);
+
+/*
 ** CAPI3REF: Serialize a database
 **
 ** The sqlite3_serialize(D,S,P,F) interface returns a pointer to

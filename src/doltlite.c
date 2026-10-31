@@ -30,6 +30,7 @@ int doltliteRegister(sqlite3 *db){
   if( (rc = doltliteRegisterBlameTables(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteSchemaDiffRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltlitePatchRegister(db))!=SQLITE_OK ) return rc;
+  if( (rc = doltliteDumpRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteSchemasRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteDiffStatRegister(db))!=SQLITE_OK ) return rc;
   if( (rc = doltliteRemoteSqlRegister(db))!=SQLITE_OK ) return rc;

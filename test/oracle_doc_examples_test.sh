@@ -101,6 +101,8 @@ substitute() {  # substitute <db>: rewrite doc placeholders into fixture values
       -e "s|/srv/authorized-keys|$TMPDIR/authorized-keys|g" \
       -e "s|/path/to/authorized-keys|$TMPDIR/authorized-keys|g" \
       -e "s|/path/compact.db|$TMPDIR/compact.db|g" \
+      -e "s|/path/to/export.sql|$db-export.sql|g" \
+      -e "s|/path/to/release.sqlite|$db-release.sqlite|g" \
       -e "s|file:///data/remote.db|file://$TMPDIR/remote.db|g" \
       -e "s|file:///data/src.db|file://$TMPDIR/remote.db|g" \
       -e "s|file:///path/to/remote.doltlite|file://$TMPDIR/remote.db|g" \

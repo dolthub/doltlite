@@ -1,0 +1,318 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach layout {"INTEGER PRIMARY KEY" "INT PRIMARY KEY" "INT PRIMARY KEY) WITHOUT ROWID; --"} {
+  reset_db
+  forcedelete dump-out.sql dump-out.sqlite
+  if {[string match {*WITHOUT*} $layout]} {
+    db eval {CREATE TABLE t(id INT PRIMARY KEY,v BLOB) WITHOUT ROWID}
+  } else {
+    db eval "CREATE TABLE t(id $layout,v BLOB)"
+  }
+  db eval {
+    CREATE INDEX tv ON t(v);
+    CREATE VIEW v AS SELECT * FROM t;
+    INSERT INTO t VALUES(1,'committed');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_tag('base');
+    UPDATE t SET v='staged';
+    SELECT dolt_add('t');
+    UPDATE t SET v='working';
+  }
+  set before [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  foreach ref {WORKING STAGED base} value {working staged committed} {
+    forcedelete dump-out.sqlite
+    do_test dump-$layout.$ref.result {
+      db one {SELECT dolt_dump('--file-name','dump-out.sqlite','--result-format','sqlite','--ref',$ref)}
+    } 0
+    sqlite3 out file:dump-out.sqlite?doltlite_engine=sqlite -uri 1
+    do_test dump-$layout.$ref.rows {out eval {SELECT * FROM v}} [list 1 $value]
+    do_test dump-$layout.$ref.format {out one {SELECT doltlite_engine()}} orig
+    do_test dump-$layout.$ref.integrity {out one {PRAGMA integrity_check}} ok
+    out close
+    do_test dump-$layout.$ref.source {
+      db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
+    } $before
+    do_test dump-$layout.$ref.overwrite {
+      lindex [catchsql {SELECT dolt_dump('--file-name','dump-out.sqlite','--result-format','sqlite')}] 0
+    } 1
+  }
+  do_test dump-$layout.sql {
+    db one {SELECT dolt_dump('--file-name','dump-out.sql')}
+  } 0
+  set sql {}
+  if {[file exists dump-out.sql]} {
+    set fd [open dump-out.sql rb]
+    set sql [read $fd]
+    close $fd
+  }
+  sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+  do_test dump-$layout.sql-replay {out eval $sql; out eval {SELECT * FROM v}} {1 working}
+  out close
+  do_test dump-$layout.no-temp {glob -nocomplain *-dump-*} {}
+}
+
+reset_db
+forcedelete dump-out.sqlite
+set before [db one {SELECT dolt_hashof('HEAD')}]
+foreach sql {
+  {SELECT dolt_dump()}
+  {SELECT dolt_dump('--file-name')}
+  {SELECT dolt_dump('--file-name','dump-out.sqlite','--result-format','csv')}
+  {SELECT dolt_dump('--file-name','dump-out.sqlite','--ref','missing')}
+  {SELECT dolt_dump('--file-name','dump-out.sqlite','extra')}
+} {
+  do_test dump-invalid-$sql {lindex [catchsql $sql] 0} 1
+}
+do_test dump-invalid.no-output {file exists dump-out.sqlite} 0
+do_test dump-invalid.head {db one {SELECT dolt_hashof('HEAD')}} $before
+
+foreach transaction {auto begin savepoint} {
+  reset_db
+  forcedelete dump-out.sqlite dump-out.sql
+  db eval {
+    PRAGMA user_version=17; PRAGMA application_id=1234;
+    CREATE TABLE audit(id INTEGER PRIMARY KEY,v TEXT);
+    CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT,v BLOB,
+      g TEXT GENERATED ALWAYS AS (hex(v)) STORED,
+      h TEXT GENERATED ALWAYS AS (typeof(v)) VIRTUAL);
+    CREATE TRIGGER tr AFTER INSERT ON t BEGIN
+      INSERT INTO audit VALUES(new.id,'trigger');
+    END;
+    CREATE VIEW v AS SELECT id,v,g,h FROM t;
+    INSERT INTO t(id,v) VALUES(1,NULL),(2,X''),(3,X'0027FF'),
+      (4,CAST(X'610062' AS TEXT)),(5,'a''b'),(6,char(13,10)),
+      (7,'Unicode: 🐬'),(8,1.2345678901234567),(9,9e999),
+      (10,-9223372036854775808),(11,9223372036854775807);
+    INSERT INTO t(id,v) VALUES(100,'deleted');
+    DELETE FROM t WHERE id=100;
+    SELECT dolt_commit('-Am','base'); SELECT dolt_tag('old');
+  }
+  if {$transaction eq "begin"} {db eval BEGIN}
+  if {$transaction eq "savepoint"} {db eval {SAVEPOINT caller}}
+  db eval {UPDATE t SET v=CAST(X'8000FF' AS TEXT) WHERE id=4}
+  set expect [db eval {SELECT id,typeof(v),hex(v),g,h FROM v ORDER BY id}]
+  set audit [db eval {SELECT * FROM audit ORDER BY id}]
+  set state [list [sqlite3_get_autocommit db] [db one {SELECT dolt_hashof('HEAD')}]     [db eval {SELECT * FROM dolt_status}]]
+  foreach format {sql sqlite} {
+    set path dump-out.$format
+    forcedelete $path
+    do_test dump-types-$transaction.$format.result {
+      db one {SELECT dolt_dump('--file-name',$path,'--result-format',$format)}
+    } 0
+    if {$format eq "sql"} {
+      set fd [open $path rb]; set sql [read $fd]; close $fd
+      sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+      out eval $sql
+    } else {sqlite3 out file:dump-out.sqlite?doltlite_engine=sqlite -uri 1}
+    do_test dump-types-$transaction.$format.rows {
+      out eval {SELECT id,typeof(v),hex(v),g,h FROM v ORDER BY id}
+    } $expect
+    do_test dump-types-$transaction.$format.triggers-not-fired {
+      out eval {SELECT * FROM audit ORDER BY id}
+    } $audit
+    do_test dump-types-$transaction.$format.meta {
+      out eval {PRAGMA user_version; PRAGMA application_id}
+    } {17 1234}
+    do_test dump-types-$transaction.$format.sequence {
+      out eval {INSERT INTO t(v) VALUES('next'); SELECT max(id) FROM t}
+    } 101
+    do_test dump-types-$transaction.$format.source {
+      list [sqlite3_get_autocommit db] [db one {SELECT dolt_hashof('HEAD')}]         [db eval {SELECT * FROM dolt_status}]
+    } $state
+    out close
+  }
+  if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
+}
+
+reset_db
+forcedelete dump-out.sqlite
+db eval {
+  CREATE TABLE old(id INT PRIMARY KEY,v TEXT);
+  INSERT INTO old VALUES(1,'old');
+  PRAGMA user_version=3; SELECT dolt_commit('-Am','old'); SELECT dolt_tag('old');
+  DROP TABLE old; CREATE TABLE new(id INT PRIMARY KEY);
+  INSERT INTO new VALUES(9); PRAGMA user_version=7;
+  SELECT dolt_commit('-Am','new');
+}
+do_test dump-historical-schema.result {
+  db one {SELECT dolt_dump('--file-name','dump-out.sqlite','-r','sqlite','--ref','old')}
+} 0
+sqlite3 out file:dump-out.sqlite?doltlite_engine=sqlite -uri 1
+do_test dump-historical-schema.rows {out eval {SELECT * FROM old}} {1 old}
+do_test dump-historical-schema.meta {out one {PRAGMA user_version}} 3
+do_test dump-historical-schema.absent {out one {SELECT count(*) FROM sqlite_schema WHERE name='new'}} 0
+out close
+
+proc dump_race {action arg1 arg2 arg3 arg4} {
+  if {$action eq "SQLITE_READ" && $arg1 eq "t" && ![file exists dump-race.sql]} {
+    set fd [open dump-race.sql wb]; puts -nonewline $fd sentinel; close $fd
+  }
+  return SQLITE_OK
+}
+reset_db
+forcedelete dump-race.sql
+db eval {CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1)}
+db authorizer dump_race
+do_test dump-publication-race.result {
+  lindex [catchsql {SELECT dolt_dump('--file-name','dump-race.sql')}] 0
+} 1
+db authorizer {}
+do_test dump-publication-race.kept {
+  set fd [open dump-race.sql rb]; set value [read $fd]; close $fd; set value
+} sentinel
+do_test dump-publication-race.no-temp {glob -nocomplain *-dump-*} {}
+
+ifcapable fts5 {
+  reset_db
+  db eval {
+    CREATE VIRTUAL TABLE f USING fts5(body);
+    INSERT INTO f(rowid,body) VALUES(1,'hello export'),(2,'another record');
+    SELECT dolt_commit('-Am','fts'); SELECT dolt_tag('fts');
+  }
+  foreach ref {WORKING fts} {
+    foreach format {sql sqlite} {
+      set path dump-fts.$format; forcedelete $path
+      do_test dump-fts-$ref.$format.result {
+        db one {SELECT dolt_dump('--file-name',$path,'--result-format',$format,'--ref',$ref)}
+      } 0
+      if {$format eq "sql"} {
+        set fd [open $path rb]; set sql [read $fd]; close $fd
+        sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1; out eval $sql
+      } else {sqlite3 out file:dump-fts.sqlite?doltlite_engine=sqlite -uri 1}
+      do_test dump-fts-$ref.$format.query {out eval {SELECT rowid,body FROM f WHERE f MATCH 'export'}} {1 {hello export}}
+      do_test dump-fts-$ref.$format.integrity {out eval {INSERT INTO f(f) VALUES('integrity-check')}} {}
+      out close
+    }
+  }
+}
+reset_db
+forcedelete dump-rowid.sqlite dump-rowid.sql
+db eval {
+  CREATE TABLE rows(v TEXT);
+  INSERT INTO rows(rowid,v) VALUES(10,'ten'),(20,'twenty');
+  SELECT dolt_commit('-Am','rowids'); SELECT dolt_tag('rows');
+}
+foreach ref {WORKING rows} {
+  foreach format {sql sqlite} {
+    set path dump-rowid.$format; forcedelete $path
+    do_test dump-rowid-$ref.$format.result {
+      db one {SELECT dolt_dump('--file-name',$path,'--result-format',$format,'--ref',$ref)}
+    } 0
+    if {$format eq "sql"} {
+      set fd [open $path rb]; set sql [read $fd]; close $fd
+      sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1; out eval $sql
+    } else {sqlite3 out file:dump-rowid.sqlite?doltlite_engine=sqlite -uri 1}
+    do_test dump-rowid-$ref.$format.values {out eval {SELECT rowid,v FROM rows ORDER BY rowid}} {10 ten 20 twenty}
+    out close
+  }
+}
+
+foreach format {sql sqlite} {
+  reset_db
+  set path dump-stage.$format; forcedelete $path
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT,old TEXT);
+    INSERT INTO t VALUES(1,'staged'),(100,'deleted'); DELETE FROM t WHERE id=100;
+    SELECT dolt_commit('-Am','base');
+    ALTER TABLE t ADD COLUMN staged TEXT DEFAULT 'stage'; SELECT dolt_add('.');
+    ALTER TABLE t DROP COLUMN old; UPDATE t SET staged='working';
+  }
+  do_test dump-stage-$format.result {
+    db one {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref','STAGED')}
+  } 0
+  if {[file exists $path]} {
+    if {$format eq "sql"} {
+      set fd [open $path rb]; set sql [read $fd]; close $fd
+      sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1; out eval $sql
+    } else {sqlite3 out file:dump-stage.sqlite?doltlite_engine=sqlite -uri 1}
+    do_test dump-stage-$format.rows {out eval {SELECT * FROM t}} {1 staged stage}
+    do_test dump-stage-$format.sequence {
+      out eval {INSERT INTO t(old) VALUES('next'); SELECT max(id) FROM t}
+    } 101
+    out close
+  }
+}
+
+foreach definition {
+  {CREATE VIEW dependent AS SELECT dolt_version()}
+  {CREATE TRIGGER dependent AFTER INSERT ON t BEGIN SELECT dolt_version(); END}
+} {
+  reset_db
+  db eval {CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1)}
+  db eval $definition
+  foreach format {sql sqlite} {
+    set path dump-dependent.$format; forcedelete $path
+    do_test dump-dependent-$definition.$format.error {
+      lindex [catchsql {SELECT dolt_dump('--file-name',$path,'-r',$format)}] 0
+    } 1
+    do_test dump-dependent-$definition.$format.absent {file exists $path} 0
+  }
+}
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1);
+  SELECT dolt_commit('-Am','base'); SELECT dolt_checkout('-b','other');
+  DROP TABLE t;
+  INSERT INTO dolt_nonlocal_tables VALUES('t','main',NULL,'immediate');
+  SELECT dolt_commit('-Am','binding'); SELECT dolt_tag('binding');
+}
+foreach ref {WORKING binding} {
+  foreach format {sql sqlite} {
+    set path dump-binding.$format; forcedelete $path
+    do_test dump-binding-$ref.$format.error {
+      set result [catchsql {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}]
+      list [lindex $result 0] [string match {*nonlocal table bindings*} [lindex $result 1]]
+    } {1 1}
+    do_test dump-binding-$ref.$format.absent {file exists $path} 0
+  }
+}
+reset_db
+db eval {CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1)}
+foreach format {sql sqlite} {
+  set path dump-empty-existing.$format; forcedelete $path
+  close [open $path wb]
+  do_test dump-empty-existing-$format.refused {
+    lindex [catchsql {SELECT dolt_dump('--file-name',$path,'-r',$format)}] 0
+  } 1
+  do_test dump-empty-existing-$format.kept {file size $path} 0
+  set path "dump unicode # ? ' 🐬.$format"; forcedelete $path
+  set utf8 [encoding convertto utf-8 $path]
+  do_test dump-path-$format.result {
+    db one {SELECT dolt_dump('--file-name',CAST($utf8 AS TEXT),'-r',$format)}
+  } 0
+  do_test dump-path-$format.exists {file exists $path} 1
+}
+if {$tcl_platform(platform) eq "unix"} {
+  forcedelete dump-link.sql dump-link-target
+  close [open dump-link-target wb]
+  file link -symbolic dump-link.sql dump-link-target
+  forcedelete dump-link-target
+  do_test dump-dangling-link.refused {
+    lindex [catchsql {SELECT dolt_dump('--file-name','dump-link.sql')}] 0
+  } 1
+  do_test dump-dangling-link.kept {file type dump-link.sql} link
+  do_test dump-dangling-link.no-target {file exists dump-link-target} 0
+}
+do_test dump-final.no-temp {glob -nocomplain *-dump-*} {}
+foreach format {sql sqlite} {
+  reset_db
+  db eval {
+    CREATE TABLE gone(id INTEGER PRIMARY KEY AUTOINCREMENT);
+    INSERT INTO gone VALUES(100); DROP TABLE gone;
+    CREATE TABLE doltlite_export_sequence_0(id INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','empty sequence');
+  }
+  set path dump-sequence-only.$format; forcedelete $path
+  do_test dump-sequence-only-$format.result {
+    db one {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref','HEAD')}
+  } 0
+  if {$format eq "sql"} {
+    set fd [open $path rb]; set sql [read $fd]; close $fd
+    sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1; out eval $sql
+  } else {sqlite3 out file:dump-sequence-only.sqlite?doltlite_engine=sqlite -uri 1}
+  do_test dump-sequence-only-$format.empty {out one {SELECT count(*) FROM sqlite_sequence}} 0
+  do_test dump-sequence-only-$format.schema {out one {SELECT count(*) FROM sqlite_schema WHERE type='table'}} 2
+  out close
+}
+finish_test

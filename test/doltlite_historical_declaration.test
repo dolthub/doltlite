@@ -115,4 +115,26 @@ do_execsql_test diff-columns-follow-add-column {
   SELECT extra FROM dolt_at_t('WORKING');
 } {1 1 a added q 1 a q modified q}
 
+reset_db
+db eval {
+  CREATE TABLE staged_schema(id INTEGER PRIMARY KEY,old TEXT);
+  INSERT INTO staged_schema VALUES(1,'stored');
+  SELECT dolt_commit('-Am','base');
+  ALTER TABLE staged_schema ADD COLUMN added TEXT DEFAULT 'staged';
+  SELECT dolt_add('.');
+  ALTER TABLE staged_schema DROP COLUMN old;
+}
+do_execsql_test historical-declaration-staged-schema {
+  SELECT s.id,s.old,s.added FROM dolt_at_staged_schema('STAGED') AS s;
+} {1 stored staged}
+reset_db
+db eval {
+  CREATE TABLE sequenced(id INTEGER PRIMARY KEY AUTOINCREMENT);
+  INSERT INTO sequenced VALUES(100); DELETE FROM sequenced;
+  SELECT dolt_commit('-Am','sequence');
+}
+do_execsql_test historical-declaration-sequence {
+  SELECT name,seq FROM dolt_at_sqlite_sequence('HEAD');
+} {sequenced 100}
+
 finish_test

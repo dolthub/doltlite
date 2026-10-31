@@ -204,6 +204,14 @@ static int atOpenSchemaDb(sqlite3 *db, sqlite3 **ppTmp){
   return SQLITE_OK;
 }
 
+static int atCreateSchemaTable(sqlite3 *db, const SchemaEntry *entry){
+  const char *sql = entry->zSql;
+  if( sqlite3_stricmp(entry->zName,"sqlite_sequence")==0 ){
+    sql = "CREATE TABLE doltlite_sequence_schema(id INTEGER PRIMARY KEY AUTOINCREMENT)";
+  }
+  return sqlite3_exec(db,sql,0,0,0);
+}
+
 /* Load columns as pCatHash declares them. Invalid-side fallback to declared
 ** layout is allowed only when the table is absent or the live schema is
 ** identical; otherwise fail rather than decode with the wrong layout. */
@@ -240,7 +248,7 @@ int doltliteSideColsLoad(
   }
 
   rc = atOpenSchemaDb(db, &tmp);
-  if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+  if( rc==SQLITE_OK ) rc = atCreateSchemaTable(tmp, &entry);
   if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTable, &pSide->ci);
   /* Affinity belongs to this commit. The live REAL affinity rounds an
   ** integer the commit stored exactly. */
@@ -463,7 +471,7 @@ static int atLoadSchemaColumns(
                                   zTableName, &entry, &found);
   if( rc==SQLITE_OK && found && entry.zSql ){
     rc = atOpenSchemaDb(db, &tmp);
-    if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+    if( rc==SQLITE_OK ) rc = atCreateSchemaTable(tmp, &entry);
     if( rc==SQLITE_OK ) rc = doltliteGetReaderColumnNames(tmp, zTableName, pCols);
     if( rc==SQLITE_OK ) rc = doltliteLoadColumnDeclarations(tmp, zTableName, pCols);
     if( rc==SQLITE_OK && pCols->nCol<=0 ){
@@ -615,6 +623,7 @@ int doltliteLoadHistoricalTableColumns(
   int nRef = 0;
   int scoped = 0;
   int skipLive = 0;
+  int staged = 0;
   int has;
   int i;
   int rc;
@@ -624,16 +633,15 @@ int doltliteLoadHistoricalTableColumns(
   /* A literal commit ref must declare that snapshot's columns. The live
   ** table is the working schema, so it can hide a column that exists
   ** only on the requested tip. Columns added on the current tip are
-  ** still declared and read as NULL. WORKING and STAGED keep the live
-  ** declaration. */
+  ** still declared and read as NULL. WORKING keeps the live declaration. */
   if( zModule
    && (sqlite3_strnicmp(zModule, "dolt_at_", 8)==0
     || sqlite3_strnicmp(zModule, "dolt_history_", 13)==0) ){
     const char *zScoped = atHistoricalLiteralArg(db, 0);
     if( zScoped
-     && !doltliteRefIsWorking(zScoped)
-     && !doltliteRefIsStaged(zScoped) ){
+     && !doltliteRefIsWorking(zScoped) ){
       skipLive = 1;
+      staged = doltliteRefIsStaged(zScoped);
     }
   }
   if( !skipLive && sqlite3FindTable(db, zTableName, "main") ){
@@ -662,6 +670,14 @@ int doltliteLoadHistoricalTableColumns(
     if( skipLive ){
       rc = atMergeCommittedHeadColumns(
           db, cs, pCache, zTableName, pCols);
+      if( rc==SQLITE_OK && staged && sqlite3FindTable(db,zTableName,"main") ){
+        DoltliteColInfo live;
+        memset(&live,0,sizeof(live));
+        rc = doltliteGetReaderColumnNames(db,zTableName,&live);
+        if( rc==SQLITE_OK ) rc = doltliteLoadColumnDeclarations(db,zTableName,&live);
+        if( rc==SQLITE_OK ) rc = atAppendMissingColumns(pCols,&live);
+        doltliteFreeColInfo(&live);
+      }
     }
     return rc;
   }

@@ -5239,6 +5239,28 @@ static int winGetLastError(sqlite3_vfs *pVfs, int nBuf, char *zBuf){
 ** Initialize and deinitialize the operating system interface.
 */
 #ifdef DOLTLITE_PROLLY
+int sqlite3OsPublishFileNative(sqlite3_vfs *pVfs, const char *zTmp,
+                                const char *zDest){
+  WCHAR *a = 0, *b = 0;
+  int nA, nB, rc = SQLITE_IOERR;
+  if( pVfs->xOpen!=winOpen ) return SQLITE_NOTFOUND;
+  nA = MultiByteToWideChar(CP_UTF8,0,zTmp,-1,0,0);
+  nB = MultiByteToWideChar(CP_UTF8,0,zDest,-1,0,0);
+  if( !nA || !nB ) return rc;
+  a = sqlite3_malloc64((sqlite3_uint64)nA*sizeof(WCHAR));
+  b = sqlite3_malloc64((sqlite3_uint64)nB*sizeof(WCHAR));
+  if( !a || !b ) rc = SQLITE_NOMEM;
+  else if( MultiByteToWideChar(CP_UTF8,0,zTmp,-1,a,nA)
+        && MultiByteToWideChar(CP_UTF8,0,zDest,-1,b,nB) ){
+    if( MoveFileExW(a,b,MOVEFILE_WRITE_THROUGH) ) rc = SQLITE_OK;
+    else if( GetLastError()==ERROR_ALREADY_EXISTS
+          || GetLastError()==ERROR_FILE_EXISTS ) rc = SQLITE_CANTOPEN;
+  }
+  sqlite3_free(a);
+  sqlite3_free(b);
+  return rc;
+}
+
 int sqlite3OsReplaceFileNative(
   sqlite3_vfs *pVfs,
   const char *zTmp,

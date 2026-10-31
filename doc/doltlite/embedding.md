@@ -16,7 +16,8 @@ must outlive their registrations.
 Loadable extensions use `doltliteext.h` (rebranded `sqlite3ext.h`, shipped in
 the amalgamation zip). The shared library exports only `sqlite3_*`,
 `doltliteServe*` (`doltlite_remotesrv.h`), `doltlite_set_chunk_source`, and
-`doltlite_init_lazy`; prolly/chunk-store internals, other `doltlite*` symbols,
+`doltlite_init_lazy`, `doltlite_dump_sql`, and `doltlite_export_sqlite`;
+prolly/chunk-store internals, other `doltlite*` symbols,
 and vendored crypto are hidden. The static archive is unfiltered for tests and
 tooling.
 
@@ -76,3 +77,13 @@ CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread 
     go build -tags libsqlite3 -o quickstart .
 ./quickstart
 ```
+
+## Export to ordinary SQLite
+
+[`dolt_dump`](dolt_dump.md) exports the current working state or a selected
+revision without changing the source. It runs in process, including on iOS;
+there is no CLI dependency. `doltlite_dump_sql()` streams SQL to a callback,
+and `doltlite_export_sqlite()` writes directly to an empty ordinary SQLite
+connection. Both APIs are declared in `doltlite.h` and included in the
+amalgamation. See the [export guide](dolt_dump.md#embedded-c-api) for examples,
+connection requirements, and failure handling.
