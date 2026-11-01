@@ -297,6 +297,24 @@ static int dumpObjects(DlDump *p){
   return rc;
 }
 
+static int dumpStats(DlDump *p){
+  const char *names[] = {"sqlite_stat1","sqlite_stat4"};
+  const char *analyze = "ANALYZE main.sqlite_schema;\n";
+  int i, found = 0, rc = SQLITE_OK;
+  for(i=0; i<ArraySize(names) && rc==SQLITE_OK; i++){
+    if( !findSchemaEntry(p->aSchema,p->nSchema,names[i]) ) continue;
+    if( !found ){
+      rc = dumpExec(p,names[i],analyze);
+      if( rc==SQLITE_OK ) rc = dumpWrite(p,analyze);
+      found = 1;
+    }
+    if( rc==SQLITE_OK ) rc = dumpTable(p,names[i]);
+  }
+  if( found && rc==SQLITE_OK ) rc = dumpExec(p,0,analyze);
+  if( found && rc==SQLITE_OK ) rc = dumpWrite(p,analyze);
+  return rc;
+}
+
 static int dumpMeta(DlDump *p, const ProllyHash *cat){
   u32 userVersion = 0, applicationId = 0;
   char sql[128];
@@ -609,6 +627,7 @@ static int dumpRun(DlDump *p){
     }
   }
   if( rc==SQLITE_OK ) rc = dumpObjects(p);
+  if( rc==SQLITE_OK ) rc = dumpStats(p);
   if( rc==SQLITE_OK ) rc = dumpValidate(p);
   if( rc==SQLITE_OK ) rc = dumpWrite(p,"COMMIT;\n");
   if( rc==SQLITE_OK ) rc = dumpExec(p,0,"RELEASE doltlite_export");
