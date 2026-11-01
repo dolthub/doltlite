@@ -184,7 +184,12 @@ static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   int srcIsDefault;
   int rc;
   (void)db;
-  if( strcmp(p->zSrc, p->zDest)==0 ) return SQLITE_ERROR;
+  /* Same name is a no-op when the branch exists. Deleting it here would
+  ** remove the branch. A missing name is not a destination collision. */
+  if( strcmp(p->zSrc, p->zDest)==0 ){
+    rc = chunkStoreFindBranch(cs, p->zSrc, 0);
+    return rc==SQLITE_OK ? SQLITE_OK : rc;
+  }
   if( !doltliteUserRefNameIsValid(p->zDest) ) return SQLITE_CONSTRAINT;
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
@@ -425,6 +430,21 @@ static void doltBranchParsedFunc(
       if( branchNameEmpty(aPositional[0]) || branchNameEmpty(aPositional[1]) ){
         branchError(ctx, hadSavepoint, "branch name required");
         return;
+      }
+      /* Checked before the destination-name rules. A missing self-move is
+      ** branch not found, including a name that would otherwise be invalid,
+      ** and an existing branch stays where it is. */
+      if( strcmp(aPositional[0], aPositional[1])==0 ){
+        rc = chunkStoreFindBranch(cs, aPositional[0], 0);
+        if( rc==SQLITE_NOTFOUND ){
+          branchNamedResultError(ctx, hadSavepoint, rc, "branch not found", 0);
+          return;
+        }
+        if( rc!=SQLITE_OK ){
+          branchErrorCode(ctx, hadSavepoint, rc);
+          return;
+        }
+        break;
       }
       if( !doltliteUserRefNameIsValid(aPositional[1]) ){
         branchError(ctx, hadSavepoint, "invalid branch name");

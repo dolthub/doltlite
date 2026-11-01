@@ -205,6 +205,19 @@ run_test "distinct_name_still_creates" "SELECT dolt_branch('feature2');" "0" "$D
 
 DB17=/tmp/test_branch17_$$.db; rm -f "$DB17"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+run_test "move_self_existing" "SELECT dolt_branch('-m','feat','feat');" "0" "$DB17"
+run_test "move_self_keeps_name" \
+  "SELECT count(*) FROM dolt_branches WHERE name='feat';" "1" "$DB17"
+run_test "move_self_current" "SELECT dolt_branch('-m','main','main');" "0" "$DB17"
+run_test "move_self_stays_current" "SELECT active_branch();" "main" "$DB17"
+run_test "move_self_force_existing" \
+  "SELECT dolt_branch('-m','-f','feat','feat');" "0" "$DB17"
+run_test_error_match "move_self_missing" \
+  "SELECT dolt_branch('-m','nope','nope');" "branch not found" "$DB17"
+run_test_error_match "move_self_invalid_missing" \
+  "SELECT dolt_branch('-m','bad..name','bad..name');" "branch not found" "$DB17"
+run_test_error_match "move_self_force_missing" \
+  "SELECT dolt_branch('-m','-f','nope','nope');" "branch not found" "$DB17"
 run_test "move_recases_own_name" "SELECT dolt_branch('-m','feat','FEAT');" "0" "$DB17"
 run_test "move_recased_branch_listed_once" \
   "SELECT group_concat(name,'|') FROM (SELECT name FROM dolt_branches ORDER BY name);" \
