@@ -243,10 +243,12 @@ int sqlite3OsDoltliteModeOf(sqlite3_file *pFile, const char *zReference, int bLo
   return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
 }
 
-int sqlite3OsPublishFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest){
+int sqlite3OsPublishFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest,
+                         int *pExists){
+  *pExists = 0;
 #if SQLITE_OS_WIN \
  || (SQLITE_OS_UNIX && !defined(SQLITE_WASM) && !defined(__EMSCRIPTEN__))
-  return sqlite3OsPublishFileNative(pVfs,zTmp,zDest);
+  return sqlite3OsPublishFileNative(pVfs,zTmp,zDest,pExists);
 #else
   UNUSED_PARAMETER(pVfs);
   UNUSED_PARAMETER(zTmp);

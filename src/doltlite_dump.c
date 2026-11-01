@@ -707,14 +707,18 @@ static int dumpToFile(sqlite3 *db, const char *zRef, const char *zPath,
     sqlite3OsCloseFree(file);
     file = 0;
   }
-  if( rc==SQLITE_OK ) rc = sqlite3OsPublishFile(vfs,tmp,dest);
+  if( rc==SQLITE_OK ) rc = sqlite3OsPublishFile(vfs,tmp,dest,&exists);
 file_done:
   if( out ) sqlite3_close(out);
   if( file ) sqlite3OsCloseFree(file);
   if( created ) sqlite3OsDelete(vfs,tmp,0);
   if( rc!=SQLITE_OK && !*pzErr ){
-    *pzErr = sqlite3_mprintf("dolt_dump: cannot export %s: %s",zPath,
-        sqlite3_errstr(rc));
+    if( exists ){
+      *pzErr = sqlite3_mprintf("dolt_dump: destination already exists: %s",zPath);
+    }else{
+      *pzErr = sqlite3_mprintf("dolt_dump: cannot export %s: %s",zPath,
+          sqlite3_errstr(rc));
+    }
   }
   sqlite3_free_filename(filename);
   sqlite3_free(uri);

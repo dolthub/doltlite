@@ -1116,7 +1116,7 @@ Module *doltliteHistoricalModuleRegister(sqlite3 *db, const char *zName){
   if( db->nDb<=0 || !sqlite3BtreeIsDoltliteFormat(db->aDb[0].pBt) ){
     return 0;
   }
-  if( sqlite3_strnicmp(zName, "dolt_at_", 8)==0 && zName[8] ){
+  if( sqlite3_strnicmp(zName, "dolt_at_", 8)==0 ){
     zPrefix = "dolt_at_";
     nPrefix = 8;
     pModule = &atModule;
@@ -1162,9 +1162,7 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
   if( !db || !pMod || !pMod->pEpoTab || db->bDoltliteHistoricalCheck ) return 0;
   zName = pMod->zName;
   if( !zName ) return 0;
-  if( sqlite3_strnicmp(zName, "dolt_at_", 8)==0 ){
-    if( zName[8]==0 ) return 0;
-  }else if( sqlite3_strnicmp(zName, "dolt_workspace_", 15)==0 ){
+  if( sqlite3_strnicmp(zName, "dolt_workspace_", 15)==0 ){
     if( zName[15]==0 ) return 0;
     bLive = 1;
   }else if( sqlite3_strnicmp(zName, "dolt_history_", 13)==0 ){
@@ -1178,7 +1176,7 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
      && doltliteShieldInner(pMod)!=doltliteDiffTableModule() ){
       return 0;
     }
-  }else{
+  }else if( sqlite3_strnicmp(zName, "dolt_at_", 8)!=0 ){
     return 0;
   }
 
