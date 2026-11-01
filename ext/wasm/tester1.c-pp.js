@@ -4501,33 +4501,34 @@ T.g('Misc. APIs')
   ////////////////////////////////////////////////////////////////////
   .t("sqlite3_js_on_pointer_dispose()", function(sqlite3){
     /* Added in 3.55.0 */
-    const db = new sqlite3.oo1.DB();
-    const seenD = new Set();
-    const seenCx = new Set();
+    const jopd = sqlite3.capi.sqlite3_js_on_pointer_dispose;
+    const seenD = new Set() /* distinct pointers passed to onDispose() */;
+    const seenCx = new Set() /* distinct sqlite3_context* */;
     const onDispose = function(p){
       //sqlite3.config.debug("onDispose",p);
       seenD.add(p);
     };
-    const jopd = sqlite3.capi.sqlite3_js_on_pointer_dispose;
-    T.assert( jopd('sqlite3*', db.pointer, onDispose) )
-    /* jopd returns "an unespecified falsy value" on error, but for
-       the sake of testing we can differentiate the possible
-       validation errors... */
-      .assert( false===jopd('nope', db.pointer, onDispose),
-               "Type ID validation failed." )
-      .assert( null===jopd('sqlite3*', 'nope', onDispose),
-               "Pointer validation failed" )
-      .assert( undefined===jopd('sqlite3*', db.pointer, 'nope'),
-               "Callback validation failed." );
-    let nCall = 0;
+    const db = new sqlite3.oo1.DB();
+    const udf = function callee(pCx,a){
+      T.assert( jopd('sqlite3_context*', pCx, onDispose) );
+      seenCx.add(pCx);
+      ++callee.nCall;
+    };
+    udf.nCall = 0 /* number of times udf is called */;
     try{
+      T.assert( jopd('sqlite3*', db.pointer, onDispose) )
+      /* jopd returns "an unespecified falsy value" on error, but for
+         the sake of testing we can differentiate the possible
+         validation errors... */
+        .assert( false===jopd('nope', db.pointer, onDispose),
+                 "Type ID validation failed." )
+        .assert( null===jopd('sqlite3*', 'nope', onDispose),
+                 "Pointer validation failed" )
+        .assert( undefined===jopd('sqlite3*', db.pointer, 'nope'),
+                 "Callback validation failed." );
       db.exec(["create table t(a);",
                "insert into t(a) values(1),(2),(3)"]);
-      db.createFunction("foo", (pCx,a)=>{
-        T.assert( jopd('sqlite3_context*', pCx, onDispose) );
-        seenCx.add(pCx);
-        ++nCall;
-      });
+      db.createFunction("foo", udf);
       const q = db.prepare("select foo(1), foo(a) from t");
       T.assert( jopd('sqlite3_stmt*', q.pointer, onDispose) );
       while( q.step() );
@@ -4535,9 +4536,9 @@ T.g('Misc. APIs')
     }finally{
       db.close();
     }
-    T.assert( 6===nCall, "2 call points times 3 rows" )
-      .assert( 2===seenCx.size, "One cx per UDF call point in the query" )
-      .assert( seenCx.size + 2 /*db + stmt*/ === seenD.size, "(2x cx) + db + stmt" );
+    T.assert( 6===udf.nCall, "2 UDF call points times 3 rows" )
+      .assert( 2===seenCx.size, "One cx per UDF call point" )
+      .assert( seenCx.size + 2 === seenD.size, "(2x cx) + db + stmt" );
   })
 
 ////////////////////////////////////////////////////////////////////
