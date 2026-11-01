@@ -971,12 +971,12 @@ T.g('C/WASM Utilities')
 
 
       { // 'string:static' argAdapter() sanity checks...
-        let argAd = w.xWrap.argAdapter('string:static');
-        let p0 = argAd('foo'), p1 = argAd('bar');
+        const argAd = w.xWrap.argAdapter('string:static');
+        const p0 = argAd('foo'), p1 = argAd('bar');
         T.assert(w.isPtr(p0) && w.isPtr(p1))
           .assert(p0 !== p1)
-          .assert(p0 === argAd('foo'))
-          .assert(p1 === argAd('bar'));
+          .assert(p0 === argAd(['f','o','o'].join('')))
+          .assert(p1 === argAd('bar'.split('').join('')));
       }
 
       // 'string:flexible' argAdapter() sanity checks...
@@ -1550,10 +1550,21 @@ T.g('sqlite3.oo1')
           T.assert( q.step(), "step()" )
             .assert( !q.step(), "!step()" );
         }finally{
-          if( pStmt ) capi.sqlite3_finalize(pStmt)
-          if( q ) q.finalize();
+          if( pStmt ){
+            capi.sqlite3_finalize(pStmt);
+            T.assert( !q?.pointer, "Expecting !q?.pointer" );
+          }else if( q ){
+            T.assert( q.pointer, "Expecting q.pointer" );
+            //console.warn("sqlite3_finalize(",q,")");
+            capi.sqlite3_finalize(
+              q
+              /* legal with sqlite3_finalize() as of the
+                 [disposal-notification] branch. Will properly
+                 clean up q. */
+            );
+            T.assert(!q.pointer, "Expecting !q.pointer after finalize");
+          }
         }
-
       }finally{
         wasm.pstack.restore(stack);
         if( pDb ){ capi.sqlite3_close_v2(pDb); }
@@ -1604,9 +1615,8 @@ T.g('sqlite3.oo1')
 
 ////////////////////////////////////////////////////////////////////
   .t('DB.Stmt', function(sqlite3){
-    let st = this.db.prepare(
-      new TextEncoder('utf-8').encode("select 3 as a")
-    );
+    this.textEncoder = new TextEncoder('utf-8');
+    let st = this.db.prepare( this.textEncoder.encode("select 3 as a") );
     let rc;
     try {
       T.assert(wasm.isPtr(st.pointer))
@@ -1700,6 +1710,71 @@ T.g('sqlite3.oo1')
         && 0 < err.message.indexOf("Do not call the Stmt constructor directly.")
     });
   })
+
+  ////////////////////////////////////////////////////////////////////////
+  .t('sqlite3_bind_text/blob() with JS values', function(){
+    /* Derived from [bugs:bbb715c3f2a0e989]. */
+    const q = this.db.prepare("select ?1, typeof(?1), octet_length(?1)");
+    const enc = this.textEncoder, denc = new TextDecoder('utf-8');
+    const BindText = capi.sqlite3_bind_text, BindBlob = capi.sqlite3_bind_blob;
+    /* Bind value v of length n to q using binding function f(), step
+       it, fetch it, reset it, and return the fetched row. */
+    const bindAndGet = (f, v, n)=>{
+      const rc = f(q, 1, v, n, capi.SQLITE_WASM_DEALLOC);
+      q.step();
+      const rv = q.get([]);
+      T.assert( 3===rv.length );
+      rv.unshift(rc);
+      q.reset(true);
+      return rv;
+    };
+    /* Pass (v,n) through sqlite3_bind_text() and affirm that
+       expect === column 0 of the result. */
+    const checkText = (v, n, expect)=>{
+      const [rc, val, type, len] = bindAndGet(BindText, v, n);
+      T.assert(0===rc)
+        .assert(expect===val)
+        .assert('text'===type)
+        .assert(enc.encode(expect).byteLength===len);
+    };
+    /* Pass (v,n) through sqlite3_bind_blob() and affirm that
+       the resulting value has a length of expectLen. Returns
+       the resulting Uint8Array.*/
+    const checkBlob = (v, n, expectLen)=>{
+      const [rc, val, type, len] = bindAndGet(BindBlob, v, n);
+      T.assert(0===rc, "bind_blob rc", rc)
+        .assert('blob'===type)
+        .assert(expectLen===len)
+        .assert(val instanceof Uint8Array && expectLen===val.byteLength);
+      return val;
+    };
+    const checkBlobText = (v, n, expectLen, expectText)=>{
+      const rv = checkBlob(v, n, expectLen);
+      T.assert(denc.decode(rv)===expectText, "checkBlobText()", expectText);
+    }
+    try{
+      checkText("SQLite", -1, "SQLite");
+      checkText(["Früh","stück"], -1, "Frühstück");
+      checkText("", -1, "");
+      checkText(enc.encode("SQLite"), -1, "SQLite");
+      const xenc = enc.encode("a string");
+      checkText(new Int8Array(xenc), -1, "a string");
+      checkText(xenc.buffer, -1, "a string");
+      checkBlobText("SQLite", -1, 6, "SQLite");
+      checkBlobText("SQLite", 2, 6, "SQLite");
+      checkBlob("", -1, 0);
+      checkBlobText(["SQL", "i", "te"], -1, 6, "SQLite");
+      T.assert("SQL"===denc.decode(checkBlob(enc.encode("SQLite"), 3, 3)));
+      T.assert(capi.SQLITE_MISUSE===bindAndGet(
+        BindBlob, {}, -1
+      )[0]);
+      T.assert(capi.SQLITE_MISUSE===bindAndGet(
+        BindText, {}, -1
+      )[0]);
+    }finally{
+      q.finalize();
+    }
+  })/*sqlite3_bind_text/blob()*/
 
 ////////////////////////////////////////////////////////////////////////
   .t('sqlite3_js_...()', function(){
@@ -3032,14 +3107,27 @@ T.g('sqlite3.oo1')
   })/*custom collation*/
 
 ////////////////////////////////////////////////////////////////////////
-  .t('Close db', function(){
+  .t('Close db', function(sqlite3){
     T.assert(this.db).assert(wasm.isPtr(this.db.pointer));
     //wasm.sqlite3__wasm_db_reset(this.db); // will leak virtual tables!
-    const strayStmt = this.db.prepare("select 1");
-    T.assert( strayStmt.pointer );
-    this.db.close();
-    T.assert(!this.db.pointer)
-      .assert(!strayStmt.pointer, "Stmt should have been finalized");
+    /* Leave some stray resources open... */
+    const stmtStray = this.db.prepare("select 1");
+    T.assert( stmtStray.pointer );
+    const stmtDupe = sqlite3.oo1.Stmt.wrapHandle(this.db, stmtStray.pointer);
+    T.assert( stmtStray.pointer === stmtDupe.pointer );
+    const dw = sqlite3.oo1.DB.wrapHandle(this.db.pointer);
+    T.assert( dw.pointer === this.db.pointer );
+    //console.debug("this.db =",this.db.pointer,this.db);
+
+    /* Close db... */
+    if( 0 ) this.db.close();
+    else capi.sqlite3_close_v2(this.db)/*as of [disposal-notification] branch*/;
+    /* Ensure the strays have been disconnected. */
+    //console.debug("this.db =",this.db.pointer,this.db);
+    T.assert(!this.db.pointer, "Expecting !db.pointer")
+      .assert(!stmtStray.pointer, "Stmt should have been finalized")
+      .assert(!stmtDupe.pointer, "Stmt should have been finalized")
+      .assert(!dw.pointer, "shared-handle wrapper should have been disconnected");
   })
 ;/* end of oo1 checks */
 
@@ -4380,7 +4468,7 @@ T.g('Misc. APIs')
         .assert( !stmt.isBusy() );
 
       if( wasm.exports.sqlite3_column_origin_name ){
-        log("Column metadata APIs enabled");
+        //log("Column metadata APIs enabled");
         T.assert( "t" === capi.sqlite3_column_table_name(stmt, 0))
           .assert("a" === capi.sqlite3_column_origin_name(stmt, 0))
           .assert("main" === capi.sqlite3_column_database_name(stmt, 0))
@@ -4408,6 +4496,49 @@ T.g('Misc. APIs')
       if(stmt) stmt.finalize();
       db.close();
     }
+  })
+
+  ////////////////////////////////////////////////////////////////////
+  .t("sqlite3_js_on_pointer_dispose()", function(sqlite3){
+    /* Added in 3.55.0 */
+    const jopd = sqlite3.capi.sqlite3_js_on_pointer_dispose;
+    const seenD = new Set() /* distinct pointers passed to onDispose() */;
+    const seenCx = new Set() /* distinct sqlite3_context* */;
+    const onDispose = function(p){
+      //sqlite3.config.debug("onDispose",p);
+      seenD.add(p);
+    };
+    const db = new sqlite3.oo1.DB();
+    const udf = function callee(pCx,a){
+      T.assert( jopd('sqlite3_context*', pCx, onDispose) );
+      seenCx.add(pCx);
+      ++callee.nCall;
+    };
+    udf.nCall = 0 /* number of times udf is called */;
+    try{
+      T.assert( jopd('sqlite3*', db.pointer, onDispose) )
+      /* jopd returns "an unespecified falsy value" on error, but for
+         the sake of testing we can differentiate the possible
+         validation errors... */
+        .assert( false===jopd('nope', db.pointer, onDispose),
+                 "Type ID validation failed." )
+        .assert( null===jopd('sqlite3*', 'nope', onDispose),
+                 "Pointer validation failed" )
+        .assert( undefined===jopd('sqlite3*', db.pointer, 'nope'),
+                 "Callback validation failed." );
+      db.exec(["create table t(a);",
+               "insert into t(a) values(1),(2),(3)"]);
+      db.createFunction("foo", udf);
+      const q = db.prepare("select foo(1), foo(a) from t");
+      T.assert( jopd('sqlite3_stmt*', q.pointer, onDispose) );
+      while( q.step() );
+      // do not q.finalize(), for test purposes
+    }finally{
+      db.close();
+    }
+    T.assert( 6===udf.nCall, "2 UDF call points times 3 rows" )
+      .assert( 2===seenCx.size, "One cx per UDF call point" )
+      .assert( seenCx.size + 2 === seenD.size, "(2x cx) + db + stmt" );
   })
 
 ////////////////////////////////////////////////////////////////////
@@ -4444,7 +4575,7 @@ T.g('Misc. APIs')
       db.close();
     }
   });
-;
+
 
 ////////////////////////////////////////////////////////////////////
 T.g('Bug Reports')
@@ -4545,6 +4676,7 @@ T.g('Bug Reports')
       const stack = wasm.pstack.pointer;
       const pAux = wasm.pstack.alloc(4);
       let pAuxDestructed = 0;
+      const cxSeen = new Set;
       const pAuxDtor = wasm.installFunction('v(p)', function(ptr){
         //log("freeing auxdata");
         ++pAuxDestructed;
@@ -4562,20 +4694,20 @@ T.g('Bug Reports')
         db.createFunction("auxtest",{
           xFunc: function(pCx, x, y){
             T.assert(wasm.isPtr(pCx));
+            cxSeen.add(pCx);
             const localAux = capi.sqlite3_get_auxdata(pCx, 0);
             if( !localAux ){
               //log("setting auxdata");
               /**
-                 We do not currently an automated way to clean up
-                 auxdata finalizer functions (the 4th argument to
+                 We do provide an automated way to clean up auxdata
+                 finalizer functions (the 4th argument to
                  sqlite3_set_auxdata()) which get automatically
-                 converted from JS to WASM. Because of that, enabling
-                 automated conversions here would lead to leaks more
-                 often than not. Instead, follow the pattern show in
-                 this function: use wasm.installFunction() to create
-                 the function, then pass the resulting function
-                 pointer this function, and cleanup (at some point)
-                 using wasm.uninstallFunction().
+                 converted from JS to WASM because it's prohibitively
+                 expensive. Instead, follow the pattern show in this
+                 function: use wasm.installFunction() to create the
+                 function, then pass the resulting function pointer
+                 this function, and cleanup (at some point) using
+                 wasm.uninstallFunction().
               */
               ++nAuxSet;
               capi.sqlite3_set_auxdata(pCx, 0, pAux, pAuxDtor);
@@ -4587,21 +4719,174 @@ T.g('Bug Reports')
             return x;
           }
         });
+        //console.error("Before 2x UDF w/ aux data for 4 rows");
         db.exec([
           "create table t(a);",
-          "insert into t(a) values(1),(2),(1);",
+          "insert into t(a) values(1),(2),(-1),(-2);",
           "select auxtest(1,a), auxtest(1,a) from t order by a"
         ]);
+        T.assert( 2===cxSeen.size, "Else my understanding here is wrong:",
+                  cxSeen.size );
+        //console.error("After 2x UDF w/ aux data for 4 rows");
       }finally{
         db.close();
         wasm.pstack.restore(stack);
       }
-      T.assert(nAuxSet>0).assert(nAuxReused>0)
-        .assert(6===nAuxReused+nAuxSet);
-      T.assert(pAuxDestructed>0);
-      T.assert(pAuxDtorDestructed);
+      T.assert(2==nAuxSet)
+        .assert(6===nAuxReused)
+        .assert(pAuxDestructed===nAuxSet);
     }
   })
+//#define ? sqlite3_set_auxdata:dtor 0
+//#if sqlite3_set_auxdata:dtor
+/* Full details: search sqlite3-api-glue.c-pp.js for
+   [tag:sqlite3_set_auxdata:dtor]. */
+  .t({
+    /* https://github.com/sqlite/sqlite-wasm/issues/92 */
+    name: 'sqlite3_set_auxdata() binding part two',
+    predicate: ()=>{
+      return wasm.xWrap.argAdapter('sqlite3_set_auxdata:dtor')
+        ? true
+        : "Requires sqlite3_set_auxdata:dtor conversion"
+    },
+    test: function(sqlite3){
+      const db = new sqlite3.oo1.DB();
+      const pAux = db.pointer; // any pointer will do
+      let pAuxDestructed = 0;
+      const cxSeen = new Set;
+      const pAuxDtor = (ptr)=>{
+        //log("freeing auxdata");
+        ++pAuxDestructed;
+      };
+      let nAuxSet = 0 /* how many times we set aux data */;
+      let nAuxReused = 0 /* how many times we reused aux data */;
+      try{
+        db.createFunction("auxtest",{
+          xFunc: function(pCx, x, y){
+            T.assert(wasm.isPtr(pCx));
+            cxSeen.add(pCx);
+            const localAux = capi.sqlite3_get_auxdata(pCx, 0);
+            if( !localAux ){
+              //log("setting auxdata");
+              ++nAuxSet;
+              capi.sqlite3_set_auxdata(pCx, 0, pAux, pAuxDtor);
+            }else{
+              //log("reusing auxdata",localAux);
+              T.assert(pAux===localAux);
+              ++nAuxReused;
+            }
+            return x;
+          }
+        });
+        console.error("Before 2x UDF w/ aux data for 4 rows");
+        db.exec([
+          "create table t(a);",
+          "insert into t(a) values(1),(2),(-1),(-2);",
+          "select auxtest(1,a), auxtest(1,a) from t order by a"
+        ]);
+        T.assert( 2===cxSeen.size, "Else my understanding here is wrong:",
+                  cxSeen.size );
+        console.error("After 2x UDF w/ aux data for 4 rows.",
+                      "pAuxDestructed",pAuxDestructed);
+      }finally{
+        db.close();
+      }
+      T.assert(2==nAuxSet)
+        .assert(6===nAuxReused)
+        .assert(pAuxDestructed===nAuxSet);
+    }
+  })
+  .t({
+    name: 'sqlite3_set_auxdata() dtor conversion lifetime part 3',
+    predicate: ()=>{
+      return wasm.xWrap.argAdapter('sqlite3_set_auxdata:dtor')
+        ? true
+        : "Requires sqlite3_set_auxdata:dtor conversion"
+    },
+    test: function(sqlite3){
+      const db = new sqlite3.oo1.DB();
+      const pAux = db.pointer /* pointer to bind */;
+      let nAuxDestructed = 0 /* how many times auxDtor is called */;
+      let nAuxSet = 0 /* how many times we set aux data */;
+      let nAuxReused = 0 /* how many times we reused aux data */;
+      let nPeakAux = 0 /* highest number bound at once */;
+      const auxDtor = (ptr)=>{
+        //log("freeing auxdata");
+        T.assert( pAux === ptr );
+        ++nAuxDestructed;
+      };
+      try{
+        db.createFunction("auxtest",{
+          xFunc: function(pCx, x, y){
+            T.assert(wasm.isPtr(pCx));
+            const localAux = capi.sqlite3_get_auxdata(pCx, 0);
+            if( !localAux ){
+              //log("setting auxdata");
+              /**
+                 The full details of when an auxdata dtor might be
+                 called are in:
+
+                 https://sqlite.org/c3ref/get_auxdata.html
+
+                 The automated conversion of the 4th argument to
+                 sqlite3_set_auxdata() happens precisely as often as
+                 we need new auxdata values. Each such conversion creates
+                 an entry in the WASM indirect function table.
+
+                 Best case (depending on how we concretely handle the
+                 conversion), this can lead to many JS/WASM proxy
+                 bindings being installed and uninstalled in rapid
+                 succession. Worst case (depending on the conversion
+                 impl), all such bindings are live until pCx is
+                 finalized.
+
+                 The way around that is to follow the pattern used in
+                 the variant of his test function two above this
+                 one. It demonstrates how to manually manage these
+                 safely and efficiently. We currently have no good way
+                 to automate that level of efficiency, however.
+              */
+              ++nAuxSet;
+              if( nAuxSet - nAuxDestructed>nPeakAux ){
+                nPeakAux = nAuxSet - nAuxDestructed;
+              }
+              capi.sqlite3_set_auxdata(pCx, 0, pAux, auxDtor);
+            }else{
+              //log("reusing auxdata",localAux);
+              T.assert(pAux===localAux);
+              ++nAuxReused;
+            }
+            return x;
+          }
+        });
+        db.exec([
+          "create table t(a);",
+          "insert into t(a) values(1),(2),(-1),(-2);",
+          "select auxtest(1,a) + auxtest(2,a), auxtest(3,a) ",
+          "from t order by a;"
+        ]);
+        /* The following numbers are very specific to the rules of
+           when auxdata dtors are called. */
+        T.assert(3===nAuxSet)
+          .assert(nAuxSet===nPeakAux)
+          .assert(9===nAuxReused)
+          .assert(nAuxDestructed===nAuxSet);
+        db.exec("select auxtest(1,a), auxtest(2,a) from t order by a;");
+        T.assert(5===nAuxSet)
+          .assert(3===nPeakAux)
+          .assert(15===nAuxReused)
+          .assert(nAuxDestructed===nAuxSet);
+        db.exec("select auxtest(1*a,a), auxtest(2+a,a) from t order by a;");
+        T.assert(13===nAuxSet/*twice per row*/)
+          .assert(3===nPeakAux)
+          .assert(15===nAuxReused/*unchanged!*/)
+          .assert(nAuxDestructed===nAuxSet);
+      }finally{
+        db.close();
+      }
+    }
+  })
+//#/if sqlite3_set_auxdata:dtor
 ;/*end of Bug Reports group*/;
 
 ////////////////////////////////////////////////////////////////////////
@@ -4642,8 +4927,13 @@ if(!globalThis.sqlite3InitModule && !isUIThread()){
                          support for locating the wasm, so remove
                          that dir part. */;
   const urlParams = new URL(globalThis.location.href).searchParams;
-  if(urlParams.has('sqlite3.dir')){
-    sqlite3Js = urlParams.get('sqlite3.dir') + '/' + sqlite3Js;
+  const s3d = urlParams.get('sqlite3.dir');
+  if( s3d ){
+    if( s3d.indexOf(':')<0 && s3d.indexOf('//')<0 ){
+      sqlite3Js = s3d + '/' + sqlite3Js;
+    }else{
+      throw new Error("Invalid sqlite3.dir value: "+s3d);
+    }
   }
   importScripts(sqlite3Js);
 }

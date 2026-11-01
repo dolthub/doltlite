@@ -17,56 +17,82 @@
   (e.g. sqlite3-api-oo1.js) have all of the infrastructure that they
   need.
 */
-globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
+sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   'use strict';
   const toss = (...args)=>{throw new Error(args.join(' '))};
   const capi = sqlite3.capi, wasm = sqlite3.wasm, util = sqlite3.util;
-  globalThis.WhWasmUtilInstaller(wasm);
-  delete globalThis.WhWasmUtilInstaller;
+  WhWasmUtilInstaller(wasm)/*injected via preprocessor*/;
 
-  if(0){
-    /**
-       Please keep this block around as a maintenance reminder
-       that we cannot rely on this type of check.
+//#define sqlite3_set_auxdata:dtor 0
+//#if sqlite3_set_auxdata:dtor
+  /**
+     The problem [tag:sqlite3_set_auxdata:dtor] attempts to address is
+     the lifetime of WASM functions created via automatic conversion
+     from JSON functions, specifically those in the final argument to
+     sqlite3_set_auxdata().  We can, with only slight acrobatics,
+     scope them to the (sqlite3_context*) object. The problem is
+     auxdata may be finalized and recreated for every column of every
+     row in which the associated UDF is called, making conversion
+     extraordinarily expensive in that it keeps all of those alive
+     until the sqlite3_context is destroyed. Potentially tens of
+     thousands or more errant WASM function bindings.
 
-       This block fails on Safari, per a report at
-       https://sqlite.org/forum/forumpost/e5b20e1feb.
+     Another alternative is to have such conversions uninstall
+     themselves when called (see branch [wasm-auxdata-dtor]). It's
+     still expensive, in that it creates and destroys just as many
+     function bindings as the aforementioned approach, but it has far
+     fewer bindings active at any given time: one per use in a given
+     query, as opposed to one per use per row.
 
-       It turns out that what Safari serves from the indirect function
-       table (e.g. wasm.functionEntry(X)) is anonymous functions which
-       wrap the WASM functions, rather than returning the WASM
-       functions themselves. That means comparison of such functions
-       is useless for determining whether or not we have a specific
-       function from wasm.exports. i.e. if function X is indirection
-       function table entry N then wasm.exports.X is not equal to
-       wasm.functionEntry(N) in Safari, despite being so in the other
-       browsers.
-    */
-    /**
-       Find a mapping for SQLITE_WASM_DEALLOC, which the API
-       guarantees is a WASM pointer to the same underlying function as
-       wasm.dealloc() (noting that wasm.dealloc() is permitted to be a
-       JS wrapper around the WASM function). There is unfortunately no
-       O(1) algorithm for finding this pointer: we have to walk the
-       WASM indirect function table to find it. However, experience
-       indicates that that particular function is always very close to
-       the front of the table (it's been entry #3 in all relevant
-       tests).
-    */
-    const dealloc = wasm.exports[sqlite3.config.deallocExportName];
-    const nFunc = wasm.functionTable().length;
-    let i;
-    for(i = 0; i < nFunc; ++i){
-      const e = wasm.functionEntry(i);
-      if(dealloc === e){
-        capi.SQLITE_WASM_DEALLOC = i;
-        break;
-      }
-    }
-    if(dealloc !== wasm.functionEntry(capi.SQLITE_WASM_DEALLOC)){
-      toss("Internal error: cannot find function pointer for SQLITE_WASM_DEALLOC.");
+     Management summary: it's far too expensive and foot-gunny
+     (performance- and memory-wise) to allow automatic JS-to-WASM
+     function conversion here.
+  */
+  let __contextScopedWasmFuncs/*Map((sqlite3_context*)=>Set(wasm func ptr)*/;
+//#/if
+//#if 0
+  /**
+     Please keep this block around as a maintenance reminder
+     that we cannot rely on this type of check.
+
+     This block fails on Safari, per a report at
+     https://sqlite.org/forum/forumpost/e5b20e1feb.
+
+     It turns out that what Safari serves from the indirect function
+     table (e.g. wasm.functionEntry(X)) is anonymous functions which
+     wrap the WASM functions, rather than returning the WASM
+     functions themselves. That means comparison of such functions
+     is useless for determining whether or not we have a specific
+     function from wasm.exports. i.e. if function X is indirection
+     function table entry N then wasm.exports.X is not equal to
+     wasm.functionEntry(N) in Safari, despite being so in the other
+     browsers.
+  */
+  /**
+     Find a mapping for SQLITE_WASM_DEALLOC, which the API
+     guarantees is a WASM pointer to the same underlying function as
+     wasm.dealloc() (noting that wasm.dealloc() is permitted to be a
+     JS wrapper around the WASM function). There is unfortunately no
+     O(1) algorithm for finding this pointer: we have to walk the
+     WASM indirect function table to find it. However, experience
+     indicates that that particular function is always very close to
+     the front of the table (it's been entry #3 in all relevant
+     tests).
+  */
+  const dealloc = wasm.exports[sqlite3.config.deallocExportName];
+  const nFunc = wasm.functionTable().length;
+  let i;
+  for(i = 0; i < nFunc; ++i){
+    const e = wasm.functionEntry(i);
+    if(dealloc === e){
+      capi.SQLITE_WASM_DEALLOC = i;
+      break;
     }
   }
+  if(dealloc !== wasm.functionEntry(capi.SQLITE_WASM_DEALLOC)){
+    toss("Internal error: cannot find function pointer for SQLITE_WASM_DEALLOC.");
+  }
+//#/if
 
   /**
      Signatures for the WASM-exported C-side functions. Each entry
@@ -85,7 +111,8 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   */
   const bindingSignatures = {
     core: [
-      // Please keep these sorted by function name!
+      /* Please keep these sorted by function name! No algos rely
+         on that but it helps human eyeballs. */
       ["sqlite3_aggregate_context","void*", "sqlite3_context*", "int"],
       /* sqlite3_auto_extension() has a hand-written binding. */
       ["sqlite3_backup_init", "sqlite3_backup*", "sqlite3*", "string", "sqlite3*", "string"],
@@ -115,10 +142,9 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       ]],
       ["sqlite3_busy_timeout","int", "sqlite3*", "int"],
       /* sqlite3_cancel_auto_extension() has a hand-written binding. */
-      /* sqlite3_close_v2() is implemented by hand to perform some
-         extra work. */
       ["sqlite3_changes", "int", "sqlite3*"],
       ["sqlite3_clear_bindings","int", "sqlite3_stmt*"],
+      ["sqlite3_close_v2", "int", "sqlite3*"],
       ["sqlite3_collation_needed", "int", "sqlite3*", "*", "*"/*=>v(ppis)*/],
       ["sqlite3_column_blob","*", "sqlite3_stmt*", "int"],
       ["sqlite3_column_bytes","int", "sqlite3_stmt*", "int"],
@@ -274,15 +300,11 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       */
       ["sqlite3_set_auxdata", undefined, [
         "sqlite3_context*", "int", "*",
-        true
-          ? "*"
-          : new wasm.xWrap.FuncPtrAdapter({
-            /* If we can find a way to automate their cleanup, JS functions can
-               be auto-converted with this. */
-            name: 'xDestroyAuxData',
-            signature: 'v(p)',
-            contextKey: (argv, argIndex)=>argv[0/* sqlite3_context* */]
-          })
+//#if sqlite3_set_auxdata:dtor
+        "sqlite3_set_auxdata:dtor"
+//#else
+        "*"
+//#/if
       ]],
       ['sqlite3_set_errmsg', 'int', 'sqlite3*', 'int', 'string'],
       ["sqlite3_shutdown", undefined],
@@ -763,7 +785,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
      Prepare JS<->C struct bindings for the non-opaque struct types we
      need...
   */
-  sqlite3.StructBinder = globalThis.Jaccwabyt({
+  sqlite3.StructBinder = Jaccwabyt({/*injected via preprocessor*/
     heap: wasm.heap8u,
     alloc: wasm.alloc,
     dealloc: wasm.dealloc,
@@ -774,7 +796,6 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
                      later: it probably should have been '$$', but see
                      the previous sentence.) */ '$'
   });
-  delete globalThis.Jaccwabyt;
 
   {// wasm.xWrap() bindings...
 
@@ -789,8 +810,8 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
        The 'string:static' argument adapter treats its argument as
        either...
 
-       - WASM pointer: assumed to be a long-lived C-string which gets
-         returned as-is.
+       - If wasm.isPtr(v) is true it is assumed to be a long-lived
+         C-string pointer which gets returned as-is.
 
        - Anything else: gets coerced to a JS string for use as a map
          key. If a matching entry is found (as described next), it is
@@ -812,8 +833,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       function(v){
         if(wasm.isPtr(v)) return v;
         v = ''+v;
-        let rc = this[v];
-        return rc || (this[v] = wasm.allocCString(v));
+        return this[v] ??= wasm.allocCString(v);
       }.bind(Object.create(null))
     );
 
@@ -873,6 +893,30 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
                   ? v.pointer : v)
       );
     }
+
+//#if sqlite3_set_auxdata:dtor
+    wasm.xWrap.argAdapter('sqlite3_set_auxdata:dtor', (v, argv, argIndex)=>{
+      /* We're using the xWrap-internal version of ----^^^^^^ this
+         interface, rather than the public interface. We need this to
+         get the (sqlite3_context*) object in argv[0], without which
+         we cannot manage these function binding lifetimes. */
+      //sqlite3.config.warn("Auto-converting auxdata dtor function",v);
+      if( !(v instanceof Function) ) return wasm.xWrap.resultAdapter('*')(v);
+      const pCx = argv[0];
+      if( !wasm.isPtr(pCx) ){
+        toss("Cannot convert JS Function:",
+             "invalid sqlite3_context argument");
+      }
+      __contextScopedWasmFuncs ??= new Map;
+      const fp = wasm.installFunction('v(p)', v);
+      let set = __contextScopedWasmFuncs.get(pCx);
+      if( !set ){
+        __contextScopedWasmFuncs.set(pCx, (set = new Set));
+      }
+      set.add(fp)/*cleaned up via SQLITE_DISPOSAL_NOTIFIER for pCx*/;
+      return fp;
+    });
+//#/if
 
     /**
        Alias `T*` to `*` for return type conversions for common T
@@ -957,7 +1001,77 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       toss("Maintenance required: increase sqlite3__wasm_enum_json()'s",
            "static buffer size!");
     }
-    wasm.ctype = JSON.parse(wasm.cstrToJs(cJson));
+    const j = wasm.cstrToJs(cJson);
+    wasm.ctype = JSON.parse(j);
+
+    const WSN = wasm.ctype.structs.find(v=>v.name==='WasmDisposalNotifier');
+    if( WSN ){
+    /* Redirect the SQLITE_DISPOSAL_NOTIFIER callback installed by
+       sqlite3-wasm.c to JS by (A) creating a JS/C struct proxy which
+       wraps the C-side singleton instance of WasmDisposalNotifier and
+       (B) connecting our own function to its $callback method. */
+      //sqlite3.config.warn("WARNING: installing WasmDisposalNotifier");
+      const ctor = sqlite3.StructBinder(WSN);
+      const w = new ctor(
+        wasm.exports.sqlite3__wasm_disposal_notifier()
+        /* ^^^ ptr to the singleton WasmDisposalNotifier instance */
+      );
+      util.disposers = Object.assign(Object.create(null),{
+        /* Lists of disposer callbacks which are passed the WASM pointer
+           of an object which is currently being finalized from
+           WASM. These are triggered via the SQLITE_DISPOSAL_NOTIFIER
+           callback which sqlite3-wasm.c installs. The C side of this
+           ensures that these callbacks are never passed NULL.
+           Downstream library bootstrapping code may append callbacks to
+           these (e.g. oo1 does so). */
+        db: [], stmt: [], context: []
+      });
+      /* Map type IDs to names to simplify $callback() below. */
+      util.disposers[1] = util.disposers.db;
+      util.disposers[2] = util.disposers.stmt;
+      util.disposers[3] = util.disposers.context;
+      try {
+        w.$callback = wasm.installFunction("v(ip)", (tid,ptr)=>{
+          //sqlite3.config.debug("WasmDisposalNotifier:",tid,ptr);
+          const li = util.disposers[tid]
+                ?? toss("Internal bug: invalid disposal type ID",tid);
+          for(const d of li){
+            try{d(ptr)}
+            catch(e){
+              sqlite3.config.error("on-dispose handler type",
+                                   tid,"threw:",e);
+            }
+          }
+        });
+      }finally{
+        w.dispose(/*only needed for the $callback assignment*/);
+        /* The irony that we permanently leak a function which is itself
+           responsible for cleanup is not lost on us. */
+      }
+//#if 0
+      // Just for testing...
+      util.disposers.stmt.push((p)=>sqlite3.config.warn("disposing stmt",p));
+      util.disposers.db.push((p)=>sqlite3.config.warn("disposing db",p));
+      util.disposers.context.push((p)=>sqlite3.config.warn("disposing context",p));
+//#/if
+//#if sqlite3_set_auxdata:dtor
+      util.disposers.context.push((p)=>{
+        const set = __contextScopedWasmFuncs?.get?.(p);
+        //sqlite3.config.warn("disposing context",p, set);
+        if( !set ) return;
+        __contextScopedWasmFuncs.delete(p);
+        //sqlite3.config.warn("Disposing of WASM function bindings",set);
+        for(const fp of set){
+          try{wasm.uninstallFunction(fp)}
+          catch(e){/*ignore*/}
+        }
+      });
+//#/if
+    }else{
+      toss("Expecting WasmDisposalNotifier to have been exported.");
+    }
+
+    //sqlite3.config.error("cJson JSON length:",j.length);
     // Groups of SQLITE_xyz macros...
     const defineGroups = ['access', 'authorizer',
                           'blobFinalizers', 'changeset',
@@ -998,6 +1112,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     const notThese = Object.assign(Object.create(null),{
       // For each struct to NOT register, map its name to true:
       WasmTestStruct: true,
+      WasmDisposalNotifier: true,
       /* sqlite3_index_info and friends require int64: */
       sqlite3_index_info: !wasm.bigIntEnabled,
       sqlite3_index_constraint: !wasm.bigIntEnabled,
@@ -1053,7 +1168,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
      UDFs and collations so that sqlite3_close_v2() can clean up any
      automated JS-to-WASM function conversions installed by those.
   */
-  const __argPDb = (pDb)=>wasm.xWrap.argAdapter('sqlite3*')(pDb);
+  const __argPDb = wasm.xWrap.argAdapter('sqlite3*');
   const __argStr = (str)=>wasm.isPtr(str) ? wasm.cstrToJs(str) : str;
   const __dbCleanupMap = function(
     pDb, mode/*0=remove, >0=create if needed, <0=do not create if missing*/
@@ -1122,6 +1237,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   */
   __dbCleanupMap.cleanup = function(pDb){
     pDb = __argPDb(pDb);
+    //sqlite3.config.warn("disposing pDb",pDb);
     //wasm.xWrap.FuncPtrAdapter.debugFuncInstall = false;
     /**
        Installing NULL functions in the C API will remove those
@@ -1201,16 +1317,11 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     delete m.wudf;
   }/*__dbCleanupMap.cleanup()*/;
 
-  {/* Binding of sqlite3_close_v2() */
-    const __sqlite3CloseV2 = wasm.xWrap("sqlite3_close_v2", "int", "sqlite3*");
-    capi.sqlite3_close_v2 = function(pDb){
-      if(1!==arguments.length) return __dbArgcMismatch(pDb, 'sqlite3_close_v2', 1);
-      if(pDb){
-        try{__dbCleanupMap.cleanup(pDb)} catch(e){/*ignored*/}
-      }
-      return __sqlite3CloseV2(pDb);
-    };
-  }/*sqlite3_close_v2()*/
+  util.disposers.db.push(
+    /* When a db is disposed from C, this will clean up the
+       various state we've bound in __dbCleanupMap */
+    __dbCleanupMap.cleanup
+  );
 
   if(capi.sqlite3session_create){
     const __sqlite3SessionDelete = wasm.xWrap(
@@ -1503,6 +1614,9 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
 
   }/*sqlite3_create_function_v2() and sqlite3_create_window_function() proxies*/;
 
+  /* Warn if client-level code makes use of FuncPtrAdapter. */
+  wasm.xWrap.FuncPtrAdapter.warnOnUse = true;
+
   {/* Special-case handling of sqlite3_prepare_v2() and
       sqlite3_prepare_v3() */
 
@@ -1605,8 +1719,8 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
         return __bindText(pStmt, iCol, text, nText, xDestroy);
       }else if(text instanceof ArrayBuffer){
         text = new Uint8Array(text);
-      }else if(Array.isArray(pMem)){
-        text = pMem.join('');
+      }else if(Array.isArray(text)){
+        text = text.join('');
       }
       let p, n;
       try{
@@ -1614,7 +1728,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           p = wasm.allocFromTypedArray(text);
           n = text.byteLength;
         }else if('string'===typeof text){
-          [p, n] = wasm.allocCString(text);
+          [p, n] = wasm.allocCString(text, true);
         }else{
           return util.sqlite3__wasm_db_error(
             capi.sqlite3_db_handle(pStmt), capi.SQLITE_MISUSE,
@@ -1648,7 +1762,7 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           p = wasm.allocFromTypedArray(pMem);
           n = nMem>=0 ? nMem : pMem.byteLength;
         }else if('string'===typeof pMem){
-          [p, n] = wasm.allocCString(pMem);
+          [p, n] = wasm.allocCString(pMem, true);
         }else{
           return util.sqlite3__wasm_db_error(
             capi.sqlite3_db_handle(pStmt), capi.SQLITE_MISUSE,
@@ -1791,8 +1905,140 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     };
   }/* auto-extension */
 
-  /* Warn if client-level code makes use of FuncPtrAdapter. */
-  wasm.xWrap.FuncPtrAdapter.warnOnUse = true;
+  {/* sqlite3_js_on_pointer_dispose() */
+    const __jsOnDisposeTypes = Object.assign(Object.create(null),{
+      /* Lazily populated with Map(ptr, Set<function>) */
+      "sqlite3*": null,
+      "sqlite3_stmt*": null,
+      "sqlite3_context*": null
+    });
+    (function callee(disposerKey, typeName){
+      /* Call all callbacks queued for the given ptr/typeName
+         combination and clear that queue. */
+      util.disposers[disposerKey].push((ptr)=>{
+        const di = __jsOnDisposeTypes[typeName];
+        const set = di?.get?.(ptr);
+        if( !set ) return;
+        //sqlite3.config.warn("jopd",ptr,di,set);
+        di.delete(ptr);
+        for(const f of set){
+          try{f(ptr)} catch(e){
+            sqlite3.config.error(
+              "sqlite3_js_on_pointer_dispose(",
+              t,ptr,f,") callback threw", e
+            );
+          }
+        }
+      });
+      return callee;
+    })('db', 'sqlite3*')
+    ('stmt', 'sqlite3_stmt*')
+    ('context', 'sqlite3_context*');
+
+    /**
+       Sets up the given callback to be called when the given WASM
+       pointer is finalized by the library. The purposes of this
+       is to provide JS code with a way to map state to native
+       pointers in such a way that the state can be cleaned up
+       regardless of how the natives get finalized.
+
+       typeName describes what data type ptr is. It must be one of:
+
+       "sqlite3*", "sqlite3_stmt*", "sqlite3_context*"
+
+       and the ptr argument must be a non-0 pointer to that type.
+
+       It is legal to call this multiple times for a given pointer.
+       Each callback will be added to the queue, but only once for
+       each distinct callback reference. That is, calling it N times
+       with the same ptr/callback combination will only install the
+       callback once, but N calls with N distinct callbacks will
+       install all N.
+
+       When used in loops, user-defined SQL functions, or client
+       functions which may see the same pointer multiple times, it is
+       generally important to **not pass function literals**, as each
+       such literal is a different instance, so an identical callback
+       may be added N times for a given pointer. Functions should be
+       assigned to symbols and those symbols should be passed in so
+       that callback deduplication works:
+
+       ```
+       // NO:
+       sqlite3_js_on_pointer_dispose(..., (x)=>...);
+       // YES:
+       const myFunc = (x)=>...;
+       sqlite3_js_on_pointer_dispose(..., myFunc);
+       ```
+
+       For one-call cases, e.g. when passing a newly-initialized db or
+       statement, a function literal is fine. Within user-defined SQL
+       functions, in particular, function literals will cause grief in
+       the form of potentially registering (C x R) callbacks, where C
+       is the number of distinct contexts in the query and R the
+       number of rows.
+
+       On success it returns an unspecified truthy value. On error
+       (argument validation issues) it returns an unspecified falsy
+       value and has no side-effects. It does not throw because it's
+       intended to be usable from cases where throwing is not
+       permitted, but it only fails for argument validation.
+
+       When SQLite is about to free that pointer, all callbacks
+       queued for it will be passed that pointer and then the
+       callback queue for that pointer is cleared.
+
+       Because the callback is called during the native-level
+       finalization process, it must observe certain limitations:
+
+       - It absolutely must not finalize the object, or results are
+       well and truly undefined (best case, a WASM crash).
+
+       - Any exceptions are ignored.
+
+       - It should not perform "real work" with the pointer. e.g. a
+       finalizing statement must not be stepped nor its columns
+       fetched. A finalizing db should probably not run new
+       queries. In the case of "sqlite3_context*", no guarantees
+       whatsoever are made about which operations are legal during
+       their finalization.
+
+       - The _only legal use_ for sqlite3_context pointers from these
+       callbacks is as an opaque key. Ideally clients should restrict
+       use of the other types similarly, though they are not quite so
+       strict in that regard.
+
+       Ideally, such callbacks do nothing more than remove any state
+       which they have mapped to the given pointer value, without
+       actually trying to use the object referred to by that pointer.
+       That's not always a realistic goal, however.
+
+       Added in 3.55.0.
+    */
+    capi.sqlite3_js_on_pointer_dispose = function(typeName, ptr, callback){
+//#if 1
+      if( !ptr || !wasm.isPtr(ptr) ) return null;
+      else if( !(callback instanceof Function) ) return undefined;
+      else if( !Object.prototype.hasOwnProperty.call(__jsOnDisposeTypes, typeName) ){
+        return false;
+      }
+      const di = __jsOnDisposeTypes[typeName] ??= new Map;
+//#else
+      if( !ptr || !wasm.isPtr(ptr) ) toss("Expecting a WASM pointer for arg[1]");
+      if( !(callback instanceof Function) ) toss("Expecting a Function-type callback");
+      const di = Object.prototype.hasOwnProperty.call(__jsOnDisposeTypes, typeName)
+            ? (__jsOnDisposeTypes[typeName] ??= new Map)
+            : toss("Expecting a typeName of 'sqlite3*',",
+                   "'sqlite3_stmt*', or 'sqlite3_context*'");
+//#/if
+      if( !di.get(ptr)?.add?.(callback) ){
+        di.set(ptr, new Set([callback]));
+      }
+      //console.debug("jopd di",di);
+      // Potential TODO: return the Set.size (number of callbacks)
+      return true;
+    };
+  }
 
   const StructBinder = sqlite3.StructBinder
   /* we require a local alias b/c StructBinder is removed from the sqlite3

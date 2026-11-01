@@ -234,7 +234,7 @@ static const PragmaName aPragmaName[] = {
   /* ColNames:  */ 0, 0,
   /* iArg:      */ SQLITE_CountRows },
 #endif
-#if !defined(SQLITE_OMIT_PAGER_PRAGMAS) && SQLITE_OS_WIN
+#if !defined(SQLITE_OMIT_PAGER_PRAGMAS) && defined(_WIN32)
  {/* zName:     */ "data_store_directory",
   /* ePragTyp:  */ PragTyp_DATA_STORE_DIRECTORY,
   /* ePragFlg:  */ PragFlg_NoColumns1,
@@ -657,4 +657,4 @@ static const PragmaName aPragmaName[] = {
   /* iArg:      */ SQLITE_WriteSchema|SQLITE_NoSchemaError },
 #endif
 };
-/* Number of pragmas: 68 on by default, 78 total. */
+/* Number of pragmas: 67 on by default, 78 total. */

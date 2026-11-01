@@ -377,7 +377,7 @@ SQLITE_API int sqlite3_initialize(void){
   ** then we have to invoke the (application-supplied) WSD initialization
   ** routine before doing anything else. */
 #ifdef SQLITE_OMIT_WSD
-  rc = sqlite3_wsd_init(4096, 24);
+  int rc = sqlite3_wsd_init(4096, 24);
   if( rc!=SQLITE_OK ){
     return rc;
   }
@@ -1041,6 +1041,9 @@ int sqlite3_db_config(sqlite3 *db, int op, ...){
         { SQLITE_DBCONFIG_ENABLE_ATTACH_CREATE,  SQLITE_AttachCreate   },
         { SQLITE_DBCONFIG_ENABLE_ATTACH_WRITE,   SQLITE_AttachWrite    },
         { SQLITE_DBCONFIG_ENABLE_COMMENTS,       SQLITE_Comments       },
+#ifdef SQLITE_DEBUG
+        { SQLITE_DBCONFIG_VDBE_TRACE,            SQLITE_VdbeTrace      },
+#endif
       };
       unsigned int i;
       rc = SQLITE_ERROR; /* IMP: R-42790-23372 */
@@ -1323,6 +1326,9 @@ static int sqlite3Close(sqlite3 *db, int forceZombie){
   if( !sqlite3SafetyCheckSickOrOk(db) ){
     return SQLITE_MISUSE_BKPT;
   }
+#if defined(SQLITE_DISPOSAL_NOTIFIER)
+  SQLITE_DISPOSAL_NOTIFIER(1,db);
+#endif
   sqlite3_mutex_enter(db->mutex);
   if( db->mTrace & SQLITE_TRACE_CLOSE ){
     db->trace.xV2(SQLITE_TRACE_CLOSE, db->pTraceArg, db, 0);
@@ -3083,6 +3089,7 @@ static const int aHardLimit[] = {
   SQLITE_MAX_PARSER_DEPTH,
   SQLITE_MAX_SCHEMA,
   SQLITE_MAX_TRIGGER_STEPS,
+  SQLITE_MAX_CTES,
 };
 
 /*
@@ -3170,7 +3177,8 @@ int sqlite3_limit(sqlite3 *db, int limitId, int newLimit){
   assert( aHardLimit[SQLITE_LIMIT_WORKER_THREADS]==SQLITE_MAX_WORKER_THREADS );
   assert( aHardLimit[SQLITE_LIMIT_SCHEMA]==SQLITE_MAX_SCHEMA );
   assert( aHardLimit[SQLITE_LIMIT_TRIGGER_STEPS]==SQLITE_MAX_TRIGGER_STEPS );
-  assert( SQLITE_LIMIT_TRIGGER_STEPS==(SQLITE_N_LIMIT-1) );
+  assert( aHardLimit[SQLITE_LIMIT_CTES]==SQLITE_MAX_CTES );
+  assert( SQLITE_LIMIT_CTES==(SQLITE_N_LIMIT-1) );
 
 
   if( limitId<0 || limitId>=SQLITE_N_LIMIT ){
@@ -4293,9 +4301,14 @@ int sqlite3_sleep(int ms){
   if( pVfs==0 ) return 0;
 
   /* This function works in milliseconds, but the underlying OsSleep()
-  ** API uses microseconds. Hence the 1000's.
+  ** API uses microseconds. Hence the range limitation and the "*1000".
   */
-  rc = (sqlite3OsSleep(pVfs, ms<0 ? 0 : 1000*ms)/1000);
+  if( ms<0 ){
+    ms = 0;
+  }else if( ms>2147483 ){
+    ms = 2147483;  /* Maximum sleep time of 35 minutes and 47.484 seconds */
+  }
+  rc = sqlite3OsSleep(pVfs, ms*1000)/1000;
   return rc;
 }
 
@@ -4621,7 +4634,7 @@ int sqlite3_test_control(int op, ...){
       break;
     }
 
-    /*  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, sqlite3 *db, int N)
+    /*  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, sqlite3 *db, u64 N)
     **
     ** Enable or disable various optimizations for testing purposes.  The
     ** argument N is a bitmask of optimizations to be disabled.  For normal
@@ -4632,18 +4645,18 @@ int sqlite3_test_control(int op, ...){
     */
     case SQLITE_TESTCTRL_OPTIMIZATIONS: {
       sqlite3 *db = va_arg(ap, sqlite3*);
-      db->dbOptFlags = va_arg(ap, u32);
+      db->dbOptFlags = va_arg(ap, u64);
       break;
     }
 
-    /*  sqlite3_test_control(SQLITE_TESTCTRL_GETOPT, sqlite3 *db, int *N)
+    /*  sqlite3_test_control(SQLITE_TESTCTRL_GETOPT, sqlite3 *db, u64 *N)
     **
     ** Write the current optimization settings into *N.  A zero bit means that
     ** the optimization is on, and a 1 bit means that the optimization is off.
     */
     case SQLITE_TESTCTRL_GETOPT: {
       sqlite3 *db = va_arg(ap, sqlite3*);
-      int *pN = va_arg(ap, int*);
+      u64 *pN = va_arg(ap, u64*);
       *pN = db->dbOptFlags;
       break;
     }
@@ -4889,6 +4902,28 @@ int sqlite3_test_control(int op, ...){
       const char *z = va_arg(ap,const char*);
       double *pR = va_arg(ap,double*);
       rc = sqlite3AtoF(z,pR);
+      break;
+    }
+
+    /* sqlite3_test_control(SQLITE_TESTCTRL_ATOF, sqlite3 *db, int iDb)
+    **
+    ** Test access to the sqlite3ExpireStmtsUsingSchema() routine.  All
+    ** prepared statements associated with database connection db and that
+    ** use schema iDb (0==main, 1==temp, etc.) are marked as expired.
+    ** Or if iDb is exactly -1, then expire all prepared statements.
+    **
+    ** If iDb is out of range, this test-control is a harmless no-op.
+    */
+    case SQLITE_TESTCTRL_EXPIRE_STMTS: {
+      sqlite3 *db = va_arg(ap,sqlite3*);
+      int iDb = va_arg(ap,int);
+      assert( db!=0 );
+      if( iDb>=0 && iDb<db->nDb ){
+        sqlite3ExpireStmtsUsingSchema(db, iDb, 0);
+      }else if( iDb==(-1) ){
+        sqlite3ExpirePreparedStatements(db, 0);
+      }
+      rc = SQLITE_OK;
       break;
     }
 

@@ -408,7 +408,7 @@ static void applyNumericAffinity(Mem *pRec, int bTryForInt){
   }else{
     pRec->u.r = rValue;
     pRec->flags |= MEM_Real;
-    if( bTryForInt ) sqlite3VdbeIntegerAffinity(pRec);
+    if( bTryForInt ) sqlite3VdbeIntegerAffinity(pRec, 1);
   }
   /* TEXT->NUMERIC is many->one.  Hence, it is important to invalidate the
   ** string representation after computing a numeric equivalent, because the
@@ -452,7 +452,7 @@ static void applyAffinity(
       if( (pRec->flags & (MEM_Real|MEM_IntReal))==0 ){
         if( pRec->flags & MEM_Str ) applyNumericAffinity(pRec,1);
       }else if( affinity<=SQLITE_AFF_REAL ){
-        sqlite3VdbeIntegerAffinity(pRec);
+        sqlite3VdbeIntegerAffinity(pRec, 0);
       }
     }
   }else if( affinity==SQLITE_AFF_TEXT ){
@@ -848,12 +848,13 @@ static SQLITE_NOINLINE int vdbeColumnFromOverflow(
     assert( t>=12 );
     sqlite3RCStrRef(pBuf);
     if( t&1 ){
-      rc = sqlite3VdbeMemSetStr(pDest, pBuf, len, encoding,
+      rc = sqlite3VdbeMemSetStr(pDest, pBuf, len, encoding|ENC_KEEPBOM,
                                 sqlite3RCStrUnref);
       pDest->flags |= MEM_Term;
     }else{
       rc = sqlite3VdbeMemSetStr(pDest, pBuf, len, 0,
                                 sqlite3RCStrUnref);
+      pDest->enc = encoding;
     }
   }else{
     rc = sqlite3VdbeMemFromBtree(pC->uc.pCursor, iOffset, len, pDest);
@@ -2266,7 +2267,18 @@ case OP_AddImm: {            /* in1 */
 case OP_MustBeInt: {            /* jump0, in1 */
   pIn1 = &aMem[pOp->p1];
   if( (pIn1->flags & MEM_Int)==0 ){
-    applyAffinity(pIn1, SQLITE_AFF_NUMERIC, encoding);
+    if( (pIn1->flags & MEM_Real)!=0 ){
+      sqlite3_int64 ix;
+      if( pIn1->u.r>=-9223372036854775808.0
+       && pIn1->u.r<+9223372036854775808.0
+       && (double)(ix = sqlite3RealToI64(pIn1->u.r))==pIn1->u.r
+      ){
+        pIn1->u.i = ix;
+        MemSetTypeFlag(pIn1, MEM_Int);
+      }
+    }else{
+      applyAffinity(pIn1, SQLITE_AFF_NUMERIC, encoding);
+    }
     if( (pIn1->flags & MEM_Int)==0 ){
       VdbeBranchTaken(1, 2);
       if( pOp->p2==0 ){
@@ -3620,6 +3632,7 @@ case OP_TypeCheck: {
   int nCol;
 
   assert( pOp->p4type==P4_TABLE );
+  if( p->expired==1 ) goto abort_due_to_expired;
   pTab = pOp->p4.pTab;
   assert( pTab->tabFlags & TF_Strict );
   assert( pOp->p3>=0 && pOp->p3<pTab->nCol+2 );
@@ -3947,13 +3960,13 @@ case OP_MakeRecord: {
       len = (u32)pRec->n;
       serial_type = (len*2) + 12 + ((pRec->flags & MEM_Str)!=0);
       if( pRec->flags & MEM_Zero ){
-        serial_type += (u32)pRec->u.nZero*2;
         if( nData ){
           if( sqlite3VdbeMemExpandBlob(pRec) ) goto no_mem;
           len += pRec->u.nZero;
         }else{
           nZero += pRec->u.nZero;
         }
+        serial_type += 2*(u32)pRec->u.nZero;
       }
       nData += len;
       nHdr += sqlite3VarintLen(serial_type);
@@ -4829,7 +4842,7 @@ case OP_Transaction: {
     ** a v-table method.
     */
     if( db->aDb[pOp->p1].pSchema->schema_cookie!=iMeta ){
-      sqlite3ResetOneSchema(db, pOp->p1);
+      sqlite3ResetOneSchema(db, pOp->p1, p);
     }
     p->expired = 1;
     rc = SQLITE_SCHEMA;
@@ -5271,6 +5284,9 @@ case OP_OpenEphemeral: {     /* ncycle */
         p->apCsr[pOp->p1] = 0;  /* Not required; helps with static analysis */
       }else{
         assert( sqlite3BtreeClosesWithCursor(pCx->ub.pBtx, pCx->uc.pCursor) );
+        if( pOp->opcode==OP_OpenAutoindex ){
+          sqlite3BtreeCursorHintFlags(pCx->uc.pCursor, BTREE_SEEK_EQ);
+        }
       }
     }
   }
@@ -5405,11 +5421,22 @@ case OP_ColumnsUsed: {
 ** If the cursor P1 was opened using the OPFLAG_SEEKEQ flag, then this
 ** opcode will either land on a record that exactly matches the key, or
 ** else it will cause a jump to P2.  When the cursor is OPFLAG_SEEKEQ,
-** this opcode must be followed by an IdxLE opcode with the same arguments.
+** this opcode must be followed by an IdxLE opcode with the same arguments,
+** except that the P2 argument (the jump destination) can be different.
 ** The IdxGT opcode will be skipped if this opcode succeeds, but the
 ** IdxGT opcode will be used on subsequent loop iterations.  The
 ** OPFLAG_SEEKEQ flags is a hint to the btree layer to say that this
 ** is an equality search.
+**
+** The P2 of the IdxLE might be less than the P2 of this opcode.  The P2
+** of the IdxLE will be the location to jump to if there are one or more
+** matching rows and is the location to continue with the next row of the
+** first containing loop.  The P2 of this opcode will be the location to
+** jump to if zero rows of cursor P1 match the key, and that will be the
+** continuation address of the first outer loop that contributes to the
+** key.  The P2 of this opcode might be greater than the P2 of the
+** subsequent IdxLE if the first outer loop that influences the key is
+** outer to the immediately next outer loop.
 **
 ** This opcode leaves the cursor configured to move in forward order,
 ** from the beginning toward the end.  In other words, the cursor is
@@ -5472,11 +5499,22 @@ case OP_ColumnsUsed: {
 ** If the cursor P1 was opened using the OPFLAG_SEEKEQ flag, then this
 ** opcode will either land on a record that exactly matches the key, or
 ** else it will cause a jump to P2.  When the cursor is OPFLAG_SEEKEQ,
-** this opcode must be followed by an IdxLE opcode with the same arguments.
+** this opcode must be followed by an IdxGE opcode with the same arguments
+** except the P2 of IdxGE might be less than the P2 of this opcode.
 ** The IdxGE opcode will be skipped if this opcode succeeds, but the
 ** IdxGE opcode will be used on subsequent loop iterations.  The
 ** OPFLAG_SEEKEQ flags is a hint to the btree layer to say that this
 ** is an equality search.
+**
+** The P2 of the IdxGE might be less than the P2 of this opcode.  The P2
+** of the IdxGE will be the location to jump to if there are one or more
+** matching rows and is the location to continue with the next row of the
+** first containing loop.  The P2 of this opcode will be the location to
+** jump to if no rows of cursor P1 match the key, and that will be the
+** continuation address of the first outer loop that contributes to the
+** key. The P2 of this opcode might be greater than the P2 of the
+** subsequent IdxLE if the first outer loop that influences the key is
+** outer to the immediately next outer loop.
 **
 ** See also: Found, NotFound, SeekGt, SeekGe, SeekLt
 */
@@ -5589,7 +5627,9 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
       assert( pOp->opcode==OP_SeekGE || pOp[1].opcode==OP_IdxLT );
       assert( pOp->opcode==OP_SeekLE || pOp[1].opcode==OP_IdxGT );
       assert( pOp[1].p1==pOp[0].p1 );
-      assert( pOp[1].p2==pOp[0].p2 );
+      assert( pOp[1].p2<=pOp[0].p2 );
+      testcase( pOp->opcode==OP_SeekGE && pOp[1].p2<pOp[0].p2 );
+      testcase( pOp->opcode==OP_SeekLE && pOp[1].p2<pOp[0].p2 );
       assert( pOp[1].p3==pOp[0].p3 );
       assert( pOp[1].p4.i==pOp[0].p4.i );
     }
@@ -5951,24 +5991,6 @@ case OP_SeekHit: {           /* ncycle */
     }       
 #endif
     pC->seekHit = pOp->p3;
-  }
-  break;
-}
-
-/* Opcode: IfNotOpen P1 P2 * * *
-** Synopsis: if( !csr[P1] ) goto P2
-**
-** If cursor P1 is not open or if P1 is set to a NULL row using the
-** OP_NullRow opcode, then jump to instruction P2. Otherwise, fall through.
-*/
-case OP_IfNotOpen: {        /* jump */
-  VdbeCursor *pCur;
-
-  assert( pOp->p1>=0 && pOp->p1<p->nCursor );
-  pCur = p->apCsr[pOp->p1];
-  VdbeBranchTaken(pCur==0 || pCur->nullRow, 2);
-  if( pCur==0 || pCur->nullRow ){
-    goto jump_to_p2_and_check_for_interrupt;
   }
   break;
 }
@@ -6552,6 +6574,7 @@ case OP_Insert: {
 
   if( pOp->p4type==P4_TABLE && HAS_UPDATE_HOOK(db) ){
     assert( pC->iDb>=0 );
+    if( p->expired==1 ) goto abort_due_to_expired;
     zDb = db->aDb[pC->iDb].zDbSName;
     pTab = pOp->p4.pTab;
     assert( (pOp->p5 & OPFLAG_ISNOOP) || HasRowid(pTab) );
@@ -6697,6 +6720,7 @@ case OP_Delete: {
 
 #ifdef SQLITE_DEBUG
   if( pOp->p4type==P4_TABLE
+   && !p->expired
    && HasRowid(pOp->p4.pTab)
    && pOp->p5==0
    && sqlite3BtreeCursorIsValidNN(pC->uc.pCursor)
@@ -6715,6 +6739,7 @@ case OP_Delete: {
   ** last moved with OP_Next or OP_Prev, not Seek or NotFound, set
   ** VdbeCursor.movetoTarget to the current rowid.  */
   if( pOp->p4type==P4_TABLE && HAS_UPDATE_HOOK(db) ){
+    if( p->expired==1 ) goto abort_due_to_expired;
     assert( pC->iDb>=0 );
     assert( pOp->p4.pTab!=0 );
     zDb = db->aDb[pC->iDb].zDbSName;
@@ -7017,6 +7042,22 @@ case OP_Rowid: {                 /* out2, ncycle */
   break;
 }
 
+/* Opcode: Stale   P1 * * * *
+**
+** Mark the row cache for cursor P1 as stale.  This opcode is used
+** on pseudo-cursors right before the content of the register that
+** holds their record is modified.
+*/
+case OP_Stale: {
+  VdbeCursor *pC;
+
+  pC = p->apCsr[pOp->p1];
+  assert( pC!=0 );
+  assert( pC->eCurType==CURTYPE_PSEUDO );
+  pC->cacheStatus = CACHE_STALE;
+  break;
+}
+
 /* Opcode: NullRow P1 P2 * * *
 **
 ** Move the cursor P1 to a null row if P2 is 0.  Any OP_Column operations
@@ -7031,6 +7072,7 @@ case OP_Rowid: {                 /* out2, ncycle */
 */
 case OP_NullRow: {
   VdbeCursor *pC;
+  Mem *pMem;
 
   assert( pOp->p1>=0 && pOp->p1<p->nCursor );
   pC = p->apCsr[pOp->p1];
@@ -7052,6 +7094,14 @@ case OP_NullRow: {
   if( pC->eCurType==CURTYPE_BTREE ){
     assert( pC->uc.pCursor!=0 );
     sqlite3BtreeClearCursor(pC->uc.pCursor);
+  }else if( pC->eCurType==CURTYPE_PSEUDO && pC->seekResult>0 ){
+    static char nullRecord[] = { 0x02, 0x00 };
+    pMem = &aMem[pC->seekResult];
+    assert( !VdbeMemDynamic(pMem) );
+    pC->nullRow = 1;
+    pMem->z = nullRecord;
+    pMem->n = 2;
+    pMem->flags = MEM_Blob|MEM_Ephem;
   }
 #ifdef SQLITE_DEBUG
   if( pC->seekOp==0 ) pC->seekOp = OP_NullRow;
@@ -7543,6 +7593,7 @@ case OP_IdxDelete: {
   rc = sqlite3BtreeIndexMoveto(pCrsr, &r, &res);
   if( rc ) goto abort_due_to_error;
   if( res!=0 ){
+    if( p->expired==1 ) goto abort_due_to_expired;
     rc = sqlite3VdbeFindIndexKey(pCrsr, pOp->p4.pIdx, &r, &res, 0);
     if( rc!=SQLITE_OK ) goto abort_due_to_error;
     if( res!=0 ){
@@ -8098,9 +8149,13 @@ case OP_ParseSchema: {
            || db->mallocFailed
            || (CORRUPT_DB && (db->flags & SQLITE_NoSchemaError)!=0) );
 
+  /* ParseSchema is never invoked on a read-only database */
+  assert( db->aDb[iDb].pBt==0 || sqlite3BtreeIsReadonly(db->aDb[iDb].pBt)==0 );
+
 #ifndef SQLITE_OMIT_ALTERTABLE
   if( pOp->p4.z==0 ){
     assert( pOp->p5!=0 );
+    sqlite3ExpireStmtsUsingSchema(db, iDb, p);
     sqlite3SchemaClear(db->aDb[iDb].pSchema);
     db->mDbFlags &= ~DBFLAG_SchemaKnownOk;
     rc = sqlite3InitOne(db, iDb, &p->zErrMsg, pOp->p5);
@@ -8141,6 +8196,7 @@ case OP_ParseSchema: {
   }
   if( rc ){
     sqlite3ResetAllSchemasOfConnection(db);
+    sqlite3ExpirePreparedStatements(db, 0);
     if( rc==SQLITE_NOMEM ){
       goto no_mem;
     }
@@ -8299,6 +8355,7 @@ case OP_IFindKey: {     /* jump, in3 */
   assert( pOp[-1].p3==pOp->p3 );
   pC = p->apCsr[pOp->p1];
   assert( pOp->p4type==P4_INDEX );
+  if( p->expired==1 ) goto abort_due_to_expired;
   assert( pC->eCurType==CURTYPE_BTREE );
   assert( pC->uc.pCursor!=0 );
   assert( pC->isTable==0 );
@@ -10413,7 +10470,7 @@ abort_due_to_error:
   }
   rc = SQLITE_ERROR;
   if( resetSchemaOnFault>0 ){
-    sqlite3ResetOneSchema(db, resetSchemaOnFault-1);
+    sqlite3ResetOneSchema(db, resetSchemaOnFault-1, p);
   }
 
   /* This is the only way out of this procedure.  We have to
@@ -10481,5 +10538,9 @@ no_mem:
 abort_due_to_interrupt:
   assert( AtomicLoad(&db->u1.isInterrupted) );
   rc = SQLITE_INTERRUPT;
+  goto abort_due_to_error;
+
+abort_due_to_expired:
+  rc = SQLITE_SCHEMA;
   goto abort_due_to_error;
 }

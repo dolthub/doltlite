@@ -398,6 +398,7 @@ struct JsonParse {
 */
 #define JSON_EDITABLE  0x01   /* Generate a writable JsonParse object */
 #define JSON_KEEPERROR 0x02   /* Return non-NULL even if there is an error */
+#define JSON_NOCACHE   0x04   /* Do not use the JSON cache */
 
 /**************************************************************************
 ** Forward references
@@ -1873,6 +1874,7 @@ json_parse_restart:
         }
       }else{
         if( !sqlite3Isdigit(z[i+1]) ){
+          assert( z[i]=='-' || z[i]=='+' );
           /* JSON5 allows for "+Infinity" and "-Infinity" using exactly
           ** that case.  SQLite also allows these in any case and it allows
           ** "+inf" and "-inf". */
@@ -1892,6 +1894,18 @@ json_parse_restart:
             t |= 0x01;
             goto parse_number_2;
           }
+#if 0
+          /* Full JSON5 compliance requires support for +NaN and -NaN, even
+          ** though the extra prefix is not used for anything.  Enable this
+          ** block of code to get SQLite to do the same thing.  It never
+          ** has in an official release, and the only accomplishment of
+          ** enabling it would be to take up a few bytes more code space. */
+          if( sqlite3StrNICmp(&z[i+1],"NaN",3)==0 ){
+            pParse->hasNonstd = 1;
+            jsonBlobAppendOneByte(pParse, JSONB_NULL);
+            return i+4;
+          }
+#endif
           pParse->iErr = i;
           return -1;
         }
@@ -3502,7 +3516,12 @@ static void jsonReturnFromBlob(
         if( c=='\\' ){
           u32 v;
           u32 szEscape = jsonUnescapeOneChar(&z[iIn], sz-iIn, &v);
-          if( v<=0x7f ){
+          if( v==0 && iIn+szEscape==sz
+           && (z[iIn+1]=='\n' || z[iIn+1]=='\r' || (u8)z[iIn+1]==0xe2)
+          ){
+            /* A JSON5 line continuation at the end of the string
+            ** contributes no characters */
+          }else if( v<=0x7f ){
             zOut[iOut++] = (char)v;
           }else if( v<=0x7ff ){
             assert( szEscape>=2 );
@@ -3841,7 +3860,9 @@ static JsonParse *jsonParseFuncArg(
   if( eType==SQLITE_NULL ){
     return 0;
   }
-  pFromCache = jsonCacheSearch(ctx, pArg);
+  if( (flgs & JSON_NOCACHE)==0 ){
+    pFromCache = jsonCacheSearch(ctx, pArg);
+  }
   if( pFromCache ){
     pFromCache->nJPRef++;
     if( (flgs & JSON_EDITABLE)==0 ){
@@ -4916,7 +4937,7 @@ static void jsonValidFunc(
       if( (flags & 0x3)==0 ) break;
       memset(&px, 0, sizeof(px));
      
-      p = jsonParseFuncArg(ctx, argv[0], JSON_KEEPERROR);
+      p = jsonParseFuncArg(ctx, argv[0], JSON_KEEPERROR|JSON_NOCACHE);
       if( p ){
         if( p->oom ){
           sqlite3_result_error_nomem(ctx);
@@ -5509,17 +5530,16 @@ static int jsonEachPathLength(JsonEachCursor *p){
   u32 n = p->path.nUsed;
   char *z = p->path.zBuf;
   if( p->iRowid==0 && p->bRecursive && n>=2 ){
-    while( n>1 ){
+    while( ALWAYS(n>1) ){
       n--;
       if( z[n]=='[' || z[n]=='.' ){
-        u32 x, sz = 0;
+        u32 x;
         char cSaved = z[n];
         z[n] = 0;
         assert( p->sParse.eEdit==0 );
         x = jsonLookupStep(&p->sParse, 0, z+1, 0);
         z[n] = cSaved;
-        if( JSON_LOOKUP_ISERROR(x) ) continue;
-        if( x + jsonbPayloadSize(&p->sParse, x, &sz) == p->i ) break;
+        if( !JSON_LOOKUP_ISERROR(x) ) break;
       }
     }
   }

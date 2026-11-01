@@ -82,7 +82,7 @@
 /*
 ** Software version. Returned by "SELECT vec1_info()".
 */
-#define VEC1_VERSION "0.7"
+#define VEC1_VERSION "0.8"
 
 /*
 ** Values for Vec1ModelHeader.iVersion:
@@ -123,6 +123,11 @@
 # include <stdio.h>
 # include <stdlib.h>
 
+/* INFINITY is C99. Fall back to HUGE_VAL for C89 compilers. */
+#ifndef INFINITY
+# define INFINITY HUGE_VAL
+#endif
+
 /* Standard sized types. */
 typedef sqlite3_int64  i64;
 typedef sqlite3_uint64 u64;
@@ -135,11 +140,11 @@ typedef char            i8;
 
 #if !defined(VEC1_TEST_SCALAR)
 
-#define VERTICAL_SUM_GENERIC(aAcc, nAcc, I) {                          \
-  int c;                                                               \
-  for(c=4; c<nAcc; c++) aAcc[c & 3] = I (aAcc[c & 3], aAcc[c]);        \
-  for(c=2; c<4 && c<nAcc; c++) aAcc[c & 1] = I (aAcc[c & 1], aAcc[c]); \
-  if( nAcc>1 ) aAcc[0] = I (aAcc[0], aAcc[1]);                         \
+#define VERTICAL_SUM_GENERIC(aAcc, nAcc, I) {                                 \
+  int dd;                                                                     \
+  for(dd=4; dd<nAcc; dd++) aAcc[dd & 3] = I (aAcc[dd & 3], aAcc[dd]);         \
+  for(dd=2; dd<4 && dd<nAcc; dd++) aAcc[dd & 1] = I (aAcc[dd & 1], aAcc[dd]); \
+  if( nAcc>1 ) aAcc[0] = I (aAcc[0], aAcc[1]);                                \
 }
 
 #ifdef __AVX2__
@@ -389,7 +394,7 @@ struct Vec1ModelHeader {
 */
 #define VEC1_MAX_NTHREAD 128
 
-static int vec1CorruptError(){
+static int vec1CorruptError(void){
   return SQLITE_CORRUPT_VTAB;
 }
 #define VEC1_CORRUPT vec1CorruptError();
@@ -698,7 +703,7 @@ static void vec1HeapInsert(Vec1AnnHeap *p, sqlite3_int64 iRowid, double fDist){
 ** encountered.
 */
 static int vec1BufferGrow(Vec1Buffer *pBuf, sqlite3_int64 nByte){
-  if( pBuf->n+nByte>pBuf->nAlloc ){
+  if( nByte>pBuf->nAlloc-pBuf->n ){
     sqlite3_int64 nNew = pBuf->nAlloc;
     unsigned char *aNew = 0;
 
@@ -837,12 +842,11 @@ static void vec1FromJsonFunc(
   const char *zJson = (const char*)sqlite3_value_text(aVal[0]);
   int nJson = sqlite3_value_bytes(aVal[0]);
   const char *p = zJson;
+  float *aVec = 0;
+  int nVec = 0;
 
   assert( nVal==1 );
   UNUSED_PARAMETER(nVal);
-
-  float *aVec = 0;
-  int nVec = 0;
 
   /* vec1_from_json(NULL) returns NULL */
   if( sqlite3_value_type(aVal[0])==SQLITE_NULL ) return;
@@ -2050,7 +2054,7 @@ static float *vec1TrainingVector(Vec1TrainVectors *p, int iVec){
 ** nCode vectors, each of nCodeElem elements. Return the index of the best
 ** match for aSub in aCodebook[].
 */
-static int vec1PqBestMatch(
+static int vec1BestMatchSimple(
   const float *aCodebook,         /* Codebook of nCodeElem element vectors */
   int nCode,                      /* Number of vectors in aCodebook */
   const float *aSub,              /* nCodeElem element vector */
@@ -2075,9 +2079,24 @@ static int vec1PqBestMatch(
 }
 
 /*
+** Relative tolerance used by vec1BucketIsNearTie().
+*/
+#define VEC1_BUCKET_TOLERANCE 0.00001
+
+/*
+** fBest is the distance from a vector to its nearest IVF centroid, as
+** found by vec1BestMatchSimple(). fDist is the distance from the same
+** vector to some other centroid. Return true if the two distances are
+** close enough that rounding differences could account for the difference.
+*/
+static int vec1BucketIsNearTie(double fBest, double fDist){
+  return (fDist - fBest) <= (fBest * VEC1_BUCKET_TOLERANCE);
+}
+
+/*
 ** Return a pseudo-random positive 32-bit value.
 */
-static int vec1Rand31(){
+static int vec1Rand31(void){
   int val;
   sqlite3_randomness(sizeof(val), (void*)&val);
   return (val & 0x7FFFFFFF);
@@ -2125,10 +2144,10 @@ struct Vec1Random {
 static u32 vec1RandomNext(Vec1Random *p) {
   u32 xorshifted, rot;
   u64 old = p->state;
-  p->state = old * 6364136223846793005ULL + p->inc;
+  p->state = old * ((((u64)0x5851F42D)<<32)|0x4C957F2D) + p->inc;
   xorshifted = (u32)(((old >> 18u) ^ old) >> 27u);
   rot = (u32)(old >> 59u);
-  return ((xorshifted >> rot) | (xorshifted << ((-rot) & 31))) & 0x7FFFFFFF;
+  return ((xorshifted >> rot) | (xorshifted << ((32 - rot) & 31))) & 0x7FFFFFFF;
 }
 
 static void vec1RandomInit(Vec1Random *p, u64 seed, u64 id){
@@ -2168,7 +2187,7 @@ static void vec1KMeansInitWork(void *pCtx){
     float *vec = vec1TrainingVector(p->pVec, ii);
     for(jj=p->iFirstNew; jj<p->nCentroid; jj++){
       float *cent = &p->aCentroid[jj * nElem];
-      float dist = vec1L2Dist(vec, cent, nElem);
+      float dist = (float)vec1L2Dist(vec, cent, nElem);
       if( jj==0 || dist<p->aMin[ii] ){
         p->aMin[ii] = dist;
         if( p->aBest ) p->aBest[ii] = jj;
@@ -2225,7 +2244,6 @@ static int vec1KMeansInitOne(
   int *aBest = 0;
   int ii;                         /* Loop counter for per-job loop */
   int rr;                         /* Loop counter for per-round loop */
-  int iNext;
   int nCentroid = 0;
   int nNewCentroid = 0;
   float *vec = 0;
@@ -2245,7 +2263,7 @@ static int vec1KMeansInitOne(
     aBest = (int*)&aMin[pVec->nVec];
   }
 
-  for(ii=0, iNext=0; ii<nJob; ii++){
+  for(ii=0; ii<nJob; ii++){
     KMeansInitJob *pJob = &aJob[ii];
     ASSIGN_VECTORS_TO_JOB(pVec, pJob, ii, nJob);
     pJob->aMin = aMin;
@@ -2286,7 +2304,7 @@ static int vec1KMeansInitOne(
     /* Choose new centroids */
     if( nNewCentroid==1 ){
       /* KMeans ++ case */
-      float fTarget = (fTotalMin * vec1RandomNext(&rnd)) / 0x7FFFFFFF;
+      float fTarget = (float)((fTotalMin * vec1RandomNext(&rnd)) / 0x7FFFFFFF);
       for(vv=0; vv<pVec->nVec-1; vv++){
         fTarget -= (aMin[vv] * (aWeight ? aWeight[vv] : 1));
         if( fTarget<=0.0 ) break;
@@ -2323,9 +2341,11 @@ static int vec1KMeansInitOne(
   return SQLITE_OK;
 }
 
+
 /*
 ** Implementation of KMeans || initialization.
 */
+#if 0
 static int vec1KMeansParallel(
   Vec1TrainVectors *pVec,
   Vec1JobQueue *pQueue,           /* Job queue to use (NULL -> 1 thread) */
@@ -2358,6 +2378,7 @@ static int vec1KMeansParallel(
 
   return rc;
 }
+#endif
 
 static int vec1KMeansPlusPlus(
   Vec1TrainVectors *pVec,
@@ -2372,8 +2393,10 @@ static int vec1KMeansPlusPlus(
 
 #if defined(_MSC_VER)
 # define VEC1_NOINLINE __declspec(noinline)
-#else
+#elif defined(__GNUC__)
 # define VEC1_NOINLINE __attribute__((noinline))
+#else
+# define VEC1_NOINLINE
 #endif
 
 static VEC1_NOINLINE void vec1AddInPlaceScalar(
@@ -2413,7 +2436,7 @@ static void vec1AddInPlace(float * a1, const float * a2, int n){
 }
 
 #ifdef VEC1_HAVE_NEON
-static inline void vec1MultiBestMatch(
+static void vec1MultiBestMatch(
   int nElem,                      /* Size of vectors in elements */
   int iCentroid,                  /* Centroid offset */
   const float *aVec[VEC1_MULTIMATCH_NVEC],
@@ -2534,7 +2557,7 @@ static void vec1BestMatchTransposeN(
   const int nWidth = VEC1_NTRANSPOSE_WIDTH;
   float aDist[VEC1_MULTIMATCH_NVEC];
   int aBest[VEC1_MULTIMATCH_NVEC];
-  int vv;
+  int vv;                         /* For looping 0..VEC1_MULTIMATCH_NVEC-1 */
   int iCent;
   const float *pTrans = aCentNT;
 
@@ -2548,7 +2571,6 @@ static void vec1BestMatchTransposeN(
   for(iCent=0; iCent<=(nCent-nWidth); iCent+=nWidth){
     __m256 aAcc[VEC1_MULTIMATCH_NVEC];
     int d;
-    int vv;                       /* For looping 0..VEC1_MULTIMATCH_NVEC-1 */
 
     for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
       aAcc[vv] = _mm256_setzero_ps();
@@ -2590,7 +2612,7 @@ static void vec1BestMatchTransposeN(
   for( ; iCent<nCent; iCent++){
     const float *cent = &aCent[iCent*nElem];
     for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
-      float dist = vec1L2Dist(aVec[vv], cent, nElem);
+      float dist = (float)vec1L2Dist(aVec[vv], cent, nElem);
       if( dist<aDist[vv] ){
         aDist[vv] = dist;
         aBest[vv] = iCent;
@@ -2646,7 +2668,7 @@ static void vec1BestMatchN(
     for(ii=0; ii<VEC1_MULTIMATCH_NCENT; ii++){
       const float *cent = &aCent[(ii+cc)*nElem];
       for(vv=0; vv<VEC1_MULTIMATCH_NCENT; vv++){
-        float dist = vec1L2Dist(cent, aVec[vv], nElem);
+        float dist = (float)vec1L2Dist(cent, aVec[vv], nElem);
         if( dist<aDist[vv] ){
           aDist[vv] = dist;
           aBest[vv] = ii+cc;
@@ -2662,7 +2684,7 @@ static void vec1BestMatchN(
     int vv;
     const float *cent = &aCent[cc*nElem];
     for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
-      float dist = vec1L2Dist(aVec[vv], cent, nElem);
+      float dist = (float)vec1L2Dist(aVec[vv], cent, nElem);
       if( dist<aDist[vv] ){
         aDist[vv] = dist;
         aBest[vv] = cc;
@@ -2705,7 +2727,6 @@ static void vec1LloydsWork(void *pCtx){
   ii = p->iFirst;
   for( ; ii<=(p->iEof-VEC1_MULTIMATCH_NVEC); ii+=VEC1_MULTIMATCH_NVEC){
     int vv;
-    int iCent;
 
     const float *aVec[VEC1_MULTIMATCH_NVEC];
     int aBest[VEC1_MULTIMATCH_NVEC];
@@ -2730,10 +2751,10 @@ static void vec1LloydsWork(void *pCtx){
     }
 
 #if 0
-    /* Check (assert) using vec1PqBestMatch() that the fancy code above
+    /* Check (assert) using vec1BestMatchSimple() that the fancy code above
     ** actually worked.  */
     for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
-      int iBest2 = vec1PqBestMatch(
+      int iBest2 = vec1BestMatchSimple(
           p->aCentroid, p->nK, aVec[vv], nElem, 0
       );
       if( iBest2!=aBest[vv] ){
@@ -2754,7 +2775,9 @@ static void vec1LloydsWork(void *pCtx){
   ** part of a batch of VEC1_MULTIMATCH_NVEC. */
   for(; ii<p->iEof; ii++){
     const float *aSub = vec1TrainingVector(pVec, ii);
-    int iBest = vec1PqBestMatch(p->aCentroid, p->nK, aSub, nElem, &p->fTotal);
+    int iBest = vec1BestMatchSimple(
+        p->aCentroid, p->nK, aSub, nElem, &p->fTotal
+    );
     assert( iBest>=0 && iBest<p->nK );
     p->aCount[iBest]++;
     vec1AddInPlace(&p->aSum[iBest * nElem], aSub, nElem);
@@ -2843,7 +2866,6 @@ static int vec1Ann1KMeans(
   int *aCount = 0;
   float *aSum = 0;
 
-  int nVecPerJob = 0;
   LloydsJob *aJob = 0;
   int rc = SQLITE_OK;
   int nThread = p ? p->nThread : 1;
@@ -3339,6 +3361,27 @@ static int vec1VectorIsNonFinite(const float *aVec, int nElem){
   return SQLITE_ERROR;
 }
 
+
+/*
+** Check that nByte is a suitable length in bytes for a blob containing a
+** vector between VEC1_VECSIZE_MIN and VEC1_VECSIZE_MAX elements in size.
+** If it is, return SQLITE_OK. Otherwise, return SQLITE_ERROR and leave
+** (*pzErrmsg) pointing to a buffer containing an English language error
+** message. It is the responsibility of the caller to free the buffer
+** using sqlite3_free() in this case.
+*/
+static int vec1CheckVectorSize(i64 nByte, char **pzErrmsg){
+  if( (nByte % sizeof_f32)!=0
+   || (nByte<(VEC1_VECSIZE_MIN*sizeof_f32))
+   || (nByte>(VEC1_VECSIZE_MAX*sizeof_f32))
+  ){
+    *pzErrmsg = sqlite3_mprintf("invalid vector size: %lld bytes", nByte);
+    return SQLITE_ERROR;
+  }
+  return SQLITE_OK;
+}
+
+
 #define VEC1_REALLOC_NVEC 10000
 
 /*
@@ -3356,27 +3399,36 @@ static void vec1TrainStep(
 ){
   Vec1TabList *pList = (Vec1TabList*)sqlite3_user_data(pCtx);
   Vec1TrainCtx *p = 0;
-  assert( nArg==1 || nArg==2 );
   int n = 0;
   const u8 *a = 0;
   int iChunk = 0;
+  char *zErr = 0;
 
+  assert( nArg==1 || nArg==2 );
   p = (Vec1TrainCtx*)sqlite3_aggregate_context(pCtx, sizeof(*p));
   if( !p ) return;
 
   n = sqlite3_value_bytes(aArg[0]);
   a = (const u8*)sqlite3_value_blob(aArg[0]);
-  if( (n==0)
-   || (n%sizeof_f32)!=0 
-   || (p->tv.nElem!=0 && p->tv.nElem!=(int)(n/sizeof_f32))
-  ){
-    sqlite3_result_error(pCtx, "vec1_train: bad argument", -1);
+
+  /* Check the vector is a valid size. */
+  if( vec1CheckVectorSize(n, &zErr) ){
+    vec1ResultErrorF(pCtx, "vec1_train: %z", zErr);
     return;
   }
+
+  /* Check there are no Inf or Nan values in the vector. */
   if( vec1VectorIsNonFinite((const float*)a, (n/sizeof_f32)) ){
     sqlite3_result_error(pCtx, 
         "vec1_train: non-finite value not allowed in vector", -1
     );
+    return;
+  }
+
+  /* Unless this is the first training vector, check that it is the same
+  ** size as all the other vectors in the training set.  */
+  if( p->tv.nElem!=0 && p->tv.nElem!=(int)(n/sizeof_f32) ){
+    sqlite3_result_error(pCtx, "vec1_train: bad argument", -1);
     return;
   }
 
@@ -3547,17 +3599,17 @@ static void vec1CodebookWork(void *pCtx){
     for(ii=0; ii<pVec->nChunk; ii++){
       /* Allocate space for this chunk. Either VEC1_TRAINING_SZCHUNK or
       ** enough space for all remaining sub-vectors, whichever is smaller. */
-      int nByte = MIN(VEC1_TRAINING_SZCHUNK, 
+      int nAlloc = MIN(VEC1_TRAINING_SZCHUNK, 
           (pVec->nVec - (ii * pVec->nVecPerChunk)) * nBytePerVec
       );
-      pVec->aChunk[ii] = (float*)sqlite3_malloc(nByte);
+      pVec->aChunk[ii] = (float*)sqlite3_malloc(nAlloc);
 
       if( pVec->aChunk[ii]==0 ){
         pJob->rc = SQLITE_NOMEM;
         break;
       }
       if( nShort>0 ){
-        memset(pVec->aChunk[ii], 0, nByte);
+        memset(pVec->aChunk[ii], 0, nAlloc);
       }
     }
 
@@ -3617,8 +3669,9 @@ static void vec1TrainPQCodebooks(
 }
 
 static void vec1TransposeMatrix(double *aMatrix, int nElem) {
-  for (int i = 0; i < nElem - 1; i++) {
-    for (int j = i + 1; j < nElem; j++) {
+  int i, j;
+  for (i = 0; i < nElem - 1; i++) {
+    for (j = i + 1; j < nElem; j++) {
       double tmp = aMatrix[i * nElem + j];
       aMatrix[i * nElem + j] = aMatrix[j * nElem + i];
       aMatrix[j * nElem + i] = tmp;
@@ -3633,18 +3686,21 @@ static int vec1JacobiDoOnePair(
   double fTol
 ){
   double alpha = 0.0, beta = 0.0, gamma = 0.0;
-  int r;
+  int r = 0;
 
   double *Ap = A + p*d;
   double *Aq = A + q*d;
-
-  assert( p<q );
-
-  r = 0;
 #ifdef VEC1_HAVE_AVX2
-  __m256d valpha = _mm256_setzero_pd();
-  __m256d vbeta  = _mm256_setzero_pd();
-  __m256d vgamma = _mm256_setzero_pd();
+  __m256d valpha, vbeta, vgamma;
+#endif
+#ifdef VEC1_HAVE_NEON
+  float64x2_t valpha, vbeta, vgamma;
+#endif
+
+#ifdef VEC1_HAVE_AVX2
+  valpha = _mm256_setzero_pd();
+  vbeta  = _mm256_setzero_pd();
+  vgamma = _mm256_setzero_pd();
   for(/*no-op*/; r<(d-3); r+=4) {
     __m256d vAp = _mm256_loadu_pd(Ap + r);
     __m256d vAq = _mm256_loadu_pd(Aq + r);
@@ -3657,9 +3713,9 @@ static int vec1JacobiDoOnePair(
   HORIZONTAL_SUM64(gamma, vgamma);
 #endif
 #ifdef VEC1_HAVE_NEON
-  float64x2_t valpha  = vdupq_n_f64(0.0);
-  float64x2_t vbeta  = vdupq_n_f64(0.0);
-  float64x2_t vgamma  = vdupq_n_f64(0.0);
+  valpha  = vdupq_n_f64(0.0);
+  vbeta  = vdupq_n_f64(0.0);
+  vgamma  = vdupq_n_f64(0.0);
   for(/*no-op*/; r<=(d-2); r+=2) {
     float64x2_t vAp = vld1q_f64(&Ap[r]);
     float64x2_t vAq = vld1q_f64(&Aq[r]);
@@ -3672,6 +3728,8 @@ static int vec1JacobiDoOnePair(
   gamma = vaddvq_f64(vgamma);
 #endif
 
+  assert( p<q );
+
   for(/*no-op*/; r<d; r++) {
     alpha += Ap[r] * Ap[r];
     beta  += Aq[r] * Aq[r];
@@ -3681,6 +3739,13 @@ static int vec1JacobiDoOnePair(
   if( gamma!=0.0 && fabs(gamma)>=fTol*sqrt(alpha*beta) ){
     double zeta = (beta - alpha) / (2.0 * gamma);
     double t, c, s;
+    double *Vtp, *Vtq;
+#ifdef VEC1_HAVE_AVX2
+    __m256d vc, vs, vms;
+#endif
+#ifdef VEC1_HAVE_NEON
+    float64x2_t vc, vs, vms;
+#endif
     if (zeta >= 0.0){
       t =  1.0 / ( zeta + sqrt(1.0 + zeta * zeta));
     }else{
@@ -3696,9 +3761,9 @@ static int vec1JacobiDoOnePair(
     /* Rotate columns p and q of A */
     r = 0;
 #ifdef VEC1_HAVE_AVX2
-    __m256d vc = _mm256_set1_pd(c);
-    __m256d vs = _mm256_set1_pd(s);
-    __m256d vms = _mm256_set1_pd(-s);
+    vc = _mm256_set1_pd(c);
+    vs = _mm256_set1_pd(s);
+    vms = _mm256_set1_pd(-s);
     for(; r<d-3; r+=4) {
       __m256d vap = _mm256_loadu_pd(&Ap[r]);
       __m256d vaq = _mm256_loadu_pd(&Aq[r]);
@@ -3708,9 +3773,9 @@ static int vec1JacobiDoOnePair(
     }
 #endif
 #ifdef VEC1_HAVE_NEON
-    float64x2_t vc  = vdupq_n_f64(c);
-    float64x2_t vs  = vdupq_n_f64(s);
-    float64x2_t vms = vdupq_n_f64(-s);
+    vc  = vdupq_n_f64(c);
+    vs  = vdupq_n_f64(s);
+    vms = vdupq_n_f64(-s);
     for(; r<=d-2; r+=2) {
       float64x2_t vap = vld1q_f64(&Ap[r]);
       float64x2_t vaq = vld1q_f64(&Aq[r]);
@@ -3736,8 +3801,8 @@ static int vec1JacobiDoOnePair(
     **   Vt(p, r) = c * Vt(p,r) + s * Vt(q,r)
     **   Vt(q, r) = -s * Vt(p,r_old) + c * Vt(q,r)
     */
-    double *Vtp = Vt + p * d;
-    double *Vtq = Vt + q * d;
+    Vtp = Vt + p * d;
+    Vtq = Vt + q * d;
     r = 0;
 #ifdef VEC1_HAVE_AVX2
     for(; r<d-3; r+=4) {
@@ -4100,16 +4165,18 @@ static void vec1MatrixMultiplyF(
 */
 static double vec1TestOrthogonality(const double *aMatrix, int nElem) {
   double err = 0.0;
-  for (int i = 0; i < nElem; i++) {
-    for (int j = 0; j < nElem; j++) {
+  int i, j;
+  for (i = 0; i < nElem; i++) {
+    for (j = 0; j < nElem; j++) {
       /* dot product of column i and column j */
       double dot = 0.0;
+      double diff;
       int r;
       for(r=0; r<nElem; r++){
         dot += aMatrix[i*nElem + r] * aMatrix[j*nElem + r];
       }
       /* subtract identity */
-      double diff = dot - (i == j ? 1.0 : 0.0);
+      diff = dot - (i == j ? 1.0 : 0.0);
       err += diff * diff;
     }
   }
@@ -4136,14 +4203,14 @@ static double vec1TestReconstruction(
 ) {
   double err = 0.0;
   double nrm = 0.0;
-  int row, col;
+  int row, col, k;
 
   for(row=0; row<nElem; row++){
     for(col=0; col<nElem; col++){
       /* Compute (U * diag(S) * Vt)[row, col] */
       double val = 0.0;
       double a, diff;
-      for (int k = 0; k < nElem; k++){
+      for (k = 0; k < nElem; k++){
         val += U[k*nElem + row] * S[k] * Vt[col*nElem + k];
       }
       a = A[col*nElem + row];
@@ -4302,10 +4369,11 @@ static void vec1CovarianceAccumulateN(
   int nElem
 ){
   int ii = 0;
+  int vv;
+
 #ifdef VEC1_HAVE_AVX2
 #define VEC1_COVAR_NACC 8
   __m256 vs[VEC1_COVAR_NVEC];
-  int vv;
   for(vv=0; vv<VEC1_COVAR_NVEC; vv++){
     vs[vv] = _mm256_set1_ps(aScalar[vv]);
   }
@@ -4328,7 +4396,6 @@ static void vec1CovarianceAccumulateN(
   }
 
   for(; ii<=(nElem-8); ii+=8){
-    __m256d lo, hi;
     __m256 acc = _mm256_set1_ps(0.0f);
     for(vv=0; vv<VEC1_COVAR_NVEC; vv++){
       __m256 vf = LOADU(&aIn[vv][ii]);
@@ -4343,7 +4410,6 @@ static void vec1CovarianceAccumulateN(
 ** to avoid spilling vs[] to the stack inside the hot loop. */
 #define VEC1_COVAR_NACC_NEON (16/VEC1_COVAR_MULTIMATCH_MULT)
   float32x4_t vs[VEC1_COVAR_NVEC];
-  int vv;
   for(vv=0; vv<VEC1_COVAR_NVEC; vv++){
     vs[vv] = vdupq_n_f32(aScalar[vv]);
   }
@@ -4377,7 +4443,6 @@ static void vec1CovarianceAccumulateN(
 
   for(; ii<nElem; ii++){
     double acc = aOut[ii];
-    int vv;
     for(vv=0; vv<VEC1_COVAR_NVEC; vv++){
       acc += (double)aScalar[vv] * aIn[vv][ii];
     }
@@ -4453,7 +4518,7 @@ static void vec1CovarianceWork(void *pArg){
   for(; ii<nVec; ii++){
     float *aVec = vec1TrainingVector(pJob->pVec, ii);
     const float *aSub = &aVec[iSubOff];
-    int iBest = vec1PqBestMatch(
+    int iBest = vec1BestMatchSimple(
         aCode, VEC1_PQ_CODEBOOK_SZ, aSub, pJob->nCodeElem, &pJob->fTotalDist
     );
     float *aSubHat = &aCode[iBest * pJob->nCodeElem];
@@ -4569,7 +4634,6 @@ static Vec1RotationJob *vec1RotationAlloc(
   int nByte = p->nThread * sizeof(Vec1RotationJob);
   Vec1RotationJob *aJob = vec1MallocZero(nByte);
   if( aJob ){
-    int iNext = 0;                /* First vector for next job */
     int ii;
     for(ii=0; ii<p->nThread; ii++){
       Vec1RotationJob *pJob = &aJob[ii];
@@ -4774,7 +4838,6 @@ static void vec1TrainRotation(
   const int nElem = p->tv.nElem;
   const int nMatrixByte = sizeof_f32 * nElem * nElem;
   int iRound = 0;                 /* Current OPQ round */
-  int rc = SQLITE_OK;
   int ii;
   float *aRot = (float*)sqlite3_malloc(nMatrixByte * 2);
   float *aRot2 = &aRot[nElem*nElem];
@@ -4919,7 +4982,7 @@ static void vec1TrainResidualWorker(void *pCtx){
 
   for(ii=p->iFirst; ii<p->iEof; ii++){
     float *a = vec1TrainingVector(p->pVec, ii);
-    int iBest = vec1PqBestMatch(p->aCentroid, p->nCentroid, a, nElem, 0);
+    int iBest = vec1BestMatchSimple(p->aCentroid, p->nCentroid, a, nElem, 0);
     vec1SubInPlace(a, &p->aCentroid[iBest * nElem], nElem);
   }
 }
@@ -5004,10 +5067,11 @@ static int vec1IsPow2(int n) {
 ** be a power of 2.
 */
 static void vec1WHT(float *x, int n){
+  int stride, i, j;
   assert( vec1IsPow2(n) );
-  for (int stride = 1; stride < n; stride <<= 1) {
-    for (int i = 0; i < n; i += stride << 1) {
-      for (int j = i; j < i + stride; j++) {
+  for (stride = 1; stride < n; stride <<= 1) {
+    for (i = 0; i < n; i += stride << 1) {
+      for (j = i; j < i + stride; j++) {
         float a = x[j];
         float b = x[j + stride];
         x[j]        = a + b;
@@ -5053,24 +5117,22 @@ static void vec1TrainFinal(sqlite3_context *pCtx){
   float *aCentroid = 0;           /* Centroids */
   float *aRotation = 0;           /* Rotation */
 
-  int nByte = 0;
+  i64 nByte = 0;
   u8 *aByte = 0;
-  int nReqVectors = 0;
 
   float *pCsr = 0;
-  int rc = SQLITE_OK;
   Vec1JobQueue *pQueue = 0;
   u32 flags = 0;
   int ii;
-
-  u32 nHdrCodebook = 0;           /* Codebooks= value stored in header */
   int bPQ = 0;
+  i64 nElem = 0;                  /* 64-bit copy of p->tv.nElem */
 
   /* Check that sufficient training vectors were provided. */
   p = (Vec1TrainCtx*)sqlite3_aggregate_context(pCtx, sizeof(*p));
   if( p==0 ) return;
   p->pCtx = pCtx;
   bPQ = (p->eQuant==VEC1_QUANTIZE_PQ || p->eQuant==VEC1_QUANTIZE_OPQ);
+  nElem = p->tv.nElem;
 
   if( p->tv.nVec==0 ){
     vec1ResultErrorF(pCtx,
@@ -5103,15 +5165,15 @@ static void vec1TrainFinal(sqlite3_context *pCtx){
     vec1TrainNormalizeAll(p);
   }
 
-  /* Allocate space for the model. Space is required for (A) the header and
-  ** coarse centroids, (B) the PQ codebooks and (C) the OPQ rotation
+  /* Allocate space for the model. Space is required for (a) the header and
+  ** coarse centroids, (b) the PQ codebooks and (c) the OPQ rotation
   ** matrix.  */
-  nByte = VEC1_HEADER_SIZE + (sizeof_f32 * p->nBucket * p->tv.nElem);  /* A */
+  nByte = VEC1_HEADER_SIZE + sizeof_f32 * p->nBucket * nElem;
   if( bPQ ){
-    nByte += sizeof_f32*p->nCodesize*p->nCodeElem*VEC1_PQ_CODEBOOK_SZ; /* B */
+    nByte += sizeof_f32 * p->nCodesize * p->nCodeElem * VEC1_PQ_CODEBOOK_SZ;
   }
   if( p->eQuant==VEC1_QUANTIZE_OPQ ){
-    nByte += sizeof_f32 * p->tv.nElem * p->tv.nElem;                   /* C */
+    nByte += sizeof_f32 * nElem * nElem;
   }
 
   aByte = (u8*)vec1ContextMalloc(pCtx, nByte);
@@ -5119,15 +5181,15 @@ static void vec1TrainFinal(sqlite3_context *pCtx){
   pCsr = (float*)&aByte[VEC1_HEADER_SIZE];
   if( bPQ ){
     aBook = pCsr;
-    pCsr += (p->nCodesize * p->nCodeElem * VEC1_PQ_CODEBOOK_SZ);
+    pCsr += (i64)p->nCodesize * p->nCodeElem * VEC1_PQ_CODEBOOK_SZ;
   }
   if( p->nBucket>0 ){
     aCentroid = pCsr;
-    pCsr += (p->nBucket * p->tv.nElem);
+    pCsr += p->nBucket * nElem;
   }
   if( p->eQuant==VEC1_QUANTIZE_OPQ ){
     aRotation = pCsr;
-    pCsr += (p->tv.nElem * p->tv.nElem);
+    pCsr += nElem * nElem;
   }
   assert( (u8*)pCsr==&aByte[nByte] );
 
@@ -5187,7 +5249,7 @@ static void vec1TrainFinal(sqlite3_context *pCtx){
 
   /* Return the result blob. */
   if( p->rc==SQLITE_OK ){
-    sqlite3_result_blob(pCtx, (void*)aByte, nByte, vec1SqliteFree);
+    sqlite3_result_blob(pCtx, (void*)aByte, (int)nByte, vec1SqliteFree);
     aByte = 0;
   }
 
@@ -5461,7 +5523,11 @@ static void vec1ModelFreeTCent(Vec1Model *pMod){
 #define VEC1_META_4BYTEMAX   +2147483646
 #define VEC1_META_4BYTENULL  +2147483647
 
-typedef struct Vec1Tab Vec1Tab;
+/* When a meta-value array is loaded from disk, at least VEC1_META_PADDING
+** extra bytes of memory are allocated. This is to allow readers to safely
+** overread the record slightly if it is corrupt.  */
+#define VEC1_META_PADDING 20
+
 typedef struct Vec1Csr Vec1Csr;
 
 /*
@@ -5900,7 +5966,7 @@ static int vec1PrepareSql(
 }
 
 #define VEC1_SQL_SCAN_BASE     1
-#define VEC1_SQL_REPLACE_IDX   2
+#define VEC1_SQL_INSERT_IDX    2
 
 #define VEC1_SQL_SCAN_IDX      3
 #define VEC1_SQL_CNT_IDX       4
@@ -5919,7 +5985,7 @@ static int vec1GetSql(Vec1Tab *pTab, int eSql, sqlite3_stmt **ppStmt){
 #define VEC1_SQL_INSERT_BASE   0
     "INSERT INTO %Q.'%q_base' VALUES(?, ?%s)",
     "SELECT * FROM %Q.'%q_base' ORDER BY 1",
-    "REPLACE INTO %Q.'%q_idx'(id, bucket, first, last, val)VALUES(?,?,?,?,?)",
+    "INSERT INTO %Q.'%q_idx'(id, bucket, first, last, val)VALUES(?,?,?,?,?)",
 
     "SELECT val, bucket, rowid FROM %Q.'%q_idx'",
     "SELECT sum( length(val) / ? ) FROM %Q.'%q_idx'",
@@ -6094,7 +6160,6 @@ static int vec1CheckColumnName(const char *zName, char **pzErr){
   char aName[16];
   int nName = 0;
   const char *z = zName;
-  char q = 0;
 
   while( vec1IsWhitespace(*z) ) z++;
 
@@ -6643,7 +6708,7 @@ static int vec1ModelTransform(
   if( pMod->aModel ){
     const int nCodebook = pMod->hdr.nCodebook;
     const int nCodeElem = pMod->nCodeElem;
-    int M, d, K;
+    int M;
   
     float *pOut = (float*)sqlite3_malloc(
         sizeof_f32 * nCodebook * nCodeElem * VEC1_PQ_CODEBOOK_SZ
@@ -6914,30 +6979,34 @@ static const float *vec1TransformInputVector(
   const float *aInput
 ){
   const float *aRet = aInput;
+  
   if( (pMod->hdr.flags & VEC1_MODEL_ROTATE) ){
     vec1RotateVector(pMod->hdr.nElem, pMod->aRotation, aInput, aTmp);
     if( pMod->hdr.eDistance==VEC1_DISTANCE_COS ){
       vec1NormalizeVector(aTmp, pMod->hdr.nElem);
     }
     aRet = aTmp;
-  }
-  else if( (pMod->hdr.flags & VEC1_MODEL_WHT) ){
-    memcpy(aTmp, aInput, pMod->hdr.nElem * sizeof_f32);
-    vec1ApplyWHT(aTmp, pMod->hdr.nElem);
-    aRet = aTmp;
-  }
-  else if( pMod->hdr.eDistance==VEC1_DISTANCE_COS ){
-    memcpy(aTmp, aInput, pMod->hdr.nElem * sizeof_f32);
-    vec1NormalizeVector(aTmp, pMod->hdr.nElem);
-    aRet = aTmp;
-  }
-
-  if( aRet!=aTmp
-   && pMod->hdr.nCodebook>0 
-   && (pMod->hdr.nCodebook*pMod->nCodeElem)!=pMod->hdr.nElem
-  ){
-    memcpy(aTmp, aRet, pMod->hdr.nElem * sizeof_f32);
-    aRet = aTmp;
+  }else{
+    const int nCodebook = pMod->hdr.nCodebook;
+    if(
+        (pMod->hdr.flags & VEC1_MODEL_WHT)
+     || (pMod->hdr.eDistance==VEC1_DISTANCE_COS)
+     || (nCodebook>0 && (nCodebook*pMod->nCodeElem)!=pMod->hdr.nElem)
+    ){
+      memcpy(aTmp, aRet, pMod->hdr.nElem * sizeof_f32);
+      /* If distance=cos, normalize the vector before applying the WHT
+      ** transform. This is because the WHT transform scales the vector
+      ** by sqrt(nElem). But so long as training, building and querying
+      ** all do the normalization first, and not after WHT, things work
+      ** out fine.  */
+      if( pMod->hdr.eDistance==VEC1_DISTANCE_COS ){
+        vec1NormalizeVector(aTmp, pMod->hdr.nElem);
+      }
+      if( (pMod->hdr.flags & VEC1_MODEL_WHT) ){
+        vec1ApplyWHT(aTmp, pMod->hdr.nElem);
+      }
+      aRet = aTmp;
+    }
   }
 
   return aRet;
@@ -7061,13 +7130,21 @@ static int vec1PutVarint(u8 *aBuf, u64 v){
 }
 
 static int vec1GetVarint(const u8 *aBuf, u64 *piVal){
-  int nRet = 0;
   u64 out = 0;
-  do {
-    out = (out<<7) + (aBuf[nRet] & 0x7F);
-  } while( aBuf[nRet++] & 0x80 );
+  int ii = 0;
+
+  out = (aBuf[0] & 0x7F);
+  if( aBuf[0] & 0x80 ){
+    for(ii=1; ii<9; ii++){
+      out = (out<<7) + (aBuf[ii] & 0x7F);
+      if( (aBuf[ii] & 0x80)==0 ){
+        break;
+      }
+    }
+  }
+
   *piVal = out;
-  return nRet;
+  return ii+1;
 }
 
 /*
@@ -7119,8 +7196,8 @@ static void vec1BinaryQuantLUTBuild(
   int nCodebook = pTab->mod.hdr.nCodebook;
   const int nCodeElem = pTab->mod.nCodeElem;
 
-  int M, K;
-  float c = 1.0 / sqrtf((float)nVec);
+  int M;
+  float c = 1.0f / (float)sqrt((double)nVec);
 
   assert( nCodeElem==8 || nCodeElem==16 );
 
@@ -7163,6 +7240,7 @@ static void vec1BinaryQuantLUTBuild(
 */
 static int vec1ReadMeta(
   Vec1Tab *pTab,                  /* Vec1 virtual table */
+  u32 nExpect,                    /* Expected number of entries */
   Vec1Buffer *pBuf,               /* Buffer to read into */
   i64 iId,                        /* Id of %_idx row */
   int iMeta                       /* Index of meta-column */
@@ -7178,18 +7256,47 @@ static int vec1ReadMeta(
     sqlite3_bind_int64(pStmt, 1, iMetaId);
     if( SQLITE_ROW==sqlite3_step(pStmt) ){
       int nByte = sqlite3_column_bytes(pStmt, 0);
-      rc = vec1BufferGrow(pBuf, nByte);
+      rc = vec1BufferGrow(pBuf, nByte + VEC1_META_PADDING);
       if( rc==SQLITE_OK ){
         const u8 *a = sqlite3_column_blob(pStmt, 0);
         memcpy(pBuf->a, a, nByte);
+        memset(&pBuf->a[nByte], 0, VEC1_META_PADDING);
         pBuf->n = nByte;
       }
     }
-
     vec1StmtReset(&rc, pStmt);
-    if( rc==SQLITE_OK && pBuf->n==0 ){
-      rc = VEC1_CORRUPT;
+
+    /* Check, so far as is possible, that the meta-value blob is the 
+    ** expected size. It is not possible to check if the meta-value blob
+    ** uses the GENERIC format, due to the variable length fields. Code
+    ** that handles GENERIC meta-value blobs has to dynamically verify
+    ** the buffer size. */
+    if( rc==SQLITE_OK ){
+      if( pBuf->n<VEC1_META_SZHDR ){
+        rc = VEC1_CORRUPT;
+      }else{
+        u32 tflag = (vec1GetU32(&pBuf->a[0]) & VEC1_META_TYPEMASK);
+        u32 nEntry = vec1GetU32(&pBuf->a[4]);
+        i64 sz = 0;
+        if( nEntry!=nExpect ){
+          rc = VEC1_CORRUPT;
+        }
+        if( tflag==VEC1_META_1BYTEINT ){
+          sz = 1;
+        }else if( tflag==VEC1_META_4BYTEINT ){
+          sz = sizeof_u32;
+        }else if( tflag==VEC1_META_REAL ){
+          sz = sizeof_f64;
+        }else if( tflag!=VEC1_META_GENERIC ){
+          rc = VEC1_CORRUPT;
+        }
+
+        if( sz && pBuf->n!=(VEC1_META_SZHDR + sz*nEntry) ){
+          rc = VEC1_CORRUPT;
+        }
+      }
     }
+
   }
 
   return rc;
@@ -7203,11 +7310,12 @@ static int vec1ReadMeta(
 **        4: Real value. 8 byte payload.
 */
 static int vec1MetaValueRead(
-  Vec1Buffer *pMeta, 
-  int *piOff, 
+  Vec1Buffer *pMeta,
+  int *piOff,
   Vec1MetaValue *pVal
 ){
-  int iOff = *piOff;
+  i64 iOff = (i64)*piOff;
+
   switch( pMeta->a[iOff] ){
     case 0: {
       pVal->eType = SQLITE_NULL;
@@ -7248,14 +7356,18 @@ static int vec1MetaValueRead(
       u64 eType = 0;
       iOff += vec1GetVarint(&pMeta->a[iOff], &eType);
       pVal->pPtr = &pMeta->a[iOff];
-      pVal->iVal = (eType-5) / 2;
-      iOff += (int)pVal->iVal;
+      pVal->iVal = (((eType-5) / 2) & (u64)0xFFFFFFFF);
+      iOff += pVal->iVal;
       pVal->eType = (eType & 0x01) ? SQLITE_TEXT : SQLITE_BLOB;
       break;
     }
   }
 
-  *piOff = iOff;
+  if( iOff>pMeta->n || iOff<0 ){
+    return VEC1_CORRUPT;
+  }
+
+  *piOff = (int)iOff;
   return SQLITE_OK;
 }
 
@@ -7449,7 +7561,6 @@ static int vec1FilterToIntOp(
   ));
 
   if( pFilter->vop==VEC1_OP_IN ){
-    int rc = SQLITE_OK;
     int *aRval = (int*)vec1MallocZero(sizeof_u32 * (pFilter->iVal+1));
     if( aRval==0 ){
       return SQLITE_NOMEM;
@@ -7469,7 +7580,7 @@ static int vec1FilterToIntOp(
   }else if( pFilter->vop==VEC1_OP_NOTNULL ){
     res = 1;
   }else if( pFilter->eType==SQLITE_NULL && pFilter->vop==VEC1_OP_IS ){
-    rval = eNull;
+    rval = (int)eNull;
     op = VEC1_OP_EQ;
 
   }else if( pFilter->eType!=SQLITE_NULL ){
@@ -7502,7 +7613,7 @@ static int vec1FilterToIntOp(
   if( res>0 ){
     assert( eNull==(iMax+1) );
     op = VEC1_OP_LT;
-    rval = eNull;
+    rval = (int)eNull;
   }
 
   *pRval = rval;
@@ -7818,6 +7929,7 @@ static void vec1MetaFilterScan4ByteArray(
     int32x4_t lhs = 
       vreinterpretq_s32_u8(vrev32q_u8(vld1q_u8((uint8_t*)&a[jj]))
     );
+    u32 mask;
 
     /* cmp is a vector of 4 u32 values. This block sets each value to
     ** 0xFFFFFFFF if the constraint is true for the corresponding meta-data
@@ -7859,7 +7971,7 @@ static void vec1MetaFilterScan4ByteArray(
     /* Collapse 4 x 32-bit mask lanes to a 4-bit nibble.
     ** NEON has no movemask, so shift the high bit of each lane
     ** into position and OR them together. */
-    u32 mask = (u8)(
+    mask = (u8)(
       (vgetq_lane_u32(cmp, 0) & 0x01) |
       (vgetq_lane_u32(cmp, 1) & 0x02) |
       (vgetq_lane_u32(cmp, 2) & 0x04) |
@@ -7913,8 +8025,8 @@ static int vec1MetaFilterIntList(
         const int *a = (const int*)&pMeta->a[VEC1_META_SZHDR];
         vec1MetaFilterScan4ByteArray(a, pBitmask->a, nEntry, rval, aRval, op);
       }else{
-        assert( szInt==1 );
         const u8 *a = (const u8*)&pMeta->a[VEC1_META_SZHDR];
+        assert( szInt==1 );
         vec1MetaFilterScan1ByteArray(a, pBitmask->a, nEntry, rval, aRval, op);
       }
     }
@@ -7949,7 +8061,7 @@ static VEC1_NOINLINE int vec1DoMetaFilters(
   for(ii=0; rc==SQLITE_OK && ii<pQuery->nFilter; ii++){
     Vec1Filter *pFilter = &pQuery->aFilter[ii];
     VEC1_QINSTR_START(pTab, VEC1_QINSTR_METAREAD);
-    rc = vec1ReadMeta(pTab, pMeta, iId, pFilter->iMeta);
+    rc = vec1ReadMeta(pTab, nEntry, pMeta, iId, pFilter->iMeta);
     VEC1_QINSTR_STOP(pTab, VEC1_QINSTR_METAREAD);
 
     VEC1_QINSTR_START(pTab, VEC1_QINSTR_METASCAN);
@@ -7986,7 +8098,8 @@ static VEC1_NOINLINE int vec1DoMetaFilters(
         int iOff = VEC1_META_SZHDR;
         for(jj=0; jj<nEntry; jj++){
           Vec1MetaValue val;
-          vec1MetaValueRead(pMeta, &iOff, &val);
+          rc = vec1MetaValueRead(pMeta, &iOff, &val);
+          if( rc!=SQLITE_OK ) break;
           if( vec1MetaValueFilter(pFilter, &val) ){
             pBitmask->a[jj / 8] |= (1 << (jj % 8));
           }
@@ -7995,7 +8108,7 @@ static VEC1_NOINLINE int vec1DoMetaFilters(
     }
 
     if( pFilter->vop==VEC1_OP_IN ){
-      ii += pFilter->iVal;
+      ii += (int)pFilter->iVal;
     }
     VEC1_QINSTR_STOP(pTab, VEC1_QINSTR_METASCAN);
   }
@@ -8013,8 +8126,8 @@ static void vec1EncodeVectorBit(
   u8 *pOut;
 
   assert( pMod->hdr.flags & VEC1_MODEL_BITQUANT );
-  norm = vec1VectorNorm2(aVec, nElem);
-  norm = sqrtf(norm);
+  norm = (float)vec1VectorNorm2(aVec, nElem);
+  norm = (float)sqrt(norm);
   memcpy(aCode, &norm, sizeof_f32);
 
   assert( pMod->nCodeElem==8 || pMod->nCodeElem==16 );
@@ -8071,26 +8184,6 @@ static void vec1EncodeVectorPQ(
   }
 }
 
-static void vec1EncodeVectorPQSimple(
-  const Vec1Model *pMod,          /* Model to encode with */
-  const float *aVec,              /* Vector to encode */
-  u8 *aOut,                       /* OUT: Quantized vector */
-  double *pfTotalDist             /* OUT: reconstruction L2 squared from orig */
-){
-  const int nCodebook = (int)pMod->hdr.nCodebook;
-  const int nCodeElem = pMod->nCodeElem;
-  int ii = 0;
-
-  for(ii=0; ii<nCodebook; ii++){
-    const float *pCodebook = &pMod->aModel[ii*nCodeElem*VEC1_PQ_CODEBOOK_SZ];
-    const float *aSub = &aVec[ii*nCodeElem];
-    aOut[ii] = (u8)vec1PqBestMatch(
-        pCodebook, VEC1_PQ_CODEBOOK_SZ, aSub, nCodeElem, pfTotalDist
-    );
-  }
-}
-
-
 static void vec1EncodeVector(
   const Vec1Model *pMod,
   const float *aVec,
@@ -8126,7 +8219,7 @@ static void vec1DecodeVector(
     /* The reconstructed vector uses the following value as the magnitude 
     ** of each dimension. The value is -ve if the corresponding bit is clear,
     ** or +ve if it is set.  */
-    fVal = sqrt((fNorm*fNorm) / nElem);
+    fVal = (float)sqrt((fNorm*fNorm) / nElem);
 
     assert( pMod->nCodeElem==8 || pMod->nCodeElem==16 );
     for(ii=0; ii<nElem; ii++){
@@ -8229,7 +8322,7 @@ static void vec1ScanBlocked(
       /* If all 16 distances sums are already greater than the required
       ** minimum, quit processing this block early.  */
       if( iBook>=iEarly && (iBook & 0x03)==0x03
-       && vec1AnyLessThan(aAcc, pHeap->fMin)==0 
+       && vec1AnyLessThan(aAcc, (float)pHeap->fMin)==0
       ){
         goto skip;
       }
@@ -8240,7 +8333,7 @@ static void vec1ScanBlocked(
       for(jj=0; jj<nSlot; jj++){
         float norm;
         memcpy(&norm, &aBlk[jj*sizeof_f32], sizeof_f32);
-        aAcc[jj] = fResidualNorm2 + (norm - 2.0 * aAcc[jj]) * norm;
+        aAcc[jj] = (float)(fResidualNorm2 + (norm - 2.0 * aAcc[jj]) * norm);
       }
     }
 
@@ -8320,7 +8413,7 @@ static int vec1DoKANNBucket(
         vec1PQLUTBuild(pTab, aEncode, aDist);
       }else{
         vec1BinaryQuantLUTBuild(pTab, aEncode, aDist);
-        fResidualNorm2 = vec1VectorNorm2(aEncode, pTab->cfg.nElem);
+        fResidualNorm2 = (float)vec1VectorNorm2(aEncode, pTab->cfg.nElem);
         vec1EncodeVectorBit(&pTab->mod, aEncode, pQuery->aBit);
       }
       VEC1_QINSTR_STOP(pTab, VEC1_QINSTR_LUT);
@@ -8332,6 +8425,12 @@ static int vec1DoKANNBucket(
   while( rc==SQLITE_OK ){
     i64 iId = 0;
     int res;
+    const u8 *aBlob;
+    int nBlob;
+    int nEntry = 0;
+    int flags = 0;
+    int ii;
+    int szRowid = 4;
       
     /* Load the next index entry from the %_idx table */
     VEC1_QINSTR_START(pTab, VEC1_QINSTR_IDXREAD);
@@ -8339,12 +8438,8 @@ static int vec1DoKANNBucket(
     VEC1_QINSTR_STOP(pTab, VEC1_QINSTR_IDXREAD);
     if( res!=SQLITE_ROW ) break;
 
-    const u8 *aBlob = (const u8*)sqlite3_column_blob(pScanIdx, 0);
-    int nBlob = sqlite3_column_bytes(pScanIdx, 0);
-    int nEntry = 0;
-    int flags = 0;
-    int ii;
-    int szRowid = 4;
+    aBlob = (const u8*)sqlite3_column_blob(pScanIdx, 0);
+    nBlob = sqlite3_column_bytes(pScanIdx, 0);
 
     if( vec1CheckIdxSize(pTab, aBlob, nBlob) ){
       rc = VEC1_CORRUPT;
@@ -8556,7 +8651,13 @@ static int vec1LoadConfig(Vec1Tab *pTab){
         }
 
         case VEC1_CONFIG_NELEM: {
-          pTab->cfg.nElem = sqlite3_column_int(pStmt, 1);
+          i64 nElem = sqlite3_column_int(pStmt, 1);
+          if( nElem<VEC1_VECSIZE_MIN || nElem>VEC1_VECSIZE_MAX ){
+            vec1VtabError(pTab, "invalid vector size in config");
+            rc = VEC1_CORRUPT;
+          }else{
+            pTab->cfg.nElem = (int)nElem;
+          }
           break;
         }
 
@@ -8661,11 +8762,12 @@ static int vec1ParseQueryParamCb(
     0
   };
   int iOpt = 0;
+  int rc;
 
   UNUSED_PARAMETER2(iVal, eType);
   UNUSED_PARAMETER2(pzErr, zVal);
 
-  int rc = vec1ConfigEnum(&iOpt, zOpt, azOpt, "option", pzErr);
+  rc = vec1ConfigEnum(&iOpt, zOpt, azOpt, "option", pzErr);
   if( rc==SQLITE_OK ){
     switch( iOpt ){
       case 0: assert( sqlite3_stricmp("nprobe", zOpt)==0 );
@@ -8825,7 +8927,7 @@ static void vec1ValueToFilter(
     case SQLITE_TEXT: 
       pFilter->iVal = sqlite3_value_bytes(pVal);
       pFilter->pPtr = (u8*)vec1Dup(
-          pRc, sqlite3_value_text(pVal), pFilter->iVal
+          pRc, sqlite3_value_text(pVal), (int)pFilter->iVal
       );
       break;
     default: {
@@ -9068,13 +9170,12 @@ static int vec1QueryToSql(Vec1Csr *pCsr){
     int bRhs = 1;
     const char *zOp = "";
     if( p->vop==VEC1_OP_IN ){
-      const char *zComma = "";
       int jj;
       sqlite3_str_appendf(pWhere, "%sc%d IN(?%d", zAnd, p->iMeta, iNextVar++);
       for(jj=2; jj<=p->iVal; jj++){
         sqlite3_str_appendf(pWhere, ", ?%d", iNextVar++);
       }
-      ii += p->iVal;
+      ii += (int)p->iVal;
       sqlite3_str_appendf(pWhere, ")");
     }else{
       switch( p->vop ){
@@ -9138,13 +9239,13 @@ static int vec1QueryToSql(Vec1Csr *pCsr){
             break;
           case SQLITE_TEXT:
             rc = sqlite3_bind_text(pCsr->pStmt, 
-                iNextVar, (const char*)p->pPtr, p->iVal, SQLITE_TRANSIENT
+                iNextVar, (const char*)p->pPtr, (int)p->iVal, SQLITE_TRANSIENT
             );
             break;
           default:
             assert( p->eType==SQLITE_BLOB );
             rc = sqlite3_bind_blob(
-                pCsr->pStmt, iNextVar, p->pPtr, p->iVal, SQLITE_TRANSIENT
+                pCsr->pStmt, iNextVar, p->pPtr, (int)p->iVal, SQLITE_TRANSIENT
             );
             break;
         }
@@ -9158,89 +9259,6 @@ static int vec1QueryToSql(Vec1Csr *pCsr){
   pCsr->pQuery = 0;
   pCsr->bSqlNNQuery = 1;
   sqlite3_free(zWhere);
-  return rc;
-}
-
-/*
-** There are three basic query plans supported by xBestIndex:
-**
-**   0: Full table scan.
-**   1: Lookup by rowid.
-**   2: K-nearest-neighbours search.
-*/
-static int vec1FilterMethod(
-  sqlite3_vtab_cursor *cur,
-  int idxNum,
-  const char *idxStr,
-  int argc,
-  sqlite3_value **argv
-){
-  Vec1Csr *pCsr = (Vec1Csr *)cur;
-  Vec1Tab *pTab = (Vec1Tab*)(cur->pVtab);
-  int rc = SQLITE_OK;
-
-  UNUSED_PARAMETER(argc);
-  assert( ((idxNum==0 || idxNum==1) && argc==0) 
-       || ((idxNum==2 || idxNum==3) && argc==1)
-       || (idxNum==5 && argc>=1)
-  );
-  vec1ResetCsr(pCsr);
-
-  if( pCsr->bLoadConfig==0 && (idxNum & 0x01) ){
-    rc = vec1LoadConfig(pTab);
-    if( rc!=SQLITE_OK ) return rc;
-    pCsr->bLoadConfig = 1;
-  }
-
-  if( idxNum==0 || idxNum==1 ){
-    /* Full-table scan. */
-    rc = vec1PrepareSql(pTab, &pCsr->pStmt,
-        "SELECT * FROM %Q.'%q_base'", pTab->zDb, pTab->zName
-    );
-  }else if( idxNum==2 || idxNum==3 ){
-    /* Lookup by rowid */
-    rc = vec1PrepareSql(pTab, &pCsr->pStmt,
-        "SELECT * FROM %Q.'%q_base' WHERE rowid=?", 
-        pTab->zDb, pTab->zName
-    );
-    if( rc==SQLITE_OK ){
-      sqlite3_bind_value(pCsr->pStmt, 1, argv[0]);
-    }
-  }else{
-    /* ANN query */
-    Vec1Query *pQuery = 0;
-
-    assert( idxNum==5 );
-
-    VEC1_QINSTR_START(pTab, VEC1_QINSTR_TOTAL);
-
-    /* Parse the query parameters. */
-    rc = vec1SetupKANNQuery(pTab, idxStr, argv, &pQuery);
-    pCsr->pQuery = pQuery;
-
-    if( rc==SQLITE_OK ){
-      if( (pTab->mod.hdr.flags & VEC1_MODEL_INDEX)==0 ){
-        rc = vec1QueryToSql(pCsr);
-        assert( pCsr->pQuery==0 );
-        assert( pCsr->bSqlNNQuery );
-      }else{
-        rc = vec1PrepareSql(pTab, &pCsr->pStmt,
-            "SELECT * FROM %Q.'%q_base' WHERE id=?", 
-            pTab->zDb, pTab->zName
-        );
-        if( rc==SQLITE_OK ){
-          rc = vec1DoKANNQuery(pCsr);
-          pCsr->iCurrentRes = -1;
-        }
-      }
-    }
-
-    VEC1_QINSTR_STOP(pTab, VEC1_QINSTR_TOTAL);
-  }
-
-  if( rc==SQLITE_OK ){
-    rc = vec1NextMethod(cur);
-  }
   return rc;
 }
 
@@ -9298,21 +9316,25 @@ static int vec1FindByRowid(
   ** in main memory. */
   if( pTab->pWriter ){
     Vec1ListBuilder *pBld = &pTab->pWriter->aBld[iBucket];
-    int ii;
-    for(ii=0; ii<pBld->bufRowid.n; ii+=pBld->szRowid){
-      i64 iRead;
-      if( pBld->szRowid==4 ){
-        iRead = vec1GetU32(&pBld->bufRowid.a[ii]);
-      }else{
-        iRead = vec1GetU64(&pBld->bufRowid.a[ii]);
-      }
-      if( iRead==iRowid ){
-        pOut->iEntry = (ii / pBld->szRowid);
-        pOut->nEntry = (pBld->bufRowid.n / pBld->szRowid);
-        pOut->nTombstone = pBld->nTombstone;
-        pOut->szRowid = pBld->szRowid;
-        pOut->pList = pBld;
-        return SQLITE_OK;
+    if( (pBld->szRowid==4 && iRowid!=VEC1_TOMBSTONE_32) 
+     || (pBld->szRowid==8 && iRowid!=VEC1_TOMBSTONE_64)
+    ){
+      int ii;
+      for(ii=0; ii<pBld->bufRowid.n; ii+=pBld->szRowid){
+        i64 iRead;
+        if( pBld->szRowid==4 ){
+          iRead = vec1GetU32(&pBld->bufRowid.a[ii]);
+        }else{
+          iRead = vec1GetU64(&pBld->bufRowid.a[ii]);
+        }
+        if( iRead==iRowid ){
+          pOut->iEntry = (ii / pBld->szRowid);
+          pOut->nEntry = (pBld->bufRowid.n / pBld->szRowid);
+          pOut->nTombstone = pBld->nTombstone;
+          pOut->szRowid = pBld->szRowid;
+          pOut->pList = pBld;
+          return SQLITE_OK;
+        }
       }
     }
   }
@@ -9519,7 +9541,7 @@ static void vec1DistanceStats(sqlite3_context *ctx, Vec1Csr *pCsr){
   
       /* Find bucket and coarse error if applicable. */
       if( pMod->hdr.nBucket>1 ){
-        iBucket = vec1PqBestMatch(
+        iBucket = vec1BestMatchSimple(
             pMod->aCentroid, pMod->hdr.nBucket, aVec, nElem, &fCoarseError
         );
         if( aTransform!=pTab->aTmpVec ){
@@ -9848,7 +9870,8 @@ static int vec1WriteMeta(
     if( rc!=SQLITE_OK ) return rc;
 
     while( iIn<p->buf.n ){
-      vec1MetaValueRead(&p->buf, &iIn, &val);
+      rc = vec1MetaValueRead(&p->buf, &iIn, &val);
+      if( rc!=SQLITE_OK ) break;
       if( val.eType==SQLITE_NULL ){
         val.iVal = iNull;
       }else if( p->format==VEC1_META_REAL ){
@@ -9882,7 +9905,7 @@ static int vec1WriteMeta(
 ** A serialized meta-value is stored in buffer aBuf. Return the size in
 ** bytes of the meta value.
 */
-static int vec1MetaValueSize(const u8 *aBuf){
+static i64 vec1MetaValueSize(const u8 *aBuf){
   switch( aBuf[0] ){
     case 0: return 1;               /* NULL */
     case 1: return 2;               /* 1-byte integer */
@@ -9898,29 +9921,10 @@ static int vec1MetaValueSize(const u8 *aBuf){
       */
       i64 V = 0;
       int n = vec1GetVarint(aBuf, (u64*)&V);
-      return (int)(((V-5)/2) + n);
+      return (((V-5)/2) & (i64)0xFFFFFFFF) + n;
     }
   }
-
-  assert( 0 );
-  return 0;
 }
-
-#ifndef NDEBUG
-/*
-** This may be used in assert() statements to check that the meta-value
-** list contains the expected number of elements.
-*/
-static int vec1MetaValueCheck(Vec1Buffer *pBuf, int nEntry){
-  int iOff = 0;
-  int ii;
-  for(ii=0; ii<nEntry; ii++){
-    iOff += vec1MetaValueSize(&pBuf->a[iOff]);
-  }
-  assert( iOff==pBuf->n );
-  return 1;
-}
-#endif
 
 static int vec1ListBuilderLoad(
   Vec1ListBuilder *p,
@@ -9978,7 +9982,7 @@ static int vec1ListBuilderLoad(
   /* Load the array for each meta-data column from the %_meta table */
   for(ii=0; rc==SQLITE_OK && ii<pTab->nMeta; ii++){
     Vec1MetaBuilder *pMeta = &p->aMeta[ii];
-    rc = vec1ReadMeta(pTab, &pMeta->buf, iId, ii);
+    rc = vec1ReadMeta(pTab, nEntry, &pMeta->buf, iId, ii);
     if( rc==SQLITE_OK ){
       u32 f = vec1GetU32(pMeta->buf.a);
       pMeta->format = (f & VEC1_META_TYPEMASK);
@@ -10013,7 +10017,19 @@ static int vec1ListBuilderFlush(Vec1ListBuilder *p){
       memcpy(&aBlob[VEC1_LIST_SZHDR], p->bufRowid.a, p->bufRowid.n);
       memcpy(&aBlob[VEC1_LIST_SZHDR+p->bufRowid.n], p->bufData.a, p->bufData.n);
 
-      rc = vec1GetSql(p->pTab, VEC1_SQL_REPLACE_IDX, &pStmt);
+      if( p->iId>0 ){
+        /* If there is an existing entry, remove it */
+        rc = vec1GetSql(p->pTab, VEC1_SQL_DELETE_FROM_IDX, &pStmt);
+        if( rc==SQLITE_OK ){
+          sqlite3_bind_int64(pStmt, 1, p->iId);
+          sqlite3_step(pStmt);
+          vec1StmtReset(&rc, pStmt);
+        }
+      }
+
+      if( rc==SQLITE_OK ){
+        rc = vec1GetSql(p->pTab, VEC1_SQL_INSERT_IDX, &pStmt);
+      }
       if( rc==SQLITE_OK ){
         if( p->iId==0 ){
           sqlite3_bind_null(pStmt, 1);
@@ -10193,9 +10209,12 @@ static int vec1ListBuilderCompress(
       Vec1MetaBuilder *pMeta = &p->aMeta[iMeta];
       u8 *a = pMeta->buf.a;
 
-
       if( pMeta->format==VEC1_META_GENERIC ){
-        int nIn = vec1MetaValueSize(&a[aMetaIn[iMeta]]);
+        i64 nIn = vec1MetaValueSize(&a[aMetaIn[iMeta]]);
+        if( nIn<=0 || nIn>pMeta->buf.n-aMetaIn[iMeta] ){
+          sqlite3_free(aMetaIn);
+          return VEC1_CORRUPT;
+        }
         if( bTombstone==0 ){
           if( aMetaIn[iMeta]!=aMetaOut[iMeta] ){
             memmove(&a[ aMetaOut[iMeta] ], &a[ aMetaIn[iMeta] ], nIn);
@@ -10286,7 +10305,6 @@ static int vec1ListBuilderAdd(
   ** buffer grows by depends on whether it is blocked or not.  */
   rc = vec1BufferGrow(&p->bufRowid, p->szRowid);
   if( rc==SQLITE_OK ){
-    int nReq = 0;
     if( p->eBlocked==VEC1_BLOCKED_NONE ){
       rc = vec1BufferGrow(&p->bufData, p->nVectorSize);
     }else{
@@ -10415,7 +10433,7 @@ static void vec1QuantizeVector(
   aVec = vec1TransformInputVector(pMod, aTmp, aVector);
   if( nBucket>0 ){
     int nElem = pMod->hdr.nElem;
-    iBucket = vec1PqBestMatch(pMod->aCentroid, nBucket, aVec, nElem, 0);
+    iBucket = vec1BestMatchSimple(pMod->aCentroid, nBucket, aVec, nElem, 0);
     if( pMod->hdr.nCodebook>0 && (pMod->hdr.flags & VEC1_MODEL_RESIDUAL) ){
       vec1Sub(aTmp, aVec, &pMod->aCentroid[iBucket*nElem], nElem);
       aVec = aTmp;
@@ -10793,6 +10811,10 @@ static int vec1WriterMetaFromStmt(
 /*
 ** Read nMeta values from buffer pBuf. Use them as the meta values associated
 ** with the (compressed) vector just appended to bucket iBucket.
+**
+** This is only called on a buffer that has been constructed in process,
+** not one loaded from disk, so it is safe to assume that pBuf really does
+** contain nMeta well-formed values.
 */
 static int vec1WriterMetaFromPacked(
   Vec1Writer *pWriter,            /* Writer object accumulating changes */
@@ -10804,7 +10826,7 @@ static int vec1WriterMetaFromPacked(
   int iOff = *piOff;
   for(ii=0; ii<pWriter->pTab->nMeta; ii++){
     Vec1MetaBuilder *pTo = &pWriter->aBld[iBucket].aMeta[ii];
-    int n = vec1MetaValueSize(&pBuf->a[iOff]);
+    i64 n = vec1MetaValueSize(&pBuf->a[iOff]);
     int rc = vec1BufferGrow(&pTo->buf, n);
     vec1MetaValueUpdateFlags(&pBuf->a[iOff], &pTo->flags);
     if( rc!=SQLITE_OK ) return rc;
@@ -10905,46 +10927,43 @@ static void vec1TransformInputVectorN(
     aOut[vv] = &aIn[vv*nElem];
   }
 
-  if( (pMod->hdr.flags & VEC1_MODEL_ROTATE) ){
+  if( (pMod->hdr.flags & (VEC1_MODEL_ROTATE|VEC1_MODEL_WHT))
+   || pMod->hdr.eDistance==VEC1_DISTANCE_COS
+   || nStride!=nElem
+  ){
+
     float *aRot[VEC1_MULTIMATCH_NVEC];
     for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
       aRot[vv] = &aTmp[vv*nStride];
     }
 
+    if( pMod->hdr.flags & VEC1_MODEL_ROTATE ){
 #if defined(VEC1_USE_TRANSPOSITION)
-    vec1RotateVectorTransposeN(
-        aRot, aOut, nElem, pMod->aRotation, pMod->aRotationNT
-    );
+      vec1RotateVectorTransposeN(
+          aRot, aOut, nElem, pMod->aRotation, pMod->aRotationNT
+          );
 #else
-    vec1RotateVectorN(aRot, aOut, nElem, pMod->aRotation);
+      vec1RotateVectorN(aRot, aOut, nElem, pMod->aRotation);
 #endif
+    }else{
+      for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
+        memcpy(aRot[vv], aOut[vv], nElem * sizeof_f32);
+      }
+    }
+
+    if( pMod->hdr.eDistance==VEC1_DISTANCE_COS ){
+      for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
+        vec1NormalizeVector(aRot[vv], nElem);
+      }
+    }
+
+    if( pMod->hdr.flags & VEC1_MODEL_WHT ){
+      for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
+        vec1ApplyWHT(aRot[vv], nElem);
+      }
+    }
 
     memcpy(aOut, aRot, sizeof(aRot));
-  }
-
-  else if( (pMod->hdr.flags & VEC1_MODEL_WHT) ){
-    for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
-      float *tmp = &aTmp[vv*nStride];
-      memcpy(tmp, aOut[vv], nElem * sizeof_f32);
-      vec1ApplyWHT(tmp, nElem);
-      aOut[vv] = tmp;
-    }
-  }
-
-  else if( pMod->hdr.eDistance==VEC1_DISTANCE_COS || nStride!=nElem ){
-    for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
-      float *tmp = &aTmp[vv*nStride];
-      memcpy(tmp, aOut[vv], nElem * sizeof_f32);
-      aOut[vv] = tmp;
-    }
-  }
-
-  /* If this model uses cosine distance, normalize the vectors. */
-  if( pMod->hdr.eDistance==VEC1_DISTANCE_COS ){
-    for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
-      assert( aOut[vv]==&aTmp[vv*nStride] );
-      vec1NormalizeVector(&aTmp[vv*nStride], nElem);
-    }
   }
 }
 
@@ -10963,7 +10982,6 @@ static void vec1QuantizeVectorN(
   const int nBucket = pMod->hdr.nBucket;
   const int nStride = MAX(nElem, pMod->nCodeElem * (int)pMod->hdr.nCodebook);
   const float *aVec[VEC1_MULTIMATCH_NVEC];
-  int iBucket = 0;
   int vv;
 
   vec1TransformInputVectorN(pMod, aVector, aVec, aTmp, nStride);
@@ -11364,19 +11382,117 @@ static int vec1WriteConfigI64(Vec1Tab *pTab, int iField, i64 iVal){
 */
 static int vec1FixVectorSize(Vec1Tab *pTab, int nVec){
   int rc = SQLITE_OK;
+  char *zErr = 0;
 
-  if( (nVec % sizeof_f32) 
-   || (nVec<(VEC1_VECSIZE_MIN*sizeof_f32))
-   || (nVec>(VEC1_VECSIZE_MAX*sizeof_f32))
-  ){
-    vec1VtabError(pTab, "invalid vector size: %d bytes", nVec);
-    rc = SQLITE_ERROR;
+  rc = vec1CheckVectorSize(nVec, &zErr);
+  if( rc!=SQLITE_OK ){
+    vec1VtabError(pTab, "vec1: %s", zErr);
+    sqlite3_free(zErr);
   }else{
     int nElem = nVec/sizeof_f32;
     rc = vec1WriteConfigI64(pTab, VEC1_CONFIG_NELEM, nElem);
     if( rc==SQLITE_OK ) pTab->cfg.nElem = nElem;
   }
 
+  return rc;
+}
+
+static int vec1FinishWriter(Vec1Tab *pTab, int bDiscard){
+  int rc = SQLITE_OK;
+  Vec1Writer *pWriter = pTab->pWriter;
+  pTab->pWriter = 0;
+  if( bDiscard ){
+    vec1WriterFinish(pWriter, SQLITE_ERROR);
+  }else{
+    rc = vec1WriterFinish(pWriter, SQLITE_OK);
+  }
+  return rc;
+}
+
+/*
+** There are three basic query plans supported by xBestIndex:
+**
+**   0: Full table scan.
+**   1: Lookup by rowid.
+**   2: K-nearest-neighbours search.
+*/
+static int vec1FilterMethod(
+  sqlite3_vtab_cursor *cur,
+  int idxNum,
+  const char *idxStr,
+  int argc,
+  sqlite3_value **argv
+){
+  Vec1Csr *pCsr = (Vec1Csr *)cur;
+  Vec1Tab *pTab = (Vec1Tab*)(cur->pVtab);
+  int rc = SQLITE_OK;
+
+  UNUSED_PARAMETER(argc);
+  assert( ((idxNum==0 || idxNum==1) && argc==0) 
+       || ((idxNum==2 || idxNum==3) && argc==1)
+       || (idxNum==5 && argc>=1)
+  );
+  vec1ResetCsr(pCsr);
+
+  if( pCsr->bLoadConfig==0 && (idxNum & 0x01) ){
+    rc = vec1LoadConfig(pTab);
+    if( rc!=SQLITE_OK ) return rc;
+    pCsr->bLoadConfig = 1;
+  }
+
+  if( idxNum==0 || idxNum==1 ){
+    /* Full-table scan. */
+    rc = vec1PrepareSql(pTab, &pCsr->pStmt,
+        "SELECT * FROM %Q.'%q_base'", pTab->zDb, pTab->zName
+    );
+  }else if( idxNum==2 || idxNum==3 ){
+    /* Lookup by rowid */
+    rc = vec1PrepareSql(pTab, &pCsr->pStmt,
+        "SELECT * FROM %Q.'%q_base' WHERE rowid=?", 
+        pTab->zDb, pTab->zName
+    );
+    if( rc==SQLITE_OK ){
+      sqlite3_bind_value(pCsr->pStmt, 1, argv[0]);
+    }
+  }else{
+    /* ANN query */
+    Vec1Query *pQuery = 0;
+
+    assert( idxNum==5 );
+
+    rc = vec1FinishWriter(pTab, 0);
+
+    VEC1_QINSTR_START(pTab, VEC1_QINSTR_TOTAL);
+
+    /* Parse the query parameters. */
+    if( rc==SQLITE_OK ){
+      rc = vec1SetupKANNQuery(pTab, idxStr, argv, &pQuery);
+      pCsr->pQuery = pQuery;
+    }
+
+    if( rc==SQLITE_OK ){
+      if( (pTab->mod.hdr.flags & VEC1_MODEL_INDEX)==0 ){
+        rc = vec1QueryToSql(pCsr);
+        assert( pCsr->pQuery==0 );
+        assert( pCsr->bSqlNNQuery );
+      }else{
+        rc = vec1PrepareSql(pTab, &pCsr->pStmt,
+            "SELECT * FROM %Q.'%q_base' WHERE id=?", 
+            pTab->zDb, pTab->zName
+        );
+        if( rc==SQLITE_OK ){
+          rc = vec1DoKANNQuery(pCsr);
+          pCsr->iCurrentRes = -1;
+        }
+      }
+    }
+
+    VEC1_QINSTR_STOP(pTab, VEC1_QINSTR_TOTAL);
+  }
+
+  if( rc==SQLITE_OK ){
+    rc = vec1NextMethod(cur);
+  }
   return rc;
 }
 
@@ -11403,6 +11519,9 @@ static int vec1SpecialInsert(
   int iCmd = 0;
 
   rc = vec1InterpretCmdName(pTab, zCmd, &iCmd);
+  if( rc==SQLITE_OK ){
+    rc = vec1FinishWriter(pTab, 0);
+  }
 
   if( rc==SQLITE_OK ){
     switch( iCmd ){
@@ -11534,6 +11653,70 @@ static int vec1SpecialInsert(
 #define VEC1_TOMBSTONE_THRESHOLD(nEntry) ((nEntry * 2) / 10)
 
 /*
+** Locate the index entry for row iRowid, for writing. Array aVec[] is the
+** row's transformed vector. 
+**
+** The bucket selected for aVec[] by vec1BestMatchSimple() is searched
+** first. If the model has no buckets, this is bucket 0 and it is the only
+** bucket searched. Otherwise, if the row is not found there, it may have
+** been assigned to a different bucket by code that rounds differently -
+** either a different routine, such as the batched routines used by 
+** 'rebuild', or the same routine on a different platform. In that case
+** all other buckets that are near-ties with the selected bucket (see 
+** vec1BucketIsNearTie()) are searched, followed by all remaining buckets.
+**
+** If the row is found, (*pLoc) is populated and (*piBucket) is set to
+** the bucket it was found in. If it is not found, (*pLoc) is zeroed and
+** SQLITE_OK returned. The caller must then treat the row as missing.
+*/
+static int vec1DeleteFindRowid(
+  Vec1Tab *pTab,                  /* Table to search */
+  const float *aVec,              /* Transformed vector */
+  i64 iRowid,                     /* Rowid to locate */
+  int *piBucket,                  /* OUT: Bucket containing iRowid */
+  Vec1RowidLocation *pLoc         /* OUT: Location of iRowid */
+){
+  const Vec1Model *pMod = &pTab->mod;
+  const int nElem = (int)pMod->hdr.nElem;
+  const int nBucket = (int)pMod->hdr.nBucket;
+  int iBest = 0;
+  double fBest = 0.0;
+  int rc = SQLITE_OK;
+
+  int iPass;
+
+  if( nBucket>0 ){
+    iBest = vec1BestMatchSimple(pMod->aCentroid, nBucket, aVec, nElem, &fBest);
+  }
+  rc = vec1FindByRowid(pTab, iBest, 1, iRowid, pLoc);
+  if( rc!=SQLITE_OK || pLoc->pList || pLoc->pBlob ){
+    *piBucket = iBest;
+    return rc;
+  }
+
+  /* Pass 0 searches buckets that are near-ties with iBest. Pass 1 searches
+  ** all others.  */
+  for(iPass=0; iPass<2; iPass++){
+    int ii;
+    for(ii=0; ii<nBucket; ii++){
+      if( ii!=iBest ){
+        double fDist;
+        fDist = vec1L2Dist(aVec, &pMod->aCentroid[ii*nElem], nElem);
+        if( vec1BucketIsNearTie(fBest, fDist)==(iPass==0) ){
+          rc = vec1FindByRowid(pTab, ii, 1, iRowid, pLoc);
+          if( rc!=SQLITE_OK || pLoc->pList || pLoc->pBlob ){
+            *piBucket = ii;
+            return rc;
+          }
+        }
+      }
+    }
+  }
+
+  return SQLITE_OK;
+}
+
+/*
 ** Delete the %_base entry for the row with rowid=iRowid. Also zero-out
 ** the corresponding %_idx entry.
 */
@@ -11546,37 +11729,34 @@ static int vec1DeleteByRowid(Vec1Tab *pTab, i64 iRowid){
 
   rc = vec1GetSql(pTab, VEC1_SQL_DEL_LOOKUP_BASE, &pDelete);
   if( rc==SQLITE_OK ){
-    int iBucket = 0;
+
+    /* Delete the row from the %_base table. Also set variable iBucket to
+    ** the index of the bucket containing the vector. Statement pDelete is
+    ** not reset until the end of this function, as aTransform[] may point
+    ** to the vector it returns.  */
     sqlite3_bind_int64(pDelete, 1, iRowid);
-    if( SQLITE_ROW==sqlite3_step(pDelete) && pTab->mod.hdr.nBucket>0 ){
+    if( (SQLITE_ROW==sqlite3_step(pDelete))
+     && (pTab->mod.hdr.flags & VEC1_MODEL_INDEX)
+    ){
+      int iBucket = 0;
+      Vec1RowidLocation loc;
+
       if( pTab->mod.hdr.nCodebook==0 ){
         iBucket = sqlite3_column_int(pDelete, 0);
+        rc = vec1FindByRowid(pTab, iBucket, 1, iRowid, &loc);
       }else{
         const u8 *aVec = sqlite3_column_blob(pDelete, 0);
         int nVec = sqlite3_column_bytes(pDelete, 0);
-        const float *aTransform = 0;
-
-        aTransform = vec1TransformInputVector(
-            &pTab->mod, pTab->aTmpVec, (const float*)aVec
-        );
 
         if( nVec!=(pTab->cfg.nElem*sizeof_f32) ){
           rc = VEC1_CORRUPT;
         }else{
-          iBucket = vec1PqBestMatch(
-              pTab->mod.aCentroid, pTab->mod.hdr.nBucket, 
-              aTransform, pTab->cfg.nElem, 0
+          const float *aTransform = vec1TransformInputVector(
+              &pTab->mod, pTab->aTmpVec, (const float*)aVec
           );
+          rc = vec1DeleteFindRowid(pTab, aTransform, iRowid, &iBucket, &loc);
         }
       }
-    }
-
-    vec1StmtReset(&rc, pDelete);
-
-    if( rc==SQLITE_OK && (pTab->mod.hdr.flags & VEC1_MODEL_INDEX) ){
-      Vec1RowidLocation loc;
-
-      rc = vec1FindByRowid(pTab, iBucket, 1, iRowid, &loc);
 
       if( rc==SQLITE_OK ){
         if( loc.pList==0 && loc.pBlob==0 ){
@@ -11587,7 +11767,7 @@ static int vec1DeleteByRowid(Vec1Tab *pTab, i64 iRowid){
           ** the threshold. So reorganize the list and remove iRowid in
           ** one go.  */
           if( loc.pList ){
-            vec1ListBuilderCompress(loc.pList, iRowid);
+            rc = vec1ListBuilderCompress(loc.pList, iRowid);
           }else{
             /* Load the list into memory, compress it so there are no
             ** tombstones, then write it back to the database.  */
@@ -11642,6 +11822,8 @@ static int vec1DeleteByRowid(Vec1Tab *pTab, i64 iRowid){
         }
       }
     }
+
+    vec1StmtReset(&rc, pDelete);
   }
 
   return rc;
@@ -11723,7 +11905,6 @@ static int vec1UpdateMethod(
   
     /* If this is an INSERT or UPDATE, write the new row. */
     if( rc==SQLITE_OK ){
-      int nVec = sqlite3_value_bytes(argv[2+VEC1_COLUMN_VECTOR]);
       int iBucket = 0;
 
       /* If there is an index (i.e. not index:"none"), then allocate an
@@ -11787,17 +11968,6 @@ static int vec1UpdateMethod(
     rc = vec1DeleteByRowid(pTab, sqlite3_value_int64(argv[0]));
   }
 
-  return rc;
-}
-
-static int vec1FinishWriter(Vec1Tab *pTab, int bDiscard){
-  int rc = SQLITE_OK;
-  if( bDiscard ){
-    vec1WriterFinish(pTab->pWriter, SQLITE_ERROR);
-  }else{
-    rc = vec1WriterFinish(pTab->pWriter, SQLITE_OK);
-  }
-  pTab->pWriter = 0;
   return rc;
 }
 
@@ -11891,8 +12061,14 @@ static int vec1ReleaseMethod(sqlite3_vtab *pVtab, int iSavepoint){
 static int vec1RollbackToMethod(sqlite3_vtab *pVtab, int iSavepoint){
   Vec1Tab *pTab = (Vec1Tab*)pVtab;
   UNUSED_PARAMETER(iSavepoint);
+
+  /* Discard any cached writes */
   vec1FinishWriter(pTab, 1);
+
+  /* Drop the in-memory cache of both the config and the model. The 
+  ** database ROLLBACK TO operation may have modified them on disk. */
   vec1UnloadConfig(pTab);
+  vec1UnloadModel(pTab);
   return SQLITE_OK;
 }
 
@@ -11947,7 +12123,7 @@ static int vec1IntegrityMetaValue(
     vec1MetaValueRead(pBuf, &iOff, &val);
   }
 
-  if( pVal ){
+  if( rc==SQLITE_OK && pVal ){
     int eType = sqlite3_value_type(pVal);
     int bMatch = 0;
     switch( eType ){
@@ -11999,7 +12175,7 @@ static int vec1IntegrityMetaValue(
 }
 
 /*
-** Return true if the difference between f1 and f2 is greater than 
+** Return true if the difference between f1 and f2 is smaller than 
 ** (fTol * max(f1, f2)). Or false if they differ by more than this.
 */
 static int vec1FloatWithinTolerance(float f1, float f2, float fTol){
@@ -12101,9 +12277,9 @@ static int vec1IntegrityCheckEncoded(
         float e1 = 0.0;           /* aEnc[] squared reconstruction error */
         float e2 = 0.0;           /* aIdx[] squared reconstruction error */
         vec1DecodeVector(pMod, aEnc, v1);
-        e1 = vec1L2Dist(v1, aVec, nElem);
+        e1 = (float)vec1L2Dist(v1, aVec, nElem);
         vec1DecodeVector(pMod, aIdx, v1);
-        e2 = vec1L2Dist(v1, aVec, nElem);
+        e2 = (float)vec1L2Dist(v1, aVec, nElem);
         if( vec1FloatWithinTolerance(e1, e2, fTol)==0 ) return 1;
       }
     }
@@ -12111,6 +12287,65 @@ static int vec1IntegrityCheckEncoded(
 
   return 0;
 }
+
+/*
+** Check that a vector with transformed value aVec[] may legitimately be
+** stored in bucket iBucket.
+**
+** If vec1BestMatchSimple() selects bucket iBucket for aVec[], then it
+** may. Otherwise, the vector may have been assigned to its bucket by
+** different code - either a different routine, such as the batched
+** routines used by 'rebuild', or the same routine on a different platform.
+** Rounding differences mean such code may select a different bucket when
+** aVec[] is (almost) equidistant from two or more centroids. So iBucket
+** is also accepted if the distance from aVec[] to centroid iBucket is
+** within a small tolerance of the distance to the centroid selected by
+** vec1BestMatchSimple().
+**
+** Return non-zero if aVec[] may not be stored in bucket iBucket, or zero
+** otherwise.
+*/
+static int vec1IntegrityCheckBucket(
+  const Vec1Model *pMod,          /* Model used to quantize vectors */
+  const float *aVec,              /* Transformed vector */
+  int iBucket                     /* Bucket the vector is stored in */
+){
+  const int nElem = (int)pMod->hdr.nElem;
+  const int nBucket = (int)pMod->hdr.nBucket;
+  double fBest = 0.0;
+  double fDist = 0.0;
+  int iBest = 0;
+
+  if( nBucket==0 ) return (iBucket!=0);
+  if( iBucket<0 || iBucket>=nBucket ) return 1;
+
+  iBest = vec1BestMatchSimple(pMod->aCentroid, nBucket, aVec, nElem, &fBest);
+  if( iBest==iBucket ) return 0;
+
+  fDist = vec1L2Dist(aVec, &pMod->aCentroid[iBucket*nElem], nElem);
+  return vec1BucketIsNearTie(fBest, fDist)==0;
+}
+
+/*
+** The buffer passed as the only argument contains a meta-value array. If
+** it is of type GENERIC, test that it is well-formed. Return VEC1_CORRUPT
+** if it is not, or SQLITE_OK if it looks ok.
+*/
+static int vec1IntegrityCheckMetaArray(Vec1Buffer *pBuf){
+  int rc = SQLITE_OK;
+  int bGeneric = vec1GetU32(pBuf->a) & VEC1_META_GENERIC;
+  if( bGeneric ){
+    u32 nEntry = vec1GetU32(&pBuf->a[4]);
+    u32 ii;
+    int iOff = VEC1_META_SZHDR;
+    for(ii=0; rc==SQLITE_OK && ii<nEntry; ii++){
+      Vec1MetaValue dummy;
+      rc = vec1MetaValueRead(pBuf, &iOff, &dummy);
+    }
+  }
+  return rc;
+}
+
 
 /*
 ** Integrity check method. If the table has been supplied with a model,
@@ -12144,7 +12379,6 @@ static int vec1IntegrityMethod(
 
     int *aiOffMeta = 0;
     i64 nTotalEntry = 0;
-    u8 *aIdxPQ = 0;
 
     if( nCodebook>0 && pMod->hdr.nBucket>0 ){
       aResidual = vec1MallocZero(pTab->nTmpVec * sizeof_f32);
@@ -12160,7 +12394,6 @@ static int vec1IntegrityMethod(
         rc = SQLITE_NOMEM;
         goto integrity_failed;
       }
-      aIdxPQ = &aPQ[nCodebook + sizeof_f32];
     }
 
     rc = vec1GetSql(pTab, VEC1_SQL_SCAN_IDX, &pScan);
@@ -12209,7 +12442,11 @@ static int vec1IntegrityMethod(
 
       /* Load the array for each meta-value column from disk */
       for(iMeta=0; iMeta<pTab->nMeta; iMeta++){
-        rc = vec1ReadMeta(pTab, &aBufMeta[iMeta], iId, iMeta);
+        rc = vec1ReadMeta(pTab, nEntry, &aBufMeta[iMeta], iId, iMeta);
+
+        if( rc==SQLITE_OK ){
+          rc = vec1IntegrityCheckMetaArray(&aBufMeta[iMeta]);
+        }
         if( rc!=SQLITE_OK ){
           if( rc==SQLITE_CORRUPT_VTAB ){
             const char *zFmt = "%s: error reading meta-list id=%lld,meta=%d";
@@ -12273,13 +12510,8 @@ static int vec1IntegrityMethod(
             const u8 *aBaseVec = sqlite3_column_blob(pLookup, 1);
             const float *aTransform = 0;
             int nBaseVec = sqlite3_column_bytes(pLookup, 1);
-            int iCalc = 0;
   
             assert( nCodebook>0 );
-
-            aTransform = vec1TransformInputVector(
-                &pTab->mod, pTab->aTmpVec, (const float*)aBaseVec
-            ); 
   
             /* Check the vector is the right size. */
             if( nBaseVec!=nElem*sizeof_f32 ){
@@ -12287,14 +12519,13 @@ static int vec1IntegrityMethod(
               zErr = sqlite3_mprintf(zFmt, zTabName, iRowid);
               goto integrity_failed;
             }
+
+            aTransform = vec1TransformInputVector(
+                &pTab->mod, pTab->aTmpVec, (const float*)aBaseVec
+            ); 
   
             /* Check the vector is in the right bucket. */
-            if( pMod->hdr.nBucket>0 ){
-              iCalc = vec1PqBestMatch(pMod->aCentroid, 
-                  pMod->hdr.nBucket, aTransform, nElem, 0
-              );
-            }
-            if( iCalc!=iBucket ){
+            if( vec1IntegrityCheckBucket(pMod, aTransform, iBucket) ){
               const char *zFmt = "%s: vector from row %lld is in wrong bucket";
               zErr = sqlite3_mprintf(zFmt, zTabName, iRowid);
               goto integrity_failed;
@@ -12307,9 +12538,9 @@ static int vec1IntegrityMethod(
               ** norm followed by nCodebook bytes of data. For PQ or OPQ,
               ** aPQ[] just contains the nCodebook bytes of encoded vector. */
               const float *aEnc = (const float*)aTransform;
-              int szElem0 = 0;
               if( (pMod->hdr.flags & VEC1_MODEL_RESIDUAL) ){
-                vec1Sub(aResidual, aEnc, &pMod->aCentroid[iCalc*nElem], nElem);
+                const float *aCent = &pMod->aCentroid[iBucket*nElem];
+                vec1Sub(aResidual, aEnc, aCent, nElem);
                 aEnc = aResidual;
               }
               if( vec1IntegrityCheckEncoded(&rc, pMod, aEnc, ii, aBlob, &tmp) ){
@@ -12852,7 +13083,7 @@ static int initExtension(
   for(ii=0; rc==SQLITE_OK && ii<size_of_array(aAgg); ii++){
     struct AggFunc *p = &aAgg[ii];
     rc = sqlite3_create_function(
-        db, p->zName, p->nArg, SQLITE_UTF8|SQLITE_INNOCUOUS, (void*)pList, 0, 
+        db, p->zName, p->nArg, SQLITE_UTF8|SQLITE_DIRECTONLY, (void*)pList, 0, 
         p->xStep, p->xFinal
     );
   }
@@ -12922,7 +13153,7 @@ static int vec1HasAvx2(void)
   return (ebx & (1 << 5)) != 0;      // AVX2
 }
 # else
-static int vec1HasAvx2(){
+static int vec1HasAvx2(void){
   /* Clang/GCC */
   __builtin_cpu_init();
   return __builtin_cpu_supports("avx2");
@@ -12952,7 +13183,7 @@ static int initMultiExtension(
 #if !defined(VEC1SIMD) || VEC1SIMD==SCALAR
 
 #ifndef VEC1_STATIC
-SQLITE_EXTENSION_INIT1;
+SQLITE_EXTENSION_INIT1
 #endif
 
 #ifdef _WIN32
@@ -12971,6 +13202,7 @@ int sqlite3_extension_init(
 
 #ifdef VEC1_STATIC
 int sqlite3_vec1_extra_init(const char *z){
+  UNUSED_PARAMETER(z);
   sqlite3_auto_extension((void(*)(void))initExtension);
   return SQLITE_OK;
 }

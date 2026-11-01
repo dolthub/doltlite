@@ -756,11 +756,16 @@ static int selectWindowRewriteExprCb(Walker *pWalker, Expr *pExpr){
 
   /* If this function is being called from within a scalar sub-select
   ** that used by the SELECT statement being processed, only process
-  ** TK_COLUMN expressions that refer to it (the outer SELECT). Do
-  ** not process aggregates or window functions at all, as they belong
-  ** to the scalar sub-select.  */
+  ** TK_COLUMN and TK_AGGREGATE expressions that refer to it (the outer
+  ** SELECT). Do not process window functions at all, as they belong to the
+  ** scalar sub-select.  */
   if( p->pSubSelect ){
-    if( pExpr->op!=TK_COLUMN ){
+    if( pExpr->op==TK_AGG_FUNCTION ){
+      /* If op2==walkerDepth, then this expression aggregates over the rows
+      ** of the SELECT being processed, even though it is within a scalar
+      ** sub-select. In that case proceed, otherwise skip this node. */
+      if( pExpr->op2!=pWalker->walkerDepth ) return WRC_Continue;
+    }else if( pExpr->op!=TK_COLUMN ){
       return WRC_Continue;
     }else{
       int nSrc = p->pSrc->nSrc;
@@ -808,7 +813,9 @@ static int selectWindowRewriteExprCb(Walker *pWalker, Expr *pExpr){
         p->pSub = sqlite3ExprListAppend(pParse, p->pSub, pDup);
       }
       if( p->pSub ){
-        int f = pExpr->flags & EP_Collate;
+        int f = pExpr->flags & (EP_Collate|EP_OuterON|EP_InnerON);
+        int iJoin = pExpr->w.iJoin;
+
         assert( ExprHasProperty(pExpr, EP_Static)==0 );
         ExprSetProperty(pExpr, EP_Static);
         sqlite3ExprDelete(pParse->db, pExpr);
@@ -820,6 +827,7 @@ static int selectWindowRewriteExprCb(Walker *pWalker, Expr *pExpr){
         pExpr->iTable = p->pWin->iEphCsr;
         pExpr->y.pTab = p->pTab;
         pExpr->flags = f;
+        if( (f & (EP_OuterON|EP_InnerON)) ) pExpr->w.iJoin = iJoin;
       }
       if( pParse->db->mallocFailed ) return WRC_Abort;
       break;
@@ -838,7 +846,9 @@ static int selectWindowRewriteSelectCb(Walker *pWalker, Select *pSelect){
     return WRC_Continue;
   }else{
     p->pSubSelect = pSelect;
+    pWalker->walkerDepth++;
     sqlite3WalkSelect(pWalker, pSelect);
+    pWalker->walkerDepth--;
     p->pSubSelect = pSave;
   }
   return WRC_Prune;
@@ -942,8 +952,15 @@ static int sqlite3WindowExtraAggFuncDepth(Walker *pWalker, Expr *pExpr){
   return WRC_Continue;
 }
 
+/*
+** Walker callback used to detect aggregate functions in the ORDER BY
+** clause of an otherwise non-aggregate SELECT. 
+*/
 static int disallowAggregatesInOrderByCb(Walker *pWalker, Expr *pExpr){
-  if( pExpr->op==TK_AGG_FUNCTION && pExpr->pAggInfo==0 ){
+  if( pExpr->op==TK_AGG_FUNCTION
+   && pExpr->pAggInfo==0
+   && pExpr->op2==pWalker->walkerDepth
+  ){
     assert( !ExprHasProperty(pExpr, EP_IntValue) );
      sqlite3ErrorMsg(pWalker->pParse,
          "misuse of aggregate: %s()", pExpr->u.zToken);
@@ -990,7 +1007,9 @@ int sqlite3WindowRewrite(Parse *pParse, Select *p){
     sqlite3WalkSelect(&w, p);
     if( (p->selFlags & SF_Aggregate)==0 ){
       w.xExprCallback = disallowAggregatesInOrderByCb;
-      w.xSelectCallback = 0;
+      w.xSelectCallback = sqlite3WalkerDepthIncrease;
+      w.xSelectCallback2 = sqlite3WalkerDepthDecrease;
+      w.walkerDepth = 0;
       sqlite3WalkExprList(&w, p->pOrderBy);
     }
 

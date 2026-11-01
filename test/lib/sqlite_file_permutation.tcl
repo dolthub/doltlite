@@ -50,7 +50,22 @@ proc sqlite_file::sql_trace {command args} {
   variable active
   variable mode
   variable attached
-  if {$active || [lindex $command 1] ni {eval onecolumn exists}} return
+  if {$active} return
+  if {$mode eq "sqlite" && [lindex $command 1] eq "backup"} {
+    set filename [lindex $command end]
+    if {![file exists $filename] || [file size $filename]==0} {
+      set active 1
+      try {
+        native sqlite_file_seed [uri $filename] -uri 1
+        sqlite_file_seed eval {PRAGMA user_version=0}
+        sqlite_file_seed close
+      } finally {
+        set active 0
+      }
+    }
+    return
+  }
+  if {[lindex $command 1] ni {eval onecolumn exists}} return
   set sql [lindex $command 2]
   if {![regexp -nocase {\mATTACH\M} $sql]} return
   set active 1

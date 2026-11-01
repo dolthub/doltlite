@@ -128,3 +128,5 @@ fts5update2
 fts5version
 fts5vocab
 fts5vocab2
+fts5error
+fts5vocab3

@@ -54,7 +54,7 @@ static int statusCheckIgnoreObject(
     return SQLITE_OK;
   }
   zTail = strrchr(zName, '_');
-  if( zTail && sqlite3ShadowTableName(db, zName) ){
+  if( zTail && sqlite3ShadowTableName(db, zName, "main") ){
     zOwner = sqlite3_mprintf("%.*s", (int)(zTail-zName), zName);
     if( !zOwner ) return SQLITE_NOMEM;
   }

@@ -1237,6 +1237,9 @@ void sqlite3Pragma(
       Index *pPk = sqlite3PrimaryKeyIndex(pTab);
       pParse->nMem = 7;
       sqlite3ViewGetColumnNames(pParse, pTab);
+#ifdef DOLTLITE_PROLLY
+      pPk = sqlite3PrimaryKeyIndex(pTab);
+#endif
       for(i=0, pCol=pTab->aCol; i<pTab->nCol; i++, pCol++){
         int isHidden = 0;
         const Expr *pColExpr;
@@ -1893,14 +1896,9 @@ void sqlite3Pragma(
         sqlite3OpenTableAndIndices(pParse, pTab, OP_OpenRead, 0,
                                    1, 0, &iDataCur, &iIdxCur);
         /* reg[7] counts the number of entries in the table.
-        ** reg[8+i] counts the number of entries in the i-th index
         */
         sqlite3VdbeAddOp2(v, OP_Integer, 0, 7);
-        for(j=0, pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext, j++){
-          sqlite3VdbeAddOp2(v, OP_Integer, 0, 8+j); /* index entries counter */
-        }
-        assert( pParse->nMem>=8+j );
-        assert( sqlite3NoTempsInRange(pParse,1,7+j) );
+        assert( sqlite3NoTempsInRange(pParse,1,7) );
         sqlite3VdbeAddOp2(v, OP_Rewind, iDataCur, 0); VdbeCoverage(v);
         loopTop = sqlite3VdbeAddOp2(v, OP_AddImm, 7, 1);
 
@@ -2119,7 +2117,6 @@ void sqlite3Pragma(
             r1 = sqlite3GenerateIndexKey(pParse, pIdx, iDataCur, 0, 0, &jmp3,
                                          pPrior, r1);
             pPrior = pIdx;
-            sqlite3VdbeAddOp2(v, OP_AddImm, 8+j, 1);/* increment entry count */
             /* Verify that an index entry exists for the current table row */
             sqlite3VdbeAddOp4Int(v, OP_Found, iIdxCur+j, ckUniq, r1,
                                         pIdx->nColumn); VdbeCoverage(v);
@@ -2710,9 +2707,10 @@ void sqlite3Pragma(
   ** disables the timeout.
   */
   /*case PragTyp_BUSY_TIMEOUT*/ default: {
+    int n = 0;
     assert( pPragma->ePragTyp==PragTyp_BUSY_TIMEOUT );
-    if( zRight ){
-      sqlite3_busy_timeout(db, sqlite3Atoi(zRight));
+    if( zRight && sqlite3GetInt32(zRight,&n) ){
+      sqlite3_busy_timeout(db, n);
     }
     returnSingleInt(v, db->busyTimeout);
     break;

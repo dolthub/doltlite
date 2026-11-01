@@ -112,6 +112,9 @@ int sqlite3_finalize(sqlite3_stmt *pStmt){
     Vdbe *v = (Vdbe*)pStmt;
     sqlite3 *db = v->db;
     if( vdbeSafety(v) ) return SQLITE_MISUSE_BKPT;
+#if defined(SQLITE_DISPOSAL_NOTIFIER)
+    SQLITE_DISPOSAL_NOTIFIER(2,pStmt);
+#endif
     sqlite3_mutex_enter(db->mutex);
     checkProfileCallback(db, v);
     assert( v->eVdbeState>=VDBE_READY_STATE );
@@ -156,6 +159,7 @@ int sqlite3_clear_bindings(sqlite3_stmt *pStmt){
   int i;
   int rc = SQLITE_OK;
   Vdbe *p = (Vdbe*)pStmt;
+  u32 maskSmallInt = 0;  /* Bitmask of bindings with value 0 or 1 */
 #if SQLITE_THREADSAFE
   sqlite3_mutex *mutex;
 #endif
@@ -167,16 +171,21 @@ int sqlite3_clear_bindings(sqlite3_stmt *pStmt){
 #if SQLITE_THREADSAFE
   mutex = p->db->mutex;
 #endif
+
   sqlite3_mutex_enter(mutex);
   for(i=0; i<p->nVar; i++){
-    sqlite3VdbeMemRelease(&p->aVar[i]);
-    p->aVar[i].flags = MEM_Null;
+    Mem *pVar = &p->aVar[i];
+    if( (pVar->flags & MEM_Int)!=0 && pVar->u.i>=0 && pVar->u.i<=1 ){
+      maskSmallInt |= i>=31 ? 0x80000000 : ((u32)1)<<i;
+    }
+    sqlite3VdbeMemRelease(pVar);
+    pVar->flags = MEM_Null;
   }
 #ifdef DOLTLITE_PROLLY
   p->nBindTooBig = 0;
 #endif
   assert( (p->prepFlags & SQLITE_PREPARE_SAVESQL)!=0 || p->expmask==0 );
-  if( p->expmask ){
+  if( (p->expmask&~p->smimask)!=0 || (p->smimask&maskSmallInt)!=0 ){
     p->expired = 1;
   }
   sqlite3_mutex_leave(mutex);
@@ -688,6 +697,7 @@ int sqlite3_result_zeroblob64(sqlite3_context *pCtx, u64 n){
   }
 #ifndef SQLITE_OMIT_INCRBLOB
   sqlite3VdbeMemSetZeroBlob(pCtx->pOut, (int)n);
+  pOut->enc = pCtx->enc;
   return SQLITE_OK;
 #else
   return sqlite3VdbeMemSetZeroBlob(pCtx->pOut, (int)n);
@@ -1768,15 +1778,13 @@ static int vdbeUnbind(Vdbe *p, unsigned int i){
     sqlite3_mutex_leave(p->db->mutex);
     return SQLITE_RANGE;
   }
+
   pVar = &p->aVar[i];
 #ifdef DOLTLITE_PROLLY
   if( p->nBindTooBig && bindValueTooBig(pVar) ){
     p->nBindTooBig--;
   }
 #endif
-  sqlite3VdbeMemRelease(pVar);
-  pVar->flags = MEM_Null;
-  p->db->errCode = SQLITE_OK;
 
   /* If the bit corresponding to this variable in Vdbe.expmask is set, then
   ** binding a new value to this variable invalidates the current query plan.
@@ -1790,11 +1798,20 @@ static int vdbeUnbind(Vdbe *p, unsigned int i){
   assert( (p->prepFlags & SQLITE_PREPARE_SAVESQL)!=0 || p->expmask==0 );
   assert( (p->expmask & p->smimask)==p->smimask );
   if( p->expmask!=0 && (p->expmask & (i>=31 ? 0x80000000 : (u32)1<<i))!=0 ){
-    /* We might avoid a reprepare here if p->smimask is set and the old
-    ** value is an integer other than (0,1).  But that is such a corner
-    ** case that it does not seem worth the extra code to implement. */
-    p->expired = 1;
+    /* If the p->smimask bit is also set, then only expire the statement if
+    ** the value being clobbered was integer value 0 or 1. */
+    if( (p->smimask==0) 
+     || (p->smimask & (i>=31 ? 0x80000000 : (u32)1<<i))==0 
+     || ((pVar->flags & MEM_Int)!=0 && pVar->u.i>=0 && pVar->u.i<=1)
+    ){
+      p->expired = 1;
+    }
   }
+
+  sqlite3VdbeMemRelease(pVar);
+  pVar->flags = MEM_Null;
+  p->db->errCode = SQLITE_OK;
+
   return SQLITE_OK;
 }
 
@@ -1807,12 +1824,13 @@ static int bindText(
   const void *zData,     /* Pointer to the data to be bound */
   i64 nData,             /* Number of bytes of data to be bound */
   void (*xDel)(void*),   /* Destructor for the data */
-  u8 encoding            /* Encoding for the data */
+  u8 encoding            /* Encoding for the data + optional ENC_KEEPBOM */
 ){
   Vdbe *p = (Vdbe *)pStmt;
   Mem *pVar;
   int rc;
 
+  assert( (encoding&ENC_KEEPBOM)==0 || (encoding&ENC_MASK)>SQLITE_UTF8 );
   rc = vdbeUnbind(p, (u32)(i-1));
   if( rc==SQLITE_OK ){
     assert( p!=0 && p->aVar!=0 && i>0 && i<=p->nVar ); /* tag-20240917-01 */
@@ -1936,8 +1954,8 @@ int sqlite3_bind_int64(sqlite3_stmt *pStmt, int i, sqlite_int64 iValue){
         if( sm1!=sm2 ){
           p->expired = 1;
         }
-      }else if( (pVar->flags & MEM_Int)==0 || pVar->u.i!=iValue ){
-        /* Always expire if the value really is changing */
+      }else if( (pVar->flags & MEM_Int)==0 || iValue!=pVar->u.i ){
+        /* Always expire if the smimask bit is clear */
         p->expired = 1;
       }
     }
@@ -2038,8 +2056,9 @@ int sqlite3_bind_value(sqlite3_stmt *pStmt, int i, const sqlite3_value *pValue){
       break;
     }
     case SQLITE_TEXT: {
+      assert( pValue->enc!=0 );
       rc = bindText(pStmt,i,  pValue->z, pValue->n, SQLITE_TRANSIENT,
-                              pValue->enc);
+              pValue->enc<=SQLITE_UTF8 ? pValue->enc : pValue->enc|ENC_KEEPBOM);
       break;
     }
     default: {
@@ -2060,6 +2079,7 @@ int sqlite3_bind_zeroblob(sqlite3_stmt *pStmt, int i, int n){
 #else
     rc = sqlite3VdbeMemSetZeroBlob(&p->aVar[i-1], n);
 #endif
+    p->aVar[i-1].enc = ENC(p->db);
     sqlite3_mutex_leave(p->db->mutex);
   }
   return rc;
@@ -2222,9 +2242,14 @@ int sqlite3_stmt_explain(sqlite3_stmt *pStmt, int eMode){
     v->explain = eMode;
     rc = SQLITE_OK;
   }else{
+    int savedMode = v->explain;
     v->explain = eMode;
     rc = sqlite3Reprepare(v);
-    v->haveEqpOps = eMode==2;
+    if( rc ){
+      v->explain = savedMode;
+    }else{
+      v->haveEqpOps = eMode==2;
+    }
   }
   if( v->explain ){
     v->nResColumn = 12 - 4*v->explain;
@@ -2416,10 +2441,11 @@ int sqlite3_preupdate_old(sqlite3 *db, int iIdx, sqlite3_value **ppValue){
 
       assert( p->pCsr->eCurType==CURTYPE_BTREE );
       nRec = sqlite3BtreePayloadSize(p->pCsr->uc.pCursor);
-      aRec = sqlite3DbMallocRaw(db, nRec);
+      aRec = sqlite3DbMallocRaw(db, (u64)nRec+8);
       if( !aRec ) goto preupdate_old_out;
       rc = sqlite3BtreePayload(p->pCsr->uc.pCursor, 0, nRec, aRec);
       if( rc==SQLITE_OK ){
+        memset(aRec+nRec, 0, 8);
         p->pUnpacked = vdbeUnpackRecord(p->pKeyinfo, nRec, aRec);
         if( !p->pUnpacked ) rc = SQLITE_NOMEM;
       }
@@ -2582,6 +2608,11 @@ int sqlite3_preupdate_new(sqlite3 *db, int iIdx, sqlite3_value **ppValue){
       sqlite3VdbeMemSetInt64(pMem, p->iKey2);
     }else if( iStore>=pUnpack->nField ){
       pMem = (sqlite3_value *)columnNullValue();
+    }else if( (p->pTab->aCol)
+           && (p->pTab->aCol[iIdx].affinity==SQLITE_AFF_REAL)
+           && (pMem->flags & (MEM_Int|MEM_IntReal))
+    ){
+      sqlite3VdbeMemRealify(pMem);
     }
   }else{
     /* For an UPDATE, memory cell (p->iNewReg+1+iStore) contains the required

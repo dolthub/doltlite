@@ -299,7 +299,7 @@ static IdxConstraint *idxNewConstraint(int *pRc, const char *zColl){
   int nColl = STRLEN(zColl);
 
   assert( *pRc==SQLITE_OK );
-  pNew = (IdxConstraint*)idxMalloc(pRc, sizeof(IdxConstraint) * nColl + 1);
+  pNew = (IdxConstraint*)idxMalloc(pRc, sizeof(IdxConstraint) + nColl + 1);
   if( pNew ){
     pNew->zColl = (char*)&pNew[1];
     memcpy(pNew->zColl, zColl, nColl+1);
@@ -823,6 +823,8 @@ static int idxIdentifierRequiresQuotes(const char *zId){
   int i;
   int nId = STRLEN(zId);
   
+  if( nId==0 ) return 1;
+  if( zId[0]>='0' && zId[0]<='9' ) return 1;
   if( sqlite3_keyword_check(zId, nId) ) return 1;
 
   for(i=0; zId[i]; i++){
@@ -992,12 +994,21 @@ static int idxCreateFromCons(
       do{
         int i;
         char *zFind;
-        for(i=0; zCols[i]; i++){
-          h += ((h<<3) + zCols[i]);
-        }
+
         sqlite3_free(zName);
-        zName = sqlite3_mprintf("%s_idx_%08x", zTable, h);
+        if( collisions<10 ){
+          for(i=0; zCols[i]; i++){
+            h += ((h<<3) + zCols[i]);
+          }
+          zName = sqlite3_mprintf("%s_idx_%08x", zTable, h);
+        }else{
+          /* After several hash attempts, generate a random name */
+          sqlite3_uint64 u;
+          sqlite3_randomness(sizeof(u), &u);
+          zName = sqlite3_mprintf("%s_idx_%llx", zTable, u);
+        }
         if( zName==0 ) break;
+         
         /* Is is unique among table, view and index names? */
         zFmt = "SELECT count(*) FROM sqlite_schema WHERE name=%Q"
           " AND type in ('index','table','view')";
@@ -1011,8 +1022,8 @@ static int idxCreateFromCons(
           break;
         }
         ++collisions;
-      }while( collisions<50 && zName!=0 );
-      if( collisions ){
+      }while( ALWAYS(collisions<500) && zName!=0 );
+      if( NEVER(collisions) ){
         /* This return means "Gave up trying to find a unique index name." */
         rc = SQLITE_BUSY_TIMEOUT;
       }else if( zName==0 ){
@@ -1028,15 +1039,13 @@ static int idxCreateFromCons(
           rc = SQLITE_NOMEM;
         }else{
           rc = sqlite3_exec(dbm, zIdx, 0, 0, p->pzErrmsg);
-          if( rc!=SQLITE_OK ){
-            rc = SQLITE_BUSY_TIMEOUT;
-          }else{
+          if( rc==SQLITE_OK ){
             idxHashAdd(&rc, &p->hIdx, zName, zIdx);
           }
         }
-        sqlite3_free(zName);
         sqlite3_free(zIdx);
       }
+      sqlite3_free(zName);
     }
 
     sqlite3_free(zCols);
@@ -1985,6 +1994,15 @@ int registerUDFs(sqlite3 *dbSrc, sqlite3 *dbDst){
 }
 #endif
 
+static int idxOpenMemory(sqlite3 **ppDb){
+#ifdef DOLTLITE_PROLLY
+  return sqlite3_open_v2("file::memory:?doltlite_engine=sqlite", ppDb,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, 0);
+#else
+  return sqlite3_open(":memory:", ppDb);
+#endif
+}
+
 /*
 ** Allocate a new sqlite3expert object.
 */
@@ -2003,10 +2021,10 @@ sqlite3expert *sqlite3_expert_new(sqlite3 *db, char **pzErrmsg){
   if( rc==SQLITE_OK ){
     pNew->db = db;
     pNew->iSample = 100;
-    rc = sqlite3_open(":memory:", &pNew->dbv);
+    rc = idxOpenMemory(&pNew->dbv);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_open(":memory:", &pNew->dbm);
+    rc = idxOpenMemory(&pNew->dbm);
     if( rc==SQLITE_OK ){
       sqlite3_db_config(pNew->dbm, SQLITE_DBCONFIG_TRIGGER_EQP, 1, (int*)0);
     }
@@ -2151,11 +2169,15 @@ int sqlite3_expert_analyze(sqlite3expert *p, char **pzErr){
 
   /* Create candidate indexes within the in-memory database file */
   if( rc==SQLITE_OK ){
+    p->pzErrmsg = pzErr;
     rc = idxCreateCandidates(p);
-  }else if ( rc==SQLITE_BUSY_TIMEOUT ){
-    if( pzErr )
-      *pzErr = sqlite3_mprintf("Cannot find a unique index name to propose.");
-    return rc;
+    p->pzErrmsg = 0;
+    if( rc==SQLITE_BUSY_TIMEOUT ){
+      if( pzErr ){
+        *pzErr = sqlite3_mprintf("Cannot find a unique index name to propose.");
+      }
+      return rc;
+    }
   }
 
   /* Generate the stat1 data */

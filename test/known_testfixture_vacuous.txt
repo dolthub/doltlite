@@ -109,3 +109,7 @@ win32heap class=intentional  # Windows only
 win32lock class=intentional  # Windows only
 win32longpath class=intentional  # Windows only
 win32nolock class=intentional  # Windows only
+mmapleak class=intentional  # SQLite mmap layout; stock-file permutation covers Linux /proc/self/maps
+pcacheleak class=intentional  # corrupt SQLite page offsets; covered in the stock-file permutation
+walroshm class=intentional  # SQLite WAL/shm races; covered in the stock-file permutation
+win32shm class=intentional  # Windows-only SQLite WAL/shm recovery; stock-file permutation on Windows

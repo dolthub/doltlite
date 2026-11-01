@@ -43,3 +43,11 @@ vacuum
 vacuum2
 without_rowid1
 without_rowid2
+mmapleak
+pcacheleak
+walroshm
+win32shm
+corruptL
+decimal
+enc
+zeroblob

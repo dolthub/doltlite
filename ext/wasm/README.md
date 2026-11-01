@@ -1,9 +1,13 @@
-This directory houses the [Web Assembly (WASM)](https://en.wikipedia.org/wiki/WebAssembly)
+This directory houses the browser-side
+[Web Assembly (WASM)](https://en.wikipedia.org/wiki/WebAssembly)
 parts of the sqlite3 build.
 
-It requires [emscripten][] and that the build environment be set up
-for emscripten. _Release_ builds also require [the wabt tools](#wabt),
-but dev builds do not. A mini-HOWTO for setting that up follows...
+See also: [](./api/README.md)
+
+It requires [Emscripten][] and that the build environment be set up
+for emscripten. _Release_ builds also require [the wabt tools](#wabt)
+1.0.36 or higher, but dev builds do not. A mini-HOWTO for setting that
+up follows...
 
 First, install the Emscripten SDK, as documented
 [here](https://emscripten.org/docs/getting_started/downloads.html) and summarized
@@ -11,7 +15,6 @@ below for Linux environments:
 
 ```
 # Clone the emscripten repository:
-$ sudo apt install git
 $ git clone https://github.com/emscripten-core/emsdk.git
 $ cd emsdk
 
@@ -22,7 +25,7 @@ $ ./emsdk install latest
 $ ./emsdk activate latest
 ```
 
-Those parts only need to be run once, but the SDK can be updated using:
+The SDK can later be updated using:
 
 ```
 $ git pull
@@ -42,7 +45,8 @@ The SQLite configure script will search for the EMSDK. One way
 to ensure that it finds it is:
 
 ```
-# Activate PATH and other environment variables in the current terminal:
+# Activate PATH and other environment variables in the current terminal
+# from the emsdk checkout:
 $ source ./emsdk_env.sh
 
 $ which emcc
@@ -74,6 +78,7 @@ $ make fiddle
 Or:
 
 ```
+$ make sqlite3.c shell.c; # needed in advance of...
 $ cd ext/wasm
 $ make
 ```
@@ -106,6 +111,39 @@ required to enable JavaScript's `SharedArrayBuffer` and `Atomics`
 APIs. Those APIs are required in order to enable the [OPFS][]-related
 features in the apps which use them.
 
+
+<a id="targets"></a>
+# Major Makefile Targets
+
+- default, all  
+  Build intended for day-to-day development, optimized for reduced
+  build time. i.e. unoptimized debug builds.
+- o0, o1, o2, o3, os, oz  
+  A full clean/rebuild with the `-Ox` optimization level indicated by
+  the target name. A clean rebuild is necessary for all components to
+  get the desired optimization level.
+- dist  
+  Creates an optimized build and distribution zip file.
+- snapshot  
+  Similar to `dist` but the resulting archive is clearly marked as a
+  snapshot/prerelease build.
+
+
+Targets intended only for use by the code maintainers:
+
+- for-testing  
+  Create an optimized build for the test server.
+- push-testing  
+  Push the current build to the test server. Requires SSH access to
+  the test server and that an SSH alias be set up for it locally.
+- update-docs  
+  Updates certain derived/generated files in a local checkout of
+  the [sqlite.org/wasm][www-wasm] site, if found. It uses whatever
+  build is currently sitting in the tree - care must be taken
+  to use an `oz`, `dist`, or `for-testing` build to ensure that
+  the optimized JS/WASM files used.
+
+
 # Testing on a remote machine that is accessed via SSH
 
 *NB: The following are developer notes, last validated on 2023-07-19*
@@ -125,6 +163,7 @@ and that the request must come from "localhost" (_or_ over an SSL
 connection).  Since the web-server is on a different machine from the
 web-broser, the localhost requirement means that the connection must
 be tunneled using SSH.
+
 
 <a id="wabt"></a>
 # The wabt Tools
@@ -148,3 +187,4 @@ As of 2025-10-14, versions 1.36.0 or higher are known to work and
 [althttpd]: https://sqlite.org/althttpd
 [SharedArrayBuffer]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer
 [OPFS]: https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system
+[www-wasm]: https://sqlite.org/wasm

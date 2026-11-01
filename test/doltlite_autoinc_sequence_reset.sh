@@ -149,6 +149,22 @@ t|100
 t|101
 1" ":memory:"
 
+run_test "clone_copies_working_rows_into_fresh_history" "
+.mode batch
+.output /dev/null
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','source history');
+INSERT INTO t VALUES(2);
+.clone $ROOT/clone-history.db
+.open $ROOT/clone-history.db
+.output stdout
+SELECT count(*) FROM t;
+SELECT count(*) FROM dolt_log WHERE message='source history';
+" "t... done
+2
+0" ":memory:"
+
 run_test "seq_clone_two_autoinc_tables_one_row_each" "
 .mode batch
 CREATE TABLE a(id INTEGER PRIMARY KEY AUTOINCREMENT);
