@@ -1036,7 +1036,7 @@ sqlite3-api-build-version.js = $(dir.tmp)/sqlite3-api-build-version.js
 $(sqlite3-api-build-version.js): $(bin.version-info) $(MAKEFILE)
 	@echo '$(logtag.@) $(emo.disk)'; { \
 		$(call b.mkdir@); \
-		echo 'globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){'; \
+		echo 'sqlite3ApiBootstrap.initializers.push(function(sqlite3){'; \
 		printf '%s' '  sqlite3.version = '; \
 		$(bin.version-info) --json; \
 		echo ';'; \
