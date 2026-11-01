@@ -1,6 +1,12 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
+# Windows has no branch presence; -d falls back to refusing a dirty branch.
+if {$tcl_platform(platform) eq "windows"} {
+  finish_test
+  return
+}
+
 proc iu_reset {} {
   catch {db2 close}
   catch {db close}

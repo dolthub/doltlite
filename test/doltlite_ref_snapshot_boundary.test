@@ -10,7 +10,7 @@ foreach txn {begin savepoint nested} {
         delete {SELECT dolt_branch('-d','b1')}
         copy {SELECT dolt_branch('-c','b1','x')}
         rename {SELECT dolt_branch('-m','b1','x')}
-        rename-current {SELECT dolt_branch('-m','main','x')}
+        rename-current {SELECT dolt_branch('-f','-m','main','x')}
         soft-reset {SELECT dolt_reset('--soft')}
       } {
         set prefix ref-snapshot-$txn.$committed.$staged.$name
@@ -51,7 +51,7 @@ foreach txn {begin savepoint nested} {
         peer close
         db close
         sqlite3 db test.db
-        if {$op eq "SELECT dolt_branch('-m','main','x')"} {
+        if {$op eq "SELECT dolt_branch('-f','-m','main','x')"} {
           db eval {SELECT dolt_checkout('x')}
         }
         do_test $prefix.reopen {

@@ -963,8 +963,10 @@ static int btreePresenceOp(
 
 void doltliteBtreeReleasePresence(Btree *p){
   if( !p->zPresenceBranch ) return;
+  sqlite3BeginBenignMalloc();
   (void)btreePresenceOp(p->pBt->pStore, DOLTLITE_PRESENCE_RELEASE,
                         p->zPresenceBranch, 0);
+  sqlite3EndBenignMalloc();
   sqlite3_free(p->zPresenceBranch);
   p->zPresenceBranch = 0;
 }
@@ -983,6 +985,9 @@ void doltliteBtreeSyncPresence(Btree *p){
   if( !zWant && !p->zPresenceBranch ) return;
   doltliteBtreeReleasePresence(p);
   if( !zWant ) return;
+  /* Presence is advisory: a connection that cannot advertise its branch
+  ** only lets a peer's -d or -m through, as before presence existed. */
+  sqlite3BeginBenignMalloc();
   p->zPresenceBranch = sqlite3_mprintf("%s", zWant);
   if( p->zPresenceBranch
    && btreePresenceOp(p->pBt->pStore, DOLTLITE_PRESENCE_HOLD,
@@ -990,6 +995,7 @@ void doltliteBtreeSyncPresence(Btree *p){
     sqlite3_free(p->zPresenceBranch);
     p->zPresenceBranch = 0;
   }
+  sqlite3EndBenignMalloc();
 }
 
 /* Whether another connection has zBranch checked out. SQLITE_NOTFOUND
