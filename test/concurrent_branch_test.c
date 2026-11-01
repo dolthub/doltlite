@@ -195,7 +195,11 @@ int main(){
     "CREATE TABLE t(id INTEGER PRIMARY KEY);"
     "SELECT dolt_commit('-A','-m','init');"
     "SELECT dolt_branch('feat');")==SQLITE_OK);
-  rc = sqlite3_open(defaultPath, &db2);
+  {
+    char zFeat[512];
+    snprintf(zFeat, sizeof(zFeat), "%s/feat", defaultPath);
+    rc = sqlite3_open(zFeat, &db2);
+  }
   check("open_default_setter_connection", rc==SQLITE_OK);
   check("peer_sets_new_default",
         strcmp(queryScalarText(db2,

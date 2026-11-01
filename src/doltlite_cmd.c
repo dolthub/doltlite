@@ -544,6 +544,7 @@ static void doltliteRunCommand(
   }
   if( !bProbe ) doltliteInvokeShieldedFunc(ctx, argc, argv, pOuter==0);
   cmdScopeEnd(ctx, &scope);
+  if( !pOuter && pMain ) doltliteBtreeSyncPresence(pMain);
   if( !pOuter && pMain && pMain->bVcScanRefused ){
     pMain->bVcScanRefused = 0;
     if( ctx->isError ){

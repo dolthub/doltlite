@@ -309,12 +309,37 @@ DB22=/tmp/test_branch_dirty_delete_$$.db
 rm -f "$DB22"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_commit('-Am','c1'); SELECT dolt_branch('feat'); SELECT dolt_branch('clean');" | $DOLTLITE "$DB22" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,2);" | $DOLTLITE "$DB22/feat" > /dev/null 2>&1
-run_test_error_match "delete_dirty_branch_refused" \
-  "SELECT dolt_branch('-d','feat');" "uncommitted changes; use --force" "$DB22"
-run_test "delete_dirty_branch_keeps_rows" "SELECT count(*) FROM t;" "2" "$DB22/feat"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) PRESENCE22=0 ;;
+  *) PRESENCE22=1 ;;
+esac
+if [ "$PRESENCE22" = 1 ]; then
+  # Another process has feat checked out: -d and -m refuse, as Dolt refuses
+  # a branch active in another session, and that process's rows survive.
+  READY22=/tmp/test_branch_in_use_ready_$$
+  rm -f "$READY22"
+  ( printf "SELECT 'ready';\n"; sleep 60 ) | $DOLTLITE "$DB22/feat" > "$READY22" 2>&1 &
+  HOLDER22=$!
+  for i in $(seq 1 200); do grep -q ready "$READY22" 2>/dev/null && break; sleep 0.05; done
+  run_test_error_match "delete_in_use_branch_refused" \
+    "SELECT dolt_branch('-d','feat');" "branches in use in other sessions" "$DB22"
+  run_test_error_match "rename_in_use_branch_refused" \
+    "SELECT dolt_branch('-m','feat','feat2');" "branches in use in other sessions" "$DB22"
+  run_test "delete_in_use_branch_keeps_rows" "SELECT count(*) FROM t;" "2" "$DB22/feat"
+  kill "$HOLDER22" 2>/dev/null
+  wait "$HOLDER22" 2>/dev/null
+  rm -f "$READY22"
+  # Nobody has it checked out: uncommitted changes alone do not refuse -d.
+  run_test "delete_dirty_branch_works" "SELECT dolt_branch('-d','feat');" "0" "$DB22"
+else
+  # Without branch presence, uncommitted changes stand in for "in use".
+  run_test_error_match "delete_dirty_branch_refused" \
+    "SELECT dolt_branch('-d','feat');" "uncommitted changes; use --force" "$DB22"
+  run_test "delete_dirty_branch_keeps_rows" "SELECT count(*) FROM t;" "2" "$DB22/feat"
+  run_test "force_delete_dirty_branch" "SELECT dolt_branch('-D','feat');" "0" "$DB22"
+fi
 run_test "delete_clean_branch_works" "SELECT dolt_branch('-d','clean');" "0" "$DB22"
-run_test "force_delete_dirty_branch" "SELECT dolt_branch('-D','feat');" "0" "$DB22"
-run_test "force_delete_dirty_branch_gone" \
+run_test "delete_dirty_branch_gone" \
   "SELECT group_concat(name) FROM dolt_branches;" "main" "$DB22"
 
 rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22"

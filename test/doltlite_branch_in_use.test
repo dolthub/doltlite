@@ -1,0 +1,78 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Windows has no branch presence; -d falls back to refusing a dirty branch.
+if {$tcl_platform(platform) eq "windows"} {
+  finish_test
+  return
+}
+
+proc iu_reset {} {
+  catch {db2 close}
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_branch('feat');
+    SELECT dolt_branch('other');
+  }
+}
+
+# A branch with uncommitted changes that no connection has checked out
+# deletes, as in Dolt.
+iu_reset
+do_test branch-in-use-dirty-idle {
+  sqlite3 db2 [file normalize test.db]/feat
+  db2 eval {INSERT INTO t VALUES(2,'feat')}
+  db2 close
+  db eval {SELECT dolt_branch('-d','feat')}
+} {0}
+
+# Another connection in this process has the branch checked out.
+iu_reset
+do_test branch-in-use-delete-refused {
+  sqlite3 db2 [file normalize test.db]/feat
+  db2 eval {INSERT INTO t VALUES(2,'feat')}
+  catchsql {SELECT dolt_branch('-d','feat')}
+} {1 {unsafe to delete or rename branches in use in other sessions; use --force to force the change}}
+do_catchsql_test branch-in-use-rename-refused {
+  SELECT dolt_branch('-m','feat','feat2');
+} {1 {unsafe to delete or rename branches in use in other sessions; use --force to force the change}}
+do_test branch-in-use-rows-kept {
+  db2 eval {SELECT count(*) FROM t}
+} {2}
+do_test branch-in-use-follows-checkout {
+  db2 eval {SELECT dolt_checkout('other')}
+  list [db eval {SELECT dolt_branch('-m','feat','feat2')}] \
+       [catchsql {SELECT dolt_branch('-d','other')}]
+} {0 {1 {unsafe to delete or rename branches in use in other sessions; use --force to force the change}}}
+do_test branch-in-use-released-on-close {
+  db2 close
+  db eval {SELECT dolt_branch('-d','other')}
+} {0}
+
+iu_reset
+do_test branch-in-use-force {
+  sqlite3 db2 [file normalize test.db]/feat
+  db2 eval {SELECT count(*) FROM t}
+  set r [db eval {SELECT dolt_branch('-D','feat')}]
+  db2 close
+  lappend r [db eval {SELECT count(*) FROM dolt_branches WHERE name='feat'}]
+} {0 0}
+
+iu_reset
+do_test branch-in-use-two-holders {
+  sqlite3 db2 [file normalize test.db]/feat
+  sqlite3 db3 [file normalize test.db]/feat
+  db2 eval {SELECT 1}
+  db3 eval {SELECT 1}
+  db2 close
+  set r [catchsql {SELECT dolt_branch('-d','feat')}]
+  db3 close
+  lappend r [db eval {SELECT dolt_branch('-d','feat')}]
+} {1 {unsafe to delete or rename branches in use in other sessions; use --force to force the change} 0}
+
+finish_test

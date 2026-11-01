@@ -194,6 +194,16 @@ struct DoltliteFileMode {
 };
 int sqlite3OsDoltliteModeOf(sqlite3_file *, const char *, int);
 #define SQLITE_FCNTL_DOLTLITE_GRAPH_LOCK 0x444c4701
+#define SQLITE_FCNTL_DOLTLITE_BRANCH_PRESENCE 0x444c5001
+#define DOLTLITE_PRESENCE_HOLD    1
+#define DOLTLITE_PRESENCE_RELEASE 2
+#define DOLTLITE_PRESENCE_PROBE   3
+typedef struct DoltliteBranchPresence DoltliteBranchPresence;
+struct DoltliteBranchPresence {
+  int eOp;
+  sqlite3_int64 iOffset;
+  int bInUse;
+};
 #endif
 int sqlite3OsSectorSize(sqlite3_file *id);
 int sqlite3OsDeviceCharacteristics(sqlite3_file *id);

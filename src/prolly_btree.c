@@ -1548,6 +1548,7 @@ int prollyBtreeClose(Btree *p){
   pBt = p->pBt;
   assert( pBt!=0 );
 
+  doltliteBtreeReleasePresence(p);
   while( pBt->pCursor ){
     sqlite3BtreeCloseCursor(pBt->pCursor);
   }

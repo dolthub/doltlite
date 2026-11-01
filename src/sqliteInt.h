@@ -5555,6 +5555,8 @@ int sqlite3BtreeIsDeferred(Btree*);
 const char *doltliteBtreeMissingWriteBranch(Btree*);
 int doltliteBtreeSameStore(Btree*, Btree*);
 const char *doltliteStoreSiblingBranch(sqlite3*, const char*, int);
+void doltliteBtreeSyncPresence(Btree*);
+int doltliteBranchInUseElsewhere(sqlite3*, const char*, int*);
 typedef struct DoltliteNonlocal DoltliteNonlocal;
 void doltliteNonlocalFree(DoltliteNonlocal*);
 int doltliteNonlocalSync(sqlite3*);
