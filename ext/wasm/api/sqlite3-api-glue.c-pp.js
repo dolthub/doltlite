@@ -1973,10 +1973,10 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
 
        For one-call cases, e.g. when passing a newly-initialized db or
        statement, a function literal is fine. Within user-defined SQL
-       functions, in particular, function literals will cause in the
-       form of potentially registering (C x R) callbacks, where C is
-       the number of distinct contexts in the query and R the number
-       of rows.
+       functions, in particular, function literals will cause grief in
+       the form of potentially registering (C x R) callbacks, where C
+       is the number of distinct contexts in the query and R the
+       number of rows.
 
        On success it returns an unspecified truthy value. On error
        (argument validation issues) it returns an unspecified falsy

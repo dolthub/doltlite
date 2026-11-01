@@ -4513,26 +4513,31 @@ T.g('Misc. APIs')
     /* jopd returns "an unespecified falsy value" on error, but for
        the sake of testing we can differentiate the possible
        validation errors... */
-      .assert( false===jopd('nope', db.pointer, onDispose) )
-      .assert( null===jopd('sqlite3*', wasm.ptr.null, onDispose) )
-      .assert( undefined===jopd('sqlite3*', db.pointer, "nope") );
+      .assert( false===jopd('nope', db.pointer, onDispose),
+               "Type ID validation failed." )
+      .assert( null===jopd('sqlite3*', 'nope', onDispose),
+               "Pointer validation failed" )
+      .assert( undefined===jopd('sqlite3*', db.pointer, 'nope'),
+               "Callback validation failed." );
+    let nCall = 0;
     try{
       db.exec(["create table t(a);",
                "insert into t(a) values(1),(2),(3)"]);
       db.createFunction("foo", (pCx,a)=>{
         T.assert( jopd('sqlite3_context*', pCx, onDispose) );
         seenCx.add(pCx);
+        ++nCall;
       });
       const q = db.prepare("select foo(1), foo(a) from t");
       T.assert( jopd('sqlite3_stmt*', q.pointer, onDispose) );
-      q.step();
+      while( q.step() );
       // do not q.finalize(), for test purposes
     }finally{
       db.close();
     }
-    //console.debug("seenCx, seenD", seenCx, seenD);
-    T.assert( 2===seenCx.size );
-    T.assert( seenCx.size+2===seenD.size );
+    T.assert( 6===nCall, "2 call points times 3 rows" )
+      .assert( 2===seenCx.size, "One cx per UDF call point in the query" )
+      .assert( seenCx.size + 2 /*db + stmt*/ === seenD.size, "(2x cx) + db + stmt" );
   })
 
 ////////////////////////////////////////////////////////////////////
