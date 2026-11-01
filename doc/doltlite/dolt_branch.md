@@ -35,6 +35,12 @@ SELECT * FROM dolt_branches;
 Returns `0`. Branch and tag changes are durable immediately, even inside
 `BEGIN`. Name rules are in [refs.md](refs.md).
 
+A connection's checked-out branch is visible to other connections and
+processes through a byte-range lock on the database file. On Windows, and
+for in-memory databases, that is unavailable: `-d` instead refuses a branch
+with uncommitted changes (`branch has uncommitted changes; use --force to
+delete it`), and `-m` does not check.
+
 | Error | Cause |
 |---|---|
 | `branch already exists` | create or rename onto an existing name |
