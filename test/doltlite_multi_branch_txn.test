@@ -226,6 +226,31 @@ do_test commit-all-amend {
   list [mb_head main] [mb_head feat] [db eval {SELECT count(*) FROM dolt_log}] $n
 } {amended amended 2 2}
 
+mb_reset
+do_test commit-branch-then-txn {
+  db eval {
+    INSERT INTO f.t VALUES(2,'feat');
+    SELECT dolt_commit('--branch','feat','-am','c1');
+    BEGIN;
+    INSERT INTO f.t VALUES(3,'feat');
+    COMMIT;
+  }
+  list [mb_head feat] [mb_disk feat]
+} {c1 {1:base,2:feat,3:feat ok}}
+
+mb_reset
+do_test commit-branch-then-commit-all {
+  db eval {
+    INSERT INTO f.t VALUES(2,'feat');
+    SELECT dolt_commit('--branch','feat','-am','c1');
+    BEGIN;
+    INSERT INTO f.t VALUES(3,'feat');
+  }
+  set r [db eval {SELECT key FROM json_each(dolt_commit_all('-am','all'))}]
+  db eval {INSERT INTO f.t VALUES(4,'feat'); COMMIT}
+  lappend r [mb_head feat] [mb_disk feat]
+} {feat all {1:base,2:feat,3:feat,4:feat ok}}
+
 # A two-branch commit is one publish: under a write or sync fault it lands
 # on both branches or on neither.
 mb_reset

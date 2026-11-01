@@ -96,6 +96,7 @@ int doltliteNonlocalFkParent(sqlite3 *db, const char *zTo,
                              const char **pzSchema, const char **pzTable);
 int doltliteTablePatternMatch(const char *zPat, const char *zStr);
 const char *doltliteBtreeBranchName(Btree *p);
+void doltliteStoreBranchMoved(sqlite3 *db, const char *zBranch);
 int doltliteBtreeTableStamp(Btree *p, Pgno iTable, ProllyHash *pRoot,
                             int *pbPending);
 int doltliteCreateShieldedModule(

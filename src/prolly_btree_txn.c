@@ -1096,6 +1096,20 @@ const char *doltliteStoreSiblingBranch(
   return 0;
 }
 
+/* This connection moved zBranch's ref outside the branch's own Btree. An
+** attachment still holding the old head would publish its next write as a
+** working set of that superseded commit, which readers then discard. */
+void doltliteStoreBranchMoved(sqlite3 *db, const char *zBranch){
+  Btree *pMain = db->nDb>0 ? db->aDb[0].pBt : 0;
+  int i;
+  for(i=1; btreeIsProlly(pMain) && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( !doltliteBtreeSameStore(pMain, q) || q->isDetached
+     || strcmp(doltliteBtreeBranchName(q), zBranch)!=0 ) continue;
+    q->iLoadedWorkingStateVersion = q->pBt->iWorkingStateVersion - 1;
+  }
+}
+
 const char *doltliteBtreeMissingWriteBranch(Btree *p){
   if( !p || !p->bBeginTransBranchMissing ) return 0;
   return p->zBranch ? p->zBranch : "main";

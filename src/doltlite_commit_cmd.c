@@ -1003,6 +1003,7 @@ static void doltliteCommitNamedBranch(
     sqlite3_result_error_code(context, rc);
     return;
   }
+  doltliteStoreBranchMoved(db, m.zBranch);
   doltliteHashToHex(&m.commit, hex);
   doltliteHistoricalModulesReset(db);
   sqlite3_result_text(context, hex, -1, SQLITE_TRANSIENT);
