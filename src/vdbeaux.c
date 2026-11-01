@@ -41,6 +41,7 @@ Vdbe *sqlite3VdbeCreate(Parse *pParse){
   assert( pParse->aLabel==0 );
   assert( pParse->nLabel==0 );
   assert( p->nOpAlloc==0 );
+  assert( pParse->szOpAlloc==0 );
   sqlite3VdbeAddOp2(p, OP_Init, 0, 1);
   return p;
 }
@@ -71,6 +72,7 @@ void sqlite3VdbeSetSql(Vdbe *p, const char *z, int n, u8 prepFlags){
   p->prepFlags = prepFlags;
   if( (prepFlags & SQLITE_PREPARE_SAVESQL)==0 ){
     p->expmask = 0;
+    p->smimask = 0;
   }
   assert( p->zSql==0 );
   p->zSql = sqlite3DbStrNDup(p->db, z, n);
@@ -191,7 +193,8 @@ static int growOpArray(Vdbe *v, int nOp){
   assert( nNew>=(v->nOpAlloc+nOp) );
   pNew = sqlite3DbRealloc(p->db, v->aOp, nNew*sizeof(Op));
   if( pNew ){
-    v->nOpAlloc = sqlite3DbMallocSize(p->db, pNew)/sizeof(Op);
+    p->szOpAlloc = sqlite3DbMallocSize(p->db, pNew);
+    v->nOpAlloc = p->szOpAlloc/sizeof(Op);
     v->aOp = pNew;
   }
   return (pNew ? SQLITE_OK : SQLITE_NOMEM_BKPT);
@@ -793,6 +796,7 @@ int sqlite3VdbeAssertMayAbort(Vdbe *v, int mayAbort){
      || opcode==OP_Function || opcode==OP_PureFunc
      || ((opcode==OP_Halt || opcode==OP_HaltIfNull)
       && ((pOp->p1)!=SQLITE_OK && pOp->p2==OE_Abort))
+     || (opcode==OP_MustBeInt && pOp->p2==0)
     ){
       hasAbort = 1;
       break;
@@ -1379,6 +1383,9 @@ static SQLITE_NOINLINE void freeP4Mem(sqlite3 *db, Mem *p){
 }
 static SQLITE_NOINLINE void freeP4FuncCtx(sqlite3 *db, sqlite3_context *p){
   assert( db!=0 );
+#if defined(SQLITE_DISPOSAL_NOTIFIER)
+  SQLITE_DISPOSAL_NOTIFIER(3,p);
+#endif
   freeEphemeralFunction(db, p->pFunc);
   sqlite3DbNNFreeNN(db, p);
 }
@@ -2703,7 +2710,7 @@ void sqlite3VdbeMakeReady(
   n = ROUND8P(sizeof(Op)*p->nOp);             /* Bytes of opcode memory used */
   x.pSpace = &((u8*)p->aOp)[n];               /* Unused opcode memory */
   assert( EIGHT_BYTE_ALIGNMENT(x.pSpace) );
-  x.nFree = ROUNDDOWN8((p->nOpAlloc-p->nOp)*sizeof(Op)); /* Bytes unused mem */
+  x.nFree = ROUNDDOWN8(pParse->szOpAlloc - n);  /* Bytes unused memory */
   assert( x.nFree>=0 );
   assert( EIGHT_BYTE_ALIGNMENT(&x.pSpace[x.nFree]) );
 
@@ -3317,6 +3324,22 @@ static int vdbeFlushFtsPending(Vdbe *p){
 #endif
 
 /*
+** Return a bitmask of all schemas referenced by active VDBEs, other
+** than pExcept.
+*/
+void sqlite3VdbeSchemaInUse(sqlite3 *db, Vdbe *pExcept, yDbMask *pM){
+  Vdbe *p;
+  yDbMask m;
+  DbMaskZero(m);
+  for(p=db->pVdbe; p; p=p->pVNext){
+    if( p==pExcept ) continue;
+    if( p->eVdbeState!=VDBE_RUN_STATE ) continue;
+    DbMaskUnion(m,p->btreeMask);
+  }
+  memcpy(pM, &m, sizeof(m));
+}
+
+/*
 ** If the Vdbe passed as the first argument opened a statement-transaction,
 ** close it now. Argument eOp must be either SAVEPOINT_ROLLBACK or
 ** SAVEPOINT_RELEASE. If it is SAVEPOINT_ROLLBACK, then the statement
@@ -3689,6 +3712,13 @@ int sqlite3VdbeHalt(Vdbe *p){
     db->bVcReopenedTxn = 0;
 #endif
     sqlite3ConnectionUnlocked(db);
+  }
+
+  /* Do any pending schema resets that were deferred because multiple
+  ** VDBEs where active at the same time.
+  */
+  if( db->bPendingSchemaReset && db->nVdbeActive==0 ){
+    sqlite3ResetOneSchema(db, -1, 0);
   }
 
   assert( db->nVdbeActive>0 || db->autoCommit==0 || db->nStatement==0 );
@@ -5569,6 +5599,23 @@ void sqlite3ExpirePreparedStatements(sqlite3 *db, int iCode){
 }
 
 /*
+** Expire (urgently, with iCode 0) every prepared statement that is using
+** a particular schema (iDb).
+*/
+void sqlite3ExpireStmtsUsingSchema(
+  sqlite3 *db,      /* The database connection statements belong to */
+  int iDb,          /* Index of the schema they are using */
+  Vdbe *pExcept     /* Except, don't expire this one */
+){
+  Vdbe *p;
+  for(p = db->pVdbe; p; p=p->pVNext){
+    if( p==pExcept ) continue;
+    if( !DbMaskTest(p->btreeMask, iDb) ) continue;
+    p->expired = 1;
+  }
+}
+
+/*
 ** Return the database associated with the Vdbe.
 */
 sqlite3 *sqlite3VdbeDb(Vdbe *v){
@@ -5626,10 +5673,12 @@ void sqlite3VdbeReprepareOnBind(Vdbe *v, int iVar, int bSmallint){
        || (v->db->mDbFlags & DBFLAG_InternalFunc)!=0 );
 
   m = (iVar>=32) ? 0x80000000 : ((u32)1 << (iVar-1));
-  v->expmask |= m;
   if( bSmallint ){
-    v->smimask |= m;
+    if( (v->expmask & m)==0 ) v->smimask |= m;
+  }else{
+    v->smimask &= ~m;
   }
+  v->expmask |= m;
 
   /* smimask is always a subset of expmask */
   assert( (v->smimask & v->expmask) == v->smimask );

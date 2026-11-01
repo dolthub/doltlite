@@ -24,12 +24,30 @@
 
   This file is kept in sync between both of those trees.
 
+//#@ push policy error
   This build was generated using:
 
-  ./c-pp -o js/whwasmutil.js -@policy=error wasmutil/whwasmutil.c-pp.js
+  @c-pp::argv@
 
-  by libcmpp 2.x 2fc4afc31f6505c27b9c34988973a2bd9b157d559247cdd26868ae75632c3a5e @ 2025-11-16 23:03:27.352 UTC
+  by libcmpp @cmpp::version@
+//#@ pop policy
 */
+//#savepoint begin
+//#define ? esm 0
+//#define ? no-export 0
+//#define ? lexical-scoped 0
+//#if defined canonical-sqlite3
+//#  // The sqlite3 wasm build.
+//#  define no-export 1
+//#  define lexical-scoped 1
+//#  if defined target:es6-module
+//#    define esm 1
+//#  /if
+//#  define omit-yawl
+//#/if
+//#if esm
+//#  define lexical-scoped 1
+//#/if
 /**
    The primary goal of this function is to provide JS/WASM utility
    code similar to some of that provided by Emscripten-generated
@@ -50,8 +68,13 @@
 
    ```
    const target = {}; // ... some object ...
+//#if esm
+   import {default as whw} from "./whwasmutil.mjs";
+   whw(target);
+//#else
    globalThis.WhWasmUtilInstaller(target);
    delete globalThis.WhWasmUtilInstaller;
+//#/if
    ```
 
    The `target` object then holds the APIs. The caller may set certain
@@ -225,10 +248,16 @@
      newly-created (or config-provided) target. The current approach
      seemed better at the time.
 */
+//#if lexical-scoped
+const WhWasmUtilInstaller =
+//#else
 'use strict';
 globalThis.WhWasmUtilInstaller =
+//#/if
 function WhWasmUtilInstaller(target){
+//#if not esm
   'use strict';
+//#/if
   if(undefined===target.bigIntEnabled){
     target.bigIntEnabled = !!globalThis['BigInt64Array'];
   }
@@ -2269,7 +2298,8 @@ function WhWasmUtilInstaller(target){
         */
         let i = 0;
         if( callee.debug ){
-          console.debug("xWrap() preparing: resultType ",resultType, 'xf',xf,"argTypes",argTypes,"args",args);
+          console.debug("xWrap() preparing: resultType ",resultType,
+                        'xf',xf,"argTypes",argTypes,"args",args);
         }
         for(; i < args.length; ++i) args[i] = cxw.convertArgNoCheck(
           argTypes[i], args[i], args, i
@@ -2442,6 +2472,7 @@ function WhWasmUtilInstaller(target){
   return target;
 };
 
+//#if not defined omit-yawl
 /**
    yawl (Yet Another Wasm Loader) provides very basic wasm loader.
    It requires a config object:
@@ -2496,9 +2527,10 @@ function WhWasmUtilInstaller(target){
    Error handling is up to the caller, who may attach a `catch()` call
    to the promise.
 */
-globalThis.WhWasmUtilInstaller
-.yawl = function yawl(config){
+WhWasmUtilInstaller.yawl = function yawl(config){
+//#if not esm
   'use strict';
+//#/if
   const wfetch = ()=>fetch(config.uri, {credentials: 'same-origin'});
   const wui = this;
   const finalThen = function(arg){
@@ -2542,6 +2574,13 @@ globalThis.WhWasmUtilInstaller
         .then(finalThen)
   ;
   return loadWasm;
-}.bind(
-globalThis.WhWasmUtilInstaller
-)/*yawl()*/;
+}.bind(WhWasmUtilInstaller)/*yawl()*/;
+//#/if not defined omit-yawl
+//#if esm and not no-export
+//#  if amalgamation
+export {WhWasmUtilInstaller};
+//#  elif not defined no-export-default
+export default WhWasmUtilInstaller;
+//#  /if
+//#/if
+//#savepoint rollback

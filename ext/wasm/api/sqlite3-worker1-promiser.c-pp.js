@@ -20,7 +20,8 @@
   Worker API does.
 
   In non-ESM builds this file necessarily exposes one global symbol,
-  but clients may freely `delete` that symbol after calling it.
+  but clients may freely `delete` that symbol after calling it (and
+  are encouraged to do so).
 */
 //#if not defined target:es6-module
 'use strict';
@@ -138,7 +139,7 @@
      developed. For use as an ESM module, see the "v2" interface later
      on in this file.
 */
-globalThis.sqlite3Worker1Promiser = function callee(config = callee.defaultConfig){
+const sqlite3Worker1Promiser = function callee(config = callee.defaultConfig){
   // Inspired by: https://stackoverflow.com/a/52439530
   if(1===arguments.length && 'function'===typeof arguments[0]){
     const f = config;
@@ -253,7 +254,7 @@ globalThis.sqlite3Worker1Promiser = function callee(config = callee.defaultConfi
   };
 }/*sqlite3Worker1Promiser()*/;
 
-globalThis.sqlite3Worker1Promiser.defaultConfig = {
+sqlite3Worker1Promiser.defaultConfig = {
   worker: function(){
 //#if target:es6-bundler-friendly
     return new Worker(new URL("sqlite3-worker1-bundler-friendly.mjs", import.meta.url),{
@@ -272,7 +273,14 @@ globalThis.sqlite3Worker1Promiser.defaultConfig = {
       //sqlite3.config.warn("promiser currentScript, theJs =",this.currentScript,theJs);
     }else if(globalThis.location){
       //sqlite3.config.warn("promiser globalThis.location =",globalThis.location);
-      const urlParams = new URL(globalThis.location.href).searchParams;
+      const s = urlParams.get('sqlite3.dir');
+      if( s ){
+        if( s.indexOf(':')<0 && s.indexOf('//')<0 ){
+          theJs = s + '/' + theJs;
+        }else{
+          console.warn("Invalid sqlite3.dir value:",s);
+        }
+      }
       if(urlParams.has('sqlite3.dir')){
         theJs = urlParams.get('sqlite3.dir') + '/' + theJs;
       }
@@ -292,7 +300,7 @@ globalThis.sqlite3Worker1Promiser.defaultConfig = {
 /**
    sqlite3Worker1Promiser.v2(), added in 3.46, works identically to
    sqlite3Worker1Promiser() except that it returns a Promise instead
-   of relying an an onready callback in the config object. The Promise
+   of relying on an onready callback in the config object. The Promise
    resolves to the same factory function which
    sqlite3Worker1Promiser() returns.
 
@@ -301,7 +309,7 @@ globalThis.sqlite3Worker1Promiser.defaultConfig = {
    after calling the original function and will reject if that
    function throws.
 */
-globalThis.sqlite3Worker1Promiser.v2 = function callee(config = callee.defaultConfig){
+sqlite3Worker1Promiser.v2 = function callee(config = callee.defaultConfig){
   let oldFunc;
   if( 'function' == typeof config ){
     oldFunc = config;
@@ -325,19 +333,15 @@ globalThis.sqlite3Worker1Promiser.v2 = function callee(config = callee.defaultCo
     promiseProxy.reject = reject;
   });
   try{
-    this.original(config);
+    sqlite3Worker1Promiser(config);
   }catch(e){
     promiseProxy.reject(e);
   }
   return p;
-}.bind({
-   /* We do this because clients are recommended to delete
-      globalThis.sqlite3Worker1Promiser. */
-  original: sqlite3Worker1Promiser
-});
+};
 
-globalThis.sqlite3Worker1Promiser.v2.defaultConfig =
-  globalThis.sqlite3Worker1Promiser.defaultConfig;
+sqlite3Worker1Promiser.v2.defaultConfig =
+  sqlite3Worker1Promiser.defaultConfig;
 
 //#if target:es6-module
 /**
@@ -348,7 +352,15 @@ globalThis.sqlite3Worker1Promiser.v2.defaultConfig =
   incompatibility.
 */
 export default sqlite3Worker1Promiser.v2;
-delete globalThis.sqlite3Worker1Promiser;
+//#else
+globalThis.sqlite3Worker1Promiser =
+  /* Prior to 3.55, sqlite3Worker1Promiser was defined as a globalThis
+     property. It turns out, however, that defining it as a const
+     works too, so we now define it as such.  However, documentation
+     has historically referred to this function as
+     globalThis.sqlite3Worker1Promiser, so we retain that mapping here
+     in non-esm builds for backwards compatibility.
+  */ sqlite3Worker1Promiser;
 //#/if /* target:es6-module */
 //#else
 /* Built with the omit-oo1 flag. */

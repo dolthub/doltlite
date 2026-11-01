@@ -215,12 +215,7 @@ b.cp = $(call b.mkdir@); \
 # D.common = flags to use for all $(bin.c-pp) invocations. These must
 # be passed before any input file names because c-pp's args are
 # processed in their given order.
-#
-# Maintenance reminder: we cannot include -@policy=error here because
-# of the @sqlite3.wasm@ placeholders in JS files, which trigger an
-# error before we get to handle that filename juggling. Most JS files
-# defensively set a file-local @policy.
-D.common =
+D.common = -@policy=error
 
 #
 # $(call b.c-pp.shcmd,LOGTAG,src,dest,-Dx=y...)
@@ -593,8 +588,13 @@ endif
 # WASM file is in use.
 #
 # If $(WASM_CUSTOM_INSTANTIATE) is 1 then mkwasmbuilds will add
-# -Dcustom-Module.instantiateWasm to some of the builds. This is
-# experimental but works on all browsers tested by its developer.
+# -Dcustom-Module.instantiateWasm to some of the builds. This problem
+# this solves is that various JS builds usually result in different JS
+# but identical binary WASM files. A custom loader allows us to define
+# the WASM filename used by the JS, enabling us to consolidate
+# identical binaries by redirecting the JS to use a single
+# copy. Without this we would need to distribute all JS/WASM files in
+# pairs, and most of the WASM files in that set would be identical.
 #
 # Changing this may require a clean rebuild. It also might not work.
 #
@@ -711,8 +711,19 @@ endif
 # build (and we've never had direct access to such a browser to test
 # on). i.e. non-BigInt builds are effectively unnecessary and can be
 # safely removed at some point.
+#
+# Emscripten 6.0.8 (2026-08-20) deprecates WASM_BIGINT, now behaving
+# as if WASM_BIGINT were always 1. WASM_BIGINT=1 has been its default
+# since 4.0.0 (2025-01-14).  We have not tested WASM_BIGINT=0 builds
+# since the earliest days of ext/wasm's development, so this does not
+# really change anything for us but does give us justification to
+# strip out the parts of the JS code which try to adapt to no-BigInt
+# environments (but are untested in such).
+#
 emcc.WASM_BIGINT ?= 1
-emcc.MEMORY64 ?= 0
+# emcc 6.0.1 deprecates -sMEMORY64=1 in favor of --target=wasm64
+emcc.MEMORY64 ?= --target=wasm64
+#emcc.MEMORY64 ?= -sMEMORY64=1
 #
 # https://emscripten.org/docs/tools_reference/settings_reference.html#memory64
 #
@@ -828,7 +839,9 @@ emcc.jsflags = -fPIC
 #emcc.jsflags += -Wno-gcc-install-dir-libstdcxx
 #emcc is not passing ^^^ this on to clang
 emcc.jsflags += --no-entry
-emcc.jsflags += -sWASM_BIGINT=$(emcc.WASM_BIGINT)
+# emcc 6.0.12+ emits ugly warnings if we turn on BIGINT,
+# despite the value being the same one it will use by
+# default: emcc.jsflags += -sWASM_BIGINT=$(emcc.WASM_BIGINT)
 emcc.jsflags += -sMODULARIZE
 emcc.jsflags += -sDYNAMIC_EXECUTION=0
 emcc.jsflags += -sNO_POLYFILL
@@ -954,11 +967,11 @@ emcc.jsflags += -sLLD_REPORT_UNDEFINED
 #
 
 #
-# b.call.patch-export-default is used by mkwasmbuilds.c and the
-# wasmfs build. $1 is 1 if the build mode needs this workaround
-# (modes: esm, bundler-friendly, node) and 0 if not (vanilla). $2 must
-# be 0 for all builds except sqlite3-wasmfs.mjs, in which case it must
-# be 1. $(3) is an optional log prefix, defaulting to $(logtag.@)
+# b.call.patch-export-default is used by mkwasmbuilds.c. $1 is 1 if
+# the build mode needs this workaround (modes: esm, bundler-friendly,
+# node) and 0 if not (vanilla). $2 must be 0 for all builds except
+# sqlite3-wasmfs.mjs, in which case it must be 1. $(3) is an optional
+# log prefix, defaulting to $(logtag.@)
 #
 # Reminder for ESM builds: even if we use -sEXPORT_ES6=0, emcc _still_
 # adds:
@@ -1031,15 +1044,13 @@ $(sqlite3-api-build-version.js): $(bin.version-info) $(MAKEFILE)
 	} > $@
 
 #
-# Inputs/outputs for the sqlite3-api.js family.
-#
-# sqlite3-api.jses = the list of JS files which make up
+# $(sqlite3-api.jses) = the list of JS files which make up
 # sqlite3-api.js, in the order they need to be assembled.
 sqlite3-api.jses = $(sqlite3-license-version.js)
-sqlite3-api.jses += $(dir.api)/sqlite3-api-prologue.js
+sqlite3-api.jses += $(dir.api)/sqlite3-api-prologue.c-pp.js
 sqlite3-api.jses += $(sqlite3-api-build-version.js)
-sqlite3-api.jses += $(dir.common)/whwasmutil.js
-sqlite3-api.jses += $(dir.jacc)/jaccwabyt.js
+sqlite3-api.jses += $(dir.common)/whwasmutil.c-pp.js
+sqlite3-api.jses += $(dir.jacc)/jaccwabyt.c-pp.js
 sqlite3-api.jses += $(dir.api)/sqlite3-api-glue.c-pp.js
 sqlite3-api.jses += $(dir.api)/sqlite3-api-oo1.c-pp.js
 sqlite3-api.jses += $(dir.api)/sqlite3-api-worker1.c-pp.js
@@ -1161,14 +1172,14 @@ emcc.flags.fiddle = \
   $(emcc.cflags) $(emcc_opt_full) \
   --minify 0 \
   -sALLOW_TABLE_GROWTH \
-  -sMEMORY64=$(emcc.MEMORY64) \
+  -sALLOW_MEMORY_GROWTH \
+  -sASSERTIONS \
   -sINITIAL_MEMORY=$(emcc.INITIAL_MEMORY.8) \
   -sABORTING_MALLOC \
   -sSTRICT_JS=0 \
   -sENVIRONMENT=web,worker \
   -sMODULARIZE \
   -sDYNAMIC_EXECUTION=0 \
-  -sWASM_BIGINT=$(emcc.WASM_BIGINT) \
   -sEXPORT_NAME=$(sqlite3.js.init-func) \
   $(emcc.exportedRuntimeMethods),FS \
   -sEXPORTED_FUNCTIONS=@$(abspath $(EXPORTED_FUNCTIONS.fiddle)) \
@@ -1322,7 +1333,6 @@ $(eval $(call gen-worker1,-bundler-friendly.mjs,$(c-pp.D.bundler)))
 
 #
 # sqlite3-worker1-promiser*.*
-# TODO: 64-bit
 #
 define gen-promiser
 # $1 = X.ext part of sqlite3-worker1-promiserX.ext
@@ -1411,7 +1421,6 @@ emcc.speedtest1.common += -sALLOW_TABLE_GROWTH
 emcc.speedtest1.common += -sDYNAMIC_EXECUTION=0
 emcc.speedtest1.common += --minify 0
 emcc.speedtest1.common += -sEXPORT_NAME=$(sqlite3.js.init-func)
-emcc.speedtest1.common += -sWASM_BIGINT=$(emcc.WASM_BIGINT)
 speedtest1.exit-runtime0 = -sEXIT_RUNTIME=0
 speedtest1.exit-runtime1 = -sEXIT_RUNTIME=1
 # Re -sEXIT_RUNTIME=1 vs 0: if it's 1 and speedtest1 crashes, we get
@@ -1565,9 +1574,9 @@ all: tester1
 #
 # jquery.terminal support for fiddle:
 #
-# If a clone of https://github.com/jcubic/jquery.terminal
-# is found in $(JQTERM), defaulting to $(HOME)/src/jquery.terminal
-# then add jquery.terminal support to fiddle.
+# If a clone of https://github.com/jcubic/jquery.terminal is found in
+# dir $(JQTERM), defaulting to $(HOME)/src/jquery.terminal then add
+# jquery.terminal support to fiddle.
 #
 # To build that package, from its checkout dir:
 #

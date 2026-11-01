@@ -118,6 +118,7 @@ static const char ZIPFILE_SCHEMA[] =
 
 #define ZIPFILE_F_COLUMN_IDX 7    /* Index of column "file" in the above */
 #define ZIPFILE_MX_NAME (250)     /* Windows limitation on filename size */
+#define ZIPFILE_MX_ENTRY (65535)  /* Max entries without zip64 extensions */
 
 /*
 ** The buffer should be large enough to contain 3 65536 byte strings - the
@@ -785,6 +786,15 @@ static void zipfileMtimeToDos(ZipfileCDS *pCds, u32 mUnixTime){
   int yr, mon, day;
   int hr, min, sec;
 
+  if( mUnixTime<=315532800 ){
+    /* Experimentally, I find that Win11 will not report the modification
+    ** time for any ZIP file entry with a date before 1980-01-01 00:00:01.
+    ** So make that the minimum date-time value. */
+    pCds->mDate = 0x0021;
+    pCds->mTime = 0x0001;
+    return;
+  }
+
   A = (int)((JD - 1867216.25)/36524.25);
   A = (int)(JD + 1 + A - (A/4));
   B = A + 1524;
@@ -800,17 +810,11 @@ static void zipfileMtimeToDos(ZipfileCDS *pCds, u32 mUnixTime){
   min = (mUnixTime % (60*60)) / 60;
   sec = (mUnixTime % 60);
 
-  if( yr>=1980 ){
-    pCds->mDate = (u16)(day + (mon << 5) + ((yr-1980) << 9));
-    pCds->mTime = (u16)(sec/2 + (min<<5) + (hr<<11));
-  }else{
-    pCds->mDate = pCds->mTime = 0;
-  }
+  pCds->mDate = (u16)(day + (mon << 5) + ((yr-1980) << 9));
+  pCds->mTime = (u16)(sec/2 + (min<<5) + (hr<<11));
 
-  assert( mUnixTime<315507600 
-       || mUnixTime==zipfileMtime(pCds) 
+  assert( mUnixTime==zipfileMtime(pCds) 
        || ((mUnixTime % 2) && mUnixTime-1==zipfileMtime(pCds)) 
-       /* || (mUnixTime % 2) */
   );
 }
 
@@ -1746,7 +1750,9 @@ static int zipfileUpdate(
     ** entry with a path, thereby making it into a duplicate. */
     if( (pOld==0 || bUpdate) && rc==SQLITE_OK ){
       ZipfileEntry *p;
+      int nEntry = 0;
       for(p=pTab->pFirstEntry; p; p=p->pNext){
+        nEntry++;
         if( zipfileComparePath(p->cds.zFile, zPath, nPath)==0 ){
           switch( sqlite3_vtab_on_conflict(pTab->db) ){
             case SQLITE_IGNORE: {
@@ -1764,6 +1770,13 @@ static int zipfileUpdate(
           }
           break;
         }
+      }
+
+      /* The EOCD record stores the number of entries as a 16-bit value.
+      ** Refuse to add an entry that would cause it to overflow.  */
+      if( p==0 && pOld==0 && nEntry>=ZIPFILE_MX_ENTRY ){
+        zipfileTableErr(pTab, "too many entries; max: %d", ZIPFILE_MX_ENTRY);
+        rc = SQLITE_CONSTRAINT;
       }
     }
 
@@ -1898,6 +1911,7 @@ static int zipfileCommit(sqlite3_vtab *pVtab){
     /* Write out the EOCD record */
     eocd.iDisk = 0;
     eocd.iFirstDisk = 0;
+    assert( nEntry<=ZIPFILE_MX_ENTRY );
     eocd.nEntry = (u16)nEntry;
     eocd.nEntryTotal = (u16)nEntry;
     eocd.nSize = (u32)(pTab->szCurrent - iOffset);
@@ -2090,6 +2104,12 @@ static void zipfileStep(sqlite3_context *pCtx, int nVal, sqlite3_value **apVal){
     rc = SQLITE_ERROR;
     goto zipfile_step_out;
   }
+  if( p->nEntry>=ZIPFILE_MX_ENTRY ){
+    zErr = sqlite3_mprintf("too many entries for zipfile(); max: %d",
+                           ZIPFILE_MX_ENTRY);
+    rc = SQLITE_ERROR;
+    goto zipfile_step_out;
+  }
 
   /* Inspect the 'method' parameter. This must be either 0 (store), 8 (use
   ** deflate compression) or NULL (choose automatically).  */
@@ -2217,6 +2237,7 @@ static void zipfileFinal(sqlite3_context *pCtx){
   if( p==0 ) return;
   if( p->nEntry>0 ){
     memset(&eocd, 0, sizeof(eocd));
+    assert( p->nEntry<=ZIPFILE_MX_ENTRY );
     eocd.nEntry = (u16)p->nEntry;
     eocd.nEntryTotal = (u16)p->nEntry;
     eocd.nSize = p->cds.n;

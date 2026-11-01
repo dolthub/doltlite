@@ -291,6 +291,15 @@ for tag in $TAGS; do
   if [ "$old_sig" = "$cur_sig" ]; then
     smoke_current "$db" "$tag"
     old_reads_current "$bin" "$db" "$tag"
+    if sql "$bin" :memory: "SELECT vec1_info();" >/dev/null 2>&1; then
+      vec1_args=()
+      # Earlier vec1 writers produce inconsistent trained-index metadata.
+      if ! git -C "$REPO_ROOT" show "$tag:ext/vec1/vec1.c" | grep 'VEC1_SQL_DELETE_FROM_META' >/dev/null; then
+        vec1_args=(--flat-only)
+      fi
+      python3 "$SCRIPT_DIR/vec1_compat.py" "$DOLTLITE" "$bin" "${vec1_args[@]}"
+      check "$tag: vec1 compatibility in both directions" "$?"
+    fi
     if ! git -C "$REPO_ROOT" show "$tag:src/sortkey.c" | grep 'finishAscNumeric' >/dev/null; then
       python3 "$SCRIPT_DIR/numeric_desc_compat.py" "$DOLTLITE" "$bin"
       check "$tag: numeric/DESC compatibility in both directions" "$?"

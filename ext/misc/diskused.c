@@ -275,7 +275,12 @@ static void diskusedPercent(
   }else{
     r = num*100.0/(double)denom;
   }
-  sqlite3_snprintf(sizeof(zNum)-5, zNum, r>=10.0 ? "%.3g" :"%.2g", r);
+  if( r>0.0 && r<0.0001 ){
+    /* Avoid exponential notation for very small percentages */
+    sqlite3_snprintf(sizeof(zNum)-5, zNum, "<0.0001");
+  }else{
+    sqlite3_snprintf(sizeof(zNum)-5, zNum, r>=10.0 ? "%.3g" :"%.2g", r);
+  }
   sz = (int)strlen(zNum);
   zDP = strchr(zNum, '.');
   if( zDP==0 ){
@@ -441,6 +446,7 @@ static void diskusedFunc(
   int rc;
   sqlite3_stmt *pStmt;
   int n;
+  char *z;
   sqlite3_int64 ii;
   sqlite3_int64 pgsz;
   sqlite3_int64 nPage;
@@ -764,9 +770,11 @@ static void diskusedFunc(
   sqlite3_str_appendf(s.pOut,
     "The following SQL will create a table named \"space_used\" which\n"
     "contains most of the information used to generate the report above.\n"
-    "*/\n"
   );
+  z = sqlite3_str_value(s.pOut);
+  while( z && (z = strstr(z,"*/"))!=0 ){ z[0] = '+'; }
   sqlite3_str_appendf(s.pOut,
+    "*/\n"
     "BEGIN;\n"
     "CREATE TABLE space_used(\n"
     "   name text,                -- A table or index\n"                /* 0 */

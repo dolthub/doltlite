@@ -129,10 +129,18 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
     int rc;
     u8 saved_iDb = db->init.iDb;
     sqlite3_stmt *pStmt;
+    const char *zEnd;
     TESTONLY(int rcp);            /* Return code from sqlite3_prepare() */
 
     assert( db->init.busy );
     db->init.iDb = iDb;
+
+    /* We never try to parse a trigger on a read-only database */
+    assert( db->aDb[iDb].pBt==0
+         || sqlite3BtreeIsReadonly(db->aDb[iDb].pBt)==0
+         || sqlite3_stricmp(argv[0],"trigger")!=0
+         || CORRUPT_DB );
+
     if( sqlite3GetUInt32(argv[3], &db->init.newTnum)==0
      || (db->init.newTnum>pData->mxPage && pData->mxPage>0)
     ){
@@ -143,7 +151,7 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
     db->init.orphanTrigger = 0;
     db->init.azInit = (const char**)argv;
     pStmt = 0;
-    TESTONLY(rcp = ) sqlite3Prepare(db, argv[4], -1, 0, 0, &pStmt, 0);
+    TESTONLY(rcp = ) sqlite3Prepare(db, argv[4], -1, 0, 0, &pStmt, &zEnd);
     rc = db->errCode;
     assert( (rc&0xFF)==(rcp&0xFF) );
     db->init.iDb = saved_iDb;
@@ -159,6 +167,8 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
           corruptSchema(pData, argv, sqlite3_errmsg(db));
         }
       }
+    }else if( zEnd[0] ){
+      corruptSchema(pData, argv, 0);
     }
     db->init.azInit = sqlite3StdType; /* Any array of string ptrs will do */
     sqlite3_finalize(pStmt);
@@ -399,8 +409,9 @@ int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
   {
     char *zSql;
     zSql = sqlite3MPrintf(db, 
-        "SELECT*FROM\"%w\".%s ORDER BY rowid",
-        db->aDb[iDb].zDbSName, zSchemaTabName);
+        "SELECT*FROM\"%w\".%s %sORDER BY rowid",
+        db->aDb[iDb].zDbSName, zSchemaTabName,
+        sqlite3BtreeIsReadonly(db->aDb[iDb].pBt)?"WHERE type<>'trigger'":"");
 #ifndef SQLITE_OMIT_AUTHORIZATION
     {
       sqlite3_xauth xAuth;
@@ -421,6 +432,12 @@ int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
 #endif
   }
   assert( pDb == &(db->aDb[iDb]) );
+
+  /* Confirm that TRIGGERs are not parsed on a read-only database */
+  assert( sqlite3BtreeIsReadonly(pDb->pBt)==0
+       || sqliteHashCount(&pDb->pSchema->trigHash)==0
+       || CORRUPT_DB );
+
   if( db->mallocFailed ){
     rc = SQLITE_NOMEM_BKPT;
     sqlite3ResetAllSchemasOfConnection(db);
@@ -464,7 +481,7 @@ error_out:
     if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
       sqlite3OomFault(db);
     }
-    sqlite3ResetOneSchema(db, iDb);
+    sqlite3ResetOneSchema(db, iDb, 0);
   }
   db->init.busy = 0;
   return rc;
@@ -569,7 +586,7 @@ static void schemaIsValid(Parse *pParse){
     assert( sqlite3SchemaMutexHeld(db, iDb, 0) );
     if( cookie!=db->aDb[iDb].pSchema->schema_cookie ){
       if( DbHasProperty(db, iDb, DB_SchemaLoaded) ) pParse->rc = SQLITE_SCHEMA;
-      sqlite3ResetOneSchema(db, iDb);
+      sqlite3ResetOneSchema(db, iDb, 0);
     }
 
     /* Close the transaction, if one was opened. */
@@ -925,7 +942,7 @@ static int sqlite3LockAndPrepare(
     if( rc==SQLITE_OK || db->mallocFailed ) break;
     cnt++;
   }while( (rc==SQLITE_ERROR_RETRY && ALWAYS(cnt<=SQLITE_MAX_PREPARE_RETRY))
-       || (rc==SQLITE_SCHEMA && (sqlite3ResetOneSchema(db,-1), cnt)==1) );
+       || (rc==SQLITE_SCHEMA && (sqlite3ResetOneSchema(db,-1,0), cnt)==1) );
 #ifdef DOLTLITE_PROLLY
   /* Compiling loaded a rules table the first sync could not see, or a
   ** statement in the batch changed it: compile once more with the

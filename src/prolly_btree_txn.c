@@ -1257,7 +1257,7 @@ static void commitPhaseTwoAdoptReloadedCatalog(
   }
   invalidateSchema(p);
   if( p->db ){
-    sqlite3ResetAllSchemasOfConnection(p->db);
+    doltliteResetSchemasPreserveExpiry(p->db);
     /* Next load is this commit's schema refresh, not a peer schema change. */
     if( p->db->nSchemaLock==0 ){
       p->bPreserveDeferFks = 1;
@@ -2109,7 +2109,7 @@ static void rollbackResetSchema(Btree *p, int bImmediate){
         pV->expired = 2;
       }
     }
-    sqlite3ResetAllSchemasOfConnection(p->db);
+    doltliteResetSchemasPreserveExpiry(p->db);
   }
 }
 

@@ -156,6 +156,15 @@ foreach {tn col before after} {
 
  11 b { CREATE TABLE t1(a, b NOT NULL GENERATED ALWAYS AS (a+1)) }
       { CREATE TABLE t1(a, b GENERATED ALWAYS AS (a+1)) }
+
+ 12 b { CREATE TABLE t1(a, b REFERENCES t1(a) NOT DEFERRABLE NOT NULL) }
+      { CREATE TABLE t1(a, b REFERENCES t1(a) NOT DEFERRABLE) }
+
+ 13 b { CREATE TABLE t1(a, b REFERENCES t1(a) NOT NULL DEFERRABLE) }
+      { CREATE TABLE t1(a, b REFERENCES t1(a) DEFERRABLE) }
+
+ 14 b { CREATE TABLE t1(a, b REFERENCES t1(a) NOT NULL ON CONFLICT IGNORE DEFERRABLE) }
+      { CREATE TABLE t1(a, b REFERENCES t1(a) DEFERRABLE) }
 } {
   reset_db
 
@@ -452,5 +461,109 @@ do_catchsql_test 10.2 {
 do_catchsql_test 10.3 {
   ALTER TABLE t1 ADD CONSTRAINT c1 CHECK( x>#2 );
 } {1 {near "#2": syntax error}}
+
+#-------------------------------------------------------------------------
+# A CHECK constraint that evaluates to NULL for existing rows is not
+# a constraint violation.
+#
+reset_db
+do_execsql_test 11.1 {
+  CREATE TABLE t1(a, b, c);
+  INSERT INTO t1 VALUES(1, 2, 3);
+  INSERT INTO t1 VALUES(4, NULL, 6);
+  INSERT INTO t1 VALUES(NULL, NULL, NULL);
+}
+
+set sql "CREATE TABLE t1(a, b, c"
+foreach {tn cons} {
+  1 "CONSTRAINT c1 CHECK (b!=5)"
+  2 "CONSTRAINT c2 CHECK (a<b)"
+  3 "CONSTRAINT c3 CHECK (a+b+c>0)"
+  4 "CONSTRAINT c4 CHECK (NULL)"
+} {
+  do_execsql_test 11.2.$tn "ALTER TABLE t1 ADD $cons"
+  append sql ", $cons"
+}
+append sql ")"
+
+do_execsql_test 11.3 {
+  SELECT sql FROM sqlite_schema WHERE name='t1';
+} [list $sql]
+
+do_catchsql_test 11.3.1 {
+  ALTER TABLE t1 ADD CONSTRAINT c5 CHECK (b>2);
+} {1 {constraint failed}}
+do_execsql_test 11.3.2 {
+  UPDATE t1 SET b=NULL WHERE b=2;
+  ALTER TABLE t1 ADD CONSTRAINT c5 CHECK (b>2);
+}
+
+do_execsql_test 11.4.1 {
+  INSERT INTO t1 VALUES(7, NULL, 8);
+}
+do_catchsql_test 11.4.2 {
+  INSERT INTO t1 VALUES(5, 1, 0);
+} {1 {CHECK constraint failed: c2}}
+
+
+#-------------------------------------------------------------------------
+# An ALTER TABLE ADD CONSTRAINT or ALTER COLUMN SET NOT NULL statement
+# that ends inside an unterminated C-style comment. The comment extends
+# to the end of the input, so the statement is complete and should
+# succeed. The unterminated comment is not copied into the schema.
+#
+reset_db
+do_execsql_test 12.0 {
+  CREATE TABLE t1(a);
+  ALTER TABLE t1 ADD CHECK(a>0) /* a must be positive */;
+  SELECT sql FROM sqlite_schema WHERE name='t1';
+} {{CREATE TABLE t1(a, CHECK(a>0) /* a must be positive */)}}
+
+do_execsql_test 12.1.1 {
+  ALTER TABLE t1 ADD CHECK(a<9) /* a must be small
+}
+do_execsql_test 12.1.2 {
+  SELECT sql FROM sqlite_schema WHERE name='t1';
+} {{CREATE TABLE t1(a, CHECK(a>0) /* a must be positive */, CHECK(a<9))}}
+do_execsql_test 12.1.3 {
+  INSERT INTO t1 VALUES(5);
+}
+do_catchsql_test 12.1.4 {
+  INSERT INTO t1 VALUES(10);
+} {1 {CHECK constraint failed: a<9}}
+do_execsql_test 12.1.5 {
+  PRAGMA integrity_check;
+} {ok}
+
+reset_db
+do_execsql_test 12.2.0 {
+  CREATE TABLE t1(a, b);
+}
+do_execsql_test 12.2.1 {
+  ALTER TABLE t1 ADD CONSTRAINT c1 CHECK(a!=b) /* unterminated
+}
+do_execsql_test 12.2.2 {
+  SELECT sql FROM sqlite_schema WHERE name='t1';
+} {{CREATE TABLE t1(a, b, CONSTRAINT c1 CHECK(a!=b))}}
+do_catchsql_test 12.2.3 {
+  INSERT INTO t1 VALUES(1, 1);
+} {1 {CHECK constraint failed: c1}}
+
+reset_db
+do_execsql_test 12.3.0 {
+  CREATE TABLE t1(a, b);
+}
+do_execsql_test 12.3.1 {
+  ALTER TABLE t1 ALTER b SET NOT NULL /* unterminated
+}
+do_execsql_test 12.3.2 {
+  SELECT sql FROM sqlite_schema WHERE name='t1';
+} {{CREATE TABLE t1(a, b NOT NULL)}}
+do_catchsql_test 12.3.3 {
+  INSERT INTO t1 VALUES(1, NULL);
+} {1 {NOT NULL constraint failed: t1.b}}
+do_execsql_test 12.3.4 {
+  PRAGMA integrity_check;
+} {ok}
 
 finish_test

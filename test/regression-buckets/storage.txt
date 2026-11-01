@@ -226,3 +226,7 @@ intckbusy
 intckcorrupt
 intckfault
 recoversql
+mmapleak
+pcacheleak
+walroshm
+win32shm

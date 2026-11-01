@@ -174,7 +174,7 @@ void sqlite3AlterRenameTable(
   if( SQLITE_OK!=isAlterableTable(pParse, pTab) ){
     goto exit_rename_table;
   }
-  if( SQLITE_OK!=sqlite3CheckObjectName(pParse,zName,"table",zName) ){
+  if( SQLITE_OK!=sqlite3CheckObjectName(pParse,zName,"table",zName,zDb) ){
     goto exit_rename_table;
   }
 #ifdef DOLTLITE_PROLLY
@@ -226,31 +226,31 @@ void sqlite3AlterRenameTable(
   nTabName = sqlite3Utf8CharLen(zTabName, -1);
 
   /* Rewrite all CREATE TABLE, INDEX, TRIGGER or VIEW statements in
-  ** the schema to use the new table name.  */
+  ** the schema to use the new table name, and update the tbl_name and
+  ** name columns as required. */
   sqlite3NestedParse(pParse,
       "UPDATE \"%w\"." LEGACY_SCHEMA_TABLE " SET "
-      "sql = sqlite_rename_table(%Q, type, name, sql, %Q, %Q, %d) "
-      "WHERE (type!='index' OR tbl_name=%Q COLLATE nocase)"
-      "AND   name NOT LIKE 'sqliteX_%%' ESCAPE 'X'"
-      , zDb, zDb, zTabName, zName, (iDb==1), zTabName
-  );
-
-  /* Update the tbl_name and name columns of the sqlite_schema table
-  ** as required.  */
-  sqlite3NestedParse(pParse,
-      "UPDATE %Q." LEGACY_SCHEMA_TABLE " SET "
-          "tbl_name = %Q, "
-          "name = CASE "
-            "WHEN type='table' THEN %Q "
-            "WHEN name LIKE 'sqliteX_autoindex%%' ESCAPE 'X' "
-            "     AND type='index' THEN "
-             "'sqlite_autoindex_' || %Q || substr(name,%d+18) "
-            "ELSE name END "
-      "WHERE tbl_name=%Q COLLATE nocase AND "
-          "(type='table' OR type='index' OR type='trigger');",
-      zDb,
-      zName, zName, zName,
-      nTabName, zTabName
+      "sql = CASE WHEN type='index' AND "
+          "name LIKE 'sqliteX_autoindex%%' ESCAPE 'X' THEN sql "
+        "ELSE sqlite_rename_table(%Q, type, name, sql, %Q, %Q, %d) END, "
+      "tbl_name = CASE "
+        "WHEN tbl_name=%Q COLLATE nocase AND (type!='trigger' OR %d=0 OR "
+        "  sqlite_rename_test(%Q, sql, type, name, 1, 'after rename', 0)) "
+        "THEN %Q ELSE tbl_name END, "
+      "name = CASE "
+        "WHEN type='table' AND tbl_name=%Q COLLATE nocase THEN %Q "
+        "WHEN type='index' AND name LIKE 'sqliteX_autoindex%%' ESCAPE 'X' "
+        "THEN 'sqlite_autoindex_' || %Q || substr(name,%d+18) "
+        "ELSE name END "
+      "WHERE (type!='index' OR tbl_name=%Q COLLATE nocase) "
+      "AND (name NOT LIKE 'sqliteX_%%' ESCAPE 'X' "
+        "OR (type='index' AND name LIKE 'sqliteX_autoindex%%' ESCAPE 'X'))"
+      , zDb,
+      zDb, zTabName, zName, (iDb==1),
+      zTabName, (iDb==1), zDb, zName,
+      zTabName, zName,
+      zName, nTabName,
+      zTabName
   );
 
 #ifndef SQLITE_OMIT_AUTOINCREMENT
@@ -351,6 +351,51 @@ static int isRowidAlias(
 
 
 /*
+** Buffer pFrag, which is nFrag bytes in size, contains a fragment of
+** SQL that will be inserted into a CREATE TABLE statement. If successful, this
+** function returns the size of the buffer in bytes not including any trailing
+** whitespace, semicolons, "--" style comments or unterminated C-style
+** comments. Or, if an OOM occurs, it returns 0 and sets db->mallocFailed to
+** true.
+**
+** Terminated C-style comments at the end are preserved.  "--" style
+** comments and unterminated C-style comments are removed because otherwise
+** inserting pFrag[] into the middle of a larger SQL statement without a 
+** comment terminator will mess up its syntax.
+*/
+static int alterRtrimFragment(
+  sqlite3 *db,                    /* used to record OOM error */
+  const char *pFrag,              /* Buffer containing SQL fragment */
+  int nFrag                       /* Size of pFrag in bytes */
+){
+  u8 *zTmp = (u8*)sqlite3MPrintf(db, "%.*s", nFrag, pFrag);
+  int iOff = 0;
+  int iEnd = 0;
+
+  if( zTmp==0 ) return 0;
+
+  while( 1 ){
+    int t = 0;
+    int nToken = sqlite3GetToken(&zTmp[iOff], &t);
+    if( t==TK_ILLEGAL ) break;
+    if( t==TK_COMMENT ){
+      /* Ignore all but properly terminated C-style comments */
+      if( zTmp[iOff]=='/' && nToken>=4
+       && zTmp[iOff+nToken-2]=='*' && zTmp[iOff+nToken-1]=='/'
+      ){
+        iEnd = iOff+nToken;
+      }
+    }else if( t!=TK_SPACE && t!=TK_SEMI ){
+      iEnd = iOff+nToken;
+    }
+    iOff += nToken;
+  }
+
+  sqlite3DbFree(db, zTmp);
+  return iEnd;
+}
+
+/*
 ** This function is called after an "ALTER TABLE ... ADD" statement
 ** has been parsed. Argument pColDef contains the text of the new
 ** column definition.
@@ -365,6 +410,7 @@ void sqlite3AlterFinishAddColumn(Parse *pParse, Token *pColDef){
   const char *zDb;          /* Database name */
   const char *zTab;         /* Table name */
   char *zCol;               /* Null-terminated column definition */
+  int nCol;                 /* Size of zCol in bytes */
   Column *pCol;             /* The new column */
   Expr *pDflt;              /* Default value for the new column */
   sqlite3 *db;              /* The database connection; */
@@ -453,12 +499,9 @@ void sqlite3AlterFinishAddColumn(Parse *pParse, Token *pColDef){
 
 
   /* Modify the CREATE TABLE statement. */
-  zCol = sqlite3DbStrNDup(db, (char*)pColDef->z, pColDef->n);
+  nCol = alterRtrimFragment(db, (char*)pColDef->z, pColDef->n);
+  zCol = sqlite3DbStrNDup(db, (char*)pColDef->z, nCol);
   if( zCol ){
-    char *zEnd = &zCol[pColDef->n-1];
-    while( zEnd>zCol && (*zEnd==';' || sqlite3Isspace(*zEnd)) ){
-      *zEnd-- = '\0';
-    }
     /* substr() operations on characters, but addColOffset is in bytes. So we
     ** have to use printf() to translate between these units: */
     assert( IsOrdinaryTable(pTab) );
@@ -729,13 +772,14 @@ void sqlite3AlterRenameColumn(
       zDb, pTab->zName, iCol, zNew, bQuote, iSchema==1,
       pTab->zName
   );
-
-  sqlite3NestedParse(pParse,
-      "UPDATE temp." LEGACY_SCHEMA_TABLE " SET "
-      "sql = sqlite_rename_column(sql, type, name, %Q, %Q, %d, %Q, %d, 1) "
-      "WHERE type IN ('trigger', 'view')",
-      zDb, pTab->zName, iCol, zNew, bQuote
-  );
+  if( iSchema!=1 ){
+    sqlite3NestedParse(pParse,
+        "UPDATE temp." LEGACY_SCHEMA_TABLE " SET "
+        "sql = sqlite_rename_column(sql, type, name, %Q, %Q, %d, %Q, %d, 1) "
+        "WHERE type IN ('trigger', 'view')",
+        zDb, pTab->zName, iCol, zNew, bQuote
+    );
+  }
 
   /* Drop and reload the database schema. */
   renameReloadSchema(pParse, iSchema, INITFLAG_AlterRename);
@@ -1440,6 +1484,7 @@ static int renameResolveTrigger(Parse *pParse){
         Select *pSel = sqlite3SelectNew(
             pParse, pStep->pExprList, pSrc, 0, 0, 0, 0, 0, 0
         );
+        Upsert *pUpsert = 0;
         if( pSel==0 ){
           pStep->pExprList = 0;
           pSrc = 0;
@@ -1463,6 +1508,8 @@ static int renameResolveTrigger(Parse *pParse){
           pSel->pSrc = 0;
           sqlite3SelectDelete(db, pSel);
         }
+
+        sNC.pSrcList = pSrc;
         if( ALWAYS(pStep->pSrc) ){
           int i;
           for(i=0; i<pStep->pSrc->nSrc && rc==SQLITE_OK; i++){
@@ -1471,13 +1518,14 @@ static int renameResolveTrigger(Parse *pParse){
               assert( p->u4.pSubq!=0 );
               sqlite3SelectPrep(pParse, p->u4.pSubq->pSelect, 0);
             }
+            if( p->fg.isUsing==0 ){
+              rc = sqlite3ResolveExprNames(&sNC, p->u3.pOn);
+            }
           }
         }
-
-        if(  db->mallocFailed ){
+        if( db->mallocFailed ){
           rc = SQLITE_NOMEM;
         }
-        sNC.pSrcList = pSrc;
         if( rc==SQLITE_OK && pStep->pWhere ){
           rc = sqlite3ResolveExprNames(&sNC, pStep->pWhere);
         }
@@ -1485,8 +1533,10 @@ static int renameResolveTrigger(Parse *pParse){
           rc = sqlite3ResolveExprListNames(&sNC, pStep->pExprList);
         }
         assert( !pStep->pUpsert || (!pStep->pWhere && !pStep->pExprList) );
-        if( pStep->pUpsert && rc==SQLITE_OK ){
-          Upsert *pUpsert = pStep->pUpsert;
+        for(pUpsert=pStep->pUpsert;
+            pUpsert && rc==SQLITE_OK;
+            pUpsert=pUpsert->pNextUpsert
+        ){
           pUpsert->pUpsertSrc = pSrc;
           sNC.uNC.pUpsert = pUpsert;
           sNC.ncFlags = NC_UUpsert;
@@ -1525,11 +1575,11 @@ static void renameWalkTrigger(Walker *pWalker, Trigger *pTrigger){
 
   /* Find tokens to edit in trigger steps */
   for(pStep=pTrigger->step_list; pStep; pStep=pStep->pNext){
+    Upsert *pUpsert = 0;
     sqlite3WalkSelect(pWalker, pStep->pSelect);
     sqlite3WalkExpr(pWalker, pStep->pWhere);
     sqlite3WalkExprList(pWalker, pStep->pExprList);
-    if( pStep->pUpsert ){
-      Upsert *pUpsert = pStep->pUpsert;
+    for(pUpsert=pStep->pUpsert; pUpsert; pUpsert=pUpsert->pNextUpsert){
       sqlite3WalkExprList(pWalker, pUpsert->pUpsertTarget);
       sqlite3WalkExprList(pWalker, pUpsert->pUpsertSet);
       sqlite3WalkExpr(pWalker, pUpsert->pUpsertWhere);
@@ -1539,9 +1589,13 @@ static void renameWalkTrigger(Walker *pWalker, Trigger *pTrigger){
       int i;
       SrcList *pSrc = pStep->pSrc;
       for(i=0; i<pSrc->nSrc; i++){
-        if( pSrc->a[i].fg.isSubquery ){
-          assert( pSrc->a[i].u4.pSubq!=0 );
-          sqlite3WalkSelect(pWalker, pSrc->a[i].u4.pSubq->pSelect);
+        SrcItem *p = &pSrc->a[i];
+        if( p->fg.isSubquery ){
+          assert( p->u4.pSubq!=0 );
+          sqlite3WalkSelect(pWalker, p->u4.pSubq->pSelect);
+        }
+        if( p->fg.isUsing==0 ){
+          sqlite3WalkExpr(pWalker, p->u3.pOn);
         }
       }
     }
@@ -1631,7 +1685,7 @@ static void renameColumnFunc(
   }
   zOld = pTab->aCol[iCol].zCnName;
   memset(&sCtx, 0, sizeof(sCtx));
-  sCtx.iCol = ((iCol==pTab->iPKey) ? -1 : iCol);
+  sCtx.iCol = iCol;
 
 #ifndef SQLITE_OMIT_AUTHORIZATION
   db->xAuth = 0;
@@ -1669,7 +1723,7 @@ static void renameColumnFunc(
               &sParse, &sCtx, (void*)sParse.pNewTable->aCol[iCol].zCnName
           );
         }
-        if( sCtx.iCol<0 ){
+        if( iCol==sParse.pNewTable->iPKey ){
           renameTokenFind(&sParse, &sCtx, (void*)&sParse.pNewTable->iPKey);
         }
         sqlite3WalkExprList(&sWalker, sParse.pNewTable->pCheck);
@@ -1715,9 +1769,9 @@ static void renameColumnFunc(
       if( pStep->pSrc ){
         Table *pTarget = sqlite3LocateTableItem(&sParse, 0, &pStep->pSrc->a[0]);
         if( pTarget==pTab ){
-          if( pStep->pUpsert ){
-            ExprList *pUpsertSet = pStep->pUpsert->pUpsertSet;
-            renameColumnElistNames(&sParse, &sCtx, pUpsertSet, zOld);
+          Upsert *pUpsert = 0;
+          for(pUpsert=pStep->pUpsert; pUpsert; pUpsert=pUpsert->pNextUpsert){
+            renameColumnElistNames(&sParse,&sCtx,pUpsert->pUpsertSet,zOld);
           }
           renameColumnIdlistNames(&sParse, &sCtx, pStep->pIdList, zOld);
           renameColumnElistNames(&sParse, &sCtx, pStep->pExprList, zOld);
@@ -1797,6 +1851,26 @@ static int renameTableSelectCb(Walker *pWalker, Select *pSelect){
   return WRC_Continue;
 }
 
+
+#ifndef SQLITE_OMIT_TRIGGER
+/*
+** Return the table that SrcItem pItem, which is part of the pSrc list of
+** an INSERT, UPDATE or DELETE trigger step (the target table, or a table
+** from the FROM clause of an UPDATE ... FROM), refers to. Or NULL if it
+** does not refer to any existing table.
+*/
+static Table *renameTriggerSrcTab(sqlite3 *db, SrcItem *pItem){
+  const char *zDb;
+  assert( pItem->fg.isSubquery==0 );
+  if( pItem->fg.fixedSchema ){
+    int iDb = sqlite3SchemaToIndex(db, pItem->u4.pSchema);
+    zDb = db->aDb[iDb].zDbSName;
+  }else{
+    zDb = pItem->u4.zDatabase;
+  }
+  return sqlite3FindTable(db, pItem->zName, zDb);
+}
+#endif
 
 /*
 ** This C function implements an SQL user function that is used by SQL code
@@ -1916,8 +1990,8 @@ static void renameTableFunc(
         Trigger *pTrigger = sParse.pNewTrigger;
         TriggerStep *pStep;
         if( 0==sqlite3_stricmp(sParse.pNewTrigger->table, zOld)
-            && sCtx.pTab->pSchema==pTrigger->pTabSchema
-          ){
+         && sCtx.pTab->pSchema==pTrigger->pTabSchema
+        ){
           renameTokenFind(&sParse, &sCtx, sParse.pNewTrigger->table);
         }
 
@@ -1929,9 +2003,9 @@ static void renameTableFunc(
               if( pStep->pSrc ){
                 int i;
                 for(i=0; i<pStep->pSrc->nSrc; i++){
-                  SrcItem *pItem = &pStep->pSrc->a[i];
-                  if( 0==sqlite3_stricmp(pItem->zName, zOld) ){
-                    renameTokenFind(&sParse, &sCtx, pItem->zName);
+                  SrcItem *p = &pStep->pSrc->a[i];
+                  if( p->zName && renameTriggerSrcTab(db, p)==sCtx.pTab ){
+                    renameTokenFind(&sParse, &sCtx, p->zName);
                   }
                 }
               }
@@ -2425,12 +2499,12 @@ void sqlite3AlterDropColumn(Parse *pParse, SrcList *pSrc, const Token *pName){
         if( i==pTab->iPKey ){
           sqlite3VdbeAddOp2(v, OP_Null, 0, regOut);
         }else{
-          char aff = pTab->aCol[i].affinity;
-          if( aff==SQLITE_AFF_REAL ){
-            pTab->aCol[i].affinity = SQLITE_AFF_NUMERIC;
-          }
           sqlite3ExprCodeGetColumnOfTable(v, pTab, iCur, i, regOut);
-          pTab->aCol[i].affinity = aff;
+          assert( pParse->nErr
+               || sqlite3VdbeGetOp(v,sqlite3VdbeCurrentAddr(v)-1)->opcode
+                    != OP_RealAffinity
+               || pTab->aCol[i].affinity==SQLITE_AFF_REAL );
+          sqlite3VdbeDeletePriorOpcode(v, OP_RealAffinity);
         }
         nField++;
       }
@@ -2481,15 +2555,19 @@ static int getWhitespace(const u8 *z){
 ** keyword.
 **
 ** Argument eTok may be the token value of the first token of the constraint
-** (e.g. TK_CHECK or TK_REFERENCES) or zero. If it is either TK_REFERENCES
-** or TK_FOREIGN, special parsing is enabled to find the end of the foreign-key
-** constraint definition.
+** (e.g. TK_CHECK or TK_REFERENCES or TK_NOT) or zero. If it is either
+** TK_REFERENCES or TK_FOREIGN, special parsing is enabled to find the
+** end of the foreign-key constraint definition.  If eTok is TK_NOT then
+** special processing is enabled to find the end of a NOT NULL constraint
+** including its optional ON CONFLICT clause.
 **
 ** Return the number of bytes until the end of the constraint. 
 */
 static int getConstraint(const u8 *z, int eTok){
   int iOff = 0;
   int t = 0;
+  int t2 = 0;
+  int prev = 0;
 
 #ifndef SQLITE_OMIT_FOREIGN_KEY
   if( eTok==TK_FOREIGN ){
@@ -2505,6 +2583,14 @@ static int getConstraint(const u8 *z, int eTok){
     /* REFERENCES is followed by a table name. Gobble this up here in
     ** case the table name is a fallback token like TK_GENERATED. */
     iOff += getConstraintToken(&z[iOff], &t);
+
+    /* If the table names is followed by a parenthesized list of columns,
+    ** also skip that, lest the close ")" end the constraint in the
+    ** while loop below. */
+    iOff += getWhitespace(&z[iOff]);
+    if( z[iOff]=='(' ){
+      iOff += getConstraintToken(&z[iOff], &t);
+    }
   }
 #endif
 
@@ -2515,17 +2601,34 @@ static int getConstraint(const u8 *z, int eTok){
   **   COLLATE, REFERENCES, FOREIGN, GENERATED, AS, RP, or COMMA
   **
   ** Also exit the loop if ILLEGAL turns up.
+  **
+  ** Exceptions:
+  **
+  **   *  For NOT NULL constraints, also terminate at DEFERRABLE
+  **
+  **   *  Do not terminate at DEFAULT if the previous token was SET
   */
   while( 1 ){
     int n = getConstraintToken(&z[iOff], &t);
-    if( t==TK_CONSTRAINT || t==TK_PRIMARY || t==TK_NOT || t==TK_UNIQUE
-     || t==TK_CHECK || t==TK_DEFAULT || t==TK_COLLATE || t==TK_REFERENCES
+    if( t==TK_CONSTRAINT || t==TK_PRIMARY || t==TK_UNIQUE
+     || t==TK_CHECK || t==TK_COLLATE || t==TK_REFERENCES
+     || (t==TK_DEFAULT && prev!=TK_SET)
      || t==TK_FOREIGN || t==TK_RP || t==TK_COMMA || t==TK_ILLEGAL
      || t==TK_AS || t==TK_GENERATED
+     || (eTok==TK_NOT && t==TK_DEFERRABLE)
     ){
       break;
     }
+    if( t==TK_NOT
+     && (eTok!=TK_REFERENCES
+         || (getConstraintToken(&z[iOff+n],&t2), t2!=TK_DEFERRABLE))
+    ){
+      /* NOT ends the constraint unless eTok is TK_REFERENCES and the next
+      ** token is DEFERRABLE */
+      break;
+    }
     iOff += n;
+    prev = t;
   }
   
   return iOff;
@@ -2692,8 +2795,12 @@ static void dropConstraintFunc(
         }
 
       }else if( t==TK_NOT && iNotNull==ii ){
-        iEnd = iOff + getConstraint(&zSql[iOff], 0);
-        break;
+        int t2;
+        (void)getConstraintToken(zSql+iOff, &t2);
+        if( t2==TK_NULL ){
+          iEnd = iOff + getConstraint(zSql+iOff, TK_NOT);
+          break;
+        }
       }else if( t==TK_RP || t==TK_ILLEGAL ){
         iEnd = -1;
         break;
@@ -2924,44 +3031,6 @@ static void failConstraintFunc(
 }
 
 /*
-** Buffer pCons, which is nCons bytes in size, contains the text of a 
-** NOT NULL or CHECK constraint that will be inserted into a CREATE TABLE
-** statement. If successful, this function returns the size of the buffer in
-** bytes not including any trailing whitespace or "--" style comments. Or,
-** if an OOM occurs, it returns 0 and sets db->mallocFailed to true.
-**
-** C-style comments at the end are preserved.  "--" style comments are
-** removed because the comment terminator might be \000, and we are about
-** to insert the pCons[] text into the middle of a larger string, and that
-** will have the effect of removing the comment terminator and messing up
-** the syntax.
-*/
-static int alterRtrimConstraint(
-  sqlite3 *db,                    /* used to record OOM error */
-  const char *pCons,              /* Buffer containing constraint */
-  int nCons                       /* Size of pCons in bytes */
-){
-  u8 *zTmp = (u8*)sqlite3MPrintf(db, "%.*s", nCons, pCons);
-  int iOff = 0;
-  int iEnd = 0;
-
-  if( zTmp==0 ) return 0;
-
-  while( 1 ){
-    int t = 0;
-    int nToken = sqlite3GetToken(&zTmp[iOff], &t);
-    if( t==TK_ILLEGAL ) break;
-    if( t!=TK_SPACE && (t!=TK_COMMENT || zTmp[iOff]!='-') ){
-      iEnd = iOff+nToken;
-    }
-    iOff += nToken;
-  }
-
-  sqlite3DbFree(db, zTmp);
-  return iEnd;
-}
-
-/*
 ** Prepare a statement of the form:
 **
 **   ALTER TABLE pSrc ALTER pCol SET NOT NULL
@@ -2991,7 +3060,7 @@ void sqlite3AlterSetNotNull(
 
   /* Find the length in bytes of the constraint definition */
   pCons = pFirst->z;
-  nCons = alterRtrimConstraint(pParse->db, pCons, pParse->sLastToken.z - pCons);
+  nCons = alterRtrimFragment(pParse->db, pCons, pParse->sLastToken.z - pCons);
 
   /* Search for a constraint violation. Throw an exception if one is found. */
   sqlite3NestedParse(pParse,
@@ -3117,13 +3186,13 @@ void sqlite3AlterAddConstraint(
   /* Search for a constraint violation. Throw an exception if one is found. */
   sqlite3NestedParse(pParse,
       "SELECT sqlite_fail('constraint failed', %d) "
-      "FROM %Q.%Q WHERE (%.*s) IS NOT TRUE", 
+      "FROM %Q.%Q WHERE (%.*s) IS FALSE", 
       SQLITE_CONSTRAINT, zDb, pTab->zName, nExpr, zExpr
   );
 
   /* Edit the SQL for the named table. */
   pCons = pFirst->z;
-  nCons = alterRtrimConstraint(pParse->db, pCons, pParse->sLastToken.z - pCons);
+  nCons = alterRtrimFragment(pParse->db, pCons, pParse->sLastToken.z - pCons);
 
   sqlite3NestedParse(pParse,
       "UPDATE \"%w\"." LEGACY_SCHEMA_TABLE " SET "

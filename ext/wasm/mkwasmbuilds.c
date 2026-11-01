@@ -242,7 +242,7 @@ const BuildDefs oBuildDefs = {
     .zDotWasm    = 0,
     .zCmppD      = 0,
     .zEmcc       = 0,
-    .zEmccExtra  = "-sMEMORY64=1 -sWASM_BIGINT=1",
+    .zEmccExtra  = "$(emcc.MEMORY64)",
     .zEnv        = 0,
     .zDeps       = 0,
     .zIfCond     = 0,
@@ -270,7 +270,7 @@ const BuildDefs oBuildDefs = {
     .zDotWasm    = 0,
     .zCmppD      = "-Dtarget:es6-module",
     .zEmcc       = 0,
-    .zEmccExtra  = "-sMEMORY64=1 -sWASM_BIGINT=1",
+    .zEmccExtra  = "$(emcc.MEMORY64)",
     .zEnv        = 0,
     .zDeps       = 0,
     .zIfCond     = 0,
@@ -313,7 +313,7 @@ const BuildDefs oBuildDefs = {
     .zEmcc       =
     "$(emcc.speedtest1)"
     " $(emcc.speedtest1.common)"
-    " -sMEMORY64=1 -sWASM_BIGINT=1"
+    " $(emcc.MEMORY64)"
     " $(pre-post.speedtest164.flags)"
     " $(cflags.common)"
     " -DSQLITE_SPEEDTEST1_WASM"
@@ -361,7 +361,7 @@ const BuildDefs oBuildDefs = {
     .zDotWasm    = "sqlite3-64bit",
     .zCmppD      = "$(c-pp.D.bundler)",
     .zEmcc       = 0,
-    .zEmccExtra  = "-sMEMORY64=1",
+    .zEmccExtra  = "$(emcc.MEMORY64)",
     .zEnv        = 0,
     .zDeps       = 0,
     .zIfCond     = 0,
@@ -495,6 +495,7 @@ static void mk_prologue(void){
       ** Performance gains or losses are _not_ taken into account
       ** here, only wasm file size.
       */
+      "$(wasm-opt.optional-flags) "
       "--all-features "           /* required */
       "--post-emscripten "        /* Saves roughly 12kb */
       "--strip-debug "            /* We already wasm-strip, but in
@@ -526,6 +527,7 @@ static void mk_prologue(void){
        "# post-compilation WASM file optimization");
 
     /* b.do.wasm-opt $1 = build name*/
+    ps("wasm-opt.optional-flags = $(filter --enable-bulk-memory-opt --disable-compact-imports,$(shell $(bin.wasm-opt) --help 2>/dev/null))");
     ps("ifeq (,$(bin.wasm-opt))"); {
       ps("b.do.wasm-opt = echo '$(logtag.$(1)) wasm-opt not available'");
     }
@@ -875,17 +877,16 @@ static void mk_lib_mode(const char *zBuildName, const BuildDef * pB){
          /* althttpd will automatically try to execute wasm files
             if they have the +x bit set. Why that bit is set
             at all is a mystery. */);
-      pf("\t@$(call b.call.wasm-strip,%s)\n", zBuildName);
-
       pf("\t@$(call b.do.wasm-opt,%s)\n", zBuildName);
+      pf("\t@$(call b.call.wasm-strip,%s)\n", zBuildName);
       pf("\t@$(call b.strip-js-emcc-bindings,$(logtag.%s))\n", zBuildName);
 
       pf("\t@if [ x1 = 'x$(base64.wasm)' ]; then \\\n"
-         "\techo '[$(emo.magic) Embedding $(out.%s.wasm) into $@ ...]'; \\\n"
+         "\techo '$(logtag.%s) $(emo.magic) Embedding $(out.%s.wasm) into $@ ...'; \\\n"
          "\telse \\\n"
-         "\techo '[$(emo.megaphone) Not embedding WASM in JS. Pass base64.wasm=1 to do that.]'; \\\n"
+         "\techo '$(logtag.%s) $(emo.megaphone) Not embedding WASM in JS. Pass base64.wasm=1 to do that.'; \\\n"
          "\tfi\n",
-         zBuildName);
+         zBuildName, zBuildName, zBuildName);
       pf("\t@mv $@ $@.in; \\\n"
          "\t$(call b.c-pp.shcmd,%s,$@.in,$@,"
          " \"--delimiter=//%%\" -Dbase64.wasm=$(base64.wasm)"

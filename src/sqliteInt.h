@@ -1585,7 +1585,7 @@ struct Schema {
 ** The number of different kinds of things that can be limited
 ** using the sqlite3_limit() interface.
 */
-#define SQLITE_N_LIMIT (SQLITE_LIMIT_TRIGGER_STEPS+1)
+#define SQLITE_N_LIMIT (SQLITE_LIMIT_CTES+1)
 
 /*
 ** Lookaside malloc is a set of fixed-size buffers that can be used
@@ -1724,7 +1724,6 @@ struct sqlite3 {
   int errByteOffset;            /* Byte offset of error in SQL statement */
   int errMask;                  /* & result codes with this before returning */
   int iSysErrno;                /* Errno value from last system error */
-  u32 dbOptFlags;               /* Flags to enable/disable optimizations */
   u8 enc;                       /* Text encoding */
   u8 autoCommit;                /* The auto-commit flag. */
   u8 temp_store;                /* 1: file 2: memory 0: default */
@@ -1740,9 +1739,11 @@ struct sqlite3 {
   u8 nSqlExec;                  /* Number of pending OP_SqlExec opcodes */
   u8 eOpenState;                /* Current condition of the connection */
   u8 nFpDigit;                  /* Significant digits to keep on double->text */
+  u8 bPendingSchemaReset;       /* 1 or more schema resets pending */
   int nextPagesize;             /* Pagesize after VACUUM if >0 */
   i64 nChange;                  /* Value returned by sqlite3_changes() */
   i64 nTotalChange;             /* Value returned by sqlite3_total_changes() */
+  u64 dbOptFlags;               /* Flags to enable/disable optimizations */
   int aLimit[SQLITE_N_LIMIT];   /* Limits */
   int nMaxSorterMmap;           /* Maximum size of regions mapped by sorter */
   struct sqlite3InitInfo {      /* Information used during initialization */
@@ -1873,10 +1874,13 @@ struct sqlite3 {
 };
 
 /*
-** A macro to discover the encoding of a database.
+** A macro to discover the encoding of a database or for managing
+** encoding values.
 */
 #define SCHEMA_ENC(db) ((db)->aDb[0].pSchema->enc)
 #define ENC(db)        ((db)->enc)
+#define ENC_MASK       0x1f           /* Usable encoding bits */
+#define ENC_KEEPBOM    0x80           /* Do not remove BOM */
 
 /*
 ** A u64 constant where the lower 32 bits are all zeros.  Only the
@@ -1967,51 +1971,50 @@ struct sqlite3 {
 /*
 ** Bits of the sqlite3.dbOptFlags field that are used by the
 ** sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS,...) interface to
-** selectively disable various optimizations.
+** selectively disable various optimizations. The numbers in each macro
+** are the one-based bit position (for improved readability).
+**
+** Keep these values in sync with the ext/misc/optname.c extension.
 */
-#define SQLITE_QueryFlattener 0x00000001 /* Query flattening */
-#define SQLITE_WindowFunc     0x00000002 /* Use xInverse for window functions */
-#define SQLITE_GroupByOrder   0x00000004 /* GROUPBY cover of ORDERBY */
-                           /* 0x00000008 -- Available for reuse */
-#define SQLITE_DistinctOpt    0x00000010 /* DISTINCT using indexes */
-#define SQLITE_CoverIdxScan   0x00000020 /* Covering index scans */
-#define SQLITE_OrderByIdxJoin 0x00000040 /* ORDER BY of joins via index */
-#define SQLITE_Transitive     0x00000080 /* Transitive constraints */
-#define SQLITE_OmitNoopJoin   0x00000100 /* Omit unused tables in joins */
-#define SQLITE_CountOfView    0x00000200 /* The count-of-view optimization */
-#define SQLITE_CursorHints    0x00000400 /* Add OP_CursorHint opcodes */
-#define SQLITE_Stat4          0x00000800 /* Use STAT4 data */
-   /* TH3 expects this value  ^^^^^^^^^^ */
-#define SQLITE_PushDown       0x00001000 /* WHERE-clause push-down opt */
-#define SQLITE_SimplifyJoin   0x00002000 /* Convert LEFT JOIN to JOIN */
-#define SQLITE_SkipScan       0x00004000 /* Skip-scans */
-#define SQLITE_PropagateConst 0x00008000 /* The constant propagation opt */
-#define SQLITE_MinMaxOpt      0x00010000 /* The min/max optimization */
-#define SQLITE_SeekScan       0x00020000 /* The OP_SeekScan optimization */
-#define SQLITE_OmitOrderBy    0x00040000 /* Omit pointless ORDER BY */
-   /* TH3 expects this value  ^^^^^^^^^^ */
-#define SQLITE_BloomFilter    0x00080000 /* Use a Bloom filters */
-   /* TH3 expects this value  ^^^^^^^^^^ */
-                          /*  0x00100000 -- Available for reuse */
-#define SQLITE_BalancedMerge  0x00200000 /* Balance multi-way merges */
-#define SQLITE_ReleaseReg     0x00400000 /* Use OP_ReleaseReg for testing */
-#define SQLITE_FlttnUnionAll  0x00800000 /* Disable the UNION ALL flattener */
-   /* TH3 expects this value  ^^^^^^^^^^ */
-#define SQLITE_IndexedExpr    0x01000000 /* Pull exprs from index when able */
-#define SQLITE_Coroutines     0x02000000 /* Co-routines for subqueries */
-#define SQLITE_NullUnusedCols 0x04000000 /* NULL unused columns in subqueries */
-#define SQLITE_OnePass        0x08000000 /* Single-pass DELETE and UPDATE */
-#define SQLITE_OrderBySubq    0x10000000 /* ORDER BY in subquery helps outer */
-#define SQLITE_StarQuery      0x20000000 /* Heurists for star queries */
-#define SQLITE_ExistsToJoin   0x40000000 /* The EXISTS-to-JOIN optimization */
-#define SQLITE_UnionLimit     0x80000000 /* Optimizations for UNION + LIMIT */
-#define SQLITE_AllOpts        0xffffffff /* All optimizations */
+#define SQLITE_QueryFlattener  1 /* Query flattening */
+#define SQLITE_WindowFunc      2 /* Use xInverse for window functions */
+#define SQLITE_GroupByOrder    3 /* GROUPBY cover of ORDERBY */
+#define SQLITE_JoinMiss        4 /* Unwind join loops on a lookup miss*/
+#define SQLITE_DistinctOpt     5 /* DISTINCT using indexes */
+#define SQLITE_CoverIdxScan    6 /* Covering index scans */
+#define SQLITE_OrderByIdxJoin  7 /* ORDER BY of joins via index */
+#define SQLITE_Transitive      8 /* Transitive constraints */
+#define SQLITE_OmitNoopJoin    9 /* Omit unused tables in joins */
+#define SQLITE_CountOfView    10 /* The count-of-view optimization */
+#define SQLITE_CursorHints    11 /* Add OP_CursorHint opcodes */
+#define SQLITE_Stat4          12 /* Use STAT4 data */
+#define SQLITE_PushDown       13 /* WHERE-clause push-down opt */
+#define SQLITE_SimplifyJoin   14 /* Convert LEFT JOIN to JOIN */
+#define SQLITE_SkipScan       15 /* Skip-scans */
+#define SQLITE_PropagateConst 16 /* The constant propagation opt */
+#define SQLITE_MinMaxOpt      17 /* The min/max optimization */
+#define SQLITE_SeekScan       18 /* The OP_SeekScan optimization */
+#define SQLITE_OmitOrderBy    19 /* Omit pointless ORDER BY */
+#define SQLITE_BloomFilter    20 /* Use a Bloom filters */
+#define SQLITE_DevTest        21 /* Temporary development testing use */
+#define SQLITE_BalancedMerge  22 /* Balance multi-way merges */
+#define SQLITE_ReleaseReg     23 /* Use OP_ReleaseReg for testing */
+#define SQLITE_FlttnUnionAll  24 /* Disable the UNION ALL flattener */
+#define SQLITE_IndexedExpr    25 /* Pull exprs from index when able */
+#define SQLITE_Coroutines     26 /* Co-routines for subqueries */
+#define SQLITE_NullUnusedCols 27 /* NULL unused columns in subqueries */
+#define SQLITE_OnePass        28 /* Single-pass DELETE and UPDATE */
+#define SQLITE_OrderBySubq    29 /* ORDER BY in subquery helps outer */
+#define SQLITE_StarQuery      30 /* Heurists for star queries */
+#define SQLITE_ExistsToJoin   31 /* The EXISTS-to-JOIN optimization */
+#define SQLITE_UnionLimit     32 /* Optimizations for UNION + LIMIT */
+#define SQLITE_HavingToWhere  33 /* HAVING-to-WHERE optimization */
 
 /*
 ** Macros for testing whether or not optimizations are enabled or disabled.
 */
-#define OptimizationDisabled(db, mask)  (((db)->dbOptFlags&(mask))!=0)
-#define OptimizationEnabled(db, mask)   (((db)->dbOptFlags&(mask))==0)
+#define OptimizationDisabled(D,M)  (((D)->dbOptFlags&(1ull<<((M)-1)))!=0)
+#define OptimizationEnabled(D,M)   (((D)->dbOptFlags&(1ull<<((M)-1)))==0)
 
 /*
 ** Return true if it OK to factor constant expressions into the initialization
@@ -3909,6 +3912,7 @@ struct TriggerPrg {
 # define DbMaskTest(M,I)    (((M)[(I)/8]&(1<<((I)&7)))!=0)
 # define DbMaskZero(M)      memset((M),0,sizeof(M))
 # define DbMaskSet(M,I)     (M)[(I)/8]|=(1<<((I)&7))
+# define DbMaskUnion(M,X)   sqlite3DbMaskUnion(M,X)
 # define DbMaskAllZero(M)   sqlite3DbMaskAllZero(M)
 # define DbMaskNonZero(M)   (sqlite3DbMaskAllZero(M)==0)
 #else
@@ -3916,9 +3920,14 @@ struct TriggerPrg {
 # define DbMaskTest(M,I)    (((M)&(((yDbMask)1)<<(I)))!=0)
 # define DbMaskZero(M)      ((M)=0)
 # define DbMaskSet(M,I)     ((M)|=(((yDbMask)1)<<(I)))
+# define DbMaskUnion(M,X)   ((M)|=(X))
 # define DbMaskAllZero(M)   ((M)==0)
 # define DbMaskNonZero(M)   ((M)!=0)
 #endif
+
+/* Should be in vdbe.h, but we needed yDbMask definition first */
+void sqlite3VdbeSchemaInUse(sqlite3*,Vdbe*,yDbMask*);
+
 
 /*
 ** For each index X that has as one of its arguments either an expression
@@ -4015,6 +4024,7 @@ struct Parse {
   int nErr;            /* Number of errors seen */
   int nTab;            /* Number of previously allocated VDBE cursors */
   int nMem;            /* Number of memory cells used so far */
+  int szOpAlloc;       /* Bytes of memory space allocated for Vdbe.aOp[] */
   int iSelfTab;        /* Table associated with an index on expr, or negative
                        ** of the base register during check-constraint eval */
   int nNestSel;        /* Number of nested SELECT statements and/or VIEWs */
@@ -4038,6 +4048,7 @@ struct Parse {
   Table *pTriggerTab;  /* Table triggers are being coded for */
   TriggerPrg *pTriggerPrg;  /* Linked list of coded triggers */
   ParseCleanup *pCleanup;   /* List of cleanup operations to run after parse */
+  Trigger *pTrigCoded;      /* Trigger whose sub-program is being coded */
 
   /**************************************************************************
   ** Fields above must be initialized to zero.  The fields that follow,
@@ -5136,7 +5147,10 @@ void sqlite3Pragma(Parse*,Token*,Token*,Token*,int);
 Module *sqlite3PragmaVtabRegister(sqlite3*,const char *zName);
 #endif
 void sqlite3ResetAllSchemasOfConnection(sqlite3*);
-void sqlite3ResetOneSchema(sqlite3*,int);
+#ifdef DOLTLITE_PROLLY
+void doltliteResetSchemasPreserveExpiry(sqlite3*);
+#endif
+void sqlite3ResetOneSchema(sqlite3*,int,Vdbe*);
 void sqlite3CollapseDatabaseArray(sqlite3*);
 void sqlite3CommitInternalChanges(sqlite3*);
 void sqlite3ColumnSetExpr(Parse*,Table*,Column*,Expr*);
@@ -5213,6 +5227,7 @@ void sqlite3CreateView(Parse*,Token*,Token*,Token*,ExprList*,Select*,int,int);
 
 #if SQLITE_MAX_ATTACHED>30
   int sqlite3DbMaskAllZero(yDbMask);
+  void sqlite3DbMaskUnion(yDbMask,yDbMask);
 #endif
 void sqlite3DropTable(Parse*, SrcList*, int, int);
 void sqlite3CodeDropTable(Parse*, Table*, int, int);
@@ -5353,11 +5368,10 @@ int sqlite3ExprTruthValue(const Expr*);
 int sqlite3ExprIsConstant(Parse*,Expr*);
 int sqlite3ExprIsConstantOrFunction(Expr*, u8);
 int sqlite3ExprIsConstantOrGroupBy(Parse*, Expr*, ExprList*);
+int sqlite3ExprIsTableConstant(Expr*,int,int);
 int sqlite3ExprIsSingleTableConstraint(Expr*,const SrcList*,int,int);
 int sqlite3ExprListIsConstant(Parse *pParse, ExprList *pList, int bNoIs);
-#ifdef SQLITE_ENABLE_CURSOR_HINTS
 int sqlite3ExprContainsSubquery(Expr*);
-#endif
 int sqlite3ExprIsInteger(const Expr*, int*, Parse*, int);
 int sqlite3ExprCanBeNull(const Expr*);
 int sqlite3ExprNeedsNoAffinityChange(const Expr*, char);
@@ -5638,13 +5652,13 @@ void sqlite3SetTextEncoding(sqlite3 *db, u8);
 CollSeq *sqlite3ExprCollSeq(Parse *pParse, const Expr *pExpr);
 CollSeq *sqlite3ExprNNCollSeq(Parse *pParse, const Expr *pExpr);
 int sqlite3ExprCollSeqMatch(Parse*,const Expr*,const Expr*);
-Expr *sqlite3ExprAddCollateToken(const Parse *pParse, Expr*, const Token*, int);
-Expr *sqlite3ExprAddCollateString(const Parse*,Expr*,const char*);
+Expr *sqlite3ExprAddCollateToken(Parse *pParse, Expr*, const Token*, int);
+Expr *sqlite3ExprAddCollateString(Parse*,Expr*,const char*);
 Expr *sqlite3ExprSkipCollate(Expr*);
 Expr *sqlite3ExprSkipCollateAndLikely(Expr*);
 int sqlite3CheckCollSeq(Parse *, CollSeq *);
 int sqlite3WritableSchema(sqlite3*);
-int sqlite3CheckObjectName(Parse*, const char*,const char*,const char*);
+int sqlite3CheckObjectName(Parse*,const char*,const char*,const char*,const char*);
 void sqlite3VdbeSetChanges(sqlite3 *, i64);
 int sqlite3AddInt64(i64*,i64);
 int sqlite3SubInt64(i64*,i64);
@@ -5713,6 +5727,7 @@ void sqlite3AlterSetNotNull(Parse*, SrcList*, Token*, Token*);
 i64 sqlite3GetToken(const unsigned char *, int *);
 void sqlite3NestedParse(Parse*, const char*, ...);
 void sqlite3ExpirePreparedStatements(sqlite3*, int);
+void sqlite3ExpireStmtsUsingSchema(sqlite3*, int, Vdbe*);
 void sqlite3CodeRhsOfIN(Parse*, Expr*, int, int);
 int sqlite3CodeSubselect(Parse*, Expr*);
 void sqlite3SelectPrep(Parse*, Select*, NameContext*);
@@ -5878,13 +5893,15 @@ void sqlite3AutoLoadExtensions(sqlite3*);
 #endif
 int sqlite3ReadOnlyShadowTables(sqlite3 *db);
 #ifndef SQLITE_OMIT_VIRTUALTABLE
-  int sqlite3ShadowTableName(sqlite3 *db, const char *zName);
+  int sqlite3ShadowTableName(sqlite3 *db, const char *zName, const char *zDb);
   int sqlite3IsShadowTableOf(sqlite3*,Table*,const char*);
   void sqlite3MarkAllShadowTablesOf(sqlite3*, Table*);
+  void sqlite3VtabEponymousTableClearAll(sqlite3*);
 #else
-# define sqlite3ShadowTableName(A,B) 0
+# define sqlite3ShadowTableName(A,B,C) 0
 # define sqlite3IsShadowTableOf(A,B,C) 0
 # define sqlite3MarkAllShadowTablesOf(A,B)
+# define sqlite3VtabEponymousTableClearAll(X)
 #endif
 int sqlite3VtabEponymousTableInit(Parse*,Module*);
 void sqlite3VtabEponymousTableClear(sqlite3*,Module*);

@@ -88,7 +88,6 @@ static MemChunk *memChunkList = 0;
 */
 static void *lemon_malloc(size_t nByte){
   MemChunk *p;
-  if( nByte<0 ) return 0;
   p = malloc( nByte + sizeof(MemChunk) );
   if( p==0 ){
     fprintf(stderr, "Out of memory.  Failed to allocate %lld bytes.\n",
@@ -1746,7 +1745,6 @@ int main(int argc, char **argv){
   static int statistics = 0;
   static int mhflag = 0;
   static int nolinenosflag = 0;
-  static int noResort = 0;
   static int sqlFlag = 0;
   static int printPP = 0;
   
@@ -1764,7 +1762,6 @@ int main(int argc, char **argv){
     {OPT_FLAG, "p", (char*)&showPrecedenceConflict,
                     "Show conflicts resolved by precedence rules"},
     {OPT_FLAG, "q", (char*)&quiet, "(Quiet) Don't print the report file."},
-    {OPT_FLAG, "r", (char*)&noResort, "Do not sort or renumber states"},
     {OPT_FLAG, "s", (char*)&statistics,
                                    "Print parser stats to standard output."},
     {OPT_FLAG, "S", (char*)&sqlFlag,
@@ -1878,7 +1875,7 @@ int main(int argc, char **argv){
     /* Reorder and renumber the states so that states with fewer choices
     ** occur at the end.  This is an optimization that helps make the
     ** generated parser tables smaller. */
-    if( noResort==0 ) ResortStates(&lem);
+    ResortStates(&lem);
 
     /* Generate a report of the parser generated.  (the "y.output" file) */
     if( !quiet ) ReportOutput(&lem);

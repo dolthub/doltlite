@@ -17,15 +17,37 @@
   - https://fossil.wanderinghorse.net/r/jaccwabyt
   - https://sqlite.org/src/dir/ext/wasm/jaccwabyt
 
+//#@ policy error
   This build was generated using:
 
-  ./c-pp -o js/jaccwabyt.js -@policy=error jaccwabyt/jaccwabyt.c-pp.js
+  @c-pp::argv@
 
-  by libcmpp 2.0.x 4539e17f451054d2aeb6a5ffe3891af087fd8fa6cfae4e31d02e1fddfec69d46 @ 2026-09-30 09:12:44.230 UTC
+  by libcmpp @cmpp::version@
+//#@ policy off
 */
+//#savepoint begin
+//#define ? esm 0
+//#define ? no-export 0
+//#define ? lexical-scoped 0
+//#if defined canonical-sqlite3
+//#  // The sqlite3 wasm build.
+//#  define no-export 1
+//#  define lexical-scoped 1
+//#  if defined target:es6-module
+//#    define esm 1
+//#  /if
+//#/if
+//#if esm
+//#  define lexical-scoped 1
+//#/if
+//#if lexical-scoped
+const Jaccwabyt =
+//#else
 'use strict';
 globalThis.Jaccwabyt =
+//#/if
 function StructBinderFactory(config){
+//#if not esm
   'use strict';
 /* ^^^^ it is recommended that clients move that object into wherever
    they'd like to have it and delete the globalThis-held copy.  This
@@ -33,6 +55,7 @@ function StructBinderFactory(config){
    as a convenience for connecting these bits to other co-developed
    code before it gets removed from the global namespace.
 */
+//#/if
 
   /** Throws a new Error, the message of which is the concatenation
       all args with a space between each. */
@@ -1197,3 +1220,11 @@ function StructBinderFactory(config){
   }
   return StructBinder;
 }/*StructBinderFactory*/;
+//#if esm and not no-export
+//#  if amalgamation
+export {Jaccwabyt};
+//#  else
+export default Jaccwabyt;
+//#  /if
+//#/if
+//#savepoint rollback

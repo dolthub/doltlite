@@ -51,9 +51,16 @@
 */
 static struct Test1Global {
   int isInit;
-  Tcl_Mutex m;
   Tcl_HashTable h;
 } g;
+
+static void testEnterHashMutex(){
+  sqlite3_mutex_enter( sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP3) );
+}
+static void testLeaveHashMutex(){
+  sqlite3_mutex_leave( sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP3) );
+}
+
 
 /*
 ** Convert a pointer to a string, and return a pointer to a buffer containing
@@ -69,7 +76,7 @@ static const char *testPointerToString(void *pPtr){
   if( pPtr==0 ){
     zRet = "0";
   }else{
-    Tcl_MutexLock(&g.m);
+    testEnterHashMutex();
     if( g.isInit==0 ){
       Tcl_InitHashTable(&g.h, TCL_STRING_KEYS);
       g.isInit = 1;
@@ -78,7 +85,7 @@ static const char *testPointerToString(void *pPtr){
     pEntry = Tcl_CreateHashEntry(&g.h, aKey, &dummy);
     Tcl_SetHashValue(pEntry, pPtr);
     zRet = Tcl_GetHashKey(&g.h, pEntry);
-    Tcl_MutexUnlock(&g.m);
+    testLeaveHashMutex();
   }
 
   return zRet;
@@ -92,14 +99,14 @@ static void *testStringToPointer(const char *zStr){
   void *pRet = 0;
 
   if( zStr[0]!='0' ){
-    Tcl_MutexLock(&g.m);
+    testEnterHashMutex();
     if( g.isInit ){
       Tcl_HashEntry *pEntry = Tcl_FindHashEntry(&g.h, zStr);
       if( pEntry ){
         pRet = Tcl_GetHashValue(pEntry);
       }
     }
-    Tcl_MutexUnlock(&g.m);
+    testLeaveHashMutex();
   }
 
   return pRet;
@@ -4752,7 +4759,9 @@ static int SQLITE_TCLAPI test_carray_bind(
     }
     case 5: { /* nData==0 */
       aData = "";
-      xDel = SQLITE_STATIC;
+      /* Preserve SQLITE_TRANSIENT so that the copy path is exercised. Since
+      ** aData is not a malloc()ed pointer, clear isTransient below. */
+      if( xDel!=SQLITE_TRANSIENT ) xDel = SQLITE_STATIC;
       isTransient = 0;
       isStatic = 0;
       break;
@@ -6707,6 +6716,52 @@ static int SQLITE_TCLAPI working_64bit_int(
 
 
 /*
+** tclcmd:   vfs_open_tempfile ?VFS?
+**
+** Invoke the xOpen() method of VFS (or of the default VFS if no VFS is
+** named) with a NULL filename, as the core does when it needs a temporary
+** file.  The file is closed again immediately.  Return a two-element list
+** consisting of the integer return code from xOpen() and the value that
+** xOpen() wrote into *pOutFlags.  *pOutFlags is initialized to zero before
+** the call, so a result of zero means that xOpen() did not set it.
+*/
+static int SQLITE_TCLAPI vfs_open_tempfile(
+  ClientData clientData, /* Not used */
+  Tcl_Interp *interp,    /* The TCL interpreter that invoked this command */
+  int objc,              /* Number of arguments */
+  Tcl_Obj *CONST objv[]  /* Command arguments */
+){
+  sqlite3_vfs *pVfs;
+  sqlite3_file *pFd;
+  int flags = SQLITE_OPEN_TEMP_DB | SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+            | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_DELETEONCLOSE;
+  int outFlags = 0;
+  int rc;
+  Tcl_Obj *pRet;
+
+  if( objc!=1 && objc!=2 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "?VFS?");
+    return TCL_ERROR;
+  }
+  pVfs = sqlite3_vfs_find(objc==2 ? Tcl_GetString(objv[1]) : 0);
+  if( pVfs==0 ){
+    Tcl_AppendResult(interp, "no such vfs", (char*)0);
+    return TCL_ERROR;
+  }
+  pFd = (sqlite3_file*)ckalloc(pVfs->szOsFile);
+  memset(pFd, 0, pVfs->szOsFile);
+  rc = pVfs->xOpen(pVfs, 0, pFd, flags, &outFlags);
+  if( pFd->pMethods ) pFd->pMethods->xClose(pFd);
+  ckfree((char*)pFd);
+
+  pRet = Tcl_NewObj();
+  Tcl_ListObjAppendElement(interp, pRet, Tcl_NewIntObj(rc));
+  Tcl_ListObjAppendElement(interp, pRet, Tcl_NewIntObj(outFlags));
+  Tcl_SetObjResult(interp, pRet);
+  return TCL_OK;
+}
+
+/*
 ** tclcmd:   vfs_unlink_test
 **
 ** This TCL command unregisters the primary VFS and then registers
@@ -7488,10 +7543,11 @@ static int SQLITE_TCLAPI test_limit(
     { "SQLITE_LIMIT_WORKER_THREADS",      SQLITE_LIMIT_WORKER_THREADS       },
     { "SQLITE_LIMIT_SCHEMA",              SQLITE_LIMIT_SCHEMA               },
     { "SQLITE_LIMIT_TRIGGER_STEPS",       SQLITE_LIMIT_TRIGGER_STEPS        },
+    { "SQLITE_LIMIT_CTES",                SQLITE_LIMIT_CTES                 },
     
     /* Out of range test cases */
     { "SQLITE_LIMIT_TOOSMALL",            -1,                               },
-    { "SQLITE_LIMIT_TOOBIG",              SQLITE_LIMIT_TRIGGER_STEPS+1      },
+    { "SQLITE_LIMIT_TOOBIG",              SQLITE_LIMIT_CTES+1               },
   };
   int i, id = 0;
   int val;
@@ -8373,6 +8429,163 @@ static int SQLITE_TCLAPI win32_file_lock(
 }
 #endif
 
+#ifdef _WIN32
+/*
+** An instance of this structure is allocated for each command created
+** by [map_win32_file].
+*/
+typedef struct TestMapFile TestMapFile;
+struct TestMapFile {
+  HANDLE hFile;                   /* Handle open on mapped file */
+  HANDLE hMap;                    /* Handle returned by CreateFileMappingW() */
+  void *pMap;                     /* Pointer returned by MapViewOfFile() */
+};
+
+/*
+** Release all resources held by the TestMapFile object passed as the
+** only argument. This is used as the delete-proc for the Tcl command.
+*/
+static void SQLITE_TCLAPI testMapFileDel(void *clientData){
+  TestMapFile *p = (TestMapFile*)clientData;
+  if( p->pMap ) UnmapViewOfFile(p->pMap);
+  if( p->hMap ) CloseHandle(p->hMap);
+  if( p->hFile!=INVALID_HANDLE_VALUE ) CloseHandle(p->hFile);
+  ckfree((char*)p);
+}
+
+/*
+** Implementation of the command created by [map_win32_file]:
+**
+**      CMD destroy
+*/
+static int SQLITE_TCLAPI testMapFileCmd(
+  void *clientData,
+  Tcl_Interp *interp,
+  int objc,
+  Tcl_Obj *CONST objv[]
+){
+  static const char *azMethod[] = { "destroy", 0 };
+  enum { MAPFILE_DESTROY };
+  int iMethod = 0;
+
+  if( objc<2 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "SUB-COMMAND ...");
+    return TCL_ERROR;
+  }
+  if( Tcl_GetIndexFromObj(interp, objv[1], azMethod, "method", 0, &iMethod) ){
+    return TCL_ERROR;
+  }
+
+  switch( iMethod ){
+    case MAPFILE_DESTROY: {
+      if( objc!=2 ){
+        Tcl_WrongNumArgs(interp, 2, objv, "");
+        return TCL_ERROR;
+      }
+      Tcl_DeleteCommand(interp, Tcl_GetString(objv[0]));
+      break;
+    }
+  }
+
+  return TCL_OK;
+}
+
+/*
+**      map_win32_file CMD FILENAME
+**
+** Open file FILENAME and memory-map the entire file using the same
+** CreateFileMappingW() and MapViewOfFile() APIs used by winShmMap() in
+** os_win.c. Create a new Tcl command named CMD that may be used to
+** unmap the file ([CMD destroy]).
+*/
+static int SQLITE_TCLAPI map_win32_file(
+  void * clientData,
+  Tcl_Interp *interp,
+  int objc,
+  Tcl_Obj *CONST objv[]
+){
+  const char *zCmd = 0;
+  const char *zFile = 0;
+  LPWSTR zWide = 0;
+  int nWide = 0;
+  TestMapFile *p = 0;
+  LARGE_INTEGER sz;
+  char zErr[100];
+
+  if( objc!=3 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "CMD FILENAME");
+    return TCL_ERROR;
+  }
+  zCmd = Tcl_GetString(objv[1]);
+  zFile = Tcl_GetString(objv[2]);
+
+  /* Convert the utf-8 filename to utf-16 */
+  nWide = MultiByteToWideChar(CP_UTF8, 0, zFile, -1, NULL, 0);
+  if( nWide<=0 ){
+    Tcl_AppendResult(interp, "cannot convert filename: ", zFile, (char*)0);
+    return TCL_ERROR;
+  }
+  zWide = (LPWSTR)ckalloc(nWide * sizeof(WCHAR));
+  MultiByteToWideChar(CP_UTF8, 0, zFile, -1, zWide, nWide);
+
+  p = (TestMapFile*)ckalloc(sizeof(TestMapFile));
+  memset(p, 0, sizeof(TestMapFile));
+  p->hFile = CreateFileW(zWide,
+      GENERIC_READ | GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      NULL,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      NULL
+  );
+  if( p->hFile==INVALID_HANDLE_VALUE ){
+    DWORD lastErr = GetLastError();
+    ckfree((char*)zWide);
+    sqlite3_snprintf(sizeof(zErr), zErr, " (%lu)", lastErr);
+    Tcl_AppendResult(interp, "cannot open file: ", zFile, zErr, (char*)0);
+    testMapFileDel((void*)p);
+    return TCL_ERROR;
+  }
+  ckfree((char*)zWide);
+
+  if( !GetFileSizeEx(p->hFile, &sz) ){
+    sqlite3_snprintf(sizeof(zErr), zErr, " (%lu)", GetLastError());
+    Tcl_AppendResult(interp, "GetFileSizeEx failed", zErr, (char*)0);
+    testMapFileDel((void*)p);
+    return TCL_ERROR;
+  }
+  if( sz.QuadPart==0 ){
+    Tcl_AppendResult(interp, "cannot map zero-length file: ", zFile, (char*)0);
+    testMapFileDel((void*)p);
+    return TCL_ERROR;
+  }
+
+  /* Map the entire file. Same protection and flags as winShmMap(). */
+  p->hMap = CreateFileMappingW(p->hFile, NULL, PAGE_READWRITE,
+      (DWORD)(sz.QuadPart >> 32), (DWORD)(sz.QuadPart & 0xFFFFFFFF), NULL
+  );
+  if( p->hMap==NULL ){
+    sqlite3_snprintf(sizeof(zErr), zErr, " (%lu)", GetLastError());
+    Tcl_AppendResult(interp, "CreateFileMappingW failed", zErr, (char*)0);
+    testMapFileDel((void*)p);
+    return TCL_ERROR;
+  }
+  p->pMap = MapViewOfFile(p->hMap, FILE_MAP_WRITE | FILE_MAP_READ, 0, 0,
+      (SIZE_T)sz.QuadPart
+  );
+  if( p->pMap==NULL ){
+    sqlite3_snprintf(sizeof(zErr), zErr, " (%lu)", GetLastError());
+    Tcl_AppendResult(interp, "MapViewOfFile failed", zErr, (char*)0);
+    testMapFileDel((void*)p);
+    return TCL_ERROR;
+  }
+
+  Tcl_CreateObjCommand(interp, zCmd, testMapFileCmd, (void*)p, testMapFileDel);
+  Tcl_SetObjResult(interp, objv[1]);
+  return TCL_OK;
+}
+#endif
+
 
 /*
 **      optimization_control DB OPT BOOLEAN
@@ -8392,35 +8605,14 @@ static int SQLITE_TCLAPI optimization_control(
   int objc,
   Tcl_Obj *CONST objv[]
 ){
-  int i;
+  size_t i, j, k;
   sqlite3 *db;
   const char *zOpt;
   int onoff;
-  int mask = 0;
-  int cnt = 0;
-  static const struct {
-    const char *zOptName;
-    int mask;
-  } aOpt[] = {
-    { "all",                 SQLITE_AllOpts        },
-    { "none",                0                     },
-    { "query-flattener",     SQLITE_QueryFlattener },
-    { "groupby-order",       SQLITE_GroupByOrder   },
-    { "distinct-opt",        SQLITE_DistinctOpt    },
-    { "cover-idx-scan",      SQLITE_CoverIdxScan   },
-    { "order-by-idx-join",   SQLITE_OrderByIdxJoin },
-    { "order-by-subquery",   SQLITE_OrderBySubq    },
-    { "transitive",          SQLITE_Transitive     },
-    { "omit-noop-join",      SQLITE_OmitNoopJoin   },
-    { "stat4",               SQLITE_Stat4          },
-    { "skip-scan",           SQLITE_SkipScan       },
-    { "push-down",           SQLITE_PushDown       },
-    { "balanced-merge",      SQLITE_BalancedMerge  },
-    { "propagate-const",     SQLITE_PropagateConst },
-    { "one-pass",            SQLITE_OnePass        },
-    { "exists-to-join",      SQLITE_ExistsToJoin   },
-    { "count-of-view",       SQLITE_CountOfView    },
-  };
+  u64 m = 0, mask = 0;
+  char zBuf[50];
+  extern int sqlite3_optimization_mask(const char*,sqlite3_uint64*);
+  extern const char *sqlite3_optimization_name(sqlite3_uint64);
 
   if( objc!=4 ){
     Tcl_WrongNumArgs(interp, 1, objv, "DB OPT BOOLEAN");
@@ -8429,23 +8621,35 @@ static int SQLITE_TCLAPI optimization_control(
   if( getDbPointer(interp, Tcl_GetString(objv[1]), &db) ) return TCL_ERROR;
   if( Tcl_GetBooleanFromObj(interp, objv[3], &onoff) ) return TCL_ERROR;
   zOpt = Tcl_GetString(objv[2]);
-  for(i=0; i<sizeof(aOpt)/sizeof(aOpt[0]); i++){
-    if( strstr(zOpt, aOpt[i].zOptName)!=0 ){
-      mask |= aOpt[i].mask;
-      cnt++;
+  while( zOpt && zOpt[0] ){
+    while( zOpt[0]==' ' || zOpt[0]==',' ) zOpt++;
+    for(i=0; zOpt[i] && zOpt[i]!=',' && zOpt[i]!=' '; i++){}
+    if( i==0 ) break;
+    if( i<sizeof(zBuf)-1 ){
+      for(j=k=0; j<i; j++){
+        if( zOpt[j]!='-' ) zBuf[k++] = zOpt[j];
+      }
+      zBuf[k] = 0;
+      if( sqlite3_optimization_mask(zBuf, &m)==SQLITE_NOTFOUND ){
+        const char *zName;
+        Tcl_AppendResult(interp, "unknown optimization \"", zBuf,
+                         "\" - should be one of:", (char*)0);
+        for(i=0; i<64; i++){
+          m = 1ull<<i;
+          zName = sqlite3_optimization_name(m);
+          if( zName ){
+            Tcl_AppendResult(interp, " ", zName, (char*)0);
+          }
+        }
+        return TCL_ERROR;
+      }
+      mask |= m;
     }
+    zOpt += i;
   }
   if( onoff ) mask = ~mask;
-  if( cnt==0 ){
-    Tcl_AppendResult(interp, "unknown optimization - should be one of:",
-                     (char*)0);
-    for(i=0; i<sizeof(aOpt)/sizeof(aOpt[0]); i++){
-      Tcl_AppendResult(interp, " ", aOpt[i].zOptName, (char*)0);
-    }
-    return TCL_ERROR;
-  }
-  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, db, mask);
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(mask));
+  sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS,db, mask);
+  Tcl_SetObjResult(interp, Tcl_NewWideIntObj(mask));
   return TCL_OK;
 }
 
@@ -8485,6 +8689,7 @@ static int SQLITE_TCLAPI tclLoadStaticExtensionCmd(
   extern int sqlite3_stmtrand_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_strdup_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_totype_init(sqlite3*,char**,const sqlite3_api_routines*);
+  extern int sqlite3_tryeval_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_wholenumber_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_unionvtab_init(sqlite3*,char**,const sqlite3_api_routines*);
 #ifdef SQLITE_HAVE_ZLIB
@@ -8519,6 +8724,7 @@ static int SQLITE_TCLAPI tclLoadStaticExtensionCmd(
     { "stmtrand",              sqlite3_stmtrand_init             },
     { "strdup",                sqlite3_strdup_init               },
     { "totype",                sqlite3_totype_init               },
+    { "tryeval",               sqlite3_tryeval_init              },
     { "unionvtab",             sqlite3_unionvtab_init            },
     { "wholenumber",           sqlite3_wholenumber_init          },
 #ifdef SQLITE_HAVE_ZLIB
@@ -9321,6 +9527,7 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
      { "optimization_control",          optimization_control,0},
 #ifdef _WIN32
      { "lock_win32_file",               win32_file_lock,    0 },
+     { "map_win32_file",                map_win32_file,     0 },
 #endif
      { "tcl_objproc",                   runAsObjProc,       0 },
 
@@ -9362,6 +9569,7 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
      { "sqlite3_create_collation_v2", test_create_collation_v2, 0 },
      { "sqlite3_global_recover",     test_global_recover, 0   },
      { "working_64bit_int",          working_64bit_int,   0   },
+     { "vfs_open_tempfile",          vfs_open_tempfile,   0   },
      { "vfs_unlink_test",            vfs_unlink_test,     0   },
      { "vfs_initfail_test",          vfs_initfail_test,   0   },
      { "vfs_unregister_all",         vfs_unregister_all,  0   },

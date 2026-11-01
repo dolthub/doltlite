@@ -38,3 +38,7 @@ vec1train
 vec1update
 vec1update2
 vec1version
+vec1bqcos
+vec1bucket
+vec1overflow
+vec1rebuild

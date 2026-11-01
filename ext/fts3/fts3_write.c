@@ -779,8 +779,8 @@ static int fts3PendingTermsAddOne(
   pList = (PendingList *)fts3HashFind(pHash, zToken, nToken);
   if( pList ){
     assert( (i64)pList->nData+(i64)nToken+(i64)sizeof(Fts3HashElem)
-             <= (i64)p->nPendingData );
-    p->nPendingData -= (int)(pList->nData + nToken + sizeof(Fts3HashElem));
+             <= p->nPendingData );
+    p->nPendingData -= pList->nData + nToken + sizeof(Fts3HashElem);
   }
   if( fts3PendingListAppend(&pList, p->iPrevDocid, iCol, iPos, &rc) ){
     if( pList==fts3HashInsert(pHash, zToken, nToken, pList) ){
@@ -793,9 +793,9 @@ static int fts3PendingTermsAddOne(
     }
   }
   if( rc==SQLITE_OK ){
-    assert( (i64)p->nPendingData + pList->nData + nToken
+    assert( p->nPendingData + pList->nData + nToken
              + sizeof(Fts3HashElem) <= 0x3fffffff );
-    p->nPendingData += (int)(pList->nData + nToken + sizeof(Fts3HashElem));
+    p->nPendingData += pList->nData + nToken + sizeof(Fts3HashElem);
   }
   return rc;
 }
@@ -5329,6 +5329,7 @@ int sqlite3Fts3IntegrityCheck(Fts3Table *p, int *pbOk){
   u64 cksum1 = 0;                 /* Checksum based on FTS index contents */
   u64 cksum2 = 0;                 /* Checksum based on %_content contents */
   sqlite3_stmt *pAllLangid = 0;   /* Statement to return all language-ids */
+  int bContentless = (p->zContentTbl && p->zContentTbl[0]=='\0');
 
   /* This block calculates the checksum according to the FTS index. */
   rc = fts3SqlStmt(p, SQL_SELECT_ALL_LANGID, &pAllLangid, 0);
@@ -5348,7 +5349,7 @@ int sqlite3Fts3IntegrityCheck(Fts3Table *p, int *pbOk){
   }
 
   /* This block calculates the checksum according to the %_content table */
-  if( rc==SQLITE_OK ){
+  if( rc==SQLITE_OK && !bContentless ){
     sqlite3_tokenizer_module const *pModule = p->pTokenizer->pModule;
     sqlite3_stmt *pStmt = 0;
     char *zSql;
@@ -5406,7 +5407,7 @@ int sqlite3Fts3IntegrityCheck(Fts3Table *p, int *pbOk){
     rc = SQLITE_OK;
     *pbOk = 0;
   }else{
-    *pbOk = (rc==SQLITE_OK && cksum1==cksum2);
+    *pbOk = (rc==SQLITE_OK && (bContentless || cksum1==cksum2));
   }
   return rc;
 }

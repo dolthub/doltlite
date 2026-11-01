@@ -62,6 +62,12 @@ typedef struct RecoverColumn RecoverColumn;
 **   aCol[] is an array of nCol columns. In the order in which they appear 
 **   in the table.
 **
+** nField:
+**   The number of fields in each record of the table's b-tree. This may
+**   be less than nCol (VIRTUAL generated columns have no field) or, for
+**   a WITHOUT ROWID table with a column that appears more than once in
+**   the PRIMARY KEY, greater than nCol.
+**
 ** bIntkey:
 **   Set to true for intkey tables, false for WITHOUT ROWID.
 **
@@ -75,6 +81,12 @@ typedef struct RecoverColumn RecoverColumn;
 **   KEY column, then the rowid value should be bound to the index associated
 **   with the column.
 **
+** zRowid:
+**   If iRowidBind>0, the name used to refer to the rowid in the INSERT
+**   statement. This is the first of "_rowid_", "rowid" and "oid" that is
+**   not also the name of a column. If all three are column names, the
+**   rowid cannot be written and iRowidBind is 0.
+**
 ** pNext:
 **   All RecoverTable objects used by the recovery operation are allocated
 **   and populated as part of creating the recovered database schema in
@@ -86,9 +98,11 @@ struct RecoverTable {
   u32 iRoot;                      /* Root page in original database */
   char *zTab;                     /* Name of table */
   int nCol;                       /* Number of columns in table */
+  int nField;                     /* Number of fields in each record */
   RecoverColumn *aCol;            /* Array of columns */
   int bIntkey;                    /* True for intkey, false for without rowid */
   int iRowidBind;                 /* If >0, bind rowid to INSERT here */
+  const char *zRowid;             /* Name to use for rowid in INSERT */
   RecoverTable *pNext;
 };
 
@@ -169,7 +183,7 @@ struct RecoverStateW1 {
   int nInsert;
 
   RecoverTable *pTab;             /* Table currently being written */
-  int nMax;                       /* Max column count in any schema table */
+  int nMax;                       /* Max field count in any schema table */
   sqlite3_value **apVal;          /* Array of nMax values */
   int nVal;                       /* Number of valid entries in apVal[] */
   int bHaveRowid;
@@ -415,7 +429,7 @@ static void recoverBitmapFree(RecoverBitmap *pMap){
 ** Set the bit associated with page iPg in bitvec pMap.
 */
 static void recoverBitmapSet(RecoverBitmap *pMap, i64 iPg){
-  if( iPg<=pMap->nPg ){
+  if( iPg<=pMap->nPg && iPg>0 ){
     int iElem = (iPg / 32);
     int iBit = (iPg % 32);
     pMap->aElem[iElem] |= (((u32)1) << iBit);
@@ -1075,7 +1089,7 @@ static void recoverAddTable(
   i64 iRoot                       /* Root page of same table in INPUT db */
 ){
   sqlite3_stmt *pStmt = recoverPreparePrintf(p, p->dbOut, 
-      "PRAGMA table_xinfo(%Q)", zName
+      "PRAGMA %Q.table_xinfo(%Q)", p->zDb, zName
   );
 
   if( pStmt ){
@@ -1129,6 +1143,7 @@ static void recoverAddTable(
         csr += (n+1);
       }
 
+      pNew->nField = iField;
       pNew->pNext = p->pTblList;
       p->pTblList = pNew;
       pNew->bIntkey = 1;
@@ -1136,24 +1151,58 @@ static void recoverAddTable(
 
     recoverFinalize(p, pStmt);
 
-    pStmt = recoverPreparePrintf(p, p->dbOut, "PRAGMA index_xinfo(%Q)", zName);
+    /* If this is a WITHOUT ROWID table, the fields of each record are
+    ** ordered as reported by PRAGMA index_xinfo on the table. A column may
+    ** appear more than once if it is listed more than once in the PRIMARY
+    ** KEY (with different collation sequences). In that case use the first
+    ** field - the others are redundant copies.  */
+    pStmt = recoverPreparePrintf(p, p->dbOut,
+                   "PRAGMA %Q.index_xinfo(%Q)", p->zDb, zName);
     while( pStmt && sqlite3_step(pStmt)==SQLITE_ROW ){
       int iField = sqlite3_column_int(pStmt, 0);
       int iCol = sqlite3_column_int(pStmt, 1);
 
-      assert( iCol<pNew->nCol );
-      pNew->aCol[iCol].iField = iField;
-
-      pNew->bIntkey = 0;
+      assert( iCol>=0 && iCol<pNew->nCol );
+      if( pNew->bIntkey ){
+        int ii;
+        for(ii=0; ii<pNew->nCol; ii++) pNew->aCol[ii].iField = -1;
+        pNew->bIntkey = 0;
+      }
+      if( pNew->aCol[iCol].iField<0 ) pNew->aCol[iCol].iField = iField;
+      pNew->nField = iField+1;
       iPk = -2;
     }
     recoverFinalize(p, pStmt);
+
+    /* A column declared as "INTEGER PRIMARY KEY DESC" is not an alias for
+    ** the rowid. Such a table has an automatic index with origin 'pk',
+    ** whereas a table with a true rowid alias does not.  */
+    if( iPk>=0 ){
+      pStmt = recoverPreparePrintf(p, p->dbOut,
+          "SELECT 1 FROM pragma_index_list(%Q, %Q) WHERE origin='pk'",
+          zName, p->zDb
+      );
+      if( pStmt && sqlite3_step(pStmt)==SQLITE_ROW ) iPk = -1;
+      recoverFinalize(p, pStmt);
+    }
 
     if( p->errCode==SQLITE_OK ){
       if( iPk>=0 ){
         pNew->aCol[iPk].bIPK = 1;
       }else if( pNew->bIntkey ){
-        pNew->iRowidBind = iBind++;
+        /* Find a name for the rowid that is not also the name of a column */
+        static const char *azRowid[] = { "_rowid_", "rowid", "oid" };
+        int ii, jj;
+        for(ii=0; ii<(int)(sizeof(azRowid)/sizeof(azRowid[0])); ii++){
+          for(jj=0; jj<pNew->nCol; jj++){
+            if( sqlite3_stricmp(azRowid[ii], pNew->aCol[jj].zCol)==0 ) break;
+          }
+          if( jj==pNew->nCol ){
+            pNew->zRowid = azRowid[ii];
+            pNew->iRowidBind = iBind++;
+            break;
+          }
+        }
       }
     }
   }
@@ -1334,13 +1383,14 @@ static sqlite3_stmt *recoverInsertStmt(
 
   if( nField<=0 ) return 0;
 
-  assert( nField<=pTab->nCol );
+  assert( nField<=pTab->nField );
 
   zSql = recoverMPrintf(p, "INSERT OR IGNORE INTO %Q(", pTab->zTab);
 
   if( pTab->iRowidBind ){
     assert( pTab->bIntkey );
-    zSql = recoverMPrintf(p, "%z_rowid_", zSql);
+    assert( pTab->zRowid );
+    zSql = recoverMPrintf(p, "%z%s", zSql, pTab->zRowid);
     if( bSql ){
       zBind = recoverMPrintf(p, "%zquote(?%d)", zBind, pTab->iRowidBind);
     }else{
@@ -1350,12 +1400,18 @@ static sqlite3_stmt *recoverInsertStmt(
     zSep = ", ";
   }
 
-  for(ii=0; ii<nField; ii++){
-    int eHidden = pTab->aCol[ii].eHidden;
-    if( eHidden!=RECOVER_EHIDDEN_VIRTUAL
-     && eHidden!=RECOVER_EHIDDEN_STORED
-    ){
-      assert( pTab->aCol[ii].iField>=0 && pTab->aCol[ii].iBind>=1 );
+  /* Include each column that has a bind parameter and either has a field
+  ** in the nField-field record or is the IPK.  This must match the set of
+  ** parameters bound by recoverWriteDataStep().  Note that nField counts
+  ** record fields, not table columns - VIRTUAL generated columns have no
+  ** field (iField<0), and the order of fields need not match the order of
+  ** columns (WITHOUT ROWID tables).  */
+  for(ii=0; ii<pTab->nCol; ii++){
+    RecoverColumn *pCol = &pTab->aCol[ii];
+    if( pCol->iBind>0 && (pCol->iField<nField || pCol->bIPK) ){
+      assert( pCol->iField>=0 );
+      assert( pCol->eHidden!=RECOVER_EHIDDEN_VIRTUAL );
+      assert( pCol->eHidden!=RECOVER_EHIDDEN_STORED );
       zSql = recoverMPrintf(p, "%z%s%Q", zSql, zSep, pTab->aCol[ii].zCol);
 
       if( bSql ){
@@ -1695,10 +1751,10 @@ static int recoverWriteDataInit(sqlite3_recover *p){
   RecoverTable *pTbl = 0;
   int nByte = 0;
 
-  /* Figure out the maximum number of columns for any table in the schema */
+  /* Figure out the maximum number of fields for any table in the schema */
   assert( p1->nMax==0 );
   for(pTbl=p->pTblList; pTbl; pTbl=pTbl->pNext){
-    if( pTbl->nCol>p1->nMax ) p1->nMax = pTbl->nCol;
+    if( pTbl->nField>p1->nMax ) p1->nMax = pTbl->nField;
   }
 
   /* Allocate an array of (sqlite3_value*) in which to accumulate the values
@@ -1805,7 +1861,7 @@ static int recoverWriteDataStep(sqlite3_recover *p){
     int bNewCell = (p1->iPrevPage!=iPage || p1->iPrevCell!=iCell);
 
     assert( bNewCell==0 || (iField==-1 || iField==0) );
-    assert( bNewCell || iField==p1->nVal || p1->nVal==pTab->nCol );
+    assert( bNewCell || iField==p1->nVal || p1->nVal==pTab->nField );
 
     if( bNewCell ){
       int ii = 0;
@@ -1855,15 +1911,15 @@ static int recoverWriteDataStep(sqlite3_recover *p){
         assert( p1->nVal==-1 );
         p1->nVal = 0;
         p1->bHaveRowid = 1;
-      }else if( iField<pTab->nCol ){
+      }else if( iField<pTab->nField ){
         assert( apVal[iField]==0 );
         apVal[iField] = sqlite3_value_dup( pVal );
         if( apVal[iField]==0 ){
           recoverError(p, SQLITE_NOMEM, 0);
         }
         p1->nVal = iField+1;
-      }else if( pTab->nCol==0 ){
-        p1->nVal = pTab->nCol;
+      }else if( pTab->nField==0 ){
+        p1->nVal = pTab->nField;
       }
       p1->iPrevCell = iCell;
       p1->iPrevPage = iPage;

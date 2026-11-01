@@ -256,14 +256,14 @@ int main(int argc, char **argv){
       sqlite3_free(zSql);
       continue;
     }
-    sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, dbRun, 0);
+    sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, dbRun, (sqlite3_uint64)0);
     if( bTrace ) printf("%s: Optimized\n", azIn[i]);
     rc = optfuzz_exec(dbRun, zSql, dbOut, "opt", &nStmt, &nRow, bTrace);
     if( rc ){
       printf("%s: optimized run failed: %s\n",
             azIn[i], sqlite3_errmsg(dbRun));
     }else{
-      sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, dbRun, 0xffff);
+      sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS, dbRun, (sqlite3_uint64)0xffff);
       if( bTrace ) printf("%s: Non-optimized\n", azIn[i]);
       rc = optfuzz_exec(dbRun, zSql, dbOut, "noopt", &nStmt, &nRow, bTrace);
       if( rc ){

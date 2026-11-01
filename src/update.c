@@ -519,10 +519,14 @@ void sqlite3Update(
       rc = sqlite3AuthCheck(pParse, SQLITE_UPDATE, pTab->zName,
                             j<0 ? "ROWID" : pTab->aCol[j].zCnName,
                             db->aDb[iDb].zDbSName);
-      if( rc==SQLITE_DENY ){
-        goto update_cleanup;
-      }else if( rc==SQLITE_IGNORE ){
-        aXRef[j] = -1;
+      if( rc!=SQLITE_OK ){
+        if( rc==SQLITE_DENY ){
+          goto update_cleanup;
+        }else if( j<0 || j==pTab->iPKey ){
+          chngRowid = 0;
+        }else{
+          aXRef[j] = -1;
+        }
       }
     }
 #endif
@@ -903,6 +907,7 @@ void sqlite3Update(
       sqlite3VdbeAddOp3(v, OP_Column, iEph, iRowidExpr, regNewRowid);
     }
     sqlite3VdbeAddOp1(v, OP_MustBeInt, regNewRowid); VdbeCoverage(v);
+    sqlite3MayAbort(pParse);
   }
 
   /* Compute the old pre-UPDATE content of the row being changed, if that
