@@ -1051,6 +1051,7 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       // Just for testing...
       util.disposers.stmt.push((p)=>sqlite3.config.warn("disposing stmt",p));
       util.disposers.db.push((p)=>sqlite3.config.warn("disposing db",p));
+      util.disposers.context.push((p)=>sqlite3.config.warn("disposing context",p));
 //#/if
 //#if sqlite3_set_auxdata:dtor
       util.disposers.context.push((p)=>{
@@ -1612,6 +1613,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
 
   }/*sqlite3_create_function_v2() and sqlite3_create_window_function() proxies*/;
 
+  /* Warn if client-level code makes use of FuncPtrAdapter. */
+  wasm.xWrap.FuncPtrAdapter.warnOnUse = true;
+
   {/* Special-case handling of sqlite3_prepare_v2() and
       sqlite3_prepare_v3() */
 
@@ -1900,8 +1904,108 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     };
   }/* auto-extension */
 
-  /* Warn if client-level code makes use of FuncPtrAdapter. */
-  wasm.xWrap.FuncPtrAdapter.warnOnUse = true;
+  {/* sqlite3_js_on_pointer_dispose() */
+    const __jsOnDisposeTypes = Object.assign(Object.create(null),{
+      /* Lazily populated with Map(ptr, Set<function>) */
+      "sqlite3*": null,
+      "sqlite3_stmt*": null,
+      "sqlite3_context*": null
+    });
+    (function callee(disposerKey, typeName){
+      /* Call all callbacks queued for the given ptr/typeName
+         combination and clear that queue. */
+      util.disposers[disposerKey].push((ptr)=>{
+        const di = __jsOnDisposeTypes[typeName];
+        const set = di?.get?.(ptr);
+        if( !set ) return;
+        di.delete(ptr);
+        for(const f of set){
+          try{f()} catch(e){
+            sqlite3.config.error(
+              "sqlite3_js_on_pointer_dispose(",
+              t,ptr,f,") callback threw", e
+            );
+          }
+        }
+      });
+      return callee;
+    })('db', 'sqlite3*')
+    ('stmt', 'sqlite3_stmt*')
+    ('context', 'sqlite3_context*');
+
+    /**
+       Experimental and untested.
+
+       Sets up the given callback to be called when the given WASM
+       pointer is finalized by the library. The purposes of this
+       is to provide JS code with a way to map state to native
+       pointers in such a way that the state can be cleaned up
+       regardless of how the natives get finalized.
+
+       typeName describes what data type ptr is. It must be one of:
+
+       "sqlite3*", "sqlite3_stmt*", "sqlite3_context*"
+
+       and the ptr argument must be a non-0 pointer to that type.
+
+       It is legal to call this multiple times for a given pointer.
+       Each callback will be added to the queue, but only once for
+       each distinct callback reference. That is, calling it N times
+       with the same ptr/callback combination will only install the
+       callback once, but N calls with N distinct callbacks will
+       install all N.
+
+       On success it returns true. On error (argument validation
+       issues) it returns false and has no side-effects. It does not
+       throw because it's intended to be usable from cases where
+       throwing is not permitted, e.g. UDFs.
+
+       When SQLite is about to free that pointer, all callbacks
+       queued for it will be passed that pointer and then the
+       callback queue for that pointer is cleared.
+
+       Because the callback is called during the native-level
+       finalization process, it must observe certain limitations:
+
+       - It absolutely must not finalize the object, or results are
+       well and truly undefined (best case, a WASM crash).
+
+       - Any exceptions are ignored.
+
+       - It should not perform "real work" with the pointer. e.g. a
+       finalizing statement must not be stepped nor its columns
+       fetched. A finalizing db should probably not run new
+       queries. In the case of "sqlite3_context*", no guarantees
+       whatsoever are made about which operations are legal during
+       their finalization. The only legal use for sqlite3_context
+       pointers from these callbacks is as a lookup key.
+
+       Ideally, such callbacks do nothing more than remove any state
+       which they have mapped to the given pointer value, without
+       actually trying to use the object referred to by that pointer.
+       That's not always a realistic goal, however.
+    */
+    capi.sqlite3_js_on_pointer_dispose = function(typeName, ptr, callback){
+//#if 1
+      if( !ptr || !wasm.isPtr(ptr)
+          || !(callback instanceof Function)
+          || !Object.prototype.hasOwnProperty.call(__jsOnDisposeTypes, typeName) ){
+        return false;
+      }
+      const di = __jsOnDisposeTypes[typeName] ??= new Map;
+//#else
+      if( !ptr || !wasm.isPtr(ptr) ) toss("Expecting a WASM pointer for arg[1]");
+      if( !(callback instanceof Function) ) toss("Expecting a Function-type callback");
+      const di = Object.prototype.hasOwnProperty.call(__jsOnDisposeTypes, typeName)
+            ? (__jsOnDisposeTypes[typeName] ??= new Map)
+            : toss("Expecting a typeName of 'sqlite3*',",
+                   "'sqlite3_stmt*', or 'sqlite3_context*'");
+//#/if
+      if( di.has(ptr) ) di.get(ptr).add(callback);
+      else di.add(ptr, new Set([callback]));
+      return true;
+    };
+  }
 
   const StructBinder = sqlite3.StructBinder
   /* we require a local alias b/c StructBinder is removed from the sqlite3
