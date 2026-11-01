@@ -388,6 +388,38 @@ $SEED
 SELECT dolt_branch('-m', 'nope', 'dest');
 "
 
+oracle "move_self_existing" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_branch('-m', 'feature', 'feature');
+"
+
+oracle "move_self_current" "
+$SEED
+SELECT dolt_branch('-m', 'main', 'main');
+"
+
+oracle "move_self_force_existing" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_branch('-m', '-f', 'feature', 'feature');
+"
+
+vc_oracle_error "move_self_missing" "
+$SEED
+SELECT dolt_branch('-m', 'nope', 'nope');
+"
+
+vc_oracle_error "move_self_invalid_missing" "
+$SEED
+SELECT dolt_branch('-m', 'bad..name', 'bad..name');
+"
+
+vc_oracle_error "move_self_force_missing" "
+$SEED
+SELECT dolt_branch('-m', '-f', 'nope', 'nope');
+"
+
 vc_oracle_error "create_duplicate" "
 $SEED
 SELECT dolt_branch('feature');
