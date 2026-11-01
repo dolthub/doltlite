@@ -36,7 +36,19 @@ int main(int argc, char **argv){
     for(i=0; i<2; i++){
       char *path = sqlite3_mprintf("%s.%s",argv[1],formats[i]);
       char *sql = sqlite3_mprintf("SELECT dolt_dump('--file-name',%Q,'-r',%Q)",path,formats[i]);
-      int rc = sqlite3_exec(db,sql,0,0,&error);
+      FILE *file = fopen(path,"wb");
+      int rc;
+      if( !file ) return 8;
+      fclose(file);
+      rc = sqlite3_exec(db,sql,0,0,&error);
+      if( rc!=SQLITE_CANTOPEN || !error
+       || !strstr(error,"destination already exists") ) return 9;
+      sqlite3_free(error); error = 0;
+      file = fopen(path,"rb");
+      if( !file || fgetc(file)!=EOF ) return 10;
+      fclose(file);
+      if( remove(path)!=0 ) return 11;
+      rc = sqlite3_exec(db,sql,0,0,&error);
       if( rc!=SQLITE_OK ){
         fprintf(stderr,"file export: %s\n",error ? error : sqlite3_errmsg(db));
         return 8;
