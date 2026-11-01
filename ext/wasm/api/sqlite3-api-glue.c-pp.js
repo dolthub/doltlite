@@ -111,7 +111,8 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   */
   const bindingSignatures = {
     core: [
-      // Please keep these sorted by function name!
+      /* Please keep these sorted by function name! No algos rely
+         on that but it helps human eyeballs. */
       ["sqlite3_aggregate_context","void*", "sqlite3_context*", "int"],
       /* sqlite3_auto_extension() has a hand-written binding. */
       ["sqlite3_backup_init", "sqlite3_backup*", "sqlite3*", "string", "sqlite3*", "string"],
@@ -1918,9 +1919,10 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
         const di = __jsOnDisposeTypes[typeName];
         const set = di?.get?.(ptr);
         if( !set ) return;
+        //sqlite3.config.warn("jopd",ptr,di,set);
         di.delete(ptr);
         for(const f of set){
-          try{f()} catch(e){
+          try{f(ptr)} catch(e){
             sqlite3.config.error(
               "sqlite3_js_on_pointer_dispose(",
               t,ptr,f,") callback threw", e
@@ -1934,8 +1936,6 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     ('context', 'sqlite3_context*');
 
     /**
-       Experimental and untested.
-
        Sets up the given callback to be called when the given WASM
        pointer is finalized by the library. The purposes of this
        is to provide JS code with a way to map state to native
@@ -1955,10 +1955,34 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
        callback once, but N calls with N distinct callbacks will
        install all N.
 
-       On success it returns true. On error (argument validation
-       issues) it returns false and has no side-effects. It does not
-       throw because it's intended to be usable from cases where
-       throwing is not permitted, e.g. UDFs.
+       When used in loops, user-defined SQL functions, or client
+       functions which may see the same pointer multiple times, it is
+       generally important to **not pass function literals**, as each
+       such literal is a different instance, so an identical callback
+       may be added N times for a given pointer. Functions should be
+       assigned to symbols and those symbols should be passed in so
+       that callback deduplication works:
+
+       ```
+       // NO:
+       sqlite3_js_on_pointer_dispose(..., (x)=>...);
+       // YES:
+       const myFunc = (x)=>...;
+       sqlite3_js_on_pointer_dispose(..., myFunc);
+       ```
+
+       For one-call cases, e.g. when passing a newly-initialized db or
+       statement, a function literal is fine. Within user-defined SQL
+       functions, in particular, function literals will cause in the
+       form of potentially registering (C x R) callbacks, where C is
+       the number of distinct contexts in the query and R the number
+       of rows.
+
+       On success it returns an unspecified truthy value. On error
+       (argument validation issues) it returns an unspecified falsy
+       value and has no side-effects. It does not throw because it's
+       intended to be usable from cases where throwing is not
+       permitted, but it only fails for argument validation.
 
        When SQLite is about to free that pointer, all callbacks
        queued for it will be passed that pointer and then the
@@ -1977,19 +2001,25 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
        fetched. A finalizing db should probably not run new
        queries. In the case of "sqlite3_context*", no guarantees
        whatsoever are made about which operations are legal during
-       their finalization. The only legal use for sqlite3_context
-       pointers from these callbacks is as a lookup key.
+       their finalization.
+
+       - The _only legal use_ for sqlite3_context pointers from these
+       callbacks is as an opaque key. Ideally clients should restrict
+       use of the other types similarly, though they are not quite so
+       strict in that regard.
 
        Ideally, such callbacks do nothing more than remove any state
        which they have mapped to the given pointer value, without
        actually trying to use the object referred to by that pointer.
        That's not always a realistic goal, however.
+
+       Added in 3.55.0.
     */
     capi.sqlite3_js_on_pointer_dispose = function(typeName, ptr, callback){
 //#if 1
-      if( !ptr || !wasm.isPtr(ptr)
-          || !(callback instanceof Function)
-          || !Object.prototype.hasOwnProperty.call(__jsOnDisposeTypes, typeName) ){
+      if( !ptr || !wasm.isPtr(ptr) ) return null;
+      else if( !(callback instanceof Function) ) return undefined;
+      else if( !Object.prototype.hasOwnProperty.call(__jsOnDisposeTypes, typeName) ){
         return false;
       }
       const di = __jsOnDisposeTypes[typeName] ??= new Map;
@@ -2001,8 +2031,11 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
             : toss("Expecting a typeName of 'sqlite3*',",
                    "'sqlite3_stmt*', or 'sqlite3_context*'");
 //#/if
-      if( di.has(ptr) ) di.get(ptr).add(callback);
-      else di.add(ptr, new Set([callback]));
+      if( !di.get(ptr)?.add?.(callback) ){
+        di.set(ptr, new Set([callback]));
+      }
+      //console.debug("jopd di",di);
+      // Potential TODO: return the Set.size (number of callbacks)
       return true;
     };
   }

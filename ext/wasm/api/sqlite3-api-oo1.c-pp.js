@@ -2008,7 +2008,15 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
 
        If Stmt does not own its underlying (sqlite3_stmt*) (see
        Stmt.wrapHandle()) then this function will not pass it to
-       sqlite3_finalize().
+       sqlite3_finalize() and will return 0.
+
+       As of version 3.55, passing this object to sqlite3_finalize()
+       is well-behaved, in that it will clean up the various
+       oo1-related internal bookkeeping. It will, however, also bypass
+       the statement-locking checks, enabling it to be (illegally)
+       finalized at times when this method would otherwise throw.
+       In prior versions doing so would leave this object holding
+       a stale pointer.
     */
     finalize: function(){
       const ptr = this.pointer;
