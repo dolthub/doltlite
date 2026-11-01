@@ -138,7 +138,8 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
     /* We never try to parse a trigger on a read-only database */
     assert( db->aDb[iDb].pBt==0
          || sqlite3BtreeIsReadonly(db->aDb[iDb].pBt)==0
-         || sqlite3_stricmp(argv[0],"trigger")!=0 );
+         || sqlite3_stricmp(argv[0],"trigger")!=0
+         || CORRUPT_DB );
 
     if( sqlite3GetUInt32(argv[3], &db->init.newTnum)==0
      || (db->init.newTnum>pData->mxPage && pData->mxPage>0)
