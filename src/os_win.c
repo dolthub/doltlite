@@ -5267,7 +5267,7 @@ static int winGetLastError(sqlite3_vfs *pVfs, int nBuf, char *zBuf){
 */
 #ifdef DOLTLITE_PROLLY
 int sqlite3OsPublishFileNative(sqlite3_vfs *pVfs, const char *zTmp,
-                                const char *zDest){
+                                const char *zDest, int *pExists){
   WCHAR *a = 0, *b = 0;
   int nA, nB, rc = SQLITE_IOERR;
   if( pVfs->xOpen!=winOpen ) return SQLITE_NOTFOUND;
@@ -5280,8 +5280,11 @@ int sqlite3OsPublishFileNative(sqlite3_vfs *pVfs, const char *zTmp,
   else if( MultiByteToWideChar(CP_UTF8,0,zTmp,-1,a,nA)
         && MultiByteToWideChar(CP_UTF8,0,zDest,-1,b,nB) ){
     if( MoveFileExW(a,b,MOVEFILE_WRITE_THROUGH) ) rc = SQLITE_OK;
-    else if( GetLastError()==ERROR_ALREADY_EXISTS
-          || GetLastError()==ERROR_FILE_EXISTS ) rc = SQLITE_CANTOPEN;
+    else{
+      DWORD e = GetLastError();
+      *pExists = e==ERROR_ALREADY_EXISTS || e==ERROR_FILE_EXISTS;
+      rc = *pExists ? SQLITE_CANTOPEN : SQLITE_IOERR;
+    }
   }
   sqlite3_free(a);
   sqlite3_free(b);

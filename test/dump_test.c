@@ -556,8 +556,45 @@ static void legacyMeta(void){
   sqlite3_close(db);
 }
 
+static void existingFiles(void){
+  sqlite3 *db = 0;
+  const char *formats[] = {"sql", "sqlite"};
+  int format, nonempty;
+  check("existing destination source opens",sqlite3_open(":memory:",&db)==SQLITE_OK);
+  check("existing destination source setup",sql(db,
+      "CREATE TABLE t(a); INSERT INTO t VALUES(1)")==SQLITE_OK);
+  for(format=0; format<2; format++) for(nonempty=0; nonempty<2; nonempty++){
+    char path[1024], data[8] = {0};
+    char *query, *err = 0;
+    FILE *file;
+    int rc;
+    sqlite3_snprintf(sizeof(path),path,"%s/dump-existing-%d-%d",DOLTLITE_TEST_TMPDIR,format,nonempty);
+    remove(path);
+    file = fopen(path,"wb");
+    check("existing destination created",file!=0);
+    if( !file ) continue;
+    if( nonempty ) check("existing destination seeded",fwrite("sentinel",1,8,file)==8);
+    fclose(file);
+    query = sqlite3_mprintf("SELECT dolt_dump('--file-name',%Q,'-r',%Q)",path,formats[format]);
+    rc = sqlite3_exec(db,query,0,0,&err);
+    check("existing destination refusal",rc==SQLITE_CANTOPEN);
+    check("existing destination diagnostic",err && strstr(err,"destination already exists"));
+    sqlite3_free(query); sqlite3_free(err);
+    file = fopen(path,"rb");
+    check("existing destination retained",file!=0);
+    if( file ){
+      size_t n = fread(data,1,sizeof(data),file);
+      check("existing destination contents",(nonempty ? n==8 && !memcmp(data,"sentinel",8) : n==0) && fgetc(file)==EOF);
+      fclose(file);
+    }
+    remove(path);
+  }
+  check("existing destination source preserved",number(db,"SELECT count(*) FROM t")==1);
+  sqlite3_close(db);
+}
+
 int main(void){
-  memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
+  existingFiles(); memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
 #ifndef SQLITE_OMIT_AUTHORIZATION
   authorization();
 #endif

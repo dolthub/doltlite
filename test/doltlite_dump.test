@@ -155,8 +155,8 @@ forcedelete dump-race.sql
 db eval {CREATE TABLE t(id INT PRIMARY KEY); INSERT INTO t VALUES(1)}
 db authorizer dump_race
 do_test dump-publication-race.result {
-  lindex [catchsql {SELECT dolt_dump('--file-name','dump-race.sql')}] 0
-} 1
+  catchsql {SELECT dolt_dump('--file-name','dump-race.sql')}
+} {1 {dolt_dump: destination already exists: dump-race.sql}}
 db authorizer {}
 do_test dump-publication-race.kept {
   set fd [open dump-race.sql rb]; set value [read $fd]; close $fd; set value
@@ -273,8 +273,9 @@ foreach format {sql sqlite} {
   set path dump-empty-existing.$format; forcedelete $path
   close [open $path wb]
   do_test dump-empty-existing-$format.refused {
-    lindex [catchsql {SELECT dolt_dump('--file-name',$path,'-r',$format)}] 0
-  } 1
+    set result [catchsql {SELECT dolt_dump('--file-name',$path,'-r',$format)}]
+    list [lindex $result 0] [lindex $result 1]
+  } [list 1 "dolt_dump: destination already exists: $path"]
   do_test dump-empty-existing-$format.kept {file size $path} 0
   set path "dump unicode # ? ' 🐬.$format"; forcedelete $path
   set utf8 [encoding convertto utf-8 $path]
@@ -315,4 +316,77 @@ foreach format {sql sqlite} {
   do_test dump-sequence-only-$format.schema {out one {SELECT count(*) FROM sqlite_schema WHERE type='table'}} 2
   out close
 }
+foreach layout {rowid integer clustered without-rowid} {
+  reset_db
+  if {$layout eq "rowid"} {db eval {CREATE TABLE ""(a, v)}}
+  if {$layout eq "integer"} {db eval {CREATE TABLE ""(a INTEGER PRIMARY KEY, v)}}
+  if {$layout eq "clustered"} {db eval {CREATE TABLE ""(a INT PRIMARY KEY, v)}}
+  if {$layout eq "without-rowid"} {db eval {CREATE TABLE ""(a INT PRIMARY KEY, v) WITHOUT ROWID}}
+  db eval {
+    INSERT INTO "" VALUES(1,'committed');
+    SELECT dolt_commit('-Am','empty name');
+    SELECT dolt_tag('empty-name');
+    SELECT dolt_branch('empty-branch');
+    DELETE FROM ""; INSERT INTO "" VALUES(1,'staged');
+    SELECT dolt_add('.');
+    DELETE FROM ""; INSERT INTO "" VALUES(1,'working');
+  }
+  set hash [db one {SELECT dolt_hashof('HEAD')}]
+  set before [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  foreach ref [list WORKING STAGED HEAD empty-name empty-branch $hash] \
+      value {working staged committed committed committed committed} {
+    foreach format {sql sqlite} {
+      set path dump-empty-name.$format
+      forcedelete $path
+      do_test dump-empty-name-$layout-$ref-$format.result {
+        db one {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}
+      } 0
+      do_test dump-empty-name-$layout-$ref-$format.rows {
+        if {$format eq "sql"} {
+          sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+          set fd [open $path rb]; set text [read $fd]; close $fd
+          out eval $text
+        } else {sqlite3 out file:dump-empty-name.sqlite?doltlite_engine=sqlite -uri 1}
+        out eval {SELECT a,v FROM ""; PRAGMA integrity_check}
+      } [list 1 $value ok]
+      catch {out close}
+      do_test dump-empty-name-$layout-$ref-$format.source {
+        db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
+      } $before
+    }
+  }
+}
+
+reset_db
+db eval {
+  CREATE TABLE ""(a TEXT);
+  INSERT INTO "" VALUES('01');
+  SELECT dolt_commit('-Am','text'); SELECT dolt_tag('empty-text');
+  DROP TABLE "";
+  CREATE TABLE ""(a NUMERIC, b TEXT);
+  INSERT INTO "" VALUES(2,'new');
+  SELECT dolt_commit('-Am','numeric'); SELECT dolt_tag('empty-numeric');
+  DROP TABLE "";
+}
+set turn 0
+foreach ref {empty-text empty-numeric empty-text} expected {{01} {2 new} {01}} {
+  incr turn
+  foreach format {sql sqlite} {
+    set path dump-empty-declaration.$format
+    forcedelete $path
+    do_test dump-empty-declaration-$turn-$ref-$format.result {
+      db one {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}
+    } 0
+    do_test dump-empty-declaration-$turn-$ref-$format.rows {
+      if {$format eq "sql"} {
+        sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+        set fd [open $path rb]; set text [read $fd]; close $fd
+        out eval $text
+      } else {sqlite3 out file:dump-empty-declaration.sqlite?doltlite_engine=sqlite -uri 1}
+      out eval {SELECT * FROM ""}
+    } $expected
+    catch {out close}
+  }
+}
+do_test dump-empty-name.no-temp {glob -nocomplain *-dump-*} {}
 finish_test
