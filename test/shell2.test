@@ -216,7 +216,11 @@ do_test shell2-1.4.9 {
 
 # Verify that .clone handles sequence table.
 # See https://sqlite.org/forum/forumpost/71ff9e6c4c
-do_test shell2-1.4.9 {
+set clone_result {0 2}
+ifcapable doltlite {set clone_result {0 {t... done
+done
+2}}}
+do_test shell2-clone-sequence {
   forcedelete clone.db
   set res [catchcmd :memory: [string trim {
 .mode batch
@@ -225,7 +229,7 @@ do_test shell2-1.4.9 {
 .clone clone.db
 .open clone.db
  SELECT max(seq) FROM sqlite_sequence;}]]
-} {0 2}
+} $clone_result
 
 ifcapable vtab {
 # Verify that generate_series stays sane near 64-bit range boundaries.

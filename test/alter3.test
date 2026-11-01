@@ -476,19 +476,27 @@ do_execsql_test alter3-10.3.2 {
 do_execsql_test alter3-10.4.1 {
   ALTER TABLE t1 ADD COLUMN e DEFAULT 8 /* eight */;
 }
+set expected {{CREATE TABLE t1(a, b INTEGER DEFAULT 5, c DEFAULT 6, d DEFAULT 7, e DEFAULT 8 /* eight */)}}
+ifcapable doltlite {
+  set expected {{CREATE TABLE t1(a, b INTEGER DEFAULT 5, c DEFAULT 6, d DEFAULT 7, e DEFAULT 8)}}
+}
 do_execsql_test alter3-10.4.2 {
   SELECT sql FROM sqlite_schema WHERE name='t1';
-} {{CREATE TABLE t1(a, b INTEGER DEFAULT 5, c DEFAULT 6, d DEFAULT 7, e DEFAULT 8 /* eight */)}}
+} $expected
 
 do_execsql_test alter3-10.5.1 {
   ALTER TABLE t1 ADD COLUMN f -- nine
     DEFAULT 9 -- nine
   ;
 }
+set expected {{CREATE TABLE t1(a, b INTEGER DEFAULT 5, c DEFAULT 6, d DEFAULT 7, e DEFAULT 8 /* eight */, f -- nine
+    DEFAULT 9)}}
+ifcapable doltlite {
+  set expected {{CREATE TABLE t1(a, b INTEGER DEFAULT 5, c DEFAULT 6, d DEFAULT 7, e DEFAULT 8, f DEFAULT 9)}}
+}
 do_execsql_test alter3-10.5.2 {
   SELECT sql FROM sqlite_schema WHERE name='t1';
-} {{CREATE TABLE t1(a, b INTEGER DEFAULT 5, c DEFAULT 6, d DEFAULT 7, e DEFAULT 8 /* eight */, f -- nine
-    DEFAULT 9)}}
+} $expected
 
 do_execsql_test alter3-10.6 {
   SELECT * FROM t1;

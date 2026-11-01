@@ -85,7 +85,8 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/up"
-git archive "$SHA" src | tar -x -C "$WORK/up"
+git archive --format=tar -o "$WORK/upstream.tar" "$SHA" src
+tar -xf "$WORK/upstream.tar" -C "$WORK/up"
 
 FAIL=0
 CHECKED=0

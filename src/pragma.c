@@ -1237,6 +1237,9 @@ void sqlite3Pragma(
       Index *pPk = sqlite3PrimaryKeyIndex(pTab);
       pParse->nMem = 7;
       sqlite3ViewGetColumnNames(pParse, pTab);
+#ifdef DOLTLITE_PROLLY
+      pPk = sqlite3PrimaryKeyIndex(pTab);
+#endif
       for(i=0, pCol=pTab->aCol; i<pTab->nCol; i++, pCol++){
         int isHidden = 0;
         const Expr *pColExpr;

@@ -1994,6 +1994,15 @@ int registerUDFs(sqlite3 *dbSrc, sqlite3 *dbDst){
 }
 #endif
 
+static int idxOpenMemory(sqlite3 **ppDb){
+#ifdef DOLTLITE_PROLLY
+  return sqlite3_open_v2("file::memory:?doltlite_engine=sqlite", ppDb,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, 0);
+#else
+  return sqlite3_open(":memory:", ppDb);
+#endif
+}
+
 /*
 ** Allocate a new sqlite3expert object.
 */
@@ -2012,10 +2021,10 @@ sqlite3expert *sqlite3_expert_new(sqlite3 *db, char **pzErrmsg){
   if( rc==SQLITE_OK ){
     pNew->db = db;
     pNew->iSample = 100;
-    rc = sqlite3_open(":memory:", &pNew->dbv);
+    rc = idxOpenMemory(&pNew->dbv);
   }
   if( rc==SQLITE_OK ){
-    rc = sqlite3_open(":memory:", &pNew->dbm);
+    rc = idxOpenMemory(&pNew->dbm);
     if( rc==SQLITE_OK ){
       sqlite3_db_config(pNew->dbm, SQLITE_DBCONFIG_TRIGGER_EQP, 1, (int*)0);
     }

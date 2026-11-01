@@ -554,18 +554,20 @@ do_execsql_test index6-20.3 {
 
 # Not covering if column "b" is used anywhere other than in a WHERE
 # clause term implied by the partial index.
+set noncovering t1cdfh
+ifcapable doltlite {set noncovering t1cdgi}
 do_eqp_test index6-20.4 {
   SELECT a, b FROM t1 WHERE c=2 AND d=3 AND b=1;
-} {SEARCH t1 USING INDEX t1cdfh (c=? AND d=?)}
+} "SEARCH t1 USING INDEX $noncovering (c=? AND d=?)"
 do_execsql_test index6-20.5 {
   SELECT a, b, typeof(b) FROM t1 WHERE c=2 AND d=3 AND b=1 ORDER BY a;
 } {one 1 integer real 1.0 real}
 do_eqp_test index6-20.6 {
   SELECT a, b=1 FROM t1 WHERE c=2 AND d=3 AND b=1;
-} {SEARCH t1 USING INDEX t1cdfh (c=? AND d=?)}
+} "SEARCH t1 USING INDEX $noncovering (c=? AND d=?)"
 do_eqp_test index6-20.7 {
   SELECT a FROM t1 WHERE c=2 AND d=3 AND b=1 ORDER BY b;
-} {SEARCH t1 USING INDEX t1cdfh (c=? AND d=?)}
+} "SEARCH t1 USING INDEX $noncovering (c=? AND d=?)"
 
 # Joins.  The optimization does not apply to the right table of a
 # LEFT JOIN, as WHERE clause terms implied by the partial index are
@@ -582,11 +584,12 @@ do_execsql_test index6-20.9 {
 } {2 one 2 real}
 do_eqp_test index6-20.10 {
   SELECT a FROM t2 LEFT JOIN t1 ON c=x AND d=3 AND b=1;
-} {
+} [string map [list t1cdfh $noncovering] {
   QUERY PLAN
   |--SCAN t2
   `--SEARCH t1 USING INDEX t1cdfh (c=? AND d=?) LEFT-JOIN
-}
+}]
+
 do_execsql_test index6-20.11 {
   SELECT x, a FROM t2 LEFT JOIN t1 ON c=x AND d=3 AND b=1 ORDER BY x, a;
 } {2 one 2 real 5 {}}

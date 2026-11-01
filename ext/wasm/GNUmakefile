@@ -839,6 +839,9 @@ emcc.jsflags = -fPIC
 #emcc.jsflags += -Wno-gcc-install-dir-libstdcxx
 #emcc is not passing ^^^ this on to clang
 emcc.jsflags += --no-entry
+ifneq (,$(filter 3.%,$(emcc.version)))
+emcc.jsflags += -sWASM_BIGINT=$(emcc.WASM_BIGINT)
+endif
 # emcc 6.0.12+ emits ugly warnings if we turn on BIGINT,
 # despite the value being the same one it will use by
 # default: emcc.jsflags += -sWASM_BIGINT=$(emcc.WASM_BIGINT)

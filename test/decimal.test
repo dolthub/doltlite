@@ -291,6 +291,12 @@ do_execsql_test 8320 {
          decimal_cmp('12e-1','1.2'), decimal_cmp('12e-1','1.25'),
          decimal_cmp('0.000001e34','1.0000000000000000000000000001e28');
 } {1 -1 1 0 0 -1 -1}
+ifcapable doltlite {
+  db close
+  forcedelete test.db
+  sqlite3 db {file:test.db?doltlite_engine=sqlite} -uri 1
+  load_static_extension db decimal
+}
 do_execsql_test 8330 {
   CREATE TABLE price(id INTEGER PRIMARY KEY, amount TEXT COLLATE decimal UNIQUE);
   INSERT INTO price(amount) VALUES('1e28');

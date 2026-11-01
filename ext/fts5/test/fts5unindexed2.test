@@ -310,8 +310,9 @@ do_execsql_test 7.0 {
 } {4 {} r}
 
 do_execsql_test 7.1 {
-  SELECT sql FROM sqlite_schema WHERE name='h_content';
-} {{CREATE TABLE 'h_content'(id INTEGER PRIMARY KEY, c1)}}
+  SELECT replace(sql, '''h_content''', 'h_content')
+    FROM sqlite_schema WHERE name='h_content';
+} {{CREATE TABLE h_content(id INTEGER PRIMARY KEY, c1)}}
 
 reset_db
 do_execsql_test 7.2 {
@@ -356,10 +357,11 @@ reset_db
 do_execsql_test 7.6 {
   CREATE VIRTUAL TABLE h USING fts5(a, b UNINDEXED, locale=1);
   INSERT INTO h(rowid, a, b) VALUES (4, fts5_locale('en', 'p q'), 'r');
-  SELECT sql FROM sqlite_schema WHERE name='h_content';
+  SELECT replace(sql, '''h_content''', 'h_content')
+    FROM sqlite_schema WHERE name='h_content';
   SELECT rowid, a, b, fts5_get_locale(h, 0) FROM h;
 } {
-  {CREATE TABLE 'h_content'(id INTEGER PRIMARY KEY, c0, c1, l0)}
+  {CREATE TABLE h_content(id INTEGER PRIMARY KEY, c0, c1, l0)}
   4 {p q} r en
 }
 

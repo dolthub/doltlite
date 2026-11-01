@@ -280,6 +280,7 @@ ifcapable rtree {
 
 # Bug 2026-10-07T15:44:40Z
 #
+set enc14width [expr {[db one {PRAGMA encoding}] eq "UTF-8" ? 1 : 2}]
 do_execsql_test enc-14.1 {
   CREATE TABLE t14(n, c);
   INSERT INTO t14 VALUES
@@ -287,7 +288,7 @@ do_execsql_test enc-14.1 {
      (5000, CAST(printf('%.*c', 5000, 'a') AS BLOB));
   SELECT n, length(c), length(CAST(c AS TEXT))
     FROM t14 ORDER BY +n;
-} {1000 2000 1000 5000 10000 5000}
+} [list 1000 [expr {1000*$enc14width}] 1000 5000 [expr {5000*$enc14width}] 5000]
 
 # Bug 2026-10-14T17:33:12Z
 ifcapable altertable {

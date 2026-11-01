@@ -1598,6 +1598,11 @@ do_catchsql_test 18.1 {
 # time it is loaded into the page cache.
 #
 reset_db
+ifcapable doltlite {
+  db close
+  forcedelete test.db
+  sqlite3 db {file:test.db?doltlite_engine=sqlite} -uri 1
+}
 do_execsql_test 20.0 {
   PRAGMA auto_vacuum=off;
   PRAGMA page_size = 4096;

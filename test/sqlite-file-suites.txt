@@ -47,3 +47,7 @@ mmapleak
 pcacheleak
 walroshm
 win32shm
+corruptL
+decimal
+enc
+zeroblob

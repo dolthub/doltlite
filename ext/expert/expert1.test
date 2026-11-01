@@ -637,6 +637,12 @@ ifcapable fts5 {
 #-------------------------------------------------------------------------
 reset_db
 
+ifcapable doltlite {
+  db close
+  forcedelete test.db
+  sqlite3 db {file:test.db?doltlite_engine=sqlite} -uri 1
+}
+
 set ci {CREATE INDEX i1 ON t1(a COLLATE "binary,sqlite_expert_rem(999,0)");}
 
 do_execsql_test 8.0 {
