@@ -1422,6 +1422,57 @@ static int commitAllCompare(const void *a, const void *b){
                 ((const CommitAllBranch*)b)->zBranch);
 }
 
+static int commitAllComposeCatalog(
+  sqlite3_context *context,
+  DoltliteCommitOptions *opts,
+  DoltliteBranchCommitState *st,
+  ProllyHash *pCatalog
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  int rc = SQLITE_OK;
+  *pCatalog = st->staged;
+  if( opts->addAll ){
+    rc = doltliteComposeStageAll(db, context, &st->working, &st->headCatalog,
+        &st->staged, st->onRebasePlan, pCatalog);
+  }else if( opts->addModifiedOnly ){
+    rc = doltliteCommitStageModifiedOnly(db, context, opts->amend, st, pCatalog);
+  }
+  if( rc==SQLITE_OK && prollyHashIsEmpty(pCatalog) ) *pCatalog = st->headCatalog;
+  return rc;
+}
+
+/* dolt_commit seals the transaction before it finds nothing to commit;
+** dolt_commit_all must refuse an empty session branch with the
+** transaction still open. */
+static int commitAllSessionEmpty(
+  sqlite3_context *context,
+  DoltliteCommitOptions *opts,
+  int *pbEmpty
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  DoltliteBranchCommitState st;
+  ProllyHash head, catalog;
+  u8 merging = 0;
+  int rc;
+  *pbEmpty = 0;
+  if( opts->amend || opts->allowEmpty || opts->skipEmpty ) return SQLITE_OK;
+  doltliteGetSessionMergeState(db, &merging, 0, 0);
+  if( merging ) return SQLITE_OK;
+  rc = doltliteReadBranchCommitState(db, doltliteGetSessionBranch(db), &st);
+  if( rc==SQLITE_OK ){
+    rc = doltliteBtreeBranchSnapshot(db->aDb[0].pBt, &head, &st.staged,
+                                     &st.working);
+  }
+  if( rc==SQLITE_OK && prollyHashCompare(&head, &st.head)!=0 ) return SQLITE_OK;
+  if( rc==SQLITE_OK ) rc = commitAllComposeCatalog(context, opts, &st, &catalog);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return rc;
+  }
+  *pbEmpty = prollyHashCompare(&catalog, &st.headCatalog)==0;
+  return SQLITE_OK;
+}
+
 /* Another branch of this store written in the transaction: build its
 ** commit from the transaction's working and staged catalogs. Nothing is
 ** installed here. */
@@ -1461,15 +1512,8 @@ static int commitAllPrepareBranch(
     sqlite3_result_error(context, "cannot amend during a merge or rebase", -1);
     return SQLITE_ERROR;
   }
-  catalog = st->staged;
-  if( opts->addAll ){
-    rc = doltliteComposeStageAll(db, context, &st->working, &st->headCatalog,
-        &st->staged, st->onRebasePlan, &catalog);
-  }else if( opts->addModifiedOnly ){
-    rc = doltliteCommitStageModifiedOnly(db, context, opts->amend, st, &catalog);
-  }
+  rc = commitAllComposeCatalog(context, opts, st, &catalog);
   if( rc!=SQLITE_OK ) return rc;
-  if( prollyHashIsEmpty(&catalog) ) catalog = st->headCatalog;
   if( !st->merging && (!opts->amend || opts->skipEmpty)
    && prollyHashCompare(&catalog, &st->headCatalog)==0 ){
     if( opts->skipEmpty ) return SQLITE_OK;
@@ -1561,6 +1605,18 @@ static void doltliteCommitAllFunc(
   for(i=0; i<all.n; i++){
     rc = commitAllPrepareBranch(context, &opts, &all.a[i]);
     if( rc!=SQLITE_OK ) goto commit_all_done;
+  }
+  if( bSessionDirty ){
+    int bEmpty;
+    if( commitAllSessionEmpty(context, &opts, &bEmpty)!=SQLITE_OK ){
+      goto commit_all_done;
+    }
+    if( bEmpty ){
+      char *zMsg = sqlite3_mprintf("nothing to commit on %s", zSession);
+      sqlite3_result_error(context, zMsg ? zMsg : "nothing to commit", -1);
+      sqlite3_free(zMsg);
+      goto commit_all_done;
+    }
   }
 
   if( bSessionDirty || all.n==0 ){
