@@ -523,10 +523,11 @@ static void doltliteRunCommand(
   ChunkStore *cs = doltliteGetChunkStore(db);
   u8 bWasNested = db->bVcNestedCommand;
   DoltliteCmdScope scope;
+  Btree *pDirty;
   int bProbe = 0;
   int rcBegin;
   if( !pOuter && sqlite3_stricmp(ctx->pFunc->zName, "dolt_commit")==0
-   && doltliteStoreSiblingBranch(db, 0, 0) ){
+   && doltliteStoreDirtyBranches(db, &pDirty)>1 ){
     sqlite3_result_error(ctx,
         "Cannot commit changes on more than one branch / database", -1);
     return;

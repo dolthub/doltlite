@@ -94,7 +94,7 @@ do_test multi-branch-stale-sibling-peer-kept {mb_disk feat} {1:base,50:peer ok}
 # writes in the transaction; only dolt_commit refuses.
 mb_reset
 do_test multi-branch-vc-add {
-  db eval {BEGIN; INSERT INTO f.t VALUES(3,'feat')}
+  db eval {BEGIN; INSERT INTO main.t VALUES(2,'main'); INSERT INTO f.t VALUES(3,'feat')}
   set r [catchsql {SELECT dolt_add('.')}]
   lappend r [catchsql {SELECT dolt_commit('-m','both')}]
   db eval COMMIT
@@ -308,6 +308,28 @@ do_test commit-branch-then-commit-all {
   db eval {INSERT INTO f.t VALUES(4,'feat'); COMMIT}
   lappend r [mb_head feat] [mb_disk feat]
 } {feat all {1:base,2:feat,3:feat,4:feat ok}}
+
+# As in Dolt, one dirty branch is not a multi-branch commit: --branch commits
+# it, and a commit of the clean session branch ends the transaction.
+foreach {name open close} {
+  begin {BEGIN} {ROLLBACK}
+  savepoint {SAVEPOINT s} {ROLLBACK TO s}
+} {
+  mb_reset
+  do_test commit-branch-only-dirty-$name {
+    db eval "$open; INSERT INTO f.t VALUES(2,'feat')"
+    set r [string length [db one {SELECT dolt_commit('--branch','feat','-am','c1')}]]
+    catchsql $close
+    lappend r [mb_head feat] [mb_disk feat] [mb_head main]
+  } {40 c1 {1:base,2:feat ok} init}
+}
+mb_reset
+do_test commit-clean-session-dirty-sibling {
+  db eval {BEGIN; INSERT INTO f.t VALUES(2,'feat')}
+  set r [catchsql {SELECT dolt_commit('-am','nothing here')}]
+  catchsql ROLLBACK
+  lappend r [mb_head main] [mb_head feat] [mb_disk feat]
+} {1 {nothing to commit, working tree clean (use dolt_add to stage changes)} init init {1:base,2:feat ok}}
 
 # A two-branch commit is one publish: under a write or sync fault it lands
 # on both branches or on neither.

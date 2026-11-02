@@ -917,6 +917,7 @@ static void doltliteCommitNamedBranch(
   DoltliteNamedCommit m;
   DoltliteBranchExpectation expected;
   ProllyHash catalog;
+  Btree *pAttached = 0;
   char hex[PROLLY_HASH_SIZE*2+1];
   int rc;
   memset(&m, 0, sizeof(m));
@@ -937,10 +938,33 @@ static void doltliteCommitNamedBranch(
     sqlite3_result_error(context, "dolt_commit requires a message", -1);
     return;
   }
+  /* The target attached here and the transaction's only dirty branch: its
+  ** writes are what this commits. */
+  if( doltliteStoreDirtyBranches(db, &pAttached)!=1 || pAttached==0
+   || pAttached==db->aDb[0].pBt
+   || strcmp(doltliteBtreeBranchName(pAttached), m.zBranch)!=0 ){
+    pAttached = 0;
+  }else if( !doltliteInAtomicCommand(db) ){
+    rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+    pAttached = 0;
+  }
   rc = doltliteReadBranchCommitState(db, m.zBranch, &m.state);
   if( rc==SQLITE_NOTFOUND ){
     sqlite3_result_error(context, "commit target branch not found", -1);
     return;
+  }
+  if( rc==SQLITE_OK && pAttached ){
+    ProllyHash head;
+    rc = doltliteBtreeBranchSnapshot(pAttached, &head, &m.state.staged,
+                                     &m.state.working);
+    if( rc==SQLITE_OK && prollyHashCompare(&head, &m.state.head)!=0 ){
+      doltliteCmdResultWriteTxnError(context, db, SQLITE_BUSY);
+      return;
+    }
   }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -1004,6 +1028,7 @@ static void doltliteCommitNamedBranch(
     return;
   }
   doltliteStoreBranchMoved(db, m.zBranch);
+  if( pAttached ) doltliteBtreeBranchCommitted(pAttached, &m.commit);
   doltliteHashToHex(&m.commit, hex);
   doltliteHistoricalModulesReset(db);
   sqlite3_result_text(context, hex, -1, SQLITE_TRANSIENT);
