@@ -1026,7 +1026,8 @@ static void doltliteCommitFuncImpl(
   ProllyHash catalogHash;
   ProllyHash sessionHeadBeforeLock;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
-  int sealTopLevel = doltliteSavepointIsTopLevelTxn(db);
+  int sealTopLevel = doltliteSavepointIsTopLevelTxn(db)
+                  && !doltliteInAtomicCommand(db);
   int pinnedRead = !db->autoCommit
                 && sqlite3_txn_state(db, "main")==SQLITE_TXN_READ;
   int rc;

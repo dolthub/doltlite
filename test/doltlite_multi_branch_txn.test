@@ -227,6 +227,26 @@ do_test commit-all-savepoint-undone-write {
 } {feat init sp}
 
 mb_reset
+do_test commit-all-top-savepoint-sibling {
+  db eval {SAVEPOINT s; INSERT INTO f.t VALUES(2,'feat')}
+  set r [db eval {SELECT key FROM json_each(dolt_commit_all('-am','sp'))}]
+  lappend r [catchsql {ROLLBACK TO s}] [sqlite3_get_autocommit db]
+  lappend r [mb_head feat] [mb_disk feat]
+  sqlite3 observer [file normalize test.db]/feat -readonly 1
+  lappend r [observer eval {SELECT count(*) FROM dolt_status}]
+  observer close
+  set r
+} {feat {1 {no such savepoint: s}} 1 sp {1:base,2:feat ok} 0}
+
+mb_reset
+do_test commit-all-top-savepoint-both {
+  db eval {SAVEPOINT s; INSERT INTO main.t VALUES(2,'main'); INSERT INTO f.t VALUES(3,'feat')}
+  set r [db eval {SELECT key FROM json_each(dolt_commit_all('-am','sp'))}]
+  lappend r [catchsql {ROLLBACK TO s}] [mb_head main] [mb_head feat] \
+            [mb_disk main] [mb_disk feat]
+} {feat main {1 {no such savepoint: s}} sp sp {1:base,2:main ok} {1:base,3:feat ok}}
+
+mb_reset
 do_execsql_test commit-all-clean {
   SELECT dolt_commit_all('--skip-empty','-m','skip');
   SELECT key FROM json_each(dolt_commit_all('--allow-empty','-m','empty'));

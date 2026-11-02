@@ -176,6 +176,11 @@ int doltlitePrepareJoinedCommit(sqlite3 *db){
   return rc;
 }
 
+int doltliteInAtomicCommand(sqlite3 *db){
+  Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
+  return p && p->pAtomicCommand;
+}
+
 int doltliteCommandHasUserSavepoint(sqlite3 *db){
   Btree *p = db->nDb>0 ? db->aDb[0].pBt : 0;
   if( p && p->pAtomicCommand ){
@@ -362,6 +367,10 @@ int doltliteCheckpointCommand(sqlite3_context *context){
 #define DOLTLITE_CMD_SCOPED   1
 #define DOLTLITE_CMD_NOWAIT   2
 #define DOLTLITE_CMD_ATOMIC   3
+/* Atomic also when a top-level SAVEPOINT opened the transaction: the
+** command commits branches the savepoint's writes touched, so it must
+** publish them in one root and end the savepoint. */
+#define DOLTLITE_CMD_ATOMIC_ALL 4
 
 /* A missing branch, a command that needs no transaction, and a read-only
 ** database are reported by the command itself. A lock busy is not. */
@@ -415,8 +424,9 @@ static int cmdScopeBegin(
   }
   pScope->bJoined = rc==SQLITE_OK;
   pScope->bInBegin = pScope->bJoined && !doltliteSavepointIsTopLevelTxn(db);
-  if( pScope->bInBegin
-   && (eScope==DOLTLITE_CMD_ATOMIC || eScope==DOLTLITE_CMD_NOWAIT) ){
+  if( (pScope->bInBegin
+       && (eScope==DOLTLITE_CMD_ATOMIC || eScope==DOLTLITE_CMD_NOWAIT))
+   || (pScope->bJoined && eScope==DOLTLITE_CMD_ATOMIC_ALL) ){
     rc = cmdBeginAtomicJoined(pMain);
     pScope->bAtomic = rc==SQLITE_OK;
     if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
@@ -591,7 +601,8 @@ static void doltliteAtomicCommandFunc(
   int argc,
   sqlite3_value **argv
 ){
-  int eScope = DOLTLITE_CMD_ATOMIC;
+  int eScope = sqlite3_stricmp(ctx->pFunc->zName, "dolt_commit_all")==0
+             ? DOLTLITE_CMD_ATOMIC_ALL : DOLTLITE_CMD_ATOMIC;
   if( sqlite3_context_db_handle(ctx)->nVdbeWrite>0 ){
     eScope = DOLTLITE_CMD_SCOPED;
   }
