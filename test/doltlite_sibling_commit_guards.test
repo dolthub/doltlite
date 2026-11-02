@@ -1,0 +1,97 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc guards_reset {engine order} {
+  catch {db close}
+  forcedelete test.db guards-extra.db
+  sqlite3 db test.db -uri 1
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','seed');
+    SELECT dolt_branch('feat'); SELECT dolt_branch('more');
+  }
+  set path [file normalize guards-extra.db]
+  if {$engine eq "sqlite"} {set path file:$path?doltlite_engine=sqlite}
+  sqlite3 extra $path -uri 1
+  extra eval {CREATE TABLE x(a); INSERT INTO x VALUES(1)}
+  extra close
+  if {$order eq "external-first"} {db eval {ATTACH $path AS ext}}
+  set branch [file normalize test.db]/feat
+  db eval {ATTACH $branch AS f}
+  set branch [file normalize test.db]/more
+  db eval {ATTACH $branch AS g}
+  if {$order eq "siblings-first"} {db eval {ATTACH $path AS ext}}
+}
+
+proc guards_rows {branch} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set rows [observer eval {SELECT group_concat(id) FROM t}]
+  observer close
+  return $rows
+}
+
+foreach engine {sqlite doltlite} {
+  foreach order {external-first siblings-first} {
+    foreach begin {BEGIN {BEGIN IMMEDIATE} {BEGIN EXCLUSIVE} {SAVEPOINT outer}} {
+      foreach mainWrite {0 1} {
+        foreach externalWrite {0 1} {
+          foreach {command sql} {
+            commit {COMMIT}
+            commit-all {SELECT dolt_commit_all('-am','joined')}
+            checkout {SELECT dolt_checkout('-b','created')}
+            branch {SELECT dolt_branch('created')}
+          } {
+            if {$begin eq "SAVEPOINT outer" && $command ne "commit-all"} {continue}
+            guards_reset $engine $order
+            db eval $begin
+            db eval {INSERT INTO f.t VALUES(2); INSERT INTO g.t VALUES(3)}
+            if {$mainWrite} {db eval {INSERT INTO main.t VALUES(4)}}
+            if {$externalWrite} {db eval {INSERT INTO ext.x VALUES(9)}}
+            set mode [string map {" " -} $begin]
+            set prefix guards-$engine-$order-$mode-$mainWrite-$externalWrite-$command
+            do_test $prefix {
+              set result [catchsql $sql]
+              set rc [lindex $result 0]
+              set message [expr {!$externalWrite || [lindex $result 1] eq
+                  "atomic commit across multiple file-backed databases is not supported"}]
+              catchsql ROLLBACK
+              set created [db one {SELECT count(*) FROM dolt_branches WHERE name='created'}]
+              set external [db one {SELECT count(*) FROM ext.x WHERE a=9}]
+              set rows [list [guards_rows feat] [guards_rows more]]
+              list $rc $message $external $created $rows
+            } [list $externalWrite 1 0 \
+                [expr {!$externalWrite && $command in {checkout branch}}] \
+                [expr {$externalWrite ? [list 1 1] : [list 1,2 1,3]}]]
+            if {$externalWrite} {
+              do_test $prefix.main-kept {guards_rows main} 1
+              do_test $prefix.heads-kept {
+                db eval {
+                  SELECT message FROM dolt_log('main') LIMIT 1;
+                  SELECT message FROM dolt_log('feat') LIMIT 1;
+                  SELECT message FROM dolt_log('more') LIMIT 1;
+                }
+              } {seed seed seed}
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+foreach begin {BEGIN {BEGIN IMMEDIATE} {BEGIN EXCLUSIVE} {SAVEPOINT outer}} {
+  guards_reset sqlite siblings-first
+  db eval {DETACH ext; ATTACH 'file::memory:?doltlite_engine=sqlite' AS mem}
+  db eval {CREATE TABLE mem.x(a)}
+  db eval $begin
+  db eval {INSERT INTO f.t VALUES(2); INSERT INTO g.t VALUES(3); INSERT INTO mem.x VALUES(9)}
+  set mode [string map {" " -} $begin]
+  do_test guards-memory-$mode {
+    set result [catchsql {SELECT dolt_commit_all('-am','memory')}]
+    catchsql ROLLBACK
+    list [lindex $result 0] [db one {SELECT a FROM mem.x}] [guards_rows feat] [guards_rows more]
+  } {0 9 1,2 1,3}
+}
+catch {db close}
+finish_test

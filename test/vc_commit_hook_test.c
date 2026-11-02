@@ -62,11 +62,89 @@ static int scalarInt(sqlite3 *db, const char *zSql){
   return result;
 }
 
+static void siblingHooks(void){
+  static const char *const commands[] = {
+    "COMMIT",
+    "SELECT dolt_commit_all('-am','sibling hook')",
+    "SELECT dolt_checkout('-b','created')"
+  };
+  int op, veto, mainWrite, mode, siblings;
+  for(op=0; op<3; op++) for(veto=0; veto<2; veto++)
+  for(mainWrite=0; mainWrite<2; mainWrite++) for(mode=0; mode<3; mode++)
+  for(siblings=1; siblings<=2; siblings++){
+    char path[512];
+    char *attach;
+    sqlite3 *db = 0, *peer = 0;
+    int rc, before = nFail;
+    snprintf(path,sizeof(path),DOLTLITE_TEST_TMPDIR "/sibling_hook_%d_%d_%d_%d_%d_%d.db",
+        (int)getpid(),op,veto,mainWrite,mode,siblings);
+    if( mode==2 && op==2 ) continue;
+    remove(path);
+    check("sibling hook opens",sqlite3_open(path,&db)==SQLITE_OK);
+    check("sibling hook setup",exec(db,
+        "CREATE TABLE t(a INTEGER PRIMARY KEY,b TEXT); INSERT INTO t VALUES(1,'base');"
+        "SELECT dolt_commit('-Am','seed'); SELECT dolt_branch('feat');"
+        "SELECT dolt_branch('more')")==SQLITE_OK);
+    attach = sqlite3_mprintf("ATTACH '%q/feat' AS f",path);
+    check("sibling hook attach",exec(db,attach)==SQLITE_OK);
+    sqlite3_free(attach);
+    if( siblings==2 ){
+      char *branch = sqlite3_mprintf("%s/more",path);
+      attach = sqlite3_mprintf("ATTACH %Q AS g",branch);
+      sqlite3_free(branch);
+      check("second sibling hook attach",exec(db,attach)==SQLITE_OK);
+      sqlite3_free(attach);
+    }
+    sqlite3_extended_result_codes(db,1);
+    check("sibling hook begin",exec(db,mode==2 ? "SAVEPOINT outer" : mode ? "BEGIN IMMEDIATE" : "BEGIN")==SQLITE_OK);
+    check("sibling hook write",exec(db,"INSERT INTO f.t VALUES(7,'feat')")==SQLITE_OK);
+    if( siblings==2 ) check("second sibling hook write",exec(db,"INSERT INTO g.t VALUES(8,'more')")==SQLITE_OK);
+    if( mainWrite ) check("sibling hook main control",exec(db,"INSERT INTO main.t VALUES(9,'main')")==SQLITE_OK);
+    sqlite3_commit_hook(db,veto ? rejectCommit : onCommit,0);
+    sqlite3_rollback_hook(db,onRollback,0);
+    nCommit = nRollback = 0;
+    rc = exec(db,commands[op]);
+    check("sibling commit hook result",rc==(veto ? SQLITE_CONSTRAINT_COMMITHOOK : SQLITE_OK));
+    check("sibling commit hook exactly once",nCommit==1);
+    check("sibling rollback hook count",nRollback==veto);
+    sqlite3_commit_hook(db,0,0);
+    sqlite3_rollback_hook(db,0,0);
+    if( veto ){
+      check("sibling commit hook veto keeps branch",scalarInt(db,"SELECT active_branch()='main'")==1);
+      check("sibling commit hook veto discards rows",scalarInt(db,"SELECT count(*) FROM f.t WHERE a=7")==0);
+      if( mainWrite ) check("sibling veto discards main rows",scalarInt(db,"SELECT count(*) FROM main.t WHERE a=9")==0);
+    }
+    if( !sqlite3_get_autocommit(db) ) check("sibling hook cleanup",exec(db,"ROLLBACK")==SQLITE_OK);
+    check("sibling hook refs",scalarInt(db,"SELECT count(*) FROM dolt_branches WHERE name='created'")==(!veto && op==2));
+    sqlite3_close(db);
+    {
+      char *branch = sqlite3_mprintf("%s/feat",path);
+      check("sibling hook observer opens",sqlite3_open_v2(branch,&peer,SQLITE_OPEN_READONLY,0)==SQLITE_OK);
+      sqlite3_free(branch);
+      check("sibling hook durable rows",scalarInt(peer,"SELECT count(*) FROM t WHERE a=7")==!veto);
+      check("sibling hook durable HEAD",scalarInt(peer,
+          "SELECT count(*) FROM dolt_log WHERE message='sibling hook'")==(!veto && op==1));
+      sqlite3_close(peer);
+    }
+    if( siblings==2 ){
+      char *branch = sqlite3_mprintf("%s/more",path);
+      check("second sibling hook observer opens",sqlite3_open_v2(branch,&peer,SQLITE_OPEN_READONLY,0)==SQLITE_OK);
+      sqlite3_free(branch);
+      check("second sibling hook durable rows",scalarInt(peer,"SELECT count(*) FROM t WHERE a=8")==!veto);
+      sqlite3_close(peer);
+    }
+    remove(path);
+    if( nFail!=before ) fprintf(stderr,"sibling hook case: op=%d veto=%d main=%d mode=%d siblings=%d\n",
+        op,veto,mainWrite,mode,siblings);
+  }
+}
+
 int main(void){
   char zPath[256];
   sqlite3 *db = 0;
 
   sqlite3_initialize();
+  siblingHooks();
   snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/vc_commit_hook_%d.db", (int)getpid());
   remove(zPath);
   check("open", sqlite3_open(zPath, &db)==SQLITE_OK);
