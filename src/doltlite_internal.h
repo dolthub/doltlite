@@ -58,6 +58,7 @@ void doltliteBtreeEndJoinedCommand(Btree*);
 int doltliteStageStoreSiblings(Btree*, void**);
 int doltliteBtreeBranchSnapshot(Btree*, ProllyHash*, ProllyHash*, ProllyHash*);
 void doltliteBtreeBranchCommitted(Btree*, const ProllyHash*);
+int doltliteBtreeTxnWrote(Btree*);
 void doltliteEndBranchCommits(sqlite3*, int bPublished);
 void doltliteFinishStoreSiblings(Btree*, void*, int bPublished);
 int doltliteBtreeEndCommandTxn(Btree*, int bFailed, int bPublished);

@@ -640,6 +640,7 @@ int pushSavepoint(Btree *pBtree, int bStatement){
   pState->bTablesCaptured = 0;
   pState->bSchemaChangedTxn = pBtree->bSchemaChangedTxn;
   pState->bMasterRootChangedTxn = pBtree->bMasterRootChangedTxn;
+  pState->bTxnWrote = pBtree->bTxnWrote;
   pState->nTables = 0;
   pState->iLargestRootPage = 0;
   pState->isRebasing = 0;
@@ -885,6 +886,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     {
       u8 inTransBefore = p->inTrans;
       u8 inTransactionBefore = p->inTransaction;
+      if( inTransBefore!=TRANS_WRITE ) p->bTxnWrote = 0;
       p->inTrans = TRANS_WRITE;
       p->inTransaction = TRANS_WRITE;
       if( p->db ){
@@ -1587,6 +1589,13 @@ int doltliteBtreeBranchSnapshot(
   *pHead = q->headCommit;
   *pStaged = q->vc.stagedCatalog;
   return rc;
+}
+
+/* BEGIN IMMEDIATE opens a write transaction on every attached database;
+** only a write makes the branch dirty, as in Dolt. */
+int doltliteBtreeTxnWrote(Btree *q){
+  return btreeIsProlly(q) && q->inTrans==TRANS_WRITE
+      && (q->bTxnWrote || btreeTxnStateChanged(q));
 }
 
 /* The branch now has pCommit as its head; its working set records that when
@@ -2589,6 +2598,7 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   restoreSavepointSessionState(p, pState);
   p->bSchemaChangedTxn = pState->bSchemaChangedTxn;
   p->bMasterRootChangedTxn = pState->bMasterRootChangedTxn;
+  p->bTxnWrote = pState->bTxnWrote;
   freeSavepointTables(pState);
   for(j=iSavepoint+1; j<p->nSavepoint; j++){
     freeSavepointTables(&p->aSavepointTables[j]);

@@ -1839,7 +1839,7 @@ static int btreeCatalogShapeChanged(Btree *p){
   return prollyHashCompare(&live, &p->committedCatalogShape)!=0;
 }
 
-static int prollyBtreeHasPendingChanges(Btree *p){
+int btreeTxnStateChanged(Btree *p){
   int i;
   if( !p ) return 0;
   if( p->bSchemaChangedTxn || p->bMasterRootChangedTxn ) return 1;
@@ -1850,11 +1850,16 @@ static int prollyBtreeHasPendingChanges(Btree *p){
     ProllyMutMap *pMap = (ProllyMutMap*)p->cat.a[i].pPending;
     if( pMap && !prollyMutMapIsEmpty(pMap) ) return 1;
   }
+  return btreeCatalogShapeChanged(p);
+}
+
+static int prollyBtreeHasPendingChanges(Btree *p){
+  if( !p ) return 0;
+  if( btreeTxnStateChanged(p) ) return 1;
   if( p->pBt ){
     ChunkStaging *st = &p->pBt->pStore->staging;
     if( chunkStagingPendingCount(st)>0 || st->nRecentUncommitted>0 ) return 1;
   }
-  if( btreeCatalogShapeChanged(p) ) return 1;
   return 0;
 }
 
@@ -1939,6 +1944,7 @@ int prollyBtreeCreateTable(Btree *p, Pgno *piTable, int flags){
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
+  p->bTxnWrote = 1;
   PROLLY_ASSERT_GRAPH_LOCKED(p->pBt);
 
   {
@@ -1972,6 +1978,7 @@ int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
+  p->bTxnWrote = 1;
 
   {
     int rc = ensureStatementSavepointsCaptured(p);
@@ -2024,6 +2031,7 @@ int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
+  p->bTxnWrote = 1;
 
   {
     int rc = ensureStatementSavepointsCaptured(p);
@@ -2120,6 +2128,7 @@ int prollyBtreeUpdateMeta(Btree *p, int idx, u32 value){
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
+  p->bTxnWrote = 1;
   if( idx<1 || idx>=SQLITE_N_BTREE_META ){
     return SQLITE_ERROR;
   }

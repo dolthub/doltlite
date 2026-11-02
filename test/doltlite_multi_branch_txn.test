@@ -204,6 +204,29 @@ do_test commit-all-session-empty-keeps-txn {
 } {1 {nothing to commit on main} 0 1 init init {1:base ok}}
 
 mb_reset
+do_test commit-all-immediate-untouched {
+  db eval {BEGIN IMMEDIATE; INSERT INTO f.t VALUES(2,'feat')}
+  set r [db eval {SELECT key FROM json_each(dolt_commit_all('-am','imm'))}]
+  db eval COMMIT
+  lappend r [mb_head main] [mb_head feat]
+} {feat init imm}
+
+mb_reset
+do_test commit-all-savepoint-undone-write {
+  db eval {
+    BEGIN;
+    INSERT INTO f.t VALUES(2,'feat');
+    SAVEPOINT s;
+    INSERT INTO main.t VALUES(3,'main');
+    ROLLBACK TO s;
+    RELEASE s;
+  }
+  set r [db eval {SELECT key FROM json_each(dolt_commit_all('-am','sp'))}]
+  db eval COMMIT
+  lappend r [mb_head main] [mb_head feat]
+} {feat init sp}
+
+mb_reset
 do_execsql_test commit-all-clean {
   SELECT dolt_commit_all('--skip-empty','-m','skip');
   SELECT key FROM json_each(dolt_commit_all('--allow-empty','-m','empty'));

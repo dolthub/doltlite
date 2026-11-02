@@ -1447,7 +1447,9 @@ int prollyBtCursorInsert(
 ){
   u8 *pKeep = 0;
   u8 *pCanon = 0;
-  int rc = btCursorInsertImpl(pCur, pPayload, flags, seekResult,
+  int rc;
+  pCur->pBtree->bTxnWrote = 1;
+  rc = btCursorInsertImpl(pCur, pPayload, flags, seekResult,
                               &pKeep, &pCanon);
   sqlite3_free(pKeep);
   sqlite3_free(pCanon);
@@ -1481,6 +1483,7 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
+  pCur->pBtree->bTxnWrote = 1;
 
   if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, 0);
@@ -1856,6 +1859,7 @@ int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
     return SQLITE_READONLY;
   }
   assert( pCur->curFlags & BTCF_Incrblob );
+  pCur->pBtree->bTxnWrote = 1;
 
   /* Mutmap value lives in the pending map; the tree leaf is stale. */
   rc = getCursorPayload(pCur, &pVal, &nVal);

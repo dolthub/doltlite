@@ -339,6 +339,7 @@ struct Btree {
   u8 inTransaction;
   u8 bSchemaChangedTxn;
   u8 bMasterRootChangedTxn;
+  u8 bTxnWrote;
   u8 bFilterSchemaPlaceholders;
   u8 bCatalogDropped;     /* OOM drop: empty committedCatalogHash is not a new db */
   u8 bForceCatalogReload; /* Invalidated: live catalog may lag committedCatalogHash */
@@ -396,6 +397,7 @@ struct Btree {
     u8 bTablesCaptured;
     u8 bSchemaChangedTxn;
     u8 bMasterRootChangedTxn;
+    u8 bTxnWrote;
 
     SequenceRef *aSequences;
     int nSequences;
@@ -827,6 +829,7 @@ int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 void btreeStoreCommittedFromCurrent(Btree*, const ProllyHash*);
 void btreeCaptureCommittedCatalogShape(Btree *p);
+int btreeTxnStateChanged(Btree *p);
 int syncBtreeSavepoints(Btree*);
 int ensureStatementSavepointsCaptured(Btree*);
 int pushSavepoint(Btree*, int);
