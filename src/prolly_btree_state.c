@@ -885,6 +885,8 @@ int btreeRefreshFromDisk(Btree *p){
      && prollyHashCompare(&newTip, &oldTip)==0 ){
       (void)chunkStoreGetBranchWorkingSet(pBt->pStore, zBr, &newWs);
       if( prollyHashCompare(&newWs, &oldWs)==0 ){
+        /* The refs dolt_branches and dolt_tags read still changed. */
+        btreeBumpExternalDataVersion(p);
         return SQLITE_OK;
       }
     }
