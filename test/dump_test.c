@@ -318,6 +318,9 @@ static void virtualTables(void){
       continue;
     }
     check("virtual schema",sql(db,ddl[module])==SQLITE_OK);
+    if( module<5 ) check("FTS auxiliary schema",sql(db,module<2
+        ? "CREATE VIRTUAL TABLE vocab USING fts4aux(v)"
+        : "CREATE VIRTUAL TABLE vocab USING fts5vocab(v,'row')")==SQLITE_OK);
     if( module>=5 ){
       check("multi-level R-tree seed",sql(db,
           "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1500)"
@@ -354,6 +357,9 @@ static void virtualTables(void){
       check("virtual immediate query",number(out,module>=5
           ? "SELECT count(*) FROM main.v WHERE x1<=0.5 AND x2>=0.5"
           : "SELECT count(*) FROM main.v WHERE v MATCH 'hello'")==2-historical);
+      if( module<5 ) check("FTS auxiliary immediate query",number(out,module<2
+          ? "SELECT documents FROM main.vocab WHERE term='hello' AND col='*'"
+          : "SELECT doc FROM main.vocab WHERE term='hello'")==2-historical);
       if( module>=5 ) check("R-tree integrity",number(out,"SELECT rtreecheck('v')='ok'")==1);
       else if( module>=2 ) check("FTS5 integrity",sql(out,"INSERT INTO main.v(v) VALUES('integrity-check')")==SQLITE_OK);
       sqlite3_free(error);sqlite3_close(out);

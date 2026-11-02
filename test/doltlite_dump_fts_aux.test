@@ -1,0 +1,63 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name base module args} {
+  fts5-row fts5 fts5vocab ,'row'
+  fts5-col fts5 fts5vocab ,'col'
+  fts5-instance fts5 fts5vocab ,'instance'
+  fts3-aux fts3 fts4aux {}
+  fts4-aux fts4 fts4aux {}
+} {
+  if {$base eq "fts5"} {ifcapable !fts5 {continue}}
+  if {$base ne "fts5"} {ifcapable !fts3 {continue}}
+  foreach ordering {base-first auxiliary-first} {
+    reset_db
+    set ft [expr {$ordering eq "base-first" ? "aa_ft" : "zz_ft"}]
+    set vocab [expr {$ordering eq "base-first" ? "zz_vocab" : "aa_vocab"}]
+    db eval "CREATE VIRTUAL TABLE $ft USING ${base}(body,title)"
+    db eval "CREATE VIRTUAL TABLE $vocab USING ${module}($ft$args)"
+    set n [llength [db eval "SELECT name FROM pragma_table_info('$vocab')"]]
+    set order {}
+    for {set i 1} {$i<=$n} {incr i} {lappend order $i}
+    set query "SELECT * FROM $vocab ORDER BY [join $order ,]"
+    db eval "INSERT INTO ${ft}(rowid,body,title) VALUES(1,'hello world','first hello'),(2,'hello export','second')"
+    db eval {SELECT dolt_commit('-Am','vocabulary'); SELECT dolt_tag('vocabulary')}
+    set head [db eval $query]
+    db eval "INSERT INTO ${ft}(rowid,body,title) VALUES(3,'staged new staged','third')"
+    db eval {SELECT dolt_add('.')}
+    set staged [db eval $query]
+    db eval "INSERT INTO ${ft}(rowid,body,title) VALUES(4,'working extra','fourth')"
+    set working [db eval $query]
+    set before [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+    foreach ref {WORKING STAGED HEAD vocabulary} expected [list $working $staged $head $head] \
+        count {4 3 2 2} {
+      foreach format {sql sqlite} {
+        set path dump-fts-aux.$format
+        forcedelete $path
+        set prefix dump-fts-aux-$name-$ordering-$ref-$format
+        do_test $prefix.rows {
+          db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}
+          if {$format eq "sql"} {
+            sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+            set fd [open $path rb]; set text [read $fd]; close $fd
+            out eval $text
+          } else {sqlite3 out file:dump-fts-aux.sqlite?doltlite_engine=sqlite -uri 1}
+          out eval $query
+        } $expected
+        do_test $prefix.data {
+          out eval "SELECT count(*) FROM $ft; SELECT count(*) FROM $ft WHERE $ft MATCH 'hello'"
+        } [list $count 2]
+        do_test $prefix.updates {
+          out eval "INSERT INTO ${ft}(body,title) VALUES('restored token','after export');
+                    SELECT count(*)>0 FROM $vocab WHERE term='restored'"
+        } 1
+        catch {out close}
+        do_test $prefix.source {
+          db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
+        } $before
+      }
+    }
+  }
+}
+do_test dump-fts-aux.no-temp {glob -nocomplain *-dump-*} {}
+finish_test

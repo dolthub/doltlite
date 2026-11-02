@@ -111,7 +111,8 @@ static int dumpCreate(DlDump *p, SchemaEntry *e){
   if( t && IsVirtual(t) ){
     const char *z = t->u.vtab.azArg[0];
     if( sqlite3_stricmp(z,"fts3") && sqlite3_stricmp(z,"fts4")
-     && sqlite3_stricmp(z,"fts5") && sqlite3_stricmp(z,"rtree")
+     && sqlite3_stricmp(z,"fts5") && sqlite3_stricmp(z,"fts4aux")
+     && sqlite3_stricmp(z,"fts5vocab") && sqlite3_stricmp(z,"rtree")
      && sqlite3_stricmp(z,"rtree_i32") ){
       return dumpError(p, SQLITE_ERROR, e->zName,
                        "virtual-table module is not part of ordinary SQLite");
