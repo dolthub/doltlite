@@ -391,4 +391,28 @@ do_test nonlocal-unopenable-target {
   lappend r [db eval {SELECT count(*) FROM dolt_status WHERE table_name='users'}]
 } {1 {cannot open nonlocal table users on main} 0}
 
+# Another connection's rule change applies to this connection's very next
+# statement, both when it creates the rules table and when it removes a rule.
+do_test nonlocal-peer-rule-change {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval {
+    CREATE TABLE users(id INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('other');
+  }
+  db close
+  sqlite3 db [file normalize test.db]/other
+  sqlite3 peer [file normalize test.db]/other
+  db eval {SELECT count(*) FROM users}
+  peer eval {INSERT INTO dolt_nonlocal_tables VALUES('users','main','','immediate')}
+  db eval {INSERT INTO users VALUES(1)}
+  peer eval {DELETE FROM dolt_nonlocal_tables}
+  db eval {INSERT INTO users VALUES(2)}
+  peer close
+  list [nl_disk main {SELECT group_concat(id) FROM users}] \
+       [nl_disk other {SELECT group_concat(id) FROM users}]
+} {1 2}
+
 finish_test

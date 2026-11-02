@@ -947,7 +947,7 @@ static int sqlite3LockAndPrepare(
   /* Compiling loaded a rules table the first sync could not see, or a
   ** statement in the batch changed it: compile once more with the
   ** redirects it implies. */
-  if( bTopLevel && !pOld && !db->mallocFailed && doltliteNonlocalSync(db) ){
+  if( bTopLevel && !db->mallocFailed && doltliteNonlocalSync(db) ){
     if( *ppStmt ){
       sqlite3VdbeFinalize((Vdbe*)*ppStmt);
       *ppStmt = 0;
