@@ -10395,7 +10395,18 @@ abort_due_to_error:
     char *zChunkSourceErr = doltliteTakeChunkSourceError(
         db, &chunkSourceRc);
     const char *zMissing = 0;
+    const char *zMissingRead = 0;
+    int detachedRead = 0;
+    int i;
     const char *zBusy = sqlite3ErrStr(SQLITE_BUSY);
+    for(i=0; i<db->nDb; i++){
+      int detached = 0;
+      const char *zRef = doltliteBtreeMissingReadRef(db->aDb[i].pBt,&detached);
+      if( rc==SQLITE_BUSY_SNAPSHOT && zRef && !zMissingRead ){
+        zMissingRead = zRef;
+        detachedRead = detached;
+      }
+    }
     if( db->nDb>0 ){
       zMissing = doltliteBtreeMissingWriteBranch(db->aDb[0].pBt);
     }
@@ -10408,12 +10419,13 @@ abort_due_to_error:
         sqlite3VdbeError(p, "cannot write: branch '%s' no longer exists",
                          zMissing);
       }
-    }else if( rc==SQLITE_BUSY_SNAPSHOT && db->nDb>0
-           && (zMissing = doltliteBtreeMissingReadBranch(db->aDb[0].pBt))!=0 ){
+    }else if( zMissingRead ){
+      zMissing = zMissingRead;
       sqlite3_free(zChunkSourceErr);
       if( p->zErrMsg==0 || (zBusy && sqlite3_stricmp(p->zErrMsg, zBusy)==0) ){
-        sqlite3VdbeError(p, "cannot read: branch '%s' no longer exists",
-                         zMissing);
+        sqlite3VdbeError(p, detachedRead
+            ? "cannot read: revision '%s' is no longer available"
+            : "cannot read: branch '%s' no longer exists", zMissing);
       }
     }else if( zChunkSourceErr ){
       sqlite3VdbeError(p, "%s", zChunkSourceErr);

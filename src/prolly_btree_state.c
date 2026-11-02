@@ -688,27 +688,38 @@ void btreeMarkWorkingStateChanged(Btree *p, int bLocal){
   assert( p->iLoadedWorkingStateVersion==pBt->iWorkingStateVersion );
 }
 
+static int btreeReadRefPresent(Btree *p, int bDisk, int *pFound){
+  ChunkStore *cs = p->pBt->pStore;
+  ProllyHash tip;
+  if( p->isDetached ) return chunkStoreHas(cs,&p->headCommit,pFound);
+  if( bDisk ){
+    return chunkStoreReadDiskBranchTip(cs,
+        p->zBranch ? p->zBranch : "main", &tip, pFound);
+  }
+  *pFound = chunkStoreFindBranch(cs,p->zBranch ? p->zBranch : "main",0)
+      !=SQLITE_NOTFOUND;
+  return SQLITE_OK;
+}
+
 int btreeReadResult(Btree *p, int rc){
   ChunkStore *cs;
-  ProllyHash tip;
   int found = 1;
   int changed = 0;
   int readRc;
   if( rc!=SQLITE_NOTFOUND || !p || p->pOrigBtree || !p->pBt
-   || p->isDetached || p->inTrans==TRANS_WRITE
+   || p->inTrans==TRANS_WRITE
    || prollyHashIsEmpty(&p->headCommit) ) return rc;
   cs = p->pBt->pStore;
   if( cs->corruptMidStream || cs->corruptHeader ) return rc;
   if( cs->lockDepth>0 ){
-    found = chunkStoreFindBranch(cs, p->zBranch ? p->zBranch : "main", 0)
-        !=SQLITE_NOTFOUND;
+    readRc = btreeReadRefPresent(p,0,&found);
+    if( readRc!=SQLITE_OK ) return readRc;
     if( !found ) p->bReadBranchMissing = 1;
     return found ? rc : SQLITE_BUSY_SNAPSHOT;
   }
   readRc = chunkStoreLockAndRefreshChanged(cs, &changed);
   if( readRc!=SQLITE_OK ) return readRc;
-  readRc = chunkStoreReadDiskBranchTip(cs,
-      p->zBranch ? p->zBranch : "main", &tip, &found);
+  readRc = btreeReadRefPresent(p,1,&found);
   if( changed ){
     btreeMarkWorkingStateChanged(p, 0);
     p->iLoadedWorkingStateVersion = p->pBt->iWorkingStateVersion - 1;

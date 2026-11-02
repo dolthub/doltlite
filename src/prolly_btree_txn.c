@@ -1117,8 +1117,10 @@ const char *doltliteBtreeMissingWriteBranch(Btree *p){
   return p->zBranch ? p->zBranch : "main";
 }
 
-const char *doltliteBtreeMissingReadBranch(Btree *p){
+const char *doltliteBtreeMissingReadRef(Btree *p, int *pDetached){
   if( !p || !p->bReadBranchMissing ) return 0;
+  *pDetached = p->isDetached;
+  p->bReadBranchMissing = 0;
   return p->zBranch ? p->zBranch : "main";
 }
 
