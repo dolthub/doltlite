@@ -137,6 +137,55 @@ static void values(void){
   }
 }
 
+static void statistics(void){
+  sqlite3 *db = 0;
+  const char *refs[] = {"WORKING","STAGED","HEAD","analyzed"};
+  const char *stats[] = {"1000000 2","1000000 1000000","1000000 1","1000000 1"};
+  int ref, format;
+  check("statistics source opens",sqlite3_open(":memory:",&db)==SQLITE_OK);
+  check("statistics setup",sql(db,
+      "CREATE TABLE t(a,b); CREATE INDEX ti ON t(a);"
+      "INSERT INTO t VALUES(1,'one'),(2,'two'),(3,'three'); ANALYZE;"
+      "UPDATE sqlite_stat1 SET stat='1000000 1' WHERE idx='ti';"
+      "SELECT dolt_commit('-Am','statistics'); SELECT dolt_tag('analyzed');"
+      "UPDATE sqlite_stat1 SET stat='1000000 1000000' WHERE idx='ti';"
+      "SELECT dolt_add('sqlite_stat1');"
+      "UPDATE sqlite_stat1 SET stat='1000000 2' WHERE idx='ti'")==SQLITE_OK);
+  for(ref=0; ref<4; ref++) for(format=0; format<2; format++){
+    sqlite3 *out = openStock();
+    sqlite3_stmt *plan = 0;
+    char *error = 0, *query;
+    int rc;
+    if( format ){
+      Sink sink = {0};
+      rc = doltlite_dump_sql(db,refs[ref],writer,&sink,&error);
+      check("statistics SQL export",rc==SQLITE_OK && !error);
+      if( rc==SQLITE_OK ) check("statistics SQL replay",sql(out,sink.data)==SQLITE_OK);
+      free(sink.data);
+    }else{
+      rc = doltlite_export_sqlite(db,refs[ref],out,&error);
+      check("statistics SQLite export",rc==SQLITE_OK && !error);
+    }
+    query = sqlite3_mprintf("SELECT count(*) FROM main.sqlite_stat1 WHERE tbl='t' AND idx='ti' AND stat=%Q",stats[ref]);
+    check("snapshot statistics preserved",number(out,query)==1);
+    sqlite3_free(query);
+    sqlite3_test_control(SQLITE_TESTCTRL_OPTIMIZATIONS,out,
+        (sqlite3_uint64)1 << (SQLITE_Stat4-1));
+    rc = sqlite3_prepare_v2(out,"EXPLAIN QUERY PLAN SELECT * FROM t WHERE a=1",-1,&plan,0);
+    check("statistics plan prepares",rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      check("statistics plan uses snapshot",sqlite3_step(plan)==SQLITE_ROW
+          && !strcmp((const char*)sqlite3_column_text(plan,3),
+                     ref==1 ? "SCAN t" : "SEARCH t USING INDEX ti (a=?)"));
+    }
+    sqlite3_finalize(plan);
+    check("statistics source preserved",number(db,
+        "SELECT count(*) FROM sqlite_stat1 WHERE stat='1000000 2'")==1);
+    sqlite3_free(error); sqlite3_close(out);
+  }
+  sqlite3_close(db);
+}
+
 static void danglingSchema(void){
   const char *refs[] = {"WORKING","STAGED","HEAD","dangling"};
   sqlite3 *db = 0;
@@ -672,7 +721,7 @@ static void existingFiles(void){
 }
 
 int main(void){
-  danglingSchema(); danglingApplications(); existingFiles(); memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
+  statistics(); danglingSchema(); danglingApplications(); existingFiles(); memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
 #ifndef SQLITE_OMIT_AUTHORIZATION
   authorization();
 #endif

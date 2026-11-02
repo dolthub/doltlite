@@ -208,6 +208,9 @@ static int atCreateSchemaTable(sqlite3 *db, const SchemaEntry *entry){
   const char *sql = entry->zSql;
   if( sqlite3_stricmp(entry->zName,"sqlite_sequence")==0 ){
     sql = "CREATE TABLE doltlite_sequence_schema(id INTEGER PRIMARY KEY AUTOINCREMENT)";
+  }else if( sqlite3_stricmp(entry->zName,"sqlite_stat1")==0
+         || sqlite3_stricmp(entry->zName,"sqlite_stat4")==0 ){
+    sql = "ANALYZE main.sqlite_schema";
   }
   return sqlite3_exec(db,sql,0,0,0);
 }

@@ -6,6 +6,7 @@ proc dump_source_state {} {
   db eval {
     SELECT dolt_hashof('HEAD'),active_branch(),dolt_hashof_table('t'),dolt_hashof_table('t','STAGED');
     SELECT * FROM dolt_status;
+    SELECT * FROM sqlite_stat1 ORDER BY tbl,idx;
   }
 }
 proc dump_fault_prepare {} {
@@ -19,6 +20,7 @@ proc dump_fault_prepare {} {
     INSERT INTO t VALUES(1,zeroblob(32768)),(2,'two');
     CREATE VIEW missing AS SELECT abs(ghost.id) FROM ghost,json_each('[1]');
     CREATE TRIGGER missing_tr AFTER INSERT ON t WHEN abs(new.id)>0 BEGIN SELECT * FROM ghost; END;
+    ANALYZE;
     SELECT dolt_commit('-Am','seed');
     UPDATE t SET v='staged' WHERE id=2; SELECT dolt_add('.');
     UPDATE t SET v='working' WHERE id=2;
@@ -38,10 +40,12 @@ proc dump_fault_check {failed message injected} {
       out eval $text
     } else {sqlite3 out file:dump-fault.sqlite?doltlite_engine=sqlite -uri 1}
     set rows [out eval {SELECT id,length(v) FROM main.t ORDER BY id; PRAGMA integrity_check}]
+    set stats [out eval {SELECT tbl,idx,stat FROM sqlite_stat1 ORDER BY tbl,idx}]
     out close
     set expected {1 32768 2 3 ok}
     if {$::dumpRef eq "WORKING"} {set expected {1 32768 2 7 ok}}
     if {$rows ne $expected} {error "incorrect successful export: $rows"}
+    if {$stats ne {t tv {2 1}}} {error "incorrect exported statistics: $stats"}
   }
   set temporary [glob -nocomplain dump-fault.*-dump-*]
   if {[llength $temporary] && !$injected} {error "temporary export leaked without a fault"}
