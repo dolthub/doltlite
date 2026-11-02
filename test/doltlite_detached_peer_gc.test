@@ -1,0 +1,164 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set executable [file normalize [info nameofexecutable]]
+while {[file type $executable] eq "link"} {
+  set executable [file normalize [file join [file dirname $executable] [file readlink $executable]]]
+}
+set engine [file join [file dirname $executable] doltlite]
+if {$tcl_platform(platform) eq "windows"} {append engine .exe}
+
+proc detached_gc_setup {kind delimiter {attached 0}} {
+  catch {reader close}
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+    CREATE INDEX tv ON t(v);
+    SELECT dolt_commit('-Am','base');
+    WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<3000)
+      INSERT INTO t SELECT x,hex(randomblob(40)) FROM n;
+    SELECT dolt_commit('-am','big');
+    SELECT dolt_tag('v1');
+  }
+  switch $kind {
+    tag {set ref v1}
+    hash {set ref [db one {SELECT dolt_hashof('HEAD')}]}
+    ancestor {
+      db eval {INSERT INTO t VALUES(3001,'later'); SELECT dolt_commit('-am','later')}
+      set ref main~1
+    }
+  }
+  set path [file normalize test.db]$delimiter$ref
+  if {$attached} {
+    sqlite3 reader :memory:
+    reader eval "ATTACH '$path' AS hist"
+    set table hist.t
+  } else {
+    sqlite3 reader $path
+    set table t
+  }
+  reader eval "SELECT count(*) FROM $table"
+  return [list $ref $table]
+}
+
+foreach kind {tag hash ancestor} {
+  foreach delimiter {/ @} {
+    foreach maintenance {{SELECT dolt_gc()} VACUUM} {
+      foreach attached {0 1} {
+        lassign [detached_gc_setup $kind $delimiter $attached] ref table
+        if {!$attached} {set head [reader one {SELECT dolt_hashof('HEAD')}]}
+        set prefix detached-gc-$kind-$delimiter-$maintenance-$attached
+        set prefix [string map {" " _} $prefix]
+        exec $engine -bail [file normalize test.db] "
+          SELECT dolt_tag('-d','v1'); SELECT dolt_reset('--hard','HEAD~[expr {$kind eq {ancestor} ? 2 : 1}]');
+          $maintenance;
+        "
+        reader eval {PRAGMA shrink_memory}
+        do_test $prefix.error {
+          set sql "SELECT count(*),sum(length(v)) FROM $table"
+          set result [catch {reader eval $sql} message]
+          list $result [expr {[reader errorcode]&255}] $message
+        } [list 1 5 "cannot read: revision '$ref' is no longer available"]
+        do_test $prefix.repeat {
+          catch {reader eval "SELECT * FROM $table"} message
+          set message
+        } "cannot read: revision '$ref' is no longer available"
+        if {!$attached} {
+          do_test $prefix.log {
+            set result [catch {reader eval {SELECT count(*) FROM dolt_log}} message]
+            list $result [sqlite3_extended_errcode reader] $message
+          } [list 1 SQLITE_BUSY_SNAPSHOT "cannot read: revision '$ref' is no longer available"]
+          do_test $prefix.log-filter {
+            set result [catch {reader eval "SELECT count(*) FROM dolt_log WHERE commit_hash='$head'"} message]
+            list $result [sqlite3_extended_errcode reader] $message
+          } [list 1 SQLITE_BUSY_SNAPSHOT "cannot read: revision '$ref' is no longer available"]
+          do_test $prefix.checkout {reader eval {SELECT dolt_checkout('main')}} 0
+          do_test $prefix.recovered {
+            reader eval {INSERT INTO t VALUES(9,'recovered'); SELECT id FROM t; PRAGMA integrity_check}
+          } {9 ok}
+        }
+      }
+    }
+  }
+}
+foreach delimiter {/ @} {
+  foreach access {read checkout} {
+    detached_gc_setup tag $delimiter
+    exec $engine -bail [file normalize test.db] {
+      SELECT dolt_tag('-d','v1'); SELECT dolt_reset('--hard','HEAD~1');
+      INSERT INTO t VALUES(777,'replacement'); SELECT dolt_commit('-am','replacement');
+      SELECT dolt_tag('v1'); SELECT dolt_gc();
+    }
+    reader eval {PRAGMA shrink_memory}
+    if {$access eq "read"} {
+      do_test detached-retagged-$delimiter.error {
+        catch {reader eval {SELECT count(*),sum(length(v)) FROM t}} message
+        set message
+      } {cannot read: revision 'v1' is no longer available}
+    }
+    do_test detached-retagged-$delimiter.$access.checkout {
+      reader eval {SELECT dolt_checkout('main'); SELECT id FROM t; PRAGMA integrity_check}
+    } {0 777 ok}
+  }
+}
+
+foreach kind {tag hash ancestor} {
+  foreach change {delete advance} {
+    lassign [detached_gc_setup $kind /] ref table
+    if {$change eq "delete"} {
+      set sql {SELECT dolt_tag('-d','v1'); SELECT dolt_gc()}
+    } else {
+      set sql {INSERT INTO t VALUES(3002,'new'); SELECT dolt_commit('-am','new');
+               SELECT dolt_tag('-d','v1'); SELECT dolt_tag('v1'); SELECT dolt_gc()}
+    }
+    exec $engine -bail [file normalize test.db] $sql
+    reader eval {PRAGMA shrink_memory}
+    do_test detached-retained-$kind.$change {
+      reader eval {SELECT count(*),sum(length(v)) FROM t; SELECT active_branch() IS NULL}
+    } {3000 240000 1}
+  }
+}
+
+foreach txn {BEGIN {SAVEPOINT s}} {
+  lassign [detached_gc_setup tag /] ref table
+  reader eval $txn
+  reader eval {SELECT count(*) FROM t}
+  exec $engine -bail [file normalize test.db] {
+    SELECT dolt_tag('-d','v1'); SELECT dolt_reset('--hard','HEAD~1'); SELECT dolt_gc();
+  }
+  reader eval {PRAGMA shrink_memory}
+  do_test detached-pinned-$txn {
+    reader eval {SELECT count(*),sum(length(v)) FROM t}
+  } {3000 240000}
+  reader eval {ROLLBACK; PRAGMA shrink_memory}
+  do_test detached-pinned-$txn.released {
+    catch {reader eval {SELECT count(*),sum(length(v)) FROM t}} message
+    set message
+  } {cannot read: revision 'v1' is no longer available}
+}
+
+do_faultsim_test detached-gc-fault -faults {oom-* ioerr-*} -prep {
+  detached_gc_setup tag /
+  exec $::engine -bail [file normalize test.db] {
+    SELECT dolt_tag('-d','v1'); SELECT dolt_reset('--hard','HEAD~1'); SELECT dolt_gc();
+  }
+  reader eval {PRAGMA shrink_memory}
+} -body {
+  reader eval {SELECT count(*),sum(length(v)) FROM t}
+} -test {
+  if {!$testnfail && (!$testrc || $testresult ne "cannot read: revision 'v1' is no longer available")} {
+    error "unexpected result: $testrc $testresult"
+  }
+  set rc [catch {reader eval {SELECT count(*),sum(length(v)) FROM t}} message]
+  if {$rc} {
+    if {$message ne "cannot read: revision 'v1' is no longer available"} {
+      error "unexpected retry: $rc $message"
+    }
+  } elseif {$message ne {3000 240000}} {
+    error "incomplete snapshot: $message"
+  }
+  reader eval {SELECT dolt_checkout('main'); INSERT INTO t VALUES(9,'retry')}
+}
+catch {reader close}
+finish_test

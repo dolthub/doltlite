@@ -5585,7 +5585,7 @@ void doltliteNonlocalTableList(Parse*, const char*);
 Table *doltliteFkParentTable(sqlite3*, const char*, const char*);
 void doltliteJoinStoreCommits(sqlite3*);
 void doltliteEndStoreCommits(sqlite3*);
-const char *doltliteBtreeMissingReadBranch(Btree*);
+const char *doltliteBtreeMissingReadRef(Btree*,int*);
 void doltliteBtreeNoteMissingWriteBranch(Btree*);
 void doltliteBtreeClearMissingWriteBranch(Btree*);
 int doltliteBtreeRunDeferredWork(sqlite3*);

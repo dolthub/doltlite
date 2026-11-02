@@ -258,7 +258,13 @@ static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
   doltliteGetSessionWorkingSetBasis(db, pWs);
   if( doltliteIsDetached(db) ){
     ProllyHash head;
+    int has;
     doltliteGetSessionHead(db, &head);
+    rc = chunkStoreHas(cs,&head,&has);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !has && !chunkStoreSourceEnabled(cs) ){
+      return doltliteMaterializeEmptyCatalog(db,pOldCatHash);
+    }
     return doltliteCommitCatalogHash(db, &head, pOldCatHash);
   }
   if( cs->refs.nBranches>0
