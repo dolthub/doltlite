@@ -5150,9 +5150,6 @@ incrvacuum3 incrvacuum3-2.1.8.3 class=intentional
 # (the body runs instead of erroring at the pragma); fault-index set, Linux CI is the oracle.
 
 
-# crash4: first-commit sector trash; reopen surfaces NOTADB (was crash)
-crash4 crash4-1.1.2 class=intentional  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor
-crash4 crash4-1.1.3 class=intentional  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor
 # filefmt: stock SQLite page-header format probes (was crash on eager open)
 filefmt filefmt-1.1 class=intentional  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
 filefmt filefmt-1.4 class=intentional  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
