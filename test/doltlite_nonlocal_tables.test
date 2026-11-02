@@ -415,4 +415,17 @@ do_test nonlocal-peer-rule-change {
        [nl_disk other {SELECT group_concat(id) FROM users}]
 } {1 2}
 
+# A statement held across a rule change (here, the Tcl statement cache
+# reusing the same SQL text) recompiles with the new redirects.
+nl_reset
+do_test nonlocal-held-statement {
+  db eval {INSERT INTO dolt_nonlocal_tables VALUES('users','main','','immediate')}
+  foreach id {2 3} {
+    if {$id==3} { db eval {DELETE FROM dolt_nonlocal_tables} }
+    db eval {INSERT INTO users VALUES($id, 'held')}
+  }
+  list [nl_disk main {SELECT group_concat(id) FROM users}] \
+       [nl_disk other {SELECT group_concat(id) FROM users}]
+} {1,2 1,3}
+
 finish_test
