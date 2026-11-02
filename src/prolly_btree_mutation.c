@@ -1177,6 +1177,30 @@ static int btCursorInsertImpl(
           nStoredPayload = nOld;
         }
       }
+      if( rc==SQLITE_OK && !isIndex && splitKey ){
+        if( pCurrentKey && nCurrentKey>nSortKey
+         && memcmp(pCurrentKey,pSortKey,nSortKey)==0
+         && sortKeyByteStartsField(pCurrentKey[nSortKey]) ){
+          rc = prollyMutMapDelete(pCur->pMutMap,pCurrentKey,nCurrentKey,0);
+        }else if( seekResult==0 && (!pCurrentKey || nCurrentKey!=nSortKey
+                  || memcmp(pCurrentKey,pSortKey,nSortKey)!=0) ){
+          ProllyCursor base;
+          int res;
+          prollyCursorInit(&base,pCur->pBt->pStore,&pCur->pBt->cache,
+                           &pCur->pCur.root,pCur->pCur.flags);
+          rc = prollyCursorSeekBlob(&base,pSortKey,nSortKey,&res);
+          if( rc==SQLITE_OK && res>0 && prollyCursorIsValid(&base) ){
+            const u8 *pKey;
+            int nKey;
+            prollyCursorKey(&base,&pKey,&nKey);
+            if( nKey>nSortKey && memcmp(pKey,pSortKey,nSortKey)==0
+             && sortKeyByteStartsField(pKey[nSortKey]) ){
+              rc = prollyMutMapDelete(pCur->pMutMap,pKey,nKey,0);
+            }
+          }
+          prollyCursorClose(&base);
+        }
+      }
       if( rc==SQLITE_OK && storePayload
        && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
        && (pStoredPayload==(const u8*)pPayload->pKey
@@ -1532,7 +1556,8 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         nSavedDelKey = e->nKey;
         savedDelKeyOwned = 1;
         hasSavedKey = 1;
-      }else if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
+      }else if( pCur->pCachedPayload && pCur->nCachedPayload > 0
+             && !prollyCursorIsValid(&pCur->pCur) ){
         int nDelKeyField = 0;
         if( pCur->pKeyInfo
          && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){

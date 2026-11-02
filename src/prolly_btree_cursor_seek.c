@@ -900,6 +900,30 @@ static int indexMovetoExactTreeHit(
   *pDone = 0;
   rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &seekRes);
   if( rc!=SQLITE_OK ) return rc;
+  /* Older empty-name catalogs stored payload fields after the primary key. */
+  if( seekRes>0 && exactMutMapKey && pCur->isTableRoot
+   && prollyCursorIsValid(&pCur->pCur) ){
+    const u8 *pStored;
+    int nStored;
+    prollyCursorKey(&pCur->pCur,&pStored,&nStored);
+    if( nStored>nSortKey && memcmp(pStored,pSortKey,nSortKey)==0
+     && sortKeyByteStartsField(pStored[nSortKey]) ){
+      struct TableEntry *pTE = findTable(pCur->pBtree,pCur->pgnoRoot);
+      ProllyMutMap *pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+      ProllyMutMapEntry *pEntry = 0;
+      seekRes = 0;
+      if( pCur->pMutMap ){
+        rc = prollyMutMapFindRc(pCur->pMutMap,pStored,nStored,0,&pEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pEntry && pEntry->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
+      }
+      if( pPending && pPending!=pCur->pMutMap ){
+        rc = prollyMutMapFindRc(pPending,pStored,nStored,0,&pEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pEntry && pEntry->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
+      }
+    }
+  }
   if( seekRes==0
    && pCur->pCur.eState==PROLLY_CURSOR_VALID
    && pCur->pKeyInfo
