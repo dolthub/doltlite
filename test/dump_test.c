@@ -137,6 +137,84 @@ static void values(void){
   }
 }
 
+static void danglingSchema(void){
+  const char *refs[] = {"WORKING","STAGED","HEAD","dangling"};
+  sqlite3 *db = 0;
+  int ref, format;
+  check("dangling source opens",sqlite3_open(":memory:",&db)==SQLITE_OK);
+  check("dangling schema setup",sql(db,
+      "CREATE TABLE x(a); CREATE TABLE y(a); INSERT INTO y VALUES(1);"
+      "CREATE VIEW v AS SELECT * FROM x;"
+      "CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO x VALUES(new.a); END;"
+      "DROP TABLE x; SELECT dolt_commit('-Am','dangling'); SELECT dolt_tag('dangling')")==SQLITE_OK);
+  for(ref=0; ref<4; ref++) for(format=0; format<2; format++){
+    sqlite3 *out = openStock();
+    char *error = 0;
+    int rc;
+    if( format ){
+      Sink sink = {0};
+      rc = doltlite_dump_sql(db,refs[ref],writer,&sink,&error);
+      check("dangling SQL export",rc==SQLITE_OK && !error);
+      if( rc==SQLITE_OK ) check("dangling SQL replay",sql(out,sink.data)==SQLITE_OK);
+      free(sink.data);
+    }else{
+      rc = doltlite_export_sqlite(db,refs[ref],out,&error);
+      check("dangling SQLite export",rc==SQLITE_OK && !error);
+    }
+    check("dangling definitions retained",number(out,
+        "SELECT count(*) FROM main.sqlite_schema WHERE name IN ('v','tr') AND instr(sql,'x')>0")==2);
+    check("dangling table data retained",number(out,"SELECT a FROM y")==1);
+    if( rc==SQLITE_OK ){
+      check("dangling dependencies restored",sql(out,"CREATE TABLE x(a); INSERT INTO y VALUES(2)")==SQLITE_OK);
+      check("restored view and trigger work",number(out,"SELECT a FROM v")==2);
+    }
+    check("dangling source remains unchanged",number(db,"SELECT count(*) FROM y")==1
+        && number(db,"SELECT count(*) FROM dolt_status")==0);
+    sqlite3_free(error); sqlite3_close(out);
+  }
+  sqlite3_close(db);
+}
+
+static void appIdentity(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3_result_value(ctx,argv[0]);
+}
+static int appCompare(void *ctx, int na, const void *a, int nb, const void *b){
+  int result = memcmp(a,b,na<nb ? na : nb);
+  return result ? result : na-nb;
+}
+static void appCollation(void *ctx, sqlite3 *db, int enc, const char *name){
+  (*(int*)ctx)++;
+  sqlite3_create_collation(db,name,enc,0,appCompare);
+}
+static void danglingApplications(void){
+  sqlite3 *db = 0, *out = openStock();
+  char *error = 0;
+  int rc, needed = 0;
+  sqlite3_open(":memory:",&db);
+  check("application schema setup",sql(db,
+      "CREATE VIEW v AS SELECT app_identity(a) FROM gone")==SQLITE_OK);
+  rc = doltlite_export_sqlite(db,0,out,&error);
+  check("missing application function rejected",rc==SQLITE_ERROR
+      && error && strstr(error,"app_identity"));
+  check("missing function rolls back destination",number(out,"SELECT count(*) FROM sqlite_schema")==0);
+  sqlite3_free(error); error = 0;
+  check("application collation schema setup",sql(db,
+      "DROP VIEW v; CREATE VIEW v AS SELECT app_identity(a) COLLATE app_collation FROM gone")==SQLITE_OK);
+  check("application function registered",sqlite3_create_function(out,"app_identity",1,
+      SQLITE_UTF8,0,appIdentity,0,0)==SQLITE_OK);
+  rc = doltlite_export_sqlite(db,0,out,&error);
+  check("missing application collation rejected",rc==SQLITE_ERROR
+      && error && strstr(error,"app_collation"));
+  check("missing collation rolls back destination",number(out,"SELECT count(*) FROM sqlite_schema")==0);
+  sqlite3_free(error); error = 0;
+  check("collation factory registered",sqlite3_collation_needed(out,&needed,appCollation)==SQLITE_OK);
+  rc = doltlite_export_sqlite(db,0,out,&error);
+  check("application dependencies accepted",rc==SQLITE_OK && !error && needed>0);
+  check("application schema restored",sql(out,"CREATE TABLE gone(a); INSERT INTO gone VALUES(7)")==SQLITE_OK
+      && number(out,"SELECT * FROM v")==7);
+  sqlite3_free(error); sqlite3_close(out); sqlite3_close(db);
+}
+
 static int memoryAccessCalls;
 static int memoryAccess(sqlite3_vfs *vfs, const char *path, int flags, int *exists){
   memoryAccessCalls++;
@@ -594,7 +672,7 @@ static void existingFiles(void){
 }
 
 int main(void){
-  existingFiles(); memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
+  danglingSchema(); danglingApplications(); existingFiles(); memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
 #ifndef SQLITE_OMIT_AUTHORIZATION
   authorization();
 #endif

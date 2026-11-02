@@ -309,6 +309,108 @@ static int dumpMeta(DlDump *p, const ProllyHash *cat){
   return rc;
 }
 
+static int dumpDoltliteFunction(const char *z){
+  return !sqlite3_strnicmp(z,"dolt_",5) || !sqlite3_strnicmp(z,"doltlite_",9)
+      || !sqlite3_stricmp(z,"active_branch");
+}
+
+static int dumpDependencyExpr(Walker *w, Expr *e){
+  Parse *parse = w->pParse;
+  if( parse->rc!=SQLITE_OK ) return WRC_Abort;
+  if( e->op==TK_FUNCTION ){
+    const char *z = e->u.zToken;
+    if( dumpDoltliteFunction(z) ){
+      sqlite3ErrorMsg(parse,"not authorized to use function: %s",z);
+    }else if( !sqlite3FindFunction(parse->db,z,-2,SQLITE_UTF8,0) ){
+      sqlite3ErrorMsg(parse,"no such function: %s",z);
+    }else{
+      sqlite3AuthCheck(parse,SQLITE_FUNCTION,0,z,0);
+    }
+  }else if( e->op==TK_COLLATE ){
+    sqlite3GetCollSeq(parse,SQLITE_UTF8,0,e->u.zToken);
+  }
+  return parse->rc==SQLITE_OK ? WRC_Continue : WRC_Abort;
+}
+
+static int dumpDependencySelect(Walker *w, Select *s){
+  int i;
+  if( w->pParse->rc!=SQLITE_OK ) return WRC_Abort;
+#ifndef SQLITE_OMIT_CTE
+  if( s->pWith ){
+    for(i=0; i<s->pWith->nCte; i++){
+      if( sqlite3WalkSelect(w,s->pWith->a[i].pSelect) ) return WRC_Abort;
+    }
+  }
+#endif
+  for(i=0; s->pSrc && i<s->pSrc->nSrc; i++){
+    SrcItem *item = &s->pSrc->a[i];
+    if( item->fg.isTabFunc ){
+      if( dumpDoltliteFunction(item->zName) ){
+        sqlite3ErrorMsg(w->pParse,"not authorized to use function: %s",item->zName);
+      }else{
+        sqlite3LocateTable(w->pParse,0,item->zName,"main");
+      }
+      if( w->pParse->rc!=SQLITE_OK ) return WRC_Abort;
+    }
+    if( !item->fg.isUsing && sqlite3WalkExpr(w,item->u3.pOn) ) return WRC_Abort;
+  }
+  return WRC_Continue;
+}
+
+static int dumpValidateDependencies(DlDump *p, Table *table){
+  Parse parse;
+  Walker w;
+  Trigger *trigger;
+  int rc;
+  sqlite3_mutex_enter(p->out->mutex);
+  sqlite3ParseObjectInit(&parse,p->out);
+  memset(&w,0,sizeof(w));
+  w.pParse = &parse;
+  w.xExprCallback = dumpDependencyExpr;
+  w.xSelectCallback = dumpDependencySelect;
+  w.xSelectCallback2 = sqlite3WalkWinDefnDummyCallback;
+  parse.zAuthContext = table->zName;
+  if( IsView(table) ) sqlite3WalkSelect(&w,table->u.view.pSelect);
+  for(trigger=table->pTrigger; trigger && !parse.rc; trigger=trigger->pNext){
+    TriggerStep *step;
+    parse.zAuthContext = trigger->zName;
+    sqlite3WalkExpr(&w,trigger->pWhen);
+    for(step=trigger->step_list; step && !parse.rc; step=step->pNext){
+      Upsert *upsert;
+      Select select;
+      memset(&select,0,sizeof(select));
+      select.pSrc = step->pSrc;
+      sqlite3WalkSelect(&w,&select);
+      sqlite3WalkSelect(&w,step->pSelect);
+      sqlite3WalkExpr(&w,step->pWhere);
+      sqlite3WalkExprList(&w,step->pExprList);
+      for(upsert=step->pUpsert; upsert && !parse.rc; upsert=upsert->pNextUpsert){
+        sqlite3WalkExprList(&w,upsert->pUpsertTarget);
+        sqlite3WalkExpr(&w,upsert->pUpsertTargetWhere);
+        sqlite3WalkExprList(&w,upsert->pUpsertSet);
+        sqlite3WalkExpr(&w,upsert->pUpsertWhere);
+      }
+    }
+  }
+  rc = p->out->mallocFailed ? SQLITE_NOMEM : parse.rc;
+  if( rc!=SQLITE_OK ) dumpError(p,rc,table->zName,parse.zErrMsg);
+  sqlite3DbFree(p->out,parse.zErrMsg);
+  sqlite3ParseObjectReset(&parse);
+  sqlite3_mutex_leave(p->out->mutex);
+  return rc;
+}
+
+static int dumpValidatePrepare(DlDump *p, Table *table, const char *sql){
+  sqlite3_stmt *q = 0;
+  int rc = sqlite3_prepare_v2(p->out,sql,-1,&q,0);
+  sqlite3_finalize(q);
+  if( rc==SQLITE_ERROR
+   && sqlite3_strnicmp(sqlite3_errmsg(p->out),"no such table:",14)==0 ){
+    rc = dumpValidateDependencies(p,table);
+  }
+  return rc;
+}
+
 static int dumpValidate(DlDump *p){
   int i, rc = SQLITE_OK;
   for(i=0; i<p->nSchema && rc==SQLITE_OK; i++){
@@ -319,16 +421,13 @@ static int dumpValidate(DlDump *p){
     table = sqlite3FindTable(p->out,e->zName,"main");
     if( !table ) continue;
     if( IsView(table) ){
-      sqlite3_stmt *q = 0;
       char *sql = sqlite3_mprintf("SELECT * FROM main.\"%w\" LIMIT 0",e->zName);
       if( !sql ) return SQLITE_NOMEM;
-      rc = sqlite3_prepare_v2(p->out,sql,-1,&q,0);
+      rc = dumpValidatePrepare(p,table,sql);
       sqlite3_free(sql);
-      sqlite3_finalize(q);
     }
     for(trigger=table->pTrigger; trigger && rc==SQLITE_OK; trigger=trigger->pNext){
       sqlite3_str *text = sqlite3_str_new(p->out);
-      sqlite3_stmt *q = 0;
       char *sql;
       if( trigger->op==TK_INSERT ){
         sqlite3_str_appendf(text,"EXPLAIN INSERT INTO main.\"%w\" DEFAULT VALUES",e->zName);
@@ -345,9 +444,8 @@ static int dumpValidate(DlDump *p){
       }
       sql = sqlite3_str_finish(text);
       if( !sql ) return SQLITE_NOMEM;
-      rc = sqlite3_prepare_v2(p->out,sql,-1,&q,0);
+      rc = dumpValidatePrepare(p,table,sql);
       sqlite3_free(sql);
-      sqlite3_finalize(q);
     }
     if( rc!=SQLITE_OK ) dumpError(p,rc,e->zName,sqlite3_errmsg(p->out));
   }
@@ -364,8 +462,7 @@ static int dumpAuthorize(void *ctx, int op, const char *a, const char *b,
                          const char *db, const char *trigger){
   DumpAuth *saved = ctx;
   if( op==SQLITE_FUNCTION && b
-   && (!sqlite3_strnicmp(b,"dolt_",5) || !sqlite3_strnicmp(b,"doltlite_",9)
-       || !sqlite3_stricmp(b,"active_branch")) ) return SQLITE_DENY;
+   && dumpDoltliteFunction(b) ) return SQLITE_DENY;
   return saved->callback ? saved->callback(saved->ctx,op,a,b,db,trigger) : SQLITE_OK;
 }
 #endif
