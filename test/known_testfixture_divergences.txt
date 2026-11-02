@@ -2987,14 +2987,10 @@ e_reindex e_reindex-2.6.5 class=intentional
 e_reindex e_reindex-2.6.7 class=intentional
 e_reindex e_reindex-2.6.8 class=intentional
 
-# parse_uri records the LAST xOpen seen by a testvfs. doltlite's chunk
-# store performs extra VFS opens after the initial URI open (traced with a
-# log-all-xOpens repro): for relative paths it re-opens the resolved
-# absolute path with no URI parameter block, so the recorded open has the
-# right file but empty params (3.2/3.3); for absolute paths the recorded
-# open is the eager ".{db}-lock" sidecar (4.2-4.4, 12.x, 13.x), so both the
-# filename and the parameter list differ.
-e_uri e_uri-3.2 class=intentional  # parse_uri records the LAST xOpen seen by a testvfs. doltlite's chunk store performs extra VFS opens after the initial URI open (traced with a log-all-xOpens repro): for relative paths it re-opens the resolved absolute path with no URI parameter block, so the recorded open has the right file but empty params (3.2/3.3); for absolute paths the recorded open is the eager ".{db}-lock" sidecar (4.2-4.4, 12.x, 13.x), so both the filename and the parameter list differ.
+# Internal database reopens lose the URI parameter block (3.2/3.3).
+# Failed absolute-path opens may reach only the eager lock sidecar, with
+# no primary-file open for the URI probe to select (4.2-4.4, 12.x, 13.x).
+e_uri e_uri-3.2 class=intentional  # internal database reopens lose URI params; failed absolute opens may only reach the lock sidecar
 e_uri e_uri-3.3 class=intentional
 e_uri e_uri-4.2 class=intentional
 e_uri e_uri-4.3 class=intentional
