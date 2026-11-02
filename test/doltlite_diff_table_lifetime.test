@@ -88,6 +88,18 @@ foreach {layout key constraint suffix} {
   do_execsql_test diff-lifetime-$layout-repeated {
     SELECT to_id,from_id,diff_type FROM dolt_diff_t;
   } {5 {} added}
+  execsql {
+    DROP TABLE t;
+    SELECT dolt_commit('-Am','drop latest table');
+    SELECT dolt_commit('--allow-empty','-m','after latest drop');
+  }
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    do_execsql_test diff-lifetime-$layout-dropped-$phase {
+      SELECT coalesce(to_id,from_id),diff_type FROM dolt_diff_t
+        ORDER BY diff_type;
+    } {5 added 5 removed}
+  }
 }
 
 foreach order {main side} {

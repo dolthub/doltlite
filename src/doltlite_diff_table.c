@@ -472,7 +472,8 @@ static int walkNextDiffPair(DiffTblCursor *pCur, sqlite3 *db,
      && !prollyHashSetContains(&pCur->walkSeen, &pCur->walkCurr.key) ){
       rc = prollyHashSetAdd(&pCur->walkSeen, &pCur->walkCurr.key);
       if( rc==SQLITE_OK && !filterHit
-       && !prollyHashIsEmpty(&curSchemaHash) ){
+       && (!prollyHashIsEmpty(&curSchemaHash)
+           || prollyHashIsEmpty(&pCur->walkCurr.schemaHash)) ){
         rc = registerCommitParents(pCur, &commit, &curTblRoot,
                                     &curSchemaHash, curFlags, curHex);
       }
