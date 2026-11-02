@@ -2445,7 +2445,7 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       pTbl = q; q += nTbl;
       (void)pTbl;
       pTE->tableRootKnown = 1;
-      if( nType==5 && memcmp(pType, "table", 5)==0 && nName>0 ){
+      if( nType==5 && memcmp(pType, "table", 5)==0 ){
         pTE->isTableRoot = 1;
         /* Views/triggers/vtables share table number 0; catAdd reuses the entry. */
         sqlite3_free(pTE->zName);
