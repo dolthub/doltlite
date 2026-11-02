@@ -10,7 +10,7 @@ echo ""
 ROOT=$(mktemp -d ./.doltlite-vc-seal.XXXXXX)
 trap 'rm -rf "$ROOT"' EXIT
 
-STATE="SELECT group_concat(message, '|') FROM dolt_log;
+STATE="SELECT group_concat(CASE WHEN message LIKE 'Initialize data repository%' THEN 'Initialize data repository' ELSE message END, '|') FROM dolt_log;
 SELECT group_concat(name, ',') FROM (SELECT name FROM dolt_branches ORDER BY name);
 SELECT group_concat(a, ',') FROM (SELECT a FROM t ORDER BY a);
 SELECT count(*) FROM dolt_status;"

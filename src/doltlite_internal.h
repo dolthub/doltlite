@@ -1339,6 +1339,7 @@ int doltliteRecordHasNocaseNulForTest(
   const u8 *pRec, int nRec, int nKeyCol, const char *const *azColl, int *pHas
 );
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
+int doltliteCreateSeedCommit(sqlite3 *db, ChunkStore *cs, ProllyHash *pHash);
 int doltliteCreateAndStoreCommit(
   sqlite3 *db,
   const ProllyHash *pParent,

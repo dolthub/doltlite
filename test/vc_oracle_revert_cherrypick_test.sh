@@ -729,7 +729,7 @@ SELECT dolt_revert('HEAD');
 
 vc_oracle_error "cherry_pick_initial_commit" "
 $SEED
-SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message = 'Initialize data repository'));
+SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message LIKE 'Initialize data repository%'));
 "
 
 vc_oracle_error "cherry_pick_already_applied" "

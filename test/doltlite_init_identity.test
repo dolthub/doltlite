@@ -1,0 +1,106 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set hashes {}
+set created 0
+for {set i 0} {$i<12} {incr i} {
+  set path init-identity-$i.db
+  forcedelete $path
+  sqlite3 peer $path
+  set hash [peer one {SELECT dolt_hashof('HEAD')}]
+  lappend hashes $hash
+  do_test init-identity-$i-root {
+    peer eval {SELECT count(*),length(commit_hash),length(date)>0 FROM dolt_log}
+  } {1 40 1}
+  do_test init-identity-$i-message {
+    regexp {^Initialize data repository \([0-9a-f]{32}\)$} \
+        [peer one {SELECT message FROM dolt_log}]
+  } 1
+  peer close
+  incr created
+}
+for {set i 0} {$i<6} {incr i} {
+  sqlite3 peer :memory:
+  lappend hashes [peer one {SELECT dolt_hashof('HEAD')}]
+  peer close
+  incr created
+}
+do_test init-identity-distinct {llength [lsort -unique $hashes]} $created
+
+sqlite3 peer init-identity-0.db
+do_test init-identity-reopen {peer one {SELECT dolt_hashof('HEAD')}} [lindex $hashes 0]
+peer close
+sqlite3 a init-identity-0.db
+sqlite3 b init-identity-1.db
+a eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(1,'a-only'); SELECT dolt_commit('-Am','a1');
+}
+b eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+  INSERT INTO t VALUES(2,'b-only'); SELECT dolt_commit('-Am','b1');
+}
+b close
+set remote [file normalize init-identity-1.db]
+a eval "SELECT dolt_remote('add','other','file://$remote'); SELECT dolt_fetch('other')"
+set head [a one {SELECT dolt_hashof('HEAD')}]
+do_test init-identity-unrelated-merge {
+  set rc [catch {a eval {SELECT dolt_merge('other/main')}} message]
+  list $rc [string match {*no common ancestor*} $message]
+} {1 1}
+do_test init-identity-unrelated-preserved {
+  list [a one {SELECT dolt_hashof('HEAD')}] \
+       [a eval {SELECT id,v FROM t ORDER BY id}] \
+       [a one {SELECT count(*) FROM dolt_status}]
+} [list $head {1 a-only} 0]
+a close
+
+foreach mode {eager lazy} index {2 3} {
+  set source [file normalize init-identity-$index.db]
+  set target init-identity-$mode.db
+  forcedelete $target
+  sqlite3 original $source
+  sqlite3 copy $target
+  set sql "SELECT dolt_clone('file://$source')"
+  if {$mode eq "lazy"} {set sql "SELECT dolt_clone('--lazy','file://$source')"}
+  do_test init-identity-clone-$mode {copy eval $sql} 0
+  do_test init-identity-clone-$mode-root {
+    copy one {SELECT dolt_hashof('HEAD')}
+  } [lindex $hashes $index]
+  do_test init-identity-clone-$mode-message {
+    expr {[copy one {SELECT message FROM dolt_log}] eq \
+          [original one {SELECT message FROM dolt_log}]}
+  } 1
+  original eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'original'); SELECT dolt_commit('-Am','original');
+  }
+  copy eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(2,'copy'); SELECT dolt_commit('-Am','copy');
+    SELECT dolt_fetch('origin'); SELECT dolt_merge('origin/main');
+  }
+  do_test init-identity-clone-$mode-merge {
+    copy eval {SELECT id,v FROM t ORDER BY id; SELECT count(*) FROM dolt_status}
+  } {1 original 2 copy 0}
+  original close
+  copy close
+}
+
+set engine [file join [file dirname [file normalize [info nameofexecutable]]] doltlite]
+if {$tcl_platform(platform) eq "windows"} {append engine .exe}
+set children {}
+for {set i 0} {$i<4} {incr i} {
+  set path [file normalize init-identity-process-$i.db]
+  forcedelete $path
+  lappend children [open [list | $engine -bail $path {SELECT dolt_hashof('HEAD')}]]
+}
+foreach child $children {
+  set hash [string trim [read $child]]
+  close $child
+  lappend hashes $hash
+  incr created
+}
+do_test init-identity-processes-distinct {llength [lsort -unique $hashes]} $created
+
+finish_test

@@ -2355,7 +2355,7 @@ result=$(cat "$PR/plain/clone.out")
 check_match "peer commit makes clone report not empty" "database is not empty" "$result"
 result=$("$DB" "$PR/plain/t.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
 check "peer commit stays at the tip" "$(cat "$PR/plain/peer.hash")" "$result"
-result=$("$DB" "$PR/plain/t.db" "SELECT group_concat(message,',') FROM dolt_log;")
+result=$("$DB" "$PR/plain/t.db" "SELECT group_concat(CASE WHEN message LIKE 'Initialize data repository%' THEN 'Initialize data repository' ELSE message END,',') FROM dolt_log;")
 check "peer commit keeps both messages" "peer,Initialize data repository" "$result"
 result=$("$DB" "$PR/plain/t.db" "SELECT x FROM peer; SELECT x FROM peer2;")
 check "peer commit and the later write both remain" "42
@@ -2368,7 +2368,7 @@ check "a later write still sees the peer row" "2" "$result"
 clone_during_pause dirty dirty ""
 result=$(cat "$PR/dirty/clone.out")
 check_match "a working set alone reports uncommitted changes" "database has uncommitted changes" "$result"
-result=$("$DB" "$PR/dirty/t.db" "SELECT group_concat(message,',') FROM dolt_log; SELECT x FROM peer2;")
+result=$("$DB" "$PR/dirty/t.db" "SELECT group_concat(CASE WHEN message LIKE 'Initialize data repository%' THEN 'Initialize data repository' ELSE message END,',') FROM dolt_log; SELECT x FROM peer2;")
 check "dirty target keeps the root commit and the write" "Initialize data repository
 7" "$result"
 result=$("$DB" "$PR/dirty/t.db" "SELECT count(*) FROM sqlite_master WHERE name='r';")
