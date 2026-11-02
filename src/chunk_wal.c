@@ -781,7 +781,10 @@ static int csReplayWalFrom(
   }
 
   chunkBuf = sqlite3_malloc(CS_SCAN_WINDOW);
-  if( !chunkBuf ) return SQLITE_NOMEM;
+  if( !chunkBuf ){
+    cs->file.iFileSize = iFileSizeBefore;
+    return SQLITE_NOMEM;
+  }
 
   csCaptureReplayState(cs, &saved);
   /* iFileSize was already advanced to the disk size above; rollback must

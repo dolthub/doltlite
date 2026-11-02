@@ -918,8 +918,8 @@ int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
 }
 
 /* The store is append-only between compactions: when the file only grew
-** and our sealed tail root is still byte-intact, ingest just the new
-** records instead of reopening the whole store. Any doubt falls back to
+** and our sealed tail root or compacted header is still byte-intact,
+** ingest just the new records instead of reopening the whole store. Any doubt falls back to
 ** the full reload. */
 static int csIncrementalTailRefresh(ChunkStore *cs){
   u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
@@ -935,30 +935,41 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
    || cs->bRefsStale || cs->movedReadOnly || cs->corruptMidStream
    || cs->notADatabase || cs->file.pFile==0
    || cs->wal.iWalOffset<=0
-   || cs->wal.nWalData < (i64)sizeof(aRoot)
+   || (cs->wal.nWalData!=0 && cs->wal.nWalData < (i64)sizeof(aRoot))
    || prollyHashCompare(&cs->refs.refsHash,
                         &cs->refs.committedRefsHash)!=0 ){
     return SQLITE_MISMATCH;
   }
 
-  contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
-  rootOff = contentEnd - (i64)sizeof(aRoot);
-  if( rootOff < cs->wal.iWalOffset ) return SQLITE_MISMATCH;
-  rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), rootOff);
-  /* A short read means the file shrank (compaction/replacement): not
-  ** eligible, reload. Any other IO failure is a real error and must not
-  ** be absorbed by the reload retry. */
-  if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
-  if( rc!=SQLITE_OK ) return rc;
-  if( aRoot[0]!=CS_WAL_TAG_ROOT ) return SQLITE_MISMATCH;
-  hashState = csManifestHashState(aRoot+1, rootOff);
-  if( hashState!=CS_MANIFEST_HASH_OK ){
-    hashState = csManifestHashStateOffsetless(aRoot+1);
-  }
-  if( hashState!=CS_MANIFEST_HASH_OK
-   || memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
-             cs->refs.refsHash.data, PROLLY_HASH_SIZE)!=0 ){
-    return SQLITE_MISMATCH;
+  if( cs->wal.nWalData==0 ){
+    u8 expected[CHUNK_MANIFEST_SIZE];
+    if( cs->file.iFileSize!=cs->wal.iWalOffset ) return SQLITE_MISMATCH;
+    rc = sqlite3OsRead(cs->file.pFile,aRoot+1,CHUNK_MANIFEST_SIZE,0);
+    if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
+    if( rc!=SQLITE_OK ) return rc;
+    csSerializeManifest(cs,expected);
+    csManifestSeal(expected,0);
+    if( memcmp(aRoot+1,expected,sizeof(expected))!=0 ) return SQLITE_MISMATCH;
+  }else{
+    contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
+    rootOff = contentEnd - (i64)sizeof(aRoot);
+    if( rootOff < cs->wal.iWalOffset ) return SQLITE_MISMATCH;
+    rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), rootOff);
+    /* A short read means the file shrank (compaction/replacement): not
+    ** eligible, reload. Any other IO failure is a real error and must not
+    ** be absorbed by the reload retry. */
+    if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
+    if( rc!=SQLITE_OK ) return rc;
+    if( aRoot[0]!=CS_WAL_TAG_ROOT ) return SQLITE_MISMATCH;
+    hashState = csManifestHashState(aRoot+1, rootOff);
+    if( hashState!=CS_MANIFEST_HASH_OK ){
+      hashState = csManifestHashStateOffsetless(aRoot+1);
+    }
+    if( hashState!=CS_MANIFEST_HASH_OK
+     || memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
+               cs->refs.refsHash.data, PROLLY_HASH_SIZE)!=0 ){
+      return SQLITE_MISMATCH;
+    }
   }
 
   rc = csReplayWalTail(cs, cs->file.iFileSize);
