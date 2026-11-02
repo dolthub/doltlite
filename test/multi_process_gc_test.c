@@ -1056,6 +1056,95 @@ static void test_peer_rewrite_then_gc(void){
   remove(path);
 }
 
+static void test_compacted_peer_rewrite(void){
+  const char *compact[] = {"SELECT dolt_gc()", "VACUUM"};
+  const char *rewrite[] = {
+    "INSERT INTO t VALUES(3,'three'); SELECT dolt_commit('-a','--amend','-m','amended')",
+    "SELECT dolt_reset('--hard','HEAD~1')",
+    "SELECT dolt_reset('--hard','HEAD~1')"
+  };
+  const char *before[] = {"1,2,3", "1", "1,2"};
+  const char *after[] = {"1,2,3,4", "1,4", "1,2,4"};
+  const char *path = DOLTLITE_TEST_TMPDIR "/compacted_peer_rewrite.db";
+  int first, last, op, readFirst;
+  for(first=0; first<2; first++) for(last=0; last<2; last++)
+  for(op=0; op<3; op++) for(readFirst=0; readFirst<2; readFirst++){
+    sqlite3 *a = 0, *b = 0, *c = 0;
+    int version, failures = nFail;
+    remove(path);
+    check("compacted_peer_open",sqlite3_open(path,&a)==SQLITE_OK);
+    check("compacted_peer_seed",execSql(a,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT); CREATE INDEX tv ON t(v);"
+        "INSERT INTO t VALUES(1,'one'); SELECT dolt_commit('-Am','c1');"
+        "INSERT INTO t VALUES(2,'two'); SELECT dolt_commit('-am','c2')")==SQLITE_OK);
+    if( op==2 ) check("compacted_peer_delete",execSql(a,
+        "DELETE FROM t WHERE id=2; SELECT dolt_commit('-am','deleted')")==SQLITE_OK);
+    check("compacted_peer_writer_open",sqlite3_open(path,&b)==SQLITE_OK);
+    check("compacted_peer_first_gc",execSql(b,compact[first])==SQLITE_OK);
+    check("compacted_peer_adopts_gc",strcmp(queryScalarText(a,
+        "SELECT group_concat(id) FROM t"),op==2 ? "1" : "1,2")==0);
+    version = atoi(queryScalarText(a,"PRAGMA data_version"));
+    check("compacted_peer_rewrite",execSql(b,rewrite[op])==SQLITE_OK);
+    check("compacted_peer_second_gc",execSql(b,compact[last])==SQLITE_OK);
+    if( readFirst ){
+      check("compacted_peer_fresh_rows",strcmp(queryScalarText(a,
+          "SELECT group_concat(id) FROM (SELECT id FROM t INDEXED BY tv ORDER BY id)"),before[op])==0);
+      check("compacted_peer_data_version",atoi(queryScalarText(a,"PRAGMA data_version"))!=version);
+    }
+    check("compacted_peer_write",execSql(a,"INSERT INTO t VALUES(4,'mine')")==SQLITE_OK);
+    check("compacted_peer_checkout",execSql(a,"SELECT dolt_checkout('main')")==SQLITE_OK);
+    sqlite3_close(a); sqlite3_close(b);
+    check("compacted_peer_observer",sqlite3_open(path,&c)==SQLITE_OK);
+    check("compacted_peer_durable_rows",strcmp(queryScalarText(c,
+        "SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id)"),after[op])==0);
+    check("compacted_peer_integrity",strcmp(queryScalarText(c,"PRAGMA integrity_check"),"ok")==0);
+    sqlite3_close(c);
+    if( nFail!=failures ) fprintf(stderr,"compacted peer case: first=%d last=%d op=%d read=%d\n",first,last,op,readFirst);
+  }
+  remove(path);
+}
+
+static void test_compacted_process_rewrite(void){
+  const char *compact[] = {"SELECT dolt_gc()", "VACUUM"};
+  const char *path = DOLTLITE_TEST_TMPDIR "/compacted_process_rewrite.db";
+  int first, last, reset;
+  for(first=0; first<2; first++) for(last=0; last<2; last++) for(reset=0; reset<2; reset++){
+    sqlite3 *reader = 0;
+    int status = 0, version;
+    pid_t pid;
+    remove(path);
+    check("compacted_process_open",sqlite3_open(path,&reader)==SQLITE_OK);
+    check("compacted_process_seed",execSql(reader,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1);"
+        "SELECT dolt_commit('-Am','c1'); INSERT INTO t VALUES(2);"
+        "SELECT dolt_commit('-am','c2')")==SQLITE_OK);
+    check("compacted_process_first_gc",execSql(reader,compact[first])==SQLITE_OK);
+    version = atoi(queryScalarText(reader,"PRAGMA data_version"));
+    pid = fork();
+    if( pid==0 ){
+      sqlite3 *writer = 0;
+      int rc = sqlite3_open(path,&writer);
+      if( rc==SQLITE_OK ) rc = execSql(writer,reset
+          ? "SELECT dolt_reset('--hard','HEAD~1')"
+          : "INSERT INTO t VALUES(3); SELECT dolt_commit('-a','--amend','-m','amended')");
+      if( rc==SQLITE_OK ) rc = execSql(writer,compact[last]);
+      sqlite3_close(writer);
+      _exit(rc==SQLITE_OK ? 0 : 1);
+    }
+    check("compacted_process_fork",pid>0);
+    if( pid>0 ){
+      waitpid(pid,&status,0);
+      check("compacted_process_writer",WIFEXITED(status) && WEXITSTATUS(status)==0);
+      check("compacted_process_fresh_rows",strcmp(queryScalarText(reader,
+          "SELECT group_concat(id) FROM t"),reset ? "1" : "1,2,3")==0);
+      check("compacted_process_data_version",atoi(queryScalarText(reader,"PRAGMA data_version"))!=version);
+      check("compacted_process_write",execSql(reader,"INSERT INTO t VALUES(4)")==SQLITE_OK);
+    }
+    sqlite3_close(reader);
+  }
+  remove(path);
+}
+
 /* A put that finds its chunk already stored writes nothing. If that chunk is
 ** an unreferenced leftover, a peer's gc may delete it before the writer
 ** publishes, and the published ref would dangle. */
@@ -1526,6 +1615,8 @@ int main(){
   test_concurrent_staging_then_gc();
   test_stale_session_roots_after_gc();
   test_peer_rewrite_then_gc();
+  test_compacted_peer_rewrite();
+  test_compacted_process_rewrite();
   test_gc_vs_put_deduped_against_garbage();
   test_gc_sweeps_refused_commit_catalog();
   test_gc_before_add_persist();

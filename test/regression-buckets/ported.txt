@@ -190,6 +190,7 @@ doltlite_ref_snapshot_boundary
 doltlite_qualified_refs
 doltlite_deleted_branch_gc
 doltlite_reset_peer_gc
+doltlite_gc_empty_wal_refresh
 doltlite_reset_peer_write
 doltlite_backup_peer_write
 doltlite_backup_busy
