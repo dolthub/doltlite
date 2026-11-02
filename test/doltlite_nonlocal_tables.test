@@ -320,4 +320,19 @@ do_test nonlocal-ddl-target-untouched {
   }
 } {{CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)}}
 
+# A TEMP table answers an unqualified name before any rule, as SQLite
+# resolves temp first; dropping it uncovers the rule again.
+nl_reset
+do_execsql_test nonlocal-temp-shadows {
+  INSERT INTO dolt_nonlocal_tables VALUES('nl','main','users','immediate');
+  CREATE TEMP TABLE nl(id INTEGER PRIMARY KEY);
+  INSERT INTO nl VALUES(42);
+  SELECT group_concat(id) FROM nl;
+  DROP TABLE nl;
+  SELECT group_concat(id) FROM nl;
+} {42 1}
+do_test nonlocal-temp-target-untouched {
+  nl_disk main {SELECT group_concat(id) FROM users}
+} {1}
+
 finish_test
