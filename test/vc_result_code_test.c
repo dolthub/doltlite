@@ -190,13 +190,15 @@ static void test_no_internal_code_escapes(const char *zPath){
   remove(zPath);
 }
 
-/* A detached session's commit is collected by a peer. Reading it must
-** report corruption, never the store's internal not-found sentinel. */
+static int rowCount(sqlite3 *db);
+
 static void test_detached_after_gc(const char *zPath){
-  static const char *azRead[] = {
+  char zLookup[256];
+  const char *azRead[] = {
     "SELECT count(*), sum(length(v)) FROM t",
     "SELECT count(*) FROM dolt_log",
     "PRAGMA integrity_check",
+    zLookup,
     0
   };
   sqlite3 *db = 0, *peer = 0;
@@ -226,8 +228,11 @@ static void test_detached_after_gc(const char *zPath){
   sqlite3_close(db);
   db = 0;
 
+  snprintf(zLookup,sizeof(zLookup),
+      "SELECT count(*) FROM dolt_log WHERE commit_hash='%s'",zHash);
   snprintf(zDetached, sizeof(zDetached), "%s/%s", zPath, zHash);
   check("detached_gc: open detached", sqlite3_open(zDetached, &db)==SQLITE_OK);
+  sqlite3_extended_result_codes(db, 1);
   check("detached_gc: point read", exec(db,
       "SELECT count(*) FROM t WHERE id=1")==SQLITE_OK);
   check("detached_gc: peer open", sqlite3_open(zPath, &peer)==SQLITE_OK);
@@ -239,10 +244,22 @@ static void test_detached_after_gc(const char *zPath){
   for(i=0; azRead[i]; i++){
     char *zErr = 0;
     int rc = sqlite3_exec(db, azRead[i], 0, 0, &zErr);
-    checkRc(azRead[i], rc, SQLITE_CORRUPT);
-    check("detached_gc: says why", zErr!=0 && zErr[0]!=0);
+    checkRc(azRead[i], rc, SQLITE_BUSY_SNAPSHOT);
+    checkRc("detached_gc: extended code", sqlite3_extended_errcode(db),
+            SQLITE_BUSY_SNAPSHOT);
+    check("detached_gc: names revision", zErr && strstr(zErr,zHash));
+    check("detached_gc: says unavailable", zErr && strstr(zErr,"no longer available"));
     sqlite3_free(zErr);
   }
+  checkRc("detached_gc: checkout recovers", exec(db,"SELECT dolt_checkout('main')"),
+          SQLITE_OK);
+  check("detached_gc: recovered writable", sqlite3_db_readonly(db,"main")==0);
+  checkRc("detached_gc: recovered write", exec(db,"INSERT INTO t VALUES(2,'recovered')"),
+          SQLITE_OK);
+  check("detached_gc: recovered rows", rowCount(db)==2);
+  sqlite3_close(db);
+  checkRc("detached_gc: reopen", sqlite3_open(zPath,&db),SQLITE_OK);
+  check("detached_gc: durable rows", rowCount(db)==2);
   sqlite3_close(db);
   remove(zPath);
 }

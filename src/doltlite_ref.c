@@ -440,6 +440,13 @@ int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
   int rc;
   if( !cs ) return SQLITE_ERROR;
   rc = chunkStoreGet(cs, pHash, &data, &nData);
+  if( rc==SQLITE_NOTFOUND && doltliteIsDetached(db) ){
+    ProllyHash head;
+    doltliteGetSessionHead(db, &head);
+    if( prollyHashCompare(pHash,&head)==0 ){
+      return btreeReadResult(db->aDb[0].pBt,rc);
+    }
+  }
   if( rc==SQLITE_NOTFOUND && !doltliteIsDetached(db) ){
     ProllyHash head;
     doltliteGetSessionHead(db, &head);

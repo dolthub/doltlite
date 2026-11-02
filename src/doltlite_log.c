@@ -402,7 +402,7 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
 
     rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
     if( rc!=SQLITE_OK ){
-      if( pCur->singleCommit ){
+      if( pCur->singleCommit && rc==SQLITE_NOTFOUND ){
         rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
         doltliteCommitClear(&pCur->curCommit);
         memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));

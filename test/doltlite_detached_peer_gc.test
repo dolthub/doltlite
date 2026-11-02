@@ -47,6 +47,7 @@ foreach kind {tag hash ancestor} {
     foreach maintenance {{SELECT dolt_gc()} VACUUM} {
       foreach attached {0 1} {
         lassign [detached_gc_setup $kind $delimiter $attached] ref table
+        if {!$attached} {set head [reader one {SELECT dolt_hashof('HEAD')}]}
         set prefix detached-gc-$kind-$delimiter-$maintenance-$attached
         set prefix [string map {" " _} $prefix]
         exec $engine -bail [file normalize test.db] "
@@ -64,6 +65,14 @@ foreach kind {tag hash ancestor} {
           set message
         } "cannot read: revision '$ref' is no longer available"
         if {!$attached} {
+          do_test $prefix.log {
+            set result [catch {reader eval {SELECT count(*) FROM dolt_log}} message]
+            list $result [sqlite3_extended_errcode reader] $message
+          } [list 1 SQLITE_BUSY_SNAPSHOT "cannot read: revision '$ref' is no longer available"]
+          do_test $prefix.log-filter {
+            set result [catch {reader eval "SELECT count(*) FROM dolt_log WHERE commit_hash='$head'"} message]
+            list $result [sqlite3_extended_errcode reader] $message
+          } [list 1 SQLITE_BUSY_SNAPSHOT "cannot read: revision '$ref' is no longer available"]
           do_test $prefix.checkout {reader eval {SELECT dolt_checkout('main')}} 0
           do_test $prefix.recovered {
             reader eval {INSERT INTO t VALUES(9,'recovered'); SELECT id FROM t; PRAGMA integrity_check}
