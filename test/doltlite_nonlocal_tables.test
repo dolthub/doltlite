@@ -335,4 +335,28 @@ do_test nonlocal-temp-target-untouched {
   nl_disk main {SELECT group_concat(id) FROM users}
 } {1}
 
+# HEAD names this session's commit, not the default branch: read-only, and
+# it follows the session's HEAD as it moves.
+nl_reset
+db eval {INSERT INTO cfg VALUES('k','other-commit'); SELECT dolt_commit('-am','oc')}
+do_execsql_test nonlocal-head-read {
+  INSERT INTO dolt_nonlocal_tables VALUES('hd','HEAD','cfg','immediate');
+  INSERT INTO dolt_nonlocal_tables VALUES('hp','HEAD~1','cfg','immediate');
+  SELECT dolt_commit('-Am','rules') IS NOT NULL;
+  SELECT group_concat(k) FROM hd;
+  SELECT group_concat(k) FROM hp;
+} {1 k,mode k,mode}
+do_catchsql_test nonlocal-head-read-only {
+  INSERT INTO hd VALUES('x','y');
+} {1 {attempt to write a readonly database}}
+do_execsql_test nonlocal-head-follows {
+  INSERT INTO cfg VALUES('n','new');
+  SELECT dolt_commit('-am','next') IS NOT NULL;
+  SELECT group_concat(k) FROM hd;
+  SELECT group_concat(k) FROM hp;
+} {1 k,mode,n k,mode}
+do_test nonlocal-head-not-default-branch {
+  nl_disk main {SELECT group_concat(k) FROM cfg; SELECT count(*) FROM dolt_status}
+} {mode 0}
+
 finish_test

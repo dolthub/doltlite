@@ -21,6 +21,7 @@ typedef struct NonlocalAttach NonlocalAttach;
 struct NonlocalAttach {
   char *zRef;
   char *zSchema;
+  char *zTarget;
 };
 
 struct DoltliteNonlocal {
@@ -78,6 +79,7 @@ void doltliteNonlocalFree(DoltliteNonlocal *p){
   for(i=0; i<p->nAttach; i++){
     sqlite3_free(p->aAttach[i].zRef);
     sqlite3_free(p->aAttach[i].zSchema);
+    sqlite3_free(p->aAttach[i].zTarget);
   }
   sqlite3_free(p->aAttach);
   sqlite3_free(p);
@@ -171,12 +173,30 @@ static int nonlocalLoadRules(sqlite3 *db, DoltliteNonlocal *p){
   return rc;
 }
 
+/* HEAD, HEAD~n and HEAD^ name a commit relative to this session, not a
+** branch: opened by name they would be the default branch's working set. */
+static int nonlocalIsHeadRef(const char *zRef){
+  return sqlite3_strnicmp(zRef, "HEAD", 4)==0
+      && (zRef[4]==0 || zRef[4]=='~' || zRef[4]=='^');
+}
+
+/* What to ATTACH for zRef: the commit a HEAD ref resolves to now, which
+** opens read-only like any other commit, else the ref itself. */
+static char *nonlocalTarget(sqlite3 *db, const char *zRef){
+  ProllyHash h;
+  char hex[PROLLY_HASH_SIZE*2+1];
+  if( !nonlocalIsHeadRef(zRef) ) return sqlite3_mprintf("%s", zRef);
+  if( doltliteResolveRef(db, zRef, &h)!=SQLITE_OK ) return 0;
+  doltliteHashToHex(&h, hex);
+  return sqlite3_mprintf("%s", hex);
+}
+
 /* Schema of this connection that holds ref on the main store: an ATTACH
 ** the user made, or one made here. */
 static const char *nonlocalSchemaFor(sqlite3 *db, DoltliteNonlocal *p,
                                      const char *zRef){
   int i;
-  for(i=2; i<db->nDb; i++){
+  for(i=2; !nonlocalIsHeadRef(zRef) && i<db->nDb; i++){
     Btree *q = db->aDb[i].pBt;
     if( q && doltliteBtreeSameStore(db->aDb[0].pBt, q)
      && strcmp(doltliteBtreeBranchName(q), zRef)==0 ){
@@ -196,30 +216,37 @@ static int nonlocalAttach(sqlite3 *db, DoltliteNonlocal *p, const char *zRef){
   const char *zFile = sqlite3_db_filename(db, "main");
   NonlocalAttach *aNew;
   char *zSchema;
+  char *zTarget;
   char *zSql;
   int rc;
   if( !zFile || !zFile[0] ) return SQLITE_OK;
+  zTarget = nonlocalTarget(db, zRef);
+  if( !zTarget ) return SQLITE_NOMEM;
   zSchema = sqlite3_mprintf(NONLOCAL_SCHEMA_PREFIX "%s", zRef);
-  if( !zSchema ) return SQLITE_NOMEM;
-  zSql = sqlite3_mprintf("ATTACH '%q/%q' AS \"%w\"", zFile, zRef, zSchema);
-  if( !zSql ){
+  zSql = sqlite3_mprintf("ATTACH '%q/%q' AS \"%w\"", zFile, zTarget, zSchema);
+  if( !zSchema || !zSql ){
+    sqlite3_free(zTarget);
     sqlite3_free(zSchema);
+    sqlite3_free(zSql);
     return SQLITE_NOMEM;
   }
   rc = sqlite3_exec(db, zSql, 0, 0, 0);
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zTarget);
     sqlite3_free(zSchema);
     return rc;
   }
   aNew = sqlite3_realloc64(p->aAttach, sizeof(*aNew)*(p->nAttach+1));
   if( !aNew ){
+    sqlite3_free(zTarget);
     sqlite3_free(zSchema);
     return SQLITE_NOMEM;
   }
   p->aAttach = aNew;
   aNew[p->nAttach].zRef = sqlite3_mprintf("%s", zRef);
   aNew[p->nAttach].zSchema = zSchema;
+  aNew[p->nAttach].zTarget = zTarget;
   if( !aNew[p->nAttach].zRef ) return SQLITE_NOMEM;
   p->nAttach++;
   return SQLITE_OK;
@@ -233,16 +260,23 @@ static int nonlocalNeedsRef(DoltliteNonlocal *p, const char *zRef){
   return 0;
 }
 
-/* Attachments made here for refs no rule names any more, or for the
-** session's own branch: release them while nothing uses them. */
-static void nonlocalDetachUnused(sqlite3 *db, DoltliteNonlocal *p){
+/* Attachments made here for refs no rule names any more, for the
+** session's own branch, or for a commit a HEAD ref no longer resolves to:
+** release them while nothing uses them. Returns how many were released. */
+static int nonlocalDetachUnused(sqlite3 *db, DoltliteNonlocal *p){
   int i = 0;
+  int nDetached = 0;
   while( i<p->nAttach ){
     NonlocalAttach *a = &p->aAttach[i];
     int iDb = sqlite3FindDbName(db, a->zSchema);
     int bKeep = nonlocalNeedsRef(p, a->zRef)
              && strcmp(a->zRef, p->zBranch)!=0
              && !nonlocalIsMissing(p, a->zRef);
+    if( bKeep && nonlocalIsHeadRef(a->zRef) ){
+      char *zNow = nonlocalTarget(db, a->zRef);
+      bKeep = zNow && a->zTarget && strcmp(zNow, a->zTarget)==0;
+      sqlite3_free(zNow);
+    }
     if( iDb>=0 && !bKeep ){
       char *zSql;
       if( db->nVdbeActive>0
@@ -258,15 +292,18 @@ static void nonlocalDetachUnused(sqlite3 *db, DoltliteNonlocal *p){
       }
       sqlite3_free(zSql);
       iDb = -1;
+      nDetached++;
     }
     if( iDb<0 ){
       sqlite3_free(a->zRef);
       sqlite3_free(a->zSchema);
+      sqlite3_free(a->zTarget);
       p->aAttach[i] = p->aAttach[--p->nAttach];
       continue;
     }
     i++;
   }
+  return nDetached;
 }
 
 static int nonlocalCheckRefs(sqlite3 *db, DoltliteNonlocal *p){
@@ -307,6 +344,7 @@ int doltliteNonlocalSync(sqlite3 *db){
   int bReload;
   int nAttach;
   int nMissing;
+  int nDetached = 0;
   int i;
 
   if( db->nVdbeExec>0 || db->nDb<1 || !doltliteNonlocalSlot(db) ) return 0;
@@ -351,6 +389,7 @@ int doltliteNonlocalSync(sqlite3 *db){
     }
     p->refsSeen = *pRefs;
     if( nonlocalCheckRefs(db, p)==SQLITE_OK ){
+      nDetached = nonlocalDetachUnused(db, p);
       for(i=0; i<p->nRule; i++){
         const char *zRef = nonlocalRuleRef(p, &p->aRule[i]);
         if( strcmp(zRef, p->zBranch)==0 || nonlocalIsMissing(p, zRef)
@@ -359,12 +398,13 @@ int doltliteNonlocalSync(sqlite3 *db){
         }
         (void)nonlocalAttach(db, p, zRef);
       }
+    }else{
+      nDetached = nonlocalDetachUnused(db, p);
     }
-    nonlocalDetachUnused(db, p);
   }
   p->bSyncing = 0;
-  if( bReload ) return !bPending || db->nDb!=nAttach;
-  return db->nDb!=nAttach || nMissing!=0 || p->nMissing!=0;
+  if( bReload ) return !bPending || db->nDb!=nAttach || nDetached>0;
+  return db->nDb!=nAttach || nDetached>0 || nMissing!=0 || p->nMissing!=0;
 }
 
 static void nonlocalListName(
