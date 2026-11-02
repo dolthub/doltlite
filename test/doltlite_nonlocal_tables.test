@@ -359,4 +359,36 @@ do_test nonlocal-head-not-default-branch {
   nl_disk main {SELECT group_concat(k) FROM cfg; SELECT count(*) FROM dolt_status}
 } {mode 0}
 
+# A qualified ref names the commit it resolves to, read-only, rather than
+# missing the target and falling through to the source branch's table.
+nl_reset
+db eval {UPDATE cfg SET v='other-local'}
+do_execsql_test nonlocal-qualified-ref-read {
+  INSERT INTO dolt_nonlocal_tables VALUES('cfg','heads/main','','immediate');
+  INSERT INTO dolt_nonlocal_tables VALUES('tg','refs/tags/v1','cfg','immediate');
+  SELECT v FROM cfg;
+  SELECT v FROM tg;
+} {v1 v1}
+do_catchsql_test nonlocal-qualified-ref-read-only {
+  UPDATE cfg SET v='written';
+} {1 {attempt to write a readonly database}}
+do_test nonlocal-qualified-ref-local-kept {
+  nl_disk main {SELECT v FROM cfg}
+} {v1}
+
+# A rule whose target cannot be opened fails the statement; it never
+# falls back to the source branch's table of the same name.
+do_test nonlocal-unopenable-target {
+  catch {db close}
+  sqlite3 db :memory:
+  db eval {
+    CREATE TABLE users(id INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','other');
+    INSERT INTO dolt_nonlocal_tables VALUES('users','main','','immediate');
+  }
+  set r [catchsql {INSERT INTO users VALUES(1)}]
+  lappend r [db eval {SELECT count(*) FROM dolt_status WHERE table_name='users'}]
+} {1 {cannot open nonlocal table users on main} 0}
+
 finish_test
