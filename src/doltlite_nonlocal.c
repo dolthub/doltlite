@@ -173,19 +173,20 @@ static int nonlocalLoadRules(sqlite3 *db, DoltliteNonlocal *p){
   return rc;
 }
 
-/* HEAD, HEAD~n and HEAD^ name a commit relative to this session, not a
-** branch: opened by name they would be the default branch's working set. */
-static int nonlocalIsHeadRef(const char *zRef){
-  return sqlite3_strnicmp(zRef, "HEAD", 4)==0
-      && (zRef[4]==0 || zRef[4]=='~' || zRef[4]=='^');
+/* Any ref but a branch names a commit: HEAD~n relative to this session,
+** a tag, heads/main. Opened by name, HEAD would be the default branch's
+** working set and the qualified spellings would not open at all. */
+static int nonlocalIsCommitRef(sqlite3 *db, const char *zRef){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  return !cs || chunkStoreFindBranch(cs, zRef, 0)!=SQLITE_OK;
 }
 
-/* What to ATTACH for zRef: the commit a HEAD ref resolves to now, which
-** opens read-only like any other commit, else the ref itself. */
+/* What to ATTACH for zRef: a branch by name, any other ref by the commit
+** it resolves to now, which opens read-only. */
 static char *nonlocalTarget(sqlite3 *db, const char *zRef){
   ProllyHash h;
   char hex[PROLLY_HASH_SIZE*2+1];
-  if( !nonlocalIsHeadRef(zRef) ) return sqlite3_mprintf("%s", zRef);
+  if( !nonlocalIsCommitRef(db, zRef) ) return sqlite3_mprintf("%s", zRef);
   if( doltliteResolveRef(db, zRef, &h)!=SQLITE_OK ) return 0;
   doltliteHashToHex(&h, hex);
   return sqlite3_mprintf("%s", hex);
@@ -196,7 +197,7 @@ static char *nonlocalTarget(sqlite3 *db, const char *zRef){
 static const char *nonlocalSchemaFor(sqlite3 *db, DoltliteNonlocal *p,
                                      const char *zRef){
   int i;
-  for(i=2; !nonlocalIsHeadRef(zRef) && i<db->nDb; i++){
+  for(i=2; !nonlocalIsCommitRef(db, zRef) && i<db->nDb; i++){
     Btree *q = db->aDb[i].pBt;
     if( q && doltliteBtreeSameStore(db->aDb[0].pBt, q)
      && strcmp(doltliteBtreeBranchName(q), zRef)==0 ){
@@ -272,7 +273,7 @@ static int nonlocalDetachUnused(sqlite3 *db, DoltliteNonlocal *p){
     int bKeep = nonlocalNeedsRef(p, a->zRef)
              && strcmp(a->zRef, p->zBranch)!=0
              && !nonlocalIsMissing(p, a->zRef);
-    if( bKeep && nonlocalIsHeadRef(a->zRef) ){
+    if( bKeep && nonlocalIsCommitRef(db, a->zRef) ){
       char *zNow = nonlocalTarget(db, a->zRef);
       bKeep = zNow && a->zTarget && strcmp(zNow, a->zTarget)==0;
       sqlite3_free(zNow);
@@ -551,7 +552,11 @@ int doltliteNonlocalResolve(
     zSchema = "main";
   }else{
     zSchema = nonlocalSchemaFor(db, p, zRef);
-    if( !zSchema ) return 0;
+    if( !zSchema ){
+      sqlite3ErrorMsg(pParse, "cannot open nonlocal table %s on %s",
+                      *pzName, zRef);
+      return -1;
+    }
   }
   if( r->zRefTable[0] ) *pzName = r->zRefTable;
   *pzDb = zSchema;
