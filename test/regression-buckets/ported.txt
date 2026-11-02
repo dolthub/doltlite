@@ -194,6 +194,7 @@ doltlite_backup_peer_write
 doltlite_backup_busy
 doltlite_dump
 doltlite_dump_fault
+doltlite_dump_schema
 doltlite_vc_interrupt
 doltlite_commit_publication
 doltlite_commit_active_write

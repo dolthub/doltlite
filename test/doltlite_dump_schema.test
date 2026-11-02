@@ -1,0 +1,102 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc dump_schema_open {ref format} {
+  set path dump-schema.$format
+  forcedelete $path
+  db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}
+  if {$format eq "sql"} {
+    sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+    set fd [open $path rb]; set text [read $fd]; close $fd
+    out eval $text
+  } else {sqlite3 out file:dump-schema.sqlite?doltlite_engine=sqlite -uri 1}
+}
+
+foreach {name definition} {
+  view {CREATE VIEW v AS SELECT * FROM gone}
+  nested {CREATE VIEW v AS SELECT * FROM gone; CREATE VIEW outer_v AS SELECT * FROM v}
+  insert {CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO gone VALUES(new.a); END}
+  update {CREATE TRIGGER tr AFTER UPDATE OF a ON y BEGIN UPDATE gone SET a=new.a; END}
+  delete {CREATE TRIGGER tr AFTER DELETE ON y BEGIN DELETE FROM gone WHERE a=old.a; END}
+  when {CREATE TRIGGER tr AFTER INSERT ON y WHEN EXISTS(SELECT 1 FROM gone) BEGIN SELECT abs(new.a); END}
+  upsert {CREATE TRIGGER tr AFTER INSERT ON y BEGIN
+    INSERT INTO gone VALUES(new.a) ON CONFLICT(a) DO UPDATE SET a=excluded.a; END}
+  instead {CREATE VIEW v AS SELECT * FROM gone;
+    CREATE TRIGGER tr INSTEAD OF INSERT ON v BEGIN INSERT INTO gone VALUES(new.a); END}
+  combined {CREATE VIEW v AS SELECT * FROM gone;
+    CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO gone VALUES(new.a); END}
+  tabfunc {CREATE VIEW v AS SELECT gone.a FROM gone,json_each('[1]')}
+  quoted {CREATE VIEW "text dolt_version()" AS SELECT 'dolt_version()', abs(a) FROM gone;
+    CREATE TRIGGER "active_branch()" AFTER INSERT ON y BEGIN
+    SELECT 'dolt_commit()', new.a FROM gone; END}
+} {
+  reset_db
+  db eval {CREATE TABLE gone(a PRIMARY KEY); CREATE TABLE y(a); INSERT INTO y VALUES(1)}
+  db eval $definition
+  db eval {DROP TABLE gone; SELECT dolt_commit('-Am','dangling'); SELECT dolt_tag('dangling')}
+  set schema [db eval {
+    SELECT type,name,tbl_name,sql FROM sqlite_schema
+    WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name;
+  }]
+  set before [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  foreach ref {WORKING HEAD dangling} {
+    foreach format {sql sqlite} {
+      do_test dump-schema-$name-$ref-$format.export {
+        dump_schema_open $ref $format
+        out eval {
+          SELECT type,name,tbl_name,replace(sql,'main.','') FROM sqlite_schema
+          WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name;
+        }
+      } $schema
+      do_test dump-schema-$name-$ref-$format.data {out eval {SELECT * FROM y}} 1
+      do_test dump-schema-$name-$ref-$format.restore {
+        out eval {CREATE TABLE gone(a PRIMARY KEY); INSERT INTO gone VALUES(2)}
+        if {$name eq "instead"} {out eval {INSERT INTO v VALUES(3)}}
+        if {$name in {view nested combined instead}} {out eval {SELECT * FROM v ORDER BY a}}
+      } [expr {$name eq "instead" ? "2 3" : $name in {view nested combined} ? "2" : ""}]
+      catch {out close}
+      do_test dump-schema-$name-$ref-$format.source {
+        db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
+      } $before
+    }
+  }
+}
+
+foreach {name definition pattern} {
+  view-function {CREATE VIEW v AS SELECT dolt_version() FROM gone} {*dolt_version*}
+  view-cte {CREATE VIEW v AS WITH c AS (SELECT dolt_version()) SELECT * FROM gone,c} {*dolt_version*}
+  view-join {CREATE VIEW v AS SELECT * FROM gone JOIN y ON active_branch() IS NOT NULL} {*active_branch*}
+  view-window {CREATE VIEW v AS SELECT count(*) OVER w FROM gone WINDOW w AS (PARTITION BY dolt_version())} {*dolt_version*}
+  view-collation {CREATE VIEW v AS SELECT a COLLATE unavailable FROM gone} {*collation*unavailable*}
+  view-missing-function {CREATE VIEW v AS SELECT unavailable(a) FROM gone} {*unavailable*}
+  view-tabfunc {CREATE VIEW v AS SELECT * FROM gone,dolt_at_y('HEAD')} {*dolt_at_y*}
+  view-missing-module {CREATE VIEW v AS SELECT * FROM gone,unavailable(1)} {*unavailable*}
+  trigger-function {CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO gone VALUES(dolt_version()); END} {*dolt_version*}
+  trigger-later-step {CREATE TRIGGER tr AFTER INSERT ON y BEGIN SELECT * FROM gone; SELECT dolt_version(); END} {*dolt_version*}
+  trigger-when {CREATE TRIGGER tr AFTER INSERT ON y WHEN dolt_version() IS NOT NULL BEGIN SELECT * FROM gone; END} {*dolt_version*}
+  trigger-update {CREATE TRIGGER tr AFTER UPDATE ON y BEGIN UPDATE gone SET a=dolt_version(); END} {*dolt_version*}
+  trigger-cte {CREATE TRIGGER tr AFTER INSERT ON y BEGIN
+    INSERT INTO gone WITH c AS (SELECT dolt_version()) SELECT * FROM c; END} {*dolt_version*}
+  trigger-collation {CREATE TRIGGER tr AFTER INSERT ON y BEGIN
+    SELECT a COLLATE unavailable FROM gone; END} {*collation*unavailable*}
+  trigger-upsert {CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO gone VALUES(new.a)
+    ON CONFLICT(a) DO UPDATE SET a=dolt_version(); END} {*dolt_version*}
+} {
+  reset_db
+  db eval {CREATE TABLE y(a); INSERT INTO y VALUES(1)}
+  db eval $definition
+  db eval {SELECT dolt_commit('-Am','dependent')}
+  foreach ref {WORKING HEAD} {
+    foreach format {sql sqlite} {
+      set path dump-schema.$format
+      forcedelete $path
+      do_test dump-schema-reject-$name-$ref-$format.error {
+        set result [catchsql {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}]
+        list [lindex $result 0] [string match $pattern [lindex $result 1]]
+      } {1 1}
+      do_test dump-schema-reject-$name-$ref-$format.absent {file exists $path} 0
+    }
+  }
+}
+do_test dump-schema.no-temp {glob -nocomplain *-dump-*} {}
+finish_test

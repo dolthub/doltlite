@@ -17,6 +17,8 @@ proc dump_fault_prepare {} {
     CREATE TABLE t(id INTEGER PRIMARY KEY,v BLOB CHECK(length(v)>0));
     CREATE INDEX tv ON t(v);
     INSERT INTO t VALUES(1,zeroblob(32768)),(2,'two');
+    CREATE VIEW missing AS SELECT abs(ghost.id) FROM ghost,json_each('[1]');
+    CREATE TRIGGER missing_tr AFTER INSERT ON t WHEN abs(new.id)>0 BEGIN SELECT * FROM ghost; END;
     SELECT dolt_commit('-Am','seed');
     UPDATE t SET v='staged' WHERE id=2; SELECT dolt_add('.');
     UPDATE t SET v='working' WHERE id=2;

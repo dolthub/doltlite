@@ -14,7 +14,10 @@ int main(int argc, char **argv){
   int bytes = 0, rc;
   if( sqlite3_open(":memory:",&db)!=SQLITE_OK ) return 1;
   if( sqlite3_exec(db,"CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);"
-      "INSERT INTO t VALUES(7,'export'); SELECT dolt_commit('-Am','seed');"
+      "INSERT INTO t VALUES(7,'export');"
+      "CREATE VIEW v AS SELECT * FROM gone;"
+      "CREATE TRIGGER tr AFTER DELETE ON t BEGIN INSERT INTO gone VALUES(old.id); END;"
+      "SELECT dolt_commit('-Am','seed');"
       "UPDATE t SET v='working'",0,0,0)!=SQLITE_OK ) return 2;
   rc = doltlite_dump_sql(db,0,discard,&bytes,&error);
   if( rc!=SQLITE_OK || bytes==0 || error ){
@@ -28,6 +31,10 @@ int main(int argc, char **argv){
   if( sqlite3_prepare_v2(out,"SELECT id,v FROM t",-1,&q,0)!=SQLITE_OK ) return 6;
   if( sqlite3_step(q)!=SQLITE_ROW || sqlite3_column_int(q,0)!=7
    || strcmp((const char*)sqlite3_column_text(q,1),"export") ) return 7;
+  sqlite3_finalize(q);
+  if( sqlite3_exec(out,"CREATE TABLE gone(id); DELETE FROM t",0,0,0)!=SQLITE_OK ) return 12;
+  if( sqlite3_prepare_v2(out,"SELECT id FROM v",-1,&q,0)!=SQLITE_OK ) return 13;
+  if( sqlite3_step(q)!=SQLITE_ROW || sqlite3_column_int(q,0)!=7 ) return 14;
   sqlite3_finalize(q);
   sqlite3_close(out);
   if( argc>1 ){
