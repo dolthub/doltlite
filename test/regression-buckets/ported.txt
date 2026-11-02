@@ -221,3 +221,4 @@ doltlite_http_timeout
 doltlite_cherry_pick_allow_empty
 doltlite_skip_verification
 doltlite_replay_lifecycle
+doltlite_empty_table_update
