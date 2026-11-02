@@ -169,7 +169,6 @@ where where-5.8 class=intentional issue=1840  # w+0 IN (same subquery): fewer se
 
 # ── index ──
 index index-11.1 class=intentional  # sqlite_search_count instrumentation not reproduced (value correct)
-index5 index5-1.3 class=intentional  # re-creating the dropped index finds every chunk already stored, so CREATE INDEX writes only its root record; the contiguous-write ratio needs a long write stream
 
 # ── alter ──
 alter alter-6.2 class=intentional issue=1852  # canonical adoption: test binds sqlite_master oids; canonical renumbering reassigns them after schema commit
@@ -1765,14 +1764,6 @@ busy2 busy2-3.2.3 class=intentional  # snapshot read instead of SQLITE_BUSY; bus
 # poke; on a chunk store the restore write is a *new* mid-stream corruption
 # of content-addressed bytes, so reads/integrity fail instead of recovering.
 # Architectural storage-format class — not freelist product work.
-corrupt6 corrupt6-1.1 class=intentional  # stock freelist/page offset probe; no page freelist (architectural)
-corrupt6 corrupt6-1.2 class=intentional  # stock freelist/page offset probe; no page freelist (architectural)
-corrupt6 corrupt6-1.5.1 class=intentional  # stock freelist/page offset probe; no page freelist (architectural)
-corrupt6 corrupt6-1.5.2 class=intentional  # stock freelist/page offset probe; no page freelist (architectural)
-corrupt6 corrupt6-1.8.3 class=intentional  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
-corrupt6 corrupt6-1.8.4 class=intentional  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
-corrupt6 corrupt6-1.9.3 class=intentional  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
-corrupt6 corrupt6-1.9.4 class=intentional  # stock restore-byte is fresh mid-stream corruption on chunk store (architectural)
 # corruptE — stock rowid/cell *order* corruption on btree page images.
 # integrity_check expects /out of order/ (page-layout cell ordering).
 # Chunk-store pokes are not cell-order mutations; when integrity fails it is
@@ -1799,11 +1790,6 @@ corruptE corruptE-3.14 class=intentional  # stock page cell-order /out of order/
 # corruptK — freelist corruption via sqlite_dbpage page writes + page_count.
 # dbpage writes are rejected (no SQLite pages); page_count is synthetic.
 # Architectural — not a freelist implementation gap.
-corruptK corruptK-1.1 class=intentional issue=2493  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
-corruptK corruptK-1.2 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
-corruptK corruptK-1.3 class=intentional  # cascade of 1.2: damaged batch has no durable root; recovery drops t1 (architectural)
-corruptK corruptK-2.1 class=intentional issue=2493  # PRAGMA page_count synthetic; no SQLite page accounting (architectural)
-corruptK corruptK-2.2 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
 corruptK corruptK-3.2 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
 corruptK corruptK-3.3 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
 # corruptL — stock index-page / rootpage corruption and writable_schema SQL
@@ -3602,16 +3588,12 @@ avtrans avtrans-1.0.1 class=intentional issue=2493  # PRAGMA auto_vacuum reads b
 # Chunk-store files have no SQLite pointer-map pages; the raw write is not
 # logical btree corruption. Architectural — not an autovacuum/ptrmap gap to
 # implement for test parity.
-corrupt8 corrupt8-2.1024.6 class=intentional  # stock ptrmap page poke; no pointer-map pages (architectural)
 
 # corruptB — stock btree loop / child-page pointer pokes by page offset.
 # On a chunk-store file offsets read back garbage: tcl "integer value too
 # large" when computing child pages, "no such table" instead of malformed,
 # or intact rows when the poke never hits a logical structure. Architectural
 # page-layout class — not "make malformed message match."
-corruptB corruptB-1.7.2 class=intentional  # stock btree child/loop poke by page offset (architectural)
-corruptB corruptB-1.8.2 class=intentional  # stock btree child/loop poke by page offset (architectural)
-corruptB corruptB-2.1.2 class=intentional  # stock btree child/loop poke by page offset (architectural)
 
 # createtab: raw-format file-size compare; the doltlite chunk file is not
 # sized in 1024-byte pages and does not grow with auto_vacuum pointer-map
@@ -5168,9 +5150,6 @@ incrvacuum3 incrvacuum3-2.1.8.3 class=intentional
 # (the body runs instead of erroring at the pragma); fault-index set, Linux CI is the oracle.
 
 
-# crash4: first-commit sector trash; reopen surfaces NOTADB (was crash)
-crash4 crash4-1.1.2 class=intentional  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor
-crash4 crash4-1.1.3 class=intentional  # creation-batch sector trash; reopen NOTADB, no journal recovery anchor
 # filefmt: stock SQLite page-header format probes (was crash on eager open)
 filefmt filefmt-1.1 class=intentional  # SQLite page-header/format bytes; CTLD chunk store has no stock file format
 filefmt filefmt-1.4 class=intentional  # SQLite page-header/format bytes; CTLD chunk store has no stock file format

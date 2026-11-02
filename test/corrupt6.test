@@ -19,6 +19,13 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
 
+# The byte offsets below address SQLite pages.
+ifcapable doltlite {
+  db close
+  forcedelete test.db
+  sqlite3 db {file:test.db?doltlite_engine=sqlite} -uri 1
+}
+
 # This module uses hard-coded offsets which do not work if the reserved_bytes
 # value is nonzero.
 if {[nonzero_reserved_bytes]} {finish_test; return;}

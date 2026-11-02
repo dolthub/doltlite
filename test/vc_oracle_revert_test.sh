@@ -64,11 +64,11 @@ SELECT dolt_commit('-Am', 'add row');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));
 " "
 SELECT 'L|' || message FROM dolt_log
-  WHERE message IN ('add row', 'Initialize data repository')
+  WHERE (message='add row' OR message LIKE 'Initialize data repository%')
      OR message LIKE 'Revert%';
 " "
 SELECT CONCAT('L|', message) FROM dolt_log
-  WHERE message IN ('add row', 'Initialize data repository')
+  WHERE (message='add row' OR message LIKE 'Initialize data repository%')
      OR message LIKE 'Revert%';
 "
 

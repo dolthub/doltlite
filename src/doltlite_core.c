@@ -966,6 +966,18 @@ int doltliteCreateAndStoreCommitWithTime(
       hasExplicitTimestamp, explicitTimestamp, pCommitHash);
 }
 
+int doltliteCreateSeedCommit(sqlite3 *db, ChunkStore *cs, ProllyHash *pHash){
+  ProllyHash empty;
+  u64 nonce[2];
+  char zMessage[96];
+  sqlite3_randomness(sizeof(nonce),nonce);
+  sqlite3_snprintf(sizeof(zMessage),zMessage,
+      "Initialize data repository (%016llx%016llx)",nonce[0],nonce[1]);
+  memset(&empty,0,sizeof(empty));
+  return doltliteCreateAndStoreCommitOnStore(db,cs,&empty,&empty,
+      zMessage,0,0,0,0,0,0,pHash);
+}
+
 int doltliteSeedStoreIfNeeded(
   sqlite3 *db,
   ChunkStore *cs,
@@ -974,7 +986,6 @@ int doltliteSeedStoreIfNeeded(
   int *pSeeded
 ){
   ProllyHash tip;
-  ProllyHash empty;
   int nBranches;
   int rc;
 
@@ -1004,9 +1015,7 @@ int doltliteSeedStoreIfNeeded(
     }
   }
 
-  memset(&empty, 0, sizeof(empty));
-  rc = doltliteCreateAndStoreCommitOnStore(db, cs, &empty, &empty,
-      "Initialize data repository", 0, 0, 0, 0, 0, 0, pSeedHash);
+  rc = doltliteCreateSeedCommit(db,cs,pSeedHash);
   if( rc==SQLITE_OK ){
     if( nBranches==0 ){
       rc = chunkStoreAddBranch(cs, zBranch, pSeedHash);

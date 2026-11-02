@@ -652,7 +652,7 @@ static int verifyReopenedState(
         "WHERE length(commit_hash)!=40 "
         "OR committer IS NULL OR committer='' "
         "OR message IS NULL OR message='' "
-        "OR (message!='Initialize data repository' "
+        "OR (message NOT LIKE 'Initialize data repository%' "
         "    AND (email IS NULL OR email=''))", &n));
   if( n!=0 ){
     *pzInvariant = "complete log metadata";

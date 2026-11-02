@@ -8,6 +8,10 @@ vc_oracle_init_execution() {
   export DLTEST_INTEGRITY_EXPECTATIONS="$VC_ORACLE_EXECUTION_DIR/integrity-exceptions"
 }
 
+vc_oracle_normalize_seed() {
+  sed -E 's/Initialize data repository \([0-9a-f]{32}\)/Initialize data repository/g'
+}
+
 vc_oracle_run_doltlite() (
   local expectation=${VC_ORACLE_EXPECTATION:-success} err rc statuses
   case "${1:-}" in
@@ -22,15 +26,21 @@ vc_oracle_run_doltlite() (
   printf '  FAIL: %s:%s (doltlite session did not complete; database %s)\n' \
     "${BASH_SOURCE[1]##*/}" "${BASH_LINENO[0]}" "${1:-}" > "$err.failure"
   if [ /dev/fd/1 -ef /dev/fd/2 ]; then
-    if "${command[@]}" "$@" 2>&1 | tee "$err"; then
+    if "${command[@]}" "$@" 2>&1 | tee "$err" | vc_oracle_normalize_seed; then
+      statuses=("${PIPESTATUS[@]}")
+    else
+      statuses=("${PIPESTATUS[@]}")
+    fi
+    rc=${statuses[0]}
+    [ "${statuses[1]}" -eq 0 ] && [ "${statuses[2]}" -eq 0 ] || return 1
+  else
+    if "${command[@]}" "$@" 2>"$err" | vc_oracle_normalize_seed; then
       statuses=("${PIPESTATUS[@]}")
     else
       statuses=("${PIPESTATUS[@]}")
     fi
     rc=${statuses[0]}
     [ "${statuses[1]}" -eq 0 ] || return 1
-  else
-    if "${command[@]}" "$@" 2>"$err"; then rc=0; else rc=$?; fi
     cat "$err" >&2
   fi
   if [ "$rc" -ge 128 ] \

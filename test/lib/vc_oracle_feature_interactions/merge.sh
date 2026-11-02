@@ -1754,7 +1754,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','this is a fairly long commit message that describes several things about the change and has some detail');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
-" "SELECT count(*) FROM dolt_log WHERE length(message) > 50;"
+" "SELECT count(*) FROM dolt_log WHERE message = 'this is a fairly long commit message that describes several things about the change and has some detail';"
 
 echo "--- max/min tie-breaking ---"
 

@@ -129,7 +129,7 @@ run_test_error_match "cp_err_noarg" "SELECT dolt_cherry_pick();" "usage" "$DB"
 run_test_error_match "cp_err_badhash" "SELECT dolt_cherry_pick('not_a_hash');" "invalid" "$DB"
 
 run_test_error_match "cp_err_initial" \
-  "SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
+  "SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message LIKE 'Initialize data repository%'));" \
   "initial commit" "$DB"
 
 rm -f "$DB"
@@ -312,7 +312,7 @@ run_test "rv_err_noarg_row_kept" "SELECT id FROM t;" "1" "$DB"
 run_test "rv_err_noarg_head_kept" "SELECT message FROM dolt_log LIMIT 1;" "c1" "$DB"
 run_test_error_match "rv_err_badhash" "SELECT dolt_revert('bad');" "invalid" "$DB"
 run_test_error_match "rv_err_initial" \
-  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message LIKE 'Initialize data repository%'));" \
   "initial commit" "$DB"
 run_test_error_match "rv_author_bad" \
   "SELECT dolt_revert('HEAD','--author','not-an-author');" \

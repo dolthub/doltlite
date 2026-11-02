@@ -207,7 +207,6 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
 int doltliteMaybeSeedRepo(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   const char *zBranch;
-  ProllyHash emptyParent;
   ProllyHash emptyCatalog;
   ProllyHash seedHash;
   ProllyHash tip;
@@ -231,11 +230,9 @@ int doltliteMaybeSeedRepo(sqlite3 *db){
     return rc;
   }
 
-  memset(&emptyParent, 0, sizeof(emptyParent));
   memset(&emptyCatalog, 0, sizeof(emptyCatalog));
 
-  rc = doltliteCreateAndStoreCommit(db, &emptyParent, &emptyCatalog,
-      "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
+  rc = doltliteCreateSeedCommit(db,cs,&seedHash);
   if( rc!=SQLITE_OK ) return rc;
 
   /* Tables created before the seed live only in the session; the working

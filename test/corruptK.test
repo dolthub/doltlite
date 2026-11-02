@@ -12,6 +12,13 @@
 
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+
+# The byte offsets below address SQLite pages.
+ifcapable doltlite {
+  db close
+  forcedelete test.db
+  sqlite3 db {file:test.db?doltlite_engine=sqlite} -uri 1
+}
 set testprefix corruptK
 
 if {[permutation]=="mmap"} {
@@ -80,6 +87,11 @@ do_catchsql_test 1.4 {
 
 #-------------------------------------------------------------------------
 reset_db
+ifcapable doltlite {
+  db close
+  forcedelete test.db
+  sqlite3 db {file:test.db?doltlite_engine=sqlite} -uri 1
+}
 do_execsql_test 2.1 {
   PRAGMA page_size=1024;
   PRAGMA auto_vacuum=0;
@@ -139,6 +151,11 @@ if {[permutation]!="inmemory_journal"} {
   }
   
   reset_db
+ifcapable doltlite {
+  db close
+  forcedelete test.db
+  sqlite3 db {file:test.db?doltlite_engine=sqlite} -uri 1
+}
   db func hex2blob hex2blob
   
   do_execsql_test 3.1 {
