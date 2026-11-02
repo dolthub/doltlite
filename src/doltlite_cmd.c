@@ -196,6 +196,14 @@ int doltliteDeferJoinedSavepointRelease(sqlite3 *db){
   return 1;
 }
 
+static int cmdHasSqlWrite(sqlite3 *db){
+  int i;
+  for(i=0; i<db->nDb; i++){
+    if( sqlite3BtreeTxnState(db->aDb[i].pBt)==SQLITE_TXN_WRITE ) return 1;
+  }
+  return 0;
+}
+
 /* What COMMIT would refuse besides the commit hook, checked before a
 ** command makes anything durable. */
 static int cmdCommitRefusal(sqlite3_context *ctx){
@@ -211,12 +219,18 @@ static int cmdCommitRefusal(sqlite3_context *ctx){
   }
   for(i=0; i<db->nDb; i++){
     Btree *pWrite = db->aDb[i].pBt;
-    if( i>1 && doltliteBtreeSameStore(db->aDb[0].pBt, pWrite) ) continue;
     if( i!=1 && pWrite && sqlite3BtreeTxnState(pWrite)==SQLITE_TXN_WRITE
      && !sqlite3PagerIsMemdb(sqlite3BtreePager(pWrite))
      && sqlite3BtreeGetFilename(pWrite)[0]
      && sqlite3BtreeHasPendingChanges(pWrite) ){
-      nFileWrite++;
+      int j;
+      for(j=0; j<i; j++){
+        Btree *pEarlier = db->aDb[j].pBt;
+        if( sqlite3BtreeTxnState(pEarlier)==SQLITE_TXN_WRITE
+         && doltliteBtreeSameStore(pEarlier,pWrite)
+         && sqlite3BtreeHasPendingChanges(pEarlier) ) break;
+      }
+      if( j==i ) nFileWrite++;
       hasDoltliteWrite |= sqlite3BtreeIsDoltliteFormat(pWrite);
     }
   }
@@ -233,18 +247,12 @@ static int cmdCommitRefusal(sqlite3_context *ctx){
 ** A hook that approves here is not asked again by the seal. */
 int doltliteVcSealPrecheck(sqlite3_context *ctx, int *pbHookApproved){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
-  int bWrite = 0;
-  int i;
   int rc;
   *pbHookApproved = 0;
   if( db->autoCommit ) return SQLITE_OK;
   rc = cmdCommitRefusal(ctx);
   if( rc!=SQLITE_OK ) return rc;
-  for(i=0; i<db->nDb; i++){
-    Btree *pBt = db->aDb[i].pBt;
-    if( pBt && sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE ) bWrite = 1;
-  }
-  if( !bWrite || !db->xCommitCallback ) return SQLITE_OK;
+  if( !cmdHasSqlWrite(db) || !db->xCommitCallback ) return SQLITE_OK;
   if( db->xCommitCallback(db->pCommitArg) ){
     (void)sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
     sqlite3_result_error(ctx, sqlite3ErrStr(SQLITE_CONSTRAINT), -1);
@@ -284,7 +292,8 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
     if( rc==SQLITE_OK ){
       rc = sqlite3_prepare_v2(db, "COMMIT", -1, &commit, 0);
     }
-    if( rc==SQLITE_OK && (s->bSqlWrite || p->bCommandWritesRows)
+    if( rc==SQLITE_OK
+     && (s->bSqlWrite || p->bCommandWritesRows || cmdHasSqlWrite(db))
      && db->xCommitCallback
      && db->xCommitCallback(db->pCommitArg) ){
       rc = SQLITE_CONSTRAINT_COMMITHOOK;
