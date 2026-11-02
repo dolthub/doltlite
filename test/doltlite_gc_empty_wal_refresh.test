@@ -1,0 +1,135 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+proc compacted_setup {maintenance rewrite {address file} {readonly 0}} {
+  catch {peer close}
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT); CREATE INDEX tv ON t(v);
+    INSERT INTO t VALUES(1,'one'); SELECT dolt_commit('-Am','c1');
+    INSERT INTO t VALUES(2,'two'); SELECT dolt_commit('-am','c2');
+  }
+  if {$rewrite eq "delete-reset"} {
+    db eval {DELETE FROM t WHERE id=2; SELECT dolt_commit('-am','deleted')}
+  }
+  sqlite3 peer test.db
+  if {$address eq "branch" || $readonly} {
+    db close
+    set path [expr {$address eq "branch" ? "test.db/main" : "test.db"}]
+    sqlite3 db $path -readonly $readonly
+  }
+  peer eval $maintenance
+  db eval {SELECT * FROM t}
+}
+
+proc compacted_rewrite {maintenance rewrite} {
+  if {$rewrite eq "amend"} {
+    peer eval {INSERT INTO t VALUES(3,'three'); SELECT dolt_commit('-a','--amend','-m','amended')}
+  } else {peer eval {SELECT dolt_reset('--hard','HEAD~1')}}
+  peer eval $maintenance
+}
+
+foreach first {{SELECT dolt_gc()} VACUUM} {
+  foreach last {{SELECT dolt_gc()} VACUUM} {
+    foreach rewrite {amend reset delete-reset} expected {{1 one 2 two 3 three} {1 one} {1 one 2 two}} \
+        message {amended c1 c2} {
+      foreach address {file branch} {
+        foreach readonly {0 1} {
+          foreach access {read write checkout} {
+            if {$readonly && $access ne "read"} {continue}
+            compacted_setup $first $rewrite $address $readonly
+            set version [db one {PRAGMA data_version}]
+            compacted_rewrite $last $rewrite
+            set prefix compacted-$first-$last-$rewrite-$address-$readonly-$access
+            set prefix [string map {" " _} $prefix]
+            do_test $prefix.access {
+              switch $access {
+                read {db eval {SELECT * FROM t}}
+                write {db eval {INSERT INTO t VALUES(4,'mine')}}
+                checkout {db eval {SELECT dolt_checkout('main')}}
+              }
+              set result 0
+            } 0
+            set rows $expected
+            if {$access eq "write"} {lappend rows 4 mine}
+            do_test $prefix.rows {db eval {SELECT id,v FROM t INDEXED BY tv ORDER BY id}} $rows
+            do_test $prefix.log {db one {SELECT message FROM dolt_log LIMIT 1}} $message
+            do_test $prefix.version {expr {[db one {PRAGMA data_version}]!=$version}} 1
+            if {!$readonly && $access ne "write"} {
+              do_execsql_test $prefix.retry {INSERT INTO t VALUES(4,'mine')}
+            }
+            do_test $prefix.integrity {db one {PRAGMA integrity_check}} ok
+          }
+        }
+      }
+    }
+  }
+}
+
+foreach first {{SELECT dolt_gc()} VACUUM} {
+  foreach last {{SELECT dolt_gc()} VACUUM} {
+    foreach txn {BEGIN {SAVEPOINT s}} {
+      compacted_setup $first amend
+      db eval $txn
+      db eval {SELECT * FROM t}
+      compacted_rewrite $last amend
+      set prefix [string map {" " _} compacted-pinned-$first-$last-$txn]
+      do_execsql_test $prefix.pinned {SELECT id,v FROM t ORDER BY id} {1 one 2 two}
+      do_test $prefix.write {
+        set result [catchsql {INSERT INTO t VALUES(4,'blocked')}]
+        list [lindex $result 0] [sqlite3_extended_errcode db]
+      } {1 SQLITE_BUSY_SNAPSHOT}
+      catchsql ROLLBACK
+      do_execsql_test $prefix.fresh {SELECT id,v FROM t ORDER BY id} {1 one 2 two 3 three}
+      do_execsql_test $prefix.retry {INSERT INTO t VALUES(4,'mine')}
+    }
+  }
+}
+
+compacted_setup {SELECT dolt_gc()} amend
+compacted_rewrite {SELECT dolt_gc()} amend
+forcedelete compacted-foreign.db compacted-saved.db
+sqlite3 foreign compacted-foreign.db
+foreign eval {CREATE TABLE stranger(a); INSERT INTO stranger VALUES(99); SELECT dolt_commit('-Am','foreign')}
+foreign close
+file rename test.db compacted-saved.db
+file rename compacted-foreign.db test.db
+do_test compacted-foreign.refused {
+  set result [catchsql {INSERT INTO t VALUES(4,'must not land')}]
+  list [lindex $result 0] [sqlite3_extended_errcode db]
+} {1 SQLITE_READONLY}
+file rename test.db compacted-foreign.db
+file rename compacted-saved.db test.db
+do_execsql_test compacted-foreign.restored {INSERT INTO t VALUES(4,'mine'); SELECT id FROM t ORDER BY id} {1 2 3 4}
+
+compacted_setup {SELECT dolt_gc()} amend
+forcedelete compacted-held.db
+file link -hard compacted-held.db test.db
+compacted_rewrite {SELECT dolt_gc()} amend
+set fd [open compacted-held.db r+]
+fconfigure $fd -translation binary
+puts -nonewline $fd X
+close $fd
+do_test compacted-corrupt-prefix.refused {
+  set result [catchsql {INSERT INTO t VALUES(4,'must not land')}]
+  list [lindex $result 0] [sqlite3_extended_errcode db]
+} {1 SQLITE_READONLY}
+forcedelete compacted-held.db
+
+do_faultsim_test compacted-refresh-fault -faults {oom-* ioerr-*} -prep {
+  compacted_setup {SELECT dolt_gc()} amend
+  compacted_rewrite {SELECT dolt_gc()} amend
+} -body {
+  db eval {SELECT id,v FROM t ORDER BY id}
+} -test {
+  if {$testrc} {
+    if {!$testnfail} {error "unexpected refresh failure: $testresult"}
+  } elseif {!$testnfail && $testresult ne {1 one 2 two 3 three}} {error "stale refresh: $testresult"}
+  set rows [db eval {SELECT id,v FROM t ORDER BY id}]
+  if {$rows ne {1 one 2 two 3 three}} {error "stale retry: $rows"}
+  db eval {INSERT INTO t VALUES(4,'retry')}
+}
+catch {peer close}
+catch {db close}
+finish_test
