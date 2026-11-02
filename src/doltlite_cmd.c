@@ -297,6 +297,9 @@ static int cmdEndAtomicJoined(Btree *p, sqlite3_context *ctx){
       installed = rc==SQLITE_OK;
     }
     doltliteFinishStoreSiblings(p, pSiblings, installed);
+    /* Before any rollback below: a sibling's rollback persists its working
+    ** set with the head it holds, which must not be the unpublished one. */
+    doltliteEndBranchCommits(db, installed);
     if( installed ){
       /* A published root cannot become a failed command during SQL cleanup. */
       (void)sqlite3_step(commit);
