@@ -106,6 +106,21 @@ run_test "multipath_reset_all_missing_unstages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "0" "$DB3C"
 
+DB3DOT=/tmp/test_reset3dot_$$.db; rm -f "$DB3DOT"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); CREATE TABLE u(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); INSERT INTO u VALUES(2); SELECT dolt_commit('-Am','init'); INSERT INTO t VALUES(3); INSERT INTO u VALUES(4); SELECT dolt_add('.'); SELECT dolt_reset('.');" | $DOLTLITE "$DB3DOT" > /dev/null 2>&1
+run_test "dot_reset_clears_every_stage" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" \
+  "0" "$DB3DOT"
+run_test "dot_reset_leaves_both_unstaged" \
+  "SELECT count(*) FROM dolt_status WHERE staged=0;" \
+  "2" "$DB3DOT"
+run_test "dot_reset_keeps_working_rows" \
+  "SELECT (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM u);" \
+  "2|2" "$DB3DOT"
+run_test "dot_reset_reports_unstaged" \
+  "SELECT staged||'|'||status FROM dolt_status WHERE table_name='t';" \
+  "0|modified" "$DB3DOT"
+
 DB3D=/tmp/test_reset3d_$$.db; rm -f "$DB3D"
 echo "CREATE TABLE Camel(id INTEGER PRIMARY KEY, v INT); CREATE INDEX Camel_v ON Camel(v); INSERT INTO Camel VALUES(1,10); SELECT dolt_commit('-Am','base'); UPDATE Camel SET v=20; SELECT dolt_add('Camel'); SELECT dolt_reset('cAmEl');" | $DOLTLITE "$DB3D" > /dev/null 2>&1
 run_test "path_reset_is_case_insensitive" \

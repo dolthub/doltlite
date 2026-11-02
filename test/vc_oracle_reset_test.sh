@@ -124,6 +124,30 @@ SELECT dolt_add('-A');
 SELECT dolt_reset();
 "
 
+oracle "reset_dot_unstages_all" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (2, 20);
+INSERT INTO u VALUES (3, 30);
+SELECT dolt_add('.');
+SELECT dolt_reset('.');
+"
+
+oracle "reset_dot_with_a_name_unstages_all" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (2, 20);
+INSERT INTO u VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_reset('.', 't');
+"
+
+oracle "reset_dot_nothing_staged" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_reset('.');
+"
+
 oracle "reset_soft_no_ref_keeps_staged" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -753,6 +777,16 @@ echo "--- error paths ---"
 vc_oracle_error "reset_to_nonexistent_ref" "
 $SEED
 SELECT dolt_reset('--hard', 'nope');
+"
+
+vc_oracle_error "reset_hard_dot_is_not_a_ref" "
+$SEED
+SELECT dolt_reset('--hard', '.');
+"
+
+vc_oracle_error "reset_soft_dot_is_not_a_ref" "
+$SEED
+SELECT dolt_reset('--soft', '.');
 "
 
 vc_oracle_error "reset_unknown_flag" "

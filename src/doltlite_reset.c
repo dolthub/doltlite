@@ -754,7 +754,11 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }
 
-  if( nPaths>1 && !isHard && !isSoft && !zRef ){
+  /* More than one table argument unstages every table. A lone "." is that
+  ** same request, not a table named ".". --hard and --soft still treat a
+  ** following word as a ref. */
+  if( !isHard && !isSoft && !zRef && nPaths>0
+   && (nPaths>1 || strcmp(azPaths[0], ".")==0) ){
     nPaths = 0;
   }
 
