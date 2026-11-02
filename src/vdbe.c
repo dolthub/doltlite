@@ -7492,10 +7492,17 @@ case OP_IdxInsert: {        /* in2 */
   x.aMem = aMem + pOp->p3;
   x.nMem = (u16)pOp->p4.i;
 #endif
+#ifdef DOLTLITE_PROLLY
+  rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
+       (pOp->p5 & (OPFLAG_APPEND|OPFLAG_SAVEPOSITION|OPFLAG_PREFORMAT))
+       | ((pOp->p5 & OPFLAG_ISUPDATE) ? BTREE_ISUPDATE : 0),
+      ((pOp->p5 & OPFLAG_USESEEKRESULT) ? pC->seekResult : 0));
+#else
   rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
        (pOp->p5 & (OPFLAG_APPEND|OPFLAG_SAVEPOSITION|OPFLAG_PREFORMAT)),
       ((pOp->p5 & OPFLAG_USESEEKRESULT) ? pC->seekResult : 0)
       );
+#endif
   assert( pC->deferredMoveto==0 );
   pC->cacheStatus = CACHE_STALE;
   if( rc) goto abort_due_to_error;

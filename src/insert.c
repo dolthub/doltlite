@@ -2649,6 +2649,9 @@ void sqlite3GenerateConstraintChecks(
     if( (ix==0 && pIdx->pNext==0)                   /* Condition 3 */
      && pPk==pIdx                                   /* Condition 2 */
      && onError==OE_Replace                         /* Condition 1 */
+#ifdef DOLTLITE_PROLLY
+     && !isUpdate
+#endif
      && ( 0==(db->flags&SQLITE_RecTriggers) ||      /* Condition 4 */
           0==sqlite3TriggersExist(pParse, pTab, TK_DELETE, 0, 0))
      && ( 0==(db->flags&SQLITE_ForeignKeys) ||      /* Condition 5 */
@@ -2987,9 +2990,7 @@ void sqlite3CompleteInsertion(
 #endif
       }
 #ifdef DOLTLITE_PROLLY
-      if( VisibleRowid(pTab) ){
-        pik_flags |= (update_flags & OPFLAG_ISUPDATE);
-      }
+      pik_flags |= (update_flags & OPFLAG_ISUPDATE);
 #endif
     }
 #ifdef DOLTLITE_PROLLY

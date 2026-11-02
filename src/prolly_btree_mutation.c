@@ -1182,7 +1182,8 @@ static int btCursorInsertImpl(
          && memcmp(pCurrentKey,pSortKey,nSortKey)==0
          && sortKeyByteStartsField(pCurrentKey[nSortKey]) ){
           rc = prollyMutMapDelete(pCur->pMutMap,pCurrentKey,nCurrentKey,0);
-        }else if( seekResult==0 && (!pCurrentKey || nCurrentKey!=nSortKey
+        }else if( seekResult==0 && !(flags & BTREE_ISUPDATE)
+               && (!pCurrentKey || nCurrentKey!=nSortKey
                   || memcmp(pCurrentKey,pSortKey,nSortKey)!=0) ){
           ProllyCursor base;
           int res;
@@ -1487,6 +1488,7 @@ int sqlite3BtreeInsert(
   int seekResult
 ){
   if( !pCur ) return SQLITE_OK;
+  if( pCur->pCurOps!=&prollyCursorOps ) flags &= ~BTREE_ISUPDATE;
   return pCur->pCurOps->xInsert(pCur, pPayload, flags, seekResult);
 }
 

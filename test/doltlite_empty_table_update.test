@@ -45,7 +45,7 @@ foreach {schema suffix} {
   }
 }
 foreach branch {integer indexed text desc composite without} {
-  foreach op {update scan key replace delete rollback rename delete-txn} {
+  foreach op {update scan key replace delete rollback rename delete-txn collision replace-collision} {
     db close
     forcecopy [file join $::testdir empty_name_v12_fixture.db] test.db
     sqlite3 db test.db
@@ -61,6 +61,8 @@ foreach branch {integer indexed text desc composite without} {
     do_catchsql_test $prefix.duplicate {INSERT INTO "" VALUES(1,'old')} [list 1 $constraint]
     do_execsql_test $prefix.before {SELECT * FROM "" ORDER BY a} {1 old 2 two}
     switch $op {
+      replace-collision {set sql {UPDATE OR REPLACE "" SET a=1 WHERE a=2}; set expected {1 two}}
+      collision {set sql {UPDATE "" SET a=1 WHERE a=2}; set expected {1 old 2 two}}
       delete-txn {set sql {BEGIN; DELETE FROM "" WHERE a=2}; set expected {1 old}}
       rename {set sql {ALTER TABLE "" RENAME TO renamed; UPDATE renamed SET a=3 WHERE a=2; ALTER TABLE renamed RENAME TO ""}; set expected {1 old 3 two}}
       update {set sql {UPDATE "" SET v='new' WHERE a=1}; set expected {1 new 2 two}}
@@ -71,7 +73,14 @@ foreach branch {integer indexed text desc composite without} {
       rollback {set sql {SAVEPOINT s; UPDATE "" SET v='new'; ROLLBACK TO s; RELEASE s}; set expected {1 old 2 two}}
     }
     if {$branch eq "composite" && $op eq "replace"} {set expected {1 new 1 old 2 two}}
-    do_execsql_test $prefix.mutate $sql
+    if {$op eq "collision" && $branch ne "composite"} {
+      do_catchsql_test $prefix.mutate $sql [list 1 $constraint]
+    } else {
+      do_execsql_test $prefix.mutate $sql
+      if {$op eq "collision" || ($op eq "replace-collision" && $branch eq "composite")} {
+        set expected {1 old 1 two}
+      }
+    }
     do_execsql_test $prefix.after {SELECT * FROM "" ORDER BY a,v} $expected
     if {$op eq "delete-txn"} {
       do_execsql_test $prefix.deleted-lookup {SELECT * FROM "" WHERE a=2} {}
