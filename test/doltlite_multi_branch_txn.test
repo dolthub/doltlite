@@ -246,6 +246,18 @@ do_test commit-all-top-savepoint-both {
             [mb_disk main] [mb_disk feat]
 } {feat main {1 {no such savepoint: s}} sp sp {1:base,2:main ok} {1:base,3:feat ok}}
 
+# A vetoed joined commit leaves both branches as they were, with no refs
+# naming the unpublished commit.
+mb_reset
+do_test commit-all-hook-veto {
+  db commit_hook {return 1}
+  db eval {BEGIN; INSERT INTO main.t VALUES(3,'main'); INSERT INTO f.t VALUES(2,'feat')}
+  set r [catchsql {SELECT dolt_commit_all('-am','vetoed')}]
+  db commit_hook {}
+  catchsql ROLLBACK
+  lappend r [mb_head main] [mb_head feat] [mb_disk main] [mb_disk feat]
+} {1 {constraint failed} init init {1:base ok} {1:base ok}}
+
 mb_reset
 do_execsql_test commit-all-clean {
   SELECT dolt_commit_all('--skip-empty','-m','skip');
