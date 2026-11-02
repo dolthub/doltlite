@@ -194,6 +194,7 @@ doltlite_backup_peer_write
 doltlite_backup_busy
 doltlite_dump
 doltlite_dump_fault
+doltlite_dump_fts_aux
 doltlite_dump_schema
 doltlite_dump_stats
 doltlite_vc_interrupt
