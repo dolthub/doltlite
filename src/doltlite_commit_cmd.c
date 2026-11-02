@@ -1593,7 +1593,7 @@ static void doltliteCommitAllFunc(
   for(i=2; i<db->nDb; i++){
     Btree *q = db->aDb[i].pBt;
     if( !doltliteBtreeSameStore(db->aDb[0].pBt, q)
-     || sqlite3BtreeTxnState(q)!=SQLITE_TXN_WRITE ) continue;
+     || !doltliteBtreeTxnWrote(q) ) continue;
     memset(&all.a[all.n], 0, sizeof(all.a[0]));
     all.a[all.n].zBranch = doltliteBtreeBranchName(q);
     all.a[all.n].pBt = q;
@@ -1601,8 +1601,7 @@ static void doltliteCommitAllFunc(
   }
   qsort(all.a, all.n, sizeof(all.a[0]), commitAllCompare);
 
-  bSessionDirty = !db->autoCommit
-               && sqlite3_txn_state(db, "main")==SQLITE_TXN_WRITE;
+  bSessionDirty = !db->autoCommit && doltliteBtreeTxnWrote(db->aDb[0].pBt);
   for(i=0; i<all.n; i++){
     rc = commitAllPrepareBranch(context, &opts, &all.a[i]);
     if( rc!=SQLITE_OK ) goto commit_all_done;
