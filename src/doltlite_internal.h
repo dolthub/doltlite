@@ -51,6 +51,7 @@ void doltliteBtreeFinishJoinedCommand(Btree*, const ProllyHash*, void*);
 int doltliteDeferJoinedCommandSeal(sqlite3*);
 int doltlitePrepareJoinedCommit(sqlite3*);
 int doltliteVcSealPrecheck(sqlite3_context*, int*);
+int doltliteInAtomicCommand(sqlite3*);
 int doltliteCommandHasUserSavepoint(sqlite3*);
 int doltliteDeferJoinedSavepointRelease(sqlite3*);
 int doltliteLockAndRefreshBusy(sqlite3*, ChunkStore*);
