@@ -147,6 +147,9 @@ void sqlite3AlterRenameTable(
   assert( pSrc->nSrc==1 );
   assert( sqlite3BtreeHoldsAllMutexes(pParse->db) );
 
+#ifdef DOLTLITE_PROLLY
+  pParse->bLocalNames = 1;
+#endif
   pTab = sqlite3LocateTableItem(pParse, 0, &pSrc->a[0]);
   if( !pTab ) goto exit_rename_table;
   iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
@@ -599,6 +602,9 @@ void sqlite3AlterBeginAddColumn(Parse *pParse, SrcList *pSrc){
   assert( pParse->pNewTable==0 );
   assert( sqlite3BtreeHoldsAllMutexes(db) );
   if( NEVER(db->mallocFailed) ) goto exit_begin_add_column;
+#ifdef DOLTLITE_PROLLY
+  pParse->bLocalNames = 1;
+#endif
   pTab = sqlite3LocateTableItem(pParse, 0, &pSrc->a[0]);
   if( !pTab ) goto exit_begin_add_column;
 
@@ -719,6 +725,9 @@ void sqlite3AlterRenameColumn(
   int bQuote;                     /* True to quote the new name */
 
   /* Locate the table to be altered */
+#ifdef DOLTLITE_PROLLY
+  pParse->bLocalNames = 1;
+#endif
   pTab = sqlite3LocateTableItem(pParse, 0, &pSrc->a[0]);
   if( !pTab ) goto exit_rename_column;
 
@@ -2399,6 +2408,9 @@ void sqlite3AlterDropColumn(Parse *pParse, SrcList *pSrc, const Token *pName){
   assert( pParse->pNewTable==0 );
   assert( sqlite3BtreeHoldsAllMutexes(db) );
   if( NEVER(db->mallocFailed) ) goto exit_drop_column;
+#ifdef DOLTLITE_PROLLY
+  pParse->bLocalNames = 1;
+#endif
   pTab = sqlite3LocateTableItem(pParse, 0, &pSrc->a[0]);
   if( !pTab ) goto exit_drop_column;
 
@@ -2942,6 +2954,9 @@ static Table *alterFindTable(
   sqlite3 *db = pParse->db;
   Table *pTab = 0;
   assert( sqlite3BtreeHoldsAllMutexes(db) );
+#ifdef DOLTLITE_PROLLY
+  pParse->bLocalNames = 1;
+#endif
   pTab = sqlite3LocateTableItem(pParse, 0, &pSrc->a[0]);
   if( pTab ){
     int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);

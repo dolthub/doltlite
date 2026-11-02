@@ -284,4 +284,40 @@ do_catchsql_test nonlocal-fk-commit-missing {
   SELECT dolt_commit('-Am','missing');
 } {1 {foreign key on table `uses_missing` requires the referenced table `nowhere`}}
 
+# DDL names local tables only, as in Dolt: a rule never sends a DROP or an
+# ALTER to the target branch.
+nl_reset
+do_execsql_test nonlocal-drop-local {
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main','','immediate');
+  DROP TABLE users;
+  SELECT count(*) FROM sqlite_master WHERE name='users';
+  SELECT count(*) FROM users;
+} {0 1}
+do_test nonlocal-drop-target-kept {
+  nl_disk main {SELECT count(*) FROM sqlite_master WHERE name='users'}
+} {1}
+nl_reset
+db eval {INSERT INTO dolt_nonlocal_tables VALUES('nl','main','users','immediate')}
+foreach {name sql} {
+  add-column {ALTER TABLE nl ADD COLUMN x INT}
+  rename {ALTER TABLE nl RENAME TO renamed}
+  rename-column {ALTER TABLE nl RENAME COLUMN name TO nm}
+  drop-column {ALTER TABLE nl DROP COLUMN name}
+  drop {DROP TABLE nl}
+} {
+  do_catchsql_test nonlocal-ddl-$name $sql {1 {no such table: nl}}
+}
+foreach {name sql} {
+  index {CREATE INDEX nl_i ON nl(name)}
+  trigger {CREATE TRIGGER nl_tr AFTER INSERT ON nl BEGIN SELECT 1; END}
+} {
+  do_catchsql_test nonlocal-ddl-$name $sql {1 {no such table: main.nl}}
+}
+do_test nonlocal-ddl-target-untouched {
+  nl_disk main {
+    SELECT sql FROM sqlite_master WHERE tbl_name='users';
+    SELECT table_name FROM dolt_status;
+  }
+} {{CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)}}
+
 finish_test

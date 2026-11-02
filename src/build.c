@@ -447,7 +447,7 @@ Table *sqlite3LocateTable(
     zDbase = "main";
   }
   p = 0;
-  if( !db->init.busy ){
+  if( !db->init.busy && !pParse->bLocalNames ){
     const char *zNonlocal = zName;
     const char *zNonlocalDb = zDbase;
     int eNonlocal = doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb);
@@ -4026,6 +4026,9 @@ void sqlite3DropTable(Parse *pParse, SrcList *pName, int isView, int noErr){
   assert( pName->a[0].fg.isSubquery==0 );
   if( sqlite3ReadSchema(pParse) ) goto exit_drop_table;
   if( noErr ) db->suppressErr++;
+#ifdef DOLTLITE_PROLLY
+  pParse->bLocalNames = 1;
+#endif
   assert( isView==0 || isView==LOCATE_VIEW );
   pTab = sqlite3LocateTableItem(pParse, isView, &pName->a[0]);
   if( noErr ) db->suppressErr--;
@@ -4529,6 +4532,9 @@ void sqlite3CreateIndex(
     ** if initializing a database schema.
     */
     if( !db->init.busy ){
+#ifdef DOLTLITE_PROLLY
+      pParse->bLocalNames = 1;
+#endif
       pTab = sqlite3SrcListLookup(pParse, pTblName);
       if( pName2->n==0 && pTab && pTab->pSchema==db->aDb[1].pSchema ){
         iDb = 1;
@@ -4542,6 +4548,9 @@ void sqlite3CreateIndex(
       ** sqlite3FixSrcList can never fail. */
       assert(0);
     }
+#ifdef DOLTLITE_PROLLY
+    pParse->bLocalNames = 1;
+#endif
     pTab = sqlite3LocateTableItem(pParse, 0, &pTblName->a[0]);
     assert( db->mallocFailed==0 || pTab==0 );
     if( pTab==0 ) goto exit_create_index;

@@ -164,6 +164,9 @@ void sqlite3BeginTrigger(
   ** If sqlite3SrcListLookup() returns 0, indicating the table does not
   ** exist, the error is caught by the block below.
   */
+#ifdef DOLTLITE_PROLLY
+  pParse->bLocalNames = 1;
+#endif
   pTab = sqlite3SrcListLookup(pParse, pTableName);
   if( db->init.busy==0 && pName2->n==0 && pTab
         && pTab->pSchema==db->aDb[1].pSchema ){
