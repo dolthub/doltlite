@@ -1969,6 +1969,7 @@ struct FailFile {
   sqlite3_file base;
   sqlite3_file *pReal;
   int isMainDb;
+  int isLockSidecar;
 };
 
 static void (*gReadHook)(void*);
@@ -1992,6 +1993,7 @@ static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
 static int gFailOpenMainOnce = 0;
 static int gFailHits = 0;
+static int gFailPresenceHits = 0;
 static int gFailExclusiveBusy;
 static int gPublicationMilliSleeps;
 static int gPublicationSleepUsec;
@@ -2048,17 +2050,20 @@ static int failWrite(sqlite3_file *pFile, const void *zBuf, int iAmt, sqlite3_in
   FailFile *p = (FailFile*)pFile;
   if( p->isMainDb && gFailWriteSticky<0 ){
     gFailHits++;
+    if( p->isLockSidecar && iOfst>=4+2*PROLLY_HASH_SIZE ) gFailPresenceHits++;
     return SQLITE_IOERR_WRITE;
   }
   if( p->isMainDb && gFailWriteSticky>0 && --gFailWriteSticky==0 ){
     gFailWriteSticky = -1;
     gFailHits++;
+    if( p->isLockSidecar && iOfst>=4+2*PROLLY_HASH_SIZE ) gFailPresenceHits++;
     return SQLITE_IOERR_WRITE;
   }
   if( gFailWriteOnce>0
    || (p->isMainDb && gFailWriteNth>0 && --gFailWriteNth==0) ){
     if( gFailWriteOnce>0 ) gFailWriteOnce--;
     gFailHits++;
+    if( p->isLockSidecar && iOfst>=4+2*PROLLY_HASH_SIZE ) gFailPresenceHits++;
     return SQLITE_IOERR_WRITE;
   }
   return p->pReal->pMethods->xWrite(p->pReal, zBuf, iAmt, iOfst);
@@ -2221,6 +2226,7 @@ static int failOpen(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *pFile,
 
   p->pReal = pReal;
   p->isMainDb = (flags & SQLITE_OPEN_MAIN_DB)!=0;
+  p->isLockSidecar = isDoltLiteLock;
   p->base.pMethods = &gFailIoMethods;
   return SQLITE_OK;
 }
@@ -6246,7 +6252,7 @@ static void run_clone_post_commit_io_failure(void){
     removeDbFiles(localPath);
     check("clone_post_commit_open", open_fail_db(localPath, &db)==SQLITE_OK);
     if( !db ) break;
-    gFailHits = 0;
+    gFailHits = gFailPresenceHits = 0;
     gFailWriteNth = nth;
     gFailWriteSticky = 0;
     rc = sqlite3_exec(db, sql, 0, 0, &err);
@@ -6258,7 +6264,8 @@ static void run_clone_post_commit_io_failure(void){
     if( hits==0 ){
       check("clone_io_unfaulted_ok", rc==SQLITE_OK);
     }else{
-      check("clone_io_fault_reported", rc!=SQLITE_OK);
+      check("clone_io_fault_reported",
+            rc!=SQLITE_OK || hits==gFailPresenceHits);
     }
     sqlite3_snprintf(sizeof(zLive), zLive, "%s", queryScalarText(db, zView));
     check("clone_io_fresh_open", open_db(localPath, &fresh)==SQLITE_OK);
@@ -12418,12 +12425,12 @@ static void run_vc_late_io_failure(void){
           "INSERT INTO t VALUES(10),(11);")==SQLITE_OK);
         sqlite3_snprintf(sizeof(zHead), zHead, "%s",
                          queryScalarText(db, "SELECT dolt_hashof('HEAD')"));
-        gFailHits = 0;
+        gFailHits = gFailPresenceHits = 0;
         if( sync ) gFailSyncNth = nth; else gFailWriteNth = nth;
         rc = execSqlSilent(db, azOps[op]);
         failed = rc!=SQLITE_OK;
         gFailWriteNth = gFailSyncNth = 0;
-        check("vc_late_io_reported", gFailHits==0 || failed);
+        check("vc_late_io_reported", gFailHits==gFailPresenceHits || failed);
         zRows = failed ? "1,2,10,11" : "1,2";
         check("vc_late_io_live_rows",
               strcmp(queryScalarText(db, "SELECT group_concat(id) FROM t"), zRows)==0);

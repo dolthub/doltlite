@@ -115,9 +115,13 @@ do_compare_test 1.6.8 "rowid >= 200"
 do_compare_test 1.6.9 "1"
 do_compare_test 1.6.10 "rowid >= 5"
 
+set nSwarmFiles 9
+ifcapable doltlite {
+  if {$tcl_platform(platform) eq "unix"} {set nSwarmFiles 18}
+}
 do_test 1.x {
   set sqlite_open_file_count
-} [expr $nFile+9]
+} [expr $nFile+$nSwarmFiles]
 
 do_test 1.y { db close } {}
 

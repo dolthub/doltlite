@@ -246,7 +246,7 @@ static int csDirectoryAccess(
   return SQLITE_OK;
 }
 
-int csFileLock(sqlite3_vfs *pVfs, const char *path, int openFlags,
+static int csFileLockOpen(sqlite3_vfs *pVfs, const char *path, int openFlags,
                       CsFileLock *ppFile, char **pzName){
   char *zRaw = csLockPath(path);
   char *zLock = 0;
@@ -287,7 +287,6 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path, int openFlags,
   pLock->pVfs = pVfs;
   pLock->readOnly = (openFlags & SQLITE_OPEN_READONLY)!=0;
   rc = chunkStoreDupFilenameDoubleNul(path, &pLock->zPath);
-  if( rc==SQLITE_OK ) rc = csFileRelock(pLock, (openFlags & SQLITE_OPEN_CREATE)!=0);
   if( rc!=SQLITE_OK ){
     sqlite3OsCloseFree(pFile);
     sqlite3_free(pLock->zPath);
@@ -299,6 +298,38 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path, int openFlags,
   /* unixFile.zPath aliases this buffer until close; caller frees it. */
   *pzName = zLock;
   return SQLITE_OK;
+}
+
+int csFileLock(sqlite3_vfs *pVfs, const char *path, int openFlags,
+               CsFileLock *ppFile, char **pzName){
+  int rc = csFileLockOpen(pVfs,path,openFlags,ppFile,pzName);
+  if( rc==SQLITE_OK ){
+    rc = csFileRelock(*ppFile,(openFlags & SQLITE_OPEN_CREATE)!=0);
+    if( rc!=SQLITE_OK ){
+      csFileUnlock(*ppFile,pzName);
+      *ppFile = 0;
+    }
+  }
+  return rc;
+}
+
+int chunkStoreGetLockFile(ChunkStore *cs, sqlite3_file **ppFile){
+  int rc = SQLITE_OK;
+  *ppFile = 0;
+  if( !CS_GRAPH_LOCK(cs) ){
+    rc = csFileLockOpen(cs->file.pVfs,cs->file.zFilename,
+        cs->readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE,
+        &CS_GRAPH_LOCK(cs),&cs->pGraphLockName);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3OsDoltliteModeOf(CS_GRAPH_LOCK(cs)->pFile,cs->file.zFilename,1);
+      if( rc!=SQLITE_OK ){
+        csFileUnlock(CS_GRAPH_LOCK(cs),&cs->pGraphLockName);
+        CS_GRAPH_LOCK(cs) = 0;
+      }
+    }
+  }
+  if( rc==SQLITE_OK ) *ppFile = CS_GRAPH_LOCK(cs)->pFile;
+  return rc;
 }
 
 static void csFileUnlockKeepOpen(CsFileLock pLock){

@@ -33,10 +33,14 @@ proc parse_uri {uri} {
   tvfs delete
   tvfs2 delete
 
-  set ::uri_open
+  set result [lindex $::uri_open end]
+  foreach opened $::uri_open {
+    if {[lindex $opened 0] eq $fileName} {set result $opened}
+  }
+  set result
 }
 proc parse_uri_open_cb {method file arglist} {
-  set ::uri_open [list $file $arglist]
+  lappend ::uri_open [list $file $arglist]
 }
 
 proc open_uri_error {uri} {

@@ -2987,14 +2987,10 @@ e_reindex e_reindex-2.6.5 class=intentional
 e_reindex e_reindex-2.6.7 class=intentional
 e_reindex e_reindex-2.6.8 class=intentional
 
-# parse_uri records the LAST xOpen seen by a testvfs. doltlite's chunk
-# store performs extra VFS opens after the initial URI open (traced with a
-# log-all-xOpens repro): for relative paths it re-opens the resolved
-# absolute path with no URI parameter block, so the recorded open has the
-# right file but empty params (3.2/3.3); for absolute paths the recorded
-# open is the eager ".{db}-lock" sidecar (4.2-4.4, 12.x, 13.x), so both the
-# filename and the parameter list differ.
-e_uri e_uri-3.2 class=intentional  # parse_uri records the LAST xOpen seen by a testvfs. doltlite's chunk store performs extra VFS opens after the initial URI open (traced with a log-all-xOpens repro): for relative paths it re-opens the resolved absolute path with no URI parameter block, so the recorded open has the right file but empty params (3.2/3.3); for absolute paths the recorded open is the eager ".{db}-lock" sidecar (4.2-4.4, 12.x, 13.x), so both the filename and the parameter list differ.
+# Internal database reopens lose the URI parameter block (3.2/3.3).
+# Failed absolute-path opens may reach only the eager lock sidecar, with
+# no primary-file open for the URI probe to select (4.2-4.4, 12.x, 13.x).
+e_uri e_uri-3.2 class=intentional  # internal database reopens lose URI params; failed absolute opens may only reach the lock sidecar
 e_uri e_uri-3.3 class=intentional
 e_uri e_uri-4.2 class=intentional
 e_uri e_uri-4.3 class=intentional
@@ -4746,61 +4742,6 @@ incrvacuum2 incrvacuum2-5.12 class=intentional  # page-WAL frame count does not 
 # -journal sidecar never exists. Preps that copy the journal aside
 # (ioerr-7/9) fail before fault
 # injection starts; recovery itself passes once the prep error clears.
-ioerr ioerr-7.2.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.3.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.4.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.5.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.6.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.7.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.8.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.9.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.10.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.11.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.12.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.13.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.14.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.15.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.16.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.17.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.18.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.19.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.20.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.21.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.22.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.23.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.24.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.25.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.26.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.27.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.28.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.29.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.30.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.31.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.32.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.33.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.34.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.35.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.36.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.37.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.38.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.39.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.40.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.41.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.42.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.43.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.44.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.45.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.46.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.47.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.48.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.49.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.50.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.51.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.52.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.53.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.54.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.55.1 class=intentional  # hot-journal prep copies absent -journal sidecar
-ioerr ioerr-7.56.1 class=intentional  # hot-journal prep copies absent -journal sidecar
 ioerr ioerr-9.1.1 class=intentional  # master-journal prep copies absent -journal sidecar
 # ioerr4: PRAGMA auto_vacuum=INCREMENTAL is a silent no-op on doltlite
 # format (read-back 0, not 2), and the chunk store has no page freelist,
