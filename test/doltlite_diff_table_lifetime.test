@@ -1,0 +1,135 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout key constraint suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {}
+  clustered {id INT PRIMARY KEY} {} {}
+  text {id TEXT PRIMARY KEY} {} {}
+  composite {id INT} {,PRIMARY KEY(tenant,id)} {}
+  without_rowid {id INT PRIMARY KEY} {} {WITHOUT ROWID}
+  keyless {id INT} {} {}
+} {
+  reset_db
+  set schema "CREATE TABLE t($key,v INT,tenant INT DEFAULT 0$constraint) $suffix"
+  execsql $schema
+  execsql {
+    INSERT INTO t(id,v) VALUES(1,10);
+    SELECT dolt_commit('-Am','old table');
+    SELECT dolt_tag('old');
+    DROP TABLE t;
+    SELECT dolt_commit('-Am','drop old table');
+    SELECT dolt_tag('dropped');
+    SELECT dolt_commit('--allow-empty','-m','gap');
+  }
+  execsql $schema
+  execsql {SELECT dolt_commit('-Am','empty recreation')}
+  do_execsql_test diff-lifetime-$layout-empty {
+    SELECT count(*) FROM dolt_diff_t;
+  } {0}
+  execsql {
+    INSERT INTO t(id,v) VALUES(2,20);
+    SELECT dolt_commit('-Am','new table');
+    INSERT INTO t(id,v) VALUES(3,30);
+  }
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    set name diff-lifetime-$layout-$phase
+    do_execsql_test $name-rows {
+      SELECT to_id,to_v,from_id,from_v,diff_type,
+             coalesce(l.message,d.to_commit)
+        FROM dolt_diff_t d LEFT JOIN dolt_log l ON l.commit_hash=d.to_commit
+        ORDER BY to_id;
+    } {2 20 {} {} added {new table} 3 30 {} {} added WORKING}
+    do_execsql_test $name-limit {
+      SELECT count(*) FROM (SELECT * FROM dolt_diff_t LIMIT 1);
+    } {1}
+    do_execsql_test $name-slice {
+      SELECT count(*) FILTER (WHERE to_id=2),
+             count(*) FILTER (WHERE from_id=1)
+        FROM dolt_diff_t('old','HEAD');
+    } {1 1}
+    execsql {
+      DROP TABLE IF EXISTS temp.full_diff;
+      CREATE TEMP TABLE full_diff AS SELECT * FROM dolt_diff_t;
+    }
+    set i 0
+    foreach hash [concat [execsql {SELECT commit_hash FROM dolt_log}] WORKING] {
+      foreach col {from_commit to_commit} {
+        set expected [execsql "SELECT to_id,from_id,diff_type FROM full_diff
+          WHERE $col='$hash' ORDER BY to_id,from_id,diff_type"]
+        foreach prefix {{} +} {
+          do_execsql_test $name-filter-[incr i] "
+            SELECT to_id,from_id,diff_type FROM dolt_diff_t
+              WHERE $prefix$col='$hash' ORDER BY to_id,from_id,diff_type;
+          " $expected
+        }
+      }
+    }
+  }
+  execsql {
+    DELETE FROM t;
+    SELECT dolt_commit('-Am','delete rows');
+    INSERT INTO t(id,v) VALUES(4,40);
+    SELECT dolt_commit('-Am','insert after delete');
+  }
+  do_execsql_test diff-lifetime-$layout-delete-rows {
+    SELECT coalesce(to_id,from_id),diff_type FROM dolt_diff_t
+      ORDER BY 1,diff_type;
+  } {2 added 2 removed 4 added}
+  execsql {
+    DROP TABLE t;
+    SELECT dolt_commit('-Am','drop new table');
+  }
+  execsql $schema
+  execsql {
+    INSERT INTO t(id,v) VALUES(5,50);
+    SELECT dolt_commit('-Am','another recreation');
+  }
+  do_execsql_test diff-lifetime-$layout-repeated {
+    SELECT to_id,from_id,diff_type FROM dolt_diff_t;
+  } {5 {} added}
+  execsql {
+    DROP TABLE t;
+    SELECT dolt_commit('-Am','drop latest table');
+    SELECT dolt_commit('--allow-empty','-m','after latest drop');
+  }
+  foreach phase {live reopen} {
+    if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+    do_execsql_test diff-lifetime-$layout-dropped-$phase {
+      SELECT coalesce(to_id,from_id),diff_type FROM dolt_diff_t
+        ORDER BY diff_type;
+    } {5 added 5 removed}
+  }
+}
+
+foreach order {main side} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY,v INT);
+    INSERT INTO t VALUES(1,10);
+    SELECT dolt_commit('-Am','old table');
+    DROP TABLE t;
+    SELECT dolt_commit('-Am','drop table');
+    SELECT dolt_branch('side');
+  }
+  execsql "SELECT dolt_checkout('$order')"
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY,v INT);
+    INSERT INTO t VALUES(2,20);
+    SELECT dolt_commit('-Am','recreate');
+  }
+  set other [expr {$order eq "main" ? "side" : "main"}]
+  execsql "SELECT dolt_checkout('$other')"
+  execsql {
+    CREATE TABLE u(id INT PRIMARY KEY);
+    INSERT INTO u VALUES(1);
+    SELECT dolt_commit('-Am','unrelated table');
+  }
+  execsql "SELECT dolt_checkout('$order');
+    SELECT dolt_merge('$other','--no-ff','-m','merge')"
+  do_execsql_test diff-lifetime-merge-$order {
+    SELECT DISTINCT to_id,from_id,diff_type FROM dolt_diff_t;
+  } {2 {} added}
+}
+
+finish_test

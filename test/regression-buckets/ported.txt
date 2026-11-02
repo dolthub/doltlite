@@ -226,3 +226,4 @@ doltlite_replay_lifecycle
 doltlite_empty_table_update
 doltlite_branch_presence_collision
 doltlite_init_identity
+doltlite_diff_table_lifetime
