@@ -178,6 +178,28 @@ do_test doltlite_data_version-1.13 {
   expr {$before==$mid && $mid==$after}
 } {1}
 
+# A peer's ref-only change (branch, tag, delete, a new branch it switches
+# to) leaves this branch's rows alone but changes dolt_branches and
+# dolt_tags, so a reader must see a new data version.
+db eval {SELECT dolt_commit('-Am','dv')}
+set i 0
+foreach op {
+  {SELECT dolt_branch('dv_b')}
+  {SELECT dolt_tag('dv_t')}
+  {SELECT dolt_branch('-d','dv_b')}
+  {SELECT dolt_checkout('-b','dv_c')}
+} {
+  incr i
+  do_test doltlite_data_version-2.$i {
+    set before [db2 one {PRAGMA data_version}]
+    set mine [db one {PRAGMA data_version}]
+    db eval $op
+    list [expr {[db2 one {PRAGMA data_version}]!=$before}] \
+         [expr {[db one {PRAGMA data_version}]==$mine}]
+  } {1 1}
+}
+db eval {SELECT dolt_checkout('main')}
+
 db3 close
 db2 close
 finish_test
