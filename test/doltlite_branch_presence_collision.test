@@ -1,0 +1,169 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set executable [file normalize [info nameofexecutable]]
+while {[file type $executable] eq "link"} {
+  set executable [file normalize [file join [file dirname $executable] [file readlink $executable]]]
+}
+set engine [file join [file dirname $executable] doltlite]
+if {$tcl_platform(platform) eq "windows"} {append engine .exe}
+
+if {$tcl_platform(platform) eq "windows"} {finish_test; return}
+
+proc presence_setup {} {
+  catch {holder close}
+  catch {peer close}
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('b14469'); SELECT dolt_branch('b45874');
+  }
+}
+
+foreach holderBranch {b14469 b45874} target {b45874 b14469} {
+  foreach access {checkout path} {
+    foreach op {delete rename} {
+      presence_setup
+      if {$access eq "checkout"} {
+        sqlite3 holder test.db
+        holder eval "SELECT dolt_checkout('$holderBranch')"
+      } else {sqlite3 holder test.db/$holderBranch}
+      holder eval {SELECT count(*) FROM t}
+      set prefix presence-collision-$holderBranch.$access.$op
+      if {$op eq "delete"} {
+        set sql "SELECT dolt_branch('-d','$target')"
+      } else {set sql "SELECT dolt_branch('-m','$target','renamed')"}
+      do_test $prefix.local {db eval $sql} 0
+      if {![db one "SELECT count(*) FROM dolt_branches WHERE name='$target'"]} {
+        db eval "SELECT dolt_branch('$target')"
+      }
+      if {$op eq "rename"} {set sql "SELECT dolt_branch('-m','$target','renamed2')"}
+      do_test $prefix.process {string trim [exec $engine -bail [file normalize test.db] $sql]} 0
+      do_test $prefix.real-holder {
+        set result [catch {db eval "SELECT dolt_branch('-d','$holderBranch')"} message]
+        list $result $message
+      } {1 {unsafe to delete or rename branches in use in other sessions; use --force to force the change}}
+      holder close
+      do_test $prefix.release {db eval "SELECT dolt_branch('-d','$holderBranch')"} 0
+      do_execsql_test $prefix.integrity {PRAGMA integrity_check} ok
+    }
+  }
+}
+
+presence_setup
+sqlite3 holder test.db/b14469
+holder eval {SELECT count(*) FROM t}
+sqlite3 peer test.db/b45874
+peer eval {SELECT count(*) FROM t}
+do_test presence-both-held.first {catch {db eval {SELECT dolt_branch('-d','b14469')}}} 1
+do_test presence-both-held.second {catch {db eval {SELECT dolt_branch('-m','b45874','renamed')}}} 1
+holder close
+do_execsql_test presence-both-held.release-first {SELECT dolt_branch('-d','b14469')} 0
+do_test presence-both-held.keeps-second {catch {db eval {SELECT dolt_branch('-d','b45874')}}} 1
+peer close
+do_execsql_test presence-both-held.release-second {SELECT dolt_branch('-d','b45874')} 0
+
+foreach maintenance {{SELECT dolt_gc()} VACUUM} {
+  presence_setup
+  sqlite3 holder test.db/b14469
+  holder eval {SELECT count(*) FROM t}
+  exec $engine -bail [file normalize test.db] $maintenance
+  do_test presence-gc-$maintenance.holder {
+    catch {db eval {SELECT dolt_branch('-d','b14469')}}
+  } 1
+  do_execsql_test presence-gc-$maintenance.unused {SELECT dolt_branch('-d','b45874')} 0
+  holder close
+}
+
+presence_setup
+sqlite3 holder test.db/b14469
+holder eval {SELECT count(*) FROM t}
+sqlite3 spare test.db
+spare eval {SELECT count(*) FROM t}
+spare close
+do_test presence-unrelated-close-keeps-holder {
+  catch {db eval {SELECT dolt_branch('-d','b14469')}}
+} 1
+do_execsql_test presence-peer-write {
+  INSERT INTO t VALUES(2,'peer'); SELECT length(dolt_commit('-am','peer'));
+} 40
+do_test presence-peer-write-snapshot {holder eval {SELECT id FROM t}} 1
+holder close
+
+presence_setup
+set child [open [list | $engine -bail [file normalize test.db]/b14469] r+]
+fconfigure $child -buffering line
+puts $child ".headers off\n.mode list\nSELECT 'ready' FROM t LIMIT 1;"
+flush $child
+do_test presence-process-ready {gets $child} ready
+do_execsql_test presence-process-unused {SELECT dolt_branch('-d','b45874')} 0
+do_test presence-process-held {catch {db eval {SELECT dolt_branch('-d','b14469')}}} 1
+exec kill -KILL {*}[pid $child]
+catch {close $child}
+do_execsql_test presence-process-crash-release {SELECT dolt_branch('-d','b14469')} 0
+
+presence_setup
+sqlite3 holder test.db/b14469
+holder eval {SELECT count(*) FROM t}
+do_execsql_test presence-force-delete {SELECT dolt_branch('-D','b14469')} 0
+do_test presence-force-checkout {holder eval {SELECT dolt_checkout('main'); SELECT count(*) FROM t}} {0 1}
+holder close
+do_execsql_test presence-force-not-resurrected {SELECT count(*) FROM dolt_branches WHERE name='b14469'} 0
+
+presence_setup
+db eval {SELECT dolt_branch('prefix-long'); SELECT dolt_branch('prefix')}
+sqlite3 holder test.db/prefix-long
+holder eval {SELECT count(*) FROM t}
+do_execsql_test presence-full-name-prefix {SELECT dolt_branch('-d','prefix')} 0
+do_test presence-full-name-held {
+  catch {db eval {SELECT dolt_branch('-d','prefix-long')}}
+} 1
+holder close
+
+set longBranch recovered-after-incomplete-registry-record-with-a-long-name
+presence_setup
+db eval "SELECT dolt_branch('$longBranch')"
+set sidecar [file normalize .test.db-lock]
+set fd [open $sidecar a]
+fconfigure $fd -translation binary
+puts -nonewline $fd [binary format H* 00000400]
+puts -nonewline $fd partial
+close $fd
+sqlite3 holder test.db/$longBranch
+holder eval {SELECT count(*) FROM t}
+do_test presence-partial-record.recovered {
+  catch {db eval "SELECT dolt_branch('-d','$longBranch')"}
+} 1
+holder close
+do_test presence-partial-record.released {db eval "SELECT dolt_branch('-d','$longBranch')"} 0
+set registrySize [file size $sidecar]
+for {set i 0} {$i<10} {incr i} {
+  set name [format reuse-branch-%03d $i]
+  db eval "SELECT dolt_branch('$name')"
+  sqlite3 holder test.db/$name
+  holder eval {SELECT count(*) FROM t}
+  holder close
+  db eval "SELECT dolt_branch('-d','$name')"
+}
+do_test presence-registry-reuses-slots {file size $sidecar} $registrySize
+
+do_faultsim_test presence-active-fault -faults {oom-* ioerr-*} -prep {
+  presence_setup
+  sqlite3 holder test.db/b14469
+  holder eval {SELECT count(*) FROM t}
+} -body {
+  db eval {SELECT dolt_branch('-d','b14469')}
+} -test {
+  faultsim_test_result {1 {unsafe to delete or rename branches in use in other sessions; use --force to force the change}} {1 {disk I/O error}}
+  if {[db one {SELECT count(*) FROM dolt_branches WHERE name='b14469'}]!=1} {
+    error "active branch disappeared"
+  }
+  set result [catch {db eval {SELECT dolt_branch('-d','b14469')}} message]
+  if {!$result || ![string match {*in use in other sessions*} $message]} {
+    error "lost presence: $result $message"
+  }
+}
+catch {holder close}
+finish_test

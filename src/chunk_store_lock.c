@@ -169,7 +169,7 @@ static int csFileRelock(CsFileLock pLock, int bCreate){
   return rc;
 }
 
-static char *csLockPath(const char *path){
+char *chunkStoreLockPath(const char *path){
   const char *zBase = strrchr(path, '/');
   int nDir = 0;
 
@@ -248,7 +248,7 @@ static int csDirectoryAccess(
 
 int csFileLock(sqlite3_vfs *pVfs, const char *path, int openFlags,
                       CsFileLock *ppFile, char **pzName){
-  char *zRaw = csLockPath(path);
+  char *zRaw = chunkStoreLockPath(path);
   char *zLock = 0;
   sqlite3_file *pFile = 0;
   CsFileLock pLock = 0;
@@ -259,7 +259,7 @@ int csFileLock(sqlite3_vfs *pVfs, const char *path, int openFlags,
   *ppFile = 0;
   *pzName = 0;
   if( !zRaw ) return SQLITE_NOMEM;
-  /* SQLITE_OPEN_MAIN_DB names need a double-nul; csLockPath is single. */
+  /* SQLITE_OPEN_MAIN_DB names need a double-nul; chunkStoreLockPath is single. */
   rc = chunkStoreDupFilenameDoubleNul(zRaw, &zLock);
   sqlite3_free(zRaw);
   if( rc!=SQLITE_OK ) return rc;

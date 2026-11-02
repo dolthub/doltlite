@@ -354,6 +354,9 @@ struct Btree {
   u8 bJoinedPublish;
   u8 bJoinedStaged;
   char *zPresenceBranch;
+  char *zPresenceFile;
+  sqlite3_file *pPresenceFile;
+  sqlite3_int64 iPresenceOffset;
   u8 bCommitAllSaved;
   u8 commitAllMerging;
   ProllyHash commitAllHead;
