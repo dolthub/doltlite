@@ -1598,6 +1598,22 @@ int doltliteBtreeTxnWrote(Btree *q){
       && (q->bTxnWrote || btreeTxnStateChanged(q));
 }
 
+/* Branches of the main database's store this transaction wrote; *ppOnly is
+** set when there is exactly one. */
+int doltliteStoreDirtyBranches(sqlite3 *db, Btree **ppOnly){
+  Btree *pMain = db->nDb>0 ? db->aDb[0].pBt : 0;
+  int i, n = 0;
+  *ppOnly = 0;
+  for(i=0; btreeIsProlly(pMain) && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( i==1 || !doltliteBtreeSameStore(pMain, q) || !doltliteBtreeTxnWrote(q) ){
+      continue;
+    }
+    *ppOnly = n++ ? 0 : q;
+  }
+  return n;
+}
+
 /* The branch now has pCommit as its head; its working set records that when
 ** the command's publish stages it. A command that does not publish puts
 ** the old head back. */
