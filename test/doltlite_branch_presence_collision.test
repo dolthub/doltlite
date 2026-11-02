@@ -22,6 +22,17 @@ proc presence_setup {} {
   }
 }
 
+presence_setup
+do_test presence-file-count {set sqlite_open_file_count} 3
+set filesBefore $sqlite_open_file_count
+sqlite3 holder test.db/b14469 -readonly 1
+do_test presence-readonly-open-held {
+  catch {db eval {SELECT dolt_branch('-d','b14469')}}
+} 1
+do_execsql_test presence-readonly-unused {SELECT dolt_branch('-d','b45874')} 0
+holder close
+do_test presence-readonly-close-files {set sqlite_open_file_count} $filesBefore
+
 foreach holderBranch {b14469 b45874} target {b45874 b14469} {
   foreach access {checkout path} {
     foreach op {delete rename} {

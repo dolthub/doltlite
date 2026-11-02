@@ -129,6 +129,7 @@ foreach vfs {unix unix-excl} {
     }]
   
     do_faultsim_test 1.3.$vfs.$tn -faults vfsfault-* -prep {
+      catch {db close}
       faultsim_restore
     } -body "
       test_syscall errno fcntl $errno

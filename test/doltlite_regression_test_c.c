@@ -2050,20 +2050,20 @@ static int failWrite(sqlite3_file *pFile, const void *zBuf, int iAmt, sqlite3_in
   FailFile *p = (FailFile*)pFile;
   if( p->isMainDb && gFailWriteSticky<0 ){
     gFailHits++;
-    if( p->isLockSidecar && iOfst>=4096 ) gFailPresenceHits++;
+    if( p->isLockSidecar && iOfst>=4+2*PROLLY_HASH_SIZE ) gFailPresenceHits++;
     return SQLITE_IOERR_WRITE;
   }
   if( p->isMainDb && gFailWriteSticky>0 && --gFailWriteSticky==0 ){
     gFailWriteSticky = -1;
     gFailHits++;
-    if( p->isLockSidecar && iOfst>=4096 ) gFailPresenceHits++;
+    if( p->isLockSidecar && iOfst>=4+2*PROLLY_HASH_SIZE ) gFailPresenceHits++;
     return SQLITE_IOERR_WRITE;
   }
   if( gFailWriteOnce>0
    || (p->isMainDb && gFailWriteNth>0 && --gFailWriteNth==0) ){
     if( gFailWriteOnce>0 ) gFailWriteOnce--;
     gFailHits++;
-    if( p->isLockSidecar && iOfst>=4096 ) gFailPresenceHits++;
+    if( p->isLockSidecar && iOfst>=4+2*PROLLY_HASH_SIZE ) gFailPresenceHits++;
     return SQLITE_IOERR_WRITE;
   }
   return p->pReal->pMethods->xWrite(p->pReal, zBuf, iAmt, iOfst);

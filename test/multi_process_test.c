@@ -669,19 +669,24 @@ static void test_cross_process_commit_conflict(void){
   pid_t pid;
   int status;
   int pipefd[2];
+  int startfd[2];
 
   printf("--- Test 6: Cross-process commit conflict ---\n");
 
   setup_db(stalePath);
 
   mpPipe(pipefd);
+  mpPipe(startfd);
 
   pid = fork();
   if( pid==0 ){
     sqlite3 *db = 0;
     char buf;
     close(pipefd[0]);
+    close(startfd[1]);
     sqlite3_open(stalePath, &db);
+    mpRead(startfd[0], &buf);
+    close(startfd[0]);
     execSql(db, "INSERT INTO t VALUES(2, 'child')");
     queryScalarText(db, "SELECT dolt_commit('-A','-m','child commit')");
 
@@ -704,11 +709,15 @@ static void test_cross_process_commit_conflict(void){
     ** test_cross_process_commit_after_peer below. */
     execSql(db, "BEGIN");
     queryScalarText(db, "SELECT count(*) FROM t");
+    close(startfd[0]);
+    mpWrite(startfd[1], "P");
+    close(startfd[1]);
 
     close(pipefd[1]);
     mpRead(pipefd[0], &buf);
     close(pipefd[0]);
     waitpid(pid, &status, 0);
+    check("mp_conflict_child_exit", WIFEXITED(status) && WEXITSTATUS(status)==0);
 
     execSql(db, "INSERT INTO t VALUES(3, 'parent')");
     r = queryScalarText(db, "SELECT dolt_commit('-A','-m','parent commit')");

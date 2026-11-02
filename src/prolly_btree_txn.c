@@ -934,17 +934,9 @@ struct DoltliteNonlocal **doltliteNonlocalSlot(sqlite3 *db){
   return &p->pNonlocal;
 }
 
-static void btreePresenceClose(Btree *p){
-  if( p->pPresenceFile ) sqlite3OsCloseFree(p->pPresenceFile);
-  sqlite3_free(p->zPresenceFile);
-  p->pPresenceFile = 0;
-  p->zPresenceFile = 0;
-}
-
 static int btreePresenceOpen(Btree *p){
   ChunkStore *cs = p->pBt->pStore;
   DoltliteBranchPresence x = {DOLTLITE_PRESENCE_PROBE,0x50000000,0};
-  char *zPath;
   int rc;
   if( p->pPresenceFile ) return SQLITE_OK;
   if( !cs || cs->isMemory || cs->isBuffer || !cs->file.pFile ){
@@ -953,29 +945,17 @@ static int btreePresenceOpen(Btree *p){
   rc = sqlite3OsFileControl(cs->file.pFile,
       SQLITE_FCNTL_DOLTLITE_BRANCH_PRESENCE,&x);
   if( rc!=SQLITE_OK ) return rc;
-  zPath = chunkStoreLockPath(cs->file.zFilename);
-  if( !zPath ) return SQLITE_NOMEM;
-  rc = chunkStoreDupFilenameDoubleNul(zPath,&p->zPresenceFile);
-  sqlite3_free(zPath);
-  if( rc==SQLITE_OK ){
-    rc = sqlite3OsOpenMalloc(cs->file.pVfs,p->zPresenceFile,&p->pPresenceFile,
-        SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB,0);
-  }
-  if( rc==SQLITE_OK ){
-    rc = sqlite3OsDoltliteModeOf(p->pPresenceFile,cs->file.zFilename,1);
-  }
-  if( rc!=SQLITE_OK ) btreePresenceClose(p);
-  return rc;
+  return chunkStoreGetLockFile(cs,&p->pPresenceFile);
 }
 
 /* Slots live after the replacement proof in the lock sidecar. A name can
 ** change only while its slot has no holders and the registry lock is held. */
 static int btreePresenceFind(Btree *p, int eOp, const char *zBranch, int *pbInUse){
   sqlite3_file *file = p->pPresenceFile;
-  sqlite3_int64 size, pos = 4096, freeSlot = -1;
+  sqlite3_int64 size, pos = 4+2*PROLLY_HASH_SIZE, freeSlot = -1;
   DoltliteBranchPresence x = {DOLTLITE_PRESENCE_PROBE,0,0};
   int nName = sqlite3Strlen30(zBranch)+1;
-  char *zName = sqlite3_malloc(nName);
+  char *zName = sqlite3_malloc(nName+4);
   int rc;
   if( !zName ) return SQLITE_NOMEM;
   rc = sqlite3OsFileSize(file,&size);
@@ -1016,13 +996,13 @@ static int btreePresenceFind(Btree *p, int eOp, const char *zBranch, int *pbInUs
   if( rc==SQLITE_OK && eOp==DOLTLITE_PRESENCE_HOLD ){
     if( freeSlot>=0 ){
       pos = freeSlot;
+      rc = sqlite3OsWrite(file,zBranch,nName,pos+4);
     }else{
-      u8 aSize[4];
-      rc = sqlite3OsTruncate(file,pos);
-      sqlite3Put4byte(aSize,(u32)nName);
-      if( rc==SQLITE_OK ) rc = sqlite3OsWrite(file,aSize,4,pos);
+      if( size>pos ) rc = sqlite3OsTruncate(file,pos);
+      sqlite3Put4byte((u8*)zName,(u32)nName);
+      memcpy(zName+4,zBranch,nName);
+      if( rc==SQLITE_OK ) rc = sqlite3OsWrite(file,zName,nName+4,pos);
     }
-    if( rc==SQLITE_OK ) rc = sqlite3OsWrite(file,zBranch,nName,pos+4);
     if( rc==SQLITE_OK ){
       x.eOp = DOLTLITE_PRESENCE_HOLD;
       x.iOffset = 0x60000000 + pos;
@@ -1037,26 +1017,35 @@ static int btreePresenceFind(Btree *p, int eOp, const char *zBranch, int *pbInUs
 static int btreePresenceOp(Btree *p, int eOp, const char *zBranch, int *pbInUse){
   DoltliteBranchPresence x;
   int locked = 1, unlock = 0;
-  int rc, rc2;
+  int rc, rc2, retries = 0;
   if( eOp==DOLTLITE_PRESENCE_RELEASE ){
     if( !p->pPresenceFile ) return SQLITE_OK;
     x.eOp = eOp;
     x.iOffset = p->iPresenceOffset;
     x.bInUse = 0;
-    return sqlite3OsFileControl(p->pPresenceFile,
+    sqlite3OsFileControlHint(p->pPresenceFile,
         SQLITE_FCNTL_DOLTLITE_BRANCH_PRESENCE,&x);
+    return SQLITE_OK;
   }
   rc = btreePresenceOpen(p);
   if( rc!=SQLITE_OK ) return rc;
   do{
     rc = sqlite3OsFileControl(p->pPresenceFile,
         SQLITE_FCNTL_DOLTLITE_GRAPH_LOCK,&locked);
-    if( rc==SQLITE_BUSY ) sqlite3_sleep(1);
+    if( rc!=SQLITE_BUSY || retries++>=100 ) break;
+    sqlite3_sleep(1);
   }while( rc==SQLITE_BUSY );
   if( rc!=SQLITE_OK ) return rc;
   rc = btreePresenceFind(p,eOp,zBranch,pbInUse);
   rc2 = sqlite3OsFileControl(p->pPresenceFile,
       SQLITE_FCNTL_DOLTLITE_GRAPH_LOCK,&unlock);
+  if( rc2!=SQLITE_OK ){
+    sqlite3OsFileControlHint(p->pPresenceFile,
+        SQLITE_FCNTL_DOLTLITE_GRAPH_LOCK,&unlock);
+    if( rc==SQLITE_OK && eOp==DOLTLITE_PRESENCE_HOLD ){
+      (void)btreePresenceOp(p,DOLTLITE_PRESENCE_RELEASE,zBranch,0);
+    }
+  }
   return rc!=SQLITE_OK ? rc : rc2;
 }
 
@@ -1065,7 +1054,7 @@ void doltliteBtreeReleasePresence(Btree *p){
   if( p->zPresenceBranch ){
     (void)btreePresenceOp(p,DOLTLITE_PRESENCE_RELEASE,p->zPresenceBranch,0);
   }
-  btreePresenceClose(p);
+  p->pPresenceFile = 0;
   sqlite3EndBenignMalloc();
   sqlite3_free(p->zPresenceBranch);
   p->zPresenceBranch = 0;
@@ -1092,7 +1081,7 @@ void doltliteBtreeSyncPresence(Btree *p){
   if( p->zPresenceBranch
    && btreePresenceOp(p, DOLTLITE_PRESENCE_HOLD,
                       p->zPresenceBranch, 0)!=SQLITE_OK ){
-    btreePresenceClose(p);
+    p->pPresenceFile = 0;
     sqlite3_free(p->zPresenceBranch);
     p->zPresenceBranch = 0;
   }

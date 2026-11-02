@@ -3165,7 +3165,10 @@ void doltliteBtreeRegistrationDone(sqlite3 *db){
   Btree *p;
   if( !db || db->nDb<=0 ) return;
   p = db->aDb[0].pBt;
-  if( p && sqlite3BtreeIsDoltliteFormat(p) ) p->bDeferredRegister = 0;
+  if( p && sqlite3BtreeIsDoltliteFormat(p) ){
+    p->bDeferredRegister = 0;
+    doltliteBtreeSyncPresence(p);
+  }
 }
 
 int doltliteBtreeRunDeferredWork(sqlite3 *db){
