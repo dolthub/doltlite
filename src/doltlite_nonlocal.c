@@ -364,6 +364,12 @@ int doltliteNonlocalSync(sqlite3 *db){
     }
     return 0;
   }
+  /* Compiling against a loaded schema opens no transaction, so a peer's
+  ** change to the rules would otherwise reach this connection only when the
+  ** statement runs, after its names were redirected by the old rules. */
+  if( doltliteRefreshAutocommitWorkingState(db)!=SQLITE_OK ) return 0;
+  pTab = sqlite3FindTable(db, "dolt_nonlocal_tables", "main");
+  if( !pTab || IsVirtual(pTab) ) return 0;
   if( doltliteBtreeTableStamp(db->aDb[0].pBt, pTab->tnum, &stamp, &bPending)
       !=SQLITE_OK ){
     return 0;
