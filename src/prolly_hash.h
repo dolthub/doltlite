@@ -12,6 +12,8 @@ struct ProllyHash {
 };
 
 void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut);
+void prollyHashComputeMany(const u8 *const *apData, const int *anData, int n,
+                           ProllyHash *aOut);
 void prollyHashComputeZeroTail(const void *pData, int nData, sqlite3_int64 nZeroTail,
                                ProllyHash *pOut);
 

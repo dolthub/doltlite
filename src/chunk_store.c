@@ -1780,15 +1780,29 @@ static int csPutChunk(
   ProllyHash *pHash,
   const ProllyHash *pExpected
 ){
-  int rc;
   ProllyHash h;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
   if( nData<0 ) return SQLITE_TOOBIG;
   prollyHashCompute(pData, nData, &h);
-  prollyStatAdd(cs->pStats, nHashBytes, (u64)nData);
   if( pExpected && prollyHashCompare(&h, pExpected)!=0 ) return SQLITE_CORRUPT;
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
+  return chunkStorePutHashed(cs, pData, nData, &h);
+}
+
+/* pHash must be the content hash of pData; it is not recomputed. */
+int chunkStorePutHashed(
+  ChunkStore *cs,
+  const u8 *pData,
+  int nData,
+  const ProllyHash *pHash
+){
+  int rc;
+  ProllyHash h = *pHash;
+
+  if( cs->notADatabase ) return SQLITE_NOTADB;
+  if( nData<0 ) return SQLITE_TOOBIG;
+  prollyStatAdd(cs->pStats, nHashBytes, (u64)nData);
 
   {
     int bHas = 0;

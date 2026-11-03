@@ -495,6 +495,124 @@ void blake3_hash_oneshot(const void *input, size_t input_len, uint8_t *out,
   }
   output_root_bytes(&output, 0, out, out_len);
 }
+/* DOLTLITE: hash many buffers at once, 32-byte output each. A single prolly
+** node has about four chunks, too few to fill an 8- or 16-lane SIMD batch, so
+** chunk j of every buffer in a group goes through one hash_many() call. Each
+** buffer's chunk CVs then fold through the same lazy-merge stack the
+** incremental hasher uses, so output matches blake3_hash_oneshot(). */
+#define DOLTLITE_MANY_GROUP 16
+#define DOLTLITE_MANY_MAX_CHUNKS 32
+#define DOLTLITE_MANY_STACK 6
+
+typedef struct {
+  uint8_t cv[DOLTLITE_MANY_STACK][BLAKE3_OUT_LEN];
+  size_t n;
+} doltlite_cv_stack;
+
+INLINE void doltlite_push_cv(doltlite_cv_stack *st, const uint8_t cv[32],
+                             uint64_t chunk_counter) {
+  size_t post = (size_t)popcnt(chunk_counter);
+  while (st->n > post) {
+    output_t output = parent_output(st->cv[st->n - 2], IV, 0);
+    output_chaining_value(&output, st->cv[st->n - 2]);
+    st->n--;
+  }
+  memcpy(st->cv[st->n++], cv, BLAKE3_OUT_LEN);
+}
+
+static void doltlite_hash_group(const uint8_t *const *inputs,
+                                const size_t *lens, size_t n, uint8_t *out) {
+  doltlite_cv_stack st[DOLTLITE_MANY_GROUP];
+  const uint8_t *batch[DOLTLITE_MANY_GROUP];
+  size_t who[DOLTLITE_MANY_GROUP];
+  uint8_t cvs[DOLTLITE_MANY_GROUP * BLAKE3_OUT_LEN];
+  size_t max_len = 0;
+  size_t i, j;
+
+  for (i = 0; i < n; i++) {
+    st[i].n = 0;
+    if (lens[i] > max_len) max_len = lens[i];
+  }
+  for (j = 0; j * BLAKE3_CHUNK_LEN < max_len; j++) {
+    size_t off = j * BLAKE3_CHUNK_LEN;
+    size_t k = 0;
+    for (i = 0; i < n; i++) {
+      if (off >= lens[i]) continue;
+      if (lens[i] - off >= BLAKE3_CHUNK_LEN) {
+        batch[k] = inputs[i] + off;
+        who[k++] = i;
+      } else {
+        blake3_chunk_state chunk;
+        output_t output;
+        uint8_t cv[BLAKE3_OUT_LEN];
+        chunk_state_init(&chunk, IV, 0);
+        chunk.chunk_counter = j;
+        chunk_state_update(&chunk, inputs[i] + off, lens[i] - off);
+        output = chunk_state_output(&chunk);
+        output_chaining_value(&output, cv);
+        doltlite_push_cv(&st[i], cv, j);
+      }
+    }
+    if (k > 0) {
+      blake3_hash_many(batch, k, BLAKE3_CHUNK_LEN / BLAKE3_BLOCK_LEN, IV, j,
+                       false, 0, CHUNK_START, CHUNK_END, cvs);
+      for (i = 0; i < k; i++) {
+        doltlite_push_cv(&st[who[i]], &cvs[i * BLAKE3_OUT_LEN], j);
+      }
+    }
+  }
+  for (i = 0; i < n; i++) {
+    size_t r = st[i].n - 2;
+    output_t output = parent_output(st[i].cv[r], IV, 0);
+    while (r > 0) {
+      uint8_t block[BLAKE3_BLOCK_LEN];
+      r--;
+      memcpy(block, st[i].cv[r], BLAKE3_OUT_LEN);
+      output_chaining_value(&output, &block[BLAKE3_OUT_LEN]);
+      output = parent_output(block, IV, 0);
+    }
+    output_root_bytes(&output, 0, out + i * BLAKE3_OUT_LEN, BLAKE3_OUT_LEN);
+  }
+}
+
+void blake3_hash_oneshot_many(const void *const *inputs,
+                              const size_t *input_lens, size_t n,
+                              uint8_t *out) {
+  const uint8_t *group[DOLTLITE_MANY_GROUP];
+  size_t lens[DOLTLITE_MANY_GROUP];
+  size_t at[DOLTLITE_MANY_GROUP];
+  uint8_t hashes[DOLTLITE_MANY_GROUP * BLAKE3_OUT_LEN];
+  size_t k = 0;
+  size_t i, q;
+
+  for (i = 0; i < n; i++) {
+    size_t len = input_lens[i];
+    if (len <= BLAKE3_CHUNK_LEN
+     || len > DOLTLITE_MANY_MAX_CHUNKS * BLAKE3_CHUNK_LEN) {
+      blake3_hash_oneshot(inputs[i], len, out + i * BLAKE3_OUT_LEN,
+                          BLAKE3_OUT_LEN);
+      continue;
+    }
+    group[k] = (const uint8_t *)inputs[i];
+    lens[k] = len;
+    at[k++] = i;
+    if (k == DOLTLITE_MANY_GROUP) {
+      doltlite_hash_group(group, lens, k, hashes);
+      for (q = 0; q < k; q++) {
+        memcpy(out + at[q] * BLAKE3_OUT_LEN, &hashes[q * BLAKE3_OUT_LEN],
+               BLAKE3_OUT_LEN);
+      }
+      k = 0;
+    }
+  }
+  if (k > 0) {
+    doltlite_hash_group(group, lens, k, hashes);
+    for (q = 0; q < k; q++) {
+      memcpy(out + at[q] * BLAKE3_OUT_LEN, &hashes[q * BLAKE3_OUT_LEN],
+             BLAKE3_OUT_LEN);
+    }
+  }
+}
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif

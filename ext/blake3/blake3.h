@@ -76,6 +76,10 @@ BLAKE3_API void blake3_hasher_reset(blake3_hasher *self);
 ** the whole buffer, but takes the wide compression path. */
 BLAKE3_API void blake3_hash_oneshot(const void *input, size_t input_len,
                                     uint8_t *out, size_t out_len);
+/* DOLTLITE addition; see blake3.c. out receives n 32-byte hashes. */
+BLAKE3_API void blake3_hash_oneshot_many(const void *const *inputs,
+                                         const size_t *input_lens, size_t n,
+                                         uint8_t *out);
 
 #ifdef __cplusplus
 }
