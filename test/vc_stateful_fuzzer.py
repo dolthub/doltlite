@@ -318,24 +318,135 @@ def commit_rows(doltlite, db_path, commit):
     return query_revision_rows(doltlite, db_path, commit)
 
 
+class MergeHistory:
+    """The commit graph a merge reads its base from. With several best common
+    ancestors the engine folds them into a virtual base, as Dolt and git's
+    recursive strategy do: ordered by commit time then hash, each next
+    candidate is three-way merged into the base so far against their own
+    (recursively virtual) base, and a conflict while doing so refuses the
+    merge. Virtual commits never reach a ref, so they live only here."""
+
+    class BaseConflict(Exception):
+        pass
+
+    def __init__(self, doltlite, db_path):
+        self.doltlite = doltlite
+        self.db_path = db_path
+        self.parents = {}
+        for line in query_list(
+                doltlite, db_path, "main",
+                ".mode list\n.separator |\n"
+                "SELECT commit_hash, coalesce(parent_hash, '') "
+                "FROM dolt_commit_ancestors;\n",
+                "commit_graph"):
+            commit, parent = line.split("|", 1)
+            self.parents.setdefault(commit, [])
+            if parent:
+                self.parents[commit].append(parent)
+        self.rows = {}
+        self.objects = {}
+        self.dates = {}
+        self.cached = {}
+        self.nvirtual = 0
+
+    def load_parents(self, commits):
+        # A scan lists the commits local branches reach; a fetched commit
+        # only remote-tracking refs reach is found by its hash.
+        commits = [c for c in commits if c not in self.parents]
+        if not commits:
+            return
+        for c in commits:
+            self.parents[c] = []
+        for line in query_list(
+                self.doltlite, self.db_path, "main",
+                ".mode list\n.separator |\n"
+                "SELECT commit_hash, coalesce(parent_hash, '') "
+                "FROM dolt_commit_ancestors WHERE commit_hash IN (%s);\n"
+                % ",".join(sql_quote(c) for c in commits),
+                "commit_parents"):
+            commit, parent = line.split("|", 1)
+            if parent:
+                self.parents[commit].append(parent)
+
+    def ancestors(self, commit):
+        if commit not in self.cached:
+            seen = set()
+            frontier = [commit]
+            while frontier:
+                self.load_parents(frontier)
+                seen.update(frontier)
+                frontier = list({p for c in frontier
+                                 for p in self.parents.get(c, ())} - seen)
+            self.cached[commit] = seen
+        return self.cached[commit]
+
+    def best_common_ancestors(self, a, b):
+        # A common ancestor below another has a child that is common too.
+        common = self.ancestors(a) & self.ancestors(b)
+        below = {p for c in common for p in self.parents.get(c, ())}
+        return [c for c in common if c not in below]
+
+    def date(self, commit):
+        if commit not in self.dates:
+            self.dates[commit] = query_scalar(
+                self.doltlite, self.db_path, "main",
+                "SELECT date FROM dolt_log(%s) LIMIT 1;" % sql_quote(commit),
+                "commit_date")
+        return self.dates[commit]
+
+    def kv(self, commit):
+        if commit not in self.rows:
+            self.rows[commit] = commit_rows(self.doltlite, self.db_path, commit)
+        return self.rows[commit]
+
+    def schema(self, commit):
+        if commit not in self.objects:
+            self.objects[commit] = set(
+                schema_objects(self.doltlite, self.db_path, commit))
+        return self.objects[commit]
+
+    def base(self, a, b, depth=0):
+        candidates = self.best_common_ancestors(a, b)
+        if len(candidates) <= 1:
+            return candidates[0] if candidates else None
+        candidates.sort(key=lambda c: (self.date(c), c))
+        acc = candidates[0]
+        for other in candidates[1:]:
+            under = self.base(acc, other, depth + 1)
+            base_rows = self.kv(under) if under else {}
+            rows, conflict = three_way(base_rows, self.kv(acc), self.kv(other))
+            if conflict:
+                raise MergeHistory.BaseConflict()
+            base_objects = self.schema(under) if under else set()
+            left, right = self.schema(acc), self.schema(other)
+            virtual = "virtual-%d" % self.nvirtual
+            self.nvirtual += 1
+            self.parents[virtual] = [acc, other]
+            self.rows[virtual] = rows
+            self.objects[virtual] = (left & right) | ((left ^ right) - base_objects)
+            acc = virtual
+        return acc
+
+
 def merge_prediction(doltlite, db_path, ours_branch, ours_rows, theirs_ref,
-                     theirs_rows):
+                     theirs_rows, history=None):
     """kv after merging theirs_ref into ours_branch, whether it conflicts, and
     whether it fast-forwards. The base rows are read back from history, which
-    the merge never writes."""
-    base_hash = query_scalar(
-        doltlite, db_path, ours_branch,
-        "SELECT coalesce(dolt_merge_base('HEAD', %s), '');" % sql_quote(theirs_ref),
-        "merge_base",
-    )
+    the merge never writes. Ancestors that conflict with each other refuse the
+    merge, which reads as a conflict here."""
     ours_hash = branch_hash(doltlite, db_path, ours_branch)
     theirs_hash = branch_hash(doltlite, db_path, ours_branch, theirs_ref)
-    if base_hash == theirs_hash:
+    history = history or MergeHistory(doltlite, db_path)
+    if theirs_hash in history.ancestors(ours_hash):
         return dict(ours_rows), False, False
-    if base_hash == ours_hash:
+    if ours_hash in history.ancestors(theirs_hash):
         return dict(theirs_rows), False, True
-    base = commit_rows(doltlite, db_path, base_hash) if base_hash else {}
-    merged, conflict = three_way(base, ours_rows, theirs_rows)
+    try:
+        base = history.base(ours_hash, theirs_hash)
+    except MergeHistory.BaseConflict:
+        return dict(ours_rows), True, False
+    merged, conflict = three_way(history.kv(base) if base else {},
+                                 ours_rows, theirs_rows)
     return merged, conflict, False
 
 
@@ -1510,16 +1621,18 @@ def merge_branch(doltlite, db_path, branches, model, rng):
     commit_branch(doltlite, db_path, source, model, 0)
     ours = set(schema_objects(doltlite, db_path, target))
     theirs = set(schema_objects(doltlite, db_path, source))
-    base_hash = query_scalar(
-        doltlite, db_path, target,
-        "SELECT coalesce(dolt_merge_base(%s, %s), '');" % (sql_quote(target), sql_quote(source)),
-        "merge_base",
-    )
-    base = set(schema_objects(doltlite, db_path, base_hash)) if base_hash else None
+    history = MergeHistory(doltlite, db_path)
+    try:
+        base_hash = history.base(branch_hash(doltlite, db_path, target),
+                                 branch_hash(doltlite, db_path, source))
+    except MergeHistory.BaseConflict:
+        base_hash = None
+    base = set(history.schema(base_hash)) if base_hash else None
     pre = state_of(**model[target])
     head = model[target]["committed"]
     merged, conflict, fast_forward = merge_prediction(
-        doltlite, db_path, target, head, source, model[source]["committed"])
+        doltlite, db_path, target, head, source, model[source]["committed"],
+        history)
     source_tip = branch_hash(doltlite, db_path, source)
     quoted = sql_quote(source)
     kind = rng.randrange(6)
