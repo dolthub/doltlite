@@ -428,4 +428,23 @@ do_test nonlocal-held-statement {
        [nl_disk other {SELECT group_concat(id) FROM users}]
 } {1,2 1,3}
 
+# Referential actions are coded in the parent's schema, another branch for
+# a nonlocal parent, so they could never fire: refused, as in Dolt.
+nl_reset
+db eval {INSERT INTO dolt_nonlocal_tables VALUES('np','main','cfg','immediate')}
+foreach {name sql} {
+  cascade {CREATE TABLE c1(k TEXT REFERENCES np(k) ON DELETE CASCADE)}
+  set-null {CREATE TABLE c2(k TEXT REFERENCES np(k) ON UPDATE SET NULL)}
+  restrict {CREATE TABLE c3(k TEXT REFERENCES np(k) ON DELETE RESTRICT)}
+  add-column {ALTER TABLE notes ADD COLUMN k TEXT REFERENCES np(k) ON DELETE CASCADE}
+} {
+  do_catchsql_test nonlocal-fk-action-$name $sql \
+    {1 {foreign keys referencing nonlocal tables do not support referential actions}}
+}
+do_execsql_test nonlocal-fk-no-action {
+  CREATE TABLE c4(k TEXT REFERENCES np(k) ON DELETE NO ACTION);
+  CREATE TABLE c5(k TEXT REFERENCES np(k));
+  SELECT count(*) FROM sqlite_master WHERE name IN ('c1','c2','c3','c4','c5');
+} {2}
+
 finish_test

@@ -5578,6 +5578,7 @@ int doltliteBranchInUseElsewhere(sqlite3*, const char*, int*);
 typedef struct DoltliteNonlocal DoltliteNonlocal;
 void doltliteNonlocalFree(DoltliteNonlocal*);
 int doltliteNonlocalSync(sqlite3*);
+int doltliteNonlocalMatches(sqlite3*, const char*);
 int doltliteNonlocalResolve(Parse*, const char**, const char**);
 int doltliteNonlocalBlocksCreate(sqlite3*, const char*);
 int doltliteNonlocalIsSchema(const char*);

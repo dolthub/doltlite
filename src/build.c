@@ -4242,6 +4242,17 @@ void sqlite3CreateForeignKey(
   pFKey->aAction[0] = (u8)(flags & 0xff);            /* ON DELETE action */
   pFKey->aAction[1] = (u8)((flags >> 8 ) & 0xff);    /* ON UPDATE action */
 
+#ifdef DOLTLITE_PROLLY
+  /* Actions are coded against the parent's schema, which for a nonlocal
+  ** parent is another branch: they would never fire. Dolt refuses them. */
+  if( !db->init.busy
+   && (pFKey->aAction[0]!=OE_None || pFKey->aAction[1]!=OE_None)
+   && doltliteNonlocalMatches(db, pFKey->zTo) ){
+    sqlite3ErrorMsg(pParse, "foreign keys referencing nonlocal tables do not "
+                    "support referential actions");
+    goto fk_end;
+  }
+#endif
   assert( sqlite3SchemaMutexHeld(db, 0, p->pSchema) );
   pNextTo = (FKey *)sqlite3HashInsert(&p->pSchema->fkeyHash,
       pFKey->zTo, (void *)pFKey
