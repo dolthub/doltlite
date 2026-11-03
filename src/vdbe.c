@@ -3235,7 +3235,7 @@ op_column_restart:
         int rcSk = sqlite3BtreeProllySortKeyField(pCrsr, (int)p2, &skf,
                                                   pC->aType);
         if( rcSk==SQLITE_OK ){
-          pC->nHdrParsed = (u16)(p2+1);
+          if( pC->nHdrParsed<=p2 ) pC->nHdrParsed = (u16)(p2+1);
           pDest = &aMem[pOp->p3];
           memAboutToChange(p, pDest);
           if( VdbeMemDynamic(pDest) ){
