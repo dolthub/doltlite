@@ -3238,9 +3238,10 @@ libdoltlite.def: $(LIBOBJS0)
 		| sort -u >> $@
 
 libdoltlite.deffile = $(if $(filter .dll,$(T.dll)),libdoltlite.def,)
+LDFLAGS.libdoltlite.runtime = $(if $(filter .dll,$(T.dll)),-static,)
 
 libdoltlite$(T.dll):	$(LIBOBJS0) $(libdoltlite.exports.file) $(libdoltlite.deffile)
-	$(T.link.shared) -o $@ $(libdoltlite.deffile) $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
+	$(T.link.shared) $(LDFLAGS.libdoltlite.runtime) -o $@ $(libdoltlite.deffile) $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
 		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname) \
 		$(LDFLAGS.libdoltlite.exports)
 	$(if $(filter .so,$(T.dll)),ln -sf libdoltlite$(T.dll) libdoltlite$(T.dll).0)

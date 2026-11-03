@@ -122,6 +122,15 @@ jobs:
     - name: Extract nightly benchmark build
       run: tar -xzf nightly-benchmark-build.tar.gz
 
+    # The ratios move with the runner's CPU, which the image does not fix;
+    # an alarm is only comparable with history from the same hardware.
+    - name: Record runner CPU
+      run: |
+        results="$RUNNER_TEMP/nightly-results"
+        mkdir -p "$results"
+        lscpu | tee "$results/${{ matrix.suite.name }}.cpu"
+        echo "Runner CPU: $(lscpu | sed -n 's/^Model name: *//p')" >> "$GITHUB_STEP_SUMMARY"
+
     - name: Run absolute benchmark
       id: benchmark
       env:

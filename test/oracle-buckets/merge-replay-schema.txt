@@ -29,3 +29,4 @@ vc_oracle_skip_verification_test.sh
 vc_oracle_triggers_test.sh
 vc_oracle_verify_constraints_test.sh
 vc_oracle_virtual_merge_base_test.sh
+vc_oracle_merge_dropped_null_test.sh
