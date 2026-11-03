@@ -202,6 +202,7 @@ static int mergePass1MergeTableData(
     sqlite3_free(rowPolicy.aiDeleteCompareFields);
     sqlite3_free(rowPolicy.aiDropFields);
     sqlite3_free(rowPolicy.aiDualAddFields);
+    sqlite3_free(rowPolicy.aInsertSides);
     sqlite3_close(pSchemaDb);
     if( rc!=SQLITE_OK ) return rc;
   }

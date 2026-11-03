@@ -1,0 +1,140 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout key extra suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {}
+  clustered {id INT PRIMARY KEY} {} {}
+  composite {id INT} {,tenant INT DEFAULT 0,PRIMARY KEY(tenant,id)} {}
+  without_rowid {id TEXT PRIMARY KEY} {} {WITHOUT ROWID}
+} {
+  foreach direction {forward reverse} {
+    foreach indexed {0 1} {
+      foreach kind {value null default explicit-null mismatch shared-null dual-equal dual-null disjoint} {
+        reset_db
+        set name insert-columns-$layout-$direction-$indexed-$kind
+        execsql "CREATE TABLE t($key,a INT$extra) $suffix"
+        if {$indexed} {execsql {CREATE INDEX ia ON t(a)}}
+        execsql {
+          INSERT INTO t(id,a) VALUES(1,1);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+        }
+        set ourA 5
+        set theirA 5
+        set column {c INT}
+        set theirC 9
+        set conflict 0
+        switch $kind {
+          null {set theirC NULL}
+          default {set column {c INT NOT NULL DEFAULT 7}; set theirC 7}
+          explicit-null {set column {c INT DEFAULT 7}; set theirC NULL}
+          mismatch {set ourA 6; set conflict 1}
+          shared-null {set ourA NULL; set conflict 1}
+          dual-equal {execsql {ALTER TABLE t ADD COLUMN c INT}}
+          dual-null {execsql {ALTER TABLE t ADD COLUMN c INT}; set conflict 1}
+          disjoint {execsql {ALTER TABLE t ADD COLUMN d INT}}
+        }
+        if {$kind eq "dual-equal"} {
+          execsql "INSERT INTO t(id,a,c) VALUES(5,$ourA,9)"
+        } elseif {$kind eq "dual-null"} {
+          execsql "INSERT INTO t(id,a,c) VALUES(5,$ourA,NULL)"
+        } elseif {$kind eq "disjoint"} {
+          execsql "INSERT INTO t(id,a,d) VALUES(5,$ourA,8)"
+        } else {
+          execsql "INSERT INTO t(id,a) VALUES(5,$ourA)"
+        }
+        execsql {
+          SELECT dolt_commit('-Am','ours');
+          SELECT dolt_checkout('side');
+        }
+        execsql "ALTER TABLE t ADD COLUMN $column;
+          INSERT INTO t(id,a,c) VALUES(5,$theirA,$theirC)"
+        if {$indexed && $kind ne "disjoint"} {
+          execsql {CREATE INDEX ic ON t(c)}
+        }
+        execsql {SELECT dolt_commit('-Am','theirs')}
+        set target main
+        set path test.db/side
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target side
+          set path test.db
+        }
+        set head [db one {SELECT dolt_hashof('HEAD')}]
+        execsql BEGIN
+        do_test $name-merge {
+          set mergeRc [lindex [catchsql "SELECT dolt_merge('$target')"] 0]
+        } $conflict
+        do_execsql_test $name-conflicts {
+          SELECT count(*) FROM dolt_conflicts;
+        } $conflict
+        if {$conflict} {
+          if {[db one {SELECT count(*) FROM dolt_conflicts}]>0} {
+            do_catchsql_test $name-commit-refused {COMMIT} \
+              {1 {cannot merge: unresolved conflicts cannot be committed}}
+          }
+          if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+          do_execsql_test $name-rollback "SELECT dolt_hashof('HEAD')='$head';
+            SELECT count(*) FROM dolt_conflicts; PRAGMA integrity_check" {1 0 ok}
+          continue
+        }
+        if {$mergeRc!=0} {execsql ROLLBACK; continue}
+        set wantC $theirC
+        if {$wantC eq "NULL"} {set wantC {}}
+        do_execsql_test $name-row {
+          SELECT id,a,c FROM t WHERE id=5;
+          PRAGMA integrity_check;
+        } [list 5 5 $wantC ok]
+        if {$kind eq "disjoint"} {
+          do_execsql_test $name-disjoint {SELECT d FROM t WHERE id=5} 8
+        }
+        if {$indexed} {
+          do_execsql_test $name-index-a {
+            SELECT id FROM t INDEXED BY ia WHERE a=5;
+          } 5
+          set index ic
+          if {$kind eq "disjoint"} {set index ia}
+          do_execsql_test $name-index-c "
+            SELECT id FROM t INDEXED BY $index WHERE c IS $theirC AND id=5;
+          " 5
+        }
+        execsql COMMIT
+        db close
+        sqlite3 db $path
+        do_execsql_test $name-reopen {
+          SELECT id,a,c FROM t WHERE id=5;
+          SELECT count(*) FROM dolt_conflicts;
+          SELECT count(*) FROM dolt_status;
+          PRAGMA integrity_check;
+        } [list 5 5 $wantC 0 0 ok]
+      }
+    }
+  }
+}
+
+foreach key {INT TEXT} {
+  foreach direction {forward reverse} {
+    foreach operation {merge cherry_pick} {
+      reset_db
+      execsql "CREATE TABLE t(id $key PRIMARY KEY)"
+      execsql {
+        INSERT INTO t VALUES(1);
+        SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');
+        INSERT INTO t VALUES(5),(6); SELECT dolt_commit('-Am','ours');
+        SELECT dolt_checkout('side'); ALTER TABLE t ADD COLUMN c INT;
+        INSERT INTO t VALUES(5,9); SELECT dolt_commit('-Am','theirs');
+      }
+      set target main
+      if {$direction eq "forward"} {
+        execsql {SELECT dolt_checkout('main')}
+        set target side
+      }
+      do_test insert-columns-key-only-$key-$direction-$operation {
+        execsql "SELECT dolt_${operation}('$target')"
+        execsql {SELECT id,c FROM t WHERE id=5; PRAGMA integrity_check}
+      } {5 9 ok}
+    }
+  }
+}
+
+finish_test
