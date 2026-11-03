@@ -413,6 +413,24 @@ static u8 *tryCellMerge(
       RecField *fO = (i<nfOurs)   ? &aOurs[i]   : (RecField*)&kNullField;
       RecField *fT = (i<nfTheirs) ? &aTheirs[i] : (RecField*)&kNullField;
       int oursChanged, theirsChanged;
+      int j;
+      for(j=0; pPolicy && pBase && j<pPolicy->nDropFields; j++){
+        if( pPolicy->aiDropFields[j]==i ){
+          const u8 *pSurv = pPolicy->bSchemaIsTheirs ? pTheirs : pOurs;
+          RecField *fSurv = pPolicy->bSchemaIsTheirs ? fT : fO;
+          const u8 *pDrop = pPolicy->bSchemaIsTheirs ? pOurs : pTheirs;
+          RecField *fDrop = pPolicy->bSchemaIsTheirs ? fO : fT;
+          if( !mergeGeneratedField(pGeneratedTable, i)
+           && fieldEquals(pBase, fB, pSurv, fSurv)!=0
+           && !fieldNumbersEqual(pBase, fB, pSurv, fSurv)
+           && (fSurv->st!=0 || (fieldEquals(pBase, fB, pDrop, fDrop)!=0
+               && !fieldNumbersEqual(pBase, fB, pDrop, fDrop))) ){
+            sqlite3_free(winners);
+            goto fail;
+          }
+          break;
+        }
+      }
       if( !pBase || nBase<=0 ){
         int side = pPolicy && i<pPolicy->nInsertFields
             ? pPolicy->aInsertSides[i] : 0;
@@ -543,7 +561,25 @@ static int mergeIndexRowDelta(
 
 static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
+  ThreeWayChange change;
   int rc = SQLITE_OK;
+
+  if( ctx->pPolicy && ctx->pPolicy->nDropFields>0 && pChange->pBaseVal ){
+    change = *pChange;
+    if( change.type==THREE_WAY_LEFT_MODIFY ){
+      change.pTheirVal = change.pBaseVal;
+      change.nTheirVal = change.nBaseVal;
+      change.type = THREE_WAY_CONFLICT_MM;
+    }else if( change.type==THREE_WAY_RIGHT_MODIFY ){
+      change.pOurVal = change.pBaseVal;
+      change.nOurVal = change.nBaseVal;
+      change.type = THREE_WAY_CONFLICT_MM;
+    }else if( change.type==THREE_WAY_CONVERGENT
+           && change.pOurVal && change.pTheirVal ){
+      change.type = THREE_WAY_CONFLICT_MM;
+    }
+    pChange = &change;
+  }
 
   switch( pChange->type ){
     case THREE_WAY_LEFT_ADD:

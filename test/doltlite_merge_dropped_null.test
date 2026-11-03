@@ -1,0 +1,164 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc drop_null_snapshot {} {
+  execsql {
+    SELECT dolt_hashof('HEAD'),dolt_hashof_db();
+    SELECT name,sql FROM sqlite_schema ORDER BY name;
+    SELECT * FROM t ORDER BY id;
+    SELECT name,hash FROM dolt_branches ORDER BY name;
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+  }
+}
+
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  composite {id INT, tenant INT DEFAULT 0, PRIMARY KEY(tenant,id)} {}
+  without_rowid {id TEXT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach position {middle trailing} {
+    foreach {shape dropedit} {add 1 drop 1 add 0} {
+      foreach {change initial edited conflict} {
+        from_null NULL 4 1
+        to_null 4 NULL 1
+        value 4 5 1
+        null_equal NULL NULL 0
+        value_equal 4 4 0
+      } {
+        foreach direction {forward reverse} {
+          foreach operation {merge cherry_pick} {
+            reset_db
+            set columns {a INT,b INT,c INT}
+            if {$position eq "middle"} {set columns {c INT,a INT,b INT}}
+            if {$layout eq "composite"} {
+              execsql "CREATE TABLE t(id INT,tenant INT DEFAULT 0,$columns,
+                         PRIMARY KEY(tenant,id)) $suffix"
+            } else {
+              execsql "CREATE TABLE t($key,$columns) $suffix"
+            }
+            execsql "INSERT INTO t(id,a,b,c) VALUES(1,1,1,$initial),(2,2,2,$initial)"
+            execsql {
+              CREATE INDEX ib ON t(b);
+              SELECT dolt_commit('-Am','base');
+              SELECT dolt_branch('side');
+            }
+            if {$shape eq "add"} {
+              execsql {ALTER TABLE t ADD COLUMN d INT DEFAULT 7}
+            } else {
+              execsql {ALTER TABLE t DROP COLUMN a}
+            }
+            execsql "UPDATE t SET c=$edited WHERE id=1"
+            execsql {
+              SELECT dolt_commit('-Am','edit');
+              SELECT dolt_checkout('side');
+              ALTER TABLE t DROP COLUMN c;
+            }
+            set dropB 1
+            if {$dropedit} {
+              execsql {UPDATE t SET b=20 WHERE id=1}
+              set dropB 20
+            }
+            execsql {
+              SELECT dolt_commit('-Am','drop');
+            }
+            set target main
+            set reopen [file normalize test.db]/side
+            if {$direction eq "forward"} {
+              execsql {SELECT dolt_checkout('main')}
+              set target side
+              set reopen [file normalize test.db]
+            }
+            set before [drop_null_snapshot]
+            execsql {BEGIN; SAVEPOINT before_apply}
+            set name dropped-null-$layout-$position-$shape-$dropedit-$change-$direction-$operation
+            do_test $name-apply {
+              lindex [catchsql "SELECT dolt_${operation}('$target')"] 0
+            } $conflict
+            if {$conflict} {
+              set count [expr {$direction eq "forward" ? 1 : 0}]
+              do_execsql_test $name-conflicts {
+                SELECT count(*) FROM dolt_conflicts;
+              } $count
+              if {$count} {
+                do_catchsql_test $name-commit {COMMIT} \
+                    {1 {cannot merge: unresolved conflicts cannot be committed}}
+              }
+              if {![sqlite3_get_autocommit db]} {execsql {ROLLBACK}}
+              do_test $name-preserved {
+                expr {$before eq [drop_null_snapshot]}
+              } 1
+            } else {
+              execsql COMMIT
+              do_execsql_test $name-clean "
+                SELECT count(*) FROM pragma_table_info('t') WHERE name='c';
+                SELECT id,b FROM t ORDER BY id;
+                SELECT id FROM t INDEXED BY ib WHERE b=$dropB;
+                SELECT count(*) FROM dolt_conflicts;
+              " [list 0 1 $dropB 2 2 1 0]
+              set before [drop_null_snapshot]
+            }
+            db close
+            sqlite3 db $reopen
+            do_test $name-reopen {
+              list [expr {$before eq [drop_null_snapshot]}] \
+                   [execsql {PRAGMA integrity_check}]
+            } {1 ok}
+          }
+        }
+      }
+    }
+  }
+}
+
+foreach mode {autocommit transaction savepoint} {
+  foreach {column initial edited conflict} {
+    {c INT} NULL 4 1
+    {c INT DEFAULT 7} 7 NULL 0
+    {c INT DEFAULT 7} 7 8 1
+    {c INT} NULL NULL 0
+    {c INT DEFAULT 7} 7 7 0
+  } {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INT PRIMARY KEY,a INT);
+      INSERT INTO t VALUES(1,1),(2,2);
+      SELECT dolt_commit('-Am','base');
+    }
+    execsql "ALTER TABLE t ADD COLUMN $column"
+    execsql {
+      SELECT dolt_commit('-am','add c');
+      ALTER TABLE t ADD COLUMN d INT;
+    }
+    execsql "UPDATE t SET c=$edited WHERE id=1"
+    execsql {SELECT dolt_commit('-am','add d and edit c')}
+    set before [drop_null_snapshot]
+    switch $mode {
+      transaction {execsql BEGIN}
+      savepoint {execsql {SAVEPOINT outer}}
+    }
+    set name dropped-null-revert-$mode-$initial-$edited
+    do_test $name-apply {
+      lindex [catchsql {SELECT dolt_revert('HEAD~1')}] 0
+    } $conflict
+    if {$conflict} {
+      if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+      do_test $name-preserved {expr {$before eq [drop_null_snapshot]}} 1
+    } else {
+      if {![sqlite3_get_autocommit db]} {execsql COMMIT}
+      do_execsql_test $name-clean {
+        SELECT name FROM pragma_table_info('t') ORDER BY cid;
+        SELECT * FROM t ORDER BY id;
+      } {id a d 1 1 {} 2 2 {}}
+      set before [drop_null_snapshot]
+    }
+    db close
+    sqlite3 db test.db
+    do_test $name-reopen {
+      list [expr {$before eq [drop_null_snapshot]}] \
+           [execsql {PRAGMA integrity_check}]
+    } {1 ok}
+  }
+}
+
+finish_test
