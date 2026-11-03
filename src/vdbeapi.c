@@ -1021,6 +1021,13 @@ int sqlite3_step(sqlite3_stmt *pStmt){
   }
   db = v->db;
   sqlite3_mutex_enter(db->mutex);
+#ifdef DOLTLITE_PROLLY
+  /* A statement held across a change to the nonlocal rules was compiled
+  ** against the old redirects; the sync expires it to recompile. */
+  if( v->eVdbeState==VDBE_READY_STATE && db->nVdbeExec==0 ){
+    (void)doltliteNonlocalSync(db);
+  }
+#endif
   while( (rc = sqlite3Step(v))==SQLITE_SCHEMA
          && cnt++ < SQLITE_MAX_SCHEMA_RETRY ){
     int savedPc = v->pc;

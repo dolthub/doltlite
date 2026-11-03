@@ -335,7 +335,7 @@ static int nonlocalCheckRefs(sqlite3 *db, DoltliteNonlocal *p){
 ** redirects changed, so a statement compiled before should compile
 ** again. A failure here leaves names unredirected; the statement reports
 ** what it cannot resolve. */
-int doltliteNonlocalSync(sqlite3 *db){
+static int nonlocalSync(sqlite3 *db){
   DoltliteNonlocal *p;
   Table *pTab;
   ChunkStore *cs;
@@ -412,6 +412,14 @@ int doltliteNonlocalSync(sqlite3 *db){
   p->bSyncing = 0;
   if( bReload ) return !bPending || db->nDb!=nAttach || nDetached>0;
   return db->nDb!=nAttach || nDetached>0 || nMissing!=0 || p->nMissing!=0;
+}
+
+/* Statements compiled against the old redirects recompile before they
+** next start; one already running finishes as compiled. */
+int doltliteNonlocalSync(sqlite3 *db){
+  int bChanged = nonlocalSync(db);
+  if( bChanged ) sqlite3ExpirePreparedStatements(db, 1);
+  return bChanged;
 }
 
 static void nonlocalListName(
