@@ -120,6 +120,7 @@ doltlite_checkout_options
 doltlite_checkout_ioerr
 doltlite_commit_ioerr
 doltlite_failed_commit_rollback
+doltlite_failed_ddl_readers
 doltlite_reload_uncommitted_recent
 doltlite_recover_cacheflush_oom
 doltlite_rebase_messages

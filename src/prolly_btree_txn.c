@@ -2319,6 +2319,7 @@ static void rollbackResetSchema(Btree *p, int bImmediate){
   invalidateSchema(p);
   if( p->db ){
     Vdbe *pV;
+    u32 schemaChange = p->db->mDbFlags & DBFLAG_SchemaChange;
     for(pV=p->db->pVdbe; pV; pV=pV->pVNext){
       if( bImmediate || pV->expired==1 ){
         pV->expired = 1;
@@ -2327,6 +2328,7 @@ static void rollbackResetSchema(Btree *p, int bImmediate){
       }
     }
     doltliteResetSchemasPreserveExpiry(p->db);
+    p->db->mDbFlags |= schemaChange;
   }
 }
 

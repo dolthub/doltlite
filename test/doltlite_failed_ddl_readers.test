@@ -1,0 +1,94 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_failed_ddl_readers
+
+foreach {layout key suffix} {
+  rowid INTEGER {}
+  int INT {}
+  text TEXT {}
+  without_rowid INT {WITHOUT ROWID}
+} {
+  foreach origin {new existing} {
+    foreach failure {unique locked dml none} {
+      foreach boundary {rollback rollback-to commit} {
+        reset_db
+        execsql "CREATE TABLE a(id $key PRIMARY KEY, x) $suffix"
+        execsql {
+          WITH RECURSIVE c(i) AS (
+            SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<1000
+          ) INSERT INTO a SELECT i, i FROM c;
+        }
+        if {$origin eq "existing"} {execsql {CREATE INDEX ax ON a(x)}}
+        execsql BEGIN
+        if {$boundary eq "rollback-to"} {execsql {SAVEPOINT s}}
+        if {$origin eq "new"} {execsql {CREATE INDEX ax ON a(x)}}
+        set prefix $testprefix-$layout-$origin-$failure-$boundary
+        set stmt [sqlite3_prepare_v2 db {
+          SELECT x FROM a INDEXED BY ax WHERE x>0 ORDER BY x
+        } -1 TAIL]
+        do_test $prefix.start {
+          list [sqlite3_step $stmt] [sqlite3_column_int $stmt 0]
+        } {SQLITE_ROW 1}
+        switch $failure {
+          unique {
+            do_catchsql_test $prefix.failure {
+              CREATE UNIQUE INDEX ux ON a(x/2)
+            } {1 {UNIQUE constraint failed: index 'ux'}}
+          }
+          locked {
+            do_catchsql_test $prefix.failure {DROP INDEX ax} \
+              {1 {database table is locked}}
+          }
+          dml {
+            do_catchsql_test $prefix.failure {
+              INSERT INTO a SELECT id, x FROM a WHERE x=1
+            } {1 {UNIQUE constraint failed: a.id}}
+          }
+          none {
+            do_execsql_test $prefix.no-failure {SELECT 1} {1}
+          }
+        }
+        do_test $prefix.after-failure {
+          list [sqlite3_step $stmt] [sqlite3_column_int $stmt 0]
+        } {SQLITE_ROW 2}
+        if {$boundary eq "rollback-to"} {
+          execsql {ROLLBACK TO s}
+        } else {
+          execsql $boundary
+        }
+        set abort [expr {$origin eq "new" && $boundary ne "commit"}]
+        if {$abort} {
+          do_test $prefix.abort {
+            list [sqlite3_step $stmt] [sqlite3_extended_errcode db]
+          } {SQLITE_ABORT SQLITE_ABORT_ROLLBACK}
+          sqlite3_finalize $stmt
+        } else {
+          do_test $prefix.continue {
+            set rows {}
+            while {[set rc [sqlite3_step $stmt]] eq "SQLITE_ROW"} {
+              lappend rows [sqlite3_column_int $stmt 0]
+            }
+            list $rc [llength $rows] [lindex $rows 0] [lindex $rows end]
+          } {SQLITE_DONE 998 3 1000}
+          sqlite3_finalize $stmt
+        }
+        if {$boundary eq "rollback-to"} {execsql {RELEASE s; COMMIT}}
+        set present [expr {$origin eq "existing" || $boundary eq "commit"}]
+        do_execsql_test $prefix.schema {
+          SELECT count(*) FROM sqlite_schema WHERE name='ax';
+          SELECT count(*) FROM sqlite_schema WHERE name='ux';
+          SELECT count(*), sum(x) FROM a;
+          PRAGMA integrity_check;
+        } [list $present 0 1000 500500 ok]
+        do_execsql_test $prefix.reuse {
+          BEGIN;
+          UPDATE a SET x=x+1 WHERE x=1000;
+          ROLLBACK;
+          SELECT count(*), sum(x) FROM a;
+        } {1000 500500}
+      }
+    }
+  }
+}
+
+finish_test
