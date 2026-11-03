@@ -1155,11 +1155,67 @@ static void test_replay_finish_failure_is_atomic(void){
   }
 }
 
+static void test_virtual_base_restore(void){
+  int failRestore;
+  for(failRestore=0; failRestore<2; failRestore++){
+    char path[256];
+    sqlite3 *db;
+    char *before, *after, *err = 0;
+    int rc;
+    const char *snapshot =
+        "SELECT dolt_hashof('HEAD')||'|'||dolt_hashof_db()||'|'||"
+        "(SELECT group_concat(a,',') FROM (SELECT a FROM t ORDER BY id))";
+    snprintf(path, sizeof(path), DOLTLITE_TEST_TMPDIR "/virtual_restore_%d_%d.db",
+             (int)getpid(), failRestore);
+    db = openDb(path);
+    check("virtual restore: open", db!=0);
+    if( !db ) continue;
+    check("virtual restore: setup", exec(db,
+        "CREATE TABLE t(id INT PRIMARY KEY,a INT);"
+        "INSERT INTO t VALUES(1,0),(2,0);"
+        "SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');"
+        "UPDATE t SET a=1 WHERE id=1; SELECT dolt_commit('-am','left');"
+        "SELECT dolt_commit('--allow-empty','-m','padding');"
+        "SELECT dolt_tag('left'); SELECT dolt_checkout('side');"
+        "UPDATE t SET a=2 WHERE id=2; SELECT dolt_commit('-am','right');"
+        "SELECT dolt_checkout('main'); SELECT dolt_merge('side');"
+        "SELECT dolt_checkout('side'); SELECT dolt_merge('left');"
+        "SELECT dolt_checkout('main'); UPDATE t SET a=0 WHERE id=2;"
+        "SELECT dolt_commit('-am','undo row 2'); BEGIN;")==SQLITE_OK);
+    before = queryText(db, snapshot);
+    doltliteTestClearFaults();
+    if( failRestore ) doltliteTestFailNextRestore();
+    else doltliteTestFailNextCreateCommit();
+    rc = execQuiet(db, "SELECT dolt_merge('side')", &err);
+    check("virtual restore: refuses failure", rc!=SQLITE_OK);
+    sqlite3_free(err);
+    doltliteTestClearFaults();
+    after = queryText(db, snapshot);
+    check("virtual restore: caller preserved",
+          before && after && strcmp(before, after)==0);
+    sqlite3_free(after);
+    check("virtual restore: following write", exec(db,
+        "INSERT INTO t VALUES(3,3); COMMIT;")==SQLITE_OK);
+    after = queryText(db, "SELECT group_concat(a,',') FROM (SELECT a FROM t ORDER BY id)");
+    check("virtual restore: no phantom base", after && strcmp(after,"1,0,3")==0);
+    sqlite3_free(after);
+    sqlite3_free(before);
+    sqlite3_close(db);
+    db = 0;
+    check("virtual restore: reopen", sqlite3_open(path, &db)==SQLITE_OK);
+    after = queryText(db, "SELECT group_concat(a,',') FROM (SELECT a FROM t ORDER BY id)");
+    check("virtual restore: durable rows", after && strcmp(after,"1,0,3")==0);
+    sqlite3_free(after);
+    closeRm(db, path);
+  }
+}
+
 int main(void){
   sqlite3_initialize();
   test_named_commit_failure();
   test_force_commit_keeps_cvs();
   test_merge_restore_not_voided();
+  test_virtual_base_restore();
   test_conflicts_resolve_savepoint();
   test_conflicts_resolve_interrupt(1, 0);
   test_conflicts_resolve_interrupt(1, 1);

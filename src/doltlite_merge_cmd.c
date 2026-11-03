@@ -1554,6 +1554,144 @@ static int mergeRefAbortAfterWriteTxn(
   return SQLITE_ERROR;
 }
 
+typedef struct VirtualBaseCandidate VirtualBaseCandidate;
+struct VirtualBaseCandidate {
+  ProllyHash hash;
+  i64 timestamp;
+};
+
+static int mergeRefVirtualBase(
+  sqlite3 *db, const ProllyHash *pLeft, const ProllyHash *pRight,
+  int depth, ProllyHash *pBase, char **pzErr
+);
+
+static int mergeRefFoldVirtualBase(
+  sqlite3 *db, const ProllyHash *pLeft, const ProllyHash *pRight,
+  int depth, ProllyHash *pOut, char **pzErr
+){
+  DoltliteCommit left, right, base;
+  DoltliteTxnState saved;
+  ProllyHash ancestor, merged;
+  SchemaMergeAction *aActions = 0;
+  char **azReindex = 0, **azRebuild = 0;
+  int nActions = 0, nReindex = 0, nRebuild = 0;
+  int nConflicts = 0, bSaved = 0, bBegan = 0;
+  int rc, restoreRc;
+
+  memset(&left, 0, sizeof(left));
+  memset(&right, 0, sizeof(right));
+  memset(&base, 0, sizeof(base));
+  rc = mergeRefVirtualBase(db, pLeft, pRight, depth+1, &ancestor, pzErr);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pLeft, &left);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pRight, &right);
+  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestor, &base);
+  if( rc==SQLITE_OK ) rc = doltliteSaveTxnState(db, &saved);
+  if( rc!=SQLITE_OK ) goto done;
+  bSaved = 1;
+  rc = doltliteMergeAutocommitTxnBegin(db, &bBegan);
+  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &left.catalogHash);
+  if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
+  if( rc==SQLITE_OK ){
+    rc = doltliteMergeCatalogs(db, &base.catalogHash,
+        &left.catalogHash, &right.catalogHash, &merged, &nConflicts, pzErr,
+        &aActions, &nActions, 0, 1, &azReindex, &nReindex,
+        &azRebuild, &nRebuild);
+  }
+  if( rc==SQLITE_OK && nConflicts>0 ){
+    sqlite3_free(*pzErr);
+    *pzErr = sqlite3_mprintf(
+        "cannot merge: common ancestors conflict while building virtual merge base");
+    rc = *pzErr ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &merged);
+  if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
+  if( rc==SQLITE_OK && nActions>0 ){
+    rc = doltliteApplyMergeSchemaActions(db, &base.catalogHash,
+        &right.catalogHash, aActions, nActions, &merged, pzErr);
+  }
+  if( rc==SQLITE_OK && nReindex>0 ){
+    rc = doltliteReindexNamedIndexes(db, azReindex, nReindex, 0);
+  }
+  if( rc==SQLITE_OK && nRebuild>0 ){
+    rc = doltliteRebuildVirtualTables(db, azRebuild, nRebuild);
+  }
+  if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, &merged);
+  if( rc==SQLITE_OK ){
+    i64 timestamp = left.timestamp>right.timestamp
+        ? left.timestamp : right.timestamp;
+    rc = doltliteCreateAndStoreCommitWithTime(db, pLeft, &merged,
+        "virtual merge base", "DoltLite", "virtual-merge-base@dolthub.com",
+        pRight, 1, 1, timestamp, pOut);
+  }
+done:
+  freeSchemaMergeActions(aActions, nActions);
+  doltliteFreeNameList(azReindex, nReindex);
+  doltliteFreeNameList(azRebuild, nRebuild);
+  if( bSaved ){
+    restoreRc = doltliteRestoreTxnState(db, &saved);
+    doltliteTxnStateClear(&saved);
+    if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+    rc = doltliteMergeAutocommitTxnEnd(db, bBegan, rc);
+  }
+  doltliteCommitClear(&left);
+  doltliteCommitClear(&right);
+  doltliteCommitClear(&base);
+  return rc;
+}
+
+static int mergeRefVirtualBase(
+  sqlite3 *db, const ProllyHash *pLeft, const ProllyHash *pRight,
+  int depth, ProllyHash *pBase, char **pzErr
+){
+  ProllyHash *aBase = 0;
+  VirtualBaseCandidate *aCandidate = 0;
+  int nBase = 0, i, rc;
+
+  if( depth>128 ){
+    *pzErr = sqlite3_mprintf("cannot merge: virtual merge base recursion limit");
+    return *pzErr ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  rc = doltliteFindAncestors(db, pLeft, pRight, &aBase, &nBase);
+  if( rc!=SQLITE_OK ) goto done;
+  if( nBase==1 ){
+    *pBase = aBase[0];
+    goto done;
+  }
+  aCandidate = sqlite3_malloc64((sqlite3_uint64)nBase*sizeof(*aCandidate));
+  if( !aCandidate ){ rc = SQLITE_NOMEM; goto done; }
+  for(i=0; i<nBase; i++){
+    DoltliteCommit commit;
+    VirtualBaseCandidate candidate;
+    int j;
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &aBase[i], &commit);
+    if( rc!=SQLITE_OK ) goto done;
+    candidate.hash = aBase[i];
+    candidate.timestamp = commit.timestamp;
+    doltliteCommitClear(&commit);
+    for(j=i; j>0; j--){
+      if( aCandidate[j-1].timestamp<candidate.timestamp
+       || (aCandidate[j-1].timestamp==candidate.timestamp
+           && prollyHashCompare(&aCandidate[j-1].hash, &candidate.hash)<0) ){
+        break;
+      }
+      aCandidate[j] = aCandidate[j-1];
+    }
+    aCandidate[j] = candidate;
+  }
+  *pBase = aCandidate[0].hash;
+  for(i=1; i<nBase && rc==SQLITE_OK; i++){
+    ProllyHash merged;
+    rc = mergeRefFoldVirtualBase(db, pBase, &aCandidate[i].hash,
+                                depth, &merged, pzErr);
+    if( rc==SQLITE_OK ) *pBase = merged;
+  }
+done:
+  sqlite3_free(aBase);
+  sqlite3_free(aCandidate);
+  return rc;
+}
+
 int doltliteMergeRef(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1575,6 +1713,8 @@ int doltliteMergeRef(
   u8 activeMerge = 0;
   DoltliteTxnState savedState;
   int nMergeConflicts = 0;
+  ProllyHash *aBases = 0;
+  int nBases = 0;
   DoltliteCommit ourCommit, theirCommit;
 
   int dirty = 0;
@@ -1674,7 +1814,10 @@ int doltliteMergeRef(
     }
   }
 
-  rc = doltliteFindAncestor(db, &ourHead, &theirHead, &ancestorHash);
+  rc = doltliteFindAncestors(db, &ourHead, &theirHead, &aBases, &nBases);
+  if( rc==SQLITE_OK ) ancestorHash = aBases[0];
+  else memset(&ancestorHash, 0, sizeof(ancestorHash));
+  sqlite3_free(aBases);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&ancestorHash) ){
     doltliteFreeCatalog(aLocal, nLocal);
     return mergeRefAbortAfterWriteTxn(db, context,
@@ -1706,6 +1849,23 @@ int doltliteMergeRef(
                             &ourCatHash, &theirCatHash, &ancCatHash, &zFail);
   if( rc!=SQLITE_OK ) goto merge_fail;
 
+  rc = doltliteSaveTxnState(db, &savedState);
+  if( rc!=SQLITE_OK ) goto merge_fail;
+  bHaveSaved = 1;
+
+  if( nBases>1 ){
+    DoltliteCommit virtualBase;
+    memset(&virtualBase, 0, sizeof(virtualBase));
+    bRestoreOnFail = 1;
+    rc = mergeRefVirtualBase(db, &ourHead, &theirHead, 0,
+                            &ancestorHash, &zOwnedErr);
+    if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestorHash, &virtualBase);
+    if( rc==SQLITE_OK ) ancCatHash = virtualBase.catalogHash;
+    doltliteCommitClear(&virtualBase);
+    if( rc!=SQLITE_OK ) goto merge_fail;
+    bRestoreOnFail = 0;
+  }
+
   /* A squash commit stores only the merged catalog. That catalog is HEAD
   ** when the two branches already have the same tree, and when their tree
   ** is still the merge base. Refuse before sealing the caller's BEGIN. */
@@ -1716,10 +1876,6 @@ int doltliteMergeRef(
     rc = SQLITE_ERROR;
     goto merge_fail;
   }
-
-  rc = doltliteSaveTxnState(db, &savedState);
-  if( rc!=SQLITE_OK ) goto merge_fail;
-  bHaveSaved = 1;
 
   rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
                               &mergedCatHash, &nMergeConflicts, &zOwnedErr,

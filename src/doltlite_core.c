@@ -141,6 +141,7 @@ int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   doltliteGetSessionMergeState(db, &p->sessionIsMerging,
                                &p->sessionMergeCommit,
                                &p->sessionConflictsCatalog);
+  doltliteGetSessionConflictsBaseCatalog(db, &p->sessionConflictsBaseCatalog);
   p->sessionPendingReplay = doltliteSessionHasPendingReplayCommit(db);
   doltliteGetSessionReplayState(db, &p->sessionReplayKind,
       &p->sessionReplaySnapshot, &p->sessionReplayStaged,
@@ -218,6 +219,9 @@ int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
     rc = doltliteSetSessionMergeState(db, p->sessionIsMerging,
                                       &p->sessionMergeCommit,
                                       &p->sessionConflictsCatalog);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionConflictsBaseCatalog(db, &p->sessionConflictsBaseCatalog);
   }
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionConstraintViolationsCatalog(

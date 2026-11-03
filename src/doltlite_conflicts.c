@@ -663,7 +663,7 @@ static int schemaConflictsLoadSides(
   SchemaEntry **paOurs, int *pnOurs,
   SchemaEntry **paTheirs, int *pnTheirs
 ){
-  ProllyHash ourHead, ancestorHash;
+  ProllyHash ourHead, ancestorHash, baseCatalog;
   DoltliteCommit ourCommit, theirCommit, ancestorCommit;
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
@@ -673,12 +673,17 @@ static int schemaConflictsLoadSides(
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&ancestorCommit, 0, sizeof(ancestorCommit));
   doltliteGetSessionHead(db, &ourHead);
-  rc = doltliteFindAncestor(db, &ourHead, pTheirHead, &ancestorHash);
+  doltliteGetSessionConflictsBaseCatalog(db, &baseCatalog);
+  rc = SQLITE_OK;
+  if( prollyHashIsEmpty(&baseCatalog) ){
+    rc = doltliteFindAncestor(db, &ourHead, pTheirHead, &ancestorHash);
+    if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestorHash, &ancestorCommit);
+    if( rc==SQLITE_OK ) baseCatalog = ancestorCommit.catalogHash;
+  }
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pTheirHead, &theirCommit);
-  if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestorHash, &ancestorCommit);
   if( rc==SQLITE_OK ){
-    rc = loadSchemaFromCatalog(db, cs, pCache, &ancestorCommit.catalogHash,
+    rc = loadSchemaFromCatalog(db, cs, pCache, &baseCatalog,
                                paBase, pnBase);
   }
   if( rc==SQLITE_OK ){

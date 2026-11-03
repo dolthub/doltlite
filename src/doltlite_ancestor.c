@@ -293,27 +293,35 @@ static int ancestorGraphHeights(AncestorGraph *pGraph){
   return SQLITE_OK;
 }
 
-int doltliteFindAncestor(
+int doltliteFindAncestors(
   sqlite3 *db,
   const ProllyHash *commitHash1,
   const ProllyHash *commitHash2,
-  ProllyHash *pAncestor
+  ProllyHash **paAncestors,
+  int *pnAncestors
 ){
   AncestorGraph graph;
   int iLeft;
   int iRight;
-  int iBest = -1;
+  int *aCandidate = 0;
+  ProllyHash *aAncestor = 0;
+  int nAncestor = 0;
   int i;
   int rc;
 
-  memset(pAncestor, 0, sizeof(*pAncestor));
+  *paAncestors = 0;
+  *pnAncestors = 0;
 
   if( prollyHashIsEmpty(commitHash1) || prollyHashIsEmpty(commitHash2) ){
     return SQLITE_NOTFOUND;
   }
 
   if( prollyHashCompare(commitHash1, commitHash2)==0 ){
-    *pAncestor = *commitHash1;
+    aAncestor = sqlite3_malloc(sizeof(*aAncestor));
+    if( !aAncestor ) return SQLITE_NOMEM;
+    aAncestor[0] = *commitHash1;
+    *paAncestors = aAncestor;
+    *pnAncestors = 1;
     return SQLITE_OK;
   }
 
@@ -332,23 +340,67 @@ int doltliteFindAncestor(
   if( rc!=SQLITE_OK ) goto done;
   for(i=0; i<graph.nNode; i++){
     AncestorNode *pNode = &graph.aNode[i];
+    if( pNode->aDistance[0]>=0 && pNode->aDistance[1]>=0 && !pNode->redundant ){
+      nAncestor++;
+    }
+  }
+  if( nAncestor==0 ){ rc = SQLITE_NOTFOUND; goto done; }
+  aCandidate = sqlite3_malloc64((sqlite3_uint64)nAncestor*sizeof(int));
+  aAncestor = sqlite3_malloc64(
+      (sqlite3_uint64)nAncestor*sizeof(*aAncestor));
+  if( !aCandidate || !aAncestor ){
+    rc = SQLITE_NOMEM;
+    goto done;
+  }
+  nAncestor = 0;
+  for(i=0; i<graph.nNode; i++){
+    AncestorNode *pNode = &graph.aNode[i];
+    int j;
     if( pNode->aDistance[0]<0 || pNode->aDistance[1]<0 || pNode->redundant ){
       continue;
     }
-    if( iBest<0 || ancestorGraphCompareCandidate(pNode,
-                                                 &graph.aNode[iBest])<0 ){
-      iBest = i;
+    for(j=nAncestor; j>0; j--){
+      if( ancestorGraphCompareCandidate(pNode,
+                                        &graph.aNode[aCandidate[j-1]])>=0 ){
+        break;
+      }
+      aCandidate[j] = aCandidate[j-1];
     }
+    aCandidate[j] = i;
+    nAncestor++;
   }
-  if( iBest<0 ){
+  if( nAncestor==0 ){
     rc = SQLITE_NOTFOUND;
   }else{
-    *pAncestor = graph.aNode[iBest].hash;
+    for(i=0; i<nAncestor; i++){
+      aAncestor[i] = graph.aNode[aCandidate[i]].hash;
+    }
+    *paAncestors = aAncestor;
+    *pnAncestors = nAncestor;
+    aAncestor = 0;
     rc = SQLITE_OK;
   }
 
 done:
+  sqlite3_free(aCandidate);
+  sqlite3_free(aAncestor);
   ancestorGraphClear(&graph);
+  return rc;
+}
+
+int doltliteFindAncestor(
+  sqlite3 *db,
+  const ProllyHash *pLeft,
+  const ProllyHash *pRight,
+  ProllyHash *pAncestor
+){
+  ProllyHash *aAncestor = 0;
+  int nAncestor = 0;
+  int rc;
+  memset(pAncestor, 0, sizeof(*pAncestor));
+  rc = doltliteFindAncestors(db, pLeft, pRight, &aAncestor, &nAncestor);
+  if( rc==SQLITE_OK ) *pAncestor = aAncestor[0];
+  sqlite3_free(aAncestor);
   return rc;
 }
 

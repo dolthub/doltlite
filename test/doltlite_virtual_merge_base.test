@@ -1,0 +1,277 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc virtual_base_history {key suffix levels padding} {
+  execsql "CREATE TABLE t($key,a INT) $suffix"
+  execsql {
+    CREATE INDEX ia ON t(a);
+    INSERT INTO t VALUES(1,0),(2,0);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+  }
+  for {set i 1} {$i<=$levels} {incr i} {
+    execsql "SELECT dolt_checkout('main'); UPDATE t SET a=$i WHERE id=1;
+      SELECT dolt_commit('-am','m$i')"
+    if {$padding eq "left"} {
+      execsql "SELECT dolt_commit('--allow-empty','-m','mp$i')"
+    }
+    execsql "SELECT dolt_tag('m$i'); SELECT dolt_checkout('side');
+      UPDATE t SET a=2*$i WHERE id=2; SELECT dolt_commit('-am','o$i')"
+    if {$padding eq "right"} {
+      execsql "SELECT dolt_commit('--allow-empty','-m','op$i')"
+    }
+    execsql "SELECT dolt_tag('o$i'); SELECT dolt_checkout('main');
+      SELECT dolt_merge('side','--no-ff','-m','mm$i');
+      SELECT dolt_checkout('side');
+      SELECT dolt_merge('m$i','--no-ff','-m','om$i')"
+  }
+}
+
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+  text {id TEXT PRIMARY KEY} {}
+  without_rowid {id TEXT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach levels {1 2} {
+    foreach padding {left right equal} {
+      foreach direction {forward reverse} {
+        foreach mode {merge squash no_commit} {
+          reset_db
+          set name virtual-base-$layout-$levels-$padding-$direction-$mode
+          do_test $name-history {
+            set historyRc [catch {virtual_base_history $key $suffix $levels $padding}]
+          } 0
+          if {$historyRc} {continue}
+          execsql {
+            SELECT dolt_checkout('main'); UPDATE t SET a=0 WHERE id=2;
+            SELECT dolt_commit('-am','undo row 2');
+          }
+          set target side
+          set path [file normalize test.db]
+          if {$direction eq "reverse"} {
+            execsql {SELECT dolt_checkout('side')}
+            set target main
+            append path /side
+          }
+          set head [db one {SELECT dolt_hashof('HEAD')}]
+          set theirs [db one "SELECT dolt_hashof('$target')"]
+          set flag {}
+          if {$mode eq "squash"} {set flag {,'--squash'}}
+          if {$mode eq "no_commit"} {set flag {,'--no-commit'}}
+          execsql {BEGIN; SAVEPOINT before_merge}
+          set expectedRc [expr {$mode eq "squash" && $direction eq "forward"}]
+          do_test $name-merge {
+            set rc [lindex [catchsql "SELECT dolt_merge('$target'$flag)"] 0]
+          } $expectedRc
+          if {$rc!=$expectedRc} {catchsql ROLLBACK; continue}
+          do_execsql_test $name-data {
+            SELECT id,a FROM t ORDER BY id;
+            SELECT count(*) FROM dolt_conflicts;
+            SELECT count(*) FROM dolt_schema_conflicts;
+            SELECT count(*) FROM dolt_log WHERE message='virtual merge base';
+            PRAGMA integrity_check;
+          } [list 1 $levels 2 0 0 0 0 ok]
+          do_execsql_test $name-index {
+            SELECT id FROM t INDEXED BY ia WHERE a=0 ORDER BY id;
+          } 2
+          do_execsql_test $name-source "SELECT dolt_hashof('$target')='$theirs'" 1
+          if {$mode eq "no_commit"} {
+            do_execsql_test $name-head "SELECT dolt_hashof('HEAD')='$head'" 1
+            execsql {SELECT dolt_commit('-am','finish merge')}
+          }
+          if {![sqlite3_get_autocommit db]} {execsql COMMIT}
+          do_execsql_test $name-clean {SELECT count(*) FROM dolt_status} 0
+          db close
+          sqlite3 db $path
+          do_execsql_test $name-reopen {
+            SELECT id,a FROM t ORDER BY id;
+            SELECT count(*) FROM dolt_log WHERE message='virtual merge base';
+            PRAGMA integrity_check;
+          } [list 1 $levels 2 0 0 ok]
+        }
+      }
+    }
+  }
+}
+
+foreach mode {autocommit transaction savepoint} {
+  reset_db
+  virtual_base_history {id INT PRIMARY KEY} {} 1 left
+  execsql {
+    SELECT dolt_checkout('main'); UPDATE t SET a=3 WHERE id=2;
+    SELECT dolt_commit('-am','left edit');
+    SELECT dolt_checkout('side'); UPDATE t SET a=4 WHERE id=2;
+    SELECT dolt_commit('-am','right edit');
+    SELECT dolt_checkout('main');
+  }
+  set head [db one {SELECT dolt_hashof('HEAD')}]
+  switch $mode {
+    transaction {execsql BEGIN}
+    savepoint {execsql {SAVEPOINT outer}}
+  }
+  do_test virtual-base-conflict-$mode {
+    lindex [catchsql {SELECT dolt_merge('side')}] 0
+  } 1
+  if {$mode eq "transaction"} {
+    do_execsql_test virtual-base-conflict-$mode-count {
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT base_a,our_a,their_a FROM dolt_conflicts_t;
+    } {1 2 3 4}
+    do_catchsql_test virtual-base-conflict-$mode-commit {COMMIT} \
+        {1 {cannot merge: unresolved conflicts cannot be committed}}
+  }
+  if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+  do_execsql_test virtual-base-conflict-$mode-rollback "
+    SELECT dolt_hashof('HEAD')='$head';
+    SELECT id,a FROM t ORDER BY id;
+    SELECT count(*) FROM dolt_conflicts;
+    PRAGMA integrity_check;
+  " {1 1 1 2 3 0 ok}
+}
+
+foreach mode {autocommit transaction savepoint} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY,a INT);
+    INSERT INTO t VALUES(1,0);
+    SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');
+    UPDATE t SET a=1; SELECT dolt_commit('-am','left');
+    SELECT dolt_tag('left'); SELECT dolt_checkout('side');
+    UPDATE t SET a=2; SELECT dolt_commit('-am','right');
+    SELECT dolt_checkout('main'); BEGIN;
+  }
+  catchsql {SELECT dolt_merge('side')}
+  execsql {
+    SELECT dolt_conflicts_resolve('--ours','t');
+    SELECT dolt_commit('-am','left resolved');
+    SELECT dolt_checkout('side'); BEGIN;
+  }
+  catchsql {SELECT dolt_merge('left')}
+  execsql {
+    SELECT dolt_conflicts_resolve('--ours','t');
+    SELECT dolt_commit('-am','right resolved');
+    SELECT dolt_checkout('main');
+  }
+  set before [execsql {
+    SELECT dolt_hashof('HEAD'),dolt_hashof_db();
+    SELECT name,hash FROM dolt_branches ORDER BY name;
+    SELECT * FROM t;
+  }]
+  switch $mode {
+    transaction {execsql BEGIN}
+    savepoint {execsql {SAVEPOINT outer}}
+  }
+  do_catchsql_test virtual-base-ambiguous-$mode {
+    SELECT dolt_merge('side');
+  } {1 {cannot merge: common ancestors conflict while building virtual merge base}}
+  if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+  do_test virtual-base-ambiguous-$mode-preserved {
+    list [expr {$before eq [execsql {
+      SELECT dolt_hashof('HEAD'),dolt_hashof_db();
+      SELECT name,hash FROM dolt_branches ORDER BY name;
+      SELECT * FROM t;
+    }]}] [execsql {SELECT count(*) FROM dolt_conflicts; PRAGMA integrity_check}]
+  } {1 {0 ok}}
+  db close
+  sqlite3 db test.db
+  do_test virtual-base-ambiguous-$mode-reopen {
+    expr {$before eq [execsql {
+      SELECT dolt_hashof('HEAD'),dolt_hashof_db();
+      SELECT name,hash FROM dolt_branches ORDER BY name;
+      SELECT * FROM t;
+    }]}
+  } 1
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INT PRIMARY KEY,a INT);
+  INSERT INTO t VALUES(1,0),(2,0),(3,0);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('b'); SELECT dolt_branch('c');
+  UPDATE t SET a=1 WHERE id=1; SELECT dolt_commit('-am','a'); SELECT dolt_tag('a');
+  SELECT dolt_checkout('b'); UPDATE t SET a=2 WHERE id=2;
+  SELECT dolt_commit('-am','b'); SELECT dolt_tag('b_tip');
+  SELECT dolt_checkout('c'); UPDATE t SET a=3 WHERE id=3;
+  SELECT dolt_commit('-am','c'); SELECT dolt_tag('c_tip');
+  SELECT dolt_checkout('main'); SELECT dolt_merge('b'); SELECT dolt_merge('c');
+  SELECT dolt_checkout('b'); SELECT dolt_merge('c_tip'); SELECT dolt_merge('a');
+  SELECT dolt_checkout('main'); UPDATE t SET a=0 WHERE id=2;
+  SELECT dolt_commit('-am','undo b');
+}
+do_test virtual-base-three-ancestors-merge {
+  lindex [catchsql {SELECT dolt_merge('b')}] 0
+} 0
+do_execsql_test virtual-base-three-ancestors-rows {
+  SELECT * FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_log WHERE message='virtual merge base';
+  PRAGMA integrity_check;
+} {1 1 2 0 3 3 0 ok}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INT PRIMARY KEY,a INT);
+  INSERT INTO t VALUES(1,0),(2,0);
+  SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');
+  ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+  UPDATE t SET a=1 WHERE id=1; SELECT dolt_commit('-am','left');
+  SELECT dolt_tag('left'); SELECT dolt_checkout('side');
+  ALTER TABLE t ADD COLUMN d INT DEFAULT 9;
+  UPDATE t SET a=2 WHERE id=2; SELECT dolt_commit('-am','right');
+  SELECT dolt_checkout('main'); SELECT dolt_merge('side');
+  SELECT dolt_checkout('side'); SELECT dolt_merge('left');
+  UPDATE t SET c=8 WHERE id=1; SELECT dolt_commit('-am','edit c');
+  SELECT dolt_checkout('main'); UPDATE t SET a=0 WHERE id=2;
+  SELECT dolt_commit('-am','undo row 2');
+}
+do_test virtual-base-schema-merge {
+  lindex [catchsql {SELECT dolt_merge('side')}] 0
+} 0
+do_execsql_test virtual-base-schema-data {
+  SELECT id,a,c,d FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_log WHERE message='virtual merge base';
+  PRAGMA integrity_check;
+} {1 1 8 9 2 0 7 9 0 ok}
+
+execsql {
+  SELECT dolt_reset('--hard','HEAD~1');
+  ALTER TABLE t ADD COLUMN extra INTEGER;
+  SELECT dolt_commit('-am','main schema');
+  SELECT dolt_checkout('side'); ALTER TABLE t ADD COLUMN extra TEXT;
+  SELECT dolt_commit('-am','side schema'); SELECT dolt_checkout('main');
+  BEGIN; SAVEPOINT before_schema;
+}
+set head [db one {SELECT dolt_hashof('HEAD')}]
+do_test virtual-base-schema-conflict {
+  lindex [catchsql {SELECT dolt_merge('side')}] 0
+} 1
+do_execsql_test virtual-base-schema-ancestor {
+  SELECT table_name,base_schema LIKE '%c INT%',base_schema LIKE '%d INT%',
+         base_schema NOT LIKE '%extra%',our_schema LIKE '%extra INTEGER%',
+         their_schema LIKE '%extra TEXT%' FROM dolt_schema_conflicts;
+} {t 1 1 1 1 1}
+do_execsql_test virtual-base-schema-savepoint {
+  SAVEPOINT after_schema;
+  ROLLBACK TO after_schema;
+  SELECT base_schema LIKE '%c INT%' AND base_schema LIKE '%d INT%'
+    FROM dolt_schema_conflicts;
+} 1
+do_catchsql_test virtual-base-schema-commit {COMMIT} \
+    {1 {cannot merge: unresolved conflicts cannot be committed}}
+if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+do_execsql_test virtual-base-schema-rollback "
+  SELECT dolt_hashof('HEAD')='$head';
+  SELECT count(*) FROM dolt_conflicts;
+  SELECT count(*) FROM dolt_schema_conflicts;
+  PRAGMA integrity_check;
+" {1 0 0 ok}
+db close
+sqlite3 db test.db
+do_execsql_test virtual-base-schema-reopen "
+  SELECT dolt_hashof('HEAD')='$head';
+  SELECT count(*) FROM dolt_schema_conflicts;
+  PRAGMA integrity_check;
+" {1 0 ok}
+
+finish_test
