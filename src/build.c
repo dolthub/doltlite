@@ -447,7 +447,7 @@ Table *sqlite3LocateTable(
     zDbase = "main";
   }
   p = 0;
-  if( !db->init.busy && !pParse->bLocalNames
+  if( !db->init.busy && !pParse->bLocalNames && doltliteNonlocalActive(db)
    && (zDbase || sqlite3FindTable(db, zName, "temp")==0) ){
     const char *zNonlocal = zName;
     const char *zNonlocalDb = zDbase;

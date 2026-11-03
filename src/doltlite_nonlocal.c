@@ -37,6 +37,11 @@ struct DoltliteNonlocal {
   int nMissing;
   ProllyHash refsSeen;
   u8 bSyncing;
+  /* The schema, as of this cookie and generation, has no rules table: the
+  ** sync every statement pays returns without a lookup. */
+  Schema *pNoRules;
+  int iNoRulesCookie;
+  int iNoRulesGen;
 };
 
 static void nonlocalRulesClear(DoltliteNonlocal *p){
@@ -351,6 +356,11 @@ static int nonlocalSync(sqlite3 *db){
   if( db->nVdbeExec>0 || db->nDb<1 || !doltliteNonlocalSlot(db) ) return 0;
   if( !DbHasProperty(db, 0, DB_SchemaLoaded) ) return 0;
   p = nonlocalState(db, 0);
+  if( p && p->pNoRules==db->aDb[0].pSchema
+   && p->iNoRulesCookie==p->pNoRules->schema_cookie
+   && p->iNoRulesGen==p->pNoRules->iGeneration ){
+    return 0;
+  }
   if( p && p->bSyncing ) return 0;
   pTab = sqlite3FindTable(db, "dolt_nonlocal_tables", "main");
   if( !pTab || IsVirtual(pTab) ){
@@ -362,8 +372,15 @@ static int nonlocalSync(sqlite3 *db){
       p->bSyncing = 0;
       return 1;
     }
+    if( !p ) p = nonlocalState(db, 1);
+    if( p ){
+      p->pNoRules = db->aDb[0].pSchema;
+      p->iNoRulesCookie = p->pNoRules->schema_cookie;
+      p->iNoRulesGen = p->pNoRules->iGeneration;
+    }
     return 0;
   }
+  if( p ) p->pNoRules = 0;
   /* Compiling against a loaded schema opens no transaction, so a peer's
   ** change to the rules would otherwise reach this connection only when the
   ** statement runs, after its names were redirected by the old rules. */
@@ -637,6 +654,11 @@ int doltliteNonlocalBlocksCreate(sqlite3 *db, const char *zName){
     return 0;
   }
   return 1;
+}
+
+int doltliteNonlocalActive(sqlite3 *db){
+  DoltliteNonlocal *p = nonlocalState(db, 0);
+  return p && p->bLoaded && p->nRule>0;
 }
 
 int doltliteNonlocalMatches(sqlite3 *db, const char *zName){
