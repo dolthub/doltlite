@@ -212,7 +212,7 @@ jobs:
       run: |
         tar -xzf coverage-cli.tar.gz
         mkdir -p "$RUNNER_TEMP/coverage-profiles"
-        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%p.profraw" >> "$GITHUB_ENV"
+        echo "LLVM_PROFILE_FILE=$RUNNER_TEMP/coverage-profiles/%8m.profraw" >> "$GITHUB_ENV"
 
     - name: Install Dolt
       run: bash .github/scripts/install-dolt-oracle.sh
