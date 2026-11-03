@@ -214,6 +214,34 @@ SELECT dolt_commit('-Am','m_victim');" >/dev/null
   check "missing_column_still_fails_$key" 1 "$d" 1 'no such column: id'
 done
 
+for key in INTEGER INT; do
+  for interrupt in 0 1; do
+    d=$(newdir "removal_diff_${key}_$interrupt" "$key")
+    "$DOLTLITE" "$d/db.db" "INSERT INTO w VALUES(100000001,'removed'),(100000002,'also removed');
+SELECT dolt_commit('-Am','inserted');" >/dev/null
+    status=0
+    out=$("$BIN" --record-removals "$d" "$interrupt" 2>&1) || status=$?
+    expected=$(printf 'D\t100000001\nD\t100000002')
+    if [ "$status" -eq 0 ] && [ "$out" = "$expected" ]; then
+      echo "ok removal_diff_with_peer_writer_${key}_$interrupt"
+    else
+      echo "FAIL removal_diff_with_peer_writer_${key}_$interrupt: status=$status $out"
+      fails=$((fails+1))
+    fi
+    printf '%s\n' $'I\t100000001\tmain\t1000\t1100' \
+      $'I\t100000002\tmain\t1200\t1300' > "$d/log.0"
+    printf '%s\n' "$out" >> "$d/log.0"
+    check "recorded_removal_excuses_only_its_rows_${key}_$interrupt" 0 "$d"
+    printf '%s\n' $'I\t100000003\tmain\t2000\t2100' >> "$d/log.0"
+    check "recorded_removal_preserves_lost_write_detection_${key}_$interrupt" 1 "$d" 1 \
+      'LOST acked id 100000003'
+  done
+done
+
+d=$(newdir removal_collection_failure)
+printf 'COLLECT_ERROR\tfailed to read removal diff\n' > "$d/log.0"
+check removal_collection_failure_is_not_ignored 1 "$d" 1 'removal collection failed'
+
 if [ "$fails" -ne 0 ]; then
   echo "vc_model_stress_check: $fails failed"
   exit 1
