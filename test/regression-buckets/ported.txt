@@ -228,3 +228,4 @@ doltlite_branch_presence_collision
 doltlite_init_identity
 doltlite_diff_table_lifetime
 doltlite_empty_rename_staging
+doltlite_merge_insert_columns

@@ -6,6 +6,7 @@
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
   sqlite3 *db;
+  Table *pTable;
   Table *pGeneratedTable;
   sqlite3_stmt *pGeneratedStmt;
   ProllyMutMap *pEdits;
@@ -412,7 +413,12 @@ static u8 *tryCellMerge(
       RecField *fO = (i<nfOurs)   ? &aOurs[i]   : (RecField*)&kNullField;
       RecField *fT = (i<nfTheirs) ? &aTheirs[i] : (RecField*)&kNullField;
       int oursChanged, theirsChanged;
-      if( fieldIsDualAdd(pPolicy, i) ){
+      if( !pBase || nBase<=0 ){
+        int side = pPolicy && i<pPolicy->nInsertFields
+            ? pPolicy->aInsertSides[i] : 0;
+        oursChanged = side!=SCHEMA_MERGE_THEIRS;
+        theirsChanged = side!=SCHEMA_MERGE_OURS;
+      }else if( fieldIsDualAdd(pPolicy, i) ){
         oursChanged = 1;
         theirsChanged = 1;
       }else{
@@ -623,6 +629,12 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
 
       u8 *pMerged = 0;
       int nMerged = 0;
+      const u8 *pOurs = pChange->pOurVal;
+      const u8 *pTheirs = pChange->pTheirVal;
+      int nOurs = pChange->nOurVal;
+      int nTheirs = pChange->nTheirVal;
+      u8 *pKeyRecord = 0;
+      int nKeyRecord = 0;
 
       /* Both sides inserted this key. A unique index sorts 1 and 1.0
       ** together. The integer fits in the key, so its value is empty;
@@ -637,7 +649,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           nNum = oursHas ? pChange->nOurVal : pChange->nTheirVal;
         }
         if( (!oursHas && !theirsHas)
-         || (pNum && recordIsNumberOrNull(pNum, nNum))
+         || (!ctx->pTable && pNum && recordIsNumberOrNull(pNum, nNum))
          || (oursHas && theirsHas
              && recordsNumericallyEqual(pChange->pOurVal, pChange->nOurVal,
                                          pChange->pTheirVal,
@@ -646,16 +658,18 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         }
       }
 
-      if( pChange->pBaseVal && pChange->nBaseVal>0
-       && pChange->pOurVal && pChange->nOurVal>0
-       && pChange->pTheirVal && pChange->nTheirVal>0 ){
-        pMerged = tryCellMerge(
-            ctx->pGeneratedTable, ctx->pPolicy,
-            pChange->pBaseVal, pChange->nBaseVal,
-            pChange->pOurVal, pChange->nOurVal,
-            pChange->pTheirVal, pChange->nTheirVal,
-            &nMerged);
+      if( ctx->pTable && !ctx->isIntKey && (nOurs==0 || nTheirs==0) ){
+        rc = doltliteRecordFromClusteredKey(ctx->db, ctx->pTable->zName,
+            pChange->pKey, pChange->nKey, &pKeyRecord, &nKeyRecord);
+        if( rc!=SQLITE_OK ) return rc;
+        if( nOurs==0 ){ pOurs = pKeyRecord; nOurs = nKeyRecord; }
+        if( nTheirs==0 ){ pTheirs = pKeyRecord; nTheirs = nKeyRecord; }
       }
+      pMerged = tryCellMerge(
+          ctx->pGeneratedTable, ctx->pPolicy,
+          pChange->pBaseVal, pChange->nBaseVal,
+          pOurs, nOurs, pTheirs, nTheirs, &nMerged);
+      sqlite3_free(pKeyRecord);
 
       if( pMerged ){
         rc = mergeGeneratedRecord(ctx->db, ctx->pGeneratedTable,
@@ -1497,6 +1511,7 @@ int mergeTableRows(
 
   memset(&ctx, 0, sizeof(ctx));
   ctx.db = db;
+  ctx.pTable = pTab;
   if( pTab && (pTab->tabFlags & TF_HasStored)!=0 ){
     ctx.pGeneratedTable = pTab;
   }

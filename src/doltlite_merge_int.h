@@ -247,6 +247,8 @@ struct MergeRowPolicy {
   ** value there, so each side's value is a change. */
   int nDualAddFields;
   int *aiDualAddFields;
+  int nInsertFields;
+  u8 *aInsertSides;
 };
 
 int mergeRowAddedDefaults(
