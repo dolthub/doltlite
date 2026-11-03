@@ -437,4 +437,44 @@ foreach {layout key suffix} {
   }
 }
 
+
+# Rebuilding an fts5 index while folding the ancestors leaves its writes
+# buffered until xSync; they belong to the virtual base, not to the
+# catalog the merge goes back to.
+db close
+forcedelete test.db
+sqlite3 db test.db
+do_execsql_test virtual-base-fts5 {
+  CREATE VIRTUAL TABLE docs USING fts5(body);
+  CREATE TABLE kv(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO docs VALUES('alpha');
+  INSERT INTO kv VALUES(1,'base'),(2,'base');
+  SELECT dolt_commit('-Am','base') IS NOT NULL;
+  SELECT dolt_branch('side');
+  INSERT INTO docs VALUES('left words');
+  UPDATE kv SET v='left' WHERE id=1;
+  SELECT dolt_commit('-am','left') IS NOT NULL;
+  SELECT dolt_tag('left_tip');
+  SELECT dolt_checkout('side');
+  INSERT INTO docs VALUES('right words');
+  UPDATE kv SET v='right' WHERE id=2;
+  SELECT dolt_commit('-am','right') IS NOT NULL;
+  SELECT dolt_checkout('main');
+  SELECT dolt_merge('side','--no-ff','-m','merge-right') IS NOT NULL;
+  SELECT dolt_checkout('side');
+  SELECT dolt_merge('left_tip','--no-ff','-m','merge-left') IS NOT NULL;
+  SELECT dolt_checkout('main');
+  INSERT INTO docs VALUES('main more');
+  SELECT dolt_commit('-am','main-more') IS NOT NULL;
+  SELECT dolt_checkout('side');
+  INSERT INTO docs VALUES('side more');
+  SELECT dolt_commit('-am','side-more') IS NOT NULL;
+  SELECT dolt_checkout('main');
+  SELECT dolt_merge('side') IS NOT NULL;
+  SELECT group_concat(body, ',') FROM (SELECT body FROM docs ORDER BY body);
+  SELECT count(*) FROM docs WHERE docs MATCH 'more OR words';
+  INSERT INTO docs(docs) VALUES('integrity-check');
+  PRAGMA integrity_check;
+} {1 0 1 0 0 1 0 1 0 1 0 1 0 1 0 1 {alpha,left words,main more,right words,side more} 4 ok}
+
 finish_test
