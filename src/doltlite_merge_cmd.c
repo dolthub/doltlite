@@ -1631,6 +1631,9 @@ done:
     restoreRc = doltliteRestoreTxnState(db, &saved);
     doltliteTxnStateClear(&saved);
     if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+    /* Restore clears the parsed schema. The caller's merge binds secondary
+    ** indexes from it, so reload it before returning. */
+    else if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
     rc = doltliteMergeAutocommitTxnEnd(db, bBegan, rc);
   }
   doltliteCommitClear(&left);

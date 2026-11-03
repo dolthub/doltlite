@@ -274,4 +274,101 @@ do_execsql_test virtual-base-schema-reopen "
   PRAGMA integrity_check;
 " {1 0 ok}
 
+proc virtual_base_index_history {} {
+  execsql {
+    CREATE TABLE w(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE INDEX iv ON w(v);
+    INSERT INTO w VALUES(1,'b1'),(2,'b2');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+    UPDATE w SET v='m1' WHERE id=1;
+    SELECT dolt_commit('-am','m1');
+    SELECT dolt_tag('m1');
+    SELECT dolt_checkout('side');
+    UPDATE w SET v='s2' WHERE id=2;
+    SELECT dolt_commit('-am','s1');
+    SELECT dolt_checkout('main');
+    SELECT dolt_merge('side','--no-ff','-m','mm1');
+    SELECT dolt_checkout('side');
+    SELECT dolt_merge('m1','--no-ff','-m','sm1');
+    SELECT dolt_checkout('main');
+  }
+}
+
+reset_db
+virtual_base_index_history
+execsql {
+  INSERT INTO w VALUES(3,'v6');
+  SELECT dolt_commit('-am','add ours');
+  SELECT dolt_checkout('side');
+  INSERT INTO w VALUES(3,'u16');
+  SELECT dolt_commit('-am','add theirs');
+  SELECT dolt_checkout('main');
+  BEGIN;
+}
+do_test virtual-base-index-addadd-conflict {
+  set result [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $result 0] [string match {*1 conflict*} [lindex $result 1]]
+} {1 1}
+do_execsql_test virtual-base-index-addadd-ours {
+  SELECT id, v FROM w WHERE id=3;
+  SELECT v FROM w INDEXED BY iv WHERE id=3 ORDER BY v;
+  SELECT count(*) FROM (
+    SELECT id, v FROM w INDEXED BY iv
+    EXCEPT SELECT id, ifnull(v,'') FROM w);
+  PRAGMA integrity_check;
+} {3 v6 v6 0 ok}
+execsql {
+  SELECT dolt_conflicts_resolve('--ours','w');
+  SELECT dolt_commit('-am','resolved');
+}
+do_execsql_test virtual-base-index-addadd-committed {
+  SELECT v FROM w INDEXED BY iv WHERE id=3;
+  SELECT count(*) FROM dolt_conflicts;
+  PRAGMA integrity_check;
+} {v6 0 ok}
+db close
+sqlite3 db test.db
+do_execsql_test virtual-base-index-addadd-reopen {
+  SELECT v FROM w INDEXED BY iv WHERE id=3;
+  PRAGMA integrity_check;
+} {v6 ok}
+
+reset_db
+virtual_base_index_history
+execsql {
+  INSERT INTO w VALUES(3,'v6');
+  SELECT dolt_commit('-am','add ours');
+  SELECT dolt_checkout('side');
+  ALTER TABLE w ADD COLUMN c TEXT;
+  INSERT INTO w(id,v) VALUES(3,'u16');
+  SELECT dolt_commit('-am','add column and theirs');
+  SELECT dolt_checkout('main');
+  BEGIN;
+}
+do_test virtual-base-index-addcol-conflict {
+  set result [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $result 0] [string match {*1 conflict*} [lindex $result 1]]
+} {1 1}
+do_execsql_test virtual-base-index-addcol-ours {
+  SELECT id, v FROM w WHERE id=3;
+  SELECT v FROM w INDEXED BY iv WHERE id=3 ORDER BY v;
+  SELECT count(*) FROM pragma_table_info('w') WHERE name='c';
+  SELECT count(*) FROM (
+    SELECT id, v FROM w INDEXED BY iv
+    EXCEPT SELECT id, ifnull(v,'') FROM w);
+  PRAGMA integrity_check;
+} {3 v6 v6 1 0 ok}
+execsql {
+  SELECT dolt_conflicts_resolve('--ours','w');
+  SELECT dolt_commit('-am','resolved column');
+}
+db close
+sqlite3 db test.db
+do_execsql_test virtual-base-index-addcol-reopen {
+  SELECT v, c FROM w WHERE id=3;
+  SELECT v FROM w INDEXED BY iv WHERE id=3;
+  PRAGMA integrity_check;
+} {v6 {} v6 ok}
+
 finish_test
