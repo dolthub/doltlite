@@ -1034,10 +1034,12 @@ static int renameMateIsContested(
       }
     }
     if( j<nBase ) continue;
+    if( doltliteFindTableByName(aFrom, nFrom, aTo[i].zName) ) return 1;
     for(j=0; j<nFrom; j++){
       if( statusRenameNumber(&aFrom[j])==statusRenameNumber(&aTo[i])
        && aFrom[j].zName
        && strcmp(aFrom[j].zName, aTo[i].zName)!=0
+       && !doltliteFindTableByName(aTo, nTo, aFrom[j].zName)
        && prollyHashCompare(&aFrom[j].root, &aTo[i].root)==0 ){
         spokenFor = 1;
         break;

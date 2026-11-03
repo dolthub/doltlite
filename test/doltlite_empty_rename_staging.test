@@ -114,12 +114,16 @@ foreach target {alpha beta} {
     CREATE TABLE beta(id INT PRIMARY KEY,v INT);
     INSERT INTO beta VALUES(1,10);
   }
+  set alphaStaged [expr {$target eq "alpha"}]
+  set betaStaged [expr {$target eq "beta"}]
   do_execsql_test empty-rename-ambiguous-$target "
     SELECT dolt_add('$target');
     SELECT coalesce(from_table_name,''),to_table_name,diff_type
       FROM dolt_diff_summary('HEAD','STAGED');
     SELECT count(*) FROM dolt_at_orig('STAGED');
-  " [list 0 {} $target added 1]
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+  " [list 0 {} $target added 1 alpha $alphaStaged {new table} \
+       beta $betaStaged {new table} orig 0 deleted]
 }
 
 foreach indexed {0 1} {
