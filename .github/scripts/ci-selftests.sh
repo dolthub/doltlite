@@ -5,6 +5,7 @@ ci_selftests() {
   ci_compile python3 "$script_dir/parallel-compile-test.py"
   ci_compile python3 "$script_dir/macos-build-jobs-test.py"
   ci_compile python3 "$script_dir/ci-cache-and-packages-test.py"
+  ci_compile python3 "$script_dir/windows-runtime-test.py"
   ci_compile python3 "$script_dir/ci-next-optimizations-test.py"
   ci_compile python3 "$script_dir/ci-followup-test.py"
   ci_compile python3 "$script_dir/development-debug-test.py"

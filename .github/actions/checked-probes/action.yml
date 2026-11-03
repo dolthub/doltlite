@@ -75,9 +75,7 @@ runs:
         rm -f doltlite.exe
         make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 \
           'T.link=$(T.cc.sqlite) -static' doltlite.exe
-        if objdump -p doltlite.exe | grep -Eq 'DLL Name: (libwinpthread-1\.dll|zlib1\.dll)'; then
-          exit 1
-        fi
+        bash ../test/windows_runtime_dependencies.sh doltlite.exe libdoltlite.dll
         make DOLTLITE_PROLLY=1 DOLTLITE_PROLLY_CHECK=1 sqlite3.c sqlite3.h
         cc $CFLAGS -I. -I../src \
           -o doltlite_regression_test_c \
@@ -91,6 +89,10 @@ runs:
         echo "::error::compiler warnings in checked build"
         exit 1
       fi
+  - name: Load Windows DLL without MSYS2 runtime dependencies
+    if: inputs.platform == 'windows'
+    shell: msys2 {0}
+    run: bash test/windows_runtime_smoke.sh build
   - name: Build standalone Unix test probes
     if: inputs.platform != 'windows'
     run: |
