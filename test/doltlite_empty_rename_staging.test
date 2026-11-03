@@ -1,0 +1,156 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {layout key constraint suffix} {
+  rowid {id INTEGER PRIMARY KEY} {} {}
+  clustered {id INT PRIMARY KEY} {} {}
+  text {id TEXT PRIMARY KEY} {} {}
+  composite {id INT} {,PRIMARY KEY(tenant,id)} {}
+  without_rowid {id INT PRIMARY KEY} {} {WITHOUT ROWID}
+  keyless {id INT} {} {}
+} {
+  foreach indexed {0 1} {
+    foreach createOrder {before after} {
+      foreach stageOrder {{m n} {n m}} {
+        reset_db
+        set name empty-rename-$layout-$indexed-$createOrder-[join $stageOrder -]
+        set schema "($key,v TEXT,tenant INT DEFAULT 0$constraint) $suffix"
+        execsql "CREATE TABLE b$schema"
+        if {$indexed} {execsql {CREATE INDEX b_v ON b(v)}}
+        execsql {SELECT dolt_commit('-Am','base')}
+        if {$createOrder eq "before"} {
+          execsql "CREATE TABLE m$schema; CREATE TABLE n$schema"
+        }
+        execsql {ALTER TABLE b RENAME TO b2}
+        if {$createOrder eq "after"} {
+          execsql "CREATE TABLE m$schema; CREATE TABLE n$schema"
+        }
+        if {$indexed} {
+          execsql {CREATE INDEX m_v ON m(v); CREATE INDEX n_v ON n(v)}
+        }
+        do_execsql_test $name-initial {
+          SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+        } {{b -> b2} 0 renamed m 0 {new table} n 0 {new table}}
+
+        foreach target $stageOrder {
+          do_execsql_test $name-add-$target "
+            SELECT dolt_add('$target');
+            SELECT table_name,staged,status FROM dolt_status
+              WHERE staged=1 ORDER BY table_name;
+          " [list 0 $target 1 {new table}]
+          do_execsql_test $name-staged-$target "
+            SELECT count(*) FROM dolt_at_b('STAGED');
+            SELECT count(*) FROM dolt_at_${target}('STAGED');
+            SELECT table_name,staged,status FROM dolt_status
+              WHERE table_name='b -> b2';
+            SELECT coalesce(from_table_name,''),to_table_name,diff_type
+              FROM dolt_diff_summary('HEAD','STAGED');
+          " [list 0 0 {b -> b2} 0 renamed {} $target added]
+          db close
+          sqlite3 db test.db
+          do_execsql_test $name-reopen-$target {
+            SELECT table_name,staged,status FROM dolt_status
+              WHERE staged=1 ORDER BY table_name;
+          } [list $target 1 {new table}]
+          do_execsql_test $name-reset-$target "
+            SELECT dolt_reset('$target');
+            SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+          " [list 0 {b -> b2} 0 renamed m 0 {new table} n 0 {new table}]
+        }
+        set first [lindex $stageOrder 0]
+        set second [lindex $stageOrder 1]
+        do_execsql_test $name-stage-both "
+          SELECT dolt_add('$first','$second');
+          SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+          SELECT dolt_reset();
+        " [list 0 {b -> b2} 0 renamed m 1 {new table} n 1 {new table} 0]
+        do_execsql_test $name-commit-first "
+          SELECT dolt_add('$first');
+          SELECT length(dolt_commit('-m','add first only'));
+          SELECT coalesce(from_table_name,''),to_table_name,diff_type
+            FROM dolt_diff_summary('HEAD~1','HEAD');
+          SELECT count(*) FROM dolt_at_b('HEAD');
+        " [list 0 40 {} $first added 0]
+        do_execsql_test $name-remaining "
+          SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+        " [list {b -> b2} 0 renamed $second 0 {new table}]
+        do_execsql_test $name-commit-second "
+          SELECT dolt_add('$second');
+          SELECT length(dolt_commit('-m','add second only'));
+          SELECT coalesce(from_table_name,''),to_table_name,diff_type
+            FROM dolt_diff_summary('HEAD~1','HEAD');
+        " [list 0 40 {} $second added]
+        do_execsql_test $name-stage-rename {
+          SELECT dolt_add('b2');
+          SELECT table_name,staged,status FROM dolt_status;
+          SELECT dolt_reset('b');
+          SELECT table_name,staged,status FROM dolt_status;
+          SELECT dolt_add('b2');
+          SELECT length(dolt_commit('-m','rename only'));
+          SELECT from_table_name,to_table_name,diff_type
+            FROM dolt_diff_summary('HEAD~1','HEAD');
+          SELECT count(*) FROM dolt_status;
+        } {0 {b -> b2} 1 renamed 0 {b -> b2} 0 renamed 0 40 b b2 renamed 0}
+        db close
+        sqlite3 db test.db
+        do_execsql_test $name-final {
+          SELECT count(*) FROM dolt_status;
+          SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
+        } {0 b2 m n}
+      }
+    }
+  }
+}
+
+foreach target {alpha beta} {
+  reset_db
+  execsql {
+    CREATE TABLE orig(id INT PRIMARY KEY,v INT);
+    INSERT INTO orig VALUES(1,10);
+    SELECT dolt_commit('-Am','base');
+    DROP TABLE orig;
+    CREATE TABLE alpha(id INT PRIMARY KEY,v INT);
+    INSERT INTO alpha VALUES(1,10);
+    CREATE TABLE beta(id INT PRIMARY KEY,v INT);
+    INSERT INTO beta VALUES(1,10);
+  }
+  do_execsql_test empty-rename-ambiguous-$target "
+    SELECT dolt_add('$target');
+    SELECT coalesce(from_table_name,''),to_table_name,diff_type
+      FROM dolt_diff_summary('HEAD','STAGED');
+    SELECT count(*) FROM dolt_at_orig('STAGED');
+  " [list 0 {} $target added 1]
+}
+
+foreach indexed {0 1} {
+  reset_db
+  execsql {
+    CREATE TABLE b(id INT PRIMARY KEY,v TEXT);
+    CREATE TABLE d(id INT PRIMARY KEY,v TEXT);
+  }
+  if {$indexed} {
+    execsql {CREATE INDEX b_v ON b(v); CREATE INDEX d_v ON d(v)}
+  }
+  execsql {
+    SELECT dolt_commit('-Am','base');
+    ALTER TABLE b RENAME TO b2;
+    DROP TABLE d;
+  }
+  do_execsql_test empty-rename-drop-$indexed-stage {
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+    SELECT dolt_add('d');
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name;
+    SELECT from_table_name,coalesce(to_table_name,''),diff_type
+      FROM dolt_diff_summary('HEAD','STAGED');
+  } {{b -> b2} 0 renamed d 0 deleted 0 {b -> b2} 0 renamed d 1 deleted d {} dropped}
+  db close
+  sqlite3 db test.db
+  do_execsql_test empty-rename-drop-$indexed-commit {
+    SELECT length(dolt_commit('-m','drop d only'));
+    SELECT from_table_name,coalesce(to_table_name,''),diff_type
+      FROM dolt_diff_summary('HEAD~1','HEAD');
+    SELECT table_name,staged,status FROM dolt_status;
+  } {40 d {} dropped {b -> b2} 0 renamed}
+}
+
+finish_test

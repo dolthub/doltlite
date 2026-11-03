@@ -1314,7 +1314,12 @@ int doltliteDisjoinCatalogEntries(
   if( rc==SQLITE_OK ){
     pMaster->root = master.root;
     for(i=0; i<nStaged; i++){
-      if( aStaged[i].iTable>1 ) aStaged[i].iTable += offset;
+      if( aStaged[i].iTable>1 ){
+        if( aStaged[i].iRenameTable==0 ){
+          aStaged[i].iRenameTable = aStaged[i].iTable;
+        }
+        aStaged[i].iTable += offset;
+      }
     }
     *pOffset = offset;
   }
