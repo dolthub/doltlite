@@ -1585,6 +1585,10 @@ static int mergeRefFoldVirtualBase(
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pLeft, &left);
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pRight, &right);
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestor, &base);
+  /* fts5 buffers writes until xSync, outside any catalog: flush the
+  ** caller's into its own tree before switching away, and the fold's into
+  ** the virtual base before it is hashed. */
+  if( rc==SQLITE_OK ) rc = sqlite3VtabSync(db, db->pVcCommand);
   if( rc==SQLITE_OK ) rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) goto done;
   bSaved = 1;
@@ -1615,6 +1619,7 @@ static int mergeRefFoldVirtualBase(
   if( rc==SQLITE_OK && nRebuild>0 ){
     rc = doltliteRebuildVirtualTables(db, azRebuild, nRebuild);
   }
+  if( rc==SQLITE_OK ) rc = sqlite3VtabSync(db, db->pVcCommand);
   if( rc==SQLITE_OK ) rc = doltliteFlushCatalogToHash(db, &merged);
   if( rc==SQLITE_OK ){
     i64 timestamp = left.timestamp>right.timestamp
