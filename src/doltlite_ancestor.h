@@ -12,4 +12,12 @@ int doltliteFindAncestor(
   ProllyHash *pAncestor
 );
 
+int doltliteFindAncestors(
+  sqlite3 *db,
+  const ProllyHash *pLeft,
+  const ProllyHash *pRight,
+  ProllyHash **paAncestors,
+  int *pnAncestors
+);
+
 #endif

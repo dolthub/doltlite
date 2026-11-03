@@ -319,6 +319,7 @@ struct DoltliteTxnState {
   ProllyHash sessionStaged;
   ProllyHash sessionMergeCommit;
   ProllyHash sessionConflictsCatalog;
+  ProllyHash sessionConflictsBaseCatalog;
   ProllyHash sessionConstraintViolationsCatalog;
   ProllyHash sessionCatalogHash;
   ProllyHash wsBasis;
@@ -1995,6 +1996,8 @@ int doltliteSessionHasUnresolvedConflicts(sqlite3 *db);
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSetSessionConflictsTheirCatalog(sqlite3 *db, const ProllyHash *pHash);
 void doltliteGetSessionConflictsTheirCatalog(sqlite3 *db, ProllyHash *pHash);
+int doltliteSetSessionConflictsBaseCatalog(sqlite3 *db, const ProllyHash *pHash);
+void doltliteGetSessionConflictsBaseCatalog(sqlite3 *db, ProllyHash *pHash);
 int doltliteSetSessionConflictsSourceCommit(sqlite3 *db, const ProllyHash *pHash);
 void doltliteGetSessionConflictsSourceCommit(sqlite3 *db, ProllyHash *pHash);
 void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash);
