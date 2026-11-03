@@ -11,7 +11,7 @@
 
 static int tryReplaceBatchLeafDirect(
   ProllyMutator*, const ProllyNode*, ProllyMutMapIter*, int,
-  ProllyHash*, int*
+  ProllyHash*, int*, u8**
 );
 
 static int parentChildSubtreeCount(
@@ -232,9 +232,15 @@ static int streamingMergeNode(
         rc = SQLITE_NOTFOUND;
         if( prollyChunkerLevelsBelowEmpty(pChunker, 1) ){
           int changed = 0;
+          u8 *pLeafData = 0;
           rc = tryReplaceBatchLeafDirect(pMut, &pChildEntry->node, pIter,
-                                         childIsLast, &childHash, &changed);
-          if( rc==SQLITE_OK ){
+                                         childIsLast, &childHash, &changed,
+                                         &pLeafData);
+          if( rc==SQLITE_OK && pLeafData ){
+            rc = prollyChunkerAddLeafNode(pChunker, pBoundKey, nBoundKey,
+                      pLeafData, pChildEntry->node.nData,
+                      pChildEntry->node.nItems);
+          }else if( rc==SQLITE_OK ){
             rc = prollyChunkerAddAtLevelWithCount(pChunker, 1,
                       pBoundKey, nBoundKey, childHash.data, PROLLY_HASH_SIZE,
                       pChildEntry->node.nItems);
@@ -1176,7 +1182,8 @@ static int tryReplaceBatchLeafDirect(
   ProllyMutMapIter *pIter,
   int isLast,
   ProllyHash *pHash,
-  int *pChanged
+  int *pChanged,
+  u8 **ppData
 ){
   ProllyMutMapIter iter = *pIter;
   u8 *pData = 0;
@@ -1255,9 +1262,13 @@ static int tryReplaceBatchLeafDirect(
     if( nCopied<pLeaf->nData ){
       memcpy(pData+nCopied, pLeaf->pData+nCopied, pLeaf->nData-nCopied);
     }
-    rc = writeOwnedNode(pMut->pStore, 0, pData, pLeaf->nData, pHash);
+    if( ppData ){
+      *ppData = pData;
+    }else{
+      rc = writeOwnedNode(pMut->pStore, 0, pData, pLeaf->nData, pHash);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     pData = 0;
-    if( rc!=SQLITE_OK ) return rc;
     prollyStatAdd(pStats, nPendingMerge, nChanged);
   }
   sqlite3_free(pData);
@@ -1281,7 +1292,7 @@ static int replaceBatchLeafNoRechunk(
   int i;
 
   rc = tryReplaceBatchLeafDirect(pMut, pLeaf, pIter, isLast,
-                                 pHash, pChanged);
+                                 pHash, pChanged, 0);
   if( rc!=SQLITE_NOTFOUND ) return rc;
 
   prollyNodeBuilderInit(&b, 0, pMut->flags);
@@ -1405,7 +1416,7 @@ static int replaceBatchNodeNoRechunk(
       if( pChildEntry && pChildEntry->node.nValuePrefix ){
         rc = tryReplaceBatchLeafDirect(pMut, &pChildEntry->node, pIter,
                                        childIsLast, &newChildHash,
-                                       &childChanged);
+                                       &childChanged, 0);
         prollyCacheRelease(pMut->pCache, pChildEntry);
         pChildEntry = 0;
       }

@@ -104,6 +104,10 @@ check "prollyHashCompute(5120 B = 5 chunks)" \
   "$($BIN prolly-size 5120)" \
   "755ae1e177565c02059c4eb273c1e1765f4aebfd"
 
+check "prollyHashComputeMany matches prollyHashCompute" \
+  "$($BIN prolly-many)" \
+  "ok"
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "=== Results: $pass passed, 0 failed ==="

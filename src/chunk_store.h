@@ -527,6 +527,8 @@ int chunkStoreSourceEnabled(ChunkStore *cs);
 
 int chunkStorePut(ChunkStore *cs, const u8 *pData, int nData,
                   ProllyHash *pHash);
+int chunkStorePutHashed(ChunkStore *cs, const u8 *pData, int nData,
+                        const ProllyHash *pHash);
 int chunkStorePutChecked(ChunkStore *cs, const ProllyHash *pExpected,
                          const u8 *pData, int nData);
 /* True when the staged write buffer has reached the drain threshold. */

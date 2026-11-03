@@ -15,6 +15,7 @@
 
 typedef struct ProllyChunker ProllyChunker;
 typedef struct ProllyChunkerLevel ProllyChunkerLevel;
+typedef struct ProllyChunkerLeaf ProllyChunkerLeaf;
 
 struct ProllyChunkerLevel {
   ProllyNodeBuilder builder;
@@ -23,6 +24,15 @@ struct ProllyChunkerLevel {
   u64 subtreeCount;
 };
 
+struct ProllyChunkerLeaf {
+  u8 *pData;
+  int nData;
+  int iItem;
+  u8 bCache;
+};
+
+/* Leaves whose hashes are still zero in the level-1 builder. They are hashed
+** together, SIMD lanes filled across nodes, before that builder is read. */
 struct ProllyChunker {
   ChunkStore *pStore;
   ProllyCache *pCache;
@@ -30,6 +40,9 @@ struct ProllyChunker {
   int nLevels;
   ProllyChunkerLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
   ProllyHash root;
+  ProllyChunkerLeaf *aLeaf;
+  int nLeaf;
+  int nLeafAlloc;
 };
 
 int prollyChunkerInit(ProllyChunker *ch, ChunkStore *pStore, u8 flags);
@@ -55,6 +68,10 @@ int prollyChunkerAddAtLevelWithCount(ProllyChunker *ch, int level,
                                      const u8 *pKey, int nKey,
                                      const u8 *pVal, int nVal,
                                      u64 subtreeCount);
+
+int prollyChunkerAddLeafNode(ProllyChunker *ch,
+                             const u8 *pKey, int nKey,
+                             u8 *pData, int nData, u64 nItems);
 
 int prollyChunkerLevelsBelowEmpty(const ProllyChunker *ch, int level);
 

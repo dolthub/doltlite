@@ -16,7 +16,7 @@ static int addToLevel(ProllyChunker *ch, int level,
                       const u8 *pKey, int nKey,
                       const u8 *pVal, int nVal, i64 nZeroTail,
                       u64 childSubtreeCount);
-static int finishFlushLevel(ProllyChunker *ch, int level,
+static int finishFlushLevel(ProllyChunker *ch, int level, int bDefer,
                             ProllyHash *pHash);
 static int hasPendingAncestorLevels(const ProllyChunker *ch, int level);
 static int finishPropagateLevel(ProllyChunker *ch, int level);
@@ -67,7 +67,7 @@ static int flushLevel(ProllyChunker *ch, int level){
   builderLastKey(&pLevel->builder, &pLastKey, &nLastKey);
   flushedCount = pLevel->subtreeCount;
 
-  rc = finishFlushLevel(ch, level, &hash);
+  rc = finishFlushLevel(ch, level, 1, &hash);
   if( rc!=SQLITE_OK ) return rc;
 
   if( level + 1 >= PROLLY_CURSOR_MAX_DEPTH ){
@@ -84,7 +84,62 @@ static int flushLevel(ProllyChunker *ch, int level){
   return SQLITE_OK;
 }
 
-static int finishFlushLevel(ProllyChunker *ch, int level,
+static int deferLeaf(ProllyChunker *ch, u8 *pData, int nData, u8 bCache){
+  ProllyChunkerLeaf *p;
+  if( ch->nLeaf==ch->nLeafAlloc ){
+    int nNew = ch->nLeafAlloc ? ch->nLeafAlloc*2 : 64;
+    ProllyChunkerLeaf *aNew;
+    sqlite3BeginBenignMalloc();
+    aNew = sqlite3_realloc64(ch->aLeaf, (u64)nNew*sizeof(ProllyChunkerLeaf));
+    sqlite3EndBenignMalloc();
+    if( !aNew ) return SQLITE_NOMEM;
+    ch->aLeaf = aNew;
+    ch->nLeafAlloc = nNew;
+  }
+  p = &ch->aLeaf[ch->nLeaf++];
+  p->pData = pData;
+  p->nData = nData;
+  p->iItem = ch->nLevels>1 ? ch->aLevel[1].builder.nItems : 0;
+  p->bCache = bCache;
+  return SQLITE_OK;
+}
+
+static int resolveLeaves(ProllyChunker *ch){
+  ProllyNodeBuilder *b = &ch->aLevel[1].builder;
+  int rc = SQLITE_OK;
+  int i, j;
+  for(i=0; i<ch->nLeaf && rc==SQLITE_OK; i+=16){
+    const u8 *apData[16];
+    int anData[16];
+    ProllyHash aHash[16];
+    int n = ch->nLeaf-i < 16 ? ch->nLeaf-i : 16;
+    for(j=0; j<n; j++){
+      apData[j] = ch->aLeaf[i+j].pData;
+      anData[j] = ch->aLeaf[i+j].nData;
+    }
+    prollyHashComputeMany(apData, anData, n, aHash);
+    for(j=0; j<n && rc==SQLITE_OK; j++){
+      ProllyChunkerLeaf *p = &ch->aLeaf[i+j];
+      assert( p->iItem<b->nItems );
+      rc = chunkStorePutHashed(ch->pStore, p->pData, p->nData, &aHash[j]);
+      if( rc!=SQLITE_OK ) break;
+      memcpy(b->pValBuf + b->aValOff[p->iItem], aHash[j].data,
+             PROLLY_HASH_SIZE);
+      if( p->bCache && ch->pCache ){
+        ProllyCacheEntry *pEntry;
+        pEntry = prollyCachePutOwned(ch->pCache, &aHash[j], p->pData,
+                                     p->nData, &rc);
+        p->pData = 0;
+        if( pEntry ) prollyCacheRelease(ch->pCache, pEntry);
+      }
+    }
+  }
+  for(i=0; i<ch->nLeaf; i++) sqlite3_free(ch->aLeaf[i].pData);
+  ch->nLeaf = 0;
+  return rc;
+}
+
+static int finishFlushLevel(ProllyChunker *ch, int level, int bDefer,
                             ProllyHash *pHash){
   ProllyChunkerLevel *pLevel = &ch->aLevel[level];
   u8 *pData = 0;
@@ -93,6 +148,11 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
   int rc;
 
   assert( pLevel->builder.nItems > 0 );
+
+  if( level==1 && ch->nLeaf ){
+    rc = resolveLeaves(ch);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   rc = prollyNodeBuilderFinishSparse(&pLevel->builder, &pData, &nData,
                                      &nZeroTail);
@@ -104,6 +164,12 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
                              nZeroTail, pHash);
     sqlite3_free(pData);
     return rc;
+  }
+
+  if( level==0 && bDefer
+   && deferLeaf(ch, pData, nData, 1)==SQLITE_OK ){
+    memset(pHash, 0, sizeof(ProllyHash));
+    return SQLITE_OK;
   }
 
   rc = chunkStorePut(ch->pStore, pData, nData, pHash);
@@ -152,6 +218,10 @@ static int canonicalRootFromSingleChild(ProllyChunker *ch,
   ProllyHash cur;
   int depth;
   assert( b->level>0 && b->nItems==1 );
+  if( b->level==1 && ch->nLeaf ){
+    int rc = resolveLeaves(ch);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( (int)(b->aValOff[1] - b->aValOff[0])!=PROLLY_HASH_SIZE ){
     return SQLITE_CORRUPT;
   }
@@ -191,7 +261,7 @@ static int finishPropagateLevel(ProllyChunker *ch, int level){
 
   builderLastKey(&pLevel->builder, &pLastKey, &nLastKey);
   flushedCount = pLevel->subtreeCount;
-  rc = finishFlushLevel(ch, level, &hash);
+  rc = finishFlushLevel(ch, level, 1, &hash);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = addToLevel(ch, level + 1, pLastKey, nLastKey,
@@ -333,7 +403,7 @@ int prollyChunkerFinish(ProllyChunker *ch){
           return SQLITE_OK;
         }
 
-        rc = finishFlushLevel(ch, level, &hash);
+        rc = finishFlushLevel(ch, level, 0, &hash);
         if( rc!=SQLITE_OK ) return rc;
 
         memcpy(&ch->root, &hash, sizeof(ProllyHash));
@@ -372,8 +442,25 @@ int prollyChunkerAddAtLevelWithCount(ProllyChunker *ch, int level,
   return addToLevel(ch, level, pKey, nKey, pVal, nVal, 0, subtreeCount);
 }
 
+int prollyChunkerAddLeafNode(ProllyChunker *ch,
+                             const u8 *pKey, int nKey,
+                             u8 *pData, int nData, u64 nItems){
+  ProllyHash hash;
+  memset(&hash, 0, sizeof(hash));
+  if( deferLeaf(ch, pData, nData, 0)!=SQLITE_OK ){
+    int rc = chunkStorePut(ch->pStore, pData, nData, &hash);
+    sqlite3_free(pData);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return addToLevel(ch, 1, pKey, nKey, hash.data, PROLLY_HASH_SIZE, 0, nItems);
+}
+
 void prollyChunkerFree(ProllyChunker *ch){
   int i;
+  for(i = 0; i < ch->nLeaf; i++) sqlite3_free(ch->aLeaf[i].pData);
+  sqlite3_free(ch->aLeaf);
+  ch->aLeaf = 0;
+  ch->nLeaf = ch->nLeafAlloc = 0;
   for(i = 0; i < ch->nLevels; i++){
     prollyNodeBuilderFree(&ch->aLevel[i].builder);
   }

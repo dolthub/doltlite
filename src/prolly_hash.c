@@ -9,6 +9,20 @@ void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
   blake3_hash_oneshot(pData, (size_t)nData, pOut->data, PROLLY_HASH_SIZE);
 }
 
+void prollyHashComputeMany(const u8 *const *apData, const int *anData, int n,
+                           ProllyHash *aOut){
+  size_t aLen[16];
+  u8 aBuf[16*32];
+  int i, j;
+  for(i=0; i<n; i+=16){
+    int k = n-i < 16 ? n-i : 16;
+    for(j=0; j<k; j++) aLen[j] = (size_t)anData[i+j];
+    blake3_hash_oneshot_many((const void *const*)&apData[i], aLen, (size_t)k,
+                             aBuf);
+    for(j=0; j<k; j++) memcpy(aOut[i+j].data, &aBuf[j*32], PROLLY_HASH_SIZE);
+  }
+}
+
 /* Hash pData[0..nData) plus nZeroTail zeros without materializing them. */
 void prollyHashComputeZeroTail(const void *pData, int nData, sqlite3_int64 nZeroTail,
                                ProllyHash *pOut){
