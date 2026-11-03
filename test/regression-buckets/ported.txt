@@ -232,3 +232,4 @@ doltlite_merge_insert_columns
 doltlite_virtual_merge_base
 doltlite_merge_dropped_null
 doltlite_integrity_sortkey_type
+doltlite_record_affinity

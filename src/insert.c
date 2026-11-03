@@ -222,6 +222,31 @@ void sqlite3TableAffinity(Vdbe *v, Table *pTab, int iReg){
     }
   }
 }
+#ifdef DOLTLITE_PROLLY
+
+/* Rebuilding a record whose registers OP_Affinity already converted: only
+** REAL is applied again, so an integral REAL is stored as an integer.
+** Applying the others twice is not a no-op: text that converted to the REAL
+** nearest -2**63 stays REAL once, and would become an integer the second
+** time. */
+static void doltliteRealAffinityOnly(Vdbe *v, const char *zAff){
+  int n = zAff ? sqlite3Strlen30(zAff) : 0;
+  int nKeep = 0;
+  int i;
+  char *z;
+  for(i=0; i<n; i++){
+    if( zAff[i]==SQLITE_AFF_REAL ) nKeep = i+1;
+  }
+  if( nKeep==0 ) return;
+  z = sqlite3DbMallocRawNN(sqlite3VdbeDb(v), nKeep+1);
+  if( z==0 ) return;
+  for(i=0; i<nKeep; i++){
+    z[i] = zAff[i]==SQLITE_AFF_REAL ? SQLITE_AFF_REAL : SQLITE_AFF_BLOB;
+  }
+  z[nKeep] = 0;
+  sqlite3VdbeChangeP4(v, -1, z, P4_DYNAMIC);
+}
+#endif
 
 /*
 ** Return non-zero if the table pTab in database iDb or any of its indices
@@ -2593,8 +2618,7 @@ void sqlite3GenerateConstraintChecks(
     /* Store an integral REAL as CREATE INDEX does (an integer), not as the
     ** float OP_Affinity left in the register. */
     if( (pTab->tabFlags & TF_Strict)==0 ){
-      sqlite3VdbeChangeP4(v, -1, sqlite3IndexAffinityStr(db, pIdx),
-                          P4_TRANSIENT);
+      doltliteRealAffinityOnly(v, sqlite3IndexAffinityStr(db, pIdx));
     }
 #endif
 #ifdef SQLITE_ENABLE_NULL_TRIM
@@ -2874,7 +2898,11 @@ void sqlite3GenerateConstraintChecks(
     ** with REAL affinity stores it as an integer. Rows are content-addressed,
     ** so the table record always takes its affinity here. */
     else if( (pTab->tabFlags & TF_Strict)==0 ){
-      sqlite3TableAffinity(v, pTab, 0);
+      if( pTab->zColAff==0 ){
+        pTab->zColAff = sqlite3TableAffinityStr(0, pTab);
+        if( pTab->zColAff==0 ) sqlite3OomFault(db);
+      }
+      doltliteRealAffinityOnly(v, pTab->zColAff);
     }
 #endif
   }
