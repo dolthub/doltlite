@@ -351,6 +351,7 @@ struct Btree {
   /* Commits with siblings on the same store as one publish: each stages
   ** its catalog, and the last to commit publishes and finishes them all. */
   struct DoltliteNonlocal *pNonlocal;
+  DoltliteNoRules nonlocalNoRules;
   u8 bJoinedPublish;
   u8 bJoinedStaged;
   char *zPresenceBranch;

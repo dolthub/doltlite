@@ -37,11 +37,6 @@ struct DoltliteNonlocal {
   int nMissing;
   ProllyHash refsSeen;
   u8 bSyncing;
-  /* The schema, as of this cookie and generation, has no rules table: the
-  ** sync every statement pays returns without a lookup. */
-  Schema *pNoRules;
-  int iNoRulesCookie;
-  int iNoRulesGen;
 };
 
 static void nonlocalRulesClear(DoltliteNonlocal *p){
@@ -341,6 +336,7 @@ static int nonlocalCheckRefs(sqlite3 *db, DoltliteNonlocal *p){
 ** again. A failure here leaves names unredirected; the statement reports
 ** what it cannot resolve. */
 static int nonlocalSync(sqlite3 *db){
+  DoltliteNoRules *pNo;
   DoltliteNonlocal *p;
   Table *pTab;
   ChunkStore *cs;
@@ -355,12 +351,13 @@ static int nonlocalSync(sqlite3 *db){
 
   if( db->nVdbeExec>0 || db->nDb<1 || !doltliteNonlocalSlot(db) ) return 0;
   if( !DbHasProperty(db, 0, DB_SchemaLoaded) ) return 0;
-  p = nonlocalState(db, 0);
-  if( p && p->pNoRules==db->aDb[0].pSchema
-   && p->iNoRulesCookie==p->pNoRules->schema_cookie
-   && p->iNoRulesGen==p->pNoRules->iGeneration ){
+  pNo = doltliteNonlocalNoRules(db);
+  if( pNo->pSchema==db->aDb[0].pSchema
+   && pNo->iCookie==pNo->pSchema->schema_cookie
+   && pNo->iGen==pNo->pSchema->iGeneration ){
     return 0;
   }
+  p = nonlocalState(db, 0);
   if( p && p->bSyncing ) return 0;
   pTab = sqlite3FindTable(db, "dolt_nonlocal_tables", "main");
   if( !pTab || IsVirtual(pTab) ){
@@ -372,15 +369,12 @@ static int nonlocalSync(sqlite3 *db){
       p->bSyncing = 0;
       return 1;
     }
-    if( !p ) p = nonlocalState(db, 1);
-    if( p ){
-      p->pNoRules = db->aDb[0].pSchema;
-      p->iNoRulesCookie = p->pNoRules->schema_cookie;
-      p->iNoRulesGen = p->pNoRules->iGeneration;
-    }
+    pNo->pSchema = db->aDb[0].pSchema;
+    pNo->iCookie = pNo->pSchema->schema_cookie;
+    pNo->iGen = pNo->pSchema->iGeneration;
     return 0;
   }
-  if( p ) p->pNoRules = 0;
+  pNo->pSchema = 0;
   /* Compiling against a loaded schema opens no transaction, so a peer's
   ** change to the rules would otherwise reach this connection only when the
   ** statement runs, after its names were redirected by the old rules. */

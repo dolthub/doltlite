@@ -5576,6 +5576,16 @@ int doltliteStoreDirtyBranches(sqlite3*, Btree**);
 void doltliteBtreeSyncPresence(Btree*);
 int doltliteBranchInUseElsewhere(sqlite3*, const char*, int*);
 typedef struct DoltliteNonlocal DoltliteNonlocal;
+/* The main schema, as of this cookie and generation, has no nonlocal rules
+** table: the sync each statement pays returns without a lookup. Held in
+** the main Btree so recording it never allocates. */
+typedef struct DoltliteNoRules DoltliteNoRules;
+struct DoltliteNoRules {
+  Schema *pSchema;
+  int iCookie;
+  int iGen;
+};
+DoltliteNoRules *doltliteNonlocalNoRules(sqlite3*);
 void doltliteNonlocalFree(DoltliteNonlocal*);
 int doltliteNonlocalSync(sqlite3*);
 int doltliteNonlocalMatches(sqlite3*, const char*);

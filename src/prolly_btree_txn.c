@@ -934,6 +934,11 @@ struct DoltliteNonlocal **doltliteNonlocalSlot(sqlite3 *db){
   return &p->pNonlocal;
 }
 
+/* Only after doltliteNonlocalSlot found the main Btree. */
+DoltliteNoRules *doltliteNonlocalNoRules(sqlite3 *db){
+  return &db->aDb[0].pBt->nonlocalNoRules;
+}
+
 static int btreePresenceOpen(Btree *p){
   ChunkStore *cs = p->pBt->pStore;
   DoltliteBranchPresence x = {DOLTLITE_PRESENCE_PROBE,0x50000000,0};
