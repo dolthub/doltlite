@@ -225,23 +225,38 @@ void sqlite3TableAffinity(Vdbe *v, Table *pTab, int iReg){
 #ifdef DOLTLITE_PROLLY
 
 /* Rebuilding a record whose registers OP_Affinity already converted: only
-** REAL is applied again, so an integral REAL is stored as an integer.
-** Applying the others twice is not a no-op: text that converted to the REAL
-** nearest -2**63 stays REAL once, and would become an integer the second
-** time. */
-static void doltliteRealAffinityOnly(Vdbe *v, const char *zAff){
+** REAL columns take their affinity again, so an integral REAL is stored as
+** an integer. Applying the others twice is not a no-op: text that converted
+** to the REAL nearest -2**63 stays REAL once, and would become an integer
+** the second time. An index affinity string folds REAL into NUMERIC, so for
+** an index key the column decides; an expression keeps its affinity. */
+static void doltliteRealAffinityOnly(
+  Vdbe *v,
+  const char *zAff,
+  Table *pTab,
+  Index *pIdx
+){
   int n = zAff ? sqlite3Strlen30(zAff) : 0;
   int nKeep = 0;
   int i;
   char *z;
-  for(i=0; i<n; i++){
-    if( zAff[i]==SQLITE_AFF_REAL ) nKeep = i+1;
-  }
-  if( nKeep==0 ) return;
-  z = sqlite3DbMallocRawNN(sqlite3VdbeDb(v), nKeep+1);
+  z = sqlite3DbMallocRawNN(sqlite3VdbeDb(v), n+1);
   if( z==0 ) return;
-  for(i=0; i<nKeep; i++){
-    z[i] = zAff[i]==SQLITE_AFF_REAL ? SQLITE_AFF_REAL : SQLITE_AFF_BLOB;
+  for(i=0; i<n; i++){
+    int bKeep;
+    if( pIdx ){
+      int iCol = pIdx->aiColumn[i];
+      bKeep = iCol==XN_EXPR
+           || (iCol>=0 && pTab->aCol[iCol].affinity==SQLITE_AFF_REAL);
+    }else{
+      bKeep = zAff[i]==SQLITE_AFF_REAL;
+    }
+    z[i] = bKeep ? zAff[i] : SQLITE_AFF_BLOB;
+    if( bKeep ) nKeep = i+1;
+  }
+  if( nKeep==0 ){
+    sqlite3DbFree(sqlite3VdbeDb(v), z);
+    return;
   }
   z[nKeep] = 0;
   sqlite3VdbeChangeP4(v, -1, z, P4_DYNAMIC);
@@ -2618,7 +2633,8 @@ void sqlite3GenerateConstraintChecks(
     /* Store an integral REAL as CREATE INDEX does (an integer), not as the
     ** float OP_Affinity left in the register. */
     if( (pTab->tabFlags & TF_Strict)==0 ){
-      doltliteRealAffinityOnly(v, sqlite3IndexAffinityStr(db, pIdx));
+      doltliteRealAffinityOnly(v, sqlite3IndexAffinityStr(db, pIdx),
+                               pTab, pIdx);
     }
 #endif
 #ifdef SQLITE_ENABLE_NULL_TRIM
@@ -2902,7 +2918,7 @@ void sqlite3GenerateConstraintChecks(
         pTab->zColAff = sqlite3TableAffinityStr(0, pTab);
         if( pTab->zColAff==0 ) sqlite3OomFault(db);
       }
-      doltliteRealAffinityOnly(v, pTab->zColAff);
+      doltliteRealAffinityOnly(v, pTab->zColAff, pTab, 0);
     }
 #endif
   }
