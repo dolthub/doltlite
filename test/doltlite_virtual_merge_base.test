@@ -274,10 +274,11 @@ do_execsql_test virtual-base-schema-reopen "
   PRAGMA integrity_check;
 " {1 0 ok}
 
-proc virtual_base_index_history {} {
+proc virtual_base_index_history {{key INTEGER} {suffix {}} {indexes {}}} {
+  execsql "CREATE TABLE w(id $key PRIMARY KEY, v TEXT) $suffix"
+  execsql {CREATE INDEX iv ON w(v)}
+  execsql $indexes
   execsql {
-    CREATE TABLE w(id INTEGER PRIMARY KEY, v TEXT);
-    CREATE INDEX iv ON w(v);
     INSERT INTO w VALUES(1,'b1'),(2,'b2');
     SELECT dolt_commit('-Am','base');
     SELECT dolt_branch('side');
@@ -370,5 +371,70 @@ do_execsql_test virtual-base-index-addcol-reopen {
   SELECT v FROM w INDEXED BY iv WHERE id=3;
   PRAGMA integrity_check;
 } {v6 {} v6 ok}
+
+foreach {layout key suffix} {
+  clustered INT {}
+  text TEXT {}
+  without_rowid INT {WITHOUT ROWID}
+} {
+  foreach addcol {0 1} {
+    foreach resolution {ours theirs} {
+      reset_db
+      virtual_base_index_history $key $suffix {
+        CREATE INDEX iv2 ON w(v);
+        CREATE INDEX iv3 ON w(v);
+      }
+      execsql {
+        INSERT INTO w VALUES(3,'v0');
+        SELECT dolt_commit('-am','add ours');
+        SELECT dolt_checkout('side');
+      }
+      if {$addcol} {execsql {ALTER TABLE w ADD COLUMN c TEXT}}
+      execsql {
+        INSERT INTO w(id,v) VALUES(3,'u0');
+        SELECT dolt_commit('-am','add theirs');
+        SELECT dolt_checkout('main');
+        BEGIN;
+      }
+      set prefix virtual-base-index-$layout-$addcol-$resolution
+      do_test $prefix.conflict {
+        set result [catchsql {SELECT dolt_merge('side')}]
+        list [lindex $result 0] [string match {*1 conflict*} [lindex $result 1]]
+      } {1 1}
+      do_execsql_test $prefix.table {
+        SELECT id,v FROM w NOT INDEXED WHERE id=3;
+        SELECT count(*) FROM dolt_conflicts_w;
+      } {3 v0 1}
+      foreach index {iv iv2 iv3} {
+        do_execsql_test $prefix.$index.conflicted "
+          SELECT v FROM w INDEXED BY $index WHERE id=3 ORDER BY v;
+          SELECT sum(1) FROM w INDEXED BY $index;
+        " {v0 3}
+      }
+      do_execsql_test $prefix.integrity {PRAGMA integrity_check} {ok}
+      execsql "SELECT dolt_conflicts_resolve('--$resolution','w')"
+      set value [expr {$resolution eq "ours" ? "v0" : "u0"}]
+      execsql {
+        SELECT dolt_commit('-am','resolved clustered indexes');
+        COMMIT;
+      }
+      do_test $prefix.reopen {
+        db close
+        sqlite3 db test.db
+        db eval {
+          SELECT v FROM w NOT INDEXED WHERE id=3;
+          SELECT count(*) FROM dolt_conflicts;
+          PRAGMA integrity_check;
+        }
+      } [list $value 0 ok]
+      foreach index {iv iv2 iv3} {
+        do_execsql_test $prefix.$index.reopen "
+          SELECT v FROM w INDEXED BY $index WHERE id=3 ORDER BY v;
+          SELECT sum(1) FROM w INDEXED BY $index;
+        " [list $value 3]
+      }
+    }
+  }
+}
 
 finish_test
