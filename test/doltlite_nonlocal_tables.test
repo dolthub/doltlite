@@ -252,9 +252,10 @@ do_execsql_test nonlocal-target-recreated {
   SELECT dolt_branch('shared', 'main');
   SELECT count(*) FROM team;
 } {0 1}
-do_execsql_test nonlocal-target-detached {
-  SELECT name FROM pragma_database_list ORDER BY seq;
-} {main dolt_nonlocal:shared}
+do_test nonlocal-target-detached {
+  list [catchsql {SELECT count(*)>0 FROM "dolt_nonlocal:shared".sqlite_schema}] \
+       [catchsql {SELECT 1 FROM "dolt_nonlocal:shared2".sqlite_schema}]
+} {{0 1} {1 {no such table: dolt_nonlocal:shared2.sqlite_schema}}}
 # dolt_commit_all commits the target branch and this one together.
 nl_reset
 do_execsql_test nonlocal-commit-all {
@@ -446,5 +447,16 @@ do_execsql_test nonlocal-fk-no-action {
   CREATE TABLE c5(k TEXT REFERENCES np(k));
   SELECT count(*) FROM sqlite_master WHERE name IN ('c1','c2','c3','c4','c5');
 } {2}
+
+# The hidden schemas holding nonlocal targets are an implementation detail:
+# introspection lists the nonlocal name under main, not the schema behind it.
+nl_reset
+do_execsql_test nonlocal-hidden-schemas {
+  INSERT INTO dolt_nonlocal_tables VALUES('np','main','cfg','immediate');
+  SELECT count(*) FROM np;
+  SELECT group_concat(name) FROM pragma_database_list;
+  SELECT count(*) FROM pragma_table_list WHERE schema NOT IN ('main','temp');
+  SELECT schema FROM pragma_table_list WHERE name='np';
+} {1 main 0 main}
 
 finish_test
