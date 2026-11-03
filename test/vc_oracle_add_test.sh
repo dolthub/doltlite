@@ -771,6 +771,67 @@ INSERT INTO beta VALUES (1, 10);
 SELECT dolt_add('alpha');
 "
 
+oracle "add_other_ambiguous_content_match_is_not_a_rename" "
+CREATE TABLE orig(id INT PRIMARY KEY, v INT);
+INSERT INTO orig VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+DROP TABLE orig;
+CREATE TABLE alpha(id INT PRIMARY KEY, v INT);
+INSERT INTO alpha VALUES (1, 10);
+CREATE TABLE beta(id INT PRIMARY KEY, v INT);
+INSERT INTO beta VALUES (1, 10);
+SELECT dolt_add('beta');
+"
+
+for layout in rowid clustered composite; do
+  case "$layout" in
+    rowid) empty_schema='id INTEGER PRIMARY KEY,v TEXT' ;;
+    clustered) empty_schema='id INT PRIMARY KEY,v TEXT' ;;
+    composite) empty_schema='id INT,v TEXT,tenant INT DEFAULT 0,PRIMARY KEY(tenant,id)' ;;
+  esac
+  for indexed in 0 1; do
+    empty_setup="CREATE TABLE b($empty_schema);"
+    if [ "$indexed" -eq 1 ]; then
+      empty_setup+='CREATE INDEX b_v ON b(v);'
+    fi
+    empty_setup+="SELECT dolt_commit('-Am','base');
+ALTER TABLE b RENAME TO b2;
+CREATE TABLE m($empty_schema);
+CREATE TABLE n($empty_schema);"
+    if [ "$indexed" -eq 1 ]; then
+      empty_setup+='CREATE INDEX m_v ON m(v); CREATE INDEX n_v ON n(v);'
+    fi
+    for target in m n; do
+      name="empty_rename_${layout}_${indexed}_${target}"
+      oracle "${name}_stage" "$empty_setup SELECT dolt_add('$target');"
+      oracle "${name}_reset" "$empty_setup
+SELECT dolt_add('$target'); SELECT dolt_reset('$target');"
+      oracle_reopen "${name}_commit" "$empty_setup
+SELECT dolt_add('$target'); SELECT dolt_commit('-m','add unrelated only');" "
+SELECT concat('Q|S|',table_name,'|',staged,'|',status) FROM dolt_status
+  ORDER BY table_name,staged,status;
+SELECT concat('Q|D|',coalesce(from_table_name,''),'|',to_table_name,'|',diff_type)
+  FROM dolt_diff_summary('HEAD~1','HEAD');"
+    done
+  done
+done
+
+for indexed in 0 1; do
+  drop_setup='CREATE TABLE b(id INT PRIMARY KEY,v TEXT);
+CREATE TABLE d(id INT PRIMARY KEY,v TEXT);'
+  if [ "$indexed" -eq 1 ]; then
+    drop_setup+='CREATE INDEX b_v ON b(v); CREATE INDEX d_v ON d(v);'
+  fi
+  drop_setup+="SELECT dolt_commit('-Am','base');
+ALTER TABLE b RENAME TO b2; DROP TABLE d; SELECT dolt_add('d');"
+  oracle "empty_rename_${indexed}_stage_drop" "$drop_setup"
+  oracle_reopen "empty_rename_${indexed}_commit_drop" "$drop_setup
+SELECT dolt_commit('-m','drop unrelated only');" "
+SELECT concat('Q|S|',table_name,'|',staged,'|',status) FROM dolt_status;
+SELECT concat('Q|D|',from_table_name,'|',coalesce(to_table_name,''),'|',diff_type)
+  FROM dolt_diff_summary('HEAD~1','HEAD');"
+done
+
 oracle "add_end_options_dash_table" "
 CREATE TABLE \`-A\`(id INT PRIMARY KEY);
 CREATE TABLE other(id INT PRIMARY KEY);

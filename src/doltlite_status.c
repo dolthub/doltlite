@@ -218,6 +218,10 @@ static u32 statusNumberHash(Pgno iTable){
   return ((u32)iTable * 2654435761u);
 }
 
+static Pgno statusRenameNumber(const struct TableEntry *pEntry){
+  return pEntry->iRenameTable ? pEntry->iRenameTable : pEntry->iTable;
+}
+
 static int statusCatalogIndexInit(
   StatusCatalogIndex *pIdx,
   struct TableEntry *aEntry,
@@ -247,15 +251,16 @@ static int statusCatalogIndexInit(
   pIdx->nSlot = nSlot;
 
   for(i=0; i<nEntry; i++){
-    u32 slot = statusNumberHash(aEntry[i].iTable) & (u32)(nSlot - 1);
+    Pgno iTable = statusRenameNumber(&aEntry[i]);
+    u32 slot = statusNumberHash(iTable) & (u32)(nSlot - 1);
     while( pIdx->aNumberSlot[slot].iEntry ){
-      if( pIdx->aNumberSlot[slot].iTable==aEntry[i].iTable ){
+      if( pIdx->aNumberSlot[slot].iTable==iTable ){
         break;
       }
       slot = (slot + 1) & (u32)(nSlot - 1);
     }
     if( !pIdx->aNumberSlot[slot].iEntry ){
-      pIdx->aNumberSlot[slot].iTable = aEntry[i].iTable;
+      pIdx->aNumberSlot[slot].iTable = iTable;
       pIdx->aNumberSlot[slot].iEntry = i + 1;
     }
   }
@@ -302,7 +307,7 @@ static struct TableEntry *statusCatalogFindEntry(
   if( pNeedle->zName ){
     return statusCatalogFindName(pIdx, pNeedle->zName);
   }
-  return statusCatalogFindNumber(pIdx, pNeedle->iTable);
+  return statusCatalogFindNumber(pIdx, statusRenameNumber(pNeedle));
 }
 
 static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **pzName){
@@ -996,7 +1001,7 @@ static int isRenamePair(
   int *pMatch
 ){
   *pMatch = 0;
-  if( pA->iTable != pB->iTable ) return SQLITE_OK;
+  if( statusRenameNumber(pA)!=statusRenameNumber(pB) ) return SQLITE_OK;
   return isRenamePairContent(db, pFromIdx, pToIdx, pA, pB, pMatch);
 }
 
@@ -1029,10 +1034,12 @@ static int renameMateIsContested(
       }
     }
     if( j<nBase ) continue;
+    if( doltliteFindTableByName(aFrom, nFrom, aTo[i].zName) ) return 1;
     for(j=0; j<nFrom; j++){
-      if( aFrom[j].iTable==aTo[i].iTable
+      if( statusRenameNumber(&aFrom[j])==statusRenameNumber(&aTo[i])
        && aFrom[j].zName
        && strcmp(aFrom[j].zName, aTo[i].zName)!=0
+       && !doltliteFindTableByName(aTo, nTo, aFrom[j].zName)
        && prollyHashCompare(&aFrom[j].root, &aTo[i].root)==0 ){
         spokenFor = 1;
         break;
@@ -1067,7 +1074,7 @@ int doltliteCatalogRenameMate(
     return rc;
   }
   pMate = statusCatalogFindNumber(bKnownIsFrom ? &toIdx : &fromIdx,
-                                  pKnown->iTable);
+                                  statusRenameNumber(pKnown));
   if( pMate ){
     const struct TableEntry *pA = bKnownIsFrom ? pKnown : pMate;
     const struct TableEntry *pB = bKnownIsFrom ? pMate : pKnown;
@@ -1090,6 +1097,18 @@ int doltliteCatalogRenameMate(
           db, &fromIdx, &toIdx, pA, pB, &isPair);
       if( rc!=SQLITE_OK ) goto rename_done;
       if( !isPair ) continue;
+      {
+        struct TableEntry *pNumberMate = statusCatalogFindNumber(
+            bKnownIsFrom ? &fromIdx : &toIdx, statusRenameNumber(&aOther[i]));
+        if( pNumberMate && pNumberMate!=pKnown ){
+          const struct TableEntry *pF = bKnownIsFrom ? pNumberMate : pA;
+          const struct TableEntry *pT = bKnownIsFrom ? pB : pNumberMate;
+          int isNumberPair = 0;
+          rc = isRenamePair(db, &fromIdx, &toIdx, pF, pT, &isNumberPair);
+          if( rc!=SQLITE_OK ) goto rename_done;
+          if( isNumberPair ) continue;
+        }
+      }
       if( pMate ){
         pMate = 0;
         break;
@@ -1147,7 +1166,7 @@ static int compareCatalogs(
       struct TableEntry *pTo;
       int isPair = 0;
       if( aFrom[i].iTable<=1 || fromHandled[i] ) continue;
-      pTo = statusCatalogFindNumber(&toIdx, aFrom[i].iTable);
+      pTo = statusCatalogFindNumber(&toIdx, statusRenameNumber(&aFrom[i]));
       if( !pTo ) continue;
       j = (int)(pTo - aTo);
       if( j<0 || j>=nTo || toHandled[j] || pTo->iTable<=1 ) continue;
@@ -1438,7 +1457,7 @@ static int compareCatalogsFiltered(
     for(i=0; i<nFrom; i++){
       int isRename = 0;
       if( aFrom[i].iTable<=1 ) continue;
-      pTo = statusCatalogFindNumber(&toIdx, aFrom[i].iTable);
+      pTo = statusCatalogFindNumber(&toIdx, statusRenameNumber(&aFrom[i]));
       if( !pTo || pTo->iTable<=1 ) continue;
       rc = statusMaybeAddRename(pCur, db, &fromIdx, &toIdx,
                                 &aFrom[i], pTo, staged, zFilter, &isRename);
