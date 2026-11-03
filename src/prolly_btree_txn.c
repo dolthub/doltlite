@@ -1078,12 +1078,17 @@ void doltliteBtreeSyncPresence(Btree *p){
   ** only lets a peer's -d or -m through, as before presence existed. */
   sqlite3BeginBenignMalloc();
   p->zPresenceBranch = sqlite3_mprintf("%s", zWant);
-  if( p->zPresenceBranch
-   && btreePresenceOp(p, DOLTLITE_PRESENCE_HOLD,
-                      p->zPresenceBranch, 0)!=SQLITE_OK ){
-    p->pPresenceFile = 0;
-    sqlite3_free(p->zPresenceBranch);
-    p->zPresenceBranch = 0;
+  if( p->zPresenceBranch ){
+    int rc = btreePresenceOp(p, DOLTLITE_PRESENCE_HOLD, p->zPresenceBranch, 0);
+    if( rc!=SQLITE_OK ){
+      p->pPresenceFile = 0;
+      /* A store with no presence file (in-memory, buffer) can never hold
+      ** one: keeping the name stops every transaction retrying. */
+      if( rc!=SQLITE_NOTFOUND ){
+        sqlite3_free(p->zPresenceBranch);
+        p->zPresenceBranch = 0;
+      }
+    }
   }
   sqlite3EndBenignMalloc();
 }
