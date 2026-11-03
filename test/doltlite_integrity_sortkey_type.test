@@ -1,0 +1,25 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite-integrity-sortkey-type
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(a NUMERIC, b INT NOT NULL DEFAULT ('x'), PRIMARY KEY(a, b))
+    WITHOUT ROWID;
+  INSERT INTO t VALUES('ab', 1);
+  PRAGMA integrity_check;
+} {ok}
+
+do_execsql_test 1.1 {
+  INSERT INTO t VALUES('cd', 2), (3, 4), (X'00', 5);
+  PRAGMA integrity_check;
+} {ok}
+
+do_execsql_test 2.0 {
+  CREATE TABLE u(a TEXT, b INT NOT NULL DEFAULT ('x'), c REAL DEFAULT ('y'),
+                 PRIMARY KEY(a, b, c)) WITHOUT ROWID;
+  INSERT INTO u VALUES('p', 1, 1.5), ('q', 2, 2.5);
+  PRAGMA integrity_check;
+} {ok}
+
+finish_test
