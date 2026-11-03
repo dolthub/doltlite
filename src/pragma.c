@@ -1302,6 +1302,9 @@ void sqlite3Pragma(
       Hash *pHash;
       int initNCol;
       if( zDb && sqlite3_stricmp(zDb, db->aDb[ii].zDbSName)!=0 ) continue;
+#ifdef DOLTLITE_PROLLY
+      if( !zDb && doltliteNonlocalIsSchema(db->aDb[ii].zDbSName) ) continue;
+#endif
 
       /* Ensure that the Table.nCol field is initialized for all views
       ** and virtual tables.  Each time we initialize a Table.nCol value
@@ -1467,6 +1470,9 @@ void sqlite3Pragma(
     for(i=0; i<db->nDb; i++){
       if( db->aDb[i].pBt==0 ) continue;
       assert( db->aDb[i].zDbSName!=0 );
+#ifdef DOLTLITE_PROLLY
+      if( doltliteNonlocalIsSchema(db->aDb[i].zDbSName) ) continue;
+#endif
       sqlite3VdbeMultiLoad(v, 1, "iss",
          i,
          db->aDb[i].zDbSName,
