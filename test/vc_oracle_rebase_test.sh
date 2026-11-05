@@ -1035,11 +1035,11 @@ UPDATE dolt_rebase SET action='$action',
   commit_hash=SUBSTR('0000000000000000000000000000000000000000',
                      1, LENGTH(dolt_hashof('HEAD')))
   WHERE rebase_order=2;
-SELECT dolt_rebase('--continue');
 " "
 SELECT dolt_checkout('dolt_rebase_feat');
 SELECT CONCAT('LOG|B|', active_branch());
 SELECT CONCAT('LOG|P|', count(*)) FROM dolt_rebase;
+SELECT CONCAT('LOG|A|', action) FROM dolt_rebase ORDER BY rebase_order;
 SELECT CONCAT('LOG|BEFORE|', id) FROM t ORDER BY id;
 UPDATE dolt_rebase SET commit_hash=(
   SELECT commit_hash FROM dolt_log('feat') WHERE message='f2'
