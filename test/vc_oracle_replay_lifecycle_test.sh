@@ -65,7 +65,7 @@ SELECT concat('AFTER|',(SELECT v FROM t),'|',
 COMMIT;"
   vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_script" --continue -r csv || true
   local dl_out dt_out
-  dl_out=$(tr -d '\r"' < "$dir/dl.out" | grep -E '^(PENDING|AFTER)\|' || true)
+  dl_out=$(vc_oracle_strip_revert_trailer < "$dir/dl.out" | tr -d '\r"' | grep -E '^(PENDING|AFTER)\|' || true)
   dt_out=$(tr -d '\r"' < "$dir/dt.out" | grep -E '^(PENDING|AFTER)\|' || true)
   if ! grep -q '^PENDING|1$' <<< "$dl_out" || ! grep -q '^PENDING|1$' <<< "$dt_out"; then
     fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"

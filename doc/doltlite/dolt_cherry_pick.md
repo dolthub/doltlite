@@ -8,8 +8,7 @@ branch. Dolt:
 ## Synopsis
 
 ```sql
-SELECT dolt_cherry_pick('0123abcd...');
-SELECT dolt_cherry_pick('-x', 'feature');
+SELECT dolt_cherry_pick('-x', '0123abcd...');     -- -x records the source hash
 SELECT dolt_revert('HEAD');
 SELECT dolt_revert('HEAD', '--author', 'Ann <ann@example.com>');
 BEGIN;
