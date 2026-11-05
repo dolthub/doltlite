@@ -3,10 +3,12 @@
 import importlib.util
 import os
 import pathlib
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -168,7 +170,99 @@ class GeneratorParityTest(unittest.TestCase):
         self.assertNotIn("generate_series", skipped)
 
 
+class UniqueUpdateOrderTest(unittest.TestCase):
+    def update_sql(self, unique=True, without_rowid=False):
+        gen = fuzz.Gen(0, ["expr"])
+        gen.shape = "composite_pk"
+        gen.has_unique_b = unique
+        gen.without_rowid = without_rowid
+        with mock.patch.object(gen.r, "choice", return_value="b"), \
+                mock.patch.object(gen.r, "random", return_value=0.0), \
+                mock.patch.object(gen, "pred", return_value="1"):
+            gen.update()
+        return gen.out[-1]
+
+    def database(self, rows, without_rowid, unique=True):
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.execute("CREATE TABLE t(k INTEGER,j TEXT,a,b TEXT,PRIMARY KEY(k,j))"
+                   + (" WITHOUT ROWID" if without_rowid else ""))
+        if unique:
+            db.execute("CREATE UNIQUE INDEX i_u ON t(b,k)")
+        db.executemany("INSERT INTO t VALUES(?,?,?,?)", rows)
+        return db
+
+    def rows(self, db):
+        return db.execute("SELECT k,j,a,b FROM t ORDER BY k,j").fetchall()
+
+    def test_unique_conflicts_are_compared_in_both_table_orders(self):
+        rows = [(1, "z", 0, "X'00'"), (1, "a", 0, b"\x00")]
+        for without_rowid in (False, True):
+            for values in (rows, list(reversed(rows))):
+                with self.subTest(without_rowid=without_rowid, values=values):
+                    db = self.database(values, without_rowid)
+                    before = self.rows(db)
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        db.execute(self.update_sql())
+                    self.assertEqual(self.rows(db), before)
+
+    def test_reported_seed_preserves_unique_checks(self):
+        sql = fuzz.Gen(5614757853, fuzz.GROUPS).run()
+        update = next(line for line in sql.splitlines()
+                      if line.startswith("UPDATE t SET b = coalesce(quote(b),'x')"))
+        rows = [(1, "z", 0, "X'00'"), (1, "a", 0, b"\x00")]
+        for without_rowid in (False, True):
+            for values in (rows, list(reversed(rows))):
+                with self.subTest(without_rowid=without_rowid, values=values):
+                    db = self.database(values, without_rowid)
+                    before = self.rows(db)
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        db.execute(update)
+                    self.assertEqual(self.rows(db), before)
+
+    def test_nonconflicting_update_visits_one_logical_row(self):
+        rows = [(1, "z", 0, b"\x00"), (1, "a", 0, "X'00'")]
+        for without_rowid in (False, True):
+            for values in (rows, list(reversed(rows))):
+                with self.subTest(without_rowid=without_rowid, values=values):
+                    db = self.database(values, without_rowid)
+                    db.execute(self.update_sql())
+                    self.assertEqual(db.execute("SELECT changes()").fetchone(), (1,))
+                    self.assertEqual(self.rows(db),
+                                     [(1, "a", 0, "'X''00'''"), (1, "z", 0, b"\x00")])
+
+    def test_bulk_updates_remain_covered(self):
+        rows = [(1, "z", 0, b"\x00"), (1, "a", 0, "X'00'")]
+        for unique, without_rowid in ((False, False), (False, True), (True, True)):
+            with self.subTest(unique=unique, without_rowid=without_rowid):
+                db = self.database(rows, without_rowid, unique)
+                db.execute(self.update_sql(unique, without_rowid))
+                self.assertEqual(db.execute("SELECT changes()").fetchone(), (2,))
+
+
 class ReducerTest(unittest.TestCase):
+    def test_error_delta_keeps_counts_and_direction(self):
+        error = b"UNIQUE constraint failed: t.b, t.k"
+        left = b"Error near line 20: " + error + b"\n"
+        right = b"Error near line 3: " + error + b"\n"
+        self.assertEqual(sweep.error_delta(left, right), {})
+        self.assertEqual(sweep.error_delta(left * 3, right), {error: 2})
+        self.assertEqual(sweep.error_delta(left, right * 2), {error: -1})
+
+    def test_keeps_the_original_error_instead_of_a_rowid_difference(self):
+        def oracle(_dl, _sq, _dd, _sd, sql):
+            if "UNIQUE_ERROR" in sql:
+                output = ("Error near line %d: UNIQUE constraint failed: t.b, t.k\n"
+                          % len(sql.splitlines())).encode()
+                return False, 1, 0, output, b""
+            if "ROWID" in sql:
+                return False, 0, 0, b"3261486686776371965\n", b"2\n"
+            return True, 0, 0, b"", b""
+
+        with mock.patch.object(sweep, "agree", side_effect=oracle):
+            reduced = sweep.shrink_sql("dl", "sq", "d.db", "s.db", "UNIQUE_ERROR\nROWID\n")
+        self.assertEqual(reduced, "UNIQUE_ERROR\n")
+
     def test_keeps_only_the_lines_that_fail(self):
         lines = ["noise-a", "NEED_A", "noise-b", "NEED_B", "noise-c"]
 

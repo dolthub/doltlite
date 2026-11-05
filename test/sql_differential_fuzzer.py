@@ -79,6 +79,8 @@ class Gen:
         self.has_child = False  # fkeys built a table referencing t
         self.autoinc = False
         self.has_rowid = False
+        self.has_unique_b = False
+        self.without_rowid = False
         self.k_not_null = False
         self.rid_seeded = False
 
@@ -205,6 +207,7 @@ class Gen:
             cols = "k INTEGER, a, %s" % bdecl
             self.has_rowid = True
         self.shape = shape
+        self.without_rowid = bool(wr)
         self.emit("CREATE TABLE t(%s%s)%s;" % (cols, extra, wr))
 
         if self.r.random() < 0.7:
@@ -214,6 +217,7 @@ class Gen:
             self.emit("CREATE INDEX i_b ON t(b, a);")
         if self.r.random() < 0.3 and shape != "unique_only":
             self.emit("CREATE UNIQUE INDEX i_u ON t(b, k);")
+            self.has_unique_b = True
         if self.on("ddl"):
             if self.r.random() < 0.4:
                 # Partial index: rows enter and leave as a changes.
@@ -424,10 +428,20 @@ class Gen:
                       % (col, "max(coalesce(quote(t2.b),''))",
                          "1", self.pred()))
             return
-        rhs = self.expr() if col == "a" else \
-            ("coalesce(quote(%s),'x')" % self.r.choice(["a", "b"])
-             if self.on("expr") and self.r.random() < 0.3 else self.val("text"))
-        self.emit("UPDATE t SET %s = %s WHERE %s;" % (col, rhs, self.pred()))
+        row_dependent = False
+        if col == "a":
+            rhs = self.expr()
+        elif self.on("expr") and self.r.random() < 0.3:
+            row_dependent = True
+            rhs = "coalesce(quote(%s),'x')" % self.r.choice(["a", "b"])
+        else:
+            rhs = self.val("text")
+        pred = self.pred()
+        if (row_dependent and self.shape == "composite_pk"
+                and self.has_unique_b and not self.without_rowid):
+            # Immediate UNIQUE checks can depend on rowid versus PK visit order.
+            pred = "(k, j) IN (SELECT k, j FROM t WHERE %s ORDER BY k, j LIMIT 1)" % pred
+        self.emit("UPDATE t SET %s = %s WHERE %s;" % (col, rhs, pred))
 
     def delete(self):
         if self.on("writesel") and self.r.random() < 0.2:

@@ -14,9 +14,11 @@ have passed, so a slow runner reports the seeds it covered instead of being
 killed by its job timeout with nothing to show.
 """
 
+from collections import Counter
 import difflib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -193,7 +195,16 @@ def ddmin(parts, test, limit=48):
     return current
 
 
+def error_delta(out_dl, out_sq):
+    pattern = rb"^(?:Parse error|Runtime error|Error)(?: near line \d+)?: (.*)$"
+    delta = Counter(re.findall(pattern, out_dl, re.MULTILINE))
+    delta.subtract(re.findall(pattern, out_sq, re.MULTILINE))
+    return {message: count for message, count in delta.items() if count}
+
+
 def shrink_sql(doltlite, sqlite3, dl_db, sq_db, sql):
+    _, _, _, out_dl, out_sq = agree(doltlite, sqlite3, dl_db, sq_db, sql)
+    original_errors = error_delta(out_dl, out_sq)
     lines = sql.split("\n")
     while lines and lines[-1] == "":
         lines.pop()
@@ -202,8 +213,9 @@ def shrink_sql(doltlite, sqlite3, dl_db, sq_db, sql):
         body = "\n".join(candidate)
         if body:
             body += "\n"
-        ok, _, _, _, _ = agree(doltlite, sqlite3, dl_db, sq_db, body)
-        return not ok
+        ok, _, _, out_dl, out_sq = agree(doltlite, sqlite3, dl_db, sq_db, body)
+        return not ok and (not original_errors
+                          or error_delta(out_dl, out_sq) == original_errors)
 
     shrunk = ddmin(lines, test)
     body = "\n".join(shrunk)
