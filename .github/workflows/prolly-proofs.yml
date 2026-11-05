@@ -1,21 +1,14 @@
 name: Prolly proofs
 
 on:
-  pull_request:
-    paths:
-      - 'formal/prolly/**'
-      - 'test/prolly_proofs_selftest.py'
-      - '.github/workflows/prolly-proofs.yml'
-      - 'src/prolly_*.c'
-      - 'src/prolly_*.h'
-      - 'src/chunk_*.c'
-      - 'src/chunk_*.h'
+  workflow_call:
   push:
     branches: [master]
     paths:
       - 'formal/prolly/**'
       - 'test/prolly_proofs_selftest.py'
       - '.github/workflows/prolly-proofs.yml'
+      - '.github/workflows/pr-ci.yml'
       - 'src/prolly_*.c'
       - 'src/prolly_*.h'
       - 'src/chunk_*.c'

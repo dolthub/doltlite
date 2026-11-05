@@ -76,7 +76,8 @@ unfinished proof. These controls test the verification gate, not the C engine.
   file I/O, durability, concurrency, and the chunk store are outside this model.
   No C source or storage format is changed by this package.
 
-The `Prolly proofs` workflow checks the package on relevant pull requests and
-master pushes. Changes to the model or mapped C algorithms must preserve this
+The main CI Gate requires the `prolly-proofs` job on pull requests. The reusable
+`Prolly proofs` workflow also runs on relevant master pushes. Changes to the
+model or mapped C algorithms must preserve this
 scope distinction: running abstract proofs against a changed C checkout is not
 an automatic check that the C code refines the model.
