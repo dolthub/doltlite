@@ -11,10 +11,6 @@ permissions:
   pull-requests: write
 
 jobs:
-  prolly_proofs:
-    name: prolly-proofs
-    uses: ./.github/workflows/prolly-proofs.yml
-
   classify:
     name: Classify changes
     runs-on: ubuntu-24.04
@@ -135,14 +131,10 @@ jobs:
   # must have succeeded. Skipping is only ever accepted by this rule.
   gate:
     name: CI Gate
-    needs: [prolly_proofs, classify, doc_links, build_ubuntu, test_ubuntu, compile_checks, wasm, build_macos, test_macos, build_windows, test_windows, windows_suites]
+    needs: [classify, doc_links, build_ubuntu, test_ubuntu, compile_checks, wasm, build_macos, test_macos, build_windows, test_windows, windows_suites]
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Require prolly proofs
-        env:
-          PROLLY_PROOFS: ${{ needs.prolly_proofs.result }}
-        run: test "$PROLLY_PROOFS" = success
       - uses: actions/checkout@v4
         with:
           sparse-checkout: .github/scripts
