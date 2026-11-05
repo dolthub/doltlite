@@ -336,7 +336,7 @@ run_test_match "rv_author_hash" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "rv_author_committer" "SELECT committer FROM dolt_log LIMIT 1;" "Ann" "$DB"
 run_test "rv_author_email" "SELECT email FROM dolt_log LIMIT 1;" "ann@x.com" "$DB"
-run_test "rv_author_message" "SELECT message FROM dolt_log LIMIT 1;" "Revert \"c2\"" "$DB"
+run_test "rv_author_message" "SELECT message = 'Revert \"c2\"' || char(10,10) || 'This reverts commit ' || (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1) || '.' FROM dolt_log LIMIT 1;" "1" "$DB"
 run_test "rv_author_count" "SELECT count(*) FROM t;" "1" "$DB"
 
 rm -f "$DB"
@@ -1083,7 +1083,7 @@ SELECT dolt_commit('-A','-m','add row 2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 TX_OUT=$(echo "BEGIN;
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));
 ROLLBACK;
-SELECT 'TX|' || (SELECT message FROM dolt_log LIMIT 1) || '|' || (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM dolt_status);" | $DOLTLITE "$DB" 2>&1)
+SELECT 'TX|' || (SELECT substr(message, 1, instr(message || char(10), char(10)) - 1) FROM dolt_log LIMIT 1) || '|' || (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM dolt_status);" | $DOLTLITE "$DB" 2>&1)
 TX_LINE=$(echo "$TX_OUT" | grep '^TX|')
 if [ "$TX_LINE" = "TX|Revert \"add row 2\"|1|0" ]; then
   dltest_pass
@@ -1177,5 +1177,83 @@ $ROWS
   done
   rm -f "$DB"
 done
+
+echo "--- source commit trailers ---"
+DB=/tmp/test_src_trailer_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'init');
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(2,'two');
+SELECT dolt_commit('-A','-m','same');
+INSERT INTO t VALUES(3,'three');
+SELECT dolt_commit('-A','-m','same');
+SELECT dolt_tag('two', 'HEAD~1');
+SELECT dolt_tag('three', 'HEAD');
+SELECT dolt_revert('three');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "trailer_revert" \
+  "SELECT message = 'Revert \"same\"' || char(10,10) || 'This reverts commit ' || dolt_hashof('three') || '.' FROM dolt_log LIMIT 1;" \
+  "1" "$DB"
+echo "SELECT dolt_revert('two');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "trailer_revert_identical_messages" \
+  "SELECT (SELECT substr(message, -41, 40) FROM dolt_log LIMIT 1) = dolt_hashof('two')
+      AND (SELECT substr(message, -41, 40) FROM dolt_log LIMIT 1 OFFSET 1) = dolt_hashof('three');" \
+  "1" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_src_trailer_series_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','a');
+SELECT dolt_tag('a', 'HEAD');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','b');
+SELECT dolt_tag('b', 'HEAD');
+SELECT dolt_revert('b', 'a');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "trailer_revert_series" \
+  "SELECT group_concat(message = 'Revert \"' || m || '\"' || char(10,10) || 'This reverts commit ' || dolt_hashof(m) || '.', ',') FROM (SELECT message, CASE WHEN message LIKE 'Revert \"a\"%' THEN 'a' ELSE 'b' END AS m FROM dolt_log LIMIT 2);" \
+  "1,1" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_src_trailer_cp_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'init');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'two');
+SELECT dolt_commit('-A','-m','add two');
+INSERT INTO t VALUES(3,'three');
+SELECT dolt_commit('-A','-m','add three');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('-x', 'feat~1');
+SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "trailer_cp_x" \
+  "SELECT message = 'add two' || char(10,10) || '(cherry picked from commit ' || dolt_hashof('feat~1') || ')' FROM dolt_log LIMIT 1 OFFSET 1;" \
+  "1" "$DB"
+run_test "trailer_cp_default_unchanged" "SELECT message FROM dolt_log LIMIT 1;" "add three" "$DB"
+run_test_error_match "trailer_cp_x_with_abort" "SELECT dolt_cherry_pick('-x', '--abort');" \
+  "does not take other arguments" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_src_trailer_cp_conflict_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'init');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='feat' WHERE id=1;
+SELECT dolt_commit('-A','-m','feat edit');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main' WHERE id=1;
+SELECT dolt_commit('-A','-m','main edit');
+BEGIN;
+SELECT dolt_cherry_pick('-x', 'feat');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT dolt_add('t');
+SELECT dolt_cherry_pick('--continue');
+COMMIT;" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "trailer_cp_x_continue" \
+  "SELECT (SELECT v FROM t WHERE id=1), message = 'feat edit' || char(10,10) || '(cherry picked from commit ' || dolt_hashof('feat') || ')' FROM dolt_log LIMIT 1;" \
+  "feat|1" "$DB"
+rm -f "$DB"
 
 dltest_finish

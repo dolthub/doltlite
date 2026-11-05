@@ -12,7 +12,8 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize_state() {
-  tr -d '"\r' \
+  vc_oracle_strip_revert_trailer \
+    | tr -d '"\r' \
     | sed -E \
         -e 's/\|false\|/|0|/g' \
         -e 's/\|true\|/|1|/g' \

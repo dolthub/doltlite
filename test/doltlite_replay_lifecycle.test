@@ -100,7 +100,9 @@ foreach storage {file memory} {
             if {$resolution eq "theirs"} {set value [expr {$kind eq "revert" ? "base" : "target"}]}
             do_execsql_test $prefix.rows {SELECT v FROM t} $value
             set message {target edit}
-            if {$kind eq "revert"} {set message {Revert "target edit"}}
+            if {$kind eq "revert"} {
+              set message "Revert \"target edit\"\n\nThis reverts commit [db one {SELECT dolt_hashof('target')}]."
+            }
             do_execsql_test $prefix.message {SELECT message FROM dolt_log LIMIT 1} [list $message]
             do_execsql_test $prefix.parent {
               SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash=dolt_hashof('HEAD')

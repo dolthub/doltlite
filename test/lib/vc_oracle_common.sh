@@ -8,6 +8,11 @@ vc_oracle_init_execution() {
   export DLTEST_INTEGRITY_EXPECTATIONS="$VC_ORACLE_EXECUTION_DIR/integrity-exceptions"
 }
 
+# DoltLite's revert message carries git's "This reverts commit" trailer; Dolt's does not.
+vc_oracle_strip_revert_trailer() {
+  perl -0pe 's/\n+This reverts commit [0-9a-v]{40}\.//g'
+}
+
 vc_oracle_normalize_seed() {
   sed -E 's/Initialize data repository \([0-9a-f]{32}\)/Initialize data repository/g'
 }

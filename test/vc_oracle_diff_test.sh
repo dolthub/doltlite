@@ -88,7 +88,8 @@ oracle() {
 }
 
 normalize_summary() {
-  tr -d '\r' \
+  vc_oracle_strip_revert_trailer \
+    | tr -d '\r' \
     | sed -e 's/	true$/	1/' -e 's/	true	/	1	/g' \
           -e 's/	false$/	0/' -e 's/	false	/	0	/g' \
     | awk -F'\t' 'NF >= 5 && $1 == "S" {

@@ -850,10 +850,12 @@ static void doltliteCherryPickFunc(
   int isAbort = 0;
   int allowEmpty = 0;
   int isContinue = 0;
+  int recordOrigin = 0;
   DoltliteCmdOption aOption[] = {
     { "continue", 0, DOLTLITE_CMD_OPTION_FLAG, &isContinue, 0 },
     { "abort", 0, DOLTLITE_CMD_OPTION_FLAG, &isAbort, 0 },
-    { "allow-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &allowEmpty, 0 }
+    { "allow-empty", 0, DOLTLITE_CMD_OPTION_FLAG, &allowEmpty, 0 },
+    { 0, 'x', DOLTLITE_CMD_OPTION_FLAG, &recordOrigin, 0 }
   };
   int nConflicts = 0;
   int dirty = 0;
@@ -883,7 +885,7 @@ static void doltliteCherryPickFunc(
     return;
   }
   if( isAbort || isContinue ){
-    if( args.nPositional>0 || allowEmpty ){
+    if( args.nPositional>0 || allowEmpty || recordOrigin ){
       doltliteCmdArgsClear(&args);
       sqlite3_result_error(context, isAbort
           ? "--abort does not take other arguments"
@@ -953,9 +955,24 @@ static void doltliteCherryPickFunc(
         &pickCommit.catalogHash, &parentCommit.catalogHash)==0;
     const char *zMsg = pickCommit.zMessage;
     char fallback[256];
+    char *zOrigin = 0;
     if( !zMsg || !*zMsg ){
       sqlite3_snprintf(sizeof(fallback), fallback, "cherry-pick of %s", zRef);
       zMsg = fallback;
+    }
+    if( recordOrigin ){
+      char zPickHex[PROLLY_HASH_SIZE*2+1];
+      doltliteHashToHex(&pickHash, zPickHex);
+      zOrigin = sqlite3_mprintf("%s\n\n(cherry picked from commit %s)",
+                                zMsg, zPickHex);
+      if( !zOrigin ){
+        doltliteCommitClear(&pickCommit);
+        doltliteCommitClear(&parentCommit);
+        doltliteCommitClear(&ourCommit);
+        sqlite3_result_error_nomem(context);
+        return;
+      }
+      zMsg = zOrigin;
     }
 
     rc = applyMergedCatalogAndCommit(db, context,
@@ -964,6 +981,7 @@ static void doltliteCherryPickFunc(
         &pickHash,
         &nConflicts, 0,
         &zApplyErr, hexBuf);
+    sqlite3_free(zOrigin);
   }
 
   doltliteCommitClear(&pickCommit);
