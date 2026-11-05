@@ -1,6 +1,0 @@
-name = "doltlite-prolly"
-version = "0.1.0"
-defaultTargets = ["Prolly"]
-
-[[lean_lib]]
-name = "Prolly"
