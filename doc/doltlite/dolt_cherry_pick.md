@@ -9,6 +9,7 @@ branch. Dolt:
 
 ```sql
 SELECT dolt_cherry_pick('0123abcd...');
+SELECT dolt_cherry_pick('-x', 'feature');
 SELECT dolt_revert('HEAD');
 SELECT dolt_revert('HEAD', '--author', 'Ann <ann@example.com>');
 BEGIN;
@@ -22,9 +23,11 @@ ROLLBACK;
 | Argument | Meaning |
 |---|---|
 | `commit` | One commit [revision](refs.md). Its parent-to-commit diff is applied as a three-way merge. |
+| `-x` | Append `(cherry picked from commit <hash>)` to the message, naming the source commit |
 | `--abort` | Drop an in-progress conflicted cherry-pick |
 
-Returns the new commit hash, keeping the original message. Conflicts behave
+Returns the new commit hash, keeping the original message (plus the `-x`
+trailer when given). Conflicts behave
 as in [dolt_merge.md](dolt_merge.md): rolled back in autocommit, inspectable
 inside `BEGIN`. A completed cherry-pick commits the enclosing SQL
 transaction and begins a new one, like `dolt_commit`.
@@ -40,13 +43,22 @@ transaction and begins a new one, like `dolt_commit`.
 
 ## dolt_revert
 
-`dolt_revert(commit)` commits the inverse of `commit` onto `HEAD` with the
-message `Revert "<original message>"` and returns the new hash. One commit at
-a time; the initial commit cannot be reverted. Conflicts behave like a merge.
+`dolt_revert(commit)` commits the inverse of `commit` onto `HEAD` and returns
+the new hash. The message follows git's default and names the reverted commit:
+
+```
+Revert "<original message>"
+
+This reverts commit <hash>.
+```
+
+Several commits, or a range such as `'HEAD~2..HEAD'`, revert as one commit
+each. The initial commit cannot be reverted. Conflicts behave
+like a merge.
 
 | Argument | Meaning |
 |---|---|
-| `commit` | One commit [revision](refs.md) to invert onto `HEAD` |
+| `commit` | One or more commit [revisions](refs.md), or a range, to invert onto `HEAD` |
 | `--author 'Name <email>'` | Override the committer for the revert commit |
 
 | Error | Cause |
@@ -57,7 +69,9 @@ a time; the initial commit cannot be reverted. Conflicts behave like a merge.
 
 ## Differences from Dolt
 
-Dolt accepts several commits per call and revert ranges; DoltLite takes one.
+Dolt's `dolt_cherry_pick` likewise takes one commit. Dolt's revert message is
+`Revert "<original message>"` with no trailer, and Dolt has no `-x`; the
+source-commit trailers are DoltLite additions, following git.
 
 ## See also
 
