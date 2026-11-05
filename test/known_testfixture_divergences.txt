@@ -5324,6 +5324,7 @@ vec1flat vec1flat-4.5.4 class=intentional issue=1840  # rowids continue after de
 vec1flat vec1flat-4.6.2 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
 vec1flat vec1flat-4.6.3 class=intentional issue=1840  # rowids continue after delete instead of restarting at 1
 vec1intck vec1intck-3.9 class=intentional issue=1840  # rowids continue after rebuild, so the corrupt %_idx entry is not id=1
+vec1stream vec1stream-1.1 unstable class=harness issue=4604  # random training occasionally leaves the single probed bucket (nprobe 1) with fewer than K=10 rows
 
 # ── rtree, intck, expert, recover and unbucketed upstream files ──
 rtree8 rtree8-1.3.1 class=intentional issue=1840  # %_node ids keep counting after DELETE, so max(nodeno) is higher
