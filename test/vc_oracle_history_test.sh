@@ -12,7 +12,8 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize_history() {
-  tr -d '\r' \
+  vc_oracle_strip_revert_trailer \
+    | tr -d '\r' \
     | awk -F'\t' 'NF >= 6 && $1 == "H" { print }' \
     | awk -F'\t' '
         {

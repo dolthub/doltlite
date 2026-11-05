@@ -747,7 +747,9 @@ static void test_process_apply_clean_peer(
       const char *zExpectedTip = revert ? "Revert \"drop index\"" : "index";
       peerRc = SQLITE_OK;
       if( afterInstall
-       && strcmp(queryText(peer, "SELECT message FROM dolt_log LIMIT 1"),
+       && strcmp(queryText(peer, "SELECT substr(message, 1, "
+                 "instr(message || char(10), char(10)) - 1) "
+                 "FROM dolt_log LIMIT 1"),
                  zExpectedTip)!=0 ) peerRc = SQLITE_ERROR;
       if( peerRc==SQLITE_OK && afterInstall && commitPeer ){
         peerRc = execSql(peer,

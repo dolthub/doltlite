@@ -173,13 +173,20 @@ static int doltliteRevertOne(
   if( rc!=SQLITE_OK ) goto revert_error;
 
   {
-    char msg[512];
+    char *msg;
+    char zRevertHex[PROLLY_HASH_SIZE*2+1];
     /* Commit from HEAD, not the working catalog, so unrelated dirty changes stay uncommitted. */
     const ProllyHash *pCommitOurs =
         prollyHashCompare(&liveOurCatalog, &ourCommit.catalogHash)!=0
           ? &ourCommit.catalogHash : 0;
-    sqlite3_snprintf(sizeof(msg), msg, "Revert \"%s\"",
-                     revertCommit.zMessage ? revertCommit.zMessage : zRef);
+    doltliteHashToHex(pRevert, zRevertHex);
+    msg = sqlite3_mprintf("Revert \"%s\"\n\nThis reverts commit %s.",
+                          revertCommit.zMessage ? revertCommit.zMessage : zRef,
+                          zRevertHex);
+    if( !msg ){
+      rc = SQLITE_NOMEM;
+      goto revert_error;
+    }
 
     rc = applyMergedCatalogAndCommit(db, context,
         &revertCommit.catalogHash, &liveOurCatalog,
@@ -187,6 +194,7 @@ static int doltliteRevertOne(
         zAuthorName, zAuthorEmail, 1, 1,
         doltliteCommitParentHash(&revertCommit, 0),
         &nConflicts, 0, &zApplyErr, hexBuf);
+    sqlite3_free(msg);
   }
 
   doltliteCommitClear(&revertCommit);
