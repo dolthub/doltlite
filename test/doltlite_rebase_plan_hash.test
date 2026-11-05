@@ -20,6 +20,59 @@ proc rebase_hash_setup {} {
   }
 }
 
+proc rebase_legacy_plan {} {
+  execsql {
+    PRAGMA writable_schema=ON;
+    UPDATE sqlite_schema SET sql='CREATE TABLE dolt_rebase(
+      rebase_order REAL PRIMARY KEY,
+      action TEXT,
+      commit_hash TEXT,
+      commit_message TEXT NOT NULL
+    )' WHERE type='table' AND name='dolt_rebase';
+    PRAGMA writable_schema=OFF;
+  }
+  db close
+  sqlite3 db test.db
+  execsql {SELECT dolt_checkout('dolt_rebase_feat')}
+}
+
+foreach {badhash msg} {
+  0000000000000000000000000000000000000000 {unable to resolve commit hash 0000000000000000000000000000000000000000: target commit not found}
+  main {invalid commit hash: main}
+  catalog {}
+} {
+  rebase_hash_setup
+  set invalid $badhash
+  if {$badhash eq "catalog"} {
+    set invalid [db one {SELECT dolt_hashof_catalog('main')}]
+    set msg "unable to resolve commit hash $invalid: target commit not found"
+  }
+  set plan [execsql {SELECT * FROM dolt_rebase ORDER BY rebase_order}]
+  set name rebase-plan-hash-write-[string index $badhash 0]
+  do_catchsql_test $name-update {
+    UPDATE dolt_rebase SET action='drop', commit_hash=$invalid
+      WHERE rebase_order=2;
+  } [list 1 $msg]
+  do_catchsql_test $name-insert {
+    INSERT INTO dolt_rebase VALUES(3, 'pick', $invalid, 'x');
+  } [list 1 $msg]
+  do_test $name-plan-intact {
+    execsql {SELECT * FROM dolt_rebase ORDER BY rebase_order}
+  } $plan
+}
+
+rebase_hash_setup
+do_catchsql_test rebase-plan-hash-write-null {
+  UPDATE dolt_rebase SET commit_hash=NULL WHERE rebase_order=2;
+} {1 {NOT NULL constraint failed: dolt_rebase.commit_hash}}
+do_test rebase-plan-hash-write-other-commit {
+  execsql {
+    UPDATE dolt_rebase SET commit_hash=dolt_hashof('main') WHERE rebase_order=2;
+    SELECT commit_hash=dolt_hashof('main') FROM dolt_rebase WHERE rebase_order=2;
+  }
+} 1
+
+# A plan table written without the write-time check still fails at --continue.
 foreach badhash {
   0000000000000000000000000000000000000000
   ffffffffffffffffffffffffffffffffffffffff
@@ -35,6 +88,7 @@ f2} main init} {0 1 2 10}
     drop {f1 main init} {0 1 10}
   } {
     rebase_hash_setup
+    rebase_legacy_plan
     set invalid $badhash
     if {$badhash eq "catalog"} {
       set invalid [db one {SELECT dolt_hashof_catalog('main')}]
@@ -69,6 +123,7 @@ f2} main init} {0 1 2 10}
 }
 
 rebase_hash_setup
+rebase_legacy_plan
 set feature [db one {SELECT dolt_hashof('feat')}]
 execsql {
   UPDATE dolt_rebase SET commit_hash='0000000000000000000000000000000000000000'
