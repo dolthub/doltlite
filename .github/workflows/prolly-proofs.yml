@@ -1,0 +1,56 @@
+name: Prolly proofs
+
+on:
+  pull_request:
+    paths:
+      - 'formal/prolly/**'
+      - 'test/prolly_proofs_selftest.py'
+      - '.github/workflows/prolly-proofs.yml'
+      - 'src/prolly_*.c'
+      - 'src/prolly_*.h'
+      - 'src/chunk_*.c'
+      - 'src/chunk_*.h'
+  push:
+    branches: [master]
+    paths:
+      - 'formal/prolly/**'
+      - 'test/prolly_proofs_selftest.py'
+      - '.github/workflows/prolly-proofs.yml'
+      - 'src/prolly_*.c'
+      - 'src/prolly_*.h'
+      - 'src/chunk_*.c'
+      - 'src/chunk_*.h'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proofs:
+    name: Prolly proofs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: bash .github/scripts/install-apt-deps.sh zstd
+      - name: Install pinned Lean
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed 's|leanprover/lean4:v||' formal/prolly/lean-toolchain)
+          archive="lean-${version}-linux.tar.zst"
+          mkdir -p "$RUNNER_TEMP/prolly-lean"
+          cd "$RUNNER_TEMP/prolly-lean"
+          curl -fLsS --retry 3 -o "$archive" \
+            "https://github.com/leanprover/lean4/releases/download/v${version}/${archive}"
+          sha256sum --check "$GITHUB_WORKSPACE/formal/prolly/lean-release.sha256"
+          tar --zstd -xf "$archive"
+          echo "$RUNNER_TEMP/prolly-lean/lean-${version}-linux/bin" >> "$GITHUB_PATH"
+      - name: Check unbounded proofs and trust audit
+        working-directory: formal/prolly
+        run: |
+          lake --wfail build
+          lake env lean Prolly/Audit.lean
+      - name: Check that broken models and untrusted proofs are rejected
+        run: python3 test/prolly_proofs_selftest.py
