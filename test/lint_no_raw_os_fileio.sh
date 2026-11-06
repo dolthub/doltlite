@@ -39,8 +39,9 @@ raw_matches() {
 # net.h: sockets; fcntl only for O_NONBLOCK. http_remote: xhr.open is the
 # browser request API inside an EM_JS body, not a file open.
 # chunk_store csHostFileIsZero: xAccess reports a 0-byte file as absent, and
-# xOpen of a missing path logs through wrapper VFSes. A host read separates
-# those two without that log. The VFS has no size-by-name that stays quiet.
+# xOpen of a missing path logs through wrapper VFSes. A host stat separates
+# those two without that log. The VFS has no size-by-name that stays quiet,
+# and a host open would drop the process's POSIX locks when it closed.
 raw_matches \
   | grep -Ev '^src/doltlite_creds\.c:' \
   | grep -Ev '^src/(doltlite_gc|chunk_store_commit)\.c:[0-9]+:#include <unistd\.h>' \
@@ -51,8 +52,8 @@ raw_matches \
   | grep -Ev '^src/doltlite_http_remote\.c:[0-9]+:.*\bxhr\.open[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_remote\.c:[0-9]+:.*\bwrite[[:space:]]*\(' \
   | grep -Ev '^src/os_kv\.c:[0-9]+:.*\b(fopen|fclose|fread|unlink|access|stat)[[:space:]]*\(' \
-  | grep -Ev '^src/chunk_store\.c:[0-9]+:.*\bfopen\(zPath, "rb"\)' \
-  | grep -Ev '^src/chunk_store\.c:[0-9]+:.*\bfclose\(p\)' \
+  | grep -Ev '^src/chunk_store\.c:[0-9]+:.*\bstat\(zPath, &st\)' \
+  | grep -Ev '^src/chunk_store\.c:[0-9]+:#include <sys/stat\.h>' \
   | grep -Ev '^src/(doltlite_remotesrv|doltlite_http_remote|doltlite_remote|os_kv)\.c:[0-9]+:#include <unistd\.h>' \
   | grep -Ev '^src/os_kv\.c:[0-9]+:#include <sys/stat\.h>' \
   > "$TMPFILE"
