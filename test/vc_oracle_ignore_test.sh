@@ -302,6 +302,7 @@ INSERT INTO dolt_ignore VALUES('tmp_*',1);
 CREATE TABLE tmp_foo(id INT PRIMARY KEY);
 INSERT INTO tmp_foo VALUES(1);
 SELECT dolt_add('tmp_foo');
+SELECT CONCAT('H|staged|',count(*)) FROM dolt_schema_diff('HEAD','STAGED') WHERE to_table_name='tmp_foo';
 SELECT dolt_commit('--allow-empty','-m','ignored noop');
 $end
 " --success "SELECT CONCAT('H|changes|',count(*)) FROM dolt_diff_summary('HEAD~1','HEAD');"
