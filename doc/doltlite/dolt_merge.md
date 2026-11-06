@@ -20,7 +20,7 @@ SELECT * FROM dolt_conflicts_users;
 SELECT dolt_merge('--abort');
 SELECT dolt_merge('feature');                     -- error: same conflicts again
 SELECT dolt_conflicts_resolve('--theirs', 'users');
-SELECT dolt_commit('-m', 'Merge feature');
+SELECT dolt_commit('-Am', 'Merge feature');       -- -A stages the resolution
 SELECT dolt_merge_base('main', 'feature');
 ```
 
@@ -67,8 +67,12 @@ Resolve with `dolt_conflicts_resolve('--ours' | '--theirs', table, ...)`, or
 `DELETE FROM dolt_conflicts_<table> WHERE dolt_conflict_id = ...` to keep the
 working value (only `DELETE` is supported on conflict tables). One call can
 resolve several named tables; a missing table name rejects the call before
-any table is resolved. Existing tables without conflicts are ignored. Then
-`dolt_commit` records the merge commit. `COMMIT` with conflicts left fails
+any table is resolved. Existing tables without conflicts are ignored.
+`dolt_commit` then records the merge commit from what is staged. Resolving
+updates the working table and does not stage it, so `dolt_commit('-m', ...)`
+keeps the pre-merge rows in that commit and a later `dolt_reset('--hard')`
+discards the resolution. Stage with `dolt_add('-A')` or
+`dolt_commit('-Am', ...)`. `COMMIT` with conflicts left fails
 with `constraint failed`; `dolt_commit` with `cannot commit: unresolved merge
 conflicts. Use dolt_conflicts_resolve() first.` Schema conflicts cannot be
 auto-resolved: abort, align the schemas on one side, merge again.

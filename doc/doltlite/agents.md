@@ -120,8 +120,7 @@ SELECT dolt_merge('feature');
 SELECT * FROM dolt_conflicts;              -- summary per table
 SELECT * FROM dolt_conflicts_<t>;          -- base/ours/theirs rows
 SELECT dolt_conflicts_resolve('--ours', '<t>');
-COMMIT;
-SELECT dolt_commit('-m', 'merged');
+SELECT dolt_commit('-Am', 'merged');       -- stage the resolution, then commit
 ```
 
 Constraint violations may persist after merges. Inspect

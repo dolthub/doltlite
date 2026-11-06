@@ -267,6 +267,7 @@ SELECT dolt_checkout('main');
 UPDATE evidence SET description='Butler observed in suspicious coffee-related activity' WHERE id=5;
 SELECT dolt_commit('-Am', 'Detective B rewords clue');
 
+BEGIN;
 SELECT dolt_merge('theory/revised_1');
 -- Merge has 1 conflict(s). Resolve and then commit with dolt_commit.
 ```
@@ -285,7 +286,7 @@ Resolve by keeping your version:
 
 ```sql
 SELECT dolt_conflicts_resolve('--ours', 'evidence');
-SELECT dolt_commit('-m', 'Resolved: kept our wording');
+SELECT dolt_commit('-Am', 'Resolved: kept our wording');
 ```
 
 Or delete individual conflict rows from `dolt_conflicts_evidence` for
