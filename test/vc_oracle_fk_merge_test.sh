@@ -72,7 +72,7 @@ run_tx_oracle_case() {
 
   (
     cd "$dt_dir" || exit 1
-    "$DOLT" init >/dev/null 2>&1
+    vc_oracle_init_repo
     "$DOLT" sql <<SQL >/dev/null 2>"$TMPROOT/${name}_dt_setup.err"
 $dolt_setup_sql
 SQL
