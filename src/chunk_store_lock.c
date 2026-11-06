@@ -869,6 +869,11 @@ static int csDetectExternalChanges(
     haveFileState = fileState.iFileSize>=0;
   }else{
     rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+    /* A VFS may omit this opcode. That is "not moved", not a failed read. */
+    if( rc==SQLITE_NOTFOUND ){
+      bMoved = 0;
+      rc = SQLITE_OK;
+    }
     if( rc!=SQLITE_OK ) return rc;
   }
   if( bMoved ){
