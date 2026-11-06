@@ -568,7 +568,7 @@ int btreeWriteWorkingState(
 }
 
 static void btreeRememberWorkingSet(Btree *p){
-  if( p->isDetached || !p->db || p==p->db->aDb[0].pBt
+  if( p->isDetached || !p->db || p->db->nDb<1 || p==p->db->aDb[0].pBt
    || !doltliteBtreeSameStore(p, p->db->aDb[0].pBt) ) return;
   memset(&p->loadedWorkingSet, 0, sizeof(p->loadedWorkingSet));
   chunkStoreGetBranchWorkingSet(p->pBt->pStore,
@@ -578,7 +578,7 @@ static void btreeRememberWorkingSet(Btree *p){
 int btreeWorkingSetMoved(Btree *p){
   ProllyHash workingSet;
   /* Store rollback can readopt peer refs without reloading this handle. */
-  if( p->isDetached || !p->db || p==p->db->aDb[0].pBt
+  if( p->isDetached || !p->db || p->db->nDb<1 || p==p->db->aDb[0].pBt
    || !doltliteBtreeSameStore(p, p->db->aDb[0].pBt) ) return 0;
   memset(&workingSet, 0, sizeof(workingSet));
   chunkStoreGetBranchWorkingSet(p->pBt->pStore,
