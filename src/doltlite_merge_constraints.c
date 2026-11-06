@@ -643,10 +643,270 @@ int fetchRowByPkFromTable(
                             ppKey, pnKey, ppVal, pnVal);
 }
 
+/* Above this many changed rows a full scan is cheaper than a lookup per row. */
+#define MERGE_CHANGED_ROWS_MAX 16384
+
+void mergeChangedRowsClear(MergeChangedRows *p){
+  int i;
+  if( p->apRec ){
+    for(i=0; i<p->nRow; i++) sqlite3_free(p->apRec[i]);
+  }
+  sqlite3_free(p->aRowid);
+  sqlite3_free(p->apRec);
+  sqlite3_free(p->anRec);
+  sqlite3_free(p->aiField);
+  sqlite3_free(p->zKeyPred);
+  memset(p, 0, sizeof(*p));
+}
+
+static int mergeChangedRowsPush(
+  sqlite3 *db, const char *zTable, MergeChangedRows *p,
+  const ProllyDiffChange *pChange
+){
+  if( p->nRow==p->nAlloc ){
+    int nAlloc = p->nAlloc ? p->nAlloc*2 : 64;
+    if( p->bIntKey ){
+      i64 *a = sqlite3_realloc64(p->aRowid, (sqlite3_uint64)nAlloc*sizeof(i64));
+      if( !a ) return SQLITE_NOMEM;
+      p->aRowid = a;
+    }else{
+      u8 **ap = sqlite3_realloc64(p->apRec, (sqlite3_uint64)nAlloc*sizeof(u8*));
+      int *an;
+      if( !ap ) return SQLITE_NOMEM;
+      p->apRec = ap;
+      an = sqlite3_realloc64(p->anRec, (sqlite3_uint64)nAlloc*sizeof(int));
+      if( !an ) return SQLITE_NOMEM;
+      p->anRec = an;
+    }
+    p->nAlloc = nAlloc;
+  }
+  if( p->bIntKey ){
+    p->aRowid[p->nRow++] = pChange->intKey;
+    return SQLITE_OK;
+  }
+  if( pChange->nNewVal>0 ){
+    u8 *pRec = sqlite3_malloc(pChange->nNewVal);
+    if( !pRec ) return SQLITE_NOMEM;
+    memcpy(pRec, pChange->pNewVal, pChange->nNewVal);
+    p->apRec[p->nRow] = pRec;
+    p->anRec[p->nRow] = pChange->nNewVal;
+  }else{
+    int rc = doltliteRecordFromClusteredKey(db, zTable,
+        pChange->pKey, pChange->nKey, &p->apRec[p->nRow], &p->anRec[p->nRow]);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !p->apRec[p->nRow] ) return SQLITE_NOTFOUND;
+  }
+  p->nRow++;
+  return SQLITE_OK;
+}
+
+static int mergeChangedRowsKeys(
+  sqlite3 *db, const char *zTable, const char *zAlias, MergeChangedRows *p
+){
+  sqlite3_str *pPred = sqlite3_str_new(0);
+  const char *zDot = zAlias ? "." : "";
+  int rc = SQLITE_OK;
+  if( !zAlias ) zAlias = "";
+  if( p->bIntKey ){
+    char *zRowid = 0;
+    rc = loadMergeRowidSql(db, zTable, &zRowid, 0);
+    if( rc==SQLITE_OK ) sqlite3_str_appendf(pPred, "%s%s%s=?", zAlias, zDot, zRowid);
+    if( rc==SQLITE_ERROR ) rc = SQLITE_NOTFOUND;
+    sqlite3_free(zRowid);
+  }else{
+    MergePkInfo pk;
+    DoltliteColInfo ci;
+    int i, j;
+    memset(&ci, 0, sizeof(ci));
+    rc = loadMergePkInfo(db, zTable, &pk);
+    if( rc==SQLITE_OK ){
+      rc = doltliteGetColumnNames(db, zTable, &ci);
+      if( rc==SQLITE_OK ){
+        p->nPk = pk.nPk;
+        p->aiField = sqlite3_malloc64((sqlite3_uint64)pk.nPk*sizeof(int));
+        if( !p->aiField ) rc = SQLITE_NOMEM;
+        for(i=0; rc==SQLITE_OK && i<pk.nPk; i++){
+          for(j=0; j<ci.nCol; j++){
+            if( sqlite3_stricmp(ci.azName[j], pk.azPk[i])==0 ) break;
+          }
+          if( j==ci.nCol || !ci.aColToRec || ci.aColToRec[j]<0 ){
+            rc = SQLITE_NOTFOUND;
+            break;
+          }
+          p->aiField[i] = ci.aColToRec[j];
+          sqlite3_str_appendf(pPred, "%s%s%s\"%w\" IS ?",
+              i ? " AND " : "", zAlias, zDot, pk.azPk[i]);
+        }
+        doltliteFreeColInfo(&ci);
+      }
+      freeMergePkInfo(&pk);
+    }
+  }
+  p->zKeyPred = sqlite3_str_finish(pPred);
+  if( rc==SQLITE_OK && !p->zKeyPred ) rc = SQLITE_NOMEM;
+  return rc;
+}
+
+int mergeTableUnchanged(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  const char *zTable
+){
+  struct TableEntry *pA = doltliteFindTableByName(aAnc, nAnc, zTable);
+  struct TableEntry *pC = doltliteFindTableByName(aCur, nCur, zTable);
+  return aAnc && pA && pC && prollyHashCompare(&pA->root, &pC->root)==0
+      && prollyHashCompare(&pA->schemaHash, &pC->schemaHash)==0;
+}
+
+/* Collects the rows the merge added or changed relative to the ancestor, and
+** a WHERE term naming one of them by the table's own key. bUsable stays 0
+** when only a full scan can answer: no ancestor table, a schema change, or
+** too many rows. */
+int mergeChangedRowsLoad(
+  sqlite3 *db, const char *zTable, const char *zAlias,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  MergeChangedRows *p
+){
+  struct TableEntry *pA, *pC;
+  ProllyDiffIter it;
+  ProllyDiffChange *pChange = 0;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  int rc;
+
+  memset(p, 0, sizeof(*p));
+  if( !aAnc || !cs || !pCache ) return SQLITE_OK;
+  pA = doltliteFindTableByName(aAnc, nAnc, zTable);
+  pC = doltliteFindTableByName(aCur, nCur, zTable);
+  if( !pA || !pC || pA->flags!=pC->flags
+   || prollyHashCompare(&pA->schemaHash, &pC->schemaHash)!=0 ){
+    return SQLITE_OK;
+  }
+  p->bIntKey = (pC->flags & PROLLY_NODE_INTKEY)!=0;
+  rc = prollyDiffIterOpen(&it, cs, pCache, &pA->root, &pC->root,
+                          pA->flags, pC->flags);
+  if( rc!=SQLITE_OK ) return rc;
+  while( (rc = prollyDiffIterStep(&it, &pChange))==SQLITE_ROW ){
+    if( pChange->type==PROLLY_DIFF_DELETE ) continue;
+    if( p->nRow>=MERGE_CHANGED_ROWS_MAX ){
+      rc = SQLITE_NOTFOUND;
+      break;
+    }
+    rc = mergeChangedRowsPush(db, zTable, p, pChange);
+    if( rc!=SQLITE_OK ) break;
+  }
+  prollyDiffIterClose(&it);
+  if( rc==SQLITE_DONE ) rc = mergeChangedRowsKeys(db, zTable, zAlias, p);
+  if( rc==SQLITE_OK ){
+    p->bUsable = 1;
+  }else{
+    mergeChangedRowsClear(p);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+  }
+  return rc;
+}
+
+int mergeChangedRowBind(MergeChangedRows *p, int iRow, sqlite3_stmt *pStmt){
+  DoltliteRecordInfo info = {0};
+  int i, rc;
+  sqlite3_reset(pStmt);
+  if( p->bIntKey ){
+    return sqlite3_bind_int64(pStmt, 1, p->aRowid[iRow]);
+  }
+  rc = doltliteParseRecordStrict(p->apRec[iRow], p->anRec[iRow], &info);
+  for(i=0; rc==SQLITE_OK && i<p->nPk; i++){
+    DoltliteSerialValue v;
+    if( p->aiField[i]>=info.nField ){
+      rc = sqlite3_bind_null(pStmt, i+1);
+      continue;
+    }
+    rc = doltliteSerialValueFromField(p->apRec[iRow], p->anRec[iRow], &info,
+                                      p->aiField[i], &v);
+    if( rc!=SQLITE_OK ) break;
+    switch( v.eType ){
+      case SQLITE_INTEGER: rc = sqlite3_bind_int64(pStmt, i+1, v.i); break;
+      case SQLITE_FLOAT:   rc = sqlite3_bind_double(pStmt, i+1, v.r); break;
+      case SQLITE_TEXT:
+        rc = sqlite3_bind_text(pStmt, i+1, (const char*)v.p, v.n, SQLITE_TRANSIENT);
+        break;
+      case SQLITE_BLOB:
+        rc = sqlite3_bind_blob(pStmt, i+1, v.p, v.n, SQLITE_TRANSIENT);
+        break;
+      default:             rc = sqlite3_bind_null(pStmt, i+1); break;
+    }
+  }
+  doltliteRecordInfoClear(&info);
+  return rc;
+}
+
+/* 1 when the merge removed no parent key: rows were only added, or changed
+** without touching a key the child references. */
+int mergeParentKeysKept(
+  sqlite3 *db, const char *zParent, char **azTo, int nCol,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  int *pbKept
+){
+  struct TableEntry *pA, *pC;
+  ProllyDiffIter it;
+  ProllyDiffChange *pChange = 0;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  const char *zSchema = 0, *zTarget = 0;
+  int bKeyIsStorageKey = 0;
+  int rc;
+
+  *pbKept = 0;
+  if( !aAnc || !cs || !pCache ) return SQLITE_OK;
+  if( doltliteNonlocalFkParent(db, zParent, &zSchema, &zTarget) ) return SQLITE_OK;
+  pA = doltliteFindTableByName(aAnc, nAnc, zParent);
+  pC = doltliteFindTableByName(aCur, nCur, zParent);
+  if( !pA || !pC || pA->flags!=pC->flags
+   || prollyHashCompare(&pA->schemaHash, &pC->schemaHash)!=0 ){
+    return SQLITE_OK;
+  }
+  if( pC->flags & PROLLY_NODE_INTKEY ){
+    Table *pTab = sqlite3FindTable(db, zParent, "main");
+    bKeyIsStorageKey = pTab && nCol==1 && azTo[0] && pTab->iPKey>=0
+        && sqlite3StrICmp(pTab->aCol[pTab->iPKey].zCnName, azTo[0])==0;
+  }else{
+    MergePkInfo pk;
+    rc = loadMergePkInfo(db, zParent, &pk);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    else if( rc!=SQLITE_OK ) return rc;
+    else{
+      int i, j;
+      bKeyIsStorageKey = pk.nPk==nCol;
+      for(i=0; bKeyIsStorageKey && i<nCol; i++){
+        for(j=0; j<pk.nPk; j++){
+          if( azTo[i] && sqlite3StrICmp(azTo[i], pk.azPk[j])==0 ) break;
+        }
+        if( j==pk.nPk ) bKeyIsStorageKey = 0;
+      }
+      freeMergePkInfo(&pk);
+    }
+  }
+  rc = prollyDiffIterOpen(&it, cs, pCache, &pA->root, &pC->root,
+                          pA->flags, pC->flags);
+  if( rc!=SQLITE_OK ) return rc;
+  *pbKept = 1;
+  while( (rc = prollyDiffIterStep(&it, &pChange))==SQLITE_ROW ){
+    if( pChange->type==PROLLY_DIFF_DELETE
+     || (pChange->type==PROLLY_DIFF_MODIFY && !bKeyIsStorageKey) ){
+      *pbKept = 0;
+      break;
+    }
+  }
+  prollyDiffIterClose(&it);
+  return rc==SQLITE_DONE || rc==SQLITE_ROW ? SQLITE_OK : rc;
+}
+
 int scanMergeColumnFlagViolations(
   sqlite3 *db,
   const char *zTable,
   struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
   char **azCols, char **azExtra, int nCols,
   u8 cvType,
   int *pnFound,
@@ -661,7 +921,9 @@ int scanMergeColumnFlagViolations(
   sqlite3_stmt *pQ = 0;
   int i;
   int rc;
-  int queryStepRc;
+  int queryStepRc = SQLITE_DONE;
+  int iRow;
+  MergeChangedRows rows;
 
   memset(&pkInfo, 0, sizeof(pkInfo));
   rc = tableHasRowid(db, zTable, &hasRowid);
@@ -674,6 +936,12 @@ int scanMergeColumnFlagViolations(
     if( rc!=SQLITE_OK ) return rc;
   }
   nKeyCol = hasRowid ? 1 : pkInfo.nPk;
+  rc = mergeChangedRowsLoad(db, zTable, 0, aAnc, nAnc, aCur, nCur, &rows);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zRowid);
+    freeMergePkInfo(&pkInfo);
+    return rc;
+  }
 
   pStr = sqlite3_str_new(db);
   sqlite3_str_appendf(pStr, "SELECT %s",
@@ -687,7 +955,9 @@ int scanMergeColumnFlagViolations(
       sqlite3_str_appendf(pStr, ", typeof(\"%w\")='null'", azCols[i]);
     }
   }
-  sqlite3_str_appendf(pStr, " FROM main.\"%w\" NOT INDEXED WHERE 0", zTable);
+  sqlite3_str_appendf(pStr, " FROM main.\"%w\" NOT INDEXED WHERE ", zTable);
+  if( rows.bUsable ) sqlite3_str_appendf(pStr, "%s AND ", rows.zKeyPred);
+  sqlite3_str_appendall(pStr, "(0");
   for(i=0; i<nCols; i++){
     if( azExtra ){
       sqlite3_str_appendf(pStr, " OR typeof(\"%w\") NOT IN ('null','%s')",
@@ -696,89 +966,94 @@ int scanMergeColumnFlagViolations(
       sqlite3_str_appendf(pStr, " OR typeof(\"%w\")='null'", azCols[i]);
     }
   }
+  sqlite3_str_appendall(pStr, ")");
   zQuery = sqlite3_str_finish(pStr);
-  if( !zQuery ){
-    freeMergePkInfo(&pkInfo);
-    return SQLITE_NOMEM;
-  }
-  rc = sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0);
+  rc = zQuery ? sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0) : SQLITE_NOMEM;
   sqlite3_free(zQuery);
   if( rc!=SQLITE_OK ){
     freeMergePkInfo(&pkInfo);
+    mergeChangedRowsClear(&rows);
     return rc;
   }
 
-  while( (queryStepRc = sqlite3_step(pQ))==SQLITE_ROW ){
-    u8 *pKey = 0; int nKey = 0;
-    u8 *pVal = 0; int nVal = 0;
-    i64 intKey = 0;
-    sqlite3_str *pInfo;
-    char *zInfo;
-    int nNamed = 0;
-    int appendRc;
-
-    if( hasRowid ){
-      intKey = sqlite3_column_int64(pQ, 0);
-      rc = fetchOrphanRow(db, zTable, intKey, &pKey, &nKey, &pVal, &nVal);
-    }else{
-      u8 *pPkRec = 0; int nPkRec = 0;
-      pPkRec = buildRecordFromStmtCols(pQ, 0, pkInfo.nPk, &nPkRec);
-      if( !pPkRec ){ rc = SQLITE_NOMEM; break; }
-      rc = fetchRowByPkFromTable(db, zTable, pPkRec, nPkRec, pkInfo.nPk,
-                                 &pKey, &nKey, &pVal, &nVal);
-      sqlite3_free(pPkRec);
+  for(iRow=0; rc==SQLITE_OK && iRow<(rows.bUsable ? rows.nRow : 1); iRow++){
+    if( rows.bUsable ){
+      rc = mergeChangedRowBind(&rows, iRow, pQ);
+      if( rc!=SQLITE_OK ) break;
     }
-    if( rc==SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(pKey);
-      sqlite3_free(pVal);
-      break;
-    }
+    while( (queryStepRc = sqlite3_step(pQ))==SQLITE_ROW ){
+      u8 *pKey = 0; int nKey = 0;
+      u8 *pVal = 0; int nVal = 0;
+      i64 intKey = 0;
+      sqlite3_str *pInfo;
+      char *zInfo;
+      int nNamed = 0;
+      int appendRc;
 
-    if( aAnc ){
-      u8 *pAncVal = 0; int nAncVal = 0;
-      int ancRc = hasRowid
-          ? fetchAncestorRowByName(db, aAnc, nAnc, zTable,
-                                   intKey, &pAncVal, &nAncVal)
-          : fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
-                                  pKey, nKey, &pAncVal, &nAncVal);
-      int preExisting = (ancRc==SQLITE_OK)
-          && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
-      sqlite3_free(pAncVal);
-      if( preExisting ){
+      if( hasRowid ){
+        intKey = sqlite3_column_int64(pQ, 0);
+        rc = fetchOrphanRow(db, zTable, intKey, &pKey, &nKey, &pVal, &nVal);
+      }else{
+        u8 *pPkRec = 0; int nPkRec = 0;
+        pPkRec = buildRecordFromStmtCols(pQ, 0, pkInfo.nPk, &nPkRec);
+        if( !pPkRec ){ rc = SQLITE_NOMEM; break; }
+        rc = fetchRowByPkFromTable(db, zTable, pPkRec, nPkRec, pkInfo.nPk,
+                                   &pKey, &nKey, &pVal, &nVal);
+        sqlite3_free(pPkRec);
+      }
+      if( rc==SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
+      if( rc!=SQLITE_OK ){
         sqlite3_free(pKey);
         sqlite3_free(pVal);
-        continue;
+        break;
       }
-    }
 
-    pInfo = sqlite3_str_new(db);
-    sqlite3_str_appendall(pInfo, "{\"Columns\": [");
-    for(i=0; i<nCols; i++){
-      if( sqlite3_column_int(pQ, nKeyCol + i) ){
-        sqlite3_str_appendf(pInfo, "%s\"%w\"", nNamed ? ", " : "", azCols[i]);
-        nNamed++;
+      if( aAnc ){
+        u8 *pAncVal = 0; int nAncVal = 0;
+        int ancRc = hasRowid
+            ? fetchAncestorRowByName(db, aAnc, nAnc, zTable,
+                                     intKey, &pAncVal, &nAncVal)
+            : fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
+                                    pKey, nKey, &pAncVal, &nAncVal);
+        int preExisting = (ancRc==SQLITE_OK)
+            && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+        sqlite3_free(pAncVal);
+        if( preExisting ){
+          sqlite3_free(pKey);
+          sqlite3_free(pVal);
+          continue;
+        }
       }
-    }
-    sqlite3_str_appendall(pInfo, "]}");
-    zInfo = sqlite3_str_finish(pInfo);
-    if( !zInfo ){
+
+      pInfo = sqlite3_str_new(db);
+      sqlite3_str_appendall(pInfo, "{\"Columns\": [");
+      for(i=0; i<nCols; i++){
+        if( sqlite3_column_int(pQ, nKeyCol + i) ){
+          sqlite3_str_appendf(pInfo, "%s\"%w\"", nNamed ? ", " : "", azCols[i]);
+          nNamed++;
+        }
+      }
+      sqlite3_str_appendall(pInfo, "]}");
+      zInfo = sqlite3_str_finish(pInfo);
+      if( !zInfo ){
+        sqlite3_free(pKey);
+        sqlite3_free(pVal);
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      appendRc = doltliteAppendConstraintViolation(
+          db, zTable, cvType, intKey, pKey, nKey, pVal, nVal, zInfo);
+      sqlite3_free(zInfo);
       sqlite3_free(pKey);
       sqlite3_free(pVal);
-      rc = SQLITE_NOMEM;
-      break;
+      if( appendRc!=SQLITE_OK ){ rc = appendRc; break; }
+      if( pnFound ) (*pnFound)++;
     }
-    appendRc = doltliteAppendConstraintViolation(
-        db, zTable, cvType, intKey, pKey, nKey, pVal, nVal, zInfo);
-    sqlite3_free(zInfo);
-    sqlite3_free(pKey);
-    sqlite3_free(pVal);
-    if( appendRc!=SQLITE_OK ){ rc = appendRc; break; }
-    if( pnFound ) (*pnFound)++;
+    if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
   }
-  if( rc==SQLITE_OK && queryStepRc!=SQLITE_DONE ) rc = queryStepRc;
   rc = finishConstraintStmt(pQ, rc);
   freeMergePkInfo(&pkInfo);
+  mergeChangedRowsClear(&rows);
   return rc;
 }
 

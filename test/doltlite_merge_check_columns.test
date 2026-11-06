@@ -139,4 +139,36 @@ foreach key {INTEGER INT} {
   }
 }
 
+# Merge validation evaluates a CHECK on the rows the merge changed, not on
+# every row of the table.
+proc check_count {v} { incr ::check_calls; return 1 }
+foreach {name ddl} {
+  intkey  {CREATE TABLE t(id INTEGER PRIMARY KEY, k INT, v INT, CHECK(check_count(v)))}
+  cluster {CREATE TABLE t(id INT, k INT, v INT, PRIMARY KEY(id,k), CHECK(check_count(v)))}
+} {
+  reset_db
+  db function check_count -deterministic check_count
+  execsql $ddl
+  do_execsql_test check-scan-$name-setup {
+    WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000)
+      INSERT INTO t SELECT i,1,0 FROM n;
+    SELECT dolt_commit('-Am','base') IS NOT NULL;
+    SELECT dolt_branch('side') IS NOT NULL;
+    UPDATE t SET v=1 WHERE id=1995;
+    SELECT dolt_commit('-am','main') IS NOT NULL;
+    SELECT dolt_checkout('side') IS NOT NULL;
+    UPDATE t SET v=2 WHERE id=5;
+    SELECT dolt_commit('-am','side') IS NOT NULL;
+    SELECT dolt_checkout('main') IS NOT NULL;
+  } {1 1 1 1 1 1}
+  set ::check_calls 0
+  do_execsql_test check-scan-$name-merge {
+    SELECT dolt_merge('side') IS NOT NULL;
+    SELECT count(*), sum(v) FROM t;
+  } {1 2000 3}
+  do_test check-scan-$name-calls {
+    expr {$::check_calls<=4}
+  } {1}
+}
+
 finish_test
