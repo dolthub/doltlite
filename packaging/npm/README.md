@@ -56,14 +56,15 @@ db.exec(`CREATE TABLE t(x)`);
 db.exec(`SELECT dolt_commit('-A', '-m', 'init')`);
 ```
 
-Paths are process-local. For persistence, serialize or use native
+That import loads the Node build under Node and the bundler build in a
+browser. Paths are process-local. For persistence, serialize or use native
 `@dolthub/doltlite`.
 
 ## Entry points
 
 | Import | Use |
 | --- | --- |
-| `@dolthub/doltlite-wasm` | Default; bundler-friendly ESM init |
+| `@dolthub/doltlite-wasm` | Node build under Node; bundler-friendly ESM otherwise |
 | `@dolthub/doltlite-wasm/sqlite3.mjs` | Plain ESM (no bundler) |
 | `@dolthub/doltlite-wasm/sqlite3-node.mjs` | Node-specific entry |
 | `@dolthub/doltlite-wasm/sqlite3-worker1-promiser.mjs` | Worker promiser API |

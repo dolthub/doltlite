@@ -47,6 +47,7 @@ done
 [ "$missing" = 0 ] || exit 1
 
 cp "$PKG_DIR/index.mjs" "$OUT_DIR/index.mjs"
+cp "$PKG_DIR/node.mjs" "$OUT_DIR/node.mjs"
 cp "$PKG_DIR/README.md" "$OUT_DIR/README.md"
 cp "$ROOT/LICENSE.md"   "$OUT_DIR/LICENSE.md"
 cp "$PKG_DIR/package.json" "$OUT_DIR/package.json"

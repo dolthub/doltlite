@@ -6,7 +6,11 @@
   "main": "index.mjs",
   "module": "index.mjs",
   "exports": {
-    ".": "./index.mjs",
+    ".": {
+      "browser": "./index.mjs",
+      "node": "./node.mjs",
+      "default": "./index.mjs"
+    },
     "./sqlite3.mjs": "./sqlite3.mjs",
     "./sqlite3.wasm": "./sqlite3.wasm",
     "./sqlite3-bundler-friendly.mjs": "./sqlite3-bundler-friendly.mjs",
@@ -19,6 +23,7 @@
   },
   "files": [
     "index.mjs",
+    "node.mjs",
     "sqlite3.mjs",
     "sqlite3.wasm",
     "sqlite3-bundler-friendly.mjs",
