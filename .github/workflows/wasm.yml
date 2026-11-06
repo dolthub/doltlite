@@ -119,6 +119,9 @@ jobs:
       run: |
         node ext/wasm/test-doltlite-write-e2e.mjs
 
+    - name: Test DoltLite wasm handle disposal
+      run: node ext/wasm/test-doltlite-disposal.mjs
+
     - name: Roundtrip exported wasm DB into native DoltLite
       run: |
         node ext/wasm/test-doltlite-export-roundtrip.mjs

@@ -345,6 +345,7 @@ DOLTLITE_ENABLE_REMOTES ?= 1
 DOLTLITE_VERSION ?= $(shell git -C $(dir.top) describe --tags --always 2>/dev/null || echo "dev")
 doltlite.wasm.lib = $(dir.doltlite.build)/libdoltlite.a
 doltlite.wasm.options = \
+  -DSQLITE_CUSTOM_INCLUDE=$(abspath $(dir.top)/src/doltlite_wasm.h) \
   -DSQLITE_ENABLE_BYTECODE_VTAB \
   -DSQLITE_ENABLE_COLUMN_METADATA \
   -DSQLITE_ENABLE_DBPAGE_VTAB \
