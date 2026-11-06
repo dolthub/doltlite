@@ -349,7 +349,8 @@ static int nonlocalSync(sqlite3 *db){
   int nDetached = 0;
   int i;
 
-  if( db->nVdbeExec>0 || db->nDb<1 || !doltliteNonlocalSlot(db) ) return 0;
+  if( db->init.busy || db->nVdbeExec>0 || db->nDb<1
+   || !doltliteNonlocalSlot(db) ) return 0;
   if( !DbHasProperty(db, 0, DB_SchemaLoaded) ) return 0;
   pNo = doltliteNonlocalNoRules(db);
   if( pNo->pSchema==db->aDb[0].pSchema

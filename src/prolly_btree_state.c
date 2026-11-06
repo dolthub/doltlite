@@ -567,6 +567,25 @@ int btreeWriteWorkingState(
   return rc;
 }
 
+static void btreeRememberWorkingSet(Btree *p){
+  if( p->isDetached || !p->db || p==p->db->aDb[0].pBt
+   || !doltliteBtreeSameStore(p, p->db->aDb[0].pBt) ) return;
+  memset(&p->loadedWorkingSet, 0, sizeof(p->loadedWorkingSet));
+  chunkStoreGetBranchWorkingSet(p->pBt->pStore,
+      p->zBranch ? p->zBranch : "main", &p->loadedWorkingSet);
+}
+
+int btreeWorkingSetMoved(Btree *p){
+  ProllyHash workingSet;
+  /* Store rollback can readopt peer refs without reloading this handle. */
+  if( p->isDetached || !p->db || p==p->db->aDb[0].pBt
+   || !doltliteBtreeSameStore(p, p->db->aDb[0].pBt) ) return 0;
+  memset(&workingSet, 0, sizeof(workingSet));
+  chunkStoreGetBranchWorkingSet(p->pBt->pStore,
+      p->zBranch ? p->zBranch : "main", &workingSet);
+  return prollyHashCompare(&workingSet, &p->loadedWorkingSet)!=0;
+}
+
 int btreeReloadBranchWorkingStateInto(
   Btree *p,
   int bLoadCatalog,
@@ -639,6 +658,7 @@ int btreeReloadBranchWorkingStateInto(
   if( (state.isRebasing & WS_REBASE_FLAG_EDIT)==0 ){
     memset(&p->rebaseEditCommit, 0, sizeof(p->rebaseEditCommit));
   }
+  if( bLoadCatalog ) btreeRememberWorkingSet(p);
   return SQLITE_OK;
 }
 
@@ -681,6 +701,7 @@ void btreeMarkWorkingStateChanged(Btree *p, int bLocal){
   }
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion;
   if( bLocal ){
+    btreeRememberWorkingSet(p);
     btreeBumpLocalDataVersion(p);
   }else{
     btreeBumpExternalDataVersion(p);
@@ -739,7 +760,8 @@ int btreeRefreshSharedWorkingState(Btree *p){
   if( p->isDetached ) return SQLITE_OK;
   pBt = p->pBt;
   if( p->iLoadedWorkingStateVersion==pBt->iWorkingStateVersion
-   && !p->bCatalogDropped ){
+   && !p->bCatalogDropped
+   && (p->inTrans!=TRANS_NONE || !btreeWorkingSetMoved(p)) ){
     return SQLITE_OK;
   }
   memset(&loadedCatHash, 0, sizeof(loadedCatHash));

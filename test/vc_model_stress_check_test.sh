@@ -242,6 +242,76 @@ d=$(newdir removal_collection_failure)
 printf 'COLLECT_ERROR\tfailed to read removal diff\n' > "$d/log.0"
 check removal_collection_failure_is_not_ignored 1 "$d" 1 'removal collection failed'
 
+for key in INTEGER INT; do
+  d=$(newdir "nonlocal_$key" "$key")
+  "$DOLTLITE" "$d/db.db" "SELECT dolt_checkout('-b','nl0');
+CREATE TABLE model_shared(id $key PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am','nonlocal base'); SELECT dolt_branch('nl1');
+SELECT dolt_tag('nl_ro'); SELECT dolt_checkout('main');" >/dev/null
+  "$DOLTLITE" "$d/db.db@nl0" "INSERT INTO model_shared VALUES(100000012,'acked');" >/dev/null
+  printf 'N\t100000012\tnl0\t1\n' > "$d/log.0"
+  check "nonlocal_target_keeps_acked_write_$key" 0 "$d"
+  printf 'X\t15\tmain\t1000\t2000\treset_hard_1\t*\n' >> "$d/log.0"
+  "$DOLTLITE" "$d/db.db@nl0" 'DELETE FROM model_shared;' >/dev/null
+  check "source_reset_cannot_excuse_nonlocal_loss_$key" 1 "$d" 1 'LOST nonlocal id'
+  "$DOLTLITE" "$d/db.db@nl1" "INSERT INTO model_shared VALUES(100000012,'misrouted');" >/dev/null
+  check "nonlocal_wrong_target_is_detected_$key" 2 "$d" 1 'phantom nonlocal id'
+  printf 'N\t100000012\tnl1\t0\n' > "$d/log.0"
+  check "nonlocal_rollback_leak_is_detected_$key" 1 "$d" 1 'phantom nonlocal id'
+  "$DOLTLITE" "$d/db.db@nl1" 'DELETE FROM model_shared;' >/dev/null
+  check "nonlocal_rollback_is_absent_$key" 0 "$d"
+  printf 'N\t100000013\tnl_ro\t0\n' >> "$d/log.0"
+  check "nonlocal_readonly_ref_is_unchanged_$key" 0 "$d"
+
+  for included in 0 1; do
+    d=$(newdir "ignore_${key}_$included" "$key")
+    "$DOLTLITE" "$d/db.db" "INSERT INTO dolt_ignore VALUES('model_ignored_*',1);
+CREATE TABLE model_ignored_test(id INT PRIMARY KEY);
+INSERT INTO model_ignored_test VALUES(1);" >/dev/null
+    if [ "$included" -eq 1 ]; then
+      "$DOLTLITE" "$d/db.db" "SELECT dolt_add('-f','model_ignored_test');" >/dev/null
+    fi
+    "$DOLTLITE" "$d/db.db" "SELECT dolt_commit('--allow-empty','-m','policy');" >/dev/null
+    printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t%s\n' "$included" > "$d/log.0"
+    check "ignore_commit_expected_contents_${key}_$included" 0 "$d"
+    printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t%s\n' "$((1-included))" > "$d/log.0"
+    check "ignore_commit_wrong_contents_detected_${key}_$included" 1 "$d" 1 'ignore commit policy table'
+    if [ "$included" -eq 0 ]; then
+      policy_hash=$("$DOLTLITE" "$d/db.db" "SELECT dolt_hashof('HEAD');")
+      "$DOLTLITE" "$d/db.db" "SELECT dolt_add('-f','model_ignored_test'); SELECT dolt_commit('-m','policy');" >/dev/null
+      printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t0\t%s\n' "$policy_hash" > "$d/log.0"
+      check "ignore_duplicate_message_uses_exact_snapshot_$key" 0 "$d"
+      printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t0\t0000000000000000000000000000000000000000\n' > "$d/log.0"
+      check "ignore_missing_snapshot_is_detected_$key" 1 "$d" 1 'expected one snapshot'
+    else
+      "$DOLTLITE" "$d/db.db" 'DELETE FROM model_ignored_test; SELECT dolt_commit("-am","later");' >/dev/null
+      printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t1\n' > "$d/log.0"
+      check "ignore_verifies_snapshot_not_working_${key}" 0 "$d"
+    fi
+  done
+done
+
+d=$(newdir policy_check_failure)
+printf 'MODEL_FAIL\tignored table was staged\n' > "$d/log.0"
+check policy_check_failure_is_not_ignored 1 "$d" 1 'policy check failed'
+
+for clustered in 0 1; do
+  d="$TMP/policy-workload-$clustered"
+  status=0
+  VCMODEL_CLUSTERED=$clustered "$BIN" "$((clustered*12))" "$d" 2 1 3 120 > "$d.out" 2>&1 || status=$?
+  covered=1
+  for pattern in $'^N\t[0-9]+\tnl[01]\t1$' $'^N\t[0-9]+\tnl[01]\t0$' $'^N\t[0-9]+\tnl_ro\t0$' $'^P\t.*\t0\t[0-9a-f]{40}$' $'^P\t.*\t1\t[0-9a-f]{40}$'; do
+    if ! grep -Eq "$pattern" "$d"/log.*; then covered=0; fi
+  done
+  if [ "$status" -eq 0 ] && [ "$covered" -eq 1 ]; then
+    echo "ok policy_workload_clustered_$clustered"
+  else
+    echo "FAIL policy_workload_clustered_$clustered: status=$status covered=$covered"
+    cat "$d.out"
+    fails=$((fails+1))
+  fi
+done
+
 if [ "$fails" -ne 0 ]; then
   echo "vc_model_stress_check: $fails failed"
   exit 1

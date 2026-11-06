@@ -4,6 +4,7 @@
 ** branches and log every acknowledged row and commit; after each phase the
 ** parent checks that each acknowledged write is still present unless an op
 ** logged as destructive could have removed it.
+** Nonlocal targets are retained: source history edits never excuse their rows.
 **
 **   vc_model_stress_test SEED DIR [NPROC NCONN NPHASE OPS]
 **   vc_model_stress_test --check DIR [NPROC]
@@ -58,6 +59,11 @@ static void logf_(const char *fmt, ...){
   fputc('\n', gLog); fflush(gLog);
 }
 
+static void sqliteLog(void *p, int rc, const char *z){
+  (void)p;
+  if( gLog && (rc&0xff)==SQLITE_CORRUPT ) logf_("SQLITE_LOG\t%d\t%s", rc, z);
+}
+
 typedef struct Conn {
   sqlite3 *db;
   int inTxn;
@@ -78,6 +84,7 @@ static int ctrMsg = 0, ctrTag = 0, ctrBr = 0, ctrCol = 0, ctrIdx = 0;
 static char azMyTags[256][32]; static int nMyTags = 0;
 static char azMyBr[256][32]; static int nMyBr = 0;
 static const char *azBr[] = { "main", "b1", "b2", "b3" };
+static const char *azNonlocal[] = { "nl0", "nl1", "nl_ro" };
 
 static int isFatal(int rc, const char *z){
   int p = rc & 0xff;
@@ -488,6 +495,109 @@ static void opCommit(Conn *c){
   }
 }
 
+static int expectInt(Conn *c, const char *zOp, const char *zSql, int want){
+  if( ex(c, zOp, zSql)!=SQLITE_OK ) return 0;
+  if( !gRes[0] || atoi(gRes)!=want ){
+    logf_("MODEL_FAIL\t%s expected %d got %s: %s", zOp, want, gRes, zSql);
+    return 0;
+  }
+  return 1;
+}
+
+static void opNonlocal(Conn *c){
+  char sql[512], br[128], target[48];
+  long long id = newId(), local = newId(), S, E;
+  int rc, kind = rn(4), committed = 0;
+  if( c->inTxn || !sqlite3_get_autocommit(c->db) ) return;
+  if( ex(c, "begin_nonlocal", "BEGIN IMMEDIATE") ) return;
+  curBranch(c, br, sizeof(br));
+  if( ex(c, "nonlocal_rule", "SELECT target_ref FROM dolt_nonlocal_tables WHERE table_name='model_link'") ) goto abort;
+  snprintf(target, sizeof(target), "%s", gRes);
+  if( !target[0] || rn(3)==0 ){
+    snprintf(target, sizeof(target), "%s", azNonlocal[rn(3)]);
+    snprintf(sql, sizeof(sql), "INSERT OR REPLACE INTO dolt_nonlocal_tables VALUES('model_link','%s','model_shared','immediate')", target);
+    if( ex(c, "nonlocal_retarget", sql) ) goto abort;
+  }
+  if( ex(c, "nonlocal_read", "SELECT count(*) FROM model_link") ) goto abort;
+  if( kind==2 && ex(c, "nonlocal_savepoint", "SAVEPOINT nl") ) goto abort;
+  S = nowNs();
+  snprintf(sql, sizeof(sql), "INSERT INTO model_link VALUES(%lld,'n%d')", id, gW);
+  rc = ex(c, "nonlocal_insert", sql);
+  if( !strcmp(target, "nl_ro") ){
+    if( (rc&0xff)!=SQLITE_READONLY )
+      logf_("MODEL_FAIL\tnonlocal readonly insert returned %d", rc);
+    goto rollback;
+  }
+  if( rc ) goto rollback;
+  snprintf(sql, sizeof(sql), "INSERT INTO w(id,v) VALUES(%lld,'local')", local);
+  if( ex(c, "nonlocal_local_insert", sql) ) goto rollback;
+  snprintf(sql, sizeof(sql), "SELECT count(*) FROM model_link WHERE id=%lld", id);
+  if( !expectInt(c, "nonlocal_own_write", sql, 1) ) goto rollback;
+  if( kind==1 ) goto rollback;
+  if( kind==2 && ex(c, "nonlocal_rollback_to", "ROLLBACK TO nl") ) goto rollback;
+  if( ex(c, "nonlocal_commit", "COMMIT") ) goto rollback;
+  E = nowNs();
+  committed = kind!=2;
+  if( committed ){
+    logf_("I\t%lld\t%s\t%lld\t%lld", local, br, S, E);
+    tripAdd(local, br);
+  }
+  logf_("N\t%lld\t%s\t%d", id, target, committed);
+  if( kind==3 ){
+    char msg[64];
+    snprintf(msg, sizeof(msg), "n_%d_%d_%d", gSeed, gW, ++ctrMsg);
+    snprintf(sql, sizeof(sql), "SELECT dolt_commit_all('-Am','%s')", msg);
+    S = nowNs();
+    if( vc(c, "commit_all", sql, 0, 0)==SQLITE_OK ){
+      logf_("C\t%s\t%s\t%lld\t%lld\t1", msg, br, S, nowNs());
+    }
+  }
+  return;
+rollback:
+  if( !sqlite3_get_autocommit(c->db) && ex(c, "nonlocal_rollback", "ROLLBACK") )
+    logf_("MODEL_FAIL\tnonlocal rollback failed");
+  logf_("N\t%lld\t%s\t0", id, target);
+  return;
+abort:
+  txnAbort(c);
+}
+
+static void opIgnored(Conn *c){
+  char sql[700], br[128], table[64], msg[64], hash[48];
+  long long S, E;
+  int ignored = rn(2), stage = rn(4), included = !ignored || stage==3;
+  if( c->inTxn || !sqlite3_get_autocommit(c->db) ) return;
+  if( ex(c, "begin_ignore", "BEGIN IMMEDIATE") ) return;
+  curBranch(c, br, sizeof(br));
+  snprintf(table, sizeof(table), "model_ignored_%d_%lld", gW, newId());
+  snprintf(msg, sizeof(msg), "ig_%d_%d_%d", gSeed, gW, ++ctrMsg);
+  if( ex(c, "ignore_rule", "INSERT OR REPLACE INTO dolt_ignore VALUES('model_ignored_*',1)") ) goto abort;
+  if( !ignored ){
+    snprintf(sql, sizeof(sql), "INSERT OR REPLACE INTO dolt_ignore VALUES('%s',0)", table);
+    if( ex(c, "ignore_exception", sql) ) goto abort;
+  }
+  snprintf(sql, sizeof(sql), "CREATE TABLE %s(id INT PRIMARY KEY); INSERT INTO %s VALUES(1)", table, table);
+  if( ex(c, "ignore_create", sql) ) goto abort;
+  snprintf(sql, sizeof(sql), "SELECT count(*) FROM dolt_status WHERE table_name='%s'", table);
+  if( !expectInt(c, "ignore_status", sql, !ignored) ) goto abort;
+  if( stage<2 ) snprintf(sql, sizeof(sql), "SELECT dolt_add('%s')", stage ? "-A" : ".");
+  else snprintf(sql, sizeof(sql), "SELECT dolt_add(%s'%s')", stage==3 ? "'-f'," : "", table);
+  if( ex(c, "ignore_add", sql) ) goto abort;
+  snprintf(sql, sizeof(sql), "SELECT count(*) FROM dolt_schema_diff('HEAD','STAGED') WHERE to_table_name='%s'", table);
+  if( !expectInt(c, "ignore_staged", sql, included) ) goto abort;
+  snprintf(sql, sizeof(sql), "SELECT dolt_commit('--allow-empty','-m','%s')", msg);
+  S = nowNs();
+  if( ex(c, "ignore_commit_vc", sql) ) goto abort;
+  snprintf(hash, sizeof(hash), "%.47s", gRes);
+  if( ex(c, "ignore_commit", "COMMIT") ) goto abort;
+  E = nowNs();
+  logf_("C\t%s\t%s\t%lld\t%lld\t0", msg, br, S, E);
+  logf_("P\t%s\t%s\t%s\t%d\t%s", br, msg, table, included, hash);
+  return;
+abort:
+  txnAbort(c);
+}
+
 static void opVc(Conn *c){
   char sql[512], br[128];
   int k = rn(100);
@@ -639,12 +749,14 @@ static void workerStep(void){
     sqlite3_busy_timeout(r->db, 10 + rn(gBusyMax));
     gErr[0] = 0;
   }
-  k = rn(100);
+  k = rn(112);
   if( c->inTxn && --c->nTxnOps<=0 ){
     if( rn(4) ) txnCommit(c); else txnAbort(c);
     return;
   }
-  if( k<30 ) opInsert(c);
+  if( k>=106 ) opIgnored(c);
+  else if( k>=100 ) opNonlocal(c);
+  else if( k<30 ) opInsert(c);
   else if( k<35 ) opUpdate(c);
   else if( k<38 ) opDelete(c);
   else if( k<45 ) opBegin(c);
@@ -884,11 +996,15 @@ static void runWorker(int w, int rfd, int wfd){
 typedef struct Ins { long long id; char br[48]; long long S, E; } Ins;
 typedef struct Xev { int flags; char br[48]; long long S, E; char op[24]; char victim[64]; char newmsg[64]; } Xev;
 typedef struct Cmt { char msg[64]; char br[48]; long long S, E; int all; } Cmt;
+typedef struct NonlocalWrite { long long id; char target[48]; int committed; } NonlocalWrite;
+typedef struct PolicyCommit { char br[48], msg[64], table[64], hash[48]; int included; } PolicyCommit;
 typedef struct StrSet { char (*a)[48]; int n, cap; } StrSet;
 
 static Ins *aIns; static int nIns, capIns;
 static Xev *aX; static int nX, capX;
 static Cmt *aCm; static int nCm, capCm;
+static NonlocalWrite *aNl; static int nNl, capNl;
+static PolicyCommit *aPolicy; static int nPolicy, capPolicy;
 static long long *aUnk; static int nUnk, capUnk;
 static long long *aDel; static int nDel, capDel;
 static StrSet tagsMade, tagsDel, brMade, brDel;
@@ -919,7 +1035,7 @@ static void viol(const char *fmt, ...){
 
 static void loadLogs(void){
   int w;
-  nIns = nX = nCm = nUnk = nDel = 0;
+  nIns = nX = nCm = nUnk = nDel = nNl = nPolicy = 0;
   tagsMade.n = tagsDel.n = brMade.n = brDel.n = 0;
   nFatal = 0; nKnownParked = 0;
   for(w=0; w<nProc; w++){
@@ -961,6 +1077,21 @@ static void loadLogs(void){
         GROW(aCm, nCm, capCm);
         snprintf(aCm[nCm].msg, 64, "%s", t[1]); snprintf(aCm[nCm].br, 48, "%s", t[2]);
         aCm[nCm].S = atoll(t[3]); aCm[nCm].E = atoll(t[4]); aCm[nCm].all = atoi(t[5]); nCm++;
+      }else if( !strcmp(t[0],"N") && nt>=4 ){
+        GROW(aNl, nNl, capNl);
+        aNl[nNl].id = atoll(t[1]);
+        snprintf(aNl[nNl].target, sizeof(aNl[nNl].target), "%s", t[2]);
+        aNl[nNl++].committed = atoi(t[3]);
+      }else if( !strcmp(t[0],"P") && nt>=5 ){
+        GROW(aPolicy, nPolicy, capPolicy);
+        snprintf(aPolicy[nPolicy].br, sizeof(aPolicy[nPolicy].br), "%s", t[1]);
+        snprintf(aPolicy[nPolicy].msg, sizeof(aPolicy[nPolicy].msg), "%s", t[2]);
+        snprintf(aPolicy[nPolicy].table, sizeof(aPolicy[nPolicy].table), "%s", t[3]);
+        aPolicy[nPolicy].included = atoi(t[4]);
+        snprintf(aPolicy[nPolicy].hash, sizeof(aPolicy[nPolicy].hash), "%s", nt>5 ? t[5] : "");
+        nPolicy++;
+      }else if( !strcmp(t[0],"MODEL_FAIL") ){
+        viol("worker %d policy check failed: %s", w, nt>1 ? t[1] : "");
       }else if( !strcmp(t[0],"T") ) ssAdd(&tagsMade, t[1]);
       else if( !strcmp(t[0],"TD") ) ssAdd(&tagsDel, t[1]);
       else if( !strcmp(t[0],"B") ) ssAdd(&brMade, t[1]);
@@ -1151,6 +1282,86 @@ static int readHeadIds(sqlite3 *db, const char *br, IdSet *s){
   return rc;
 }
 
+static void checkNonlocal(void){
+  int b, i, j;
+  if( !nNl ) return;
+  for(b=0;b<3;b++){
+    sqlite3 *db = 0;
+    IdSet rows = {0};
+    char path[800];
+    snprintf(path, sizeof(path), "%s@%s", zDb, azNonlocal[b]);
+    if( sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, 0) ){
+      viol("open nonlocal target %s: %s", azNonlocal[b], sqlite3_errmsg(db));
+      sqlite3_close(db);
+      continue;
+    }
+    sqlite3_busy_timeout(db, 5000);
+    if( readIds(db, "SELECT id FROM main.model_shared", &rows)==SQLITE_OK ){
+      for(i=0;i<nNl;i++){
+        if( aNl[i].committed && !strcmp(aNl[i].target, azNonlocal[b])
+         && !hasLL(rows.a, rows.n, aNl[i].id) ){
+          viol("LOST nonlocal id %lld on target %s", aNl[i].id, azNonlocal[b]);
+        }
+      }
+      for(i=0;i<rows.n;i++){
+        for(j=0;j<nNl;j++){
+          if( aNl[j].committed && aNl[j].id==rows.a[i]
+           && !strcmp(aNl[j].target, azNonlocal[b]) ) break;
+        }
+        if( j==nNl ) viol("phantom nonlocal id %lld on target %s", rows.a[i], azNonlocal[b]);
+      }
+    }
+    free(rows.a);
+    sqlite3_close(db);
+  }
+  printf("  verified nonlocal receipts=%d\n", nNl);
+}
+
+static void checkPolicyCommits(sqlite3 *db, const char *br, StrSet *logm){
+  int i;
+  for(i=0;i<nPolicy;i++){
+    PolicyCommit *p = &aPolicy[i];
+    sqlite3 *snapshot = 0;
+    StrSet hash = {0};
+    IdSet count = {0};
+    char path[800], sql[512];
+    if( strcmp(p->br, br) || !ssHas(logm, p->msg) ) continue;
+    snprintf(sql, sizeof(sql), "SELECT commit_hash FROM dolt_log WHERE %s='%s'",
+        p->hash[0] ? "commit_hash" : "message", p->hash[0] ? p->hash : p->msg);
+    if( readStrs(db, sql, &hash)!=SQLITE_OK ){
+      free(hash.a);
+      continue;
+    }
+    if( hash.n!=1 ){
+      int j;
+      for(j=0;j<nCm;j++){
+        if( !strcmp(aCm[j].msg, p->msg) && !strcmp(aCm[j].br, br)
+         && commitExcused(&aCm[j]) ) break;
+      }
+      if( j==nCm ) viol("ignore commit %s: expected one snapshot, got %d", p->msg, hash.n);
+    }
+    if( hash.n==1 ){
+      snprintf(path, sizeof(path), "%s@%s", zDb, hash.a[0]);
+      if( sqlite3_open_v2(path, &snapshot, SQLITE_OPEN_READONLY, 0) ){
+        viol("open ignore commit %s: %s", p->msg, sqlite3_errmsg(snapshot));
+      }else{
+        snprintf(sql, sizeof(sql), "SELECT count(*) FROM main.sqlite_schema WHERE type='table' AND name='%s'", p->table);
+        if( readIds(snapshot, sql, &count)==SQLITE_OK
+         && (count.n!=1 || count.a[0]!=p->included) ){
+          viol("ignore commit %s table %s expected %d got %lld", p->msg, p->table, p->included, count.n ? count.a[0] : -1);
+        }else if( p->included ){
+          snprintf(sql, sizeof(sql), "SELECT count(*) FROM main.%s WHERE id=1", p->table);
+          if( readIds(snapshot, sql, &count)==SQLITE_OK && (count.n!=1 || count.a[0]!=1) )
+            viol("ignore commit %s lost row in %s", p->msg, p->table);
+        }
+      }
+    }
+    sqlite3_close(snapshot);
+    free(hash.a);
+    free(count.a);
+  }
+}
+
 static void checkModel(int ph){
   sqlite3 *db = 0;
   StrSet branches = {0}, tags = {0}, logm = {0};
@@ -1158,6 +1369,7 @@ static void checkModel(int ph){
   int i, b;
   long long t0 = nowNs();
   loadLogs();
+  checkNonlocal();
   for(i=0;i<nIns;i++) idAdd(&acked, aIns[i].id);
   qsort(acked.a, acked.n, sizeof(long long), cmpll);
   if( sqlite3_open(zDb, &db) ){ viol("open main for check"); return; }
@@ -1188,6 +1400,7 @@ static void checkModel(int ph){
     }
     snprintf(sql, sizeof(sql), "SELECT message FROM dolt_log('%s')", br);
     readStrs(bd, sql, &logm);
+    checkPolicyCommits(bd, br, &logm);
     {
       StrSet ic = {0};
       readStrs(bd, "PRAGMA integrity_check", &ic);
@@ -1240,8 +1453,8 @@ static void checkModel(int ph){
   printf("  verified rows=%d (excused %d) commits=%d (excused %d) headrows=%d (excused %d)\n", stRow, stRowEx, stCm, stCmEx, stHead, stHeadEx);
   stRow=stRowEx=stCm=stCmEx=stHead=stHeadEx=0;
   if( nKnownParked ) printf("  known: %d CORRUPT errors on connections parked on a deleted branch\n", nKnownParked);
-  printf("  phase %d check: branches=%d acked=%d unknown=%d deleted=%d xev=%d commits=%d (%.1fs)\n",
-         ph, branches.n, nIns, nUnk, nDel, nX, nCm, (nowNs()-t0)/1e9);
+  printf("  phase %d check: branches=%d acked=%d unknown=%d deleted=%d xev=%d commits=%d ignore=%d (%.1fs)\n",
+         ph, branches.n, nIns, nUnk, nDel, nX, nCm, nPolicy, (nowNs()-t0)/1e9);
   fflush(stdout);
 }
 
@@ -1277,7 +1490,13 @@ static void buildDb(void){
     "SELECT dolt_branch('b1');"
     "SELECT dolt_branch('b2');"
     "SELECT dolt_branch('b3');"
-    "SELECT dolt_tag('base');", 0, 0, &zE);
+    "SELECT dolt_tag('base');"
+    "SELECT dolt_checkout('-b','nl0');"
+    "CREATE TABLE model_shared(id INT PRIMARY KEY, v TEXT);"
+    "SELECT dolt_commit('-Am','nonlocal base');"
+    "SELECT dolt_branch('nl1');"
+    "SELECT dolt_tag('nl_ro');"
+    "SELECT dolt_checkout('main');", 0, 0, &zE);
   if( rc ){ fprintf(stderr, "build failed: %s\n", zE); exit(2); }
   sqlite3_close(db);
 }
@@ -1292,6 +1511,7 @@ int main(int argc, char **argv){
   pid_t aPid[32];
   int aUp[32][2], aDown[32][2];
   int wedgeSec = 120;
+  sqlite3_config(SQLITE_CONFIG_LOG, sqliteLog, 0);
   if( argc<3 ){ fprintf(stderr, "usage: %s SEED DIR [NPROC NCONN NPHASE OPS]\n", argv[0]); return 2; }
   if( !strcmp(argv[1], "--record-removals") && argc==4 ){
     Conn c;

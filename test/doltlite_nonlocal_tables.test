@@ -459,4 +459,61 @@ do_execsql_test nonlocal-hidden-schemas {
   SELECT schema FROM pragma_table_list WHERE name='np';
 } {1 main 0 main}
 
+set executable [file normalize [info nameofexecutable]]
+while {[file type $executable] eq "link"} {
+  set executable [file normalize [file join [file dirname $executable] [file readlink $executable]]]
+}
+set engine [file join [file dirname $executable] doltlite]
+if {$tcl_platform(platform) eq "windows"} {append engine .exe}
+
+foreach key {INTEGER INT} {
+  foreach gc {0 1} {
+    foreach command {
+      {SELECT dolt_checkout('missing')}
+      {SELECT dolt_merge('missing')}
+      {SELECT dolt_commit('-m','nothing staged')}
+    } kind {checkout merge commit} {
+      foreach access {read write} {
+        reset_db
+        execsql "CREATE TABLE w(id $key PRIMARY KEY)"
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_checkout('-b','nl0');
+          CREATE TABLE shared(id INT PRIMARY KEY);
+          SELECT dolt_commit('-Am','shared');
+          SELECT dolt_checkout('main');
+          INSERT INTO dolt_nonlocal_tables VALUES('link','nl0','shared','immediate');
+          SELECT dolt_commit('-Am','rule');
+          SELECT dolt_checkout('-b','b1');
+          BEGIN IMMEDIATE;
+          INSERT INTO link VALUES(0);
+          INSERT INTO w VALUES(0);
+          COMMIT;
+        }
+        exec $engine -bail [file normalize test.db] {
+          BEGIN IMMEDIATE;
+          INSERT INTO link VALUES(1);
+          INSERT INTO w VALUES(1);
+          COMMIT;
+        }
+        if {$gc} {exec $engine -bail [file normalize test.db] {SELECT dolt_gc()}}
+        set prefix nonlocal-peer-refused-$key.$gc.$kind.$access
+        do_test $prefix.refused {lindex [catchsql $command] 0} 1
+        if {$access eq "read"} {
+          do_execsql_test $prefix.read {SELECT id FROM link ORDER BY id} {0 1}
+        }
+        do_execsql_test $prefix.write {
+          BEGIN IMMEDIATE;
+          INSERT INTO link VALUES(2);
+          INSERT INTO w VALUES(2);
+          COMMIT;
+        } {}
+        do_test $prefix.durable {
+          nl_disk nl0 {SELECT id FROM shared ORDER BY id; PRAGMA integrity_check}
+        } {0 1 2 ok}
+      }
+    }
+  }
+}
+
 finish_test
