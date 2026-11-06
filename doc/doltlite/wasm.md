@@ -15,6 +15,10 @@ use `@dolthub/doltlite` instead.
 | Browser, not isolated | In-memory only |
 | Node / Bun | Virtual; no host persistence |
 
+`sqlite3.oo1.OpfsDb` is set only when the OPFS VFS installed. `sqlite3.opfs` is
+internal and is deleted at the end of init, so `'opfs' in sqlite3` does not
+report whether OPFS is available.
+
 OPFS/serialized bytes use the native format and include history. Persist bytes
 yourself or use native `@dolthub/doltlite`.
 

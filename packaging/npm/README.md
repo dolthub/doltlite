@@ -24,8 +24,9 @@ import { sqlite3InitModule } from '@dolthub/doltlite-wasm';
 
 const sqlite3 = await sqlite3InitModule();
 
-// Persistent across reloads when OPFS is available, in-memory otherwise.
-const db = ('opfs' in sqlite3)
+// OpfsDb exists only after the OPFS VFS installs. sqlite3.opfs is removed
+// during init, so ('opfs' in sqlite3) stays false even when OPFS is ready.
+const db = sqlite3.oo1.OpfsDb
   ? new sqlite3.oo1.OpfsDb('/app.db')
   : new sqlite3.oo1.DB(':memory:');
 

@@ -2001,6 +2001,8 @@ static void (*gSyncHook)(void*);
 static void *gSyncHookArg;
 static int gFailFullPathnameHits = 0;
 static const char *gFullPathnameSuffix = 0;
+static int gOpfsLikeIo = 0;
+static int gOpfsLikeDevHits = 0;
 static char gRewrittenFullPath[512];
 static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
 static int failFullPathname(sqlite3_vfs *pVfs, const char *zName, int nOut, char *zOut);
@@ -2182,6 +2184,21 @@ static int failUnfetch(sqlite3_file *pFile, sqlite3_int64 iOfst, void *pPage){
   return p->pReal->pMethods->xUnfetch(p->pReal, iOfst, pPage);
 }
 
+static int opfsLikeFileControl(sqlite3_file *pFile, int op, void *pArg){
+  (void)pFile;
+  (void)op;
+  (void)pArg;
+  return SQLITE_NOTFOUND;
+}
+
+static int opfsLikeDeviceCharacteristics(sqlite3_file *pFile){
+  (void)pFile;
+  gOpfsLikeDevHits++;
+  return SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN;
+}
+
+static sqlite3_io_methods gOpfsLikeIoMethods;
+
 static const sqlite3_io_methods gFailIoMethods = {
   3,
   failClose,
@@ -2227,7 +2244,17 @@ static int failOpen(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *pFile,
   p->pReal = pReal;
   p->isMainDb = (flags & SQLITE_OPEN_MAIN_DB)!=0;
   p->isLockSidecar = isDoltLiteLock;
-  p->base.pMethods = &gFailIoMethods;
+  if( gOpfsLikeIo ){
+    if( gOpfsLikeIoMethods.iVersion==0 ){
+      gOpfsLikeIoMethods = gFailIoMethods;
+      gOpfsLikeIoMethods.xSectorSize = 0;
+      gOpfsLikeIoMethods.xDeviceCharacteristics = opfsLikeDeviceCharacteristics;
+      gOpfsLikeIoMethods.xFileControl = opfsLikeFileControl;
+    }
+    p->base.pMethods = &gOpfsLikeIoMethods;
+  }else{
+    p->base.pMethods = &gFailIoMethods;
+  }
   return SQLITE_OK;
 }
 
@@ -2281,6 +2308,42 @@ static int open_fail_db(const char *path, sqlite3 **ppDb){
     sqlite3_busy_timeout(*ppDb, 5000);
   }
   return rc;
+}
+
+/* Async OPFS leaves xSectorSize unset, reports no powersafe overwrite, and
+** answers every file-control with SQLITE_NOTFOUND. A file database still
+** has to open, answer SQL, and come back after close. */
+static void run_opfs_like_vfs(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("--- Test: OPFS-like VFS opens and rereads a file database ---\n");
+  check("opfs_like_register", registerFailVfs()==SQLITE_OK);
+  gOpfsLikeIo = 1;
+  gOpfsLikeDevHits = 0;
+  make_dbpath(dbpath, sizeof(dbpath), "test_opfs_like");
+  removeDbFiles(dbpath);
+  check("opfs_like_open", open_fail_db(dbpath, &db)==SQLITE_OK);
+  if( db ){
+    check("opfs_like_asked_device", gOpfsLikeDevHits>0);
+    check("opfs_like_select",
+      strcmp(queryScalarText(db, "SELECT 1"), "1")==0);
+    check("opfs_like_write", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+    check("opfs_like_read",
+      strcmp(queryScalarText(db, "SELECT v FROM t"), "a")==0);
+    sqlite3_close(db);
+    db = 0;
+    check("opfs_like_reopen", open_fail_db(dbpath, &db)==SQLITE_OK);
+    if( db ){
+      check("opfs_like_persist",
+        strcmp(queryScalarText(db, "SELECT v FROM t"), "a")==0);
+      sqlite3_close(db);
+    }
+  }
+  gOpfsLikeIo = 0;
+  removeDbFiles(dbpath);
 }
 
 static int persist_working_set(sqlite3 *db){
@@ -20545,7 +20608,8 @@ static const RegressionCase aCases[] = {
   { "clustered_pk_rowid_metadata", "Clustered PK Rowid Metadata Test", run_clustered_pk_rowid_metadata },
   { "nocase_nul_record_parse", "NOCASE NUL Record Parse Test", run_nocase_nul_record_parse },
   { "defer_fk_after_own_ddl", "Defer Foreign Keys After Own DDL", run_defer_fk_after_own_ddl },
-  { "uri_branch_readonly_open", "Read-only URI Branch Open Test", run_uri_branch_readonly_open }
+  { "uri_branch_readonly_open", "Read-only URI Branch Open Test", run_uri_branch_readonly_open },
+  { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs }
 };
 
 static int run_case_by_name(const char *zName){
