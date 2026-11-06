@@ -106,4 +106,3 @@ proc sqlite_file::sql_trace {command args} {
     set active 0
   }
 }
-
