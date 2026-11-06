@@ -313,13 +313,81 @@ jobs:
         echo "::error::SQL differential sweep diverged from stock SQLite"
         exit 1
 
+  dump-roundtrip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: bash .github/scripts/install-apt-deps.sh tcl-dev build-essential zlib1g-dev
+    - name: Build engines
+      run: |
+        mkdir -p build-dump && cd build-dump
+        ../configure
+        make -j2 doltlite
+        bash ../test/build_stock_reference.sh ../build-dump-stock ./doltlite
+    - name: Run export round-trip sweep
+      id: sweep
+      run: |
+        set -o pipefail
+        FIRST=$(python3 -c 'import random; print(random.randint(10_000_001, 9_000_000_000))')
+        LAST=$((FIRST + 99999))
+        mkdir -p dump-artifacts
+        echo "seed window: $FIRST..$LAST" | tee dump-artifacts/sweep.log
+        if python3 test/sql_dump_roundtrip_sweep.py \
+             build-dump/doltlite build-dump-stock/sqlite3 "$FIRST" "$LAST" \
+             --handoff --seconds 2700 --save-dir dump-artifacts \
+             2>&1 | tee -a dump-artifacts/sweep.log; then
+          echo "diverged=0" >> "$GITHUB_OUTPUT"
+        else
+          echo "diverged=1" >> "$GITHUB_OUTPUT"
+        fi
+        grep -E '^(seed window:|Time budget|Results:)' dump-artifacts/sweep.log \
+          >> "$GITHUB_STEP_SUMMARY" || true
+    - name: Compose export differential report
+      if: steps.sweep.outputs.diverged == '1'
+      run: |
+        {
+          echo 'The nightly SQLite export/import or stock-file handoff sweep failed.'
+          echo ''
+          echo 'Reproduce a failing seed:'
+          echo '```sh'
+          echo 'bash test/build_stock_reference.sh build-stockref build/doltlite'
+          echo 'python3 test/sql_dump_roundtrip_sweep.py build/doltlite build-stockref/sqlite3 <seed> <seed> --handoff'
+          echo '```'
+          echo ''
+          echo 'The dump-roundtrip-cases artifact contains generated SQL, database images, and comparison details.'
+          echo ''
+          echo '```'
+          tail -n 80 dump-artifacts/sweep.log
+          echo '```'
+        } > "$RUNNER_TEMP/dump-body.md"
+    - name: Upload export differential failures
+      if: steps.sweep.outputs.diverged == '1'
+      uses: actions/upload-artifact@v4
+      with:
+        name: dump-roundtrip-cases
+        path: dump-artifacts
+        retention-days: 7
+    - name: Report export differential failure
+      if: steps.sweep.outputs.diverged == '1'
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: sql-dump-roundtrip-divergence
+        title: Nightly SQLite export/import round-trip sweep failed
+        body-file: ${{ runner.temp }}/dump-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Fail on export differential divergence
+      if: steps.sweep.outputs.diverged == '1'
+      run: exit 1
+
   # A red or cancelled night must never be silent. Specific failures above
   # cut their own issues; this catches the classes they cannot: a setup or
   # build step failing before the reporter arms, or a job cancelled while
   # the run survives. A whole-run cancellation kills this job too, which is
   # what the weekly nightly-heartbeat exists to catch.
   watchdog:
-    needs: [fuzz, differential]
+    needs: [fuzz, differential, dump-roundtrip]
     if: failure() || cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -328,11 +396,11 @@ jobs:
       id: sibling
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        LABEL_PREFIXES: "fuzz-crash- sql-differential-divergence"
+        LABEL_PREFIXES: "fuzz-crash- sql-differential-divergence sql-dump-roundtrip-divergence"
       run: |
         started=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq .run_started_at)
         covered=0
-        for prefix in fuzz-crash- sql-differential-divergence; do
+        for prefix in fuzz-crash- sql-differential-divergence sql-dump-roundtrip-divergence; do
           n=$(gh api -X GET "repos/${{ github.repository }}/issues" \
                 -f state=all -f per_page=50 -f sort=updated -f direction=desc \
               | jq --arg p "$prefix" --arg t "$started" --arg w "nightly-fuzz-watchdog" \
