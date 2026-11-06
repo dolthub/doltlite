@@ -251,6 +251,13 @@ SELECT dolt_tag('nl_ro'); SELECT dolt_checkout('main');" >/dev/null
   "$DOLTLITE" "$d/db.db@nl0" "INSERT INTO model_shared VALUES(100000012,'acked');" >/dev/null
   printf 'N\t100000012\tnl0\t1\n' > "$d/log.0"
   check "nonlocal_target_keeps_acked_write_$key" 0 "$d"
+  nonlocal_hash=$("$DOLTLITE" "$d/db.db@nl0" "SELECT dolt_commit('-am','nonlocal snapshot');")
+  printf 'N\t100000012\tnl0\t1\t%s\n' "$nonlocal_hash" > "$d/log.0"
+  check "nonlocal_commit_keeps_acked_write_$key" 0 "$d"
+  nonlocal_empty_hash=$("$DOLTLITE" "$d/db.db@nl_ro" "SELECT dolt_hashof('HEAD');")
+  printf 'N\t100000012\tnl0\t1\t%s\n' "$nonlocal_empty_hash" > "$d/log.0"
+  check "nonlocal_wrong_commit_is_detected_$key" 1 "$d" 1 'nonlocal commit'
+  printf 'N\t100000012\tnl0\t1\n' > "$d/log.0"
   printf 'X\t15\tmain\t1000\t2000\treset_hard_1\t*\n' >> "$d/log.0"
   "$DOLTLITE" "$d/db.db@nl0" 'DELETE FROM model_shared;' >/dev/null
   check "source_reset_cannot_excuse_nonlocal_loss_$key" 1 "$d" 1 'LOST nonlocal id'
@@ -300,7 +307,7 @@ for clustered in 0 1; do
   status=0
   VCMODEL_CLUSTERED=$clustered "$BIN" "$((clustered*12))" "$d" 2 1 3 120 > "$d.out" 2>&1 || status=$?
   covered=1
-  for pattern in $'^N\t[0-9]+\tnl[01]\t1$' $'^N\t[0-9]+\tnl[01]\t0$' $'^N\t[0-9]+\tnl_ro\t0$' $'^P\t.*\t0\t[0-9a-f]{40}$' $'^P\t.*\t1\t[0-9a-f]{40}$'; do
+  for pattern in $'^N\t[0-9]+\tnl[01]\t1$' $'^N\t[0-9]+\tnl[01]\t1\t[0-9a-f]{40}$' $'^N\t[0-9]+\tnl[01]\t0$' $'^N\t[0-9]+\tnl_ro\t0$' $'^P\t.*\t0\t[0-9a-f]{40}$' $'^P\t.*\t1\t[0-9a-f]{40}$'; do
     if ! grep -Eq "$pattern" "$d"/log.*; then covered=0; fi
   done
   if [ "$status" -eq 0 ] && [ "$covered" -eq 1 ]; then

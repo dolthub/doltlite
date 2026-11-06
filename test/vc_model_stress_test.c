@@ -512,7 +512,7 @@ static void opNonlocal(Conn *c){
   if( ex(c, "begin_nonlocal", "BEGIN IMMEDIATE") ) return;
   curBranch(c, br, sizeof(br));
   if( ex(c, "nonlocal_rule", "SELECT target_ref FROM dolt_nonlocal_tables WHERE table_name='model_link'") ) goto abort;
-  snprintf(target, sizeof(target), "%s", gRes);
+  snprintf(target, sizeof(target), "%.47s", gRes);
   if( !target[0] || rn(3)==0 ){
     snprintf(target, sizeof(target), "%s", azNonlocal[rn(3)]);
     snprintf(sql, sizeof(sql), "INSERT OR REPLACE INTO dolt_nonlocal_tables VALUES('model_link','%s','model_shared','immediate')", target);
@@ -535,6 +535,28 @@ static void opNonlocal(Conn *c){
   if( !expectInt(c, "nonlocal_own_write", sql, 1) ) goto rollback;
   if( kind==1 ) goto rollback;
   if( kind==2 && ex(c, "nonlocal_rollback_to", "ROLLBACK TO nl") ) goto rollback;
+  if( kind==3 ){
+    char msg[64], key[64], hash[48];
+    const char *zHash;
+    long long commitS = nowNs();
+    snprintf(msg, sizeof(msg), "n_%d_%d_%d", gSeed, gW, ++ctrMsg);
+    snprintf(sql, sizeof(sql), "SELECT dolt_commit_all('-Am','%s')", msg);
+    if( ex(c, "commit_all", sql) ) goto rollback;
+    snprintf(key, sizeof(key), "\"%s\":\"", target);
+    zHash = strstr(gRes, key);
+    hash[0] = 0;
+    if( zHash ) snprintf(hash, sizeof(hash), "%.40s", zHash+strlen(key));
+    if( strlen(hash)!=40 ) logf_("MODEL_FAIL\tcommit_all omitted target %s", target);
+    if( !sqlite3_get_autocommit(c->db)
+     && ex(c, "nonlocal_after_commit_all", "ROLLBACK") )
+      logf_("MODEL_FAIL\trollback after commit_all failed");
+    E = nowNs();
+    logf_("I\t%lld\t%s\t%lld\t%lld", local, br, S, E);
+    tripAdd(local, br);
+    logf_("N\t%lld\t%s\t1\t%s", id, target, hash);
+    logf_("C\t%s\t%s\t%lld\t%lld\t1", msg, br, commitS, E);
+    return;
+  }
   if( ex(c, "nonlocal_commit", "COMMIT") ) goto rollback;
   E = nowNs();
   committed = kind!=2;
@@ -543,15 +565,6 @@ static void opNonlocal(Conn *c){
     tripAdd(local, br);
   }
   logf_("N\t%lld\t%s\t%d", id, target, committed);
-  if( kind==3 ){
-    char msg[64];
-    snprintf(msg, sizeof(msg), "n_%d_%d_%d", gSeed, gW, ++ctrMsg);
-    snprintf(sql, sizeof(sql), "SELECT dolt_commit_all('-Am','%s')", msg);
-    S = nowNs();
-    if( vc(c, "commit_all", sql, 0, 0)==SQLITE_OK ){
-      logf_("C\t%s\t%s\t%lld\t%lld\t1", msg, br, S, nowNs());
-    }
-  }
   return;
 rollback:
   if( !sqlite3_get_autocommit(c->db) && ex(c, "nonlocal_rollback", "ROLLBACK") )
@@ -996,7 +1009,7 @@ static void runWorker(int w, int rfd, int wfd){
 typedef struct Ins { long long id; char br[48]; long long S, E; } Ins;
 typedef struct Xev { int flags; char br[48]; long long S, E; char op[24]; char victim[64]; char newmsg[64]; } Xev;
 typedef struct Cmt { char msg[64]; char br[48]; long long S, E; int all; } Cmt;
-typedef struct NonlocalWrite { long long id; char target[48]; int committed; } NonlocalWrite;
+typedef struct NonlocalWrite { long long id; char target[48], hash[48]; int committed; } NonlocalWrite;
 typedef struct PolicyCommit { char br[48], msg[64], table[64], hash[48]; int included; } PolicyCommit;
 typedef struct StrSet { char (*a)[48]; int n, cap; } StrSet;
 
@@ -1081,7 +1094,9 @@ static void loadLogs(void){
         GROW(aNl, nNl, capNl);
         aNl[nNl].id = atoll(t[1]);
         snprintf(aNl[nNl].target, sizeof(aNl[nNl].target), "%s", t[2]);
-        aNl[nNl++].committed = atoi(t[3]);
+        aNl[nNl].committed = atoi(t[3]);
+        snprintf(aNl[nNl].hash, sizeof(aNl[nNl].hash), "%s", nt>4 ? t[4] : "");
+        nNl++;
       }else if( !strcmp(t[0],"P") && nt>=5 ){
         GROW(aPolicy, nPolicy, capPolicy);
         snprintf(aPolicy[nPolicy].br, sizeof(aPolicy[nPolicy].br), "%s", t[1]);
@@ -1313,6 +1328,23 @@ static void checkNonlocal(void){
     }
     free(rows.a);
     sqlite3_close(db);
+  }
+  for(i=0;i<nNl;i++){
+    sqlite3 *db = 0;
+    IdSet rows = {0};
+    char path[800], sql[256];
+    if( !aNl[i].hash[0] ) continue;
+    snprintf(path, sizeof(path), "%s@%s", zDb, aNl[i].hash);
+    if( sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, 0) ){
+      viol("open nonlocal commit %s: %s", aNl[i].hash, sqlite3_errmsg(db));
+    }else{
+      sqlite3_busy_timeout(db, 5000);
+      snprintf(sql, sizeof(sql), "SELECT id FROM main.model_shared WHERE id=%lld", aNl[i].id);
+      if( readIds(db, sql, &rows)==SQLITE_OK && rows.n!=1 )
+        viol("nonlocal commit %s lost id %lld on %s", aNl[i].hash, aNl[i].id, aNl[i].target);
+    }
+    sqlite3_close(db);
+    free(rows.a);
   }
   printf("  verified nonlocal receipts=%d\n", nNl);
 }
