@@ -104,11 +104,6 @@ int mergeChangedRowsLoad(
   MergeChangedRows *p
 );
 int mergeChangedRowBind(MergeChangedRows *p, int iRow, sqlite3_stmt *pStmt);
-int mergeTableUnchanged(
-  struct TableEntry *aAnc, int nAnc,
-  struct TableEntry *aCur, int nCur,
-  const char *zTable
-);
 int mergeParentKeysKept(
   sqlite3 *db, const char *zParent, char **azTo, int nCol,
   struct TableEntry *aAnc, int nAnc,

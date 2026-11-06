@@ -747,17 +747,6 @@ static int mergeChangedRowsKeys(
   return rc;
 }
 
-int mergeTableUnchanged(
-  struct TableEntry *aAnc, int nAnc,
-  struct TableEntry *aCur, int nCur,
-  const char *zTable
-){
-  struct TableEntry *pA = doltliteFindTableByName(aAnc, nAnc, zTable);
-  struct TableEntry *pC = doltliteFindTableByName(aCur, nCur, zTable);
-  return aAnc && pA && pC && prollyHashCompare(&pA->root, &pC->root)==0
-      && prollyHashCompare(&pA->schemaHash, &pC->schemaHash)==0;
-}
-
 /* Collects the rows the merge added or changed relative to the ancestor, and
 ** a WHERE term naming one of them by the table's own key. bUsable stays 0
 ** when only a full scan can answer: no ancestor table, a schema change, or
