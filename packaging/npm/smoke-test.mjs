@@ -15,6 +15,7 @@ const require = createRequire(pathToFileURL(process.cwd() + '/'));
 
 const nodeEntry = require.resolve('@dolthub/doltlite-wasm/sqlite3-node.mjs');
 const wasmPath = require.resolve('@dolthub/doltlite-wasm/sqlite3.wasm');
+const rootEntry = require.resolve('@dolthub/doltlite-wasm');
 
 const { default: sqlite3InitModule } = await import(pathToFileURL(nodeEntry).href);
 
@@ -46,3 +47,16 @@ try {
 } finally {
   db.close();
 }
+
+// The package root is what the README imports. Under Node that has to be the
+// disk-loading build, reached with no locateFile override.
+if (rootEntry.endsWith('index.mjs')) fail('package root resolved to the browser entry');
+const { sqlite3InitModule: initFromRoot } = await import(pathToFileURL(rootEntry).href);
+const rootDb = new (await initFromRoot()).oo1.DB(':memory:');
+try {
+  rootDb.exec('CREATE TABLE t(x)');
+  rootDb.exec("SELECT dolt_commit('-A', '-m', 'init')");
+} finally {
+  rootDb.close();
+}
+console.log('@dolthub/doltlite-wasm package root import OK');

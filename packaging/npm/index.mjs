@@ -1,4 +1,7 @@
-// Entry point for @dolthub/doltlite-wasm.
+// Browser and bundler entry for @dolthub/doltlite-wasm.
+//
+// Node resolves the package root to node.mjs instead. This file fetches
+// sqlite3.wasm, which Node cannot do.
 //
 // Mirrors @sqlite.org/sqlite-wasm: the default export is the async module
 // initializer. Await it to get the sqlite3 namespace, which has the dolt_*
