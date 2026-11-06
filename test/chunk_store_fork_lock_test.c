@@ -10,6 +10,7 @@
 # include <unistd.h>
 # include <sys/types.h>
 # include <sys/wait.h>
+# include <fcntl.h>
 #endif
 
 static int nPass = 0;
@@ -305,8 +306,78 @@ static void test_unlinked_lock_replacement(int backup){
 #endif
 }
 
+static void test_zero_byte_open_keeps_peer_lock(void){
+#ifndef _WIN32
+  const char *zPath = DOLTLITE_TEST_TMPDIR "/test_zero_byte_peer_lock.db";
+  const char *zUri =
+    "file:" DOLTLITE_TEST_TMPDIR "/test_zero_byte_peer_lock.db?doltlite_engine=sqlite";
+  sqlite3 *owner = 0, *peer = 0;
+  sqlite3_stmt *stmt = 0;
+  FILE *f;
+  pid_t pid;
+  int status = 0;
+  int rc;
+
+  printf("--- opening a 0-byte file keeps a peer connection's locks ---\n");
+  rm_db(zPath);
+  f = fopen(zPath, "wb");
+  check("zero_lock_create_empty", f!=0);
+  if( !f ) return;
+  fclose(f);
+
+  rc = sqlite3_open_v2(zUri, &owner,
+    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, 0);
+  check("zero_lock_owner_open", rc==SQLITE_OK);
+  check("zero_lock_owner_begin", exec_sql(owner,
+    "BEGIN IMMEDIATE; CREATE TABLE s(x)")==SQLITE_OK);
+  check("zero_lock_peer_open", sqlite3_open(zPath, &peer)==SQLITE_OK);
+  sqlite3_exec(peer, "SELECT count(*) FROM sqlite_master", 0, 0, 0);
+
+  pid = fork();
+  if( pid==0 ){
+    /* A forked child inherits the parent's in-memory lock state, so ask
+    ** the kernel whether the parent still holds SQLite's RESERVED byte. */
+    struct flock lk;
+    int fd = open(zPath, O_RDWR);
+    int held = 0;
+    if( fd>=0 ){
+      memset(&lk, 0, sizeof(lk));
+      lk.l_type = F_WRLCK;
+      lk.l_whence = SEEK_SET;
+      lk.l_start = 0x40000001;
+      lk.l_len = 1;
+      held = fcntl(fd, F_GETLK, &lk)==0 && lk.l_type!=F_UNLCK;
+      close(fd);
+    }
+    _exit(held ? 0 : 1);
+  }
+  if( pid>0 ) waitpid(pid, &status, 0);
+  check("zero_lock_owner_keeps_reserved_lock",
+        pid>0 && WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  check("zero_lock_owner_commit", exec_sql(owner, "COMMIT")==SQLITE_OK);
+  sqlite3_close(peer);
+  sqlite3_close(owner);
+
+  owner = 0;
+  rc = sqlite3_open(zPath, &owner);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_prepare_v2(owner,
+      "SELECT group_concat(name) FROM sqlite_master", -1, &stmt, 0);
+  }
+  check("zero_lock_owner_table_durable", rc==SQLITE_OK
+        && sqlite3_step(stmt)==SQLITE_ROW
+        && sqlite3_column_text(stmt, 0)!=0
+        && strcmp((const char*)sqlite3_column_text(stmt, 0), "s")==0);
+  sqlite3_finalize(stmt);
+  sqlite3_close(owner);
+  rm_db(zPath);
+#endif
+}
+
 int main(void){
   test_fork_child_does_not_keep_parent_lock();
+  test_zero_byte_open_keeps_peer_lock();
   test_graph_lock_promotion_has_one_winner();
   test_unlinked_graph_lock(0);
   test_unlinked_graph_lock(1);

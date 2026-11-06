@@ -4,6 +4,7 @@
 
 #include "chunk_store_int.h"
 #include "../ext/blake3/blake3.h"
+#include <sys/stat.h>
 
 /* unix VFS asserts a 128KiB read cap; writers already slice. */
 #define CS_IO_SLICE 65536
@@ -88,17 +89,13 @@ int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize){
 
 /* xAccess reports a 0-byte regular file as absent. Distinguish that from a
 ** missing path without xOpen: a failed open is logged by the VFS, including
-** wrapper VFSes, even when this connection goes on to create the database. */
+** wrapper VFSes, even when this connection goes on to create the database.
+** Never open a descriptor here: closing one releases every POSIX lock this
+** process holds on the file, including another connection's. */
 static int csHostFileIsZero(const char *zPath){
-  FILE *p;
-  long sz;
-
-  p = fopen(zPath, "rb");
-  if( !p ) return 0;
-  sz = -1;
-  if( fseek(p, 0, SEEK_END)==0 ) sz = ftell(p);
-  fclose(p);
-  return sz==0;
+  struct stat st;
+  if( stat(zPath, &st)!=0 ) return 0;
+  return (st.st_mode & S_IFMT)==S_IFREG && st.st_size==0;
 }
 
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut){
