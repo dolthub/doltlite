@@ -5,6 +5,7 @@
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 #include "doltlite_merge_int.h"
+#include "vdbeInt.h"
 #include <string.h>
 
 typedef DoltliteConflictTable ConflictTableInfo;
@@ -309,11 +310,12 @@ static int storeConflictBytes(
   return SQLITE_OK;
 }
 
-static int deleteConflictRowFromCatalog(
+static int deleteConflictRowsFromCatalog(
   sqlite3 *db,
   ChunkStore *cs,
   const char *zTableName,
-  i64 deleteRowid
+  const i64 *aRowid,
+  int nRowid
 ){
   ProllyHash hash;
   u8 *data = 0;
@@ -328,8 +330,8 @@ static int deleteConflictRowFromCatalog(
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  rc = dlFramedDeleteRow(data, nData, conflictCodec(), zTableName, deleteRowid,
-                         &out, &nOut, &nOutTables, &deleted);
+  rc = dlFramedDeleteRows(data, nData, conflictCodec(), zTableName,
+                          aRowid, nRowid, &out, &nOut, &nOutTables, &deleted);
   sqlite3_free(data);
   if( rc==SQLITE_OK && deleted ){
     rc = storeConflictBytes(db, cs, out, nOut, nOutTables);
@@ -1140,6 +1142,85 @@ static int cfrBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   return SQLITE_OK;
 }
 
+typedef struct CfDeleteBatch CfDeleteBatch;
+struct CfDeleteBatch {
+  char *zTableName;
+  i64 *aRowid;
+  int nRowid;
+  int nAlloc;
+};
+
+typedef struct CfDeletes CfDeletes;
+struct CfDeletes {
+  CfDeleteBatch *a;
+  int n;
+};
+
+/* Each delete rewrites the whole conflict catalog, so a statement's deletes
+** are applied together when it halts, like dolt_workspace changes. */
+static int cfQueueDelete(Vdbe *pStmt, const char *zTableName, i64 iRowid){
+  CfDeletes *pDel = (CfDeletes*)pStmt->pConflictDeletes;
+  CfDeleteBatch *pBatch;
+  int i;
+  if( !pDel ){
+    pDel = sqlite3_malloc(sizeof(*pDel));
+    if( !pDel ) return SQLITE_NOMEM;
+    memset(pDel, 0, sizeof(*pDel));
+    pStmt->pConflictDeletes = pDel;
+  }
+  for(i=0; i<pDel->n; i++){
+    if( strcmp(pDel->a[i].zTableName, zTableName)==0 ) break;
+  }
+  if( i==pDel->n ){
+    CfDeleteBatch *a = sqlite3_realloc64(pDel->a,
+        (sqlite3_uint64)(pDel->n+1)*sizeof(*a));
+    if( !a ) return SQLITE_NOMEM;
+    pDel->a = a;
+    memset(&a[i], 0, sizeof(a[i]));
+    a[i].zTableName = sqlite3_mprintf("%s", zTableName);
+    if( !a[i].zTableName ) return SQLITE_NOMEM;
+    pDel->n++;
+  }
+  pBatch = &pDel->a[i];
+  if( pBatch->nRowid==pBatch->nAlloc ){
+    int nAlloc = pBatch->nAlloc ? pBatch->nAlloc*2 : 64;
+    i64 *a = sqlite3_realloc64(pBatch->aRowid, (sqlite3_uint64)nAlloc*sizeof(i64));
+    if( !a ) return SQLITE_NOMEM;
+    pBatch->aRowid = a;
+    pBatch->nAlloc = nAlloc;
+  }
+  pBatch->aRowid[pBatch->nRowid++] = iRowid;
+  return SQLITE_OK;
+}
+
+void doltliteConflictsFinishStatement(Vdbe *pStmt){
+  CfDeletes *pDel = (CfDeletes*)pStmt->pConflictDeletes;
+  sqlite3 *db = pStmt->db;
+  int i, rc = SQLITE_OK;
+  if( pStmt->rc==SQLITE_OK ){
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    ProllyHash before;
+    rc = doltliteGetSessionConflictsCatalog(db, &before);
+    for(i=0; i<pDel->n && rc==SQLITE_OK; i++){
+      rc = deleteConflictRowsFromCatalog(db, cs, pDel->a[i].zTableName,
+                                         pDel->a[i].aRowid, pDel->a[i].nRowid);
+    }
+    if( rc!=SQLITE_OK ){
+      doltliteSetSessionConflictsCatalog(db, &before);
+      sqlite3VdbeError(pStmt, "%s", sqlite3ErrStr(rc));
+      pStmt->rc = rc;
+      pStmt->errorAction = OE_Abort;
+    }
+  }
+  for(i=0; i<pDel->n; i++){
+    sqlite3_free(pDel->a[i].zTableName);
+    sqlite3_free(pDel->a[i].aRowid);
+  }
+  sqlite3_free(pDel->a);
+  sqlite3_free(pDel);
+  pStmt->pConflictDeletes = 0;
+}
+
 static int cfrUpdate(
   sqlite3_vtab *pVtab,
   int nArg,
@@ -1147,8 +1228,7 @@ static int cfrUpdate(
   sqlite3_int64 *pRowid
 ){
   CfRowVtab *v = (CfRowVtab*)pVtab;
-  ChunkStore *cs = doltliteGetChunkStore(v->db);
-  i64 deleteRowid;
+  Vdbe *pStmt = v->db->pWorkspaceStatement;
 
   (void)pRowid;
 
@@ -1156,9 +1236,8 @@ static int cfrUpdate(
     pVtab->zErrMsg = sqlite3_mprintf("only DELETE is supported on conflict tables");
     return SQLITE_ERROR;
   }
-
-  deleteRowid = sqlite3_value_int64(apArg[0]);
-  return deleteConflictRowFromCatalog(v->db, cs, v->zTableName, deleteRowid);
+  if( !pStmt ) return SQLITE_MISUSE_BKPT;
+  return cfQueueDelete(pStmt, v->zTableName, sqlite3_value_int64(apArg[0]));
 }
 
 static sqlite3_module cfRowModule = {

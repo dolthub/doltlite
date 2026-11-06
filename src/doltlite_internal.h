@@ -1301,6 +1301,13 @@ int dlFramedDeleteRow(
   i64 deleteRowid,
   u8 **ppOut, int *pnOut, int *pnOutTables, int *pDeleted
 );
+int dlFramedDeleteRows(
+  const u8 *data, int nData,
+  const DlFramedCodec *pCodec,
+  const char *zTableName,
+  const i64 *aDeleteRowid, int nDeleteRowid,
+  u8 **ppOut, int *pnOut, int *pnOutTables, int *pnDeleted
+);
 int dlFramedDropTable(
   const u8 *data, int nData,
   const DlFramedCodec *pCodec,

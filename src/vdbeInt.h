@@ -541,6 +541,7 @@ struct Vdbe {
 #endif
 #ifdef DOLTLITE_PROLLY
   void *pWorkspaceChanges;
+  void *pConflictDeletes;
 #endif
 };
 
