@@ -116,6 +116,26 @@ if [ ! -x "$SQLITE3" ]; then
 fi
 
 echo ""
+echo "--- physical layout and query plans ---"
+
+DB=$TMP/layout.db
+seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<600) INSERT INTO t SELECT x,hex(zeroblob(100)) FROM n;"
+for operation in add vacuum; do
+  case "$operation" in
+    add) sql="ALTER TABLE t ADD COLUMN n DEFAULT 123;" ;;
+    vacuum) sql="DELETE FROM t WHERE id%2=0; VACUUM;" ;;
+  esac
+  oracle_copy "O_layout_$operation" \
+    "$sql PRAGMA page_count; PRAGMA freelist_count; PRAGMA integrity_check;" "$DB"
+  want_eq "O_layout_${operation}_file_size" \
+    "$(wc -c < "$TMP/ora-d.db" | tr -d '[:space:]')" \
+    "$(wc -c < "$TMP/ora-s.db" | tr -d '[:space:]')"
+done
+oracle "O_plan_primary_key" "EXPLAIN QUERY PLAN SELECT v FROM t WHERE id=17;" "$DB"
+oracle_copy "O_plan_create_index" \
+  "CREATE INDEX tv ON t(v); EXPLAIN QUERY PLAN SELECT id FROM t WHERE v='probe';" "$DB"
+
+echo ""
 echo "--- INTEGER PK / page sizes ---"
 
 for page_size in 512 1024 4096 8192 16384 65536; do
