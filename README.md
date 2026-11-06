@@ -188,8 +188,12 @@ BEGIN;
 SELECT dolt_merge('feature');                 -- error names the conflicts, if any
 SELECT * FROM dolt_conflicts_users;
 SELECT dolt_conflicts_resolve('--theirs', 'users');
-SELECT dolt_commit('-m', 'Merge feature');
+SELECT dolt_commit('-Am', 'Merge feature');   -- -A stages the resolution
 ```
+
+`dolt_commit('-m', ...)` records only what is staged. Without `-A` or
+`dolt_add`, the merge commit keeps the pre-merge rows and
+`dolt_reset('--hard')` discards the resolution.
 
 Conflicts live only inside the transaction; nothing conflicted reaches disk.
 Constraint violations from a merge land in
