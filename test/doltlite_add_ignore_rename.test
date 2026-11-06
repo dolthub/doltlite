@@ -142,4 +142,43 @@ foreach stage {dot all commit force} {
   }
 }
 
+foreach key {INTEGER INT} {
+  foreach name {kept w} {
+    foreach begin {{} BEGIN {BEGIN IMMEDIATE}} {
+      foreach prior {0 1} {
+        reset_db
+        execsql "CREATE TABLE ${name}(id $key PRIMARY KEY, v INT)"
+        execsql "INSERT INTO $name VALUES(1,10); SELECT dolt_commit('-Am','base')"
+        if {$prior} {
+          execsql "UPDATE $name SET v=11; SELECT dolt_add('$name'); UPDATE $name SET v=12"
+        }
+        if {$begin ne ""} {execsql $begin}
+        execsql {
+          INSERT INTO dolt_ignore VALUES('tmp_*',1);
+          CREATE TABLE tmp_hidden(id INT PRIMARY KEY);
+          INSERT INTO tmp_hidden VALUES(1);
+          SELECT dolt_hashof_db('WORKING');
+        }
+        set staged [db onecolumn {SELECT dolt_hashof_db('STAGED')}]
+        execsql {SELECT dolt_add('tmp_hidden')}
+        set prefix "add-ignore-named-noop-$key-$name-[string map { { } -} $begin]-$prior"
+        do_execsql_test $prefix-staged-hash {SELECT dolt_hashof_db('STAGED')} $staged
+        do_execsql_test $prefix-staged-schema {
+          SELECT count(*) FROM dolt_schema_diff('HEAD','STAGED')
+          WHERE to_table_name='tmp_hidden';
+        } {0}
+        execsql {SELECT dolt_commit('--allow-empty','-m','kept staging')}
+        if {$begin ne ""} {execsql COMMIT}
+        db close
+        sqlite3 db test.db
+        do_catchsql_test $prefix-head {
+          SELECT * FROM dolt_at_tmp_hidden('HEAD');
+        } {1 {table not found: tmp_hidden at HEAD}}
+        do_execsql_test $prefix-working {SELECT * FROM tmp_hidden; PRAGMA integrity_check} {1 ok}
+        do_execsql_test $prefix-prior "SELECT v FROM dolt_at_${name}('HEAD')" [expr {$prior ? 11 : 10}]
+      }
+    }
+  }
+}
+
 finish_test

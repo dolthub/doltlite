@@ -266,6 +266,7 @@ oracle_head_commit() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local q="SELECT CONCAT('H|', coalesce(from_table_name,''), '|', coalesce(to_table_name,''), '|', diff_type) FROM dolt_diff_summary('HEAD~1','HEAD') ORDER BY to_table_name;"
+  if [ -n "${4:-}" ]; then q="$4"; fi
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
@@ -288,6 +289,24 @@ oracle_head_commit() {
 
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
+
+for txn in autocommit transaction; do
+  begin=""; end=""
+  if [ "$txn" = transaction ]; then begin="BEGIN;"; end="COMMIT;"; fi
+  oracle_head_commit "add_named_ignored_head_noop_$txn" "
+CREATE TABLE w(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO w VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+$begin
+INSERT INTO dolt_ignore VALUES('tmp_*',1);
+CREATE TABLE tmp_foo(id INT PRIMARY KEY);
+INSERT INTO tmp_foo VALUES(1);
+SELECT dolt_add('tmp_foo');
+SELECT CONCAT('H|staged|',count(*)) FROM dolt_schema_diff('HEAD','STAGED') WHERE to_table_name='tmp_foo';
+SELECT dolt_commit('--allow-empty','-m','ignored noop');
+$end
+" --success "SELECT CONCAT('H|changes|',count(*)) FROM dolt_diff_summary('HEAD~1','HEAD');"
+done
 
 oracle_head_commit "commit_A_head_skips_ignored" "
 INSERT INTO dolt_ignore VALUES ('tmp_*', 1);

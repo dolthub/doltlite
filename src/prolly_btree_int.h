@@ -423,6 +423,7 @@ struct Btree {
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;
+  ProllyHash loadedWorkingSet;
   ProllyHash committedCatalogShape;
   DoltVcState committedVc;
   u32 committedAMeta[16];
@@ -585,6 +586,7 @@ void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur);
 void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur);
 int copyZeroTailPayload(ProllyMutMapEntry *e, u32 offset, u32 amt, void *pBuf);
 void btreeMarkWorkingStateChanged(Btree *p, int bLocal);
+int btreeWorkingSetMoved(Btree*);
 int rollbackNeedsSchemaReset(Btree *pBtree);
 int btreeFillWorkingSetBlob(
   u8 *buf,

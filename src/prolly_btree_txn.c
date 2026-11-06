@@ -793,6 +793,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       /* A VC command's refresh consumes the external-change signal; a
       ** peer-moved working set still means the snapshot is stale. */
       if( bChanged
+       || btreeWorkingSetMoved(p)
        || chunkStoreWorkingSetMovedFromBasis(pBt->pStore,
                                              p->zBranch ? p->zBranch : "main") ){
         chunkStoreUnlock(pBt->pStore);
@@ -834,7 +835,8 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       int bStaleHead;
       ProllyHash loadedCatHash;
       ProllyHash branchTip;
-      bPeerWrite = chunkStoreWorkingSetMovedFromBasis(pBt->pStore, zBranch);
+      bPeerWrite = btreeWorkingSetMoved(p)
+          || chunkStoreWorkingSetMovedFromBasis(pBt->pStore, zBranch);
       bStaleHead = 0;
       memset(&branchTip, 0, sizeof(branchTip));
       if( p->inTrans==TRANS_NONE && p->db && p->db->autoCommit

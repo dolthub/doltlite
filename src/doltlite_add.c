@@ -1156,6 +1156,11 @@ int doltliteStageNamedTables(
     }
   }
 
+  if( !updateMaster ){
+    ADDNAMED_FREE_ALL();
+    return SQLITE_OK;
+  }
+
   /* Settle numbering before composing the master. Alignment uses working
   ** numbers; stale entries move off numbers working may have reused. */
   doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
