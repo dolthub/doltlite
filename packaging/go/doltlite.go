@@ -80,6 +80,7 @@ import (
 	"runtime/cgo"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -360,7 +361,12 @@ var (
 )
 
 func (c *conn) Prepare(query string) (driver.Stmt, error) {
-	s, _, err := c.prepare(query)
+	return c.PrepareContext(context.Background(), query)
+}
+
+// PrepareContext is Prepare, interrupting the compile when ctx ends.
+func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	s, _, err := c.prepare(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -370,28 +376,12 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 	return s, nil
 }
 
-// PrepareContext is Prepare, interrupting the compile when ctx ends.
-func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	stop := c.interruptOnDone(ctx)
-	s, err := c.Prepare(query)
-	stop()
-	if err != nil {
-		return nil, contextErr(ctx, err)
-	}
-	// SQLite checks for an interrupt only between some tokens, so a compile can finish after ctx ends.
-	if err := ctx.Err(); err != nil {
-		s.Close()
-		return nil, err
-	}
-	return s, nil
-}
-
 // prepare compiles the first statement in query and returns the SQL after it.
 // The statement is nil when query holds no statement.
-func (c *conn) prepare(query string) (*stmt, string, error) {
+func (c *conn) prepare(ctx context.Context, query string) (*stmt, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -401,9 +391,18 @@ func (c *conn) prepare(query string) (*stmt, string, error) {
 	var rc C.int
 	var nInput int
 	var rest string
+	var compileErr error
 	if err := c.run(func() {
+		if compileErr = ctx.Err(); compileErr != nil {
+			return
+		}
 		cq := C.CString(query)
 		defer C.free(unsafe.Pointer(cq))
+		if compileErr = ctx.Err(); compileErr != nil {
+			return
+		}
+		stop := c.interruptOnDone(ctx, time.Millisecond)
+		defer stop()
 		var tail *C.char
 		rc = C.sqlite3_prepare_v2(c.db, cq, -1, &st, &tail)
 		if rc == C.SQLITE_OK && st != nil {
@@ -413,8 +412,17 @@ func (c *conn) prepare(query string) (*stmt, string, error) {
 	}); err != nil {
 		return nil, "", driver.ErrBadConn
 	}
+	if compileErr != nil {
+		return nil, "", compileErr
+	}
 	if rc != C.SQLITE_OK {
-		return nil, "", c.err(rc)
+		return nil, "", contextErr(ctx, c.err(rc))
+	}
+	if err := ctx.Err(); err != nil {
+		if st != nil {
+			c.run(func() { C.sqlite3_finalize(st) })
+		}
+		return nil, "", err
 	}
 	if st == nil {
 		return nil, "", nil
@@ -467,14 +475,14 @@ func (c *conn) ExecContext(ctx context.Context, query string, named []driver.Nam
 	if err != nil {
 		return nil, err
 	}
-	stop := c.interruptOnDone(ctx)
+	stop := c.interruptOnDone(ctx, 0)
 	defer stop()
 	var res driver.Result
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		s, rest, err := c.prepare(query)
+		s, rest, err := c.prepare(ctx, query)
 		if err != nil {
 			return nil, err
 		}
@@ -674,7 +682,7 @@ func (s *stmt) ExecContext(ctx context.Context, named []driver.NamedValue) (driv
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	stop := s.c.interruptOnDone(ctx)
+	stop := s.c.interruptOnDone(ctx, 0)
 	defer stop()
 	res, err := s.Exec(args)
 	return res, contextErr(ctx, err)
@@ -688,7 +696,7 @@ func (s *stmt) QueryContext(ctx context.Context, named []driver.NamedValue) (dri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	stop := s.c.interruptOnDone(ctx)
+	stop := s.c.interruptOnDone(ctx, 0)
 	r, err := s.Query(args)
 	if err != nil {
 		stop()
@@ -711,9 +719,9 @@ func positional(named []driver.NamedValue) ([]driver.Value, error) {
 }
 
 // interruptOnDone interrupts the connection's running statement when ctx ends,
-// until the returned stop is called. sqlite3_step clears a late interrupt
-// before the next statement runs.
-func (c *conn) interruptOnDone(ctx context.Context) (stop func()) {
+// until the returned stop is called. Compilation clears a pending interrupt
+// at startup, so a nonzero retry keeps cancellation effective until it returns.
+func (c *conn) interruptOnDone(ctx context.Context, retry time.Duration) (stop func()) {
 	if ctx.Done() == nil {
 		return func() {}
 	}
@@ -722,12 +730,29 @@ func (c *conn) interruptOnDone(ctx context.Context) (stop func()) {
 		defer close(exited)
 		select {
 		case <-ctx.Done():
+		case <-done:
+			return
+		}
+		interrupt := func() {
 			c.interruptMu.Lock()
 			if !c.dbClosed {
 				C.sqlite3_interrupt(c.db)
 			}
 			c.interruptMu.Unlock()
-		case <-done:
+		}
+		interrupt()
+		if retry == 0 {
+			return
+		}
+		ticker := time.NewTicker(retry)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				interrupt()
+			case <-done:
+				return
+			}
 		}
 	}()
 	return func() {
