@@ -289,9 +289,18 @@ SQLITE_WASM_EXPORT2(WasmDisposalNotifier *,
 ** DB-class-hosted (sqlite3*) using sqlite3_close_v2() would leave the
 ** DB instance pointing to a stale pointer. Ditto for oo1.DB.Stmt.
 */
+#if defined(SQLITE_WASM_SPLIT_BUILD)
+#include "doltlite_wasm.h"
+void sqlite3WasmDisposalNotify(int typeId, const void *p){
+  if( p && sqlite3WasmDisposalNotifier.callback ){
+    sqlite3WasmDisposalNotifier.callback(typeId, p);
+  }
+}
+#else
 #define SQLITE_DISPOSAL_NOTIFIER(T,P) \
   if( (P) && sqlite3WasmDisposalNotifier.callback ) \
     sqlite3WasmDisposalNotifier.callback(T, P)
+#endif
 
 /*
 ** Which sqlite3.c we're using needs to be configurable to enable

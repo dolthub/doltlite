@@ -996,6 +996,7 @@ HDR = \
 HDR += \
    $(TOP)/src/doltlite_catalog_types.h \
    $(TOP)/src/doltlite_remote.h \
+   $(TOP)/src/doltlite_wasm.h \
    $(TOP)/src/record_codec.h \
    $(TOP)/src/prolly_hash.h \
    $(TOP)/src/prolly_xxhash.h \
