@@ -592,9 +592,12 @@ static int csOpen(
     }
     rc = csReadManifest(cs);
     /* Truncate-to-empty only for NOTADB, not for a damaged-but-identified
-    ** header. SQLITE_OPEN_CREATE keeps the full scan. Other modes recover
-    ** only an all-zero header sector, so a foreign file is not read through.
-    ** Read-only presents that empty store and does not rewrite the file. */
+    ** header. SQLITE_OPEN_CREATE keeps the full scan. Other modes scan only
+    ** under an all-zero header sector, so a foreign file is not read through.
+    ** Only a creation root proves the bytes are a torn DoltLite creation: an
+    ** ordinary SQLite file can lose its header sector too, and stock refuses
+    ** it as not a database. Read-only presents the empty store and does not
+    ** rewrite the file. */
     if( rc==SQLITE_NOTADB ){
       u8 aHdr[CHUNK_MANIFEST_SIZE];
       int allZero = 0;
@@ -609,9 +612,6 @@ static int csOpen(
       }
       if( ((flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly) || allZero ){
         rc2 = csScanForCommittedRoot(cs, &everCommitted, &creationRoot);
-        if( rc2==SQLITE_OK && !everCommitted && !creationRoot && allZero ){
-          creationRoot = 1;
-        }
         if( rc2==SQLITE_OK && !everCommitted && creationRoot ){
           cs->index.nChunks = 0;
           cs->index.iIndexOffset = 0;

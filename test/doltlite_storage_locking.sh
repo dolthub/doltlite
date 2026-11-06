@@ -170,6 +170,35 @@ run_test_error_match "zeroed_header_after_a_later_commit_stays_closed" \
   "SELECT count(*) FROM t;" "file is not a database" "file:$DB.poison?mode=rw"
 lock_rm "$COMMITTED"
 lock_rm "$DB.poison"
+
+STOCK="$DB.stock"
+$DOLTLITE "file:$STOCK?doltlite_engine=sqlite" "CREATE TABLE t(a); INSERT INTO t SELECT randomblob(1000) FROM generate_series(1,200);" > /dev/null 2>&1
+dd if=/dev/zero of="$STOCK" bs=512 count=1 conv=notrunc 2>/dev/null
+STOCK_SUM=$(cksum < "$STOCK")
+for mode in rwc rw ro; do
+  X="$DB.stock_$mode"
+  cp "$STOCK" "$X"
+  dltest_expect_integrity "$X" 'skip:an ordinary SQLite file without its header is not a database'
+  run_test_error_match "zeroed_sqlite_header_${mode}_stays_not_a_database" \
+    "SELECT count(*) FROM sqlite_master;" "file is not a database" "file:$X?mode=$mode"
+  dltest_assert_equal "zeroed_sqlite_header_${mode}_keeps_the_bytes" "$(cksum < "$X")" "$STOCK_SUM"
+  lock_rm "$X"
+done
+X="$DB.stock_attach"
+cp "$STOCK" "$X"
+run_test_error_match "zeroed_sqlite_header_attach_stays_not_a_database" \
+  "ATTACH '$X' AS s; SELECT count(*) FROM s.sqlite_master;" "file is not a database" ":memory:"
+dltest_assert_equal "zeroed_sqlite_header_attach_keeps_the_bytes" "$(cksum < "$X")" "$STOCK_SUM"
+lock_rm "$X"
+lock_rm "$STOCK"
+
+ALLZERO="$DB.allzero"
+head -c 4096 /dev/zero > "$ALLZERO"
+dltest_expect_integrity "$ALLZERO" 'skip:zeros without a creation root are not a database'
+run_test_error_match "all_zero_file_stays_not_a_database" \
+  "SELECT count(*) FROM sqlite_master;" "file is not a database" "$ALLZERO"
+dltest_assert_equal "all_zero_file_keeps_its_size" "$(byte_size "$ALLZERO")" "4096"
+lock_rm "$ALLZERO"
 lock_rm "$FRESH"
 lock_rm "$TORN"
 rm -f "$ZERO"
