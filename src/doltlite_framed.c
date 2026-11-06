@@ -357,11 +357,11 @@ int dlFramedDeleteRows(
 
     isMatch = (!matched && framedNameEq(pCodec, zName, zTableName));
     if( isMatch ){
-      matched = 1;
       u8 *pCountOut = 0;
       int nKeep = 0;
       int nl = (int)strlen(zName);
 
+      matched = 1;
       dlWriteU16Name(&w, zName, nl);
       pCountOut = w.p;
       dlWriteU32(&w, 0);
