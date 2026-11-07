@@ -2229,6 +2229,8 @@ int prollyBtreeCursor(
     if( rcTrans!=SQLITE_OK ) return rcTrans;
   }
   assert( p->inTrans>=TRANS_READ );
+  if( pBt->pStore->corruptMidStream
+   && (!p->db || !p->db->init.busy) ) return SQLITE_CORRUPT;
 
   pCur->pgnoRoot = iTable;
   pCur->pKeyInfo = pKeyInfo;

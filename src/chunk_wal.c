@@ -746,7 +746,9 @@ static int csReplayWalFrom(
       return SQLITE_CORRUPT;
     }
     if( !bTailMode && chunkIndexCount(&cs->index)==0 ){
-      return SQLITE_CORRUPT;
+      memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
+      cs->index.nChunks = 0;
+      cs->wal.recoveredMidStream = 1;
     }
     return SQLITE_OK;
   }
@@ -978,8 +980,10 @@ static int csReplayWalFrom(
 
   if( !bTailMode && nRootRecordsSeen==0
    && nPendingBefore==0 && chunkIndexCount(&cs->index)==0 ){
-    rc = SQLITE_CORRUPT;
-    goto replay_error;
+    memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
+    cs->index.nChunks = 0;
+    cs->wal.recoveredMidStream = 1;
+    sawMidStream = 1;
   }
 
   /* Reclaim uncommitted tail unless poisoned. */

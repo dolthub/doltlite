@@ -506,6 +506,7 @@ SQL
 for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
   DB_LOCAL="$TMPROOT/s10_n${N}_local.db"
   rm -f "$DB_LOCAL"
+  "$DOLTLITE" "$DB_LOCAL" "SELECT 1;" >/dev/null 2>&1
 
   DOLTLITE_CRASH_WRITE=$N "$DOLTLITE" "$DB_LOCAL" \
     "SELECT dolt_clone('file://$REMOTE10');" >/dev/null 2>&1
