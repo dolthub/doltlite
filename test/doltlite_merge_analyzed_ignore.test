@@ -1,0 +1,148 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_merge_analyzed_ignore
+
+foreach analyzed {0 1} {
+  foreach ignoreStats {0 1} {
+    foreach stage {all modified named forced} {
+      foreach side {ours theirs} {
+        set prefix $analyzed.$ignoreStats.$stage.$side
+        do_test $prefix.setup {
+          reset_db
+          execsql {
+            INSERT INTO dolt_ignore VALUES('calc_%',1);
+            CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+            INSERT INTO t VALUES(1,0),(2,0),(3,0);
+          }
+          if {$ignoreStats} {
+            execsql {INSERT INTO dolt_ignore VALUES('sqlite_stat%',1)}
+          }
+          if {$analyzed} {execsql ANALYZE}
+          execsql {
+            SELECT dolt_commit('-Am','base');
+            CREATE TABLE calc_meta(id INTEGER PRIMARY KEY, b INTEGER);
+            CREATE INDEX calc_b ON calc_meta(b);
+            INSERT INTO calc_meta VALUES(1,1);
+            SELECT dolt_branch('agent');
+            UPDATE t SET v=1 WHERE id=1;
+            SELECT dolt_commit('-Am','user');
+            SELECT dolt_checkout('agent');
+            UPDATE t SET v=2 WHERE id IN (1,3);
+            SELECT dolt_commit('-Am','agent');
+            SELECT dolt_checkout('main');
+            BEGIN;
+          }
+          catchsql {SELECT dolt_merge('agent')}
+          db one {SELECT count(*) FROM dolt_conflicts_t}
+        } {1}
+        do_test $prefix.commit {
+          execsql "SELECT dolt_conflicts_resolve('--$side','t')"
+          switch $stage {
+            all {set flags {'-Am'}}
+            modified {set flags {'-am'}}
+            named - forced {
+              execsql {
+                CREATE TABLE local_only(id INTEGER PRIMARY KEY);
+                INSERT INTO local_only VALUES(5);
+                CREATE VIEW local_view AS SELECT * FROM local_only;
+                SELECT dolt_add('t');
+              }
+              if {$stage eq "forced"} {
+                execsql {SELECT dolt_add('-f','calc_meta')}
+              }
+              set flags {'-m'}
+            }
+          }
+          set hash [db one "SELECT dolt_commit($flags,'merged')"]
+          execsql COMMIT
+          string length $hash
+        } {40}
+        set tracked [expr {$stage eq "forced"}]
+        do_execsql_test $prefix.diff {
+          SELECT count(*) FROM dolt_diff_stat('HEAD~1','HEAD')
+            WHERE table_name='calc_meta';
+          SELECT count(*) FROM dolt_diff_stat('HEAD~1','HEAD')
+            WHERE table_name='local_only';
+        } [list $tracked 0]
+        do_test $prefix.history {
+          catch {db eval {SELECT * FROM dolt_at_calc_meta('HEAD')}}
+        } [expr {!$tracked}]
+        do_test $prefix.snapshot {
+          execsql {SELECT dolt_checkout('-b','snapshot','HEAD')}
+          set result [execsql {
+            SELECT count(*) FROM sqlite_master WHERE name IN ('calc_meta','calc_b');
+            SELECT count(*) FROM sqlite_master WHERE name IN ('local_only','local_view');
+            SELECT count(*) FROM sqlite_master WHERE name='sqlite_stat1';
+            SELECT id,v FROM t ORDER BY id;
+            PRAGMA integrity_check;
+          }]
+          execsql {SELECT dolt_checkout('main')}
+          set result
+        } [list [expr {2*$tracked}] 0 [expr {$analyzed && !$ignoreStats}] \
+                1 [expr {$side eq "ours" ? 1 : 2}] 2 0 3 2 ok]
+        do_test $prefix.reopen {
+          db close
+          sqlite3 db test.db
+          execsql {
+            SELECT id FROM calc_meta INDEXED BY calc_b WHERE b=1;
+            SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;
+            UPDATE calc_meta SET b=2 WHERE id=1;
+            SELECT count(*) FROM dolt_status WHERE table_name='calc_meta';
+            PRAGMA integrity_check;
+          }
+        } [list 1 0 $tracked ok]
+      }
+    }
+  }
+}
+
+foreach forceStats {0 1} {
+  do_test $testprefix.stats.$forceStats {
+    reset_db
+    execsql {
+      INSERT INTO dolt_ignore VALUES('calc_%',1);
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+      INSERT INTO t VALUES(1,0),(2,0),(3,0);
+    }
+    if {$forceStats} {
+      execsql {INSERT INTO dolt_ignore VALUES('sqlite_stat%',1)}
+    }
+    execsql {
+      ANALYZE;
+      SELECT dolt_commit('-Am','base');
+      CREATE TABLE calc_meta(id INTEGER PRIMARY KEY);
+      INSERT INTO calc_meta VALUES(1);
+      SELECT dolt_branch('agent');
+      UPDATE t SET v=1 WHERE id=1;
+      SELECT dolt_commit('-Am','user');
+      SELECT dolt_checkout('agent');
+      UPDATE t SET v=2 WHERE id IN (1,3);
+      SELECT dolt_commit('-Am','agent');
+      SELECT dolt_checkout('main');
+      BEGIN;
+    }
+    catchsql {SELECT dolt_merge('agent')}
+    execsql {
+      SELECT dolt_conflicts_resolve('--ours','t');
+      INSERT INTO t VALUES(4,4);
+      SELECT dolt_add('t');
+    }
+    if {$forceStats} {execsql {SELECT dolt_add('-f','sqlite_stat1')}}
+    execsql {
+      UPDATE t SET v=9 WHERE id=2;
+      SELECT dolt_commit('-m','merged');
+      COMMIT;
+    }
+    db close
+    sqlite3 db test.db
+    execsql {
+      SELECT id,v FROM dolt_at_t('HEAD') ORDER BY id;
+      SELECT stat FROM dolt_at_sqlite_stat1('HEAD') WHERE tbl='t' AND idx IS NULL;
+      SELECT v FROM t WHERE id=2;
+      SELECT count(*) FROM dolt_diff_stat('HEAD~1','HEAD') WHERE table_name='calc_meta';
+      PRAGMA integrity_check;
+    }
+  } {1 1 2 0 3 2 4 4 4 9 0 ok}
+}
+
+finish_test

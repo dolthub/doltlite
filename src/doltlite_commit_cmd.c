@@ -183,6 +183,45 @@ static int doltliteCommitValidateAuthor(
   return rc;
 }
 
+static int commitStageAnalyzedStats(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const ProllyHash *pWorking
+){
+  static const char *azStats[] = {"sqlite_stat1", "sqlite_stat4"};
+  sqlite3_value *apValue[2] = {0, 0};
+  struct TableEntry *aStaged = 0;
+  ProllyHash staged;
+  int nStaged = 0;
+  int nValue = 0;
+  int i, rc;
+
+  doltliteGetSessionStaged(db, &staged);
+  if( prollyHashIsEmpty(&staged) ) return SQLITE_OK;
+  rc = doltliteLoadCatalog(db, &staged, &aStaged, &nStaged, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<ArraySize(azStats); i++){
+    if( !doltliteFindTableByName(aStaged, nStaged, azStats[i])
+     || !sqlite3FindTable(db, azStats[i], "main") ){
+      continue;
+    }
+    apValue[nValue] = sqlite3ValueNew(db);
+    if( !apValue[nValue] ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    sqlite3ValueSetStr(apValue[nValue++], -1, azStats[i], SQLITE_UTF8,
+                        SQLITE_STATIC);
+  }
+  if( rc==SQLITE_OK && nValue>0 ){
+    rc = doltliteStageNamedTables(db, context, doltliteGetChunkStore(db),
+                                  pWorking, nValue, apValue, 1, 0);
+  }
+  for(i=0; i<nValue; i++) sqlite3ValueFree(apValue[i]);
+  doltliteFreeCatalog(aStaged, nStaged);
+  return rc;
+}
+
 /* Rebuild the staged catalog for dolt_commit -a: overlay working-tree
 ** changes for tables that already exist in HEAD. */
 static int doltliteCommitStageModifiedOnly(
@@ -1246,7 +1285,7 @@ static void doltliteCommitFuncImpl(
         ProllyHash refreshedCat;
         (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
         if( doltliteFlushCatalogToHash(db, &refreshedCat)==SQLITE_OK ){
-          rc = doltliteSetSessionStaged(db, &refreshedCat);
+          rc = commitStageAnalyzedStats(db, context, &refreshedCat);
           if( rc!=SQLITE_OK ){
             sqlite3_result_error_code(context, rc);
             return;
