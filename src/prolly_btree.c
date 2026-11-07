@@ -2960,7 +2960,8 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 int sqlite3BtreeIsInBackup(Btree *p){
   assert( p );
   assert( sqlite3_mutex_held(p->db->mutex) );
-  return p->nBackup!=0;
+  /* A backup from an ordinary SQLite file counts on the stock btree. */
+  return p->nBackup!=0 || (p->pOrigBtree && origBtreeIsInBackup(p->pOrigBtree));
 }
 
 #ifndef SQLITE_OMIT_WAL

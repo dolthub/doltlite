@@ -177,4 +177,40 @@ foreach maintenance {commit gc vacuum} {
 }
 backupvfs delete
 
+# A backup reading an attached ordinary SQLite file keeps that schema in use.
+foreach op {detach deserialize} {
+  set prefix backup-busy-stock-source.$op
+  catch {db close}
+  forcedelete stock-aux.db stock-dest.db
+  sqlite3 seed file:stock-aux.db?doltlite_engine=sqlite -uri 1
+  seed eval {
+    CREATE TABLE t(a);
+    WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200)
+    INSERT INTO t SELECT randomblob(900) FROM n;
+  }
+  seed close
+  sqlite3 db :memory:
+  db eval {ATTACH 'stock-aux.db' AS aux}
+  sqlite3 dest file:stock-dest.db?doltlite_engine=sqlite -uri 1
+  set image [db serialize aux]
+  sqlite3_backup B dest main db aux
+  do_test $prefix.step {B step 1} SQLITE_OK
+  if {$op eq "detach"} {
+    do_test $prefix.refused {catchsql {DETACH aux}} {1 {database aux is locked}}
+  } else {
+    do_test $prefix.refused {
+      list [catch {db deserialize aux $image} msg] $msg
+    } {1 {unable to set MEMDB content}}
+  }
+  do_test $prefix.source-kept {db eval {SELECT count(*) FROM aux.t}} {200}
+  do_test $prefix.done {B step -1} SQLITE_DONE
+  do_test $prefix.finish {B finish} SQLITE_OK
+  do_test $prefix.copied {
+    dest eval {SELECT count(*), sum(length(a)) FROM t; PRAGMA integrity_check}
+  } {200 180000 ok}
+  dest close
+  db close
+}
+sqlite3 db test.db
+
 finish_test

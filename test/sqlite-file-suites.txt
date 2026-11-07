@@ -23,6 +23,7 @@ attach2
 attach3
 attach4
 autoinc
+backup
 blob
 collate1
 collate2

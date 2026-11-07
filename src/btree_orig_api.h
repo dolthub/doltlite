@@ -37,6 +37,7 @@ int origBtreeSavepoint(void *p, int op, int iSavepoint);
 int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
 #endif
 int origBtreeTxnState(void *p);
+int origBtreeIsInBackup(void *p);
 int origBtreeCreateTable(void *p, Pgno *piTable, int flags);
 int origBtreeDropTable(void *p, int iTable, int *piMoved);
 int origBtreeClearTable(void *p, int iTable, i64 *pnChange);
