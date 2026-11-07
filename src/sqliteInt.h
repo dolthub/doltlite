@@ -4003,7 +4003,7 @@ struct Parse {
   u8 eTriggerOp;       /* TK_UPDATE, TK_INSERT or TK_DELETE */
   u8 eOrconf;          /* Default ON CONFLICT policy for trigger steps */
 #ifdef DOLTLITE_PROLLY
-  u8 bLocalNames;      /* DDL: names are local tables, never nonlocal rules */
+  u8 bLocalNames;      /* DROP, RENAME TO, CREATE TRIGGER: skip nonlocal rules */
 #endif
 #if defined(SQLITE_DEBUG) || defined(SQLITE_COVERAGE_TEST)
   u8 earlyCleanup;     /* OOM inside sqlite3ParserAddCleanup() */
