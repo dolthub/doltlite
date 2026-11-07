@@ -296,6 +296,7 @@ static int dumpTable(DlDump *p, const char *zName){
       ** commit_ref argument. Naming those columns would select it. */
       zRead = sqlite3_mprintf("SELECT src.* FROM %s%s",zFrom,zOrder);
     }else if( bRowid ){
+      /* A user column named rowid must not hide the integer key. */
       zRead = sqlite3_mprintf(
           "SELECT src.\"%w\",src.* FROM %s",zRowid,zFrom);
     }else{

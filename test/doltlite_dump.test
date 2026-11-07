@@ -577,4 +577,33 @@ do_test dump-commit-ref-head {
   out eval {SELECT commit_ref, x, y FROM c}
 } {working 1 11}
 out close
+
+# The integer key has to be read through an alias that is not a user column.
+# src.rowid is that column when the table declares one.
+reset_db
+forcedelete dump-shadow-rowid.sql dump-shadow-rowid.sqlite
+db eval {
+  CREATE TABLE "shadowed rowid"(rowid, v);
+  INSERT INTO "shadowed rowid"(_rowid_,rowid,v)
+    VALUES(7,'visible','first'),(19,'visible',char(97,0,98));
+  SELECT dolt_commit('-Am','shadow');
+}
+foreach ref {WORKING HEAD} {
+  foreach format {sql sqlite} {
+    set path dump-shadow-rowid.$format
+    forcedelete $path
+    do_test dump-shadow-rowid-$ref-$format {
+      db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}
+      if {$format eq "sql"} {
+        sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+        set fd [open $path rb]; set text [read $fd]; close $fd
+        out eval $text
+      } else {
+        sqlite3 out file:dump-shadow-rowid.sqlite?doltlite_engine=sqlite -uri 1
+      }
+      out eval {SELECT _rowid_, rowid, hex(v) FROM "shadowed rowid" ORDER BY _rowid_}
+    } {7 visible 6669727374 19 visible 610062}
+    catch {out close}
+  }
+}
 finish_test
