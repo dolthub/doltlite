@@ -197,7 +197,10 @@ static int dumpTable(DlDump *p, const char *zName){
   char *zNames = 0, *zParams = 0, *zRead = 0, *zInsert = 0, *zReadNames = 0;
   char *zFrom = 0, *zOrder = 0, *zRowidRead = 0, *zRowidFix = 0;
   const char *zRowid = 0;
-  int nCol = 0, nData = 0, nLimit = 0, rc, i, bRowid = 0, bSplit = 0;
+  int *aHist = 0;
+  int *aGrow;
+  int nCol = 0, nData = 0, nHist = 0, nLimit = 0;
+  int rc, i, iSrc, bRowid = 0, bSplit = 0;
   {
     Table *t = sqlite3FindTable(p->out,zName,"main");
     ProllyHash root;
@@ -213,6 +216,16 @@ static int dumpTable(DlDump *p, const char *zName){
           break;
         }
       }
+    }
+  }
+  /* dolt_at hides its ref argument under the name commit_ref and renames a
+  ** user column of that name. Declared columns stay in order at the front
+  ** of that result, ahead of columns that exist only on a later tip. */
+  if( rc==SQLITE_OK && !p->working ){
+    aHist = sqlite3_malloc(16*sizeof(int));
+    if( !aHist ) rc = SQLITE_NOMEM;
+    else{
+      nHist = 16;
     }
   }
   if( rc==SQLITE_OK ){
@@ -236,6 +249,7 @@ static int dumpTable(DlDump *p, const char *zName){
     if( outLimit<nLimit ) nLimit = outLimit;
     if( nData+1>nLimit ) bSplit = 1;
   }
+  if( rc==SQLITE_OK && !p->working && bRowid && !bSplit ) aHist[0] = 0;
   if( rc==SQLITE_OK && bRowid && !bSplit ){
     sqlite3_str_appendf(names,"\"%w\"",zRowid);
     sqlite3_str_appendf(readNames,"src.\"%w\"",zRowid);
@@ -244,6 +258,15 @@ static int dumpTable(DlDump *p, const char *zName){
   }
   while( rc==SQLITE_OK && sqlite3_step(cols)==SQLITE_ROW ){
     if( sqlite3_column_int(cols,6)!=0 ) continue;
+    if( !p->working ){
+      if( nCol>=nHist ){
+        aGrow = sqlite3_realloc(aHist,(nHist+16)*sizeof(int));
+        if( !aGrow ){ rc = SQLITE_NOMEM; break; }
+        aHist = aGrow;
+        nHist += 16;
+      }
+      aHist[nCol] = sqlite3_column_int(cols,0) + (bRowid && !bSplit);
+    }
     sqlite3_str_appendf(names,"%s\"%w\"",nCol ? "," : "",
         sqlite3_column_text(cols,1));
     sqlite3_str_appendf(readNames,"%ssrc.\"%w\"",nCol ? "," : "",
@@ -265,8 +288,19 @@ static int dumpTable(DlDump *p, const char *zName){
     if( !zFrom || (bSplit && !zOrder) ) rc = SQLITE_NOMEM;
   }
   if( rc==SQLITE_OK ){
-    zRead = sqlite3_mprintf("SELECT %s FROM %s%s",zReadNames,zFrom,
-        zOrder ? zOrder : "");
+    if( p->working ){
+      zRead = sqlite3_mprintf("SELECT %s FROM %s%s",zReadNames,zFrom,
+          zOrder ? zOrder : "");
+    }else if( bSplit ){
+      /* src.* keeps declared columns in order and omits the hidden
+      ** commit_ref argument. Naming those columns would select it. */
+      zRead = sqlite3_mprintf("SELECT src.* FROM %s%s",zFrom,zOrder);
+    }else if( bRowid ){
+      zRead = sqlite3_mprintf(
+          "SELECT src.\"%w\",src.* FROM %s",zRowid,zFrom);
+    }else{
+      zRead = sqlite3_mprintf("SELECT src.* FROM %s",zFrom);
+    }
     zInsert = sqlite3_mprintf("INSERT INTO main.\"%w\"(%s) VALUES(%s)",
         zName,zNames,zParams);
     if( bSplit ){
@@ -323,7 +357,12 @@ static int dumpTable(DlDump *p, const char *zName){
       }
     }
     for(i=0; i<nCol && rc==SQLITE_OK; i++){
-      rc = sqlite3_bind_value(insert,i+1,sqlite3_column_value(read,i));
+      iSrc = p->working ? i : aHist[i];
+      if( !p->working && (iSrc<0 || iSrc>=sqlite3_column_count(read)) ){
+        rc = dumpError(p,SQLITE_ERROR,zName,"snapshot is missing a column");
+        break;
+      }
+      rc = sqlite3_bind_value(insert,i+1,sqlite3_column_value(read,iSrc));
     }
     if( rc==SQLITE_OK ) rc = sqlite3_step(insert);
     if( rc==SQLITE_DONE ) rc = SQLITE_OK;
@@ -340,8 +379,9 @@ static int dumpTable(DlDump *p, const char *zName){
       rc = dumpWrite(p,prefix);
       sqlite3_free(prefix);
       for(i=0; i<nCol && rc==SQLITE_OK; i++){
+        iSrc = p->working ? i : aHist[i];
         if( i ) rc = dumpWrite(p,",");
-        if( rc==SQLITE_OK ) rc = dumpValue(p,read,i);
+        if( rc==SQLITE_OK ) rc = dumpValue(p,read,iSrc);
       }
       if( rc==SQLITE_OK ) rc = dumpWrite(p,");\n");
       if( rc==SQLITE_OK && bSplit ){
@@ -372,6 +412,7 @@ table_done:
   sqlite3_free(zNames);
   sqlite3_free(zParams);
   sqlite3_free(zReadNames);
+  sqlite3_free(aHist);
   return rc;
 }
 

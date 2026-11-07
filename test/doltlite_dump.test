@@ -472,4 +472,109 @@ foreach format {sql sqlite} {
   } {3 {7 3 4 42 1 2} {9 8} {15 mine 6} {10 ten}}
   catch {out close}
 }
+
+# dolt_at names its hidden ref argument commit_ref, so a historical export
+# has to copy declared columns by position. That includes a later tip that
+# adds a column, a stored generated column, and a sibling already named
+# commit_ref_1.
+reset_db
+forcedelete dump-commit-ref.sql dump-commit-ref.sqlite
+db eval {
+  CREATE TABLE c(commit_ref TEXT, x INT);
+  INSERT INTO c VALUES('mine',1);
+  CREATE TABLE s(commit_ref INTEGER PRIMARY KEY, x INT) STRICT;
+  INSERT INTO s VALUES(7,2);
+  CREATE TABLE mixed("Commit_Ref" TEXT, commit_ref_1 TEXT, x INT);
+  INSERT INTO mixed VALUES('Keep','suffix',3);
+  CREATE TABLE gen(
+    commit_ref TEXT,
+    g TEXT GENERATED ALWAYS AS (commit_ref || '!') STORED,
+    x INT
+  );
+  INSERT INTO gen(commit_ref, x) VALUES('mine',4);
+  CREATE TABLE mid(a INT, commit_ref TEXT, b INT);
+  INSERT INTO mid VALUES(8,'mine',9);
+  CREATE TABLE bare(commit_ref TEXT, x INT);
+  INSERT INTO bare VALUES('row',5);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_tag('base');
+}
+set baseHash [db one {SELECT dolt_hashof('base')}]
+db eval {
+  UPDATE c SET commit_ref='staged';
+  UPDATE s SET x=20 WHERE commit_ref=7;
+  UPDATE mixed SET "Commit_Ref"='Staged';
+  UPDATE gen SET commit_ref='staged';
+  UPDATE mid SET commit_ref='staged';
+  UPDATE bare SET commit_ref='staged';
+  SELECT dolt_add('.');
+  UPDATE c SET commit_ref='working';
+  UPDATE bare SET x=50;
+}
+set before [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+foreach ref {WORKING STAGED base} {
+  foreach format {sql sqlite} {
+    set path dump-commit-ref.$format
+    forcedelete $path
+    set prefix dump-commit-ref-$ref-$format
+    do_test $prefix.values {
+      db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}
+      if {$format eq "sql"} {
+        sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+        set fd [open $path rb]; set text [read $fd]; close $fd
+        out eval $text
+      } else {
+        sqlite3 out file:dump-commit-ref.sqlite?doltlite_engine=sqlite -uri 1
+      }
+      list [out eval {SELECT commit_ref, x FROM c}] \
+           [out eval {SELECT commit_ref, x FROM s}] \
+           [out eval {SELECT "Commit_Ref", commit_ref_1, x FROM mixed}] \
+           [out eval {SELECT commit_ref, g, x FROM gen}] \
+           [out eval {SELECT a, commit_ref, b FROM mid}] \
+           [out eval {SELECT rowid, commit_ref, x FROM bare}] \
+           [out eval "SELECT commit_ref='$baseHash' FROM c"]
+    } [list \
+        [dict get {WORKING {working 1} STAGED {staged 1} base {mine 1}} $ref] \
+        [dict get {WORKING {7 20} STAGED {7 20} base {7 2}} $ref] \
+        [dict get {WORKING {Staged suffix 3} STAGED {Staged suffix 3} base {Keep suffix 3}} $ref] \
+        [dict get {WORKING {staged staged! 4} STAGED {staged staged! 4} base {mine mine! 4}} $ref] \
+        [dict get {WORKING {8 staged 9} STAGED {8 staged 9} base {8 mine 9}} $ref] \
+        [dict get {WORKING {1 staged 50} STAGED {1 staged 5} base {1 row 5}} $ref] \
+        0]
+    catch {out close}
+    do_test $prefix.source {
+      db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
+    } $before
+  }
+}
+db eval {
+  ALTER TABLE c ADD COLUMN y INT DEFAULT 0;
+  UPDATE c SET y=11;
+  SELECT dolt_commit('-Am','added');
+}
+foreach format {sql sqlite} {
+  set path dump-commit-ref-old.$format
+  forcedelete $path
+  do_test dump-commit-ref-old-$format {
+    db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref','base')}
+    if {$format eq "sql"} {
+      sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+      set fd [open $path rb]; set text [read $fd]; close $fd
+      out eval $text
+    } else {
+      sqlite3 out file:dump-commit-ref-old.sqlite?doltlite_engine=sqlite -uri 1
+    }
+    list [out eval {SELECT commit_ref, x FROM c}] \
+         [catch {out eval {SELECT y FROM c}}] \
+         [out eval "SELECT commit_ref='$baseHash' FROM c"]
+  } {{mine 1} 1 0}
+  catch {out close}
+}
+do_test dump-commit-ref-head {
+  forcedelete dump-commit-ref-head.sqlite
+  db eval {SELECT dolt_dump('--file-name','dump-commit-ref-head.sqlite','-r','sqlite','--ref','HEAD')}
+  sqlite3 out file:dump-commit-ref-head.sqlite?doltlite_engine=sqlite -uri 1
+  out eval {SELECT commit_ref, x, y FROM c}
+} {working 1 11}
+out close
 finish_test
