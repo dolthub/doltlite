@@ -2201,6 +2201,14 @@ void sqlite3Pragma(
               sqlite3VdbeJumpHere(v, jmp6);
               sqlite3VdbeAddOp4Int(v, OP_IdxGT, iIdxCur+j, uniqOk, r1,
                                    pIdx->nKeyCol); VdbeCoverage(v);
+#ifdef DOLTLITE_PROLLY
+              if( !sqlite3BtreeUsesOrig(db->aDb[i].pBt) ){
+                sqlite3VdbeChangeP5(v, 1);
+                sqlite3VdbeAddOp4Int(v, OP_IdxLT, iIdxCur+j, uniqOk, r1,
+                                     pIdx->nKeyCol); VdbeCoverage(v);
+                sqlite3VdbeChangeP5(v, 1);
+              }
+#endif
               sqlite3VdbeLoadString(v, 3, "non-unique entry in index ");
               sqlite3VdbeGoto(v, jmp5);
               sqlite3VdbeResolveLabel(v, uniqOk);
