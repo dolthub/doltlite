@@ -631,6 +631,7 @@ int mergeCatalogPass1(
 );
 
 int mergeCatalogPass2(
+  sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,
   struct TableEntry *aTheirs, int nTheirs,

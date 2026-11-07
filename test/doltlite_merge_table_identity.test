@@ -1,0 +1,84 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach tables {ordinary system same-rows} {
+  foreach operation {merge cherry_pick revert} {
+    reset_db
+    execsql {
+      CREATE TABLE w(id INT PRIMARY KEY,v TEXT);
+      INSERT INTO w VALUES(1,'kept');
+    }
+    if {$tables eq "system"} {
+      set old dolt_ignore
+      set other dolt_nonlocal_tables
+      execsql {INSERT INTO dolt_ignore VALUES('first',0)}
+      set insert {INSERT INTO dolt_ignore VALUES('second',0)}
+      set replacement {
+        INSERT INTO dolt_nonlocal_tables VALUES('link','main','w','immediate')
+      }
+      set kept {link main w immediate}
+    } else {
+      set old old_table
+      set other new_table
+      execsql {
+        CREATE TABLE old_table(k TEXT PRIMARY KEY,v INTEGER);
+        INSERT INTO old_table VALUES('first',0);
+      }
+      set insert {INSERT INTO old_table VALUES('second',0)}
+      set replacement {
+        CREATE TABLE new_table(id INT PRIMARY KEY,v TEXT,extra TEXT);
+        INSERT INTO new_table VALUES(9,'kept','value');
+      }
+      set kept {9 kept value}
+      if {$tables eq "same-rows"} {
+        set replacement {
+          CREATE TABLE new_table(k TEXT PRIMARY KEY,v INTEGER CHECK(v>=0));
+          INSERT INTO new_table VALUES('first',0);
+        }
+        set kept {first 0}
+      }
+    }
+    execsql {
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('side');
+    }
+    set oldRoot [db one "SELECT rootpage FROM sqlite_schema WHERE name='$old'"]
+    execsql "DROP TABLE $old"
+    execsql $replacement
+    execsql {
+      SELECT dolt_commit('-Am','replace');
+      SELECT dolt_checkout('side');
+    }
+    execsql $insert
+    execsql {
+      SELECT dolt_commit('-Am','modify');
+      SELECT dolt_checkout('main');
+    }
+    set prefix merge-table-identity-$tables-$operation
+    do_test $prefix.reused-root {
+      expr {[db one "SELECT rootpage FROM sqlite_schema WHERE name='$other'"] == $oldRoot}
+    } 1
+    set head [db one {SELECT dolt_hashof('HEAD')}]
+    set staged [db one {SELECT dolt_hashof_db('STAGED')}]
+    do_test $prefix.refused {
+      set result [catchsql "SELECT dolt_${operation}('side')"]
+      list [lindex $result 0] [string match {*conflict*} [lindex $result 1]]
+    } {1 1}
+    foreach phase {live reopen} {
+      if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+      do_execsql_test $prefix.$phase.rows "SELECT * FROM $other" $kept
+      do_execsql_test $prefix.$phase.old-absent \
+          "SELECT count(*) FROM sqlite_schema WHERE name='$old'" 0
+      do_execsql_test $prefix.$phase.w {
+        SELECT * FROM w;
+        PRAGMA integrity_check;
+      } {1 kept ok}
+      do_test $prefix.$phase.refs {
+        list [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $head}] \
+             [expr {[db one {SELECT dolt_hashof_db('STAGED')}] eq $staged}]
+      } {1 1}
+    }
+  }
+}
+
+finish_test

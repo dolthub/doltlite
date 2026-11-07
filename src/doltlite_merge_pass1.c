@@ -290,32 +290,19 @@ static int mergePass1ResolveOursEntry(
 
   *ppAnc = doltliteFindTableByName(c->aAnc, c->nAnc, zName);
   *ppTheirs = doltliteFindTableByName(c->aTheirs, c->nTheirs, zName);
-  if( !*ppAnc ){
-    struct TableEntry *pByNo = doltliteFindTableByNumber(
-        c->aAnc, c->nAnc, c->aOurs[iOurs].iTable);
-    if( pByNo && pByNo->zName && strcmp(pByNo->zName, zName)!=0
-     && !doltliteFindTableByName(c->aOurs, c->nOurs, pByNo->zName) ){
-      struct TableEntry *pTheirsByNo;
-      /* Drop plus a dual add: the new name is on both sides and was not
-      ** in the ancestor. Reusing the dropped table's number is not a rename. */
-      if( doltliteFindTableByName(c->aTheirs, c->nTheirs, zName)
-       && !doltliteFindTableByName(c->aAnc, c->nAnc, zName) ){
-        return SQLITE_OK;
-      }
-      pTheirsByNo = doltliteFindTableByNumber(
-          c->aTheirs, c->nTheirs, c->aOurs[iOurs].iTable);
-      if( pTheirsByNo && !pTheirsByNo->zName ){
-        pTheirsByNo = 0;
-        pByNo = 0;
-      }else if( pTheirsByNo
-             && strcmp(pTheirsByNo->zName, pByNo->zName)!=0
-             && strcmp(pTheirsByNo->zName, zName)!=0 ){
-        pTheirsByNo = 0;
-        pByNo = 0;
-      }
-      if( pByNo ){
-        *ppAnc = pByNo;
-        if( !*ppTheirs && pTheirsByNo ) *ppTheirs = pTheirsByNo;
+  if( !*ppAnc && !*ppTheirs ){
+    int rc = doltliteCatalogRenameMate(c->db, c->aAnc, c->nAnc,
+        c->aAnc, c->nAnc, c->aOurs, c->nOurs,
+        &c->aOurs[iOurs], 0, ppAnc);
+    if( rc!=SQLITE_OK ) return rc;
+    if( *ppAnc && !*ppTheirs ){
+      *ppTheirs = doltliteFindTableByName(
+          c->aTheirs, c->nTheirs, (*ppAnc)->zName);
+      if( !*ppTheirs ){
+        rc = doltliteCatalogRenameMate(c->db, c->aAnc, c->nAnc,
+            c->aAnc, c->nAnc, c->aTheirs, c->nTheirs,
+            *ppAnc, 1, ppTheirs);
+        if( rc!=SQLITE_OK ) return rc;
       }
     }
   }
@@ -1207,25 +1194,11 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
     if( zObject ){
       pAncEntry = doltliteFindTableByName(c->aAnc, c->nAnc, zObject);
       pOurEntry = doltliteFindTableByName(c->aOurs, c->nOurs, zObject);
-      if( !pOurEntry ){
-        struct TableEntry *pByNo = doltliteFindTableByNumber(
-            c->aOurs, c->nOurs, c->aTheirs[i].iTable);
-        if( pByNo && pByNo->zName
-         && doltliteFindTableByName(c->aTheirs, c->nTheirs, pByNo->zName)
-         && doltliteFindTableByName(c->aOurs, c->nOurs, pByNo->zName)
-         && !doltliteFindTableByName(c->aAnc, c->nAnc, pByNo->zName) ){
-          pByNo = 0;
-        }
-        if( pByNo && pByNo->zName && pAncEntry && pAncEntry->zName
-         && strcmp(pByNo->zName, pAncEntry->zName)!=0
-         && strcmp(zObject, pAncEntry->zName)!=0 ){
-          pByNo = 0;
-        }
-        if( pByNo && pByNo->zName
-         && doltliteFindTableByName(c->aAnc, c->nAnc, pByNo->zName) ){
-          pByNo = 0;
-        }
-        pOurEntry = pByNo;
+      if( !pOurEntry && pAncEntry ){
+        rc = doltliteCatalogRenameMate(c->db, c->aAnc, c->nAnc,
+            c->aAnc, c->nAnc, c->aOurs, c->nOurs,
+            pAncEntry, 1, &pOurEntry);
+        if( rc!=SQLITE_OK ) return rc;
       }
       if( pAncEntry ){
         changed = prollyHashCompare(&c->aTheirs[i].root, &pAncEntry->root)!=0

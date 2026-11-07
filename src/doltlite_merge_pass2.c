@@ -330,6 +330,7 @@ int mergeIndexColumnGoneFrom(
 
 
 int mergeCatalogPass2(
+  sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,
   struct TableEntry *aTheirs, int nTheirs,
@@ -526,32 +527,22 @@ int mergeCatalogPass2(
       continue;
     }
 
-    if( hasSchemaConflictObject(aConflictTables, nConflictTables, zName) ){
-      continue;
-    }
     oursEntry = doltliteFindTableByName(aOurs, nOurs, zName);
     if( oursEntry ) continue;
     {
-      struct TableEntry *pOursSame = doltliteFindTableByNumber(
-          aOurs, nOurs, aTheirs[i].iTable);
-      struct TableEntry *pAncSame = doltliteFindTableByNumber(
-          aAnc, nAnc, aTheirs[i].iTable);
-      if( pOursSame && zName && pAncSame && pAncSame->zName
-       && strcmp(zName, pAncSame->zName)==0 ){
-        continue;
-      }
-      if( pOursSame && pOursSame->zName && zName
-       && strcmp(pOursSame->zName, zName)==0 ){
-        continue;
-      }
-    }
-
-    {
       struct TableEntry *ancEntry = doltliteFindTableByName(aAnc, nAnc, zName);
+      if( ancEntry ){
+        rc = doltliteCatalogRenameMate(db, aAnc, nAnc,
+            aAnc, nAnc, aOurs, nOurs, ancEntry, 1, &oursEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        if( oursEntry ) continue;
+      }
       if( !ancEntry ){
-
         struct TableEntry newEntry = aTheirs[i];
         int forceRemap = bDisjointSchemaChanges;
+        if( hasSchemaConflictObject(aConflictTables, nConflictTables, zName) ){
+          continue;
+        }
         {
           int j, conflict = 0;
           for(j=0; j<*pnMerged; j++){
@@ -578,6 +569,10 @@ int mergeCatalogPass2(
            && strcmp(pAncSe->zSql, pTheirSe->zSql)==0 ){
             zKind = "data modification";
           }else{
+            if( hasSchemaConflictObject(
+                  aConflictTables, nConflictTables, zName) ){
+              continue;
+            }
             zKind = "schema modification";
           }
           if( pzErrMsg && !*pzErrMsg ){
