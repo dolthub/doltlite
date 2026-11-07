@@ -767,7 +767,6 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
 
     if( p->inTrans==TRANS_READ ){
       int bChanged = 0;
-      int bWorkingSetMoved = 0;
       rc = chunkStoreHasExternalChanges(pBt->pStore, &bChanged);
       if( rc==SQLITE_OK && bChanged ){
         const char *zBranch = p->zBranch ? p->zBranch : "main";
@@ -791,15 +790,10 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         chunkStoreUnlock(pBt->pStore);
         return rc;
       }
-      rc = btreeWorkingSetMoved(p, &bWorkingSetMoved);
-      if( rc!=SQLITE_OK ){
-        chunkStoreUnlock(pBt->pStore);
-        return rc;
-      }
       /* A VC command's refresh consumes the external-change signal; a
       ** peer-moved working set still means the snapshot is stale. */
       if( bChanged
-       || bWorkingSetMoved
+       || btreeWorkingSetMoved(p)
        || chunkStoreWorkingSetMovedFromBasis(pBt->pStore,
                                              p->zBranch ? p->zBranch : "main") ){
         chunkStoreUnlock(pBt->pStore);
@@ -841,12 +835,8 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       int bStaleHead;
       ProllyHash loadedCatHash;
       ProllyHash branchTip;
-      rc = btreeWorkingSetMoved(p, &bPeerWrite);
-      if( rc!=SQLITE_OK ){
-        chunkStoreUnlock(pBt->pStore);
-        return rc;
-      }
-      bPeerWrite |= chunkStoreWorkingSetMovedFromBasis(pBt->pStore, zBranch);
+      bPeerWrite = btreeWorkingSetMoved(p)
+          || chunkStoreWorkingSetMovedFromBasis(pBt->pStore, zBranch);
       bStaleHead = 0;
       memset(&branchTip, 0, sizeof(branchTip));
       if( p->inTrans==TRANS_NONE && p->db && p->db->autoCommit

@@ -1117,6 +1117,7 @@ static int csRefreshIfChangedReadLocked(
     }
   }
   rc = csRefreshIfChanged(cs, pChanged);
+  if( rc==SQLITE_OK && *pChanged ) cs->refreshGen++;
   if( locked ){
     rc2 = csReadUnlock(cs, &readLock);
     if( rc==SQLITE_OK ) rc = rc2;

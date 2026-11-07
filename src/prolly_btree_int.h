@@ -323,6 +323,7 @@ struct Btree {
   u8 inTrans;
   u32 iBDataVersion;
   u32 iLoadedWorkingStateVersion;
+  u64 iLoadedRefreshGen;
   Btree *pNext;
   u64 nSeek;
   int nBackup;
@@ -585,9 +586,8 @@ int cachedSeekKeyMatchesCurrent(BtCursor *pCur);
 void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur);
 void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur);
 int copyZeroTailPayload(ProllyMutMapEntry *e, u32 offset, u32 amt, void *pBuf);
-void btreeRememberWorkingSet(Btree*);
 void btreeMarkWorkingStateChanged(Btree *p, int bLocal);
-int btreeWorkingSetMoved(Btree*, int*);
+int btreeWorkingSetMoved(Btree*);
 int rollbackNeedsSchemaReset(Btree *pBtree);
 int btreeFillWorkingSetBlob(
   u8 *buf,
