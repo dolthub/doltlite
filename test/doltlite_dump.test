@@ -429,4 +429,47 @@ do_test dump-normal-view-still-dumps.rows {
 } {}
 do_test dump-normal-view-still-dumps.no-temp {glob -nocomplain *-dump-*} {}
 out close
+
+# A keyless table can already occupy every result column. Rowid has to be
+# copied by a follow-up update so the export stays within that limit.
+reset_db
+forcedelete dump-wide-rowid.sql dump-wide-rowid.sqlite
+set lim [sqlite3_limit db SQLITE_LIMIT_COLUMN -1]
+set cols [list]
+for {set i 0} {$i < $lim} {incr i} { lappend cols "c$i" }
+set last [expr {$lim-1}]
+set pk [list {id INTEGER PRIMARY KEY}]
+for {set i 1} {$i < $lim} {incr i} { lappend pk "p$i" }
+set shadow [list {"rowid"}]
+for {set i 1} {$i < $lim} {incr i} { lappend shadow "s$i" }
+db eval "CREATE TABLE w([join $cols ,])"
+db eval "INSERT INTO w(rowid,c0,c$last) VALUES(42,1,2),(7,3,4)"
+db eval "CREATE TABLE pk([join $pk ,])"
+db eval "INSERT INTO pk(id,p$last) VALUES(9,8)"
+db eval "CREATE TABLE shadow([join $shadow ,])"
+db eval "INSERT INTO shadow(\"_rowid_\",\"rowid\",s$last) VALUES(15,'mine',6)"
+db eval {CREATE TABLE narrow(v TEXT); INSERT INTO narrow(rowid,v) VALUES(10,'ten')}
+db eval {SELECT dolt_commit('-Am','wide')}
+foreach format {sql sqlite} {
+  set path dump-wide-rowid.$format
+  forcedelete $path
+  do_test dump-wide-rowid-$format {
+    db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref','WORKING')}
+    if {$format eq "sql"} {
+      set fd [open $path rb]; set text [read $fd]; close $fd
+      sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+      out eval $text
+      set updates [regexp -all {last_insert_rowid} $text]
+    } else {
+      sqlite3 out file:dump-wide-rowid.sqlite?doltlite_engine=sqlite -uri 1
+      set updates 3
+    }
+    list $updates \
+         [out eval "SELECT rowid, c0, c$last FROM w ORDER BY rowid"] \
+         [out eval "SELECT id, p$last FROM pk"] \
+         [out eval "SELECT _rowid_, \"rowid\", s$last FROM shadow"] \
+         [out eval {SELECT rowid, v FROM narrow}]
+  } {3 {7 3 4 42 1 2} {9 8} {15 mine 6} {10 ten}}
+  catch {out close}
+}
 finish_test

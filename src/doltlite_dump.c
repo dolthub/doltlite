@@ -190,12 +190,14 @@ static int dumpValue(DlDump *p, sqlite3_stmt *q, int i){
 }
 
 static int dumpTable(DlDump *p, const char *zName){
-  sqlite3_stmt *cols = 0, *read = 0, *insert = 0;
+  sqlite3_stmt *cols = 0, *read = 0, *insert = 0, *rowidRead = 0, *rowidFix = 0;
   sqlite3_str *names = sqlite3_str_new(p->db);
   sqlite3_str *params = sqlite3_str_new(p->db);
   sqlite3_str *readNames = sqlite3_str_new(p->db);
   char *zNames = 0, *zParams = 0, *zRead = 0, *zInsert = 0, *zReadNames = 0;
-  int nCol = 0, rc, i;
+  char *zFrom = 0, *zOrder = 0, *zRowidRead = 0, *zRowidFix = 0;
+  const char *zRowid = 0;
+  int nCol = 0, nData = 0, nLimit = 0, rc, i, bRowid = 0, bSplit = 0;
   {
     Table *t = sqlite3FindTable(p->out,zName,"main");
     ProllyHash root;
@@ -206,10 +208,8 @@ static int dumpTable(DlDump *p, const char *zName){
       const char *aliases[] = {"rowid","_rowid_","oid"};
       for(i=0; i<3; i++){
         if( sqlite3ColumnIndex(t,aliases[i])<0 ){
-          sqlite3_str_appendf(names,"\"%w\"",aliases[i]);
-          sqlite3_str_appendf(readNames,"src.\"%w\"",aliases[i]);
-          sqlite3_str_appendall(params,"?");
-          nCol++;
+          zRowid = aliases[i];
+          bRowid = 1;
           break;
         }
       }
@@ -219,6 +219,28 @@ static int dumpTable(DlDump *p, const char *zName){
     char *pragma = sqlite3_mprintf("PRAGMA main.table_xinfo(%Q)",zName);
     rc = pragma ? sqlite3_prepare_v2(p->out,pragma,-1,&cols,0) : SQLITE_NOMEM;
     sqlite3_free(pragma);
+  }
+  while( rc==SQLITE_OK && sqlite3_step(cols)==SQLITE_ROW ){
+    if( sqlite3_column_int(cols,6)==0 ) nData++;
+  }
+  if( cols ){
+    int resetRc = sqlite3_reset(cols);
+    if( rc==SQLITE_OK ) rc = resetRc;
+  }
+  /* A rowid table may already use every result column the connection
+  ** allows. Read and apply rowid on its own so neither statement exceeds
+  ** that limit. */
+  if( rc==SQLITE_OK && bRowid ){
+    int outLimit = sqlite3_limit(p->out,SQLITE_LIMIT_COLUMN,-1);
+    nLimit = sqlite3_limit(p->db,SQLITE_LIMIT_COLUMN,-1);
+    if( outLimit<nLimit ) nLimit = outLimit;
+    if( nData+1>nLimit ) bSplit = 1;
+  }
+  if( rc==SQLITE_OK && bRowid && !bSplit ){
+    sqlite3_str_appendf(names,"\"%w\"",zRowid);
+    sqlite3_str_appendf(readNames,"src.\"%w\"",zRowid);
+    sqlite3_str_appendall(params,"?");
+    nCol++;
   }
   while( rc==SQLITE_OK && sqlite3_step(cols)==SQLITE_ROW ){
     if( sqlite3_column_int(cols,6)!=0 ) continue;
@@ -231,15 +253,32 @@ static int dumpTable(DlDump *p, const char *zName){
   }
   if( rc==SQLITE_OK ) rc = sqlite3_finalize(cols);
   else sqlite3_finalize(cols);
+  cols = 0;
   zNames = sqlite3_str_finish(names);
   zParams = sqlite3_str_finish(params);
   zReadNames = sqlite3_str_finish(readNames);
   if( rc==SQLITE_OK && (!zNames || !zParams || !zReadNames) ) rc = SQLITE_NOMEM;
   if( rc==SQLITE_OK ){
-    if( p->working ) zRead = sqlite3_mprintf("SELECT %s FROM main.\"%w\" AS src",zReadNames,zName);
-    else zRead = sqlite3_mprintf("SELECT %s FROM \"dolt_at_%w\"(%Q) AS src",zReadNames,zName,p->zRef);
-    zInsert = sqlite3_mprintf("INSERT INTO main.\"%w\"(%s) VALUES(%s)",zName,zNames,zParams);
-    if( !zRead || !zInsert ) rc = SQLITE_NOMEM;
+    if( p->working ) zFrom = sqlite3_mprintf("main.\"%w\" AS src",zName);
+    else zFrom = sqlite3_mprintf("\"dolt_at_%w\"(%Q) AS src",zName,p->zRef);
+    if( bSplit ) zOrder = sqlite3_mprintf(" ORDER BY src.\"%w\"",zRowid);
+    if( !zFrom || (bSplit && !zOrder) ) rc = SQLITE_NOMEM;
+  }
+  if( rc==SQLITE_OK ){
+    zRead = sqlite3_mprintf("SELECT %s FROM %s%s",zReadNames,zFrom,
+        zOrder ? zOrder : "");
+    zInsert = sqlite3_mprintf("INSERT INTO main.\"%w\"(%s) VALUES(%s)",
+        zName,zNames,zParams);
+    if( bSplit ){
+      zRowidRead = sqlite3_mprintf("SELECT src.\"%w\" FROM %s%s",
+          zRowid,zFrom,zOrder);
+      zRowidFix = sqlite3_mprintf(
+          "UPDATE main.\"%w\" SET \"%w\"=? WHERE \"%w\"=last_insert_rowid()",
+          zName,zRowid,zRowid);
+    }
+    if( !zRead || !zInsert || (bSplit && (!zRowidRead || !zRowidFix)) ){
+      rc = SQLITE_NOMEM;
+    }
   }
   if( rc==SQLITE_OK ) rc = sqlite3_prepare_v2(p->db,zRead,-1,&read,0);
   if( rc!=SQLITE_OK ){
@@ -247,20 +286,55 @@ static int dumpTable(DlDump *p, const char *zName){
     goto table_done;
   }
   rc = sqlite3_prepare_v2(p->out,zInsert,-1,&insert,0);
+  if( rc!=SQLITE_OK ){
+    dumpError(p,rc,zName,sqlite3_errmsg(p->out));
+    goto table_done;
+  }
+  if( bSplit ){
+    rc = sqlite3_prepare_v2(p->db,zRowidRead,-1,&rowidRead,0);
+    if( rc!=SQLITE_OK ){
+      dumpError(p,rc,zName,sqlite3_errmsg(p->db));
+      goto table_done;
+    }
+    rc = sqlite3_prepare_v2(p->out,zRowidFix,-1,&rowidFix,0);
+    if( rc!=SQLITE_OK ){
+      dumpError(p,rc,zName,sqlite3_errmsg(p->out));
+      goto table_done;
+    }
+  }
   while( rc==SQLITE_OK ){
     int step = sqlite3_step(read);
-    if( step==SQLITE_DONE ) break;
+    if( step==SQLITE_DONE ){
+      if( bSplit && sqlite3_step(rowidRead)!=SQLITE_DONE ){
+        rc = dumpError(p,SQLITE_ERROR,zName,"rowid export did not line up");
+      }
+      break;
+    }
     if( step!=SQLITE_ROW ){
       rc = dumpError(p,step,zName,sqlite3_errmsg(p->db));
       break;
+    }
+    if( bSplit ){
+      int rowStep = sqlite3_step(rowidRead);
+      if( rowStep!=SQLITE_ROW ){
+        rc = dumpError(p,rowStep==SQLITE_DONE ? SQLITE_ERROR : rowStep,zName,
+            "rowid export did not line up");
+        break;
+      }
     }
     for(i=0; i<nCol && rc==SQLITE_OK; i++){
       rc = sqlite3_bind_value(insert,i+1,sqlite3_column_value(read,i));
     }
     if( rc==SQLITE_OK ) rc = sqlite3_step(insert);
     if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    if( rc==SQLITE_OK && bSplit ){
+      rc = sqlite3_bind_value(rowidFix,1,sqlite3_column_value(rowidRead,0));
+      if( rc==SQLITE_OK ) rc = sqlite3_step(rowidFix);
+      if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    }
     if( rc!=SQLITE_OK ) dumpError(p,rc,zName,sqlite3_errmsg(p->out));
     sqlite3_reset(insert);
+    if( bSplit ) sqlite3_reset(rowidFix);
     if( rc==SQLITE_OK && p->xWrite ){
       char *prefix = sqlite3_mprintf("INSERT INTO main.\"%w\"(%s) VALUES(",zName,zNames);
       rc = dumpWrite(p,prefix);
@@ -270,13 +344,31 @@ static int dumpTable(DlDump *p, const char *zName){
         if( rc==SQLITE_OK ) rc = dumpValue(p,read,i);
       }
       if( rc==SQLITE_OK ) rc = dumpWrite(p,");\n");
+      if( rc==SQLITE_OK && bSplit ){
+        prefix = sqlite3_mprintf("UPDATE main.\"%w\" SET \"%w\"=",zName,zRowid);
+        rc = dumpWrite(p,prefix);
+        sqlite3_free(prefix);
+        if( rc==SQLITE_OK ) rc = dumpValue(p,rowidRead,0);
+        if( rc==SQLITE_OK ){
+          prefix = sqlite3_mprintf(" WHERE \"%w\"=last_insert_rowid();\n",zRowid);
+          rc = dumpWrite(p,prefix);
+          sqlite3_free(prefix);
+        }
+      }
     }
   }
 table_done:
+  sqlite3_finalize(cols);
   sqlite3_finalize(read);
   sqlite3_finalize(insert);
+  sqlite3_finalize(rowidRead);
+  sqlite3_finalize(rowidFix);
   sqlite3_free(zRead);
   sqlite3_free(zInsert);
+  sqlite3_free(zRowidRead);
+  sqlite3_free(zRowidFix);
+  sqlite3_free(zFrom);
+  sqlite3_free(zOrder);
   sqlite3_free(zNames);
   sqlite3_free(zParams);
   sqlite3_free(zReadNames);
