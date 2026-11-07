@@ -1570,6 +1570,7 @@ static int prollyBtreeOpenImpl(
   if( rc!=SQLITE_OK && chunkStoreOriginSourceEnabled(pBt->pStore) ){
     p->bDeferredRegister = 1;
   }
+  btreeRememberWorkingSet(p);
 
   releaseOpenStoreFilename(zStoreFilename, bStoreUri);
   return SQLITE_OK;

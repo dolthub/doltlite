@@ -1,0 +1,111 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set writer [file normalize shared-store-writer.tcl]
+set fd [open $writer w]
+puts $fd {
+  sqlite3 writer [lindex $argv 0]
+  writer eval [lindex $argv 1]
+  writer close
+}
+close $fd
+
+proc refresh_peer {branch sql} {
+  exec [info nameofexecutable] $::writer [file normalize test.db]/$branch $sql
+}
+
+proc refresh_setup {key owner} {
+  reset_db
+  db eval "CREATE TABLE t(id $key PRIMARY KEY, v TEXT)"
+  db eval {
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feat');
+  }
+  set root main
+  if {$owner eq "attached"} {
+    db close
+    sqlite3 db :memory:
+    db eval "ATTACH '[file normalize test.db]/main' AS a"
+    set root a
+  }
+  db eval "ATTACH '[file normalize test.db]/feat' AS f"
+  db eval "SELECT count(*) FROM $root.t; SELECT count(*) FROM f.t"
+  return $root
+}
+
+foreach key {INTEGER INT} {
+  foreach owner {main attached} {
+    foreach branch {main feat} {
+      foreach operation {working commit schema} {
+        set root [refresh_setup $key $owner]
+        set target [expr {$branch eq "main" ? $root : "f"}]
+        set other [expr {$branch eq "main" ? "f" : $root}]
+        set prefix "shared-refresh-$key-$owner-$branch-$operation"
+        set version [db one "PRAGMA $target.data_version"]
+        set sql {INSERT INTO t VALUES(2,'peer');}
+        if {$operation eq "commit"} {append sql {SELECT dolt_commit('-am','peer');}}
+        if {$operation eq "schema"} {append sql {ALTER TABLE t ADD COLUMN extra INT DEFAULT 7;}}
+        refresh_peer $branch $sql
+        do_execsql_test $prefix-consume "SELECT count(*) FROM $other.t" {1}
+        foreach attempt {1 2 3} {
+          do_execsql_test $prefix-read-$attempt "SELECT count(*) FROM $target.t" {2}
+        }
+        do_test $prefix-version {
+          expr {[db one "PRAGMA $target.data_version"]>$version}
+        } {1}
+        if {$operation eq "schema"} {
+          do_execsql_test $prefix-schema "SELECT sum(extra) FROM $target.t" {14}
+        }
+        do_execsql_test $prefix-integrity "PRAGMA $target.integrity_check" {ok}
+      }
+      set root [refresh_setup $key $owner]
+      set target [expr {$branch eq "main" ? $root : "f"}]
+      set other [expr {$branch eq "main" ? "f" : $root}]
+      set prefix "shared-refresh-$key-$owner-$branch-snapshot"
+      db eval "BEGIN; SELECT count(*) FROM $target.t; SELECT count(*) FROM $other.t"
+      refresh_peer $branch {INSERT INTO t VALUES(2,'peer'); SELECT dolt_commit('-am','peer');}
+      do_execsql_test $prefix-pinned "SELECT count(*) FROM $other.t; SELECT count(*) FROM $target.t" {1 1}
+      db eval ROLLBACK
+      do_execsql_test $prefix-consume "SELECT count(*) FROM $other.t" {1}
+      do_execsql_test $prefix-fresh "SELECT count(*) FROM $target.t" {2}
+
+      set root [refresh_setup $key $owner]
+      set target [expr {$branch eq "main" ? $root : "f"}]
+      set other [expr {$branch eq "main" ? "f" : $root}]
+      set prefix "shared-refresh-$key-$owner-$branch-upgrade"
+      db eval "BEGIN; SELECT count(*) FROM $target.t; SELECT count(*) FROM $other.t"
+      refresh_peer $branch {INSERT INTO t VALUES(2,'peer');}
+      db eval "INSERT INTO $other.t VALUES(3,'local')"
+      do_test $prefix-refused {
+        set result [catchsql "INSERT INTO $target.t VALUES(4,'stale')"]
+        lappend result [sqlite3_extended_errcode db]
+      } {1 {database is locked} SQLITE_BUSY_SNAPSHOT}
+      db eval COMMIT
+      do_execsql_test $prefix-peer-kept "SELECT group_concat(id) FROM $target.t" {1,2}
+      do_execsql_test $prefix-local-kept "SELECT group_concat(id) FROM $other.t" {1,3}
+    }
+  }
+  reset_db
+  db eval "CREATE TABLE t(id $key PRIMARY KEY, v TEXT)"
+  db eval {
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_tag('pinned');
+    SELECT dolt_branch('feat');
+  }
+  db close
+  sqlite3 db [file normalize test.db]/feat
+  db eval {INSERT INTO dolt_nonlocal_tables VALUES('t','main',NULL,'immediate')}
+  do_execsql_test shared-refresh-$key-nonlocal-before {SELECT count(*) FROM t} {1}
+  refresh_peer main {INSERT INTO t VALUES(2,'peer'); SELECT dolt_commit('-am','peer');}
+  do_execsql_test shared-refresh-$key-nonlocal-consume {SELECT count(*) FROM main.dolt_nonlocal_tables} {1}
+  do_execsql_test shared-refresh-$key-nonlocal-fresh {SELECT count(*) FROM t} {2}
+  db eval {UPDATE dolt_nonlocal_tables SET target_ref='pinned'}
+  do_execsql_test shared-refresh-$key-nonlocal-detached {SELECT count(*) FROM t} {1}
+  refresh_peer main {INSERT INTO t VALUES(3,'peer'); SELECT dolt_commit('-am','next peer');}
+  do_execsql_test shared-refresh-$key-nonlocal-detached-retained {SELECT count(*) FROM t} {1}
+}
+
+forcedelete $writer
+finish_test

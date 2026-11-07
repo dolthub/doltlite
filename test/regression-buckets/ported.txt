@@ -237,3 +237,4 @@ doltlite_merge_dropped_null
 doltlite_integrity_sortkey_type
 doltlite_record_affinity
 doltlite_integrity_nocase_nul
+doltlite_shared_store_refresh

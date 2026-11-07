@@ -567,23 +567,25 @@ int btreeWriteWorkingState(
   return rc;
 }
 
-static void btreeRememberWorkingSet(Btree *p){
-  if( p->isDetached || !p->db || p->db->nDb<1 || p==p->db->aDb[0].pBt
-   || !doltliteBtreeSameStore(p, p->db->aDb[0].pBt) ) return;
+void btreeRememberWorkingSet(Btree *p){
+  if( p->isDetached || !p->db || p->db->nDb<1 ) return;
   memset(&p->loadedWorkingSet, 0, sizeof(p->loadedWorkingSet));
   chunkStoreGetBranchWorkingSet(p->pBt->pStore,
       p->zBranch ? p->zBranch : "main", &p->loadedWorkingSet);
 }
 
-int btreeWorkingSetMoved(Btree *p){
+int btreeWorkingSetMoved(Btree *p, int *pMoved){
   ProllyHash workingSet;
+  int rc;
+  *pMoved = 0;
   /* Store rollback can readopt peer refs without reloading this handle. */
-  if( p->isDetached || !p->db || p->db->nDb<1 || p==p->db->aDb[0].pBt
-   || !doltliteBtreeSameStore(p, p->db->aDb[0].pBt) ) return 0;
+  if( p->isDetached || !p->db || p->db->nDb<1 ) return SQLITE_OK;
   memset(&workingSet, 0, sizeof(workingSet));
-  chunkStoreGetBranchWorkingSet(p->pBt->pStore,
+  rc = chunkStoreGetBranchWorkingSet(p->pBt->pStore,
       p->zBranch ? p->zBranch : "main", &workingSet);
-  return prollyHashCompare(&workingSet, &p->loadedWorkingSet)!=0;
+  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+  *pMoved = prollyHashCompare(&workingSet, &p->loadedWorkingSet)!=0;
+  return SQLITE_OK;
 }
 
 int btreeReloadBranchWorkingStateInto(
@@ -760,9 +762,13 @@ int btreeRefreshSharedWorkingState(Btree *p){
   if( p->isDetached ) return SQLITE_OK;
   pBt = p->pBt;
   if( p->iLoadedWorkingStateVersion==pBt->iWorkingStateVersion
-   && !p->bCatalogDropped
-   && (p->inTrans!=TRANS_NONE || !btreeWorkingSetMoved(p)) ){
-    return SQLITE_OK;
+   && !p->bCatalogDropped ){
+    int bMoved = 0;
+    if( p->inTrans==TRANS_NONE ){
+      rc = btreeWorkingSetMoved(p, &bMoved);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    if( !bMoved ) return SQLITE_OK;
   }
   memset(&loadedCatHash, 0, sizeof(loadedCatHash));
   rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);

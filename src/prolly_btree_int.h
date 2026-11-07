@@ -585,8 +585,9 @@ int cachedSeekKeyMatchesCurrent(BtCursor *pCur);
 void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur);
 void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur);
 int copyZeroTailPayload(ProllyMutMapEntry *e, u32 offset, u32 amt, void *pBuf);
+void btreeRememberWorkingSet(Btree*);
 void btreeMarkWorkingStateChanged(Btree *p, int bLocal);
-int btreeWorkingSetMoved(Btree*);
+int btreeWorkingSetMoved(Btree*, int*);
 int rollbackNeedsSchemaReset(Btree *pBtree);
 int btreeFillWorkingSetBlob(
   u8 *buf,
