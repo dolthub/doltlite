@@ -162,6 +162,15 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
     sqlite3_result_null(ctx);
     return;
   }
+  {
+    /* An ordinary SQLite file reads a missing trailing field as the
+    ** column's DEFAULT, so its rows stay as they are, as in stock. */
+    int iDb = sqlite3FindDbName(db, zDb);
+    if( iDb>=0 && sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
+      sqlite3_result_int(ctx, 0);
+      return;
+    }
+  }
 
   rc = doltliteMaterializeDefaultColumn(db, zDb, zTable, zColumn);
   if( rc!=SQLITE_NOTFOUND ){
