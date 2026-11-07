@@ -290,7 +290,27 @@ static int mergePass1ResolveOursEntry(
 
   *ppAnc = doltliteFindTableByName(c->aAnc, c->nAnc, zName);
   *ppTheirs = doltliteFindTableByName(c->aTheirs, c->nTheirs, zName);
-  if( !*ppAnc ){
+  if( !c->bBranchMerge && !*ppAnc && !*ppTheirs ){
+    int rc = doltliteCatalogRenameMate(c->db, c->aAnc, c->nAnc,
+        c->aAnc, c->nAnc, c->aOurs, c->nOurs,
+        &c->aOurs[iOurs], 0, ppAnc);
+    if( rc!=SQLITE_OK ) return rc;
+    if( *ppAnc && !*ppTheirs ){
+      *ppTheirs = doltliteFindTableByName(
+          c->aTheirs, c->nTheirs, (*ppAnc)->zName);
+      if( !*ppTheirs ){
+        rc = doltliteCatalogRenameMate(c->db, c->aAnc, c->nAnc,
+            c->aAnc, c->nAnc, c->aTheirs, c->nTheirs,
+            *ppAnc, 1, ppTheirs);
+        if( rc!=SQLITE_OK ) return rc;
+        if( *ppTheirs ){
+          *ppAnc = 0;
+          *ppTheirs = 0;
+        }
+      }
+    }
+  }
+  if( c->bBranchMerge && !*ppAnc ){
     struct TableEntry *pByNo = doltliteFindTableByNumber(
         c->aAnc, c->nAnc, c->aOurs[iOurs].iTable);
     if( pByNo && pByNo->zName && strcmp(pByNo->zName, zName)!=0

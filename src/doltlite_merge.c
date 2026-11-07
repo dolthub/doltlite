@@ -1178,12 +1178,12 @@ int doltliteMergeCatalogs(
     }
   }
 
-  rc = mergeCatalogPass2(aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
+  rc = mergeCatalogPass2(db, aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
                           aAncSchema, nAncSchema,
                           aOursSchema, nOursSchema,
                           aTheirsSchema, nTheirsSchema,
                           aMerged, &nMerged, &iNextMerged,
-                          bDisjointSchemaChanges,
+                          bDisjointSchemaChanges, bBranchMerge,
                           aConflictTables, nConflictTables,
                           &aRemap, &nRemap,
                           pazReindex, pnReindex,

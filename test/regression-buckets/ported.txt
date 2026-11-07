@@ -80,6 +80,7 @@ doltlite_merge_virtual_affinity
 doltlite_merge_schema_errors
 doltlite_merge_column_ancestry
 doltlite_merge_renamed_index
+doltlite_merge_table_identity
 doltlite_merge_replaced_table
 doltlite_merge_pk_autoindex
 doltlite_merge_trigger_reference

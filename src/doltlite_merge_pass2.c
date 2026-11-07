@@ -330,6 +330,7 @@ int mergeIndexColumnGoneFrom(
 
 
 int mergeCatalogPass2(
+  sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,
   struct TableEntry *aTheirs, int nTheirs,
@@ -339,6 +340,7 @@ int mergeCatalogPass2(
   struct TableEntry *aMerged, int *pnMerged,
   Pgno *piNextMerged,
   int bDisjointSchemaChanges,
+  int bBranchMerge,
   MergeConflictTable *aConflictTables,
   int nConflictTables,
   SchemaRootpageRemap **ppaRemap,
@@ -531,7 +533,7 @@ int mergeCatalogPass2(
     }
     oursEntry = doltliteFindTableByName(aOurs, nOurs, zName);
     if( oursEntry ) continue;
-    {
+    if( bBranchMerge ){
       struct TableEntry *pOursSame = doltliteFindTableByNumber(
           aOurs, nOurs, aTheirs[i].iTable);
       struct TableEntry *pAncSame = doltliteFindTableByNumber(
@@ -548,8 +550,13 @@ int mergeCatalogPass2(
 
     {
       struct TableEntry *ancEntry = doltliteFindTableByName(aAnc, nAnc, zName);
+      if( !bBranchMerge && ancEntry ){
+        rc = doltliteCatalogRenameMate(db, aAnc, nAnc,
+            aAnc, nAnc, aOurs, nOurs, ancEntry, 1, &oursEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        if( oursEntry ) continue;
+      }
       if( !ancEntry ){
-
         struct TableEntry newEntry = aTheirs[i];
         int forceRemap = bDisjointSchemaChanges;
         {
