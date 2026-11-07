@@ -137,4 +137,94 @@ foreach key {INT TEXT} {
   }
 }
 
+# Ours adds a column and theirs drops one. Identical new rows merge.
+# A difference in a surviving column still conflicts. The mirror, where
+# ours drops and theirs adds, stays clean.
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  clustered {id INT PRIMARY KEY} {}
+} {
+  foreach direction {forward reverse} {
+    foreach operation {merge cherry_pick} {
+      foreach kind {clean null_b differ mirror} {
+        reset_db
+        set name insert-add-drop-$layout-$direction-$operation-$kind
+        execsql "CREATE TABLE t($key,a INT,b INT) $suffix"
+        execsql {CREATE INDEX ia ON t(a)}
+        execsql {
+          INSERT INTO t(id,a,b) VALUES(1,0,0);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+        }
+        set conflict 0
+        if {$kind eq "mirror"} {
+          execsql {ALTER TABLE t DROP COLUMN b; INSERT INTO t(id,a) VALUES(5,1)}
+        } elseif {$kind eq "null_b"} {
+          execsql {ALTER TABLE t ADD COLUMN c INT;
+                   INSERT INTO t(id,a,b,c) VALUES(5,1,NULL,NULL)}
+        } else {
+          execsql {ALTER TABLE t ADD COLUMN c INT;
+                   INSERT INTO t(id,a,b,c) VALUES(5,1,2,NULL)}
+        }
+        execsql {
+          SELECT dolt_commit('-Am','ours');
+          SELECT dolt_checkout('side');
+        }
+        if {$kind eq "mirror"} {
+          execsql {ALTER TABLE t ADD COLUMN c INT;
+                   INSERT INTO t(id,a,b,c) VALUES(5,1,2,NULL)}
+        } elseif {$kind eq "differ"} {
+          execsql {ALTER TABLE t DROP COLUMN b; INSERT INTO t(id,a) VALUES(5,9)}
+          set conflict 1
+        } else {
+          execsql {ALTER TABLE t DROP COLUMN b; INSERT INTO t(id,a) VALUES(5,1)}
+        }
+        execsql {SELECT dolt_commit('-Am','theirs')}
+        set target main
+        set path test.db/side
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target side
+          set path test.db
+        }
+        set head [db one {SELECT dolt_hashof('HEAD')}]
+        execsql BEGIN
+        do_test $name-merge {
+          lindex [catchsql "SELECT dolt_${operation}('$target')"] 0
+        } $conflict
+        do_execsql_test $name-conflicts {
+          SELECT count(*) FROM dolt_conflicts;
+        } $conflict
+        if {$conflict} {
+          if {[db one {SELECT count(*) FROM dolt_conflicts}]>0} {
+            do_catchsql_test $name-commit-refused {COMMIT} \
+              {1 {cannot merge: unresolved conflicts cannot be committed}}
+          }
+          if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
+          do_execsql_test $name-rollback "SELECT dolt_hashof('HEAD')='$head';
+            SELECT count(*) FROM dolt_conflicts; PRAGMA integrity_check" {1 0 ok}
+          continue
+        }
+        do_execsql_test $name-rows {
+          SELECT id,a,c FROM t ORDER BY id;
+          SELECT group_concat(name, ',') FROM (
+            SELECT name FROM pragma_table_info('t') ORDER BY cid);
+          PRAGMA integrity_check;
+        } {1 0 {} 5 1 {} id,a,c ok}
+        do_execsql_test $name-index {
+          SELECT id FROM t INDEXED BY ia WHERE a=1;
+        } 5
+        execsql COMMIT
+        db close
+        sqlite3 db $path
+        do_execsql_test $name-reopen {
+          SELECT id,a,c FROM t ORDER BY id;
+          SELECT count(*) FROM dolt_conflicts;
+          PRAGMA integrity_check;
+        } {1 0 {} 5 1 {} 0 ok}
+      }
+    }
+  }
+}
+
 finish_test
