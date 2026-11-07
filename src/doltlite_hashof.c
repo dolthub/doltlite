@@ -100,10 +100,12 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
     sqlite3_result_error(ctx, "dolt_hashof() takes exactly one argument", -1);
     return;
   }
+  /* NULL does not read the catalog, including when main is stock SQLite. */
   if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
     sqlite3_result_null(ctx);
     return;
   }
+  if( hashofUnavailable(ctx) ) return;
   zRef = (const char*)sqlite3_value_text(argv[0]);
   if( !zRef ){
     sqlite3_result_null(ctx);
@@ -114,7 +116,6 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
     return;
   }
   db = sqlite3_context_db_handle(ctx);
-  if( hashofUnavailable(ctx) ) return;
   rc = doltliteRefreshAutocommitWorkingState(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, rc);

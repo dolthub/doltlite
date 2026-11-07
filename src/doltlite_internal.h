@@ -1526,6 +1526,13 @@ static SQLITE_INLINE const char *doltliteVtabOnConflictOr(
   }
 }
 
+static SQLITE_INLINE const char *doltliteVcUnavailableMessage(sqlite3 *db){
+  if( doltliteIsStockSqliteDb(db) ){
+    return "dolt version-control features are not available on stock SQLite databases";
+  }
+  return "no database open";
+}
+
 static SQLITE_INLINE int doltliteLazyCreateTable(
   sqlite3_vtab *pBase,
   sqlite3 *db,
@@ -1534,6 +1541,11 @@ static SQLITE_INLINE int doltliteLazyCreateTable(
 ){
   char *zErr = 0;
   int rc;
+  if( doltliteIsStockSqliteDb(db) ){
+    sqlite3_free(pBase->zErrMsg);
+    pBase->zErrMsg = sqlite3_mprintf("%s", doltliteVcUnavailableMessage(db));
+    return pBase->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
   if( sqlite3FindTable(db, zName, "main") ) return SQLITE_OK;
   rc = sqlite3_exec(db, zCreate, 0, 0, &zErr);
   if( rc!=SQLITE_OK ){
@@ -2168,13 +2180,6 @@ int doltliteForEachConflict(sqlite3 *db,
     int (*xConflict)(void*, const char*, int), void *pCtx);
 int doltliteForEachConflictAsDolt(sqlite3 *db,
     int (*xConflict)(void*, const char*, int), void *pCtx);
-
-static SQLITE_INLINE const char *doltliteVcUnavailableMessage(sqlite3 *db){
-  if( doltliteIsStockSqliteDb(db) ){
-    return "dolt version-control features are not available on stock SQLite databases";
-  }
-  return "no database open";
-}
 
 static SQLITE_INLINE int doltliteGrowArrayImpl(
   void **ppArr, int *pnAlloc, int nNeeded, int elemSize, int seed

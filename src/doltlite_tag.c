@@ -76,7 +76,11 @@ static void doltTagParsedFunc(
   char *zParsedEmail = 0;
   int rc;
 
-  if( !cs ){ doltliteVcResultError(ctx, db, "no database"); return; }
+  if( !cs ){
+    doltliteVcResultError(ctx, db, doltliteIsStockSqliteDb(db)
+        ? doltliteVcUnavailableMessage(db) : "no database");
+    return;
+  }
   if( nPositional<1 ){ doltliteVcResultError(ctx, db, "tag name required"); return; }
 
   memset(&m, 0, sizeof(m));

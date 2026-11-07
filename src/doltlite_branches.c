@@ -108,6 +108,12 @@ static int brFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3
   (void)a;
   brClearCommit(pCur);
   brCurClearSnapshot(pCur);
+  if( doltliteIsStockSqliteDb(pVtab->db) ){
+    sqlite3_free(c->pVtab->zErrMsg);
+    c->pVtab->zErrMsg = sqlite3_mprintf("%s",
+        doltliteVcUnavailableMessage(pVtab->db));
+    return c->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
   if( !cs ) return SQLITE_OK;
   refsTableGetBranches(&cs->refs, &nBr, &aBr);
   if( n==1 ){
@@ -321,6 +327,12 @@ static int rbFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3
   (void)a;
   brClearCommit(pCur);
   brCurClearSnapshot(pCur);
+  if( doltliteIsStockSqliteDb(pVtab->db) ){
+    sqlite3_free(c->pVtab->zErrMsg);
+    c->pVtab->zErrMsg = sqlite3_mprintf("%s",
+        doltliteVcUnavailableMessage(pVtab->db));
+    return c->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
   if( !cs ) return SQLITE_OK;
   refsTableGetTracking(&cs->refs, &nTr, &aTr);
   if( n==1 ){

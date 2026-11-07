@@ -549,7 +549,8 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   int rc;
 
   if( !cs ){
-    doltliteVcResultError(ctx, db, "no database");
+    doltliteVcResultError(ctx, db, doltliteIsStockSqliteDb(db)
+        ? doltliteVcUnavailableMessage(db) : "no database");
     return;
   }
   if( argc<2 ){
