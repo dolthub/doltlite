@@ -281,6 +281,13 @@ INSERT INTO model_ignored_test VALUES(1);" >/dev/null
     "$DOLTLITE" "$d/db.db" "SELECT dolt_commit('--allow-empty','-m','policy');" >/dev/null
     printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t%s\n' "$included" > "$d/log.0"
     check "ignore_commit_expected_contents_${key}_$included" 0 "$d"
+    if [ "$included" -eq 1 ]; then
+      policy_hash=$("$DOLTLITE" "$d/db.db" "SELECT dolt_hashof('HEAD');")
+      printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t1\t%s\t1\n' "$policy_hash" > "$d/log.0"
+      check "ignore_receipt_row_is_verified_$key" 0 "$d"
+      printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t1\t%s\t100000001\n' "$policy_hash" > "$d/log.0"
+      check "ignore_receipt_wrong_row_is_detected_$key" 1 "$d" 1 'lost row'
+    fi
     printf 'C\tpolicy\tmain\t1000\t1100\t0\nP\tmain\tpolicy\tmodel_ignored_test\t%s\n' "$((1-included))" > "$d/log.0"
     check "ignore_commit_wrong_contents_detected_${key}_$included" 1 "$d" 1 'ignore commit policy table'
     if [ "$included" -eq 0 ]; then
@@ -302,12 +309,33 @@ d=$(newdir policy_check_failure)
 printf 'MODEL_FAIL\tignored table was staged\n' > "$d/log.0"
 check policy_check_failure_is_not_ignored 1 "$d" 1 'policy check failed'
 
+for key in INTEGER INT; do
+  for seed in 1 2 3 5 32 33 34 35; do
+    d=$(newdir "ignore_reused_contents_${key}_$seed" "$key")
+    "$DOLTLITE" "$d/db.db" "CREATE TABLE model_ignored_old(id INT PRIMARY KEY);
+INSERT INTO model_ignored_old VALUES(1);
+INSERT INTO dolt_ignore VALUES('model_ignored_*',1),('model_ignored_old',0);
+SELECT dolt_commit('-Am','old policy table');
+DROP TABLE model_ignored_old;
+SELECT dolt_reset();" >/dev/null
+    status=0
+    "$BIN" --ignore-policy "$d" "$seed" > "$d.out" 2>&1 || status=$?
+    if [ "$status" -eq 0 ] && grep -q $'^P\t' "$d/log.0"; then
+      echo "ok ignore_reused_contents_${key}_$seed"
+    else
+      echo "FAIL ignore_reused_contents_${key}_$seed: status=$status"
+      cat "$d.out" "$d/log.0"
+      fails=$((fails+1))
+    fi
+  done
+done
+
 for clustered in 0 1; do
   d="$TMP/policy-workload-$clustered"
   status=0
   VCMODEL_CLUSTERED=$clustered "$BIN" "$((clustered*12))" "$d" 2 1 3 120 > "$d.out" 2>&1 || status=$?
   covered=1
-  for pattern in $'^N\t[0-9]+\tnl[01]\t1$' $'^N\t[0-9]+\tnl[01]\t1\t[0-9a-f]{40}$' $'^N\t[0-9]+\tnl[01]\t0$' $'^N\t[0-9]+\tnl_ro\t0$' $'^P\t.*\t0\t[0-9a-f]{40}$' $'^P\t.*\t1\t[0-9a-f]{40}$'; do
+  for pattern in $'^N\t[0-9]+\tnl[01]\t1$' $'^N\t[0-9]+\tnl[01]\t1\t[0-9a-f]{40}$' $'^N\t[0-9]+\tnl[01]\t0$' $'^N\t[0-9]+\tnl_ro\t0$' $'^P\t.*\t0\t[0-9a-f]{40}\t[0-9]+$' $'^P\t.*\t1\t[0-9a-f]{40}\t[0-9]+$'; do
     if ! grep -Eq "$pattern" "$d"/log.*; then covered=0; fi
   done
   if [ "$status" -eq 0 ] && [ "$covered" -eq 1 ]; then
