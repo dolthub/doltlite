@@ -3,7 +3,7 @@
 // bundled engine, every value type, error paths, and a version-control round
 // trip (commit, branch, checkout, merge, dolt_log reads).
 
-use doltlite::{Connection, Value};
+use doltlite::{Connection, OpenFlags, Value};
 
 fn main() -> std::process::ExitCode {
     let mut failures = 0usize;
@@ -205,6 +205,113 @@ fn main() -> std::process::ExitCode {
     );
 
     drop(db);
+
+    let before = std::fs::read(&db_path).expect("read database");
+    let db = Connection::open_with_flags(&db_path, OpenFlags::READ_ONLY).expect("read-only open");
+    check(
+        "read-only reads existing data",
+        db.query_row("SELECT count(*) FROM t", &[])
+            .expect("read-only query")
+            .expect("row")
+            .get(0)
+            .unwrap()
+            .as_i64()
+            .unwrap()
+            .to_string(),
+        "3".into(),
+    );
+    for sql in [
+        "INSERT INTO t(pk) VALUES(99)",
+        "CREATE TABLE forbidden(id INTEGER PRIMARY KEY)",
+        "SELECT dolt_branch('forbidden')",
+    ] {
+        check(
+            "read-only refuses mutation",
+            db.execute_batch(sql)
+                .err()
+                .map(|e| e.code)
+                .unwrap_or(0)
+                .to_string(),
+            "8".into(),
+        );
+    }
+    drop(db);
+    check(
+        "read-only preserves bytes",
+        (std::fs::read(&db_path).unwrap() == before).to_string(),
+        "true".into(),
+    );
+
+    let uri = format!("file:{}?mode=ro", db_path.display());
+    let db = Connection::open_with_flags(uri, OpenFlags::READ_ONLY | OpenFlags::URI)
+        .expect("read-only URI open");
+    db.query_row("SELECT * FROM t", &[]).expect("URI query");
+    drop(db);
+    for flags in [
+        OpenFlags::CREATE,
+        OpenFlags::READ_ONLY | OpenFlags::READ_WRITE,
+    ] {
+        check(
+            "invalid open flags refused",
+            Connection::open_with_flags(&db_path, flags)
+                .err()
+                .map(|e| e.code)
+                .unwrap_or(0)
+                .to_string(),
+            "21".into(),
+        );
+    }
+    let db = Connection::open_with_flags(&db_path, OpenFlags::READ_WRITE).expect("existing open");
+    db.execute_batch("INSERT INTO t(pk) VALUES(99)")
+        .expect("existing write");
+    drop(db);
+    let _ = std::fs::remove_file(&db_path);
+
+    for flags in [OpenFlags::READ_ONLY, OpenFlags::READ_WRITE] {
+        check(
+            "missing file refused",
+            Connection::open_with_flags(&db_path, flags)
+                .err()
+                .map(|e| e.code)
+                .unwrap_or(0)
+                .to_string(),
+            "14".into(),
+        );
+        check(
+            "missing file not created",
+            db_path.exists().to_string(),
+            "false".into(),
+        );
+    }
+    let db = Connection::open_with_flags(&db_path, OpenFlags::READ_WRITE | OpenFlags::CREATE)
+        .expect("explicit create");
+    db.execute_batch("CREATE TABLE saved(id INTEGER PRIMARY KEY)")
+        .expect("create saved");
+    drop(db);
+    let valid = std::fs::read(&db_path).unwrap();
+    for cut in [168, 500, 1000] {
+        for flags in [
+            OpenFlags::READ_ONLY,
+            OpenFlags::READ_WRITE,
+            OpenFlags::READ_WRITE | OpenFlags::CREATE,
+        ] {
+            std::fs::write(&db_path, &valid[..cut]).unwrap();
+            let code = match Connection::open_with_flags(&db_path, flags) {
+                Ok(db) => db
+                    .execute_batch("SELECT count(*) FROM sqlite_schema")
+                    .err()
+                    .map(|e| e.code)
+                    .unwrap_or(0),
+                Err(e) => e.code,
+            };
+            check("truncated file refused", code.to_string(), "11".into());
+            check(
+                "truncated file preserved",
+                (std::fs::read(&db_path).unwrap() == valid[..cut]).to_string(),
+                "true".into(),
+            );
+        }
+    }
     let _ = std::fs::remove_file(&db_path);
 
     if failures == 0 {

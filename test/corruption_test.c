@@ -630,6 +630,46 @@ static void test_manifest_only(void){
   removeDb(dbpath);
 }
 
+static void test_truncated_store_preserved(void){
+  const char *base = DOLTLITE_TEST_TMPDIR "/test_corr_truncated_base.db";
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_corr_truncated_open.db";
+  const int cuts[] = {100, 167, 168, 169, 200, 400, 500, 600, 900, 1000};
+  const int flags[] = {
+    SQLITE_OPEN_READONLY,
+    SQLITE_OPEN_READWRITE,
+    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+  };
+  unsigned char before[1000], after[1000];
+  unsigned int i, j;
+  check("truncated_store_create", create_good_db(base)==0);
+  for(i=0; i<sizeof(cuts)/sizeof(cuts[0]); i++){
+    for(j=0; j<sizeof(flags)/sizeof(flags[0]); j++){
+      sqlite3 *db = 0;
+      int rc;
+      check("truncated_store_copy", copy_file(base, path)==0);
+      check("truncated_store_cut", truncate_file(path, cuts[i])==0);
+      check("truncated_store_before", read_bytes(path, 0, before, cuts[i])==0);
+      rc = sqlite3_open_v2(path, &db, flags[j], 0);
+      if( rc==SQLITE_OK ){
+        rc = execSql(db, "SELECT count(*) FROM sqlite_schema");
+      }
+      check("truncated_store_read_refused",
+            rc==SQLITE_CORRUPT || rc==SQLITE_NOTADB);
+      if( db ){
+        rc = execSql(db, "CREATE TABLE replacement(id INTEGER PRIMARY KEY)");
+        check("truncated_store_write_refused", rc!=SQLITE_OK);
+      }
+      sqlite3_close(db);
+      check("truncated_store_size_preserved", file_size(path)==cuts[i]);
+      check("truncated_store_bytes_preserved",
+            read_bytes(path, 0, after, cuts[i])==0
+            && memcmp(before, after, cuts[i])==0);
+    }
+  }
+  removeDb(base);
+  removeDb(path);
+}
+
 static void test_corrupt_wal_tag(void){
   const char *dbpath = DOLTLITE_TEST_TMPDIR "/test_corr_wal_tag.db";
   off_t sz;
@@ -734,7 +774,8 @@ static void test_corrupt_initial_wal_chunk_body_detected(void){
     memset(&zero, 0, sizeof(zero));
     rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
-    check("initial_wal_body_corruption_open_12", rc==SQLITE_OK);
+    check("initial_wal_body_corruption_open_12",
+          rc==SQLITE_CORRUPT || (rc==SQLITE_OK && cs.corruptMidStream));
     if( rc==SQLITE_OK ){
       check("initial_wal_body_corruption_poisoned_12", cs.corruptMidStream);
       rc = chunkStoreGet(&cs, &zero, &pData, &nData);
@@ -2159,6 +2200,7 @@ int main(void){
   test_append_garbage();
   test_empty_file();
   test_manifest_only();
+  test_truncated_store_preserved();
   test_corrupt_wal_tag();
   test_corrupt_wal_chunk_body_stops_replay();
   test_corrupt_initial_wal_chunk_body_detected();

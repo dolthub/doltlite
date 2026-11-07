@@ -695,32 +695,6 @@ damage_done:
   return rc;
 }
 
-/* A store whose first batch never synced: nothing indexed, nothing pending,
-** no root proving a durable commit past the header and no root of any later
-** batch (synchronous=OFF never advances DURABLE_TO). Like stock SQLite
-** rolling back a torn first transaction, it opens empty. */
-static int csWalIsCreationCrash(
-  ChunkStore *cs,
-  int bTailMode,
-  i64 iStart,
-  int nPendingBefore,
-  int *pCrash
-){
-  int everCommitted = 1;
-  int creationRoot = 0;
-  int laterBatch = 1;
-  int rc;
-  *pCrash = 0;
-  if( bTailMode || iStart!=cs->wal.iWalOffset || nPendingBefore!=0
-   || chunkIndexCount(&cs->index)!=0 || cs->readOnly ){
-    return SQLITE_OK;
-  }
-  rc = csScanForCommittedRootEx(cs, &everCommitted, &creationRoot,
-                                &laterBatch);
-  if( rc==SQLITE_OK ) *pCrash = !everCommitted && !laterBatch;
-  return rc;
-}
-
 static int csReplayWalFrom(
   ChunkStore *cs,
   i64 iStart,
@@ -739,8 +713,6 @@ static int csReplayWalFrom(
   int nPendingBefore;
   int nRootedPending;
   int nRootRecordsSeen = 0;
-  int sawDamage = 0;
-  int creationCrash = 0;
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
   u8 *chunkBuf = 0;
@@ -773,9 +745,10 @@ static int csReplayWalFrom(
      && cs->index.nChunks!=chunkIndexCount(&cs->index) ){
       return SQLITE_CORRUPT;
     }
-    if( chunkIndexCount(&cs->index)==0 && cs->index.nChunks==0
-     && !prollyHashIsEmpty(&cs->refs.refsHash) ){
+    if( !bTailMode && chunkIndexCount(&cs->index)==0 ){
       memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
+      cs->index.nChunks = 0;
+      cs->wal.recoveredMidStream = 1;
     }
     return SQLITE_OK;
   }
@@ -831,7 +804,6 @@ static int csReplayWalFrom(
           (long long)(cs->wal.iWalOffset + recPos));
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
-        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -846,7 +818,6 @@ static int csReplayWalFrom(
           (long long)(cs->wal.iWalOffset + pos - 24 - 1), (unsigned)len);
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
-        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -877,7 +848,6 @@ static int csReplayWalFrom(
             (long long)(cs->wal.iWalOffset + pos - 24 - 1), (unsigned)len);
           rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
           if( rc != SQLITE_OK ) goto replay_error;
-          sawDamage = 1;
           if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
           sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
           break;
@@ -926,7 +896,6 @@ static int csReplayWalFrom(
           (long long)(cs->wal.iWalOffset + recPos));
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
-        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -951,7 +920,6 @@ static int csReplayWalFrom(
           (long long)(cs->wal.iWalOffset + recPos));
         rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
         if( rc != SQLITE_OK ) goto replay_error;
-        sawDamage = 1;
         if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
         sawMidStream = (damageAction==CS_DAMAGE_MIDSTREAM);
         break;
@@ -998,7 +966,6 @@ static int csReplayWalFrom(
         (int)tag, (long long)(cs->wal.iWalOffset + recPos));
       rc = csWalResolveDamage(cs, recPos, walSize, &damageAction, &resumePos);
       if( rc != SQLITE_OK ) goto replay_error;
-      sawDamage = 1;
       if( damageAction==CS_DAMAGE_RESUME ){ pos = resumePos; continue; }
       /* Without an indexed base, damaged WAL start is not an empty store. */
       if( damageAction==CS_DAMAGE_TORN && recPos == 0 && tag != 0
@@ -1011,17 +978,8 @@ static int csReplayWalFrom(
     }
   }
 
-  if( sawDamage && nRootRecordsSeen == 0 ){
-    rc = csWalIsCreationCrash(cs, bTailMode, iStart, nPendingBefore,
-                              &creationCrash);
-    if( rc!=SQLITE_OK ) goto replay_error;
-  }
-
-  /* Damaged WAL start is not an empty store. Prealloc zeros never set
-  ** sawDamage; malformed non-zero bytes are corrupt even with no root. */
-  if( sawDamage
-   && nRootRecordsSeen == 0 && !creationCrash
-   && nPendingBefore == 0 && chunkIndexCount(&cs->index)==0 ){
+  if( !bTailMode && nRootRecordsSeen==0
+   && nPendingBefore==0 && chunkIndexCount(&cs->index)==0 ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->index.nChunks = 0;
     cs->wal.recoveredMidStream = 1;

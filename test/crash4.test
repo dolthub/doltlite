@@ -46,6 +46,8 @@ set sql_cmd_list {
 # the state of the database prior to any of these statements.
 #
 set crash4_cksum_set {}
+set crash4_prolly [expr {![catch {db one {SELECT doltlite_engine()}} engine]
+                        && $engine eq "prolly"}]
 lappend crash4_cksum_set [allcksum db]
 foreach cmd $sql_cmd_list {
   db eval $cmd
@@ -92,6 +94,25 @@ for {set cnt 1; set fin 0} {!$fin} {incr cnt} {
     set c
   } {1 {child process exited abnormally}}
   sqlite3 db test.db
+  if {$crash4_prolly && $delay==1 && $file eq "test.db"
+      && [catch {db eval {SELECT count(*) FROM sqlite_schema}}]} {
+    set fd [open test.db rb]
+    set before [read $fd]
+    close $fd
+    do_test crash4-1.$cnt.2 {
+      set rc [catch {db eval {PRAGMA integrity_check}}]
+      set code [sqlite3_errcode db]
+      list $rc [expr {$code in {SQLITE_CORRUPT SQLITE_NOTADB}}]
+    } {1 1}
+    do_test crash4-1.$cnt.3 {
+      set rc [catch {db eval {CREATE TABLE replacement(id INTEGER PRIMARY KEY)}}]
+      set fd [open test.db rb]
+      set after [read $fd]
+      close $fd
+      list $rc [expr {$after eq $before}]
+    } {1 1}
+    continue
+  }
   integrity_check crash4-1.$cnt.2
   do_test crash4-1.$cnt.3 {
     set x [lsearch $::crash4_cksum_set [allcksum db]]

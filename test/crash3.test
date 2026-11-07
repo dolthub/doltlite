@@ -23,6 +23,9 @@ ifcapable !crashtest {
   return
 }
 
+set crash3_prolly [expr {![catch {db one {SELECT doltlite_engine()}} engine]
+                        && $engine eq "prolly"}]
+
 proc do_test2 {name tcl res1 res2} {
   set script [subst -nocommands {
     do_test $name {
@@ -181,7 +184,27 @@ for {set ii 0} {$ii < 10} {incr ii} {
   crashsql -file test.db -char {sequential atomic} {
     CREATE TABLE abc(a, b, c);
   }
+  if {$crash3_prolly} {
+    set fd [open test.db rb]
+    set before [read $fd]
+    close $fd
+  }
   sqlite3 db test.db
+  if {$crash3_prolly && [catch {execsql {PRAGMA integrity_check}}]} {
+    do_test crash3-3.$ii {
+      set rc [catch {db eval {SELECT count(*) FROM sqlite_schema}}]
+      set code [sqlite3_errcode db]
+      list $rc [expr {$code in {SQLITE_CORRUPT SQLITE_NOTADB}}]
+    } {1 1}
+    do_test crash3-3.$ii.preserved {
+      set rc [catch {db eval {CREATE TABLE replacement(id INTEGER PRIMARY KEY)}}]
+      set fd [open test.db rb]
+      set after [read $fd]
+      close $fd
+      list $rc [expr {$after eq $before}]
+    } {1 1}
+    continue
+  }
   do_test crash3-3.$ii {
     execsql {PRAGMA integrity_check}
   } {ok}

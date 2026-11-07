@@ -512,6 +512,33 @@ foreach maintenance {gc vacuum} {
 }
 forcedelete compact-base.db compact-tail.db
 
+set f [open rch1.db rb]
+set prefix [read $f 1000]
+close $f
+foreach cut {100 167 168 169 200 400 500 600 900 1000} {
+  foreach mode {create existing readonly} {
+    do_test doltlite_recover_corruption-truncated.$cut.$mode {
+      forcedelete rcor.db
+      set bytes [string range $prefix 0 [expr {$cut-1}]]
+      set f [open rcor.db wb]
+      puts -nonewline $f $bytes
+      close $f
+      set rc [catch {
+        sqlite3 dbc rcor.db -create [expr {$mode eq "create"}] \
+            -readonly [expr {$mode eq "readonly"}]
+        dbc eval {SELECT count(*) FROM sqlite_schema}
+      } msg]
+      set writeRc [catch {dbc eval {CREATE TABLE replacement(id INTEGER PRIMARY KEY)}}]
+      catch {dbc close}
+      set f [open rcor.db rb]
+      set after [read $f]
+      close $f
+      list $rc [expr {$msg in {"file is not a database" "database disk image is malformed"}}] \
+          $writeRc [expr {$after eq $bytes}]
+    } {1 1 1 1}
+  }
+}
+
 forcedelete rch1.db rch2.db rcor.db header.db checkpoint.db checkpoint-crash.db \
             checkpoint-torn.db checkpoint-bad.db checkpoint-gc.db
 

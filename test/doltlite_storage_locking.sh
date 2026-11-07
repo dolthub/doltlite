@@ -80,29 +80,26 @@ FULL=$(wc -c < "$DB" | tr -d ' ')
 # The closed file ends with a clean-close root (169 bytes) written after the
 # first fsync; a torn creation never reached it.
 PRECLOSE=$((FULL - 169))
-for cut in 200 400 600 $((PRECLOSE - 100)); do
+for cut in 168 169 200 400 500 600 1000 $((PRECLOSE - 100)); do
   T="$DB.cut$cut"; head -c "$cut" "$DB" > "$T"
-  run_test "torn_creation_cut_${cut}_opens_empty" \
-    "CREATE TABLE t(a); INSERT INTO t VALUES(1); PRAGMA integrity_check; SELECT count(*) FROM t;" \
-    "ok
-1" "$T"
+  SUM=$(cksum < "$T")
+  dltest_expect_integrity "$T" 'skip:truncated creation has no recoverable root'
+  run_test_error_match "torn_creation_cut_${cut}_refused" \
+    "CREATE TABLE t(a);" "database disk image is malformed" "$T"
+  dltest_assert_equal "torn_creation_cut_${cut}_keeps_the_bytes" "$(cksum < "$T")" "$SUM"
   rm -f "$T" "$(dirname "$T")/.$(basename "$T")-lock"
 done
 T="$DB.zero"; head -c "$PRECLOSE" "$DB" > "$T"
 dd if=/dev/zero of="$T" bs=1 seek=168 count=$((PRECLOSE - 169 - 168)) conv=notrunc 2>/dev/null
-run_test "torn_creation_zeroed_data_opens_empty" \
-  "CREATE TABLE t(a); INSERT INTO t VALUES(1); PRAGMA integrity_check; SELECT count(*) FROM t;" \
-  "ok
-1" "$T"
+SUM=$(cksum < "$T")
+dltest_expect_integrity "$T" 'skip:zeroed creation data is corrupt'
+run_test_error_match "torn_creation_zeroed_data_refused" \
+  "CREATE TABLE t(a);" "database disk image is malformed" "$T"
+dltest_assert_equal "torn_creation_zeroed_data_keeps_the_bytes" "$(cksum < "$T")" "$SUM"
 rm -f "$T" "$(dirname "$T")/.$(basename "$T")-lock"
 db_rm "$DB"; rm -f "$(dirname "$DB")/.$(basename "$DB")-lock"
 
-# A crash during creation can leave a 0-byte file or a zero header sector.
-# Both open as an empty database without SQLITE_OPEN_CREATE. Read-only does
-# not rewrite the file. A missing path and a non-store file still fail, and
-# a later commit under a zeroed header stays refused.
 byte_size() { wc -c < "$1" | tr -d ' '; }
-file_prefix() { python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes()[:4].hex())' "$1"; }
 lock_rm() { rm -f "$1" "$(dirname "$1")/.$(basename "$1")-lock" "${1}-wal"; }
 
 DB=/tmp/test_open_empty_$$.db
@@ -113,7 +110,7 @@ PRECLOSE=$((FULL - 169))
 TORN="$DB.torn"
 head -c "$PRECLOSE" "$FRESH" > "$TORN"
 dd if=/dev/zero of="$TORN" bs=1 count=168 conv=notrunc 2>/dev/null
-TORN_SZ=$(byte_size "$TORN")
+TORN_SUM=$(cksum < "$TORN")
 
 ZERO="$DB.zero"
 : > "$ZERO"
@@ -132,17 +129,12 @@ lock_rm "$ZERO"
 for mode in rw ro rwc; do
   X="$DB.$mode"
   cp "$TORN" "$X"
-  run_test "torn_header_${mode}_opens_empty" \
-    "SELECT count(*) FROM sqlite_master;" "0" "file:$X?mode=$mode"
-  if [ "$mode" = ro ]; then
-    dltest_assert_equal "torn_header_ro_does_not_rewrite" "$(byte_size "$X")" "$TORN_SZ"
-    dltest_assert_equal "torn_header_ro_keeps_the_zero_header" "$(file_prefix "$X")" "00000000"
-    run_test_error_match "torn_header_ro_does_not_repair" \
-      "CREATE TABLE t(a);" "attempt to write a readonly database" "file:$X?mode=ro"
-    dltest_assert_equal "torn_header_ro_write_keeps_the_bytes" "$(byte_size "$X")" "$TORN_SZ"
-  else
-    dltest_assert_equal "torn_header_${mode}_repairs_the_header" "$(file_prefix "$X")" "43544c44"
-  fi
+  dltest_expect_integrity "$X" 'skip:zeroed header is not a database'
+  run_test_error_match "torn_header_${mode}_refused" \
+    "SELECT count(*) FROM sqlite_master;" "file is not a database" "file:$X?mode=$mode"
+  run_test_error_match "torn_header_${mode}_write_refused" \
+    "CREATE TABLE t(a);" "file is not a database" "file:$X?mode=$mode"
+  dltest_assert_equal "torn_header_${mode}_keeps_the_bytes" "$(cksum < "$X")" "$TORN_SUM"
   lock_rm "$X"
 done
 
