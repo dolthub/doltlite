@@ -92,6 +92,21 @@ fn main() -> std::process::ExitCode {
         "twö".into(),
     );
 
+    let bad = db
+        .query_row("SELECT CAST(X'FF61' AS TEXT), CAST(X'610062' AS TEXT)", &[])
+        .expect("q")
+        .expect("row");
+    check(
+        "invalid utf8 text keeps its bytes",
+        format!("{:?}", bad.get(0).unwrap()),
+        format!("{:?}", Value::Blob(vec![0xFF, 0x61])),
+    );
+    check(
+        "text with an embedded NUL stays text",
+        format!("{:?}", bad.get(1).unwrap()),
+        format!("{:?}", Value::Text("a\0b".into())),
+    );
+
     let nullrow = db
         .query_row("SELECT s FROM t WHERE pk = 3", &[])
         .expect("q")
