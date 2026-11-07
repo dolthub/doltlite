@@ -58,6 +58,7 @@ int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt){
 }
 #endif
 int origBtreeTxnState(void *p){ return orig_sqlite3BtreeTxnState(B(p)); }
+int origBtreeIsInBackup(void *p){ return orig_sqlite3BtreeIsInBackup(B(p)); }
 int origBtreeCreateTable(void *p, Pgno *pi, int f){ return orig_sqlite3BtreeCreateTable(B(p),pi,f); }
 int origBtreeDropTable(void *p, int i, int *pm){ return orig_sqlite3BtreeDropTable(B(p),i,pm); }
 int origBtreeClearTable(void *p, int i, i64 *pn){ return orig_sqlite3BtreeClearTable(B(p),i,pn); }
