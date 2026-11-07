@@ -526,6 +526,20 @@ WRQ="EXPLAIN QUERY PLAN SELECT * FROM w ORDER BY a;"
 want_eq "H4_without_rowid_plan_matches_sqlite" \
   "$(dl_all "$WRQ" "$WR")" "$(printf '%s\n' "$WRQ" | $SQLITE3 "$WR" 2>&1)"
 
+BL=$TMP/bulk.db
+seed_stock "$BL" "PRAGMA page_size=512; CREATE TABLE t(a INTEGER PRIMARY KEY, b, c); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<300) INSERT INTO t SELECT i, zeroblob(i%5000), 'v'||i FROM n;"
+cp "$BL" "$TMP/bulk_s.db"
+printf '%s\n' "CREATE INDEX c2 ON t(c); VACUUM;" | $SQLITE3 "$TMP/bulk_s.db" >/dev/null 2>&1
+dl_all "CREATE INDEX c2 ON t(c); VACUUM;" "$BL" >/dev/null 2>&1
+want_eq "H1_index_build_packs_pages_like_sqlite" \
+  "$(sq_last "PRAGMA page_count;" "$BL")" "$(sq_last "PRAGMA page_count;" "$TMP/bulk_s.db")"
+
+OPT=$TMP/optimize.db
+seed_stock "$OPT" "CREATE TABLE small(a,b); CREATE INDEX sb ON small(b); INSERT INTO small VALUES(1,1),(2,2); ANALYZE;"
+want_eq "H2_optimize_skips_analyzed_tables_like_sqlite" \
+  "$(dl_all "SELECT * FROM small WHERE b=1; PRAGMA optimize(0x03);" "$OPT")" \
+  "$(printf '%s\n' "SELECT * FROM small WHERE b=1; PRAGMA optimize(0x03);" | $SQLITE3 "$OPT" 2>&1)"
+
 echo ""
 echo "============================="
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"

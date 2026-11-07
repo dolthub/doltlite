@@ -283,8 +283,8 @@ int origCursorCountIndexRangeVt(
                                   pLower, pUpper, pnEntry);
 }
 i64 origCursorRowCountEstVt(BtCursor *pCur){
-  (void)pCur;
-  return -1;
+  if( !pCur->pOrigCursor ) return -1;
+  return origBtreeRowCountEst(pCur->pOrigCursor);
 }
 void origCursorCursorPinVt(BtCursor *pCur){
   origBtreeCursorPin(pCur->pOrigCursor);
@@ -292,13 +292,12 @@ void origCursorCursorPinVt(BtCursor *pCur){
 void origCursorCursorUnpinVt(BtCursor *pCur){
   origBtreeCursorUnpin(pCur->pOrigCursor);
 }
+/* A cursor whose open failed has no stock cursor behind it. */
 void origCursorCursorHintFlagsVt(BtCursor *pCur, unsigned x){
-  (void)pCur; (void)x;
-
+  if( pCur->pOrigCursor ) origBtreeCursorHintFlags(pCur->pOrigCursor, x);
 }
 int origCursorCursorHasHintVt(BtCursor *pCur, unsigned int mask){
-  (void)pCur; (void)mask;
-  return 0;
+  return pCur->pOrigCursor && origBtreeCursorHasHint(pCur->pOrigCursor, mask);
 }
 #ifndef SQLITE_OMIT_INCRBLOB
 int origCursorPayloadCheckedVt(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
