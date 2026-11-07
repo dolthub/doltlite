@@ -1,0 +1,83 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite-integrity-nocase-nul
+
+foreach {layout key suffix} {
+  rowid INTEGER {}
+  clustered INT {}
+  without-rowid INT {WITHOUT ROWID}
+} {
+  foreach {index terms predicate} {
+    ascending {a COLLATE NOCASE, b} {}
+    descending {a COLLATE NOCASE DESC, b DESC} {}
+    mixed {a COLLATE NOCASE DESC, b} {}
+    trailing {b, a COLLATE NOCASE} {}
+    expression {lower(a) COLLATE NOCASE, b} {}
+    partial {a COLLATE NOCASE, b} {WHERE id>0}
+  } {
+    reset_db
+    execsql "CREATE TABLE t(id $key PRIMARY KEY, a TEXT, b TEXT) $suffix"
+    execsql "CREATE UNIQUE INDEX u ON t($terms) $predicate"
+    execsql {
+      BEGIN;
+      INSERT INTO t VALUES(1, char(0)||'3', 'x'),
+                          (2, char(0)||'105', 'x'),
+                          (3, 'A'||char(0)||'3', 'y'),
+                          (4, 'A'||char(0)||'105', 'y'),
+                          (5, 'case', 'z'), (6, 'CASE', 'zz'),
+                          (7, NULL, 'z'), (8, NULL, 'z');
+    }
+    foreach phase {pending committed reopened reindexed} {
+      if {$phase eq "committed"} {execsql COMMIT}
+      if {$phase eq "reopened"} {db close; sqlite3 db test.db}
+      if {$phase eq "reindexed"} {execsql {REINDEX u}}
+      do_execsql_test $layout-$index-$phase {
+        PRAGMA integrity_check;
+        PRAGMA integrity_check(t);
+        PRAGMA quick_check;
+        SELECT count(*) FROM t;
+      } {ok ok ok 8}
+    }
+    do_catchsql_test $layout-$index-enforce {
+      INSERT INTO t VALUES(9, char(0)||'7', 'x');
+    } [list 1 [expr {$index eq "expression" ?
+        "UNIQUE constraint failed: index 'u'" :
+        ($index eq "trailing" ? "UNIQUE constraint failed: t.b, t.a" :
+        "UNIQUE constraint failed: t.a, t.b")}]]
+    do_execsql_test $layout-$index-rollback {
+      BEGIN;
+      UPDATE t SET b='changed' WHERE id=1;
+      PRAGMA integrity_check;
+      ROLLBACK;
+      PRAGMA integrity_check;
+    } {ok ok}
+  }
+}
+
+foreach {variant first second} {
+  exact {'same'} {'same'}
+  case {'same'} {'SAME'}
+  nul {char(0)||'3'} {char(0)||'7'}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b TEXT);
+    CREATE INDEX u ON t(a COLLATE NOCASE, b);
+  }
+  execsql "INSERT INTO t VALUES(1, $first, 'x'), (2, $second, 'x')"
+  sqlite3_db_config db DEFENSIVE 0
+  execsql {
+    PRAGMA writable_schema=ON;
+    UPDATE sqlite_schema SET sql='CREATE UNIQUE INDEX u ON t(a COLLATE NOCASE, b)'
+      WHERE name='u';
+    PRAGMA writable_schema=OFF;
+  }
+  db close
+  sqlite3 db test.db
+  do_execsql_test corrupt-$variant {
+    PRAGMA integrity_check;
+  } {{non-unique entry in index u}}
+}
+
+finish_test
