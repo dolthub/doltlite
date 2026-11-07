@@ -962,4 +962,39 @@ t|1|modified" \
 
 db_rm "$DB"
 
+# An equality probe of a key deleted earlier in the transaction must not
+# walk the rest of the deleted run looking for a landing row.
+DB=/tmp/test_txn_seek_deleted_probe_$$.db; db_rm "$DB"
+echo "CREATE TABLE c(s INTEGER, r INTEGER, k INTEGER, v, PRIMARY KEY(s,r,k));
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000)
+  INSERT INTO c SELECT 1,i,1,i FROM n;
+SELECT dolt_commit('-Am','base');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "deleted_key_probes_do_not_walk_the_deleted_run" \
+  "BEGIN;
+   DELETE FROM c WHERE r<=1000;
+   CREATE TEMP TABLE before AS
+     SELECT value FROM dolt_engine_stats WHERE name='pending_lookup';
+   SELECT count(*) FROM c WHERE s=1 AND r=1 AND k=1;
+   SELECT count(*) FROM c WHERE s=1 AND r=2;
+   SELECT (SELECT value FROM dolt_engine_stats WHERE name='pending_lookup')
+          - (SELECT value FROM before) < 50;
+   ROLLBACK;" \
+  "0
+0
+1" \
+  "$DB"
+run_test "deleted_key_probe_sees_reinsert" \
+  "BEGIN;
+   DELETE FROM c WHERE r<=1000;
+   INSERT INTO c VALUES(1,500,1,'back');
+   SELECT v FROM c WHERE s=1 AND r=500 AND k=1;
+   SELECT count(*) FROM c WHERE s=1 AND r=499 AND k=1;
+   SELECT count(*), sum(r) FROM c WHERE s=1 AND r IN (1,500,1001);
+   ROLLBACK;" \
+  "back
+0
+2|1501" \
+  "$DB"
+db_rm "$DB"
+
 dltest_finish

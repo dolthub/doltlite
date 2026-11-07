@@ -593,6 +593,38 @@ static int indexMovetoExactMutMap(
   return SQLITE_OK;
 }
 
+/* Whether a full primary-key seek names a row deleted in this transaction.
+** Only the whole key is exact: a prefix may still match a live row. */
+static int indexMovetoEqDeleted(
+  BtCursor *pCur,
+  const u8 *pSortKey,
+  int nSortKey,
+  int nSeekKeyField,
+  int *pDeleted
+){
+  struct TableEntry *pTE;
+  ProllyMutMap *pPending;
+  ProllyMutMapEntry *pEntry = 0;
+  int rc;
+
+  if( *pDeleted ) return SQLITE_OK;
+  if( !pCur->isTableRoot || !pCur->pKeyInfo
+   || nSeekKeyField!=pCur->pKeyInfo->nKeyField
+   || !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
+    return SQLITE_OK;
+  }
+  rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
+  if( rc!=SQLITE_OK || !pEntry || pEntry->op!=PROLLY_EDIT_DELETE ) return rc;
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+  if( pPending && pPending!=pCur->pMutMap && !prollyMutMapIsEmpty(pPending) ){
+    rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
+    if( rc!=SQLITE_OK || (pEntry && pEntry->op==PROLLY_EDIT_INSERT) ) return rc;
+  }
+  *pDeleted = 1;
+  return SQLITE_OK;
+}
+
 static int unpackedRecordHasWideNumericDescPrefix(
   const KeyInfo *pKeyInfo,
   const UnpackedRecord *pIdxKey
@@ -755,7 +787,10 @@ static int indexMovetoScanTreeLeaf(
         int prefixCmp = memcmp(pSK, pSortKey, cmpLen);
         if( prefixCmp > 0 ){
           if( bestIdx < 0 ){
-            if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+            /* Past the key nothing can match, and an equality seek never
+            ** reads its landing, so it need not skip deleted rows. */
+            if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
+             && !prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ) ){
               ProllyMutMapEntry *mmE = 0;
               rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
               if( rc!=SQLITE_OK ) break;
@@ -1152,6 +1187,18 @@ static int prollyIndexMoveto(
         exactMutMapKey,
         pRes, &done, &isDeleted);
     if( rc!=SQLITE_OK || done ) return rc;
+    /* An equality seek never reads where a miss lands, and finding the next
+    ** live row walks every key deleted after this one in the transaction. */
+    if( prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ) ){
+      rc = indexMovetoEqDeleted(pCur, pSortKey, nSortKey, nSeekKeyField,
+                                &isDeleted);
+      if( rc!=SQLITE_OK ) return rc;
+      if( isDeleted ){
+        pCur->eState = CURSOR_INVALID;
+        *pRes = -1;
+        return SQLITE_OK;
+      }
+    }
 
     exactOnly = exactOnly && pIdxKey->default_rc==0
         && (exactMutMapKey || (!pCur->isTableRoot && pCur->pKeyInfo
