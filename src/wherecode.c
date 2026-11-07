@@ -1945,6 +1945,7 @@ Bitmask sqlite3WhereCodeOneLoopStart(
     Expr *pExpr;
     ExprList *pList;
     int useRowSet = 0;
+    int iTabDb = sqlite3SchemaToIndex(db, pTabItem->pSTab->pSchema);
 #endif
     assert( pLoop->u.btree.nEq==1 );
     pTerm = pLoop->aLTerm[0];
@@ -1955,10 +1956,13 @@ Bitmask sqlite3WhereCodeOneLoopStart(
 #ifdef DOLTLITE_PROLLY
     pExpr = pTerm->pExpr;
     assert( pExpr!=0 );
+    /* An ordinary SQLite table keeps stock's ephemeral IN loop. */
     if( addrMiss==0 && !bRev
      && (pTerm->eOperator & WO_IN)!=0
      && pExpr->op==TK_IN
      && ExprUseXList(pExpr)
+     && iTabDb>=0 && iTabDb<db->nDb && db->aDb[iTabDb].pBt
+     && !sqlite3BtreeUsesOrig(db->aDb[iTabDb].pBt)
     ){
       pList = pExpr->x.pList;
       useRowSet = 1;

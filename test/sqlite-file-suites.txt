@@ -104,6 +104,7 @@ vacuum2
 vacuum4
 vacuum5
 walroshm
+where
 win32shm
 without_rowid1
 without_rowid2
