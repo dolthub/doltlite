@@ -382,64 +382,6 @@ static int csReadManifest(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-/* Distinguish crashed first-commit from a damaged committed DB. */
-static int csScanForCommittedRoot(ChunkStore *cs, int *pEverCommitted,
-                                  int *pCreationRoot){
-  return csScanForCommittedRootEx(cs, pEverCommitted, pCreationRoot, 0);
-}
-
-int csScanForCommittedRootEx(ChunkStore *cs, int *pEverCommitted,
-                             int *pCreationRoot, int *pLaterBatch){
-  u8 *buf;
-  i64 fileSize = 0;
-  i64 q = CHUNK_MANIFEST_SIZE;
-  int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
-  *pEverCommitted = 0;
-  *pCreationRoot = 0;
-  if( pLaterBatch ) *pLaterBatch = 0;
-  if( rc != SQLITE_OK ) return rc;
-  buf = sqlite3_malloc(CS_SCAN_WINDOW);
-  if( !buf ) return SQLITE_NOMEM;
-  while( q + 5 <= fileSize ){
-    i64 nAvail = fileSize - q;
-    int n = nAvail > (i64)CS_SCAN_WINDOW ? CS_SCAN_WINDOW : (int)nAvail;
-    int i;
-    rc = sqlite3OsRead(cs->file.pFile, buf, n, q);
-    if( rc != SQLITE_OK ) goto scan_done;
-    for(i=0; i+5<=n; i++){
-      if( buf[i]==CS_WAL_TAG_ROOT && CS_READ_U32(buf+i+1)==CHUNK_STORE_MAGIC ){
-        u8 m[CHUNK_MANIFEST_SIZE];
-        int state;
-        if( q + i + 1 + CHUNK_MANIFEST_SIZE > fileSize ) continue;
-        rc = sqlite3OsRead(cs->file.pFile, m, CHUNK_MANIFEST_SIZE, q + i + 1);
-        if( rc != SQLITE_OK ) goto scan_done;
-        state = csManifestHashState(m, q + i);
-        if( state==CS_MANIFEST_HASH_OK ){
-          if( csValidateWalRootManifest(0, m, q+i)!=SQLITE_OK ){
-            *pEverCommitted = 1;
-            goto scan_done;
-          }
-          if( CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF) > CHUNK_MANIFEST_SIZE ){
-            *pEverCommitted = 1;
-            goto scan_done;
-          }
-          if( pLaterBatch
-           && CS_READ_I64(m + CS_MANIFEST_BATCH_START_OFF) > CHUNK_MANIFEST_SIZE ){
-            *pLaterBatch = 1;
-          }
-          *pCreationRoot = 1;
-        }
-      }
-    }
-    if( (i64)n >= nAvail ) break;
-    q += n - 4;
-  }
-
-scan_done:
-  sqlite3_free(buf);
-  return rc;
-}
-
 static void csCaptureDamageFinger(ChunkStore *cs);
 
 static int csOpen(
@@ -588,51 +530,6 @@ static int csOpen(
       }
     }
     rc = csReadManifest(cs);
-    /* Truncate-to-empty only for NOTADB, not for a damaged-but-identified
-    ** header. SQLITE_OPEN_CREATE keeps the full scan. Other modes scan only
-    ** under an all-zero header sector, so a foreign file is not read through.
-    ** Only a creation root proves the bytes are a torn DoltLite creation: an
-    ** ordinary SQLite file can lose its header sector too, and stock refuses
-    ** it as not a database. Read-only presents the empty store and does not
-    ** rewrite the file. */
-    if( rc==SQLITE_NOTADB ){
-      u8 aHdr[CHUNK_MANIFEST_SIZE];
-      int allZero = 0;
-      int everCommitted = 1;
-      int creationRoot = 0;
-      int rc2;
-      int i;
-      rc2 = sqlite3OsRead(cs->file.pFile, aHdr, CHUNK_MANIFEST_SIZE, 0);
-      if( rc2==SQLITE_OK ){
-        for(i=0; i<CHUNK_MANIFEST_SIZE && aHdr[i]==0; i++){}
-        allZero = (i==CHUNK_MANIFEST_SIZE);
-      }
-      if( ((flags & SQLITE_OPEN_CREATE)!=0 && !cs->readOnly) || allZero ){
-        rc2 = csScanForCommittedRoot(cs, &everCommitted, &creationRoot);
-        if( rc2==SQLITE_OK && !everCommitted && creationRoot ){
-          cs->index.nChunks = 0;
-          cs->index.iIndexOffset = 0;
-          cs->index.nIndexSize = 0;
-          cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
-          if( cs->readOnly ){
-            i64 sz = 0;
-            rc2 = sqlite3OsFileSize(cs->file.pFile, &sz);
-            if( rc2==SQLITE_OK ){
-              cs->file.iFileSize = sz;
-              csMarkRefsCommitted(cs);
-              return SQLITE_OK;
-            }
-          }else{
-            cs->file.iFileSize = 0;
-            rc = sqlite3OsTruncate(cs->file.pFile, 0);
-            if( rc==SQLITE_OK ){
-              csMarkRefsCommitted(cs);
-              return SQLITE_OK;
-            }
-          }
-        }
-      }
-    }
     /* Stock defers NOTADB until first use; keep the garbage bytes. */
     if( rc==SQLITE_NOTADB ){
       cs->notADatabase = 1;

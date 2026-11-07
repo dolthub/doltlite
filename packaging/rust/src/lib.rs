@@ -34,9 +34,6 @@ mod ffi {
     pub const BLOB: c_int = 4;
     pub const NULL: c_int = 5;
 
-    pub const OPEN_READWRITE: c_int = 0x00000002;
-    pub const OPEN_CREATE: c_int = 0x00000004;
-
     // Tells the engine to copy bound text and blobs rather than borrow them.
     pub const TRANSIENT: isize = -1;
 
@@ -223,6 +220,24 @@ impl Row {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenFlags(c_int);
+
+impl OpenFlags {
+    pub const READ_ONLY: Self = Self(0x00000001);
+    pub const READ_WRITE: Self = Self(0x00000002);
+    pub const CREATE: Self = Self(0x00000004);
+    pub const URI: Self = Self(0x00000040);
+}
+
+impl std::ops::BitOr for OpenFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
 /// A connection to a DoltLite database.
 pub struct Connection {
     db: *mut ffi::Sqlite3,
@@ -235,26 +250,23 @@ unsafe impl Send for Connection {}
 
 impl Connection {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
+        Self::open_with_flags(path, OpenFlags::READ_WRITE | OpenFlags::CREATE)
+    }
+
+    pub fn open_with_flags<P: AsRef<Path>>(path: P, flags: OpenFlags) -> Result<Connection> {
         let path = path.as_ref().to_string_lossy().into_owned();
-        Connection::open_raw(&path)
+        Connection::open_raw(&path, flags)
     }
 
     pub fn open_in_memory() -> Result<Connection> {
-        Connection::open_raw(":memory:")
+        Connection::open_raw(":memory:", OpenFlags::READ_WRITE | OpenFlags::CREATE)
     }
 
-    fn open_raw(path: &str) -> Result<Connection> {
-        let c_path = CString::new(path)
-            .map_err(|_| Error::new(0, "database path contains a NUL byte"))?;
+    fn open_raw(path: &str, flags: OpenFlags) -> Result<Connection> {
+        let c_path =
+            CString::new(path).map_err(|_| Error::new(0, "database path contains a NUL byte"))?;
         let mut db: *mut ffi::Sqlite3 = ptr::null_mut();
-        let rc = unsafe {
-            ffi::sqlite3_open_v2(
-                c_path.as_ptr(),
-                &mut db,
-                ffi::OPEN_READWRITE | ffi::OPEN_CREATE,
-                ptr::null(),
-            )
-        };
+        let rc = unsafe { ffi::sqlite3_open_v2(c_path.as_ptr(), &mut db, flags.0, ptr::null()) };
         if rc != ffi::OK {
             let msg = if db.is_null() {
                 format!("unable to open database ({rc})")
