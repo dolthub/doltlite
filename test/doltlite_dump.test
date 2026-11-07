@@ -389,4 +389,44 @@ foreach ref {empty-text empty-numeric empty-text} expected {{01} {2 new} {01}} {
   }
 }
 do_test dump-empty-name.no-temp {glob -nocomplain *-dump-*} {}
+# Views and triggers that read DoltLite system vtables must be refused: the
+# exported database has no dolt_* vtabs, so the reference would be silently
+# unusable in stock SQLite (views over dropped tables stay allowed).
+reset_db
+forcedelete dump-out.sqlite
+db eval {
+  CREATE TABLE t(a);
+  CREATE VIEW vb AS SELECT name FROM dolt_branches;
+}
+do_test dump-system-vtable-view {
+  catchsql {SELECT dolt_dump('--file-name','dump-out.sqlite','-r','sqlite')}
+} {1 {dolt_dump: vb: access to dolt_branches.name is prohibited}}
+do_test dump-system-vtable-view.no-file {
+  file exists dump-out.sqlite
+} 0
+forcedelete dump-out.sqlite
+db eval {DROP VIEW vb}
+db eval {
+  CREATE TRIGGER tg AFTER INSERT ON t BEGIN
+    INSERT INTO t SELECT name FROM dolt_branches;
+  END;
+}
+do_test dump-system-vtable-trigger {
+  catchsql {SELECT dolt_dump('--file-name','dump-out.sqlite','-r','sqlite')}
+} {1 {dolt_dump: t: access to dolt_branches.name is prohibited}}
+do_test dump-system-vtable-trigger.no-file {
+  file exists dump-out.sqlite
+} 0
+forcedelete dump-out.sqlite
+db eval {DROP TRIGGER tg}
+do_test dump-normal-view-still-dumps {
+  db eval {CREATE VIEW vgood AS SELECT * FROM t; SELECT dolt_commit('-Am','x')}
+  db one {SELECT dolt_dump('--file-name','dump-out.sqlite','-r','sqlite')}
+} 0
+do_test dump-normal-view-still-dumps.rows {
+  sqlite3 out file:dump-out.sqlite?doltlite_engine=sqlite -uri 1
+  out eval {SELECT * FROM vgood}
+} {}
+do_test dump-normal-view-still-dumps.no-temp {glob -nocomplain *-dump-*} {}
+out close
 finish_test
