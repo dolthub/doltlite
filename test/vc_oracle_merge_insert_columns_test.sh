@@ -123,4 +123,80 @@ SELECT concat('R|',id,'|',c) FROM t WHERE id=5;"
   done
 done
 
+for key in INTEGER INT; do
+  for direction in forward reverse; do
+    for operation in merge cherry_pick; do
+      for kind in clean null_b differ mirror; do
+        name="add_drop_${key}_${direction}_${operation}_${kind}"
+        dir="$TMPROOT/$name"
+        mkdir -p "$dir/dt"
+        conflict=0
+        case "$kind" in
+          mirror)
+            ours="ALTER TABLE t DROP COLUMN b; INSERT INTO t(id,a) VALUES(5,1);"
+            theirs="ALTER TABLE t ADD COLUMN c INT; INSERT INTO t(id,a,b,c) VALUES(5,1,2,NULL);"
+            ;;
+          null_b)
+            ours="ALTER TABLE t ADD COLUMN c INT; INSERT INTO t(id,a,b,c) VALUES(5,1,NULL,NULL);"
+            theirs="ALTER TABLE t DROP COLUMN b; INSERT INTO t(id,a) VALUES(5,1);"
+            ;;
+          differ)
+            ours="ALTER TABLE t ADD COLUMN c INT; INSERT INTO t(id,a,b,c) VALUES(5,1,2,NULL);"
+            theirs="ALTER TABLE t DROP COLUMN b; INSERT INTO t(id,a) VALUES(5,9);"
+            conflict=1
+            ;;
+          *)
+            ours="ALTER TABLE t ADD COLUMN c INT; INSERT INTO t(id,a,b,c) VALUES(5,1,2,NULL);"
+            theirs="ALTER TABLE t DROP COLUMN b; INSERT INTO t(id,a) VALUES(5,1);"
+            ;;
+        esac
+        setup="CREATE TABLE t(id $key PRIMARY KEY,a INT,b INT); CREATE INDEX ia ON t(a);
+INSERT INTO t(id,a,b) VALUES(1,0,0);
+SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');
+$ours
+SELECT dolt_commit('-Am','ours'); SELECT dolt_checkout('side');
+$theirs
+SELECT dolt_commit('-Am','theirs');"
+        target=main
+        if [ "$direction" = forward ]; then
+          setup+="SELECT dolt_checkout('main');"
+          target=side
+        fi
+        probe="SELECT concat('C|',count(*)) FROM dolt_conflicts;"
+        schema_dl=""
+        schema_dt=""
+        expected="C|$conflict"
+        if [ "$conflict" -eq 0 ]; then
+          probe+="SELECT concat('R|',id,'|',a,'|',coalesce(c,'NULL')) FROM t ORDER BY id;"
+          schema_dl="SELECT concat('S|',group_concat(name, ',')) FROM (SELECT name FROM pragma_table_info('t') ORDER BY cid);"
+          schema_dt="SELECT CONCAT('S|',GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ',')) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='t';"
+          expected=$(printf '%s\nR|1|0|NULL\nR|5|1|NULL\nS|id,a,c' "$expected")
+        fi
+        script="$setup
+BEGIN;
+SELECT dolt_${operation}('$target');
+$probe
+ROLLBACK;"
+        vc_oracle_run_doltlite_script "$dir/db" "$dir/dl.out" "$dir/dl.err" \
+          "$script
+$schema_dl" --allow-error
+        dl_rc=$?
+        vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
+          "$(vc_oracle_translate_for_dolt "$script")
+$schema_dt" -r csv
+        dt_rc=$?
+        if [ "$dl_rc" -ne "$conflict" ] || [ "$dt_rc" -ne 0 ]; then
+          vc_oracle_assert_match "$name execution" failed success
+          cat "$dir/dl.err" "$dir/dt.err"
+          continue
+        fi
+        dl_out=$(tr -d '\r' <"$dir/dl.out" | grep -E '^[CRS]\|' | sort)
+        dt_out=$(tr -d '"\r' <"$dir/dt.out" | grep -E '^[CRS]\|' | sort)
+        vc_oracle_assert_match "$name reference" "$dt_out" "$(printf '%s\n' "$expected" | sort)"
+        vc_oracle_assert_match "$name merge" "$dl_out" "$dt_out"
+      done
+    done
+  done
+done
+
 vc_oracle_finish

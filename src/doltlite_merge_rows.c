@@ -414,8 +414,11 @@ static u8 *tryCellMerge(
       RecField *fT = (i<nfTheirs) ? &aTheirs[i] : (RecField*)&kNullField;
       int oursChanged, theirsChanged;
       int j;
-      for(j=0; pPolicy && pBase && j<pPolicy->nDropFields; j++){
-        if( pPolicy->aiDropFields[j]==i ){
+      int bDropped = 0;
+      for(j=0; pPolicy && j<pPolicy->nDropFields; j++){
+        if( pPolicy->aiDropFields[j]!=i ) continue;
+        bDropped = 1;
+        if( pBase ){
           const u8 *pSurv = pPolicy->bSchemaIsTheirs ? pTheirs : pOurs;
           RecField *fSurv = pPolicy->bSchemaIsTheirs ? fT : fO;
           const u8 *pDrop = pPolicy->bSchemaIsTheirs ? pOurs : pTheirs;
@@ -428,14 +431,21 @@ static u8 *tryCellMerge(
             sqlite3_free(winners);
             goto fail;
           }
-          break;
         }
+        break;
       }
       if( !pBase || nBase<=0 ){
         int side = pPolicy && i<pPolicy->nInsertFields
             ? pPolicy->aInsertSides[i] : 0;
-        oursChanged = side!=SCHEMA_MERGE_THEIRS;
-        theirsChanged = side!=SCHEMA_MERGE_OURS;
+        /* A dropped column is stored as side 0. On a new row that index
+        ** would count the cell changed on both branches. */
+        if( bDropped ){
+          oursChanged = 0;
+          theirsChanged = 0;
+        }else{
+          oursChanged = side!=SCHEMA_MERGE_THEIRS;
+          theirsChanged = side!=SCHEMA_MERGE_OURS;
+        }
       }else if( fieldIsDualAdd(pPolicy, i) ){
         oursChanged = 1;
         theirsChanged = 1;
