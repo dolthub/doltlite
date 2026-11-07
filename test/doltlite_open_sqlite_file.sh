@@ -540,6 +540,17 @@ want_eq "H2_optimize_skips_analyzed_tables_like_sqlite" \
   "$(dl_all "SELECT * FROM small WHERE b=1; PRAGMA optimize(0x03);" "$OPT")" \
   "$(printf '%s\n' "SELECT * FROM small WHERE b=1; PRAGMA optimize(0x03);" | $SQLITE3 "$OPT" 2>&1)"
 
+AC=$TMP/addcol.db
+seed_stock "$AC" "CREATE TABLE t(a INTEGER PRIMARY KEY, b); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<5000) INSERT INTO t SELECT i, 'x' FROM n;"
+cp "$AC" "$TMP/addcol_s.db"
+ADDCOL="ALTER TABLE t ADD COLUMN c TEXT DEFAULT 'dflt'; ALTER TABLE t ADD COLUMN d INT NOT NULL DEFAULT 7;"
+printf '%s\n' "$ADDCOL" | $SQLITE3 "$TMP/addcol_s.db" >/dev/null 2>&1
+dl_all "$ADDCOL" "$AC" >/dev/null 2>&1
+want_eq "H3_add_column_default_leaves_rows_like_sqlite" \
+  "$(sq_last "PRAGMA page_count;" "$AC")" "$(sq_last "PRAGMA page_count;" "$TMP/addcol_s.db")"
+want_eq "H3b_add_column_default_reads_the_default" \
+  "$(sq_last "SELECT count(*) || '|' || sum(c='dflt') || '|' || sum(d) FROM t;" "$AC")" "5000|5000|35000"
+
 echo ""
 echo "============================="
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
