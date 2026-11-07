@@ -520,6 +520,12 @@ $DOLTLITE "$PG" .recover 2>/dev/null | $SQLITE3 "$TMP/rec_d.db" >/dev/null 2>&1
 want_eq "P3_recover_salvages_a_damaged_sqlite_file" \
   "$(sq_last "SELECT count(*)>0 FROM t;" "$TMP/rec_d.db")" "1"
 
+WR=$TMP/wrplan.db
+seed_stock "$WR" "CREATE TABLE w(k PRIMARY KEY, a, b, c) WITHOUT ROWID; CREATE INDEX wa ON w(a); CREATE INDEX wb ON w(b); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<5000) INSERT INTO w SELECT i, i%97, i%13, randomblob(50) FROM n; ANALYZE;"
+WRQ="EXPLAIN QUERY PLAN SELECT * FROM w ORDER BY a;"
+want_eq "H4_without_rowid_plan_matches_sqlite" \
+  "$(dl_all "$WRQ" "$WR")" "$(printf '%s\n' "$WRQ" | $SQLITE3 "$WR" 2>&1)"
+
 echo ""
 echo "============================="
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"

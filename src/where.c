@@ -3256,12 +3256,15 @@ static int whereRangeVectorLen(
 ** table outgrows the node cache that seek reads and verifies a chunk. Only
 ** ANALYZE says a table is large; without it every table is assumed to be,
 ** and a small table stays cached. 120 is sqlite3LogEst(4096). */
-static int doltliteRowFetchIsCostly(WhereInfo *pWInfo, Table *pTab, LogEst nRow){
+static int doltliteTableOnProlly(WhereInfo *pWInfo, Table *pTab){
   sqlite3 *db = pWInfo->pParse->db;
   int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
-  return (pTab->tabFlags & TF_HasStat1)!=0 && nRow>=120
-      && iDb>=0 && iDb<db->nDb
+  return iDb>=0 && iDb<db->nDb
       && db->aDb[iDb].pBt!=0 && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt);
+}
+static int doltliteRowFetchIsCostly(WhereInfo *pWInfo, Table *pTab, LogEst nRow){
+  return (pTab->tabFlags & TF_HasStat1)!=0 && nRow>=120
+      && doltliteTableOnProlly(pWInfo, pTab);
 }
 /* True when p is a literal whose NOCASE comparison cannot see past a
 ** NUL, because the literal itself has none. char(0) and column
@@ -4599,7 +4602,8 @@ static int whereLoopAddBtree(
           ** fetches keeps the stock cost, including one that is not a
           ** fixed integer. A missing LIMIT still reads every row. */
           if( !doltliteLimitStopsEarly(pWInfo, rSize)
-           && (!HasRowid(pTab) || doltliteRowFetchIsCostly(pWInfo, pTab, rSize)) ){
+           && ((!HasRowid(pTab) && doltliteTableOnProlly(pWInfo, pTab))
+               || doltliteRowFetchIsCostly(pWInfo, pTab, rSize)) ){
             nLookup = rSize + 70;
           }
 #endif
