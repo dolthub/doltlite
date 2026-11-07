@@ -59,5 +59,57 @@ foreach {name base module args} {
     }
   }
 }
+# fts3tokenize ships with FTS3. The export replays in stock SQLite and
+# tokenizes the same input, including a tokenizer with custom separators.
+ifcapable fts3 {
+  reset_db
+  execsql {
+    CREATE VIRTUAL TABLE tk USING fts3tokenize(simple);
+    CREATE VIRTUAL TABLE tksep USING fts3tokenize(simple, '', 'xyz ');
+  }
+  set simple {SELECT token FROM tk WHERE input='hello world' ORDER BY position}
+  set split {SELECT token FROM tksep WHERE input='1x2x3x' ORDER BY position}
+  set simpleRows [db eval $simple]
+  set splitRows [db eval $split]
+  set before [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  foreach format {sql sqlite} {
+    set path dump-fts3tokenize.$format
+    forcedelete $path
+    set prefix dump-fts3tokenize-working-$format
+    do_test $prefix.tokens {
+      db eval {SELECT dolt_dump('--file-name',$path,'-r',$format)}
+      if {$format eq "sql"} {
+        sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+        set fd [open $path rb]; set text [read $fd]; close $fd
+        out eval $text
+      } else {sqlite3 out file:dump-fts3tokenize.sqlite?doltlite_engine=sqlite -uri 1}
+      list [out eval $simple] [out eval $split]
+    } [list $simpleRows $splitRows]
+    catch {out close}
+    do_test $prefix.source {
+      db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
+    } $before
+  }
+  execsql {SELECT dolt_commit('-Am','tokenize')}
+  set before [db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}]
+  foreach format {sql sqlite} {
+    set path dump-fts3tokenize-head.$format
+    forcedelete $path
+    set prefix dump-fts3tokenize-head-$format
+    do_test $prefix.tokens {
+      db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref','HEAD')}
+      if {$format eq "sql"} {
+        sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+        set fd [open $path rb]; set text [read $fd]; close $fd
+        out eval $text
+      } else {sqlite3 out file:dump-fts3tokenize-head.sqlite?doltlite_engine=sqlite -uri 1}
+      list [out eval $simple] [out eval $split]
+    } [list $simpleRows $splitRows]
+    catch {out close}
+    do_test $prefix.source {
+      db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
+    } $before
+  }
+}
 do_test dump-fts-aux.no-temp {glob -nocomplain *-dump-*} {}
 finish_test

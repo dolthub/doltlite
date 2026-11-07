@@ -72,6 +72,24 @@ for format in sql sqlite; do
   "$SQLITE3" "$output" "INSERT INTO ft(ft) VALUES('integrity-check');"
 done
 
+"$DOLTLITE" "$TMP/tok" "CREATE VIRTUAL TABLE tk USING fts3tokenize(simple);
+CREATE VIRTUAL TABLE tksep USING fts3tokenize(simple, '', 'xyz ');" > /dev/null
+for format in sql sqlite; do
+  path="$TMP/tok.$format"
+  "$DOLTLITE" "$TMP/tok" "SELECT dolt_dump('--file-name','$path','-r','$format')" > /dev/null
+  output="$path"
+  if [[ "$format" == sql ]]; then
+    output="$TMP/tok-replayed-$format.sqlite"
+    "$SQLITE3" "$output" < "$path"
+  fi
+  compare "fts3tokenize $format simple" \
+    "$("$SQLITE3" "$output" "SELECT group_concat(token, ' ') FROM (SELECT token FROM tk WHERE input='hello world' ORDER BY position);")" \
+    "hello world"
+  compare "fts3tokenize $format separators" \
+    "$("$SQLITE3" "$output" "SELECT group_concat(token, ' ') FROM (SELECT token FROM tksep WHERE input='1x2x3x' ORDER BY position);")" \
+    "1 2 3"
+done
+
 echo "Results: $pass passed, $fail failed"
 echo __SUITE_COMPLETE__
 [[ "$fail" == 0 ]]
