@@ -641,6 +641,7 @@ int mergeCatalogPass2(
   struct TableEntry *aMerged, int *pnMerged,
   Pgno *piNextMerged,
   int bDisjointSchemaChanges,
+  int bBranchMerge,
   MergeConflictTable *aConflictTables,
   int nConflictTables,
   SchemaRootpageRemap **ppaRemap,

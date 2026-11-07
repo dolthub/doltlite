@@ -1183,7 +1183,7 @@ int doltliteMergeCatalogs(
                           aOursSchema, nOursSchema,
                           aTheirsSchema, nTheirsSchema,
                           aMerged, &nMerged, &iNextMerged,
-                          bDisjointSchemaChanges,
+                          bDisjointSchemaChanges, bBranchMerge,
                           aConflictTables, nConflictTables,
                           &aRemap, &nRemap,
                           pazReindex, pnReindex,
