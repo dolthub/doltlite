@@ -68,11 +68,11 @@ run_tx_oracle_case() {
 
   printf '%s\n' "$dl_setup_sql" | dl_setup "$dl_db" "${name}_dl_setup"
   local dl_out
-  dl_out=$(printf '%s\n' "$dl_tx_sql" | vc_oracle_run_doltlite "$dl_db" 2>"$TMPROOT/${name}_dl.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
+  dl_out=$(printf '%s\n' "$dl_tx_sql" | vc_oracle_run_doltlite --allow-error "$dl_db" 2>"$TMPROOT/${name}_dl.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
 
   (
     cd "$dt_dir" || exit 1
-    "$DOLT" init >/dev/null 2>&1
+    vc_oracle_init_repo
     "$DOLT" sql <<SQL >/dev/null 2>"$TMPROOT/${name}_dt_setup.err"
 $dolt_setup_sql
 SQL
@@ -599,4 +599,49 @@ SELECT (SELECT count(*) FROM dolt_conflicts) || '|' ||
           FROM (SELECT id,u,v FROM t ORDER BY id));
 ROLLBACK;" \
   "0|1|1:9:main1,2:9:feat2"
+
+echo ""
+echo "--- I. A merge reports only the orphans it created ---"
+fk_preexisting_case() {
+  local name="$1" ours="$2" theirs="$3"
+  run_tx_oracle_case "$name" \
+"PRAGMA foreign_keys=OFF;
+CREATE TABLE p(id INT PRIMARY KEY);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT, FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES (1),(2),(3);
+INSERT INTO c VALUES (10,1),(11,99),(13,3);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('o');
+$ours;
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('o');
+$theirs;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');" \
+"BEGIN;
+SELECT dolt_merge('o');
+SELECT count(*) || '|' || coalesce(sum(id),0) || '|' FROM dolt_constraint_violations_c;
+ROLLBACK;" \
+"SET foreign_key_checks=1; SET @@dolt_force_transaction_commit=1; CALL dolt_merge('o'); SELECT concat(count(*), '|', coalesce(sum(id),0), '|') FROM dolt_constraint_violations_c;" \
+"CREATE TABLE p(id INT PRIMARY KEY);
+CREATE TABLE c(id INT PRIMARY KEY, pid INT, FOREIGN KEY(pid) REFERENCES p(id));
+INSERT INTO p VALUES (1),(2),(3);
+INSERT INTO c VALUES (10,1),(13,3);
+SET foreign_key_checks=0;
+INSERT INTO c VALUES (11,99);
+CALL dolt_commit('-Am','base');
+CALL dolt_branch('o');
+$ours;
+CALL dolt_commit('-Am','ours');
+CALL dolt_checkout('o');
+$theirs;
+CALL dolt_commit('-Am','theirs');
+CALL dolt_checkout('main');"
+}
+fk_preexisting_case "fk_preexisting_orphan_parent_delete" \
+  "INSERT INTO c VALUES(14,2)" "DELETE FROM p WHERE id=1"
+fk_preexisting_case "fk_preexisting_orphan_parent_insert" \
+  "INSERT INTO p VALUES(5)" "UPDATE c SET pid=77 WHERE id=13"
+fk_preexisting_case "fk_preexisting_orphan_unreferenced_delete" \
+  "INSERT INTO p VALUES(4)" "DELETE FROM p WHERE id=2; INSERT INTO c VALUES(12,1)"
 vc_oracle_finish

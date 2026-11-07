@@ -9,6 +9,7 @@
 #include "doltlite_internal.h"
 #include "doltlite_record.h"
 #include "doltlite_constraint_violations.h"
+#include "prolly_diff.h"
 
 #include <string.h>
 
@@ -81,9 +82,38 @@ int fetchRowByPkFromTable(
   const u8 *pPkRec, int nPkRec, int nPkField,
   u8 **ppKey, int *pnKey, u8 **ppVal, int *pnVal
 );
+typedef struct MergeChangedRows MergeChangedRows;
+struct MergeChangedRows {
+  int bUsable;
+  int bIntKey;
+  int nRow;
+  int nAlloc;
+  i64 *aRowid;
+  u8 **apRec;
+  int *anRec;
+  int nPk;
+  int *aiField;
+  char *zKeyPred;
+};
+
+void mergeChangedRowsClear(MergeChangedRows *p);
+int mergeChangedRowsLoad(
+  sqlite3 *db, const char *zTable, const char *zAlias,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  MergeChangedRows *p
+);
+int mergeChangedRowBind(MergeChangedRows *p, int iRow, sqlite3_stmt *pStmt);
+int mergeParentKeysKept(
+  sqlite3 *db, const char *zParent, char **azTo, int nCol,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
+  int *pbKept
+);
 int scanMergeColumnFlagViolations(
   sqlite3 *db, const char *zTable,
   struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aCur, int nCur,
   char **azCols, char **azExtra, int nCols,
   u8 cvType, int *pnFound, char **pzErrMsg
 );

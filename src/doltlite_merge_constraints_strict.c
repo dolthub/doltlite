@@ -121,7 +121,7 @@ static int strictWalkTable(
   int nCols = 0;
   int isStrict;
   int rc;
-  (void)zSql; (void)aCur; (void)nCur;
+  (void)zSql;
   rc = tableIsStrict(db, zTable, &isStrict);
   if( rc!=SQLITE_OK ) return rc;
   if( !isStrict ) return SQLITE_OK;
@@ -129,7 +129,7 @@ static int strictWalkTable(
   if( rc!=SQLITE_OK ) return rc;
   if( nCols==0 ) return SQLITE_OK;
   rc = scanMergeColumnFlagViolations(
-      db, zTable, aAnc, nAnc, azCols, azAllowed, nCols,
+      db, zTable, aAnc, nAnc, aCur, nCur, azCols, azAllowed, nCols,
       DOLTLITE_CV_STRICT_TYPE, pWalk->pnFound, pWalk->pzErrMsg);
   doltliteFreeNameList(azCols, nCols);
   doltliteFreeNameList(azAllowed, nCols);

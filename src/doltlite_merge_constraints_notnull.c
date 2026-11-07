@@ -67,12 +67,12 @@ static int notNullWalkTable(
   char **azCols = 0;
   int nCols = 0;
   int rc;
-  (void)zSql; (void)aCur; (void)nCur;
+  (void)zSql;
   rc = loadNotNullColumns(db, zTable, &azCols, &nCols);
   if( rc!=SQLITE_OK ) return rc;
   if( nCols==0 ) return SQLITE_OK;
   rc = scanMergeColumnFlagViolations(
-      db, zTable, aAnc, nAnc, azCols, 0, nCols,
+      db, zTable, aAnc, nAnc, aCur, nCur, azCols, 0, nCols,
       DOLTLITE_CV_NOT_NULL, pWalk->pnFound, pWalk->pzErrMsg);
   doltliteFreeNameList(azCols, nCols);
   return rc;
