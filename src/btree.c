@@ -4293,7 +4293,11 @@ static int autoVacuumCommit(Btree *p){
     if( db->xAutovacPages ){
       int iDb;
       for(iDb=0; ALWAYS(iDb<db->nDb); iDb++){
+#ifdef DOLTLITE_PROLLY
+        if( doltliteBtreeOrigPtr((void*)db->aDb[iDb].pBt)==(void*)p ) break;
+#else
         if( (void*)db->aDb[iDb].pBt==(void*)p ) break;
+#endif
       }
       nVac = db->xAutovacPages(
         db->pAutovacPagesArg,
