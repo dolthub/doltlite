@@ -101,6 +101,8 @@ pub enum Value {
     Null,
     Integer(i64),
     Real(f64),
+    /// A TEXT value. Text that is not valid UTF-8 is returned as `Blob`
+    /// holding its exact bytes rather than altered to fit a `String`.
     Text(String),
     Blob(Vec<u8>),
 }
@@ -494,7 +496,10 @@ impl<'conn> Statement<'conn> {
             Value::Text(String::new())
         } else {
             let bytes = std::slice::from_raw_parts(p, n);
-            Value::Text(String::from_utf8_lossy(bytes).into_owned())
+            match String::from_utf8(bytes.to_vec()) {
+                Ok(s) => Value::Text(s),
+                Err(e) => Value::Blob(e.into_bytes()),
+            }
         }
     }
 }
