@@ -180,16 +180,17 @@ static void doltliteInternalMaterializeDefaultColumnFunc(
   /* Stock ALTER exposes no row DML to triggers, counters, authorizers,
   ** or update/preupdate hooks. */
   {
-    int bWasSet = (db->mDbFlags & DBFLAG_InternalDml)!=0;
+    u32 mask = DBFLAG_InternalDml | DBFLAG_MaterializeDefault;
+    u32 savedFlags = db->mDbFlags & mask;
     i64 nChange = db->nChange;
     i64 nTotalChange = db->nTotalChange;
     DoltliteAuthShield shield;
-    db->mDbFlags |= DBFLAG_InternalDml;
+    db->mDbFlags |= mask;
     doltliteAuthShieldEnter(db, &shield);
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
     doltliteAuthShieldLeave(&shield);
-    /* Clear this bit only: restoring the word would undo flags set by prepare. */
-    if( !bWasSet ) db->mDbFlags &= ~DBFLAG_InternalDml;
+    /* Restoring the word would undo flags set by prepare. */
+    db->mDbFlags = (db->mDbFlags & ~mask) | savedFlags;
     db->nChange = nChange;
     db->nTotalChange = nTotalChange;
   }

@@ -179,6 +179,9 @@ char *sqlite3TableAffinityStr(sqlite3 *db, const Table *pTab){
 void sqlite3TableAffinity(Vdbe *v, Table *pTab, int iReg){
   int i;
   char *zColAff;
+#ifdef DOLTLITE_PROLLY
+  char *zMaterializeAff = 0;
+#endif
   if( pTab->tabFlags & TF_Strict ){
     if( iReg==0 ){
       /* Move the previous opcode (which should be OP_MakeRecord) forward
@@ -211,6 +214,19 @@ void sqlite3TableAffinity(Vdbe *v, Table *pTab, int iReg){
     pTab->zColAff = zColAff;
   }
   assert( zColAff!=0 );
+#ifdef DOLTLITE_PROLLY
+  if( sqlite3VdbeDb(v)->mDbFlags & DBFLAG_MaterializeDefault ){
+    int j;
+    zMaterializeAff = sqlite3DbStrDup(sqlite3VdbeDb(v), zColAff);
+    if( !zMaterializeAff ) return;
+    for(j=0; zMaterializeAff[j]; j++){
+      if( zMaterializeAff[j]!=SQLITE_AFF_REAL ){
+        zMaterializeAff[j] = SQLITE_AFF_BLOB;
+      }
+    }
+    zColAff = zMaterializeAff;
+  }
+#endif
   i = sqlite3Strlen30NN(zColAff);
   if( i ){
     if( iReg ){
@@ -221,6 +237,9 @@ void sqlite3TableAffinity(Vdbe *v, Table *pTab, int iReg){
       sqlite3VdbeChangeP4(v, -1, zColAff, i);
     }
   }
+#ifdef DOLTLITE_PROLLY
+  sqlite3DbFree(sqlite3VdbeDb(v), zMaterializeAff);
+#endif
 }
 #ifdef DOLTLITE_PROLLY
 
