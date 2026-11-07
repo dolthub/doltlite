@@ -12,6 +12,13 @@
 
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 
+static int hashofUnavailable(sqlite3_context *ctx){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  if( doltliteGetChunkStore(db) ) return 0;
+  sqlite3_result_error(ctx, doltliteVcUnavailableMessage(db), -1);
+  return 1;
+}
+
 static int hashofResolveRef(
   sqlite3 *db,
   const char *zRef,
@@ -107,6 +114,7 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
     return;
   }
   db = sqlite3_context_db_handle(ctx);
+  if( hashofUnavailable(ctx) ) return;
   rc = doltliteRefreshAutocommitWorkingState(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, rc);
@@ -886,6 +894,7 @@ static int hashofResolveRefCatalog(
         "dolt_hashof_db: invalid argument: contains a NUL byte", -1);
     return 1;
   }
+  if( hashofUnavailable(ctx) ) return 1;
   rc = doltliteRefreshAutocommitWorkingState(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, rc);
@@ -958,6 +967,7 @@ static void hashofNamedObjectFunc(
   db = sqlite3_context_db_handle(ctx);
 
   if( argc==1 ){
+    if( hashofUnavailable(ctx) ) return;
     rc = doltliteFlushCatalogToHash(db, &catHash);
     if( rc!=SQLITE_OK ){
       sqlite3_snprintf(sizeof(zErr), zErr, "%s: catalog flush failed", zFn);
@@ -1000,6 +1010,7 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   db = sqlite3_context_db_handle(ctx);
 
   if( argc==0 ){
+    if( hashofUnavailable(ctx) ) return;
     rc = doltliteFlushCatalogToHash(db, &catHash);
     if( rc!=SQLITE_OK ){
       doltliteVcResultErrorCode(ctx, sqlite3_context_db_handle(ctx),
@@ -1037,6 +1048,7 @@ static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_va
   db = sqlite3_context_db_handle(ctx);
 
   if( argc==0 ){
+    if( hashofUnavailable(ctx) ) return;
     rc = doltliteResolveCatalogHashForRef(db, "WORKING", &catHash);
     if( rc!=SQLITE_OK ){
       doltliteVcResultErrorCode(ctx, sqlite3_context_db_handle(ctx),

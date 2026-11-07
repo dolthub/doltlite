@@ -17,6 +17,46 @@ dbs eval {
 set img [dbs serialize]
 dbs close
 
+sqlite3 hashdb stockimg.db
+foreach mode {autocommit transaction} {
+  if {$mode eq "transaction"} {hashdb eval BEGIN}
+  foreach {name sql} {
+    head {dolt_hashof('HEAD')}
+    branch {dolt_hashof('main')}
+    db {dolt_hashof_db()}
+    table {dolt_hashof_table('t')}
+    index {dolt_hashof_index('sqlite_autoindex_pk_1')}
+    catalog {dolt_hashof_catalog()}
+    db-head {dolt_hashof_db('HEAD')}
+    db-working {dolt_hashof_db('WORKING')}
+    db-staged {dolt_hashof_db('STAGED')}
+    db-empty {dolt_hashof_db('')}
+    table-head {dolt_hashof_table('t','HEAD')}
+    table-working {dolt_hashof_table('t','WORKING')}
+    table-staged {dolt_hashof_table('t','STAGED')}
+    index-head {dolt_hashof_index('sqlite_autoindex_pk_1','HEAD')}
+    index-working {dolt_hashof_index('sqlite_autoindex_pk_1','WORKING')}
+    catalog-head {dolt_hashof_catalog('HEAD')}
+    catalog-working {dolt_hashof_catalog('WORKING')}
+  } {
+    do_test hashof.$mode.$name {
+      list [catch {hashdb eval "SELECT $sql"} msg] $msg
+    } {1 {dolt version-control features are not available on stock SQLite databases}}
+  }
+  do_test hashof.$mode.null {
+    hashdb eval {
+      SELECT typeof(dolt_hashof(NULL)), typeof(dolt_hashof_db(NULL)),
+             typeof(dolt_hashof_table(NULL)), typeof(dolt_hashof_table('t',NULL)),
+             typeof(dolt_hashof_index(NULL)), typeof(dolt_hashof_index('i',NULL)),
+             typeof(dolt_hashof_catalog(NULL));
+    }
+  } {null null null null null null null}
+  do_test hashof.$mode.readable {hashdb eval {SELECT sum(a) FROM t}} {6}
+  if {$mode eq "transaction"} {hashdb eval ROLLBACK}
+}
+do_test hashof.integrity {hashdb eval {PRAGMA integrity_check}} {ok}
+hashdb close
+
 # 1: into a DoltLite-format :memory: main
 sqlite3 db :memory:
 do_test 1.1 {
