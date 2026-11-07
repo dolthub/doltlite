@@ -101,7 +101,10 @@ foreach transaction {auto begin savepoint} {
       db one {SELECT dolt_dump('--file-name',$path,'--result-format',$format)}
     } 0
     if {$format eq "sql"} {
-      set fd [open $path rb]; set sql [read $fd]; close $fd
+      set fd [open $path r]
+      fconfigure $fd -encoding utf-8 -translation lf
+      set sql [read $fd]
+      close $fd
       sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
       out eval $sql
     } else {sqlite3 out file:dump-out.sqlite?doltlite_engine=sqlite -uri 1}
@@ -606,4 +609,45 @@ foreach ref {WORKING HEAD} {
     catch {out close}
   }
 }
+
+# SQL text has to stay encoding-independent. A hex cast stores UTF-8 bytes
+# unchanged, which a UTF-16 database then reads as its own code units.
+reset_db
+forcedelete dump-encoding.sql
+db eval {
+  CREATE TABLE t(s TEXT, b BLOB);
+  INSERT INTO t VALUES(char(104,233,108,108,111), NULL);
+  INSERT INTO t VALUES('a'||char(10)||'b', NULL);
+  INSERT INTO t VALUES(char(0), NULL);
+  INSERT INTO t VALUES('it''s', X'6100');
+  INSERT INTO t VALUES(char(97,0,98), NULL);
+  INSERT INTO t VALUES(char(39)||char(10)||char(39), NULL);
+  INSERT INTO t VALUES('', NULL);
+}
+do_test dump-encoding.sql {
+  db eval {SELECT dolt_dump('--file-name','dump-encoding.sql','-r','sql')}
+  set fd [open dump-encoding.sql r]
+  fconfigure $fd -encoding utf-8 -translation lf
+  set sql [read $fd]
+  close $fd
+  sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+  out eval {PRAGMA encoding='UTF-16le'}
+  out eval $sql
+  list [expr {[string first "CAST(X'" $sql]<0}] \
+       [expr {[string first "\u00e9" $sql]>=0}] \
+       [expr {[string first "char(10)" $sql]>=0}] \
+       [expr {[string first "char(0)" $sql]>=0}] \
+       [expr {[string first "X'6100'" $sql]>=0}] \
+       [out one {SELECT encoding FROM pragma_encoding}] \
+       [out eval {SELECT hex(s), length(s) FROM t LIMIT 1 OFFSET 0}] \
+       [out eval {SELECT hex(s), length(s) FROM t LIMIT 1 OFFSET 1}] \
+       [out eval {SELECT hex(s) FROM t LIMIT 1 OFFSET 2}] \
+       [out eval {SELECT hex(s), hex(b) FROM t LIMIT 1 OFFSET 3}] \
+       [out eval {SELECT hex(s) FROM t LIMIT 1 OFFSET 4}] \
+       [out eval {SELECT hex(s), length(s) FROM t LIMIT 1 OFFSET 5}] \
+       [out eval {SELECT s='', length(s) FROM t LIMIT 1 OFFSET 6}] \
+       [out one {PRAGMA integrity_check}]
+} [list 1 1 1 1 1 UTF-16le {6800E9006C006C006F00 5} {61000A006200 3} 0000 \
+   {6900740027007300 6100} 610000006200 {27000A002700 3} {1 0} ok]
+catch {out close}
 finish_test
