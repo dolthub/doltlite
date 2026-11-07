@@ -577,19 +577,20 @@ abort:
 
 static void opIgnored(Conn *c){
   char sql[700], br[128], table[64], msg[64], hash[48];
-  long long S, E;
+  long long S, E, tableId;
   int ignored = rn(2), stage = rn(4), included = !ignored || stage==3;
   if( c->inTxn || !sqlite3_get_autocommit(c->db) ) return;
   if( ex(c, "begin_ignore", "BEGIN IMMEDIATE") ) return;
   curBranch(c, br, sizeof(br));
-  snprintf(table, sizeof(table), "model_ignored_%d_%lld", gW, newId());
+  tableId = newId();
+  snprintf(table, sizeof(table), "model_ignored_%d_%lld", gW, tableId);
   snprintf(msg, sizeof(msg), "ig_%d_%d_%d", gSeed, gW, ++ctrMsg);
   if( ex(c, "ignore_rule", "INSERT OR REPLACE INTO dolt_ignore VALUES('model_ignored_*',1)") ) goto abort;
   if( !ignored ){
     snprintf(sql, sizeof(sql), "INSERT OR REPLACE INTO dolt_ignore VALUES('%s',0)", table);
     if( ex(c, "ignore_exception", sql) ) goto abort;
   }
-  snprintf(sql, sizeof(sql), "CREATE TABLE %s(id INT PRIMARY KEY); INSERT INTO %s VALUES(1)", table, table);
+  snprintf(sql, sizeof(sql), "CREATE TABLE %s(id INT PRIMARY KEY); INSERT INTO %s VALUES(%lld)", table, table, tableId);
   if( ex(c, "ignore_create", sql) ) goto abort;
   snprintf(sql, sizeof(sql), "SELECT count(*) FROM dolt_status WHERE table_name='%s'", table);
   if( !expectInt(c, "ignore_status", sql, !ignored) ) goto abort;
@@ -605,7 +606,7 @@ static void opIgnored(Conn *c){
   if( ex(c, "ignore_commit", "COMMIT") ) goto abort;
   E = nowNs();
   logf_("C\t%s\t%s\t%lld\t%lld\t0", msg, br, S, E);
-  logf_("P\t%s\t%s\t%s\t%d\t%s", br, msg, table, included, hash);
+  logf_("P\t%s\t%s\t%s\t%d\t%s\t%lld", br, msg, table, included, hash, tableId);
   return;
 abort:
   txnAbort(c);
@@ -1010,7 +1011,7 @@ typedef struct Ins { long long id; char br[48]; long long S, E; } Ins;
 typedef struct Xev { int flags; char br[48]; long long S, E; char op[24]; char victim[64]; char newmsg[64]; } Xev;
 typedef struct Cmt { char msg[64]; char br[48]; long long S, E; int all; } Cmt;
 typedef struct NonlocalWrite { long long id; char target[48], hash[48]; int committed; } NonlocalWrite;
-typedef struct PolicyCommit { char br[48], msg[64], table[64], hash[48]; int included; } PolicyCommit;
+typedef struct PolicyCommit { char br[48], msg[64], table[64], hash[48]; int included; long long rowId; } PolicyCommit;
 typedef struct StrSet { char (*a)[48]; int n, cap; } StrSet;
 
 static Ins *aIns; static int nIns, capIns;
@@ -1103,6 +1104,7 @@ static void loadLogs(void){
         snprintf(aPolicy[nPolicy].msg, sizeof(aPolicy[nPolicy].msg), "%s", t[2]);
         snprintf(aPolicy[nPolicy].table, sizeof(aPolicy[nPolicy].table), "%s", t[3]);
         aPolicy[nPolicy].included = atoi(t[4]);
+        aPolicy[nPolicy].rowId = nt>6 ? atoll(t[6]) : 1;
         snprintf(aPolicy[nPolicy].hash, sizeof(aPolicy[nPolicy].hash), "%s", nt>5 ? t[5] : "");
         nPolicy++;
       }else if( !strcmp(t[0],"MODEL_FAIL") ){
@@ -1382,7 +1384,7 @@ static void checkPolicyCommits(sqlite3 *db, const char *br, StrSet *logm){
          && (count.n!=1 || count.a[0]!=p->included) ){
           viol("ignore commit %s table %s expected %d got %lld", p->msg, p->table, p->included, count.n ? count.a[0] : -1);
         }else if( p->included ){
-          snprintf(sql, sizeof(sql), "SELECT count(*) FROM main.%s WHERE id=1", p->table);
+          snprintf(sql, sizeof(sql), "SELECT count(*) FROM main.%s WHERE id=%lld", p->table, p->rowId);
           if( readIds(snapshot, sql, &count)==SQLITE_OK && (count.n!=1 || count.a[0]!=1) )
             viol("ignore commit %s lost row in %s", p->msg, p->table);
         }
@@ -1545,6 +1547,25 @@ int main(int argc, char **argv){
   int wedgeSec = 120;
   sqlite3_config(SQLITE_CONFIG_LOG, sqliteLog, 0);
   if( argc<3 ){ fprintf(stderr, "usage: %s SEED DIR [NPROC NCONN NPHASE OPS]\n", argv[0]); return 2; }
+  if( !strcmp(argv[1], "--ignore-policy") && argc==4 ){
+    int rc;
+    char path[700];
+    snprintf(zDir, sizeof(zDir), "%s", argv[2]);
+    snprintf(zDb, sizeof(zDb), "%s/db.db", zDir);
+    snprintf(path, sizeof(path), "%s/log.0", zDir);
+    gLog = fopen(path, "w");
+    if( !gLog ) return 2;
+    rngState = strtoull(argv[3], 0, 10);
+    nProc = 1;
+    rc = sqlite3_open(zDb, &aC[0].db);
+    if( rc==SQLITE_OK ) opIgnored(&aC[0]);
+    sqlite3_close(aC[0].db);
+    fclose(gLog);
+    gLog = 0;
+    if( rc!=SQLITE_OK ) return 2;
+    checkModel(99);
+    return nViol!=0;
+  }
   if( !strcmp(argv[1], "--record-removals") && argc==4 ){
     Conn c;
     int up[2], down[2], rc, childStatus = 0;
