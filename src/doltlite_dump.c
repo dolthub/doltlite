@@ -371,6 +371,10 @@ static int dumpDependencySelect(Walker *w, Select *s){
       }
       if( w->pParse->rc!=SQLITE_OK ) return WRC_Abort;
     }
+    if( item->zName && sqlite3_strnicmp(item->zName,"dolt_",5)==0 ){
+      sqlite3ErrorMsg(w->pParse,"not authorized to use table: %s",item->zName);
+      return WRC_Abort;
+    }
     if( !item->fg.isUsing && sqlite3WalkExpr(w,item->u3.pOn) ) return WRC_Abort;
   }
   return WRC_Continue;
@@ -482,6 +486,9 @@ static int dumpAuthorize(void *ctx, int op, const char *a, const char *b,
   DumpAuth *saved = ctx;
   if( op==SQLITE_FUNCTION && b
    && dumpDoltliteFunction(b) ) return SQLITE_DENY;
+  if( (op==SQLITE_READ || op==SQLITE_INSERT
+    || op==SQLITE_UPDATE || op==SQLITE_DELETE) && a
+   && sqlite3_strnicmp(a,"dolt_",5)==0 ) return SQLITE_DENY;
   return saved->callback ? saved->callback(saved->ctx,op,a,b,db,trigger) : SQLITE_OK;
 }
 #endif
