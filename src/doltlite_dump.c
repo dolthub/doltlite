@@ -137,6 +137,79 @@ static int dumpSchema(DlDump *p){
   return rc;
 }
 
+/* A SQL literal has to be valid UTF-8. Anything else keeps its bytes
+** in a hex cast, which a UTF-8 database stores unchanged. */
+static int textIsUtf8(const unsigned char *z, int n){
+  int i;
+  for(i=0; i<n; ){
+    unsigned char c = z[i];
+    int need, k;
+    if( c<=0x7f ){ i++; continue; }
+    if( c>=0xc2 && c<=0xdf ) need = 1;
+    else if( c==0xe0 ){
+      if( i+1>=n || z[i+1]<0xa0 ) return 0;
+      need = 2;
+    }else if( c>=0xe1 && c<=0xec ) need = 2;
+    else if( c==0xed ){
+      if( i+1>=n || z[i+1]>=0xa0 ) return 0;
+      need = 2;
+    }else if( c>=0xee && c<=0xef ) need = 2;
+    else if( c==0xf0 ){
+      if( i+1>=n || z[i+1]<0x90 ) return 0;
+      need = 3;
+    }else if( c>=0xf1 && c<=0xf3 ) need = 3;
+    else if( c==0xf4 ){
+      if( i+1>=n || z[i+1]>=0x90 ) return 0;
+      need = 3;
+    }else return 0;
+    if( i+need>=n ) return 0;
+    for(k=1; k<=need; k++){
+      if( (z[i+k]&0xc0)!=0x80 ) return 0;
+    }
+    i += need+1;
+  }
+  return 1;
+}
+
+/* Text is a SQL literal so replay converts it into the destination
+** encoding. Control bytes and NUL cannot sit in that literal. */
+static int dumpText(DlDump *p, const unsigned char *z, int n){
+  int i = 0, rc = SQLITE_OK, any = 0;
+  if( n<=0 ) return dumpWrite(p,"''");
+  while( i<n && rc==SQLITE_OK ){
+    if( z[i]<32 || z[i]==127 ){
+      int first = 1;
+      char num[16];
+      if( any ) rc = dumpWrite(p,"||");
+      if( rc==SQLITE_OK ) rc = dumpWrite(p,"char(");
+      while( rc==SQLITE_OK && i<n && (z[i]<32 || z[i]==127) ){
+        if( !first ) rc = dumpWrite(p,",");
+        sqlite3_snprintf(sizeof(num),num,"%d",z[i]);
+        if( rc==SQLITE_OK ) rc = dumpWrite(p,num);
+        first = 0;
+        i++;
+      }
+      if( rc==SQLITE_OK ) rc = dumpWrite(p,")");
+    }else{
+      int begin = i;
+      if( any ) rc = dumpWrite(p,"||");
+      if( rc==SQLITE_OK ) rc = dumpWrite(p,"'");
+      while( rc==SQLITE_OK && i<n && z[i]>=32 && z[i]!=127 ){
+        if( z[i]=='\'' ){
+          rc = dumpBytes(p,z+begin,i-begin);
+          if( rc==SQLITE_OK ) rc = dumpWrite(p,"''");
+          begin = i+1;
+        }
+        i++;
+      }
+      if( rc==SQLITE_OK ) rc = dumpBytes(p,z+begin,i-begin);
+      if( rc==SQLITE_OK ) rc = dumpWrite(p,"'");
+    }
+    any = 1;
+  }
+  return rc;
+}
+
 static int dumpValue(DlDump *p, sqlite3_stmt *q, int i){
   int type = sqlite3_column_type(q,i);
   char number[64];
@@ -154,28 +227,18 @@ static int dumpValue(DlDump *p, sqlite3_stmt *q, int i){
   {
     const unsigned char *bytes = type==SQLITE_TEXT
         ? sqlite3_column_text(q,i) : sqlite3_column_blob(q,i);
-    int n = sqlite3_column_bytes(q,i), j, rc, plain = type==SQLITE_TEXT;
-    if( p->db->mallocFailed ) return SQLITE_NOMEM;
-    for(j=0; plain && j<n; j++){
-      if( bytes[j]<32 || bytes[j]>=127 ) plain = 0;
+    int n = sqlite3_column_bytes(q,i), j, rc;
+    static const char hex[] = "0123456789ABCDEF";
+    int bCast;
+    if( p->db->mallocFailed || (n>0 && !bytes) ) return SQLITE_NOMEM;
+    if( type==SQLITE_TEXT && (n<=0 || textIsUtf8(bytes,n)) ){
+      return dumpText(p,bytes,n);
     }
-    if( plain ){
-      int begin = 0;
-      rc = dumpWrite(p,"'");
-      for(j=0; j<n && rc==SQLITE_OK; j++){
-        if( bytes[j]=='\'' ){
-          rc = dumpBytes(p,bytes+begin,j-begin);
-          if( rc==SQLITE_OK ) rc = dumpWrite(p,"''");
-          begin = j+1;
-        }
-      }
-      if( rc==SQLITE_OK ) rc = dumpBytes(p,bytes+begin,n-begin);
-      if( rc==SQLITE_OK ) rc = dumpWrite(p,"'");
-      return rc;
-    }
-    rc = dumpWrite(p,type==SQLITE_TEXT ? "CAST(X'" : "X'");
+    /* Invalid UTF-8 cannot be a SQL literal. A hex cast keeps the bytes
+    ** and the text storage class; a bare blob literal would not. */
+    bCast = type==SQLITE_TEXT;
+    rc = dumpWrite(p, bCast ? "CAST(X'" : "X'");
     for(j=0; j<n && rc==SQLITE_OK; ){
-      static const char hex[] = "0123456789ABCDEF";
       char buf[8192];
       int k = 0;
       while( j<n && k<(int)sizeof(buf) ){
@@ -184,7 +247,7 @@ static int dumpValue(DlDump *p, sqlite3_stmt *q, int i){
       }
       rc = dumpBytes(p,buf,k);
     }
-    if( rc==SQLITE_OK ) rc = dumpWrite(p,type==SQLITE_TEXT ? "' AS TEXT)" : "'");
+    if( rc==SQLITE_OK ) rc = dumpWrite(p, bCast ? "' AS TEXT)" : "'");
     return rc;
   }
 }
