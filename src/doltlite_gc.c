@@ -1327,7 +1327,11 @@ static void doltliteGcFunc(
   (void)argv;
 
   if( !cs ){
-    sqlite3_result_error(context, "no database", -1);
+    if( doltliteIsStockSqliteDb(db) ){
+      sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
+    }else{
+      sqlite3_result_error(context, "no database", -1);
+    }
     return;
   }
 

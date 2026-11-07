@@ -274,6 +274,10 @@ static void doltVerifyConstraintsFunc(
   ProllyHash headHash;
   const ProllyHash *pDetectAnc = 0;
 
+  if( doltliteIsStockSqliteDb(db) ){
+    sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
+    return;
+  }
   memset(&headCat, 0, sizeof(headCat));
   memset(&emptyCat, 0, sizeof(emptyCat));
   memset(&headCommit, 0, sizeof(headCommit));

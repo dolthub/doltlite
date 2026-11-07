@@ -365,6 +365,37 @@ for sql in "dolt_hashof_db()" "dolt_hashof_catalog()" \
     "SELECT $sql;" "$DB"
 done
 
+DB=$TMP/sys.db
+seed_stock "$DB" "CREATE TABLE t(a);"
+before=$(cksum "$DB")
+for sql in \
+  "SELECT * FROM dolt_docs;" \
+  "SELECT * FROM dolt_ignore;" \
+  "SELECT * FROM dolt_tests;" \
+  "SELECT * FROM dolt_nonlocal_tables;" \
+  "INSERT INTO dolt_docs VALUES('R','x');" \
+  "INSERT INTO dolt_ignore VALUES('p',1);" \
+  "INSERT INTO dolt_tests(test_name,test_query,assertion_type,assertion_comparator) VALUES('n','SELECT 1','expected_rows','==');" \
+  "INSERT INTO dolt_nonlocal_tables(table_name,target_ref) VALUES('t','main');" \
+  "CREATE TABLE dolt_ignore(x,y,z);" \
+  "CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));" \
+  "SELECT active_branch();" \
+  "SELECT dolt_gc();" \
+  "SELECT dolt_tag('t');" \
+  "SELECT dolt_remote('add','o','file:/tmp/nowhere');" \
+  "SELECT dolt_verify_constraints();" \
+  "SELECT count(*) FROM dolt_branches;" \
+  "SELECT count(*) FROM dolt_remote_branches;" \
+  "SELECT dolt_hashof(NULL);"
+do
+  want_vc_unavailable "V12_${sql}" "$sql" "$DB"
+done
+want_eq "V12_user_table_still_there" \
+  "$(sq_last "SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' ORDER BY name);" "$DB")" \
+  "t"
+want_eq "V12_file_bytes_unchanged" "$(cksum "$DB")" "$before"
+want_eq "V12_user_rows_unchanged" "$(sq_last "SELECT count(*) FROM t;" "$DB")" "0"
+
 echo ""
 echo "--- durability ---"
 

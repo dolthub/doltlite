@@ -438,6 +438,19 @@ Table *sqlite3LocateTable(
   }
 
 #ifdef DOLTLITE_PROLLY
+  if( (zDbase==0 || sqlite3StrICmp(zDbase, "main")==0)
+   && db->nDb>0 && db->aDb[0].pBt && sqlite3BtreeUsesOrig(db->aDb[0].pBt)
+   && (sqlite3StrICmp(zName, "dolt_ignore")==0
+    || sqlite3StrICmp(zName, "dolt_docs")==0
+    || sqlite3StrICmp(zName, "dolt_tests")==0
+    || sqlite3StrICmp(zName, "dolt_nonlocal_tables")==0)
+  ){
+    if( (flags & LOCATE_NOERR)==0 ){
+      sqlite3ErrorMsg(pParse,
+        "dolt version-control features are not available on stock SQLite databases");
+    }
+    return 0;
+  }
   if( zDbase==0
    && (sqlite3StrICmp(zName, "dolt_ignore")==0
     || sqlite3StrICmp(zName, "dolt_docs")==0
@@ -3019,6 +3032,23 @@ void sqlite3EndTable(
 #endif
 
 #ifdef DOLTLITE_PROLLY
+  /* A stock file has no version-control catalog for these names. */
+  if( !db->init.busy
+   && !db->init.imposterTable
+   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && IsOrdinaryTable(p)
+   && iDb>=0 && iDb<db->nDb
+   && db->aDb[iDb].pBt && sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+   && (sqlite3StrICmp(p->zName, "dolt_ignore")==0
+    || sqlite3StrICmp(p->zName, "dolt_docs")==0
+    || sqlite3StrICmp(p->zName, "dolt_tests")==0
+    || sqlite3StrICmp(p->zName, "dolt_nonlocal_tables")==0)
+  ){
+    sqlite3ErrorMsg(pParse, "%s",
+        "dolt version-control features are not available on stock SQLite databases");
+    return;
+  }
+
   /* dolt_ignore is a user-created system table whose schema is
   ** load-bearing. Enforce the exact shape at CREATE TIME. Skipped
   ** during schema replay (db->init.busy). */

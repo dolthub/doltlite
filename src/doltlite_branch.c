@@ -16,6 +16,10 @@
 static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   (void)argc; (void)argv;
+  if( doltliteIsStockSqliteDb(db) ){
+    sqlite3_result_error(ctx, doltliteVcUnavailableMessage(db), -1);
+    return;
+  }
   if( doltliteIsDetached(db) ){
     sqlite3_result_null(ctx);
   }else{

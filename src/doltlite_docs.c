@@ -178,6 +178,11 @@ static int docsFilter(sqlite3_vtab_cursor *pCursor,
   DocsVtab *p = (DocsVtab*)pCursor->pVtab;
   int rc;
   (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  if( doltliteIsStockSqliteDb(p->db) ){
+    sqlite3_free(p->base.zErrMsg);
+    p->base.zErrMsg = sqlite3_mprintf("%s", doltliteVcUnavailableMessage(p->db));
+    return p->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
   sqlite3_finalize(c->pStmt);
   c->pStmt = 0;
   c->eof = 0;
