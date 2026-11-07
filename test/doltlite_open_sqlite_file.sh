@@ -349,6 +349,22 @@ want_vc_unavailable "V8_dolt_log_unavailable_on_stock_format" \
 want_vc_unavailable "V9_dolt_status_unavailable_on_stock_format" \
   "SELECT count(*) FROM dolt_status;" "$DB"
 
+for ref in HEAD main WORKING STAGED ""; do
+  for fn in dolt_hashof dolt_hashof_db dolt_hashof_catalog; do
+    want_vc_unavailable "V10_${fn}_${ref:-empty}_unavailable_on_stock_format" \
+      "SELECT $fn('$ref');" "$DB"
+  done
+  want_vc_unavailable "V10_dolt_hashof_table_${ref:-empty}_unavailable_on_stock_format" \
+    "SELECT dolt_hashof_table('t','$ref');" "$DB"
+  want_vc_unavailable "V10_dolt_hashof_index_${ref:-empty}_unavailable_on_stock_format" \
+    "SELECT dolt_hashof_index('i','$ref');" "$DB"
+done
+for sql in "dolt_hashof_db()" "dolt_hashof_catalog()" \
+           "dolt_hashof_table('t')" "dolt_hashof_index('i')"; do
+  want_vc_unavailable "V11_${sql}_unavailable_on_stock_format" \
+    "SELECT $sql;" "$DB"
+done
+
 echo ""
 echo "--- durability ---"
 
