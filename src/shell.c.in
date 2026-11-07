@@ -5434,15 +5434,19 @@ static void parseDoltiteDbBranch(
     const char *zAt = strrchr(zInput, '@');
     if( zAt && zAt[1]!=0 && (!zSep || zAt > zSep) ){
       zBase = sqlite3_mprintf("%.*s", (int)(zAt - zInput), zInput);
-      if( zBase && doltliteShellLooksLikeDbPath(zBase)
-       && (doltliteShellReadableFile(zBase) || access(zBase, 0)==0) ){
-        sqlite3_free(zBase);
-        *pzFilename = sqlite3_mprintf("%s", zInput);
+      /* Only an existing store takes a branch, so with nothing at the base
+      ** the '@' is part of an ordinary file name. */
+      if( zBase && (doltliteShellReadableFile(zBase) || access(zBase, 0)==0) ){
+        if( doltliteShellLooksLikeDbPath(zBase) ){
+          sqlite3_free(zBase);
+          *pzFilename = sqlite3_mprintf("%s", zInput);
+          return;
+        }
+        *pzFilename = zBase;
+        *pzBranch = sqlite3_mprintf("%s", zAt + 1);
         return;
       }
-      *pzFilename = zBase;
-      *pzBranch = sqlite3_mprintf("%s", zAt + 1);
-      return;
+      sqlite3_free(zBase);
     }
   }
 
