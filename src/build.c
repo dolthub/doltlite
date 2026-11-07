@@ -3032,13 +3032,14 @@ void sqlite3EndTable(
 #endif
 
 #ifdef DOLTLITE_PROLLY
-  /* A stock file has no version-control catalog for these names. */
+  /* Refuse these names on a stock main. Temp uses the original btree as
+  ** well, and an attached database keeps tables of the same names. */
   if( !db->init.busy
    && !db->init.imposterTable
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
    && IsOrdinaryTable(p)
-   && iDb>=0 && iDb<db->nDb
-   && db->aDb[iDb].pBt && sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+   && iDb==0
+   && db->aDb[0].pBt && sqlite3BtreeUsesOrig(db->aDb[0].pBt)
    && (sqlite3StrICmp(p->zName, "dolt_ignore")==0
     || sqlite3StrICmp(p->zName, "dolt_docs")==0
     || sqlite3StrICmp(p->zName, "dolt_tests")==0

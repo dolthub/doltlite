@@ -385,11 +385,13 @@ for sql in \
   "SELECT dolt_remote('add','o','file:/tmp/nowhere');" \
   "SELECT dolt_verify_constraints();" \
   "SELECT count(*) FROM dolt_branches;" \
-  "SELECT count(*) FROM dolt_remote_branches;" \
-  "SELECT dolt_hashof(NULL);"
+  "SELECT count(*) FROM dolt_remote_branches;"
 do
   want_vc_unavailable "V12_${sql}" "$sql" "$DB"
 done
+want_eq "V12_hashof_null_stays_null" \
+  "$(dl_last "SELECT typeof(dolt_hashof(NULL))||typeof(dolt_hashof_db(NULL))||typeof(dolt_hashof_table(NULL))||typeof(dolt_hashof_table('t',NULL))||typeof(dolt_hashof_index(NULL))||typeof(dolt_hashof_index('i',NULL))||typeof(dolt_hashof_catalog(NULL));" "$DB")" \
+  "nullnullnullnullnullnullnull"
 want_eq "V12_user_table_still_there" \
   "$(sq_last "SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' ORDER BY name);" "$DB")" \
   "t"
