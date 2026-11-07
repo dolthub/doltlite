@@ -5932,6 +5932,7 @@ int sqlite3VtabConstructing(sqlite3*, Table*);
 void sqlite3BtreeMarkMasterRootChanged(Btree*);
 int doltliteBtreeCaptureStatement(void*);
 void doltliteWorkspaceFinishStatement(Vdbe*);
+void doltliteConflictsFinishStatement(Vdbe*);
 void *doltliteBtreeOrigPtr(void*);
 #endif
 void sqlite3VtabBeginParse(Parse*, Token*, Token*, Token*, int);

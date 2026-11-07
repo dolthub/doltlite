@@ -178,4 +178,27 @@ run_test_error_output_match "decl_nocase_key" "BEGIN; SELECT dolt_merge('b');
 SELECT 'CN|' || count(*) FROM dolt_conflicts_t WHERE our_k='A'; ROLLBACK;" "^CN\\|1$" "$DB" 'Merge has [1-9][0-9]* conflict\(s\)'
 rm -f "$DB"
 
+DB=/tmp/test_cfrow_bulk_$$.db
+rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v);
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000) INSERT INTO t SELECT i,0 FROM n;
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+UPDATE t SET v=2; SELECT dolt_commit('-am','main');
+SELECT dolt_checkout('feature'); UPDATE t SET v=1; SELECT dolt_commit('-am','feature');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_error_output_match "bulk_where_delete_keeps_the_rest" "BEGIN; SELECT dolt_merge('feature');
+DELETE FROM dolt_conflicts_t WHERE base_id%2=0;
+SELECT 'BW|' || count(*) || '|' || sum(base_id%2) || '|' || min(base_id) FROM dolt_conflicts_t; ROLLBACK;" "^BW\\|1000\\|1000\\|1$" "$DB" 'Merge has 2000 conflict\(s\)'
+run_test_error_output_match "bulk_delete_rolls_back_to_savepoint" "BEGIN; SELECT dolt_merge('feature');
+SAVEPOINT s; DELETE FROM dolt_conflicts_t; ROLLBACK TO s;
+SELECT 'BR|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^BR\\|2000$" "$DB" 'Merge has 2000 conflict\(s\)'
+run_test_error_output_match "bulk_delete_all_commits_ours" "BEGIN; SELECT dolt_merge('feature');
+DELETE FROM dolt_conflicts_t;
+SELECT dolt_commit('-Am','merge') IS NULL; COMMIT;
+SELECT 'BA|' || (SELECT count(*) FROM dolt_conflicts) || '|' || count(*) || '|' || sum(v) FROM t;" "^BA\\|0\\|2000\\|4000$" "$DB" 'Merge has 2000 conflict\(s\)'
+# Every per-row catalog rewrite was a new chunk; 2000 conflicts grew the file to 85MB.
+dltest_assert_equal "bulk_delete_file_stays_small" "$(( $(wc -c < "$DB") < 10000000 ))" "1"
+rm -f "$DB"
+
 dltest_finish

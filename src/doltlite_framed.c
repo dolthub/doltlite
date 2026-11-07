@@ -258,6 +258,27 @@ static int framedRewriteFinish(
   return SQLITE_OK;
 }
 
+static int framedRowidCmp(const void *a, const void *b){
+  i64 x = *(const i64*)a, y = *(const i64*)b;
+  return x<y ? -1 : x>y;
+}
+
+/* aRowid is sorted. Each entry removes at most one row, so equal rowids
+** remove that many identical rows. */
+static int framedTakeRowid(const i64 *aRowid, u8 *aUsed, int nRowid, i64 iRowid){
+  int lo = 0, hi = nRowid;
+  while( lo<hi ){
+    int mid = lo + (hi-lo)/2;
+    if( aRowid[mid]<iRowid ) lo = mid+1; else hi = mid;
+  }
+  while( lo<nRowid && aRowid[lo]==iRowid && aUsed[lo] ) lo++;
+  if( lo<nRowid && aRowid[lo]==iRowid ){
+    aUsed[lo] = 1;
+    return 1;
+  }
+  return 0;
+}
+
 int dlFramedDeleteRow(
   const u8 *data, int nData,
   const DlFramedCodec *pCodec,
@@ -265,25 +286,51 @@ int dlFramedDeleteRow(
   i64 deleteRowid,
   u8 **ppOut, int *pnOut, int *pnOutTables, int *pDeleted
 ){
+  return dlFramedDeleteRows(data, nData, pCodec, zTableName, &deleteRowid, 1,
+                            ppOut, pnOut, pnOutTables, pDeleted);
+}
+
+int dlFramedDeleteRows(
+  const u8 *data, int nData,
+  const DlFramedCodec *pCodec,
+  const char *zTableName,
+  const i64 *aDeleteRowid, int nDeleteRowid,
+  u8 **ppOut, int *pnOut, int *pnOutTables, int *pnDeleted
+){
   u8 *out = 0;
   DlByteReader r;
   DlByteWriter w;
   int nTables, nOutTables = 0;
   int i, j, rc;
   int deleted = 0;
+  int matched = 0;
   void *pRow = 0;
+  i64 *aRowid = 0;
+  u8 *aUsed = 0;
 
   *ppOut = 0;
   *pnOut = 0;
   *pnOutTables = 0;
-  *pDeleted = 0;
+  *pnDeleted = 0;
+  if( nDeleteRowid<=0 ) return SQLITE_OK;
+
+  aRowid = sqlite3_malloc64((sqlite3_uint64)nDeleteRowid * (sizeof(i64)+1));
+  if( !aRowid ) return SQLITE_NOMEM;
+  aUsed = (u8*)&aRowid[nDeleteRowid];
+  memcpy(aRowid, aDeleteRowid, (size_t)nDeleteRowid * sizeof(i64));
+  memset(aUsed, 0, (size_t)nDeleteRowid);
+  qsort(aRowid, (size_t)nDeleteRowid, sizeof(i64), framedRowidCmp);
 
   rc = framedRewriteOpen(data, nData, pCodec, &out, &r, &w, &nTables);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aRowid);
+    return rc;
+  }
 
   pRow = sqlite3_malloc64(pCodec->szRow ? (sqlite3_uint64)pCodec->szRow : 1);
   if( !pRow ){
     sqlite3_free(out);
+    sqlite3_free(aRowid);
     return SQLITE_NOMEM;
   }
 
@@ -308,12 +355,13 @@ int dlFramedDeleteRow(
       goto delete_done;
     }
 
-    isMatch = (!deleted && framedNameEq(pCodec, zName, zTableName));
+    isMatch = (!matched && framedNameEq(pCodec, zName, zTableName));
     if( isMatch ){
       u8 *pCountOut = 0;
       int nKeep = 0;
       int nl = (int)strlen(zName);
 
+      matched = 1;
       dlWriteU16Name(&w, zName, nl);
       pCountOut = w.p;
       dlWriteU32(&w, 0);
@@ -325,8 +373,9 @@ int dlFramedDeleteRow(
           sqlite3_free(zName);
           goto delete_done;
         }
-        if( !deleted && pCodec->xRowid(pRow)==deleteRowid ){
-          deleted = 1;
+        if( deleted<nDeleteRowid
+         && framedTakeRowid(aRowid, aUsed, nDeleteRowid, pCodec->xRowid(pRow)) ){
+          deleted++;
         }else{
           pCodec->xWriteRow(&w, pRow);
           nKeep++;
@@ -364,13 +413,15 @@ int dlFramedDeleteRow(
   }
 
   sqlite3_free(pRow);
+  sqlite3_free(aRowid);
   pRow = 0;
-  *pDeleted = deleted;
+  *pnDeleted = deleted;
   return framedRewriteFinish(data, nData, pCodec, &r, &w, out, nOutTables,
-                             deleted, ppOut, pnOut, pnOutTables);
+                             deleted>0, ppOut, pnOut, pnOutTables);
 
 delete_done:
   sqlite3_free(pRow);
+  sqlite3_free(aRowid);
   sqlite3_free(out);
   return rc;
 }

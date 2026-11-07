@@ -3495,6 +3495,7 @@ int sqlite3VdbeHalt(Vdbe *p){
   }
 #ifdef DOLTLITE_PROLLY
   if( p->pWorkspaceChanges ) doltliteWorkspaceFinishStatement(p);
+  if( p->pConflictDeletes ) doltliteConflictsFinishStatement(p);
 #endif
   checkActiveVdbeCnt(db);
 
