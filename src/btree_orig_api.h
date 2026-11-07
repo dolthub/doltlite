@@ -87,6 +87,9 @@ void origBtreeCursorUnpin(void *pCur);
 int origBtreeCursorIsValidNN(void *pCur);
 int origBtreeTransferRow(void *pDest, void *pSrc, i64 iKey);
 int origBtreeIsEmpty(void *pCur, int *pRes);
+void origBtreeCursorHintFlags(void *pCur, unsigned x);
+int origBtreeCursorHasHint(void *pCur, unsigned int mask);
+i64 origBtreeRowCountEst(void *pCur);
 int origBtreeClearTableOfCursor(void *pCur);
 int origBtreeMaxRecordSize(void *pCur);
 

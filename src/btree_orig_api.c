@@ -198,6 +198,15 @@ int origBtreeTransferRow(void *pDest, void *pSrc, i64 iKey){
 int origBtreeIsEmpty(void *pCur, int *pRes){
   return orig_sqlite3BtreeIsEmpty(C(pCur), pRes);
 }
+void origBtreeCursorHintFlags(void *pCur, unsigned x){
+  orig_sqlite3BtreeCursorHintFlags(C(pCur), x);
+}
+int origBtreeCursorHasHint(void *pCur, unsigned int mask){
+  return orig_sqlite3BtreeCursorHasHint(C(pCur), mask);
+}
+i64 origBtreeRowCountEst(void *pCur){
+  return orig_sqlite3BtreeRowCountEst(C(pCur));
+}
 int origBtreeClearTableOfCursor(void *pCur){
   return orig_sqlite3BtreeClearTableOfCursor(C(pCur));
 }
