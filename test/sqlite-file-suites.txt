@@ -35,6 +35,8 @@ conflict2
 conflict3
 conflict4
 corruptL
+dbpage
+dbpagefault
 decimal
 delete
 delete2

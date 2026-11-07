@@ -1220,15 +1220,10 @@ dbpage dbpage-120 class=unsupported issue=947  # sqlite_dbpage raw page access; 
 dbpage dbpage-130 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-140 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-150 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
-dbpage dbpage-160 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
-dbpage dbpage-170 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-200 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-210 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-220 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-230 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
-dbpage dbpage-241 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
-dbpage dbpage-250 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
-dbpage dbpage-260 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-400 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-500 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
 dbpage dbpage-510 class=unsupported issue=947  # sqlite_dbpage raw page access; chunk store has no SQLite pages
@@ -1789,8 +1784,6 @@ corruptE corruptE-3.14 class=intentional  # stock page cell-order /out of order/
 # corruptK — freelist corruption via sqlite_dbpage page writes + page_count.
 # dbpage writes are rejected (no SQLite pages); page_count is synthetic.
 # Architectural — not a freelist implementation gap.
-corruptK corruptK-3.2 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
-corruptK corruptK-3.3 class=intentional  # stock freelist via sqlite_dbpage; page writes rejected (architectural)
 # corruptL — stock index-page / rootpage corruption and writable_schema SQL
 # pokes against page-layout assumptions. Most cases never form stock
 # page-level corruption on the chunk store (schema-level reject or no-op).

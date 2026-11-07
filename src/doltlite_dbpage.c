@@ -10,10 +10,13 @@
 
 #define DOLTLITE_DBPAGE_PAGE_BYTES 4096
 
+/* An ordinary SQLite schema has real pages; stock sqlite_dbpage serves it. */
 typedef struct DbpageVtab DbpageVtab;
 struct DbpageVtab {
   sqlite3_vtab base;
   sqlite3 *db;
+  const sqlite3_module *pStock;
+  sqlite3_vtab *pStockTab;
 };
 
 typedef struct DlDbpageCursor DlDbpageCursor;
@@ -21,8 +24,24 @@ struct DlDbpageCursor {
   sqlite3_vtab_cursor base;
   int iRow;
   int hasRow;
+  sqlite3_vtab_cursor *pStockCur;
+  int bStock;
   unsigned char aPage[DOLTLITE_DBPAGE_PAGE_BYTES];
 };
+
+static int dlDbpageStockSchema(sqlite3 *db, int iDb){
+  return iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
+      && sqlite3BtreeUsesOrig(db->aDb[iDb].pBt);
+}
+
+static int dlDbpageStockRc(DbpageVtab *pVtab, int rc){
+  if( pVtab->pStockTab && pVtab->pStockTab->zErrMsg ){
+    sqlite3_free(pVtab->base.zErrMsg);
+    pVtab->base.zErrMsg = pVtab->pStockTab->zErrMsg;
+    pVtab->pStockTab->zErrMsg = 0;
+  }
+  return rc;
+}
 
 static void put2byteBE(unsigned char *p, unsigned int v){
   p[0] = (unsigned char)(v >> 8);
@@ -116,33 +135,58 @@ static const char *zDbpageSchema =
 
 static int dlDbpageConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
+  const sqlite3_module *pStock = (const sqlite3_module*)pAux;
+  sqlite3_vtab *pStockTab = 0;
   DbpageVtab *pVtab;
   int rc;
-  (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = doltliteVtabConnectSimple(db, zDbpageSchema, sizeof(*pVtab), ppVtab);
-  if( rc!=SQLITE_OK ) return rc;
-  sqlite3_vtab_config(db, SQLITE_VTAB_DIRECTONLY);
-  pVtab = (DbpageVtab*)*ppVtab;
+  *ppVtab = 0;
+  if( pStock ){
+    rc = pStock->xConnect(db, 0, argc, argv, &pStockTab, pzErr);
+    if( rc!=SQLITE_OK ) return rc;
+  }else{
+    rc = sqlite3_declare_vtab(db, zDbpageSchema);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_vtab_config(db, SQLITE_VTAB_DIRECTONLY);
+  }
+  pVtab = sqlite3_malloc(sizeof(*pVtab));
+  if( !pVtab ){
+    if( pStockTab ) pStock->xDisconnect(pStockTab);
+    return SQLITE_NOMEM;
+  }
+  memset(pVtab, 0, sizeof(*pVtab));
   pVtab->db = db;
+  pVtab->pStock = pStock;
+  pVtab->pStockTab = pStockTab;
+  *ppVtab = &pVtab->base;
   return SQLITE_OK;
 }
 
-static int dlDbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+static int dlDbpageDisconnect(sqlite3_vtab *pBase){
+  DbpageVtab *pVtab = (DbpageVtab*)pBase;
+  if( pVtab->pStockTab ) pVtab->pStock->xDisconnect(pVtab->pStockTab);
+  sqlite3_free(pVtab);
+  return SQLITE_OK;
+}
+
+/* The stock plan: idxNum bit 2 binds schema= as argv[0], bit 1 binds pgno=. */
+static int dlDbpageBestIndex(sqlite3_vtab *pBase, sqlite3_index_info *pInfo){
+  DbpageVtab *pVtab = (DbpageVtab*)pBase;
   int i, idxNum = 0, nArg = 0;
   int iPgno = -1, iSchema = -1;
-  (void)pVtab;
 
+  if( pVtab->pStock ){
+    return pVtab->pStock->xBestIndex(pVtab->pStockTab, pInfo);
+  }
   for(i=0; i<pInfo->nConstraint; i++){
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     if( pInfo->aConstraint[i].iColumn==2 ){
       if( !pInfo->aConstraint[i].usable ) return SQLITE_CONSTRAINT;
       if( iSchema<0 ) iSchema = i;
     }else if( pInfo->aConstraint[i].usable
-           && pInfo->aConstraint[i].iColumn==0 && iPgno<0 ){
+           && pInfo->aConstraint[i].iColumn<=0 && iPgno<0 ){
       iPgno = i;
     }
   }
-
   if( iSchema>=0 ){
     pInfo->aConstraintUsage[iSchema].argvIndex = ++nArg;
     pInfo->aConstraintUsage[iSchema].omit = 1;
@@ -153,7 +197,6 @@ static int dlDbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iPgno].omit = 1;
     idxNum |= 1;
   }
-
   pInfo->idxNum = idxNum;
   pInfo->estimatedCost = 1.0;
   pInfo->estimatedRows = 1;
@@ -165,24 +208,44 @@ static int dlDbpageOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
   return doltliteVtabOpenCursor(ppCursor, sizeof(DlDbpageCursor));
 }
 
+static int dlDbpageClose(sqlite3_vtab_cursor *pCursor){
+  DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
+  DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
+  if( pCur->pStockCur ) pVtab->pStock->xClose(pCur->pStockCur);
+  return doltliteVtabClose(pCursor);
+}
+
 static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
   DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
-  int iArg = 0;
+  int iDb = 0;
   int rc;
-  (void)idxStr; (void)argc;
 
   pCur->iRow = 0;
   pCur->hasRow = 0;
+  pCur->bStock = 0;
 
   if( idxNum & 2 ){
-    const char *zSchema = (const char*)sqlite3_value_text(argv[iArg++]);
-    if( sqlite3FindDbName(pVtab->db, zSchema)!=0 ) return SQLITE_OK;
+    const char *zSchema = (const char*)sqlite3_value_text(argv[0]);
+    iDb = sqlite3FindDbName(pVtab->db, zSchema);
   }
 
+  if( pVtab->pStock && dlDbpageStockSchema(pVtab->db, iDb) ){
+    if( !pCur->pStockCur ){
+      rc = pVtab->pStock->xOpen(pVtab->pStockTab, &pCur->pStockCur);
+      if( rc!=SQLITE_OK ) return dlDbpageStockRc(pVtab, rc);
+      pCur->pStockCur->pVtab = pVtab->pStockTab;
+    }
+    pCur->bStock = 1;
+    return dlDbpageStockRc(pVtab,
+        pVtab->pStock->xFilter(pCur->pStockCur, idxNum, idxStr, argc, argv));
+  }
+
+  if( iDb!=0 ) return SQLITE_OK;
+
   if( idxNum & 1 ){
-    sqlite3_int64 pgno = sqlite3_value_int64(argv[iArg++]);
+    sqlite3_int64 pgno = sqlite3_value_int64(argv[idxNum>>1]);
     if( pgno!=1 ){
       sqlite3_free(pVtab->base.zErrMsg);
       pVtab->base.zErrMsg = sqlite3_mprintf(
@@ -200,18 +263,31 @@ static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
 
 static int dlDbpageNext(sqlite3_vtab_cursor *pCursor){
   DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
+  if( pCur->bStock ){
+    DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
+    return dlDbpageStockRc(pVtab, pVtab->pStock->xNext(pCur->pStockCur));
+  }
   pCur->iRow++;
   return SQLITE_OK;
 }
 
 static int dlDbpageEof(sqlite3_vtab_cursor *pCursor){
   DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
+  if( pCur->bStock ){
+    DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
+    return pVtab->pStock->xEof(pCur->pStockCur);
+  }
   return !pCur->hasRow || pCur->iRow>=1;
 }
 
 static int dlDbpageColumn(sqlite3_vtab_cursor *pCursor,
     sqlite3_context *ctx, int iCol){
   DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
+  if( pCur->bStock ){
+    DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
+    return dlDbpageStockRc(pVtab,
+        pVtab->pStock->xColumn(pCur->pStockCur, ctx, iCol));
+  }
   switch( iCol ){
     case 0:
       sqlite3_result_int64(ctx, 1);
@@ -231,20 +307,70 @@ static int dlDbpageColumn(sqlite3_vtab_cursor *pCursor,
 }
 
 static int dlDbpageRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
+  DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
+  if( pCur->bStock ){
+    DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
+    return pVtab->pStock->xRowid(pCur->pStockCur, pRowid);
+  }
   *pRowid = 1;
-  (void)pCursor;
   return SQLITE_OK;
 }
 
+/* Writes reach real pages, so only an ordinary SQLite schema accepts them. */
+static int dlDbpageUpdate(sqlite3_vtab *pBase, int argc,
+    sqlite3_value **argv, sqlite3_int64 *pRowid){
+  DbpageVtab *pVtab = (DbpageVtab*)pBase;
+  int iDb = 0;
+  if( argc>4 && sqlite3_value_type(argv[4])!=SQLITE_NULL ){
+    iDb = sqlite3FindDbName(pVtab->db, (const char*)sqlite3_value_text(argv[4]));
+  }
+  if( pVtab->pStock && pVtab->pStock->xUpdate
+   && (iDb<0 || dlDbpageStockSchema(pVtab->db, iDb)) ){
+    return dlDbpageStockRc(pVtab,
+        pVtab->pStock->xUpdate(pVtab->pStockTab, argc, argv, pRowid));
+  }
+  sqlite3_free(pVtab->base.zErrMsg);
+  pVtab->base.zErrMsg = sqlite3_mprintf("table sqlite_dbpage may not be modified");
+  return SQLITE_ERROR;
+}
+
+static int dlDbpageBegin(sqlite3_vtab *pBase){
+  DbpageVtab *pVtab = (DbpageVtab*)pBase;
+  if( !pVtab->pStock || !pVtab->pStock->xBegin ) return SQLITE_OK;
+  return dlDbpageStockRc(pVtab, pVtab->pStock->xBegin(pVtab->pStockTab));
+}
+
+static int dlDbpageSync(sqlite3_vtab *pBase){
+  DbpageVtab *pVtab = (DbpageVtab*)pBase;
+  if( !pVtab->pStock || !pVtab->pStock->xSync ) return SQLITE_OK;
+  return dlDbpageStockRc(pVtab, pVtab->pStock->xSync(pVtab->pStockTab));
+}
+
+static int dlDbpageRollbackTo(sqlite3_vtab *pBase, int iSavepoint){
+  DbpageVtab *pVtab = (DbpageVtab*)pBase;
+  if( !pVtab->pStock || !pVtab->pStock->xRollbackTo ) return SQLITE_OK;
+  return pVtab->pStock->xRollbackTo(pVtab->pStockTab, iSavepoint);
+}
+
 static sqlite3_module doltliteDbpageModule = {
-  0, 0, dlDbpageConnect, dlDbpageBestIndex, doltliteVtabDisconnect, 0,
-  dlDbpageOpen, doltliteVtabClose, dlDbpageFilter, dlDbpageNext, dlDbpageEof,
-  dlDbpageColumn, dlDbpageRowid,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  2, dlDbpageConnect, dlDbpageConnect, dlDbpageBestIndex, dlDbpageDisconnect,
+  dlDbpageDisconnect, dlDbpageOpen, dlDbpageClose, dlDbpageFilter,
+  dlDbpageNext, dlDbpageEof, dlDbpageColumn, dlDbpageRowid, dlDbpageUpdate,
+  dlDbpageBegin, dlDbpageSync, 0, 0, 0, 0, 0, 0, dlDbpageRollbackTo, 0, 0
 };
 
 int doltliteDbpageRegister(sqlite3 *db){
-  return sqlite3_create_module(db, "sqlite_dbpage", &doltliteDbpageModule, 0);
+  const sqlite3_module *pStock = 0;
+#if (defined(SQLITE_ENABLE_DBPAGE_VTAB) || defined(SQLITE_TEST)) \
+    && !defined(SQLITE_OMIT_VIRTUALTABLE)
+  Module *pMod;
+  int rc = sqlite3DbpageRegister(db);
+  if( rc!=SQLITE_OK ) return rc;
+  pMod = (Module*)sqlite3HashFind(&db->aModule, "sqlite_dbpage");
+  if( pMod ) pStock = pMod->pModule;
+#endif
+  return sqlite3_create_module(db, "sqlite_dbpage", &doltliteDbpageModule,
+                               (void*)pStock);
 }
 
 #endif

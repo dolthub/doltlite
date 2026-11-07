@@ -504,6 +504,22 @@ rm -f "$DLDST"; dl_all "CREATE TABLE keep(x);" "$DLDST" >/dev/null 2>&1
 want_eq "M9_backup_legacy_to_existing_doltlite_refused" \
   "$(printf '.backup %s\n' "$DLDST" | $DOLTLITE "$SRC" 2>&1 | grep -c 'legacy SQLite database and a doltlite')" "1"
 
+PG=$TMP/dbpage.db
+seed_stock "$PG" "CREATE TABLE t(a,b); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<2000) INSERT INTO t SELECT i, randomblob(200) FROM c;"
+want_eq "P1_dbpage_reads_every_page_of_a_sqlite_file" \
+  "$(dl_last "SELECT count(*) FROM sqlite_dbpage;" "$PG")" \
+  "$(sq_last "SELECT count(*) FROM sqlite_dbpage;" "$PG")"
+want_eq "P2_dbpage_reads_an_attached_sqlite_file" \
+  "$(dl_last "ATTACH '$PG' AS aux; SELECT count(*) FROM sqlite_dbpage('aux');" ":memory:")" \
+  "$(sq_last "SELECT count(*) FROM sqlite_dbpage;" "$PG")"
+dd if=/dev/zero of="$PG" bs=1 seek=12000 count=400 conv=notrunc 2>/dev/null
+rm -f "$TMP/rec_s.db" "$TMP/rec_d.db"
+$SQLITE3 "$PG" .recover 2>/dev/null | $SQLITE3 "$TMP/rec_s.db" >/dev/null 2>&1
+$DOLTLITE "$PG" .recover 2>/dev/null | $SQLITE3 "$TMP/rec_d.db" >/dev/null 2>&1
+want_eq "P3_recover_salvages_a_damaged_sqlite_file" \
+  "$(sq_last "SELECT count(*) FROM t;" "$TMP/rec_d.db")" \
+  "$(sq_last "SELECT count(*) FROM t;" "$TMP/rec_s.db")"
+
 echo ""
 echo "============================="
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"

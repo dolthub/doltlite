@@ -47,7 +47,9 @@ proc sqlite3 {args} {
     error "SQLite permutation opened $filename on the wrong engine"
   }
   if {$stock} {incr sqlite_file::opened}
-  trace add execution $handle {enter leave} sqlite_file::sql_trace
+  # A leave trace formats the result as a string, and a blob with a string
+  # form binds back as text, so only an ATTACH gets one.
+  trace add execution $handle enter sqlite_file::sql_trace
   return $res
 }
 
@@ -73,10 +75,10 @@ proc sqlite_file::sql_trace {command args} {
   if {[lindex $command 1] ni {eval onecolumn exists}} return
   set sql [lindex $command 2]
   if {![regexp -nocase {\mATTACH\M} $sql]} return
+  trace add execution [lindex $command 0] leave sqlite_file::attach_done
   set active 1
   try {
-    set op [lindex $args end]
-    if {$op eq "enter" && $mode eq "sqlite"} {
+    if {$mode eq "sqlite"} {
       foreach {match filename} [regexp -all -inline -nocase -expanded {
         \mATTACH\s+(?:DATABASE\s+)?'([^']+)'\s+AS\M
       } $sql] {
@@ -87,19 +89,31 @@ proc sqlite_file::sql_trace {command args} {
           sqlite_file_seed close
         }
       }
-    } elseif {$op eq "leave" && [lindex $args 0]==0} {
-      set handle [lindex $command 0]
-      set engine [doltlite_test_engine $handle]
-      foreach {seq name filename} [$handle eval {PRAGMA database_list}] {
-        if {$seq<2 || ![file isfile $filename] || [file size $filename]<16} continue
-        set fd [open $filename rb]
-        set header [read $fd 16]
-        close $fd
-        if {$header eq "SQLite format 3\x00" &&
-            [doltlite_test_engine $handle $name] eq "orig" &&
-            ($mode eq "sqlite" || $engine eq "prolly")} {
-          incr attached
-        }
+    }
+  } finally {
+    set active 0
+  }
+}
+
+proc sqlite_file::attach_done {command code result op} {
+  variable active
+  variable mode
+  variable attached
+  set handle [lindex $command 0]
+  trace remove execution $handle leave sqlite_file::attach_done
+  if {$code!=0} return
+  set active 1
+  try {
+    set engine [doltlite_test_engine $handle]
+    foreach {seq name filename} [$handle eval {PRAGMA database_list}] {
+      if {$seq<2 || ![file isfile $filename] || [file size $filename]<16} continue
+      set fd [open $filename rb]
+      set header [read $fd 16]
+      close $fd
+      if {$header eq "SQLite format 3\x00" &&
+          [doltlite_test_engine $handle $name] eq "orig" &&
+          ($mode eq "sqlite" || $engine eq "prolly")} {
+        incr attached
       }
     }
   } finally {
