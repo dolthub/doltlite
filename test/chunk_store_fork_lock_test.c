@@ -375,9 +375,64 @@ static void test_zero_byte_open_keeps_peer_lock(void){
 #endif
 }
 
+static int count_rows(sqlite3 *db, const char *zSql){
+  sqlite3_stmt *stmt = 0;
+  int n = -1;
+  if( sqlite3_prepare_v2(db, zSql, -1, &stmt, 0)==SQLITE_OK
+   && sqlite3_step(stmt)==SQLITE_ROW ){
+    n = sqlite3_column_int(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return n;
+}
+
+static void test_zero_byte_peer_follows_sqlite_creator(void){
+  const char *zPath = DOLTLITE_TEST_TMPDIR "/test_zero_byte_creator.db";
+  const char *zUri =
+    "file:" DOLTLITE_TEST_TMPDIR "/test_zero_byte_creator.db?doltlite_engine=sqlite";
+  sqlite3 *creator = 0, *peer = 0;
+  sqlite3_stmt *stmt = 0;
+  FILE *f;
+  int rc;
+
+  printf("--- a peer of a SQLite creator on a 0-byte file sees its tables ---\n");
+  rm_db(zPath);
+  remove(DOLTLITE_TEST_TMPDIR "/.test_zero_byte_creator.db-lock");
+  f = fopen(zPath, "wb");
+  check("creator_create_empty", f!=0);
+  if( !f ) return;
+  fclose(f);
+
+  rc = sqlite3_open_v2(zUri, &creator,
+    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, 0);
+  check("creator_open", rc==SQLITE_OK);
+  check("creator_begin", exec_sql(creator,
+    "BEGIN IMMEDIATE; CREATE TABLE s(a); INSERT INTO s VALUES('stock1')")==SQLITE_OK);
+  check("creator_peer_open", sqlite3_open(zPath, &peer)==SQLITE_OK);
+  check("creator_peer_sees_empty",
+        count_rows(peer, "SELECT count(*) FROM sqlite_master")==0);
+  check("creator_commit", exec_sql(creator, "COMMIT")==SQLITE_OK);
+  check("creator_peer_sees_table",
+        count_rows(peer, "SELECT count(*) FROM s")==1);
+  rc = sqlite3_prepare_v2(peer, "SELECT doltlite_engine()", -1, &stmt, 0);
+  check("creator_peer_on_sqlite_engine", rc==SQLITE_OK
+        && sqlite3_step(stmt)==SQLITE_ROW
+        && strcmp((const char*)sqlite3_column_text(stmt, 0), "orig")==0);
+  sqlite3_finalize(stmt);
+  sqlite3_close(peer);
+  sqlite3_close(creator);
+  {
+    FILE *pLock = fopen(DOLTLITE_TEST_TMPDIR "/.test_zero_byte_creator.db-lock", "rb");
+    check("creator_peer_leaves_no_lock_sidecar", pLock==0);
+    if( pLock ) fclose(pLock);
+  }
+  rm_db(zPath);
+}
+
 int main(void){
   test_fork_child_does_not_keep_parent_lock();
   test_zero_byte_open_keeps_peer_lock();
+  test_zero_byte_peer_follows_sqlite_creator();
   test_graph_lock_promotion_has_one_winner();
   test_unlinked_graph_lock(0);
   test_unlinked_graph_lock(1);

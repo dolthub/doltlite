@@ -573,6 +573,7 @@ int chunkStoreAdoptDiskState(ChunkStore *cs);
 
 /* Duplicate z with two trailing nuls (SQLITE_OPEN_MAIN_DB xOpen URI term). */
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
+int chunkStoreHostFileIsZero(const char *zPath);
 int chunkStoreGetLockFile(ChunkStore *cs, sqlite3_file **ppFile);
 
 /* Read the first nBuf bytes of an existing file. *pRead is 0 when it is

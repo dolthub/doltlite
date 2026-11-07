@@ -92,7 +92,7 @@ int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize){
 ** wrapper VFSes, even when this connection goes on to create the database.
 ** Never open a descriptor here: closing one releases every POSIX lock this
 ** process holds on the file, including another connection's. */
-static int csHostFileIsZero(const char *zPath){
+int chunkStoreHostFileIsZero(const char *zPath){
   struct stat st;
   if( stat(zPath, &st)!=0 ) return 0;
   return (st.st_mode & S_IFMT)==S_IFREG && st.st_size==0;
@@ -466,7 +466,7 @@ static int csOpen(
       emptyFile = 1;
       if( (flags & SQLITE_OPEN_READONLY)!=0 ) cs->readOnly = 1;
     }
-  }else if( csHostFileIsZero(cs->file.zFilename) ){
+  }else if( chunkStoreHostFileIsZero(cs->file.zFilename) ){
     /* unix and win xAccess treat a 0-byte regular file as absent. Stock
     ** opens that file as an empty database. A missing path stays absent. */
     emptyFile = 1;

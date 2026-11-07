@@ -906,6 +906,51 @@ static int doltliteFileHasContent(
   return SQLITE_OK;
 }
 
+/* A SQLite connection creating a 0-byte file holds its RESERVED lock or
+** has a journal or WAL beside it; DoltLite leaves neither. Opening that
+** file as a new DoltLite store would never see the tables it commits. */
+static int doltliteEmptyFileInSqliteCreation(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  int *pbSqlite
+){
+  static const char *const azSuffix[] = { "-journal", "-wal" };
+  sqlite3_file *pFile = 0;
+  char *zDup = 0;
+  int outFlags = 0;
+  int res = 0;
+  int i;
+  int rc;
+
+  *pbSqlite = 0;
+  if( !chunkStoreHostFileIsZero(zFilename) ) return SQLITE_OK;
+  if( !pVfs ){
+    pVfs = sqlite3_vfs_find(0);
+    if( !pVfs ) return SQLITE_OK;
+  }
+  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
+                           SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
+                           &outFlags);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsCheckReservedLock(pFile, &res);
+    sqlite3OsCloseFree(pFile);
+  }else{
+    if( pFile ) sqlite3OsCloseFree(pFile);
+    rc = SQLITE_OK;
+  }
+  sqlite3_free(zDup);
+  for(i=0; rc==SQLITE_OK && !res && i<ArraySize(azSuffix); i++){
+    char *z = sqlite3_mprintf("%s%s", zFilename, azSuffix[i]);
+    if( !z ) return SQLITE_NOMEM;
+    rc = sqlite3OsAccess(pVfs, z, SQLITE_ACCESS_EXISTS, &res);
+    sqlite3_free(z);
+  }
+  if( rc==SQLITE_OK ) *pbSqlite = res!=0;
+  return rc;
+}
+
 /* Version-control writes never pass OP_Transaction, so the connection's
 ** query_only flag has to be re-checked where the store persists. */
 static int prollyBtreeQueryOnlyWriteGate(void *pArg){
@@ -1119,6 +1164,9 @@ static int prollyBtreeOpenImpl(
     }
     if( zStoreFilename ) zOpenFilename = zStoreFilename;
     rc = origBtreeIsSqliteFile(pVfs, zOpenFilename, &useOrig);
+    if( rc==SQLITE_OK && !useOrig && !zStoreFilename ){
+      rc = doltliteEmptyFileInSqliteCreation(pVfs, zOpenFilename, &useOrig);
+    }
     if( useOrig && zStoreFilename ){
       useOrig = 0;
     }
