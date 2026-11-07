@@ -220,6 +220,16 @@ res=$("$DOLTLITE" "$PLAIN/nope" "SELECT 1;" 2>&1 | normalize_output)
 check_match "missing_revision_without_db_extension" 'branch or revision "nope" not found' "$res"
 rm -f "$PLAIN" "/tmp/.test_open_branch_plain_$$-lock"
 
+ATDIR=/tmp/test_open_branch_at_$$
+rm -rf "$ATDIR"; mkdir -p "$ATDIR"
+res=$("$DOLTLITE" "$ATDIR/x@y.db" "CREATE TABLE t(a); INSERT INTO t VALUES(7); SELECT a FROM t;" 2>&1 | normalize_output)
+check_eq "at_in_new_file_name_opens_that_file" "7" "$res"
+res=$(ls -A "$ATDIR" | tr '\n' ' ')
+check_eq "at_in_new_file_name_leaves_no_stray_files" ".x@y.db-lock x@y.db " "$res"
+res=$("$DOLTLITE" "$ATDIR/x@y.db" "SELECT a FROM t;" 2>&1 | normalize_output)
+check_eq "at_in_file_name_reopens_that_file" "7" "$res"
+rm -rf "$ATDIR"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 if [ $FAIL -gt 0 ]; then
