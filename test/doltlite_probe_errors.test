@@ -114,4 +114,32 @@ foreach vfs {probe default} {
   } {1 {unable to open database file}}
 }
 
+testvfs dirprobe
+dirprobe filter {xAccess xOpen}
+dirprobe script probe_directory
+proc probe_directory {method filename args} {
+  if {$method eq "xAccess" && [string match */ $filename]} {return 0}
+  if {[file normalize $filename] eq $::probe_parent} {
+    if {$method eq "xAccess"} {return 1}
+    incr ::probe_parent_opens
+    return SQLITE_IOERR
+  }
+  return SQLITE_OK
+}
+foreach directory {probe-dir probe-dir-\u2603} {
+  file mkdir $directory
+  set ::probe_parent [file normalize $directory]
+  set ::probe_parent_opens 0
+  forcedelete $directory/child.db
+  do_test 8.$directory {
+    sqlite3 db $directory/child.db -vfs dirprobe
+    db eval {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(4)}
+    db close
+    sqlite3 db $directory/child.db -vfs dirprobe
+    list [db eval {SELECT * FROM t}] $::probe_parent_opens
+  } {4 0}
+  catch {db close}
+}
+dirprobe delete
+
 finish_test

@@ -4,7 +4,6 @@
 
 #include "chunk_store_int.h"
 #include "../ext/blake3/blake3.h"
-#include <errno.h>
 #include <sys/stat.h>
 
 /* unix VFS asserts a 128KiB read cap; writers already slice. */
@@ -157,6 +156,23 @@ static int csCanonicalFilename(
   return rc;
 }
 
+int chunkStorePathIsDirectory(
+  sqlite3_vfs *pVfs,
+  const char *zPath,
+  int *pIsDir
+){
+  char *zDir;
+  int rc;
+  *pIsDir = 0;
+  if( sqlite3IsDoltliteSharedMemVfs(pVfs) ) return SQLITE_OK;
+  /* Windows ignores trailing slashes and hides zero-size paths from EXISTS. */
+  zDir = sqlite3_mprintf("%s/.", zPath);
+  if( !zDir ) return SQLITE_NOMEM;
+  rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_READ, pIsDir);
+  sqlite3_free(zDir);
+  return rc;
+}
+
 int chunkStoreReadFileHeader(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -166,6 +182,7 @@ int chunkStoreReadFileHeader(
 ){
   sqlite3_file *pFile = 0;
   int exists = 0;
+  int isDir = 0;
   int outFlags = 0;
   int nFull;
   char *zFull = 0;
@@ -184,6 +201,8 @@ int chunkStoreReadFileHeader(
   rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
   if( rc!=SQLITE_OK ) return rc;
   if( !exists ) return SQLITE_OK;
+  rc = chunkStorePathIsDirectory(pVfs, zFilename, &isDir);
+  if( rc!=SQLITE_OK || isDir ) return rc;
 
   nFull = pVfs->mxPathname + 1;
   zFull = sqlite3_malloc(nFull);
@@ -208,15 +227,6 @@ int chunkStoreReadFileHeader(
     return rc;
   }
   rc = sqlite3OsRead(pFile, aBuf, nBuf, 0);
-#if !SQLITE_OS_WIN && defined(EISDIR)
-  if( rc==SQLITE_IOERR_READ ){
-    int err = 0;
-    if( sqlite3OsFileControl(pFile, SQLITE_FCNTL_LAST_ERRNO, &err)==SQLITE_OK
-     && err==EISDIR ){
-      rc = SQLITE_CANTOPEN;
-    }
-  }
-#endif
   sqlite3OsCloseFree(pFile);
   sqlite3_free(zProbe);
   if( rc==SQLITE_OK ) *pRead = 1;

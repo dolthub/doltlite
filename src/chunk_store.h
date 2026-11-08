@@ -575,6 +575,7 @@ int chunkStoreAdoptDiskState(ChunkStore *cs);
 /* Duplicate z with two trailing nuls (SQLITE_OPEN_MAIN_DB xOpen URI term). */
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
 int chunkStoreHostFileIsZero(const char *zPath);
+int chunkStorePathIsDirectory(sqlite3_vfs *pVfs, const char *zPath, int *pIsDir);
 int chunkStoreGetLockFile(ChunkStore *cs, sqlite3_file **ppFile);
 
 /* *pRead is true only when all nBuf header bytes were read. */
