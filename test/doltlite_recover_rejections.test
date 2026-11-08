@@ -140,16 +140,18 @@ do_test doltlite_recover_rejections-4.1 {
     |      0: 53 51 4c 69 74 65 20 66 6f 72 6d 61 74 20 33 00   SQLite format 3.
     | end x.db
   }]} msg] $msg
-} {1 {unable to set MEMDB content}}
+} {0 {}}
 do_test doltlite_recover_rejections-4.2 {
-  set res [dbm eval {
-    CREATE TABLE z(a INTEGER PRIMARY KEY, b TEXT);
-    INSERT INTO z VALUES(5,'five');
-    SELECT a, b FROM z ORDER BY a;
-  }]
+  set res [list [catch {
+    dbm eval {
+      CREATE TABLE z(a INTEGER PRIMARY KEY, b TEXT);
+      INSERT INTO z VALUES(5,'five');
+      SELECT a, b FROM z ORDER BY a;
+    }
+  } m] $m]
   dbm close
   set res
-} {5 five}
+} {1 {file is not a database}}
 
 do_test doltlite_recover_rejections-5.0 {
   db close

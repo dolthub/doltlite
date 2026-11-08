@@ -2711,16 +2711,10 @@ collate9 collate9-4.5 class=intentional
 colmeta colmeta-5.1 class=intentional  # doltlite PKs are the prolly key and are NOT NULL (Dolt semantics, enforced — INSERT NULL fails); table_column_metadata reports notnull=1 where stock's rowid-table quirk reports nullable non-INTEGER PKs
 colmeta colmeta-5.2 class=intentional
 
-# dbfuzz001 injects corrupt raw SQLite-format images via `db deserialize
-# [decode_hexdb ...]`. doltlite's serialize/deserialize does not carry the
-# SQLite file format (serialize returns empty, deserialize fails "unable to
-# set MEMDB content" — verified with a roundtrip repro), so every image
-# fails to load: 100/200/310 error in the do_test body, and 101a/110/320/330
-# are cascades that then see an empty db instead of the corrupt content
-# ("ok" / "no such table" instead of "database disk image is malformed").
-# PRAGMA journal_mode = memory/PERSIST is rejected ("journal_mode is not
-# configurable on doltlite-format databases") — intentional rejection class.
-dbfuzz001 dbfuzz001-420 class=intentional  # dbfuzz001 injects corrupt raw SQLite-format images via `db deserialize [decode_hexdb ...]`. doltlite's serialize/deserialize does not carry the SQLite file format (serialize returns empty, deserialize fails "unable to set MEMDB content" — verified with a roundtrip repro), so every image fails to load: 100/200/310 error in the do_test body, and 101a/110/320/330 are cascades that then see an empty db instead of the corrupt content ("ok" / "no such table" instead of "database disk image is malformed"). PRAGMA journal_mode = memory/PERSIST is rejected ("journal_mode is not configurable on doltlite-format databases") — intentional rejection class.
+# dbfuzz001-420/440 set PRAGMA journal_mode = memory/PERSIST on a
+# doltlite-format database, which rejects it ("journal_mode is not
+# configurable on doltlite-format databases") and keeps reporting wal.
+dbfuzz001 dbfuzz001-420 class=intentional  # PRAGMA journal_mode = memory/PERSIST is rejected on a doltlite-format database ("journal_mode is not configurable on doltlite-format databases"); it keeps reporting wal — intentional rejection class.
 dbfuzz001 dbfuzz001-440 class=intentional
 
 # Table q(s, id, constraint pk_q primary key(id)) is PK-keyed in doltlite.

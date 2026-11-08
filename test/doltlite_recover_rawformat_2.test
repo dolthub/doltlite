@@ -483,19 +483,21 @@ do_test doltlite_recover_rawformat_2-6.10 {
 do_test doltlite_recover_rawformat_2-7.1 {
   sqlite3 dbd {}
   set rc [catch {dbd deserialize [string repeat \x00 512]} msg]
-  set usable [dbd eval {SELECT 11+22}]
+  set use [list [catch {dbd eval {SELECT 11+22}} m] $m]
   dbd close
-  list $rc $msg $usable
-} {1 {unable to set MEMDB content} 33}
+  list $rc $msg {*}$use
+} {0 {} 1 {file is not a database}}
 
 do_test doltlite_recover_rawformat_2-7.2 {
   sqlite3 dbd {}
   set img "SQLite format 3\x00[string repeat \x5a 496]"
   set rc [catch {dbd deserialize $img} msg]
-  set usable [dbd eval {CREATE TABLE qq(x); INSERT INTO qq VALUES(7); SELECT x FROM qq}]
+  set use [list [catch {
+    dbd eval {CREATE TABLE qq(x); INSERT INTO qq VALUES(7); SELECT x FROM qq}
+  } m] $m]
   dbd close
-  list $rc $msg $usable [execsql {PRAGMA integrity_check}]
-} {1 {unable to set MEMDB content} 7 ok}
+  list $rc $msg {*}$use [execsql {PRAGMA integrity_check}]
+} {0 {} 1 {file is not a database} ok}
 
 do_test doltlite_recover_rawformat_2-8.1 {
   db close

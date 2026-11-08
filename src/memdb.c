@@ -941,6 +941,10 @@ static int doltliteImageIsSqliteHeader(const unsigned char *p, sqlite3_int64 n){
   if( p[19]>2 ) return 0;
   return p[21]==64 && p[22]==32 && p[23]==32;
 }
+
+static int doltliteImageIsDoltlite(const unsigned char *p, sqlite3_int64 n){
+  return n>=4 && p!=0 && memcmp(p, "CTLD", 4)==0;
+}
 #endif
 
 int sqlite3_deserialize(
@@ -974,13 +978,14 @@ int sqlite3_deserialize(
     goto end_deserialize;
   }
 #ifdef DOLTLITE_PROLLY
-  /* The image decides the engine: a well-formed stock page image goes
-  ** through the stock reopen below even when the schema currently holds a
-  ** prolly tree. Anything else stays on the DoltLite path, which rejects
-  ** garbage up front; a stock-engine schema takes only stock images. */
+  /* The image decides the engine: an empty image or a DoltLite image into
+  ** a prolly schema stays on the DoltLite path. Everything else goes
+  ** through the stock reopen, which, like stock, accepts any bytes and
+  ** reports "file is not a database" on first use. */
   if( iDb>=0 && db->aDb[iDb].pBt
    && sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt)
-   && !doltliteImageIsSqliteHeader(pData, szDb) ){
+   && !doltliteImageIsSqliteHeader(pData, szDb)
+   && (szDb==0 || doltliteImageIsDoltlite(pData, szDb)) ){
     Btree *pNewBt = 0;
     Schema *pNewSchema;
     if( szDb<0 || szBuf<szDb || (szDb>0 && pData==0) ){
@@ -1010,10 +1015,6 @@ int sqlite3_deserialize(
     db->aDb[iDb].pSchema = pNewSchema;
     db->mDbFlags &= ~DBFLAG_SchemaKnownOk;
     rc = SQLITE_OK;
-    goto end_deserialize;
-  }
-  if( szDb>0 && !doltliteImageIsSqliteHeader(pData, szDb) ){
-    rc = SQLITE_NOTADB;
     goto end_deserialize;
   }
 #endif
