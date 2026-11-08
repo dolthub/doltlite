@@ -39,8 +39,8 @@ proc sqlite3 {args} {
     ($filename ni {:memory: {}} && [file tail $filename] ne "test.db" &&
      ![string match "file:*" $filename])}]
   set invalid 0
-  if {$stock && [file isfile $filename] && [file size $filename]>0} {
-    set fd [open $filename rb]
+  if {$stock && [file isfile $filename] && [file size $filename]>0
+      && ![catch {open $filename rb} fd]} {
     set invalid [expr {[read $fd 16] ne "SQLite format 3\x00"}]
     close $fd
   }
