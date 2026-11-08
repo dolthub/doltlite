@@ -136,6 +136,7 @@ walbig
 walblock
 walckptnoop
 walcksum
+walcrash
 walcrash2
 walcrash4
 walfault

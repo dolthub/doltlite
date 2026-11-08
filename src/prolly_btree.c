@@ -906,6 +906,40 @@ static int doltliteFileHasContent(
   return SQLITE_OK;
 }
 
+/* Only a real journal or WAL counts; stray bytes beside a store are not
+** SQLite's. */
+static int doltliteSqliteSidecar(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  int *pbSqlite
+){
+  static const char *const azSuffix[] = { "-journal", "-wal" };
+  int res = 0;
+  int i;
+  int rc = SQLITE_OK;
+
+  for(i=0; rc==SQLITE_OK && !res && i<ArraySize(azSuffix); i++){
+    static const u8 aJournalMagic[] = {
+      0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7 };
+    u8 aHdr[8];
+    int nRead = 0;
+    char *z = sqlite3_mprintf("%s%s", zFilename, azSuffix[i]);
+    if( !z ) return SQLITE_NOMEM;
+    memset(aHdr, 0, sizeof(aHdr));
+    rc = chunkStoreReadFileHeader(pVfs, z, aHdr, sizeof(aHdr), &nRead);
+    sqlite3_free(z);
+    if( rc!=SQLITE_OK ) break;
+    if( i==0 ){
+      res = nRead && memcmp(aHdr, aJournalMagic, 8)==0;
+    }else{
+      res = nRead && aHdr[0]==0x37 && aHdr[1]==0x7f && aHdr[2]==0x06
+         && (aHdr[3]==0x82 || aHdr[3]==0x83);
+    }
+  }
+  *pbSqlite = rc==SQLITE_OK && res;
+  return rc;
+}
+
 /* A SQLite connection creating a 0-byte file holds its RESERVED lock or
 ** has a valid journal or WAL beside it; DoltLite leaves neither. Opening that
 ** file as a new DoltLite store would never see the tables it commits. */
@@ -914,12 +948,10 @@ static int doltliteEmptyFileInSqliteCreation(
   const char *zFilename,
   int *pbSqlite
 ){
-  static const char *const azSuffix[] = { "-journal", "-wal" };
   sqlite3_file *pFile = 0;
   char *zDup = 0;
   int outFlags = 0;
   int res = 0;
-  int i;
   int rc;
 
   *pbSqlite = 0;
@@ -941,28 +973,37 @@ static int doltliteEmptyFileInSqliteCreation(
     rc = SQLITE_OK;
   }
   sqlite3_free(zDup);
-  for(i=0; rc==SQLITE_OK && !res && i<ArraySize(azSuffix); i++){
-    static const u8 aJournalMagic[] = {
-      0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7 };
-    u8 aHdr[8];
-    int nRead = 0;
-    char *z = sqlite3_mprintf("%s%s", zFilename, azSuffix[i]);
-    if( !z ) return SQLITE_NOMEM;
-    memset(aHdr, 0, sizeof(aHdr));
-    rc = chunkStoreReadFileHeader(pVfs, z, aHdr, sizeof(aHdr), &nRead);
-    sqlite3_free(z);
-    if( rc!=SQLITE_OK ) break;
-    /* Only a real journal or WAL counts; stray bytes beside a new store
-    ** are not a creator. */
-    if( i==0 ){
-      res = nRead && memcmp(aHdr, aJournalMagic, 8)==0;
-    }else{
-      res = nRead && aHdr[0]==0x37 && aHdr[1]==0x7f && aHdr[2]==0x06
-         && (aHdr[3]==0x82 || aHdr[3]==0x83);
-    }
+  if( rc==SQLITE_OK && res ){
+    *pbSqlite = 1;
+    return SQLITE_OK;
   }
-  if( rc==SQLITE_OK ) *pbSqlite = res!=0;
-  return rc;
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteSqliteSidecar(pVfs, zFilename, pbSqlite);
+}
+
+/* A crash mid-checkpoint can tear page 1 of a SQLite file while its WAL or
+** hot journal still holds the page; stock recovers the file from there. */
+static int doltliteTornSqliteFile(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  int *pbSqlite
+){
+  u8 aHdr[CS_MANIFEST_MAGIC_OFF+4];
+  int nRead = 0;
+  int rc;
+
+  *pbSqlite = 0;
+  if( !pVfs ){
+    pVfs = sqlite3_vfs_find(0);
+    if( !pVfs ) return SQLITE_OK;
+  }
+  rc = chunkStoreReadFileHeader(pVfs, zFilename, aHdr, sizeof(aHdr), &nRead);
+  if( rc!=SQLITE_OK || nRead==0 ) return rc;
+  if( nRead==(int)sizeof(aHdr)
+   && CS_READ_U32(aHdr+CS_MANIFEST_MAGIC_OFF)==CHUNK_STORE_MAGIC ){
+    return SQLITE_OK;
+  }
+  return doltliteSqliteSidecar(pVfs, zFilename, pbSqlite);
 }
 
 /* Version-control writes never pass OP_Transaction, so the connection's
@@ -1180,6 +1221,9 @@ static int prollyBtreeOpenImpl(
     rc = origBtreeIsSqliteFile(pVfs, zOpenFilename, &useOrig);
     if( rc==SQLITE_OK && !useOrig && !zStoreFilename ){
       rc = doltliteEmptyFileInSqliteCreation(pVfs, zOpenFilename, &useOrig);
+    }
+    if( rc==SQLITE_OK && !useOrig && !zStoreFilename ){
+      rc = doltliteTornSqliteFile(pVfs, zOpenFilename, &useOrig);
     }
     if( useOrig && zStoreFilename ){
       useOrig = 0;
