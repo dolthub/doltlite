@@ -760,6 +760,19 @@ UPDATE dolt_rebase SET commit_message = NULL WHERE rebase_order = 1;
 " "SELECT dolt_checkout('dolt_rebase_feat');
 SELECT CONCAT('LOG|', commit_message) FROM dolt_rebase ORDER BY rebase_order;"
 
+for action in bogus PICK; do
+  oracle_error_reopen "interactive_invalid_action_$action" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action='$action' WHERE rebase_order=2;
+" "
+SELECT dolt_checkout('dolt_rebase_feat');
+SELECT CONCAT('LOG|', action) FROM dolt_rebase ORDER BY rebase_order;
+SELECT dolt_rebase('--continue');
+SELECT CONCAT('LOG|', id) FROM t ORDER BY id;
+"
+done
+
 LONG_INTERACTIVE_SETUP="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);

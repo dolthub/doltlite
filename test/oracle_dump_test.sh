@@ -90,6 +90,41 @@ for format in sql sqlite; do
     "1 2 3"
 done
 
+"$DOLTLITE" "$TMP/rebase" > /dev/null <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-am','f1');
+INSERT INTO t VALUES(2);
+SELECT dolt_commit('-am','f2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(10);
+SELECT dolt_commit('-am','main');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i','main');
+SQL
+plan_query='SELECT rebase_order,action,commit_hash,commit_message FROM dolt_rebase ORDER BY rebase_order;'
+plan=$("$DOLTLITE" "$TMP/rebase/dolt_rebase_feat" "$plan_query")
+for mode in all plan rowids; do
+  case "$mode" in
+    all) command='.dump' ;;
+    plan) command='.dump dolt_rebase' ;;
+    rowids) command='.dump --preserve-rowids dolt_rebase' ;;
+  esac
+  "$DOLTLITE" "$TMP/rebase/dolt_rebase_feat" "$command" > "$TMP/rebase-$mode.sql"
+  "$SQLITE3" "$TMP/rebase-$mode.sqlite" < "$TMP/rebase-$mode.sql"
+  compare "mid-rebase $mode plan" "$("$SQLITE3" "$TMP/rebase-$mode.sqlite" "$plan_query")" "$plan"
+  compare "mid-rebase $mode integrity" "$("$SQLITE3" "$TMP/rebase-$mode.sqlite" 'PRAGMA integrity_check')" ok
+  rejected=0
+  if ! "$SQLITE3" "$TMP/rebase-$mode.sqlite" "UPDATE dolt_rebase SET action='bogus'" > /dev/null 2>&1; then
+    rejected=1
+  fi
+  compare "mid-rebase $mode action constraint" "$rejected" 1
+done
+compare "mid-rebase source unchanged" "$("$DOLTLITE" "$TMP/rebase/dolt_rebase_feat" "$plan_query")" "$plan"
+
 echo "Results: $pass passed, $fail failed"
 echo __SUITE_COMPLETE__
 [[ "$fail" == 0 ]]
