@@ -92,7 +92,7 @@ proc sqlite_file::sql_trace {command args} {
       foreach {match filename schema} [regexp -all -inline -nocase -expanded {
         \mATTACH\s+(?:DATABASE\s+)?'([^']+)'\s+AS\M(?:\s+(\w+))?
       } $sql] {
-        if {[regexp {^test[^/]*\.db[^/]*$} $filename] &&
+        if {[regexp {^[^/:]+$} $filename] &&
             (![file exists $filename] || [file size $filename]==0)} {
           native sqlite_file_seed [uri $filename] -uri 1
           set pragma [format {
