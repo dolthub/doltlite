@@ -574,11 +574,13 @@ int chunkStoreAdoptDiskState(ChunkStore *cs);
 
 /* Duplicate z with two trailing nuls (SQLITE_OPEN_MAIN_DB xOpen URI term). */
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
+int chunkStoreCanonicalFilename(sqlite3_vfs *pVfs, const char *zFilename,
+                                char **pzOut, int flags);
 int chunkStoreHostFileIsZero(const char *zPath);
+int chunkStorePathIsDirectory(sqlite3_vfs *pVfs, const char *zPath, int *pIsDir);
 int chunkStoreGetLockFile(ChunkStore *cs, sqlite3_file **ppFile);
 
-/* Read the first nBuf bytes of an existing file. *pRead is 0 when it is
-** missing, unopenable or shorter; only OOM is an error. */
+/* *pRead is true only when all nBuf header bytes were read. */
 int chunkStoreReadFileHeader(sqlite3_vfs *pVfs, const char *zFilename,
                              u8 *aBuf, int nBuf, int *pRead);
 

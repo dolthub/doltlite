@@ -109,7 +109,7 @@ int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut){
   return SQLITE_OK;
 }
 
-static int csCanonicalFilename(
+int chunkStoreCanonicalFilename(
   sqlite3_vfs *pVfs,
   const char *zFilename,
   char **pzOut,
@@ -156,6 +156,16 @@ static int csCanonicalFilename(
   return rc;
 }
 
+int chunkStorePathIsDirectory(
+  sqlite3_vfs *pVfs,
+  const char *zPath,
+  int *pIsDir
+){
+  *pIsDir = 0;
+  if( sqlite3IsDoltliteSharedMemVfs(pVfs) ) return SQLITE_OK;
+  return sqlite3OsDoltlitePathIsDirectory(zPath, pIsDir);
+}
+
 int chunkStoreReadFileHeader(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -165,9 +175,8 @@ int chunkStoreReadFileHeader(
 ){
   sqlite3_file *pFile = 0;
   int exists = 0;
+  int isDir = 0;
   int outFlags = 0;
-  int nFull;
-  char *zFull = 0;
   char *zProbe = 0;
   int rc;
 
@@ -181,20 +190,12 @@ int chunkStoreReadFileHeader(
     if( !pVfs ) return SQLITE_OK;
   }
   rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
-  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
-  if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  if( !exists ) return SQLITE_OK;
+  rc = chunkStorePathIsDirectory(pVfs, zFilename, &isDir);
+  if( rc!=SQLITE_OK || isDir ) return rc;
 
-  nFull = pVfs->mxPathname + 1;
-  zFull = sqlite3_malloc(nFull);
-  if( !zFull ) return SQLITE_NOMEM;
-  rc = sqlite3OsFullPathname(pVfs, zFilename, nFull, zFull);
-  if( rc==SQLITE_OK_SYMLINK ) rc = SQLITE_OK;
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zFull);
-    return rc;
-  }
-  rc = chunkStoreDupFilenameDoubleNul(zFull, &zProbe);
-  sqlite3_free(zFull);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &zProbe, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   /* zProbe must outlive close: unixClose logs pFile->zPath. */
@@ -204,15 +205,13 @@ int chunkStoreReadFileHeader(
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
     sqlite3_free(zProbe);
-    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
-    return SQLITE_OK;
+    return rc;
   }
   rc = sqlite3OsRead(pFile, aBuf, nBuf, 0);
   sqlite3OsCloseFree(pFile);
   sqlite3_free(zProbe);
-  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
   if( rc==SQLITE_OK ) *pRead = 1;
-  return SQLITE_OK;
+  return rc==SQLITE_IOERR_SHORT_READ ? SQLITE_OK : rc;
 }
 
 int csSyncFile(ChunkStore *cs){
@@ -441,7 +440,7 @@ static int csOpen(
     return SQLITE_CANTOPEN;
   }
 
-  rc = csCanonicalFilename(pVfs, zFilename, &cs->file.zFilename, flags);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &cs->file.zFilename, flags);
   if( rc!=SQLITE_OK ){
     chunkStoreClose(cs);
     return rc;

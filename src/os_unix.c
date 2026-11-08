@@ -4564,6 +4564,12 @@ int sqlite3OsDoltliteFileState(
 #endif
 
 #ifdef DOLTLITE_PROLLY
+int sqlite3OsDoltlitePathIsDirectory(const char *zPath, int *pIsDir){
+  struct stat st;
+  *pIsDir = osStat(zPath, &st)==0 && S_ISDIR(st.st_mode);
+  return SQLITE_OK;
+}
+
 int sqlite3OsDoltliteHasMultipleLinks(sqlite3_file *id){
   if( id==0 || id->pMethods==0
    || id->pMethods->xFileControl!=unixFileControl

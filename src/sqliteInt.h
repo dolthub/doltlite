@@ -225,6 +225,7 @@ struct DoltliteFileState {
 };
 int sqlite3OsDoltliteFileState(sqlite3_file*, DoltliteFileState*);
 int sqlite3OsDoltliteHasMultipleLinks(sqlite3_file*);
+int sqlite3OsDoltlitePathIsDirectory(const char*, int*);
 void sqlite3OsDoltliteRequestDirSync(sqlite3_file*);
 #endif
 

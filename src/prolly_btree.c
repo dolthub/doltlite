@@ -713,32 +713,6 @@ static int doltliteIsChunkStoreFile(sqlite3_vfs *pVfs, const char *zFilename,
   return SQLITE_OK;
 }
 
-/* Directories must not be opened to probe them: an unreadable one logs an
-** OS error for an ordinary open of a new file inside it. "P/" exists only
-** for a directory on POSIX. winAccess already reports a directory as
-** missing (zero size), and resolves "P/" to a file, so skip it there. */
-static int doltlitePathIsDirectory(sqlite3_vfs *pVfs, const char *zPath,
-                                   int *pIsDir){
-#if SQLITE_OS_WIN
-  (void)pVfs;
-  (void)zPath;
-  *pIsDir = 0;
-  return SQLITE_OK;
-#else
-  char *zDir;
-  int rc;
-  if( sqlite3IsDoltliteSharedMemVfs(pVfs) ){
-    *pIsDir = 0;
-    return SQLITE_OK;
-  }
-  zDir = sqlite3_mprintf("%s/", zPath);
-  if( !zDir ) return SQLITE_NOMEM;
-  rc = doltliteFileExists(pVfs, zDir, pIsDir);
-  sqlite3_free(zDir);
-  return rc;
-#endif
-}
-
 /* sqlite3_uri_parameter walks back to the four zero bytes in front of a
 ** ParseUri name. zDatabase is the store path; zFrom is the open name,
 ** which carries that prefix when SQLITE_OPEN_URI is set. The result is
@@ -822,7 +796,7 @@ static int doltliteResolveOpenBranchPath(
     if( !zParent ) return SQLITE_NOMEM;
     rc = doltliteFileExists(pVfs, zParent, &exists);
     if( rc==SQLITE_OK && exists ){
-      rc = doltlitePathIsDirectory(pVfs, zParent, &isDir);
+      rc = chunkStorePathIsDirectory(pVfs, zParent, &isDir);
     }
     if( rc==SQLITE_OK && exists && !isDir ){
       rc = doltliteIsChunkStoreFile(pVfs, zParent, &isStore);
@@ -885,8 +859,7 @@ static int doltliteFileHasContent(
   if( rc!=SQLITE_OK ) return rc;
   if( !exists ) return SQLITE_OK;
 
-  /* ParseUri names are double-nul; MAIN_DB walks URI params, so copy first. */
-  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &zDup, 0);
   if( rc!=SQLITE_OK ) return rc;
   /* The handle stores zPath, not a copy; unixClose logs it on close. */
   rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
@@ -960,7 +933,7 @@ static int doltliteEmptyFileInSqliteCreation(
     pVfs = sqlite3_vfs_find(0);
     if( !pVfs ) return SQLITE_OK;
   }
-  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &zDup, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,

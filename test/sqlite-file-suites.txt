@@ -81,6 +81,7 @@ pager1
 pager2
 pager3
 pager4
+pagerfault
 pagerfault2
 pagerfault3
 pageropt
