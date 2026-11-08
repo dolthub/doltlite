@@ -147,4 +147,29 @@ foreach directory {probe-dir probe-dir-\u2603} {
 }
 dirprobe delete
 
+testvfs existsprobe
+existsprobe filter xAccess
+existsprobe script probe_exists
+proc probe_exists {method filename op} {
+  if {$op eq "SQLITE_ACCESS_EXISTS"} {return [file exists $filename]}
+  return SQLITE_OK
+}
+do_test 9.sqlite {
+  sqlite3 db legacy.db -vfs existsprobe
+  db eval {SELECT * FROM t}
+} {2}
+catch {db close}
+sqlite3 db test.db
+db eval {
+  SELECT dolt_commit('-Am', 'probe seed');
+  SELECT dolt_branch('probe-branch');
+}
+db close
+do_test 9.branch {
+  sqlite3 db test.db/probe-branch -vfs existsprobe
+  list [db eval {SELECT * FROM t}] [db one {SELECT active_branch()}]
+} {1 probe-branch}
+catch {db close}
+existsprobe delete
+
 finish_test

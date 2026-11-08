@@ -161,22 +161,9 @@ int chunkStorePathIsDirectory(
   const char *zPath,
   int *pIsDir
 ){
-#if !SQLITE_OS_WIN
-  char *zDir;
-  int rc;
-#endif
   *pIsDir = 0;
   if( sqlite3IsDoltliteSharedMemVfs(pVfs) ) return SQLITE_OK;
-#if SQLITE_OS_WIN
   return sqlite3OsDoltlitePathIsDirectory(zPath, pIsDir);
-#else
-  /* Looking up "." would require search permission on the directory. */
-  zDir = sqlite3_mprintf("%s/", zPath);
-  if( !zDir ) return SQLITE_NOMEM;
-  rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_EXISTS, pIsDir);
-  sqlite3_free(zDir);
-  return rc;
-#endif
 }
 
 int chunkStoreReadFileHeader(

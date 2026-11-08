@@ -532,6 +532,12 @@ int sqlite3_vfs_unregister(sqlite3_vfs *pVfs){
 }
 
 #if defined(DOLTLITE_PROLLY) && SQLITE_OS_OTHER
+int sqlite3OsDoltlitePathIsDirectory(const char *zPath, int *pIsDir){
+  UNUSED_PARAMETER(zPath);
+  *pIsDir = 0;
+  return SQLITE_OK;
+}
+
 int sqlite3OsDoltliteFileState(
   sqlite3_file *id,
   DoltliteFileState *pState
