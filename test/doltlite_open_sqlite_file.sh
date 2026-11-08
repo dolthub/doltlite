@@ -551,6 +551,17 @@ want_eq "H3_add_column_default_leaves_rows_like_sqlite" \
 want_eq "H3b_add_column_default_reads_the_default" \
   "$(sq_last "SELECT count(*) || '|' || sum(c='dflt') || '|' || sum(d) FROM t;" "$AC")" "5000|5000|35000"
 
+ND=$TMP/notadb.db
+seed_stock "$ND" "CREATE TABLE t(a INTEGER PRIMARY KEY, b); INSERT INTO t VALUES(1, zeroblob(4000));"
+dd if=/dev/zero of="$ND" bs=168 count=1 conv=notrunc 2>/dev/null
+dltest_expect_integrity "$ND" 'skip:header zeroed so neither engine recognizes the file'
+rm -f "$TMP/.notadb.db-lock"
+want_eq "L1_not_a_database_open_reports_like_sqlite" \
+  "$(dl_all "SELECT count(*) FROM t;" "$ND")" \
+  "$(printf '%s\n' "SELECT count(*) FROM t;" | $SQLITE3 "$ND" 2>&1)"
+want_eq "L2_not_a_database_open_leaves_no_lock_sidecar" \
+  "$(test -e "$TMP/.notadb.db-lock" && echo sidecar || echo none)" "none"
+
 echo ""
 echo "============================="
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
