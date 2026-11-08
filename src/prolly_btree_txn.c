@@ -946,7 +946,8 @@ static int btreePresenceOpen(Btree *p){
   DoltliteBranchPresence x = {DOLTLITE_PRESENCE_PROBE,0x50000000,0};
   int rc;
   if( p->pPresenceFile ) return SQLITE_OK;
-  if( !cs || cs->isMemory || cs->isBuffer || !cs->file.pFile ){
+  if( !cs || cs->isMemory || cs->isBuffer || !cs->file.pFile
+   || cs->notADatabase ){
     return SQLITE_NOTFOUND;
   }
   rc = sqlite3OsFileControl(cs->file.pFile,
