@@ -170,7 +170,8 @@ int chunkStorePathIsDirectory(
 #if SQLITE_OS_WIN
   return sqlite3OsDoltlitePathIsDirectory(zPath, pIsDir);
 #else
-  zDir = sqlite3_mprintf("%s/.", zPath);
+  /* Looking up "." would require search permission on the directory. */
+  zDir = sqlite3_mprintf("%s/", zPath);
   if( !zDir ) return SQLITE_NOMEM;
   rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_EXISTS, pIsDir);
   sqlite3_free(zDir);

@@ -123,7 +123,7 @@ testvfs dirprobe
 dirprobe filter {xAccess xOpen}
 dirprobe script probe_directory
 proc probe_directory {method filename args} {
-  if {$method eq "xAccess" && [string match */ $filename]} {return 0}
+  if {$method eq "xAccess" && [string match */. $filename]} {return 0}
   if {[file normalize $filename] eq $::probe_parent} {
     if {$method eq "xAccess"} {return 1}
     incr ::probe_parent_opens
