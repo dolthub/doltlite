@@ -1212,7 +1212,7 @@ static int rebaseWritePlanRows(
     "DROP TABLE IF EXISTS main.dolt_rebase;"
     "CREATE TABLE main.dolt_rebase("
     "  rebase_order REAL PRIMARY KEY,"
-    "  action TEXT,"
+    "  action TEXT NOT NULL CHECK(action IN ('pick','reword','squash','fixup','drop','edit')),"
     "  commit_hash TEXT NOT NULL CHECK(dolt_rebase_commit_check(commit_hash)),"
     "  commit_message TEXT NOT NULL"
     ")");
@@ -1280,7 +1280,7 @@ static int rebaseCreateAndPopulatePlanTable(
   rc = rebaseExecPlanDdl(db,
     "CREATE TABLE main.dolt_rebase("
     "  rebase_order REAL PRIMARY KEY,"
-    "  action TEXT,"
+    "  action TEXT NOT NULL CHECK(action IN ('pick','reword','squash','fixup','drop','edit')),"
     "  commit_hash TEXT NOT NULL CHECK(dolt_rebase_commit_check(commit_hash)),"
     "  commit_message TEXT NOT NULL"
     ")");
@@ -3682,7 +3682,7 @@ static void doltliteRebaseCommitCheckFunc(
 
 int doltliteRebaseRegister(sqlite3 *db){
   int rc = sqlite3_create_function(db, "dolt_rebase_commit_check", 1,
-      SQLITE_UTF8|SQLITE_DETERMINISTIC|SQLITE_INNOCUOUS, 0,
+      SQLITE_UTF8|SQLITE_INNOCUOUS, 0,
       doltliteRebaseCommitCheckFunc, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
   return doltliteCreateCommandFunc(db, "dolt_rebase", -1,

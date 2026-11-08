@@ -589,4 +589,18 @@ vc_oracle_txn_savepoint "txnsp_checkout_b_existing" "$TXNSP_SETUP" "SELECT dolt_
 vc_oracle_txn_savepoint "txnsp_commit" "$TXNSP_SETUP" "SELECT dolt_commit('-Am', 'c')"
 vc_oracle_txn_savepoint "txnsp_commit_nothing_staged" "$TXNSP_SETUP" "SELECT dolt_commit('-m', 'c')"
 
+for branch in main side; do
+  oracle_with_rows "force_copy_self_$branch" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('side');
+SELECT dolt_checkout('$branch');
+INSERT INTO t VALUES(2,20);
+SELECT dolt_add('t');
+INSERT INTO t VALUES(3,30);
+SELECT dolt_branch('-c','-f','$branch','$branch');
+"
+done
+
 vc_oracle_finish

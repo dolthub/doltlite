@@ -4385,6 +4385,9 @@ static int db_int(sqlite3 *db, const char *zSql, ...);
 ** the table type ("index" or "table") and SQL to create the table.
 ** This routine should print text sufficient to recreate the table.
 */
+#ifdef DOLTLITE_PROLLY
+static int doltliteShellDbIsStock(sqlite3 *db);
+#endif
 static int dump_callback(void *pArg, int nArg, char **azArg, char **azNotUsed){
   int rc;
   const char *zTable;
@@ -4441,7 +4444,22 @@ static int dump_callback(void *pArg, int nArg, char **azArg, char **azNotUsed){
     sqlite3_free(zIns);
     return 0;
   }else{
+#ifdef DOLTLITE_PROLLY
+    static const char zCheck[] = "CHECK(dolt_rebase_commit_check(commit_hash))";
+    const char *zAt;
+    char *zPortable = 0;
+    if( cli_strcmp(zTable, "dolt_rebase")==0
+     && !doltliteShellDbIsStock(p->db)
+     && (zAt = strstr(zSql, zCheck))!=0 ){
+      zPortable = sqlite3_mprintf("%.*s%s", (int)(zAt-zSql), zSql,
+                                  zAt+sizeof(zCheck)-1);
+      shell_check_oom(zPortable);
+    }
+    printSchemaLine(p->out, zPortable ? zPortable : zSql, ";\n");
+    sqlite3_free(zPortable);
+#else
     printSchemaLine(p->out, zSql, ";\n");
+#endif
   }
 
   if( cli_strcmp(zType, "table")==0 ){
@@ -6309,7 +6327,6 @@ static char *SQLITE_CDECL ascii_read_one_field(ImportCtx *p){
 
 #ifndef SQLITE_SHELL_FIDDLE
 #ifdef DOLTLITE_PROLLY
-static int doltliteShellDbIsStock(sqlite3 *db);
 /*
 ** Try to transfer data for table zTable.  If an error is seen while
 ** moving forward, try to go backwards.  The backwards movement won't

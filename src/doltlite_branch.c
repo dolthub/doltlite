@@ -394,12 +394,14 @@ static void doltBranchParsedFunc(
         return;
       }
       if( force
+       && strcmp(aPositional[0], aPositional[1])!=0
        && strcmp(aPositional[1], doltliteGetSessionBranch(db))==0 ){
         branchError(ctx, hadSavepoint,
           "cannot force-update the current branch");
         return;
       }
-      if( force && branchHeldBySibling(ctx, hadSavepoint, aPositional[1]) ){
+      if( force && strcmp(aPositional[0], aPositional[1])!=0
+       && branchHeldBySibling(ctx, hadSavepoint, aPositional[1]) ){
         return;
       }
       memset(&m, 0, sizeof(m));
@@ -415,6 +417,14 @@ static void doltBranchParsedFunc(
         branchNamedResultError(ctx, hadSavepoint, rc,
           "source branch not found", "branch already exists");
         return;
+      }
+      if( force && strcmp(aPositional[1], doltliteGetSessionBranch(db))==0 ){
+        doltliteInvalidateSessionWorkingState(db);
+        rc = doltliteReloadSessionWorkingState(db);
+        if( rc!=SQLITE_OK ){
+          branchErrorCode(ctx, hadSavepoint, rc);
+          return;
+        }
       }
       break;
     }

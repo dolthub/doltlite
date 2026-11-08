@@ -1,0 +1,142 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc review_rebase_setup {} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(0);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','feat');
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-am','f1');
+    INSERT INTO t VALUES(2);
+    SELECT dolt_commit('-am','f2');
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(10);
+    SELECT dolt_commit('-am','main');
+    SELECT dolt_checkout('feat');
+    SELECT dolt_rebase('-i','main');
+  }
+}
+
+do_execsql_test review-commit-check-flags {
+  SELECT flags & 2048 FROM pragma_function_list
+    WHERE name='dolt_rebase_commit_check' AND narg=1;
+} 0
+
+foreach {name action} {bogus bogus uppercase PICK trailing {pick } empty {}} {
+  review_rebase_setup
+  set before [db eval {SELECT * FROM dolt_rebase ORDER BY rebase_order}]
+  foreach operation {update insert replace upsert} {
+    set sql [dict get [dict create \
+      update {UPDATE dolt_rebase SET action=CASE rebase_order WHEN 1 THEN 'reword' ELSE $action END} \
+      insert {INSERT INTO dolt_rebase SELECT 3,$action,commit_hash,'new' FROM dolt_rebase LIMIT 1} \
+      replace {INSERT OR REPLACE INTO dolt_rebase SELECT rebase_order,$action,commit_hash,commit_message FROM dolt_rebase} \
+      upsert {INSERT INTO dolt_rebase SELECT rebase_order,$action,commit_hash,commit_message FROM dolt_rebase WHERE 1 ON CONFLICT(rebase_order) DO UPDATE SET action=excluded.action} \
+    ] $operation]
+    do_test review-action-$name-$operation {lindex [catchsql $sql] 0} 1
+    do_test review-action-$name-$operation-atomic {
+      db eval {SELECT * FROM dolt_rebase ORDER BY rebase_order}
+    } $before
+  }
+  db eval {SELECT dolt_rebase('--abort')}
+}
+
+review_rebase_setup
+do_catchsql_test review-action-null {
+  UPDATE dolt_rebase SET action=NULL;
+} {1 {NOT NULL constraint failed: dolt_rebase.action}}
+foreach action {pick reword squash fixup drop edit} {
+  do_test review-action-valid-$action {
+    db eval {UPDATE dolt_rebase SET action=$action WHERE rebase_order=2}
+    db one {SELECT action FROM dolt_rebase WHERE rebase_order=2}
+  } $action
+}
+db eval {UPDATE dolt_rebase SET action='pick'}
+
+set shell [file join [file dirname [info nameofexecutable]] doltlite]
+if {$tcl_platform(platform) eq "windows"} {append shell .exe}
+set plan [db eval {SELECT * FROM dolt_rebase ORDER BY rebase_order}]
+foreach {name options} {all {.dump} plan {.dump dolt_rebase} rowids {.dump --preserve-rowids dolt_rebase}} {
+  set dump [exec $shell -bail [file normalize test.db]/dolt_rebase_feat $options]
+  set replay [regsub -all {\mdolt_rebase\M} $dump exported_plan]
+  sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+  sqlite3_create_function_v2 out dolt_rebase_commit_check 1 utf8
+  do_test review-dump-$name-function-absent {
+    out one {SELECT count(*) FROM pragma_function_list WHERE name='dolt_rebase_commit_check'}
+  } 0
+  do_test review-dump-$name-replay {out eval $replay} {}
+  do_test review-dump-$name-plan {
+    out eval {SELECT rebase_order,action,commit_hash,commit_message FROM exported_plan ORDER BY rebase_order}
+  } $plan
+  do_test review-dump-$name-integrity {out eval {PRAGMA integrity_check}} ok
+  out close
+}
+do_test review-dump-source-intact {
+  db eval {SELECT * FROM dolt_rebase ORDER BY rebase_order}
+} $plan
+db eval {SELECT dolt_rebase('--abort')}
+
+review_rebase_setup
+db eval {
+  PRAGMA writable_schema=ON;
+  UPDATE sqlite_schema SET sql='CREATE TABLE dolt_rebase(rebase_order REAL PRIMARY KEY,action TEXT,commit_hash TEXT,commit_message TEXT NOT NULL)'
+    WHERE name='dolt_rebase' AND type='table';
+  PRAGMA writable_schema=OFF;
+}
+db close
+sqlite3 db test.db/dolt_rebase_feat
+db eval {UPDATE dolt_rebase SET action='bogus' WHERE rebase_order=2}
+do_catchsql_test review-legacy-action-continue {
+  SELECT dolt_rebase('--continue');
+} {1 {unknown rebase action "bogus": expected pick, reword, squash, fixup, drop or edit}}
+do_execsql_test review-legacy-action-repair {
+  UPDATE dolt_rebase SET action='pick';
+  SELECT count(*) FROM dolt_rebase;
+} 2
+db eval {SELECT dolt_rebase('--continue')}
+do_execsql_test review-legacy-action-rows {SELECT id FROM t ORDER BY id} {0 1 2 10}
+
+foreach branch {main side} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY);
+    INSERT INTO t VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+  }
+  db eval {SELECT dolt_checkout($branch); INSERT INTO t VALUES(2); SELECT dolt_add('t'); INSERT INTO t VALUES(3)}
+  set head [db one {SELECT dolt_hashof('HEAD')}]
+  sqlite3 holder test.db/$branch
+  do_execsql_test review-self-copy-$branch {SELECT dolt_branch('-c','-f',$branch,$branch)} 0
+  do_test review-self-copy-$branch-head {db one {SELECT dolt_hashof('HEAD')}} $head
+  do_execsql_test review-self-copy-$branch-reset {
+    SELECT id FROM t ORDER BY id;
+    SELECT count(*) FROM dolt_status;
+  } {1 0}
+  do_catchsql_test review-self-copy-$branch-no-force {
+    SELECT dolt_branch('-c',$branch,$branch);
+  } {1 {branch already exists}}
+  holder close
+}
+do_catchsql_test review-self-copy-missing {
+  SELECT dolt_branch('-c','-f','missing','missing');
+} {1 {source branch not found}}
+
+reset_db
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('feat');
+  ATTACH 'test.db/feat' AS f;
+  SELECT * FROM f.t;
+}
+sqlite3 peer test.db
+do_test review-attached-branch-deletion {peer eval {SELECT dolt_branch('-d','feat')}} 0
+do_catchsql_test review-attached-deleted-write {INSERT INTO f.t VALUES(2)} \
+  {1 {cannot write: branch 'feat' no longer exists}}
+peer close
+
+finish_test

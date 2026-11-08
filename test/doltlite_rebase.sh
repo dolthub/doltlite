@@ -31,12 +31,11 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
 SELECT dolt_checkout('feat');
 SQL
 
-# Invalid-plan --continue must leave the rebase in progress (one session).
-run_test_error_match "invalid_plan_continue_errors" \
+run_test_error_match "invalid_plan_write_errors" \
   "SELECT dolt_rebase('-i', 'main');
    UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';
    SELECT dolt_rebase('--continue');" \
-  "rebase failed|no rebase in progress" \
+  "CHECK constraint failed" \
   "$DB"
 run_test "invalid_plan_branch_preserved" \
   "SELECT active_branch();" \
@@ -293,7 +292,6 @@ base,feat
 base" \
   "$DB_OTHER_ABORT"
 
-# Unrecognised verb must name the error; plan and working branch stay for --continue.
 DB4=/tmp/test_rebase_verb_$$.db
 seed_verb_repo() {
   rm -f "$1"
@@ -309,12 +307,12 @@ SQL
 }
 
 seed_verb_repo "$DB4"
-run_test_error_match "unknown_plan_action_names_the_action" \
+run_test_error_match "unknown_plan_action_rejected_on_write" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');
    UPDATE dolt_rebase SET action='oops';
    SELECT dolt_rebase('--continue');" \
-  'unknown rebase action "oops": expected pick, reword, squash, fixup, drop or edit' \
+  'CHECK constraint failed' \
   "$DB4"
 
 seed_verb_repo "$DB4"
@@ -322,11 +320,10 @@ run_test_error_output_match "unknown_plan_action_stays_resumable" \
   "SELECT dolt_checkout('feat');
    SELECT dolt_rebase('-i','main');
    UPDATE dolt_rebase SET action='oops';
-   SELECT dolt_rebase('--continue');
    UPDATE dolt_rebase SET action='pick';
    SELECT dolt_rebase('--continue');" \
   "Successfully rebased and updated refs/heads/feat" \
-  "$DB4" 'unknown\ rebase\ action\ "oops":\ expected\ pick,\ reword,\ squash,\ fixup,\ drop\ or\ edit'
+  "$DB4" 'CHECK\ constraint\ failed'
 
 BRANCH63=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 BRANCH64=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
