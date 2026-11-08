@@ -658,7 +658,10 @@ int btreeReloadBranchWorkingStateInto(
   if( (state.isRebasing & WS_REBASE_FLAG_EDIT)==0 ){
     memset(&p->rebaseEditCommit, 0, sizeof(p->rebaseEditCommit));
   }
-  if( bLoadCatalog ) btreeRememberWorkingSet(p);
+  if( bLoadCatalog ){
+    btreeRememberWorkingSet(p);
+    p->iLoadedRefreshGen = pBt->pStore->refreshGen;
+  }
   return SQLITE_OK;
 }
 
@@ -872,10 +875,12 @@ int btreeRefreshFromDisk(Btree *p){
   ProllyHash oldTip, oldWs;
   int hadOldTip = 0;
   u32 oldReloadGen;
+  u64 oldRefreshGen;
   int rc;
 
   assert( p!=0 && p->pBt!=0 );
   pBt = p->pBt;
+  oldRefreshGen = pBt->pStore->refreshGen;
   snapshotPinned = pBt->pStore->snapshotPinned;
   bAutocommitBoundary = p->inTrans==TRANS_NONE
     && p->db && p->db->autoCommit && !p->db->pSavepoint;
@@ -899,8 +904,13 @@ int btreeRefreshFromDisk(Btree *p){
     pBt->pStore->snapshotPinned = snapshotPinned;
   }
   if( rc!=SQLITE_OK ) return rc;
-  if( !bChanged ) return SQLITE_OK;
-  if( p->isDetached ) return SQLITE_OK;
+  if( !bChanged && p->iLoadedRefreshGen==pBt->pStore->refreshGen ){
+    return SQLITE_OK;
+  }
+  if( p->isDetached ){
+    p->iLoadedRefreshGen = pBt->pStore->refreshGen;
+    return SQLITE_OK;
+  }
 
   /* Peers moved other branches only: this session's view is intact, so
   ** keep its catalog and prepared statements undisturbed. Only sound
@@ -908,7 +918,8 @@ int btreeRefreshFromDisk(Btree *p){
   ** wholesale) and while the view really is loaded — a failed statement
   ** drops the catalog without moving the tip, and skipping then would
   ** latch the empty catalog. */
-  if( hadOldTip && pBt->pStore->reloadGen==oldReloadGen
+  if( p->iLoadedRefreshGen==oldRefreshGen
+   && hadOldTip && pBt->pStore->reloadGen==oldReloadGen
    && !p->bCatalogDropped ){
     const char *zBr = p->zBranch ? p->zBranch : "main";
     ProllyHash newTip, newWs;
@@ -919,6 +930,7 @@ int btreeRefreshFromDisk(Btree *p){
       (void)chunkStoreGetBranchWorkingSet(pBt->pStore, zBr, &newWs);
       if( prollyHashCompare(&newWs, &oldWs)==0 ){
         /* The refs dolt_branches and dolt_tags read still changed. */
+        p->iLoadedRefreshGen = pBt->pStore->refreshGen;
         btreeBumpExternalDataVersion(p);
         return SQLITE_OK;
       }

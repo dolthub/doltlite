@@ -1571,6 +1571,7 @@ static int prollyBtreeOpenImpl(
     p->bDeferredRegister = 1;
   }
 
+  p->iLoadedRefreshGen = pBt->pStore->refreshGen;
   releaseOpenStoreFilename(zStoreFilename, bStoreUri);
   return SQLITE_OK;
 }

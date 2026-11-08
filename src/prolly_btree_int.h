@@ -323,6 +323,7 @@ struct Btree {
   u8 inTrans;
   u32 iBDataVersion;
   u32 iLoadedWorkingStateVersion;
+  u64 iLoadedRefreshGen;
   Btree *pNext;
   u64 nSeek;
   int nBackup;

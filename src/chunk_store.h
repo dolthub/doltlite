@@ -320,6 +320,7 @@ struct ChunkStore {
   /* Bumped on every full reload-from-disk. Session-level state caches
   ** (catalog, working roots) are only valid while this is unchanged. */
   u32 reloadGen;
+  u64 refreshGen;
   /* Puts satisfied by an already-stored chunk since the last publish. They
   ** wrote nothing, so a peer's gc may have swept them if unreferenced. */
   ProllyHash *aStoredHit;
