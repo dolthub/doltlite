@@ -122,6 +122,7 @@ vacuum
 vacuum2
 vacuum4
 vacuum5
+wal
 wal2
 wal3
 wal4
