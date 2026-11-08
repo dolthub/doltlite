@@ -18,6 +18,8 @@ struct RowMergeCtx {
 
   DoltliteConflictRow *aConflicts;
   int nConflictsAlloc;
+  VbTable *pVbCheck;
+  VirtualBaseCells *pVbCollect;
 };
 
 static int mergeGeneratedField(Table *pTab, int iField){
@@ -381,6 +383,9 @@ static u8 *tryCellMerge(
   const u8 *pBase, int nBase,
   const u8 *pOurs, int nOurs,
   const u8 *pTheirs, int nTheirs,
+  const VbRow *pForced,
+  int **paKeptBase,
+  int *pnKeptBase,
   int *pnMerged
 ){
   RecField *aBase=0, *aOurs=0, *aTheirs=0;
@@ -407,6 +412,11 @@ static u8 *tryCellMerge(
 
     winners = sqlite3_malloc(nfMax * (int)sizeof(*winners));
     if(!winners) goto fail;
+    if( paKeptBase ){
+      *pnKeptBase = 0;
+      *paKeptBase = sqlite3_malloc((nfMax ? nfMax : 1) * (int)sizeof(int));
+      if( !*paKeptBase ){ sqlite3_free(winners); goto fail; }
+    }
 
     for(i=0; i<nfMax; i++){
       RecField *fB = (i<nfBase)   ? &aBase[i]   : (RecField*)&kNullField;
@@ -449,6 +459,9 @@ static u8 *tryCellMerge(
       }else if( fieldIsDualAdd(pPolicy, i) ){
         oursChanged = 1;
         theirsChanged = 1;
+      }else if( mergeVbRowForces(pForced, i) ){
+        oursChanged = 1;
+        theirsChanged = 1;
       }else{
         oursChanged   = fieldEquals(pBase, fB, pOurs, fO)!=0;
         theirsChanged = fieldEquals(pBase, fB, pTheirs, fT)!=0;
@@ -464,6 +477,9 @@ static u8 *tryCellMerge(
              || fieldNumbersEqual(pOurs, fO, pTheirs, fT) ){
 
         winners[i].pRec = pOurs; winners[i].pField = fO;
+      }else if( paKeptBase && pBase && nBase>0 ){
+        winners[i].pRec = pBase; winners[i].pField = fB;
+        (*paKeptBase)[(*pnKeptBase)++] = i;
       }else{
         sqlite3_free(winners); goto fail;
       }
@@ -490,6 +506,11 @@ fail:
   sqlite3_free(aBase);
   sqlite3_free(aOurs);
   sqlite3_free(aTheirs);
+  if( paKeptBase ){
+    sqlite3_free(*paKeptBase);
+    *paKeptBase = 0;
+    *pnKeptBase = 0;
+  }
   *pnMerged = 0;
   return 0;
 }
@@ -569,9 +590,127 @@ static int mergeIndexRowDelta(
   return rc;
 }
 
+static int vbTableKeyless(Table *pTab){
+  return HasRowid(pTab) && pTab->iPKey<0 && sqlite3PrimaryKeyIndex(pTab)==0;
+}
+
+static int vbSidesDiffer(
+  RowMergeCtx *ctx, const VbRow *pRow,
+  int bL, const u8 *pL, int nL,
+  int bR, const u8 *pR, int nR,
+  int *pbDiffer
+){
+  static const RecField kNullField = { 0, 0, 0 };
+  RecField *aL = 0, *aR = 0;
+  int nfL = 0, nfR = 0, nf, i;
+
+  *pbDiffer = 0;
+  if( bL!=bR ){
+    *pbDiffer = 1;
+    return SQLITE_OK;
+  }
+  if( !bL ) return SQLITE_OK;
+  if( vbTableKeyless(ctx->pTable) ){
+    *pbDiffer = nL!=nR || (nL>0 && memcmp(pL, pR, nL)!=0);
+    return SQLITE_OK;
+  }
+  if( parseRecordFields(pL, nL, &aL, &nfL)<0
+   || parseRecordFields(pR, nR, &aR, &nfR)<0 ){
+    sqlite3_free(aL);
+    sqlite3_free(aR);
+    return SQLITE_CORRUPT;
+  }
+  nf = nfL>nfR ? nfL : nfR;
+  for(i=0; i<nf && !*pbDiffer; i++){
+    const RecField *fL = i<nfL ? &aL[i] : &kNullField;
+    const RecField *fR = i<nfR ? &aR[i] : &kNullField;
+    if( !mergeVbRowForces(pRow, i) || mergeGeneratedField(ctx->pGeneratedTable, i) ){
+      continue;
+    }
+    *pbDiffer = fieldEquals(pL, fL, pR, fR)!=0
+             && !fieldNumbersEqual(pL, fL, pR, fR);
+  }
+  sqlite3_free(aL);
+  sqlite3_free(aR);
+  return SQLITE_OK;
+}
+
+/* A one-sided change to a row with conflicted cells conflicts unless both
+** sides hold the same value in those cells. */
+static int vbCheckChange(
+  RowMergeCtx *ctx, const ThreeWayChange *p, const VbRow *pRow,
+  ThreeWayChange *pOut, int *pbConflict
+){
+  MergeVbSides sides;
+  int bDiffer = 0, rc;
+
+  *pbConflict = 0;
+  if( !mergeVbOneSided(p, &sides) ) return SQLITE_OK;
+  rc = vbSidesDiffer(ctx, pRow, sides.bL, sides.pL, sides.nL,
+                     sides.bR, sides.pR, sides.nR, &bDiffer);
+  if( rc!=SQLITE_OK || !bDiffer ) return rc;
+  mergeVbConflictChange(p, &sides, pOut);
+  *pbConflict = 1;
+  return SQLITE_OK;
+}
+
+/* Building a virtual merge base: a conflicted cell keeps the base value and
+** is recorded, as is a conflicted row, which keeps the base row whole. */
+static int vbKeepBase(
+  RowMergeCtx *ctx, const ThreeWayChange *p, const VbRow *pForced
+){
+  int bOurs = p->pOurVal!=0;
+  int rc;
+
+  if( p->pBaseVal && p->nBaseVal>0 && p->nOurVal>0 && p->nTheirVal>0
+   && !vbTableKeyless(ctx->pTable) && !mergeVbRowWhole(pForced) ){
+    int *aKept = 0;
+    int nKept = 0, nMerged = 0;
+    u8 *pMerged = tryCellMerge(ctx->pGeneratedTable, 0,
+        p->pBaseVal, p->nBaseVal, p->pOurVal, p->nOurVal,
+        p->pTheirVal, p->nTheirVal, pForced, &aKept, &nKept, &nMerged);
+    if( !pMerged ) return SQLITE_NOMEM;
+    rc = mergeGeneratedRecord(ctx->db, ctx->pGeneratedTable,
+        &ctx->pGeneratedStmt, p->intKey, &pMerged, &nMerged);
+    if( rc==SQLITE_OK ){
+      rc = prollyMutMapInsert(ctx->pEdits, p->pKey, p->nKey, p->intKey,
+                              pMerged, nMerged);
+    }
+    if( rc==SQLITE_OK ){
+      rc = mergeIndexRowDelta(ctx, p, 1, p->pOurVal, p->nOurVal,
+                              1, pMerged, nMerged);
+    }
+    if( rc==SQLITE_OK && nKept>0 ){
+      rc = mergeVbCollect(ctx->pVbCollect, ctx->pTable->zName, p, 0,
+                          aKept, nKept);
+    }
+    sqlite3_free(pMerged);
+    sqlite3_free(aKept);
+    return rc;
+  }
+  if( p->pBaseVal ){
+    rc = prollyMutMapInsert(ctx->pEdits, p->pKey, p->nKey, p->intKey,
+                            p->pBaseVal, p->nBaseVal);
+    if( rc==SQLITE_OK ){
+      rc = mergeIndexRowDelta(ctx, p, bOurs, p->pOurVal, p->nOurVal,
+                              1, p->pBaseVal, p->nBaseVal);
+    }
+  }else{
+    rc = prollyMutMapDelete(ctx->pEdits, p->pKey, p->nKey, p->intKey);
+    if( rc==SQLITE_OK && bOurs ){
+      rc = mergeIndexRowDelta(ctx, p, 1, p->pOurVal, p->nOurVal, 0, 0, 0);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = mergeVbCollect(ctx->pVbCollect, ctx->pTable->zName, p, 1, 0, 0);
+  }
+  return rc;
+}
+
 static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
   ThreeWayChange change;
+  const VbRow *pForced = 0;
   int rc = SQLITE_OK;
 
   if( ctx->pPolicy && ctx->pPolicy->nDropFields>0 && pChange->pBaseVal ){
@@ -589,6 +728,19 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       change.type = THREE_WAY_CONFLICT_MM;
     }
     pChange = &change;
+  }
+
+  if( ctx->pVbCheck ){
+    pForced = mergeVbFindRow(ctx->pVbCheck, pChange);
+    if( pForced ){
+      int bConflict = 0;
+      rc = vbCheckChange(ctx, pChange, pForced, &change, &bConflict);
+      if( rc!=SQLITE_OK ) return rc;
+      if( bConflict ){
+        pChange = &change;
+        goto record_conflict;
+      }
+    }
   }
 
   switch( pChange->type ){
@@ -714,7 +866,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       pMerged = tryCellMerge(
           ctx->pGeneratedTable, ctx->pPolicy,
           pChange->pBaseVal, pChange->nBaseVal,
-          pOurs, nOurs, pTheirs, nTheirs, &nMerged);
+          pOurs, nOurs, pTheirs, nTheirs, pForced, 0, 0, &nMerged);
       sqlite3_free(pKeyRecord);
 
       if( pMerged ){
@@ -786,6 +938,10 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         }
       }
 
+record_conflict:
+      if( ctx->pVbCollect && ctx->pTable && !ctx->pPolicy ){
+        return vbKeepBase(ctx, pChange, pForced);
+      }
       rc = DOLTLITE_GROW_ARRAY(&ctx->aConflicts, &ctx->nConflictsAlloc,
                                 ctx->nConflicts + 1, 16);
       if( rc!=SQLITE_OK ) return rc;
@@ -1558,6 +1714,11 @@ int mergeTableRows(
   memset(&ctx, 0, sizeof(ctx));
   ctx.db = db;
   ctx.pTable = pTab;
+  if( pTab ){
+    rc = mergeVbBind(db, pTab->zName, pPolicy!=0,
+                     &ctx.pVbCheck, &ctx.pVbCollect);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( pTab && (pTab->tabFlags & TF_HasStored)!=0 ){
     ctx.pGeneratedTable = pTab;
   }

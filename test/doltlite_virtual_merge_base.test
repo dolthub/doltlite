@@ -164,7 +164,7 @@ foreach mode {autocommit transaction savepoint} {
   }
   do_catchsql_test virtual-base-ambiguous-$mode {
     SELECT dolt_merge('side');
-  } {1 {cannot merge: common ancestors conflict while building virtual merge base}}
+  } {1 {Merge has 1 conflict(s). Resolve and then commit with dolt_commit.}}
   if {![sqlite3_get_autocommit db]} {execsql ROLLBACK}
   do_test virtual-base-ambiguous-$mode-preserved {
     list [expr {$before eq [execsql {
@@ -476,5 +476,49 @@ do_execsql_test virtual-base-fts5 {
   INSERT INTO docs(docs) VALUES('integrity-check');
   PRAGMA integrity_check;
 } {1 0 1 0 0 1 0 1 0 1 0 1 0 1 0 1 {alpha,left words,main more,right words,side more} 4 ok}
+
+foreach {name tipEdit mainEdit expect} {
+  clean {} {} {0 {1 1 2 6 3 5} {} {}}
+  tips-differ {UPDATE t SET a=7 WHERE id=1} {} {1 {1 1 2 6 3 5} {t 1} {0 1 7}}
+  back-to-base {} {UPDATE t SET a=0 WHERE id=1} {1 {1 0 2 6 3 5} {t 1} {0 0 1}}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY,a INT);
+    INSERT INTO t VALUES(1,0),(2,0),(3,0);
+    SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side');
+    UPDATE t SET a=1 WHERE id=1; SELECT dolt_commit('-am','m1');
+    SELECT dolt_tag('m1'); SELECT dolt_checkout('side');
+    UPDATE t SET a=2 WHERE id=1; SELECT dolt_commit('-am','s1');
+    SELECT dolt_checkout('main'); BEGIN;
+  }
+  catchsql {SELECT dolt_merge('side','--no-ff','-m','mm')}
+  execsql {
+    SELECT dolt_conflicts_resolve('--ours','t'); SELECT dolt_commit('-am','mm');
+    COMMIT; SELECT dolt_checkout('side'); BEGIN;
+  }
+  catchsql {SELECT dolt_merge('m1','--no-ff','-m','sm')}
+  execsql {
+    SELECT dolt_conflicts_resolve('--theirs','t'); SELECT dolt_commit('-am','sm');
+    COMMIT; SELECT dolt_checkout('main'); UPDATE t SET a=5 WHERE id=3;
+  }
+  execsql $mainEdit
+  execsql {
+    SELECT dolt_commit('-am','m2'); SELECT dolt_checkout('side');
+    UPDATE t SET a=6 WHERE id=2;
+  }
+  execsql $tipEdit
+  execsql {
+    SELECT dolt_commit('-am','s2'); SELECT dolt_checkout('main'); BEGIN;
+  }
+  do_test virtual-base-cells-$name {
+    list [lindex [catchsql {SELECT dolt_merge('side')}] 0] \
+         [execsql {SELECT id,a FROM t ORDER BY id}] \
+         [execsql {SELECT * FROM dolt_conflicts}] \
+         [execsql {SELECT base_a,our_a,their_a FROM dolt_conflicts_t}]
+  } $expect
+  do_execsql_test virtual-base-cells-$name-integrity {PRAGMA integrity_check} ok
+  execsql ROLLBACK
+}
 
 finish_test

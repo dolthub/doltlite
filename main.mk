@@ -1704,6 +1704,9 @@ doltlite_merge_rebuild.o:	$(TOP)/src/doltlite_merge_rebuild.c $(TOP)/src/doltlit
 doltlite_merge_rows.o:	$(TOP)/src/doltlite_merge_rows.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_rows.c
 
+doltlite_merge_vbase.o:	$(TOP)/src/doltlite_merge_vbase.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_vbase.c
+
 doltlite_merge_index_key.o:	$(TOP)/src/doltlite_merge_index_key.c $(TOP)/src/doltlite_merge_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge_index_key.c
 
