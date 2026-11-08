@@ -32,9 +32,9 @@ SELECT dolt_checkout('feat');
 SQL
 
 run_test_error_match "invalid_plan_write_errors" \
-  "SELECT dolt_rebase('-i', 'main');
-   UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';
-   SELECT dolt_rebase('--continue');" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i', 'main');
+   UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';" \
   "CHECK constraint failed" \
   "$DB"
 run_test "invalid_plan_branch_preserved" \
@@ -45,9 +45,13 @@ run_test "invalid_plan_table_preserved" \
   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase';" \
   "0" \
   "$DB"
+run_test "invalid_plan_working_table_preserved" \
+  "SELECT count(*) FROM dolt_rebase;" \
+  "3" \
+  "$DB/dolt_rebase_feat"
 run_test "invalid_plan_abort_works" \
   "SELECT dolt_rebase('--abort');" \
-  "Error near line 1: no rebase in progress" \
+  "Interactive rebase aborted" \
   "$DB"
 run_test "invalid_plan_abort_restores_branch" \
   "SELECT active_branch();" \

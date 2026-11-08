@@ -13133,7 +13133,10 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
 
   res = queryScalarText(db, "UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1'");
   check("rebase_invalid_plan_returns_error",
-        strcmp(res, "")==0);
+        strstr(res, "ERROR: CHECK constraint failed:")!=0);
+  check("rebase_invalid_plan_keeps_actions",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_rebase WHERE action='pick'"), "3")==0);
   check("rebase_invalid_plan_keeps_working_branch",
         strcmp(queryScalarText(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_invalid_plan_keeps_plan_table",
