@@ -109,7 +109,7 @@ int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut){
   return SQLITE_OK;
 }
 
-static int csCanonicalFilename(
+int chunkStoreCanonicalFilename(
   sqlite3_vfs *pVfs,
   const char *zFilename,
   char **pzOut,
@@ -185,8 +185,6 @@ int chunkStoreReadFileHeader(
   int exists = 0;
   int isDir = 0;
   int outFlags = 0;
-  int nFull;
-  char *zFull = 0;
   char *zProbe = 0;
   int rc;
 
@@ -205,17 +203,7 @@ int chunkStoreReadFileHeader(
   rc = chunkStorePathIsDirectory(pVfs, zFilename, &isDir);
   if( rc!=SQLITE_OK || isDir ) return rc;
 
-  nFull = pVfs->mxPathname + 1;
-  zFull = sqlite3_malloc(nFull);
-  if( !zFull ) return SQLITE_NOMEM;
-  rc = sqlite3OsFullPathname(pVfs, zFilename, nFull, zFull);
-  if( rc==SQLITE_OK_SYMLINK ) rc = SQLITE_OK;
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zFull);
-    return rc;
-  }
-  rc = chunkStoreDupFilenameDoubleNul(zFull, &zProbe);
-  sqlite3_free(zFull);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &zProbe, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   /* zProbe must outlive close: unixClose logs pFile->zPath. */
@@ -460,7 +448,7 @@ static int csOpen(
     return SQLITE_CANTOPEN;
   }
 
-  rc = csCanonicalFilename(pVfs, zFilename, &cs->file.zFilename, flags);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &cs->file.zFilename, flags);
   if( rc!=SQLITE_OK ){
     chunkStoreClose(cs);
     return rc;

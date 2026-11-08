@@ -859,8 +859,7 @@ static int doltliteFileHasContent(
   if( rc!=SQLITE_OK ) return rc;
   if( !exists ) return SQLITE_OK;
 
-  /* ParseUri names are double-nul; MAIN_DB walks URI params, so copy first. */
-  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &zDup, 0);
   if( rc!=SQLITE_OK ) return rc;
   /* The handle stores zPath, not a copy; unixClose logs it on close. */
   rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
@@ -934,7 +933,7 @@ static int doltliteEmptyFileInSqliteCreation(
     pVfs = sqlite3_vfs_find(0);
     if( !pVfs ) return SQLITE_OK;
   }
-  rc = chunkStoreDupFilenameDoubleNul(zFilename, &zDup);
+  rc = chunkStoreCanonicalFilename(pVfs, zFilename, &zDup, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3OsOpenMalloc(pVfs, zDup, &pFile,
                            SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,

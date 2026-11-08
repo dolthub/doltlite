@@ -11,6 +11,11 @@ forcedelete legacy.db
 sqlite3 legacy file:legacy.db?doltlite_engine=sqlite -uri 1
 legacy eval {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(2)}
 legacy close
+do_test 1.1 {
+  sqlite3 legacy file:legacy.db?doltlite_engine=sqlite -uri 1
+  legacy eval {SELECT * FROM t}
+} {2}
+legacy close
 
 testvfs probe -default 1
 probe script probe_error
