@@ -4329,6 +4329,16 @@ static int winIsDir(LPCWSTR zConverted){
   return (attr!=INVALID_FILE_ATTRIBUTES) && (attr&FILE_ATTRIBUTE_DIRECTORY);
 }
 
+#ifdef DOLTLITE_PROLLY
+int sqlite3OsDoltlitePathIsDirectory(const char *zPath, int *pIsDir){
+  LPWSTR zConverted = winConvertFromUtf8Filename(zPath);
+  if( !zConverted ) return SQLITE_IOERR_NOMEM_BKPT;
+  *pIsDir = winIsDir(zConverted);
+  sqlite3_free(zConverted);
+  return SQLITE_OK;
+}
+#endif
+
 /* forward reference */
 static int winAccess(
   sqlite3_vfs *pVfs,         /* Not used on win32 */
