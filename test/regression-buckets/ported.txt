@@ -239,6 +239,7 @@ doltlite_record_affinity
 doltlite_integrity_nocase_nul
 doltlite_shared_store_refresh
 doltlite_expression_index_affinity
+doltlite_sqlite_file_autovacuum
 doltlite_sqlite_file_engine
 doltlite_vc_review
 doltlite_staged_index_collision

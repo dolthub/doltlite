@@ -162,6 +162,95 @@ def vc_cases(engine, stock, directory):
                                    "VALUES('kept','main');"), stock_file
 
 
+class Session:
+    def __init__(self, binary, database, directory, name):
+        self.out = directory / (name + ".out")
+        self.err_path = directory / (name + ".err")
+        self.err = open(self.err_path, "wb")
+        self.seen = 0
+        self.process = subprocess.Popen([str(binary), str(database)],
+                                        stdin=subprocess.PIPE,
+                                        stdout=subprocess.DEVNULL,
+                                        stderr=self.err, cwd=directory)
+
+    def step(self, sql):
+        self.out.unlink(missing_ok=True)
+        script = ".output %s\n%s\n.print __step__\n.output stdout\n" % (
+            json.dumps(str(self.out)), sql)
+        self.process.stdin.write(script.encode())
+        self.process.stdin.flush()
+        deadline = time.monotonic() + 20
+        while not self.out.exists() or not self.out.read_bytes().endswith(b"__step__\n"):
+            if self.process.poll() is not None or time.monotonic() >= deadline:
+                raise RuntimeError("session stopped during: " + sql)
+            time.sleep(0.01)
+        errors = self.err_path.read_bytes()[self.seen:]
+        self.seen += len(errors)
+        return self.out.read_bytes()[:-len(b"__step__\n")] + b"!" + errors
+
+    def close(self):
+        if self.process.poll() is None:
+            self.process.stdin.close()
+            self.process.wait(timeout=20)
+        self.err.close()
+
+
+# Two writers on one stock file, one SQL statement block at a time: each
+# takes the write lock in turn, the other reads and is refused meanwhile.
+INTERLEAVE = (
+    ("b", "BEGIN; INSERT INTO t VALUES(2,'b');"),
+    ("a", "SELECT count(*) FROM t;"),
+    ("a", "INSERT INTO t VALUES(3,'a');"),
+    ("b", "COMMIT;"),
+    ("a", "INSERT INTO t VALUES(3,'a'); SELECT group_concat(id) FROM t;"),
+    ("a", "BEGIN IMMEDIATE; UPDATE t SET who='a2' WHERE id=2;"),
+    ("b", "SELECT who FROM t WHERE id=2;"),
+    ("b", "INSERT INTO t VALUES(4,'b');"),
+    ("a", "COMMIT;"),
+    ("b", "SELECT who FROM t WHERE id=2; INSERT INTO t VALUES(4,'b');"),
+    ("b", "BEGIN; SELECT count(*) FROM t;"),
+    ("a", "INSERT INTO t VALUES(5,'a');"),
+    ("b", "SELECT count(*) FROM t; COMMIT; SELECT count(*) FROM t;"),
+    ("a", "INSERT OR IGNORE INTO t VALUES(5,'a'); PRAGMA integrity_check;"),
+)
+
+
+def interleave_run(first, second, stock, journal, directory):
+    directory.mkdir()
+    database = directory / "test.db"
+    run(stock, database, "PRAGMA journal_mode=%s; CREATE TABLE t(id INTEGER PRIMARY KEY,"
+        "who TEXT); INSERT INTO t VALUES(1,'seed');" % journal)
+    sessions = {"a": Session(first, database, directory, "a"),
+                "b": Session(second, database, directory, "b")}
+    try:
+        transcript = [name.encode() + b":" + sessions[name].step(sql)
+                      for name, sql in INTERLEAVE]
+    finally:
+        for session in sessions.values():
+            session.close()
+    for name in ("a.out", "b.out", "a.err", "b.err"):
+        (directory / name).unlink()
+    final = run(stock, database, "PRAGMA journal_mode; PRAGMA integrity_check;"
+                "SELECT group_concat(id||who) FROM (SELECT * FROM t ORDER BY id);")
+    return transcript, final, sorted(p.name for p in directory.iterdir())
+
+
+def interleave_case(engine, stock, journal, doltlite_first, directory):
+    expected = interleave_run(stock, stock, stock, journal, directory / "stock")
+    pair = (engine, stock) if doltlite_first else (stock, engine)
+    actual = interleave_run(pair[0], pair[1], stock, journal, directory / "doltlite")
+    for step, (want, got) in enumerate(zip(expected[0], actual[0])):
+        if want != got:
+            raise AssertionError("step %d (%s) differs: stock=%r, DoltLite=%r" % (
+                step + 1, INTERLEAVE[step][1], want, got))
+    if expected[1] != actual[1]:
+        raise AssertionError("final state differs: stock=%r, DoltLite=%r" % (
+            expected[1], actual[1]))
+    if expected[2] != actual[2]:
+        raise AssertionError("files differ: stock=%s, DoltLite=%s" % (
+            expected[2], actual[2]))
+
+
 def vc_case(engine, source, sql, attached, directory):
     database = directory / "test.db"
     shutil.copyfile(source, database)
@@ -184,10 +273,11 @@ def main():
     parser.add_argument("stock", type=Path)
     parser.add_argument("--corpus", nargs="+", choices=CORPUS + ("all",))
     parser.add_argument("--vc", action="store_true")
+    parser.add_argument("--interleave", action="store_true")
     parser.add_argument("--save-dir", type=Path)
     args = parser.parse_args()
-    if not args.corpus and not args.vc:
-        parser.error("select --corpus cases or --vc")
+    if not args.corpus and not args.vc and not args.interleave:
+        parser.error("select --corpus cases, --vc or --interleave")
     engine, stock = args.doltlite.resolve(), args.stock.resolve()
     subprocess.run(["bash", str(Path(__file__).with_name("assert_stock_reference.sh")),
                     str(stock), str(engine)], check=True)
@@ -222,6 +312,13 @@ def main():
                     mode = "attach" if attached else "main"
                     attempt(name + "/" + mode, lambda path, s=sql, a=attached:
                             vc_case(engine, source, s, a, path))
+        if args.interleave:
+            for journal in ("delete", "wal"):
+                for doltlite_first in (False, True):
+                    name = "interleave/%s/%s" % (
+                        journal, "doltlite-first" if doltlite_first else "stock-first")
+                    attempt(name, lambda path, j=journal, d=doltlite_first:
+                            interleave_case(engine, stock, j, d, path))
     print("Results: %d passed, %d failed" % (passed, failed), flush=True)
     return int(failed != 0)
 

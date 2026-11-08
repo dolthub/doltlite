@@ -1,0 +1,51 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_sqlite_file_autovacuum
+
+proc autovac_cb {schema filesize freesize pagesize} {
+  lappend ::autovac $schema $filesize $freesize $pagesize
+  return [expr {$freesize/2}]
+}
+
+proc seed_autovacuum {filename} {
+  forcedelete $filename
+  sqlite3 seed file:$filename?doltlite_engine=sqlite -uri 1
+  seed eval {
+    PRAGMA page_size=1024;
+    PRAGMA auto_vacuum=FULL;
+    CREATE TABLE t1(x);
+    VACUUM;
+    INSERT INTO t1 VALUES(zeroblob(10000));
+  }
+  seed close
+}
+
+seed_autovacuum stock-av.db
+do_execsql_test 1.0 {
+  ATTACH 'stock-av.db' AS aux;
+  PRAGMA aux.page_count;
+} {12}
+sqlite3_autovacuum_pages db autovac_cb
+set ::autovac {}
+do_execsql_test 1.1 {DELETE FROM aux.t1} {}
+do_test 1.2 {set ::autovac} {aux 12 9 1024}
+do_execsql_test 1.3 {
+  PRAGMA aux.freelist_count;
+  PRAGMA aux.page_count;
+  PRAGMA aux.integrity_check;
+} {5 8 ok}
+
+seed_autovacuum stock-av-main.db
+sqlite3 sdb stock-av-main.db
+sqlite3_autovacuum_pages sdb autovac_cb
+set ::autovac {}
+do_test 2.1 {
+  sdb eval {DELETE FROM t1}
+  set ::autovac
+} {main 12 9 1024}
+do_test 2.2 {
+  sdb eval {PRAGMA page_count; PRAGMA integrity_check}
+} {8 ok}
+sdb close
+
+finish_test

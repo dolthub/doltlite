@@ -561,6 +561,20 @@ want_eq "L1_not_a_database_open_reports_like_sqlite" \
   "$(printf '%s\n' "SELECT count(*) FROM t;" | $SQLITE3 "$ND" 2>&1)"
 want_eq "L2_not_a_database_open_leaves_no_lock_sidecar" \
   "$(test -e "$TMP/.notadb.db-lock" && echo sidecar || echo none)" "none"
+DI=$TMP/dbinfo.db
+seed_stock "$DI" "PRAGMA page_size=4096; CREATE TABLE t(a INTEGER PRIMARY KEY, b); CREATE INDEX tb ON t(b); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<500) INSERT INTO t SELECT i, randomblob(100) FROM n; CREATE VIEW v AS SELECT 1; CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;"
+# data version counts the shell's own statements, which varies by release.
+if ! $SQLITE3 "$DI" .dbinfo 2>&1 | grep -q '^database page size:'; then
+  skip "P4_dbinfo_matches_sqlite" "reference sqlite3 cannot run .dbinfo"
+  skip "P5_dbinfo_of_an_attached_sqlite_file_matches_sqlite" "reference sqlite3 cannot run .dbinfo"
+else
+  want_eq "P4_dbinfo_matches_sqlite" \
+    "$($DOLTLITE "$DI" .dbinfo 2>&1 | grep -v '^data version')" \
+    "$($SQLITE3 "$DI" .dbinfo 2>&1 | grep -v '^data version')"
+  want_eq "P5_dbinfo_of_an_attached_sqlite_file_matches_sqlite" \
+    "$($DOLTLITE :memory: "ATTACH '$DI' AS a2;" ".dbinfo a2" 2>&1 | grep -v '^data version')" \
+    "$($SQLITE3 :memory: "ATTACH '$DI' AS a2;" ".dbinfo a2" 2>&1 | grep -v '^data version')"
+fi
 
 echo ""
 echo "============================="
