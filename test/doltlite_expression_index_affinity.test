@@ -1,0 +1,68 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test expression-affinity-json {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, d TEXT);
+  CREATE INDEX i ON t(CAST(json_extract(d,'$.price') AS REAL));
+  INSERT INTO t VALUES(1,'{"price":5}'),(2,'{"price":7}');
+  SELECT sum(CAST(json_extract(d,'$.price') AS REAL)/2)
+    FROM t WHERE CAST(json_extract(d,'$.price') AS REAL)>1;
+} 6.0
+
+foreach {layout key suffix} {
+  rowid {INTEGER PRIMARY KEY} {}
+  clustered {INT PRIMARY KEY} {}
+  without-rowid {INT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach affinity {REAL NUMERIC} {
+    set expr "CAST(x AS $affinity)"
+    foreach {shape columns} [list expression $expr real-first "r,$expr" real-last "$expr,r"] {
+      foreach path {insert update upsert replace create-index} {
+        reset_db
+        set prefix "expression-affinity-$layout-$affinity-$shape-$path"
+        execsql "CREATE TABLE t(id $key, x TEXT, r REAL) $suffix"
+        execsql {
+          CREATE TEMP TABLE input(id, x, r);
+          INSERT INTO input VALUES(1,'5',3),(2,'7',4),
+            (3,'-9223372036854775809',5),(4,'-9.2233720368547758e18',6),
+            (5,'3.5',7),(6,'not numeric',8),(7,NULL,9);
+          BEGIN;
+        }
+        if {$path ne "create-index"} {execsql "CREATE INDEX i ON t($columns)"}
+        if {$path in {update upsert replace}} {
+          execsql {INSERT INTO t SELECT id,NULL,0 FROM input}
+        }
+        switch $path {
+          update {execsql {UPDATE t SET (x,r)=(SELECT x,r FROM input WHERE input.id=t.id)}}
+          upsert {execsql {
+            INSERT INTO t SELECT * FROM input WHERE 1
+              ON CONFLICT(id) DO UPDATE SET x=excluded.x,r=excluded.r;
+          }}
+          replace {execsql {INSERT OR REPLACE INTO t SELECT * FROM input}}
+          default {execsql {INSERT INTO t SELECT * FROM input}}
+        }
+        if {$path eq "create-index"} {execsql "CREATE INDEX i ON t($columns)"}
+        foreach phase {pending committed reopened reindexed} {
+          switch $phase {
+            committed {execsql COMMIT}
+            reopened {db close; sqlite3 db test.db}
+            reindexed {execsql {REINDEX i}}
+          }
+          foreach {name select tail} [list \
+            values "id,typeof($expr),quote($expr),typeof($expr/2),quote($expr/2)" \
+              "ORDER BY $expr,id" \
+            arithmetic "typeof(sum($expr/2)),quote(sum($expr/2))" "WHERE $expr>1" \
+            column {id,typeof(r),quote(r)} "ORDER BY $expr,id" \
+          ] {
+            set expected [db eval "SELECT $select FROM t NOT INDEXED $tail"]
+            do_execsql_test $prefix-$phase-$name \
+              "SELECT $select FROM t INDEXED BY i $tail" $expected
+          }
+          do_execsql_test $prefix-$phase-integrity {PRAGMA integrity_check} ok
+        }
+      }
+    }
+  }
+}
+
+finish_test
