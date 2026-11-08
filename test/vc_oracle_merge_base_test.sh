@@ -436,6 +436,103 @@ oracle "fanin_feat_main" "$FANIN" "'feat'" "'main'"
 oracle "fanin_head_feat" "$FANIN" "'HEAD'" "'feat'"
 oracle "fanin_head_parent_feat" "$FANIN" "'HEAD~1'" "'feat'"
 
+echo "--- virtual merge base conflicted cells ---"
+
+# The merge bases m1 and s1 conflict on row 1. The virtual base keeps the
+# older value there, and a tip that differs from the other in that cell
+# conflicts even when the other tip still holds the older value.
+oracle_conflicted_cells() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_cells"
+  mkdir -p "$dir/dl" "$dir/dt"
+  local q="SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;
+SELECT CONCAT('C|', base_v, '|', our_v, '|', their_v) FROM dolt_conflicts_t;"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
+           | vc_oracle_run_doltlite "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' \
+           | grep -E '^(R|C)\|' )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      echo "$dolt_setup"
+      echo "$q"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep -E '^(R|C)\|')
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+CONFLICTED_BASES="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 0), (2, 0), (3, 0);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('side');
+UPDATE t SET v = 1 WHERE id = 1;
+SELECT dolt_commit('-am', 'm1');
+SELECT dolt_tag('m1');
+SELECT dolt_checkout('side');
+UPDATE t SET v = 2 WHERE id = 1;
+SELECT dolt_commit('-am', 's1');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('side', '--no-ff', '-m', 'mm');
+SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT dolt_commit('-am', 'mm');
+COMMIT;
+SELECT dolt_checkout('side');
+BEGIN;
+SELECT dolt_merge('m1', '--no-ff', '-m', 'sm');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT dolt_commit('-am', 'sm');
+COMMIT;
+SELECT dolt_checkout('main');
+UPDATE t SET v = 5 WHERE id = 3;
+"
+
+VC_ORACLE_EXPECTATION=allow-error oracle_conflicted_cells "virtual_base_conflicted_clean" "
+$CONFLICTED_BASES
+SELECT dolt_commit('-am', 'm2');
+SELECT dolt_checkout('side');
+UPDATE t SET v = 6 WHERE id = 2;
+SELECT dolt_commit('-am', 's2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('side');
+"
+
+VC_ORACLE_EXPECTATION=allow-error oracle_conflicted_cells "virtual_base_conflicted_tips_differ" "
+$CONFLICTED_BASES
+SELECT dolt_commit('-am', 'm2');
+SELECT dolt_checkout('side');
+UPDATE t SET v = 6 WHERE id = 2;
+UPDATE t SET v = 7 WHERE id = 1;
+SELECT dolt_commit('-am', 's2');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('side');
+"
+
+VC_ORACLE_EXPECTATION=allow-error oracle_conflicted_cells "virtual_base_conflicted_back_to_base" "
+$CONFLICTED_BASES
+UPDATE t SET v = 0 WHERE id = 1;
+SELECT dolt_commit('-am', 'm2');
+SELECT dolt_checkout('side');
+UPDATE t SET v = 6 WHERE id = 2;
+SELECT dolt_commit('-am', 's2');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('side');
+"
+
 echo "--- error paths ---"
 
 vc_oracle_error "bad_ref1" "

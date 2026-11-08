@@ -651,4 +651,43 @@ int mergeCatalogPass2(
   char **pzErrMsg
 );
 
+/* Cells where the merge bases of a virtual merge base conflicted. The base
+** keeps the older value there, so a merge against it must treat each such
+** cell as changed on both sides. */
+typedef struct VirtualBaseCells VirtualBaseCells;
+typedef struct VirtualBaseMerge VirtualBaseMerge;
+struct VirtualBaseMerge {
+  VirtualBaseCells *pCheck;
+  VirtualBaseCells *pCollect;
+  int bRefuse;
+};
+VirtualBaseCells *doltliteVirtualBaseCellsNew(void);
+void doltliteVirtualBaseCellsFree(VirtualBaseCells *p);
+int doltliteVirtualBaseCellsAdd(VirtualBaseCells **ppDst, VirtualBaseCells *pSrc);
+int doltliteVirtualBaseMergeTouches(sqlite3 *db, const char *zTable);
+
+typedef struct VbRow VbRow;
+typedef struct VbTable VbTable;
+typedef struct MergeVbSides MergeVbSides;
+struct MergeVbSides {
+  int bBase, bL, bR;
+  const u8 *pL, *pR;
+  int nL, nR;
+};
+const VbRow *mergeVbFindRow(VbTable *pTab, const ThreeWayChange *pChange);
+int mergeVbRowForces(const VbRow *pRow, int iField);
+int mergeVbRowWhole(const VbRow *pRow);
+int mergeVbCollect(
+  VirtualBaseCells *p, const char *zTable, const ThreeWayChange *pChange,
+  int bWholeRow, const int *aiField, int nField
+);
+int mergeVbBind(
+  sqlite3 *db, const char *zTable, int bSchemaChanged,
+  VbTable **ppCheck, VirtualBaseCells **ppCollect
+);
+int mergeVbOneSided(const ThreeWayChange *p, MergeVbSides *pSides);
+void mergeVbConflictChange(
+  const ThreeWayChange *p, const MergeVbSides *pSides, ThreeWayChange *pOut
+);
+
 #endif /* DOLTLITE_MERGE_INT_H */

@@ -1591,6 +1591,22 @@ int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
   return rc;
 }
 
+void *doltliteVirtualBaseMerge(sqlite3 *db){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    return db->aDb[0].pBt->pVirtualBaseMerge;
+  }
+  return 0;
+}
+
+void *doltliteSetVirtualBaseMerge(sqlite3 *db, void *pMerge){
+  void *pPrev = 0;
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    pPrev = db->aDb[0].pBt->pVirtualBaseMerge;
+    db->aDb[0].pBt->pVirtualBaseMerge = pMerge;
+  }
+  return pPrev;
+}
+
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *p = db->aDb[0].pBt;

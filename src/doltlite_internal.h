@@ -2012,6 +2012,8 @@ int doltliteWriteBranchRebaseMetadata(sqlite3*, const char*, u8,
                                       const char*, const char*);
 int doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 int doltliteSessionHasUnresolvedConflicts(sqlite3 *db);
+void *doltliteVirtualBaseMerge(sqlite3 *db);
+void *doltliteSetVirtualBaseMerge(sqlite3 *db, void *pMerge);
 int doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSetSessionConflictsTheirCatalog(sqlite3 *db, const ProllyHash *pHash);
 void doltliteGetSessionConflictsTheirCatalog(sqlite3 *db, ProllyHash *pHash);

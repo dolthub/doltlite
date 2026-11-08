@@ -150,7 +150,8 @@ static int mergePass1MergeTableData(
   rc = mergePass1CollectIndexes(c, zName, &aIdxInfo, &nIdxInfo);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( canFastMerge(c->db, zName, !ourSchemaChanged && !theirSchemaChanged) ){
+  if( !doltliteVirtualBaseMergeTouches(c->db, zName)
+   && canFastMerge(c->db, zName, !ourSchemaChanged && !theirSchemaChanged) ){
     rc = prollyThreeWayMergeFast(
       doltliteGetChunkStore(c->db), doltliteGetCache(c->db),
       &pAnc->root, &pOurs->root, pTheirsRoot,

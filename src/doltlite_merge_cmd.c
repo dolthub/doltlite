@@ -1562,12 +1562,12 @@ struct VirtualBaseCandidate {
 
 static int mergeRefVirtualBase(
   sqlite3 *db, const ProllyHash *pLeft, const ProllyHash *pRight,
-  int depth, ProllyHash *pBase, char **pzErr
+  int depth, ProllyHash *pBase, VirtualBaseCells **ppCells, char **pzErr
 );
 
 static int mergeRefFoldVirtualBase(
   sqlite3 *db, const ProllyHash *pLeft, const ProllyHash *pRight,
-  int depth, ProllyHash *pOut, char **pzErr
+  int depth, ProllyHash *pOut, VirtualBaseCells **ppCells, char **pzErr
 ){
   DoltliteCommit left, right, base;
   DoltliteTxnState saved;
@@ -1577,11 +1577,18 @@ static int mergeRefFoldVirtualBase(
   int nActions = 0, nReindex = 0, nRebuild = 0;
   int nConflicts = 0, bSaved = 0, bBegan = 0;
   int rc, restoreRc;
+  VirtualBaseMerge vb;
+  void *pPrevVb;
 
   memset(&left, 0, sizeof(left));
   memset(&right, 0, sizeof(right));
   memset(&base, 0, sizeof(base));
-  rc = mergeRefVirtualBase(db, pLeft, pRight, depth+1, &ancestor, pzErr);
+  memset(&vb, 0, sizeof(vb));
+  *ppCells = 0;
+  vb.pCollect = doltliteVirtualBaseCellsNew();
+  if( !vb.pCollect ) return SQLITE_NOMEM;
+  rc = mergeRefVirtualBase(db, pLeft, pRight, depth+1, &ancestor,
+                           &vb.pCheck, pzErr);
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pLeft, &left);
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, pRight, &right);
   if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestor, &base);
@@ -1596,12 +1603,14 @@ static int mergeRefFoldVirtualBase(
   if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &left.catalogHash);
   if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
   if( rc==SQLITE_OK ){
+    pPrevVb = doltliteSetVirtualBaseMerge(db, &vb);
     rc = doltliteMergeCatalogs(db, &base.catalogHash,
         &left.catalogHash, &right.catalogHash, &merged, &nConflicts, pzErr,
         &aActions, &nActions, 0, 1, &azReindex, &nReindex,
         &azRebuild, &nRebuild);
+    doltliteSetVirtualBaseMerge(db, pPrevVb);
   }
-  if( rc==SQLITE_OK && nConflicts>0 ){
+  if( (rc==SQLITE_OK && nConflicts>0) || vb.bRefuse ){
     sqlite3_free(*pzErr);
     *pzErr = sqlite3_mprintf(
         "cannot merge: common ancestors conflict while building virtual merge base");
@@ -1629,6 +1638,7 @@ static int mergeRefFoldVirtualBase(
         pRight, 1, 1, timestamp, pOut);
   }
 done:
+  doltliteVirtualBaseCellsFree(vb.pCheck);
   freeSchemaMergeActions(aActions, nActions);
   doltliteFreeNameList(azReindex, nReindex);
   doltliteFreeNameList(azRebuild, nRebuild);
@@ -1641,6 +1651,11 @@ done:
     else if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
     rc = doltliteMergeAutocommitTxnEnd(db, bBegan, rc);
   }
+  if( rc==SQLITE_OK ){
+    *ppCells = vb.pCollect;
+    vb.pCollect = 0;
+  }
+  doltliteVirtualBaseCellsFree(vb.pCollect);
   doltliteCommitClear(&left);
   doltliteCommitClear(&right);
   doltliteCommitClear(&base);
@@ -1649,12 +1664,13 @@ done:
 
 static int mergeRefVirtualBase(
   sqlite3 *db, const ProllyHash *pLeft, const ProllyHash *pRight,
-  int depth, ProllyHash *pBase, char **pzErr
+  int depth, ProllyHash *pBase, VirtualBaseCells **ppCells, char **pzErr
 ){
   ProllyHash *aBase = 0;
   VirtualBaseCandidate *aCandidate = 0;
   int nBase = 0, i, rc;
 
+  *ppCells = 0;
   if( depth>128 ){
     *pzErr = sqlite3_mprintf("cannot merge: virtual merge base recursion limit");
     return *pzErr ? SQLITE_ERROR : SQLITE_NOMEM;
@@ -1690,11 +1706,17 @@ static int mergeRefVirtualBase(
   *pBase = aCandidate[0].hash;
   for(i=1; i<nBase && rc==SQLITE_OK; i++){
     ProllyHash merged;
+    VirtualBaseCells *pFold = 0;
     rc = mergeRefFoldVirtualBase(db, pBase, &aCandidate[i].hash,
-                                depth, &merged, pzErr);
+                                depth, &merged, &pFold, pzErr);
+    if( rc==SQLITE_OK ) rc = doltliteVirtualBaseCellsAdd(ppCells, pFold);
     if( rc==SQLITE_OK ) *pBase = merged;
   }
 done:
+  if( rc!=SQLITE_OK ){
+    doltliteVirtualBaseCellsFree(*ppCells);
+    *ppCells = 0;
+  }
   sqlite3_free(aBase);
   sqlite3_free(aCandidate);
   return rc;
@@ -1741,7 +1763,10 @@ int doltliteMergeRef(
   int nRebuildVtabs = 0;
   int nViolations = 0;
   ProllyHash cleanWorkingSet;
+  VirtualBaseMerge vb;
+  void *pPrevVb;
 
+  memset(&vb, 0, sizeof(vb));
   memset(&ourCommit, 0, sizeof(ourCommit));
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&savedState, 0, sizeof(savedState));
@@ -1866,7 +1891,7 @@ int doltliteMergeRef(
     memset(&virtualBase, 0, sizeof(virtualBase));
     bRestoreOnFail = 1;
     rc = mergeRefVirtualBase(db, &ourHead, &theirHead, 0,
-                            &ancestorHash, &zOwnedErr);
+                            &ancestorHash, &vb.pCheck, &zOwnedErr);
     if( rc==SQLITE_OK ) rc = doltliteLoadCommit(db, &ancestorHash, &virtualBase);
     if( rc==SQLITE_OK ) ancCatHash = virtualBase.catalogHash;
     doltliteCommitClear(&virtualBase);
@@ -1885,11 +1910,21 @@ int doltliteMergeRef(
     goto merge_fail;
   }
 
+  pPrevVb = doltliteSetVirtualBaseMerge(db, &vb);
   rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
                               &mergedCatHash, &nMergeConflicts, &zOwnedErr,
                               &aSchemaActions, &nSchemaActions, 0, 1,
                               &azReindex, &nReindex,
                               &azRebuildVtabs, &nRebuildVtabs);
+  doltliteSetVirtualBaseMerge(db, pPrevVb);
+  doltliteVirtualBaseCellsFree(vb.pCheck);
+  vb.pCheck = 0;
+  if( rc!=SQLITE_OK && vb.bRefuse ){
+    sqlite3_free(zOwnedErr);
+    zOwnedErr = sqlite3_mprintf(
+        "cannot merge: common ancestors conflict while building virtual merge base");
+    if( !zOwnedErr ) rc = SQLITE_NOMEM;
+  }
   if( rc!=SQLITE_OK ){
     if( !zOwnedErr ) zFail = "merge failed";
     goto merge_fail;
@@ -2038,6 +2073,7 @@ int doltliteMergeRef(
       zBranch, zMessage, zAuthorName, zAuthorEmail, squash ? 0 : 1);
 
 merge_fail:
+  doltliteVirtualBaseCellsFree(vb.pCheck);
   doltliteFreeCatalog(aLocal, nLocal);
   freeSchemaMergeActions(aSchemaActions, nSchemaActions);
   doltliteFreeNameList(azReindex, nReindex);
