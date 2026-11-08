@@ -90,6 +90,61 @@ for format in sql sqlite; do
     "1 2 3"
 done
 
+"$DOLTLITE" "$TMP/cref" "CREATE TABLE c(commit_ref TEXT, x INT); INSERT INTO c VALUES('mine',1); SELECT dolt_commit('-Am','base'); UPDATE c SET commit_ref='working';" > /dev/null
+for format in sql sqlite; do
+  path="$TMP/cref.$format"
+  "$DOLTLITE" "$TMP/cref" "SELECT dolt_dump('--file-name','$path','-r','$format','--ref','HEAD')" > /dev/null
+  output="$path"
+  if [[ "$format" == sql ]]; then
+    output="$TMP/cref-replayed.sqlite"
+    "$SQLITE3" "$output" < "$path"
+  fi
+  compare "--ref $format keeps a user column named commit_ref" \
+    "$("$SQLITE3" "$output" "SELECT commit_ref,x FROM c;")" 'mine|1'
+done
+
+wide_cols=$(seq -f 'c%g' 1 2000 | paste -sd, -)
+wide_vals=$(seq 1 2000 | paste -sd, -)
+"$DOLTLITE" "$TMP/wide" "CREATE TABLE wide($wide_cols); INSERT INTO wide VALUES($wide_vals); INSERT INTO wide VALUES($wide_vals);" > /dev/null
+for format in sql sqlite; do
+  path="$TMP/wide.$format"
+  "$DOLTLITE" "$TMP/wide" "SELECT dolt_dump('--file-name','$path','-r','$format')" > /dev/null
+  output="$path"
+  if [[ "$format" == sql ]]; then
+    output="$TMP/wide-replayed.sqlite"
+    "$SQLITE3" "$output" < "$path"
+  fi
+  compare "2000-column keyless $format rows" \
+    "$("$SQLITE3" "$output" "SELECT count(*),sum(c1),sum(c2000) FROM wide;")" '2|2|4000'
+done
+
+"$DOLTLITE" "$TMP/u16src" "CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'Unicode: 🐬'),(2,'café'),(3,'日本語');" > /dev/null
+"$DOLTLITE" "$TMP/u16src" "SELECT dolt_dump('--file-name','$TMP/u16.sql','-r','sql')" > /dev/null
+for enc in UTF-16le UTF-16be; do
+  output="$TMP/u16-$enc.sqlite"
+  { echo "PRAGMA encoding='$enc';"; cat "$TMP/u16.sql"; } | "$SQLITE3" "$output"
+  compare "SQL export replayed into $enc" \
+    "$("$SQLITE3" "$output" "PRAGMA encoding; SELECT group_concat(v,'|') FROM (SELECT v FROM u ORDER BY id);")" \
+    "$(printf '%s\n%s' "$enc" 'Unicode: 🐬|café|日本語')"
+done
+
+for kind in view trigger; do
+  case "$kind" in
+    view) ddl="CREATE VIEW vb AS SELECT name FROM dolt_branches;" ;;
+    trigger) ddl="CREATE TABLE t(name TEXT); CREATE TABLE src(x); CREATE TRIGGER tg AFTER INSERT ON src BEGIN INSERT INTO t SELECT name FROM dolt_branches; END;" ;;
+  esac
+  "$DOLTLITE" "$TMP/sys-$kind" "CREATE TABLE keep(id INTEGER PRIMARY KEY); $ddl" > /dev/null
+  for format in sql sqlite; do
+    path="$TMP/sys-$kind.$format"
+    refused=0
+    if ! "$DOLTLITE" "$TMP/sys-$kind" "SELECT dolt_dump('--file-name','$path','-r','$format')" > /dev/null 2>&1; then
+      refused=1
+    fi
+    compare "$kind over dolt_* $format refused" "$refused" 1
+    compare "$kind over dolt_* $format writes no file" "$(test -e "$path" && echo present || echo absent)" absent
+  done
+done
+
 "$DOLTLITE" "$TMP/rebase" > /dev/null <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(0);
