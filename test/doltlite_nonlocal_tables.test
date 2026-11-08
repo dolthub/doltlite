@@ -285,8 +285,8 @@ do_catchsql_test nonlocal-fk-commit-missing {
   SELECT dolt_commit('-Am','missing');
 } {1 {foreign key on table `uses_missing` requires the referenced table `nowhere`}}
 
-# DDL names local tables only, as in Dolt: a rule never sends a DROP or an
-# ALTER to the target branch.
+# DROP and RENAME TO edit the local table. Column changes, constraints, and
+# CREATE INDEX follow the rule onto the target, as Dolt does.
 nl_reset
 do_execsql_test nonlocal-drop-local {
   INSERT INTO dolt_nonlocal_tables VALUES('users','main','','immediate');
@@ -298,28 +298,90 @@ do_test nonlocal-drop-target-kept {
   nl_disk main {SELECT count(*) FROM sqlite_master WHERE name='users'}
 } {1}
 nl_reset
-db eval {INSERT INTO dolt_nonlocal_tables VALUES('nl','main','users','immediate')}
-foreach {name sql} {
-  add-column {ALTER TABLE nl ADD COLUMN x INT}
-  rename {ALTER TABLE nl RENAME TO renamed}
-  rename-column {ALTER TABLE nl RENAME COLUMN name TO nm}
-  drop-column {ALTER TABLE nl DROP COLUMN name}
-  drop {DROP TABLE nl}
-} {
-  do_catchsql_test nonlocal-ddl-$name $sql {1 {no such table: nl}}
-}
-foreach {name sql} {
-  index {CREATE INDEX nl_i ON nl(name)}
-  trigger {CREATE TRIGGER nl_tr AFTER INSERT ON nl BEGIN SELECT 1; END}
-} {
-  do_catchsql_test nonlocal-ddl-$name $sql {1 {no such table: main.nl}}
-}
-do_test nonlocal-ddl-target-untouched {
+do_execsql_test nonlocal-alter-add {
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  ALTER TABLE users ADD COLUMN c INT;
+  INSERT INTO users VALUES(2,'exp',7);
+  SELECT id, name, c FROM users ORDER BY id;
+  SELECT sql FROM sqlite_master WHERE type='table' AND name='users';
+} {1 base {} 2 exp 7 {CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)}}
+do_test nonlocal-alter-add-target {
   nl_disk main {
-    SELECT sql FROM sqlite_master WHERE tbl_name='users';
-    SELECT table_name FROM dolt_status;
+    SELECT id, name, c FROM users ORDER BY id;
+    SELECT group_concat(name, '.') FROM pragma_table_info('users');
   }
+} {1 base {} 2 exp 7 id.name.c}
+do_execsql_test nonlocal-alter-rename-column {
+  ALTER TABLE users RENAME COLUMN name TO nm;
+  SELECT group_concat(name, '.') FROM pragma_table_info('users');
+  SELECT sql FROM sqlite_master WHERE type='table' AND name='users';
+} {id.nm.c {CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)}}
+do_test nonlocal-alter-rename-column-target {
+  nl_disk main {SELECT group_concat(name, '.') FROM pragma_table_info('users')}
+} {id.nm.c}
+do_execsql_test nonlocal-alter-drop-column {
+  ALTER TABLE users DROP COLUMN c;
+  SELECT group_concat(name, '.') FROM pragma_table_info('users');
+  SELECT sql FROM sqlite_master WHERE type='table' AND name='users';
+} {id.nm {CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)}}
+do_test nonlocal-alter-drop-column-target {
+  nl_disk main {SELECT group_concat(name, '.') FROM pragma_table_info('users')}
+} {id.nm}
+do_execsql_test nonlocal-alter-index {
+  CREATE INDEX users_nm ON users(nm);
+  SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users';
+} {}
+do_test nonlocal-alter-index-target {
+  nl_disk main {
+    SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users';
+  }
+} {users_nm}
+do_execsql_test nonlocal-alter-check {
+  ALTER TABLE users ADD CONSTRAINT chk CHECK (id > 0);
+  SELECT sql FROM sqlite_master WHERE type='table' AND name='users';
 } {{CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)}}
+do_test nonlocal-alter-check-target {
+  expr {[string first "CHECK" [nl_disk main {
+    SELECT sql FROM sqlite_master WHERE type='table' AND name='users'
+  }]]>=0}
+} {1}
+do_execsql_test nonlocal-rename-stays-local {
+  ALTER TABLE users RENAME TO people;
+  SELECT id FROM users ORDER BY id;
+  SELECT id FROM people ORDER BY id;
+  SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','people');
+} {1 2 1 people}
+do_test nonlocal-rename-target-kept {
+  nl_disk main {SELECT name FROM sqlite_master WHERE type='table' AND name='users'}
+} {users}
+nl_reset
+db eval {INSERT INTO dolt_nonlocal_tables VALUES('nl','main','users','immediate')}
+do_execsql_test nonlocal-alias-add {
+  ALTER TABLE nl ADD COLUMN x INT;
+  SELECT group_concat(name, '.') FROM pragma_table_info('nl');
+} {id.name.x}
+do_test nonlocal-alias-add-target {
+  nl_disk main {SELECT group_concat(name, '.') FROM pragma_table_info('users')}
+} {id.name.x}
+do_execsql_test nonlocal-alias-index {
+  CREATE INDEX nl_i ON nl(name);
+  SELECT count(*) FROM sqlite_master WHERE type='index' AND name='nl_i';
+} {0}
+do_test nonlocal-alias-index-target {
+  nl_disk main {SELECT name, sql FROM sqlite_master WHERE name='nl_i'}
+} {nl_i {CREATE INDEX nl_i ON "users"(name)}}
+do_execsql_test nonlocal-alias-same-branch-index {
+  INSERT INTO dolt_nonlocal_tables VALUES('my_notes','','notes','immediate');
+  CREATE INDEX notes_i ON my_notes(body);
+  SELECT sql FROM sqlite_master WHERE name='notes_i';
+} {{CREATE INDEX notes_i ON "notes"(body)}}
+foreach {name sql err} {
+  rename {ALTER TABLE nl RENAME TO renamed} {no such table: nl}
+  drop {DROP TABLE nl} {no such table: nl}
+  trigger {CREATE TRIGGER nl_tr AFTER INSERT ON nl BEGIN SELECT 1; END} {no such table: main.nl}
+} {
+  do_catchsql_test nonlocal-ddl-$name $sql [list 1 $err]
+}
 
 # A TEMP table answers an unqualified name before any rule, as SQLite
 # resolves temp first; dropping it uncovers the rule again.

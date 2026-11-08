@@ -4059,6 +4059,7 @@ void sqlite3DropTable(Parse *pParse, SrcList *pName, int isView, int noErr){
   if( sqlite3ReadSchema(pParse) ) goto exit_drop_table;
   if( noErr ) db->suppressErr++;
 #ifdef DOLTLITE_PROLLY
+  /* DROP edits the local table. A nonlocal rule does not apply. */
   pParse->bLocalNames = 1;
 #endif
   assert( isView==0 || isView==LOCATE_VIEW );
@@ -4498,6 +4499,81 @@ int sqlite3HasExplicitNulls(Parse *pParse, ExprList *pList){
   return 0;
 }
 
+#ifdef DOLTLITE_PROLLY
+/* Stored CREATE INDEX text is parsed again with redirects off. An alias
+** in that text names no table on the target, so record the resolved name. */
+static char *doltliteIndexOnResolved(
+  sqlite3 *db,
+  const char *zStmt,
+  const char *zTable
+){
+  const unsigned char *z = (const unsigned char*)zStmt;
+  i64 i = 0;
+  i64 nTok = 0;
+  i64 iStart = -1;
+  i64 iEnd = -1;
+  int eTok = 0;
+  int bOn = 0;
+  int bQual = 0;
+
+  while( z[i] ){
+    nTok = sqlite3GetToken(z + i, &eTok);
+    if( nTok<=0 ) break;
+    if( eTok==TK_SPACE || eTok==TK_COMMENT ){
+      i += nTok;
+      continue;
+    }
+    if( !bOn ){
+      if( eTok==TK_ON ) bOn = 1;
+      i += nTok;
+      continue;
+    }
+    if( eTok!=TK_ID ) break;
+    iStart = i;
+    i += nTok;
+    iEnd = i;
+    eTok = 0;
+    while( z[i] ){
+      nTok = sqlite3GetToken(z + i, &eTok);
+      if( nTok<=0 ) break;
+      if( eTok==TK_SPACE || eTok==TK_COMMENT ){
+        i += nTok;
+        continue;
+      }
+      break;
+    }
+    if( eTok!=TK_DOT ) break;
+    i += nTok;
+    eTok = 0;
+    while( z[i] ){
+      nTok = sqlite3GetToken(z + i, &eTok);
+      if( nTok<=0 ) break;
+      if( eTok==TK_SPACE || eTok==TK_COMMENT ){
+        i += nTok;
+        continue;
+      }
+      break;
+    }
+    if( eTok==TK_ID ){
+      i += nTok;
+      iEnd = i;
+      bQual = 1;
+    }
+    break;
+  }
+  if( iStart<0 ) return 0;
+  /* A bare table name that already matches the resolved table reloads. */
+  if( !bQual
+   && iEnd-iStart==(i64)strlen(zTable)
+   && sqlite3_strnicmp((const char*)(z+iStart), zTable,
+                       (int)(iEnd-iStart))==0
+  ){
+    return 0;
+  }
+  return sqlite3MPrintf(db, "%.*s\"%w\"%s",
+                        (int)iStart, zStmt, zTable, zStmt + iEnd);
+}
+#endif
 /*
 ** Create a new index for an SQL table.  pName1.pName2 is the name of the index
 ** and pTblList is the name of the table that is to be indexed.  Both will
@@ -4539,6 +4615,9 @@ void sqlite3CreateIndex(
   int nExtraCol;                   /* Number of extra columns needed */
   char *zExtra = 0;                /* Extra space after the Index object */
   Index *pPk = 0;      /* PRIMARY KEY index for WITHOUT ROWID tables */
+#ifdef DOLTLITE_PROLLY
+  int iSrcDb = 0;      /* Database named by the index, before a redirect */
+#endif
 
   assert( db->pParse==pParse );
   if( pParse->nErr ){
@@ -4575,9 +4654,6 @@ void sqlite3CreateIndex(
     ** if initializing a database schema.
     */
     if( !db->init.busy ){
-#ifdef DOLTLITE_PROLLY
-      pParse->bLocalNames = 1;
-#endif
       pTab = sqlite3SrcListLookup(pParse, pTblName);
       if( pName2->n==0 && pTab && pTab->pSchema==db->aDb[1].pSchema ){
         iDb = 1;
@@ -4591,9 +4667,6 @@ void sqlite3CreateIndex(
       ** sqlite3FixSrcList can never fail. */
       assert(0);
     }
-#ifdef DOLTLITE_PROLLY
-    pParse->bLocalNames = 1;
-#endif
     pTab = sqlite3LocateTableItem(pParse, 0, &pTblName->a[0]);
     assert( db->mallocFailed==0 || pTab==0 );
     if( pTab==0 ) goto exit_create_index;
@@ -4603,6 +4676,15 @@ void sqlite3CreateIndex(
            pTab->zName);
       goto exit_create_index;
     }
+#ifdef DOLTLITE_PROLLY
+    /* A nonlocal rule resolves the table in another schema. The index
+    ** belongs with that table. */
+    iSrcDb = iDb;
+    if( !db->init.busy && pTab->pSchema!=db->aDb[iDb].pSchema ){
+      int iReal = sqlite3SchemaToIndex(db, pTab->pSchema);
+      if( iReal>=0 ) iDb = iReal;
+    }
+#endif
     if( !HasRowid(pTab) ) pPk = sqlite3PrimaryKeyIndex(pTab);
   }else{
     assert( pName==0 );
@@ -5053,6 +5135,17 @@ void sqlite3CreateIndex(
         /* zStmt = sqlite3MPrintf(""); */
         zStmt = 0;
       }
+#ifdef DOLTLITE_PROLLY
+      if( zStmt && pTblName && pTab
+       && (iDb!=iSrcDb
+           || sqlite3StrICmp(pTblName->a[0].zName, pTab->zName)!=0) ){
+        char *zResolved = doltliteIndexOnResolved(db, zStmt, pTab->zName);
+        if( zResolved ){
+          sqlite3DbFree(db, zStmt);
+          zStmt = zResolved;
+        }
+      }
+#endif
 
       /* Add an entry in sqlite_schema for this index
       */

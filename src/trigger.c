@@ -165,6 +165,7 @@ void sqlite3BeginTrigger(
   ** exist, the error is caught by the block below.
   */
 #ifdef DOLTLITE_PROLLY
+  /* CREATE TRIGGER binds the local table. A nonlocal rule does not apply. */
   pParse->bLocalNames = 1;
 #endif
   pTab = sqlite3SrcListLookup(pParse, pTableName);

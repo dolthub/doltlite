@@ -280,6 +280,34 @@ tables_oracle() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+oracle "nonlocal_alter_follows_rule" "
+CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES (1, 'm');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'exp');
+INSERT INTO dolt_nonlocal_tables(table_name, target_ref, ref_table, options)
+  VALUES ('users', 'main', '', 'immediate');
+ALTER TABLE users ADD COLUMN c INT;
+INSERT INTO users VALUES (2, 'exp', 7);
+SELECT CONCAT('R|via|', id, '|', name, '|', IFNULL(c, -1)) FROM users ORDER BY id;
+SELECT dolt_checkout('main');
+SELECT CONCAT('R|main|', id, '|', name, '|', IFNULL(c, -1)) FROM users ORDER BY id;
+"
+
+oracle "nonlocal_rename_stays_local" "
+CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES (1, 'm');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'exp');
+INSERT INTO dolt_nonlocal_tables(table_name, target_ref, ref_table, options)
+  VALUES ('users', 'main', '', 'immediate');
+ALTER TABLE users RENAME TO people;
+SELECT CONCAT('R|via|', id, '|', name) FROM users ORDER BY id;
+SELECT CONCAT('R|local|', id) FROM people ORDER BY id;
+SELECT dolt_checkout('main');
+SELECT CONCAT('R|main|', id, '|', name) FROM users ORDER BY id;
+"
+
 tables_oracle "nonlocal_tables_listing" "
 CREATE TABLE users (id INT PRIMARY KEY);
 CREATE TABLE cfg (k VARCHAR(10) PRIMARY KEY);
