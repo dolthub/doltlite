@@ -334,7 +334,7 @@ static int resetStageNamedPaths(
       rc = doltliteBuildNamedStageMasterRoot(db,
               &pHeadMaster->root, pHeadMaster->flags,
               &pStagedMaster->root, pStagedMaster->flags,
-              azReset, nReset, aStaged, nStaged, resetSchemas, &composedRoot);
+              azReset, nReset, aStaged, nStaged, resetSchemas, &composedRoot, 0);
       if( rc!=SQLITE_OK ) goto done;
       pStagedMaster->root = composedRoot;
     }

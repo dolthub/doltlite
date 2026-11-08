@@ -275,7 +275,7 @@ static int applyStageConflictsAtBase(
       &pWorkMaster->root, pWorkMaster->flags,
       pBaseMaster ? &pBaseMaster->root : 0,
       pBaseMaster ? pBaseMaster->flags : 0,
-      azTouched, nTouched, aMerged, nMerged, 1, &composedRoot);
+      azTouched, nTouched, aMerged, nMerged, 1, &composedRoot, 0);
   if( rc!=SQLITE_OK ) goto stage_done;
   pWorkMaster->root = composedRoot;
 

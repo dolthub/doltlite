@@ -1,0 +1,189 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc collision_setup {key suffix definition} {
+  catch {verify close}
+  reset_db
+  db eval "CREATE TABLE b(id $key PRIMARY KEY,v TEXT) $suffix"
+  db eval $definition
+  db eval {
+    INSERT INTO b VALUES(1,'x');
+    CREATE TABLE keep(id INTEGER PRIMARY KEY,v INT);
+    INSERT INTO keep VALUES(1,0);
+    SELECT dolt_commit('-Am','base');
+    ALTER TABLE b RENAME TO b2;
+    UPDATE b2 SET id=2,v='y';
+    UPDATE keep SET v=1;
+    SELECT dolt_add('keep');
+  }
+}
+
+proc collision_state {} {
+  db eval {
+    SELECT dolt_hashof('HEAD'),dolt_hashof_catalog('STAGED'),dolt_hashof_catalog('WORKING');
+    SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged;
+    SELECT * FROM keep;
+  }
+}
+
+foreach {layout key suffix} {
+  rowid INTEGER {}
+  clustered INT {}
+  text TEXT {}
+  without-rowid INT {WITHOUT ROWID}
+} {
+  foreach {kind index definition} {
+    plain b_v {CREATE INDEX b_v ON b(v)}
+    unique b_v {CREATE UNIQUE INDEX b_v ON b(v DESC)}
+    expression b_v {CREATE INDEX b_v ON b(lower(v)) WHERE id>0}
+    quoted {B V} {CREATE INDEX "B V" ON b(v COLLATE NOCASE)}
+  } {
+    foreach transaction {auto deferred immediate savepoint} {
+      collision_setup $key $suffix $definition
+      switch $transaction {
+        deferred {db eval BEGIN}
+        immediate {db eval {BEGIN IMMEDIATE}}
+        savepoint {db eval {SAVEPOINT user_savepoint}}
+      }
+      db eval {UPDATE keep SET v=2}
+      set prefix collision-$layout-$kind-$transaction
+      set before [collision_state]
+      foreach {operation sql} {
+        named {SELECT dolt_add('b2')}
+        uppercase {SELECT dolt_add('B2')}
+        forced {SELECT dolt_add('-f','b2')}
+        last {SELECT dolt_add('keep','b2')}
+        first {SELECT dolt_add('b2','keep')}
+      } {
+        do_test $prefix-$operation-error {
+          set result [catchsql $sql]
+          list [lindex $result 0] [string match "*index '$index'*table 'b2'*table 'b'*" [lindex $result 1]] \
+            [sqlite3_extended_errcode db]
+        } {1 1 SQLITE_CONSTRAINT}
+        do_test $prefix-$operation-atomic {collision_state} $before
+      }
+      if {$transaction ne "auto"} {catch {db eval ROLLBACK}}
+      db close
+      sqlite3 db test.db
+      do_execsql_test $prefix-reopen {
+        SELECT * FROM dolt_at_b('STAGED');
+        SELECT * FROM dolt_at_keep('STAGED');
+        SELECT table_name FROM dolt_status WHERE staged=1;
+      } {1 x 1 1 keep}
+      do_test $prefix-commit-keeps-index {
+        db eval {SELECT dolt_commit('-m','keep only'); SELECT dolt_branch('verify')}
+        sqlite3 verify test.db/verify
+        try {
+          set result [verify eval "SELECT * FROM b INDEXED BY \"$index\" WHERE id>0; PRAGMA integrity_check"]
+        } finally {verify close}
+        set result
+      } {1 x ok}
+    }
+  }
+}
+
+foreach stage {
+  {SELECT dolt_add('b','b2')}
+  {SELECT dolt_add('b2','b')}
+  {SELECT dolt_add('b'); SELECT dolt_add('b2')}
+  {SELECT dolt_add('-A')}
+  {SELECT dolt_add('.')}
+} {
+  collision_setup INT {} {CREATE INDEX b_v ON b(v)}
+  do_test collision-stage-both-[incr stageNumber] {
+    db eval $stage
+    db eval {SELECT dolt_commit('-m','rename'); SELECT dolt_branch('verify')}
+    sqlite3 verify test.db/verify
+    set result [verify eval {
+      SELECT name,tbl_name FROM sqlite_schema WHERE type='index' AND name='b_v';
+      SELECT * FROM b2 INDEXED BY b_v;
+      SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='b';
+      PRAGMA integrity_check;
+    }]
+    verify close
+    set result
+  } {b_v b2 2 y 0 ok}
+}
+
+collision_setup INT {} {CREATE INDEX b_v ON b(v)}
+db eval {SELECT dolt_add('b','b2')}
+set before [collision_state]
+do_test collision-reset-parent-error {
+  set result [catchsql {SELECT dolt_reset('b')}]
+  list [lindex $result 0] [sqlite3_extended_errcode db]
+} {1 SQLITE_CONSTRAINT}
+do_test collision-reset-parent-atomic {collision_state} $before
+do_execsql_test collision-reset-both {
+  SELECT dolt_reset('b','b2');
+  SELECT * FROM dolt_at_b('STAGED');
+} {0 1 x}
+
+collision_setup INT {} {CREATE INDEX b_v ON b(v)}
+db eval {DROP INDEX b_v; CREATE INDEX b2_v ON b2(v)}
+do_test collision-distinct-index-names {
+  db eval {SELECT dolt_add('b2'); SELECT dolt_commit('-m','b2 only'); SELECT dolt_branch('verify')}
+  sqlite3 verify test.db/verify
+  set result [verify eval {
+    SELECT * FROM b INDEXED BY b_v;
+    SELECT * FROM b2 INDEXED BY b2_v;
+    PRAGMA integrity_check;
+  }]
+  verify close
+  set result
+} {1 x 2 y ok}
+
+collision_setup INT {} {CREATE INDEX b_v ON b(v)}
+db eval {DROP INDEX b_v; CREATE INDEX B_V ON b2(v)}
+do_test collision-index-case-folded {
+  set result [catchsql {SELECT dolt_add('b2')}]
+  list [lindex $result 0] [string match {*index 'B_V'*table 'b2'*table 'b'*} [lindex $result 1]]
+} {1 1}
+
+foreach populated {0 1} {
+  reset_db
+  db eval {
+    CREATE TABLE b(id INT PRIMARY KEY,v TEXT);
+    CREATE TABLE c(id INT PRIMARY KEY,v TEXT);
+    CREATE TABLE keep(id INTEGER PRIMARY KEY,v INT);
+    INSERT INTO keep VALUES(1,0);
+    CREATE INDEX shared ON b(v);
+  }
+  if {$populated} {db eval {INSERT INTO b VALUES(1,'x'); INSERT INTO c VALUES(2,'y')}}
+  db eval {
+    SELECT dolt_commit('-Am','base');
+    DROP INDEX shared;
+    CREATE INDEX shared ON c(v);
+  }
+  set before [collision_state]
+  do_test collision-transfer-$populated-error {
+    set result [catchsql {SELECT dolt_add('c')}]
+    list [lindex $result 0] [string match {*index 'shared'*table 'c'*table 'b'*} [lindex $result 1]]
+  } {1 1}
+  do_test collision-transfer-$populated-atomic {collision_state} $before
+  do_execsql_test collision-transfer-$populated-both {
+    SELECT dolt_add('b','c');
+    SELECT count(*) FROM dolt_status WHERE staged=1;
+  } {0 2}
+}
+
+collision_setup INT {} {CREATE INDEX b_v ON b(v)}
+db eval {INSERT INTO dolt_ignore VALUES('b',1)}
+set before [collision_state]
+foreach {name sql} {
+  all {SELECT dolt_add('-A')}
+  dot {SELECT dolt_add('.')}
+  commit {SELECT dolt_commit('-Am','ignored source')}
+} {
+  do_test collision-ignored-source-$name-error {
+    set result [catchsql $sql]
+    list [lindex $result 0] [sqlite3_extended_errcode db]
+  } {1 SQLITE_CONSTRAINT}
+  do_test collision-ignored-source-$name-atomic {collision_state} $before
+}
+do_execsql_test collision-ignored-source-force {
+  SELECT dolt_add('-A','-f');
+  SELECT length(dolt_commit('-m','stage all'));
+  SELECT count(*) FROM dolt_status;
+} {0 40 0}
+
+finish_test
