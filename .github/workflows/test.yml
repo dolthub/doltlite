@@ -316,7 +316,7 @@ jobs:
         cd build-coverage
         python3 ../test/sql_dump_roundtrip_check_test.py ./sqlite3-stock
         python3 ../test/sqlite_file_safety_sweep.py ./doltlite ./sqlite3-stock \
-          --corpus all --vc
+          --corpus all --vc --interleave
         failed=0
         for first in $(seq 0 20 180); do
           last=$((first + 19))
