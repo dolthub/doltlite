@@ -21,6 +21,10 @@ trace add execution source leave sqlite_file::source_done
 
 set testdir [file dirname $suite]
 source $testdir/tester.tcl
+proc crashsql [info args crashsql] [string map [list \
+  {puts $f "autoinstall_test_functions"} \
+  {puts $f "autoinstall_test_functions"
+  puts $f [list source $::sqlite_file_engine]}] [info body crashsql]]
 proc sqlite_file::finish {command op} {
   do_test sqlite-file.engine {expr {$sqlite_file::opened>0}} 1
   if {[file tail $::suite] in {attach.test attach3.test}} {

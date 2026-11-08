@@ -12,7 +12,8 @@ from urllib.parse import quote
 from sql_dump_roundtrip_sweep import literal, query, run
 
 
-CORPUS = ("hot-journal", "wal-frames", "wal-empty-main", "truncated-tail",
+CORPUS = ("hot-journal", "wal-frames", "wal-empty-main", "wal-torn-header",
+          "truncated-tail",
           "header-8", "header-100", "zero-header-16", "zero-header-168",
           "zero-sector")
 MODES = ("plain", "rw", "ro", "immutable", "attach")
@@ -63,6 +64,13 @@ def make_corpus(stock, directory):
             journal = target / "test.db-journal"
             if not journal.exists() or journal.read_bytes()[:8] == bytes(8):
                 raise AssertionError("stock writer did not produce a hot journal")
+        elif case == "wal-torn-header":
+            crash_writer(stock, database, "PRAGMA journal_mode=WAL;"
+                         "PRAGMA wal_autocheckpoint=0;"
+                         "UPDATE corpus SET payload=randomblob(4000) WHERE id<=10;")
+            if not (target / "test.db-wal").exists():
+                raise AssertionError("stock writer did not produce WAL frames")
+            database.write_bytes(bytes(100) + database.read_bytes()[100:])
         elif case.startswith("wal-"):
             database.unlink()
             crash_writer(stock, database, "PRAGMA journal_mode=WAL;"
