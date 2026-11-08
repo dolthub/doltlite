@@ -1,0 +1,109 @@
+set testdir [file dirname $argv0]
+if {![llength [info commands sqlite_file::native]]} {
+  set ::env(SQLITE_FILE_TEST_MODE) sqlite
+  source $testdir/lib/sqlite_file_engine.tcl
+  set sqlite_options(doltlite) 0
+}
+source $testdir/tester.tcl
+set testprefix doltlite_sqlite_file_engine
+
+foreach {mode expected} {none 0 full 1 incremental 2 'INCREMENTAL' 2 2 2} {
+  forcedelete test-vacuum.db
+  do_test $testprefix-attach-$mode {
+    db eval "
+      ATTACH 'test-vacuum.db' AS aux;
+      PRAGMA aux.auto_vacuum=$mode;
+      CREATE TABLE aux.t(x);
+      PRAGMA aux.auto_vacuum;
+    "
+  } $expected
+  do_test $testprefix-attach-$mode-engine {doltlite_test_engine db aux} orig
+  db eval {DETACH aux}
+}
+
+do_test $testprefix-existing-attachment {
+  db eval {
+    ATTACH 'test-vacuum.db' AS aux;
+    PRAGMA aux.auto_vacuum=none;
+    PRAGMA aux.auto_vacuum;
+  }
+} 2
+db eval {DETACH aux}
+
+do_test $testprefix-quoted-attachment {
+  forcedelete test-quoted.db
+  db eval {ATTACH 'test-quoted.db' AS "quoted aux"; CREATE TABLE "quoted aux".t(x)}
+  doltlite_test_engine db {quoted aux}
+} orig
+db eval {DETACH "quoted aux"}
+
+do_test $testprefix-attachment-modes {
+  forcedelete test-full.db test-incremental.db
+  db eval {
+    ATTACH 'test-full.db' AS a;
+    ATTACH 'test-incremental.db' AS b;
+    PRAGMA a.auto_vacuum=full;
+    PRAGMA b.auto_vacuum=incremental;
+    CREATE TABLE a.t(x);
+    CREATE TABLE b.t(x);
+    PRAGMA a.auto_vacuum;
+    PRAGMA b.auto_vacuum;
+  }
+} {1 2}
+db eval {DETACH a; DETACH b}
+
+do_test $testprefix-mode-after-create {
+  forcedelete test-created.db
+  db eval {
+    ATTACH 'test-created.db' AS aux;
+    CREATE TABLE aux.t(x);
+    PRAGMA aux.auto_vacuum=incremental;
+    PRAGMA aux.auto_vacuum;
+  }
+} 0
+db eval {DETACH aux}
+
+do_test $testprefix-mode-before-create {
+  forcedelete test-initial.db
+  db eval {
+    ATTACH 'test-initial.db' AS aux;
+    PRAGMA aux.auto_vacuum=full;
+    PRAGMA aux.auto_vacuum=incremental;
+    CREATE TABLE aux.t(x);
+    PRAGMA aux.auto_vacuum;
+  }
+} 2
+db eval {DETACH aux}
+
+do_test $testprefix-invalid-file {
+  set fd [open invalid.db w]
+  puts $fd "This is not an SQLite database file"
+  close $fd
+  set opened $sqlite_file::opened
+  sqlite3 invalid invalid.db
+  list [catchsql {PRAGMA incremental_vacuum(10)} invalid] \
+       [expr {$sqlite_file::opened==$opened}]
+} {{1 {file is not a database}} 1}
+invalid close
+
+do_test $testprefix-valid-doltlite-refused {
+  forcedelete wrong-engine.db
+  sqlite_file::native wrong wrong-engine.db
+  wrong eval {CREATE TABLE t(id INTEGER PRIMARY KEY)}
+  wrong close
+  list [catch {sqlite3 wrong wrong-engine.db} message] $message
+} {1 {SQLite permutation opened wrong-engine.db on the wrong engine}}
+wrong close
+
+rename doltlite_test_engine sqlite_file::actual_engine
+proc doltlite_test_engine {args} {return prolly}
+foreach filename {test.db fresh.db} {
+  do_test $testprefix-misrouted-$filename {
+    list [catch {sqlite3 wrong $filename} message] $message
+  } [list 1 "SQLite permutation opened $filename on the wrong engine"]
+  wrong close
+}
+rename doltlite_test_engine {}
+rename sqlite_file::actual_engine doltlite_test_engine
+
+finish_test

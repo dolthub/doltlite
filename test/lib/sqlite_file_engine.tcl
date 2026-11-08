@@ -38,15 +38,25 @@ proc sqlite3 {args} {
   set stock [expr {$sqlite_file::mode eq "sqlite" ||
     ($filename ni {:memory: {}} && [file tail $filename] ne "test.db" &&
      ![string match "file:*" $filename])}]
+  set invalid 0
+  if {$stock && [file isfile $filename] && [file size $filename]>0} {
+    set fd [open $filename rb]
+    set invalid [expr {[read $fd 16] ne "SQLite format 3\x00"}]
+    close $fd
+  }
   if {$stock && $filename ne ""} {
     set args [lreplace $args 1 1 [sqlite_file::uri $filename]]
     lappend args -uri 1
   }
   set res [uplevel 1 [list sqlite_file::native {*}$args]]
-  if {$stock && [doltlite_test_engine $handle] ne "orig"} {
-    error "SQLite permutation opened $filename on the wrong engine"
+  if {$stock} {
+    if {[doltlite_test_engine $handle] eq "orig"} {
+      incr sqlite_file::opened
+    } elseif {!$invalid || ![catch {$handle eval {PRAGMA schema_version}}] ||
+              [$handle errorcode]!=26} {
+      error "SQLite permutation opened $filename on the wrong engine"
+    }
   }
-  if {$stock} {incr sqlite_file::opened}
   # A leave trace formats the result as a string, and a blob with a string
   # form binds back as text, so only an ATTACH gets one.
   trace add execution $handle enter sqlite_file::sql_trace
@@ -79,12 +89,24 @@ proc sqlite_file::sql_trace {command args} {
   set active 1
   try {
     if {$mode eq "sqlite"} {
-      foreach {match filename} [regexp -all -inline -nocase -expanded {
-        \mATTACH\s+(?:DATABASE\s+)?'([^']+)'\s+AS\M
+      foreach {match filename schema} [regexp -all -inline -nocase -expanded {
+        \mATTACH\s+(?:DATABASE\s+)?'([^']+)'\s+AS\M(?:\s+(\w+))?
       } $sql] {
         if {[regexp {^test[^/]*\.db[^/]*$} $filename] &&
             (![file exists $filename] || [file size $filename]==0)} {
           native sqlite_file_seed [uri $filename] -uri 1
+          set pragma [format {
+            \mPRAGMA\s+%s\s*\.\s*auto_vacuum\s*=\s*('(?:[^']|'')*'|"(?:[^"]|"")*"|\w+)
+          } $schema]
+          set initial $sql
+          if {[regexp -nocase -expanded -indices {
+            (?:^|;)\s*(?:CREATE|INSERT|UPDATE|DELETE|REPLACE|DROP|VACUUM)\M
+          } $initial write]} {
+            set initial [string range $initial 0 [expr {[lindex $write 0]-1}]]
+          }
+          foreach {match value} [regexp -all -inline -nocase -expanded $pragma $initial] {
+            sqlite_file_seed eval "PRAGMA auto_vacuum=$value"
+          }
           sqlite_file_seed eval {PRAGMA user_version=0}
           sqlite_file_seed close
         }

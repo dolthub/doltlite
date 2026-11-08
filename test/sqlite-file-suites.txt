@@ -40,6 +40,7 @@ dbpagefault
 decimal
 delete
 delete2
+doltlite_sqlite_file_engine
 e_delete
 e_insert
 e_update
@@ -54,6 +55,8 @@ fkey7
 fkey8
 gencol1
 incrblob3
+incrvacuum
+incrvacuum2
 index
 index2
 index3
