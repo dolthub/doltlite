@@ -241,3 +241,4 @@ doltlite_shared_store_refresh
 doltlite_expression_index_affinity
 doltlite_sqlite_file_engine
 doltlite_vc_review
+doltlite_staged_index_collision

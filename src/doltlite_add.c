@@ -287,7 +287,7 @@ static int addComposeStageAllMaster(
             &pWorkingMaster->root, pWorkingMaster->flags,
             pStagedMaster ? &pStagedMaster->root : 0,
             pStagedMaster ? pStagedMaster->flags : 0,
-            azTouched, nTouched, aNew, nNew, 1, &composedRoot);
+            azTouched, nTouched, aNew, nNew, 1, &composedRoot, 0);
     if( rc==SQLITE_OK ){
       pNewMaster->root = composedRoot;
       pNewMaster->schemaHash = pWorkingMaster->schemaHash;
@@ -1173,14 +1173,17 @@ int doltliteStageNamedTables(
       /* Compose staged master: table/index from working, view/trigger from prior
       ** staged. Wholesale adoption would commit unstaged view/trigger changes. */
       ProllyHash composedRoot;
+      char *zErr = 0;
       rc = doltliteBuildNamedStageMasterRoot(db,
               &pWorkingMaster->root, pWorkingMaster->flags,
               pStagedMaster ? &pStagedMaster->root : 0,
               pStagedMaster ? pStagedMaster->flags : 0,
               (const char**)azTouched, nTouched,
               aStaged, nStaged, stageSchemas,
-              &composedRoot);
+              &composedRoot, &zErr);
       if( rc!=SQLITE_OK ){
+        if( zErr ) sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
         ADDNAMED_FREE_ALL();
         sqlite3_result_error_code(context, rc);
         return rc;

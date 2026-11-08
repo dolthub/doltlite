@@ -764,7 +764,7 @@ static int wsEnsureEmptyStagedTable(
           db, &pWorkMaster->root, pWorkMaster->flags,
           pStagedMaster ? &pStagedMaster->root : 0,
           pStagedMaster ? pStagedMaster->flags : 0,
-          azTouched, 1, *paStaged, *pnStaged, 0, &composedRoot);
+          azTouched, 1, *paStaged, *pnStaged, 0, &composedRoot, 0);
       if( rc==SQLITE_OK && pStagedMaster ){
         pStagedMaster->root = composedRoot;
         pStagedMaster->schemaHash = pWorkMaster->schemaHash;

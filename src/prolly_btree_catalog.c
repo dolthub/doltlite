@@ -1460,7 +1460,8 @@ int doltliteBuildNamedStageMasterRoot(
   const char **azTouched, int nTouched,
   struct TableEntry *aFinal, int nFinal,
   int bEntrylessFromWorking,
-  ProllyHash *pNewRoot
+  ProllyHash *pNewRoot,
+  char **pzErr
 ){
   Btree *pBtree;
   struct TableEntry m;
@@ -1477,6 +1478,7 @@ int doltliteBuildNamedStageMasterRoot(
   Pgno iNextPg;
   int i, t, rc;
 
+  if( pzErr ) *pzErr = 0;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
   memset(pNewRoot, 0, sizeof(*pNewRoot));
@@ -1495,6 +1497,36 @@ int doltliteBuildNamedStageMasterRoot(
                                &ignoreRoot, &ignoreFlags);
     if( rc!=SQLITE_OK ){
       freeSchemaCatalogRows(aWork, nWork);
+      return rc;
+    }
+  }
+
+  for(i=0; i<nWork; i++){
+    SchemaCatalogRow *pWork = &aWork[i];
+    if( !pWork->zType || strcmp(pWork->zType, "index")!=0
+     || !pWork->zName || !pWork->zTblName
+     || !stageMasterRowEmitted(pWork, 1, azTouched, nTouched,
+                                bEntrylessFromWorking)
+     || !stageMasterNamedInFinal(aFinal, nFinal, pWork->zTblName) ) continue;
+    for(t=0; t<nOld; t++){
+      SchemaCatalogRow *pOld = &aOld[t];
+      if( !pOld->zType || strcmp(pOld->zType, "index")!=0
+       || !pOld->zName || !pOld->zTblName
+       || sqlite3_stricmp(pWork->zName, pOld->zName)!=0
+       || sqlite3_stricmp(pWork->zTblName, pOld->zTblName)==0
+       || !stageMasterRowEmitted(pOld, 0, azTouched, nTouched,
+                                  bEntrylessFromWorking)
+       || !stageMasterNamedInFinal(aFinal, nFinal, pOld->zTblName) ) continue;
+      rc = SQLITE_CONSTRAINT;
+      if( pzErr ){
+        *pzErr = sqlite3_mprintf(
+            "cannot stage index '%s' for table '%s': name conflicts with "
+            "table '%s' in staged schema; stage both table changes together",
+            pWork->zName, pWork->zTblName, pOld->zTblName);
+        if( !*pzErr ) rc = SQLITE_NOMEM;
+      }
+      freeSchemaCatalogRows(aWork, nWork);
+      freeSchemaCatalogRows(aOld, nOld);
       return rc;
     }
   }

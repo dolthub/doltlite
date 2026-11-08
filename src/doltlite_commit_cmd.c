@@ -559,7 +559,7 @@ static int doltliteCommitStageModifiedOnly(
               &pStagedMaster->root, pStagedMaster->flags,
               azTouched, nTouched,
               aStaged, nStaged, 1,
-              &composedRoot);
+              &composedRoot, 0);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
         FREE_ADD_MODIFIED_CATALOGS();

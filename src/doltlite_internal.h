@@ -2164,7 +2164,7 @@ int doltliteBuildNamedStageMasterRoot(sqlite3 *db,
     const char **azTouched, int nTouched,
     struct TableEntry *aFinal, int nFinal,
     int bEntrylessFromWorking,
-    ProllyHash *pNewRoot);
+    ProllyHash *pNewRoot, char **pzErr);
 void doltliteRenumberStaleStagedEntries(
     struct TableEntry *aStaged, int nStaged,
     struct TableEntry *aWorking, int nWorking);
