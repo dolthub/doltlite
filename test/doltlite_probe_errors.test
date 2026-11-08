@@ -1,0 +1,117 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_probe_errors
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1);
+}
+db close
+forcedelete legacy.db
+sqlite3 legacy file:legacy.db?doltlite_engine=sqlite -uri 1
+legacy eval {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(2)}
+legacy close
+
+testvfs probe -default 1
+probe script probe_error
+proc probe_error {method filename args} {
+  if {[file normalize $filename] eq $::probe_filename} {
+    incr ::probe_calls
+    if {$::probe_calls==1} {return SQLITE_IOERR}
+  }
+  return SQLITE_OK
+}
+
+foreach filename {test.db legacy.db} {
+  set ::probe_filename [file normalize $filename]
+  foreach method {xAccess xOpen xRead} {
+    probe filter $method
+    do_test 2.$filename.$method {
+      set ::probe_calls 0
+      set rc [catch {sqlite3 db $filename} msg]
+      catch {db close}
+      list $rc $msg $::probe_calls
+    } {1 {disk I/O error} 1}
+  }
+  probe filter xOpen
+  probe script {}
+  do_test 3.$filename {
+    probe cantopenerr 1 0
+    set rc [catch {sqlite3 db $filename} msg]
+    catch {db close}
+    probe cantopenerr 0 0
+    list $rc $msg
+  } {1 {unable to open database file}}
+  probe filter {}
+  sqlite3 db $filename
+  do_test 4.$filename {db eval {SELECT * FROM t}} \
+      [expr {$filename eq "test.db" ? 1 : 2}]
+  db close
+  probe script probe_error
+}
+
+file copy -force legacy.db backup.db
+sqlite3 db legacy.db
+set ::probe_filename [file normalize backup.db]
+foreach method {xOpen xRead} {
+  probe filter $method
+  do_test 5.$method {
+    set ::probe_calls 0
+    set rc [catch {db backup backup.db} msg]
+    list $rc [regsub {.*: } $msg {}] $::probe_calls
+  } {1 {disk I/O error} 1}
+}
+probe script {}
+do_test 5.cantopen {
+  probe filter xOpen
+  probe cantopenerr 1 0
+  set rc [catch {db backup backup.db} msg]
+  probe cantopenerr 0 0
+  list $rc [regsub {.*: } $msg {}]
+} {1 {unable to open database file}}
+probe filter {}
+do_test 5.retry {db backup backup.db} {}
+db close
+sqlite3 db backup.db
+do_execsql_test 5.data {SELECT * FROM t} {2}
+db close
+
+foreach filename {missing.db empty.db} {
+  forcedelete $filename
+  if {$filename eq "empty.db"} {close [open $filename w]}
+  do_test 6.$filename {
+    sqlite3 db $filename
+    db eval {CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(3)}
+    db eval {SELECT * FROM t}
+  } 3
+  db close
+}
+
+foreach size {3 7 15} {
+  do_test 6.short.$size {
+    set bytes [string repeat x $size]
+    set fd [open short.db wb]
+    puts -nonewline $fd $bytes
+    close $fd
+    sqlite3 db short.db
+    set result [catchsql {SELECT * FROM sqlite_master}]
+    db close
+    set fd [open short.db rb]
+    set unchanged [expr {[read $fd] eq $bytes}]
+    close $fd
+    list $result $unchanged
+  } {{1 {file is not a database}} 1}
+}
+
+file mkdir probe-dir
+foreach vfs {probe default} {
+  if {$vfs eq "default"} {probe delete}
+  do_test 7.$vfs {
+    set opts [expr {$vfs eq "probe" ? {-vfs probe} : {}}]
+    set rc [catch {sqlite3 db probe-dir {*}$opts} msg]
+    catch {db close}
+    list $rc $msg
+  } {1 {unable to open database file}}
+}
+
+finish_test

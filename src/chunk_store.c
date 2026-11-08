@@ -4,6 +4,7 @@
 
 #include "chunk_store_int.h"
 #include "../ext/blake3/blake3.h"
+#include <errno.h>
 #include <sys/stat.h>
 
 /* unix VFS asserts a 128KiB read cap; writers already slice. */
@@ -181,8 +182,8 @@ int chunkStoreReadFileHeader(
     if( !pVfs ) return SQLITE_OK;
   }
   rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
-  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
-  if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  if( !exists ) return SQLITE_OK;
 
   nFull = pVfs->mxPathname + 1;
   zFull = sqlite3_malloc(nFull);
@@ -204,15 +205,22 @@ int chunkStoreReadFileHeader(
   if( rc!=SQLITE_OK ){
     if( pFile ) sqlite3OsCloseFree(pFile);
     sqlite3_free(zProbe);
-    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
-    return SQLITE_OK;
+    return rc;
   }
   rc = sqlite3OsRead(pFile, aBuf, nBuf, 0);
+#if !SQLITE_OS_WIN && defined(EISDIR)
+  if( rc==SQLITE_IOERR_READ ){
+    int err = 0;
+    if( sqlite3OsFileControl(pFile, SQLITE_FCNTL_LAST_ERRNO, &err)==SQLITE_OK
+     && err==EISDIR ){
+      rc = SQLITE_CANTOPEN;
+    }
+  }
+#endif
   sqlite3OsCloseFree(pFile);
   sqlite3_free(zProbe);
-  if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ) return rc;
   if( rc==SQLITE_OK ) *pRead = 1;
-  return SQLITE_OK;
+  return rc==SQLITE_IOERR_SHORT_READ ? SQLITE_OK : rc;
 }
 
 int csSyncFile(ChunkStore *cs){

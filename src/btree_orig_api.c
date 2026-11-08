@@ -230,7 +230,6 @@ void origBtreeLeave(void *p){
 }
 void *origBtreePager(void *p){ return orig_sqlite3BtreePager(B(p)); }
 
-/* Probe failure usually means "not a legacy sqlite file"; OOM must still propagate. */
 int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename,
                           int *pIsSqliteFile){
   u8 buf[16];

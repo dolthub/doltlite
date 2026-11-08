@@ -76,6 +76,7 @@ statfault
 swarmvtabfault
 sysfault
 doltlite_probe_fullpath
+doltlite_probe_errors
 tempfault
 unionallfault
 unionvtabfault

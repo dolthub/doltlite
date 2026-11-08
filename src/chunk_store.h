@@ -577,8 +577,7 @@ int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
 int chunkStoreHostFileIsZero(const char *zPath);
 int chunkStoreGetLockFile(ChunkStore *cs, sqlite3_file **ppFile);
 
-/* Read the first nBuf bytes of an existing file. *pRead is 0 when it is
-** missing, unopenable or shorter; only OOM is an error. */
+/* *pRead is true only when all nBuf header bytes were read. */
 int chunkStoreReadFileHeader(sqlite3_vfs *pVfs, const char *zFilename,
                              u8 *aBuf, int nBuf, int *pRead);
 
