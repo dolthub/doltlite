@@ -248,7 +248,7 @@ void sqlite3TableAffinity(Vdbe *v, Table *pTab, int iReg){
 ** an integer. Applying the others twice is not a no-op: text that converted
 ** to the REAL nearest -2**63 stays REAL once, and would become an integer
 ** the second time. An index affinity string folds REAL into NUMERIC, so for
-** an index key the column decides; an expression keeps its affinity. */
+** an index key the column decides; expressions keep their evaluated type. */
 static void doltliteRealAffinityOnly(
   Vdbe *v,
   const char *zAff,
@@ -265,8 +265,7 @@ static void doltliteRealAffinityOnly(
     int bKeep;
     if( pIdx ){
       int iCol = pIdx->aiColumn[i];
-      bKeep = iCol==XN_EXPR
-           || (iCol>=0 && pTab->aCol[iCol].affinity==SQLITE_AFF_REAL);
+      bKeep = iCol>=0 && pTab->aCol[iCol].affinity==SQLITE_AFF_REAL;
     }else{
       bKeep = zAff[i]==SQLITE_AFF_REAL;
     }
