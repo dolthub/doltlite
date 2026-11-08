@@ -75,6 +75,7 @@ lock4
 lock5
 lock6
 lock7
+memdb1
 mmapleak
 pager1
 pager2
