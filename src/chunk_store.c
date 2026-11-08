@@ -162,13 +162,14 @@ int chunkStorePathIsDirectory(
   int *pIsDir
 ){
   char *zDir;
+  int accessFlags = SQLITE_OS_WIN ? SQLITE_ACCESS_READ : SQLITE_ACCESS_EXISTS;
   int rc;
   *pIsDir = 0;
   if( sqlite3IsDoltliteSharedMemVfs(pVfs) ) return SQLITE_OK;
   /* Windows ignores trailing slashes and hides zero-size paths from EXISTS. */
   zDir = sqlite3_mprintf("%s/.", zPath);
   if( !zDir ) return SQLITE_NOMEM;
-  rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_READ, pIsDir);
+  rc = sqlite3OsAccess(pVfs, zDir, accessFlags, pIsDir);
   sqlite3_free(zDir);
   return rc;
 }
