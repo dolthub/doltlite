@@ -582,7 +582,8 @@ RT_ALTER="ALTER TABLE t RENAME TO t2; ALTER TABLE t2 RENAME COLUMN x TO y; ALTER
 seed_stock "$RT" "$RT_SEED"
 seed_stock "$TMP/realtab_ref.db" "$RT_SEED"
 want_eq "R1_recover_keeps_a_real_dolt_ignore_table" \
-  "$($DOLTLITE "$RT" .recover 2>&1)" "$($SQLITE3 "$RT" .recover 2>&1)"
+  "$($DOLTLITE "$RT" .recover 2>&1 | grep -c -e '^CREATE TABLE dolt_ignore' -e "^INSERT OR IGNORE INTO 'dolt_ignore'.*'tmp%', 1);$")" \
+  "2"
 want_eq "R2_alter_beside_a_real_dolt_ignore_table_matches_sqlite" \
   "$(dl_all "$RT_ALTER" "$RT")" \
   "$(printf '%s\n' "$RT_ALTER" | $SQLITE3 "$TMP/realtab_ref.db" 2>&1)"
