@@ -659,11 +659,11 @@ set long_text_schema {
     (1,replace(hex(zeroblob(501)),'00','line'||char(10))),
     (2,replace(hex(zeroblob(1001)),'00',char(0))),
     (3,replace(hex(zeroblob(65537)),'00',char(0))),
-    (4,replace(hex(zeroblob(4097)),'00',char(233,0,128044,39,9))),
+    (4,replace(hex(zeroblob(4097)),'00',char(233,0,8364,39,9))),
     (5,replace(hex(zeroblob(10001)),'00','line'||char(10))),
     (6,replace(hex(zeroblob(1001)),'00',char(1,31,127))),
     (7,char(39)||replace(hex(zeroblob(3000)),'00',char(233))||char(0,39)
-       ||replace(hex(zeroblob(3001)),'00',char(128044))||char(0));
+       ||replace(hex(zeroblob(3001)),'00',char(8364))||char(0));
 }
 db eval $long_text_schema
 set expected [db eval {SELECT id,typeof(v),hex(v) FROM long_text ORDER BY id}]
