@@ -1498,6 +1498,20 @@ static void gcVacuumIntoOpenMsg(sqlite3 *db, int rc, const char *zName,
   *pzPhase = sqlite3_errmsg(db);
 }
 
+/* A failed VACUUM INTO leaves nothing beside the target: drop the
+** reservation sidecar unless it was there before this call. Peers writing
+** the same target still exclude each other on the output file itself. */
+static void gcVacuumIntoAbandonDest(
+  sqlite3_vfs *pVfs,
+  const char *zPath,
+  CsFileLock pLock,
+  char **pzLockName,
+  int bSidecarWasThere
+){
+  csFileUnlock(pLock, pzLockName);
+  if( pLock && !bSidecarWasThere ) csLockSidecarDelete(pVfs, zPath);
+}
+
 static void gcVacuumIntoDiscardEphemeral(sqlite3_vfs *pVfs, const char *zPath){
   if( !pVfs || !zPath || !zPath[0] ) return;
   sqlite3OsDelete(pVfs, zPath, 0);
@@ -1526,6 +1540,7 @@ int doltliteGcVacuumInto(
   sqlite3_file *pOutFile = 0;
   CsFileLock pDestLock = 0;
   char *zDestLockName = 0;
+  int bDestSidecar = 1;
   char *zPath = 0;
   char *zFile = 0;
   char *zErr = 0;
@@ -1637,8 +1652,11 @@ int doltliteGcVacuumInto(
   ** a guess that a peer can invalidate before the first byte goes out.
   ** A memdb target has no disk sidecar to lock. */
   if( !bMem ){
-    rc = csFileLock(pVfs, zPath, SQLITE_OPEN_READONLY,
-                    &pDestLock, &zDestLockName);
+    rc = csLockSidecarExists(pVfs, zPath, &bDestSidecar);
+    if( rc==SQLITE_OK ){
+      rc = csFileLock(pVfs, zPath, SQLITE_OPEN_READONLY,
+                      &pDestLock, &zDestLockName);
+    }
     if( rc!=SQLITE_OK ){
       if( bEphemeral ) gcVacuumIntoDiscardEphemeral(pVfs, zPath);
       sqlite3_free(zPath);
@@ -1658,7 +1676,8 @@ int doltliteGcVacuumInto(
 
   rc = gcLockAndRefresh(db, cs, 1, &bRefreshed);
   if( rc!=SQLITE_OK ){
-    csFileUnlock(pDestLock, &zDestLockName);
+    gcVacuumIntoAbandonDest(pVfs, zPath, pDestLock, &zDestLockName,
+                            bDestSidecar);
     if( bEphemeral ) gcVacuumIntoDiscardEphemeral(pVfs, zPath);
     sqlite3_free(zPath);
     sqlite3_free(zOwnedOut);
@@ -1669,7 +1688,8 @@ int doltliteGcVacuumInto(
   rc = gcMarksInit(&marked, cs);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
-    csFileUnlock(pDestLock, &zDestLockName);
+    gcVacuumIntoAbandonDest(pVfs, zPath, pDestLock, &zDestLockName,
+                            bDestSidecar);
     if( bEphemeral ) gcVacuumIntoDiscardEphemeral(pVfs, zPath);
     sqlite3_free(zPath);
     sqlite3_free(zOwnedOut);
@@ -1680,7 +1700,8 @@ int doltliteGcVacuumInto(
   if( rc!=SQLITE_OK ){
     gcMarksFree(&marked);
     chunkStoreUnlock(cs);
-    csFileUnlock(pDestLock, &zDestLockName);
+    gcVacuumIntoAbandonDest(pVfs, zPath, pDestLock, &zDestLockName,
+                            bDestSidecar);
     if( bEphemeral ) gcVacuumIntoDiscardEphemeral(pVfs, zPath);
     sqlite3_free(zPath);
     sqlite3_free(zOwnedOut);
@@ -1696,7 +1717,8 @@ int doltliteGcVacuumInto(
     if( bTargetNonEmpty ){
       gcMarksFree(&marked);
       chunkStoreUnlock(cs);
-      csFileUnlock(pDestLock, &zDestLockName);
+      gcVacuumIntoAbandonDest(pVfs, zPath, pDestLock, &zDestLockName,
+                              bDestSidecar);
       if( bEphemeral ) gcVacuumIntoDiscardEphemeral(pVfs, zPath);
       sqlite3_free(zPath);
       sqlite3_free(zOwnedOut);
@@ -1707,7 +1729,8 @@ int doltliteGcVacuumInto(
   gcMarksFree(&marked);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
-    csFileUnlock(pDestLock, &zDestLockName);
+    gcVacuumIntoAbandonDest(pVfs, zPath, pDestLock, &zDestLockName,
+                            bDestSidecar);
     if( bEphemeral ) gcVacuumIntoDiscardEphemeral(pVfs, zPath);
     sqlite3_free(zPath);
     sqlite3_free(zOwnedOut);
