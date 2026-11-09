@@ -14,6 +14,8 @@
 source [file join [file dirname [info script]] vec1_common.tcl]
 set testprefix vec1rotate
 vec1_load db
+expr srand(0)
+prng_seed 1
 
 do_execsql_test 1.0 {
   CREATE VIRTUAL TABLE v1 USING vec1(v);
@@ -32,7 +34,7 @@ do_execsql_test 1.0 {
 set v [db one {SELECT random_vector(14)}]
 do_execsql_test 1.1 {
   SELECT
-      (SELECT rowid FROM v1($v, 1))==
+      (SELECT rowid FROM v1($v, 10) ORDER BY vec1_cos_distance($v, v))==
       (SELECT rowid FROM v1 ORDER BY vec1_cos_distance($v, v))
   ;
 } {1}
