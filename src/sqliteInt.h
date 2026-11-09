@@ -1968,6 +1968,7 @@ struct sqlite3 {
 #define DBFLAG_MergeSchemaAdd 0x0200
 #define DBFLAG_RebasePlan     0x0400  /* Internal CREATE of the rebase plan */
 #define DBFLAG_MaterializeDefault 0x0800
+#define DBFLAG_DoltliteDump   0x1000
 #endif
 
 /*

@@ -631,6 +631,65 @@ static void authorization(void){
   check("authorizer restored",number(out,"SELECT 1")==-1);
   sqlite3_free(error); sqlite3_close(out); sqlite3_close(db);
 }
+
+struct TableAuth {
+  int deny;
+  int inserts;
+};
+static int materializedAuthorizer(void *ctx, int op, const char *a,
+    const char *b, const char *db, const char *trigger){
+  struct TableAuth *auth = ctx;
+  if( op==SQLITE_CREATE_TABLE && a && !sqlite3_stricmp(a,"dolt_docs")
+   && auth->deny==2 ) return SQLITE_DENY;
+  if( op==SQLITE_INSERT && a && !sqlite3_stricmp(a,"dolt_docs") ){
+    auth->inserts++;
+    if( auth->deny==1 ) return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+static void materializedAuthorization(void){
+  sqlite3 *db = 0, *out = openStock();
+  struct TableAuth auth = {2,0};
+  char *error = 0;
+  int rc;
+  check("materialized source opens",sqlite3_open(":memory:",&db)==SQLITE_OK);
+  check("materialized source setup",sql(db,
+      "INSERT INTO dolt_docs VALUES('README.md','original')")==SQLITE_OK);
+  sqlite3_set_authorizer(out,materializedAuthorizer,&auth);
+  rc = doltlite_export_sqlite(db,0,out,&error);
+  check("materialized creation authorizer forwarded",rc==SQLITE_AUTH);
+  check("materialized creation refusal rolls back",sqlite3_get_autocommit(out)
+      && number(out,"SELECT count(*) FROM sqlite_schema")==0);
+  check("materialized creation refusal restores guard",sqlite3_exec(out,
+      "CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL,"
+      " PRIMARY KEY(pattern))",0,0,0)==SQLITE_ERROR);
+  sqlite3_free(error); error = 0;
+  auth.deny = 1;
+  rc = doltlite_export_sqlite(db,0,out,&error);
+  check("materialized authorizer forwarded",rc==SQLITE_AUTH && auth.inserts>0);
+  check("materialized refusal rolls back",sqlite3_get_autocommit(out)
+      && number(out,"SELECT count(*) FROM sqlite_schema")==0);
+  check("materialized failure restores creation guard",sqlite3_exec(out,
+      "CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL,"
+      " PRIMARY KEY(pattern))",0,0,0)==SQLITE_ERROR);
+  sqlite3_free(error); error = 0;
+  auth.deny = 0;
+  rc = doltlite_export_sqlite(db,0,out,&error);
+  check("materialized export retries",rc==SQLITE_OK && !error);
+  check("materialized export data",number(out,
+      "SELECT count(*) FROM dolt_docs WHERE doc_name='README.md'"
+      " AND doc_text='original'")==1);
+  check("materialized success restores creation guard",sqlite3_exec(out,
+      "CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL,"
+      " PRIMARY KEY(pattern))",0,0,0)==SQLITE_ERROR);
+  auth.deny = 1;
+  check("materialized authorizer restored",sqlite3_exec(out,
+      "INSERT INTO dolt_docs VALUES('forbidden','x')",0,0,0)==SQLITE_AUTH);
+  check("materialized source retained",number(db,
+      "SELECT count(*) FROM dolt_docs WHERE doc_name='README.md'"
+      " AND doc_text='original'")==1);
+  sqlite3_free(error); sqlite3_close(out); sqlite3_close(db);
+}
 #endif
 
 static void legacyMeta(void){
@@ -730,6 +789,7 @@ int main(void){
   statistics(); danglingSchema(); danglingApplications(); existingFiles(); memoryDestinations(); values(); virtualTables(); destinationScope(); constraintStreams(); lateCancellation(); failures(); snapshot(); movingSnapshots(); legacyMeta();
 #ifndef SQLITE_OMIT_AUTHORIZATION
   authorization();
+  materializedAuthorization();
 #endif
   printf("dump_test: %d passed, %d failed\n",passed,failed);
   return failed ? 1 : 0;

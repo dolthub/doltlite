@@ -440,16 +440,20 @@ Table *sqlite3LocateTable(
 #ifdef DOLTLITE_PROLLY
   if( (zDbase==0 || sqlite3StrICmp(zDbase, "main")==0)
    && db->nDb>0 && db->aDb[0].pBt && sqlite3BtreeUsesOrig(db->aDb[0].pBt)
+   && (db->mDbFlags & DBFLAG_DoltliteDump)==0
    && (sqlite3StrICmp(zName, "dolt_ignore")==0
     || sqlite3StrICmp(zName, "dolt_docs")==0
     || sqlite3StrICmp(zName, "dolt_tests")==0
     || sqlite3StrICmp(zName, "dolt_nonlocal_tables")==0)
   ){
-    if( (flags & LOCATE_NOERR)==0 ){
-      sqlite3ErrorMsg(pParse,
-        "dolt version-control features are not available on stock SQLite databases");
+    p = sqlite3FindTable(db,zName,"main");
+    if( !p || !IsOrdinaryTable(p) ){
+      if( (flags & LOCATE_NOERR)==0 ){
+        sqlite3ErrorMsg(pParse,
+          "dolt version-control features are not available on stock SQLite databases");
+      }
+      return 0;
     }
-    return 0;
   }
   if( zDbase==0
    && (sqlite3StrICmp(zName, "dolt_ignore")==0
@@ -3039,6 +3043,7 @@ void sqlite3EndTable(
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
    && IsOrdinaryTable(p)
    && iDb==0
+   && (db->mDbFlags & DBFLAG_DoltliteDump)==0
    && db->aDb[0].pBt && sqlite3BtreeUsesOrig(db->aDb[0].pBt)
    && (sqlite3StrICmp(p->zName, "dolt_ignore")==0
     || sqlite3StrICmp(p->zName, "dolt_docs")==0
