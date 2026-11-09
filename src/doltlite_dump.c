@@ -48,6 +48,17 @@ static int dumpWrite(DlDump *p, const char *z){
   return dumpBytes(p,z,sqlite3Strlen30(z));
 }
 
+static char *dumpStatement(const char *zSql){
+  static const char *azTerm[] = { "", "*/", "\n" };
+  int i;
+  for(i=0; i<(int)(sizeof(azTerm)/sizeof(azTerm[0])); i++){
+    char *z = sqlite3_mprintf("%s%s;\n", zSql, azTerm[i]);
+    if( !z || sqlite3_complete(z) ) return z;
+    sqlite3_free(z);
+  }
+  return sqlite3_mprintf("%s;\n", zSql);
+}
+
 static int dumpExec(DlDump *p, const char *zObject, const char *zSql){
   int rc = sqlite3_exec(p->out, zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) return dumpError(p, rc, zObject, sqlite3_errmsg(p->out));
@@ -488,7 +499,7 @@ static int dumpObjects(DlDump *p){
     if( dumpSkip(e->zName) || dumpSkip(e->zTblName)
      || !e->zSql || !e->zSql[0] || !strcmp(e->zType,"table") ) continue;
     rc = dumpExec(p,e->zName,e->zSql);
-    z = sqlite3_mprintf("%s;\n",e->zSql);
+    z = dumpStatement(e->zSql);
     if( rc==SQLITE_OK ) rc = dumpWrite(p,z);
     sqlite3_free(z);
   }
@@ -801,7 +812,7 @@ static int dumpRun(DlDump *p){
       if( (t->tabFlags & TF_Shadow)!=0 ){
         z = sqlite3_mprintf("DELETE FROM main.\"%w\";\n",e->zName);
         if( z ) rc = dumpExec(p,e->zName,z);
-      }else z = sqlite3_mprintf("%s;\n",e->zSql);
+      }else z = dumpStatement(e->zSql);
       if( rc==SQLITE_OK ) rc = dumpWrite(p,z);
       sqlite3_free(z);
       if( rc==SQLITE_OK && !IsVirtual(t) ) rc = dumpTable(p,e->zName);

@@ -650,4 +650,26 @@ do_test dump-encoding.sql {
 } [list 1 1 1 1 1 UTF-16le {6800E9006C006C006F00 5} {61000A006200 3} 0000 \
    {6900740027007300 6100} 610000006200 {27000A002700 3} {1 0} ok]
 catch {out close}
+
+# Stored SQL can end inside a comment; the terminator must not land in it.
+foreach {tn tail} {line "-- note\n" block "/* open"} {
+  reset_db
+  set path dump-comment-$tn.sql
+  forcedelete $path
+  db eval {CREATE TABLE t(a); INSERT INTO t VALUES(1),(2),(3);}
+  db eval "CREATE VIEW v AS SELECT a FROM t $tail"
+  do_test dump-trailing-comment.$tn {
+    db eval {SELECT dolt_dump('--file-name',$path,'-r','sql')}
+    set fd [open $path r]
+    fconfigure $fd -encoding utf-8 -translation lf
+    set sql [read $fd]
+    close $fd
+    sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+    out eval $sql
+    list [sqlite3_get_autocommit out] [out one {SELECT count(*) FROM sqlite_schema}] \
+         [out one {SELECT count(*) FROM v}] [out one {PRAGMA integrity_check}]
+  } {1 2 3 ok}
+  catch {out close}
+}
+
 finish_test
