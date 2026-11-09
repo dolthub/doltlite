@@ -1234,7 +1234,8 @@ int sqlite3CheckObjectName(
       return SQLITE_ERROR;
     }
 #ifdef DOLTLITE_PROLLY
-    if( pParse->nested==0 && sqlite3StrNICmp(zName, "dolt_", 5)==0 ){
+    if( pParse->nested==0 && !IN_RENAME_OBJECT
+     && sqlite3StrNICmp(zName, "dolt_", 5)==0 ){
       int bPlanTable = (db->mDbFlags & DBFLAG_RebasePlan)!=0
         && sqlite3StrICmp(zType, "table")==0
         && sqlite3StrICmp(zName, "dolt_rebase")==0;
