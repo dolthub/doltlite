@@ -987,6 +987,36 @@ static void run_serialize_deserialize(void){
             "CREATE TABLE zero_t(v TEXT); INSERT INTO zero_t VALUES('ok');")
             ==SQLITE_OK);
   }
+  {
+    static unsigned char aNone[1];
+    unsigned aFlag[] = {
+      0, SQLITE_DESERIALIZE_READONLY,
+      SQLITE_DESERIALIZE_FREEONCLOSE,
+      SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_READONLY
+    };
+    int i;
+    for(i=0; i<4; i++){
+      sqlite3 *noRoom = 0;
+      unsigned char *pNone = aNone;
+      check("deserialize_empty_fixed_open",
+            open_db(":memory:", &noRoom)==SQLITE_OK);
+      if( aFlag[i] & SQLITE_DESERIALIZE_FREEONCLOSE ){
+        pNone = sqlite3_malloc64(1);
+      }
+      if( noRoom && pNone ){
+        check("deserialize_empty_fixed_seed",
+              execSql(noRoom, "CREATE TABLE old(x);")==SQLITE_OK);
+        rc = sqlite3_deserialize(noRoom, "main", pNone, 0, 0, aFlag[i]);
+        check("deserialize_empty_fixed", rc==SQLITE_OK);
+        check("deserialize_empty_fixed_schema",
+              strcmp(queryScalarText(noRoom,
+                "SELECT count(*) FROM sqlite_master"), "0")==0);
+        check("deserialize_empty_fixed_write_refused",
+              execSql(noRoom, "CREATE TABLE t(x);")!=SQLITE_OK);
+      }
+      sqlite3_close(noRoom);
+    }
+  }
 
   sqlite3_free(pData);
   sqlite3_free(pReadOnly);

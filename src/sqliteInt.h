@@ -5638,7 +5638,8 @@ int doltliteBtreeSerialize(Btree*, const char*, const void*,
                            unsigned char**, sqlite3_int64*);
 int doltliteSerializeDb(sqlite3*, Btree*, unsigned char**, sqlite3_int64*);
 int doltliteBtreeDeserialize(
-  sqlite3*, unsigned char*, sqlite3_int64, sqlite3_int64, unsigned, Btree**
+  sqlite3*, unsigned char*, sqlite3_int64, sqlite3_int64, unsigned, Btree**,
+  int*
 );
 #endif
 #else
