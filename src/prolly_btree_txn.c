@@ -1242,6 +1242,10 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
   }
   if( !p ) return SQLITE_OK;
+  {
+    int rc = doltliteBtreeCheckEmptyEngine(p);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   return btreeReadResult(p,
       p->pOps->xBeginTrans(p, wrFlag, pSchemaVersion));
 }
