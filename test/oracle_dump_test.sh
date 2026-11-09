@@ -235,6 +235,29 @@ for table in dolt_ignore dolt_docs dolt_tests; do
       "$(test -e "$path" && echo present || echo absent)" absent
   done
 done
+text_schema="CREATE TABLE long_text(id INTEGER PRIMARY KEY,v TEXT);
+INSERT INTO long_text VALUES
+ (1,replace(hex(zeroblob(501)),'00','line'||char(10))),
+ (2,replace(hex(zeroblob(1001)),'00',char(0))),
+ (3,replace(hex(zeroblob(65537)),'00',char(0))),
+ (4,replace(hex(zeroblob(4097)),'00','é'||char(0)||'🐬''')),
+ (5,replace(hex(zeroblob(10001)),'00','line'||char(10))),
+ (6,replace(hex(zeroblob(1001)),'00',char(1,31,127)));"
+"$DOLTLITE" "$TMP/long-text" "$text_schema"
+"$DOLTLITE" "$TMP/long-text" "SELECT dolt_dump('--file-name','$TMP/long-text.sql')" > /dev/null
+text_query="SELECT id,typeof(v),hex(v) FROM long_text ORDER BY id; PRAGMA integrity_check;"
+for encoding in UTF-8 UTF-16le UTF-16be; do
+  expected="$TMP/text-expected-$encoding.sqlite"
+  output="$TMP/text-replayed-$encoding.sqlite"
+  "$SQLITE3" "$expected" "PRAGMA encoding='$encoding'; $text_schema"
+  { echo "PRAGMA encoding='$encoding';"; cat "$TMP/long-text.sql"; } | "$SQLITE3" "$output"
+  compare "long text SQL replay $encoding" \
+    "$("$SQLITE3" "$output" "$text_query")" "$("$SQLITE3" "$expected" "$text_query")"
+done
+"$DOLTLITE" "$TMP/text-replayed-doltlite" < "$TMP/long-text.sql"
+compare "long text SQL replay doltlite" \
+  "$("$DOLTLITE" "$TMP/text-replayed-doltlite" "$text_query")" \
+  "$("$DOLTLITE" "$TMP/long-text" "$text_query")"
 
 broken_schema="CREATE TABLE gone(x);
 CREATE VIEW bv AS SELECT x FROM gone;

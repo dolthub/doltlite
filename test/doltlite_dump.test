@@ -651,6 +651,48 @@ do_test dump-encoding.sql {
    {6900740027007300 6100} 610000006200 {27000A002700 3} {1 0} ok]
 catch {out close}
 
+reset_db
+forcedelete dump-long-text.sql
+set long_text_schema {
+  CREATE TABLE long_text(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO long_text VALUES
+    (1,replace(hex(zeroblob(501)),'00','line'||char(10))),
+    (2,replace(hex(zeroblob(1001)),'00',char(0))),
+    (3,replace(hex(zeroblob(65537)),'00',char(0))),
+    (4,replace(hex(zeroblob(4097)),'00',char(233,0,128044,39,9))),
+    (5,replace(hex(zeroblob(10001)),'00','line'||char(10))),
+    (6,replace(hex(zeroblob(1001)),'00',char(1,31,127))),
+    (7,char(39)||replace(hex(zeroblob(3000)),'00',char(233))||char(0,39)
+       ||replace(hex(zeroblob(3001)),'00',char(128044))||char(0));
+}
+db eval $long_text_schema
+set expected [db eval {SELECT id,typeof(v),hex(v) FROM long_text ORDER BY id}]
+do_test dump-long-text.export {
+  db one {SELECT dolt_dump('--file-name','dump-long-text.sql')}
+} 0
+set fd [open dump-long-text.sql r]
+fconfigure $fd -encoding utf-8 -translation lf
+set sql [read $fd]
+close $fd
+foreach encoding {UTF-8 UTF-16le UTF-16be} {
+  sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+  sqlite3 expected file::memory:?doltlite_engine=sqlite -uri 1
+  out eval "PRAGMA encoding='$encoding'"
+  expected eval "PRAGMA encoding='$encoding'"
+  expected eval $long_text_schema
+  do_test dump-long-text.replay.$encoding {
+    out eval $sql
+    list [expr {[out eval {SELECT id,typeof(v),hex(v) FROM long_text ORDER BY id}]
+        eq [expected eval {SELECT id,typeof(v),hex(v) FROM long_text ORDER BY id}]}] \
+        [out one {PRAGMA integrity_check}]
+  } {1 ok}
+  out close
+  expected close
+}
+do_test dump-long-text.source {
+  expr {$expected eq [db eval {SELECT id,typeof(v),hex(v) FROM long_text ORDER BY id}]}
+} 1
+
 # Stored SQL can end inside a comment; the terminator must not land in it.
 foreach {tn tail} {line "-- note\n" block "/* open"} {
   reset_db
