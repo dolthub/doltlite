@@ -672,4 +672,30 @@ foreach {tn tail} {line "-- note\n" block "/* open"} {
   catch {out close}
 }
 
+# vec1 is built into DoltLite but not into ordinary SQLite builds.
+foreach {tn schema err} {
+  check {CREATE TABLE t(e BLOB CHECK(e IS NULL OR vec1_to_json(e) IS NOT NULL))}
+    {t: not authorized to use function: vec1_to_json}
+  default {CREATE TABLE t(e BLOB DEFAULT (vec1_from_json('[1]')))}
+    {t: not authorized to use function: vec1_from_json}
+  view {CREATE TABLE t(e BLOB); CREATE VIEW v AS SELECT VEC1_TO_JSON(e) FROM t}
+    {v: not authorized to use function: VEC1_TO_JSON}
+  trigger {CREATE TABLE t(e BLOB); CREATE TABLE l(x);
+    CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO l VALUES(vec1_to_json(new.e)); END}
+    {t: not authorized to use function: vec1_to_json}
+  vec1cat {CREATE TABLE t(e BLOB); CREATE VIEW v AS SELECT * FROM vec1cat}
+    {v: access to vec1cat.database is prohibited}
+} {
+  foreach format {sql sqlite} {
+    reset_db
+    set path dump-vec1-$tn.$format
+    forcedelete $path
+    db eval $schema
+    do_test dump-vec1-function.$tn.$format {
+      catchsql {SELECT dolt_dump('--file-name',$path,'-r',$format)}
+    } [list 1 "dolt_dump: $err"]
+    do_test dump-vec1-function.$tn.$format.no-file {file exists $path} 0
+  }
+}
+
 finish_test

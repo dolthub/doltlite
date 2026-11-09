@@ -548,11 +548,12 @@ static int dumpMeta(DlDump *p, const ProllyHash *cat){
 
 static int dumpDoltliteFunction(const char *z){
   return !sqlite3_strnicmp(z,"dolt_",5) || !sqlite3_strnicmp(z,"doltlite_",9)
-      || !sqlite3_stricmp(z,"active_branch");
+      || !sqlite3_strnicmp(z,"vec1_",5) || !sqlite3_stricmp(z,"active_branch");
 }
 
 static int dumpDoltliteTable(DlDump *p, const char *z, const char *zDb){
   SchemaEntry *table;
+  if( z && !sqlite3_stricmp(z,"vec1cat") ) return 1;
   if( !z || sqlite3_strnicmp(z,"dolt_",5) ) return 0;
   if( zDb && sqlite3_stricmp(zDb,"main") ) return 1;
   table = findSchemaEntry(p->aSchema,p->nSchema,z);
