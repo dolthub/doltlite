@@ -197,4 +197,23 @@ SELECT CONCAT('L|', committer, '|', coalesce(email, ''), '|', message)
 SELECT CONCAT('C|', count(*)) FROM t;
 "
 
+oracle_state "revert_index_add_keeps_secondary_index_in_sync" "
+CREATE TABLE t(a INT PRIMARY KEY, cb INT, cc INT);
+CREATE INDEX ix2 ON t(cc, cb);
+INSERT INTO t VALUES(6, 5, 6);
+SELECT dolt_commit('-Am', 'c8');
+UPDATE t SET cc=NULL WHERE a=6;
+CREATE INDEX ixz ON t(cb);
+SELECT dolt_commit('-Am', 'c10');
+UPDATE t SET cb=1 WHERE a=6;
+SELECT dolt_commit('-Am', 'c12');
+SELECT dolt_revert('HEAD~1');
+" "
+SELECT 'T|' || a || '|' || cb || '|' || cc FROM t WHERE cc=6;
+SELECT 'S|' || count(*) FROM t;
+" "
+SELECT CONCAT('T|', a, '|', cb, '|', cc) FROM t WHERE cc=6;
+SELECT CONCAT('S|', count(*)) FROM t;
+"
+
 vc_oracle_finish

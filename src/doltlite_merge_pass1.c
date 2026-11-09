@@ -1649,6 +1649,7 @@ int mergeCatalogPass1(
 
   rc = mergePass1MergeMaster(&c, iTable1Idx);
   if( rc==SQLITE_DONE ){
+    mergePass1ApplyIndexPatches(&c);
     rc = mergePass1KeepSchemaConflictRoots(&c);
     mergePass1Free(&c);
     return rc;
