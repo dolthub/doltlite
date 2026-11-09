@@ -390,6 +390,19 @@ for sql in \
 do
   want_vc_unavailable "V12_${sql}" "$sql" "$DB"
 done
+for tab in $($DOLTLITE :memory: "SELECT name FROM pragma_module_list WHERE name LIKE 'dolt\_%' ESCAPE '\' AND name NOT IN ('dolt_engine_stats','dolt_creds_ls') ORDER BY 1;"); do
+  want_vc_unavailable "V13_${tab}" "SELECT count(*) FROM $tab;" "$DB"
+done
+for sql in \
+  "SELECT count(*) FROM dolt_diff_summary('HEAD','WORKING');" \
+  "SELECT count(*) FROM dolt_diff_stat('HEAD','WORKING');" \
+  "SELECT count(*) FROM dolt_diff('HEAD','WORKING','t');" \
+  "SELECT count(*) FROM dolt_test_run('*');"
+do
+  want_vc_unavailable "V13_${sql}" "$sql" "$DB"
+done
+want_eq "V13_engine_stats_still_readable" \
+  "$(dl_last "SELECT count(*)>0 FROM dolt_engine_stats;" "$DB")" "1"
 want_eq "V12_hashof_null_stays_null" \
   "$(dl_last "SELECT typeof(dolt_hashof(NULL))||typeof(dolt_hashof_db(NULL))||typeof(dolt_hashof_table(NULL))||typeof(dolt_hashof_table('t',NULL))||typeof(dolt_hashof_index(NULL))||typeof(dolt_hashof_index('i',NULL))||typeof(dolt_hashof_catalog(NULL));" "$DB")" \
   "nullnullnullnullnullnullnull"

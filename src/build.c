@@ -501,6 +501,19 @@ Table *sqlite3LocateTable(
         pMod = sqlite3CarrayRegister(db);
       }
 #endif
+#ifdef DOLTLITE_PROLLY
+      if( pMod && sqlite3StrNICmp(zName, "dolt_", 5)==0
+       && db->nDb>0 && db->aDb[0].pBt && sqlite3BtreeUsesOrig(db->aDb[0].pBt)
+       && sqlite3StrICmp(zName, "dolt_engine_stats")!=0
+       && sqlite3StrICmp(zName, "dolt_creds_ls")!=0
+      ){
+        if( (flags & LOCATE_NOERR)==0 ){
+          sqlite3ErrorMsg(pParse,
+            "dolt version-control features are not available on stock SQLite databases");
+        }
+        return 0;
+      }
+#endif
       if( pMod && sqlite3VtabEponymousTableInit(pParse, pMod) ){
         testcase( pMod->pEpoTab==0 );
         return pMod->pEpoTab;
