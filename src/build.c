@@ -3040,7 +3040,8 @@ void sqlite3EndTable(
   ** well, and an attached database keeps tables of the same names. */
   if( !db->init.busy
    && !db->init.imposterTable
-   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && pParse->eParseMode==PARSE_MODE_NORMAL
+   && !sqlite3WritableSchema(db)
    && IsOrdinaryTable(p)
    && iDb==0
    && (db->mDbFlags & DBFLAG_DoltliteDump)==0
