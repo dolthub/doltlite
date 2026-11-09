@@ -680,8 +680,13 @@ static int dumpValidate(DlDump *p){
       sqlite3_free(sql);
     }
     for(trigger=table->pTrigger; trigger && rc==SQLITE_OK; trigger=trigger->pNext){
-      sqlite3_str *text = sqlite3_str_new(p->out);
+      sqlite3_str *text;
       char *sql;
+      if( trigger->op==TK_UPDATE && table->nCol==0 ){
+        rc = dumpValidateDependencies(p,table);
+        continue;
+      }
+      text = sqlite3_str_new(p->out);
       if( trigger->op==TK_INSERT ){
         sqlite3_str_appendf(text,"EXPLAIN INSERT INTO main.\"%w\" DEFAULT VALUES",e->zName);
       }else if( trigger->op==TK_DELETE ){
