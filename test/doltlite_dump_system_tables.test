@@ -1,0 +1,154 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_dump_system_tables
+
+proc dump_system_insert {table value} {
+  switch $table {
+    dolt_ignore {
+      db eval {INSERT INTO dolt_ignore VALUES($value,1)}
+    }
+    dolt_docs {
+      db eval {INSERT INTO dolt_docs VALUES($value,$value || char(0) || 'é')}
+    }
+    dolt_tests {
+      db eval {INSERT INTO dolt_tests VALUES(
+        $value,'g','SELECT 1','expected_single_value','==','1')}
+    }
+  }
+}
+
+proc dump_system_open {path format} {
+  if {$format eq "sql"} {
+    set fd [open $path r]
+    fconfigure $fd -encoding utf-8 -translation lf
+    set sql [read $fd]
+    close $fd
+    sqlite3 out :memory:
+    out eval $sql
+  } else {
+    sqlite3 out $path
+  }
+}
+
+foreach table {dolt_ignore dolt_docs dolt_tests} {
+  reset_db
+  db eval {CREATE TABLE events(id INTEGER PRIMARY KEY)}
+  switch $table {
+    dolt_ignore {
+      set key pattern
+      set query {SELECT pattern,ignored FROM stored ORDER BY pattern}
+      set insert {INSERT INTO DOLT_IGNORE VALUES('trigger',1)}
+    }
+    dolt_docs {
+      set key doc_name
+      set query {SELECT doc_name,CASE WHEN doc_name='AGENT.md'
+        THEN length(doc_text) ELSE hex(doc_text) END FROM stored ORDER BY doc_name}
+      set insert {INSERT INTO DOLT_DOCS VALUES('trigger','written')}
+    }
+    dolt_tests {
+      set key test_name
+      set query {SELECT * FROM stored ORDER BY test_name}
+      set insert {INSERT INTO DOLT_TESTS VALUES(
+        'trigger','g','SELECT 1','expected_single_value','==','1')}
+    }
+  }
+  foreach phase {base staged working} {
+    dump_system_insert $table $phase
+    if {$phase eq "base"} {
+      db eval "CREATE VIEW stored AS SELECT * FROM main.\"[string toupper $table]\""
+      db eval "CREATE TRIGGER write_stored AFTER INSERT ON events BEGIN $insert; END"
+      db eval {SELECT dolt_commit('-Am','base')}
+    }
+    set expected($phase) [db eval $query]
+    if {$phase eq "staged"} {db eval {SELECT dolt_add('.')}}
+  }
+  set before [list [db one {SELECT dolt_hashof('HEAD')}] \
+      [db eval {SELECT * FROM dolt_status}] [db eval $query]]
+  foreach {ref phase} {HEAD base STAGED staged WORKING working} {
+    foreach format {sql sqlite} {
+      set path dump-system.$format
+      forcedelete $path
+      do_test $table.$ref.$format {
+        db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref',$ref)}
+        dump_system_open $path $format
+        set rows [out eval $query]
+        set schema [out one {SELECT count(*) FROM sqlite_schema
+          WHERE type='table' AND name=$table}]
+        out eval {INSERT INTO events DEFAULT VALUES}
+        set fired [out one "SELECT count(*) FROM $table WHERE $key='trigger'"]
+        list $rows $schema $fired [out one {PRAGMA integrity_check}] \
+            [expr {$before eq [list [db one {SELECT dolt_hashof('HEAD')}] \
+                [db eval {SELECT * FROM dolt_status}] [db eval $query]]}]
+      } [list $expected($phase) 1 1 ok 1]
+      catch {out close}
+    }
+  }
+  db eval "CREATE VIEW dangling AS SELECT * FROM absent JOIN $table"
+  foreach format {sql sqlite} {
+    set path dump-system-dangling.$format
+    forcedelete $path
+    do_test $table.dangling.$format {
+      db eval {SELECT dolt_dump('--file-name',$path,'-r',$format)}
+      dump_system_open $path $format
+      list [out eval $query] \
+          [out one {SELECT count(*) FROM sqlite_schema WHERE name='dangling'}]
+    } [list $expected(working) 1]
+    catch {out close}
+  }
+
+  reset_db
+  db eval "CREATE VIEW stored AS SELECT * FROM $table"
+  db eval {SELECT dolt_commit('-Am','lazy view')}
+  dump_system_insert $table base
+  foreach format {sql sqlite} {
+    set path dump-system-lazy.$format
+    forcedelete $path
+    do_test $table.lazy-history.$format {
+      list [lindex [catchsql {
+        SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref','HEAD')
+      }] 0] [file exists $path]
+    } {1 0}
+    do_test $table.materialized-working.$format {
+      db one {SELECT dolt_dump('--file-name',$path,'-r',$format)}
+    } 0
+  }
+  set historical [db eval $query]
+  db eval {SELECT dolt_commit('-Am','materialized')}
+  db eval "DROP TABLE $table"
+  foreach format {sql sqlite} {
+    set path dump-system-dropped.$format
+    forcedelete $path
+    do_test $table.dropped-working-history.$format {
+      db eval {SELECT dolt_dump('--file-name',$path,'-r',$format,'--ref','HEAD')}
+      dump_system_open $path $format
+      list [out eval $query] [db one {SELECT count(*) FROM sqlite_schema WHERE name=$table}]
+    } [list $historical 0]
+    catch {out close}
+    forcedelete $path
+    do_test $table.dropped-working.$format {
+      list [lindex [catchsql {
+        SELECT dolt_dump('--file-name',$path,'-r',$format)
+      }] 0] [file exists $path]
+    } {1 0}
+  }
+}
+
+foreach dependency {dolt_branches dolt_docs dolt_ignore dolt_tests} {
+  foreach missing {0 1} {
+    reset_db
+    set from $dependency
+    if {$missing} {set from "absent JOIN $dependency"}
+    db eval "CREATE VIEW forbidden AS SELECT * FROM $from"
+    foreach format {sql sqlite} {
+      set path dump-system-forbidden.$format
+      forcedelete $path
+      do_test forbidden.$dependency.$missing.$format {
+        list [lindex [catchsql {
+          SELECT dolt_dump('--file-name',$path,'-r',$format)
+        }] 0] [file exists $path]
+      } {1 0}
+    }
+  }
+}
+
+finish_test

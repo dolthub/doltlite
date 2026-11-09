@@ -180,6 +180,62 @@ for mode in all plan rowids; do
 done
 compare "mid-rebase source unchanged" "$("$DOLTLITE" "$TMP/rebase/dolt_rebase_feat" "$plan_query")" "$plan"
 
+"$DOLTLITE" "$TMP/system-tables" > /dev/null <<'SQL'
+INSERT INTO dolt_ignore VALUES('tmp_%',1);
+INSERT INTO dolt_docs VALUES('README.md','café ''quoted'' 🐬');
+INSERT INTO dolt_tests VALUES('one','g','SELECT 1','expected_single_value','==','1');
+CREATE TABLE events(id INTEGER PRIMARY KEY);
+CREATE VIEW stored_docs AS SELECT * FROM DOLT_DOCS;
+CREATE TRIGGER write_system_tables AFTER INSERT ON events BEGIN
+  INSERT INTO dolt_ignore VALUES('trigger',0);
+  INSERT INTO dolt_docs VALUES('trigger','written');
+  INSERT INTO dolt_tests VALUES('trigger','g','SELECT 1','expected_single_value','==','1');
+END;
+SELECT dolt_commit('-Am','system tables');
+SQL
+"$DOLTLITE" "$TMP/system-tables" .dump > "$TMP/system-reference.sql"
+"$SQLITE3" "$TMP/system-reference.sqlite" < "$TMP/system-reference.sql"
+system_query="SELECT pattern,ignored FROM dolt_ignore ORDER BY pattern;
+SELECT doc_name,hex(doc_text) FROM stored_docs ORDER BY doc_name;
+SELECT * FROM dolt_tests ORDER BY test_name;
+SELECT name,type FROM sqlite_schema WHERE name IN
+ ('dolt_ignore','dolt_docs','dolt_tests','stored_docs','write_system_tables') ORDER BY name;
+PRAGMA integrity_check;"
+system_expected=$("$SQLITE3" "$TMP/system-reference.sqlite" "$system_query")
+for format in sql sqlite; do
+  path="$TMP/system-tables.$format"
+  "$DOLTLITE" "$TMP/system-tables" "SELECT dolt_dump('--file-name','$path','-r','$format')" > /dev/null
+  output="$path"
+  if [[ "$format" == sql ]]; then
+    output="$TMP/system-replayed.sqlite"
+    "$SQLITE3" "$output" < "$path"
+  fi
+  compare "materialized system tables $format rows and schema" \
+    "$("$SQLITE3" "$output" "$system_query")" "$system_expected"
+  compare "materialized system tables $format source unchanged" \
+    "$("$DOLTLITE" "$TMP/system-tables" "$system_query")" "$system_expected"
+  "$SQLITE3" "$output" 'INSERT INTO events DEFAULT VALUES'
+  compare "materialized system tables $format trigger writes" \
+    "$("$SQLITE3" "$output" "SELECT
+      (SELECT count(*) FROM dolt_ignore WHERE pattern='trigger')+
+      (SELECT count(*) FROM dolt_docs WHERE doc_name='trigger')+
+      (SELECT count(*) FROM dolt_tests WHERE test_name='trigger');")" 3
+done
+
+for table in dolt_ignore dolt_docs dolt_tests; do
+  "$DOLTLITE" "$TMP/lazy-$table" "CREATE VIEW forbidden AS SELECT * FROM $table"
+  for format in sql sqlite; do
+    path="$TMP/lazy-$table.$format"
+    refused=0
+    if ! "$DOLTLITE" "$TMP/lazy-$table" "SELECT dolt_dump('--file-name','$path','-r','$format')" > /dev/null 2>&1; then
+      refused=1
+    fi
+    compare "unmaterialized $table $format dependency refused" "$refused" 1
+    compare "unmaterialized $table $format writes no file" \
+      "$(test -e "$path" && echo present || echo absent)" absent
+  done
+done
+
 echo "Results: $pass passed, $fail failed"
 echo __SUITE_COMPLETE__
 [[ "$fail" == 0 ]]

@@ -21,6 +21,12 @@ struct DlDump {
   char **pzErr;
 };
 
+typedef struct DumpWalker DumpWalker;
+struct DumpWalker {
+  Walker walker;
+  DlDump *dump;
+};
+
 static int dumpError(DlDump *p, int rc, const char *zObject, const char *zWhy){
   if( p->pzErr && !*p->pzErr ){
     *p->pzErr = sqlite3_mprintf("dolt_dump: %s%s%s", zObject ? zObject : "",
@@ -116,7 +122,11 @@ static char *dumpMainSql(const SchemaEntry *e){
 
 static int dumpCreate(DlDump *p, SchemaEntry *e){
   Table *t;
-  int rc = dumpExec(p, e->zName, e->zSql);
+  int wasDump = (p->out->mDbFlags & DBFLAG_DoltliteDump)!=0;
+  int rc;
+  p->out->mDbFlags |= DBFLAG_DoltliteDump;
+  rc = dumpExec(p, e->zName, e->zSql);
+  if( !wasDump ) p->out->mDbFlags &= ~DBFLAG_DoltliteDump;
   if( rc!=SQLITE_OK ) return rc;
   t = sqlite3FindTable(p->out, e->zName, "main");
   if( t && IsVirtual(t) ){
@@ -541,6 +551,15 @@ static int dumpDoltliteFunction(const char *z){
       || !sqlite3_stricmp(z,"active_branch");
 }
 
+static int dumpDoltliteTable(DlDump *p, const char *z, const char *zDb){
+  SchemaEntry *table;
+  if( !z || sqlite3_strnicmp(z,"dolt_",5) ) return 0;
+  if( zDb && sqlite3_stricmp(zDb,"main") ) return 1;
+  table = findSchemaEntry(p->aSchema,p->nSchema,z);
+  return !table || strcmp(table->zType,"table") || dumpVirtual(table)
+      || dumpSkip(z);
+}
+
 static int dumpDependencyExpr(Walker *w, Expr *e){
   Parse *parse = w->pParse;
   if( parse->rc!=SQLITE_OK ) return WRC_Abort;
@@ -560,6 +579,7 @@ static int dumpDependencyExpr(Walker *w, Expr *e){
 }
 
 static int dumpDependencySelect(Walker *w, Select *s){
+  DlDump *p = ((DumpWalker*)w)->dump;
   int i;
   if( w->pParse->rc!=SQLITE_OK ) return WRC_Abort;
 #ifndef SQLITE_OMIT_CTE
@@ -579,7 +599,7 @@ static int dumpDependencySelect(Walker *w, Select *s){
       }
       if( w->pParse->rc!=SQLITE_OK ) return WRC_Abort;
     }
-    if( item->zName && sqlite3_strnicmp(item->zName,"dolt_",5)==0 ){
+    if( dumpDoltliteTable(p,item->zName,"main") ){
       sqlite3ErrorMsg(w->pParse,"not authorized to use table: %s",item->zName);
       return WRC_Abort;
     }
@@ -590,36 +610,38 @@ static int dumpDependencySelect(Walker *w, Select *s){
 
 static int dumpValidateDependencies(DlDump *p, Table *table){
   Parse parse;
-  Walker w;
+  DumpWalker context;
+  Walker *w = &context.walker;
   Trigger *trigger;
   int rc;
   sqlite3_mutex_enter(p->out->mutex);
   sqlite3ParseObjectInit(&parse,p->out);
-  memset(&w,0,sizeof(w));
-  w.pParse = &parse;
-  w.xExprCallback = dumpDependencyExpr;
-  w.xSelectCallback = dumpDependencySelect;
-  w.xSelectCallback2 = sqlite3WalkWinDefnDummyCallback;
+  memset(&context,0,sizeof(context));
+  context.dump = p;
+  w->pParse = &parse;
+  w->xExprCallback = dumpDependencyExpr;
+  w->xSelectCallback = dumpDependencySelect;
+  w->xSelectCallback2 = sqlite3WalkWinDefnDummyCallback;
   parse.zAuthContext = table->zName;
-  if( IsView(table) ) sqlite3WalkSelect(&w,table->u.view.pSelect);
+  if( IsView(table) ) sqlite3WalkSelect(w,table->u.view.pSelect);
   for(trigger=table->pTrigger; trigger && !parse.rc; trigger=trigger->pNext){
     TriggerStep *step;
     parse.zAuthContext = trigger->zName;
-    sqlite3WalkExpr(&w,trigger->pWhen);
+    sqlite3WalkExpr(w,trigger->pWhen);
     for(step=trigger->step_list; step && !parse.rc; step=step->pNext){
       Upsert *upsert;
       Select select;
       memset(&select,0,sizeof(select));
       select.pSrc = step->pSrc;
-      sqlite3WalkSelect(&w,&select);
-      sqlite3WalkSelect(&w,step->pSelect);
-      sqlite3WalkExpr(&w,step->pWhere);
-      sqlite3WalkExprList(&w,step->pExprList);
+      sqlite3WalkSelect(w,&select);
+      sqlite3WalkSelect(w,step->pSelect);
+      sqlite3WalkExpr(w,step->pWhere);
+      sqlite3WalkExprList(w,step->pExprList);
       for(upsert=step->pUpsert; upsert && !parse.rc; upsert=upsert->pNextUpsert){
-        sqlite3WalkExprList(&w,upsert->pUpsertTarget);
-        sqlite3WalkExpr(&w,upsert->pUpsertTargetWhere);
-        sqlite3WalkExprList(&w,upsert->pUpsertSet);
-        sqlite3WalkExpr(&w,upsert->pUpsertWhere);
+        sqlite3WalkExprList(w,upsert->pUpsertTarget);
+        sqlite3WalkExpr(w,upsert->pUpsertTargetWhere);
+        sqlite3WalkExprList(w,upsert->pUpsertSet);
+        sqlite3WalkExpr(w,upsert->pUpsertWhere);
       }
     }
   }
@@ -686,6 +708,7 @@ static int dumpValidate(DlDump *p){
 #ifndef SQLITE_OMIT_AUTHORIZATION
 typedef struct DumpAuth DumpAuth;
 struct DumpAuth {
+  DlDump *dump;
   int (*callback)(void*,int,const char*,const char*,const char*,const char*);
   void *ctx;
 };
@@ -696,7 +719,7 @@ static int dumpAuthorize(void *ctx, int op, const char *a, const char *b,
    && dumpDoltliteFunction(b) ) return SQLITE_DENY;
   if( (op==SQLITE_READ || op==SQLITE_INSERT
     || op==SQLITE_UPDATE || op==SQLITE_DELETE) && a
-   && sqlite3_strnicmp(a,"dolt_",5)==0 ) return SQLITE_DENY;
+   && dumpDoltliteTable(saved->dump,a,db) ) return SQLITE_DENY;
   return saved->callback ? saved->callback(saved->ctx,op,a,b,db,trigger) : SQLITE_OK;
 }
 #endif
@@ -781,6 +804,7 @@ static int dumpRun(DlDump *p){
   if( rc!=SQLITE_OK ) goto dump_done;
   transaction = 1;
 #ifndef SQLITE_OMIT_AUTHORIZATION
+  auth.dump = p;
   auth.callback = p->out->xAuth; auth.ctx = p->out->pAuthArg;
   rc = sqlite3_set_authorizer(p->out,dumpAuthorize,&auth);
   haveAuth = rc==SQLITE_OK;
