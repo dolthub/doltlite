@@ -5673,6 +5673,12 @@ static Index *findSingleColumnIndex(
   return 0;
 }
 
+static int rangeCountTableUsesOrig(Parse *pParse, Table *pTab){
+  sqlite3 *db = pParse->db;
+  int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+  return iDb>=0 && sqlite3BtreeUsesOrig(db->aDb[iDb].pBt);
+}
+
 /*
 ** Return the table for a SELECT that can be answered by counting an
 ** inclusive integer rowid range, and populate ppLow/ppHigh with the bounds.
@@ -5695,7 +5701,6 @@ static Table *isSimpleRowidRangeCount(
   int lowOk;
   int highOk;
 
-  (void)pParse;
   assert( !p->pGroupBy );
   if( p->pWhere==0
    || p->pWhere->op!=TK_BETWEEN
@@ -5715,6 +5720,7 @@ static Table *isSimpleRowidRangeCount(
   assert( pTab!=0 );
   assert( !IsView(pTab) );
   if( !IsOrdinaryTable(pTab) || !HasRowid(pTab) ) return 0;
+  if( rangeCountTableUsesOrig(pParse, pTab) ) return 0;
   if( !exprIsRowidOfTable(p->pWhere->pLeft, pTab) ) return 0;
   *ppLow = p->pWhere->x.pList->a[0].pExpr;
   *ppHigh = p->pWhere->x.pList->a[1].pExpr;
@@ -5785,6 +5791,7 @@ static Index *isSimpleIndexRangeCount(
   assert( pTab!=0 );
   assert( !IsView(pTab) );
   if( !IsOrdinaryTable(pTab) ) return 0;
+  if( rangeCountTableUsesOrig(pParse, pTab) ) return 0;
   if( p->pWhere->pLeft==0
    || (p->pWhere->pLeft->op!=TK_COLUMN && p->pWhere->pLeft->op!=TK_AGG_COLUMN)
   ){
