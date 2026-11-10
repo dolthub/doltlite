@@ -318,6 +318,38 @@ else
   FAIL=$((FAIL+1)); ERRORS="$ERRORS\n  FAIL: J12_wal_auto_checkpoints (frames left in the WAL: $frames)"
 fi
 
+# A hot rollback journal beside a main file torn to under four bytes.
+HJ=$TMP/hotjournal; mkdir "$HJ"
+seed_stock "$HJ/f.db" "CREATE TABLE t(a,b);
+  WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<200)
+  INSERT INTO t SELECT x, randomblob(100) FROM c;"
+mkfifo "$HJ/pipe"
+$DOLTLITE "$HJ/f.db" < "$HJ/pipe" >/dev/null 2>&1 &
+hj_pid=$!
+exec 9>"$HJ/pipe"
+echo "PRAGMA cache_size=2; BEGIN; UPDATE t SET b=randomblob(300);
+  WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300)
+  INSERT INTO t SELECT x+1000, randomblob(3000) FROM c;" >&9
+for i in $(seq 1 100); do
+  [ -s "$HJ/f.db-journal" ] && [ "$(wc -c < "$HJ/f.db" | tr -d ' ')" -gt 400000 ] && break
+  sleep 0.1
+done
+kill -9 $hj_pid 2>/dev/null; wait $hj_pid 2>/dev/null
+exec 9>&-
+want_eq "J13_crash_left_a_hot_journal" "$([ -s "$HJ/f.db-journal" ] && echo yes || echo no)" "yes"
+cp "$HJ/f.db-journal" "$HJ/journal.snap"
+for n in 2 3 4; do
+  cp "$HJ/journal.snap" "$HJ/f.db-journal"
+  head -c $n /dev/zero > "$HJ/f.db"
+  want_eq "J14_hot_journal_recovers_${n}_byte_main" \
+    "$(dl_last "SELECT count(*) FROM t;" "$HJ/f.db")" "200"
+  want_eq "J15_recovered_${n}_byte_main_is_stock_format" "$(head -c 15 "$HJ/f.db")" "SQLite format 3"
+done
+cp "$HJ/journal.snap" "$HJ/f.db-journal"
+head -c 1 /dev/zero > "$HJ/f.db"
+dl_last "SELECT count(*) FROM sqlite_schema;" "$HJ/f.db" >/dev/null
+want_eq "J16_one_byte_main_is_not_rewritten" "$(wc -c < "$HJ/f.db" | tr -d ' ')" "1"
+
 echo ""
 echo "--- VC features on non-doltlite file ---"
 
