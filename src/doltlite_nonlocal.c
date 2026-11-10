@@ -441,6 +441,45 @@ void doltliteNonlocalDetached(sqlite3 *db){
   if( p && !p->bSyncing && p->nRule>0 ) p->bStale = 1;
 }
 
+/* The user is attaching zFile. A branch the hidden schema already holds
+** would open as a separate store that writes like a peer of the rule's
+** own writes, so an idle hidden schema is released first: the user's
+** attachment then shares the main store and the rule resolves through it. */
+void doltliteNonlocalYield(sqlite3 *db, const char *zFile){
+  DoltliteNonlocal *p = nonlocalState(db, 0);
+  const char *zMain;
+  int nFile = sqlite3Strlen30(zFile);
+  int i;
+  if( !p || p->bSyncing || p->nAttach==0 || db->nDb<1 ) return;
+  zMain = sqlite3_db_filename(db, "main");
+  if( !zMain || !zMain[0] ) return;
+  for(i=0; i<p->nAttach; i++){
+    NonlocalAttach *a = &p->aAttach[i];
+    int nRef = sqlite3Strlen30(a->zRef);
+    int nPath = db->pVfs->mxPathname + 1;
+    char *zFull;
+    char *zSql;
+    int bSame;
+    if( strcmp(a->zRef, a->zTarget)!=0 || nFile<nRef+2
+     || zFile[nFile-nRef-1]!='/' || strcmp(&zFile[nFile-nRef], a->zRef)!=0
+     || sqlite3FindDbName(db, a->zSchema)<0 ){
+      continue;
+    }
+    zFull = sqlite3_malloc64(nPath + (sqlite3_int64)nFile);
+    if( !zFull ) return;
+    memcpy(&zFull[nPath], zFile, nFile-nRef-1);
+    zFull[nPath+nFile-nRef-1] = 0;
+    bSame = sqlite3OsFullPathname(db->pVfs, &zFull[nPath], nPath, zFull)
+              ==SQLITE_OK && strcmp(zFull, zMain)==0;
+    sqlite3_free(zFull);
+    if( !bSame ) continue;
+    zSql = sqlite3_mprintf("DETACH \"%w\"", a->zSchema);
+    if( zSql ) (void)sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+    return;
+  }
+}
+
 static void nonlocalListName(
   Parse *pParse,
   DoltliteNonlocal *p,

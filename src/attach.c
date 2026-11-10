@@ -118,6 +118,9 @@ static void attachFunc(
 # define REOPEN_AS_MEMDB(db)  (0)
 #endif
 
+#ifdef DOLTLITE_PROLLY
+  if( !REOPEN_AS_MEMDB(db) ) doltliteNonlocalYield(db, zFile);
+#endif
   if( REOPEN_AS_MEMDB(db) ){
     /* This is not a real ATTACH.  Instead, this routine is being called
     ** from sqlite3_deserialize() to close database db->init.iDb and

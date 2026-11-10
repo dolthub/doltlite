@@ -5595,6 +5595,7 @@ DoltliteNoRules *doltliteNonlocalNoRules(sqlite3*);
 void doltliteNonlocalFree(DoltliteNonlocal*);
 int doltliteNonlocalSync(sqlite3*);
 void doltliteNonlocalDetached(sqlite3*);
+void doltliteNonlocalYield(sqlite3*, const char*);
 int doltliteNonlocalMatches(sqlite3*, const char*);
 int doltliteNonlocalActive(sqlite3*);
 int doltliteNonlocalResolve(Parse*, const char**, const char**);

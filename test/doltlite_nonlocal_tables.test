@@ -595,6 +595,31 @@ do_execsql_test nonlocal-reattach.hidden-detach {
 do_test nonlocal-reattach.target {
   nl_disk main {SELECT group_concat(id) FROM users}
 } {1,2}
+
+nl_reset
+do_execsql_test nonlocal-attach-after.hidden {
+  INSERT INTO dolt_nonlocal_tables VALUES('nl','main','users','immediate');
+  SELECT group_concat(id) FROM nl;
+} {1}
+do_execsql_test nonlocal-attach-after.handover {
+  ATTACH 'test.db/main' AS m;
+  SELECT group_concat(id) FROM nl;
+} {1}
+do_execsql_test nonlocal-attach-after.one-txn {
+  BEGIN;
+  INSERT INTO nl VALUES(2,'via rule');
+  INSERT INTO m.users VALUES(3,'via attach');
+  COMMIT;
+  SELECT group_concat(id) FROM m.users;
+} {1,2,3}
+do_test nonlocal-attach-after.target {
+  nl_disk main {SELECT group_concat(id) FROM users}
+} {1,2,3}
+do_execsql_test nonlocal-attach-after.detach {
+  DETACH m;
+  INSERT INTO nl VALUES(4,'after detach');
+  SELECT group_concat(id) FROM nl;
+} {1,2,3,4}
 nl_reset
 db eval {INSERT INTO dolt_nonlocal_tables VALUES('np','main','cfg','immediate')}
 foreach {name sql} {
