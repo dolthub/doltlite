@@ -1,0 +1,149 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+set testprefix doltlite-pending-delete-scan
+
+proc pending_delete_cursor_read {conn} {
+  set rows {}
+  $conn eval {SELECT id,n FROM t ORDER BY id} row {
+    if {$row(n)==901} {
+      for {set i 0} {$i<4} {incr i} {
+        $conn eval {SELECT id FROM t ORDER BY id LIMIT 1}
+      }
+    }
+    lappend rows $row(id) $row(n)
+  }
+  return $rows
+}
+
+foreach layout {rowid without} {
+  foreach indexed {0 1} {
+    reset_db
+    set suffix [expr {$layout eq "without" ? "WITHOUT ROWID" : ""}]
+    set n 1000
+    execsql "
+      PRAGMA foreign_keys=ON;
+      CREATE TABLE p(a INTEGER NOT NULL,b INTEGER NOT NULL,PRIMARY KEY(a,b));
+      CREATE TABLE c(a INTEGER NOT NULL,b INTEGER NOT NULL,k INTEGER NOT NULL,x,
+        PRIMARY KEY(a,b,k),
+        FOREIGN KEY(a,b) REFERENCES p(a,b) ON DELETE CASCADE,
+        FOREIGN KEY(a,x) REFERENCES p(a,b)) $suffix;
+      WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i<$n)
+        INSERT INTO p SELECT 1,i FROM r;
+      WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i<$n),
+        k(j) AS (VALUES(1) UNION ALL SELECT j+1 FROM k WHERE j<5)
+        INSERT INTO c SELECT 1,i,j,NULL FROM r,k;
+    "
+    if {$indexed} {execsql {CREATE INDEX c_x ON c(a,x)}}
+    do_test $layout-$indexed.scan-cost {
+      db eval {BEGIN; DELETE FROM c; SELECT value FROM dolt_engine_stats(1);}
+      db eval {DELETE FROM p}
+      set work [db one {SELECT value FROM dolt_engine_stats WHERE name='pending_lookup'}]
+      set result [db eval {SELECT count(*) FROM c; SELECT count(*) FROM p;}]
+      lappend result [expr {$work<100*$n}]
+      db eval ROLLBACK
+      set result
+    } {0 0 1}
+    do_execsql_test $layout-$indexed.rollback {
+      SELECT count(*) FROM p;
+      SELECT count(*) FROM c;
+    } {1000 5000}
+    do_execsql_test $layout-$indexed.savepoint {
+      BEGIN;
+      DELETE FROM c;
+      SAVEPOINT s;
+      DELETE FROM p;
+      ROLLBACK TO s;
+      SELECT count(*) FROM p;
+      SELECT count(*) FROM c;
+      INSERT INTO c VALUES(1,1,1,2);
+      RELEASE s;
+    } {1000 0}
+    do_catchsql_test $layout-$indexed.failed-statement {
+      DELETE FROM p WHERE a=1 AND b=2;
+    } {1 {FOREIGN KEY constraint failed}}
+    do_execsql_test $layout-$indexed.reinsert {
+      SELECT count(*) FROM p;
+      SELECT * FROM c;
+      ROLLBACK;
+      SELECT count(*) FROM c;
+      PRAGMA integrity_check;
+    } {1000 1 1 1 2 5000 ok}
+  }
+}
+
+foreach {keytype declaration keyexpr} {
+  integer {INTEGER PRIMARY KEY} i
+  text {TEXT PRIMARY KEY} {printf('key-%08d',i)}
+} {
+  reset_db
+  forcedelete pending-delete-oracle.db
+  sqlite3 oracle {file:pending-delete-oracle.db?doltlite_engine=sqlite} -uri 1
+  foreach conn {db oracle} {
+    $conn eval "
+      CREATE TABLE t(id $declaration,n INTEGER);
+      WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i<1024)
+        INSERT INTO t SELECT $keyexpr,i FROM r;
+      CREATE INDEX t_n ON t(n);
+      BEGIN;
+      DELETE FROM t WHERE n<=900;
+      SAVEPOINT s;
+    "
+  }
+  foreach {name sql} {
+    forward {SELECT id,n FROM t ORDER BY id LIMIT 2}
+    backward {SELECT id,n FROM t ORDER BY id DESC LIMIT 2}
+    prefix {SELECT id,n FROM t WHERE id>='' ORDER BY id LIMIT 2}
+    empty {SELECT id,n FROM t INDEXED BY t_n WHERE n<900}
+  } {
+    do_test $keytype-$name {
+      set expected [oracle eval $sql]
+      set matches 1
+      for {set i 0} {$i<10} {incr i} {
+        if {[db eval $sql] ne $expected} {set matches 0}
+      }
+      set matches
+    } 1
+  }
+  foreach conn {db oracle} {
+    $conn eval {ROLLBACK; BEGIN; DELETE FROM t WHERE n<=900; SAVEPOINT s;}
+  }
+  do_test $keytype-active-cursor {pending_delete_cursor_read db} \
+    [pending_delete_cursor_read oracle]
+  foreach conn {db oracle} {
+    $conn eval {ROLLBACK TO s; RELEASE s;}
+    $conn eval {SAVEPOINT again; DELETE FROM t WHERE n>900;}
+    for {set i 0} {$i<10} {incr i} {$conn eval {SELECT id FROM t ORDER BY id LIMIT 1}}
+    $conn eval {ROLLBACK TO again; RELEASE again; ROLLBACK;}
+  }
+  do_test $keytype-rollback {db eval {SELECT id,n FROM t ORDER BY id}} \
+    [oracle eval {SELECT id,n FROM t ORDER BY id}]
+  oracle close
+}
+
+reset_db
+do_execsql_test oom.setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i<128)
+    INSERT INTO t SELECT i FROM r;
+} {}
+faultsim_save_and_close
+do_faultsim_test oom -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {BEGIN; DELETE FROM t WHERE id<=96;}
+  for {set i 0} {$i<2} {incr i} {
+    db eval {SELECT id FROM t ORDER BY id LIMIT 1}
+  }
+  db eval {SAVEPOINT s}
+} -body {
+  db eval {SELECT id FROM t ORDER BY id LIMIT 1}
+} -test {
+  faultsim_test_result {0 97} {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  if {[db eval {SELECT count(*),sum(id) FROM t}] ne {128 8256}} {
+    error {rollback lost rows}
+  }
+  faultsim_integrity_check
+}
+
+finish_test

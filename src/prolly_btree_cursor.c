@@ -212,7 +212,11 @@ int mergeScan(BtCursor *pCur, int dir, int *pRes){
     rc = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx, &e);
     if( rc!=SQLITE_OK ) return rc;
     if( !treeOk ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx += dir; continue; }
+      if( e->op==PROLLY_EDIT_DELETE ){
+        pCur->pMutMap->nScanSkip++;
+        pCur->mmIdx += dir;
+        continue;
+      }
       pCur->mergeSrc = MERGE_SRC_MUT;
       if( pRes ) *pRes = 0;
       return SQLITE_OK;
@@ -223,12 +227,17 @@ int mergeScan(BtCursor *pCur, int dir, int *pRes){
       if( pRes ) *pRes = 0;
       return SQLITE_OK;
     }else if( cmp*dir > 0 ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx += dir; continue; }
+      if( e->op==PROLLY_EDIT_DELETE ){
+        pCur->pMutMap->nScanSkip++;
+        pCur->mmIdx += dir;
+        continue;
+      }
       pCur->mergeSrc = MERGE_SRC_MUT;
       if( pRes ) *pRes = 0;
       return SQLITE_OK;
     }else{
       if( e->op==PROLLY_EDIT_DELETE ){
+        pCur->pMutMap->nScanSkip++;
         pCur->mmIdx += dir;
         cmp = advanceTreeCursor(pCur, dir);
         if( cmp!=SQLITE_OK ) return cmp;
@@ -593,6 +602,8 @@ int mergeLast(BtCursor *pCur, int *pRes){
 
 int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
+  rc = flushScanDeletes(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
   CLEAR_CACHED_COMPARE_KEY(pCur);
@@ -627,6 +638,8 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 
 int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
+  rc = flushScanDeletes(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
   CLEAR_CACHED_COMPARE_KEY(pCur);

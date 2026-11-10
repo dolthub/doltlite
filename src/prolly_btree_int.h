@@ -573,6 +573,7 @@ int prollyBtCursorCurrentSortKey(BtCursor *pCur, const u8 **ppKey, int *pnKey);
 int prollyIndexMovetoExactSortKey(BtCursor *pCur, const u8 *pKey, int nKey,
                                   int *pRes);
 int flushIfNeeded(BtCursor *pCur);
+int flushScanDeletes(BtCursor *pCur);
 int flushPendingForTable(Btree *pBtree, BtShared *pBt,
                                 struct TableEntry *pTE, int clearInPlace);
 int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData);

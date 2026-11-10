@@ -80,6 +80,7 @@ struct ProllyMutMap {
   /* Bytes of keys, values, entries and undo copies added since the last
   ** clear; it never shrinks before then. */
   i64 nBytes;
+  u64 nScanSkip;
   ProllyStats *pStats;
 };
 
@@ -141,6 +142,12 @@ void prollyMutMapNoteInTree(
 int prollyMutMapInTreeRootIs(const ProllyMutMap *mm, const ProllyHash *pRoot);
 
 int prollyMutMapFindRc(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyMutMapEntry **ppEntry
+);
+
+int prollyMutMapFindScanRc(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
   ProllyMutMapEntry **ppEntry

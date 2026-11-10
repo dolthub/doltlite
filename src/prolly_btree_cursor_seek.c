@@ -59,6 +59,8 @@ int prollyBtCursorTableMoveto(
 
   assert( pCur->curIntKey );
 
+  rc = flushScanDeletes(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   pCur->nSeek++;
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
   if( pCur->pBt ) prollyStatAdd(&pCur->pBt->stats, nSeek, 1);
@@ -291,6 +293,7 @@ static int findMatchingMutMapEntry(
     }
     pRec = pEntry->pVal;
     nRec = pEntry->nVal;
+    if( pEntry->op==PROLLY_EDIT_DELETE ) pMap->nScanSkip++;
 
     if( pMap->isIntKey ){
       lo++;
@@ -365,6 +368,7 @@ static int scanMutMapForCustomCollation(
     int cmp;
 
     if( pEntry->op!=PROLLY_EDIT_INSERT ){
+      pMap->nScanSkip++;
       continue;
     }
     if( nRec==0 ){
@@ -414,7 +418,7 @@ static int scanTreeForCustomCollation(
     prollyCursorKey(&pCur->pCur, &pKey, &nKey);
     if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
       ProllyMutMapEntry *pEntry = 0;
-      rc = prollyMutMapFindRc(pCur->pMutMap, pKey, nKey, 0, &pEntry);
+      rc = prollyMutMapFindScanRc(pCur->pMutMap, pKey, nKey, 0, &pEntry);
       if( rc!=SQLITE_OK ) break;
       if( pEntry && pEntry->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
     }
@@ -792,7 +796,7 @@ static int indexMovetoScanTreeLeaf(
             if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
              && !prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ) ){
               ProllyMutMapEntry *mmE = 0;
-              rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+              rc = prollyMutMapFindScanRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
               if( rc!=SQLITE_OK ) break;
               if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
                 continue;  /* delete-masked; next live row is the landing */
@@ -826,7 +830,7 @@ static int indexMovetoScanTreeLeaf(
          && (nSK==nSortKey || sortKeyByteStartsField(pSK[nSortKey])) ){
           if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
             ProllyMutMapEntry *mmE = 0;
-            rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+            rc = prollyMutMapFindScanRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
             if( rc!=SQLITE_OK ) break;
             if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
               continue;
@@ -859,7 +863,7 @@ static int indexMovetoScanTreeLeaf(
       if( recCmp==0 || pIdxKey->eqSeen ){
         if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
           ProllyMutMapEntry *mmE = 0;
-          rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+          rc = prollyMutMapFindScanRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
           if( rc!=SQLITE_OK ) break;
           if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
             /* Not a match: a stale eqSeen lets an equality seek accept the
@@ -877,7 +881,7 @@ static int indexMovetoScanTreeLeaf(
       }else if( recCmp > 0 ){
         if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
           ProllyMutMapEntry *mmE = 0;
-          rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+          rc = prollyMutMapFindScanRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
           if( rc!=SQLITE_OK ) break;
           if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
             continue;
@@ -1146,6 +1150,8 @@ static int prollyIndexMoveto(
 
   assert( !pCur->curIntKey );
 
+  rc = flushScanDeletes(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
   if( pCur->pBt ) prollyStatAdd(&pCur->pBt->stats, nSeek, 1);
 
