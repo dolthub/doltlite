@@ -522,6 +522,64 @@ expect_merge_ok "idx_both_delete" "$DB"
 
 echo ""
 
+echo "--- Different index column lists ---"
+for direction in forward reverse; do
+  for unique in regular unique; do
+    modifier=""
+    if [ "$unique" = unique ]; then modifier="UNIQUE"; fi
+    for pair in suffix prefix shared shared_pk reversed disjoint identical single; do
+      want=ok
+      case "$pair" in
+        suffix) left='b,a'; right='a' ;;
+        prefix) left='a,b'; right='a' ;;
+        shared) left='b,a'; right='id,b' ;;
+        shared_pk) left='b,id'; right='a,id' ;;
+        reversed) left='b,a'; right='a,b' ;;
+        disjoint) left='a'; right='b' ;;
+        identical) left='b,a'; right='b,a'; want=conflict ;;
+        single) left='a'; right='a'; want=conflict ;;
+      esac
+      main_index="CREATE $modifier INDEX ixa ON t($left);"
+      feat_index="CREATE $modifier INDEX ixb ON t($right);"
+      if [ "$direction" = reverse ]; then
+        main_index="CREATE $modifier INDEX ixb ON t($right);"
+        feat_index="CREATE $modifier INDEX ixa ON t($left);"
+      fi
+      tag="dual_index_${direction}_${unique}_${pair}"
+      DB="$TMPROOT/$tag.db"
+      cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t(id INTEGER PRIMARY KEY,a INT,b INT);
+INSERT INTO t VALUES(1,11,101);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$main_index
+INSERT INTO t VALUES(2,22,202);
+SELECT dolt_commit('-Am','main index');
+SELECT dolt_checkout('feat');
+$feat_index
+INSERT INTO t VALUES(3,33,303);
+SELECT dolt_commit('-Am','feature index');
+SELECT dolt_checkout('main');
+SQL
+      expect_merge_outcome "${tag}_merge" "$DB" "$want"
+      if [ "$want" = ok ]; then
+        expect_dual_value "${tag}_indexes" "$DB" 'ixa|ixb' \
+          "SELECT group_concat(name,'|') FROM (SELECT name FROM sqlite_schema WHERE type='index' AND name IN ('ixa','ixb') ORDER BY name);" \
+          "SELECT GROUP_CONCAT(DISTINCT index_name ORDER BY index_name SEPARATOR '|') FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='t' AND index_name IN ('ixa','ixb');"
+        expect_dual_value "${tag}_ixa_columns" "$DB" "$left" \
+          "SELECT group_concat(name,',') FROM (SELECT name FROM pragma_index_info('ixa') ORDER BY seqno);" \
+          "SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='t' AND index_name='ixa';"
+        expect_dual_value "${tag}_ixb_columns" "$DB" "$right" \
+          "SELECT group_concat(name,',') FROM (SELECT name FROM pragma_index_info('ixb') ORDER BY seqno);" \
+          "SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='t' AND index_name='ixb';"
+        expect_dual_value "${tag}_rows" "$DB" '1,2,3' \
+          "SELECT group_concat(id,',') FROM (SELECT id FROM t ORDER BY id);" \
+          "SELECT GROUP_CONCAT(id ORDER BY id SEPARATOR ',') FROM t;"
+      fi
+    done
+  done
+done
+
 echo "--- Check Constraints ---"
 
 DB="$TMPROOT/ck1.db"; rm -f "$DB"
