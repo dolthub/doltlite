@@ -578,4 +578,56 @@ foreach key {INTEGER INT} {
   }
 }
 
+# A rule that fell back to the local table follows the target as soon as a
+# peer creates the table there.
+catch {db close}
+forcedelete test.db
+sqlite3 db test.db
+db eval {
+  CREATE TABLE t0(x);
+  SELECT dolt_commit('-Am','init');
+  SELECT dolt_branch('exp');
+}
+db close
+sqlite3 db [file normalize test.db]/exp
+do_execsql_test nonlocal-peer-create.fallback {
+  CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT);
+  INSERT INTO dolt_nonlocal_tables VALUES('settings','main',NULL,'immediate');
+  SELECT count(*) FROM settings;
+} {0}
+do_test nonlocal-peer-create.redirects {
+  sqlite3 peer [file normalize test.db]/main
+  peer eval {CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT)}
+  peer close
+  db eval {
+    INSERT INTO settings VALUES('a','fromA');
+    SELECT * FROM settings;
+  }
+} {a fromA}
+do_test nonlocal-peer-create.on-target {
+  nl_disk main {SELECT * FROM settings}
+} {a fromA}
+do_test nonlocal-peer-create.fresh-agrees {
+  nl_disk exp {SELECT * FROM settings}
+} {a fromA}
+
+do_test nonlocal-peer-recreate.fallback {
+  sqlite3 peer [file normalize test.db]/main
+  peer eval {DROP TABLE settings}
+  peer close
+  db eval {SELECT count(*) FROM settings}
+} {0}
+do_test nonlocal-peer-recreate.redirects {
+  sqlite3 peer [file normalize test.db]/main
+  peer eval {CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT)}
+  peer close
+  db eval {
+    INSERT INTO settings VALUES('b','again');
+    SELECT * FROM settings;
+  }
+} {b again}
+do_test nonlocal-peer-recreate.on-target {
+  nl_disk main {SELECT * FROM settings}
+} {b again}
+
 finish_test
