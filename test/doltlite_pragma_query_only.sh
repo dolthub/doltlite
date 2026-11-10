@@ -85,4 +85,15 @@ run_test "immutable_state_unchanged" "SELECT count(*) FROM t; SELECT count(*) FR
 3
 main,b" "$DB"
 
+CANTOPEN="unable to open database"
+run_test_error_match "immutable_missing_main_refused" "CREATE TABLE x(a);" "$CANTOPEN" "file:$ROOT/missing.db?immutable=1"
+run_test_error_match "immutable_missing_attach_refused" "ATTACH 'file:$ROOT/missing_att.db?immutable=1' AS a;" "$CANTOPEN" ":memory:"
+run_test_error_match "immutable_missing_branch_path_refused" "SELECT 1;" "$CANTOPEN" "file:$ROOT/missing.db/b?immutable=1"
+run_test "immutable_missing_path_creates_nothing" "SELECT $(ls -A "$ROOT" | grep -c missing);" "0"
+: > "$ROOT/empty.db"
+run_test "immutable_empty_file_reads" "SELECT count(*) FROM sqlite_master;" "0" "file:$ROOT/empty.db?immutable=1"
+run_test_error_match "immutable_empty_file_write_refused" "CREATE TABLE x(a);" "$RO" "file:$ROOT/empty.db?immutable=1"
+run_test "immutable_memory_stays_writable" "CREATE TABLE x(a); INSERT INTO x VALUES(7); SELECT a FROM x;" "7" "file::memory:?immutable=1"
+run_test "immutable_mode_memory_stays_writable" "CREATE TABLE x(a); INSERT INTO x VALUES(8); SELECT a FROM x;" "8" "file:m?mode=memory&immutable=1"
+
 dltest_finish

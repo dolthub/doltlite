@@ -1107,7 +1107,11 @@ static int prollyBtreeOpenImpl(
   if( !useOrig && (vfsFlags & SQLITE_OPEN_MAIN_DB)!=0 ){
     const char *zEngine = sqlite3_uri_parameter(zFilename, "doltlite_engine");
     useOriginSource = sqlite3_uri_boolean(zFilename, "lazy_origin", 0);
-    if( sqlite3_uri_boolean(zFilename, "immutable", 0) ){
+    if( sqlite3_uri_boolean(zFilename, "immutable", 0)
+     && (vfsFlags & SQLITE_OPEN_MEMORY)==0
+     && strcmp(zFilename, ":memory:")!=0
+     && !sqlite3IsMemdb(pVfs) ){
+      vfsFlags &= ~(SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE);
       vfsFlags |= SQLITE_OPEN_READONLY;
     }
     if( zEngine && sqlite3StrICmp(zEngine, "sqlite")==0 ){
