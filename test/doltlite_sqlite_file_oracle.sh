@@ -153,6 +153,11 @@ seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a, b REAL); CREATE INDE
 oracle_copy "O_layout_integral_real" \
   "INSERT INTO t VALUES(1,0,1),(2,1,2.0); UPDATE t SET b=3 WHERE id=2; SELECT id, a, b, typeof(b) FROM t ORDER BY id; PRAGMA integrity_check;" "$DB"
 want_same_bytes "O_layout_integral_real_bytes"
+DB=$TMP/dropcol.db
+seed_stock "$DB" "CREATE TABLE w(k PRIMARY KEY, v, s) WITHOUT ROWID; INSERT INTO w VALUES(1,'x',2),(0,'y',1); CREATE TABLE r(id INTEGER PRIMARY KEY, v, s); INSERT INTO r VALUES(1,0,2),(2,1,3);"
+oracle_copy "O_layout_drop_column" \
+  "ALTER TABLE w DROP COLUMN s; ALTER TABLE r DROP COLUMN s; SELECT * FROM w; SELECT * FROM r; PRAGMA integrity_check;" "$DB"
+want_same_bytes "O_layout_drop_column_bytes"
 
 echo ""
 echo "--- INTEGER PK / page sizes ---"

@@ -64,6 +64,18 @@ static int vdbeDoltliteSeqNameIsAutoinc(sqlite3 *db, int iDb, const char *zName)
 # include "hwtime.h"
 #endif
 
+#ifdef DOLTLITE_PROLLY
+static int doltliteWritesOnlyOrig(sqlite3 *db, Vdbe *p){
+  int i;
+  int bOrig = 0;
+  for(i=0; i<db->nDb; i++){
+    if( i==1 || !DbMaskTest(p->btreeMask, i) ) continue;
+    if( !sqlite3BtreeUsesOrig(db->aDb[i].pBt) ) return 0;
+    bOrig = 1;
+  }
+  return bOrig;
+}
+#endif
 /*
 ** Invoke this macro on memory cells just prior to changing the
 ** value of the cell.  This macro verifies that shallow copies are
@@ -5069,7 +5081,8 @@ case OP_OpenWrite:
     /* Rows are content-addressed, so they must encode as every other write
     ** does. The TEMP database a DROP COLUMN touches has no file format to
     ** stay readable by, initialized (format 1) or not (format 0). */
-    if( iDb!=1 && pDb->pSchema->file_format!=0 )
+    if( (iDb!=1 && pDb->pSchema->file_format!=0)
+     || doltliteWritesOnlyOrig(db, p) )
 #endif
     if( pDb->pSchema->file_format < p->minWriteFileFormat ){
       p->minWriteFileFormat = pDb->pSchema->file_format;
