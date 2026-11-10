@@ -715,6 +715,21 @@ do_test nonlocal-trigger-none.direct-write-still-fires {
 } {{main-ins 7}}
 
 nl_trigger_reset
+do_test nonlocal-trigger-bare-target.fires {
+  sqlite3 peer [file normalize test.db]/main
+  peer eval {DROP TRIGGER tr_i; DROP TRIGGER tr_u; DROP TRIGGER tr_d}
+  peer close
+  db eval {
+    CREATE TRIGGER x_i AFTER INSERT ON users BEGIN
+      INSERT INTO log VALUES('exp-ins '||new.id);
+    END;
+    INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+    INSERT INTO users VALUES(1,'a');
+    SELECT msg FROM log;
+  }
+} {{exp-ins 1}}
+
+nl_trigger_reset
 do_test nonlocal-trigger-peer.created-later-fires {
   db eval {
     INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');

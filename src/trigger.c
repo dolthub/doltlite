@@ -928,6 +928,14 @@ Trigger *sqlite3TriggersExist(
   int *pMask              /* OUT: Mask of TRIGGER_BEFORE|TRIGGER_AFTER */
 ){
   assert( pTab!=0 );
+#ifdef DOLTLITE_PROLLY
+  if( !pParse->disableTriggers
+   && (pParse->db->mDbFlags & DBFLAG_InternalDml)==0
+   && doltliteNonlocalLocalTable(pParse, pTab, 0)
+  ){
+    return triggersReallyExist(pParse,pTab,op,pChanges,pMask);
+  }
+#endif
   if( (pTab->pTrigger==0 && !tempTriggersExist(pParse->db))
    || pParse->disableTriggers
 #ifdef DOLTLITE_PROLLY
