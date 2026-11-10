@@ -434,6 +434,13 @@ int doltliteNonlocalSync(sqlite3 *db){
   return bChanged;
 }
 
+/* A DETACH may have removed the schema a rule resolved through; the next
+** sync reloads and attaches its own. */
+void doltliteNonlocalDetached(sqlite3 *db){
+  DoltliteNonlocal *p = nonlocalState(db, 0);
+  if( p && !p->bSyncing && p->nRule>0 ) p->bStale = 1;
+}
+
 static void nonlocalListName(
   Parse *pParse,
   DoltliteNonlocal *p,

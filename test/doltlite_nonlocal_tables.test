@@ -542,6 +542,28 @@ do_test nonlocal-held-statement {
 # Referential actions are coded in the parent's schema, another branch for
 # a nonlocal parent, so they could never fire: refused, as in Dolt.
 nl_reset
+do_execsql_test nonlocal-reattach.user-attach {
+  ATTACH 'test.db/main' AS m;
+  INSERT INTO dolt_nonlocal_tables VALUES('nl','main','users','immediate');
+  SELECT group_concat(id) FROM nl;
+  SELECT count(*) FROM pragma_database_list WHERE name LIKE 'dolt_nonlocal:%';
+} {1 0}
+do_execsql_test nonlocal-reattach.user-detach {
+  DETACH m;
+  SELECT group_concat(id) FROM nl;
+} {1}
+do_execsql_test nonlocal-reattach.write {
+  INSERT INTO nl VALUES(2,'x');
+  SELECT group_concat(id) FROM nl;
+} {1,2}
+do_execsql_test nonlocal-reattach.hidden-detach {
+  DETACH "dolt_nonlocal:main";
+  SELECT group_concat(id) FROM nl;
+} {1,2}
+do_test nonlocal-reattach.target {
+  nl_disk main {SELECT group_concat(id) FROM users}
+} {1,2}
+nl_reset
 db eval {INSERT INTO dolt_nonlocal_tables VALUES('np','main','cfg','immediate')}
 foreach {name sql} {
   cascade {CREATE TABLE c1(k TEXT REFERENCES np(k) ON DELETE CASCADE)}

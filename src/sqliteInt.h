@@ -5594,6 +5594,7 @@ struct DoltliteNoRules {
 DoltliteNoRules *doltliteNonlocalNoRules(sqlite3*);
 void doltliteNonlocalFree(DoltliteNonlocal*);
 int doltliteNonlocalSync(sqlite3*);
+void doltliteNonlocalDetached(sqlite3*);
 int doltliteNonlocalMatches(sqlite3*, const char*);
 int doltliteNonlocalActive(sqlite3*);
 int doltliteNonlocalResolve(Parse*, const char**, const char**);

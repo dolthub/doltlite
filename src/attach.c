@@ -364,6 +364,9 @@ static void detachFunc(
   pDb->pBt = 0;
   pDb->pSchema = 0;
   sqlite3CollapseDatabaseArray(db);
+#ifdef DOLTLITE_PROLLY
+  doltliteNonlocalDetached(db);
+#endif
   return;
 
 detach_error:
