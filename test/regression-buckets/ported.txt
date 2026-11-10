@@ -57,6 +57,7 @@ doltlite_diff_dates
 doltlite_diff_merge_history
 doltlite_patch_column_rename
 doltlite_patch_rebuild_dependencies
+doltlite_patch_system_tables
 doltlite_historical_affinity
 doltlite_historical_declaration
 doltlite_historical_pk_mapping

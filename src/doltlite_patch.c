@@ -1255,6 +1255,105 @@ static int patchTableUnchanged(
                              aToSchema,nToSchema);
 }
 
+/* SQLite's own bookkeeping tables are versioned but cannot be created by
+** name, so a change replaces the whole content of the one the replaying
+** database already has. */
+static int patchAppendSystemTable(
+  PatchCursor *pCur,
+  sqlite3 *db,
+  const char *zName,
+  const char *zCreate,
+  struct TableEntry *aFromTable, int nFromTable,
+  struct TableEntry *aToTable, int nToTable,
+  int *pbStat
+){
+  struct TableEntry *pFrom = doltliteFindTableByName(aFromTable,nFromTable,zName);
+  struct TableEntry *pTo = doltliteFindTableByName(aToTable,nToTable,zName);
+  int bStat = sqlite3_strnicmp(zName,"sqlite_stat",11)==0;
+  SchemaEntry entry;
+  PatchTable table;
+  PatchSchema to;
+  char *zSql;
+  int rc = SQLITE_OK;
+  if( !pFrom && !pTo ) return SQLITE_OK;
+  if( pFrom && pTo && prollyHashCompare(&pFrom->root,&pTo->root)==0 ){
+    return SQLITE_OK;
+  }
+  if( !pTo ){
+    if( !bStat ) return SQLITE_OK;
+    zSql = sqlite3_mprintf("DROP TABLE \"%w\"",zName);
+    if( !zSql ) return SQLITE_NOMEM;
+    rc = patchAppendRow(pCur,zName,"schema",zSql);
+    sqlite3_free(zSql);
+    return rc;
+  }
+  if( bStat ){
+    if( !pFrom ) rc = patchAppendRow(pCur,zName,"schema","ANALYZE sqlite_schema");
+    *pbStat = 1;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  zSql = sqlite3_mprintf("DELETE FROM \"%w\"",zName);
+  if( !zSql ) return SQLITE_NOMEM;
+  rc = patchAppendRow(pCur,zName,"data",zSql);
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&entry,0,sizeof(entry));
+  entry.zName = (char*)"t";
+  entry.zSql = (char*)zCreate;
+  rc = patchSchemaLoad(&entry,&to);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&table,0,sizeof(table));
+  table.pToTable = pTo;
+  table.pToSchema = &entry;
+  table.zToName = zName;
+  rc = patchAppendAllData(pCur,db,&table,&to);
+  patchSchemaClear(&to);
+  return rc;
+}
+
+static int patchAppendSystem(
+  PatchCursor *pCur,
+  sqlite3 *db,
+  const char *zFilter,
+  const ProllyHash *pFromCat,
+  const ProllyHash *pToCat,
+  struct TableEntry *aFromTable, int nFromTable,
+  struct TableEntry *aToTable, int nToTable,
+  int *pFound
+){
+  static const struct { const char *zName; const char *zCreate; } aSys[] = {
+    { "sqlite_sequence", "CREATE TABLE t(name,seq)" },
+    { "sqlite_stat1", "CREATE TABLE t(tbl,idx,stat)" },
+    { "sqlite_stat4", "CREATE TABLE t(tbl,idx,neq,nlt,ndlt,sample)" },
+  };
+  int bStat = 0;
+  int rc = SQLITE_OK;
+  int i;
+  for(i=0; rc==SQLITE_OK && i<ArraySize(aSys); i++){
+    if( zFilter && sqlite3_stricmp(zFilter,aSys[i].zName)!=0 ) continue;
+    if( zFilter ) *pFound = 1;
+    rc = patchAppendSystemTable(pCur,db,aSys[i].zName,aSys[i].zCreate,
+            aFromTable,nFromTable,aToTable,nToTable,&bStat);
+  }
+  if( rc==SQLITE_OK && bStat ){
+    rc = patchAppendRow(pCur,"sqlite_stat1","schema","ANALYZE sqlite_schema");
+  }
+  if( rc==SQLITE_OK && !zFilter ){
+    u32 aFrom[2] = {0,0};
+    u32 aTo[2] = {0,0};
+    static const char *const azMeta[] = { "user_version", "application_id" };
+    rc = doltliteCatalogReadMeta(db,pFromCat,&aFrom[0],&aFrom[1]);
+    if( rc==SQLITE_OK ) rc = doltliteCatalogReadMeta(db,pToCat,&aTo[0],&aTo[1]);
+    for(i=0; rc==SQLITE_OK && i<2; i++){
+      char zSql[64];
+      if( aFrom[i]==aTo[i] ) continue;
+      sqlite3_snprintf(sizeof(zSql),zSql,"PRAGMA %s=%d",azMeta[i],(int)aTo[i]);
+      rc = patchAppendRow(pCur,"","schema",zSql);
+    }
+  }
+  return rc;
+}
+
 static const char *patchSchemaSql =
   "CREATE TABLE x("
   "statement_order INTEGER,"
@@ -1425,6 +1524,10 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
   if( rc==SQLITE_OK ){
     rc=patchAppendViewCreates(pCur,zFilter,aFromSchema,nFromSchema,
                               aToSchema,nToSchema,&found);
+  }
+  if( rc==SQLITE_OK ){
+    rc=patchAppendSystem(pCur,pVtab->db,zFilter,&fromCat,&toCat,
+                         aFromTable,nFromTable,aToTable,nToTable,&found);
   }
   if( rc==SQLITE_OK && zFilter && !found ){
     patchSetError(&pVtab->base,"dolt_patch: table '%s' does not exist",zFilter);
