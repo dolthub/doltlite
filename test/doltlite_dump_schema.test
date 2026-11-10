@@ -23,6 +23,13 @@ foreach {name definition} {
     INSERT INTO gone VALUES(new.a) ON CONFLICT(a) DO UPDATE SET a=excluded.a; END}
   instead {CREATE VIEW v AS SELECT * FROM gone;
     CREATE TRIGGER tr INSTEAD OF INSERT ON v BEGIN INSERT INTO gone VALUES(new.a); END}
+  instead-update {CREATE VIEW v AS SELECT * FROM gone;
+    CREATE TRIGGER tr INSTEAD OF UPDATE ON v BEGIN
+    UPDATE gone SET a=new.a WHERE a=old.a; END}
+  instead-update-of {CREATE VIEW inner_v AS SELECT * FROM gone;
+    CREATE VIEW v AS SELECT * FROM inner_v;
+    CREATE TRIGGER tr INSTEAD OF UPDATE OF a ON v BEGIN
+    UPDATE gone SET a=new.a WHERE a=old.a; END}
   combined {CREATE VIEW v AS SELECT * FROM gone;
     CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO gone VALUES(new.a); END}
   tabfunc {CREATE VIEW v AS SELECT gone.a FROM gone,json_each('[1]')}
@@ -52,8 +59,11 @@ foreach {name definition} {
       do_test dump-schema-$name-$ref-$format.restore {
         out eval {CREATE TABLE gone(a PRIMARY KEY); INSERT INTO gone VALUES(2)}
         if {$name eq "instead"} {out eval {INSERT INTO v VALUES(3)}}
-        if {$name in {view nested combined instead}} {out eval {SELECT * FROM v ORDER BY a}}
-      } [expr {$name eq "instead" ? "2 3" : $name in {view nested combined} ? "2" : ""}]
+        if {[string match instead-update* $name]} {out eval {UPDATE v SET a=3}}
+        if {$name in {view nested combined instead} || [string match instead-update* $name]} {
+          out eval {SELECT * FROM v ORDER BY a}
+        }
+      } [expr {$name eq "instead" ? "2 3" : [string match instead-update* $name] ? "3" : $name in {view nested combined} ? "2" : ""}]
       catch {out close}
       do_test dump-schema-$name-$ref-$format.source {
         db eval {SELECT dolt_hashof('HEAD'),active_branch(); SELECT * FROM dolt_status}
@@ -81,6 +91,13 @@ foreach {name definition pattern} {
     SELECT a COLLATE unavailable FROM gone; END} {*collation*unavailable*}
   trigger-upsert {CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO gone VALUES(new.a)
     ON CONFLICT(a) DO UPDATE SET a=dolt_version(); END} {*dolt_version*}
+  instead-update-function {CREATE VIEW v AS SELECT * FROM gone;
+    CREATE TRIGGER tr INSTEAD OF UPDATE ON v BEGIN SELECT dolt_version(); END} {*dolt_version*}
+  instead-update-table {CREATE VIEW v AS SELECT * FROM gone;
+    CREATE TRIGGER tr INSTEAD OF UPDATE ON v BEGIN SELECT * FROM dolt_branches; END} {*dolt_branches*}
+  instead-update-collation {CREATE VIEW v AS SELECT * FROM gone;
+    CREATE TRIGGER tr INSTEAD OF UPDATE ON v BEGIN
+    SELECT a COLLATE unavailable FROM gone; END} {*collation*unavailable*}
 } {
   reset_db
   db eval {CREATE TABLE y(a); INSERT INTO y VALUES(1)}

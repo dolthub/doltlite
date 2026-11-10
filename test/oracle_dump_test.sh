@@ -236,6 +236,39 @@ for table in dolt_ignore dolt_docs dolt_tests; do
   done
 done
 
+broken_schema="CREATE TABLE gone(x);
+CREATE VIEW bv AS SELECT x FROM gone;
+CREATE TRIGGER bvu INSTEAD OF UPDATE ON bv BEGIN SELECT 1; END;
+CREATE VIEW writable AS SELECT x FROM gone;
+CREATE TRIGGER writable_update INSTEAD OF UPDATE OF x ON writable BEGIN
+ UPDATE gone SET x=new.x WHERE x=old.x; END;
+DROP TABLE gone;"
+"$DOLTLITE" "$TMP/broken-view" "$broken_schema SELECT dolt_commit('-Am','broken view');" > /dev/null
+"$SQLITE3" "$TMP/broken-reference.sqlite" "$broken_schema"
+"$SQLITE3" "$TMP/broken-reference.sqlite" .dump > "$TMP/broken-reference.sql"
+"$SQLITE3" "$TMP/broken-replayed.sqlite" < "$TMP/broken-reference.sql"
+broken_query="SELECT type,name,tbl_name,replace(sql,'main.','') FROM sqlite_schema
+ WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name;"
+broken_expected=$("$SQLITE3" "$TMP/broken-replayed.sqlite" "$broken_query")
+broken_before=$("$DOLTLITE" "$TMP/broken-view" "SELECT dolt_hashof('HEAD'); SELECT * FROM dolt_status;")
+for format in sql sqlite; do
+  path="$TMP/broken-view.$format"
+  "$DOLTLITE" "$TMP/broken-view" "SELECT dolt_dump('--file-name','$path','-r','$format')" > /dev/null
+  output="$path"
+  if [[ "$format" == sql ]]; then
+    output="$TMP/broken-view-replayed.sqlite"
+    "$SQLITE3" "$output" < "$path"
+  fi
+  compare "broken update views $format schema" \
+    "$("$SQLITE3" "$output" "$broken_query")" "$broken_expected"
+  compare "broken update views $format source unchanged" \
+    "$("$DOLTLITE" "$TMP/broken-view" "SELECT dolt_hashof('HEAD'); SELECT * FROM dolt_status;")" "$broken_before"
+  compare "broken update views $format restored triggers" \
+    "$("$SQLITE3" "$output" "CREATE TABLE gone(x); INSERT INTO gone VALUES(2);
+      UPDATE bv SET x=4; UPDATE writable SET x=3;
+      SELECT x FROM bv; SELECT x FROM writable; PRAGMA integrity_check;")" $'3\n3\nok'
+done
+
 echo "Results: $pass passed, $fail failed"
 echo __SUITE_COMPLETE__
 [[ "$fail" == 0 ]]

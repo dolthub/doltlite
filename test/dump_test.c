@@ -195,6 +195,8 @@ static void danglingSchema(void){
       "CREATE TABLE x(a); CREATE TABLE y(a); INSERT INTO y VALUES(1);"
       "CREATE VIEW v AS SELECT * FROM x;"
       "CREATE TRIGGER tr AFTER INSERT ON y BEGIN INSERT INTO x VALUES(new.a); END;"
+      "CREATE TRIGGER vu INSTEAD OF UPDATE ON v BEGIN"
+      " UPDATE x SET a=new.a WHERE a=old.a; END;"
       "DROP TABLE x; SELECT dolt_commit('-Am','dangling'); SELECT dolt_tag('dangling')")==SQLITE_OK);
   for(ref=0; ref<4; ref++) for(format=0; format<2; format++){
     sqlite3 *out = openStock();
@@ -211,11 +213,13 @@ static void danglingSchema(void){
       check("dangling SQLite export",rc==SQLITE_OK && !error);
     }
     check("dangling definitions retained",number(out,
-        "SELECT count(*) FROM main.sqlite_schema WHERE name IN ('v','tr') AND instr(sql,'x')>0")==2);
+        "SELECT count(*) FROM main.sqlite_schema WHERE name IN ('v','tr','vu') AND instr(sql,'x')>0")==3);
     check("dangling table data retained",number(out,"SELECT a FROM y")==1);
     if( rc==SQLITE_OK ){
       check("dangling dependencies restored",sql(out,"CREATE TABLE x(a); INSERT INTO y VALUES(2)")==SQLITE_OK);
       check("restored view and trigger work",number(out,"SELECT a FROM v")==2);
+      check("restored view update works",sql(out,"UPDATE v SET a=3")==SQLITE_OK
+          && number(out,"SELECT a FROM v")==3);
     }
     check("dangling source remains unchanged",number(db,"SELECT count(*) FROM y")==1
         && number(db,"SELECT count(*) FROM dolt_status")==0);
