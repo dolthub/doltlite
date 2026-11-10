@@ -472,7 +472,9 @@ Table *sqlite3LocateTable(
     if( eNonlocal<0 ) return 0;
     if( eNonlocal>0 ){
       p = sqlite3FindTable(db, zNonlocal, zNonlocalDb);
-      if( p==0 ){
+      if( p ){
+        doltliteNonlocalNoteUse(pParse, p, zName);
+      }else{
         /* The fallback to the local table holds only while the target
         ** lacks the table. Verify the target's schema so a peer creating
         ** it there reprepares this statement. */

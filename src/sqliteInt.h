@@ -4055,6 +4055,9 @@ struct Parse {
   TriggerPrg *pTriggerPrg;  /* Linked list of coded triggers */
   ParseCleanup *pCleanup;   /* List of cleanup operations to run after parse */
   Trigger *pTrigCoded;      /* Trigger whose sub-program is being coded */
+#ifdef DOLTLITE_PROLLY
+  struct DoltliteNonlocalUse *pNonlocalUse; /* Tables reached by a rule */
+#endif
 
   /**************************************************************************
   ** Fields above must be initialized to zero.  The fields that follow,
@@ -5594,6 +5597,8 @@ int doltliteNonlocalSync(sqlite3*);
 int doltliteNonlocalMatches(sqlite3*, const char*);
 int doltliteNonlocalActive(sqlite3*);
 int doltliteNonlocalResolve(Parse*, const char**, const char**);
+void doltliteNonlocalNoteUse(Parse*, Table*, const char*);
+int doltliteNonlocalLocalTable(Parse*, Table*, Table**);
 int doltliteNonlocalBlocksCreate(sqlite3*, const char*);
 int doltliteNonlocalIsSchema(const char*);
 void doltliteNonlocalTableList(Parse*, const char*);

@@ -630,4 +630,109 @@ do_test nonlocal-peer-recreate.on-target {
   nl_disk main {SELECT * FROM settings}
 } {b again}
 
+proc nl_trigger_reset {} {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval {
+    CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
+    CREATE TABLE log(msg TEXT);
+    CREATE TRIGGER tr_i AFTER INSERT ON users BEGIN
+      INSERT INTO log VALUES('main-ins '||new.id);
+    END;
+    CREATE TRIGGER tr_u AFTER UPDATE ON users BEGIN
+      INSERT INTO log VALUES('main-upd '||new.id);
+    END;
+    CREATE TRIGGER tr_d AFTER DELETE ON users BEGIN
+      INSERT INTO log VALUES('main-del '||old.id);
+    END;
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','exp');
+    DROP TRIGGER tr_i;
+    DROP TRIGGER tr_u;
+    DROP TRIGGER tr_d;
+  }
+}
+
+nl_trigger_reset
+do_execsql_test nonlocal-trigger-session.fires {
+  CREATE TRIGGER x_i AFTER INSERT ON users BEGIN
+    INSERT INTO log VALUES('exp-ins '||new.id);
+  END;
+  CREATE TRIGGER x_u AFTER UPDATE OF name ON users BEGIN
+    INSERT INTO log VALUES('exp-upd '||old.name||'>'||new.name);
+  END;
+  CREATE TRIGGER x_d BEFORE DELETE ON users BEGIN
+    INSERT INTO log VALUES('exp-del '||old.id);
+  END;
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  INSERT INTO users VALUES(1,'a'),(2,'b');
+  UPDATE users SET name='c' WHERE id=1;
+  DELETE FROM users WHERE id=2;
+  SELECT msg FROM log ORDER BY rowid;
+} {{exp-ins 1} {exp-ins 2} {exp-upd a>c} {exp-del 2}}
+do_test nonlocal-trigger-session.rows-on-target {
+  nl_disk main {SELECT id, name FROM users}
+} {1 c}
+do_test nonlocal-trigger-session.target-log-untouched {
+  nl_disk main {SELECT count(*) FROM log}
+} {0}
+do_execsql_test nonlocal-trigger-session.drop-stops {
+  DROP TRIGGER x_i;
+  INSERT INTO users VALUES(3,'d');
+  SELECT count(*) FROM log WHERE msg LIKE 'exp-ins%';
+} {2}
+do_execsql_test nonlocal-trigger-session.temp {
+  CREATE TEMP TRIGGER t_i AFTER INSERT ON main.users BEGIN
+    INSERT INTO log VALUES('temp-ins '||new.id);
+  END;
+  INSERT INTO users VALUES(4,'e');
+  SELECT msg FROM log WHERE msg LIKE 'temp%';
+} {{temp-ins 4}}
+do_execsql_test nonlocal-trigger-session.returning {
+  INSERT INTO users VALUES(5,'f') RETURNING id, name;
+} {5 f}
+
+nl_trigger_reset
+do_execsql_test nonlocal-trigger-none.target-triggers-idle {
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  INSERT INTO users VALUES(1,'a');
+  UPDATE users SET name='b';
+  DELETE FROM users;
+  SELECT count(*) FROM log;
+} {0}
+do_test nonlocal-trigger-none.target-log-untouched {
+  nl_disk main {SELECT count(*) FROM log}
+} {0}
+do_test nonlocal-trigger-none.direct-write-still-fires {
+  sqlite3 peer [file normalize test.db]/main
+  set r [peer eval {
+    INSERT INTO users VALUES(7,'g');
+    SELECT msg FROM log;
+  }]
+  peer close
+  set r
+} {{main-ins 7}}
+
+nl_trigger_reset
+do_test nonlocal-trigger-peer.created-later-fires {
+  db eval {
+    INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+    INSERT INTO users VALUES(1,'a');
+  }
+  set stmt [sqlite3_prepare_v2 db "INSERT INTO users(name) VALUES('p')" -1 TAIL]
+  sqlite3_step $stmt
+  sqlite3_reset $stmt
+  sqlite3 peer [file normalize test.db]/exp
+  peer eval {
+    CREATE TRIGGER p_i AFTER INSERT ON users BEGIN
+      INSERT INTO log VALUES('peer-trig');
+    END;
+  }
+  peer close
+  sqlite3_step $stmt
+  sqlite3_finalize $stmt
+  db eval {SELECT msg FROM log}
+} {peer-trig}
+
 finish_test

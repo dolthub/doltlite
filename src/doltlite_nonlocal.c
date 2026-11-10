@@ -589,6 +589,49 @@ int doltliteNonlocalResolve(
   return 1;
 }
 
+typedef struct DoltliteNonlocalUse DoltliteNonlocalUse;
+struct DoltliteNonlocalUse {
+  Table *pTab;
+  DoltliteNonlocalUse *pNext;
+  char zName[1];
+};
+
+/* Records that pTab, on another branch, was reached through the session
+** name zName, so the statement fires the session's triggers on that name
+** in place of the target's own. */
+void doltliteNonlocalNoteUse(Parse *pParse, Table *pTab, const char *zName){
+  Parse *pTop = sqlite3ParseToplevel(pParse);
+  sqlite3 *db = pParse->db;
+  DoltliteNonlocalUse *p;
+  int n;
+  if( pTab->pSchema==db->aDb[0].pSchema ) return;
+  for(p=pTop->pNonlocalUse; p; p=p->pNext){
+    if( p->pTab==pTab ) return;
+  }
+  n = sqlite3Strlen30(zName);
+  p = sqlite3DbMallocRaw(db, sizeof(*p)+n);
+  if( !p ) return;
+  p->pTab = pTab;
+  memcpy(p->zName, zName, n+1);
+  if( sqlite3ParserAddCleanup(pTop, sqlite3DbFree, p) ){
+    p->pNext = pTop->pNonlocalUse;
+    pTop->pNonlocalUse = p;
+  }
+}
+
+/* Whether this statement reached pTab through a session name. *ppLocal is
+** the session's own table of that name, or 0 when it has none. */
+int doltliteNonlocalLocalTable(Parse *pParse, Table *pTab, Table **ppLocal){
+  DoltliteNonlocalUse *p = sqlite3ParseToplevel(pParse)->pNonlocalUse;
+  for(; p; p=p->pNext){
+    if( p->pTab==pTab ){
+      if( ppLocal ) *ppLocal = sqlite3FindTable(pParse->db, p->zName, "main");
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static int nonlocalResolveName(
   sqlite3 *db,
   const char **pzName,

@@ -47,20 +47,45 @@ void sqlite3DeleteTriggerStep(sqlite3 *db, TriggerStep *pTriggerStep){
 ** that fire off of pTab.  The list will include any TEMP triggers on
 ** pTab as well as the triggers lised in pTab->pTrigger.
 */
+#ifdef DOLTLITE_PROLLY
+/* The triggers stored with pTab. A table on another branch reached through
+** a session name fires the session's triggers on that name: *ppOn is the
+** session's table, or 0 when it has none. */
+static Trigger *doltliteTableTriggers(Parse *pParse, Table *pTab, Table **ppOn){
+  Table *pLocal = 0;
+  *ppOn = pTab;
+  if( !doltliteNonlocalLocalTable(pParse, pTab, &pLocal) ) return pTab->pTrigger;
+  sqlite3CodeVerifySchema(pParse, 0);
+  *ppOn = pLocal;
+  return pLocal ? pLocal->pTrigger : 0;
+}
+#endif
 Trigger *sqlite3TriggerList(Parse *pParse, Table *pTab){
   Schema *pTmpSchema;       /* Schema of the pTab table */
   Trigger *pList;           /* List of triggers to return */
   HashElem *p;              /* Loop variable for TEMP triggers */
+#ifdef DOLTLITE_PROLLY
+  Table *pOn;
+#endif
 
   assert( pParse->disableTriggers==0 );
   pTmpSchema = pParse->db->aDb[1].pSchema;
   p = sqliteHashFirst(&pTmpSchema->trigHash);
   pList = pTab->pTrigger;
+#ifdef DOLTLITE_PROLLY
+  pList = doltliteTableTriggers(pParse, pTab, &pOn);
+#endif
   while( p ){
     Trigger *pTrig = (Trigger *)sqliteHashData(p);
+#ifdef DOLTLITE_PROLLY
+    if( pOn && pTrig->pTabSchema==pOn->pSchema
+     && pTrig->table
+     && 0==sqlite3StrICmp(pTrig->table, pOn->zName)
+#else
     if( pTrig->pTabSchema==pTab->pSchema
      && pTrig->table
      && 0==sqlite3StrICmp(pTrig->table, pTab->zName)
+#endif
      && (pTrig->pTabSchema!=pTmpSchema || pTrig->bReturning)
     ){
       pTrig->pNext = pList;
@@ -832,6 +857,21 @@ static SQLITE_NOINLINE Trigger *triggersReallyExist(
            || (pList->bReturning && pList->pNext==0) );
   if( pList!=0 ){
     p = pList;
+#ifdef DOLTLITE_PROLLY
+    if( (pParse->db->flags & SQLITE_EnableTrigger)==0
+     && doltliteNonlocalLocalTable(pParse, pTab, 0)
+    ){
+      Table *pOn;
+      Trigger *pStored = doltliteTableTriggers(pParse, pTab, &pOn);
+      if( pList==pStored ){
+        pList = 0;
+        goto exit_triggers_exist;
+      }
+      while( p->pNext && p->pNext!=pStored ) p = p->pNext;
+      p->pNext = 0;
+      p = pList;
+    }else
+#endif
     if( (pParse->db->flags & SQLITE_EnableTrigger)==0
      && pTab->pTrigger!=0
      && sqlite3SchemaToIndex(pParse->db, pTab->pTrigger->pSchema)!=1
@@ -1277,7 +1317,12 @@ static TriggerPrg *codeRowTrigger(
   }
 
   pTop = sqlite3ParseToplevel(pParse);
+#ifdef DOLTLITE_PROLLY
+  assert( pTrigger->zName==0 || pTab==tableOfTrigger(pTrigger)
+       || doltliteNonlocalLocalTable(pParse, pTab, 0) );
+#else
   assert( pTrigger->zName==0 || pTab==tableOfTrigger(pTrigger) );
+#endif
   assert( pTop->pVdbe );
 
 
@@ -1388,7 +1433,12 @@ static TriggerPrg *getRowTrigger(
   Parse *pRoot = sqlite3ParseToplevel(pParse);
   TriggerPrg *pPrg;
 
+#ifdef DOLTLITE_PROLLY
+  assert( pTrigger->zName==0 || pTab==tableOfTrigger(pTrigger)
+       || doltliteNonlocalLocalTable(pParse, pTab, 0) );
+#else
   assert( pTrigger->zName==0 || pTab==tableOfTrigger(pTrigger) );
+#endif
 
   /* It may be that this trigger has already been coded (or is in the
   ** process of being coded). If this is the case, then an entry with
