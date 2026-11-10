@@ -279,6 +279,11 @@ static void doltliteRealAffinityOnly(
   z[nKeep] = 0;
   sqlite3VdbeChangeP4(v, -1, z, P4_DYNAMIC);
 }
+
+static int doltliteTableUsesOrig(sqlite3 *db, Table *pTab){
+  int iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+  return iDb>=0 && sqlite3BtreeUsesOrig(db->aDb[iDb].pBt);
+}
 #endif
 
 /*
@@ -2650,7 +2655,7 @@ void sqlite3GenerateConstraintChecks(
 #ifdef DOLTLITE_PROLLY
     /* Store an integral REAL as CREATE INDEX does (an integer), not as the
     ** float OP_Affinity left in the register. */
-    if( (pTab->tabFlags & TF_Strict)==0 ){
+    if( (pTab->tabFlags & TF_Strict)==0 && !doltliteTableUsesOrig(db, pTab) ){
       doltliteRealAffinityOnly(v, sqlite3IndexAffinityStr(db, pIdx),
                                pTab, pIdx);
     }
@@ -2931,7 +2936,8 @@ void sqlite3GenerateConstraintChecks(
     /* OP_Affinity casts an integral REAL to a float, while a record built
     ** with REAL affinity stores it as an integer. Rows are content-addressed,
     ** so the table record always takes its affinity here. */
-    else if( (pTab->tabFlags & TF_Strict)==0 ){
+    else if( (pTab->tabFlags & TF_Strict)==0
+          && !doltliteTableUsesOrig(db, pTab) ){
       if( pTab->zColAff==0 ){
         pTab->zColAff = sqlite3TableAffinityStr(0, pTab);
         if( pTab->zColAff==0 ) sqlite3OomFault(db);

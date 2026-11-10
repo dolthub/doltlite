@@ -135,6 +135,13 @@ oracle "O_plan_primary_key" "EXPLAIN QUERY PLAN SELECT v FROM t WHERE id=17;" "$
 oracle_copy "O_plan_create_index" \
   "CREATE INDEX tv ON t(v); EXPLAIN QUERY PLAN SELECT id FROM t WHERE v='probe';" "$DB"
 
+DB=$TMP/realaff.db
+seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a, b REAL); CREATE INDEX ta ON t(a); CREATE INDEX tb ON t(b);"
+oracle_copy "O_layout_integral_real" \
+  "INSERT INTO t VALUES(1,0,1),(2,1,2.0); UPDATE t SET b=3 WHERE id=2; SELECT id, a, b, typeof(b) FROM t ORDER BY id; PRAGMA integrity_check;" "$DB"
+want_eq "O_layout_integral_real_bytes" \
+  "$(cmp -s "$TMP/ora-d.db" "$TMP/ora-s.db" && echo same)" "same"
+
 echo ""
 echo "--- INTEGER PK / page sizes ---"
 
