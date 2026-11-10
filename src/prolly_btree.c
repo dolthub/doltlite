@@ -973,15 +973,9 @@ static int doltliteTornSqliteFile(
   rc = chunkStoreReadFileHeader(pVfs, zFilename, aHdr, sizeof(aHdr), &nRead);
   if( rc!=SQLITE_OK ) return rc;
   if( nRead==0 ){
-    int exists = 0;
-    int isDir = 0;
-    if( !zFilename || zFilename[0]=='\0' || strcmp(zFilename, ":memory:")==0 ){
+    if( !zFilename || !chunkStoreHostFileIsShort(zFilename, sizeof(aHdr)) ){
       return SQLITE_OK;
     }
-    rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
-    if( rc!=SQLITE_OK || !exists ) return rc;
-    rc = chunkStorePathIsDirectory(pVfs, zFilename, &isDir);
-    if( rc!=SQLITE_OK || isDir ) return rc;
   }else if( CS_READ_U32(aHdr+CS_MANIFEST_MAGIC_OFF)==CHUNK_STORE_MAGIC ){
     return SQLITE_OK;
   }
