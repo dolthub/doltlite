@@ -178,6 +178,13 @@ done
 
 oracle "O_intpk_between_last" "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 10;" "$TMP/intpk-4096.db"
 
+DB=$TMP/rangecount.db
+seed_stock "$DB" "CREATE TABLE r(id INTEGER PRIMARY KEY, x); CREATE INDEX rx ON r(x); INSERT INTO r VALUES(1,1),(2,3),(3,5),(4,7);"
+oracle "O_plan_count_index_between" \
+  "EXPLAIN QUERY PLAN SELECT count(*) FROM r AS q WHERE x BETWEEN 1 AND 5; SELECT count(*) FROM r AS q WHERE x BETWEEN 1 AND 5;" "$DB"
+oracle "O_plan_count_rowid_between" \
+  "EXPLAIN QUERY PLAN SELECT count(*) FROM r AS q WHERE id BETWEEN 2 AND 3; SELECT count(*) FROM r AS q WHERE id BETWEEN 2 AND 3;" "$DB"
+
 echo ""
 echo "--- overflow DISTINCT ---"
 
